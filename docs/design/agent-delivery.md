@@ -1,6 +1,6 @@
 # Agent 之间的推式投递与终端驱动
 
-> 状态：目标设计，未实施。本文只定语义、接口形状、表结构与错误码，不写实现代码。
+> 状态：**已实施（2026-09-21，阶段 A–E 全部合入）**，实测记录见 [TypeScript Core 进度](../status/typescript-core-status.md) §22–§26。本文只定语义、接口形状、表结构与错误码，不写实现代码。
 > 范围：`apps/desktop/src/core/{collab,agent,terminal,hook,schedule,browser,identity}`、`apps/web/src/{canvas,store,nodes,terminal}`、`apps/desktop/src/cli/armadra-hook`、`packages/shared/src/api`。
 > 前置：[Agent 协作](../guides/agent-collaboration.md)（现状）、[Agent 自动化](agent-automation-design.md) §4–§5（投递与目标闸门）、[Agent 协作通道](agent-collaboration-channels.md) §3（事件映射与 PTY 观测的边界）、[服务器账号、中转与共享](server-accounts-and-sharing.md) S5 / §4.4（`terminal:drive`）、[v3 Agent 终端](../contracts/v3-agent-terminal-plan.md) §3.3 / §3.4 / §5.4 / §5.7 / §5.8。
 

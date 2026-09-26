@@ -1,6 +1,6 @@
 # 终端持久化、Windows 宿主与桌面生命周期设计
 
-> 状态：目标设计，待实施。
+> 状态：**部分实施**。tmux / 直连 PTY / SSH 三种后端与 Windows ConPTY 会话宿主已落地（TS 版见 [TypeScript Core 进度](../status/typescript-core-status.md) §13），Windows 真机验收未完成，见 [功能预期总表](../status/feature-roadmap.md) §4。
 > 本文扩展并更新 [Windows 会话守护进程早期设计](./windows-session-daemon.md) 的目标；其中“本轮不实现 Windows”的旧范围不再适用于本轮。
 > 2026-09-19：桌面壳已换成 Electron，本文提到 Tauri 的部分是换壳之前写下的，只作为当时的方案记录；壳的现状见 [Electron 迁移](./electron-migration.md) 与 [架构](../guides/architecture.md)。
 
