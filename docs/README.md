@@ -13,15 +13,16 @@
 
 ## guides/ 现行事实
 
-| 文档                                                   | 内容                             |
-| ------------------------------------------------------ | -------------------------------- |
-| [开发指南](guides/development.md)                      | 依赖、启动、检查、打包与环境变量 |
-| [CI 与发布](guides/ci-release.md)                      | 三平台矩阵、发布矩阵与密钥清单   |
-| [架构](guides/architecture.md)                         | 当前结构、数据模型与安全边界     |
-| [Agent 协作](guides/agent-collaboration.md)            | CLI 能力、上下文与消息箱协议     |
-| [界面规范](guides/ui-refinement.md)                    | 布局、交互与验收范围             |
-| [客户端平台](guides/client-platforms.md)               | 各平台职责与适配边界             |
-| [原生白板参考](guides/native-whiteboard-references.md) | 原生对象作为 Agent 资料的规则    |
+| 文档                                                   | 内容                                     |
+| ------------------------------------------------------ | ---------------------------------------- |
+| [产品说明](guides/product-overview.md)                 | 产品出发点、成本分工、需求证据与应用场景 |
+| [开发指南](guides/development.md)                      | 依赖、启动、检查、打包与环境变量         |
+| [CI 与发布](guides/ci-release.md)                      | 三平台矩阵、发布矩阵与密钥清单           |
+| [架构](guides/architecture.md)                         | 当前结构、数据模型与安全边界             |
+| [Agent 协作](guides/agent-collaboration.md)            | CLI 能力、上下文与消息箱协议             |
+| [界面规范](guides/ui-refinement.md)                    | 布局、交互与验收范围                     |
+| [客户端平台](guides/client-platforms.md)               | 各平台职责与适配边界                     |
+| [原生白板参考](guides/native-whiteboard-references.md) | 原生对象作为 Agent 资料的规则            |
 
 代码边界与验证入口见[项目约定](../AGENTS.md)。
 
@@ -91,6 +92,6 @@
 | [Host 设备认证](history/host-device-auth.md)              | `armadra-host` 的 owner 多设备认证接口    |
 
 现状对应的文档：进程与装配见[架构](guides/architecture.md)，core 的线上形状见 [core 的 JSON 面](contracts/core-json-api.md)，服务器壳的账号模型见[服务器账号、中转与共享](design/server-accounts-and-sharing.md)。
-`research/` 保存研究材料：[M0 探针记录](research/m0-executor-probes.md)与[运行入口](../tools/probes/README.md)、[UI 风格参考](research/ui-style-references/README.md)、[立项会话归档](research/chatgpt-conversation-archive.md)。
+`research/` 保存研究材料：[产品需求与成本调研](research/product-demand-and-cost-evidence.md)、[M0 探针记录](research/m0-executor-probes.md)与[运行入口](../tools/probes/README.md)、[UI 风格参考](research/ui-style-references/README.md)、[立项会话归档](research/chatgpt-conversation-archive.md)。
 
 架构变化同步更新 `guides/architecture.md`。
