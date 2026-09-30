@@ -294,7 +294,7 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
       {!exited && surface.render === "disconnected" && (
         <Badge
           variant="outline"
-          className="h-[18px] px-1.5 text-[length:var(--text-caption)] text-[var(--danger)]"
+          className="h-[18px] px-1.5 text-[length:var(--text-caption)] text-[var(--danger-text)]"
         >
           <Unplug className="size-2.5" />
           {t("terminal.render.disconnected")}

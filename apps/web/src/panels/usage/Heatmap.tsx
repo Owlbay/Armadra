@@ -59,7 +59,7 @@ export function Heatmap({
   return (
     <div data-slot="usage-heatmap" className="flex flex-col gap-1">
       <div className="flex gap-1">
-        <div className="flex shrink-0 flex-col gap-[3px] pt-[14px] text-[9px] leading-[10px] text-muted-foreground">
+        <div className="flex shrink-0 flex-col gap-[3px] pt-[14px] text-[length:var(--text-caption)] leading-[10px] text-muted-foreground">
           {Array.from({ length: 7 }, (_, row) => (
             <span key={row} className="h-[10px]">
               {ROW_LABELS[row]
@@ -77,7 +77,7 @@ export function Heatmap({
                   className="relative h-[14px] w-[10px] shrink-0"
                 >
                   {column.monthStart !== null && (
-                    <span className="absolute top-0 left-0 text-[9px] leading-[10px] whitespace-nowrap text-muted-foreground">
+                    <span className="absolute top-0 left-0 text-[length:var(--text-caption)] leading-[10px] whitespace-nowrap text-muted-foreground">
                       {month.format(column.monthStart)}
                     </span>
                   )}
@@ -119,7 +119,7 @@ export function Heatmap({
           </div>
         </div>
       </div>
-      <div className="flex items-center justify-end gap-1 text-[9px] text-muted-foreground">
+      <div className="flex items-center justify-end gap-1 text-[length:var(--text-caption)] text-muted-foreground">
         <span>{t("usage.heatmap.less")}</span>
         {HEAT_LEVELS.map((color) => (
           <span

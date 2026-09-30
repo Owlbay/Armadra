@@ -105,7 +105,7 @@ export function MemoryBadge({
           data-testid={`memory-badge-${nodeId}`}
           data-over={over ? "true" : undefined}
           className={`flex min-h-6 shrink-0 items-center gap-1 rounded px-1 text-[length:var(--text-caption)] tabular-nums hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring ${
-            over ? "text-[var(--danger)]" : "text-muted-foreground"
+            over ? "text-[var(--danger-text)]" : "text-muted-foreground"
           }`}
           aria-label={t("resources.memory.badge", { value: label })}
           onPointerDown={(event) => event.stopPropagation()}

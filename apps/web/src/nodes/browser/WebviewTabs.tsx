@@ -57,7 +57,7 @@ export function WebviewTabs({ control }: { control: TabsControl }) {
             ) : (
               <span
                 aria-hidden="true"
-                className="grid size-3.5 shrink-0 place-items-center rounded-[2px] bg-muted text-[8px] font-medium text-muted-foreground"
+                className="grid size-3.5 shrink-0 place-items-center rounded-[2px] bg-muted text-[length:var(--text-caption)] font-medium text-muted-foreground"
               >
                 {tabLetter(tab)}
               </span>

@@ -342,7 +342,9 @@ function Facet({
         >
           {label}
           {count > 0 && (
-            <span className="tabular-nums text-[10px]">{count}</span>
+            <span className="tabular-nums text-[length:var(--text-caption)]">
+              {count}
+            </span>
           )}
         </Button>
       </DropdownMenuTrigger>

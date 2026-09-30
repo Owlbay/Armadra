@@ -70,7 +70,7 @@ export function ResourceDrawer() {
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-3 p-3">
           {error && !snapshot && (
-            <p className="text-[12px] text-[var(--danger)]">{error}</p>
+            <p className="text-[12px] text-[var(--danger-text)]">{error}</p>
           )}
           {/* 还没有过样本时不画表格骨架：等第一份真实数字，别先显示一屏 0。 */}
           {loading && !snapshot && (

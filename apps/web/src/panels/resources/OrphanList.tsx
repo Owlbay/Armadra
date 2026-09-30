@@ -108,7 +108,10 @@ export function OrphanList({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
                 <span className="truncate text-[12px]">{label(orphan)}</span>
-                <Badge variant="outline" className="text-[10px]">
+                <Badge
+                  variant="outline"
+                  className="text-[length:var(--text-caption)]"
+                >
                   {t(`resources.orphan.${orphan.reason}`)}
                 </Badge>
               </div>

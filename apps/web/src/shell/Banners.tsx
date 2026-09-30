@@ -265,7 +265,7 @@ function Banner({
       data-tone={tone}
       data-slot="banner"
       {...noDragProps()}
-      className="pointer-events-auto motion-fade-in flex h-9 max-w-full min-w-0 items-center gap-2 rounded-[var(--r-card)] border border-border bg-[var(--panel)]/90 pr-1.5 pl-3 shadow-[var(--shadow-pill)] backdrop-blur-[12px] data-[tone=danger]:text-danger data-[tone=warn]:text-warn"
+      className="pointer-events-auto motion-fade-in flex h-9 max-w-full min-w-0 items-center gap-2 rounded-[var(--r-card)] border border-border bg-[var(--panel)]/90 pr-1.5 pl-3 shadow-[var(--shadow-pill)] backdrop-blur-[12px] data-[tone=danger]:text-danger-text data-[tone=warn]:text-warn"
     >
       <span className="shrink-0 [&_svg]:size-4 [&_svg]:[stroke-width:1.5]">
         {icon}

@@ -128,7 +128,7 @@ export function SessionRow({ row }: { row: SessionRowData }) {
       ) : (
         <Button
           variant="ghost"
-          className="motion-hover h-auto min-h-[40px] flex-1 flex-col items-stretch gap-px rounded-[var(--r-control)] px-2 py-1 font-normal hover:bg-[var(--hover)] data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_15%,transparent)] data-[selected=true]:text-[var(--brand)]"
+          className="motion-hover h-auto min-h-[40px] flex-1 flex-col items-stretch gap-px rounded-[var(--r-control)] px-2 py-1 font-normal hover:bg-[var(--hover)] data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_15%,transparent)] data-[selected=true]:text-[var(--brand-text)]"
           data-selected={selected ? "true" : undefined}
           title={row.cwd}
           onClick={activate}

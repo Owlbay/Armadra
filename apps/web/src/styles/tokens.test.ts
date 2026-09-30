@@ -169,7 +169,7 @@ describe("tokens.css", () => {
     // shadcn 的 --accent 是菜单高亮底色；品牌蓝在 --brand / --primary
     expect(dark.get("--brand")).toBe("#0a84ff");
     expect(light.get("--brand")).toBe("#007aff");
-    expect(dark.get("--primary")).toBe("var(--brand)");
+    expect(dark.get("--primary")).toBe("var(--brand-solid)");
     expect(dark.get("--accent")).not.toContain("--brand");
   });
 
@@ -281,5 +281,65 @@ describe("tokens.css", () => {
 
   it("不加载在线字体", () => {
     expect(tokensCss).not.toMatch(/@font-face|fonts\.googleapis|https?:/);
+  });
+  /**
+   * 几组会被悄悄改坏的对比度（WCAG 2.x 相对亮度公式）：实底按钮的白字、
+   * 叠在自身浅底上的危险文字，以及按 50% 透明画的焦点环（1.4.11 要 3:1）。
+   * 背景取两套主题里所有表面档位，按最差的那一档断言。
+   */
+  describe("对比度", () => {
+    type Rgb = readonly [number, number, number];
+    const hex = (value: string | undefined): Rgb => {
+      const match = /^#([0-9a-f]{6})$/i.exec(value ?? "");
+      if (!match?.[1]) throw new Error(`不是 6 位十六进制色：${value}`);
+      const n = Number.parseInt(match[1], 16);
+      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    };
+    const channel = (c: number) => {
+      const v = c / 255;
+      return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+    };
+    const luminance = ([r, g, b]: Rgb) =>
+      0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+    const ratio = (a: Rgb, b: Rgb) => {
+      const hi = Math.max(luminance(a), luminance(b));
+      const lo = Math.min(luminance(a), luminance(b));
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    const over = ([r, g, b]: Rgb, alpha: number, [br, bg, bb]: Rgb): Rgb => [
+      Math.round(r * alpha + br * (1 - alpha)),
+      Math.round(g * alpha + bg * (1 - alpha)),
+      Math.round(b * alpha + bb * (1 - alpha)),
+    ];
+    const surfaces = (theme: Map<string, string>) =>
+      ["--bg", "--surface-card", "--surface-raised", "--surface-overlay"]
+        .map((name) => theme.get(name) ?? dark.get(name))
+        .filter((value): value is string => /^#/.test(value ?? ""))
+        .map(hex);
+    const white: Rgb = [255, 255, 255];
+
+    it.each([
+      ["深色", dark],
+      ["浅色", light],
+    ])("%s：实底按钮白字 ≥ 4.5，焦点环 50% ≥ 3", (_, theme) => {
+      expect(
+        ratio(white, hex(theme.get("--brand-solid"))),
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        ratio(white, hex(theme.get("--danger-solid"))),
+      ).toBeGreaterThanOrEqual(4.5);
+      const ring = hex(theme.get("--focus-ring"));
+      for (const bg of surfaces(theme)) {
+        expect(ratio(over(ring, 0.5, bg), bg)).toBeGreaterThanOrEqual(3);
+      }
+    });
+
+    it("深色：危险文字叠在自身 20% 的浅底上 ≥ 4.5（卡片与面板）", () => {
+      const text = hex(dark.get("--danger-text"));
+      for (const name of ["--surface-card", "--panel"]) {
+        const bg = hex(dark.get(name));
+        expect(ratio(text, over(text, 0.2, bg))).toBeGreaterThanOrEqual(4.5);
+      }
+    });
   });
 });

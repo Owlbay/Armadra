@@ -152,7 +152,7 @@ function DashboardBody() {
             {t("usage.cost.disabled")}
           </p>
         ) : cost.isError ? (
-          <p role="status" className="text-xs text-danger">
+          <p role="status" className="text-xs text-danger-text">
             {t("usage.cost.error")}
           </p>
         ) : !summary || summary.status === "unavailable" ? (

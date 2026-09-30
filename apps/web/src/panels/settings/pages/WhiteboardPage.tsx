@@ -58,7 +58,11 @@ export function WhiteboardPage() {
               set("background", value as WhiteboardBackground)
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.whiteboard.background")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -87,7 +91,11 @@ export function WhiteboardPage() {
               set("gridSize", Number(value) as WhiteboardGridSize)
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.whiteboard.gridSize")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -175,7 +183,11 @@ export function WhiteboardPage() {
               set("inputMode", value as WhiteboardInputMode)
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.whiteboard.inputMode")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -204,7 +216,11 @@ export function WhiteboardPage() {
               set("defaultSize", value as WhiteboardSize)
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.whiteboard.defaultSize")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">

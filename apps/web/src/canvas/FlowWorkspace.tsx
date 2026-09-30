@@ -78,6 +78,7 @@ import {
   isToolDisabledWhenLocked,
   splitSelectionForDelete,
 } from "./tools";
+import { DANGER_ACTION_CLASS } from "@/lib/danger-action";
 import { MAX_ZOOM, MIN_ZOOM } from "./zoom";
 import { isZoomWheel, zoomCanvasByWheel } from "./interaction/wheel-zoom";
 
@@ -501,7 +502,10 @@ function FlowWorkspaceInner() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t("delete.cancel")}</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete}>
+            <AlertDialogAction
+              className={DANGER_ACTION_CLASS}
+              onClick={confirmDelete}
+            >
               {t("delete.session.confirm")}
             </AlertDialogAction>
           </AlertDialogFooter>

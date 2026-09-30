@@ -40,7 +40,7 @@ export const MINIMAP_COLORS = {
   /** working：陶土色。 */
   working: "var(--agent-working)",
   /** needs-you。 */
-  attention: "var(--danger)",
+  attention: "var(--status-attention)",
   /** 未读。 */
   unread: "var(--brand)",
   /** 无状态的节点、白板对象与分组：一块低对比的底。 */

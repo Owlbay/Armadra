@@ -73,7 +73,9 @@ export function EditPreviewDialog() {
           </DialogDescription>
         </DialogHeader>
 
-        {error && <p className="text-[12px] text-[var(--danger)]">{error}</p>}
+        {error && (
+          <p className="text-[12px] text-[var(--danger-text)]">{error}</p>
+        )}
 
         {preview?.blocked && (
           <p className="text-[12px] text-[var(--warn)]">
@@ -95,7 +97,7 @@ export function EditPreviewDialog() {
               })}
             </span>
             {result.failed.length > 0 && (
-              <div className="flex flex-col gap-0.5 text-[var(--danger)]">
+              <div className="flex flex-col gap-0.5 text-[var(--danger-text)]">
                 <span>{t("lsp.preview.failedTitle")}</span>
                 {result.failed.map((failure) => (
                   <span key={failure.path} className="break-all">

@@ -92,7 +92,11 @@ export function AccountPage() {
               save.mutate({ usage: { refreshMinutes: Number(value) } })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.usageCadence")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -222,7 +226,7 @@ export function AccountPage() {
       </SettingsGroup>
 
       {usageEnabled && (refreshFailed || usage.isError) && (
-        <p role="status" className="text-xs text-danger">
+        <p role="status" className="text-xs text-danger-text">
           {t("usage.refreshError")}
         </p>
       )}

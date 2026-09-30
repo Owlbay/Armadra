@@ -320,7 +320,11 @@ export function KeybindingsPage() {
           footnote={t("settings.shortcut.profile.note")}
         >
           <Select value={profile} onValueChange={chooseProfile}>
-            <SelectTrigger size="sm" className="w-40">
+            <SelectTrigger
+              aria-label={t("settings.shortcut.profile")}
+              size="sm"
+              className="w-40"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -367,7 +371,11 @@ export function KeybindingsPage() {
             value={layer}
             onValueChange={(value) => setLayer(value as WriteLayer)}
           >
-            <SelectTrigger size="sm" className="w-40">
+            <SelectTrigger
+              aria-label={t("settings.shortcut.layer")}
+              size="sm"
+              className="w-40"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -390,7 +398,11 @@ export function KeybindingsPage() {
             value={platform}
             onValueChange={(value) => setPlatform(value as PlatformName)}
           >
-            <SelectTrigger size="sm" className="w-40">
+            <SelectTrigger
+              aria-label={t("settings.shortcut.platform")}
+              size="sm"
+              className="w-40"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">

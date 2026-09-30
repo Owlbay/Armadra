@@ -128,7 +128,11 @@ export function TerminalPage() {
               save.mutate({ terminal: { backend: value as TerminalBackend } })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.terminalBackend")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -155,7 +159,11 @@ export function TerminalPage() {
               save.mutate({ terminal: { dormantAfterSeconds: Number(value) } })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("terminal.settings.dormantAfter")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -190,7 +198,11 @@ export function TerminalPage() {
               save.mutate({ terminal: { ecoIdleMinutes: Number(value) } })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("terminal.settings.ecoIdle")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -211,7 +223,11 @@ export function TerminalPage() {
               save.mutate({ terminal: { detachedGraceMinutes: Number(value) } })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.detachedGrace")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -239,7 +255,11 @@ export function TerminalPage() {
               save.mutate({ power: { policy: value as PowerPolicyChoice } })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("resources.power.policyLabel")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -278,7 +298,11 @@ export function TerminalPage() {
               save.mutate({ resources: { intervalMs: Number(value) } })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("resources.intervalLabel")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -299,7 +323,11 @@ export function TerminalPage() {
             value={String(memoryWarnBytes)}
             onValueChange={(value) => setMemoryWarnBytes(Number(value))}
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("resources.memory.thresholdLabel")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -320,7 +348,11 @@ export function TerminalPage() {
             value={String(renderBudget)}
             onValueChange={(value) => setRenderBudget(Number(value))}
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("terminal.settings.renderBudget")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -387,7 +419,11 @@ export function TerminalPage() {
               set("cursorStyle", value as TerminalCursorStyle)
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("terminal.settings.cursor")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">

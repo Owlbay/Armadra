@@ -222,14 +222,17 @@ export function SessionTable({
                       {titleOf(session)}
                     </span>
                     {session.location === "remote" && (
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge
+                        variant="outline"
+                        className="text-[length:var(--text-caption)]"
+                      >
                         {t("resources.location.remote")}
                       </Badge>
                     )}
                     {high && (
                       <Badge
                         variant="outline"
-                        className="border-[var(--danger)] text-[10px] text-[var(--danger)]"
+                        className="border-[var(--danger)] text-[length:var(--text-caption)] text-[var(--danger-text)]"
                       >
                         {t("resources.session.high")}
                       </Badge>
@@ -257,7 +260,7 @@ export function SessionTable({
                 </span>
                 <span
                   className={`w-20 shrink-0 text-right text-[12px] tabular-nums ${
-                    high ? "text-[var(--danger)]" : ""
+                    high ? "text-[var(--danger-text)]" : ""
                   }`}
                   // 共享页会被重复计入，所以这是估计值而不是独占内存（设计 §8）。
                   title={

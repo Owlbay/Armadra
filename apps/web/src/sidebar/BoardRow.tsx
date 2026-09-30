@@ -33,9 +33,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/ui/dropdown-menu";
+import { DANGER_ACTION_CLASS } from "@/lib/danger-action";
 import { IconButton } from "@/ui/icon-button";
 import type { BoardEntry, BoardSignal } from "./board-tree";
 import { SignalDot } from "./SignalDot";
+import { displayName } from "./display-name";
 
 export interface BoardRowProps {
   board: BoardEntry;
@@ -103,7 +105,7 @@ export function BoardRow({
           <div
             data-active={active ? "true" : undefined}
             className={cn(
-              "group/board motion-hover flex h-7 items-center gap-1 rounded-[var(--r-control)] pr-1 hover:bg-[var(--hover)] data-[active=true]:bg-[color-mix(in_srgb,var(--brand)_15%,transparent)] data-[active=true]:text-[var(--brand)]",
+              "group/board motion-hover flex h-7 items-center gap-1 rounded-[var(--r-control)] pr-1 hover:bg-[var(--hover)] data-[active=true]:bg-[color-mix(in_srgb,var(--brand)_15%,transparent)] data-[active=true]:text-[var(--brand-text)]",
               indent ? "pl-4" : "pl-1.5",
             )}
           >
@@ -113,7 +115,7 @@ export function BoardRow({
               <LayoutGrid className="size-3.5 shrink-0 opacity-60" />
             )}
             <InlineName
-              name={board.name}
+              name={displayName(board.name, t)}
               label={t("sidebar.boardName")}
               caption={caption}
               editing={editing}
@@ -177,7 +179,9 @@ export function BoardRow({
         <AlertDialogContent className="z-[var(--z-dialog)]">
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {t("sidebar.boardDeleteTitle", { name: board.name })}
+              {t("sidebar.boardDeleteTitle", {
+                name: displayName(board.name, t),
+              })}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {t("sidebar.boardDeleteDescription")}
@@ -186,6 +190,7 @@ export function BoardRow({
           <AlertDialogFooter>
             <AlertDialogCancel>{t("sidebar.cancel")}</AlertDialogCancel>
             <AlertDialogAction
+              className={DANGER_ACTION_CLASS}
               onClick={() => {
                 setConfirming(false);
                 onDelete();

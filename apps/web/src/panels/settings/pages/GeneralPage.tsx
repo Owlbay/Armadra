@@ -56,7 +56,11 @@ export function GeneralPage() {
             value={theme}
             onValueChange={(value) => setTheme(value as ThemePreference)}
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.theme")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -74,7 +78,11 @@ export function GeneralPage() {
             value={locale}
             onValueChange={(value) => setLocale(value as Locale)}
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.locale")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">

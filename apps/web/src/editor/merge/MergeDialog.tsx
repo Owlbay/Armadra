@@ -107,7 +107,7 @@ export function MergeDialog() {
         {state.error && (
           <p
             role="alert"
-            className="break-words text-[12px] text-[var(--danger)]"
+            className="break-words text-[12px] text-[var(--danger-text)]"
           >
             {state.error}
           </p>

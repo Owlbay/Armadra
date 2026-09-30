@@ -133,7 +133,10 @@ function FileDiff({
           {file.path}
         </span>
         {file.binary ? (
-          <Badge variant="outline" className="shrink-0 text-[10px]">
+          <Badge
+            variant="outline"
+            className="shrink-0 text-[length:var(--text-caption)]"
+          >
             {t("github.pull.binary")}
           </Badge>
         ) : (

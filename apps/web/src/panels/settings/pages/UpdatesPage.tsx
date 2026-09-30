@@ -176,7 +176,11 @@ export function UpdatesPage() {
               })
             }
           >
-            <SelectTrigger size="sm" className="w-[160px]">
+            <SelectTrigger
+              aria-label={t("updates.channel")}
+              size="sm"
+              className="w-[160px]"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">

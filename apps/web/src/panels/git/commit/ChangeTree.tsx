@@ -169,7 +169,7 @@ function FileRow({
       {node.group === "conflicts" && (
         <GitMerge
           aria-hidden
-          className="size-3.5 shrink-0 text-[var(--danger)]"
+          className="size-3.5 shrink-0 text-[var(--danger-text)]"
         />
       )}
       <StatusBadge node={node} />
@@ -351,7 +351,8 @@ export function ChangeTree({
                     className={cn(
                       "px-2 py-1 text-[11px] font-semibold tracking-wide text-muted-foreground",
                       showRepositories && "pl-4",
-                      section.group === "conflicts" && "text-[var(--danger)]",
+                      section.group === "conflicts" &&
+                        "text-[var(--danger-text)]",
                     )}
                   >
                     {t(`gitCommit.group.${section.group}`)}

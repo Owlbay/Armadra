@@ -417,9 +417,9 @@ function CommitRow({
           key={`${badge.kind}:${badge.label}`}
           title={badge.label}
           className={cn(
-            "max-w-28 shrink-0 truncate rounded px-1 text-[10px] leading-4",
+            "max-w-28 shrink-0 truncate rounded px-1 text-[length:var(--text-caption)] leading-4",
             badge.kind === "tag"
-              ? "bg-[color-mix(in_srgb,var(--brand)_16%,transparent)] text-[var(--brand)]"
+              ? "bg-[color-mix(in_srgb,var(--brand)_16%,transparent)] text-[var(--brand-text)]"
               : badge.kind === "head"
                 ? "bg-foreground text-background"
                 : "border border-border text-muted-foreground",

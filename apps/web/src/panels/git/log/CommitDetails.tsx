@@ -108,9 +108,9 @@ export function CommitDetails({
             <span
               key={`${badge.kind}:${badge.label}`}
               className={cn(
-                "rounded px-1 text-[10px] leading-4",
+                "rounded px-1 text-[length:var(--text-caption)] leading-4",
                 badge.kind === "tag"
-                  ? "bg-[color-mix(in_srgb,var(--brand)_16%,transparent)] text-[var(--brand)]"
+                  ? "bg-[color-mix(in_srgb,var(--brand)_16%,transparent)] text-[var(--brand-text)]"
                   : badge.kind === "head"
                     ? "bg-foreground text-background"
                     : "border border-border text-muted-foreground",
@@ -221,7 +221,7 @@ export function CommitDetails({
                     </span>
                   )}
                 </span>
-                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                <span className="shrink-0 font-mono text-[length:var(--text-caption)] text-muted-foreground">
                   {row.file?.additions === null || row.file?.deletions === null
                     ? t("gitRepo.binaryFile")
                     : `+${row.file?.additions} −${row.file?.deletions}`}

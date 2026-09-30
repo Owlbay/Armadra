@@ -114,7 +114,7 @@ export function RelocateDialog({
             {error && (
               <p
                 role="alert"
-                className="break-words text-[12px] text-[var(--danger)]"
+                className="break-words text-[12px] text-[var(--danger-text)]"
               >
                 {error}
               </p>

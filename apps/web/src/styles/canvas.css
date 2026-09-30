@@ -241,6 +241,30 @@
   }
 }
 
+/*
+ * 最窄的手机（≤380px，例如 320 宽）：Dock 的十来个钮排不下，最右的缩放钮会
+ * 落到屏幕外。先收紧间距与两侧边距，仍放不下时让 Dock 自己横向滚动——被
+ * 截住的半个按钮就是「还有」的提示，不会再有点不到的钮。
+ */
+@media (max-width: 380px) {
+  .canvas-dock-row {
+    left: 8px;
+    right: 8px;
+  }
+  .canvas-dock {
+    gap: 2px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .canvas-dock::-webkit-scrollbar {
+    display: none;
+  }
+  .canvas-dock [data-slot="separator"] {
+    margin-inline: 2px;
+  }
+}
+
 .workspace-surface[data-minimap-collapsed="true"],
 .workspace-surface[data-minimap-collapsed="true"] .react-flow__minimap {
   --minimap-w: 36px;

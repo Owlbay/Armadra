@@ -120,7 +120,9 @@ export function CopilotSignIn({ disabled }: { disabled?: boolean }) {
           role="status"
           data-slot="copilot-progress"
           className={`px-4 pb-3 text-xs ${
-            progress === "authorized" ? "text-muted-foreground" : "text-danger"
+            progress === "authorized"
+              ? "text-muted-foreground"
+              : "text-danger-text"
           }`}
         >
           {t(`settings.copilot.${progress}`)}

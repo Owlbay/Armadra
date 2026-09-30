@@ -55,7 +55,11 @@ export function RunHistory({
   return (
     <div className="min-w-0 space-y-3 p-3">
       <Select value={planId ?? ""} onValueChange={onSelect}>
-        <SelectTrigger size="sm" className="w-full">
+        <SelectTrigger
+          aria-label={t("automation.runs.plan")}
+          size="sm"
+          className="w-full"
+        >
           <SelectValue />
         </SelectTrigger>
         <SelectContent className="z-[var(--z-dialog)]">

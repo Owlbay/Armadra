@@ -200,7 +200,7 @@ function KeyButton({
         "min-h-10 min-w-11 shrink-0 rounded-md border border-border px-2",
         "font-mono text-[13px] leading-none",
         pressed
-          ? "border-[var(--brand)] text-[var(--brand)]"
+          ? "border-[var(--brand)] text-[var(--brand-text)]"
           : "bg-card text-foreground",
       )}
       // 按下不抢终端的焦点，否则每按一个键软键盘就收一次。

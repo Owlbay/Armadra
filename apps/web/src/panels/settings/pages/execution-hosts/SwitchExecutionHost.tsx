@@ -111,7 +111,11 @@ export function SwitchExecutionHost({
       <SettingsGroup>
         <SettingsRow label={t("executionHosts.switch.target")}>
           <Select value={target} onValueChange={setTarget}>
-            <SelectTrigger size="sm" className="w-[220px]">
+            <SelectTrigger
+              aria-label={t("executionHosts.switch.target")}
+              size="sm"
+              className="w-[220px]"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">

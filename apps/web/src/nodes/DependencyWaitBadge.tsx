@@ -52,7 +52,7 @@ export function DependencyWaitBadge({
           variant="outline"
           className={
             "h-[18px] px-1.5 text-[length:var(--text-caption)]" +
-            (stuck ? " text-[var(--danger)]" : "")
+            (stuck ? " text-[var(--danger-text)]" : "")
           }
           data-no-drag="true"
         >

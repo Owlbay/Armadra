@@ -211,7 +211,7 @@ const zh = {
 
   /* 删除确认：只有节点里跑着会话时才弹 */
   "delete.session.title": "结束会话并删除？",
-  "delete.session.confirm": "删除",
+  "delete.session.confirm": "结束并删除",
   "delete.cancel": "取消",
 
   /* 在线设备与编辑租约（core JSON §9） */
@@ -412,7 +412,7 @@ const en: Record<keyof typeof zh, string> = {
   "wb.input.trackpad": "Trackpad",
 
   "delete.session.title": "End the session and delete?",
-  "delete.session.confirm": "Delete",
+  "delete.session.confirm": "End and delete",
   "delete.cancel": "Cancel",
 
   "presence.label": "Devices online",

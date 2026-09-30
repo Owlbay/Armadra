@@ -162,13 +162,13 @@ export function BranchTree({
               </button>
               {node.kind === "branch" &&
                 (node.ahead ? (
-                  <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground">
+                  <span className="shrink-0 tabular-nums text-[length:var(--text-caption)] text-muted-foreground">
                     ↑{node.ahead}
                   </span>
                 ) : null)}
               {node.kind === "branch" &&
                 (node.behind ? (
-                  <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground">
+                  <span className="shrink-0 tabular-nums text-[length:var(--text-caption)] text-muted-foreground">
                     ↓{node.behind}
                   </span>
                 ) : null)}
@@ -186,7 +186,7 @@ export function BranchTree({
                       event.stopPropagation();
                       onToggleFavorite(key);
                     }}
-                    className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted aria-pressed:text-[var(--brand)]"
+                    className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted aria-pressed:text-[var(--brand-text)]"
                   >
                     <Star
                       className="size-3"

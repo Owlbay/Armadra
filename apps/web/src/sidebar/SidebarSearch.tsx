@@ -45,6 +45,7 @@ import {
 } from "@/ui/dialog";
 import { gotoNode } from "./goto-node";
 import { searchBoards, type SearchBoard, type SearchHit } from "./search-index";
+import { displayName } from "./display-name";
 
 export interface SidebarSearchProps {
   open: boolean;
@@ -80,7 +81,7 @@ export function SidebarSearch({ open, onOpenChange }: SidebarSearchProps) {
     () =>
       boards.map((board, index) => ({
         id: board.id,
-        name: board.name,
+        name: displayName(board.name, t),
         // 当前这块板用 store 里的文档：它包含还没落盘的编辑。
         nodes:
           board.id === boardId && document?.board.id === board.id
@@ -94,6 +95,7 @@ export function SidebarSearch({ open, onOpenChange }: SidebarSearchProps) {
       boards,
       document,
       documents.map((item) => item.dataUpdatedAt).join(),
+      t,
     ],
   );
 

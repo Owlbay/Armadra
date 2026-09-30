@@ -236,8 +236,8 @@
 .node-glow[data-glow="attention"]::after {
   animation: armadra-glow 1.8s ease-in-out infinite;
   box-shadow:
-    0 0 0 2px var(--danger),
-    0 0 18px 2px var(--danger);
+    0 0 0 2px var(--status-attention),
+    0 0 18px 2px var(--status-attention);
 }
 
 @keyframes armadra-glow {

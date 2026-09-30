@@ -68,7 +68,7 @@ export function ModelCatalogPanel() {
       </SettingsRow>
       {failed && (
         <SettingsRow label={null}>
-          <span role="status" className="text-[11px] text-danger">
+          <span role="status" className="text-[11px] text-danger-text">
             {t("settings.priceRefreshFailed")}
           </span>
         </SettingsRow>

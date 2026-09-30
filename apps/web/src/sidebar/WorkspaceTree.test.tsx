@@ -120,7 +120,7 @@ describe("WorkspaceTree", () => {
     renderTree();
 
     expect(await screen.findByText("repo")).toBeTruthy();
-    expect(screen.getByText("Default")).toBeTruthy();
+    expect(screen.getByText("默认")).toBeTruthy();
     expect(screen.getByText("实验")).toBeTruthy();
     expect(screen.queryByText("3")).toBeNull();
     expect(screen.queryByText("7")).toBeNull();
@@ -145,7 +145,7 @@ describe("WorkspaceTree", () => {
     ]);
     renderTree();
 
-    await screen.findByText("Default");
+    await screen.findByText("默认");
     // 会话只喂行尾那颗点，标题不进树
     expect(await screen.findByLabelText("未读")).toBeTruthy();
     expect(screen.queryByText("Codex")).toBeNull();
@@ -292,7 +292,7 @@ describe("WorkspaceTree", () => {
     setBoards(1);
     renderTree();
 
-    await screen.findByText("Default");
+    await screen.findByText("默认");
     openMenu(screen.getByLabelText("画布操作"));
     const item = await screen.findByRole("menuitem", { name: "删除" });
     expect(item.getAttribute("aria-disabled")).toBe("true");
@@ -308,7 +308,7 @@ describe("WorkspaceTree", () => {
     await screen.findByText("实验");
     openMenu(screen.getAllByLabelText("画布操作")[1]!);
     fireEvent.click(await screen.findByRole("menuitem", { name: "删除" }));
-    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除画布" }));
 
     await waitFor(() =>
       expect(deleteBoard).toHaveBeenCalledWith(workspace.id, SECOND),

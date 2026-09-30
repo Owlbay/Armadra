@@ -118,7 +118,7 @@ export function MobileBottomNav() {
               "flex min-h-[var(--mobile-nav-h)] flex-1 flex-col items-center justify-center gap-1 px-1",
               "text-[11px] leading-4 transition-colors disabled:opacity-40",
               current
-                ? "text-[var(--brand)]"
+                ? "text-[var(--brand-text)]"
                 : "text-muted-foreground hover:text-foreground",
             )}
             onClick={() => {

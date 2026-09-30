@@ -575,7 +575,7 @@ function FailurePage({
         <div className="truncate font-mono text-[11px] text-muted-foreground">
           {failure.url}
         </div>
-        <div className="font-mono text-[10px] text-muted-foreground/70">
+        <div className="font-mono text-[length:var(--text-caption)] text-muted-foreground/70">
           {failure.description || failure.code}
         </div>
         <Button size="sm" variant="outline" onClick={onRetry}>

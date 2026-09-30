@@ -171,7 +171,7 @@ export function NodeNameDialog() {
                 }}
               />
               {entry.problem === null ? null : (
-                <span className="text-xs text-[var(--danger)]">
+                <span className="text-xs text-[var(--danger-text)]">
                   {entry.problem}
                 </span>
               )}

@@ -63,6 +63,7 @@ import {
   type BoardSignal,
 } from "./board-tree";
 import { useBoardMutations } from "./use-board-mutations";
+import { displayName } from "./display-name";
 
 export function WorkspaceTree() {
   const t = useT();
@@ -471,7 +472,7 @@ function WorkspaceRow({
       <div className="group/ws motion-hover flex h-7 items-center gap-1 rounded-[var(--r-control)] pr-1 pl-1.5 hover:bg-[var(--hover)]">
         <Folder className="size-3.5 shrink-0 opacity-60" />
         <InlineName
-          name={summary.name}
+          name={displayName(summary.name, t)}
           label={t("sidebar.workspaceName")}
           editing={editing}
           onEditingChange={setEditing}

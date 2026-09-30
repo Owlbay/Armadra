@@ -94,10 +94,18 @@
   --brand: #0a84ff;
   --brand-text: #6cb0ff;
   --brand-soft: rgb(10 132 255 / 16%);
+  /* 实底按钮的底色：白字要过 4.5:1，`--brand` 本身只有 3.65:1 */
+  --brand-solid: #0a6fd6;
+  /* 焦点环：shadcn 组件按 50% 透明画 `ring-ring/50`，这个值在各级表面上
+     叠出来仍 ≥ 3:1（WCAG 1.4.11）；品牌蓝 50% 只有约 2:1 */
+  --focus-ring: #b8dbff;
 
   /* ── 状态色 ──────────────────────────────────────────────────────── */
   --danger: #ff453a;
   --danger-soft: rgb(255 69 58 / 16%);
+  /* 危险文字（叠在自己 20% 的浅底上仍 ≥ 4.5:1）与危险实底（配白字） */
+  --danger-text: #ff9c94;
+  --danger-solid: #d93025;
   --warn: #ff9f0a;
   --warn-soft: rgb(255 159 10 / 16%);
   --caution: #ffd60a;
@@ -118,7 +126,8 @@
 
   /* ── 节点/会话状态语义色（§3.4 状态胶囊） ─────────────────────────── */
   --status-working: var(--agent-working);
-  --status-attention: var(--danger);
+  /* 需要人处理用橙、失败用红：减少动效时两者不再只靠「脉冲与否」区分 */
+  --status-attention: var(--warn);
   --status-failed: var(--danger);
   --status-queued: var(--muted-foreground);
   --status-paused: var(--muted-foreground);
@@ -147,10 +156,13 @@
   --r-card: 10px;
   --r-panel: 12px;
   --r-dialog: 14px;
+  /* shadcn 组件的控件（按钮、输入框、下拉）写 `rounded-lg`、菜单项写
+     `rounded-md`：映射到 §24.2 的语义档，控件 10 / 菜单项 6。菜单容器
+     `rounded-lg` 10 = 菜单项 6 + 内边距 4，同心。 */
   --radius-sm: var(--r-sm);
-  --radius-md: var(--r-md);
+  --radius-md: var(--r-control);
   --radius: var(--r-md);
-  --radius-lg: var(--r-lg);
+  --radius-lg: var(--r-card);
   --radius-xl: var(--r-xl);
 
   /* ── 字号阶梯（§24.2「字体层级」；界面里不允许出现 11px 以下） ────── */
@@ -214,7 +226,7 @@
   --card-foreground: var(--text);
   --popover: var(--surface-overlay);
   --popover-foreground: var(--text);
-  --primary: var(--brand);
+  --primary: var(--brand-solid);
   --primary-foreground: var(--on-accent);
   --secondary: var(--surface-raised);
   --secondary-foreground: var(--text);
@@ -225,11 +237,11 @@
      命令面板、下拉菜单、Select 每一行都吃这个色，用蓝底会太吵。 */
   --accent: rgb(var(--tint-rgb) / 9%);
   --accent-foreground: var(--text);
-  --destructive: var(--danger);
+  --destructive: var(--danger-text);
   --destructive-foreground: var(--on-accent);
   /* shadcn 的 `--input` 是输入控件的边框色（也被 `bg-input/30` 当底用） */
   --input: var(--border-strong);
-  --ring: var(--brand);
+  --ring: var(--focus-ring);
 
   /* 图表色：上下文占用条、用量统计用 */
   --chart-1: #0a84ff;
@@ -299,9 +311,13 @@
   --brand: #007aff;
   --brand-text: #0a5fc4;
   --brand-soft: rgb(0 122 255 / 12%);
+  --brand-solid: #0066cc;
+  --focus-ring: #082340;
 
   --danger: #d70015;
   --danger-soft: rgb(215 0 21 / 10%);
+  --danger-text: #d70015;
+  --danger-solid: #d70015;
   --warn: #b26200;
   --warn-soft: rgb(178 98 0 / 12%);
   --caution: #9a7500;
@@ -324,7 +340,7 @@
   --card-foreground: var(--text);
   --popover: var(--surface-overlay);
   --popover-foreground: var(--text);
-  --primary: var(--brand);
+  --primary: var(--brand-solid);
   --primary-foreground: var(--on-accent);
   --secondary: var(--surface-raised);
   --secondary-foreground: var(--text);
@@ -332,10 +348,10 @@
   --muted-foreground: rgb(var(--tint-rgb) / 70%);
   --accent: rgb(var(--tint-rgb) / 8%);
   --accent-foreground: var(--text);
-  --destructive: var(--danger);
+  --destructive: var(--danger-text);
   --destructive-foreground: var(--on-accent);
   --input: var(--border-strong);
-  --ring: var(--brand);
+  --ring: var(--focus-ring);
 
   --chart-1: #007aff;
   --chart-2: #1d8a35;

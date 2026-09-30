@@ -204,7 +204,7 @@ function DiffFileRow({
         <span className="ml-auto shrink-0 font-mono text-[length:var(--text-caption)] text-[var(--success)]">
           +{file.additions}
         </span>
-        <span className="shrink-0 font-mono text-[length:var(--text-caption)] text-[var(--danger)]">
+        <span className="shrink-0 font-mono text-[length:var(--text-caption)] text-[var(--danger-text)]">
           −{file.deletions}
         </span>
       </Button>
@@ -262,7 +262,7 @@ export function PatchBody({
               : line.startsWith("+") && !line.startsWith("+++")
                 ? "bg-[var(--success-soft)] text-[var(--success)]"
                 : line.startsWith("-") && !line.startsWith("---")
-                  ? "bg-[var(--danger-soft)] text-[var(--danger)]"
+                  ? "bg-[var(--danger-soft)] text-[var(--danger-text)]"
                   : "text-muted-foreground",
             needle &&
               line.toLowerCase().includes(needle) &&
@@ -317,7 +317,7 @@ function SideBySideBody({
                         : !cell
                           ? "bg-[var(--surface-sunken)]"
                           : changed && side === "left"
-                            ? "bg-[var(--danger-soft)] text-[var(--danger)]"
+                            ? "bg-[var(--danger-soft)] text-[var(--danger-text)]"
                             : changed
                               ? "bg-[var(--success-soft)] text-[var(--success)]"
                               : "text-muted-foreground",

@@ -351,7 +351,7 @@ export function NodeHeader({
           <Button
             size="xs"
             variant="ghost"
-            className="text-[var(--danger)]"
+            className="text-[var(--danger-text)]"
             aria-label={t("node.deny")}
             onClick={() => approval.onAnswer("deny")}
           >
@@ -372,7 +372,7 @@ export function NodeHeader({
       />
 
       <IconButton
-        className="node-secondary-action hover:text-[var(--danger)]"
+        className="node-secondary-action hover:text-[var(--danger-text)]"
         label={t("node.close")}
         onClick={() => closeNode(node.id)}
       >

@@ -40,14 +40,14 @@ export function IconButton({
       "size-[28px] rounded-[var(--r-control)] text-muted-foreground",
       "hover:bg-[var(--hover)] hover:text-foreground",
       "data-[active=true]:bg-[color-mix(in_srgb,var(--brand)_15%,transparent)]",
-      "data-[active=true]:text-[var(--brand)]",
+      "data-[active=true]:text-[var(--brand-text)]",
       "[&_svg:not([class*='size-'])]:size-4 [&_svg]:[stroke-width:1.5]",
     ],
     dock: [
       "size-[32px] rounded-[var(--r-md)] text-muted-foreground",
       "hover:bg-[var(--hover)] hover:text-foreground",
       "data-[active=true]:bg-[color-mix(in_srgb,var(--brand)_15%,transparent)]",
-      "data-[active=true]:text-[var(--brand)]",
+      "data-[active=true]:text-[var(--brand-text)]",
       "[&_svg:not([class*='size-'])]:size-[18px] [&_svg]:[stroke-width:1.5]",
     ],
     inline: [
