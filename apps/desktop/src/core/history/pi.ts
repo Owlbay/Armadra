@@ -74,6 +74,32 @@ export function candidates(root: string): Candidate[] {
   );
 }
 
+/** OMP 的标题记录是定长的一行（带填充），这么多字节一定读得完。 */
+const TITLE_LINE_BYTES = 8 * 1024;
+
+/**
+ * 这个文件是哪一家写的：OMP 在 session 记录前面有一行 `type:"title"` 的标题记
+ * 录，Pi 没有。
+ */
+export function writerOf(path: string): PiAgent {
+  const first = readLines(path, TITLE_LINE_BYTES, 1)[0] ?? "";
+  return jsonRecord(first.trim())?.type === "title" ? "omp" : "pi";
+}
+
+/**
+ * 适配器的 `list`。`PI_CODING_AGENT_DIR` 对两家都生效，OMP 又没用 profile 时，
+ * 两家的根是同一个目录；不分的话同一个会话在索引里一家一行（场景 10 真跑发现）。
+ * 根重合时只认自己写的文件；不重合时照旧，不多读一个字节。
+ */
+function listFor(agentId: PiAgent, root: string): Candidate[] {
+  const other: PiAgent = agentId === "pi" ? "omp" : "pi";
+  const found = candidates(root);
+  const shared = rootsOf(other).some((path) => resolve(path) === resolve(root));
+  return shared
+    ? found.filter((candidate) => writerOf(candidate.path) === agentId)
+    : found;
+}
+
 /** `2026-10-02T01-02-03-456Z_<uuid>` → 那个 uuid；形状不对是 `undefined`。 */
 export function sessionIdFromStem(stem: string): string | undefined {
   const separator = stem.lastIndexOf("_");
@@ -366,7 +392,7 @@ function adapterOf(agentId: PiAgent): HistoryAdapter {
     locate: (hint) =>
       reportedFile(hint.transcriptPath) ??
       locateIn(agentId, hint, rootsOf(agentId)),
-    list: candidates,
+    list: (root) => listFor(agentId, root),
     parse: (candidate) => parse(candidate.path),
     readEntries: readPiEntries,
     cost: { kind: "jsonl", source: costSourceOf(agentId) },

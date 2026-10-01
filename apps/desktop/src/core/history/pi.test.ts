@@ -240,6 +240,37 @@ describe("会话索引", () => {
     });
   });
 
+  it("两家的根重合时一个文件只归写它的那一家，不重合时照旧", () => {
+    // 这里 PI_CODING_AGENT_DIR 对两家都生效（beforeEach），根是同一个目录。
+    const title = JSON.stringify({
+      type: "title",
+      v: 1,
+      title: "",
+      updatedAt: 0,
+      pad: " ".repeat(180),
+    });
+    const pi = writeSession(
+      `2026-10-01T08-00-00-000Z_${SESSION_ID}.jsonl`,
+      TEXT,
+    );
+    const omp = writeSession(
+      "2026-10-01T09-00-00-000Z_99999999-2222-4333-8444-555555555555.jsonl",
+      `${title}\n${TEXT}`,
+    );
+    const root = join(directory, "sessions");
+    expect(piAdapter.list(root).map((c) => c.path)).toEqual([pi]);
+    expect(ompAdapter.list(root).map((c) => c.path)).toEqual([omp]);
+
+    // OMP 用了 profile：两家各有各的根，扫到什么认什么。
+    process.env.OMP_PROFILE = "work";
+    expect(
+      piAdapter
+        .list(root)
+        .map((c) => c.path)
+        .sort(),
+    ).toEqual([pi, omp].sort());
+  });
+
   it("OMP 的 session 记录在标题行之后也认得", () => {
     const head = JSON.stringify({
       type: "title",
