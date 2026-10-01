@@ -35,6 +35,7 @@ import {
   pruneHours,
   splitKey,
   totalTokens,
+  type CostUnit,
   type FileState,
   type TokenTotals,
 } from "./cost-buckets";
@@ -51,7 +52,7 @@ export {
   splitKey,
   totalTokens,
 } from "./cost-buckets";
-export type { FileState, TokenTotals } from "./cost-buckets";
+export type { CostUnit, FileState, TokenTotals } from "./cost-buckets";
 export { COST_SOURCES, costSource } from "./cost-sources";
 export type { AgentCostSource } from "./cost-sources";
 
@@ -114,9 +115,18 @@ export type CostStatus = "ok" | "disabled" | "unavailable";
 /** `none` = 这家 agent 目前没有任何本地来源，token 一律是零而不是一个估数。 */
 export type CostAgentSource = "local" | "none";
 
+/**
+ * 一家 agent 在一个窗口里的用量（契约 §12.1）。
+ *
+ * `unit` 是 `"premiumRequests"` 时用量在 `requests`，`tokens` 是零、`costUsd` 是
+ * 0、`complete` 为真——请求数不折算成金额（设计 `cli-collaboration.md` §10）。
+ * `"tokens"` 的行 `requests` 是 0。
+ */
 export interface AgentCost {
   readonly agent: AgentId;
+  readonly unit: CostUnit;
   readonly tokens: TokenTotals;
+  readonly requests: number;
   readonly costUsd: number;
   readonly complete: boolean;
   readonly source: CostAgentSource;
@@ -181,6 +191,11 @@ function sourceOf(agent: AgentId): CostAgentSource {
   return costSource(agent) === undefined ? "none" : "local";
 }
 
+/** 这家的成本行按什么计：来源自己声明，没有来源的按 token。 */
+function unitOf(agent: AgentId): CostUnit {
+  return costSource(agent)?.unit ?? "tokens";
+}
+
 function emptyRange(granularity: "hour" | "day"): CostRange {
   return {
     granularity,
@@ -189,7 +204,9 @@ function emptyRange(granularity: "hour" | "day"): CostRange {
     byModel: [],
     byAgent: AGENT_IDS.map((agent) => ({
       agent,
+      unit: unitOf(agent),
       tokens: emptyTokens(),
+      requests: 0,
       costUsd: 0,
       complete: true,
       source: sourceOf(agent),
@@ -373,6 +390,13 @@ export interface ScanResult {
   readonly buckets: Map<string, TokenTotals>;
   /** 同一个形状，第一段是本地小时，只有最近 48 小时。 */
   readonly hourBuckets: Map<string, TokenTotals>;
+  /**
+   * 按请求计的来源（Copilot）记下的请求增量，键同 `buckets`。没有这类来源时可以
+   * 不给。不进 token 桶，也不进 `totals`。
+   */
+  readonly requestBuckets?: Map<string, number>;
+  /** 同上，小时粒度，只有最近 48 小时。 */
+  readonly requestHourBuckets?: Map<string, number>;
   /** 日期或小时 → 在那一格里有活动的文件（一次扫描内的序号）。 */
   readonly sessions: Map<string, Set<number>>;
   readonly files: Record<string, number>;
@@ -599,9 +623,13 @@ export class ScanState {
     roots: readonly (readonly [AgentId, string])[] = scanRoots(),
   ): Promise<ScanResult> {
     const nowMs = this.now();
+    const requestBuckets = new Map<string, number>();
+    const requestHourBuckets = new Map<string, number>();
     const result: ScanResult = {
       buckets: new Map(),
       hourBuckets: new Map(),
+      requestBuckets,
+      requestHourBuckets,
       sessions: new Map(),
       files: {},
       truncated: false,
@@ -654,6 +682,14 @@ export class ScanState {
       }
       for (const [key, tokens] of state.hourBuckets) {
         addToBucket(result.hourBuckets, key, tokens);
+        addSession(result.sessions, key, fileId);
+      }
+      for (const [key, count] of state.requestBuckets ?? []) {
+        requestBuckets.set(key, (requestBuckets.get(key) ?? 0) + count);
+        addSession(result.sessions, key, fileId);
+      }
+      for (const [key, count] of state.requestHourBuckets ?? []) {
+        requestHourBuckets.set(key, (requestHourBuckets.get(key) ?? 0) + count);
         addSession(result.sessions, key, fileId);
       }
       if (state.buckets.size === 0) continue;
@@ -789,11 +825,17 @@ function addSession(
   else files.add(fileId);
 }
 
-/** 一个桶对一个点的贡献：谁、哪个模型、多少 token。 */
+/**
+ * 一个桶对一个点的贡献：谁、哪个模型、多少 token。
+ *
+ * 请求桶的格子带 `requests`、`tokens` 是零：它们只进 agent 拆分，不进模型拆分、
+ * 不进 token 合计，也不参与定价。
+ */
 interface Cell {
   readonly agent: string;
   readonly model: string;
   readonly tokens: TokenTotals;
+  readonly requests?: number;
 }
 
 /**
@@ -801,25 +843,41 @@ interface Cell {
  *
  * 一趟线性遍历：`buckets` 可能有几千个键，而每条轴只按键查表，不再各自走一遍。
  */
-function groupCells(buckets: ReadonlyMap<string, TokenTotals>): {
+function groupCells(
+  buckets: ReadonlyMap<string, TokenTotals>,
+  requestBuckets: ReadonlyMap<string, number> = new Map(),
+): {
   readonly cells: Map<string, Cell[]>;
   readonly earliest: string | undefined;
 } {
   const cells = new Map<string, Cell[]>();
   let earliest: string | undefined;
-  for (const [key, tokens] of buckets) {
+  const put = (key: string, cell: (agent: string, model: string) => Cell) => {
     const { date, agent, model } = splitKey(key);
-    const cell: Cell = { agent, model, tokens };
     const list = cells.get(date);
-    if (list === undefined) cells.set(date, [cell]);
-    else list.push(cell);
+    if (list === undefined) cells.set(date, [cell(agent, model)]);
+    else list.push(cell(agent, model));
     if (earliest === undefined || date < earliest) earliest = date;
+  };
+  for (const [key, tokens] of buckets) {
+    put(key, (agent, model) => ({ agent, model, tokens }));
+  }
+  for (const [key, requests] of requestBuckets) {
+    put(key, (agent, model) => ({
+      agent,
+      model,
+      tokens: emptyTokens(),
+      requests,
+    }));
   }
   return { cells, earliest };
 }
 
+/** 按 token 计的格子，按模型摊开。请求格子不在里面。 */
 function modelEntries(cells: readonly Cell[]): [string, TokenTotals][] {
-  return cells.map((cell) => [cell.model, cell.tokens]);
+  return cells.flatMap((cell): [string, TokenTotals][] =>
+    cell.requests === undefined ? [[cell.model, cell.tokens]] : [],
+  );
 }
 
 /**
@@ -834,7 +892,12 @@ function agentCosts(
   everyAgent: boolean,
 ): AgentCost[] {
   const perAgent = new Map<string, [string, TokenTotals][]>();
+  const requests = new Map<string, number>();
   for (const cell of cells) {
+    if (cell.requests !== undefined) {
+      requests.set(cell.agent, (requests.get(cell.agent) ?? 0) + cell.requests);
+      continue;
+    }
     const entry: [string, TokenTotals] = [cell.model, cell.tokens];
     const list = perAgent.get(cell.agent);
     if (list === undefined) perAgent.set(cell.agent, [entry]);
@@ -843,11 +906,14 @@ function agentCosts(
   const out: AgentCost[] = [];
   for (const agent of AGENT_IDS) {
     const entries = perAgent.get(agent);
-    if (entries === undefined && !everyAgent) continue;
+    const count = requests.get(agent);
+    if (entries === undefined && count === undefined && !everyAgent) continue;
     const window = windowFrom(entries ?? [], prices);
     out.push({
       agent,
+      unit: unitOf(agent),
       tokens: window.tokens,
+      requests: count ?? 0,
       costUsd: window.costUsd,
       complete: window.complete,
       source: sourceOf(agent),
@@ -888,13 +954,16 @@ function rangeOf(
       sessions: ownSessions?.size ?? 0,
     });
     const total = totalTokens(window.tokens);
-    if (total === 0) {
+    // 只有请求数的格子（Copilot）也算活跃，但峰值仍按 token 比。
+    const requested = own.some((cell) => cell.requests !== undefined);
+    if (total === 0 && !requested) {
       streak = 0;
       continue;
     }
     activeIntervals += 1;
     streak += 1;
     if (streak > longestStreak) longestStreak = streak;
+    if (total === 0) continue;
     if (peak === null || total > totalTokens(peak.tokens)) {
       peak = { key, tokens: window.tokens, costUsd: window.costUsd };
     }
@@ -962,8 +1031,14 @@ export function summarize(
   const today = dates[dates.length - 1] ?? dateAt(nowMs);
   const oldest = dates[0] ?? today;
 
-  const { cells: dayCells, earliest } = groupCells(result.buckets);
-  const { cells: hourCells } = groupCells(result.hourBuckets);
+  const { cells: dayCells, earliest } = groupCells(
+    result.buckets,
+    result.requestBuckets,
+  );
+  const { cells: hourCells } = groupCells(
+    result.hourBuckets,
+    result.requestHourBuckets,
+  );
   const sessions = result.sessions;
 
   const unpriced = new Set<string>();
@@ -972,6 +1047,7 @@ export function summarize(
   for (const [date, cells] of dayCells) {
     if (date < oldest) continue;
     for (const cell of cells) {
+      if (cell.requests !== undefined) continue;
       windowModels.push([cell.model, cell.tokens]);
       if (date === today) todayModels.push([cell.model, cell.tokens]);
       if (priceFor(prices, cell.model) === undefined) unpriced.add(cell.model);
@@ -1017,7 +1093,10 @@ export function summarize(
   }
 
   return {
-    status: result.buckets.size === 0 ? "unavailable" : "ok",
+    status:
+      result.buckets.size === 0 && (result.requestBuckets?.size ?? 0) === 0
+        ? "unavailable"
+        : "ok",
     today: windowFrom(todayModels, prices),
     last30Days: windowFrom(windowModels, prices),
     ...(currentSession === undefined ? {} : { currentSession }),

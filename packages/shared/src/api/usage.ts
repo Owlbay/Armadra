@@ -122,10 +122,21 @@ export const costStatusSchema = z.enum(["ok", "disabled", "unavailable"]);
  */
 export const costAgentSourceSchema = z.enum(["local", "none"]);
 
-/** 一个 agent 在某个窗口里的用量。`agent` 是注册表里的 id（`claude` / `codex` …）。 */
+/**
+ * 成本行的单位：`tokens`，或者 `premiumRequests`（Copilot，只有请求数，不折算
+ * 成 token 或金额）。见契约 §12.1。
+ */
+export const costUnitSchema = z.enum(["tokens", "premiumRequests"]);
+
+/**
+ * 一个 agent 在某个窗口里的用量。`agent` 是注册表里的 id（`claude` / `codex` …）。
+ * `unit` 为 `premiumRequests` 时用量在 `requests`，`tokens` 为零、`costUsd` 为 0。
+ */
 export const costAgentSchema = z.object({
   agent: z.string(),
+  unit: costUnitSchema.default("tokens"),
   tokens: costTokensSchema,
+  requests: z.number().default(0),
   costUsd: z.number(),
   complete: z.boolean(),
   source: costAgentSourceSchema,
@@ -201,6 +212,7 @@ export type CostDay = z.infer<typeof costDaySchema>;
 export type CostSession = z.infer<typeof costSessionSchema>;
 export type CostStatus = z.infer<typeof costStatusSchema>;
 export type CostAgentSource = z.infer<typeof costAgentSourceSchema>;
+export type CostUnit = z.infer<typeof costUnitSchema>;
 export type CostAgent = z.infer<typeof costAgentSchema>;
 export type CostPoint = z.infer<typeof costPointSchema>;
 export type CostRangeKey = z.infer<typeof costRangeKeySchema>;

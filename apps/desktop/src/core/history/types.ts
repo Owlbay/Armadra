@@ -1,6 +1,6 @@
 import type { AgentId } from "../agent/registry";
 import type { Candidate, Parsed } from "../conversations/scan";
-import type { FileState, TokenTotals } from "../usage/cost-buckets";
+import type { CostUnit, FileState, TokenTotals } from "../usage/cost-buckets";
 
 /**
  * 本地历史适配器的类型（设计 `cli-collaboration.md` §2.1）。
@@ -93,6 +93,8 @@ export interface AbsorbContext {
 /** 逐行 JSONL 的成本来源：扫描器按字节增量读，每行交给 `absorb`。 */
 export interface AgentCostSource {
   readonly agentId: AgentId;
+  /** 成本行按什么计，缺省 `"tokens"`；Copilot 按 premium request 计。 */
+  readonly unit?: CostUnit;
   /** 要扫的根目录。这台机器上认不出任何一个时是空数组。 */
   roots(): readonly string[];
   /** 解码前的字节预筛，见 `eachAppendedLine`。 */

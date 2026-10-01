@@ -698,7 +698,7 @@ describe("汇总", () => {
     expect(byAgent.map((one) => one.agent)).toEqual([...AGENT_IDS]);
     expect(
       byAgent.filter((one) => one.source === "local").map((one) => one.agent),
-    ).toEqual(["claude", "codex", "pi", "omp"]);
+    ).toEqual(["claude", "codex", "pi", "omp", "copilot"]);
     expect(byAgent.find((one) => one.agent === "codex")?.costUsd).toBe(1.25);
     expect(byAgent.find((one) => one.agent === "claude")?.costUsd).toBe(5);
     for (const one of byAgent.filter((entry) => entry.source === "none")) {
@@ -715,6 +715,44 @@ describe("汇总", () => {
     expect(
       summary.ranges["30d"].points.at(-1)?.agents.map((one) => one.agent),
     ).toEqual(["claude", "codex"]);
+  });
+
+  it("混合单位：totals 只合并 token，Copilot 行是请求数", async () => {
+    const result = {
+      ...scanned([[localToday(), "claude-opus-5", 1_000_000]]),
+      requestBuckets: new Map([
+        [bucketKey(localToday(), "copilot", "unknown"), 4],
+        [bucketKey(localDay(40), "copilot", "unknown"), 2],
+      ]),
+    };
+    const summary = summarize(result, BUILT_IN_PRICES, NOW);
+    const thirty = summary.ranges["30d"];
+    expect(thirty.totals.tokens.input).toBe(1_000_000);
+    expect(thirty.totals.costUsd).toBe(5);
+    expect(thirty.byModel.map((one) => one.model)).toEqual(["claude-opus-5"]);
+    expect(summary.today.tokens.input).toBe(1_000_000);
+    expect(summary.unpricedModels).toEqual([]);
+    const copilot = thirty.byAgent.find((one) => one.agent === "copilot");
+    expect(copilot).toMatchObject({
+      unit: "premiumRequests",
+      requests: 4,
+      costUsd: 0,
+      complete: true,
+      source: "local",
+    });
+    expect(copilot?.tokens.input).toBe(0);
+    const claude = thirty.byAgent.find((one) => one.agent === "claude");
+    expect(claude).toMatchObject({ unit: "tokens", requests: 0 });
+    // 窗口外的增量只进 all。
+    expect(
+      summary.ranges.all.byAgent.find((one) => one.agent === "copilot")
+        ?.requests,
+    ).toBe(6);
+    // 点上列出有请求数的 Copilot。
+    expect(thirty.points.at(-1)?.agents.map((one) => one.agent)).toEqual([
+      "claude",
+      "copilot",
+    ]);
   });
 
   it("agent 的 complete 和窗口是同一套规则：有没价格的模型就不完整", async () => {

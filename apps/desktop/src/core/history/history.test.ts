@@ -13,6 +13,7 @@ import { PROVIDERS, defaultRoots } from "../conversations";
 import { COST_SOURCES } from "../usage/cost-sources";
 import { claudeAdapter } from "./claude";
 import { codexAdapter } from "./codex";
+import { copilotAdapter } from "./copilot";
 import { entriesFromJson } from "./entries";
 import { readFileEntries } from "./files";
 import expected from "./history.expected.json";
@@ -51,21 +52,36 @@ afterEach(() => {
 });
 
 describe("注册表", () => {
-  it("派生出来的会话索引 provider 和成本来源与拆分之前相同（加上 OpenCode、Pi、OMP）", () => {
-    expect(PROVIDERS).toEqual(["claude", "codex", "opencode", "pi", "omp"]);
+  it("派生出来的会话索引 provider 和成本来源与拆分之前相同（加上 OpenCode、Pi、OMP、Copilot）", () => {
+    expect(PROVIDERS).toEqual([
+      "claude",
+      "codex",
+      "opencode",
+      "pi",
+      "omp",
+      "copilot",
+    ]);
     expect(HISTORY_ADAPTERS.map((adapter) => adapter.agentId)).toEqual([
       "claude",
       "codex",
       "opencode",
       "pi",
       "omp",
+      "copilot",
     ]);
     // 快照式来源不进逐行成本表。
-    expect(Object.keys(COST_SOURCES)).toEqual(["claude", "codex", "pi", "omp"]);
+    expect(Object.keys(COST_SOURCES)).toEqual([
+      "claude",
+      "codex",
+      "pi",
+      "omp",
+      "copilot",
+    ]);
     expect(historyAdapter("claude")).toBe(claudeAdapter);
     expect(historyAdapter("codex")).toBe(codexAdapter);
     expect(historyAdapter("opencode")).toBe(opencodeAdapter);
-    for (const agentId of ["copilot", "custom:x"]) {
+    expect(historyAdapter("copilot")).toBe(copilotAdapter);
+    for (const agentId of ["custom:x"]) {
       expect(historyAdapter(agentId)).toBeUndefined();
     }
   });
@@ -95,6 +111,7 @@ describe("注册表", () => {
       ...opencodeAdapter.roots().map((root) => ["opencode", root]),
       ...piAdapter.roots().map((root) => ["pi", root]),
       ...ompAdapter.roots().map((root) => ["omp", root]),
+      ...copilotAdapter.roots().map((root) => ["copilot", root]),
     ]);
   });
 });
