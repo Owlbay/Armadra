@@ -195,6 +195,72 @@ describe("IntegrationPage", () => {
     expect(mock.uninstallIntegration).not.toHaveBeenCalled();
   });
 
+  /** 历史数据三项：没有数据写状态词，不写 0。 */
+  it("shows the three history badges with a state word each", async () => {
+    mock.agents.mockReset().mockResolvedValue([
+      {
+        ...claude,
+        history: {
+          index: "available",
+          cost: "unsupported",
+          transcript: "not-found",
+        },
+      },
+    ]);
+    mock.integration.mockResolvedValue({
+      agentId: "claude",
+      mode: "canvas",
+      hook: { installed: true, revision: 4 },
+      skill: { installed: true, revision: 12 },
+      legacy: { found: [] },
+      revision: 4,
+    });
+    view();
+    const badge = (part: string, state: string) =>
+      zh(`integration.history.${part}`).replace("{state}", zh(state));
+    const index = await screen.findByText(
+      badge("index", "capability.state.supported"),
+    );
+    expect(index.getAttribute("data-variant")).toBe("secondary");
+    const cost = screen.getByText(
+      badge("cost", "capability.state.unsupported"),
+    );
+    expect(cost.getAttribute("data-variant")).toBe("outline");
+    expect(
+      screen.getByText(badge("transcript", "capability.state.notFound")),
+    ).toBeTruthy();
+  });
+
+  it("marks a transcript switched off on a custom entry as disabled", async () => {
+    mock.agents.mockReset().mockResolvedValue([
+      {
+        ...claude,
+        history: {
+          index: "not-found",
+          cost: "not-found",
+          transcript: "disabled",
+        },
+      },
+    ]);
+    mock.integration.mockResolvedValue({
+      agentId: "claude",
+      mode: "canvas",
+      hook: { installed: true, revision: 4 },
+      skill: { installed: true, revision: 12 },
+      legacy: { found: [] },
+      revision: 4,
+    });
+    view();
+    expect(
+      await screen.findByText(
+        zh("integration.history.transcript").replace(
+          "{state}",
+          zh("capability.state.disabled"),
+        ),
+      ),
+    ).toBeTruthy();
+  });
+
   /**
    * 接口没答上来时整页是空白的：没有 CLI 与还没读完长得一模一样，用户
    * 只能看着一张空页猜。

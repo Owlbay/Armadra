@@ -21,6 +21,9 @@ export const integration: MessageModule = {
     "integration.hook.missing": "Hook 未生成", // i18n-exempt
     "integration.skill.revision": "技能 rev {value}", // i18n-exempt
     "integration.skill.missing": "技能未生成",
+    "integration.history.index": "索引：{state}",
+    "integration.history.cost": "成本：{state}",
+    "integration.history.transcript": "转录：{state}",
     "integration.globalWrite": "信任记录写在 {path}",
     "integration.migrated": "已清理全局安装",
     "integration.regenerate": "重新生成",
@@ -48,6 +51,9 @@ export const integration: MessageModule = {
     "integration.hook.missing": "Hook not generated",
     "integration.skill.revision": "Skill rev {value}",
     "integration.skill.missing": "Skill not generated",
+    "integration.history.index": "Index: {state}",
+    "integration.history.cost": "Cost: {state}",
+    "integration.history.transcript": "Transcript: {state}",
     "integration.globalWrite": "Trust records in {path}",
     "integration.migrated": "Global install removed",
     "integration.regenerate": "Regenerate",

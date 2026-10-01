@@ -1,7 +1,12 @@
 import { useMutation } from "@tanstack/react-query";
 import { Wrench } from "lucide-react";
 import { toast } from "sonner";
-import type { AgentInfo, LegacyIntegrationFinding } from "@armadra/shared";
+import type {
+  AgentHistory,
+  AgentInfo,
+  HistoryState,
+  LegacyIntegrationFinding,
+} from "@armadra/shared";
 
 import { runtimeApi } from "../../../api/client";
 import { useAgentsQuery } from "../../../app/use-agents";
@@ -163,6 +168,7 @@ function AgentIntegrationRow({ agent }: { agent: AgentInfo }) {
           </Badge>
         )}
         {legacy.length > 0 && <LegacyBadge findings={legacy} />}
+        {agent.history && <HistoryBadges history={agent.history} />}
       </span>
     </span>
   );
@@ -190,6 +196,33 @@ function AgentIntegrationRow({ agent }: { agent: AgentInfo }) {
       )}
     </SettingsRow>
   );
+}
+
+const HISTORY_PARTS = ["index", "cost", "transcript"] as const;
+
+const HISTORY_STATE_KEY: Record<HistoryState, string> = {
+  available: "capability.state.supported",
+  "not-found": "capability.state.notFound",
+  unsupported: "capability.state.unsupported",
+  disabled: "capability.state.disabled",
+};
+
+/**
+ * 本机历史数据三项（契约 §12.2）。没有数据也写状态词，不写成 0 或留空：「没
+ * 找到」和「这家不支持」是两回事。
+ */
+function HistoryBadges({ history }: { history: AgentHistory }) {
+  const t = useT();
+  return HISTORY_PARTS.map((part) => (
+    <Badge
+      key={part}
+      variant={history[part] === "available" ? "secondary" : "outline"}
+    >
+      {t(`integration.history.${part}`, {
+        state: t(HISTORY_STATE_KEY[history[part]]),
+      })}
+    </Badge>
+  ));
 }
 
 /**
