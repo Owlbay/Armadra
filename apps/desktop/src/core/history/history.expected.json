@@ -1,0 +1,541 @@
+{
+  "roles": {
+    "records": [
+      {
+        "line": "[用户] ask",
+        "endOffset": 44
+      },
+      {
+        "line": "[助手] answer",
+        "endOffset": 96
+      },
+      {
+        "line": "[系统] note",
+        "endOffset": 131
+      }
+    ],
+    "brief": [
+      {
+        "line": "[用户] ask",
+        "endOffset": 44
+      },
+      {
+        "line": "[助手] answer",
+        "endOffset": 96
+      },
+      {
+        "line": "[系统] note",
+        "endOffset": 131
+      }
+    ],
+    "digest": {
+      "lastUser": "ask",
+      "lastAssistant": "answer",
+      "files": [],
+      "filesTruncated": false,
+      "toolCalls": 0,
+      "entries": 3
+    }
+  },
+  "codex": {
+    "records": [
+      {
+        "line": "[用户] fix the bug",
+        "endOffset": 257
+      },
+      {
+        "line": "[助手] done",
+        "endOffset": 504
+      }
+    ],
+    "brief": [
+      {
+        "line": "[用户] fix the bug",
+        "endOffset": 257
+      },
+      {
+        "line": "[助手] done",
+        "endOffset": 504
+      }
+    ],
+    "digest": {
+      "lastUser": "fix the bug",
+      "lastAssistant": "done",
+      "files": [],
+      "filesTruncated": false,
+      "toolCalls": 0,
+      "entries": 2
+    }
+  },
+  "claude": {
+    "records": [
+      {
+        "line": "[用户] please read a.ts",
+        "endOffset": 110
+      },
+      {
+        "line": "[助手] Reading. [工具 Read a.ts] [工具 Bash ls -la]",
+        "endOffset": 387
+      },
+      {
+        "line": "[结果 line1 line2]",
+        "endOffset": 494
+      },
+      {
+        "line": "[结果 nested text]",
+        "endOffset": 626
+      },
+      {
+        "line": "[系统] tool says",
+        "endOffset": 738
+      },
+      {
+        "line": "[用户] typed",
+        "endOffset": 873
+      },
+      {
+        "line": "[助手] object content",
+        "endOffset": 1038
+      },
+      {
+        "line": "[工具 apply {\"path\":\"p.ts\"}]",
+        "endOffset": 1160
+      },
+      {
+        "line": "[结果 ]",
+        "endOffset": 1249
+      },
+      {
+        "line": "[助手] 长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长…",
+        "endOffset": 10295
+      },
+      {
+        "line": "[工具 未命名工具]",
+        "endOffset": 10360
+      },
+      {
+        "line": "[工具 Odd {\"a\":1,\"b\":[2]}]",
+        "endOffset": 10462
+      },
+      {
+        "line": "[工具 Empty]",
+        "endOffset": 10553
+      },
+      {
+        "line": "[用户] text field",
+        "endOffset": 10589
+      },
+      {
+        "line": "[用户] 我在 中文 里",
+        "endOffset": 10647
+      }
+    ],
+    "brief": [
+      {
+        "line": "[用户] please read a.ts",
+        "endOffset": 110
+      },
+      {
+        "line": "[助手] Reading. [工具 Read a.ts] [工具 Bash ls -la]",
+        "endOffset": 387
+      },
+      {
+        "line": "[结果 Bash 11 B 首行：line1]",
+        "endOffset": 494
+      },
+      {
+        "line": "[结果 Read 11 B 首行：nested text]",
+        "endOffset": 626
+      },
+      {
+        "line": "[系统] tool says",
+        "endOffset": 738
+      },
+      {
+        "line": "[用户] typed",
+        "endOffset": 873
+      },
+      {
+        "line": "[助手] object content",
+        "endOffset": 1038
+      },
+      {
+        "line": "[工具 apply {\"path\":\"p.ts\"}]",
+        "endOffset": 1160
+      },
+      {
+        "line": "[结果 apply 0 B]",
+        "endOffset": 1249
+      },
+      {
+        "line": "[助手] 长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长…",
+        "endOffset": 10295
+      },
+      {
+        "line": "[工具 未命名工具]",
+        "endOffset": 10360
+      },
+      {
+        "line": "[工具 Odd {\"a\":1,\"b\":[2]}]",
+        "endOffset": 10462
+      },
+      {
+        "line": "[工具 Empty]",
+        "endOffset": 10553
+      },
+      {
+        "line": "[用户] text field",
+        "endOffset": 10589
+      },
+      {
+        "line": "[用户] 我在 中文 里",
+        "endOffset": 10647
+      }
+    ],
+    "digest": {
+      "lastUser": "我在 中文 里",
+      "lastAssistant": "长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长…",
+      "files": ["a.ts", "n.ts", "p.ts"],
+      "filesTruncated": false,
+      "toolCalls": 7,
+      "entries": 17
+    }
+  },
+  "document": {
+    "records": [
+      {
+        "line": "[用户] from a document",
+        "endOffset": 58
+      }
+    ],
+    "brief": [
+      {
+        "line": "[用户] from a document",
+        "endOffset": 58
+      }
+    ],
+    "digest": {
+      "lastUser": "from a document",
+      "files": [],
+      "filesTruncated": false,
+      "toolCalls": 0,
+      "entries": 1
+    }
+  },
+  "array": {
+    "records": [
+      {
+        "line": "[用户] array",
+        "endOffset": 99
+      },
+      {
+        "line": "[助手] reply",
+        "endOffset": 99
+      }
+    ],
+    "brief": [
+      {
+        "line": "[用户] array",
+        "endOffset": 99
+      },
+      {
+        "line": "[助手] reply",
+        "endOffset": 99
+      }
+    ],
+    "digest": {
+      "lastUser": "array",
+      "lastAssistant": "reply",
+      "files": [],
+      "filesTruncated": false,
+      "toolCalls": 0,
+      "entries": 2
+    }
+  },
+  "emptyDocument": {
+    "records": [],
+    "brief": [],
+    "digest": {
+      "files": [],
+      "filesTruncated": false,
+      "toolCalls": 0,
+      "entries": 1
+    }
+  },
+  "singleLine": {
+    "records": [
+      {
+        "line": "[用户] one line",
+        "endOffset": 48
+      }
+    ],
+    "brief": [
+      {
+        "line": "[用户] one line",
+        "endOffset": 48
+      }
+    ],
+    "digest": {
+      "lastUser": "one line",
+      "files": [],
+      "filesTruncated": false,
+      "toolCalls": 0,
+      "entries": 1
+    }
+  },
+  "prettyDocument": {
+    "records": [
+      {
+        "line": "[用户] pretty",
+        "endOffset": 84
+      }
+    ],
+    "brief": [
+      {
+        "line": "[用户] pretty",
+        "endOffset": 84
+      }
+    ],
+    "digest": {
+      "lastUser": "pretty",
+      "files": [],
+      "filesTruncated": false,
+      "toolCalls": 0,
+      "entries": 1
+    }
+  },
+  "files": {
+    "records": [
+      {
+        "line": "[工具 Edit f0.ts]",
+        "endOffset": 109
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g1.ts \"}]",
+        "endOffset": 221
+      },
+      {
+        "line": "[工具 Edit f2.ts]",
+        "endOffset": 330
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g3.ts \"}]",
+        "endOffset": 442
+      },
+      {
+        "line": "[工具 Edit f4.ts]",
+        "endOffset": 551
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g5.ts \"}]",
+        "endOffset": 663
+      },
+      {
+        "line": "[工具 Edit f6.ts]",
+        "endOffset": 772
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g7.ts \"}]",
+        "endOffset": 884
+      },
+      {
+        "line": "[工具 Edit f8.ts]",
+        "endOffset": 993
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g9.ts \"}]",
+        "endOffset": 1105
+      },
+      {
+        "line": "[工具 Edit f10.ts]",
+        "endOffset": 1215
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g11.ts \"}]",
+        "endOffset": 1328
+      },
+      {
+        "line": "[工具 Edit f12.ts]",
+        "endOffset": 1438
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g13.ts \"}]",
+        "endOffset": 1551
+      },
+      {
+        "line": "[工具 Edit f14.ts]",
+        "endOffset": 1661
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g15.ts \"}]",
+        "endOffset": 1774
+      },
+      {
+        "line": "[工具 Edit f16.ts]",
+        "endOffset": 1884
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g17.ts \"}]",
+        "endOffset": 1997
+      },
+      {
+        "line": "[工具 Edit f18.ts]",
+        "endOffset": 2107
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g19.ts \"}]",
+        "endOffset": 2220
+      },
+      {
+        "line": "[工具 Edit f20.ts]",
+        "endOffset": 2330
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g21.ts \"}]",
+        "endOffset": 2443
+      },
+      {
+        "line": "[工具 Edit f22.ts]",
+        "endOffset": 2553
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g23.ts \"}]",
+        "endOffset": 2666
+      },
+      {
+        "line": "[工具 Edit f24.ts]",
+        "endOffset": 2776
+      }
+    ],
+    "brief": [
+      {
+        "line": "[工具 Edit f0.ts]",
+        "endOffset": 109
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g1.ts \"}]",
+        "endOffset": 221
+      },
+      {
+        "line": "[工具 Edit f2.ts]",
+        "endOffset": 330
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g3.ts \"}]",
+        "endOffset": 442
+      },
+      {
+        "line": "[工具 Edit f4.ts]",
+        "endOffset": 551
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g5.ts \"}]",
+        "endOffset": 663
+      },
+      {
+        "line": "[工具 Edit f6.ts]",
+        "endOffset": 772
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g7.ts \"}]",
+        "endOffset": 884
+      },
+      {
+        "line": "[工具 Edit f8.ts]",
+        "endOffset": 993
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g9.ts \"}]",
+        "endOffset": 1105
+      },
+      {
+        "line": "[工具 Edit f10.ts]",
+        "endOffset": 1215
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g11.ts \"}]",
+        "endOffset": 1328
+      },
+      {
+        "line": "[工具 Edit f12.ts]",
+        "endOffset": 1438
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g13.ts \"}]",
+        "endOffset": 1551
+      },
+      {
+        "line": "[工具 Edit f14.ts]",
+        "endOffset": 1661
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g15.ts \"}]",
+        "endOffset": 1774
+      },
+      {
+        "line": "[工具 Edit f16.ts]",
+        "endOffset": 1884
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g17.ts \"}]",
+        "endOffset": 1997
+      },
+      {
+        "line": "[工具 Edit f18.ts]",
+        "endOffset": 2107
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g19.ts \"}]",
+        "endOffset": 2220
+      },
+      {
+        "line": "[工具 Edit f20.ts]",
+        "endOffset": 2330
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g21.ts \"}]",
+        "endOffset": 2443
+      },
+      {
+        "line": "[工具 Edit f22.ts]",
+        "endOffset": 2553
+      },
+      {
+        "line": "[工具 Edit {\"path\":\" g23.ts \"}]",
+        "endOffset": 2666
+      },
+      {
+        "line": "[工具 Edit f24.ts]",
+        "endOffset": 2776
+      }
+    ],
+    "digest": {
+      "files": [
+        "f0.ts",
+        "g1.ts",
+        "f2.ts",
+        "g3.ts",
+        "f4.ts",
+        "g5.ts",
+        "f6.ts",
+        "g7.ts",
+        "f8.ts",
+        "g9.ts",
+        "f10.ts",
+        "g11.ts",
+        "f12.ts",
+        "g13.ts",
+        "f14.ts",
+        "g15.ts",
+        "f16.ts",
+        "g17.ts",
+        "f18.ts",
+        "g19.ts"
+      ],
+      "filesTruncated": true,
+      "toolCalls": 25,
+      "entries": 25
+    }
+  },
+  "entries": ["[用户] hi", "[工具 Read a.ts]", "[结果 lots of output]", null]
+}
