@@ -155,4 +155,9 @@ export interface HistoryAdapter {
     maxBytes: number,
   ): EntryRange;
   readonly cost?: CostCollector;
+  /**
+   * 把 `readEntries` 的游标说成给读者看的一句话。不给就是字节（文件来源）；
+   * 游标不是字节的来源（OpenCode 的消息时间）自己说。
+   */
+  describeCursor?(offset: number): string;
 }

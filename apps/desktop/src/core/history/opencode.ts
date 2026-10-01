@@ -31,8 +31,9 @@ import type {
  *
  *   * 候选的 `path` 与定位结果的 `key` 都是不透明键 `opencode:<sessionId>`，
  *     没有 `path`（{@link Located}）。
- *   * 读取游标是 `message.time_created`（毫秒），不是字节：`startOffset` 恒为
- *     0，每条记录的 `endOffset` 就是那条消息的 `time_created`。
+ *   * 读取游标不是字节，而是 `(message.time_created, 同一毫秒里的序号)` 编成的
+ *     一个整数（{@link encodeCursor}）：`startOffset` 恒为 0，每条记录的
+ *     `endOffset` 就是那条消息的游标。
  *   * 成本是快照式（`kind: "snapshot"`）：每趟把某个时间之后的 assistant 消息
  *     一次交齐。
  *
@@ -183,7 +184,13 @@ interface SessionRow {
  * 上一趟 {@link candidates} 读出来的标题与 cwd，按候选的 `path` 存。索引紧接着
  * 就会对每个变了的候选调 `parse`，那一行刚才已经读过，没有必要再开一次库。
  */
-let parsedCache = new Map<string, Parsed>();
+let parsedCache = new Map<string, Parsed & { readonly updatedAt: string }>();
+
+/**
+ * OpenCode 还没来得及起标题时写的占位（`New session - <ISO 时间>`，子会话是
+ * `Child session - …`）。它说不出会话是关于什么的，于是换成首条用户消息。
+ */
+const PLACEHOLDER_TITLE = /^(New|Child) session - \d{4}-\d{2}-\d{2}T/;
 
 /**
  * 库里的会话，一个会话一个候选，最近更新的在前。子会话（`parent_id` 非空，
@@ -191,7 +198,7 @@ let parsedCache = new Map<string, Parsed>();
  */
 export function candidates(root: string): Candidate[] {
   const found: Candidate[] = [];
-  const parsed = new Map<string, Parsed>();
+  const parsed = new Map<string, Parsed & { readonly updatedAt: string }>();
   try {
     withDatabase(root, (database) => {
       const rows = database
@@ -204,16 +211,18 @@ export function candidates(root: string): Candidate[] {
         const id = String(row.id ?? "");
         if (id === "") continue;
         const path = `${KEY_PREFIX}${id}`;
+        const updatedAt = isoAt(row.time_updated);
         found.push({
           path,
-          updatedAt: isoAt(row.time_updated),
+          updatedAt,
           // 没有一个文件可以量；会话索引不读这个数。
           bytes: 0,
         });
         parsed.set(path, {
           sessionId: id,
-          title: clampTitle(String(row.title ?? "")),
+          title: String(row.title ?? ""),
           cwd: String(row.directory ?? ""),
+          updatedAt,
         });
       }
     });
@@ -226,12 +235,24 @@ export function candidates(root: string): Candidate[] {
   return found;
 }
 
-/** 一个候选 → 会话 id、标题与 cwd。标题直接用 `session.title`。 */
+/**
+ * 一个候选 → 会话 id、标题与 cwd。
+ *
+ * 标题直接用 `session.title`；还是占位标题时退回首条用户消息。上一趟列表读过
+ * 这一行、而且候选的更新时间对得上时不再开库（会话索引紧接着列表调它）；对不上
+ * （比如节点改名建议传的是空的更新时间）就现读，标题可能刚被 OpenCode 起好。
+ */
 export function parse(candidate: Candidate): Parsed | undefined {
   const id = sessionIdOf(candidate.path);
   if (id === undefined) return undefined;
   const cached = parsedCache.get(candidate.path);
-  if (cached !== undefined) return cached;
+  if (
+    cached !== undefined &&
+    cached.updatedAt === candidate.updatedAt &&
+    !PLACEHOLDER_TITLE.test(cached.title)
+  ) {
+    return { sessionId: id, title: clampTitle(cached.title), cwd: cached.cwd };
+  }
   const path = databasePath();
   if (path === undefined) return undefined;
   try {
@@ -240,15 +261,42 @@ export function parse(candidate: Candidate): Parsed | undefined {
         .prepare("SELECT id, title, directory FROM session WHERE id = ?")
         .get(id) as unknown as Omit<SessionRow, "time_updated"> | undefined;
       if (row === undefined) return undefined;
+      const stored = String(row.title ?? "");
+      const title = PLACEHOLDER_TITLE.test(stored)
+        ? (firstUserText(database, id) ?? "")
+        : stored;
       return {
         sessionId: id,
-        title: clampTitle(String(row.title ?? "")),
+        title: clampTitle(title),
         cwd: String(row.directory ?? ""),
       };
     });
   } catch {
     return undefined;
   }
+}
+
+/** 首条用户消息里第一段不是 OpenCode 自己塞进来的文本；最多看前 50 个分块。 */
+function firstUserText(
+  database: DatabaseSync,
+  sessionId: string,
+): string | undefined {
+  const rows = database
+    .prepare(
+      "SELECT m.data AS message, p.data AS part FROM message m " +
+        "JOIN part p ON p.message_id = m.id WHERE m.session_id = ? " +
+        "ORDER BY m.time_created, m.id, p.id LIMIT 50",
+    )
+    .all(sessionId) as { message: string; part: string }[];
+  for (const row of rows) {
+    if (asRecord(parseJson(String(row.message)))?.role !== "user") continue;
+    const part = asRecord(parseJson(String(row.part)));
+    if (part?.type !== "text" || part.synthetic === true) continue;
+    if (part.ignored === true) continue;
+    const text = typeof part.text === "string" ? part.text.trim() : "";
+    if (text !== "") return text;
+  }
+  return undefined;
 }
 
 /** `opencode:<id>` → `<id>`；不是这个前缀是 `undefined`。 */
@@ -272,12 +320,44 @@ export function locate(hint: SessionHint): Located | undefined {
 interface JoinedRow {
   readonly id: string;
   readonly at: number;
+  readonly rank: number;
   readonly message: string;
   readonly part: string | null;
 }
 
 /**
- * 读 `fromOffset`（一个 `time_created` 游标）之后的消息。
+ * 同一毫秒里能区分的消息条数。游标是 `time_created × 1000 + 序号`：毫秒时间戳
+ * 乘上一千仍远在 2^53 以内（到 2255 年），而一个会话在同一毫秒写下一千条消息不
+ * 会发生——真到了，多出来的那些共用最后一个序号。
+ */
+const PER_MS = 1000;
+
+/** `(time_created, 同一毫秒里按 id 排的序号)` → 读取游标。 */
+export function encodeCursor(timeMs: number, rank: number): number {
+  return timeMs * PER_MS + Math.min(Math.max(0, rank), PER_MS - 1);
+}
+
+/** {@link encodeCursor} 的逆；0（从头读）是「早于一切」。 */
+export function decodeCursor(offset: number): {
+  readonly timeMs: number;
+  readonly rank: number;
+} {
+  if (!Number.isFinite(offset) || offset <= 0) return { timeMs: 0, rank: -1 };
+  const whole = Math.trunc(offset);
+  return { timeMs: Math.floor(whole / PER_MS), rank: whole % PER_MS };
+}
+
+/** 给读者看的游标：那条消息的时间，同一毫秒里不是第一条时再带上序号。 */
+export function describeCursor(offset: number): string {
+  const { timeMs, rank } = decodeCursor(offset);
+  if (timeMs === 0) return "从头（OpenCode 消息游标）";
+  const nth = rank > 0 ? ` 第 ${rank + 1} 条` : "";
+  return `OpenCode 消息时间 ${isoAt(timeMs)}${nth}`;
+}
+
+/**
+ * 读 `fromOffset`（{@link encodeCursor} 编的游标）之后的消息。同一毫秒的多条
+ * 按 id 排序号，游标停在哪一条，下次就从它的下一条接着读：不漏也不重复。
  *
  * 一条消息一条记录，它的分块按 `part.id` 的顺序变成块：`text` → 文本，`tool`
  * → 工具调用，跑完了的再跟一个工具结果（取 `state.output`，失败取
@@ -293,7 +373,8 @@ export function readEntries(
   fromOffset: number,
   maxBytes: number,
 ): EntryRange {
-  const from = Number.isFinite(fromOffset) && fromOffset > 0 ? fromOffset : 0;
+  const from =
+    Number.isFinite(fromOffset) && fromOffset > 0 ? Math.trunc(fromOffset) : 0;
   const empty: EntryRange = { entries: [], startOffset: 0, endOffset: from };
   const id = sessionIdOf(located.key);
   const path = databasePath();
@@ -311,14 +392,26 @@ export function readFrom(
   from: number,
   maxBytes: number,
 ): EntryRange {
+  const cursor = decodeCursor(from);
+  // 序号在 `time_created >= 游标时间` 这一片里按毫秒分组算：游标那一毫秒的消息
+  // 全在片里，所以同一条消息两次算出的序号相同。
   const rows = database
     .prepare(
-      "SELECT m.id AS id, m.time_created AS at, m.data AS message, p.data AS part " +
-        "FROM message m LEFT JOIN part p ON p.message_id = m.id " +
-        "WHERE m.session_id = ? AND m.time_created > ? " +
-        "ORDER BY m.time_created DESC, m.id DESC, p.id ASC",
+      "WITH ranked AS (SELECT id, time_created, data, " +
+        "ROW_NUMBER() OVER (PARTITION BY time_created ORDER BY id) - 1 AS rank " +
+        "FROM message WHERE session_id = ? AND time_created >= ?) " +
+        "SELECT r.id AS id, r.time_created AS at, r.rank AS rank, " +
+        "r.data AS message, p.data AS part " +
+        "FROM ranked r LEFT JOIN part p ON p.message_id = r.id " +
+        "WHERE r.time_created > ? OR r.rank > ? " +
+        "ORDER BY r.time_created DESC, r.id DESC, p.id ASC",
     )
-    .iterate(sessionId, from) as IterableIterator<JoinedRow>;
+    .iterate(
+      sessionId,
+      cursor.timeMs,
+      cursor.timeMs,
+      cursor.rank,
+    ) as IterableIterator<JoinedRow>;
 
   // 从新往旧读，攒够预算就停：被丢掉的总是旧的那头。
   const newestFirst: TranscriptEntry[] = [];
@@ -350,7 +443,7 @@ export function readFrom(
       if (!flush()) break;
       current = {
         id: rowId,
-        at: Number(row.at),
+        at: encodeCursor(Number(row.at), Number(row.rank)),
         message: String(row.message ?? ""),
         parts: [],
         bytes: 0,
@@ -383,7 +476,12 @@ function entryOf(
     if (part !== undefined) blocks.push(...blocksOfPart(part));
   }
   if (blocks.length === 0) return undefined;
-  return { role, blocks, endOffset: at, at: isoAt(at) };
+  return {
+    role,
+    blocks,
+    endOffset: at,
+    at: isoAt(decodeCursor(at).timeMs),
+  };
 }
 
 function blocksOfPart(part: Record<string, unknown>): Block[] {
@@ -453,14 +551,19 @@ interface MessageRow {
 }
 
 /**
- * `sinceMs` 之后（按 `message.time_created`）写完了的 assistant 消息的用量。
+ * `sinceMs` 当时及之后（按 `message.time_created`，**含**等于）写完了的
+ * assistant 消息的用量。
+ *
+ * 含等于是为了同一毫秒的多条：游标停在某一毫秒时，那一毫秒里还没交出的消息
+ * 下一趟仍然读得到；已经交出的那些靠 `ctx.seen` 按消息 id 去重——所以调用方
+ * 必须在各趟扫描之间留着同一个 `seen`（`ScanState` 正是这样）。
  *
  * 一条 assistant 消息是先插入、跑完才把 `tokens` 写满的。遇到第一条还没写完的
  * 就停：它之后的留给下一趟，这样调用方把游标推到「交出来的最后一条的时间」不会
  * 越过它。挂了一小时还没写完的不再等（{@link STALE_UNFINISHED_MS}）。
  *
- * `reasoning` 按输出计（OpenCode 把它单列，计费按输出价）。同一条消息在一趟
- * 扫描里只计一次（`ctx.seen`）。子会话的消息照样计：钱是真花了的。
+ * `reasoning` 按输出计（OpenCode 把它单列，计费按输出价）。子会话的消息照样
+ * 计：钱是真花了的。
  */
 export function collectFrom(
   path: string,
@@ -487,7 +590,7 @@ export function samplesFrom(
   const rows = database
     .prepare(
       "SELECT id, session_id, time_created, data FROM message " +
-        "WHERE time_created > ? ORDER BY time_created, id",
+        "WHERE time_created >= ? ORDER BY time_created, id",
     )
     .iterate(since) as IterableIterator<MessageRow>;
   const samples: CostSample[] = [];
@@ -554,6 +657,7 @@ export const opencodeAdapter: HistoryAdapter = {
   list: candidates,
   parse,
   readEntries,
+  describeCursor,
   cost: {
     kind: "snapshot",
     collect(sinceMs, ctx) {

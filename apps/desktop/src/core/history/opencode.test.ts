@@ -11,6 +11,9 @@ import { openDatabase } from "../db/open";
 import {
   candidates,
   collectFrom,
+  decodeCursor,
+  describeCursor,
+  encodeCursor,
   locate,
   opencodeAdapter,
   parse,
@@ -343,12 +346,12 @@ describe("定位与记录", () => {
       1 << 20,
     );
     expect(range.startOffset).toBe(0);
-    expect(range.endOffset).toBe(2_000);
+    expect(range.endOffset).toBe(encodeCursor(2_000, 0));
     expect(range.entries).toEqual([
       {
         role: "user",
         blocks: [{ type: "text", text: "登录页白屏" }],
-        endOffset: 1_000,
+        endOffset: encodeCursor(1_000, 0),
         at: new Date(1_000).toISOString(),
       },
       {
@@ -370,13 +373,13 @@ describe("定位与记录", () => {
             content: "export function Login() {}",
           },
         ],
-        endOffset: 2_000,
+        endOffset: encodeCursor(2_000, 0),
         at: new Date(2_000).toISOString(),
       },
     ]);
   });
 
-  it("游标是 time_created：从上次的 endOffset 续读只给新的消息", () => {
+  it("游标编的是 time_created：从上次的 endOffset 续读只给新的消息", () => {
     const database = createDatabase();
     seedConversation(database);
     const located = { key: "opencode:ses_root", origin: "" };
@@ -394,8 +397,53 @@ describe("定位与记录", () => {
     ]);
     database.close();
     const next = readEntries(located, cursor, 1 << 20);
-    expect(next.entries.map((entry) => entry.endOffset)).toEqual([3_000]);
-    expect(next.endOffset).toBe(3_000);
+    expect(next.entries.map((entry) => entry.endOffset)).toEqual([
+      encodeCursor(3_000, 0),
+    ]);
+    expect(next.endOffset).toBe(encodeCursor(3_000, 0));
+  });
+
+  it("同一毫秒的多条消息：游标停在其中一条，下次从它的下一条接着读，不漏不重", () => {
+    const database = createDatabase();
+    addSession(database, {
+      id: "ses_tie",
+      title: "同一毫秒",
+      directory: "/work/app",
+      updated: 9_000,
+    });
+    for (const text of ["一", "二", "三"]) {
+      addMessage(database, "ses_tie", 7_000, { role: "user" }, [
+        { type: "text", text },
+      ]);
+    }
+    const located = { key: "opencode:ses_tie", origin: "" };
+    const all = readEntries(located, 0, 1 << 20);
+    expect(all.entries.map((entry) => entry.endOffset)).toEqual([
+      encodeCursor(7_000, 0),
+      encodeCursor(7_000, 1),
+      encodeCursor(7_000, 2),
+    ]);
+    // 只交出了第一条：游标停在它，后两条下次还在。
+    const after = readEntries(located, all.entries[0]!.endOffset, 1 << 20);
+    expect(
+      after.entries.map((entry) =>
+        entry.blocks.map((block) => (block.type === "text" ? block.text : "")),
+      ),
+    ).toEqual([["二"], ["三"]]);
+    // 同一毫秒又写进来一条：接在最后一条之后，前面的不再给。
+    addMessage(database, "ses_tie", 7_000, { role: "user" }, [
+      { type: "text", text: "四" },
+    ]);
+    database.close();
+    const more = readEntries(located, all.endOffset, 1 << 20);
+    expect(more.entries.map((entry) => entry.endOffset)).toEqual([
+      encodeCursor(7_000, 3),
+    ]);
+    expect(decodeCursor(more.endOffset)).toEqual({ timeMs: 7_000, rank: 3 });
+    expect(describeCursor(more.endOffset)).toBe(
+      `OpenCode 消息时间 ${new Date(7_000).toISOString()} 第 4 条`,
+    );
+    expect(describeCursor(0)).toContain("从头");
   });
 
   it("超出 maxBytes 时保留最新的消息，最新一条再大也给", () => {
@@ -408,7 +456,7 @@ describe("定位与记录", () => {
     const located = { key: "opencode:ses_root", origin: "" };
     expect(
       readEntries(located, 0, 100).entries.map((entry) => entry.endOffset),
-    ).toEqual([3_000]);
+    ).toEqual([encodeCursor(3_000, 0)]);
   });
 
   it("经注册表读出来的记录可以渲染、可以摘要", () => {
@@ -436,7 +484,7 @@ describe("定位与记录", () => {
 });
 
 describe("成本快照", () => {
-  it("assistant 消息逐条成样本，sinceMs 之后才取；reasoning 计入输出", () => {
+  it("assistant 消息逐条成样本，sinceMs 当时及之后才取；reasoning 计入输出", () => {
     const database = createDatabase();
     seedConversation(database);
     addSession(database, {
@@ -482,8 +530,12 @@ describe("成本快照", () => {
         reportedCost: 0.01,
       },
     ]);
+    // 含等于：游标那一毫秒的还会给，由调用方跨趟留着的 `seen` 去重。
     expect(
       collectFrom(dbPath, 2_000, context()).map((sample) => sample.timestamp),
+    ).toEqual([2_000, 4_000]);
+    expect(
+      collectFrom(dbPath, 2_001, context()).map((sample) => sample.timestamp),
     ).toEqual([4_000]);
 
     addMessage(
@@ -494,8 +546,37 @@ describe("成本快照", () => {
     );
     database.close();
     expect(
-      collectFrom(dbPath, 4_000, context()).map((sample) => sample.timestamp),
+      collectFrom(dbPath, 4_001, context()).map((sample) => sample.timestamp),
     ).toEqual([5_000]);
+  });
+
+  it("同一毫秒的两条：一条先交出、另一条还没写完，下一趟从同一毫秒接着取，不漏不重", () => {
+    const database = createDatabase();
+    seedConversation(database);
+    addMessage(
+      database,
+      "ses_root",
+      6_000,
+      assistant("m-1", { input: 1, output: 1 }),
+    );
+    const pending = addMessage(
+      database,
+      "ses_root",
+      6_000,
+      assistant("m-1", { input: 2, output: 2 }, false),
+    );
+    const shared = context(6_500);
+    const first = collectFrom(dbPath, 0, shared);
+    expect(first.map((sample) => sample.tokens.input)).toEqual([10, 1]);
+    const cursor = Math.max(...first.map((sample) => Number(sample.timestamp)));
+    database
+      .prepare("UPDATE message SET data = ? WHERE id = ?")
+      .run(JSON.stringify(assistant("m-1", { input: 2, output: 2 })), pending);
+    database.close();
+    expect(
+      collectFrom(dbPath, cursor, shared).map((sample) => sample.tokens.input),
+    ).toEqual([2]);
+    expect(collectFrom(dbPath, cursor, shared)).toEqual([]);
   });
 
   it("没写完的 assistant 消息挡住它之后的，挂太久的不再等；一趟里不重复计", () => {

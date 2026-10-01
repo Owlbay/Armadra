@@ -55,3 +55,18 @@ export function readHistoryEntries(
     ? readLocatedEntries(located, fromOffset, maxBytes)
     : adapter.readEntries(located, fromOffset, maxBytes);
 }
+
+/**
+ * 读取游标给读者看的样子：适配器说了算，没说的是文件来源，按字节。有 `path` 的
+ * 定位结果按字节读（文件），哪怕这家的适配器另有游标。
+ */
+export function describeHistoryCursor(
+  agentId: string,
+  located: Located,
+  offset: number,
+): string {
+  const describe = historyAdapter(agentId)?.describeCursor;
+  return located.path === undefined && describe !== undefined
+    ? describe(offset)
+    : `${offset} 字节`;
+}
