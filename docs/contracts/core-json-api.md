@@ -387,7 +387,31 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 12. CLI 协作的补充形状
 
-设计见 [CLI 接入、通信与共享上下文](../design/cli-collaboration.md)。§12.1（成本行的 `unit` 与 `requests`）与 §12.2（`/api/agents` 行的 `history`）由 H3 / M1 两个批次补写，这里先只有 §12.3。
+设计见 [CLI 接入、通信与共享上下文](../design/cli-collaboration.md)。§12.2（`/api/agents` 行的 `history`）由 M1 批次补写。
+
+### 12.1 成本行的 `unit` 与 `requests`
+
+`GET /api/usage/cost` 与 `POST /api/usage/cost/refresh` 里每个 agent 的成本行（`ranges.*.byAgent[]` 与 `ranges.*.points[].agents[]`）多两个字段（代码在 `core/usage/cost.ts` 的 `AgentCost`，共享层 `costAgentSchema`）：
+
+- `unit`：`"tokens"` 或 `"premiumRequests"`。共享层缺省 `"tokens"`。
+- `requests`：`unit` 为 `"premiumRequests"` 时的请求数；`"tokens"` 的行恒为 0。共享层缺省 0。
+
+```json
+{
+  "agent": "copilot",
+  "source": "local",
+  "unit": "premiumRequests",
+  "requests": 37,
+  "tokens": { "input": 0, "output": 0, "cacheRead": 0, "cacheCreation": 0 },
+  "costUsd": 0,
+  "complete": true
+}
+```
+
+- 目前只有 Copilot 按请求计。来源是 `session-state/<id>/events.jsonl` 里 `session.usage_checkpoint` 的 `totalPremiumRequests`，那是**会话累计值**：每条只把比上一条多出来的部分记到它自己的时间点上，所以一个会话跨几个窗口时各窗口各算各的增量，合起来等于最后一条的值。累计值变小视为会话从头计。
+- 请求数不折算成 token 或金额：这一行的 `tokens` 为零、`costUsd` 为 0、`complete` 为 `true`。
+- 窗口合计（`totals`、`today`、`last30Days`、`daily`）、`byModel`、`peak` 与 `unpricedModels` 只合并 token，不含请求数；`sessions` 与 `activeIntervals` / `longestStreak` 把只有请求数的会话和时间段也算进去。`currentSession` 只看按 token 计的会话。
+- 只有请求数而没有 token 时，`status` 仍是 `"ok"`。
 
 ### 12.2 `/api/agents` 行的历史数据可用性
 
