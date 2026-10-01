@@ -1,5 +1,6 @@
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { rfc3339 } from "../workspaces/support";
 import { type AgentFixture, agentFixture } from "./fixture";
@@ -388,5 +389,131 @@ describe("the handoff routes", () => {
       `/api/workspaces/${fixture.workspaceId}/handoffs/nope`,
     );
     expect(answer.status).toBe(404);
+  });
+});
+
+describe("没有转录文件也读得到：OpenCode 的库与 Pi 的兜底定位", () => {
+  const saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const key of ["XDG_DATA_HOME", "PI_CODING_AGENT_DIR"]) {
+      saved[key] = process.env[key];
+    }
+    process.env.XDG_DATA_HOME = join(fixture.directory, "xdg");
+    process.env.PI_CODING_AGENT_DIR = join(fixture.directory, "pi");
+  });
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  function openCodeDatabase(title: string): void {
+    const dir = join(fixture.directory, "xdg", "opencode");
+    mkdirSync(dir, { recursive: true });
+    const database = new DatabaseSync(join(dir, "opencode.db"));
+    database.exec(
+      "CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT NOT NULL, " +
+        "title TEXT NOT NULL, time_updated INTEGER NOT NULL, cost REAL NOT NULL DEFAULT 0, " +
+        "tokens_input INTEGER NOT NULL DEFAULT 0);" +
+        "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, " +
+        "time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);" +
+        "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, " +
+        "time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);",
+    );
+    database
+      .prepare(
+        "INSERT INTO session (id, parent_id, directory, title, time_updated) VALUES (?, NULL, ?, ?, ?)",
+      )
+      .run("ses_x", fixture.directory, title, 2_000);
+    const message = database.prepare(
+      "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, 'ses_x', ?, ?, ?)",
+    );
+    const part = database.prepare(
+      "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, 'ses_x', 0, 0, ?)",
+    );
+    message.run("msg_1", 1_000, 1_000, JSON.stringify({ role: "user" }));
+    part.run(
+      "prt_1",
+      "msg_1",
+      JSON.stringify({ type: "text", text: "修复导出按钮" }),
+    );
+    message.run("msg_2", 2_000, 2_000, JSON.stringify({ role: "assistant" }));
+    part.run("prt_2", "msg_2", JSON.stringify({ type: "text", text: "好的" }));
+    database.close();
+  }
+
+  it("OpenCode：转录面板按会话 id 读库，改名建议取会话标题", async () => {
+    openCodeDatabase("导出按钮没反应");
+    const node = fixture.agentNode("OpenCode", "opencode");
+    statusRow(node, { agentId: "opencode", sessionId: "ses_x" });
+    const transcript = await fixture.call(
+      "GET",
+      `/api/agent-status/${node}/transcript`,
+    );
+    expect(transcript.status).toBe(200);
+    expect((transcript.body as { text: string }).text).toBe(
+      "[用户] 修复导出按钮\n[助手] 好的",
+    );
+    const title = await fixture.call(
+      "POST",
+      `/api/agent-status/${node}/suggest-title`,
+    );
+    expect(title.body).toEqual({
+      title: "导出按钮没反应",
+      source: "transcript",
+    });
+  });
+
+  it("OpenCode 还是占位标题时，改名建议退回首条用户消息", async () => {
+    openCodeDatabase("New session - 2026-10-02T03:00:00.000Z");
+    const node = fixture.agentNode("OpenCode", "opencode");
+    statusRow(node, { agentId: "opencode", sessionId: "ses_x" });
+    const title = await fixture.call(
+      "POST",
+      `/api/agent-status/${node}/suggest-title`,
+    );
+    expect(title.body).toEqual({ title: "修复导出按钮", source: "transcript" });
+  });
+
+  it("Pi 没报转录路径也没报会话 id：按终端的 cwd 加启动时间找到会话文件", async () => {
+    const node = fixture.agentNode("Pi", "pi");
+    statusRow(node, { agentId: "pi" });
+    fixture.session(node, "pi");
+    // 终端一分钟前起的，Pi 的会话文件在那之后才写。
+    fixture.database
+      .prepare(
+        "UPDATE terminal_sessions SET created_at = ? WHERE owner_node_id = ?",
+      )
+      .run(new Date(Date.now() - 60_000).toISOString(), node);
+    const dir = join(fixture.directory, "pi", "sessions", "--encoded-cwd--");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(
+        dir,
+        "2026-10-02T03-00-00-000Z_0f5c1d9e-0000-4000-8000-000000000001.jsonl",
+      ),
+      [
+        JSON.stringify({
+          type: "session",
+          id: "0f5c1d9e-0000-4000-8000-000000000001",
+          cwd: fixture.directory,
+        }),
+        JSON.stringify({
+          type: "message",
+          message: { role: "user", content: "整理一下依赖" },
+        }),
+      ].join("\n") + "\n",
+    );
+    const transcript = await fixture.call(
+      "GET",
+      `/api/agent-status/${node}/transcript`,
+    );
+    expect(transcript.status).toBe(200);
+    expect((transcript.body as { text: string }).text).toBe(
+      "[用户] 整理一下依赖",
+    );
   });
 });

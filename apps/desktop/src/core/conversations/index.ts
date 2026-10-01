@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { AgentId } from "../agent/registry";
 import { claudeAdapter, fallbackTitle } from "../history/claude";
 import { HISTORY_ADAPTERS, historyAdapter } from "../history/registry";
+import type { Located } from "../history/types";
 import * as claude from "./claude";
 import * as codex from "./codex";
 import { type Parsed, clamp } from "./scan";
@@ -460,6 +461,29 @@ export function transcriptTitle(
   // the common one, so it is also the default for an agent with no adapter.
   const adapter = historyAdapter(agentId) ?? claudeAdapter;
   const parsed = adapter.parse({ path, updatedAt: "", bytes: 0 });
+  if (parsed === undefined) return undefined;
+  const title = clamp(parsed.title, MAX_SUGGESTED_TITLE_CHARS);
+  return title === "" ? undefined : title;
+}
+
+/**
+ * 一份定位到了的本地历史的标题：有文件按 {@link transcriptTitle}；没有文件的来源
+ * （OpenCode 的 `opencode:<id>`）交给那家适配器的 `parse`，它自己决定取会话标题
+ * 还是首条用户消息。更新时间传空：不借会话索引那一趟的缓存。
+ */
+export function historyTitle(
+  agentId: string,
+  located: Located,
+): string | undefined {
+  if (located.path !== undefined) return transcriptTitle(agentId, located.path);
+  const adapter = historyAdapter(agentId);
+  if (adapter === undefined) return undefined;
+  let parsed: Parsed | undefined;
+  try {
+    parsed = adapter.parse({ path: located.key, updatedAt: "", bytes: 0 });
+  } catch {
+    return undefined;
+  }
   if (parsed === undefined) return undefined;
   const title = clamp(parsed.title, MAX_SUGGESTED_TITLE_CHARS);
   return title === "" ? undefined : title;

@@ -16,6 +16,7 @@ import {
 import {
   type Caller,
   type NodeRef,
+  historyHint,
   loadNode,
   loadSession,
   workspaceRoot,
@@ -30,7 +31,11 @@ import { requireReadBudget } from "./read-budget";
 import { redact } from "./redact";
 import { type Args, Refusal, truncate } from "./refusals";
 import { type CollabContext, nowDate } from "./service";
-import { locateHistory, readHistoryEntries } from "../history/registry";
+import {
+  describeHistoryCursor,
+  locateHistory,
+  readHistoryEntries,
+} from "../history/registry";
 import type { EntryRange, Located } from "../history/types";
 import { digestEntries, renderSummary } from "./transcript-summary";
 import {
@@ -631,11 +636,9 @@ function locateTranscript(
 ): FoundTranscript {
   const status = getAgentStatus(context.database, target.id);
   const agentId = target.agentId ?? status?.agentId ?? "claude";
-  const located = locateHistory({
-    agentId,
-    transcriptPath: status?.transcriptPath,
-    sessionId: status?.sessionId,
-  });
+  const located = locateHistory(
+    historyHint(context.database, target.id, agentId, status),
+  );
   if (located === undefined) throw missing(target, agentId);
   return { agentId, located };
 }
@@ -738,7 +741,7 @@ function readTranscript(
     if (since && cursor !== undefined) {
       return (
         `「${target.title}」自上次读取之后没有新条目（来源：${origin}）。\n` +
-        `游标：${range.endOffset} 字节。\n`
+        `游标：${describeHistoryCursor(found.agentId, found.located, range.endOffset)}。\n`
       );
     }
     throw Refusal.notFound(
@@ -780,7 +783,7 @@ function readTranscript(
   );
   return (
     `${header}\n${body}\n\n` +
-    `游标：${range.startOffset + picked.endOffset} 字节。下次加 \`--since\` 只取新的。\n`
+    `游标：${describeHistoryCursor(found.agentId, found.located, range.startOffset + picked.endOffset)}。下次加 \`--since\` 只取新的。\n`
   );
 }
 

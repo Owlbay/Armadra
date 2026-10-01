@@ -1,5 +1,6 @@
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type AgentFixture, agentFixture, callerFor } from "../agent/fixture";
 import { rfc3339, uuidV7 } from "../workspaces/support";
@@ -446,5 +447,84 @@ describe("被读取 N 次的 JSON 面", () => {
     );
     expect(answer.status).toBe(200);
     expect((answer.body as { reads: unknown[] }).reads.length).toBe(1);
+  });
+});
+
+describe("增量游标：没有文件的来源（OpenCode）", () => {
+  let previous: string | undefined;
+
+  beforeEach(() => {
+    previous = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = join(fixture.directory, "xdg");
+  });
+
+  afterEach(() => {
+    if (previous === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = previous;
+  });
+
+  function openCode(): DatabaseSync {
+    const dir = join(fixture.directory, "xdg", "opencode");
+    mkdirSync(dir, { recursive: true });
+    const database = new DatabaseSync(join(dir, "opencode.db"));
+    database.exec(
+      "CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT NOT NULL, " +
+        "title TEXT NOT NULL, time_updated INTEGER NOT NULL, cost REAL NOT NULL DEFAULT 0, " +
+        "tokens_input INTEGER NOT NULL DEFAULT 0);" +
+        "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, " +
+        "time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);" +
+        "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, " +
+        "time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);",
+    );
+    return database;
+  }
+
+  function sayIn(
+    database: DatabaseSync,
+    id: string,
+    at: number,
+    text: string,
+  ): void {
+    database
+      .prepare(
+        "INSERT INTO message VALUES (?, 'ses_p', ?, ?, '{\"role\":\"user\"}')",
+      )
+      .run(id, at, at);
+    database
+      .prepare("INSERT INTO part VALUES (?, ?, 'ses_p', 0, 0, ?)")
+      .run(`prt_${id}`, id, JSON.stringify({ type: "text", text }));
+  }
+
+  it("--since 按消息游标续读，同一毫秒的新消息不漏；提示不说「字节」", async () => {
+    const database = openCode();
+    sayIn(database, "msg_1", 1_000, "第一轮");
+    const peer = fixture.agentNode("Peer", "opencode");
+    fixture.link(me, peer);
+    fixture.database
+      .prepare(
+        "INSERT INTO agent_status (node_id, workspace_id, agent_id, state, unread, verified, restored, " +
+          "updated_at, session_id) VALUES (?, ?, 'opencode', 'idle', 0, 1, 0, ?, 'ses_p')",
+      )
+      .run(peer, fixture.workspaceId, rfc3339());
+
+    const first = await read(me, "transcript", { node: "Peer" });
+    expect(first).toContain("第一轮");
+    expect(first).toContain("来源：OpenCode 会话 ses_p");
+    expect(first).toMatch(
+      /游标：OpenCode 消息时间 1970-01-01T00:00:01\.000Z。/u,
+    );
+    expect(first).not.toMatch(/游标：\d+ 字节/u);
+
+    // 同一毫秒再写一条：不能因为游标停在这一毫秒就被跳过。
+    sayIn(database, "msg_2", 1_000, "第二轮");
+    database.close();
+    const next = await read(me, "transcript", { node: "Peer", since: true });
+    expect(next).toContain("第二轮");
+    expect(next).not.toContain("第一轮");
+    expect(next).toContain("第 2 条");
+
+    const none = await read(me, "transcript", { node: "Peer", since: true });
+    expect(none).toContain("没有新条目");
+    expect(none).not.toContain("字节");
   });
 });

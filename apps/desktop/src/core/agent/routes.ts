@@ -15,12 +15,12 @@ import {
   ensureIndexed,
   listConversations,
   refresh,
-  transcriptTitle,
+  historyTitle,
   DEFAULT_LIMIT,
 } from "../conversations";
 import { definition, baseAgent } from "./registry";
 import { listAgents } from "./list";
-import { loadSession } from "../collab/nodes";
+import { historyHint, loadSession } from "../collab/nodes";
 import { listContextReads } from "../collab/context-reads";
 import {
   type ConfirmRequest,
@@ -119,11 +119,9 @@ export function installRoutes(deps: AgentRouteDeps): void {
       const status = getAgentStatus(database, nodeId);
       if (status === undefined) throw notFound("This node has never reported");
       const provider = baseAgent(collab.settings, status.agentId);
-      const located = locateHistory({
-        agentId: provider,
-        transcriptPath: status.transcriptPath,
-        sessionId: status.sessionId,
-      });
+      const located = locateHistory(
+        historyHint(database, nodeId, provider, status),
+      );
       // A provider that keeps nothing readable is **501, not an empty body**.
       // An empty excerpt would be indistinguishable from a session that has
       // said nothing yet, and the panel would draw the blank as the truth.
@@ -174,11 +172,16 @@ export function installRoutes(deps: AgentRouteDeps): void {
       // last typed in the pane, then the agent's own label — which is always
       // available and never wrong. No model is called: this is a rename
       // button, and a local read answers it in milliseconds.
-      if (status.transcriptPath !== undefined) {
-        const title = transcriptTitle(status.agentId, status.transcriptPath);
-        if (title !== undefined) {
-          return { status: 200, body: { title, source: "transcript" } };
-        }
+      // 经本地历史适配器定位：CLI 报来的路径先认，没有的按会话 id、cwd 加启动
+      // 时间找；OpenCode 这种没有文件的来源取库里的会话标题。
+      const provider = baseAgent(collab.settings, status.agentId);
+      const located = locateHistory(
+        historyHint(database, nodeId, provider, status),
+      );
+      const title =
+        located === undefined ? undefined : historyTitle(provider, located);
+      if (title !== undefined) {
+        return { status: 200, body: { title, source: "transcript" } };
       }
       // The node's terminal keeps its logical key across recycles, so the
       // lookup is by node id rather than by the session id the status row

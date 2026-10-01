@@ -1,5 +1,6 @@
 import { readTail } from "../history/files";
-import { locateHistory } from "../history/registry";
+import { locateHistory, readHistoryEntries } from "../history/registry";
+import type { TranscriptEntry } from "../history/types";
 import { gitFingerprint } from "../git/fingerprint";
 import {
   type FileReference,
@@ -25,11 +26,21 @@ export interface CaptureRequest {
   readonly execute: boolean;
   /** 写进每条文件引用的 `executionHost`。 */
   readonly executionHost: string;
-  /** 在这台机器上读转录：CLI 报来的路径，只认那一个。 */
-  readonly transcript?: {
-    readonly provider: string;
-    readonly path: string;
-  };
+  /** 在这台机器上读转录，线索见 {@link TranscriptSource}。 */
+  readonly transcript?: TranscriptSource;
+}
+
+/**
+ * 去哪找来源 Agent 的转录：CLI 报来的路径与会话 id，加上节点终端的 cwd 与启动
+ * 时间。路径永远先认；没有路径时经本地历史适配器按其余线索找（Codex 按会话 id、
+ * Pi / OMP 按 cwd 加启动时间、OpenCode 按会话 id 读库）。
+ */
+export interface TranscriptSource {
+  readonly provider: string;
+  readonly path?: string;
+  readonly sessionId?: string;
+  readonly cwd?: string;
+  readonly startedAtMs?: number;
 }
 
 export interface Captured {
@@ -48,21 +59,52 @@ export type TranscriptTail =
   | { readonly state: "missing" }
   | { readonly state: "unreadable" };
 
-export function readTranscriptTail(
-  provider: string,
-  path: string,
-): TranscriptTail {
-  // 只给路径、不给会话 id：交接只认 CLI 报来的那一个文件，不去别处找。
-  const located = locateHistory({ agentId: provider, transcriptPath: path });
-  if (located?.path === undefined) return { state: "missing" };
+export function readTranscriptTail(source: TranscriptSource): TranscriptTail {
+  const located = locateHistory({
+    agentId: source.provider,
+    transcriptPath: source.path,
+    sessionId: source.sessionId,
+    cwd: source.cwd,
+    startedAtMs: source.startedAtMs,
+  });
+  if (located === undefined) return { state: "missing" };
   try {
-    return {
-      state: "read",
-      text: readTail(located.path, TRANSCRIPT_TAIL_BYTES),
-    };
+    if (located.path !== undefined) {
+      return {
+        state: "read",
+        text: readTail(located.path, TRANSCRIPT_TAIL_BYTES),
+      };
+    }
+    // 没有文件的来源（OpenCode 的库）：经适配器读归一化记录，再写回 JSONL。
+    // 交出去的仍是一段文本——远端 Worker 的回复形状与控制端的渲染都不用改。
+    const range = readHistoryEntries(
+      source.provider,
+      located,
+      0,
+      TRANSCRIPT_TAIL_BYTES,
+    );
+    if (range.entries.length === 0) return { state: "missing" };
+    return { state: "read", text: entriesAsJsonl(range.entries) };
   } catch {
     return { state: "unreadable" };
   }
+}
+
+/**
+ * 归一化记录 → `entriesFromJson` 认得回来的 JSONL：`{role, content, timestamp}`，
+ * 块原样放进 `content`（`tool_result` 的 id 落在 `id` 上，解析时照样认）。
+ */
+export function entriesAsJsonl(entries: readonly TranscriptEntry[]): string {
+  return entries
+    .map(
+      (entry) =>
+        `${JSON.stringify({
+          role: entry.role,
+          content: entry.blocks,
+          ...(entry.at === undefined ? {} : { timestamp: entry.at }),
+        })}\n`,
+    )
+    .join("");
 }
 
 export function capture(root: string, request: CaptureRequest): Captured {
@@ -77,10 +119,7 @@ export function capture(root: string, request: CaptureRequest): Captured {
     ...(request.transcript === undefined
       ? {}
       : {
-          transcript: readTranscriptTail(
-            request.transcript.provider,
-            request.transcript.path,
-          ),
+          transcript: readTranscriptTail(request.transcript),
         }),
   };
 }
@@ -90,9 +129,12 @@ export function captureArgs(args: Record<string, unknown>): CaptureRequest {
   const paths = Array.isArray(args.paths)
     ? args.paths.filter((path): path is string => typeof path === "string")
     : [];
-  const transcript = args.transcript as
-    | { provider?: unknown; path?: unknown }
-    | undefined;
+  const transcript = args.transcript as Record<string, unknown> | undefined;
+  const text = (key: string): string | undefined => {
+    const value = transcript?.[key];
+    return typeof value === "string" && value !== "" ? value : undefined;
+  };
+  const startedAtMs = transcript?.startedAtMs;
   return {
     paths: paths.slice(0, 32),
     execute: args.execute === true,
@@ -100,12 +142,22 @@ export function captureArgs(args: Record<string, unknown>): CaptureRequest {
       typeof args.executionHost === "string"
         ? args.executionHost
         : "local-runtime",
-    ...(typeof transcript?.provider === "string" &&
-    typeof transcript.path === "string"
+    ...(text("provider") !== undefined
       ? {
           transcript: {
-            provider: transcript.provider,
-            path: transcript.path,
+            provider: text("provider") as string,
+            ...(text("path") === undefined
+              ? {}
+              : { path: text("path") as string }),
+            ...(text("sessionId") === undefined
+              ? {}
+              : { sessionId: text("sessionId") as string }),
+            ...(text("cwd") === undefined
+              ? {}
+              : { cwd: text("cwd") as string }),
+            ...(typeof startedAtMs === "number" && Number.isFinite(startedAtMs)
+              ? { startedAtMs }
+              : {}),
           },
         }
       : {}),

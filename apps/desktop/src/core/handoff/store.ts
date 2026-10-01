@@ -6,7 +6,7 @@ import {
   MAX_PENDING as MAILBOX_MAX_PENDING,
   pendingCount,
 } from "../collab/mailbox";
-import { type Caller, loadNode } from "../collab/nodes";
+import { type Caller, historyHint, loadNode } from "../collab/nodes";
 import { render } from "../collab/transcript";
 import { type CollabContext, nowDate, nowSeconds } from "../collab/service";
 import { UNAVAILABLE } from "../git/fingerprint";
@@ -38,6 +38,7 @@ import {
 import {
   type CaptureRequest,
   type Captured,
+  type TranscriptSource,
   capture,
   readTranscriptTail,
 } from "./capture";
@@ -404,6 +405,39 @@ export async function prepare(
  *     is not a repository, reports `unavailable` — an invented `observed` would
  *     be a claim about a worktree nobody looked at.
  */
+/**
+ * 交接去哪找来源的转录：`agent_status` 报来的路径与会话 id，加上节点终端的 cwd
+ * 与启动时间。一样线索都没有时是 `undefined`——那就是没有转录。
+ */
+function transcriptSource(
+  context: CollabContext,
+  source: Identity,
+  status: { readonly transcriptPath?: string; readonly sessionId?: string },
+): TranscriptSource | undefined {
+  const hint = historyHint(
+    context.database,
+    source.nodeId,
+    source.provider,
+    status,
+  );
+  if (
+    hint.transcriptPath === undefined &&
+    hint.sessionId === undefined &&
+    (hint.cwd === undefined || hint.startedAtMs === undefined)
+  ) {
+    return undefined;
+  }
+  return {
+    provider: source.provider,
+    ...(hint.transcriptPath === undefined ? {} : { path: hint.transcriptPath }),
+    ...(hint.sessionId === undefined ? {} : { sessionId: hint.sessionId }),
+    ...(hint.cwd === undefined ? {} : { cwd: hint.cwd }),
+    ...(hint.startedAtMs === undefined
+      ? {}
+      : { startedAtMs: hint.startedAtMs }),
+  };
+}
+
 async function build(
   context: CollabContext,
   space: { readonly rootPath: string; readonly executionHostId: string },
@@ -425,14 +459,17 @@ async function build(
     sourceUpdatedAt: status?.lastEventAt ?? null,
   };
   let excerpt = "";
-  // Provider home directories are never scanned: only a path the current
-  // verified, generation-bound provider named is eligible.
-  const eligible =
+  // Only a verified, generation-bound provider's report makes the transcript
+  // eligible. Past the path it reported, the agent's history adapter may find
+  // the session by what that same report and the node's terminal say — the
+  // session id, the cwd and the launch time (Codex by id, Pi / OMP by cwd and
+  // time, OpenCode's database by id) — never by scanning a home at large.
+  const eligible: TranscriptSource | undefined =
     request.includeTranscript &&
     status !== undefined &&
     status.verified &&
     !status.restored
-      ? (status.transcriptPath ?? undefined)
+      ? transcriptSource(context, source, status)
       : undefined;
   // The transcript is on the machine the source Agent runs on, the files and
   // the repository on the workspace's: an SSH Agent on the execution host has
@@ -443,9 +480,7 @@ async function build(
     paths: request.filePaths,
     execute: execute === true,
     executionHost: hostLabel(space.executionHostId),
-    ...(eligible !== undefined && sourceRemote
-      ? { transcript: { provider: source.provider, path: eligible } }
-      : {}),
+    ...(eligible !== undefined && sourceRemote ? { transcript: eligible } : {}),
   };
   const captured =
     space.executionHostId === ""
@@ -461,7 +496,7 @@ async function build(
         ? undefined
         : sourceRemote
           ? captured.transcript
-          : readTranscriptTail(source.provider, eligible);
+          : readTranscriptTail(eligible);
     if (tail?.state === "read") {
       excerpt = render(tail.text).join("\n");
       cutoff = {

@@ -261,8 +261,16 @@ export function locate(
   agentId: string,
   transcriptPath: string | undefined,
   sessionId: string | undefined,
+  launch: { readonly cwd?: string; readonly startedAtMs?: number } = {},
 ): Located | undefined {
-  const found = locateHistory({ agentId, transcriptPath, sessionId });
+  // `launch` 是节点终端的 cwd 与启动时间（`collab/nodes.ts::launchOf`）：Pi / OMP
+  // 没报路径时靠它兜底。
+  const found = locateHistory({
+    agentId,
+    transcriptPath,
+    sessionId,
+    ...launch,
+  });
   return found?.path === undefined
     ? undefined
     : { path: found.path, origin: found.origin };

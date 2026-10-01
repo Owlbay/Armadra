@@ -107,7 +107,7 @@ export interface HistoryAdapter {
 
 OpenCode 库的读法：每次扫描用 `new DatabaseSync(path, { readOnly: true })` 打开，`finally` 里关闭，不长期持有连接（本机对运行中的库实测可以打开）。版本探测用 `PRAGMA table_info(session)` 看有没有 `tokens_input` 和 `cost` 两列；`user_version` 是 0，不能当版本号用。列不齐，或者目录不可写导致建不出 `-shm` 时，整家跳过，状态记为 `not-found` 并给 warning。`parent_id` 非空的是子会话，不进索引。旧版 `storage/` 目录不读。
 
-读取游标表 `context_read_cursors` 的 `(transcript_path, byte_offset)` 对 OpenCode 当作不透明键（`opencode:<id>`）和 `message.time_created` 游标使用，在 `context-reads.ts` 的注释里写明即可，不需要迁移。
+读取游标表 `context_read_cursors` 的 `(transcript_path, byte_offset)` 对 OpenCode 当作不透明键（`opencode:<id>`）和消息游标使用，在 `context-reads.ts` 的注释里写明即可，不需要迁移。消息游标是 `time_created × 1000 + 同一毫秒里按 id 排的序号`，同一毫秒的多条消息不漏不重；`context transcript` 的提示按来源说明单位（OpenCode 显示消息时间，不写「字节」）。
 
 ## §3 会话索引、成本与转录
 
@@ -198,7 +198,8 @@ OpenCode 库的读法：每次扫描用 `new DatabaseSync(path, { readOnly: true
 ### H2：OpenCode（只读 SQLite）
 
 - `history/opencode.ts`：每个会话对应一个候选，`path` 为 `opencode:<id>`；`readEntries` 以 `message.time_created` 作游标。
-- `usage/cost.ts` 的 `ScanState` 增加快照式分支：`FileState` 以 `located.key` 为键，`offset` 存最后一条的 `time_created`。`conversations/index.ts` 的 `forgetMissing` 对不是文件的根改问适配器。
+- `usage/cost.ts` 的 `ScanState` 增加快照式分支：`FileState` 以 `located.key` 为键；游标是每家一个「已交出的最大 `time_created`」，作为下一趟的 `sinceMs`，适配器按含等于取、靠扫描状态里跨趟保留的去重集合按消息 id 去重，遇到还没写完的 assistant 消息就停。价格表认不出的模型用 OpenCode 自己记的 `cost` 兜底（契约 §12.1）。`conversations/index.ts` 的 `forgetMissing` 对根是文件（库）的情况按存在处理。
+- 交接、转录面板、改名建议与连线读取经注册表定位，`SessionHint` 补上节点终端的 cwd 与启动时间（`collab/nodes.ts::historyHint`），Pi / OMP 的兜底定位因此生效；没有文件的来源交接时把归一化记录写回 JSONL 文本。
 - 测试 `history/opencode.test.ts`：测试里自己建最小 schema 的库，覆盖缺列时整家跳过、子会话不进索引、增量读取、只读句柄不阻塞另一个连接写入。
 
 ### H3：Copilot 与成本 `unit`
