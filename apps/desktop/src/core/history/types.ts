@@ -109,9 +109,18 @@ export interface CostSample {
   /** 归属哪份记录：`Located.key`，扫描状态以它为键。 */
   readonly key: string;
   readonly model: string;
-  /** 记录自己的时间（RFC 3339 或毫秒）；读不出来按现在算。 */
+  /**
+   * 记录自己的时间（RFC 3339 或毫秒）；读不出来按现在算。OpenCode 给的是
+   * `message.time_created` 毫秒，也就是这一条的游标：调用方把状态的 offset
+   * 推到交出来的最大值即可。
+   */
   readonly timestamp: unknown;
   readonly tokens: TokenTotals;
+  /**
+   * CLI 自己算好的这一条的美元成本（OpenCode 的 `message.cost`），有才有。价格表
+   * 里没有的模型可以用它兜底；用不用由成本扫描决定。
+   */
+  readonly reportedCost?: number;
   /** 不按 token 计的来源（Copilot 的 premium requests），会话累计值。 */
   readonly requests?: number;
 }

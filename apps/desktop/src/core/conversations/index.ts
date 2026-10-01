@@ -336,7 +336,7 @@ function upsert(database: DatabaseSync, rows: readonly IndexRow[]): number {
 /**
  * Drops rows whose file the walk no longer finds.
  *
- * The one special case is a provider whose root directory is gone: an absent
+ * The one special case is a provider whose root is gone: an absent
  * `~/.codex` means codex was uninstalled or its home moved, and every row for
  * it is stale. A root that exists but yielded nothing is the ordinary case of
  * "all of those transcripts were deleted".
@@ -347,9 +347,12 @@ function forgetMissing(
   root: string,
   seen: readonly string[],
 ): number {
+  // 根不一定是目录：OpenCode 的根是它的 SQLite 库文件，候选是库里的行
+  // （`opencode:<id>`），不是文件。根还在（目录或文件）就按候选逐行对账。
   let present = false;
   try {
-    present = statSync(root).isDirectory();
+    const stats = statSync(root);
+    present = stats.isDirectory() || stats.isFile();
   } catch {
     present = false;
   }
