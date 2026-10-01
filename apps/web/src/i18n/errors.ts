@@ -43,6 +43,8 @@ export const errors: MessageModule = {
     "error.delivery.TARGET_BUSY": "目标正在一轮里",
     "error.delivery.TARGET_STARTING": "目标刚起来，还没报过状态",
     "error.delivery.TARGET_INPUT_PENDING": "目标的输入行上有没提交的半行",
+    "error.delivery.TARGET_NOT_AT_PROMPT":
+      "目标停在 CLI 的对话框上，没有替它回答",
     "error.delivery.QUEUE_FULL": "这个目标的队伍满了",
     "error.delivery.TARGET_GONE": "目标没有在运行的会话",
   },
@@ -79,6 +81,8 @@ export const errors: MessageModule = {
       "The target just started and has not reported yet",
     "error.delivery.TARGET_INPUT_PENDING":
       "The target has an unsubmitted half line in its input",
+    "error.delivery.TARGET_NOT_AT_PROMPT":
+      "The target is on one of its CLI's dialogs; nobody answered it for them",
     "error.delivery.QUEUE_FULL": "That target's queue is full",
     "error.delivery.TARGET_GONE": "The target has no running session",
   },
