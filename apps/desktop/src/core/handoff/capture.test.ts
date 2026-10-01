@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -81,6 +87,43 @@ describe("readTranscriptTail", () => {
       "[用户] 接着做导出",
       "[工具 read /w/export.ts] [结果 ok]",
     ]);
+  });
+
+  it("Pi / OMP：报来的文件按适配器归一化，文本渲染得回来", () => {
+    // 原文的 `type:"message"` 行 `render()` 不认；直接交原文时交接材料的转录摘录
+    // 是空的（场景 10 真跑发现）。
+    const path = join(directory, "2026-10-02T00-00-00-000Z_s.jsonl");
+    writeFileSync(
+      path,
+      [
+        { type: "session", version: 3, id: "s", cwd: "/w" },
+        {
+          type: "message",
+          id: "a1",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "回复 OK" }],
+          },
+        },
+        {
+          type: "message",
+          id: "a2",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "OK" }],
+          },
+        },
+      ]
+        .map((line) => `${JSON.stringify(line)}\n`)
+        .join(""),
+    );
+    expect(render(readFileSync(path, "utf8"))).toEqual([]);
+    for (const provider of ["pi", "omp"]) {
+      const tail = readTranscriptTail({ provider, path });
+      expect(tail.state).toBe("read");
+      if (tail.state !== "read") return;
+      expect(render(tail.text)).toEqual(["[用户] 回复 OK", "[助手] OK"]);
+    }
   });
 
   it("没有线索、会话不存在都是 missing", () => {

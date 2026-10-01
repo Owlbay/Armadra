@@ -1,5 +1,9 @@
-import { readTail } from "../history/files";
-import { locateHistory, readHistoryEntries } from "../history/registry";
+import { readLocatedEntries, readTail } from "../history/files";
+import {
+  historyAdapter,
+  locateHistory,
+  readHistoryEntries,
+} from "../history/registry";
 import type { TranscriptEntry } from "../history/types";
 import { gitFingerprint } from "../git/fingerprint";
 import {
@@ -69,14 +73,16 @@ export function readTranscriptTail(source: TranscriptSource): TranscriptTail {
   });
   if (located === undefined) return { state: "missing" };
   try {
-    if (located.path !== undefined) {
+    if (located.path !== undefined && rendersRaw(source.provider)) {
       return {
         state: "read",
         text: readTail(located.path, TRANSCRIPT_TAIL_BYTES),
       };
     }
-    // 没有文件的来源（OpenCode 的库）：经适配器读归一化记录，再写回 JSONL。
-    // 交出去的仍是一段文本——远端 Worker 的回复形状与控制端的渲染都不用改。
+    // 没有文件的来源（OpenCode 的库），以及行形状 `render()` 不认的文件（Pi /
+    // OMP 的 `type:"message"`、Copilot 的 `events.jsonl`）：经适配器读归一化记
+    // 录，再写回 JSONL。交出去的仍是一段文本——远端 Worker 的回复形状与控制端
+    // 的渲染都不用改。
     const range = readHistoryEntries(
       source.provider,
       located,
@@ -88,6 +94,15 @@ export function readTranscriptTail(source: TranscriptSource): TranscriptTail {
   } catch {
     return { state: "unreadable" };
   }
+}
+
+/**
+ * 这家的转录文件原文交给 `render()` 就认得：适配器读记录用的就是通用的文件读
+ * 法（Claude、Codex，以及没有适配器的自定义条目）。
+ */
+function rendersRaw(provider: string): boolean {
+  const adapter = historyAdapter(provider);
+  return adapter === undefined || adapter.readEntries === readLocatedEntries;
 }
 
 /**
