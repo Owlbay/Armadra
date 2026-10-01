@@ -30,17 +30,18 @@
 
 各文档首行声明状态（目标设计 / 部分实施 / 已实施）；多数已经交付，现状以 [功能预期总表](status/feature-roadmap.md) 与源码为准。
 
-| 文档                                                 | 内容                                                                    |
-| ---------------------------------------------------- | ----------------------------------------------------------------------- |
-| [后续规划](design/product-roadmap.md)                | 四个部分：CLI 协作、ACP 会话、协调 Agent 与工作流、多人协同；平台线并行 |
-| [平台总纲](design/canvas-platform-design.md)         | 需求、M0–M8 阶段与验收                                                  |
-| [Agent 自动化](design/agent-automation-design.md)    | 交接、循环卡片、计划与命名                                              |
-| [Git / GitHub](design/git-github-design.md)          | worktree、提交、Issues 与 PR                                            |
-| [Git 工具窗口](design/git-tool-window.md)            | IDEA 式日志三栏、提交页、多仓库合并图                                   |
-| [编辑器与浏览器](design/editor-browser-design.md)    | 语言服务、远程文件与受控浏览器                                          |
-| [终端宿主](design/terminal-host-design.md)           | 持久终端、ConPTY、资源与快捷键                                          |
-| [Windows 早期方案](design/windows-session-daemon.md) | 早期设计，本轮目标以终端宿主方案为准                                    |
-| [仓库结构与校验](design/repository-structure.md)     | 目标目录、统一规则、repo-check 与 CI                                    |
+| 文档                                                      | 内容                                                                    |
+| --------------------------------------------------------- | ----------------------------------------------------------------------- |
+| [后续规划](design/product-roadmap.md)                     | 四个部分：CLI 协作、ACP 会话、协调 Agent 与工作流、多人协同；平台线并行 |
+| [CLI 接入、通信与共享上下文](design/cli-collaboration.md) | 后续规划第一部分：本地历史适配器、投递终态回执、历史可用性与六家端到端  |
+| [平台总纲](design/canvas-platform-design.md)              | 需求、M0–M8 阶段与验收                                                  |
+| [Agent 自动化](design/agent-automation-design.md)         | 交接、循环卡片、计划与命名                                              |
+| [Git / GitHub](design/git-github-design.md)               | worktree、提交、Issues 与 PR                                            |
+| [Git 工具窗口](design/git-tool-window.md)                 | IDEA 式日志三栏、提交页、多仓库合并图                                   |
+| [编辑器与浏览器](design/editor-browser-design.md)         | 语言服务、远程文件与受控浏览器                                          |
+| [终端宿主](design/terminal-host-design.md)                | 持久终端、ConPTY、资源与快捷键                                          |
+| [Windows 早期方案](design/windows-session-daemon.md)      | 早期设计，本轮目标以终端宿主方案为准                                    |
+| [仓库结构与校验](design/repository-structure.md)          | 目标目录、统一规则、repo-check 与 CI                                    |
 
 按域展开的实施方案：
 
