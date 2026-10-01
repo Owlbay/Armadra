@@ -94,6 +94,8 @@ async function harness(): Promise<Harness> {
   // 扫描的两棵树指向这个空目录，所以成本汇总不会去翻开发者自己的记录。
   process.env.CLAUDE_CONFIG_DIR = join(dataDir, "claude");
   process.env.CODEX_HOME = join(dataDir, "codex");
+  // Pi 与 OMP 共用这个覆盖（没有 profile 时）。
+  process.env.PI_CODING_AGENT_DIR = join(dataDir, "pi");
 
   const opened: OpenedDatabase = openDatabase({
     file: join(dataDir, "canvas.db"),
@@ -136,6 +138,7 @@ async function harness(): Promise<Harness> {
       delete process.env.ARMADRA_SECRET_BACKEND;
       delete process.env.CLAUDE_CONFIG_DIR;
       delete process.env.CODEX_HOME;
+      delete process.env.PI_CODING_AGENT_DIR;
     },
   };
 }

@@ -698,7 +698,7 @@ describe("汇总", () => {
     expect(byAgent.map((one) => one.agent)).toEqual([...AGENT_IDS]);
     expect(
       byAgent.filter((one) => one.source === "local").map((one) => one.agent),
-    ).toEqual(["claude", "codex"]);
+    ).toEqual(["claude", "codex", "pi", "omp"]);
     expect(byAgent.find((one) => one.agent === "codex")?.costUsd).toBe(1.25);
     expect(byAgent.find((one) => one.agent === "claude")?.costUsd).toBe(5);
     for (const one of byAgent.filter((entry) => entry.source === "none")) {

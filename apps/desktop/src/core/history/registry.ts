@@ -2,6 +2,7 @@ import { claudeAdapter } from "./claude";
 import { codexAdapter } from "./codex";
 import { readLocatedEntries, reportedFile } from "./files";
 import { opencodeAdapter } from "./opencode";
+import { ompAdapter, piAdapter } from "./pi";
 import type { EntryRange, HistoryAdapter, Located, SessionHint } from "./types";
 
 /**
@@ -15,6 +16,8 @@ export const HISTORY_ADAPTERS: readonly HistoryAdapter[] = [
   claudeAdapter,
   codexAdapter,
   opencodeAdapter,
+  piAdapter,
+  ompAdapter,
 ];
 
 /** 这个 agent id 的适配器；自定义条目与还没接入的 CLI 是 `undefined`。 */

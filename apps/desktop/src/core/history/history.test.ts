@@ -19,6 +19,7 @@ import expected from "./history.expected.json";
 import { BRIEF, ENTRY_FIXTURES, TEXT_FIXTURES } from "./history.fixtures";
 import { configRoot } from "./home";
 import { opencodeAdapter } from "./opencode";
+import { ompAdapter, piAdapter } from "./pi";
 import {
   HISTORY_ADAPTERS,
   historyAdapter,
@@ -50,19 +51,21 @@ afterEach(() => {
 });
 
 describe("注册表", () => {
-  it("派生出来的会话索引 provider 和成本来源与拆分之前相同（加上 OpenCode）", () => {
-    expect(PROVIDERS).toEqual(["claude", "codex", "opencode"]);
+  it("派生出来的会话索引 provider 和成本来源与拆分之前相同（加上 OpenCode、Pi、OMP）", () => {
+    expect(PROVIDERS).toEqual(["claude", "codex", "opencode", "pi", "omp"]);
     expect(HISTORY_ADAPTERS.map((adapter) => adapter.agentId)).toEqual([
       "claude",
       "codex",
       "opencode",
+      "pi",
+      "omp",
     ]);
     // 快照式来源不进逐行成本表。
-    expect(Object.keys(COST_SOURCES)).toEqual(["claude", "codex"]);
+    expect(Object.keys(COST_SOURCES)).toEqual(["claude", "codex", "pi", "omp"]);
     expect(historyAdapter("claude")).toBe(claudeAdapter);
     expect(historyAdapter("codex")).toBe(codexAdapter);
     expect(historyAdapter("opencode")).toBe(opencodeAdapter);
-    for (const agentId of ["pi", "omp", "copilot", "custom:x"]) {
+    for (const agentId of ["copilot", "custom:x"]) {
       expect(historyAdapter(agentId)).toBeUndefined();
     }
   });
@@ -90,6 +93,8 @@ describe("注册表", () => {
       ...claudeAdapter.roots().map((root) => ["claude", root]),
       ...codexAdapter.roots().map((root) => ["codex", root]),
       ...opencodeAdapter.roots().map((root) => ["opencode", root]),
+      ...piAdapter.roots().map((root) => ["pi", root]),
+      ...ompAdapter.roots().map((root) => ["omp", root]),
     ]);
   });
 });
@@ -223,11 +228,14 @@ describe("按偏移读记录", () => {
   });
 
   it("没有适配器的 agent 按 JSONL 文件读 CLI 报来的路径", () => {
-    const path = join(directory, "pi.jsonl");
+    const path = join(directory, "custom.jsonl");
     writeFileSync(path, `${JSON.stringify({ role: "user", content: "hi" })}\n`);
-    const located = locateHistory({ agentId: "pi", transcriptPath: path });
+    const located = locateHistory({
+      agentId: "custom:x",
+      transcriptPath: path,
+    });
     if (located === undefined) throw new Error("not located");
-    const range = readHistoryEntries("pi", located, 0, 1024);
+    const range = readHistoryEntries("custom:x", located, 0, 1024);
     expect(renderEntries(range.entries).map((record) => record.line)).toEqual([
       "[用户] hi",
     ]);
