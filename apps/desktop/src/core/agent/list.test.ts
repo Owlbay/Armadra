@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -122,6 +122,44 @@ describe("listAgents and the integration", () => {
     expect(claude?.clientRevision).toBeGreaterThan(0);
     // Codex was not installed, so its row is untouched by Claude's.
     expect(rows.find((row) => row.id === "codex")?.launchArgs).toBeUndefined();
+  });
+
+  it("answers history availability on every row, the custom one by its base", () => {
+    const env = isolated();
+    mkdirSync(join(home, "claude", "projects"), { recursive: true });
+    const rows = listAgents({
+      dataDir: fixture.directory,
+      settings: settings([
+        {
+          id: "custom:mine",
+          label: "My Claude",
+          baseAgent: "claude",
+          launchCmd: "/nope/claude-wrapper",
+          disabledCapabilities: ["contextLink"],
+        },
+      ]),
+      env,
+    });
+    for (const row of rows) {
+      expect(Object.keys(row.history).sort()).toEqual([
+        "cost",
+        "index",
+        "transcript",
+      ]);
+    }
+    expect(rows.find((row) => row.id === "claude")?.history).toEqual({
+      index: "available",
+      cost: "available",
+      transcript: "available",
+    });
+    expect(rows.find((row) => row.id === "codex")?.history.index).toBe(
+      "not-found",
+    );
+    expect(rows.find((row) => row.id === "custom:mine")?.history).toEqual({
+      index: "available",
+      cost: "available",
+      transcript: "disabled",
+    });
   });
 
   it("gives a custom entry the integration of the base it borrows", () => {

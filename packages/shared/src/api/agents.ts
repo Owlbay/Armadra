@@ -10,6 +10,23 @@ export const launchWordSchema = z.union([
   z.object({ prefix: z.string(), env: z.string() }),
 ]);
 
+/** One of `history.index` / `cost` / `transcript` (contract §12.2). */
+export const HISTORY_STATES = [
+  "available",
+  "not-found",
+  "unsupported",
+  "disabled",
+] as const;
+export const historyStateSchema = z.enum(HISTORY_STATES);
+export type HistoryState = z.infer<typeof historyStateSchema>;
+
+export const agentHistorySchema = z.object({
+  index: historyStateSchema,
+  cost: historyStateSchema,
+  transcript: historyStateSchema,
+});
+export type AgentHistory = z.infer<typeof agentHistorySchema>;
+
 /** `GET /api/agents` — registry entry plus local detection. */
 export const agentInfoSchema = z.object({
   id: agentIdSchema,
@@ -77,6 +94,12 @@ export const agentInfoSchema = z.object({
    * present, and `launchArgs` otherwise.
    */
   launchWords: z.array(launchWordSchema).optional(),
+  /**
+   * Whether this machine has the CLI's local history (contract §12.2): the
+   * session index, local cost, and transcripts read over a link. Optional
+   * because a runtime that predates the field simply does not say.
+   */
+  history: agentHistorySchema.optional(),
 });
 
 export const agentListSchema = z.array(agentInfoSchema);

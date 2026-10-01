@@ -1,3 +1,7 @@
+import {
+  type HistoryAvailability,
+  availabilityOf,
+} from "../history/availability";
 import { state as integrationState } from "../hook/install/integration";
 import type { LaunchWord } from "../terminal/shell";
 import { type AgentProbe, storedProbe } from "./probe";
@@ -50,6 +54,11 @@ export interface AgentListRow extends AgentInfo {
    * 这里只**读**缓存：探测在后台扫描里跑，一次列表绝不等一个子进程。
    */
   readonly probe?: AgentProbe;
+  /**
+   * 本机有没有这家 CLI 的历史数据（契约 §12.2）。只 stat 根目录，不扫描：
+   * 列表要便宜。
+   */
+  readonly history: HistoryAvailability;
 }
 
 export function listAgents(options: ListAgentsOptions): AgentListRow[] {
@@ -57,7 +66,10 @@ export function listAgents(options: ListAgentsOptions): AgentListRow[] {
     ...detect(),
     ...options.settings.customAgents().map((custom) => customInfo(custom)),
   ];
-  return rows.map((row) => withIntegration(row, options));
+  return rows.map((row) => ({
+    ...withIntegration(row, options),
+    history: availabilityOf(row.id, options.settings, options.env),
+  }));
 }
 
 /**
@@ -74,7 +86,7 @@ export function listAgents(options: ListAgentsOptions): AgentListRow[] {
 function withIntegration(
   row: AgentInfo,
   options: ListAgentsOptions,
-): AgentListRow {
+): Omit<AgentListRow, "history"> {
   const provider = row.baseAgent ?? row.id;
   let state;
   try {
