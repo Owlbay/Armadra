@@ -384,3 +384,35 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - 工作空间事件 `terminal.hibernation`：`{ "type": "terminal.hibernation", "sessionId", "nodeId", "state", "reason"? }`，`state` 是 `hibernated`（进程确认结束之后才发）/ `resuming` / `running` / `failed`。`reason` 在 `resuming` / `running` 时是唤醒来源（`focus` / `delivery` / `schedule`），在 `failed` 时是稳定码（`noProviderSession`、`spawnFailed`、`agentDidNotStart` 等），不翻译。
 - 资源采样里休眠的会话照列，`unknownReason: "hibernated"`、`alive: false`、各项数字为 `null`。
 - 设置：`terminal.ecoMode`（布尔，缺省 `true`）、`terminal.ecoIdleMinutes`（5–1440，缺省 30）。
+
+## 12. CLI 协作的补充形状
+
+设计见 [CLI 接入、通信与共享上下文](../design/cli-collaboration.md)。§12.1（成本行的 `unit` 与 `requests`）与 §12.2（`/api/agents` 行的 `history`）由 H3 / M1 两个批次补写，这里先只有 §12.3。
+
+### 12.3 投递终态回执
+
+排队项（`agent_send_queue`）因为过期、目标侧拒收或出队时门链拒绝而结束时，core 往发送方的收件箱写一条回执（迁移 0029 的 `settled_by` / `notified_at`，代码在 `core/collab/receipts.ts`）。发送方自己取消的（`canvas cancel`），以及发送当下就拿到拒绝回执的（如 `--no-queue`），不写。
+
+`canvas inbox` 的每一行多一个 `kind`：`"message"` 是同级消息，`"receipt"` 是回执。回执行的 `from` / `fromTitle` 是**那条投递的目标**，`key` 是 `receipt:<queueId>`，正文写目标名、原因（最后一次没投出去的码）、尝试次数与正文字数，不带原消息正文：
+
+```json
+{
+  "sequence": 12,
+  "id": "<mailbox id>",
+  "from": "<目标节点 id>",
+  "fromTitle": "审查",
+  "fromHandle": null,
+  "fromRole": "peer",
+  "kind": "receipt",
+  "key": "receipt:<queueId>",
+  "body": "投往「审查」的消息已过期（TARGET_BUSY，尝试 0 次，正文 412 字）。",
+  "createdAt": 1790000000,
+  "expiresAt": 1790086400
+}
+```
+
+- 三种正文：`已过期`（清扫）、`被对方拒收`（`DELETE /api/workspaces/{id}/deliveries/{queueId}`）、`在出队时被拦下`（门链硬拒绝；尝试次数含被拦下的那一次）。
+- 回执不计入收件箱唤醒，也不占 `MAX_PENDING`；`post` 拒绝以 `receipt:` 开头的 key（400 `key_invalid`）。
+- 每条终态同时写一行投递记录（`GET /api/workspaces/{id}/deliveries`，`outcome` 为 `expired` 或 `cancelled`，`receipt` 是队列 id），并发 `agent.delivery` 事件：`{ "type": "agent.delivery", "traceId", "sourceNodeId", "targetNodeId", "outcome": "expired" | "cancelled", "code"? }`，`code` 是最后一次没投出去的码。
+- 发送方节点已经不在画布上、目标节点已经不在画布上（收件箱外键填不了），或者是收件箱唤醒（来源就是目标自己）时不写回执，投递记录与事件照发。
+- 每条终态只通知一次；清扫只删回执已经写过的、或者不需要回执的终态行。
