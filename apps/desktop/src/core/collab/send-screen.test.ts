@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type AgentFixture, agentFixture, callerFor } from "../agent/fixture";
 import { freeLease } from "../drive/lease";
 import { controlDispatcher, type ControlOutcome } from "./control";
+import { runMailbox } from "./mailbox";
+import { Args } from "./refusals";
 import { SendPump } from "./send-pump";
 import { resetSendLimits } from "./send-limits";
+import { pendingFor } from "./send-queue";
 
 /**
  * 画面门（设计 `agent-delivery.md` §4.3「画面门」）。
@@ -80,6 +83,10 @@ function openedOnly(): void {
     lastOutputAt: Date.now() - 500,
   });
   target({ state: "starting" });
+}
+
+function nowSeconds(): number {
+  return Math.floor(Date.now() / 1000);
 }
 
 beforeEach(() => {
@@ -212,5 +219,31 @@ describe("the screen gate", () => {
     const body = ok(await run("send", { to: pi, body: "做这件事" }));
     expect(body).toMatchObject({ outcome: "delivered" });
     expect(captured).toBe(0);
+  });
+
+  it("过期回执说明是停在对话框上", async () => {
+    fixture.terminal.capture = AUTO_MODE_DIALOG;
+    const body = ok(await run("send", { to: peer, body: "做这件事" }));
+    expect(pendingFor(fixture.database, peer, nowSeconds())).toHaveLength(1);
+    const later = nowSeconds() + 3_600;
+    new SendPump(() => ({
+      ...fixture.collab,
+      now: () => new Date(later * 1000),
+    })).sweep();
+    const inbox = (
+      await runMailbox(
+        fixture.collab,
+        callerFor(fixture, me),
+        "inbox",
+        new Args({}),
+      )
+    ).messages as Record<string, unknown>[];
+    expect(inbox[0]).toMatchObject({
+      kind: "receipt",
+      key: `receipt:${String(body.id)}`,
+    });
+    expect(String(inbox[0]?.body)).toBe(
+      "投往「审查」的消息已过期（TARGET_NOT_AT_PROMPT：对方终端停在 CLI 的对话框上，没有替人回答，正文 4 字）。",
+    );
   });
 });
