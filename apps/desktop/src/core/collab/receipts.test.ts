@@ -130,7 +130,7 @@ describe("delivery receipts", () => {
       key: `receipt:${id}`,
     });
     expect(String(inbox[0]?.body)).toBe(
-      "投往「审查」的消息已过期（TARGET_BUSY，尝试 0 次，正文 4 字）。",
+      "投往「审查」的消息已过期（TARGET_BUSY，正文 4 字）。",
     );
     // 原文不进回执。
     expect(String(inbox[0]?.body)).not.toContain("做这件事");
@@ -186,7 +186,7 @@ describe("delivery receipts", () => {
     const inbox = await inboxOf(me);
     expect(inbox).toHaveLength(1);
     expect(String(inbox[0]?.body)).toBe(
-      "投往「审查」的消息被对方拒收（TARGET_BUSY，尝试 0 次，正文 4 字）。",
+      "投往「审查」的消息被对方拒收（TARGET_BUSY，正文 4 字）。",
     );
     expect(deliveryOutcomes(id)).toContain("cancelled");
   });

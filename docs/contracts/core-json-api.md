@@ -393,7 +393,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 排队项（`agent_send_queue`）因为过期、目标侧拒收或出队时门链拒绝而结束时，core 往发送方的收件箱写一条回执（迁移 0029 的 `settled_by` / `notified_at`，代码在 `core/collab/receipts.ts`）。发送方自己取消的（`canvas cancel`），以及发送当下就拿到拒绝回执的（如 `--no-queue`），不写。
 
-`canvas inbox` 的每一行多一个 `kind`：`"message"` 是同级消息，`"receipt"` 是回执。回执行的 `from` / `fromTitle` 是**那条投递的目标**，`key` 是 `receipt:<queueId>`，正文写目标名、原因（最后一次没投出去的码）、尝试次数与正文字数，不带原消息正文：
+`canvas inbox` 的每一行多一个 `kind`：`"message"` 是同级消息，`"receipt"` 是回执。回执行的 `from` / `fromTitle` 是**那条投递的目标**，`key` 是 `receipt:<queueId>`，正文写目标名、原因（最后一次没投出去的码）、尝试次数（为 0 时省略）与正文字数，不带原消息正文：
 
 ```json
 {
@@ -405,7 +405,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
   "fromRole": "peer",
   "kind": "receipt",
   "key": "receipt:<queueId>",
-  "body": "投往「审查」的消息已过期（TARGET_BUSY，尝试 0 次，正文 412 字）。",
+  "body": "投往「审查」的消息已过期（TARGET_BUSY，正文 412 字）。",
   "createdAt": 1790000000,
   "expiresAt": 1790086400
 }

@@ -36,11 +36,12 @@ export function receiptBody(item: QueueItem, targetName: string): string {
         ? "被对方拒收"
         : "在出队时被拦下";
   // `attempts` 数的是被认领去投的次数；门链在认领之前就把它拦下了，那一次也是
-  // 一次实际的尝试（§4）。
+  // 一次实际的尝试（§4）。忙或启动中退回排队的不算认领，所以过期与拒收大多是
+  // 0 次——「尝试 0 次」读起来像根本没投，干脆不写。
   const attempts = item.attempts + (item.settledBy === "gate" ? 1 : 0);
   const facts = [
     ...(item.lastReason === undefined ? [] : [item.lastReason]),
-    `尝试 ${attempts} 次`,
+    ...(attempts === 0 ? [] : [`尝试 ${attempts} 次`]),
     `正文 ${[...item.body].length} 字`,
   ];
   return `投往「${targetName}」的消息${what}（${facts.join("，")}）。`;
