@@ -31,6 +31,13 @@ export type QueueState =
   | "cancelled"
   | "expired";
 
+/**
+ * 终态是谁定的（迁移 0029，设计 `cli-collaboration.md` §4）。`''` 是投出去的
+ * 行与 0029 之前的旧行；`source` 是发送方已经知道的那些——它自己取消的，或者
+ * 发送当下就拿到了拒绝回执的。只有后三种要往发送方的收件箱写回执。
+ */
+export type SettledBy = "" | "source" | "target" | "gate" | "sweep";
+
 /** 还在排的那些状态。容量只数这两个。 */
 const PENDING: readonly QueueState[] = ["queued", "delivering"];
 
@@ -51,6 +58,9 @@ export interface QueueItem {
   readonly state: QueueState;
   /** 上一次没投出去的 code。排队回执里的 `reason` 就是它。 */
   readonly lastReason?: string;
+  readonly settledBy: SettledBy;
+  /** 终态回执写进发送方收件箱的时刻；还没写就没有。 */
+  readonly notifiedAt?: number;
 }
 
 interface QueueRow {
@@ -68,11 +78,16 @@ interface QueueRow {
   readonly attempts: number;
   readonly state: string;
   readonly last_reason: string | null;
+  readonly settled_by: string;
+  readonly notified_at: number | null;
 }
 
-const COLUMNS =
+/** 插入时写的那些。`settled_by` / `notified_at` 只在结束时由 UPDATE 写。 */
+const INSERT_COLUMNS =
   "id, workspace_id, source_node_id, target_node_id, origin, message_key, body, " +
   "hops, trail, created_at, expires_at, attempts, state, last_reason";
+
+const COLUMNS = `${INSERT_COLUMNS}, settled_by, notified_at`;
 
 function itemOf(row: QueueRow): QueueItem {
   let trail: string[] = [];
@@ -101,6 +116,10 @@ function itemOf(row: QueueRow): QueueItem {
     attempts: Number(row.attempts),
     state: row.state as QueueState,
     ...(row.last_reason === null ? {} : { lastReason: row.last_reason }),
+    settledBy: row.settled_by as SettledBy,
+    ...(row.notified_at === null
+      ? {}
+      : { notifiedAt: Number(row.notified_at) }),
   };
 }
 
@@ -158,7 +177,7 @@ export function enqueue(
   const expiresAt = item.now + SEND_QUEUE_TTL_SECONDS;
   const changes = database
     .prepare(
-      `INSERT OR IGNORE INTO agent_send_queue (${COLUMNS}) ` +
+      `INSERT OR IGNORE INTO agent_send_queue (${INSERT_COLUMNS}) ` +
         "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ? WHERE " +
         "(SELECT COUNT(*) FROM agent_send_queue WHERE target_node_id = ? " +
         "AND state IN ('queued','delivering') AND expires_at > ?) < ?",
@@ -311,18 +330,22 @@ export function claim(
   return Number(changes.changes) === 0 ? undefined : byId(database, id);
 }
 
-/** 投出去了 / 被取消了 / 过期了。 */
+/**
+ * 投出去了 / 被取消了 / 过期了。`settledBy` 说的是这个终态是谁定的：出队时
+ * 门链拒绝的那几处写 `gate`，它们要给发送方一条回执（§4）；投出去的不写。
+ */
 export function settle(
   database: DatabaseSync,
   id: string,
   state: QueueState,
   reason?: string,
+  settledBy: SettledBy = "",
 ): void {
   database
     .prepare(
-      "UPDATE agent_send_queue SET state = ?, last_reason = ? WHERE id = ?",
+      "UPDATE agent_send_queue SET state = ?, last_reason = ?, settled_by = ? WHERE id = ?",
     )
-    .run(state, reason ?? null, id);
+    .run(state, reason ?? null, settledBy, id);
 }
 
 /** 没投成，退回队列，记下这一次的 code。 */
@@ -350,30 +373,72 @@ export function cancelOwn(
 ): boolean {
   const changes = database
     .prepare(
-      "UPDATE agent_send_queue SET state = 'cancelled' WHERE id = ? " +
-        "AND source_node_id = ? AND state = 'queued'",
+      "UPDATE agent_send_queue SET state = 'cancelled', settled_by = 'source' " +
+        "WHERE id = ? AND source_node_id = ? AND state = 'queued'",
     )
     .run(id, sourceNodeId);
   return Number(changes.changes) > 0;
 }
 
 /**
- * 过期清扫：排过头的标 `expired`，终态里放够久的删掉。
+ * 结束了、该给发送方一条回执、而回执还没写的那些（`cli-collaboration.md` §4）。
+ * 最早结束的在前。
+ */
+export function settledUnnotified(database: DatabaseSync): QueueItem[] {
+  const rows = database
+    .prepare(
+      `SELECT ${COLUMNS} FROM agent_send_queue WHERE state IN ('cancelled','expired') ` +
+        "AND settled_by IN ('target','gate','sweep') AND notified_at IS NULL " +
+        "ORDER BY created_at, id",
+    )
+    .all() as unknown as QueueRow[];
+  return rows.map(itemOf);
+}
+
+/**
+ * 认领一条回执：把 `notified_at` 写上，返回这一次是不是自己认领到的。先认领
+ * 再写，回执就最多一条——两次清扫撞在一起时，后到的那一次在这里落空。
+ */
+export function markNotified(
+  database: DatabaseSync,
+  id: string,
+  now: number,
+): boolean {
+  const changes = database
+    .prepare(
+      "UPDATE agent_send_queue SET notified_at = ? WHERE id = ? AND notified_at IS NULL",
+    )
+    .run(now, id);
+  return Number(changes.changes) > 0;
+}
+
+/**
+ * 过期清扫，三步：排过头的标 `expired`（`settled_by = 'sweep'`）→ `notify`
+ * 写回执 → 终态里放够久的删掉。
+ *
+ * 删的只有两种：回执已经写过的，以及根本不需要回执的（`settled_by` 为空——投
+ * 出去的与 0029 之前的旧行——或者 `source`）。回执没写成的那些留着，下一遍
+ * 清扫再写，不会因为删得早而让发送方永远不知道。
  *
  * 不轮询队列本身（出队由 `agent.status` 驱动），这一遍只是让表不会无限长，
  * 并让「五分钟前那条指令」有一个明确的死亡时刻而不是永远等着（§4.6）。
  */
-export function expireQueue(database: DatabaseSync, now: number): number {
+export function expireQueue(
+  database: DatabaseSync,
+  now: number,
+  notify?: () => void,
+): number {
   const expired = database
     .prepare(
-      "UPDATE agent_send_queue SET state = 'expired' WHERE expires_at <= ? " +
-        "AND state IN ('queued','delivering')",
+      "UPDATE agent_send_queue SET state = 'expired', settled_by = 'sweep' " +
+        "WHERE expires_at <= ? AND state IN ('queued','delivering')",
     )
     .run(now);
+  notify?.();
   database
     .prepare(
       "DELETE FROM agent_send_queue WHERE state IN ('done','cancelled','expired') " +
-        "AND expires_at <= ?",
+        "AND expires_at <= ? AND (notified_at IS NOT NULL OR settled_by IN ('','source'))",
     )
     .run(now - SEND_QUEUE_TTL_SECONDS);
   return Number(expired.changes);

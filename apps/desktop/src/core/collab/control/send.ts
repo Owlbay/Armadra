@@ -52,6 +52,7 @@ import {
 import { MAX_HOPS, sendLimits } from "../send-limits";
 import {
   type QueueItem,
+  type SettledBy,
   SEND_QUEUE_TTL_SECONDS,
   claim,
   enqueue,
@@ -414,6 +415,15 @@ export interface AttemptOptions {
    * 那一次没有人在等那个回执。
    */
   readonly announce?: boolean;
+  /**
+   * 这一次是出队泵发起的。硬拒绝落 `settled_by = 'gate'`，给发送方写回执；发送
+   * 当下的那一次不需要——拒绝回执已经当场交到调用者手里了（`cli-collaboration.md` §4）。
+   */
+  readonly dequeued?: boolean;
+}
+
+function refusedBy(options: AttemptOptions): SettledBy {
+  return options.dequeued === true ? "gate" : "source";
 }
 
 /**
@@ -468,7 +478,13 @@ export async function attempt(
       throw error;
     }
     // 门链上的硬拒绝：这一条再等也不会变好，从队列里拿掉。
-    settle(context.database, item.id, "cancelled", codeOf(error));
+    settle(
+      context.database,
+      item.id,
+      "cancelled",
+      codeOf(error),
+      refusedBy(options),
+    );
     throw error;
   }
   const target = live.target;
@@ -503,7 +519,13 @@ export async function attempt(
         now,
       );
     } else if (options.unverified !== true) {
-      settle(context.database, item.id, "cancelled", "TARGET_STATE_UNVERIFIED");
+      settle(
+        context.database,
+        item.id,
+        "cancelled",
+        "TARGET_STATE_UNVERIFIED",
+        refusedBy(options),
+      );
       throw refuse(
         "TARGET_STATE_UNVERIFIED",
         `「${target.title}」没有装状态适配，只有 PTY 观测；改用 canvas post，或显式加 --unverified 自负其责。`,
@@ -540,7 +562,13 @@ export async function attempt(
   // `--interrupt`：只对真的在一轮里的目标有意义。空闲提示符上的 `ESC` 是空
   // 操作，而权限提示上的 `ESC` 的意思是「拒绝这次工具调用」——那是替人做决定。
   if (options.interrupt === true && state === "awaiting-approval") {
-    settle(context.database, item.id, "cancelled", "TARGET_AWAITING_APPROVAL");
+    settle(
+      context.database,
+      item.id,
+      "cancelled",
+      "TARGET_AWAITING_APPROVAL",
+      refusedBy(options),
+    );
     throw refuse(
       "TARGET_AWAITING_APPROVAL",
       `「${target.title}」停在一个权限提示上，Escape 在那里的意思是「拒绝这次工具调用」，已拒绝。`,
@@ -563,7 +591,13 @@ export async function attempt(
 
   // 租约（§6）。人在打字就不是 Agent 的回合；接管更是明说了不自动恢复。
   if (live.leaseState === "humanTakeover") {
-    settle(context.database, item.id, "cancelled", LEASE_REVOKED);
+    settle(
+      context.database,
+      item.id,
+      "cancelled",
+      LEASE_REVOKED,
+      refusedBy(options),
+    );
     throw refuse(
       LEASE_REVOKED,
       `有人接管了「${target.title}」的终端，Agent 的驱动权要等对方交还；读 canvas outbox 并告诉用户。`,
@@ -734,7 +768,7 @@ function queueOrRefuse(
   now: number,
 ): Outcome {
   if (!options.queue) {
-    settle(context.database, item.id, "cancelled", reason);
+    settle(context.database, item.id, "cancelled", reason, refusedBy(options));
     throw refuse(
       reason,
       `${QUEUE_MESSAGES[reason]}没有排队，因为你给了 --no-queue。`,

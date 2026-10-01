@@ -2,9 +2,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { getWorkspace } from "../workspaces/table";
 import { rfc3339 } from "../workspaces/support";
 import { loadNode } from "./nodes";
+import { writeReceipts } from "./receipts";
 import { pendingFor, positionOf } from "./send-queue";
 import { displayName } from "./control/send";
-import type { CollabContext } from "./service";
+import { type CollabContext, nowSeconds } from "./service";
 
 /**
  * `GET /api/workspaces/{id}/deliveries` — the delivery record panel.
@@ -189,6 +190,9 @@ export function listQueued(
  * 只删还在排的那些。已经写进 PTY 的那条收不回来，对它说「取消了」就是撒谎，
  * 所以 `delivering` 不在条件里——与 `cancelOwn` 同一条规矩，只是这里按工作空间
  * 而不是按发起者收窄：按下这个按钮的是人，他管的是自己的那块画布。
+ *
+ * 拒收落 `settled_by = 'target'`，并当场给发起者写一条回执（设计
+ * `cli-collaboration.md` §4）：它没有在等，不告诉它就只能等它自己去翻 outbox。
  */
 export function cancelQueued(
   context: CollabContext,
@@ -198,9 +202,11 @@ export function cancelQueued(
   getWorkspace(context.database, workspaceId);
   const changes = context.database
     .prepare(
-      "UPDATE agent_send_queue SET state = 'cancelled' WHERE id = ? " +
-        "AND workspace_id = ? AND state = 'queued'",
+      "UPDATE agent_send_queue SET state = 'cancelled', settled_by = 'target' " +
+        "WHERE id = ? AND workspace_id = ? AND state = 'queued'",
     )
     .run(id, workspaceId);
-  return Number(changes.changes) > 0;
+  const cancelled = Number(changes.changes) > 0;
+  if (cancelled) writeReceipts(context, nowSeconds(context));
+  return cancelled;
 }

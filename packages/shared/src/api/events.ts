@@ -42,7 +42,11 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
     traceId: z.string(),
     sourceNodeId: z.string(),
     targetNodeId: z.string(),
-    /** `delivered` / `queued` / `unknown` / `refused`。 */
+    /**
+     * `delivered` / `queued` / `unknown` / `refused`，以及排队项的终态
+     * `expired` / `cancelled`（设计 `cli-collaboration.md` §4，终态的 `code` 是
+     * 它最后一次没投出去的理由）。
+     */
     outcome: z.string(),
     /**
      * 被拦下时的稳定码（`LOOP_DETECTED`、`RATE_LIMITED`…）。页面按它取文案，

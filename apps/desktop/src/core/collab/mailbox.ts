@@ -32,6 +32,15 @@ export const MAX_BODY_CHARS = 2_000;
 export const MAX_PENDING = 64;
 export const TTL_SECONDS = 86_400;
 
+/**
+ * 投递终态回执的 key 前缀（`receipts.ts`，设计 `cli-collaboration.md` §4）。
+ * 回执不计入唤醒、不占容量，`post` 也不许用这个前缀冒充一条回执。
+ */
+export const RECEIPT_KEY_PREFIX = "receipt:";
+
+/** 拼进 SQL 的那一句：这一行不是回执。 */
+const NOT_RECEIPT = `message_key NOT LIKE '${RECEIPT_KEY_PREFIX}%'`;
+
 export const HELP_LINES = [
   "Armadra collaboration (pull-only, no automatic input):",
   "armadra-hook context list",
@@ -190,7 +199,11 @@ function post(
       "post requires --key <handoff-id> for safe retries.",
     );
   }
-  if (key.length > 128 || !/^[A-Za-z0-9\-_.:]+$/.test(key)) {
+  if (
+    key.length > 128 ||
+    !/^[A-Za-z0-9\-_.:]+$/.test(key) ||
+    key.startsWith(RECEIPT_KEY_PREFIX)
+  ) {
     throw refuse(
       400,
       "key_invalid",
@@ -204,7 +217,7 @@ function post(
     .prepare(
       "INSERT INTO agent_mailbox (id, workspace_id, source_node_id, target_node_id, message_key, body, created_at, expires_at) " +
         "SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE " +
-        "(SELECT COUNT(*) FROM agent_mailbox WHERE target_node_id = ? AND acknowledged_at IS NULL AND expires_at > ?) < ? " +
+        `(SELECT COUNT(*) FROM agent_mailbox WHERE target_node_id = ? AND acknowledged_at IS NULL AND expires_at > ? AND ${NOT_RECEIPT}) < ? ` +
         "ON CONFLICT(source_node_id, target_node_id, message_key) DO NOTHING",
     )
     .run(
@@ -318,6 +331,10 @@ function inbox(
       /** 发信者相对于你是什么：`main` 你的主、`sub` 你的从、`peer` 对等。 */
       fromRole: roles.get(row.source_node_id) ?? "peer",
       key: row.message_key,
+      /** `receipt` 是投递终态回执：署名是那条投递的目标，正文是应用写的。 */
+      kind: row.message_key.startsWith(RECEIPT_KEY_PREFIX)
+        ? "receipt"
+        : "message",
       // Bodies stay JSON strings, preserving the data boundary even if they
       // contain Markdown fences or forged message headers.
       body: row.body,
@@ -444,7 +461,11 @@ export function insertHandoffNotice(
     );
 }
 
-/** Unacknowledged, unexpired messages waiting for one node. */
+/**
+ * Unacknowledged, unexpired messages waiting for one node. Delivery receipts
+ * are not counted: they are notices about one's own sends, not peer messages
+ * waiting to be read, and they never take up `MAX_PENDING`.
+ */
 export function pendingCount(
   context: CollabContext,
   targetNodeId: string,
@@ -452,7 +473,8 @@ export function pendingCount(
 ): number {
   const row = context.database
     .prepare(
-      "SELECT COUNT(*) AS total FROM agent_mailbox WHERE target_node_id = ? AND acknowledged_at IS NULL AND expires_at > ?",
+      "SELECT COUNT(*) AS total FROM agent_mailbox WHERE target_node_id = ? AND acknowledged_at IS NULL AND expires_at > ? " +
+        `AND ${NOT_RECEIPT}`,
     )
     .get(targetNodeId, now) as { total: number };
   return Number(row.total);
@@ -463,6 +485,9 @@ export function pendingCount(
  * 这一批里最大的 `sequence`——「同一批未读只提示一次」认的就是这个数。
  *
  * 署名与 `inbox` 的每一行同源：名字优先，没有名字才退回标题（§2.4）。
+ *
+ * 投递终态回执不在这里：它们不该把提示敲进发送方的终端（`cli-collaboration.md`
+ * §10 第 2 条），Agent 在下一次 `inbox` 时自然会看见。
  */
 export interface UnreadDigest {
   readonly count: number;
@@ -480,7 +505,7 @@ export function unreadDigest(
     .prepare(
       "SELECT COUNT(*) AS total, MAX(sequence) AS latest " +
         "FROM agent_mailbox WHERE target_node_id = ? AND acknowledged_at IS NULL " +
-        "AND expires_at > ?",
+        `AND expires_at > ? AND ${NOT_RECEIPT}`,
     )
     .get(targetNodeId, now) as { total: number; latest: number | null };
   const count = Number(row.total);
@@ -491,7 +516,7 @@ export function unreadDigest(
         "FROM agent_mailbox m LEFT JOIN nodes n ON n.id = m.source_node_id " +
         "LEFT JOIN node_handles h ON h.node_id = m.source_node_id " +
         "WHERE m.target_node_id = ? AND m.acknowledged_at IS NULL " +
-        "AND m.expires_at > ? ORDER BY m.sequence LIMIT 1",
+        `AND m.expires_at > ? AND m.${NOT_RECEIPT} ORDER BY m.sequence LIMIT 1`,
     )
     .get(targetNodeId, now) as { from_name: string; body: string } | undefined;
   if (earliest === undefined) return undefined;
