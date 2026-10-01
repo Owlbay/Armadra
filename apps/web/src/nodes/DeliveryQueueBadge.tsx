@@ -11,6 +11,9 @@
  * 浮层里另列最近几条投进来的，并标出**凭什么**放行的（迁移 0026 的
  * `targetState`）：目标自己报了空闲是「有上报」，没有上报、看着它安静了就投的
  * 是「按观察放行」。两种都以「已投递」收尾，可信度却不同，事后要分得出来。
+ *
+ * 再列这个节点**发出去**的最近几条的结果（设计 `cli-collaboration.md` §4）：
+ * 排队项过期或被取消时 core 也记一行投递记录，发起者这一侧才看得到终态。
  */
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -23,6 +26,7 @@ import {
   useDeliveryStore,
 } from "@/agent/delivery-store";
 import { formatRelativeTime } from "@/lib/format";
+import { useCanvasStore } from "@/store/canvas-store";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui/popover";
@@ -87,6 +91,17 @@ export function DeliveryQueueBadge({
         record.targetNodeId === nodeId && record.outcome === "delivered",
     )
     .slice(0, RECENT_LIMIT);
+  const sent = (history.data ?? [])
+    .filter(
+      (record) =>
+        record.sourceNodeId === nodeId &&
+        record.targetNodeId !== nodeId &&
+        record.outcome !== "queued",
+    )
+    .slice(0, RECENT_LIMIT);
+  const nodes = useCanvasStore((state) => state.document?.nodes);
+  const titleOf = (id: string) =>
+    nodes?.find((node) => node.id === id)?.title ?? id;
 
   const items = queue.data ?? [];
   // 队空就不画——除非有人**问起**（命令面板那条）：那时空队列本身就是答案。
@@ -180,6 +195,35 @@ export function DeliveryQueueBadge({
                   </li>
                 );
               })}
+            </ul>
+          </>
+        ) : null}
+        {sent.length > 0 ? (
+          <>
+            <h3 className="mt-2 font-medium">{t("delivery.sent.title")}</h3>
+            <ul className="m-0 flex list-none flex-col gap-1 p-0">
+              {sent.map((record) => (
+                <li
+                  key={record.traceId}
+                  className="flex items-center gap-2"
+                  data-slot="delivery-sent"
+                >
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                    {t("delivery.sent.item", {
+                      name: titleOf(record.targetNodeId),
+                      time: formatRelativeTime(Date.parse(record.createdAt)),
+                    })}
+                  </span>
+                  <Badge
+                    variant={
+                      record.outcome === "delivered" ? "secondary" : "outline"
+                    }
+                    className="h-[18px] px-1.5 text-[length:var(--text-caption)]"
+                  >
+                    {t(`delivery.outcome.${record.outcome}`)}
+                  </Badge>
+                </li>
+              ))}
             </ul>
           </>
         ) : null}

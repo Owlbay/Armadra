@@ -134,6 +134,14 @@ export function reduce(
       [event.targetNodeId]: (state.queueVersion[event.targetNodeId] ?? 0) + 1,
     };
   }
+  // 排队项的终态（过期 / 取消）也是发起者那一侧的事：它浮层里「我发出的」
+  // 该重读了（设计 `cli-collaboration.md` §4）。
+  if (isSettled(event.outcome) && event.sourceNodeId !== event.targetNodeId) {
+    next.queueVersion = {
+      ...(next.queueVersion ?? state.queueVersion),
+      [event.sourceNodeId]: (state.queueVersion[event.sourceNodeId] ?? 0) + 1,
+    };
+  }
 
   if (event.outcome === "refused" && isNoticeCode(event.code)) {
     const id = `${event.code}:${key}`;
@@ -163,6 +171,11 @@ export function reduce(
     }
   }
   return next;
+}
+
+/** 排队项结束了：过期，或者被谁取消了。 */
+export function isSettled(outcome: string): boolean {
+  return outcome === "expired" || outcome === "cancelled";
 }
 
 /** 这条边此刻要不要闪一下。 */
