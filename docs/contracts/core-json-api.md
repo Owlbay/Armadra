@@ -461,6 +461,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 ```
 
 - 三种正文：`已过期`（清扫）、`被对方拒收`（`DELETE /api/workspaces/{id}/deliveries/{queueId}`）、`在出队时被拦下`（门链硬拒绝；尝试次数含被拦下的那一次）。
+- 原因是 `TARGET_NOT_AT_PROMPT`（目标终端停在 CLI 自己的对话框上，见 `agent-delivery.md` §4.3「画面门」）时，码后面补一句人话：`（TARGET_NOT_AT_PROMPT：对方终端停在 CLI 的对话框上，没有替人回答，正文 4 字）`。其余码原样写。
 - 回执不计入收件箱唤醒，也不占 `MAX_PENDING`；`post` 拒绝以 `receipt:` 开头的 key（400 `key_invalid`）。
 - 每条终态同时写一行投递记录（`GET /api/workspaces/{id}/deliveries`，`outcome` 为 `expired` 或 `cancelled`，`receipt` 是队列 id），并发 `agent.delivery` 事件：`{ "type": "agent.delivery", "traceId", "sourceNodeId", "targetNodeId", "outcome": "expired" | "cancelled", "code"? }`，`code` 是最后一次没投出去的码。
 - 发送方节点已经不在画布上、目标节点已经不在画布上（收件箱外键填不了），或者是收件箱唤醒（来源就是目标自己）时不写回执，投递记录与事件照发。
