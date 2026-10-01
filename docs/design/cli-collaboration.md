@@ -1,6 +1,6 @@
 # CLI 接入、通信与共享上下文（后续规划第一部分）
 
-> 状态：目标设计（2026-10-02），已审阅（有条件通过，必须修改项已并入本文），H0 与 R1 实施中。对应[后续规划](product-roadmap.md)第一部分。现状以[功能预期总表](../status/feature-roadmap.md)与源码为准。
+> 状态：部分实施（2026-10-02）——H0、H1、H2、H3、R1、M1 已合入分支 `feature/cli-collaboration`；E1（agent-e2e 场景 10）与 X1（多账号调研）未开始。对应[后续规划](product-roadmap.md)第一部分。现状以[功能预期总表](../status/feature-roadmap.md)与源码为准。
 > 范围：`apps/desktop/src/core/{history,conversations,usage,collab,handoff,hook,agent}`、`apps/web/src/{agent,nodes,settings,usage}`、`packages/shared/src`、`tools/probes/agent-e2e`。
 > 前置：[Agent 协作](../guides/agent-collaboration.md)（现状）、[Agent 推式投递](agent-delivery.md)（`send` 与投递队列）、[Agent 协作通道](agent-collaboration-channels.md)（各 CLI 的 Hook 通道）、[远端画布注入](remote-canvas-injection.md)。
 
