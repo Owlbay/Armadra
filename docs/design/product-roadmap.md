@@ -41,7 +41,7 @@
 
 设计一个 Armadra 自己的协调 Agent，负责拆分任务、分派给各 CLI、汇总结果；再把协作过程沉淀为可复用的工作流。
 
-- [ ] **协调 Agent**：核心先选用 Pi，借它的进程内扩展直接调用画布动词（`open-agent`、`team`、`send`、`inbox`、上下文读取）。
+- [ ] **协调 Agent**：Armadra 自己的 `ama`（独立仓库 [armadra-agent](https://github.com/yovinchen/armadra-agent)），作为第七个内置 Agent 跑在画布终端节点里，经宿主适配器直接调用画布动词（`open-agent`、`team`、`send`、`inbox`、上下文读取）。专项设计：[协调 Agent](coordinator-agent.md)。
 - [ ] **分派与汇总**：例如让 Claude Code 审查一部分代码、Codex 审查另一部分，协调 Agent 收齐结论后汇总到画板。
 - [ ] **人在回路**：关键步骤（合并、推送、破坏性操作）停下来等人确认。
 - [ ] **工作流录入**：把一次完成的协作保存为工作流模板，包括角色、CLI、提示词、连线、依赖顺序、worktree 与审查步骤。
