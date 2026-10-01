@@ -389,6 +389,30 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 设计见 [CLI 接入、通信与共享上下文](../design/cli-collaboration.md)。§12.1（成本行的 `unit` 与 `requests`）与 §12.2（`/api/agents` 行的 `history`）由 H3 / M1 两个批次补写，这里先只有 §12.3。
 
+### 12.2 `/api/agents` 行的历史数据可用性
+
+`GET /api/agents` 的每一行（内置与 `custom:` 条目）多一个 `history`，说本机有没有这家 CLI 的本地历史，三项分别对应会话索引、本地成本与连线读取的转录（代码在 `core/history/availability.ts`）。不新开路由；共享层 `agentInfoSchema.history` 可选，旧 runtime 不带这个字段时页面不画这三项。
+
+```json
+{
+  "id": "opencode",
+  "history": {
+    "index": "available",
+    "cost": "available",
+    "transcript": "not-found"
+  }
+}
+```
+
+每项取值四选一，按顺序判：
+
+- `unsupported`：这家没有历史适配器（`HISTORY_ADAPTERS` 里没有它），三项都是；适配器没有成本来源时只有 `cost` 是。
+- `disabled`：`custom:` 条目关掉了 `contextLink`，只影响 `transcript`。
+- `not-found`：适配器的根目录一个都不存在。
+- `available`：至少一个根目录存在。
+
+`custom:` 条目按它的 `baseAgent` 找适配器。只 stat 根目录、不扫描文件，所以 `available` 只说明「有地方可读」，不保证有会话或有成本；页面对 `not-found` 与 `unsupported` 写状态词，不写成 0。
+
 ### 12.3 投递终态回执
 
 排队项（`agent_send_queue`）因为过期、目标侧拒收或出队时门链拒绝而结束时，core 往发送方的收件箱写一条回执（迁移 0029 的 `settled_by` / `notified_at`，代码在 `core/collab/receipts.ts`）。发送方自己取消的（`canvas cancel`），以及发送当下就拿到拒绝回执的（如 `--no-queue`），不写。
