@@ -126,7 +126,7 @@ node tools/probes/ui-features-e2e.mjs [输出目录] [--only=presence,editor,fil
 
 node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,3,4,5,6]
 
-node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,3,4,5,6,7,8] [--backend direct]
+node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,3,4,5,6,7,8,9,10] [--backend direct]
 
 ```
 
@@ -134,7 +134,7 @@ node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,3,4,5,6,7,8] [--backe
 
 场景：
 
-八个场景（缺省全跑；`--backend direct` 先把 `terminal.backend` 设成 direct、重起一次 core 再跑，macOS 缺省是 tmux）：
+十个场景（缺省全跑；`--backend direct` 先把 `terminal.backend` 设成 direct、重起一次 core 再跑，macOS 缺省是 tmux）：
 
 1. **Codex 首投**：普通终端节点当发送方（探针以它的节点身份跑 `armadra-hook canvas`，令牌经 `POST /api/terminals/{id}/node-token/refresh` 签发），`send` 投给两个互相连线的 Codex，再 `open-agent --task` 建第三个；断言投递 `delivered` + `targetState = observed-quiet`，且 hook 随后报了一轮。
 2. **Claude 投递**：hook 状态通道那条路（`targetState = idle`）；半截输入门——经页面在 Claude 输入框里打半行不回车，等人的租约过期后 `send` 排队 `TARGET_INPUT_PENDING`，回车后投出去。
@@ -146,12 +146,13 @@ node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,3,4,5,6,7,8] [--backe
 7. **Claude 的权限请求在画布里答复**：节点用「自动编辑」（`--permission-mode acceptEdits`，盖过操作员设置里的 bypass），经页面让 Claude 跑一条 `node -e` 写文件；断言节点状态 blocked 带 pendingId、请求文件在 `pending/`、节点头的「允许 / 拒绝」可点且没被遮住；允许后文件写出来，拒绝后文件不存在，终端里不残留 Claude 自己的权限对话框。
 8. **休眠后经 `send` 唤醒**：关页面让 Claude 睡着，`canvas send` 当场答排队（`TARGET_STARTING`），同一会话 id 起下一代、进程带 `--resume <同一个 id>`，投递 `delivered` 并跑完一轮；重开页面问一句，确认接回的是原来那段对话。
 9. **组队带 worktree**（§59）：不用真 CLI，自己另起一套 core（临时 git 仓库当工作区，假 CLI 是一段记下自己工作目录再停在 shell 里的 sh），`--only 9` 单跑时不检查 CLI 登录、不起 Vite 与 Chrome。`team --member "…|worktree=名字"` 与按路径的成员各建出一条检出与绑定的 Frame、同名的两个成员共用一个 Frame、成员终端从节点 `cwd` 起在检出里；`open-agent --worktree` 按分支名进同一个 Frame；`--dry-run` 不建，Git 拒绝时画布不多一个节点。
+10. **六家互读**（设计 cli-collaboration §8）：claude、codex、opencode、pi、omp、copilot 各起一个**交互式 TUI** 节点，按这个顺序以 `peer` 连成环。每个节点经页面敲一句跑完一轮；环上每个下游以自己的节点身份（`canvasAs` / `contextAs`，换的只是 `ARMADRA_NODE_ID`）`context summary` 与 `context transcript` 读上游，断言非空且「来源」落在那一家的根下（OpenCode 是 `opencode:<id>`）；沿环 `send` 一轮，每条都 `delivered` 且目标真的跑了一轮；半截输入门造一条排队，`DELETE /api/workspaces/{id}/deliveries/{queueId}` 拒收，发送方收件箱（`inboxOf`）出现 `receipt:<queueId>`、投递记录有 `cancelled`；Pi → 下游走一次交接 prepare → accept（材料里有转录摘录、目标收件箱多一条）；会话索引（`conversationsRows`，只取这次的工作目录）每家都有、同一个文件不被两家各认一次，`GET /api/usage/cost` 每家 `source` 不是 none 且 24 小时里记到了用量。`result.json` 的 `sixWay` 记每家每步的通过 / 失败 / 跳过矩阵、每个节点的 `agent_status.transcript_path` 与分段耗时。另外四家的临时 HOME 与凭据和场景 6 是同一个函数（`prepareCliHomes`），但 Pi / OMP 的 agent 目录、`COPILOT_HOME` 与 OpenCode 的 `XDG_DATA_HOME` 指到 core 自己的根（core 才认得出这些会话；Pi 与 OMP 因此共用一个目录）；它们的启动行经页面的「自定义启动命令」（localStorage `armadra.launchOverrides`）换成临时包装脚本，注入参数照常由页面拼上。Claude 用「自动编辑」起：操作员缺省是 bypass 时新版 Claude 先弹「把 auto 设成缺省？」，缺省选项是「是」，一条投递的回车就会改掉 `~/.claude/settings.json`（首跑踩中，已改回；收尾因此单独比对 `permissions.defaultMode`）。Claude 的转录在真实目录，探针把**这一次**的那个文件硬链接进 core 的临时 `CLAUDE_CONFIG_DIR`，索引与成本才扫得到。没装或认证不上的那家整家记 skipped 并写原因，环只连能跑的几家；没跑完首轮的节点不往里投。`--only 10` 单跑约 1.5 分钟（2026-10-02 实测三家：84 秒），花费是每家三轮左右「回复 OK」（首轮、环上一轮、交接目标收到通知后多一轮）。
 
 隔离：数据目录、工作空间、浏览器 profile 与 CODEX_HOME 全部 `mktemp`，结束删除并停掉自己的 tmux 服务器。Codex 用临时 CODEX_HOME（只复制 `~/.codex/auth.json`，关掉启动时的升级检查，预先信任工作目录；token 超过 7 天没刷新就拒跑）。Claude 的登录在钥匙串里，临时 `CLAUDE_CONFIG_DIR` 认证不上，所以 Claude 进程用真实配置目录——前提是 Armadra 对 Claude 走启动时注入（`--settings` 指向数据目录里的文件），探针启动前就检查这一点；core 自己的 `CLAUDE_CONFIG_DIR` 指向临时目录，技能文件只写在那里。终端子进程的环境按白名单建，于是 `SHELL` 换成一个临时包装脚本（导出临时 CODEX_HOME、去掉 CLAUDE_CONFIG_DIR、`exec zsh -f`）。跑前跑后比对 `~/.claude/settings.json`、`~/.codex` 的 `config.toml` / `hooks.json` / `auth.json`、另外四个 CLI 的配置与凭据文件，以及两个 CLI 的版本；Claude 仍会像平常一样在 `~/.claude.json` 与 `~/.claude/projects/` 里记下这个临时目录的会话。
 
 产物默认在 `target/agent-e2e/`：`result.json`（逐条断言、时间线、投递记录、控制台错误、配置比对）、每个场景的截图与 `core.log`。一次全量约 4–5 分钟（实测 245 秒），花费是十几轮「回复 OK」量级的 token。
 
-没验证的：会话宿主后端（Windows）；OpenCode / Pi / OMP / Copilot 的交互式 TUI（场景 6 用非交互模式，验的是注入而不是界面）；打包版见「打包版冒烟」一节。
+没验证的：会话宿主后端（Windows）；OpenCode / OMP / Copilot 的交互式 TUI（场景 10 写了它们的路径，但 2026-10-02 这台机器上三家都没装、记 skipped；Pi 的 TUI 真跑过）；打包版见「打包版冒烟」一节。
 ```
 
 pnpm --filter @armadra/server build

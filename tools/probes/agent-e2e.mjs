@@ -22,6 +22,10 @@
 //   6. 组队带 worktree：`team --member "…|worktree=名字"` 建出检出与绑定的
 //      Frame，成员的终端起在检出里。用假 CLI、自己一套 core，`--only 6` 单跑
 //      时不需要真 CLI 的登录。
+//   10. 六家互读（设计 cli-collaboration §8）：六种 CLI 各起一个交互式 TUI 节点
+//      连成环，下游 `context summary / transcript` 读上游、沿环 send、拒收一条
+//      排队看回执、交接 prepare → accept、会话索引与成本每家都有。没装或认证
+//      不上的那家记 skipped。
 //
 // 认证与隔离：
 //   * Codex 用临时 CODEX_HOME，只**复制** ~/.codex/auth.json 进去。token 超过 7
@@ -40,7 +44,7 @@
 //
 // 用法（仓库根目录）：
 //   pnpm libs:build && pnpm --filter @armadra/desktop build
-//   node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,3,4,5,6]
+//   node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,…,10] [--backend direct]
 //
 // 产物：<输出目录>/result.json、每个场景的截图、core.log。
 import {
@@ -60,6 +64,7 @@ import scenario6 from "./agent-e2e/scenario-6-other-clis.mjs";
 import scenario7 from "./agent-e2e/scenario-7-claude-approval.mjs";
 import scenario8 from "./agent-e2e/scenario-8-send-wakes.mjs";
 import scenario9 from "./agent-e2e/scenario-9-team-worktree.mjs";
+import scenario10 from "./agent-e2e/scenario-10-six-way-context.mjs";
 
 const SCENARIOS = [
   ["1", scenario1],
@@ -70,6 +75,7 @@ const SCENARIOS = [
   ["6", scenario6],
   ["7", scenario7],
   ["8", scenario8],
+  ["10", scenario10],
 ];
 
 async function main() {

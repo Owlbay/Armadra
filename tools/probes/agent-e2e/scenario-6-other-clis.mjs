@@ -27,191 +27,56 @@
 //     自带的免费模型，不需要凭据。
 //   * Copilot：登录在钥匙串里，临时 HOME 下读不到；`gh auth token` 取出的令牌
 //     经 COPILOT_GITHUB_TOKEN 交给这一个进程（不写任何文件，不打印）。
+//
+// 临时 HOME 与凭据的搭建在 lib.mjs 的 `prepareCliHomes`（场景 10 也用它）。
 import { execFile, execFileSync } from "node:child_process";
-import {
-  chmodSync,
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { homedir } from "node:os";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { note, putDocument, scenario, sleep, waitSoft } from "./lib.mjs";
+import {
+  cliEnvLines,
+  note,
+  prepareCliHomes,
+  putDocument,
+  scenario,
+  sleep,
+  waitSoft,
+} from "./lib.mjs";
 
 const PROMPT =
   "Do not use any tools. Answer in one line exactly: SKILLS=<names of the skills available to you, comma-separated, or none>; RULE=<the shell command your instructions say to collaborate through, or none>";
 
-/** 包里的原生 OpenCode：`<全局 node_modules>/opencode-ai/node_modules/opencode-<平台>/bin/opencode`。 */
-function opencodeBinary() {
-  try {
-    const wrapper = execFileSync("which", ["opencode"], {
-      encoding: "utf8",
-    }).trim();
-    const prefix = join(wrapper, "..", "..", "lib", "node_modules");
-    const native = join(
-      prefix,
-      "opencode-ai",
-      "node_modules",
-      `opencode-${process.platform}-${process.arch}`,
-      "bin",
-      "opencode",
-    );
-    return existsSync(native) ? native : undefined;
-  } catch {
-    return undefined;
-  }
-}
+/** 每个 CLI 非交互跑一轮的参数（`launch` 是 `GET /api/agents` 的 `launchArgs`）。 */
+const LINES = {
+  opencode(cli, launch) {
+    return [...launch, "run", "--model", cli.model, PROMPT];
+  },
+  pi: (cli, launch) => [
+    ...launch,
+    "-p",
+    "--no-session",
+    "--thinking",
+    "off",
+    "--model",
+    cli.model,
+    PROMPT,
+  ],
+  omp: (cli, launch) => [...launch, "-p", `--model=${cli.model}`, PROMPT],
+  copilot: (cli, launch) => [
+    ...launch,
+    "-p",
+    PROMPT,
+    "-s",
+    "--no-auto-update",
+    "--model",
+    cli.model,
+  ],
+};
 
-function which(program) {
-  try {
-    return execFileSync("which", [program], { encoding: "utf8" }).trim();
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * 四个 CLI 的临时 HOME 与凭据。答 `{ program, args(launchArgs), secrets }`，或
- * `{ skip }` 说明为什么认证不上。
- */
+/** 四个 CLI 的临时 HOME 与凭据，外加各自的非交互参数 `line(launchArgs)`。 */
 function prepareClis(scratch) {
-  const clis = {};
-  const home = (id) => {
-    const path = join(scratch, `home-${id}`);
-    mkdirSync(path, { recursive: true });
-    return path;
-  };
-  const piAuth = (() => {
-    try {
-      return JSON.parse(
-        readFileSync(join(homedir(), ".pi/agent/auth.json"), "utf8"),
-      )["moonshotai-cn"];
-    } catch {
-      return undefined;
-    }
-  })();
-
-  /* OpenCode */
-  {
-    const program = opencodeBinary();
-    clis.opencode = program
-      ? {
-          program,
-          home: home("opencode"),
-          // 免费模型的名单随 OpenCode 的在线目录变（新 HOME 里内置的那份已经
-          // 过期）：跑之前先 `models` 刷一次目录，从里面挑（见 pickFreeModel）。
-          model: "opencode/big-pickle",
-          line(launch) {
-            return [...launch, "run", "--model", this.model, PROMPT];
-          },
-        }
-      : { skip: "没有找到 OpenCode 的原生二进制" };
-  }
-
-  /* Pi */
-  if (which("pi") && piAuth?.type === "api_key") {
-    const h = home("pi");
-    mkdirSync(join(h, ".pi/agent"), { recursive: true });
-    writeFileSync(
-      join(h, ".pi/agent/auth.json"),
-      JSON.stringify({ "moonshotai-cn": piAuth }),
-      { mode: 0o600 },
-    );
-    clis.pi = {
-      program: which("pi"),
-      home: h,
-      line: (launch) => [
-        ...launch,
-        "-p",
-        "--no-session",
-        "--thinking",
-        "off",
-        "--model",
-        "moonshotai-cn/kimi-k2.6",
-        PROMPT,
-      ],
-    };
-  } else {
-    clis.pi = {
-      skip: "没有 pi，或 ~/.pi/agent/auth.json 里没有 API key 形式的凭据",
-    };
-  }
-
-  /* OMP */
-  if (which("omp") && piAuth?.type === "api_key") {
-    const h = home("omp");
-    mkdirSync(join(h, ".omp/agent"), { recursive: true });
-    writeFileSync(
-      join(h, ".omp/agent/models.yml"),
-      [
-        "providers:",
-        "  moonshot-cn:",
-        "    baseUrl: https://api.moonshot.cn/v1",
-        "    apiKey: MOONSHOT_API_KEY",
-        "    api: openai-completions",
-        "    authHeader: true",
-        "    models:",
-        "      - id: kimi-k2.6",
-        "        name: Kimi K2.6",
-        "        reasoning: false",
-        "        input: [text]",
-        "",
-      ].join("\n"),
-    );
-    clis.omp = {
-      program: which("omp"),
-      home: h,
-      // OMP 也认 PI_CODING_AGENT_DIR（core 的环境里带着一个）：指到它自己的目录。
-      agentDir: join(h, ".omp/agent"),
-      secrets: { MOONSHOT_API_KEY: piAuth.key },
-      line: (launch) => [
-        ...launch,
-        "-p",
-        "--model=moonshot-cn/kimi-k2.6",
-        PROMPT,
-      ],
-    };
-  } else {
-    clis.omp = { skip: "没有 omp，或没有可复制的 API key" };
-  }
-
-  /* Copilot */
-  let token;
-  try {
-    token = execFileSync("gh", ["auth", "token"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {}
-  if (which("copilot") && token) {
-    const h = home("copilot");
-    mkdirSync(join(h, ".copilot"), { recursive: true });
-    // 只复制非凭据的那份（信任过的目录、上次登录的账号名）：没有它 Copilot 会
-    // 在第一次启动时问这些。
-    try {
-      copyFileSync(
-        join(homedir(), ".copilot/config.json"),
-        join(h, ".copilot/config.json"),
-      );
-    } catch {}
-    clis.copilot = {
-      program: which("copilot"),
-      home: h,
-      secrets: { COPILOT_GITHUB_TOKEN: token },
-      line: (launch) => [
-        ...launch,
-        "-p",
-        PROMPT,
-        "-s",
-        "--no-auto-update",
-        "--model",
-        "gpt-5-mini",
-      ],
-    };
-  } else {
-    clis.copilot = { skip: "没有 copilot，或 `gh auth token` 取不到令牌" };
+  const clis = prepareCliHomes(scratch);
+  for (const [id, cli] of Object.entries(clis)) {
+    if (!cli.skip) cli.line = (launch) => LINES[id](cli, launch);
   }
   return clis;
 }
@@ -222,29 +87,18 @@ function prepareClis(scratch) {
  * 与参数。
  */
 function writeWrapper(scratch, id, cli) {
-  const secretsFile = join(scratch, `secrets-${id}.sh`);
-  writeFileSync(
-    secretsFile,
-    Object.entries(cli.secrets ?? {})
-      .map(([name, value]) => `export ${name}='${value.replaceAll("'", "")}'`)
-      .join("\n") + "\n",
-    { mode: 0o600 },
-  );
   const wrapper = join(scratch, `run-${id}.sh`);
-  const h = cli.home;
   writeFileSync(
     wrapper,
-    `#!/bin/sh
-prefix="$1"; shift
-env | grep -E '^(ARMADRA_|OPENCODE_CONFIG|COPILOT_CUSTOM_INSTRUCTIONS)' > "$prefix.env"
-export HOME='${h}'
-export XDG_CONFIG_HOME='${h}/.config' XDG_DATA_HOME='${h}/.local/share' XDG_STATE_HOME='${h}/.local/state' XDG_CACHE_HOME='${h}/.cache'
-export COPILOT_HOME='${h}/.copilot' PI_CODING_AGENT_DIR='${cli.agentDir ?? `${h}/.pi/agent`}'
-unset CLAUDE_CONFIG_DIR CODEX_HOME CLAUDECODE
-. '${secretsFile}'
-'${cli.program}' "$@" > "$prefix.out" 2> "$prefix.err" < /dev/null
-echo $? > "$prefix.code"
-`,
+    [
+      "#!/bin/sh",
+      'prefix="$1"; shift',
+      `env | grep -E '^(ARMADRA_|OPENCODE_CONFIG|COPILOT_CUSTOM_INSTRUCTIONS)' > "$prefix.env"`,
+      ...cliEnvLines(scratch, id, cli),
+      `'${cli.program}' "$@" > "$prefix.out" 2> "$prefix.err" < /dev/null`,
+      'echo $? > "$prefix.code"',
+      "",
+    ].join("\n"),
   );
   chmodSync(wrapper, 0o755);
   return wrapper;

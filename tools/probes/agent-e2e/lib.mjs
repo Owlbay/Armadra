@@ -28,7 +28,7 @@ const onlyFlag = argv.indexOf("--only");
 export const only =
   onlyFlag >= 0
     ? new Set(argv[onlyFlag + 1].split(",").map((part) => part.trim()))
-    : new Set(["1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+    : new Set(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
 // `--backend direct`：终端后端改成 direct（非 tmux）再跑。缺省按平台（macOS
 // 装了 tmux 就是 tmux）。
 const backendFlag = argv.indexOf("--backend");
@@ -211,12 +211,225 @@ export function fingerprint() {
   return answer;
 }
 
+/**
+ * 操作员 Claude 的缺省权限模式。字节比对只在新内容提到临时目录时才怪探针，可
+ * Claude 自己的启动对话框（「把 auto 设成缺省？」）被一次投递答掉时，改的正是
+ * 这一项、内容里没有临时目录——场景 10 首跑就这样漏过去了。单独盯住它。
+ */
+export function claudeDefaultMode() {
+  try {
+    return (
+      JSON.parse(readFileSync(join(homedir(), ".claude/settings.json"), "utf8"))
+        ?.permissions?.defaultMode ?? null
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/* ------------------- 另外四个 CLI 的临时 HOME（场景 6、10） ------------------- */
+
+export function which(program) {
+  try {
+    return execFileSync("which", [program], { encoding: "utf8" }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+/** 包里的原生 OpenCode：`<全局 node_modules>/opencode-ai/node_modules/opencode-<平台>/bin/opencode`。 */
+export function opencodeBinary() {
+  try {
+    const wrapper = execFileSync("which", ["opencode"], {
+      encoding: "utf8",
+    }).trim();
+    const prefix = join(wrapper, "..", "..", "lib", "node_modules");
+    const native = join(
+      prefix,
+      "opencode-ai",
+      "node_modules",
+      `opencode-${process.platform}-${process.arch}`,
+      "bin",
+      "opencode",
+    );
+    return existsSync(native) ? native : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * OpenCode / Pi / OMP / Copilot 的临时 HOME 与凭据。答
+ * `{ [id]: { program, home, agentDir?, copilotHome?, xdgData?, secrets?, model? } }`，
+ * 认证不上的那一家是 `{ skip }`。凭据只**复制**，绝不写操作员的配置目录
+ * （本机实测见场景 6 顶部）：
+ *
+ *   * Pi：复制 ~/.pi/agent/auth.json 里的 moonshotai-cn 那一条（API key，不会
+ *     刷新；OAuth 那条不复制，刷新会轮换真实那份），模型 kimi-k2.6。
+ *   * OMP：同一把 key 经环境变量交给临时 models.yml 里的一个提供商（OMP 自带的
+ *     moonshot 指向国际站，这把 key 在那边无效）。
+ *   * OpenCode：用包里的原生二进制和它自带的免费模型，不需要凭据。
+ *   * Copilot：登录在钥匙串里，`gh auth token` 取出的令牌经
+ *     COPILOT_GITHUB_TOKEN 交给这一个进程（不写任何文件，不打印）。
+ *
+ * `dirs` 把 Pi / OMP 的 agent 目录（`pi` / `omp`）、`COPILOT_HOME`（`copilot`）
+ * 与 OpenCode 的 `XDG_DATA_HOME`（`xdgData`）指到给定位置——场景 10 指到 core
+ * 的根，core 才认得出这些会话；缺省都在各自的临时 HOME 里（场景 6）。
+ */
+export function prepareCliHomes(scratch, { dirs = {} } = {}) {
+  const clis = {};
+  const home = (id) => {
+    const path = join(scratch, `home-${id}`);
+    mkdirSync(path, { recursive: true });
+    return path;
+  };
+  const piAuth = (() => {
+    try {
+      return JSON.parse(
+        readFileSync(join(homedir(), ".pi/agent/auth.json"), "utf8"),
+      )["moonshotai-cn"];
+    } catch {
+      return undefined;
+    }
+  })();
+
+  /* OpenCode */
+  {
+    const program = opencodeBinary();
+    if (program) {
+      const h = home("opencode");
+      clis.opencode = {
+        program,
+        home: h,
+        xdgData: dirs.xdgData ?? `${h}/.local/share`,
+        // 免费模型的名单随 OpenCode 的在线目录变（新 HOME 里内置的那份已经
+        // 过期）：跑之前先 `models --refresh` 刷一次目录再挑。
+        model: "opencode/big-pickle",
+      };
+    } else {
+      clis.opencode = { skip: "没有找到 OpenCode 的原生二进制" };
+    }
+  }
+
+  /* Pi */
+  if (which("pi") && piAuth?.type === "api_key") {
+    const h = home("pi");
+    const agentDir = dirs.pi ?? join(h, ".pi/agent");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(
+      join(agentDir, "auth.json"),
+      JSON.stringify({ "moonshotai-cn": piAuth }),
+      { mode: 0o600 },
+    );
+    clis.pi = {
+      program: which("pi"),
+      home: h,
+      agentDir,
+      model: "moonshotai-cn/kimi-k2.6",
+    };
+  } else {
+    clis.pi = {
+      skip: "没有 pi，或 ~/.pi/agent/auth.json 里没有 API key 形式的凭据",
+    };
+  }
+
+  /* OMP */
+  if (which("omp") && piAuth?.type === "api_key") {
+    const h = home("omp");
+    const agentDir = dirs.omp ?? join(h, ".omp/agent");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(
+      join(agentDir, "models.yml"),
+      [
+        "providers:",
+        "  moonshot-cn:",
+        "    baseUrl: https://api.moonshot.cn/v1",
+        "    apiKey: MOONSHOT_API_KEY",
+        "    api: openai-completions",
+        "    authHeader: true",
+        "    models:",
+        "      - id: kimi-k2.6",
+        "        name: Kimi K2.6",
+        "        reasoning: false",
+        "        input: [text]",
+        "",
+      ].join("\n"),
+    );
+    clis.omp = {
+      program: which("omp"),
+      home: h,
+      // OMP 也认 PI_CODING_AGENT_DIR（core 的环境里带着一个）：指到它自己的目录。
+      agentDir,
+      secrets: { MOONSHOT_API_KEY: piAuth.key },
+      model: "moonshot-cn/kimi-k2.6",
+    };
+  } else {
+    clis.omp = { skip: "没有 omp，或没有可复制的 API key" };
+  }
+
+  /* Copilot */
+  let token;
+  try {
+    token = execFileSync("gh", ["auth", "token"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {}
+  if (which("copilot") && token) {
+    const h = home("copilot");
+    const copilotHome = dirs.copilot ?? join(h, ".copilot");
+    mkdirSync(copilotHome, { recursive: true });
+    // 只复制非凭据的那份（信任过的目录、上次登录的账号名）：没有它 Copilot 会
+    // 在第一次启动时问这些。
+    try {
+      copyFileSync(
+        join(homedir(), ".copilot/config.json"),
+        join(copilotHome, "config.json"),
+      );
+    } catch {}
+    clis.copilot = {
+      program: which("copilot"),
+      home: h,
+      copilotHome,
+      secrets: { COPILOT_GITHUB_TOKEN: token },
+      model: "gpt-5-mini",
+    };
+  } else {
+    clis.copilot = { skip: "没有 copilot，或 `gh auth token` 取不到令牌" };
+  }
+  return clis;
+}
+
+/**
+ * 包装脚本里换环境的那几行：HOME 与各 CLI 的配置目录换成临时的，再读 0600 的
+ * 凭据文件（凭据不进脚本正文、不进命令行）。答脚本行，不含 shebang。
+ */
+export function cliEnvLines(scratch, id, cli) {
+  const secretsFile = join(scratch, `secrets-${id}.sh`);
+  writeFileSync(
+    secretsFile,
+    Object.entries(cli.secrets ?? {})
+      .map(([name, value]) => `export ${name}='${value.replaceAll("'", "")}'`)
+      .join("\n") + "\n",
+    { mode: 0o600 },
+  );
+  const h = cli.home;
+  return [
+    `export HOME='${h}'`,
+    `export XDG_CONFIG_HOME='${h}/.config' XDG_DATA_HOME='${cli.xdgData ?? `${h}/.local/share`}' XDG_STATE_HOME='${h}/.local/state' XDG_CACHE_HOME='${h}/.cache'`,
+    `export COPILOT_HOME='${cli.copilotHome ?? `${h}/.copilot`}' PI_CODING_AGENT_DIR='${cli.agentDir ?? `${h}/.pi/agent`}'`,
+    "unset CLAUDE_CONFIG_DIR CODEX_HOME CLAUDECODE",
+    `. '${secretsFile}'`,
+  ];
+}
+
 /* --------------------------------- 装配 ---------------------------------- */
 
 /** 起临时环境、core、Vite 与 Chrome，挂上页面；答场景共用的上下文。 */
 export async function setup() {
   const before = fingerprint();
   report.safety.before = before;
+  report.safety.claudeDefaultMode = { before: claudeDefaultMode() };
 
   // Codex 的 token：临时目录里刷新会轮换 refresh token。
   const auth = JSON.parse(
@@ -309,6 +522,10 @@ export async function setup() {
     // core 启动时的一次性迁移按这些目录找旧的全局安装：全指到临时目录，探针
     // 不替操作员清他机器上的东西（那是升级后真实应用第一次启动的事）。
     XDG_CONFIG_HOME: join(scratch, "xdg"),
+    // OpenCode 的库在 `XDG_DATA_HOME/opencode`：不给的话 core 的会话索引、成本与
+    // 转录会去读操作员真实的 `~/.local/share/opencode`。场景 10 的 OpenCode 也
+    // 用这一份，core 才认得出它的会话。
+    XDG_DATA_HOME: join(scratch, "xdg-data"),
     COPILOT_HOME: join(scratch, "copilot-home"),
     PI_CODING_AGENT_DIR: join(scratch, "pi-agent"),
     SHELL: shell,
@@ -545,19 +762,23 @@ export async function setup() {
 
   /* --------------------------- 发送方：armadra-hook ---------------------------- */
 
-  const sourceEnv = () => ({
+  const sourceEnv = (nodeId = source.id) => ({
     PATH: process.env.PATH,
     HOME: homedir(),
-    ARMADRA_NODE_ID: source.id,
+    ARMADRA_NODE_ID: nodeId,
     ARMADRA_ENDPOINT_FILE: join(data, "hook-endpoint.env"),
   });
-  /** `armadra-hook canvas <verb> …`，以源节点的身份（节点令牌是 core 签发的那一份）。 */
-  const canvas = (verb, ...args) =>
+  /**
+   * `armadra-hook <argv…>`，以 `nodeId` 的身份：节点令牌按名字从
+   * `<data>/node-tokens/<nodeId>` 读，会话装起来时 core 就写好了，所以换身份只
+   * 需要换 `ARMADRA_NODE_ID`。`label` 只用于时间线。
+   */
+  const hookAs = (nodeId, argv, label) =>
     new Promise((done) => {
       execFile(
         hookBin,
-        ["canvas", verb, ...args],
-        { env: sourceEnv(), timeout: 60_000 },
+        argv,
+        { env: sourceEnv(nodeId), timeout: 60_000 },
         (error, stdout, stderr) => {
           let json;
           try {
@@ -569,8 +790,9 @@ export async function setup() {
             stderr: stderr.trim(),
             json,
           };
-          note(`canvas ${verb}`, {
-            args,
+          note(label, {
+            ...(nodeId === source.id ? {} : { as: nodeId }),
+            args: argv.slice(2),
             code: answer.code,
             out:
               (json ?? answer.stdout ?? "").toString().slice(0, 300) ||
@@ -581,6 +803,30 @@ export async function setup() {
         },
       );
     });
+  /** `armadra-hook canvas <verb> …`，以指定节点的身份。 */
+  const canvasAs = (nodeId, verb, ...args) =>
+    hookAs(nodeId, ["canvas", verb, ...args], `canvas ${verb}`);
+  /** `armadra-hook canvas <verb> …`，以源节点的身份（节点令牌是 core 签发的那一份）。 */
+  const canvas = (verb, ...args) => canvasAs(source.id, verb, ...args);
+  /** `armadra-hook context <verb> …`（读连线那头的节点），以指定节点的身份。 */
+  const contextAs = (nodeId, verb, ...args) =>
+    hookAs(nodeId, ["context", verb, ...args], `context ${verb}`);
+  /** 某个节点的收件箱（含已确认与回执），按到达顺序。 */
+  const inboxOf = (nodeId) =>
+    all(
+      "SELECT sequence, source_node_id, message_key, body, created_at, acknowledged_at FROM agent_mailbox WHERE target_node_id = ? ORDER BY sequence",
+      nodeId,
+    );
+  /** 会话索引表；给了 `cwd` 就只取那个目录的（不把操作员别处的会话读出来）。 */
+  const conversationsRows = (cwd) =>
+    cwd === undefined
+      ? all(
+          "SELECT provider, session_id, title, cwd, path, updated_at, bytes FROM conversations ORDER BY updated_at DESC",
+        )
+      : all(
+          "SELECT provider, session_id, title, cwd, path, updated_at, bytes FROM conversations WHERE cwd = ? ORDER BY updated_at DESC",
+          cwd,
+        );
 
   /* ------------------------------- 浏览器 --------------------------------- */
 
@@ -1151,6 +1397,10 @@ export async function setup() {
     statusSummary,
     sourceEnv,
     canvas,
+    canvasAs,
+    contextAs,
+    inboxOf,
+    conversationsRows,
     port,
     vite,
     served,
@@ -1207,6 +1457,14 @@ export function finalize() {
       )
         report.safety.blamed.push(file);
     } catch {}
+  }
+  const mode = report.safety.claudeDefaultMode;
+  if (mode !== undefined) {
+    mode.after = claudeDefaultMode();
+    if (mode.after !== mode.before)
+      report.safety.blamed.push(
+        `${join(homedir(), ".claude/settings.json")} permissions.defaultMode`,
+      );
   }
   report.safety.untouched =
     versionsKept &&
