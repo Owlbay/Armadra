@@ -1,6 +1,6 @@
 # CLI 接入、通信与共享上下文（后续规划第一部分）
 
-> 状态：部分实施（2026-10-02）——H0、H1、H2、H3、R1、M1 已合入分支 `feature/cli-collaboration`；X1（多账号调研）结论见 §7；E1（agent-e2e 场景 10）实施中。对应[后续规划](product-roadmap.md)第一部分。现状以[功能预期总表](../status/feature-roadmap.md)与源码为准。
+> 状态：已实施（2026-10-02）——H0、H1、H2、H3、R1、M1、E1 已合入分支 `feature/cli-collaboration`；E1 本机实跑 Claude / Codex / Pi 通过（OpenCode / OMP / Copilot 未安装，记 skipped，待装机补跑）；X1（多账号调研）结论见 §7，第二阶段待实测（§7.4）。对应[后续规划](product-roadmap.md)第一部分。现状以[功能预期总表](../status/feature-roadmap.md)与源码为准。
 > 范围：`apps/desktop/src/core/{history,conversations,usage,collab,handoff,hook,agent}`、`apps/web/src/{agent,nodes,settings,usage}`、`packages/shared/src`、`tools/probes/agent-e2e`。
 > 前置：[Agent 协作](../guides/agent-collaboration.md)（现状）、[Agent 推式投递](agent-delivery.md)（`send` 与投递队列）、[Agent 协作通道](agent-collaboration-channels.md)（各 CLI 的 Hook 通道）、[远端画布注入](remote-canvas-injection.md)。
 
@@ -304,6 +304,8 @@ ALTER TABLE agent_send_queue ADD COLUMN notified_at INTEGER;
 ### E1：场景 10
 
 按 §8 实施。等其余批次全部合入后再做。
+
+已实施（2026-10-02，`tools/probes/agent-e2e/scenario-10-six-way-context.mjs`，说明见 `tools/probes/README.md`）。与 §8 的差别：「来源」按那家 CLI 实际写历史的根判断——探针的 Claude 用真实配置目录，core 的 `CLAUDE_CONFIG_DIR` 是临时的，所以 Claude 的来源在 `~/.claude` 下，索引与成本靠把这一次的转录硬链接进 core 的根；成本除了 `source` 不是 none，还要求 24 小时窗口里确实记到用量。真跑发现并修掉两处：交接对 Pi / OMP / Copilot 直接交原文，`render()` 不认它们的行形状，转录摘录为空（`handoff/capture.ts` 改为经适配器归一化）；Pi 与 OMP 的根重合时同一个会话在索引里各出现一次（`history/pi.ts` 按文件头的标题记录分家）。OMP 的 `transcript_path` 是否上报仍待装了 OMP 的机器上验证。
 
 ### X1：多账号调研
 
