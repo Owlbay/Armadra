@@ -1,4 +1,6 @@
 import type { TargetState } from "../agent/target-state";
+import { entriesFromJson } from "../history/entries";
+import type { TranscriptEntry } from "../history/types";
 import { redact } from "./redact";
 
 /**
@@ -75,6 +77,16 @@ export function stateLabel(state: TargetState): string {
  * 样、都没承诺过，认不出来的行直接跳过。认出一半也比报错有用。
  */
 export function digestTranscript(text: string): TranscriptDigest {
+  return digestEntries(entriesFromJson(text));
+}
+
+/**
+ * 归一化记录 → 摘要要的那几件事。认形状是 `history/entries.ts` 的事，这里只数：
+ * role 不是三种之一的记录不计入，`loose` 的块照读（拆分之前的规矩）。
+ */
+export function digestEntries(
+  records: readonly TranscriptEntry[],
+): TranscriptDigest {
   let lastUser: string | undefined;
   let lastAssistant: string | undefined;
   const files: string[] = [];
@@ -83,8 +95,8 @@ export function digestTranscript(text: string): TranscriptDigest {
   let toolCalls = 0;
   let entries = 0;
 
-  for (const value of entriesOf(text)) {
-    const entry = readEntry(value);
+  for (const record of records) {
+    const entry = readEntry(record);
     if (entry === undefined) continue;
     entries += 1;
     toolCalls += entry.toolCalls;
@@ -157,126 +169,28 @@ interface Parsed {
   readonly toolCalls: number;
 }
 
-/** 转录文本 → 一串待解析的条目。JSONL、JSON 数组与 `{messages: []}` 都收。 */
-export function entriesOf(text: string): unknown[] {
-  const trimmed = text.trimStart();
-  if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-    let value: unknown;
-    try {
-      value = JSON.parse(trimmed);
-    } catch {
-      value = undefined;
-    }
-    const items = documentItems(value);
-    if (items !== undefined) return items;
-  }
-  const out: unknown[] = [];
-  for (const raw of text.split("\n")) {
-    const line = raw.trim();
-    if (line === "") continue;
-    try {
-      out.push(JSON.parse(line));
-    } catch {
-      continue;
-    }
-  }
-  return out;
-}
-
-function documentItems(value: unknown): unknown[] | undefined {
-  if (Array.isArray(value)) return value;
-  if (value === null || typeof value !== "object") return undefined;
-  const record = value as Record<string, unknown>;
-  for (const key of ["messages", "history", "chat", "turns", "items"]) {
-    const items = record[key];
-    if (Array.isArray(items)) return items;
-  }
-  return undefined;
-}
-
-const ROLES = ["user", "assistant", "system"] as const;
-
-function readEntry(value: unknown): Parsed | undefined {
-  if (value === null || typeof value !== "object") return undefined;
-  const record = value as Record<string, unknown>;
-  // Codex 把一切包进 `{type, payload}`，剥一层。
-  const payload = record.payload;
-  if (
-    payload !== null &&
-    typeof payload === "object" &&
-    !Array.isArray(payload)
-  ) {
-    return readEntry(payload);
-  }
-  const kind = record.type;
-  const named =
-    typeof kind === "string" && (ROLES as readonly string[]).includes(kind)
-      ? kind
-      : typeof record.role === "string"
-        ? record.role
-        : undefined;
-  if (named === undefined || !(ROLES as readonly string[]).includes(named)) {
-    return undefined;
-  }
-  const message = record.message;
-  const content =
-    message !== null && typeof message === "object" && !Array.isArray(message)
-      ? ((message as Record<string, unknown>).content ??
-        record.content ??
-        record.text)
-      : (record.content ?? record.text);
-  if (content === undefined || content === null) return undefined;
-
+function readEntry(entry: TranscriptEntry): Parsed | undefined {
+  if (entry.foreign === true) return undefined;
   const parts: string[] = [];
   const files: string[] = [];
   let toolCalls = 0;
-  walk(content, parts, files, () => {
-    toolCalls += 1;
-  });
+  for (const block of entry.blocks) {
+    if (block.type === "text") {
+      parts.push(block.text);
+    } else if (block.type === "tool_use") {
+      toolCalls += 1;
+      const path = filePath(block.input);
+      if (path !== undefined) files.push(path);
+    }
+    // 工具结果是摘要里最没用、最长的一段：只数进 `toolCalls` 的那一头，正文
+    // 一个字都不带。
+  }
   return {
-    role: named as Parsed["role"],
+    role: entry.role,
     text: collapse(parts.join(" ")),
     files,
     toolCalls,
   };
-}
-
-function walk(
-  content: unknown,
-  parts: string[],
-  files: string[],
-  countTool: () => void,
-): void {
-  if (typeof content === "string") {
-    parts.push(content);
-    return;
-  }
-  if (Array.isArray(content)) {
-    for (const block of content) walk(block, parts, files, countTool);
-    return;
-  }
-  if (content === null || typeof content !== "object") return;
-  const record = content as Record<string, unknown>;
-  const kind = typeof record.type === "string" ? record.type : "text";
-  switch (kind) {
-    case "text":
-    case "output_text":
-    case "input_text": {
-      if (typeof record.text === "string") parts.push(record.text);
-      return;
-    }
-    case "tool_use":
-    case "function_call": {
-      countTool();
-      const path = filePath(record.input ?? record.arguments);
-      if (path !== undefined) files.push(path);
-      return;
-    }
-    // 工具结果是摘要里最没用、最长的一段：只数进 `toolCalls` 的那一头，正文
-    // 一个字都不带。
-    default:
-      return;
-  }
 }
 
 /** `tool_use` 参数里的 `file_path` / `path`，只认字符串。 */

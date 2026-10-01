@@ -1,6 +1,9 @@
 import { statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import type { AgentId } from "../agent/registry";
+import { claudeAdapter, fallbackTitle } from "../history/claude";
+import { HISTORY_ADAPTERS, historyAdapter } from "../history/registry";
 import * as claude from "./claude";
 import * as codex from "./codex";
 import { type Parsed, clamp } from "./scan";
@@ -34,10 +37,15 @@ import { settingsDomain } from "../settings";
  * has disappeared is dropped at the end of the scan.
  */
 
-/** Providers whose transcripts this build knows how to read. */
-export const PROVIDERS = ["claude", "codex"] as const;
+/**
+ * Providers whose transcripts this build knows how to read — every agent with
+ * a history adapter (`history/registry.ts`), in registry order.
+ */
+export const PROVIDERS: readonly AgentId[] = HISTORY_ADAPTERS.map(
+  (adapter) => adapter.agentId,
+);
 
-export type Provider = (typeof PROVIDERS)[number];
+export type Provider = AgentId;
 
 /** How often the index is refreshed once the core is up. */
 export const REFRESH_INTERVAL_MS = 60_000;
@@ -144,10 +152,9 @@ export function inScope(scope: Scope, cwd: string): boolean {
 
 /** Where each provider keeps its transcripts on this machine. */
 export function defaultRoots(): Roots {
-  return [
-    ["claude", claude.root()],
-    ["codex", codex.root()],
-  ];
+  return HISTORY_ADAPTERS.flatMap((adapter) =>
+    adapter.roots().map((root) => [adapter.agentId, root] as const),
+  );
 }
 
 /**
@@ -231,8 +238,9 @@ function scanProvider(
   known: Map<string, KnownRow>,
   scope: Scope,
 ): { rows: IndexRow[]; seen: string[] } {
-  const found =
-    provider === "codex" ? codex.candidates(root) : claude.candidates(root);
+  const adapter = historyAdapter(provider);
+  if (adapter === undefined) return { rows: [], seen: [] };
+  const found = adapter.list(root);
   const rows: IndexRow[] = [];
   const seen: string[] = [];
   for (const candidate of found) {
@@ -243,10 +251,7 @@ function scanProvider(
       if (inScope(scope, cached.cwd)) seen.push(candidate.path);
       continue;
     }
-    const parsed: Parsed | undefined =
-      provider === "codex"
-        ? codex.parse(candidate.path)
-        : claude.parse(candidate.path);
+    const parsed: Parsed | undefined = adapter.parse(candidate);
     if (parsed === undefined || parsed.sessionId === "") continue;
     // 范围外的转录不进索引，也不算「见过」：上一轮留下的那一行随后被清掉。
     if (!inScope(scope, parsed.cwd)) continue;
@@ -254,7 +259,7 @@ function scanProvider(
     // A session whose opening message could not be read is still worth a row —
     // it is resumable — so it borrows its directory's name.
     const title =
-      parsed.title === "" ? claude.fallbackTitle(parsed.cwd) : parsed.title;
+      parsed.title === "" ? fallbackTitle(parsed.cwd) : parsed.title;
     rows.push({
       provider,
       sessionId: parsed.sessionId,
@@ -448,12 +453,10 @@ export function transcriptTitle(
   } catch {
     return undefined;
   }
-  const parsed =
-    agentId === "codex"
-      ? codex.parse(path)
-      : // Custom agents borrow a base agent's adapter and claude's JSONL shape
-        // is the common one, so it is also the default.
-        claude.parse(path);
+  // Custom agents borrow a base agent's adapter and claude's JSONL shape is
+  // the common one, so it is also the default for an agent with no adapter.
+  const adapter = historyAdapter(agentId) ?? claudeAdapter;
+  const parsed = adapter.parse({ path, updatedAt: "", bytes: 0 });
   if (parsed === undefined) return undefined;
   const title = clamp(parsed.title, MAX_SUGGESTED_TITLE_CHARS);
   return title === "" ? undefined : title;

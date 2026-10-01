@@ -14,9 +14,9 @@
 
 import { execFile, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { configRoot } from "../history/home";
 import type {
   CredentialSource,
   UsageCredits,
@@ -62,11 +62,8 @@ export function failureFromStatus(status: number): UsageFailure {
   return "provider_error";
 }
 
-/** `~`，Windows 用 `USERPROFILE`。 */
-export function homeDir(): string | undefined {
-  const value = process.env.HOME ?? process.env.USERPROFILE ?? homedir();
-  return value === "" ? undefined : value;
-}
+// `~` 的解析与各 CLI 的配置目录合并进了 `history/home.ts`，这里照旧转出。
+export { homeDir } from "../history/home";
 
 /**
  * `604800 → "7d"`、`18000 → "5h"`。供应商按秒报窗口大小；胶囊要的是 CLI 打印的
@@ -198,13 +195,7 @@ function claudeKeychainPayload(): Promise<string | undefined> {
 }
 
 function claudeFilePayload(): string | undefined {
-  const configured = process.env.CLAUDE_CONFIG_DIR;
-  const directory =
-    configured !== undefined && configured !== ""
-      ? configured
-      : homeDir() === undefined
-        ? undefined
-        : join(homeDir() as string, ".claude");
+  const directory = configRoot("claude");
   if (directory === undefined) return undefined;
   try {
     return readFileSync(join(directory, ".credentials.json"), "utf8");
@@ -315,13 +306,7 @@ export function accountIdFromJwt(token: string): string | undefined {
 export function codexCredentials():
   | { token: string; accountId: string }
   | undefined {
-  const configured = process.env.CODEX_HOME;
-  const directory =
-    configured !== undefined && configured !== ""
-      ? configured
-      : homeDir() === undefined
-        ? undefined
-        : join(homeDir() as string, ".codex");
+  const directory = configRoot("codex");
   if (directory === undefined) return undefined;
   let raw: string;
   try {

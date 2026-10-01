@@ -6,10 +6,9 @@ import { getAgentStatus, markAgentStatusRead } from "./status";
 import {
   MAX_TAIL_BYTES,
   MAX_RENDERED_BYTES,
-  locate,
-  readTail,
-  render,
+  renderEntries,
 } from "../collab/transcript";
+import { locateHistory, readHistoryEntries } from "../history/registry";
 import {
   commandFromCapture,
   configuredScope,
@@ -120,7 +119,11 @@ export function installRoutes(deps: AgentRouteDeps): void {
       const status = getAgentStatus(database, nodeId);
       if (status === undefined) throw notFound("This node has never reported");
       const provider = baseAgent(collab.settings, status.agentId);
-      const located = locate(provider, status.transcriptPath, status.sessionId);
+      const located = locateHistory({
+        agentId: provider,
+        transcriptPath: status.transcriptPath,
+        sessionId: status.sessionId,
+      });
       // A provider that keeps nothing readable is **501, not an empty body**.
       // An empty excerpt would be indistinguishable from a session that has
       // said nothing yet, and the panel would draw the blank as the truth.
@@ -133,13 +136,13 @@ export function installRoutes(deps: AgentRouteDeps): void {
       const budget = Number.isFinite(wanted)
         ? Math.min(MAX_TAIL_BYTES, Math.max(1, wanted))
         : MAX_TAIL_BYTES;
-      let text: string;
+      let entries;
       try {
-        text = readTail(located.path, budget);
+        entries = readHistoryEntries(provider, located, 0, budget).entries;
       } catch {
         throw notFound("The transcript could not be read");
       }
-      const lines = render(text);
+      const lines = renderEntries(entries).map((record) => record.line);
       if (lines.length === 0) {
         throw unsupported(
           `The file ${provider} reports is not a conversation this reader renders`,

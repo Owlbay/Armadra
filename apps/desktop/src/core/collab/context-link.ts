@@ -30,14 +30,13 @@ import { requireReadBudget } from "./read-budget";
 import { redact } from "./redact";
 import { type Args, Refusal, truncate } from "./refusals";
 import { type CollabContext, nowDate } from "./service";
-import { digestTranscript, renderSummary } from "./transcript-summary";
+import { locateHistory, readHistoryEntries } from "../history/registry";
+import type { EntryRange, Located } from "../history/types";
+import { digestEntries, renderSummary } from "./transcript-summary";
 import {
   MAX_TAIL_BYTES,
   type TranscriptRecord,
-  locate,
-  readRange,
-  readTail,
-  renderRecords,
+  renderEntries,
 } from "./transcript";
 
 /**
@@ -619,16 +618,47 @@ async function readTerminal(
 
 /* -------------------------------- 转录两档 -------------------------------- */
 
-/** 定位一个节点的转录文件，找不到就抛那句解释。 */
+/** 一个节点的转录在哪、归哪家适配器读。 */
+interface FoundTranscript {
+  readonly agentId: string;
+  readonly located: Located;
+}
+
+/** 经本地历史适配器定位一个节点的转录，找不到就抛那句解释。 */
 function locateTranscript(
   context: CollabContext,
   target: NodeRef,
-): { readonly path: string; readonly origin: string } {
+): FoundTranscript {
   const status = getAgentStatus(context.database, target.id);
   const agentId = target.agentId ?? status?.agentId ?? "claude";
-  const found = locate(agentId, status?.transcriptPath, status?.sessionId);
-  if (found === undefined) throw missing(target, agentId);
-  return found;
+  const located = locateHistory({
+    agentId,
+    transcriptPath: status?.transcriptPath,
+    sessionId: status?.sessionId,
+  });
+  if (located === undefined) throw missing(target, agentId);
+  return { agentId, located };
+}
+
+/** 经适配器读一段归一化记录；读不出来就抛那句解释。 */
+function readEntries(
+  found: FoundTranscript,
+  target: NodeRef,
+  fromOffset: number,
+): EntryRange {
+  try {
+    return readHistoryEntries(
+      found.agentId,
+      found.located,
+      fromOffset,
+      MAX_TAIL_BYTES,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw Refusal.notFound(
+      `「${target.title}」的转录文件读不出来（${message}）。`,
+    );
+  }
 }
 
 /** 这个节点现在在五态的哪一个。 */
@@ -655,15 +685,7 @@ function readSummary(
   handles: Handles,
 ): string {
   const found = locateTranscript(context, target);
-  let text: string;
-  try {
-    text = readTail(found.path, MAX_TAIL_BYTES);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw Refusal.notFound(
-      `「${target.title}」的转录文件读不出来（${message}）。`,
-    );
-  }
+  const range = readEntries(found, target, 0);
   const handle = handles.get(target.id);
   return renderSummary(
     {
@@ -671,9 +693,9 @@ function readSummary(
       ...(handle === undefined ? {} : { handle }),
       state: stateOf(context, target),
       pendingApproval: hasOpenApproval(context, target.id),
-      origin: found.origin,
+      origin: found.located.origin,
     },
-    digestTranscript(text),
+    digestEntries(range.entries),
   );
 }
 
@@ -699,20 +721,15 @@ function readTranscript(
     : MAX_TRANSCRIPT_BYTES;
   const since = args.flag("since");
 
+  // 游标表的 `transcript_path` 存的是 `Located.key`：文件来源就是路径。
+  const key = found.located.key;
+  const origin = found.located.origin;
   const cursor = since
-    ? readCursor(context.database, caller.node.id, target.id, found.path)
+    ? readCursor(context.database, caller.node.id, target.id, key)
     : undefined;
-  let range;
-  try {
-    range = readRange(found.path, cursor?.byteOffset ?? 0, MAX_TAIL_BYTES);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw Refusal.notFound(
-      `「${target.title}」的转录文件读不出来（${message}）。`,
-    );
-  }
+  const range = readEntries(found, target, cursor?.byteOffset ?? 0);
 
-  const records = renderRecords(range.text, {
+  const records = renderEntries(range.entries, {
     // `--full` 松的是这两档，不是总量：总量永远有一个数，只是那个数可以被显式
     // 抬高。
     ...(full ? {} : { maxLineChars: MAX_ENTRY_CHARS, briefToolResults: true }),
@@ -720,12 +737,12 @@ function readTranscript(
   if (records.length === 0) {
     if (since && cursor !== undefined) {
       return (
-        `「${target.title}」自上次读取之后没有新条目（来源：${found.origin}）。\n` +
+        `「${target.title}」自上次读取之后没有新条目（来源：${origin}）。\n` +
         `游标：${range.endOffset} 字节。\n`
       );
     }
     throw Refusal.notFound(
-      `「${target.title}」的转录里没有可读的对话（${found.origin}）。`,
+      `「${target.title}」的转录里没有可读的对话（${origin}）。`,
     );
   }
 
@@ -740,7 +757,7 @@ function readTranscript(
     (since ? "自上次读取之后的" : "最近的") +
     ` ${picked.lines.length} 条` +
     (since ? "" : `（这一段里共 ${records.length} 条）`) +
-    `，来源：${found.origin}\n` +
+    `，来源：${origin}\n` +
     `本次约 ${Math.max(1, Math.round(bytes / 1024))} KB ≈ ${tokens} token` +
     (full ? "（--full）" : "") +
     "\n";
@@ -756,7 +773,7 @@ function readTranscript(
     caller.node.id,
     target.id,
     {
-      transcriptPath: found.path,
+      transcriptPath: key,
       byteOffset: range.startOffset + picked.endOffset,
     },
     nowMs,

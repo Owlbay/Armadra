@@ -1,4 +1,5 @@
-import { locate, readTail } from "../collab/transcript";
+import { readTail } from "../history/files";
+import { locateHistory } from "../history/registry";
 import { gitFingerprint } from "../git/fingerprint";
 import {
   type FileReference,
@@ -51,8 +52,9 @@ export function readTranscriptTail(
   provider: string,
   path: string,
 ): TranscriptTail {
-  const located = locate(provider, path, undefined);
-  if (located === undefined) return { state: "missing" };
+  // 只给路径、不给会话 id：交接只认 CLI 报来的那一个文件，不去别处找。
+  const located = locateHistory({ agentId: provider, transcriptPath: path });
+  if (located?.path === undefined) return { state: "missing" };
   try {
     return {
       state: "read",

@@ -1,7 +1,13 @@
 import { z } from "zod";
+import { AGENT_IDS } from "../agents.js";
 
-/** Which CLI wrote the transcript a conversation row was read from. */
-export const CONVERSATION_PROVIDERS = ["claude", "codex"] as const;
+/**
+ * Which CLI wrote the transcript a conversation row was read from. Every
+ * built-in agent is allowed: which of them actually produce rows is decided by
+ * the core's history adapters, and a narrower enum here would reject a row the
+ * moment one more adapter is registered.
+ */
+export const CONVERSATION_PROVIDERS = AGENT_IDS;
 export const conversationProviderSchema = z.enum(CONVERSATION_PROVIDERS);
 
 /**

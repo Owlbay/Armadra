@@ -79,12 +79,20 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 重置时间。数据采集时间与额度重置时间分开显示；后台刷新和手动刷新共用串行化
 与冷却时间，前端只轮询缓存，不把缓存轮询时间当成数据更新时间。
 
-本地成本按 agent 采集：`core/usage/cost-sources.ts` 里每个 `AgentCostSource` 声明
-自己的转录根目录、字节预筛与逐行解析，`COST_SOURCES` 按注册表 id 登记（目前
-claude、codex）。扫描器只认这张表——没有本地来源的 agent 不在表里，`byAgent`
-里标 `source: "none"`，界面显示「暂无本地用量数据」而不是零。接入一家新 agent
-就是写一个适配器并登记，聚合（`summarize()` 的 `ranges`：24h / 7d / 30d / 全部）、
-契约与界面都不用改。
+各 CLI 留在本机的会话记录经**本地历史适配器**读（`core/history/`，每家一个
+`HistoryAdapter`，在 `history/registry.ts` 的 `HISTORY_ADAPTERS` 登记，目前 claude、
+codex）：根目录（`history/home.ts`，规则与 `hook/install/shared.ts::configHomeWith`
+同一份）、定位、会话列表与解析、归一化记录（`TranscriptEntry`，由
+`history/entries.ts` 从 JSON 读出）和成本来源都在适配器上。会话索引的 provider、
+成本来源表、`context summary / transcript`、转录面板与交接的转录读取都从注册表
+派生；CLI 自己报来的转录路径永远先认，所以没有适配器的 CLI 只要报了路径也读得到。
+
+本地成本按 agent 采集：适配器上的 `cost: { kind: "jsonl", source }` 声明自己的
+字节预筛与逐行解析（`AgentCostSource`），`core/usage/cost-sources.ts` 的
+`COST_SOURCES` 从注册表收集。扫描器只认这张表——没有本地来源的 agent 不在表里，
+`byAgent` 里标 `source: "none"`，界面显示「暂无本地用量数据」而不是零。接入一家
+新 agent 就是写一个适配器并登记，聚合（`summarize()` 的 `ranges`：24h / 7d / 30d /
+全部）、契约与界面都不用改。
 
 **工作面板一次只开一个**（`panels/WorkPanelSheet.tsx`）：资源管理器、资源、
 问题、用量、GitHub、自动化、交接停在右侧，宽度来自一张表——右上工具簇也读
