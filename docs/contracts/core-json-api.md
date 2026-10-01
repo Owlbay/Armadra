@@ -387,7 +387,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 12. CLI 协作的补充形状
 
-设计见 [CLI 接入、通信与共享上下文](../design/cli-collaboration.md)。§12.2（`/api/agents` 行的 `history`）由 M1 批次补写。
+设计见 [CLI 接入、通信与共享上下文](../design/cli-collaboration.md)。
 
 ### 12.1 成本行的 `unit` 与 `requests`
 
