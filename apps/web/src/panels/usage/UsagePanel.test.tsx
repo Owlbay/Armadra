@@ -15,7 +15,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import type { AgentInfo } from "@armadra/shared";
+import type { AgentInfo, CostSummary } from "@armadra/shared";
 
 const agents = vi.fn();
 
@@ -109,9 +109,8 @@ afterEach(() => {
   agents.mockReset();
 });
 
-function renderPanel() {
+function renderPanel(summary: CostSummary = sampleCostSummary()) {
   agents.mockResolvedValue(registry);
-  const summary = sampleCostSummary();
   render(
     <TestProviders>
       <UsagePanel summary={summary} />
@@ -193,6 +192,50 @@ describe("用量面板", () => {
       .map((button) => button.textContent ?? "");
     expect(labels.some((label) => label.includes("Claude Code"))).toBe(true);
     expect(labels.some((label) => label.includes("Pi"))).toBe(false);
+  });
+
+  it("Copilot 按请求数单列，不进 token 面积，选中一个点后换成该点的请求数", async () => {
+    const summary = sampleCostSummary();
+    const seven = summary.ranges["7d"];
+    seven.byAgent = seven.byAgent.map((entry) =>
+      entry.agent === "copilot"
+        ? { ...entry, unit: "premiumRequests", requests: 37, source: "local" }
+        : entry,
+    );
+    seven.points = seven.points.map((point, index) => ({
+      ...point,
+      agents: point.agents.map((entry) =>
+        entry.agent === "copilot"
+          ? {
+              ...entry,
+              unit: "premiumRequests",
+              requests: index === 3 ? 4 : 0,
+              source: "local",
+            }
+          : entry,
+      ),
+    }));
+    renderPanel(summary);
+    const section = await screen.findByRole("region", { name: "按 Agent" });
+    const row = await waitFor(() => {
+      const node = section.querySelector<HTMLElement>(
+        '[data-slot="usage-request-item"][data-agent="copilot"]',
+      );
+      if (!node) throw new Error("no copilot row");
+      return node;
+    });
+    await waitFor(() => expect(row.textContent).toContain("GitHub Copilot"));
+    expect(row.textContent).toContain("37 次高级请求");
+    const labels = within(section)
+      .getAllByRole("button")
+      .map((button) => button.textContent ?? "");
+    expect(labels.some((label) => label.includes("Copilot"))).toBe(false);
+    expect(
+      within(section).getByText(/暂无本地用量数据/).textContent,
+    ).not.toContain("Copilot");
+
+    fireEvent.click(document.querySelectorAll(".recharts-bar-rectangle")[3]!);
+    await waitFor(() => expect(row.textContent).toContain("4 次高级请求"));
   });
 
   it("点图例聚焦一条系列，其余变淡", async () => {
