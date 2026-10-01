@@ -412,6 +412,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - 请求数不折算成 token 或金额：这一行的 `tokens` 为零、`costUsd` 为 0、`complete` 为 `true`。
 - 窗口合计（`totals`、`today`、`last30Days`、`daily`）、`byModel`、`peak` 与 `unpricedModels` 只合并 token，不含请求数；`sessions` 与 `activeIntervals` / `longestStreak` 把只有请求数的会话和时间段也算进去。`currentSession` 只看按 token 计的会话。
 - 只有请求数而没有 token 时，`status` 仍是 `"ok"`。
+- OpenCode 按 token 计（`source: "local"`、`unit: "tokens"`），用量来自它库里 assistant 消息的 `tokens`。定价规则不变：价格表认得的模型按表算；认不出、而 OpenCode 自己在消息里记了大于零的 `cost` 时，用它记的数作这个模型的 `costUsd`，这个模型算有价格（不让 `complete` 变假，也不进 `unpricedModels`）。它记 0 的按没有价格处理。
 
 ### 12.2 `/api/agents` 行的历史数据可用性
 
