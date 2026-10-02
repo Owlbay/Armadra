@@ -11,7 +11,7 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "build": "electron-vite build && node scripts/launch-exe.mjs --if-windows",
     "predev": "node scripts/ensure-electron.mjs",
     "dist": "node scripts/dist.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",

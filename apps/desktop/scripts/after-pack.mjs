@@ -32,6 +32,7 @@ import {
   HOOK_LAUNCHER_RESOURCE,
   compileHookLauncher,
 } from "./hook-launcher.mjs";
+import { LAUNCH_EXE_RESOURCE, compileLaunchExe } from "./launch-exe.mjs";
 
 const app = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -209,6 +210,7 @@ export default async function afterPack(context) {
     console.log(`after-pack: placed ${placement.to}`);
   }
   placeHookLauncher(platformName, resourcesDir);
+  placeLaunchExe(platformName, resourcesDir);
 }
 
 /**
@@ -238,5 +240,33 @@ export function placeHookLauncher(
   }
   const output = compile(join(resourcesDir, HOOK_LAUNCHER_RESOURCE));
   log(`after-pack: built ${HOOK_LAUNCHER_RESOURCE}`);
+  return output;
+}
+
+/**
+ * Builds `cli/armadra-launch.exe`, the canvas launcher, for a Windows target
+ * (see launch-exe.mjs). Same rule as {@link placeHookLauncher}: only a Windows
+ * host can compile it, a Windows target packaged elsewhere says so, and a
+ * failed compile on a Windows host fails the build. Without it that build's
+ * core starts canvas agents on a bare line, without injection.
+ */
+export function placeLaunchExe(
+  platformName,
+  resourcesDir,
+  {
+    host = process.platform,
+    compile = compileLaunchExe,
+    log = console.log,
+  } = {},
+) {
+  if (platformName !== "win32") return undefined;
+  if (host !== "win32") {
+    log(
+      `after-pack: WARNING ${LAUNCH_EXE_RESOURCE} not built (needs a Windows host); canvas agents on this build start without injection`,
+    );
+    return undefined;
+  }
+  const output = compile(join(resourcesDir, LAUNCH_EXE_RESOURCE));
+  log(`after-pack: built ${LAUNCH_EXE_RESOURCE}`);
   return output;
 }
