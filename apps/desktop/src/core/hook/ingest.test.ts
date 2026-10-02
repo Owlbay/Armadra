@@ -602,4 +602,61 @@ describe("custom agents", () => {
   });
 });
 
+/**
+ * The source check (docs/design/canvas-launcher.md §12): `ARMADRA_NODE_ID`
+ * leaks into whatever the node's terminal starts, so a report from another
+ * CLI than the node's is dropped — quietly, a 204 like an unknown node.
+ */
+describe("a report from another CLI than the node's", () => {
+  it("is dropped without touching the node", async () => {
+    const it_ = fixture();
+    insertSession(it_, { id: "sess-1", status: "running", agentId: "claude" });
+    const token = it_.service.issueNodeToken(it_.nodeId);
+    const response = await it_.postHook(
+      "codex",
+      { nodeId: it_.nodeId, payload: { hook_event_name: "Stop" } },
+      {
+        "x-armadra-hook-token": it_.bearer,
+        "x-armadra-node-token": token,
+      },
+    );
+    expect(response.status).toBe(204);
+    expect(it_.status()).toBeUndefined();
+    expect(it_.published).toEqual([]);
+  });
+
+  it("is accepted from a custom entry's base CLI", async () => {
+    const it_ = fixture(true);
+    settingsDomain()?.settings.patch({
+      agents: {
+        custom: [
+          {
+            id: "custom:mine",
+            label: "Mine",
+            launchCmd: "/opt/claude-wrapper",
+            baseAgent: "claude",
+          },
+        ],
+      },
+    });
+    insertSession(it_, {
+      id: "sess-1",
+      status: "running",
+      agentId: "custom:mine",
+    });
+    const token = it_.service.issueNodeToken(it_.nodeId);
+    const response = await it_.postHook(
+      "claude",
+      { nodeId: it_.nodeId, payload: { hook_event_name: "Stop" } },
+      {
+        "x-armadra-hook-token": it_.bearer,
+        "x-armadra-node-token": token,
+      },
+    );
+    expect(response.status).toBe(204);
+    expect(it_.status()?.agentId).toBe("custom:mine");
+    expect(it_.status()?.state).toBe("done");
+  });
+});
+
 type AnyStatus = Record<string, unknown>;
