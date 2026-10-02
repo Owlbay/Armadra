@@ -136,6 +136,25 @@ export function ingest(
     return ACCEPTED;
   }
 
+  // A report from another CLI than the node's: `ARMADRA_NODE_ID` leaked into
+  // a nested process, or the user started a different CLI by hand in the
+  // node's terminal. Its hooks must not rewrite this node's state; dropped
+  // like a report for an unknown node, without an error the CLI would print
+  // (docs/design/canvas-launcher.md §12). A `custom:` entry compares as its
+  // base CLI.
+  if (
+    validAgentId(pathAgentId) &&
+    owner.agentId !== undefined &&
+    baseAgent(owner.agentId) !== baseAgent(pathAgentId)
+  ) {
+    context.log.debug("hook report from another CLI than the node's", {
+      nodeId,
+      provider: pathAgentId,
+      agentId: owner.agentId,
+    });
+    return ACCEPTED;
+  }
+
   // The path names the provider whose hook fired; the session's own agent id
   // is the fallback for a client invoked without one.
   let provider = validAgentId(pathAgentId)
