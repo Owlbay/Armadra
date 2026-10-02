@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentInfo } from "@armadra/shared";
 
 import { setCoreHost } from "@/app/core-host";
+import { usePreferencesStore } from "@/app/preferences-store";
 import {
   agentColor,
   agentColorVar,
@@ -109,7 +110,121 @@ describe("启动行用探测到的绝对路径", () => {
   });
 });
 
-describe("启动行按节点终端的 shell 引用", () => {
+describe("启动行经画布启动器", () => {
+  const launcher =
+    "/Users/me/Library/Application Support/Armadra/integration/run/codex";
+  const codex: AgentInfo = {
+    id: "codex",
+    label: "Codex",
+    color: "#000",
+    launchCmd: "codex",
+    promptMode: "argv",
+    capabilities: [],
+    args: [],
+    resolvedPath: "/opt/homebrew/bin/codex",
+    installed: true,
+    launcher,
+  };
+
+  afterEach(() => {
+    usePreferencesStore.setState({ launchOverrides: {} });
+  });
+
+  it("启动器在前，程序作它的第一个参数，行上没有注入", () => {
+    setAgentRegistry([codex]);
+    expect(buildAgentLaunch({ id: "codex", model: "gpt-5" }).command).toBe(
+      `'${launcher}' /opt/homebrew/bin/codex --model gpt-5`,
+    );
+  });
+
+  it("恢复与带帧粘贴同样经启动器，prompt 仍在最后", () => {
+    setAgentRegistry([codex]);
+    expect(buildResumeLaunch("codex", "t-1").command).toBe(
+      `'${launcher}' /opt/homebrew/bin/codex resume t-1`,
+    );
+    expect(buildAgentLaunch({ id: "codex" }, "Reply OK").command).toBe(
+      `'${launcher}' /opt/homebrew/bin/codex 'Reply OK'`,
+    );
+  });
+
+  it("有启动器时不读旧 core 的 launchWords / launchArgs", () => {
+    setAgentRegistry([
+      {
+        ...codex,
+        launchWords: ["-c", "hooks.Stop=x"],
+        launchArgs: ["-c", "hooks.Stop=x"],
+      },
+    ]);
+    expect(buildAgentLaunch({ id: "codex" }).command).toBe(
+      `'${launcher}' /opt/homebrew/bin/codex`,
+    );
+  });
+
+  it("用户的启动命令与 npm 包装背后的程序都作启动器的参数", () => {
+    usePreferencesStore.setState({
+      launchOverrides: { codex: "/usr/local/bin/codex" },
+    });
+    setAgentRegistry([codex]);
+    expect(buildAgentLaunch({ id: "codex" }).command).toBe(
+      `'${launcher}' /usr/local/bin/codex`,
+    );
+    usePreferencesStore.setState({ launchOverrides: {} });
+    const exe =
+      "C:\\Users\\Ada Bell\\AppData\\Roaming\\Armadra\\integration\\run\\codex.exe";
+    const node = "C:\\Program Files\\nodejs\\node.exe";
+    const script =
+      "C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js";
+    setAgentRegistry([
+      {
+        ...codex,
+        launcher: exe,
+        launchTarget: { program: node, args: [script] },
+      },
+    ]);
+    expect(
+      buildAgentLaunch({ id: "codex", model: "gpt-5" }, undefined, "powershell")
+        .command,
+    ).toBe(`& '${exe}' '${node}' '${script}' --model gpt-5`);
+  });
+
+  it("自定义条目的程序是它自己的启动命令", () => {
+    setAgentRegistry([
+      {
+        ...echo,
+        resolvedPath: null,
+        launcher: "/data/integration/run/claude",
+      },
+    ]);
+    expect(buildAgentLaunch({ id: "custom:echo" }).command).toBe(
+      "/data/integration/run/claude /bin/echo hello",
+    );
+  });
+
+  it("没有启动器也没有旧字段时是裸行", () => {
+    setAgentRegistry([{ ...codex, launcher: undefined }]);
+    expect(buildAgentLaunch({ id: "codex" }).command).toBe(
+      "/opt/homebrew/bin/codex",
+    );
+  });
+
+  it("旧 core 只答 launchArgs 时照旧逐个引用在行上", () => {
+    setAgentRegistry([
+      { ...codex, launcher: undefined, launchArgs: ["-c", "a b"] },
+    ]);
+    expect(buildAgentLaunch({ id: "codex" }).command).toBe(
+      "/opt/homebrew/bin/codex -c 'a b'",
+    );
+  });
+
+  it("SSH 节点不经启动器：执行主机上没有这条路径", () => {
+    setAgentRegistry([codex]);
+    expect(
+      buildAgentLaunch({ id: "codex" }, undefined, "posix", true).command,
+    ).toBe("codex");
+  });
+});
+
+describe("旧 core（launchWords）的启动行按节点终端的 shell 引用", () => {
   const codex: AgentInfo = {
     id: "codex",
     label: "Codex",

@@ -161,9 +161,9 @@ export function buildAgentLaunch(
 /**
  * 恢复一条历史对话的启动行（`--resume` / `resume` 子命令）。
  *
- * 与新开的节点走同一条拼法：本机程序路径、画布注入的 argv 都照带——恢复时每
- * 个 CLI 都要把 Hook、技能与画布说明重新传一遍，少了它们，恢复出来的会话在画
- * 布上就不报状态、也不认画布规则。
+ * 与新开的节点走同一条拼法：本机程序路径、画布启动器都照带——恢复时每个 CLI
+ * 都要把 Hook、技能与画布说明重新传一遍，少了它们，恢复出来的会话在画布上就
+ * 不报状态、也不认画布规则。
  */
 export function buildResumeLaunch(
   agentId: string,
@@ -199,39 +199,46 @@ export function buildAgentLaunchArgv(agent: TerminalAgent): LaunchArgv {
  * 没有它时用 Runtime 探测到的绝对路径：终端里的 shell 会按自己的 PATH 顺序
  * 再找一次 `codex`，找到的可能是另一份（比如 Homebrew 下签名已吊销的旧版本，
  * 一启动就被系统 SIGKILL）。探测过能用的那一份，就要原样启动它。
+ *
+ * 画布注入（Hook、技能、画布说明）不在行上：Runtime 的 `GET /api/agents` 答
+ * 这台机器上的启动器 `launcher`（设计 canvas-launcher §8.1），行写成
+ * `<launcher> <程序> [前置词] <旗标>`，启动器只在节点环境里有
+ * `ARMADRA_NODE_ID` 时把注入接在后面。启动器路径是 Runtime 那台机器的，所以
+ * 不落进节点数据，也不进后台计划。
  */
 function launchInput(agent: TerminalAgent, prompt?: string, remote = false) {
-  // SSH 节点的行由执行主机上的 shell 读：本机的程序路径与注入的路径那边都不
-  // 存在。程序按名字由远端 PATH 找，注入由远端的垫片补上（Runtime 在开终端时
+  // SSH 节点的行由执行主机上的 shell 读：本机的程序路径与启动器那边都不存
+  // 在。程序按名字由远端 PATH 找，注入由远端的垫片补上（Runtime 在开终端时
   // 已同步过去）。
+  const row = remote ? undefined : registryEntry(agent.id);
   const override = usePreferencesStore.getState().launchOverrides[agent.id];
   // Windows 上 npm 装的 CLI 是 `.cmd` 包装：批处理会让 cmd.exe 把参数再读一遍，
   // 引用挡不住。Runtime 读出了包装背后的程序（`launchTarget`）时直接起它。
-  const target =
-    remote || override ? undefined : registryEntry(agent.id)?.launchTarget;
-  const programOverride = remote
+  const target = override ? undefined : row?.launchTarget;
+  const program = remote
     ? undefined
-    : override ||
-      target?.program ||
-      registryEntry(agent.id)?.resolvedPath ||
-      undefined;
+    : override || target?.program || row?.resolvedPath || undefined;
+  const lead = target?.args ?? [];
   const custom = customAgentFor(agent.id);
-  // 画布注入的 argv（设计 canvas-only-integration §2）：Hook、技能与画布说明
-  // 只在从画布启动时交给 CLI，由 Runtime 的 `GET /api/agents` 现答。路径是
-  // Runtime 那台机器的，所以不落进节点数据，也不进后台计划——存下来的计划只
-  // 认 agent id，冷启动时由 core 自己补上。
-  // 优先用 `launchWords`：同一份注入的「敲进 shell 的词」，还没引用，由
-  // `assembleLaunchCommand` 按节点 shell 的方言引用；Codex 的长值留在节点终端
-  // 的环境变量里只写变量名——几 KB 的一行敲进刚起的 shell 会被截断。旧
-  // Runtime 只给 `launchArgs`，照旧逐个引用。
-  const row = remote ? undefined : registryEntry(agent.id);
-  const words = row?.launchWords ?? [];
-  const injected = words.length > 0 ? [] : (row?.launchArgs ?? []);
+  const launcher = row?.launcher;
+  // 有启动器时程序与前置词都是它的参数；程序缺省为条目自己的启动命令。
+  const launch = row?.launcher
+    ? {
+        programOverride: row.launcher,
+        programArgs: [program || row.launchCmd, ...lead],
+      }
+    : {
+        ...(program ? { programOverride: program } : {}),
+        ...(lead.length > 0 ? { programArgs: lead } : {}),
+      };
+  // 旧 Runtime 没有启动器，注入以 `launchWords` / `launchArgs` 给出：照旧写在
+  // 行上（保留一个版本）。当前 Runtime 两个都不答，没有启动器时就是裸行。
+  const words = launcher ? [] : (row?.launchWords ?? []);
+  const injected = launcher || words.length > 0 ? [] : (row?.launchArgs ?? []);
   return {
     agentId: agent.id,
     ...(custom ? { custom } : {}),
-    ...(programOverride ? { programOverride } : {}),
-    ...(target && target.args.length > 0 ? { programArgs: target.args } : {}),
+    ...launch,
     ...(agent.permissionMode ? { permissionMode: agent.permissionMode } : {}),
     ...(agent.model ? { model: agent.model } : {}),
     ...(agent.sessionId ? { sessionId: agent.sessionId } : {}),
