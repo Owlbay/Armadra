@@ -8,7 +8,9 @@ import {
 } from "node:fs";
 import { join, posix } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { installCollaborationSkill } from "../../collab/skill";
 import { tempDir } from "../../testing/temp-dir";
+import { artifactLayout } from "./inject";
 import {
   LAUNCH_GATE,
   type LauncherSpec,
@@ -18,6 +20,7 @@ import {
   runDirectory,
   shimsDirectory,
 } from "./launcher";
+import { remoteIntegrationFiles, runDirectory as remoteRun } from "./remote";
 
 /**
  * POSIX 启动器与垫片（docs/design/canvas-launcher.md §4、§13.1）。
@@ -229,5 +232,80 @@ describe.runIf(posixOnly)("the launcher, run by /bin/sh", () => {
     expect((JSON.parse(readFileSync(out, "utf8")) as Seen).argv).toEqual([
       "ok",
     ]);
+  });
+});
+
+/**
+ * 执行主机那份（docs/design/canvas-launcher.md §6.2）：同一个生成器，垫片委托
+ * 给 `run/<cli>`，启动器里是远端路径；没有任何一份去碰 Codex 的信任。
+ */
+describe("the copy synced to an execution host", () => {
+  function remoteFiles(remoteRoot: string) {
+    const release = installCollaborationSkill();
+    try {
+      return remoteIntegrationFiles(
+        {
+          root: remoteRoot,
+          node: "/usr/bin/node",
+          socket: posix.join(remoteRoot, "relay.sock"),
+          endpointFile: posix.join(remoteRoot, "endpoint.json"),
+          tokenDir: posix.join(remoteRoot, "tokens"),
+        },
+        "// bundle\n",
+      );
+    } finally {
+      release();
+    }
+  }
+
+  it("writes a launcher and a delegating shim per CLI", () => {
+    const files = remoteFiles("/srv/armadra/integration/7");
+    const byPath = new Map(files.map((entry) => [entry.path, entry]));
+    const run = remoteRun("/srv/armadra/integration/7");
+    const claude = byPath.get(posix.join(run, "claude"));
+    expect(claude?.mode).toBe(0o755);
+    const layout = artifactLayout(
+      "/srv/armadra/integration/7",
+      "claude",
+      posix.join,
+    );
+    expect(claude?.content).toContain(
+      `--settings ${layout.settings as string}`,
+    );
+    expect(
+      byPath.get("/srv/armadra/integration/7/shims/claude")?.content,
+    ).toContain(`exec ${posix.join(run, "claude")} claude "$@"`);
+    const codex = byPath.get(posix.join(run, "codex"))?.content ?? "";
+    expect(codex).toContain("--dangerously-bypass-hook-trust");
+    expect(codex).toContain("hooks.SessionStart=");
+  });
+
+  it.runIf(posixOnly)("injects through the synced shim, run by /bin/sh", () => {
+    const remoteRoot = join(root, "remote");
+    for (const entry of remoteFiles(remoteRoot)) {
+      mkdirSync(join(entry.path, ".."), { recursive: true });
+      writeFileSync(entry.path, entry.content, "utf8");
+      chmodSync(entry.path, entry.mode);
+    }
+    const out = join(root, "out.json");
+    const realDir = join(root, "host bin");
+    fakeCli(realDir, "claude", out);
+    const shims = join(remoteRoot, "shims");
+    const { seen } = run(
+      [join(shims, "claude"), "--model", "opus"],
+      {
+        ...baseEnv(`${shims}:${realDir}:/usr/bin:/bin`),
+        [LAUNCH_GATE]: "node-1",
+      },
+      out,
+    );
+    const layout = artifactLayout(remoteRoot, "claude", posix.join);
+    expect(seen.argv.slice(0, 4)).toEqual([
+      "--model",
+      "opus",
+      "--settings",
+      layout.settings,
+    ]);
+    expect(seen.path.split(":")).not.toContain(shims);
   });
 });
