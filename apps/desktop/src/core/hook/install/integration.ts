@@ -122,6 +122,8 @@ export interface IntegrationOptions {
   /** The CLI's config home; resolved from the environment when absent. */
   readonly home?: string;
   readonly now?: () => Date;
+  /** Windows: the `armadra-launch.exe` to copy (`InjectionOptions.launchExe`). */
+  readonly launchExe?: string;
 }
 
 function requireInjected(agentId: string): void {
@@ -143,6 +145,9 @@ function injectionOptions(
     ...(options.env === undefined ? {} : { env: options.env }),
     ...(options.client === undefined ? {} : { client: options.client }),
     ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.launchExe === undefined
+      ? {}
+      : { launchExe: options.launchExe }),
   };
 }
 

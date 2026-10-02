@@ -9,7 +9,6 @@ import {
 } from "node:fs";
 import { basename, dirname, join as nativeJoin } from "node:path";
 import { storedProbe } from "../../agent/probe";
-import type { ShimTarget } from "../../agent/windows-shim";
 import type { LaunchWord, ShellDialect } from "../../terminal/shell";
 import { eventKey } from "./codex";
 import {
@@ -37,6 +36,13 @@ import {
   writeAtomically,
 } from "./shared";
 import { SKILLS_ROOT, SKILL_NAME, skillContent } from "./skills";
+import {
+  findLaunchExe,
+  shimTargetFor,
+  windowsLauncherFiles,
+  windowsShimPath,
+  writeWindowsLauncherFiles,
+} from "./windows-launcher";
 
 /**
  * Canvas-only integration: the one place that decides what a CLI started from
@@ -594,7 +600,10 @@ export function currentLauncher(
   if (
     marker === undefined ||
     marker.revision !== INTEGRATION_REVISION ||
-    marker.platform !== process.platform
+    marker.platform !== process.platform ||
+    // Windows without `armadra-launch.exe` (§5.3): an older `run\` left
+    // behind would carry an older injection.
+    marker.warning !== undefined
   ) {
     return undefined;
   }
@@ -602,29 +611,39 @@ export function currentLauncher(
   return isFile(path) ? path : undefined;
 }
 
-/** WP4 的 `windows-launcher.ts` 的接口（docs/design/canvas-launcher.md §6.1）。 */
-interface WindowsLauncherSpec extends LauncherSpec {
-  readonly exe: string;
-  readonly shimTarget?: ShimTarget;
+const WINDOWS_LAUNCHER_MISSING =
+  "armadra-launch.exe is not available: canvas launches start without injection";
+
+/**
+ * The `armadra-launch.exe` the Windows launchers are copies of: the caller's
+ * `launchExe`, else `ARMADRA_LAUNCH_EXE`, else the built one next to the app
+ * ({@link findLaunchExe}). An empty override means "none"; an override that
+ * is not a file is none as well — never a guess at another one.
+ */
+function launchExeOf(
+  options: InjectionOptions,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const override = options.launchExe ?? env.ARMADRA_LAUNCH_EXE;
+  if (override === undefined) return findLaunchExe();
+  return isFile(override) ? override : undefined;
 }
 
 /**
- * 过渡桩：Windows 启动器的文件集。`windows-launcher.ts` 合入后换成它导出的
- * `windowsLauncherFiles` / `shimTargetFor`；在那之前 Windows 没有启动器，
- * `launcher.json` 记警告，启动行退回裸行（宁可不注入）。
+ * A shim whose CLI can no longer be resolved would start the old target;
+ * without one, a hand-typed name falls through to the next on `PATH` (§5.4).
+ * Best effort: a shim that is running stays until the next terminal.
  */
-function windowsLauncherFiles(
-  _spec: WindowsLauncherSpec,
-): Map<string, { content: string | Buffer; mode: number }> {
-  return new Map();
+function removeStaleShim(shimDir: string, agentId: string): void {
+  const exe = windowsShimPath(shimDir, agentId);
+  for (const file of [exe, `${exe.slice(0, -".exe".length)}.launch`]) {
+    try {
+      rmSync(file, { force: true });
+    } catch {
+      // In use.
+    }
+  }
 }
-
-function shimTargetFor(_agentId: string): ShimTarget | undefined {
-  return undefined;
-}
-
-const WINDOWS_LAUNCHER_MISSING =
-  "armadra-launch.exe is not available: canvas launches start without injection";
 
 interface LauncherReport {
   readonly written: readonly string[];
@@ -653,26 +672,31 @@ function writeLaunchers(
     args: injection.args,
     env: injection.env,
   };
-  let files: Map<string, { content: string | Buffer; mode: number }>;
+  let written: string[];
   let warning: string | undefined;
   if (process.platform === "win32") {
-    const exe = options.launchExe ?? env.ARMADRA_LAUNCH_EXE;
-    const target = shimTargetFor(agentId);
-    files =
-      exe === undefined || exe === "" || !isFile(exe)
-        ? new Map()
-        : windowsLauncherFiles({
-            ...spec,
-            exe,
-            ...(target === undefined ? {} : { shimTarget: target }),
-          });
-    if (!files.has(launcherPath(dataDir, agentId))) {
+    const exe = launchExeOf(options, env);
+    if (exe === undefined) {
+      // §5.3: no launcher at all; the marker's warning makes every line bare.
+      written = [];
       warning = WINDOWS_LAUNCHER_MISSING;
+    } else {
+      const target = shimTargetFor(agentId, {
+        ambient: env,
+        shimDir: spec.shimDir,
+      });
+      if (target === undefined) removeStaleShim(spec.shimDir, agentId);
+      written = writeWindowsLauncherFiles(
+        windowsLauncherFiles({
+          ...spec,
+          exe,
+          ...(target === undefined ? {} : { shimTarget: target }),
+        }),
+      );
     }
   } else {
-    files = launcherFiles(spec, nativeJoin);
+    written = writeExecutables(launcherFiles(spec, nativeJoin));
   }
-  const written = writeExecutables(files);
   const previous = readLauncherMarker(dataDir);
   if (
     previous === undefined ||
@@ -709,7 +733,8 @@ export interface InjectionOptions {
   readonly force?: boolean;
   /**
    * Windows: the `armadra-launch.exe` the launchers are copies of;
-   * `ARMADRA_LAUNCH_EXE` when absent.
+   * `ARMADRA_LAUNCH_EXE`, then the built one ({@link findLaunchExe}), when
+   * absent. `""` means none: the launch lines go bare (§5.3).
    */
   readonly launchExe?: string;
   /**
