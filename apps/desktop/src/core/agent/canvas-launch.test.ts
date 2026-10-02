@@ -414,13 +414,15 @@ describe("the single exit", () => {
 
   /**
    * The page builds its own lines, from `GET /api/agents`: every one of them
-   * goes through `agent/launch.ts`. That it starts them through the row's
-   * `launcher` is the page's work package (docs/design/canvas-launcher.md §17
-   * WP5), asserted there.
+   * goes through `agent/launch.ts`, which starts them through the row's
+   * `launcher` (docs/design/canvas-launcher.md §8.1, §9).
    */
-  it("builds page launch lines in agent/launch.ts only", () => {
+  it("builds page launch lines in agent/launch.ts only, through the launcher", () => {
     expect(callers(WEB, /\bassemble(LaunchCommand|LaunchArgv)\(/)).toEqual([
       "agent/launch.ts",
     ]);
+    expect(readFileSync(join(WEB, "agent", "launch.ts"), "utf8")).toMatch(
+      /\?\.launcher\b/,
+    );
   });
 });

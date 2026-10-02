@@ -156,10 +156,11 @@ describe("IntegrationPage", () => {
   });
 
   /**
-   * 画布内注入：没有「安装 / 卸载」，只有「重新生成」；唯一的全局写入（Codex
-   * 的信任记录）与升级时清掉的旧全局安装都在徽标上说出来。
+   * 画布内注入：没有「安装 / 卸载」，只有「重新生成」。数据目录之外不写文件，
+   * 旧 core 答的 globalWrites 也不再画；升级时清掉的旧全局安装与 Codex 的
+   * 会话信任记录在一个徽标上说出来。
    */
-  it("shows the global write and the migration, and only regenerates", async () => {
+  it("shows the migration but no global write, and only regenerates", async () => {
     mock.integration.mockResolvedValue({
       agentId: "claude",
       mode: "canvas",
@@ -177,11 +178,8 @@ describe("IntegrationPage", () => {
     mock.installIntegration.mockResolvedValue({});
     view();
     expect(await screen.findByText(zh("integration.mode.canvas"))).toBeTruthy();
-    expect(
-      screen.getByText(
-        zh("integration.globalWrite").replace("{path}", "~/.codex/config.toml"),
-      ),
-    ).toBeTruthy();
+    expect(screen.queryByText(/config\.toml/)).toBeNull();
+    expect(screen.queryByText(zh("integration.launcherWarning"))).toBeNull();
     expect(screen.getByText(zh("integration.migrated"))).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: zh("integration.repair") }),
@@ -193,6 +191,38 @@ describe("IntegrationPage", () => {
       expect(mock.installIntegration).toHaveBeenCalledWith("claude"),
     );
     expect(mock.uninstallIntegration).not.toHaveBeenCalled();
+  });
+
+  /** 启动器少带了东西：徽标说「注入受限」，原因在悬停提示里。 */
+  it("shows the launcher warning and the cleared session trust", async () => {
+    mock.integration.mockResolvedValue({
+      agentId: "claude",
+      mode: "canvas",
+      hook: { installed: true, revision: 4 },
+      skill: { installed: true, revision: 16 },
+      legacy: { found: [] },
+      revision: 416,
+      globalWrites: [],
+      launcherWarning: "Codex 0.133.0 is older than 0.134.0",
+      migration: {
+        migratedAt: "2026-09-26T00:00:00Z",
+        removed: [],
+        backups: [],
+        sessionTrust: {
+          at: "2026-10-02T00:00:00Z",
+          removed: ["/<session-flags>/config.toml:stop:0:0"],
+          backup: "/Users/dev/.codex/config.toml.armadra-backup-20261002",
+        },
+      },
+    });
+    view();
+    const warning = await screen.findByText(zh("integration.launcherWarning"));
+    expect(warning.getAttribute("title")).toBe(
+      "Codex 0.133.0 is older than 0.134.0",
+    );
+    expect(
+      screen.getByText(zh("integration.migrated")).getAttribute("title"),
+    ).toBe("/Users/dev/.codex/config.toml.armadra-backup-20261002");
   });
 
   /** 历史数据三项：没有数据写状态词，不写 0。 */

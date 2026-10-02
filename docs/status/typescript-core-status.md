@@ -2672,3 +2672,29 @@ H04 的前置（设计 `design/canvas-platform-design.md` §3 H04、`design/serv
 - 放开「SSH 终端里的 Agent 限同一执行主机」（设计 §6）未做，`handoff/store.ts` 仍返回 501。
 - OpenCode、OMP、Copilot 的交互式 TUI 没有实跑；OMP 是否上报 `transcript_path` 待验证。Copilot 的对话框特征未在本机核实，三家的提示符特征都没有登记（首投不要求提示符）。
 - 画面门只认登记过的对话框；CLI 改版换了文字就认不出，没登记的对话框照旧可能被答掉。`schedule/dispatch.ts` 的计划投递有自己的门链，没有接画面门。
+
+## 63. 画布启动器：页面经 `launcher` 拼行、集成页去掉信任记录、场景 5 改为经启动器（2026-10-02）
+
+[画布启动器](../design/canvas-launcher.md) §17 的 WP5，叠在 WP1（启动器生成与注入）、WP2（启动行出口与契约 §13）之上。
+
+### 63.1 改了什么
+
+- 页面 `web/agent/launch.ts`：`GET /api/agents` 的行有 `launcher` 时，程序换成启动器，原来的程序（用户的启动命令、`launchTarget.program`、`resolvedPath`、`launchCmd` 中先有的那个）与 `launchTarget` 的前置词作它的参数，行上没有注入；只对没有 `launcher` 的旧 core 退回 `launchWords` / `launchArgs`，两者都没有就是裸行；SSH 节点不变。`canvas-launch.test.ts` 的结构性用例补上「页面读 `?.launcher`」。
+- 集成页：不再画 `globalWrites`（`integration.globalWrite` 中英一起删）；`launcherWarning` 画成「注入受限」徽标、原因在悬停提示里；「已清理全局安装」把迁移第二步清掉的 Codex 会话信任记录与备份一并算进去。
+- 探针：场景 5 按设计 §13.3 重写；装配处改为确认 Claude / Codex 的启动器指向临时数据目录；场景 6 经启动器起四个 CLI，并断言节点终端环境有 `ARMADRA_SHIMS`、没有 `OPENCODE_CONFIG_*` / `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`。
+
+### 63.2 实测
+
+`pnpm --filter @armadra/desktop build && node tools/probes/agent-e2e.mjs <输出目录> --only 1,4,5`（2026-10-02，本机 macOS，tmux 后端，Claude Code 2.1.287、Codex 0.160.0）：三个场景全过，59 项，206 秒；控制台错误 0，操作员配置未改动。
+
+- 场景 5（28 项）：两行的 `launcher` 都是 `<临时数据目录>/integration/run/<cli>`，行上没有 `launchWords` / `launchArgs`；Codex 的 `launchArgs` 以 `--dangerously-bypass-hook-trust` 开头、八个 `-c hooks.*`（SessionStart … SubagentStop）；`globalWrites` 为空；迁移记录 `version: 2`、`sessionTrust.removed` 为空。画布内 `<launcher> codex exec --skip-git-repo-check "<prompt>"`：注入落在 prompt 之后仍生效，会话记录里有 `[Armadra canvas rules r16]` 与技能路径，stderr 有旗标警告，Hook 打到 core；去掉 `ARMADRA_NODE_ID` 重跑同一行、裸程序带节点身份，两遍都没有画布规则、没有旗标、Hook 没打到 core。只放了 `auth.json` 的新 `CODEX_HOME` 三遍跑完没有 `config.toml`。Claude 同样三遍（`-p --output-format stream-json`，prompt 在注入之前）：画布内 init 有 `armadra` 插件（`armadra@inline`，版本 416）与 `armadra:armadra` 技能、Hook 打到 core；另两遍都没有。
+- 场景 1（14 项）：页面敲的启动行经启动器，两个 Codex 起到提示符，首投 delivered + observed-quiet，Hook 报 working → done；TUI 的旗标警告不挡首投。
+- 场景 4（17 项）：休眠前记下的 CLI 进程命令行是启动器 exec 之后的 `claude … --settings …` 与 `codex --dangerously-bypass-hook-trust …`（启动器不留中间进程）；唤醒的 `--resume` / `resume` 行经启动器，答出 418，provider 会话 id 不变。
+- 第一次跑场景 1、4 失败：新 worktree 里 node-pty 的 `spawn-helper` 没有执行位，页面挂终端时 `posix_spawnp failed`；补上执行位后重跑如上。与本改动无关。
+- 单测：`pnpm --filter @armadra/web test` 290 文件 2834 条；`pnpm --filter @armadra/web typecheck` 通过；`pnpm libs:build && pnpm --filter @armadra/desktop test` 292 文件通过、2 跳过（3452 条通过、14 跳过），live 配置 2 文件 3 条，脚本用例 43 条（42 通过、1 跳过）。
+
+### 63.3 没做 / 已知
+
+- 集成页没有「执行主机的 Worker 旧」提示：控制端只在 `RemoteIntegration.outdatedWorkers()` 里记着，集成状态与 API 都没有给出这一项。
+- 场景 6（另外四个 CLI）没有实跑：要各家的凭据；`tools/probes/packaged-smoke.mjs` 仍断言 Codex 信任记录写进临时 HOME，未随本方案改，打包版冒烟会在这一项上红。
+- Windows 上的页面行（`& '<run\codex.exe>' '<node.exe>' '<codex.js>' …`）只有单测，没有在 Windows 真机上经页面跑过。

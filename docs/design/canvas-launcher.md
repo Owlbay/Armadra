@@ -1,6 +1,6 @@
 # 画布启动器：注入由数据目录里的启动器完成，启动行不再带注入
 
-> 状态：**设计中（2026-10-02）**。取代[画布内注入](./canvas-only-integration.md)的 §2 后半（方言引用里 Codex 的环境变量展开、`.cmd` 包装的词过滤）、§3 的「Codex 的启动行要短」、§4 全部（信任记录）与 §5 的迁移记录形状；取代[远端画布注入](./remote-canvas-injection.md) §2 第 3 条（垫片的生成方式）与 Codex 信任那一段。Hook 事件契约、技能正文、产物目录 `integration/<cli>/`、Worker 中继与一次性迁移的备份规则不变。实施完成后按 §16 回改那两份文档。
+> 状态：**已实施（2026-10-02）**，与设计的出入：集成页还没有「执行主机 X 的 Worker 旧」提示（§8.4）——控制端只在 `RemoteIntegration.outdatedWorkers()` 里记着，集成状态与 API 都没有给出这一项；`tools/probes/packaged-smoke.mjs` 仍断言信任记录写进临时 HOME，未随本方案改。实测见[状态文档](../status/typescript-core-status.md) §63。取代[画布内注入](./canvas-only-integration.md)的 §2 后半（方言引用里 Codex 的环境变量展开、`.cmd` 包装的词过滤）、§3 的「Codex 的启动行要短」、§4 全部（信任记录）与 §5 的迁移记录形状；取代[远端画布注入](./remote-canvas-injection.md) §2 第 3 条（垫片的生成方式）与 Codex 信任那一段。Hook 事件契约、技能正文、产物目录 `integration/<cli>/`、Worker 中继与一次性迁移的备份规则不变。实施完成后按 §16 回改那两份文档。
 
 ## 1. 目标与硬约束
 
