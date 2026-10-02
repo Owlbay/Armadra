@@ -122,8 +122,9 @@ describe("start-up", () => {
     expect(report.failures).toEqual([]);
     expect(report.prepared).toEqual([...INJECTED_AGENTS]);
     expect(readMigration(dataDir)).toEqual(report.migration);
-    // Codex has a config home here, so its trust records went in.
-    expect(existsSync(codexConfigPath(join(root, "codex")))).toBe(true);
+    // Codex has a config home here, and still nothing is written into it:
+    // its hooks are trusted by the launcher's flag.
+    expect(existsSync(codexConfigPath(join(root, "codex")))).toBe(false);
     for (const agentId of INJECTED_AGENTS) {
       expect(state(agentId, options(agentId)).hook.installed, agentId).toBe(
         true,

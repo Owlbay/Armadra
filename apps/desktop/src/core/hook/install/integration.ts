@@ -10,7 +10,6 @@ import {
   type InjectionOptions,
   artifactLayout,
   canvasInjection,
-  codexTrusted,
   globalWritesDisabled,
   isInjected,
   prepareInjection,
@@ -118,9 +117,6 @@ function injectionOptions(
     ...(options.env === undefined ? {} : { env: options.env }),
     ...(options.client === undefined ? {} : { client: options.client }),
     ...(options.now === undefined ? {} : { now: options.now }),
-    ...(agentId === "codex" && options.home !== undefined
-      ? { codexHome: options.home }
-      : {}),
   };
 }
 
@@ -156,11 +152,7 @@ export function state(
   const marker = readMarker(options.dataDir, agentId);
   const hookFile =
     layout.settings ?? layout.module ?? layout.pluginHooks ?? layout.marker;
-  const trusted =
-    agentId !== "codex" ||
-    (marker !== undefined &&
-      codexTrusted(home, hookCommand(marker.clientBin, agentId)));
-  const hookInstalled = marker !== undefined && isPresent(hookFile) && trusted;
+  const hookInstalled = marker !== undefined && isPresent(hookFile);
   const skillRevision = revisionOf(layout.skill);
   const injection = canvasInjection({ dataDir: options.dataDir, agentId });
   const migration = migrationFor(readMigration(options.dataDir), agentId);
@@ -256,13 +248,7 @@ export function prepareAtStartup(options: IntegrationOptions): StartupReport {
     "copilot",
   ]) {
     try {
-      const codexHome = configHome("codex", env);
-      prepareInjection(agentId, {
-        ...injectionOptions(agentId, options),
-        ...(agentId === "codex" && !existsSync(codexHome)
-          ? { skipTrust: true }
-          : {}),
-      });
+      prepareInjection(agentId, injectionOptions(agentId, options));
       prepared.push(agentId);
     } catch (error) {
       failures.push({ agentId, error: describe(error) });

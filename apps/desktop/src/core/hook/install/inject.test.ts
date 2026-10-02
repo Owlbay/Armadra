@@ -2,28 +2,37 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { forgetProbes, rememberProbe } from "../../agent/probe";
 import { installCollaborationSkill } from "../../collab/skill";
 import { configPath as codexConfigPath } from "./codex";
-import { CLAUDE_HOOK_EVENTS, COPILOT_HOOK_EVENTS } from "./events";
 import {
+  CLAUDE_HOOK_EVENTS,
+  COPILOT_HOOK_EVENTS,
+  INTEGRATION_REVISION,
+} from "./events";
+import {
+  CODEX_BYPASS_HOOK_TRUST,
   CODEX_HOOK_VAR,
   CODEX_INSTRUCTIONS_VAR,
-  CODEX_SESSION_KEY_PREFIX,
   INJECTED_AGENTS,
   artifactLayout,
   canvasInjection,
-  codexSessionTrust,
-  codexTrusted,
+  codexBypassesTrust,
+  codexHooksWarning,
+  currentLauncher,
+  launcherPath,
   prepareInjection,
   codexTomlString,
+  readLauncherMarker,
   removeInjection,
+  shimPath,
 } from "./inject";
-import { stateKeys } from "./toml-state";
 import { tempDir } from "../../testing/temp-dir";
 
 /**
@@ -60,10 +69,11 @@ beforeEach(() => {
 afterEach(() => {
   release?.();
   release = undefined;
+  forgetProbes();
 });
 
 function prepare(agentId: string) {
-  return prepareInjection(agentId, { dataDir, env, codexHome });
+  return prepareInjection(agentId, { dataDir, env });
 }
 
 function inject(agentId: string, resume = false) {
@@ -87,16 +97,20 @@ describe("canvas injection", () => {
       const first = prepare(agentId);
       expect(first.written.length, agentId).toBeGreaterThan(0);
       for (const path of first.written) {
-        expect(path.startsWith(join(dataDir, "integration", agentId))).toBe(
-          true,
-        );
+        expect(
+          [
+            join(dataDir, "integration", agentId),
+            launcherPath(dataDir, agentId),
+            shimPath(dataDir, agentId),
+          ].some((prefix) => path.startsWith(prefix)),
+          path,
+        ).toBe(true);
       }
       const layout = artifactLayout(dataDir, agentId);
       const skill = readFileSync(layout.skill, "utf8");
       const again = prepareInjection(agentId, {
         dataDir,
         env,
-        codexHome,
         force: true,
       });
       expect(again.written, agentId).toEqual([]);
@@ -133,53 +147,83 @@ describe("canvas injection", () => {
     );
   });
 
-  it("gives Codex its hooks, its instructions and no update prompt", () => {
+  it("gives Codex the trust flag, its hooks, its instructions and no update prompt", () => {
     prepare("codex");
     const layout = artifactLayout(dataDir, "codex");
-    const { args, words, env: vars } = inject("codex");
-    const pairs = args.filter((_, index) => index % 2 === 1);
+    const { args, env: vars } = inject("codex");
+    // The flag first, then only `-c` pairs.
+    expect(args[0]).toBe(CODEX_BYPASS_HOOK_TRUST);
+    const rest = args.slice(1);
     expect(
-      args.filter((_, index) => index % 2 === 0).every((a) => a === "-c"),
+      rest.filter((_, index) => index % 2 === 0).every((a) => a === "-c"),
     ).toBe(true);
+    const pairs = rest.filter((_, index) => index % 2 === 1);
     expect(pairs[0]).toBe("check_for_update_on_startup=false");
     expect(pairs).toContain(
       `hooks.SessionStart=[{hooks=[{type="command",command=${JSON.stringify(`${hookBin} codex`)}}]}]`,
     );
+    expect(pairs.filter((pair) => pair.startsWith("hooks.")).length).toBe(8);
     // Codex has no Notification event; it is not passed.
     expect(pairs.some((pair) => pair.startsWith("hooks.Notification"))).toBe(
       false,
     );
-    const instructions = pairs.find((pair) =>
-      pair.startsWith("developer_instructions="),
-    ) as string;
+    const instructions = pairs.at(-1) as string;
+    expect(instructions.startsWith("developer_instructions=")).toBe(true);
     const text = JSON.parse(
       instructions.slice("developer_instructions=".length),
     ) as string;
     expect(text).toContain("canvas open-agent");
     expect(text).toContain(layout.skill);
     expect(existsSync(layout.skill)).toBe(true);
-
-    // Typed, the long values stay in the terminal's environment: the line only
-    // names them, and stays short enough for a fresh shell to take whole.
-    expect(vars).toEqual([
-      [
-        CODEX_HOOK_VAR,
-        `[{hooks=[{type="command",command=${JSON.stringify(`${hookBin} codex`)}}]}]`,
-      ],
-      [CODEX_INSTRUCTIONS_VAR, JSON.stringify(text)],
-    ]);
-    expect(words).toContainEqual({
-      prefix: "hooks.SessionStart=",
-      env: CODEX_HOOK_VAR,
-    });
-    expect(words).toContainEqual({
-      prefix: "developer_instructions=",
-      env: CODEX_INSTRUCTIONS_VAR,
-    });
-    expect(JSON.stringify(words).length).toBeLessThan(1200);
+    // Nothing for the environment: the launcher carries it all as argv.
+    expect(vars).toEqual([]);
   });
 
-  it("hands every other CLI's argv over as its words, unquoted", () => {
+  it("gates Codex's flag and hooks on its probed version", () => {
+    prepare("codex");
+    const old = canvasInjection({
+      dataDir,
+      agentId: "codex",
+      codexVersion: "0.133.0",
+    }).args;
+    expect(old).not.toContain(CODEX_BYPASS_HOOK_TRUST);
+    expect(old.some((arg) => arg.startsWith("hooks."))).toBe(false);
+    expect(old).toContain("check_for_update_on_startup=false");
+    expect(old.at(-1)?.startsWith("developer_instructions=")).toBe(true);
+    for (const version of ["0.134.0", "0.160.1", null]) {
+      expect(
+        canvasInjection({ dataDir, agentId: "codex", codexVersion: version })
+          .args[0],
+        String(version),
+      ).toBe(CODEX_BYPASS_HOOK_TRUST);
+    }
+    expect(codexBypassesTrust("0.133.9")).toBe(false);
+    expect(codexBypassesTrust("1.0")).toBe(true);
+    expect(codexBypassesTrust("garbage")).toBe(true);
+    expect(codexHooksWarning("0.120.0")).toMatch(/0\.120\.0.*no hooks/);
+    expect(codexHooksWarning("0.134.0")).toBeUndefined();
+
+    // Read off the cached probe, and the launcher follows it.
+    rememberProbe({
+      agentId: "codex",
+      launchCmd: "codex",
+      version: "0.133.0",
+      status: "ok",
+      probedAt: new Date().toISOString(),
+    });
+    expect(inject("codex").args).not.toContain(CODEX_BYPASS_HOOK_TRUST);
+    prepare("codex");
+    expect(readFileSync(launcherPath(dataDir, "codex"), "utf8")).not.toContain(
+      CODEX_BYPASS_HOOK_TRUST,
+    );
+    forgetProbes();
+    prepare("codex");
+    expect(readFileSync(launcherPath(dataDir, "codex"), "utf8")).toContain(
+      CODEX_BYPASS_HOOK_TRUST,
+    );
+  });
+
+  it("hands every other CLI's argv over as its (deprecated) words", () => {
     for (const agentId of ["claude", "opencode", "pi", "omp", "copilot"]) {
       prepare(agentId);
       const { args, words } = inject(agentId);
@@ -284,61 +328,97 @@ describe("canvas injection", () => {
   });
 });
 
-describe("Codex's trust records", () => {
-  it("writes one record per session-flag hook, once", () => {
-    const first = prepare("codex");
-    expect(first.trust?.changed).toBe(true);
-    const config = readFileSync(codexConfigPath(codexHome), "utf8");
-    const keys = stateKeys(config);
-    expect(keys.length).toBe(codexSessionTrust(`${hookBin} codex`).length);
-    for (const key of keys) {
-      expect(key.startsWith(CODEX_SESSION_KEY_PREFIX)).toBe(true);
-      expect(key.endsWith(":0:0")).toBe(true);
+describe("the launcher and the shim", () => {
+  it("writes run/ and shims/ for every CLI, carrying the literal injection", () => {
+    for (const agentId of INJECTED_AGENTS) {
+      const report = prepare(agentId);
+      if (process.platform === "win32") {
+        // Without armadra-launch.exe there is no launcher: a bare line.
+        expect(report.launcher).toBeUndefined();
+        expect(report.launcherWarning).toMatch(/armadra-launch\.exe/);
+        continue;
+      }
+      expect(report.launcher, agentId).toBe(launcherPath(dataDir, agentId));
+      expect(currentLauncher(dataDir, agentId)).toBe(report.launcher);
+      const launcher = readFileSync(report.launcher as string, "utf8");
+      for (const arg of inject(agentId).args) {
+        expect(launcher, agentId).toContain(arg.replace(/'/g, "'\\''"));
+      }
+      for (const [name] of inject(agentId).env) {
+        expect(launcher).toContain(`export ${name}`);
+      }
+      expect(statSync(report.launcher as string).mode & 0o777).toBe(0o755);
+      expect(readFileSync(shimPath(dataDir, agentId), "utf8")).toContain(
+        `${agentId} "$@"`,
+      );
     }
-    expect(codexTrusted(codexHome, `${hookBin} codex`)).toBe(true);
-    const before = statSync(codexConfigPath(codexHome)).mtimeMs;
-    expect(prepare("codex").trust?.changed).toBe(false);
-    expect(statSync(codexConfigPath(codexHome)).mtimeMs).toBe(before);
+    expect(readLauncherMarker(dataDir)).toMatchObject({
+      revision: INTEGRATION_REVISION,
+      clientBin: hookBin,
+      platform: process.platform,
+    });
   });
 
-  it("keeps the rest of config.toml and takes only ours back out", () => {
-    mkdirSync(codexHome, { recursive: true });
+  it.runIf(process.platform !== "win32")(
+    "rewrites nothing when nothing changed",
+    () => {
+      prepare("claude");
+      const marker = readFileSync(
+        join(dataDir, "integration", "launcher.json"),
+        "utf8",
+      );
+      expect(prepare("claude").written).toEqual([]);
+      expect(
+        readFileSync(join(dataDir, "integration", "launcher.json"), "utf8"),
+      ).toBe(marker);
+    },
+  );
+
+  it("is not trusted when written by another revision", () => {
+    prepare("pi");
     writeFileSync(
-      codexConfigPath(codexHome),
-      '# mine\nmodel = "gpt-5"\n\n[hooks.state."/home/me/.codex/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:theirs"\n',
+      join(dataDir, "integration", "launcher.json"),
+      JSON.stringify({
+        revision: 1,
+        clientBin: hookBin,
+        platform: process.platform,
+        writtenAt: "",
+      }),
       "utf8",
     );
-    prepare("codex");
-    removeInjection("codex", { dataDir, env, codexHome });
-    const config = readFileSync(codexConfigPath(codexHome), "utf8");
-    expect(config).toContain("# mine");
-    expect(config).toContain("/home/me/.codex/hooks.json:stop:0:0");
-    expect(config).not.toContain(CODEX_SESSION_KEY_PREFIX);
-    expect(existsSync(artifactLayout(dataDir, "codex").dir)).toBe(false);
+    expect(currentLauncher(dataDir, "pi")).toBeUndefined();
+    expect(currentLauncher(dataDir, "custom:x")).toBeUndefined();
   });
 
-  it("writes nothing global when global writes are switched off", () => {
-    const report = prepareInjection("codex", {
-      dataDir,
-      env: { ...env, ARMADRA_NO_GLOBAL_WRITES: "1" },
-      codexHome,
-    });
-    expect(report.trust).toBeUndefined();
-    expect(existsSync(codexConfigPath(codexHome))).toBe(false);
+  it("is removed with the artifacts", () => {
+    prepare("claude");
+    removeInjection("claude", { dataDir, env });
+    expect(existsSync(launcherPath(dataDir, "claude"))).toBe(false);
+    expect(existsSync(shimPath(dataDir, "claude"))).toBe(false);
+    expect(existsSync(artifactLayout(dataDir, "claude").dir)).toBe(false);
   });
+});
 
-  it("refuses a config.toml it would mangle", () => {
+describe("nothing outside the data directory", () => {
+  it("leaves Codex's config.toml alone, with global writes on", () => {
+    for (const agentId of INJECTED_AGENTS) prepare(agentId);
+    expect(existsSync(codexHome)).toBe(false);
     mkdirSync(codexHome, { recursive: true });
-    writeFileSync(codexConfigPath(codexHome), "this is [not toml\n", "utf8");
-    expect(() => prepare("codex")).toThrow(/not valid TOML/);
+    const mine = '# mine\nmodel = "gpt-5"\n';
+    writeFileSync(codexConfigPath(codexHome), mine, "utf8");
+    prepareInjection("codex", { dataDir, env, force: true });
+    removeInjection("codex", { dataDir, env });
+    expect(readFileSync(codexConfigPath(codexHome), "utf8")).toBe(mine);
+    expect(readdirSync(codexHome)).toEqual(["config.toml"]);
   });
 });
 
 /**
- * 启动行是敲进节点终端的；Windows 上那个 shell 默认是 `cmd.exe`。行里的词由
- * `terminal/shell.ts` 按方言引用，这里只管 Codex 那两个由行展开的环境变量。
+ * 过渡（deprecated）：启动行改经启动器之前，Codex 的长值仍放在节点终端的环境里
+ * 由行展开。Windows 上那个 shell 默认是 `cmd.exe`；行里的词由 `terminal/shell.ts`
+ * 按方言引用，这里只管 Codex 那两个由行展开的环境变量。
  */
-describe("Codex's expanded values per shell", () => {
+describe("Codex's expanded values per shell (deprecated typed line)", () => {
   const nasty = 'say "hi" & a|b <c> ^d (e) 100% !x! C:\\dir\\ 画布\n';
 
   it("keeps a plain TOML string where the shell expands one finished word", () => {
@@ -368,6 +448,10 @@ describe("Codex's expanded values per shell", () => {
       nodeId: "node-1",
       dialect: "cmd",
     }).env;
+    expect(vars.map(([name]) => name)).toEqual([
+      CODEX_HOOK_VAR,
+      CODEX_INSTRUCTIONS_VAR,
+    ]);
     const hook = vars.find(([name]) => name === CODEX_HOOK_VAR)?.[1] ?? "";
     expect(hook).toBe(
       `[{hooks=[{type=${codexTomlString("command", "cmd")},command=${codexTomlString(`${hookBin} codex`, "cmd")}}]}]`,
