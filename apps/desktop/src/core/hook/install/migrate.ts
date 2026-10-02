@@ -1,5 +1,6 @@
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -27,6 +28,12 @@ import {
   writeAtomically,
 } from "./shared";
 import { SKILLS_ROOT, SKILL_NAME, revisionOf } from "./skills";
+import {
+  isEditable,
+  readDocument,
+  removeTrustState,
+  stateKeys,
+} from "./toml-state";
 
 /**
  * The one-time move from global installs to canvas-only injection
@@ -52,6 +59,13 @@ import { SKILLS_ROOT, SKILL_NAME, revisionOf } from "./skills";
  *     included — a start that edits the user's files again and again is the
  *     behaviour this whole change exists to end. The settings page reads the
  *     record.
+ *
+ * Version 2 of the record adds a second step (docs/design/canvas-launcher.md
+ * §10): the `trusted_hash` records the canvas-only build itself wrote into
+ * Codex's `config.toml` for its session-flag hooks. The launcher passes
+ * `--dangerously-bypass-hook-trust` instead, so they are taken back out —
+ * the last write this app ever makes outside its data directory. A machine
+ * already carrying a version-1 record runs only this step, once.
  */
 
 export interface AgentMigration {
@@ -63,11 +77,36 @@ export interface AgentMigration {
   error?: string;
 }
 
+/** What the second step did to Codex's `config.toml`. */
+export interface SessionTrustMigration {
+  readonly at: string;
+  /** The `config.toml` looked at; absent when Codex has no home here. */
+  readonly path?: string;
+  /** The `hooks.state` keys taken out. */
+  readonly removed: string[];
+  /** The copy made beside it, only when the bytes changed. */
+  readonly backup?: string;
+  /** Why the file was left alone. */
+  readonly error?: string;
+}
+
 export interface MigrationRecord {
-  readonly version: 1;
+  /** 1: global installs removed; 2: and the session-flag trust records. */
+  readonly version: 1 | 2;
   readonly migratedAt: string;
   readonly agents: Record<string, AgentMigration>;
+  readonly sessionTrust?: SessionTrustMigration;
 }
+
+/** The record version this build writes. */
+export const MIGRATION_VERSION = 2;
+
+/**
+ * The key prefix Codex files a hook passed with `-c hooks.<Event>=…` under:
+ * the literal pseudo-path of its session-flag layer. Only our hooks were ever
+ * passed that way and trusted there, so the prefix alone identifies them.
+ */
+export const CODEX_SESSION_KEY_PREFIX = "/<session-flags>/config.toml:";
 
 export interface MigrationOptions {
   readonly dataDir: string;
@@ -108,16 +147,29 @@ function readOrUndefined(path: string): string | undefined {
 }
 
 /**
- * Runs the migration unless it already ran on this data directory. Answers
- * the record either way.
+ * Runs the migration unless it already ran on this data directory: both steps
+ * on a machine without a record, only the second on one the previous build
+ * migrated (its record is kept and raised to version 2). Answers the record
+ * either way.
  */
 export function migrateGlobalInstalls(
   options: MigrationOptions,
 ): MigrationRecord {
   const existing = readMigration(options.dataDir);
-  if (existing !== undefined) return existing;
+  if (existing !== undefined && existing.version !== 1) return existing;
   const now = (options.now ?? (() => new Date()))();
-  const stamp = now.toISOString().replace(/[-:T]/g, "").slice(0, 14);
+  const codexHome = options.homes?.codex ?? configHome("codex", options.env);
+  if (existing !== undefined) {
+    // Migrated by the previous build: only the step it did not have.
+    const record: MigrationRecord = {
+      ...existing,
+      version: 2,
+      sessionTrust: clearCodexSessionTrust(codexHome, now),
+    };
+    writeRecord(options.dataDir, record);
+    return record;
+  }
+  const stamp = stampOf(now);
   const vault = join(options.dataDir, "integration", `global-backup-${stamp}`);
   const agents: Record<string, AgentMigration> = {};
   for (const agentId of INJECTED_AGENTS) {
@@ -140,15 +192,81 @@ export function migrateGlobalInstalls(
     }
   }
   const record: MigrationRecord = {
-    version: 1,
+    version: 2,
     migratedAt: now.toISOString(),
     agents,
+    sessionTrust: clearCodexSessionTrust(codexHome, now),
   };
+  writeRecord(options.dataDir, record);
+  return record;
+}
+
+function stampOf(now: Date): string {
+  return now.toISOString().replace(/[-:T]/g, "").slice(0, 14);
+}
+
+function writeRecord(dataDir: string, record: MigrationRecord): void {
   writeAtomically(
-    migrationPath(options.dataDir),
+    migrationPath(dataDir),
     `${JSON.stringify(record, null, 2)}\n`,
   );
-  return record;
+}
+
+/**
+ * The second step: drops every `hooks.state` table under
+ * {@link CODEX_SESSION_KEY_PREFIX} from `<codexHome>/config.toml`.
+ *
+ * By key alone, without recomputing any hash — a record the user wrote for
+ * the same key goes too, the edge the first version's notes already accepted.
+ * A missing Codex home is not created; a file the line editor would mangle is
+ * recorded and left alone; the backup beside it is only kept when the bytes
+ * changed. Never throws: whatever happened is the answer, and the caller
+ * records it. The Worker runs the same step on an execution host.
+ */
+export function clearCodexSessionTrust(
+  codexHome: string,
+  now: Date = new Date(),
+): SessionTrustMigration {
+  const at = now.toISOString();
+  if (!existsSync(codexHome)) return { at, removed: [] };
+  const path = codexConfigPath(codexHome);
+  try {
+    if (!isFile(path)) return { at, path, removed: [] };
+    const document = readDocument(path);
+    if (!isEditable(document)) {
+      return {
+        at,
+        path,
+        removed: [],
+        error: `${path} is not valid TOML; left as it is`,
+      };
+    }
+    const removed = stateKeys(document).filter((key) =>
+      key.startsWith(CODEX_SESSION_KEY_PREFIX),
+    );
+    const next = removeTrustState(document, CODEX_SESSION_KEY_PREFIX, []);
+    if (next === document) return { at, path, removed: [] };
+    const backup = freeBackupPath(path, stampOf(now));
+    copyFileSync(path, backup);
+    writeAtomically(path, next);
+    return { at, path, removed, backup };
+  } catch (error) {
+    return { at, path, removed: [], error: describe(error) };
+  }
+}
+
+/**
+ * `<file>.armadra-backup-<stamp>`, or with a `-2`, `-3`… when that is taken —
+ * on a first migration the first step may already have backed this very file
+ * up under the same stamp, and that copy is the older one.
+ */
+function freeBackupPath(path: string, stamp: string): string {
+  const base = `${path}.armadra-backup-${stamp}`;
+  if (!existsSync(base)) return base;
+  for (let index = 2; ; index += 1) {
+    const candidate = `${base}-${index}`;
+    if (!existsSync(candidate)) return candidate;
+  }
 }
 
 interface Pass {
