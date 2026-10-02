@@ -34,6 +34,7 @@
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | [后续规划](design/product-roadmap.md)                     | 四个部分：CLI 协作、ACP 会话、协调 Agent 与工作流、多人协同；平台线并行                                            |
 | [CLI 接入、通信与共享上下文](design/cli-collaboration.md) | 后续规划第一部分：本地历史适配器、投递终态回执、历史可用性与六家端到端                                             |
+| [ACP 接入与会话视图](design/acp-session-view.md)          | 后续规划第二部分：六家 CLI 的 ACP 支持核实、ACP 作为同一节点的第二种驱动方式、会话视图、输出到画板、普通用户入口   |
 | [协调 Agent](design/coordinator-agent.md)                 | 后续规划第三部分：`ama` 作为第七个内置 Agent 接入、Armadra 宿主适配器、`core/workflow/` 草案与运行、打包与版本锁定 |
 | [平台总纲](design/canvas-platform-design.md)              | 需求、M0–M8 阶段与验收                                                                                             |
 | [Agent 自动化](design/agent-automation-design.md)         | 交接、循环卡片、计划与命名                                                                                         |
