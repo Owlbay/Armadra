@@ -388,18 +388,27 @@ export interface AssembleLaunchCommandInput {
   /**
    * Words the program itself needs in front of the CLI's argv — the script
    * when an npm wrapper on Windows is started as `node.exe <cli.js>` (the
-   * row's `launchTarget`). Only on the typed line: a frozen plan names the
-   * agent, and its executor resolves the program on its own machine.
+   * row's `launchTarget`), and, when the program is the canvas launcher
+   * (the row's `launcher`), the CLI's program before them. Only on the typed
+   * line: a frozen plan names the agent, and its executor resolves the
+   * program on its own machine.
    */
   programArgs?: readonly string[];
-  /** Extra argv appended after the flags (custom agents). */
+  /**
+   * @deprecated Extra argv appended after the flags — an older core's
+   * injection argv (`launchArgs`). A current core's canvas launcher appends
+   * the injection itself (docs/design/canvas-launcher.md §8.1): the page puts
+   * the launcher in {@link programOverride} and the CLI's program in front of
+   * {@link programArgs} instead. Kept one release for the page's fallback to
+   * an older core. A custom entry's own argv comes from {@link custom}.
+   */
   extraArgs?: readonly string[];
   /**
-   * Words appended to the *typed* line, in front of the prompt: the canvas
-   * injection the runtime answers as `launchWords`, some of which read an
+   * @deprecated Words appended to the *typed* line, in front of the prompt:
+   * an older core's injection as `launchWords`, some of which read an
    * environment variable of the node's terminal. Quoted with {@link dialect}
-   * like the rest. Not part of {@link assembleLaunchArgv} — a frozen plan
-   * never carries the injection.
+   * like the rest. Same fallback as {@link extraArgs}; not part of
+   * {@link assembleLaunchArgv} — a frozen plan never carries the injection.
    */
   shellWords?: readonly LaunchWord[];
   /**
