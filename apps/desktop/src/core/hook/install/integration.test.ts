@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { forgetProbes, rememberProbe } from "../../agent/probe";
 import { installCollaborationSkill } from "../../collab/skill";
 import { configPath as codexConfigPath } from "./codex";
 import {
@@ -8,7 +9,12 @@ import {
   INTEGRATION_REVISION,
   SKILLS_REVISION,
 } from "./events";
-import { INJECTED_AGENTS, artifactLayout } from "./inject";
+import {
+  INJECTED_AGENTS,
+  artifactLayout,
+  launcherPath,
+  shimPath,
+} from "./inject";
 import {
   type IntegrationOptions,
   install,
@@ -57,6 +63,7 @@ beforeEach(() => {
 afterEach(() => {
   release?.();
   release = undefined;
+  forgetProbes();
 });
 
 describe("the canvas integration", () => {
@@ -97,14 +104,48 @@ describe("the canvas integration", () => {
     }
   });
 
-  /** The page names Codex's trust records as the one global write. */
-  it("names the only global write, and only for Codex", () => {
+  /** Nothing is written outside the data directory; the field stays empty. */
+  it("names no global write, for any CLI", () => {
     for (const agentId of INJECTED_AGENTS) {
-      const answer = state(agentId, options(agentId));
-      expect(answer.globalWrites).toEqual(
-        agentId === "codex" ? [codexConfigPath(join(root, "codex"))] : [],
-      );
+      install(agentId, options(agentId));
+      expect(state(agentId, options(agentId)).globalWrites).toEqual([]);
     }
+    expect(existsSync(codexConfigPath(join(root, "codex")))).toBe(false);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "answers the launcher and the shim once they are written",
+    () => {
+      const dataDir = join(root, "data");
+      const before = state("claude", options("claude"));
+      expect(before.launcher).toBeUndefined();
+      expect(before.shim).toBeUndefined();
+      const after = install("claude", options("claude"));
+      expect(after.launcher).toBe(launcherPath(dataDir, "claude"));
+      expect(after.shim).toBe(shimPath(dataDir, "claude"));
+      expect(after.launcherWarning).toBeUndefined();
+      // Codex's hooks live in its launcher.
+      const codex = install("codex", options("codex"));
+      expect(codex.hook.installed).toBe(true);
+      expect(codex.hook.path).toBe(launcherPath(dataDir, "codex"));
+      expect(codex.launchArgs[0]).toBe("--dangerously-bypass-hook-trust");
+    },
+  );
+
+  it("warns when the probed Codex is too old for hooks", () => {
+    rememberProbe({
+      agentId: "codex",
+      launchCmd: "codex",
+      version: "0.120.0",
+      status: "ok",
+      probedAt: new Date().toISOString(),
+    });
+    const codex = install("codex", options("codex"));
+    expect(codex.launcherWarning).toMatch(/0\.120\.0/);
+    expect(codex.launchArgs).not.toContain("--dangerously-bypass-hook-trust");
+    expect(install("claude", options("claude")).launcherWarning).toBe(
+      undefined,
+    );
   });
 
   it("refuses a CLI it has no injection for", () => {
@@ -125,6 +166,11 @@ describe("start-up", () => {
     // Codex has a config home here, and still nothing is written into it:
     // its hooks are trusted by the launcher's flag.
     expect(existsSync(codexConfigPath(join(root, "codex")))).toBe(false);
+    // The migration's second step is reported on Codex's state.
+    expect(state("codex", options("codex")).migration?.sessionTrust).toEqual({
+      at: report.migration?.sessionTrust?.at,
+      removed: [],
+    });
     for (const agentId of INJECTED_AGENTS) {
       expect(state(agentId, options(agentId)).hook.installed, agentId).toBe(
         true,

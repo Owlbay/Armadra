@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import type { LaunchWord } from "../../terminal/shell";
-import { configPath as codexConfigPath } from "./codex";
 import {
   HOOK_CLIENT_REVISION,
   INTEGRATION_REVISION,
@@ -10,11 +9,15 @@ import {
   type InjectionOptions,
   artifactLayout,
   canvasInjection,
+  codexHooksWarning,
+  currentLauncher,
   globalWritesDisabled,
   isInjected,
   prepareInjection,
+  readLauncherMarker,
   readMarker,
   removeInjection,
+  shimPath,
 } from "./inject";
 import {
   type MigrationRecord,
@@ -27,7 +30,6 @@ import {
   InstallError,
   configHome,
   describe,
-  hookCommand,
 } from "./shared";
 import { revisionOf } from "./skills";
 
@@ -37,11 +39,12 @@ import { revisionOf } from "./skills";
  *
  * There is no "install into the CLI" any more: hook, skill and canvas
  * instructions are artifacts under our data directory that only a canvas
- * launch hands over. So the state answers "are the artifacts current" and the
- * one action is "regenerate them". Two things are still about the CLI's own
- * configuration, and both are reported rather than hidden: Codex's trust
- * records (the only global write, named in {@link IntegrationState.globalWrites})
- * and what the one-time migration took out of the old global install.
+ * launch hands over through its launcher (docs/design/canvas-launcher.md
+ * §8.2). So the state answers "are the artifacts and the launcher current" and
+ * the one action is "regenerate them". Nothing is written into the CLI's own
+ * configuration any more — {@link IntegrationState.globalWrites} is always
+ * empty — and what the one-time migration took out of the old global install
+ * is reported rather than hidden.
  */
 
 /** Half of the integration, as the settings page reads it. */
@@ -59,6 +62,13 @@ export interface MigrationSummary {
   readonly removed: readonly string[];
   readonly backups: readonly string[];
   readonly error?: string;
+  /** Codex only: the session-flag trust records the second step took out. */
+  readonly sessionTrust?: {
+    readonly at: string;
+    readonly removed: readonly string[];
+    readonly backup?: string;
+    readonly error?: string;
+  };
 }
 
 /** `GET /api/agents/{id}/integration`. */
@@ -75,14 +85,30 @@ export interface IntegrationState {
   readonly installedRevision?: number;
   /** Written by an older Armadra; the next launch rewrites them anyway. */
   readonly stale: boolean;
-  /** Argv a canvas launch of this CLI carries, literal. */
+  /** Argv the launcher appends to a canvas launch of this CLI, literal. */
   readonly launchArgs: readonly string[];
-  /** The same as words for a typed launch line, unquoted (see `inject.ts`). */
+  /**
+   * @deprecated The same as words for a typed launch line, unquoted — the
+   * pre-launcher road (see `inject.ts`). Goes with its last reader.
+   */
   readonly launchWords: readonly LaunchWord[];
-  /** Names of the environment variables a canvas launch sets. */
+  /** Names of the environment variables the launcher sets for the CLI. */
   readonly launchEnv: readonly string[];
-  /** Files outside our data directory this integration writes. */
+  /**
+   * Files outside our data directory this integration writes: none. Kept one
+   * release for older pages, always `[]`.
+   */
   readonly globalWrites: readonly string[];
+  /** `run/<cli>` on this machine, when it is there and current. */
+  readonly launcher?: string;
+  /** `shims/<cli>` on this machine, when it is there. */
+  readonly shim?: string;
+  /**
+   * Why canvas launches of this CLI carry less than they should: no
+   * launcher on Windows (no `armadra-launch.exe`), or a Codex too old for
+   * hooks.
+   */
+  readonly launcherWarning?: string;
   readonly migration?: MigrationSummary;
   /** Absolute path of the hook client the artifacts name. */
   readonly clientBin?: string;
@@ -126,11 +152,22 @@ function migrationFor(
 ): MigrationSummary | undefined {
   const entry = record?.agents[agentId];
   if (record === undefined || entry === undefined) return undefined;
+  const trust = agentId === "codex" ? record.sessionTrust : undefined;
   return {
     migratedAt: record.migratedAt,
     removed: entry.removed,
     backups: entry.backups,
     ...(entry.error === undefined ? {} : { error: entry.error }),
+    ...(trust === undefined
+      ? {}
+      : {
+          sessionTrust: {
+            at: trust.at,
+            removed: trust.removed,
+            ...(trust.backup === undefined ? {} : { backup: trust.backup }),
+            ...(trust.error === undefined ? {} : { error: trust.error }),
+          },
+        }),
   };
 }
 
@@ -156,12 +193,18 @@ export function state(
   const skillRevision = revisionOf(layout.skill);
   const injection = canvasInjection({ dataDir: options.dataDir, agentId });
   const migration = migrationFor(readMigration(options.dataDir), agentId);
+  const launcher = currentLauncher(options.dataDir, agentId);
+  const shim = shimPath(options.dataDir, agentId);
+  const launcherWarning =
+    readLauncherMarker(options.dataDir)?.warning ??
+    (agentId === "codex" ? codexHooksWarning() : undefined);
   return {
     agentId,
     mode: "canvas",
     hook: {
       installed: hookInstalled,
-      path: agentId === "codex" ? codexConfigPath(home) : hookFile,
+      // Codex's hooks are `-c` pairs its launcher carries.
+      path: agentId === "codex" ? (launcher ?? hookFile) : hookFile,
       revision: hookInstalled ? HOOK_CLIENT_REVISION : 0,
     },
     skill: {
@@ -176,7 +219,10 @@ export function state(
     launchArgs: injection.args,
     launchWords: injection.words,
     launchEnv: injection.env.map(([name]) => name),
-    globalWrites: agentId === "codex" ? [codexConfigPath(home)] : [],
+    globalWrites: [],
+    ...(launcher === undefined ? {} : { launcher }),
+    ...(isPresent(shim) ? { shim } : {}),
+    ...(launcherWarning === undefined ? {} : { launcherWarning }),
     ...(migration === undefined ? {} : { migration }),
     ...(marker === undefined ? {} : { clientBin: marker.clientBin }),
     ...(warning === undefined ? {} : { warning }),
@@ -186,8 +232,8 @@ export function state(
 /* -------------------------------- writing --------------------------------- */
 
 /**
- * `POST …/integration/install`: regenerate the artifacts (and Codex's trust
- * records) now, whatever the marker says.
+ * `POST …/integration/install`: regenerate the artifacts and the launcher
+ * now, whatever the marker says.
  */
 export function install(
   agentId: string,
@@ -201,7 +247,7 @@ export function install(
   return state(agentId, options);
 }
 
-/** `POST …/integration/uninstall`: remove the artifacts and trust records. */
+/** `POST …/integration/uninstall`: remove the artifacts and the launcher. */
 export function uninstall(
   agentId: string,
   options: IntegrationOptions,
@@ -221,8 +267,7 @@ export interface StartupReport {
 
 /**
  * What core start-up does: the one-time migration, then every CLI's artifacts
- * made current. Codex's trust records are written only when Codex has a
- * config home here — a machine that never ran Codex gets no `~/.codex`.
+ * and launcher made current — all under the data directory.
  *
  * Nothing global happens when {@link globalWritesDisabled}: the test suite's
  * cores run with the developer's real `HOME`.
