@@ -5,9 +5,12 @@ import {
   bundleResources,
   copyWithRetry,
   migrationResources,
+  placeLaunchExe,
   placements,
   platformFor,
 } from "./after-pack.mjs";
+import { join } from "node:path";
+import { LAUNCH_EXE_RESOURCE } from "./launch-exe.mjs";
 
 test("only the platform/arch pairs this shell ships are packaged", () => {
   assert.equal(platformFor("darwin", "arm64"), "darwin");
@@ -111,5 +114,37 @@ test("the migrations go where a packaged core looks for them", () => {
       Number(m.to.slice("migrations/".length, -".sql".length).slice(0, 4)),
     ),
     migrations.map((_, index) => index + 1),
+  );
+});
+
+test("a Windows target also gets the canvas launcher, built only on a Windows host", () => {
+  const built = [];
+  const logs = [];
+  const options = {
+    host: "win32",
+    compile: (output) => (built.push(output), output),
+    log: (line) => logs.push(line),
+  };
+  assert.equal(placeLaunchExe("darwin", "R", options), undefined);
+  assert.equal(placeLaunchExe("linux", "R", options), undefined);
+  assert.deepEqual(built, []);
+  assert.equal(
+    placeLaunchExe("win32", "R", options),
+    join("R", LAUNCH_EXE_RESOURCE),
+  );
+  assert.deepEqual(built, [join("R", LAUNCH_EXE_RESOURCE)]);
+
+  const elsewhere = [];
+  assert.equal(
+    placeLaunchExe("win32", "R", {
+      host: "darwin",
+      compile: () => assert.fail("no compiler off Windows"),
+      log: (line) => elsewhere.push(line),
+    }),
+    undefined,
+  );
+  assert.match(
+    elsewhere[0],
+    /WARNING .*armadra-launch\.exe.*without injection/,
   );
 });
