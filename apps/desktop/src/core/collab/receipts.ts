@@ -27,6 +27,17 @@ import type { CollabContext } from "./service";
  * 记录面板看的是那张表，不是收件箱。
  */
 
+/**
+ * 光看码猜不出该去哪找原因的几个码，回执里补一句人话。
+ *
+ * 只补「发送方要去终端里看一眼」的那种：`TARGET_NOT_AT_PROMPT` 的消息一直没
+ * 投进去，是因为对方终端停在 CLI 自己的对话框上——那个对话框要人去答，发送方
+ * 换个时间重发也没用。
+ */
+const REASON_NOTES: Readonly<Record<string, string>> = {
+  TARGET_NOT_AT_PROMPT: "对方终端停在 CLI 的对话框上，没有替人回答",
+};
+
 /** 回执正文。不带原消息正文，只说去了哪、为什么停下、试过几次、多长。 */
 export function receiptBody(item: QueueItem, targetName: string): string {
   const what =
@@ -40,7 +51,13 @@ export function receiptBody(item: QueueItem, targetName: string): string {
   // 0 次——「尝试 0 次」读起来像根本没投，干脆不写。
   const attempts = item.attempts + (item.settledBy === "gate" ? 1 : 0);
   const facts = [
-    ...(item.lastReason === undefined ? [] : [item.lastReason]),
+    ...(item.lastReason === undefined
+      ? []
+      : [
+          REASON_NOTES[item.lastReason] === undefined
+            ? item.lastReason
+            : `${item.lastReason}：${REASON_NOTES[item.lastReason]}`,
+        ]),
     ...(attempts === 0 ? [] : [`尝试 ${attempts} 次`]),
     `正文 ${[...item.body].length} 字`,
   ];

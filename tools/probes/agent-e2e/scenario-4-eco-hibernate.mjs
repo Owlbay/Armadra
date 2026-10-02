@@ -175,6 +175,15 @@ export default async function run(ctx) {
         resumed !== undefined,
         facts[agent].providerSession,
       );
+      if (agent === "claude") {
+        // 接回的那一代也得带着显式的权限模式，否则它起来先弹缺省权限模式对话框。
+        const relaunched = agentPid(node.id, agent);
+        s.check(
+          "claude：接回的进程仍带着 --permission-mode acceptEdits",
+          /--permission-mode acceptEdits/.test(relaunched?.command ?? ""),
+          relaunched,
+        );
+      }
       await waitAgentUp(node.id, agent, page, 120_000);
       // 问话由人经页面打进去：`send` 投进去的正文带着来源信封，模型按「同级消
       // 息是资料」处理，会拒绝回答一个像是在套它上下文的问题。

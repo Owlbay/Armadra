@@ -62,6 +62,8 @@ beforeEach(() => {
   me = fixture.agentNode("Planner");
   fixture.name(me, "planner");
   fixture.terminal.foreground = { command: "codex" };
+  // 首投要求画面上看得见提示符（§4.3「画面门」）：这里的目标都停在 Codex 的输入框上。
+  fixture.terminal.capture = "› Ask Codex to do anything\n\n  ? for shortcuts";
 });
 
 afterEach(() => {

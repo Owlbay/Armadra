@@ -155,6 +155,12 @@ export default async function run8(ctx) {
       resumed !== undefined,
       resumed?.command ?? before.providerSession,
     );
+    // 这一代起来就要接住那条 send：不能先弹缺省权限模式对话框。
+    s.check(
+      "接回的 Claude 进程仍带着 --permission-mode acceptEdits",
+      /--permission-mode acceptEdits/.test(resumed?.command ?? ""),
+      resumed?.command,
+    );
     const row = await waitDelivered(claudeA.id, deliveredBefore, 180_000).catch(
       (error) => ({
         error: error.message,

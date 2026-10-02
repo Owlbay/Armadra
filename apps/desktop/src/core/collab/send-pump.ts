@@ -218,10 +218,18 @@ export class SendPump {
    *   * 标了 `startsSilently`、且从未上报过（Codex）；
    *   * 只报过一条开场、还没开过一轮（Claude：`SessionStart` 把状态清空，下一
    *     条事件要等人提交输入）。`restored` 的行不算——它等的是新进程的上报。
+   *
+   * 另有一种不看 CLI、看队头：最前面那条是因为画面停在对话框上退回来的
+   * （`TARGET_NOT_AT_PROMPT`，§4.3「画面门」）。人在终端里答掉那个对话框不会
+   * 产生任何上报——Hook 早就报过空闲了——所以同样得靠快探再看一眼画面。
    */
   private silentStarter(context: CollabContext, nodeId: string): boolean {
     const node = loadNode(context.database, nodeId);
     if (node?.agentId == null) return false;
+    const head = pendingFor(context.database, nodeId, nowSeconds(context)).find(
+      (item) => item.state === "queued",
+    );
+    if (head?.lastReason === "TARGET_NOT_AT_PROMPT") return true;
     const status = getAgentStatus(context.database, nodeId);
     if (
       status !== undefined &&
