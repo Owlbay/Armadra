@@ -18,8 +18,6 @@ import {
 } from "./events";
 import {
   CODEX_BYPASS_HOOK_TRUST,
-  CODEX_HOOK_VAR,
-  CODEX_INSTRUCTIONS_VAR,
   INJECTED_AGENTS,
   artifactLayout,
   canvasInjection,
@@ -28,7 +26,6 @@ import {
   currentLauncher,
   launcherPath,
   prepareInjection,
-  codexTomlString,
   readLauncherMarker,
   removeInjection,
   shimPath,
@@ -103,13 +100,9 @@ function inject(agentId: string, resume = false) {
 describe("canvas injection", () => {
   it("hands nothing over before the artifacts exist", () => {
     for (const agentId of INJECTED_AGENTS) {
-      expect(inject(agentId), agentId).toEqual({
-        args: [],
-        words: [],
-        env: [],
-      });
+      expect(inject(agentId), agentId).toEqual({ args: [], env: [] });
     }
-    expect(inject("custom:unknown")).toEqual({ args: [], words: [], env: [] });
+    expect(inject("custom:unknown")).toEqual({ args: [], env: [] });
   });
 
   it("writes everything under the data directory, byte-identical twice", () => {
@@ -238,14 +231,6 @@ describe("canvas injection", () => {
     forgetProbes();
     prepare("codex");
     expect(launcherText("codex")).toContain(CODEX_BYPASS_HOOK_TRUST);
-  });
-
-  it("hands every other CLI's argv over as its (deprecated) words", () => {
-    for (const agentId of ["claude", "opencode", "pi", "omp", "copilot"]) {
-      prepare(agentId);
-      const { args, words } = inject(agentId);
-      expect(words, agentId).toEqual(args);
-    }
   });
 
   it("gives OpenCode a fixed config directory and the instructions by env", () => {
@@ -459,52 +444,5 @@ describe("nothing outside the data directory", () => {
     removeInjection("codex", { dataDir, env });
     expect(readFileSync(codexConfigPath(codexHome), "utf8")).toBe(mine);
     expect(readdirSync(codexHome)).toEqual(["config.toml"]);
-  });
-});
-
-/**
- * 过渡（deprecated）：启动行改经启动器之前，Codex 的长值仍放在节点终端的环境里
- * 由行展开。Windows 上那个 shell 默认是 `cmd.exe`；行里的词由 `terminal/shell.ts`
- * 按方言引用，这里只管 Codex 那两个由行展开的环境变量。
- */
-describe("Codex's expanded values per shell (deprecated typed line)", () => {
-  const nasty = 'say "hi" & a|b <c> ^d (e) 100% !x! C:\\dir\\ 画布\n';
-
-  it("keeps a plain TOML string where the shell expands one finished word", () => {
-    expect(codexTomlString(nasty)).toBe(JSON.stringify(nasty));
-    expect(codexTomlString(nasty, "powershell")).toBe(JSON.stringify(nasty));
-  });
-
-  it("writes cmd.exe's so nothing in it is live and its quotes survive", () => {
-    const value = codexTomlString(nasty, "cmd");
-    expect(value.startsWith('\\"')).toBe(true);
-    expect(value.endsWith('\\"')).toBe(true);
-    // Between the `\"` pair: nothing cmd.exe or the C runtime acts on, and a
-    // backslash only as the start of a `\uXXXX` escape.
-    const body = value.slice(2, -2);
-    expect(body).not.toMatch(/["%!^&|<>()\r\n]/);
-    expect(body).not.toMatch(/\\(?!u[0-9a-f]{4})/);
-    // The program receives `"` for each `\"`: a TOML basic string of the
-    // value, whose escapes here are JSON's.
-    expect(JSON.parse(value.replace(/\\"/g, '"'))).toBe(nasty);
-  });
-
-  it("puts the node shell's form into the terminal's environment", () => {
-    prepare("codex");
-    const vars = canvasInjection({
-      dataDir,
-      agentId: "codex",
-      nodeId: "node-1",
-      dialect: "cmd",
-    }).env;
-    expect(vars.map(([name]) => name)).toEqual([
-      CODEX_HOOK_VAR,
-      CODEX_INSTRUCTIONS_VAR,
-    ]);
-    const hook = vars.find(([name]) => name === CODEX_HOOK_VAR)?.[1] ?? "";
-    expect(hook).toBe(
-      `[{hooks=[{type=${codexTomlString("command", "cmd")},command=${codexTomlString(`${hookBin} codex`, "cmd")}}]}]`,
-    );
-    expect(hook).not.toMatch(/(?<!\\)"/);
   });
 });

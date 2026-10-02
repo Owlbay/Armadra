@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join as nativeJoin } from "node:path";
 import { storedProbe } from "../../agent/probe";
-import type { LaunchWord, ShellDialect } from "../../terminal/shell";
+import type { ShellDialect } from "../../terminal/shell";
 import { eventKey } from "./codex";
 import {
   CLAUDE_HOOK_EVENTS,
@@ -476,11 +476,8 @@ function codexEvents(): string[] {
 }
 
 /** One hook table for Codex: `[{hooks=[{type="command",command=…}]}]`. */
-function codexHookTable(
-  command: string,
-  string: (value: string) => string = tomlString,
-): string {
-  return `[{hooks=[{type=${string("command")},command=${string(command)}}]}]`;
+function codexHookTable(command: string): string {
+  return `[{hooks=[{type=${tomlString("command")},command=${tomlString(command)}}]}]`;
 }
 
 /** A TOML basic string; JSON's escapes are a subset TOML accepts. */
@@ -737,11 +734,6 @@ export interface InjectionOptions {
    * absent. `""` means none: the launch lines go bare (§5.3).
    */
   readonly launchExe?: string;
-  /**
-   * @deprecated Nothing is written into Codex's `config.toml` any more;
-   * ignored. Kept until the callers that still pass it are updated.
-   */
-  readonly skipTrust?: boolean;
 }
 
 export interface PrepareReport {
@@ -877,13 +869,6 @@ export interface InjectionRequest {
    * (`agent/probe.ts::storedProbe`) when absent; `null` = unknown.
    */
   readonly codexVersion?: string | null;
-  /**
-   * @deprecated The node shell's dialect, for the old typed-line callers
-   * only. Present, Codex's {@link Injection.env} is the pre-launcher form —
-   * the variables its {@link Injection.words} expand, written for that
-   * shell. Goes away with those callers.
-   */
-  readonly dialect?: ShellDialect;
 }
 
 export interface Injection {
@@ -894,16 +879,9 @@ export interface Injection {
   readonly args: readonly string[];
   /** Set by the launcher for the CLI process only. */
   readonly env: readonly (readonly [string, string])[];
-  /**
-   * @deprecated The injection as words for a line typed into the node's
-   * shell — the pre-launcher road, kept until the line builders go through
-   * the launcher. Codex's name the variables of the deprecated
-   * {@link InjectionRequest.dialect} form.
-   */
-  readonly words: readonly LaunchWord[];
 }
 
-const NOTHING: Injection = { args: [], words: [], env: [] };
+const NOTHING: Injection = { args: [], env: [] };
 
 function codexInstructions(layout: ArtifactLayout, exists = isFile) {
   const content = skillContent();
@@ -919,21 +897,7 @@ function codexInstructions(layout: ArtifactLayout, exists = isFile) {
  * which is worse than starting with nothing.
  */
 export function canvasInjection(request: InjectionRequest): Injection {
-  const literal = launchInjection(request);
-  if (literal.args.length === 0 && literal.env.length === 0) return NOTHING;
-  if (request.agentId !== "codex") return { ...literal, words: literal.args };
-  const hooks = codexBypassesTrust(codexVersionOf(request));
-  const instructions = codexInstructions(
-    artifactLayout(request.dataDir, "codex"),
-  );
-  return {
-    args: literal.args,
-    words: codexWords(instructions !== undefined, hooks),
-    env:
-      request.dialect === undefined
-        ? literal.env
-        : legacyCodexEnv(request, instructions, hooks),
-  };
+  return launchInjection(request);
 }
 
 function codexVersionOf(request: InjectionRequest): string | null | undefined {
@@ -943,10 +907,10 @@ function codexVersionOf(request: InjectionRequest): string | null | undefined {
 }
 
 /** The literal argv and environment: what the launcher carries. */
-function launchInjection(request: InjectionRequest): Omit<Injection, "words"> {
-  if (!isInjected(request.agentId)) return { args: [], env: [] };
+function launchInjection(request: InjectionRequest): Injection {
+  if (!isInjected(request.agentId)) return NOTHING;
   const marker = readMarker(request.dataDir, request.agentId);
-  if (marker === undefined) return { args: [], env: [] };
+  if (marker === undefined) return NOTHING;
   return (
     injectionFromLayout(
       request.agentId,
@@ -954,7 +918,7 @@ function launchInjection(request: InjectionRequest): Omit<Injection, "words"> {
       marker.clientBin,
       isFile,
       { codexHooks: codexBypassesTrust(codexVersionOf(request)) },
-    ) ?? { args: [], env: [] }
+    ) ?? NOTHING
   );
 }
 
@@ -971,7 +935,7 @@ export function injectionFromLayout(
   clientBin: string,
   exists: (path: string | undefined) => path is string,
   options: { readonly codexHooks?: boolean } = {},
-): Omit<Injection, "words"> | undefined {
+): Injection | undefined {
   const isFile = exists;
   const skill = isFile(layout.skill);
   const instructions = isFile(layout.instructions)
@@ -1061,47 +1025,17 @@ export function injectionFromLayout(
 
 /* ------------------------- deprecated: typed line ------------------------- */
 /*
- * 过渡段：启动行改由 run/<cli> 拼（docs/design/canvas-launcher.md §9）之前，
- * `agent/canvas-launch.ts` 与页面仍把注入写在敲进 shell 的行上，Codex 的长值
- * 放在节点终端的环境里由行展开。那几处改完后整段删除。
+ * 过渡：启动行改经 run/<cli> 启动器拼（docs/design/canvas-launcher.md §9）之
+ * 后，core 已不再把 Codex 的长值放进节点终端的环境由行展开。只剩下面这一个
+ * 导出，留给 WP4 改写之前的 `agent/windows-launch.test.ts`；那份用例换成经启动
+ * 器之后整段删除。
  */
-
-/** @deprecated The environment variables Codex's typed line expands. */
-export const CODEX_HOOK_VAR = "ARMADRA_CODEX_HOOK";
-/** @deprecated See {@link CODEX_HOOK_VAR}. */
-export const CODEX_INSTRUCTIONS_VAR = "ARMADRA_CODEX_INSTRUCTIONS";
-
-/**
- * @deprecated Codex's injection as typed words naming {@link CODEX_HOOK_VAR}
- * and {@link CODEX_INSTRUCTIONS_VAR} — a line spelling the values out runs to
- * kilobytes, and the PTY cuts a typed line at about one. The trust flag goes
- * last, so the line still starts with the `-c` pairs.
- */
-export function codexWords(
-  withInstructions: boolean,
-  hooks = true,
-): LaunchWord[] {
-  const words: LaunchWord[] = ["-c", "check_for_update_on_startup=false"];
-  if (hooks) {
-    for (const event of codexEvents()) {
-      words.push("-c", { prefix: `hooks.${event}=`, env: CODEX_HOOK_VAR });
-    }
-  }
-  if (withInstructions) {
-    words.push("-c", {
-      prefix: "developer_instructions=",
-      env: CODEX_INSTRUCTIONS_VAR,
-    });
-  }
-  if (hooks) words.push(CODEX_BYPASS_HOOK_TRUST);
-  return words;
-}
 
 /** What stays itself inside {@link codexTomlString}'s `cmd.exe` form. */
 const CMD_TOML_PLAIN = /^(?:[A-Za-z0-9 _.,:;/=+@#~*?{}[\]'-]|[^\x00-\x7f])$/u;
 
 /**
- * @deprecated A TOML basic string for a value the typed line expands as
+ * @deprecated A TOML basic string for a value a typed line expanded as
  * `"prefix=%NAME%"` in `cmd.exe` (and after `--%` in Windows PowerShell 5.1):
  * the string's own quotes are written `\"` and everything either reader acts
  * on is a `\uXXXX` escape. Other shells get {@link tomlString} as it is.
@@ -1121,32 +1055,4 @@ export function codexTomlString(
       : `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`;
   }
   return `\\"${body}\\"`;
-}
-
-function legacyCodexEnv(
-  request: InjectionRequest,
-  instructions: string | undefined,
-  hooks: boolean,
-): readonly (readonly [string, string])[] {
-  const marker = readMarker(request.dataDir, "codex") as InjectionMarker;
-  return [
-    ...(hooks
-      ? ([
-          [
-            CODEX_HOOK_VAR,
-            codexHookTable(hookCommand(marker.clientBin, "codex"), (value) =>
-              codexTomlString(value, request.dialect),
-            ),
-          ],
-        ] as const)
-      : []),
-    ...(instructions === undefined
-      ? []
-      : ([
-          [
-            CODEX_INSTRUCTIONS_VAR,
-            codexTomlString(instructions, request.dialect),
-          ],
-        ] as const)),
-  ];
 }
