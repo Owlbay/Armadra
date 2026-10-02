@@ -22,6 +22,9 @@ import {
   resolveCommand,
 } from "../../agent/registry";
 import type { ShimTarget } from "../../agent/windows-shim";
+import { LAUNCH_GATE, type LauncherSpec } from "./launcher";
+
+export { LAUNCH_GATE };
 
 /**
  * The Windows half of the canvas launcher (docs/design/canvas-launcher.md
@@ -52,27 +55,18 @@ import type { ShimTarget } from "../../agent/windows-shim";
 export const LAUNCH_EXE_NAME = "armadra-launch.exe";
 /** The first line of every `.launch`; the program refuses anything else. */
 export const LAUNCH_CONFIG_HEADER = "armadra-launch 1";
-/** The variable that opens the gate: set only in a canvas node's terminal. */
-export const LAUNCH_GATE = "ARMADRA_NODE_ID";
-
-/** What a `.launch` needs from the generator's spec (a `LauncherSpec` fits). */
-export interface LaunchConfigSpec {
-  readonly agentId: string;
-  /** The injection's literal argv (`Injection.args`): appended after the caller's words. */
-  readonly args: readonly string[];
-  /** The injection's environment (`Injection.env`): set for the CLI process only. */
-  readonly env: readonly (readonly [string, string])[];
-}
+/**
+ * What a `.launch` needs from the generator's spec: the injection's literal
+ * argv (appended after the caller's words) and its environment (set for the
+ * CLI process only). Any `LauncherSpec` fits.
+ */
+export type LaunchConfigSpec = Pick<LauncherSpec, "agentId" | "args" | "env">;
 
 /**
- * Everything one CLI's Windows launcher and shim are made of. Structurally the
- * POSIX generator's `LauncherSpec` plus the program and the shim's target.
+ * Everything one CLI's Windows launcher and shim are made of: the POSIX
+ * generator's `LauncherSpec` (§6.1) plus the program and the shim's target.
  */
-export interface WindowsLauncherSpec extends LaunchConfigSpec {
-  /** `<root>\integration\run`. */
-  readonly runDir: string;
-  /** `<root>\integration\shims`. */
-  readonly shimDir: string;
+export interface WindowsLauncherSpec extends LauncherSpec {
   /** The built `armadra-launch.exe` ({@link findLaunchExe}). */
   readonly exe: string;
   /** The shim's program and lead words ({@link shimTargetFor}); absent, no shim is written. */
