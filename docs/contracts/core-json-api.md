@@ -466,3 +466,87 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - 每条终态同时写一行投递记录（`GET /api/workspaces/{id}/deliveries`，`outcome` 为 `expired` 或 `cancelled`，`receipt` 是队列 id），并发 `agent.delivery` 事件：`{ "type": "agent.delivery", "traceId", "sourceNodeId", "targetNodeId", "outcome": "expired" | "cancelled", "code"? }`，`code` 是最后一次没投出去的码。
 - 发送方节点已经不在画布上、目标节点已经不在画布上（收件箱外键填不了），或者是收件箱唤醒（来源就是目标自己）时不写回执，投递记录与事件照发。
 - 每条终态只通知一次；清扫只删回执已经写过的、或者不需要回执的终态行。
+
+## 13. 画布启动器
+
+设计见 [画布启动器](../design/canvas-launcher.md)。注入（Hook、技能、画布说明）不再写在敲进节点 shell 的启动行上，而由数据目录里每个 CLI 一个的启动器 `integration/run/<cli>`（Windows `run\<cli>.exe`）在 CLI 启动时追加；启动器只在环境里有 `ARMADRA_NODE_ID` 时注入，没有时原样启动程序。启动行只剩「启动器 + 程序 + 程序前置词 + CLI 自己的旗标」。
+
+### 13.1 `GET /api/agents` 行的 `launcher`
+
+每一行（内置与 `custom:` 条目）多一个可选的 `launcher`：这台机器上这家 CLI 的启动器的绝对路径（代码在 `core/agent/list.ts`，来自集成状态；共享层 `agentInfoSchema.launcher`）。`custom:` 条目答它 `baseAgent` 的。
+
+```json
+{
+  "id": "codex",
+  "resolvedPath": "/opt/homebrew/bin/codex",
+  "launcher": "/Users/me/Library/Application Support/Armadra/integration/run/codex"
+}
+```
+
+- 缺席：还没生成、启动器层的标记 `integration/launcher.json` 不是当前修订或当前平台、Windows 没有 `armadra-launch.exe`。这时调用方拼**裸行**（程序 + 旗标，不注入），不回到把注入写在行上。
+- 拼法：`<launcher> <程序> [程序前置词…] <旗标…> [prompt]`。程序是 `launchTarget.program` / `resolvedPath` / `launchCmd` 中先有的那个（用户的启动命令覆盖优先），前置词是 `launchTarget.args`。启动器把注入接在调用者的全部参数之后，所以 prompt 在行上时注入的旗标落在它之后。
+- 自己 exec 的调用方（探针）直接 exec `<launcher> <程序> …`，并在环境里带 `ARMADRA_NODE_ID`。要看注入本身，读 §13.2 的 `launchArgs`。
+- **下线**：当前 core 不再答 `launchWords` 与 `launchArgs`。共享层把这两个字段留作可选、标为弃用一个版本：新页面对没有 `launcher` 的旧 core 退回读它们；旧页面对新 core 两个字段都读不到，拼出裸行（不注入，也不会截断）。
+- SSH 节点不受影响：行仍是裸的 `<程序名> <旗标…>`，由执行主机 `PATH` 最前面的远端垫片交给远端启动器。
+
+节点终端的环境（`POST /api/terminals` 带 `agent` 与 `nodeId` 时、依赖编排、冷启动、节能唤醒）里，画布这一半只有两个变量：`ARMADRA_SHIMS=<数据目录>/integration/shims` 与以它开头的 `PATH`（其后与普通终端的 `PATH` 相同）。`OPENCODE_CONFIG_DIR`、`OPENCODE_CONFIG_CONTENT`、`COPILOT_CUSTOM_INSTRUCTIONS_DIRS`、`ARMADRA_CODEX_HOOK`、`ARMADRA_CODEX_INSTRUCTIONS` 不再出现在终端环境里：前三个由启动器只给 CLI 进程设，后两个已删除。SSH 节点的终端不带这两个（远端的 `ARMADRA_SHIMS` 由远端 shell 命令设）。§5 列的地址变量不变。
+
+### 13.2 `GET /api/agents/{id}/integration` 的状态字段
+
+代码在 `core/hook/install/integration.ts`，共享层 `integrationStateSchema`。
+
+| 字段              | 变化                                                                                                                   |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `launchArgs`      | 保留：启动器追加的字面 argv（显示与探针用）                                                                            |
+| `launchEnv`       | 保留：启动器给 CLI 进程设的变量名                                                                                      |
+| `launchWords`     | **删除**                                                                                                               |
+| `globalWrites`    | 恒为 `[]`（数据目录之外不写任何文件）；字段留一个版本给旧页面                                                          |
+| `launcher`        | 新增，可选：`run/<cli>` 的绝对路径，存在且是当前修订时才有                                                             |
+| `shim`            | 新增，可选：`shims/<cli>` 的绝对路径，存在时才有                                                                       |
+| `launcherWarning` | 新增，可选：画布内启动少带了东西的原因——Windows 没有 `armadra-launch.exe`；Codex 版本低于 0.134.0，画布内启动不带 Hook |
+| `hook.installed`  | 对 Codex 只看产物，不再看信任记录；Codex 的 `hook.path` 是它的启动器（有时）                                           |
+
+```json
+{
+  "agentId": "codex",
+  "mode": "canvas",
+  "launchArgs": [
+    "--dangerously-bypass-hook-trust",
+    "-c",
+    "check_for_update_on_startup=false",
+    "…"
+  ],
+  "launchEnv": [],
+  "globalWrites": [],
+  "launcher": "/…/integration/run/codex",
+  "shim": "/…/integration/shims/codex"
+}
+```
+
+### 13.3 迁移记录 `version: 2`
+
+`<数据目录>/integration/global-migration.json`（代码在 `core/hook/install/migrate.ts`）。`version: 2` 在 v1 的 `agents` 之外多一个 `sessionTrust`：把旧版本写进 `~/.codex/config.toml` 的 `/<session-flags>/config.toml:*` 信任记录清掉的那一步。没有记录的机器 v1、v2 一起跑；已有 `version: 1` 的只跑 v2 并把记录升版，`agents` 原样保留。`ARMADRA_NO_GLOBAL_WRITES=1` 时都不跑。
+
+```json
+{
+  "version": 2,
+  "migratedAt": "2026-10-02T08:00:00.000Z",
+  "agents": { "codex": { "removed": [], "backups": [] } },
+  "sessionTrust": {
+    "at": "2026-10-02T08:00:00.000Z",
+    "path": "/Users/me/.codex/config.toml",
+    "removed": ["/<session-flags>/config.toml:session_start:0:0"],
+    "backup": "/Users/me/.codex/config.toml.armadra-backup-20261002080000"
+  }
+}
+```
+
+- `path` 缺席：这台机器没有 Codex 的配置目录（不建）。`removed` 为空、没有 `backup`：文件里没有这类键，字节没变。`error`：文件认不出，没有改写。
+- 集成状态（§13.2）里 Codex 的 `migration.sessionTrust` 是同一份：`{ at, removed, backup?, error? }`。
+
+### 13.4 Worker 能力 `remote.integration.v2`
+
+- 新 Worker 在握手里多报 `remote.integration.v2`（`core/remote/operations.ts::INTEGRATION_V2_CAPABILITY`）。`integration.sync` 不再接受 `codexCommand`（收到就忽略），答复只有 `{ missing, written }`，没有 `trustChanged`；`integration.locate` 不变。
+- 新 Worker 在第一次 `integration.sync` 时对执行主机的 `~/.codex/config.toml` 做一次 §13.3 的第二步，记进它状态目录下的 `integration/global-migration.json`。
+- 控制端只要求 `remote.integration.v1` 就能同步，且不再发 `codexCommand`（旧 Worker 只在收到它时写信任）。只有 v1 的主机控制端记为「Worker 旧」：它之前写下的 Codex 信任记录要等 Worker 升级后才会被清。
+- 远端注入文件改为与本机同一个生成器：`run/<cli>`（POSIX 启动器）与委托给它的 `shims/<cli>`。

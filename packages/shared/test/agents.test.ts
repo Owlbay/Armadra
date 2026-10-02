@@ -500,7 +500,52 @@ describe("assembleLaunchArgv", () => {
   });
 });
 
-describe("the typed canvas injection", () => {
+/** docs/design/canvas-launcher.md §2.2 / §8.1: the line starts the launcher. */
+describe("a launch line through the canvas launcher", () => {
+  it("puts the launcher first, then the program and its words, then the flags", () => {
+    expect(
+      assembleLaunchCommand({
+        agentId: "codex",
+        programOverride:
+          "/Users/me/Library/Application Support/Armadra/integration/run/codex",
+        programArgs: ["/opt/homebrew/bin/codex"],
+        resume: "019a",
+        model: "gpt-5",
+      }).command,
+    ).toBe(
+      "'/Users/me/Library/Application Support/Armadra/integration/run/codex' /opt/homebrew/bin/codex resume 019a --model gpt-5",
+    );
+    expect(
+      assembleLaunchCommand({
+        agentId: "codex",
+        programOverride:
+          "C:\\Users\\me\\AppData\\Roaming\\Armadra\\integration\\run\\codex.exe",
+        programArgs: [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\npm\\codex.js",
+        ],
+        model: "gpt-5",
+        dialect: "powershell",
+      }).command,
+    ).toBe(
+      "C:\\Users\\me\\AppData\\Roaming\\Armadra\\integration\\run\\codex.exe 'C:\\Program Files\\nodejs\\node.exe' C:\\npm\\codex.js --model gpt-5",
+    );
+  });
+
+  it("keeps a prompt on the line after the CLI's flags", () => {
+    expect(
+      assembleLaunchCommand({
+        agentId: "claude",
+        programOverride: "/d/run/claude",
+        programArgs: ["/bin/claude"],
+        model: "opus",
+        prompt: "hi there",
+      }).command,
+    ).toBe("/d/run/claude /bin/claude --model opus 'hi there'");
+  });
+});
+
+describe("the typed canvas injection of an older core (deprecated)", () => {
   it("appends the runtime's words verbatim, in front of a prompt", () => {
     expect(
       assembleLaunchCommand({

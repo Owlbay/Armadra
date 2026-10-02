@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import type { LaunchWord } from "../../terminal/shell";
 import {
   HOOK_CLIENT_REVISION,
   INTEGRATION_REVISION,
@@ -87,11 +86,6 @@ export interface IntegrationState {
   readonly stale: boolean;
   /** Argv the launcher appends to a canvas launch of this CLI, literal. */
   readonly launchArgs: readonly string[];
-  /**
-   * @deprecated The same as words for a typed launch line, unquoted — the
-   * pre-launcher road (see `inject.ts`). Goes with its last reader.
-   */
-  readonly launchWords: readonly LaunchWord[];
   /** Names of the environment variables the launcher sets for the CLI. */
   readonly launchEnv: readonly string[];
   /**
@@ -222,7 +216,6 @@ export function state(
     stale: marker !== undefined && marker.revision !== INTEGRATION_REVISION,
     ...(marker === undefined ? {} : { installedRevision: marker.revision }),
     launchArgs: injection.args,
-    launchWords: injection.words,
     launchEnv: injection.env.map(([name]) => name),
     globalWrites: [],
     ...(launcher === undefined ? {} : { launcher }),

@@ -50,14 +50,26 @@ export type ShellDialect =
   | "windows-powershell";
 
 /**
- * A word of a launch line before it is quoted: a literal value, or a value the
- * shell reads from an environment variable of the node's terminal, after a
- * literal prefix (`-c "hooks.Stop=$VAR"`). The second form keeps a long value
- * off the typed line; the environment is the terminal's own.
+ * A word of a launch line before it is quoted: a literal value.
+ *
+ * The canvas injection is no longer on the typed line — the data directory's
+ * launcher `run/<cli>` appends it (docs/design/canvas-launcher.md §2) — so
+ * nothing the core writes needs more. The `{ prefix, env }` form (a value the
+ * shell reads from the node terminal's environment, `-c "hooks.Stop=$VAR"`) is
+ * {@link LegacyLaunchWord}: kept one release for the page's fallback to an
+ * older core, whose `launchWords` still name such variables (§8.1).
  */
-export type LaunchWord =
-  | string
-  | { readonly prefix: string; readonly env: string };
+export type LaunchWord = string | LegacyLaunchWord;
+
+/**
+ * @deprecated A value the shell expands from an environment variable of the
+ * node's terminal, after a literal prefix. Only an older core answers it;
+ * goes away with the page's fallback to that core.
+ */
+export interface LegacyLaunchWord {
+  readonly prefix: string;
+  readonly env: string;
+}
 
 /** `C:\Windows\System32\cmd.exe` → `cmd`; `/usr/local/bin/fish` → `fish`. */
 export function shellProgramName(shell: string): string {
@@ -162,14 +174,15 @@ export function quoteShellWord(value: string, dialect: ShellDialect): string {
 }
 
 /**
- * `prefix` followed by the value of the environment variable `name`, as one
- * word — double quotes in every dialect, so the value is never split:
- * `"p$NAME"` / `"p%NAME%"` / `"p${env:NAME}"`.
+ * @deprecated `prefix` followed by the value of the environment variable
+ * `name`, as one word — double quotes in every dialect, so the value is never
+ * split: `"p$NAME"` / `"p%NAME%"` / `"p${env:NAME}"`. Only for an older core's
+ * {@link LegacyLaunchWord}s.
  *
  * `cmd.exe` pastes the value's text into those quotes before it reads the
  * line, so there the *value* must hold no `"` and not end in `\` (which would
- * escape the closing quote for the program). The environment is ours, so it is
- * written for that — see the core's `codexTomlString`.
+ * escape the closing quote for the program). That older core wrote its
+ * environment for that.
  */
 export function shellEnvWord(
   prefix: string,
@@ -274,9 +287,8 @@ export function isBatchProgram(program: string): boolean {
  * (`agent/windows-shim.ts`); this is what is left when the shim could not be
  * read.
  *
- * A variable's prefix is checked the same way; its value is the caller's and
- * must hold nothing either read acts on (Codex's `codexTomlString` in its
- * `cmd.exe` form).
+ * A variable's prefix ({@link LegacyLaunchWord}) is checked the same way; its
+ * value is the caller's and must hold nothing either read acts on.
  */
 export function batchSafeWord(word: LaunchWord): boolean {
   return !/["%^&|<>()\r\n]/.test(typeof word === "string" ? word : word.prefix);
