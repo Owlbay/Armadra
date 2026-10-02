@@ -802,6 +802,12 @@ const GIT_OPERATION_NAMES = new Set([
 
 /** 画布注入的产物同步与 Hook 中继。 */
 export const INTEGRATION_CAPABILITY = "remote.integration.v1";
+/**
+ * 同一组动作的第二版：`integration.sync` 不再接受 `codexCommand`、不再写
+ * Codex 信任，并一次性清掉旧版写过的那些。不门控任何动作——控制端只要 v1
+ * 就能同步，缺 v2 只是提示升级（docs/design/canvas-launcher.md §8.4）。
+ */
+export const INTEGRATION_V2_CAPABILITY = "remote.integration.v2";
 
 /** 比一帧大的字节：分块上传、续传与分块下载。 */
 export const TRANSFER_CAPABILITY = "remote.transfer.v1";

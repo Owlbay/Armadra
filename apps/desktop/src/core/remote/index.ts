@@ -349,6 +349,13 @@ export function install(context: CoreContext): RemoteDomain {
     version: VERSION,
     call: async (hostId, operation, args) =>
       await executeRemote(hostId, operation, "/", args),
+    capability: (hostId, capability) => {
+      try {
+        return workers.get(host(hostId), hostId).capability(capability);
+      } catch {
+        return undefined;
+      }
+    },
     log: (message, fields) => context.log.warn(message, fields),
   });
   const unlisten = listenRemote(integration);
