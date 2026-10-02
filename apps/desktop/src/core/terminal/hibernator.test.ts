@@ -130,11 +130,14 @@ beforeEach(() => {
   cli = new FakeCli();
   injectionDir = tempDir("armadra-hibernator-injection-");
   writeFileSync(join(injectionDir, "armadra-hook"), "#!/bin/sh\n", "utf8");
+  // Windows' launcher is a copy of armadra-launch.exe; any bytes do here.
+  writeFileSync(join(injectionDir, "armadra-launch.exe"), "MZ", "utf8");
   prepareInjection("claude", {
     dataDir: injectionDir,
     env: {
       ...process.env,
       ARMADRA_HOOK_BIN: join(injectionDir, "armadra-hook"),
+      ARMADRA_LAUNCH_EXE: join(injectionDir, "armadra-launch.exe"),
     },
   });
   now = Date.parse("2026-09-26T08:00:00.000Z");

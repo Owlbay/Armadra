@@ -35,6 +35,8 @@ function isolated(): NodeJS.ProcessEnv {
     // The installer writes a hook entry naming a real file; the suite supplies
     // a stub rather than the packaged sidecar, which does not exist in a test.
     ARMADRA_HOOK_BIN: hookBin,
+    // Windows' launcher is a copy of it; any bytes do. Ignored elsewhere.
+    ARMADRA_LAUNCH_EXE: join(home, "armadra-launch.exe"),
     HOME: home,
     CLAUDE_CONFIG_DIR: join(home, "claude"),
     CODEX_HOME: join(home, "codex"),
@@ -49,6 +51,7 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "armadra-agents-"));
   hookBin = join(home, "armadra-hook");
   writeFileSync(hookBin, "#!/bin/sh\n", "utf8");
+  writeFileSync(join(home, "armadra-launch.exe"), "MZ", "utf8");
 });
 
 afterEach(() => {
@@ -108,28 +111,25 @@ describe("listAgents and the integration", () => {
   });
 
   /** docs/design/canvas-launcher.md §8.1: `launcher`, no injected argv. */
-  it.runIf(process.platform !== "win32")(
-    "answers Claude's launcher once its integration is written",
-    () => {
-      const env = isolated();
-      installIntegration("claude", { dataDir: fixture.directory, env });
-      const rows = listAgents({
-        dataDir: fixture.directory,
-        settings: settings(),
-        env,
-      });
-      const claude = rows.find((row) => row.id === "claude");
-      // The path is inside *this* data directory, which is why it is answered
-      // per request rather than frozen into a launch definition.
-      expect(claude?.launcher).toBe(launcherPath(fixture.directory, "claude"));
-      expect(claude?.clientRevision).toBeGreaterThan(0);
-      // 注入的 argv 不在行上：由启动器追加，要看的读 /integration 的 launchArgs。
-      expect(claude).not.toHaveProperty("launchArgs");
-      expect(claude).not.toHaveProperty("launchWords");
-      // Codex was not written, so its row is untouched by Claude's.
-      expect(rows.find((row) => row.id === "codex")?.launcher).toBeUndefined();
-    },
-  );
+  it("answers Claude's launcher once its integration is written", () => {
+    const env = isolated();
+    installIntegration("claude", { dataDir: fixture.directory, env });
+    const rows = listAgents({
+      dataDir: fixture.directory,
+      settings: settings(),
+      env,
+    });
+    const claude = rows.find((row) => row.id === "claude");
+    // The path is inside *this* data directory, which is why it is answered
+    // per request rather than frozen into a launch definition.
+    expect(claude?.launcher).toBe(launcherPath(fixture.directory, "claude"));
+    expect(claude?.clientRevision).toBeGreaterThan(0);
+    // 注入的 argv 不在行上：由启动器追加，要看的读 /integration 的 launchArgs。
+    expect(claude).not.toHaveProperty("launchArgs");
+    expect(claude).not.toHaveProperty("launchWords");
+    // Codex was not written, so its row is untouched by Claude's.
+    expect(rows.find((row) => row.id === "codex")?.launcher).toBeUndefined();
+  });
 
   it("answers history availability on every row, the custom one by its base", () => {
     const env = isolated();
