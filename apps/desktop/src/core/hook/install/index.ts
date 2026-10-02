@@ -30,7 +30,6 @@ export { LAUNCH_GATE, type LauncherSpec } from "./launcher";
 export { migrateGlobalInstalls, readMigration } from "./migrate";
 export { modulePath, piExtensionPath, opencodePluginPath } from "./extensions";
 export {
-  hookHash,
   hooksPath as codexHooksPath,
   configPath as codexConfigPath,
 } from "./codex";
