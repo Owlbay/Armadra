@@ -33,6 +33,8 @@ function env(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     ...process.env,
     ARMADRA_HOOK_BIN: hookBin,
+    // Windows' launchers copy it; any bytes do here. Ignored elsewhere.
+    ARMADRA_LAUNCH_EXE: join(root, "bin", "armadra-launch.exe"),
     HOME: join(root, "home"),
     CLAUDE_CONFIG_DIR: join(root, "claude"),
     CODEX_HOME: join(root, "codex"),
@@ -57,6 +59,7 @@ beforeEach(() => {
   hookBin = join(root, "bin", "armadra-hook");
   mkdirSync(join(root, "bin"), { recursive: true });
   writeFileSync(hookBin, "#!/bin/sh\n", "utf8");
+  writeFileSync(join(root, "bin", "armadra-launch.exe"), "MZ", "utf8");
   release = installCollaborationSkill();
 });
 
@@ -113,22 +116,31 @@ describe("the canvas integration", () => {
     expect(existsSync(codexConfigPath(join(root, "codex")))).toBe(false);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "answers the launcher and the shim once they are written",
-    () => {
-      const dataDir = join(root, "data");
-      const before = state("claude", options("claude"));
-      expect(before.launcher).toBeUndefined();
-      expect(before.shim).toBeUndefined();
-      const after = install("claude", options("claude"));
-      expect(after.launcher).toBe(launcherPath(dataDir, "claude"));
+  it("answers the launcher and the shim once they are written", () => {
+    const dataDir = join(root, "data");
+    const before = state("claude", options("claude"));
+    expect(before.launcher).toBeUndefined();
+    expect(before.shim).toBeUndefined();
+    const after = install("claude", options("claude"));
+    expect(after.launcher).toBe(launcherPath(dataDir, "claude"));
+    // Windows writes the shim only for a CLI it finds on `PATH` (§5.4).
+    if (process.platform !== "win32") {
       expect(after.shim).toBe(shimPath(dataDir, "claude"));
-      expect(after.launcherWarning).toBeUndefined();
-      // Codex's hooks live in its launcher.
-      const codex = install("codex", options("codex"));
-      expect(codex.hook.installed).toBe(true);
-      expect(codex.hook.path).toBe(launcherPath(dataDir, "codex"));
-      expect(codex.launchArgs[0]).toBe("--dangerously-bypass-hook-trust");
+    }
+    expect(after.launcherWarning).toBeUndefined();
+    // Codex's hooks live in its launcher.
+    const codex = install("codex", options("codex"));
+    expect(codex.hook.installed).toBe(true);
+    expect(codex.hook.path).toBe(launcherPath(dataDir, "codex"));
+    expect(codex.launchArgs[0]).toBe("--dangerously-bypass-hook-trust");
+  });
+
+  it.runIf(process.platform === "win32")(
+    "answers no launcher on Windows without armadra-launch.exe",
+    () => {
+      const state = install("claude", { ...options("claude"), launchExe: "" });
+      expect(state.launcher).toBeUndefined();
+      expect(state.launcherWarning).toMatch(/armadra-launch\.exe/);
     },
   );
 

@@ -20,6 +20,7 @@ import {
   runDirectory,
   shimsDirectory,
 } from "./launcher";
+import { posixQuote } from "../../terminal/shell";
 import { remoteIntegrationFiles, runDirectory as remoteRun } from "./remote";
 
 /**
@@ -134,8 +135,9 @@ describe("the generated text", () => {
 
   it("delegates the shim to the launcher by bare name", () => {
     const shim = posixShim(spec);
+    // Quoted only when the path needs it (a Windows temp dir's backslashes).
     expect(shim.trimEnd().split("\n").at(-1)).toBe(
-      `exec ${posix.join(spec.runDir, "claude")} claude "$@"`,
+      `exec ${posixQuote(posix.join(spec.runDir, "claude"))} claude "$@"`,
     );
   });
 });

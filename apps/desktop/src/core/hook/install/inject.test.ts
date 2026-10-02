@@ -6,7 +6,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { forgetProbes, rememberProbe } from "../../agent/probe";
 import { installCollaborationSkill } from "../../collab/skill";
@@ -48,6 +48,7 @@ let dataDir: string;
 let codexHome: string;
 let env: NodeJS.ProcessEnv;
 let hookBin: string;
+let launchExe: string;
 let release: (() => void) | undefined;
 
 beforeEach(() => {
@@ -57,9 +58,14 @@ beforeEach(() => {
   hookBin = join(root, "bin", "armadra-hook");
   mkdirSync(join(root, "bin"), { recursive: true });
   writeFileSync(hookBin, "#!/bin/sh\n", "utf8");
+  // Windows' launchers are copies of armadra-launch.exe; any bytes will do
+  // here (windows-launch.test.ts runs the real one). Ignored elsewhere.
+  launchExe = join(root, "bin", "armadra-launch.exe");
+  writeFileSync(launchExe, "MZ not a program", "utf8");
   env = {
     ...process.env,
     ARMADRA_HOOK_BIN: hookBin,
+    ARMADRA_LAUNCH_EXE: launchExe,
     CODEX_HOME: codexHome,
     ARMADRA_NO_GLOBAL_WRITES: "",
   };
@@ -74,6 +80,20 @@ afterEach(() => {
 
 function prepare(agentId: string) {
   return prepareInjection(agentId, { dataDir, env });
+}
+
+const windows = process.platform === "win32";
+
+/**
+ * What the launcher carries, as text: the script itself, or on Windows the
+ * `.launch` beside the copied program.
+ */
+function launcherText(agentId: string): string {
+  const path = launcherPath(dataDir, agentId);
+  return readFileSync(
+    windows ? `${path.slice(0, -".exe".length)}.launch` : path,
+    "utf8",
+  );
 }
 
 function inject(agentId: string, resume = false) {
@@ -100,8 +120,9 @@ describe("canvas injection", () => {
         expect(
           [
             join(dataDir, "integration", agentId),
-            launcherPath(dataDir, agentId),
-            shimPath(dataDir, agentId),
+            // `run\<cli>.exe` comes with its `.launch` on Windows.
+            launcherPath(dataDir, agentId).replace(/\.exe$/, "."),
+            shimPath(dataDir, agentId).replace(/\.exe$/, "."),
           ].some((prefix) => path.startsWith(prefix)),
           path,
         ).toBe(true);
@@ -213,14 +234,10 @@ describe("canvas injection", () => {
     });
     expect(inject("codex").args).not.toContain(CODEX_BYPASS_HOOK_TRUST);
     prepare("codex");
-    expect(readFileSync(launcherPath(dataDir, "codex"), "utf8")).not.toContain(
-      CODEX_BYPASS_HOOK_TRUST,
-    );
+    expect(launcherText("codex")).not.toContain(CODEX_BYPASS_HOOK_TRUST);
     forgetProbes();
     prepare("codex");
-    expect(readFileSync(launcherPath(dataDir, "codex"), "utf8")).toContain(
-      CODEX_BYPASS_HOOK_TRUST,
-    );
+    expect(launcherText("codex")).toContain(CODEX_BYPASS_HOOK_TRUST);
   });
 
   it("hands every other CLI's argv over as its (deprecated) words", () => {
@@ -332,15 +349,24 @@ describe("the launcher and the shim", () => {
   it("writes run/ and shims/ for every CLI, carrying the literal injection", () => {
     for (const agentId of INJECTED_AGENTS) {
       const report = prepare(agentId);
-      if (process.platform === "win32") {
-        // Without armadra-launch.exe there is no launcher: a bare line.
-        expect(report.launcher).toBeUndefined();
-        expect(report.launcherWarning).toMatch(/armadra-launch\.exe/);
+      expect(report.launcher, agentId).toBe(launcherPath(dataDir, agentId));
+      expect(report.launcherWarning).toBeUndefined();
+      expect(currentLauncher(dataDir, agentId)).toBe(report.launcher);
+      const launcher = launcherText(agentId);
+      if (windows) {
+        // `.launch` lines are literals: no quoting at all.
+        expect(readFileSync(report.launcher as string, "utf8")).toBe(
+          "MZ not a program",
+        );
+        for (const arg of inject(agentId).args) {
+          expect(launcher, agentId).toContain(`\r\narg=${arg}\r\n`);
+        }
+        for (const [name, value] of inject(agentId).env) {
+          expect(launcher).toContain(`\r\nenv=${name}=${value}\r\n`);
+        }
+        // The shim is only written for a CLI found on `PATH` (§5.4).
         continue;
       }
-      expect(report.launcher, agentId).toBe(launcherPath(dataDir, agentId));
-      expect(currentLauncher(dataDir, agentId)).toBe(report.launcher);
-      const launcher = readFileSync(report.launcher as string, "utf8");
       for (const arg of inject(agentId).args) {
         expect(launcher, agentId).toContain(arg.replace(/'/g, "'\\''"));
       }
@@ -359,18 +385,41 @@ describe("the launcher and the shim", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
-    "rewrites nothing when nothing changed",
+  it("rewrites nothing when nothing changed", () => {
+    prepare("claude");
+    const marker = readFileSync(
+      join(dataDir, "integration", "launcher.json"),
+      "utf8",
+    );
+    expect(prepare("claude").written).toEqual([]);
+    expect(
+      readFileSync(join(dataDir, "integration", "launcher.json"), "utf8"),
+    ).toBe(marker);
+  });
+
+  // Windows only: elsewhere the launcher is a script and needs no program.
+  it.runIf(windows)(
+    "writes no launcher on Windows without armadra-launch.exe (§5.3)",
     () => {
       prepare("claude");
-      const marker = readFileSync(
-        join(dataDir, "integration", "launcher.json"),
-        "utf8",
-      );
-      expect(prepare("claude").written).toEqual([]);
-      expect(
-        readFileSync(join(dataDir, "integration", "launcher.json"), "utf8"),
-      ).toBe(marker);
+      expect(currentLauncher(dataDir, "claude")).toBeDefined();
+      const report = prepareInjection("claude", {
+        dataDir,
+        env,
+        launchExe: "",
+      });
+      expect(report.launcher).toBeUndefined();
+      expect(report.launcherWarning).toMatch(/armadra-launch\.exe/);
+      expect(readLauncherMarker(dataDir)?.warning).toMatch(/armadra-launch/);
+      // The run\ left from before is not trusted: the line goes bare.
+      expect(currentLauncher(dataDir, "claude")).toBeUndefined();
+      const fresh = join(dirname(dataDir), "fresh");
+      prepareInjection("pi", {
+        dataDir: fresh,
+        env: { ...env, ARMADRA_LAUNCH_EXE: join(fresh, "missing.exe") },
+      });
+      expect(existsSync(launcherPath(fresh, "pi"))).toBe(false);
+      expect(currentLauncher(fresh, "pi")).toBeUndefined();
     },
   );
 
