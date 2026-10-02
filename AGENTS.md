@@ -17,3 +17,15 @@
 - 前端检查用 `pnpm --filter @armadra/web test` / `typecheck`，core 与桌面壳用 `pnpm --filter @armadra/desktop test`，服务器壳用 `pnpm --filter @armadra/server test`。
 - 桌面脚本测试与 `pnpm --filter @armadra/desktop test` 同一条命令；跑之前先 `pnpm libs:build`，否则依赖 `@armadra/shared` 产物的用例会整文件失败。发布与 CI 脚本用 `pnpm release:test`、`pnpm ci:workflows`、`pnpm release:check`。
 - 仓库级脚本在 `tools/`，各 app 自己的脚本仍在各自的 `scripts/`。
+
+## Review guidelines
+
+- 审查意见用简体中文，先给结论，每条写明文件与行号、会出什么错、怎么修。
+- 只报会造成错误行为、数据损坏、安全问题或违反下列约定的问题；不报纯风格与命名偏好。
+- core（`apps/desktop/src/core/`）出现 `electron`、`../main/` 或 `../shell-core/` 的 import 视为 P1。
+- 修改已发布的迁移、迁移编号不连续或没有同步 `migrations.lock`，视为 P0；任何自动清库、重建或跳过损坏数据库的逻辑视为 P0。
+- 接口形状改了而 `docs/contracts/core-json-api.md` 没同步，或改动、复用了已有的 §N 节号，视为 P1。
+- 凭据、终端原始输出、文件正文进入画布持久化、日志或 API 响应，视为 P0。
+- 协作上下文绕过连线授权（读到未连线的节点、跨工作空间读取），或向 Agent 终端投递时可能替人回答权限提示与对话框，视为 P1。
+- 界面文案没有进 `apps/web/src/i18n/`、中英不同步，或新造组件而不复用现有 shadcn 组件，视为 P2。
+- 新增行为没有对应测试时指出缺口；测试只改断言去迁就实现时要说明理由是否成立。
