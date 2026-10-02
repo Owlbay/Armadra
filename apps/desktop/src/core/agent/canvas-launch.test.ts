@@ -1,14 +1,22 @@
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { delimiter, join, relative, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installCollaborationSkill } from "../collab/skill";
-import { artifactLayout, prepareInjection } from "../hook/install/inject";
+import {
+  artifactLayout,
+  launcherMarkerPath,
+  launcherPath,
+  prepareInjection,
+  shimDirectoryOf,
+} from "../hook/install/inject";
 import { launchLine as coldStartLine } from "../schedule/cold-start";
 import { resumeLine } from "../terminal/hibernator";
 import { tempDir } from "../testing/temp-dir";
@@ -16,23 +24,26 @@ import {
   canvasEnvironment,
   canvasLaunch,
   canvasLaunchLine,
+  launcherFor,
   nodeDialect,
-  startsThroughBatch,
 } from "./canvas-launch";
 import { quoteShellWord } from "../terminal/shell";
 import type { AgentSettings, CustomAgent } from "./registry";
 
 /**
- * The one exit every canvas launch line leaves through.
+ * The one exit every canvas launch line leaves through
+ * (docs/design/canvas-launcher.md §9).
  *
- * Two halves: the shapes (each road carries the injection, a resume carries it
- * again), and a structural check that no road builds a launch line anywhere
- * else — a new launch path that skipped `canvas-launch.ts` would start CLIs
- * without our hooks, skill and rules, and nothing else would notice.
+ * Two halves: the shapes (each road starts the CLI through its launcher
+ * `run/<cli>`, the line itself carries no injection), and a structural check
+ * that no road builds a launch line anywhere else — a new launch path that
+ * skipped `canvas-launch.ts` would start CLIs without our hooks, skill and
+ * rules, and nothing else would notice.
  */
 
 const CORE = join(__dirname, "..");
 const WEB = join(__dirname, "..", "..", "..", "..", "web", "src");
+const POSIX = process.platform !== "win32";
 
 let dataDir: string;
 let release: (() => void) | undefined;
@@ -40,8 +51,9 @@ const custom: CustomAgent[] = [];
 const settings: AgentSettings = { customAgents: () => custom };
 
 beforeEach(() => {
+  // 数据目录带空格：启动器路径要在每种方言里都引得对。
   const root = tempDir("armadra-canvas-launch-");
-  dataDir = join(root, "data");
+  dataDir = join(root, "data dir");
   const hookBin = join(root, "armadra-hook");
   writeFileSync(hookBin, "#!/bin/sh\n", "utf8");
   release = installCollaborationSkill();
@@ -49,7 +61,6 @@ beforeEach(() => {
     prepareInjection(agentId, {
       dataDir,
       env: { ...process.env, ARMADRA_HOOK_BIN: hookBin },
-      skipTrust: true,
     });
   }
   custom.length = 0;
@@ -60,32 +71,33 @@ afterEach(() => {
   release = undefined;
 });
 
-describe("canvas launch lines", () => {
-  it("appends Claude's injection after its own flags", () => {
-    const layout = artifactLayout(dataDir, "claude");
+describe.runIf(POSIX)("canvas launch lines", () => {
+  it("starts Claude through its launcher, the injection left to it", () => {
+    const launcher = launcherPath(dataDir, "claude");
     const launch = canvasLaunch({
       settings,
       dataDir,
       agentId: "claude",
       permissionMode: "plan",
       model: "opus",
+      dialect: "posix",
     });
-    expect(launch.program).toBe("claude");
+    expect(launch.launcher).toBe(launcher);
+    expect(launch.program).toBe(launcher);
     expect(launch.args).toEqual([
+      "claude",
       "--permission-mode",
       "plan",
       "--model",
       "opus",
-      "--settings",
-      layout.settings,
-      "--plugin-dir",
-      layout.pluginDir,
-      "--append-system-prompt-file",
-      layout.instructions,
     ]);
+    expect(launch.line).toBe(
+      `${quoteShellWord(launcher, "posix")} claude --permission-mode plan --model opus`,
+    );
+    expect(launch.line).not.toContain("--settings");
   });
 
-  it("carries the injection again on resume, after Codex's subcommand", () => {
+  it("keeps Codex's resume subcommand first, after the program", () => {
     const line = canvasLaunchLine({
       settings,
       dataDir,
@@ -93,23 +105,16 @@ describe("canvas launch lines", () => {
       resume: "thread-9",
       dialect: "posix",
     });
-    expect(line.startsWith("codex resume thread-9 -c ")).toBe(true);
-    expect(line).toContain("check_for_update_on_startup=false");
-    expect(line).toContain('"hooks.SessionStart=${ARMADRA_CODEX_HOOK}"');
-    expect(line).toContain(
-      '"developer_instructions=${ARMADRA_CODEX_INSTRUCTIONS}"',
+    expect(line).toBe(
+      `${quoteShellWord(launcherPath(dataDir, "codex"), "posix")} codex resume thread-9`,
     );
-    // Short and single: the values are in the terminal's environment.
-    expect(line).not.toContain("\n");
-    expect(line.length).toBeLessThan(600);
-    const env = canvasEnvironment(settings, dataDir, "codex", "node-1");
-    expect(env.map(([name]) => name)).toEqual([
-      "ARMADRA_CODEX_HOOK",
-      "ARMADRA_CODEX_INSTRUCTIONS",
-    ]);
+    // 几 KB 的 `-c` 都在启动器文件里，行与 CLI、与注入内容无关。
+    expect(line).not.toContain(" -c ");
+    expect(line).not.toContain("ARMADRA_CODEX");
   });
 
-  it("writes the line in the node shell's dialect", () => {
+  it("writes the launcher in the node shell's dialect", () => {
+    const launcher = launcherPath(dataDir, "codex");
     const program = "C:\\Program Files\\codex.exe";
     const cmd = canvasLaunchLine({
       settings,
@@ -118,20 +123,19 @@ describe("canvas launch lines", () => {
       program,
       dialect: "cmd",
     });
-    expect(cmd.startsWith('"C:\\Program Files\\codex.exe" -c ')).toBe(true);
-    expect(cmd).toContain('"hooks.SessionStart=%ARMADRA_CODEX_HOOK%"');
+    expect(cmd).toBe(
+      `${quoteShellWord(launcher, "cmd")} "C:\\Program Files\\codex.exe"`,
+    );
     const powershell = canvasLaunchLine({
       settings,
       dataDir,
       agentId: "codex",
       program,
+      model: "gpt-5",
       dialect: "powershell",
     });
-    expect(powershell.startsWith("& 'C:\\Program Files\\codex.exe' -c ")).toBe(
-      true,
-    );
-    expect(powershell).toContain(
-      '"hooks.SessionStart=${env:ARMADRA_CODEX_HOOK}"',
+    expect(powershell).toBe(
+      `& '${launcher}' 'C:\\Program Files\\codex.exe' --model gpt-5`,
     );
     expect(nodeDialect("C:\\Windows\\system32\\cmd.exe")).toBe("cmd");
     expect(nodeDialect("pwsh.exe")).toBe("powershell");
@@ -139,39 +143,50 @@ describe("canvas launch lines", () => {
     expect(nodeDialect("C:\\Windows\\system32\\cmd.exe", true)).toBe("posix");
   });
 
-  /**
-   * Windows PowerShell 5.1 strips a `"` when it passes an argument on, so
-   * Codex's line goes after `--%` there and its variables are `%NAME%`,
-   * written in the same C-runtime form as for `cmd.exe`.
-   */
-  it("writes Codex's line after --% for Windows PowerShell 5.1", () => {
-    const line = canvasLaunchLine({
-      settings,
-      dataDir,
-      agentId: "codex",
-      program: "C:\\npm\\codex.exe",
-      dialect: nodeDialect("powershell.exe"),
+  it("starts a custom entry through its base's launcher", () => {
+    custom.push({
+      id: "custom:mine",
+      label: "Mine",
+      launchCmd: "/opt/claude-wrapper",
+      baseAgent: "claude",
     });
-    expect(line.startsWith("C:\\npm\\codex.exe -c ")).toBe(true);
-    expect(line).toContain(' --% "hooks.SessionStart=%ARMADRA_CODEX_HOOK%"');
-    const env = canvasEnvironment(
-      settings,
-      dataDir,
-      "codex",
-      "node-1",
-      undefined,
-      "windows-powershell",
+    const launch = canvasLaunch({ settings, dataDir, agentId: "custom:mine" });
+    expect(launch.program).toBe(launcherPath(dataDir, "claude"));
+    expect(launch.args[0]).toBe("/opt/claude-wrapper");
+    expect(launch.args).not.toContain("--plugin-dir");
+    expect(launcherFor(settings, dataDir, "custom:mine")).toBe(
+      launcherPath(dataDir, "claude"),
     );
-    const hook = env.find(([key]) => key === "ARMADRA_CODEX_HOOK")?.[1];
-    expect(hook?.startsWith('[{hooks=[{type=\\"command\\"')).toBe(true);
+  });
+
+  /** No current launcher: a bare line, never the injection on the line. */
+  it("falls back to a bare line without a current launcher", () => {
+    expect(
+      canvasLaunchLine({
+        settings,
+        agentId: "claude",
+        model: "opus",
+        dialect: "posix",
+      }),
+    ).toBe("claude --model opus");
+    rmSync(launcherMarkerPath(dataDir));
+    expect(launcherFor(settings, dataDir, "claude")).toBeUndefined();
+    expect(
+      canvasLaunchLine({
+        settings,
+        dataDir,
+        agentId: "claude",
+        model: "opus",
+        dialect: "posix",
+      }),
+    ).toBe("claude --model opus");
   });
 
   /**
-   * A wrapper that could not be read stays the program: the line is written
-   * only when every word survives `cmd.exe`'s second read, and a value the
-   * line expands is written for `cmd.exe` whatever shell types it.
+   * A wrapper that could not be read stays the program of a bare line: the
+   * line is written only when every word survives `cmd.exe`'s second read.
    */
-  it("keeps an unreadable batch wrapper to the words it cannot break", () => {
+  it("keeps an unreadable batch wrapper on a bare line to safe words", () => {
     const wrapper = join(tempDir("armadra-batch-"), "codex.cmd");
     writeFileSync(wrapper, '@echo off\r\nset "P=x"\r\n"%P%" %*\r\n', "utf8");
     chmodSync(wrapper, 0o755);
@@ -181,26 +196,15 @@ describe("canvas launch lines", () => {
       launchCmd: wrapper,
       baseAgent: "codex",
     });
-    expect(startsThroughBatch(settings, "custom:batch")).toBe(true);
-    expect(startsThroughBatch(settings, "codex")).toBe(false);
-    const line = canvasLaunchLine({
-      settings,
-      dataDir,
-      agentId: "custom:batch",
-      program: wrapper,
-      dialect: "powershell",
-    });
-    expect(line).toContain('"hooks.SessionStart=${env:ARMADRA_CODEX_HOOK}"');
-    const env = canvasEnvironment(
-      settings,
-      dataDir,
-      "custom:batch",
-      "node-1",
-      undefined,
-      "powershell",
-    );
-    const hook = env.find(([key]) => key === "ARMADRA_CODEX_HOOK")?.[1];
-    expect(hook).not.toMatch(/(^|[^\\])"/);
+    expect(
+      canvasLaunchLine({
+        settings,
+        agentId: "custom:batch",
+        program: wrapper,
+        frozenArgs: ["--model", "gpt-5"],
+        dialect: "cmd",
+      }),
+    ).toBe(`${quoteShellWord(wrapper, "cmd")} --model gpt-5`);
     expect(() =>
       canvasLaunchLine({
         settings,
@@ -212,29 +216,8 @@ describe("canvas launch lines", () => {
     ).toThrow(/batch/);
   });
 
-  it("injects a custom entry as its base", () => {
-    custom.push({
-      id: "custom:mine",
-      label: "Mine",
-      launchCmd: "/opt/claude-wrapper",
-      baseAgent: "claude",
-    });
-    const launch = canvasLaunch({ settings, dataDir, agentId: "custom:mine" });
-    expect(launch.program).toBe("/opt/claude-wrapper");
-    expect(launch.args).toContain("--plugin-dir");
-  });
-
-  it("hands the environment half to the node's terminal", () => {
-    const layout = artifactLayout(dataDir, "opencode");
-    const env = canvasEnvironment(settings, dataDir, "opencode", "node-1");
-    expect(env[0]).toEqual(["OPENCODE_CONFIG_DIR", layout.configDir]);
-    expect(canvasEnvironment(settings, dataDir, "claude", "node-1")).toEqual(
-      [],
-    );
-  });
-
   /** The road that used to leave `--settings` off. */
-  it("gives a schedule's cold start the injection, not the frozen plan", () => {
+  it("gives a schedule's cold start the launcher, not the frozen plan alone", () => {
     const spec = {
       agentId: "claude",
       workingDirectory: "/tmp/ws",
@@ -244,24 +227,23 @@ describe("canvas launch lines", () => {
       accountId: "default",
     };
     const line = coldStartLine(settings, spec, dataDir);
-    expect(
-      line.startsWith(
-        `claude --model opus --settings ${quoteShellWord(artifactLayout(dataDir, "claude").settings as string, nodeDialect(undefined))}`,
-      ),
-    ).toBe(true);
+    expect(line).toBe(
+      `${quoteShellWord(launcherPath(dataDir, "claude"), nodeDialect(undefined))} claude --model opus`,
+    );
     expect(coldStartLine(settings, spec)).toBe("claude --model opus");
   });
 
-  it("gives the Eco wake-up the injection on its resume line", () => {
+  it("gives the Eco wake-up the launcher on its resume line", () => {
     const line = resumeLine(
       settings,
       "claude",
       { agent: { id: "claude" } },
       "session-1",
-      { dataDir },
+      { dataDir, dialect: "posix" },
     );
-    expect(line).toContain("--resume session-1");
-    expect(line).toContain("--append-system-prompt-file");
+    expect(line).toBe(
+      `${quoteShellWord(launcherPath(dataDir, "claude"), "posix")} claude --resume session-1`,
+    );
   });
 
   it("leaves an SSH node's line bare: the host's shims inject", () => {
@@ -275,8 +257,9 @@ describe("canvas launch lines", () => {
       dialect: "cmd",
       ssh: true,
     });
-    // 本机的程序路径与注入路径在执行主机上都不存在；行按 POSIX 写。
+    // 本机的启动器、程序路径与注入路径在执行主机上都不存在；行按 POSIX 写。
     expect(launch.line).toBe("claude --model opus");
+    expect(launch.launcher).toBeUndefined();
     const resumed = resumeLine(
       settings,
       "codex",
@@ -285,6 +268,82 @@ describe("canvas launch lines", () => {
       { dataDir, path: "/usr/local/bin/codex" },
     );
     expect(resumed).toBe("codex resume thread-1");
+  });
+
+  /**
+   * The line really read by `/bin/sh`: with `ARMADRA_NODE_ID` the program
+   * receives the caller's words then Claude's injection; without it — the
+   * same line again from shell history — the caller's words only.
+   */
+  it("injects through the launcher only inside a canvas node", () => {
+    const root = tempDir("armadra-canvas-launch-run-");
+    const fake = join(root, "fake-claude");
+    writeFileSync(
+      fake,
+      `#!${process.execPath}\nprocess.stdout.write(JSON.stringify(process.argv.slice(2)));\n`,
+      "utf8",
+    );
+    chmodSync(fake, 0o755);
+    const line = canvasLaunchLine({
+      settings,
+      dataDir,
+      agentId: "claude",
+      program: fake,
+      model: "opus",
+      dialect: "posix",
+    });
+    const run = (env: NodeJS.ProcessEnv): string[] =>
+      JSON.parse(
+        execFileSync("/bin/sh", ["-c", line], { encoding: "utf8", env }),
+      ) as string[];
+    const outside: NodeJS.ProcessEnv = { ...process.env };
+    delete outside.ARMADRA_NODE_ID;
+    expect(run(outside)).toEqual(["--model", "opus"]);
+    const layout = artifactLayout(dataDir, "claude");
+    expect(run({ ...outside, ARMADRA_NODE_ID: "node-1" })).toEqual([
+      "--model",
+      "opus",
+      "--settings",
+      layout.settings,
+      "--plugin-dir",
+      layout.pluginDir,
+      "--append-system-prompt-file",
+      layout.instructions,
+    ]);
+  });
+});
+
+describe("canvas node terminal environment", () => {
+  it("answers the shims directory and a PATH that starts with it", () => {
+    const shims = shimDirectoryOf(dataDir);
+    const env = canvasEnvironment(settings, dataDir, "opencode", undefined, {
+      ambient: { PATH: ["/usr/bin", shims, "/bin"].join(delimiter) },
+    });
+    expect(env.map(([name]) => name)).toEqual(["ARMADRA_SHIMS", "PATH"]);
+    expect(env[0]).toEqual(["ARMADRA_SHIMS", shims]);
+    const path = (env[1]?.[1] ?? "").split(delimiter);
+    expect(path[0]).toBe(shims);
+    expect(path.slice(1, 3)).toEqual(["/usr/bin", "/bin"]);
+    // 只给 CLI 进程的变量不进节点 shell：由启动器设。
+    expect(env.some(([name]) => name.startsWith("OPENCODE_"))).toBe(false);
+  });
+
+  it("answers nothing for an SSH node or a CLI without an injection", () => {
+    expect(
+      canvasEnvironment(settings, dataDir, "claude", undefined, { ssh: true }),
+    ).toEqual([]);
+    expect(canvasEnvironment(settings, dataDir, "gemini")).toEqual([]);
+  });
+
+  it("makes the launcher current on the way", () => {
+    rmSync(launcherMarkerPath(dataDir));
+    expect(launcherFor(settings, dataDir, "claude")).toBeUndefined();
+    canvasEnvironment(settings, dataDir, "claude");
+    if (POSIX) {
+      expect(launcherFor(settings, dataDir, "claude")).toBe(
+        launcherPath(dataDir, "claude"),
+      );
+    }
   });
 });
 
@@ -333,10 +392,16 @@ describe("the single exit", () => {
     );
   });
 
-  it("answers the injection argv from inject.ts to the exit and the list only", () => {
+  it("answers the injection argv from inject.ts to the integration state only", () => {
     expect(callers(CORE, /(?<!function )\bcanvasInjection\(/)).toEqual([
-      "agent/canvas-launch.ts",
       "hook/install/integration.ts",
+    ]);
+  });
+
+  /** Which launcher a line goes through is asked in one place. */
+  it("asks for the launcher in canvas-launch.ts only", () => {
+    expect(callers(CORE, /(?<!function )\blauncherFor\(/)).toEqual([
+      "agent/canvas-launch.ts",
     ]);
   });
 
@@ -349,16 +414,13 @@ describe("the single exit", () => {
 
   /**
    * The page builds its own lines, from `GET /api/agents`: every one of them
-   * goes through `agent/launch.ts`, which appends the row's `launchArgs`.
+   * goes through `agent/launch.ts`. That it starts them through the row's
+   * `launcher` is the page's work package (docs/design/canvas-launcher.md §17
+   * WP5), asserted there.
    */
-  it("builds page launch lines in agent/launch.ts only, with the injection", () => {
+  it("builds page launch lines in agent/launch.ts only", () => {
     expect(callers(WEB, /\bassemble(LaunchCommand|LaunchArgv)\(/)).toEqual([
       "agent/launch.ts",
     ]);
-    const launch = readFileSync(join(WEB, "agent", "launch.ts"), "utf8");
-    expect(launch).toContain("?.launchWords");
-    expect(launch).toContain("?.launchArgs");
-    expect(launch).toMatch(/shellWords: words/);
-    expect(launch).toMatch(/extraArgs: injected/);
   });
 });
