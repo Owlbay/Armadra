@@ -676,6 +676,11 @@ export async function setup() {
   const codexA = makeNode("codex-a", 1500, 0, "codex");
   const codexB = makeNode("codex-b", 2100, 0, "codex");
   const claudeA = makeNode("claude-a", 1500, 420, "claude");
+  // 场景 2、4、8 都往 claude-a 里投递。操作员的缺省权限模式是 bypass 时，新版
+  // Claude 起来先弹「把 auto 设成缺省权限模式？」（缺省为是），投进去的回车就
+  // 替人答了它、改写真实的 ~/.claude/settings.json（场景 10 首跑实测）。显式的
+  // `--permission-mode` 不弹这个对话框，与场景 7、10 一样用「自动编辑」起。
+  claudeA.data.agent.permissionMode = "auto-edit";
   const edge = (from, to, role) => ({
     id: randomUUID(),
     boardId: board.id,

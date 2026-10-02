@@ -4,6 +4,7 @@ import { note, scenario, sleep } from "./lib.mjs";
 export default async function run(ctx) {
   const {
     claudeA,
+    agentPid,
     deliveriesTo,
     queueFor,
     statusSummary,
@@ -18,6 +19,12 @@ export default async function run(ctx) {
   try {
     await waitAgentUp(claudeA.id, "claude", page, 120_000);
     s.check("Claude 起到提示符（页面挂着）", true, statusSummary(claudeA.id));
+    const launched = agentPid(claudeA.id, "claude");
+    s.check(
+      "Claude 进程的 argv 带着 --permission-mode acceptEdits（不弹缺省权限模式对话框）",
+      /--permission-mode acceptEdits/.test(launched?.command ?? ""),
+      launched,
+    );
     const sent = await canvas(
       "send",
       "--to",

@@ -13,6 +13,12 @@ import {
   silentStartIdle,
   stateSourceIsReported,
 } from "../../agent/target-state";
+import {
+  SCREEN_GATE_LINES,
+  type ScreenVerdict,
+  judgeScreen,
+  screenProfile,
+} from "../../agent/screen-gate";
 import { getAgentStatus } from "../../agent/status";
 import { getContextLinks } from "../../canvas/context-links";
 import {
@@ -136,6 +142,15 @@ export const SEND_CODES = {
   TARGET_AWAITING_APPROVAL: 409,
   TARGET_INPUT_PENDING: 409,
   TARGET_STATE_UNVERIFIED: 409,
+  /**
+   * 目标的终端画面不是输入提示符：停在 CLI 自己的对话框上（启动时的信任 / 权限
+   * 模式 / 升级提示），或者首投时画面上还看不见提示符（§4.3「画面门」）。
+   *
+   * 与 `TARGET_AWAITING_APPROVAL` 是同一类事——正文加回车就是替人选了那个对话
+   * 框的缺省项——但事实来源不同：那一个是状态通道报的，这一个是看画面看出来
+   * 的。分成两个码，看回执的人才知道该去终端里找什么。
+   */
+  TARGET_NOT_AT_PROMPT: 409,
   [LEASE_HELD_BY_HUMAN]: 409,
   [LEASE_REVOKED]: 409,
   [LEASE_HELD_BY_AGENT]: 409,
@@ -187,6 +202,7 @@ type QueueReason =
   | "TARGET_STARTING"
   | "TARGET_AWAITING_APPROVAL"
   | "TARGET_INPUT_PENDING"
+  | "TARGET_NOT_AT_PROMPT"
   | typeof LEASE_HELD_BY_HUMAN
   | typeof LEASE_HELD_BY_AGENT;
 
@@ -197,6 +213,8 @@ const QUEUE_MESSAGES: Record<QueueReason, string> = {
     "目标停在一个权限提示或提问上；写进去就是替人回答了那个问题。",
   TARGET_INPUT_PENDING:
     "目标的输入行上有半截没提交的字；投进去就会接在那半行后面。",
+  TARGET_NOT_AT_PROMPT:
+    "目标的终端画面不是输入提示符（停在 CLI 的对话框上，或者还没画出提示符）；写进去再回车就是替人选了那个对话框的缺省项。",
   [LEASE_HELD_BY_HUMAN]: "有人正在这个终端里打字。",
   [LEASE_HELD_BY_AGENT]: "另一个 Agent 正在驱动它。",
 };
@@ -206,6 +224,8 @@ const QUEUE_STATE: Record<QueueReason, TargetState> = {
   TARGET_STARTING: "starting",
   TARGET_AWAITING_APPROVAL: "awaiting-approval",
   TARGET_INPUT_PENDING: "idle",
+  // 停在对话框上的目标在等人回答，与停在权限提示上是同一种「在等人」。
+  TARGET_NOT_AT_PROMPT: "awaiting-approval",
   [LEASE_HELD_BY_HUMAN]: "idle",
   [LEASE_HELD_BY_AGENT]: "idle",
 };
@@ -490,6 +510,9 @@ export async function attempt(
   const target = live.target;
   let state = live.state;
   let targetStateLabel: string = state;
+  // 这一次是不是按首投放行门放行的（下面两处之一）。那两条门凭的是「会话够
+  // 老」，不是任何一条说「输入框在前台」的事实，所以投之前要看得见提示符。
+  let firstDelivery = false;
 
   // 没有状态适配的通道（§4.3）。默认拒绝而不是默认放行：这种节点上「在等人」
   // 这个事实根本不存在，放行就没法保证不替人回答权限提示。
@@ -509,6 +532,7 @@ export async function attempt(
     if (silentStart(context, live, nowMs)) {
       state = "idle";
       targetStateLabel = OBSERVED_QUIET;
+      firstDelivery = true;
     } else if (hasStateChannel(context, target)) {
       return queueOrRefuse(
         context,
@@ -557,6 +581,7 @@ export async function attempt(
   ) {
     state = "idle";
     targetStateLabel = state;
+    firstDelivery = true;
   }
 
   // `--interrupt`：只对真的在一轮里的目标有意义。空闲提示符上的 `ESC` 是空
@@ -640,6 +665,24 @@ export async function attempt(
       item,
       target,
       "TARGET_INPUT_PENDING",
+      options,
+      now,
+    );
+  }
+
+  // 画面门（§4.3）。状态通道说「空闲」，说的是这一轮结束了或会话开场了，不是
+  // 「输入框在前台」：CLI 自己的启动对话框（信任目录、把 auto 设为缺省、升级
+  // 提示）停在那里时 Hook 照样报。正文加回车落进去就是替人选了缺省项——
+  // 2026-10-02 实测，Claude 的「把 auto 设为缺省权限模式？」就这样被答掉，改写
+  // 了用户真实的 `~/.claude/settings.json`。只认已知对话框；首投另要求看得见
+  // 提示符。判据在 `agent/screen-gate.ts`。
+  const screen = await screenGate(context, live, firstDelivery);
+  if (screen.kind !== "clear") {
+    return queueOrRefuse(
+      context,
+      item,
+      target,
+      "TARGET_NOT_AT_PROMPT",
       options,
       now,
     );
@@ -1063,6 +1106,39 @@ function sessionStart(
     observed,
     sessionAgeMs: generationAge(session, observed, nowMs),
   });
+}
+
+/**
+ * 取目标的画面交给 `judgeScreen`。这家 CLI 没有登记画面特征就不取（裸终端、
+ * 没有已知对话框的几家），平常的投递一次 capture 也不多花。
+ *
+ * capture 失败不抛：首投按「看不见提示符」排队，平常的投递放过——取画面失败
+ * 不该让一条本来能投的消息从此投不进去。
+ */
+async function screenGate(
+  context: CollabContext,
+  live: LiveTarget,
+  first: boolean,
+): Promise<ScreenVerdict> {
+  const agentId = live.target.agentId;
+  if (agentId === null) return { kind: "clear" };
+  const profile = screenProfile(baseAgent(context.settings, agentId));
+  if (profile === undefined) return { kind: "clear" };
+  const terminals = context.terminals;
+  let screen: string | undefined;
+  if (terminals !== undefined) {
+    try {
+      const captured = await terminals.capture(
+        live.session.sessionId,
+        SCREEN_GATE_LINES,
+        false,
+      );
+      screen = captured.data;
+    } catch {
+      screen = undefined;
+    }
+  }
+  return judgeScreen(profile, screen, first);
 }
 
 /**
