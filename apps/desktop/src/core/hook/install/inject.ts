@@ -9,7 +9,6 @@ import {
 } from "node:fs";
 import { basename, dirname, join as nativeJoin } from "node:path";
 import { storedProbe } from "../../agent/probe";
-import type { ShellDialect } from "../../terminal/shell";
 import { eventKey } from "./codex";
 import {
   CLAUDE_HOOK_EVENTS,
@@ -1021,38 +1020,4 @@ export function injectionFromLayout(
     default:
       return undefined;
   }
-}
-
-/* ------------------------- deprecated: typed line ------------------------- */
-/*
- * 过渡：启动行改经 run/<cli> 启动器拼（docs/design/canvas-launcher.md §9）之
- * 后，core 已不再把 Codex 的长值放进节点终端的环境由行展开。只剩下面这一个
- * 导出，留给 WP4 改写之前的 `agent/windows-launch.test.ts`；那份用例换成经启动
- * 器之后整段删除。
- */
-
-/** What stays itself inside {@link codexTomlString}'s `cmd.exe` form. */
-const CMD_TOML_PLAIN = /^(?:[A-Za-z0-9 _.,:;/=+@#~*?{}[\]'-]|[^\x00-\x7f])$/u;
-
-/**
- * @deprecated A TOML basic string for a value a typed line expanded as
- * `"prefix=%NAME%"` in `cmd.exe` (and after `--%` in Windows PowerShell 5.1):
- * the string's own quotes are written `\"` and everything either reader acts
- * on is a `\uXXXX` escape. Other shells get {@link tomlString} as it is.
- */
-export function codexTomlString(
-  value: string,
-  dialect: ShellDialect = "posix",
-): string {
-  if (dialect !== "cmd" && dialect !== "windows-powershell") {
-    return tomlString(value);
-  }
-  let body = "";
-  for (const char of value) {
-    // Only ASCII is ever escaped, so one `\uXXXX` per character.
-    body += CMD_TOML_PLAIN.test(char)
-      ? char
-      : `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`;
-  }
-  return `\\"${body}\\"`;
 }
