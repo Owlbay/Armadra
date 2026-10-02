@@ -31,7 +31,7 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 │ 是同一数据目录、由桌面启动的旧 core 后发 SIGTERM 再重拉               │
 │  └── 随包资源：`resources/cli/armadra-hook.js`、`resources/migrations/`│
 │      （Windows 另有 `resources/session-host/host.cjs` 与              │
-│      `resources/cli/armadra-hook.exe` 启动器）                        │
+│      `resources/cli/armadra-hook.exe`、`armadra-launch.exe` 启动器）  │
 │  └── 回环 HTTP 静态服务：内核分配端口，页面从这里加载                 │
 └───────────────────────────────┬──────────────────────────────────────┘
                                 │ 加载同一套页面（preload 给出基址与凭据）
@@ -165,13 +165,16 @@ Agent 节点就是终端节点里跑着一个 CLI，没有中间协议：
 2. **画布内注入**：适配只随画布启动带上，不写各 CLI 的全局配置，画布外启动的 CLI
    不受影响（[画布内注入](../design/canvas-only-integration.md)）。唯一出口是
    `core/hook/install/inject.ts::canvasInjection`，产物（插件目录、扩展、技能、画布说明、
-   Claude 的 settings）生成在 `<数据目录>/integration/<cli>/`，启动行与终端环境按各 CLI
-   实测的参数引用它们：Claude / Codex / Copilot 是**命令 Hook**（行是 `armadra-hook`），
+   Claude 的 settings）生成在 `<数据目录>/integration/<cli>/`；同目录下每个 CLI 一个启动器
+   `run/<cli>` 按各 CLI 实测的参数引用它们，只在有 `ARMADRA_NODE_ID` 时注入
+   （[画布启动器](../design/canvas-launcher.md)），启动行只是 `<launcher> <程序> <旗标>`，
+   节点终端 `PATH` 最前面的同名垫片 `shims/<cli>` 让手敲的 CLI 也经启动器：Claude / Codex / Copilot 是**命令 Hook**（行是 `armadra-hook`），
    Pi / Oh My Pi 是生成的 **TS 扩展**，OpenCode 是插件。core 里拼启动行的只有
    `core/agent/canvas-launch.ts`，页面只有 `web/agent/launch.ts`；整行按节点 shell 的方言
    引用（posix、fish、cmd.exe、PowerShell 7 / 5.1），Windows 上绕过 npm 的 `.cmd` 包装直接
-   起真正的程序。唯一的全局写入是 Codex 的 Hook 信任记录；升级时旧的全局安装由
-   `migrate.ts` 先备份再清掉一次。SSH 终端里的 CLI 由 Worker 同步的产物与同名垫片注入、
+   起真正的程序，启动器是 C# 写的 `armadra-launch.exe` 副本加 `.launch` 文件。数据目录之外
+   不写任何文件（Codex 的 Hook 信任用会话级旗标）；升级时旧的全局安装与旧版写下的 Codex
+   信任记录由 `migrate.ts` 先备份再清掉一次。SSH 终端里的 CLI 由 Worker 同步的产物、远端启动器与同名垫片注入、
    Hook 经 Worker 中继（§3 远端一段）。
 3. 命令 Hook 每个事件调一次 `armadra-hook`；进程内扩展在 CLI 自己的进程里说同一套 HTTP。
    Windows 上 `armadra-hook` 是一个 C# 小启动器（`cli/armadra-hook/windows-launcher.cs`，
@@ -311,28 +314,29 @@ CSRF 与 Origin 校验（[服务器账号、中转与共享](../design/server-ac
 分进程时代的票据链设计见 [桌面壳原生 Host 会话](../history/host-native-session.md)
 与[设备认证](../history/host-device-auth.md)，两份都是历史文档。
 
-| 项                  | 值                                                                   | 覆盖方式                                        |
-| ------------------- | -------------------------------------------------------------------- | ----------------------------------------------- |
-| core 监听           | `127.0.0.1:43120`                                                    | `ARMADRA_RUNTIME_HOST` / `ARMADRA_RUNTIME_PORT` |
-| core 监听（壳内）   | `tcp:127.0.0.1:0`，端口由内核分配、stdout 公告                       | `ARMADRA_RUNTIME_LISTEN`                        |
-| 壳的静态服务        | `127.0.0.1:<内核分配>`，页面从这里加载                               | —                                               |
-| Web 开发服务器      | `127.0.0.1:1420`                                                     | `vite --port`                                   |
-| 数据目录（macOS）   | `~/Library/Application Support/Armadra`                              | `ARMADRA_DATA_DIR`                              |
-| 数据目录（Windows） | `%LOCALAPPDATA%\Armadra`                                             | 同上                                            |
-| 数据目录（Linux）   | `$XDG_DATA_HOME/armadra`                                             | 同上                                            |
-| 数据库              | `<数据目录>/canvas.db`                                               | `ARMADRA_DATABASE_URL`                          |
-| 迁移目录            | `apps/desktop/src/core/db/migrations`（包内 `resources/migrations`） | `ARMADRA_CORE_MIGRATIONS_DIR`                   |
-| Hook 端点文件       | `<数据目录>/hook-endpoint.env`（0600）                               | —                                               |
-| 节点 token          | `<数据目录>/node-tokens/<nodeId>`                                    | —                                               |
-| 待答权限            | `<数据目录>/pending/`                                                | —                                               |
-| 画布注入产物        | `<数据目录>/integration/<cli>/`                                      | —                                               |
-| Hook 客户端启动器   | `<数据目录>/bin/armadra-hook`（Windows 为 `.exe`，兜底 `.cmd`）      | —                                               |
-| 账号偏好            | `<数据目录>/settings.json`                                           | —                                               |
-| 本机偏好            | `<数据目录>/worker-settings.json`                                    | —                                               |
-| 模型目录缓存        | `<数据目录>/models-catalog.json`（0600）                             | —                                               |
-| 价格覆盖            | `<数据目录>/model-pricing.json`                                      | —                                               |
-| 私有 tmux server    | `<数据目录>/tmux.sock` + `tmux.conf`（0700 目录）                    | —                                               |
-| 工作区产物          | `<工作区>/.armadra/`（assets、exports、板日志）                      | —                                               |
+| 项                  | 值                                                                                                  | 覆盖方式                                        |
+| ------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| core 监听           | `127.0.0.1:43120`                                                                                   | `ARMADRA_RUNTIME_HOST` / `ARMADRA_RUNTIME_PORT` |
+| core 监听（壳内）   | `tcp:127.0.0.1:0`，端口由内核分配、stdout 公告                                                      | `ARMADRA_RUNTIME_LISTEN`                        |
+| 壳的静态服务        | `127.0.0.1:<内核分配>`，页面从这里加载                                                              | —                                               |
+| Web 开发服务器      | `127.0.0.1:1420`                                                                                    | `vite --port`                                   |
+| 数据目录（macOS）   | `~/Library/Application Support/Armadra`                                                             | `ARMADRA_DATA_DIR`                              |
+| 数据目录（Windows） | `%LOCALAPPDATA%\Armadra`                                                                            | 同上                                            |
+| 数据目录（Linux）   | `$XDG_DATA_HOME/armadra`                                                                            | 同上                                            |
+| 数据库              | `<数据目录>/canvas.db`                                                                              | `ARMADRA_DATABASE_URL`                          |
+| 迁移目录            | `apps/desktop/src/core/db/migrations`（包内 `resources/migrations`）                                | `ARMADRA_CORE_MIGRATIONS_DIR`                   |
+| Hook 端点文件       | `<数据目录>/hook-endpoint.env`（0600）                                                              | —                                               |
+| 节点 token          | `<数据目录>/node-tokens/<nodeId>`                                                                   | —                                               |
+| 待答权限            | `<数据目录>/pending/`                                                                               | —                                               |
+| 画布注入产物        | `<数据目录>/integration/<cli>/`                                                                     | —                                               |
+| 画布启动器与垫片    | `<数据目录>/integration/run/<cli>`、`shims/<cli>`、`launcher.json`（Windows 为 `.exe` + `.launch`） | —                                               |
+| Hook 客户端启动器   | `<数据目录>/bin/armadra-hook`（Windows 为 `.exe`，兜底 `.cmd`）                                     | —                                               |
+| 账号偏好            | `<数据目录>/settings.json`                                                                          | —                                               |
+| 本机偏好            | `<数据目录>/worker-settings.json`                                                                   | —                                               |
+| 模型目录缓存        | `<数据目录>/models-catalog.json`（0600）                                                            | —                                               |
+| 价格覆盖            | `<数据目录>/model-pricing.json`                                                                     | —                                               |
+| 私有 tmux server    | `<数据目录>/tmux.sock` + `tmux.conf`（0700 目录）                                                   | —                                               |
+| 工作区产物          | `<工作区>/.armadra/`（assets、exports、板日志）                                                     | —                                               |
 
 偏好分两个文件：`settings.json` 跟着账号走，`worker-settings.json` 属于这台
 机器（`core/settings/local.ts`：终端后端、浏览器可执行文件、电源策略、
