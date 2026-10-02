@@ -23,7 +23,6 @@ import {
   type RemoteFile,
   type RemoteIntegrationSite,
   fingerprint,
-  remoteCodexCommand,
   remoteIntegrationFiles,
   remoteInjectionReady,
   shimDirectory,
@@ -31,6 +30,7 @@ import {
 import { defaultBundleCandidates } from "../hook/install/shared";
 import { hookEndpointFile } from "../paths";
 import type { RemoteChannel, RemoteListener, RemotePushEvent } from "./execute";
+import { INTEGRATION_V2_CAPABILITY } from "./operations";
 
 type EnvPairs = readonly (readonly [string, string])[];
 
@@ -56,6 +56,14 @@ export interface RemoteIntegrationOptions {
   readonly hookBundle?: () => string | undefined;
   /** 本机 Hook 服务；缺省读 `<数据目录>/hook-endpoint.env`。 */
   readonly hookEndpoint?: () => LocalHookEndpoint | undefined;
+  /**
+   * 这台主机上活着的 Worker 是否声明了某个能力；还没握手是 `undefined`。用来
+   * 认出只有 `remote.integration.v1` 的旧 Worker。缺省当作不知道。
+   */
+  readonly capability?: (
+    hostId: string,
+    capability: string,
+  ) => boolean | undefined;
   /** 断线后隔多久自己重连；测试调短。 */
   readonly reconnectMs?: number;
   readonly log?: (message: string, fields: Record<string, unknown>) => void;
@@ -91,6 +99,8 @@ interface HostState {
   listening?: Promise<void>;
   wanted: boolean;
   timer?: NodeJS.Timeout;
+  /** 上次同步时 Worker 只有 v1：它之前写的 Codex 信任记录要升级后才会清。 */
+  outdated?: boolean;
 }
 
 export class RemoteIntegration implements RemoteListener {
@@ -140,9 +150,11 @@ export class RemoteIntegration implements RemoteListener {
       const files = remoteIntegrationFiles(site, bundle);
       const print = fingerprint(files);
       if (state.synced !== print) {
-        await this.sync(hostId, files, remoteCodexCommand(site.root));
+        await this.sync(hostId, files);
         state.synced = print;
       }
+      state.outdated =
+        this.options.capability?.(hostId, INTEGRATION_V2_CAPABILITY) === false;
       const token = issueNodeToken(this.options.dataDir, nodeId);
       await this.sync(hostId, [tokenFile(site, nodeId, token)]);
       await this.listen(hostId, state);
@@ -179,11 +191,24 @@ export class RemoteIntegration implements RemoteListener {
     return site;
   }
 
-  /** 先只报哈希，再只发缺的那些。 */
+  /**
+   * 同步过注入、而 Worker 只有 `remote.integration.v1` 的主机：旧 Worker 收到
+   * `codexCommand` 时写过 Codex 信任记录，只有升级后的 Worker 才清（集成页据此
+   * 提示升级）。连接断了不清——换 Worker 要等下一次同步才知道。
+   */
+  outdatedWorkers(): string[] {
+    return [...this.hosts]
+      .filter(([, state]) => state.outdated === true)
+      .map(([hostId]) => hostId);
+  }
+
+  /**
+   * 先只报哈希，再只发缺的那些。不带 `codexCommand`：旧 Worker 只在收到它时
+   * 写 Codex 信任，所以同步只要 v1。
+   */
   private async sync(
     hostId: string,
     files: readonly RemoteFile[],
-    codexCommand?: string,
   ): Promise<void> {
     const manifest = files.map(({ path, sha256, mode }) => ({
       path,
@@ -192,7 +217,6 @@ export class RemoteIntegration implements RemoteListener {
     }));
     const first = (await this.options.call(hostId, "integration.sync", {
       files: manifest,
-      ...(codexCommand === undefined ? {} : { codexCommand }),
     })) as { missing?: string[] };
     const missing = new Set(first.missing ?? []);
     if (missing.size === 0) return;
@@ -207,7 +231,6 @@ export class RemoteIntegration implements RemoteListener {
             }
           : { path: entry.path, sha256: entry.sha256, mode: entry.mode },
       ),
-      ...(codexCommand === undefined ? {} : { codexCommand }),
     })) as { missing?: string[] };
     if ((second.missing ?? []).length > 0) {
       throw new Error("The execution host did not take the injection files");
