@@ -41,6 +41,11 @@ export interface IdentitySession {
   readonly accessExpiresAtMs: number;
   readonly expiresAtMs: number;
   readonly revokedAtMs: number;
+  /** 最近一次认证成功的时刻（节流写入，见 `touchSession`）；0 = 没记过。 */
+  readonly lastSeenAtMs?: number;
+  /** 建会话那一刻的来源地址与 UA，给「我的会话」列表看。 */
+  readonly remoteIp?: string;
+  readonly userAgent?: string;
 }
 export interface IdentityTicket {
   readonly ticketId: string;
@@ -53,6 +58,53 @@ export interface IdentityTicket {
   readonly createdAtMs: number;
   readonly expiresAtMs: number;
   readonly consumedAtMs: number;
+}
+
+/** `identity_lockouts` 的一行（迁移 `identity_hardening`）。 */
+export interface LockoutRow {
+  readonly key: string;
+  readonly failures: number;
+  readonly lockedUntilMs: number;
+  readonly updatedAtMs: number;
+}
+
+/** `identity_mfa` 的一行。密钥本身在 SecretStore，这里只有条目名。 */
+export interface MfaRow {
+  readonly principalId: string;
+  readonly totpSecretRef: string;
+  readonly enrolledAtMs: number;
+  /** 0 = 登记了但还没用一个码确认过，登录时不要求它。 */
+  readonly verifiedAtMs: number;
+  readonly lastTimeStep: number;
+}
+
+export interface RecoveryCodeRow {
+  readonly principalId: string;
+  readonly codeHash: Buffer;
+  readonly salt: Buffer;
+  readonly createdAtMs: number;
+  readonly usedAtMs: number;
+}
+
+/** `identity_credentials(kind='passkey')` 的一行。 */
+export interface PasskeyRow {
+  readonly credentialId: string;
+  readonly principalId: string;
+  /** WebAuthn 凭据 ID，base64url。 */
+  readonly webauthnId: string;
+  readonly publicKey: Buffer;
+  readonly signCount: number;
+  readonly aaguid: string;
+  readonly transports: readonly string[];
+  readonly label: string;
+  readonly createdAtMs: number;
+  readonly revokedAtMs: number;
+}
+
+/** 会话列表的一行：会话加它的设备。 */
+export interface SessionListing {
+  readonly session: IdentitySession;
+  readonly device: IdentityDevice;
 }
 
 export class IdentityStore {
@@ -215,8 +267,8 @@ export class IdentityTx {
     const row = this.database
       .prepare(
         "SELECT session_id, device_id, device_epoch, origin, scopes, access_hash, refresh_hash, csrf_hash, " +
-          "rotation, created_at_ms, access_expires_at_ms, expires_at_ms, revoked_at_ms " +
-          "FROM identity_sessions WHERE session_id = ?",
+          "rotation, created_at_ms, access_expires_at_ms, expires_at_ms, revoked_at_ms, " +
+          "last_seen_at_ms, remote_ip, user_agent FROM identity_sessions WHERE session_id = ?",
       )
       .get(sessionId) as Record<string, unknown> | undefined;
     return row === undefined ? undefined : toSession(row);
@@ -226,8 +278,9 @@ export class IdentityTx {
     this.database
       .prepare(
         "INSERT INTO identity_sessions(session_id, device_id, device_epoch, origin, scopes, access_hash, " +
-          "refresh_hash, csrf_hash, rotation, created_at_ms, access_expires_at_ms, expires_at_ms, revoked_at_ms) " +
-          "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+          "refresh_hash, csrf_hash, rotation, created_at_ms, access_expires_at_ms, expires_at_ms, revoked_at_ms, " +
+          "last_seen_at_ms, remote_ip, user_agent) " +
+          "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
       )
       .run(
         session.sessionId,
@@ -242,6 +295,9 @@ export class IdentityTx {
         session.createdAtMs,
         session.accessExpiresAtMs,
         session.expiresAtMs,
+        session.lastSeenAtMs ?? session.createdAtMs,
+        (session.remoteIp ?? "").slice(0, 64),
+        (session.userAgent ?? "").slice(0, 256),
       );
   }
 
@@ -289,6 +345,277 @@ export class IdentityTx {
         "UPDATE identity_sessions SET revoked_at_ms = ? WHERE session_id = ? AND revoked_at_ms = 0",
       )
       .run(nowMs, sessionId);
+  }
+
+  /**
+   * 记最近活动。调用方负责节流（一分钟以内不重写），所以这里只是一条 UPDATE。
+   */
+  touchSession(sessionId: string, nowMs: number): void {
+    this.database
+      .prepare(
+        "UPDATE identity_sessions SET last_seen_at_ms = ? WHERE session_id = ? AND revoked_at_ms = 0",
+      )
+      .run(nowMs, sessionId);
+  }
+
+  /**
+   * 还活着的会话（没撤销、没过绝对期限、设备没撤销且 epoch 对得上），带设备。
+   * 给了 `principalId` 只列那个人的。
+   */
+  liveSessions(nowMs: number, principalId?: string): SessionListing[] {
+    const sql =
+      "SELECT s.session_id, s.device_id, s.device_epoch, s.origin, s.scopes, s.access_hash, s.refresh_hash, " +
+      "s.csrf_hash, s.rotation, s.created_at_ms, s.access_expires_at_ms, s.expires_at_ms, s.revoked_at_ms, " +
+      "s.last_seen_at_ms, s.remote_ip, s.user_agent, d.principal_id, d.name, d.role, d.epoch, " +
+      "d.created_at_ms AS device_created_at_ms, d.revoked_at_ms AS device_revoked_at_ms " +
+      "FROM identity_sessions s JOIN identity_devices d ON d.device_id = s.device_id " +
+      "WHERE s.revoked_at_ms = 0 AND s.expires_at_ms > ? AND d.revoked_at_ms = 0 AND d.epoch = s.device_epoch" +
+      (principalId === undefined ? "" : " AND d.principal_id = ?") +
+      " ORDER BY s.created_at_ms DESC, s.session_id LIMIT 1000";
+    const statement = this.database.prepare(sql);
+    const rows = (
+      principalId === undefined
+        ? statement.all(nowMs)
+        : statement.all(nowMs, principalId)
+    ) as Record<string, unknown>[];
+    return rows.map((row) => ({
+      session: toSession(row),
+      device: toDevice({
+        device_id: row.device_id,
+        principal_id: row.principal_id,
+        name: row.name,
+        role: row.role,
+        epoch: row.epoch,
+        created_at_ms: row.device_created_at_ms,
+        revoked_at_ms: row.device_revoked_at_ms,
+      }),
+    }));
+  }
+
+  /* ------------------------------ 锁定 ------------------------------ */
+
+  lockout(key: string): LockoutRow | undefined {
+    const row = this.database
+      .prepare(
+        "SELECT key, failures, locked_until_ms, updated_at_ms FROM identity_lockouts WHERE key = ?",
+      )
+      .get(key) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : toLockout(row);
+  }
+
+  putLockout(row: LockoutRow): void {
+    this.database
+      .prepare(
+        "INSERT INTO identity_lockouts(key, failures, locked_until_ms, updated_at_ms) VALUES(?, ?, ?, ?) " +
+          "ON CONFLICT(key) DO UPDATE SET failures = excluded.failures, " +
+          "locked_until_ms = excluded.locked_until_ms, updated_at_ms = excluded.updated_at_ms",
+      )
+      .run(row.key, row.failures, row.lockedUntilMs, row.updatedAtMs);
+  }
+
+  deleteLockout(key: string): void {
+    this.database
+      .prepare("DELETE FROM identity_lockouts WHERE key = ?")
+      .run(key);
+  }
+
+  activeLockouts(nowMs: number): LockoutRow[] {
+    return (
+      this.database
+        .prepare(
+          "SELECT key, failures, locked_until_ms, updated_at_ms FROM identity_lockouts " +
+            "WHERE locked_until_ms > ? ORDER BY locked_until_ms DESC LIMIT 500",
+        )
+        .all(nowMs) as Record<string, unknown>[]
+    ).map(toLockout);
+  }
+
+  /** 早于 `beforeMs` 且没锁着的行没有用了。 */
+  pruneLockouts(beforeMs: number): void {
+    this.database
+      .prepare(
+        "DELETE FROM identity_lockouts WHERE updated_at_ms < ? AND locked_until_ms < ?",
+      )
+      .run(beforeMs, beforeMs);
+  }
+
+  /* ------------------------------- MFA -------------------------------- */
+
+  mfa(principalId: string): MfaRow | undefined {
+    const row = this.database
+      .prepare(
+        "SELECT principal_id, totp_secret_ref, enrolled_at_ms, verified_at_ms, last_time_step " +
+          "FROM identity_mfa WHERE principal_id = ?",
+      )
+      .get(principalId) as Record<string, unknown> | undefined;
+    return row === undefined
+      ? undefined
+      : {
+          principalId: String(row.principal_id),
+          totpSecretRef: String(row.totp_secret_ref),
+          enrolledAtMs: Number(row.enrolled_at_ms),
+          verifiedAtMs: Number(row.verified_at_ms),
+          lastTimeStep: Number(row.last_time_step),
+        };
+  }
+
+  /** 登记（或在未确认时重登记）一份 TOTP；确认状态与时间步一起清零。 */
+  putMfa(row: MfaRow): void {
+    this.database
+      .prepare(
+        "INSERT INTO identity_mfa(principal_id, totp_secret_ref, enrolled_at_ms, verified_at_ms, last_time_step) " +
+          "VALUES(?, ?, ?, ?, ?) ON CONFLICT(principal_id) DO UPDATE SET " +
+          "totp_secret_ref = excluded.totp_secret_ref, enrolled_at_ms = excluded.enrolled_at_ms, " +
+          "verified_at_ms = excluded.verified_at_ms, last_time_step = excluded.last_time_step",
+      )
+      .run(
+        row.principalId,
+        row.totpSecretRef,
+        row.enrolledAtMs,
+        row.verifiedAtMs,
+        row.lastTimeStep,
+      );
+  }
+
+  /**
+   * 用掉一个时间步。`last_time_step < ?` 是条件的一部分：两个并发的校验拿着同一
+   * 个码，只有一个改得动行——重放防护在这里，不在内存里。
+   */
+  advanceTimeStep(
+    principalId: string,
+    timeStep: number,
+    verifiedAtMs?: number,
+  ): boolean {
+    const changes = this.database
+      .prepare(
+        "UPDATE identity_mfa SET last_time_step = ?, " +
+          "verified_at_ms = CASE WHEN verified_at_ms = 0 THEN ? ELSE verified_at_ms END " +
+          "WHERE principal_id = ? AND last_time_step < ?",
+      )
+      .run(timeStep, verifiedAtMs ?? 0, principalId, timeStep).changes;
+    return Number(changes) === 1;
+  }
+
+  deleteMfa(principalId: string): void {
+    this.database
+      .prepare("DELETE FROM identity_mfa WHERE principal_id = ?")
+      .run(principalId);
+    this.database
+      .prepare("DELETE FROM identity_recovery_codes WHERE principal_id = ?")
+      .run(principalId);
+  }
+
+  recoveryCodes(principalId: string): RecoveryCodeRow[] {
+    return (
+      this.database
+        .prepare(
+          "SELECT principal_id, code_hash, salt, created_at_ms, used_at_ms FROM identity_recovery_codes " +
+            "WHERE principal_id = ? ORDER BY created_at_ms, code_hash",
+        )
+        .all(principalId) as Record<string, unknown>[]
+    ).map((row) => ({
+      principalId: String(row.principal_id),
+      codeHash: blob(row.code_hash),
+      salt: blob(row.salt),
+      createdAtMs: Number(row.created_at_ms),
+      usedAtMs: Number(row.used_at_ms),
+    }));
+  }
+
+  /** 换一整批：旧的（含用过的）全删，新的写进去。 */
+  replaceRecoveryCodes(
+    principalId: string,
+    rows: readonly RecoveryCodeRow[],
+  ): void {
+    this.database
+      .prepare("DELETE FROM identity_recovery_codes WHERE principal_id = ?")
+      .run(principalId);
+    const insert = this.database.prepare(
+      "INSERT INTO identity_recovery_codes(principal_id, code_hash, salt, created_at_ms, used_at_ms) VALUES(?, ?, ?, ?, 0)",
+    );
+    for (const row of rows) {
+      insert.run(
+        principalId,
+        new Uint8Array(row.codeHash),
+        new Uint8Array(row.salt),
+        row.createdAtMs,
+      );
+    }
+  }
+
+  /** 用掉一个恢复码；已经用过（并发的第二次）改不动行，答 false。 */
+  useRecoveryCode(
+    principalId: string,
+    codeHash: Buffer,
+    nowMs: number,
+  ): boolean {
+    const changes = this.database
+      .prepare(
+        "UPDATE identity_recovery_codes SET used_at_ms = ? WHERE principal_id = ? AND code_hash = ? AND used_at_ms = 0",
+      )
+      .run(nowMs, principalId, new Uint8Array(codeHash)).changes;
+    return Number(changes) === 1;
+  }
+
+  /* ----------------------------- passkey ------------------------------ */
+
+  passkeysOf(principalId: string): PasskeyRow[] {
+    return (
+      this.database
+        .prepare(
+          `SELECT ${PASSKEY_COLUMNS} WHERE kind = 'passkey' AND principal_id = ? AND revoked_at_ms = 0 ` +
+            "ORDER BY created_at_ms, credential_id",
+        )
+        .all(principalId) as Record<string, unknown>[]
+    ).map(toPasskey);
+  }
+
+  /** 按 WebAuthn 凭据 ID 找一把没撤销的 passkey。 */
+  passkeyByWebauthnId(webauthnId: string): PasskeyRow | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT ${PASSKEY_COLUMNS} WHERE kind = 'passkey' AND subject = ? AND revoked_at_ms = 0`,
+      )
+      .get(webauthnId) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : toPasskey(row);
+  }
+
+  passkey(credentialId: string): PasskeyRow | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT ${PASSKEY_COLUMNS} WHERE kind = 'passkey' AND credential_id = ?`,
+      )
+      .get(credentialId) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : toPasskey(row);
+  }
+
+  createPasskey(row: PasskeyRow): void {
+    this.database
+      .prepare(
+        "INSERT INTO identity_credentials(credential_id, principal_id, kind, provider, subject, public_key, " +
+          "sign_count, aaguid, transports_json, label, created_at_ms, revoked_at_ms) " +
+          "VALUES(?, ?, 'passkey', 'webauthn', ?, ?, ?, ?, ?, ?, ?, 0)",
+      )
+      .run(
+        row.credentialId,
+        row.principalId,
+        row.webauthnId,
+        new Uint8Array(row.publicKey),
+        row.signCount,
+        row.aaguid,
+        JSON.stringify(row.transports),
+        row.label,
+        row.createdAtMs,
+      );
+  }
+
+  /** 按库的判定写回计数器（`@simplewebauthn/server` 的 `newCounter`）。 */
+  updatePasskeyCounter(credentialId: string, signCount: number): void {
+    this.database
+      .prepare(
+        "UPDATE identity_credentials SET sign_count = ? WHERE credential_id = ? AND kind = 'passkey' AND revoked_at_ms = 0",
+      )
+      .run(signCount, credentialId);
   }
 
   ticket(ticketId: string): IdentityTicket | undefined {
@@ -369,6 +696,48 @@ function toSession(row: Record<string, unknown>): IdentitySession {
     createdAtMs: Number(row.created_at_ms),
     accessExpiresAtMs: Number(row.access_expires_at_ms),
     expiresAtMs: Number(row.expires_at_ms),
+    revokedAtMs: Number(row.revoked_at_ms),
+    lastSeenAtMs: Number(row.last_seen_at_ms ?? 0),
+    remoteIp: String(row.remote_ip ?? ""),
+    userAgent: String(row.user_agent ?? ""),
+  };
+}
+
+function toLockout(row: Record<string, unknown>): LockoutRow {
+  return {
+    key: String(row.key),
+    failures: Number(row.failures),
+    lockedUntilMs: Number(row.locked_until_ms),
+    updatedAtMs: Number(row.updated_at_ms),
+  };
+}
+
+const PASSKEY_COLUMNS =
+  "credential_id, principal_id, subject, public_key, sign_count, aaguid, transports_json, label, " +
+  "created_at_ms, revoked_at_ms FROM identity_credentials";
+
+function toPasskey(row: Record<string, unknown>): PasskeyRow {
+  let transports: string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(String(row.transports_json));
+    if (Array.isArray(parsed)) {
+      transports = parsed.filter(
+        (item): item is string => typeof item === "string",
+      );
+    }
+  } catch {
+    // 手改坏的那一列当作没有传输方式；判定不看它。
+  }
+  return {
+    credentialId: String(row.credential_id),
+    principalId: String(row.principal_id),
+    webauthnId: String(row.subject),
+    publicKey: blob(row.public_key),
+    signCount: Number(row.sign_count),
+    aaguid: String(row.aaguid),
+    transports,
+    label: String(row.label),
+    createdAtMs: Number(row.created_at_ms),
     revokedAtMs: Number(row.revoked_at_ms),
   };
 }

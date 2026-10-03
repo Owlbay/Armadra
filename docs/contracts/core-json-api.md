@@ -684,7 +684,116 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 
 ## 18. 身份扩展：口令策略、passkey、MFA、会话、OAuth、审计
 
-预留，由 G1-11（§18.1–§18.4）、G1-12（§18.5）与 G2-8（§18.6）填写。
+规格是 [补全架构](../design/completion-architecture.md) §8.3；实现在 `core/identity/`（`policy.ts`、`throttle.ts`、`passkey.ts`、`mfa/`，路由在 `accounts-http.ts`），形状的 zod 在 `packages/shared/src/api/identity-security.ts`。和 §10 同一个前缀、同一套认证（Origin、会话凭据；下面标「写」的要 `X-Armadra-CSRF`）。整段 `/api/identity/` 不经路由门（`core/http/route-scopes.ts` 的 `SELF_GUARDED`），本人与 `identity:manage` 的判定在身份域里。
+
+**错误码**：身份域原有的五种仍是 UPPER_SNAKE（`UNAUTHENTICATED` / `PERMISSION_DENIED` / `INVALID_ARGUMENT` / `NOT_FOUND` / `CONFLICT`）；本节新增的具名拒绝是 snake_case，页面按 `code` 选文案。错误体只有 `{ code, message }`。迁移是 `identity_hardening`（`identity_credentials` 加 `sign_count / aaguid / transports_json / label`，新表 `identity_mfa`、`identity_recovery_codes`、`identity_lockouts`，`identity_sessions` 加 `last_seen_at_ms / remote_ip / user_agent`）。
+
+### 18.1 口令策略与锁定
+
+设口令（`POST credentials` `{ kind: "password" }`）与持邀请注册（`POST register`）先过策略，第一条不过的规则就是 `code`，HTTP 400：
+
+| `code`                   | 规则                                                                               |
+| ------------------------ | ---------------------------------------------------------------------------------- |
+| `password_too_short`     | 码点数 < `identity.passwordMinLength`（缺省 12，可配 10–64）                       |
+| `password_too_long`      | UTF-8 超过 1024 字节                                                               |
+| `password_contains_name` | 含显示名或 principal 标识（不分大小写；三个字符以下的名字不参与）                  |
+| `password_too_common`    | 在随包的常见口令表（`core/identity/common-passwords.txt`，1 万条）里，小写精确比对 |
+| `password_breached`      | 泄露检查命中（`identity.breachCheck`，G3-8 实现；调用点已在，今天恒为未检查）      |
+
+登录类请求（`login`、`mfa/verify`、`passkey/login/*`、`register`）的限流与锁定，HTTP 429，带 `Retry-After`（秒）：
+
+| `code`           | 什么时候                                                                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rate_limited`   | 同一来源地址（socket 对端，不读 `X-Forwarded-For`）超过每分钟 20 次                                                                               |
+| `account_locked` | 这个 `principalId` 连续 5 次口令或第二因素失败之后：锁 1 分钟，每多一次失败翻倍，封顶 15 分钟；锁着时不校验口令。成功清零，一小时没有新失败也清零 |
+
+锁定按调用方报上来的 `principalId` 计，**不看账号是否存在**：不存在的账号也会被锁、答同一个 429，锁定因此不泄露存在性。
+
+| 方法与路径                            | 谁能调            | 答案                                                                        |
+| ------------------------------------- | ----------------- | --------------------------------------------------------------------------- |
+| `GET lockouts`                        | `identity:manage` | `{ lockouts: [{ key, principalId, failures, lockedUntilMs }] }`，只列锁着的 |
+| `DELETE lockouts/{principalId}`（写） | `identity:manage` | `{ principalId, unlocked }`（原来是否锁着）                                 |
+
+审计：`identity.login.failed`（`detail.reason`：`password` / `mfa` / `passkey` / `locked`）、`identity.lockout`（新上锁）、`identity.lockout.clear`。
+
+### 18.2 passkey
+
+`@simplewebauthn/server` 校验；attestation 只收 `none`，不做证明链校验；登录走可发现凭据（不给 `allowCredentials`）。挑战在内存里 2 分钟、一次性。
+
+**RP ID**：`identity.rpId` 非空时用它（请求来源的主机必须是它或它的子域，否则 `passkey_rp_id_mismatch`）；否则取公网来源（`gateway.publicOrigin`）的主机名，多个公网来源取按标签的公共后缀（至少两段，取不到就用第一个）；都没有时取请求来源的主机。**主机是 IP 字面量时**一律 `passkey_unavailable_on_ip_host`。改 RP ID 会让已登记的 passkey 全部失效。
+
+| 方法与路径                                                               | 谁能调                           | 答案                                                                                                                                                     |
+| ------------------------------------------------------------------------ | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET passkey`                                                            | 已登录                           | `{ available, rpId, reason, passkeys: [{ credentialId, label, aaguid, transports, createdAtMs }] }`；不可用时 `available: false`、`reason` 是下表的 code |
+| `POST passkey/register/options` `{ label? }`（写）                       | 已登录（给自己登记）             | `{ challengeId, options }`，`options` 是 `PublicKeyCredentialCreationOptionsJSON`                                                                        |
+| `POST passkey/register/verify` `{ challengeId, response, label? }`（写） | 同一个人、同一个来源要的挑战     | 201 `{ credentialId, label, aaguid, transports, createdAtMs }`；`response` 是 `PublicKeyCredential.toJSON()`                                             |
+| `POST passkey/login/options` `{}`                                        | 匿名                             | `{ challengeId, options }`（`PublicKeyCredentialRequestOptionsJSON`）                                                                                    |
+| `POST passkey/login/verify` `{ challengeId, response, deviceName? }`     | 匿名                             | 与 `login` 同形的会话；**视为已满足第二因素**；失败一律 401 `UNAUTHENTICATED`                                                                            |
+| `DELETE passkey/{credentialId}`（写）                                    | 本人；别人的要 `identity:manage` | `{ credentialId, removed: true }`；看不到的答 404                                                                                                        |
+
+| `code`（400）                    | 意思                                        |
+| -------------------------------- | ------------------------------------------- |
+| `passkey_unavailable_on_ip_host` | 以 IP 访问，WebAuthn 不可用；口令照旧       |
+| `passkey_rp_id_mismatch`         | 请求来源不在配置的 RP ID 之下               |
+| `passkey_challenge_expired`      | 挑战不存在、用过或过期（2 分钟）            |
+| `passkey_verification_failed`    | 注册应答没过校验（来源、挑战、RP ID、签名） |
+
+计数器按库的判定写回 `sign_count`；回退（克隆的认证器）由库拒绝。审计：`identity.passkey.add`、`identity.passkey.remove`、`identity.login`（`detail.method: "passkey"`）。
+
+### 18.3 MFA：TOTP、恢复码与两步登录
+
+TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时间步；记最后用过的时间步，**同一个码第二次一律拒**。密钥在 SecretStore（条目名 `armadra-totp-<principalId>`），库里只有条目名。恢复码 10 个（`xxxxx-xxxxx`，大小写、空格与连字符不计），只存 scrypt 哈希，用掉即作废。
+
+**两步登录**：`POST login` 口令对了且这个人有**已确认**的 TOTP 时，不建会话，答：
+
+```json
+{
+  "mfaRequired": true,
+  "challengeId": "…",
+  "expiresAtMs": 1760000000000,
+  "methods": ["totp", "recovery"]
+}
+```
+
+然后 `POST mfa/verify { challengeId, code }`（匿名）换出与 `login` 同形的会话。中间票 5 分钟、绑定来源、最多试 5 次；第二因素失败与口令失败计入同一个锁定。没有登记 TOTP 而 `identity.mfa.requireFor` 覆盖这个人（`all`，或 `members` 下的非 owner）时照常建会话，响应体多一个 `mfaEnrollmentRequired: true`，页面据此把人带去登记。
+
+| 方法与路径                                 | 谁能调               | 答案                                                                                              |
+| ------------------------------------------ | -------------------- | ------------------------------------------------------------------------------------------------- |
+| `GET mfa`                                  | 已登录               | `{ enrolled, pending, enrolledAtMs, verifiedAtMs, recoveryCodesRemaining, requireFor, required }` |
+| `POST mfa/totp/enroll`（写）               | 已登录               | `{ secret, otpauthUri }`（只在这一次出现）；已确认过的答 409 `mfa_already_enrolled`               |
+| `POST mfa/totp/confirm` `{ code }`（写）   | 已登录               | `{ recoveryCodes }`（10 个，只在这一次出现）                                                      |
+| `POST mfa/verify` `{ challengeId, code }`  | 匿名                 | 会话                                                                                              |
+| `POST mfa/recovery-codes` `{ code }`（写） | 本人，要当前有效的码 | `{ recoveryCodes }`，旧的全部作废                                                                 |
+| `POST mfa/disable` `{ code }`（写）        | 本人，要当前有效的码 | `{ disabled: true }`                                                                              |
+| `POST mfa/reset` `{ principalId }`（写）   | `identity:manage`    | `{ principalId, reset }`：替丢了手机的人清掉 TOTP 与恢复码                                        |
+
+| `code`                   | HTTP | 意思                                           |
+| ------------------------ | ---- | ---------------------------------------------- |
+| `mfa_invalid_code`       | 401  | 码不对、用过（重放）或格式不对                 |
+| `mfa_challenge_expired`  | 401  | 中间票不存在、过期、来源不对或试满了，回到口令 |
+| `mfa_already_enrolled`   | 409  | 已有确认过的 TOTP，先停用                      |
+| `mfa_secret_unavailable` | 503  | SecretStore 读写不了 TOTP 密钥                 |
+
+审计：`identity.mfa.enroll`、`identity.mfa.disable`、`identity.mfa.reset`、`identity.mfa.recovery.used`、`identity.mfa.recovery.regenerate`、`identity.login`（`detail.method`：`totp` / `recovery`）。
+
+### 18.4 会话列表与撤销
+
+| 方法与路径                          | 谁能调                            | 答案                                                                                                                                                 |
+| ----------------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET sessions`                      | 已登录                            | `{ sessions: [{ sessionId, principalId, deviceId, deviceName, createdAtMs, lastSeenAtMs, expiresAtMs, remoteIp, userAgent, current }] }`，只列活着的 |
+| `GET sessions?all=1`                | `identity:manage`（owner 看全部） | 同上，所有人的                                                                                                                                       |
+| `DELETE sessions/{sessionId}`（写） | 本人；别人的要 `identity:manage`  | `{ sessionId, revoked: true }`；看不到的答 404                                                                                                       |
+| `POST sessions/revoke-others`（写） | 已登录                            | `{ revoked }`：撤掉我除当前之外的全部会话（「其它设备全部登出」）                                                                                    |
+
+`remoteIp` 是建会话那一刻的 socket 对端，`userAgent` 截到 256 字符；`lastSeenAtMs` 是最近一次认证成功，一分钟内不重写。撤销在下一个请求上生效（认证每次读库）。审计：`identity.session.revoke`、`identity.session.revoke-others`。
+
+### 18.5 OAuth / OIDC
+
+预留，由 G1-12 填写。
+
+### 18.6 审计查询
+
+预留，由 G2-8 填写。
 
 ## 19. 推送：`/api/push/devices*`
 

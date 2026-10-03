@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { build } from "esbuild";
@@ -23,6 +24,25 @@ import { build } from "esbuild";
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
 
+/**
+ * `import text from "./x.txt?raw"`：vite（桌面壳与 vitest）原生支持的写法，这里
+ * 对齐成同一个语义——把文件正文当字符串内联。core 用它带上随包的常见口令表
+ * （`core/identity/common-passwords.txt`）。
+ */
+const rawText = {
+  name: "raw-text",
+  setup(context) {
+    context.onResolve({ filter: /\?raw$/ }, (args) => ({
+      path: resolve(args.resolveDir, args.path.slice(0, -"?raw".length)),
+      namespace: "raw-text",
+    }));
+    context.onLoad({ filter: /.*/, namespace: "raw-text" }, async (args) => ({
+      contents: await readFile(args.path, "utf8"),
+      loader: "text",
+    }));
+  },
+};
+
 await build({
   entryPoints: [resolve(root, "src/main.ts")],
   outfile: resolve(root, "out/main.js"),
@@ -32,6 +52,7 @@ await build({
   target: "node22",
   sourcemap: true,
   external: ["node-pty", "bufferutil", "utf-8-validate", "electron"],
+  plugins: [rawText],
   /**
    * 这个进程的入口是服务器壳，不是 core。
    *
