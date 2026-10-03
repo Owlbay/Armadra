@@ -709,7 +709,8 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
     "subject": "CN=192.168.1.20",
     "names": ["192.168.1.20", "mac.local", "127.0.0.1"],
     "notAfter": "2027-11-04T00:00:00.000Z",
-    "caAvailable": true
+    "caAvailable": true,
+    "acme": null
   },
   "error": null
 }
@@ -719,7 +720,23 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 - `listen` / `port` / `publicOrigin` / `tls.{certFile,keyFile,acmeEmail}` 是设置里的值；`address`、`origin`、`origins` 与 `tls` 的其余字段是运行中的事实，没在运行时为 `null` / `[]`。
 - `origin` 是首选来源（二维码用它）：公网来源优先，否则第一个私网地址，然后主机名，最后 `127.0.0.1`。`origins` 是来源白名单：Origin / Host 必须命中其中之一。`https://localhost` 永远不在里面（它是 Android 版 App 的来源）。
 - `tls.source`：`localCa`、`file`、`acme`、`selfSigned`（只有服务器壳没给证书时）。`fingerprint` 是**信任锚** DER 的 SHA-256：本地 CA 时是 CA，其余是叶证书。`caAvailable` 表示 `GET /ca.crt` 有东西可发。
-- `error`：最近一次没能开启的原因，开着或关着时为 `null`。`code` 取值：`acme_unavailable`（ACME 来源尚未实现）、`tls_files_missing`、`port_in_use`、`port_forbidden`、`identity_unavailable`（库没过统一库迁移）、`gateway_failed`（其余，`message` 是原因）。
+- `tls.acme`：ACME 来源在跑时的续期状态，其余来源为 `null`（旧 core 不带这个键）：
+
+  ```json
+  {
+    "directory": "https://acme-v02.api.letsencrypt.org/directory",
+    "profile": null,
+    "names": ["armadra.example.com"],
+    "notAfter": "2026-12-30T08:00:00.000Z",
+    "renewAt": "2026-11-30T08:00:00.000Z",
+    "failures": 0,
+    "lastError": null
+  }
+  ```
+
+  `profile` 是 `shortlived` / `classic` / `null`（CA 缺省）；`renewAt` 是下一次续期，失败后是下一次重试；`failures` 是连续失败次数，到 3 次时 core 记一条错误日志通知运维，期间**继续用旧证书**直到它过期；`lastError` 是 `{ code, message }`。证书是公共 CA 签的，没有信任锚可发，`caAvailable` 为 `false`，`fingerprint` 是叶证书的、每次续期都会变。
+
+- `error`：最近一次没能开启的原因，开着或关着时为 `null`。`code` 取值：`acme_misconfigured`（缺邮箱、缺对外来源、对外来源是回环地址或 `ARMADRA_ACME_*` 取值不对）、`acme_port_unavailable`（`http-01` 挑战端口开不了）、`acme_failed`（CA 拒绝或连不上，`message` 是原因）、`tls_files_missing`、`port_in_use`、`port_forbidden`、`identity_unavailable`（库没过统一库迁移）、`gateway_failed`（其余，`message` 是原因）。
 
 ### 17.2 `PUT /api/gateway`
 

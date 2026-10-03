@@ -21,6 +21,21 @@ export const gatewayErrorSchema = z.object({
   message: z.string(),
 });
 
+/** `tls.acme` of §17.1: the renewal state while the ACME source is serving. */
+export const gatewayAcmeStatusSchema = z.object({
+  directory: z.string(),
+  profile: z.enum(["shortlived", "classic"]).nullable(),
+  names: z.array(z.string()),
+  notAfter: z.string().datetime({ offset: true }).nullable(),
+  /** Next renewal, or the next retry after a failure. */
+  renewAt: z.string().datetime({ offset: true }).nullable(),
+  /** Consecutive failures; the old certificate keeps serving meanwhile. */
+  failures: z.number().int().min(0),
+  lastError: gatewayErrorSchema.nullable(),
+});
+
+export type GatewayAcmeStatus = z.infer<typeof gatewayAcmeStatusSchema>;
+
 /** `GET /api/gateway` (§17.1). */
 export const gatewayStatusSchema = z.object({
   enabled: z.boolean(),
@@ -43,6 +58,8 @@ export const gatewayStatusSchema = z.object({
     names: z.array(z.string()),
     notAfter: z.string().datetime({ offset: true }).nullable(),
     caAvailable: z.boolean(),
+    /** `null` unless the ACME source is serving (optional for older cores). */
+    acme: gatewayAcmeStatusSchema.nullable().optional(),
   }),
   error: gatewayErrorSchema.nullable(),
 });
