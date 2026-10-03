@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { resumeIdentity, type IdentitySession } from "../api/identity";
 import { RUNTIME_VIA_SERVER_SHELL } from "../api/request";
+import { terminalsApi } from "../api/terminals";
 
 /**
  * 这个页面背后的人能做什么（服务器账号 R8，权限表见设计
@@ -69,4 +70,60 @@ function useServerSession(): IdentitySession | null | undefined {
     refetchOnWindowFocus: true,
     retry: false,
   }).data;
+}
+
+/**
+ * 审批按钮摆不摆（契约 §23）：这块画布的 driver 什么都答得了；operator 只答
+ * 自己起的终端上的——「自己起的」是终端行上的创建者等于他（创建者 = 触发者：
+ * 他的协调者建的成员、他起跑的工作流也算）。`creator` 还没取回来时不摆。
+ */
+export function canAnswerFor(
+  access: Access,
+  workspaceId: string,
+  creator: string | undefined,
+): boolean {
+  if (access.can("approval:answer", workspaceId)) return true;
+  const principalId = access.session?.device.principalId ?? "";
+  return (
+    access.member &&
+    principalId !== "" &&
+    creator === principalId &&
+    access.can("terminal:create", workspaceId)
+  );
+}
+
+/** {@link canAnswerFor} 的 hook：只在可能是「自己起的」时才去问终端行。 */
+export function useCanAnswer(
+  workspaceId: string,
+  sessionId: string | null | undefined,
+  server: boolean = RUNTIME_VIA_SERVER_SHELL,
+): boolean {
+  // 与 `useAccess` 同理：`server` 是页面装载时定下的常量，桌面壳不发请求。
+  if (!server) return true;
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  return useServerCanAnswer(workspaceId, sessionId ?? null);
+}
+
+function useServerCanAnswer(
+  workspaceId: string,
+  sessionId: string | null,
+): boolean {
+  const access = accessOf(useServerSession());
+  const direct = access.can("approval:answer", workspaceId);
+  const maybeOwn =
+    !direct &&
+    sessionId !== null &&
+    (access.session?.device.principalId ?? "") !== "" &&
+    access.can("terminal:create", workspaceId);
+  const creator = useQuery({
+    queryKey: ["terminal", "creator", sessionId],
+    queryFn: async () =>
+      (await terminalsApi.getTerminal(sessionId as string))
+        .creatorPrincipalId ?? "",
+    enabled: maybeOwn,
+    // 创建者在一行的一生里不变；换了会话就是另一个键。
+    staleTime: Infinity,
+    retry: false,
+  }).data;
+  return direct || (maybeOwn && canAnswerFor(access, workspaceId, creator));
 }

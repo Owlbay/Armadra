@@ -439,11 +439,40 @@
 
 ## G2-9 Agent 权限角色（RB）
 
-未开始。
+做了什么：
+
+- 角色阶梯（契约 §23.1）：`identity/route-access.ts` 对终端写入、ACP 发提示 / 取消 / 换模式、ACP 驱动切换、审批答复统一按「自己的要 `terminal:create`（operator），别人的要 `terminal:drive` / `approval:answer`（driver）」判；审批的「自己的」按审批行的 `session_id`，旧行按节点最近的会话。关闭确认只在内存里，仍只有 driver。
+- 创建者 = 触发者（契约 §23.2）：新增迁移 `node_creators`（分支上 0035）与 `identity/creators.ts`。控制动词 `open-agent` / `open-terminal` / `team` 在存盘前记下调用方节点终端的创建者（ama runner 经 `open-agent` 同样落在这里），工作流 `layoutRun` 记起跑的人，库里的触发器让之后任何一条路起的会话行都继承；冷启动起完后按自动化的创建者（owner）改写（`schedule/cold-start.ts::stampColdStartCreator`）。路由门对记过触发者的节点不再把「恰好起它的人」写成创建者；`POST /api/acp/sessions` 答已有的或原地接回的同一行时不改写创建者（原先 operator 对着 driver 的节点调一次就能把会话变成自己的）。
+- ACP 与工作流的成员访问（契约 §23.3）：`/api/workflows/*` 按草案 / 运行 / 画板（查询串或请求体）查画布；列表不带 `boardId` 对成员 403（raw 路由过滤不到答案）；起跑、取消、确认 / 丢弃草案、关卡答复要 `agent:launch`（关卡在 `route-scopes.ts` 单列，常量 `workflow/routes.ts::GATE_SCOPE`）；模板对「在任意画布上能起 Agent」的成员只读，改模板只有 owner。ACP 的查找 G2-1 已补，本包加了驱动切换的「自己的」与开会话的改写保护。
+- 终端会话 JSON 加可选 `creatorPrincipalId`（读行时带）；页面 `use-access.ts::useCanAnswer` / `canAnswerFor`：driver 照旧，operator 对自己起的终端也摆审批按钮（终端节点头与 ACP 权限卡）；答不了的人在 ACP 权限卡上看到「等待接管」徽标（设计系统 §5.8）。
+- 展示页 `collab` 分区加角色样本：成员表（可改 / 只读）、审批卡三种看法。契约 §23、服务器账号设计 §6 两行。
+
+实测：core `route-access.test` 78 例（全局权限表加审批四行：operator 答自己起的 / 别人起的、自动化起的、ama 起的，另有 ACP、工作流各行），`identity/creators.test` 7 例（真库：触发器继承、冷启动改写、审批 / 驱动切换 / 工作流查找），`collab/creators.test` 3 例，`workflow/routes.test` +2；服务器壳 `roles.integration.test` 5 例（owner + 两个 operator + driver + editor + viewer + 局外人，真 HTTPS）；web `use-access.test` +3、`PermissionCard.test` 改 1。`design-showcase --only=collab` 通过、控制台无错。`pnpm libs:build && pnpm -r --if-present test` 全绿，typecheck 与 `pnpm check` 通过。
+
+没做：终端节点头（非 ACP）的审批在答不了时仍是不显示按钮，没有「等待接管」徽标（头部组件归别的包）；成员能建自动化之前，冷启动的创建者恒为 owner（`creators.ts::AUTOMATION_CREATOR`）；runners（G2-4）若不经 `open-agent` 建节点，要自己调 `recordNodeCreator`。
 
 ## G2-10 移动网页：连接页与手机细节（M1）
 
-未开始。
+**做了什么**
+
+- 入口分支（`main.tsx` → `mobile/entry.ts` + `MobileRoot.tsx`）：原生 App（Capacitor，页面来源 `capacitor://localhost` / `https://localhost` 且 `Capacitor.isNativePlatform()`）没有记下的 Gateway 或钥匙串里没有它的会话 → 连接页；手机浏览器经 Gateway 打开、窄屏、带 `#pair=` → 连接页（票留到点「连接」才取走，CA 引导的「回到这一页刷新」之后仍可配对）；其余（桌面窗口、宽屏、普通网页）直接是画布，不发请求。
+- `mobile/ConnectScreen.tsx`：BrandMark + 标题 + 一个动作；原生贴配对链接（网页链接或 `armadra://pair` 深链，复用 `host/qr.ts::parsePairingQr`）或扫码；网页只差「连接」并带 `PageCaGuide`。错误在字段下 / 一条 Alert。`mobile/connect.ts`：原生先钉指纹、再配对（`pairWithGateway`）、记下来源、重载。
+- `mobile/native-bridge.ts`：插件 `Capacitor.Plugins.ArmadraNative`（`getSession/setSession/clearSession/pin/scan/pushRegistration`，形状写在文件头）；不在 App 里是空实现。`installNativeTransport` 包 `fetch`（发往 Gateway 的补 Bearer、401 轮转一次重发）与 `WebSocket`（升级前换 `ws-ticket`，`Sec-WebSocket-Protocol: armadra-ticket.<票>`），调用点不改。
+- `api/runtime-url.ts`：`savedRuntimeOrigin / saveRuntimeOrigin / forgetRuntimeOrigin / isNativeAppPage / gatewayOrigin`，只有原生 App 的页面认记下的来源。`api/identity.ts`：原生 App 与桌面壳同走 Bearer，密钥另存钥匙串；`pairWithGateway`、`restoreNativeCredentials`、`fetchWsTicket`、`currentAccessToken`；刷新也被拒时清钥匙串回连接页。
+- 推送：`mobile/PushPermission.tsx`（手机布局或 App 里、登录后问一次，浮在底部导航上，焦点页打开时让开；浏览器走 `subscribeToPush("/sw.js")`，App 走插件令牌 + `PUT /api/push/devices`）；`mobile/sw.ts` 由 `vite.config.ts` 的插件单独打成 IIFE 挂在站点根 `/sw.js`（约 138 KB，开发服务器按请求现打）；`mobile/push-open.ts`：SW 消息、`#push=<深链>`（SW 新开窗口与原生 App 都走它）→ 打开工作空间并进节点焦点页。
+- 焦点页：ACP 驱动的终端节点不出 PTY 按键条；会话视图输入 16px；`mobile/keyboard.ts` 在 iOS 软键盘盖住页面时按可视视口摆整页。顺手修了 `acp/SessionView.tsx`：同一节点同时挂两份会话视图（焦点页 + 画布）时每个分块被拼两遍，现按事件对象去重。
+- 展示页 `mobile` 分区换成六块 390×844 的真组件样本（原生未连接、网页扫码打开 + CA 引导、配对失败、推送提示、焦点页会话视图、焦点页终端按键条）；`i18n/mobile-connect.ts` 中英。
+
+**实测**
+
+- A 档 `ui-features-e2e --only=mobile`（新场景，经 Gateway 本地 CA、回环、托管 `apps/web/dist`，Chrome 经 CDP 只对自己忽略证书错误）：390×844 扫码链接 → 连接页（含 CA 下载）→ 点「连接」配对成 owner、票被抹掉 → `#push=armadra://w/…/n/…` 打开焦点页会话视图（无按键条、输入 16px）→ 发一句假 ACP Agent 回复流入 → 768×1024 回到画布；控制台无错误。
+- 展示页探针 `--only=mobile` 六张图，对比度与控制台通过。
+
+**没做**
+
+- 8 位配对码（core 只有两分钟票，同 G2-7）；PromptBox 的模式 Select 在手机上收进「⋯」（`acp/PromptBox.tsx` 不归本包）；评论在焦点页的布局等 G2-6 合入。
+- 原生侧全部未验证（插件由 G3-1 实现）；`<img src>` 直连 core 的资源在 App 里不带 Bearer。
+- 推送订阅没有在真浏览器里跑通：无头 Chrome 忽略证书错误时不给注册 service worker，要装好 CA 的真机（U6）。
 
 ## G2-11 存量界面套用一：按钮、空态、手机对话框（WP-D3a）
 
@@ -471,7 +500,26 @@
 
 ## G3-5 服务器部署：镜像、公网部署指南、备份升级
 
-未开始。
+做了什么：
+
+- ACME 内建（W-ACME）：`core/gateway/acme.ts`——`acme-client` 走 RFC 8555（账户、带 `profile` 的订单、`http-01`、定稿），CSR 用本目录的 DER 写入器自签；挑战监听 `ARMADRA_ACME_HTTP_PORT`（缺省 80，其余请求 308 到对外来源）；证书、私钥、账户密钥、`state.json` 在 `<数据目录>/tls/acme/`（0700 / 0600）；寿命过三分之二续，失败按 1、2、4…小时退避（≤ 12 小时、≤ 剩余寿命一半），连续 3 次记错误并 `onAlert`，一直用旧证书；续好 `gateway.refresh()` 热换。`tls.ts` 加 `acme` 来源，`index.ts` 的 `open()` 接 `acme` 分支（桌面设置 `gateway.tls.source = "acme"` 与服务器壳共用 `startAcme`），`GET /api/gateway` 的 `tls.acme` 报续期状态（契约 §17.1 同步，共享层 `gatewayAcmeStatusSchema`）。错误码 `acme_misconfigured` / `acme_port_unavailable` / `acme_failed`（替换 `acme_unavailable`）。出站表登记 Let's Encrypt 目录。
+- 服务器壳：`serve --acme <邮箱>` / `ARMADRA_ACME_EMAIL`，与 `--tls-cert/--tls-key` 互斥、要求对外来源；`status` 报「ACME，有效期至…，续期已连续失败 N 次」。
+- 镜像 `apps/server/docker/`：两段构建、uid 10001、`/data` 卷、tini、tmux / git / bash；入口脚本没有 `ARMADRA_PUBLIC_ORIGIN` 退出 64；健康检查、`backup.mjs`（不停服 `VACUUM INTO`）、compose 示例；hook 客户端打进 `/app/cli/`，迁移目录 `/app/migrations`。dev-stack 的 `armadra-server` 改用它（删掉占位 `Dockerfile.dev`）。
+- `server-e2e.mjs` 加容器模式（`--container=<镜像> [--build]`），B 档条目 `server-container-e2e`；`nightly.yml` 加 `server-image` 作业（构建 + 容器端到端，不推送）；`server-image.yml` 只在 `v*` 标签上用 `GITHUB_TOKEN` 推 GHCR（amd64 + arm64），PR 不触发。
+- 新指南 [服务器部署](../guides/server-deployment.md)。
+
+实测（2026-10-03，macOS + OrbStack）：
+
+- dev-stack Pebble：`acme.pebble.test.ts`（`ARMADRA_DEV_STACK=1`）签 shortlived 证书、链验到 Pebble 本次的根、续期换证书；目录地址错时 `acme_failed`。
+- 另起一个开着验证的 Pebble（`PEBBLE_VA_ALWAYS_VALID` 关），服务器壳 `--acme` 经 `host.docker.internal` 真走了 `http-01` 回连并签发，`status` 报 ACME，`tls/acme/` 全是 0600。
+- 镜像本机构建（436 MB），`server-e2e --container` 全过（配对、邀请、只读 / 可写 / 撤销共享、同机两窗口接管），浏览器节点一步 skipped；容器里对 dev-stack Pebble 跑 `--acme` 签发成功；`backup.mjs` 备份、停服替换、再启动健康；Nginx 反代（上游只信 `/ca.crt`）后配对兑换 200。
+
+没做：
+
+- `tls-alpn-01`（要在握手里按 ALPN 换证书；80 端口在容器与反代部署里都现成）。
+- step-ca 的 ACME 签发：它真回连挑战地址，CI 的 Linux 上容器到宿主回环不通；只用 Pebble 验了两条路（不回连 / 回连）。
+- 指南里的 Caddy 配置没有在本机跑过（Nginx 跑过）；镜像不带 Chrome，服务器壳容器里没有浏览器节点（指南未展开 `ARMADRA_BROWSER_PATH`）。
+- 真域名与 Let's Encrypt 生产签发需用户提供域名（指南第 3 节照做）。
 
 ## G3-6 服务端性能基线与多主机管理页面
 

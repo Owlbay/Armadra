@@ -73,7 +73,17 @@ export const LEAF_RENEW_BEFORE_DAYS = 30;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export type TlsSourceKind = "file" | "selfSigned" | "localCa";
+/**
+ * ACME 签来的证书（`./acme.ts`）：`<数据目录>/tls/acme/` 下，目录 0700、每个
+ * 文件 0600。签发与续期是 ACME 管理器的事；这里只按文件读出当前那一张。
+ */
+export const ACME_DIR = "acme";
+export const ACME_CERT = "cert.pem";
+export const ACME_KEY = "key.pem";
+export const ACME_ACCOUNT_KEY = "account.key";
+export const ACME_STATE = "state.json";
+
+export type TlsSourceKind = "file" | "selfSigned" | "localCa" | "acme";
 
 export interface TlsMaterial {
   readonly cert: string;
@@ -105,8 +115,11 @@ export interface TlsRequest {
   readonly dataDir: string;
   /** 证书要覆盖的名字：监听地址、主机名、私网地址与公网来源的主机。 */
   readonly hosts: readonly string[];
-  /** 没给证书文件时走哪一条。缺省 `selfSigned`（服务器壳的既有行为）。 */
-  readonly generated?: "selfSigned" | "localCa";
+  /**
+   * 没给证书文件时走哪一条。缺省 `selfSigned`（服务器壳的既有行为）。`acme`
+   * 读 ACME 管理器已经写好的那一对，没有就是错误——签发不在这里发生。
+   */
+  readonly generated?: "selfSigned" | "localCa" | "acme";
   readonly now?: () => Date;
 }
 
@@ -119,6 +132,7 @@ export function resolveTls(request: TlsRequest): TlsMaterial {
     return fileMaterial(certFile, keyFile);
   }
   const now = request.now ?? (() => new Date());
+  if (request.generated === "acme") return acmeMaterial(request.dataDir);
   if (request.generated === "localCa") {
     return localCaMaterial(request.dataDir, request.hosts, now());
   }
@@ -149,6 +163,24 @@ function fileMaterial(certFile: string, keyFile: string): TlsMaterial {
     keyFile,
     anchor: chain.length > 1 ? chain[chain.length - 1] : undefined,
   });
+}
+
+/**
+ * ACME 管理器写下的证书链与私钥。公共 CA 签的证书不需要用户装根，所以没有
+ * 信任锚可发（`/ca.crt` 答 404）；指纹是叶证书的，每次续期都会变。
+ */
+export function acmeMaterial(dataDir: string): TlsMaterial {
+  const directory = join(dataDir, SELF_SIGNED_DIR, ACME_DIR);
+  const certFile = join(directory, ACME_CERT);
+  const keyFile = join(directory, ACME_KEY);
+  if (!existsSync(certFile) || !existsSync(keyFile)) {
+    throw new Error("还没有 ACME 证书：签发要先于监听");
+  }
+  return describe(
+    readFileSync(certFile, "utf8"),
+    readFileSync(keyFile, "utf8"),
+    { source: "acme", certFile, keyFile },
+  );
 }
 
 function describe(
@@ -379,16 +411,25 @@ function reusableLeaf(
   }
 }
 
-/** 本地 CA 签的叶证书，SAN 覆盖传进来的每一个名字。 */
+/**
+ * 本地 CA 签的叶证书，SAN 覆盖传进来的每一个名字。`options` 给测试里的假 CA
+ * 用（ACME 用例要给定私钥与有效期签一张）。
+ */
 export function issueLeaf(
   ca: LocalCa,
   hosts: readonly string[],
   now: Date,
+  options: {
+    readonly privateKey?: KeyObject;
+    readonly notBefore?: Date;
+    readonly notAfter?: Date;
+  } = {},
 ): { cert: string; key: string } {
   if (hosts.length === 0) throw new Error("叶证书至少要覆盖一个名字");
-  const { privateKey, publicKey } = generateKeyPairSync("ec", {
-    namedCurve: "prime256v1",
-  });
+  const privateKey =
+    options.privateKey ??
+    generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey;
+  const publicKey = createPublicKey(privateKey);
   const spki = publicKey.export({ type: "spki", format: "der" }) as Buffer;
   const caSpki = createPublicKey(ca.key).export({
     type: "spki",
@@ -400,8 +441,9 @@ export function issueLeaf(
     issuer: subjectDer(ca.parsed),
     spki,
     signer: ca.key,
-    notBefore: new Date(now.getTime() - 60 * 60 * 1000),
-    notAfter: new Date(now.getTime() + LOCAL_LEAF_DAYS * DAY_MS),
+    notBefore: options.notBefore ?? new Date(now.getTime() - 60 * 60 * 1000),
+    notAfter:
+      options.notAfter ?? new Date(now.getTime() + LOCAL_LEAF_DAYS * DAY_MS),
     extensions: [
       extension("2.5.29.19", true, sequence()),
       // digitalSignature

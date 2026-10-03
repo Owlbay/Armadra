@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
@@ -133,11 +133,71 @@ const vendorGroups = [
   },
 ];
 
+/**
+ * 推送的 service worker（契约 §19，`src/mobile/sw.ts`）。
+ *
+ * worker 必须挂在站点根 `/sw.js`（作用域才覆盖整个页面），而且要能在不支持
+ * 模块 worker 的浏览器里跑，所以单独打成一个自包含的 IIFE，不进应用的分块
+ * 图。构建时作为一个资源写进产物；开发服务器上按请求现打一份。
+ */
+function serviceWorker(): Plugin {
+  const entry = fileURLToPath(new URL("./src/mobile/sw.ts", import.meta.url));
+  const bundle = async (): Promise<string> => {
+    const { build } = await import("vite");
+    const result = await build({
+      configFile: false,
+      logLevel: "silent",
+      define: { "process.env.NODE_ENV": JSON.stringify("production") },
+      build: {
+        write: false,
+        minify: true,
+        emptyOutDir: false,
+        lib: {
+          entry,
+          formats: ["iife"],
+          name: "armadraServiceWorker",
+          fileName: () => "sw.js",
+        },
+      },
+    });
+    const outputs = Array.isArray(result) ? result : [result];
+    for (const output of outputs) {
+      if (!("output" in output)) continue;
+      const chunk = output.output.find((item) => item.type === "chunk");
+      if (chunk && chunk.type === "chunk") return chunk.code;
+    }
+    throw new Error("service worker bundle produced no chunk");
+  };
+  return {
+    name: "armadra-service-worker",
+    configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        if (request.url?.split("?")[0] !== "/sw.js") return next();
+        bundle().then(
+          (code) => {
+            response.setHeader("content-type", "text/javascript");
+            response.setHeader("cache-control", "no-store");
+            response.end(code);
+          },
+          (error: unknown) => next(error),
+        );
+      });
+    },
+    async generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: "sw.js",
+        source: await bundle(),
+      });
+    },
+  };
+}
+
 // 代理与 `VITE_RUNTIME_URL` 的覆盖只属于开发服务器：生产构建（打包桌面壳）
 // 必须让页面在运行时按来源自己解析 Runtime 地址，否则本机碰巧在跑的一个
 // 开发 Runtime 会把「空地址」烤进产物，壳里一启动就报错。
 export default defineConfig(({ command }) => ({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), serviceWorker()],
   resolve: {
     alias: {
       // shadcn CLI 生成的组件用 `@/` 引用彼此，别名必须和

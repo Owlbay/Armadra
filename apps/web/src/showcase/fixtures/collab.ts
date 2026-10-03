@@ -85,3 +85,20 @@ export const COMMENT_RESOLVED = comment("c3", 0, 120, "标题改成英文", {
   anchor: { kind: "point", x: 0, y: 0 },
   resolvedAtMs: COMMENT_NOW - 60 * 60_000,
 });
+
+/* --------------------------------- 角色 ---------------------------------- */
+
+/**
+ * 角色阶梯的成员表（设计系统 §5.8，契约 §23.1）：一块画布上四档各一人。
+ * `color` 是成员色序号。
+ */
+export const ROLE_MEMBERS: readonly {
+  readonly name: string;
+  readonly role: "viewer" | "editor" | "operator" | "driver";
+  readonly color: number;
+}[] = [
+  { name: "林舟", role: "driver", color: 2 },
+  { name: "Ada", role: "operator", color: 3 },
+  { name: "周远", role: "editor", color: 4 },
+  { name: "Mika", role: "viewer", color: 5 },
+];

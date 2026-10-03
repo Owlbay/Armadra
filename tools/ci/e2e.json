@@ -88,6 +88,15 @@
       "args": ["{out}"],
       "requires": ["tmux"],
       "timeoutMinutes": 15
+    },
+    {
+      "id": "server-container-e2e",
+      "tier": "b",
+      "script": "tools/probes/server-e2e.mjs",
+      "args": ["--container=armadra-server:e2e", "--build", "{out}"],
+      "requires": ["chrome"],
+      "devStack": true,
+      "timeoutMinutes": 40
     }
   ]
 }

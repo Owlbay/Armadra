@@ -446,7 +446,7 @@ describe("关掉即断流", () => {
     await expect(remote("/health")).rejects.toThrow(/ECONNREFUSED/);
   });
 
-  it("证书来源：ACME 与缺文件的「指定文件」报原因不开；指定文件时指纹是叶证书的", async () => {
+  it("证书来源：没配邮箱与对外来源的 ACME、缺文件的「指定文件」报原因不开；指定文件时指纹是叶证书的", async () => {
     const acme = JSON.parse(
       (
         await local("PUT", "/api/gateway", {
@@ -456,7 +456,8 @@ describe("关掉即断流", () => {
       ).body,
     );
     expect(acme.running).toBe(false);
-    expect(acme.error.code).toBe("acme_unavailable");
+    // ACME 已实现（acme.ts）；这里没给邮箱也没有对外来源，签发前就拒绝。
+    expect(acme.error.code).toBe("acme_misconfigured");
     const missing = JSON.parse(
       (await local("PUT", "/api/gateway", { tls: { source: "file" } })).body,
     );

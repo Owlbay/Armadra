@@ -40,16 +40,55 @@ function granted(principalId: string): Scope[] {
 /**
  * 对象 → 工作空间：终端 `t1`、节点 `n1`、审批 `p1`、关闭确认 `c1` 都在 w1 上，
  * 别的都不认识。创建者记在一张表里，像库里那一列一样跨「重启」（重建路由门）。
+ *
+ * 契约 §23 的几种来历各有一个终端（都在 w1 上）：`t-op` 是 operator 自己从页面
+ * 起的，`t-drv` 是 driver 起的，`t-auto` 是自动化冷启动起的（owner，空串），
+ * `t-ama` 是 operator 起的协调者经 ama runner（`open-agent`）建的成员——继承
+ * 协调者的创建者。每个终端上挂一条待答的审批，节点 `n-<来历>` 跑着那个终端。
  */
+const STATIC_CREATORS: Record<string, string> = {
+  "t-op": "operator",
+  "t-drv": "driver",
+  "t-auto": "",
+  "t-ama": "operator",
+};
+const APPROVAL_SESSIONS: Record<string, string> = {
+  p1: "t1",
+  "p-op": "t-op",
+  "p-drv": "t-drv",
+  "p-auto": "t-auto",
+  "p-ama": "t-ama",
+};
 const creators = new Map<string, string>();
+/** 节点记下的触发者（迁移 0035）。 */
+const nodeCreators = new Map<string, string>();
+const sessionCreatorOf = (id: string) =>
+  creators.get(id) ?? STATIC_CREATORS[id] ?? "";
+const nodeSessionOf = (id: string) =>
+  id === "n1" ? "t1" : id.startsWith("n-") ? `t-${id.slice(2)}` : "";
 const lookups = {
-  sessionWorkspace: (id: string) => (id === "t1" ? "w1" : ""),
-  sessionCreator: (id: string) => creators.get(id) ?? "",
+  sessionWorkspace: (id: string) =>
+    id === "t1" || id in STATIC_CREATORS ? "w1" : "",
+  sessionCreator: sessionCreatorOf,
   recordCreator: (id: string, principalId: string) => {
     creators.set(id, principalId);
   },
-  nodeWorkspace: (id: string) => (id === "n1" ? "w1" : ""),
-  approvalWorkspace: (id: string) => (id === "p1" ? "w1" : ""),
+  inheritedCreator: (id: string) => nodeCreators.get(id) ?? null,
+  nodeSession: nodeSessionOf,
+  nodeOwner: (id: string) => {
+    const session = nodeSessionOf(id);
+    return session !== "" && (session === "t1" || session in STATIC_CREATORS)
+      ? sessionCreatorOf(session)
+      : (nodeCreators.get(id) ?? "");
+  },
+  nodeWorkspace: (id: string) =>
+    id === "n1" || id.startsWith("n-") ? "w1" : "",
+  approvalWorkspace: (id: string) => (id in APPROVAL_SESSIONS ? "w1" : ""),
+  approvalCreator: (id: string) =>
+    sessionCreatorOf(APPROVAL_SESSIONS[id] ?? ""),
+  boardWorkspace: (id: string) => (id === "b1" ? "w1" : ""),
+  workflowDraftWorkspace: (id: string) => (id === "d1" ? "w1" : ""),
+  workflowRunWorkspace: (id: string) => (id === "r1" ? "w1" : ""),
   confirmWorkspace: (id: string) => (id === "c1" ? "w1" : ""),
 };
 
@@ -67,9 +106,11 @@ function harness() {
     method: string,
     path: string,
     body?: unknown,
+    query?: Record<string, string>,
   ) => {
     const request = {
       ...emptyRequest(method, path),
+      query: new URLSearchParams(query ?? {}),
       json: <T>() => body as T,
     };
     const run = () => guard(request, router.requiredScope(method, path));
@@ -92,10 +133,11 @@ function row(
   method: string,
   path: string,
   body?: unknown,
+  query?: Record<string, string>,
 ): string {
-  return PEOPLE.filter((who) => decide(who, method, path, body).allowed).join(
-    ",",
-  );
+  return PEOPLE.filter(
+    (who) => decide(who, method, path, body, query).allowed,
+  ).join(",");
 }
 
 describe("路由门的矩阵", () => {
@@ -143,7 +185,7 @@ describe("路由门的矩阵", () => {
     expect(row(decide, "POST", "/api/push/devices")).toBe(PEOPLE.join(","));
   });
 
-  it("补全计划的新面：Gateway、凭据、ACP、工作流在补上查找之前只有 owner", () => {
+  it("补全计划的新面：Gateway、凭据只有 owner；ACP、工作流查不到画布时只有 owner", () => {
     const { decide } = harness();
     expect(row(decide, "GET", "/api/gateway")).toBe("owner");
     expect(row(decide, "POST", "/api/credentials")).toBe("owner");
@@ -246,6 +288,87 @@ describe("路由门的矩阵", () => {
   });
 });
 
+describe("契约 §23：创建者 = 触发者与工作流", () => {
+  it("工作流列表与起跑按查询串 / 请求体的画板落到画布", () => {
+    const { decide } = harness();
+    expect(
+      row(decide, "GET", "/api/workflows/runs", undefined, { boardId: "b1" }),
+    ).toBe("owner,driver,operator,editor,viewer");
+    expect(
+      row(decide, "GET", "/api/workflows/drafts", undefined, { boardId: "b1" }),
+    ).toBe("owner,driver,operator,editor,viewer");
+    expect(
+      row(decide, "GET", "/api/workflows/runs", undefined, { boardId: "b9" }),
+    ).toBe("owner");
+    expect(
+      row(decide, "POST", "/api/workflows/runs", {
+        templateId: "x1",
+        boardId: "b1",
+      }),
+    ).toBe("owner,driver,operator");
+    expect(
+      row(decide, "POST", "/api/workflows/runs", { templateId: "x1" }),
+    ).toBe("owner");
+  });
+
+  it("节点记过触发者时，起它的人不改写创建者", () => {
+    creators.clear();
+    nodeCreators.set("n-new", "operator");
+    // driver 的页面先挂载、替 operator 的协调者建的节点起了终端：库已按触发者
+    // 写好（迁移 0035 的触发器），路由门不再记成 driver。
+    const opened = harness().decide("driver", "POST", "/api/terminals", {
+      workspaceId: "w1",
+      nodeId: "n-new",
+    });
+    opened.filter?.({ id: "t-new", ownerNodeId: "n-new" });
+    expect(creators.has("t-new")).toBe(false);
+    // 没记过触发者的节点照旧记起它的人。
+    harness()
+      .decide("operator", "POST", "/api/terminals", { workspaceId: "w1" })
+      .filter?.({ id: "t-plain", ownerNodeId: null });
+    expect(creators.get("t-plain")).toBe("operator");
+    nodeCreators.clear();
+    creators.clear();
+  });
+
+  it("ACP 开会话答的是已有的那一行时，不把别人的会话改成自己的", () => {
+    creators.clear();
+    // n-drv 上活着的是 driver 起的 t-drv；operator 再开一次，答的还是 t-drv。
+    const again = harness().decide("operator", "POST", "/api/acp/sessions", {
+      workspaceId: "w1",
+      nodeId: "n-drv",
+    });
+    expect(again.allowed).toBe(true);
+    again.filter?.({ id: "t-drv" });
+    expect(creators.has("t-drv")).toBe(false);
+    expect(
+      harness().decide("operator", "POST", "/api/acp/sessions/t-drv/prompt")
+        .allowed,
+    ).toBe(false);
+    // 真起了新的一行才记。
+    harness()
+      .decide("operator", "POST", "/api/acp/sessions", {
+        workspaceId: "w1",
+        nodeId: "fresh",
+      })
+      .filter?.({ id: "t-fresh" });
+    expect(creators.get("t-fresh")).toBe("operator");
+    creators.clear();
+  });
+
+  it("还没起过终端的节点按记下的触发者判驱动切换", () => {
+    nodeCreators.set("n-idle", "operator");
+    const { decide } = harness();
+    expect(row(decide, "POST", "/api/acp/nodes/n-idle/driver")).toBe(
+      "owner,driver,operator",
+    );
+    nodeCreators.clear();
+    expect(row(decide, "POST", "/api/acp/nodes/n-idle/driver")).toBe(
+      "owner,driver",
+    );
+  });
+});
+
 /**
  * 全局路由的权限表（设计 §6）：每一行是一条路由对六个人的答案。成员能不能
  * 做由它落到哪块画布决定；落不到画布的，要么是无害的全局读（被共享了任意一块
@@ -271,6 +394,36 @@ describe("全局路由的权限表", () => {
     ],
     ["GET", "/api/nodes/n1/context-reads", W1_ALL],
     ["POST", "/api/approvals/p1/answer", "owner,driver"],
+    // 契约 §23：operator 答自己起的终端上的审批；别人起的、自动化冷启动起的
+    // （owner）只有 driver；operator 的协调者经 ama runner 建的成员继承他。
+    ["POST", "/api/approvals/p-op/answer", "owner,driver,operator"],
+    ["POST", "/api/approvals/p-drv/answer", "owner,driver"],
+    ["POST", "/api/approvals/p-auto/answer", "owner,driver"],
+    ["POST", "/api/approvals/p-ama/answer", "owner,driver,operator"],
+    // 驱动切换与往会话里写同一套「自己的 / 别人的」。
+    ["POST", "/api/acp/nodes/n-op/driver", "owner,driver,operator"],
+    ["POST", "/api/acp/nodes/n-drv/driver", "owner,driver"],
+    ["POST", "/api/acp/sessions/t-ama/prompt", "owner,driver,operator"],
+    ["POST", "/api/acp/sessions/t-auto/prompt", "owner,driver"],
+    ["POST", "/api/terminals/t-ama/paste", "owner,driver,operator"],
+    // 工作流（契约 §23.3）：按草案 / 运行查画布。
+    ["GET", "/api/workflows/runs/r1", W1_ALL],
+    ["POST", "/api/workflows/runs/r1/cancel", "owner,driver,operator"],
+    ["POST", "/api/workflows/runs/r1/gates/s1", "owner,driver,operator"],
+    ["POST", "/api/workflows/runs/unknown/gates/s1", "owner"],
+    ["GET", "/api/workflows/drafts/d1", W1_ALL],
+    ["POST", "/api/workflows/drafts/d1/confirm", "owner,driver,operator"],
+    ["POST", "/api/workflows/drafts/d1/discard", "owner,driver,operator"],
+    // 列表不带画板：答案过滤不到 raw 路由，成员一律不放。
+    ["GET", "/api/workflows/runs", "owner"],
+    ["GET", "/api/workflows/drafts", "owner"],
+    // 模板是本机共用的库：在哪块画布上能起 Agent 就能读，改只有 owner。
+    ["GET", "/api/workflows/templates", "owner,driver,operator,outsider"],
+    ["GET", "/api/workflows/templates/x1", "owner,driver,operator,outsider"],
+    ["POST", "/api/workflows/templates", "owner"],
+    ["PUT", "/api/workflows/templates/x1", "owner"],
+    ["DELETE", "/api/workflows/templates/x1", "owner"],
+    ["GET", "/api/workflows/nowhere", "owner"],
     ["POST", "/api/control/confirm/c1", "owner,driver"],
     // 找不到对象的：只有 owner
     ["POST", "/api/agent-status/unknown/read", "owner"],

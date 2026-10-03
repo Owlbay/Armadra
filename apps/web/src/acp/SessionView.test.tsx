@@ -76,6 +76,23 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("SessionView", () => {
+  it("同一个节点挂两份会话视图（手机焦点页 + 画布）时分块只拼一遍", async () => {
+    render(
+      <>
+        <SessionView nodeId="n1" data={data} />
+        <SessionView nodeId="n1" data={data} />
+      </>,
+    );
+    await waitFor(() =>
+      expect(screen.getAllByText("向它说第一句话")).toHaveLength(2),
+    );
+    useAcpStore.getState().begin(SESSION, "hi");
+    text("agent_message_chunk", "echo: ");
+    text("agent_message_chunk", "hi");
+    expect(screen.getAllByText("echo: hi")).toHaveLength(2);
+    expect(screen.queryByText("echo: hiecho: hi")).toBeNull();
+  });
+
   it("shows skeletons while loading, then the empty state", async () => {
     let resolve: (log: AcpLogResponse) => void = () => undefined;
     api.log.mockReturnValue(new Promise((done) => (resolve = done)));
