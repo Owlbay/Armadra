@@ -28,6 +28,14 @@
 //      的结果回到模型 → 模型 ack 并把结果汇总进便签。
 //   断言：成员节点与连线、`workflow_task_runs` 一行 done 且带结果、task 结果与
 //   便签里是假 CLI 回报的正文。
+//
+// ama → ama（`@armadra/agent` ≥ 0.6.7 调宿主注入的 `ama` runner）：
+//   5. 再 post 一条「交给 ama」→ 唤醒 → 模型调 `task(agent="ama")` → 适配器的
+//      `ama` runner 经 `open-agent --agent ama --task-id` 在画布上起第二个 ama
+//      节点（同一个脚本化模型服务，凭它自己的节点兑换 key）→ 那个 ama 读到任务，
+//      调 `canvas_post` 按任务末尾的键回报 → 协调者的 `task` 拿到结果写进便签。
+//   断言：`workflow_task_runs` 有一行 `runner_id = ama`、done 且带结果；成员节点
+//   是 ama、从协调者连线；便签里是第二个 ama 回报的正文。
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -61,6 +69,9 @@ const FAKE_KEY = "sk-agent-e2e-fake-key";
 const DISPATCH = "派任务：请 taskecho 检查 src/z";
 const TASK_PROMPT = "检查 src/z，结论按任务末尾的键回报";
 const TASK_RESULT = "taskecho 回报：src/z 没有问题";
+const DISPATCH_AMA = "交给 ama：请另一个 ama 复核 src/w";
+const AMA_TASK_PROMPT = "复核 src/w，结论按任务末尾的键回报";
+const AMA_RESULT = "第二个 ama 回报：src/w 已复核";
 
 /**
  * 派任务用的假 CLI（自定义 Agent `custom:taskecho`，借 Claude 的 hook 适配）：
@@ -176,6 +187,23 @@ function inboxIds(messages) {
 function coordinatorScript(body) {
   const messages = body.messages ?? [];
   const last = messages[messages.length - 1];
+  // 第二个 ama（成员）：任务在它的用户消息里，按末尾的键 post 回去。
+  const memberTask = messages.find(
+    (m) => m.role === "user" && textOf(m).includes(AMA_TASK_PROMPT),
+  );
+  if (memberTask !== undefined) {
+    if (lastToolCall(messages) === "canvas_post") return { text: "已回报。" };
+    const target = /--to (\S+) --key (\S+)/.exec(textOf(memberTask));
+    if (target === null) return { text: "任务里没有回报的键。" };
+    return {
+      toolCalls: [
+        {
+          name: "canvas_post",
+          arguments: { to: target[1], key: target[2], body: AMA_RESULT },
+        },
+      ],
+    };
+  }
   if (last?.role === "user") {
     if (textOf(last).includes("审查"))
       return {
@@ -199,6 +227,20 @@ function coordinatorScript(body) {
     case "canvas_inbox": {
       const ids = inboxIds(messages);
       if (ids.length === 0) return { text: "收件箱是空的。" };
+      // 交给另一个 ama 的那条：宿主注入的 `ama` runner 在画布上起一个 ama 节点。
+      if (inboxText(messages).includes("交给 ama"))
+        return {
+          toolCalls: [
+            {
+              name: "task",
+              arguments: {
+                agent: "ama",
+                prompt: AMA_TASK_PROMPT,
+                background: false,
+              },
+            },
+          ],
+        };
       // 派任务的那条：交给画布上的成员做，等它回来再 ack。
       if (inboxText(messages).includes("派任务"))
         return {
@@ -862,6 +904,86 @@ export default async function run() {
       "成员的终端由 core 起（页面不在），假 CLI 收到了任务",
       existsSync(taskLog) &&
         readFileSync(taskLog, "utf8").includes(TASK_PROMPT),
+    );
+
+    /* --------- 5. ama → ama：task(agent="ama") → 画布上的第二个 ama --------- */
+
+    const amaDispatched = await canvasAs(
+      context,
+      dispatcher.id,
+      "post",
+      "--to",
+      lead.id,
+      "--key",
+      "dispatch-ama",
+      "--body",
+      DISPATCH_AMA,
+    );
+    s.check(
+      "交给 ama 的那条 post 成功",
+      amaDispatched.code === 0,
+      amaDispatched.stderr,
+    );
+    const amaSticky = await waitFor(
+      "协调者把第二个 ama 的结果写进便签",
+      async () =>
+        (await document()).nodes.find(
+          (node) =>
+            node.type === "sticky" &&
+            JSON.stringify(node.data ?? {}).includes(AMA_RESULT),
+        ),
+      { timeout: 240_000, interval: 1000 },
+    ).catch(async (error) => {
+      note("协调者终端画面", await capture());
+      const all = (sql, ...params) => database.prepare(sql).all(...params);
+      note("ama → ama 诊断", {
+        runs: all("SELECT * FROM workflow_task_runs"),
+        status: all("SELECT node_id, agent_id, state FROM agent_status"),
+        queue: all(
+          "SELECT target_node_id, origin, state, last_reason FROM agent_send_queue",
+        ),
+      });
+      throw error;
+    });
+    s.check(
+      "便签里是第二个 ama 回报的结果",
+      amaSticky !== undefined,
+      amaSticky?.data,
+    );
+    const amaRun = database
+      .prepare(
+        "SELECT runner_id, node_id, status, result_json FROM workflow_task_runs WHERE runner_id = 'ama'",
+      )
+      .all();
+    s.check(
+      "workflow_task_runs 有一行 ama：done、带第二个 ama 的结果",
+      amaRun.length === 1 &&
+        amaRun[0].status === "done" &&
+        String(amaRun[0].result_json).includes(AMA_RESULT),
+      amaRun,
+    );
+    const afterAma = await document();
+    const amaNode = afterAma.nodes.find(
+      (node) => node.id === amaRun[0]?.node_id,
+    );
+    s.check(
+      "第二个 ama 节点在画布上，从协调者连了一条线",
+      amaNode?.data?.agent?.id === "ama" &&
+        amaNode.id !== lead.id &&
+        afterAma.edges.some(
+          (edge) => edge.source === lead.id && edge.target === amaNode.id,
+        ),
+      { title: amaNode?.title, agent: amaNode?.data?.agent },
+    );
+    s.check(
+      "第二个 ama 真的调了模型（脚本化服务收到带任务的请求）",
+      mock.requests.some((request) =>
+        (request.messages ?? []).some(
+          (message) =>
+            message.role === "user" &&
+            textOf(message).includes(AMA_TASK_PROMPT),
+        ),
+      ),
     );
 
     const leaked = filesContaining(data, FAKE_KEY, [join(data, "secrets")]);
