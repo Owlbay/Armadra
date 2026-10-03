@@ -72,6 +72,15 @@
       "args": ["{out}"],
       "requires": ["tmux", "chrome"],
       "timeoutMinutes": 10
+    },
+    {
+      "id": "crash-report-e2e",
+      "tier": "b",
+      "script": "tools/probes/crash-report-e2e.mjs",
+      "args": ["{out}"],
+      "requires": [],
+      "timeoutMinutes": 5,
+      "devStack": true
     }
   ]
 }
