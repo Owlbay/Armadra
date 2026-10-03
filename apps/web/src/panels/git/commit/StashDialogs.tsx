@@ -253,11 +253,12 @@ export function UnstashDialog({
           <ul aria-label={t("gitStash.title")} className="space-y-1">
             {state?.stashes.map((entry) => (
               <li key={`${entry.selector}:${entry.oid}`}>
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
                   aria-pressed={entry.oid === selectedOid}
                   onClick={() => setSelectedOid(entry.oid)}
-                  className="flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-muted aria-pressed:bg-muted"
+                  className="h-auto w-full min-w-0 flex-col items-stretch justify-start gap-0.5 rounded-md px-2 py-1.5 text-left text-[length:inherit] font-normal whitespace-normal hover:bg-muted aria-pressed:bg-muted"
                 >
                   <span className="min-w-0 truncate font-medium">
                     {entry.subject}
@@ -265,7 +266,7 @@ export function UnstashDialog({
                   <span className="min-w-0 truncate font-mono text-muted-foreground">
                     {entry.selector} · {entry.authorName} · {entry.authorTime}
                   </span>
-                </button>
+                </Button>
               </li>
             ))}
           </ul>
