@@ -359,6 +359,11 @@ async function launch({ executable, sandbox, source, extraEnv = {} }) {
   const child = spawn(executable, args, {
     env,
     stdio: ["ignore", "pipe", "pipe"],
+    // Its own process group, so `stop` can end the whole tree: Electron's
+    // helpers, the core it owns and (on Linux) the AppImage runtime's child
+    // outlive the main process and keep writing into the sandbox — the rm
+    // after the leg then met ENOTEMPTY.
+    detached: process.platform !== "win32",
   });
   let log = "";
   child.stdout.on("data", (chunk) => (log += chunk));
@@ -379,12 +384,57 @@ async function stop(running) {
   } catch {
     // Already gone.
   }
-  running.child.kill("SIGTERM");
+  const group =
+    process.platform !== "win32" && running.child.pid
+      ? -running.child.pid
+      : null;
+  const signal = (name) => {
+    try {
+      if (group !== null) process.kill(group, name);
+      else running.child.kill(name);
+    } catch {
+      // Already gone.
+    }
+  };
+  signal("SIGTERM");
   const settled = await Promise.race([
     running.exited,
     delay(5000).then(() => null),
   ]);
-  if (settled === null) running.child.kill("SIGKILL");
+  if (settled === null) signal("SIGKILL");
+  if (group === null) return;
+  // The main process going is not the tree going: wait for the last helper,
+  // and stop waiting politely after two seconds.
+  for (let waited = 0; waited < 100 && groupAlive(group); waited += 1) {
+    if (waited === 20) signal("SIGKILL");
+    await delay(100);
+  }
+}
+
+function groupAlive(group) {
+  try {
+    process.kill(group, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Removes a leg's sandbox. A Chromium helper of a process that has already
+ * exited can still be flushing its profile for a moment, so ENOTEMPTY is
+ * retried for a few seconds before it counts.
+ */
+async function removeSandbox(sandbox) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      rmSync(sandbox, { recursive: true, force: true, maxRetries: 10 });
+      return;
+    } catch (error) {
+      if (attempt >= 20 || error?.code !== "ENOTEMPTY") throw error;
+      await delay(500);
+    }
+  }
 }
 
 /** Every file under `directory` whose bytes have this sha256. */
@@ -619,7 +669,7 @@ async function packageLeg({ options, target, report }) {
     return leg;
   } finally {
     if (leg.status !== "passed") report.logTail = log().slice(-4000);
-    rmSync(sandbox, { recursive: true, force: true, maxRetries: 10 });
+    await removeSandbox(sandbox);
   }
 }
 
