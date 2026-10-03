@@ -38,6 +38,13 @@ describe("useLinkFragments", () => {
     expect(usePreferencesStore.getState().lastSettingsSection).toBe("host");
   });
 
+  it("OAuth 回调打开到「安全」", () => {
+    window.history.replaceState(null, "", "#oauth=mfa&challengeId=c1");
+    renderHook(() => useLinkFragments(true));
+    expect(useCanvasStore.getState().panels.settings).toBe(true);
+    expect(usePreferencesStore.getState().lastSettingsSection).toBe("security");
+  });
+
   it("不是服务器壳、或者没有片段，什么都不做", () => {
     window.history.replaceState(null, "", "#pair=abc.def");
     renderHook(() => useLinkFragments(false));

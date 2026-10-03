@@ -878,6 +878,42 @@ describe("scroll", () => {
     expect(wheel?.params).toMatchObject({ deltaX: 300, deltaY: 0 });
   });
 
+  /**
+   * The compositor applies a wheel on its own schedule: the first reading after
+   * the wheel can still be the old position. Linux CI once read "scrolled 0 px"
+   * for a page that did scroll; the move is measured once the page settles.
+   */
+  it("measures the move after the page has settled, not the first reading", async () => {
+    const at = (top: number) => ({
+      top,
+      left: 0,
+      height: 2_000,
+      width: 800,
+      viewportHeight: 600,
+      viewportWidth: 800,
+    });
+    page.scripts.scrollPosition = [at(0), at(0), at(120), at(300), at(300)];
+    const text = await run("scroll", { direction: "down", amount: 300 });
+    expect(text).toContain("已滚动 300 px");
+  });
+
+  it("reports a page that does not move as zero, without waiting forever", async () => {
+    page.scripts.scrollPosition = [
+      {
+        top: 0,
+        left: 0,
+        height: 600,
+        width: 800,
+        viewportHeight: 600,
+        viewportWidth: 800,
+      },
+    ];
+    const started = Date.now();
+    const text = await run("scroll", { direction: "down", amount: 300 });
+    expect(text).toContain("已滚动 0 px");
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
   it("brings an element into view with --ref", async () => {
     const ref = refIn(await run("read"), '"提交"');
     expect(await run("scroll", { ref })).toContain("滚进可视区域");

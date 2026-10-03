@@ -546,6 +546,7 @@ it("reasons are stable tokens and carry no transport detail", () => {
     "hostStopFailed",
     "installFailed",
     "updaterUnavailable",
+    "notSigned",
   ]);
   for (const reason of REASONS) {
     expect(reason).not.toContain("://");

@@ -5,10 +5,12 @@
  *     --from <release dir> --out <dir> [--version X.Y.Z] [--require-updater]
  *
  * electron-builder names files after each platform's own conventions —
- * `Armadra-0.1.0-arm64.dmg`, `Armadra Setup 0.1.0-arm64.exe`,
+ * `Armadra-0.1.0-arm64.dmg`, `Armadra-Setup-0.1.0-arm64.exe`,
  * `armadra_0.1.0_amd64.deb` — and none of those spellings contains a target
- * the Host can read: `assetTarget` finds nothing in `arm64` or `amd64`, and
- * one of them has a space in it. Uploading them as they come off the packager
+ * the Host can read: `assetTarget` finds nothing in `arm64` or `amd64`.
+ * (The installer's own name has no space any more — `nsis.artifactName` in
+ * `electron-builder.yml` — because Azure Artifact Signing cannot sign a file
+ * whose name has one; older builds' `Armadra Setup …` is still recognised.) Uploading them as they come off the packager
  * produces a release whose desktop assets the Host will never offer, which is
  * a failure that only shows up in a client weeks later. So every bundle is
  * looked up by kind and copied to the one name `artifacts.mjs` declares, and
@@ -263,7 +265,7 @@ export function normalizeSha512(value) {
  * `updaterFeedFile(target)` 写进 `out`。
  *
  * 清单里的条目按**字节**而不是按名字对上暂存的包：electron-builder 在清单里写的
- * 名字与磁盘上的文件名并不总是一样（Windows 安装包名里的空格在清单里是 `-`），
+ * 名字与磁盘上的文件名并不总是一样（旧版 Windows 安装包名里的空格在清单里是 `-`），
  * 而 sha512 相同就是同一份字节。对不上说明打包器描述的不是我们要发布的那个文件，
  * 这时宁可在这里失败，也不发一份会让客户端下错包的清单。
  */

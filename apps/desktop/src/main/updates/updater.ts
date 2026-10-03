@@ -7,7 +7,9 @@ import { IPC } from "../../shared/ipc";
 import { dataDir } from "../../shell-core/paths";
 import {
   initialState,
+  installRefusal,
   shouldEnableUpdater,
+  type UpdaterEnvironment,
 } from "../../shell-core/updates/availability";
 import { Cancellation } from "../../shell-core/updates/cancel";
 import * as coordinate from "../../shell-core/updates/coordinate";
@@ -25,6 +27,7 @@ import {
   notificationTitle,
   stagedCleared,
   stagedReady,
+  unsignedNotificationBody,
   wantsNotification,
   type Staged,
 } from "../../shell-core/updates/notify";
@@ -36,6 +39,7 @@ import {
 } from "../../shell-core/updates/verdict";
 import { sendToWindow } from "../window";
 import {
+  allowInsecureLoopback,
   currentTarget,
   releaseSource,
   updaterEnvironment,
@@ -104,6 +108,13 @@ export interface UpdatesDeps {
    * 认不出来，拿回来是 `undefined`——更新会悄悄不工作。
    */
   readonly updaterModule?: () => typeof import("electron-updater");
+  /**
+   * The four answers about this installation (`environment.ts`). Injected by
+   * tests that need a packaged, unsigned build without being one; read fresh
+   * on every use otherwise, because it is cheap and a cached Windows
+   * signature read is already memoised underneath.
+   */
+  readonly environment?: () => UpdaterEnvironment;
 }
 
 declare const require: (id: string) => unknown;
@@ -145,8 +156,12 @@ export class UpdatesController {
 
   /* ------------------------------ the state ------------------------------ */
 
+  private environment(): UpdaterEnvironment {
+    return (this.deps.environment ?? updaterEnvironment)();
+  }
+
   private current(): Machine {
-    this.machine ??= Machine.of(initialState(updaterEnvironment()));
+    this.machine ??= Machine.of(initialState(this.environment()));
     return this.machine;
   }
 
@@ -185,7 +200,7 @@ export class UpdatesController {
   async checkRelease(
     options: { manual?: boolean; nowMs?: number } = {},
   ): Promise<UpdateState> {
-    if (!shouldEnableUpdater(updaterEnvironment())) return this.state();
+    if (!shouldEnableUpdater(this.environment())) return this.state();
     const source = releaseSource();
     const target = currentTarget();
     if (source === null || target === null) return this.state();
@@ -453,6 +468,15 @@ export class UpdatesController {
     }
     const pending = preparing.offer;
 
+    // A package without a platform signature stages and verifies updates (with
+    // ARMADRA_UPDATES_DEV=1) but never hands them to an installer. Checked
+    // before anything is stopped: nothing about this restart is going to
+    // happen, so nothing should be interrupted for it.
+    const refusal = installRefusal(this.environment());
+    if (refusal !== null) {
+      return this.apply({ type: "restartAbandoned", reason: refusal });
+    }
+
     const stopped = await this.stopOwnedBackground();
     if (stopped !== null) {
       // The install never started. Nothing was replaced, nothing was written,
@@ -478,6 +502,17 @@ export class UpdatesController {
     try {
       // 走到这一步必然已经下载过，模块早就加载好了；这里只是把句柄再取一次。
       const { autoUpdater } = this.updater();
+      // On macOS `quitAndInstall` only *asks* Squirrel.Mac, which then fetches
+      // the staged zip and checks it against this app's designated requirement
+      // — a different signer (a rotated certificate, an ad-hoc rehearsal build)
+      // is refused there, asynchronously, as an `error` event. Without this the
+      // page would sit in "installing" while nothing happens.
+      autoUpdater.once("error", (error: unknown) => {
+        const now = this.state();
+        if (now.state === "downloaded" && now.phase === "installing") {
+          this.failInstall(transferReason(error));
+        }
+      });
       this.deps.onBeforeRestart();
       // Never returns: the installer replaces this process.
       autoUpdater.quitAndInstall();
@@ -545,7 +580,8 @@ export class UpdatesController {
    * the same thing without either of them.
    */
   private async announceStaged(pending: Offer): Promise<void> {
-    this.announce(stagedReady(pending.version));
+    const installable = installRefusal(this.environment()) === null;
+    this.announce(stagedReady(pending.version, installable));
     if (this.deps.notify === undefined) return;
     let settings: Uint8Array | string;
     try {
@@ -557,7 +593,9 @@ export class UpdatesController {
     const locale = localeFromEnvironment();
     this.deps.notify(
       notificationTitle(locale),
-      notificationBody(locale, pending.version),
+      installable
+        ? notificationBody(locale, pending.version)
+        : unsignedNotificationBody(locale, pending.version),
     );
   }
 
@@ -621,7 +659,7 @@ async function resolveOffer(
   | { ok: true; value: Offer; rollout: offer.Rollout | null }
   | { ok: false; reason: Reason }
 > {
-  const insecure = !app.isPackaged;
+  const insecure = allowInsecureLoopback();
   const target = offer.pointer(verdict.answer, verdict.target, insecure);
   if (!target.ok) return target;
   const manifest = await fetchManifest(target.value.url);
@@ -653,7 +691,7 @@ async function verifiedFeed(
   pending: Offer,
   manifest: URL,
 ): Promise<offer.Resolved<void>> {
-  const insecure = !app.isPackaged;
+  const insecure = allowInsecureLoopback();
   let feedUrl = manifest;
   let expected: string | null = null;
   if (manifest.pathname.endsWith("/latest.json")) {
