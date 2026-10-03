@@ -20,7 +20,9 @@ import {
   GitToolWindow,
   SshPromptDialog,
   UsageDashboard,
+  WorkflowPanel,
 } from "./lazy";
+import { DraftLayer } from "@/workflow/DraftCard";
 import { AgentSettingsDialog } from "@/nodes/AgentSettingsDialog";
 import { NodeNameDialog } from "@/nodes/NodeNameDialog";
 import { useMountedOnce, useOverlayRequested } from "./overlay-gates";
@@ -104,12 +106,17 @@ export function Overlays() {
       <Gate open={panels.handoff !== "closed"}>
         <HandoffHistoryDrawer />
       </Gate>
+      <Gate open={panels.workflow !== "closed"}>
+        <WorkflowPanel />
+      </Gate>
       {/* 事件流驱动的四个：必须先订阅，不能等状态。 */}
       <ControlConfirmDialog />
       <NodeNameDialog />
       <AgentSettingsDialog />
       <SshPromptDialog />
       <HandoffDialog />
+      {/* 工作流草案卡：`workflow.draft` 到达前就要订阅（设计系统 §5.5）。 */}
+      <DraftLayer />
     </Suspense>
   );
 }

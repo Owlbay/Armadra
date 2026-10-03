@@ -20,7 +20,9 @@ export type StatusTone =
   | "queued"
   | "paused"
   | "unread"
-  | "idle";
+  | "idle"
+  /** 已完成（设计系统 §2.3：done = success），会话行与工作流运行记录用。 */
+  | "done";
 
 /** 图形色：圆点与衬底的色相（`--status-*`）。 */
 export const TONE_COLOR: Record<StatusTone, string> = {
@@ -31,6 +33,7 @@ export const TONE_COLOR: Record<StatusTone, string> = {
   paused: "var(--status-paused)",
   unread: "var(--status-unread)",
   idle: "var(--status-idle)",
+  done: "var(--success)",
 };
 
 /**
@@ -46,6 +49,7 @@ export const STATUS_PILL_TEXT: Record<StatusTone, string> = {
   paused: "--muted-foreground",
   unread: "--brand-text",
   idle: "--muted-foreground",
+  done: "--success-text",
 };
 
 /** 衬底 = 图形色按这个百分比混进透明。15% 时深色 working 字只有约 4.3。 */
@@ -63,6 +67,7 @@ export const STATUS_PILL_LABELS: Record<StatusTone, string> = {
   paused: "Paused",
   unread: "Unread",
   idle: "Idle",
+  done: "Done",
 };
 
 /** 默认会脉冲的两种状态：正在跑、需要你。其余静止（§3.4）。 */
@@ -74,6 +79,7 @@ export const STATUS_PILL_PULSES: Record<StatusTone, boolean> = {
   paused: false,
   unread: false,
   idle: false,
+  done: false,
 };
 
 export interface StatusPillProps extends React.ComponentProps<"span"> {

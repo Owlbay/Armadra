@@ -17,6 +17,11 @@
  */
 
 import { z } from "zod";
+import {
+  WORKFLOW_RUN_TARGET_KIND,
+  workflowRunTargetSchema,
+  type WorkflowRunTarget,
+} from "@armadra/shared";
 
 import {
   RuntimeConnectionError,
@@ -77,6 +82,8 @@ export const AutomationTargetKind = {
   UNSPECIFIED: "AUTOMATION_TARGET_KIND_UNSPECIFIED",
   NON_INTERACTIVE_COMMAND: "AUTOMATION_TARGET_KIND_NON_INTERACTIVE_COMMAND",
   AGENT_SESSION_PROMPT: "AUTOMATION_TARGET_KIND_AGENT_SESSION_PROMPT",
+  /** 起一次工作流运行（契约 §15.6）。 */
+  WORKFLOW_RUN: WORKFLOW_RUN_TARGET_KIND,
 } as const;
 export type AutomationTargetKind =
   (typeof AutomationTargetKind)[keyof typeof AutomationTargetKind];
@@ -191,6 +198,7 @@ export interface AutomationTarget {
   nodeId: string;
   coldStartPolicy: AutomationColdStartPolicy;
   agentLaunch?: AgentLaunchSpec;
+  workflowRun?: WorkflowRunTarget;
 }
 
 const automationTargetSchema: z.ZodType<AutomationTarget> = z.object({
@@ -201,6 +209,7 @@ const automationTargetSchema: z.ZodType<AutomationTarget> = z.object({
   nodeId: text,
   coldStartPolicy: enumOf(AutomationColdStartPolicy),
   agentLaunch: agentLaunchSpecSchema.optional(),
+  workflowRun: workflowRunTargetSchema.optional(),
 });
 
 /**

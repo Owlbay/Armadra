@@ -363,7 +363,17 @@
 
 ## G2-3 工作流页面、再运行与定时（C3）
 
-未开始。
+做了什么：
+
+- core：自动化目标 `WORKFLOW_RUN`（`schedule/types.ts` 的 `workflowRun`、`plan.ts` 归一化与闸门按模板、`workflow-target.ts` 定义时核模板 / 版本 / 画布 / 参数、到点经 `WorkflowEngine.startRun` 起跑，运行 id 由投递的操作标识推出，收据随运行状态 `RUNNING` → `SUCCEEDED` / `FAILED` / `CANCELLED`）；`workflow.gate` 帧带运行 Frame 的 `nodeId`，推送规则只在 `waiting` 时叫人；契约 §15.6、§15.4 补一句。
+- 页面：`apps/web/src/workflow/`（草案卡常驻层、工作面板「工作流」页：模板库 / 起跑参数 / 模板编辑器 / 运行记录 / 两次对比 / 关卡答复）；自动化表单新增「运行工作流」目标（模板库「定时运行」预填）；画布「新建」菜单加「工作流」；`StatusPill` 新增 `done` 色调；展示页 `workflow` 分区换成真组件。
+
+实测：
+
+- `workflow-e2e`（登记进 A 档）新增「定时触发一次」：一次性计划到点起跑，第二次运行带计划参数且 `succeeded`，自动化运行 `SUCCEEDED` / `WORKFLOW_SUCCEEDED`，只起一次。
+- 浏览器（Vite + 裸 core）：草案卡保存入库 → 模板库 → 填参数运行 → 运行记录展开、关卡「答复」通过 → 运行 `succeeded`。服务器壳 + 无头 Chrome：模板库「定时运行」→ 自动化表单预填 → 保存出一条「运行工作流」计划。
+
+没做：运行中节点头部「第 n 步」徽标与完成节点的绿边（设计系统 §4，在画布节点头部，不在本包文件内）；模板编辑器不增删步骤 / 角色，只改已有步骤、名称与参数缺省值；模板改版后已有定时计划按版本冻结跳过，要人重新保存。
 
 ## G2-4 `HostApi.runners` 与 `wait` 动词（C4）
 

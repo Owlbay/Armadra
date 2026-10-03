@@ -101,6 +101,11 @@ export interface StartRunRequest {
   readonly template: TemplateRow;
   readonly params?: unknown;
   readonly boardId?: string | undefined;
+  /**
+   * 运行 id；缺省新铸一个。定时起跑（`schedule/workflow-target.ts`）从投递的
+   * 操作标识推出它，重试与复核据此认出「这次已经起过了」。
+   */
+  readonly runId?: string | undefined;
 }
 
 export class WorkflowEngine {
@@ -192,7 +197,7 @@ export class WorkflowEngine {
       throw new DomainError(404, "not_found", "没有这块画布。");
     }
 
-    const runId = uuidV7();
+    const runId = request.runId ?? uuidV7();
     const roles: LayoutRole[] = template.roles.map((role) => ({
       id: role.id,
       agentId: role.agentId,
@@ -805,6 +810,7 @@ export class WorkflowEngine {
       stepId,
       label: gate?.label ?? stepId,
       state,
+      ...(run.frameId === null ? {} : { nodeId: run.frameId }),
     });
   }
 

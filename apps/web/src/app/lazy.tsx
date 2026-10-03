@@ -79,6 +79,11 @@ export const HandoffHistoryDrawer = lazy(() =>
     default: module.HandoffHistoryDrawer,
   })),
 );
+export const WorkflowPanel = lazy(() =>
+  import("@/workflow/WorkflowPanel").then((module) => ({
+    default: module.WorkflowPanel,
+  })),
+);
 export const UsageDashboard = lazy(() =>
   import("@/panels/UsageDashboard").then((module) => ({
     default: module.UsageDashboard,

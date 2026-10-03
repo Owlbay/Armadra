@@ -13,13 +13,23 @@ import {
   MAX_PREVIEW,
   ScheduleError,
   configHash,
+  gateIdentity,
+  generationPinned,
   normalize,
   num,
   preview,
   validId,
   validText,
+  workflowParams,
 } from "./plan";
-import { AutomationConcurrencyPolicy, AutomationMisfirePolicy } from "./types";
+import {
+  AutomationColdStartPolicy,
+  AutomationConcurrencyPolicy,
+  AutomationMisfirePolicy,
+  AutomationTargetKind,
+  AutomationTargetSchema,
+  create,
+} from "./types";
 
 const MINUTE = 60_000;
 
@@ -154,5 +164,85 @@ describe("预览", () => {
     expect(() => preview(config(), Date.now(), MAX_PREVIEW + 1)).toThrow(
       ScheduleError,
     );
+  });
+});
+
+describe("工作流目标（契约 §15.6）", () => {
+  const workflow = (overrides: Record<string, unknown> = {}) => {
+    const base = config({ target: {} });
+    base.target = create(AutomationTargetSchema, {
+      executionHostId: base.target?.executionHostId ?? "",
+      kind: AutomationTargetKind.WORKFLOW_RUN,
+      workflowRun: { templateId: "tpl-1", templateVersion: 3, boardId: "b" },
+      ...overrides,
+    });
+    return base;
+  };
+
+  it("归一化幂等，冷启动策略归成 SKIP", () => {
+    const once = normalize(workflow());
+    expect(once.target?.coldStartPolicy).toBe(AutomationColdStartPolicy.SKIP);
+    expect(configHash(normalize(once))).toEqual(configHash(once));
+  });
+
+  it("不能带会话、节点或启动定义，必须指明模板与版本", () => {
+    expect(() => normalize(workflow({ nodeId: "node-1" }))).toThrow(
+      ScheduleError,
+    );
+    expect(() =>
+      normalize(
+        workflow({
+          workflowRun: {
+            templateId: "tpl-1",
+            templateVersion: 0,
+            boardId: "b",
+          },
+        }),
+      ),
+    ).toThrow(ScheduleError);
+    expect(() => normalize(workflow({ workflowRun: undefined }))).toThrow(
+      ScheduleError,
+    );
+  });
+
+  it("别的目标不能夹带 workflowRun", () => {
+    const agent = config();
+    (agent.target as { workflowRun?: unknown }).workflowRun = {
+      templateId: "tpl-1",
+      templateVersion: 1,
+      boardId: "b",
+    };
+    expect(() => normalize(agent)).toThrow(ScheduleError);
+  });
+
+  it("不钉代数，闸门按模板", () => {
+    const target = normalize(workflow()).target!;
+    expect(generationPinned(target)).toBe(false);
+    expect(gateIdentity(target)).toEqual({
+      sessionId: "",
+      nodeId: "workflow:tpl-1",
+    });
+  });
+
+  it("没有 workflowRun 的旧配置摘要不变", () => {
+    const json = canonicalJson(planConfigToJson(normalize(config())));
+    expect(json).not.toContain("workflowRun");
+  });
+
+  it("载荷是 {params}：只收字符串值与合法的名字", () => {
+    const bytes = (value: unknown) => Buffer.from(JSON.stringify(value));
+    expect(workflowParams(bytes({ params: { scope: "src" } }))).toEqual({
+      scope: "src",
+    });
+    expect(workflowParams(bytes({}))).toEqual({});
+    expect(() => workflowParams(Buffer.from("不是 JSON"))).toThrow(
+      ScheduleError,
+    );
+    expect(() => workflowParams(bytes({ params: { scope: 1 } }))).toThrow(
+      ScheduleError,
+    );
+    expect(() =>
+      workflowParams(bytes({ params: { "bad name": "x" } })),
+    ).toThrow(ScheduleError);
   });
 });
