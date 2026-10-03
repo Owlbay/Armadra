@@ -9,10 +9,22 @@
 | 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                   | 何时跑                              | 失败时       |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | ------------ |
 | A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e`、`push-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`core-terminal-packaged`、`server-perf`、`update-e2e`                                                                                                  | `nightly.yml`                       | 开 issue     |
-| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                                                                | 手动；清单在执行计划 §5             | 记进状态文档 |
+| B   | `packaged-smoke`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`windows-acceptance`（windows runner 作业）                                                     | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                          | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
+
+## Windows 真机验收
+
+`windows-acceptance.mjs`（补全计划 G3-2）：在 Windows 上一键装 NSIS 包、起应用、验会话宿主与命名管道、三种 shell 里的 `armadra-launch.exe`（参数、注入、凭据兑换）、DPAPI 凭据状态、回环 Gateway、文件监听、保活、杀主进程后接回、ConPTY 关闭、静默卸载与用户配置快照，写 `result.json`。只要 Node 22；纯函数一半在 `windows-acceptance-lib.mjs`，拷到别的机器上要连它一起。
+
+```powershell
+node tools/probes/windows-acceptance.mjs --installer .\Armadra-Setup-0.1.0-x64.exe [--soak-minutes 30] [--with-codex] [--require-signed]
+node tools/probes/windows-acceptance.mjs --app <Armadra.exe>
+node tools/probes/windows-acceptance.mjs --dry-run
+```
+
+检查项、结果文件的形状与回传方式见[开发指南](../../docs/guides/development.md)「Windows 真机验收」。干跑在三个平台的 `pnpm release:test` 里（`windows-acceptance.test.mjs`）；`nightly.yml` 的 `windows-acceptance` 作业在 windows runner 上打包并完整跑一遍（保活两分钟）。
 
 ## 受控 Chromium
 
