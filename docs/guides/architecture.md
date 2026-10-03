@@ -79,6 +79,11 @@ Gateway（契约 §17）。用法见
 复用 core `push/transport-direct.ts` 的 APNs / FCM 客户端；是否运营由发布方定，
 见它的 [README](../../apps/push-relay/README.md) 与契约 §19。
 
+`apps/mobile` 是 Capacitor 手机壳：把同一份 `apps/web` 产物打进 iOS / Android
+安装包，经 Gateway 跨源访问 core（Bearer 会话、一次性 WS 票）；原生只补钥匙串、
+证书钉扎、扫码、推送解密与深链，不含业务。见
+[客户端平台](client-platforms.md#原生-appcapacitor-手机壳g3-1)。
+
 ## 3. 画布层
 
 窗口浮层以侧栏之外的可用画布区域为布局容器。标题栏图标共用 44px 高度的

@@ -38,8 +38,53 @@ Go Host 用 `--serve-web <dist>` 在它自己的 HTTPS 来源上托管这份前�
 
 ## 运行边界
 
-手机浏览器是客户端，不在手机上启动桌面 CLI。终端、Git、文件与 Agent 仍由电脑上的 Runtime 执行。当前项目未提供 iOS/Android 原生安装包，也没有后台推送通知。
+手机浏览器与原生 App 都是客户端，不在手机上启动桌面 CLI。终端、Git、文件与 Agent 仍由电脑上的 core 执行。原生 App 见下一节；商店分发与真机推送要用户的证书（清单在该节末尾）。
 
 电脑上的浏览器可直接使用 `./armadra.sh run web`。如果已有带认证的 HTTPS 反向代理，可将 Web 静态产物和 Runtime 的 `/api/*`、`/health`、WebSocket 代理到同一来源，并在构建时把 `VITE_RUNTIME_URL` 设置为该来源，例如 `https://canvas.example.com`（此处仅为配置示例）。也可以显式设置空值使用当前来源，或设置 `/runtime` 这样的反向代理前缀；HTTP 与 WebSocket 会保留同一前缀。Runtime 本身仍保持回环监听；代理必须保护 HTTP 与 WebSocket 的所有入口，不能把可执行终端和主机文件 API 裸露到网络。
 
-这份客户端适配不会自动更改监听地址、CORS、账户配置或主机权限。手机原生打包属于独立后续实现，不应把响应式页面等同于完整远程主机产品。
+这份客户端适配不会自动更改监听地址、CORS、账户配置或主机权限。
+
+## 原生 App（Capacitor 手机壳，G3-1）
+
+`apps/mobile`（`@armadra/mobile`，Capacitor 8）把同一份 `apps/web` 生产构建**打进安装包**：不配 `server.url`、不做 OTA，版本随桌面 / 服务器一起发（`apps/mobile/package.json` 在 `tools/release/version.mjs` 的版本清单里）。商店定位是「连接你自己的 Armadra 的通用客户端」，App 里不内置任何由我们托管的服务（[外部服务](../design/external-services.md) §5.1）。页面来源固定为 iOS `capacitor://localhost`、Android `https://localhost`，Gateway 的 CORS 只放行这两个（契约 §17.4）。
+
+原生只补网页做不到的几件事，页面一半的约定在 `apps/web/src/mobile/native-bridge.ts` 文件头：
+
+| 能力         | iOS（`ios/App/App/ArmadraNativePlugin.swift`）                                                                                          | Android（`android/app/src/main/java/dev/armadra/mobile/`）                              |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| 会话凭据     | 钥匙串（`AfterFirstUnlockThisDeviceOnly`，首次启动清掉上次安装的残留）                                                                  | Keystore 里不可导出的 AES-GCM 钥加密后存私有偏好；不备份                                |
+| 证书钉扎     | 插件挂 WKWebView 的认证挑战：只在链能验到「指纹等于二维码 `fp` 的信任锚」且主机名对得上时放行，系统信任库不参与                         | `WebViewClient.onReceivedSslError`：叶证书要能验到同一张信任锚，否则 `cancel()`         |
+| 信任锚从哪来 | 配对时取一次 `GET /ca.crt`（本地 CA 模式下握手链里只有叶），按指纹核对后才存                                                            | 同左；两步取（先只看叶、再只信那一张叶去取 `/ca.crt`），不用「信任一切」的 TrustManager |
+| 扫码         | AVFoundation 整屏扫码，系统「取消」                                                                                                     | Google 代码扫描器（Play 服务提供界面，不要相机权限）                                    |
+| 推送         | APNs 令牌 + 设备 X25519 公钥；Notification Service Extension 用钥匙串里的私钥解开信封（契约 §19.5），换上标题、正文、深链               | FCM 令牌 + 设备公钥；数据消息在 `ArmadraMessagingService` 里解开再出通知                |
+| 深链         | `armadra://pair?…` → 写进页面 `#link=` 并重载，连接页预填，人点「连接」才配；`armadra://w/<工作空间>/n/<节点>` → `#push=`，进节点焦点页 | 同左                                                                                    |
+
+- 商店版走发布方的推送中继：构建时设 `ARMADRA_MOBILE_RELAY_URL`（写进 `capacitor.config.ts` 的 `plugins.ArmadraNative.relayUrl`），App 先向中继 `/v1/register` 换中继令牌，再以 `transport: "relay"` 登记；不设时以 `direct` 登记，适合自己构建、自己持有 APNs / FCM 密钥的部署。
+- 系统本来就信任的证书（ACME、反向代理的真证书）在 Android 上由系统校验，WebView 没有别的钩子，指纹不再参与；iOS 照样按指纹判。
+- 钉扎、信封与深链的判定在不依赖 UI 的模块里：iOS `ios/ArmadraNativeKit`（`swift test`），Android `android/armadra-native-core`（纯 JVM，`./gradlew :armadra-native-core:test`），两边读同一份样本 `apps/mobile/fixtures/`，`src/fixtures.test.ts` 守着样本与 core 的实现一致。
+
+### 本地构建
+
+```sh
+pnpm libs:build && pnpm --filter @armadra/web build
+pnpm --filter @armadra/mobile sync          # 拷页面产物进 www/、插插件桥、cap sync
+# iOS 模拟器（不签名）
+xcodebuild build -project apps/mobile/ios/App/App.xcodeproj -scheme App \
+  -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO
+# Android debug APK（要 Android SDK 与 JDK 21）
+(cd apps/mobile/android && ./gradlew :armadra-native-core:test :app:assembleDebug)
+```
+
+「连接 → 配对 → 画布」在模拟器里跑：`node tools/probes/mobile-shell-e2e.mjs --platform ios|android`（B 档，`nightly.yml` 的 `mobile-ios` / `mobile-android` 作业；产物名见 `tools/release/artifacts.mjs` 的 `mobileAssets`）。
+
+### 真机与商店：需用户提供
+
+对应[补全执行计划](../design/completion-plan.md) §5 的 U8、U9、U10。仓库里没有任何签名材料，下面每一项都由用户提供后再做：
+
+1. **Apple**：Apple Developer Program 账号（与桌面公证同一个）；App ID `dev.armadra.mobile` 与 `dev.armadra.mobile.NotificationService`，都开 Push Notifications 与 Keychain Sharing（组 `dev.armadra.mobile.shared`）；开发 / 分发证书与两份 provisioning profile；CI secrets `IOS_DISTRIBUTION_P12_BASE64`、`IOS_DISTRIBUTION_PASSWORD`、`IOS_PROVISIONING_PROFILE_BASE64`，上传用桌面公证的同一把 App Store Connect API key。发布构建把 `App.entitlements` 的 `aps-environment` 交给分发 profile 决定（`production`）。
+2. **APNs**：`.p8` + Key ID + Team ID。自建部署填进 core 的 `ARMADRA_PUSH_APNS_*`（`direct`）；商店版填进中继的 `ARMADRA_RELAY_APNS_*`。验证：真机开推送 → `POST /api/push/test` 收到通知，锁屏上显示解密后的标题。
+3. **Android**：Play 开发者账号（个人账户的新 App 要 12 名测试者封闭测试 14 天）；上传密钥 `ANDROID_UPLOAD_KEYSTORE`（构建时的文件路径）、`ANDROID_UPLOAD_KEYSTORE_PASSWORD`、`ANDROID_UPLOAD_KEY_ALIAS`（`app/build.gradle` 只从环境读）；Play 服务账号 JSON（上传用）。
+4. **Firebase**：一个 Firebase 项目，下载 `google-services.json` 放到 `apps/mobile/android/app/`（不进仓库；有它构建时才套 google-services 插件，没有时 App 照常、开推送答失败）；服务账号 JSON 给 core 的 `ARMADRA_PUSH_FCM_CREDENTIALS_FILE` 或中继的 `ARMADRA_RELAY_FCM_CREDENTIALS_FILE`。
+5. **推送中继**（商店版）：一台公网主机运行 `apps/push-relay`，构建 App 时设 `ARMADRA_MOBILE_RELAY_URL`。
+6. **商店审核**：一台公网可达的演示服务器壳与审核账号；隐私说明（App 只连用户自己的服务器、不收集数据）；出口合规问卷（只用系统自带的标准算法：TLS、AES-GCM、X25519）。
+7. **真机验收**：扫桌面「对外服务」的二维码 → 钉扎 → 配对 → 画布；关掉再开 App 不用重配；换证书（重置 CA）后 App 提示重新扫码、不自动信任；收到审批推送、点开进节点焦点页。
