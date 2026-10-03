@@ -184,6 +184,16 @@ export class AccountsTx {
     return row === undefined ? undefined : toCredential(row);
   }
 
+  /** 一个第三方身份当前绑在谁身上，最多一份（唯一索引，契约 §18.5）。 */
+  liveOAuth(provider: string, subject: string): CredentialRow | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT ${CREDENTIAL_COLUMNS} WHERE kind = 'oauth' AND provider = ? AND subject = ? AND revoked_at_ms = 0`,
+      )
+      .get(provider, subject) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : toCredential(row);
+  }
+
   createCredential(row: CredentialRow): void {
     this.database
       .prepare(

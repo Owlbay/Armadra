@@ -121,7 +121,12 @@ export interface PublicDevice {
 }
 
 /** 进 `identity.login` 审计的那一个字：这次是怎么证明身份的。 */
-export type LoginMethod = "password" | "passkey" | "totp" | "recovery";
+export type LoginMethod =
+  | "password"
+  | "passkey"
+  | "totp"
+  | "recovery"
+  | "oauth";
 
 /** 会话列表的一行（契约 §18.4）。密钥与哈希不出这个域。 */
 export interface SessionView {

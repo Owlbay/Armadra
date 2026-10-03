@@ -245,9 +245,32 @@ describe("账号这一面", () => {
     const session = await pair(core, base);
     // passkey 的旧占位路径（`credentials/passkey/*`）随 §18.2 做实一起退役，
     // 现在的路由在 `passkey/*`，见下一条用例与 `security-http.test.ts`。
+    // OAuth 的旧占位路径同样退役；没有公网来源时 `oauth/*` 答
+    // `oauth_not_configured`（契约 §18.5）。
+    const retired = await call(
+      session,
+      "POST",
+      "/api/identity/credentials/oauth/github/start",
+      {},
+    );
+    expect(retired.status).toBe(404);
+    const providers = await call(
+      session,
+      "GET",
+      "/api/identity/oauth/providers",
+    );
+    expect(await providers.json()).toMatchObject({ configured: false });
+    const oauth = await call(
+      session,
+      "POST",
+      "/api/identity/oauth/github/start",
+      {},
+    );
+    expect(oauth.status).toBe(404);
+    expect(((await oauth.json()) as { code: string }).code).toBe(
+      "oauth_not_configured",
+    );
     for (const [method, path] of [
-      ["POST", "/api/identity/credentials/oauth/github/start"],
-      ["POST", "/api/identity/credentials/oauth/github/callback"],
       ["POST", "/api/identity/register"],
     ] as const) {
       const response = await call(session, method, path, {});
