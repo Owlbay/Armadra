@@ -22,12 +22,14 @@
 //   node tools/probes/mobile-shell-e2e.mjs --platform ios [--device "iPhone 16"|auto] [输出目录]
 //   node tools/probes/mobile-shell-e2e.mjs --platform android [输出目录]
 //
-// 产物：<输出目录>/result.json，默认 target/mobile-shell-e2e/。一切都是临时的、回环的。
+// 产物：<输出目录>/result.json，默认 target/mobile-shell-e2e/。一切都是临时的、回环的；
+// core 用临时 HOME（`probe-home.mjs`），不读操作员的 CLI 登录状态。
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isolatedEnv, probeHome } from "./probe-home.mjs";
 import { harness } from "./shell-e2e-lib.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -50,6 +52,9 @@ const output = resolve(
 );
 mkdirSync(output, { recursive: true });
 const h = harness(output);
+// 临时 HOME 只给 core：xcodebuild / Gradle 是工具链，照常用自己的缓存。
+const home = probeHome("armadra-mobile-e2e-home-");
+h.cleanups.push(home.remove);
 const { report, step, temp } = h;
 report.platform = platform;
 report.failures = [];
@@ -107,13 +112,12 @@ async function startCore(dataDir) {
     [entry, "--listen", "tcp:127.0.0.1:0", "--data-dir", dataDir],
     {
       stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
+      env: isolatedEnv(home, {
         ARMADRA_CORE: "ts",
         ARMADRA_NO_GLOBAL_WRITES: "1",
         ARMADRA_SECRET_BACKEND: "file",
         ARMADRA_GATEWAY_WEB_ROOT: webDist,
-      },
+      }),
     },
   );
   let stderr = "";

@@ -522,7 +522,7 @@
 - 真机、签名、TestFlight / Play 上传、APNs / FCM 生产密钥：需用户提供（计划 §5 的 U8–U10，清单在[客户端平台](../guides/client-platforms.md)）；真机推送与 NSE 解密只有单测。
 - 本机 Xcode 27 的 CoreSimulator 过旧且没装 iOS 运行时，模拟器只在 CI 上跑；本机没有 Android SDK。
 - Android 上系统已信任的证书（ACME / 反代真证书）由系统校验，指纹不参与（WebView 无钩子）；FCM 令牌轮换不主动重登记；通用链接（`apple-app-site-association` / `assetlinks.json`）等域名（外部服务 §5.3）。
-- 探针要模拟器，不进 `tools/ci/e2e.json`，由夜间作业直接跑。
+- 探针要模拟器，不进 `tools/ci/e2e.d/` 的清单，由夜间作业直接跑。
 
 ## G3-2 Windows 真机验收包
 
