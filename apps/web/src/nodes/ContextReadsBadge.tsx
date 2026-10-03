@@ -22,6 +22,7 @@ import { useT } from "@/app/preferences-store";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
 import { usePageVisible } from "@/panels/resources/use-visibility";
 import { Badge } from "@/ui/badge";
+import { Button } from "@/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui/popover";
 
 /** 悬停里最多几条。再多就不是「最近」了，那是审计面板的事。 */
@@ -64,8 +65,10 @@ export function ContextReadsBadge({
           className="h-[18px] px-1.5 text-[length:var(--text-caption)]"
           data-no-drag="true"
         >
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
             data-slot="context-reads"
             data-testid={`context-reads-${nodeId}`}
             aria-label={t("contextReads.count", { count: total })}
@@ -77,7 +80,7 @@ export function ContextReadsBadge({
           >
             <Eye className="size-2.5" />
             {t("contextReads.count", { count: total })}
-          </button>
+          </Button>
         </Badge>
       </PopoverTrigger>
       <PopoverContent

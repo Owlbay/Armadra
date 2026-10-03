@@ -441,11 +441,14 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
 - **Windows 持久化会话**：session host 已实现并在 Windows CI 上通过，没有在真机上
   长时间运行过（进度 §13、§33）。启动行方言、`.cmd` 绕过与 `.exe` 启动器同样只在
   Windows CI 上跑过（进度 §54、§57、§61）。
-- **多人实时协同**：core 侧已实现（`core/realtime/`，契约 §16.1–§16.2）：每块板
+- **多人实时协同**：core 侧（`core/realtime/`，契约 §16.1–§16.2、§16.4）：每块板
   一个 `Y.Doc`，快照 + 更新流是实时板的真相，表由物化得来；core 自己的写者经
-  `saveBoard` 前的拦截写进文档；设置 `collab.realtime`（缺省开）关掉时退回租约模式。
-  页面侧（Yjs 绑定、`Y.UndoManager`、光标层）与评论路由尚未实现（G2-5、G2-6），在那之
-  前页面仍走 §5 的编辑租约。
+  `saveBoard` 前的拦截写进文档；awareness 按连接改写身份、校验形状。页面侧
+  （`apps/web/src/realtime/`）：开板时 `realtime || enabled` 就连 `…/sync`，
+  `Y.Doc` 与 `canvas-store` 双向绑定（origin 断开回声环），`Y.UndoManager` 接管
+  撤销，在线条与光标层来自 awareness，断线时本地照常编辑、重连补齐。设置
+  `collab.realtime`（缺省开）关掉时新板留在 §5 的编辑租约。评论（G2-6）尚未实现；
+  实时板的视口不进文档，只留在本窗口。
 - **自动更新**：electron-updater 已接通（`apps/desktop/src/main/updates/`），但未
   签名的构建里更新器是关闭的——「没签名 = 什么也验证不了 = `notConfigured`」，
   它绝不会报 `upToDate`（`shell-core/updates/availability.ts`）。

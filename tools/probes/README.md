@@ -6,11 +6,11 @@
 
 按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.json` 的清单跑（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
-| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                        | 何时跑                              | 失败时       |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
-| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`push-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`core-terminal-packaged`                                                                                                    | `nightly.yml`                       | 开 issue     |
-| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                                     | 手动；清单在执行计划 §5             | 记进状态文档 |
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                        | 何时跑                              | 失败时       |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`push-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`core-terminal-packaged`                                                                                                                    | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                                                     | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
 
@@ -126,6 +126,18 @@ node tools/probes/credentials-e2e.mjs [输出目录]   # 默认 target/probes/cr
 ## 本轮界面功能的端到端验证
 
 真 core（`apps/desktop/out/core/main.js`）、真 Vite 页面、新 profile 的无头 Chrome，经浏览器级 CDP 连接驱动；多设备场景用两个独立的 browser context 当两台设备。场景拆在 `ui-features/` 里，共用一套临时环境（`harness.mjs`），媒体夹具与截图像素统计在 `fixtures.mjs`。
+
+## 实时协同端到端
+
+[补全架构](../../docs/design/completion-architecture.md) §6.4 的页面侧：真 core、真 Vite 页面、新 profile 的无头 Chrome，两个独立 browser context 同开一块板（复用 `ui-features/harness.mjs`）。
+
+```sh
+pnpm libs:build
+pnpm --filter @armadra/desktop build
+node tools/probes/realtime-e2e.mjs [输出目录]
+```
+
+验证：第一台打开即切到实时（`GET …/realtime`）、两边在线条列出对方；两边同时各拖一个节点，两边与 core 物化的表一致；成员光标与选区外框；同一张便签一个在开头、一个在结尾同时输入，提交后收敛且两个人的字都在；断网（探针注入的 WebSocket 包装切断 `…/sync` 并拒绝重连）时顶部「离线编辑」、在线条置灰，期间的拖动对方看不到，恢复后自动重连补齐。产物默认在 `target/realtime-e2e/`。租约模式的多设备场景（`ui-features` 的 presence、`server-e2e`）开头先把 `collab.realtime` 关掉。
 
 ## Agent 协作端到端（真 Claude Code + 真 Codex CLI）
 

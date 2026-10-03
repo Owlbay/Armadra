@@ -26,7 +26,7 @@ minimumReleaseAgeExclude:
   - "@xyflow/system@0.0.80"
   - react-resizable-panels@4.12.4
   - electron@42.11.6
-  - "@armadra/agent@0.6.2"
+  - "@armadra/agent@0.6.5"
 
 storeDir: .pnpm-store
 

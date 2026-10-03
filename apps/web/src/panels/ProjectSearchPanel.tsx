@@ -19,9 +19,12 @@ import { runtimeApi } from "@/api/client";
 import { useT } from "@/app/preferences-store";
 import { openFileInEditor } from "@/files/open-editor";
 import { useCanvasStore } from "@/store/canvas-store";
+import { Alert, AlertTitle } from "@/ui/alert";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
+import { Empty, EmptyDescription } from "@/ui/empty";
 import { Input } from "@/ui/input";
+import { Spinner } from "@/ui/spinner";
 import { Toggle } from "@/ui/toggle";
 
 interface Options {
@@ -249,13 +252,11 @@ export function ProjectSearchPanel({
         {busy && (
           <span
             role="status"
-            className="text-[length:var(--text-caption)] text-muted-foreground"
+            className="flex items-center gap-1 text-[length:var(--text-caption)] text-muted-foreground"
           >
+            <Spinner aria-hidden role="presentation" className="size-3" />
             {t("projectSearch.searching")}
           </span>
-        )}
-        {failed && (
-          <Badge variant="destructive">{t("projectSearch.failed")}</Badge>
         )}
         {result && !busy && files.length > 0 && (
           <span className="text-[length:var(--text-caption)] text-muted-foreground">
@@ -264,9 +265,6 @@ export function ProjectSearchPanel({
               matches: totalMatches,
             })}
           </span>
-        )}
-        {result && !busy && files.length === 0 && !failed && (
-          <Badge variant="outline">{t("projectSearch.empty")}</Badge>
         )}
         {result?.timedOut && (
           <Badge variant="outline">{t("projectSearch.timedOut")}</Badge>
@@ -280,6 +278,17 @@ export function ProjectSearchPanel({
           </span>
         )}
       </div>
+
+      {failed && (
+        <Alert variant="destructive">
+          <AlertTitle>{t("projectSearch.failed")}</AlertTitle>
+        </Alert>
+      )}
+      {result && !busy && files.length === 0 && !failed && (
+        <Empty className="p-4">
+          <EmptyDescription>{t("projectSearch.empty")}</EmptyDescription>
+        </Empty>
+      )}
 
       {files.map((file) => (
         <div key={file.path} className="min-w-0">

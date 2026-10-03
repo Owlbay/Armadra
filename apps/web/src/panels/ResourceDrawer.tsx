@@ -17,6 +17,8 @@ import { ScrollArea } from "../ui/scroll-area";
 import { SheetTitle } from "../ui/sheet";
 import { WorkPanelSheet } from "./WorkPanelSheet";
 import { IconButton } from "../ui/icon-button";
+import { Alert, AlertTitle } from "../ui/alert";
+import { Skeleton } from "../ui/skeleton";
 import { ComponentList } from "./resources/ComponentList";
 import { HostCard } from "./resources/HostCard";
 import { OrphanList } from "./resources/OrphanList";
@@ -70,13 +72,24 @@ export function ResourceDrawer() {
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-3 p-3">
           {error && !snapshot && (
-            <p className="text-[12px] text-[var(--danger-text)]">{error}</p>
+            <Alert variant="destructive">
+              <AlertTitle className="font-normal break-words">
+                {error}
+              </AlertTitle>
+            </Alert>
           )}
-          {/* 还没有过样本时不画表格骨架：等第一份真实数字，别先显示一屏 0。 */}
+          {/* 还没有过样本时不画表格：等第一份真实数字，别先显示一屏 0——
+              只放两块卡片形状的骨架占位。 */}
           {loading && !snapshot && (
-            <p className="text-[12px] text-muted-foreground">
-              {t("resources.loading")}
-            </p>
+            <div
+              role="status"
+              data-slot="resources-loading"
+              className="flex flex-col gap-3"
+            >
+              <span className="sr-only">{t("resources.loading")}</span>
+              <Skeleton className="h-20 w-full rounded-[var(--r-card)]" />
+              <Skeleton className="h-20 w-full rounded-[var(--r-card)]" />
+            </div>
           )}
 
           {snapshot && (

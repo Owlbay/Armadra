@@ -1,4 +1,5 @@
 import {
+  boardRealtimeStateSchema,
   boardDocumentSchema,
   boardPresenceSchema,
   leaseRequestSchema,
@@ -42,6 +43,16 @@ export const boardsApi = {
       `/api/workspaces/${workspaceId}/boards/${boardId}`,
       noContentSchema,
       { method: "DELETE" },
+    ),
+
+  /**
+   * 这块板走不走实时协同（契约 §16.2）：`realtime || enabled` 时连 `…/sync`，
+   * 否则留在租约 + CAS。
+   */
+  boardRealtime: (workspaceId: string, boardId: string) =>
+    request(
+      `/api/workspaces/${workspaceId}/boards/${boardId}/realtime`,
+      boardRealtimeStateSchema,
     ),
 
   /* --------------------------------- 画布文档 --------------------------- */

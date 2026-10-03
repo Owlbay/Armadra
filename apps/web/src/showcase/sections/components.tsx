@@ -9,10 +9,31 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/ui/accordion";
+import {
+  ResponsiveDialog,
+  ResponsiveDialogClose,
+  ResponsiveDialogContent,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+  ResponsiveDialogTrigger,
+} from "@/panels/ResponsiveDialog";
+import { TABS_CONTENT_FOCUS } from "@/panels/tabs-focus";
 import { AgentAvatar } from "@/ui/agent-avatar";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/ui/alert-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/ui/alert";
 import { Avatar, AvatarFallback, AvatarGroup } from "@/ui/avatar";
 import { Badge } from "@/ui/badge";
+import { BrandMark } from "@/ui/brand-mark";
 import { Button } from "@/ui/button";
 import { ButtonGroup } from "@/ui/button-group";
 import {
@@ -52,6 +73,8 @@ import {
 import { Kbd, KbdGroup } from "@/ui/kbd";
 import { Label } from "@/ui/label";
 import { MemberDot, memberColorVar } from "@/ui/member-dot";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui/hover-card";
+import { Popover, PopoverContent, PopoverTrigger } from "@/ui/popover";
 import { Progress } from "@/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/ui/radio-group";
 import {
@@ -61,7 +84,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/ui/select";
+import { ScrollArea } from "@/ui/scroll-area";
 import { Separator } from "@/ui/separator";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/ui/sheet";
 import { Skeleton } from "@/ui/skeleton";
 import { Slider } from "@/ui/slider";
 import { Spinner } from "@/ui/spinner";
@@ -75,7 +106,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/ui/table";
-import { Tabs, TabsList, TabsTrigger } from "@/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui/tabs";
 import { Textarea } from "@/ui/textarea";
 import { Toggle } from "@/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/ui/toggle-group";
@@ -427,6 +458,18 @@ function Gallery() {
               {t("showcase.sample.terminal")}
             </TabsTrigger>
           </TabsList>
+          <TabsContent
+            value="session"
+            className={`px-1 py-1.5 text-muted-foreground ${TABS_CONTENT_FOCUS}`}
+          >
+            {SESSIONS[0].title}
+          </TabsContent>
+          <TabsContent
+            value="terminal"
+            className={`px-1 py-1.5 text-muted-foreground ${TABS_CONTENT_FOCUS}`}
+          >
+            {SESSIONS[1].title}
+          </TabsContent>
         </Tabs>
       </Sample>
       <Sample name="toggle-group · button-group">
@@ -600,6 +643,101 @@ function Gallery() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+      </Sample>
+      <Sample name="responsive-dialog · alert-dialog · sheet">
+        <ResponsiveDialog>
+          <ResponsiveDialogTrigger asChild>
+            <Button variant="outline" size="sm">
+              <Plus />
+              {t("showcase.sample.create")}
+            </Button>
+          </ResponsiveDialogTrigger>
+          <ResponsiveDialogContent>
+            <ResponsiveDialogHeader>
+              <ResponsiveDialogTitle>
+                {t("showcase.sample.create")}
+              </ResponsiveDialogTitle>
+            </ResponsiveDialogHeader>
+            <Field>
+              <FieldLabel htmlFor="showcase-dialog-name">
+                {t("showcase.sample.name")}
+              </FieldLabel>
+              <Input id="showcase-dialog-name" />
+            </Field>
+            <ResponsiveDialogFooter>
+              <ResponsiveDialogClose asChild>
+                <Button variant="outline">{t("showcase.sample.cancel")}</Button>
+              </ResponsiveDialogClose>
+              <Button>{t("showcase.sample.save")}</Button>
+            </ResponsiveDialogFooter>
+          </ResponsiveDialogContent>
+        </ResponsiveDialog>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button variant="destructive" size="sm">
+              {t("showcase.sample.delete")}
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("showcase.sample.delete")}</AlertDialogTitle>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>
+                {t("showcase.sample.cancel")}
+              </AlertDialogCancel>
+              <AlertDialogAction variant="destructive">
+                {t("showcase.sample.delete")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+        <Sheet>
+          <SheetTrigger asChild>
+            <Button variant="ghost" size="sm">
+              {t("showcase.sample.details")}
+            </Button>
+          </SheetTrigger>
+          <SheetContent>
+            <SheetHeader>
+              <SheetTitle>{t("showcase.sample.details")}</SheetTitle>
+            </SheetHeader>
+          </SheetContent>
+        </Sheet>
+      </Sample>
+      <Sample name="popover · hover-card · brand-mark">
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="sm">
+              {t("showcase.sample.more")}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-56 text-xs">
+            {SESSIONS[0].title}
+          </PopoverContent>
+        </Popover>
+        <HoverCard>
+          <HoverCardTrigger asChild>
+            <Button variant="link" size="sm">
+              {agentLabel(SESSIONS[0].agent)}
+            </Button>
+          </HoverCardTrigger>
+          <HoverCardContent className="w-56 text-xs">
+            {SESSIONS[0].title}
+          </HoverCardContent>
+        </HoverCard>
+        <BrandMark className="size-6" />
+      </Sample>
+      <Sample name="scroll-area" wide>
+        <ScrollArea className="h-24 w-full rounded-[var(--r-control)] border">
+          <div className="flex flex-col gap-1 p-2">
+            {[...SESSIONS, ...SESSIONS].map((session, index) => (
+              <span key={`${session.id}-${index}`} className="truncate">
+                {session.title}
+              </span>
+            ))}
+          </div>
+        </ScrollArea>
       </Sample>
       <Sample name="empty" wide>
         <Empty className="border border-dashed border-border">
