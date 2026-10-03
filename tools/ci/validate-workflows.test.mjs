@@ -329,3 +329,51 @@ test("tier A runs as ci.yml's e2e job on ubuntu, tier B on a nightly schedule", 
     ],
   );
 });
+
+test("tier B runs on every system its entries name, reports failures as issues and spends no secret", () => {
+  const read = (name) =>
+    parseYaml(readFileSync(join(root, ".github/workflows", name), "utf8"));
+  const ci = read("ci.yml");
+  const nightly = read("nightly.yml");
+  const entries = [
+    { id: "packaged-smoke", tier: "b", platforms: ["darwin", "linux"] },
+    { id: "deb-install", tier: "b", platforms: ["linux"] },
+    { id: "anywhere", tier: "b" },
+    { id: "a-only", tier: "a", platforms: ["win32"] },
+  ];
+  const check = (document) =>
+    checkE2eTiers({ "ci.yml": ci, "nightly.yml": document }, entries);
+  assert.deepEqual(check(nightly), []);
+  // The repository's own entries agree with the repository's nightly.yml.
+  assert.deepEqual(checkE2eTiers({ "ci.yml": ci, "nightly.yml": nightly }), []);
+
+  const noMac = structuredClone(nightly);
+  delete noMac.jobs.macos;
+  noMac.jobs.report.needs = ["linux"];
+  assert.deepEqual(check(noMac), [
+    "nightly.yml: no job runs --tier b on darwin, where packaged-smoke must run",
+  ]);
+
+  const silent = structuredClone(nightly);
+  delete silent.jobs.report;
+  assert.deepEqual(check(silent), [
+    "nightly.yml: no job opens an issue when a tier B job fails",
+  ]);
+
+  const partial = structuredClone(nightly);
+  partial.jobs.report.needs = ["linux"];
+  delete partial.jobs.report.permissions;
+  assert.deepEqual(check(partial), [
+    "nightly.yml: job report does not need macos, so their failures open no issue",
+    "nightly.yml: job report opens issues without permissions: issues: write",
+  ]);
+
+  const spending = structuredClone(nightly);
+  spending.jobs.linux.steps[0].env = {
+    TOKEN: "${{ secrets.RELEASE_TOKEN }}",
+    OK: "${{ secrets.GITHUB_TOKEN }}",
+  };
+  assert.deepEqual(check(spending), [
+    "nightly.yml: reads RELEASE_TOKEN; tier B may use only the default GITHUB_TOKEN",
+  ]);
+});

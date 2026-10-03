@@ -47,6 +47,8 @@ test("the manifest is one file per entry, loaded tier by tier and by id", () => 
     put("beta.json", entry("beta", "a"));
     put("renamed.json", entry("other", "a"));
     put("notes.md", "not an entry");
+    put(".DS_Store", "finder");
+    put("._zeta.json", "resource fork");
     put("broken.json", "{");
     const legacy = `${directory}-e2e.json`;
     writeFileSync(legacy, "{}");
@@ -92,8 +94,9 @@ test("a malformed manifest is reported entry by entry", () => {
         id: "ok",
         tier: "c",
         script: "tools/nope.mjs",
-        requires: ["docker"],
+        requires: ["gpu"],
         args: [1],
+        platforms: ["beos"],
       },
       {
         tier: "a",
@@ -107,7 +110,8 @@ test("a malformed manifest is reported entry by entry", () => {
     "repeats its id",
     "has tier c",
     "does not exist",
-    "requires docker",
+    "requires gpu",
+    "platforms that are not a non-empty list",
     "args that are not a list of strings",
     "no positive timeoutMinutes",
     "no kebab-case id",
@@ -320,6 +324,59 @@ test("dev-stack entries are skipped unless ARMADRA_DEV_STACK=1 and Docker answer
     });
     assert.equal(broken.status, "failed");
     assert.equal(broken.entries[0].status, "failed");
+  } finally {
+    remove();
+  }
+});
+
+test("an entry for another platform is skipped, and docker is a requirement", async () => {
+  const { root, remove } = fixture();
+  try {
+    const summary = await runTier({
+      tier: "b",
+      root,
+      out: join(root, "out"),
+      log: quiet,
+      env: { PATH: process.env.PATH },
+      platform: "linux",
+      probe: { ...present, docker: () => false },
+      manifest: {
+        entries: [
+          {
+            id: "mac-only",
+            tier: "b",
+            script: "fail.mjs",
+            platforms: ["darwin"],
+            timeoutMinutes: 1,
+          },
+          {
+            id: "linux-only",
+            tier: "b",
+            script: "pass.mjs",
+            args: ["{out}"],
+            platforms: ["linux"],
+            timeoutMinutes: 1,
+          },
+          {
+            id: "container",
+            tier: "b",
+            script: "pass.mjs",
+            args: ["{out}"],
+            requires: ["docker"],
+            timeoutMinutes: 1,
+          },
+        ],
+      },
+    });
+    assert.deepEqual(
+      summary.entries.map((entry) => [entry.id, entry.status, entry.reason]),
+      [
+        ["mac-only", "skipped", "only on darwin"],
+        ["linux-only", "passed", undefined],
+        ["container", "failed", "missing docker"],
+      ],
+    );
+    assert.equal(summary.platform, `linux-${process.arch}`);
   } finally {
     remove();
   }

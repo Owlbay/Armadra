@@ -19,12 +19,18 @@
  * that add a probe add a file instead of all editing the end of one list. The
  * run order is fixed by the loader: tier by tier, then by id.
  *
+ * An entry with `platforms` only runs on those `process.platform` values and is
+ * recorded as skipped elsewhere: tier B runs once per operating system in
+ * nightly.yml, and a packaged-app probe for one system has nothing to test on
+ * another.
+ *
  * Tier A needs tmux and a Chrome / Chromium (CHROME_PATH, or the usual install
  * locations). Entries marked `devStack` only run when ARMADRA_DEV_STACK=1 and
  * Docker answers; otherwise they are recorded as skipped, not failed.
  */
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   createWriteStream,
   existsSync,
   mkdirSync,
@@ -41,7 +47,9 @@ export const MANIFEST_DIR = join(ROOT, "tools/ci/e2e.d");
 /** The single-file manifest this directory replaced; it must not come back. */
 export const LEGACY_MANIFEST = join(ROOT, "tools/ci/e2e.json");
 export const TIERS = ["a", "b"];
-export const REQUIREMENTS = ["tmux", "chrome"];
+export const REQUIREMENTS = ["tmux", "chrome", "docker"];
+/** `process.platform` values an entry may restrict itself to. */
+export const PLATFORMS = ["darwin", "linux", "win32"];
 
 /**
  * Read tools/ci/e2e.d/*.json into `{ entries, problems }`. Each entry keeps the
@@ -60,6 +68,8 @@ export function loadManifest(
     );
   const entries = [];
   for (const file of readdirSync(directory).sort()) {
+    // Hidden files are the file system's, not entries (.DS_Store, ._x.json).
+    if (file.startsWith(".")) continue;
     if (!file.endsWith(".json")) {
       problems.push(`${file} is not a .json entry`);
       continue;
@@ -130,6 +140,17 @@ export function validateManifest(manifest, root = ROOT) {
       problems.push(`${where} has no positive timeoutMinutes`);
     if (entry.devStack !== undefined && typeof entry.devStack !== "boolean")
       problems.push(`${where} has a devStack that is not a boolean`);
+    if (
+      entry.platforms !== undefined &&
+      !(
+        Array.isArray(entry.platforms) &&
+        entry.platforms.length > 0 &&
+        entry.platforms.every((name) => PLATFORMS.includes(name))
+      )
+    )
+      problems.push(
+        `${where} has platforms that are not a non-empty list of ${PLATFORMS.join(", ")}`,
+      );
   }
   return problems;
 }
@@ -239,6 +260,7 @@ export async function runTier({
   out = join(root, "target/e2e", tier),
   only,
   env = process.env,
+  platform = process.platform,
   probe = { tmux: hasTmux, chrome: () => findChrome(env), docker: hasDocker },
   devStack = {
     up: () => pnpm(root, ["dev-stack", "up"]),
@@ -263,17 +285,18 @@ export async function runTier({
   }
   mkdirSync(out, { recursive: true });
 
-  const chrome = selected.some((entry) => entry.requires?.includes("chrome"))
-    ? probe.chrome()
-    : null;
-  const tmux = selected.some((entry) => entry.requires?.includes("tmux"))
-    ? probe.tmux()
-    : false;
+  const runsHere = (entry) =>
+    entry.platforms === undefined || entry.platforms.includes(platform);
+  const needs = (what) =>
+    selected.some((entry) => runsHere(entry) && entry.requires?.includes(what));
+  const chrome = needs("chrome") ? probe.chrome() : null;
+  const tmux = needs("tmux") ? probe.tmux() : false;
+  const docker = needs("docker") ? probe.docker() : false;
   const childEnv = { ...env, ...(chrome ? { CHROME_PATH: chrome } : {}) };
 
   // The dev-stack is brought up once for the whole tier, and only when asked.
   let stack = { state: "off", reason: "ARMADRA_DEV_STACK is not 1" };
-  if (selected.some((entry) => entry.devStack)) {
+  if (selected.some((entry) => runsHere(entry) && entry.devStack)) {
     if (env.ARMADRA_DEV_STACK !== "1")
       stack = { state: "off", reason: "ARMADRA_DEV_STACK is not 1" };
     else if (!probe.docker())
@@ -292,7 +315,7 @@ export async function runTier({
     tier,
     status: "passed",
     startedAt: new Date().toISOString(),
-    platform: `${process.platform}-${process.arch}`,
+    platform: `${platform}-${process.arch}`,
     chrome,
     devStack: stack.state,
     entries: [],
@@ -302,9 +325,21 @@ export async function runTier({
       log(`\n== ${entry.id}\n`);
       let record;
       const missing = (entry.requires ?? []).filter((need) =>
-        need === "chrome" ? !chrome : need === "tmux" ? !tmux : false,
+        need === "chrome"
+          ? !chrome
+          : need === "tmux"
+            ? !tmux
+            : need === "docker"
+              ? !docker
+              : false,
       );
-      if (entry.devStack && stack.state !== "up") {
+      if (!runsHere(entry)) {
+        record = {
+          id: entry.id,
+          status: "skipped",
+          reason: `only on ${entry.platforms.join(", ")}`,
+        };
+      } else if (entry.devStack && stack.state !== "up") {
         record = {
           id: entry.id,
           status: stack.state === "failed" ? "failed" : "skipped",
@@ -406,7 +441,7 @@ async function main() {
       (item) => item.tier === options.tier,
     ))
       console.log(
-        `${entry.id}${entry.devStack ? " (dev-stack)" : ""}  ${entry.script}`,
+        `${entry.id}${entry.devStack ? " (dev-stack)" : ""}${entry.platforms ? ` [${entry.platforms.join(", ")}]` : ""}  ${entry.script}`,
       );
     return 0;
   }
@@ -419,6 +454,16 @@ async function main() {
   console.log(
     `  report ${join(options.out ?? join(ROOT, "target/e2e", summary.tier), "result.json")}`,
   );
+  // In a workflow the failing ids become a step output, so the job that opens
+  // the nightly issue can name them without downloading the artifacts.
+  if (process.env.GITHUB_OUTPUT)
+    appendFileSync(
+      process.env.GITHUB_OUTPUT,
+      `failed=${summary.entries
+        .filter((entry) => entry.status === "failed")
+        .map((entry) => entry.id)
+        .join(",")}\n`,
+    );
   return summary.status === "failed" ? 1 : 0;
 }
 
