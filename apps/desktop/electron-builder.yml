@@ -143,12 +143,35 @@ nsis:
 # it reads the AppImage's.
 deb:
   artifactName: ${productName}_${version}_${arch}.${ext}
+  # electron-builder's default list plus the two libraries Electron links that
+  # it leaves out: on a clean Ubuntu 22.04 `apt install` succeeded and the app
+  # then failed to start on `libgbm.so.1` / `libasound.so.2` (found by
+  # tools/probes/deb-install.mjs; libgbm1 also brings libdrm2,
+  # libwayland-server0 and libxcb-randr0). `libasound2` is still satisfied on
+  # 24.04 and Debian 13, where libasound2t64 provides it.
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
+    - libgbm1
+    - libasound2
 rpm:
   artifactName: ${productName}-${version}.${arch}.${ext}
 
 linux:
   icon: build/icons/icon.png
   category: Development
+  # Electron takes the Wayland app_id / X11 WM_CLASS from `desktopName` in
+  # package.json; without it the running window does not match the installed
+  # `armadra.desktop` and docks show a generic icon beside the launcher. The
+  # flag names the .desktop file and its StartupWMClass after the same value.
+  syncDesktopName: true
   target:
     - target: AppImage
       arch: [x64, arm64]
