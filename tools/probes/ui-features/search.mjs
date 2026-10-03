@@ -5,6 +5,7 @@
 // 连接断开时记一条 debug 日志「文件搜索随连接断开中止」并带上停在第几个文件
 // （`visited`），这里断言每次取消都有这一条，且 visited 明显小于整轮的文件数。
 import { mkdirSync, writeFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { openExplorer } from "./file-tree.mjs";
@@ -36,7 +37,12 @@ export default async function search({ stack, output, report, scenario }) {
     );
   // 文件数贴着 core 的扫描上限（MAX_SCANNED_ENTRIES 4 万）；要更慢只能让每个
   // 文件更大。
-  const fill = (scale) => {
+  //
+  // 必须异步写：两次 `stack.api` 之间同步写几万个文件会把事件循环堵上好几秒，
+  // 超过 core 的 keep-alive 空闲上限（Node 默认 5 秒）。core 那头已经关了
+  // 连接池里那条空闲连接，这头却没机会处理它的 FIN、也跑不了自己的空闲计时，
+  // 下一次 POST 照旧写进这条死连接，得到 ECONNRESET（`fetch failed`）。
+  const fill = async (scale) => {
     const content = body.repeat(scale);
     for (let group = 0; group < FILES / 1000; group += 1) {
       const directory = join(
@@ -45,13 +51,15 @@ export default async function search({ stack, output, report, scenario }) {
         `g${String(group).padStart(2, "0")}`,
       );
       mkdirSync(directory, { recursive: true });
-      for (let index = 0; index < 1000; index += 1) {
-        writeFileSync(join(directory, `f${index}.txt`), content);
-      }
+      await Promise.all(
+        Array.from({ length: 1000 }, (_, index) =>
+          writeFile(join(directory, `f${index}.txt`), content),
+        ),
+      );
     }
   };
   const SCALES = [1, 4, 8];
-  fill(SCALES[0]);
+  await fill(SCALES[0]);
   writeFileSync(join(project, "README.md"), "# search\n");
   const { workspace, board } = await stack.workspace("搜索取消", project);
 
@@ -75,7 +83,7 @@ export default async function search({ stack, output, report, scenario }) {
     };
     if (baseline.ms > 1_200 || full.timedOut || round === SCALES.length - 1)
       break;
-    fill(SCALES[round + 1]);
+    await fill(SCALES[round + 1]);
   }
   run.check(baseline.ms > 600, "大目录整轮扫描足够慢，取消有窗口", baseline);
 
