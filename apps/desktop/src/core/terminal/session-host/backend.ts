@@ -48,6 +48,7 @@ import {
 } from "./link";
 import { type HelloAuth, ensureKey, signHello } from "./auth";
 import { ReplayScreen } from "../replay-screen";
+import { type EnvPairs, childEnvironment } from "../environment";
 
 /**
  * The Windows backend: terminals owned by `armadra-session-host`.
@@ -146,8 +147,14 @@ export class SessionHostBackend implements AdoptableBackend {
   private readonly ids = new RequestIds();
   /** One pipe connection per attachment; closing it is the detach. */
   private readonly attachments = new Map<number, Link>();
-  /** Per attachment: stop it feeding its session's screen. */
-  private readonly stopFeeding = new Map<number, () => void>();
+  /**
+   * Per attachment: what a deliberate detach does before it closes the
+   * connection — stop feeding the screen, and end the stream **silently**.
+   * Closing the link raises `closed`, and an unsilenced `end` would tell the
+   * socket layer the session exited: the row was marked `exited` the moment
+   * the page let go of a terminal (G3-2 acceptance run).
+   */
+  private readonly releases = new Map<number, () => void>();
   private readonly options: SessionHostBackendOptions;
   /** The one long-lived connection every control request goes through. */
   private control: Link | undefined;
@@ -333,7 +340,11 @@ export class SessionHostBackend implements AdoptableBackend {
         shell: spec.shell,
         command: spec.command ?? null,
         args: spec.args,
-        env: spec.env,
+        // Built here, as the direct and tmux backends build theirs: the host
+        // starts the console with exactly this block and inherits nothing, so
+        // without the base a Windows shell had no `SystemRoot` (PowerShell 5.1
+        // would not start) and no `TEMP`. The caller's variables last.
+        env: sessionHostEnvironment(spec.env),
         size: spec.size,
       }),
     );
@@ -510,7 +521,10 @@ export class SessionHostBackend implements AdoptableBackend {
       throw hostError(answer.code, answer.message);
     }
     this.attachments.set(id, link);
-    this.stopFeeding.set(id, stopFeeding);
+    this.releases.set(id, () => {
+      ended = true;
+      stopFeeding();
+    });
 
     return {
       attachmentId: id,
@@ -529,8 +543,8 @@ export class SessionHostBackend implements AdoptableBackend {
     const link = this.attachments.get(attachmentId);
     if (link === undefined) return;
     this.attachments.delete(attachmentId);
-    this.stopFeeding.get(attachmentId)?.();
-    this.stopFeeding.delete(attachmentId);
+    this.releases.get(attachmentId)?.();
+    this.releases.delete(attachmentId);
     // Closing the connection is the detach. The host keeps the session; only
     // `destroy` ends one.
     link.close();
@@ -662,13 +676,27 @@ export class SessionHostBackend implements AdoptableBackend {
    * backend exists.
    */
   async detachAll(): Promise<void> {
+    for (const release of this.releases.values()) release();
+    this.releases.clear();
     for (const link of this.attachments.values()) link.close();
     this.attachments.clear();
-    for (const stop of this.stopFeeding.values()) stop();
-    this.stopFeeding.clear();
     this.control?.close();
     this.control = undefined;
   }
+}
+
+/** The child environment every backend starts from, with the caller's pairs over it. */
+export function sessionHostEnvironment(
+  env: TerminalSpec["env"],
+  base: EnvPairs = childEnvironment(),
+): [string, string][] {
+  const merged = new Map<string, [string, string]>();
+  // Windows names are case-insensitive: one entry per name, the last spelling wins.
+  const key = (name: string): string =>
+    process.platform === "win32" ? name.toUpperCase() : name;
+  for (const [name, value] of [...base, ...env])
+    merged.set(key(name), [name, value]);
+  return [...merged.values()];
 }
 
 function hostError(code: HostErrorCode, message: string): TerminalError {

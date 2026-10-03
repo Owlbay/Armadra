@@ -4,7 +4,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureKey } from "../core/terminal/session-host/auth";
-import { SessionHostBackend } from "../core/terminal/session-host/backend";
+import {
+  SessionHostBackend,
+  sessionHostEnvironment,
+} from "../core/terminal/session-host/backend";
 import { PIPE_PREFIX } from "../core/terminal/session-host/protocol";
 import { sessionKey } from "../core/terminal/backend";
 import { type FakePty, fakeSpawner } from "./fake-pty";
@@ -180,6 +183,46 @@ describe("session-host capture", () => {
     expect(plain.split("\n")).toEqual(["before", "both", "after"]);
   });
 
+  /**
+   * Letting go of a terminal is a detach, never an exit: closing the
+   * attachment's connection raised `closed`, the stream ended as if the
+   * session had, and the socket layer marked the row `exited` — the next
+   * capture answered 404 (G3-2 acceptance run on a packaged Windows build).
+   */
+  it("does not report an exit when the attachment is let go", async () => {
+    const harness = await serve();
+    await started(harness);
+    const attachment = await harness.backend.attach(KEY, 1, SIZE);
+    const exits: (number | undefined)[] = [];
+    attachment.onData(() => {});
+    attachment.onExit((code) => exits.push(code));
+    harness.last().emit("still here\r\n");
+    await eventually(
+      () => harness.backend.capture(KEY, 10, false),
+      (text) => text.includes("still here"),
+    );
+    await harness.backend.detach(KEY, attachment.attachmentId);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(exits).toEqual([]);
+    expect(await harness.backend.capture(KEY, 10, false)).toContain(
+      "still here",
+    );
+    expect(harness.last().killed).toBe(0);
+  });
+
+  it("still reports an exit when the session really ends", async () => {
+    const harness = await serve();
+    await started(harness);
+    const attachment = await harness.backend.attach(KEY, 1, SIZE);
+    const exits: (number | undefined)[] = [];
+    attachment.onData(() => {});
+    attachment.onExit((code) => exits.push(code));
+    harness.last().exit(3);
+    for (let attempt = 0; attempt < 200 && exits.length === 0; attempt += 1)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(exits).toEqual([3]);
+  });
+
   it("follows a resize", async () => {
     const harness = await serve();
     await started(harness);
@@ -197,5 +240,29 @@ describe("session-host capture", () => {
       "abcdefghij",
       "KLM",
     ]);
+  });
+});
+
+describe("the session host's console environment", () => {
+  it("starts from the child environment every backend uses, the caller's last", () => {
+    const env = Object.fromEntries(
+      sessionHostEnvironment(
+        [
+          ["ARMADRA_NODE_ID", "n"],
+          ["LANG", "C.UTF-8"],
+        ],
+        [
+          ["PATH", "/bin"],
+          ["LANG", "en_US.UTF-8"],
+          ["TERM", "xterm-256color"],
+        ],
+      ),
+    );
+    expect(env).toEqual({
+      PATH: "/bin",
+      LANG: "C.UTF-8",
+      TERM: "xterm-256color",
+      ARMADRA_NODE_ID: "n",
+    });
   });
 });
