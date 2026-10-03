@@ -59,6 +59,8 @@ export default function StatesSection() {
         <Badge variant="secondary">{t("showcase.sample.owner")}</Badge>
         <Badge variant="outline">{t("showcase.sample.member")}</Badge>
         <Badge variant="outline">{t("showcase.sample.viewer")}</Badge>
+        {/* 权限态替代按钮的那一枚（设计系统 §5.16）：终端节点头部用的就是它。 */}
+        <Badge variant="outline">{t("node.awaitingDriver")}</Badge>
       </div>
 
       <Alert className="self-start">

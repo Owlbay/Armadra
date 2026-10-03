@@ -6,12 +6,14 @@ import { GatewayPanel } from "@/panels/settings/pages/gateway/GatewayPanel";
 import { PairingCard } from "@/panels/settings/pages/gateway/PairingCard";
 import {
   CA_HREF,
+  CURRENT_DEVICE,
   DEVICES,
   EXPIRED_NOW,
   FAILED,
   NOW,
   OFF,
   PAIRING,
+  RENEW_FAILED,
   RUNNING,
   STARTING,
 } from "../fixtures/gateway";
@@ -39,9 +41,9 @@ function Sample({
  * `gateway` 分区（设计展示页 §2.1，设计系统 §5.12）：设置页里真的
  * `GatewayPanel` / `PairingCard` / `CaInstallGuide`，喂假数据。
  *
- * 关闭（只有开关一行）· 运行中（二维码、倒计时、指纹与 CA、设备表，其中
- * 一行正在撤销）· 正在生成证书 · 没能开启 · 配对码过期 · 手机配对页的 CA
- * 引导。时钟钉住，截图稳定。
+ * 关闭（只有开关一行）· 运行中（二维码、倒计时、指纹与 CA、设备表——当前
+ * 设备带「当前」、一行正在撤销、底部「加载更多」）· 正在生成证书 · 没能开启 ·
+ * ACME 续期失败 · 配对码过期 · 手机配对页的 CA 引导。时钟钉住，截图稳定。
  */
 export default function GatewaySection() {
   const t = useT();
@@ -88,7 +90,15 @@ export default function GatewaySection() {
             pairing={PAIRING}
             devices={DEVICES}
             revoking="dev-ipad"
+            deviceOptions={{
+              currentDeviceId: CURRENT_DEVICE,
+              hasMore: true,
+              onMore: noop,
+            }}
           />
+        </Sample>
+        <Sample caption={t("gateway.acme.renewFailed")}>
+          <GatewayPanel {...panel} status={RENEW_FAILED} />
         </Sample>
         <Sample caption={t("gateway.showcase.phone")}>
           <div className="w-full max-w-[390px]">

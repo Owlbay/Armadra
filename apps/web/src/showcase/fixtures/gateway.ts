@@ -57,6 +57,29 @@ export const RUNNING: GatewayStatus = {
 
 export const STARTING: GatewayStatus = { ...OFF, enabled: true };
 
+/** ACME 续期连着失败两次，旧证书继续服务，下次重试的时刻（契约 §17.1）。 */
+export const RENEW_FAILED: GatewayStatus = {
+  ...RUNNING,
+  publicOrigin: "https://armadra.example",
+  tls: {
+    ...RUNNING.tls,
+    source: "acme",
+    acmeEmail: "ops@armadra.example",
+    acme: {
+      directory: "https://acme-v02.api.letsencrypt.org/directory",
+      profile: "shortlived",
+      names: ["armadra.example"],
+      notAfter: "2026-10-09T00:00:00.000Z",
+      renewAt: "2026-10-03T12:30:00.000Z",
+      failures: 2,
+      lastError: { code: "acme_failed", message: "" },
+    },
+  },
+};
+
+/** 这台设备自己（设备表里标「当前」）。 */
+export const CURRENT_DEVICE = "dev-iphone";
+
 export const FAILED: GatewayStatus = {
   ...OFF,
   enabled: true,
