@@ -13,6 +13,9 @@ import {
   credentialsDomain,
   persistedBinding,
 } from "../agent/credentials";
+import { amaCredentials } from "../agent/ama-credentials";
+import { parseCustomAgents } from "../settings/custom-agents";
+import { settingsDomain } from "../settings";
 import { collabDispatcher } from "./collab";
 import {
   CLIENT_REVISION_HEADER,
@@ -78,6 +81,9 @@ export class HookServer {
 
     this.router.handle("POST", "/credential", (_match, request) =>
       this.credential(request),
+    );
+    this.router.handle("POST", "/credential/ama", (_match, request) =>
+      this.amaKeys(request),
     );
 
     for (const family of ["context-link", "control", "browser"] as const) {
@@ -223,6 +229,72 @@ export class HookServer {
       return {
         status: 500,
         body: { code: "internal", message: "Could not redeem the credential" },
+      };
+    }
+  }
+
+  /**
+   * ama 的模型密钥（契约 §12.4），给画布启动器 `run/ama` 兑换：与 `/credential`
+   * 同一道门——应用 bearer、节点 token 必须**验过**——外加节点在画布上就是 ama
+   * （或以它为基础的自定义 Agent），别的节点拿不到。答已设的那几家，变量名是
+   * ama 自己读的 `AMA_API_KEY_<供应商>`。答复与失败都不记日志。
+   */
+  private async amaKeys(request: CoreRequest): Promise<HandlerResult> {
+    const refusal = this.requireBearer(request);
+    if (refusal !== undefined) return refusal;
+    let nodeId = "";
+    try {
+      const body = request.json<{ nodeId?: unknown }>();
+      if (typeof body?.nodeId === "string") nodeId = body.nodeId;
+    } catch {
+      nodeId = "";
+    }
+    const verdict = this.options.hooks.verdict(
+      nodeId,
+      single(request.headers[NODE_TOKEN_HEADER]),
+    );
+    if (nodeId === "" || verdict !== "verified") {
+      return {
+        status: 403,
+        body: { code: "forbidden", message: "The node token is not valid" },
+      };
+    }
+    const agentId = persistedBinding(this.options.database, nodeId).agentId;
+    const base =
+      agentId === undefined
+        ? undefined
+        : (parseCustomAgents(settingsDomain()?.settings.snapshot() ?? {}).find(
+            (custom) => custom.id === agentId,
+          )?.baseAgent ?? agentId);
+    if (base !== "ama") {
+      return {
+        status: 403,
+        body: { code: "forbidden", message: "This node is not an ama node" },
+      };
+    }
+    const keys = amaCredentials();
+    if (keys === undefined) {
+      return {
+        status: 503,
+        body: {
+          code: "credential_unavailable",
+          message: "ama's model keys are not assembled",
+        },
+      };
+    }
+    try {
+      return {
+        status: 200,
+        body: { variables: await keys.variables() },
+        headers: { "cache-control": "no-store" },
+      };
+    } catch {
+      return {
+        status: 503,
+        body: {
+          code: "secret_unavailable",
+          message: "The secret store is unavailable",
+        },
       };
     }
   }

@@ -20,6 +20,7 @@ import {
 type Reply =
   | { kind: "json"; status?: number; body: unknown }
   | { kind: "raw"; body: string }
+  | { kind: "redirect"; location: string }
   | { kind: "hang" };
 
 let server: Server;
@@ -35,6 +36,11 @@ beforeEach(async () => {
     hits.push(path);
     const reply = replies[path];
     if (!reply || reply.kind === "hang") return; // 不回话，等客户端超时。
+    if (reply.kind === "redirect") {
+      response.writeHead(302, { location: reply.location });
+      response.end();
+      return;
+    }
     if (reply.kind === "raw") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(reply.body);
@@ -131,6 +137,32 @@ describe("provider status pages", () => {
     const later = await service.current();
     expect(hits).toHaveLength(6);
     expect(later[1]!.indicator).toBe("critical");
+  });
+});
+
+describe("status.anthropic.com → status.claude.com", () => {
+  it("用的是新地址", () => {
+    expect(STATUS_SOURCES.anthropic).toEqual({
+      url: "https://status.claude.com/api/v2/status.json",
+      pageUrl: "https://status.claude.com",
+    });
+  });
+
+  it("旧地址 302 过去时跟随重定向，读到的是新页的指示", async () => {
+    replies["/anthropic"] = {
+      kind: "redirect",
+      location: `${base}/claude/api/v2/status.json`,
+    };
+    replies["/claude/api/v2/status.json"] = document("minor", "Degraded");
+    replies["/openai"] = document("none");
+    replies["/github"] = document("none");
+    const result = await new StatusService({ sources: sources() }).current();
+    expect(result[0]).toMatchObject({
+      id: "anthropic",
+      indicator: "minor",
+      description: "Degraded",
+    });
+    expect(hits).toContain("/claude/api/v2/status.json");
   });
 });
 

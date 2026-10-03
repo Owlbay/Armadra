@@ -30,6 +30,8 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 │ 启动时打到 stdout 的一致）；不一致时按 endpoints.json 与进程表确认    │
 │ 是同一数据目录、由桌面启动的旧 core 后发 SIGTERM 再重拉               │
 │  └── 随包资源：`resources/cli/armadra-hook.js`、`resources/migrations/`│
+│      `resources/agent/ama.cjs`（钉住的 @armadra/agent）与             │
+│      `resources/agent-host/ama-armadra.cjs`（它的宿主适配器）         │
 │      （Windows 另有 `resources/session-host/host.cjs` 与              │
 │      `resources/cli/armadra-hook.exe`、`armadra-launch.exe` 启动器）  │
 │  └── 回环 HTTP 静态服务：内核分配端口，页面从这里加载                 │
@@ -51,6 +53,7 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 ┌───────────────────────────────▼──────────────────────────────────────┐
 │ src/cli/armadra-hook  各 CLI 的 hook 与技能调用的小客户端（单文件 JS）│
 │ src/hook-client  端点、令牌、HTTP 与动词工具表（CLI 与适配器共用）    │
+│ src/agent-host/ama  ama 的宿主适配器：画布工具、状态上报（进程内）    │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -86,6 +89,14 @@ Gateway（契约 §17）。用法见
 用量快照保留供应商返回的基础与模型专属额度窗口，每个窗口独立显示已用比例和
 重置时间。数据采集时间与额度重置时间分开显示；后台刷新和手动刷新共用串行化
 与冷却时间，前端只轮询缓存，不把缓存轮询时间当成数据更新时间。
+
+core 自己的全部出站地址登记在 `core/net/outbound.ts`（用途、频率、关闭开关；
+`outbound.test.ts` 扫源码，没登记的 `https://` 真实主机过不了测试）。借用 CLI
+登录令牌的两个额度端点（Claude `api/oauth/usage`、Copilot `copilot_internal/user`
+与它的设备流）默认关（`usage.claudeUsage` / `usage.copilotUsage`），关着时不读凭据、
+不发请求，本机在用的那家在快照里报 `unavailable` + `reason: "policy_off"`，页面第一次
+看到时提示一次；Codex 端点默认开、标「非官方端点」，答 HTML 时报 `unavailable` +
+`reason: "unsupported"`。
 
 各 CLI 留在本机的会话记录经**本地历史适配器**读（`core/history/`，每家一个
 `HistoryAdapter`，在 `history/registry.ts` 的 `HISTORY_ADAPTERS` 登记，目前 claude、
@@ -131,7 +142,11 @@ Git 的路由做完权限与参数解析后，按工作空间的 `executionHostI
 服务走同一台主机上的第二个 Worker（`worker --stdio --language-link`，
 `core/remote/language.ts`），语言服务器是它的子进程；长时间没有会话时控制端
 关掉这条连接（`core/remote/language-idle.ts`），下次按需重连。交接材料经 Worker
-在执行主机上采集（`handoff.capture`）。比一帧大的上传与下载分块传输、按 Worker
+在执行主机上采集（`handoff.capture`，`core/remote/handoff-worker.ts`）；来源
+Agent 在另一台执行主机的 SSH 终端里时，只有它的转录到那台主机上读
+（`core/handoff/remote-capture.ts`，读不了答 501 `handoff_host_offline`）。控制
+连接每次握手的版本与能力汇成 Worker 舰队（`core/remote/fleet.ts`）：执行主机行的
+`worker`、集成状态的 `outdatedHosts` 与「重新同步」都读它。比一帧大的上传与下载分块传输、按 Worker
 已收的字节续传（`core/remote/transfer.ts`）。画布 SSH 终端里的 CLI 由 Worker
 同步过去的产物与垫片注入，Hook 经 Worker 的 unix socket 中继回控制端
 （`core/remote/integration.ts`，见[远端画布注入](../design/remote-canvas-injection.md)）。
@@ -339,6 +354,8 @@ CSRF 与 Origin 校验（[服务器账号、中转与共享](../design/server-ac
 | 画布注入产物        | `<数据目录>/integration/<cli>/`                                                                     | —                                               |
 | 画布启动器与垫片    | `<数据目录>/integration/run/<cli>`、`shims/<cli>`、`launcher.json`（Windows 为 `.exe` + `.launch`） | —                                               |
 | Hook 客户端启动器   | `<数据目录>/bin/armadra-hook`（Windows 为 `.exe`，兜底 `.cmd`）                                     | —                                               |
+| 随包 ama 启动器     | `<数据目录>/bin/ama`（Windows 为 `armadra-hook.exe` 的拷贝 `ama.exe` + `ama.launch`）               | `ARMADRA_AMA_BUNDLE`、`ARMADRA_AMA_HOST`        |
+| ama 的模型密钥      | 只在密钥后端（`armadra-ama-<供应商>`）；`run/ama` 凭节点 token 经 hook 通道兑换、只设给 ama 进程    | —                                               |
 | 账号偏好            | `<数据目录>/settings.json`                                                                          | —                                               |
 | 本机偏好            | `<数据目录>/worker-settings.json`                                                                   | —                                               |
 | 模型目录缓存        | `<数据目录>/models-catalog.json`（0600）                                                            | —                                               |

@@ -1,5 +1,7 @@
 import {
   agentListSchema,
+  amaCredentialRequestSchema,
+  amaCredentialStatusSchema,
   agentModelListSchema,
   agentStatusSchema,
   answerApprovalResponseSchema,
@@ -151,6 +153,24 @@ export const agentsApi = {
       `/api/agents/${query(agentId)}/integration/repair`,
       integrationRepairReportSchema,
       { method: "POST" },
+    ),
+  /** Armadra Agent 的模型密钥（契约 §12.4）：只答是否已设与后端，从不答值。 */
+  amaCredentials: () =>
+    request("/api/agents/ama/credentials", amaCredentialStatusSchema),
+  setAmaCredential: (provider: string, apiKey: string) =>
+    request(
+      `/api/agents/ama/credentials/${query(provider)}`,
+      amaCredentialStatusSchema,
+      {
+        method: "PUT",
+        ...json(amaCredentialRequestSchema.parse({ apiKey })),
+      },
+    ),
+  clearAmaCredential: (provider: string) =>
+    request(
+      `/api/agents/ama/credentials/${query(provider)}`,
+      amaCredentialStatusSchema,
+      { method: "DELETE" },
     ),
   /** 清掉某个节点的未读标记；其它窗口通过 workspace 事件流同步。 */
   markAgentRead: (nodeId: string) =>

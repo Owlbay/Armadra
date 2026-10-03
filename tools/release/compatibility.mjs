@@ -12,6 +12,11 @@
  * so the fence in a release note can never disagree with the code that release
  * contains. It carries versions only: there is no cross-process protocol left
  * to declare a major for.
+ *
+ * One more key lives in the file and never in the fence: `agent`, the pinned
+ * `@armadra/agent` the build bundles and the host API its adapter speaks
+ * (docs/design/coordinator-agent.md §2.6). `version.mjs check` holds it
+ * against the desktop manifest and the lockfile.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -60,7 +65,7 @@ export function compareVersions(left, right) {
  * release was verified against, not which installs may move to it, so they
  * never enter the release note's fence — which stays strict.
  */
-const SIDE_KEYS = ["acp"];
+const SIDE_KEYS = ["acp", "agent"];
 
 function readDocument(path) {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -89,6 +94,7 @@ export function readAcpCompatibility(path = COMPATIBILITY_FILE) {
 
 function normalizeSide(key, value) {
   if (key === "acp") return normalizeAcp(value);
+  if (key === "agent") return normalizeAgentPin(value);
   throw new Error(`unknown compatibility key: ${key}`);
 }
 
@@ -122,6 +128,35 @@ export function normalizeAcp(value) {
     };
   }
   return { protocolVersion: 1, adapters: result };
+}
+
+/** The package the `agent` key may name. */
+export const AGENT_PACKAGE = "@armadra/agent";
+
+/**
+ * The `agent` key: `{ package, version, hostApi }`. The version is exact — an
+ * upgrade is one explicit change in this file, the desktop manifest and the
+ * lockfile together.
+ */
+export function readAgentPin(path = COMPATIBILITY_FILE) {
+  return normalizeAgentPin(readDocument(path).agent);
+}
+
+export function normalizeAgentPin(agent) {
+  if (agent === null || typeof agent !== "object" || Array.isArray(agent))
+    throw new Error("compatibility.json has no agent pin");
+  for (const key of Object.keys(agent)) {
+    if (!["package", "version", "hostApi"].includes(key))
+      throw new Error(`unknown agent pin key: ${key}`);
+  }
+  if (agent.package !== AGENT_PACKAGE)
+    throw new Error(`agent.package must be ${AGENT_PACKAGE}`);
+  const version = parseVersion(agent.version).text;
+  if (version !== agent.version)
+    throw new Error(`agent.version must be an exact version: ${agent.version}`);
+  if (!Number.isSafeInteger(agent.hostApi) || agent.hostApi < 1)
+    throw new Error("agent.hostApi must be a positive integer");
+  return { package: AGENT_PACKAGE, version, hostApi: agent.hostApi };
 }
 
 /**

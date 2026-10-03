@@ -256,6 +256,41 @@ LiveAgent 还用 `dmgbuild` 重建 DMG 并自己 `notarytool submit` + `stapler 
 提交的标签。预发布按标签里有没有 `-` 判定（`v0.2.0-rc.1`），与 semver 的读法一致。
 `latest.json` 仍由 `tools/release/updater-manifest.mjs` 生成并随产物一起上传。
 
+**更新清单是两份。** `latest.json`（minisign 签名）之外，每个目标还发一份
+electron-updater 自己读的清单——桌面壳下载时走 `provider: generic`，只认 yml。
+electron-builder 写的 `latest-mac.yml` / `latest.yml` 只按平台起名，两台 macOS
+runner、两台 Windows runner 合进同一个目录会互相覆盖，所以 `stage-desktop.mjs` 把它
+改写成按目标命名的一份：`latest-<target>` 是 electron-updater 的通道名，文件名是它
+自己对这个通道算出的名字（`latest-darwin-aarch64-mac.yml`、`latest-windows-x86_64.yml`、
+`latest-linux-aarch64-linux-arm64.yml`……，`artifacts.mjs::updaterFeedFile`；
+`apps/desktop/src/shell-core/updates/feed.test.ts` 用钉住的 electron-updater 核对）。
+改写时只留这个目标的更新包，`url` / `path` 换成发布名，`sha512` 写 base64；打包器
+清单里的条目按字节对上暂存的包，对不上就在构建作业里失败。`--require-updater` 下
+缺清单也失败。
+
+`assemble.mjs` 再核一遍：每个目标的清单都在、版本对、`files[].url` 是本次发布的
+文件、清单的 sha512 与 `SHA256SUMS` 的 sha256 说的是同一份字节。`latest.json` 的每个
+平台条目带 `feed: { url, sha256 }` 点名这份清单；桌面壳下载前先取它、核对 sha256 与
+它描述的包，再把 `autoUpdater.channel` 设成 `latest-<target>` 交给 electron-updater。
+清单本身的 Ed25519 签名等 electron-builder 27 稳定后另做（外部服务 §2.4）。
+
+**灰度**：`assemble.mjs --rollout <percent>` 给 `latest.json` 写
+`rollout: { percent, seed }`，seed 缺省为版本号；客户端用安装 id（数据目录
+`updates/install-id`）与 seed 的哈希落在百分比内才接受。不写 electron-updater 的
+`stagingPercentage`，免得同一台机器被两道闸各筛一次。放量就是改百分比重发
+`latest.json`（及其 `.sig`）。
+
+**检查**：桌面壳自己问 `GET …/releases`（发布源来自 `ARMADRA_UPDATER_SOURCE`，或由
+已发布构建的 `github.com/<owner>/<repo>` 更新地址推出 `api.github.com/repos/…`），
+带上一次的 `ETag` 发 `If-None-Match`，304 不计入匿名限额；自动检查启动约一分钟后
+一次，之后间隔不短于 6 小时并加抖动，`updates.autoCheck` 关掉就不查。`updates.channel`
+为 `beta` 才考虑预发布，缓存按发布源与通道分开。
+
+本地对着 dev-stack 验一遍：`pnpm dev-stack up release`，然后
+`pnpm release:dry-run --against http://127.0.0.1:8090/repos/armadra/armadra --pubkey tools/dev-stack/.data/release/minisign.pub`
+——检查（带 ETag 再查一次应得 304）→ 取 `SHA256SUMS` 与 `latest.json` 并验签 → 逐个
+目标取清单与它点名的包，核对 sha512、sha256、索引 digest 与 minisign 签名。
+
 仍然只创建 **draft**：LiveAgent 会直接发布并 `--latest`，我们不。产物清单与说明要
 人审阅，更新检查会跳过 draft，所以未发布前任何客户端都看不到它。
 

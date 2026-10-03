@@ -250,6 +250,22 @@ export const executionHostRefusalSchema = z.object({
  * first. The local row has an empty id and no SSH block: it needs no
  * registration, which is why it has no row to edit or delete either.
  */
+/**
+ * The Worker an execution host answered with at its last handshake (contract
+ * §21.2). Absent until the host has been connected to once.
+ */
+export const executionHostWorkerSchema = z.object({
+  /** The Worker's `runtimeVersion`; empty when it did not report one. */
+  version: z.string(),
+  capabilities: z.array(z.string()).default([]),
+  /** Older than this core, or missing a capability this core's Worker has. */
+  outdated: z.boolean(),
+  /** Whether the control connection is up right now. */
+  connected: z.boolean(),
+  /** When that handshake happened (RFC 3339). */
+  checkedAt: z.string(),
+});
+
 export const executionHostSchema = z.object({
   executionHostId: z.string(),
   name: z.string(),
@@ -261,6 +277,7 @@ export const executionHostSchema = z.object({
    */
   workerConfigured: z.boolean(),
   workspaceCount: z.number().int().nonnegative(),
+  worker: executionHostWorkerSchema.optional(),
 });
 
 /**
@@ -321,6 +338,7 @@ export type RootFingerprint = z.infer<typeof rootFingerprintSchema>;
 export type ExecutionHostBlocker = z.infer<typeof executionHostBlockerSchema>;
 export type ExecutionHostRefusal = z.infer<typeof executionHostRefusalSchema>;
 export type ExecutionHost = z.infer<typeof executionHostSchema>;
+export type ExecutionHostWorker = z.infer<typeof executionHostWorkerSchema>;
 export type ExecutionHostValidation = z.infer<
   typeof executionHostValidationSchema
 >;

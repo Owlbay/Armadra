@@ -9,6 +9,7 @@ import {
   type SignatureState,
   type UpdaterEnvironment,
 } from "../../shell-core/updates/availability";
+import { releaseSourceFor, shellTarget } from "../../shell-core/updates/offer";
 
 /**
  * The four questions `shell-core/updates/availability.ts` needs answered about
@@ -84,6 +85,7 @@ export function signatureState(
  */
 export function publishConfigured(env = process.env): boolean {
   if (configuredEndpoints(env).length > 0) return true;
+  if ((env[SOURCE_ENV] ?? "").trim().length > 0) return true;
   if (!app.isPackaged) return false;
   return existsSync(join(process.resourcesPath, "app-update.yml"));
 }
@@ -96,4 +98,45 @@ export function updaterEnvironment(env = process.env): UpdaterEnvironment {
     signature: signatureState(),
     developmentOverride: developmentOverride(env),
   };
+}
+
+/** An explicit release index, `…/repos/{owner}/{repo}` (GitHub API shape). */
+export const SOURCE_ENV = "ARMADRA_UPDATER_SOURCE";
+
+/**
+ * The `url` a published build carries in `app-update.yml`, which is where the
+ * release workflow's `ARMADRA_UPDATER_ENDPOINTS` ends up. Read with one regular
+ * expression: electron-builder writes a two-line document, and this is the
+ * only field asked of it.
+ */
+function packagedEndpoint(): string[] {
+  if (!app.isPackaged) return [];
+  try {
+    const text = readFileSync(
+      join(process.resourcesPath, "app-update.yml"),
+      "utf8",
+    );
+    const match = /^url:\s*['"]?([^'"\s]+)['"]?\s*$/m.exec(text);
+    return match?.[1] ? [match[1]] : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The release index this shell asks, or `null` when it was given none it can
+ * read. A loopback `http:` source is accepted only from a development build
+ * with `ARMADRA_UPDATES_DEV=1`, the same exception the manifest fetch makes.
+ */
+export function releaseSource(env = process.env): string | null {
+  return releaseSourceFor(
+    env[SOURCE_ENV] ?? "",
+    [...configuredEndpoints(env), ...packagedEndpoint()],
+    !app.isPackaged && developmentOverride(env),
+  );
+}
+
+/** This shell's release target, `darwin-aarch64` and so on. */
+export function currentTarget(): string | null {
+  return shellTarget(process.platform, process.arch);
 }

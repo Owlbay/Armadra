@@ -142,7 +142,7 @@ function verdict() {
         {
           component: "manifest",
           target: "",
-          url: `${RELEASE}/latest-mac.yml`,
+          url: `${RELEASE}/latest-darwin-aarch64-mac.yml`,
           sizeBytes: 200,
           sha256: "b".repeat(64),
           signed: false,
@@ -216,7 +216,7 @@ beforeEach(() => {
   runtimeStops = async () => undefined;
 
   vi.stubGlobal("fetch", async (url: URL | string) => {
-    if (String(url) === `${RELEASE}/latest-mac.yml`) {
+    if (String(url) === `${RELEASE}/latest-darwin-aarch64-mac.yml`) {
       return new Response(FEED, { status: 200 });
     }
     return new Response("", { status: 404 });
@@ -392,5 +392,256 @@ describe("the restart report (§2.3, R6)", () => {
     expect(existsSync(join(directory, "updates", "pending-restart.json"))).toBe(
       true,
     );
+  });
+});
+
+/* ------------------------ the shell's own release check -------------------- */
+
+describe("checking the release index (external services §3.1, §3.4)", () => {
+  const SOURCE = "http://127.0.0.1:8123/repos/o/r";
+
+  async function target(): Promise<string> {
+    const { shellTarget, feedName } = await import(
+      "../../shell-core/updates/offer"
+    );
+    const value = shellTarget(process.platform, process.arch);
+    if (value === null || feedName(value) === null) {
+      throw new Error("this test needs a platform a release builds for");
+    }
+    return value;
+  }
+
+  /** One release, every asset named the way `tools/release` names it. */
+  async function release(
+    options: { tag?: string; rollout?: unknown; feedDigest?: string } = {},
+  ) {
+    const { feedName } = await import("../../shell-core/updates/offer");
+    const own = await target();
+    const tag = options.tag ?? "v0.2.0";
+    const version = tag.slice(1);
+    const base = `http://127.0.0.1:8123/download/${tag}`;
+    const bundle = `Armadra_${version}_${own}.bin`;
+    const feed = feedName(own)!;
+    const feedText = [
+      `version: ${version}`,
+      "files:",
+      `  - url: ${bundle}`,
+      "    sha512: x",
+      `    size: ${PAYLOAD.length}`,
+      "",
+    ].join("\n");
+    const feedDigest = createHash("sha256").update(feedText).digest("hex");
+    const latest = JSON.stringify({
+      version,
+      notes: "",
+      pub_date: "1970-01-01T00:00:00.000Z",
+      ...(options.rollout ? { rollout: options.rollout } : {}),
+      platforms: {
+        [own]: {
+          signature: "",
+          url: `${base}/${bundle}`,
+          feed: {
+            url: `${base}/${feed}`,
+            sha256: options.feedDigest ?? feedDigest,
+          },
+        },
+      },
+    });
+    const asset = (name: string, digest: string) => ({
+      name,
+      browser_download_url: `${base}/${name}`,
+      size: name === bundle ? PAYLOAD.length : 100,
+      digest: `sha256:${digest}`,
+    });
+    const index = [
+      {
+        tag_name: tag,
+        draft: false,
+        prerelease: tag.includes("-"),
+        html_url: `https://releases.invalid/${tag}`,
+        assets: [
+          asset("latest.json", "c".repeat(64)),
+          asset(feed, feedDigest),
+          asset(bundle, DIGEST),
+        ],
+      },
+    ];
+    const files: Record<string, string> = {
+      [`${base}/latest.json`]: latest,
+      [`${base}/${feed}`]: feedText,
+    };
+    return { index, files, bundleUrl: `${base}/${bundle}`, version };
+  }
+
+  let requests: { url: string; ifNoneMatch: string | null }[];
+
+  function serve(index: unknown, files: Record<string, string>, etag = '"v1"') {
+    requests = [];
+    vi.stubGlobal(
+      "fetch",
+      async (
+        url: URL | string,
+        init?: { headers?: Record<string, string> },
+      ) => {
+        const href = String(url);
+        const ifNoneMatch = init?.headers?.["if-none-match"] ?? null;
+        requests.push({ url: href, ifNoneMatch });
+        if (href.startsWith(`${SOURCE}/releases`)) {
+          if (ifNoneMatch === etag) return new Response(null, { status: 304 });
+          return new Response(JSON.stringify(index), {
+            status: 200,
+            headers: { etag },
+          });
+        }
+        const body = files[href];
+        return body === undefined
+          ? new Response("", { status: 404 })
+          : new Response(body, { status: 200 });
+      },
+    );
+  }
+
+  beforeEach(() => {
+    process.env.ARMADRA_UPDATER_SOURCE = SOURCE;
+  });
+  afterEach(() => {
+    delete process.env.ARMADRA_UPDATER_SOURCE;
+  });
+
+  it("checks, then stays quiet for six hours, then asks with the ETag", async () => {
+    const { index, files, bundleUrl } = await release();
+    serve(index, files);
+    const { controller } = await subject();
+    const now = 1_800_000_000_000;
+
+    const first = await controller.checkRelease({ nowMs: now });
+    expect(first).toMatchObject({
+      state: "available",
+      offer: { version: "0.2.0", packageUrl: bundleUrl, sha256: DIGEST },
+    });
+    expect(requests[0]).toEqual({
+      url: `${SOURCE}/releases?per_page=30`,
+      ifNoneMatch: null,
+    });
+
+    // The timer firing again within the interval asks nothing at all.
+    requests.length = 0;
+    await controller.checkRelease({ nowMs: now + 60_000 });
+    expect(requests).toEqual([]);
+
+    // Past the interval it asks — conditionally, and a 304 reuses the answer.
+    controller.dismiss();
+    const later = await controller.checkRelease({
+      nowMs: now + 6 * 60 * 60 * 1000 + 1,
+    });
+    expect(requests[0]).toEqual({
+      url: `${SOURCE}/releases?per_page=30`,
+      ifNoneMatch: '"v1"',
+    });
+    expect(later.state).toBe("available");
+  });
+
+  it("a person pressing check asks at once", async () => {
+    const { index, files } = await release();
+    serve(index, files);
+    const { controller } = await subject();
+    await controller.checkRelease({ nowMs: 1 });
+    controller.dismiss();
+    requests.length = 0;
+    await controller.checkRelease({ manual: true, nowMs: 2 });
+    expect(requests.length).toBeGreaterThan(0);
+  });
+
+  it("stable never offers a prerelease; beta does, and the cache is not shared", async () => {
+    const { index, files } = await release({ tag: "v0.3.0-beta.1" });
+    serve(index, files);
+    const stable = await subject();
+    expect(
+      (await stable.controller.checkRelease({ manual: true, nowMs: 1 })).state,
+    ).toBe("upToDate");
+
+    const beta = await subject({
+      settings: async () => '{"updates":{"channel":"beta"}}',
+    });
+    requests.length = 0;
+    const state = await beta.controller.checkRelease({
+      manual: true,
+      nowMs: 2,
+    });
+    expect(state).toMatchObject({
+      state: "available",
+      offer: { version: "0.3.0-beta.1" },
+    });
+    // The stable answer's ETag is not offered for a beta question.
+    expect(requests[0]?.ifNoneMatch).toBeNull();
+  });
+
+  it("a rollout this installation is outside of is no offer", async () => {
+    const { index, files } = await release({
+      rollout: { percent: 0, seed: "0.2.0" },
+    });
+    serve(index, files);
+    const { controller } = await subject();
+    expect(
+      (await controller.checkRelease({ manual: true, nowMs: 1 })).state,
+    ).toBe("upToDate");
+    // The id that decided it is this installation's, kept for the next check.
+    const id = readFileSync(join(directory, "updates", "install-id"), "utf8");
+    expect(id.trim()).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("a rate-limited index is no answer, with the reset as the retry hint", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response("", {
+          status: 403,
+          headers: {
+            "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 600),
+          },
+        }),
+    );
+    const { controller } = await subject();
+    const state = await controller.checkRelease({ manual: true, nowMs: 1 });
+    expect(state).toMatchObject({
+      state: "unavailable",
+      reason: "sourceUnreachable",
+    });
+    if (state.state !== "unavailable") return;
+    expect(state.retryAfterMs).toBeGreaterThan(500_000);
+  });
+
+  it("downloads through this target's own feed, after checking it", async () => {
+    const { index, files } = await release();
+    serve(index, files);
+    const { feedName, updaterChannel } = await import(
+      "../../shell-core/updates/offer"
+    );
+    const own = await target();
+    const { controller } = await subject();
+    await controller.checkRelease({ manual: true, nowMs: 1 });
+    const fake = updater as unknown as {
+      channel?: string;
+      allowDowngrade?: boolean;
+    };
+    fake.allowDowngrade = true;
+    expect((await controller.download()).state).toBe("downloaded");
+    expect(fake.channel).toBe(updaterChannel(own));
+    // Setting a channel turns this on inside electron-updater; it is off again.
+    expect(fake.allowDowngrade).toBe(false);
+    expect(requests.some((r) => r.url.endsWith(`/${feedName(own)}`))).toBe(
+      true,
+    );
+  });
+
+  it("a feed that is not the one latest.json named stops the download", async () => {
+    const { index, files } = await release({ feedDigest: "f".repeat(64) });
+    serve(index, files);
+    const { controller } = await subject();
+    // The Host's digest for the feed disagrees with latest.json's: refused at
+    // the check already.
+    expect(
+      await controller.checkRelease({ manual: true, nowMs: 1 }),
+    ).toMatchObject({ state: "unavailable", reason: "digestMismatch" });
   });
 });
