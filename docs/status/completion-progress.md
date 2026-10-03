@@ -422,7 +422,26 @@
 
 ## G2-10 移动网页：连接页与手机细节（M1）
 
-未开始。
+**做了什么**
+
+- 入口分支（`main.tsx` → `mobile/entry.ts` + `MobileRoot.tsx`）：原生 App（Capacitor，页面来源 `capacitor://localhost` / `https://localhost` 且 `Capacitor.isNativePlatform()`）没有记下的 Gateway 或钥匙串里没有它的会话 → 连接页；手机浏览器经 Gateway 打开、窄屏、带 `#pair=` → 连接页（票留到点「连接」才取走，CA 引导的「回到这一页刷新」之后仍可配对）；其余（桌面窗口、宽屏、普通网页）直接是画布，不发请求。
+- `mobile/ConnectScreen.tsx`：BrandMark + 标题 + 一个动作；原生贴配对链接（网页链接或 `armadra://pair` 深链，复用 `host/qr.ts::parsePairingQr`）或扫码；网页只差「连接」并带 `PageCaGuide`。错误在字段下 / 一条 Alert。`mobile/connect.ts`：原生先钉指纹、再配对（`pairWithGateway`）、记下来源、重载。
+- `mobile/native-bridge.ts`：插件 `Capacitor.Plugins.ArmadraNative`（`getSession/setSession/clearSession/pin/scan/pushRegistration`，形状写在文件头）；不在 App 里是空实现。`installNativeTransport` 包 `fetch`（发往 Gateway 的补 Bearer、401 轮转一次重发）与 `WebSocket`（升级前换 `ws-ticket`，`Sec-WebSocket-Protocol: armadra-ticket.<票>`），调用点不改。
+- `api/runtime-url.ts`：`savedRuntimeOrigin / saveRuntimeOrigin / forgetRuntimeOrigin / isNativeAppPage / gatewayOrigin`，只有原生 App 的页面认记下的来源。`api/identity.ts`：原生 App 与桌面壳同走 Bearer，密钥另存钥匙串；`pairWithGateway`、`restoreNativeCredentials`、`fetchWsTicket`、`currentAccessToken`；刷新也被拒时清钥匙串回连接页。
+- 推送：`mobile/PushPermission.tsx`（手机布局或 App 里、登录后问一次，浮在底部导航上，焦点页打开时让开；浏览器走 `subscribeToPush("/sw.js")`，App 走插件令牌 + `PUT /api/push/devices`）；`mobile/sw.ts` 由 `vite.config.ts` 的插件单独打成 IIFE 挂在站点根 `/sw.js`（约 138 KB，开发服务器按请求现打）；`mobile/push-open.ts`：SW 消息、`#push=<深链>`（SW 新开窗口与原生 App 都走它）→ 打开工作空间并进节点焦点页。
+- 焦点页：ACP 驱动的终端节点不出 PTY 按键条；会话视图输入 16px；`mobile/keyboard.ts` 在 iOS 软键盘盖住页面时按可视视口摆整页。顺手修了 `acp/SessionView.tsx`：同一节点同时挂两份会话视图（焦点页 + 画布）时每个分块被拼两遍，现按事件对象去重。
+- 展示页 `mobile` 分区换成六块 390×844 的真组件样本（原生未连接、网页扫码打开 + CA 引导、配对失败、推送提示、焦点页会话视图、焦点页终端按键条）；`i18n/mobile-connect.ts` 中英。
+
+**实测**
+
+- A 档 `ui-features-e2e --only=mobile`（新场景，经 Gateway 本地 CA、回环、托管 `apps/web/dist`，Chrome 经 CDP 只对自己忽略证书错误）：390×844 扫码链接 → 连接页（含 CA 下载）→ 点「连接」配对成 owner、票被抹掉 → `#push=armadra://w/…/n/…` 打开焦点页会话视图（无按键条、输入 16px）→ 发一句假 ACP Agent 回复流入 → 768×1024 回到画布；控制台无错误。
+- 展示页探针 `--only=mobile` 六张图，对比度与控制台通过。
+
+**没做**
+
+- 8 位配对码（core 只有两分钟票，同 G2-7）；PromptBox 的模式 Select 在手机上收进「⋯」（`acp/PromptBox.tsx` 不归本包）；评论在焦点页的布局等 G2-6 合入。
+- 原生侧全部未验证（插件由 G3-1 实现）；`<img src>` 直连 core 的资源在 App 里不带 Bearer。
+- 推送订阅没有在真浏览器里跑通：无头 Chrome 忽略证书错误时不给注册 service worker，要装好 CA 的真机（U6）。
 
 ## G2-11 存量界面套用一：按钮、空态、手机对话框（WP-D3a）
 
