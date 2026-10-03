@@ -82,3 +82,61 @@ jobs:
           path: target/e2e/server-container
           if-no-files-found: ignore
           retention-days: 14
+
+  # Windows 打包验收（补全计划 G3-2）：在 windows runner 上打 NSIS 安装包，用
+  # tools/probes/windows-acceptance.mjs 走一遍真机清单——静默安装、会话宿主与命名
+  # 管道、三种 shell 里的画布启动器与凭据兑换、Gateway、文件监听、保活（缩到两
+  # 分钟）、杀主进程后接回、ConPTY 关闭、静默卸载、用户配置未动。真机上的长时间
+  # 保活与真 CLI 仍要用户跑（docs/guides/development.md「Windows 真机验收」）。
+  windows-acceptance:
+    name: windows acceptance (NSIS + session host)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # 与 release.yml 同一个理由：实时扫描会占住刚写出的二进制，打包时撞 EBUSY。
+      - name: 让扫描器放过打包目录
+        shell: pwsh
+        run: |
+          $desktop = Join-Path $env:GITHUB_WORKSPACE 'apps\desktop'
+          Add-MpPreference -ExclusionPath (Join-Path $desktop 'out')
+          Add-MpPreference -ExclusionPath (Join-Path $desktop 'release')
+          try {
+            Set-MpPreference -DisableRealtimeMonitoring $true
+          } catch {
+            Write-Host "::warning::无法关闭实时监控：$($_.Exception.Message)"
+          }
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: 打 Windows 安装包（本地构建，不签名）
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm libs:build
+          pnpm --filter @armadra/desktop dist
+
+      - name: 真机验收清单（runner 版）
+        shell: bash
+        run: |
+          set -euo pipefail
+          installer=$(ls apps/desktop/release/Armadra-Setup-*-x64.exe | head -n 1)
+          node tools/probes/windows-acceptance.mjs --installer "$installer" \
+            --soak-minutes 2 --out target/windows-acceptance
+
+      - name: 上传验收结果
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-acceptance
+          path: target/windows-acceptance
+          if-no-files-found: ignore
+          retention-days: 14
