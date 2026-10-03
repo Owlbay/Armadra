@@ -9,7 +9,7 @@
 | 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                   | 何时跑                              | 失败时       |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | ------------ |
 | A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e`、`push-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`core-terminal-packaged`、`server-perf`                                                                                                                | `nightly.yml`                       | 开 issue     |
+| B   | `packaged-smoke`、`core-terminal-packaged`、`server-perf`、`mobile-shell-e2e`                                                                                            | `nightly.yml`                       | 开 issue     |
 | C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                                                                | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
@@ -290,3 +290,14 @@ node tools/probes/packaged-smoke.mjs [输出目录] [--app <Armadra.app>]
 4. **控制台**：渲染进程没有 error 级别的输出与未捕获异常。
 
 产物默认在 `target/packaged-smoke/`：`result.json`、`app.log`、`packaged-media.png`、`packaged-before-hibernate.png`、`packaged-hibernated.png`、`packaged-resumed.png`。没验证：Claude（登录在钥匙串里，临时 HOME 认证不上）、签名与公证后的包、自动更新。
+
+## 手机壳冒烟（Capacitor，B 档）
+
+`mobile-shell-e2e.mjs` 在模拟器里走原生 App 的「连接 → 配对 → 画布」：起临时 core、在回环上开 Gateway（本地 CA），把配对深链 `armadra://pair?…` 交给 UI 用例——iOS 是 `AppUITests`（XCUITest，链接经 `TEST_RUNNER_ARMADRA_PAIR_LINK`），Android 是 `ConnectFlowTest`（插桩，`adb reverse` 接回环，链接经插桩参数 `armadraPairLink`）。App 先取 `/ca.crt` 按指纹钉住信任锚、再配对，页面进画布（底部导航出现）。要模拟器，所以不进 `tools/ci/e2e.json`，由 `nightly.yml` 的 `mobile-ios` / `mobile-android` 作业直接跑。
+
+```sh
+pnpm libs:build && pnpm --filter @armadra/web build && pnpm --filter @armadra/desktop build
+pnpm --filter @armadra/mobile sync
+node tools/probes/mobile-shell-e2e.mjs --platform ios [--device "iPhone 16"|auto] [输出目录]
+node tools/probes/mobile-shell-e2e.mjs --platform android [输出目录]   # 模拟器已起、adb 看得到
+```
