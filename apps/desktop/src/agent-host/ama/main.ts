@@ -9,10 +9,11 @@
  * browser verbs as tools, adds the tool note and the trust rule to the system
  * prompt, and reports every status event to `/hook/ama`.
  *
- * Not here yet: `HostApi.runners` (a canvas node per `task(agent=…)`) — that
- * arrives with the workflow domain's `wait` verb (contract §15.5). Until then
- * ama's `task` stays as ama ships it, and the canvas rules ask for
- * `canvas_team` / `canvas_open_agent` instead.
+ * It also provides `HostApi.runners` — `task(agent=<cli>)` becomes a node on
+ * the board, followed with the `wait` verb (`runners.ts`, contract §15.5) —
+ * and, when the core set `ARMADRA_PERM_WAIT_SECS`, an approval broker that
+ * lets a person answer ama's permission requests on the canvas
+ * (`approvals.ts`). Neither ever answers an approval itself.
  */
 
 // Types only: the bundle carries none of ama's code, and ama refuses a
@@ -22,8 +23,10 @@ import type {
   HostAdapter,
   HostApi,
 } from "@armadra/agent/host";
+import { installBroker } from "./approvals.js";
 import { subscribeEvents } from "./events.js";
 import { addInstructions } from "./instructions.js";
+import { provideRunners } from "./runners.js";
 import { registerTools } from "./tools.js";
 
 /** The adapter's id in ama's status line and logs. */
@@ -38,6 +41,8 @@ export function create(api: HostApi): HostAdapter | undefined {
   registerTools(api);
   addInstructions(api);
   const unsubscribe = subscribeEvents(api);
+  unsubscribe.push(provideRunners(api));
+  installBroker(api);
   return {
     id: ADAPTER_ID,
     dispose() {
