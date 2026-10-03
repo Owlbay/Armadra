@@ -25,7 +25,8 @@ import { CredentialService, type GhCli, type SecretStore } from "./credentials";
 import { GithubService, type Caller } from "./service";
 import { GithubStore } from "./store";
 import { scope, type Scope } from "../identity/scopes";
-import { openDatabase, type OpenedDatabase } from "../db/open";
+import type { OpenedDatabase } from "../db/open";
+import { openFreshDatabase } from "../db/fresh.fixture";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -212,10 +213,7 @@ export async function githubFixture(
 ): Promise<GithubFixture> {
   const github = await fakeGithub();
   const dataDir = mkdtempSync(join(tmpdir(), "armadra-github-"));
-  const db = openDatabase({
-    file: join(dataDir, "canvas.db"),
-    migrationsDir: migrationsDir(),
-  });
+  const db = openFreshDatabase(join(dataDir, "canvas.db"), migrationsDir());
   const store = new GithubStore(db.database);
   const secrets = memorySecrets();
   const credentials = new CredentialService({
