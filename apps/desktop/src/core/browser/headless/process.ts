@@ -48,9 +48,21 @@ export type Launcher = (options: LaunchOptions) => BrowserProcess;
  * default-browser nagging, no crash reporter, no keychain prompt on a machine
  * with no desktop session to answer it.
  */
-export function chromiumArgs(options: LaunchOptions): string[] {
+export function chromiumArgs(
+  options: LaunchOptions,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
   return [
     "--headless=new",
+    // No GPU process on macOS. On the macOS CI runner (a VM with a
+    // paravirtual GPU) the GPU path froze the whole browser now and then:
+    // right after an `Input.dispatchMouseEvent`, even browser-level commands
+    // (`Target.getTargets`, `SystemInfo.getProcessInfo`) stopped answering
+    // for 30 s. Measured with the wire trace, the same live suite stalled in
+    // 12 of 68 rounds as it was and in 0 of 36 with `--disable-gpu`. A headless
+    // node paints for a screencast, which software compositing does — the
+    // same path a Linux server without a GPU already takes.
+    ...(platform === "darwin" ? ["--disable-gpu"] : []),
     "--remote-debugging-pipe",
     `--user-data-dir=${options.profileDir}`,
     `--window-size=${options.width},${options.height}`,
