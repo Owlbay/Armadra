@@ -77,6 +77,18 @@ export function agentColorVar(id: string | undefined): string {
 }
 
 /**
+ * Agent 的文字色（设计系统 §2.4 第二层）：会话行里的 Agent 名、消息流里的
+ * 发言人用它，标识色（`agentColorVar`）只给色点、头像底这类图形。
+ *
+ * 只有内置 Agent 有算过对比度的 `--agent-<id>-text`；自定义 Agent 一律退回
+ * 正文色，靠旁边的色点认人，不为每个自定义色算文字变体。
+ */
+export function agentTextColorVar(id: string | undefined): string {
+  if (id && id in AGENT_REGISTRY) return `var(--agent-${id}-text)`;
+  return "var(--text)";
+}
+
+/**
  * 节点上的 `custom:` id → 拼启动行需要的那份定义。
  *
  * `env` 不在这里：它由 Runtime 在建终端时并进 PTY 环境，不上启动行

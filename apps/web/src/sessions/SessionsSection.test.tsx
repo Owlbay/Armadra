@@ -163,7 +163,10 @@ describe("SessionsSection", () => {
     expect(screen.getByText("登录修复")).toBeTruthy();
     // 已关闭的会话只出现在「历史」折叠里，默认不展开。
     expect(screen.queryByText("旧终端")).toBeNull();
-    expect(screen.getByText("Claude Code")).toBeTruthy();
+    // Agent 名用文字色（设计系统 §2.4），不用标识色。
+    expect(screen.getByText("Claude Code").style.color).toBe(
+      "var(--agent-claude-text)",
+    );
     // 分组头按「需要你 → 运行中」排；工作空间维度已经交给上面的树。
     const buckets = screen
       .getAllByRole("heading", { level: 3 })

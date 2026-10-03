@@ -8,6 +8,7 @@ import {
   agentColorVar,
   agentLabel,
   agentSessionRequest,
+  agentTextColorVar,
   buildAgentLaunch,
   buildResumeLaunch,
   customAgentFor,
@@ -52,6 +53,14 @@ describe("自定义 Agent 的显示名与颜色", () => {
     expect(agentLabel("claude")).toBe("Claude Code");
     expect(agentColorVar("codex")).toBe("var(--agent-codex)");
     expect(agentLabel(undefined)).toBe("");
+  });
+
+  it("文字色只给内置 Agent 用 `-text` 变量，自定义与缺省退回正文色", () => {
+    setAgentRegistry([echo]);
+    expect(agentTextColorVar("claude")).toBe("var(--agent-claude-text)");
+    expect(agentTextColorVar("codex")).toBe("var(--agent-codex-text)");
+    expect(agentTextColorVar("custom:echo")).toBe("var(--text)");
+    expect(agentTextColorVar(undefined)).toBe("var(--text)");
   });
 });
 

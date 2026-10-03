@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { Bell, Check, X } from "lucide-react";
 import { toast } from "sonner";
 
-import { agentLabel } from "../agent/launch";
+import { agentLabel, agentTextColorVar } from "../agent/launch";
 import { basename, type SessionRow as SessionRowData } from "../agent/sessions";
 import { isAttention, useAgentStatusStore } from "../agent/status-store";
 import { runtimeApi } from "../api/client";
@@ -155,7 +155,11 @@ export function SessionRow({ row }: { row: SessionRowData }) {
               {row.title}
             </span>
             {agentId && (
-              <span className="shrink-0 text-[length:var(--text-caption)] text-muted-foreground">
+              <span
+                data-slot="session-row-agent"
+                className="shrink-0 text-[length:var(--text-caption)]"
+                style={{ color: agentTextColorVar(agentId) }}
+              >
                 {agentLabel(agentId)}
               </span>
             )}
