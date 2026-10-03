@@ -49,6 +49,7 @@ import {
   sleep,
   startChrome,
 } from "./shell-e2e-lib.mjs";
+import { isolatedEnv, probeHome } from "./probe-home.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const args = process.argv.slice(2);
@@ -97,6 +98,9 @@ await h.run(async () => {
   if (image === undefined) {
     const data = h.temp("armadra-server-e2e-");
     h.cleanups.push(() => killTmux(data));
+    // 临时 HOME：服务器壳里的 core 不读操作员的 CLI 登录状态与配置。
+    const home = probeHome("armadra-server-e2e-home-");
+    h.cleanups.push(home.remove);
     server = child(
       h,
       process.execPath,
@@ -108,7 +112,7 @@ await h.run(async () => {
         "--web-root",
         join(root, "apps/web/dist"),
       ],
-      { cwd: root, env: { ...process.env, ARMADRA_LOG: "warn" } },
+      { cwd: root, env: isolatedEnv(home, { ARMADRA_LOG: "warn" }) },
     );
   } else {
     if (build) {

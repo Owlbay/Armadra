@@ -14,6 +14,8 @@
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
 
+探针起的 core、服务器壳、桌面壳一律用临时 HOME（`probe-home.mjs`：HOME、XDG、各 CLI 配置目录与 git 全局配置都指进 mktemp 目录，并去掉指向真实账号的凭据变量），不读写操作员自己的 HOME。新写的探针也照此办；Vite / pnpm 这类工具链进程不在此列。
+
 ## 受控 Chromium
 
 需要 Node.js 22+（内置 WebSocket/fetch）和已安装的 Chrome/Chromium；脚本不下载浏览器。默认探测系统常见安装路径，也可显式选择可执行文件：

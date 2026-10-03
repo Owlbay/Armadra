@@ -37,11 +37,15 @@ import { request as httpsRequest } from "node:https";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { harness, sleep, startChrome } from "./shell-e2e-lib.mjs";
+import { isolatedEnv, probeHome } from "./probe-home.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const output = resolve(process.argv[2] ?? join(root, "target/gateway-e2e"));
 mkdirSync(output, { recursive: true });
 const h = harness(output);
+// 临时 HOME：core 不读操作员的 CLI 登录状态与配置。
+const home = probeHome("armadra-gateway-e2e-home-");
+h.cleanups.push(home.remove);
 const { report, step, temp } = h;
 report.failures = [];
 
@@ -157,15 +161,14 @@ async function startCore(dataDir) {
     [entry, "--listen", "tcp:127.0.0.1:0", "--data-dir", dataDir],
     {
       stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
+      env: isolatedEnv(home, {
         ARMADRA_CORE: "ts",
         ARMADRA_NO_GLOBAL_WRITES: "1",
         ARMADRA_SECRET_BACKEND: "file",
         ARMADRA_GATEWAY_WEB_ROOT: hasPage
           ? webDist
           : temp("armadra-gateway-web-"),
-      },
+      }),
     },
   );
   let stderr = "";
