@@ -78,3 +78,13 @@ export function languageSessionUrl(
     `/api/workspaces/${workspaceId}/language/sessions/${query(sessionId)}/stream`,
   );
 }
+
+/**
+ * 一块板的实时同步流（契约 §16.1）：二进制帧，`y-protocols` 的 sync 与
+ * awareness。页面在 `GET …/realtime` 答 `realtime || enabled` 时才开它。
+ */
+export function boardSyncUrl(workspaceId: string, boardId: string): string {
+  return socketUrl(
+    `/api/workspaces/${query(workspaceId)}/boards/${query(boardId)}/sync`,
+  );
+}
