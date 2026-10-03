@@ -76,6 +76,10 @@ vi.mock("@/panels/settings/pages/ssh/SshPromptDialog", () => ({
 vi.mock("@/agent/handoff/HandoffDialog", () => ({
   HandoffDialog: () => null,
 }));
+vi.mock("@/workflow/DraftCard", () => ({ DraftLayer: () => null }));
+vi.mock("@/workflow/WorkflowPanel", () => ({
+  WorkflowPanel: stub("WorkflowPanel"),
+}));
 
 const { Overlays } = await import("./Overlays");
 const { requestOverlay, useOverlayGates } = await import("./overlay-gates");
