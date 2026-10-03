@@ -1,5 +1,5 @@
 # B 档夜间作业（docs/guides/ci-release.md §1.1）：打包冒烟、update-e2e、
-# Capacitor 构建等需要打包或较慢的探针。清单是 tools/ci/e2e.json 里 tier b 的
+# Capacitor 构建等需要打包或较慢的探针。清单是 tools/ci/e2e.d/ 里 tier b 的
 # 条目；具体作业由 G3-4 填。失败开 issue，不阻断合并。
 name: nightly
 

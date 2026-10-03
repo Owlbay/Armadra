@@ -89,7 +89,7 @@ jobs:
       - name: 桌面壳构建（不打包）
         run: pnpm --filter @armadra/desktop build
 
-  # A 档端到端（docs/guides/ci-release.md §1.1）：tools/ci/e2e.json 里 tier a 的
+  # A 档端到端（docs/guides/ci-release.md §1.1）：tools/ci/e2e.d/ 里 tier a 的
   # 探针逐条跑——真 core、真页面、新 profile 的无头 Chrome、各自私有的 tmux
   # socket。只在 Linux 上跑：探针要 tmux，而三平台的差异已经由上面的单测守着。
   # 失败阻断合并；每条的 result.json、截图与输出作为产物上传。

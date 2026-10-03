@@ -4,7 +4,7 @@
 
 ## 分档
 
-按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.json` 的清单跑（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
+按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.d/` 的清单跑（一条一个文件 `<id>.json`，新增探针就新增一个文件）（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
 | 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                            | 何时跑                              | 失败时       |
 | --- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |

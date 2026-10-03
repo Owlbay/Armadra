@@ -3,7 +3,7 @@
  *
  *   node tools/ci/e2e.mjs --tier a [--only id,id] [--out dir] [--list]
  *
- * Runs every probe in tools/ci/e2e.json that belongs to the tier, one after
+ * Runs every probe in tools/ci/e2e.d/ that belongs to the tier, one after
  * another, and writes <out>/result.json with one record per entry. Any failure
  * makes the exit code non-zero; the remaining entries still run, because one
  * broken probe should not hide what the others would have said.
@@ -15,6 +15,10 @@
  *   pnpm --filter @armadra/desktop build
  *   pnpm --filter @armadra/server build
  *
+ * The manifest is one file per entry, tools/ci/e2e.d/<id>.json, so packages
+ * that add a probe add a file instead of all editing the end of one list. The
+ * run order is fixed by the loader: tier by tier, then by id.
+ *
  * Tier A needs tmux and a Chrome / Chromium (CHROME_PATH, or the usual install
  * locations). Entries marked `devStack` only run when ARMADRA_DEV_STACK=1 and
  * Docker answers; otherwise they are recorded as skipped, not failed.
@@ -25,6 +29,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -32,13 +37,61 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-export const MANIFEST = join(ROOT, "tools/ci/e2e.json");
+export const MANIFEST_DIR = join(ROOT, "tools/ci/e2e.d");
+/** The single-file manifest this directory replaced; it must not come back. */
+export const LEGACY_MANIFEST = join(ROOT, "tools/ci/e2e.json");
 export const TIERS = ["a", "b"];
 export const REQUIREMENTS = ["tmux", "chrome"];
 
+/**
+ * Read tools/ci/e2e.d/*.json into `{ entries, problems }`. Each entry keeps the
+ * name of its file in `file` so the validator can hold id and file name
+ * together. Entries come back tier by tier (a, then b), then sorted by id, so
+ * the run order never depends on the order files were added in.
+ */
+export function loadManifest(
+  directory = MANIFEST_DIR,
+  legacy = LEGACY_MANIFEST,
+) {
+  const problems = [];
+  if (legacy && existsSync(legacy))
+    problems.push(
+      "tools/ci/e2e.json is back; move its entries to tools/ci/e2e.d/<id>.json and delete it",
+    );
+  const entries = [];
+  for (const file of readdirSync(directory).sort()) {
+    if (!file.endsWith(".json")) {
+      problems.push(`${file} is not a .json entry`);
+      continue;
+    }
+    try {
+      entries.push({
+        ...JSON.parse(readFileSync(join(directory, file), "utf8")),
+        file,
+      });
+    } catch (error) {
+      problems.push(`${file} is not valid JSON: ${error.message}`);
+    }
+  }
+  return { entries: sortEntries(entries), problems };
+}
+
+/** Tier order first, then id; entries without a usable tier or id sort last. */
+export function sortEntries(entries) {
+  const rank = (entry) => {
+    const index = TIERS.indexOf(entry?.tier);
+    return index < 0 ? TIERS.length : index;
+  };
+  return [...entries].sort(
+    (left, right) =>
+      rank(left) - rank(right) ||
+      String(left?.id ?? "").localeCompare(String(right?.id ?? ""), "en"),
+  );
+}
+
 /** Structural problems with a manifest, as plain sentences. */
 export function validateManifest(manifest, root = ROOT) {
-  const problems = [];
+  const problems = [...(manifest?.problems ?? [])];
   const entries = manifest?.entries;
   if (!Array.isArray(entries)) return ["manifest has no entries list"];
   const seen = new Set();
@@ -52,6 +105,8 @@ export function validateManifest(manifest, root = ROOT) {
       problems.push(`${where} has no kebab-case id`);
     else if (seen.has(entry.id)) problems.push(`${where} repeats its id`);
     else seen.add(entry.id);
+    if (entry.file !== undefined && entry.file !== `${entry.id}.json`)
+      problems.push(`${where} lives in ${entry.file}, not <id>.json`);
     if (!TIERS.includes(entry.tier))
       problems.push(
         `${where} has tier ${entry.tier}, not one of ${TIERS.join(", ")}`,
@@ -179,7 +234,7 @@ function runEntry(entry, { root, out, env, log }) {
  */
 export async function runTier({
   tier,
-  manifest = JSON.parse(readFileSync(MANIFEST, "utf8")),
+  manifest = loadManifest(),
   root = ROOT,
   out = join(root, "target/e2e", tier),
   only,
@@ -195,7 +250,7 @@ export async function runTier({
     throw new Error(`unknown tier ${tier}; use one of ${TIERS.join(", ")}`);
   const problems = validateManifest(manifest, root);
   if (problems.length > 0)
-    throw new Error(`tools/ci/e2e.json:\n  ${problems.join("\n  ")}`);
+    throw new Error(`tools/ci/e2e.d:\n  ${problems.join("\n  ")}`);
   const selected = manifest.entries.filter(
     (entry) => entry.tier === tier && (!only || only.includes(entry.id)),
   );
@@ -341,7 +396,12 @@ async function main() {
     return 2;
   }
   if (options.list) {
-    const manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
+    const manifest = loadManifest();
+    const problems = validateManifest(manifest);
+    if (problems.length > 0) {
+      console.error(`tools/ci/e2e.d:\n  ${problems.join("\n  ")}`);
+      return 1;
+    }
     for (const entry of manifest.entries.filter(
       (item) => item.tier === options.tier,
     ))

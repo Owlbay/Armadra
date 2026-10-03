@@ -45,7 +45,7 @@ Rust 与 Go 的 setup、缓存与检查步骤一并删除。
 ### 1.1 端到端分档
 
 `tools/probes/` 下的端到端探针按「要不要用户的东西」分三档（[补全架构](../design/completion-architecture.md) §12）。
-A 档与 B 档由 `tools/ci/e2e.mjs` 执行，清单在 `tools/ci/e2e.json`：
+A 档与 B 档由 `tools/ci/e2e.mjs` 执行，清单是 `tools/ci/e2e.d/` 目录，一条一个文件：
 
 ```sh
 pnpm libs:build
@@ -64,10 +64,13 @@ node tools/ci/e2e.mjs --tier b --list     # 只列出清单
 | B   | `nightly.yml`（每天一次，可手动触发）             | 开 issue |
 | C   | 手动，需要真实账号或真机                          | —        |
 
-- **清单一条一行。** 每条写 `id`、`tier`、`script`、`args`（`{out}` 换成这一条的
-  输出目录）、`requires`（`tmux` / `chrome`）与 `timeoutMinutes`；外部服务替身由
-  `tools/dev-stack/` 提供的条目加 `devStack: true`。工作包只追加自己的一行，
-  `tools/ci/e2e.test.mjs` 校验清单形状、脚本存在与 A 档必有的五条。
+- **清单一条一个文件。** 每条是 `tools/ci/e2e.d/<id>.json`，写 `id`（与文件名一致）、
+  `tier`、`script`、`args`（`{out}` 换成这一条的输出目录）、`requires`（`tmux` /
+  `chrome`）与 `timeoutMinutes`；外部服务替身由 `tools/dev-stack/` 提供的条目加
+  `devStack: true`。工作包新增探针就新增一个文件，不改别人的条目，合并时不冲突。
+  运行顺序由加载器定：先 A 档后 B 档，同档按 `id` 排序，与文件添加先后无关。
+  `tools/ci/e2e.test.mjs` 校验清单形状、文件名与 `id` 一致、脚本存在、A 档必有的
+  五条，以及旧的单文件 `tools/ci/e2e.json` 没有被合并带回来。
 - **逐条记账，跑完全部再判。** 每条探针的输出写进 `<out>/<id>/output.log`，
   探针自己的 `result.json` 与截图也落在 `<out>/<id>/`；汇总在 `<out>/result.json`
   （默认 `target/e2e/<档>/`）。任一条失败或超时，退出码非零，但后面的条目照跑。
