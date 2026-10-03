@@ -382,9 +382,16 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   `ELECTRON_RUN_AS_NODE` 子进程，封与解经 fork 的 IPC 通道问主进程的 `safeStorage`
   （`main/secrets.ts`，`dpapi` / `libsecret`；Linux 的 `basic_text` / `unknown` 当作
   没有钥匙串）；服务器壳用 `<数据目录>/secrets/master.key` 做 AES-256-GCM
-  （`file-encrypted`）；其余与 `ARMADRA_SECRET_BACKEND=file` 是 0600 明文（`file`）。
+  （`file-encrypted`，探针可用 `ARMADRA_SECRET_BACKEND=file-encrypted` 指定）；其余与
+  `ARMADRA_SECRET_BACKEND=file` 是 0600 明文（`file`）。
   壳说了要用 `safeStorage` 而通道不在时拒绝，不降级成明文。旧名字的条目第一次读写时
   一次性迁移，记录在 `secrets/migrated.json`。设置页只显示种类。
+- 节点凭据（`core/agent/credentials/`，契约 §20）：条目在 `agent_credentials` 表，值在
+  SecretStore `armadra-credential-<ref>`；`kind → 变量名` 由 core 写死。起终端时
+  `terminal/install.ts::ownedEnvironment` 校验 `credentialRef`，节点 shell 的环境里只有条目名
+  `ARMADRA_CREDENTIAL_REF`；CLI 启动时 POSIX 启动器 `run/<cli>` 调 `armadra-hook credential`
+  经本机 hook 面 `POST /credential`（节点 token）现取，只在自己的进程里设变量再 `exec`。
+  `file` 后端、SSH 节点与 Windows 拒绝。
 - 服务器壳默认不监听非回环地址，对外服务是显式动作；它的配对码不可复用，
   token 不出现在 URL 里，撤销设备后正在进行的流立即终止。
 - 服务器壳认证出的主体经 `AsyncLocalStorage` 跟着请求走（`core/identity/gate.ts` 的

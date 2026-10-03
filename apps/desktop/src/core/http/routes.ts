@@ -968,6 +968,13 @@ export const ROUTES: readonly RouteEntry[] = [
     implemented: true,
   },
   {
+    // 契约 §20.4：画布启动器兑换节点凭据。只在本机 hook 通道上，带节点 token。
+    path: "/credential",
+    methods: ["POST"],
+    surface: "hook",
+    implemented: true,
+  },
+  {
     // R6c: a browser node on a shell with no window. The desktop build never
     // answers it — there the page is a `<webview>` the person is looking at.
     path: "/api/workspaces/{workspaceId}/browser/{nodeId}/stream",
@@ -995,6 +1002,19 @@ export const ROUTES: readonly RouteEntry[] = [
     // R7a：Hello 的 JSON 形状。能力表与 `HostService/Hello` 是同一张。
     path: "/api/identity/hello",
     methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    // 契约 §20.2：节点凭据条目。只有 owner（`route-scopes.ts`）。
+    path: "/api/credentials",
+    methods: ["GET", "POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/credentials/{ref}",
+    methods: ["PATCH", "DELETE"],
     surface: "runtime",
     implemented: true,
   },
