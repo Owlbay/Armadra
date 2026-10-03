@@ -19,6 +19,7 @@ import {
   forgetCsrf,
   currentCsrf,
   identityHello,
+  identityRequest,
   identitySessionSchema,
   IdentityRequestError,
   IdentityTransportError,
@@ -420,5 +421,48 @@ describe("windows of one browser sharing a session", () => {
     release();
     expect(await pending).toBe(OTHER);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("identityRequest on a cookie session", () => {
+  /** 令牌被别处换掉时 403：换一枚重发一次；再 403 照实报。 */
+  it("retries a rotated CSRF token exactly once", async () => {
+    rememberCsrf(SECRET);
+    const fresh = "c".repeat(43);
+    let writes = 0;
+    answer = (call) => {
+      if (call.url.includes("session/csrf"))
+        return { body: { csrfToken: fresh } };
+      writes += 1;
+      return writes === 1
+        ? { status: 403, body: { code: "PERMISSION_DENIED", message: "" } }
+        : { body: { ok: true } };
+    };
+    const { z } = await import("zod");
+    await expect(
+      identityRequest("groups", z.object({ ok: z.boolean() }), {
+        method: "POST",
+        body: { name: "x" },
+      }),
+    ).resolves.toEqual({ ok: true });
+    const sent = calls
+      .filter((call) => call.url.endsWith("/groups"))
+      .map(
+        (call) =>
+          (call.init.headers as Record<string, string>)["X-Armadra-CSRF"],
+      );
+    expect(sent).toEqual([SECRET, fresh]);
+
+    writes = 0;
+    answer = (call) =>
+      call.url.includes("session/csrf")
+        ? { body: { csrfToken: "d".repeat(43) } }
+        : { status: 403, body: { code: "PERMISSION_DENIED", message: "" } };
+    await expect(
+      identityRequest("groups", z.object({ ok: z.boolean() }), {
+        method: "POST",
+        body: { name: "x" },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
   });
 });

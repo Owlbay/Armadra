@@ -76,6 +76,17 @@ export const SECURITY_AUDIT_ACTIONS = [
   "identity.oauth.failed",
   "identity.oauth.secret.set",
   "identity.oauth.secret.clear",
+  // 安全收尾（G3-8）：泄露检查、对外服务、节点凭据与 ama 模型密钥。值、票、
+  // 口令都不进 `detail`。
+  "identity.password.breached",
+  "identity.password.breach_check_failed",
+  "gateway.configure",
+  "gateway.pairing.issue",
+  "credential.create",
+  "credential.update",
+  "credential.delete",
+  "ama.credential.set",
+  "ama.credential.clear",
 ] as const;
 
 export type SecurityAuditAction = (typeof SECURITY_AUDIT_ACTIONS)[number];

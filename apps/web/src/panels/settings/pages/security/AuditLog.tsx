@@ -54,9 +54,11 @@ export const AUDIT_TYPES = {
     "identity.invitation",
     "identity.group",
     "identity.credential",
+    "identity.password",
   ],
   sharing: ["share"],
   agents: ["terminal", "approval", "agent", "canvas"],
+  host: ["gateway", "credential", "ama.credential"],
 } as const satisfies Record<string, readonly string[]>;
 export type AuditType = keyof typeof AUDIT_TYPES;
 

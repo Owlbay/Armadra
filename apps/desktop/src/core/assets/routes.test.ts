@@ -81,6 +81,10 @@ describe("the asset routes", () => {
     expect(served.headers?.["content-type"]).toBe("image/png");
     expect(served.headers?.["cache-control"]).toContain("immutable");
     expect(served.headers?.["x-content-type-options"]).toBe("nosniff");
+    // 直接导航到资产地址时它是一份沙箱里的文档，脚本不跑（安全审查 H3）。
+    expect(served.headers?.["content-security-policy"]).toMatch(
+      /default-src 'none'.*sandbox/,
+    );
     expect(served.raw?.equals(png)).toBe(true);
 
     // A type outside the whitelist is refused before anything is written.

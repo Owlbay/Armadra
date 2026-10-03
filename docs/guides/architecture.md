@@ -465,6 +465,25 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   失去写权的客户端当场交出画布写租约。没有请求主体时放行——桌面壳里没有第二个人，行为
   不变。设计见[服务器账号与共享](../design/server-accounts-and-sharing.md) §6，契约见
   [core JSON 契约](../contracts/core-json-api.md) §10。
+- **信任边界（补全后，[补全架构](../design/completion-architecture.md) §8.1）**：
+  - 页面 ↔ core：桌面本机是回环 + preload 票换 Bearer；Gateway / 服务器壳是 TLS + `__Host-` 会话
+    Cookie（`HttpOnly; SameSite=Strict; Secure`）+ Origin 白名单 + 写操作的 CSRF 双提交；原生 App 走
+    Bearer（只认 `capacitor://localhost` / `https://localhost`，WS 用 30 秒一次性票）。CSRF 只在
+    Cookie 会话上核对，Bearer 不是环境凭据（`identity/http.ts::csrfRequired`）。Gateway 的每个答案带
+    HSTS 与 `nosniff`，接口答案再带沙箱 CSP 与缺省 `no-store`（`gateway/csp.ts`）。
+  - 长连接：事件流、实时同步、终端、语言服务、浏览器画面在授权变化（撤销设备或会话、登出、停用账号、
+    收回共享）时按同一道路由门复核，不过以 4403 关（`http/server.ts`）。
+  - Agent 进程 ↔ core：节点 token + 终端绑定；`armadra-hook`、`armadra-hook mcp`、ama 适配器三者不作区分。
+  - 成员 ↔ 工作空间：scope 唯一判定 + 「自己创建的终端」规则（契约 §23）；终端与 ACP 会话请求体里的节点
+    必须属于体里的那块画布。
+  - 凭据：值只在 SecretStore，注入只进 CLI 进程；成员起的终端 / ACP 会话不能带 owner 的节点凭据
+    （`credential:use`，契约 §20.3）。ama 的模型密钥只兑换给 ama 节点。
+  - 推送：载荷只有标题、短正文、深链；经中继时端到端加密；只发给有 `canvas:read` 的人的未撤销设备。
+  - 身份：口令 scrypt + 策略 + 泄露检查（HIBP k-匿名，`identity.breachCheck`）；passkey、TOTP、OAuth 的
+    密钥在 SecretStore；登录、配对、刷新按来源地址限流，按 principal 锁定；登录失败与锁定、MFA 与
+    passkey 变更、OAuth 绑定、Gateway 开关与配对票、节点凭据与 ama 密钥的增删全部进审计。
+  - 已知约束：operator 能开 shell，就是能以 core 的系统用户执行任意命令；服务器壳应跑在专用用户或
+    容器里。审查记录见[安全审查 2026-10](../status/security-review-2026-10.md)。
 
 ## 8. 未实现
 

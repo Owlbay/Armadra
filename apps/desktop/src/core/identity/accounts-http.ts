@@ -10,7 +10,7 @@ import type { CoreRequest } from "../http/router";
 import type { SecretBackend } from "../secrets";
 import { Mfa } from "./mfa";
 import { type RelyingParty, Passkeys, resolveRelyingParty } from "./passkey";
-import { checkBreach, enforcePasswordPolicy } from "./policy";
+import { type BreachMode, checkBreach, enforcePasswordPolicy } from "./policy";
 import { SHARE_ROLES } from "./roles";
 import { scope } from "./scopes";
 import type {
@@ -54,8 +54,11 @@ export interface Answer {
 
 export interface AccountsHttpContext {
   readonly accounts: AccountsService;
-  /** 已认证的调用方；未认证时抛 `unauthenticated`。 */
-  readonly authenticate: () => Principal;
+  /**
+   * 已认证的调用方；未认证时抛 `unauthenticated`。`write` 为真时在 Cookie 会话上
+   * 还要核对 `X-Armadra-CSRF`（不对抛 `permission`）。
+   */
+  readonly authenticate: (write?: boolean) => Principal;
   /** 口令登录，落在同一张会话表上。 */
   readonly login: (input: {
     principalId: string;
@@ -74,6 +77,12 @@ export interface SecuritySettings {
   /** 配置的公网来源（`gateway.publicOrigin`）；空 = 用请求来源。 */
   readonly publicOrigins: readonly string[];
   readonly mfaRequireFor: "none" | "members" | "all";
+  /**
+   * 泄露检查落地之后的档位（`auto` 已由装配方解析）；缺省 `off`。
+   */
+  readonly breachCheck?: BreachMode;
+  /** 范围接口的根；空 = HIBP 本身（`ARMADRA_HIBP_BASE` 给 fixture）。 */
+  readonly breachBase?: string;
 }
 
 /** 加固的状态与依赖，一轮 core 一份（内存里的挑战表与 IP 桶在这里）。 */
@@ -107,6 +116,11 @@ export interface SecurityHttpContext {
   readonly service: IdentityService;
   /** 这次请求的凭据（含 CSRF）；需要会话的路由拿它认证。 */
   readonly actor: AccessRequest;
+  /**
+   * 写操作要不要核对 CSRF：Cookie 会话要，Bearer（桌面壳原生传输、原生 App）
+   * 不要（`identity/http.ts` 的 `csrfRequired`）。缺省要。
+   */
+  readonly csrf?: boolean;
   readonly hostId: string;
   readonly origin: string;
   readonly remoteIp: string;
@@ -133,12 +147,19 @@ export function notImplemented(feature: string): Answer {
 export function handleAccounts(
   action: string,
   request: CoreRequest,
-  context: AccountsHttpContext,
+  given: AccountsHttpContext,
 ): Answer | Promise<Answer> | undefined {
   const method = request.method.toUpperCase();
   const segments = action.split("/").filter((part) => part !== "");
   const head = segments[0] ?? "";
-  const security = context.security;
+  const security = given.security;
+  // 这一面每条要会话的写路由都经 `subject()` 认人：写方法在那里一并核对 CSRF，
+  // 不再由各条路由自己记得。
+  const write = method !== "GET" && method !== "HEAD";
+  const context: AccountsHttpContext = {
+    ...given,
+    authenticate: (force) => given.authenticate(force ?? write),
+  };
   switch (head) {
     case "principals":
       return principals(method, segments, request, context);
@@ -245,7 +266,13 @@ function credentials(
     const displayName = security.security.store.transaction(
       (tx) => tx.accounts.principal(principalId)?.displayName ?? "",
     );
-    return checkedPassword(security, password, [displayName, principalId], set);
+    return checkedPassword(
+      security,
+      password,
+      [displayName, principalId],
+      set,
+      principalId,
+    );
   }
   if (segments.length === 2 && method === "DELETE") {
     accounts.revokeCredential(subject(context), segments[1] as string);
@@ -674,7 +701,7 @@ function me(
 ): Principal {
   return context.service.authenticate({
     ...context.actor,
-    requireCsrf: write,
+    requireCsrf: write && context.csrf !== false,
     ...(manage ? { requiredScopes: [scope("identity:manage")] } : {}),
   });
 }
@@ -689,27 +716,62 @@ export function mfaRequiredFor(
   return false;
 }
 
-/** 口令策略 + 泄露检查（调用点；G3-8 填实现），过了才做 `then`。 */
+/**
+ * 口令策略 + 泄露检查，过了才做 `then`（契约 §18.1）。
+ *
+ * 泄露检查三档：`off` 不查；`warn` 命中照常设、答案多一个 `passwordBreached:
+ * true` 并记审计；`block` 命中答 400 `password_breached`。查不成（离线、超时）
+ * 只记一条 `identity.password.breach_check_failed`，不阻止设口令。审计里只有
+ * 档位与结果，口令与哈希都不进去。
+ */
 async function checkedPassword(
   context: SecurityHttpContext,
   password: string,
   names: readonly string[],
   then: () => Answer,
+  target = "",
 ): Promise<Answer> {
+  const settings = context.security.settings();
   enforcePasswordPolicy(password, {
-    minLength: context.security.settings().passwordMinLength,
+    minLength: settings.passwordMinLength,
     names,
   });
-  const verdict = await checkBreach(password);
-  if (verdict === "breached") {
-    throw new IdentityRefusal(
-      "invalid",
-      400,
-      "password_breached",
-      "Password appears in a known breach corpus",
-    );
+  const mode = settings.breachCheck ?? "off";
+  const verdict = await checkBreach(password, {
+    mode,
+    ...(settings.breachBase ? { base: settings.breachBase } : {}),
+  });
+  if (verdict === "unknown") {
+    record(context.security.store, {
+      action: "identity.password.breach_check_failed",
+      target,
+      detail: { mode, ip: context.remoteIp },
+    });
   }
-  return then();
+  if (verdict === "breached") {
+    record(context.security.store, {
+      action: "identity.password.breached",
+      target,
+      detail: { mode, ip: context.remoteIp },
+    });
+    if (mode === "block") {
+      throw new IdentityRefusal(
+        "invalid",
+        400,
+        "password_breached",
+        "Password appears in a known breach corpus",
+      );
+    }
+  }
+  const answer = then();
+  if (verdict !== "breached") return answer;
+  return {
+    ...answer,
+    body: {
+      ...(answer.body as Record<string, unknown>),
+      passwordBreached: true,
+    },
+  };
 }
 
 function deviceNameOf(body: Record<string, unknown>): string {
@@ -1231,14 +1293,14 @@ function sessions(
     if (method !== "POST") return undefined;
     const revoked = context.service.revokeOtherSessions({
       ...context.actor,
-      requireCsrf: true,
+      requireCsrf: context.csrf !== false,
     });
     return { status: 200, body: { revoked } };
   }
   if (segments.length === 2 && method === "DELETE") {
     const sessionId = segments[1] as string;
     context.service.revokeSessionById(
-      { ...context.actor, requireCsrf: true },
+      { ...context.actor, requireCsrf: context.csrf !== false },
       sessionId,
     );
     return { status: 200, body: { sessionId, revoked: true } };

@@ -2,11 +2,11 @@ import { z } from "zod";
 
 import {
   ensureCsrf,
-  forgetCsrf,
   IdentityRequestError,
   IdentityTransportError,
   identitySessionSchema,
   rememberCsrf,
+  replaceRejectedCsrf,
   type IdentitySession,
 } from "./identity";
 import { RUNTIME_URL } from "./request";
@@ -99,29 +99,37 @@ async function call<T>(
   options: { method?: string; body?: unknown } = {},
 ): Promise<T> {
   const method = options.method ?? "GET";
-  const headers: Record<string, string> = { Accept: "application/json" };
-  if (options.body !== undefined) headers["Content-Type"] = "application/json";
+  const send = async (csrf: string): Promise<Response> => {
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (options.body !== undefined) {
+      headers["Content-Type"] = "application/json";
+    }
+    if (csrf) headers["X-Armadra-CSRF"] = csrf;
+    try {
+      return await fetch(`${RUNTIME_URL}${PREFIX}${action}`, {
+        method,
+        headers,
+        body:
+          options.body === undefined ? undefined : JSON.stringify(options.body),
+        credentials: "include",
+        redirect: "error",
+        cache: "no-store",
+      });
+    } catch (cause) {
+      throw new IdentityTransportError(cause);
+    }
+  };
   const csrf = method === "GET" ? "" : await ensureCsrf();
-  if (csrf) headers["X-Armadra-CSRF"] = csrf;
-  let response: Response;
-  try {
-    response = await fetch(`${RUNTIME_URL}${PREFIX}${action}`, {
-      method,
-      headers,
-      body:
-        options.body === undefined ? undefined : JSON.stringify(options.body),
-      credentials: "include",
-      redirect: "error",
-      cache: "no-store",
-    });
-  } catch (cause) {
-    throw new IdentityTransportError(cause);
+  let response = await send(csrf);
+  // 写被 403 多半是令牌被换掉了（别的窗口、别的标签页换过一枚）：换一枚重发
+  // 一次，与 `api/request.ts` 同一个做法。请求根本没进处理逻辑，不会执行两次；
+  // 再 403 就是真的没有权限。
+  if (response.status === 403 && method !== "GET") {
+    const renewed = await replaceRejectedCsrf(csrf);
+    if (renewed && renewed !== csrf) response = await send(renewed);
   }
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    // 403 可能是 CSRF 过期：作废本地这枚，下一次写请求重新取。
-    // 别的窗口这期间换来的新令牌不动（`forgetCsrf` 只作废被拒的那一枚）。
-    if (response.status === 403) forgetCsrf(csrf);
     const body = (payload ?? {}) as { code?: unknown; message?: unknown };
     throw new IdentityRequestError(
       response.status,

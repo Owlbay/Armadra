@@ -11,6 +11,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { CoreRequest } from "../../http/router";
+import {
+  type AuditEvent,
+  installAuditSink,
+  resetAuditSink,
+} from "../../identity/audit";
+import { runAs } from "../../identity/gate";
 import type { CoreContext } from "../../main";
 import type { SecretBackend, SecretBackendKind } from "../../secrets/backend";
 import { posixLauncher } from "../../hook/install/launcher";
@@ -139,6 +145,9 @@ describe("/api/credentials", () => {
   it("stores the value in the secret store and only ever answers isSet", async () => {
     const backend = memoryBackend();
     const { core } = withRoutes(backend);
+    const audited: AuditEvent[] = [];
+    installAuditSink((event) => audited.push(event));
+    opened.push({ close: () => resetAuditSink() });
     const created = await core.call("POST", "/api/credentials", {
       providerId: "claude",
       kind: "oauth-token",
@@ -195,6 +204,16 @@ describe("/api/credentials", () => {
     const again = await core.call("DELETE", `/api/credentials/${entry.ref}`);
     expect(again.body).toMatchObject({ code: "credential_not_found" });
     expect(again.status).toBe(404);
+
+    // 增改删各一条审计，只有条目名与种类，值一个字节都没有（安全审查 M5）。
+    expect(audited.map((event) => event.action)).toEqual([
+      "credential.create",
+      "credential.update",
+      "credential.delete",
+    ]);
+    expect(audited.every((event) => event.target === entry.ref)).toBe(true);
+    expect(JSON.stringify(audited)).not.toContain(VALUE);
+    expect(JSON.stringify(audited)).not.toContain("another-value");
   });
 
   it("refuses a kind outside the table, a disabled kind and a malformed body", async () => {
@@ -456,6 +475,40 @@ describe.skipIf(process.platform === "win32")(
         .prepare("SELECT COUNT(*) AS n FROM terminal_sessions")
         .get() as { n: number };
       expect(rows.n).toBe(0);
+    });
+
+    it("refuses a member without credential:use, before a pane exists (security review H2)", async () => {
+      const backend = memoryBackend();
+      const { core: made, workspaceId } = await core(backend);
+      const created = await made.call("POST", "/api/credentials", {
+        providerId: "copilot",
+        kind: "github-token",
+        label: "Owner's",
+        value: "github_pat_FAKE",
+      });
+      const ref = (created.body as { ref: string }).ref;
+      const member = {
+        subject: {
+          principalId: "p-member",
+          kind: "member" as const,
+          scopes: [],
+        },
+      };
+      const answer = await runAs(member, () =>
+        made.call("POST", "/api/terminals", {
+          workspaceId,
+          cwd: made.directory,
+          nodeId: "00000000-0000-4000-8000-000000000002",
+          agent: { id: "copilot", credentialRef: ref },
+        }),
+      );
+      expect(answer.status).toBe(403);
+      expect(answer.body).toMatchObject({ code: "credential_forbidden" });
+      const rows = made.database
+        .prepare("SELECT COUNT(*) AS n FROM terminal_sessions")
+        .get() as { n: number };
+      expect(rows.n).toBe(0);
+      expect(JSON.stringify(answer.body)).not.toContain("github_pat_FAKE");
     });
 
     it("refuses on a host whose secret backend is a plain file", async () => {

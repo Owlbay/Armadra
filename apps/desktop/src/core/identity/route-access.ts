@@ -245,6 +245,19 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
     return DENY;
   };
 
+  /**
+   * 请求体里的 `nodeId` 属于另一块画布。授权按体里的 `workspaceId` 判，而终端
+   * 与 ACP 会话会给这个节点铸节点 token、接上它的会话与凭据绑定——拿 A 上的
+   * operator 去起 B 上的节点就是跨工作空间（安全审查 2026-10 的 H1）。认不出
+   * 节点在哪（还没落库的新节点）时不算。
+   */
+  const foreignNode = (request: CoreRequest, workspaceId: string): boolean => {
+    const nodeId = bodyString(request, "nodeId");
+    if (nodeId === "") return false;
+    const home = lookups.nodeWorkspace(nodeId);
+    return home !== "" && home !== workspaceId;
+  };
+
   return (request, requirement) => {
     const identity = requestIdentity();
     if (identity === undefined) return ALLOW;
@@ -280,6 +293,7 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
     if (path === "/api/terminals" && method === "POST") {
       const workspaceId = bodyWorkspace(request);
       if (!allowed(subject, "terminal:create", workspaceId)) return DENY;
+      if (foreignNode(request, workspaceId)) return DENY;
       return {
         allowed: true,
         filter: (body) => {
@@ -302,6 +316,7 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
     if (path === "/api/acp/sessions" && method === "POST") {
       const workspaceId = bodyWorkspace(request);
       if (!allowed(subject, "terminal:create", workspaceId)) return DENY;
+      if (foreignNode(request, workspaceId)) return DENY;
       // 这个接口对已经活着的会话答「就是它」、对结束了的同一行原地接回：那两种
       // 都不是新行，创建者不能被这次请求改写——否则 operator 对着 driver 起的
       // 节点调一次，就把它变成了「自己的」。

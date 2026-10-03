@@ -261,6 +261,28 @@ describe("路由门的矩阵", () => {
     creators.clear();
   });
 
+  it("请求体里的节点属于别的画布：终端与 ACP 会话都拒（安全审查 H1）", () => {
+    creators.clear();
+    const { decide } = harness();
+    for (const path of ["/api/terminals", "/api/acp/sessions"]) {
+      // outsider 是 w2 上的 driver；n1 在 w1 上。
+      expect(
+        row(decide, "POST", path, { workspaceId: "w2", nodeId: "n1" }),
+        path,
+      ).toBe("owner");
+      expect(
+        row(decide, "POST", path, { workspaceId: "w1", nodeId: "n1" }),
+        path,
+      ).toBe("owner,driver,operator");
+      // 还没落库的新节点认不出画布：照体里的工作空间判。
+      expect(
+        row(decide, "POST", path, { workspaceId: "w2", nodeId: "fresh" }),
+        path,
+      ).toBe("owner,outsider");
+    }
+    creators.clear();
+  });
+
   it("operator 自己开的终端自己能写，路由门重建（core 重启）之后照旧", () => {
     creators.clear();
     const created = harness().decide("operator", "POST", "/api/terminals", {

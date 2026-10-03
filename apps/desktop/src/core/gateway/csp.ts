@@ -99,3 +99,62 @@ export function serverContentSecurityPolicy(): string {
     })
     .join("; ");
 }
+
+/**
+ * 原生 App（Capacitor）里那张页面的 CSP：页面打在包里，来源是
+ * `capacitor://localhost` / `https://localhost`，要跨源连**用户配的那台**
+ * Gateway——地址在配对之前不知道，所以连接与图片按协议放行 `https:` / `wss:`
+ * （证书由原生层钉扎，架构 §7）。回环授权同样摘掉：手机上的回环端口不是
+ * Armadra。其余每一条逐字继承桌面壳那一份。`frame-ancestors` 在 `<meta>` 里
+ * 不生效，留着无害。原生壳（`apps/mobile`）把它写进包里页面的 `<meta>`。
+ */
+const NATIVE_APP_GRANTS: Readonly<Record<string, readonly string[]>> = {
+  "connect-src": ["https:", "wss:"],
+  "img-src": ["https:"],
+  "media-src": ["https:"],
+};
+
+export function nativeAppContentSecurityPolicy(): string {
+  return serverContentSecurityPolicy()
+    .split("; ")
+    .map((directive) => {
+      const name = directive.split(" ")[0] as string;
+      const extra = NATIVE_APP_GRANTS[name];
+      return extra === undefined
+        ? directive
+        : `${directive} ${extra.join(" ")}`;
+    })
+    .join("; ");
+}
+
+/** Gateway 只在 TLS 上服务：一年的 HSTS 是这类部署的下限。 */
+export const TRANSPORT_SECURITY = "max-age=31536000";
+
+/**
+ * Gateway 上每一个响应都带的头（静态产物另有 {@link serverContentSecurityPolicy}，
+ * 在 `web-root.ts`）。
+ */
+export const GATEWAY_RESPONSE_HEADERS: Readonly<Record<string, string>> = {
+  "strict-transport-security": TRANSPORT_SECURITY,
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+};
+
+/**
+ * `/api/**` 与 `/health` 的答案再多三条：
+ *
+ *   * `content-security-policy: … sandbox`：接口答的从来不是要渲染的页面，但
+ *     有几条把用户数据原样回出去（画布资产里的 SVG）。同源导航到那样一个地址
+ *     时，`sandbox` 把它放进不透明来源、`default-src 'none'` 不让脚本跑——
+ *     否则一张带脚本的 SVG 就能借看它的人的 Cookie 会话调接口；
+ *   * `cache-control: no-store` 是缺省：会话、CSRF、原生密钥都在答案里。答案
+ *     自己写了缓存策略（资产按内容寻址，永久缓存）时以它为准；
+ *   * `x-frame-options: DENY`：给不认 `frame-ancestors` 的老内核。
+ */
+export const GATEWAY_API_HEADERS: Readonly<Record<string, string>> = {
+  ...GATEWAY_RESPONSE_HEADERS,
+  "content-security-policy":
+    "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; sandbox",
+  "x-frame-options": "DENY",
+  "cache-control": "no-store",
+};
