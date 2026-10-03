@@ -45,7 +45,24 @@
 
 ## G1-2 跨主机交接与 Worker 舰队
 
-未开始。
+做了什么：
+
+- 跨执行主机交接（契约 §21.1）：`handoff/store.ts` 不再对「SSH 主机 ≠ 工作空间主机」一律 501；来源转录经 `handoff/remote-capture.ts` 到来源主机上读（Worker 操作 `handoff.capture` 加 `transcriptOnly`，实现搬到 `remote/handoff-worker.ts`），`bundle.capturedOn` 记主机 id；主机未登记 / 没配 Worker / 连不上一律 501 `handoff_host_offline`；不读转录时不连那台主机；目标在任何主机都接受。执行主机登记由远端域装配时经 `setCaptureHosts` 接上。
+- Worker 舰队（契约 §21.2）：`remote/fleet.ts` 汇总控制连接每次握手的版本与能力（`RemoteWorker` 新增 `onHandshake`），过旧 = 版本更旧或缺本构建 Worker 的任一能力；`GET /api/execution-hosts` 与新增 `GET /api/execution-hosts/{id}` 的 SSH 行带 `worker`；`POST /api/execution-hosts/{id}/resync` 重连、重新握手并调 `RemoteIntegration.resync()` 重新同步注入；`GET /api/agents/{id}/integration` 带 `outdatedHosts`（舰队过旧 ∪ `outdatedWorkers()`）。`outdatedHosts` 只放集成状态，共享层 `agentInfoSchema` 去掉了这个可选字段。
+- 能力常量搬到无依赖的 `remote/capabilities.ts`（`operations.ts` / `server.ts` 再导出），免得舰队把整张操作表与语言服务拉进设置域、Hook 域的依赖图（打包后的初始化顺序会坏）。
+- 页面：集成页页首一组「Worker 待升级」+「重新同步」，执行主机页每台握过手的主机一个 Worker 徽标（版本或「Worker 待升级」）+「重新同步」；文案进 `i18n/integration.ts` / `execution-hosts.ts`，中英同步。
+
+实测：
+
+- `pnpm --filter @armadra/desktop exec vitest run src/core/handoff src/core/remote src/core/settings src/core/hook src/core/http`：全过（新增 `handoff/remote-capture.test.ts` 7 条：在线 / 离线 / 非执行主机 / 不读转录 / 本机来源 / Worker 侧 `transcriptOnly` / 答复形状；`remote/fleet.test.ts` 7 条：版本比较、过旧判定、舰队汇总、`outdatedHosts` 合并、真 Worker 握手进执行主机行、resync 的 200 / 404 / 501 / 503；`integration.test` 加 resync）。
+- 页面：`IntegrationPage.test`、`ExecutionHostsPage.test` 各加 2 条。
+- A 档 `node tools/probes/remote-e2e.mjs`（假 ssh，无 sshd）新增第 9 步：本机工作空间里假远端 SSH 终端的 Agent → 本机 Agent 交接，`capturedOn = fake-remote`、转录来自执行主机、文件引用在本机读；执行主机行带 Worker 0.1.0 未过旧；页面点「重新同步」后重新握手。全部 `ok`。
+
+没做：
+
+- 真 sshd 主机上的传输、主机密钥与交接经远端采集（`remote-e2e.mjs --real <host>`）：需用户提供（计划 §5 U4）。
+- 设计展示页的样本：本包计划未列，归后续界面套用包。
+- Worker 的升级本身（往执行主机上装新 Worker）不在范围：「重新同步」只重连并重新同步注入。
 
 ## G1-3 画面门补齐与计划投递接门
 
