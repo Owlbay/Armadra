@@ -430,7 +430,23 @@
 
 ## G3-10 可选崩溃上报（W-CRASH）
 
-未开始。
+做了什么：
+
+- 剥离规则 `core/diagnostics/crash.ts`（纯函数，不依赖 SDK）：删 `user` / `request` / `extra` / `server_name` / `modules` / `threads` 与任何层级的环境变量、命令行、工作目录、请求头、局部变量、源码行；面包屑只留类别 / 级别 / 时间 / 一句话，控制台与网络类整条丢；每个字符串去 ANSI 与控制字符、替换环境变量的值、家目录、路径里的用户名、令牌形状、地址里的账号与查询串，再截断。
+- `CorePlatform.reportError`（可选）与 `reportError(platform, error, {source})`：缺省只写本地日志；core 在请求 500 与 `uncaughtExceptionMonitor` 两处调用。桌面 core 子进程经 fork 的 IPC（`ARMADRA_CRASH_REPORT_IPC=1` 时）把剥离后的错误交给主进程。
+- 桌面壳 `main/diagnostics.ts`（`@sentry/electron` 7.20.0）与服务器壳 `apps/server/src/diagnostics.ts`（`@sentry/node` 10.75.0）：只有 DSN 合格时才加载 SDK；`defaultIntegrations: false`，不开 minidump、会话、OTel、网络 / 控制台集成，`ipcMode: 0`；设置文档每 5 秒看一次，关掉立即停发、打开不用重启。服务器壳 `ARMADRA_CRASH_REPORT_DSN` 优先。
+- 设置 → 通用 → 诊断：开关 + DSN 输入（合格才存，关掉即清空）；出站表登记 `crashReport`。
+
+实测：
+
+- dev-stack GlitchTip：`node tools/probes/crash-report-e2e.mjs` 通过（真 `@sentry/node` 经 core 500 路径发出，取回的事件里没有环境变量、家目录、令牌、终端输出、用户与 extra；没配 DSN 不发）。
+- 桌面路径（临时 Electron 脚本，未入库）：fork 的子进程经 `nodePlatform.reportError` → IPC → 主进程 `@sentry/electron` → GlitchTip 收到，标签 `process: core`，栈路径 `~/…`；主进程错误同样收到。
+- 打包后的服务器壳 `out/main.js serve` 带 DSN 启动日志「崩溃上报已打开」（只写主机）。
+
+没做：
+
+- 页面（渲染进程）的 JS 错误不上报：页面不装 SDK，`ipcMode: 0` 也不开渲染进程通道。
+- core 子进程因未接住异常退出时，IPC 消息是同步写管道的尽力而为；服务器壳会等最多 2 秒送出再以 1 退出。
 
 ## G3-11 存量界面套用二：对话框与其余页面（WP-D3b）
 

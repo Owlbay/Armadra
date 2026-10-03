@@ -240,6 +240,7 @@ preload 注入页面，没有票据链；服务器壳的设备配对与可撤销
 | `ARMADRA_DATABASE_URL`                          | SQLite 连接，例如 `sqlite://…?mode=rwc`                                                                                                                                              |
 | `ARMADRA_CORE_MIGRATIONS_DIR`                   | 迁移目录，覆盖「包内 `resources/migrations` → 往上找检出」这条查找顺序（测试与夹具用）                                                                                               |
 | `ARMADRA_LOG`                                   | 日志级别，默认 `info`                                                                                                                                                                |
+| `ARMADRA_CRASH_REPORT_DSN`                      | 服务器壳的可选崩溃上报 DSN（自托管 GlitchTip / Sentry 协议）；设了就以它为准，不设时读设置 `diagnostics.crashReportDsn`，两处都空则不发（外部服务 §11.2）                            |
 | `ARMADRA_HOOK_DEBUG`                            | Hook 调试                                                                                                                                                                            |
 | `ARMADRA_DESKTOP_OWNS_RUNTIME`                  | 开发也由壳持有 core（默认连外部 core）                                                                                                                                               |
 | `ARMADRA_DESKTOP_PACKAGED`                      | 按打包布局解析随包资源的位置，不必真打包                                                                                                                                             |
