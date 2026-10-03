@@ -10,7 +10,7 @@ import {
   resolveWithinRoot,
   staticHeaders,
 } from "./web-root";
-import { tempDir } from "../../desktop/src/core/testing/temp-dir";
+import { tempDir } from "../testing/temp-dir";
 
 function fixture(): { root: string; outside: string } {
   const root = tempDir("armadra-webroot-");
