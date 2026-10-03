@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { contentSourceSchema } from "@armadra/shared";
 
 import {
   WHITEBOARD_COLORS,
@@ -76,6 +77,12 @@ const baseItemSchema = z.object({
   z: z.number(),
   parentId: z.string().nullable().optional(),
   style: itemStyleSchema,
+  /**
+   * 对象的附加信息。目前只有 `source`：Agent 的回复输出到画板时记下来自哪个
+   * 节点（ACP 会话视图设计 §7），只用于显示与跳回，core 不读。可选，v2 格式
+   * 不变；字段写明而不是放行任意键，免得校验之外的东西混进文档。
+   */
+  meta: z.object({ source: contentSourceSchema.optional() }).optional(),
 });
 
 /** 墨迹的一个采样点：`[x, y, 压力]`，坐标相对对象原点。 */

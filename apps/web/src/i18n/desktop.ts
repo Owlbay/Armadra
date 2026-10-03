@@ -15,6 +15,7 @@ import type { MessageModule } from "./index";
 export const desktop: MessageModule = {
   "zh-CN": {
     "tray.showWindow": "显示窗口",
+    "tray.gateway": "对外服务",
     "tray.quit": "退出并停止后台",
     "tray.updateRestart": "重启以完成更新",
     "tray.usage.signedOut": "未登录",
@@ -48,6 +49,7 @@ export const desktop: MessageModule = {
   },
   en: {
     "tray.showWindow": "Show window",
+    "tray.gateway": "External access",
     "tray.quit": "Quit and stop background services",
     "tray.updateRestart": "Restart to finish updating",
     "tray.usage.signedOut": "signed out",

@@ -71,7 +71,7 @@ import {
   settleKeyIntent,
 } from "./menu";
 import { applyShortcuts, releaseShortcuts } from "./shortcuts";
-import { createTray, destroyTray } from "./tray";
+import { createTray, destroyTray, refreshGateway } from "./tray";
 import { ownsRuntime } from "../shell-core/runtime/identity";
 
 /**
@@ -104,6 +104,10 @@ function registerIpc(): void {
     [IPC.identityTicket.channel]: nativeTicket,
     [IPC.appLocale.channel]: () => app.getLocale(),
     [IPC.windowIsFocused.channel]: () => getMainWindow()?.isFocused() ?? false,
+    [IPC.gatewayRefresh.channel]: async () => {
+      await refreshGateway();
+      return { ok: true };
+    },
     // The page answering a claimed chord. `menu.ts` owns the arbitration,
     // because it is the module that claimed the chord in the first place.
     [IPC.windowKeyIntentResult.channel]: (result) => {

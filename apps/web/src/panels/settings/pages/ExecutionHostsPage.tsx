@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { PlugZap } from "lucide-react";
+import { PlugZap, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { executionHostPackageSchema } from "@armadra/shared";
 
@@ -26,6 +26,9 @@ import { Textarea } from "@/ui/textarea";
  *
  * 「验证」按钮问的是两个问题：`ssh` 通不通，以及那台机器上的 Worker 是不是
  * 这个构建。两者要做的事不一样，所以答案分开显示，不合成一句「失败」。
+ *
+ * Worker 舰队（契约 §21.2）：握过手的主机带一个徽标——过旧时是「Worker 待升级」，
+ * 否则是版本号；「重新同步」重连 Worker 并把画布注入再同步一次。
  */
 export function ExecutionHostsPage() {
   const t = useT();
@@ -62,6 +65,24 @@ export function ExecutionHostsPage() {
     },
     onError: (cause: Error) =>
       toast.error(t("executionHosts.handshakeRefused"), {
+        description: cause.message,
+      }),
+  });
+
+  // 重新同步（契约 §21.2）：重连 Worker、重新握手，再把画布注入同步一次。
+  const resync = useMutation({
+    mutationFn: (hostId: string) => runtimeApi.resyncExecutionHost(hostId),
+    onSuccess: (host) => {
+      void client.invalidateQueries({ queryKey: ["execution-hosts"] });
+      void client.invalidateQueries({ queryKey: ["agent-integration"] });
+      toast.success(
+        t("executionHosts.resynced", {
+          name: host.name || host.executionHostId,
+        }),
+      );
+    },
+    onError: (cause: Error) =>
+      toast.error(t("executionHosts.resyncFailed"), {
         description: cause.message,
       }),
   });
@@ -116,6 +137,37 @@ export function ExecutionHostsPage() {
               <Badge variant="outline" className="font-normal">
                 {t("executionHosts.workerMissing")}
               </Badge>
+            )}
+            {host.worker &&
+              (host.worker.outdated ? (
+                <Badge
+                  variant="destructive"
+                  className="font-normal"
+                  title={host.worker.version || undefined}
+                >
+                  {t("executionHosts.worker.outdated")}
+                </Badge>
+              ) : (
+                host.worker.version && (
+                  <Badge variant="secondary" className="font-normal">
+                    {t("executionHosts.worker.version", {
+                      version: host.worker.version,
+                    })}
+                  </Badge>
+                )
+              ))}
+            {host.kind === "ssh" && host.workerConfigured && (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={resync.isPending}
+                onClick={() => resync.mutate(host.executionHostId)}
+              >
+                <RefreshCw />
+                {resync.isPending && resync.variables === host.executionHostId
+                  ? t("executionHosts.resyncing")
+                  : t("executionHosts.resync")}
+              </Button>
             )}
             {host.kind === "ssh" && (
               <Button

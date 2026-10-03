@@ -30,6 +30,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../ui/alert-dialog";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { ColorDot } from "../ui/color-dot";
 import { IconButton } from "../ui/icon-button";
@@ -69,6 +70,12 @@ export function SessionRow({ row }: { row: SessionRowData }) {
   // 名字与颜色都走 `agent/launch`：自定义 Agent 不在内置注册表里，
   // 得靠 `GET /api/agents` 那份快照才认得（§24.1）。
   const agentId = row.agentId;
+  // 会话行带上 core 报的驱动方式；旧 core 不报时退回节点数据里写明的那个。
+  const nodeDriver = useCanvasStore((state) => {
+    const node = state.document?.nodes.find((item) => item.id === row.nodeId);
+    return node?.data.kind === "terminal" ? node.data.agent?.driver : undefined;
+  });
+  const acp = row.backend ? row.backend === "acp" : nodeDriver === "acp";
 
   const activate = () => {
     markRead(row.nodeId);
@@ -154,6 +161,15 @@ export function SessionRow({ row }: { row: SessionRowData }) {
             <span className="flex-1 truncate text-left text-[length:var(--text-body)]">
               {row.title}
             </span>
+            {acp && (
+              <Badge
+                variant="outline"
+                data-slot="session-row-acp"
+                className="h-4 shrink-0 px-1 text-[length:var(--text-caption)] font-normal"
+              >
+                {t("acp.backend")}
+              </Badge>
+            )}
             {agentId && (
               <span
                 data-slot="session-row-agent"

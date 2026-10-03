@@ -9,12 +9,12 @@ import { useT } from "../../../../app/preferences-store";
 import { writeClipboard } from "../../../../terminal/TerminalSurface";
 import { Button } from "../../../../ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "../../../../ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "../../../ResponsiveDialog";
 import { CherryPick } from "../../CherryPick";
 import { RebaseTodo } from "../../RebaseTodo";
 import type { CommitDialogTarget } from "./context";
@@ -51,19 +51,21 @@ export function RebaseTodoDialog({
 }) {
   const t = useT();
   return (
-    <Dialog
+    <ResponsiveDialog
       open={target !== null}
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
     >
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>{t("gitRepo.rebaseTodo")}</DialogTitle>
-          <DialogDescription className="break-all font-mono">
+      <ResponsiveDialogContent className="max-w-3xl">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {t("gitRepo.rebaseTodo")}
+          </ResponsiveDialogTitle>
+          <ResponsiveDialogDescription className="break-all font-mono">
             {target?.oid.slice(0, 12)}
-          </DialogDescription>
-        </DialogHeader>
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
         <div className="max-h-[60vh] min-w-0 overflow-auto text-xs">
           {target && (
             <RebaseTodo
@@ -83,8 +85,8 @@ export function RebaseTodoDialog({
             />
           )}
         </div>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 
@@ -112,19 +114,21 @@ export function CherryPickDialog({
 }) {
   const t = useT();
   return (
-    <Dialog
+    <ResponsiveDialog
       open={target !== null}
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
     >
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>{t("gitIntegration.cherryPick")}</DialogTitle>
-          <DialogDescription>
+      <ResponsiveDialogContent className="max-w-3xl">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {t("gitIntegration.cherryPick")}
+          </ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
             {t("gitLog.menu.cherryPickPasteOid")}
-          </DialogDescription>
-        </DialogHeader>
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
         {target && (
           <Button
             variant="outline"
@@ -154,7 +158,7 @@ export function CherryPickDialog({
             />
           )}
         </div>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

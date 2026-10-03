@@ -18,6 +18,7 @@
  * 项目（通知按下时这一段换成 Agent 状态面板）/ 设置。
  */
 import { useCompactLayout } from "../platform/layout";
+import { isSimpleMode } from "../acp/simple-mode";
 import { Sheet, SheetClose, SheetContent, SheetTitle } from "@/ui/sheet";
 import { useState } from "react";
 import { createPortal } from "react-dom";
@@ -52,7 +53,8 @@ export function LeftSidebar() {
   const visible = open && (!compact || !settingsOpen);
   const setPanel = useCanvasStore((state) => state.setPanel);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [agentsOpen, setAgentsOpen] = useState(false);
+  // 简洁模式下 Agent 面板默认展开（ACP 设计 §8 第 3 条）；只定初值，之后由人收放。
+  const [agentsOpen, setAgentsOpen] = useState(isSimpleMode);
 
   const content = (
     <div className="flex h-full w-full flex-col overflow-hidden">

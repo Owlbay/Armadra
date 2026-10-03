@@ -30,6 +30,8 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 │ 启动时打到 stdout 的一致）；不一致时按 endpoints.json 与进程表确认    │
 │ 是同一数据目录、由桌面启动的旧 core 后发 SIGTERM 再重拉               │
 │  └── 随包资源：`resources/cli/armadra-hook.js`、`resources/migrations/`│
+│      `resources/agent/ama.cjs`（钉住的 @armadra/agent）与             │
+│      `resources/agent-host/ama-armadra.cjs`（它的宿主适配器）         │
 │      （Windows 另有 `resources/session-host/host.cjs` 与              │
 │      `resources/cli/armadra-hook.exe`、`armadra-launch.exe` 启动器）  │
 │  └── 回环 HTTP 静态服务：内核分配端口，页面从这里加载                 │
@@ -51,6 +53,7 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 ┌───────────────────────────────▼──────────────────────────────────────┐
 │ src/cli/armadra-hook  各 CLI 的 hook 与技能调用的小客户端（单文件 JS）│
 │ src/hook-client  端点、令牌、HTTP 与动词工具表（CLI 与适配器共用）    │
+│ src/agent-host/ama  ama 的宿主适配器：画布工具、状态上报（进程内）    │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -82,6 +85,14 @@ Gateway（契约 §17）。用法见
 用量快照保留供应商返回的基础与模型专属额度窗口，每个窗口独立显示已用比例和
 重置时间。数据采集时间与额度重置时间分开显示；后台刷新和手动刷新共用串行化
 与冷却时间，前端只轮询缓存，不把缓存轮询时间当成数据更新时间。
+
+core 自己的全部出站地址登记在 `core/net/outbound.ts`（用途、频率、关闭开关；
+`outbound.test.ts` 扫源码，没登记的 `https://` 真实主机过不了测试）。借用 CLI
+登录令牌的两个额度端点（Claude `api/oauth/usage`、Copilot `copilot_internal/user`
+与它的设备流）默认关（`usage.claudeUsage` / `usage.copilotUsage`），关着时不读凭据、
+不发请求，本机在用的那家在快照里报 `unavailable` + `reason: "policy_off"`，页面第一次
+看到时提示一次；Codex 端点默认开、标「非官方端点」，答 HTML 时报 `unavailable` +
+`reason: "unsupported"`。
 
 各 CLI 留在本机的会话记录经**本地历史适配器**读（`core/history/`，每家一个
 `HistoryAdapter`，在 `history/registry.ts` 的 `HISTORY_ADAPTERS` 登记，目前 claude、
@@ -127,7 +138,11 @@ Git 的路由做完权限与参数解析后，按工作空间的 `executionHostI
 服务走同一台主机上的第二个 Worker（`worker --stdio --language-link`，
 `core/remote/language.ts`），语言服务器是它的子进程；长时间没有会话时控制端
 关掉这条连接（`core/remote/language-idle.ts`），下次按需重连。交接材料经 Worker
-在执行主机上采集（`handoff.capture`）。比一帧大的上传与下载分块传输、按 Worker
+在执行主机上采集（`handoff.capture`，`core/remote/handoff-worker.ts`）；来源
+Agent 在另一台执行主机的 SSH 终端里时，只有它的转录到那台主机上读
+（`core/handoff/remote-capture.ts`，读不了答 501 `handoff_host_offline`）。控制
+连接每次握手的版本与能力汇成 Worker 舰队（`core/remote/fleet.ts`）：执行主机行的
+`worker`、集成状态的 `outdatedHosts` 与「重新同步」都读它。比一帧大的上传与下载分块传输、按 Worker
 已收的字节续传（`core/remote/transfer.ts`）。画布 SSH 终端里的 CLI 由 Worker
 同步过去的产物与垫片注入，Hook 经 Worker 的 unix socket 中继回控制端
 （`core/remote/integration.ts`，见[远端画布注入](../design/remote-canvas-injection.md)）。
@@ -227,6 +242,31 @@ Agent 之间的协作走 core 的两个动词表面：
 画布说明（一段「画布规则」）与按需技能：协作只走 `armadra-hook canvas`，要别的 Agent
 用 `open-agent` / `team`，要浏览器用画布浏览器节点。详见
 [Agent 适配与协作协议](./agent-collaboration.md)。
+
+经 ACP 驱动的 Agent 没有终端可敲命令，画布工具改由 `armadra-hook mcp` 承担：它在
+stdio 上讲 MCP（`initialize` / `tools/list` / `tools/call` 手写，不引 SDK），工具表就是
+`src/hook-client/verbs.ts` 的 `VERB_TOOLS`，每次 `tools/call` 是一次与
+`armadra-hook canvas|context|browser` 逐字节相同的 HTTP 调用（同一份节点令牌与会话绑定），
+`initialize.instructions` 是 `collab/skill.ts::mcpInstructions`。core 开会话时经
+`core/acp/mcp.ts` 把它放进 `session/new` 的 `mcpServers`（命令、`ARMADRA_NODE_ID`、端点
+文件；ama 不加）；`@armadra/agent` 的 `AcpClient` 声明 `features.mcpServers` 才带，旧版照旧
+开会话、答 `mcpInjected: false`。
+
+ACP 只是同一个 Agent 节点的另一种驱动方式（`core/acp/`，[ACP 会话视图](../design/acp-session-view.md)，
+契约 §14）。节点数据 `agent.driver: "acp"` 的节点不开 PTY：core 直接起适配器
+（`host.ts`，协议栈是 `@armadra/agent/acp`），会话是 `terminal_sessions` 里
+`backend_kind = 'acp'` 的一行。ACP 是终端管理器的**一个后端**（`bridge.ts`），所以行、代次、
+人类租约、退出通知、Eco 休眠（同一行上起下一代并 `session/load`）只有一份实现：`writeSubmit`
+（括号粘贴加回车）落为 `session/prompt`，单个 `ESC` 落为 `session/cancel`，`capture` 读镜像，
+`send` 的门链、收件箱唤醒、`interrupt`、依赖编排与调度一行不改。状态是第四种来源 `acp`：
+`session.ts` 说出回合边界的信号，经 `hook/normalize` 的 `case "acp"`（`normalize.ts`）与
+`hook/ingest.ts::apply` 进同一个 reducer；`request_permission` 进同一张 `agent_approvals`，
+答复经 `agent/approvals.ts` 的 `"acp"` 路由回到挂起的请求，回合取消、退出、切换、休眠时一律
+回 `cancelled`。每条 `session/update` 先写镜像 `<数据目录>/acp/<nodeId>/<会话 id>.acp.jsonl`
+（`mirror.ts`；读取方经 `history/acp-mirror.ts`，连线读取认得这个后缀）再发 `acp.update`。
+驱动切换（`POST /api/acp/nodes/{id}/driver`）结束当前驱动、在同一行上以另一种驱动接回 CLI
+自己的会话；画布注入在 ACP 下只留入口认得的那一半（`agent/canvas-launch.ts::acpInjection`），
+其余由 MCP 承担。
 
 浏览器节点的 Agent 工具是 `armadra-hook browser <动词>`，动词清单只有一份
 （`core/browser/verb-spec.ts`，`--help` 与技能都由它生成）；执行下沉在 core
@@ -335,6 +375,8 @@ CSRF 与 Origin 校验（[服务器账号、中转与共享](../design/server-ac
 | 画布注入产物        | `<数据目录>/integration/<cli>/`                                                                     | —                                               |
 | 画布启动器与垫片    | `<数据目录>/integration/run/<cli>`、`shims/<cli>`、`launcher.json`（Windows 为 `.exe` + `.launch`） | —                                               |
 | Hook 客户端启动器   | `<数据目录>/bin/armadra-hook`（Windows 为 `.exe`，兜底 `.cmd`）                                     | —                                               |
+| 随包 ama 启动器     | `<数据目录>/bin/ama`（Windows 为 `armadra-hook.exe` 的拷贝 `ama.exe` + `ama.launch`）               | `ARMADRA_AMA_BUNDLE`、`ARMADRA_AMA_HOST`        |
+| ama 的模型密钥      | 只在密钥后端（`armadra-ama-<供应商>`）；`run/ama` 凭节点 token 经 hook 通道兑换、只设给 ama 进程    | —                                               |
 | 账号偏好            | `<数据目录>/settings.json`                                                                          | —                                               |
 | 本机偏好            | `<数据目录>/worker-settings.json`                                                                   | —                                               |
 | 模型目录缓存        | `<数据目录>/models-catalog.json`（0600）                                                            | —                                               |
@@ -382,9 +424,16 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   `ELECTRON_RUN_AS_NODE` 子进程，封与解经 fork 的 IPC 通道问主进程的 `safeStorage`
   （`main/secrets.ts`，`dpapi` / `libsecret`；Linux 的 `basic_text` / `unknown` 当作
   没有钥匙串）；服务器壳用 `<数据目录>/secrets/master.key` 做 AES-256-GCM
-  （`file-encrypted`）；其余与 `ARMADRA_SECRET_BACKEND=file` 是 0600 明文（`file`）。
+  （`file-encrypted`，探针可用 `ARMADRA_SECRET_BACKEND=file-encrypted` 指定）；其余与
+  `ARMADRA_SECRET_BACKEND=file` 是 0600 明文（`file`）。
   壳说了要用 `safeStorage` 而通道不在时拒绝，不降级成明文。旧名字的条目第一次读写时
   一次性迁移，记录在 `secrets/migrated.json`。设置页只显示种类。
+- 节点凭据（`core/agent/credentials/`，契约 §20）：条目在 `agent_credentials` 表，值在
+  SecretStore `armadra-credential-<ref>`；`kind → 变量名` 由 core 写死。起终端时
+  `terminal/install.ts::ownedEnvironment` 校验 `credentialRef`，节点 shell 的环境里只有条目名
+  `ARMADRA_CREDENTIAL_REF`；CLI 启动时 POSIX 启动器 `run/<cli>` 调 `armadra-hook credential`
+  经本机 hook 面 `POST /credential`（节点 token）现取，只在自己的进程里设变量再 `exec`。
+  `file` 后端、SSH 节点与 Windows 拒绝。
 - 服务器壳默认不监听非回环地址，对外服务是显式动作；它的配对码不可复用，
   token 不出现在 URL 里，撤销设备后正在进行的流立即终止。
 - 服务器壳认证出的主体经 `AsyncLocalStorage` 跟着请求走（`core/identity/gate.ts` 的
@@ -404,8 +453,14 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
 - **Windows 持久化会话**：session host 已实现并在 Windows CI 上通过，没有在真机上
   长时间运行过（进度 §13、§33）。启动行方言、`.cmd` 绕过与 `.exe` 启动器同样只在
   Windows CI 上跑过（进度 §54、§57、§61）。
-- **多人实时协同**：同一块板同时只有一个写者（§5 的编辑租约）；白板快照对 core 是
-  不透明字符串，真要多人同时改时再引入 CRDT。
+- **多人实时协同**：core 侧（`core/realtime/`，契约 §16.1–§16.2、§16.4）：每块板
+  一个 `Y.Doc`，快照 + 更新流是实时板的真相，表由物化得来；core 自己的写者经
+  `saveBoard` 前的拦截写进文档；awareness 按连接改写身份、校验形状。页面侧
+  （`apps/web/src/realtime/`）：开板时 `realtime || enabled` 就连 `…/sync`，
+  `Y.Doc` 与 `canvas-store` 双向绑定（origin 断开回声环），`Y.UndoManager` 接管
+  撤销，在线条与光标层来自 awareness，断线时本地照常编辑、重连补齐。设置
+  `collab.realtime`（缺省开）关掉时新板留在 §5 的编辑租约。评论（G2-6）尚未实现；
+  实时板的视口不进文档，只留在本窗口。
 - **自动更新**：electron-updater 已接通（`apps/desktop/src/main/updates/`），但未
   签名的构建里更新器是关闭的——「没签名 = 什么也验证不了 = `notConfigured`」，
   它绝不会报 `upToDate`（`shell-core/updates/availability.ts`）。

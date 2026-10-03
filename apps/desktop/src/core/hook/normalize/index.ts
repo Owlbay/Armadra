@@ -1,3 +1,4 @@
+import * as acp from "../../acp/normalize";
 import * as claude from "./claude";
 import * as codex from "./codex";
 import * as copilot from "./copilot";
@@ -25,6 +26,10 @@ export function normalizeAs(
   payload: Payload,
 ): AgentEvent | undefined {
   switch (provider) {
+    // 不是一家 CLI 的 Hook：core 以 ACP 驱动的会话自己说出的信号（ACP 会话视图
+    // 设计 §5.4）。`/hook/{agentId}` 的路径校验认不得 `acp`，客户端到不了这里。
+    case "acp":
+      return acp.normalize(nodeId, agentId, payload);
     case "codex":
       return codex.normalize(nodeId, agentId, payload);
     case "copilot":
@@ -33,8 +38,11 @@ export function normalizeAs(
       return opencode.normalize(nodeId, agentId, payload);
     // One parser for both: OMP is a fork of Pi's extension API and the
     // vocabularies differ by an alias, not by a shape.
+    // `ama`'s host adapter reports Pi's vocabulary in the same payload shape,
+    // plus two approval events `pi.ts` already maps (coordinator-agent §2.3).
     case "pi":
     case "omp":
+    case "ama":
       return pi.normalize(nodeId, agentId, payload);
     default:
       return claude.normalize(nodeId, agentId, payload);

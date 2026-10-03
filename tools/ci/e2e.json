@@ -40,6 +40,38 @@
       "args": ["{out}"],
       "requires": ["tmux", "chrome"],
       "timeoutMinutes": 15
+    },
+    {
+      "id": "design-showcase",
+      "tier": "a",
+      "script": "tools/probes/design-showcase.mjs",
+      "args": ["{out}"],
+      "requires": ["chrome"],
+      "timeoutMinutes": 15
+    },
+    {
+      "id": "gateway-e2e",
+      "tier": "a",
+      "script": "tools/probes/gateway-e2e.mjs",
+      "args": ["{out}"],
+      "requires": ["chrome"],
+      "timeoutMinutes": 5
+    },
+    {
+      "id": "realtime-e2e",
+      "tier": "a",
+      "script": "tools/probes/realtime-e2e.mjs",
+      "args": ["{out}"],
+      "requires": ["tmux", "chrome"],
+      "timeoutMinutes": 10
+    },
+    {
+      "id": "acp-e2e",
+      "tier": "a",
+      "script": "tools/probes/acp-e2e.mjs",
+      "args": ["{out}"],
+      "requires": ["tmux", "chrome"],
+      "timeoutMinutes": 10
     }
   ]
 }

@@ -145,6 +145,18 @@ export function bundleResources(platformName) {
     // `process.resourcesPath` in a packaged app; without this entry the
     // packaged tray logged "could not be loaded" and stayed off.
     { from: "build/icons/icon.png", to: "tray.png" },
+    // The bundled `ama` (the pinned `@armadra/agent`'s single-file runtime and
+    // the sandbox helper it loads from beside itself) and Armadra's host
+    // adapter for it (docs/design/coordinator-agent.md §2.5). Real files: the
+    // `<data>/bin/ama` launcher names the first, the profile's `host` the
+    // last, and neither reader can open an asar. On Windows the launcher is a
+    // copy of `cli/armadra-hook.exe`, so no second program is built.
+    { from: "out/agent/ama.cjs", to: "agent/ama.cjs" },
+    { from: "out/agent/ama-sandbox.cjs", to: "agent/ama-sandbox.cjs" },
+    {
+      from: "out/agent-host/ama-armadra.cjs",
+      to: "agent-host/ama-armadra.cjs",
+    },
   ];
   if (platformName === "win32")
     resources.push({

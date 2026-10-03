@@ -12,9 +12,11 @@
  *     「正常」。一个假的绿灯比没有灯更糟。
  *   * **有缓存**。状态页不是实时仪表，五分钟问一次足够；看板开着、页面每次
  *     重渲染都来问，也只在缓存过期后真发请求，同一时刻只有一趟在路上。
- *   * **能关**。`usage.statusPage` 关掉之后这里一个请求都不发（开关在路由那
- *     一层判）。
+ *   * **能关**。`usage.statusBadges` 关掉之后这里一个请求都不发（开关在路由
+ *     那一层判；只有旧键 `usage.statusPage` 的文档由设置归一化沿用旧值）。
  */
+
+import { OUTBOUND } from "../net/outbound";
 
 export const STATUS_PROVIDER_IDS = ["anthropic", "openai", "github"] as const;
 export type StatusProviderId = (typeof STATUS_PROVIDER_IDS)[number];
@@ -52,20 +54,23 @@ export interface StatusSource {
   readonly pageUrl: string;
 }
 
+/** Atlassian Statuspage 的公共 Status API 路径。 */
+const STATUS_JSON_PATH = "/api/v2/status.json";
+
+function source(root: string): StatusSource {
+  return { url: `${root}${STATUS_JSON_PATH}`, pageUrl: root };
+}
+
+/**
+ * 地址在出站表里（`net/outbound.ts`）。Anthropic 的状态页已从
+ * `status.anthropic.com` 搬到 `status.claude.com`（旧地址 302 过去）；这里用新
+ * 地址，`fetch` 仍按缺省跟随重定向，`status.test.ts` 钉着这一点。
+ */
 export const STATUS_SOURCES: Readonly<Record<StatusProviderId, StatusSource>> =
   {
-    anthropic: {
-      url: "https://status.anthropic.com/api/v2/status.json",
-      pageUrl: "https://status.anthropic.com",
-    },
-    openai: {
-      url: "https://status.openai.com/api/v2/status.json",
-      pageUrl: "https://status.openai.com",
-    },
-    github: {
-      url: "https://www.githubstatus.com/api/v2/status.json",
-      pageUrl: "https://www.githubstatus.com",
-    },
+    anthropic: source(OUTBOUND.statusAnthropic.url),
+    openai: source(OUTBOUND.statusOpenai.url),
+    github: source(OUTBOUND.statusGithub.url),
   };
 
 /**
@@ -96,7 +101,11 @@ export const STATUS_TIMEOUT_MS = 5_000;
 
 export type StatusFetch = (
   url: string,
-  init: { signal: AbortSignal; headers: Record<string, string> },
+  init: {
+    signal: AbortSignal;
+    headers: Record<string, string>;
+    redirect: "follow";
+  },
 ) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
 export interface StatusServiceOptions {
@@ -180,6 +189,8 @@ export class StatusService {
       const response = await this.fetch(source.url, {
         signal: controller.signal,
         headers: { accept: "application/json" },
+        // 状态页会搬家（anthropic → claude），跟随是这里的契约而不是缺省碰巧。
+        redirect: "follow",
       });
       if (!response.ok) return unknown;
       const parsed = parseStatusDocument(await response.json());

@@ -146,6 +146,9 @@ export function install(context: CoreContext): ModelsDomain {
     log: (message, fields) => context.log.info(message, fields ?? {}),
     // 菜单是按上一份目录拼的；刚要求更新的人不该再等满它的 TTL。
     onInstalled: forgetMenus,
+    // 归一化已经补好缺省（开）；没有设置存储时同样按开。
+    autoRefresh: () =>
+      settingsDomain()?.settings.get("models.catalog.autoRefresh") !== false,
   });
   // 只读盘。网络那一趟等到第一次有人读目录才武装。
   catalog.load();

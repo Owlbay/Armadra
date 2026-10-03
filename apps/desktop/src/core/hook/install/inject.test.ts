@@ -446,3 +446,89 @@ describe("nothing outside the data directory", () => {
     expect(readdirSync(codexHome)).toEqual(["config.toml"]);
   });
 });
+
+describe("ama's injection (coordinator-agent §2.4)", () => {
+  it("is one --profile argument naming paths only, and no key file", () => {
+    const host = join(dirname(hookBin), "ama-armadra.cjs");
+    writeFileSync(host, "module.exports = {};\n", "utf8");
+    const report = prepareInjection("ama", {
+      dataDir,
+      env: { ...env, ARMADRA_AMA_HOST: host },
+    });
+    const layout = artifactLayout(dataDir, "ama");
+    expect(inject("ama")).toEqual({
+      args: ["--profile", layout.profile],
+      env: [],
+    });
+    const profile = JSON.parse(readFileSync(layout.profile as string, "utf8"));
+    expect(profile).toEqual({
+      version: 1,
+      host,
+      instructions: [layout.instructions],
+      skillDirs: [join(dataDir, "integration", "ama", "skills")],
+      config: layout.config,
+      sessionDir: join(dataDir, "ama", "sessions"),
+    });
+    expect(JSON.parse(readFileSync(layout.config as string, "utf8"))).toEqual({
+      version: 1,
+      permission: { mode: "default" },
+      compaction: { enabled: true },
+    });
+    expect(existsSync(layout.skill)).toBe(true);
+    expect(readFileSync(layout.instructions as string, "utf8")).not.toBe("");
+    // The key file is the launch path's, never an artifact.
+    // The launcher exchanges ama's keys on the hook surface; the names it may
+    // set are ama's own, and no value is in it.
+    if (!windows) {
+      const launcher = launcherText("ama");
+      expect(launcher).toContain(hookBin);
+      expect(launcher).toContain(" credential --ama)");
+      expect(launcher).toContain("AMA_API_KEY_DEEPSEEK)");
+    }
+    // No key file at all: the keys reach ama on its process environment.
+    expect(profile.authFile).toBeUndefined();
+    expect(existsSync(join(layout.dir, "auth.json"))).toBe(false);
+    expect(report.written.some((path) => path.endsWith("auth.json"))).toBe(
+      false,
+    );
+    const marker = readFileSync(layout.marker, "utf8");
+    expect(marker).not.toContain("auth.json");
+
+    // Deterministic: a forced regeneration writes nothing.
+    const again = prepareInjection("ama", {
+      dataDir,
+      env: { ...env, ARMADRA_AMA_HOST: host },
+      force: true,
+    });
+    expect(again.written).toEqual([]);
+  });
+
+  it("rewrites the profile when the adapter moved, and names none without one", () => {
+    const first = join(dirname(hookBin), "first.cjs");
+    const second = join(dirname(hookBin), "second.cjs");
+    writeFileSync(first, "", "utf8");
+    writeFileSync(second, "", "utf8");
+    prepareInjection("ama", {
+      dataDir,
+      env: { ...env, ARMADRA_AMA_HOST: first },
+    });
+    const layout = artifactLayout(dataDir, "ama");
+    const moved = prepareInjection("ama", {
+      dataDir,
+      env: { ...env, ARMADRA_AMA_HOST: second },
+    });
+    expect(moved.written).toContain(layout.profile);
+    expect(
+      JSON.parse(readFileSync(layout.profile as string, "utf8")).host,
+    ).toBe(second);
+    // An override that is not a file is "none": the profile names no host and
+    // ama starts without the canvas tools rather than on a missing module.
+    prepareInjection("ama", {
+      dataDir,
+      env: { ...env, ARMADRA_AMA_HOST: join(dirname(hookBin), "missing.cjs") },
+    });
+    expect(
+      JSON.parse(readFileSync(layout.profile as string, "utf8")).host,
+    ).toBeUndefined();
+  });
+});

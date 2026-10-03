@@ -40,6 +40,8 @@ import {
   optionalString,
 } from "../workspaces/support";
 import { answerApproval } from "./approvals";
+import { AmaCredentials, installAmaCredentialRoutes } from "./ama-credentials";
+import { resolveSecretBackend } from "../secrets";
 import { audit } from "../identity/audit";
 import type { CoreRequest, HandlerResult, RouteMatch } from "../http/router";
 
@@ -63,11 +65,24 @@ const MAX_CONTEXT_READS = 200;
 export interface AgentRouteDeps {
   readonly server: CoreServer;
   readonly collab: CollabContext;
+  /**
+   * ama's model keys. The domain passes the one it published; without it the
+   * routes keep their own over the data directory's default backend.
+   */
+  readonly amaCredentials?: AmaCredentials;
 }
 
 export function installRoutes(deps: AgentRouteDeps): void {
   const { server, collab } = deps;
   const database = collab.database;
+
+  installAmaCredentialRoutes(
+    server,
+    deps.amaCredentials ??
+      new AmaCredentials(
+        resolveSecretBackend({ dataDir: collab.dataDir }).backend,
+      ),
+  );
 
   /* --------------------------------- agents ------------------------------- */
 
@@ -235,6 +250,10 @@ export function installRoutes(deps: AgentRouteDeps): void {
           ...(typeof expected === "number"
             ? { expectedRevision: expected }
             : {}),
+          // ACP 审批的选项（契约 §14.4）；别的审批带了它答 400。
+          ...(optionalString(body, "optionId") === undefined
+            ? {}
+            : { optionId: optionalString(body, "optionId") as string }),
         },
       );
       // 审批答复是设计 §4.5 的五个审计写入点之一：一次「允许」可能让 Agent 动

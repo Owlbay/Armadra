@@ -13,9 +13,29 @@ import { DirectBackend } from "./direct";
 import { nodeRole } from "../canvas/context-links";
 import { handleForNode } from "../canvas/handles";
 import { type EnvPairs, agentEnvironment, setHookClient } from "./environment";
-import { launcherClientBinary } from "../hook/install/shared";
+import {
+  agentLauncherBinary,
+  launcherClientBinary,
+} from "../hook/install/shared";
 import { collab, setTerminalBridge } from "../agent";
+import {
+  acpAdapter,
+  agentSettings as acpAgentSettings,
+  createAcpBackend,
+  prepareAcpStart,
+  provideAcpTerminal,
+} from "../acp";
+import { acpSwitching } from "../acp/routes";
+import { loadNode } from "../collab/nodes";
 import { canvasEnvironment } from "../agent/canvas-launch";
+import {
+  CredentialError,
+  CredentialsDomain,
+  persistedBinding,
+  setCredentialsDomain,
+} from "../agent/credentials";
+import { installRoutes as installCredentialRoutes } from "../agent/credentials/routes";
+import { type SecretBackend, secretsFor } from "../secrets";
 import { listAgents } from "../agent/list";
 import { baseAgent } from "../agent/registry";
 import { parseCustomAgents } from "../settings/custom-agents";
@@ -94,6 +114,13 @@ export interface TerminalInstallOptions {
    * running it has tmux would be a suite that proves nothing.
    */
   readonly configured?: BackendChoice;
+  /**
+   * The secret backend node credentials use, for the tests: the suite's
+   * default is the `file` backend, which this domain refuses on purpose.
+   */
+  readonly credentialSecrets?: SecretBackend;
+  /** Platform the credential domain judges availability by (tests). */
+  readonly platform?: NodeJS.Platform;
 }
 
 export function install(
@@ -137,6 +164,10 @@ export function install(
   for (const [kind, backend] of [...backends]) {
     backends.set(kind, wrapSsh(context, backend));
   }
+  // ACP 驱动（ACP 设计 §4.1）：同一张表里的另一种后端，不经 SSH 装饰——ACP 会话
+  // 第一版只在本机起（§5.3 最后一条）。从不是 effective：只有点名它的请求拿到。
+  const acpBackend = createAcpBackend(context);
+  backends.set("acp", acpBackend);
   // A selection this build cannot honour falls back rather than throwing at
   // assembly time: an unusable effective backend would take the whole core
   // down over a preference.
@@ -259,7 +290,47 @@ export function install(
     };
   // `ssh`：这个终端是 SSH 会话——本机的垫片目录在执行主机上不存在，那边的
   // `PATH` 由远端 shell 命令前置远端的垫片（`remote/integration.ts`）。
-  const ownedEnvironment = (nodeId: string, agentId: string, ssh: boolean) => {
+  // 节点凭据（契约 §20）：校验在起终端之前；环境里只有条目名，值由画布启动器
+  // 在 CLI 启动时经 hook 通道现取。
+  const credentials = new CredentialsDomain({
+    database: context.db.database,
+    secrets: options.credentialSecrets ?? secretsFor(context).backend,
+    ...(options.platform === undefined ? {} : { platform: options.platform }),
+    baseOf: (id) => baseAgent(agentSettings(), id),
+    log: (message, fields) => context.log.info(message, fields),
+  });
+  setCredentialsDomain(credentials);
+  installCredentialRoutes(context.server, credentials);
+  // `credential`：`POST /api/terminals` 带来的那个（`requested` 缺席就是没绑定）；
+  // 其余几条路（唤醒、依赖编排、冷启动）不传，读节点数据里的绑定。
+  // `acp`：节点以 ACP 驱动。适配器不经画布启动器、不在 shell 里，所以不给它
+  // 垫片目录在前的 `PATH`（否则它起的 CLI 会经启动器再挂一套 Hook，一个节点
+  // 两个状态来源），也不给 Hook 等答复的变量——ACP 的审批走协议本身。
+  const ownedEnvironment = (
+    nodeId: string,
+    agentId: string,
+    ssh: boolean,
+    credential?: { readonly requested: string | undefined },
+    options: { readonly acp?: boolean } = {},
+  ) => {
+    const acp = options.acp === true;
+    let credentialEnv: readonly (readonly [string, string])[];
+    try {
+      credentialEnv = credentials.environment(
+        nodeId,
+        agentId,
+        ssh,
+        credential?.requested,
+        credential === undefined
+          ? persistedBinding(context.db.database, nodeId).ref
+          : undefined,
+      );
+    } catch (failure) {
+      if (failure instanceof CredentialError) {
+        throw new TerminalError(failure.status, failure.code, failure.message);
+      }
+      throw failure;
+    }
     try {
       issueNodeToken(context.dataDir, nodeId);
     } catch (failure) {
@@ -280,21 +351,26 @@ export function install(
       ),
       // Contract §5.5: the one variable that switches the hook client from
       // "report and exit" to "wait for the canvas' answer".
-      ...permissionWaitEnvironment(
-        agentId,
-        settingsDomain()?.settings.get("hooks.replyApprovals") !== false,
-        (id) => baseAgent(agentSettings(), id),
-      ),
+      ...(acp
+        ? []
+        : permissionWaitEnvironment(
+            agentId,
+            settingsDomain()?.settings.get("hooks.replyApprovals") !== false,
+            (id) => baseAgent(agentSettings(), id),
+          )),
       // 画布启动器的终端半边：`ARMADRA_SHIMS` 与把垫片目录放在最前的 `PATH`
       // （画布启动器设计 §4.3）；也是注入产物与启动器确保为最新的时刻——这个
       // 终端就要起这个 CLI 了。注入自己的环境变量只由启动器给 CLI 进程设。
-      ...canvasEnvironment(
-        agentSettings(),
-        context.dataDir,
-        agentId,
-        (message, fields) => context.log.warn(message, fields),
-        { ssh },
-      ),
+      ...(acp
+        ? []
+        : canvasEnvironment(
+            agentSettings(),
+            context.dataDir,
+            agentId,
+            (message, fields) => context.log.warn(message, fields),
+            { ssh },
+          )),
+      ...credentialEnv,
     ];
   };
 
@@ -315,8 +391,8 @@ export function install(
         ? policy
         : { ...policy, idleMinutes: ecoOverride.idleMinutes };
     },
-    environment: (nodeId, agentId, ssh) =>
-      ownedEnvironment(nodeId, agentId, ssh),
+    environment: (nodeId, agentId, ssh, options) =>
+      ownedEnvironment(nodeId, agentId, ssh, undefined, options),
     // 与依赖编排拼启动行时同一个来源：本机解析到的程序路径；画布注入的 argv
     // 由恢复行经 `agent/canvas-launch.ts` 从数据目录取。
     program: (agentId) => {
@@ -347,6 +423,74 @@ export function install(
   }, ecoOverride?.intervalMs ?? HIBERNATE_INTERVAL_MS);
   hibernateTimer.unref?.();
 
+  // 本机解析到的 CLI 程序路径：与休眠恢复行、依赖编排同一个来源。
+  const programOf = (agentId: string): { path?: string } => {
+    try {
+      const row = listAgents({
+        dataDir: context.dataDir,
+        settings: agentSettings(),
+      }).find((entry) => entry.id === agentId);
+      return row?.resolvedPath ? { path: row.resolvedPath } : {};
+    } catch {
+      return {};
+    }
+  };
+  // ACP 域在本域之后装配：交给它管理器、休眠执行者与节点环境（ACP 设计 §4）。
+  provideAcpTerminal({
+    manager,
+    hibernator,
+    backend: acpBackend,
+    ready,
+    environment: (nodeId, agentId, options) =>
+      ownedEnvironment(nodeId, agentId, false, undefined, options),
+    typeLaunchLine: (sessionId, generation, line) =>
+      typeLaunchLine(manager, sessionId, generation, line),
+    program: programOf,
+  });
+  /** 节点数据里写明以 ACP 驱动的 Agent 节点（缺省按终端，ACP 设计 §4.1）。 */
+  const drivenOverAcp = (nodeId: string, agentId: string): boolean => {
+    const agent = loadNode(context.db.database, nodeId)?.data.agent;
+    return (
+      agent !== null &&
+      typeof agent === "object" &&
+      (agent as { driver?: unknown }).driver === "acp" &&
+      acpAdapter(baseAgent(acpAgentSettings(), agentId)) !== undefined
+    );
+  };
+  /** 替一个 ACP 节点起会话（依赖编排、定时冷启动）：新开，第一条任务经投递。 */
+  const spawnAcpForNode = async (request: {
+    readonly workspaceId: string;
+    readonly nodeId: string;
+    readonly agentId: string;
+    readonly cwd: string;
+  }) => {
+    const agent = loadNode(context.db.database, request.nodeId)?.data.agent as
+      | Record<string, unknown>
+      | undefined;
+    prepareAcpStart(request.nodeId, {
+      agentId: request.agentId,
+      permissionMode:
+        typeof agent?.permissionMode === "string"
+          ? agent.permissionMode
+          : undefined,
+      model: typeof agent?.model === "string" ? agent.model : undefined,
+      resume: null,
+    });
+    return manager.spawn({
+      workspaceId: request.workspaceId,
+      cwd: resolve(request.cwd),
+      command: acpAdapter(baseAgent(acpAgentSettings(), request.agentId))
+        ?.program,
+      kind: "terminal",
+      ownerNodeId: request.nodeId,
+      agentId: request.agentId,
+      backend: "acp",
+      env: ownedEnvironment(request.nodeId, request.agentId, false, undefined, {
+        acp: true,
+      }),
+    });
+  };
+
   route("POST", "/api/terminals", async (_params, request) => {
     const body = json<CreateTerminalRequest>(request);
     const invalid = validateCreate(body);
@@ -359,6 +503,7 @@ export function install(
           body.nodeId as string,
           (body.agent as { id: string }).id,
           body.ssh !== undefined,
+          { requested: body.agent?.credentialRef },
         )
       : [];
     const session = await manager.spawn({
@@ -590,6 +735,10 @@ export function install(
       if (!manager.exists(params.sessionId as string)) {
         return { status: 404, reason: "Not Found" };
       }
+      // ACP 驱动的会话没有 PTY 可附着（契约 §14.2 的 `acp_session`）。
+      if (manager.session(params.sessionId as string).backend === "acp") {
+        return { status: 409, reason: "Conflict" };
+      }
       if (validWriter(request.query.get("writer")) === undefined) {
         return { status: 400, reason: "Bad Request" };
       }
@@ -614,12 +763,26 @@ export function install(
       await hibernator.wake(nodeId, "delivery");
       return true;
     },
-    // 休眠着或正在接回：`send` 的门链把这段时间的「没有会话」当「还早」排队。
-    sleeping: (nodeId) => hibernator.sleeping(nodeId),
+    // 休眠着或正在接回，或正在切换驱动方式（ACP 设计 §4.2）：`send` 的门链把
+    // 这段时间的「没有会话」当「还早」排队。
+    sleeping: (nodeId) => hibernator.sleeping(nodeId) || acpSwitching(nodeId),
     // 依赖编排在页面没开时替节点起终端（Agent 自动化设计 §6）。与
     // `POST /api/terminals` 同一套环境与令牌，只是请求来自 core 自己。
     spawnForNode: async (request) => {
       await ready;
+      // 以 ACP 驱动的节点起的是适配器（ACP 设计 §4.4 依赖编排一行）：会话开好
+      // 就能收 prompt，第一条任务照旧经投递队列，不敲启动行。
+      if (
+        request.sshHostId === undefined &&
+        drivenOverAcp(request.nodeId, request.agentId)
+      ) {
+        const session = await spawnAcpForNode(request);
+        return {
+          sessionId: session.id,
+          generation: session.generation,
+          driver: "acp" as const,
+        };
+      }
       const session = await manager.spawn({
         workspaceId: request.workspaceId,
         cwd: resolve(request.cwd),
@@ -642,6 +805,11 @@ export function install(
   });
   // 定时任务的冷启动（自动化设计 §4.2）：同一条建会话的路，外加敲一行启动行。
   setAgentLauncher(async (request) => {
+    // ACP 节点：起适配器即可，任务由调度随后经 `writeSubmit` 投成一次 prompt。
+    if (drivenOverAcp(request.nodeId, request.agentId)) {
+      const session = await spawnAcpForNode(request);
+      return { sessionId: session.id, generation: session.generation };
+    }
     const session = await manager.spawn({
       workspaceId: request.workspaceId,
       cwd: resolve(request.cwd),
@@ -675,6 +843,8 @@ export function install(
       // manager that is shutting down would be told a session is missing
       // rather than that there is nothing to talk to.
       setTerminalBridge(undefined);
+      provideAcpTerminal(undefined);
+      setCredentialsDomain(undefined);
       setAgentLauncher(undefined);
       setHibernationWaker(undefined);
       clearInterval(hibernateTimer);
@@ -749,6 +919,16 @@ function publishHookClient(context: CoreContext): void {
     context.log.info("no armadra-hook bundle: the canvas verbs have no client");
   } else {
     context.log.debug("armadra-hook client", { path });
+  }
+  // The bundled `ama` gets the same kind of launcher in the same directory
+  // (docs/design/coordinator-agent.md §2.5).
+  try {
+    const ama = agentLauncherBinary({ dataDir: context.dataDir });
+    if (ama !== undefined) context.log.debug("ama launcher", { path: ama });
+  } catch (error) {
+    context.log.warn("could not write the ama launcher", {
+      error: describe(error),
+    });
   }
 }
 
@@ -890,7 +1070,7 @@ interface CreateTerminalRequest {
   readonly command?: string;
   readonly args?: readonly string[];
   readonly nodeId?: string;
-  readonly agent?: { readonly id: string };
+  readonly agent?: { readonly id: string; readonly credentialRef?: string };
   /**
    * `ssh: { hostId }` — the session runs `ssh …` instead of a shell.
    *
@@ -916,6 +1096,15 @@ function validateCreate(body: CreateTerminalRequest): string | undefined {
     // Without a node there is nothing to attribute hook reports to, and the
     // hook client would refuse to report anyway.
     return "An agent terminal requires the owning nodeId";
+  }
+  const credentialRef = body.agent?.credentialRef;
+  if (
+    credentialRef !== undefined &&
+    (typeof credentialRef !== "string" ||
+      credentialRef === "" ||
+      credentialRef.length > 200)
+  ) {
+    return "credentialRef is invalid";
   }
   if (
     body.ssh !== undefined &&

@@ -17,6 +17,7 @@
  * download links pointing at that loopback address rather than at the
  * container's own.
  */
+import { createHash } from "node:crypto";
 import { createReadStream, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
@@ -84,6 +85,11 @@ export async function describeRelease({
  * `faults` lets a test ask for the failures a real host produces: `status` to
  * answer the index with an error code, `truncate` to cut a download short, and
  * `corrupt` to flip a byte so a digest check has something to catch.
+ *
+ * The index carries an `ETag` and answers a matching `If-None-Match` with 304,
+ * as GitHub does — a 304 does not count against the anonymous rate limit, which
+ * is what lets every installation behind one office NAT keep checking
+ * (external services §3.1). `notModified` counts how often that happened.
  */
 export async function startMockReleaseServer({
   releases,
@@ -106,6 +112,8 @@ export async function startMockReleaseServer({
     releases.map((release) => [release.tag, release.directory]),
   );
   const requests = [];
+  const etag = `"${createHash("sha256").update(JSON.stringify(documents)).digest("hex").slice(0, 32)}"`;
+  let notModified = 0;
 
   server.on("request", (request, response) => {
     requests.push(request.url);
@@ -121,7 +129,12 @@ export async function startMockReleaseServer({
           .end("not json");
         return;
       }
-      response.writeHead(200, { "content-type": "application/json" });
+      if (request.headers["if-none-match"] === etag) {
+        notModified += 1;
+        response.writeHead(304, { etag }).end();
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json", etag });
       // Drafts are served exactly as GitHub does — visible to the API, and
       // skipped by the Host — so the "not published yet" path is real.
       response.end(JSON.stringify(documents));
@@ -179,6 +192,10 @@ export async function startMockReleaseServer({
     /** The value an operator would pass to --updates-source. */
     source: `${base}/repos/${owner}/${repo}`,
     requests,
+    etag,
+    get notModified() {
+      return notModified;
+    },
     async close() {
       // Node's fetch keeps its sockets alive, so close() alone would wait for
       // a client that has no intention of hanging up. A test server outlives
