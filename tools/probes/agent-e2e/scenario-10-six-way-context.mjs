@@ -702,10 +702,34 @@ export default async function run10(ctx) {
         doubled.map(([path, providers]) => ({ path, providers })),
       );
 
-      await api("/api/usage/cost/refresh", { method: "POST" }).catch((error) =>
-        note("成本刷新失败", error.message),
-      );
-      const cost = await api("/api/usage/cost");
+      // 手动刷新有 30 秒冷却（`usage/cost.ts::MANUAL_COOLDOWN_MS`）：冷却里答的
+      // 是上一趟扫描的旧汇总。两家时整场只有五十来秒，上一趟（页面打开时那
+      // 一趟）还在冷却里，那时转录还是空的、Claude 那份也还没链接进来——实跑
+      // claude、pi 两家时两家都读成 0。所以按 `scannedAt` 认：没有在转录写完
+      // 之后扫过，就等到 `refreshAvailableAt` 再刷，最多三次。
+      const turnsDone = Date.now();
+      let cost;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        cost = await api("/api/usage/cost/refresh", { method: "POST" }).catch(
+          (error) => {
+            note("成本刷新失败", error.message);
+            return undefined;
+          },
+        );
+        cost ??= await api("/api/usage/cost");
+        const scanned = Date.parse(cost?.scannedAt ?? "");
+        if (Number.isFinite(scanned) && scanned >= turnsDone) break;
+        const ready = Date.parse(cost?.refreshAvailableAt ?? "");
+        const wait = Number.isFinite(ready)
+          ? Math.min(Math.max(ready - Date.now(), 0) + 500, 35_000)
+          : 5_000;
+        note("成本汇总是转录写完之前扫的，等冷却过了再刷", {
+          scannedAt: cost?.scannedAt ?? null,
+          waitMs: wait,
+        });
+        await sleep(wait);
+      }
+      sixWay.costScannedAt = cost?.scannedAt ?? null;
       const byAgent = cost?.ranges?.["24h"]?.byAgent ?? [];
       sixWay.cost = {};
       for (const id of active) {
