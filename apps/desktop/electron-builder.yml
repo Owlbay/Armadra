@@ -139,7 +139,10 @@ nsis:
   # architecture; tools/release/stage-desktop.mjs tells the two Windows
   # builds apart by an architecture token in the name, so the arm64 installer
   # was "not produced" as far as it could see. `${arch}` is `x64` / `arm64`.
-  artifactName: ${productName} Setup ${version}-${arch}.${ext}
+  # No space anywhere: Azure Artifact Signing's PowerShell module splits the
+  # file list on spaces and signs nothing (electron-builder #8626), and the
+  # feed electron-builder writes spells the name with `-` anyway.
+  artifactName: Armadra-Setup-${version}-${arch}.${ext}
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

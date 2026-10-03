@@ -8,8 +8,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { TARGETS, desktopAssets, updaterFeedFile } from "./artifacts.mjs";
 import {
@@ -187,6 +188,8 @@ test("the architecture token is matched as a whole word", () => {
     ["armadra_0.1.0_amd64.deb", "linux-x86_64"],
     ["Armadra Setup 0.1.0-x64.exe", "windows-x86_64"],
     ["Armadra Setup 0.1.0-arm64.exe", "windows-aarch64"],
+    ["Armadra-Setup-0.1.0-x64.exe", "windows-x86_64"],
+    ["Armadra-Setup-0.1.0-arm64.exe", "windows-aarch64"],
   ])
     assert.equal(matchesArch(name, target), true, `${name} / ${target}`);
   for (const [name, target] of [
@@ -282,10 +285,11 @@ test("Windows publishes the installer the updater runs and the portable zip", ()
   const root = scratch();
   try {
     const bundle = join(root, "release");
-    writeOutput(bundle, "Armadra Setup 0.1.0.exe");
+    // The name `nsis.artifactName` now produces: no space, an arch token.
+    writeOutput(bundle, "Armadra-Setup-0.1.0-x64.exe");
     writeOutput(bundle, "Armadra-0.1.0-x64-win.zip");
     writeBuilderFeed(bundle, "latest.yml", [
-      { file: "Armadra Setup 0.1.0.exe", url: "Armadra-Setup-0.1.0.exe" },
+      { file: "Armadra-Setup-0.1.0-x64.exe" },
     ]);
     const out = join(root, "artifacts");
     const { missing } = stageDesktop({
@@ -481,6 +485,46 @@ test("a feed that describes other bytes or another version is refused", () => {
     );
     const stale = stageDesktop({ ...options, out: join(root, "b") });
     assert.match(stale.missing[0], /^feedVersion/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The installer name electron-builder is told to write must have no space:
+ * Azure Artifact Signing's module splits its file list on spaces and signs
+ * nothing (external services §2.2, electron-builder #8626). And whatever it
+ * expands to has to be one `findBundle` finds for its own architecture.
+ */
+test("the NSIS installer name has no space and is found for both architectures", () => {
+  const config = readFileSync(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../apps/desktop/electron-builder.yml",
+    ),
+    "utf8",
+  );
+  const nsis = /^nsis:\n(?:[ \t].*\n)*?\s+artifactName:\s*(.+)$/m.exec(config);
+  assert.ok(nsis, "nsis.artifactName is set");
+  const pattern = nsis[1].trim();
+  assert.doesNotMatch(pattern, /\s/);
+  const root = scratch();
+  try {
+    for (const [arch, target] of [
+      ["x64", "windows-x86_64"],
+      ["arm64", "windows-aarch64"],
+    ]) {
+      const bundle = join(root, arch);
+      const name = pattern
+        .replace("${version}", "0.1.0")
+        .replace("${arch}", arch)
+        .replace("${ext}", "exe");
+      writeOutput(bundle, name);
+      assert.equal(
+        findBundle({ bundle, kind: "nsis", target }),
+        join(bundle, name),
+      );
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
