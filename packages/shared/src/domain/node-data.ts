@@ -1,10 +1,12 @@
 import { z } from "zod";
 
+import { AGENT_IDS } from "../agents.js";
 import { permissionModeSchema } from "./primitives.js";
 
 /**
- * Built-in agent ids plus `custom:<id>` for user-defined CLIs. Kept here (and
- * not in `agents.ts`) so the node schema does not depend on the registry.
+ * Built-in agent ids plus `custom:<id>` for user-defined CLIs. The built-ins
+ * come from the registry's id list, so a new built-in cannot be accepted by
+ * one schema and refused by another (docs/design/coordinator-agent.md §2.1).
  */
 export const agentIdSchema = z
   .string()
@@ -12,10 +14,30 @@ export const agentIdSchema = z
   .max(80)
   .refine(
     (value) =>
-      ["claude", "codex", "opencode", "pi", "omp", "copilot"].includes(value) ||
+      (AGENT_IDS as readonly string[]).includes(value) ||
       /^custom:[A-Za-z0-9._:-]{1,64}$/.test(value),
     { message: "Unknown agent id" },
   );
+
+/**
+ * How a terminal node's agent is driven (docs/design/acp-session-view.md
+ * §4.1): a CLI typed into a PTY, or a session the core speaks the Agent Client
+ * Protocol with. Absent means the core's default.
+ */
+export const AGENT_DRIVERS = ["terminal", "acp"] as const;
+export const agentDriverSchema = z.enum(AGENT_DRIVERS);
+
+/**
+ * Where a sticky or editor node's content came from when an agent's reply was
+ * put on the board (docs/design/acp-session-view.md §7). Display only — the
+ * header's "from <node>" and "go to source"; the core never reads it, and the
+ * readable link between the two is an edge, not this field.
+ */
+export const contentSourceSchema = z.object({
+  nodeId: z.string().uuid(),
+  sessionId: z.string().max(200),
+  messageId: z.string().max(200).optional(),
+});
 
 /** The longest a handle may be — mirrors `MAX_HANDLE_CHARS` in the runtime. */
 export const MAX_HANDLE_CHARS = 24;
@@ -116,6 +138,8 @@ export const terminalAgentSchema = z.object({
    * 只交出「我在干什么」。
    */
   contextShare: z.enum(["full", "summary"]).optional(),
+  /** PTY or ACP (`AGENT_DRIVERS`); absent means the core's default. */
+  driver: agentDriverSchema.optional(),
 });
 
 /**
@@ -145,6 +169,7 @@ export const stickyNodeDataSchema = z.object({
   kind: z.literal("sticky"),
   ...addressable,
   content: z.string().max(MAX_STICKY_CONTENT).default(""),
+  source: contentSourceSchema.optional(),
 });
 
 /**
@@ -216,6 +241,7 @@ export const editorNodeDataSchema = z.object({
   readonly: z.boolean().optional(),
   /** Absent until a session has been opened for this node. */
   languageService: languageServiceSchema.optional(),
+  source: contentSourceSchema.optional(),
 });
 
 export const DIFF_SCOPES = ["worktree", "staged"] as const;
@@ -346,6 +372,8 @@ export const canvasNodeDataSchema = z.discriminatedUnion("kind", [
 
 export type DiffScope = (typeof DIFF_SCOPES)[number];
 export type TerminalAgent = z.infer<typeof terminalAgentSchema>;
+export type AgentDriver = (typeof AGENT_DRIVERS)[number];
+export type ContentSource = z.infer<typeof contentSourceSchema>;
 export type SshTarget = z.infer<typeof sshTargetSchema>;
 export type PendingLaunch = z.infer<typeof pendingLaunchSchema>;
 export type CanvasNodeData = z.infer<typeof canvasNodeDataSchema>;

@@ -80,6 +80,7 @@
 | [画布性能基线](status/canvas-performance-baseline.md)    | 30 个终端 + 真实会话的 fps / 帧时 / 重渲组件数，改动前后           |
 | [Electron 迁移复查](status/electron-migration-review.md) | 换壳后功能总表逐行核查、UI 死角、文档漂移与测试盲区；已修复项见 §0 |
 | [TypeScript Core 进度](status/typescript-core-status.md) | R0–R7 与 2026-09-25/26 补齐轮的逐节实施记录、实测数字与验证命令    |
+| [补全进度](status/completion-progress.md)                | 补全执行计划 49 个工作包逐包的「做了什么 / 实测 / 没做」           |
 
 ## contracts/ 实施契约
 

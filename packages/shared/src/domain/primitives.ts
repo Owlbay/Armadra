@@ -51,9 +51,17 @@ export const AGENT_STATES = ["working", "waiting", "blocked", "done"] as const;
  * really ended. `observed` is the PTY-side guess of §3.4: it may drive a header
  * hint and auto-naming, and it must never satisfy the idle gate that lets a
  * prompt be written into somebody's terminal. An absent source means nothing
- * has reported at all, which is a grey badge, not an idle one.
+ * has reported at all, which is a grey badge, not an idle one. `acp` is a
+ * session the core drives over the Agent Client Protocol
+ * (docs/design/acp-session-view.md §4.1): the protocol itself reports turns,
+ * so it is as much a report as `hook`.
  */
-export const AGENT_STATE_SOURCES = ["hook", "extension", "observed"] as const;
+export const AGENT_STATE_SOURCES = [
+  "hook",
+  "extension",
+  "observed",
+  "acp",
+] as const;
 
 export const PERMISSION_MODES = [
   "default",
