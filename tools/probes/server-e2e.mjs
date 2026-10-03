@@ -210,6 +210,14 @@ await h.run(async () => {
       return text ? JSON.parse(text) : null;
     `);
 
+  // 这条线验的是租约 + CAS 的多人语义（契约 §9：只读共享、接管、撤销时释放
+  // 租约）；实时协同缺省开，先关掉，共享画布留在租约模式。实时那条路由
+  // realtime-e2e 验。
+  await adminApi("/api/settings", {
+    method: "PATCH",
+    body: { collab: { realtime: false } },
+  });
+
   writeFileSync(join(projectRoot, "README.md"), "# 共享项目\n");
   const shared = await adminApi("/api/workspaces", {
     method: "POST",

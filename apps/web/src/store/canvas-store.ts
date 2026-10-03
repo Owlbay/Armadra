@@ -17,6 +17,7 @@ export type {
   CanvasStore,
   PanelState,
   PremaxRect,
+  RealtimeState,
   Rect,
   SaveState,
 } from "./canvas/types";
@@ -25,7 +26,9 @@ export {
   beginCoalesce,
   endCoalesce,
   resetHistory,
+  setHistoryDelegate,
   type CommitOptions,
+  type HistoryDelegate,
 } from "./canvas/history";
 export {
   isReadOnly,
@@ -51,7 +54,9 @@ export {
  *     反向派生」的双轨整个删除了。
  *  2. **撤销栈自己维护。** `store/canvas/history.ts` 记按实体的反向补丁；
  *     远端灌入（`setDocument`、WS 事件、保存 409 变基）走
- *     `history: "ignore"`，所以 ⌘Z 撤不掉别人建的节点。
+ *     `history: "ignore"`，所以 ⌘Z 撤不掉别人建的节点。实时板上这个栈停用，
+ *     撤销交给 `Y.UndoManager`（`setHistoryDelegate`，`realtime/undo.ts`），
+ *     远端灌入走 `applyRealtimeState`（补全架构 §6.4）。
  *
  * `setViewport` 既不置 dirty 也不进历史，由 `save/autosave.ts` 单独节流。
  */

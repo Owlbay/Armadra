@@ -116,8 +116,10 @@ export function DeliveryQueueBadge({
           className="h-[18px] px-1.5 text-[length:var(--text-caption)]"
           data-no-drag="true"
         >
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
             data-slot="delivery-queue"
             data-testid={`delivery-queue-${nodeId}`}
             aria-label={t("delivery.queued", { count: items.length })}
@@ -125,7 +127,7 @@ export function DeliveryQueueBadge({
           >
             <Inbox className="size-2.5" />
             {t("delivery.queued", { count: items.length })}
-          </button>
+          </Button>
         </Badge>
       </PopoverTrigger>
       <PopoverContent

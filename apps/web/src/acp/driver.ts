@@ -45,13 +45,17 @@ export async function switchDriver(
   if (driverOf(agent) === driver) return;
   try {
     const result = await acpApi.switchDriver(nodeId, driver);
-    useCanvasStore
-      .getState()
-      .updateNodeData(
-        nodeId,
-        { agent: { ...agent, driver }, sessionId: result.sessionId },
-        { history: "ignore" },
-      );
+    useCanvasStore.getState().updateNodeData(
+      nodeId,
+      // 上一种驱动结束时页面记下的退出码不属于新的这一代：清掉，节点头才不
+      // 会对着一个刚起来的会话写「已退出」。
+      {
+        agent: { ...agent, driver },
+        sessionId: result.sessionId,
+        lastExitCode: null,
+      },
+      { history: "ignore" },
+    );
     if (!result.resumed) toast.info(t("acp.driver.notResumed"));
   } catch (error) {
     toast.error(

@@ -56,8 +56,10 @@ export function DependencyWaitBadge({
           }
           data-no-drag="true"
         >
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
             data-slot="dependency-wait"
             data-testid={`dependency-wait-${nodeId}`}
             aria-label={label}
@@ -65,7 +67,7 @@ export function DependencyWaitBadge({
           >
             <Hourglass className="size-2.5" />
             <span className="max-w-40 truncate">{label}</span>
-          </button>
+          </Button>
         </Badge>
       </PopoverTrigger>
       <PopoverContent

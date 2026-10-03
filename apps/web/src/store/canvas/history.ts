@@ -55,6 +55,39 @@ export interface CommitOptions {
   label?: string;
 }
 
+/* ------------------------------ 实时板的代理 ------------------------------ */
+
+/**
+ * 实时板上的撤销（补全架构 §6.4）：这里的栈停用，⌘Z / ⇧⌘Z、可撤销与否、
+ * 合并会话都转给 `Y.UndoManager`（`realtime/undo.ts`）。非实时板没有代理，
+ * 一切照旧。
+ */
+export interface HistoryDelegate {
+  undo(): void;
+  redo(): void;
+  canUndo(): boolean;
+  canRedo(): boolean;
+  beginCoalesce(): void;
+  endCoalesce(): void;
+  /** 栈变了就调 `notify`，按钮的可用态跟着变。返回退订。 */
+  subscribe(notify: () => void): () => void;
+}
+
+let delegate: HistoryDelegate | null = null;
+let offDelegate: (() => void) | null = null;
+
+/** 装上 / 卸下代理。装上时清掉本地栈：两套栈不能混着撤。 */
+export function setHistoryDelegate(next: HistoryDelegate | null): void {
+  offDelegate?.();
+  offDelegate = null;
+  delegate = next;
+  coalescing = null;
+  past = [];
+  future = [];
+  if (next) offDelegate = next.subscribe(notify);
+  notify();
+}
+
 /* -------------------------------- 栈 ------------------------------------- */
 
 let past: HistoryEntry[] = [];
@@ -179,7 +212,7 @@ export function isReplaying(): boolean {
  * 任何一次新记录都清空重做栈（与所有编辑器一致）。
  */
 export function record(entry: HistoryEntry): void {
-  if (replaying) return;
+  if (replaying || delegate) return;
   if (isEmptyPatch(entry.before) && isEmptyPatch(entry.after)) return;
   if (coalescing) {
     mergeBefore(coalescing.before, entry.before);
@@ -197,11 +230,19 @@ export function record(entry: HistoryEntry): void {
  * 进入编辑时开一个，提交时关掉，整段只形成一条历史。
  */
 export function beginCoalesce(label: string): void {
+  if (delegate) {
+    delegate.beginCoalesce();
+    return;
+  }
   if (coalescing) endCoalesce();
   coalescing = { label, before: emptyPatch(), after: emptyPatch() };
 }
 
 export function endCoalesce(): void {
+  if (delegate) {
+    delegate.endCoalesce();
+    return;
+  }
   const session = coalescing;
   coalescing = null;
   if (!session) return;
@@ -275,6 +316,10 @@ function run(patch: EntityPatch): void {
 }
 
 export function undo(): void {
+  if (delegate) {
+    if (!isReadOnly(useCanvasStore.getState())) delegate.undo();
+    return;
+  }
   endCoalesce();
   const entry = past.pop();
   if (!entry) return;
@@ -284,6 +329,10 @@ export function undo(): void {
 }
 
 export function redo(): void {
+  if (delegate) {
+    if (!isReadOnly(useCanvasStore.getState())) delegate.redo();
+    return;
+  }
   const entry = future.pop();
   if (!entry) return;
   run(entry.after);
@@ -292,10 +341,12 @@ export function redo(): void {
 }
 
 export function canUndo(): boolean {
+  if (delegate) return delegate.canUndo();
   return past.length > 0 || coalescing !== null;
 }
 
 export function canRedo(): boolean {
+  if (delegate) return delegate.canRedo();
   return future.length > 0;
 }
 

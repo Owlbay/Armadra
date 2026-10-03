@@ -285,6 +285,27 @@ describe("SessionView", () => {
     });
   });
 
+  it("leaves the loading state once the new session id is written back", async () => {
+    // 写回会话 id 会让起会话的 effect 自己被清理（依赖变了）；清理之后「正在起」
+    // 也得收起，否则骨架屏永远不走（真浏览器里撞出来的）。
+    api.createSession.mockResolvedValue({ id: SESSION });
+    api.log.mockResolvedValue(emptyLog);
+    const fresh: TerminalNodeData = {
+      kind: "terminal",
+      agent: { id: "codex", driver: "acp" },
+    };
+    // 真画布里写回节点数据会同步重渲染这个节点：在写回的那一刻就换上新 id。
+    let view: ReturnType<typeof render> | undefined;
+    store.updateNodeData.mockImplementationOnce(() => {
+      view?.rerender(
+        <SessionView nodeId="n1" data={{ ...fresh, sessionId: SESSION }} />,
+      );
+    });
+    view = render(<SessionView nodeId="n1" data={fresh} />);
+    expect(await screen.findByText("向它说第一句话")).toBeTruthy();
+    expect(document.querySelector('[data-slot="acp-loading"]')).toBeNull();
+  });
+
   it("says the session did not start and retries", async () => {
     api.createSession.mockRejectedValueOnce(new Error("acp_not_installed"));
     api.createSession.mockResolvedValueOnce({ id: SESSION });

@@ -115,6 +115,12 @@ vi.mock("../api/client", () => ({
     presenceHeartbeat: (...args: unknown[]) =>
       presenceHeartbeat(...(args as [string, string, { clientId: string }])),
     leavePresence: (...args: unknown[]) => leavePresence(...(args as [])),
+    // 这一组测的是租约模式：core 说这块板不走实时、设置也关着。
+    boardRealtime: vi.fn(async () => ({
+      realtime: false,
+      materializedSeq: 0,
+      enabled: false,
+    })),
   },
 }));
 

@@ -12,6 +12,7 @@ import "@xyflow/react/dist/style.css";
 import "../styles/canvas.css";
 import { useCanvasReadOnly } from "../store/canvas/presence";
 import { PresenceBar } from "./PresenceBar";
+import { CursorLayer } from "../realtime/CursorLayer";
 
 import {
   AlertDialog,
@@ -479,6 +480,8 @@ function FlowWorkspaceInner() {
             <Minimap />
             <ViewportPortal>
               <CanvasOverlays />
+              {/* 实时板上别人的光标与选区（补全架构 §6.4）；非实时板不画。 */}
+              <CursorLayer />
             </ViewportPortal>
             {/* 白板工具覆盖层（`whiteboard/tools/ToolLayer.tsx`）。 */}
             <ToolLayer />
