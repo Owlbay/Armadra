@@ -103,6 +103,17 @@ export const OUTBOUND = {
     defaultOn: false,
     documented: true,
   },
+  crashReport: {
+    // 地址是用户填的 DSN（自托管 GlitchTip / Sentry 协议），这里只是占位主机。
+    // 发的是壳（`main/diagnostics.ts`、`apps/server/src/diagnostics.ts`），core
+    // 只经 `platform.reportError` 交出剥离过的错误。DSN 为空即关（缺省）。
+    url: "https://<DSN 主机>",
+    purpose: "可选崩溃上报（只有 JS 错误，剥离后发往自托管 DSN）",
+    cadence: "事件驱动：只在出错时",
+    switch: "diagnostics.crashReportDsn",
+    defaultOn: false,
+    documented: true,
+  },
 } as const satisfies Record<string, OutboundEndpoint>;
 
 export type OutboundId = keyof typeof OUTBOUND;

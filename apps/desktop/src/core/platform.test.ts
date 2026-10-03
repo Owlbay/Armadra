@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createLog, logLevel, nodePlatform } from "./platform";
+import { CRASH_REPORT_ENV, CRASH_REPORT_MESSAGE } from "./diagnostics/crash";
+import { createLog, logLevel, nodePlatform, reportError } from "./platform";
 
 describe("the log", () => {
   it("defaults to info and refuses to be silenced by a typo", () => {
@@ -62,5 +63,86 @@ describe("the platform seam", () => {
     await expect(platform.openExternal("not a url")).rejects.toThrow(
       /not a URL/,
     );
+  });
+});
+
+describe("reportError（外部服务 §11.2）", () => {
+  it("壳没给 reportError 时只写一行本地日志，消息已剥离", () => {
+    const lines: string[] = [];
+    const log = createLog("debug", (line) => lines.push(line));
+    const key = process.env.HOME ?? "/nonexistent-home";
+    reportError({ log }, new Error(`failed in ${key}/x`), { source: "http" });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("unhandled error");
+    expect(lines[0]).toContain('"source":"http"');
+    expect(lines[0]).not.toContain(`${key}/x`);
+  });
+
+  it("壳给了就交给壳；壳自己抛也不往外抛", () => {
+    const seen: unknown[] = [];
+    const log = createLog("error", () => {});
+    reportError(
+      { log, reportError: (error, context) => seen.push([error, context]) },
+      "x",
+      { source: "uncaught" },
+    );
+    expect(seen).toEqual([["x", { source: "uncaught" }]]);
+    expect(() =>
+      reportError(
+        {
+          log,
+          reportError: () => {
+            throw new Error("sdk down");
+          },
+        },
+        "x",
+        { source: "http" },
+      ),
+    ).not.toThrow();
+  });
+
+  it("nodePlatform 只在壳设了通道变量且有 IPC 时转发", () => {
+    const sent: unknown[] = [];
+    const original = {
+      send: process.send,
+      connected: Object.getOwnPropertyDescriptor(process, "connected"),
+      flag: process.env[CRASH_REPORT_ENV],
+    };
+    process.send = ((message: unknown) => {
+      sent.push(message);
+      return true;
+    }) as typeof process.send;
+    Object.defineProperty(process, "connected", {
+      value: true,
+      configurable: true,
+    });
+    try {
+      const platform = nodePlatform({
+        dataDir: "/tmp/x",
+        appVersion: "0",
+        log: createLog("error", () => {}),
+      });
+      delete process.env[CRASH_REPORT_ENV];
+      platform.reportError?.(new Error("a"), { source: "http" });
+      expect(sent).toEqual([]);
+      process.env[CRASH_REPORT_ENV] = "1";
+      platform.reportError?.(new Error("b"), { source: "uncaught" });
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({
+        type: CRASH_REPORT_MESSAGE,
+        source: "uncaught",
+        name: "Error",
+        message: "b",
+      });
+    } finally {
+      process.send = original.send;
+      if (original.connected) {
+        Object.defineProperty(process, "connected", original.connected);
+      } else {
+        delete (process as { connected?: boolean }).connected;
+      }
+      if (original.flag === undefined) delete process.env[CRASH_REPORT_ENV];
+      else process.env[CRASH_REPORT_ENV] = original.flag;
+    }
   });
 });
