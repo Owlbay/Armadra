@@ -116,8 +116,10 @@ node tools/ci/e2e.mjs --tier b --list     # 只列出清单
 
 **版本住在仓库里，标签只是指向它的名字。** 这一点与许多流水线相反，也与
 LiveAgent 相反——它用 `prepare-app-version-from-tag.mjs` 从标签解出版本、写进一份
-生成的打包配置，仓库里根本不存版本。我们不这么做，因为版本在三个 manifest 里
-（根 `package.json` 是源，两种壳与它一致，见 `tools/release/version.mjs`），两种壳
+生成的打包配置，仓库里根本不存版本。我们不这么做，因为版本写在仓库里
+（根 `package.json` 是源；桌面、服务器、手机三壳的 manifest 与 core、armadra-hook
+的版本常量都要与它一致，`version.mjs set` 一起改、`check` 一起看，见
+`tools/release/version.mjs` 的 `VERSION_SITES`），两种壳
 都会自报它，更新检查比的也是它。于是方向反过来：`verify` 要求
 **标签等于仓库版本**，不等就拒绝发布，而不是让标签去覆盖代码里的版本。
 
@@ -126,7 +128,7 @@ LiveAgent 相反——它用 `prepare-app-version-from-tag.mjs` 从标签解出�
 
 | 作业       | runner         | 做什么                                                  |
 | ---------- | -------------- | ------------------------------------------------------- |
-| `verify`   | ubuntu-latest  | 三处版本与标签一致、全量测试、工作流与发布脚本自检      |
+| `verify`   | ubuntu-latest  | 各处版本与标签一致、全量测试、工作流与发布脚本自检      |
 | `build`    | 六行矩阵，见下 | 打桌面包、改名，上传 `release-<target>`                 |
 | `web`      | ubuntu-latest  | 打前端产物 `armadra-web_<version>.tar.gz`               |
 | `notarize` | ubuntu-latest  | 只报告哪些平台缺签名 secret，不阻断                     |
@@ -479,7 +481,7 @@ CLI 需要的宽沙箱权限过不了审核。服务器壳镜像推 GHCR 由 `se
 ```sh
 pnpm ci:workflows      # 两份工作流的结构、runner 标签与矩阵三元组
 pnpm release:test      # tools/release 与 tools/ci 的单元测试
-pnpm release:check     # 三处版本一致、兼容范围包含本版本
+pnpm release:check     # 各处版本一致、兼容范围包含本版本
 pnpm release:dry-run   # 把一次完整发布落到临时目录并校验
 ```
 

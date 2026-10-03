@@ -75,6 +75,31 @@ test("one file left behind fails the check", () => {
   }
 });
 
+test("set rewrites the version constants in source, and check reads them", () => {
+  const base = workspace("0.3.1");
+  try {
+    for (const path of [
+      "apps/desktop/src/core/instance.ts",
+      "apps/desktop/src/cli/armadra-hook/usage.ts",
+    ]) {
+      assert.match(readFileSync(base + path, "utf8"), /= "0\.3\.1";/);
+    }
+    const stale = base + "apps/desktop/src/core/instance.ts";
+    writeFileSync(
+      stale,
+      readFileSync(stale, "utf8").replace('"0.3.1"', '"0.3.0"'),
+    );
+    const { problems } = checkVersions({
+      base,
+      compatibility: normalize({ minimumInstalled: "0.1.0" }),
+    });
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /instance\.ts says 0\.3\.0/);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("a tag that does not name the version fails the check", () => {
   const base = workspace();
   const compatibility = normalize({

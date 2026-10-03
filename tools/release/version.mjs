@@ -36,11 +36,21 @@ export const VERSION_SITES = [
   { path: "apps/server/package.json", kind: "json" },
   // 手机壳随桌面 / 服务器一起发（补全架构 §10）；Android 的版本名从这里读。
   { path: "apps/mobile/package.json", kind: "json" },
+  // core 与 armadra-hook 各把版本写成常量（运行时不读 manifest）；漏改时
+  // instance.test / hook.test 才会在单测里红，这里让 set 一起改、check 一起看。
+  { path: "apps/desktop/src/core/instance.ts", kind: "ts", name: "VERSION" },
+  {
+    path: "apps/desktop/src/cli/armadra-hook/usage.ts",
+    kind: "ts",
+    name: "CLIENT_VERSION",
+  },
 ];
 
 const JSON_VERSION = /^(\s*"version"\s*:\s*")([^"]*)(")/m;
 
-function pattern() {
+function pattern(site) {
+  if (site.kind === "ts")
+    return new RegExp(`^(export const ${site.name} = ")([^"]*)(";)`, "m");
   return JSON_VERSION;
 }
 
@@ -48,7 +58,7 @@ function pattern() {
 export function readVersions(base = root) {
   return VERSION_SITES.map((site) => {
     const text = readFileSync(base + site.path, "utf8");
-    const match = pattern(site.kind).exec(text);
+    const match = pattern(site).exec(text);
     if (!match) throw new Error(`no version field in ${site.path}`);
     return { ...site, version: match[2] };
   });
@@ -154,14 +164,11 @@ export function setVersion(next, base = root) {
   for (const site of VERSION_SITES) {
     const file = base + site.path;
     const text = readFileSync(file, "utf8");
-    const replaced = text.replace(
-      pattern(site.kind),
-      (_, head, current, tail) => {
-        if (current !== version)
-          changed.push(`${site.path}: ${current} -> ${version}`);
-        return head + version + tail;
-      },
-    );
+    const replaced = text.replace(pattern(site), (_, head, current, tail) => {
+      if (current !== version)
+        changed.push(`${site.path}: ${current} -> ${version}`);
+      return head + version + tail;
+    });
     if (replaced !== text) writeFileSync(file, replaced);
   }
   return { version, changed };
