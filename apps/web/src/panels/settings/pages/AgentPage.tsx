@@ -29,6 +29,7 @@ import {
 } from "../../../api/settings";
 import { AgentCredentials } from "./AgentCredentials";
 import { CONTROL_WIDTH } from "./GeneralPage";
+import { AmaKeys } from "./AmaKeys";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -170,6 +171,8 @@ export function AgentPage() {
           </SettingsRow>
         ))}
       </SettingsGroup>
+
+      <AmaKeys />
 
       <SettingsGroup>
         <SettingsRow label={t("settings.defaultAgent")}>

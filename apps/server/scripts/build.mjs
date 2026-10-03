@@ -1,5 +1,7 @@
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
 import { build } from "esbuild";
 
 /**
@@ -42,5 +44,36 @@ await build({
    * 行，所以 core 的判断读到它时已经写好了。
    */
   banner: { js: 'globalThis.__armadraShellEntry = "server";' },
+  logLevel: "info",
+});
+
+/**
+ * 随包的 `ama` 与它的宿主适配器（docs/design/coordinator-agent.md §2.5）：与桌面
+ * 壳同一份——`@armadra/agent` 的单文件运行时（桌面壳的精确版本 devDependency）
+ * 复制到 `out/agent/`，适配器打成 `out/agent-host/ama-armadra.cjs`。core 在
+ * `out/main.js` 旁边找它们（`hook/install/shared.ts::agentBundle`），
+ * `<数据目录>/bin/ama` 启动器的运行器是本进程的 `node`。
+ */
+const desktop = resolve(root, "../desktop");
+const agentDir = dirname(
+  createRequire(join(desktop, "package.json")).resolve("@armadra/agent/bundle"),
+);
+const agentOut = resolve(root, "out/agent");
+rmSync(agentOut, { recursive: true, force: true });
+mkdirSync(agentOut, { recursive: true });
+for (const name of ["ama.cjs", "ama-sandbox.cjs"]) {
+  const source = join(agentDir, name);
+  if (!existsSync(source)) throw new Error(`@armadra/agent has no ${name}`);
+  copyFileSync(source, join(agentOut, name));
+}
+
+await build({
+  entryPoints: [resolve(desktop, "src/agent-host/ama/main.ts")],
+  outfile: resolve(root, "out/agent-host/ama-armadra.cjs"),
+  bundle: true,
+  platform: "node",
+  format: "cjs",
+  target: "node22",
+  external: ["electron"],
   logLevel: "info",
 });

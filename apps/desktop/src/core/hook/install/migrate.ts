@@ -173,6 +173,8 @@ export function migrateGlobalInstalls(
   const vault = join(options.dataDir, "integration", `global-backup-${stamp}`);
   const agents: Record<string, AgentMigration> = {};
   for (const agentId of INJECTED_AGENTS) {
+    // ama never had a global install to take back.
+    if (agentId === "ama") continue;
     const report: AgentMigration = { removed: [], backups: [] };
     agents[agentId] = report;
     try {

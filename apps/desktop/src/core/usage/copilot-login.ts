@@ -15,13 +15,15 @@
  * 等价于 bearer 的密钥，不能到磁盘、也不能到一条 API 响应里。
  */
 
+import { OUTBOUND } from "../net/outbound";
 import type { Fetcher } from "./providers";
 import type { SecretBackendKind, SecretStore } from "./secret-store";
 
 /**
  * GitHub Copilot 编辑器集成的公开设备流 client id。设备流的 client id 不是密钥
- * （这个授权里没有 client secret）；`ARMADRA_COPILOT_CLIENT_ID` 为测试和自带 OAuth
- * 应用的企业部署覆盖它。
+ * （这个授权里没有 client secret）；`ARMADRA_COPILOT_CLIENT_ID` 换成自己的 OAuth
+ * 应用（企业部署、测试）。整条设备流与额度读取都在 `usage.copilotUsage` 后面，
+ * 默认关（外部服务 §9.3），由路由那一层判。
  */
 const DEFAULT_CLIENT_ID = "Iv1.b507a08c87ecfe98";
 /** `read:user` 就是全部的请求：`copilot_internal/user` 只要一个认证过的用户。 */
@@ -35,10 +37,10 @@ export function oauthBase(): string {
   const configured = process.env.ARMADRA_GITHUB_OAUTH_BASE;
   return configured !== undefined && configured.trim() !== ""
     ? configured
-    : "https://github.com";
+    : OUTBOUND.copilotDeviceFlow.url;
 }
 
-function clientId(): string {
+export function clientId(): string {
   const configured = process.env.ARMADRA_COPILOT_CLIENT_ID;
   return configured !== undefined && configured.trim() !== ""
     ? configured
@@ -257,6 +259,11 @@ export class CopilotLogin {
       await this.store.clear();
       return this.authState();
     });
+  }
+
+  /** 有没有存着的令牌。只问存在与否，不读出值。 */
+  signedIn(): Promise<boolean> {
+    return this.store.isSet();
   }
 
   /** 存着的令牌，给 `fetchCopilot`。值不经过任何别的地方。 */

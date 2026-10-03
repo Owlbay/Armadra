@@ -38,6 +38,11 @@ export interface CatalogServiceOptions {
   readonly log?: (message: string, fields?: Record<string, unknown>) => void;
   /** 目录换了以后要作废的缓存（每个 Agent 的模型菜单）。 */
   readonly onInstalled?: () => void;
+  /**
+   * `models.catalog.autoRefresh`：每一趟后台刷新前问一次，所以改开关不用重启。
+   * 关着时后台一次都不抓，用户手动刷新照常。不给 = 开。
+   */
+  readonly autoRefresh?: () => boolean;
 }
 
 /** 一次刷新之后交给调用方的东西。`error` 是这一次没成的原因。 */
@@ -60,6 +65,7 @@ export class CatalogService {
     fields?: Record<string, unknown>,
   ) => void;
   private readonly onInstalled: () => void;
+  private readonly autoRefresh: () => boolean;
 
   constructor(options: CatalogServiceOptions) {
     this.file = cachePath(options.dataDir);
@@ -67,6 +73,7 @@ export class CatalogService {
     this.now = options.now ?? (() => Date.now());
     this.log = options.log ?? (() => {});
     this.onInstalled = options.onInstalled ?? (() => {});
+    this.autoRefresh = options.autoRefresh ?? (() => true);
   }
 
   /** 现在这份目录。从不阻塞在网络上，也从不失败。 */
@@ -105,8 +112,9 @@ export class CatalogService {
     this.timer.unref?.();
   }
 
-  /** 后台那一趟：只有过期了才去抓。 */
-  private async tick(): Promise<void> {
+  /** 后台那一趟：开关开着、且过期了才去抓。测试直接调它。 */
+  async tick(): Promise<void> {
+    if (!this.autoRefresh()) return;
     if (!isStale(this.catalog, this.now())) return;
     const outcome = await this.refresh({ force: true });
     if (outcome.error !== undefined) {

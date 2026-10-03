@@ -16,6 +16,8 @@ import {
   terminalBackendKindSchema,
   terminalNodeDataSchema,
   workflowStepKindSchema,
+  executionHostSchema,
+  handoffBundleSchema,
 } from "../src/index.js";
 
 const nodeId = "019ff7d1-5c48-7d75-a0ed-64b52f44e214";
@@ -67,7 +69,7 @@ describe("completion shared layer", () => {
     expect(agentStateSourceSchema.parse("acp")).toBe("acp");
   });
 
-  it("reads an agent row's acp field and outdated hosts", () => {
+  it("reads an agent row's acp field, and outdated hosts on the integration state only", () => {
     const row = agentInfoSchema.parse({
       id: "opencode",
       label: "OpenCode",
@@ -84,7 +86,8 @@ describe("completion shared layer", () => {
       outdatedHosts: [{ hostId: "h1", version: "0.1.0" }],
     });
     expect(row.acp?.support).toBe("native");
-    expect(row.outdatedHosts?.[0]?.hostId).toBe("h1");
+    // §21.2：过旧主机只在集成状态上给，agent 行不重复（多出来的键被丢掉）。
+    expect("outdatedHosts" in row).toBe(false);
     const older = agentInfoSchema.parse({
       id: "claude",
       label: "Claude Code",
@@ -101,9 +104,36 @@ describe("completion shared layer", () => {
       skill: { installed: false },
       legacy: {},
       revision: 1,
-      outdatedHosts: [{ hostId: "h2" }],
+      outdatedHosts: [{ hostId: "h2", name: "build-box", version: "0.0.9" }],
     });
-    expect(state.outdatedHosts).toEqual([{ hostId: "h2" }]);
+    expect(state.outdatedHosts).toEqual([
+      { hostId: "h2", name: "build-box", version: "0.0.9" },
+    ]);
+  });
+
+  it("reads the Worker on an execution host row and capturedOn on a bundle (§21)", () => {
+    const row = executionHostSchema.parse({
+      executionHostId: "far",
+      name: "far",
+      kind: "ssh",
+      workerConfigured: true,
+      workspaceCount: 0,
+      worker: {
+        version: "0.1.0",
+        capabilities: ["remote.handoff.v1"],
+        outdated: false,
+        connected: true,
+        checkedAt: "2026-10-03T00:00:00.000Z",
+      },
+    });
+    expect(row.worker?.outdated).toBe(false);
+    expect(
+      executionHostSchema.parse({ ...row, worker: undefined }).worker,
+    ).toBeUndefined();
+    expect(
+      handoffBundleSchema.shape.capturedOn.safeParse(undefined).success,
+    ).toBe(true);
+    expect(handoffBundleSchema.shape.capturedOn.parse("far")).toBe("far");
   });
 
   it("exports a skeleton for every new domain", () => {

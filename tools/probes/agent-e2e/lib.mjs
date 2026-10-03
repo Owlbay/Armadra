@@ -28,7 +28,7 @@ const onlyFlag = argv.indexOf("--only");
 export const only =
   onlyFlag >= 0
     ? new Set(argv[onlyFlag + 1].split(",").map((part) => part.trim()))
-    : new Set(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+    : new Set(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]);
 // `--backend direct`：终端后端改成 direct（非 tmux）再跑。缺省按平台（macOS
 // 装了 tmux 就是 tmux）。
 const backendFlag = argv.indexOf("--backend");

@@ -3,8 +3,11 @@
  * `UsageService`。
  */
 
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { configRoot } from "../history/home";
+import { OUTBOUND } from "../net/outbound";
 import type { SettingsStore } from "../settings/store";
 import { BUILT_IN_PRICES, CostService, type PriceTable } from "./cost";
 import { CopilotLogin } from "./copilot-login";
@@ -145,6 +148,36 @@ export class UsageService {
     return this.options.settings?.usageProviderEnabled(id) ?? true;
   }
 
+  /**
+   * 出站政策（外部服务 §9.3）：Claude 与 Copilot 的额度端点要借用登录令牌，
+   * 各有一个默认关的开关，和逐个 provider 的开关是「且」的关系。没有设置存储
+   * （测试里裸装的 core）按缺省值算，也就是关。
+   */
+  policyAllows(id: UsageProviderId): boolean {
+    const key =
+      id === CLAUDE_ID
+        ? OUTBOUND.claudeUsage.switch
+        : id === COPILOT_ID
+          ? OUTBOUND.copilotUsage.switch
+          : undefined;
+    if (key === undefined) return true;
+    return this.options.settings?.get(key) === true;
+  }
+
+  /**
+   * 政策关着的这家，本机上看起来有没有在用——有才报 `policy_off`，好让页面说
+   * 「默认关了，可以开」；没有就和没装一样报 `unavailable`。只看目录与自己的
+   * 密钥存储，不读 Claude 的钥匙串，也不联网。
+   */
+  private async appearsInUse(id: UsageProviderId): Promise<boolean> {
+    if (id === CLAUDE_ID) {
+      const directory = configRoot("claude");
+      return directory !== undefined && existsSync(directory);
+    }
+    if (id === COPILOT_ID) return this.copilot.signedIn();
+    return false;
+  }
+
   private costEnabled(): boolean {
     const value = this.options.settings?.get("usage.cost.enabled");
     return typeof value === "boolean" ? value : true;
@@ -228,6 +261,12 @@ export class UsageService {
     if (!this.providerEnabled(id)) {
       return unavailable(id, "none");
     }
+    // 政策关着同样一个请求都不发、也不读凭据。
+    if (!this.policyAllows(id)) {
+      return (await this.appearsInUse(id).catch(() => false))
+        ? { ...unavailable(id, "none"), reason: "policy_off" }
+        : unavailable(id, "none");
+    }
     try {
       const { report, source } = await fetchOne();
       if (report === undefined) {
@@ -250,6 +289,10 @@ export class UsageService {
         fetchedAt: new Date(this.now()).toISOString(),
       };
     } catch (error) {
+      if (error instanceof ProviderError && error.reason === "unsupported") {
+        // 端点答了 HTML：这条路走不通，不是一次失败（外部服务 §9.3）。
+        return { ...unavailable(id, "none"), reason: "unsupported" };
+      }
       return errored(
         id,
         "none",

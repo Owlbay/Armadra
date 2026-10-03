@@ -2,6 +2,7 @@ import type { UsageProvider } from "@armadra/shared";
 import { useT } from "../app/preferences-store";
 import { formatRelativeTime } from "../lib/format";
 import {
+  UNAVAILABLE_REASONS,
   usageIsStale,
   usagePercent,
   usageReasonKey,
@@ -49,7 +50,12 @@ export function ProviderDetail({
             </span>
           )}
       </div>
-      {provider.status !== "ok" ? (
+      {provider.status === "unavailable" &&
+      UNAVAILABLE_REASONS.has(provider.reason ?? "") ? (
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {t(usageReasonKey(provider.reason))}
+        </p>
+      ) : provider.status !== "ok" ? (
         <p className="text-xs leading-relaxed text-muted-foreground">
           {t(
             provider.status === "error"

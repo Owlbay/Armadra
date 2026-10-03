@@ -40,10 +40,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { OUTBOUND } from "../net/outbound";
 import { writeSecret } from "../paths";
 
-/** 唯一一个对外地址，写在这里而不是调用点，方便 grep。 */
-export const CATALOG_URL = "https://models.dev/api.json";
+/**
+ * 唯一一个对外地址，登记在出站表（`net/outbound.ts`）。后台每日抓取跟着
+ * `models.catalog.autoRefresh`；关掉以后只剩用户手动刷新会联网。
+ */
+export const CATALOG_URL = OUTBOUND.modelsCatalog.url;
 
 /** `<dataDir>/models-catalog.json`。 */
 export const CACHE_FILE = "models-catalog.json";

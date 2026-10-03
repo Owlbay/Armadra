@@ -433,6 +433,7 @@ export function answerKeys(agentId: string, decision: string): string {
     case "pi":
     case "omp":
     case "copilot":
+    case "ama":
       return allow ? "y\r" : "n\r";
     default:
       return allow ? "y\r" : "n\r";

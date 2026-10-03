@@ -35,9 +35,14 @@ export type AgentHistory = z.infer<typeof agentHistorySchema>;
 /**
  * An execution host whose Worker is older than this build expects (contract
  * §21.2): canvas launches there carry a stale injection until it is resynced.
+ * Reported on the integration state (`GET /api/agents/{id}/integration`)
+ * only — the hosts are the same for every agent, so the agent rows do not
+ * repeat them.
  */
 export const outdatedHostSchema = z.looseObject({
   hostId: z.string().min(1),
+  /** The host's name in the registry, when it is still there. */
+  name: z.string().optional(),
   /** The Worker version the host reported, when it reported one. */
   version: z.string().optional(),
 });
@@ -120,8 +125,6 @@ export const agentInfoSchema = z.object({
    * because a runtime that predates the field simply does not say.
    */
   history: agentHistorySchema.optional(),
-  /** Execution hosts whose Worker is out of date for this agent (§21.2). */
-  outdatedHosts: z.array(outdatedHostSchema).optional(),
   /**
    * How this CLI speaks the Agent Client Protocol on this machine (contract
    * §14.1). Absent from a core without ACP, and for an agent without a path.
@@ -266,7 +269,10 @@ export const integrationStateSchema = z.looseObject({
     })
     .optional(),
   clientBin: z.string().optional(),
-  /** Execution hosts whose Worker needs a resync (contract §21.2). */
+  /**
+   * Execution hosts whose Worker needs an upgrade and a resync (contract
+   * §21.2). Present from a core with the Worker fleet; usually empty.
+   */
   outdatedHosts: z.array(outdatedHostSchema).optional(),
   /** Something worked but deserves a sentence in the settings page. */
   warning: z.string().optional(),
@@ -381,3 +387,19 @@ export type IntegrationRepairReport = z.infer<
 export type AnswerApprovalRequest = z.infer<typeof answerApprovalRequestSchema>;
 export type ContextLink = z.infer<typeof contextLinkSchema>;
 export type ContextLinkContent = z.infer<typeof contextLinkContentSchema>;
+
+/**
+ * `GET /api/agents/ama/credentials`（契约 §12.4）：Armadra Agent 的模型密钥。
+ * 只说哪家供应商设了、存在哪个后端（与 `copilotBackendSchema` 同一组取值），
+ * 从不带值；供应商列表由 core 给，页面不自己列。
+ */
+export const amaCredentialStatusSchema = z.object({
+  backend: z.enum(["keychain", "dpapi", "libsecret", "file-encrypted", "file"]),
+  providers: z.array(z.object({ id: z.string(), isSet: z.boolean() })),
+});
+export type AmaCredentialStatus = z.infer<typeof amaCredentialStatusSchema>;
+
+/** `PUT /api/agents/ama/credentials/{provider}` 的请求体。 */
+export const amaCredentialRequestSchema = z.object({
+  apiKey: z.string().min(1),
+});

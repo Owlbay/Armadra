@@ -291,7 +291,7 @@ describe("hook mode", () => {
       "Content-Length",
     ]);
     expect(header(captured, "Host")).toBe("127.0.0.1");
-    expect(header(captured, "X-Armadra-Hook-Client")).toBe("4");
+    expect(header(captured, "X-Armadra-Hook-Client")).toBe("5");
     expect(header(captured, "X-Armadra-Hook-Token")).toBe("app-token-abc");
     expect(header(captured, "X-Armadra-Node-Token")).toBe("kid1234.macvalue");
     expect(header(captured, "Content-Type")).toBe("application/json");

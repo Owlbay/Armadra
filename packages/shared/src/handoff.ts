@@ -73,6 +73,11 @@ export const handoffBundleSchema = z.object({
     status: z.enum(["observed", "unavailable"]),
     worktreeDigestBasis: z.literal("statusSummary"),
   }),
+  /**
+   * 来源 Agent 的转录在哪台执行主机上读的（主机 id，契约 §21.1）。在控制端
+   * 本机读、或没有读转录时不出现。
+   */
+  capturedOn: z.string().optional(),
   attachments: z.array(z.never()),
   budget: z.object({
     byteLimit: z.number().int().positive(),
@@ -113,6 +118,8 @@ export const handoffViewSchema = z.object({
   sourceHasNewActivity: z.boolean(),
 });
 export const handoffListSchema = z.array(handoffViewSchema);
+/** `handoff/prepare` 的 501：来源 Agent 所在主机采集不了（契约 §21.1）。 */
+export const HANDOFF_HOST_OFFLINE = "handoff_host_offline";
 export type HandoffSections = z.infer<typeof handoffSectionsSchema>;
 export type HandoffPrepare = z.infer<typeof handoffPrepareSchema>;
 export type HandoffBundle = z.infer<typeof handoffBundleSchema>;
