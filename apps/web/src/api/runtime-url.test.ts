@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  forgetRuntimeOrigin,
+  gatewayOrigin,
+  isNativeAppPage,
+  isServerShellServed,
+  saveRuntimeOrigin,
+  savedRuntimeOrigin,
   serverShellOrigin,
   isShellTransport,
   resetShellEndpoints,
@@ -232,5 +238,60 @@ describe("WebSocket base resolution", () => {
     expect(resolveSocketBase("http://127.0.0.1:43120")).toBe(
       "http://127.0.0.1:43120",
     );
+  });
+});
+
+describe("原生 App 记下的 Gateway 来源", () => {
+  function capacitor(native: boolean) {
+    vi.stubGlobal("Capacitor", { isNativePlatform: () => native });
+  }
+  afterEach(() => {
+    forgetRuntimeOrigin();
+  });
+
+  it("只在原生 App 的页面上认记下的来源", () => {
+    saveRuntimeOrigin("https://192.168.1.8:8443/");
+    capacitor(true);
+    expect(resolveRuntimeUrl(undefined, "capacitor://localhost/")).toBe(
+      "https://192.168.1.8:8443",
+    );
+    // Android 的包内来源长得像服务器壳，但不是 core。
+    expect(resolveRuntimeUrl(undefined, "https://localhost/")).toBe(
+      "https://192.168.1.8:8443",
+    );
+    expect(isServerShellServed(undefined, "https://localhost/")).toBe(false);
+    // 浏览器与经 Gateway 打开的网页不受残留值影响。
+    expect(resolveRuntimeUrl(undefined, "http://127.0.0.1:1420/")).toBe(
+      "http://127.0.0.1:43120",
+    );
+    expect(resolveRuntimeUrl(undefined, "https://10.0.0.2:8443/")).toBe(
+      "https://10.0.0.2:8443",
+    );
+  });
+
+  it("不是 Capacitor 原生时不认", () => {
+    saveRuntimeOrigin("https://192.168.1.8:8443");
+    capacitor(false);
+    expect(isNativeAppPage("capacitor://localhost/")).toBe(false);
+    expect(resolveRuntimeUrl(undefined, "https://localhost/")).toBe(
+      "https://localhost",
+    );
+  });
+
+  it("原生 App 还没有来源时退回回环默认值", () => {
+    capacitor(true);
+    expect(savedRuntimeOrigin()).toBeNull();
+    expect(resolveRuntimeUrl(undefined, "capacitor://localhost/")).toBe(
+      "http://127.0.0.1:43120",
+    );
+  });
+
+  it("只收干净的 HTTPS 来源", () => {
+    expect(gatewayOrigin("https://h:8443")).toBe("https://h:8443");
+    expect(gatewayOrigin("http://h:8443")).toBeNull();
+    expect(gatewayOrigin("https://u:p@h")).toBeNull();
+    expect(gatewayOrigin("https://h/#pair=x")).toBeNull();
+    expect(gatewayOrigin("https://h/sub")).toBeNull();
+    expect(() => saveRuntimeOrigin("http://h")).toThrow();
   });
 });

@@ -1,0 +1,33 @@
+# Armadra 服务器壳的 compose 示例（部署步骤见 docs/guides/server-deployment.md）。
+#
+#   cp compose.yml /srv/armadra/compose.yml   # 改下面两处 example 值
+#   docker compose up -d
+#   docker compose logs armadra | grep "armadra-server pairing"   # 首个管理员的配对链接
+#
+# 直接对公网、由 ACME 自动签证书：宿主 443 → 容器 8443（HTTPS），宿主 80 → 容器
+# 8080（只答 ACME 的 http-01 挑战，其余请求 308 到 HTTPS）。放在反向代理后面时
+# 删掉 ARMADRA_ACME_EMAIL 与 80 端口，把 443 换成只绑回环的端口，见指南第 2 节。
+name: armadra
+
+services:
+  armadra:
+    image: ghcr.io/owlbay/armadra-server:latest
+    # 从源码构建（仓库根目录是上下文）：
+    # build:
+    #   context: ../../..
+    #   dockerfile: apps/server/docker/Dockerfile
+    environment:
+      ARMADRA_PUBLIC_ORIGIN: "https://armadra.example.com"
+      ARMADRA_ACME_EMAIL: "ops@example.com"
+      # 只想先试签发流程时换成 Let's Encrypt 的测试目录：
+      # ARMADRA_ACME_DIRECTORY: "https://acme-staging-v02.api.letsencrypt.org/directory"
+    ports:
+      - "443:8443"
+      - "80:8080"
+    volumes:
+      - armadra-data:/data
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  armadra-data:
