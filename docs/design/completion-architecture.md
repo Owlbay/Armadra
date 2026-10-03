@@ -1,6 +1,6 @@
 # 补全架构：后续规划二至四部分与平台线的整体框架
 
-> 状态：目标设计（2026-10-03），未开始实施。本文是「该实现的内容全量实现」的总框架：补全之后的整体架构、新模块与边界、数据模型与迁移编号、契约节号、安全模型、ACP 与工作流模型、移动端策略、测试策略，以及每一处取舍的被否方案。执行计划（波次、工作包、文件归属、验证命令）在 [补全执行计划](completion-plan.md)。
+> 状态：部分实施（2026-10-04）。G0–G3 的包全部合入，迁移 0030–0035、契约 §14–§23 落地；逐包的「做了什么 / 没做」见[补全进度](../status/completion-progress.md)，需要用户提供的条件汇总在该文 G4-1 一节。本文是「该实现的内容全量实现」的总框架：补全之后的整体架构、新模块与边界、数据模型与迁移编号、契约节号、安全模型、ACP 与工作流模型、移动端策略、测试策略，以及每一处取舍的被否方案。执行计划（波次、工作包、文件归属、验证命令）在 [补全执行计划](completion-plan.md)。
 > 现状以[功能预期总表](../status/feature-roadmap.md)与源码为准；本文只写缺口的目标形态，已交付的部分只在边界处提及。
 > 前置：[后续规划](product-roadmap.md)、[CLI 协作](cli-collaboration.md)、[ACP 会话视图](acp-session-view.md)、[协调 Agent](coordinator-agent.md)、[服务器账号与共享](server-accounts-and-sharing.md)、[画布启动器](canvas-launcher.md)、[Agent 推式投递](agent-delivery.md)、[架构](../guides/architecture.md)。界面规范由 [设计系统](design-system.md) 定；需要用户账号或证书的第三方服务由 [外部服务](external-services.md) 按提供方逐条展开，本文只按章节名引用它。
 

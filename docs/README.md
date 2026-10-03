@@ -13,23 +13,23 @@
 
 ## guides/ 现行事实
 
-| 文档                                                   | 内容                                     |
-| ------------------------------------------------------ | ---------------------------------------- |
-| [产品说明](guides/product-overview.md)                 | 产品出发点、成本分工、需求证据与应用场景 |
-| [开发指南](guides/development.md)                      | 依赖、启动、检查、打包与环境变量         |
-| [CI 与发布](guides/ci-release.md)                      | 三平台矩阵、发布矩阵与密钥清单           |
-| [架构](guides/architecture.md)                         | 当前结构、数据模型与安全边界             |
-| [Agent 协作](guides/agent-collaboration.md)            | CLI 能力、上下文与消息箱协议             |
-| [界面规范](guides/ui-refinement.md)                    | 布局、交互与验收范围                     |
-| [客户端平台](guides/client-platforms.md)               | 各平台职责与适配边界                     |
-| [服务器部署](guides/server-deployment.md)              | 镜像、证书与 ACME、外网访问、备份升级    |
-| [原生白板参考](guides/native-whiteboard-references.md) | 原生对象作为 Agent 资料的规则            |
+| 文档                                                   | 内容                                             |
+| ------------------------------------------------------ | ------------------------------------------------ |
+| [产品说明](guides/product-overview.md)                 | 产品出发点、成本分工、需求证据与应用场景         |
+| [开发指南](guides/development.md)                      | 依赖、启动、检查、打包与环境变量                 |
+| [CI 与发布](guides/ci-release.md)                      | 三平台矩阵、发布矩阵与密钥清单                   |
+| [架构](guides/architecture.md)                         | 当前结构、数据模型与安全边界                     |
+| [Agent 协作](guides/agent-collaboration.md)            | CLI 能力、消息与投递、ACP 模式、协调者与 runners |
+| [界面规范](guides/ui-refinement.md)                    | 布局、交互与验收范围                             |
+| [客户端平台](guides/client-platforms.md)               | 各平台职责、Gateway 配对与原生 App               |
+| [服务器部署](guides/server-deployment.md)              | 镜像、证书与 ACME、外网访问、备份升级            |
+| [原生白板参考](guides/native-whiteboard-references.md) | 原生对象作为 Agent 资料的规则                    |
 
 代码边界与验证入口见[项目约定](../AGENTS.md)。
 
 ## design/ 目标设计
 
-各文档首行声明状态（目标设计 / 部分实施 / 已实施）；多数已经交付，现状以 [功能预期总表](status/feature-roadmap.md) 与源码为准。
+各文档首行声明状态（目标设计 / 部分实施 / 已实施），部分实施的写明缺什么；多数已经交付，现状以 [功能预期总表](status/feature-roadmap.md) 与源码为准。
 
 | 文档                                                      | 内容                                                                                                               |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -74,21 +74,21 @@
 
 ## status/ 已验证进度
 
-| 文档                                                     | 内容                                                                                |
-| -------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| [平台实施记录](status/platform-implementation-status.md) | 阶段状态、需求核对与验证证据                                                        |
-| [功能预期总表](status/feature-roadmap.md)                | 按源码核实的功能现状表（附依据节号）与需要外部条件的项                              |
-| [画布性能基线](status/canvas-performance-baseline.md)    | 30 个终端 + 真实会话的 fps / 帧时 / 重渲组件数，改动前后                            |
-| [服务端性能基线](status/server-performance-baseline.md)  | 服务器壳 30 个终端、6 个事件流、2000 对象实时板的延迟 / 吞吐 / RSS / CPU 与热点修复 |
-| [Electron 迁移复查](status/electron-migration-review.md) | 换壳后功能总表逐行核查、UI 死角、文档漂移与测试盲区；已修复项见 §0                  |
-| [TypeScript Core 进度](status/typescript-core-status.md) | R0–R7 与 2026-09-25/26 补齐轮的逐节实施记录、实测数字与验证命令                     |
-| [补全进度](status/completion-progress.md)                | 补全执行计划 49 个工作包逐包的「做了什么 / 实测 / 没做」                            |
-| [安全审查 2026-10](status/security-review-2026-10.md)    | 补全计划新增面的安全审查：已修的中高危、未修的低危与设计约束                        |
+| 文档                                                     | 内容                                                                                    |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| [平台实施记录](status/platform-implementation-status.md) | 阶段状态、需求核对与验证证据                                                            |
+| [功能预期总表](status/feature-roadmap.md)                | 按源码核实的功能现状表（附依据节号）与需要外部条件的项                                  |
+| [画布性能基线](status/canvas-performance-baseline.md)    | 30 个终端 + 真实会话的 fps / 帧时 / 重渲组件数，改动前后                                |
+| [服务端性能基线](status/server-performance-baseline.md)  | 服务器壳 30 个终端、6 个事件流、2000 对象实时板的延迟 / 吞吐 / RSS / CPU 与热点修复     |
+| [Electron 迁移复查](status/electron-migration-review.md) | 换壳后功能总表逐行核查、UI 死角、文档漂移与测试盲区；已修复项见 §0                      |
+| [TypeScript Core 进度](status/typescript-core-status.md) | R0–R7 与 2026-09-25/26 补齐轮的逐节实施记录、实测数字与验证命令                         |
+| [补全进度](status/completion-progress.md)                | 补全执行计划 49 个工作包逐包的「做了什么 / 实测 / 没做」；G4-1 一节汇总需用户提供的条件 |
+| [安全审查 2026-10](status/security-review-2026-10.md)    | 补全计划新增面的安全审查：已修的中高危、未修的低危与设计约束                            |
 
 ## contracts/ 实施契约
 
 - [v3 Agent 终端](contracts/v3-agent-terminal-plan.md)：章节 §N 被代码引用，保留编号。
-- [core 的 JSON 面](contracts/core-json-api.md)：`/api/github/*`、`/api/automations/*`、`GET /api/identity/hello` 与 `GET /api/nodes/{id}/context-reads` 的线上形状，以及自动化域存进库里的那份 JSON。章节 §N 被代码引用，保留编号。
+- [core 的 JSON 面](contracts/core-json-api.md)：`/api/github/*`、`/api/automations/*`、`GET /api/identity/hello` 与 `GET /api/nodes/{id}/context-reads` 的线上形状，自动化域存进库里的那份 JSON，以及补全阶段的 §14 ACP、§15 工作流与 runners、§16 实时协同与评论、§17 Gateway、§18 身份扩展、§19 推送、§20 节点凭据、§21 跨主机交接与舰队、§22 画面门、§23 权限补充。章节 §N 被代码引用，保留编号。
 - [tldraw 画布](history/tldraw-canvas-plan.md) 已被 [React Flow 画布](design/canvas-react-flow.md)取代并移入 `history/`。代码注释里的「旧画布契约 §N」指的就是它，只写编号不写路径；§6.1 / §6.3 已改指 React Flow 画布的 §3.1 / §2.5，§6.2（资产端点）与 §8（实施阶段）在新文档里没有对应章节，仍按编号回溯本文。
 
 ## history/ 与 research/

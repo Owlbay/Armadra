@@ -7,35 +7,118 @@
 
 ## G0-1 文档修正与进度载体
 
-未开始。
+> 本节由 G4-1 按 PR #21 的正文补记（该包合入早于进度载体启用）。
+
+**做了什么**
+
+- `tools/probes/README.md`：打包冒烟两处「信任记录写进临时 HOME」改为启动器方案（零写入、`--dangerously-bypass-hook-trust`、迁移清掉上一版的会话级信任记录）；新增「分档」一节，按补全架构 §12 列 A / B / C 三档。
+- `docs/status/typescript-core-status.md` §60.5：自定义 Agent 拿不到画布审批标「已修（9ba14061）」。
+- `docs/design/updates-and-service-install.md`、`docs/status/platform-implementation-status.md` 开头改为「现状入口」，正文保留作历史；`README.md` 改为手机经服务器壳访问、桌面 Gateway 在计划中；`acp-session-view.md`、`coordinator-agent.md` 首部加修订注，`product-roadmap.md` 第三部分第一条同步。
+- 新建本文档：49 个工作包各一节，登记进 `docs/README.md`。
+
+**实测**：`pnpm check` 通过。
+
+**没做 / 偏离**：计划正文写「39 个」空节，实际 §2 有 49 个包，按 49 建，并把 `completion-plan.md` 里的数字改成 49。
 
 ## G0-2 共享层与页面骨架
 
-未开始。
+> 本节由 G4-1 按 PR #23 的正文补记（该包合入早于进度载体启用）。
+
+**做了什么**
+
+- `packages/shared`：`AGENT_IDS` 加 `ama` 与注册表条目；`AMA_HOOK_EVENTS`，`HOOK_CLIENT_REVISION` 4 → 5；`agentIdSchema` 引用 `AGENT_IDS`、`terminalAgentSchema.driver`（`AGENT_DRIVERS`）、`contentSourceSchema` 与便签 / 编辑器的可选 `source`；`AGENT_STATE_SOURCES`、`TERMINAL_BACKENDS` 加 `acp`；`agentInfoSchema` 加可选 `acp` 与 `outdatedHosts`（集成状态也加，留给 G1-2 选用）；骨架 `api/{acp,workflows,realtime,gateway,identity-security,push,credentials}.ts`。
+- `apps/web`：`i18n/index.ts` 预登记八个模块；设置导航加 `security` 分区与占位页，`host` 分区标题改「后台服务与对外服务」。
+- 依赖（精确版本）：`@armadra/agent 0.6.2`（dev）、`yjs`、`y-protocols`、`lib0`、`@simplewebauthn/server 14.0.3`、`otplib 13.5.0`、`acme-client 5.4.0`。
+- 计划外的最小改动：`SettingsDialog.tsx` 挂占位页、`StateSourceBadge.tsx` 与 `i18n/agent.ts` 的 `acp` 来源、`pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude`。
+
+**实测**：`pnpm libs:build && pnpm -r --if-present test` 全绿（shared 295、server 85、desktop 3457、web 2834）；web typecheck 与 `pnpm check` 通过；新增 `completion-skeleton.test.ts`，`agents.test.ts` 改为七个并加 ama 用例。
+
+**没做**：core 侧未动（`registry.ts`、`custom-agents.ts`、`hook/install/events.ts` 仍为 4、`usage.ts`、`hook/store.ts`），由 G1 的 ama 与 ACP 包同步；设置页「安全」为空页（G2-8）；其他模块里「设置 → 连接 → 后台服务」的提示句未随标题改名。
 
 ## G0-3 core 骨架与契约节占位
 
-未开始。
+> 本节由 G4-1 按 PR #27 的正文补记（该包合入早于进度载体启用）。
+
+**做了什么**
+
+- 新域空骨架 `core/{acp,workflow,realtime,push,gateway}/index.ts`（只有 `install(context)`），`DOMAINS` 顺序里 gateway 最后；`core/identity/oauth/index.ts` 空的 `installOAuth`。
+- `core/http/route-scopes.ts`：新面按前缀先声明 scope；`SELF_GUARDED` / `selfGuarded()`（健康检查、`/api/identity/`、`/api/push/`）。
+- 设置键一次加齐（都有缺省，坏值退回缺省）：`gateway.*`、`push.*`、`updates.channel`、`identity.*`、`agents.defaultDriver`、`collab.realtime`、`usage.{claudeUsage,copilotUsage,statusBadges}`、`models.catalog.autoRefresh`、`diagnostics.crashReportDsn`；选项表 `completion-settings.ts` core 与 shared 两份逐字节相同。
+- 契约追加 §14–§23 标题与「预留」。
+
+**实测**：`completion-settings.test.ts`（字节一致、缺省、坏值、`statusPage` 沿用、OAuth 提供方过滤）、`routes.test.ts`、`main.test.ts`、`route-scopes.test.ts`、`route-access.test.ts`、shared `api-settings.test.ts`；`pnpm libs:build && pnpm -r --if-present test` 全绿（shared 291、server 85、desktop 3473、web 2834），`pnpm check` 通过。
+
+**没做 / 偏离**：`gateway.*` 与 `push.apns/fcm` 的文件路径没加进 `LOCAL_PATHS`（留给 G1-10 / G1-13）；归一放在 `settings/schema.ts` 而非计划写的 `settings/index.ts`；`agents.defaultDriver` 缺席时由 `completionSettings` 给缺省 `acp`；`usage.statusBadges` 与旧键 `usage.statusPage` 并存，读者由 G1-15 迁移；ACP、工作流路径成员一律 403，等 G2-1 / G1-8 补按对象查画布。
 
 ## G0-4 CI 端到端分档
 
-未开始。
+> 本节由 G4-1 按 PR #26 的正文补记（该包合入早于进度载体启用）。
+
+**做了什么**
+
+- `tools/ci/e2e.mjs`：`--tier a|b [--only] [--out] [--list]`，逐条跑清单 `tools/ci/e2e.json`，每条输出进 `<out>/<id>/`，汇总 `result.json`；失败或超时非零退出、其余照跑，超时按进程组杀；`ARMADRA_DEV_STACK=1` 且 Docker 可用时先 `dev-stack up`，否则 `devStack` 条目记 `skipped`。
+- `ci.yml` 新增 `e2e` 作业（ubuntu，tmux、xvfb、Chrome，`--tier a`，产物上传）；`nightly.yml` 骨架（只 `--tier b --list`）；`validate-workflows.mjs` 加 `checkE2eTiers`。
+- 探针修复：`ui-features/presence.mjs` 按同一台设备断言（main 上原本就红）；让 A 档在 Linux 上成立的若干处（node-pty 编译、`remote-e2e` 资源卡、快捷键与编辑器场景、搜索取消、替身 `claude`）。
+
+**实测**：`node --test tools/ci/*.test.mjs` 22 条（新增 `e2e.test.mjs` 7 条）；`pnpm ci:workflows`；本机 `--tier a` 5 条全过；`pnpm check`、`pnpm -r --if-present test`、`pnpm release:test` 通过；PR CI 的 e2e 与三平台 check 全绿（第一轮 macOS / Windows 的既有不稳定用例重跑即绿）。
+
+**没做**：A 档只在 Linux 上跑；`nightly.yml` 只列清单（B 档由 G3-4 填）；浅色主题图片棋盘格两色几乎看不出，探针改用深色主题量，产品侧未改。
 
 ## G0-5 hook-client 抽取与动词表生成
 
-未开始。
+> 本节由 G4-1 按 PR #22 的正文补记（该包合入早于进度载体启用）。
+
+**做了什么**
+
+- `cli/armadra-hook/{endpoint,http,session,json}.ts` 及两份测试搬到 `apps/desktop/src/hook-client/`，调用方改 import；`HOOK_CLIENT_REVISION` 移进 `hook-client/session.ts`（值不变 "4"），`usage.ts` 再导出。
+- 新建 `hook-client/verbs.ts`：画布 / 上下文 / 浏览器动词的工具表（`VERB_TOOLS`、`toolByName`、`toWireArgs`，`binding: "session"`、`long: true`）。
+- `electron.vite.config.ts` 只补注释；架构指南进程图加 `src/hook-client` 一行。
+
+**实测**：`hook-client/verbs.test.ts`（画布段与 core `VERBS` 及 `canvas help` 一致、上下文 / 浏览器段与 `--help` 及路由白名单一致、枚举同值、名字唯一、`toWireArgs` 转换与拒绝、依赖方向）；`pnpm libs:build && pnpm -r --if-present test` 全绿（desktop 3475，含对真实 bundle 的 `wire.test.ts`），desktop typecheck / build 与 `pnpm check` 通过。
+
+**没做**：画布与上下文动词的描述与参数 schema 是手写的，参数是否齐全靠评审；`armadra-hook canvas --help` 仍报「expected a canvas verb」，CLI 行为未改。
 
 ## G0-6 设计系统 token 与基础件（WP-D1）
 
-未开始。
+> 本节由 G4-1 按 PR #24 的正文补记（该包合入早于进度载体启用）。
+
+**做了什么**
+
+- `tokens.css` 只加不改：`--agent-ama`、七个 `--agent-*-text`、`--on-agent`、`--member-1..8`、`--warn-text / --success-text / --working-text`、字号、`--dur-page`、`--r-pill`、三个 z 层；`app.css` 的 `@theme` 映射。浅色 AA 修正（`--success`、`--caution`、`--warn`、`--danger-text`、`--chart-2/3`、浅色 Agent 压暗值）。
+- `src/lib/contrast.ts` 与 `tokens-contrast.test.ts`；`agentTextColorVar`；`MobileFocusPage` 与 sonner 用新 z 层，`MotionConfig` 曲线与时长。
+- shadcn CLI 加 16 个组件；`ui/agent-avatar.tsx`、`ui/member-dot.tsx`；`ui.test.tsx` 补冒烟与状态矩阵。
+
+**实测**：`pnpm libs:build && pnpm -r --if-present test` 全绿（web 2905）；`pnpm check`、`pnpm --filter @armadra/web build` 通过。
+
+**没做 / 偏离**：浅色 Agent 压暗值比设计表再暗约 5%（侧栏底色上才够 4.5）；`tokens.test` 的「Agent 色只在深色块声明」改为「深色保持原值、浅色另给压暗值」；深色 `--working-text` 叠在 18% 衬底上约 4.1，守卫里跳过并注明；生成组件 import `cn` 包未改；`Spinner` 默认英文 `aria-label`；只在 jsdom 与构建产物上验证，没有截图对比（留给 G1-14）。
 
 ## G0-7 本地 dev-stack（W-DEVSTACK）
 
-未开始。
+> 本节由 G4-1 按 PR #28 的正文补记（该包合入早于进度载体启用）。
+
+**做了什么**
+
+- `tools/dev-stack/docker-compose.yml`：release、pebble、step-ca、dex、keycloak、mailpit、gitea、glitchtip（+ postgres + redis）、push-sink、hibp、armadra-server，可选 profile `headscale`、`ntfy`；镜像全部钉版本，端口只绑 127.0.0.1。
+- `pnpm dev-stack up|down|logs|ps|health`（`dev-stack.mjs`），端口与健康检查唯一来源 `services.mjs`；没有 Docker 时说明原因并退出 0。
+- 自写替身：`push-sink.mjs`（假 APNs h2c、FCM v1、Web Push VAPID 验签、`/relay/*`）、`hibp-fixture.mjs`（range API，支持 Add-Padding）、`release-entry.mjs`（每次启动现生成 minisign 密钥并签一份 99.0.0 发布）。`mock-release-server.mjs` 只加监听地址可配。开发密钥首次 `up` 时随机生成到已忽略的 `.data/dev.env`。
+
+**实测**：`node --test tools/dev-stack/*.test.mjs` 18 条（并进 `pnpm release:test`）；本机 OrbStack 真起全栈，11 个默认服务与两个可选服务健康检查通过，手动验证 dex / Keycloak 授权码 + PKCE、Gitea 登录、step-ca `roots.pem`、push-sink h2c；`pnpm libs:build && pnpm -r --if-present test` 全绿，`pnpm check` 通过。
+
+**没做 / 限制**：pebble 默认不回连验证挑战；dex 的 issuer 用宿主机地址，容器间按服务名互访时对不上；`armadra-server` 是占位 `Dockerfile.dev`（等 G3-5），构建上下文改为仓库根；首次 `up` 要几分钟构建；CI 里起全栈属 G0-4。
 
 ## G0-8 密钥后端按平台补齐（W-SECRETS）
 
-未开始。
+> 本节由 G4-1 按 PR #25 的正文补记（该包合入早于进度载体启用）。
+
+**做了什么**
+
+- `core/secrets/`：`SecretBackend { kind, get, set, delete }`；实现 `keychain`（macOS `security(1)`）、`dpapi` / `libsecret`（壳封存的信封）、`file-encrypted`（master key AES-256-GCM，支持轮换与中断恢复）、`file`（0600 明文）。挑法按 `ARMADRA_SECRET_BACKEND` → 服务器壳注入 → 桌面壳 `ipc:<kind>` → macOS 钥匙串 → 文件；壳要求 `safeStorage` 而通道不在时拒绝、不降级。
+- 桌面壳 `main/secrets.ts` 经 fork 的 IPC 封 / 解（Windows `dpapi`；Linux 只在 libsecret / kwallet 时 `libsecret`，`basic_text` / `unknown` 退回 `file`）；服务器壳 `<数据目录>/secrets/master.key`。
+- 名字统一 `armadra-*`（Copilot、GitHub），旧条目第一次读写时一次性迁移，记在 `secrets/migrated.json`；设置页 Copilot 一行按种类说存在哪儿。
+
+**实测**：`core/secrets/secrets.test.ts`（四种后端、名字校验、信封跨后端、master key 生成 / 篡改 / 轮换、IPC 往返 / 超时 / 断开、迁移；`runIf(win32)` 用真 DPAPI）、`main/secrets.test.ts`、`server/secrets.test.ts`、`github/credentials.test.ts`、`usage/routes.test.ts`、`AccountPage.test.tsx`；测试默认 `ARMADRA_SECRET_BACKEND=file`，不碰真钥匙串；`pnpm libs:build && pnpm -r --if-present test` 全绿，web typecheck 与 `pnpm check` 通过。
+
+**没做 / 限制**：`safeStorage` 本身跑不进 vitest，libsecret 没有 CI 行能跑真钥匙环；GitHub 线上枚举仍是两档，契约未改；`rotateMasterKey` 未接 CLI；被别的壳接管的 core 在桌面壳退出后读不到 `dpapi` / `libsecret` 条目。
 
 <!-- G1 各域 core 与第一部分遗留 -->
 
@@ -746,7 +829,56 @@
 
 ## G4-1 文档收口
 
-未开始。
+**做了什么**
+
+- [架构](../guides/architecture.md)：§2 的 core 方框加新域与 runners，附「补全新增的域」表（目录、职责、契约节）；§4 补自动化运行工作流与协调者 runners；§5 把实时板与评论写进持久化、加 0030–0035 迁移表；§7 补身份加固与角色阶梯；§8 按各包的「没做」重写。
+- [Agent 协作](../guides/agent-collaboration.md)：ama 一行；「没有主动投递」一节已与代码不符（`send` 与投递队列在用），改写为「推式投递与打断」；新增「ACP 模式（会话视图）」与「协调者与 runners」两节；会话索引一句改为六家。
+- [客户端平台](../guides/client-platforms.md)：删掉 Go Host 时代的「经 Host 访问（H02）」，换成「经 Gateway 访问」；Runtime 字样改 core。
+- [功能预期总表](feature-roadmap.md)：§2 加 ama 宿主适配器、手机壳、推送中继三行；§3.1–§3.13 逐行按本文各节更新（新增实时协同、评论、ACP、工作流、runners、Gateway、身份、推送、原生 App、签名、分发、声明、崩溃上报等行，多账号由 ⬜ 改 🔶，交接去掉「限同一执行主机」）；§4 重写为「现状 / 缺的条件 / 拿到后怎么验」。
+- [后续规划](../design/product-roadmap.md)：按包勾选，没勾的写明剩余。专项设计首行状态：ACP 会话视图、补全架构、补全执行计划、外部服务改「部分实施」并列缺口；协调 Agent、设计系统、设计展示页改「已实施」并列出入；服务器账号、画布启动器、CLI 协作补记已补上的部分。
+- README 能力一览、支持的 Agent、设计图与路线图按现状改写，项目结构加 `apps/mobile`、`apps/push-relay`；[文档索引](../README.md)的描述与契约节清单校对。
+
+**实测**：`pnpm check` 通过（格式、类型、仓库规则含文档登记与相对链接）。文中每条「已实施 / 没做」按本文各包一节与源码核对（如 `use-update-state.ts` 仍报 `noReleaseSource`、`policy.ts::checkBreach` 仍恒 `skipped`、开放注册仍 501）。
+
+**没做**
+
+- G0-1 至 G0-8 各节由本包按各自 PR 正文补记（经协调者授权；这些包合入早于进度载体启用）。
+- G3-2、G3-7、G3-8 在本节写作中陆续合入，各文档已按它们的节更新。
+
+### 需用户提供（汇总，按优先级）
+
+每一项都有 mock 路径（多数对着 `tools/dev-stack/`），实施不等它；括号里是来源包与[执行计划](../design/completion-plan.md) §5 的编号。
+
+**P0：能发出可安装的正式版**
+
+- [ ] Apple Developer Program 会员与 **Developer ID Application（G2 链）** 证书（`.p12`）→ secrets `APPLE_CERTIFICATE_P12_BASE64`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_TEAM_ID`（可选 `APPLE_SIGNING_IDENTITY`）。解锁：macOS 签名与公证、`update-e2e --install` 的「安装 → 重启 → 版本号变」、Homebrew cask（要求签名且公证）；同一账号也是 iOS 分发与 APNs 的前提。（G3-3、G3-1；U8）
+- [ ] App Store Connect API key（Developer 角色）→ `APPLE_API_KEY_P8_BASE64`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER_ID`（Apple ID 回退可选）。解锁：公证、TestFlight 上传。（G3-3；U8）
+- [ ] minisign 发布密钥：`node tools/release/sign.mjs keygen` → secret `ARMADRA_RELEASE_SIGNING_KEY`，公钥提交进仓库。解锁：`latest.json` / `SHA256SUMS` 签名，桌面更新器对真实发布源检查。（G1-15、G3-3；U8）
+
+**P1：三平台与真实环境验收**
+
+- [ ] Windows 代码签名三选一（Azure Artifact Signing / OV 证书文件 / 自托管 runner + USB 令牌）与变量 `ARMADRA_WIN_PUBLISHER_NAME`。解锁：签名安装包、`Get-AuthenticodeSignature` 为 `Valid`、Windows 自动更新安装。（G3-3；U13）
+- [ ] 一台 Windows 10 / 11 机器。解锁：按开发指南「Windows 真机验收」跑 `windows-acceptance.mjs --installer`（有 Codex 加 `--with-codex`）并回传 `result.json`；节点凭据 T9。（G3-2、G1-1；U5）
+- [ ] GPG 签名专用密钥 → `ARMADRA_LINUX_GPG_KEY`、`ARMADRA_LINUX_GPG_PASSPHRASE`；首个签名发布后把 `armadra-linux.gpg` 提交到 `apps/web/public/`。解锁：Linux `.asc` 与 rpm 签名。（G3-3）
+- [ ] 稳定域名与一台公网可达主机（或反向代理）。解锁：passkey 的 RP ID 与真手机注册登录、手机网页不装 CA 直接访问、Let's Encrypt 生产签发（[服务器部署](../guides/server-deployment.md)第 3 节）、OAuth 回调地址、通用链接、商店审核演示服务器、对公网部署跑 `server-e2e` 与性能探针。（G1-10、G1-11、G1-12、G3-5、G3-1、G3-6；U6、U11）
+- [ ] 测试账号：两个 Claude 订阅（一个 `/login`、一个 `setup-token`）、两个带 Copilot 的 GitHub 账号与 B 的细粒度 PAT；Codex / Pi / OMP / OpenCode 的 API key。解锁：CLI 协作 §7.4 的 T1–T8，通过一项就打开 `CREDENTIAL_KINDS` 里对应种类；能在隔离 HOME 下登录的 Claude 凭据还解锁打包版冒烟带真 Claude。（G1-1；U1）
+- [ ] 装好并登录 OpenCode / OMP / Copilot 的机器，以及 `npm i -g @agentclientprotocol/claude-agent-acp @agentclientprotocol/codex-acp pi-acp`。解锁：按 `tools/probes/README.md`「C 档运行手册」跑 `ARMADRA_E2E_REAL=1 agent-e2e --only 10,12 --record-compat`、画面门里 `verified: false` 的特征翻真、`compatibility.json` 记实跑版本、Copilot 在 `--acp` 下的权限旗标核实。（G1-3、G1-4、G2-1、G3-7；U2、U3）
+- [ ] ama 的真模型供应商 key（`ARMADRA_E2E_AMA_PROVIDER` / `_MODEL` / `_KEY`）。解锁：场景 11 `--real-model`（真模型分派与 ama → ama）。（G3-7）
+
+**P2：手机、分发与远端**
+
+- [ ] iOS：App ID `dev.armadra.mobile` 与 `….NotificationService`（Push、Keychain Sharing）、分发证书与两份 provisioning profile → `IOS_DISTRIBUTION_P12_BASE64`、`IOS_DISTRIBUTION_PASSWORD`、`IOS_PROVISIONING_PROFILE_BASE64`；APNs `.p8` + Key ID。解锁：真机安装、TestFlight、真 APNs 推送与 NSE 解密。（G3-1、G1-13；U8）
+- [ ] Android：Play 开发者账号、上传密钥（`ANDROID_UPLOAD_KEYSTORE*`）、Play 服务账号；Firebase 项目的 `google-services.json` 与服务账号 JSON。解锁：签名 APK / AAB、Play 封闭测试、真 FCM 推送。（G3-1、G1-13；U9）
+- [ ] 一台公网主机运行 `apps/push-relay`（商店版推送；是否运营由发布方定）。解锁：`push.transport = "relay"` 与商店版 App 的端到端加密推送。（G1-13、G3-1；U10）
+- [ ] 商店审核材料：演示服务器与审核账号、隐私说明、出口合规问卷。（G3-1）
+- [ ] tap / bucket 仓库、winget-pkgs fork 与细粒度 PAT（`HOMEBREW_TAP_TOKEN`、`SCOOP_BUCKET_TOKEN`、`WINGET_TOKEN`）。解锁：`distribute.yml` 在 Release 转正后真推。（G3-9；U12）
+- [ ] 一台真实 sshd 主机（注册为执行主机）。解锁：`remote-e2e.mjs --real <host>`：传输、主机密钥、askpass、跨主机交接经远端采集。（G1-2；U4）
+
+**P3：可选**
+
+- [ ] OAuth 应用：GitHub OAuth App（回调 `<公网来源>/api/identity/oauth/github/callback`，scope `read:user user:email`）与一个 OIDC 提供方（Google / Entra / Keycloak）的 client id / secret；开放 SSO 建号时填 `allowedDomains`。解锁：真提供方上的绑定、登录与建号。依赖上面的域名。（G1-12；U7）
+- [ ] GlitchTip 实例的 DSN。解锁：可选崩溃上报的真实收件。（G3-10；U13）
+- [ ] 之后的包才用到：SMTP 账号（W-MAIL）、域名 + Cloudflare R2（W-MIRROR 更新镜像）。
 
 ## G4-2 启动兼容退役
 
