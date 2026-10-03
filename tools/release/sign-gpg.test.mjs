@@ -92,10 +92,17 @@ test("fingerprints are read from a --with-colons listing", () => {
  * The real thing, with a throwaway key. Runs wherever gpg is installed (the
  * ubuntu CI rows have it); the rpm half also needs rpmbuild and rpmsign.
  */
-const hasGpg = available("gpg");
+// Not on Windows: the gpg Git for Windows puts on PATH is an MSYS build that
+// reads `--homedir C:\…` its own way, and the release signs on ubuntu anyway.
+const skipReason =
+  process.platform === "win32"
+    ? "Linux packages are signed on ubuntu"
+    : available("gpg")
+      ? false
+      : "gpg is not installed";
 test(
   "a throwaway key signs, verifies, and catches a changed package",
-  { skip: hasGpg ? false : "gpg is not installed" },
+  { skip: skipReason },
   () => {
     const root = scratch();
     try {
