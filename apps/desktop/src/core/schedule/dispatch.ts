@@ -43,6 +43,7 @@ import {
   agentLauncher,
   launchLine,
   rememberSession,
+  stampColdStartCreator,
 } from "./cold-start";
 import { ScheduleError, agentTarget, big, num } from "./plan";
 import { COMMAND_SESSION_READY, ScheduleStore } from "./store";
@@ -285,6 +286,7 @@ export class TerminalDispatcher implements Dispatcher {
       return offline;
     }
     this.coldStarts.note(node.id, started.sessionId, nowMs);
+    stampColdStartCreator(this.context.database, started.sessionId);
     rememberSession(
       this.context.database,
       node,

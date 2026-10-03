@@ -5,6 +5,7 @@ import type { AgentSettings } from "../agent/registry";
 import { loadBoard, saveBoard } from "../canvas/documents";
 import type { NodeRef } from "../collab/nodes";
 import type { WorkspaceEvent } from "../bus";
+import { AUTOMATION_CREATOR, stampSessionCreator } from "../identity/creators";
 import { DomainError } from "../workspaces/support";
 import type { AgentLaunchSpec } from "./types";
 
@@ -114,6 +115,23 @@ export class ColdStarts {
     return last !== undefined && last.sessionId === sessionId
       ? last.atMs
       : undefined;
+  }
+}
+
+/**
+ * 冷启动起的会话的创建者 = 自动化的创建者（补全架构 §8.2「创建者 = 触发者」，
+ * 契约 §23）。节点上记着的触发者（比如一个 operator 的协调者建了它）不算：
+ * 这一次是自动化触发的，不是那个人。起完之后显式改写，压过库里按节点继承的
+ * 那一笔。写不下来就算了——会话照样起，只是按节点的触发者判。
+ */
+export function stampColdStartCreator(
+  database: DatabaseSync,
+  sessionId: string,
+): void {
+  try {
+    stampSessionCreator(database, sessionId, AUTOMATION_CREATOR);
+  } catch {
+    // 没有终端表的装配（单测里的假库）：没有可改的行。
   }
 }
 
