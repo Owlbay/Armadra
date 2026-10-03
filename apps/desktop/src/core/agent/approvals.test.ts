@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { rfc3339 } from "../workspaces/support";
 import {
+  acpOptionFor,
+  acpOptionsOf,
   ORPHAN_MINUTES,
   answerApproval,
   answerKeys,
@@ -242,5 +244,31 @@ describe("the safety gate the terminal domain asks about", () => {
       setState(state);
       expect(isAwaitingHuman(fixture.database, nodeId)).toBe(false);
     }
+  });
+});
+
+describe("ACP approvals (contract §14.4)", () => {
+  const options = [
+    { optionId: "a1", kind: "allow_once" },
+    { optionId: "a2", kind: "allow_always" },
+    { optionId: "r1", kind: "reject_once" },
+  ];
+
+  it("reads the options of an ACP request only", () => {
+    expect(acpOptionsOf({ protocol: "acp", options })).toHaveLength(3);
+    expect(acpOptionsOf({ tool_name: "Bash" })).toBeUndefined();
+    expect(acpOptionsOf(null)).toBeUndefined();
+  });
+
+  it("takes the chosen option when it agrees with the decision, else the first of its kind", () => {
+    expect(acpOptionFor(options, "allow", "a2")?.optionId).toBe("a2");
+    expect(acpOptionFor(options, "deny", "r1")?.optionId).toBe("r1");
+    // 头部的允许 / 拒绝：第一个同类选项。
+    expect(acpOptionFor(options, "allow", undefined)?.optionId).toBe("a1");
+    expect(acpOptionFor(options, "deny", undefined)?.optionId).toBe("r1");
+    // 选项与决定不符、或者不是 Agent 给的：没有可送达的选项。
+    expect(acpOptionFor(options, "allow", "r1")).toBeUndefined();
+    expect(acpOptionFor(options, "deny", "nope")).toBeUndefined();
+    expect(acpOptionFor([options[0]!], "deny", undefined)).toBeUndefined();
   });
 });
