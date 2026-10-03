@@ -144,6 +144,10 @@ export interface ArmadraDesktopApi {
       workspaceIds: readonly string[];
     }): Promise<BrowserClearDataResult>;
   };
+  /** The tray's external-access item re-reads the gateway after the page changed it. */
+  readonly gateway: {
+    refresh(): Promise<{ ok: boolean }>;
+  };
   /**
    * The absolute path of a dropped or picked `File`. The page hands the path
    * to the Runtime, which is the process allowed to read it; the bytes never
@@ -207,6 +211,9 @@ const api: ArmadraDesktopApi = {
     onDrive: (listener) => onBrowserDrive(listener),
     clearData: (request) =>
       ipcRenderer.invoke(IPC.browserClearData.channel, request),
+  },
+  gateway: {
+    refresh: () => ipcRenderer.invoke(IPC.gatewayRefresh.channel),
   },
   pathForFile: (file) => webUtils.getPathForFile(file),
 };

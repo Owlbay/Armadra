@@ -7,7 +7,8 @@ import { Badge } from "@/ui/badge";
  *
  * 它是 shadcn `Badge` 的一层薄封装：11px / medium / 圆角 6 / 前置 6px 圆点，
  * 不再强制全大写也不加字距——文案由调用方经 i18n 给出，中文加字距会散架。
- * 颜色按 tone 从 `--status-*` token 取，所以两套主题自动跟随。
+ * 圆点与衬底按 tone 从 `--status-*` 取，文字从对应的 `-text` token 取
+ * （`STATUS_PILL_TEXT`），两套主题自动跟随。
  *
  * `pulse` 的呼吸动画在 `prefers-reduced-motion` 下会被 tokens.css 压掉，
  * 因此状态永远同时由“文字 + 颜色”表达，不靠动画传递信息。
@@ -21,7 +22,8 @@ export type StatusTone =
   | "unread"
   | "idle";
 
-const TONE_COLOR: Record<StatusTone, string> = {
+/** 图形色：圆点与衬底的色相（`--status-*`）。 */
+export const TONE_COLOR: Record<StatusTone, string> = {
   working: "var(--status-working)",
   attention: "var(--status-attention)",
   failed: "var(--status-failed)",
@@ -30,6 +32,24 @@ const TONE_COLOR: Record<StatusTone, string> = {
   unread: "var(--status-unread)",
   idle: "var(--status-idle)",
 };
+
+/**
+ * 文字色（设计系统 §2.3 三件套里的 `-text`）。图形色只保证 ≥ 3:1，拿来写字
+ * 在深色 working 上只有约 3.6，所以字一律换成对应的文字 token；idle 的
+ * `--faint` 也只是图形级，字退到 `--muted-foreground`。
+ */
+export const STATUS_PILL_TEXT: Record<StatusTone, string> = {
+  working: "--working-text",
+  attention: "--warn-text",
+  failed: "--danger-text",
+  queued: "--muted-foreground",
+  paused: "--muted-foreground",
+  unread: "--brand-text",
+  idle: "--muted-foreground",
+};
+
+/** 衬底 = 图形色按这个百分比混进透明。15% 时深色 working 字只有约 4.3。 */
+export const STATUS_PILL_TINT = 10;
 
 /**
  * 兜底文案：界面里的胶囊一律由调用方传 `t(...)` 的本地化串，
@@ -82,8 +102,8 @@ export function StatusPill({
       data-slot="status-pill"
       data-tone={tone}
       style={{
-        color,
-        backgroundColor: `color-mix(in srgb, ${color} 15%, transparent)`,
+        color: `var(${STATUS_PILL_TEXT[tone]})`,
+        backgroundColor: `color-mix(in srgb, ${color} ${STATUS_PILL_TINT}%, transparent)`,
         ...style,
       }}
       className={cn(

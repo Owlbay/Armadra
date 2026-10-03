@@ -3,6 +3,7 @@ import type { CostPoint } from "@armadra/shared";
 import { useReducedMotion } from "motion/react";
 
 import { usePreferencesStore, useT } from "../../app/preferences-store";
+import { Button } from "@/ui/button";
 import {
   HEAT_LEVELS,
   formatMetric,
@@ -91,9 +92,11 @@ export function Heatmap({
                     cell === null ? (
                       <div key={row} className={CELL} />
                     ) : (
-                      <button
+                      <Button
                         key={cell.key}
                         type="button"
+                        variant="ghost"
+                        size="icon-xs"
                         data-slot="usage-heatmap-cell"
                         data-key={cell.key}
                         data-selected={selected === cell.key}
@@ -109,7 +112,7 @@ export function Heatmap({
                             HEAT_LEVELS[heatLevel(cell.value, grid.levels)],
                           transitionDuration: duration,
                         }}
-                        className={`${CELL} cursor-pointer transition-[background-color] data-[selected=true]:ring-1 data-[selected=true]:ring-ring`}
+                        className={`${CELL} cursor-pointer border-0 p-0 transition-[background-color] data-[selected=true]:ring-1 data-[selected=true]:ring-ring`}
                       />
                     ),
                   )}

@@ -303,7 +303,29 @@
 
 ## G2-7 桌面 Gateway 设置页与配对（G1）
 
-未开始。
+做了什么：
+
+- 设置 → 后台服务与对外服务加「对外服务」区块（`panels/settings/pages/gateway/`）：开关、监听地址；「更多选项」里是端口（0 显示「自动」，开启后读回写回的端口）、公网来源、证书来源（本地 CA / 指定文件 / ACME 与各自的输入）；运行时出配对卡（二维码 200px 白底黑码、来源多于一个时可选、复制链接、新配对码、两分钟倒计时、指纹按冒号分组、下载 CA）；启动中 `Alert` + Spinner；没能开启按 `error.code` 给本地化文案，不打印 core 的原文；服务器壳托管时控件只读、配对照常；`/api/gateway` 403（成员）时整块不出现。
+- 已配对设备表（名称 · 添加时间 · 权限 Badge · 撤销，撤销中 Spinner、失败 sonner）读 `GET /api/identity/devices`，没有身份会话时不出现；与开关无关，关掉后照样列出。
+- 经 Gateway 打开的页面（HTTPS、页面与 core 同源、`HEAD /ca.crt` 答 200）在后台服务页顶上给 CA 安装引导（iOS / Android 两页步骤 + 下载），带 `#pair=` 打开时默认展开。
+- `host/qr.ts` 换成 `lean-qr@2.7.4`（MIT、无依赖；旧的自写编码器只到版本 6、装不下带票与指纹的链接），加 `pairingQrText` / `parsePairingQr`（认网页链接与 `armadra://pair?…` 两种）。
+- 桌面托盘加「对外服务」勾选项（只在 `managedBy: settings` 时出现，点一下 `PUT /api/gateway`，画 core 答回来的状态）；IPC 一条 `app:gateway-refresh`（页面改完让托盘立即重读），preload 暴露 `window.armadra.gateway.refresh()`。
+- 展示页 `gateway` 分区换成真组件样本（关闭 / 启动中 / 没能开启 / 过期 / 运行中含设备表 / 手机配对页 CA 引导）。
+- `gateway-e2e` 加「从页面开关」，并登记进 `tools/ci/e2e.json`（A 档，要 Chrome）。
+
+实测：
+
+- 本机 dev core（回环 `127.0.0.1`、临时数据目录与 HOME）+ Vite 页面：开关打开后 Gateway 只监听 `127.0.0.1`，端口写回设置；页面二维码用 Chrome 的 `BarcodeDetector` 解码与 `webUrl` 逐字相同（174 字节）；关掉后端口不再监听。
+- `gateway-e2e`：无头 Chrome 打开网页配对链接即配对成 owner，配对页出 CA 引导、对外服务开着、二维码是这个 Gateway 的链接、设备表里有这台；在页面上点开关经 Gateway 自己的 `PUT` 关掉，回环读到已关。
+- `design-showcase --only=gateway`：三种视口两种主题无控制台错误，对比度通过。
+
+没做：
+
+- 设计系统 §5.12 的 8 位配对码与手机端 `InputOTP` 输入：core 只发两分钟的票（契约 §17.3），没有短码，要 core 先加；本包只做二维码 / 链接配对与倒计时。
+- 设备表没有「平台」「最近访问」两列：`/api/identity/devices` 不给这两个字段。
+- 桌面窗口里设备表要先有身份会话（「设备登录」里检查连接后才有）；没有自动换票，免得每次打开设置都多配出一台设备。
+- 与「设备登录」区块自带的设备列表在同一页会同时出现（那块在检查连接后才有）；合并留给 G3-11。
+- 计划列的 `session/gateway.ts` 是终端会话域的网关，与 Gateway 无关，没改。
 
 ## G2-8 安全页面：会话 / 设备、MFA / passkey 管理、审计（I3）
 
@@ -319,7 +341,9 @@
 
 ## G2-11 存量界面套用一：按钮、空态、手机对话框（WP-D3a）
 
-未开始。
+- 做了什么：本包文件集合里的手写 `<button>` 全部换成 `Button` / `Toggle`（`SettingsRow` 标签钮、三个节点徽标、手机底部导航、工具簇用量环、用量图例与热力格、Git 的 Reflog / 储藏 / 提交日志 / 分支树 / 提交详情），一文件一提交；文件树、资源抽屉、项目搜索、Agent 查看对话框的加载 / 错误 / 空态换 `Skeleton` / `Alert` / `Empty`（文案键不变，加载文字留给读屏）；新建 `panels/ResponsiveDialog.tsx`（≤767 换 `Sheet side=bottom`：顶部圆角 14、拖柄、最高 `100dvh-48px`、让出安全区），克隆仓库、新建文件夹 / 文件、Agent 查看、Git 储藏与日志菜单、工作树对话框接上；`TabsContent` 焦点环由调用方加 `panels/tabs-focus.ts` 的 `TABS_CONTENT_FOCUS`（生成文件不改）；状态胶囊的字改用 `-text` token、衬底 15% → 10%；展示页 `components` 补 TabsContent、ResponsiveDialog / AlertDialog / Sheet、Popover / HoverCard / BrandMark、ScrollArea，`states` 补列表与树里的行内形态。
+- 实测：守卫 `panels/no-raw-button.test.ts`（名单文件与 `panels/usage`、`panels/git`、`sidebar` 目录无 `<button`）；`ResponsiveDialog.test`（桌面 Dialog / 手机底部 Sheet / Esc）；`ui/status-pill-contrast.test.ts` 逐 tone 逐主题算三档阅读表面，深色 working 字在卡片衬底上约 4.6（原来拿图形色写字约 3.6，把衬底改回 15% 时该用例失败）；改动文件的既有用例未改断言。展示页探针 `components,states,mobile` 前后对照：控制台无 error，`components` Tab 可达 80/80 且都有焦点环（新增的 TabsContent 也有），对比度两主题全过。
+- 没做：`command` 样本没放进展示页（`CommandInput` 外层 `InputGroup` 的 `shadow-none!` 压掉了焦点环，生成文件不改，归 G3-11）；`resizable`、`chart`、`sonner`、`context-menu` 的样本未补；`QuickOpen` 与 `SidebarSearch` 用的是 `CommandEmpty`，保持不变；`NodeNameBadge`、`WebviewTabs`、`MobileFocusPage`、`SettingsDialog`、`IntegrationPage`、`references` / `resources` / `problems` / `github` 面板与 `HandoffBadge`、`LanguageStatus` 里的手写按钮不在本包文件集合，留给 G3-11；计划写的 `patterns` 分区不存在，样本补在 `states` 分区。
 
 <!-- G3 平台线 -->
 

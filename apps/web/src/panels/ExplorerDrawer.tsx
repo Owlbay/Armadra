@@ -18,6 +18,7 @@ import { SheetTitle } from "../ui/sheet";
 import { PINNED_PANEL_WIDTH, WorkPanelSheet } from "./WorkPanelSheet";
 import { IconButton } from "../ui/icon-button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
+import { TABS_CONTENT_FOCUS } from "./tabs-focus";
 import { ExecutionHostBadge } from "./ExecutionHostBadge";
 import { FileTree } from "./FileTree";
 import { ProjectSearchPanel } from "./ProjectSearchPanel";
@@ -79,12 +80,18 @@ export function ExplorerDrawer() {
           {t("projectSearch.tab.search")}
         </TabsTrigger>
       </TabsList>
-      <TabsContent value="files" className="min-h-0 flex-1">
+      <TabsContent
+        value="files"
+        className={`min-h-0 flex-1 ${TABS_CONTENT_FOCUS}`}
+      >
         <ScrollArea className="h-full">
           <FileTree />
         </ScrollArea>
       </TabsContent>
-      <TabsContent value="search" className="min-h-0 flex-1">
+      <TabsContent
+        value="search"
+        className={`min-h-0 flex-1 ${TABS_CONTENT_FOCUS}`}
+      >
         <ScrollArea className="h-full">
           <ProjectSearchPanel autoFocusToken={focusToken} />
         </ScrollArea>

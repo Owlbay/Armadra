@@ -6,13 +6,13 @@ import { useT } from "../../../../app/preferences-store";
 import { Button } from "../../../../ui/button";
 import { Input } from "../../../../ui/input";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../../../../ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "../../../ResponsiveDialog";
 import { Check, Field, ReadError, selectClass } from "../../forms";
 import { createWorktreeAction, localBranch } from "../../worktree";
 import {
@@ -95,21 +95,23 @@ export function WorktreeCreateDialog({
   };
 
   return (
-    <Dialog
+    <ResponsiveDialog
       open={repositoryPath !== null}
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
     >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t("gitRepo.createWorktree")}</DialogTitle>
+      <ResponsiveDialogContent>
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {t("gitRepo.createWorktree")}
+          </ResponsiveDialogTitle>
           {repositoryPath && (
-            <DialogDescription className="break-all font-mono">
+            <ResponsiveDialogDescription className="break-all font-mono">
               {repositoryPath}
-            </DialogDescription>
+            </ResponsiveDialogDescription>
           )}
-        </DialogHeader>
+        </ResponsiveDialogHeader>
         <form
           className="min-w-0 space-y-2"
           onSubmit={(event) => {
@@ -194,13 +196,13 @@ export function WorktreeCreateDialog({
           <p className="text-xs text-muted-foreground">
             {t("gitRepo.worktreeSafety")}
           </p>
-          <DialogFooter>
+          <ResponsiveDialogFooter>
             <Button type="submit" disabled={busy || !ready}>
               {t("gitRepo.createWorktree")}
             </Button>
-          </DialogFooter>
+          </ResponsiveDialogFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
