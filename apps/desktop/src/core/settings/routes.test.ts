@@ -93,6 +93,8 @@ describe("GET /api/settings", () => {
       "agents.probes",
       "language.probes",
       "language.servers",
+      "push.apns.keyFile",
+      "push.fcm.serviceAccountFile",
     ]);
   });
 });
