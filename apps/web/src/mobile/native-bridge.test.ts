@@ -9,8 +9,9 @@ import {
   WS_TICKET_PROTOCOL,
 } from "./native-bridge";
 
-const SECRET = "a".repeat(43);
-const OTHER = "b".repeat(43);
+// core 发的会话密钥是 `<32 位十六进制>.<43 位 base64url>`（`identity/tokens.ts`）。
+const SECRET = `${"0".repeat(32)}.${"a".repeat(43)}`;
+const OTHER = `${"1".repeat(32)}.${"b".repeat(43)}`;
 const FP = "0".repeat(64);
 const ORIGIN = "https://192.168.1.8:8443";
 
@@ -73,6 +74,15 @@ describe("原生插件", () => {
     });
     plugin.getSession.mockResolvedValueOnce({
       session: { origin: ORIGIN, accessToken: "short", refreshToken: OTHER },
+    });
+    await expect(bridge.loadSession()).resolves.toBeNull();
+    // 只有密钥半段、没有标识的不算会话密钥。
+    plugin.getSession.mockResolvedValueOnce({
+      session: {
+        origin: ORIGIN,
+        accessToken: "a".repeat(43),
+        refreshToken: OTHER,
+      },
     });
     await expect(bridge.loadSession()).resolves.toBeNull();
     plugin.getSession.mockRejectedValueOnce(new Error("locked"));
