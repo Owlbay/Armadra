@@ -19,6 +19,10 @@ import {
 import { AccountsService } from "../../desktop/src/core/identity/accounts";
 import { IdentityStore } from "../../desktop/src/core/identity/store";
 import { allScopes } from "../../desktop/src/core/identity/scopes";
+import {
+  type ServerDiagnostics,
+  installServerDiagnostics,
+} from "./diagnostics";
 import { serverPlatform } from "./platform-node";
 import { serverSecrets } from "./secrets";
 
@@ -142,6 +146,7 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
   };
   const stdout =
     options.stdout ?? ((line: string) => process.stdout.write(line));
+  let diagnostics: ServerDiagnostics | undefined;
   const core = await run({
     // core 自己的监听留在回环：对外这一侧由 Gateway 的 TLS 服务负责。
     argv: [
@@ -155,14 +160,25 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
     ...(options.moduleDir === undefined
       ? {}
       : { moduleDir: options.moduleDir }),
-    platform: (base) => ({
-      ...serverPlatform(base),
-      secrets: serverSecrets(base.dataDir, env),
-    }),
+    platform: (base) => {
+      // 可选崩溃上报（外部服务 §11.2）：没配 DSN 时只写本地日志。
+      diagnostics = installServerDiagnostics({
+        dataDir: base.dataDir,
+        env,
+        release: base.appVersion,
+        log: base.log,
+      });
+      return {
+        ...serverPlatform(base),
+        secrets: serverSecrets(base.dataDir, env),
+        reportError: diagnostics.reportError,
+      };
+    },
   });
   const log = core.platform.log;
   if (!core.db.unified) {
     await core.stop();
+    await diagnostics?.stop();
     throw new Error(
       "这个数据目录还没过统一库迁移，服务器壳没有身份表可用；先用桌面壳跑一次 ARMADRA_CORE=ts",
     );
@@ -202,6 +218,7 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
   } catch (error) {
     await acme?.close();
     await core.stop();
+    await diagnostics?.stop();
     throw error;
   }
   // 续期成功后热换证书，已有连接不断。
@@ -280,6 +297,7 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
       await gateway.close();
       await acme?.close();
       await core.stop();
+      await diagnostics?.stop();
     },
   };
 }
