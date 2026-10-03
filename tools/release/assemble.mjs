@@ -7,7 +7,9 @@
  *
  * In order: check that every file is one the updater can place, sign every
  * artifact, write latest.json from the signatures that produced, write
- * SHA256SUMS, then verify what was just produced. The last step matters most —
+ * SHA256SUMS, then verify what was just produced — including that each
+ * target's electron-updater feed (`latest-<target>….yml`) names a published
+ * bundle by the same bytes `SHA256SUMS` lists. The last step matters most —
  * it is the only one that can catch a release that each individual step was
  * happy with.
  *
@@ -24,15 +26,27 @@
  * note says so: a release that looks signed and is not is worse than one that
  * admits it.
  */
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { TARGETS, assetComponent, assetTarget } from "./artifacts.mjs";
-import { verifyChecksums, writeChecksums } from "./checksums.mjs";
+import {
+  TARGETS,
+  assetComponent,
+  assetTarget,
+  desktopAssets,
+  updaterFeedFile,
+} from "./artifacts.mjs";
+import {
+  parseChecksums,
+  verifyChecksums,
+  writeChecksums,
+} from "./checksums.mjs";
 import { readCompatibility, releaseNote } from "./compatibility.mjs";
 import { keyFromSecret, publicKeyFile } from "./minisign.mjs";
 import { SECRET_ENV, signDirectory, verifyDirectory } from "./sign.mjs";
 import { writeManifest } from "./updater-manifest.mjs";
+import { normalizeSha512, parseFeed, sha512Base64 } from "./stage-desktop.mjs";
 
 /** Every file must be one the updater can place, or it can never be offered. */
 export function checkNames(directory) {
@@ -49,9 +63,82 @@ export function checkNames(directory) {
       problems.push(`${name} declares no component the updater can read`);
       continue;
     }
-    if (component === "web") continue;
+    if (component === "web" || component === "manifest") continue;
     if (assetTarget(name) === "")
       problems.push(`${name} declares no target the updater can read`);
+  }
+  return problems;
+}
+
+/**
+ * electron-updater 的清单与发布的字节是否是同一回事（外部服务 §3.2 第 2 条）。
+ *
+ * 对每个发布了更新包的目标：清单必须在（否则 electron-updater 的下载一步是 404），
+ * 版本对，`files[].url` 是本目录里真有的文件，清单的 sha512 是这份字节的 sha512，
+ * `SHA256SUMS` 给这个文件记的 sha256 也是这份字节的——两份清单说的是同一个文件；
+ * latest.json 的 `feed.sha256` 是这份 yml 的。返回问题列表，不抛。
+ */
+export function verifyFeeds({ directory, version, manifest }) {
+  const problems = [];
+  let sums = new Map();
+  try {
+    sums = parseChecksums(readFileSync(join(directory, "SHA256SUMS"), "utf8"));
+  } catch (error) {
+    problems.push(`SHA256SUMS cannot be read: ${error.message}`);
+  }
+  for (const target of TARGETS) {
+    const updater = desktopAssets(version, target).find((a) => a.updater);
+    if (!existsSync(join(directory, updater.name))) continue;
+    const feedName = updaterFeedFile(target);
+    const feedPath = join(directory, feedName);
+    if (!existsSync(feedPath)) {
+      problems.push(
+        `${feedName} is missing: electron-updater cannot download ${updater.name}`,
+      );
+      continue;
+    }
+    const feedBytes = readFileSync(feedPath);
+    let feed;
+    try {
+      feed = parseFeed(feedBytes.toString("utf8"));
+    } catch (error) {
+      problems.push(`${feedName} is malformed: ${error.message}`);
+      continue;
+    }
+    if (feed.version !== version)
+      problems.push(
+        `${feedName} names version ${feed.version}, not ${version}`,
+      );
+    if (feed.files.length === 0) problems.push(`${feedName} lists no file`);
+    if (feed.files.length > 0 && feed.path !== feed.files[0].url)
+      problems.push(`${feedName} path is not its first file`);
+    for (const file of feed.files) {
+      const path = join(directory, String(file.url ?? ""));
+      if (!file.url || file.url.includes("/") || !existsSync(path)) {
+        problems.push(`${feedName} names ${file.url}, which is not published`);
+        continue;
+      }
+      const bytes = readFileSync(path);
+      if (normalizeSha512(file.sha512) !== sha512Base64(bytes))
+        problems.push(`${feedName} sha512 for ${file.url} is not its bytes`);
+      if (!/^[A-Za-z0-9+/]+={0,2}$/.test(String(file.sha512)))
+        problems.push(`${feedName} sha512 for ${file.url} is not base64`);
+      if (Number(file.size) !== bytes.length)
+        problems.push(`${feedName} size for ${file.url} is not its length`);
+      const listed = sums.get(file.url);
+      const actual = createHash("sha256").update(bytes).digest("hex");
+      if (listed !== actual)
+        problems.push(
+          `${feedName} and SHA256SUMS do not describe the same ${file.url}`,
+        );
+    }
+    const entry = manifest?.platforms?.[target];
+    if (entry) {
+      const feedDigest = createHash("sha256").update(feedBytes).digest("hex");
+      if (!entry.feed) problems.push(`latest.json ${target} names no feed`);
+      else if (entry.feed.sha256 !== feedDigest)
+        problems.push(`latest.json ${target} feed digest is not ${feedName}`);
+    }
   }
   return problems;
 }
@@ -69,6 +156,7 @@ export async function assemble({
   unnotarized = [],
   notes = "",
   secret = process.env[SECRET_ENV],
+  rollout,
 }) {
   const problems = checkNames(directory);
   const download = (name) =>
@@ -85,6 +173,7 @@ export async function assemble({
     notes,
     targets: TARGETS,
     downloadUrl: download,
+    rollout,
   });
   // A build without ARMADRA_RELEASE_SIGNING_KEY signs nothing, and that is a
   // release that admits it cannot update itself, not a broken one: every
@@ -119,6 +208,7 @@ export async function assemble({
     problems.push(...signatureProblems);
   }
   problems.push(...(await verifyChecksums(directory)));
+  problems.push(...verifyFeeds({ directory, version, manifest }));
 
   const compatibility = readCompatibility();
   const unsigned = secret ? [] : ["component packages (no signing key)"];
@@ -152,7 +242,7 @@ async function main(argv) {
   const tag = flag(argv, "tag") || `v${version}`;
   if (!directory || !version || !repo) {
     console.error(
-      "usage: node tools/release/assemble.mjs --dir <dir> --version X.Y.Z --repo owner/name [--tag vX.Y.Z] [--unnotarized a,b] [--note file]",
+      "usage: node tools/release/assemble.mjs --dir <dir> --version X.Y.Z --repo owner/name [--tag vX.Y.Z] [--unnotarized a,b] [--note file] [--rollout <percent>]",
     );
     return 2;
   }
@@ -167,6 +257,9 @@ async function main(argv) {
       .map((value) => value.trim())
       .filter(Boolean),
     notes: notesFile ? readFileSync(notesFile, "utf8") : `Armadra ${version}.`,
+    rollout: flag(argv, "rollout")
+      ? { percent: Number(flag(argv, "rollout")) }
+      : undefined,
   });
   const notePath = flag(argv, "note");
   if (notePath) writeFileSync(notePath, result.note);

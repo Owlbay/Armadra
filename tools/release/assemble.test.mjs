@@ -9,7 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { TARGETS } from "./artifacts.mjs";
+import { TARGETS, updaterFeedFile } from "./artifacts.mjs";
 import {
   parseChecksums,
   sha256,
@@ -21,16 +21,17 @@ import { signDirectory, signableFiles, verifyDirectory } from "./sign.mjs";
 import { startMockReleaseServer } from "./mock-release-server.mjs";
 import {
   buildManifest,
+  normalizeRollout,
   platformKey,
   writeManifest,
 } from "./updater-manifest.mjs";
-import { auditRelease, stageAssets } from "./dry-run.mjs";
+import { auditRelease, stageAssets, verifyServedRelease } from "./dry-run.mjs";
 import {
   extractFence,
   readCompatibility,
   releaseNote,
 } from "./compatibility.mjs";
-import { assemble } from "./assemble.mjs";
+import { assemble, verifyFeeds } from "./assemble.mjs";
 
 function scratch() {
   return mkdtempSync(join(tmpdir(), "armadra-assemble-"));
@@ -486,6 +487,244 @@ test("an unplaceable file fails assembly", async () => {
         /notes\.txt declares no component/.test(problem),
       ),
     );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+/* ------------------------- electron-updater feeds ------------------------- */
+
+test("every target publishes its own feed, and latest.json names it by digest", async () => {
+  const directory = scratch();
+  try {
+    stageAssets({ directory, version: "0.2.0" });
+    const result = await assemble({
+      directory,
+      version: "0.2.0",
+      repo: "Owlbay/Armadra",
+      tag: "v0.2.0",
+      secret: secretFromKey(generateKey()),
+    });
+    assert.deepEqual(result.problems, []);
+    const names = readdirSync(directory);
+    for (const target of TARGETS) {
+      const feed = updaterFeedFile(target);
+      assert.ok(names.includes(feed), feed);
+      assert.ok(names.includes(`${feed}.sig`), `${feed} is signed`);
+      const entry = result.manifest.platforms[target];
+      assert.equal(
+        entry.feed.url,
+        `https://github.com/Owlbay/Armadra/releases/download/v0.2.0/${feed}`,
+      );
+      assert.equal(entry.feed.sha256, await sha256(join(directory, feed)));
+    }
+    const sums = parseChecksums(
+      readFileSync(join(directory, "SHA256SUMS"), "utf8"),
+    );
+    assert.ok(sums.has(updaterFeedFile("windows-aarch64")));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a feed that disagrees with SHA256SUMS about the bytes fails assembly", async () => {
+  const directory = scratch();
+  try {
+    stageAssets({ directory, version: "0.2.0" });
+    // The feed still describes the bytes the packager wrote; the bundle that
+    // will be published is a different file. SHA256SUMS is written from the
+    // bundle, so the two lists now name different bytes under one name.
+    const bundle = join(directory, "Armadra_0.2.0_linux-aarch64.AppImage");
+    writeFileSync(bundle, "replaced after staging\n");
+    const result = await assemble({
+      directory,
+      version: "0.2.0",
+      repo: "Owlbay/Armadra",
+      tag: "v0.2.0",
+      secret: secretFromKey(generateKey()),
+    });
+    assert.ok(
+      result.problems.some((problem) =>
+        /latest-linux-aarch64-linux-arm64\.yml sha512 for Armadra_0\.2\.0_linux-aarch64\.AppImage is not its bytes/.test(
+          problem,
+        ),
+      ),
+      result.problems.join("\n"),
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a missing feed is a hole electron-updater would hit as a 404", async () => {
+  const directory = scratch();
+  try {
+    stageAssets({ directory, version: "0.2.0" });
+    rmSync(join(directory, updaterFeedFile("darwin-x86_64")));
+    const result = await assemble({
+      directory,
+      version: "0.2.0",
+      repo: "Owlbay/Armadra",
+      tag: "v0.2.0",
+      secret: secretFromKey(generateKey()),
+    });
+    assert.ok(
+      result.problems.some((problem) =>
+        /latest-darwin-x86_64-mac\.yml is missing/.test(problem),
+      ),
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("verifyFeeds reads SHA256SUMS against the feed, not the feed against itself", async () => {
+  const directory = scratch();
+  try {
+    stageAssets({ directory, version: "0.2.0" });
+    await writeChecksums(directory);
+    assert.deepEqual(verifyFeeds({ directory, version: "0.2.0" }), []);
+    // Rewrite one SHA256SUMS line: the feed and the bundle still agree, the
+    // list does not.
+    const path = join(directory, "SHA256SUMS");
+    const name = "Armadra_0.2.0_windows-x86_64-setup.exe";
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replace(
+        new RegExp(`^[0-9a-f]{64}  ${name.replace(/\./g, "\\.")}$`, "m"),
+        `${"0".repeat(64)}  ${name}`,
+      ),
+    );
+    assert.deepEqual(verifyFeeds({ directory, version: "0.2.0" }), [
+      `${updaterFeedFile("windows-x86_64")} and SHA256SUMS do not describe the same ${name}`,
+    ]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a rollout is written once, with the version as its default seed", () => {
+  const directory = scratch();
+  try {
+    stageAssets({ directory, version: "0.2.0" });
+    signStaged(directory);
+    const options = {
+      directory,
+      version: "0.2.0",
+      notes: "",
+      targets: TARGETS,
+      downloadUrl: (name) => `https://example.invalid/${name}`,
+    };
+    assert.equal(buildManifest(options).manifest.rollout, undefined);
+    const { manifest } = writeManifest({
+      ...options,
+      rollout: { percent: 25 },
+    });
+    assert.deepEqual(manifest.rollout, { percent: 25, seed: "0.2.0" });
+    assert.deepEqual(Object.keys(manifest).slice(0, 5), [
+      "version",
+      "notes",
+      "pub_date",
+      "rollout",
+      "platforms",
+    ]);
+    assert.deepEqual(
+      normalizeRollout({ percent: 5, seed: "wave-2" }, "0.2.0"),
+      { percent: 5, seed: "wave-2" },
+    );
+    for (const percent of [-1, 101, 2.5, "x"])
+      assert.throws(() => normalizeRollout({ percent }, "0.2.0"), /0-100/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("the mock server answers its own ETag with 304", async () => {
+  const directory = scratch();
+  try {
+    stageAssets({ directory, version: "0.2.0" });
+    await writeChecksums(directory);
+    const server = await startMockReleaseServer({
+      releases: [{ directory, tag: "v0.2.0", body: "" }],
+    });
+    try {
+      const first = await fetch(`${server.source}/releases`);
+      const etag = first.headers.get("etag");
+      assert.equal(etag, server.etag);
+      await first.arrayBuffer();
+      const again = await fetch(`${server.source}/releases`, {
+        headers: { "if-none-match": etag },
+      });
+      assert.equal(again.status, 304);
+      const stale = await fetch(`${server.source}/releases`, {
+        headers: { "if-none-match": '"something-else"' },
+      });
+      assert.equal(stale.status, 200);
+      await stale.arrayBuffer();
+      assert.equal(server.notModified, 1);
+    } finally {
+      await server.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("the served-release check catches a corrupted bundle and a stale feed", async () => {
+  const directory = scratch();
+  try {
+    stageAssets({ directory, version: "0.2.0" });
+    const key = generateKey();
+    const probe = await startMockReleaseServer({ releases: [] });
+    const port = Number(new URL(probe.base).port);
+    await probe.close();
+    const base = `http://127.0.0.1:${port}`;
+    signDirectory({ directory, key, version: "0.2.0" });
+    writeManifest({
+      directory,
+      version: "0.2.0",
+      notes: "",
+      targets: TARGETS,
+      downloadUrl: (name) =>
+        `${base}/download/v0.2.0/${encodeURIComponent(name)}`,
+    });
+    await writeChecksums(directory);
+    signDirectory({ directory, key, version: "0.2.0", onlyMissing: true });
+    const target = "darwin-aarch64";
+    const bundle = "Armadra_0.2.0_darwin-aarch64.zip";
+    const clean = await startMockReleaseServer({
+      releases: [{ directory, tag: "v0.2.0", body: "" }],
+      port,
+    });
+    try {
+      const result = await verifyServedRelease({
+        source: clean.source,
+        publicKeyText: publicKeyFile(key),
+      });
+      assert.deepEqual(result.problems, []);
+      assert.ok(result.checked.includes("index 304 on If-None-Match"));
+    } finally {
+      await clean.close();
+    }
+    const corrupt = await startMockReleaseServer({
+      releases: [{ directory, tag: "v0.2.0", body: "" }],
+      port,
+      faults: { corrupt: bundle },
+    });
+    try {
+      const { problems } = await verifyServedRelease({
+        source: corrupt.source,
+        publicKeyText: publicKeyFile(key),
+        targets: [target],
+      });
+      assert.ok(
+        problems.includes(`${bundle} does not match the feed's sha512`),
+      );
+      assert.ok(problems.includes(`${bundle} does not match SHA256SUMS`));
+      assert.ok(problems.some((p) => p.startsWith(`${bundle} signature:`)));
+    } finally {
+      await corrupt.close();
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
