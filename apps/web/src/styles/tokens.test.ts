@@ -163,6 +163,13 @@ describe("tokens.css", () => {
     expect(light.get(alias)).toBeTruthy();
   });
 
+  // 设计系统 §7 第 11 步：旧别名删除后不许再出现，也不许有人再引用它们。
+  it.each(["--accent-text", "--accent-soft"])("旧别名 %s 已删除", (alias) => {
+    expect(dark.has(alias)).toBe(false);
+    expect(light.has(alias)).toBe(false);
+    expect(tokensCss).not.toContain(`var(${alias})`);
+  });
+
   it("没有悬空的 var() 引用", () => {
     const missing: string[] = [];
     for (const [theme, table] of [
