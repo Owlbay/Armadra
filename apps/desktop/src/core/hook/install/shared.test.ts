@@ -216,8 +216,8 @@ describe("the bundled ama", () => {
 
   it("gets a launcher beside armadra-hook's, named ama", () => {
     const root = tempDir("armadra-ama-launcher-");
-    const bundle = join(root, "ama.cjs");
-    writeFileSync(bundle, "", "utf8");
+    // A POSIX launcher is written whatever this machine is; the path is text.
+    const bundle = "/res/agent/ama.cjs";
     const written = agentLauncherBinary({
       dataDir: root,
       bundle,
