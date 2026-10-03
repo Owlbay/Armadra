@@ -85,6 +85,8 @@ export const updates: MessageModule = {
       "本应用启动的后台服务没有停止，因此没有开始安装。",
     "updates.shellReason.installFailed": "安装失败，当前版本没有被替换。",
     "updates.shellReason.updaterUnavailable": "此构建的更新器不可用。",
+    "updates.shellReason.notSigned":
+      "更新已下载并通过校验，但当前安装未签名，不会安装。请从发布页手动安装。",
     "updates.release": "新版本",
     "updates.signature": "签名",
     "updates.signature.present": "发布包附带签名，由安装程序验证",
@@ -202,6 +204,8 @@ export const updates: MessageModule = {
       "The install failed; the running version was not replaced.",
     "updates.shellReason.updaterUnavailable":
       "This build's updater is unusable.",
+    "updates.shellReason.notSigned":
+      "The update was downloaded and verified, but this installation is unsigned, so it is not installed. Install it from the release page.",
     "updates.release": "New release",
     "updates.signature": "Signature",
     "updates.signature.present":

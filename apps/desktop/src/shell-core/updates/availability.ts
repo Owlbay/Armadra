@@ -23,7 +23,7 @@
  * the same variable.
  */
 
-import type { MissingUpdaterConfig, UpdateState } from "./machine";
+import type { MissingUpdaterConfig, Reason, UpdateState } from "./machine";
 
 /**
  * Whether this package carries a platform signature that makes an update
@@ -34,8 +34,10 @@ import type { MissingUpdaterConfig, UpdateState } from "./machine";
  * Host published — both of which are checked whether or not anything is
  * signed.
  *
- * `unknown` is refused rather than assumed. Windows is `unknown` until W2.3
- * wires Authenticode. Armadra requires this order:
+ * `unknown` is refused rather than assumed. Windows reads Authenticode
+ * (`Get-AuthenticodeSignature`): `Valid` is `signed`, `NotSigned` is
+ * `unsigned`, and anything else — a self-signed rehearsal certificate
+ * included — is `unknown`. Armadra requires this order:
  * **sign first, then turn on automatic updates**, because an unsigned
  * automatic update is a step backwards in trust.
  */
@@ -96,6 +98,26 @@ export function missingUpdaterConfig(
   };
 }
 
+/** Whether an installer may be handed bytes on this installation's say-so. */
+export function installable(signature: SignatureState): boolean {
+  return signature === "signed" || signature === "notApplicable";
+}
+
+/**
+ * Why a staged update must not be installed here, or `null` when it may be.
+ *
+ * `ARMADRA_UPDATES_DEV=1` lets an unsigned package check, download, verify and
+ * stage — that is how the whole path is walked without a certificate — but it
+ * never lets one *install*: an installer started by a build that cannot be
+ * checked against is exactly the unsigned automatic update the order above
+ * rules out. A development (unpackaged) build is not judged here; it has no
+ * package to replace, and electron-updater refuses on its own.
+ */
+export function installRefusal(environment: UpdaterEnvironment): Reason | null {
+  if (!environment.packaged) return null;
+  return installable(environment.signature) ? null : "notSigned";
+}
+
 /** Whether anything about this build could make an update trustworthy. */
 function trustworthy(environment: UpdaterEnvironment): boolean {
   // The escape hatch does not relax this: it lets a development build talk to
@@ -105,10 +127,7 @@ function trustworthy(environment: UpdaterEnvironment): boolean {
   // in the sense that the operator asked for exactly this.
   if (environment.developmentOverride) return true;
   if (!environment.packaged) return false;
-  return (
-    environment.signature === "signed" ||
-    environment.signature === "notApplicable"
-  );
+  return installable(environment.signature);
 }
 
 /** Whether the local-package marker turns the updater off. */
