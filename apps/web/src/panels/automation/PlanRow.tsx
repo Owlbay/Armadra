@@ -14,6 +14,7 @@ import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { useQuery } from "@tanstack/react-query";
 import { useT } from "@/app/preferences-store";
+import { useAccess } from "@/app/use-access";
 import { workflowsApi } from "@/workflow/api";
 import { workflowKeys } from "@/workflow/store";
 import { digestLabel, instant, planStateKey, scheduleKind } from "./model";
@@ -66,10 +67,11 @@ export function PlanRow({
   const t = useT();
   // 工作流目标（契约 §15.6）：显示模板名，读不到就显示 id。
   const workflowRun = snapshot.plan?.config?.target?.workflowRun;
+  const member = useAccess().member;
   const templates = useQuery({
     queryKey: workflowKeys.templates(),
     queryFn: () => workflowsApi.templates(),
-    enabled: Boolean(workflowRun),
+    enabled: Boolean(workflowRun) && !member,
     retry: false,
   });
   const templateName = templates.data?.find(

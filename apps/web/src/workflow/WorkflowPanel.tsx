@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { RotateCw, X } from "lucide-react";
 
 import { useT } from "@/app/preferences-store";
+import { useAccess } from "@/app/use-access";
 import { WorkPanelSheet } from "@/panels/WorkPanelSheet";
 import { TABS_CONTENT_FOCUS } from "@/panels/tabs-focus";
 import { useCanvasStore } from "@/store/canvas-store";
@@ -29,7 +30,9 @@ export function WorkflowPanel() {
   const boardId = useCanvasStore((state) => state.boardId);
   const view = useWorkflowView();
   const client = useQueryClient();
-  const open = mode === "drawer";
+  // 成员访问工作流路由一律 403（契约 §15）：不发请求，只说没有权限。
+  const member = useAccess().member;
+  const open = mode === "drawer" && !member;
 
   const templates = useQuery({
     queryKey: workflowKeys.templates(),
@@ -52,7 +55,7 @@ export function WorkflowPanel() {
 
   return (
     <>
-      <WorkPanelSheet panel="workflow" open={open} onClose={close}>
+      <WorkPanelSheet panel="workflow" open={mode === "drawer"} onClose={close}>
         <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border px-3">
           <SheetTitle className="shrink-0 truncate text-[13px] font-semibold">
             {t("workflow.title")}
@@ -97,7 +100,11 @@ export function WorkflowPanel() {
             >
               <ScrollArea className="min-h-0 flex-1">
                 <div className="min-w-0 p-3">
-                  {failure ? (
+                  {member ? (
+                    <p role="status" className="text-[12px] text-destructive">
+                      {t("workflow.error.forbidden")}
+                    </p>
+                  ) : failure ? (
                     <p role="status" className="text-[12px] text-destructive">
                       {t(workflowErrorKey(failure))}
                     </p>

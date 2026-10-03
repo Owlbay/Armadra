@@ -19,6 +19,7 @@ import {
 import { Textarea } from "@/ui/textarea";
 import { localPathRules, useCoreHost } from "@/app/core-host";
 import { useT } from "@/app/preferences-store";
+import { useAccess } from "@/app/use-access";
 import { isAbsoluteHostPath } from "@/lib/host-path";
 import { runtimeApi } from "@/api/client";
 import { useCanvasStore } from "@/store/canvas-store";
@@ -212,9 +213,12 @@ export function CreatePlanForm({
   >(frozenTarget?.kind ?? prefill?.targetKind ?? "command");
   // 工作流目标（契约 §15.6）：模板在当前画布上起跑，参数冻结进载荷。
   const boardId = useCanvasStore((store) => store.boardId);
+  const member = useAccess().member;
   const templates = useQuery({
     queryKey: workflowKeys.templates(),
     queryFn: () => workflowsApi.templates(),
+    // 成员访问工作流路由一律 403（契约 §15）：不取，「运行工作流」因此不可选。
+    enabled: !member,
     retry: false,
   });
   const [templateId, setTemplateId] = React.useState(

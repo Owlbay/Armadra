@@ -5,6 +5,7 @@ import { Workflow } from "lucide-react";
 import type { WorkflowDraftRow } from "@armadra/shared";
 
 import { useT } from "@/app/preferences-store";
+import { useAccess } from "@/app/use-access";
 import { Button } from "@/ui/button";
 import {
   Card,
@@ -29,11 +30,13 @@ import { openWorkflowPanel, useWorkflowEvents, workflowKeys } from "./store";
 export function DraftLayer() {
   useWorkflowEvents();
   const boardId = useCanvasStore((state) => state.boardId);
+  // 工作流路由对成员一律 403（契约 §15）：成员不取、不显示草案卡。
+  const member = useAccess().member;
   const drafts = useQuery({
     queryKey: workflowKeys.drafts(boardId ?? ""),
     queryFn: () =>
       workflowsApi.drafts({ boardId: boardId!, status: "pending" }),
-    enabled: Boolean(boardId),
+    enabled: Boolean(boardId) && !member,
     retry: false,
   });
   const pending = drafts.data ?? [];
