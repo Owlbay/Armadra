@@ -265,7 +265,18 @@
 
 ## G2-5 实时协同页面绑定与在线光标（R1）
 
-未开始。
+做了什么：
+
+- 页面 `apps/web/src/realtime/`：`doc.ts`（契约 §16.1 文档结构在页面这一侧的读写：按对象身份只写改过的实体与字段、便签正文按改动的那一段落到 `Y.Text`、读回逐条 zod 校验并沿用内容相同的本地对象与顺序）、`client.ts`（`…/sync` 帧、step1 / step2、退避重连、4403 转 forbidden、断线期间保留别人的 awareness、重连同步完清掉走了的）、`binding.ts`（本地动作 → 本地 origin 事务；非本地 origin → `applyRealtimeState` 灌入；手势中延后；同步完成前不读不写；本地编辑的 `dirty` 当场改回 `saved`）、`undo.ts`（`Y.UndoManager` 管五个根、只追踪本地来源、`captureTimeout: 0` 一个动作一条、合并会话期间放开）、`awareness.ts`（`awarenessStateSchema` 校验别人、按加入顺序取成员色、撞色 clientID 大的换、光标 50ms 节流）、`session.ts`（开板 `GET …/realtime`，`realtime || enabled` 就连；4403 换新文档只读重连；连不上两次复核，设置关着且不是实时板就退回租约）、`CursorLayer`、`OfflineBanner`、`RealtimeSetting`。
+- store 两个入口：`applyRealtimeState`（远端灌入，视口 / 选区留本地，不动历史、待存登记与保存态）、`setHistoryDelegate`（实时板上本地历史栈停用、撤销转给 `Y.UndoManager`）；`presence.ts` 加 `realtime` 链接，实时板的只读看同步层、不看租约。`use-board-sync` 在实时板上不再按 `board.changed` 重取、不往回合 HTTP 文档；自动保存对实时板不 PUT（视口也不存）。
+- `PresenceBar` 实时板上列 awareness：头像堆叠（自己在前、最多四个 + N）、点头像跟随光标、断线置灰写「已断开」、只读徽标；租约模式原样保留。`CursorLayer` 挂在 `ViewportPortal`：成员色箭头 + 名字标签、120ms 插值、离开 5 秒淡出，选区 1.5px 虚线一圈套一圈。顶部通知条堆栈加「离线编辑」。白板设置页加「实时协同」开关（`collab.realtime`，缺省开，成员不显示）。便签提交时按开始编辑那一刻的正文变基（`rebaseText`），同时输入两个人的字都留下。
+- core：`realtime/awareness.ts` 校验 awareness（契约 §16.4）：只留认识的键、形状不对或超过 16 KiB 的整条丢弃、`principalId` 按连接改写、别的连接登记过的 clientID 不能写；共享层 `awarenessStateSchema` / `AWARENESS_LIMITS`，两边上限逐条比对。契约 §16.4。
+- 展示页 `collab` 分区：在线条 1 / 3 / 6 人、跟随中、只读、断开，光标与选区，离线编辑（评论与角色留给 G2-6 / G2-9 加在后面）。
+- A 档探针 `realtime-e2e`（进 `tools/ci/e2e.json`）；租约语义的 `ui-features` presence 场景与 `server-e2e` 开头先关 `collab.realtime`。
+
+实测：web `realtime/` 8 个文件 51 例（含 `binding.test`、`undo.test`、`CursorLayer.test`、实时版 `two-windows.test`）、`PresenceBar.test` +4、`StickyNode.test` +1；core `awareness.test` 7 例、`sync.test` +2；shared `api-realtime.test` 3 例。`realtime-e2e` 本机通过（两上下文同时拖、光标与选区、同一便签同时输入收敛为「B 写的·中间·A 写的」、断网离线编辑与重连补齐、控制台无错）；`ui-features-e2e --only=presence,layout` 与 `server-e2e` 本机通过；`design-showcase --only=collab` 通过。`pnpm libs:build && pnpm -r --if-present test` 全绿，typecheck 与 `pnpm check` 通过。
+
+没做：实时板的视口不进文档、不再保存（刷新后回到上次租约模式时存下的视口）；白板对象的他人选区外框只画节点，`wb:` 项不画；跟随是跟光标而不是跟对方的视口；评论（G2-6）；拆出 G2-5b 的必要没有出现，光标层与本包一起做完。
 
 ## G2-6 评论（R2）
 
