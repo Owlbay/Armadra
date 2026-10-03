@@ -1,6 +1,5 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { PlugZap, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { executionHostPackageSchema } from "@armadra/shared";
 
@@ -9,8 +8,8 @@ import { useT } from "../../../app/preferences-store";
 import { useCanvasStore } from "../../../store/canvas-store";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
-import { sshHostTarget } from "../ssh-hosts";
 import { useSubpage } from "../subpage";
+import { FleetGroup } from "./execution-hosts/FleetGroup";
 import { SwitchExecutionHost } from "./execution-hosts/SwitchExecutionHost";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
@@ -27,8 +26,8 @@ import { Textarea } from "@/ui/textarea";
  * 「验证」按钮问的是两个问题：`ssh` 通不通，以及那台机器上的 Worker 是不是
  * 这个构建。两者要做的事不一样，所以答案分开显示，不合成一句「失败」。
  *
- * Worker 舰队（契约 §21.2）：握过手的主机带一个徽标——过旧时是「Worker 待升级」，
- * 否则是版本号；「重新同步」重连 Worker 并把画布注入再同步一次。
+ * Worker 舰队（契约 §21.2、§21.3）：主机列表就是舰队视图（`FleetGroup`）——
+ * 在线、Worker 版本或「待升级」、健康记录、逐台与全部重新同步。
  */
 export function ExecutionHostsPage() {
   const t = useT();
@@ -39,6 +38,8 @@ export function ExecutionHostsPage() {
     queryKey: ["execution-hosts"],
     queryFn: runtimeApi.executionHosts,
     retry: false,
+    // 舰队视图的在线状态与健康记录跟着 core 变，不等人刷新。
+    refetchInterval: 15_000,
   });
 
   const validate = useMutation({
@@ -87,6 +88,39 @@ export function ExecutionHostsPage() {
       }),
   });
 
+  // 全部重新同步：配了 Worker 的 SSH 主机逐台来（每台都要重连 ssh），
+  // 一台失败不挡后面的；最后一句话说清成了几台、哪几台没成。
+  const resyncAll = useMutation({
+    mutationFn: async () => {
+      const targets = (hosts.data ?? []).filter(
+        (host) => host.kind === "ssh" && host.workerConfigured,
+      );
+      const failed: string[] = [];
+      for (const host of targets) {
+        try {
+          await runtimeApi.resyncExecutionHost(host.executionHostId);
+        } catch {
+          failed.push(host.name || host.executionHostId);
+        }
+      }
+      return { done: targets.length - failed.length, failed };
+    },
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: ["execution-hosts"] });
+      void client.invalidateQueries({ queryKey: ["agent-integration"] });
+    },
+    onSuccess: ({ done, failed }) => {
+      if (failed.length === 0) {
+        toast.success(t("executionHosts.fleet.resyncAllDone", { count: done }));
+        return;
+      }
+      toast.error(
+        t("executionHosts.fleet.resyncAllFailed", { count: failed.length }),
+        { description: failed.join(", ") },
+      );
+    },
+  });
+
   if (subpage.current === "executionHosts:switch" && workspace) {
     return (
       <SwitchExecutionHost
@@ -120,74 +154,16 @@ export function ExecutionHostsPage() {
         </SettingsGroup>
       )}
 
-      <SettingsGroup>
-        {(hosts.data ?? []).map((host) => (
-          <SettingsRow
-            key={host.executionHostId || "local"}
-            label={hostLabel(host, host.executionHostId, t)}
-            footnote={
-              host.ssh
-                ? sshHostTarget(host.ssh)
-                : t("executionHosts.workspaces", {
-                    count: host.workspaceCount,
-                  })
-            }
-          >
-            {host.kind === "ssh" && !host.workerConfigured && (
-              <Badge variant="outline" className="font-normal">
-                {t("executionHosts.workerMissing")}
-              </Badge>
-            )}
-            {host.worker &&
-              (host.worker.outdated ? (
-                <Badge
-                  variant="destructive"
-                  className="font-normal"
-                  title={host.worker.version || undefined}
-                >
-                  {t("executionHosts.worker.outdated")}
-                </Badge>
-              ) : (
-                host.worker.version && (
-                  <Badge variant="secondary" className="font-normal">
-                    {t("executionHosts.worker.version", {
-                      version: host.worker.version,
-                    })}
-                  </Badge>
-                )
-              ))}
-            {host.kind === "ssh" && host.workerConfigured && (
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={resync.isPending}
-                onClick={() => resync.mutate(host.executionHostId)}
-              >
-                <RefreshCw />
-                {resync.isPending && resync.variables === host.executionHostId
-                  ? t("executionHosts.resyncing")
-                  : t("executionHosts.resync")}
-              </Button>
-            )}
-            {host.kind === "ssh" && (
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={validate.isPending}
-                onClick={() => validate.mutate(host.executionHostId)}
-              >
-                <PlugZap />
-                {validate.isPending
-                  ? t("executionHosts.validating")
-                  : t("executionHosts.validate")}
-              </Button>
-            )}
-          </SettingsRow>
-        ))}
-        {(hosts.data ?? []).length <= 1 && (
-          <SettingsRow label={t("executionHosts.empty")} />
-        )}
-      </SettingsGroup>
+      <FleetGroup
+        hosts={hosts.data ?? []}
+        resyncing={resync.isPending ? (resync.variables ?? null) : null}
+        resyncingAll={resyncAll.isPending}
+        validating={validate.isPending}
+        onResync={(hostId) => resync.mutate(hostId)}
+        onResyncAll={() => resyncAll.mutate()}
+        onValidate={(hostId) => validate.mutate(hostId)}
+        label={(host) => hostLabel(host, host.executionHostId, t)}
+      />
 
       <PackageGroup
         onImported={() =>

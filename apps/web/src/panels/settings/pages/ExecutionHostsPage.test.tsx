@@ -262,6 +262,86 @@ describe("execution hosts page", () => {
   });
 
   /**
+   * The fleet view (contract §21.3): online or not, the health history behind
+   * a button that opens the detail table, and one "resync all" that goes host
+   * by host and says which ones did not make it.
+   */
+  it("shows online state and health history, and resyncs the whole fleet", async () => {
+    const worker = {
+      version: "0.1.0",
+      capabilities: [],
+      outdated: false,
+      connected: true,
+      checkedAt: "2026-10-03T00:00:00Z",
+    };
+    const far = {
+      ...box,
+      executionHostId: "far",
+      name: "Far",
+      worker: { ...worker, connected: false },
+      health: [
+        {
+          at: "2026-10-03T00:00:00Z",
+          event: "handshake" as const,
+          ok: true,
+          version: "0.1.0",
+        },
+        {
+          at: "2026-10-03T00:01:00Z",
+          event: "disconnected" as const,
+          ok: false,
+        },
+        {
+          at: "2026-10-03T00:02:00Z",
+          event: "failed" as const,
+          ok: false,
+          code: "unreachable",
+        },
+      ],
+    };
+    api.executionHosts.mockResolvedValue([local, { ...box, worker }, far]);
+    api.resyncExecutionHost.mockImplementation(async (id: string) => {
+      if (id === "far") throw new Error("unavailable");
+      return { ...box, worker };
+    });
+    mount();
+    expect(await screen.findByText("Online")).toBeTruthy();
+    expect(screen.getByText("Offline")).toBeTruthy();
+
+    const history = screen.getByRole("button", {
+      name: "Health history: 3 entries, 2 problems",
+    });
+    await click(history);
+    expect(await screen.findByText("Disconnected")).toBeTruthy();
+    expect(screen.getByText("Handshake")).toBeTruthy();
+    // 验证的原因码有现成译文。
+    expect(screen.getByText("Unreachable")).toBeTruthy();
+    await act(async () => {
+      fireEvent.keyDown(document.activeElement ?? document.body, {
+        key: "Escape",
+      });
+    });
+
+    await click(screen.getByRole("button", { name: "Resync all" }));
+    await waitFor(() =>
+      expect(toasts.error).toHaveBeenCalledWith("1 hosts did not resync", {
+        description: "Far",
+      }),
+    );
+    expect(api.resyncExecutionHost.mock.calls.map((call) => call[0])).toEqual([
+      "build-box",
+      "far",
+    ]);
+  });
+
+  it("offers no resync-all with a single Worker host", async () => {
+    api.executionHosts.mockResolvedValue([local, box]);
+    mount();
+    expect(await screen.findByRole("button", { name: "Resync" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Resync all" })).toBeNull();
+  });
+
+  /**
    * Something really was killed even though the switch was refused anyway, and
    * "nothing happened" is the wrong thing to leave a person believing.
    */
