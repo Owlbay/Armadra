@@ -28,6 +28,7 @@
     "0026_delivery_target_state.sql": "e4583ed6cde8043ed412f37cb60447b2077c362bb77b8ba9a5afc534259bcf96",
     "0027_agent_dependencies.sql": "d25bb4c7646ba758a90a1fdaaad9730f68b72e45948c562b8c18d7b11eeac386",
     "0028_terminal_creator.sql": "ea631c247cb85d6361c778bc83ce11f35e6a0a53b27036696d27201cbf0c7ff4",
-    "0029_send_queue_receipts.sql": "b3cd488dec7936564d95020bdd88637f0e297454f0ef14129a6967e0505490bc"
+    "0029_send_queue_receipts.sql": "b3cd488dec7936564d95020bdd88637f0e297454f0ef14129a6967e0505490bc",
+    "0030_realtime.sql": "92d9c71e908a4514ab087b0888bb9a493d05ce86d6a8e012517277340d261e24"
   }
 }
