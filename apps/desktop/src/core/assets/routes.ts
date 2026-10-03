@@ -15,7 +15,7 @@ import {
   optionalString,
 } from "../workspaces/support";
 import { getWorkspace } from "../workspaces/table";
-import { writePngExport } from "./exports";
+import { writePngExport, writeTextExport } from "./exports";
 import {
   assetExtension,
   assetMime,
@@ -86,6 +86,45 @@ export function install(context: CoreContext): void {
           canonicalDirectory(workspace.rootPath),
           match.params.exportId ?? "",
           dataUrl,
+        ),
+      };
+    }),
+  );
+
+  // 输出到画板的代码块（契约 §14.5）。远端工作空间的 Worker 没有对应的操作，
+  // 答 501——页面把这一项当失败提示，不在本机落一份对方看不到的文件。
+  server.router.handle(
+    "POST",
+    "/api/workspaces/{workspaceId}/exports/{exportId}/text",
+    answered(async (match, request) => {
+      const workspace = getWorkspace(database, workspaceId(match));
+      if (!workspace.permissions.write) {
+        throw new DomainError(
+          403,
+          "forbidden",
+          "This workspace is opened read-only",
+        );
+      }
+      if (isRemote(workspace)) {
+        throw new DomainError(
+          501,
+          "unsupported",
+          "Text exports are not available on a remote workspace",
+        );
+      }
+      const body = jsonObject(request.body);
+      const name = optionalString(body, "name");
+      const content = optionalString(body, "content");
+      if (name === undefined || content === undefined) {
+        throw badRequest("Export body needs a name and a content");
+      }
+      return {
+        status: 200,
+        body: writeTextExport(
+          canonicalDirectory(workspace.rootPath),
+          match.params.exportId ?? "",
+          name,
+          content,
         ),
       };
     }),
