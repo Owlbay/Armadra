@@ -38,6 +38,17 @@ let updateStaged = false;
 let onRestart: () => void = () => undefined;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let stopped = false;
+/** Where the core is; set by `createTray`, read by the gateway item. */
+let base: () => Promise<string> = async () => "";
+/**
+ * The external-access item (completion plan G2-7). `null` until the core has
+ * answered `GET /api/gateway` once, and whenever it refuses or is the server
+ * shell's (configured on its command line, not here): then there is no item,
+ * rather than one that would claim a state it does not know.
+ */
+let gateway: { enabled: boolean } | null = null;
+/** A toggle in flight; a second click while it runs is dropped. */
+let toggling = false;
 
 /** What the quit item does. Supplied by the assembly, because the graceful
  * shutdown sequence is `main/index.ts`'s, not the tray's. */
@@ -106,6 +117,18 @@ function buildMenu(): Menu {
         }) satisfies Electron.MenuItemConstructorOptions,
     ),
     { type: "separator" },
+    ...(gateway
+      ? [
+          {
+            label: shellText(locale, "tray.gateway"),
+            type: "checkbox",
+            checked: gateway.enabled,
+            enabled: !toggling,
+            click: () => void toggleGateway(),
+          } satisfies Electron.MenuItemConstructorOptions,
+          { type: "separator" } satisfies Electron.MenuItemConstructorOptions,
+        ]
+      : []),
     // Present exactly while an update is staged. An item that is always there
     // but disabled would say the feature exists and is unavailable, when the
     // truth is that there is nothing to restart into (`main.rs:255-262`).
@@ -156,6 +179,7 @@ export function createTray(options: TrayOptions): void {
     process.stderr.write("Tray icon could not be loaded; tray disabled\n");
     return;
   }
+  base = options.runtimeBase;
   tray = new Tray(image);
   tray.setToolTip("Armadra");
   redraw();
@@ -166,20 +190,88 @@ export function createTray(options: TrayOptions): void {
 
 export function destroyTray(): void {
   stopped = true;
+  gateway = null;
   if (timer) clearTimeout(timer);
   timer = null;
   tray?.destroy();
   tray = null;
 }
 
-async function fetchText(base: string, path: string): Promise<string | null> {
+async function fetchText(
+  base: string,
+  path: string,
+  init?: RequestInit,
+): Promise<string | null> {
   try {
     const response = await fetch(`${base}${path}`, {
+      ...init,
       signal: AbortSignal.timeout(5_000),
     });
     return response.ok ? await response.text() : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * The item's state out of a `GET` / `PUT /api/gateway` answer (contract
+ * §17.1). Only a gateway the settings own gets an item; anything unreadable
+ * is "unknown", which draws no item.
+ */
+export function gatewayItemState(
+  text: string | null,
+): { enabled: boolean } | null {
+  if (text === null) return null;
+  try {
+    const status = JSON.parse(text) as {
+      enabled?: unknown;
+      managedBy?: unknown;
+    };
+    if (status.managedBy !== "settings" || typeof status.enabled !== "boolean")
+      return null;
+    return { enabled: status.enabled };
+  } catch {
+    return null;
+  }
+}
+
+function setGateway(next: { enabled: boolean } | null): void {
+  const same =
+    next === null ? gateway === null : gateway?.enabled === next.enabled;
+  if (same) return;
+  gateway = next;
+  redraw();
+}
+
+/**
+ * Re-read the gateway now. The page calls this (IPC `app:gateway-refresh`) after
+ * it changed the setting, so the check mark does not wait for the next poll.
+ */
+export async function refreshGateway(): Promise<void> {
+  if (stopped) return;
+  setGateway(gatewayItemState(await fetchText(await base(), "/api/gateway")));
+}
+
+/**
+ * The item's click: flip `gateway.enabled` through the same route the page
+ * uses (`PUT /api/gateway`), then draw what the core answered — not what was
+ * asked for, since "on" can come back as "on, but failed to listen".
+ */
+async function toggleGateway(): Promise<void> {
+  if (!gateway || toggling) return;
+  toggling = true;
+  redraw();
+  try {
+    const answer = await fetchText(await base(), "/api/gateway", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: !gateway.enabled }),
+    });
+    const next = gatewayItemState(answer);
+    if (next) gateway = next;
+  } finally {
+    toggling = false;
+    redraw();
   }
 }
 
@@ -205,6 +297,7 @@ async function poll(runtimeBase: () => Promise<string>): Promise<void> {
       summary = next;
       redraw();
     }
+    setGateway(gatewayItemState(await fetchText(base, "/api/gateway")));
     const settings = await fetchText(base, "/api/settings");
     interval = pollIntervalMs(
       settings === null ? null : refreshMinutes(settings),

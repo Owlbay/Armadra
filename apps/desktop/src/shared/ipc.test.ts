@@ -65,6 +65,8 @@ describe("the IPC table", () => {
         "browser:view",
         "browser:control",
         "browser:clear-data",
+        // G2-7: the tray's external-access item re-reads after the page.
+        "app:gateway-refresh",
       ].sort(),
     );
   });
