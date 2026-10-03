@@ -73,6 +73,7 @@ import { missingCapability } from "./handshake";
 import { capabilityOf } from "./operations";
 import { RemoteWorker, RemoteWorkers, unsupported } from "./worker";
 import { RemoteIntegration } from "./integration";
+import { setCaptureHosts } from "../handoff/remote-capture";
 import { LANGUAGE_IDLE_CHECK_MS, LanguageIdle } from "./language-idle";
 
 /**
@@ -359,6 +360,8 @@ export function install(context: CoreContext): RemoteDomain {
     log: (message, fields) => context.log.warn(message, fields),
   });
   const unlisten = listenRemote(integration);
+  // 跨执行主机交接（契约 §21.1）认的是同一份执行主机登记。
+  setCaptureHosts(host);
 
   const domain: RemoteDomain = {
     askpass,
@@ -370,6 +373,8 @@ export function install(context: CoreContext): RemoteDomain {
       clearInterval(idleTimer);
       unlisten();
       integration.stop();
+      const currentHosts = setCaptureHosts(undefined);
+      if (currentHosts !== host) setCaptureHosts(currentHosts);
       if (assembled === domain) assembled = undefined;
       const current = setRemoteCaller(undefined);
       if (current !== call) setRemoteCaller(current);

@@ -65,7 +65,6 @@ import { canonicalDirectory } from "../workspaces/roots";
 import { badRequest } from "../workspaces/support";
 import type { WorkerSession } from "./session";
 import { type RootFingerprint, fingerprintOf } from "./switch";
-import { capture as captureHandoff, captureArgs } from "../handoff/capture";
 import { trackOperation } from "./git-worker";
 import {
   ASSETS_CAPABILITY,
@@ -78,6 +77,7 @@ import {
   TRANSFER_CAPABILITY,
   WATCH_CAPABILITY,
 } from "./capabilities";
+import { handoffCapture } from "./handoff-worker";
 import { readRemoteResources } from "./resources-worker";
 import { unwatchFiles, watchFiles } from "./watch-worker";
 import { writePngExport } from "../assets/exports";
@@ -776,9 +776,7 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
 
   /* ------------------------------ 交接 ------------------------------ */
   /** 交接材料里要在执行主机上读的：文件引用、Git 指纹、SSH Agent 的转录尾巴。 */
-  "handoff.capture": read((_c, root, args) =>
-    captureHandoff(root, captureArgs(args)),
-  ),
+  "handoff.capture": read((_c, root, args) => handoffCapture(root, args)),
 
   "git.rebaseTodo": read(
     async (context, root, args) =>

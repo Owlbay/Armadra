@@ -121,7 +121,7 @@ describe("a handoff on a remote workspace", () => {
     expect(view.bundle.source.executionHost).toBe("local-runtime");
   });
 
-  it("takes an SSH Agent on the same host, and refuses one on another", async () => {
+  it("takes an SSH Agent on the same host, and one on another only through that host", async () => {
     const setHost = (nodeId: string, hostId: string): void => {
       fixture.database
         .prepare(
@@ -132,10 +132,11 @@ describe("a handoff on a remote workspace", () => {
     setHost(source, HOST.id);
     const view = await prepare(fixture.collab, fixture.workspaceId, request());
     expect(view.bundle.source.executionHost).toBe("execution-host:far");
+    // 不读转录：另一台主机上的来源不必连那台主机（契约 §21.1）。
     setHost(source, "elsewhere");
-    await expect(
-      prepare(fixture.collab, fixture.workspaceId, request()),
-    ).rejects.toThrow(/同一台执行主机/u);
+    const apart = await prepare(fixture.collab, fixture.workspaceId, request());
+    expect(apart.bundle.source.executionHost).toBe("execution-host:elsewhere");
+    expect(apart.bundle.capturedOn).toBeUndefined();
   });
 
   it("answers an unreachable host by name rather than reading this disk", async () => {
