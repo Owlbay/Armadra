@@ -14,8 +14,8 @@ import { getContextLinks } from "../../canvas/context-links";
 import { handlesFor } from "../../canvas/handles";
 import { roleLabel } from "../context-link";
 import { rfc3339, uuidV7 } from "../../workspaces/support";
-import type { Caller } from "../nodes";
-import { type Args, Refusal, collapseNewlines } from "../refusals";
+import { type Caller, loadNode } from "../nodes";
+import { type Args, Refusal, Refused, collapseNewlines } from "../refusals";
 import { MAX_HOPS, sendLimits } from "../send-limits";
 import { enqueue } from "../send-queue";
 import { type CollabContext, nowDate, nowSeconds } from "../service";
@@ -41,6 +41,14 @@ import {
 import { addLink } from "./edits";
 import { type Outcome, result } from "./outcome";
 import { checkBody, refuse as sendRefusal } from "./send";
+import { launchRoleNode } from "../../workflow/dispatch";
+import {
+  type TaskRun,
+  rebindTask,
+  recordTaskStart,
+  taskRun,
+} from "../../workflow/task-runs";
+import { validTaskId } from "./wait";
 
 /**
  * `list`, the three verbs that add a node to the board, and `team`, which adds
@@ -185,13 +193,30 @@ export async function openAgent(
     collapsed === undefined || collapsed.trim() === ""
       ? undefined
       : checkBody(collapsed, "--task");
-  const title = cleanTitle(args.text("title") ?? agentId);
+  // `--name` 是 runner 起节点时给的名字（补全架构 §5.3），与 `--title` 同义。
+  const title = cleanTitle(args.text("title") ?? args.text("name") ?? agentId);
   const permissionMode = readPermissionMode(context, agentId, args);
   const model = readModel(args);
   const inboxWake = readInboxWake(args);
   const after = args.list("after");
   const condition = readCondition(args);
   const ttlMinutes = readTtl(args);
+  const taskKey = readTaskId(args);
+  // `--task-id` 是幂等键（契约 §15.5）：同一个协调者重试同一个任务，节点还在
+  // 就答回那个节点，不起第二个。
+  const previous =
+    taskKey === undefined ? undefined : taskRun(context.database, taskKey);
+  if (previous !== undefined) {
+    if (previous.coordinatorNodeId !== caller.node.id) {
+      throw new Refused(
+        409,
+        "task_conflict",
+        `任务 id \`${taskKey}\` 已经被另一个节点用过了。`,
+      );
+    }
+    const kept = reusedTask(context, previous);
+    if (kept !== undefined) return kept;
+  }
   let document = load(context, caller);
   for (const id of after) {
     if (!document.nodes.some((node) => node.id === id)) {
@@ -332,6 +357,33 @@ export async function openAgent(
     task === undefined || waits !== undefined
       ? undefined
       : queueFirstTask(context, caller, node, task);
+  if (taskKey !== undefined) {
+    const nowMs = nowDate(context).getTime();
+    if (previous !== undefined) {
+      rebindTask(context.database, taskKey, node.id, nowMs);
+    } else {
+      recordTaskStart(context.database, {
+        taskId: taskKey,
+        coordinatorNodeId: caller.node.id,
+        runnerId: agentId,
+        nodeId: node.id,
+        now: nowMs,
+      });
+    }
+    // runner 起的成员由 core 起终端、敲启动行（与工作流的角色节点同一条路），
+    // 页面开不开都一样；有依赖时依赖服务本来就会起它。
+    if (waits === undefined) {
+      launchRoleNode(
+        context.database,
+        {
+          nodeId: node.id,
+          workspaceId: caller.node.workspaceId,
+          boardId: document.board.id,
+        },
+        nowSeconds(context),
+      );
+    }
+  }
 
   const parts = [`已创建 ${agentId} 节点「${title}」，并连了一条线过去。`];
   parts.push(
@@ -379,7 +431,36 @@ export async function openAgent(
     ...(args.text("task") === undefined && legacyPrompt !== undefined
       ? { warning: "--prompt 已更名为 --task" }
       : {}),
+    ...(taskKey === undefined ? {} : { taskRunId: taskKey, reused: false }),
   });
+}
+
+/** `--task-id`：形状不对当场拒绝。 */
+function readTaskId(args: Args): string | undefined {
+  const wanted = args.text("task-id") ?? args.text("taskId");
+  if (wanted === undefined) return undefined;
+  if (!validTaskId(wanted)) {
+    throw Refusal.badRequest("--task-id 是 1–100 个字母、数字或 . _ : - 。");
+  }
+  return wanted;
+}
+
+/** 同一个任务的节点还在：原样答回去，不建、不投、不起。 */
+function reusedTask(context: CollabContext, run: TaskRun): Outcome | undefined {
+  const node = loadNode(context.database, run.nodeId);
+  if (node === undefined) return undefined;
+  return result(
+    `任务 ${run.taskId} 已经有节点「${node.title}」了，沿用它，没有再建。`,
+    {
+      id: node.id,
+      agent: run.runnerId,
+      title: node.title,
+      linked: true,
+      taskRunId: run.taskId,
+      reused: true,
+      status: run.status,
+    },
+  );
 }
 
 const AGENT_CHOICES = "claude / codex / opencode / pi / omp / copilot";
@@ -904,8 +985,12 @@ function readPermissionMode(
   if (wanted === undefined) return undefined;
   const base = baseAgent(context.settings, agentId);
   if (!supportedPermissionModes(base).includes(wanted as PermissionMode)) {
-    throw Refusal.badRequest(
+    // 码与工作流起跑时的同一个（契约 §15.3）：runner 据此退回缺省模式重试。
+    throw new Refused(
+      400,
+      "permission_mode_unsupported",
       `${agentId} 没有 \`${wanted}\` 这个权限模式；可用：${supportedPermissionModes(base).join(" / ")}。`,
+      { supported: [...supportedPermissionModes(base)] },
     );
   }
   return wanted;
