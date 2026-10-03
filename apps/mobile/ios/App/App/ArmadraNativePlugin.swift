@@ -184,8 +184,9 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
     // MARK: - 推送
 
     @objc func pushRegistration(_ call: CAPPluginCall) {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { [weak self] granted, _ in
             DispatchQueue.main.async {
+                guard let self else { return }
                 guard granted else {
                     call.reject("denied")
                     return

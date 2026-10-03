@@ -25,6 +25,7 @@
 		8273F3C084F3551B5B5BECE2 /* NotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D4A234D0D22E5956E0F5F0CC /* NotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		65F8374176533860A0E2A73E /* ArmadraNativeKit in Frameworks */ = {isa = PBXBuildFile; productRef = 28A4D2CB7820E9CE86503EE9 /* ArmadraNativeKit */; };
 		527D27CA01AB38E4762DF599 /* ArmadraNativeKit in Frameworks */ = {isa = PBXBuildFile; productRef = B8C6D06ED1AC402E38607FF8 /* ArmadraNativeKit */; };
+		32BF665DE0AF08E5B30B5590 /* ConnectFlowUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCC0839B228919B6EB655F3D /* ConnectFlowUITests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -51,6 +52,8 @@
 		ECDD82A6D0689551E817269B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		C632A99C1D5E1A4E86D51B8D /* NotificationService.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NotificationService.entitlements; sourceTree = "<group>"; };
 		D4A234D0D22E5956E0F5F0CC /* NotificationService.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		BCC0839B228919B6EB655F3D /* ConnectFlowUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectFlowUITests.swift; sourceTree = "<group>"; };
+		9E922423EF967A993BE9829D /* AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -71,12 +74,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		ACE4ED414B35DBDC9761523B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		504EC2FB1FED79650016851F = {
 			isa = PBXGroup;
 			children = (
+				1C97CCBA286BD14A47637A92 /* AppUITests */,
 				9924322CBA5EBF713092E34C /* NotificationService */,
 				958DCC722DB07C7200EA8C5F /* debug.xcconfig */,
 				504EC3061FED79650016851F /* App */,
@@ -87,6 +98,7 @@
 		504EC3051FED79650016851F /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				9E922423EF967A993BE9829D /* AppUITests.xctest */,
 				D4A234D0D22E5956E0F5F0CC /* NotificationService.appex */,
 				504EC3041FED79650016851F /* App.app */,
 			);
@@ -123,6 +135,14 @@
 				C632A99C1D5E1A4E86D51B8D /* NotificationService.entitlements */,
 			);
 			path = NotificationService;
+			sourceTree = "<group>";
+		};
+		1C97CCBA286BD14A47637A92 /* AppUITests */ = {
+			isa = PBXGroup;
+			children = (
+				BCC0839B228919B6EB655F3D /* ConnectFlowUITests.swift */,
+			);
+			path = AppUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -171,6 +191,24 @@
 			productReference = D4A234D0D22E5956E0F5F0CC /* NotificationService.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		C84FFC3031A1BB6B67448DD1 /* AppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6E3CC5DF3FC8A64AD1E8C6D9 /* Build configuration list for PBXNativeTarget "AppUITests" */;
+			buildPhases = (
+				20F97B21EEBC255AE7764833 /* Sources */,
+				ACE4ED414B35DBDC9761523B /* Frameworks */,
+				C873349B449C81802A4E5E84 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				0ACDD24C7B95A3649A8249F8 /* PBXTargetDependency */,
+			);
+			name = AppUITests;
+			productName = AppUITests;
+			productReference = 9E922423EF967A993BE9829D /* AppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -180,6 +218,10 @@
 				LastSwiftUpdateCheck = 0920;
 				LastUpgradeCheck = 0920;
 				TargetAttributes = {
+					C84FFC3031A1BB6B67448DD1 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 504EC3031FED79650016851F;
+					};
 					19DEA6DF205246B086792699 = {
 						CreatedOnToolsVersion = 27.0;
 					};
@@ -210,6 +252,7 @@
 			targets = (
 				504EC3031FED79650016851F /* App */,
 				19DEA6DF205246B086792699 /* NotificationService */,
+				C84FFC3031A1BB6B67448DD1 /* AppUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -237,6 +280,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C873349B449C81802A4E5E84 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -257,6 +307,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				5AC197E02481E6ACE61BE5CF /* NotificationService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		20F97B21EEBC255AE7764833 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				32BF665DE0AF08E5B30B5590 /* ConnectFlowUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -321,6 +379,13 @@
 			remoteGlobalIDString = 19DEA6DF205246B086792699;
 			remoteInfo = NotificationService;
 		};
+		89D8950EA84C6EC78BBAB677 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 504EC3031FED79650016851F;
+			remoteInfo = App;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXTargetDependency section */
@@ -328,6 +393,11 @@
 			isa = PBXTargetDependency;
 			target = 19DEA6DF205246B086792699 /* NotificationService */;
 			targetProxy = F7C4391E13270BF6DDDA5F93 /* PBXContainerItemProxy */;
+		};
+		0ACDD24C7B95A3649A8249F8 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 504EC3031FED79650016851F /* App */;
+			targetProxy = 89D8950EA84C6EC78BBAB677 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -533,6 +603,39 @@
 			};
 			name = Release;
 		};
+		07AB6229C6A0F3E6C4C7190F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.armadra.mobile.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = App;
+			};
+			name = Debug;
+		};
+		7DB29761E31EAAD3C89898E0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.armadra.mobile.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = App;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -559,6 +662,15 @@
 			buildConfigurations = (
 				7EE6CF2D28D87A34E3CD0C19 /* Debug */,
 				06A247EC68D2F862E5D63B83 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		6E3CC5DF3FC8A64AD1E8C6D9 /* Build configuration list for PBXNativeTarget "AppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				07AB6229C6A0F3E6C4C7190F /* Debug */,
+				7DB29761E31EAAD3C89898E0 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
