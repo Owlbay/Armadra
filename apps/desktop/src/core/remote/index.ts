@@ -17,6 +17,10 @@
  *   * `POST|DELETE /api/ssh/hosts/{id}/prompts/{promptId}` — answer, cancel;
  *   * `POST /api/execution-hosts/{id}/validate` — the settings page's button.
  *
+ * `POST /api/execution-hosts/{id}/resync` is the settings domain's route; the
+ * reconnect and the injection re-sync it needs are registered from here
+ * through {@link setFleetHooks} (contract §21.2).
+ *
  * What is **not** claimed, and why, is as much a part of this file:
  *
  *   * `/api/ssh/askpass/prompts` and `…/{id}` stay 501. The helper reaches
@@ -73,6 +77,7 @@ import { missingCapability } from "./handshake";
 import { capabilityOf } from "./operations";
 import { RemoteWorker, RemoteWorkers, unsupported } from "./worker";
 import { RemoteIntegration } from "./integration";
+import { setFleetHooks, workerFleet } from "./fleet";
 import { setCaptureHosts } from "../handoff/remote-capture";
 import { LANGUAGE_IDLE_CHECK_MS, LanguageIdle } from "./language-idle";
 
@@ -158,8 +163,22 @@ export function install(context: CoreContext): RemoteDomain {
         ...(launcher === undefined ? {} : { launcher }),
         languageLink: channel === "language",
         onEvent: (event) => remotePushed(entry.id, channel, event),
+        // 舰队只看控制连接：语言连接是同一台主机上的第二个 Worker 进程，
+        // 版本相同，能力表却是另一张。
+        ...(channel === "control"
+          ? {
+              onHandshake: (probe) =>
+                workerFleet().handshake(entry.id, {
+                  runtimeVersion: probe.runtimeVersion,
+                  capabilities: probe.capabilities,
+                }),
+            }
+          : {}),
         onConnected: () => remoteConnected(entry.id, channel),
-        onDisconnected: () => remoteDisconnected(entry.id, channel),
+        onDisconnected: () => {
+          if (channel === "control") workerFleet().disconnected(entry.id);
+          remoteDisconnected(entry.id, channel);
+        },
       });
   const workers = new RemoteWorkers(make("control"));
   const languageLinks = new RemoteWorkers(make("language"));
@@ -360,6 +379,25 @@ export function install(context: CoreContext): RemoteDomain {
     log: (message, fields) => context.log.warn(message, fields),
   });
   const unlisten = listenRemote(integration);
+
+  // Worker 舰队（契约 §21.2）：执行主机行的 `worker` 与集成状态的
+  // `outdatedHosts` 由设置域与 Hook 域读；「重新同步」要这里的连接与注入。
+  const fleetHooks: Parameters<typeof setFleetHooks>[0] = {
+    resync: async (hostId) => {
+      const entry = host(hostId);
+      // 没配置、没配 Worker：照 `workers.get` 的 501 答，不新建任何东西。
+      workers.get(entry, hostId);
+      await askpass.start();
+      // 丢掉旧连接（连同它的握手结果），重新握手：刚升级的 Worker 在这里报新
+      // 版本与能力。
+      workers.forget(hostId);
+      await workers.get(entry, hostId).probe();
+      await integration.resync(hostId);
+    },
+    integrationOutdated: () => integration.outdatedWorkers(),
+    hostName: (hostId) => host(hostId)?.name,
+  };
+  setFleetHooks(fleetHooks);
   // 跨执行主机交接（契约 §21.1）认的是同一份执行主机登记。
   setCaptureHosts(host);
 
@@ -373,6 +411,8 @@ export function install(context: CoreContext): RemoteDomain {
       clearInterval(idleTimer);
       unlisten();
       integration.stop();
+      const currentHooks = setFleetHooks(undefined);
+      if (currentHooks !== fleetHooks) setFleetHooks(currentHooks);
       const currentHosts = setCaptureHosts(undefined);
       if (currentHosts !== host) setCaptureHosts(currentHosts);
       if (assembled === domain) assembled = undefined;

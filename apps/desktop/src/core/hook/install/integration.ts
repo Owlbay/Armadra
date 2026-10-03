@@ -31,6 +31,7 @@ import {
   describe,
 } from "./shared";
 import { revisionOf } from "./skills";
+import type { OutdatedHost } from "../../remote/fleet";
 
 /**
  * What the settings page reads and does for one CLI's integration
@@ -106,6 +107,12 @@ export interface IntegrationState {
   readonly migration?: MigrationSummary;
   /** Absolute path of the hook client the artifacts name. */
   readonly clientBin?: string;
+  /**
+   * Execution hosts whose Worker is out of date (contract §21.2): canvas
+   * launches in SSH terminals there carry a stale injection until the host is
+   * resynced. Present whenever the core has a remote domain; usually `[]`.
+   */
+  readonly outdatedHosts?: readonly OutdatedHost[];
   readonly warning?: string;
 }
 
@@ -118,6 +125,8 @@ export interface IntegrationOptions {
   readonly now?: () => Date;
   /** Windows: the `armadra-launch.exe` to copy (`InjectionOptions.launchExe`). */
   readonly launchExe?: string;
+  /** The Worker fleet's outdated hosts (`remote/fleet.ts::outdatedHosts`). */
+  readonly outdatedHosts?: () => readonly OutdatedHost[];
 }
 
 function requireInjected(agentId: string): void {
@@ -223,6 +232,9 @@ export function state(
     ...(launcherWarning === undefined ? {} : { launcherWarning }),
     ...(migration === undefined ? {} : { migration }),
     ...(marker === undefined ? {} : { clientBin: marker.clientBin }),
+    ...(options.outdatedHosts === undefined
+      ? {}
+      : { outdatedHosts: options.outdatedHosts() }),
     ...(warning === undefined ? {} : { warning }),
   };
 }

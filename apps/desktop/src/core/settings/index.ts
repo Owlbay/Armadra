@@ -2,7 +2,10 @@
  * The settings domain: the preferences document, the local split, and the
  * execution host registry read out of it.
  *
- * Nine routes, all of them phase 1. `POST /api/execution-hosts/{id}/validate`
+ * Nine routes from phase 1, plus `GET /api/execution-hosts/{id}` and
+ * `POST …/{id}/resync` for the Worker fleet (contract §21.2; the reconnect
+ * itself is the remote domain's, reached through `remote/fleet.ts`).
+ * `POST /api/execution-hosts/{id}/validate`
  * is the tenth in the table and is **not** here: it reaches a machine over
  * `ssh` and runs the Worker's version handshake, so it is registered by
  * `core/remote`, which owns the host-key file, the askpass helper and the
@@ -17,8 +20,10 @@ import {
   deleteExecutionHost,
   exportExecutionHosts,
   importExecutionHosts,
+  getExecutionHost,
   listExecutionHosts,
   putExecutionHost,
+  resyncExecutionHost,
   type ExecutionHostDeps,
 } from "./execution-hosts";
 import { getLocalSettings, getSettings, patchSettings } from "./routes";
@@ -86,6 +91,13 @@ export function install(context: CoreContext): SettingsDomain {
   );
   router.handle("DELETE", "/api/execution-hosts/{hostId}", (match) =>
     deleteExecutionHost(hosts, match.params.hostId ?? ""),
+  );
+  // Worker 舰队（契约 §21.2）：单台主机的行（带 `worker`）与重新同步。
+  router.handle("GET", "/api/execution-hosts/{hostId}", (match) =>
+    getExecutionHost(hosts, match.params.hostId ?? ""),
+  );
+  router.handle("POST", "/api/execution-hosts/{hostId}/resync", (match) =>
+    resyncExecutionHost(hosts, match.params.hostId ?? ""),
   );
 
   assembled = { settings };

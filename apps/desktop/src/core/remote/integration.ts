@@ -146,15 +146,7 @@ export class RemoteIntegration implements RemoteListener {
     try {
       const state = this.state(hostId);
       state.wanted = true;
-      const site = await this.site(hostId, state);
-      const files = remoteIntegrationFiles(site, bundle);
-      const print = fingerprint(files);
-      if (state.synced !== print) {
-        await this.sync(hostId, files);
-        state.synced = print;
-      }
-      state.outdated =
-        this.options.capability?.(hostId, INTEGRATION_V2_CAPABILITY) === false;
+      const site = await this.prepare(hostId, state, bundle);
       const token = issueNodeToken(this.options.dataDir, nodeId);
       await this.sync(hostId, [tokenFile(site, nodeId, token)]);
       await this.listen(hostId, state);
@@ -166,6 +158,44 @@ export class RemoteIntegration implements RemoteListener {
       });
       return undefined;
     }
+  }
+
+  /** 定位、按指纹同步产物，并记下这台主机的 Worker 是否只有 v1。 */
+  private async prepare(
+    hostId: string,
+    state: HostState,
+    bundle: string,
+  ): Promise<RemoteIntegrationSite> {
+    const site = await this.site(hostId, state);
+    const files = remoteIntegrationFiles(site, bundle);
+    const print = fingerprint(files);
+    if (state.synced !== print) {
+      await this.sync(hostId, files);
+      state.synced = print;
+    }
+    state.outdated =
+      this.options.capability?.(hostId, INTEGRATION_V2_CAPABILITY) === false;
+    return site;
+  }
+
+  /**
+   * 「重新同步」（`POST /api/execution-hosts/{id}/resync`，契约 §21.2）：忘掉这台
+   * 主机的位置、指纹与「待升级」记号，开过画布 SSH 终端的主机立刻重新定位、
+   * 同步产物并重开中继——升级后的 Worker 在这一次同步里清掉旧版的信任记录。
+   * 没开过的主机只清记号，下一次开终端时照常同步。失败照实抛出，由路由答复。
+   */
+  async resync(hostId: string): Promise<void> {
+    const state = this.hosts.get(hostId);
+    if (state === undefined) return;
+    state.site = undefined;
+    state.synced = undefined;
+    state.listening = undefined;
+    state.outdated = undefined;
+    if (!state.wanted || !remoteInjectionReady()) return;
+    const bundle = (this.options.hookBundle ?? readHookBundle)();
+    if (bundle === undefined) return;
+    await this.prepare(hostId, state, bundle);
+    await this.listen(hostId, state);
   }
 
   private async site(
