@@ -17,6 +17,7 @@ import { state as integrationState } from "../hook/install/integration";
 import { tempDir } from "../testing/temp-dir";
 import { WORKER_CAPABILITIES } from "./capabilities";
 import {
+  HEALTH_HISTORY_LIMIT,
   WorkerFleet,
   compareVersions,
   isOutdated,
@@ -114,6 +115,54 @@ describe("WorkerFleet", () => {
     expect(fleet.outdated()).toEqual([]);
     fleet.forget("h2");
     expect(fleet.status("h2")).toBeUndefined();
+  });
+
+  it("keeps a bounded health history per host, oldest first", () => {
+    let tick = 0;
+    const fleet = new WorkerFleet(
+      EXPECTED,
+      () => new Date(Date.UTC(2026, 9, 3, 0, 0, tick++)),
+    );
+    expect(fleet.history("h1")).toEqual([]);
+    fleet.handshake("h1", {
+      runtimeVersion: "0.5.0",
+      capabilities: ["a", "b"],
+    });
+    fleet.disconnected("h1");
+    // 已经断开的再断一次不重复记。
+    fleet.disconnected("h1");
+    fleet.failed("h1", "unreachable");
+    fleet.handshake("h1", { runtimeVersion: "", capabilities: ["a", "b"] });
+    expect(fleet.history("h1")).toEqual([
+      {
+        at: "2026-10-03T00:00:00.000Z",
+        event: "handshake",
+        ok: true,
+        version: "0.5.0",
+      },
+      { at: "2026-10-03T00:00:01.000Z", event: "disconnected", ok: false },
+      {
+        at: "2026-10-03T00:00:02.000Z",
+        event: "failed",
+        ok: false,
+        code: "unreachable",
+      },
+      { at: "2026-10-03T00:00:03.000Z", event: "handshake", ok: true },
+    ]);
+    // 没握过手的主机也能记失败。
+    fleet.failed("never", "");
+    expect(fleet.history("never")).toEqual([
+      { at: "2026-10-03T00:00:04.000Z", event: "failed", ok: false },
+    ]);
+    for (let index = 0; index < HEALTH_HISTORY_LIMIT + 5; index += 1) {
+      fleet.failed("h1", `n${index}`);
+    }
+    const kept = fleet.history("h1");
+    expect(kept).toHaveLength(HEALTH_HISTORY_LIMIT);
+    expect(kept[0]?.code).toBe("n5");
+    expect(kept.at(-1)?.code).toBe(`n${HEALTH_HISTORY_LIMIT + 4}`);
+    fleet.forget("h1");
+    expect(fleet.history("h1")).toEqual([]);
   });
 });
 
@@ -262,5 +311,19 @@ describe("execution host rows carry the Worker", () => {
     const failed = await resyncExecutionHost(deps(), HOST.id);
     expect(failed.status).toBe(503);
     expect((failed.body as { code: string }).code).toBe("unavailable");
+    // 健康记录（契约 §21.3）：握手成功一条，失败一条，都出现在行上。
+    const health = (
+      getExecutionHost(deps(), HOST.id).body as {
+        health?: { event: string; ok: boolean; code?: string }[];
+      }
+    ).health;
+    expect(health?.map((sample) => [sample.event, sample.ok])).toEqual([
+      ["handshake", true],
+      ["failed", false],
+    ]);
+    expect(health?.at(-1)?.code).toBe("unavailable");
+    expect(
+      (getExecutionHost(deps(), "").body as { health?: unknown }).health,
+    ).toBeUndefined();
   });
 });

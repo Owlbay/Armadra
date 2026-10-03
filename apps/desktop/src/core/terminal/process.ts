@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 
 /**
@@ -39,19 +39,11 @@ export function parseProcessLine(
   return [pid, parent, (match[3] as string).trimStart()];
 }
 
-/** `pid -> { parent, argv }` for every process of this machine. */
-export function processTable(): Map<number, ProcessRow> {
+const PS_ARGS = ["-Ao", "pid=,ppid=,args="];
+const PS_MAX_BUFFER = 16 * 1024 * 1024;
+
+function tableOf(output: string): Map<number, ProcessRow> {
   const table = new Map<number, ProcessRow>();
-  if (process.platform === "win32") return table;
-  let output: string;
-  try {
-    output = execFileSync("ps", ["-Ao", "pid=,ppid=,args="], {
-      encoding: "utf8",
-      maxBuffer: 16 * 1024 * 1024,
-    });
-  } catch {
-    return table;
-  }
   for (const line of output.split("\n")) {
     const parsed = parseProcessLine(line);
     if (parsed !== undefined) {
@@ -59,6 +51,41 @@ export function processTable(): Map<number, ProcessRow> {
     }
   }
   return table;
+}
+
+/**
+ * `pid -> { parent, argv }` for every process of this machine.
+ *
+ * Synchronous: one `ps` blocks the event loop for as long as it runs — tens of
+ * milliseconds on a busy machine. Code that is already async uses
+ * {@link readProcessTable} instead (the server performance baseline found 30
+ * terminal closes spending 1.5 s with every client frozen in here).
+ */
+export function processTable(): Map<number, ProcessRow> {
+  if (process.platform === "win32") return new Map();
+  try {
+    return tableOf(
+      execFileSync("ps", PS_ARGS, {
+        encoding: "utf8",
+        maxBuffer: PS_MAX_BUFFER,
+      }),
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+/** {@link processTable} without blocking the event loop. */
+export function readProcessTable(): Promise<Map<number, ProcessRow>> {
+  if (process.platform === "win32") return Promise.resolve(new Map());
+  return new Promise((resolve) => {
+    execFile(
+      "ps",
+      PS_ARGS,
+      { encoding: "utf8", maxBuffer: PS_MAX_BUFFER },
+      (error, stdout) => resolve(error ? new Map() : tableOf(stdout)),
+    );
+  });
 }
 
 /** `root` first, then its descendants breadth-first. */
@@ -122,7 +149,7 @@ export async function terminateTree(root: number): Promise<void> {
     }
     return;
   }
-  const tree = processTree(root).reverse();
+  const tree = processTree(root, await readProcessTable()).reverse();
   for (const pid of tree) {
     try {
       process.kill(pid, "SIGTERM");

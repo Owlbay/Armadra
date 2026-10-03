@@ -266,6 +266,26 @@ export const executionHostWorkerSchema = z.object({
   checkedAt: z.string(),
 });
 
+/**
+ * One health sample of an execution host (contract §21.3): a handshake, a
+ * dropped control connection, or a failed validation / resync. In memory for
+ * this run only, oldest first, at most {@link EXECUTION_HOST_HEALTH_LIMIT}.
+ */
+export const EXECUTION_HOST_HEALTH_EVENTS = [
+  "handshake",
+  "disconnected",
+  "failed",
+] as const;
+export const EXECUTION_HOST_HEALTH_LIMIT = 20;
+export const executionHostHealthSchema = z.object({
+  at: z.string(),
+  event: z.enum(EXECUTION_HOST_HEALTH_EVENTS),
+  ok: z.boolean(),
+  version: z.string().optional(),
+  /** The validation `reason` or the resync error code. */
+  code: z.string().optional(),
+});
+
 export const executionHostSchema = z.object({
   executionHostId: z.string(),
   name: z.string(),
@@ -278,6 +298,7 @@ export const executionHostSchema = z.object({
   workerConfigured: z.boolean(),
   workspaceCount: z.number().int().nonnegative(),
   worker: executionHostWorkerSchema.optional(),
+  health: z.array(executionHostHealthSchema).optional(),
 });
 
 /**
@@ -339,6 +360,7 @@ export type ExecutionHostBlocker = z.infer<typeof executionHostBlockerSchema>;
 export type ExecutionHostRefusal = z.infer<typeof executionHostRefusalSchema>;
 export type ExecutionHost = z.infer<typeof executionHostSchema>;
 export type ExecutionHostWorker = z.infer<typeof executionHostWorkerSchema>;
+export type ExecutionHostHealth = z.infer<typeof executionHostHealthSchema>;
 export type ExecutionHostValidation = z.infer<
   typeof executionHostValidationSchema
 >;

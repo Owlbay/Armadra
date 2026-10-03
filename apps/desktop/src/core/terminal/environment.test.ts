@@ -15,7 +15,12 @@ import {
   setHookClient,
   withUtf8Locale,
 } from "./environment";
-import { parseProcessLine, processTable, processTree } from "./process";
+import {
+  parseProcessLine,
+  processTable,
+  processTree,
+  readProcessTable,
+} from "./process";
 
 describe("the inheritance allow-list", () => {
   /**
@@ -269,6 +274,22 @@ describe("the process table", () => {
     expect(table.size).toBeGreaterThan(20);
     expect(processTree(process.pid, table)).toContain(process.pid);
   });
+  it.skipIf(process.platform === "win32")(
+    "reads the same table without blocking the event loop",
+    async () => {
+      let ticked = false;
+      setImmediate(() => {
+        ticked = true;
+      });
+      const reading = readProcessTable();
+      const table = await reading;
+      // The `ps` ran while the loop kept turning.
+      expect(ticked).toBe(true);
+      expect(table.has(process.pid)).toBe(true);
+      expect(table.size).toBeGreaterThan(20);
+      expect(table.get(process.pid)?.parent).toBe(process.ppid);
+    },
+  );
 });
 
 /**

@@ -19,6 +19,10 @@
  * （集成状态）都要读它，而它们不该为此 import 远端域的装配点。重新同步与「注入
  * 同步时 Worker 只有 v1」这两样只有远端域知道，由它装配时经 {@link setFleetHooks}
  * 登记。
+ *
+ * 健康探测历史（契约 §21.3）：每台主机留最近 {@link HEALTH_HISTORY_LIMIT} 条
+ * ——握手成功、控制连接断开、验证或重新同步失败。只在内存里，core 重启从空
+ * 开始：它回答的是「这次运行里这台机器稳不稳」，不是长期监控。
  */
 
 import { VERSION } from "../instance";
@@ -41,6 +45,22 @@ export interface OutdatedHost {
   readonly hostId: string;
   readonly name?: string;
   readonly version?: string;
+}
+
+/** 每台主机留几条健康记录。 */
+export const HEALTH_HISTORY_LIMIT = 20;
+
+/** 一条健康记录，执行主机行 `health[]` 的一项（契约 §21.3）。 */
+export interface HealthSample {
+  /** RFC 3339。 */
+  readonly at: string;
+  /** `handshake` 成功握手；`disconnected` 控制连接断开；`failed` 验证或重新同步失败。 */
+  readonly event: "handshake" | "disconnected" | "failed";
+  readonly ok: boolean;
+  /** 握手时对方报的版本。 */
+  readonly version?: string;
+  /** 失败的稳定原因码（验证的 `reason` 或重新同步的错误码）。 */
+  readonly code?: string;
 }
 
 export interface FleetExpectation {
@@ -107,6 +127,7 @@ export function isOutdated(
 
 export class WorkerFleet {
   private readonly hosts = new Map<string, WorkerStatus>();
+  private readonly samples = new Map<string, HealthSample[]>();
 
   constructor(
     private readonly expected: FleetExpectation = {
@@ -133,6 +154,12 @@ export class WorkerFleet {
       checkedAt: this.now().toISOString(),
     };
     this.hosts.set(hostId, status);
+    this.record(hostId, {
+      at: status.checkedAt,
+      event: "handshake",
+      ok: true,
+      ...(status.version === "" ? {} : { version: status.version }),
+    });
     return status;
   }
 
@@ -141,11 +168,32 @@ export class WorkerFleet {
     const status = this.hosts.get(hostId);
     if (status === undefined || !status.connected) return;
     this.hosts.set(hostId, { ...status, connected: false });
+    this.record(hostId, {
+      at: this.now().toISOString(),
+      event: "disconnected",
+      ok: false,
+    });
+  }
+
+  /** 验证或重新同步没过：记一条失败，不动「上次见到的 Worker」。 */
+  failed(hostId: string, code: string): void {
+    this.record(hostId, {
+      at: this.now().toISOString(),
+      event: "failed",
+      ok: false,
+      ...(code === "" ? {} : { code }),
+    });
+  }
+
+  /** 这台主机的健康记录，旧的在前。 */
+  history(hostId: string): readonly HealthSample[] {
+    return [...(this.samples.get(hostId) ?? [])];
   }
 
   /** 主机从配置里删掉了。 */
   forget(hostId: string): void {
     this.hosts.delete(hostId);
+    this.samples.delete(hostId);
   }
 
   status(hostId: string): WorkerStatus | undefined {
@@ -161,6 +209,16 @@ export class WorkerFleet {
 
   clear(): void {
     this.hosts.clear();
+    this.samples.clear();
+  }
+
+  private record(hostId: string, sample: HealthSample): void {
+    const list = this.samples.get(hostId) ?? [];
+    list.push(sample);
+    if (list.length > HEALTH_HISTORY_LIMIT) {
+      list.splice(0, list.length - HEALTH_HISTORY_LIMIT);
+    }
+    this.samples.set(hostId, list);
   }
 }
 

@@ -181,6 +181,15 @@ export class Args {
       .filter((entry) => entry !== "");
   }
 
+  /**
+   * The value as it arrived, for the one verb whose argument is a structured
+   * document rather than a flag (`workflow-propose --draft`): over the JSON
+   * call it is an object, from a command line a JSON string.
+   */
+  value(name: string): unknown {
+    return this.source[name];
+  }
+
   /** A repeatable flag, also accepting one comma-separated value. */
   list(name: string): string[] {
     const out: string[] = [];
