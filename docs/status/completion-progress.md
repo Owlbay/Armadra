@@ -888,7 +888,7 @@
 
 做了什么：
 
-- 版本：`node tools/release/version.mjs set 0.2.0`，改了根、`apps/desktop`、`apps/server`、`apps/mobile` 四处 `package.json`。iOS 工程的 `MARKETING_VERSION` 缺省值同步改为 0.2.0（CI 打包时仍由命令行覆盖）；Android 的版本名与版本号从 `apps/mobile/package.json` 推出（200）。`apps/web`、`packages/shared` 是不发布的私有包，不在 `VERSION_SITES` 里，保持不变。
+- 版本：`node tools/release/version.mjs set 0.2.0`，改了根、`apps/desktop`、`apps/server`、`apps/mobile` 四处 `package.json`。演练中发现 core 的 `VERSION`（`core/instance.ts`）与 armadra-hook 的 `CLIENT_VERSION`（`cli/armadra-hook/usage.ts`）是手写常量，`set` 不会改它们，结果 `instance.test` / `hook.test` 红了。现在把这两处加进 `VERSION_SITES`，`set` 会一起改，`release:check` 也会一起看；`version.test` 加了一条用例覆盖。iOS 工程的 `MARKETING_VERSION` 缺省值同步改为 0.2.0（CI 打包时仍由命令行覆盖）；Android 的版本名与版本号从 `apps/mobile/package.json` 推出（200）。`apps/web`、`packages/shared` 是不发布的私有包，不在 `VERSION_SITES` 里，保持不变。
 - 兼容表 `tools/release/compatibility.json`：
   - `minimumInstalled` 保持 0.1.0。v0.1.0 的 13 个迁移与现在 `core/db/migrations/` 的 0001–0013 逐字节相同，之后只新增到 0035，0.1.0 的库能直接迁上来。
   - `agent` 为 `@armadra/agent` 0.6.7、`hostApi` 1，与桌面壳的 devDependency、lockfile 一致（`release:check` 校验通过）。
@@ -897,8 +897,8 @@
 
 实测（macOS arm64，2026-10-04）：
 
-- `pnpm release:check`：版本 0.2.0，四处一致；agent 钉住的版本与安装的一致。
-- `pnpm release:test`：138 项，137 过、1 跳过（dev-stack 条目在没有设 `ARMADRA_DEV_STACK=1` 时按设计跳过），0 失败。
+- `pnpm release:check`：版本 0.2.0，六处一致；agent 钉住的版本与安装的一致。
+- `pnpm release:test`：139 项，138 过、1 跳过（dev-stack 条目在没有设 `ARMADRA_DEV_STACK=1` 时按设计跳过），0 失败。
 - `pnpm release:dry-run --keep`：0.2.0 全矩阵通过，22 个文件进 `SHA256SUMS`，6 个更新平台。产物矩阵逐项核对过：
   - darwin-aarch64 / x86_64：`.dmg`、`.zip`
   - linux-aarch64 / x86_64：`.AppImage`、`.deb`、`.rpm`
