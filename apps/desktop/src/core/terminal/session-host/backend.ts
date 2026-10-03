@@ -1,3 +1,4 @@
+import { StringDecoder } from "node:string_decoder";
 import {
   type AdoptableBackend,
   type Attachment,
@@ -20,7 +21,6 @@ import {
   notFound,
   sanitizePaste,
   sessionKey as asSessionKey,
-  stripEscapes,
   tailLines,
   trimCaptured,
 } from "../backend";
@@ -47,6 +47,8 @@ import {
   waitForHost,
 } from "./link";
 import { type HelloAuth, ensureKey, signHello } from "./auth";
+import { ReplayScreen } from "../replay-screen";
+import { type EnvPairs, childEnvironment } from "../environment";
 
 /**
  * The Windows backend: terminals owned by `armadra-session-host`.
@@ -87,11 +89,48 @@ interface Remembered {
   generation: number;
   pid: number | undefined;
   /**
-   * The last replay this core saw, for `capture`. The host keeps bytes rather
-   * than a screen, so this is the same approximation `DirectBackend` makes —
-   * labelled as such, not presented as a real capture.
+   * The bytes this core has seen since the last replay: the escaped form of
+   * `capture`, which is the replay itself.
    */
-  screen: Buffer[];
+  replay: Buffer[];
+  /**
+   * The same bytes laid out on a screen of the session's size
+   * (`replay-screen.ts`): what the plain `capture` reads. The host keeps
+   * bytes, not a screen, so a full-screen CLI that draws with cursor moves
+   * would otherwise read as one run-on line or a tail of redraw fragments —
+   * the approximation `DirectBackend` already makes, now made here too.
+   */
+  screen: ReplayScreen;
+  /** UTF-8 that a chunk boundary split stays here until the next chunk. */
+  decoder: StringDecoder;
+  size: TerminalSize;
+  /**
+   * The attachments that may feed {@link screen}, newest last; only the
+   * newest does. Every attachment of a session receives the same live output,
+   * so feeding the screen from all of them would draw each byte twice. The
+   * newest one started from the host's full replay; when it goes, the next
+   * one takes over without a gap, having seen the same frames.
+   */
+  feeders: object[];
+}
+
+/** The size a session is assumed to have until an attach or resize says. */
+const ASSUMED_SIZE: TerminalSize = { cols: 80, rows: 24 };
+
+function remember(
+  generation: number,
+  pid: number | undefined,
+  size: TerminalSize,
+): Remembered {
+  return {
+    generation,
+    pid,
+    replay: [],
+    screen: new ReplayScreen(size.cols, size.rows),
+    decoder: new StringDecoder("utf8"),
+    size,
+    feeders: [],
+  };
 }
 
 export interface SessionHostBackendOptions {
@@ -108,6 +147,14 @@ export class SessionHostBackend implements AdoptableBackend {
   private readonly ids = new RequestIds();
   /** One pipe connection per attachment; closing it is the detach. */
   private readonly attachments = new Map<number, Link>();
+  /**
+   * Per attachment: what a deliberate detach does before it closes the
+   * connection — stop feeding the screen, and end the stream **silently**.
+   * Closing the link raises `closed`, and an unsilenced `end` would tell the
+   * socket layer the session exited: the row was marked `exited` the moment
+   * the page let go of a terminal (G3-2 acceptance run).
+   */
+  private readonly releases = new Map<number, () => void>();
   private readonly options: SessionHostBackendOptions;
   /** The one long-lived connection every control request goes through. */
   private control: Link | undefined;
@@ -293,17 +340,20 @@ export class SessionHostBackend implements AdoptableBackend {
         shell: spec.shell,
         command: spec.command ?? null,
         args: spec.args,
-        env: spec.env,
+        // Built here, as the direct and tmux backends build theirs: the host
+        // starts the console with exactly this block and inherits nothing, so
+        // without the base a Windows shell had no `SystemRoot` (PowerShell 5.1
+        // would not start) and no `TEMP`. The caller's variables last.
+        env: sessionHostEnvironment(spec.env),
         size: spec.size,
       }),
     );
     if (summary === undefined) throw internal("会话宿主什么都没创建");
     const pid = summary.pid ?? undefined;
-    this.sessions.set(spec.sessionKey, {
-      generation: spec.generation,
-      pid,
-      screen: [],
-    });
+    this.sessions.set(
+      spec.sessionKey,
+      remember(spec.generation, pid, spec.size),
+    );
     return {
       sessionKey: spec.sessionKey,
       generation: spec.generation,
@@ -338,7 +388,7 @@ export class SessionHostBackend implements AdoptableBackend {
       // The host is unreachable. The row stays as it is — see `reconcile`,
       // which does not call this at all unless the probe succeeded.
     }
-    this.sessions.set(key, { generation, pid, screen: [] });
+    this.sessions.set(key, remember(generation, pid, ASSUMED_SIZE));
     return pid;
   }
 
@@ -359,14 +409,44 @@ export class SessionHostBackend implements AdoptableBackend {
     const buffered: Buffer[] = [];
     let subscribed = false;
     let ended = false;
+    /** Set once the first frame of this attach's replay (or output) arrived. */
+    let replayed = false;
+    const feeder = {};
 
-    const deliver = (payload: Buffer, replacing: boolean): void => {
-      // A snapshot is the session's past being redrawn, so it replaces this
-      // core's idea of the screen; live output appends to it.
-      if (replacing) remembered.screen.length = 0;
-      remembered.screen.push(payload);
-      while (remembered.screen.length > REPLAY_CHUNKS)
-        remembered.screen.shift();
+    // The replay arrives at the size this attach asks for.
+    remembered.size = clampSize(size);
+    const stopFeeding = (): void => {
+      remembered.feeders = remembered.feeders.filter(
+        (other) => other !== feeder,
+      );
+    };
+    /**
+     * The first frame of an attach — normally its replay, which the host
+     * sends as one or more snapshot frames — is the session's past being
+     * redrawn: this attachment starts the screen over and feeds it from now
+     * on. Live output appends.
+     */
+    const takeOver = (): void => {
+      if (replayed) return;
+      replayed = true;
+      remembered.feeders = [
+        ...remembered.feeders.filter((other) => other !== feeder),
+        feeder,
+      ];
+      remembered.replay.length = 0;
+      remembered.screen = new ReplayScreen(
+        remembered.size.cols,
+        remembered.size.rows,
+      );
+      remembered.decoder = new StringDecoder("utf8");
+    };
+    const deliver = (payload: Buffer): void => {
+      if (remembered.feeders.at(-1) === feeder) {
+        remembered.replay.push(payload);
+        while (remembered.replay.length > REPLAY_CHUNKS)
+          remembered.replay.shift();
+        remembered.screen.write(remembered.decoder.write(payload));
+      }
       if (!subscribed) {
         buffered.push(payload);
         return;
@@ -382,6 +462,7 @@ export class SessionHostBackend implements AdoptableBackend {
     const end = (exitCode: number | undefined): void => {
       if (ended) return;
       ended = true;
+      stopFeeding();
       for (const listener of exitListeners) listener(exitCode);
     };
 
@@ -393,10 +474,17 @@ export class SessionHostBackend implements AdoptableBackend {
       link = await Link.connect(this.endpoint(), (event) => {
         switch (event.type) {
           case "snapshot":
-            deliver(event.payload, true);
+            // A long replay comes as several snapshot frames: only the first
+            // one starts the screen over.
+            takeOver();
+            deliver(event.payload);
+            return;
+          case "snapshotEnd":
+            takeOver();
             return;
           case "output":
-            deliver(event.payload, false);
+            takeOver();
+            deliver(event.payload);
             return;
           case "exit":
             end(event.exitCode ?? undefined);
@@ -428,10 +516,15 @@ export class SessionHostBackend implements AdoptableBackend {
       size: clampSize(size),
     });
     if (answer.type === "error") {
+      stopFeeding();
       link.close();
       throw hostError(answer.code, answer.message);
     }
     this.attachments.set(id, link);
+    this.releases.set(id, () => {
+      ended = true;
+      stopFeeding();
+    });
 
     return {
       attachmentId: id,
@@ -450,6 +543,8 @@ export class SessionHostBackend implements AdoptableBackend {
     const link = this.attachments.get(attachmentId);
     if (link === undefined) return;
     this.attachments.delete(attachmentId);
+    this.releases.get(attachmentId)?.();
+    this.releases.delete(attachmentId);
     // Closing the connection is the detach. The host keeps the session; only
     // `destroy` ends one.
     link.close();
@@ -483,11 +578,17 @@ export class SessionHostBackend implements AdoptableBackend {
 
   async resize(key: SessionKey, size: TerminalSize): Promise<void> {
     await this.call((id) => resizeMessage(id, key, size));
+    const remembered = this.sessions.get(key);
+    if (remembered !== undefined) {
+      remembered.size = clampSize(size);
+      remembered.screen.resize(remembered.size.cols, remembered.size.rows);
+    }
   }
 
   /**
-   * The host keeps bytes, not a screen, so this is the replay this core has
-   * seen — the same approximation the direct backend makes.
+   * The host keeps bytes, not a screen. The plain capture reads the screen
+   * this core lays them out on ({@link Remembered.screen}), the same way the
+   * direct backend does; the escaped form is the replay itself.
    */
   async capture(
     key: SessionKey,
@@ -495,9 +596,10 @@ export class SessionHostBackend implements AdoptableBackend {
     withEscapes: boolean,
   ): Promise<string> {
     const remembered = this.remembered(key);
-    const raw = Buffer.concat(remembered.screen).toString("utf8");
-    const text = withEscapes ? raw : stripEscapes(raw);
-    return tailLines(trimCaptured(text.replaceAll("\r", "")), lines);
+    const text = withEscapes
+      ? Buffer.concat(remembered.replay).toString("utf8").replaceAll("\r", "")
+      : remembered.screen.text();
+    return tailLines(trimCaptured(text), lines);
   }
 
   async signal(key: SessionKey, _signal: "interrupt"): Promise<void> {
@@ -574,11 +676,27 @@ export class SessionHostBackend implements AdoptableBackend {
    * backend exists.
    */
   async detachAll(): Promise<void> {
+    for (const release of this.releases.values()) release();
+    this.releases.clear();
     for (const link of this.attachments.values()) link.close();
     this.attachments.clear();
     this.control?.close();
     this.control = undefined;
   }
+}
+
+/** The child environment every backend starts from, with the caller's pairs over it. */
+export function sessionHostEnvironment(
+  env: TerminalSpec["env"],
+  base: EnvPairs = childEnvironment(),
+): [string, string][] {
+  const merged = new Map<string, [string, string]>();
+  // Windows names are case-insensitive: one entry per name, the last spelling wins.
+  const key = (name: string): string =>
+    process.platform === "win32" ? name.toUpperCase() : name;
+  for (const [name, value] of [...base, ...env])
+    merged.set(key(name), [name, value]);
+  return [...merged.values()];
 }
 
 function hostError(code: HostErrorCode, message: string): TerminalError {

@@ -169,6 +169,72 @@ Rust↔Go 的归档互通，以及需要受管二进制路径的 `agent:smoke` /
 
 本机想演练完整的清单 + 签名 + 校验用 `pnpm release:dry-run`，它自带一次性密钥，不碰任何真实密钥。
 
+## Windows 真机验收
+
+Windows 特有的部分（ConPTY、会话宿主与命名管道、`armadra-launch.exe` 在 cmd / pwsh 7 / Windows
+PowerShell 5.1 里的读法、DPAPI、NSIS 安装与卸载）由 `tools/probes/windows-acceptance.mjs` 一键走完，
+写出一份 `result.json`。它只用 Node 22 自带的东西，可以只把 `tools/probes/` 下的 `windows-acceptance.mjs`、
+`windows-acceptance-lib.mjs` 与 `probe-home.mjs` 三个文件拷到 Windows 机器上（数据目录、HOME 与凭据变量的隔离同其他探针）。
+
+**要准备的**：一台 Windows 10 22H2 / 11（x64 或 arm64）、Node 22+、要验的安装包
+（`pnpm --filter @armadra/desktop dist` 在 Windows 上打出的 `Armadra-Setup-<版本>-<架构>.exe`，或 Release
+资产）。机器上已经装着 Armadra 时，先卸载它，或改用 `--app` 对着它跑（同一个 appId 的安装包会先卸掉旧的）。
+想顺带验真 Codex：装好 `codex` 并登录过（只把 `%USERPROFILE%\.codex\auth.json` 复制进临时 HOME）。
+
+```powershell
+node windows-acceptance.mjs --installer .\Armadra-Setup-0.1.0-x64.exe            # 完整：装、跑 30 分钟保活、卸
+node windows-acceptance.mjs --installer .\Armadra-Setup-0.1.0-x64.exe --with-codex
+node windows-acceptance.mjs --app "$env:LOCALAPPDATA\Programs\Armadra\Armadra.exe" --soak-minutes 5
+node windows-acceptance.mjs --dry-run                                              # 只验脚本自己
+```
+
+其他选项：`--soak-minutes <n>`（默认 30）、`--require-signed`（发布候选：Authenticode 不是 `Valid` 就失败）、
+`--out <目录>`、`--keep`（失败时留下临时目录）。跑的时候会弹出一个 Armadra 窗口，别去操作它；
+防火墙不会弹窗（Gateway 只开在回环上）。数据目录、HOME / USERPROFILE 与 Chromium profile 都在临时目录，
+跑完删除；开始前与卸载后各给真实用户配置（各 CLI 的配置目录、`%APPDATA%\Armadra`）拍一次快照，必须逐字节相同。
+
+**结果**：命令最后打印每一项的 ✓ / ✗ / ! / - 与 `result.json` 的路径（仓库里跑在
+`target/windows-acceptance/<时间>/`，拷出去跑在当前目录的 `windows-acceptance-<时间>/`）。把 `result.json`
+整个贴回来即可；同目录的 `app-output.log` 是应用的标准输出，失败时一并附上。
+
+`result.json` 的形状（`schema: "armadra-windows-acceptance/1"`）：
+
+| 字段                | 含义                                                                                                |
+| ------------------- | --------------------------------------------------------------------------------------------------- |
+| `status`            | `passed`、`failed`（有 `fail` 项）、`incomplete`（中途退出）、`dryRun`                              |
+| `options`           | 模式（`installer` / `app` / `dryRun`）、安装包文件名、保活分钟数、是否带 Codex                      |
+| `machine`           | 系统版本、架构、内存、Node、三种 shell 的路径与 PowerShell 版本、`csc.exe`、PATH 上找得到的各家 CLI |
+| `app`               | 被测的 `Armadra.exe` 与它的版本号                                                                   |
+| `checks[]`          | 每项 `{ id, title, status: pass/fail/warn/skip, detail, seconds }`，id 稳定，见下表                 |
+| `samples[]`         | 保活期间每分钟一次：Armadra 各进程（main / sessionHost / renderer / gpu …）与各 shell 的内存与句柄  |
+| `failures[]`        | `fail` 项的 id                                                                                      |
+| `leftover`、`error` | 没删掉的临时目录；脚本自己的异常                                                                    |
+
+| id                                     | 验什么                                                                                                |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `preflight.platform` / `.existing`     | Windows + Node 22；`--installer` 时没有已登记的 Armadra 安装                                          |
+| `install.silent` / `.layout`           | `/S /D=<临时目录>` 静默安装；包里有 `armadra-hook.exe`、`armadra-launch.exe`、会话宿主、`conpty.node` |
+| `install.signature`                    | 安装包、`Armadra.exe`、`armadra-launch.exe` 的 Authenticode；未签名记 `warn`                          |
+| `app.start` / `app.updater`            | 临时目录里起应用、页面与 core 应答；更新器状态（签名、是否本地构建）                                  |
+| `terminal.backend` / `terminal.shells` | 后端是 `sessionHost`；cmd / pwsh 7 / 5.1 各起一个终端，输入回显、`capture` 读得到                     |
+| `sessionHost.process`                  | 会话宿主进程与 `\\.\pipe\armadra-session-*` 在                                                        |
+| `launcher.dialects` / `.credential`    | 三种 shell 里经 `armadra-launch.exe` 起程序：参数原样、注入在后、门关不注入；凭据兑换只进 CLI 进程    |
+| `credentials.status`                   | `GET /api/credentials`：`dpapi` 且 `available`                                                        |
+| `gateway.loopback`                     | 回环上开 Gateway 能握 TLS，关掉后不再监听                                                             |
+| `files.watch`                          | 外部改文件后收到 `file.changed`                                                                       |
+| `agent.codex`                          | `--with-codex`：经页面起 Codex，启动行是 `run\codex.exe`                                              |
+| `soak`                                 | 保活：进程都在、终端仍应答；会话宿主内存涨三倍以上或句柄多 2000 记 `warn`                             |
+| `restart.survives`                     | 杀主进程后宿主与 shell 都在，重启后同一会话接回并应答                                                 |
+| `conpty.close`                         | 终止会话后 shell 与它的 `conhost` / `OpenConsole` 都退出                                              |
+| `app.logs`                             | 数据目录日志里的 error / fatal 行（有就 `warn`，内容附在 detail）                                     |
+| `uninstall.silent`                     | 卸载后 `Armadra.exe`、注册表卸载项、开始菜单与桌面快捷方式都不在                                      |
+| `userConfig.untouched`                 | 真实用户配置前后逐字节相同                                                                            |
+
+`result.json` 不含凭据；终端内容只在某项失败时带最后一小段，探针自己的标记行之外没有别的输入。
+CI 有两处：三个平台的 `pnpm release:test` 跑干跑（Windows 上顺带核对三种 shell 与 `csc` 都探测得到），
+`nightly.yml` 的 `windows-acceptance` 作业在 windows runner 上打 NSIS 包并完整跑一遍（保活两分钟），
+结果作为产物上传。真机上的长时间保活、真 CLI 与用户自己的 shell 配置只有用户的机器能答。
+
 ## 本地 dev-stack
 
 `tools/dev-stack/` 用 Docker Compose 在本机起一组外部服务的替身，供探针与集成测试对着跑

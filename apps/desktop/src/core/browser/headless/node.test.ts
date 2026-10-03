@@ -313,6 +313,30 @@ describe("a browser that went away", () => {
     made.close();
   });
 
+  /**
+   * Chromium keeps writing until its pipe drains: a frame can arrive after the
+   * node stopped. Acknowledging it used to throw `browser_unavailable` out of
+   * the pipe's `data` listener — an uncaught exception that ends the core.
+   */
+  it("drops a frame that arrives after the browser was stopped", async () => {
+    const made = backend();
+    const node = await made.ensure("node-a");
+    const viewer = new FakeViewer();
+    node.attachViewer(viewer);
+    await settle();
+    const session = fake.sessionFor(node.listTabs()[0]?.id ?? "");
+    // The process is told to go, but its pipe has not drained yet.
+    fake.crash = () => undefined;
+    node.stop();
+    const acks = fake.called("Page.screencastFrameAck").length;
+    fake.frame(session, 30);
+    await settle();
+    expect(node.isAlive()).toBe(false);
+    expect(fake.called("Page.screencastFrameAck")).toHaveLength(acks);
+    expect(viewer.binaries).toHaveLength(0);
+    made.close();
+  });
+
   it("starts a fresh browser for the node after a crash", async () => {
     const made = backend();
     await made.ensure("node-a");

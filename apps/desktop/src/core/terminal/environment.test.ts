@@ -43,6 +43,39 @@ describe("the inheritance allow-list", () => {
     expect(inherited("PATH")).toBe(false);
   });
 
+  it("keeps Windows' own variables however they are spelt, on Windows only", () => {
+    const env = asRecord(
+      childEnvironment({
+        platform: "win32",
+        ambient: {
+          SystemRoot: "C:\\Windows",
+          ComSpec: "C:\\Windows\\system32\\cmd.exe",
+          TEMP: "C:\\Users\\me\\AppData\\Local\\Temp",
+          PATHEXT: ".COM;.EXE;.BAT;.CMD",
+          USERPROFILE: "C:\\Users\\me",
+          "ProgramFiles(x86)": "C:\\Program Files (x86)",
+          PSModulePath: "C:\\Program Files\\PowerShell\\7\\Modules",
+          CLAUDECODE: "1",
+        },
+      }),
+    );
+    expect(env).toMatchObject({
+      SystemRoot: "C:\\Windows",
+      ComSpec: "C:\\Windows\\system32\\cmd.exe",
+      TEMP: "C:\\Users\\me\\AppData\\Local\\Temp",
+      PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      USERPROFILE: "C:\\Users\\me",
+      "ProgramFiles(x86)": "C:\\Program Files (x86)",
+    });
+    // pwsh 7's module path would stop Windows PowerShell 5.1 loading its own.
+    expect(env).not.toHaveProperty("PSModulePath");
+    expect(env).not.toHaveProperty("CLAUDECODE");
+    // Elsewhere names are exact: a lower-case look-alike is not inherited.
+    expect(inherited("SystemRoot", "linux")).toBe(false);
+    expect(inherited("SYSTEMROOT", "linux")).toBe(true);
+    expect(inherited("ComSpec", "win32")).toBe(true);
+  });
+
   it("builds a child environment rather than copying one", () => {
     const env = asRecord(
       childEnvironment({

@@ -158,11 +158,12 @@ exec '/…/integration/run/claude' claude "$@"
 1. 读 `<自身路径去掉 .exe>.launch`（UTF-8，`\r\n` 或 `\n`，`key=value` 一行一条，`#` 开头是注释）。首行必须是 `armadra-launch 1`；认不出就 stderr 一句、退出码 1。
 2. 取 `tail = Tail(Environment.CommandLine)`（沿用 `windows-launcher.cs::Tail`：argv[0] 之后的原文）。
 3. 决定程序：`.launch` 里有 `program=` 时（垫片模式）程序是它，`lead=` 的词依次排在后面，`tail` 整段是 CLI 的参数；没有时（启动器模式）`tail` 的第一个词就是程序，`tail` 原样就是整条命令行。
-4. 门：`gate=` 指定的变量（固定 `ARMADRA_NODE_ID`）为空 → 跳过第 5 步。
-5. 注入：`env=NAME=value` 逐条 `Environment.SetEnvironmentVariable`（子进程继承本进程环境块）；`arg=value` 逐条按 MSVCRT 规则加引号（`"` → `\"`，引号前的反斜杠加倍，与 `terminal/shell.ts::argvQuote` 同一规则）接在命令行末尾。
-6. 垫片模式：从本进程 `PATH` 里摘掉自身目录（大小写不敏感、去掉尾部 `\` 后比较），再启动——与 POSIX 垫片同义。
-7. 程序以 `.cmd` / `.bat` 结尾（`custom:` 条目指向读不出的包装）：改为 `cmd.exe /d /s /c "<整行>"`，并且只在每个 `arg=` 都满足 `batchSafeWord`（没有 `" % ^ & | < > ( )`）时注入，否则不注入并在 stderr 打一行「Armadra: <程序> 是批处理包装，画布注入已跳过」。这是今天 `shellCommandLine` 对批处理程序的规则搬到启动器里，内置六个 CLI 走 `launchTarget` 拆包装，不会到这一步。
-8. `CreateProcessW(null, commandLine, …, CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT)`、作业对象、`ResumeThread`、等退出、透传退出码——照抄 Hook 启动器。**不设** `ELECTRON_RUN_AS_NODE`。
+4. 门：`gate=` 指定的变量（固定 `ARMADRA_NODE_ID`）为空 → 跳过第 5、6 步。
+5. 兑换（契约 §20.4、§12.4，2026-10-03 补上）：有 `credential=<客户端>` 且 `ARMADRA_CREDENTIAL_REF` 非空时起 `<客户端> credential`，读它的标准输出 `NAME=value`，名字必须在 `credential-var=` 名单里；有 `ama-keys=<客户端>` 时起 `<客户端> credential --ama`，按行读，名字必须在 `ama-var=` 名单里。客户端失败、名字不认识、`credential=` 为空串（没有客户端）都拒绝启动；值只 `SetEnvironmentVariable` 给 CLI 继承。兑换不受第 8 步跳过注入词的影响。
+6. 注入：`env=NAME=value` 逐条 `Environment.SetEnvironmentVariable`（子进程继承本进程环境块）；`arg=value` 逐条按 MSVCRT 规则加引号（`"` → `\"`，引号前的反斜杠加倍，与 `terminal/shell.ts::argvQuote` 同一规则）接在命令行末尾。
+7. 垫片模式：从本进程 `PATH` 里摘掉自身目录（大小写不敏感、去掉尾部 `\` 后比较），再启动——与 POSIX 垫片同义。
+8. 程序以 `.cmd` / `.bat` 结尾（`custom:` 条目指向读不出的包装）：改为 `cmd.exe /d /s /c "<整行>"`，并且只在每个 `arg=` 都满足 `batchSafeWord`（没有 `" % ^ & | < > ( )`）时注入，否则不注入并在 stderr 打一行「Armadra: <程序> 是批处理包装，画布注入已跳过」。这是今天 `shellCommandLine` 对批处理程序的规则搬到启动器里，内置六个 CLI 走 `launchTarget` 拆包装，不会到这一步。
+9. `CreateProcessW(null, commandLine, …, CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT)`、作业对象、`ResumeThread`、等退出、透传退出码——照抄 Hook 启动器。**不设** `ELECTRON_RUN_AS_NODE`。
 
 `.launch` 示例（启动器模式，Codex）：
 

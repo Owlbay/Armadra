@@ -57,10 +57,13 @@ export const LAUNCH_EXE_NAME = "armadra-launch.exe";
 export const LAUNCH_CONFIG_HEADER = "armadra-launch 1";
 /**
  * What a `.launch` needs from the generator's spec: the injection's literal
- * argv (appended after the caller's words) and its environment (set for the
- * CLI process only). Any `LauncherSpec` fits.
+ * argv (appended after the caller's words), its environment (set for the
+ * CLI process only), and the node credential / ama key exchange the POSIX
+ * launcher does with `armadra-hook credential` (contract §20.4, §12.4). Any
+ * `LauncherSpec` fits.
  */
-export type LaunchConfigSpec = Pick<LauncherSpec, "agentId" | "args" | "env">;
+export type LaunchConfigSpec = Pick<LauncherSpec, "agentId" | "args" | "env"> &
+  Partial<Pick<LauncherSpec, "credential" | "amaKeys">>;
 
 /**
  * Everything one CLI's Windows launcher and shim are made of: the POSIX
@@ -128,7 +131,31 @@ export function launchConfig(
   }
   for (const word of spec.args)
     lines.push(`arg=${literal("an argument", word)}`);
+  // The exchange, as in `launcher.ts::credentialLines` / `amaKeyLines`: an
+  // empty client with variables still writes `credential=` so a bound
+  // credential is refused rather than skipped; ama keys need a client.
+  const credential = spec.credential;
+  if (credential !== undefined && credential.variables.length > 0) {
+    lines.push(
+      `credential=${literal("the credential client", credential.client)}`,
+    );
+    for (const name of credential.variables)
+      lines.push(`credential-var=${variableName(name)}`);
+  }
+  const keys = spec.amaKeys;
+  if (keys !== undefined && keys.client !== "" && keys.variables.length > 0) {
+    lines.push(`ama-keys=${literal("the ama key client", keys.client)}`);
+    for (const name of keys.variables)
+      lines.push(`ama-var=${variableName(name)}`);
+  }
   return `${lines.join("\r\n")}\r\n`;
+}
+
+function variableName(name: string): string {
+  if (!ENV_NAME.test(name)) {
+    throw new Error(`not an environment variable name: ${name}`);
+  }
+  return name;
 }
 
 /** `run\<cli>.exe` — the launcher the typed line names. */
@@ -285,6 +312,21 @@ export function findLaunchExe(
   candidates: readonly string[] = defaultLaunchExeCandidates(),
 ): string | undefined {
   return candidates.find(isFile);
+}
+
+/**
+ * The `armadra-launch.exe` this core would copy into `run\` and `shims\`:
+ * `override`, else `ARMADRA_LAUNCH_EXE`, else the built one next to the app
+ * ({@link findLaunchExe}). An empty override means "none"; an override that
+ * is not a file is none as well — never a guess at another one.
+ */
+export function configuredLaunchExe(
+  env: NodeJS.ProcessEnv = process.env,
+  override?: string,
+): string | undefined {
+  const value = override ?? env.ARMADRA_LAUNCH_EXE;
+  if (value === undefined) return findLaunchExe();
+  return isFile(value) ? value : undefined;
 }
 
 function isFile(file: string): boolean {

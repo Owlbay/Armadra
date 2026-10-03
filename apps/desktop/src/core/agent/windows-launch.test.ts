@@ -458,3 +458,169 @@ describe.runIf(windows)("npm wrappers behind the launcher", () => {
     }
   });
 });
+
+/**
+ * 节点凭据与 ama 密钥的兑换（契约 §20.4、§12.4）：门开着且有
+ * `ARMADRA_CREDENTIAL_REF` 时启动器起 `<客户端> credential`，答复的变量只进
+ * CLI 进程；名字不在名单里、客户端失败或缺席都拒绝启动，CLI 不运行。客户端是
+ * 一个 `.cmd` 包装的假客户端（真客户端 `armadra-hook.exe` 的回退形状）。
+ */
+describe.runIf(windows)("the credential exchange behind the launcher", () => {
+  const TOKEN = "tok en=v & %PATH% ^ 画布";
+  const CLIENT = [
+    "const ama = process.argv[3] === '--ama';",
+    "const mode = process.env.FAKE_CLIENT_MODE ?? 'ok';",
+    "if (process.argv[2] !== 'credential') process.exit(9);",
+    "if (mode === 'fail') { process.stderr.write('fake: refused\\n'); process.exit(3); }",
+    "if (ama) {",
+    "  if (mode === 'bad') process.stdout.write('EVIL=1\\n');",
+    "  else if (mode !== 'none') process.stdout.write('AMA_API_KEY_OPENAI=sk-o\\r\\nAMA_API_KEY_ANTHROPIC=sk=a=b\\n');",
+    "} else {",
+    "  process.stdout.write(mode === 'bad' ? 'PATH=C:\\\\evil' : 'ARMADRA_TEST_TOKEN=' + process.env.FAKE_TOKEN);",
+    "}",
+  ].join("\n");
+  const SHOW = [
+    "const pick = (name) => process.env[name] ?? null;",
+    "const out = { token: pick('ARMADRA_TEST_TOKEN'), openai: pick('AMA_API_KEY_OPENAI'), anthropic: pick('AMA_API_KEY_ANTHROPIC') };",
+    "process.stdout.write(JSON.stringify(out).replace(/[\\u0080-\\uffff]/g, (c) => '\\\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')));",
+  ].join("\n");
+
+  let client = "";
+  let show = "";
+
+  function exchangeLauncher(
+    agentId: string,
+    extra: Pick<WindowsLauncherSpec, "credential" | "amaKeys">,
+  ): string {
+    const spec: WindowsLauncherSpec = {
+      agentId,
+      runDir: join(root, "exchange", "run"),
+      shimDir: join(root, "exchange", "shims"),
+      args: [],
+      env: [],
+      exe,
+      ...extra,
+    };
+    writeWindowsLauncherFiles(windowsLauncherFiles(spec));
+    return windowsLauncherPath(spec.runDir, agentId);
+  }
+
+  function run(
+    launcherExe: string,
+    env: NodeJS.ProcessEnv,
+  ): ReturnType<typeof spawnSync> & { stdout: string; stderr: string } {
+    return spawnSync(launcherExe, [process.execPath, show], {
+      env: { ...env, FAKE_TOKEN: TOKEN },
+      encoding: "utf8",
+    }) as ReturnType<typeof spawnSync> & { stdout: string; stderr: string };
+  }
+
+  beforeAll(() => {
+    const dir = join(root, "exchange");
+    mkdirSync(dir, { recursive: true });
+    const script = join(dir, "fake-client.js");
+    writeFileSync(script, CLIENT, "utf8");
+    client = join(dir, "armadra-hook.cmd");
+    writeFileSync(client, `@"${process.execPath}" "${script}" %*\r\n`, "utf8");
+    show = join(dir, "show.js");
+    writeFileSync(show, SHOW, "utf8");
+  });
+
+  const credential = () => ({
+    credential: { client, variables: ["ARMADRA_TEST_TOKEN"] },
+  });
+
+  it("sets the redeemed variable for the CLI only when a credential is bound", () => {
+    const launcherExe = exchangeLauncher("claude", credential());
+    const bound = run(launcherExe, {
+      ...canvasEnv(),
+      ARMADRA_CREDENTIAL_REF: "3f9c2a1b7d4e8f60",
+    });
+    expect(bound.status, bound.stderr).toBe(0);
+    expect(JSON.parse(bound.stdout).token).toBe(TOKEN);
+    // The value is never echoed by the launcher.
+    expect(bound.stderr).not.toContain("tok en");
+
+    const unbound = run(launcherExe, canvasEnv());
+    expect(unbound.status, unbound.stderr).toBe(0);
+    expect(JSON.parse(unbound.stdout).token).toBeNull();
+
+    // Outside a canvas the reference alone does nothing.
+    const outside = run(launcherExe, {
+      ...outsideEnv(),
+      ARMADRA_CREDENTIAL_REF: "3f9c2a1b7d4e8f60",
+    });
+    expect(outside.status, outside.stderr).toBe(0);
+    expect(JSON.parse(outside.stdout).token).toBeNull();
+  });
+
+  it("refuses to start the CLI when the exchange fails", () => {
+    const launcherExe = exchangeLauncher("claude", credential());
+    const env = { ...canvasEnv(), ARMADRA_CREDENTIAL_REF: "3f9c2a1b7d4e8f60" };
+
+    const failed = run(launcherExe, { ...env, FAKE_CLIENT_MODE: "fail" });
+    expect(failed.status).toBe(3);
+    expect(failed.stdout).toBe("");
+    expect(failed.stderr).toMatch(/fake: refused/);
+
+    const unexpected = run(launcherExe, { ...env, FAKE_CLIENT_MODE: "bad" });
+    expect(unexpected.status).toBe(1);
+    expect(unexpected.stdout).toBe("");
+    expect(unexpected.stderr).toMatch(/unexpected node credential variable/);
+
+    const noClient = run(
+      exchangeLauncher("copilot", {
+        credential: { client: "", variables: ["ARMADRA_TEST_TOKEN"] },
+      }),
+      env,
+    );
+    expect(noClient.status).toBe(1);
+    expect(noClient.stdout).toBe("");
+    expect(noClient.stderr).toMatch(/needs the armadra-hook client/);
+
+    const missing = run(
+      exchangeLauncher("pi", {
+        credential: {
+          client: join(root, "exchange", "missing.exe"),
+          variables: ["ARMADRA_TEST_TOKEN"],
+        },
+      }),
+      env,
+    );
+    expect(missing.status).toBe(1);
+    expect(missing.stdout).toBe("");
+  });
+
+  it("sets every ama key the client answers, and refuses an unknown one", () => {
+    const launcherExe = exchangeLauncher("ama", {
+      amaKeys: {
+        client,
+        variables: ["AMA_API_KEY_OPENAI", "AMA_API_KEY_ANTHROPIC"],
+      },
+    });
+    const ok = run(launcherExe, canvasEnv());
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(JSON.parse(ok.stdout)).toMatchObject({
+      openai: "sk-o",
+      anthropic: "sk=a=b",
+    });
+
+    const none = run(launcherExe, { ...canvasEnv(), FAKE_CLIENT_MODE: "none" });
+    expect(none.status, none.stderr).toBe(0);
+    expect(JSON.parse(none.stdout)).toMatchObject({
+      openai: null,
+      anthropic: null,
+    });
+
+    const bad = run(launcherExe, { ...canvasEnv(), FAKE_CLIENT_MODE: "bad" });
+    expect(bad.status).toBe(1);
+    expect(bad.stdout).toBe("");
+    expect(bad.stderr).toMatch(/unexpected ama key variable/);
+
+    const outside = run(launcherExe, {
+      ...outsideEnv(),
+      FAKE_CLIENT_MODE: "fail",
+    });
+    expect(outside.status, outside.stderr).toBe(0);
+  });
+});

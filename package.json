@@ -14,7 +14,7 @@
     "notices": "node tools/notices.mjs",
     "notices:check": "node tools/notices.mjs --check",
     "release:dry-run": "node tools/release/dry-run.mjs",
-    "release:test": "node --test tools/release/*.test.mjs tools/notices.test.mjs tools/ci/*.test.mjs tools/dev-stack/*.test.mjs tools/probes/server-perf.test.mjs",
+    "release:test": "node --test tools/release/*.test.mjs tools/notices.test.mjs tools/ci/*.test.mjs tools/dev-stack/*.test.mjs tools/probes/server-perf.test.mjs tools/probes/windows-acceptance.test.mjs",
     "dev-stack": "node tools/dev-stack/dev-stack.mjs",
     "libs:build": "pnpm --filter @armadra/shared build",
     "check": "pnpm libs:build && pnpm format:check && pnpm typecheck && pnpm repo:check && pnpm ci:workflows && pnpm release:check && pnpm notices:check",

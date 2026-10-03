@@ -619,7 +619,24 @@
 
 ## G3-2 Windows 真机验收包
 
-未开始。
+做了什么：
+
+- 验收探针 `tools/probes/windows-acceptance.mjs`（纯函数与 CDP 在 `windows-acceptance-lib.mjs`，临时 HOME 用 `probe-home.mjs`）：`--installer` 静默装 NSIS 包到临时目录、`--app` 对着已装的跑、`--dry-run` 只验脚本；22 项检查（安装与包内布局、Authenticode、更新器状态、sessionHost 后端、cmd / pwsh 7 / 5.1 三个终端的回显与 capture、会话宿主进程与命名管道、三种 shell 里 `armadra-launch.exe` 的参数 / 注入 / 门 / 凭据兑换、DPAPI 凭据状态、回环 Gateway 的 TLS 与关闭、文件监听、保活与资源采样、杀主进程后接回、ConPTY 关闭证明、日志、静默卸载、真实用户配置前后快照），写 `result.json`（形状与回传方式见开发指南「Windows 真机验收」）。干跑进 `pnpm release:test`（三平台）；`nightly.yml` 新增 `windows-acceptance` 作业在 windows runner 上打包并完整跑一遍（保活两分钟），失败进 report 作业的 issue 表。
+- 会话宿主后端的 capture 接 `replay-screen.ts`（状态 §60.5 第三条）：字节排成当前一屏，多帧回放只在首帧重来、多条附着只由最新的一条喂屏幕。
+- Windows 启动器兑换节点凭据与 ama 密钥：`.launch` 多 `credential=` / `credential-var=` / `ama-keys=` / `ama-var=`，`armadra-launch.exe` 起 `armadra-hook credential [--ama]` 读标准输出，名字不在名单、客户端失败或缺席都拒绝启动；core 在有 `armadra-launch.exe` 时对 Windows 开放节点凭据（没有时仍 `credential_unsupported_here`）。契约 §20.2–§20.4、§12.4 与文案同步。
+- 探针在 runner 上跑出来、随包修掉的 Windows 问题（之前打包版 Windows 实际不可用）：桌面壳让 core 听 `unix:C:\…\runtime.sock`，core 拒绝、窗口弹「后台未就绪」——改为命名管道（`main/runtime-process.ts`）；会话宿主取 SID 的裸 `whoami` 在 PATH 有 Git usr\bin 时是 GNU 版——改系统 `whoami.exe` 绝对路径；包外的 `session-host/host.cjs` 找不到 `node-pty`——从 `app.asar.unpacked` 加载；页面一松开终端，会话宿主后端把关连接当成会话退出、行被记 `exited`——主动松开不再报退出；会话宿主建会话只带注入的变量、终端环境继承表按大小写精确匹配，Windows 的 `SystemRoot` / `ComSpec` / `TEMP` 全丢、PowerShell 5.1 起不来（8009001d）——补基础环境并在 Windows 上不分大小写、补系统变量（不含 `PSModulePath`）。
+
+实测：
+
+- windows runner（Windows Server 2025 Datacenter 10.0.26100，pwsh 7.6.6，PowerShell 5.1）上的未签名本地包，`nightly` 运行 37141727509 的 `windows-acceptance` 产物：`status: passed`，20 项过、`install.signature` warn（未签名）、`agent.codex` skip（runner 无 Codex），全程 218 秒；保活两分钟内会话宿主 83→67 MB、句柄 267 不变，杀主进程后三个 shell 同 pid 接回并应答，终止后会话宿主名下的控制台宿主 3→0，卸载后安装目录、注册表卸载项与两个快捷方式都不在，真实用户配置 16 处未变。
+- CI 的 Windows 作业：`windows-launch.test.ts` 新增三例（凭据兑换、拒绝、ama 多行）真编 `armadra-launch.exe` 跑过；`session-host/capture.test.ts`（命名管道 + 假控制台）与 `runtime-process.test.ts` 的管道占用用例在 Windows 上跑。
+- 本机：`pnpm libs:build && pnpm -r --if-present test` 全绿；`pnpm check` 通过。
+
+没做：
+
+- 真机（用户的 Windows 10 / 11、真 CLI、30 分钟保活、用户自己的 shell 配置）没有跑：需用户按开发指南跑一次 `--installer`（有 Codex 时加 `--with-codex`）并回传 `result.json`。
+- 会话宿主空闲三十分钟才退：应用退出后马上卸载或升级时，宿主仍占着 `Armadra.exe`。electron-builder 的 NSIS 会按安装目录结束进程，但一次 runner 运行里卸载后仍留下了 `armadra.exe`（删除与进程退出赛跑）；探针收尾时先结束它再卸载，并把结束掉的进程记进 detail。是否让宿主在没有会话且没有 core 连着时提早退出，留给后续。
+- `agent.codex` 只验「启动行是 `run\codex.exe`、画面出现 Codex」，不验对话；Claude / Copilot 等其他 CLI 与 SSH 节点未覆盖。
 
 ## G3-3 签名、公证与自动更新端到端
 
@@ -713,7 +730,19 @@
 
 ## G3-7 真 CLI 端到端：场景 11 / 12 与三家 TUI
 
-未开始。
+**做了什么**
+
+- C 档开关：`agent-e2e` 起真 CLI / 真模型的场景（1–8、10、11 `--real-model`、12）没设 `ARMADRA_E2E_REAL=1` 就在起任何进程之前退出；`--self-test` 把场景 11 / 12 换成脚本化模型、假 ACP Agent 与假 TUI，其余装配与断言同一份代码。新增 A 档 `tools/ci/e2e.d/agent-e2e-self-test.json`（`--only 11,12 --self-test`），探针本身不会烂掉。
+- 场景 12「六家 ACP」（`agent-e2e/scenario-12-acp.mjs`，设计 acp-session-view §11）：预检、六家各两轮、Claude 审批经页面拒绝、倒着沿环 send（避开三跳上限）与 `context summary`、经页面菜单切终端视图再切回（Claude `resumed: true`、进程带 `--resume <id> --permission-mode acceptEdits`；Copilot `resumed: false`）、OpenCode 休眠与 `/wake`、用量 < 5 万、控制台无错。隔离：core 用 `probe-home.mjs` 的临时 HOME，PATH 最前面是每家的隔离包装（临时 HOME / 配置目录、只复制凭据），其余真 CLI 名字是替身（调用即记、以 97 退出，收尾断言没有调用）。Claude 只能用真实配置目录（钥匙串）：包装换回真实 HOME、去掉 `CLAUDE_CONFIG_DIR`、关自动更新、缺省 `haiku`；终端视图的信任对话框按「Yes」的编号答，认不出的画面不答、先结束终端再切回（切回时 core 敲 `/exit`+回车，敲进对话框就是替人答）。`--record-compat` 把全部通过的那几家的 `initialize` 版本并进 `compatibility.json`。
+- 场景 11 `--real-model`：真供应商（`ARMADRA_E2E_AMA_PROVIDER` / `_MODEL` / `_KEY`），用户的话写成明确指令、成员一律用假 CLI，断言放宽到画布结果（成员与边、两条 ack、汇总便签、`task` 一行 done、第 5 步 `task(agent="ama")` 起的第二个 ama 用同一个真模型回报非空结果、key 不落盘不进日志不进节点 shell）；这套 core 的 PATH 同样挂真 CLI 替身。
+- 守门：`~/.claude/settings.local.json`、`.credentials.json` 进字节指纹；`~/.claude.json` 比顶层键摘要（计数 / 缓存类键与 `projects` 只记不判，其余任何变化判失败，报告只留结论不留内容）；只跑假 CLI 时收尾不再起 `claude` / `codex --version`。
+- 场景 10 把每家 TUI 起来时（或起不来时）的画面存进 `<输出目录>/screens/`，供核对画面门里 `verified: false` 的特征。
+- 修了 `lib.mjs::setup()` 返回里引用未定义的 `injected`（真跑场景 1–8、10 会在装配末尾抛 ReferenceError）；`lib.mjs` 超 1500 行上限，拆出 `safety.mjs`（配置守门）、`cli-homes.mjs`（四家临时 HOME）、`isolated.mjs`（自起 core、`hookIn` / `canvasAsIn` / `contextAsIn`、`acpAdapterInstalled`、`promptViaApi`、`watchWorkspaceEvents`、`blockRealClis`、`startPageStack`），`lib.mjs` 全部再导出。
+- 运行手册：`tools/probes/README.md`「C 档运行手册」（备份与还原命令、每家要装 / 要登录的、命令、花费、每步断言）。
+
+**实测**（本机，未起任何真 CLI、未用真账号）：`--only 11`（脚本化模型，含 ama → ama 第 5 步）30 项全过；`--only 11 --real-model --self-test` 23 项全过；`--only 12 --self-test` 六家 40 项全过，约 164 秒；没设开关时 `--only 12` / `--only 2` / `--only 11 --real-model` 都在起进程前退出。
+
+**没做**：场景 11 真模型版、场景 12 真跑、OpenCode / OMP / Copilot 交互式 TUI 的真跑与画面门特征核实——按手册由用户（或经用户直接授权的会话）跑；`compatibility.json` 各家 `verified` 仍为 null（没有真跑证据）。Copilot 三条权限旗标在 `--acp` 下是否生效、OMP `acp` 是否接受 `--model=`、Pi 的 `settings.json` 键名未经实跑核实，真跑结果出来后按装机结果修。
 
 ## G3-8 安全收尾：泄露检查、公网加固、安全审查
 

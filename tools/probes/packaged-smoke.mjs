@@ -541,45 +541,19 @@ async function main() {
   const backend = await api("/api/terminals/backend");
   note("终端后端", backend);
 
-  // 视频夹具：用打包版自己的 MediaRecorder 录一段 canvas——它录得出来的格式
-  // 就是它该放得出来的格式。
-  const recorded = await evaluate(`
-    const type = ["video/mp4;codecs=avc1.42E01E", "video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm"].find((t) => MediaRecorder.isTypeSupported(t));
-    if (!type) return null;
-    const canvas = document.createElement("canvas");
-    canvas.width = 320; canvas.height = 240;
-    const context = canvas.getContext("2d");
-    const stream = canvas.captureStream(30);
-    const recorder = new MediaRecorder(stream, { mimeType: type });
-    const chunks = [];
-    recorder.ondataavailable = (event) => chunks.push(event.data);
-    let frame = 0;
-    const timer = setInterval(() => {
-      frame += 1;
-      context.fillStyle = "#1e3a8a"; context.fillRect(0, 0, 320, 240);
-      context.fillStyle = "#f97316"; context.fillRect(20 + (frame * 6) % 240, 80, 60, 60);
-      context.fillStyle = "#fff"; context.font = "28px sans-serif"; context.fillText("Armadra " + frame, 20, 40);
-    }, 33);
-    recorder.start(200);
-    await new Promise((done) => setTimeout(done, 1800));
-    recorder.stop();
-    await new Promise((done) => (recorder.onstop = done));
-    clearInterval(timer);
-    const bytes = new Uint8Array(await new Blob(chunks, { type }).arrayBuffer());
-    let binary = "";
-    for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
-    return { type, base64: btoa(binary) };
-  `);
-  if (!recorded) throw new Error("打包版的 MediaRecorder 录不出视频");
-  const videoFile = recorded.type.startsWith("video/mp4")
-    ? "clip.mp4"
-    : "clip.webm";
-  writeFileSync(
+  // 视频夹具：仓库里的一段 H.264（`fixtures/clip-h264.mp4`，320×240、约 1.6
+  // 秒，Chrome 的 MediaRecorder 录的 canvas 动画）。以前在打包版的窗口里现录：
+  // CI 的 macOS 上那个窗口不在前台，canvas 动画的定时器被节流、captureStream
+  // 不出帧，录出来的先是一帧（duration 0.033），后来干脆是 0 字节，编辑器只能
+  // 显示成下载卡片，这一项就跟着失败——要验的是「打包版放得出 H.264」，不是
+  // 「后台窗口录得出视频」。
+  const videoFile = "clip.mp4";
+  copyFileSync(
+    join(root, "tools/probes/fixtures/clip-h264.mp4"),
     join(project, "media", videoFile),
-    Buffer.from(recorded.base64, "base64"),
   );
   writeFileSync(join(project, "media/manual.pdf"), pdfDocument("Armadra PDF"));
-  note("媒体夹具", { video: recorded.type });
+  note("媒体夹具", { video: "fixtures/clip-h264.mp4" });
 
   const workspace = await api("/api/workspaces", {
     method: "POST",
