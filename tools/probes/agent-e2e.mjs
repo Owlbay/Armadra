@@ -63,8 +63,11 @@
 // 产物：<输出目录>/result.json、每个场景的截图、core.log。
 import {
   fingerprint,
+  scenario,
   finalize,
   only,
+  preflight,
+  setupOnly,
   REAL_FLAG,
   realAllowed,
   realModel,
@@ -85,6 +88,8 @@ import scenario9 from "./agent-e2e/scenario-9-team-worktree.mjs";
 import scenario10 from "./agent-e2e/scenario-10-six-way-context.mjs";
 import scenario11 from "./agent-e2e/scenario-11-coordinator.mjs";
 import scenario12 from "./agent-e2e/scenario-12-acp.mjs";
+import { cliPrerequisites, planScenarios } from "./agent-e2e/preflight.mjs";
+import { homedir } from "node:os";
 
 const SCENARIOS = [
   ["1", scenario1],
@@ -119,6 +124,37 @@ async function main() {
     );
   report.mode = selfTest ? "self-test" : real.length > 0 ? "real" : "mock";
 
+  // 共用装配要的 Claude / Codex 前提：缺哪家只跳过依赖它的场景，不让装配崩掉。
+  // `--preflight` 只答这份计划、不起 core（只跑两家的 `--version`、读 auth.json
+  // 的刷新时间）。
+  const clis = shared.length > 0 ? cliPrerequisites({ home: homedir() }) : {};
+  const plan = planScenarios(
+    shared.filter((id) => id !== "6" && id !== "10"),
+    clis,
+  );
+  const sharedRun = [
+    ...plan.run,
+    ...shared.filter((id) => id === "6" || id === "10"),
+  ];
+  report.preflight = {
+    clis: Object.fromEntries(
+      Object.entries(clis).map(([id, entry]) => [
+        id,
+        entry.ok
+          ? { ok: true, version: entry.version }
+          : { ok: false, reason: entry.reason },
+      ]),
+    ),
+    run: sharedRun,
+    skip: plan.skip,
+  };
+  if (preflight) {
+    report.safety.before ??= fingerprint();
+    console.log(JSON.stringify(report.preflight, null, 2));
+    report.status = "preflight";
+    return;
+  }
+
   // 场景 9 用假 CLI、自己起一套 core：单跑它时不要真 CLI 的登录，也不起页面。
   if (only.has("9")) {
     report.safety.before ??= fingerprint();
@@ -134,9 +170,25 @@ async function main() {
     report.safety.before ??= fingerprint();
     await scenario12();
   }
-  if (shared.length === 0) return;
-  const ctx = await setup();
-  for (const [id, run] of SCENARIOS) if (only.has(id)) await run(ctx);
+  for (const [id, reason] of Object.entries(plan.skip))
+    scenario(id).skip(reason);
+  if (sharedRun.length === 0 && !setupOnly) return;
+  const ctx = await setup(clis);
+  if (setupOnly) {
+    const s = scenario("setup-only");
+    const titles = ctx.seeded.map((node) => node.title);
+    s.check("共用装配走完，core 在跑", ctx.runtime.exitCode === null, titles);
+    s.check(
+      "只给可用的那几家建节点",
+      titles.includes("codex-a") === clis.codex.ok &&
+        titles.includes("claude-a") === clis.claude.ok,
+      { titles, codex: clis.codex.ok, claude: clis.claude.ok },
+    );
+    s.finish();
+    state.currentScenario = "teardown";
+    return;
+  }
+  for (const [id, run] of SCENARIOS) if (sharedRun.includes(id)) await run(ctx);
 
   state.currentScenario = "teardown";
   const { page, all, board } = ctx;

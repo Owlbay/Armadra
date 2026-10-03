@@ -60,14 +60,17 @@ export function opencodeBinary() {
  * 与 OpenCode 的 `XDG_DATA_HOME`（`xdgData`）指到给定位置——场景 10 指到 core
  * 的根，core 才认得出这些会话；缺省都在各自的临时 HOME 里（场景 6）。
  */
-export function prepareCliHomes(scratch, { dirs = {} } = {}) {
+export function prepareCliHomes(scratch, { dirs = {}, only } = {}) {
   const clis = {};
+  // `only`：只准备这几家；别的家连凭据都不读。
+  const wanted = (id) => only === undefined || only.has(id);
   const home = (id) => {
     const path = join(scratch, `home-${id}`);
     mkdirSync(path, { recursive: true });
     return path;
   };
   const piAuth = (() => {
+    if (!wanted("pi") && !wanted("omp")) return undefined;
     try {
       return JSON.parse(
         readFileSync(join(homedir(), ".pi/agent/auth.json"), "utf8"),
@@ -153,12 +156,14 @@ export function prepareCliHomes(scratch, { dirs = {} } = {}) {
 
   /* Copilot */
   let token;
-  try {
-    token = execFileSync("gh", ["auth", "token"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {}
+  if (wanted("copilot")) {
+    try {
+      token = execFileSync("gh", ["auth", "token"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+    } catch {}
+  }
   if (which("copilot") && token) {
     const h = home("copilot");
     const copilotHome = dirs.copilot ?? join(h, ".copilot");
@@ -181,6 +186,8 @@ export function prepareCliHomes(scratch, { dirs = {} } = {}) {
   } else {
     clis.copilot = { skip: "没有 copilot，或 `gh auth token` 取不到令牌" };
   }
+  for (const id of ["opencode", "pi", "omp", "copilot"])
+    if (!wanted(id)) clis[id] = { skip: "没选这家" };
   return clis;
 }
 

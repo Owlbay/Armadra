@@ -47,6 +47,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { chosenFamilies } from "./preflight.mjs";
 import {
   cliEnvLines,
   note,
@@ -237,7 +238,11 @@ export default async function run10(ctx) {
   try {
     /* ------------------------------ 准备 ------------------------------ */
 
+    // Claude / Codex 的前提在开跑前查过（`preflight.mjs`）；`ARMADRA_E2E_TUI_ONLY`
+    // 只跑名单里的几家（没选的连凭据都不读）。
+    const chosen = chosenFamilies(process.env.ARMADRA_E2E_TUI_ONLY, FAMILIES);
     const homes = prepareCliHomes(scratch, {
+      only: chosen,
       dirs: {
         pi: environment.PI_CODING_AGENT_DIR,
         omp: environment.PI_CODING_AGENT_DIR,
@@ -245,18 +250,21 @@ export default async function run10(ctx) {
         xdgData: environment.XDG_DATA_HOME,
       },
     });
+    for (const id of FAMILIES) {
+      if (!chosen.has(id)) sixWay.skipped[id] = "ARMADRA_E2E_TUI_ONLY 没选这家";
+      else if (ctx.clis?.[id] !== undefined && !ctx.clis[id].ok)
+        sixWay.skipped[id] = ctx.clis[id].reason;
+      else if (homes[id]?.skip) sixWay.skipped[id] = homes[id].skip;
+    }
     const overrides = {};
     for (const id of ["opencode", "pi", "omp", "copilot"]) {
       const cli = homes[id];
-      if (cli.skip) continue;
+      if (cli.skip || sixWay.skipped[id] !== undefined) continue;
       if (id === "opencode") {
         cli.model = pickFreeModel(scratch, cli);
         note("OpenCode 用的免费模型", cli.model);
       }
       overrides[id] = writeTuiWrapper(scratch, id, cli);
-    }
-    for (const id of FAMILIES) {
-      if (homes[id]?.skip) sixWay.skipped[id] = homes[id].skip;
     }
     const active = FAMILIES.filter((id) => sixWay.skipped[id] === undefined);
     for (const id of FAMILIES) {
