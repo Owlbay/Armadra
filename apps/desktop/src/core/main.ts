@@ -51,7 +51,7 @@ import { install as installAcp } from "./acp";
 import { install as installWorkflow } from "./workflow";
 import { install as installRealtime, realtimeDomain } from "./realtime";
 import { install as installPush } from "./push";
-import { install as installGateway } from "./gateway";
+import { gatewayDomainOf, install as installGateway } from "./gateway";
 
 /**
  * The core process.
@@ -328,6 +328,12 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
 
   // Step 4 — armed before step 5 publishes anything about this process.
   const stop = async (): Promise<void> => {
+    // 对外的 Gateway 先关：它的监听与经它进来的流不在 `server` 的名单上。
+    try {
+      await gatewayDomainOf(server)?.close();
+    } catch (error) {
+      log.warn("could not stop the gateway", { error: describe(error) });
+    }
     await server.close();
     // 实时板：活动文档物化、写快照。更新早已逐条落库，这一步只是让表与快照
     // 在退出时追平，下次启动不必重放。

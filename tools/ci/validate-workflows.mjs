@@ -235,11 +235,60 @@ export function checkWorkflow(name, document) {
   return problems;
 }
 
+/** Every `run` line of a job, joined; empty for a job that is not a mapping. */
+function jobRuns(job) {
+  if (!job || !Array.isArray(job.steps)) return "";
+  return job.steps
+    .map((step) => (typeof step?.run === "string" ? step.run : ""))
+    .join("\n");
+}
+
+/**
+ * The end-to-end tiers (docs/guides/ci-release.md §1.1): tier A runs on every
+ * push as ci.yml's `e2e` job, tier B nightly. A tier that silently stops being
+ * scheduled looks exactly like a tier that passes, so its wiring is asserted.
+ */
+export function checkE2eTiers(documents) {
+  const problems = [];
+  const ci = documents["ci.yml"];
+  // The tiers hang off ci.yml; a directory without it is not this repository's.
+  if (!ci || typeof ci !== "object") return problems;
+  {
+    const job = ci.jobs?.e2e;
+    if (!job) problems.push("ci.yml: has no e2e job running tier A");
+    else {
+      if (!/tools\/ci\/e2e\.mjs\s+--tier\s+a\b/.test(jobRuns(job)))
+        problems.push(
+          "ci.yml: job e2e does not run node tools/ci/e2e.mjs --tier a",
+        );
+      if (!runnerLabels(job).every((label) => label.startsWith("ubuntu-")))
+        problems.push("ci.yml: job e2e must run on ubuntu (tmux, xvfb)");
+    }
+  }
+  const nightly = documents["nightly.yml"];
+  if (!nightly || typeof nightly !== "object")
+    problems.push("nightly.yml: is missing; tier B has nowhere to run");
+  else {
+    const triggers = nightly.on ?? nightly[true] ?? {};
+    if (!Array.isArray(triggers.schedule) || triggers.schedule.length === 0)
+      problems.push("nightly.yml: has no schedule trigger");
+    if (!("workflow_dispatch" in triggers))
+      problems.push("nightly.yml: cannot be run by hand (workflow_dispatch)");
+    const runsTierB = Object.values(nightly.jobs ?? {}).some((job) =>
+      /tools\/ci\/e2e\.mjs\s+--tier\s+b\b/.test(jobRuns(job)),
+    );
+    if (!runsTierB)
+      problems.push("nightly.yml: no job runs node tools/ci/e2e.mjs --tier b");
+  }
+  return problems;
+}
+
 /** Check every workflow in the repository. */
 export function checkWorkflowDirectory(directory = WORKFLOW_DIR) {
   const problems = [];
   const files = readdirSync(directory).filter((name) => /\.ya?ml$/.test(name));
   if (files.length === 0) problems.push(`${directory} holds no workflows`);
+  const documents = {};
   for (const file of files.sort()) {
     let document;
     try {
@@ -248,8 +297,10 @@ export function checkWorkflowDirectory(directory = WORKFLOW_DIR) {
       problems.push(`${file}: ${error.message}`);
       continue;
     }
+    documents[file] = document;
     problems.push(...checkWorkflow(file, document));
   }
+  problems.push(...checkE2eTiers(documents));
   return { files, problems };
 }
 

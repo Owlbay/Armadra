@@ -1,7 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fakeAcpAgentPath } from "@armadra/agent/acp";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { forgetAcpVersions, probeAcp } from "../acp/host";
 import { launcherPath } from "../hook/install/inject";
 import { install as installIntegration } from "../hook/install/integration";
 import { type AgentListRow, listAgents } from "./list";
@@ -229,5 +237,92 @@ describe("listAgents 与版本探测", () => {
     });
     // 别人的行不受影响：版本是那一个程序的事实。
     expect(rows.find((row) => row.id === "claude")?.probe).toBeUndefined();
+  });
+});
+
+/**
+ * `acp` 那一栏（契约 §14.1）：`installed` 每次在补齐过的 PATH 上找适配器程序；
+ * `version` 只读最近一次 `initialize` 报的值，列表从不为它起进程。
+ */
+describe("listAgents 的 acp", () => {
+  afterEach(() => forgetAcpVersions());
+
+  /** PATH 上放一个名叫 `name` 的可执行文件；HOME 用临时目录，不碰本机的。 */
+  function withProgram(name: string): NodeJS.ProcessEnv {
+    const bin = join(home, "bin");
+    mkdirSync(bin, { recursive: true });
+    const file = join(bin, process.platform === "win32" ? `${name}.cmd` : name);
+    writeFileSync(file, "#!/bin/sh\n", "utf8");
+    chmodSync(file, 0o755);
+    return { ...isolated(), PATH: bin };
+  }
+
+  const rowsWith = (env: NodeJS.ProcessEnv, custom: CustomAgent[] = []) =>
+    listAgents({
+      dataDir: fixture.directory,
+      settings: { customAgents: () => custom },
+      env,
+    });
+
+  it("answers the adapter row on every built-in, installed by its program", () => {
+    const rows = rowsWith(withProgram("codex-acp"), [
+      {
+        id: "custom:mine",
+        label: "My Codex",
+        baseAgent: "codex",
+        launchCmd: "/nope/codex-wrapper",
+      },
+    ]);
+    const codex = rows.find((row) => row.id === "codex");
+    expect(codex?.acp).toEqual({
+      support: "official",
+      program: "codex-acp",
+      installed: true,
+      resume: "load",
+    });
+    expect(rows.find((row) => row.id === "copilot")?.acp).toMatchObject({
+      support: "native",
+      program: "copilot",
+      resume: "none",
+    });
+    expect(rows.find((row) => row.id === "pi")?.acp).toMatchObject({
+      support: "community",
+      program: "pi-acp",
+    });
+    for (const row of rows) {
+      expect(Object.keys(row.acp ?? {}).sort(), row.id).toEqual([
+        "installed",
+        "program",
+        "resume",
+        "support",
+      ]);
+    }
+    // custom 借它基础适配器的。
+    expect(rows.find((row) => row.id === "custom:mine")?.acp).toEqual(
+      codex?.acp,
+    );
+  });
+
+  it("carries the version the last initialize reported, and only once installed", async () => {
+    await probeAcp({
+      agentId: "codex",
+      program: process.execPath,
+      args: [fakeAcpAgentPath()],
+      cwd: home,
+    });
+    const installed = rowsWith(withProgram("codex-acp"));
+    expect(installed.find((row) => row.id === "codex")?.acp?.version).toBe(
+      "1.0.0",
+    );
+    expect(
+      installed.find((row) => row.id === "claude")?.acp?.version,
+    ).toBeUndefined();
+    const gone = rowsWith({ ...isolated(), PATH: join(home, "empty") });
+    expect(gone.find((row) => row.id === "codex")?.acp).toMatchObject({
+      installed: false,
+    });
+    expect(gone.find((row) => row.id === "codex")?.acp).not.toHaveProperty(
+      "version",
+    );
   });
 });

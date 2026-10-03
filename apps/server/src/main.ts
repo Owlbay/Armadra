@@ -16,8 +16,11 @@ import {
   wantsJson,
 } from "./cli";
 import { serve } from "./serve";
-import { SELF_SIGNED_CERT, SELF_SIGNED_DIR } from "./tls";
-import { defaultWebRoot } from "./web-root";
+import {
+  SELF_SIGNED_CERT,
+  SELF_SIGNED_DIR,
+} from "../../desktop/src/core/gateway/tls";
+import { defaultWebRoot } from "../../desktop/src/core/gateway/web-root";
 import {
   generate,
   readMarker,

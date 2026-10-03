@@ -38,7 +38,20 @@ export interface LauncherSpec {
   readonly args: readonly string[];
   /** 启动器只给 CLI 进程设的变量（`canvasInjection` 答的 `env`）。 */
   readonly env: readonly (readonly [string, string])[];
+  /**
+   * 节点凭据（契约 §20.4）：节点终端环境里有 `ARMADRA_CREDENTIAL_REF` 时，启动器调
+   * `client credential` 兑换，只认 `variables` 里的名字，在自己的进程里设好再
+   * `exec`。缺席（执行主机那份）时不生成这一段。
+   */
+  readonly credential?: {
+    /** `armadra-hook` 的路径；空串表示没有客户端，带凭据的启动一律拒绝。 */
+    readonly client: string;
+    readonly variables: readonly string[];
+  };
 }
+
+/** 节点终端环境里的凭据条目名（与 `agent/credentials/inject.ts` 同一个常量）。 */
+export const CREDENTIAL_GATE = "ARMADRA_CREDENTIAL_REF";
 
 /** 一个要写的可执行文件。 */
 export interface LauncherFile {
@@ -71,6 +84,40 @@ function exportLines(env: LauncherSpec["env"]): string[] {
 }
 
 /**
+ * 凭据那一段。值经命令替换进启动器自己的变量，从不经过节点的交互 shell、不进
+ * argv；答复的变量名不在这家 CLI 的名单里、客户端失败或缺席，都拒绝启动——
+ * 悄悄用默认登录起 CLI 就是用错了账号。没有 `eval`：每个名字一条字面的分支。
+ */
+function credentialLines(spec: LauncherSpec): string[] {
+  const credential = spec.credential;
+  if (credential === undefined || credential.variables.length === 0) return [];
+  const refuse = (reason: string) =>
+    `printf '%s\\n' ${posixQuote(`armadra: ${reason}`)} >&2; exit 1`;
+  const lines = [`if [ -n "\${${CREDENTIAL_GATE}:-}" ]; then`];
+  if (credential.client === "") {
+    lines.push(`  ${refuse("node credential needs the armadra-hook client")}`);
+  } else {
+    lines.push(
+      `  armadra_pair=$(${posixQuote(credential.client)} credential) || exit $?`,
+      '  case "${armadra_pair%%=*}" in',
+    );
+    for (const name of credential.variables) {
+      if (!ENV_NAME.test(name)) {
+        throw new Error(`not an environment variable name: ${name}`);
+      }
+      lines.push(`    ${name}) ${name}=\${armadra_pair#*=}; export ${name} ;;`);
+    }
+    lines.push(
+      `    *) ${refuse("unexpected node credential variable")} ;;`,
+      "  esac",
+      "  unset armadra_pair",
+    );
+  }
+  lines.push("fi");
+  return lines;
+}
+
+/**
  * `run/<cli>` 的正文。
  *
  * 两个 `exec`，没有子进程：CLI 顶替启动器的 pid，进程树与直接起 CLI 一样。
@@ -87,6 +134,7 @@ export function posixLauncher(spec: LauncherSpec): string {
     `[ -n "\${${LAUNCH_GATE}:-}" ] || exec "$@"`,
     // 变量在第一个 `exec` 之后才设：画布外不设。
     ...exportLines(spec.env),
+    ...credentialLines(spec),
     `exec "$@"${tail === "" ? "" : ` ${tail}`}`,
     "",
   ].join("\n");

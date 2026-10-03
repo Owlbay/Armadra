@@ -287,6 +287,16 @@ describe("takePairingTicket", () => {
     expect(replaceState).toHaveBeenCalledWith(null, "", "/");
   });
 
+  it("accepts the gateway's trailing fingerprint and drops it", () => {
+    vi.stubGlobal("location", {
+      hash: `#pair=abc-123&fp=${"ab".repeat(32)}`,
+      pathname: "/",
+      search: "",
+    });
+    vi.stubGlobal("history", { replaceState: vi.fn() });
+    expect(takePairingTicket()).toBe("abc-123");
+  });
+
   it("ignores anything that is not a pairing fragment", () => {
     vi.stubGlobal("location", { hash: "#settings", pathname: "/", search: "" });
     expect(takePairingTicket()).toBe("");

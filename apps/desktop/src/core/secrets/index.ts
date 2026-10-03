@@ -16,7 +16,11 @@
 import { join } from "node:path";
 
 import { type SecretBackend, unavailableBackend } from "./backend";
-import { plainFileBackend, sealedFileBackend } from "./file";
+import {
+  encryptedFileBackend,
+  plainFileBackend,
+  sealedFileBackend,
+} from "./file";
 import { type IpcChannel, ipcSealer, sealerKindFromEnv } from "./ipc";
 import {
   type SecurityTool,
@@ -69,6 +73,17 @@ export function forcedFileBackend(env: NodeJS.ProcessEnv): boolean {
   return (env.ARMADRA_SECRET_BACKEND ?? "").trim().toLowerCase() === "file";
 }
 
+/**
+ * `ARMADRA_SECRET_BACKEND=file-encrypted`：无窗口的探针与端到端用，同服务器壳的
+ * 默认（数据目录里的 master key，AES-256-GCM），既不碰系统钥匙串、也不是
+ * 明文降级——节点凭据这类拒绝 `file` 的功能可以在临时数据目录里走通。
+ */
+export function forcedEncryptedBackend(env: NodeJS.ProcessEnv): boolean {
+  return (
+    (env.ARMADRA_SECRET_BACKEND ?? "").trim().toLowerCase() === "file-encrypted"
+  );
+}
+
 export interface ResolveOptions {
   readonly dataDir: string;
   readonly env?: NodeJS.ProcessEnv;
@@ -97,6 +112,15 @@ export function resolveSecretBackend(options: ResolveOptions): ResolvedSecrets {
     security,
   });
   if (forcedFileBackend(env)) return done(plainFileBackend(directory));
+  if (forcedEncryptedBackend(env)) {
+    return done(
+      encryptedFileBackend({
+        directory,
+        keyFile: join(directory, "master.key"),
+        createKey: true,
+      }),
+    );
+  }
   if (options.injected !== undefined) return done(options.injected);
   const sealer = sealerKindFromEnv(env);
   if (sealer !== undefined) {

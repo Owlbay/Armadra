@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join as nativeJoin } from "node:path";
+import { variablesFor } from "../../agent/credentials/inject";
 import { storedProbe } from "../../agent/probe";
 import { eventKey } from "./codex";
 import {
@@ -667,6 +668,7 @@ function writeLaunchers(
     shimDir: shimsDirectory(dataDir, nativeJoin),
     args: injection.args,
     env: injection.env,
+    credential: { client: clientBin, variables: variablesFor(agentId) },
   };
   let written: string[];
   let warning: string | undefined;

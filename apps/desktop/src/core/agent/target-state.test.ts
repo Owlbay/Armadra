@@ -82,6 +82,7 @@ describe("投递目标的五态", () => {
     expect(stateSourceIsReported("hook")).toBe(true);
     expect(stateSourceIsReported("extension")).toBe(true);
     expect(stateSourceIsReported("observed")).toBe(false);
+    expect(stateSourceIsReported("acp")).toBe(true);
     expect(stateSourceIsReported(undefined)).toBe(false);
   });
 

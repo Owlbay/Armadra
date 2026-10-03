@@ -10,12 +10,38 @@
  *   * 路由 `/api/acp/*` 的权限在 `http/route-scopes.ts`：读 `terminal:read`，
  *     写 `terminal:create`；契约 §14。
  *
- * 现在只是骨架（G0-3）：`install` 什么也不登记。G1-4 填传输与适配器表，
- * G2-1 填会话、桥与路由。
+ * G1-4 填了传输（`client.ts`）、适配器表（`adapters.ts`）与起会话（`host.ts`），
+ * `GET /api/agents` 的 `acp` 字段在 `agent/list.ts`（契约 §14.1）。`install`
+ * 仍不登记任何东西：会话、桥、归一化与路由在 G2-1。
  */
 
 import type { CoreContext } from "../main";
 
+export {
+  ACP_ADAPTERS,
+  type AcpAdapter,
+  acpAdapter,
+  acpLaunchPlan,
+  acpPermissionModes,
+} from "./adapters";
+export {
+  AcpError,
+  type AcpErrorCode,
+  type AcpExit,
+  type AcpPendingPermission,
+  type AcpPermissionSettlement,
+  AcpProcess,
+} from "./client";
+export {
+  type AcpCapabilities,
+  type AcpHostSession,
+  type AcpStartOptions,
+  probeAcp,
+  rememberedAcpVersion,
+  startAcp,
+  startAdapter,
+} from "./host";
+
 export function install(_context: CoreContext): void {
-  // 骨架：G1-4 / G2-1 填。
+  // G2-1 装配会话、桥与路由。
 }
