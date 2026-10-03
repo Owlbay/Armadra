@@ -23,6 +23,7 @@ import {
   languageServerEventSchema,
   languageSessionEventSchema,
 } from "./language.js";
+import { boardCommentEventSchema } from "./realtime.js";
 import { resourceSnapshotSchema } from "./resources.js";
 import { sshPromptSchema } from "./ssh.js";
 
@@ -103,6 +104,8 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
    * 换手时各一帧。
    */
   boardPresenceSchema.extend({ type: z.literal("canvas.presence") }),
+  /** 一条评论变了（契约 §16.3）：页面重新拉评论，推送按提及叫人。 */
+  boardCommentEventSchema,
   /**
    * A control verb added a node on behalf of `originNodeId` — the node whose
    * agent ran the verb.
@@ -244,6 +247,10 @@ export type LanguageServerWorkspaceEvent = Extract<
 export type ResourceSampleEvent = Extract<
   WorkspaceEvent,
   { type: "resource.sample" }
+>;
+export type BoardCommentEvent = Extract<
+  WorkspaceEvent,
+  { type: "board.comment" }
 >;
 export type CanvasPresenceEvent = Extract<
   WorkspaceEvent,
