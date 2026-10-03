@@ -33,6 +33,25 @@ export const exportPngResponseSchema = z.object({
   bytes: z.number().int().nonnegative(),
 });
 
+/**
+ * `POST /api/workspaces/{id}/exports/{exportId}/text` — a code block put on
+ * the board (contract §14.5). `exportId` is the source node's uuid; the file
+ * lands at `.armadra/exports/acp/<exportId>/<name>` and the answer has the same
+ * shape as the PNG export's.
+ */
+export const MAX_EXPORT_TEXT_BYTES = 1024 * 1024;
+
+export const exportTextRequestSchema = z.object({
+  name: z
+    .string()
+    .regex(/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,119}$/)
+    .refine((value) => !value.includes(".."), {
+      message: "Export name must be a plain file name",
+    }),
+  content: z.string(),
+});
+
+export type ExportTextRequest = z.infer<typeof exportTextRequestSchema>;
 export type ExportPngRequest = z.infer<typeof exportPngRequestSchema>;
 export type ExportPngResponse = z.infer<typeof exportPngResponseSchema>;
 export type ExportNodePngRequest = ExportPngRequest;

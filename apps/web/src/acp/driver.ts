@@ -4,12 +4,19 @@
  * 只认节点数据里写明的 `acp`：缺省按 core 的 `agents.defaultDriver` 定，那是
  * core 起会话时的决定，页面不替它猜——猜错了就是对着一个 PTY 会话画消息流。
  */
-import type { AgentDriver, TerminalAgent } from "@armadra/shared";
+import * as React from "react";
+import {
+  completionSettingsSchema,
+  type AgentDriver,
+  type AgentInfo,
+  type TerminalAgent,
+} from "@armadra/shared";
 import { toast } from "sonner";
 
 import { agentAcpInfo } from "@/agent/launch";
 import { RuntimeRequestError } from "@/api/request";
 import { t } from "@/app/preferences-store";
+import { useRuntimeSettings } from "@/panels/settings/use-runtime-settings";
 import { useCanvasStore } from "@/store/canvas-store";
 import { acpApi } from "./api";
 
@@ -56,4 +63,51 @@ export async function switchDriver(
       ),
     );
   }
+}
+
+/* ------------------------------ 缺省驱动 --------------------------------- */
+
+/**
+ * `agents.defaultDriver`（ACP 设计 §8 第 2 条）的最近一次读数。新建菜单的
+ * 规格不是组件，拿不到查询，所以由挂着的组件（`useDefaultDriverSync`）把设置
+ * 推到这里；还没读到时按缺省 `acp`。
+ */
+let defaultDriverSetting: AgentDriver = "acp";
+
+export function defaultDriver(): AgentDriver {
+  return defaultDriverSetting;
+}
+
+/** 仅测试用。 */
+export function setDefaultDriverForTest(value: AgentDriver): void {
+  defaultDriverSetting = value;
+}
+
+/** 设置文档里的 `agents.defaultDriver`；读不出就是缺省。 */
+export function driverSettingOf(settings: unknown): AgentDriver {
+  return completionSettingsSchema.parse(
+    settings && typeof settings === "object" ? settings : {},
+  ).agents.defaultDriver;
+}
+
+/** 读设置并推给 `defaultDriver()`；返回当前值。 */
+export function useDefaultDriverSync(): AgentDriver {
+  const { settings } = useRuntimeSettings();
+  const value = settings.data ? driverSettingOf(settings.data) : null;
+  React.useEffect(() => {
+    if (value) defaultDriverSetting = value;
+  }, [value]);
+  return value ?? defaultDriverSetting;
+}
+
+/**
+ * 新建节点时写进节点数据的驱动方式：设置是 `acp` 且这家的适配器装了才走 ACP，
+ * 否则这一家退回终端。写明而不是留空：节点上的驱动是建它那一刻的决定，之后
+ * 改设置不该把已有节点翻成另一种视图。
+ */
+export function preferredDriver(
+  agent: Pick<AgentInfo, "acp">,
+  setting: AgentDriver = defaultDriverSetting,
+): AgentDriver {
+  return setting === "acp" && agent.acp?.installed ? "acp" : "terminal";
 }
