@@ -7,7 +7,7 @@
  *     `canvas/documents.saveBoard` 前的拦截写进文档，不绕过文档直写表
  *     （`intercept.ts`）；带 `clientId` 的 HTTP 保存答 409 `realtime_active`。
  *   * 评论不进 `Y.Doc`，落 `board_comments`，由 core 判权限与锚点
- *     （`comments-store.ts`；路由在 G2-6）。
+ *     （`comments-store.ts`，路由 `comments-routes.ts`）。
  *   * `WS …/boards/{boardId}/sync` 升级要 `canvas:read`、更新帧要
  *     `canvas:write`（`http/route-scopes.ts`）。契约 §16.1–§16.2。
  *   * 是否允许把板切到实时看设置 `collab.realtime`（缺省开）；关掉之后没有
@@ -33,6 +33,7 @@ import { completionSettings, settingsDomain } from "../settings";
 import { answered, workspaceId } from "../workspaces/routes";
 import { internalError } from "../workspaces/support";
 import { RealtimeHub, type LiveBoard } from "./hub";
+import { installCommentRoutes } from "./comments-routes";
 import { realtimeHooks } from "./intercept";
 import { isRealtime, realtimeRow } from "./store";
 import { CLOSE_BAD_FRAME, CLOSE_FORBIDDEN, SyncConnection } from "./sync";
@@ -115,6 +116,14 @@ export function install(context: CoreContext): RealtimeHub {
       };
     }),
   );
+
+  // 评论（契约 §16.3）：不进文档，读写都在 `board_comments`。
+  installCommentRoutes(context.server.router, {
+    database,
+    publish: (workspace, event) => {
+      context.bus.emit("workspace.event", { workspaceId: workspace, event });
+    },
+  });
 
   context.server.stream(
     SYNC_PATH,
