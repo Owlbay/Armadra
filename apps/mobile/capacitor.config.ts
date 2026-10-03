@@ -17,7 +17,8 @@ const config: CapacitorConfig = {
   appId: "dev.armadra.mobile",
   appName: "Armadra",
   webDir: "www",
-  loggingBehavior: "debug",
+  // 不记插件调用：Capacitor 的调试日志会把调用参数（含会话密钥）原样写进设备日志。
+  loggingBehavior: "none",
   ios: {
     contentInset: "never",
     limitsNavigationsToAppBoundDomains: false,

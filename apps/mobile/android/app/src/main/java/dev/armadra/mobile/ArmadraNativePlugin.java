@@ -55,7 +55,8 @@ import org.json.JSONObject;
         permissions = {@Permission(alias = "notifications", strings = {Manifest.permission.POST_NOTIFICATIONS})})
 public class ArmadraNativePlugin extends Plugin {
     static final String TAG = "ArmadraNative";
-    private static final Pattern SECRET = Pattern.compile("^[A-Za-z0-9_-]{43}$");
+    /** 会话密钥：{@code <32 位十六进制标识>.<43 位 base64url>}（core {@code identity/tokens.ts}）。 */
+    private static final Pattern SECRET = Pattern.compile("^[0-9a-f]{32}\\.[A-Za-z0-9_-]{43}$");
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private SecureStore store;

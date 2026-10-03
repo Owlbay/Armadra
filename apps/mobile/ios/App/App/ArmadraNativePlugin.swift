@@ -36,7 +36,8 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
     }
 
     private static let installedFlag = "dev.armadra.mobile.installed"
-    private static let secret = "^[A-Za-z0-9_-]{43}$"
+    /// 会话密钥：`<32 位十六进制标识>.<43 位 base64url>`（core `identity/tokens.ts`）。
+    private static let secret = "^[0-9a-f]{32}\\.[A-Za-z0-9_-]{43}$"
 
     private let store: SecretStore = KeychainStore()
     private var currentPin: Pin?

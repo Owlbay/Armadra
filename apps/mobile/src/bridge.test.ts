@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { bundleBridge } from "../scripts/prepare-web.mjs";
 import { nativeBridge } from "../../web/src/mobile/native-bridge";
 
+/** core 发的会话密钥形状：`<32 位十六进制>.<43 位 base64url>`。 */
+const TOKEN_A = `${"0".repeat(32)}.${"a".repeat(43)}`;
+const TOKEN_B = `${"1".repeat(32)}.${"b".repeat(43)}`;
+
 const METHODS = [
   "getSession",
   "setSession",
@@ -56,8 +60,8 @@ describe("plugin bridge", () => {
         ? {
             session: {
               origin: "https://192.168.1.20:8443",
-              accessToken: "a".repeat(43),
-              refreshToken: "b".repeat(43),
+              accessToken: TOKEN_A,
+              refreshToken: TOKEN_B,
             },
           }
         : method === "scan"
@@ -69,8 +73,8 @@ describe("plugin bridge", () => {
     expect(bridge.canScan).toBe(true);
     await expect(bridge.loadSession()).resolves.toEqual({
       origin: "https://192.168.1.20:8443",
-      accessToken: "a".repeat(43),
-      refreshToken: "b".repeat(43),
+      accessToken: TOKEN_A,
+      refreshToken: TOKEN_B,
     });
     await expect(bridge.scan()).resolves.toBe(
       "armadra://pair?host=h&ticket=t&fp=f",
