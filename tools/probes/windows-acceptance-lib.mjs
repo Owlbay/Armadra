@@ -238,6 +238,7 @@ export class Recorder {
    */
   async check(id, run) {
     const started = Date.now();
+    this.log(`  …    ${id}`);
     try {
       const outcome = await run();
       const seconds = Math.round((Date.now() - started) / 100) / 10;

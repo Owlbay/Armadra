@@ -295,7 +295,9 @@ async function attachToRenderer(port) {
   for (let attempt = 0; attempt < 240; attempt += 1) {
     try {
       const targets = await (
-        await fetch(`http://127.0.0.1:${port}/json/list`)
+        await fetch(`http://127.0.0.1:${port}/json/list`, {
+          signal: AbortSignal.timeout(5_000),
+        })
       ).json();
       seen = targets.map((target) => `${target.type} ${target.url}`);
       const page = targets.find(
@@ -315,6 +317,9 @@ async function attachToRenderer(port) {
   );
 }
 
+/** 页面里最长的一次等待（起 Codex 九十秒）再留余量。 */
+const CDP_TIMEOUT_MS = 180_000;
+
 async function cdp(url) {
   const socket = new WebSocket(url);
   const pending = new Map();
@@ -333,11 +338,32 @@ async function cdp(url) {
     if (message.error) waiter.fail(new Error(JSON.stringify(message.error)));
     else waiter.done(message.result);
   });
+  // 应用退出或页面卡住时不能一直等：每次调用都有上限，连接断了全部失败。
+  socket.addEventListener("close", () => {
+    for (const waiter of pending.values())
+      waiter.fail(new Error("CDP 连接断了"));
+    pending.clear();
+  });
   const send = (method, params) =>
     new Promise((done, fail) => {
       const id = next;
       next += 1;
-      pending.set(id, { done, fail });
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        fail(
+          new Error(`CDP ${method} 在 ${CDP_TIMEOUT_MS / 1000}s 内没有回答`),
+        );
+      }, CDP_TIMEOUT_MS);
+      pending.set(id, {
+        done: (value) => {
+          clearTimeout(timer);
+          done(value);
+        },
+        fail: (error) => {
+          clearTimeout(timer);
+          fail(error);
+        },
+      });
       socket.send(JSON.stringify({ id, method, params }));
     });
   return {
@@ -661,7 +687,14 @@ async function runFull(options, result, record, out) {
             windowsVerbatimArguments: true,
             stdio: "ignore",
           });
-          child.on("exit", (code) => done(code));
+          const timer = setTimeout(() => {
+            child.kill();
+            done("安装程序五分钟没有退出");
+          }, 300_000);
+          child.on("exit", (code) => {
+            clearTimeout(timer);
+            done(code);
+          });
           child.on("error", (error) => done(error.message));
         });
         exe = join(installDir, "Armadra.exe");
@@ -1313,7 +1346,7 @@ async function runFull(options, result, record, out) {
         const uninstaller = newestUninstaller(installDir);
         if (uninstaller === undefined)
           return { ok: false, detail: { reason: "安装目录里没有卸载程序" } };
-        spawnSync(uninstaller, ["/S"], { stdio: "ignore" });
+        spawnSync(uninstaller, ["/S"], { stdio: "ignore", timeout: 300_000 });
         // NSIS 卸载程序把自己拷到临时目录再跑，先返回：按结果轮询。
         try {
           await waitFor("安装目录清空", () => !existsSync(exe), {
