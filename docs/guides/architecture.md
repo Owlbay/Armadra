@@ -83,6 +83,14 @@ Gateway（契约 §17）。用法见
 重置时间。数据采集时间与额度重置时间分开显示；后台刷新和手动刷新共用串行化
 与冷却时间，前端只轮询缓存，不把缓存轮询时间当成数据更新时间。
 
+core 自己的全部出站地址登记在 `core/net/outbound.ts`（用途、频率、关闭开关；
+`outbound.test.ts` 扫源码，没登记的 `https://` 真实主机过不了测试）。借用 CLI
+登录令牌的两个额度端点（Claude `api/oauth/usage`、Copilot `copilot_internal/user`
+与它的设备流）默认关（`usage.claudeUsage` / `usage.copilotUsage`），关着时不读凭据、
+不发请求，本机在用的那家在快照里报 `unavailable` + `reason: "policy_off"`，页面第一次
+看到时提示一次；Codex 端点默认开、标「非官方端点」，答 HTML 时报 `unavailable` +
+`reason: "unsupported"`。
+
 各 CLI 留在本机的会话记录经**本地历史适配器**读（`core/history/`，每家一个
 `HistoryAdapter`，在 `history/registry.ts` 的 `HISTORY_ADAPTERS` 登记，目前 claude、
 codex）：根目录（`history/home.ts`，规则与 `hook/install/shared.ts::configHomeWith`
