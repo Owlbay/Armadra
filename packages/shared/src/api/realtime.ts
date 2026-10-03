@@ -110,3 +110,93 @@ export const awarenessStateSchema = z.object({
 });
 
 export type AwarenessState = z.infer<typeof awarenessStateSchema>;
+
+/* -------------------------------------------------------------------------- */
+/*                              评论（契约 §16.3）                              */
+/* -------------------------------------------------------------------------- */
+
+/** 评论正文的上限（字符），与 core `realtime/comments-store.ts` 一致。 */
+export const MAX_COMMENT_CHARS = 10_000;
+
+/** 锚点：节点、白板 item（id 带 `wb:` 前缀与否由页面定）或画布坐标。 */
+export const commentAnchorSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("node"), id: z.string().min(1).max(200) }),
+  z.object({ kind: z.literal("item"), id: z.string().min(1).max(200) }),
+  z.object({
+    kind: z.literal("point"),
+    x: z.number().finite(),
+    y: z.number().finite(),
+  }),
+]);
+
+export type CommentAnchor = z.infer<typeof commentAnchorSchema>;
+
+export const boardCommentSchema = z.looseObject({
+  id: z.string(),
+  boardId: z.string(),
+  anchor: commentAnchorSchema,
+  /** 正文。提及写成 `@[显示名](principal:<id>)`。 */
+  body: z.string(),
+  authorPrincipalId: z.string(),
+  /** 回复指向的顶层评论；回复只有一层，锚点随父评论。 */
+  parentId: z.string().nullable(),
+  createdAtMs: z.number(),
+  updatedAtMs: z.number(),
+  /** 只有顶层评论有；回复随父评论。 */
+  resolvedAtMs: z.number().nullable(),
+  /** core 认出来的提及：对这个工作空间有 `canvas:read` 的 principal。 */
+  mentions: z.array(z.string()),
+});
+
+export type BoardComment = z.infer<typeof boardCommentSchema>;
+
+/** 能被提及的人：对这个工作空间有 `canvas:read`、没停用。 */
+export const commentPersonSchema = z.object({
+  principalId: z.string(),
+  name: z.string(),
+});
+
+export type CommentPerson = z.infer<typeof commentPersonSchema>;
+
+/** `GET …/boards/{boardId}/comments`。 */
+export const commentListSchema = z.looseObject({
+  comments: z.array(boardCommentSchema),
+  people: z.array(commentPersonSchema),
+});
+
+export type CommentList = z.infer<typeof commentListSchema>;
+
+export const COMMENT_ACTIONS = [
+  "created",
+  "updated",
+  "resolved",
+  "reopened",
+  "deleted",
+] as const;
+
+/**
+ * 工作空间事件 `board.comment`：一条评论变了。不带正文；`mentions` 是这一次
+ * 新叫到的人（不含作者），推送域按它发通知。
+ */
+export const boardCommentEventSchema = z.object({
+  type: z.literal("board.comment"),
+  boardId: z.string(),
+  action: z.enum(COMMENT_ACTIONS),
+  comment: z.object({
+    id: z.string(),
+    parentId: z.string().nullable(),
+    anchorKind: z.enum(["node", "item", "point"]),
+    anchorId: z.string().optional(),
+  }),
+  mentions: z.array(z.string()),
+});
+
+/** 提及记号：`@[显示名](principal:<id>)`。 */
+export function mentionToken(name: string, principalId: string): string {
+  const clean =
+    name
+      .replace(/[\]\n]/g, " ")
+      .trim()
+      .slice(0, 80) || "?";
+  return `@[${clean}](principal:${principalId})`;
+}

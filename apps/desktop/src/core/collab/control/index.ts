@@ -12,6 +12,7 @@ import { list, openAgent, openTerminal, sticky, team } from "./nodes";
 import { outbox } from "./outbox";
 import { resolveTarget, send } from "./send";
 import { type Outcome, outcomeBody, raw, result } from "./outcome";
+import { workflowPropose } from "./workflow";
 
 export { outcomeBody };
 
@@ -65,6 +66,8 @@ export const VERBS = [
   "cancel",
   // 批量组队（Agent 自动化设计 §6）：几次 `open-agent` 加上它们之间的依赖。
   "team",
+  // 工作流草案（协调 Agent §5.2）：协调者只出草案，确认是人的事。
+  "workflow-propose",
 ] as const;
 
 export type ControlVerb = (typeof VERBS)[number];
@@ -218,6 +221,8 @@ export async function run(
       return cancel(context, caller, args);
     case "team":
       return team(context, caller, args);
+    case "workflow-propose":
+      return workflowPropose(context, caller, args);
     default:
       throw Refusal.badRequest(`未知的画布动词 \`${verb}\`。`);
   }

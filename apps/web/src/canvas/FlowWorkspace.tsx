@@ -13,6 +13,7 @@ import "../styles/canvas.css";
 import { useCanvasReadOnly } from "../store/canvas/presence";
 import { PresenceBar } from "./PresenceBar";
 import { CursorLayer } from "../realtime/CursorLayer";
+import { CommentLayer } from "../realtime/comments/CommentLayer";
 
 import {
   AlertDialog,
@@ -482,6 +483,8 @@ function FlowWorkspaceInner() {
               <CanvasOverlays />
               {/* 实时板上别人的光标与选区（补全架构 §6.4）；非实时板不画。 */}
               <CursorLayer />
+              {/* 评论钉与评论模式（契约 §16.3）；任何板都有。 */}
+              <CommentLayer />
             </ViewportPortal>
             {/* 白板工具覆盖层（`whiteboard/tools/ToolLayer.tsx`）。 */}
             <ToolLayer />

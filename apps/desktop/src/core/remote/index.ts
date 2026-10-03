@@ -266,15 +266,18 @@ export function install(context: CoreContext): RemoteDomain {
       const hostId = match.params.hostId ?? "";
       try {
         await askpass.start();
-        return {
-          status: 200,
-          body: await validateExecutionHost(hostId, {
-            dataDir: context.dataDir,
-            host: host(hostId),
-            worker: (entry) => workers.get(entry, entry.id),
-            ...(launcher === undefined ? {} : { launcher }),
-          }),
-        };
+        const result = await validateExecutionHost(hostId, {
+          dataDir: context.dataDir,
+          host: host(hostId),
+          worker: (entry) => workers.get(entry, entry.id),
+          ...(launcher === undefined ? {} : { launcher }),
+        });
+        // 健康记录（契约 §21.3）：成功的验证经握手记下；没过的在这里记一笔。
+        // 没配 Worker 的主机不算失败——它本来就只跑终端。
+        if (!result.workerOk && result.reason !== "noWorkerConfigured") {
+          workerFleet().failed(hostId, result.reason ?? "handshakeRefused");
+        }
+        return { status: 200, body: result };
       } catch (failure) {
         if (failure instanceof ValidationRefused) {
           return coreError(failure.status, failure.code, failure.message);

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { fetchNativeTicket, isNativeShell } from "../host/native-session";
+import { isNativeApp, nativeBridge } from "../mobile/native-bridge";
 import { RUNTIME_URL } from "./request";
 
 /**
@@ -18,8 +19,10 @@ import { RUNTIME_URL } from "./request";
  *    Cookie + 双提交的 CSRF 头。配对材料从地址栏的 `#pair=<票>` 来。
  *
  * 凭据只在内存里：不写 localStorage、不进 URL、不发往本源以外的任何地方。
- * 同一浏览器里的几个窗口共用一条 Cookie 会话，也就共用一枚 CSRF：谁换了新的，
- * 经同源的 `BroadcastChannel` 告诉其它窗口（见下面的「多窗口」）。
+ * 原生 App（Capacitor，架构 §7）走和桌面壳同一种 Bearer 传输，区别只是两把
+ * 密钥另存一份在设备钥匙串里（`mobile/native-bridge.ts`），App 重开不用重新配对。
+ * 服务器壳上同一浏览器里的几个窗口共用一条 Cookie 会话，也就共用一枚 CSRF：
+ * 谁换了新的，经同源的 `BroadcastChannel` 告诉其它窗口（见下面的「多窗口」）。
  */
 
 const PREFIX = "/api/identity/";
@@ -157,8 +160,9 @@ function announce(): void {
  *
  * 所以换出来的新令牌经同源的 `BroadcastChannel` 告诉其它窗口，它们直接改用；
  * 真要去换的时候先拿同一把 Web Lock，拿到锁再看一眼是不是别的窗口刚换过。
- * 令牌仍然只在各窗口的内存里，不落任何存储。没有这两样 API 的环境（桌面壳的
- * 单窗口、测试）退回各窗口各管各的。
+ * 令牌仍然只在各窗口的内存里，不落任何存储。没有这两样 API 的环境退回各窗口
+ * 各管各的。只管 Cookie 会话：Bearer 传输（桌面壳、原生 App）里每个窗口各有
+ * 自己的会话、写请求也不带 CSRF 头，既不广播也不采用。
  */
 const CSRF_CHANNEL = "armadra.identity.csrf";
 const CSRF_RENEW_LOCK = "armadra.identity.csrf-renew";
@@ -174,6 +178,9 @@ csrfChannel?.addEventListener("message", (event: MessageEvent) => {
 
 /** 别的窗口换来的令牌：直接改用，不再往外转。 */
 function adoptCsrf(value: string): void {
+  // Bearer 传输（桌面壳、原生 App）每个窗口是自己的会话，不发 CSRF 头，
+  // 别人的令牌与它无关。
+  if (bearerTransport()) return;
   if (!SECRET.test(value) || value === csrf) return;
   const had = csrf !== "";
   csrf = value;
@@ -194,7 +201,8 @@ export function rememberCsrf(value: string): void {
   const changed = next !== csrf;
   csrf = next;
   renewing = null;
-  if (changed && next) csrfChannel?.postMessage({ csrf: next });
+  if (changed && next && !bearerTransport())
+    csrfChannel?.postMessage({ csrf: next });
   if (changed) announce();
 }
 
@@ -249,10 +257,27 @@ export async function ensureCsrf(): Promise<string> {
   return renewing;
 }
 
-function remember(session: IdentitySession): IdentitySession {
+/**
+ * 走 Bearer 传输的两种环境：桌面壳（票换会话）与原生 App（钥匙串里的会话）。
+ * 两者都不用 Cookie、不用 CSRF。
+ */
+function bearerTransport(): boolean {
+  return isNativeShell() || isNativeApp();
+}
+
+function remember(
+  session: IdentitySession,
+  origin: string = RUNTIME_URL,
+): IdentitySession {
   if (session.native) {
     access = session.native.accessToken;
     refresh = session.native.refreshToken;
+    if (isNativeApp())
+      void nativeBridge().saveSession({
+        origin,
+        accessToken: access,
+        refreshToken: refresh,
+      });
   }
   rememberCsrf(session.csrfToken ?? "");
   // CSRF 没变（例如原生传输上两次都是空）时也要announce一次：换了会话。
@@ -271,6 +296,8 @@ interface CallOptions {
   readonly refreshBearer?: boolean;
   /** 不需要会话的那两条：hello 与配对。 */
   readonly anonymous?: boolean;
+  /** 原生 App 的连接页在记下来源之前就要配对，那时 `RUNTIME_URL` 还不是它。 */
+  readonly base?: string;
 }
 
 async function call<T>(
@@ -279,7 +306,7 @@ async function call<T>(
   options: CallOptions = {},
 ): Promise<T> {
   const method = options.method ?? "GET";
-  const native = isNativeShell();
+  const native = bearerTransport();
   const bearer = options.refreshBearer ? refresh : access;
   const headers: Record<string, string> = { Accept: "application/json" };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
@@ -289,7 +316,7 @@ async function call<T>(
 
   let response: Response;
   try {
-    response = await fetch(`${RUNTIME_URL}${PREFIX}${action}`, {
+    response = await fetch(`${options.base ?? RUNTIME_URL}${PREFIX}${action}`, {
       method,
       headers,
       body:
@@ -323,7 +350,7 @@ export const BROWSER_SESSION_CAPABILITY = "identity.browser-session.v1";
 
 /** 这个环境要求 hello 报的会话能力名。 */
 export function sessionCapability(): string {
-  return isNativeShell()
+  return bearerTransport()
     ? NATIVE_SESSION_CAPABILITY
     : BROWSER_SESSION_CAPABILITY;
 }
@@ -367,6 +394,8 @@ export async function pairIdentity(ticket: string): Promise<IdentitySession> {
 export async function resumeIdentity(): Promise<IdentitySession | null> {
   if (isNativeShell() && !access)
     return pairIdentity(await fetchNativeTicket());
+  if (isNativeApp() && !access && !(await restoreNativeCredentials()))
+    return null;
   try {
     return await call("session", identitySessionSchema);
   } catch (error) {
@@ -377,6 +406,12 @@ export async function resumeIdentity(): Promise<IdentitySession | null> {
       // 会话过期时刷新密钥可能还在：换一份再说「没登录」。
       const refreshed = await refreshIdentity().catch(() => null);
       if (refreshed) return refreshed;
+      if (isNativeApp()) {
+        // 刷新密钥也不认了（设备被撤销或过期）：钥匙串里那份作废，回连接页。
+        resetIdentityCredentials();
+        await nativeBridge().clearSession();
+        return null;
+      }
       if (isNativeShell()) {
         // 桌面壳里「登录」是进程内的事实：访问密钥过了 15 分钟、刷新密钥也
         // 到期时，向壳再要一张票重新配对，而不是让面板停在「已断开」等人
@@ -420,8 +455,57 @@ export async function logoutIdentity(): Promise<void> {
     });
   } finally {
     resetIdentityCredentials();
+    if (isNativeApp()) await nativeBridge().clearSession();
     announce();
   }
+}
+
+/* ------------------------------- 原生 App -------------------------------- */
+
+/**
+ * 从钥匙串把上次的会话读回内存。来源对不上（换过 Gateway）的那份不用。
+ * 读到返回 `true`。
+ */
+export async function restoreNativeCredentials(): Promise<boolean> {
+  const stored = await nativeBridge().loadSession();
+  if (stored === null || stored.origin !== RUNTIME_URL) return false;
+  access = stored.accessToken;
+  refresh = stored.refreshToken;
+  return true;
+}
+
+/**
+ * 原生 App 的连接页：对一个还没记下的 Gateway 来源配对。会话照常进内存与
+ * 钥匙串（绑着这个来源），调用方随后记下来源并重载页面。
+ */
+export async function pairWithGateway(
+  origin: string,
+  ticket: string,
+): Promise<IdentitySession> {
+  return remember(
+    await call("pair", identitySessionSchema, {
+      method: "POST",
+      body: { ticket },
+      anonymous: true,
+      base: origin,
+    }),
+    origin,
+  );
+}
+
+/** 当前的访问密钥（原生 App 的 `fetch` 包装用）；没有是空串。 */
+export function currentAccessToken(): string {
+  return access;
+}
+
+/** `POST /api/identity/ws-ticket`：原生 App 升级 WebSocket 前换的一次性票。 */
+export async function fetchWsTicket(): Promise<string> {
+  const answer = await call(
+    "ws-ticket",
+    z.object({ ticket: z.string().min(1) }),
+    { method: "POST" },
+  );
+  return answer.ticket;
 }
 
 /** 这个 principal 配过的设备，按 id 分页。 */

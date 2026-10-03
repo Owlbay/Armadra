@@ -14,6 +14,7 @@ import { getContextLinks } from "../../canvas/context-links";
 import { handlesFor } from "../../canvas/handles";
 import { roleLabel } from "../context-link";
 import { rfc3339, uuidV7 } from "../../workspaces/support";
+import { nodeOwnerPrincipal, recordNodeCreator } from "../../identity/creators";
 import type { Caller } from "../nodes";
 import { type Args, Refusal, collapseNewlines } from "../refusals";
 import { MAX_HOPS, sendLimits } from "../send-limits";
@@ -104,6 +105,27 @@ export function list(context: CollabContext, caller: Caller): Outcome {
   );
 }
 
+/**
+ * 创建者 = 触发者（补全架构 §8.2，契约 §23）：控制动词建的节点，终端将来不管
+ * 由谁、从哪条路起，创建者都是调用方节点终端的创建者——operator 起的协调者
+ * 建的成员，operator 自己驱动得了、审批得了。ama 的 runner 经 `open-agent`
+ * 建节点，同样落在这里。存盘之前记：页面一看见新节点就可能起终端。
+ */
+function inheritCreator(
+  context: CollabContext,
+  caller: Caller,
+  nodes: readonly CanvasNode[],
+): void {
+  const principal = nodeOwnerPrincipal(context.database, caller.node.id);
+  for (const node of nodes) {
+    recordNodeCreator(
+      context.database,
+      { nodeId: node.id, workspaceId: caller.node.workspaceId },
+      principal,
+    );
+  }
+}
+
 function agentOf(node: CanvasNode): string | null {
   const data = node.data;
   if (data === null || typeof data !== "object") return null;
@@ -134,6 +156,7 @@ export function openTerminal(
     placement(document, caller.node.id),
     { kind: "terminal" },
   );
+  inheritCreator(context, caller, [node]);
   save(
     context,
     caller,
@@ -288,6 +311,7 @@ export async function openAgent(
       updatedAt: now,
     },
   ];
+  inheritCreator(context, caller, [node]);
   save(
     context,
     caller,
@@ -673,6 +697,7 @@ export async function team(
     ...created.map((node) => edge(caller.node.id, node.id, "supervises")),
     ...peers.map(([from, to]) => edge(nodeAt(from).id, nodeAt(to).id, "peer")),
   ];
+  inheritCreator(context, caller, created);
   save(context, caller, { ...working, edges }, created[0]);
   for (const node of created) {
     addLink(

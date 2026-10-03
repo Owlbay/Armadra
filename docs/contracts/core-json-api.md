@@ -670,11 +670,165 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 15. 工作流与 runners：`/api/workflows/*`
 
-预留，由 G1-8（§15.1–§15.4）、G2-4（§15.5）与 G2-3（§15.6）填写。
+协调者把一次协作沉淀成**草案**，人确认后成为**模板**，模板按参数**运行**（设计 `design/coordinator-agent.md` §5、`design/completion-architecture.md` §5.4）。表在迁移 `0034_workflow.sql`（`workflow_drafts` / `workflow_templates` / `workflow_runs` / `workflow_run_steps` / `workflow_task_runs`）。zod 在 `packages/shared/src/api/workflows.ts`，core 的手写校验在 `core/workflow/draft.ts`，两边规则相同。§15.5（`wait` 动词与 `workflow_task_runs` 行）由 G2-4、§15.6（自动化目标 `WORKFLOW_RUN`）由 G2-3 填写。
+
+权限按前缀（`http/route-scopes.ts`）：读 `canvas:read`，写 `agent:launch`。路径里没有工作空间，服务器壳上的路由门按草案 / 运行 / 画板查出画布再判，成员的逐条权限与关卡答复见 §23.3。失败一律 `{ code, message }`，`code` 是 snake_case 的稳定码。
+
+### 15.1 草案 JSON 与 `workflow-propose`
+
+控制动词 `workflow-propose`（`collab/control/index.ts::VERBS`；工具名 `canvas_workflow_propose`）：`args.draft` 是草案 JSON（JSON 调用时是对象，命令行上是它的 JSON 字符串，两种都收），`--dry-run` 只校验不落库。成功回 `{ draftId, status: "pending", title }` 并推 `workflow.draft`；草案不成立回 `400 invalid_draft`，消息指出第一处问题。
+
+```json
+{
+  "version": 1,
+  "title": "双人代码审查",
+  "params": [
+    { "name": "scopeA", "type": "string", "label": null, "default": null }
+  ],
+  "roles": [
+    {
+      "id": "reviewerA",
+      "agentId": "claude",
+      "title": null,
+      "permissionMode": "plan",
+      "model": null,
+      "worktree": null
+    },
+    { "id": "lead", "agentId": "codex" }
+  ],
+  "links": [{ "from": "lead", "to": "reviewerA", "role": "supervises" }],
+  "steps": [
+    {
+      "id": "s1",
+      "kind": "prompt",
+      "role": "reviewerA",
+      "prompt": "审查 {{scopeA}}，结论 canvas post 给 lead",
+      "after": []
+    },
+    {
+      "id": "s2",
+      "kind": "collect",
+      "role": "lead",
+      "from": ["s1"],
+      "prompt": "汇总到便签",
+      "after": ["s1"]
+    },
+    { "id": "s3", "kind": "gate", "label": "合并前人工确认", "after": ["s2"] }
+  ],
+  "source": {
+    "boardId": "…",
+    "nodeIds": ["…"],
+    "proposedBy": "ama",
+    "sessionId": "…"
+  }
+}
+```
+
+- `version` ≥ 1 的整数；模板改一次就要更大（§15.2）。`title` 1–160 字。
+- `params[]` ≤ 32：`name` 匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$`，`type` 是 `string` / `path` / `text`（缺省 `string`），可选 `label`、`default`。提示词里 `{{name}}` 在起跑时代入；没声明的 `{{…}}` 原样留着。
+- `roles[]` 1–8：`id` 匹配 `^[A-Za-z][A-Za-z0-9_-]{0,31}$`；`agentId` 是注册表 id 或 `custom:…`；`permissionMode` 是 `default` / `auto-edit` / `full-auto` / `plan` 或 null（这个 CLI 有没有这个模式在起跑时查）；`model` ≤ 120 字；`worktree` 是 worktree 名或相对路径，起跑时与 `canvas team` 一样备好检出，角色的终端开在里面。
+- `links[]` ≤ 32：两个不同角色之间的线，`role` 是 `peer`（缺省）或 `supervises`（`from` 是主）。
+- `steps[]` 1–32，`id` 同角色的规则、草案内唯一；`after` 是别的步骤 id，不能成环。`kind`：
+  - `prompt`：把 `prompt`（代入参数后 ≤ 2000 字）投给 `role` 的节点；
+  - `collect`：先把 `from` 里各步骤的产出放进 `role` 节点的收件箱，再投 `prompt`（末尾加一句「来源步骤的结论在收件箱里」，代入后连这一句 ≤ 2000 字）；`from` 必须都写在它的 `after` 里；
+  - `gate`：停下等人答复（§15.3），`label` 1–160 字。
+- `source` 可选，原样存着；未知字段丢掉。
+
+### 15.2 草案与模板
+
+| 方法与路径                                | 说明                                                                                            |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `GET /api/workflows/drafts`               | `?boardId=`、`?status=pending\|confirmed\|discarded` 过滤，新的在前，最多 200 条 → `{ drafts }` |
+| `GET /api/workflows/drafts/{id}`          | `{ draft }`                                                                                     |
+| `POST /api/workflows/drafts/{id}/confirm` | `{ name?, draft? }`：`draft` 给了就是人改过的那份（重新校验）→ `{ draft, template }`            |
+| `POST /api/workflows/drafts/{id}/discard` | `{ draft }`                                                                                     |
+| `GET /api/workflows/templates`            | `{ templates }`，最近改过的在前                                                                 |
+| `POST /api/workflows/templates`           | `{ name?, template }` → `201 { template }`；`name` 缺省取 `template.title`                      |
+| `GET /api/workflows/templates/{id}`       | `{ template }`                                                                                  |
+| `PUT /api/workflows/templates/{id}`       | `{ name?, template }`，`template.version` 必须大于库里那份，否则 `409 template_version_stale`   |
+| `DELETE /api/workflows/templates/{id}`    | `204`；已有的运行不受影响（运行存的是起跑时的模板快照）                                         |
+
+草案行：`{ id, workspaceId, boardId, proposerNodeId, status, templateId, draft, createdAt, updatedAt }`，`status` 是 `pending` / `confirmed` / `discarded`；不是 `pending` 的草案再确认或丢弃回 `409 draft_not_pending`。模板行：`{ id, name, version, createdFromDraft, template, createdAt, updatedAt }`。
+
+### 15.3 运行、步骤与关卡
+
+| 方法与路径                                     | 说明                                                                                         |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `POST /api/workflows/runs`                     | `{ templateId, params?, boardId? }` → `201 { run }`；`boardId` 缺省取模板的 `source.boardId` |
+| `GET /api/workflows/runs`                      | `?templateId=`、`?boardId=`、`?limit=`（1–200，缺省 50），新的在前 → `{ runs }`              |
+| `GET /api/workflows/runs/{id}`                 | `{ run }`                                                                                    |
+| `POST /api/workflows/runs/{id}/cancel`         | `{ run }`；已结束回 `409 run_finished`                                                       |
+| `POST /api/workflows/runs/{id}/gates/{stepId}` | `{ decision: "approve" \| "reject", note? }` → `{ run }`；不在等人回 `409 gate_not_waiting`  |
+
+起跑当场拒绝的：缺参数或参数未声明（`400 missing_param` / `bad_request`）、代入后超长（`400 prompt_too_long`）、角色的 CLI 没有那个权限模式（`400 permission_mode_unsupported`）、这台机器不认识的 `agentId`（`400 invalid_draft`）、画布不存在（`404`）、worktree 备不好（Git 的拒绝原样）。这些都在动画布之前。
+
+起跑之后 core 在画布上建一个 Frame（标题是模板标题），里面一张起点便签和每个角色一个 Agent 终端节点；便签向每个角色连一条 `supervises` 线，草案的 `links` 照原样连。角色节点由依赖编排的启动路径起终端、敲启动行；提示词是投递队列里的一条（`origin: "first-task"`，发起方是起点便签），门链、租约、回执与 `canvas send` 相同。**页面开不开都一样**；重启后按库里的状态续跑。
+
+```json
+{
+  "run": {
+    "id": "0192…",
+    "templateId": "0192…",
+    "templateVersion": 1,
+    "title": "双人代码审查",
+    "workspaceId": "ws",
+    "boardId": "board",
+    "frameId": "node-frame",
+    "params": { "scopeA": "src/a" },
+    "status": "waiting",
+    "reason": null,
+    "roles": { "reviewerA": "node-a", "lead": "node-l" },
+    "startedAt": "2026-10-03T08:00:00.000Z",
+    "endedAt": null,
+    "steps": [
+      {
+        "stepId": "s1",
+        "kind": "prompt",
+        "role": "reviewerA",
+        "status": "done",
+        "nodeId": "node-a",
+        "startedAt": "2026-10-03T08:00:00.000Z",
+        "endedAt": "2026-10-03T08:03:10.000Z",
+        "reason": null,
+        "outputs": [
+          {
+            "key": "review",
+            "body": "结论…",
+            "at": "2026-10-03T08:03:00.000Z",
+            "target": "node-l"
+          }
+        ],
+        "decision": null,
+        "note": null
+      }
+    ]
+  }
+}
+```
+
+- 运行 `status`：`running` / `waiting`（有关卡在等人）/ `succeeded` / `failed` / `cancelled`；`reason` 是 `<stepId>:<步骤 reason>`（失败时）或 `cancelledByUser`。
+- 步骤 `status`：`pending` / `running` / `waiting`（关卡）/ `done` / `failed` / `skipped`（它等的步骤没成功）/ `cancelled`。一步在 `after` 全部 `done` 时开始；全部步骤结束后，全 `done` 记 `succeeded`，否则 `failed`。
+- `prompt` / `collect` 何时算完：投递落地之后，角色节点**下一轮干净地结束**（判定与 §8 的依赖边相同：只认基准之后的结束）。失败的 `reason`：`turnFailed` / `turnInterrupted`（这一轮出错或被中断）、`nodeDeleted`、`nodeExited`（终端退出而这一轮没结束）、`roleMissing`、`QUEUE_FULL`，以及投递三次都没投进去时最后一次排队项的码（如 `TARGET_STARTING`）。
+- `outputs`：角色节点在这一步开始之后 `canvas post` 的正文（最多 8 条，回执与引擎放进收件箱的副本不算），`target` 是收件节点。关卡的答复记在 `decision` 与 `note`。
+- 取消：没结束的步骤记 `cancelled`、还排着的提示词收回，节点留在画布上。
+
+### 15.4 事件
+
+三帧经 `WS /api/workspaces/{id}/events`，帧里不带正文，页面据此重读上面的路由：
+
+```text
+{ "type": "workflow.draft", "draftId": "…", "boardId": "…", "status": "pending" }
+{ "type": "workflow.run", "runId": "…", "boardId": "…", "status": "running", "stepId": "s1", "stepStatus": "done" }
+{ "type": "workflow.gate", "runId": "…", "boardId": "…", "stepId": "s3", "label": "合并前人工确认", "state": "waiting" }
+```
+
+- `workflow.draft`：草案出现、被确认或丢弃。
+- `workflow.run`：运行或其中一步换了状态；只有运行换状态时没有 `stepId` / `stepStatus`。
+- `workflow.gate`：`state` 是 `waiting` / `approved` / `rejected` / `cancelled`。
 
 ## 16. 实时协同：`…/boards/{boardId}/sync` 与评论
 
-实现：`apps/desktop/src/core/realtime/`；共享常量与 zod：`packages/shared/src/api/realtime.ts`。§16.3（评论路由）由 G2-6 填写。
+实现：`apps/desktop/src/core/realtime/`；共享常量与 zod：`packages/shared/src/api/realtime.ts`。评论路由在 `realtime/comments-routes.ts`（§16.3）。
 
 ### 16.1 `WS /api/workspaces/{id}/boards/{boardId}/sync`
 
@@ -720,6 +874,67 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
   `enabled` 是设置 `collab.realtime`（缺省 `true`）。页面在 `realtime || enabled` 时连 `…/sync`，否则留在租约 + CAS。
 
 - **关回租约模式**：设置关掉之后，新板不再切换；已经是实时板的，在没有客户端连着时（卸载或下一次 core 写入）先物化、再标 `realtime = 0` 并删掉更新流与快照，表重新成为真相。有客户端连着的板继续服务到它们离开。
+
+### 16.3 评论：`/api/workspaces/{id}/boards/{boardId}/comments*` 与 `board.comment`
+
+评论不进 `Y.Doc`，落 `board_comments`；实时板与租约板一样可用。读要 `canvas:read`，写要 `canvas:write`（路由门与域内各判一次）。板不存在或不在这个工作空间 `404`。
+
+一条评论：
+
+```json
+{
+  "id": "0192…",
+  "boardId": "0191…",
+  "anchor": { "kind": "node", "id": "9b1c…" },
+  "body": "请 @[Vera](principal:3f2a…) 看一下",
+  "authorPrincipalId": "",
+  "parentId": null,
+  "createdAtMs": 1760000000000,
+  "updatedAtMs": 1760000000000,
+  "resolvedAtMs": null,
+  "mentions": ["3f2a…"]
+}
+```
+
+| 字段                | 规则                                                                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `anchor`            | 三选一：`{kind:"node", id}`、`{kind:"item", id}`（白板 item id）、`{kind:"point", x, y}`（画布坐标，有限数）；id 1–200 字符          |
+| `body`              | 去掉首尾空白后 1–10 000 字符。提及写成 `@[显示名](principal:<id>)`                                                                   |
+| `authorPrincipalId` | 写入时取请求的 principal（本机壳的 owner 为 `""`），客户端不能指定                                                                   |
+| `parentId`          | 回复指向一条**顶层**评论（只有一层）；回复的锚点随父评论，请求里的 `anchor` 被忽略                                                   |
+| `resolvedAtMs`      | 只有顶层评论能解决；回复随父评论                                                                                                     |
+| `mentions`          | core 认出来的提及：正文里的 principal 存在、没停用、对这个工作空间有 `canvas:read`；认不出的记号照原文留着，不叫任何人。最多认 20 个 |
+
+| 方法与路径                            | 权限                             | 请求                                                                                                                | 应答                                                                                          |
+| ------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `GET …/comments`                      | `canvas:read`                    | 查询 `anchorKind=node\|item&anchorId=…`（只要这个锚点的，含回复）、`resolved=false`（去掉已解决的线程与它们的回复） | `200 { comments: [评论…], people: [{principalId, name}] }`，按创建时间；`people` 是可提及的人 |
+| `POST …/comments`                     | `canvas:write`                   | `{ anchor, body, parentId? }`                                                                                       | `201` 评论                                                                                    |
+| `PATCH …/comments/{commentId}`        | `canvas:write`，且是作者         | `{ body }`                                                                                                          | `200` 评论；不是作者 `403 forbidden`（owner 也不能改别人的话）                                |
+| `DELETE …/comments/{commentId}`       | `canvas:write`，且是作者或 owner | —                                                                                                                   | `204`；顶层评论的回复一起删；记审计 `canvas.comment.delete`                                   |
+| `POST …/comments/{commentId}/resolve` | `canvas:write`                   | `{ resolved?: boolean }`（缺省 `true`）                                                                             | `200` 评论；回复 `400`                                                                        |
+
+校验失败 `400 bad_request`，评论不存在 `404 not_found`。
+
+**事件** `board.comment`（工作空间事件流）：每次写入一帧，不带正文：
+
+```json
+{
+  "type": "board.comment",
+  "boardId": "0191…",
+  "action": "created",
+  "comment": {
+    "id": "0192…",
+    "parentId": null,
+    "anchorKind": "node",
+    "anchorId": "9b1c…"
+  },
+  "mentions": ["3f2a…"]
+}
+```
+
+`action` 为 `created | updated | resolved | reopened | deleted`；`anchorId` 在点锚时省略。`mentions` 是这一次**新叫到**的人且不含作者：新建时是全部提及，改正文时只是新加的，其余动作为空。页面收到后重新拉列表；推送域（§19）按 `mentions` 给有 `canvas:read` 的人发「有人在评论里提到了你」，深链指向锚定的节点。
+
+**对 Agent 可读**：Agent 经上下文连线读一个节点（`context summary | transcript | terminal`）时，回答末尾附上锚在该节点上、未解决的评论线程（提及换成 `@显示名`，至多 8 KiB），与正文一起脱敏、计入这条连线的读取预算。白板对象与已解决的线程不附。
 
 ### 16.4 awareness 状态
 
@@ -782,7 +997,8 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
     "subject": "CN=192.168.1.20",
     "names": ["192.168.1.20", "mac.local", "127.0.0.1"],
     "notAfter": "2027-11-04T00:00:00.000Z",
-    "caAvailable": true
+    "caAvailable": true,
+    "acme": null
   },
   "error": null
 }
@@ -792,7 +1008,23 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 - `listen` / `port` / `publicOrigin` / `tls.{certFile,keyFile,acmeEmail}` 是设置里的值；`address`、`origin`、`origins` 与 `tls` 的其余字段是运行中的事实，没在运行时为 `null` / `[]`。
 - `origin` 是首选来源（二维码用它）：公网来源优先，否则第一个私网地址，然后主机名，最后 `127.0.0.1`。`origins` 是来源白名单：Origin / Host 必须命中其中之一。`https://localhost` 永远不在里面（它是 Android 版 App 的来源）。
 - `tls.source`：`localCa`、`file`、`acme`、`selfSigned`（只有服务器壳没给证书时）。`fingerprint` 是**信任锚** DER 的 SHA-256：本地 CA 时是 CA，其余是叶证书。`caAvailable` 表示 `GET /ca.crt` 有东西可发。
-- `error`：最近一次没能开启的原因，开着或关着时为 `null`。`code` 取值：`acme_unavailable`（ACME 来源尚未实现）、`tls_files_missing`、`port_in_use`、`port_forbidden`、`identity_unavailable`（库没过统一库迁移）、`gateway_failed`（其余，`message` 是原因）。
+- `tls.acme`：ACME 来源在跑时的续期状态，其余来源为 `null`（旧 core 不带这个键）：
+
+  ```json
+  {
+    "directory": "https://acme-v02.api.letsencrypt.org/directory",
+    "profile": null,
+    "names": ["armadra.example.com"],
+    "notAfter": "2026-12-30T08:00:00.000Z",
+    "renewAt": "2026-11-30T08:00:00.000Z",
+    "failures": 0,
+    "lastError": null
+  }
+  ```
+
+  `profile` 是 `shortlived` / `classic` / `null`（CA 缺省）；`renewAt` 是下一次续期，失败后是下一次重试；`failures` 是连续失败次数，到 3 次时 core 记一条错误日志通知运维，期间**继续用旧证书**直到它过期；`lastError` 是 `{ code, message }`。证书是公共 CA 签的，没有信任锚可发，`caAvailable` 为 `false`，`fingerprint` 是叶证书的、每次续期都会变。
+
+- `error`：最近一次没能开启的原因，开着或关着时为 `null`。`code` 取值：`acme_misconfigured`（缺邮箱、缺对外来源、对外来源是回环地址或 `ARMADRA_ACME_*` 取值不对）、`acme_port_unavailable`（`http-01` 挑战端口开不了）、`acme_failed`（CA 拒绝或连不上，`message` 是原因）、`tls_files_missing`、`port_in_use`、`port_forbidden`、`identity_unavailable`（库没过统一库迁移）、`gateway_failed`（其余，`message` 是原因）。
 
 ### 17.2 `PUT /api/gateway`
 
@@ -1214,6 +1446,34 @@ TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时
 - `POST /api/execution-hosts/{id}/resync`：丢掉这台主机的控制连接，重新握手（刚升级的 Worker 在这里报新版本），再把画布注入重新同步一次（开过画布 SSH 终端的主机立刻同步并重开中继；没开过的只清掉「待升级」记号）。答复与 `GET …/{id}` 同形。不存在 404 `not_found`；没配 Worker 501 `unsupported`；连不上或握手失败按远端的错误码答（如 503 `unavailable`）。权限与其余执行主机写路由相同（`settings:write`）。
 - `GET /api/agents/{id}/integration` 多一个 `outdatedHosts: [{ hostId, name?, version? }]`：舰队判为过旧的主机，加上注入同步时 Worker 只有 `remote.integration.v1` 的主机（§13.4），按主机 id 去重排序。每个 CLI 的集成状态给的是同一份表；没有远端域的 core 不给这个字段。`GET /api/agents` 的行**不**带它。
 
+### 21.3 健康探测历史
+
+`GET /api/execution-hosts`、`GET …/{id}` 与 `POST …/resync` 的 SSH 行多一个可选的 `health`：这次运行里这台主机最近 20 条健康记录，旧的在前；一条都没有时不出现，本机行永远没有。只在内存里，core 重启从空开始。
+
+```json
+[
+  {
+    "at": "2026-10-03T08:00:00.000Z",
+    "event": "handshake",
+    "ok": true,
+    "version": "0.1.0"
+  },
+  { "at": "2026-10-03T08:05:00.000Z", "event": "disconnected", "ok": false },
+  {
+    "at": "2026-10-03T08:06:00.000Z",
+    "event": "failed",
+    "ok": false,
+    "code": "unreachable"
+  }
+]
+```
+
+| `event`        | 何时记                                                                                                                  |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `handshake`    | 控制连接握手成功（含验证与重新同步触发的握手）；`version` 是对方报的 `runtimeVersion`，没报时不出现                     |
+| `disconnected` | 控制连接从在线变为断开                                                                                                  |
+| `failed`       | `POST …/validate` 没过（`code` 是答复的 `reason`；`noWorkerConfigured` 不记）或 `POST …/resync` 失败（`code` 是错误码） |
+
 ## 22. 投递画面门补充
 
 画面门（[投递设计](../design/agent-delivery.md) §4.3「画面门」）的判据在 `core/agent/screen-gate.ts`，「取画面 → 判定 → 退回理由」在 `core/collab/screen.ts::checkScreen`；`send`（§12）与计划投递共用这一份。线上没有新路由，变化只在理由码与判据。
@@ -1250,4 +1510,58 @@ TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时
 
 ## 23. 权限补充：自己创建的终端与工作流关卡
 
-预留，由 G2-9 填写。
+补全架构 §8.2 的角色决定。判定只有一处：`core/identity/route-access.ts`（路由门），触发者的记法在 `core/identity/creators.ts`。不做节点级的「驱动者名单」。
+
+### 23.1 角色阶梯
+
+| 角色     | 画布 | 起 Agent | 驱动 / 审批自己起的 | 驱动 / 审批别人起的 | 工作流关卡 |
+| -------- | ---- | -------- | ------------------- | ------------------- | ---------- |
+| viewer   | 看   | 否       | —                   | 否                  | 否         |
+| editor   | 改   | 否       | —                   | 否                  | 否         |
+| operator | 改   | 是       | 是                  | 否                  | 是         |
+| driver   | 改   | 是       | 是                  | 是                  | 是         |
+
+「自己起的」= `terminal_sessions.creator_principal_id` 等于请求主体。下列路由对「自己的」要 `terminal:create@workspace`（operator），对「别人的」要括号里的那条（driver）：
+
+| 路由                                               | 「自己的」按什么判                                       | 别人的要          |
+| -------------------------------------------------- | -------------------------------------------------------- | ----------------- |
+| `/api/terminals/{id}/…` 的写（含 `…/ws`）          | 会话行                                                   | `terminal:drive`  |
+| `POST /api/acp/sessions/{id}/prompt\|cancel\|mode` | 会话行                                                   | `terminal:drive`  |
+| `POST /api/acp/nodes/{nodeId}/driver`              | 节点最近的会话行；还没起过时是节点记下的触发者           | `terminal:drive`  |
+| `POST /api/approvals/{pendingId}/answer`           | 审批行的 `session_id` 那一行；旧行没有时按节点最近的会话 | `approval:answer` |
+| `POST /api/control/confirm/{requestId}`            | 不判（只在内存里，查不到终端）                           | `approval:answer` |
+
+### 23.2 创建者 = 触发者
+
+| 终端怎么起来的                                                | 创建者                                              |
+| ------------------------------------------------------------- | --------------------------------------------------- |
+| 人从页面起（`POST /api/terminals`、`POST /api/acp/sessions`） | 本人；节点记过触发者时是那个触发者                  |
+| 控制动词 `open-agent` / `open-terminal` / `team` 建的节点     | 调用方节点终端的创建者                              |
+| ama 的 runner 建的节点                                        | 同上（经 `open-agent`）                             |
+| 工作流的角色节点（`POST /api/workflows/runs`）                | 起跑的人                                            |
+| 定时冷启动                                                    | 自动化的创建者；自动化只有 owner 能建，所以是 owner |
+| 依赖编排、休眠接回、切换驱动、重启接回                        | 节点记下的触发者；接回同一行时沿用那一行的          |
+| 桌面壳、没有请求主体                                          | owner（空串）                                       |
+
+节点的触发者在建节点、存盘之前写进 `node_creators`（迁移 0035），只由 core 写，不在画布文档里。库里的触发器让任何一条起终端的路插入的会话行都继承它；没有记录的节点仍按 0028 的判法（起它的那个人）。`POST /api/acp/sessions` 答的是已经活着的会话、或原地接回的同一行时，创建者不被这次请求改写。
+
+终端会话的 JSON（`GET /api/terminals/{id}`）多一个可选字段 `creatorPrincipalId`（空串是 owner）；页面据它决定对 operator 摆不摆「自己起的」审批按钮（`apps/web/src/app/use-access.ts::useCanAnswer`），判定仍在 core。
+
+一处可接受的隐式提权：editor 能改节点里的启动命令（节点数据），operator 起这个节点时执行它——与「editor 改便签、Agent 读便签」同一信任层级。Agent 之间的驱动仍由连线编译（投递设计 §3.2），与人无关。
+
+### 23.3 工作流
+
+`/api/workflows/*` 路径里没有工作空间，服务器壳的路由门按对象查画布再判（§15）：
+
+| 路由                                          | 画布从哪来               | 要                                |
+| --------------------------------------------- | ------------------------ | --------------------------------- |
+| `GET drafts?boardId=`、`GET runs?boardId=`    | 查询串的画板；不带是 403 | `canvas:read`                     |
+| `GET drafts/{id}`、`GET runs/{id}`            | 草案 / 运行行            | `canvas:read`                     |
+| `POST drafts/{id}/confirm\|discard`           | 草案行                   | `agent:launch`                    |
+| `POST runs` `{ boardId }`                     | 请求体的画板             | `agent:launch`                    |
+| `POST runs/{id}/cancel`                       | 运行行                   | `agent:launch`                    |
+| `POST runs/{id}/gates/{stepId}`               | 运行行                   | `agent:launch`（operator）        |
+| `GET templates`、`GET templates/{id}`         | 模板是本机共用的一份库   | 在任意一块画布上有 `agent:launch` |
+| `POST templates`、`PUT/DELETE templates/{id}` | —                        | 只有 owner                        |
+
+关卡答复是放行或拦下一次运行，与起跑同一档，不是替 Agent 代答，所以要 operator 而不是 `approval:answer`。声明在 `http/route-scopes.ts` 单列一行，常量 `core/workflow/routes.ts::GATE_SCOPE`。

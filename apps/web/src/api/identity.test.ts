@@ -386,6 +386,16 @@ describe("windows of one browser sharing a session", () => {
     expect(calls).toHaveLength(1);
   });
 
+  /** Bearer 传输里每个窗口各有自己的会话：不广播，也不采用别人的。 */
+  it("leaves the Bearer transport out of the sharing", async () => {
+    mocks.nativeShell = true;
+    rememberCsrf(SECRET);
+    other.postMessage({ csrf: OTHER });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(currentCsrf()).toBe(SECRET);
+    expect(heard).toEqual([]);
+  });
+
   it("forgets only the token that was rejected", () => {
     rememberCsrf(NEWER);
     forgetCsrf(SECRET);

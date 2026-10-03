@@ -5,6 +5,7 @@ import {
   AddMenuContent,
 } from "../canvas/menus/AddMenuContent";
 import { DockTools } from "./DockTools";
+import { CommentModeButton } from "@/realtime/comments/CommentLayer";
 import { setCanvasLocked, useCanvasLocked } from "../canvas/canvas-lock";
 import { useMenuTooltip } from "./menu-tooltip";
 import { currentViewportCenter } from "../canvas/placement";
@@ -182,6 +183,7 @@ export function Dock() {
 
         {/* 白板工具组（§5）；画布没挂载时整组连同分隔线一起不渲染。 */}
         <DockTools />
+        <CommentModeButton />
 
         <Separator orientation="vertical" className="mx-1 h-5" />
 

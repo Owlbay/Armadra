@@ -180,6 +180,53 @@ describe("the phone focus page", () => {
     expect(screen.queryByRole("button", { name: "^C" })).toBeNull();
   });
 
+  it("offers no terminal keys when the terminal is driven over ACP", () => {
+    const acp = node("n-acp", "terminal", "会话");
+    acp.data = {
+      kind: "terminal",
+      cwd: "/tmp",
+      agent: { id: "claude", driver: "acp" },
+    } as never;
+    useCanvasStore.setState((state) => ({
+      focusNodeId: "n-acp",
+      document: {
+        ...state.document!,
+        nodes: [...state.document!.nodes, acp],
+      },
+    }));
+    render(<MobileFocusPage />);
+    expect(screen.getByTestId("node-body").textContent).toBe("n-acp");
+    // 会话视图自己的 PromptBox 是输入；PTY 按键条不出现。
+    expect(screen.queryByRole("toolbar")).toBeNull();
+  });
+
+  it("sits on the soft keyboard when the visual viewport shrinks", () => {
+    const listeners = new Set<() => void>();
+    const viewport = {
+      height: 844,
+      offsetTop: 0,
+      addEventListener: (_: string, listener: () => void) =>
+        listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) =>
+        listeners.delete(listener),
+    };
+    vi.stubGlobal("visualViewport", viewport);
+    vi.stubGlobal("innerHeight", 844);
+    useCanvasStore.setState({ focusNodeId: "n-terminal" });
+    render(<MobileFocusPage />);
+    const page = screen.getByRole("dialog");
+    expect(page.style.height).toBe("");
+    act(() => {
+      viewport.height = 500;
+      viewport.offsetTop = 12;
+      for (const listener of listeners) listener();
+    });
+    expect(page.style.height).toBe("500px");
+    expect(page.style.top).toBe("12px");
+    expect(screen.getByRole("toolbar")).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
   it("offers no terminal keys for a node that is not a terminal", () => {
     useCanvasStore.setState({ focusNodeId: "n-editor" });
     render(<MobileFocusPage />);

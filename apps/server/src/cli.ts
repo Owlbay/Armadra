@@ -31,6 +31,8 @@ serve:
   --web-root DIR         apps/web 的构建产物目录
   --tls-cert PATH        TLS 证书（PEM）；与 --tls-key 成对
   --tls-key PATH         TLS 私钥（PEM）
+  --acme EMAIL           用 ACME（缺省 Let's Encrypt）给 --public-origin 签证书并自动
+                         续期；与 --tls-cert/--tls-key 互斥。等同 ARMADRA_ACME_EMAIL
   --device-name NAME     配对时记录的设备名，默认「服务器配对」
   --no-pairing           启动时不铸配对码
 
@@ -96,6 +98,7 @@ const FLAGS: Record<CommandName, readonly string[]> = {
     "--web-root",
     "--tls-cert",
     "--tls-key",
+    "--acme",
     "--device-name",
     "--no-pairing",
     "--output",
