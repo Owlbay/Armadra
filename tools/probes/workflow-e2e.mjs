@@ -10,7 +10,11 @@
  *   3. 经 `/api/workflows/*` 建模板（`s1` prompt → `s2` collect）并起跑；
  *   4. 不开页面：core 自己起角色节点的终端、敲启动行、投提示词、判完成；
  *   5. 断言运行 `succeeded`、`s1` 的产出是假 CLI post 的那条、`s2` 投给 lead
- *      的正文带着汇总说明、lead 的收件箱里有 `s1` 的结论。
+ *      的正文带着汇总说明、lead 的收件箱里有 `s1` 的结论；
+ *   6. 定时触发一次（G2-3，契约 §15.6）：经控制 socket 配对出本机主人，在
+ *      `/api/automations/*` 定义一个「运行工作流」的一次性计划、激活，等调度
+ *      到点起跑；断言工作流多出一次带计划参数的运行且 `succeeded`，自动化运行
+ *      跟着落 `SUCCEEDED`，没有起第二次。
  *
  * 不用真实账号、不碰操作员的数据目录与配置：HOME、XDG、CLAUDE_CONFIG_DIR 全
  * 指到临时目录，跑完删除。前置：`pnpm --filter @armadra/desktop build`。
@@ -18,6 +22,7 @@
  *   node tools/probes/workflow-e2e.mjs [输出目录]
  */
 import { spawn } from "node:child_process";
+import { request as httpRequest } from "node:http";
 import {
   chmodSync,
   existsSync,
@@ -240,6 +245,135 @@ function diagnose() {
   }
 }
 
+/** 经控制 socket 签一张票，再在 HTTP 面上换成本机主人的设备（契约 §3）。 */
+async function pairOwner(origin) {
+  const body = JSON.stringify({ origin, deviceName: "workflow-e2e" });
+  const answer = await new Promise((resolve, reject) => {
+    const call = httpRequest(
+      {
+        socketPath: join(data, "core-control.sock"),
+        path: "/control/identity/ticket",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+        },
+      },
+      (response) => {
+        let text = "";
+        response.on("data", (chunk) => (text += chunk));
+        response.on("end", () =>
+          response.statusCode === 200
+            ? resolve(JSON.parse(text))
+            : reject(new Error(`签票失败 ${response.statusCode} ${text}`)),
+        );
+      },
+    );
+    call.on("error", reject);
+    call.end(body);
+  });
+  await api("/api/identity/pair", {
+    method: "POST",
+    body: JSON.stringify({ ticket: answer.ticket }),
+  });
+  return answer.hostId;
+}
+
+/** 定时触发一次：一次性计划到点起跑同一个模板（契约 §15.6）。 */
+async function scheduleOnce({
+  origin,
+  template,
+  board,
+  workspaceId,
+  firstRunId,
+}) {
+  const hostId = await pairOwner(origin);
+  const query = `?workspaceId=${encodeURIComponent(workspaceId)}`;
+  const planId = "workflow-e2e-plan";
+  const defined = await api(`/api/automations/plans${query}`, {
+    method: "POST",
+    body: JSON.stringify({
+      planId,
+      expectedRevision: 0,
+      payload: JSON.stringify({ params: { topic: "CHANGELOG" } }),
+      config: {
+        workspaceId,
+        title: "workflow-e2e 定时",
+        schedule: { once: { atUnixMs: String(Date.now() + 4_000) } },
+        target: {
+          executionHostId: hostId,
+          kind: "AUTOMATION_TARGET_KIND_WORKFLOW_RUN",
+          // 版本给 0：core 存成模板当前的版本。
+          workflowRun: {
+            templateId: template.id,
+            templateVersion: 0,
+            boardId: board.id,
+          },
+        },
+      },
+    }),
+  });
+  const frozen = defined.plan.config.target.workflowRun;
+  if (frozen.templateVersion !== template.version) {
+    throw new Error(`计划没有冻结模板版本：${JSON.stringify(frozen)}`);
+  }
+  await api(`/api/automations/plans/${planId}/activate${query}`, {
+    method: "POST",
+    body: JSON.stringify({
+      expectedRevision: defined.revision,
+      configVersion: Number(defined.plan.configVersion),
+      configSha256: defined.configSha256,
+    }),
+  });
+  note("定时计划已激活", { planId, at: "+4s" });
+  const automation = await waitFor(
+    "定时运行结束",
+    async () => {
+      const { runs } = await api(
+        `/api/automations/plans/${planId}/runs${query}`,
+      );
+      const run = runs[0]?.run;
+      return run &&
+        [
+          "AUTOMATION_RUN_STATE_SUCCEEDED",
+          "AUTOMATION_RUN_STATE_FAILED",
+          "AUTOMATION_RUN_STATE_SKIPPED",
+          "AUTOMATION_RUN_STATE_CANCELLED",
+          "AUTOMATION_RUN_STATE_EXPIRED",
+        ].includes(run.state)
+        ? run
+        : undefined;
+    },
+    150_000,
+  );
+  result.automation = {
+    state: automation.state,
+    reasonCode: automation.reasonCode,
+  };
+  note("定时运行结束", result.automation);
+  if (automation.state !== "AUTOMATION_RUN_STATE_SUCCEEDED") {
+    throw new Error(`定时运行没有成功：${automation.reasonCode}`);
+  }
+  const { runs } = await api(
+    `/api/workflows/runs?templateId=${encodeURIComponent(template.id)}`,
+  );
+  const scheduled = runs.filter((item) => item.id !== firstRunId);
+  if (scheduled.length !== 1) {
+    throw new Error(`定时应当只起一次运行：${scheduled.length}`);
+  }
+  const [second] = scheduled;
+  if (second.status !== "succeeded" || second.params.topic !== "CHANGELOG") {
+    throw new Error(`定时起的运行不对：${JSON.stringify(second)}`);
+  }
+  const s1 = second.steps.find((step) => step.stepId === "s1");
+  if (
+    !s1?.outputs.some((output) => output.body.includes("look at CHANGELOG"))
+  ) {
+    throw new Error(`定时运行的 s1 没有产出：${JSON.stringify(s1)}`);
+  }
+  note("定时起跑的运行成功", { runId: second.id });
+}
+
 try {
   core = spawn(
     process.execPath,
@@ -261,8 +395,9 @@ try {
 
   api = async (path, init = {}) => {
     const answer = await fetch(new URL(path, origin), {
-      headers: { "Content-Type": "application/json" },
       ...init,
+      // 自动化面要一个本机来源（回环明文、无凭据 = 本机主人，契约 §4）。
+      headers: { "Content-Type": "application/json", Origin: origin },
     });
     const text = await answer.text();
     if (!answer.ok) {
@@ -370,6 +505,13 @@ try {
   } finally {
     database.close();
   }
+  await scheduleOnce({
+    origin,
+    template,
+    board,
+    workspaceId: workspace.id,
+    firstRunId: runId,
+  });
   result.ok = true;
   note("通过");
 } catch (error) {

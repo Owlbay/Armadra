@@ -1,0 +1,32 @@
+# Rendered by tools/release/publish-channels.mjs for {{repo}} {{tag}}.
+# Maintainer: {{owner}} <https://github.com/{{owner}}> (replace with the AUR maintainer)
+# A template for the community-maintained AUR package armadra-bin
+# (external-services §4.3): the project does not maintain an AUR package itself.
+pkgname=armadra-bin
+_pkgname=armadra
+pkgver={{version}}
+pkgrel=1
+pkgdesc="Infinite canvas where AI coding agents collaborate"
+arch=('x86_64' 'aarch64')
+url="https://github.com/{{repo}}"
+license=('MIT')
+depends=('gtk3' 'nss' 'alsa-lib' 'libsecret' 'xdg-utils' 'tmux')
+optdepends=('git: source control panels')
+provides=("${_pkgname}")
+conflicts=("${_pkgname}")
+options=('!strip' '!debug')
+source=("LICENSE-${pkgver}::https://raw.githubusercontent.com/{{repo}}/v${pkgver}/LICENSE")
+source_x86_64=("${_pkgname}-${pkgver}-x86_64.deb::{{downloadBase}}/v${pkgver}/Armadra_${pkgver}_linux-x86_64.deb")
+source_aarch64=("${_pkgname}-${pkgver}-aarch64.deb::{{downloadBase}}/v${pkgver}/Armadra_${pkgver}_linux-aarch64.deb")
+sha256sums=('{{licenseSha256}}')
+sha256sums_x86_64=('{{sha256:linux-x86_64.deb}}')
+sha256sums_aarch64=('{{sha256:linux-aarch64.deb}}')
+
+package() {
+  bsdtar -xf data.tar.* -C "${pkgdir}"
+  # Electron's setuid sandbox helper; the .deb's postinst does the same.
+  chmod 4755 "${pkgdir}/opt/Armadra/chrome-sandbox"
+  install -d "${pkgdir}/usr/bin"
+  ln -sf /opt/Armadra/armadra "${pkgdir}/usr/bin/${_pkgname}"
+  install -Dm644 "LICENSE-${pkgver}" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

@@ -1,0 +1,8 @@
+{
+  "id": "workflow-e2e",
+  "tier": "a",
+  "script": "tools/probes/workflow-e2e.mjs",
+  "args": ["{out}"],
+  "requires": ["tmux"],
+  "timeoutMinutes": 10
+}

@@ -8,6 +8,7 @@ import { resetInboxWake } from "../collab/wake";
 import { rfc3339, uuidV7 } from "../workspaces/support";
 import { parseDraft } from "./draft";
 import { WorkflowEngine } from "./engine";
+import { type EventFrame, TriggerRules } from "../push/triggers";
 import {
   type TemplateRow,
   insertTemplate,
@@ -358,6 +359,13 @@ describe("the three step kinds", () => {
       stepId: "s4",
       label: "合并前确认",
       state: "waiting",
+      nodeId: run.frameId,
+    });
+    // 推送规则认得这一帧：叫人，深链指向运行的 Frame（补全架构 §10）。
+    const gateFrame = events("workflow.gate").at(-1) as unknown as EventFrame;
+    expect(new TriggerRules().draft(run.workspaceId, gateFrame)).toMatchObject({
+      kind: "workflowGate",
+      nodeId: run.frameId,
     });
 
     // 关卡等人：怎么推都不动。

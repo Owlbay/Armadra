@@ -388,22 +388,26 @@ runner、两台 Windows runner 合进同一个目录会互相覆盖，所以 `st
 `assemble` 会把这件事写进 Release 说明顶部，`latest.json` 会把没有签名的
 updater 包排除在外。
 
-| Secret / 变量                                                 | 谁用                                                                 | 缺了会怎样                                   |
-| ------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------- |
-| `APPLE_CERTIFICATE_P12_BASE64`                                | macOS 代码签名（base64 的 Developer ID Application .p12，G2 链）     | 不签名，首次打开有 Gatekeeper 提示           |
-| `APPLE_CERTIFICATE_PASSWORD`                                  | 导入上面的证书                                                       | 只给一半：构建失败                           |
-| `APPLE_SIGNING_IDENTITY`                                      | 指定用哪张证书；缺则取第一张                                         | 钥匙串里有多张时可能选错                     |
-| `APPLE_API_KEY_P8_BASE64`                                     | 公证（推荐）：App Store Connect API key 的 .p8，base64               | 退回 Apple ID；两套都没有就不公证            |
-| `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID`                    | 同上的 key id 与 issuer                                              | 三个只给一部分：构建失败                     |
-| `APPLE_ID` / `APPLE_TEAM_ID`                                  | 公证（回退）                                                         | 不公证，`notarize` 作业把 macOS 列进说明     |
-| `APPLE_APP_SPECIFIC_PASSWORD`                                 | 公证回退用的 app 专用密码                                            | 同上                                         |
-| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` | Windows：Azure Artifact Signing 的 Entra 凭据                        | 与下面三个变量、发布者名一起：缺一个构建失败 |
-| 变量 `AZURE_SIGNING_ENDPOINT` / `_ACCOUNT` / `_PROFILE`       | Windows：Artifact Signing 账户、证书配置                             | 同上                                         |
-| 变量 `ARMADRA_WIN_PUBLISHER_NAME`                             | Windows：证书主体 CN，钉进 `publisherName`                           | Azure 路径必需；证书文件路径缺省取证书 CN    |
-| `WINDOWS_CERT_BASE64` / `WINDOWS_CERT_PASSWORD`               | Windows：OV 证书文件（与 Azure、令牌三选一）                         | 不签名，SmartScreen 提示，不自动更新         |
-| 变量 `ARMADRA_WIN_CERT_SHA1`                                  | Windows：自托管 runner 证书库里的令牌证书                            | 同上                                         |
-| `ARMADRA_LINUX_GPG_KEY` / `ARMADRA_LINUX_GPG_PASSPHRASE`      | Linux 包的 `.asc` 与 rpm 签名                                        | 不带 `.asc`，rpm 不签名，说明里写明          |
-| `ARMADRA_RELEASE_SIGNING_KEY`                                 | 每个产物与 `SHA256SUMS` 的 minisign 签名，`latest.json` 引用的也是它 | 产物不带签名，`latest.json` 为空，说明里写明 |
+| Secret / 变量                                                 | 谁用                                                                                                             | 缺了会怎样                                   |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `APPLE_CERTIFICATE_P12_BASE64`                                | macOS 代码签名（base64 的 Developer ID Application .p12，G2 链）                                                 | 不签名，首次打开有 Gatekeeper 提示           |
+| `APPLE_CERTIFICATE_PASSWORD`                                  | 导入上面的证书                                                                                                   | 只给一半：构建失败                           |
+| `APPLE_SIGNING_IDENTITY`                                      | 指定用哪张证书；缺则取第一张                                                                                     | 钥匙串里有多张时可能选错                     |
+| `APPLE_API_KEY_P8_BASE64`                                     | 公证（推荐）：App Store Connect API key 的 .p8，base64                                                           | 退回 Apple ID；两套都没有就不公证            |
+| `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID`                    | 同上的 key id 与 issuer                                                                                          | 三个只给一部分：构建失败                     |
+| `APPLE_ID` / `APPLE_TEAM_ID`                                  | 公证（回退）                                                                                                     | 不公证，`notarize` 作业把 macOS 列进说明     |
+| `APPLE_APP_SPECIFIC_PASSWORD`                                 | 公证回退用的 app 专用密码                                                                                        | 同上                                         |
+| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` | Windows：Azure Artifact Signing 的 Entra 凭据                                                                    | 与下面三个变量、发布者名一起：缺一个构建失败 |
+| 变量 `AZURE_SIGNING_ENDPOINT` / `_ACCOUNT` / `_PROFILE`       | Windows：Artifact Signing 账户、证书配置                                                                         | 同上                                         |
+| 变量 `ARMADRA_WIN_PUBLISHER_NAME`                             | Windows：证书主体 CN，钉进 `publisherName`                                                                       | Azure 路径必需；证书文件路径缺省取证书 CN    |
+| `WINDOWS_CERT_BASE64` / `WINDOWS_CERT_PASSWORD`               | Windows：OV 证书文件（与 Azure、令牌三选一）                                                                     | 不签名，SmartScreen 提示，不自动更新         |
+| 变量 `ARMADRA_WIN_CERT_SHA1`                                  | Windows：自托管 runner 证书库里的令牌证书                                                                        | 同上                                         |
+| `ARMADRA_LINUX_GPG_KEY` / `ARMADRA_LINUX_GPG_PASSPHRASE`      | Linux 包的 `.asc` 与 rpm 签名                                                                                    | 不带 `.asc`，rpm 不签名，说明里写明          |
+| `ARMADRA_RELEASE_SIGNING_KEY`                                 | 每个产物与 `SHA256SUMS` 的 minisign 签名，`latest.json` 引用的也是它                                             | 产物不带签名，`latest.json` 为空，说明里写明 |
+| `HOMEBREW_TAP_TOKEN`                                          | `distribute.yml` 推 Homebrew tap（细粒度 PAT，只对 tap 仓库 `contents: write`）                                  | 跳过 tap，告警                               |
+| `SCOOP_BUCKET_TOKEN`                                          | `distribute.yml` 推 Scoop bucket（同上，只对 bucket 仓库）                                                       | 跳过 Scoop，告警                             |
+| `WINGET_TOKEN`                                                | `distribute.yml` 用 wingetcreate 向 `microsoft/winget-pkgs` 提 PR（对 fork `contents` + `pull_requests: write`） | 跳过 winget，告警                            |
+| 变量 `ARMADRA_HOMEBREW_TAP` / `ARMADRA_SCOOP_BUCKET`          | tap / bucket 仓库名，缺省 `Owlbay/homebrew-tap` / `Owlbay/scoop-bucket`                                          | 用缺省                                       |
 
 证书与公证密码两个名字沿用 LiveAgent 的拼写；工作流同时接受早先的
 `APPLE_CERTIFICATE` 与 `APPLE_PASSWORD`（`${{ secrets.A || secrets.B }}`），
@@ -433,6 +437,42 @@ macOS 的证书与公证凭据走 §2.6 的两个预检步骤，Windows 走 §2.
 构建之前，否则缺密钥的失败要等到最后一步才出现。该脚本用 Node 直接启动
 electron-vite 的入口——Windows 上包管理器是 `.cmd`，`execFileSync` 不带 shell
 启动不了它。它之前没有别的构建步骤：这个壳不再有受管二进制。
+
+### 3.1 分发渠道与第三方声明
+
+渠道清单不手写：`tools/release/publish-channels.mjs render` 从版本、仓库名与发布里的
+`SHA256SUMS` 渲染 `tools/release/templates/` 下的模板——Homebrew cask（`armadra.rb`，
+dmg）、Scoop（`armadra.json`，便携 zip，`checkver: github`，`autoupdate` 从
+`$baseurl/SHA256SUMS` 取哈希）、winget 三件套（`Owlbay.Armadra`，NSIS 安装包）、AUR
+`armadra-bin` 的 `PKGBUILD`（基于 `.deb`）。文件名取 `artifacts.mjs` 的 `desktopAssets()`，
+`SHA256SUMS` 缺哪个就拒绝渲染；只渲染稳定版。
+
+两处工作流：
+
+- `release.yml` 的 `channels`（Ubuntu：渲染两份——指向 GitHub Release 的与指向
+  `127.0.0.1:8765` 的本地版；PKGBUILD 在 Arch 容器里过 `makepkg --printsrcinfo` 与
+  `namcap`）、`channels-macos`（本地 tap 上 `brew style` / `brew audit --cask --strict`，
+  从本地静态服务器 `brew install --cask` 进临时 appdir，断言包里有 Electron / Chromium
+  声明与 `THIRD_PARTY_NOTICES.md`）、`channels-windows`（`winget validate`、`scoop install`
+  本地版）。只校验，不推送：此时 Release 还是 draft，下载地址对外是 404。
+- `distribute.yml` 挂在 `release: published` 上（也可手动给标签补跑）：从已发布 Release 的
+  `SHA256SUMS` 重新渲染，`publish-tap` / `publish-scoop` 用 `publish-channels.mjs push` 把
+  文件提交进渠道仓库（令牌经 HTTP 头交给 git，不进 URL），`publish-winget` 用
+  wingetcreate 提 PR（包已在 winget-pkgs 里用 `update`，首次用渲染好的三件套 `submit`）。
+  每个作业缺自己的 secret 就跳过并告警。
+
+官方 `homebrew/cask` 与 Scoop `Extras` 有知名度门槛，达到后再提；`brew audit --new` 要求仓库
+公开可查，私有期间只跑 `--strict`。Linux 的结论（外部服务 §4.3）：AUR 只附 `PKGBUILD` 模板、
+不自己维护；apt / rpm 仓库是可选的 W-LINUX-REPO；Flathub 与 Snap 延后——终端、PTY 与任意
+CLI 需要的宽沙箱权限过不了审核。服务器壳镜像推 GHCR 由 `server-image.yml` 负责（G3-5）。
+
+第三方声明：`node tools/notices.mjs` 用 `pnpm licenses list --prod --json` 生成根目录的
+`THIRD_PARTY_NOTICES.md`（每个包带许可证原文），`pnpm check` 里的 `notices:check` 防漂移——
+**改了生产依赖要重新生成并提交**。`apps/desktop/scripts/after-pack.mjs` 把它放进
+`resources/`，把 ama 自带的 `LICENSE` / `THIRD_PARTY_NOTICES.md` 放进 `resources/agent/`，
+并把 Electron 的 `LICENSE.electron.txt` / `LICENSES.chromium.html` 放回 macOS 的
+`Contents/Resources/`（Windows / Linux 上 electron-builder 已放在可执行文件旁，缺了才补）。
+设置 → 关于 → 开源许可显示的就是这份文件。
 
 ## 4. 本地怎么先验
 

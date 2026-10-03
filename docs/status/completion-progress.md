@@ -363,7 +363,17 @@
 
 ## G2-3 工作流页面、再运行与定时（C3）
 
-未开始。
+做了什么：
+
+- core：自动化目标 `WORKFLOW_RUN`（`schedule/types.ts` 的 `workflowRun`、`plan.ts` 归一化与闸门按模板、`workflow-target.ts` 定义时核模板 / 版本 / 画布 / 参数、到点经 `WorkflowEngine.startRun` 起跑，运行 id 由投递的操作标识推出，收据随运行状态 `RUNNING` → `SUCCEEDED` / `FAILED` / `CANCELLED`）；`workflow.gate` 帧带运行 Frame 的 `nodeId`，推送规则只在 `waiting` 时叫人；契约 §15.6、§15.4 补一句。
+- 页面：`apps/web/src/workflow/`（草案卡常驻层、工作面板「工作流」页：模板库 / 起跑参数 / 模板编辑器 / 运行记录 / 两次对比 / 关卡答复）；自动化表单新增「运行工作流」目标（模板库「定时运行」预填）；画布「新建」菜单加「工作流」；`StatusPill` 新增 `done` 色调；展示页 `workflow` 分区换成真组件。
+
+实测：
+
+- `workflow-e2e`（登记进 A 档）新增「定时触发一次」：一次性计划到点起跑，第二次运行带计划参数且 `succeeded`，自动化运行 `SUCCEEDED` / `WORKFLOW_SUCCEEDED`，只起一次。
+- 浏览器（Vite + 裸 core）：草案卡保存入库 → 模板库 → 填参数运行 → 运行记录展开、关卡「答复」通过 → 运行 `succeeded`。服务器壳 + 无头 Chrome：模板库「定时运行」→ 自动化表单预填 → 保存出一条「运行工作流」计划。
+
+没做：运行中节点头部「第 n 步」徽标与完成节点的绿边（设计系统 §4，在画布节点头部，不在本包文件内）；模板编辑器不增删步骤 / 角色，只改已有步骤、名称与参数缺省值；模板改版后已有定时计划按版本冻结跳过，要人重新保存。
 
 ## G2-4 `HostApi.runners` 与 `wait` 动词（C4）
 
@@ -620,7 +630,21 @@
 
 ## G3-9 分发渠道与许可证声明（W-DIST + W-NOTICES）
 
-未开始。
+做了什么：
+
+- 第三方声明：`tools/notices.mjs` 由 `pnpm licenses list --prod --json` 生成根 `THIRD_PARTY_NOTICES.md`（逐包带 LICENSE / NOTICE 原文，单列 Electron / Chromium 与 ama 的随包声明），`pnpm check` 的 `notices:check` 防漂移；`after-pack.mjs` 把它与 ama 的 `LICENSE` / `THIRD_PARTY_NOTICES.md` 放进 `resources/`，Electron 的 `LICENSE.electron.txt` / `LICENSES.chromium.html` 在 macOS 放回 `Contents/Resources/`（`node_modules/electron` 没解包时先跑它的 `install.js`）；设置 → 关于 → 开源许可显示全文。
+- 渠道：`tools/release/templates/`（cask、Scoop、winget 三件套、AUR `armadra-bin` 的 PKGBUILD）+ `publish-channels.mjs`（`render` 从 `SHA256SUMS` 渲染，`push` 提交进 tap / bucket）。`release.yml` 的 `channels` / `channels-macos` / `channels-windows` 渲染并试装、不推送；新 `distribute.yml` 在 Release 转正后推 tap / bucket / winget，各缺 secret 就跳过。GHCR 镜像沿用 G3-5 的 `server-image.yml`。Flathub / Snap / apt-rpm 只写结论（[CI 与发布](../guides/ci-release.md) §3.1）。
+
+实测（2026-10-03，macOS）：
+
+- 本地 tap 上 `brew style`、`brew audit --cask --strict` 通过；从本地 HTTP 服务器 `brew install --cask --appdir=<临时>` 装假 dmg 成功并卸载。`brew audit --new` 因仓库私有 GitHub API 404。
+- PKGBUILD：archlinux 容器 `makepkg --printsrcinfo` 通过，`namcap` 只有 x86_64 字面量与 Maintainer 告警。winget 三件套对官方 1.10.0 JSON schema、Scoop manifest 对 Scoop `schema.json` 校验通过（ajv）。
+- `pnpm check`、`pnpm release:test`、`pnpm -r --if-present test` 全绿。
+
+没做：
+
+- 真推送（需用户建 tap / bucket 仓库、winget-pkgs fork 与三个 PAT）；`distribute.yml` 要合入后才能手动触发验证。
+- 被 electron-vite 打进 `out/` 的桌面 devDependencies 不在 `--prod` 列表里，未单独列声明。
 
 ## G3-10 可选崩溃上报（W-CRASH）
 

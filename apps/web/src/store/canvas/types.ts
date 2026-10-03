@@ -68,6 +68,8 @@ export interface PanelState {
   automation: "closed" | "drawer";
   /** 工作空间的交接历史（自动化设计 §7）。只读，不发起交接。 */
   handoff: "closed" | "drawer";
+  /** 工作流：模板库与运行记录（设计系统 §5.5）。 */
+  workflow: "closed" | "drawer";
   /** 额度、用量与成本看板（§4.2）。抽屉或右侧常驻浮卡。 */
   usage: "closed" | "drawer" | "pinned";
   /** 右侧工作面板的「GitHub」页（Git/GitHub 设计 §1 / 画布平台设计 §4）。 */

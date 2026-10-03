@@ -105,7 +105,13 @@ const EVENTS: readonly [string, EventFrame, string][] = [
   ],
   [
     "工作流关卡",
-    { type: "workflow.gate", runId: "r1", stepId: "s1", nodeId: "n6" },
+    {
+      type: "workflow.gate",
+      runId: "r1",
+      stepId: "s1",
+      nodeId: "n6",
+      state: "waiting",
+    },
     "workflowGate",
   ],
 ];
@@ -251,5 +257,21 @@ describe("不该叫人的那些", () => {
     expect([...payload.title]).toHaveLength(64);
     expect([...payload.tag]).toHaveLength(128);
     expect(payload.url).toBe("armadra://w/w");
+  });
+});
+
+describe("工作流关卡", () => {
+  it("只有开始等人叫人，答复与取消不叫", () => {
+    const { push } = setup();
+    for (const state of ["approved", "rejected", "cancelled"]) {
+      expect(
+        push.handleEvent("w1", {
+          type: "workflow.gate",
+          runId: "r1",
+          stepId: "s1",
+          state,
+        }),
+      ).toBe(0);
+    }
   });
 });

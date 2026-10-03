@@ -34,6 +34,7 @@ import { addItems, createItemId, select } from "../whiteboard/store";
 import { textItemAt } from "../whiteboard/tools/draft";
 import { openMermaidImport } from "../whiteboard/mermaid/open";
 import { openAutomationPanel } from "../../panels/automation/open";
+import { openWorkflowPanel } from "../../workflow/store";
 import { isDesktop } from "../../platform";
 import { preferredDriver } from "../../acp/driver";
 import { openNewAgentWizard } from "../../acp/wizard-open";
@@ -320,6 +321,14 @@ export function buildAddMenu(
       // 计划本身住在 Host 上，所以这一项开的是自动化页，而不是先造一张
       // 指向不存在计划的空卡片。
       run: () => openAutomationPanel(null),
+    },
+    {
+      id: "add.workflow",
+      label: t("add.workflow"),
+      icon: Workflow,
+      group: "content",
+      // 工作流是模板库里的东西，不是一张卡：这一项开模板库（设计系统 §5.5）。
+      run: () => openWorkflowPanel("templates"),
     },
     {
       id: "add.agentActivity",

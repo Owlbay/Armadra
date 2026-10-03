@@ -9,3 +9,7 @@ docs/research
 .claude/skills
 .claude/agents
 target-main
+# 生成文件（node tools/notices.mjs），正文是各包许可证原文
+THIRD_PARTY_NOTICES.md
+# 渠道清单模板（tools/release/publish-channels.mjs 渲染），{{占位符}} 不是合法 YAML
+tools/release/templates
