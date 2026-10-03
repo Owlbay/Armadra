@@ -21,6 +21,7 @@ import { IdentityHttp } from "./http";
 import { totpAt } from "./mfa/totp";
 import { allScopes } from "./scopes";
 import { IdentityService } from "./service";
+import { startHibp } from "./hibp.fixture";
 import { SoftAuthenticator } from "./soft-authenticator.fixture";
 import { IdentityStore } from "./store";
 
@@ -244,6 +245,81 @@ describe("口令策略（§18.1）", () => {
         )
       ).status,
     ).toBe(201);
+  });
+});
+
+describe("泄露检查（§18.1，HIBP fixture）", () => {
+  async function setup(mode: "off" | "warn" | "block", base: string) {
+    const fixture = await harness();
+    const admin = await owner(fixture);
+    fixture.settings.value = {
+      ...fixture.settings.value,
+      breachCheck: mode,
+      breachBase: base,
+    };
+    const created = await call(
+      fixture,
+      "POST",
+      "principals",
+      { displayName: "Hibp" },
+      admin,
+    );
+    const { principalId } = (await created.json()) as { principalId: string };
+    const set = (password: string) =>
+      call(
+        fixture,
+        "POST",
+        "credentials",
+        { principalId, kind: "password", password },
+        admin,
+      );
+    const actions = async () =>
+      (
+        (await (
+          await call(fixture, "GET", "audit?limit=100", undefined, admin)
+        ).json()) as { entries: { action: string; detail: unknown }[] }
+      ).entries;
+    return { set, actions };
+  }
+
+  it("三档：off 不查、warn 照设并标出、block 拒", async () => {
+    const hibp = await startHibp();
+    closing.push(() => hibp.close());
+    const off = await setup("off", hibp.base);
+    const offAnswer = await off.set("armadra-pwned-fixture");
+    expect(offAnswer.status).toBe(201);
+    expect(await offAnswer.json()).not.toHaveProperty("passwordBreached");
+
+    const warn = await setup("warn", hibp.base);
+    const warned = await warn.set("armadra-pwned-fixture");
+    expect(warned.status).toBe(201);
+    expect(await warned.json()).toMatchObject({ passwordBreached: true });
+    const clean = await warn.set("a distinctly unbreached phrase 42");
+    expect(await clean.json()).not.toHaveProperty("passwordBreached");
+    const entries = await warn.actions();
+    const hit = entries.find(
+      (entry) => entry.action === "identity.password.breached",
+    );
+    expect(hit?.detail).toMatchObject({ mode: "warn" });
+    // 审计里没有口令，也没有哈希。
+    expect(JSON.stringify(entries)).not.toContain("pwned-fixture");
+
+    const block = await setup("block", hibp.base);
+    const blocked = await block.set("armadra-pwned-fixture");
+    expect(blocked.status).toBe(400);
+    expect(await code(blocked)).toBe("password_breached");
+    expect((await block.set("a distinctly unbreached phrase 42")).status).toBe(
+      201,
+    );
+  });
+
+  it("离线时不阻止设口令，只记一条审计", async () => {
+    const offline = await setup("block", "http://127.0.0.1:9");
+    const answer = await offline.set("armadra-pwned-fixture");
+    expect(answer.status).toBe(201);
+    expect((await offline.actions()).map((entry) => entry.action)).toContain(
+      "identity.password.breach_check_failed",
+    );
   });
 });
 

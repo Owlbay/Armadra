@@ -10,7 +10,7 @@ import type { CoreRequest } from "../http/router";
 import type { SecretBackend } from "../secrets";
 import { Mfa } from "./mfa";
 import { type RelyingParty, Passkeys, resolveRelyingParty } from "./passkey";
-import { checkBreach, enforcePasswordPolicy } from "./policy";
+import { type BreachMode, checkBreach, enforcePasswordPolicy } from "./policy";
 import { SHARE_ROLES } from "./roles";
 import { scope } from "./scopes";
 import type {
@@ -74,6 +74,12 @@ export interface SecuritySettings {
   /** 配置的公网来源（`gateway.publicOrigin`）；空 = 用请求来源。 */
   readonly publicOrigins: readonly string[];
   readonly mfaRequireFor: "none" | "members" | "all";
+  /**
+   * 泄露检查落地之后的档位（`auto` 已由装配方解析）；缺省 `off`。
+   */
+  readonly breachCheck?: BreachMode;
+  /** 范围接口的根；空 = HIBP 本身（`ARMADRA_HIBP_BASE` 给 fixture）。 */
+  readonly breachBase?: string;
 }
 
 /** 加固的状态与依赖，一轮 core 一份（内存里的挑战表与 IP 桶在这里）。 */
@@ -245,7 +251,13 @@ function credentials(
     const displayName = security.security.store.transaction(
       (tx) => tx.accounts.principal(principalId)?.displayName ?? "",
     );
-    return checkedPassword(security, password, [displayName, principalId], set);
+    return checkedPassword(
+      security,
+      password,
+      [displayName, principalId],
+      set,
+      principalId,
+    );
   }
   if (segments.length === 2 && method === "DELETE") {
     accounts.revokeCredential(subject(context), segments[1] as string);
@@ -689,27 +701,62 @@ export function mfaRequiredFor(
   return false;
 }
 
-/** 口令策略 + 泄露检查（调用点；G3-8 填实现），过了才做 `then`。 */
+/**
+ * 口令策略 + 泄露检查，过了才做 `then`（契约 §18.1）。
+ *
+ * 泄露检查三档：`off` 不查；`warn` 命中照常设、答案多一个 `passwordBreached:
+ * true` 并记审计；`block` 命中答 400 `password_breached`。查不成（离线、超时）
+ * 只记一条 `identity.password.breach_check_failed`，不阻止设口令。审计里只有
+ * 档位与结果，口令与哈希都不进去。
+ */
 async function checkedPassword(
   context: SecurityHttpContext,
   password: string,
   names: readonly string[],
   then: () => Answer,
+  target = "",
 ): Promise<Answer> {
+  const settings = context.security.settings();
   enforcePasswordPolicy(password, {
-    minLength: context.security.settings().passwordMinLength,
+    minLength: settings.passwordMinLength,
     names,
   });
-  const verdict = await checkBreach(password);
-  if (verdict === "breached") {
-    throw new IdentityRefusal(
-      "invalid",
-      400,
-      "password_breached",
-      "Password appears in a known breach corpus",
-    );
+  const mode = settings.breachCheck ?? "off";
+  const verdict = await checkBreach(password, {
+    mode,
+    ...(settings.breachBase ? { base: settings.breachBase } : {}),
+  });
+  if (verdict === "unknown") {
+    record(context.security.store, {
+      action: "identity.password.breach_check_failed",
+      target,
+      detail: { mode, ip: context.remoteIp },
+    });
   }
-  return then();
+  if (verdict === "breached") {
+    record(context.security.store, {
+      action: "identity.password.breached",
+      target,
+      detail: { mode, ip: context.remoteIp },
+    });
+    if (mode === "block") {
+      throw new IdentityRefusal(
+        "invalid",
+        400,
+        "password_breached",
+        "Password appears in a known breach corpus",
+      );
+    }
+  }
+  const answer = then();
+  if (verdict !== "breached") return answer;
+  return {
+    ...answer,
+    body: {
+      ...(answer.body as Record<string, unknown>),
+      passwordBreached: true,
+    },
+  };
 }
 
 function deviceNameOf(body: Record<string, unknown>): string {
