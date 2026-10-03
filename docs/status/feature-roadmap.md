@@ -1,8 +1,8 @@
 # Armadra 功能预期总表
 
-> 状态：2026-09-26 逐行按源码核实的现状（基线 `a3a8266e`，含进度 §47–§61）；2026-10-02 按源码补后续规划第一部分（CLI 协作）涉及的行：会话索引、成本、投递回执、上下文读取、交接、历史数据可用性（进度 §62，[CLI 协作设计](../design/cli-collaboration.md)）。
+> 状态：2026-09-26 逐行按源码核实的现状（基线 `a3a8266e`，含进度 §47–§61）；2026-10-02 补后续规划第一部分（CLI 协作）涉及的行（进度 §62）；2026-10-04 按[补全进度](./completion-progress.md)（下文写「补全 G*-*」）逐行更新 G0–G3 已合入的包，未合入的包按未交付记。
 > 本文回答「产品最终要有什么、现在做到哪」；实现细节与验证命令以 [TypeScript Core 实施进度](./typescript-core-status.md)（下文简称「进度」）为准，架构以 [架构](../guides/architecture.md) 为准。2026-09-19 之前的里程碑记录在[平台实施记录](./platform-implementation-status.md)。
-> 标注：✅ 已交付 · 🔶 部分交付 · ⬜ 未开始。依据一栏写进度文档的节号（§N），或源码位置。需要真机、账号或签名等外部条件才能收尾的项集中在 §4。
+> 标注：✅ 已交付 · 🔶 部分交付 · ⬜ 未开始。依据一栏写进度文档的节号（§N）、补全工作包号，或源码位置。需要真机、账号或签名等外部条件才能收尾的项集中在 §4。
 
 ## 1. 产品定位
 
@@ -12,58 +12,71 @@ Armadra 是 local-first 的 AI Coding 画布：把真实 CLI Agent（Claude Code
 
 业务只有一个执行者：Electron-free 的 TypeScript core。两种壳装配它，页面只有一份。Go Host、Rust Runtime 与 Protobuf 已在 R7d 整体删除（进度 §17、§18），没有跨进程协议，线上形状以 [core JSON 契约](../contracts/core-json-api.md) 为准。
 
-| 层           | 目录                            | 技术                                                                                      | 说明                                                                                                                             |
-| ------------ | ------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| 前端         | `apps/web`                      | React 19、Vite、TypeScript、React Flow 12、xterm.js、CodeMirror 6、shadcn/ui、Tailwind v4 | 唯一页面，两种壳加载同一份产物；白板层自写                                                                                       |
-| core         | `apps/desktop/src/core`         | TypeScript、`node:http(s)`、`ws`、`node:sqlite`、node-pty                                 | 画布、终端、文件、Git、GitHub、身份、调度、语言服务、浏览器、Hook、资源、用量；不 import `electron` 与壳目录                     |
-| 桌面壳       | `apps/desktop/src/main` 等      | Electron、electron-updater、electron-builder                                              | 窗口、托盘、通知、对话框、`<webview>` 浏览器节点；以 `ELECTRON_RUN_AS_NODE` 子进程拉起 core；IPC 只有 `src/shared/ipc.ts` 一张表 |
-| 服务器壳     | `apps/server`                   | Node、TLS                                                                                 | 无窗口；同一份页面与 core，对外只有 HTTPS；设备配对、账号与共享；服务定义生成与原地升级                                          |
-| 远端 Worker  | `core/remote`                   | 同一份 core 包以 `worker --stdio` 启动                                                    | 经 `ssh` 在执行主机上跑文件、Git、语言服务与资源读取；不开库、不监听（进度 §34、§44）                                            |
-| Windows 会话 | `apps/desktop/src/session-host` | TypeScript、ConPTY                                                                        | 持有 ConPTY 会话，比壳活得久（进度 §13）                                                                                         |
-| 共享模型     | `packages/shared`               | zod                                                                                       | 节点 / 边 / 工作空间、CLI 注册表、Git / 交接 / 事件 schema                                                                       |
-| Hook 客户端  | `apps/desktop/src/cli`          | 单文件 JS（`armadra-hook`）；Windows 另有 C# `.exe` 启动器                                | CLI hook 回调、`canvas` / `browser` 动词、上下文读取；任意参数可从标准输入或文件读（进度 §61）                                   |
+| 层             | 目录                              | 技术                                                                                      | 说明                                                                                                                                               |
+| -------------- | --------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 前端           | `apps/web`                        | React 19、Vite、TypeScript、React Flow 12、xterm.js、CodeMirror 6、shadcn/ui、Tailwind v4 | 唯一页面，两种壳加载同一份产物；白板层自写                                                                                                         |
+| core           | `apps/desktop/src/core`           | TypeScript、`node:http(s)`、`ws`、`node:sqlite`、node-pty、Yjs                            | 画布、终端、ACP、文件、Git、GitHub、身份、调度、工作流、实时协同、推送、Gateway、语言服务、浏览器、Hook、资源、用量；不 import `electron` 与壳目录 |
+| 桌面壳         | `apps/desktop/src/main` 等        | Electron、electron-updater、electron-builder                                              | 窗口、托盘、通知、对话框、`<webview>` 浏览器节点；以 `ELECTRON_RUN_AS_NODE` 子进程拉起 core；IPC 只有 `src/shared/ipc.ts` 一张表                   |
+| 服务器壳       | `apps/server`                     | Node、TLS                                                                                 | 无窗口；同一份页面与 core，对外只有 HTTPS；设备配对、账号与共享；服务定义生成与原地升级                                                            |
+| 远端 Worker    | `core/remote`                     | 同一份 core 包以 `worker --stdio` 启动                                                    | 经 `ssh` 在执行主机上跑文件、Git、语言服务与资源读取；不开库、不监听（进度 §34、§44）                                                              |
+| Windows 会话   | `apps/desktop/src/session-host`   | TypeScript、ConPTY                                                                        | 持有 ConPTY 会话，比壳活得久（进度 §13）                                                                                                           |
+| ama 宿主适配器 | `apps/desktop/src/agent-host/ama` | TypeScript，随包 `@armadra/agent`                                                         | 协调者 ama 的画布工具、状态上报、runners、审批（补全 G1-7、G2-4）                                                                                  |
+| 手机壳         | `apps/mobile`                     | Capacitor 8、Swift、Kotlin                                                                | 打包同一份页面；钥匙串、证书钉扎、扫码、推送解密、深链（补全 G3-1）                                                                                |
+| 推送中继       | `apps/push-relay`                 | Node                                                                                      | 商店版 App 的无状态推送中继，只转发端到端加密信封；写完不部署（补全 G1-13）                                                                        |
+| 共享模型       | `packages/shared`                 | zod                                                                                       | 节点 / 边 / 工作空间、CLI 注册表、Git / 交接 / 事件 schema                                                                                         |
+| Hook 客户端    | `apps/desktop/src/cli`            | 单文件 JS（`armadra-hook`）；Windows 另有 C# `.exe` 启动器                                | CLI hook 回调、`canvas` / `browser` 动词、上下文读取、`mcp`（stdio MCP，补全 G1-5）、`credential`；任意参数可从标准输入或文件读（进度 §61）        |
 
 ## 3. 功能总表
 
 ### 3.1 画布
 
-| 功能                                                                                                   | 状态 | 依据                                                    |
-| ------------------------------------------------------------------------------------------------------ | ---- | ------------------------------------------------------- |
-| 9 种节点：terminal（含 Agent）、sticky、group、editor、diff、files、browser、automation、agentActivity | ✅   | `packages/shared/src/domain/primitives.ts` `NODE_TYPES` |
-| 上下文链接 `link`（对等 / 主从，事后可改、可反向），派生边不入库                                       | ✅   | 进度 §25.3、§26.4、§30                                  |
-| React Flow 画布 + 自写白板层（手绘、几何、直线 / 箭头、文字、图片），与节点共用相机与撤销栈            | ✅   | [设计](../design/canvas-react-flow.md)；进度 §32        |
-| 图片内容寻址资产、8 MiB 快照上限、自动保存队列、revision CAS                                           | ✅   | [架构](../guides/architecture.md) §5                    |
-| 缩略图、用量球、命令面板                                                                               | ✅   | `canvas/flow/Minimap.tsx`、`shell/`                     |
-| 窄屏右侧抽屉铺满、停在底部导航上沿；Dock 与顶部通知条让开右侧抽屉                                      | ✅   | 进度 §58.1–§58.3                                        |
-| 文件拖入终端插入路径 / 拖到画布开预览                                                                  | ✅   | `apps/web/src/platform/index.ts` `onFileDrop`           |
-| 白板对象与 Frame 引用到 Agent（`reference` 边、PNG / 文字导出）                                        | ✅   | `canvas/frame-reference.ts`                             |
-| **多设备在线表与画布编辑租约**：谁在看、谁在写、只读提示与接管；同一设备另一窗口免确认接管、接管记审计 | ✅   | 进度 §41、§49、§56                                      |
-| Kanban 退役为只读归档；节点备注保留                                                                    | ✅   | —                                                       |
+| 功能                                                                                                                                     | 状态 | 依据                                                    |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | ---- | ------------------------------------------------------- |
+| 9 种节点：terminal（含 Agent）、sticky、group、editor、diff、files、browser、automation、agentActivity                                   | ✅   | `packages/shared/src/domain/primitives.ts` `NODE_TYPES` |
+| 上下文链接 `link`（对等 / 主从，事后可改、可反向），派生边不入库                                                                         | ✅   | 进度 §25.3、§26.4、§30                                  |
+| React Flow 画布 + 自写白板层（手绘、几何、直线 / 箭头、文字、图片），与节点共用相机与撤销栈                                              | ✅   | [设计](../design/canvas-react-flow.md)；进度 §32        |
+| 图片内容寻址资产、8 MiB 快照上限、自动保存队列、revision CAS                                                                             | ✅   | [架构](../guides/architecture.md) §5                    |
+| 缩略图、用量球、命令面板                                                                                                                 | ✅   | `canvas/flow/Minimap.tsx`、`shell/`                     |
+| 窄屏右侧抽屉铺满、停在底部导航上沿；Dock 与顶部通知条让开右侧抽屉                                                                        | ✅   | 进度 §58.1–§58.3                                        |
+| 文件拖入终端插入路径 / 拖到画布开预览                                                                                                    | ✅   | `apps/web/src/platform/index.ts` `onFileDrop`           |
+| 白板对象与 Frame 引用到 Agent（`reference` 边、PNG / 文字导出）                                                                          | ✅   | `canvas/frame-reference.ts`                             |
+| **多设备在线表与画布编辑租约**：谁在看、谁在写、只读提示与接管；同一设备另一窗口免确认接管、接管记审计（`collab.realtime` 关闭时的模式） | ✅   | 进度 §41、§49、§56                                      |
+| **多人实时协同**：Yjs 文档、同时编辑收敛、在线条与光标 / 选区、跟随、只读、离线编辑重连补齐、撤销按人                                    | ✅   | 补全 G1-9、G2-5；契约 §16；A 档 `realtime-e2e`          |
+| **评论**：评论钉、线程、回复、解决 / 重开、`@` 提及推送；Agent 经连线读节点时附未解决的评论                                              | ✅   | 补全 G2-6；契约 §16.3                                   |
+| **设计系统与展示页**：token、16 个新 shadcn 组件、手机底部对话框、展示页 14 个分区 × 两主题 × 三宽度截图与对比度探针                     | ✅   | 补全 G0-6、G1-14、G2-11、G3-11                          |
+| Kanban 退役为只读归档；节点备注保留                                                                                                      | ✅   | —                                                       |
 
 ### 3.2 Agent 终端与协作
 
-| 功能                                                                                                                                                                               | 状态 | 依据                                                                                                                       |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- | -------------------------------------------------------------------------------------------------------------------------- |
-| 6 种 CLI 与自定义 CLI 启动、resume、权限模式、模型选择（模型目录 + 版本探测）；保留各 CLI 账户与配置                                                                               | ✅   | 进度 §19                                                                                                                   |
-| Hook / 扩展 / 插件 → 归一化 → `working/waiting/blocked/done`，来源徽标                                                                                                             | ✅   | 进度 §9                                                                                                                    |
-| **画布内注入**：Hook、技能与画布说明只随画布启动带上（六个 CLI 各按实测参数），画布外启动零影响；升级后先备份再清掉旧的全局安装；集成页只剩「重新生成」                            | ✅   | 进度 §51；六个 CLI 真跑见 §51.2、§60.1                                                                                     |
-| SSH 终端里的画布注入：产物经 Worker 按哈希同步、同名垫片注入、Hook 经 Worker 的 unix socket 中继回控制端                                                                           | ✅   | 进度 §55.1；[远端画布注入](../design/remote-canvas-injection.md)                                                           |
-| 权限请求在节点头部直答                                                                                                                                                             | ✅   | 进度 §60.1（真 Claude 允许 / 拒绝）；底层是 Claude 的 `custom:` 条目同样可答（按借用的内置 CLI 判）                        |
-| 拉取信箱 `post/inbox/ack`；推式投递 `send` + 投递队列、驱动租约、半截输入门、收件箱唤醒、投递依据；投给休眠节点先唤醒再投                                                          | ✅   | 进度 §22–§26、§31、§35.2、§35.4、§48.2、§60.2                                                                              |
-| **投递终态回执**：排队项过期、目标侧拒收或出队时被门链拦下，发送方收件箱收到回执（不计唤醒与容量），投递记录与「我发出的」看得到终态                                               | ✅   | CLI 协作设计 §4；`collab/receipts.ts`、迁移 0029；契约 §12.3                                                               |
-| **投递画面门**：目标画面停在 CLI 已知的启动对话框上（信任目录、把 auto 设为缺省、升级提示），或首投时看不见提示符，退回排队 `TARGET_NOT_AT_PROMPT`                                 | ✅   | 投递设计 §4.3「画面门」；`agent/screen-gate.ts`、`collab/control/send.ts`；进度 §62                                        |
-| 按连线读取转录 / 摘要 / 终端画面，上下文读取预算；六种 CLI 的转录与摘要经本地历史适配器归一化（Pi / OMP / Copilot 的 JSONL、OpenCode 的 SQLite）                                   | ✅   | 进度 §27、§28；CLI 协作设计 §2、§3；`core/history/`                                                                        |
-| **依赖编排**：`open-agent --after`、`--after-turn`、TTL 由 core 判定与启动，页面不在也生效                                                                                         | ✅   | 进度 §36                                                                                                                   |
-| **批量组队** `canvas team`：并行、流水线、汇总；成员与 `open-agent --worktree` 各带一条 worktree，放进绑着它的 Frame                                                               | ✅   | 进度 §45.3、§59.6                                                                                                          |
-| `canvas open-browser --url`：建浏览器节点并从调用者连一条对等边                                                                                                                    | ✅   | 进度 §51.1；`collab/control/browser-node.ts`                                                                               |
-| Hook 客户端参数从标准输入（`--x -`）或文件（`--x-file`）读，正文含特殊字符时绕开 shell                                                                                             | ✅   | 进度 §61.2                                                                                                                 |
-| 对话交接：prepare → 预览 → accept/cancel，状态可追溯；远端工作空间经 Worker 在执行主机上采集；转录摘录经适配器归一化，六种 CLI 都有；SSH 终端里的 Agent 限同一执行主机（放开未做） | ✅   | 进度 §34.2、§55.2；`handoff/capture.ts`；跨执行主机见 CLI 协作设计 §6                                                      |
-| 自动命名：占位标题才应用、人工改名锁定、设置开关                                                                                                                                   | ✅   | `apps/web/src/meta/annotations.ts` `autoNameNode`                                                                          |
-| 原生 Loop/Cron 观察卡片、子代理卡片                                                                                                                                                | ✅   | —                                                                                                                          |
-| **会话索引**覆盖六种 CLI（Claude、Codex、OpenCode、Pi、OMP、Copilot），可 resume；Pi 与 OMP 根重合时按文件头分家                                                                   | ✅   | CLI 协作设计 §3；`core/history/registry.ts` `HISTORY_ADAPTERS`、`conversations/index.ts` `PROVIDERS`                       |
-| **历史数据可用性**：`/api/agents` 每行报索引 / 成本 / 转录 `available / not-found / unsupported / disabled`，集成页三个徽标                                                        | ✅   | CLI 协作设计 §5；`history/availability.ts`；契约 §12.2                                                                     |
-| 多账号与节点账号绑定（`credentialRef`）                                                                                                                                            | ⬜   | 只有 schema 与只读徽标（`agent/account/AccountBindingBadge.tsx`）；调研结论与第二阶段方案见 CLI 协作设计 §7，待实测，见 §4 |
-| ~~单会话上下文占用~~                                                                                                                                                               | —    | 已作废：2026-09-21 整条链路移除（进度 §29）                                                                                |
+| 功能                                                                                                                                                                                         | 状态 | 依据                                                                                                                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| 6 种 CLI 与自定义 CLI 启动、resume、权限模式、模型选择（模型目录 + 版本探测）；保留各 CLI 账户与配置                                                                                         | ✅   | 进度 §19                                                                                                                                  |
+| **ama**：第七个内置 Agent（随包 `@armadra/agent`），宿主适配器直接调画布动词；模型密钥只在密钥后端、经 hook 通道兑换                                                                         | ✅   | 补全 G1-7；A 档 `agent-e2e --only 11`；Windows 启动器与 SSH 主机不兑换密钥                                                                |
+| **协调者 runners 与 `wait`**：ama 的 `task` 落成画布节点，长轮询等结果，成员按 `task:<id>:result` 回报                                                                                       | ✅   | 补全 G2-4；契约 §15.5；不支持 `--cwd` / `--resume`                                                                                        |
+| **工作流**：草案 → 模板 → 按参数运行（Frame + 角色节点）、关卡、运行记录与对比、定时运行                                                                                                     | ✅   | 补全 G1-8、G2-3；契约 §15；A 档 `workflow-e2e`；模板编辑器不增删步骤                                                                      |
+| **ACP 会话视图**：同一节点在终端与会话视图间切换；消息流、工具调用、差异、权限卡；状态、审批、投递、休眠同一套语义                                                                           | ✅   | 补全 G1-4、G1-6、G2-1；契约 §14；A 档 `acp-e2e`（假 ACP Agent）                                                                           |
+| ACP 真适配器（六家）端到端、版本区间                                                                                                                                                         | 🔶   | 适配器表与假 Agent 测过；真跑属补全 G3-7（未合入），见 §4                                                                                 |
+| `armadra-hook mcp`：ACP 会话的画布工具（工具表即动词表）                                                                                                                                     | ✅   | 补全 G1-5；`@armadra/agent` 0.6.5 起 `mcpInjected` 为真                                                                                   |
+| **输出到画板与普通用户入口**：回复落成便签 / 白板 / 编辑器 / Mermaid 对象并带来源；新建 Agent 向导、模板、简洁模式、缺省视图                                                                 | ✅   | 补全 G2-2；契约 §14.5                                                                                                                     |
+| Hook / 扩展 / 插件 → 归一化 → `working/waiting/blocked/done`，来源徽标                                                                                                                       | ✅   | 进度 §9                                                                                                                                   |
+| **画布内注入**：Hook、技能与画布说明只随画布启动带上（六个 CLI 各按实测参数），画布外启动零影响；升级后先备份再清掉旧的全局安装；集成页只剩「重新生成」                                      | ✅   | 进度 §51；六个 CLI 真跑见 §51.2、§60.1                                                                                                    |
+| SSH 终端里的画布注入：产物经 Worker 按哈希同步、同名垫片注入、Hook 经 Worker 的 unix socket 中继回控制端                                                                                     | ✅   | 进度 §55.1；[远端画布注入](../design/remote-canvas-injection.md)                                                                          |
+| 权限请求在节点头部直答                                                                                                                                                                       | ✅   | 进度 §60.1（真 Claude 允许 / 拒绝）；底层是 Claude 的 `custom:` 条目同样可答（按借用的内置 CLI 判）                                       |
+| 拉取信箱 `post/inbox/ack`；推式投递 `send` + 投递队列、驱动租约、半截输入门、收件箱唤醒、投递依据；投给休眠节点先唤醒再投                                                                    | ✅   | 进度 §22–§26、§31、§35.2、§35.4、§48.2、§60.2                                                                                             |
+| **投递终态回执**：排队项过期、目标侧拒收或出队时被门链拦下，发送方收件箱收到回执（不计唤醒与容量），投递记录与「我发出的」看得到终态                                                         | ✅   | CLI 协作设计 §4；`collab/receipts.ts`、迁移 0029；契约 §12.3                                                                              |
+| **投递画面门**：目标画面停在 CLI 已知的启动对话框上（信任目录、把 auto 设为缺省、升级提示），或首投时看不见提示符，退回排队 `TARGET_NOT_AT_PROMPT`；未登记的选择菜单一律拦下，计划投递也过门 | ✅   | 投递设计 §4.3「画面门」；`agent/screen-gate.ts`；进度 §62；补全 G1-3、契约 §22；Copilot / OMP / OpenCode 的特征未核实，见 §4              |
+| 按连线读取转录 / 摘要 / 终端画面，上下文读取预算；六种 CLI 的转录与摘要经本地历史适配器归一化（Pi / OMP / Copilot 的 JSONL、OpenCode 的 SQLite）                                             | ✅   | 进度 §27、§28；CLI 协作设计 §2、§3；`core/history/`                                                                                       |
+| **依赖编排**：`open-agent --after`、`--after-turn`、TTL 由 core 判定与启动，页面不在也生效                                                                                                   | ✅   | 进度 §36                                                                                                                                  |
+| **批量组队** `canvas team`：并行、流水线、汇总；成员与 `open-agent --worktree` 各带一条 worktree，放进绑着它的 Frame                                                                         | ✅   | 进度 §45.3、§59.6                                                                                                                         |
+| `canvas open-browser --url`：建浏览器节点并从调用者连一条对等边                                                                                                                              | ✅   | 进度 §51.1；`collab/control/browser-node.ts`                                                                                              |
+| Hook 客户端参数从标准输入（`--x -`）或文件（`--x-file`）读，正文含特殊字符时绕开 shell                                                                                                       | ✅   | 进度 §61.2                                                                                                                                |
+| 对话交接：prepare → 预览 → accept/cancel，状态可追溯；远端工作空间经 Worker 在执行主机上采集；转录摘录经适配器归一化，六种 CLI 都有；来源在另一台执行主机时到那台主机上读转录                | ✅   | 进度 §34.2、§55.2；补全 G1-2、契约 §21.1；真 sshd 见 §4                                                                                   |
+| 自动命名：占位标题才应用、人工改名锁定、设置开关                                                                                                                                             | ✅   | `apps/web/src/meta/annotations.ts` `autoNameNode`                                                                                         |
+| 原生 Loop/Cron 观察卡片、子代理卡片                                                                                                                                                          | ✅   | —                                                                                                                                         |
+| **会话索引**覆盖六种 CLI（Claude、Codex、OpenCode、Pi、OMP、Copilot），可 resume；Pi 与 OMP 根重合时按文件头分家                                                                             | ✅   | CLI 协作设计 §3；`core/history/registry.ts` `HISTORY_ADAPTERS`、`conversations/index.ts` `PROVIDERS`                                      |
+| **历史数据可用性**：`/api/agents` 每行报索引 / 成本 / 转录 `available / not-found / unsupported / disabled`，集成页三个徽标                                                                  | ✅   | CLI 协作设计 §5；`history/availability.ts`；契约 §12.2                                                                                    |
+| 多账号与节点账号绑定（`credentialRef`）：节点头可选可切，值经启动器现取、不进节点 shell 环境                                                                                                 | 🔶   | 补全 G1-1、契约 §20；只开 Claude `oauth-token` 与 Copilot `github-token`，其余种类待 T4–T7 实测；Windows 与 SSH 节点拒绝；真账号验证见 §4 |
+| ~~单会话上下文占用~~                                                                                                                                                                         | —    | 已作废：2026-09-21 整条链路移除（进度 §29）                                                                                               |
 
 ### 3.3 终端与主机生命周期
 
@@ -126,21 +139,24 @@ Armadra 是 local-first 的 AI Coding 画布：把真实 CLI Agent（Claude Code
 | 目标为 Agent 终端时的投递门（idle-success、TTL、半截输入）                             | ✅   | 进度 §35.2                   |
 | **`LAUNCH_FROZEN` 冷启动**；休眠目标走 resume；挂着的终端节点跟上 core 起的会话        | ✅   | 进度 §35.1、§43.1、§45.2     |
 | 原生任务「转为平台计划」确认流程：预填向导 → 人确认 → 草稿；本机路径按 core 的平台校验 | ✅   | 进度 §54.2                   |
+| 自动化目标「运行工作流」：定义时核模板 / 版本 / 参数，到点起跑，收据随运行状态         | ✅   | 补全 G2-3；契约 §15.6        |
 
 ### 3.8 GitHub
 
-| 功能                                                                                    | 状态 | 依据              |
-| --------------------------------------------------------------------------------------- | ---- | ----------------- |
-| Issues 列表、详情、分组、`Move to…`、重开 / 关闭、状态映射回写                          | ✅   | 进度 §16          |
-| PR 列表、创建、差异 / 评审 / 检查、预期 SHA 合并、检出到 worktree                       | ✅   | —                 |
-| `ExternalReference` 关联 Issue/PR 与会话、分支、worktree；`gh` / token 凭据、Enterprise | ✅   | —                 |
-| Projects v2 状态映射翻完所有页，到上界时标「分组不完整」                                | ✅   | 进度 §38.4、§45.1 |
+| 功能                                                                                    | 状态 | 依据                                    |
+| --------------------------------------------------------------------------------------- | ---- | --------------------------------------- |
+| Issues 列表、详情、分组、`Move to…`、重开 / 关闭、状态映射回写                          | ✅   | 进度 §16                                |
+| PR 列表、创建、差异 / 评审 / 检查、预期 SHA 合并、检出到 worktree                       | ✅   | —                                       |
+| `ExternalReference` 关联 Issue/PR 与会话、分支、worktree；`gh` / token 凭据、Enterprise | ✅   | —                                       |
+| Projects v2 状态映射翻完所有页，到上界时标「分组不完整」                                | ✅   | 进度 §38.4、§45.1                       |
+| GitLab / Gitea / Forgejo                                                                | ⬜   | 外部服务 §10.2（W-FORGE），留到补全之后 |
 
 ### 3.9 额度、用量与成本
 
 | 功能                                                                                                                                                      | 状态 | 依据                                                                  |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- | --------------------------------------------------------------------- |
-| Claude / Codex / Copilot 额度窗口与重置时间，用量球                                                                                                       | ✅   | —                                                                     |
+| Claude / Codex / Copilot 额度窗口与重置时间，用量球；借用 CLI 令牌的 Claude / Copilot 额度端点默认关（`policy_off`），Codex 端点标「非官方」              | ✅   | 补全 G1-16                                                            |
+| core 出站地址登记表（用途、频率、关闭开关），扫描测试强制登记；模型目录自动刷新可关                                                                       | ✅   | 补全 G1-16；`core/net/outbound.ts`                                    |
 | 本地成本按历史适配器采集六种 CLI（Claude、Codex、Pi、OMP 逐行；OpenCode 读库快照；Copilot 按高级请求数单列、不折算金额），24h / 7d / 30d / 全部；目录价格 | ✅   | 进度 §20.6；CLI 协作设计 §3、§10；`usage/cost-sources.ts`；契约 §12.1 |
 | 独立用量看板、桌面托盘迷你条                                                                                                                              | ✅   | —                                                                     |
 | **Provider 状态页 / 事故徽标**（可在设置关闭）                                                                                                            | ✅   | 进度 §39.3                                                            |
@@ -157,53 +173,72 @@ Armadra 是 local-first 的 AI Coding 画布：把真实 CLI Agent（Claude Code
 
 ### 3.11 服务器壳、远程与多端
 
-| 功能                                                                                                                       | 状态 | 依据                                                          |
-| -------------------------------------------------------------------------------------------------------------------------- | ---- | ------------------------------------------------------------- |
-| 无窗口服务器壳：TLS、静态页面托管、设备配对、`__Host-` 会话、CSRF、可撤销设备                                              | ✅   | 进度 §11                                                      |
-| **远端执行主机**：`WorkspacePath{executionHostId}` 统一执行位置，建远端工作空间与切换主机                                  | ✅   | 进度 §34、§44                                                 |
-| SSH 主机配置与连接测试                                                                                                     | ✅   | —                                                             |
-| 事件 outbox、durable sequence、`?cursor=` 续订                                                                             | ✅   | 进度 §15.3                                                    |
-| **账号、组与共享**：请求主体、路由门、邀请注册、按工作空间授权、收权即断事件流、收权即释放写租约                           | ✅   | 进度 §42、§50.1、§56                                          |
-| 成员权限：全局路由分三类（按对象落到工作空间、无害的全局读、本机管理只给 owner）；组管理员管本组成员与邀请；终端创建者落库 | ✅   | 进度 §56；[设计](../design/server-accounts-and-sharing.md) §6 |
-| 手机焦点页、底部导航、软键盘工具条、断线重连不重复输入                                                                     | 🔶   | 网页端已交付（抽屉布局 §58.1）；原生打包与推送见 §4           |
-| ~~业务 Protobuf 表面与写入所有权切换（H01）~~                                                                              | —    | 已作废：单一 core 没有第二个写者（进度 §15.1、§18）           |
+| 功能                                                                                                                                        | 状态 | 依据                                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------- | ---- | --------------------------------------------------------------------------------------------- |
+| 无窗口服务器壳：TLS、静态页面托管、设备配对、`__Host-` 会话、CSRF、可撤销设备                                                               | ✅   | 进度 §11                                                                                      |
+| 服务器部署：容器镜像（`/data` 卷、健康检查、不停服备份）、内建 ACME（`http-01`、续期热换、失败保留旧证书）、部署指南；GHCR 只在 `v*` 标签推 | ✅   | 补全 G3-5；[服务器部署](../guides/server-deployment.md)；真域名见 §4                          |
+| **桌面 Gateway**：设置 / 托盘开关、本地 CA / 指定文件 / ACME、二维码与链接配对、CA 安装引导、原生 App 的 Bearer 与一次性 WS 票、设备表      | ✅   | 补全 G1-10、G2-7、G3-11；契约 §17；没有 8 位配对码                                            |
+| 身份加固：口令策略、限流与锁定、passkey、TOTP 与恢复码、会话与锁定管理、审计筛选与 CSV 导出、两步登录页                                     | ✅   | 补全 G1-11、G2-8；契约 §18.1–§18.4、§18.6；passkey 在 IP 主机上如实不可用                     |
+| OAuth / OIDC / SSO：GitHub 与通用 OIDC，绑定、登录、白名单建号、SSO 登出                                                                    | ✅   | 补全 G1-12、G2-8；契约 §18.5；dex / Keycloak 测过，真应用见 §4                                |
+| 口令泄露检查（HIBP k-匿名）                                                                                                                 | ⬜   | 调用点在 `identity/policy.ts::checkBreach`，恒答 `skipped`；补全 G3-8 未合入                  |
+| Agent 权限角色：自己起的终端 operator 可驱动与答审批，别人的要 driver；创建者 = 触发者；ACP 与工作流按对象落到画布                          | ✅   | 补全 G2-9；契约 §23                                                                           |
+| Worker 舰队：版本与能力、过旧提示、健康记录、逐台 / 全部重新同步                                                                            | ✅   | 补全 G1-2、G3-6；契约 §21.2–§21.3                                                             |
+| 服务端性能基线（扇出、终端吞吐、实时板、RSS）与按平台比对                                                                                   | 🔶   | 补全 G3-6；[基线](server-performance-baseline.md)只有 `darwin-arm64`                          |
+| **远端执行主机**：`WorkspacePath{executionHostId}` 统一执行位置，建远端工作空间与切换主机                                                   | ✅   | 进度 §34、§44                                                                                 |
+| SSH 主机配置与连接测试                                                                                                                      | ✅   | —                                                                                             |
+| 事件 outbox、durable sequence、`?cursor=` 续订                                                                                              | ✅   | 进度 §15.3                                                                                    |
+| **账号、组与共享**：请求主体、路由门、邀请注册、按工作空间授权、收权即断事件流、收权即释放写租约                                            | ✅   | 进度 §42、§50.1、§56                                                                          |
+| 成员权限：全局路由分三类（按对象落到工作空间、无害的全局读、本机管理只给 owner）；组管理员管本组成员与邀请；终端创建者落库                  | ✅   | 进度 §56；[设计](../design/server-accounts-and-sharing.md) §6                                 |
+| 手机焦点页、底部导航、软键盘工具条、断线重连不重复输入；手机连接页、推送权限、点通知进节点焦点页                                            | ✅   | 进度 §58.1；补全 G2-10；A 档 `ui-features-e2e --only=mobile`                                  |
+| 推送：Web Push、APNs / FCM 直连、端到端加密中继；审批 / 完成 / 投递失败 / 评论提及 / 工作流关卡等触发                                       | 🔶   | 补全 G1-13；契约 §19；对 push-sink 走通四条线；真 APNs / FCM、中继部署见 §4；UnifiedPush 未做 |
+| 手机原生 App（iOS / Android，Capacitor）：钥匙串、证书钉扎、扫码、推送解密、深链                                                            | 🔶   | 补全 G3-1；夜间 CI 模拟器里「深链 → 钉扎 → 配对 → 画布」通过；真机、签名与商店见 §4           |
+| ~~业务 Protobuf 表面与写入所有权切换（H01）~~                                                                                               | —    | 已作废：单一 core 没有第二个写者（进度 §15.1、§18）                                           |
 
 ### 3.12 桌面壳与服务集成
 
-| 功能                                                                                                                               | 状态 | 依据                                                   |
-| ---------------------------------------------------------------------------------------------------------------------------------- | ---- | ------------------------------------------------------ |
-| Electron 壳：窗口、托盘、通知、对话框、菜单、全局热键；core 以子进程拉起并按 instanceId 认领                                       | ✅   | [架构](../guides/architecture.md) §2                   |
-| 不占固定端口：壳内 core 由内核分配回环端口并经 stdout 公告，Hook 优先 Unix socket                                                  | ✅   | `core/listen.ts`；[开发指南](../guides/development.md) |
-| 服务器壳 `install` 生成 launchd / systemd / sc.exe 定义（不注册）、`status`、`logs`、`upgrade`                                     | ✅   | `apps/server/src/cli.ts`                               |
-| Windows 上 `armadra-hook` 用 C# `.exe` 启动器（系统自带 `csc.exe` 编），参数不经 `cmd.exe` 二次解释；没有 `.exe` 的构建退回 `.cmd` | 🔶   | 进度 §61；只在 Windows CI 上编译与运行，见 §4          |
-| 打包版：升级后自动迁移全局安装、编辑器 PDF 与视频、节能休眠与唤醒                                                                  | ✅   | 进度 §60.1（`tools/probes/packaged-smoke.mjs`）        |
-| 自动更新：检查 → 下载 → 验签 → 暂存 → 安装链路已接 electron-updater，更新器去掉 Host 依赖；未签名构建报 `notConfigured`            | 🔶   | 进度 §40.2；缺发布签名与发布源，见 §4                  |
-| ~~项目结构整理（Desktop / Web / Go / Rust 边界）~~                                                                                 | —    | 已作废：Go 与 Rust 已删，结构即 §2（进度 §17）         |
+| 功能                                                                                                                                         | 状态 | 依据                                                                        |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | ---- | --------------------------------------------------------------------------- |
+| Electron 壳：窗口、托盘、通知、对话框、菜单、全局热键；core 以子进程拉起并按 instanceId 认领                                                 | ✅   | [架构](../guides/architecture.md) §2                                        |
+| 不占固定端口：壳内 core 由内核分配回环端口并经 stdout 公告，Hook 优先 Unix socket                                                            | ✅   | `core/listen.ts`；[开发指南](../guides/development.md)                      |
+| 服务器壳 `install` 生成 launchd / systemd / sc.exe 定义（不注册）、`status`、`logs`、`upgrade`                                               | ✅   | `apps/server/src/cli.ts`                                                    |
+| Windows 上 `armadra-hook` 用 C# `.exe` 启动器（系统自带 `csc.exe` 编），参数不经 `cmd.exe` 二次解释；没有 `.exe` 的构建退回 `.cmd`           | 🔶   | 进度 §61；只在 Windows CI 上编译与运行，见 §4                               |
+| 打包版：升级后自动迁移全局安装、编辑器 PDF 与视频、节能休眠与唤醒                                                                            | ✅   | 进度 §60.1（`tools/probes/packaged-smoke.mjs`）                             |
+| 自动更新：按目标的清单、通道与灰度、ETag、6 小时定时检查；检查 → 下载 → 验签 → 暂存在 dev-stack 发布源上走通；未签名包「安装」答 `notSigned` | 🔶   | 进度 §40.2；补全 G1-15、G3-3；签名包的安装与设置页「检查」按钮未接壳，见 §4 |
+| 签名与公证：macOS API key / Apple ID、Windows 三条路、Linux GPG `.asc` 与 rpm 签名、发布前校验                                               | 🔶   | 补全 G3-3；流程与工作流分支有测试，没有真证书，见 §4                        |
+| Linux 打包（AppImage / deb / rpm）、glibc 基线、夜间 B 档冒烟与失败开 issue                                                                  | ✅   | 补全 G3-4；arm64 AppImage 在干净系统缺 `libz.so`                            |
+| 分发渠道：Homebrew cask、Scoop、winget、AUR 模板渲染与试装；Release 转正后推送                                                               | 🔶   | 补全 G3-9；没有真仓库与令牌，未真推，见 §4                                  |
+| 第三方声明 `THIRD_PARTY_NOTICES.md` 生成与防漂移，随包、关于页可看                                                                           | ✅   | 补全 G3-9                                                                   |
+| 可选崩溃上报（默认关，自托管 DSN，发送前剥离）                                                                                               | ✅   | 补全 G3-10；页面（渲染进程）错误不上报                                      |
+| 密钥后端按平台：macOS 钥匙串、Windows / Linux `safeStorage`、服务器壳 `file-encrypted`                                                       | ✅   | 补全 G0-8；[架构](../guides/architecture.md) §7                             |
+| ~~项目结构整理（Desktop / Web / Go / Rust 边界）~~                                                                                           | —    | 已作废：Go 与 Rust 已删，结构即 §2（进度 §17）                              |
 
 ### 3.13 设置与数据
 
-| 功能                                                                                                                                                                                     | 状态 | 依据                                              |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ------------------------------------------------- |
-| 通用、通知、白板、Agent、集成、终端、浏览器、工作空间、后台服务、GitHub、SSH、执行主机、数据、账号与用量、快捷键、更新、关于；服务器壳另有「账号与共享」；成员只看得到本机管理以外的六页 | ✅   | `apps/web/src/panels/settings/nav.ts`；进度 §56.1 |
-| SQLite 一致性备份；未知 / 损坏库拒绝启动不重建                                                                                                                                           | ✅   | [架构](../guides/architecture.md) §5              |
-| 主题、语言（中英同步，未引用键由测试守住）                                                                                                                                               | ✅   | `apps/web/src/i18n/i18n.test.ts`                  |
-| **快捷键**：按平台 / 设备覆盖与继承、设为无、多组替代键、自定义 `when`                                                                                                                   | ✅   | 进度 §40.1                                        |
-| 用量刷新节奏、资源采样间隔与内存阈值、Eco 休眠阈值                                                                                                                                       | ✅   | 进度 §43.1                                        |
+| 功能                                                                                                                                                                                                                                                                             | 状态 | 依据                                                               |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ------------------------------------------------------------------ |
+| 通用（含诊断）、通知、白板（含实时协同开关）、Agent（含节点凭据、ama 模型密钥、缺省视图、简洁模式）、集成、终端、浏览器、工作空间、后台服务与对外服务、账号与共享、安全、GitHub、SSH、执行主机、数据、账号与用量、快捷键、更新、关于（含开源许可）；成员只看得到本机管理以外的页 | ✅   | `apps/web/src/panels/settings/nav.ts`；进度 §56.1；补全 G2-7、G2-8 |
+| SQLite 一致性备份；未知 / 损坏库拒绝启动不重建                                                                                                                                                                                                                                   | ✅   | [架构](../guides/architecture.md) §5                               |
+| 主题、语言（中英同步，未引用键由测试守住）                                                                                                                                                                                                                                       | ✅   | `apps/web/src/i18n/i18n.test.ts`                                   |
+| **快捷键**：按平台 / 设备覆盖与继承、设为无、多组替代键、自定义 `when`                                                                                                                                                                                                           | ✅   | 进度 §40.1                                                         |
+| 用量刷新节奏、资源采样间隔与内存阈值、Eco 休眠阈值                                                                                                                                                                                                                               | ✅   | 进度 §43.1                                                         |
 
 ## 4. 需要外部条件的项
 
-这些项的代码侧已经走到能走的地方，收尾依赖真机、账号、签名或第三方服务，不能在本机自动化里完成。进度 §60 已在本机真跑并移出本表的：OpenCode / Pi / OMP / Copilot 的画布内注入，Claude 的 direct 后端投递、画布审批与休眠后经 `send` 唤醒，打包版的全局安装迁移、编辑器 PDF 与视频、节能休眠与唤醒（真 Codex）。
+代码侧已走到能走的地方，收尾依赖真机、账号、证书或第三方服务。每行都有 mock 路径（多数对着 `tools/dev-stack/`）与拿到条件后的验证脚本；按优先级排列的「需用户提供」清单在[补全进度](./completion-progress.md) G4-1 一节，编号对应[补全执行计划](../design/completion-plan.md) §5 的 U1–U13。
 
-| 项                   | 现状                                                                                                                                                                                                                                 | 缺的条件                                 |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
-| Windows 真机         | session host、命名管道、ConPTY 关闭证明、文件监听、启动行方言与 `.cmd` 绕过、`.exe` 启动器都只有单测与 `runIf(win32)` 用例，靠 Windows CI（进度 §13、§33、§53、§54.3、§57.5、§61.3）；会话宿主后端的 capture 仍是回放去转义（§60.5） | 一台 Windows 机器上的安装与长时间运行    |
-| 手机原生打包与推送   | 网页端焦点页、底部导航、软键盘工具条、抽屉布局已交付（§58.1）                                                                                                                                                                        | 原生壳、应用商店签名、推送服务账号       |
-| 发布签名             | 更新链路已接，未签名构建里更新器关闭（`shell-core/updates/availability.ts`）；Windows 的 `.exe` 启动器随包进签名步骤，未用真证书确认（§61.1）                                                                                        | 代码签名证书、公证、发布源               |
-| passkey / OAuth      | 设计内按 501 返回（进度 §42.2）                                                                                                                                                                                                      | 依赖方 ID 与域名、OAuth 应用             |
-| 多账号 CLI           | 节点账号绑定只有 schema 与只读徽标（§3.2）；第二阶段方案已定（CLI 协作设计 §7.3），没有实施                                                                                                                                          | 测试账号与凭据，见 CLI 协作设计 §7.4     |
-| 另外三家的交互式 TUI | `agent-e2e` 场景 10 写了 OpenCode / OMP / Copilot 的交互式路径，本机实跑只有 Claude、Codex、Pi（进度 §62）；OMP 是否上报 `transcript_path` 未验证                                                                                    | 装了这三家 CLI 并能认证的机器            |
-| 真 sshd 端到端       | 远端 Worker、SSH 终端注入与 Hook 中继用本机子进程与假 ssh 测过（进度 §34.3、§44.3、§50.2、§55.7）；真 ssh 的传输、主机密钥、askpass 与远端 profile 改写 `PATH` 未覆盖                                                                | 一台真实远端主机                         |
-| 打包版 Claude        | 打包版冒烟只用临时 HOME，Claude 的登录在钥匙串里认证不上（进度 §60.1）；Claude 在开发构建里已真跑（§48、§60）                                                                                                                        | 能在隔离 HOME 下登录的 Claude 账号或凭据 |
+| 项                           | 现状（mock 走到哪）                                                                                                                                                           | 缺的条件                                                                                                                                       | 拿到后怎么验                                                                                                   |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| 发布签名与自动更新安装       | 签名计划、公证凭据预检、Windows 三条签名路、GPG `.asc` 与 rpm 签名都有测试；未签名发布包对 dev-stack 发布源走到「暂存」，ad-hoc 包过不了 Squirrel.Mac（补全 G3-3）            | Apple Developer ID 证书与 App Store Connect API key、minisign 发布密钥、Windows 签名（Azure Artifact Signing 或 OV 证书）、GPG 密钥（U8、U13） | `release.yml` 带 secret 跑一次 draft；`update-e2e.mjs --install --next` 对签名包走到「安装 → 重启 → 版本号变」 |
+| Windows 真机                 | session host、命名管道、ConPTY、启动行方言、`.cmd` 绕过、`.exe` 启动器只有单测与 Windows CI（进度 §13、§33、§54、§57、§61）；节点凭据与 ama 密钥在 Windows 启动器里未实现兑换 | 一台 Windows 机器（U5）                                                                                                                        | 补全 G3-2 的验收包（未合入）                                                                                   |
+| 手机原生 App 与推送          | 模拟器里「深链 → 钉扎 → 配对 → 画布」在夜间 CI 通过；推送四条线对 push-sink 走通，NSE / FCM 解密只有单测（补全 G1-13、G3-1）                                                  | Apple 分发证书与 APNs `.p8`、Play 开发者账号与上传密钥、Firebase 项目；商店版要一台运行 `apps/push-relay` 的公网主机（U8–U10）                 | [客户端平台](../guides/client-platforms.md)「真机与商店」七步；`POST /api/push/test` 真机收到                  |
+| 稳定域名与真证书             | Gateway 本地 CA、ACME 对 Pebble 签发与续期、Nginx 反代都测过；passkey 以 `https://localhost` + 虚拟认证器验证（补全 G1-10、G1-11、G3-5）                                      | 域名与公网可达主机（U6、U11）                                                                                                                  | [服务器部署](../guides/server-deployment.md)第 3 节；手机网页不装 CA 直接访问；真手机注册与登录 passkey        |
+| OAuth 应用                   | GitHub 特例与通用 OIDC 对进程内假 issuer、dex、Keycloak 走通（补全 G1-12）                                                                                                    | GitHub OAuth App、一个 OIDC 提供方的 client id / secret（U7）                                                                                  | 设置里填入 → 绑定 → 用它登录 → `allowSignup` 建号一次                                                          |
+| 多账号 CLI 凭据              | Claude `oauth-token`、Copilot `github-token` 开放，`credentials-e2e` 15 步过；其余种类 `enabled: false`（补全 G1-1）                                                          | 两个 Claude 订阅、两个带 Copilot 的 GitHub 账号与 PAT；各家 API key（U1）                                                                      | CLI 协作设计 §7.4 的 T1–T9；通过一项就打开对应种类                                                             |
+| 另外三家 CLI 与 ACP 真适配器 | `agent-e2e` 场景 10 本机只跑了 Claude、Codex、Pi；画面门里 Copilot / OMP / OpenCode 的特征 `verified: false`；ACP 只对假 Agent 跑过，`compatibility.json` 的 `verified` 为空  | 装好并登录 OpenCode / OMP / Copilot 的机器；三个 ACP 适配器包（U2、U3）                                                                        | `agent-e2e.mjs --only 10,12`；补全 G3-7 的 C 档探针（未合入）                                                  |
+| 真 sshd 端到端               | Worker、远端注入、Hook 中继、跨主机交接用本机子进程与假 ssh 测过（进度 §34.3、§44.3、§55.7；补全 G1-2）                                                                       | 一台真实远端主机（U4）                                                                                                                         | `remote-e2e.mjs --real <host>`                                                                                 |
+| 分发渠道                     | cask / Scoop / winget / AUR 模板渲染、本地 tap 上 `brew audit` 与试装通过；`distribute.yml` 缺 secret 就跳过（补全 G3-9）                                                     | tap / bucket 仓库、winget-pkgs fork 与三个 PAT（U12）                                                                                          | 发布一次 draft 后在 tap / bucket 里看到新 cask / manifest                                                      |
+| 崩溃上报                     | 对 dev-stack GlitchTip 走通，事件里没有环境变量、家目录、令牌（补全 G3-10）                                                                                                   | 可选：GlitchTip 实例（U13）                                                                                                                    | 设置 → 通用 → 诊断填 DSN，收到一条事件                                                                         |
+| 打包版 Claude                | 打包版冒烟只用临时 HOME，Claude 的登录在钥匙串里认证不上（进度 §60.1）                                                                                                        | 能在隔离 HOME 下登录的 Claude 凭据                                                                                                             | `packaged-smoke.mjs` 带真 CLI                                                                                  |
 
 ## 5. 验收原则
 
