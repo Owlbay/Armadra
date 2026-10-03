@@ -114,6 +114,32 @@ describe("watching open editor files", () => {
     expect((event as { mtime: string | null }).mtime).toMatch(/\+00:00$/);
   });
 
+  /**
+   * The gap {@link ARM_MS} waits out in every other test, met head on: a write
+   * right after registration, before FSEvents is live. It used to be lost for
+   * good (11 times in 100 on macOS); the watcher's own late looks report it.
+   */
+  it("reports a change made before the platform watcher was live", async () => {
+    const root = workspace();
+    const id = workspaceId();
+    opened.push(id);
+    const events: WorkspaceEvent[] = [];
+    writeFileSync(join(root.path, "note.txt"), "one\n");
+    register(id, root.path, "note.txt", "node-1", (_id, event) => {
+      events.push(event);
+    });
+    writeFileSync(join(root.path, "note.txt"), "one\ntwo\n");
+    const fixture = { events } as unknown as Fixture;
+    expect(await next(fixture)).toMatchObject({
+      type: "file.changed",
+      path: "note.txt",
+      sha256: createHash("sha256").update("one\ntwo\n").digest("hex"),
+    });
+    // Once, not once per look: wait past the last one.
+    await delay(1_700);
+    expect(events).toEqual([]);
+  });
+
   it("does not report a save made through the core", async () => {
     const fixture = await open(workspace(), "one\n");
     opened.push(fixture.id);
