@@ -13,7 +13,10 @@ import { DirectBackend } from "./direct";
 import { nodeRole } from "../canvas/context-links";
 import { handleForNode } from "../canvas/handles";
 import { type EnvPairs, agentEnvironment, setHookClient } from "./environment";
-import { launcherClientBinary } from "../hook/install/shared";
+import {
+  agentLauncherBinary,
+  launcherClientBinary,
+} from "../hook/install/shared";
 import { collab, setTerminalBridge } from "../agent";
 import { canvasEnvironment } from "../agent/canvas-launch";
 import { listAgents } from "../agent/list";
@@ -749,6 +752,16 @@ function publishHookClient(context: CoreContext): void {
     context.log.info("no armadra-hook bundle: the canvas verbs have no client");
   } else {
     context.log.debug("armadra-hook client", { path });
+  }
+  // The bundled `ama` gets the same kind of launcher in the same directory
+  // (docs/design/coordinator-agent.md §2.5).
+  try {
+    const ama = agentLauncherBinary({ dataDir: context.dataDir });
+    if (ama !== undefined) context.log.debug("ama launcher", { path: ama });
+  } catch (error) {
+    context.log.warn("could not write the ama launcher", {
+      error: describe(error),
+    });
   }
 }
 
