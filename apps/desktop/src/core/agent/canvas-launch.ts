@@ -4,11 +4,14 @@ import {
   shellDialect,
 } from "../terminal/shell";
 import {
+  artifactLayout,
   currentLauncher,
   isInjected,
   prepareInjection,
   shimDirectoryOf,
 } from "../hook/install/inject";
+import { writeSecret } from "../paths";
+import { amaAuthFile, amaCredentials } from "./ama-credentials";
 import { canvasPath, defaultShell } from "../terminal/environment";
 import { planLaunch } from "./launch";
 import {
@@ -212,9 +215,34 @@ export function canvasEnvironment(
     });
   }
   if (options.ssh === true) return [];
+  if (base === "ama") {
+    try {
+      writeAmaAuth(dataDir);
+    } catch (error) {
+      log?.("could not write ama's key file", {
+        agentId: base,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   const shims = shimDirectoryOf(dataDir);
   return [
     ["ARMADRA_SHIMS", shims],
     ["PATH", canvasPath(shims, options.ambient)],
   ];
+}
+
+/**
+ * Writes ama's `auth.json` right before a start (coordinator-agent §7): the
+ * keys the settings hold, 0600 in the 0700 integration directory, at the path
+ * the profile names. Not an injection artifact — `prepareInjection` never
+ * writes it and the marker never lists it — and not removed on exit, like
+ * `hook-secret`. Answers the path.
+ */
+export function writeAmaAuth(dataDir: string): string {
+  const path = artifactLayout(dataDir, "ama").authFile as string;
+  const credentials = amaCredentials();
+  if (credentials === undefined) writeSecret(path, amaAuthFile(new Map()));
+  else credentials.writeAuthFile(path);
+  return path;
 }

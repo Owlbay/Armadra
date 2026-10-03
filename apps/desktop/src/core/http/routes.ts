@@ -775,6 +775,19 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // ama 的模型密钥（契约 §12.4）：只答有没有、存在哪，从不答值。
+  {
+    path: "/api/agents/ama/credentials",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/agents/ama/credentials/{provider}",
+    methods: ["PUT", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/agents/{agentId}/integration",
     methods: ["GET"],

@@ -40,6 +40,8 @@ import {
   optionalString,
 } from "../workspaces/support";
 import { answerApproval } from "./approvals";
+import { AmaCredentials, installAmaCredentialRoutes } from "./ama-credentials";
+import { resolveSecretBackend } from "../secrets";
 import { audit } from "../identity/audit";
 import type { CoreRequest, HandlerResult, RouteMatch } from "../http/router";
 
@@ -63,11 +65,24 @@ const MAX_CONTEXT_READS = 200;
 export interface AgentRouteDeps {
   readonly server: CoreServer;
   readonly collab: CollabContext;
+  /**
+   * ama's model keys. The domain passes the one it published; without it the
+   * routes keep their own over the data directory's default backend.
+   */
+  readonly amaCredentials?: AmaCredentials;
 }
 
 export function installRoutes(deps: AgentRouteDeps): void {
   const { server, collab } = deps;
   const database = collab.database;
+
+  installAmaCredentialRoutes(
+    server,
+    deps.amaCredentials ??
+      new AmaCredentials(
+        resolveSecretBackend({ dataDir: collab.dataDir }).backend,
+      ),
+  );
 
   /* --------------------------------- agents ------------------------------- */
 
