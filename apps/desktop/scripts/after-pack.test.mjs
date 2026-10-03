@@ -217,7 +217,11 @@ test("Electron's notices go back into Contents/Resources on macOS and beside the
       appOutDir: join(dir, "mac"),
       resourcesDir: join(dir, "mac/Resources"),
     };
-    const options = { dist, copy: (from, to) => copyFileSync(from, to) };
+    let looked = 0;
+    const options = {
+      dist: () => (looked++, dist),
+      copy: (from, to) => copyFileSync(from, to),
+    };
     assert.equal(placeElectronNotices("darwin", mac, options).length, 2);
     assert.equal(
       readFileSync(join(mac.resourcesDir, "LICENSE.electron.txt"), "utf8"),
@@ -237,6 +241,10 @@ test("Electron's notices go back into Contents/Resources on macOS and beside the
       readFileSync(join(linux.appOutDir, "LICENSE.electron.txt"), "utf8"),
       "packager's",
     );
+    // Both already beside the executable: the distribution is not even looked up.
+    const before = looked;
+    assert.deepEqual(placeElectronNotices("linux", linux, options), []);
+    assert.equal(looked, before);
     // A distribution without them fails the build rather than ship without.
     rmSync(join(dist, "LICENSE"));
     assert.throws(

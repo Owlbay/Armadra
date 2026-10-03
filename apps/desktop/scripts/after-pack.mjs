@@ -235,22 +235,50 @@ export function electronNoticePlacements(
   ];
 }
 
-/** The unpacked Electron distribution this checkout installed. */
-export function electronDist() {
+/**
+ * The unpacked Electron distribution this checkout installed, unpacking it
+ * first when it is not there.
+ *
+ * electron-builder packs from its own download cache, so `node_modules/electron`
+ * can be a package with no `dist/` at all — pnpm runs electron's postinstall
+ * only for an install made after `allowBuilds.electron` (see
+ * `ensure-electron.mjs`), and the release runners hit exactly that. The two
+ * notice files exist only in that distribution, so this runs electron's own
+ * `install.js` (the same download, through the same cache) when they are
+ * missing. Called only when a notice actually has to be copied.
+ */
+export function electronDist({ run = spawnSync, log = console.log } = {}) {
   const require = createRequire(join(app, "package.json"));
-  return join(dirname(require.resolve("electron/package.json")), "dist");
+  const packageDir = dirname(require.resolve("electron/package.json"));
+  const dist = join(packageDir, "dist");
+  if (!existsSync(join(dist, "LICENSES.chromium.html"))) {
+    log(
+      "after-pack: Electron's distribution is not unpacked; running electron's install.js for its notices",
+    );
+    const result = run(process.execPath, [join(packageDir, "install.js")], {
+      cwd: packageDir,
+      stdio: "inherit",
+    });
+    if (result.status !== 0)
+      throw new Error(
+        `after-pack: electron's install.js exited with ${result.status}; its notices cannot be shipped`,
+      );
+  }
+  return dist;
 }
 
 /** Places Electron's notices; returns the destinations written. */
 export function placeElectronNotices(
   platformName,
   dirs,
-  { dist = electronDist(), copy = copyWithRetry, exists = existsSync } = {},
+  { dist = electronDist, copy = copyWithRetry, exists = existsSync } = {},
 ) {
   const written = [];
+  let from;
   for (const placement of electronNoticePlacements(platformName, dirs)) {
     if (platformName !== "darwin" && exists(placement.to)) continue;
-    const source = join(dist, placement.from);
+    from ??= dist();
+    const source = join(from, placement.from);
     if (!exists(source))
       throw new Error(
         `after-pack: ${source} is missing; Electron's notices must ship with the bundle`,
