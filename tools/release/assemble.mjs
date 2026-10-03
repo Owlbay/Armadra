@@ -63,7 +63,12 @@ export function checkNames(directory) {
       problems.push(`${name} declares no component the updater can read`);
       continue;
     }
-    if (component === "web" || component === "manifest") continue;
+    if (
+      component === "web" ||
+      component === "manifest" ||
+      component === "mobile"
+    )
+      continue;
     if (assetTarget(name) === "")
       problems.push(`${name} declares no target the updater can read`);
   }

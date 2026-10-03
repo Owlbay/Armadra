@@ -10,6 +10,7 @@ import {
   feedTarget,
   updaterChannel,
   updaterFeedFile,
+  mobileAssets,
   webAsset,
 } from "./artifacts.mjs";
 
@@ -119,6 +120,16 @@ test("the web bundle is the one published artifact with no target", () => {
   assert.equal(name, "armadra-web_0.2.0.tar.gz");
   assert.equal(assetComponent(name), "web");
   assert.equal(assetTarget(name), "");
+});
+
+test("the mobile shell's CI builds are named but never placed by the updater", () => {
+  const [apk, simulator] = mobileAssets("0.2.0");
+  assert.equal(apk.name, "armadra-mobile_0.2.0_android-debug.apk");
+  assert.equal(simulator.name, "armadra-mobile_0.2.0_ios-simulator.app.zip");
+  for (const asset of [apk, simulator]) {
+    assert.equal(assetComponent(asset.name), "mobile", asset.name);
+    assert.equal(assetTarget(asset.name), "", asset.name);
+  }
 });
 
 test("each target's electron-updater feed is a manifest of its own", () => {
