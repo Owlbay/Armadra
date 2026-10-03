@@ -3,7 +3,9 @@ import { createInterface } from "node:readline";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { connect } from "node:net";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { userInfo } from "node:os";
+import { join, resolve } from "node:path";
 import { dataDir, endpointsFile } from "../shell-core/paths";
 import {
   type HealthResponse,
@@ -292,13 +294,14 @@ export async function socketHealth(
   address: RuntimeAddress,
   timeoutMs = 500,
 ): Promise<HealthResponse | undefined> {
-  if (address.kind !== "socket") {
-    return httpHealth(
-      `http://${address.kind === "tcp" ? address.authority : ""}`,
-      timeoutMs,
-    );
+  if (address.kind === "tcp") {
+    return httpHealth(`http://${address.authority}`, timeoutMs);
   }
-  const body = await requestOverSocket(address.path, "/health", timeoutMs);
+  const body = await requestOverSocket(
+    localEndpoint(address),
+    "/health",
+    timeoutMs,
+  );
   return body === undefined ? undefined : parseHealth(body);
 }
 
@@ -542,10 +545,11 @@ export async function waitUntilAddressIsFree(
  * connection is what tells the shell the address is its to take.
  */
 export function addressIsHeld(address: RuntimeAddress): Promise<boolean> {
-  if (address.kind !== "socket") return Promise.resolve(false);
-  if (!existsSync(address.path)) return Promise.resolve(false);
+  if (address.kind === "tcp") return Promise.resolve(false);
+  if (address.kind === "socket" && !existsSync(address.path))
+    return Promise.resolve(false);
   return new Promise((done) => {
-    const socket = connect(address.path);
+    const socket = connect(localEndpoint(address));
     const finish = (held: boolean): void => {
       socket.destroy();
       done(held);
@@ -556,9 +560,51 @@ export function addressIsHeld(address: RuntimeAddress): Promise<boolean> {
   });
 }
 
-/** Where the shell asks its own Runtime to listen. */
-export function ownedRuntimeAddress(): RuntimeAddress {
-  return { kind: "socket", path: join(dataDir(), "runtime.sock") };
+/**
+ * Where the shell asks its own Runtime to listen: a Unix socket in the data
+ * directory, or on Windows — which has no socket files the core can bind
+ * (`core/listen.ts` refuses `unix:` there) — a named pipe whose name is
+ * derived from the user and the data directory, so two data directories never
+ * share a Runtime. Before this a packaged Windows build asked for
+ * `unix:C:\…\runtime.sock`, the core refused, and the window never opened.
+ */
+export function ownedRuntimeAddress(
+  platform: NodeJS.Platform = process.platform,
+  directory: string = dataDir(),
+): RuntimeAddress {
+  if (platform === "win32") {
+    return { kind: "pipe", name: runtimePipeName(directory) };
+  }
+  return { kind: "socket", path: join(directory, "runtime.sock") };
+}
+
+/** `armadra-runtime-<16 hex>`: what `core/listen.ts` accepts as a pipe name. */
+export function runtimePipeName(
+  directory: string,
+  user: string = safeUserName(),
+): string {
+  const digest = createHash("sha256")
+    .update(`${user.toLowerCase()}\0${resolve(directory).toLowerCase()}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `armadra-runtime-${digest}`;
+}
+
+function safeUserName(): string {
+  try {
+    return userInfo().username;
+  } catch {
+    return "";
+  }
+}
+
+/** What `net.connect` takes for a local address: the socket path or the pipe. */
+export function localEndpoint(
+  address: Exclude<RuntimeAddress, { kind: "tcp" }>,
+): string {
+  return address.kind === "socket"
+    ? address.path
+    : `\\\\.\\pipe\\${address.name}`;
 }
 
 /**
