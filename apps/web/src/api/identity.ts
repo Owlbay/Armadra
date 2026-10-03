@@ -98,6 +98,8 @@ export class IdentityRequestError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** 429 的 `Retry-After`（秒）；没有时 0。 */
+    readonly retryAfterSeconds = 0,
   ) {
     super(message || code);
   }
@@ -204,13 +206,15 @@ function remember(session: IdentitySession): IdentitySession {
 /* --------------------------------- 传输 ---------------------------------- */
 
 interface CallOptions {
-  readonly method?: "GET" | "POST";
+  readonly method?: "GET" | "POST" | "PUT" | "DELETE";
   readonly body?: unknown;
   readonly signal?: AbortSignal;
   /** 用刷新密钥而不是访问密钥当 Bearer：刷新 / 换 CSRF / 登出三条。 */
   readonly refreshBearer?: boolean;
-  /** 不需要会话的那两条：hello 与配对。 */
+  /** 不需要会话的那几条：hello、配对与登录。 */
   readonly anonymous?: boolean;
+  /** 答案是文本而不是 JSON（只用于成功时）。 */
+  readonly text?: boolean;
 }
 
 async function call<T>(
@@ -243,16 +247,49 @@ async function call<T>(
   } catch (cause) {
     throw new IdentityTransportError(cause);
   }
+  if (response.ok && options.text) return (await response.text()) as T;
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
+    // 403 可能是 CSRF 过期：作废本地这枚，下一次写请求重新取。
+    if (response.status === 403 && !native) forgetCsrf();
     const body = (payload ?? {}) as { code?: unknown; message?: unknown };
+    const retry = Number(response.headers?.get?.("retry-after") ?? 0);
     throw new IdentityRequestError(
       response.status,
       typeof body.code === "string" ? body.code : "UNKNOWN",
       typeof body.message === "string" ? body.message : "",
+      Number.isFinite(retry) && retry > 0 ? Math.ceil(retry) : 0,
     );
   }
   return schema.parse(payload);
+}
+
+/**
+ * 身份面上别的模块（安全页、登录）用的同一条传输：桌面壳走 Bearer，服务器壳
+ * 走 Cookie + CSRF；浏览器上的写请求先确保手里有一枚 CSRF。
+ */
+export async function identityRequest<T>(
+  action: string,
+  schema: z.ZodType<T>,
+  options: Omit<CallOptions, "refreshBearer" | "text"> = {},
+): Promise<T> {
+  const method = options.method ?? "GET";
+  if (!isNativeShell() && method !== "GET" && !options.anonymous) {
+    await ensureCsrf();
+  }
+  return call(action, schema, options);
+}
+
+/** 同一条传输取一份文本答案（审计导出的 CSV）。 */
+export function identityText(action: string): Promise<string> {
+  return call(action, z.string(), { text: true });
+}
+
+/** 登录类请求（口令、第二因素、passkey）换来的会话：记住凭据并通知订阅者。 */
+export function adoptIdentitySession(
+  session: IdentitySession,
+): IdentitySession {
+  return remember(session);
 }
 
 /* --------------------------------- 动作 ---------------------------------- */
