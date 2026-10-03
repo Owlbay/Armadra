@@ -27,10 +27,11 @@ node apps/server/out/main.js --help
 [开发指南 · 无窗口服务器壳](../../docs/guides/development.md#无窗口服务器壳)，账号模型见
 [服务器账号、中转与共享](../../docs/design/server-accounts-and-sharing.md)。
 
-| 文件           | 职责                         |
-| -------------- | ---------------------------- |
-| `src/cli.ts`   | 子命令与参数解析             |
-| `src/serve.ts` | 装配 core、静态托管与路由    |
-| `src/auth.ts`  | 配对、会话与 CSRF            |
-| `src/tls.ts`   | 证书加载与自签名             |
-| `src/service/` | 服务定义生成、日志读取与升级 |
+| 文件           | 职责                                  |
+| -------------- | ------------------------------------- |
+| `src/cli.ts`   | 子命令与参数解析                      |
+| `src/serve.ts` | 装配 core，再调 core 的 `openGateway` |
+| `src/service/` | 服务定义生成、日志读取与升级          |
+
+TLS、准入（Cookie / Bearer、CSRF、Origin）、CSP 与页面托管在 core 的 Gateway 域
+`apps/desktop/src/core/gateway/`，桌面壳的对外服务用的是同一份。

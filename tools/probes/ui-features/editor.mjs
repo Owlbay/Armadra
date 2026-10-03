@@ -162,6 +162,11 @@ export default async function editor({ stack, output, report, scenario }) {
   const url = stack.boardUrl(workspace.id, board.id);
 
   const page = await stack.browser.page(await stack.browser.context());
+  // 棋盘格的两种表面色在浅色主题里只差两级灰（#ededed / #ebebeb），按 4 位
+  // 量化的像素统计分不开；固定深色主题，结果不随系统外观变。
+  await page.call("Emulation.setEmulatedMedia", {
+    features: [{ name: "prefers-color-scheme", value: "dark" }],
+  });
   await page.goto(url);
   await page.settle();
 
@@ -405,7 +410,8 @@ export default async function editor({ stack, output, report, scenario }) {
     `return document.querySelector('.react-flow__pane');`,
     "画布空白处",
   );
-  await page.key("p", 4);
+  // ⌘P（macOS）/ Ctrl+P（其余平台）：CDP 修饰位 4 是 Meta、2 是 Ctrl。
+  await page.key("p", process.platform === "darwin" ? 4 : 2);
   const recent = await page.until(
     `const heading = [...document.querySelectorAll('[cmdk-group-heading]')].find((h) => h.textContent === "最近打开");
      if (!heading) return null;

@@ -119,7 +119,7 @@ describe("the local split", () => {
     // follow them; only the probe cache underneath it is local.
     expect(isLocal("agents.custom")).toBe(false);
     expect(localPaths()).toContain("agents.probes");
-    expect(localPaths()).toHaveLength(7);
+    expect(localPaths()).toHaveLength(8);
   });
 
   it("recognises a document written before the split", () => {
@@ -168,6 +168,8 @@ describe("SettingsStore", () => {
     expect((shared.terminal as JsonObject).detachedGraceMinutes).toBe(30);
     expect("backend" in (shared.terminal as JsonObject)).toBe(false);
     expect("power" in shared).toBe(false);
+    // Gateway 的配置整段在本机：监听接口、端口与证书文件都只对这台机器成立。
+    expect("gateway" in shared).toBe(false);
 
     const local = readJson(files.local);
     expect((local.terminal as JsonObject).backend).toBe("tmux");
@@ -175,7 +177,12 @@ describe("SettingsStore", () => {
     // Only the local paths are in it. `browser.executablePath` is one of them
     // and `normalize` always writes it, so an empty string here is the
     // documented "detect a browser" and not a leak of the account's half.
-    expect(Object.keys(local).sort()).toEqual(["browser", "power", "terminal"]);
+    expect(Object.keys(local).sort()).toEqual([
+      "browser",
+      "gateway",
+      "power",
+      "terminal",
+    ]);
     expect("usage" in local).toBe(false);
     expect("detachedGraceMinutes" in (local.terminal as JsonObject)).toBe(
       false,
