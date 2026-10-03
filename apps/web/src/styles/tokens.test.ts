@@ -49,6 +49,7 @@ const LAYOUT_CONSTANTS: Record<string, string> = {
 /** §3.1 的 z 轴栈，顺序不能乱。 */
 const Z_SCALE: Array<[string, number]> = [
   ["--z-pills", 5],
+  ["--z-canvas-overlay", 8],
   ["--z-sessions", 12],
   ["--z-dock", 20],
   ["--z-cluster", 26],
@@ -57,6 +58,9 @@ const Z_SCALE: Array<[string, number]> = [
   ["--z-focus", 40],
   ["--z-menu", 46],
   ["--z-dialog", 55],
+  ["--z-focus-page", 60],
+  ["--z-toast", 70],
+  ["--z-splash", 90],
 ];
 
 /** §3.4 的 Agent 品牌色。 */
@@ -67,6 +71,30 @@ const AGENT_COLORS: Record<string, string> = {
   "--agent-pi": "#e8b86d",
   "--agent-omp": "#d4a373",
   "--agent-copilot": "#a371f7",
+  "--agent-ama": "#1cb5c9",
+};
+
+/** 设计系统 §2.4：每个内置 Agent 一个文字色，两套主题各自声明。 */
+const AGENT_TEXT_COLORS = Object.keys(AGENT_COLORS).map(
+  (name) => `${name}-text`,
+);
+
+/** 设计系统 §2.3–§2.10 新增、两套主题都要有的名字。 */
+const THEMED_ADDITIONS = [
+  "--on-agent",
+  "--warn-text",
+  "--success-text",
+  "--working-text",
+  ...Array.from({ length: 8 }, (_, index) => `--member-${index + 1}`),
+];
+
+/** 设计系统 §2.6–§2.10 新增、与主题无关的常量。 */
+const SCALE_ADDITIONS: Record<string, string> = {
+  "--text-display": "22px",
+  "--text-code": "12px",
+  "--text-input-touch": "16px",
+  "--dur-page": "220ms",
+  "--r-pill": "999px",
 };
 
 /** §3.4 的节点调色板 7 色。 */
@@ -201,10 +229,34 @@ describe("tokens.css", () => {
     expect(values).toEqual(sorted);
   });
 
-  it("Agent 品牌色与主题无关，只在深色块里声明一次", () => {
+  it("Agent 品牌色深色保持各家原值，浅色换成压暗值（设计系统 §2.4）", () => {
+    // 原先两套主题共用原值；白底上原值都不到 3:1，§2.4 改为浅色另给一组压暗值。
     for (const [name, value] of Object.entries(AGENT_COLORS)) {
       expect(dark.get(name)).toBe(value);
-      expect(light.has(name)).toBe(false);
+      expect(light.get(name)).toMatch(/^#[0-9a-f]{6}$/);
+      expect(light.get(name)).not.toBe(value);
+    }
+  });
+
+  it.each(AGENT_TEXT_COLORS)("Agent 文字色 %s 两套主题都有", (name) => {
+    expect(dark.has(name)).toBe(true);
+    expect(light.has(name)).toBe(true);
+  });
+
+  it.each(THEMED_ADDITIONS)("新增 token %s 两套主题都有", (name) => {
+    expect(dark.has(name)).toBe(true);
+    expect(light.has(name)).toBe(true);
+  });
+
+  it("新增的字号、动效、圆角常量按设计系统取值", () => {
+    for (const [name, value] of Object.entries(SCALE_ADDITIONS)) {
+      expect(dark.get(name)).toBe(value);
+    }
+  });
+
+  it("深色成员色前七条就是节点调色板（§2.5）", () => {
+    for (let n = 1; n <= 7; n += 1) {
+      expect(dark.get(`--member-${n}`)).toBe(`var(--node-color-${n})`);
     }
   });
 
