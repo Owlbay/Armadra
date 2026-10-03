@@ -54,6 +54,7 @@ import {
   SelectValue,
 } from "@/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/ui/toggle-group";
+import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from "@/ui/empty";
 
 /**
  * 设置 → Agent（§24.1）。
@@ -130,6 +131,18 @@ export function AgentPage() {
       />
     );
   }
+
+  const addCustom = (
+    <Button
+      variant="secondary"
+      size="sm"
+      disabled={!settings.data}
+      onClick={() => subpage.open("agent", "new")}
+    >
+      <Plus />
+      {t("settings.customAgent.add")}
+    </Button>
+  );
 
   return (
     <>
@@ -331,20 +344,19 @@ export function AgentPage() {
             </span>
           </SettingsRow>
         ))}
-        {custom.length === 0 && (
-          <SettingsRow label={t("settings.customAgent.empty")} />
+        {custom.length === 0 ? (
+          // 空态：一句话 + 一个动作（设计系统 §5.16），不再单列一行「添加」。
+          <Empty className="py-6">
+            <EmptyHeader>
+              <EmptyTitle className="text-[13px] font-normal text-muted-foreground">
+                {t("settings.customAgent.empty")}
+              </EmptyTitle>
+            </EmptyHeader>
+            <EmptyContent>{addCustom}</EmptyContent>
+          </Empty>
+        ) : (
+          <SettingsRow label={null}>{addCustom}</SettingsRow>
         )}
-        <SettingsRow label={null}>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={!settings.data}
-            onClick={() => subpage.open("agent", "new")}
-          >
-            <Plus />
-            {t("settings.customAgent.add")}
-          </Button>
-        </SettingsRow>
       </SettingsGroup>
 
       <AgentCredentials />
