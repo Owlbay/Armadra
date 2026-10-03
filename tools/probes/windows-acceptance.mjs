@@ -637,7 +637,8 @@ async function runFull(options, result, record, out) {
           session.id,
           [`${markerLine(dialect, marker)}\r`],
           marker,
-          45_000,
+          // Windows PowerShell 5.1 的第一条命令要等模块自动加载，冷机上能到半分钟以上。
+          120_000,
         );
         const capture = await app.api(
           "GET",
