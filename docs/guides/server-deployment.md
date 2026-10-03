@@ -236,13 +236,14 @@ node apps/server/out/main.js upgrade --rollback --confirm && systemctl restart a
 
 ## 9. 推送
 
-推送由设置键 `push.*` 配置（页面随推送域上线），`push.transport` 三选一：
+推送由设置键 `push.*` 配置（契约 §19），`push.transport` 三选一；网页与 PWA 另走 Web Push，不需要任何第三方凭据。
 
 - `log`（缺省）：不发，只记日志；页面里的通知照常。
-- `direct`：服务器直连 APNs / FCM。要用户提供 APNs 的 `.p8`（Key ID、Team ID）或 FCM 服务账号 JSON——**只把文件挂进容器、在设置里填路径**，
+- `direct`：服务器直连 APNs / FCM，适合自己构建 App 的部署。要用户提供 APNs 的 `.p8`（Key ID、Team ID）或 FCM 服务账号 JSON——**只把文件挂进容器、在设置里填路径**，
   不要把内容放进环境变量。服务器需要能出站访问 `api.push.apple.com` 与 `fcm.googleapis.com`。
-- `relay`：经推送中继转发（`push.relayUrl`）。中继持有 App 的签名凭据，服务器不需要 APNs / FCM 凭据；设备注册时带 X25519 公钥，
-  载荷按设备加密，中继只转发。自己部署中继时它只需要出站 HTTPS 与 App 那一组 APNs / FCM 凭据，服务器到中继走 HTTPS。
+- `relay`：经推送中继（`push.relayUrl`）转发，给商店版 App 用：`.p8` 与服务账号属于发布方，只在中继上。core 交出的是按设备
+  X25519 公钥端到端加密的信封，中继看不到正文，也不存表。中继是 [`apps/push-relay`](../../apps/push-relay/README.md)，单独部署：
+  只需出站 HTTPS 与那一组 APNs / FCM 凭据，放在第 3 节同样的 HTTPS 入口后面；是否运营由发布方决定。
 
 推送正文不含终端原文与文件内容。本地联调用 dev-stack 的 `push-sink`（假 APNs / FCM / 中继，`http://127.0.0.1:8091`）。
 
