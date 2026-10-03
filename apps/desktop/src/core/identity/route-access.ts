@@ -2,6 +2,12 @@ import type { DatabaseSync } from "node:sqlite";
 import type { CoreRequest } from "../http/router";
 import { type RouteScopeRequirement, selfGuarded } from "../http/route-scopes";
 import { type AuthorizationSubject, isOwner } from "./authorize";
+import {
+  latestNodeSession,
+  nodeCreator,
+  nodeOwnerPrincipal,
+  sessionCreator,
+} from "./creators";
 import { type RouteGuard, type RouteVerdict, requestIdentity } from "./gate";
 import { type Scope, scope } from "./scopes";
 
@@ -15,7 +21,8 @@ import { type Scope, scope } from "./scopes";
  *
  *   * **按对象落到工作空间**：工作空间列表（答案过滤）、终端（创建看请求体，
  *     已有会话看会话行）、Agent 状态与「被读取」（看节点）、审批与关闭确认
- *     （看那条待答的请求）。对象属于哪块画布，就按那块画布上的授权判。
+ *     （看那条待答的请求）、ACP 会话（看会话行）、工作流（看草案 / 运行 /
+ *     画板）。对象属于哪块画布，就按那块画布上的授权判。
  *   * **无害的全局读**：Agent 目录、模型目录、终端后端、公开状态页。新建菜单、
  *     节点头、终端面板都要它们，而它们不带任何人的数据；只要这个成员至少被
  *     共享了一块画布就放行。
@@ -38,10 +45,27 @@ export interface RouteAccessLookups {
   sessionCreator(sessionId: string): string;
   /** 成员开终端成功之后记下创建者（迁移 0028 的那一列）。 */
   recordCreator(sessionId: string, principalId: string): void;
+  /**
+   * 节点记下的触发者（迁移 0035）；没记过是 `null`。记过的节点起终端时由库
+   * 继承这一个，路由门就不再把「恰好起它的人」写成创建者。
+   */
+  inheritedCreator(nodeId: string): string | null;
+  /** 节点最近一个终端会话；没起过是空串。 */
+  nodeSession(nodeId: string): string;
+  /** 节点是谁的：最近那个终端的创建者，没起过时是记下的触发者（契约 §23）。 */
+  nodeOwner(nodeId: string): string;
   /** 画布节点 → 工作空间。 */
   nodeWorkspace(nodeId: string): string;
   /** 待答的审批 → 工作空间。 */
   approvalWorkspace(pendingId: string): string;
+  /** 待答的审批是谁的终端上的：那个终端的创建者（契约 §23）。 */
+  approvalCreator(pendingId: string): string;
+  /** 画板 → 工作空间。 */
+  boardWorkspace(boardId: string): string;
+  /** 工作流草案 → 工作空间。 */
+  workflowDraftWorkspace(draftId: string): string;
+  /** 工作流运行 → 工作空间。 */
+  workflowRunWorkspace(runId: string): string;
   /** 待确认的关闭请求 → 工作空间（只在内存里）。 */
   confirmWorkspace(requestId: string): string;
 }
@@ -91,6 +115,14 @@ const ACP_SESSION = /^\/api\/acp\/sessions\/([^/]+)\/[^/]+$/;
 /** 驱动切换：按节点查画布。 */
 const ACP_DRIVER = /^\/api\/acp\/nodes\/([^/]+)\/driver$/;
 const CONFIRM = /^\/api\/control\/confirm\/([^/]+)$/;
+/** 工作流（契约 §15.2–§15.3）：路径里没有工作空间，按草案 / 运行 / 画板查。 */
+const WORKFLOW_TEMPLATES = /^\/api\/workflows\/templates(\/[^/]+)?$/;
+const WORKFLOW_DRAFTS = /^\/api\/workflows\/drafts$/;
+const WORKFLOW_DRAFT =
+  /^\/api\/workflows\/drafts\/([^/]+)(\/(confirm|discard))?$/;
+const WORKFLOW_RUNS = /^\/api\/workflows\/runs$/;
+const WORKFLOW_RUN =
+  /^\/api\/workflows\/runs\/([^/]+)(\/cancel|\/gates\/[^/]+)?$/;
 
 /** Agent 状态的三条路由各要什么。 */
 const AGENT_STATUS_PERMISSION: Readonly<Record<string, string>> = {
@@ -122,11 +154,96 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
     workspaceId: string,
   ): RouteVerdict => (allowed(subject, permission, workspaceId) ? ALLOW : DENY);
 
-  /** 至少在一块画布上有 `canvas:read`。 */
-  const sharedSomewhere = (subject: AuthorizationSubject): boolean =>
+  /** 至少在一块画布上有这条权限。 */
+  const grantedSomewhere = (
+    subject: AuthorizationSubject,
+    permission: string,
+  ): boolean =>
     (options.effectiveScopes?.(subject) ?? []).some(
-      (value) => value.Permission === "canvas:read",
+      (value) => value.Permission === permission,
     );
+  const sharedSomewhere = (subject: AuthorizationSubject): boolean =>
+    grantedSomewhere(subject, "canvas:read");
+
+  /**
+   * 「自己的」那一档（契约 §23）：往自己起的终端里写、答自己终端上的审批、
+   * 切自己节点的驱动，要的是 `terminal:create`（operator）；别人的要
+   * `terminal:drive` / `approval:answer`（driver）。创建者 = 触发者，见
+   * `identity/creators.ts`。
+   */
+  const mine = (subject: AuthorizationSubject, creator: string): boolean =>
+    subject.principalId !== "" && creator === subject.principalId;
+  const ownOrOthers = (
+    subject: AuthorizationSubject,
+    creator: string,
+    others: string,
+    workspaceId: string,
+  ): RouteVerdict =>
+    onWorkspace(
+      subject,
+      mine(subject, creator) ? "terminal:create" : others,
+      workspaceId,
+    );
+
+  /**
+   * 工作流（契约 §15、§23）。读草案与运行是看画布（列表必须带 `boardId`：
+   * 这一面是 raw 路由，答案过滤不到）；确认 / 丢弃草案、起跑、取消、答关卡
+   * 是 operator（`agent:launch`）。模板是本机共用的一份库：在任意一块画布上
+   * 能起 Agent 的成员能读，改模板只有 owner。不是工作流路径时答 `undefined`。
+   */
+  const workflowVerdict = (
+    request: CoreRequest,
+    path: string,
+    method: string,
+    subject: AuthorizationSubject,
+  ): RouteVerdict | undefined => {
+    if (!path.startsWith("/api/workflows/")) return undefined;
+    const reading = method === "GET" || method === "HEAD";
+    if (WORKFLOW_TEMPLATES.test(path)) {
+      return reading && grantedSomewhere(subject, "agent:launch")
+        ? ALLOW
+        : DENY;
+    }
+    if (WORKFLOW_DRAFTS.test(path) && reading) {
+      return onWorkspace(
+        subject,
+        "canvas:read",
+        lookups.boardWorkspace(request.query.get("boardId") ?? ""),
+      );
+    }
+    const draft = WORKFLOW_DRAFT.exec(path);
+    if (draft !== null) {
+      return onWorkspace(
+        subject,
+        reading ? "canvas:read" : "agent:launch",
+        lookups.workflowDraftWorkspace(decodeURIComponent(draft[1] as string)),
+      );
+    }
+    if (WORKFLOW_RUNS.test(path)) {
+      return reading
+        ? onWorkspace(
+            subject,
+            "canvas:read",
+            lookups.boardWorkspace(request.query.get("boardId") ?? ""),
+          )
+        : onWorkspace(
+            subject,
+            "agent:launch",
+            lookups.boardWorkspace(bodyString(request, "boardId")),
+          );
+    }
+    const run = WORKFLOW_RUN.exec(path);
+    if (run !== null) {
+      // 关卡答复（`…/gates/{stepId}`）是 operator：放行或拦下一次运行，与起跑
+      // 同一档，不是替 Agent 代答（契约 §23）。
+      return onWorkspace(
+        subject,
+        reading ? "canvas:read" : "agent:launch",
+        lookups.workflowRunWorkspace(decodeURIComponent(run[1] as string)),
+      );
+    }
+    return DENY;
+  };
 
   return (request, requirement) => {
     const identity = requestIdentity();
@@ -166,9 +283,14 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
       return {
         allowed: true,
         filter: (body) => {
-          const id = (body as { id?: unknown } | null)?.id;
-          if (typeof id === "string") {
-            lookups.recordCreator(id, subject.principalId);
+          const row = body as { id?: unknown; ownerNodeId?: unknown } | null;
+          // 节点记过触发者的，库已经按它写好了：起它的人只是「替触发者起」。
+          if (
+            typeof row?.id === "string" &&
+            (typeof row.ownerNodeId !== "string" ||
+              lookups.inheritedCreator(row.ownerNodeId) === null)
+          ) {
+            lookups.recordCreator(row.id, subject.principalId);
           }
           return body;
         },
@@ -180,11 +302,20 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
     if (path === "/api/acp/sessions" && method === "POST") {
       const workspaceId = bodyWorkspace(request);
       if (!allowed(subject, "terminal:create", workspaceId)) return DENY;
+      // 这个接口对已经活着的会话答「就是它」、对结束了的同一行原地接回：那两种
+      // 都不是新行，创建者不能被这次请求改写——否则 operator 对着 driver 起的
+      // 节点调一次，就把它变成了「自己的」。
+      const nodeId = bodyString(request, "nodeId");
+      const before = nodeId === "" ? "" : lookups.nodeSession(nodeId);
       return {
         allowed: true,
         filter: (body) => {
           const id = (body as { id?: unknown } | null)?.id;
-          if (typeof id === "string") {
+          if (
+            typeof id === "string" &&
+            id !== before &&
+            (nodeId === "" || lookups.inheritedCreator(nodeId) === null)
+          ) {
             lookups.recordCreator(id, subject.principalId);
           }
           return body;
@@ -197,24 +328,28 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
       const workspaceId = lookups.sessionWorkspace(sessionId);
       if (workspaceId === "") return DENY;
       if (reading) return onWorkspace(subject, "terminal:read", workspaceId);
-      const own =
-        subject.principalId !== "" &&
-        lookups.sessionCreator(sessionId) === subject.principalId;
-      return onWorkspace(
+      return ownOrOthers(
         subject,
-        own ? "terminal:create" : "terminal:drive",
+        lookups.sessionCreator(sessionId),
+        "terminal:drive",
         workspaceId,
       );
     }
     const acpDriver = ACP_DRIVER.exec(path);
     if (acpDriver !== null) {
-      // 切换会结束当前进程、起另一个：与往别人的终端里写同一档。
-      return onWorkspace(
+      // 切换会结束当前进程、起另一个：与往终端里写同一档——自己的节点
+      // operator 就够，别人的要 driver。
+      const nodeId = decodeURIComponent(acpDriver[1] as string);
+      return ownOrOthers(
         subject,
+        lookups.nodeOwner(nodeId),
         "terminal:drive",
-        lookups.nodeWorkspace(decodeURIComponent(acpDriver[1] as string)),
+        lookups.nodeWorkspace(nodeId),
       );
     }
+
+    const workflow = workflowVerdict(request, path, method, subject);
+    if (workflow !== undefined) return workflow;
 
     const session = TERMINAL_SESSION.exec(path);
     if (session !== null && path !== "/api/terminals/backend") {
@@ -228,12 +363,10 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
       }
       // 设计 S5：往自己开的终端里写只要 `terminal:create`，往别人的要
       // `terminal:drive`。「自己的」按会话行上记的创建者判，重启之后照旧。
-      const own =
-        subject.principalId !== "" &&
-        lookups.sessionCreator(sessionId) === subject.principalId;
-      return onWorkspace(
+      return ownOrOthers(
         subject,
-        own ? "terminal:create" : "terminal:drive",
+        lookups.sessionCreator(sessionId),
+        "terminal:drive",
         workspaceId,
       );
     }
@@ -255,13 +388,16 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
       );
     }
     // 审批答复与关闭确认都是替 Agent 代答（设计 S5），和 `terminal:drive`
-    // 同一档：只有那块画布上的 driver 答得了。
+    // 同一档：别人终端上的只有那块画布上的 driver 答得了；自己终端上的
+    // operator 就够（契约 §23）。关闭确认只在内存里、查不到终端，仍只有 driver。
     const approval = APPROVAL.exec(path);
     if (approval !== null) {
-      return onWorkspace(
+      const pendingId = decodeURIComponent(approval[1] as string);
+      return ownOrOthers(
         subject,
+        lookups.approvalCreator(pendingId),
         "approval:answer",
-        lookups.approvalWorkspace(decodeURIComponent(approval[1] as string)),
+        lookups.approvalWorkspace(pendingId),
       );
     }
     const confirm = CONFIRM.exec(path);
@@ -342,14 +478,51 @@ function databaseLookups(database: DatabaseSync): RouteAccessLookups {
         id,
         "workspace_id",
       ),
+    // 审批行记着它来自哪个会话；hook 面写的旧行没有，按节点最近的终端判。
+    approvalCreator: (id) => {
+      const session = text(
+        "SELECT session_id FROM agent_approvals WHERE id = ?",
+        id,
+        "session_id",
+      );
+      if (session !== "") return sessionCreator(database, session);
+      const node = text(
+        "SELECT node_id FROM agent_approvals WHERE id = ?",
+        id,
+        "node_id",
+      );
+      return node === "" ? "" : nodeOwnerPrincipal(database, node);
+    },
+    inheritedCreator: (id) => nodeCreator(database, id),
+    nodeSession: (id) => latestNodeSession(database, id),
+    nodeOwner: (id) => nodeOwnerPrincipal(database, id),
+    boardWorkspace: (id) =>
+      text("SELECT workspace_id FROM boards WHERE id = ?", id, "workspace_id"),
+    workflowDraftWorkspace: (id) =>
+      text(
+        "SELECT workspace_id FROM workflow_drafts WHERE id = ?",
+        id,
+        "workspace_id",
+      ),
+    workflowRunWorkspace: (id) =>
+      text(
+        "SELECT workspace_id FROM workflow_runs WHERE id = ?",
+        id,
+        "workspace_id",
+      ),
     confirmWorkspace: () => "",
   };
 }
 
 function bodyWorkspace(request: CoreRequest): string {
+  return bodyString(request, "workspaceId");
+}
+
+function bodyString(request: CoreRequest, field: string): string {
   try {
-    const body = request.json<{ workspaceId?: unknown }>();
-    return typeof body?.workspaceId === "string" ? body.workspaceId : "";
+    const body = request.json<Record<string, unknown>>();
+    const value = body?.[field];
+    return typeof value === "string" ? value : "";
   } catch {
     return "";
   }

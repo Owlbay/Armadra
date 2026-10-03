@@ -13,12 +13,21 @@ import {
  *
  * 整段挂在 `server.raw` 上（与自动化、OAuth 同一种装法）：这一面的路径不进
  * `http/routes.ts` 那张表，权限按前缀在 `http/route-scopes.ts` 声明——读是
- * `canvas:read`，写是 `agent:launch`。路由门在进这里之前已经判过。
+ * `canvas:read`，写是 `agent:launch`，关卡答复单列一行（{@link GATE_SCOPE}）。
+ * 路由门在进这里之前已经判过：服务器壳上按草案 / 运行 / 画板查出画布
+ * （`identity/route-access.ts`），列表必须带 `boardId`。
  *
  * 所有失败都是 `{ code, message }`，`code` 是 snake_case。
  */
 
 export const API_PREFIX = "/api/workflows/";
+
+/**
+ * 关卡答复要的权限（契约 §23）：运行所在画布上的 operator。放行或拦下一次
+ * 运行与起跑同一档，不是替 Agent 代答，所以不是 `approval:answer`。
+ * `http/route-scopes.ts` 的那一行与它一致（用例逐字比对）。
+ */
+export const GATE_SCOPE = "agent:launch";
 
 interface Answer {
   readonly status: number;
