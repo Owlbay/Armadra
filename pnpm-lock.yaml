@@ -61,8 +61,8 @@ importers:
         version: 13.6.33
     devDependencies:
       '@armadra/agent':
-        specifier: 0.6.5
-        version: 0.6.5
+        specifier: 0.6.7
+        version: 0.6.7
       '@electron/rebuild':
         specifier: ^4.2.0
         version: 4.2.0(supports-color@7.2.0)
@@ -366,8 +366,8 @@ packages:
   '@antfu/install-pkg@2.1.0':
     resolution: {integrity: sha512-sdg9NxU3zR4Mnawfbc/x6GB5Wf17WYud5qOuEuxXjaKpYpMkISSJEjItGebXJ2bQ4DIcly4NYH23mtkGJjvKUw==}
 
-  '@armadra/agent@0.6.5':
-    resolution: {integrity: sha512-cqlrXZOd9XzZGkDXG2or810QnxJc+OBQ6nPB3kP0aspQdpWm+MglqevYx9MssQZuZfIEU9TtpFOqvJ2eTP5IVQ==}
+  '@armadra/agent@0.6.7':
+    resolution: {integrity: sha512-wZ5Qhh0hoYvlDqlib7gcFGSSOGnTZLSy2hJwnvSPlx7KT22PHPg8/oCLpYqpQMLCJAsvZeQm71Dn0Hj4SVjKhQ==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -5747,7 +5747,7 @@ snapshots:
       package-manager-detector: 1.8.0
       tinyexec: 1.3.1
 
-  '@armadra/agent@0.6.5': {}
+  '@armadra/agent@0.6.7': {}
 
   '@asamuzakjp/css-color@6.0.7':
     dependencies:
