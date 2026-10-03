@@ -10,6 +10,12 @@ const settings = vi.hoisted(() => ({
   data: { diagnostics: { crashReportDsn: "" } } as Record<string, unknown>,
 }));
 const save = vi.hoisted(() => ({ mutate: vi.fn() }));
+const access = vi.hoisted(() => ({ member: false }));
+const runtimeSettings = vi.hoisted(() => ({ calls: 0 }));
+
+vi.mock("../../../app/use-access", () => ({
+  useAccess: () => ({ member: access.member }),
+}));
 
 vi.mock("../../../store/canvas-store", () => {
   const useCanvasStore = <T,>(selector: (state: typeof store) => T) =>
@@ -19,7 +25,10 @@ vi.mock("../../../store/canvas-store", () => {
 });
 
 vi.mock("../use-runtime-settings", () => ({
-  useRuntimeSettings: () => ({ settings, save }),
+  useRuntimeSettings: () => {
+    runtimeSettings.calls += 1;
+    return { settings, save };
+  },
 }));
 
 import { GeneralPage, isCrashReportDsn } from "./GeneralPage";
@@ -36,6 +45,8 @@ describe("通用页的崩溃上报", () => {
     usePreferencesStore.setState({ locale: "zh-CN" });
     save.mutate.mockClear();
     settings.data = { diagnostics: { crashReportDsn: "" } };
+    access.member = false;
+    runtimeSettings.calls = 0;
   });
   afterEach(cleanup);
 
@@ -73,6 +84,13 @@ describe("通用页的崩溃上报", () => {
     expect(save.mutate).toHaveBeenCalledWith({
       diagnostics: { crashReportDsn: "" },
     });
+  });
+
+  it("成员看不到这一组，也不去读设置文档（否则是一次 403）", () => {
+    access.member = true;
+    render(<GeneralPage />);
+    expect(screen.queryByRole("switch", { name: "崩溃上报" })).toBeNull();
+    expect(runtimeSettings.calls).toBe(0);
   });
 
   it("DSN 规则与壳一致", () => {

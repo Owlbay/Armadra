@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { useAccess } from "../../../app/use-access";
 import {
   THEME_PREFERENCES,
   usePreferencesStore,
@@ -30,6 +31,7 @@ export const CONTROL_WIDTH = "w-[168px]";
  */
 export function GeneralPage() {
   const t = useT();
+  const { member } = useAccess();
   const theme = usePreferencesStore((state) => state.theme);
   const setTheme = usePreferencesStore((state) => state.setTheme);
   const locale = usePreferencesStore((state) => state.locale);
@@ -153,7 +155,8 @@ export function GeneralPage() {
         </SettingsRow>
       </SettingsGroup>
 
-      <DiagnosticsGroup />
+      {/* 设置文档只有 owner 读得到：成员这里不摆、也不去问（否则就是一次 403）。 */}
+      {member ? null : <DiagnosticsGroup />}
     </>
   );
 }

@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { CRASH_REPORT_ENV, CRASH_REPORT_MESSAGE } from "./diagnostics/crash";
 import { createLog, logLevel, nodePlatform, reportError } from "./platform";
@@ -70,7 +71,8 @@ describe("reportError（外部服务 §11.2）", () => {
   it("壳没给 reportError 时只写一行本地日志，消息已剥离", () => {
     const lines: string[] = [];
     const log = createLog("debug", (line) => lines.push(line));
-    const key = process.env.HOME ?? "/nonexistent-home";
+    // 剥离按 `os.homedir()` 认家目录（Windows 上没有 HOME）。
+    const key = homedir();
     reportError({ log }, new Error(`failed in ${key}/x`), { source: "http" });
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("unhandled error");
