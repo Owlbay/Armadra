@@ -60,3 +60,53 @@ export const REALTIME_ERROR_CODES = {
   /** `…/sync` upgrade refused: setting off and the board is not realtime. */
   disabled: "realtime_disabled",
 } as const;
+
+/* -------------------------------------------------------------------------- */
+/*                         awareness 状态（契约 §16.4）                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * awareness 状态的上限。core 的 `realtime/awareness.ts` 手写同一套检查（core
+ * 不依赖本包），两边的数字必须一致。
+ */
+export const AWARENESS_LIMITS = {
+  /** `principalId` / `deviceId` / `focusNodeId` / 选区每一项的长度。 */
+  idLength: 128,
+  /** 显示名长度。 */
+  nameLength: 80,
+  /** 成员色环长度（设计系统 §2.5），`color` 取 `1..colors`。 */
+  colors: 8,
+  /** 选区里最多列多少个 id。 */
+  selection: 256,
+  /** 序列化之后一份状态的字节上限。 */
+  stateBytes: 16 * 1024,
+} as const;
+
+const awarenessId = z.string().min(1).max(AWARENESS_LIMITS.idLength);
+
+/**
+ * 一个连接的 awareness 状态（补全架构 §6.2，契约 §16.4）。
+ *
+ *   * `principalId`：core 按连接身份**改写**，客户端填什么都不算（本机壳是
+ *     owner，为 `""`）。
+ *   * `deviceId`：页面的 `clientId`（同一个人的两个窗口各有一个）。
+ *   * `color`：成员色序号 `1..8`（设计系统 §2.5）。加入时取在场者没用过的
+ *     最小一个（从 2 起），所以各个观看者看到的同一个人颜色相同。
+ *   * `cursor`：画布坐标；指针离开画布时省略。
+ *   * `selection`：选中的节点 id（白板对象带 `wb:` 前缀）。
+ *
+ * 认不出的状态（形状不对、超长）整条丢弃，不进在线表。
+ */
+export const awarenessStateSchema = z.object({
+  principalId: z.string().max(AWARENESS_LIMITS.idLength),
+  deviceId: awarenessId,
+  name: z.string().max(AWARENESS_LIMITS.nameLength),
+  color: z.number().int().min(1).max(AWARENESS_LIMITS.colors),
+  cursor: z
+    .object({ x: z.number().finite(), y: z.number().finite() })
+    .optional(),
+  selection: z.array(awarenessId).max(AWARENESS_LIMITS.selection).optional(),
+  focusNodeId: awarenessId.optional(),
+});
+
+export type AwarenessState = z.infer<typeof awarenessStateSchema>;
