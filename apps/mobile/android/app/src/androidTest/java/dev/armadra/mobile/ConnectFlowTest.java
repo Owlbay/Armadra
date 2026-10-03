@@ -50,7 +50,10 @@ public class ConnectFlowTest {
             }
             SystemClock.sleep(500);
         }
-        throw new AssertionError("timed out waiting for " + what);
+        // 失败时把页面上看得到的字（连接页的错误提示）带进断言，CI 日志里就能看出卡在哪。
+        String page = eval(scenario, "(function(){var n=document.querySelector('[data-slot=\"mobile-connect\"]');"
+                + "return location.href+' | '+(n?n.innerText:document.body.innerText).slice(0,600);})()");
+        throw new AssertionError("timed out waiting for " + what + ": " + page);
     }
 
     @Test

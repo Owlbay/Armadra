@@ -221,6 +221,20 @@ async function ios(link) {
     ],
     { env: { ...process.env, TEST_RUNNER_ARMADRA_PAIR_LINK: link } },
   );
+  // App 的设备日志（Capacitor 在 debug 构建里把页面控制台也写进去），失败时看卡在哪。
+  await run("simulator-log", "xcrun", [
+    "simctl",
+    "spawn",
+    target,
+    "log",
+    "show",
+    "--last",
+    "10m",
+    "--style",
+    "compact",
+    "--predicate",
+    'process == "App"',
+  ]);
   check(
     code === 0,
     "XCUITest：连接页 → 配对 → 画布",
@@ -246,6 +260,16 @@ async function android(link, port) {
     ],
     { cwd: join(root, "apps/mobile/android") },
   );
+  // 失败时最有用的是 WebView 控制台与插件自己的几行（不含任何密钥）。
+  await run("logcat", "adb", [
+    "logcat",
+    "-d",
+    "-s",
+    "ArmadraNative:*",
+    "Capacitor:*",
+    "Capacitor/Console:*",
+    "chromium:*",
+  ]);
   check(code === 0, "插桩用例：连接页 → 配对 → 画布", `gradle exit ${code}`);
 }
 

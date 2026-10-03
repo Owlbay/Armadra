@@ -90,6 +90,7 @@ jobs:
             target/mobile/*.zip
             target/mobile-shell-e2e/ios/result.json
             target/mobile-shell-e2e/ios/*.log
+            target/mobile-shell-e2e/ios/AppUITests.xcresult
           if-no-files-found: warn
 
   mobile-android:

@@ -7,6 +7,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.webkit.SslErrorHandler;
 import android.webkit.WebView;
 import com.getcapacitor.Bridge;
@@ -49,11 +50,13 @@ final class PinningWebViewClient extends BridgeWebViewClient {
         String host = url.getHost();
         X509Certificate leaf = leafOf(error.getCertificate());
         if (pin == null || host == null || leaf == null || !pin.covers(host, url.getPort())) {
+            Log.w(ArmadraNativePlugin.TAG, "tls: not a pinned origin, refused (" + error.getPrimaryError() + ")");
             handler.cancel();
             return;
         }
         worker.execute(() -> {
             boolean trusted = PinPolicy.evaluate(List.of(leaf), pin, host, new Date());
+            Log.i(ArmadraNativePlugin.TAG, "tls: pinned origin " + (trusted ? "trusted" : "refused"));
             main.post(() -> {
                 if (trusted) handler.proceed();
                 else handler.cancel();

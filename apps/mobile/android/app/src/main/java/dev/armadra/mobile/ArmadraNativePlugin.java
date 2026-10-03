@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
+import android.util.Log;
 import android.webkit.WebView;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
@@ -53,6 +54,7 @@ import org.json.JSONObject;
         name = "ArmadraNative",
         permissions = {@Permission(alias = "notifications", strings = {Manifest.permission.POST_NOTIFICATIONS})})
 public class ArmadraNativePlugin extends Plugin {
+    static final String TAG = "ArmadraNative";
     private static final Pattern SECRET = Pattern.compile("^[A-Za-z0-9_-]{43}$");
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -145,9 +147,11 @@ public class ArmadraNativePlugin extends Plugin {
         worker.execute(() -> {
             Pin next = new Pin(origin, fingerprint, null);
             List<X509Certificate> fetched = AnchorFetch.run(origin);
+            Log.i(TAG, "pin: fetched " + (fetched == null ? "nothing" : fetched.size() + " certificate(s)"));
             if (fetched != null) {
                 X509Certificate anchor = AnchorFetch.anchorFor(fetched, next, Uri.parse(origin).getHost());
                 if (anchor == null) {
+                    Log.w(TAG, "pin: no fetched certificate matches the pinned fingerprint");
                     call.reject("fingerprint mismatch");
                     return;
                 }
