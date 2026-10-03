@@ -13,13 +13,13 @@ import { useT } from "../../../app/preferences-store";
 import { Button } from "../../../ui/button";
 import { Input } from "../../../ui/input";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../../../ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "../../ResponsiveDialog";
 import { Check, Field, ReadError, selectClass } from "../forms";
 import type { RepositoryRequest } from "../actions/integration";
 import {
@@ -116,12 +116,14 @@ export function StashDialog({
     setMessage("");
   };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90dvh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{t("gitCommit.stash")}</DialogTitle>
-          <DialogDescription>{t("gitStash.safety")}</DialogDescription>
-        </DialogHeader>
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent className="max-h-[90dvh] overflow-y-auto">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{t("gitCommit.stash")}</ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
+            {t("gitStash.safety")}
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
         <div className="space-y-3 text-xs">
           <RepositoryPicker
             repositories={repositories}
@@ -153,7 +155,7 @@ export function StashDialog({
             </p>
           )}
         </div>
-        <DialogFooter>
+        <ResponsiveDialogFooter>
           <Button
             variant="outline"
             size="sm"
@@ -168,9 +170,9 @@ export function StashDialog({
           >
             {t("gitRepo.createStash")}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 
@@ -228,12 +230,16 @@ export function UnstashDialog({
     onOpenChange(false);
   };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90dvh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{t("gitCommit.unstash")}</DialogTitle>
-          <DialogDescription>{t("gitStash.conflictSafety")}</DialogDescription>
-        </DialogHeader>
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent className="max-h-[90dvh] overflow-y-auto">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {t("gitCommit.unstash")}
+          </ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
+            {t("gitStash.conflictSafety")}
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
         <div className="space-y-3 text-xs">
           <RepositoryPicker
             repositories={repositories}
@@ -301,7 +307,7 @@ export function UnstashDialog({
             </section>
           )}
         </div>
-        <DialogFooter>
+        <ResponsiveDialogFooter>
           <Button
             variant="outline"
             size="sm"
@@ -326,8 +332,8 @@ export function UnstashDialog({
           >
             {t("gitRepo.dropStash")}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
