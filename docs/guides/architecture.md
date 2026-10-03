@@ -228,6 +228,15 @@ Agent 之间的协作走 core 的两个动词表面：
 用 `open-agent` / `team`，要浏览器用画布浏览器节点。详见
 [Agent 适配与协作协议](./agent-collaboration.md)。
 
+经 ACP 驱动的 Agent 没有终端可敲命令，画布工具改由 `armadra-hook mcp` 承担：它在
+stdio 上讲 MCP（`initialize` / `tools/list` / `tools/call` 手写，不引 SDK），工具表就是
+`src/hook-client/verbs.ts` 的 `VERB_TOOLS`，每次 `tools/call` 是一次与
+`armadra-hook canvas|context|browser` 逐字节相同的 HTTP 调用（同一份节点令牌与会话绑定），
+`initialize.instructions` 是 `collab/skill.ts::mcpInstructions`。core 开会话时经
+`core/acp/mcp.ts` 把它放进 `session/new` 的 `mcpServers`（命令、`ARMADRA_NODE_ID`、端点
+文件；ama 不加）；`@armadra/agent` 的 `AcpClient` 声明 `features.mcpServers` 才带，旧版照旧
+开会话、答 `mcpInjected: false`。
+
 浏览器节点的 Agent 工具是 `armadra-hook browser <动词>`，动词清单只有一份
 （`core/browser/verb-spec.ts`，`--help` 与技能都由它生成）；执行下沉在 core
 （`core/browser/cdp/`），CDP 调用经一张白名单，执行任意 JS 不开放
