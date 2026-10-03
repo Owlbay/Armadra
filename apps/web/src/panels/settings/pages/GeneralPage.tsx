@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 import {
   THEME_PREFERENCES,
   usePreferencesStore,
@@ -8,6 +10,8 @@ import { LOCALES, type Locale } from "../../../i18n";
 import { useCanvasStore } from "../../../store/canvas-store";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
+import { useRuntimeSettings } from "../use-runtime-settings";
+import { Input } from "@/ui/input";
 import {
   Select,
   SelectContent,
@@ -22,7 +26,7 @@ export const CONTROL_WIDTH = "w-[168px]";
 
 /**
  * 设置 → 通用（§24.1）：主题、语言、侧栏、用量、恢复上次工作空间、
- * 系统文件、开屏动画。
+ * 系统文件、开屏动画；最后一组是诊断（可选崩溃上报，外部服务 §11.2）。
  */
 export function GeneralPage() {
   const t = useT();
@@ -148,6 +152,94 @@ export function GeneralPage() {
           />
         </SettingsRow>
       </SettingsGroup>
+
+      <DiagnosticsGroup />
     </>
+  );
+}
+
+/**
+ * 与 core / 壳的 `parseDsn` 同一条规则：`http(s)://<公钥>@<主机>/<项目>`。
+ * 页面只用它决定存不存；壳那边还会再校验一次。
+ */
+export function isCrashReportDsn(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed === "" || trimmed.length > 512) return false;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return false;
+  if (url.username === "" || url.hostname === "") return false;
+  if (url.search !== "" || url.hash !== "") return false;
+  const project = url.pathname.split("/").filter(Boolean).pop();
+  return project !== undefined && /^[A-Za-z0-9_-]+$/.test(project);
+}
+
+/**
+ * 诊断：崩溃上报默认关。打开后填 DSN 才真的开始发（`diagnostics.crashReportDsn`
+ * 非空）；关掉即把 DSN 清空。
+ */
+function DiagnosticsGroup() {
+  const t = useT();
+  const { settings, save } = useRuntimeSettings();
+  const saved = settings.data?.diagnostics?.crashReportDsn ?? "";
+  const [opened, setOpened] = useState(false);
+  const [draft, setDraft] = useState(saved);
+  useEffect(() => setDraft(saved), [saved]);
+  if (!settings.data) return null;
+
+  const enabled = saved !== "" || opened;
+  const trimmed = draft.trim();
+  const invalid = trimmed !== "" && !isCrashReportDsn(trimmed);
+  const commit = () => {
+    if (invalid || trimmed === "" || trimmed === saved) return;
+    save.mutate({ diagnostics: { crashReportDsn: trimmed } });
+  };
+
+  return (
+    <SettingsGroup>
+      <SettingsRow
+        label={t("settings.diagnostics.crashReports")}
+        footnote={t("settings.diagnostics.crashReports.note")}
+      >
+        <Switch
+          checked={enabled}
+          aria-label={t("settings.diagnostics.crashReports")}
+          onCheckedChange={(next) => {
+            setOpened(next);
+            if (next) return;
+            setDraft("");
+            if (saved !== "")
+              save.mutate({ diagnostics: { crashReportDsn: "" } });
+          }}
+        />
+      </SettingsRow>
+      {enabled && (
+        <SettingsRow
+          label={t("settings.diagnostics.dsn")}
+          footnote={invalid ? t("settings.diagnostics.dsnInvalid") : undefined}
+        >
+          <Input
+            aria-label={t("settings.diagnostics.dsn")}
+            aria-invalid={invalid || undefined}
+            type="url"
+            autoComplete="off"
+            spellCheck={false}
+            maxLength={512}
+            placeholder="https://key@host/1"
+            className={`h-8 text-xs ${CONTROL_WIDTH}`}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") commit();
+            }}
+          />
+        </SettingsRow>
+      )}
+    </SettingsGroup>
   );
 }
