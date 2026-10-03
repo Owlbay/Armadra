@@ -164,7 +164,9 @@
 
 ## G1-8 工作流引擎（C2）
 
-未开始。
+- 做了什么：`core/workflow/{types,draft,store,dispatch,engine,service,routes,registry,task-runs,index}.ts`；迁移 `0034_workflow.sql`（草案、模板、运行、步骤、runner 任务五张表）；控制动词 `workflow-propose`（工具 `canvas_workflow_propose`）；bus 事件 `workflow.draft` / `workflow.run` / `workflow.gate`（core 与共享层同步）；`packages/shared/src/api/workflows.ts` 的 zod；契约 §15.1–§15.4。运行建 Frame + 起点便签 + 角色节点，节点经依赖编排的启动路径起、提示词经投递队列投，完成判定复用 `dependencies/evaluate.ts`。
+- 实测：`core/workflow/*.test.ts`（草案校验、引擎三种步骤、关卡、取消、无页面推进、重启续跑、重投、路由与动词）；`node tools/probes/workflow-e2e.mjs`（真 core + 假 CLI `custom:wfecho` 走通 prompt → collect 两步模板）本机通过。
+- 没做：页面（草案卡、模板库、运行记录，G2 的包）；`wait` 动词与 runner 适配（G2-4，`task-runs.ts` 只有存取）；自动化目标（G2-3）；成员访问 `/api/workflows/*` 仍一律 403（按运行查画布的收窄留给 G2-9）；`workflow-e2e` 等 G0-4 的 `tools/ci/e2e.json` 合入后登记进 A 档。
 
 ## G1-9 实时协同 core（R0）
 
@@ -225,11 +227,51 @@
 
 ## G1-12 OAuth / OIDC / SSO（I2）
 
-未开始。
+**做了什么**
+
+- `core/identity/oauth/`：`providers.ts`（通用 OIDC：发现文档与 issuer 逐字节核对、JWKS 验签只收 RS256 / ES256、`iss` / `aud` / `azp` / 时效 / `nonce`、缺邮箱补 userinfo；GitHub 特例：`/user` 与 `/user/emails`）、`flow.ts`（`state` 内存 10 分钟取出即删、PKCE S256、浏览器绑定 Cookie 防登录 CSRF；绑定 / 登录 / 建号的决定；登记过 TOTP 的人跳回 `#oauth=mfa&challengeId=` 接 §18.3 的第二步）、`http.ts`（`providers`、`providers/{id}/secret`、`{id}/start`、`{id}/callback`、`bindings`、`{id}/logout`）、`index.ts`（挂原样前缀 `/api/identity/oauth/`；公网来源 = `gateway.publicOrigin` + 壳注入的 HTTPS 域名来源）。测试专用：`fake-issuer.ts`（进程内 OIDC + GitHub 假端点，可注入签名 / nonce / aud / 过期 / `alg: none` / issuer 错误）、`harness.fixture.ts`。
+- 绑定键按 issuer 派生（`oidc:<sha256 前缀>`、`github`），不用设置里的 `id`；`clientSecret` 在 SecretStore `armadra-oidc-<id>`；不加迁移。
+- 共享层 `identity-security.ts` 的 §18.5 小节（拒绝码表 `OAUTH_CODES`、提供方列表、start、绑定、登出）；契约 §18.5。
+- 对共享文件的最小改动：`service.ts` 的 `LoginMethod` 加 `"oauth"`；`audit.ts` 的 `SECURITY_AUDIT_ACTIONS` 追加 `identity.oauth.*`；`accounts-store.ts` 加 `liveOAuth(provider, subject)`；`identity/http.ts` 导出 `isSecure` / `sessionCookies`；`identity/index.ts` 把加固实例交给 OAuth；`accounts-http.ts` 退役 `credentials/oauth/*` 的 501；`gateway/admission.ts` 对 `GET /api/identity/oauth/{id}/callback` 放开 Origin 与 `Sec-Fetch-Site`（`oauthCallbackPath`）。分支叠在 G1-11（PR #34）之上，依赖它的 `openSession` 与 MFA。
+
+**实测**
+
+- `oauth.test.ts`（32 条，对进程内假 issuer）：绑定 → 登录同一 principal、未绑定拒绝、`allowSignup` + 白名单建 member（只有 `identity:read`）、GitHub 特例与错误 secret、已绑在别人名下、解绑、TOTP 用户走第二步；`state` 重放（不再换令牌）、绑定 Cookie 伪造、未知 state、`email_verified = false`、域名不在白名单（含子域）、五种 `id_token` 故障、ES256、发现文档 issuer 不符、用户取消、`returnTo` 越界、授权地址参数、SSO 登出地址；源码里的每个拒绝码都在共享层表里。
+- `oauth.devstack.integration.test.ts`（`ARMADRA_DEV_STACK=1`，对 `pnpm dev-stack up dex keycloak`，3 条全过）：dex 回环公开客户端 PKCE → 绑定 → 登录、重放拒绝、发现文档无 `end_session_endpoint`；Keycloak `armadra-dev`：建号、`unverified` 用户 `oauth_email_unverified`、SSO 仍在时 authorize 直接跳回、`end_session_endpoint` 登出后再 authorize 出登录页。
+- `accounts.integration.test.ts` 起真 core：`oauth/providers` 答 `configured: false`，`oauth/github/start` 答 `oauth_not_configured`；`admission.test.ts` 两条回调放行用例。
+
+**没做**
+
+- 设置页的提供方编辑与绑定区块：G2-8（接口与 zod 已备）。
+- dev-stack 用例不在 CI 的默认 vitest 里跑（门控 skipped）；没有加进 `tools/ci/e2e.json`。
+- 原生 App（Gateway Bearer 模式）发起答 `oauth_browser_required`：授权页开在系统浏览器里，没有发起时的绑定 Cookie。
+- OAuth 登录不受 `identity.mfa.requireFor`「未登记也提示」那条影响；登记过 TOTP 的人照样要第二因素。
+- 需用户提供（外部服务 §7.1）：
+  - [ ] 稳定的公网来源（`gateway.publicOrigin` 或服务器壳 `--public-origin`），HTTPS 域名。
+  - [ ] GitHub：Settings → Developer settings → OAuth Apps 新建，回调填 `<公网来源>/api/identity/oauth/github/callback`，scope 只要 `read:user user:email`；把 client id 填进 `identity.oauth.providers[]`，client secret 经 `PUT /api/identity/oauth/providers/github/secret` 存入。
+  - [ ] Google / Microsoft Entra / Keycloak 等：各建一个 OIDC 客户端（授权码 + PKCE），回调同上（`…/oauth/<id>/callback`），scope `openid email profile`；Google 填 issuer `https://accounts.google.com`，Entra 填 `https://login.microsoftonline.com/<tenant>/v2.0`；机密客户端的 secret 同样经 `PUT …/secret` 存入。
+  - [ ] 要开放 SSO 建号时：`allowSignup: true` 并填 `allowedDomains`（公司邮箱域名）。
 
 ## G1-13 推送 core（PU）
 
-未开始。
+**做了什么**
+
+- `core/push/`：设备登记（挂在身份设备上，覆盖式；原生 App 上交 X25519 公钥）、发送队列（先入队再发，总共最多 3 次尝试，令牌作废即撤销设备，终态留 7 天）、触发规则（`agent.approval` / `agent.status` 进入完成或出错 / `agent.delivery` 失败与回执 / `schedule.*` / `resources.threshold` / `board.comment` 提及 / `workflow.gate`，收件人按 `canvas:read` 过滤，正文按种类与设备语言写死、不读事件内容）、三条传输（Web Push：VAPID 密钥对生成到 `<数据目录>/push/vapid.json` 0600、RFC 8291；`direct`：APNs HTTP/2 ES256、FCM v1 RS256 换令牌；`relay`：只发端到端信封）与未配置时的 `log`。配置由设置 `push.*` 与 `ARMADRA_PUSH_*` 环境变量合成，密钥只给文件路径，两个路径进本机设置（`LOCAL_PATHS`）。
+- `/api/push/{config,devices,devices/{deviceId},test}`，契约 §19；共享层 `api/push.ts` 的 zod；`apps/web/src/push/service-worker.ts`（订阅与 worker 处理）。
+- `apps/push-relay`（`@armadra/push-relay`）：无状态中继，中继令牌即用中继的钥封起来的平台令牌，只收信封，复用 core 的 APNs / FCM 客户端。**按 §14 Q6 只写完、不部署。**
+- 迁移 `0033_push.sql`（合入时按 main 最大号 +1 改号）。
+
+**实测**
+
+- 单测：`core/push/*.test.ts` 5 个文件 44 条（`crypto` 设备私钥能解 / 别的钥与改字节解不开；`triggers` 每种事件一条、无 `canvas:read` 收不到、明文无终端原文；`transport-direct` 对进程内 push-sink 验 APNs ES256 签名、FCM RS256 断言、作废撤销、网络失败重试封顶 3 次；`transport-relay`；`routes`）；`apps/push-relay` 9 条（core → 中继 → 假 APNs / FCM 整条线）；`apps/web/src/push` 6 条。
+- `pnpm libs:build && pnpm -r --if-present test` 全绿（desktop 3563、web 2912、server 89、shared 298、push-relay 9）；`pnpm --filter @armadra/web typecheck`、`pnpm check` 通过。
+- A 档探针 `node tools/probes/push-e2e.mjs`：服务器壳 → push-sink 走 iOS 直连（权限请求与 Stop 各一条，ES256 验签、信封可解、明文与线上都没有夹带的终端原文）、Android 直连、Web Push（VAPID 由 sink 验签）、中继四条线，已进 A 档清单 `tools/ci/e2e.json`；进程内 sink 与 `pnpm dev-stack up push-sink` 的容器各跑一次均通过（容器里 APNs 签名记 `unchecked`，见探针说明）。
+
+**没做**
+
+- 中继不部署、不运营（用户决定）；真 APNs / FCM、真机收推送要发布方的 `.p8`、Firebase 服务账号与运行中继的主机（计划 §5 U8–U10）。
+- `schedule.*`、`resources.threshold`、`board.comment`、`workflow.gate` 四种事件今天没有域在发：规则已按契约 §19.6 的字段写好、用例用合成事件覆盖，由调度 / 资源 / G1-9 / G1-8 各自发布时接上。「用户关注的节点」这一层过滤没有数据来源，现在发给全部有 `canvas:read` 的人。
+- worker 产物挂到站点根、权限提示与入口归 G2-10；推送设置页区块（「后台服务 → 推送」）的界面归设置页的包，本包只用 G0-3 已建的键。UnifiedPush（ntfy）未做。
 
 ## G1-14 设计展示页与截图探针（WP-D2）
 
@@ -344,7 +386,17 @@
 
 ## G2-6 评论（R2）
 
-未开始。
+做了什么：
+
+- core `realtime/comments-routes.ts`：`GET/POST …/boards/{boardId}/comments`、`PATCH/DELETE …/comments/{id}`、`POST …/comments/{id}/resolve`（契约 §16.3）；读 `canvas:read`、写 `canvas:write`（路由门之外域内再判一次）；改正文只有作者，删除作者或 owner（记审计 `canvas.comment.delete`）；`resolved=false` 连已解决线程的回复一起去掉。提及记号 `@[显示名](principal:<id>)`（`realtime/comment-text.ts`），只认存在、没停用、对该工作空间有 `canvas:read` 的人；列表带 `people`（可提及的人）。
+- 事件 `board.comment`（`bus.ts` 与共享层 `workspaceEventSchema`）：`{boardId, action, comment:{id,parentId,anchorKind,anchorId?}, mentions}`，不带正文；`mentions` 是这一次新叫到的人、不含作者。推送域（G1-13）的规则读的正是 `comment.anchorKind/anchorId` 与 `mentions`，`comments-routes.test` 用真规则核对：叫被提及的人、深链到锚定节点。
+- `collab/context-link.ts`：Agent 经连线读节点时，回答末尾附该节点上未解决的评论线程（提及换成 `@显示名`、8 KiB 上限），与正文一起脱敏并计入读取预算；`readableAs` 对可读节点注明「附未解决的评论」。
+- 页面 `realtime/comments/`：`CommentLayer`（`ViewportPortal` 里的评论钉，坐标用 `nodeBox` / 白板 item / 点，按 `1/zoom` 反缩放，缩放 < 0.5 只画点，同锚点聚成一枚钉）、Dock「评论」开关（评论模式点画布放钉：节点 → item → 坐标；右侧非模态抽屉，只看未解决、已解决收进 `Accordion`、空态）、`CommentThread`（Popover 线程、回复、解决 / 重开、作者编辑、作者或 owner 删除；只读隐藏输入）、`CommentComposer`（Textarea，`@` 弹 `Command` 选人，离线禁发留草稿，⌘/Ctrl+Enter 发送）；收到同板 `board.comment` 重拉。文案进 `i18n/realtime.ts`（`comments.*`，中英同步）。
+- 展示页 `collab` 分区加评论样本：钉四种样子、线程可写 / 只读 / 离线、输入框、抽屉空态与有已解决折叠。A 档 `realtime-e2e` 加第 7 步：A 开评论模式在便签上放钉并发送，B 经事件看到钉，core 列表里锚点是该节点。
+
+实测：core `comments-routes.test` 5 例（只读 / 外人权限、作者改与作者或 owner 删、解决与回复锚点与过滤、`@` 解析与事件形状、记号纯文本），`context-link.test` +3（附评论、预算计入、上限截断、`readableAs`）；web `comments.test` 11 例。`realtime-e2e` 本机通过（含评论一步）；`design-showcase --only=collab` 通过（对比度最低 3.07，控制台无错）。
+
+没做：评论里的 Markdown（正文按纯文本显示，保留换行）；白板对象上的评论不随连线读给 Agent（白板引用不走节点读取路径）；钉的聚合只按同一锚点，没有按屏幕距离聚成「+N」。
 
 ## G2-7 桌面 Gateway 设置页与配对（G1）
 
@@ -374,15 +426,62 @@
 
 ## G2-8 安全页面：会话 / 设备、MFA / passkey 管理、审计（I3）
 
-未开始。
+**做了什么**
+
+- core：`GET /api/identity/audit` 加筛选（`principalId`、`workspaceId`、可重复的动作族 `action`、`sinceMs` / `untilMs`、游标 `beforeId`、`limit`）与 `nextBeforeId`；新增 `GET audit/export`（CSV，RFC 4180，公式开头的单元格补撇号，最多一万行）；契约 §18.6。
+- 页面：`panels/settings/pages/security/`（`SecurityPage`、`PasskeyList`、`MfaSetup`、`OAuthBindings` + owner 的 `OAuthProviders`、`SessionList` + `LockoutList`、`AuditLog`）替换占位页；登录 `session/SignIn.tsx` 两步（账号 → 口令 → 六位码 / 恢复码）、通行密钥、第三方账号按钮、锁定倒计时、离线 Alert，「账号与共享」与「安全」两处共用；`#oauth=` 回调由 `use-link-fragments` 打开到安全页（`signedIn/signedUp` 换会话、`mfa` 进第二步、`bound` 提示、`error` 写原因）；`mfaEnrollmentRequired` 把人带到安全页，页面上策略要求时两步验证排第一并给 Alert。
+- 客户端 `api/security.ts`；身份传输 `identityRequest` / `identityText` 支持 PUT/DELETE、文本答案与 `Retry-After`；`session/webauthn.ts` 在没有 `parse…FromJSON` 的浏览器上手工转 base64url。
+- 展示页 `auth` 分区换成真组件样本（`fixtures/auth.ts`）。
+
+**实测**
+
+- `gateway-e2e.mjs` 加第 5 步：公网来源设为 `https://localhost:<端口>`，无头 Chrome 独立上下文兑换邀请成为成员，CDP 虚拟认证器，安全页「添加通行密钥」→ 清 Cookie →「使用通行密钥」登录回同一成员；RP ID 为 `localhost`；审计按动作族查到 `identity.passkey.add` 与 `method: "passkey"` 的登录；页面无控制台错误。
+- 服务器壳（回环）上手工走一遍：owner 开两步验证（扫码页、恢复码）、审计按「两步验证」筛选并展开详情、清 Cookie 后口令 + TOTP 两步登录、CSV 导出表头与行数正确。
+- 展示页 `--only=auth` 六张截图，两主题对比度通过，控制台无错误。
+
+**没做**
+
+- 提供方本身（issuer、clientId、域名、开关）仍在设置 `identity.oauth.providers` 里编辑；安全页只管密钥与看状态 / 回调地址。
+- 通行密钥重命名（core 没有接口）、owner 替别人重置 MFA（`POST mfa/reset` 有接口，页面未接）、「忘记口令」（无流程）。
+- 设计 §5.9 的整页登录（无侧栏）：登录仍挂在设置对话框的「账号与共享」与「安全」里，组件本身已是整页布局，换入口归改 `App.tsx` 的包。
+- OAuth 绑定区块的 dex 集成用例：G1-12 的 dev-stack 用例已覆盖回调；页面这一侧用单测与片段解析覆盖。
 
 ## G2-9 Agent 权限角色（RB）
 
-未开始。
+做了什么：
+
+- 角色阶梯（契约 §23.1）：`identity/route-access.ts` 对终端写入、ACP 发提示 / 取消 / 换模式、ACP 驱动切换、审批答复统一按「自己的要 `terminal:create`（operator），别人的要 `terminal:drive` / `approval:answer`（driver）」判；审批的「自己的」按审批行的 `session_id`，旧行按节点最近的会话。关闭确认只在内存里，仍只有 driver。
+- 创建者 = 触发者（契约 §23.2）：新增迁移 `node_creators`（分支上 0035）与 `identity/creators.ts`。控制动词 `open-agent` / `open-terminal` / `team` 在存盘前记下调用方节点终端的创建者（ama runner 经 `open-agent` 同样落在这里），工作流 `layoutRun` 记起跑的人，库里的触发器让之后任何一条路起的会话行都继承；冷启动起完后按自动化的创建者（owner）改写（`schedule/cold-start.ts::stampColdStartCreator`）。路由门对记过触发者的节点不再把「恰好起它的人」写成创建者；`POST /api/acp/sessions` 答已有的或原地接回的同一行时不改写创建者（原先 operator 对着 driver 的节点调一次就能把会话变成自己的）。
+- ACP 与工作流的成员访问（契约 §23.3）：`/api/workflows/*` 按草案 / 运行 / 画板（查询串或请求体）查画布；列表不带 `boardId` 对成员 403（raw 路由过滤不到答案）；起跑、取消、确认 / 丢弃草案、关卡答复要 `agent:launch`（关卡在 `route-scopes.ts` 单列，常量 `workflow/routes.ts::GATE_SCOPE`）；模板对「在任意画布上能起 Agent」的成员只读，改模板只有 owner。ACP 的查找 G2-1 已补，本包加了驱动切换的「自己的」与开会话的改写保护。
+- 终端会话 JSON 加可选 `creatorPrincipalId`（读行时带）；页面 `use-access.ts::useCanAnswer` / `canAnswerFor`：driver 照旧，operator 对自己起的终端也摆审批按钮（终端节点头与 ACP 权限卡）；答不了的人在 ACP 权限卡上看到「等待接管」徽标（设计系统 §5.8）。
+- 展示页 `collab` 分区加角色样本：成员表（可改 / 只读）、审批卡三种看法。契约 §23、服务器账号设计 §6 两行。
+
+实测：core `route-access.test` 78 例（全局权限表加审批四行：operator 答自己起的 / 别人起的、自动化起的、ama 起的，另有 ACP、工作流各行），`identity/creators.test` 7 例（真库：触发器继承、冷启动改写、审批 / 驱动切换 / 工作流查找），`collab/creators.test` 3 例，`workflow/routes.test` +2；服务器壳 `roles.integration.test` 5 例（owner + 两个 operator + driver + editor + viewer + 局外人，真 HTTPS）；web `use-access.test` +3、`PermissionCard.test` 改 1。`design-showcase --only=collab` 通过、控制台无错。`pnpm libs:build && pnpm -r --if-present test` 全绿，typecheck 与 `pnpm check` 通过。
+
+没做：终端节点头（非 ACP）的审批在答不了时仍是不显示按钮，没有「等待接管」徽标（头部组件归别的包）；成员能建自动化之前，冷启动的创建者恒为 owner（`creators.ts::AUTOMATION_CREATOR`）；runners（G2-4）若不经 `open-agent` 建节点，要自己调 `recordNodeCreator`。
 
 ## G2-10 移动网页：连接页与手机细节（M1）
 
-未开始。
+**做了什么**
+
+- 入口分支（`main.tsx` → `mobile/entry.ts` + `MobileRoot.tsx`）：原生 App（Capacitor，页面来源 `capacitor://localhost` / `https://localhost` 且 `Capacitor.isNativePlatform()`）没有记下的 Gateway 或钥匙串里没有它的会话 → 连接页；手机浏览器经 Gateway 打开、窄屏、带 `#pair=` → 连接页（票留到点「连接」才取走，CA 引导的「回到这一页刷新」之后仍可配对）；其余（桌面窗口、宽屏、普通网页）直接是画布，不发请求。
+- `mobile/ConnectScreen.tsx`：BrandMark + 标题 + 一个动作；原生贴配对链接（网页链接或 `armadra://pair` 深链，复用 `host/qr.ts::parsePairingQr`）或扫码；网页只差「连接」并带 `PageCaGuide`。错误在字段下 / 一条 Alert。`mobile/connect.ts`：原生先钉指纹、再配对（`pairWithGateway`）、记下来源、重载。
+- `mobile/native-bridge.ts`：插件 `Capacitor.Plugins.ArmadraNative`（`getSession/setSession/clearSession/pin/scan/pushRegistration`，形状写在文件头）；不在 App 里是空实现。`installNativeTransport` 包 `fetch`（发往 Gateway 的补 Bearer、401 轮转一次重发）与 `WebSocket`（升级前换 `ws-ticket`，`Sec-WebSocket-Protocol: armadra-ticket.<票>`），调用点不改。
+- `api/runtime-url.ts`：`savedRuntimeOrigin / saveRuntimeOrigin / forgetRuntimeOrigin / isNativeAppPage / gatewayOrigin`，只有原生 App 的页面认记下的来源。`api/identity.ts`：原生 App 与桌面壳同走 Bearer，密钥另存钥匙串；`pairWithGateway`、`restoreNativeCredentials`、`fetchWsTicket`、`currentAccessToken`；刷新也被拒时清钥匙串回连接页。
+- 推送：`mobile/PushPermission.tsx`（手机布局或 App 里、登录后问一次，浮在底部导航上，焦点页打开时让开；浏览器走 `subscribeToPush("/sw.js")`，App 走插件令牌 + `PUT /api/push/devices`）；`mobile/sw.ts` 由 `vite.config.ts` 的插件单独打成 IIFE 挂在站点根 `/sw.js`（约 138 KB，开发服务器按请求现打）；`mobile/push-open.ts`：SW 消息、`#push=<深链>`（SW 新开窗口与原生 App 都走它）→ 打开工作空间并进节点焦点页。
+- 焦点页：ACP 驱动的终端节点不出 PTY 按键条；会话视图输入 16px；`mobile/keyboard.ts` 在 iOS 软键盘盖住页面时按可视视口摆整页。顺手修了 `acp/SessionView.tsx`：同一节点同时挂两份会话视图（焦点页 + 画布）时每个分块被拼两遍，现按事件对象去重。
+- 展示页 `mobile` 分区换成六块 390×844 的真组件样本（原生未连接、网页扫码打开 + CA 引导、配对失败、推送提示、焦点页会话视图、焦点页终端按键条）；`i18n/mobile-connect.ts` 中英。
+
+**实测**
+
+- A 档 `ui-features-e2e --only=mobile`（新场景，经 Gateway 本地 CA、回环、托管 `apps/web/dist`，Chrome 经 CDP 只对自己忽略证书错误）：390×844 扫码链接 → 连接页（含 CA 下载）→ 点「连接」配对成 owner、票被抹掉 → `#push=armadra://w/…/n/…` 打开焦点页会话视图（无按键条、输入 16px）→ 发一句假 ACP Agent 回复流入 → 768×1024 回到画布；控制台无错误。
+- 展示页探针 `--only=mobile` 六张图，对比度与控制台通过。
+
+**没做**
+
+- 8 位配对码（core 只有两分钟票，同 G2-7）；PromptBox 的模式 Select 在手机上收进「⋯」（`acp/PromptBox.tsx` 不归本包）；评论在焦点页的布局等 G2-6 合入。
+- 原生侧全部未验证（插件由 G3-1 实现）；`<img src>` 直连 core 的资源在 App 里不带 Bearer。
+- 推送订阅没有在真浏览器里跑通：无头 Chrome 忽略证书错误时不给注册 service worker，要装好 CA 的真机（U6）。
 
 ## G2-11 存量界面套用一：按钮、空态、手机对话框（WP-D3a）
 
@@ -402,7 +501,39 @@
 
 ## G3-3 签名、公证与自动更新端到端
 
-未开始。
+做了什么：
+
+- macOS（W-SIGN-MAC）：`signing-electron.mjs` 的公证凭据改为「App Store Connect API key 三件套（`APPLE_API_KEY` 为 .p8 路径 / `APPLE_API_KEY_ID` / `APPLE_API_ISSUER`）**或** Apple ID 三件套，任一完整即可」，两套都在时 API key 胜出并把另一套从环境里拿掉（`unsetEnv`，app-builder-lib 见 `APPLE_ID` 就走 Apple ID 分支）；`.p8` 路径不存在、证书缺口令、某一套给一半都在构建前拒绝。`ARMADRA_MAC_ADHOC_SIGN=1` 是本地演练（ad-hoc 身份 `-`、不公证，发布与真证书在场时拒绝）。`release.yml` 预检把 `APPLE_API_KEY_P8_BASE64` 解到 `$RUNNER_TEMP/AuthKey.p8` 并 `notarytool store-credentials --key … --validate`，只把选中的一套写进 `GITHUB_ENV`；签过名的包上传前 `signing-electron.mjs verify-mac`（`codesign --verify --deep --strict`）。
+- Windows（W-SIGN-WIN）：签名计划按平台分，Windows 三条路三选一——Azure Artifact Signing（凭据 + 端点 / 账户 / 证书配置 + `ARMADRA_WIN_PUBLISHER_NAME` 齐全才合并 `win.azureSignOptions`，显式 `timestampRfc3161` 与 SHA256）、证书文件（`CSC_LINK`，钉了名字就加 `win.signtoolOptions.publisherName`）、自托管 runner 证书库（`ARMADRA_WIN_CERT_SHA1`）；给一半或配了两条都拒绝。工作流读 `.pfx` 主体 CN 与 `publisherName` 逐字核对（`check-publisher`），签过名的安装包与 `armadra.exe` 必须 `Get-AuthenticodeSignature` 为 `Valid`（`verify-windows`）。`nsis.artifactName` 改成无空格的 `Armadra-Setup-${version}-${arch}.${ext}`，暂存仍认旧名。`environment.ts::signatureState` 的 Windows 分支真实现：`Get-AuthenticodeSignature` 子进程（每进程一次），`Valid` 才 `signed`、`NotSigned` 为 `unsigned`、其余（含自签证书的 `UnknownError`）为 `unknown`。
+- Linux（W-SIGN-LINUX）：新建 `tools/release/sign-gpg.mjs`——`ARMADRA_LINUX_GPG_KEY` / `_PASSPHRASE` 导进一次性 `GNUPGHOME`，rpm 先 `rpmsign --addsign`，再给 AppImage / deb / rpm 各出 `.asc`，导出公钥 `armadra-linux.gpg` 作 Release 资产；仓库里有 `apps/web/public/armadra-linux.gpg` 时指纹必须一致；`verify`（`gpg --verify` + `rpmkeys --checksig`）；`keygen` 出一天期演练密钥。`release.yml` 的 `assemble` 作业在 `assemble.mjs` 之前签与验；`assemble.mjs` 名字检查放行 `.asc` 与公钥；缺 GPG 密钥时说明顶部列「Linux (GPG)」。
+- 更新器：发布包此前一律带本地构建的停更标记（`dist.mjs` 只有 `local = true` 一条路，发布包永远报 `localBuild`），现在 `ARMADRA_DIST_RELEASE=1`（`release.yml` 设）才是发布包；`ARMADRA_DIST_VERSION` 按另一版本号打包（探针造「下一版」用）。未签名的打包版在 `ARMADRA_UPDATES_DEV=1` 下能走完检查、下载、校验、暂存，但「重启安装」答新原因 `notSigned`（`availability.ts::installRefusal`，不停后台、不写待重启记录），暂存通知与托盘公告改说「已校验、未签名、不自动安装」（`notify.ts`，页面文案 `updates.shellReason.notSigned` 中英）；打包版在同一开关下可读回环 http 发布源。macOS 上 `quitAndInstall` 之后 Squirrel.Mac 异步拒绝（换了签名者）的 `error` 事件现在落到 `failed / signatureMismatch`，之前页面会一直停在「安装中」。
+- 探针 `tools/probes/update-e2e.mjs`（B 档 `update-e2e`）与 `docs/guides/ci-release.md` §2.6 / §2.6.1 / §2.6.2 / §3 / §4、`tools/probes/README.md`。
+
+实测：
+
+- 本机（macOS arm64）`ARMADRA_DIST_RELEASE=1 pnpm --filter @armadra/desktop dist` 出未签名发布包，`update-e2e` 两段都过：dev-stack `release`（127.0.0.1:8090，开发 minisign 公钥）检查 + ETag 304 + `SHA256SUMS` / `latest.json` / `darwin-aarch64` 清单与包全验；打包版 idle → check 得 0.1.1 → download → 暂存文件（临时 HOME 的 `Library/Caches/…-updater/pending/Armadra_0.1.1_darwin-aarch64.zip`）与发布字节同 sha256 → install 答 `notSigned`、无待重启记录、应用仍在跑。
+- ad-hoc 演练包（`ARMADRA_MAC_ADHOC_SIGN=1`）：`codesign -dv` 为 `adhoc,runtime`、`Sealed Resources` 214 个文件，`verify-mac` 通过（未签名包 `verify-mac` 失败，退出 1），带 hardened runtime 能启动并走到「暂存」。再打一个 `ARMADRA_DIST_VERSION=0.1.1` 的 ad-hoc 包走 `--install --next`：下载、暂存、交给 Squirrel.Mac 后应用两分钟内没有退出——ad-hoc 签名过不了 Squirrel.Mac 对更新包签名者的校验，这一段只有 Developer ID 能走通（上面的 `error` 事件修正是据此加的，单测覆盖）。
+- GPG：Docker（node 22 bookworm + gnupg 2.2.40 + rpm 4.18）里 `sign-gpg.test.mjs` 5/5 过，含真 `rpmbuild` 出的 rpm 经 `rpmsign --addsign` 与 `rpmkeys --checksig`、改一个字节后 `.asc` 验不过、换一把密钥签被已发布公钥拦下；CLI 的 skip / refuse / sign / verify 四条与 `keygen` 都跑过，容器里没有留下 `~/.gnupg`。
+- 工作流：`validate-workflows` 通过；`release.yml` 的 bash 步骤 `bash -n` 全过，「选 Windows 签名路径」与「预检公证凭据」两步用假环境逐组合跑过（全缺告警、给一半失败、Azure / 证书文件 / 证书库 / API key / Apple ID 各自只写自己那套进 `GITHUB_ENV`）。
+- `environment.test.ts` 的 Windows 真分支（`New-SelfSignedCertificate` 签 `.ps1` 得 `unknown`、无签名得 `unsigned`）只在 Windows runner 上跑，见 PR 的 CI。
+
+没做：
+
+- 签名包的「安装 → 重启 → 版本号变」没有走通：本机没有 Developer ID 证书，ad-hoc 过不了 Squirrel.Mac；Windows 自签证书过不了 electron-updater 的发布者校验；Linux AppImage 的安装段要 Linux 桌面环境（夜间 B 档由 G3-4 接 `xvfb` 与打包后再跑）。探针的 `--install` 分支写了但未实跑成功。
+- 没用自签的 macOS codesign 身份演练：那要往用户钥匙串的搜索列表里加钥匙串，属于改本机安全设置，改用 ad-hoc。
+- Azure Artifact Signing、`notarytool --validate`、CA 云签名（`WINDOWS_CLOUD_SIGN_*`）没有本地等价物，只有合并逻辑与工作流分支的测试；CA 云签名的自定义 sign hook 未写（等选定供应商）。
+- `apps/web/public/armadra-linux.gpg` 没有提交：没有真密钥，不放占位公钥；用户提供密钥后把 `sign-gpg.mjs sign` 导出的公钥提交进去。
+- `signatureState` 在 macOS 仍只看 `_CodeSignature`（ad-hoc 包也算 signed）；靠发布前的 `codesign --verify` 与安装时 Squirrel.Mac 的校验兜底。
+- electron-updater 的缓存目录名是 `@armadradesktop-updater`（由包名推出），未改。
+
+需用户提供（P0 / P1，[外部服务](../design/external-services.md) §13）：
+
+- [ ] **P0** Apple Developer Program 会员；**Developer ID Application（G2 链）** 证书导出为 `.p12` → secrets `APPLE_CERTIFICATE_P12_BASE64`、`APPLE_CERTIFICATE_PASSWORD`（可选 `APPLE_SIGNING_IDENTITY`）、`APPLE_TEAM_ID`。
+- [ ] **P0** App Store Connect API key（Developer 角色，`.p8` 只能下载一次）→ secrets `APPLE_API_KEY_P8_BASE64`（base64 的 .p8）、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER_ID`；Apple ID 回退可选：`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`。
+- [ ] **P0** minisign 发布密钥：`node tools/release/sign.mjs keygen` → secret `ARMADRA_RELEASE_SIGNING_KEY`，公钥提交进仓库。
+- [ ] **P1** Windows 签名三选一：Azure Artifact Signing（secrets `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET`，变量 `AZURE_SIGNING_ENDPOINT` / `AZURE_SIGNING_ACCOUNT` / `AZURE_SIGNING_PROFILE`）；或 OV 证书文件（secrets `WINDOWS_CERT_BASE64` / `WINDOWS_CERT_PASSWORD`）；或自托管 Windows runner + USB 令牌（变量 `ARMADRA_WIN_CERT_SHA1`，Windows 两行 `runs-on` 改 `[self-hosted, windows, signing]`）。都要配变量 `ARMADRA_WIN_PUBLISHER_NAME` = 证书主体 CN。
+- [ ] **P1** GPG 签名专用密钥 → secrets `ARMADRA_LINUX_GPG_KEY`（armored 私钥）、`ARMADRA_LINUX_GPG_PASSPHRASE`；首个签名发布后把 `armadra-linux.gpg` 提交到 `apps/web/public/`。
+- [ ] **P1** 自家 tap / bucket 仓库 + 细粒度 PAT（`HOMEBREW_TAP_TOKEN`、`SCOOP_BUCKET_TOKEN`、`WINGET_TOKEN`）——Homebrew cask 自 2026-09-01 起要求签名且公证，归 W-DIST，本包未用。
 
 ## G3-4 Linux 打包验证与夜间冒烟
 
@@ -419,16 +550,44 @@
 
 - 分支上手动触发的 nightly（run 37122980815）：linux 作业 `deb-install`（amd64，干净 ubuntu:22.04）与 `packaged-smoke` 通过，macos 作业 `packaged-smoke` 通过；`report` 因不在 main 跳过，issue 上报未实跑。
 - arm64 AppImage 的运行时要 `libz.so`（开发包里的无版本名），干净系统上 `APPIMAGE_EXTRACT_AND_RUN` 会报缺库；x64 runner 有 `zlib1g-dev`，未改打包。
-- `update-e2e` 没有单独作业：G3-3 新增 `tools/ci/e2e.d/update-e2e.json` 并写 `platforms`，在对应系统作业里打包后执行。
+- `update-e2e`、`server-perf`、`server-container-e2e` 不设单独作业：条目写 `platforms: ["linux"]`，在 `linux` 作业里打包后执行（作业设 `ARMADRA_DEV_STACK=1`、装 Chrome）；原 `server-image` 作业由 `server-container-e2e` 条目取代。
 - macOS 作业与 issue 上报只在 GitHub 上首跑时验证；deb 容器验证没有复用 dev-stack 的 compose（直接 `docker run`）。
 
 ## G3-5 服务器部署：镜像、公网部署指南、备份升级
 
-未开始。
+做了什么：
+
+- ACME 内建（W-ACME）：`core/gateway/acme.ts`——`acme-client` 走 RFC 8555（账户、带 `profile` 的订单、`http-01`、定稿），CSR 用本目录的 DER 写入器自签；挑战监听 `ARMADRA_ACME_HTTP_PORT`（缺省 80，其余请求 308 到对外来源）；证书、私钥、账户密钥、`state.json` 在 `<数据目录>/tls/acme/`（0700 / 0600）；寿命过三分之二续，失败按 1、2、4…小时退避（≤ 12 小时、≤ 剩余寿命一半），连续 3 次记错误并 `onAlert`，一直用旧证书；续好 `gateway.refresh()` 热换。`tls.ts` 加 `acme` 来源，`index.ts` 的 `open()` 接 `acme` 分支（桌面设置 `gateway.tls.source = "acme"` 与服务器壳共用 `startAcme`），`GET /api/gateway` 的 `tls.acme` 报续期状态（契约 §17.1 同步，共享层 `gatewayAcmeStatusSchema`）。错误码 `acme_misconfigured` / `acme_port_unavailable` / `acme_failed`（替换 `acme_unavailable`）。出站表登记 Let's Encrypt 目录。
+- 服务器壳：`serve --acme <邮箱>` / `ARMADRA_ACME_EMAIL`，与 `--tls-cert/--tls-key` 互斥、要求对外来源；`status` 报「ACME，有效期至…，续期已连续失败 N 次」。
+- 镜像 `apps/server/docker/`：两段构建、uid 10001、`/data` 卷、tini、tmux / git / bash；入口脚本没有 `ARMADRA_PUBLIC_ORIGIN` 退出 64；健康检查、`backup.mjs`（不停服 `VACUUM INTO`）、compose 示例；hook 客户端打进 `/app/cli/`，迁移目录 `/app/migrations`。dev-stack 的 `armadra-server` 改用它（删掉占位 `Dockerfile.dev`）。
+- `server-e2e.mjs` 加容器模式（`--container=<镜像> [--build]`），B 档条目 `server-container-e2e`；`nightly.yml` 加 `server-image` 作业（构建 + 容器端到端，不推送）；`server-image.yml` 只在 `v*` 标签上用 `GITHUB_TOKEN` 推 GHCR（amd64 + arm64），PR 不触发。
+- 新指南 [服务器部署](../guides/server-deployment.md)。
+
+实测（2026-10-03，macOS + OrbStack）：
+
+- dev-stack Pebble：`acme.pebble.test.ts`（`ARMADRA_DEV_STACK=1`）签 shortlived 证书、链验到 Pebble 本次的根、续期换证书；目录地址错时 `acme_failed`。
+- 另起一个开着验证的 Pebble（`PEBBLE_VA_ALWAYS_VALID` 关），服务器壳 `--acme` 经 `host.docker.internal` 真走了 `http-01` 回连并签发，`status` 报 ACME，`tls/acme/` 全是 0600。
+- 镜像本机构建（436 MB），`server-e2e --container` 全过（配对、邀请、只读 / 可写 / 撤销共享、同机两窗口接管），浏览器节点一步 skipped；容器里对 dev-stack Pebble 跑 `--acme` 签发成功；`backup.mjs` 备份、停服替换、再启动健康；Nginx 反代（上游只信 `/ca.crt`）后配对兑换 200。
+
+没做：
+
+- `tls-alpn-01`（要在握手里按 ALPN 换证书；80 端口在容器与反代部署里都现成）。
+- step-ca 的 ACME 签发：它真回连挑战地址，CI 的 Linux 上容器到宿主回环不通；只用 Pebble 验了两条路（不回连 / 回连）。
+- 指南里的 Caddy 配置没有在本机跑过（Nginx 跑过）；镜像不带 Chrome，服务器壳容器里没有浏览器节点（指南未展开 `ARMADRA_BROWSER_PATH`）。
+- 真域名与 Let's Encrypt 生产签发需用户提供域名（指南第 3 节照做）。
 
 ## G3-6 服务端性能基线与多主机管理页面
 
-未开始。
+**做了什么**
+
+- 性能探针 `tools/probes/server-perf.mjs`：对真的服务器壳加 30 个终端、6 个事件流、一块 2000 对象的实时板，量建会话、`board.changed` 扇出、终端吞吐、实时板批量 / 冷同步 / 物化 / 单字段更新、同时关掉全部终端时其余请求被堵多久，以及服务器壳与 tmux 的 RSS / CPU；`--cpu-prof` 找热点；按平台基线（`server-perf-baseline.json`）比对，差 20% 以上且超过绝对容差即失败。进 `e2e.json` B 档；纯函数用例进 `release:test`。结果与解读：[服务端性能基线](server-performance-baseline.md)。
+- 热点修复（按 profile）：关终端走同步 `ps`、每次接终端流同步 `tmux -V`、每次建终端同步 `infocmp`，三处都堵事件循环。改成异步 `readProcessTable()`、可用后缓存探测、`infocmp` 每进程一次。
+- 舰队健康记录：`remote/fleet.ts` 每台主机留最近 20 条握手 / 断开 / 验证或重新同步失败，执行主机行带可选 `health`（契约 §21.3），共享层 `executionHostHealthSchema`。
+- 执行主机页的舰队视图 `execution-hosts/FleetGroup.tsx`：在线 / 离线、Worker 版本或待升级、健康记录（点开明细表）、逐台与全部重新同步；页面 15 秒刷新。展示页 `integration` 分区放它的真样本。
+
+**实测**（Apple M1 Max，本机负载 12–14，三次中位数）：扇出 p50 1.3 ms / p95 2.2 ms；终端吞吐 24.4 MiB/s；实时板 2000 对象到在线客户端 170 ms、冷同步 67 ms、物化 58 ms、单字段更新 p95 1.6 ms；稳态 RSS 183 MiB。同时关 30 个终端时其余请求最慢从 0.8–1.3 s 降到 0.08–0.17 s。
+
+**没做**：基线只有 `darwin-arm64`；ubuntu 的 B 档第一次跑出结果后再补录 `linux-x64`（之前只报告不判）。夜间作业的构建步骤归 G3-4。休眠判据 `hibernator.ts::processesUnder` 仍是同步 `ps`（它本身是同步接口，未在本次负载里出现）。展示页 `integration` 分区里 CLI 分组（启动器 / ACP）的样本归集成设置页的实现包。
 
 ## G3-7 真 CLI 端到端：场景 11 / 12 与三家 TUI
 

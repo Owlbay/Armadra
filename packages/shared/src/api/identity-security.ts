@@ -181,3 +181,139 @@ export type IdentitySessionRow = z.infer<typeof identitySessionSchema>;
 export const identitySessionListSchema = z.object({
   sessions: z.array(identitySessionSchema),
 });
+
+/* ------------------------------------------------------------------------- */
+/* §18.5 OAuth / OIDC（G1-12）                                                */
+/* ------------------------------------------------------------------------- */
+
+/** OAuth 路由的拒绝码（契约 §18.5）；回调把它放在跳回地址的 `#oauth=error&code=`。 */
+export const OAUTH_CODES = [
+  "oauth_not_configured",
+  "oauth_browser_required",
+  "oauth_state_invalid",
+  "oauth_denied",
+  "oauth_provider_error",
+  "oauth_token_invalid",
+  "oauth_email_unverified",
+  "oauth_domain_not_allowed",
+  "oauth_not_bound",
+  "oauth_already_bound",
+] as const;
+export const oauthCodeSchema = z.enum(OAUTH_CODES);
+export type OAuthCode = (typeof OAUTH_CODES)[number];
+
+/** 回调跳回时片段里的 `oauth=`。 */
+export const OAUTH_RESULTS = [
+  "signedIn",
+  "signedUp",
+  "bound",
+  "mfa",
+  "error",
+] as const;
+export type OAuthResult = (typeof OAUTH_RESULTS)[number];
+
+/** `GET oauth/providers` 的一行。匿名只有 `id` 与 `kind`；owner 看得到其余。 */
+export const oauthProviderRowSchema = z.object({
+  id: z.string(),
+  kind: z.enum(["github", "oidc"]),
+  issuer: z.string().optional(),
+  clientId: z.string().optional(),
+  enabled: z.boolean().optional(),
+  allowSignup: z.boolean().optional(),
+  allowedDomains: z.array(z.string()).optional(),
+  hasClientSecret: z.boolean().optional(),
+  /** 开着、有公网来源、（GitHub）有 secret。 */
+  usable: z.boolean().optional(),
+  /** 要在提供方登记的回调地址，每个公网来源一条。 */
+  callbackUrls: z.array(z.string()).optional(),
+});
+export type OAuthProviderRow = z.infer<typeof oauthProviderRowSchema>;
+
+export const oauthProviderListSchema = z.object({
+  /** 有没有公网来源；没有时任何提供方都不可用。 */
+  configured: z.boolean(),
+  providers: z.array(oauthProviderRowSchema),
+});
+export type OAuthProviderList = z.infer<typeof oauthProviderListSchema>;
+
+/** `POST oauth/{id}/start` 的请求与答案。 */
+export const oauthStartRequestSchema = z.object({
+  mode: z.enum(["login", "bind"]).default("login"),
+  /** 站内路径，`/` 开头；回调跳回这里。 */
+  returnTo: z.string().max(512).optional(),
+  deviceName: z.string().max(256).optional(),
+});
+export type OAuthStartRequest = z.input<typeof oauthStartRequestSchema>;
+
+export const oauthStartSchema = z.object({
+  authorizeUrl: z.string(),
+  expiresAtMs: z.number().int().positive(),
+});
+export type OAuthStart = z.infer<typeof oauthStartSchema>;
+
+/** `GET oauth/bindings` 的一行。 */
+export const oauthBindingSchema = z.object({
+  credentialId: z.string(),
+  /** 设置里认不出（删了或换了 issuer）时为空串。 */
+  providerId: z.string(),
+  kind: z.enum(["github", "oidc"]),
+  createdAtMs: z.number().int().positive(),
+});
+export type OAuthBinding = z.infer<typeof oauthBindingSchema>;
+
+export const oauthBindingListSchema = z.object({
+  bindings: z.array(oauthBindingSchema),
+});
+
+/** `POST oauth/{id}/logout`：提供方没有 RP 发起的登出时为 null。 */
+export const oauthLogoutSchema = z.object({
+  endSessionUrl: z.string().nullable(),
+});
+
+/* ------------------------------------------------------------------------- */
+/* §18.6 审计查询（G2-8）                                                     */
+/* ------------------------------------------------------------------------- */
+
+/** `GET audit` 一页的上限；`limit` 超出或缺省时取 100。 */
+export const AUDIT_PAGE_MAX = 500;
+/** `GET audit/export` 一次最多导出的行数（按 id 从新到旧截断）。 */
+export const AUDIT_EXPORT_MAX = 10_000;
+
+/** 审计查询的筛选参数（查询串，全部可选，彼此 AND）。 */
+export const auditQuerySchema = z.object({
+  principalId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  /**
+   * 动作或动作族：`identity.login` 命中它自己与 `identity.login.*`。可重复，
+   * 彼此 OR。
+   */
+  action: z.array(z.string().min(1).max(128)).optional(),
+  /** 含：`at_ms >= sinceMs`。 */
+  sinceMs: z.number().int().nonnegative().optional(),
+  /** 不含：`at_ms < untilMs`。 */
+  untilMs: z.number().int().nonnegative().optional(),
+  /** 翻页游标：只要 `id < beforeId` 的。 */
+  beforeId: z.number().int().positive().optional(),
+  limit: z.number().int().positive().max(AUDIT_PAGE_MAX).optional(),
+});
+export type AuditQuery = z.infer<typeof auditQuerySchema>;
+
+export const auditEntrySchema = z.object({
+  id: z.number().int().positive(),
+  atMs: z.number().int().nonnegative(),
+  principalId: z.string(),
+  deviceId: z.string(),
+  action: z.string(),
+  target: z.string(),
+  workspaceId: z.string(),
+  /** 写入时的结构化补充；没有时 `null`。 */
+  detail: z.unknown(),
+});
+export type AuditEntry = z.infer<typeof auditEntrySchema>;
+
+/** `GET audit` 的答案：从新到旧；`nextBeforeId` 为 0 表示没有更早的了。 */
+export const auditPageSchema = z.object({
+  entries: z.array(auditEntrySchema),
+  nextBeforeId: z.number().int().nonnegative(),
+});
+export type AuditPage = z.infer<typeof auditPageSchema>;

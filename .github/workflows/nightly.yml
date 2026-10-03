@@ -1,5 +1,5 @@
 # B 档夜间作业（docs/guides/ci-release.md §1.1）：打包冒烟、deb 安装验证、
-# update-e2e 等需要打包或较慢的探针。清单是 tools/ci/e2e.d/ 里 tier b 的条目，
+# update-e2e、服务器壳性能与容器模式 server-e2e 等需要打包、容器或较慢的探针。清单是 tools/ci/e2e.d/ 里 tier b 的条目，
 # 每个系统一条作业，条目用 platforms 说明自己在哪个系统上跑。失败开 issue
 # （report 作业，只用默认的 GITHUB_TOKEN），不阻断合并。
 name: nightly
@@ -23,7 +23,9 @@ env:
 jobs:
   # Linux：在发布同一个 runner（22.04，glibc 基线）上打 AppImage / deb / rpm，
   # 断言 glibc 基线，再跑 B 档里 platforms 含 linux 的条目——xvfb 下起 AppImage
-  # 的打包冒烟、ubuntu:22.04 容器里装 deb。
+  # 的打包冒烟、ubuntu:22.04 容器里装 deb、服务器壳性能、对着镜像跑的
+  # server-e2e（只构建不推送）、update-e2e。devStack 条目要的替身由
+  # ARMADRA_DEV_STACK=1 让 e2e.mjs 先 `pnpm dev-stack up`、跑完 down。
   linux:
     name: Linux 打包与 B 档
     runs-on: ubuntu-22.04
@@ -52,6 +54,11 @@ jobs:
             libgtk-3-0 libnss3 libasound2 libgbm1 libxss1 libxtst6 libnotify4 libsecret-1-0
           tmux -V
 
+      - uses: browser-actions/setup-chrome@v2
+        id: chrome
+        with:
+          chrome-version: stable
+
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
@@ -67,6 +74,8 @@ jobs:
         run: |
           set -euo pipefail
           pnpm libs:build
+          pnpm --filter @armadra/web build
+          pnpm --filter @armadra/server build
           pnpm --filter @armadra/desktop dist
           ls -l apps/desktop/release
 
@@ -77,6 +86,9 @@ jobs:
       - name: B 档（Linux）
         id: tier
         shell: bash
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          ARMADRA_DEV_STACK: "1"
         run: xvfb-run -a node tools/ci/e2e.mjs --tier b --out target/e2e/b-linux
 
       - name: 上传 B 档产物

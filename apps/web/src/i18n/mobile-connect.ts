@@ -1,7 +1,53 @@
 import type { MessageModule } from "./index";
 
-/** 预登记的空模块（补全计划 G0-2），由对应的工作包填写。 */
+/** 移动网页与原生 App 的连接页、推送权限提示（补全计划 G2-10）。 */
 export const mobileConnect: MessageModule = {
-  "zh-CN": {},
-  en: {},
+  "zh-CN": {
+    "mobileConnect.title": "连接到 Armadra",
+    "mobileConnect.link": "配对链接",
+    "mobileConnect.connect": "连接",
+    "mobileConnect.scan": "扫码",
+    "mobileConnect.error.invalid": "这不是配对链接",
+    "mobileConnect.error.noFingerprint": "链接缺少证书指纹",
+    "mobileConnect.error.pin": "无法校验证书",
+    "mobileConnect.error.expired": "配对链接已失效，请重新扫码",
+    "mobileConnect.error.unreachable": "连不上 {origin}",
+    "mobileConnect.error.failed": "配对没有成功",
+    "mobileConnect.push.title": "接收审批与完成通知",
+    "mobileConnect.push.enable": "开启",
+    "mobileConnect.push.later": "以后",
+    "mobileConnect.push.failed": "没能开启通知",
+    "mobileConnect.showcase.native": "原生 App · 未连接",
+    "mobileConnect.showcase.web": "网页 · 扫码打开",
+    "mobileConnect.showcase.error": "配对失败",
+    "mobileConnect.connecting": "正在连接",
+    "mobileConnect.showcase.push": "推送权限提示",
+    "mobileConnect.showcase.focusAcp": "焦点页 · 会话视图",
+    "mobileConnect.showcase.focusTerminal": "焦点页 · 终端按键条",
+  },
+  en: {
+    "mobileConnect.title": "Connect to Armadra",
+    "mobileConnect.link": "Pairing link",
+    "mobileConnect.connect": "Connect",
+    "mobileConnect.scan": "Scan QR code",
+    "mobileConnect.error.invalid": "This isn't a pairing link",
+    "mobileConnect.error.noFingerprint":
+      "The link has no certificate fingerprint",
+    "mobileConnect.error.pin": "Couldn't verify the certificate",
+    "mobileConnect.error.expired":
+      "This pairing link has expired. Scan a new one.",
+    "mobileConnect.error.unreachable": "Can't reach {origin}",
+    "mobileConnect.error.failed": "Pairing didn't succeed",
+    "mobileConnect.push.title": "Get approval and completion alerts",
+    "mobileConnect.push.enable": "Turn on",
+    "mobileConnect.push.later": "Not now",
+    "mobileConnect.push.failed": "Couldn't turn on notifications",
+    "mobileConnect.showcase.native": "Native app · not connected",
+    "mobileConnect.showcase.web": "Web · opened from QR code",
+    "mobileConnect.showcase.error": "Pairing failed",
+    "mobileConnect.connecting": "Connecting",
+    "mobileConnect.showcase.push": "Notification prompt",
+    "mobileConnect.showcase.focusAcp": "Focus page · session view",
+    "mobileConnect.showcase.focusTerminal": "Focus page · terminal keys",
+  },
 };

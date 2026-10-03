@@ -6,11 +6,11 @@
 
 按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.d/` 的清单跑（一条一个文件 `<id>.json`，新增探针就新增一个文件）（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
-| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                       | 何时跑                              | 失败时       |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | ------------ |
-| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`                                                                                                    | `nightly.yml`                       | 开 issue     |
-| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                                                    | 手动；清单在执行计划 §5             | 记进状态文档 |
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                   | 何时跑                              | 失败时       |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e`、`push-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`                                                         | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                                                                | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
 
@@ -146,7 +146,7 @@ pnpm --filter @armadra/desktop build
 node tools/probes/realtime-e2e.mjs [输出目录]
 ```
 
-验证：第一台打开即切到实时（`GET …/realtime`）、两边在线条列出对方；两边同时各拖一个节点，两边与 core 物化的表一致；成员光标与选区外框；同一张便签一个在开头、一个在结尾同时输入，提交后收敛且两个人的字都在；断网（探针注入的 WebSocket 包装切断 `…/sync` 并拒绝重连）时顶部「离线编辑」、在线条置灰，期间的拖动对方看不到，恢复后自动重连补齐。产物默认在 `target/realtime-e2e/`。租约模式的多设备场景（`ui-features` 的 presence、`server-e2e`）开头先把 `collab.realtime` 关掉。
+验证：第一台打开即切到实时（`GET …/realtime`）、两边在线条列出对方；两边同时各拖一个节点，两边与 core 物化的表一致；成员光标与选区外框；同一张便签一个在开头、一个在结尾同时输入，提交后收敛且两个人的字都在；断网（探针注入的 WebSocket 包装切断 `…/sync` 并拒绝重连）时顶部「离线编辑」、在线条置灰，期间的拖动对方看不到，恢复后自动重连补齐。最后一台开评论模式在便签上放钉并发送，另一台经 `board.comment` 看到评论钉（契约 §16.3）。产物默认在 `target/realtime-e2e/`。租约模式的多设备场景（`ui-features` 的 presence、`server-e2e`）开头先把 `collab.realtime` 关掉。
 
 ## Agent 协作端到端（真 Claude Code + 真 Codex CLI）
 
@@ -221,6 +221,17 @@ node tools/probes/server-e2e.mjs [输出目录]
 
 产物默认在 `target/server-e2e/`：`result.json` 与 `01-admin-paired.png` … `13-second-window-took-over.png`。端口随机，数据目录、项目目录与浏览器 profile 都是 `mktemp`，服务器壳先 SIGTERM（让它收掉自己起的 headless Chromium）再删目录、停 tmux。没有验证：`--public-origin` 与真证书、passkey / OAuth、多于一个成员、手机布局。
 
+## 服务器壳性能基线
+
+`server-perf.mjs` 起一个临时数据目录、临时 HOME 的服务器壳（或 `--attach <配对链接>` 接一个已经在跑的），依次加 30 个终端会话、6 个事件流订阅、一块 2000 个对象的实时板，量建会话延迟、`board.changed` 扇出延迟、终端吞吐、实时板批量 / 冷同步 / 物化 / 单字段更新、同时关掉全部终端时其余请求被堵多久，以及服务器壳进程与 tmux 服务器的 RSS / CPU。
+
+```sh
+pnpm libs:build && pnpm --filter @armadra/desktop build && pnpm --filter @armadra/server build
+node tools/probes/server-perf.mjs [输出目录] [--cpu-prof 目录] [--no-baseline | --write-baseline]
+```
+
+产物 `result.json` 与 `table.md`。与 `server-perf-baseline.json` 里这台平台的基线比，差 20% 以上且超过该项绝对容差即失败；没有这台平台的基线时只报告。`--cpu-prof` 让服务器壳退出时写 `.cpuprofile`，找热点用。数字与解读见 [服务端性能基线](../../docs/status/server-performance-baseline.md)。
+
 ## 远端执行主机端到端（假 ssh）
 
 在界面上把远端工作空间用一遍（§34、§44，结果记在 §50），不需要 sshd，也不改任何 SSH 或系统配置。
@@ -293,3 +304,25 @@ node tools/probes/deb-install.mjs [输出目录] [--deb <Armadra_x.y.z_arch.deb>
 ```
 
 断言：`apt-get install` 从官方源把依赖都解出来；`/usr/bin/armadra` 指向 `/opt/Armadra/armadra`；`ldd` 没有 `not found`；`armadra --version` 答出 `apps/desktop/package.json` 的版本（`main/version-flag.ts`：在任何窗口、数据目录与 core 之前答完退出，不要显示器）。容器 `--rm`、只读挂载 release 目录，不碰本机的 apt 与 `/opt`。产物默认在 `target/deb-install/`：`result.json`、`container.log`。没验证：桌面环境里从应用菜单启动、rpm 包。
+
+## 自动更新端到端
+
+签名、公证与自动更新（G3-3）的整条更新路径，在真打包版上走，结果记在 [补全进度](../../docs/status/completion-progress.md) 的 G3-3 节。
+
+```sh
+ARMADRA_DIST_RELEASE=1 pnpm --filter @armadra/desktop dist   # 发布包：不带本地构建的停更标记
+pnpm dev-stack up release
+node tools/probes/update-e2e.mjs [输出目录] [--app <Armadra.app>] [--release-dir <dist 输出>] \
+  [--build] [--require-dev-stack] [--install --next <更高版本的 dist 输出>]
+```
+
+两段，各记进 `<输出目录>/result.json`（默认 `target/update-e2e/`）：
+
+1. **dev-stack**：对 `127.0.0.1:8090` 的 `release` 服务做「检查（带 ETag 再查得 304）→ 取 `latest.json`、`SHA256SUMS`、本目标的清单与包 → 用服务的 minisign 公钥（`tools/dev-stack/.data/release/minisign.pub`）验每个签名与摘要」。服务发的是占位包，这一段止于「验过」。没起服务时记 `skipped`（`--require-dev-stack` 时记失败）。
+2. **package**：打包版在临时 HOME / 数据目录 / Chromium profile 下起，带 `ARMADRA_UPDATES_DEV=1`，发布源指向一个本机 `mock-release-server`（与 dev-stack 服务同一份代码），它把**这个包自己的字节**按更高版本号发布、用一次性 minisign 密钥签名。经页面自己的桥（`window.armadra.updates`）走「检查 → 有更新 → 下载（electron-updater 的 sha512，再核 Host 的 sha256）→ 暂存」，并断言临时 HOME 里暂存的文件就是发布的字节。然后：
+   - **未签名的包**（`signatureState` 为 unsigned / unknown）：「重启安装」必须答 `notSigned`，不停后台、不写待重启记录、应用照常在跑；
+   - **签过名的包**（或 Linux，没有代码签名可言）：只有给了 `--install --next <dir>`（第二次 `dist`，带 `ARMADRA_DIST_VERSION=<更高版本>`）才走「安装 → 重启 → 版本号变」，被更新的是沙盒里的一份副本，判据是重启后 `restartReport()` 报 `completed` 与新版本号。
+
+本地演练签名：macOS `ARMADRA_MAC_ADHOC_SIGN=1`（ad-hoc 身份 `-`，`codesign --verify --deep --strict` 能过，`node apps/desktop/scripts/signing-electron.mjs verify-mac`）；Windows `New-SelfSignedCertificate -Type CodeSigningCert` 导出的 `.pfx` 走 `CSC_LINK` 路径，`Get-AuthenticodeSignature` 得 `UnknownError`（`signatureState` 报 `unknown`）；Linux `node tools/release/sign-gpg.mjs keygen --out <dir>` 出一天期的演练密钥。ad-hoc 与自签证书都过不了 Squirrel.Mac / Windows 对更新包签名者的校验，所以安装那一段只有真证书（[CI 与发布](../../docs/guides/ci-release.md) §3）才能走通。
+
+不碰已安装的 Armadra、用户的 HOME 与钥匙串，也不连任何真实发布地址：全部是回环。

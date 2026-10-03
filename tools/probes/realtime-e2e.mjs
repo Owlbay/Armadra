@@ -338,6 +338,47 @@ try {
   run.ok("恢复网络后自动重连，离线期间的改动补齐");
   await run.shot(a, "realtime-6-reconnected-a");
 
+  /* ------------------------- 7. 评论（§16.3） -------------------------- */
+  const commentsPath = `/api/workspaces/${workspace.id}/boards/${board.id}/comments`;
+  await a.clickOn(
+    `return document.querySelector('button[aria-label="评论"]')`,
+    "A 打开评论模式",
+  );
+  await a.until(
+    `return !!document.querySelector('[data-slot="comments-panel"]')`,
+    "A 的评论抽屉打开",
+  );
+  await a.clickOn(
+    `return document.querySelector('.react-flow__node[data-id="${right.id}"] [data-slot="node-header"]')`,
+    "A 在右边的便签上放钉",
+  );
+  await a.until(
+    `const box = document.querySelector('[data-slot="comment-composer"] textarea');
+     if (!box) return false; box.focus(); return true;`,
+    "A 的评论输入框出现",
+  );
+  await a.type("看这里");
+  await a.clickOn(
+    `return [...document.querySelectorAll('[data-slot="comment-composer"] button')].find((node) => node.textContent.trim() === "发送")`,
+    "A 发送评论",
+  );
+  const pinned = await b.until(
+    `const pin = document.querySelector('[data-comment-pin]');
+     return pin ? pin.getAttribute("aria-label") : null;`,
+    "B 看到评论钉（board.comment 事件）",
+  );
+  const listed = await stack.api(commentsPath);
+  run.check(
+    listed.comments.length === 1 &&
+      listed.comments[0].anchor.kind === "node" &&
+      listed.comments[0].anchor.id === right.id &&
+      listed.comments[0].body === "看这里",
+    "评论锚在节点上，另一台经事件看到钉",
+    { pinned, comment: listed.comments[0] },
+  );
+  await run.shot(a, "realtime-7-comment-a");
+  await run.shot(b, "realtime-7-comment-pin-b");
+
   run.consoleClean(a, b);
   await a.close();
   await b.close();

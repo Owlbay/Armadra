@@ -71,9 +71,15 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 对外只有 TLS 一个面，认证走设备配对与可撤销会话。对外的那一层（TLS、本地 CA、
 准入、CSP、页面托管、配对载荷）在 core 的 Gateway 域 `core/gateway/`：服务器壳的
 `serve` 只是「解析参数 → `openGateway`」，桌面壳按设置 `gateway.*` 开关同一个
-Gateway（契约 §17）。用法见
-[开发指南](development.md#无窗口服务器壳)，进度见
+Gateway（契约 §17）。证书来源四种：本地 CA、指定文件、自签名，以及 ACME
+（`core/gateway/acme.ts`：`http-01`、证书在 `<数据目录>/tls/acme/`、寿命过三分之二续期并
+热换、失败保留旧证书）。容器镜像在 `apps/server/docker/`。用法见
+[开发指南](development.md#无窗口服务器壳)与[服务器部署指南](server-deployment.md)，进度见
 [TypeScript Core 实施进度](../status/typescript-core-status.md) §11。
+
+`apps/push-relay` 是商店版 App 的最小推送中继（无状态，只转发端到端加密的信封），
+复用 core `push/transport-direct.ts` 的 APNs / FCM 客户端；是否运营由发布方定，
+见它的 [README](../../apps/push-relay/README.md) 与契约 §19。
 
 ## 3. 画布层
 
@@ -229,7 +235,7 @@ Agent 之间的协作走 core 的两个动词表面：
 
 - `POST /context-link/{verb}`：读取被链接节点的转录、摘要或终端画面。
 - `POST /control/{verb}`：`list` / `open-terminal` / `open-agent` / `open-browser` / `team` / `sticky` /
-  `link` / `rename` / `color` / `post` / `inbox` / `ack` / `handoff-read` / `interrupt` / `close` / `send` / `outbox` / `cancel`。`team` 一次建一组 Agent 节点，成员之间的先后写进依赖表（`core/dependencies`）。成员（与 `open-agent --worktree`）可以各带一条 worktree：检出不存在时经 Git 域同一条写队列新建，成员放进绑着它的 Frame（`core/collab/control/worktree.ts`）。
+  `link` / `rename` / `color` / `post` / `inbox` / `ack` / `handoff-read` / `interrupt` / `close` / `send` / `outbox` / `cancel` / `workflow-propose`。`team` 一次建一组 Agent 节点，成员之间的先后写进依赖表（`core/dependencies`）。成员（与 `open-agent --worktree`）可以各带一条 worktree：检出不存在时经 Git 域同一条写队列新建，成员放进绑着它的 Frame（`core/collab/control/worktree.ts`）。
 
 依赖编排在 core 里（`core/dependencies/`，迁移 0027）：`open-agent --after` 与 `team`
 把「下游等哪些上游、等当前还是下一轮结束」写进依赖表，服务订阅 `agent.status` /
@@ -237,6 +243,13 @@ Agent 之间的协作走 core 的两个动词表面：
 条件满足时由 core 启动下游——节点已有 shell 就往里敲，没有就经终端桥起一个——
 再把第一条任务放进投递队列，与 `send` 走同一条出队路；页面不在也照样生效。节点头的
 「等待 X」徽标读的是这张表，不再是节点数据里的 `pendingLaunch`。契约见 [core JSON 契约](../contracts/core-json-api.md) §8。
+
+工作流在 core 里（`core/workflow/`）：协调者经 `workflow-propose` 交草案，人经
+`/api/workflows/*` 确认成模板、按参数起跑。一次运行在画布上建一个 Frame（起点便签 +
+每个角色一个 Agent 节点），角色节点交给依赖编排的启动路径起，提示词经投递队列投出
+（发起方是起点便签）；步骤是否完成用与依赖边相同的判定。引擎订阅 `agent.status` /
+`agent.delivery` / `terminal.exit` 并每 30 秒扫一次，页面不在、重启之后都照样推进。契约见
+[core JSON 契约](../contracts/core-json-api.md) §15。
 
 所有 Agent 终端都能调用 `armadra-hook canvas help` 读取短帮助。画布启动的 CLI 带着
 画布说明（一段「画布规则」）与按需技能：协作只走 `armadra-hook canvas`，要别的 Agent

@@ -35,7 +35,7 @@ test("每个镜像都钉到明确版本", () => {
   for (const [name, service] of composeServices) {
     if (service.build) {
       assert.equal(service.build.context, "../..", name);
-      assert.equal(service.build.dockerfile, "tools/dev-stack/Dockerfile.dev");
+      assert.equal(service.build.dockerfile, "apps/server/docker/Dockerfile");
       continue;
     }
     const image = service.image;
@@ -47,13 +47,13 @@ test("每个镜像都钉到明确版本", () => {
     );
     assert.doesNotMatch(tag, /latest|nightly|edge|main/, `${name}: ${image}`);
   }
-  const dockerfile = readFileSync(join(HERE, "Dockerfile.dev"), "utf8");
-  const from = /^FROM (\S+)/m.exec(dockerfile)[1];
-  assert.match(
-    from,
-    /:\d+\.\d+\.\d+-/,
-    `Dockerfile.dev FROM ${from} is pinned`,
+  // 服务器壳的正式镜像（G3-5）：基础镜像经 `ARG NODE_IMAGE` 给出，缺省值钉版本。
+  const dockerfile = readFileSync(
+    join(HERE, "../../apps/server/docker/Dockerfile"),
+    "utf8",
   );
+  const from = /^ARG NODE_IMAGE=(\S+)/m.exec(dockerfile)[1];
+  assert.match(from, /:\d+\.\d+\.\d+-/, `NODE_IMAGE ${from} is pinned`);
 });
 
 test("端口只绑回环、互不冲突，且与 services.mjs 的端口表一致", () => {

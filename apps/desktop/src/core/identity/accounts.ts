@@ -1,4 +1,5 @@
 import type {
+  AuditFilter,
   AccountsTx,
   GrantSubjectKind,
   GroupRole,
@@ -808,7 +809,7 @@ export class AccountsService {
 
   readAudit(
     actor: AuthorizationSubject,
-    filter: { principalId?: string; workspaceId?: string; limit?: number },
+    filter: AuditFilter,
   ): {
     id: number;
     atMs: number;

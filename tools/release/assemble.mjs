@@ -46,16 +46,25 @@ import { readCompatibility, releaseNote } from "./compatibility.mjs";
 import { keyFromSecret, publicKeyFile } from "./minisign.mjs";
 import { SECRET_ENV, signDirectory, verifyDirectory } from "./sign.mjs";
 import { writeManifest } from "./updater-manifest.mjs";
+import { PUBLIC_KEY_ASSET } from "./sign-gpg.mjs";
 import { normalizeSha512, parseFeed, sha512Base64 } from "./stage-desktop.mjs";
 
-/** Every file must be one the updater can place, or it can never be offered. */
+/**
+ * Every file must be one the updater can place, or it can never be offered.
+ *
+ * Two kinds of file describe a package rather than being one, and are let
+ * through by shape: a detached signature — minisign `.sig`, or the GPG `.asc`
+ * `sign-gpg.mjs` writes beside a Linux package, whose own name is checked like
+ * any other — and the GPG public key those `.asc` files verify against.
+ */
 export function checkNames(directory) {
   const problems = [];
   for (const name of readdirSync(directory)) {
     if (
       name.endsWith(".sig") ||
       name === "SHA256SUMS" ||
-      name === "latest.json"
+      name === "latest.json" ||
+      name === PUBLIC_KEY_ASSET
     )
       continue;
     const component = assetComponent(name);

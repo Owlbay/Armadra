@@ -173,7 +173,7 @@ flowchart LR
 #### G1-8 工作流引擎（C2）
 
 - 范围：协调 Agent §5 + 架构 §5.4。`core/workflow/{types,store,draft,service,engine,dispatch,routes,index}.ts`：草案存取与确认、模板 CRUD、运行（建 Frame、按 `roles` 开节点与连线、`prompt` / `collect` / `gate`、`after` 复用依赖判定）、运行记录、`workflow_task_runs` 存取（给 G2-4 用）；`collab/control/workflow.ts` + `VERBS` 加 `workflow-propose`；bus 事件 `workflow.draft` / `workflow.run` / `workflow.gate`；`packages/shared/src/api/workflows.ts` 填 zod；契约 §15.1–§15.4。
-- 文件：新建 `core/workflow/**`、`collab/control/workflow.ts`、迁移 `0030_workflow.sql` + `migrations.lock`；修改 `core/workflow/index.ts`（骨架）、`collab/control/index.ts`（一行）、`packages/shared/src/api/workflows.ts`、契约 §15。
+- 文件：新建 `core/workflow/**`、`collab/control/workflow.ts`、迁移 `0034_workflow.sql` + `migrations.lock`；修改 `core/workflow/index.ts`（骨架）、`collab/control/index.ts`（一行）、`packages/shared/src/api/workflows.ts`、契约 §15。
 - 依赖：G0-2、G0-3。编号：迁移 0030、契约 §15.1–§15.4。
 - 测试：`draft.test`（zod 拒绝未知 `agentId`、`after` 环）、`engine.test`（假 `TerminalBridge` 与假节点：三种步骤、关卡等人、取消、页面不在也推进、重启后续跑）、`routes.test`；A 档 `workflow-e2e.mjs`（自定义 Agent 用 `env-echo` 一类假 CLI 走通一个两步模板）。
 - dev-stack：无。外部条件：无。

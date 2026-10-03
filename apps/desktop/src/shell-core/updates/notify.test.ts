@@ -12,6 +12,7 @@ import {
   restartMenuLabel,
   stagedCleared,
   stagedReady,
+  unsignedNotificationBody,
   wantsNotification,
   type Locale,
 } from "./notify";
@@ -58,7 +59,27 @@ it("both languages have every string", () => {
     const anonymous = notificationBody(locale, "  ");
     expect(anonymous).not.toBe("");
     expect(anonymous).not.toContain("  ");
+    expect(unsignedNotificationBody(locale, "0.2.0")).toContain("0.2.0");
+    expect(unsignedNotificationBody(locale, " ")).not.toContain("  ");
   }
+});
+
+it("an update staged on an unsigned installation does not promise a restart", () => {
+  // The bytes are verified, and nothing will install them: the body says so
+  // and never reads like the ordinary "restart to update".
+  expect(unsignedNotificationBody("en", "0.2.0")).toMatch(/unsigned/);
+  expect(unsignedNotificationBody("zhCn", "0.2.0")).toMatch(/未签名/);
+  for (const locale of LOCALES) {
+    expect(unsignedNotificationBody(locale, "0.2.0")).not.toBe(
+      notificationBody(locale, "0.2.0"),
+    );
+  }
+  expect(stagedReady("0.2.0", false)).toEqual({
+    ready: true,
+    version: "0.2.0",
+    installable: false,
+  });
+  expect(stagedReady("0.2.0").installable).toBe(true);
 });
 
 it("the two languages differ", () => {
@@ -76,6 +97,7 @@ it("the announcement round trips as the tray reads it", () => {
   const cleared = JSON.parse(JSON.stringify(stagedCleared()));
   expect(cleared.ready).toBe(false);
   expect(cleared.version).toBe("");
+  expect(cleared.installable).toBe(false);
 });
 
 /**

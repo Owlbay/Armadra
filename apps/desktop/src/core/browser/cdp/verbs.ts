@@ -52,6 +52,52 @@ import { diffLines, takeSnapshot, type Snapshot } from "./snapshot";
 
 type Args = Record<string, unknown>;
 
+interface ScrollState {
+  top: number;
+  left: number;
+  height: number;
+  width: number;
+  viewportHeight: number;
+  viewportWidth: number;
+}
+
+/** How often, and for how long, a scroll is re-measured until it settles. */
+export const SCROLL_POLL_MS = 40;
+/** A page that has not moved at all by then is taken as refusing to scroll. */
+export const SCROLL_STILL_MS = 600;
+/** A page still moving by then (a long smooth scroll) is measured as it is. */
+export const SCROLL_SETTLE_MS = 2_000;
+
+/**
+ * The scroll position once the page has stopped moving.
+ *
+ * A wheel event is applied by the compositor on its own schedule, and a smooth
+ * scroll takes several frames; one fixed pause before measuring read a page
+ * that had not moved YET as one that did not move — "scrolled 0 px" on a busy
+ * machine for a page that then scrolled. So: measure until two readings agree
+ * after the page has moved, give a page that has not moved at all a short
+ * grace, and never wait unboundedly.
+ */
+async function settledScroll(
+  session: CdpSession,
+  before: { top: number; left: number },
+): Promise<ScrollState> {
+  const started = Date.now();
+  let last: ScrollState | undefined;
+  for (;;) {
+    await sleep(SCROLL_POLL_MS);
+    const now = await session.run<ScrollState>("scrollPosition");
+    const elapsed = Date.now() - started;
+    const moved = now.top !== before.top || now.left !== before.left;
+    const steady =
+      last !== undefined && now.top === last.top && now.left === last.left;
+    if (moved && steady) return now;
+    if (!moved && elapsed >= SCROLL_STILL_MS) return now;
+    if (elapsed >= SCROLL_SETTLE_MS) return now;
+    last = now;
+  }
+}
+
 /** One tab of a browser node, as a verb reports it. */
 export interface VerbTab {
   readonly id: string;
@@ -393,15 +439,7 @@ const HANDLERS: Record<string, Handler> = {
           );
       }
     }
-    await sleep(120);
-    const after = await session.run<{
-      top: number;
-      left: number;
-      height: number;
-      width: number;
-      viewportHeight: number;
-      viewportWidth: number;
-    }>("scrollPosition");
+    const after = await settledScroll(session, before);
     // The MEASURED move, which is what a page that refused to scroll reports
     // as zero rather than as the number that was asked for.
     return {

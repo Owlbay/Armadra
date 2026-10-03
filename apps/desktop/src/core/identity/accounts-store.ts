@@ -81,6 +81,18 @@ export interface GrantRow {
   readonly revokedAtMs: number;
 }
 
+/** 审计查询的筛选（契约 §18.6），彼此 AND；`actions` 之间 OR。 */
+export interface AuditFilter {
+  readonly principalId?: string;
+  readonly workspaceId?: string;
+  /** 动作或动作族（命中自己与 `<它>.*`）。 */
+  readonly actions?: readonly string[];
+  readonly sinceMs?: number;
+  readonly untilMs?: number;
+  readonly beforeId?: number;
+  readonly limit?: number;
+}
+
 export interface AuditRow {
   readonly id: number;
   readonly atMs: number;
@@ -181,6 +193,16 @@ export class AccountsTx {
         `SELECT ${CREDENTIAL_COLUMNS} WHERE principal_id = ? AND kind = 'password' AND revoked_at_ms = 0`,
       )
       .get(principalId) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : toCredential(row);
+  }
+
+  /** 一个第三方身份当前绑在谁身上，最多一份（唯一索引，契约 §18.5）。 */
+  liveOAuth(provider: string, subject: string): CredentialRow | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT ${CREDENTIAL_COLUMNS} WHERE kind = 'oauth' AND provider = ? AND subject = ? AND revoked_at_ms = 0`,
+      )
+      .get(provider, subject) as Record<string, unknown> | undefined;
     return row === undefined ? undefined : toCredential(row);
   }
 
@@ -499,11 +521,7 @@ export class AccountsTx {
       );
   }
 
-  auditEntries(filter: {
-    readonly principalId?: string;
-    readonly workspaceId?: string;
-    readonly limit?: number;
-  }): AuditRow[] {
+  auditEntries(filter: AuditFilter): AuditRow[] {
     const clauses: string[] = [];
     const values: (string | number)[] = [];
     if (filter.principalId) {
@@ -513,6 +531,29 @@ export class AccountsTx {
     if (filter.workspaceId) {
       clauses.push("workspace_id = ?");
       values.push(filter.workspaceId);
+    }
+    const actions = (filter.actions ?? []).filter((value) => value !== "");
+    if (actions.length > 0) {
+      // 动作族：`identity.login` 命中它自己与 `identity.login.*`。LIKE 的通配符
+      // 先转义，动作名里的 `_` 不当通配用。
+      clauses.push(
+        `(${actions.map(() => "action = ? OR action LIKE ? ESCAPE '\\'").join(" OR ")})`,
+      );
+      for (const action of actions) {
+        values.push(action, `${action.replace(/[\\%_]/g, "\\$&")}.%`);
+      }
+    }
+    if (filter.sinceMs !== undefined) {
+      clauses.push("at_ms >= ?");
+      values.push(filter.sinceMs);
+    }
+    if (filter.untilMs !== undefined) {
+      clauses.push("at_ms < ?");
+      values.push(filter.untilMs);
+    }
+    if (filter.beforeId !== undefined) {
+      clauses.push("id < ?");
+      values.push(filter.beforeId);
     }
     const where = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
     values.push(filter.limit ?? 100);

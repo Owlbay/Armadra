@@ -233,7 +233,7 @@ MVP 闭环（场景 11 也按此验收）：
 
 ### §5.3 持久化与接口
 
-- 迁移 `0030_workflow.sql`：`workflow_drafts(id, board_id, proposer_node_id, draft_json, status, created_at)`、`workflow_templates(id, name, template_json, created_from_draft, created_at, updated_at)`、`workflow_runs(id, template_id, params_json, status, started_at, ended_at)`、`workflow_run_steps(run_id, step_id, status, node_id, started_at, ended_at, outcome_json)`。`migrations.lock` 更新。
+- 迁移 `0034_workflow.sql`：`workflow_drafts(id, board_id, proposer_node_id, draft_json, status, created_at)`、`workflow_templates(id, name, template_json, created_from_draft, created_at, updated_at)`、`workflow_runs(id, template_id, params_json, status, started_at, ended_at)`、`workflow_run_steps(run_id, step_id, status, node_id, started_at, ended_at, outcome_json)`。`migrations.lock` 更新。
 - 路由 `/api/workflows/*`（草案 list / confirm / discard，模板 CRUD，runs start / cancel / gates answer / list），形状登记进 `docs/contracts/core-json-api.md` 新 §。
 - 装配：`core/workflow/index.ts::install(context)`，与 `schedule/index.ts` 同款「迁移未应用则不装」；排在 collab 与 terminal 之后。
 - `collab/control/index.ts` 的 `VERBS` 加 `workflow-propose`，`control/workflow.ts` 校验草案后写 `workflow_drafts` 并推 bus 事件，页面出草案卡。
@@ -286,7 +286,7 @@ B1 可以在 `@armadra/agent` 第 2 期发 0.2.0 后立即开始；B2 的 core �
 - `apps/desktop/src/hook-client/{endpoint,http,session,json}.ts`（从 `cli/armadra-hook/` 移出，CLI 改 import）
 - `apps/desktop/src/core/workflow/{index,types,store,service,engine,routes,draft}.ts` 与测试
 - `apps/desktop/src/core/collab/control/workflow.ts`
-- `apps/desktop/src/core/db/migrations/0030_workflow.sql`、`migrations.lock`
+- `apps/desktop/src/core/db/migrations/0034_workflow.sql`、`migrations.lock`
 - `apps/desktop/src/core/history/ama.ts`（B3）
 - `packages/shared/src/api/workflows.ts`
 - `tools/probes/agent-e2e/scenario-11-coordinator.mjs`

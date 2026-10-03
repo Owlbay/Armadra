@@ -202,6 +202,29 @@ export interface WorkspaceEventPayloads {
     readonly size: number | null;
     readonly mtime: string | null;
   };
+  /**
+   * 工作流（契约 §15.4）：草案出现或换了状态、一次运行或它的某一步换了状态、
+   * 一个关卡开始等人或被答复。页面据此重读 `/api/workflows/*`，帧里不带正文。
+   */
+  "workflow.draft": {
+    readonly draftId: string;
+    readonly boardId: string;
+    readonly status: string;
+  };
+  "workflow.run": {
+    readonly runId: string;
+    readonly boardId: string;
+    readonly status: string;
+    readonly stepId?: string;
+    readonly stepStatus?: string;
+  };
+  "workflow.gate": {
+    readonly runId: string;
+    readonly boardId: string;
+    readonly stepId: string;
+    readonly label: string;
+    readonly state: "waiting" | "approved" | "rejected" | "cancelled";
+  };
   /*
    * ACP 驱动的会话（契约 §14.3）。`sessionId` 是 `terminal_sessions.id`；
    * `update` 是 ACP `session/update` 的 `update` 原样。
@@ -223,6 +246,26 @@ export interface WorkspaceEventPayloads {
     readonly driver: "terminal" | "acp";
     readonly sessionId: string;
     readonly resumed: boolean;
+  };
+  /*
+   * 一条评论变了（契约 §16.3）。不带正文：页面据此重新拉列表，推送域按
+   * `mentions`（被提及的 principal，不含作者）叫人。
+   */
+  "board.comment": {
+    readonly boardId: string;
+    readonly action:
+      | "created"
+      | "updated"
+      | "resolved"
+      | "reopened"
+      | "deleted";
+    readonly comment: {
+      readonly id: string;
+      readonly parentId: string | null;
+      readonly anchorKind: "node" | "item" | "point";
+      readonly anchorId?: string;
+    };
+    readonly mentions: readonly string[];
   };
 }
 
@@ -267,6 +310,9 @@ export const WORKSPACE_EVENT_TYPES = [
   "language.session",
   "language.server",
   "file.changed",
+  "workflow.draft",
+  "workflow.run",
+  "workflow.gate",
 ] as const satisfies readonly WorkspaceEventType[];
 
 export interface CoreEvents {

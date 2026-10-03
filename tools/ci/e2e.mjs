@@ -14,6 +14,7 @@
  *   pnpm --filter @armadra/web build
  *   pnpm --filter @armadra/desktop build
  *   pnpm --filter @armadra/server build
+ *   pnpm --filter @armadra/push-relay build
  *
  * The manifest is one file per entry, tools/ci/e2e.d/<id>.json, so packages
  * that add a probe add a file instead of all editing the end of one list. The

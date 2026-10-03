@@ -89,11 +89,12 @@ mac:
   entitlementsInherit: build/entitlements.mac.plist
   # Whether this build actually notarizes is decided by
   # `scripts/signing-electron.mjs` before packaging starts (three-state
-  # sign / skip / refuse): it reads APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD /
-  # APPLE_TEAM_ID from the
+  # sign / skip / refuse): it reads the App Store Connect API key
+  # (APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER) or, as the fallback,
+  # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID from the
   # environment and disables notarization here via `-c.mac.notarize=false`
-  # when they are absent, the same "decide before the twenty-minute build, not
-  # after" reasoning as docs/guides/ci-release.md §2.6.
+  # when neither set is complete, the same "decide before the twenty-minute
+  # build, not after" reasoning as docs/guides/ci-release.md §2.6.
   notarize: true
   extendInfo:
     # macOS 15+ gates any connection to an address on the user's own subnet
@@ -119,6 +120,13 @@ mac:
     - target: zip
       arch: [arm64, x64]
 
+# How Windows is signed is not written here either. `win.azureSignOptions`
+# (Azure Artifact Signing) makes electron-builder take the signing path the
+# moment the block exists, without checking that its credentials do, so
+# `scripts/signing-electron.mjs` merges it only when every AZURE_* value and
+# ARMADRA_WIN_PUBLISHER_NAME are present; a certificate file (CSC_LINK) or a
+# self-hosted runner's store (ARMADRA_WIN_CERT_SHA1) gets
+# `win.signtoolOptions.publisherName` the same way. external-services §2.2.
 win:
   icon: build/icons/icon.ico
   target:
@@ -131,7 +139,10 @@ nsis:
   # architecture; tools/release/stage-desktop.mjs tells the two Windows
   # builds apart by an architecture token in the name, so the arm64 installer
   # was "not produced" as far as it could see. `${arch}` is `x64` / `arm64`.
-  artifactName: ${productName} Setup ${version}-${arch}.${ext}
+  # No space anywhere: Azure Artifact Signing's PowerShell module splits the
+  # file list on spaces and signs nothing (electron-builder #8626), and the
+  # feed electron-builder writes spells the name with `-` anyway.
+  artifactName: Armadra-Setup-${version}-${arch}.${ext}
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

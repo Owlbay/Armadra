@@ -1,4 +1,8 @@
-import type { GrantSubjectKind, GroupRole } from "./accounts-store";
+import type {
+  AuditFilter,
+  GrantSubjectKind,
+  GroupRole,
+} from "./accounts-store";
 import type { AccountsService } from "./accounts";
 import type { AuthorizationSubject } from "./authorize";
 import { IdentityError, IdentityRefusal } from "./errors";
@@ -32,14 +36,20 @@ import { ID_PATTERN, newId, validName } from "./tokens";
  * core 自己的面，加路径不影响任何对账。R6 的服务器壳要改成设计里的写法时，改
  * 的是这一个文件的分发表。
  *
- * 做不到的按设计要求**返回 501 且形状一致**：OAuth 绑定的 start / callback、开放
- * 注册。passkey、MFA、会话列表、锁定（契约 §18.1–§18.4）在本文件下半部分，
+ * 做不到的按设计要求**返回 501 且形状一致**：开放注册。OAuth / OIDC 在
+ * `oauth/`（契约 §18.5），自己挂更长的原样前缀。passkey、MFA、会话列表、锁定（契约 §18.1–§18.4）在本文件下半部分，
  * 由 {@link IdentitySecurity} 驱动；没有它时那几条路径按 404 回答。
  */
 
 export interface Answer {
   readonly status: number;
   readonly body: unknown;
+  /** 不是 JSON 的答案（审计导出的 CSV）；有它时 `body` 不用。 */
+  readonly text?: {
+    readonly contentType: string;
+    readonly filename: string;
+    readonly body: string;
+  };
 }
 
 export interface AccountsHttpContext {
@@ -164,7 +174,7 @@ export function handleAccounts(
     case "grants":
       return grants(method, segments, request, context);
     case "audit":
-      return audit(method, request, context);
+      return audit(method, segments, request, context);
     default:
       return undefined;
   }
@@ -207,11 +217,8 @@ function credentials(
   context: AccountsHttpContext,
 ): Answer | Promise<Answer> | undefined {
   const accounts = context.accounts;
-  // OAuth 的形状现在就在表里，答案是 501（G1-12 做实）。passkey 有自己的
-  // `passkey/*` 路由（契约 §18.2），这里的旧占位路径不再存在。
-  if (segments[1] === "oauth" && method === "POST") {
-    return notImplemented(`OAuth 绑定 ${segments[2] ?? ""}`.trim());
-  }
+  // passkey 与 OAuth 都有了自己的路由（`passkey/*` 契约 §18.2、`oauth/*`
+  // 契约 §18.5），`credentials/{passkey,oauth}/*` 的旧占位路径不再存在。
   if (segments.length === 1 && method === "GET") {
     const principalId = request.query.get("principalId") ?? "";
     return {
@@ -456,28 +463,141 @@ function grants(
   return undefined;
 }
 
+/* ================================ 审计查询 ================================ */
+
+/**
+ * `GET audit` 与 `GET audit/export`（契约 §18.6）。筛选参数两条一样；导出不
+ * 分页，按 id 从新到旧最多 {@link AUDIT_EXPORT_MAX} 行。
+ */
 function audit(
   method: string,
+  segments: readonly string[],
   request: CoreRequest,
   context: AccountsHttpContext,
 ): Answer | undefined {
   if (method !== "GET") return undefined;
-  const limit = Number(request.query.get("limit") ?? 100);
-  return {
-    status: 200,
-    body: {
-      entries: context.accounts.readAudit(subject(context), {
-        ...(request.query.get("principalId")
-          ? { principalId: request.query.get("principalId") as string }
-          : {}),
-        ...(request.query.get("workspaceId")
-          ? { workspaceId: request.query.get("workspaceId") as string }
-          : {}),
-        limit:
-          Number.isInteger(limit) && limit > 0 && limit <= 500 ? limit : 100,
-      }),
-    },
+  if (segments.length === 1) {
+    const filter = auditFilter(request);
+    const limit = pageLimit(request.query.get("limit"));
+    // 多取一行，知道还有没有更早的。
+    const rows = context.accounts.readAudit(subject(context), {
+      ...filter,
+      limit: limit + 1,
+    });
+    const entries = rows.slice(0, limit);
+    return {
+      status: 200,
+      body: {
+        entries,
+        nextBeforeId:
+          rows.length > limit ? (entries[entries.length - 1]?.id ?? 0) : 0,
+      },
+    };
+  }
+  if (segments.length === 2 && segments[1] === "export") {
+    const rows = context.accounts.readAudit(subject(context), {
+      ...auditFilter(request),
+      limit: AUDIT_EXPORT_MAX,
+    });
+    return {
+      status: 200,
+      body: null,
+      text: {
+        contentType: "text/csv; charset=utf-8",
+        filename: "armadra-audit.csv",
+        body: auditCsv(rows),
+      },
+    };
+  }
+  return undefined;
+}
+
+export const AUDIT_PAGE_MAX = 500;
+export const AUDIT_EXPORT_MAX = 10_000;
+
+function pageLimit(raw: string | null): number {
+  const limit = Number(raw ?? 100);
+  return Number.isInteger(limit) && limit > 0 && limit <= AUDIT_PAGE_MAX
+    ? limit
+    : 100;
+}
+
+/** 查询串 → 筛选。写错的数字一律 400，不悄悄当成「不筛」。 */
+function auditFilter(request: CoreRequest): AuditFilter {
+  const query = request.query;
+  const number = (name: string, min: number): number | undefined => {
+    const raw = query.get(name);
+    if (raw === null || raw === "") return undefined;
+    const value = Number(raw);
+    if (!Number.isSafeInteger(value) || value < min) {
+      throw new IdentityError("invalid");
+    }
+    return value;
   };
+  const actions = query.getAll("action").filter((value) => value !== "");
+  if (actions.length > 20 || actions.some((value) => value.length > 128)) {
+    throw new IdentityError("invalid");
+  }
+  const sinceMs = number("sinceMs", 0);
+  const untilMs = number("untilMs", 0);
+  const beforeId = number("beforeId", 1);
+  return {
+    ...(query.get("principalId")
+      ? { principalId: query.get("principalId") as string }
+      : {}),
+    ...(query.get("workspaceId")
+      ? { workspaceId: query.get("workspaceId") as string }
+      : {}),
+    ...(actions.length > 0 ? { actions } : {}),
+    ...(sinceMs === undefined ? {} : { sinceMs }),
+    ...(untilMs === undefined ? {} : { untilMs }),
+    ...(beforeId === undefined ? {} : { beforeId }),
+  };
+}
+
+/**
+ * RFC 4180 的 CSV，`\r\n` 换行，首行表头。以 `= + - @` 或制表、回车开头的
+ * 单元格前面补一个 `'`：表格软件会把它们当公式执行（CSV 注入），而 `target`
+ * 与 `detail` 里有用户写的名字。
+ */
+export function auditCsv(
+  rows: readonly {
+    id: number;
+    atMs: number;
+    principalId: string;
+    deviceId: string;
+    action: string;
+    target: string;
+    workspaceId: string;
+    detail: unknown;
+  }[],
+): string {
+  const cell = (value: string): string => {
+    const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+    return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+  };
+  const lines = [
+    "id,time,principalId,deviceId,action,target,workspaceId,detail",
+  ];
+  for (const row of rows) {
+    lines.push(
+      [
+        String(row.id),
+        new Date(row.atMs).toISOString(),
+        row.principalId,
+        row.deviceId,
+        row.action,
+        row.target,
+        row.workspaceId,
+        row.detail === null || row.detail === undefined
+          ? ""
+          : JSON.stringify(row.detail),
+      ]
+        .map(cell)
+        .join(","),
+    );
+  }
+  return `${lines.join("\r\n")}\r\n`;
 }
 
 /** 调用方是谁。认证失败在这里抛，于是每条路由都不必自己写那个 401。 */

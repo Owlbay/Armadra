@@ -62,6 +62,13 @@ export const REASONS = [
   "installFailed",
   /** The updater is present but unusable in this build. */
   "updaterUnavailable",
+  /**
+   * The update is staged, but this installation carries no platform signature
+   * an installer could be checked against, so it is not installed. Only
+   * reachable with `ARMADRA_UPDATES_DEV=1` on an unsigned package: without it
+   * such a build never checks at all (`availability.ts`).
+   */
+  "notSigned",
 ] as const;
 
 export type Reason = (typeof REASONS)[number];

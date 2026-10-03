@@ -91,13 +91,16 @@ node tools/ci/e2e.mjs --tier b --list     # 只列出清单
     `verify-linux-glibc-baseline.sh` 断言基线，再在 `xvfb-run` 下跑 B 档：
     `packaged-smoke --no-real-cli` 起 AppImage（`APPIMAGE_EXTRACT_AND_RUN`，不要
     FUSE），`deb-install` 在 `ubuntu:22.04` 容器里 `apt-get install` 那个 deb、`ldd`
-    没有缺库、`armadra --version` 答出版本。
+    没有缺库、`armadra --version` 答出版本；另跑 `server-perf`、
+    `server-container-e2e`（构建服务器壳镜像、对着容器跑 `server-e2e`，不推送）与
+    `update-e2e`。作业设 `ARMADRA_DEV_STACK=1`、装 Chrome，`devStack` 条目先
+    `pnpm dev-stack up`。
   - `macos`（macos-14）：同样打包，跑 `packaged-smoke --no-real-cli`。
   - `report`：前两条任一失败、且在 main 上时，用默认的 `GITHUB_TOKEN`（作业级
     `issues: write`）开一个「夜间 B 档失败」issue，已有开着的同名 issue 就追加评论；
     正文是运行链接与每条作业失败的条目（`e2e.mjs` 在 `GITHUB_OUTPUT` 里写
     `failed=<id,…>`）。夜间工作流不读任何 secret。
-  - 要打好的包才能跑的新探针（`update-e2e` 等）只需新增一个 B 档条目并写明
+  - 要打好的包才能跑的新探针只需新增一个 B 档条目并写明
     `platforms`，在对应作业里打包之后执行，不必加作业。
 - `pnpm ci:workflows` 断言 `ci.yml` 有跑 `--tier a` 的 `e2e` 作业且在 ubuntu 上，
   `nightly.yml` 有 `schedule` 与 `workflow_dispatch` 并跑 `--tier b`；B 档条目
@@ -252,14 +255,77 @@ electron-builder 的 `CSC_LINK` / `CSC_KEY_PASSWORD`。多这一步只为了**�
 - 没给 `APPLE_SIGNING_IDENTITY` 时，从 `find-identity` 的输出里取第一条。
 - 构建结束后 `if: always()` 删掉钥匙串。
 
-公证用 `xcrun notarytool store-credentials armadra-notary --validate` 预检：
-`--validate` 会真的去问一次 Apple，凭据不对在这里报错，而不是在打包末尾排队等公证
-时。预检通过后把 `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_SPECIFIC_PASSWORD`
-写进 `GITHUB_ENV`——这正是 `signing-electron.mjs` 读的三个名字——公证与装订由
-electron-builder 在打包末尾完成。
+证书只给了一半（有 `.p12` 没口令，或反过来）在这一步就失败，而不是当成「不签名」。
 
-任何一半缺失就整段跳过并 `::warning::`，`notarize` 作业把 macOS 列进未签名平台，
-`assemble` 把这句话写在 Release 说明顶部。缺 secret 从不阻断发布。
+**公证凭据两套，API key 优先**（[外部服务](../design/external-services.md) §2.1）：
+
+- **App Store Connect API key**（推荐）：secrets `APPLE_API_KEY_P8_BASE64`、`APPLE_API_KEY_ID`、
+  `APPLE_API_ISSUER_ID`。预检把 base64 解到 `$RUNNER_TEMP/AuthKey.p8`，
+  `xcrun notarytool store-credentials armadra-notary --key … --key-id … --issuer … --validate`，
+  通过后把 `APPLE_API_KEY`（`.p8` 的**路径**）、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER` 写进
+  `GITHUB_ENV`；
+- **Apple ID**（回退）：`APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_SPECIFIC_PASSWORD`，
+  `--apple-id … --team-id … --password … --validate`。
+
+`--validate` 会真的去问一次 Apple，凭据不对在这里报错，而不是在打包末尾排队等公证时。
+app-builder-lib 只要看到 `APPLE_ID` 就走 Apple ID 分支，所以**两套都配时只把 API key 那套写进环境**；
+`signing-electron.mjs` 的 `signingPlan` 也按同一规则在打包前把另一套从环境里拿掉（`unsetEnv`）。
+一套给了一半（例如只有 `APPLE_API_KEY_ID`）预检直接失败；两套都没有才是「不公证」，`::warning::`
+后继续，`notarize` 作业把 macOS 列进未签名平台，`assemble` 把这句话写在 Release 说明顶部。
+
+**打包后断言**：签过名的构建在上传前跑
+`node apps/desktop/scripts/signing-electron.mjs verify-mac`，对每个 `.app` 做
+`codesign --verify --deep --strict`。更新器的 `signatureState` 只看 `_CodeSignature/CodeResources`
+在不在，这一步挡住「有签名目录但 Gatekeeper 不认」的包。
+
+证书选 **Developer ID Application（G2 链）**：旧的 Developer ID Sub-CA 2027-02-01 到期，
+之后签出的东西必须来自 G2 链证书。
+
+本地演练：`ARMADRA_MAC_ADHOC_SIGN=1 ARMADRA_DIST_RELEASE=1 pnpm --filter @armadra/desktop dist`
+用 ad-hoc 身份 `-` 签，`verify-mac` 能过；Gatekeeper（`spctl --assess`）与 Squirrel.Mac 只认
+Developer ID 签名加公证，所以 ad-hoc 包能走到「暂存」，装不上（`tools/probes/README.md` 的自动更新端到端）。
+没有用自签的 codesign 身份演练：那要往用户的钥匙串搜索列表里加钥匙串，属于改本机安全设置。
+
+### 2.6.1 Windows 签名
+
+三条路，只能配一条（`signing-electron.mjs::windowsPlan`，工作流「选 Windows 签名路径」一步）：
+
+| 路径                   | 配置                                                                                                                                                                                        | electron-builder 拿到的                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Azure Artifact Signing | secrets `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET`；变量 `AZURE_SIGNING_ENDPOINT` / `AZURE_SIGNING_ACCOUNT` / `AZURE_SIGNING_PROFILE`；变量 `ARMADRA_WIN_PUBLISHER_NAME` | 齐全时才合并 `win.azureSignOptions`，显式 `timestampRfc3161: http://timestamp.acs.microsoft.com`、SHA256 |
+| OV 证书文件            | secrets `WINDOWS_CERT_BASE64` / `WINDOWS_CERT_PASSWORD`；可选变量 `ARMADRA_WIN_PUBLISHER_NAME`                                                                                              | `CSC_LINK` / `CSC_KEY_PASSWORD`，钉了名字就加 `win.signtoolOptions.publisherName`                        |
+| 自托管 runner 上的令牌 | 变量 `ARMADRA_WIN_CERT_SHA1`（证书库里的指纹）；Windows 两行 `runs-on: [self-hosted, windows, signing]`                                                                                     | `win.signtoolOptions.certificateSha1`                                                                    |
+
+`win.azureSignOptions` 一出现 electron-builder 就走 Azure 签名、不先查凭据，所以它只在全部字段在场时
+由 `signingPlan` 合并进配置，仓库里的 `electron-builder.yml` 不写它。给了一半在构建前拒绝。
+Azure 的签名模块按空格切文件名，`nsis.artifactName` 因此是无空格的 `Armadra-Setup-${version}-${arch}.${ext}`。
+
+**publisherName**：装好的副本每次更新都拿安装包证书的 CN 与 `app-update.yml` 里的
+`publisherName` 比，对不上就拒装。证书文件那条路上，工作流用 PowerShell 读出 `.pfx` 主体的
+CN，`signing-electron.mjs check-publisher` 要求它与 `ARMADRA_WIN_PUBLISHER_NAME` 逐字相同；
+换证书时这个名字不能变。
+
+**打包后断言**：签过名时 `signing-electron.mjs verify-windows` 要求每个安装包和
+`*-unpacked/armadra.exe` 的 `Get-AuthenticodeSignature` 都是 `Valid`。
+
+**更新器**：`main/updates/environment.ts::signatureState` 在 Windows 上读
+`Get-AuthenticodeSignature`（每个进程一次）：`Valid` 才是 `signed`，`NotSigned` 是 `unsigned`，
+自签证书（`UnknownError`）等一律 `unknown`；后两者都不自动更新。`environment.test.ts` 在
+Windows runner 上用 `New-SelfSignedCertificate` 现做一张证书核对这条（测试结束删掉）。
+
+### 2.6.2 Linux GPG
+
+`assemble` 作业在 `assemble.mjs` 之前跑 `tools/release/sign-gpg.mjs sign`：密钥来自
+secrets `ARMADRA_LINUX_GPG_KEY`（armored 私钥）/ `ARMADRA_LINUX_GPG_PASSPHRASE`，导进一次性的
+`GNUPGHOME`（用完即删）；`.rpm` 先 `rpmsign --addsign`，再给 `.AppImage` / `.deb` / `.rpm`
+各出一个 `.asc`，公钥导出为 `armadra-linux.gpg` 随 Release 发布。仓库里一旦提交了
+`apps/web/public/armadra-linux.gpg`（服务器壳会把它当静态文件发出去），之后的发布都要求签名密钥的
+指纹与它一致。签完立即 `sign-gpg.mjs verify`（`gpg --verify` 与 `rpmkeys --checksig`）。
+没有密钥就跳过并告警，`notarize` 作业把「Linux (GPG)」列进说明顶部。
+
+用户验证：`gpg --import armadra-linux.gpg && gpg --verify Armadra_<v>_linux-x86_64.AppImage.asc`；
+rpm 用 `rpm --import` 之后 `rpm -K`。本地演练：`node tools/release/sign-gpg.mjs keygen --out <dir>`
+出一把一天期的密钥。
 
 LiveAgent 还用 `dmgbuild` 重建 DMG 并自己 `notarytool submit` + `stapler staple`，
 那是为了拿到确定性的 Finder 布局（背景图、图标位置）——它把 bundler 的 DMG 丢掉，
@@ -322,16 +388,22 @@ runner、两台 Windows runner 合进同一个目录会互相覆盖，所以 `st
 `assemble` 会把这件事写进 Release 说明顶部，`latest.json` 会把没有签名的
 updater 包排除在外。
 
-| Secret                         | 谁用                                                                 | 缺了会怎样                                   |
-| ------------------------------ | -------------------------------------------------------------------- | -------------------------------------------- |
-| `APPLE_CERTIFICATE_P12_BASE64` | macOS 代码签名（base64 的 .p12）                                     | 不签名，首次打开有 Gatekeeper 提示           |
-| `APPLE_CERTIFICATE_PASSWORD`   | 导入上面的证书                                                       | 同上                                         |
-| `APPLE_SIGNING_IDENTITY`       | 指定用哪张证书；缺则取第一张                                         | 钥匙串里有多张时可能选错                     |
-| `APPLE_ID` / `APPLE_TEAM_ID`   | 公证                                                                 | 不公证，`notarize` 作业把 macOS 列进说明     |
-| `APPLE_APP_SPECIFIC_PASSWORD`  | 公证用的 app 专用密码                                                | 同上                                         |
-| `WINDOWS_CERT_BASE64`          | Windows Authenticode                                                 | 不签名，SmartScreen 会提示                   |
-| `WINDOWS_CERT_PASSWORD`        | 导入上面的证书                                                       | 同上                                         |
-| `ARMADRA_RELEASE_SIGNING_KEY`  | 每个产物与 `SHA256SUMS` 的 minisign 签名，`latest.json` 引用的也是它 | 产物不带签名，`latest.json` 为空，说明里写明 |
+| Secret / 变量                                                 | 谁用                                                                 | 缺了会怎样                                   |
+| ------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------- |
+| `APPLE_CERTIFICATE_P12_BASE64`                                | macOS 代码签名（base64 的 Developer ID Application .p12，G2 链）     | 不签名，首次打开有 Gatekeeper 提示           |
+| `APPLE_CERTIFICATE_PASSWORD`                                  | 导入上面的证书                                                       | 只给一半：构建失败                           |
+| `APPLE_SIGNING_IDENTITY`                                      | 指定用哪张证书；缺则取第一张                                         | 钥匙串里有多张时可能选错                     |
+| `APPLE_API_KEY_P8_BASE64`                                     | 公证（推荐）：App Store Connect API key 的 .p8，base64               | 退回 Apple ID；两套都没有就不公证            |
+| `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID`                    | 同上的 key id 与 issuer                                              | 三个只给一部分：构建失败                     |
+| `APPLE_ID` / `APPLE_TEAM_ID`                                  | 公证（回退）                                                         | 不公证，`notarize` 作业把 macOS 列进说明     |
+| `APPLE_APP_SPECIFIC_PASSWORD`                                 | 公证回退用的 app 专用密码                                            | 同上                                         |
+| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` | Windows：Azure Artifact Signing 的 Entra 凭据                        | 与下面三个变量、发布者名一起：缺一个构建失败 |
+| 变量 `AZURE_SIGNING_ENDPOINT` / `_ACCOUNT` / `_PROFILE`       | Windows：Artifact Signing 账户、证书配置                             | 同上                                         |
+| 变量 `ARMADRA_WIN_PUBLISHER_NAME`                             | Windows：证书主体 CN，钉进 `publisherName`                           | Azure 路径必需；证书文件路径缺省取证书 CN    |
+| `WINDOWS_CERT_BASE64` / `WINDOWS_CERT_PASSWORD`               | Windows：OV 证书文件（与 Azure、令牌三选一）                         | 不签名，SmartScreen 提示，不自动更新         |
+| 变量 `ARMADRA_WIN_CERT_SHA1`                                  | Windows：自托管 runner 证书库里的令牌证书                            | 同上                                         |
+| `ARMADRA_LINUX_GPG_KEY` / `ARMADRA_LINUX_GPG_PASSPHRASE`      | Linux 包的 `.asc` 与 rpm 签名                                        | 不带 `.asc`，rpm 不签名，说明里写明          |
+| `ARMADRA_RELEASE_SIGNING_KEY`                                 | 每个产物与 `SHA256SUMS` 的 minisign 签名，`latest.json` 引用的也是它 | 产物不带签名，`latest.json` 为空，说明里写明 |
 
 证书与公证密码两个名字沿用 LiveAgent 的拼写；工作流同时接受早先的
 `APPLE_CERTIFICATE` 与 `APPLE_PASSWORD`（`${{ secrets.A || secrets.B }}`），
@@ -339,8 +411,8 @@ updater 包排除在外。
 
 工作流只把**非空**的 secret 写进环境：空字符串的证书变量会被当成「有密钥」，
 然后在打包最后一步失败；没有密钥时要的是跳过，不是一个更晚、更难读的错误。
-macOS 的证书与公证凭据走 §2.6 的两个预检步骤，Windows 的证书走同一对
-`CSC_LINK` / `CSC_KEY_PASSWORD`，都是「缺了就跳过并告警」。
+macOS 的证书与公证凭据走 §2.6 的两个预检步骤，Windows 走 §2.6.1 的三选一，Linux 走 §2.6.2，
+都是「全缺就跳过并告警，缺一半就失败」。
 
 **签名在写清单之前。** 上一代打包器在构建过程中就给每个 updater 包签出一份分离
 签名，所以 `assemble.mjs` 读得到一个已经在盘上的 `.sig`；electron-builder 只做平台
@@ -375,8 +447,10 @@ pnpm release:dry-run   # 把一次完整发布落到临时目录并校验
 
 - `ubuntu-22.04` / `ubuntu-22.04-arm` 上 electron-builder 能否打出 AppImage / deb / rpm
   三种包（换打包器后未在真 runner 上跑过）；
-- Apple 证书导入、`notarytool --validate` 与 electron-builder 的公证（要真 secret）；
-- Windows Authenticode 走同一对 `CSC_*` 变量是否成立（要真 secret）；
+- Apple 证书导入、`notarytool --validate`（API key 与 Apple ID 两条）与 electron-builder 的公证（要真 secret）；
+- Windows Authenticode 的 Azure / 证书文件 / 自托管令牌三条路（要真 secret 或订阅）；
+- 签名包的「安装 → 重启 → 版本号变」（`tools/probes/update-e2e.mjs --install`，要真证书；
+  未签名包的「检查 → 下载 → 验签 → 暂存 → 拒装」已在本机打包版上走通）；
 - Windows 便携 zip 解压后 core 能不能在 `resources/` 里找到 hook 客户端、
   session-host 与 `migrations/`。
 

@@ -67,5 +67,7 @@ describe("PermissionCard", () => {
     render(<PermissionCard permission={permission} canAnswer={false} />);
     expect(screen.getByText("pnpm test")).toBeTruthy();
     expect(screen.queryAllByRole("button")).toHaveLength(0);
+    // 同一张卡，按钮换成徽标（设计系统 §5.8）。
+    expect(screen.getByText("等待接管")).toBeTruthy();
   });
 });

@@ -208,9 +208,14 @@ jobs:
           SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
-          if [ -z "${APPLE_CERTIFICATE_P12_BASE64:-}" ] || [ -z "${APPLE_CERTIFICATE_PASSWORD:-}" ]; then
+          if [ -z "${APPLE_CERTIFICATE_P12_BASE64:-}" ] && [ -z "${APPLE_CERTIFICATE_PASSWORD:-}" ]; then
             echo "::warning::没有 APPLE_CERTIFICATE_P12_BASE64 与 APPLE_CERTIFICATE_PASSWORD，macOS 产物不签名，首次打开会有 Gatekeeper 提示"
             exit 0
+          fi
+          # 只给了一半是配置错误，不是「不签名」：在这里失败，而不是发一个悄悄没签的包。
+          if [ -z "${APPLE_CERTIFICATE_P12_BASE64:-}" ] || [ -z "${APPLE_CERTIFICATE_PASSWORD:-}" ]; then
+            echo "::error::APPLE_CERTIFICATE_P12_BASE64 与 APPLE_CERTIFICATE_PASSWORD 要一起给"
+            exit 1
           fi
           keychain="$RUNNER_TEMP/armadra-release.keychain-db"
           keychain_password="$(openssl rand -hex 24)"
@@ -244,52 +249,167 @@ jobs:
           } >> "$GITHUB_ENV"
 
       # store-credentials --validate 会真的去问一次 Apple。凭据不对时它在这里
-      # 报错，而不是在打包最后一步排队等公证时。
+      # 报错，而不是在打包最后一步排队等公证时。两套凭据（外部服务 §2.1）：
+      # App Store Connect API key 优先（.p8 解到 $RUNNER_TEMP/AuthKey.p8），
+      # Apple ID + app 专用密码作回退。app-builder-lib 只要看到 APPLE_ID 就走
+      # Apple ID 分支，所以只把选中的那一套写进环境。一套给了一半是配置错误，
+      # 在这里就失败；两套都没有才是「不公证」，告警后继续。
       - name: 预检公证凭据
         if: startsWith(matrix.target, 'darwin-')
         shell: bash
         env:
+          NOTARY_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          NOTARY_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          NOTARY_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
           NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
           NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           NOTARY_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD || secrets.APPLE_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "${NOTARY_APPLE_ID:-}" ] || [ -z "${NOTARY_TEAM_ID:-}" ] || [ -z "${NOTARY_PASSWORD:-}" ]; then
-            echo "::warning::缺少 APPLE_ID / APPLE_TEAM_ID / APPLE_APP_SPECIFIC_PASSWORD，macOS 产物不公证"
+          count() { local n=0; for value in "$@"; do [ -n "$value" ] && n=$((n + 1)); done; echo "$n"; }
+          api="$(count "${NOTARY_API_KEY_P8_BASE64:-}" "${NOTARY_API_KEY_ID:-}" "${NOTARY_API_ISSUER:-}")"
+          appleid="$(count "${NOTARY_APPLE_ID:-}" "${NOTARY_TEAM_ID:-}" "${NOTARY_PASSWORD:-}")"
+          if [ "$api" = 3 ]; then
+            key="$RUNNER_TEMP/AuthKey.p8"
+            printf '%s' "$NOTARY_API_KEY_P8_BASE64" | base64 --decode > "$key"
+            chmod 600 "$key"
+            xcrun notarytool store-credentials armadra-notary \
+              --key "$key" \
+              --key-id "$NOTARY_API_KEY_ID" \
+              --issuer "$NOTARY_API_ISSUER" \
+              --validate
+            # electron-builder 认这三个变量（signing-electron.mjs 的
+            # APPLE_API_KEY_ENV / APPLE_API_KEY_ID_ENV / APPLE_API_ISSUER_ENV）；
+            # APPLE_API_KEY 是 .p8 的路径，不是内容。
+            {
+              printf 'APPLE_API_KEY=%s\n' "$key"
+              printf 'APPLE_API_KEY_ID=%s\n' "$NOTARY_API_KEY_ID"
+              printf 'APPLE_API_ISSUER=%s\n' "$NOTARY_API_ISSUER"
+            } >> "$GITHUB_ENV"
+            [ "$appleid" = 0 ] || echo "::notice::App Store Connect API key 与 Apple ID 都配了，公证用 API key"
             exit 0
           fi
-          xcrun notarytool store-credentials armadra-notary \
-            --apple-id "$NOTARY_APPLE_ID" \
-            --team-id "$NOTARY_TEAM_ID" \
-            --password "$NOTARY_PASSWORD" \
-            --validate
-          # electron-builder 认这三个变量（signing-electron.mjs 的
-          # APPLE_ID_ENV / APPLE_PASSWORD_ENV / APPLE_TEAM_ENV），公证与装订
-          # 由它在打包末尾做。
-          {
-            printf 'APPLE_ID=%s\n' "$NOTARY_APPLE_ID"
-            printf 'APPLE_TEAM_ID=%s\n' "$NOTARY_TEAM_ID"
-            printf 'APPLE_APP_SPECIFIC_PASSWORD=%s\n' "$NOTARY_PASSWORD"
-          } >> "$GITHUB_ENV"
+          if [ "$api" != 0 ] && [ "$appleid" != 3 ]; then
+            echo "::error::APPLE_API_KEY_P8_BASE64 / APPLE_API_KEY_ID / APPLE_API_ISSUER_ID 只配了 $api 个，三个要一起给"
+            exit 1
+          fi
+          if [ "$appleid" = 3 ]; then
+            xcrun notarytool store-credentials armadra-notary \
+              --apple-id "$NOTARY_APPLE_ID" \
+              --team-id "$NOTARY_TEAM_ID" \
+              --password "$NOTARY_PASSWORD" \
+              --validate
+            # electron-builder 认这三个变量（signing-electron.mjs 的
+            # APPLE_ID_ENV / APPLE_PASSWORD_ENV / APPLE_TEAM_ENV），公证与装订
+            # 由它在打包末尾做。
+            {
+              printf 'APPLE_ID=%s\n' "$NOTARY_APPLE_ID"
+              printf 'APPLE_TEAM_ID=%s\n' "$NOTARY_TEAM_ID"
+              printf 'APPLE_APP_SPECIFIC_PASSWORD=%s\n' "$NOTARY_PASSWORD"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ "$appleid" != 0 ]; then
+            echo "::error::APPLE_ID / APPLE_TEAM_ID / APPLE_APP_SPECIFIC_PASSWORD 只配了 $appleid 个，三个要一起给"
+            exit 1
+          fi
+          echo "::warning::没有 App Store Connect API key（APPLE_API_KEY_P8_BASE64 / APPLE_API_KEY_ID / APPLE_API_ISSUER_ID），也没有 Apple ID 三件套，macOS 产物不公证"
 
-      # Windows 的 Authenticode：electron-builder 同样认 CSC_LINK /
-      # CSC_KEY_PASSWORD，所以这里只是把 Windows 的那张证书填进同一对变量。
-      - name: 解出 Windows 签名证书
+      # Windows 的 Authenticode 三条路，只能配一条（外部服务 §2.2，
+      # signing-electron.mjs 的 windowsPlan）：
+      #   - Azure Artifact Signing：secrets AZURE_TENANT_ID / AZURE_CLIENT_ID /
+      #     AZURE_CLIENT_SECRET + 变量 AZURE_SIGNING_ENDPOINT / AZURE_SIGNING_ACCOUNT /
+      #     AZURE_SIGNING_PROFILE / ARMADRA_WIN_PUBLISHER_NAME，齐全才合并
+      #     win.azureSignOptions；
+      #   - OV 证书文件：WINDOWS_CERT_BASE64 / WINDOWS_CERT_PASSWORD → CSC_LINK /
+      #     CSC_KEY_PASSWORD；
+      #   - 自托管 runner 上的 USB 令牌：变量 ARMADRA_WIN_CERT_SHA1（Windows 两行
+      #     的 runs-on 要改成 [self-hosted, windows, signing]，见 ci-release.md §3）。
+      # 给了一半就在这里失败；都没有才是「不签名」，告警后继续。
+      - name: 选 Windows 签名路径
         if: startsWith(matrix.target, 'windows-')
         shell: bash
         env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+          PUBLISHER_NAME: ${{ vars.ARMADRA_WIN_PUBLISHER_NAME }}
+          CERT_SHA1: ${{ vars.ARMADRA_WIN_CERT_SHA1 }}
           WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "${WINDOWS_CERT_BASE64:-}" ]; then
-            echo "::warning::没有 WINDOWS_CERT_BASE64，Windows 安装包不签名，SmartScreen 会提示"
+          azure=(AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_SIGNING_PROFILE)
+          set_count=0
+          missing=()
+          for name in "${azure[@]}"; do
+            if [ -n "${!name:-}" ]; then set_count=$((set_count + 1)); else missing+=("$name"); fi
+          done
+          [ -n "${PUBLISHER_NAME:-}" ] || missing+=("ARMADRA_WIN_PUBLISHER_NAME")
+          if [ "$set_count" -gt 0 ]; then
+            if [ ${#missing[@]} -gt 0 ]; then
+              echo "::error::Azure Artifact Signing 只配了一半，缺：${missing[*]}"
+              exit 1
+            fi
+            if [ -n "${WINDOWS_CERT_BASE64:-}" ] || [ -n "${CERT_SHA1:-}" ]; then
+              echo "::error::Azure Artifact Signing 与 WINDOWS_CERT_BASE64 / ARMADRA_WIN_CERT_SHA1 同时配置，只能选一条"
+              exit 1
+            fi
+            {
+              for name in "${azure[@]}"; do printf '%s=%s\n' "$name" "${!name}"; done
+              printf 'ARMADRA_WIN_PUBLISHER_NAME=%s\n' "$PUBLISHER_NAME"
+            } >> "$GITHUB_ENV"
+            echo "Windows：Azure Artifact Signing（$AZURE_SIGNING_ACCOUNT / $AZURE_SIGNING_PROFILE）"
             exit 0
           fi
-          {
-            printf 'CSC_LINK=%s\n' "$WINDOWS_CERT_BASE64"
-            printf 'CSC_KEY_PASSWORD=%s\n' "${WINDOWS_CERT_PASSWORD:-}"
-          } >> "$GITHUB_ENV"
+          if [ -n "${WINDOWS_CERT_BASE64:-}" ] && [ -n "${CERT_SHA1:-}" ]; then
+            echo "::error::WINDOWS_CERT_BASE64 与 ARMADRA_WIN_CERT_SHA1 同时配置，只能选一条"
+            exit 1
+          fi
+          if [ -n "${WINDOWS_CERT_BASE64:-}" ]; then
+            if [ -z "${WINDOWS_CERT_PASSWORD:-}" ]; then
+              echo "::error::有 WINDOWS_CERT_BASE64 但没有 WINDOWS_CERT_PASSWORD"
+              exit 1
+            fi
+            {
+              printf 'CSC_LINK=%s\n' "$WINDOWS_CERT_BASE64"
+              printf 'CSC_KEY_PASSWORD=%s\n' "$WINDOWS_CERT_PASSWORD"
+              [ -z "${PUBLISHER_NAME:-}" ] || printf 'ARMADRA_WIN_PUBLISHER_NAME=%s\n' "$PUBLISHER_NAME"
+            } >> "$GITHUB_ENV"
+            echo "Windows：证书文件（CSC_LINK）"
+            exit 0
+          fi
+          if [ -n "${CERT_SHA1:-}" ]; then
+            {
+              printf 'ARMADRA_WIN_CERT_SHA1=%s\n' "$CERT_SHA1"
+              [ -z "${PUBLISHER_NAME:-}" ] || printf 'ARMADRA_WIN_PUBLISHER_NAME=%s\n' "$PUBLISHER_NAME"
+            } >> "$GITHUB_ENV"
+            echo "Windows：本 runner 证书库里的 $CERT_SHA1"
+            exit 0
+          fi
+          echo "::warning::没有配置任何 Windows 签名路径，安装包不签名：SmartScreen 会提示、Smart App Control 直接拦，装好的副本也不会自动更新"
+
+      # 证书文件那条路：证书主体的 CN 必须就是钉住的 publisherName。装好的副本
+      # 每次更新都拿安装包证书的 CN 与它比，对不上就拒装——换证书时最容易踩。
+      - name: 核对 Windows 证书主体与 publisherName
+        if: startsWith(matrix.target, 'windows-')
+        shell: pwsh
+        env:
+          WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERT_BASE64 -or -not $env:ARMADRA_WIN_PUBLISHER_NAME) {
+            Write-Host "没有证书文件或没有钉 publisherName，跳过"
+            exit 0
+          }
+          $bytes = [Convert]::FromBase64String($env:WINDOWS_CERT_BASE64)
+          $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($bytes, $env:WINDOWS_CERT_PASSWORD)
+          $subject = $cert.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+          node apps/desktop/scripts/signing-electron.mjs check-publisher --subject "$subject"
+          exit $LASTEXITCODE
 
       # Windows runner 的实时扫描会把刚写出的文件占住几秒到几十秒，复制到包里
       # 时就撞上 EBUSY。把产物目录排除出扫描范围，比只在复制处重试可靠；runner
@@ -322,7 +442,34 @@ jobs:
         shell: bash
         env:
           ARMADRA_UPDATER_ENDPOINTS: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
+          # 发布包不带本地构建的停更标记（scripts/dist.mjs 的 RELEASE_ENV）。
+          ARMADRA_DIST_RELEASE: "1"
         run: pnpm --filter @armadra/desktop dist
+
+      # 「有 _CodeSignature」不等于「Gatekeeper 认」：签过名的 .app 上传前先过
+      # codesign --verify --deep --strict（外部服务 §2.1 第 3 条）。没签名就没什么可验。
+      - name: 校验 macOS 签名
+        if: startsWith(matrix.target, 'darwin-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CSC_LINK:-}" ]; then
+            echo "未签名构建，跳过 codesign --verify"
+            exit 0
+          fi
+          node apps/desktop/scripts/signing-electron.mjs verify-mac --dir apps/desktop/release
+
+      # Windows 签过名的安装包与包里的 armadra.exe 都必须是 Authenticode Valid。
+      - name: 校验 Windows 签名
+        if: startsWith(matrix.target, 'windows-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CSC_LINK:-}" ] && [ -z "${AZURE_CLIENT_ID:-}" ] && [ -z "${ARMADRA_WIN_CERT_SHA1:-}" ]; then
+            echo "未签名构建，跳过 Authenticode 校验"
+            exit 0
+          fi
+          node apps/desktop/scripts/signing-electron.mjs verify-windows --dir apps/desktop/release
 
       # 产物已经落地，先断言它能在承诺的系统上启动，再去改名上传。
       - name: 校验 Linux 的 glibc 基线
@@ -374,8 +521,9 @@ jobs:
         shell: bash
         env:
           HAS_APPLE_CERT: ${{ (secrets.APPLE_CERTIFICATE_P12_BASE64 || secrets.APPLE_CERTIFICATE) != '' }}
-          HAS_APPLE_NOTARY: ${{ secrets.APPLE_ID != '' && (secrets.APPLE_APP_SPECIFIC_PASSWORD || secrets.APPLE_PASSWORD) != '' }}
-          HAS_WINDOWS: ${{ secrets.WINDOWS_CERT_BASE64 != '' }}
+          HAS_APPLE_NOTARY: ${{ (secrets.APPLE_API_KEY_P8_BASE64 != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER_ID != '') || (secrets.APPLE_ID != '' && (secrets.APPLE_APP_SPECIFIC_PASSWORD || secrets.APPLE_PASSWORD) != '') }}
+          HAS_WINDOWS: ${{ secrets.WINDOWS_CERT_BASE64 != '' || secrets.AZURE_CLIENT_SECRET != '' || vars.ARMADRA_WIN_CERT_SHA1 != '' }}
+          HAS_LINUX_GPG: ${{ secrets.ARMADRA_LINUX_GPG_KEY != '' }}
         run: |
           set -euo pipefail
           missing=()
@@ -383,6 +531,7 @@ jobs:
             missing+=("macOS")
           fi
           [ "$HAS_WINDOWS" = "true" ] || missing+=("Windows")
+          [ "$HAS_LINUX_GPG" = "true" ] || missing+=("Linux (GPG)")
           printf 'unnotarized=%s\n' "$(IFS=,; echo "${missing[*]:-}")" >> "$GITHUB_OUTPUT"
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::warning::未公证/未签名的平台：${missing[*]}；首次安装会有系统提示"
@@ -425,6 +574,26 @@ jobs:
           fi
           [ -s "$path" ] || printf 'Armadra %s\n' "$RELEASE_TAG" > "$path"
           printf 'path=%s\n' "$path" >> "$GITHUB_OUTPUT"
+      # Linux 包的 GPG 签名（外部服务 §2.3）：rpm 先 rpmsign --addsign 改写包，
+      # 再给 AppImage / deb / rpm 各出 .asc，并导出公钥 armadra-linux.gpg 作
+      # Release 资产。必须在 assemble.mjs 之前：校验和与 minisign 签的是最终字节。
+      # 仓库里已有 apps/web/public/armadra-linux.gpg 时，签名密钥的指纹必须与它
+      # 一致。没有 ARMADRA_LINUX_GPG_KEY 就跳过并告警。
+      - name: GPG 签 Linux 包
+        shell: bash
+        env:
+          ARMADRA_LINUX_GPG_KEY: ${{ secrets.ARMADRA_LINUX_GPG_KEY }}
+          ARMADRA_LINUX_GPG_PASSPHRASE: ${{ secrets.ARMADRA_LINUX_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ARMADRA_LINUX_GPG_KEY:-}" ]; then
+            echo "::warning::没有 ARMADRA_LINUX_GPG_KEY，Linux 包不带 .asc，rpm 不签名"
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y rpm
+          node tools/release/sign-gpg.mjs sign --dir artifacts --published apps/web/public/armadra-linux.gpg
+          node tools/release/sign-gpg.mjs verify --dir artifacts --public-key artifacts/armadra-linux.gpg
       - name: 生成清单、校验列表与说明
         shell: bash
         env:

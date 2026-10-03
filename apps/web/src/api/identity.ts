@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { fetchNativeTicket, isNativeShell } from "../host/native-session";
+import { isNativeApp, nativeBridge } from "../mobile/native-bridge";
 import { RUNTIME_URL } from "./request";
 
 /**
@@ -18,6 +19,8 @@ import { RUNTIME_URL } from "./request";
  *    Cookie + 双提交的 CSRF 头。配对材料从地址栏的 `#pair=<票>` 来。
  *
  * 凭据只在内存里：不写 localStorage、不进 URL、不发往本源以外的任何地方。
+ * 原生 App（Capacitor，架构 §7）走和桌面壳同一种 Bearer 传输，区别只是两把
+ * 密钥另存一份在设备钥匙串里（`mobile/native-bridge.ts`），App 重开不用重新配对。
  */
 
 const PREFIX = "/api/identity/";
@@ -98,6 +101,8 @@ export class IdentityRequestError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** 429 的 `Retry-After`（秒）；没有时 0。 */
+    readonly retryAfterSeconds = 0,
   ) {
     super(message || code);
   }
@@ -189,10 +194,27 @@ export async function ensureCsrf(): Promise<string> {
   return renewing;
 }
 
-function remember(session: IdentitySession): IdentitySession {
+/**
+ * 走 Bearer 传输的两种环境：桌面壳（票换会话）与原生 App（钥匙串里的会话）。
+ * 两者都不用 Cookie、不用 CSRF。
+ */
+function bearerTransport(): boolean {
+  return isNativeShell() || isNativeApp();
+}
+
+function remember(
+  session: IdentitySession,
+  origin: string = RUNTIME_URL,
+): IdentitySession {
   if (session.native) {
     access = session.native.accessToken;
     refresh = session.native.refreshToken;
+    if (isNativeApp())
+      void nativeBridge().saveSession({
+        origin,
+        accessToken: access,
+        refreshToken: refresh,
+      });
   }
   rememberCsrf(session.csrfToken ?? "");
   // CSRF 没变（例如原生传输上两次都是空）时也要announce一次：换了会话。
@@ -204,13 +226,17 @@ function remember(session: IdentitySession): IdentitySession {
 /* --------------------------------- 传输 ---------------------------------- */
 
 interface CallOptions {
-  readonly method?: "GET" | "POST";
+  readonly method?: "GET" | "POST" | "PUT" | "DELETE";
   readonly body?: unknown;
   readonly signal?: AbortSignal;
   /** 用刷新密钥而不是访问密钥当 Bearer：刷新 / 换 CSRF / 登出三条。 */
   readonly refreshBearer?: boolean;
-  /** 不需要会话的那两条：hello 与配对。 */
+  /** 不需要会话的那几条：hello、配对与登录。 */
   readonly anonymous?: boolean;
+  /** 答案是文本而不是 JSON（只用于成功时）。 */
+  readonly text?: boolean;
+  /** 原生 App 的连接页在记下来源之前就要配对，那时 `RUNTIME_URL` 还不是它。 */
+  readonly base?: string;
 }
 
 async function call<T>(
@@ -219,7 +245,7 @@ async function call<T>(
   options: CallOptions = {},
 ): Promise<T> {
   const method = options.method ?? "GET";
-  const native = isNativeShell();
+  const native = bearerTransport();
   const bearer = options.refreshBearer ? refresh : access;
   const headers: Record<string, string> = { Accept: "application/json" };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
@@ -229,7 +255,7 @@ async function call<T>(
 
   let response: Response;
   try {
-    response = await fetch(`${RUNTIME_URL}${PREFIX}${action}`, {
+    response = await fetch(`${options.base ?? RUNTIME_URL}${PREFIX}${action}`, {
       method,
       headers,
       body:
@@ -243,16 +269,49 @@ async function call<T>(
   } catch (cause) {
     throw new IdentityTransportError(cause);
   }
+  if (response.ok && options.text) return (await response.text()) as T;
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
+    // 403 可能是 CSRF 过期：作废本地这枚，下一次写请求重新取。
+    if (response.status === 403 && !native) forgetCsrf();
     const body = (payload ?? {}) as { code?: unknown; message?: unknown };
+    const retry = Number(response.headers?.get?.("retry-after") ?? 0);
     throw new IdentityRequestError(
       response.status,
       typeof body.code === "string" ? body.code : "UNKNOWN",
       typeof body.message === "string" ? body.message : "",
+      Number.isFinite(retry) && retry > 0 ? Math.ceil(retry) : 0,
     );
   }
   return schema.parse(payload);
+}
+
+/**
+ * 身份面上别的模块（安全页、登录）用的同一条传输：桌面壳走 Bearer，服务器壳
+ * 走 Cookie + CSRF；浏览器上的写请求先确保手里有一枚 CSRF。
+ */
+export async function identityRequest<T>(
+  action: string,
+  schema: z.ZodType<T>,
+  options: Omit<CallOptions, "refreshBearer" | "text"> = {},
+): Promise<T> {
+  const method = options.method ?? "GET";
+  if (!bearerTransport() && method !== "GET" && !options.anonymous) {
+    await ensureCsrf();
+  }
+  return call(action, schema, options);
+}
+
+/** 同一条传输取一份文本答案（审计导出的 CSV）。 */
+export function identityText(action: string): Promise<string> {
+  return call(action, z.string(), { text: true });
+}
+
+/** 登录类请求（口令、第二因素、passkey）换来的会话：记住凭据并通知订阅者。 */
+export function adoptIdentitySession(
+  session: IdentitySession,
+): IdentitySession {
+  return remember(session);
 }
 
 /* --------------------------------- 动作 ---------------------------------- */
@@ -263,7 +322,7 @@ export const BROWSER_SESSION_CAPABILITY = "identity.browser-session.v1";
 
 /** 这个环境要求 hello 报的会话能力名。 */
 export function sessionCapability(): string {
-  return isNativeShell()
+  return bearerTransport()
     ? NATIVE_SESSION_CAPABILITY
     : BROWSER_SESSION_CAPABILITY;
 }
@@ -307,6 +366,8 @@ export async function pairIdentity(ticket: string): Promise<IdentitySession> {
 export async function resumeIdentity(): Promise<IdentitySession | null> {
   if (isNativeShell() && !access)
     return pairIdentity(await fetchNativeTicket());
+  if (isNativeApp() && !access && !(await restoreNativeCredentials()))
+    return null;
   try {
     return await call("session", identitySessionSchema);
   } catch (error) {
@@ -317,6 +378,12 @@ export async function resumeIdentity(): Promise<IdentitySession | null> {
       // 会话过期时刷新密钥可能还在：换一份再说「没登录」。
       const refreshed = await refreshIdentity().catch(() => null);
       if (refreshed) return refreshed;
+      if (isNativeApp()) {
+        // 刷新密钥也不认了（设备被撤销或过期）：钥匙串里那份作废，回连接页。
+        resetIdentityCredentials();
+        await nativeBridge().clearSession();
+        return null;
+      }
       if (isNativeShell()) {
         // 桌面壳里「登录」是进程内的事实：访问密钥过了 15 分钟、刷新密钥也
         // 到期时，向壳再要一张票重新配对，而不是让面板停在「已断开」等人
@@ -360,8 +427,57 @@ export async function logoutIdentity(): Promise<void> {
     });
   } finally {
     resetIdentityCredentials();
+    if (isNativeApp()) await nativeBridge().clearSession();
     announce();
   }
+}
+
+/* ------------------------------- 原生 App -------------------------------- */
+
+/**
+ * 从钥匙串把上次的会话读回内存。来源对不上（换过 Gateway）的那份不用。
+ * 读到返回 `true`。
+ */
+export async function restoreNativeCredentials(): Promise<boolean> {
+  const stored = await nativeBridge().loadSession();
+  if (stored === null || stored.origin !== RUNTIME_URL) return false;
+  access = stored.accessToken;
+  refresh = stored.refreshToken;
+  return true;
+}
+
+/**
+ * 原生 App 的连接页：对一个还没记下的 Gateway 来源配对。会话照常进内存与
+ * 钥匙串（绑着这个来源），调用方随后记下来源并重载页面。
+ */
+export async function pairWithGateway(
+  origin: string,
+  ticket: string,
+): Promise<IdentitySession> {
+  return remember(
+    await call("pair", identitySessionSchema, {
+      method: "POST",
+      body: { ticket },
+      anonymous: true,
+      base: origin,
+    }),
+    origin,
+  );
+}
+
+/** 当前的访问密钥（原生 App 的 `fetch` 包装用）；没有是空串。 */
+export function currentAccessToken(): string {
+  return access;
+}
+
+/** `POST /api/identity/ws-ticket`：原生 App 升级 WebSocket 前换的一次性票。 */
+export async function fetchWsTicket(): Promise<string> {
+  const answer = await call(
+    "ws-ticket",
+    z.object({ ticket: z.string().min(1) }),
+    { method: "POST" },
+  );
+  return answer.ticket;
 }
 
 /** 这个 principal 配过的设备，按 id 分页。 */
