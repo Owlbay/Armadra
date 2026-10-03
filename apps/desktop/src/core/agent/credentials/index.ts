@@ -3,6 +3,11 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SecretBackend } from "../../secrets/backend";
 import { CREDENTIAL_KINDS, CREDENTIAL_REF_ENV, kindRow } from "./inject";
 import { type CredentialRow, CredentialStore } from "./store";
+import { configuredLaunchExe } from "../../hook/install/windows-launcher";
+
+function hasLaunchExe(): boolean {
+  return configuredLaunchExe() !== undefined;
+}
 
 export * from "./inject";
 export { CredentialStore, REF_PATTERN, type CredentialRow } from "./store";
@@ -32,6 +37,13 @@ export interface CredentialsOptions {
   /** 一个节点 Agent id 的基础 CLI（`custom:` 条目按它的 `baseAgent`）。 */
   readonly baseOf: (agentId: string) => string;
   readonly platform?: NodeJS.Platform;
+  /**
+   * Windows: whether this core has the canvas launcher (`armadra-launch.exe`)
+   * that redeems the credential. Without it canvas agents start on a bare
+   * line (canvas-launcher §5.3) and a bound credential would silently not
+   * apply, so credentials are refused. Defaults to looking for the program.
+   */
+  readonly windowsLauncher?: () => boolean;
   readonly log?: (message: string, fields: Record<string, unknown>) => void;
   readonly now?: () => number;
 }
@@ -60,7 +72,9 @@ export class CredentialsDomain {
 
   /**
    * 这台主机能不能存、能不能用凭据。`file` 后端是 0600 明文，一次降级，不拿来放
-   * 别人的令牌；Windows 的启动器（C#）还没有兑换那一段（T9 待测）。
+   * 别人的令牌；Windows 上兑换由 C# 启动器 `armadra-launch.exe` 做，这台机器没有
+   * 它（开发树没在 Windows 上 build、打包时没有 csc）时节点终端起的是裸行，凭据
+   * 不会生效，所以拒绝。
    */
   availability(): { ok: true } | { ok: false; error: CredentialError } {
     if (this.options.secrets.kind === "file") {
@@ -73,13 +87,16 @@ export class CredentialsDomain {
         ),
       };
     }
-    if ((this.options.platform ?? process.platform) === "win32") {
+    if (
+      (this.options.platform ?? process.platform) === "win32" &&
+      !(this.options.windowsLauncher ?? hasLaunchExe)()
+    ) {
       return {
         ok: false,
         error: new CredentialError(
           400,
           "credential_unsupported_here",
-          "Node credentials are not available on Windows yet",
+          "Node credentials need the canvas launcher (armadra-launch.exe), which this installation does not have",
         ),
       };
     }

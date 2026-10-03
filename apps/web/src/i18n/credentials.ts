@@ -24,7 +24,7 @@ const zh = {
   "credentials.unavailable.credential_backend_insecure":
     "本机密钥存储是明文文件，不能保存凭据",
   "credentials.unavailable.credential_unsupported_here":
-    "此平台暂不支持节点凭据",
+    "此安装缺少画布启动器，不能使用节点凭据",
   "credentials.badge.title": "账号：{account}",
   "credentials.badge.default": "默认登录",
   "credentials.badge.switched": "重启终端后生效",
@@ -32,7 +32,7 @@ const zh = {
   "credentials.error.credential_mismatch": "凭据与节点的 Agent 不匹配",
   "credentials.error.credential_kind_disabled": "这种凭据尚未启用",
   "credentials.error.credential_unsupported_here":
-    "这里不能使用节点凭据（SSH 节点或当前平台）",
+    "这里不能使用节点凭据（SSH 节点或缺少画布启动器）",
   "credentials.error.credential_backend_insecure":
     "本机密钥存储是明文文件，不能使用凭据",
   "credentials.error.credential_unset": "凭据没有值，请重新设置",
@@ -59,7 +59,7 @@ const en: typeof zh = {
   "credentials.unavailable.credential_backend_insecure":
     "This host stores secrets in a plain file, so credentials cannot be saved",
   "credentials.unavailable.credential_unsupported_here":
-    "Node credentials are not available on this platform yet",
+    "This installation has no canvas launcher, so node credentials are unavailable",
   "credentials.badge.title": "Account: {account}",
   "credentials.badge.default": "Default login",
   "credentials.badge.switched": "Takes effect after the terminal restarts",
@@ -69,7 +69,7 @@ const en: typeof zh = {
   "credentials.error.credential_kind_disabled":
     "This kind of credential is not enabled yet",
   "credentials.error.credential_unsupported_here":
-    "Node credentials cannot be used here (SSH node or this platform)",
+    "Node credentials cannot be used here (SSH node or no canvas launcher)",
   "credentials.error.credential_backend_insecure":
     "This host stores secrets in a plain file, so credentials cannot be used",
   "credentials.error.credential_unset":

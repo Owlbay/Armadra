@@ -130,6 +130,76 @@ describe("launchConfig", () => {
     }
   });
 
+  it("carries the node credential exchange, in run and shim mode", () => {
+    const client = "C:\\data\\bin\\armadra-hook.exe";
+    const spec = {
+      ...CODEX,
+      args: [],
+      credential: { client, variables: ["CODEX_API_KEY", "OPENAI_API_KEY"] },
+    };
+    for (const text of [
+      launchConfig(spec, "run"),
+      launchConfig(spec, "shim", TARGET),
+    ]) {
+      expect(
+        lines(text).filter((line) => line.startsWith("credential")),
+      ).toEqual([
+        `credential=${client}`,
+        "credential-var=CODEX_API_KEY",
+        "credential-var=OPENAI_API_KEY",
+      ]);
+    }
+    // No client: still written, so a bound credential is refused, not skipped.
+    expect(
+      lines(
+        launchConfig(
+          { ...spec, credential: { client: "", variables: ["X"] } },
+          "run",
+        ),
+      ),
+    ).toContain("credential=");
+    // A CLI with no credential kind writes nothing.
+    expect(
+      launchConfig({ ...spec, credential: { client, variables: [] } }, "run"),
+    ).not.toMatch(/^credential/m);
+    expect(() =>
+      launchConfig(
+        { ...spec, credential: { client, variables: ["A B"] } },
+        "run",
+      ),
+    ).toThrow(/environment variable name/);
+    expect(() =>
+      launchConfig(
+        { ...spec, credential: { client: "a\nb", variables: ["X"] } },
+        "run",
+      ),
+    ).toThrow(/line break/);
+  });
+
+  it("carries the ama key exchange only with a client", () => {
+    const client = "C:\\data\\bin\\armadra-hook.exe";
+    const spec = {
+      agentId: "ama",
+      args: [],
+      env: [],
+      amaKeys: {
+        client,
+        variables: ["AMA_API_KEY_OPENAI", "AMA_API_KEY_ANTHROPIC"],
+      },
+    };
+    expect(lines(launchConfig(spec, "run")).slice(3)).toEqual([
+      `ama-keys=${client}`,
+      "ama-var=AMA_API_KEY_OPENAI",
+      "ama-var=AMA_API_KEY_ANTHROPIC",
+    ]);
+    expect(
+      launchConfig(
+        { ...spec, amaKeys: { client: "", variables: ["X"] } },
+        "run",
+      ),
+    ).not.toMatch(/^ama-/m);
+  });
+
   it("is deterministic", () => {
     expect(launchConfig(CODEX, "shim", TARGET)).toBe(
       launchConfig(CODEX, "shim", TARGET),

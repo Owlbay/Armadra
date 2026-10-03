@@ -13,8 +13,19 @@
 //   lead=C:\…\cli.js             只在垫片模式：排在程序后面的词，可多条
 //   env=NAME=value               注入：只给 CLI 进程设的环境变量，可多条
 //   arg=value                    注入：接在调用者参数之后的词，可多条
+//   credential=C:\…\armadra-hook.exe   节点凭据（契约 §20.4）：客户端路径，空值表示没有客户端
+//   credential-var=NAME          节点凭据：答复里允许的变量名，可多条
+//   ama-keys=C:\…\armadra-hook.exe     ama 的模型密钥（契约 §12.4）：客户端路径
+//   ama-var=NAME                 ama 的模型密钥：允许的变量名，可多条
 //
 // 值是原文：不加引号、不转义，不含换行。
+//
+// 兑换（与 POSIX 启动器 hook/install/launcher.ts 同一套规矩）：门开着时，环境里有
+// `ARMADRA_CREDENTIAL_REF` 就起 `<客户端> credential`，答复是一行 `NAME=value`；
+// ama 的启动器起 `<客户端> credential --ama`，答复是零到多行 `NAME=value`。名字
+// 不在名单里、客户端失败或缺席，都拒绝启动（退出码非零）——悄悄用默认登录起
+// CLI 就是用错了账号。值只进 CLI 进程的环境，不写 stderr、不写文件、不进命令行。
+// 凭据是环境变量，不经 `cmd.exe` 再读，批处理包装跳过注入词时照样兑换。
 //
 // 启动器模式（没有 program=）：调用者命令行尾巴的第一个词是程序，尾巴原样就是子进程
 // 的整条命令行，注入的词按 C 运行库的规则加引号接在后面——调用者的参数一个字节都
@@ -170,7 +181,14 @@ internal static class ArmadraLaunch
         public readonly List<string> Lead = new List<string>();
         public readonly List<KeyValuePair<string, string>> Env = new List<KeyValuePair<string, string>>();
         public readonly List<string> Args = new List<string>();
+        /// <summary>有 `credential=` 行；客户端为空串表示没有客户端。</summary>
+        public string CredentialClient;
+        public readonly List<string> CredentialVars = new List<string>();
+        public string AmaClient;
+        public readonly List<string> AmaVars = new List<string>();
     }
+
+    private const string CredentialGate = "ARMADRA_CREDENTIAL_REF";
 
     private static int Main()
     {
@@ -236,7 +254,13 @@ internal static class ArmadraLaunch
         }
 
         bool batch = IsBatch(resolved);
-        bool inject = config.Gate == null || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(config.Gate));
+        bool canvas = config.Gate == null || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(config.Gate));
+        bool inject = canvas;
+        if (canvas)
+        {
+            int refused = Exchange(config);
+            if (refused != 0) return refused;
+        }
         if (inject && batch && !config.Args.TrueForAll(BatchSafe))
         {
             Console.Error.WriteLine(
@@ -275,6 +299,100 @@ internal static class ArmadraLaunch
         return Start(application, commandLine);
     }
 
+    /// <summary>
+    /// 节点凭据与 ama 密钥的兑换：把答复里的变量设进本进程的环境（CLI 继承它）。
+    /// 答 0 表示照常启动，非零是拒绝启动时的退出码（stderr 已说明，不带值）。
+    /// </summary>
+    private static int Exchange(LaunchConfig config)
+    {
+        if (config.CredentialClient != null
+            && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(CredentialGate)))
+        {
+            if (config.CredentialClient.Length == 0)
+                return Refuse("node credential needs the armadra-hook client");
+            string answer;
+            int code = RunClient(config.CredentialClient, "credential", out answer);
+            if (code != 0) return code;
+            string name;
+            string value;
+            if (!SplitPair(answer.TrimEnd('\r', '\n'), out name, out value)
+                || !config.CredentialVars.Contains(name))
+                return Refuse("unexpected node credential variable");
+            Environment.SetEnvironmentVariable(name, value);
+        }
+        if (!string.IsNullOrEmpty(config.AmaClient) && config.AmaVars.Count > 0)
+        {
+            string answer;
+            int code = RunClient(config.AmaClient, "credential --ama", out answer);
+            if (code != 0) return code;
+            List<KeyValuePair<string, string>> pairs = new List<KeyValuePair<string, string>>();
+            foreach (string raw in answer.Split('\n'))
+            {
+                string line = raw.TrimEnd('\r');
+                if (line.Length == 0) continue;
+                string name;
+                string value;
+                if (!SplitPair(line, out name, out value) || !config.AmaVars.Contains(name))
+                    return Refuse("unexpected ama key variable");
+                pairs.Add(new KeyValuePair<string, string>(name, value));
+            }
+            foreach (KeyValuePair<string, string> pair in pairs)
+                Environment.SetEnvironmentVariable(pair.Key, pair.Value);
+        }
+        return 0;
+    }
+
+    private static int Refuse(string reason)
+    {
+        Console.Error.WriteLine("armadra: " + reason);
+        return 1;
+    }
+
+    /// <summary>`NAME=value`：名字非空、值可以含 `=`。</summary>
+    internal static bool SplitPair(string line, out string name, out string value)
+    {
+        int split = line.IndexOf('=');
+        if (split <= 0)
+        {
+            name = null;
+            value = null;
+            return false;
+        }
+        name = line.Substring(0, split);
+        value = line.Substring(split + 1);
+        return true;
+    }
+
+    /// <summary>
+    /// 起兑换客户端，读它的标准输出（UTF-8）。stderr 与 stdin 继承本控制台：客户端
+    /// 的报错原样给人看。答客户端的退出码；起不来答 1 并在 stderr 说一句。客户端是
+    /// `.cmd` 时由 CreateProcess 经 `cmd.exe` 起，参数只有我们自己的常量词。
+    /// </summary>
+    private static int RunClient(string client, string arguments, out string output)
+    {
+        output = "";
+        System.Diagnostics.ProcessStartInfo start = new System.Diagnostics.ProcessStartInfo(client, arguments);
+        start.UseShellExecute = false;
+        start.RedirectStandardOutput = true;
+        start.StandardOutputEncoding = new UTF8Encoding(false);
+        System.Diagnostics.Process process;
+        try
+        {
+            process = System.Diagnostics.Process.Start(start);
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine("armadra: could not start " + client + ": " + error.Message);
+            return 1;
+        }
+        using (process)
+        {
+            output = process.StandardOutput.ReadToEnd();
+            process.WaitForExit();
+            return process.ExitCode == 0 ? 0 : (process.ExitCode > 0 ? process.ExitCode : 1);
+        }
+    }
+
     /// <summary>读 `.launch`；认不出时答 null，并在 problem 里说为什么。</summary>
     private static LaunchConfig Parse(string[] lines, out string problem)
     {
@@ -310,6 +428,18 @@ internal static class ArmadraLaunch
                     break;
                 case "arg":
                     config.Args.Add(value);
+                    break;
+                case "credential":
+                    config.CredentialClient = value;
+                    break;
+                case "credential-var":
+                    config.CredentialVars.Add(value);
+                    break;
+                case "ama-keys":
+                    config.AmaClient = value;
+                    break;
+                case "ama-var":
+                    config.AmaVars.Add(value);
                     break;
                 case "env":
                     int split = value.IndexOf('=');
