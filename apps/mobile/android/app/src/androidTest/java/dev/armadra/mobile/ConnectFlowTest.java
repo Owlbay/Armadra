@@ -12,8 +12,10 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONObject;
+import org.junit.FixMethodOrder;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.junit.runners.MethodSorters;
 
 /**
  * B 档 UI 用例「连接 → 配对 → 画布」（补全计划 G3-1），由
@@ -21,9 +23,11 @@ import org.junit.runner.RunWith;
  * {@code adb reverse} 把模拟器的回环端口接到宿主，再把原生深链
  * {@code armadra://pair?host=…&ticket=…&fp=…} 作为插桩参数 {@code armadraPairLink} 传进来。
  *
- * <p>页面在 WebView 里，按页面自己的标记判断（{@code data-slot}），不依赖文案语言。
+ * <p>页面在 WebView 里，按页面自己的标记判断（{@code data-slot}），不依赖文案语言。两条按名字
+ * 顺序跑：配对之后 App 记住了 Gateway，「没有 Gateway」那条必须在前。
  */
 @RunWith(AndroidJUnit4.class)
+@FixMethodOrder(MethodSorters.NAME_ASCENDING)
 public class ConnectFlowTest {
     private static final long TIMEOUT_MS = 60_000;
 
@@ -57,7 +61,7 @@ public class ConnectFlowTest {
     }
 
     @Test
-    public void withoutAGatewayTheAppOpensOnTheConnectScreen() throws Exception {
+    public void a_withoutAGatewayTheAppOpensOnTheConnectScreen() throws Exception {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             waitFor(scenario, "document.querySelector('[data-slot=\"mobile-connect\"]')", "connect screen");
             assertTrue("plugin registered", "true".equals(eval(scenario,
@@ -66,7 +70,7 @@ public class ConnectFlowTest {
     }
 
     @Test
-    public void pairsThroughThePinnedGatewayAndOpensTheCanvas() throws Exception {
+    public void b_pairsThroughThePinnedGatewayAndOpensTheCanvas() throws Exception {
         String link = InstrumentationRegistry.getArguments().getString("armadraPairLink");
         assumeTrue("armadraPairLink not given (run through tools/probes/mobile-shell-e2e.mjs)", link != null);
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
@@ -81,6 +85,11 @@ public class ConnectFlowTest {
             eval(scenario, "document.querySelector('[data-slot=\"mobile-connect\"] form').requestSubmit();true");
             waitFor(scenario, "document.querySelector('[data-slot=\"mobile-bottom-nav\"]')"
                     + " && !document.querySelector('[data-slot=\"mobile-connect\"]')", "canvas after pairing");
+        }
+        // 重开 App：会话从 Keystore 读回，直接进画布、不再问配对。
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            waitFor(scenario, "document.querySelector('[data-slot=\"mobile-bottom-nav\"]')"
+                    + " && !document.querySelector('[data-slot=\"mobile-connect\"]')", "canvas after relaunch");
         }
     }
 }
