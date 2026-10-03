@@ -70,6 +70,7 @@ afterEach(() => {
 function withRoutes(
   backend: SecretBackend,
   platform: NodeJS.Platform = "darwin",
+  windowsLauncher?: () => boolean,
 ): { core: Fixture; domain: CredentialsDomain; logged: unknown[] } {
   let domain: CredentialsDomain | undefined;
   const logged: unknown[] = [];
@@ -80,6 +81,7 @@ function withRoutes(
         secrets: backend,
         baseOf: (id) => (id.startsWith("custom:") ? "claude" : id),
         platform,
+        ...(windowsLauncher === undefined ? {} : { windowsLauncher }),
         log: (message, fields) => logged.push([message, fields]),
       });
       installRoutes(context.server, domain);
@@ -253,13 +255,33 @@ describe("/api/credentials", () => {
     expect(created.body).toMatchObject({ code: "credential_backend_insecure" });
   });
 
-  it("is not available on Windows until the launcher there can redeem", async () => {
-    const { core } = withRoutes(memoryBackend("dpapi"), "win32");
+  it("is not available on Windows without the canvas launcher that redeems", async () => {
+    const { core } = withRoutes(memoryBackend("dpapi"), "win32", () => false);
     const listed = await core.call("GET", "/api/credentials");
     expect(listed.body).toMatchObject({
       available: false,
       reason: "credential_unsupported_here",
     });
+  });
+
+  it("is available on Windows with the launcher and a DPAPI store", async () => {
+    const { core, domain } = withRoutes(
+      memoryBackend("dpapi"),
+      "win32",
+      () => true,
+    );
+    const listed = await core.call("GET", "/api/credentials");
+    expect(listed.body).toMatchObject({ backend: "dpapi", available: true });
+    expect(listed.body).not.toHaveProperty("reason");
+    const entry = await domain.store.create({
+      providerId: "claude",
+      kind: "oauth-token",
+      label: "Work",
+      value: VALUE,
+    });
+    expect(
+      domain.environment("n", "claude", false, entry.ref, undefined),
+    ).toEqual([[CREDENTIAL_REF_ENV, entry.ref]]);
   });
 });
 
