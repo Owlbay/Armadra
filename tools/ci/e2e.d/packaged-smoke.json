@@ -1,0 +1,9 @@
+{
+  "id": "packaged-smoke",
+  "tier": "b",
+  "script": "tools/probes/packaged-smoke.mjs",
+  "args": ["{out}", "--no-real-cli"],
+  "requires": ["tmux"],
+  "platforms": ["darwin", "linux"],
+  "timeoutMinutes": 15
+}

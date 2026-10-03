@@ -3,9 +3,15 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { MANIFEST, findChrome, runTier, validateManifest } from "./e2e.mjs";
+import {
+  findChrome,
+  loadManifest,
+  runTier,
+  sortEntries,
+  validateManifest,
+} from "./e2e.mjs";
 
-const manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
+const manifest = loadManifest();
 
 test("the repository's manifest is valid and tier A names the CI probes", () => {
   assert.deepEqual(validateManifest(manifest), []);
@@ -22,6 +28,64 @@ test("the repository's manifest is valid and tier A names the CI probes", () => 
     assert.ok(tierA.includes(id), `${id} is not in tier A`);
 });
 
+test("the manifest is one file per entry, loaded tier by tier and by id", () => {
+  const directory = mkdtempSync(join(tmpdir(), "armadra-e2e-d-"));
+  try {
+    const entry = (id, tier) => ({
+      id,
+      tier,
+      script: "tools/ci/e2e.mjs",
+      timeoutMinutes: 1,
+    });
+    const put = (file, body) =>
+      writeFileSync(
+        join(directory, file),
+        typeof body === "string" ? body : JSON.stringify(body),
+      );
+    put("zeta.json", entry("zeta", "a"));
+    put("alpha.json", entry("alpha", "b"));
+    put("beta.json", entry("beta", "a"));
+    put("renamed.json", entry("other", "a"));
+    put("notes.md", "not an entry");
+    put(".DS_Store", "finder");
+    put("._zeta.json", "resource fork");
+    put("broken.json", "{");
+    const legacy = `${directory}-e2e.json`;
+    writeFileSync(legacy, "{}");
+    const loaded = loadManifest(directory, legacy);
+    assert.deepEqual(
+      loaded.entries.map((item) => item.id),
+      ["beta", "other", "zeta", "alpha"],
+    );
+    assert.equal(loaded.entries[0].file, "beta.json");
+    const problems = validateManifest(loaded);
+    for (const fragment of [
+      "e2e.json is back",
+      "notes.md is not a .json entry",
+      "broken.json is not valid JSON",
+      "lives in renamed.json, not <id>.json",
+    ])
+      assert.ok(
+        problems.some((problem) => problem.includes(fragment)),
+        `expected a problem mentioning "${fragment}" in ${JSON.stringify(problems)}`,
+      );
+    assert.equal(problems.length, 4);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+    rmSync(`${directory}-e2e.json`, { force: true });
+  }
+  // Order does not depend on the order the entries arrived in.
+  assert.deepEqual(
+    sortEntries([
+      { id: "b", tier: "b" },
+      { id: "x", tier: "nope" },
+      { id: "c", tier: "a" },
+      { id: "a", tier: "b" },
+    ]).map((item) => item.id),
+    ["c", "a", "b", "x"],
+  );
+});
+
 test("a malformed manifest is reported entry by entry", () => {
   const problems = validateManifest({
     entries: [
@@ -30,8 +94,9 @@ test("a malformed manifest is reported entry by entry", () => {
         id: "ok",
         tier: "c",
         script: "tools/nope.mjs",
-        requires: ["docker"],
+        requires: ["gpu"],
         args: [1],
+        platforms: ["beos"],
       },
       {
         tier: "a",
@@ -45,7 +110,8 @@ test("a malformed manifest is reported entry by entry", () => {
     "repeats its id",
     "has tier c",
     "does not exist",
-    "requires docker",
+    "requires gpu",
+    "platforms that are not a non-empty list",
     "args that are not a list of strings",
     "no positive timeoutMinutes",
     "no kebab-case id",
@@ -258,6 +324,59 @@ test("dev-stack entries are skipped unless ARMADRA_DEV_STACK=1 and Docker answer
     });
     assert.equal(broken.status, "failed");
     assert.equal(broken.entries[0].status, "failed");
+  } finally {
+    remove();
+  }
+});
+
+test("an entry for another platform is skipped, and docker is a requirement", async () => {
+  const { root, remove } = fixture();
+  try {
+    const summary = await runTier({
+      tier: "b",
+      root,
+      out: join(root, "out"),
+      log: quiet,
+      env: { PATH: process.env.PATH },
+      platform: "linux",
+      probe: { ...present, docker: () => false },
+      manifest: {
+        entries: [
+          {
+            id: "mac-only",
+            tier: "b",
+            script: "fail.mjs",
+            platforms: ["darwin"],
+            timeoutMinutes: 1,
+          },
+          {
+            id: "linux-only",
+            tier: "b",
+            script: "pass.mjs",
+            args: ["{out}"],
+            platforms: ["linux"],
+            timeoutMinutes: 1,
+          },
+          {
+            id: "container",
+            tier: "b",
+            script: "pass.mjs",
+            args: ["{out}"],
+            requires: ["docker"],
+            timeoutMinutes: 1,
+          },
+        ],
+      },
+    });
+    assert.deepEqual(
+      summary.entries.map((entry) => [entry.id, entry.status, entry.reason]),
+      [
+        ["mac-only", "skipped", "only on darwin"],
+        ["linux-only", "passed", undefined],
+        ["container", "failed", "missing docker"],
+      ],
+    );
+    assert.equal(summary.platform, `linux-${process.arch}`);
   } finally {
     remove();
   }

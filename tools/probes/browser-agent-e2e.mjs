@@ -38,6 +38,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { child, harness, killTmux, sleep } from "./shell-e2e-lib.mjs";
+import { isolatedEnv, probeHome } from "./probe-home.mjs";
 import { decodePng } from "./ui-features/fixtures.mjs";
 
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -53,6 +54,9 @@ const coreEntry = join(root, "apps/desktop/out/core/main.js");
 const hookEntry = join(root, "apps/desktop/out/cli/armadra-hook.js");
 
 const h = harness(output);
+// 临时 HOME：core 不读操作员的 CLI 登录状态与配置。
+const coreHome = probeHome("armadra-browser-agent-home-");
+h.cleanups.push(coreHome.remove);
 const { report, step } = h;
 report.scenarios = [];
 report.failures = [];
@@ -165,7 +169,10 @@ async function startCore(data) {
     h,
     process.execPath,
     [coreEntry, "--listen", "tcp:127.0.0.1:0", "--data-dir", data],
-    { cwd: root, env: { ...process.env, ARMADRA_DATA_DIR: data } },
+    {
+      cwd: root,
+      env: isolatedEnv(coreHome, { ARMADRA_DATA_DIR: data }),
+    },
   );
   for (let attempt = 0; attempt < 300; attempt += 1) {
     const found = /Armadra core is listening .*"spec":"tcp:([^"]+)"/.exec(
