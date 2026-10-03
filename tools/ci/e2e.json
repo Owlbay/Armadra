@@ -82,6 +82,14 @@
       "timeoutMinutes": 5
     },
     {
+      "id": "workflow-e2e",
+      "tier": "a",
+      "script": "tools/probes/workflow-e2e.mjs",
+      "args": ["{out}"],
+      "requires": ["tmux"],
+      "timeoutMinutes": 10
+    },
+    {
       "id": "server-perf",
       "tier": "b",
       "script": "tools/probes/server-perf.mjs",
