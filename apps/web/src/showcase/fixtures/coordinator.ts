@@ -31,7 +31,8 @@ function terminal(
     labels: [],
     note: "",
     position,
-    size: { width: 184, height: 96 },
+    // 节点宽 >440 才画头部徽标与状态胶囊（`nodes.css` 的容器查询）。
+    size: { width: 456, height: 84 },
     data: { kind: "terminal", agent: { id: agentId } },
     createdAt: AT,
     updatedAt: AT,
@@ -40,12 +41,12 @@ function terminal(
 
 export const COORDINATOR_NODES: CanvasNode[] = [
   terminal(COORDINATOR_IDS.lead, "审查 src/x 与 src/y", "ama", {
-    x: 208,
-    y: 16,
+    x: 16,
+    y: 120,
   }),
-  terminal(COORDINATOR_IDS.done, "src/x", "claude", { x: 8, y: 184 }),
-  terminal(COORDINATOR_IDS.working, "src/y", "codex", { x: 208, y: 184 }),
-  terminal(COORDINATOR_IDS.failed, "文档", "pi", { x: 408, y: 184 }),
+  terminal(COORDINATOR_IDS.done, "src/x", "claude", { x: 560, y: 16 }),
+  terminal(COORDINATOR_IDS.working, "src/y", "codex", { x: 560, y: 120 }),
+  terminal(COORDINATOR_IDS.failed, "文档", "pi", { x: 560, y: 224 }),
 ];
 
 export const COORDINATOR_EDGES = [

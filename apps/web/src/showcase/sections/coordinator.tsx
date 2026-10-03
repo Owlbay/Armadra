@@ -40,8 +40,8 @@ import {
 
 type CoordinatorFlowNode = Node<CanvasNode, "member">;
 
-const WIDTH = 600;
-const HEIGHT = 296;
+const WIDTH = 1032;
+const HEIGHT = 324;
 
 const TONES: Record<string, { tone: StatusTone; label: string }> = {
   [COORDINATOR_IDS.lead]: { tone: "working", label: "showcase.tone.working" },
@@ -129,7 +129,7 @@ export default function CoordinatorSection() {
   }, []);
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+    <div className="flex min-w-0 flex-col gap-6">
       <div
         ref={frame}
         className="min-w-0"
