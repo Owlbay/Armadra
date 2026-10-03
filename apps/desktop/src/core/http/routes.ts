@@ -475,6 +475,19 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 实时协同（契约 §16.1–§16.2）：同步流与一块板的实时状态。
+  {
+    path: "/api/workspaces/{workspaceId}/boards/{boardId}/sync",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workspaces/{workspaceId}/boards/{boardId}/realtime",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/workspaces/{workspaceId}/deliveries",
     methods: ["GET"],
