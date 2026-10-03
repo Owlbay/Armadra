@@ -485,11 +485,14 @@ export function resolveCommand(
   if (looksLikePath) {
     return isExecutable(command) ? command : withPlatformSuffix(command);
   }
-  // `<data>/bin` holds the `armadra-hook` launcher and the bundled `ama`'s; a
-  // node terminal has it on PATH, so detection looks there too.
+  // `<data>/bin` holds the `armadra-hook` launcher and the bundled `ama`'s,
+  // and is searched first: an `ama` some other install put on PATH is not the
+  // pinned one, and a host API it does not speak makes it refuse to start.
+  // Nothing else of ours lives there, so no other CLI is shadowed.
   const client = hookClient();
-  const bin = client === undefined ? undefined : dirname(client);
-  for (const directory of agentPath(ambient, bin).split(delimiter)) {
+  const directories = agentPath(ambient).split(delimiter);
+  if (client !== undefined) directories.unshift(dirname(client));
+  for (const directory of directories) {
     if (directory === "") continue;
     const candidate = join(directory, command);
     if (isExecutable(candidate)) return candidate;
