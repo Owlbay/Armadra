@@ -3,6 +3,7 @@ import type { CanvasNode } from "@armadra/shared";
 import { useT } from "@/app/preferences-store";
 import { Badge } from "@/ui/badge";
 import { nodeName, requestNodeNames } from "./node-names";
+import { Button } from "@/ui/button";
 
 /**
  * 节点头上的 `@名字`（设计 §2.3）。
@@ -22,7 +23,9 @@ export function NodeNameBadge({ node }: { node: CanvasNode }) {
       className="text-[var(--muted-foreground)]"
       data-no-drag="true"
     >
-      <button
+      <Button
+        variant="ghost"
+        size="xs"
         type="button"
         aria-label={t("node.name.edit")}
         title={t("node.name.edit")}
@@ -32,7 +35,7 @@ export function NodeNameBadge({ node }: { node: CanvasNode }) {
         }}
       >
         @{name}
-      </button>
+      </Button>
     </Badge>
   );
 }

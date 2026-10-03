@@ -5,6 +5,7 @@ import { formatRelativeTime } from "@/lib/format";
 import { gotoNode } from "@/sidebar/goto-node";
 import { useCanvasStore } from "@/store/canvas-store";
 import { Badge } from "@/ui/badge";
+import { Button } from "@/ui/button";
 
 /**
  * 输出到画板的对象上那枚「来自 · 节点名」（设计系统 §4 来源链接，ACP 设计 §7）。
@@ -41,7 +42,9 @@ export function SourceBadge({
       }
       data-no-drag="true"
     >
-      <button
+      <Button
+        variant="ghost"
+        size="xs"
         type="button"
         data-slot="content-source"
         aria-label={t("acp.source.goto", { name: title })}
@@ -55,7 +58,7 @@ export function SourceBadge({
         <span className="truncate">
           {t("acp.source.from", { name: title })}
         </span>
-      </button>
+      </Button>
     </Badge>
   );
 }
