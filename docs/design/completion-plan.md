@@ -49,7 +49,7 @@ flowchart LR
   - `docs/design/updates-and-service-install.md`、`docs/status/platform-implementation-status.md`：开头的状态说明仍描述已删除的 Go / Rust 载体，改为一段「现状入口」（指向架构、CI 与发布、本计划），正文保留作历史。
   - `README.md`：「桌面 / 浏览器 / 手机共用同一份页面」与路线图里的手机访问改为「手机经服务器壳访问；桌面 Gateway 在计划中（本计划 G1-10 / G2-7）」。
   - `docs/design/acp-session-view.md` 首部加修订注：契约节改 §14、协议栈改依赖 `@armadra/agent/acp`、ama 行按 0.6.2；`docs/design/coordinator-agent.md` 首部加修订注：0.6.2、`HostApi.runners`、B4 改 ACP 形态；`docs/design/product-roadmap.md` 第三部分第一条按协调 Agent §1 改。
-  - 新建 `docs/status/completion-progress.md`：每个工作包一个 `## <包 id> <名>` 空节（39 个），各包合入时填「做了什么 / 实测 / 没做」。
+  - 新建 `docs/status/completion-progress.md`：每个工作包一个 `## <包 id> <名>` 空节（49 个），各包合入时填「做了什么 / 实测 / 没做」。
 - 文件：上述文件 + `docs/README.md`（登记进度文档；本计划与架构两份由协调者登记）。
 - 依赖：无。交付：`pnpm check` 通过（链接与登记）。外部条件：无。
 - dev-stack：无。
