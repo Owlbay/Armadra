@@ -782,7 +782,19 @@ async function runFull(options, result, record, out) {
           backend: session.backend,
           echoed: typed.ok,
           captured,
-          tail: typed.ok && captured ? undefined : typed.tail,
+          ...(typed.ok && captured
+            ? {}
+            : {
+                tail: typed.tail.slice(-600),
+                capture: {
+                  status: capture.status,
+                  lines: capture.body?.lines ?? null,
+                  tail:
+                    typeof capture.body?.data === "string"
+                      ? capture.body.data.slice(-600)
+                      : capture.body,
+                },
+              }),
         };
       }
       return {
@@ -902,10 +914,24 @@ async function runFull(options, result, record, out) {
           }
         }
         const values = Object.values(verdicts);
-        return {
-          ok: values.length > 0 && values.every((verdict) => verdict.ok),
-          detail: verdicts,
-        };
+        const ok = values.length > 0 && values.every((verdict) => verdict.ok);
+        if (!ok) {
+          // 失败时带上各终端此刻的屏幕尾部：启动器的报错就在那里。
+          for (const session of sessions) {
+            const capture = await app.api(
+              "GET",
+              `/api/terminals/${session.id}/capture?lines=40`,
+            );
+            verdicts[`${session.dialect}-screen`] = {
+              status: capture.status,
+              tail:
+                typeof capture.body?.data === "string"
+                  ? capture.body.data.slice(-800)
+                  : capture.body,
+            };
+          }
+        }
+        return { ok, detail: verdicts };
       });
       await record.check("launcher.credential", async () => {
         const tokens = Object.fromEntries(
