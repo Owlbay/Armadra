@@ -33,7 +33,9 @@ import { GatewayDevices, type GatewayDevice } from "./GatewayDevices";
 import { PairingCard } from "./PairingCard";
 
 const KNOWN_ERRORS = new Set([
-  "acme_unavailable",
+  "acme_misconfigured",
+  "acme_port_unavailable",
+  "acme_failed",
   "tls_files_missing",
   "port_in_use",
   "port_forbidden",

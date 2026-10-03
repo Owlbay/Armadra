@@ -6,6 +6,7 @@
 **/target
 **/coverage
 .git
+.github
 .claude
 docs
 apps/desktop/release

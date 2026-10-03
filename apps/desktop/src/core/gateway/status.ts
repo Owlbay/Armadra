@@ -1,3 +1,4 @@
+import type { AcmeStatus } from "./acme";
 import type { Gateway } from "./listener";
 import type { ListenMode } from "./network";
 import type { TlsMaterial } from "./tls";
@@ -33,6 +34,8 @@ export function statusJson(input: {
   readonly config: GatewayConfigView;
   readonly managedBy: "settings" | "shell";
   readonly gateway: Gateway | undefined;
+  /** ACME 来源在跑时它的续期状态；其余来源为 `undefined`。 */
+  readonly acme?: AcmeStatus | undefined;
   readonly error: GatewayFailure | undefined;
 }): Record<string, unknown> {
   const { config, gateway } = input;
@@ -60,6 +63,7 @@ export function statusJson(input: {
       names: tls === undefined ? [] : [...tls.names],
       notAfter: tls === undefined ? null : new Date(tls.notAfter).toISOString(),
       caAvailable: tls?.anchor !== undefined,
+      acme: input.acme ?? null,
     },
     error: input.error ?? null,
   };

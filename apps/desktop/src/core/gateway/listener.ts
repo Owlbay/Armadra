@@ -70,7 +70,7 @@ export interface GatewayOptions {
   readonly tls: {
     readonly certFile?: string | undefined;
     readonly keyFile?: string | undefined;
-    readonly generated: "selfSigned" | "localCa";
+    readonly generated: "selfSigned" | "localCa" | "acme";
   };
   readonly webRoot?: WebRoot | undefined;
   /** 配对出来的设备的缺省名字。 */
