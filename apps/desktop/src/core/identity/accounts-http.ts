@@ -54,8 +54,11 @@ export interface Answer {
 
 export interface AccountsHttpContext {
   readonly accounts: AccountsService;
-  /** 已认证的调用方；未认证时抛 `unauthenticated`。 */
-  readonly authenticate: () => Principal;
+  /**
+   * 已认证的调用方；未认证时抛 `unauthenticated`。`write` 为真时在 Cookie 会话上
+   * 还要核对 `X-Armadra-CSRF`（不对抛 `permission`）。
+   */
+  readonly authenticate: (write?: boolean) => Principal;
   /** 口令登录，落在同一张会话表上。 */
   readonly login: (input: {
     principalId: string;
@@ -113,6 +116,11 @@ export interface SecurityHttpContext {
   readonly service: IdentityService;
   /** 这次请求的凭据（含 CSRF）；需要会话的路由拿它认证。 */
   readonly actor: AccessRequest;
+  /**
+   * 写操作要不要核对 CSRF：Cookie 会话要，Bearer（桌面壳原生传输、原生 App）
+   * 不要（`identity/http.ts` 的 `csrfRequired`）。缺省要。
+   */
+  readonly csrf?: boolean;
   readonly hostId: string;
   readonly origin: string;
   readonly remoteIp: string;
@@ -139,12 +147,19 @@ export function notImplemented(feature: string): Answer {
 export function handleAccounts(
   action: string,
   request: CoreRequest,
-  context: AccountsHttpContext,
+  given: AccountsHttpContext,
 ): Answer | Promise<Answer> | undefined {
   const method = request.method.toUpperCase();
   const segments = action.split("/").filter((part) => part !== "");
   const head = segments[0] ?? "";
-  const security = context.security;
+  const security = given.security;
+  // 这一面每条要会话的写路由都经 `subject()` 认人：写方法在那里一并核对 CSRF，
+  // 不再由各条路由自己记得。
+  const write = method !== "GET" && method !== "HEAD";
+  const context: AccountsHttpContext = {
+    ...given,
+    authenticate: (force) => given.authenticate(force ?? write),
+  };
   switch (head) {
     case "principals":
       return principals(method, segments, request, context);
@@ -686,7 +701,7 @@ function me(
 ): Principal {
   return context.service.authenticate({
     ...context.actor,
-    requireCsrf: write,
+    requireCsrf: write && context.csrf !== false,
     ...(manage ? { requiredScopes: [scope("identity:manage")] } : {}),
   });
 }
@@ -1278,14 +1293,14 @@ function sessions(
     if (method !== "POST") return undefined;
     const revoked = context.service.revokeOtherSessions({
       ...context.actor,
-      requireCsrf: true,
+      requireCsrf: context.csrf !== false,
     });
     return { status: 200, body: { revoked } };
   }
   if (segments.length === 2 && method === "DELETE") {
     const sessionId = segments[1] as string;
     context.service.revokeSessionById(
-      { ...context.actor, requireCsrf: true },
+      { ...context.actor, requireCsrf: context.csrf !== false },
       sessionId,
     );
     return { status: 200, body: { sessionId, revoked: true } };

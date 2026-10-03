@@ -7,6 +7,7 @@ import { IdentityError, identityFailure } from "../errors";
 import {
   cookieName,
   credential,
+  csrfRequired,
   isSecure,
   nativeRequest,
   remoteAddress,
@@ -580,7 +581,8 @@ export class OAuthHttp {
       hostId,
       origin,
       csrfToken: single(request, "x-armadra-csrf") ?? "",
-      requireCsrf: write,
+      // Cookie 会话上的写要 CSRF；Bearer 传输不要（`identity/http.ts`）。
+      requireCsrf: write && csrfRequired(request),
       ...(manage ? { requiredScopes: [scope("identity:manage")] } : {}),
     };
   }

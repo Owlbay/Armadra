@@ -729,16 +729,22 @@ describe("会话列表与撤销（§18.4）", () => {
     ).toBe(401);
   });
 
-  it("写操作要 CSRF", async () => {
+  it("Bearer 传输的写不核对 CSRF（不是环境凭据）；Cookie 会话那一半在 gateway.integration", async () => {
     const fixture = await harness();
     const admin = await owner(fixture);
+    // 桌面壳与原生 App 的页面在 Bearer 传输上不发 CSRF 头（契约 §17.4）：
+    // 要求它只会让这两种传输上的每一次写都 403。
     const response = await call(
       fixture,
       "POST",
       "sessions/revoke-others",
       {},
-      { ...admin, csrfToken: "x".repeat(43) },
+      { ...admin, csrfToken: "" },
     );
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(200);
+    // 没有凭据仍是 401。
+    expect(
+      (await call(fixture, "POST", "sessions/revoke-others", {})).status,
+    ).toBe(401);
   });
 });

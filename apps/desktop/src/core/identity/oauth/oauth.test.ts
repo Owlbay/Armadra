@@ -129,15 +129,8 @@ describe("未配置（§18.5）", () => {
       callbackUrls: [`${ORIGIN}/api/identity/oauth/github/callback`],
     });
     expect(JSON.stringify(list)).not.toContain("s3cret");
-    // 没有 CSRF 的写拒绝；匿名拒绝。
-    const noCsrf = await call(
-      h,
-      "DELETE",
-      "oauth/providers/github/secret",
-      undefined,
-      { ...admin, csrfToken: "" },
-    );
-    expect(noCsrf.status).toBe(403);
+    // CSRF 只在 Cookie 会话上核对：这里的 owner 走 Bearer 传输
+    // （回环原生来源），Cookie 会话那一半在 `gateway.integration.test.ts`。
     const cleared = await call(
       h,
       "DELETE",

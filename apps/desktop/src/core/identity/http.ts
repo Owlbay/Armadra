@@ -83,6 +83,17 @@ export function nativeRequest(request: CoreRequest): boolean {
   return !isSecure(request) && origin !== undefined && nativeOrigin(origin);
 }
 
+/**
+ * 这次写请求要不要 `X-Armadra-CSRF`（契约 §3.2、§17.4）：凭据是 Cookie（浏览器
+ * 会话）时要——Cookie 是环境凭据，跨站页面发起的请求会自动带上它，双提交的那枚
+ * 密钥是唯一分得清「是不是这张页面」的东西；凭据是 `Authorization: Bearer`
+ * （桌面壳的原生传输、Gateway 的原生 App）时不要——跨站页面拿不到也带不上那个
+ * 头，页面在这两种传输上本来就不发 CSRF 头。
+ */
+export function csrfRequired(request: CoreRequest): boolean {
+  return !nativeRequest(request);
+}
+
 export function isSecure(request: CoreRequest): boolean {
   return (request.raw.socket as { encrypted?: boolean }).encrypted === true;
 }
@@ -246,6 +257,7 @@ export class IdentityHttp {
       origin,
       csrfToken,
     };
+    const csrf = csrfRequired(request);
     const remoteIp = remoteAddress(request);
     const userAgent = (header(request, "user-agent") ?? "").slice(0, 256);
     try {
@@ -363,7 +375,7 @@ export class IdentityHttp {
             throw new IdentityError("invalid");
           }
           this.service.revokeDevice(
-            { ...actor, requireCsrf: true },
+            { ...actor, requireCsrf: csrf },
             body.deviceId,
             body.expectedRevision,
           );
@@ -389,7 +401,12 @@ export class IdentityHttp {
               ? undefined
               : await handleAccounts(action, request, {
                   accounts,
-                  authenticate: () => this.service.authenticate(actor),
+                  // 写操作在 Cookie 会话上要 CSRF（契约 §10 与 §18 同一套）。
+                  authenticate: (write = false) =>
+                    this.service.authenticate({
+                      ...actor,
+                      requireCsrf: write && csrf,
+                    }),
                   login: (input) =>
                     issue(
                       this.service.loginWithPassword({
@@ -407,6 +424,7 @@ export class IdentityHttp {
                           security,
                           service: this.service,
                           actor,
+                          csrf,
                           hostId,
                           origin,
                           remoteIp,

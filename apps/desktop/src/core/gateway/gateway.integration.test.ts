@@ -500,3 +500,69 @@ describe("关掉即断流", () => {
     expect(reopened.tls.fingerprint).toBe(fingerprintOf(ca));
   });
 });
+
+describe("安全收尾（G3-8）", () => {
+  it("账号 / 组 / 共享的写路由在 Cookie 会话上要 CSRF（安全审查 M1）", async () => {
+    const withoutCsrf = (
+      method: string,
+      path: string,
+      body: unknown,
+    ): Promise<Answer> =>
+      remote(path, {
+        method,
+        body,
+        headers: { cookie: owner.cookie },
+      });
+    for (const [method, path, body] of [
+      ["POST", "/api/identity/principals", { displayName: "无 CSRF" }],
+      ["POST", "/api/identity/groups", { name: "无 CSRF" }],
+      ["POST", "/api/identity/invitations", { role: "viewer" }],
+      [
+        "PUT",
+        "/api/identity/grants",
+        {
+          workspaceId,
+          subjectKind: "principal",
+          subjectId: "0123456789abcdef0123456789abcdef",
+          role: "viewer",
+        },
+      ],
+    ] as const) {
+      const refused = await withoutCsrf(method, path, body);
+      expect(refused.status, `${method} ${path}`).toBe(403);
+    }
+    // 带上 CSRF 就过；读不要。
+    const created = await remote("/api/identity/groups", {
+      method: "POST",
+      person: owner,
+      body: { name: "带 CSRF" },
+    });
+    expect(created.status).toBe(201);
+    expect(
+      (
+        await remote("/api/identity/groups", {
+          headers: { cookie: owner.cookie },
+        })
+      ).status,
+    ).toBe(200);
+  });
+
+  it("原生 App 的 Bearer 写不要 CSRF（契约 §17.4）", async () => {
+    const payload = await pairing();
+    const paired = await remote("/api/identity/pair", {
+      method: "POST",
+      origin: APP,
+      body: { ticket: payload.ticket },
+    });
+    const bearer = (
+      JSON.parse(paired.body) as { native: { accessToken: string } }
+    ).native.accessToken;
+    const created = await remote("/api/identity/groups", {
+      method: "POST",
+      origin: APP,
+      bearer,
+      body: { name: "App" },
+    });
+    expect(created.status).toBe(201);
+  });
+});
