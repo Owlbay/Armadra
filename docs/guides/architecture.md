@@ -71,8 +71,10 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 对外只有 TLS 一个面，认证走设备配对与可撤销会话。对外的那一层（TLS、本地 CA、
 准入、CSP、页面托管、配对载荷）在 core 的 Gateway 域 `core/gateway/`：服务器壳的
 `serve` 只是「解析参数 → `openGateway`」，桌面壳按设置 `gateway.*` 开关同一个
-Gateway（契约 §17）。用法见
-[开发指南](development.md#无窗口服务器壳)，进度见
+Gateway（契约 §17）。证书来源四种：本地 CA、指定文件、自签名，以及 ACME
+（`core/gateway/acme.ts`：`http-01`、证书在 `<数据目录>/tls/acme/`、寿命过三分之二续期并
+热换、失败保留旧证书）。容器镜像在 `apps/server/docker/`。用法见
+[开发指南](development.md#无窗口服务器壳)与[服务器部署指南](server-deployment.md)，进度见
 [TypeScript Core 实施进度](../status/typescript-core-status.md) §11。
 
 `apps/push-relay` 是商店版 App 的最小推送中继（无状态，只转发端到端加密的信封），

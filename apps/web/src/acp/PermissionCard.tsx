@@ -3,6 +3,7 @@ import type { AcpPermissionOption } from "@armadra/shared";
 import { useT } from "@/app/preferences-store";
 import { useAgentStatusStore } from "@/agent/status-store";
 import { cn } from "@/lib/cn";
+import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { ButtonGroup } from "@/ui/button-group";
 import { Card } from "@/ui/card";
@@ -42,7 +43,8 @@ export function answerPermission(
 /**
  * `session/request_permission` 的卡片（设计系统 §5.1）：标题是工具调用，
  * 选项按 ACP 的 kind 分允许 / 拒绝两组，允许用 default、拒绝用 outline。
- * 没有答复权限的人只看得到标题。
+ * 没有答复权限的人（不是 driver、终端也不是自己起的，契约 §23）看到同一张卡，
+ * 按钮换成「等待接管」（设计系统 §5.8）。
  */
 export function PermissionCard({
   permission,
@@ -82,11 +84,15 @@ export function PermissionCard({
       )}
     >
       <span className="text-[13px]">{permission.toolCall.title}</span>
-      {canAnswer && (
+      {canAnswer ? (
         <div className="flex flex-wrap gap-2">
           {group(allow, true)}
           {group(reject, false)}
         </div>
+      ) : (
+        <Badge variant="outline" className="self-start">
+          {t("acp.permission.awaitingDriver")}
+        </Badge>
       )}
     </Card>
   );

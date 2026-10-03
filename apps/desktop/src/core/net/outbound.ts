@@ -140,6 +140,15 @@ export const OUTBOUND = {
     defaultOn: false,
     documented: true,
   },
+  acmeLetsEncrypt: {
+    // `ARMADRA_ACME_DIRECTORY` 可换成别的 CA（step-ca、ZeroSSL…）。
+    url: "https://acme-v02.api.letsencrypt.org/directory",
+    purpose: "Gateway 的 ACME 证书（签发与续期）",
+    cadence: "首签 + 证书寿命过去三分之二时续；失败按小时退避",
+    switch: null,
+    defaultOn: false,
+    documented: true,
+  },
   crashReport: {
     // 地址是用户填的 DSN（自托管 GlitchTip / Sentry 协议），这里只是占位主机。
     // 发的是壳（`main/diagnostics.ts`、`apps/server/src/diagnostics.ts`），core

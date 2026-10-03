@@ -22,6 +22,7 @@
 | [Agent 协作](guides/agent-collaboration.md)            | CLI 能力、上下文与消息箱协议             |
 | [界面规范](guides/ui-refinement.md)                    | 布局、交互与验收范围                     |
 | [客户端平台](guides/client-platforms.md)               | 各平台职责与适配边界                     |
+| [服务器部署](guides/server-deployment.md)              | 镜像、证书与 ACME、外网访问、备份升级    |
 | [原生白板参考](guides/native-whiteboard-references.md) | 原生对象作为 Agent 资料的规则            |
 
 代码边界与验证入口见[项目约定](../AGENTS.md)。

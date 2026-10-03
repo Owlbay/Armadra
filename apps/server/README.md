@@ -23,15 +23,18 @@ node apps/server/out/main.js --help
 ```
 
 子命令：`serve`、`install`、`uninstall`、`status`、`logs`、`upgrade`。监听非回环地址必须同时给
-`--public-origin`；不给证书时在 `<数据目录>/tls/` 生成自签名证书。完整参数与约束见
+`--public-origin`；不给证书时在 `<数据目录>/tls/` 生成自签名证书，`--acme <邮箱>` 则由 ACME（缺省
+Let's Encrypt）签发并自动续期。容器镜像在 [`docker/`](docker/README.md)，部署、证书、备份与升级见
+[服务器部署指南](../../docs/guides/server-deployment.md)。完整参数与约束见
 [开发指南 · 无窗口服务器壳](../../docs/guides/development.md#无窗口服务器壳)，账号模型见
 [服务器账号、中转与共享](../../docs/design/server-accounts-and-sharing.md)。
 
-| 文件           | 职责                                  |
-| -------------- | ------------------------------------- |
-| `src/cli.ts`   | 子命令与参数解析                      |
-| `src/serve.ts` | 装配 core，再调 core 的 `openGateway` |
-| `src/service/` | 服务定义生成、日志读取与升级          |
+| 文件           | 职责                                      |
+| -------------- | ----------------------------------------- |
+| `src/cli.ts`   | 子命令与参数解析                          |
+| `src/serve.ts` | 装配 core，再调 core 的 `openGateway`     |
+| `src/service/` | 服务定义生成、日志读取与升级              |
+| `docker/`      | 镜像、入口、健康检查、备份与 compose 示例 |
 
 TLS、准入（Cookie / Bearer、CSRF、Origin）、CSP 与页面托管在 core 的 Gateway 域
 `apps/desktop/src/core/gateway/`，桌面壳的对外服务用的是同一份。

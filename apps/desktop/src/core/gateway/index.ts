@@ -21,6 +21,12 @@ import { coreError } from "../http/errors";
 import type { CoreContext } from "../main";
 import { completionSettings, settingsDomain } from "../settings";
 import type { JsonObject } from "../settings/local";
+import {
+  AcmeError,
+  AcmeManager,
+  type AcmeManagerOptions,
+  acmeConfigFrom,
+} from "./acme";
 import { type Gateway, GatewayError, openGateway } from "./listener";
 import {
   type ListenMode,
@@ -58,10 +64,54 @@ export interface GatewayDomainOptions {
   /** 测试用：地址来源。 */
   readonly addresses?: () => { privates: string[]; all: string[] };
   readonly pollMs?: number;
+  /** 测试用：ACME 的签发器、时钟与计时器（`log` 由域自己给）。 */
+  readonly acme?: Omit<AcmeManagerOptions, "log">;
+}
+
+/**
+ * 按邮箱与对外来源开一个 ACME 管理器并拿到第一张证书（`./acme.ts`）。服务器壳
+ * 的 `--acme` 与桌面设置 `gateway.tls.source = "acme"` 走的都是它；之后
+ * `openGateway` 用 `tls.generated = "acme"` 读它写下的文件，续期后
+ * `gateway.refresh()` 热换。错误统一成 {@link GatewayError}。
+ */
+export async function startAcme(
+  context: CoreContext,
+  input: {
+    readonly email: string;
+    readonly publicOrigins: readonly string[];
+    readonly env?: NodeJS.ProcessEnv;
+  },
+  options: Omit<AcmeManagerOptions, "log"> = {},
+): Promise<AcmeManager> {
+  try {
+    const config = acmeConfigFrom({
+      email: input.email,
+      publicOrigins: input.publicOrigins,
+      env: input.env ?? process.env,
+    });
+    const manager = new AcmeManager(context.dataDir, config, {
+      log: context.log,
+      onAlert: (status) =>
+        context.log.error("ACME 续期已连续失败，仍在用旧证书", {
+          failures: status.failures,
+          notAfter: status.notAfter,
+          error: status.lastError?.message,
+        }),
+      ...options,
+    });
+    await manager.start();
+    return manager;
+  } catch (error) {
+    if (error instanceof AcmeError) {
+      throw new GatewayError(error.code, error.message);
+    }
+    throw error;
+  }
 }
 
 export class GatewayDomain {
   private current: Gateway | undefined;
+  private acme: AcmeManager | undefined;
   private managed = false;
   private failure: GatewayFailure | undefined;
   private queue: Promise<void> = Promise.resolve();
@@ -85,9 +135,10 @@ export class GatewayDomain {
   }
 
   /** 服务器壳把它打开的那个交给这里；之后设置不再驱动 Gateway。 */
-  adopt(gateway: Gateway): void {
+  adopt(gateway: Gateway, acme?: AcmeManager): void {
     this.managed = true;
     this.current = gateway;
+    this.acme = acme;
     this.failure = undefined;
   }
 
@@ -99,6 +150,7 @@ export class GatewayDomain {
         : config,
       managedBy: this.managed ? "shell" : "settings",
       gateway: this.current,
+      acme: this.acme?.status(),
       error: this.failure,
     });
   }
@@ -143,8 +195,11 @@ export class GatewayDomain {
     this.stopPolling();
     await this.queue;
     const gateway = this.current;
+    const acme = this.acme;
     this.current = undefined;
+    this.acme = undefined;
     await gateway?.close();
+    await acme?.close();
   }
 
   private async reconcileNow(): Promise<void> {
@@ -184,9 +239,6 @@ export class GatewayDomain {
 
   private async open(config: GatewayConfigView): Promise<Gateway> {
     const source = config.tls.source;
-    if (source === "acme") {
-      throw new GatewayError("acme_unavailable", "ACME 证书来源还没有实现");
-    }
     if (
       source === "file" &&
       (config.tls.certFile === "" || config.tls.keyFile === "")
@@ -203,23 +255,28 @@ export class GatewayDomain {
         all: interfaceAddresses(),
       };
     const webRoot = await (this.options.webRoot ?? defaultGatewayWebRoot)();
-    const gateway = await openGateway(this.context, {
-      listen: { host: bindHost(mode), port: config.port },
-      mode,
-      publicOrigins: config.publicOrigin === "" ? [] : [config.publicOrigin],
-      hosts: () => gatewayHosts(mode, addresses()),
-      privateAddresses: () => addresses().privates,
-      tls:
-        source === "file"
-          ? {
-              certFile: config.tls.certFile,
-              keyFile: config.tls.keyFile,
-              generated: "localCa",
-            }
-          : { generated: "localCa" },
-      webRoot,
-      deviceName: DEVICE_NAME,
-    });
+    const publicOrigins =
+      config.publicOrigin === "" ? [] : [config.publicOrigin];
+    // ACME 先签（或读出手里那张）再监听：签不出来就不开，原因进状态。
+    const acme =
+      source === "acme"
+        ? await startAcme(
+            this.context,
+            { email: config.tls.acmeEmail, publicOrigins },
+            this.options.acme,
+          )
+        : undefined;
+    let gateway: Gateway;
+    try {
+      gateway = await this.listen(config, mode, addresses, webRoot, acme);
+    } catch (error) {
+      await acme?.close();
+      throw error;
+    }
+    if (acme !== undefined) {
+      acme.onRenewed(() => gateway.refresh());
+      this.acme = acme;
+    }
     // 端口 0 = 首次由内核分配，写回设置固定下来：手机记住的地址下次还在。
     if (config.port === 0) {
       settingsDomain()?.settings.patch({
@@ -229,12 +286,44 @@ export class GatewayDomain {
     return gateway;
   }
 
+  private listen(
+    config: GatewayConfigView,
+    mode: ListenMode,
+    addresses: () => { privates: string[]; all: string[] },
+    webRoot: WebRoot | undefined,
+    acme: AcmeManager | undefined,
+  ): Promise<Gateway> {
+    const source = config.tls.source;
+    return openGateway(this.context, {
+      listen: { host: bindHost(mode), port: config.port },
+      mode,
+      publicOrigins: config.publicOrigin === "" ? [] : [config.publicOrigin],
+      hosts: () => gatewayHosts(mode, addresses()),
+      privateAddresses: () => addresses().privates,
+      tls:
+        acme !== undefined
+          ? { generated: "acme" }
+          : source === "file"
+            ? {
+                certFile: config.tls.certFile,
+                keyFile: config.tls.keyFile,
+                generated: "localCa",
+              }
+            : { generated: "localCa" },
+      webRoot,
+      deviceName: DEVICE_NAME,
+    });
+  }
+
   private async shut(): Promise<void> {
     this.stopPolling();
     const gateway = this.current;
+    const acme = this.acme;
     this.current = undefined;
+    this.acme = undefined;
     this.openedWith = "";
     await gateway?.close();
+    await acme?.close();
   }
 
   private startPolling(mode: ListenMode): void {

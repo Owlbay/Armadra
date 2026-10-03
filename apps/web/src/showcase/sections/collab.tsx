@@ -1,10 +1,21 @@
 import { CloudOff } from "lucide-react";
 
+import { PermissionCard } from "@/acp/PermissionCard";
 import { useT } from "@/app/preferences-store";
 import { RealtimePresenceView } from "@/canvas/PresenceBar";
 import { PeerCursor } from "@/realtime/CursorLayer";
 import { Alert, AlertTitle } from "@/ui/alert";
-import { memberColorVar } from "@/ui/member-dot";
+import { Badge } from "@/ui/badge";
+import { Button } from "@/ui/button";
+import { MemberDot, memberColorVar } from "@/ui/member-dot";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/select";
+import { Table, TableBody, TableCell, TableRow } from "@/ui/table";
 import { CommentComposer } from "@/realtime/comments/CommentComposer";
 import { CommentPin } from "@/realtime/comments/CommentPin";
 import { CommentThread } from "@/realtime/comments/CommentThread";
@@ -19,13 +30,17 @@ import {
   COMMENT_SELF,
   CURSOR_PEERS,
   PEER_SETS,
+  ROLE_MEMBERS,
 } from "../fixtures/collab";
+import { ACP_PERMISSION } from "../fixtures/acp";
 
 /**
  * `collab` 分区（设计展示页 §2.1，设计系统 §5.6）：实时板的在线条——头像
  * 堆叠 1 / 3 / 6 人、跟随中、只读、断开——成员光标与选区外框，以及「离线
  * 编辑」；评论（§5.7）：钉的四种样子、线程（可写 / 只读 / 离线）、输入框与
- * 评论抽屉（空态、有已解决的折叠区）。角色（§5.8）的样本由它的实现包加在后面。
+ * 评论抽屉（空态、有已解决的折叠区）；角色（§5.8，契约 §23）：成员表（可改 /
+ * 只读）与审批卡的三种看法——driver 答谁的都行、operator 答自己起的、operator
+ * 看别人起的只有「等待接管」。
  */
 const noop = () => undefined;
 
@@ -69,6 +84,60 @@ function SampleThread({
 
 const FRAME =
   "w-[320px] rounded-[var(--r-card)] border border-border bg-popover p-3";
+
+const ROLES = ["viewer", "editor", "operator", "driver"] as const;
+
+/** 成员表：头像 名字 · 角色 · 移除；`editable` 为假时角色列只读。 */
+function RoleTable({ editable }: { editable: boolean }) {
+  const t = useT();
+  return (
+    <Table>
+      <TableBody>
+        {ROLE_MEMBERS.map((member) => (
+          <TableRow key={member.name}>
+            <TableCell>
+              <span className="flex items-center gap-2">
+                <MemberDot index={member.color} name={member.name} />
+                {member.name}
+              </span>
+            </TableCell>
+            <TableCell>
+              {editable ? (
+                <Select value={member.role}>
+                  <SelectTrigger
+                    size="sm"
+                    className="w-[112px]"
+                    aria-label={t("sharing.role")}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ROLES.map((role) => (
+                      <SelectItem key={role} value={role}>
+                        {t(`sharing.role.${role}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Badge variant="outline">
+                  {t(`sharing.role.${member.role}`)}
+                </Badge>
+              )}
+            </TableCell>
+            {editable && (
+              <TableCell className="text-right">
+                <Button size="sm" variant="ghost" className="text-destructive">
+                  {t("sharing.share.remove")}
+                </Button>
+              </TableCell>
+            )}
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
 const BAR = "relative top-auto right-auto self-start";
 
 export default function CollabSection() {
@@ -227,6 +296,33 @@ export default function CollabSection() {
             />
           </div>
         ))}
+      </div>
+
+      <div className="flex flex-wrap items-start gap-4">
+        <div data-sample="roles-members" className="w-[400px]">
+          <RoleTable editable />
+        </div>
+        <div data-sample="roles-members-readonly" className="w-[320px]">
+          <RoleTable editable={false} />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-start gap-4">
+        <div data-sample="roles-approval-driver" className="w-[320px]">
+          <PermissionCard permission={ACP_PERMISSION} canAnswer />
+        </div>
+        <div data-sample="roles-approval-own" className="w-[320px]">
+          <PermissionCard
+            permission={{ ...ACP_PERMISSION, pendingId: "p-own" }}
+            canAnswer
+          />
+        </div>
+        <div data-sample="roles-approval-others" className="w-[320px]">
+          <PermissionCard
+            permission={{ ...ACP_PERMISSION, pendingId: "p-others" }}
+            canAnswer={false}
+          />
+        </div>
       </div>
     </div>
   );

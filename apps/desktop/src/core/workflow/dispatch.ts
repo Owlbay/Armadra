@@ -11,6 +11,7 @@ import type {
 } from "../canvas/document-types";
 import { loadBoard, saveBoard } from "../canvas/documents";
 import { newNode } from "../collab/control/board";
+import { recordNodeCreator, requestTrigger } from "../identity/creators";
 import { ensureWorktree } from "../collab/control/worktree";
 import type { Caller } from "../collab/nodes";
 import { asRefused } from "../collab/refusals";
@@ -101,9 +102,15 @@ export async function layoutRun(
     }
   }
 
+  // 创建者 = 触发者（契约 §23）：角色节点的终端不管由谁、从哪条路起，创建者
+  // 都是起跑的人——operator 起的运行，他自己驱动得了、审批得了。存盘之前记。
+  const trigger = requestTrigger();
   for (let attempt = 1; ; attempt += 1) {
     const document = loadBoard(collab.database, workspaceId, boardId);
     const built = build(document, request, cwds);
+    for (const nodeId of Object.values(built.layout.roles)) {
+      recordNodeCreator(collab.database, { nodeId, workspaceId }, trigger);
+    }
     try {
       const saved = saveBoard(collab.database, workspaceId, boardId, {
         expectedUpdatedAt: document.board.updatedAt,

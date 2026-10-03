@@ -4,7 +4,7 @@ import type { AcpSessionUpdate, TerminalNodeData } from "@armadra/shared";
 
 import { onWorkspaceConnection, onWorkspaceEvent } from "@/api/events";
 import { useT } from "@/app/preferences-store";
-import { useAccess } from "@/app/use-access";
+import { useCanAnswer } from "@/app/use-access";
 import { isResolvedApproval } from "@/agent/status-store";
 import { useCanvasStore } from "@/store/canvas-store";
 import { Alert, AlertAction, AlertTitle } from "@/ui/alert";
@@ -95,6 +95,19 @@ function useAcpSession(nodeId: string, data: TerminalNodeData) {
  * 读镜像、接活事件。先订阅再读：读回来之前到的分块已经写进了镜像（core 先写
  * 镜像再发事件），丢掉不画；工具调用按 id 合并，读回来之后再补一遍无妨。
  */
+/**
+ * 已经并进 store 的那几条事件（按对象认：同一条事件派给每个订阅者的是同一个
+ * 对象）。同一个节点可以同时挂两份会话视图——手机焦点页铺满屏幕时画布上那一份
+ * 还在——两份各自订阅，不去重的话每个分块都会被拼两遍。
+ */
+const applied = new WeakSet<object>();
+
+function firstTime(event: object): boolean {
+  if (applied.has(event)) return false;
+  applied.add(event);
+  return true;
+}
+
 function useAcpLog(sessionId: string | null, nodeId: string) {
   const [state, setState] = React.useState<LoadState>("loading");
   const [attempt, setAttempt] = React.useState(0);
@@ -104,16 +117,16 @@ function useAcpLog(sessionId: string | null, nodeId: string) {
     const store = useAcpStore.getState;
     let loaded = false;
     let cancelled = false;
-    const early: AcpSessionUpdate[] = [];
     setState("loading");
 
+    const early: { event: object; update: AcpSessionUpdate }[] = [];
     const offUpdate = onWorkspaceEvent("acp.update", (event) => {
       if (event.sessionId !== sessionId) return;
-      if (loaded) store().update(sessionId, event.update);
-      else early.push(event.update);
+      if (!loaded) early.push({ event, update: event.update });
+      else if (firstTime(event)) store().update(sessionId, event.update);
     });
     const offTurn = onWorkspaceEvent("acp.turn", (event) => {
-      if (event.sessionId !== sessionId) return;
+      if (event.sessionId !== sessionId || !firstTime(event)) return;
       store().end(sessionId, nodeId, event);
     });
     const offApproval = onWorkspaceEvent("agent.approval", (event) => {
@@ -132,9 +145,9 @@ function useAcpLog(sessionId: string | null, nodeId: string) {
         if (cancelled) return;
         store().hydrate(sessionId, nodeId, log);
         loaded = true;
-        for (const update of early) {
+        for (const { event, update } of early) {
           if (update.sessionUpdate.endsWith("_chunk")) continue;
-          store().update(sessionId, update);
+          if (firstTime(event)) store().update(sessionId, update);
         }
         early.length = 0;
         setState("ready");
@@ -204,9 +217,9 @@ export function SessionView({
 }) {
   const t = useT();
   const workspaceId = useCanvasStore((state) => state.workspace?.id ?? null);
-  const canAnswer = useAccess().can("approval:answer", workspaceId ?? "");
   const session = useAcpSession(nodeId, data);
   const sessionId = session.sessionId;
+  const canAnswer = useCanAnswer(workspaceId ?? "", sessionId);
   const log = useAcpLog(sessionId, nodeId);
   const connected = useConnected(workspaceId);
   const view = useAcpStore((state) =>
