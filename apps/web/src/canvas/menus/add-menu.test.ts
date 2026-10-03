@@ -147,10 +147,12 @@ describe("buildAddMenu", () => {
     state.document = { nodes: [] };
   });
 
-  it("按 §3.2 的顺序分组：终端 → Agent → 内容 → 画布动作", () => {
+  // ACP 设计 §8：「新建 Agent…」排在最前，自成一组（不带组标题）。
+  it("按 §3.2 的顺序分组：新建 Agent… → 终端 → Agent → 内容 → 画布动作", () => {
     const groups = buildAddMenu([claude], t).map((item) => item.group);
-    expect(groups[0]).toBe("terminal");
-    expect(groups[1]).toBe("agent");
+    expect(groups[0]).toBe("start");
+    expect(groups[1]).toBe("terminal");
+    expect(groups[2]).toBe("agent");
     expect(groups.at(-1)).toBe("canvas");
     // 每个组只出现一段，不会被别的组打断（渲染时按 group 变化插分隔线）。
     expect(new Set(groups).size).toBe(
@@ -196,6 +198,30 @@ describe("buildAddMenu", () => {
     const item = itemById("add.agent.claude");
     expect(item.label).toBe("Claude Code");
     expect(item.color).toBe("#d97757");
+  });
+
+  it("Agent 项按缺省驱动写明驱动方式：适配器没装的这一家退回终端", () => {
+    itemById("add.agent.claude").run(ctx);
+    expect(
+      (addNode.mock.calls.at(-1) as unknown[] | undefined)?.[1],
+    ).toMatchObject({
+      data: { agent: { id: "claude", driver: "terminal" } },
+    });
+    const withAcp = {
+      ...claude,
+      acp: {
+        support: "official",
+        program: "claude-agent-acp",
+        installed: true,
+        resume: "load",
+      },
+    } as AgentInfo;
+    itemById("add.agent.claude", [withAcp]).run({ ...ctx, agents: [withAcp] });
+    expect(
+      (addNode.mock.calls.at(-1) as unknown[] | undefined)?.[1],
+    ).toMatchObject({
+      data: { agent: { id: "claude", driver: "acp" } },
+    });
   });
 
   it("探测不到可执行文件的 Agent 禁用而不隐藏", () => {

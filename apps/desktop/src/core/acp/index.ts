@@ -33,6 +33,16 @@ export {
   AcpProcess,
 } from "./client";
 export {
+  type AcpSessionOpener,
+  type AcpStdioMcpServer,
+  CANVAS_MCP_NAME,
+  type CanvasMcpInput,
+  acpMcpServers,
+  canvasMcpServer,
+  clientAcceptsMcpServers,
+  sessionOpener,
+} from "./mcp";
+export {
   type AcpCapabilities,
   type AcpHostSession,
   type AcpStartOptions,

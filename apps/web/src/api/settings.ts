@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  type AgentDriver,
   TERMINAL_BACKEND_CHOICES,
   answerSshPromptRequestSchema,
   customAgentSchema,
@@ -214,7 +215,8 @@ export interface RuntimeSettingsPatch {
   workspaces?: Record<string, { defaultAgent?: string | null }>;
   /** 数组是整段替换（Runtime 的 merge 只对对象递归），删主机就是发新数组。 */
   ssh?: { hosts: SshHost[] };
-  agents?: { custom: CustomAgent[] };
+  /** `defaultDriver`：新建 Agent 节点缺省走会话视图还是终端（ACP 设计 §8）。 */
+  agents?: { custom?: CustomAgent[]; defaultDriver?: AgentDriver };
   hooks?: { replyApprovals?: boolean };
   usage?: {
     enabled?: boolean;

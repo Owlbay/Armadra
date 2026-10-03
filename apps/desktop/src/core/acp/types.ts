@@ -10,6 +10,7 @@ export type {
   AcpImplementationInfo,
   AcpInitializeResult,
   AcpLoadSessionResult,
+  AcpMcpServer,
   AcpNewSessionResult,
   AcpPermissionOption,
   AcpPermissionOptionKind,
