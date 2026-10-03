@@ -390,9 +390,16 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   `ELECTRON_RUN_AS_NODE` 子进程，封与解经 fork 的 IPC 通道问主进程的 `safeStorage`
   （`main/secrets.ts`，`dpapi` / `libsecret`；Linux 的 `basic_text` / `unknown` 当作
   没有钥匙串）；服务器壳用 `<数据目录>/secrets/master.key` 做 AES-256-GCM
-  （`file-encrypted`）；其余与 `ARMADRA_SECRET_BACKEND=file` 是 0600 明文（`file`）。
+  （`file-encrypted`，探针可用 `ARMADRA_SECRET_BACKEND=file-encrypted` 指定）；其余与
+  `ARMADRA_SECRET_BACKEND=file` 是 0600 明文（`file`）。
   壳说了要用 `safeStorage` 而通道不在时拒绝，不降级成明文。旧名字的条目第一次读写时
   一次性迁移，记录在 `secrets/migrated.json`。设置页只显示种类。
+- 节点凭据（`core/agent/credentials/`，契约 §20）：条目在 `agent_credentials` 表，值在
+  SecretStore `armadra-credential-<ref>`；`kind → 变量名` 由 core 写死。起终端时
+  `terminal/install.ts::ownedEnvironment` 校验 `credentialRef`，节点 shell 的环境里只有条目名
+  `ARMADRA_CREDENTIAL_REF`；CLI 启动时 POSIX 启动器 `run/<cli>` 调 `armadra-hook credential`
+  经本机 hook 面 `POST /credential`（节点 token）现取，只在自己的进程里设变量再 `exec`。
+  `file` 后端、SSH 节点与 Windows 拒绝。
 - 服务器壳默认不监听非回环地址，对外服务是显式动作；它的配对码不可复用，
   token 不出现在 URL 里，撤销设备后正在进行的流立即终止。
 - 服务器壳认证出的主体经 `AsyncLocalStorage` 跟着请求走（`core/identity/gate.ts` 的
@@ -412,8 +419,11 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
 - **Windows 持久化会话**：session host 已实现并在 Windows CI 上通过，没有在真机上
   长时间运行过（进度 §13、§33）。启动行方言、`.cmd` 绕过与 `.exe` 启动器同样只在
   Windows CI 上跑过（进度 §54、§57、§61）。
-- **多人实时协同**：同一块板同时只有一个写者（§5 的编辑租约）；白板快照对 core 是
-  不透明字符串，真要多人同时改时再引入 CRDT。
+- **多人实时协同**：core 侧已实现（`core/realtime/`，契约 §16.1–§16.2）：每块板
+  一个 `Y.Doc`，快照 + 更新流是实时板的真相，表由物化得来；core 自己的写者经
+  `saveBoard` 前的拦截写进文档；设置 `collab.realtime`（缺省开）关掉时退回租约模式。
+  页面侧（Yjs 绑定、`Y.UndoManager`、光标层）与评论路由尚未实现（G2-5、G2-6），在那之
+  前页面仍走 §5 的编辑租约。
 - **自动更新**：electron-updater 已接通（`apps/desktop/src/main/updates/`），但未
   签名的构建里更新器是关闭的——「没签名 = 什么也验证不了 = `notConfigured`」，
   它绝不会报 `upToDate`（`shell-core/updates/availability.ts`）。
