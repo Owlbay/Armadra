@@ -52,3 +52,7 @@ overrides:
   # GHSA-hxh3-vqpv-xpqv: hono before 4.13.7. Pulled in by shadcn's
   # @modelcontextprotocol/sdk (directly and via @hono/node-server).
   "hono@<4.13.7": 4.13.7
+  # GHSA-hrr3-gc8f-f4qj: fast-uri 3.x before 3.1.8. Pulled in through ajv 8 by
+  # shadcn (@modelcontextprotocol/sdk, @dotenvx/dotenvx's conf) and by
+  # electron-builder's app-builder-lib.
+  "fast-uri@>=3.0.0 <3.1.8": 3.1.8
