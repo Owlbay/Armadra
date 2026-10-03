@@ -232,3 +232,36 @@ describe("file attachments", () => {
     expect(image.style.backgroundImage).toContain("repeating-conic-gradient");
   });
 });
+
+describe("load states", () => {
+  it("says the read failed and reads again on retry", async () => {
+    usePreferencesStore.setState({ locale: "zh-CN" });
+    fileInfo.mockReset().mockRejectedValueOnce(new Error("offline"));
+    fileInfo.mockResolvedValue({
+      path: "docs/a.pdf",
+      name: "a.pdf",
+      size: 10,
+      mimeType: "application/pdf",
+      preview: "download",
+    });
+    render(
+      <EditorNode
+        id="node"
+        selected={false}
+        collapsed={false}
+        focused={false}
+        node={
+          {
+            title: "a.pdf",
+            data: { kind: "editor", path: "docs/a.pdf" },
+          } as never
+        }
+      />,
+    );
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("读取失败");
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("link", { name: "下载文件" })).toBeTruthy();
+    expect(fileInfo).toHaveBeenCalledTimes(2);
+  });
+});

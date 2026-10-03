@@ -57,7 +57,12 @@ import { SettingsRow } from "../SettingsRow";
 import { useRuntimeSettings } from "../use-runtime-settings";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/ui/dialog";
+import {
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -628,19 +633,19 @@ export function KeybindingsPage() {
         </SettingsGroup>
       ))}
 
-      <Dialog
+      <ResponsiveDialog
         open={editingWhen !== null}
         onOpenChange={(open) => !open && setEditingWhen(null)}
       >
-        <DialogContent className="z-[var(--z-dialog)] sm:max-w-[460px]">
-          <DialogHeader>
-            <DialogTitle>
+        <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[460px]">
+          <ResponsiveDialogHeader>
+            <ResponsiveDialogTitle>
               {editingWhen &&
                 t("settings.shortcut.when.title", {
                   command: t(COMMAND_BY_ID[editingWhen.id].labelKey),
                 })}
-            </DialogTitle>
-          </DialogHeader>
+            </ResponsiveDialogTitle>
+          </ResponsiveDialogHeader>
           <Input
             aria-label={t("settings.shortcut.when")}
             aria-invalid={whenCheck !== null}
@@ -693,17 +698,19 @@ export function KeybindingsPage() {
               {t("settings.shortcut.when.save")}
             </Button>
           </div>
-        </DialogContent>
-      </Dialog>
+        </ResponsiveDialogContent>
+      </ResponsiveDialog>
 
-      <Dialog
+      <ResponsiveDialog
         open={naming !== null}
         onOpenChange={(open) => !open && setNaming(null)}
       >
-        <DialogContent className="z-[var(--z-dialog)] sm:max-w-[420px]">
-          <DialogHeader>
-            <DialogTitle>{t("settings.shortcut.profile.create")}</DialogTitle>
-          </DialogHeader>
+        <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[420px]">
+          <ResponsiveDialogHeader>
+            <ResponsiveDialogTitle>
+              {t("settings.shortcut.profile.create")}
+            </ResponsiveDialogTitle>
+          </ResponsiveDialogHeader>
           <Input
             aria-label={t("settings.shortcut.profile.create")}
             value={naming ?? ""}
@@ -728,17 +735,19 @@ export function KeybindingsPage() {
               {t("settings.shortcut.profile.create")}
             </Button>
           </div>
-        </DialogContent>
-      </Dialog>
+        </ResponsiveDialogContent>
+      </ResponsiveDialog>
 
-      <Dialog
+      <ResponsiveDialog
         open={transfer !== null}
         onOpenChange={(open) => !open && setTransfer(null)}
       >
-        <DialogContent className="z-[var(--z-dialog)] sm:max-w-[520px]">
-          <DialogHeader>
-            <DialogTitle>{t("settings.shortcut.transfer")}</DialogTitle>
-          </DialogHeader>
+        <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[520px]">
+          <ResponsiveDialogHeader>
+            <ResponsiveDialogTitle>
+              {t("settings.shortcut.transfer")}
+            </ResponsiveDialogTitle>
+          </ResponsiveDialogHeader>
           <p className="text-[13px] text-muted-foreground">
             {t("settings.shortcut.transfer.note")}
           </p>
@@ -761,8 +770,8 @@ export function KeybindingsPage() {
               {t("settings.shortcut.import.apply")}
             </Button>
           </div>
-        </DialogContent>
-      </Dialog>
+        </ResponsiveDialogContent>
+      </ResponsiveDialog>
     </>
   );
 }

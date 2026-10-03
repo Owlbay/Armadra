@@ -36,6 +36,7 @@ import {
   privateAddresses,
 } from "./network";
 import { pairingJson } from "./pairing";
+import { audit } from "../identity/audit";
 import {
   GATEWAY_MANAGED,
   GATEWAY_NOT_RUNNING,
@@ -170,6 +171,22 @@ export class GatewayDomain {
     }
     settings.patch({ gateway: patch });
     await this.reconcile();
+    // 开关与对外面的变化进审计（架构 §8.1）：只记改了哪些键与改成什么，证书
+    // 与私钥的文件路径不记。
+    audit({
+      action: "gateway.configure",
+      detail: {
+        keys: Object.keys(patch).sort(),
+        ...(typeof patch.enabled === "boolean"
+          ? { enabled: patch.enabled }
+          : {}),
+        ...(typeof patch.listen === "string" ? { listen: patch.listen } : {}),
+        ...(typeof patch.publicOrigin === "string"
+          ? { publicOrigin: patch.publicOrigin }
+          : {}),
+        running: this.current !== undefined,
+      },
+    });
     return undefined;
   }
 
@@ -180,7 +197,13 @@ export class GatewayDomain {
     const gateway = this.current;
     if (gateway === undefined) return GATEWAY_NOT_RUNNING;
     try {
-      return pairingJson(gateway.pair(input));
+      const issued = gateway.pair(input);
+      // 票本身不进审计：它两分钟内就能换出一台 owner 设备。
+      audit({
+        action: "gateway.pairing.issue",
+        detail: { origin: issued.origin, expiresAtMs: issued.expiresAtMs },
+      });
+      return pairingJson(issued);
     } catch (error) {
       if (error instanceof GatewayError) {
         return coreError(400, error.code, error.message);

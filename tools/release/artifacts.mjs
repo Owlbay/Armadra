@@ -37,6 +37,21 @@ export function webAsset(version) {
 }
 
 /**
+ * 手机壳的产物（补全架构 §10，计划 G3-1）：夜间作业产出的 debug APK 与 iOS 模拟器
+ * `.app`（zip）。都不签名、不进更新清单（App 没有自更新，商店分发要用户的证书），
+ * 名字没有 `<os>-<arch>` 目标段，只给人装来试。
+ */
+export function mobileAssets(version) {
+  return [
+    { name: `armadra-mobile_${version}_android-debug.apk`, kind: "apk" },
+    {
+      name: `armadra-mobile_${version}_ios-simulator.app.zip`,
+      kind: "simulator-app",
+    },
+  ];
+}
+
+/**
  * electron-updater 的「通道」名：桌面壳下载前设 `autoUpdater.channel` 为它。
  *
  * 一次发布把六个目标的产物放进同一个扁平目录，而 electron-builder 的清单名只按
@@ -83,7 +98,11 @@ export function assetComponent(name) {
   if (feedTarget(name) !== "") return "manifest";
   const separator = name.indexOf("_");
   if (separator < 0) return "";
-  const prefixes = { Armadra: "desktop", "armadra-web": "web" };
+  const prefixes = {
+    Armadra: "desktop",
+    "armadra-web": "web",
+    "armadra-mobile": "mobile",
+  };
   return prefixes[name.slice(0, separator)] ?? "";
 }
 

@@ -4,12 +4,12 @@ import type { CanvasEdgeRole, CanvasNode } from "@armadra/shared";
 import { useT } from "@/app/preferences-store";
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Input } from "@/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/ui/toggle-group";
 import { useCanvasStore } from "@/store/canvas-store";
@@ -132,11 +132,14 @@ export function NodeNameDialog() {
   };
 
   return (
-    <Dialog open={editing.length > 0} onOpenChange={(open) => !open && close()}>
-      <DialogContent className="z-[var(--z-dialog)]">
-        <DialogHeader>
-          <DialogTitle>{t("node.name.title")}</DialogTitle>
-        </DialogHeader>
+    <ResponsiveDialog
+      open={editing.length > 0}
+      onOpenChange={(open) => !open && close()}
+    >
+      <ResponsiveDialogContent className="z-[var(--z-dialog)]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{t("node.name.title")}</ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
         <form
           className="flex flex-col gap-3"
           onSubmit={(event) => {
@@ -205,16 +208,16 @@ export function NodeNameDialog() {
               </ToggleGroup>
             </div>
           )}
-          <DialogFooter>
+          <ResponsiveDialogFooter>
             <Button type="button" variant="ghost" onClick={close}>
               {t("node.name.skip")}
             </Button>
             <Button type="submit" disabled={!ready}>
               {t("dialog.confirm")}
             </Button>
-          </DialogFooter>
+          </ResponsiveDialogFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

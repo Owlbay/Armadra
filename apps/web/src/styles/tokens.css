@@ -16,8 +16,8 @@
  *   CLI 生成的、且要求原样保留，这里就以 shadcn 语义为准：
  *     品牌蓝  → `--brand`（并映射到 shadcn 的 `--primary`）
  *     次要文字 → `--muted-foreground`
- *   `--accent-text` / `--accent-soft` 这两个旧名字保留为品牌色的别名，
- *   给尚未删除的 `styles/*.css` 用，Phase 1 删旧样式表时一并删掉。
+ *   旧别名 `--accent-text` / `--accent-soft` 已删除（设计系统 §7 第 11 步），
+ *   品牌色一律用 `--brand-text` / `--brand-soft`。
  */
 
 :root {
@@ -311,10 +311,6 @@
   --sidebar-accent-foreground: var(--accent-foreground);
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
-
-  /* 旧样式表（styles/*.css）用的名字，Phase 1 删除它们时一并删掉 */
-  --accent-text: var(--brand-text);
-  --accent-soft: var(--brand-soft);
 
   color: var(--text);
   background: var(--bg);

@@ -3,7 +3,12 @@ import type { IdentitySessionRow, Lockout } from "@armadra/shared";
 import { Globe, Laptop, Smartphone } from "lucide-react";
 
 import { useT } from "../../../../app/preferences-store";
-import { ConfirmRemove, SecuritySection, useDateTime } from "./parts";
+import {
+  ConfirmRemove,
+  SecuritySection,
+  SecuritySectionSkeleton,
+  useDateTime,
+} from "./parts";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { Spinner } from "@/ui/spinner";
@@ -30,6 +35,7 @@ export function SessionList({
   onEveryone,
   onRevoke,
   onRevokeOthers,
+  loading = false,
 }: {
   sessions: readonly IdentitySessionRow[] | undefined;
   everyone: boolean;
@@ -41,13 +47,18 @@ export function SessionList({
   onEveryone(value: boolean): void;
   onRevoke(session: IdentitySessionRow): void;
   onRevokeOthers(): void;
+  /** 第一次取数中（还没有 `sessions`）。 */
+  loading?: boolean;
 }) {
   const t = useT();
   const when = useDateTime();
   const [confirm, setConfirm] = React.useState<
     IdentitySessionRow | "others" | null
   >(null);
-  if (sessions === undefined) return null;
+  if (sessions === undefined)
+    return loading ? (
+      <SecuritySectionSkeleton title={t("security.sessions")} />
+    ) : null;
   const others = sessions.some((session) => !session.current && !everyone);
   const ordered = [...sessions].sort(
     (a, b) =>

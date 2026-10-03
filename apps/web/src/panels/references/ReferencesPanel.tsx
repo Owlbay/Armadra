@@ -12,6 +12,7 @@ import { Badge } from "@/ui/badge";
 import { IconButton } from "@/ui/icon-button";
 import { ScrollArea } from "@/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/ui/sheet";
+import { Button } from "@/ui/button";
 
 /**
  * 引用面板（语言服务设计 §1.1「符号」、§4.2 `ReferencesPanel.tsx`）。
@@ -105,10 +106,12 @@ function Group({ group }: { group: ReferenceGroup }) {
   const toggle = useReferencesStore((state) => state.toggle);
   return (
     <div className="min-w-0">
-      <button
+      <Button
+        variant="ghost"
+        size="xs"
         type="button"
         aria-expanded={!collapsed}
-        className="flex w-full min-w-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 py-0.5 text-left hover:bg-[var(--hover)]"
+        className="flex h-auto w-full justify-start font-normal min-w-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 py-0.5 text-left hover:bg-[var(--hover)]"
         onClick={() => toggle(group.uri)}
       >
         {collapsed ? (
@@ -122,7 +125,7 @@ function Group({ group }: { group: ReferenceGroup }) {
         <span className="shrink-0 text-[length:var(--text-caption)] text-muted-foreground">
           {group.locations.length}
         </span>
-      </button>
+      </Button>
       {!collapsed && (
         <ul className="flex flex-col">
           {group.locations.map((location, index) => {
@@ -130,13 +133,15 @@ function Group({ group }: { group: ReferenceGroup }) {
             const line = location.line + 1;
             return (
               <li key={`${location.line}:${location.character}:${index}`}>
-                <button
+                <Button
+                  variant="ghost"
+                  size="xs"
                   type="button"
                   aria-label={t("references.open", {
                     path: group.path,
                     line: String(line),
                   })}
-                  className="flex w-full min-w-0 items-start gap-2 rounded-[var(--radius-sm)] px-1 py-0.5 text-left hover:bg-[var(--hover)]"
+                  className="flex h-auto w-full justify-start font-normal min-w-0 items-start gap-2 rounded-[var(--radius-sm)] px-1 py-0.5 text-left hover:bg-[var(--hover)]"
                   onClick={() => openFileInEditor(group.path, { line })}
                 >
                   <span className="w-8 shrink-0 text-right font-mono text-[length:var(--text-caption)] tabular-nums text-muted-foreground">
@@ -145,7 +150,7 @@ function Group({ group }: { group: ReferenceGroup }) {
                   <span className="min-w-0 flex-1 truncate font-mono text-[11px]">
                     {location.preview ?? ""}
                   </span>
-                </button>
+                </Button>
               </li>
             );
           })}

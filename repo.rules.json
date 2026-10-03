@@ -49,6 +49,11 @@
       "directory": "packages",
       "manifest": "package.json",
       "prefix": "@armadra/"
+    },
+    {
+      "directory": "apps",
+      "manifest": "package.json",
+      "prefix": "@armadra/"
     }
   ],
   "fileSize": {

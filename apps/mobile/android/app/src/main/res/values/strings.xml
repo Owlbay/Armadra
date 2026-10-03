@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Armadra</string>
+    <string name="title_activity_main">Armadra</string>
+    <string name="package_name">dev.armadra.mobile</string>
+    <string name="custom_url_scheme">dev.armadra.mobile</string>
+    <string name="notification_channel">Armadra</string>
+    <string name="push_fallback_title">Armadra</string>
+    <string name="push_fallback_body">New notification</string>
+</resources>

@@ -231,11 +231,19 @@ export function install(context: CoreContext): void {
           // An SVG is served as an image and must never be sniffed into a
           // document; the header costs nothing on the other seven types.
           "x-content-type-options": "nosniff",
+          // 直接导航到这个地址时，一张带脚本的 SVG 会作为文档在 core（或
+          // Gateway）的来源上运行。`sandbox` 把它放进不透明来源、脚本一行不跑；
+          // 经 `<img>` 显示时这条头不起作用（安全审查 2026-10 的 H3）。
+          "content-security-policy": ASSET_CSP,
         },
       };
     }),
   );
 }
+
+/** 资产答案的 CSP：图片用不到任何来源，文档化的 SVG 什么都做不了。 */
+export const ASSET_CSP =
+  "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox";
 
 async function readRemoteAsset(
   workspace: { readonly rootPath: string; readonly executionHostId?: string },

@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM"],
+    "types": ["node", "vitest/globals"],
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": [
+    "src/**/*.ts",
+    "capacitor.config.ts",
+    "vitest.config.mts",
+    "../web/src/platform/*.d.ts"
+  ],
+  "exclude": ["node_modules", "www", "ios", "android"]
+}

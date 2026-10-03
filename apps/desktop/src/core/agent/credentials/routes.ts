@@ -3,6 +3,7 @@ import type { CoreServer } from "../../http/server";
 import { CredentialError, type CredentialsDomain } from "./index";
 import { kindRow } from "./inject";
 import type { CredentialRow } from "./store";
+import { audit } from "../../identity/audit";
 
 /**
  * `/api/credentials*`（契约 §20.2）。只有 owner（路由门按全局 `settings:*`）。
@@ -80,6 +81,12 @@ export function installRoutes(
       label,
       value,
     });
+    // 审计只记条目名与种类，值一个字节都不进（契约 §20）。
+    audit({
+      action: "credential.create",
+      target: created.ref,
+      detail: { providerId, kind },
+    });
     return { status: 201, body: await entry(domain, created) };
   });
 
@@ -103,11 +110,17 @@ export function installRoutes(
       ...(value === undefined ? {} : { value }),
     });
     if (updated === undefined) throw notFound();
+    audit({
+      action: "credential.update",
+      target: updated.ref,
+      detail: { label: label !== undefined, value: value !== undefined },
+    });
     return { status: 200, body: await entry(domain, updated) };
   });
 
   handle("DELETE", "/api/credentials/{ref}", async (params) => {
     if (!(await domain.store.remove(params.ref ?? ""))) throw notFound();
+    audit({ action: "credential.delete", target: params.ref ?? "" });
     return { status: 204 };
   });
 }

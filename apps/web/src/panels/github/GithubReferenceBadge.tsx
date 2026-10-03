@@ -2,6 +2,7 @@ import { Badge } from "@/ui/badge";
 import { useT } from "@/app/preferences-store";
 import { openGithubPanel } from "./open";
 import { referenceTab, useGithubReferences } from "./references";
+import { Button } from "@/ui/button";
 
 /**
  * The GitHub items linked to a terminal or frame node (canvas platform §4).
@@ -22,7 +23,9 @@ export function GithubReferenceBadge({ nodeId }: { nodeId: string }) {
           variant="outline"
           className="cursor-pointer"
         >
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             type="button"
             title={reference.title || t("github.reference.open")}
             aria-label={t("github.reference.open")}
@@ -32,7 +35,7 @@ export function GithubReferenceBadge({ nodeId }: { nodeId: string }) {
             }}
           >
             #{String(reference.number)}
-          </button>
+          </Button>
         </Badge>
       ))}
     </>

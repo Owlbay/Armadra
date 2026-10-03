@@ -34,6 +34,8 @@ export const VERSION_SITES = [
   { path: "package.json", kind: "json" },
   { path: "apps/desktop/package.json", kind: "json" },
   { path: "apps/server/package.json", kind: "json" },
+  // 手机壳随桌面 / 服务器一起发（补全架构 §10）；Android 的版本名从这里读。
+  { path: "apps/mobile/package.json", kind: "json" },
 ];
 
 const JSON_VERSION = /^(\s*"version"\s*:\s*")([^"]*)(")/m;

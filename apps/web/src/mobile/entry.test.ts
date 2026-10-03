@@ -88,4 +88,28 @@ describe("入口分支", () => {
       expect.objectContaining({ origin: "https://h:8443" }),
     );
   });
+
+  it("原生 App：配对深链（#link=）→ 连接页预填链接，片段随即抹掉", async () => {
+    mocks.app = true;
+    mocks.saved = "https://h:8443";
+    mocks.restored = true;
+    const link = "armadra://pair?host=192.168.1.20%3A8443&ticket=t&fp=f";
+    history.replaceState(null, "", `/#link=${encodeURIComponent(link)}`);
+    await expect(prepareEntry()).resolves.toEqual({
+      kind: "connect",
+      mode: "native",
+      origin: "https://h:8443",
+      link,
+    });
+    expect(location.hash).toBe("");
+    expect(mocks.install).not.toHaveBeenCalled();
+
+    // 别的链接不当配对链接用：照常进画布。
+    history.replaceState(
+      null,
+      "",
+      `/#link=${encodeURIComponent("https://evil.example/#pair=x")}`,
+    );
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+  });
 });

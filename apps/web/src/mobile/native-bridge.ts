@@ -59,7 +59,8 @@ interface ArmadraNativePlugin {
   pushRegistration?(): Promise<unknown>;
 }
 
-const SECRET = /^[A-Za-z0-9_-]{43}$/;
+/** 会话密钥：`<32 位十六进制标识>.<43 位 base64url>`（core `identity/tokens.ts::parseToken`）。 */
+const SESSION_TOKEN = /^[0-9a-f]{32}\.[A-Za-z0-9_-]{43}$/;
 const FINGERPRINT = /^[0-9a-f]{64}$/;
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 
@@ -85,8 +86,8 @@ function storedSession(value: unknown): StoredSession | null {
     typeof origin !== "string" ||
     typeof accessToken !== "string" ||
     typeof refreshToken !== "string" ||
-    !SECRET.test(accessToken) ||
-    !SECRET.test(refreshToken)
+    !SESSION_TOKEN.test(accessToken) ||
+    !SESSION_TOKEN.test(refreshToken)
   )
     return null;
   return { origin, accessToken, refreshToken };

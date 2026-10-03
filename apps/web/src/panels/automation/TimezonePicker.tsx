@@ -13,6 +13,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui/popover";
 
 import { timezoneOptions } from "./model";
+import { COMMAND_INPUT_FOCUS } from "../tabs-focus";
 
 /**
  * 计划表单的时区选择（§58）。
@@ -128,6 +129,7 @@ function TimezoneList({
   return (
     <Command shouldFilter={false} className="rounded-lg!">
       <CommandInput
+        className={COMMAND_INPUT_FOCUS}
         placeholder={t("automation.wizard.timezoneSearch")}
         value={query}
         onValueChange={onQueryChange}

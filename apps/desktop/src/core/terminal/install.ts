@@ -1,4 +1,6 @@
 import { resolve } from "node:path";
+import { allows } from "../identity/gate";
+import { scope } from "../identity/scopes";
 import { VERSION } from "../instance";
 import type { CoreContext } from "../main";
 import { settingsDomain } from "../settings";
@@ -314,6 +316,23 @@ export function install(
     options: { readonly acp?: boolean } = {},
   ) => {
     const acp = options.acp === true;
+    const bound =
+      credential === undefined
+        ? persistedBinding(context.db.database, nodeId).ref
+        : undefined;
+    // 节点凭据是 owner 的账号（契约 §20.3）：共享角色里没有 `credential:use`，
+    // 成员起的终端 / ACP 会话不能带上它——否则节点 shell 经 hook 面就能把值
+    // 兑换出来。本机壳与 core 自己的动作没有请求身份，问到的是 owner，照旧。
+    if (
+      (credential?.requested ?? bound) !== undefined &&
+      !allows([scope("credential:use")])
+    ) {
+      throw new TerminalError(
+        403,
+        "credential_forbidden",
+        "Launching with a node credential requires credential:use",
+      );
+    }
     let credentialEnv: readonly (readonly [string, string])[];
     try {
       credentialEnv = credentials.environment(
@@ -321,9 +340,7 @@ export function install(
         agentId,
         ssh,
         credential?.requested,
-        credential === undefined
-          ? persistedBinding(context.db.database, nodeId).ref
-          : undefined,
+        bound,
       );
     } catch (failure) {
       if (failure instanceof CredentialError) {

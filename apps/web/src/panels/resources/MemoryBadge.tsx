@@ -24,6 +24,7 @@ import { formatMetricBytes, formatPercent, UNKNOWN } from "./metrics";
 import { claimAlert, crossedThreshold } from "./memory-alert";
 import { useSessionResources } from "./use-resources";
 import { useOnScreen, usePageVisible } from "./use-visibility";
+import { Button } from "@/ui/button";
 
 export interface MemoryBadgeProps {
   nodeId: string;
@@ -99,19 +100,21 @@ export function MemoryBadge({
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button
+        <Button
+          variant="ghost"
+          size="xs"
           ref={anchor}
           type="button"
           data-testid={`memory-badge-${nodeId}`}
           data-over={over ? "true" : undefined}
-          className={`flex min-h-6 shrink-0 items-center gap-1 rounded px-1 text-[length:var(--text-caption)] tabular-nums hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring ${
+          className={`flex h-auto min-h-6 shrink-0 items-center gap-1 rounded px-1 text-[length:var(--text-caption)] font-normal tabular-nums hover:bg-accent ${
             over ? "text-[var(--danger-text)]" : "text-muted-foreground"
           }`}
           aria-label={t("resources.memory.badge", { value: label })}
           onPointerDown={(event) => event.stopPropagation()}
         >
           <span className="whitespace-nowrap">{label}</span>
-        </button>
+        </Button>
       </PopoverTrigger>
       <PopoverContent
         className="w-72 max-w-[calc(100vw-1rem)] text-xs"

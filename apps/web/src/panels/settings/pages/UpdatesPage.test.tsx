@@ -312,6 +312,31 @@ describe("UpdatesPage", () => {
     expect(updates.cancel).toHaveBeenCalled();
   });
 
+  it("draws the transfer as a progress bar beside the byte count", async () => {
+    draw(
+      {
+        state: "downloading",
+        offer,
+        receivedBytes: 1_048_576,
+        totalBytes: 4_194_304,
+      },
+      answered("available"),
+    );
+    expect(
+      await screen.findByRole("progressbar", { name: "已下载" }),
+    ).toBeTruthy();
+  });
+
+  it("puts a failed install in a destructive alert with retry", async () => {
+    draw(
+      { state: "failed", reason: "digestMismatch", offer },
+      answered("available"),
+    );
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("更新失败");
+    expect(screen.getByRole("button", { name: "重试" })).toBeTruthy();
+  });
+
   it("shows the transfer as bytes rather than a fraction of nothing", async () => {
     draw(
       { state: "downloading", offer, receivedBytes: 1_048_576, totalBytes: 0 },

@@ -155,9 +155,11 @@ function ImagePreview({
                     maxWidth: "none",
                   }
                 : {}),
-              // 透明区域的棋盘格：两种表面色交替，深浅主题都跟着 token 走。
+              // 透明区域的棋盘格：卡片底与它掺 10% 前景色交替，深浅主题都跟着
+              // token 走。以前用 --surface-deep / --surface-raised 两档表面，
+              // 浅色下两者只差 2/255，几乎看不出格子（G0-4 截图发现）。
               backgroundImage:
-                "repeating-conic-gradient(var(--surface-deep) 0 25%, var(--surface-raised) 0 50%)",
+                "repeating-conic-gradient(var(--card) 0 25%, color-mix(in oklab, var(--card), var(--foreground) 10%) 0 50%)",
               backgroundSize: "16px 16px",
               imageRendering:
                 zoom.mode === "scale" && zoom.scale >= 4

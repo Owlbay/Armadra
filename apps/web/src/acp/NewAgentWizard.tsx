@@ -11,11 +11,16 @@ import { usePreferencesStore, useT } from "@/app/preferences-store";
 import { useAgentsQuery } from "@/app/use-agents";
 import { revealCreatedNode } from "@/canvas/created-node";
 import { nodeDropPosition } from "@/canvas/placement";
+import {
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { useCompactLayout } from "@/platform/layout";
 import { useCanvasStore } from "@/store/canvas-store";
 import { AgentAvatar } from "@/ui/agent-avatar";
 import { Button } from "@/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/ui/dialog";
 import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from "@/ui/empty";
 import { Field, FieldError, FieldLabel } from "@/ui/field";
 import { Label } from "@/ui/label";
@@ -27,7 +32,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/ui/select";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/ui/sheet";
 import { Textarea } from "@/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/ui/toggle-group";
 import { acpApi } from "./api";
@@ -485,31 +489,19 @@ export function NewAgentWizard() {
     if (!next) closeNewAgentWizard();
   };
 
-  if (compact) {
-    return (
-      <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent
-          side="bottom"
-          className="h-[100dvh] gap-4 p-4"
-          aria-describedby={undefined}
-        >
-          <SheetHeader className="p-0">
-            <SheetTitle>{t("wizard.title")}</SheetTitle>
-          </SheetHeader>
-          {body}
-        </SheetContent>
-      </Sheet>
-    );
-  }
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[560px]" aria-describedby={undefined}>
-        <DialogHeader>
-          <DialogTitle>{t("wizard.title")}</DialogTitle>
-        </DialogHeader>
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent
+        // 手机上整高（设计系统 §5.3），桌面 560 宽。
+        className={compact ? "h-[calc(100dvh-48px)]" : "sm:max-w-[560px]"}
+        aria-describedby={undefined}
+      >
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{t("wizard.title")}</ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
         {body}
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 

@@ -8,12 +8,12 @@ import { useT } from "@/app/preferences-store";
 import { useAccess } from "@/app/use-access";
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Input } from "@/ui/input";
 
 /**
@@ -105,16 +105,19 @@ export function SshPromptDialog() {
   );
 
   return (
-    <Dialog
+    <ResponsiveDialog
       open={Boolean(current)}
       onOpenChange={(next) => {
         if (!next) cancel();
       }}
     >
-      <DialogContent className="z-[var(--z-dialog)]" showCloseButton={false}>
-        <DialogHeader>
-          <DialogTitle>{t("ssh.prompt.title")}</DialogTitle>
-        </DialogHeader>
+      <ResponsiveDialogContent
+        className="z-[var(--z-dialog)]"
+        showCloseButton={false}
+      >
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{t("ssh.prompt.title")}</ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
         <form className="flex flex-col gap-3" onSubmit={submit}>
           <p className="text-xs text-muted-foreground">
             {`${t("ssh.prompt.host")} · ${current?.hostId ?? ""}`}
@@ -131,16 +134,16 @@ export function SshPromptDialog() {
             disabled={sending}
             onChange={(event) => setAnswer(event.target.value)}
           />
-          <DialogFooter>
+          <ResponsiveDialogFooter>
             <Button type="button" variant="ghost" size="sm" onClick={cancel}>
               {t("ssh.prompt.cancel")}
             </Button>
             <Button type="submit" size="sm" disabled={sending}>
               {t("ssh.prompt.submit")}
             </Button>
-          </DialogFooter>
+          </ResponsiveDialogFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

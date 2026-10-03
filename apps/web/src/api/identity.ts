@@ -361,10 +361,22 @@ export async function identityRequest<T>(
   options: Omit<CallOptions, "refreshBearer" | "text"> = {},
 ): Promise<T> {
   const method = options.method ?? "GET";
-  if (!bearerTransport() && method !== "GET" && !options.anonymous) {
-    await ensureCsrf();
+  if (bearerTransport() || method === "GET" || options.anonymous) {
+    return call(action, schema, options);
   }
-  return call(action, schema, options);
+  const used = await ensureCsrf();
+  try {
+    return await call(action, schema, options);
+  } catch (error) {
+    // 令牌被别处换掉（另一个标签页、换过 CSRF 的脚本）时 403：换一枚重发一次，
+    // 与 `api/request.ts` 同一个做法。请求没进处理逻辑，不会执行两次。
+    if (!(error instanceof IdentityRequestError) || error.status !== 403) {
+      throw error;
+    }
+    const renewed = await replaceRejectedCsrf(used);
+    if (!renewed || renewed === used) throw error;
+    return call(action, schema, options);
+  }
 }
 
 /** 同一条传输取一份文本答案（审计导出的 CSV）。 */

@@ -76,6 +76,8 @@ export const showcase: MessageModule = {
     "showcase.tone.paused": "已暂停",
     "showcase.tone.unread": "未读",
     "showcase.tone.idle": "空闲",
+    "showcase.tone.done": "已完成",
+    "showcase.coordinator.members": "{count} 成员",
   },
   en: {
     "showcase.title": "Design showcase",
@@ -145,5 +147,7 @@ export const showcase: MessageModule = {
     "showcase.tone.paused": "Paused",
     "showcase.tone.unread": "Unread",
     "showcase.tone.idle": "Idle",
+    "showcase.tone.done": "Done",
+    "showcase.coordinator.members": "{count} members",
   },
 };
