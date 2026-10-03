@@ -351,7 +351,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 10. 账号、组、邀请与共享：`/api/identity/*` 的管理面
 
-规格是 [服务器账号与共享](../design/server-accounts-and-sharing.md) §3；实现在 `core/identity/accounts-http.ts`。和 §3 同一个前缀、同一套认证（Origin、写操作的 CSRF、会话凭据）；失败的 `code` 是身份域的 UPPER_SNAKE（`UNAUTHENTICATED` / `PERMISSION_DENIED` / `INVALID_ARGUMENT` / `NOT_FOUND` / `CONFLICT`），做不到的是 501 `NOT_IMPLEMENTED`。
+规格是 [服务器账号与共享](../design/server-accounts-and-sharing.md) §3；实现在 `core/identity/accounts-http.ts`。和 §3 同一个前缀、同一套认证（Origin、写操作的 CSRF、会话凭据）；CSRF 只在 Cookie 会话上核对——凭据是 `Authorization: Bearer` 的请求（桌面壳的原生传输、Gateway 的原生 App，§17.4）不是环境凭据，不要求也不核对 `X-Armadra-CSRF`。下表每一条非 `GET` 的路由都是写。失败的 `code` 是身份域的 UPPER_SNAKE（`UNAUTHENTICATED` / `PERMISSION_DENIED` / `INVALID_ARGUMENT` / `NOT_FOUND` / `CONFLICT`），做不到的是 501 `NOT_IMPLEMENTED`。
 
 | 方法与路径                                                                                                                                         | 谁能调                                                                                                                            | 答案                                                                                                                                   |
 | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1153,11 +1153,14 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 
 - `GET /ca.crt`：匿名，`application/x-x509-ca-cert`，PEM。本地 CA 时是 CA；服务器壳的自签名证书是它自己；指定文件时是链文件里的最后一张，只有一张时 404 `ca_unavailable`。只在 Gateway 上，core 的回环监听没有它。
 - 来源是 `capacitor://localhost` 或 `https://localhost`（且不在 `origins` 里）的请求走 **Bearer 模式**：会话绑定的来源是 App 连上的 Gateway 来源 `https://<Host>`（必须在 `origins` 里，否则 403）；凭据只认 `Authorization: Bearer <访问密钥>`，Cookie 不看、没有 CSRF；`POST /api/identity/pair`、`/session/refresh` 与登录把密钥放在响应体的 `native` 里、不发 Cookie（与桌面壳的原生传输同一形状，§3）；CORS 只回 App 自己的来源，预检放行 `authorization, content-type, x-armadra-csrf`。
+- **响应头**（`core/gateway/csp.ts`）：经 Gateway 的每个答案都带 `Strict-Transport-Security: max-age=31536000`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`；`/api/**` 与 `/health` 再带 `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; sandbox`、`X-Frame-Options: DENY`，以及缺省的 `Cache-Control: no-store`（答案自己写了缓存策略时以它为准，如资产）。静态产物用页面的 CSP（`serverContentSecurityPolicy`）。画布资产（`GET …/assets/{assetId}`）无论经不经 Gateway 都带 `default-src 'none'; …; sandbox`：直接导航到一张 SVG 时它是一份沙箱里的文档，脚本不跑。
+- **原生 App 包里页面的 CSP**（`nativeAppContentSecurityPolicy()`）：桌面那一份摘掉回环授权，`connect-src` 加 `https: wss:`、`img-src` / `media-src` 加 `https:`（Gateway 地址配对前未知，证书由原生层钉扎）；其余逐字继承。
+- **长连接复核**：经 Gateway 升级的流（事件、实时同步、终端、语言服务、浏览器画面）在授权变化（撤销设备或会话、登出、停用账号、收回共享）时按同一道路由门、用复核后的主体再判一次，不过即以 **4403** 关流（`core/http/server.ts`）。
 - `POST /api/identity/ws-ticket`（只在 Gateway 的 Bearer 模式下）：要 Bearer 会话，回 `{ "ticket": string, "expiresAt": string }`，票 30 秒、一次性、只在内存里。浏览器 WebSocket 带不了头，App 升级时在 `Sec-WebSocket-Protocol` 里带 `armadra-ticket.<票>`，服务端回同一个子协议。Cookie 模式请求它答 400 `bearer_required`。
 
 ## 18. 身份扩展：口令策略、passkey、MFA、会话、OAuth、审计
 
-规格是 [补全架构](../design/completion-architecture.md) §8.3；实现在 `core/identity/`（`policy.ts`、`throttle.ts`、`passkey.ts`、`mfa/`，路由在 `accounts-http.ts`），形状的 zod 在 `packages/shared/src/api/identity-security.ts`。和 §10 同一个前缀、同一套认证（Origin、会话凭据；下面标「写」的要 `X-Armadra-CSRF`）。整段 `/api/identity/` 不经路由门（`core/http/route-scopes.ts` 的 `SELF_GUARDED`），本人与 `identity:manage` 的判定在身份域里。
+规格是 [补全架构](../design/completion-architecture.md) §8.3；实现在 `core/identity/`（`policy.ts`、`throttle.ts`、`passkey.ts`、`mfa/`，路由在 `accounts-http.ts`），形状的 zod 在 `packages/shared/src/api/identity-security.ts`。和 §10 同一个前缀、同一套认证（Origin、会话凭据；下面标「写」的在 Cookie 会话上要 `X-Armadra-CSRF`，Bearer 传输不要）。整段 `/api/identity/` 不经路由门（`core/http/route-scopes.ts` 的 `SELF_GUARDED`），本人与 `identity:manage` 的判定在身份域里。
 
 **错误码**：身份域原有的五种仍是 UPPER_SNAKE（`UNAUTHENTICATED` / `PERMISSION_DENIED` / `INVALID_ARGUMENT` / `NOT_FOUND` / `CONFLICT`）；本节新增的具名拒绝是 snake_case，页面按 `code` 选文案。错误体只有 `{ code, message }`。迁移是 `identity_hardening`（`identity_credentials` 加 `sign_count / aaguid / transports_json / label`，新表 `identity_mfa`、`identity_recovery_codes`、`identity_lockouts`，`identity_sessions` 加 `last_seen_at_ms / remote_ip / user_agent`）。
 
@@ -1171,9 +1174,19 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 | `password_too_long`      | UTF-8 超过 1024 字节                                                               |
 | `password_contains_name` | 含显示名或 principal 标识（不分大小写；三个字符以下的名字不参与）                  |
 | `password_too_common`    | 在随包的常见口令表（`core/identity/common-passwords.txt`，1 万条）里，小写精确比对 |
-| `password_breached`      | 泄露检查命中（`identity.breachCheck`，G3-8 实现；调用点已在，今天恒为未检查）      |
+| `password_breached`      | 泄露检查命中，且 `identity.breachCheck` 是 `block`（见下）                         |
 
-登录类请求（`login`、`mfa/verify`、`passkey/login/*`、`register`）的限流与锁定，HTTP 429，带 `Retry-After`（秒）：
+**泄露检查**（`identity.breachCheck`，`core/identity/policy.ts`）：HIBP Pwned Passwords 的 k-匿名范围接口，只发 SHA-1 的前 5 位，带 `Add-Padding: true`，次数为 0 的填充行不算命中；4 秒超时。`auto`（缺省）在服务器壳与开了 Gateway 的桌面上按 `warn`，其余按 `off`。
+
+| 档位    | 命中时                                                                         | 查不成（离线、超时、非 200）                         |
+| ------- | ------------------------------------------------------------------------------ | ---------------------------------------------------- |
+| `off`   | 不发请求                                                                       | —                                                    |
+| `warn`  | 照常设，答案多一个 `passwordBreached: true`；审计 `identity.password.breached` | 照常设；审计 `identity.password.breach_check_failed` |
+| `block` | 400 `password_breached`，不设；审计 `identity.password.breached`               | 同 `warn`：不阻止设口令，只记审计                    |
+
+审计的 `detail` 只有 `{ mode, ip }`，口令与哈希都不进。地址可用 `ARMADRA_HIBP_BASE` 换成 dev-stack 的 `hibp` fixture（出站表 `core/net/outbound.ts` 的 `hibpRange`）。
+
+登录类请求（`login`、`mfa/verify`、`passkey/login/*`、`register`）的限流与锁定，HTTP 429，带 `Retry-After`（秒）。凭据换会话的那几条（`pair`、`session/refresh`、`session/csrf`、`session/logout`）共用同一个来源地址的桶，但**只有失败才扣**、桶空时同样答 429 `rate_limited`——它们的凭据是 256 位随机串，限的是撒网猜票，不让一台 NAT 后的多人互相挤掉刷新：
 
 | `code`           | 什么时候                                                                                                                                          |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1493,6 +1506,9 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 | 400  | `credential_kind_disabled`    | 条目的 `kind` 在 §20.1 里是 `enabled: false`        |
 | 400  | `credential_unsupported_here` | SSH 节点（凭据在控制端，不经 SSH 下发），或 Windows |
 | 409  | `credential_backend_insecure` | 这台主机的密钥后端自报 `file`                       |
+| 403  | `credential_forbidden`        | 请求者没有全局 `credential:use`（服务器壳上的成员） |
+
+`credential_forbidden` 不只看请求体：没给 `credentialRef` 而节点数据里绑着一条时（ACP 会话、依赖编排在这次请求里替节点起终端），成员同样被拒。凭据是 owner 的账号，共享角色里没有 `credential:use`；本机壳与 core 自己的动作没有请求身份，按 owner 判。
 
 通过后节点终端的环境里只多一个变量 `ARMADRA_CREDENTIAL_REF=<ref>`（名字，不是值）。依赖编排、冷启动与节能唤醒没有请求体，读节点数据里的绑定照样带上这个变量；那里不预先校验，绑定失效时由 §20.4 拒绝、启动器拒绝起 CLI，而不是悄悄用默认登录。
 

@@ -614,7 +614,21 @@
 
 ## G3-8 安全收尾：泄露检查、公网加固、安全审查
 
-未开始。
+**做了什么**
+
+- 泄露检查：`identity/policy.ts::checkBreach` 走 HIBP k-匿名范围接口（只发 SHA-1 前 5 位、`Add-Padding`、填充行不算命中、4 秒超时）；`identity.breachCheck` 的 `auto` 在服务器壳与开了 Gateway 的桌面上按 `warn`；`warn` 命中照设并在答案里带 `passwordBreached: true`，`block` 答 400 `password_breached`，查不成只记审计不阻止。出站表加 `hibpRange`，`ARMADRA_HIBP_BASE` 指向 fixture。契约 §18.1。
+- 安全审查：[安全审查 2026-10](security-review-2026-10.md)。中危及以上 9 条全部修复并有测试：跨画布节点（H1）、成员起终端带 owner 的节点凭据（H2，新码 `credential_forbidden`，契约 §20.3）、资产 SVG 同源导航执行（H3）、账号写路由的 CSRF（M1）、Bearer 上的 CSRF 规则统一为「只在 Cookie 会话上核对」（M2）、已升级的流在授权变化后复核并以 4403 关（M3）、配对 / 刷新 / 换 CSRF / 登出按失败限流（M4）、Gateway 开关与配对票、节点凭据、ama 密钥进审计（M5）、Gateway 响应头与原生 App 的 CSP 放行表（M6）。低危 10 条与一条设计约束只列出。
+- 路由 scope 覆盖率补上整段接管的前缀（`main.test.ts`）；`docs/guides/architecture.md` §7 按架构 §8.1 写信任边界；契约 §10、§17.4、§18、§18.1、§20.3。
+
+**实测**
+
+- 单测与集成：`policy.test`（对进程内 hibp fixture 的三档、离线 / 超时 / 非 200 / 认不出）、`security-http.test`（三档经 HTTP、离线只记审计、限流只扣失败）、`gateway.integration.test`（Cookie 会话上的账号写要 CSRF、App 的 Bearer 写不要、响应头、审计）、`server-revoke.test`、`route-access.test`、`credentials.test`、`ama-credentials.test`、`assets/routes.test`、`csp.test`、`server-report.test`。
+- dev-stack：`pnpm dev-stack up hibp` 后 `ARMADRA_DEV_STACK=1` 跑 `policy.devstack.integration.test.ts` 通过。
+
+**没做**
+
+- 页面上口令策略拒绝码与 `warn` 档的提示（安全审查 L7）；GitHub / 自动化两面对 Bearer 写仍要 CSRF（L8）；其余低危见审查 §3。
+- 原生 App 的 CSP 只给出策略（`nativeAppContentSecurityPolicy()`，契约 §17.4），写进 `apps/mobile` 包里页面归 G3-1。
 
 ## G3-9 分发渠道与许可证声明（W-DIST + W-NOTICES）
 
