@@ -780,7 +780,37 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 
 ## 22. 投递画面门补充
 
-预留，由 G1-3 填写。
+画面门（[投递设计](../design/agent-delivery.md) §4.3「画面门」）的判据在 `core/agent/screen-gate.ts`，「取画面 → 判定 → 退回理由」在 `core/collab/screen.ts::checkScreen`；`send`（§12）与计划投递共用这一份。线上没有新路由，变化只在理由码与判据。
+
+**计划投递**（`core/schedule/dispatch.ts`）：Agent 目标的探测在状态、半截输入、冷启动之后再过画面门；停在对话框上、或首投时看不见提示符，探测答 `busy` 并带 `reason: "TARGET_NOT_AT_PROMPT"`。运行进 `WAITING_TARGET`，`reasonCode` 记探测给的理由（没有理由仍是 `TARGET_NOT_IDLE`，理由变了跟着改写），下一拍再探；写入前的复核退回时收据是 `NOT_DISPATCHED` + `TARGET_NOT_AT_PROMPT`（其余仍是 `TARGET_NOT_READY`）。「首投」= 没有一条晚于冷启动、来自 `hook` / `extension` / `acp` 的回合结束上报（`idle` / `done` / `error`）。
+
+**判据**：
+
+- 只看最后 60 行，按位置判：对话框特征或选择菜单出现在最后一处提示符**之后**才拦；一行同时像提示符和对话框按对话框算。
+- 选择菜单（通用，id `<cli>.unrecognized-menu`）：高亮的编号选项（`❯ 1.` / `› 2.` / `> 1.`），或页脚 `Enter to confirm` / `Esc to cancel` / `enter continue · esc …` / `Press Enter to continue` / `[y/N]`。只对有画面特征的 CLI 生效。
+- 对话框特征不论 `verified` 都用；提示符特征只用 `verified: true` 的（没核实的提示符不要求，以免永远投不进去）。没有对话框、也没有核实过的提示符的 CLI 不取画面。
+
+**对话框 id**（`verified` 为真 = 对过本机安装包字符串或实际画面）：
+
+| id                                  | verified | 出处                                       |
+| ----------------------------------- | -------- | ------------------------------------------ |
+| `claude.workspace-trust`            | 是       | Claude Code 2.1.286 安装包字符串           |
+| `claude.bypass-permissions-warning` | 是       | 同上                                       |
+| `claude.auto-mode-default`          | 是       | 同上与本机画面                             |
+| `codex.folder-trust`                | 是       | Codex 0.159.3 画面、0.160.0 安装包字符串   |
+| `codex.update`                      | 是       | 两种形态：0.155.1 画面、0.160.0 「✨」横幅 |
+| `codex.hooks-review`                | 是       | Codex 0.160.0 安装包字符串                 |
+| `codex.model-migration`             | 是       | 同上                                       |
+| `codex.sign-in`                     | 是       | 同上                                       |
+| `codex.rate-limit-switch`           | 是       | 同上                                       |
+| `codex.full-access-warning`         | 是       | 同上                                       |
+| `codex.mcp-install`                 | 是       | 同上                                       |
+| `codex.database-rebuilt`            | 是       | 同上                                       |
+| `copilot.folder-trust`              | 否       | GitHub 官方文档，本机未安装                |
+| `pi.project-trust`                  | 是       | Pi 1.0.0 安装包字符串                      |
+| `omp.project-trust`                 | 否       | 按同源的 Pi 推断，本机未安装               |
+
+提示符：Claude（单独一个 `❯`、`? for shortcuts`、`(shift+tab to cycle)`）与 Codex（`›` 后面不是编号，也不是 `Waiting for startup` / `Resuming session` / `Forking session`）已核实；Copilot、Pi、OMP、OpenCode 不登记。OpenCode 官方文档没有启动对话框，整条门不跑。
 
 ## 23. 权限补充：自己创建的终端与工作流关卡
 
