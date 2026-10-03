@@ -28,11 +28,21 @@
 //      的结果回到模型 → 模型 ack 并把结果汇总进便签。
 //   断言：成员节点与连线、`workflow_task_runs` 一行 done 且带结果、task 结果与
 //   便签里是假 CLI 回报的正文。
-import { execFile, execFileSync, spawn } from "node:child_process";
+//
+// 真模型（`--real-model`，C 档，`ARMADRA_E2E_REAL=1`）：同一条闭环交给真模型走。
+// 供应商与 key 从环境变量读（`ARMADRA_E2E_AMA_PROVIDER`，缺省 deepseek；
+// `ARMADRA_E2E_AMA_MODEL`，缺省 deepseek-chat；`ARMADRA_E2E_AMA_KEY` 必填；可选
+// `ARMADRA_E2E_AMA_BASE_URL`），key 照样只经 core 的密钥后端兑换给 ama。用户的话
+// 写成明确的指令（成员一律用假 CLI `custom:taskecho`），断言放宽到画布上的结果：
+// 两个成员与边、两条结论都 ack、汇总便签、`task` 跑完一行；看不到模型请求的那
+// 几条（工具表、请求头、画布外对照）不判。成员与派任务都不是真 CLI：这套 core
+// 的 PATH 最前面是一组替身（`blockRealClis`），任何节点想起 claude / codex 等都
+// 会被拦下并记进报告。`--real-model --self-test` 用脚本化模型冒充真供应商，走一
+// 遍这条路径本身。
+import { execFile, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
-  createWriteStream,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -46,14 +56,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import { CREDENTIAL_VARIABLES, probeHome } from "../probe-home.mjs";
 import { mockModelServer } from "./mock-model.mjs";
 import {
+  blockRealClis,
+  canvasAsIn,
   cleanups,
   note,
   output,
+  realModel,
+  report,
+  requireReal,
   root,
   scenario,
+  selfTest,
   sleep,
+  startIsolatedCore,
   waitFor,
 } from "./lib.mjs";
 
@@ -135,6 +153,45 @@ function inboxText(messages) {
     .join("\n");
 }
 const PROMPT = "让 A 审查 src/x，B 审查 src/y，汇总到便签";
+/**
+ * 真模型版的用户的话：同一件事，写成真模型照着做就能走到断言的指令。仍含「审查」
+ * （`--self-test` 时脚本化模型按它起团队）。
+ */
+const REAL_PROMPT = [
+  "让 A 审查 src/x，B 审查 src/y，汇总到便签。具体做法：",
+  "1. 调一次 canvas_team 建两个成员，agent 一律用 custom:taskecho，标题分别是 reviewer-a 与 reviewer-b，任务写「审查 src/x」「审查 src/y」；建完回一句话就结束这一轮，不要等待。",
+  "2. 之后你会被唤醒：调 canvas_inbox 读结论，每条用 canvas_ack 确认，再用 canvas_sticky 写一张标题是「审查汇总」、内容以「汇总：」开头的便签。",
+  "3. 如果收件箱里有「派任务」的信：调 task 工具，agent=custom:taskecho，prompt 用信里给的那句，等它的结果；然后 ack 那封信，用 canvas_sticky 写一张标题是「任务汇总」、内容以「任务汇总：」开头并附上结果原文的便签。",
+  "全程不要调用别的 Agent 或 shell 命令。",
+].join(" ");
+const REAL_DISPATCH = `派任务：请调用 task 工具，agent=custom:taskecho，prompt=「${TASK_PROMPT}」，拿到结果后写进「任务汇总」便签。`;
+
+/**
+ * 真模型的配置。`--self-test` 时把脚本化模型当作「真供应商」（`baseUrl` 指到它），
+ * 其余照真跑那条路走。答 `{ provider, model, key, baseUrl? }`。
+ */
+function realModelConfig(mock) {
+  if (selfTest)
+    return {
+      provider: "deepseek",
+      model: "mock-coordinator",
+      key: FAKE_KEY,
+      baseUrl: mock.baseUrl,
+    };
+  const key = process.env.ARMADRA_E2E_AMA_KEY;
+  if (!key)
+    throw new Error(
+      "--real-model 要 ARMADRA_E2E_AMA_KEY（供应商的 API key，只经 core 的临时文件密钥后端兑换给 ama，跑完随临时目录删除）",
+    );
+  return {
+    provider: process.env.ARMADRA_E2E_AMA_PROVIDER || "deepseek",
+    model: process.env.ARMADRA_E2E_AMA_MODEL || "deepseek-chat",
+    key,
+    ...(process.env.ARMADRA_E2E_AMA_BASE_URL
+      ? { baseUrl: process.env.ARMADRA_E2E_AMA_BASE_URL }
+      : {}),
+  };
+}
 const SUMMARY = "汇总：A 说 x 没问题；B 说 y 要补测试。";
 
 /** 一条消息正文（OpenAI 的 content 可以是字符串或分段）。 */
@@ -307,22 +364,28 @@ function paneEnvironment(data) {
   }
 }
 
-/** 自己的一套 core：临时 HOME、文件密钥后端、不写全局。 */
-async function setupCore(scratch, home) {
+/**
+ * 自己的一套 core：临时 HOME、文件密钥后端、不写全局；PATH 最前面是真 CLI 的
+ * 替身目录，这套 core 起不了任何真 CLI（ama 是数据目录里随包的那份）。
+ */
+async function setupCore(scratch, home, probeEnv) {
   const project = join(scratch, "project");
   mkdirSync(project);
   writeFileSync(join(project, "README.md"), "# probe\n");
   const data = join(scratch, "rt");
   mkdirSync(data);
-  const binary = join(root, "apps/desktop/out/core/main.js");
   const hook = join(root, "apps/desktop/out/cli/armadra-hook.js");
   const ama = join(root, "apps/desktop/out/agent/ama.cjs");
   const host = join(root, "apps/desktop/out/agent-host/ama-armadra.cjs");
-  for (const file of [binary, hook, ama, host])
+  for (const file of [hook, ama, host])
     if (!existsSync(file)) throw new Error(`未构建：${file}`);
+  const blockedDir = join(scratch, "blocked-bin");
+  const blocked = blockRealClis(blockedDir, join(scratch, "blocked.log"));
   const environment = {
     ...process.env,
+    ...probeEnv,
     HOME: home,
+    PATH: `${blockedDir}:${process.env.PATH ?? ""}`,
     ARMADRA_DATA_DIR: data,
     ARMADRA_SECRET_BACKEND: "file",
     ARMADRA_NO_GLOBAL_WRITES: "1",
@@ -330,104 +393,69 @@ async function setupCore(scratch, home) {
   for (const name of [
     "TMUX",
     "TMUX_PANE",
-    "XDG_CONFIG_HOME",
-    "XDG_DATA_HOME",
+    ...CREDENTIAL_VARIABLES,
     "AMA_CONFIG_DIR",
     "AMA_DATA_DIR",
   ])
     delete environment[name];
-  const log = createWriteStream(join(output, "core-coordinator.log"));
-  const core = spawn(
-    process.execPath,
-    [binary, "--listen", "tcp:127.0.0.1:0", "--data-dir", data],
-    { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: environment },
-  );
-  cleanups.push(() => core.kill("SIGKILL"));
-  cleanups.push(() => {
-    try {
-      execFile("tmux", ["-S", join(data, "tmux.sock"), "kill-server"]);
-    } catch {}
+  // key 只经 core 的密钥后端兑换：操作员环境里的那几个变量不带进这套 core。
+  for (const name of Object.keys(environment))
+    if (name.startsWith("AMA_API_KEY_") || name === "ARMADRA_E2E_AMA_KEY")
+      delete environment[name];
+  const { api } = await startIsolatedCore({
+    data,
+    environment,
+    logName: "core-coordinator.log",
   });
-  core.stdout.pipe(log);
-  core.stderr.pipe(log);
-  const origin = await waitFor(
-    "协调者场景的 core 就绪",
-    () => {
-      try {
-        return JSON.parse(readFileSync(join(data, "endpoints.json"), "utf8"))
-          .runtime.http;
-      } catch {
-        return undefined;
-      }
-    },
-    { timeout: 30_000, interval: 100 },
-  );
-  const api = async (path, init = {}) => {
-    const answer = await fetch(new URL(path, origin), {
-      headers: { "Content-Type": "application/json" },
-      ...init,
-      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-    });
-    const text = await answer.text();
-    if (!answer.ok)
-      throw new Error(
-        `${init.method ?? "GET"} ${path} → ${answer.status} ${text}`,
-      );
-    return text === "" ? null : JSON.parse(text);
-  };
-  return { api, data, project, hook, home };
-}
-
-/** 以某个节点的身份跑一次 `armadra-hook canvas …`。 */
-function canvasAs(context, nodeId, verb, ...args) {
-  return new Promise((done) => {
-    execFile(
-      process.execPath,
-      [context.hook, "canvas", verb, ...args],
-      {
-        env: {
-          PATH: process.env.PATH,
-          HOME: context.home,
-          ARMADRA_NODE_ID: nodeId,
-          ARMADRA_ENDPOINT_FILE: join(context.data, "hook-endpoint.env"),
-          ARMADRA_DATA_DIR: context.data,
-        },
-        timeout: 60_000,
-      },
-      (error, stdout, stderr) => {
-        note(`canvas ${verb}（${nodeId.slice(0, 8)}）`, {
-          code: error ? (error.code ?? 1) : 0,
-          out: (stdout || stderr).trim().slice(0, 300),
-        });
-        done({ code: error ? (error.code ?? 1) : 0, stdout, stderr });
-      },
-    );
-  });
+  return { api, data, project, hook, home, blocked };
 }
 
 export default async function run() {
-  const s = scenario("11-coordinator");
+  const real = realModel;
+  const s = scenario(real ? "11-coordinator-real-model" : "11-coordinator");
   try {
+    if (real) requireReal("场景 11 的 --real-model ");
     const scratch = realpathSync(mkdtempSync(join(tmpdir(), "armadra-ama-")));
     cleanups.push(() =>
       rmSync(scratch, { recursive: true, force: true, maxRetries: 20 }),
     );
-    const mock = await mockModelServer(coordinatorScript);
-    const home = join(scratch, "home");
+    // 真模型时没有脚本化服务；`--self-test` 时它冒充真供应商。
+    const mock =
+      real && !selfTest ? undefined : await mockModelServer(coordinatorScript);
+    const model = real
+      ? realModelConfig(mock)
+      : {
+          provider: "deepseek",
+          model: "mock-coordinator",
+          key: FAKE_KEY,
+          baseUrl: mock.baseUrl,
+        };
+    const secret = model.key;
+    report.coordinator = {
+      mode: real ? (selfTest ? "real-model-self-test" : "real-model") : "mock",
+      provider: model.provider,
+      model: model.model,
+    };
+    // 临时 HOME（`probe-home.mjs`）：ama 的配置写在它的 XDG_CONFIG_HOME 下。
+    const probe = probeHome("armadra-ama-home-");
+    cleanups.push(probe.remove);
+    const home = probe.path;
     mkdirSync(join(home, ".config", "ama"), { recursive: true });
     writeFileSync(
       join(home, ".config", "ama", "config.json"),
       `${JSON.stringify(
         {
           version: 1,
-          defaultModel: "deepseek/mock-coordinator",
-          providers: { deepseek: { baseUrl: mock.baseUrl } },
+          defaultModel: `${model.provider}/${model.model}`,
+          ...(model.baseUrl === undefined
+            ? {}
+            : { providers: { [model.provider]: { baseUrl: model.baseUrl } } }),
         },
         null,
         2,
       )}\n`,
     );
-    const context = await setupCore(scratch, home);
+    const context = await setupCore(scratch, home, probe.env);
     const { api, data, project } = context;
 
     // 派任务用的成员：一个自定义 Agent，程序是上面的假 CLI。在协调者起来之前
@@ -465,14 +493,14 @@ export default async function run() {
     });
 
     // 假 key 经 core 存：页面「Armadra Agent 的模型密钥」走的就是这一条。
-    const stored = await api("/api/agents/ama/credentials/deepseek", {
+    const stored = await api(`/api/agents/ama/credentials/${model.provider}`, {
       method: "PUT",
-      body: { apiKey: FAKE_KEY },
+      body: { apiKey: secret },
     });
     s.check(
       "密钥只答「已设」，不回显",
-      stored.providers.some((p) => p.id === "deepseek" && p.isSet) &&
-        !JSON.stringify(stored).includes(FAKE_KEY),
+      stored.providers.some((p) => p.id === model.provider && p.isSet) &&
+        !JSON.stringify(stored).includes(secret),
     );
 
     const agents = await api("/api/agents");
@@ -556,7 +584,7 @@ export default async function run() {
       amaRow.resolvedPath,
       "--permission-mode",
       "full-auto",
-      PROMPT,
+      real ? REAL_PROMPT : PROMPT,
     ]
       .map(quote)
       .join(" ");
@@ -609,19 +637,21 @@ export default async function run() {
       note("协调者终端画面", await capture());
       throw error;
     });
-    s.check(
-      "key 经启动器的兑换到了 ama：模型服务收到 Bearer <这把 key>",
-      mock.headers[0]?.authorization === `Bearer ${FAKE_KEY}`,
-      mock.headers[0]?.authorization === `Bearer ${FAKE_KEY}`
-        ? undefined
-        : mock.headers[0]?.authorization === undefined
-          ? "请求没带 key"
-          : "带的不是这把",
-    );
+    // 真模型看不到请求：这两条只在脚本化模型时判（`--self-test` 同真跑）。
+    if (!real)
+      s.check(
+        "key 经启动器的兑换到了 ama：模型服务收到 Bearer <这把 key>",
+        mock.headers[0]?.authorization === `Bearer ${FAKE_KEY}`,
+        mock.headers[0]?.authorization === `Bearer ${FAKE_KEY}`
+          ? undefined
+          : mock.headers[0]?.authorization === undefined
+            ? "请求没带 key"
+            : "带的不是这把",
+      );
     const pane = paneEnvironment(data);
     s.check(
       "节点 shell 的环境里没有这把 key（只在 ama 进程里）",
-      pane !== undefined && !pane.includes(FAKE_KEY),
+      pane !== undefined && !pane.includes(secret),
       pane === undefined ? "读不到窗格进程的环境" : undefined,
     );
     s.check(
@@ -629,26 +659,39 @@ export default async function run() {
       statusRow.agent_id === "ama" && statusRow.state_source === "extension",
       statusRow,
     );
-    const firstTools = (mock.requests[0]?.tools ?? []).map(
-      (tool) => tool.function?.name,
-    );
-    s.check(
-      "首个请求的工具表里有画布工具",
-      ["canvas_team", "canvas_inbox", "canvas_ack", "canvas_sticky"].every(
-        (name) => firstTools.includes(name),
-      ),
-      firstTools.filter((name) => name?.startsWith("canvas_")),
-    );
+    const firstTools = real
+      ? []
+      : (mock.requests[0]?.tools ?? []).map((tool) => tool.function?.name);
+    if (!real)
+      s.check(
+        "首个请求的工具表里有画布工具",
+        ["canvas_team", "canvas_inbox", "canvas_ack", "canvas_sticky"].every(
+          (name) => firstTools.includes(name),
+        ),
+        firstTools.filter((name) => name?.startsWith("canvas_")),
+      );
 
     const document = () => api(documentPath);
     const members = await waitFor(
       "canvas_team 建出两个成员",
       async () => {
         const doc = await document();
-        const found = doc.nodes.filter((node) =>
-          ["reviewer-a", "reviewer-b"].includes(node.title),
-        );
-        return found.length === 2 ? { doc, found } : undefined;
+        // 真模型取的标题不一定照抄：认从协调者连出去的终端节点。
+        const found = real
+          ? doc.nodes.filter(
+              (node) =>
+                node.type === "terminal" &&
+                node.id !== lead.id &&
+                doc.edges.some(
+                  (edge) => edge.source === lead.id && edge.target === node.id,
+                ),
+            )
+          : doc.nodes.filter((node) =>
+              ["reviewer-a", "reviewer-b"].includes(node.title),
+            );
+        return found.length >= 2
+          ? { doc, found: found.slice(0, 2) }
+          : undefined;
       },
       { timeout: 90_000, interval: 500 },
     ).catch(async (error) => {
@@ -695,7 +738,7 @@ export default async function run() {
       await api(`/api/terminals/${memberSession.id}/node-token/refresh`, {
         method: "POST",
       });
-      const posted = await canvasAs(
+      const posted = await canvasAsIn(
         context,
         node.id,
         "post",
@@ -735,26 +778,28 @@ export default async function run() {
       throw error;
     });
     s.check("协调者的便签出现，内容是汇总", sticky !== undefined, sticky?.data);
-    const calledTools = () =>
-      mock.requests
-        .flatMap((request) => request.messages ?? [])
-        .filter((message) => message.role === "assistant")
-        .flatMap((message) => message.tool_calls ?? [])
-        .map((call) => call.function?.name);
-    // 便签一出现就查会早一步：`canvas_sticky` 那次调用要等下一次请求才进对话。
-    await waitFor(
-      "sticky 那次调用进了对话",
-      () => calledTools().includes("canvas_sticky"),
-      { timeout: 30_000, interval: 250 },
-    ).catch(() => undefined);
-    const called = calledTools();
-    s.check(
-      "收到唤醒后依次 inbox → ack → sticky",
-      ["canvas_inbox", "canvas_ack", "canvas_sticky"].every((name) =>
-        called.includes(name),
-      ),
-      [...new Set(called)],
-    );
+    if (!real) {
+      const calledTools = () =>
+        mock.requests
+          .flatMap((request) => request.messages ?? [])
+          .filter((message) => message.role === "assistant")
+          .flatMap((message) => message.tool_calls ?? [])
+          .map((call) => call.function?.name);
+      // 便签一出现就查会早一步：`canvas_sticky` 那次调用要等下一次请求才进对话。
+      await waitFor(
+        "sticky 那次调用进了对话",
+        () => calledTools().includes("canvas_sticky"),
+        { timeout: 30_000, interval: 250 },
+      ).catch(() => undefined);
+      const called = calledTools();
+      s.check(
+        "收到唤醒后依次 inbox → ack → sticky",
+        ["canvas_inbox", "canvas_ack", "canvas_sticky"].every((name) =>
+          called.includes(name),
+        ),
+        [...new Set(called)],
+      );
+    }
     // 第一条 post 一到就唤醒了一次；第二条可能赶上那一轮，也可能等下一次唤醒。
     const unread = () =>
       Number(
@@ -771,13 +816,14 @@ export default async function run() {
 
     /* ------------- 4. 派任务：task(agent=…) → 画布成员 → wait ------------- */
 
-    s.check(
-      "工具表里有 ama 的 task（画布 runner 接管它）",
-      firstTools.includes("task"),
-      firstTools.filter((name) => !name?.startsWith("canvas_")),
-    );
+    if (!real)
+      s.check(
+        "工具表里有 ama 的 task（画布 runner 接管它）",
+        firstTools.includes("task"),
+        firstTools.filter((name) => !name?.startsWith("canvas_")),
+      );
     const dispatcher = members.found[0];
-    const dispatched = await canvasAs(
+    const dispatched = await canvasAsIn(
       context,
       dispatcher.id,
       "post",
@@ -786,7 +832,7 @@ export default async function run() {
       "--key",
       "dispatch-1",
       "--body",
-      DISPATCH,
+      real ? REAL_DISPATCH : DISPATCH,
     );
     s.check("派任务的那条 post 成功", dispatched.code === 0, dispatched.stderr);
 
@@ -848,23 +894,25 @@ export default async function run() {
         ),
       { title: taskNode?.title, agent: taskNode?.data?.agent },
     );
-    const taskResults = mock.requests
-      .flatMap((request) => request.messages ?? [])
-      .filter(
-        (message) =>
-          message.role === "tool" && textOf(message).includes(TASK_RESULT),
+    if (!real) {
+      const taskResults = mock.requests
+        .flatMap((request) => request.messages ?? [])
+        .filter(
+          (message) =>
+            message.role === "tool" && textOf(message).includes(TASK_RESULT),
+        );
+      s.check(
+        "task 的结果回到了模型（成员 post 的正文）",
+        taskResults.length > 0,
       );
-    s.check(
-      "task 的结果回到了模型（成员 post 的正文）",
-      taskResults.length > 0,
-    );
+    }
     s.check(
       "成员的终端由 core 起（页面不在），假 CLI 收到了任务",
       existsSync(taskLog) &&
         readFileSync(taskLog, "utf8").includes(TASK_PROMPT),
     );
 
-    const leaked = filesContaining(data, FAKE_KEY, [join(data, "secrets")]);
+    const leaked = filesContaining(data, secret, [join(data, "secrets")]);
     s.check(
       "数据目录里除密钥后端外没有文件含这把 key",
       leaked.length === 0,
@@ -873,11 +921,24 @@ export default async function run() {
     const coreLog = join(output, "core-coordinator.log");
     s.check(
       "core 日志里没有这把 key",
-      !existsSync(coreLog) || !readFileSync(coreLog, "utf8").includes(FAKE_KEY),
+      !existsSync(coreLog) || !readFileSync(coreLog, "utf8").includes(secret),
+    );
+
+    const blockedCalls = context.blocked();
+    s.check(
+      "这套 core 没有起任何真 CLI（替身没被调用）",
+      blockedCalls.length === 0,
+      blockedCalls.slice(0, 5),
     );
 
     /* -------------------- 4. 画布外对照：同一 profile -------------------- */
 
+    // 画布外对照要看模型请求里的工具表：只在脚本化模型时做（真模型不多花一轮）。
+    if (real) {
+      await sleep(200);
+      s.finish();
+      return;
+    }
     const before = mock.requests.length;
     const outside = await new Promise((done) =>
       execFile(
@@ -894,7 +955,7 @@ export default async function run() {
           env: {
             PATH: process.env.PATH,
             HOME: home,
-            AMA_API_KEY_DEEPSEEK: FAKE_KEY,
+            AMA_API_KEY_DEEPSEEK: secret,
           },
           cwd: project,
           timeout: 60_000,
