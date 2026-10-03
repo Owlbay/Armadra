@@ -1,6 +1,6 @@
 # 设计系统
 
-> 状态：目标设计（2026-10-03）。覆盖现有界面与[后续规划](product-roadmap.md)第二至第四部分及平台线的全部界面；展示页与截图探针见[设计展示页](design-showcase.md)。
+> 状态：已实施（2026-10-04），偏离与剩余：token、16 个新组件与存量界面套用已合入（[补全进度](../status/completion-progress.md) G0-6、G2-11、G3-11）；§5.12 的 8 位配对码与手机端 `InputOTP`、协调者的右侧分派抽屉（§5.4）、`AlertDialog` 的手机底部形态没有做；设备表缺「平台」「最近访问」两列（接口不给）。覆盖现有界面与[后续规划](product-roadmap.md)第二至第四部分及平台线的全部界面；展示页与截图探针见[设计展示页](design-showcase.md)。
 > 现状来源：`apps/web/src/styles/{tokens,app,canvas,nodes}.css`、`apps/web/src/ui/*`、[界面规范](../guides/ui-refinement.md)、[v3 契约](../contracts/v3-agent-terminal-plan.md) §3–§4、§24。本文不改契约编号；与 §4.3 的差异沿用 `tokens.css` 头部注释里的说明（品牌蓝叫 `--brand`，`--accent` 是 shadcn 语义）。
 > 硬性规则（用户定）：界面极简，不写说明性文字，不出现「预留 / 未实现」字样，chrome 里不放版本与状态字符串；文案只用简体中文（品牌与 CLI 名除外），全部经 `apps/web/src/i18n/` 且中英同步；控件只用 `apps/web/src/ui/` 里的 shadcn 组件，新组件只经 shadcn CLI 加入；功能代码里不手写 `<button className>`。
 
