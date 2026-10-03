@@ -1,5 +1,10 @@
 import { type PermissionMode, PERMISSION_MODES } from "../agent/launch";
-import type { AgentId } from "../agent/registry";
+import {
+  type AgentId,
+  type AgentSettings,
+  baseAgent,
+  customAgent,
+} from "../agent/registry";
 
 /**
  * 七家 Agent 以 ACP 驱动时的启动与映射表（ACP 会话视图设计 §5.2，补全架构
@@ -256,4 +261,28 @@ export function acpLaunchPlan(
   return mapping.modeId === undefined
     ? { args }
     : { args, modeId: mapping.modeId };
+}
+
+/**
+ * 这个 Agent 以 ACP 起时用哪一行适配器。`custom:` 条目借它基础 CLI 的；基础
+ * CLI 自己就是 ACP 入口（`native`）时，条目的启动程序与参数顶替表里的程序——
+ * 一个包装了 `opencode` 的自定义条目，它的 ACP 入口就是那个包装。
+ */
+export function adapterFor(
+  settings: AgentSettings,
+  agentId: string,
+): AcpAdapter | undefined {
+  const adapter = acpAdapter(baseAgent(settings, agentId));
+  if (adapter === undefined) return undefined;
+  const custom = customAgent(settings, agentId);
+  if (custom === undefined || adapter.support !== "native") return adapter;
+  return {
+    ...adapter,
+    program: custom.launchCmd,
+    args: [...(custom.args ?? []), ...adapter.args],
+    expectedProcess: [
+      ...adapter.expectedProcess,
+      custom.launchCmd.split(/[/\\]/).pop() ?? custom.launchCmd,
+    ],
+  };
 }

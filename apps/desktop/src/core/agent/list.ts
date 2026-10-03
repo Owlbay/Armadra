@@ -1,4 +1,4 @@
-import { type AcpResume, type AcpSupport, acpAdapter } from "../acp/adapters";
+import { type AcpResume, type AcpSupport, adapterFor } from "../acp/adapters";
 import { rememberedAcpVersion } from "../acp/host";
 import {
   type HistoryAvailability,
@@ -99,14 +99,15 @@ export function listAgents(options: ListAgentsOptions): AgentListRow[] {
 
 /**
  * ACP 那一半。一个 `custom:` 条目借它基础适配器的：ACP 入口是那家 CLI 的
- * 适配器程序，与用户给它起的标签和启动程序无关。
+ * 适配器程序，与用户给它起的标签无关——只有基础 CLI 自己就是 ACP 入口
+ * （`native`）时，条目的启动程序就是它的入口（`acp/adapters.ts::adapterFor`）。
  */
 function acpOf(
   row: AgentInfo,
   options: ListAgentsOptions,
 ): AgentAcpInfo | undefined {
   const provider = row.baseAgent ?? row.id;
-  const adapter = acpAdapter(provider);
+  const adapter = adapterFor(options.settings, row.id);
   if (adapter === undefined) return undefined;
   const installed =
     resolveCommand(adapter.program, options.env ?? process.env) !== undefined;
