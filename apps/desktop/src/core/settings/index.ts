@@ -28,7 +28,7 @@ import { workspaceCounts } from "./workspace-counts";
 export { SettingsStore } from "./store";
 export type { JsonObject, JsonValue } from "./local";
 export { isLocal, localPaths, LOCAL_PATHS } from "./local";
-export { normalize, merge } from "./schema";
+export { completionSettings, normalize, merge } from "./schema";
 export { parseHosts, validateHost, type SshHost } from "./ssh-hosts";
 
 /** The store this run assembled, so other domains can read a preference. */

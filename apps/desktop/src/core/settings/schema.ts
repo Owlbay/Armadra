@@ -11,6 +11,18 @@
  * unreadable.
  */
 
+import {
+  AGENT_DRIVER_CHOICES,
+  BREACH_CHECK_CHOICES,
+  COMPLETION_SETTINGS_DEFAULTS,
+  GATEWAY_LISTEN_CHOICES,
+  GATEWAY_TLS_SOURCES,
+  MAX_OAUTH_PROVIDERS,
+  MFA_REQUIRE_CHOICES,
+  OAUTH_PROVIDER_KINDS,
+  PASSWORD_MIN_LENGTH_RANGE,
+  PUSH_TRANSPORTS,
+} from "./completion-settings";
 import { normalizeCustomAgents } from "./custom-agents";
 import { clone, isJsonObject, type JsonObject, type JsonValue } from "./local";
 import { normalizeHosts } from "./ssh-hosts";
@@ -189,8 +201,318 @@ export function normalize(raw: JsonValue): JsonObject {
   // Same contract as the hosts above: what the API hands back is exactly the set
   // of agents that can actually be started.
   normalizeCustomAgents(document);
+  // After the custom agents: `agents.defaultDriver` is only written into a
+  // section that already exists, for the same reason the custom list is.
+  normalizeCompletion(document);
 
   return document;
+}
+
+/* ------------------------- completion plan (G0-3) ------------------------- */
+
+/**
+ * The sections the completion plan's packages read, every key present with its
+ * default (`completion-settings.ts`, a byte copy of the shared one; the shared
+ * zod schema in `packages/shared/src/api/settings.ts` describes the same
+ * shapes and the same snapping rules).
+ *
+ * `gateway`, `push`, `identity`, `collab`, `models` and `diagnostics` are new
+ * and always written. `agents` is not created when absent — a file that never
+ * had a custom agent does not grow the section — so a reader without one takes
+ * `COMPLETION_SETTINGS_DEFAULTS.agents.defaultDriver`; {@link completionSettings}
+ * does that for it. `usage` and `updates` live in their own normalisers.
+ */
+function normalizeCompletion(document: JsonObject): void {
+  normalizeGateway(document);
+  normalizePush(document);
+  normalizeIdentity(document);
+  const collab = section(document, "collab");
+  collab.realtime =
+    asBool(collab.realtime) ?? COMPLETION_SETTINGS_DEFAULTS.collab.realtime;
+  document.collab = collab;
+  const models = section(document, "models");
+  const catalog = section(models, "catalog");
+  catalog.autoRefresh =
+    asBool(catalog.autoRefresh) ??
+    COMPLETION_SETTINGS_DEFAULTS.models.catalog.autoRefresh;
+  models.catalog = catalog;
+  document.models = models;
+  const diagnostics = section(document, "diagnostics");
+  diagnostics.crashReportDsn = shortText(diagnostics.crashReportDsn);
+  document.diagnostics = diagnostics;
+  const agents = document.agents;
+  if (isJsonObject(agents)) {
+    agents.defaultDriver = choice(
+      agents.defaultDriver,
+      AGENT_DRIVER_CHOICES,
+      COMPLETION_SETTINGS_DEFAULTS.agents.defaultDriver,
+    );
+  }
+}
+
+const MAX_FILE_SETTING = 4_096;
+const MAX_SHORT_SETTING = 512;
+
+function fileText(value: JsonValue | undefined): string {
+  const text = asString(value);
+  return text !== undefined && text.length <= MAX_FILE_SETTING ? text : "";
+}
+
+function shortText(value: JsonValue | undefined): string {
+  const text = asString(value);
+  return text !== undefined && text.length <= MAX_SHORT_SETTING ? text : "";
+}
+
+function normalizeGateway(document: JsonObject): void {
+  const defaults = COMPLETION_SETTINGS_DEFAULTS.gateway;
+  const gateway = section(document, "gateway");
+  gateway.enabled = asBool(gateway.enabled) ?? defaults.enabled;
+  gateway.listen = choice(
+    gateway.listen,
+    GATEWAY_LISTEN_CHOICES,
+    defaults.listen,
+  );
+  const port = asUnsigned(gateway.port);
+  gateway.port = port !== undefined && port <= 65_535 ? port : defaults.port;
+  gateway.publicOrigin = shortText(gateway.publicOrigin);
+  const tls = section(gateway, "tls");
+  tls.source = choice(tls.source, GATEWAY_TLS_SOURCES, defaults.tls.source);
+  tls.certFile = fileText(tls.certFile);
+  tls.keyFile = fileText(tls.keyFile);
+  tls.acmeEmail = shortText(tls.acmeEmail);
+  gateway.tls = tls;
+  document.gateway = gateway;
+}
+
+function normalizePush(document: JsonObject): void {
+  const defaults = COMPLETION_SETTINGS_DEFAULTS.push;
+  const push = section(document, "push");
+  push.transport = choice(push.transport, PUSH_TRANSPORTS, defaults.transport);
+  push.relayUrl = shortText(push.relayUrl);
+  const apns = section(push, "apns");
+  apns.keyFile = fileText(apns.keyFile);
+  apns.keyId = shortText(apns.keyId);
+  apns.teamId = shortText(apns.teamId);
+  apns.topic = shortText(apns.topic);
+  apns.production = asBool(apns.production) ?? defaults.apns.production;
+  push.apns = apns;
+  const fcm = section(push, "fcm");
+  fcm.serviceAccountFile = fileText(fcm.serviceAccountFile);
+  fcm.projectId = shortText(fcm.projectId);
+  push.fcm = fcm;
+  const webpush = section(push, "webpush");
+  webpush.enabled = asBool(webpush.enabled) ?? defaults.webpush.enabled;
+  webpush.subject = shortText(webpush.subject);
+  push.webpush = webpush;
+  document.push = push;
+}
+
+function normalizeIdentity(document: JsonObject): void {
+  const defaults = COMPLETION_SETTINGS_DEFAULTS.identity;
+  const identity = section(document, "identity");
+  identity.rpId = shortText(identity.rpId);
+  const length = asUnsigned(identity.passwordMinLength);
+  identity.passwordMinLength =
+    length !== undefined &&
+    length >= PASSWORD_MIN_LENGTH_RANGE.min &&
+    length <= PASSWORD_MIN_LENGTH_RANGE.max
+      ? length
+      : defaults.passwordMinLength;
+  identity.breachCheck = choice(
+    identity.breachCheck,
+    BREACH_CHECK_CHOICES,
+    defaults.breachCheck,
+  );
+  const mfa = section(identity, "mfa");
+  mfa.requireFor = choice(
+    mfa.requireFor,
+    MFA_REQUIRE_CHOICES,
+    defaults.mfa.requireFor,
+  );
+  identity.mfa = mfa;
+  const oauth = section(identity, "oauth");
+  oauth.providers = oauthProviders(oauth.providers);
+  identity.oauth = oauth;
+  document.identity = identity;
+}
+
+const OAUTH_PROVIDER_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const OAUTH_ISSUER = /^https?:\/\/\S+$/;
+
+/**
+ * `identity.oauth.providers[]`: an entry that does not validate is dropped,
+ * the first of two with the same id wins, and the list stops at
+ * {@link MAX_OAUTH_PROVIDERS} — the rule `agents.custom[]` follows. The
+ * client secret is never here; it lives in the SecretStore.
+ */
+function oauthProviders(value: JsonValue | undefined): JsonObject[] {
+  if (!Array.isArray(value)) return [];
+  const kept: JsonObject[] = [];
+  for (const raw of value) {
+    if (kept.length >= MAX_OAUTH_PROVIDERS) break;
+    const provider = oauthProvider(raw);
+    if (provider === undefined) continue;
+    if (kept.some((other) => other.id === provider.id)) continue;
+    kept.push(provider);
+  }
+  return kept;
+}
+
+function oauthProvider(raw: JsonValue): JsonObject | undefined {
+  if (!isJsonObject(raw)) return undefined;
+  const id = asString(raw.id);
+  if (id === undefined || !OAUTH_PROVIDER_ID.test(id)) return undefined;
+  const kind = asString(raw.kind);
+  if (
+    kind === undefined ||
+    !(OAUTH_PROVIDER_KINDS as readonly string[]).includes(kind)
+  ) {
+    return undefined;
+  }
+  const clientId = asString(raw.clientId);
+  if (
+    clientId === undefined ||
+    clientId.length === 0 ||
+    clientId.length > 512
+  ) {
+    return undefined;
+  }
+  const issuer = raw.issuer;
+  if (issuer !== undefined && typeof issuer !== "string") return undefined;
+  if (kind === "oidc" && (issuer === undefined || !OAUTH_ISSUER.test(issuer))) {
+    return undefined;
+  }
+  const scopes = stringList(raw.scopes, 32, 128);
+  const allowedDomains = stringList(raw.allowedDomains, 64, 253);
+  if (scopes === undefined || allowedDomains === undefined) return undefined;
+  const allowSignup = raw.allowSignup ?? false;
+  const enabled = raw.enabled ?? true;
+  if (typeof allowSignup !== "boolean" || typeof enabled !== "boolean") {
+    return undefined;
+  }
+  const provider: JsonObject = { id, kind };
+  if (issuer !== undefined) provider.issuer = issuer;
+  provider.clientId = clientId;
+  provider.scopes = scopes;
+  provider.allowSignup = allowSignup;
+  provider.allowedDomains = allowedDomains;
+  provider.enabled = enabled;
+  return provider;
+}
+
+/** A list of non-empty strings, or `undefined` when it is not one. */
+function stringList(
+  value: JsonValue | undefined,
+  maxItems: number,
+  maxLength: number,
+): string[] | undefined {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > maxItems) return undefined;
+  const items: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || item.length === 0) return undefined;
+    if (item.length > maxLength) return undefined;
+    items.push(item);
+  }
+  return items;
+}
+
+/**
+ * The completion-plan keys of a settings document with every default filled
+ * in — how another domain reads them:
+ * `completionSettings(settingsDomain()?.settings.snapshot() ?? {})`.
+ */
+export function completionSettings(document: JsonValue): CompletionSettings {
+  const normalized = normalize(document);
+  const agents = normalized.agents;
+  const usage = normalized.usage as JsonObject;
+  const updates = normalized.updates as JsonObject;
+  return {
+    gateway: normalized.gateway as unknown as CompletionSettings["gateway"],
+    push: normalized.push as unknown as CompletionSettings["push"],
+    updates: { channel: updates.channel as string },
+    identity: normalized.identity as unknown as CompletionSettings["identity"],
+    agents: {
+      defaultDriver: (isJsonObject(agents)
+        ? agents.defaultDriver
+        : COMPLETION_SETTINGS_DEFAULTS.agents
+            .defaultDriver) as CompletionSettings["agents"]["defaultDriver"],
+    },
+    collab: normalized.collab as unknown as CompletionSettings["collab"],
+    usage: {
+      claudeUsage: usage.claudeUsage as boolean,
+      copilotUsage: usage.copilotUsage as boolean,
+      statusBadges: usage.statusBadges as boolean,
+    },
+    models: normalized.models as unknown as CompletionSettings["models"],
+    diagnostics:
+      normalized.diagnostics as unknown as CompletionSettings["diagnostics"],
+  };
+}
+
+type Choice<T extends readonly string[]> = T[number];
+
+/** The typed view {@link completionSettings} answers. */
+export interface CompletionSettings {
+  readonly gateway: {
+    readonly enabled: boolean;
+    readonly listen: Choice<typeof GATEWAY_LISTEN_CHOICES>;
+    readonly port: number;
+    readonly publicOrigin: string;
+    readonly tls: {
+      readonly source: Choice<typeof GATEWAY_TLS_SOURCES>;
+      readonly certFile: string;
+      readonly keyFile: string;
+      readonly acmeEmail: string;
+    };
+  };
+  readonly push: {
+    readonly transport: Choice<typeof PUSH_TRANSPORTS>;
+    readonly relayUrl: string;
+    readonly apns: {
+      readonly keyFile: string;
+      readonly keyId: string;
+      readonly teamId: string;
+      readonly topic: string;
+      readonly production: boolean;
+    };
+    readonly fcm: {
+      readonly serviceAccountFile: string;
+      readonly projectId: string;
+    };
+    readonly webpush: { readonly enabled: boolean; readonly subject: string };
+  };
+  readonly updates: { readonly channel: string };
+  readonly identity: {
+    readonly rpId: string;
+    readonly passwordMinLength: number;
+    readonly breachCheck: Choice<typeof BREACH_CHECK_CHOICES>;
+    readonly mfa: { readonly requireFor: Choice<typeof MFA_REQUIRE_CHOICES> };
+    readonly oauth: { readonly providers: readonly OAuthProvider[] };
+  };
+  readonly agents: {
+    readonly defaultDriver: Choice<typeof AGENT_DRIVER_CHOICES>;
+  };
+  readonly collab: { readonly realtime: boolean };
+  readonly usage: {
+    readonly claudeUsage: boolean;
+    readonly copilotUsage: boolean;
+    readonly statusBadges: boolean;
+  };
+  readonly models: { readonly catalog: { readonly autoRefresh: boolean } };
+  readonly diagnostics: { readonly crashReportDsn: string };
+}
+
+/** One `identity.oauth.providers[]` entry; the client secret is not here. */
+export interface OAuthProvider {
+  readonly id: string;
+  readonly kind: Choice<typeof OAUTH_PROVIDER_KINDS>;
+  readonly issuer?: string;
+  readonly clientId: string;
+  readonly scopes: readonly string[];
+  readonly allowSignup: boolean;
+  readonly allowedDomains: readonly string[];
+  readonly enabled: boolean;
 }
 
 function normalizeTerminal(document: JsonObject): void {
@@ -247,6 +569,16 @@ function normalizeUsage(document: JsonObject): void {
   usage.codexCliFallback =
     asBool(usage.codexCliFallback) ?? DEFAULT_CODEX_CLI_FALLBACK;
   usage.statusPage = asBool(usage.statusPage) ?? DEFAULT_USAGE_STATUS_PAGE;
+  // `statusBadges` is the name the outbound table uses (external services
+  // §12.3). Until its reader moves over, a document that only has the old key
+  // keeps the user's choice rather than snapping to the default.
+  usage.statusBadges = asBool(usage.statusBadges) ?? usage.statusPage;
+  // Both reach a provider with the user's own credential: off until asked.
+  usage.claudeUsage =
+    asBool(usage.claudeUsage) ?? COMPLETION_SETTINGS_DEFAULTS.usage.claudeUsage;
+  usage.copilotUsage =
+    asBool(usage.copilotUsage) ??
+    COMPLETION_SETTINGS_DEFAULTS.usage.copilotUsage;
   const cost = section(usage, "cost");
   cost.enabled = asBool(cost.enabled) ?? DEFAULT_COST_ENABLED;
   usage.cost = cost;
