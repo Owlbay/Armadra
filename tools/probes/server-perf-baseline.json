@@ -1,0 +1,31 @@
+{
+  "$comment": "server-perf.mjs 的比对基线：按 <平台>-<架构> 一份，数字是同一台机器上连跑三次的中位数。B 档比这次与基线，差 20% 以上且超过该项绝对容差（server-perf.mjs 的 METRICS）即失败；没有这台平台的基线时只报告。重录：跑三次取中位数后改这里，并同步 docs/status/server-performance-baseline.md。",
+  "platforms": {
+    "darwin-arm64": {
+      "recordedAt": "2026-10-03",
+      "machine": "Apple M1 Max 10 核 32 GiB，macOS 26.6，Node 26.10.0，tmux 3.7c；录制时机器上并行跑着其他构建（load average 约 12–14）",
+      "options": {
+        "sessions": 30,
+        "subscribers": 6,
+        "objects": 2000,
+        "rounds": 40,
+        "burstKib": 1024
+      },
+      "metrics": {
+        "sessionCreateP95Ms": 69.4,
+        "fanoutP50Ms": 1.3,
+        "fanoutP95Ms": 2.2,
+        "terminalThroughputMiBs": 24.4,
+        "terminalBurstP95Ms": 1229.9,
+        "closeStallMaxMs": 138.7,
+        "realtimeBulkMs": 170.2,
+        "realtimeColdSyncMs": 67.4,
+        "realtimeMaterializeMs": 58.2,
+        "realtimeUpdateP95Ms": 1.6,
+        "rssPeakMiB": 209.9,
+        "rssSteadyMiB": 183.1,
+        "cpuIdlePercent": 0.3
+      }
+    }
+  }
+}

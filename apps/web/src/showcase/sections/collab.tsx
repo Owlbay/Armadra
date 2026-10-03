@@ -5,14 +5,70 @@ import { RealtimePresenceView } from "@/canvas/PresenceBar";
 import { PeerCursor } from "@/realtime/CursorLayer";
 import { Alert, AlertTitle } from "@/ui/alert";
 import { memberColorVar } from "@/ui/member-dot";
-import { CURSOR_PEERS, PEER_SETS } from "../fixtures/collab";
+import { CommentComposer } from "@/realtime/comments/CommentComposer";
+import { CommentPin } from "@/realtime/comments/CommentPin";
+import { CommentThread } from "@/realtime/comments/CommentThread";
+import { CommentsPanelView } from "@/realtime/comments/CommentsPanel";
+import type { CommentThreadData } from "@/realtime/comments/store";
+import {
+  COMMENT_NOW,
+  COMMENT_PEOPLE,
+  COMMENT_REPLY,
+  COMMENT_RESOLVED,
+  COMMENT_ROOT,
+  COMMENT_SELF,
+  CURSOR_PEERS,
+  PEER_SETS,
+} from "../fixtures/collab";
 
 /**
  * `collab` 分区（设计展示页 §2.1，设计系统 §5.6）：实时板的在线条——头像
  * 堆叠 1 / 3 / 6 人、跟随中、只读、断开——成员光标与选区外框，以及「离线
- * 编辑」。评论（§5.7）与角色（§5.8）的样本由各自的实现包加在后面。
+ * 编辑」；评论（§5.7）：钉的四种样子、线程（可写 / 只读 / 离线）、输入框与
+ * 评论抽屉（空态、有已解决的折叠区）。角色（§5.8）的样本由它的实现包加在后面。
  */
 const noop = () => undefined;
+
+const OPEN_THREAD: CommentThreadData = {
+  root: COMMENT_ROOT,
+  replies: [COMMENT_REPLY],
+};
+const RESOLVED_THREAD: CommentThreadData = {
+  root: COMMENT_RESOLVED,
+  replies: [],
+};
+
+function SampleThread({
+  thread,
+  canWrite = true,
+  offline = false,
+  compact = false,
+}: {
+  thread: CommentThreadData;
+  canWrite?: boolean;
+  offline?: boolean;
+  compact?: boolean;
+}) {
+  return (
+    <CommentThread
+      thread={thread}
+      people={COMMENT_PEOPLE}
+      selfId={COMMENT_SELF}
+      canWrite={canWrite}
+      isOwner
+      offline={offline}
+      compact={compact}
+      now={COMMENT_NOW}
+      onReply={noop}
+      onResolve={noop}
+      onEdit={noop}
+      onDelete={noop}
+    />
+  );
+}
+
+const FRAME =
+  "w-[320px] rounded-[var(--r-card)] border border-border bg-popover p-3";
 const BAR = "relative top-auto right-auto self-start";
 
 export default function CollabSection() {
@@ -92,6 +148,85 @@ export default function CollabSection() {
           <CloudOff />
           <AlertTitle>{t("realtime.offline")}</AlertTitle>
         </Alert>
+      </div>
+
+      <div data-sample="comment-pins" className="flex items-center gap-4">
+        <CommentPin
+          count={3}
+          open
+          color={2}
+          label={t("comments.pin", { count: 3 })}
+        />
+        <CommentPin
+          count={1}
+          open
+          color={4}
+          label={t("comments.pin", { count: 1 })}
+        />
+        <CommentPin
+          count={2}
+          open={false}
+          color={2}
+          label={t("comments.pin", { count: 2 })}
+        />
+        <CommentPin
+          count={3}
+          open
+          dot
+          color={2}
+          label={t("comments.pin", { count: 3 })}
+        />
+        <CommentPin
+          count={2}
+          open={false}
+          dot
+          color={2}
+          label={t("comments.pin", { count: 2 })}
+        />
+      </div>
+
+      <div className="flex flex-wrap items-start gap-4">
+        <div data-sample="comment-thread" className={FRAME}>
+          <SampleThread thread={OPEN_THREAD} />
+        </div>
+        <div data-sample="comment-thread-readonly" className={FRAME}>
+          <SampleThread thread={OPEN_THREAD} canWrite={false} />
+        </div>
+        <div data-sample="comment-thread-offline" className={FRAME}>
+          <SampleThread thread={OPEN_THREAD} offline />
+        </div>
+        <div data-sample="comment-composer" className={FRAME}>
+          <CommentComposer
+            people={COMMENT_PEOPLE}
+            placeholder={t("comments.placeholder")}
+            onSubmit={noop}
+            onCancel={noop}
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-start gap-4">
+        {[[], [OPEN_THREAD, RESOLVED_THREAD]].map((threads) => (
+          <div
+            key={threads.length}
+            data-sample={
+              threads.length === 0 ? "comments-panel-empty" : "comments-panel"
+            }
+            className="flex h-[440px] w-[360px] flex-col rounded-[var(--r-card)] border border-border bg-popover pt-4"
+          >
+            <p className="px-4 pb-2 text-base font-medium text-foreground">
+              {t("comments.title")}
+            </p>
+            <CommentsPanelView
+              threads={threads}
+              onlyOpen={false}
+              onOnlyOpenChange={noop}
+              renderThread={(thread, { compact }) => (
+                <SampleThread thread={thread} compact={compact} />
+              )}
+            />
+          </div>
+        ))}
       </div>
     </div>
   );

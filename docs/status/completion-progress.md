@@ -164,7 +164,9 @@
 
 ## G1-8 工作流引擎（C2）
 
-未开始。
+- 做了什么：`core/workflow/{types,draft,store,dispatch,engine,service,routes,registry,task-runs,index}.ts`；迁移 `0034_workflow.sql`（草案、模板、运行、步骤、runner 任务五张表）；控制动词 `workflow-propose`（工具 `canvas_workflow_propose`）；bus 事件 `workflow.draft` / `workflow.run` / `workflow.gate`（core 与共享层同步）；`packages/shared/src/api/workflows.ts` 的 zod；契约 §15.1–§15.4。运行建 Frame + 起点便签 + 角色节点，节点经依赖编排的启动路径起、提示词经投递队列投，完成判定复用 `dependencies/evaluate.ts`。
+- 实测：`core/workflow/*.test.ts`（草案校验、引擎三种步骤、关卡、取消、无页面推进、重启续跑、重投、路由与动词）；`node tools/probes/workflow-e2e.mjs`（真 core + 假 CLI `custom:wfecho` 走通 prompt → collect 两步模板）本机通过。
+- 没做：页面（草案卡、模板库、运行记录，G2 的包）；`wait` 动词与 runner 适配（G2-4，`task-runs.ts` 只有存取）；自动化目标（G2-3）；成员访问 `/api/workflows/*` 仍一律 403（按运行查画布的收窄留给 G2-9）；`workflow-e2e` 等 G0-4 的 `tools/ci/e2e.json` 合入后登记进 A 档。
 
 ## G1-9 实时协同 core（R0）
 
@@ -384,7 +386,17 @@
 
 ## G2-6 评论（R2）
 
-未开始。
+做了什么：
+
+- core `realtime/comments-routes.ts`：`GET/POST …/boards/{boardId}/comments`、`PATCH/DELETE …/comments/{id}`、`POST …/comments/{id}/resolve`（契约 §16.3）；读 `canvas:read`、写 `canvas:write`（路由门之外域内再判一次）；改正文只有作者，删除作者或 owner（记审计 `canvas.comment.delete`）；`resolved=false` 连已解决线程的回复一起去掉。提及记号 `@[显示名](principal:<id>)`（`realtime/comment-text.ts`），只认存在、没停用、对该工作空间有 `canvas:read` 的人；列表带 `people`（可提及的人）。
+- 事件 `board.comment`（`bus.ts` 与共享层 `workspaceEventSchema`）：`{boardId, action, comment:{id,parentId,anchorKind,anchorId?}, mentions}`，不带正文；`mentions` 是这一次新叫到的人、不含作者。推送域（G1-13）的规则读的正是 `comment.anchorKind/anchorId` 与 `mentions`，`comments-routes.test` 用真规则核对：叫被提及的人、深链到锚定节点。
+- `collab/context-link.ts`：Agent 经连线读节点时，回答末尾附该节点上未解决的评论线程（提及换成 `@显示名`、8 KiB 上限），与正文一起脱敏并计入读取预算；`readableAs` 对可读节点注明「附未解决的评论」。
+- 页面 `realtime/comments/`：`CommentLayer`（`ViewportPortal` 里的评论钉，坐标用 `nodeBox` / 白板 item / 点，按 `1/zoom` 反缩放，缩放 < 0.5 只画点，同锚点聚成一枚钉）、Dock「评论」开关（评论模式点画布放钉：节点 → item → 坐标；右侧非模态抽屉，只看未解决、已解决收进 `Accordion`、空态）、`CommentThread`（Popover 线程、回复、解决 / 重开、作者编辑、作者或 owner 删除；只读隐藏输入）、`CommentComposer`（Textarea，`@` 弹 `Command` 选人，离线禁发留草稿，⌘/Ctrl+Enter 发送）；收到同板 `board.comment` 重拉。文案进 `i18n/realtime.ts`（`comments.*`，中英同步）。
+- 展示页 `collab` 分区加评论样本：钉四种样子、线程可写 / 只读 / 离线、输入框、抽屉空态与有已解决折叠。A 档 `realtime-e2e` 加第 7 步：A 开评论模式在便签上放钉并发送，B 经事件看到钉，core 列表里锚点是该节点。
+
+实测：core `comments-routes.test` 5 例（只读 / 外人权限、作者改与作者或 owner 删、解决与回复锚点与过滤、`@` 解析与事件形状、记号纯文本），`context-link.test` +3（附评论、预算计入、上限截断、`readableAs`）；web `comments.test` 11 例。`realtime-e2e` 本机通过（含评论一步）；`design-showcase --only=collab` 通过（对比度最低 3.07，控制台无错）。
+
+没做：评论里的 Markdown（正文按纯文本显示，保留换行）；白板对象上的评论不随连线读给 Agent（白板引用不走节点读取路径）；钉的聚合只按同一锚点，没有按屏幕距离聚成「+N」。
 
 ## G2-7 桌面 Gateway 设置页与配对（G1）
 
@@ -473,7 +485,16 @@
 
 ## G3-6 服务端性能基线与多主机管理页面
 
-未开始。
+**做了什么**
+
+- 性能探针 `tools/probes/server-perf.mjs`：对真的服务器壳加 30 个终端、6 个事件流、一块 2000 对象的实时板，量建会话、`board.changed` 扇出、终端吞吐、实时板批量 / 冷同步 / 物化 / 单字段更新、同时关掉全部终端时其余请求被堵多久，以及服务器壳与 tmux 的 RSS / CPU；`--cpu-prof` 找热点；按平台基线（`server-perf-baseline.json`）比对，差 20% 以上且超过绝对容差即失败。进 `e2e.json` B 档；纯函数用例进 `release:test`。结果与解读：[服务端性能基线](server-performance-baseline.md)。
+- 热点修复（按 profile）：关终端走同步 `ps`、每次接终端流同步 `tmux -V`、每次建终端同步 `infocmp`，三处都堵事件循环。改成异步 `readProcessTable()`、可用后缓存探测、`infocmp` 每进程一次。
+- 舰队健康记录：`remote/fleet.ts` 每台主机留最近 20 条握手 / 断开 / 验证或重新同步失败，执行主机行带可选 `health`（契约 §21.3），共享层 `executionHostHealthSchema`。
+- 执行主机页的舰队视图 `execution-hosts/FleetGroup.tsx`：在线 / 离线、Worker 版本或待升级、健康记录（点开明细表）、逐台与全部重新同步；页面 15 秒刷新。展示页 `integration` 分区放它的真样本。
+
+**实测**（Apple M1 Max，本机负载 12–14，三次中位数）：扇出 p50 1.3 ms / p95 2.2 ms；终端吞吐 24.4 MiB/s；实时板 2000 对象到在线客户端 170 ms、冷同步 67 ms、物化 58 ms、单字段更新 p95 1.6 ms；稳态 RSS 183 MiB。同时关 30 个终端时其余请求最慢从 0.8–1.3 s 降到 0.08–0.17 s。
+
+**没做**：基线只有 `darwin-arm64`；ubuntu 的 B 档第一次跑出结果后再补录 `linux-x64`（之前只报告不判）。夜间作业的构建步骤归 G3-4。休眠判据 `hibernator.ts::processesUnder` 仍是同步 `ps`（它本身是同步接口，未在本次负载里出现）。展示页 `integration` 分区里 CLI 分组（启动器 / ACP）的样本归集成设置页的实现包。
 
 ## G3-7 真 CLI 端到端：场景 11 / 12 与三家 TUI
 

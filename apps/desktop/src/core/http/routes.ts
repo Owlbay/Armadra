@@ -488,6 +488,25 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 评论（契约 §16.3，G2-6）：列表与新建、改正文与删除、解决 / 重新打开。
+  {
+    path: "/api/workspaces/{workspaceId}/boards/{boardId}/comments",
+    methods: ["GET", "POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workspaces/{workspaceId}/boards/{boardId}/comments/{commentId}",
+    methods: ["PATCH", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workspaces/{workspaceId}/boards/{boardId}/comments/{commentId}/resolve",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/workspaces/{workspaceId}/deliveries",
     methods: ["GET"],
