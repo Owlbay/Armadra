@@ -48,6 +48,17 @@ export interface LauncherSpec {
     readonly client: string;
     readonly variables: readonly string[];
   };
+  /**
+   * ama 的模型密钥（契约 §12.4）：画布节点里启动器调 `client credential --ama`，
+   * 凭节点 token 兑换出若干行 `AMA_API_KEY_<供应商>=<值>`，只认 `variables` 里的
+   * 名字，设给 ama 进程再 `exec`。兑换失败拒绝启动；一行都没有（没设密钥）照常
+   * 启动。只有 ama 的启动器有这一段。
+   */
+  readonly amaKeys?: {
+    /** `armadra-hook` 的路径；空串表示没有客户端，这一段不生成。 */
+    readonly client: string;
+    readonly variables: readonly string[];
+  };
 }
 
 /** 节点终端环境里的凭据条目名（与 `agent/credentials/inject.ts` 同一个常量）。 */
@@ -118,6 +129,44 @@ function credentialLines(spec: LauncherSpec): string[] {
 }
 
 /**
+ * ama 的密钥那一段。答复的每一行都经命令替换进启动器自己的变量，按换行切开，
+ * 每个名字一条字面的分支；没有 `eval`、没有 here-doc（有的 sh 把 here-doc 写成
+ * 临时文件，值就落了盘）。名字不认识、客户端失败，都拒绝启动。
+ */
+function amaKeyLines(spec: LauncherSpec): string[] {
+  const keys = spec.amaKeys;
+  if (keys === undefined || keys.client === "" || keys.variables.length === 0)
+    return [];
+  const refuse = `printf '%s\\n' ${posixQuote("armadra: unexpected ama key variable")} >&2; exit 1`;
+  const lines = [
+    `armadra_keys=$(${posixQuote(keys.client)} credential --ama) || exit $?`,
+    "armadra_nl='",
+    "'",
+    'while [ -n "$armadra_keys" ]; do',
+    '  armadra_pair=${armadra_keys%%"$armadra_nl"*}',
+    '  case "$armadra_keys" in',
+    '    *"$armadra_nl"*) armadra_keys=${armadra_keys#*"$armadra_nl"} ;;',
+    "    *) armadra_keys= ;;",
+    "  esac",
+    '  [ -n "$armadra_pair" ] || continue',
+    '  case "${armadra_pair%%=*}" in',
+  ];
+  for (const name of keys.variables) {
+    if (!ENV_NAME.test(name)) {
+      throw new Error(`not an environment variable name: ${name}`);
+    }
+    lines.push(`    ${name}) ${name}=\${armadra_pair#*=}; export ${name} ;;`);
+  }
+  lines.push(
+    `    *) ${refuse} ;;`,
+    "  esac",
+    "done",
+    "unset armadra_keys armadra_pair armadra_nl",
+  );
+  return lines;
+}
+
+/**
  * `run/<cli>` 的正文。
  *
  * 两个 `exec`，没有子进程：CLI 顶替启动器的 pid，进程树与直接起 CLI 一样。
@@ -135,6 +184,7 @@ export function posixLauncher(spec: LauncherSpec): string {
     // 变量在第一个 `exec` 之后才设：画布外不设。
     ...exportLines(spec.env),
     ...credentialLines(spec),
+    ...amaKeyLines(spec),
     `exec "$@"${tail === "" ? "" : ` ${tail}`}`,
     "",
   ].join("\n");

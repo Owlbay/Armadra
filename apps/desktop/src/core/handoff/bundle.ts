@@ -115,6 +115,11 @@ export interface HandoffBundle {
   readonly sourcePreserved: boolean;
   readonly files: readonly FileReference[];
   readonly git: GitFingerprint;
+  /**
+   * The execution host id the source Agent's transcript was read on (contract
+   * §21.1). Absent when it was read on this machine, or not read at all.
+   */
+  readonly capturedOn?: string;
   readonly attachments: readonly unknown[];
   readonly budget: Budget;
 }

@@ -129,6 +129,9 @@ export function remoteIntegrationFiles(
   const run = runDirectory(site.root);
   const target = { join: posix.join, windows: false };
   for (const agentId of INJECTED_AGENTS) {
+    // ama on an execution host is not supported in this version: its key
+    // file is never synced (docs/design/coordinator-agent.md §7).
+    if (agentId === "ama") continue;
     const written = artifactFiles(site.root, agentId, clientBin, target);
     for (const [path, content] of written) files.push(file(path, content));
     const layout = artifactLayout(site.root, agentId, posix.join);

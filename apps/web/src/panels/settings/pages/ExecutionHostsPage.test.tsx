@@ -18,6 +18,7 @@ const api = vi.hoisted(() => ({
   exportExecutionHosts: vi.fn(),
   importExecutionHosts: vi.fn(),
   switchExecutionHost: vi.fn(),
+  resyncExecutionHost: vi.fn(),
 }));
 const refusal = vi.hoisted(() => vi.fn());
 const toasts = vi.hoisted(() => ({
@@ -203,6 +204,61 @@ describe("execution hosts page", () => {
     expect(
       screen.queryByRole("button", { name: "Stop and switch" }),
     ).toBeNull();
+  });
+
+  /**
+   * The Worker fleet (contract §21.2): a host seen at a handshake carries its
+   * Worker — the version, or "outdated" — and every host with a Worker gets a
+   * resync that reconnects it and re-syncs the canvas injection.
+   */
+  it("shows the Worker it last saw and resyncs the host", async () => {
+    const worker = {
+      version: "0.0.9",
+      capabilities: [],
+      outdated: true,
+      connected: false,
+      checkedAt: "2026-10-03T00:00:00Z",
+    };
+    api.executionHosts.mockResolvedValue([local, { ...box, worker }]);
+    api.resyncExecutionHost.mockResolvedValue({
+      ...box,
+      worker: { ...worker, version: "0.1.0", outdated: false },
+    });
+    mount();
+    expect(await screen.findByText("Worker outdated")).toBeTruthy();
+    await click(screen.getByRole("button", { name: "Resync" }));
+    await waitFor(() =>
+      expect(api.resyncExecutionHost).toHaveBeenCalledWith("build-box"),
+    );
+    await waitFor(() =>
+      expect(toasts.success).toHaveBeenCalledWith("Resynced Build box"),
+    );
+  });
+
+  it("shows a current Worker's version and offers no resync without one", async () => {
+    api.executionHosts.mockResolvedValue([
+      local,
+      {
+        ...box,
+        worker: {
+          version: "0.1.0",
+          capabilities: [],
+          outdated: false,
+          connected: true,
+          checkedAt: "2026-10-03T00:00:00Z",
+        },
+      },
+      {
+        ...box,
+        executionHostId: "bare",
+        name: "Bare",
+        workerConfigured: false,
+      },
+    ]);
+    mount();
+    expect(await screen.findByText("Worker 0.1.0")).toBeTruthy();
+    expect(screen.queryByText("Worker outdated")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Resync" })).toHaveLength(1);
   });
 
   /**

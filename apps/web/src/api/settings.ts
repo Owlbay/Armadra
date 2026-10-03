@@ -110,9 +110,21 @@ export const runtimeSettingsSchema = z.looseObject({
       refreshMinutes: z.number().int().nonnegative().optional(),
       providers: z.record(z.string(), z.boolean()).optional(),
       codexCliFallback: z.boolean().optional(),
-      /** Provider 状态页徽标（roadmap §3.9），默认开。 */
+      /** Provider 状态页徽标（roadmap §3.9），默认开。旧键，读 `statusBadges`。 */
       statusPage: z.boolean().optional(),
+      statusBadges: z.boolean().optional(),
+      /** 借用登录令牌读额度的两个端点，默认关（外部服务 §9.3）。 */
+      claudeUsage: z.boolean().optional(),
+      copilotUsage: z.boolean().optional(),
       cost: z.looseObject({ enabled: z.boolean().optional() }).optional(),
+    })
+    .optional(),
+  /** `models.catalog.autoRefresh`：models.dev 目录的每日后台抓取，默认开。 */
+  models: z
+    .looseObject({
+      catalog: z
+        .looseObject({ autoRefresh: z.boolean().optional() })
+        .optional(),
     })
     .optional(),
   /**
@@ -212,8 +224,12 @@ export interface RuntimeSettingsPatch {
     providers?: Record<string, boolean>;
     codexCliFallback?: boolean;
     statusPage?: boolean;
+    statusBadges?: boolean;
+    claudeUsage?: boolean;
+    copilotUsage?: boolean;
     cost?: { enabled?: boolean };
   };
+  models?: { catalog?: { autoRefresh?: boolean } };
   logs?: { retentionDays?: number };
   /** 更新通道与两个开关（S03 §4.1）。 */
   updates?: {
@@ -355,6 +371,16 @@ export const settingsApi = {
     request(
       `/api/execution-hosts/${query(hostId)}/validate`,
       executionHostValidationSchema,
+      { method: "POST" },
+    ),
+  /** 单台主机的一行，带上次握手见到的 Worker（契约 §21.2）。 */
+  executionHost: (hostId: string) =>
+    request(`/api/execution-hosts/${query(hostId)}`, executionHostSchema),
+  /** 重连这台主机的 Worker 并重新同步画布注入；答更新后的那一行。 */
+  resyncExecutionHost: (hostId: string) =>
+    request(
+      `/api/execution-hosts/${query(hostId)}/resync`,
+      executionHostSchema,
       { method: "POST" },
     ),
   /** 可携带的主机表；里面没有任何能用来认证的东西。 */

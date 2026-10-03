@@ -66,9 +66,20 @@ import { badRequest } from "../workspaces/support";
 import type { WorkerSession } from "./session";
 import { type RootFingerprint, fingerprintOf } from "./switch";
 import { trackOperation } from "./git-worker";
+import {
+  ASSETS_CAPABILITY,
+  FILES_CAPABILITY,
+  GIT_CAPABILITY,
+  GIT_OPERATIONS_CAPABILITY,
+  HANDOFF_CAPABILITY,
+  INTEGRATION_CAPABILITY,
+  RESOURCES_CAPABILITY,
+  TRANSFER_CAPABILITY,
+  WATCH_CAPABILITY,
+} from "./capabilities";
+import { handoffCapture } from "./handoff-worker";
 import { readRemoteResources } from "./resources-worker";
 import { unwatchFiles, watchFiles } from "./watch-worker";
-import { capture as captureHandoff, captureArgs } from "../handoff/capture";
 import { writePngExport } from "../assets/exports";
 import {
   assetExtension,
@@ -765,9 +776,7 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
 
   /* ------------------------------ 交接 ------------------------------ */
   /** 交接材料里要在执行主机上读的：文件引用、Git 指纹、SSH Agent 的转录尾巴。 */
-  "handoff.capture": read((_c, root, args) =>
-    captureHandoff(root, captureArgs(args)),
-  ),
+  "handoff.capture": read((_c, root, args) => handoffCapture(root, args)),
 
   "git.rebaseTodo": read(
     async (context, root, args) =>
@@ -780,15 +789,18 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
   ),
 };
 
-/** 远端握手里声明的能力组；缺哪组，控制端对那组答 501 并写明能力名。 */
-export const FILES_CAPABILITY = "remote.files.v1";
-export const GIT_CAPABILITY = "remote.git.v1";
-/** 长操作队列、集成状态、工作树绑定与 AI 提交信息的采集。 */
-export const GIT_OPERATIONS_CAPABILITY = "remote.git.operations.v1";
-/** Worker 侧文件监听，变化主动推送。 */
-export const WATCH_CAPABILITY = "remote.watch.v1";
-/** 远端主机总览与会话进程树的一轮读取。 */
-export const RESOURCES_CAPABILITY = "remote.resources.v1";
+export {
+  ASSETS_CAPABILITY,
+  FILES_CAPABILITY,
+  GIT_CAPABILITY,
+  GIT_OPERATIONS_CAPABILITY,
+  HANDOFF_CAPABILITY,
+  INTEGRATION_CAPABILITY,
+  INTEGRATION_V2_CAPABILITY,
+  RESOURCES_CAPABILITY,
+  TRANSFER_CAPABILITY,
+  WATCH_CAPABILITY,
+} from "./capabilities";
 
 const GIT_OPERATION_NAMES = new Set([
   "git.operationStart",
@@ -799,23 +811,6 @@ const GIT_OPERATION_NAMES = new Set([
   "git.worktreeBinding",
   "git.messageCapture",
 ]);
-
-/** 画布注入的产物同步与 Hook 中继。 */
-export const INTEGRATION_CAPABILITY = "remote.integration.v1";
-/**
- * 同一组动作的第二版：`integration.sync` 不再接受 `codexCommand`、不再写
- * Codex 信任，并一次性清掉旧版写过的那些。不门控任何动作——控制端只要 v1
- * 就能同步，缺 v2 只是提示升级（docs/design/canvas-launcher.md §8.4）。
- */
-export const INTEGRATION_V2_CAPABILITY = "remote.integration.v2";
-
-/** 比一帧大的字节：分块上传、续传与分块下载。 */
-export const TRANSFER_CAPABILITY = "remote.transfer.v1";
-/** 白板图片资产与画布导出落在执行主机上。 */
-export const ASSETS_CAPABILITY = "remote.assets.v1";
-
-/** 交接材料在执行主机上的采集。 */
-export const HANDOFF_CAPABILITY = "remote.handoff.v1";
 
 /** 一个操作属于哪个能力组。 */
 export function capabilityOf(operation: string): string | undefined {

@@ -15,7 +15,7 @@
  * integration's version: the design keeps it fixed while the way the adapter
  * is injected changes (docs/design/agent-integration.md §2).
  */
-export const HOOK_CLIENT_REVISION = 4;
+export const HOOK_CLIENT_REVISION = 5;
 
 /** The revision of the skill half, mirroring `collab::skills::SKILLS_REVISION`. */
 export const SKILLS_REVISION = 16;
@@ -133,4 +133,15 @@ export const COPILOT_HOOK_EVENTS = [
   "errorOccurred",
   "preCompact",
   "sessionEnd",
+] as const;
+
+/**
+ * Armadra's own agent (`ama`): its host adapter reports Pi's vocabulary plus
+ * the two approval events its runtime raises (docs/design/coordinator-agent.md
+ * §2.1 / §2.3). Mirrors `packages/shared`'s `AMA_HOOK_EVENTS`.
+ */
+export const AMA_HOOK_EVENTS = [
+  ...PI_HOOK_EVENTS,
+  "tool_approval_requested",
+  "tool_approval_resolved",
 ] as const;

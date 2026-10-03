@@ -1,4 +1,6 @@
-import { resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import { type Plugin, type UserConfig, build } from "vite";
 import webConfig from "../web/vite.config";
@@ -195,6 +197,64 @@ const sessionHostConfig: UserConfig = {
   ssr: { noExternal: true },
 };
 
+/**
+ * The seventh target: ama's host adapter (docs/design/coordinator-agent.md
+ * §2.5, §3).
+ *
+ * Built like the hook client — one CJS file, nothing external — because it is
+ * loaded the same way: by path, from outside the asar, by a program that is
+ * not this app (ama `require`s the profile's `host`). It inlines the shared
+ * `src/hook-client/` source and imports only *types* from `@armadra/agent`.
+ */
+const agentHostConfig: UserConfig = {
+  build: {
+    outDir: resolve(here, "out/agent-host"),
+    emptyOutDir: true,
+    target: "node22",
+    ssr: true,
+    minify: false,
+    rollupOptions: {
+      input: { "ama-armadra": resolve(here, "src/agent-host/ama/main.ts") },
+      external: EXTERNAL,
+      output: {
+        format: "cjs" as const,
+        entryFileNames: "[name].cjs",
+        exports: "named" as const,
+        codeSplitting: false,
+      },
+    },
+  },
+  ssr: { noExternal: true },
+};
+
+/**
+ * The files of the pinned `@armadra/agent` (exact devDependency) that ship:
+ * its single-file runtime and the sandbox helper it loads from beside itself.
+ * Copied, never imported — the app runs them with its own Electron as Node,
+ * through the `<data>/bin/ama` launcher.
+ */
+export const AGENT_FILES = ["ama.cjs", "ama-sandbox.cjs"] as const;
+
+export function copyAgentBundle(
+  from: string = dirname(
+    createRequire(join(here, "package.json")).resolve("@armadra/agent/bundle"),
+  ),
+  to: string = resolve(here, "out/agent"),
+): string[] {
+  rmSync(to, { recursive: true, force: true });
+  mkdirSync(to, { recursive: true });
+  const copied: string[] = [];
+  for (const name of AGENT_FILES) {
+    const source = join(from, name);
+    if (!existsSync(source)) {
+      throw new Error(`@armadra/agent has no ${name} at ${source}`);
+    }
+    copyFileSync(source, join(to, name));
+    copied.push(join(to, name));
+  }
+  return copied;
+}
+
 function buildCore(): Plugin {
   return {
     name: "armadra-core-bundle",
@@ -203,6 +263,8 @@ function buildCore(): Plugin {
       await build(coreConfig);
       await build(cliConfig);
       await build(sessionHostConfig);
+      await build(agentHostConfig);
+      copyAgentBundle();
     },
   };
 }

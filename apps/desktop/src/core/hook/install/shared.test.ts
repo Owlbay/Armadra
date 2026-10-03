@@ -1,8 +1,10 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { COPILOT_HOOK_EVENTS, OMP_HOOK_EVENTS, PI_HOOK_EVENTS } from "./events";
 import {
+  agentBundle,
+  agentLauncherBinary,
   type FromEnv,
   type JsonObject,
   appendManagedGroup,
@@ -198,5 +200,41 @@ describe("the config home", () => {
     expect(configHomeWith("omp", escapingRoot, HOME)).toBe(
       join(HOME, ".omp/agent"),
     );
+  });
+});
+
+describe("the bundled ama", () => {
+  it("finds its bundle through the override, and refuses a bad one", () => {
+    const root = tempDir("armadra-ama-bundle-");
+    const bundle = join(root, "ama.cjs");
+    writeFileSync(bundle, "", "utf8");
+    expect(agentBundle({ ARMADRA_AMA_BUNDLE: bundle })).toBe(bundle);
+    expect(
+      agentBundle({ ARMADRA_AMA_BUNDLE: join(root, "missing.cjs") }),
+    ).toBeUndefined();
+  });
+
+  it("gets a launcher beside armadra-hook's, named ama", () => {
+    const root = tempDir("armadra-ama-launcher-");
+    // A POSIX launcher is written whatever this machine is; the path is text.
+    const bundle = "/res/agent/ama.cjs";
+    const written = agentLauncherBinary({
+      dataDir: root,
+      bundle,
+      runner: "/opt/Armadra",
+      platform: "linux",
+    });
+    expect(written).toBe(join(root, "bin", "ama"));
+    expect(readFileSync(written as string, "utf8")).toContain(
+      `exec "/opt/Armadra" "${bundle}" "$@"`,
+    );
+    expect(existsSync(join(root, "bin", "armadra-hook"))).toBe(false);
+    expect(
+      agentLauncherBinary({
+        dataDir: root,
+        bundle: undefined,
+        platform: "linux",
+      }),
+    ).toBe(agentBundle() === undefined ? undefined : join(root, "bin", "ama"));
   });
 });

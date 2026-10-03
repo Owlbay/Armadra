@@ -1,4 +1,5 @@
-// armadra-hook 的 Windows 启动器（控制台程序）。
+// armadra-hook 的 Windows 启动器（控制台程序）。拷成 `ama.exe` 时就是随包 ama 的
+// 启动器（docs/design/coordinator-agent.md §2.5）：配置按自身文件名找。
 //
 // 为什么不是 .cmd：Agent 在 Windows 上的 shell 多半是 Git Bash 或 PowerShell，
 // 它们调用 .cmd 时都会经过 cmd.exe，而 cmd.exe 会把整行命令再读一遍——
@@ -160,8 +161,21 @@ internal static class ArmadraHookLauncher
         }
         catch (Exception error)
         {
-            Console.Error.WriteLine("armadra-hook: " + error.Message);
+            Console.Error.WriteLine(Prefix() + error.Message);
             return 1;
+        }
+    }
+
+    // 报错前缀用自身文件名：同一个程序拷成 `ama.exe` 时说的是 `ama`。
+    private static string Prefix()
+    {
+        try
+        {
+            return Path.GetFileNameWithoutExtension(Assembly.GetEntryAssembly().Location) + ": ";
+        }
+        catch (Exception)
+        {
+            return "armadra-hook: ";
         }
     }
 
@@ -171,13 +185,13 @@ internal static class ArmadraHookLauncher
         string config = Path.ChangeExtension(self, ".launch");
         if (!File.Exists(config))
         {
-            Console.Error.WriteLine("armadra-hook: launcher config missing: " + config);
+            Console.Error.WriteLine(Prefix() + "launcher config missing: " + config);
             return 1;
         }
         string[] lines = File.ReadAllLines(config, new UTF8Encoding(false));
         if (lines.Length < 2 || lines[0].Length == 0 || lines[1].Length == 0)
         {
-            Console.Error.WriteLine("armadra-hook: launcher config is incomplete: " + config);
+            Console.Error.WriteLine(Prefix() + "launcher config is incomplete: " + config);
             return 1;
         }
         string runner = lines[0];
@@ -222,7 +236,7 @@ internal static class ArmadraHookLauncher
         {
             int code = Marshal.GetLastWin32Error();
             Console.Error.WriteLine(
-                "armadra-hook: could not start " + runner + ": " + new Win32Exception(code).Message);
+                Prefix() + "could not start " + runner + ": " + new Win32Exception(code).Message);
             return 1;
         }
 
