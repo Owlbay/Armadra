@@ -410,7 +410,8 @@ export default async function editor({ stack, output, report, scenario }) {
     `return document.querySelector('.react-flow__pane');`,
     "画布空白处",
   );
-  await page.key("p", 4);
+  // ⌘P（macOS）/ Ctrl+P（其余平台）：CDP 修饰位 4 是 Meta、2 是 Ctrl。
+  await page.key("p", process.platform === "darwin" ? 4 : 2);
   const recent = await page.until(
     `const heading = [...document.querySelectorAll('[cmdk-group-heading]')].find((h) => h.textContent === "最近打开");
      if (!heading) return null;
