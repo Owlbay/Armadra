@@ -19,12 +19,12 @@ import {
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { IconButton } from "@/ui/icon-button";
 import { Input } from "@/ui/input";
 import { Label } from "@/ui/label";
@@ -204,16 +204,16 @@ function CredentialDialog({
     !create.isPending;
 
   return (
-    <Dialog
+    <ResponsiveDialog
       open={open}
       onOpenChange={(next) => {
         if (!next) onClose();
       }}
     >
-      <DialogContent className="z-[var(--z-dialog)] sm:max-w-[420px]">
-        <DialogHeader>
-          <DialogTitle>{t("credentials.add")}</DialogTitle>
-        </DialogHeader>
+      <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[420px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{t("credentials.add")}</ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
         <form
           className="flex flex-col gap-3"
           onSubmit={(event) => {
@@ -267,16 +267,16 @@ function CredentialDialog({
               onChange={(event) => setValue(event.target.value)}
             />
           </div>
-          <DialogFooter>
+          <ResponsiveDialogFooter>
             <Button type="button" variant="ghost" size="sm" onClick={onClose}>
               {t("credentials.cancel")}
             </Button>
             <Button type="submit" size="sm" disabled={!ready}>
               {t("credentials.save")}
             </Button>
-          </DialogFooter>
+          </ResponsiveDialogFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

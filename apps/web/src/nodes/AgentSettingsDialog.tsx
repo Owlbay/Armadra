@@ -21,7 +21,12 @@ import {
 } from "@armadra/shared";
 
 import { useT } from "@/app/preferences-store";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/ui/dialog";
+import {
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Switch } from "@/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/ui/toggle-group";
 import { useCanvasStore } from "@/store/canvas-store";
@@ -54,14 +59,16 @@ export function AgentSettingsDialog() {
   const wake = agent?.inboxWake ?? DEFAULT_INBOX_WAKE;
 
   return (
-    <Dialog
+    <ResponsiveDialog
       open={agent !== undefined}
       onOpenChange={(open) => !open && close()}
     >
-      <DialogContent className="z-[var(--z-dialog)]">
-        <DialogHeader>
-          <DialogTitle>{t("agentSettings.title")}</DialogTitle>
-        </DialogHeader>
+      <ResponsiveDialogContent className="z-[var(--z-dialog)]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {t("agentSettings.title")}
+          </ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <span className="text-xs text-[var(--muted-foreground)]">
@@ -112,7 +119,7 @@ export function AgentSettingsDialog() {
             />
           </label>
         </div>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
