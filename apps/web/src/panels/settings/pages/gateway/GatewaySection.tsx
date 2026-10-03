@@ -8,6 +8,7 @@ import type {
 } from "@armadra/shared";
 
 import { useT } from "../../../../app/preferences-store";
+import { useAccess } from "../../../../app/use-access";
 import {
   GATEWAY_QUERY_KEY,
   gatewayApi,
@@ -36,16 +37,21 @@ export const GATEWAY_POLL_MS = 15_000;
 export function GatewaySection() {
   const t = useT();
   const client = useQueryClient();
+  // 服务器壳上的成员连问都不问：必然 403 的请求不该发（会话没取回来时也按
+  // 成员算，晚一拍出现）。
+  const owner = !useAccess().member;
   const status = useQuery({
     queryKey: GATEWAY_QUERY_KEY,
     queryFn: ({ signal }) => gatewayApi.status(signal),
     refetchInterval: GATEWAY_POLL_MS,
     retry: false,
+    enabled: owner,
   });
   const devices = useQuery({
     queryKey: DEVICES_QUERY_KEY,
     queryFn: () => listIdentityDevices(),
     retry: false,
+    enabled: owner,
   });
   React.useEffect(
     () =>
@@ -97,7 +103,7 @@ export function GatewaySection() {
     if (running) mint(undefined);
   }, [running, origin, fingerprint, mint]);
 
-  if (!status.data) return null;
+  if (!owner || !status.data) return null;
   return (
     <GatewayPanel
       status={status.data}

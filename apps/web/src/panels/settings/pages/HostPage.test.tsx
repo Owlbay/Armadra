@@ -16,6 +16,10 @@ vi.mock("../../../host/connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../host/connection")>()),
   probeHost: (...args: unknown[]) => probe(...args),
 }));
+let member = false;
+vi.mock("../../../app/use-access", () => ({
+  useAccess: () => ({ member, can: () => !member, session: undefined }),
+}));
 vi.mock("./HostIdentityPanel", () => ({
   HostIdentityPanel: () => null,
 }));
@@ -161,6 +165,7 @@ const hello: IdentityHello = {
 };
 
 beforeEach(() => {
+  member = false;
   probe.mockReset();
   usePreferencesStore.setState({ locale: "zh-CN" });
   // 缺省是成员：`/api/gateway` 403，对外服务这一块不出现。
@@ -280,6 +285,19 @@ describe("HostPage · 对外服务", () => {
     await waitFor(() =>
       expect(calls.some((call) => call.path === "/api/gateway")).toBe(true),
     );
+    expect(screen.queryByRole("switch", { name: "对外服务" })).toBeNull();
+  });
+
+  it("a member on the server shell does not even ask", async () => {
+    member = true;
+    const calls = fakeCore({ status: runningStatus() });
+    render(<HostPage />);
+    await act(async () => {
+      await new Promise((done) => setTimeout(done, 20));
+    });
+    expect(
+      calls.filter((call) => call.path.startsWith("/api/gateway")),
+    ).toEqual([]);
     expect(screen.queryByRole("switch", { name: "对外服务" })).toBeNull();
   });
 
