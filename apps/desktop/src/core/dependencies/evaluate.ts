@@ -102,7 +102,11 @@ export type Verdict =
     };
 
 export function evaluate(
-  dependency: DependencyRow,
+  // 只读这三项：工作流的步骤（`workflow/engine.ts`）用同一份判定，它没有整行。
+  dependency: Pick<
+    DependencyRow,
+    "condition" | "observedBusy" | "baselineEventAt"
+  >,
   upstream: { readonly exists: boolean; readonly status?: AgentStatus },
 ): Verdict {
   if (!upstream.exists) return { kind: "missing" };

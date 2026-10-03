@@ -105,7 +105,15 @@ function view(
     workerConfigured: host.worker !== undefined,
     workspaceCount: counts.get(host.id) ?? 0,
     ...workerField(host.id),
+    ...healthField(host.id),
   };
+}
+
+/** 这次运行里的健康记录（契约 §21.3）；一条都没有时不出现。 */
+function healthField(hostId: string): { health?: JsonObject[] } {
+  const samples = workerFleet().history(hostId);
+  if (samples.length === 0) return {};
+  return { health: samples.map((sample) => ({ ...sample })) };
 }
 
 /** 上次握手见到的 Worker；没握过手不出现（契约 §21.2）。 */
@@ -173,10 +181,12 @@ export async function resyncExecutionHost(
     await hooks.resync(hostId);
   } catch (failure) {
     const status = (failure as { status?: unknown }).status;
-    const code = (failure as { code?: unknown }).code;
+    const raw = (failure as { code?: unknown }).code;
+    const code = typeof raw === "string" ? raw : "unavailable";
+    workerFleet().failed(hostId, code);
     return coreError(
       typeof status === "number" ? status : 502,
-      typeof code === "string" ? code : "unavailable",
+      code,
       failure instanceof Error ? failure.message : String(failure),
     );
   }

@@ -322,6 +322,20 @@ const CANVAS: Record<ControlVerb, Row> = {
     },
     required: ["member"],
   },
+  "workflow-propose": {
+    description:
+      "Propose a reusable workflow draft (roles, links, prompt/collect/gate steps); a person confirms it.",
+    properties: {
+      draft: {
+        type: "object",
+        description:
+          "the draft JSON: version, title, params, roles, links, steps, source",
+        additionalProperties: true,
+      },
+      "dry-run": DRY_RUN,
+    },
+    required: ["draft"],
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -501,6 +515,15 @@ function convert(schema: JsonSchema, value: unknown): JsonValue | undefined {
       }
       return out;
     }
+    case "object":
+      // 一份结构化的文档（`workflow-propose --draft`）原样过去；命令行上来的
+      // 是它的 JSON 字符串，动词两种都收。
+      if (typeof value === "string") return value;
+      return value !== null &&
+        typeof value === "object" &&
+        !Array.isArray(value)
+        ? (value as JsonValue)
+        : undefined;
     default:
       return undefined;
   }
