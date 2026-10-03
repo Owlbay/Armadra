@@ -1226,7 +1226,27 @@ TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时
 
 ### 18.6 审计查询
 
-预留，由 G2-8 填写。
+查的是 `audit_log`（迁移 `accounts`），写入点见各节的「审计」一行与 `core/identity/audit.ts` 的 `SECURITY_AUDIT_ACTIONS`。实现在 `accounts-http.ts` 的审计一段，形状的 zod 在 `identity-security.ts` 的 §18.6 小节。两条都只读；谁能调与原来一样：带 `workspaceId` 要那块画布的 `workspace:share`，不带要 `identity:manage`（owner）。
+
+筛选参数（查询串，都可选，彼此 AND）：
+
+| 参数                 | 意思                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------- |
+| `principalId`        | 动作的发起者                                                                                            |
+| `workspaceId`        | 动作所在的工作空间                                                                                      |
+| `action`（可重复）   | 动作或动作族：`identity.login` 命中它自己与 `identity.login.*`（不命中 `identity.loginx`）；多个之间 OR |
+| `sinceMs`、`untilMs` | 时间窗，`sinceMs <= atMs < untilMs`，毫秒                                                               |
+| `beforeId`           | 翻页游标：只要 `id < beforeId` 的                                                                       |
+| `limit`              | 一页几行，1–500，缺省或越界取 100（只对 `GET audit`）                                                   |
+
+数字参数写错（非整数、负数、`beforeId` 为 0）答 400 `INVALID_ARGUMENT`，不悄悄当成「不筛」；`action` 超过 20 个或单个超过 128 字符同样 400。
+
+| 方法与路径         | 答案                                                                                                                                                                          |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET audit`        | `{ entries: [{ id, atMs, principalId, deviceId, action, target, workspaceId, detail }], nextBeforeId }`，从新到旧；`nextBeforeId` 是下一页的 `beforeId`，0 表示没有更早的了   |
+| `GET audit/export` | `text/csv; charset=utf-8`，`Content-Disposition: attachment; filename="armadra-audit.csv"`；同样的筛选、不分页，从新到旧最多 10000 行；错误照旧是 JSON 的 `{ code, message }` |
+
+CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,action,target,workspaceId,detail`；`time` 是 ISO 8601（UTC），`detail` 是 JSON 文本（没有时空）；含逗号、引号或换行的单元格加引号、引号双写；以 `=`、`+`、`-`、`@`、制表或回车开头的单元格前面补一个 `'`（表格软件的公式注入）。页面的「结果」由动作名推出：`.failed`、`identity.lockout` 记为失败，其余为成功。
 
 ## 19. 推送：`/api/push/devices*`
 

@@ -269,3 +269,51 @@ export const oauthBindingListSchema = z.object({
 export const oauthLogoutSchema = z.object({
   endSessionUrl: z.string().nullable(),
 });
+
+/* ------------------------------------------------------------------------- */
+/* §18.6 审计查询（G2-8）                                                     */
+/* ------------------------------------------------------------------------- */
+
+/** `GET audit` 一页的上限；`limit` 超出或缺省时取 100。 */
+export const AUDIT_PAGE_MAX = 500;
+/** `GET audit/export` 一次最多导出的行数（按 id 从新到旧截断）。 */
+export const AUDIT_EXPORT_MAX = 10_000;
+
+/** 审计查询的筛选参数（查询串，全部可选，彼此 AND）。 */
+export const auditQuerySchema = z.object({
+  principalId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  /**
+   * 动作或动作族：`identity.login` 命中它自己与 `identity.login.*`。可重复，
+   * 彼此 OR。
+   */
+  action: z.array(z.string().min(1).max(128)).optional(),
+  /** 含：`at_ms >= sinceMs`。 */
+  sinceMs: z.number().int().nonnegative().optional(),
+  /** 不含：`at_ms < untilMs`。 */
+  untilMs: z.number().int().nonnegative().optional(),
+  /** 翻页游标：只要 `id < beforeId` 的。 */
+  beforeId: z.number().int().positive().optional(),
+  limit: z.number().int().positive().max(AUDIT_PAGE_MAX).optional(),
+});
+export type AuditQuery = z.infer<typeof auditQuerySchema>;
+
+export const auditEntrySchema = z.object({
+  id: z.number().int().positive(),
+  atMs: z.number().int().nonnegative(),
+  principalId: z.string(),
+  deviceId: z.string(),
+  action: z.string(),
+  target: z.string(),
+  workspaceId: z.string(),
+  /** 写入时的结构化补充；没有时 `null`。 */
+  detail: z.unknown(),
+});
+export type AuditEntry = z.infer<typeof auditEntrySchema>;
+
+/** `GET audit` 的答案：从新到旧；`nextBeforeId` 为 0 表示没有更早的了。 */
+export const auditPageSchema = z.object({
+  entries: z.array(auditEntrySchema),
+  nextBeforeId: z.number().int().nonnegative(),
+});
+export type AuditPage = z.infer<typeof auditPageSchema>;

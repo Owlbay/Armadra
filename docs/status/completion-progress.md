@@ -426,7 +426,25 @@
 
 ## G2-8 安全页面：会话 / 设备、MFA / passkey 管理、审计（I3）
 
-未开始。
+**做了什么**
+
+- core：`GET /api/identity/audit` 加筛选（`principalId`、`workspaceId`、可重复的动作族 `action`、`sinceMs` / `untilMs`、游标 `beforeId`、`limit`）与 `nextBeforeId`；新增 `GET audit/export`（CSV，RFC 4180，公式开头的单元格补撇号，最多一万行）；契约 §18.6。
+- 页面：`panels/settings/pages/security/`（`SecurityPage`、`PasskeyList`、`MfaSetup`、`OAuthBindings` + owner 的 `OAuthProviders`、`SessionList` + `LockoutList`、`AuditLog`）替换占位页；登录 `session/SignIn.tsx` 两步（账号 → 口令 → 六位码 / 恢复码）、通行密钥、第三方账号按钮、锁定倒计时、离线 Alert，「账号与共享」与「安全」两处共用；`#oauth=` 回调由 `use-link-fragments` 打开到安全页（`signedIn/signedUp` 换会话、`mfa` 进第二步、`bound` 提示、`error` 写原因）；`mfaEnrollmentRequired` 把人带到安全页，页面上策略要求时两步验证排第一并给 Alert。
+- 客户端 `api/security.ts`；身份传输 `identityRequest` / `identityText` 支持 PUT/DELETE、文本答案与 `Retry-After`；`session/webauthn.ts` 在没有 `parse…FromJSON` 的浏览器上手工转 base64url。
+- 展示页 `auth` 分区换成真组件样本（`fixtures/auth.ts`）。
+
+**实测**
+
+- `gateway-e2e.mjs` 加第 5 步：公网来源设为 `https://localhost:<端口>`，无头 Chrome 独立上下文兑换邀请成为成员，CDP 虚拟认证器，安全页「添加通行密钥」→ 清 Cookie →「使用通行密钥」登录回同一成员；RP ID 为 `localhost`；审计按动作族查到 `identity.passkey.add` 与 `method: "passkey"` 的登录；页面无控制台错误。
+- 服务器壳（回环）上手工走一遍：owner 开两步验证（扫码页、恢复码）、审计按「两步验证」筛选并展开详情、清 Cookie 后口令 + TOTP 两步登录、CSV 导出表头与行数正确。
+- 展示页 `--only=auth` 六张截图，两主题对比度通过，控制台无错误。
+
+**没做**
+
+- 提供方本身（issuer、clientId、域名、开关）仍在设置 `identity.oauth.providers` 里编辑；安全页只管密钥与看状态 / 回调地址。
+- 通行密钥重命名（core 没有接口）、owner 替别人重置 MFA（`POST mfa/reset` 有接口，页面未接）、「忘记口令」（无流程）。
+- 设计 §5.9 的整页登录（无侧栏）：登录仍挂在设置对话框的「账号与共享」与「安全」里，组件本身已是整页布局，换入口归改 `App.tsx` 的包。
+- OAuth 绑定区块的 dex 集成用例：G1-12 的 dev-stack 用例已覆盖回调；页面这一侧用单测与片段解析覆盖。
 
 ## G2-9 Agent 权限角色（RB）
 

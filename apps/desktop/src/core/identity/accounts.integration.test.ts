@@ -240,6 +240,75 @@ describe("账号这一面", () => {
     );
   });
 
+  it("审计查询：筛选、游标翻页、CSV 导出（契约 §18.6）", async () => {
+    const { core, base } = await start();
+    const session = await pair(core, base);
+    const member = (await (
+      await call(session, "POST", "/api/identity/principals", {
+        displayName: "=同事",
+      })
+    ).json()) as { principalId: string };
+    for (const workspaceId of ["w1", "w2", "w3"]) {
+      await call(session, "PUT", "/api/identity/grants", {
+        workspaceId,
+        subjectKind: "principal",
+        subjectId: member.principalId,
+        role: "viewer",
+      });
+    }
+    const page = async (query: string) => {
+      const response = await call(
+        session,
+        "GET",
+        `/api/identity/audit?${query}`,
+      );
+      expect(response.status).toBe(200);
+      return (await response.json()) as {
+        entries: { id: number; action: string; workspaceId: string }[];
+        nextBeforeId: number;
+      };
+    };
+    const first = await page("action=share.grant&limit=2");
+    expect(first.entries.map((entry) => entry.workspaceId)).toEqual([
+      "w3",
+      "w2",
+    ]);
+    expect(first.nextBeforeId).toBe(first.entries[1]?.id);
+    const second = await page(
+      `action=share.grant&limit=2&beforeId=${first.nextBeforeId}`,
+    );
+    expect(second.entries.map((entry) => entry.workspaceId)).toEqual(["w1"]);
+    expect(second.nextBeforeId).toBe(0);
+    expect((await page(`sinceMs=${Date.now() + 60_000}`)).entries).toHaveLength(
+      0,
+    );
+
+    const bad = await call(session, "GET", "/api/identity/audit?sinceMs=soon");
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toMatchObject({ code: "INVALID_ARGUMENT" });
+
+    const exported = await call(
+      session,
+      "GET",
+      "/api/identity/audit/export?action=share.grant.set",
+    );
+    expect(exported.status).toBe(200);
+    expect(exported.headers.get("content-type")).toBe(
+      "text/csv; charset=utf-8",
+    );
+    expect(exported.headers.get("content-disposition")).toContain(
+      "armadra-audit.csv",
+    );
+    const lines = (await exported.text()).trimEnd().split("\r\n");
+    expect(lines[0]).toBe(
+      "id,time,principalId,deviceId,action,target,workspaceId,detail",
+    );
+    expect(lines).toHaveLength(4);
+    expect(
+      lines.slice(1).every((line) => line.includes(",share.grant.set,")),
+    ).toBe(true);
+  });
+
   it("做不到的那几条是 501，形状和其余失败一致", async () => {
     const { core, base } = await start();
     const session = await pair(core, base);

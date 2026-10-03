@@ -415,6 +415,19 @@ export class IdentityHttp {
                         },
                       }),
                 });
+          if (answered?.text !== undefined) {
+            // 审计导出（契约 §18.6）是这一面唯一不是 JSON 的答案。
+            const payload = Buffer.from(answered.text.body, "utf8");
+            response.writeHead(answered.status, {
+              ...cors,
+              "content-type": answered.text.contentType,
+              "content-length": String(payload.byteLength),
+              "content-disposition": `attachment; filename="${answered.text.filename}"`,
+              "cache-control": "no-store",
+            });
+            response.end(payload);
+            return;
+          }
           if (answered !== undefined) {
             this.json(response, cors, answered.status, answered.body);
             return;
