@@ -748,7 +748,7 @@
 
 - 场景 12（`ARMADRA_E2E_ACP_ONLY=claude,pi`）：Pi 全过，`compatibility.json` 记 pi-acp `verified.min = 0.0.34`；Claude 除 `switchToTerminal` 外全过——那一步碰上没编号的信任菜单，没答、超时失败（fail-closed），本 PR 已能识别。修复后重跑：Claude 与 Pi 全过（含经箭头菜单切终端视图），`compatibility.json` 记 claude-agent-acp `verified.min = 0.85.1`。
 - 场景 11 `--real-model`：全过（含 ama → ama），只有「便签里是成员回报的结果」因真模型转述而失败——断言过严，本 PR 已改。
-- 场景 10（`ARMADRA_E2E_TUI_ONLY=claude,pi`）：22 项通过，1 项失败——两家时的沿环 send 被 core 判成环，本 PR 改为少于三家时跳过。修复后重跑 24 项通过，2 项失败：两家的「成本」读到 0。原因在探针：整场只有约 50 秒，`POST /api/usage/cost/refresh` 还在 30 秒冷却里，答的是转录写完之前扫的旧汇总；用 core 的成本扫描器直接扫这次 Claude 的真实转录，读出 2 万多 token（缓存读 12063、缓存写 8116），说明读取适配器没问题。探针改为按 `scannedAt` 认，冷却里就等到 `refreshAvailableAt` 再刷（最多三次）。成本这一步待重跑。
+- 场景 10（`ARMADRA_E2E_TUI_ONLY=claude,pi`）：22 项通过，1 项失败——两家时的沿环 send 被 core 判成环，本 PR 改为少于三家时跳过。修复后重跑 24 项通过，2 项失败：两家的「成本」读到 0。原因在探针：整场只有约 50 秒，`POST /api/usage/cost/refresh` 还在 30 秒冷却里，答的是转录写完之前扫的旧汇总；用 core 的成本扫描器直接扫这次 Claude 的真实转录，读出 2 万多 token（缓存读 12063、缓存写 8116），说明读取适配器没问题。探针改为按 `scannedAt` 认，冷却里就等到 `refreshAvailableAt` 再刷（最多三次）。2026-10-04 再跑一次：26 项全部通过，成本读到 Claude 21737 token、Pi 2109 token，跑后配置哈希不变。
 - 每次跑完配置哈希比对都干净。两次跑之间，cc-switch 切换供应商改过 `~/.codex/config.toml`，不是探针造成的，没有还原。
 
 **没做**：场景 10 成本那一步在修复后的重跑；Codex（ChatGPT 登录）与 OpenCode / OMP / Copilot 的真跑与画面门特征核实；codex-acp 的 `verified` 仍为 null。Copilot 三条权限旗标在 `--acp` 下是否生效、OMP `acp` 是否接受 `--model=`、Pi 的 `settings.json` 键名未经实跑核实，真跑结果出来后按装机结果修。
