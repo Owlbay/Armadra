@@ -29,3 +29,35 @@ minimumReleaseAgeExclude:
   - "@armadra/agent@0.6.2"
 
 storeDir: .pnpm-store
+
+# Security overrides for transitive dependencies. Each entry is scoped to the
+# vulnerable range only and pins the minimum patched release; the parents'
+# own ranges already admit it, so these only stop the lockfile from holding a
+# vulnerable copy. Drop an entry once its parents resolve past it on their own.
+overrides:
+  # GHSA-rfgv-xxqx-mfg5, GHSA-w293-vg96-wgc3, GHSA-pmjh-fq2x-6v4x,
+  # GHSA-3xpg-4rpp-hhhm, GHSA-2jfj-6hjv-fm6j, GHSA-rx4f-c7p8-82vq,
+  # GHSA-r53p-7pc4-xj5r, GHSA-2gqq-gqf2-x968, GHSA-8436-99hf-9mmv: undici 7.x
+  # before 7.29.1. Pulled in by shadcn (and its @dotenvx/dotenvx) in the web
+  # app and by electron's @electron/get; undici 6.x/8.x are unaffected.
+  "undici@>=7.0.0 <7.29.1": 7.29.1
+  # GHSA-6j4f-fj2g-mc7p, GHSA-qhr7-859c-m2p7, GHSA-q2hr-2g5m-vwhr:
+  # brace-expansion 4.x/5.x before 5.0.12. Pulled in via minimatch 10 by
+  # shadcn's ts-morph and by electron-builder's app-builder-lib; the 1.x/2.x
+  # copies used elsewhere are unaffected.
+  "brace-expansion@>=4.0.0 <5.0.12": 5.0.12
+  # GHSA-h3mg-xc3c-68pw, GHSA-j6r3-76f7-8jcv: ip-address before 10.7.1.
+  # Pulled in by shadcn through socks and @modelcontextprotocol/sdk's
+  # express-rate-limit.
+  "ip-address@<10.7.1": 10.7.1
+  # GHSA-hxh3-vqpv-xpqv: hono before 4.13.7. Pulled in by shadcn's
+  # @modelcontextprotocol/sdk (directly and via @hono/node-server).
+  "hono@<4.13.7": 4.13.7
+  # GHSA-hrr3-gc8f-f4qj: fast-uri 3.x before 3.1.8. Pulled in through ajv 8 by
+  # shadcn (@modelcontextprotocol/sdk, @dotenvx/dotenvx's conf) and by
+  # electron-builder's app-builder-lib.
+  "fast-uri@>=3.0.0 <3.1.8": 3.1.8
+  # GHSA-p98j-92pf-mc4p: dompurify 3.4.13–3.4.15. Pulled in by mermaid in the
+  # web app; mermaid's latest release still accepts the vulnerable range, so a
+  # mermaid bump alone would not move it.
+  "dompurify@>=3.4.13 <3.4.16": 3.4.16
