@@ -1,3 +1,4 @@
+import { isAcpMirror, readMirrorEntries } from "./acp-mirror";
 import { claudeAdapter } from "./claude";
 import { codexAdapter } from "./codex";
 import { copilotAdapter } from "./copilot";
@@ -42,7 +43,8 @@ export function locateHistory(hint: SessionHint): Located | undefined {
 
 /**
  * 读一段归一化记录：有适配器经适配器，没有的按 JSONL 文件读（CLI 报来的路径）。
- * I/O 失败照常抛出。
+ * ACP 会话的镜像（`.acp.jsonl`，`acp-mirror.ts`）先认：它是 core 自己写的形状，
+ * 不是这家 CLI 的，交给适配器就读不出来。I/O 失败照常抛出。
  */
 export function readHistoryEntries(
   agentId: string,
@@ -50,6 +52,9 @@ export function readHistoryEntries(
   fromOffset: number,
   maxBytes: number,
 ): EntryRange {
+  if (isAcpMirror(located.path)) {
+    return readMirrorEntries(located.path as string, fromOffset, maxBytes);
+  }
   const adapter = historyAdapter(agentId);
   return adapter === undefined
     ? readLocatedEntries(located, fromOffset, maxBytes)
