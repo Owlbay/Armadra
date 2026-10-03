@@ -70,7 +70,8 @@ node apps/server/out/main.js serve --listen 0.0.0.0:8443 \
 
 `--listen` 默认 `127.0.0.1:0`；**监听非回环地址必须同时给 `--public-origin`**，否则直接拒绝。
 不给 `--tls-cert/--tls-key` 就在 `<数据目录>/tls/` 生成一张自签名证书（私钥 0600），
-`status` 会把它标成「自签名」。启动时打印一行
+`status` 会把它标成「自签名」；`--acme <邮箱>`（或 `ARMADRA_ACME_EMAIL`）改由 ACME 签发并续期，
+本地对 dev-stack 的 Pebble 演练，见 [服务器部署指南](server-deployment.md) §3。启动时打印一行
 `armadra-server pairing https://…/#pair=<两分钟一次性票>`——用它在新设备上完成配对，
 之后是 `__Host-` 前缀的会话 Cookie；POSIX 上 `kill -USR2 <pid>` 再铸一张。
 
@@ -186,21 +187,21 @@ pnpm dev-stack down                    # 加 --volumes 连卷一起删
 镜像全部钉到明确版本，端口只绑 `127.0.0.1`。端口与健康检查的唯一来源是
 `tools/dev-stack/services.mjs`，`stack.test.mjs` 守住它与 `docker-compose.yml` 一致。
 
-| 服务             | 端口          | 用途                                                         |
-| ---------------- | ------------- | ------------------------------------------------------------ |
-| `release`        | 8090          | 假 GitHub Releases：`latest.json`、下载、minisign 验签       |
-| `pebble`         | 14000 / 15000 | ACME（验证一律放行，改 `PEBBLE_VA_ALWAYS_VALID=0` 测真挑战） |
-| `step-ca`        | 9000          | 第二个 ACME 实现与本地 CA 根（`/roots.pem`）                 |
-| `dex`            | 5556          | OIDC，issuer `http://127.0.0.1:5556/dex`                     |
-| `keycloak`       | 8080          | OIDC，issuer `http://127.0.0.1:8080/realms/armadra`          |
-| `mailpit`        | 1025 / 8025   | SMTP 与收件 API                                              |
-| `gitea`          | 3000          | Gitea API，管理员 `armadra-dev`                              |
-| `glitchtip`      | 8000          | 崩溃上报（带 postgres 与 redis，均不对外）                   |
-| `push-sink`      | 8091          | 假 APNs（h2c）/ FCM / Web Push / 推送中继，记录请求          |
-| `hibp`           | 8092          | Pwned Passwords range API 固定响应                           |
-| `armadra-server` | 8443          | 容器化服务器壳（`Dockerfile.dev` 占位，自签名 TLS）          |
-| `headscale`      | 8094          | 可选 profile，只做文档验证，不进 CI                          |
-| `ntfy`           | 8093          | 可选 profile，UnifiedPush 分发                               |
+| 服务             | 端口          | 用途                                                          |
+| ---------------- | ------------- | ------------------------------------------------------------- |
+| `release`        | 8090          | 假 GitHub Releases：`latest.json`、下载、minisign 验签        |
+| `pebble`         | 14000 / 15000 | ACME（验证一律放行，改 `PEBBLE_VA_ALWAYS_VALID=0` 测真挑战）  |
+| `step-ca`        | 9000          | 第二个 ACME 实现与本地 CA 根（`/roots.pem`）                  |
+| `dex`            | 5556          | OIDC，issuer `http://127.0.0.1:5556/dex`                      |
+| `keycloak`       | 8080          | OIDC，issuer `http://127.0.0.1:8080/realms/armadra`           |
+| `mailpit`        | 1025 / 8025   | SMTP 与收件 API                                               |
+| `gitea`          | 3000          | Gitea API，管理员 `armadra-dev`                               |
+| `glitchtip`      | 8000          | 崩溃上报（带 postgres 与 redis，均不对外）                    |
+| `push-sink`      | 8091          | 假 APNs（h2c）/ FCM / Web Push / 推送中继，记录请求           |
+| `hibp`           | 8092          | Pwned Passwords range API 固定响应                            |
+| `armadra-server` | 8443          | 容器化服务器壳（`apps/server/docker/Dockerfile`，自签名 TLS） |
+| `headscale`      | 8094          | 可选 profile，只做文档验证，不进 CI                           |
+| `ntfy`           | 8093          | 可选 profile，UnifiedPush 分发                                |
 
 开发夹具与密钥：
 

@@ -225,8 +225,10 @@ services:
   armadra-server:
     build:
       context: ../..
-      dockerfile: tools/dev-stack/Dockerfile.dev
+      dockerfile: apps/server/docker/Dockerfile
     image: armadra-dev-server:local
+    environment:
+      ARMADRA_PUBLIC_ORIGIN: "https://localhost:8443"
     volumes:
       - armadra-server:/data
     ports:
