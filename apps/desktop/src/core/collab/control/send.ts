@@ -13,12 +13,6 @@ import {
   silentStartIdle,
   stateSourceIsReported,
 } from "../../agent/target-state";
-import {
-  SCREEN_GATE_LINES,
-  type ScreenVerdict,
-  judgeScreen,
-  screenProfile,
-} from "../../agent/screen-gate";
 import { getAgentStatus } from "../../agent/status";
 import { getContextLinks } from "../../canvas/context-links";
 import {
@@ -38,6 +32,7 @@ import {
   loadHandles,
   resolveLink,
 } from "../addressing";
+import { checkScreen } from "../screen";
 import { recordDelivery } from "../deliveries";
 import { MAX_BODY_CHARS } from "../mailbox";
 import {
@@ -675,17 +670,16 @@ export async function attempt(
   // 提示）停在那里时 Hook 照样报。正文加回车落进去就是替人选了缺省项——
   // 2026-10-02 实测，Claude 的「把 auto 设为缺省权限模式？」就这样被答掉，改写
   // 了用户真实的 `~/.claude/settings.json`。只认已知对话框；首投另要求看得见
-  // 提示符。判据在 `agent/screen-gate.ts`。
-  const screen = await screenGate(context, live, firstDelivery);
+  // 提示符。判据在 `agent/screen-gate.ts`，取画面在 `collab/screen.ts`。
+  const screen = await checkScreen({
+    terminals: context.terminals,
+    settings: context.settings,
+    agentId: live.target.agentId,
+    sessionId: live.session.sessionId,
+    first: firstDelivery,
+  });
   if (screen.kind !== "clear") {
-    return queueOrRefuse(
-      context,
-      item,
-      target,
-      "TARGET_NOT_AT_PROMPT",
-      options,
-      now,
-    );
+    return queueOrRefuse(context, item, target, screen.reason, options, now);
   }
 
   /* ------------------------------- 真的投 ------------------------------- */
@@ -1106,39 +1100,6 @@ function sessionStart(
     observed,
     sessionAgeMs: generationAge(session, observed, nowMs),
   });
-}
-
-/**
- * 取目标的画面交给 `judgeScreen`。这家 CLI 没有登记画面特征就不取（裸终端、
- * 没有已知对话框的几家），平常的投递一次 capture 也不多花。
- *
- * capture 失败不抛：首投按「看不见提示符」排队，平常的投递放过——取画面失败
- * 不该让一条本来能投的消息从此投不进去。
- */
-async function screenGate(
-  context: CollabContext,
-  live: LiveTarget,
-  first: boolean,
-): Promise<ScreenVerdict> {
-  const agentId = live.target.agentId;
-  if (agentId === null) return { kind: "clear" };
-  const profile = screenProfile(baseAgent(context.settings, agentId));
-  if (profile === undefined) return { kind: "clear" };
-  const terminals = context.terminals;
-  let screen: string | undefined;
-  if (terminals !== undefined) {
-    try {
-      const captured = await terminals.capture(
-        live.session.sessionId,
-        SCREEN_GATE_LINES,
-        false,
-      );
-      screen = captured.data;
-    } catch {
-      screen = undefined;
-    }
-  }
-  return judgeScreen(profile, screen, first);
 }
 
 /**
