@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { CoreRequest } from "../http/router";
-import type { RouteScopeRequirement } from "../http/route-scopes";
+import { type RouteScopeRequirement, selfGuarded } from "../http/route-scopes";
 import { type AuthorizationSubject, isOwner } from "./authorize";
 import { type RouteGuard, type RouteVerdict, requestIdentity } from "./gate";
 import { type Scope, scope } from "./scopes";
@@ -65,15 +65,6 @@ export interface RouteAccessOptions {
 
 const ALLOW: RouteVerdict = { allowed: true };
 const DENY: RouteVerdict = { allowed: false };
-
-/** 不经路由门的面：健康检查，以及自己认证、自己判定的身份域。 */
-function selfGuarded(path: string): boolean {
-  return (
-    path === "/health" ||
-    path === "/api/health" ||
-    path.startsWith("/api/identity/")
-  );
-}
 
 /**
  * 无害的全局读：不带任何人的数据，画布上的日常操作离不开。只有 GET。

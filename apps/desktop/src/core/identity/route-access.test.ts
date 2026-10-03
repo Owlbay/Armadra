@@ -139,6 +139,23 @@ describe("路由门的矩阵", () => {
   it("身份域自己判，不经路由门", () => {
     const { decide } = harness();
     expect(row(decide, "GET", "/api/identity/groups")).toBe(PEOPLE.join(","));
+    // 推送域同样自己认身份：登录即可，只碰请求主体自己的设备。
+    expect(row(decide, "POST", "/api/push/devices")).toBe(PEOPLE.join(","));
+  });
+
+  it("补全计划的新面：Gateway、凭据、ACP、工作流在补上查找之前只有 owner", () => {
+    const { decide } = harness();
+    expect(row(decide, "GET", "/api/gateway")).toBe("owner");
+    expect(row(decide, "POST", "/api/credentials")).toBe("owner");
+    expect(row(decide, "POST", "/api/acp/sessions")).toBe("owner");
+    expect(row(decide, "POST", "/api/workflows/runs")).toBe("owner");
+    // 实时同步与评论在路径上带着工作空间，按角色链收窄。
+    expect(row(decide, "GET", "/api/workspaces/w1/boards/b1/sync")).toBe(
+      "owner,driver,operator,editor,viewer",
+    );
+    expect(row(decide, "POST", "/api/workspaces/w1/boards/b1/comments")).toBe(
+      "owner,driver,operator,editor",
+    );
   });
 
   it("工作空间列表放行，只留看得见的", () => {

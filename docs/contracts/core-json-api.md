@@ -550,3 +550,43 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - 新 Worker 在第一次 `integration.sync` 时对执行主机的 `~/.codex/config.toml` 做一次 §13.3 的第二步，记进它状态目录下的 `integration/global-migration.json`。
 - 控制端只要求 `remote.integration.v1` 就能同步，且不再发 `codexCommand`（旧 Worker 只在收到它时写信任）。只有 v1 的主机控制端记为「Worker 旧」：它之前写下的 Codex 信任记录要等 Worker 升级后才会被清。
 - 远端注入文件改为与本机同一个生成器：`run/<cli>`（POSIX 启动器）与委托给它的 `shims/<cli>`。
+
+## 14. ACP：`/api/acp/*` 与 `/api/agents` 行的 `acp`
+
+预留，由 G1-4（§14.1）与 G2-1（§14.2–§14.4）填写。
+
+## 15. 工作流与 runners：`/api/workflows/*`
+
+预留，由 G1-8（§15.1–§15.4）、G2-4（§15.5）与 G2-3（§15.6）填写。
+
+## 16. 实时协同：`…/boards/{boardId}/sync` 与评论
+
+预留，由 G1-9（§16.1–§16.2）、G2-6（§16.3）与 G2-5（§16.4）填写。
+
+## 17. Gateway：`/api/gateway*`
+
+预留，由 G1-10 填写。
+
+## 18. 身份扩展：口令策略、passkey、MFA、会话、OAuth、审计
+
+预留，由 G1-11（§18.1–§18.4）、G1-12（§18.5）与 G2-8（§18.6）填写。
+
+## 19. 推送：`/api/push/devices*`
+
+预留，由 G1-13 填写。
+
+## 20. 节点凭据：`/api/credentials*`
+
+预留，由 G1-1 填写。
+
+## 21. 跨主机交接与 Worker 舰队
+
+预留，由 G1-2 填写。
+
+## 22. 投递画面门补充
+
+预留，由 G1-3 填写。
+
+## 23. 权限补充：自己创建的终端与工作流关卡
+
+预留，由 G2-9 填写。

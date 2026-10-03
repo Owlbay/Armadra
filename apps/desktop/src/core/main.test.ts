@@ -3,7 +3,21 @@ import { connect } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { HelpRequested, type RunningCore, run, runtimeEndpoint } from "./main";
+import {
+  DOMAINS,
+  HelpRequested,
+  type RunningCore,
+  run,
+  runtimeEndpoint,
+} from "./main";
+import { install as installAcp } from "./acp";
+import { install as installGateway } from "./gateway";
+import { install as installHooks } from "./hook";
+import { installIdentity } from "./identity";
+import { install as installPush } from "./push";
+import { install as installRealtime } from "./realtime";
+import { install as installTerminals } from "./terminal/install";
+import { install as installWorkflow } from "./workflow";
 import { read } from "./endpoints";
 import { ROUTES } from "./http/routes";
 import { parseAnnouncement } from "./instance";
@@ -393,6 +407,26 @@ describe("the published record", () => {
     ]);
     expect(private_.http).toBeUndefined();
     expect(private_.websocket).toBeUndefined();
+  });
+});
+
+describe("the assembly order", () => {
+  it("补全计划的域按 identity → 终端 → acp → workflow → realtime → push → gateway 装配", () => {
+    const order = [
+      installIdentity,
+      installTerminals,
+      installAcp,
+      installWorkflow,
+      installRealtime,
+      installPush,
+      installGateway,
+    ].map((install) => DOMAINS.indexOf(install));
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // Gateway 对外监听，开始时每个域都得已经装好；hook 服务公布端点，也在
+    // 每个答得了 hook 报告的域之后。
+    expect(DOMAINS.at(-1)).toBe(installGateway);
+    expect(DOMAINS.at(-2)).toBe(installHooks);
   });
 });
 
