@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PERMISSIONS } from "../identity/scopes";
-import { routeScope, workspaceOf } from "./route-scopes";
+import { routeScope, selfGuarded, workspaceOf } from "./route-scopes";
 import { Router } from "./router";
 import { ROUTES } from "./routes";
 
@@ -100,5 +100,123 @@ describe("路由要求的 scope", () => {
     expect(
       router.requiredScope("POST", "/api/workspaces/w-7/git/status"),
     ).toEqual({ permission: "git:write", workspaceId: "w-7" });
+  });
+});
+
+/**
+ * 补全计划的新面（G0-3）：路由还没写，权限先按前缀声明好，后面的包只登记
+ * 路由、不再改这张表。
+ */
+describe("补全计划新面的 scope", () => {
+  const permission = (method: string, path: string) =>
+    routeScope(method, path)?.permission;
+
+  it("ACP：看会话同看终端，开会话同开终端", () => {
+    expect(permission("GET", "/api/acp/sessions")).toBe("terminal:read");
+    expect(permission("GET", "/api/acp/sessions/s1")).toBe("terminal:read");
+    expect(permission("POST", "/api/acp/sessions")).toBe("terminal:create");
+    expect(permission("PUT", "/api/acp/nodes/n1/driver")).toBe(
+      "terminal:create",
+    );
+  });
+
+  it("工作流：读是看画布，写要 operator 那一档", () => {
+    expect(permission("GET", "/api/workflows/templates")).toBe("canvas:read");
+    expect(permission("POST", "/api/workflows/runs")).toBe("agent:launch");
+    expect(permission("POST", "/api/workflows/drafts/d1/confirm")).toBe(
+      "agent:launch",
+    );
+  });
+
+  it("实时同步与评论：读 canvas:read，写 canvas:write，且先于看板那一档", () => {
+    expect(routeScope("GET", "/api/workspaces/w-1/boards/b-1/sync")).toEqual({
+      permission: "canvas:read",
+      workspaceId: "w-1",
+    });
+    expect(
+      permission("POST", "/api/workspaces/{workspaceId}/boards/{boardId}/sync"),
+    ).toBe("canvas:write");
+    expect(permission("GET", "/api/workspaces/w-1/boards/b-1/comments")).toBe(
+      "canvas:read",
+    );
+    expect(
+      routeScope("DELETE", "/api/workspaces/w-1/boards/b-1/comments/c-1"),
+    ).toEqual({ permission: "canvas:write", workspaceId: "w-1" });
+  });
+
+  it("Gateway 与节点凭据只有 owner：全局的设置那一档", () => {
+    for (const path of ["/api/gateway", "/api/gateway/pairing"]) {
+      expect(routeScope("GET", path)).toEqual({
+        permission: "settings:read",
+        workspaceId: "",
+      });
+      expect(routeScope("POST", path)?.permission).toBe("settings:write");
+    }
+    expect(permission("GET", "/api/credentials")).toBe("settings:read");
+    expect(permission("DELETE", "/api/credentials/c1")).toBe("settings:write");
+  });
+
+  it("推送与身份域自己认身份，路由门不判", () => {
+    expect(selfGuarded("/api/push/devices")).toBe(true);
+    expect(selfGuarded("/api/identity/passkey/register/options")).toBe(true);
+    expect(selfGuarded("/health")).toBe(true);
+    expect(selfGuarded("/api/gateway")).toBe(false);
+    expect(selfGuarded("/api/pushy")).toBe(false);
+    expect(selfGuarded("/api/acp/sessions")).toBe(false);
+  });
+
+  it("身份扩展按 §18 分别声明：登录那几步不要求权限", () => {
+    expect(
+      routeScope("POST", "/api/identity/passkey/login/options"),
+    ).toBeUndefined();
+    expect(
+      routeScope("POST", "/api/identity/passkey/login/verify"),
+    ).toBeUndefined();
+    expect(routeScope("POST", "/api/identity/mfa/verify")).toBeUndefined();
+    expect(routeScope("GET", "/api/identity/oauth/dex/start")).toBeUndefined();
+    expect(
+      routeScope("GET", "/api/identity/oauth/dex/callback"),
+    ).toBeUndefined();
+    expect(permission("POST", "/api/identity/passkey/register/options")).toBe(
+      "identity:manage",
+    );
+    expect(permission("GET", "/api/identity/passkey")).toBe("identity:read");
+    expect(permission("POST", "/api/identity/mfa/totp")).toBe(
+      "identity:manage",
+    );
+    expect(permission("DELETE", "/api/identity/oauth/bindings/b1")).toBe(
+      "identity:manage",
+    );
+    expect(permission("GET", "/api/identity/sessions")).toBe("identity:read");
+    expect(permission("DELETE", "/api/identity/sessions/s1")).toBe(
+      "identity:manage",
+    );
+    expect(permission("GET", "/api/identity/audit")).toBe("identity:read");
+  });
+
+  it("新声明的权限名都在授权词汇表里", () => {
+    const paths = [
+      "/api/acp/sessions",
+      "/api/workflows/runs",
+      "/api/workspaces/w/boards/b/sync",
+      "/api/workspaces/w/boards/b/comments",
+      "/api/gateway",
+      "/api/credentials",
+      "/api/push/devices",
+      "/api/identity/passkey",
+      "/api/identity/mfa/totp",
+      "/api/identity/oauth/bindings",
+      "/api/identity/sessions",
+      "/api/identity/audit",
+    ];
+    for (const path of paths) {
+      for (const method of ["GET", "POST"]) {
+        const required = routeScope(method, path);
+        expect(required, `${method} ${path}`).toBeDefined();
+        expect(PERMISSIONS as readonly string[]).toContain(
+          required?.permission,
+        );
+      }
+    }
   });
 });

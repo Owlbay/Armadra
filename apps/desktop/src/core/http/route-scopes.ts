@@ -36,6 +36,23 @@ export interface RouteScopeRequirement {
 
 const WORKSPACE = String.raw`/api/workspaces/[^/]+`;
 
+/**
+ * 不经路由门的路径：它们要么先于任何身份存在（健康检查），要么自己认请求
+ * 身份、自己判定（身份域；推送域只碰请求主体自己的设备，「登录即可」）。
+ *
+ * 这张表里的路径照样可以在 {@link ROUTE_SCOPE_RULES} 里声明权限——那是给
+ * 读的人看的清单，门不拿它判。`identity/route-access.ts` 用的就是这一份。
+ */
+export const SELF_GUARDED: readonly RegExp[] = [
+  /^\/(api\/)?health$/,
+  /^\/api\/identity\//,
+  /^\/api\/push\//,
+];
+
+export function selfGuarded(path: string): boolean {
+  return SELF_GUARDED.some((pattern) => pattern.test(path));
+}
+
 /** 路径族 → 权限。顺序即优先级。 */
 export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
   // 健康检查是壳与探针用来确认「core 起来了」的，先于任何身份存在。
@@ -44,6 +61,84 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
   // Hello 回答的是「这台 core 是谁、支持什么」，那是一次配对**之前**就要知道的
   // 事，所以它和健康检查同一档：不要求任何权限。
   { pattern: /^\/api\/identity\/hello$/, read: null, write: null },
+
+  // 身份扩展（契约 §18）。整段 `/api/identity/` 自己认证（{@link SELF_GUARDED}），
+  // 这几行是清单而不是门：写的是「管别人的」那一档，本人的 passkey、MFA、
+  // 会话与 OAuth 绑定由身份域按请求主体放行。登录本身的几步先于身份存在。
+  {
+    pattern: /^\/api\/identity\/passkey\/login\//,
+    read: null,
+    write: null,
+  },
+  {
+    pattern: /^\/api\/identity\/passkey/,
+    read: "identity:read",
+    write: "identity:manage",
+  },
+  { pattern: /^\/api\/identity\/mfa\/verify$/, read: null, write: null },
+  {
+    pattern: /^\/api\/identity\/mfa/,
+    read: "identity:read",
+    write: "identity:manage",
+  },
+  {
+    pattern: /^\/api\/identity\/oauth\/[^/]+\/(start|callback)$/,
+    read: null,
+    write: null,
+  },
+  {
+    pattern: /^\/api\/identity\/oauth/,
+    read: "identity:read",
+    write: "identity:manage",
+  },
+  {
+    pattern: /^\/api\/identity\/sessions/,
+    read: "identity:read",
+    write: "identity:manage",
+  },
+  // 审计只读；导出 CSV 也是 GET。
+  {
+    pattern: /^\/api\/identity\/audit/,
+    read: "identity:read",
+    write: "identity:read",
+  },
+
+  // Gateway 与节点凭据只有 owner：要的是全局授权，共享只发工作空间上的授权，
+  // 所以成员在这里一律 403（与设置同一档）。契约 §17、§20。
+  {
+    pattern: /^\/api\/gateway/,
+    read: "settings:read",
+    write: "settings:write",
+  },
+  {
+    pattern: /^\/api\/credentials/,
+    read: "settings:read",
+    write: "settings:write",
+  },
+  // 推送设备：登录即可（{@link SELF_GUARDED}），推送域只碰请求主体自己的设备。
+  // 声明的这一档只是清单：注册一台设备收的是「看得见的画布」上的通知。契约 §19。
+  {
+    pattern: /^\/api\/push\//,
+    read: "canvas:read",
+    write: "canvas:read",
+  },
+  // ACP 会话（契约 §14）：看会话与看终端同一档，开会话、发提示与开终端同一档。
+  // 路径里没有工作空间，成员在路由门按会话行查出画布之前一律 403（G2-1 补
+  // 与 `/api/terminals/{id}` 相同的那段查找）。
+  {
+    pattern: /^\/api\/acp\//,
+    read: "terminal:read",
+    write: "terminal:create",
+  },
+  // 工作流（契约 §15）：看草案、模板与运行记录是看画布；确认草案、改模板、
+  // 起一次运行会开节点与 Agent，要 operator 那一档（`agent:launch`）。关卡
+  // 答复的权限由契约 §23 收紧。路径里没有工作空间，成员在 G1-8 补上按运行
+  // 查画布之前一律 403。
+  {
+    pattern: /^\/api\/workflows/,
+    read: "canvas:read",
+    write: "agent:launch",
+  },
 
   // R7a 的两张 JSON 面。工作空间跟着查询串走而不是路径，所以这里声明的是全局
   // 那一档；按工作空间收窄的那一次判定在域自己的 HTTP 面上（`github/http.ts`
@@ -103,6 +198,20 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
     pattern: new RegExp(`^${WORKSPACE}/execution-host$`),
     read: "settings:read",
     write: "settings:write",
+  },
+
+  // 实时协同（契约 §16）。`…/sync` 是 WebSocket：升级（GET）要
+  // `canvas:read`，更新帧要 `canvas:write`——帧上的那次判定在实时域里，
+  // 这里的写方法一档写给非 GET 的同路径。评论读写分开。
+  {
+    pattern: new RegExp(`^${WORKSPACE}/boards/[^/]+/sync$`),
+    read: "canvas:read",
+    write: "canvas:write",
+  },
+  {
+    pattern: new RegExp(`^${WORKSPACE}/boards/[^/]+/comments`),
+    read: "canvas:read",
+    write: "canvas:write",
   },
 
   // 在线设备的心跳与离开（契约 §9.1）：只读的客户端也要让别人看见自己在看，
