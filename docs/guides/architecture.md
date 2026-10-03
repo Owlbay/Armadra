@@ -540,8 +540,8 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
 同一文档 G4-1 一节。这里只列影响架构判断的几条：
 
 - **Windows 真机**：session host、启动行方言、`.cmd` 绕过与 `.exe` 启动器只在 Windows CI
-  上跑过，没有在真机上长时间运行（进度 §13、§33、§54、§57、§61）；节点凭据与 ama 模型密钥
-  的兑换在 Windows 启动器里没有实现，一律答 `credential_unsupported_here`。
+  上跑过，没有在真机上长时间运行（进度 §13、§33、§54、§57、§61）；Windows 启动器没有兑换段：
+  节点凭据一律答 `credential_unsupported_here`，ama 不兑换模型密钥、用它自己的 `auth.json`。
 - **签名发布**：签名、公证、GPG 与更新清单的流程都已写好（[CI 与发布](ci-release.md)），
   但没有真证书。未签名的发布包在 `ARMADRA_UPDATES_DEV=1` 下能检查、下载、校验、暂存，
   「安装」答 `notSigned`；本地 `dist` 是 `localBuild`；更新器从不报没发生过的 `upToDate`
