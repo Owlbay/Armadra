@@ -162,6 +162,11 @@ export default async function editor({ stack, output, report, scenario }) {
   const url = stack.boardUrl(workspace.id, board.id);
 
   const page = await stack.browser.page(await stack.browser.context());
+  // 棋盘格的两种表面色在浅色主题里只差两级灰（#ededed / #ebebeb），按 4 位
+  // 量化的像素统计分不开；固定深色主题，结果不随系统外观变。
+  await page.call("Emulation.setEmulatedMedia", {
+    features: [{ name: "prefers-color-scheme", value: "dark" }],
+  });
   await page.goto(url);
   await page.settle();
 
