@@ -160,6 +160,8 @@ export const sessionSummarySchema = z.object({
   updatedAt: z.string().datetime({ offset: true }),
   /** The PTY is still running in this runtime instance. */
   alive: z.boolean(),
+  /** How the session is driven; the sidebar marks `acp` rows. */
+  backend: terminalBackendKindSchema.optional(),
 });
 
 export const sessionsResponseSchema = z.array(sessionSummarySchema);
