@@ -765,7 +765,8 @@ jobs:
           $env:PATH = "$env:USERPROFILE\scoop\shims;$env:PATH"
           $server = Start-Process python -ArgumentList '-m','http.server','8765','--bind','127.0.0.1' -WorkingDirectory serve -PassThru -WindowStyle Hidden
           Start-Sleep -Seconds 2
-          scoop install rendered/channels-local/scoop/bucket/armadra.json
+          # 相对路径会被当成「bucket/应用」，要给绝对路径。
+          scoop install (Resolve-Path rendered/channels-local/scoop/bucket/armadra.json).Path
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $app = "$env:USERPROFILE\scoop\apps\armadra\current"
           foreach ($name in 'armadra.exe', 'LICENSE.electron.txt', 'LICENSES.chromium.html', 'resources\THIRD_PARTY_NOTICES.md') {
