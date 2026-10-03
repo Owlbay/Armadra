@@ -8,6 +8,11 @@ import { type ListenSpec, bind, release } from "../listen";
 import { ROUTES } from "../http/routes";
 import { Router, type CoreRequest, type HandlerResult } from "../http/router";
 import { readBody } from "../http/server";
+import {
+  CredentialError,
+  credentialsDomain,
+  persistedBinding,
+} from "../agent/credentials";
 import { collabDispatcher } from "./collab";
 import {
   CLIENT_REVISION_HEADER,
@@ -70,6 +75,10 @@ export class HookServer {
         headerRecord(request),
       );
     });
+
+    this.router.handle("POST", "/credential", (_match, request) =>
+      this.credential(request),
+    );
 
     for (const family of ["context-link", "control", "browser"] as const) {
       this.router.handle("POST", `/${family}/{verb}`, async (match, request) =>
@@ -152,6 +161,70 @@ export class HookServer {
     return answer.kind === "text"
       ? text(answer.status, answer.body)
       : { status: answer.status, body: answer.body };
+  }
+
+  /**
+   * 画布启动器兑换节点凭据（契约 §20.4）。值只走这一条本机回环通道：要应用
+   * bearer，且节点 token 必须**验过**（`legacy` 没 token 的不行），只答这个节点
+   * 此刻绑定的那一条。答复与失败都不记日志。
+   */
+  private async credential(request: CoreRequest): Promise<HandlerResult> {
+    const refusal = this.requireBearer(request);
+    if (refusal !== undefined) return refusal;
+    let body: { nodeId?: unknown; ref?: unknown };
+    try {
+      body = (request.json<{ nodeId?: unknown; ref?: unknown }>() ?? {}) as {
+        nodeId?: unknown;
+        ref?: unknown;
+      };
+    } catch {
+      body = {};
+    }
+    const nodeId = typeof body.nodeId === "string" ? body.nodeId : "";
+    const ref = typeof body.ref === "string" ? body.ref : "";
+    const verdict = this.options.hooks.verdict(
+      nodeId,
+      single(request.headers[NODE_TOKEN_HEADER]),
+    );
+    if (nodeId === "" || ref === "" || verdict !== "verified") {
+      return {
+        status: 403,
+        body: { code: "forbidden", message: "The node token is not valid" },
+      };
+    }
+    const domain = credentialsDomain();
+    if (domain === undefined) {
+      return {
+        status: 503,
+        body: {
+          code: "credential_unavailable",
+          message: "Node credentials are not assembled",
+        },
+      };
+    }
+    try {
+      const redeemed = await domain.redeem(
+        nodeId,
+        ref,
+        persistedBinding(this.options.database, nodeId),
+      );
+      return {
+        status: 200,
+        body: redeemed,
+        headers: { "cache-control": "no-store" },
+      };
+    } catch (failure) {
+      if (failure instanceof CredentialError) {
+        return {
+          status: failure.status,
+          body: { code: failure.code, message: failure.message },
+        };
+      }
+      return {
+        status: 500,
+        body: { code: "internal", message: "Could not redeem the credential" },
+      };
+    }
   }
 
   /** One listener per address; the router is shared. */

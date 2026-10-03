@@ -454,6 +454,23 @@ describe("挑后端", () => {
     expect(resolved.backend.kind).toBe("file");
   });
 
+  it("ARMADRA_SECRET_BACKEND=file-encrypted 在数据目录里封存，不碰钥匙串", async () => {
+    const dir = dataDir();
+    const resolved = resolveSecretBackend({
+      dataDir: dir,
+      env: { ARMADRA_SECRET_BACKEND: "file-encrypted" },
+      platform: "darwin",
+      security: () => {
+        throw new Error("the keychain must not be touched");
+      },
+    });
+    expect(resolved.backend.kind).toBe("file-encrypted");
+    await resolved.backend.set("armadra-probe", "sealed-value");
+    await expect(resolved.backend.get("armadra-probe")).resolves.toBe(
+      "sealed-value",
+    );
+  });
+
   it("壳注入的后端（服务器壳）优先于平台默认", () => {
     const injected = memoryBackend("file-encrypted");
     const resolved = resolveSecretBackend({

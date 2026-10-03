@@ -224,10 +224,12 @@ export function wantsJson(
 
 /* ------------------------------ 监听地址 --------------------------------- */
 
-export interface ListenAddress {
-  readonly host: string;
-  readonly port: number;
-}
+// 地址类型与回环判定随 Gateway 下沉到 core（`core/gateway/network.ts`）。
+import type { ListenAddress } from "../../desktop/src/core/gateway/network";
+export {
+  type ListenAddress,
+  loopbackHost,
+} from "../../desktop/src/core/gateway/network";
 
 /**
  * `HOST:PORT`，IPv6 写成 `[::1]:8443`。端口 0 表示由内核分配；指定的端口被占用
@@ -251,14 +253,4 @@ export function parseListen(value: string): ListenAddress | undefined {
   const port = Number(portText);
   if (port > 65535) return undefined;
   return { host, port };
-}
-
-/** 回环字面量。主机名不算：主机名是别人的 `/etc/hosts` 说了算的东西。 */
-export function loopbackHost(host: string): boolean {
-  const literal =
-    host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
-  if (literal === "localhost") return true;
-  if (/^127(\.\d{1,3}){3}$/.test(literal)) return true;
-  const lowered = literal.toLowerCase();
-  return lowered === "::1" || lowered === "0:0:0:0:0:0:0:1";
 }

@@ -1,0 +1,373 @@
+/**
+ * End-to-end tiers.
+ *
+ *   node tools/ci/e2e.mjs --tier a [--only id,id] [--out dir] [--list]
+ *
+ * Runs every probe in tools/ci/e2e.json that belongs to the tier, one after
+ * another, and writes <out>/result.json with one record per entry. Any failure
+ * makes the exit code non-zero; the remaining entries still run, because one
+ * broken probe should not hide what the others would have said.
+ *
+ * The probes build nothing themselves. The caller builds first:
+ *
+ *   pnpm libs:build
+ *   pnpm --filter @armadra/web build
+ *   pnpm --filter @armadra/desktop build
+ *   pnpm --filter @armadra/server build
+ *
+ * Tier A needs tmux and a Chrome / Chromium (CHROME_PATH, or the usual install
+ * locations). Entries marked `devStack` only run when ARMADRA_DEV_STACK=1 and
+ * Docker answers; otherwise they are recorded as skipped, not failed.
+ */
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = fileURLToPath(new URL("../../", import.meta.url));
+export const MANIFEST = join(ROOT, "tools/ci/e2e.json");
+export const TIERS = ["a", "b"];
+export const REQUIREMENTS = ["tmux", "chrome"];
+
+/** Structural problems with a manifest, as plain sentences. */
+export function validateManifest(manifest, root = ROOT) {
+  const problems = [];
+  const entries = manifest?.entries;
+  if (!Array.isArray(entries)) return ["manifest has no entries list"];
+  const seen = new Set();
+  for (const [index, entry] of entries.entries()) {
+    const where = `entry ${index + 1}${entry?.id ? ` (${entry.id})` : ""}`;
+    if (!entry || typeof entry !== "object") {
+      problems.push(`${where} is not an object`);
+      continue;
+    }
+    if (typeof entry.id !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(entry.id))
+      problems.push(`${where} has no kebab-case id`);
+    else if (seen.has(entry.id)) problems.push(`${where} repeats its id`);
+    else seen.add(entry.id);
+    if (!TIERS.includes(entry.tier))
+      problems.push(
+        `${where} has tier ${entry.tier}, not one of ${TIERS.join(", ")}`,
+      );
+    if (typeof entry.script !== "string" || entry.script === "")
+      problems.push(`${where} names no script`);
+    else if (!existsSync(join(root, entry.script)))
+      problems.push(`${where} runs ${entry.script}, which does not exist`);
+    if (
+      entry.args !== undefined &&
+      (!Array.isArray(entry.args) ||
+        entry.args.some((arg) => typeof arg !== "string"))
+    )
+      problems.push(`${where} has args that are not a list of strings`);
+    for (const need of entry.requires ?? [])
+      if (!REQUIREMENTS.includes(need))
+        problems.push(
+          `${where} requires ${need}, which the runner cannot check`,
+        );
+    if (!(typeof entry.timeoutMinutes === "number" && entry.timeoutMinutes > 0))
+      problems.push(`${where} has no positive timeoutMinutes`);
+    if (entry.devStack !== undefined && typeof entry.devStack !== "boolean")
+      problems.push(`${where} has a devStack that is not a boolean`);
+  }
+  return problems;
+}
+
+/** The Chrome to hand the probes: CHROME_PATH, or the first usual location. */
+export function findChrome(env = process.env, platform = process.platform) {
+  if (env.CHROME_PATH)
+    return existsSync(env.CHROME_PATH) ? env.CHROME_PATH : null;
+  const candidates =
+    platform === "darwin"
+      ? [
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+      : platform === "win32"
+        ? ["C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"]
+        : [
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/snap/bin/chromium",
+          ];
+  return candidates.find((path) => existsSync(path)) ?? null;
+}
+
+function hasTmux() {
+  return spawnSync("tmux", ["-V"], { stdio: "ignore" }).status === 0;
+}
+
+function hasDocker() {
+  return (
+    spawnSync("docker", ["info"], { stdio: "ignore", timeout: 30_000 })
+      .status === 0
+  );
+}
+
+/** Kill a probe and everything it started (Chrome, core, Vite, tmux clients). */
+function killTree(child, signal) {
+  try {
+    if (process.platform === "win32") child.kill(signal);
+    else process.kill(-child.pid, signal);
+  } catch {}
+}
+
+function runEntry(entry, { root, out, env, log }) {
+  const directory = join(out, entry.id);
+  rmSync(directory, { recursive: true, force: true });
+  mkdirSync(directory, { recursive: true });
+  const logPath = join(directory, "output.log");
+  const sink = createWriteStream(logPath);
+  const args = (entry.args ?? []).map((arg) =>
+    arg.replaceAll("{out}", directory),
+  );
+  const started = Date.now();
+  return new Promise((done) => {
+    const child = spawn(process.execPath, [join(root, entry.script), ...args], {
+      cwd: root,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
+    });
+    const forward = (chunk) => {
+      sink.write(chunk);
+      log(chunk);
+    };
+    child.stdout.on("data", forward);
+    child.stderr.on("data", forward);
+    let timedOut = false;
+    const limit = entry.timeoutMinutes * 60_000;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree(child, "SIGTERM");
+      setTimeout(() => killTree(child, "SIGKILL"), 10_000).unref();
+    }, limit);
+    child.on("error", (error) => forward(`${error.stack ?? error}\n`));
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      // The probe's own children (Chrome, core) may outlive a crash.
+      killTree(child, "SIGKILL");
+      sink.end();
+      const passed = code === 0 && !timedOut;
+      done({
+        id: entry.id,
+        status: passed ? "passed" : "failed",
+        ...(timedOut
+          ? { reason: `timed out after ${entry.timeoutMinutes} min` }
+          : {}),
+        exitCode: code,
+        signal,
+        durationMs: Date.now() - started,
+        output: directory,
+        log: logPath,
+      });
+    });
+  });
+}
+
+/**
+ * Run one tier. Returns the summary that is also written to <out>/result.json.
+ * `probe` lets tests stand in for tmux / Chrome / Docker detection.
+ */
+export async function runTier({
+  tier,
+  manifest = JSON.parse(readFileSync(MANIFEST, "utf8")),
+  root = ROOT,
+  out = join(root, "target/e2e", tier),
+  only,
+  env = process.env,
+  probe = { tmux: hasTmux, chrome: () => findChrome(env), docker: hasDocker },
+  devStack = {
+    up: () => pnpm(root, ["dev-stack", "up"]),
+    down: () => pnpm(root, ["dev-stack", "down"]),
+  },
+  log = (chunk) => process.stdout.write(chunk),
+}) {
+  if (!TIERS.includes(tier))
+    throw new Error(`unknown tier ${tier}; use one of ${TIERS.join(", ")}`);
+  const problems = validateManifest(manifest, root);
+  if (problems.length > 0)
+    throw new Error(`tools/ci/e2e.json:\n  ${problems.join("\n  ")}`);
+  const selected = manifest.entries.filter(
+    (entry) => entry.tier === tier && (!only || only.includes(entry.id)),
+  );
+  if (only) {
+    const unknown = only.filter(
+      (id) => !selected.some((entry) => entry.id === id),
+    );
+    if (unknown.length > 0)
+      throw new Error(`not in tier ${tier}: ${unknown.join(", ")}`);
+  }
+  mkdirSync(out, { recursive: true });
+
+  const chrome = selected.some((entry) => entry.requires?.includes("chrome"))
+    ? probe.chrome()
+    : null;
+  const tmux = selected.some((entry) => entry.requires?.includes("tmux"))
+    ? probe.tmux()
+    : false;
+  const childEnv = { ...env, ...(chrome ? { CHROME_PATH: chrome } : {}) };
+
+  // The dev-stack is brought up once for the whole tier, and only when asked.
+  let stack = { state: "off", reason: "ARMADRA_DEV_STACK is not 1" };
+  if (selected.some((entry) => entry.devStack)) {
+    if (env.ARMADRA_DEV_STACK !== "1")
+      stack = { state: "off", reason: "ARMADRA_DEV_STACK is not 1" };
+    else if (!probe.docker())
+      stack = { state: "off", reason: "Docker is not available" };
+    else {
+      log("== dev-stack up\n");
+      const up = devStack.up();
+      stack =
+        up === 0
+          ? { state: "up" }
+          : { state: "failed", reason: `pnpm dev-stack up exited ${up}` };
+    }
+  }
+
+  const summary = {
+    tier,
+    status: "passed",
+    startedAt: new Date().toISOString(),
+    platform: `${process.platform}-${process.arch}`,
+    chrome,
+    devStack: stack.state,
+    entries: [],
+  };
+  try {
+    for (const entry of selected) {
+      log(`\n== ${entry.id}\n`);
+      let record;
+      const missing = (entry.requires ?? []).filter((need) =>
+        need === "chrome" ? !chrome : need === "tmux" ? !tmux : false,
+      );
+      if (entry.devStack && stack.state !== "up") {
+        record = {
+          id: entry.id,
+          status: stack.state === "failed" ? "failed" : "skipped",
+          reason: `dev-stack: ${stack.reason}`,
+        };
+      } else if (missing.length > 0) {
+        record = {
+          id: entry.id,
+          status: "failed",
+          reason: `missing ${missing.join(", ")}`,
+        };
+      } else {
+        record = await runEntry(entry, { root, out, env: childEnv, log });
+      }
+      summary.entries.push(record);
+      log(
+        `== ${entry.id}: ${record.status}${record.reason ? ` (${record.reason})` : ""}\n`,
+      );
+      writeSummary(out, summary);
+    }
+  } finally {
+    if (stack.state === "up") {
+      log("== dev-stack down\n");
+      devStack.down();
+    }
+  }
+  summary.status = summary.entries.some((entry) => entry.status === "failed")
+    ? "failed"
+    : "passed";
+  summary.finishedAt = new Date().toISOString();
+  writeSummary(out, summary);
+  return summary;
+}
+
+function writeSummary(out, summary) {
+  writeFileSync(
+    join(out, "result.json"),
+    `${JSON.stringify(summary, null, 2)}\n`,
+  );
+}
+
+function pnpm(root, args) {
+  try {
+    execFileSync(process.platform === "win32" ? "pnpm.cmd" : "pnpm", args, {
+      cwd: root,
+      stdio: "inherit",
+      shell: process.platform === "win32",
+    });
+    return 0;
+  } catch (error) {
+    return typeof error.status === "number" ? error.status : 1;
+  }
+}
+
+function parseArgs(argv) {
+  const options = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const value = () => {
+      const next = argv[index + 1];
+      if (next === undefined) throw new Error(`${arg} needs a value`);
+      index += 1;
+      return next;
+    };
+    if (arg === "--tier") options.tier = value();
+    else if (arg.startsWith("--tier=")) options.tier = arg.slice(7);
+    else if (arg === "--only")
+      options.only = value().split(",").filter(Boolean);
+    else if (arg.startsWith("--only="))
+      options.only = arg.slice(7).split(",").filter(Boolean);
+    else if (arg === "--out") options.out = resolve(value());
+    else if (arg.startsWith("--out=")) options.out = resolve(arg.slice(6));
+    else if (arg === "--list") options.list = true;
+    else throw new Error(`unknown argument ${arg}`);
+  }
+  if (!options.tier)
+    throw new Error(
+      "usage: node tools/ci/e2e.mjs --tier a|b [--only id,id] [--out dir] [--list]",
+    );
+  return options;
+}
+
+async function main() {
+  let options;
+  try {
+    options = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error.message);
+    return 2;
+  }
+  if (options.list) {
+    const manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
+    for (const entry of manifest.entries.filter(
+      (item) => item.tier === options.tier,
+    ))
+      console.log(
+        `${entry.id}${entry.devStack ? " (dev-stack)" : ""}  ${entry.script}`,
+      );
+    return 0;
+  }
+  const summary = await runTier(options);
+  console.log(`\ne2e tier ${summary.tier}: ${summary.status}`);
+  for (const entry of summary.entries)
+    console.log(
+      `  ${entry.status.padEnd(7)} ${entry.id}${entry.durationMs !== undefined ? `  ${Math.round(entry.durationMs / 1000)}s` : ""}${entry.reason ? `  ${entry.reason}` : ""}`,
+    );
+  console.log(
+    `  report ${join(options.out ?? join(ROOT, "target/e2e", summary.tier), "result.json")}`,
+  );
+  return summary.status === "failed" ? 1 : 0;
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main().then(
+    (code) => process.exit(code),
+    (error) => {
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
+    },
+  );
+}

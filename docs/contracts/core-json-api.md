@@ -620,7 +620,91 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 17. Gateway：`/api/gateway*`
 
-预留，由 G1-10 填写。
+Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补全架构](../design/completion-architecture.md) §7）。服务器壳的 `serve` 用命令行参数打开它；桌面壳按设置 `gateway.*` 打开它。下面三条路由在 core 的主监听器上与 Gateway 上都答，路由门按 `settings:read` / `settings:write` 判——只有 owner，成员一律 403 `forbidden`。字段名 camelCase，时间是带时区的 ISO 8601，错误 `{ code, message }`。
+
+### 17.1 `GET /api/gateway`
+
+```json
+{
+  "enabled": true,
+  "running": true,
+  "managedBy": "settings",
+  "listen": "private",
+  "port": 8443,
+  "publicOrigin": "",
+  "address": { "host": "0.0.0.0", "port": 8443 },
+  "origin": "https://192.168.1.20:8443",
+  "origins": [
+    "https://192.168.1.20:8443",
+    "https://mac.local:8443",
+    "https://127.0.0.1:8443"
+  ],
+  "tls": {
+    "source": "localCa",
+    "certFile": "",
+    "keyFile": "",
+    "acmeEmail": "",
+    "fingerprint": "5f1c…（64 位小写十六进制）",
+    "subject": "CN=192.168.1.20",
+    "names": ["192.168.1.20", "mac.local", "127.0.0.1"],
+    "notAfter": "2027-11-04T00:00:00.000Z",
+    "caAvailable": true
+  },
+  "error": null
+}
+```
+
+- `managedBy`：`settings`（桌面壳）或 `shell`（服务器壳，配置来自命令行；这时 `enabled` 恒为 `true`，`port` 是实际绑定的端口）。
+- `listen` / `port` / `publicOrigin` / `tls.{certFile,keyFile,acmeEmail}` 是设置里的值；`address`、`origin`、`origins` 与 `tls` 的其余字段是运行中的事实，没在运行时为 `null` / `[]`。
+- `origin` 是首选来源（二维码用它）：公网来源优先，否则第一个私网地址，然后主机名，最后 `127.0.0.1`。`origins` 是来源白名单：Origin / Host 必须命中其中之一。`https://localhost` 永远不在里面（它是 Android 版 App 的来源）。
+- `tls.source`：`localCa`、`file`、`acme`、`selfSigned`（只有服务器壳没给证书时）。`fingerprint` 是**信任锚** DER 的 SHA-256：本地 CA 时是 CA，其余是叶证书。`caAvailable` 表示 `GET /ca.crt` 有东西可发。
+- `error`：最近一次没能开启的原因，开着或关着时为 `null`。`code` 取值：`acme_unavailable`（ACME 来源尚未实现）、`tls_files_missing`、`port_in_use`、`port_forbidden`、`identity_unavailable`（库没过统一库迁移）、`gateway_failed`（其余，`message` 是原因）。
+
+### 17.2 `PUT /api/gateway`
+
+请求体是设置 `gateway.*` 的子集，未给的键不动：
+
+```json
+{
+  "enabled": true,
+  "listen": "private",
+  "port": 0,
+  "publicOrigin": "",
+  "tls": { "source": "localCa", "certFile": "", "keyFile": "", "acmeEmail": "" }
+}
+```
+
+- `listen`：`loopback` 只绑 `127.0.0.1`；`private` 绑 `0.0.0.0` 但只接受落在回环与本机私网地址（RFC 1918、`100.64.0.0/10`、IPv6 ULA）上的连接；`all` 不筛。
+- `port`：0–65535；`0` = 由内核分配，开启后把实际端口写回设置，之后固定。
+- `publicOrigin`：空串或一个规范拼法的 `https` 来源（反向代理时填）。
+- 不认识的键、类型或取值错误一律 400 `bad_request`，不让规范化悄悄退回缺省。
+- 回答是写入并对账之后的 §17.1。开着时改了任何键会重开监听；`enabled: false` 即刻停止监听并断开经它进来的每一条连接（升级过的流也在内）。没能开启不算请求失败：200，原因在 `error`。
+- 服务器壳上答 409 `gateway_managed_by_shell`。
+
+### 17.3 `POST /api/gateway/pairing`
+
+请求体可选：`{ "origin"?: string, "deviceName"?: string }`。`origin` 必须在 `origins` 里（否则 400 `invalid_origin`），缺省用首选来源；`deviceName` 1–64 字符，缺省「Gateway 配对」。没在运行时 409 `gateway_not_running`。
+
+```json
+{
+  "origin": "https://192.168.1.20:8443",
+  "ticket": "0123…ef.AbC…",
+  "fingerprint": "5f1c…",
+  "expiresAt": "2026-10-03T08:02:00.000Z",
+  "webUrl": "https://192.168.1.20:8443/#pair=0123…ef.AbC…&fp=5f1c…",
+  "deepLink": "armadra://pair?host=192.168.1.20%3A8443&ticket=0123…&fp=5f1c…"
+}
+```
+
+- 票两分钟、一次性，绑在 `origin` 上；兑换走 `POST /api/identity/pair`（§3），配出来的设备拿 owner 的全套授权。成员走邀请。
+- 网页链接把票与指纹放在片段里（不上请求行、不进日志）；页面认 `#pair=<票>` 与 `#pair=<票>&fp=<64 位十六进制>` 两种。
+- 原生 App 按 `fp` 钉信任锚，不装 CA；锚变了（重置 CA、换证书文件）就重新扫码，不自动信任新证书。
+
+### 17.4 Gateway 上的匿名面与原生 App
+
+- `GET /ca.crt`：匿名，`application/x-x509-ca-cert`，PEM。本地 CA 时是 CA；服务器壳的自签名证书是它自己；指定文件时是链文件里的最后一张，只有一张时 404 `ca_unavailable`。只在 Gateway 上，core 的回环监听没有它。
+- 来源是 `capacitor://localhost` 或 `https://localhost`（且不在 `origins` 里）的请求走 **Bearer 模式**：会话绑定的来源是 App 连上的 Gateway 来源 `https://<Host>`（必须在 `origins` 里，否则 403）；凭据只认 `Authorization: Bearer <访问密钥>`，Cookie 不看、没有 CSRF；`POST /api/identity/pair`、`/session/refresh` 与登录把密钥放在响应体的 `native` 里、不发 Cookie（与桌面壳的原生传输同一形状，§3）；CORS 只回 App 自己的来源，预检放行 `authorization, content-type, x-armadra-csrf`。
+- `POST /api/identity/ws-ticket`（只在 Gateway 的 Bearer 模式下）：要 Bearer 会话，回 `{ "ticket": string, "expiresAt": string }`，票 30 秒、一次性、只在内存里。浏览器 WebSocket 带不了头，App 升级时在 `Sec-WebSocket-Protocol` 里带 `armadra-ticket.<票>`，服务端回同一个子协议。Cookie 模式请求它答 400 `bearer_required`。
 
 ## 18. 身份扩展：口令策略、passkey、MFA、会话、OAuth、审计
 
@@ -632,7 +716,87 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 20. 节点凭据：`/api/credentials*`
 
-预留，由 G1-1 填写。
+设计见 [补全架构](../design/completion-architecture.md) §9.1 与 [CLI 协作](../design/cli-collaboration.md) §7.3。一个节点可以绑定一条具名凭据，起终端时由 core 校验、CLI 启动时由画布启动器现取并只设给 CLI 进程。代码在 `core/agent/credentials/`，共享层 `packages/shared/src/api/credentials.ts`。
+
+**值的去向**：只在执行主机的 SecretStore（条目名 `armadra-credential-<ref>`）。库表 `agent_credentials` 只记 `ref`、`providerId`、`kind`、`label`、`createdAt`、`lastUsedAt`。值不进节点 shell 的环境、启动行、shell 历史、画布持久化、日志，也不进任何 `/api/*` 答复；**唯一带值的是 §20.4 那条本机回环的 hook 答复**，答给启动器，带 `Cache-Control: no-store`，不记日志。
+
+### 20.1 `kind` 表
+
+`kind` 只能从下表选，变量名由 core 写死（`core/agent/credentials/inject.ts::CREDENTIAL_KINDS`），不上线、不让用户填。`enabled: false` 的行列在表里，新建与启动都拒绝，等 CLI 协作 §7.4 用真实账号测过再开。
+
+| `providerId` | `kind`              | 变量                      | `enabled`   |
+| ------------ | ------------------- | ------------------------- | ----------- |
+| `claude`     | `oauth-token`       | `CLAUDE_CODE_OAUTH_TOKEN` | 是          |
+| `claude`     | `api-key`           | `ANTHROPIC_API_KEY`       | 否（T1）    |
+| `copilot`    | `github-token`      | `COPILOT_GITHUB_TOKEN`    | 是          |
+| `codex`      | `api-key`           | `CODEX_API_KEY`           | 否（T4）    |
+| `pi` / `omp` | `api-key:anthropic` | `ANTHROPIC_API_KEY`       | 否（T5/T6） |
+| `pi` / `omp` | `api-key:openai`    | `OPENAI_API_KEY`          | 否（T5/T6） |
+| `pi` / `omp` | `api-key:moonshot`  | `MOONSHOT_API_KEY`        | 否（T5/T6） |
+| `opencode`   | `api-key:anthropic` | `ANTHROPIC_API_KEY`       | 否（T7）    |
+| `opencode`   | `api-key:openai`    | `OPENAI_API_KEY`          | 否（T7）    |
+
+`providerId` 是基础 CLI 的 id；`custom:` 条目按它的 `baseAgent` 匹配。
+
+### 20.2 条目路由
+
+只有 owner（路由门按全局 `settings:read` / `settings:write`，成员一律 `403 forbidden`）。
+
+- `GET /api/credentials` →
+
+  ```json
+  {
+    "backend": "keychain",
+    "available": true,
+    "kinds": [
+      { "providerId": "claude", "kind": "oauth-token", "enabled": true }
+    ],
+    "entries": [
+      {
+        "ref": "3f9c2a1b7d4e8f60",
+        "providerId": "claude",
+        "kind": "oauth-token",
+        "label": "Work",
+        "isSet": true,
+        "lastUsedAt": 1790000000000
+      }
+    ]
+  }
+  ```
+
+  `backend` 是密钥后端自报的种类（`keychain` / `dpapi` / `libsecret` / `file-encrypted` / `file`）。`available: false` 时多一个 `reason`：`credential_backend_insecure`（后端是 `file`）或 `credential_unsupported_here`（Windows，启动器还不能兑换）。`isSet` 是值在不在（后端打不开也答 `false`）；`lastUsedAt` 从没被取用过时缺席。
+
+- `POST /api/credentials`，体 `{ providerId, kind, label, value }` → `201` 条目。`ref` 由 core 生成（16 位小写十六进制）。`value` 单行、去首尾空白、最长 8192。
+- `PATCH /api/credentials/{ref}`，体 `{ label?, value? }`（至少一个）→ `200` 条目。`providerId` 与 `kind` 不可改：换种类就是另一条凭据。
+- `DELETE /api/credentials/{ref}` → `204`。先删值后删行。绑定着它的节点下次起终端时被拒（`credential_mismatch`）。
+
+### 20.3 `POST /api/terminals` 的 `credentialRef`
+
+`agent` 段多一个可选的 `credentialRef`（条目名，1–200 字符）。页面从节点数据 `agent.account.credentialRef` 取（`apps/web/src/agent/launch.ts::agentSessionRequest`）。core 在起任何进程之前校验，不满足时整个请求被拒、不建会话行：
+
+| 状态 | `code`                        | 何时                                                |
+| ---- | ----------------------------- | --------------------------------------------------- |
+| 400  | `bad_request`                 | `credentialRef` 不是非空字符串或超长                |
+| 400  | `credential_mismatch`         | 条目不存在，或它的 `providerId` 不是节点的基础 CLI  |
+| 400  | `credential_kind_disabled`    | 条目的 `kind` 在 §20.1 里是 `enabled: false`        |
+| 400  | `credential_unsupported_here` | SSH 节点（凭据在控制端，不经 SSH 下发），或 Windows |
+| 409  | `credential_backend_insecure` | 这台主机的密钥后端自报 `file`                       |
+
+通过后节点终端的环境里只多一个变量 `ARMADRA_CREDENTIAL_REF=<ref>`（名字，不是值）。依赖编排、冷启动与节能唤醒没有请求体，读节点数据里的绑定照样带上这个变量；那里不预先校验，绑定失效时由 §20.4 拒绝、启动器拒绝起 CLI，而不是悄悄用默认登录。
+
+条目路由的其余错误码：`credential_not_found`（404，`PATCH` / `DELETE` 一个不存在的 `ref`）、`credential_unavailable`（503，密钥后端这一刻打不开）。
+
+### 20.4 启动器兑换：hook 面的 `POST /credential`
+
+只在本机 hook 服务（Unix socket / 回环端口，契约 §5.2）上，不在主监听器、Gateway 或执行主机上。
+
+- 调用方：画布启动器 `run/<cli>`（POSIX）在 `ARMADRA_NODE_ID` 与 `ARMADRA_CREDENTIAL_REF` 都在时执行 `armadra-hook credential`，后者发这一条。
+- 请求：头 `X-Armadra-Hook-Token`（应用 bearer）与 `X-Armadra-Node-Token`（必须验过，`legacy` 不行）；体 `{ "nodeId", "ref" }`。
+- 只答这个节点此刻绑定的那一条：起终端时记下的绑定，core 重启后改读节点数据 `agent.account.credentialRef` 与 `agent.id`；每次都重新做 §20.3 的校验。
+- 成功 `200 { "variable": "CLAUDE_CODE_OAUTH_TOKEN", "value": "…" }`，并更新 `lastUsedAt`；日志只记 `nodeId` 与 `ref`。失败：`403 forbidden`（token 不对、或节点没绑这一条）、§20.3 的各码、`409 credential_unset`（值不在）、`503 credential_unavailable`。
+- 客户端把 `NAME=value` 打到 stdout，启动器用命令替换接住，只认这家 CLI 在 §20.1 里的变量名（字面的 `case` 分支，没有 `eval`），在自己的进程里 `export` 后 `exec` CLI。客户端失败或名字不认识时启动器打一行原因、退出码非零，不起 CLI。
+
+**威胁模型**：这防的是误泄露（shell 的 `env` 输出、回滚缓冲区、shell 历史、日志、磁盘），不是同一用户的主动读取——持有节点 token 的进程本来就能兑换。CLI 起的子进程（bash 工具、MCP 服务器）会继承这个变量；设置页的脚注写明这一点，并建议用权限最窄的凭据（`setup-token`、只开 Copilot Requests 的细粒度 PAT）。
 
 ## 21. 跨主机交接与 Worker 舰队
 

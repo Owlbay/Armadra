@@ -15,6 +15,12 @@ export const createTerminalAgentSchema = z.object({
   permissionMode: permissionModeSchema.optional(),
   model: z.string().max(120).optional(),
   sessionId: z.string().max(200).optional(),
+  /**
+   * A node credential to hand the CLI (contract §20): a **name** in the
+   * execution host's credential store, never a value. The core checks the
+   * entry exists and belongs to the node's base CLI, or refuses the launch.
+   */
+  credentialRef: z.string().min(1).max(200).optional(),
 });
 
 export const createTerminalRequestSchema = z.object({

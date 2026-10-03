@@ -19,6 +19,14 @@ import {
 } from "../hook/install/shared";
 import { collab, setTerminalBridge } from "../agent";
 import { canvasEnvironment } from "../agent/canvas-launch";
+import {
+  CredentialError,
+  CredentialsDomain,
+  persistedBinding,
+  setCredentialsDomain,
+} from "../agent/credentials";
+import { installRoutes as installCredentialRoutes } from "../agent/credentials/routes";
+import { type SecretBackend, secretsFor } from "../secrets";
 import { listAgents } from "../agent/list";
 import { baseAgent } from "../agent/registry";
 import { parseCustomAgents } from "../settings/custom-agents";
@@ -97,6 +105,13 @@ export interface TerminalInstallOptions {
    * running it has tmux would be a suite that proves nothing.
    */
   readonly configured?: BackendChoice;
+  /**
+   * The secret backend node credentials use, for the tests: the suite's
+   * default is the `file` backend, which this domain refuses on purpose.
+   */
+  readonly credentialSecrets?: SecretBackend;
+  /** Platform the credential domain judges availability by (tests). */
+  readonly platform?: NodeJS.Platform;
 }
 
 export function install(
@@ -262,7 +277,42 @@ export function install(
     };
   // `ssh`：这个终端是 SSH 会话——本机的垫片目录在执行主机上不存在，那边的
   // `PATH` 由远端 shell 命令前置远端的垫片（`remote/integration.ts`）。
-  const ownedEnvironment = (nodeId: string, agentId: string, ssh: boolean) => {
+  // 节点凭据（契约 §20）：校验在起终端之前；环境里只有条目名，值由画布启动器
+  // 在 CLI 启动时经 hook 通道现取。
+  const credentials = new CredentialsDomain({
+    database: context.db.database,
+    secrets: options.credentialSecrets ?? secretsFor(context).backend,
+    ...(options.platform === undefined ? {} : { platform: options.platform }),
+    baseOf: (id) => baseAgent(agentSettings(), id),
+    log: (message, fields) => context.log.info(message, fields),
+  });
+  setCredentialsDomain(credentials);
+  installCredentialRoutes(context.server, credentials);
+  // `credential`：`POST /api/terminals` 带来的那个（`requested` 缺席就是没绑定）；
+  // 其余几条路（唤醒、依赖编排、冷启动）不传，读节点数据里的绑定。
+  const ownedEnvironment = (
+    nodeId: string,
+    agentId: string,
+    ssh: boolean,
+    credential?: { readonly requested: string | undefined },
+  ) => {
+    let credentialEnv: readonly (readonly [string, string])[];
+    try {
+      credentialEnv = credentials.environment(
+        nodeId,
+        agentId,
+        ssh,
+        credential?.requested,
+        credential === undefined
+          ? persistedBinding(context.db.database, nodeId).ref
+          : undefined,
+      );
+    } catch (failure) {
+      if (failure instanceof CredentialError) {
+        throw new TerminalError(failure.status, failure.code, failure.message);
+      }
+      throw failure;
+    }
     try {
       issueNodeToken(context.dataDir, nodeId);
     } catch (failure) {
@@ -298,6 +348,7 @@ export function install(
         (message, fields) => context.log.warn(message, fields),
         { ssh },
       ),
+      ...credentialEnv,
     ];
   };
 
@@ -362,6 +413,7 @@ export function install(
           body.nodeId as string,
           (body.agent as { id: string }).id,
           body.ssh !== undefined,
+          { requested: body.agent?.credentialRef },
         )
       : [];
     const session = await manager.spawn({
@@ -678,6 +730,7 @@ export function install(
       // manager that is shutting down would be told a session is missing
       // rather than that there is nothing to talk to.
       setTerminalBridge(undefined);
+      setCredentialsDomain(undefined);
       setAgentLauncher(undefined);
       setHibernationWaker(undefined);
       clearInterval(hibernateTimer);
@@ -903,7 +956,7 @@ interface CreateTerminalRequest {
   readonly command?: string;
   readonly args?: readonly string[];
   readonly nodeId?: string;
-  readonly agent?: { readonly id: string };
+  readonly agent?: { readonly id: string; readonly credentialRef?: string };
   /**
    * `ssh: { hostId }` — the session runs `ssh …` instead of a shell.
    *
@@ -929,6 +982,15 @@ function validateCreate(body: CreateTerminalRequest): string | undefined {
     // Without a node there is nothing to attribute hook reports to, and the
     // hook client would refuse to report anyway.
     return "An agent terminal requires the owning nodeId";
+  }
+  const credentialRef = body.agent?.credentialRef;
+  if (
+    credentialRef !== undefined &&
+    (typeof credentialRef !== "string" ||
+      credentialRef === "" ||
+      credentialRef.length > 200)
+  ) {
+    return "credentialRef is invalid";
   }
   if (
     body.ssh !== undefined &&

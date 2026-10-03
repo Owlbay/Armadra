@@ -51,7 +51,7 @@ import { install as installAcp } from "./acp";
 import { install as installWorkflow } from "./workflow";
 import { install as installRealtime } from "./realtime";
 import { install as installPush } from "./push";
-import { install as installGateway } from "./gateway";
+import { gatewayDomainOf, install as installGateway } from "./gateway";
 
 /**
  * The core process.
@@ -327,6 +327,12 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
 
   // Step 4 — armed before step 5 publishes anything about this process.
   const stop = async (): Promise<void> => {
+    // 对外的 Gateway 先关：它的监听与经它进来的流不在 `server` 的名单上。
+    try {
+      await gatewayDomainOf(server)?.close();
+    } catch (error) {
+      log.warn("could not stop the gateway", { error: describe(error) });
+    }
     await server.close();
     // Language servers are child processes of this one, and nothing else ends
     // them: a core that exits without this leaves one running per workspace it

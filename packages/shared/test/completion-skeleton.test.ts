@@ -121,6 +121,8 @@ describe("completion shared layer", () => {
         ticket: "t",
         fingerprint: "ab:cd",
         expiresAt: "2026-10-03T00:00:00.000Z",
+        webUrl: "https://gw.example.test/#pair=t&fp=ab",
+        deepLink: "armadra://pair?host=gw.example.test&ticket=t&fp=ab",
       }).success,
     ).toBe(true);
     expect(mfaRequirementSchema.parse("members")).toBe("members");

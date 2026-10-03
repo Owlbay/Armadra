@@ -31,6 +31,7 @@ export function serverPlatform(options: ServerPlatformOptions): CorePlatform {
     dataDir: options.dataDir,
     appVersion: options.appVersion,
     isPackaged: options.isPackaged,
+    shell: "server",
     // 明确的 undefined：没有应用包，就没有资源目录。
     resourcesPath: undefined,
     log,
