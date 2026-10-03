@@ -194,7 +194,7 @@ export function PeerCursor({
       />
       {name !== "" && (
         <span
-          className="mt-3 rounded-[var(--r-pill)] border bg-card px-1.5 text-[length:var(--text-caption)] leading-4 whitespace-nowrap text-foreground shadow-[var(--shadow-overlay)]"
+          className="mt-3 rounded-[var(--r-pill)] border bg-card px-1.5 text-[length:var(--text-caption)] leading-4 whitespace-nowrap text-foreground"
           style={{ borderColor: color }}
         >
           {name}

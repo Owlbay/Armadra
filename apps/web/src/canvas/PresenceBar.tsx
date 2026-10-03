@@ -26,6 +26,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/ui/alert-dialog";
+import { cn } from "@/lib/cn";
 import { Avatar, AvatarFallback } from "@/ui/avatar";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
@@ -87,15 +88,43 @@ function initialOf(name: string): string {
  * 跟随他的光标，再点取消。断线时头像置灰、写「已断开」；只读写「只读」。
  */
 function RealtimePresence() {
-  const t = useT();
   const peers = useRealtimeStore((view) => view.peers);
   const status = useRealtimeStore((view) => view.status);
   const following = useRealtimeStore((view) => view.following);
   const follow = useRealtimeStore((view) => view.follow);
   const readOnly = useCanvasStore(isReadOnly);
   if (peers.length === 0 && !readOnly) return null;
+  return (
+    <RealtimePresenceView
+      peers={peers}
+      offline={status === "offline"}
+      readOnly={readOnly}
+      following={following}
+      onFollow={follow}
+    />
+  );
+}
 
-  const offline = status === "offline";
+export interface RealtimePresenceViewProps {
+  peers: readonly Peer[];
+  offline: boolean;
+  readOnly: boolean;
+  following: number | null;
+  onFollow: (clientId: number | null) => void;
+  /** 缺省浮在画布右上；展示页里传 `relative` 一类的类名放进文档流。 */
+  className?: string;
+}
+
+/** 在线条本体：不读任何 store，展示页与上面的实时条共用。 */
+export function RealtimePresenceView({
+  peers,
+  offline,
+  readOnly,
+  following,
+  onFollow: follow,
+  className,
+}: RealtimePresenceViewProps) {
+  const t = useT();
   const visible = peers.slice(0, MAX_AVATARS - 1);
   const hidden = peers.length - visible.length;
   const nameOf = (peer: Peer) =>
@@ -108,7 +137,7 @@ function RealtimePresence() {
       data-offline={offline ? "true" : undefined}
       {...noDragProps()}
       aria-label={t("realtime.presence.label")}
-      className={BAR_CLASS}
+      className={cn(BAR_CLASS, className)}
     >
       <div
         className={`flex items-center -space-x-1 ${offline ? "opacity-50 grayscale" : ""}`}
