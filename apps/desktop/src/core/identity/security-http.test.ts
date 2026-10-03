@@ -248,6 +248,51 @@ describe("口令策略（§18.1）", () => {
   });
 });
 
+describe("凭据换会话的那几条也限流（§18.1）", () => {
+  it("配对票猜错 20 次后 429；只有失败才扣，成功的刷新不占桶", async () => {
+    const fixture = await harness();
+    const admin = await owner(fixture);
+    // 成功的请求不扣：连刷 25 次 CSRF 都过。
+    const refreshToken = await (async () => {
+      const ticket = fixture.service.issueBootstrap({
+        hostId: fixture.service.hostId(),
+        instanceId: INSTANCE,
+        origin: fixture.origin,
+        deviceName: "第二台",
+        scopes: allScopes(),
+      });
+      const paired = await call(fixture, "POST", "pair", {
+        ticket: ticket.ticket,
+      });
+      return ((await paired.json()) as { native: { refreshToken: string } })
+        .native.refreshToken;
+    })();
+    for (let index = 0; index < 25; index += 1) {
+      const renewed = await fetch(`${fixture.base}/api/identity/session/csrf`, {
+        method: "POST",
+        headers: {
+          origin: fixture.origin,
+          authorization: `Bearer ${refreshToken}`,
+        },
+      });
+      expect(renewed.status, `csrf #${index}`).toBe(200);
+    }
+    for (let index = 0; index < 20; index += 1) {
+      const wrong = await call(fixture, "POST", "pair", {
+        ticket: `bogus-${index}`,
+      });
+      expect(wrong.status).not.toBe(429);
+    }
+    const limited = await call(fixture, "POST", "pair", { ticket: "bogus" });
+    expect(limited.status).toBe(429);
+    expect(await code(limited)).toBe("rate_limited");
+    expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
+    // 同一个桶：刷新也挡在门外。
+    const refresh = await call(fixture, "POST", "session/refresh", {}, admin);
+    expect(refresh.status).toBe(429);
+  });
+});
+
 describe("泄露检查（§18.1，HIBP fixture）", () => {
   async function setup(mode: "off" | "warn" | "block", base: string) {
     const fixture = await harness();

@@ -266,14 +266,17 @@ export class IdentityHttp {
           const body = request.json<{ ticket?: unknown }>();
           if (typeof body?.ticket !== "string")
             throw new IdentityError("invalid");
-          const credentials = this.service.consumeBootstrap({
-            ticket: body.ticket,
-            hostId,
-            instanceId: this.options.instanceId,
-            origin,
-            remoteIp,
-            userAgent,
-          });
+          const ticket = body.ticket;
+          const credentials = this.throttled(remoteIp, () =>
+            this.service.consumeBootstrap({
+              ticket,
+              hostId,
+              instanceId: this.options.instanceId,
+              origin,
+              remoteIp,
+              userAgent,
+            }),
+          );
           sessionCookies(request, response, hostId, credentials);
           this.json(
             response,
@@ -318,12 +321,14 @@ export class IdentityHttp {
           return;
         }
         case "POST session/refresh": {
-          const credentials = this.service.refresh({
-            refreshToken: credential(request, hostId, "refresh"),
-            csrfToken,
-            hostId,
-            origin,
-          });
+          const credentials = this.throttled(remoteIp, () =>
+            this.service.refresh({
+              refreshToken: credential(request, hostId, "refresh"),
+              csrfToken,
+              hostId,
+              origin,
+            }),
+          );
           sessionCookies(request, response, hostId, credentials);
           this.json(
             response,
@@ -334,22 +339,25 @@ export class IdentityHttp {
           return;
         }
         case "POST session/csrf": {
-          this.json(response, cors, 200, {
-            csrfToken: this.service.renewCsrf({
+          const renewed = this.throttled(remoteIp, () =>
+            this.service.renewCsrf({
               refreshToken: credential(request, hostId, "refresh"),
               hostId,
               origin,
             }),
-          });
+          );
+          this.json(response, cors, 200, { csrfToken: renewed });
           return;
         }
         case "POST session/logout": {
-          this.service.logoutRefresh({
-            refreshToken: credential(request, hostId, "refresh"),
-            csrfToken,
-            hostId,
-            origin,
-          });
+          this.throttled(remoteIp, () =>
+            this.service.logoutRefresh({
+              refreshToken: credential(request, hostId, "refresh"),
+              csrfToken,
+              hostId,
+              origin,
+            }),
+          );
           clearSessionCookies(request, response, hostId);
           this.json(response, cors, 200, { closed: true });
           return;
@@ -471,6 +479,21 @@ export class IdentityHttp {
         code: failure.code,
         message: failure.message,
       });
+    }
+  }
+
+  /**
+   * 凭据换会话的那几条（配对、刷新、换 CSRF、登出）的限流：桶空了答 429，
+   * 只有失败才扣（`Throttle.checkIp` / `chargeIp`）。没装加固时不限。
+   */
+  private throttled<T>(remoteIp: string, action: () => T): T {
+    const throttle = this.options.security?.throttle;
+    throttle?.checkIp(remoteIp);
+    try {
+      return action();
+    } catch (error) {
+      if (error instanceof IdentityError) throttle?.chargeIp(remoteIp);
+      throw error;
     }
   }
 

@@ -74,6 +74,21 @@ export class IpBuckets {
     return { ok: true, retryAfterMs: 0 };
   }
 
+  /** 只看不拿：桶里还有没有一个令牌。空 IP 不限。 */
+  peek(ip: string, nowMs: number): { ok: boolean; retryAfterMs: number } {
+    if (ip === "") return { ok: true, retryAfterMs: 0 };
+    const bucket = this.buckets.get(ip);
+    if (bucket === undefined) return { ok: true, retryAfterMs: 0 };
+    const rate = this.capacity / this.windowMs;
+    const tokens = Math.min(
+      this.capacity,
+      bucket.tokens + Math.max(0, nowMs - bucket.atMs) * rate,
+    );
+    return tokens < 1
+      ? { ok: false, retryAfterMs: Math.ceil((1 - tokens) / rate) }
+      : { ok: true, retryAfterMs: 0 };
+  }
+
   private prune(nowMs: number): void {
     const rate = this.capacity / this.windowMs;
     for (const [ip, bucket] of this.buckets) {
@@ -123,6 +138,21 @@ export class Throttle {
   admitIp(ip: string): void {
     const verdict = this.ips.take(ip, this.clock());
     if (!verdict.ok) throw rateLimited(verdict.retryAfterMs);
+  }
+
+  /**
+   * 高频的合法请求（配对、刷新、换 CSRF、登出）用的那一档：先看桶空没空，
+   * 空了就 429；**只有失败才扣**（{@link chargeIp}）。这几条的凭据都是 256 位
+   * 随机串，限的是撒网猜票，而不是让一台 NAT 后面的十个人互相挤掉刷新。
+   */
+  checkIp(ip: string): void {
+    const verdict = this.ips.peek(ip, this.clock());
+    if (!verdict.ok) throw rateLimited(verdict.retryAfterMs);
+  }
+
+  /** 记一次失败：扣一个令牌，不抛。 */
+  chargeIp(ip: string): void {
+    this.ips.take(ip, this.clock());
   }
 
   /** 这个键现在锁着吗；锁着就抛，不校验凭据。 */
