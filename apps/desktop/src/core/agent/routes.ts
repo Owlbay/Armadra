@@ -250,6 +250,10 @@ export function installRoutes(deps: AgentRouteDeps): void {
           ...(typeof expected === "number"
             ? { expectedRevision: expected }
             : {}),
+          // ACP 审批的选项（契约 §14.4）；别的审批带了它答 400。
+          ...(optionalString(body, "optionId") === undefined
+            ? {}
+            : { optionId: optionalString(body, "optionId") as string }),
         },
       );
       // 审批答复是设计 §4.5 的五个审计写入点之一：一次「允许」可能让 Agent 动

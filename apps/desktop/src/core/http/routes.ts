@@ -707,6 +707,44 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // ACP 驱动的会话（契约 §14.2）：同一张 `terminal_sessions` 的行，路由在
+  // `core/acp/routes.ts`。
+  {
+    path: "/api/acp/sessions",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/acp/sessions/{sessionId}/prompt",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/acp/sessions/{sessionId}/cancel",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/acp/sessions/{sessionId}/mode",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/acp/sessions/{sessionId}/log",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/acp/nodes/{nodeId}/driver",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/terminals/{sessionId}/ws",
     methods: ["GET"],

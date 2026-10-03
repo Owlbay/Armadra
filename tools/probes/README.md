@@ -6,11 +6,11 @@
 
 按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.json` 的清单跑（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
-| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                            | 何时跑                              | 失败时       |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
-| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`core-terminal-packaged`、`update-e2e`                                                                                          | `nightly.yml`                       | 开 issue     |
-| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                                         | 手动；清单在执行计划 §5             | 记进状态文档 |
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                       | 何时跑                              | 失败时       |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`core-terminal-packaged`、`update-e2e`                                                                                                     | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                                                    | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
 
@@ -122,6 +122,15 @@ node tools/probes/credentials-e2e.mjs [输出目录]   # 默认 target/probes/cr
 ```
 
 不用真实账号（契约 §20）：一个基础 CLI 为 Claude 的自定义 Agent 指向 `fixtures/env-echo.mjs`（只打印变量长度），凭据值是一串假令牌。断言 CLI 进程看到的长度正确、节点 shell 的 `env` 里没有这个变量、值不在画面 / 日志 / 答复里、基础 CLI 不匹配时起终端被拒、条目删掉后同一 shell 重跑启动器拒绝起 CLI。临时数据目录与 HOME，密钥后端 `file-encrypted`，`ARMADRA_NO_GLOBAL_WRITES=1`；Windows 上跳过。产物 `result.json`。
+
+## ACP 会话端到端
+
+```sh
+pnpm --filter @armadra/desktop build
+node tools/probes/acp-e2e.mjs [输出目录]   # 默认 target/acp-e2e/
+```
+
+真 core、真 Vite 页面、新 profile 的无头 Chrome（契约 §14.2–§14.4）。ACP Agent 是 `@armadra/agent/acp` 的假 Agent，注册成基础 CLI 为 OpenCode 的 `custom:` 条目，不用真实账号、不起真 CLI。两个以 ACP 驱动的节点 A → B：页面挂载即起会话（`terminal_sessions` 的 `acp` 行）→ 会话视图里发一句、回复流进来、状态来源 `acp` → 审批卡在页面上点「拒绝」（审批行 `deny`、审计 `route = acp`）→ `armadra-hook canvas send` 从 A 投给 B（`delivered`，B 的会话视图里看得到）→ 经节点菜单切到终端视图再切回（同一行、代次 +2、CLI 会话接回、之前的对话还在）→ 打开 Eco（`ARMADRA_TEST_ECO_IDLE_SECONDS=3`）让 A 休眠、再在页面上发一句唤醒（同一行、适配器 pid 换了、CLI 会话 id 没变）→ 全程没有控制台错误。临时数据目录与 HOME，`ARMADRA_NO_GLOBAL_WRITES=1`。产物 `result.json` 与 `01-sessions-open.png` … `09-woken.png`。
 
 ## 本轮界面功能的端到端验证
 

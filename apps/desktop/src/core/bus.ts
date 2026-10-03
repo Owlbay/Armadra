@@ -202,6 +202,28 @@ export interface WorkspaceEventPayloads {
     readonly size: number | null;
     readonly mtime: string | null;
   };
+  /*
+   * ACP 驱动的会话（契约 §14.3）。`sessionId` 是 `terminal_sessions.id`；
+   * `update` 是 ACP `session/update` 的 `update` 原样。
+   */
+  "acp.update": {
+    readonly sessionId: string;
+    readonly nodeId: string;
+    readonly update: { readonly sessionUpdate: string } & OpaquePayload;
+  };
+  "acp.turn": {
+    readonly sessionId: string;
+    readonly nodeId: string;
+    readonly turnId: string;
+    readonly stopReason?: string;
+    readonly error?: { readonly code: string; readonly message: string };
+  };
+  "acp.driver": {
+    readonly nodeId: string;
+    readonly driver: "terminal" | "acp";
+    readonly sessionId: string;
+    readonly resumed: boolean;
+  };
 }
 
 export type WorkspaceEventType = keyof WorkspaceEventPayloads;

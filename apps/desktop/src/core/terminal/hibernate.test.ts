@@ -75,6 +75,22 @@ describe("hibernationBlockers", () => {
     expect(hibernationBlockers({ ...READY, ...patch })).toContain(blocker);
   });
 
+  // ACP 驱动的会话（ACP 设计 §5.3）：ACP 流本身是上报，同一套判据。
+  it("ACP 的上报算数，不能跨进程接回的适配器（Copilot）永不睡", () => {
+    expect(hibernationBlockers({ ...READY, stateSource: "acp" })).toEqual([]);
+    expect(
+      hibernationBlockers({
+        ...READY,
+        agentId: "copilot",
+        stateSource: "acp",
+        resumable: false,
+      }),
+    ).toEqual(["noResume"]);
+    expect(
+      hibernationBlockers({ ...READY, stateSource: "acp", state: "blocked" }),
+    ).toEqual(["awaitingApproval"]);
+  });
+
   it("只差时间就是状态机里的 idle", () => {
     const waiting = hibernationBlockers({ ...READY, idleForMs: 0 });
     expect(onlyWaitingForTime(waiting)).toBe(true);

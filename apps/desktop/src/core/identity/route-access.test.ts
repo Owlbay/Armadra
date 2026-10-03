@@ -187,6 +187,38 @@ describe("路由门的矩阵", () => {
     expect(row(decide, "GET", "/api/terminals/unknown/capture")).toBe("owner");
   });
 
+  it("ACP 会话与终端同一档：按会话行与节点查画布（契约 §14.2）", () => {
+    creators.clear();
+    const { decide } = harness();
+    expect(
+      row(decide, "POST", "/api/acp/sessions", { workspaceId: "w1" }),
+    ).toBe("owner,driver,operator");
+    // 读镜像是看终端；发提示、取消、换模式是往会话里写。
+    expect(row(decide, "GET", "/api/acp/sessions/t1/log")).toBe(
+      "owner,driver,operator,editor,viewer",
+    );
+    expect(row(decide, "POST", "/api/acp/sessions/t1/prompt")).toBe(
+      "owner,driver",
+    );
+    expect(row(decide, "POST", "/api/acp/sessions/unknown/prompt")).toBe(
+      "owner",
+    );
+    // 切换驱动会结束一个进程、起另一个：driver 一档。
+    expect(row(decide, "POST", "/api/acp/nodes/n1/driver")).toBe(
+      "owner,driver",
+    );
+    // 自己开的 ACP 会话自己能发提示。
+    const created = harness().decide("operator", "POST", "/api/acp/sessions", {
+      workspaceId: "w1",
+    });
+    created.filter?.({ id: "t1" });
+    expect(
+      harness().decide("operator", "POST", "/api/acp/sessions/t1/prompt")
+        .allowed,
+    ).toBe(true);
+    creators.clear();
+  });
+
   it("operator 自己开的终端自己能写，路由门重建（core 重启）之后照旧", () => {
     creators.clear();
     const created = harness().decide("operator", "POST", "/api/terminals", {
