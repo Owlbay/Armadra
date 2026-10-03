@@ -315,15 +315,16 @@ export function verifyLinuxPackages({
  */
 export function rehearsalKey({ out, run = defaultRun }) {
   mkdirSync(out, { recursive: true });
-  const passphrase = randomBytes(18).toString("base64url");
+  // Hex: base64url can start with "-", which gpg once took for an option.
+  const passphrase = randomBytes(18).toString("hex");
   return withKeyring((home) => {
     gpg(
       home,
       [
         "--pinentry-mode",
         "loopback",
-        "--passphrase",
-        passphrase,
+        // `=` form: a value starting with "-" must not read as an option.
+        `--passphrase=${passphrase}`,
         "--quick-gen-key",
         "Armadra rehearsal signing <rehearsal@armadra.invalid>",
         "rsa3072",
@@ -340,8 +341,8 @@ export function rehearsalKey({ out, run = defaultRun }) {
       [
         "--pinentry-mode",
         "loopback",
-        "--passphrase",
-        passphrase,
+        // `=` form: a value starting with "-" must not read as an option.
+        `--passphrase=${passphrase}`,
         "--armor",
         "--export-secret-keys",
         fingerprint,
