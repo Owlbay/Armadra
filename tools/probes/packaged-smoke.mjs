@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// 打包版冒烟：`pnpm --filter @armadra/desktop dist` 产出的 Armadra.app，按访达的方
-// 式起（launchd 的 PATH），数据目录 ARMADRA_DATA_DIR、HOME、Chromium profile 全是
-// 临时的。验四件只有打包版才验得出的事：
+// 打包版冒烟：`pnpm --filter @armadra/desktop dist` 产出的 Armadra.app（macOS）或
+// AppImage / linux-unpacked（Linux），按桌面启动的方式起（launchd 或桌面会话的
+// PATH），数据目录 ARMADRA_DATA_DIR、HOME、Chromium profile 全是临时的。验四件只
+// 有打包版才验得出的事：
 //
 //   1. 升级后自动迁移全局安装：临时 HOME 里预先造出旧版装进各 CLI 全局目录的东
 //      西（Claude settings.json 里的 Hook、Codex hooks.json 条目、Copilot 的
@@ -12,12 +13,17 @@
 //   2. 编辑器的 PDF 与视频：打包版的 Electron 里内置 PDF 查看器与 H.264 解码是
 //      否真的可用（无头 Chrome 的结论不能搬过来）。截图看 PDF 区域不是空白，
 //      <video> 读得出画面尺寸、没有解码错误。
-//   3. 节能休眠与唤醒：真 Codex（临时 HOME 里的 ~/.codex，只复制 auth.json），
+//   3. 节能休眠与唤醒（--no-real-cli 时换成普通终端）：真 Codex（临时 HOME 里的 ~/.codex，只复制 auth.json），
 //      ARMADRA_TEST_ECO_IDLE_SECONDS=20；页面离开画布后 Codex 进程退出、会话记
 //      成休眠，回到画布点节点，同一个会话 id 起下一代、`codex resume <同一个
 //      id>`，还记得之前让它记的数。
 //   4. 控制台：渲染进程没有 error 级别的输出与未捕获异常。
 //
+// --no-real-cli（夜间 B 档用）：不要真 Codex 与它的登录，第 3 步换成一个普通终
+// 端节点——打包版在桌面 PATH 下找得到 tmux、起得来 shell、页面敲的命令有回显。
+// Linux 上 --app 认 AppImage（APPIMAGE_EXTRACT_AND_RUN，不要 FUSE）或
+// linux-unpacked 目录；不给时在 apps/desktop/release/ 里找。DISPLAY 由调用方给
+// （CI 用 xvfb-run）。//
 // 不安装、不替换 /Applications/Armadra.app，不碰正在运行的那个 Armadra：直接执
 // 行 release 目录里的二进制，--user-data-dir 在临时目录（Electron 的单实例锁按
 // 它算），Chromium 用 mock 钥匙串。Claude 的登录在钥匙串里，临时 HOME 下认证不
@@ -25,7 +31,7 @@
 //
 // 用法（仓库根目录）：
 //   pnpm --filter @armadra/desktop dist
-//   node tools/probes/packaged-smoke.mjs [输出目录] [--app <Armadra.app>]
+//   node tools/probes/packaged-smoke.mjs [输出目录] [--app <Armadra.app | *.AppImage | linux-unpacked>] [--no-real-cli]
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -63,7 +69,9 @@ import {
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const argv = process.argv.slice(2);
 const appFlag = argv.indexOf("--app");
-const app = appFlag >= 0 ? argv[appFlag + 1] : defaultApp();
+const linux = process.platform === "linux";
+const app = appFlag >= 0 ? resolve(argv[appFlag + 1]) : packagedApp();
+const realCli = !argv.includes("--no-real-cli");
 const positional = argv.filter(
   (value, index) =>
     !value.startsWith("--") && (appFlag < 0 || index !== appFlag + 1),
@@ -72,6 +80,46 @@ const output = resolve(positional[0] ?? join(root, "target/packaged-smoke"));
 mkdirSync(output, { recursive: true });
 
 const ECO_IDLE_SECONDS = 20;
+
+/** The packaged build `dist` left behind for this platform. */
+function packagedApp() {
+  if (!linux) return defaultApp();
+  const release = join(root, "apps/desktop/release");
+  if (!existsSync(release)) return undefined;
+  const image = readdirSync(release)
+    .filter((name) => name.endsWith(".AppImage"))
+    .sort()
+    .at(-1);
+  if (image) return join(release, image);
+  return ["linux-unpacked", "linux-arm64-unpacked"]
+    .map((name) => join(release, name))
+    .find((path) => existsSync(join(path, "armadra")));
+}
+
+/** The executable inside what --app names, and the environment it needs. */
+function launchTarget(path, platform = process.platform) {
+  if (platform === "darwin")
+    return { binary: join(path, "Contents/MacOS/Armadra"), env: {} };
+  if (path.endsWith(".AppImage"))
+    // Without FUSE (containers, fresh runners) the image unpacks itself to a
+    // temporary directory and runs from there; the app sees $APPIMAGE either way.
+    return { binary: path, env: { APPIMAGE_EXTRACT_AND_RUN: "1" } };
+  return { binary: join(path, "armadra"), env: {} };
+}
+
+/** What a desktop session hands an app started from its launcher. */
+const DESKTOP_PATH = linux
+  ? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  : LAUNCHD_PATH;
+const LOGIN_SHELL = linux ? "/bin/bash" : "/bin/zsh";
+/** Variables a Linux desktop session passes through and the app cannot invent. */
+const SESSION_VARIABLES = [
+  "DISPLAY",
+  "XAUTHORITY",
+  "WAYLAND_DISPLAY",
+  "XDG_RUNTIME_DIR",
+  "DBUS_SESSION_BUS_ADDRESS",
+];
 const started = Date.now();
 const report = {
   status: "failed",
@@ -123,7 +171,9 @@ const sha = (path) => {
 
 /* ------------------------------ 旧版全局安装 ------------------------------ */
 
-const CLIENT = "/Applications/Armadra.app/Contents/Resources/bin/armadra-hook";
+const CLIENT = linux
+  ? "/opt/Armadra/resources/bin/armadra-hook"
+  : "/Applications/Armadra.app/Contents/Resources/bin/armadra-hook";
 const OLD_SKILL =
   "---\nname: armadra\ndescription: old\n---\n\n# old skill\n\n<!-- armadra:skill-revision 11 -->\n";
 
@@ -194,7 +244,9 @@ async function main() {
   if (app === undefined || !existsSync(app)) {
     throw new Error("没有打包产物：先跑 `pnpm --filter @armadra/desktop dist`");
   }
-  const binary = join(app, "Contents/MacOS/Armadra");
+  const launch = launchTarget(app);
+  const binary = launch.binary;
+  note("打包产物", { app, binary, realCli });
   const realCodexConfig = join(homedir(), ".codex/config.toml");
   const operatorBefore = {
     codexConfig: sha(realCodexConfig),
@@ -215,50 +267,53 @@ async function main() {
   execFileSync("git", ["init", "-q", project]);
   // 没有任何启动文件的 zsh 会弹「新用户配置」菜单，吃掉敲进去的启动行。
   writeFileSync(join(home, ".zshrc"), "PS1='probe%# '\n");
+  writeFileSync(join(home, ".bashrc"), "PS1='probe$ '\n");
 
   const legacy = seedLegacy(home);
 
-  // Codex：临时 HOME 里的 ~/.codex，只复制 auth.json。token 超过 7 天没刷新就
-  // 不跑——在临时目录里刷新会轮换 refresh token，真实那份随之失效。
-  const auth = JSON.parse(
-    readFileSync(join(homedir(), ".codex/auth.json"), "utf8"),
-  );
-  if (!(Date.now() - Date.parse(auth.last_refresh ?? "") < 7 * 86_400_000)) {
-    throw new Error(
-      "~/.codex/auth.json 超过 7 天没刷新，先在自己的终端里跑一次 codex",
-    );
-  }
-  copyFileSync(
-    join(homedir(), ".codex/auth.json"),
-    join(home, ".codex/auth.json"),
-  );
   // 外加上一版写进来的一条会话级信任记录：迁移第二步要把它清掉，其余原样留着。
   writeFileSync(
     join(home, ".codex/config.toml"),
     `model_reasoning_effort = "low"\ncheck_for_update_on_startup = false\n\n[projects."${projectReal}"]\ntrust_level = "trusted"\n\n[hooks.state."/<session-flags>/config.toml:session_start:0:0"]\ntrusted_hash = "sha256:0000"\n`,
   );
-  // Node 与全局装的 codex 在 mise 的目录里；core 按 HOME 找那里（agentPath），
-  // 临时 HOME 里放一个指过去的链接（只读用）。
-  const codexBin = execFileSync("which", ["codex"], {
-    encoding: "utf8",
-  }).trim();
-  if (codexBin.includes("/.local/share/mise/installs/node/")) {
-    const nodeInstall = dirname(dirname(codexBin));
-    const miseNode = join(home, ".local/share/mise/installs/node");
-    mkdirSync(miseNode, { recursive: true });
-    symlinkSync(nodeInstall, join(miseNode, basename(nodeInstall)));
+  if (realCli) {
+    // Codex：临时 HOME 里的 ~/.codex，只复制 auth.json。token 超过 7 天没刷新就
+    // 不跑——在临时目录里刷新会轮换 refresh token，真实那份随之失效。
+    const auth = JSON.parse(
+      readFileSync(join(homedir(), ".codex/auth.json"), "utf8"),
+    );
+    if (!(Date.now() - Date.parse(auth.last_refresh ?? "") < 7 * 86_400_000)) {
+      throw new Error(
+        "~/.codex/auth.json 超过 7 天没刷新，先在自己的终端里跑一次 codex",
+      );
+    }
+    copyFileSync(
+      join(homedir(), ".codex/auth.json"),
+      join(home, ".codex/auth.json"),
+    );
+    // Node 与全局装的 codex 在 mise 的目录里；core 按 HOME 找那里（agentPath），
+    // 临时 HOME 里放一个指过去的链接（只读用）。
+    const codexBin = execFileSync("which", ["codex"], {
+      encoding: "utf8",
+    }).trim();
+    if (codexBin.includes("/.local/share/mise/installs/node/")) {
+      const nodeInstall = dirname(dirname(codexBin));
+      const miseNode = join(home, ".local/share/mise/installs/node");
+      mkdirSync(miseNode, { recursive: true });
+      symlinkSync(nodeInstall, join(miseNode, basename(nodeInstall)));
+    }
+    // 临时 ~/.codex 第一次用：先让它完成自己的 sqlite 迁移（约两千 token）。
+    execFileSync(
+      codexBin,
+      ["exec", "--skip-git-repo-check", "Reply with just OK."],
+      {
+        cwd: project,
+        env: { PATH: process.env.PATH, HOME: home, TERM: "dumb" },
+        stdio: "ignore",
+        timeout: 180_000,
+      },
+    );
   }
-  // 临时 ~/.codex 第一次用：先让它完成自己的 sqlite 迁移（约两千 token）。
-  execFileSync(
-    codexBin,
-    ["exec", "--skip-git-repo-check", "Reply with just OK."],
-    {
-      cwd: project,
-      env: { PATH: process.env.PATH, HOME: home, TERM: "dumb" },
-      stdio: "ignore",
-      timeout: 180_000,
-    },
-  );
   note("临时 HOME 就位", { home, legacy: Object.keys(legacy) });
 
   /* ------------------------------ 起打包版 ------------------------------- */
@@ -270,19 +325,31 @@ async function main() {
       `--remote-debugging-port=${port}`,
       "--remote-allow-origins=*",
       `--user-data-dir=${profile}`,
-      "--use-mock-keychain",
+      // Linux 上不让 Chromium 去找 gnome-keyring / kwallet：没有会话总线时它会
+      // 卡住等；macOS 上同理用 mock 钥匙串。
+      linux ? "--password-store=basic" : "--use-mock-keychain",
+      // root 下 Chromium 不肯起沙箱（容器里调试时才会是 root）。
+      ...(process.getuid?.() === 0 ? ["--no-sandbox"] : []),
     ],
     {
       env: {
-        PATH: LAUNCHD_PATH,
+        PATH: DESKTOP_PATH,
         HOME: home,
         USER: process.env.USER,
         LOGNAME: process.env.USER,
-        SHELL: "/bin/zsh",
+        SHELL: LOGIN_SHELL,
         LANG: "zh_CN.UTF-8",
         TMPDIR: process.env.TMPDIR ?? tmpdir(),
         ARMADRA_DATA_DIR: data,
         ARMADRA_TEST_ECO_IDLE_SECONDS: String(ECO_IDLE_SECONDS),
+        ...(linux
+          ? Object.fromEntries(
+              SESSION_VARIABLES.filter((name) => process.env[name]).map(
+                (name) => [name, process.env[name]],
+              ),
+            )
+          : {}),
+        ...launch.env,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -558,12 +625,15 @@ async function main() {
     { width: 420, height: 340 },
     { kind: "editor", path: `media/${videoFile}` },
   );
+  // --no-real-cli：同一个位置放一个普通终端，第 3 步只验 shell 与 tmux。
   const codex = node(
     "terminal",
-    "codex-eco",
+    realCli ? "codex-eco" : "shell",
     { x: 940, y: 20 },
     { width: 560, height: 360 },
-    { kind: "terminal", agent: { id: "codex" } },
+    realCli
+      ? { kind: "terminal", agent: { id: "codex" } }
+      : { kind: "terminal" },
   );
   const documentPath = `/api/workspaces/${workspace.id}/boards/${board.id}/document`;
   const initial = await api(documentPath);
@@ -734,164 +804,194 @@ async function main() {
       { timeout, interval: 500 },
     );
 
-  let stuck;
-  const up = await waitSoft(
-    async () => {
-      const text = await screen();
-      if (/Update available|Update now/i.test(text)) {
-        stuck = "升级提示";
-        return undefined;
-      }
-      if (/Hooks need review|hook is new or changed/i.test(text)) {
-        stuck = "Hook 审查提示：画布注入的 Hook 没被信任";
-        return undefined;
-      }
-      return /Ask Codex|›/.test(text) ? text : undefined;
-    },
-    { timeout: 120_000, interval: 1000 },
-  );
-  check(
-    "Codex 没有停在升级或 Hook 审查提示上（画布内带 --dangerously-bypass-hook-trust，不靠信任记录）",
-    stuck === undefined,
-    stuck,
-  );
-  check(
-    "打包版里页面敲的启动行起来了 Codex",
-    up !== undefined,
-    up === undefined
-      ? (await screen(20)).split("\n").slice(-8)
-      : liveSession()?.backend,
-  );
-  if (up !== undefined) {
-    await sleep(3000);
-    await focusCodex();
-    const toldAt = Date.now();
-    await typeLine("Remember the number 417. Reply with just OK.");
-    await waitTurn(toldAt);
-    const before = {
-      provider: status()?.session_id,
-      session: liveSession()?.id,
-      generation: liveSession()?.generation,
-      process: codexProcess(),
-    };
-    check(
-      "记下了 provider 会话 id 与 Codex 进程",
-      before.provider && before.process?.pid,
-      before,
+  if (realCli) {
+    let stuck;
+    const up = await waitSoft(
+      async () => {
+        const text = await screen();
+        if (/Update available|Update now/i.test(text)) {
+          stuck = "升级提示";
+          return undefined;
+        }
+        if (/Hooks need review|hook is new or changed/i.test(text)) {
+          stuck = "Hook 审查提示：画布注入的 Hook 没被信任";
+          return undefined;
+        }
+        return /Ask Codex|›/.test(text) ? text : undefined;
+      },
+      { timeout: 120_000, interval: 1000 },
     );
-    await shot("packaged-before-hibernate");
+    check(
+      "Codex 没有停在升级或 Hook 审查提示上（画布内带 --dangerously-bypass-hook-trust，不靠信任记录）",
+      stuck === undefined,
+      stuck,
+    );
+    check(
+      "打包版里页面敲的启动行起来了 Codex",
+      up !== undefined,
+      up === undefined
+        ? (await screen(20)).split("\n").slice(-8)
+        : liveSession()?.backend,
+    );
+    if (up !== undefined) {
+      await sleep(3000);
+      await focusCodex();
+      const toldAt = Date.now();
+      await typeLine("Remember the number 417. Reply with just OK.");
+      await waitTurn(toldAt);
+      const before = {
+        provider: status()?.session_id,
+        session: liveSession()?.id,
+        generation: liveSession()?.generation,
+        process: codexProcess(),
+      };
+      check(
+        "记下了 provider 会话 id 与 Codex 进程",
+        before.provider && before.process?.pid,
+        before,
+      );
+      await shot("packaged-before-hibernate");
 
-    await api("/api/settings", {
-      method: "PATCH",
-      body: JSON.stringify({ terminal: { ecoMode: true } }),
-    });
-    // 有 socket 附着就不睡：页面离开画布。
-    await page.send("Page.navigate", { url: "about:blank" });
-    const slept = await waitSoft(
-      () => {
-        const row = liveSession();
-        return row?.termination_intent === "hibernate" &&
-          row.status !== "running"
-          ? row
-          : undefined;
-      },
-      { timeout: 240_000, interval: 1000 },
-    );
-    check(
-      "离开画布后进入休眠",
-      slept !== undefined,
-      slept?.status ?? liveSession()?.status,
-    );
-    const gone = before.process?.pid
-      ? await waitSoft(
-          () => {
-            try {
-              process.kill(before.process.pid, 0);
-              return false;
-            } catch {
-              return true;
-            }
-          },
-          { timeout: 15_000 },
-        )
-      : undefined;
-    check("Codex 进程确实退出", gone === true, before.process?.pid);
-    await api("/api/settings", {
-      method: "PATCH",
-      body: JSON.stringify({ terminal: { ecoMode: false } }),
-    });
+      await api("/api/settings", {
+        method: "PATCH",
+        body: JSON.stringify({ terminal: { ecoMode: true } }),
+      });
+      // 有 socket 附着就不睡：页面离开画布。
+      await page.send("Page.navigate", { url: "about:blank" });
+      const slept = await waitSoft(
+        () => {
+          const row = liveSession();
+          return row?.termination_intent === "hibernate" &&
+            row.status !== "running"
+            ? row
+            : undefined;
+        },
+        { timeout: 240_000, interval: 1000 },
+      );
+      check(
+        "离开画布后进入休眠",
+        slept !== undefined,
+        slept?.status ?? liveSession()?.status,
+      );
+      const gone = before.process?.pid
+        ? await waitSoft(
+            () => {
+              try {
+                process.kill(before.process.pid, 0);
+                return false;
+              } catch {
+                return true;
+              }
+            },
+            { timeout: 15_000 },
+          )
+        : undefined;
+      check("Codex 进程确实退出", gone === true, before.process?.pid);
+      await api("/api/settings", {
+        method: "PATCH",
+        body: JSON.stringify({ terminal: { ecoMode: false } }),
+      });
 
-    await page.send("Page.navigate", { url: target });
-    await waitFor(
-      "画布节点渲染",
-      () =>
-        evaluate(
-          `return document.querySelectorAll(".react-flow__node").length >= 3;`,
-        ),
-      { timeout: 90_000 },
-    );
-    await sleep(2000);
-    const header = await evaluate(
-      `return document.querySelector('.react-flow__node[data-id="${codex.id}"]')?.textContent?.slice(0, 200) ?? null;`,
-    );
-    check("回到画布，节点显示休眠中", /休眠/.test(header ?? ""), header);
-    await shot("packaged-hibernated");
-    await focusCodex();
-    const woke = await waitSoft(
-      () => {
-        const row = liveSession();
-        return row?.status === "running" && row.generation > before.generation
-          ? row
-          : undefined;
-      },
-      { timeout: 60_000 },
+      await page.send("Page.navigate", { url: target });
+      await waitFor(
+        "画布节点渲染",
+        () =>
+          evaluate(
+            `return document.querySelectorAll(".react-flow__node").length >= 3;`,
+          ),
+        { timeout: 90_000 },
+      );
+      await sleep(2000);
+      const header = await evaluate(
+        `return document.querySelector('.react-flow__node[data-id="${codex.id}"]')?.textContent?.slice(0, 200) ?? null;`,
+      );
+      check("回到画布，节点显示休眠中", /休眠/.test(header ?? ""), header);
+      await shot("packaged-hibernated");
+      await focusCodex();
+      const woke = await waitSoft(
+        () => {
+          const row = liveSession();
+          return row?.status === "running" && row.generation > before.generation
+            ? row
+            : undefined;
+        },
+        { timeout: 60_000 },
+      );
+      check(
+        "点节点唤醒：同一个会话 id 起下一代",
+        woke?.id === before.session,
+        woke === undefined
+          ? liveSession()
+          : { id: woke.id, generation: woke.generation },
+      );
+      const resumed = await waitSoft(
+        () => {
+          const found = codexProcess();
+          return found?.command.includes(before.provider) ? found : undefined;
+        },
+        { timeout: 60_000 },
+      );
+      check(
+        "接回的 Codex 带着同一个 provider 会话 id（resume）",
+        resumed !== undefined,
+        resumed?.command.slice(0, 200),
+      );
+      await waitSoft(
+        async () => (/Ask Codex|›/.test(await screen()) ? true : undefined),
+        {
+          timeout: 60_000,
+        },
+      );
+      await sleep(3000);
+      await focusCodex();
+      const askedAt = Date.now();
+      await typeLine(
+        "What number did I ask you to remember? Reply with that number plus one, digits only.",
+      );
+      await waitTurn(askedAt).catch(() => {});
+      const answer = await waitSoft(
+        async () => ((await screen(80)).includes("418") ? true : undefined),
+        {
+          timeout: 30_000,
+        },
+      );
+      check(
+        "记得之前的对话（答出 418）",
+        answer === true,
+        (await screen(20)).split("\n").filter(Boolean).slice(-6),
+      );
+      await shot("packaged-resumed");
+    }
+  } else {
+    const ready = await waitSoft(
+      async () =>
+        liveSession()?.status === "running" && (await screen()).trim() !== ""
+          ? true
+          : undefined,
+      { timeout: 90_000, interval: 1000 },
     );
     check(
-      "点节点唤醒：同一个会话 id 起下一代",
-      woke?.id === before.session,
-      woke === undefined
-        ? liveSession()
-        : { id: woke.id, generation: woke.generation },
+      "打包版按桌面 PATH 起来了普通终端（找得到 tmux 与 shell）",
+      ready === true,
+      liveSession() ?? null,
     );
-    const resumed = await waitSoft(
-      () => {
-        const found = codexProcess();
-        return found?.command.includes(before.provider) ? found : undefined;
-      },
-      { timeout: 60_000 },
-    );
-    check(
-      "接回的 Codex 带着同一个 provider 会话 id（resume）",
-      resumed !== undefined,
-      resumed?.command.slice(0, 200),
-    );
-    await waitSoft(
-      async () => (/Ask Codex|›/.test(await screen()) ? true : undefined),
-      {
-        timeout: 60_000,
-      },
-    );
-    await sleep(3000);
-    await focusCodex();
-    const askedAt = Date.now();
-    await typeLine(
-      "What number did I ask you to remember? Reply with that number plus one, digits only.",
-    );
-    await waitTurn(askedAt).catch(() => {});
-    const answer = await waitSoft(
-      async () => ((await screen(80)).includes("418") ? true : undefined),
-      {
-        timeout: 30_000,
-      },
-    );
-    check(
-      "记得之前的对话（答出 418）",
-      answer === true,
-      (await screen(20)).split("\n").filter(Boolean).slice(-6),
-    );
-    await shot("packaged-resumed");
+    if (ready) {
+      await sleep(1500);
+      await focusCodex();
+      await typeLine("echo armadra-$((40+2))");
+      const echoed = await waitSoft(
+        async () =>
+          (await screen()).includes("armadra-42") ? true : undefined,
+        { timeout: 30_000 },
+      );
+      check(
+        "页面敲的命令在打包版的终端里有回显",
+        echoed === true,
+        (await screen(20)).split("\n").filter(Boolean).slice(-6),
+      );
+      await shot("packaged-shell");
+    }
   }
-
   check(
     "画布里起过 Codex 之后，临时 HOME 的 config.toml 里仍没有我们的信任记录",
     !readFileSync(join(home, ".codex/config.toml"), "utf8").includes(
