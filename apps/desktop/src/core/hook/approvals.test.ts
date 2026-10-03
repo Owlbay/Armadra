@@ -13,6 +13,13 @@ describe("the approval wait variable", () => {
     expect(permissionWaitEnvironment("codex", true)).toEqual([]);
   });
 
+  it("is set for ama, whose adapter answers through the same files", () => {
+    expect(permissionWaitEnvironment("ama", true)).toEqual([
+      ["ARMADRA_PERM_WAIT_SECS", "45"],
+    ]);
+    expect(permissionWaitEnvironment("ama", false)).toEqual([]);
+  });
+
   it("follows a custom entry to the built-in it borrows", () => {
     const baseOf = (id: string) =>
       id === "custom:review" ? "claude" : id === "custom:fast" ? "codex" : id;

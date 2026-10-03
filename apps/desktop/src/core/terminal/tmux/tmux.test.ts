@@ -130,7 +130,21 @@ describe("the generated configuration", () => {
     expect(conf).toContain('set -ga terminal-overrides ",*:smcup@:rmcup@"');
     expect(conf).toContain("set -g set-clipboard on");
     expect(conf).toContain('set -as terminal-features ",xterm*:clipboard"');
-    expect(conf).toContain("set -g allow-passthrough on");
+    expect(conf).toContain("set -gq allow-passthrough on");
+  });
+
+  /**
+   * MINIMUM_VERSION is 3.2, so every option the conf sets without `-q` must
+   * exist in 3.2: an unknown one opens each new session on tmux's
+   * config-error screen, which eats the first keystrokes (Ubuntu 22.04's 3.2a).
+   */
+  it("sets options newer than the minimum tmux only quietly", () => {
+    const newerThanMinimum = ["allow-passthrough"];
+    for (const line of renderedConf().split("\n")) {
+      const match = line.match(/^set(?:-option)? -(\w+) ([a-z-]+)/);
+      if (match && newerThanMinimum.includes(match[2] ?? ""))
+        expect(match[1], line).toContain("q");
+    }
   });
 
   it("probes the default terminal and falls back", () => {

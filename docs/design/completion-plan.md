@@ -78,7 +78,7 @@ flowchart LR
 
 #### G0-4 CI 端到端分档
 
-- 范围：`tools/ci/e2e.mjs`（按 `--tier a|b` 跑探针清单，逐条记 `result.json`，任一失败非零退出；清单在 `tools/ci/e2e.json`）；`.github/workflows/ci.yml` 加 `e2e` 作业（ubuntu：装 tmux、Chromium、xvfb，`pnpm --filter @armadra/web build && pnpm --filter @armadra/desktop build && node tools/ci/e2e.mjs --tier a`）；新建 `.github/workflows/nightly.yml` 骨架（`schedule` + `workflow_dispatch`，B 档作业由 G3-4 填）；`tools/ci/validate-workflows.mjs` 认新作业；`e2e.mjs` 认 `ARMADRA_DEV_STACK=1`（设了就先 `pnpm dev-stack up`，没 Docker 时把标了 `devStack` 的条目记 `skipped`）；`tools/ci/e2e.json` 之后由各包**只追加自己的一行**；现有探针里能在 CI 上跑的（`server-e2e`、`ui-features-e2e`、`core-terminal-smoke / lifecycle`、`remote-e2e`）修到在 ubuntu 上稳定（临时目录、端口、超时）。
+- 范围：`tools/ci/e2e.mjs`（按 `--tier a|b` 跑探针清单，逐条记 `result.json`，任一失败非零退出；清单在 `tools/ci/e2e.d/`，一条一个文件 `<id>.json`）；`.github/workflows/ci.yml` 加 `e2e` 作业（ubuntu：装 tmux、Chromium、xvfb，`pnpm --filter @armadra/web build && pnpm --filter @armadra/desktop build && node tools/ci/e2e.mjs --tier a`）；新建 `.github/workflows/nightly.yml` 骨架（`schedule` + `workflow_dispatch`，B 档作业由 G3-4 填）；`tools/ci/validate-workflows.mjs` 认新作业；`e2e.mjs` 认 `ARMADRA_DEV_STACK=1`（设了就先 `pnpm dev-stack up`，没 Docker 时把标了 `devStack` 的条目记 `skipped`）；之后各包**只新增自己的条目文件** `tools/ci/e2e.d/<id>.json`（原先的单文件 `e2e.json` 已拆成目录，免得各包都改同一处末尾而冲突）；现有探针里能在 CI 上跑的（`server-e2e`、`ui-features-e2e`、`core-terminal-smoke / lifecycle`、`remote-e2e`）修到在 ubuntu 上稳定（临时目录、端口、超时）。
 - 文件：`tools/ci/*`、`.github/workflows/{ci,nightly}.yml`、上述探针文件、`docs/guides/ci-release.md` §1 加一段。
 - 依赖：无。交付：PR 的 `e2e` 作业绿。dev-stack：无（只做门控与全栈健康检查）。外部条件：无。
 
@@ -220,8 +220,8 @@ flowchart LR
 
 #### G1-14 设计展示页与截图探针（WP-D2）
 
-- 范围：[设计展示页](design-showcase.md) §2–§4。`apps/web/showcase.html` 与 `src/showcase/{main,ShowcaseApp,harness,force-state.css}`、`sections/<id>.tsx`（13 个分区；本包只建 token / components / canvas 等基础分区，功能分区先放占位，由各功能包填自己的 `sections/<id>.tsx`——`ShowcaseApp.tsx` 预登记全部 13 个 id，之后不再改）、`fixtures/*`、`i18n/showcase.ts`、`vite.config.ts` 只加 `input` 且生产 `dist/` 不含展示页；`tools/probes/design-showcase.mjs`：13 分区 × 2 主题 × 3 视口截图、`window.__showcaseContrast()` 实测对比度、Tab 可达计数、`reduced-motion` 与 `forced-colors` 两张额外图、`--diff` 像素比较；探针进 A 档（`tools/ci/e2e.json` 追加一行）。
-- 文件：新建 `apps/web/showcase.html`、`apps/web/src/showcase/**`、`apps/web/src/i18n/showcase.ts`、`tools/probes/design-showcase.mjs`；修改 `apps/web/vite.config.ts`、`apps/web/src/i18n/i18n.test.ts`（排除 `fixtures/`）、`tools/probes/README.md`（自己的一节）、`tools/ci/e2e.json`（追加）。
+- 范围：[设计展示页](design-showcase.md) §2–§4。`apps/web/showcase.html` 与 `src/showcase/{main,ShowcaseApp,harness,force-state.css}`、`sections/<id>.tsx`（13 个分区；本包只建 token / components / canvas 等基础分区，功能分区先放占位，由各功能包填自己的 `sections/<id>.tsx`——`ShowcaseApp.tsx` 预登记全部 13 个 id，之后不再改）、`fixtures/*`、`i18n/showcase.ts`、`vite.config.ts` 只加 `input` 且生产 `dist/` 不含展示页；`tools/probes/design-showcase.mjs`：13 分区 × 2 主题 × 3 视口截图、`window.__showcaseContrast()` 实测对比度、Tab 可达计数、`reduced-motion` 与 `forced-colors` 两张额外图、`--diff` 像素比较；探针进 A 档（新增 `tools/ci/e2e.d/design-showcase.json`）。
+- 文件：新建 `apps/web/showcase.html`、`apps/web/src/showcase/**`、`apps/web/src/i18n/showcase.ts`、`tools/probes/design-showcase.mjs`；修改 `apps/web/vite.config.ts`、`apps/web/src/i18n/i18n.test.ts`（排除 `fixtures/`）、`tools/probes/README.md`（自己的一节）、`tools/ci/e2e.d/<id>.json`（新增）。
 - 依赖：G0-6、G0-4。编号：无。
 - 测试：设计展示页 §4 的七条验收；`pnpm --filter @armadra/web build` 后断言 `dist/` 无 `showcase` chunk。
 - dev-stack：无。外部条件：无。
@@ -361,7 +361,7 @@ flowchart LR
 #### G3-4 Linux 打包验证与夜间冒烟
 
 - 范围：架构 §11。`nightly.yml`：ubuntu 作业 `dist` 出 AppImage / deb，`xvfb-run node tools/probes/packaged-smoke.mjs --app <AppImage>`，deb 在 `ubuntu:22.04` 容器里 `apt install` 后起一次 `--version`；macOS 作业跑现有打包冒烟；`update-e2e` 作业（G3-3 的探针，`--if-present`）；`packaged-smoke.mjs` 认 Linux 路径与 `--app`；修出来的 Linux 问题（托盘、通知、PATH、tmux 发现）随包交付；`tools/release/verify-linux-glibc-baseline.sh` 接进作业。
-- 文件：修改 `.github/workflows/nightly.yml`（除 G3-1 的两条作业外全部）、`tools/probes/packaged-smoke.mjs`、`tools/ci/e2e.json`（B 档清单）、Linux 相关的壳文件（按发现）。
+- 文件：修改 `.github/workflows/nightly.yml`（除 G3-1 的两条作业外全部）、`tools/probes/packaged-smoke.mjs`、`tools/ci/e2e.d/`（B 档条目）、Linux 相关的壳文件（按发现）。
 - 依赖：G0-4。
 - 测试：夜间作业绿；`validate-workflows.test` 认新作业。
 - dev-stack：`armadra-server`（deb 容器安装验证与镜像冒烟复用同一 compose）。外部条件：无。
@@ -546,7 +546,7 @@ flowchart LR
 | `apps/desktop/src/main/updates/*`、`shell-core/updates/*`                                                                                                                                                                                               | —                            | G1-15                                                        | —                                                                       | G3-3                                                    |
 | `apps/desktop/src/main/index.ts`                                                                                                                                                                                                                        | G0-8                         | —                                                            | —                                                                       | G3-10                                                   |
 | `apps/server/src/{serve,main}.ts`                                                                                                                                                                                                                       | G0-8（装配一行）             | G1-10（变薄）                                                | —                                                                       | G3-10（main 一行）、G3-5（cli `--acme`）                |
-| `tools/ci/e2e.json`                                                                                                                                                                                                                                     | G0-4 建                      | 各包只追加自己的一行                                         | 同左                                                                    | 同左                                                    |
+| `tools/ci/e2e.d/`（一条一个文件）                                                                                                                                                                                                                       | G0-4 建                      | 各包只新增自己的 `<id>.json`                                 | 同左                                                                    | 同左                                                    |
 | `tools/dev-stack/**`                                                                                                                                                                                                                                    | G0-7                         | —                                                            | —                                                                       | G3-5（`armadra-server` 条目换成真 Dockerfile）          |
 | `docs/status/completion-progress.md`                                                                                                                                                                                                                    | G0-1 建节                    | 各包只写自己的节                                             | 同左                                                                    | 同左                                                    |
 

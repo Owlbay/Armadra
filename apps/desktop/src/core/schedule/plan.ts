@@ -104,25 +104,77 @@ export function agentTarget(target: AutomationTarget | undefined): boolean {
   return target?.kind === AutomationTargetKind.AGENT_SESSION_PROMPT;
 }
 
+/** 工作流目标（契约 §15.6）：到点起一次工作流运行，不往任何终端里写。 */
+export function workflowTarget(target: AutomationTarget | undefined): boolean {
+  return target?.kind === AutomationTargetKind.WORKFLOW_RUN;
+}
+
 /**
  * 这次投递要不要求代数完全一致。
  *
  * 只有命令目标要：它钉在这个 core 冻结的那一个会话上，换一个代数就是换了一个
  * 进程。Agent 目标不能要——重启或者一次获授权的冷启动会合法地换掉会话，身份因
- * 此是节点加上冻结的那份定义，写入的时候再核一次。
+ * 此是节点加上冻结的那份定义，写入的时候再核一次。工作流目标没有会话。
  */
 export function generationPinned(target: AutomationTarget): boolean {
-  return !agentTarget(target);
+  return !agentTarget(target) && !workflowTarget(target);
 }
 
-/** 闸门按什么键。命令目标按会话，Agent 目标按节点。 */
+/** 工作流目标在闸门表里的键：同一个模板同一时刻只跑一次（并发策略照旧）。 */
+export const WORKFLOW_GATE_PREFIX = "workflow:";
+
+/** 闸门按什么键。命令目标按会话，Agent 目标按节点，工作流目标按模板。 */
 export function gateIdentity(target: AutomationTarget): {
   readonly sessionId: string;
   readonly nodeId: string;
 } {
+  if (workflowTarget(target)) {
+    return {
+      sessionId: "",
+      nodeId: `${WORKFLOW_GATE_PREFIX}${target.workflowRun?.templateId ?? ""}`,
+    };
+  }
   return agentTarget(target)
     ? { sessionId: "", nodeId: target.nodeId }
     : { sessionId: target.sessionId, nodeId: "" };
+}
+
+/** 工作流目标的载荷：`{"params":{名字:值}}` 的 UTF-8（契约 §15.6）。 */
+export const MAX_WORKFLOW_PARAMS = 32;
+export const MAX_WORKFLOW_PARAM_VALUE = 2_000;
+
+/**
+ * 读工作流目标的载荷。不成立就抛 `invalid`——定义时拒，而不是到点才发现。
+ * 只查形状；参数是否齐、是否声明过，由工作流服务按模板判（与页面起跑同一处）。
+ */
+export function workflowParams(payload: Uint8Array): Record<string, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(payload).toString("utf8"));
+  } catch {
+    throw invalid("工作流目标的载荷必须是 JSON");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw invalid("工作流目标的载荷必须是对象");
+  }
+  const raw = (parsed as { params?: unknown }).params ?? {};
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw invalid("params 必须是对象");
+  }
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length > MAX_WORKFLOW_PARAMS) throw invalid("参数太多");
+  const params: Record<string, string> = {};
+  for (const [name, value] of entries) {
+    if (
+      !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name) ||
+      typeof value !== "string" ||
+      [...value].length > MAX_WORKFLOW_PARAM_VALUE
+    ) {
+      throw invalid(`参数 ${name} 不合法`);
+    }
+    params[name] = value;
+  }
+  return params;
 }
 
 export function hashText(...parts: readonly string[]): string {
@@ -148,6 +200,7 @@ function normalizeTarget(target: AutomationTarget): void {
     if (
       target.nodeId !== "" ||
       target.agentLaunch !== undefined ||
+      target.workflowRun !== undefined ||
       target.coldStartPolicy === AutomationColdStartPolicy.LAUNCH_FROZEN
     ) {
       throw invalid("命令目标不能带节点或启动定义");
@@ -157,6 +210,34 @@ function normalizeTarget(target: AutomationTarget): void {
     }
     target.coldStartPolicy = AutomationColdStartPolicy.SKIP;
     return;
+  }
+  if (target.kind === AutomationTargetKind.WORKFLOW_RUN) {
+    // 工作流目标只有模板、版本与画布：没有会话、节点、启动定义可冻结，起什么
+    // 节点由模板说了算，所以也没有冷启动可授权——归一成 SKIP 让它幂等。
+    const workflow = target.workflowRun;
+    if (
+      workflow === undefined ||
+      !validId(workflow.templateId) ||
+      !validId(workflow.boardId) ||
+      !Number.isInteger(workflow.templateVersion) ||
+      workflow.templateVersion < 1
+    ) {
+      throw invalid("工作流目标必须指明模板、版本与画布");
+    }
+    if (
+      target.sessionId !== "" ||
+      num(target.generation) !== 0 ||
+      target.nodeId !== "" ||
+      target.agentLaunch !== undefined ||
+      target.coldStartPolicy === AutomationColdStartPolicy.LAUNCH_FROZEN
+    ) {
+      throw invalid("工作流目标不能带会话、节点或启动定义");
+    }
+    target.coldStartPolicy = AutomationColdStartPolicy.SKIP;
+    return;
+  }
+  if (target.workflowRun !== undefined) {
+    throw invalid("只有工作流目标带 workflowRun");
   }
   if (target.kind !== AutomationTargetKind.AGENT_SESSION_PROMPT) {
     throw invalid("未知的目标类别");

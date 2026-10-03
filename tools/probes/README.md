@@ -4,19 +4,21 @@
 
 ## 分档
 
-按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.json` 的清单跑（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
+按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.d/` 的清单跑（一条一个文件 `<id>.json`，新增探针就新增一个文件）（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
-| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                   | 何时跑                              | 失败时       |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | ------------ |
-| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e`、`push-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`windows-acceptance`（windows runner 作业）                                                     | `nightly.yml`                       | 开 issue     |
-| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                          | 手动；清单在执行计划 §5             | 记进状态文档 |
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                   | 何时跑                              | 失败时       |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`crash-report-e2e`、`windows-acceptance`（windows runner 作业）        | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                                          | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
 
+探针起的 core、服务器壳、桌面壳一律用临时 HOME（`probe-home.mjs`：HOME、XDG、各 CLI 配置目录与 git 全局配置都指进 mktemp 目录，并去掉指向真实账号的凭据变量），不读写操作员自己的 HOME。新写的探针也照此办；Vite / pnpm 这类工具链进程不在此列。
+
 ## Windows 真机验收
 
-`windows-acceptance.mjs`（补全计划 G3-2）：在 Windows 上一键装 NSIS 包、起应用、验会话宿主与命名管道、三种 shell 里的 `armadra-launch.exe`（参数、注入、凭据兑换）、DPAPI 凭据状态、回环 Gateway、文件监听、保活、杀主进程后接回、ConPTY 关闭、静默卸载与用户配置快照，写 `result.json`。只要 Node 22；纯函数一半在 `windows-acceptance-lib.mjs`，拷到别的机器上要连它一起。
+`windows-acceptance.mjs`（补全计划 G3-2）：在 Windows 上一键装 NSIS 包、起应用、验会话宿主与命名管道、三种 shell 里的 `armadra-launch.exe`（参数、注入、凭据兑换）、DPAPI 凭据状态、回环 Gateway、文件监听、保活、杀主进程后接回、ConPTY 关闭、静默卸载与用户配置快照，写 `result.json`。只要 Node 22；纯函数一半在 `windows-acceptance-lib.mjs`，临时 HOME 用同目录的 `probe-home.mjs`，拷到别的机器上要连这两个文件一起。
 
 ```powershell
 node tools/probes/windows-acceptance.mjs --installer .\Armadra-Setup-0.1.0-x64.exe [--soak-minutes 30] [--with-codex] [--require-signed]
@@ -160,6 +162,25 @@ node tools/probes/realtime-e2e.mjs [输出目录]
 
 验证：第一台打开即切到实时（`GET …/realtime`）、两边在线条列出对方；两边同时各拖一个节点，两边与 core 物化的表一致；成员光标与选区外框；同一张便签一个在开头、一个在结尾同时输入，提交后收敛且两个人的字都在；断网（探针注入的 WebSocket 包装切断 `…/sync` 并拒绝重连）时顶部「离线编辑」、在线条置灰，期间的拖动对方看不到，恢复后自动重连补齐。最后一台开评论模式在便签上放钉并发送，另一台经 `board.comment` 看到评论钉（契约 §16.3）。产物默认在 `target/realtime-e2e/`。租约模式的多设备场景（`ui-features` 的 presence、`server-e2e`）开头先把 `collab.realtime` 关掉。
 
+## 工作流端到端
+
+```sh
+pnpm --filter @armadra/desktop build
+node tools/probes/workflow-e2e.mjs [输出目录]
+```
+
+不开页面、不用真账号：临时 HOME 里起 core，注册一个假 CLI 的自定义 Agent，经 `/api/workflows/*` 建两步模板（prompt → collect）并起跑，断言运行 `succeeded`、产出与收件箱；再经控制 socket 配对出本机主人，在 `/api/automations/*` 定义一个「运行工作流」的一次性计划（契约 §15.6）并激活，等调度到点起跑，断言多出一次带计划参数的成功运行、自动化运行落 `SUCCEEDED` 且只起了一次。产物默认在 `target/workflow-e2e/`。
+
+## 崩溃上报对 GlitchTip（dev-stack）
+
+```sh
+pnpm dev-stack up glitchtip
+pnpm libs:build
+node tools/probes/crash-report-e2e.mjs [输出目录]   # 默认 target/crash-report-e2e/
+```
+
+[外部服务](../../docs/design/external-services.md) §11.2：真 `@sentry/node`，经 core 的请求错误路径（500 → `platform.reportError` → `apps/server/src/diagnostics.ts`）发到 dev-stack 的 GlitchTip，再用它的 API 取回事件，断言里面没有环境变量的值与名字、家目录、路径里的用户名、令牌、ANSI / 终端输出、用户与 extra，面包屑没有 data；没配 DSN 时同一路径不发。组织、项目与只读令牌由容器里的 `manage.py shell` 现建。用例本体是 `apps/server/src/diagnostics.devstack.test.ts`（平时 skipped），e2e 清单里是 B 档的 dev-stack 条目。
+
 ## Agent 协作端到端（真 Claude Code + 真 Codex CLI）
 
 用真 CLI 把投递、依赖编排、组队与节能休眠走一遍。页面必须真的挂着这些终端节点：CLI 起来时的终端查询由 xterm 经页面写回 PTY，[状态文档](../../docs/status/typescript-core-status.md) §31.7 那个「Codex 首条任务投不出去」只在页面挂着时出现。每个 Agent 节点都由页面挂载、由页面敲启动行。
@@ -291,8 +312,11 @@ node tools/probes/timezone-picker.mjs [输出目录]
 
 ```sh
 pnpm --filter @armadra/desktop dist        # 没有 CSC_LINK 时自动跳过签名与公证
-node tools/probes/packaged-smoke.mjs [输出目录] [--app <Armadra.app>]
+node tools/probes/packaged-smoke.mjs [输出目录] [--app <Armadra.app | *.AppImage | linux-unpacked>] [--no-real-cli]
+xvfb-run -a node tools/probes/packaged-smoke.mjs --no-real-cli   # Linux，没有桌面时
 ```
+
+B 档（`nightly.yml` 的 `linux` 与 `macos` 作业）带 `--no-real-cli`：不要真 Codex 与它的登录，第 3 步换成一个普通终端节点——打包版按桌面会话的 PATH 起来后找得到 tmux、起得来 shell、页面敲的 `echo` 有回显（`packaged-shell.png`）。第 1、2、4 步照旧。Linux 上不给 `--app` 时取 `apps/desktop/release/` 里的 AppImage（没有就取 `linux-unpacked/`）；AppImage 用 `APPIMAGE_EXTRACT_AND_RUN=1` 起，不要 FUSE；环境是桌面会话的 PATH（`/usr/local/sbin:…:/bin`）、`SHELL=/bin/bash`，透传 `DISPLAY` / `XAUTHORITY` / `WAYLAND_DISPLAY` / `XDG_RUNTIME_DIR` / `DBUS_SESSION_BUS_ADDRESS`，Chromium 用 `--password-store=basic`；以 root 运行（容器里调试）时加 `--no-sandbox`。
 
 直接执行 `apps/desktop/release/mac-arm64/Armadra.app` 里的二进制，按访达的方式给环境（launchd 的 PATH、`SHELL=/bin/zsh`），`HOME`、`ARMADRA_DATA_DIR`、`--user-data-dir` 都在 `mktemp` 的目录里，Chromium 用 `--use-mock-keychain`（临时 HOME 下没有登录钥匙串）。不安装、不替换 `/Applications/Armadra.app`，也不碰正在运行的那个 Armadra（单实例锁按 `--user-data-dir` 算）。
 
@@ -302,6 +326,17 @@ node tools/probes/packaged-smoke.mjs [输出目录] [--app <Armadra.app>]
 4. **控制台**：渲染进程没有 error 级别的输出与未捕获异常。
 
 产物默认在 `target/packaged-smoke/`：`result.json`、`app.log`、`packaged-media.png`、`packaged-before-hibernate.png`、`packaged-hibernated.png`、`packaged-resumed.png`。没验证：Claude（登录在钥匙串里，临时 HOME 认证不上）、签名与公证后的包、自动更新。
+
+## deb 安装验证
+
+Linux 上 `dist` 出的 `.deb` 在干净的 `ubuntu:22.04` 容器里装一次（B 档，`nightly.yml` 的 `linux` 作业）。要 Docker；架构跟着 Docker 主机（x64 runner 验 amd64 包，Apple 芯片上验 arm64 包）。
+
+```sh
+pnpm --filter @armadra/desktop dist
+node tools/probes/deb-install.mjs [输出目录] [--deb <Armadra_x.y.z_arch.deb>] [--image ubuntu:22.04]
+```
+
+断言：`apt-get install` 从官方源把依赖都解出来；`/usr/bin/armadra` 指向 `/opt/Armadra/armadra`；`ldd` 没有 `not found`；`armadra --version` 答出 `apps/desktop/package.json` 的版本（`main/version-flag.ts`：在任何窗口、数据目录与 core 之前答完退出，不要显示器）。容器 `--rm`、只读挂载 release 目录，不碰本机的 apt 与 `/opt`。产物默认在 `target/deb-install/`：`result.json`、`container.log`。没验证：桌面环境里从应用菜单启动、rpm 包。
 
 ## 自动更新端到端
 

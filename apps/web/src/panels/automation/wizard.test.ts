@@ -401,3 +401,45 @@ describe("editing an existing plan", () => {
     expect(targetFromConfig(broken)).toBeNull();
   });
 });
+
+describe("workflow target (contract §15.6)", () => {
+  const workflowTarget: WizardTarget = {
+    kind: "workflow",
+    workspaceId: "workspace-1",
+    executionHostId: "0123456789abcdef0123456789abcdef",
+    sessionId: "",
+    generation: 0n,
+    workflowRun: { templateId: "tpl-1", templateVersion: 2, boardId: "b1" },
+  };
+
+  it("freezes the template, its version and the board, with no session", () => {
+    const result = buildPlanConfig(form(), workflowTarget);
+    if (!result.ok) throw new Error(result.messageKey);
+    const frozen = result.config.target!;
+    expect(frozen.kind).toBe(AutomationTargetKind.WORKFLOW_RUN);
+    expect(frozen.workflowRun).toEqual({
+      templateId: "tpl-1",
+      templateVersion: 2,
+      boardId: "b1",
+    });
+    expect(frozen.sessionId).toBe("");
+    expect(frozen.generation).toBe(0n);
+    expect(frozen.agentLaunch).toBeUndefined();
+    // An edit re-sends exactly this target.
+    expect(targetFromConfig(result.config)).toMatchObject({
+      kind: "workflow",
+      workflowRun: workflowTarget.workflowRun,
+    });
+  });
+
+  it("refuses a workflow plan without a template", () => {
+    const result = buildPlanConfig(form(), {
+      ...workflowTarget,
+      workflowRun: { templateId: "", templateVersion: 0, boardId: "b1" },
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      messageKey: "automation.wizard.workflowRequired",
+    });
+  });
+});

@@ -45,7 +45,7 @@ Rust 与 Go 的 setup、缓存与检查步骤一并删除。
 ### 1.1 端到端分档
 
 `tools/probes/` 下的端到端探针按「要不要用户的东西」分三档（[补全架构](../design/completion-architecture.md) §12）。
-A 档与 B 档由 `tools/ci/e2e.mjs` 执行，清单在 `tools/ci/e2e.json`：
+A 档与 B 档由 `tools/ci/e2e.mjs` 执行，清单是 `tools/ci/e2e.d/` 目录，一条一个文件：
 
 ```sh
 pnpm libs:build
@@ -64,10 +64,14 @@ node tools/ci/e2e.mjs --tier b --list     # 只列出清单
 | B   | `nightly.yml`（每天一次，可手动触发）             | 开 issue |
 | C   | 手动，需要真实账号或真机                          | —        |
 
-- **清单一条一行。** 每条写 `id`、`tier`、`script`、`args`（`{out}` 换成这一条的
-  输出目录）、`requires`（`tmux` / `chrome`）与 `timeoutMinutes`；外部服务替身由
-  `tools/dev-stack/` 提供的条目加 `devStack: true`。工作包只追加自己的一行，
-  `tools/ci/e2e.test.mjs` 校验清单形状、脚本存在与 A 档必有的五条。
+- **清单一条一个文件。** 每条是 `tools/ci/e2e.d/<id>.json`，写 `id`（与文件名一致）、
+  `tier`、`script`、`args`（`{out}` 换成这一条的输出目录）、`requires`（`tmux` /
+  `chrome` / `docker`）与 `timeoutMinutes`；外部服务替身由 `tools/dev-stack/` 提供的条目加
+  `devStack: true`；只在某些系统上有意义的条目加 `platforms`（`darwin` / `linux` /
+  `win32`，取 `process.platform`），别的系统上记 `skipped`。工作包新增探针就新增一个文件，不改别人的条目，合并时不冲突。
+  运行顺序由加载器定：先 A 档后 B 档，同档按 `id` 排序，与文件添加先后无关。
+  `tools/ci/e2e.test.mjs` 校验清单形状、文件名与 `id` 一致、脚本存在、A 档必有的
+  五条，以及旧的单文件 `tools/ci/e2e.json` 没有被合并带回来。
 - **逐条记账，跑完全部再判。** 每条探针的输出写进 `<out>/<id>/output.log`，
   探针自己的 `result.json` 与截图也落在 `<out>/<id>/`；汇总在 `<out>/result.json`
   （默认 `target/e2e/<档>/`）。任一条失败或超时，退出码非零，但后面的条目照跑。
@@ -80,8 +84,29 @@ node tools/ci/e2e.mjs --tier b --list     # 只列出清单
   `requires` 里的任何一样，那一条直接记 `failed` 并写明缺什么。`e2e` 作业用
   `browser-actions/setup-chrome` 装 stable，apt 装 tmux 与 xvfb，并放开 Ubuntu 24.04
   对非特权用户命名空间的 AppArmor 限制，好让 Chrome 的沙箱起得来。
+- **B 档的夜间作业。** `nightly.yml` 每个系统一条作业，各自打包后跑
+  `e2e.mjs --tier b`，条目靠 `platforms` 分到对应系统：
+  - `linux`（ubuntu-22.04，与发布同一个 glibc 基线）：桌面壳 `dist` 出
+    AppImage / deb / rpm（不签名），
+    `verify-linux-glibc-baseline.sh` 断言基线，再在 `xvfb-run` 下跑 B 档：
+    `packaged-smoke --no-real-cli` 起 AppImage（`APPIMAGE_EXTRACT_AND_RUN`，不要
+    FUSE），`deb-install` 在 `ubuntu:22.04` 容器里 `apt-get install` 那个 deb、`ldd`
+    没有缺库、`armadra --version` 答出版本；另跑 `server-perf`、
+    `server-container-e2e`（构建服务器壳镜像、对着容器跑 `server-e2e`，不推送）、`crash-report-e2e` 与
+    `update-e2e`。作业设 `ARMADRA_DEV_STACK=1`、装 Chrome，`devStack` 条目先
+    `pnpm dev-stack up`。
+  - `macos`（macos-14）：同样打包，跑 `packaged-smoke --no-real-cli`。
+  - `report`：前两条任一失败、且在 main 上时，用默认的 `GITHUB_TOKEN`（作业级
+    `issues: write`）开一个「夜间 B 档失败」issue，已有开着的同名 issue 就追加评论；
+    正文是运行链接与每条作业失败的条目（`e2e.mjs` 在 `GITHUB_OUTPUT` 里写
+    `failed=<id,…>`）。夜间工作流不读任何 secret。
+  - 要打好的包才能跑的新探针只需新增一个 B 档条目并写明
+    `platforms`，在对应作业里打包之后执行，不必加作业。
 - `pnpm ci:workflows` 断言 `ci.yml` 有跑 `--tier a` 的 `e2e` 作业且在 ubuntu 上，
-  `nightly.yml` 有 `schedule` 与 `workflow_dispatch` 并跑 `--tier b`。
+  `nightly.yml` 有 `schedule` 与 `workflow_dispatch` 并跑 `--tier b`；B 档条目
+  `platforms` 里的每个系统都有一条在该系统 runner 上跑 `--tier b` 的作业；有一条
+  `failure()` 门控、`needs` 全部 B 档作业、带 `issues: write` 的开 issue 作业；
+  除 `GITHUB_TOKEN` 外不引用 secret。
 
 ## 2. release.yml
 
@@ -363,22 +388,26 @@ runner、两台 Windows runner 合进同一个目录会互相覆盖，所以 `st
 `assemble` 会把这件事写进 Release 说明顶部，`latest.json` 会把没有签名的
 updater 包排除在外。
 
-| Secret / 变量                                                 | 谁用                                                                 | 缺了会怎样                                   |
-| ------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------- |
-| `APPLE_CERTIFICATE_P12_BASE64`                                | macOS 代码签名（base64 的 Developer ID Application .p12，G2 链）     | 不签名，首次打开有 Gatekeeper 提示           |
-| `APPLE_CERTIFICATE_PASSWORD`                                  | 导入上面的证书                                                       | 只给一半：构建失败                           |
-| `APPLE_SIGNING_IDENTITY`                                      | 指定用哪张证书；缺则取第一张                                         | 钥匙串里有多张时可能选错                     |
-| `APPLE_API_KEY_P8_BASE64`                                     | 公证（推荐）：App Store Connect API key 的 .p8，base64               | 退回 Apple ID；两套都没有就不公证            |
-| `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID`                    | 同上的 key id 与 issuer                                              | 三个只给一部分：构建失败                     |
-| `APPLE_ID` / `APPLE_TEAM_ID`                                  | 公证（回退）                                                         | 不公证，`notarize` 作业把 macOS 列进说明     |
-| `APPLE_APP_SPECIFIC_PASSWORD`                                 | 公证回退用的 app 专用密码                                            | 同上                                         |
-| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` | Windows：Azure Artifact Signing 的 Entra 凭据                        | 与下面三个变量、发布者名一起：缺一个构建失败 |
-| 变量 `AZURE_SIGNING_ENDPOINT` / `_ACCOUNT` / `_PROFILE`       | Windows：Artifact Signing 账户、证书配置                             | 同上                                         |
-| 变量 `ARMADRA_WIN_PUBLISHER_NAME`                             | Windows：证书主体 CN，钉进 `publisherName`                           | Azure 路径必需；证书文件路径缺省取证书 CN    |
-| `WINDOWS_CERT_BASE64` / `WINDOWS_CERT_PASSWORD`               | Windows：OV 证书文件（与 Azure、令牌三选一）                         | 不签名，SmartScreen 提示，不自动更新         |
-| 变量 `ARMADRA_WIN_CERT_SHA1`                                  | Windows：自托管 runner 证书库里的令牌证书                            | 同上                                         |
-| `ARMADRA_LINUX_GPG_KEY` / `ARMADRA_LINUX_GPG_PASSPHRASE`      | Linux 包的 `.asc` 与 rpm 签名                                        | 不带 `.asc`，rpm 不签名，说明里写明          |
-| `ARMADRA_RELEASE_SIGNING_KEY`                                 | 每个产物与 `SHA256SUMS` 的 minisign 签名，`latest.json` 引用的也是它 | 产物不带签名，`latest.json` 为空，说明里写明 |
+| Secret / 变量                                                 | 谁用                                                                                                             | 缺了会怎样                                   |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `APPLE_CERTIFICATE_P12_BASE64`                                | macOS 代码签名（base64 的 Developer ID Application .p12，G2 链）                                                 | 不签名，首次打开有 Gatekeeper 提示           |
+| `APPLE_CERTIFICATE_PASSWORD`                                  | 导入上面的证书                                                                                                   | 只给一半：构建失败                           |
+| `APPLE_SIGNING_IDENTITY`                                      | 指定用哪张证书；缺则取第一张                                                                                     | 钥匙串里有多张时可能选错                     |
+| `APPLE_API_KEY_P8_BASE64`                                     | 公证（推荐）：App Store Connect API key 的 .p8，base64                                                           | 退回 Apple ID；两套都没有就不公证            |
+| `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID`                    | 同上的 key id 与 issuer                                                                                          | 三个只给一部分：构建失败                     |
+| `APPLE_ID` / `APPLE_TEAM_ID`                                  | 公证（回退）                                                                                                     | 不公证，`notarize` 作业把 macOS 列进说明     |
+| `APPLE_APP_SPECIFIC_PASSWORD`                                 | 公证回退用的 app 专用密码                                                                                        | 同上                                         |
+| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` | Windows：Azure Artifact Signing 的 Entra 凭据                                                                    | 与下面三个变量、发布者名一起：缺一个构建失败 |
+| 变量 `AZURE_SIGNING_ENDPOINT` / `_ACCOUNT` / `_PROFILE`       | Windows：Artifact Signing 账户、证书配置                                                                         | 同上                                         |
+| 变量 `ARMADRA_WIN_PUBLISHER_NAME`                             | Windows：证书主体 CN，钉进 `publisherName`                                                                       | Azure 路径必需；证书文件路径缺省取证书 CN    |
+| `WINDOWS_CERT_BASE64` / `WINDOWS_CERT_PASSWORD`               | Windows：OV 证书文件（与 Azure、令牌三选一）                                                                     | 不签名，SmartScreen 提示，不自动更新         |
+| 变量 `ARMADRA_WIN_CERT_SHA1`                                  | Windows：自托管 runner 证书库里的令牌证书                                                                        | 同上                                         |
+| `ARMADRA_LINUX_GPG_KEY` / `ARMADRA_LINUX_GPG_PASSPHRASE`      | Linux 包的 `.asc` 与 rpm 签名                                                                                    | 不带 `.asc`，rpm 不签名，说明里写明          |
+| `ARMADRA_RELEASE_SIGNING_KEY`                                 | 每个产物与 `SHA256SUMS` 的 minisign 签名，`latest.json` 引用的也是它                                             | 产物不带签名，`latest.json` 为空，说明里写明 |
+| `HOMEBREW_TAP_TOKEN`                                          | `distribute.yml` 推 Homebrew tap（细粒度 PAT，只对 tap 仓库 `contents: write`）                                  | 跳过 tap，告警                               |
+| `SCOOP_BUCKET_TOKEN`                                          | `distribute.yml` 推 Scoop bucket（同上，只对 bucket 仓库）                                                       | 跳过 Scoop，告警                             |
+| `WINGET_TOKEN`                                                | `distribute.yml` 用 wingetcreate 向 `microsoft/winget-pkgs` 提 PR（对 fork `contents` + `pull_requests: write`） | 跳过 winget，告警                            |
+| 变量 `ARMADRA_HOMEBREW_TAP` / `ARMADRA_SCOOP_BUCKET`          | tap / bucket 仓库名，缺省 `Owlbay/homebrew-tap` / `Owlbay/scoop-bucket`                                          | 用缺省                                       |
 
 证书与公证密码两个名字沿用 LiveAgent 的拼写；工作流同时接受早先的
 `APPLE_CERTIFICATE` 与 `APPLE_PASSWORD`（`${{ secrets.A || secrets.B }}`），
@@ -408,6 +437,42 @@ macOS 的证书与公证凭据走 §2.6 的两个预检步骤，Windows 走 §2.
 构建之前，否则缺密钥的失败要等到最后一步才出现。该脚本用 Node 直接启动
 electron-vite 的入口——Windows 上包管理器是 `.cmd`，`execFileSync` 不带 shell
 启动不了它。它之前没有别的构建步骤：这个壳不再有受管二进制。
+
+### 3.1 分发渠道与第三方声明
+
+渠道清单不手写：`tools/release/publish-channels.mjs render` 从版本、仓库名与发布里的
+`SHA256SUMS` 渲染 `tools/release/templates/` 下的模板——Homebrew cask（`armadra.rb`，
+dmg）、Scoop（`armadra.json`，便携 zip，`checkver: github`，`autoupdate` 从
+`$baseurl/SHA256SUMS` 取哈希）、winget 三件套（`Owlbay.Armadra`，NSIS 安装包）、AUR
+`armadra-bin` 的 `PKGBUILD`（基于 `.deb`）。文件名取 `artifacts.mjs` 的 `desktopAssets()`，
+`SHA256SUMS` 缺哪个就拒绝渲染；只渲染稳定版。
+
+两处工作流：
+
+- `release.yml` 的 `channels`（Ubuntu：渲染两份——指向 GitHub Release 的与指向
+  `127.0.0.1:8765` 的本地版；PKGBUILD 在 Arch 容器里过 `makepkg --printsrcinfo` 与
+  `namcap`）、`channels-macos`（本地 tap 上 `brew style` / `brew audit --cask --strict`，
+  从本地静态服务器 `brew install --cask` 进临时 appdir，断言包里有 Electron / Chromium
+  声明与 `THIRD_PARTY_NOTICES.md`）、`channels-windows`（`winget validate`、`scoop install`
+  本地版）。只校验，不推送：此时 Release 还是 draft，下载地址对外是 404。
+- `distribute.yml` 挂在 `release: published` 上（也可手动给标签补跑）：从已发布 Release 的
+  `SHA256SUMS` 重新渲染，`publish-tap` / `publish-scoop` 用 `publish-channels.mjs push` 把
+  文件提交进渠道仓库（令牌经 HTTP 头交给 git，不进 URL），`publish-winget` 用
+  wingetcreate 提 PR（包已在 winget-pkgs 里用 `update`，首次用渲染好的三件套 `submit`）。
+  每个作业缺自己的 secret 就跳过并告警。
+
+官方 `homebrew/cask` 与 Scoop `Extras` 有知名度门槛，达到后再提；`brew audit --new` 要求仓库
+公开可查，私有期间只跑 `--strict`。Linux 的结论（外部服务 §4.3）：AUR 只附 `PKGBUILD` 模板、
+不自己维护；apt / rpm 仓库是可选的 W-LINUX-REPO；Flathub 与 Snap 延后——终端、PTY 与任意
+CLI 需要的宽沙箱权限过不了审核。服务器壳镜像推 GHCR 由 `server-image.yml` 负责（G3-5）。
+
+第三方声明：`node tools/notices.mjs` 用 `pnpm licenses list --prod --json` 生成根目录的
+`THIRD_PARTY_NOTICES.md`（每个包带许可证原文），`pnpm check` 里的 `notices:check` 防漂移——
+**改了生产依赖要重新生成并提交**。`apps/desktop/scripts/after-pack.mjs` 把它放进
+`resources/`，把 ama 自带的 `LICENSE` / `THIRD_PARTY_NOTICES.md` 放进 `resources/agent/`，
+并把 Electron 的 `LICENSE.electron.txt` / `LICENSES.chromium.html` 放回 macOS 的
+`Contents/Resources/`（Windows / Linux 上 electron-builder 已放在可执行文件旁，缺了才补）。
+设置 → 关于 → 开源许可显示的就是这份文件。
 
 ## 4. 本地怎么先验
 

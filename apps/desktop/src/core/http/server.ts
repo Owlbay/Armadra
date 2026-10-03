@@ -7,7 +7,7 @@ import {
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { EventBus } from "../bus";
-import type { CorePlatform } from "../platform";
+import { type CorePlatform, reportError } from "../platform";
 import { corsHeaders, websocketOriginAllowed } from "./cors";
 import {
   type ErrorResponse,
@@ -189,6 +189,8 @@ export class CoreServer {
         path,
         error: error instanceof Error ? error.message : String(error),
       });
+      // 没人接住的错误才走到这里；按 §11.2 报给壳（没开上报就只是这行日志）。
+      reportError(this.options.platform, error, { source: "http" });
       answer = internal("核心处理请求时失败");
     }
     this.send(

@@ -74,6 +74,21 @@ export function setSecretChannel(channel: SecretChannel): void {
 }
 
 /**
+ * 崩溃上报通道（`main/diagnostics.ts`，外部服务 §11.2）：同样每次 spawn 都重挂。
+ * 发不发由那边按设置决定，这里只负责把 child 交过去。
+ */
+let crashChannel:
+  | {
+      environment(): Record<string, string>;
+      attach(child: Pick<ChildProcess, "on">): void;
+    }
+  | undefined;
+
+export function setCrashChannel(channel: typeof crashChannel): void {
+  crashChannel = channel;
+}
+
+/**
  * 这个壳自己起的那个 core 进程，以及怎么请它停下。
  *
  * 打好包的壳自己起 core；开发时的 core 是别人的进程，这个模块从不给一个不是自己
@@ -167,6 +182,7 @@ export class RuntimeProcess {
       ...process.env,
       ...driveEnvironment,
       ...(secretChannel?.environment() ?? {}),
+      ...(crashChannel?.environment() ?? {}),
     };
     // `child_process.fork`, not `utilityProcess.fork`: everything below this
     // line — the announcement reader, the exit bookkeeping, the SIGKILL
@@ -180,6 +196,7 @@ export class RuntimeProcess {
       env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
     });
     secretChannel?.attach(child);
+    crashChannel?.attach(child);
     child.on("error", (error) => {
       this.exited = true;
       process.stderr.write(

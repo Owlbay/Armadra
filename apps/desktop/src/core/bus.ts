@@ -224,6 +224,8 @@ export interface WorkspaceEventPayloads {
     readonly stepId: string;
     readonly label: string;
     readonly state: "waiting" | "approved" | "rejected" | "cancelled";
+    /** 运行的 Frame：推送的深链打开它（契约 §15.4）。 */
+    readonly nodeId?: string;
   };
   /*
    * ACP 驱动的会话（契约 §14.3）。`sessionId` 是 `terminal_sessions.id`；

@@ -297,6 +297,8 @@ armadra-hook canvas cancel --id <待投 id>                            # 撤掉�
 
 - \`open-terminal\` / \`open-agent\` / \`open-browser\` / \`sticky\` / \`link\` 支持 \`--dry-run\`，只回报会发生什么，不改画布。
 - \`open-agent --task\` 是给新节点的第一件事：节点建好、从你这里连一条线过去，等它第一次空闲时把任务投进去（和一次 \`send\` 走同一条路）。有的 CLI 起来之后不报状态（Codex 就是），那种节点等的是终端安静下来，可能要多等一会儿。**不要**把任务写进启动行——启动行只负责把 CLI 起起来。还可以带 \`--permission-mode\` 与 \`--model\`。
+- 交给你的任务末尾写着 \`task:<id>:result\` 这样的键时（协调者经 runner 派的任务），做完后用它回报：\`armadra-hook canvas post --to <派任务的节点> --key task:<id>:result --body '结论；文件路径'\`。派任务的一方只等这一条；没有它就只能去读你的转录。
+  When a task ends with a \`task:<id>:result\` key, report with \`canvas post --to <sender> --key task:<id>:result --body '…'\` when done; the sender waits for exactly that post.
 - 新节点会放在你右边。\`--after\` 让新 Agent 等依赖节点跑完再启动：由 core 等、由 core 启动，页面开不开都一样。\`--after-turn current\`（缺省）等对方手上这一轮，\`next\` 等它下一次成功结束；失败、中断、退出都不放行，缺省最多等一天（\`--ttl\` 改）。依赖只能是 Agent 节点。
 - \`team\` 一次建最多 6 个成员，每个 \`--member\` 是 \`agent[@模型]|标题|任务\`（只按前两个 \`|\` 切）。缺省并行、一起启动；\`--chain\` 让每个成员等上一个做完，并彼此连线；\`--gather\` 加一个汇总节点，等所有成员（流水线时等最后一个）做完再启动，并与每个成员连线。\`--after\`、\`--after-turn\`、\`--ttl\`、\`--permission-mode\`、\`--dry-run\` 与 \`open-agent\` 相同，作用于整队。
 - 几个成员要同时改代码时，给每人一条 worktree：\`--member\` 末尾加 \`|worktree=名字\`（没有任务就写 \`agent|标题||worktree=名字\`），\`open-agent\` 用 \`--worktree 名字\`。名字先找分支名或目录名是它的现有 worktree，没有就在 \`.worktrees/名字\` 从当前 HEAD 新建同名分支；也可以写工作区内的路径。成员放进绑着那条检出的 Frame（没有就建一个），终端开在检出目录里；两个成员写同一个名字就在同一个 Frame 里。Git 拒绝（分支已存在、目录被占、工作区不是仓库）时整队不建。
