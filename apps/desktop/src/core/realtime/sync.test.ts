@@ -154,22 +154,83 @@ describe("同步流", () => {
     const a = new MemoryClient("a");
     const b = new MemoryClient("b");
     a.connect(fx.hub, live);
-    b.connect(fx.hub, live, { canWrite: () => false });
+    b.connect(fx.hub, live, { canWrite: () => false, principalId: "p-bob" });
     // 只读者也能发 awareness：让别人看见自己在看。
     b.awareness.setLocalState({
       principalId: "p",
+      deviceId: "bob-window",
       name: "Bob",
+      color: 2,
       cursor: { x: 1, y: 2 },
     });
     pumpAll([a, b]);
-    expect(a.awareness.getStates().get(b.doc.clientID)).toMatchObject({
+    // 身份按连接改写（契约 §16.4）：客户端自报的 `p` 不算。
+    expect(a.awareness.getStates().get(b.doc.clientID)).toEqual({
+      principalId: "p-bob",
+      deviceId: "bob-window",
       name: "Bob",
+      color: 2,
+      cursor: { x: 1, y: 2 },
     });
     expect(b.closed).toBeUndefined();
 
     b.disconnect(fx.hub);
     pumpAll([a]);
     expect(a.awareness.getStates().has(b.doc.clientID)).toBe(false);
+  });
+
+  it("形状不对的 awareness 丢掉，连接不断（契约 §16.4）", () => {
+    const live = fx.hub.open(fx.workspaceId, fx.board.id, true);
+    if (live === undefined) throw new Error("not opened");
+    const a = new MemoryClient("a");
+    const b = new MemoryClient("b");
+    a.connect(fx.hub, live);
+    b.connect(fx.hub, live);
+    b.awareness.setLocalState({ name: "Bob", cursor: { x: 1, y: 2 } });
+    pumpAll([a, b]);
+    expect(a.awareness.getStates().has(b.doc.clientID)).toBe(false);
+    expect(live.awareness.getStates().has(b.doc.clientID)).toBe(false);
+    expect(b.closed).toBeUndefined();
+  });
+
+  it("不能改写别的连接登记过的 awareness", () => {
+    const live = fx.hub.open(fx.workspaceId, fx.board.id, true);
+    if (live === undefined) throw new Error("not opened");
+    const a = new MemoryClient("a");
+    const b = new MemoryClient("b");
+    a.connect(fx.hub, live);
+    b.connect(fx.hub, live);
+    a.awareness.setLocalState({
+      principalId: "",
+      deviceId: "alice",
+      name: "Alice",
+      color: 2,
+    });
+    pumpAll([a, b]);
+    // b 冒充 a 的 clientID、用更大的 clock 发一条。
+    const forged = new MemoryClient("forged");
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, MESSAGE_AWARENESS);
+    const inner = encoding.createEncoder();
+    encoding.writeVarUint(inner, 1);
+    encoding.writeVarUint(inner, a.doc.clientID);
+    encoding.writeVarUint(inner, 999);
+    encoding.writeVarString(
+      inner,
+      JSON.stringify({
+        principalId: "",
+        deviceId: "x",
+        name: "Mallory",
+        color: 3,
+      }),
+    );
+    encoding.writeVarUint8Array(encoder, encoding.toUint8Array(inner));
+    b.conn?.receive(encoding.toUint8Array(encoder));
+    pumpAll([a, b]);
+    expect(live.awareness.getStates().get(a.doc.clientID)).toMatchObject({
+      name: "Alice",
+    });
+    expect(forged.closed).toBeUndefined();
   });
 
   it("断线期间的本地编辑在重连后经 step1 / step2 补齐", () => {

@@ -46,6 +46,13 @@ function occupies(value: PanelState[keyof PanelState]): boolean {
   return (OPEN_WORK_PANEL as readonly unknown[]).includes(value);
 }
 
+/** 选区里去掉已经不存在的 id；一个都没少时原样返回，免得白重渲。 */
+function keepKnown(ids: string[], known: ReadonlySet<string>): string[] {
+  return ids.every((id) => known.has(id))
+    ? ids
+    : ids.filter((id) => known.has(id));
+}
+
 export function createBoardSlice(
   set: CanvasSet,
   get: CanvasGet,
@@ -57,6 +64,7 @@ export function createBoardSlice(
   | "focusNodeId"
   | "maximized"
   | "mergeRemoteDocument"
+  | "applyRealtimeState"
   | "panels"
   | "saveError"
   | "saveState"
@@ -180,6 +188,43 @@ export function createBoardSlice(
         maximized: Object.fromEntries(
           Object.entries(state.maximized).filter(([id]) => nodeIds.has(id)),
         ),
+      });
+    },
+
+    /**
+     * 实时板的远端灌入（补全架构 §6.4）。`state` 已经按身份复用过本地对象
+     * （`realtime/doc.ts`），三张表都没变时什么都不写。
+     */
+    applyRealtimeState: (remote) => {
+      const state = get();
+      const local = state.document;
+      if (!local) return;
+      if (
+        remote.nodes === local.nodes &&
+        remote.edges === local.edges &&
+        remote.whiteboard === state.whiteboard
+      ) {
+        return;
+      }
+      const nodeIds = new Set(remote.nodes.map((node) => node.id));
+      const itemIds = new Set(
+        remote.whiteboard.items.map((item) => toItemId(item.id)),
+      );
+      const edgeIds = new Set([
+        ...remote.edges.map((edge) => edge.id),
+        ...remote.whiteboard.references.map((reference) => reference.id),
+      ]);
+      set({
+        document: { ...local, nodes: remote.nodes, edges: remote.edges },
+        whiteboard: remote.whiteboard,
+        selectedNodeIds: keepKnown(state.selectedNodeIds, nodeIds),
+        selectedItemIds: keepKnown(state.selectedItemIds, itemIds),
+        selectedEdgeIds: keepKnown(state.selectedEdgeIds, edgeIds),
+        maximized: Object.keys(state.maximized).every((id) => nodeIds.has(id))
+          ? state.maximized
+          : Object.fromEntries(
+              Object.entries(state.maximized).filter(([id]) => nodeIds.has(id)),
+            ),
       });
     },
 

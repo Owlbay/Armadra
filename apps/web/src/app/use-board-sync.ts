@@ -7,6 +7,7 @@ import { useDraftsActive } from "../canvas/flow/drafts";
 import { LEASE_LOST_EVENT, flushBoardSaves } from "../save/autosave";
 import { SAVE_RETRY_EVENT } from "../shell/Banners";
 import { useCanvasStore } from "../store/canvas-store";
+import { realtimeActive, startRealtime } from "../realtime/session";
 import {
   applyPresence,
   markPresenceActivity,
@@ -123,9 +124,19 @@ export function useBoardSync() {
       const current = useCanvasStore.getState().document;
       if (!current || current.board.id !== event.boardId) return;
       if (current.board.updatedAt === event.updatedAt) return;
+      // 实时板（契约 §16.2）：`board.changed` 只说明表追上了文档，改动早已经
+      // 由 `…/sync` 送到，重取只会拿回同一份。画布列表照常刷新。
+      if (realtimeActive(event.boardId)) {
+        if (workspaceId) {
+          void queryClient.invalidateQueries({
+            queryKey: ["boards", workspaceId],
+          });
+        }
+        return;
+      }
       onCanvasChanged();
     });
-  }, [onCanvasChanged, workspaceId]);
+  }, [onCanvasChanged, queryClient, workspaceId]);
 
   /**
    * 丢了租约：按远端重载，而且**不靠文档查询的引用变没变**。远端这段时间
@@ -241,6 +252,8 @@ export function useBoardSync() {
     }
     if (dragging || mergedRef.current === board.data) return;
     mergedRef.current = board.data;
+    // 实时板的真相是 `Y.Doc`，HTTP 读回来的物化表不往回合（补全架构 §6.4）。
+    if (realtimeActive(board.data.board.id)) return;
     mergeRemoteDocument(board.data);
   }, [
     board.data,
@@ -251,6 +264,32 @@ export function useBoardSync() {
     setDocument,
     workspace,
   ]);
+
+  /* ------------------------------ 实时协同 ------------------------------ */
+  /**
+   * 文档载入之后问 core 这块板走不走实时（契约 §16.2）：`realtime || enabled`
+   * 就连 `…/sync`，从此这块板的编辑经 `Y.Doc` 同步（`realtime/session.ts`）；
+   * 否则留在租约 + CAS。问不到（旧 core、断网）也留在租约模式。
+   */
+  const documentLoaded = documentBoardId === boardId && boardId !== null;
+  useEffect(() => {
+    if (!workspaceId || !boardId || !documentLoaded) return;
+    let cancelled = false;
+    let stop: (() => void) | null = null;
+    void Promise.resolve()
+      .then(() => runtimeApi.boardRealtime(workspaceId, boardId))
+      .then((state) => {
+        if (cancelled) return;
+        if (state.realtime || state.enabled !== false) {
+          stop = startRealtime({ workspaceId, boardId });
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }, [boardId, documentLoaded, workspaceId]);
 
   /* ---------------------------- 保存失败后重试 --------------------------- */
   useEffect(() => {

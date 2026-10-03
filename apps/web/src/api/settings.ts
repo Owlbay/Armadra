@@ -256,6 +256,8 @@ export interface RuntimeSettingsPatch {
   power?: { policy?: PowerPolicy; keepAwakeWhileWorking?: boolean };
   /** 会话索引的范围。 */
   conversations?: { scope?: ConversationScope };
+  /** 实时协同（契约 §16.2）：关掉就回到租约 + CAS。 */
+  collab?: { realtime?: boolean };
   /** 资源面板采样间隔；Runtime 侧会夹回 500ms–60s。 */
   resources?: { intervalMs?: number };
   /**
