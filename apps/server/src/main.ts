@@ -17,6 +17,9 @@ import {
 } from "./cli";
 import { serve } from "./serve";
 import {
+  ACME_CERT,
+  ACME_DIR,
+  ACME_STATE,
   SELF_SIGNED_CERT,
   SELF_SIGNED_DIR,
 } from "../../desktop/src/core/gateway/tls";
@@ -164,6 +167,7 @@ async function runServe(
     webRoot,
     certFile: single(values, "--tls-cert"),
     keyFile: single(values, "--tls-key"),
+    acmeEmail: single(values, "--acme") ?? io.env.ARMADRA_ACME_EMAIL,
     deviceName: single(values, "--device-name") ?? DEFAULT_DEVICE_NAME,
     pairing: !switched(values, "--no-pairing"),
     env: io.env,
@@ -360,7 +364,7 @@ function runStatus(dataDir: string, io: MainIo, json: boolean): number {
       `${COMPONENT_NAME} ${VERSION}（node ${process.versions.node}）`,
       `数据目录：${dataDir}`,
       `服务定义：${String(definition.state)}${definition.path === undefined ? "" : ` ${String(definition.path)}`}`,
-      `TLS：${document.tls.kind}${document.tls.notAfter === undefined ? "" : `，有效期至 ${document.tls.notAfter}`}`,
+      `TLS：${document.tls.kind}${document.tls.notAfter === undefined ? "" : `，有效期至 ${document.tls.notAfter}`}${document.tls.acmeFailures ? `，续期已连续失败 ${document.tls.acmeFailures} 次` : ""}`,
       `core：${document.core.running ? `在跑（pid ${String(document.core.processId)}）` : "没在跑"}`,
     ].join("\n"),
   );
@@ -370,7 +374,38 @@ function runStatus(dataDir: string, io: MainIo, json: boolean): number {
 function tlsStatus(
   dataDir: string,
   certFile: string,
-): { kind: string; certFile?: string; notAfter?: string } {
+): {
+  kind: string;
+  certFile?: string;
+  notAfter?: string;
+  acmeFailures?: number;
+} {
+  const acme = join(dataDir, SELF_SIGNED_DIR, ACME_DIR);
+  if (certFile === "" && existsSync(join(acme, ACME_CERT))) {
+    // ACME 来源：报到期时间与连续失败次数（失败期间仍在用旧证书）。
+    try {
+      const parsed = new X509Certificate(
+        readFileSync(join(acme, ACME_CERT), "utf8"),
+      );
+      let failures = 0;
+      try {
+        const state = JSON.parse(
+          readFileSync(join(acme, ACME_STATE), "utf8"),
+        ) as { failures?: unknown };
+        if (typeof state.failures === "number") failures = state.failures;
+      } catch {
+        /* 没有状态文件 = 还没失败过。 */
+      }
+      return {
+        kind: "ACME",
+        certFile: join(acme, ACME_CERT),
+        notAfter: parsed.validTo,
+        acmeFailures: failures,
+      };
+    } catch {
+      return { kind: "读不出来", certFile: join(acme, ACME_CERT) };
+    }
+  }
   const path =
     certFile !== ""
       ? certFile
