@@ -8,12 +8,12 @@ import { useT } from "../app/preferences-store";
 import { useCreateWorkspace } from "../app/workspace-actions";
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "./ResponsiveDialog";
 import { Input } from "@/ui/input";
 
 export interface NewFolderDialogProps {
@@ -55,11 +55,13 @@ export function NewFolderDialog({
   const ready = path.trim().length > 0;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="z-[var(--z-dialog)]">
-        <DialogHeader>
-          <DialogTitle>{t("launcher.newFolder")}</DialogTitle>
-        </DialogHeader>
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent className="z-[var(--z-dialog)]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {t("launcher.newFolder")}
+          </ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
 
         {/* 分组卡片：标签左 / 控件右（§24.2「分组表单」） */}
         <div className="grid grid-cols-[72px_1fr] items-center gap-x-3 rounded-[var(--r-card)] border border-border bg-[var(--card)] p-4">
@@ -89,7 +91,7 @@ export function NewFolderDialog({
           </div>
         </div>
 
-        <DialogFooter>
+        <ResponsiveDialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             {t("dialog.cancel")}
           </Button>
@@ -99,8 +101,8 @@ export function NewFolderDialog({
           >
             {t("dialog.create")}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

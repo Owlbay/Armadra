@@ -59,6 +59,9 @@ import {
   ContextMenuTrigger,
 } from "../ui/context-menu";
 import { IconButton } from "../ui/icon-button";
+import { Alert, AlertTitle } from "../ui/alert";
+import { Empty, EmptyDescription } from "../ui/empty";
+import { Skeleton } from "../ui/skeleton";
 import { nodeDropPosition } from "@/canvas/placement";
 import { FileEntryDialog } from "./FileEntryDialog";
 import { useWorkspaceFileDrag } from "../files/use-workspace-file-drag";
@@ -287,35 +290,43 @@ function Directory({
   return (
     <>
       {files.isPending && (
-        <p
-          className="px-2 py-1 text-xs text-muted-foreground"
+        <div
+          role="status"
+          data-slot="file-tree-loading"
+          className="flex flex-col gap-1.5 px-2 py-1.5"
           style={indent(depth)}
         >
-          {t("explorer.loading")}
-        </p>
+          <span className="sr-only">{t("explorer.loading")}</span>
+          <Skeleton className="h-3 w-2/3" />
+          <Skeleton className="h-3 w-1/2" />
+        </div>
       )}
       {files.isError && (
-        <div
-          className="flex items-center gap-1 px-2 py-1 text-xs text-destructive"
-          role="alert"
+        <Alert
+          variant="destructive"
+          className="flex items-center gap-1 rounded-none border-0 bg-transparent px-2 py-1 text-xs"
           style={indent(depth)}
         >
-          <span className="truncate">{files.error.message}</span>
+          <AlertTitle className="min-w-0 flex-1 truncate font-normal">
+            {files.error.message}
+          </AlertTitle>
           <IconButton
             label={t("explorer.retry")}
             onClick={() => void files.refetch()}
           >
             <RotateCw />
           </IconButton>
-        </div>
+        </Alert>
       )}
       {files.isSuccess && entries.length === 0 && (
-        <p
-          className="px-2 py-1 text-xs text-muted-foreground"
+        <Empty
+          className="items-start gap-0 rounded-none p-0 px-2 py-1 text-left"
           style={indent(depth)}
         >
-          {t("explorer.empty")}
-        </p>
+          <EmptyDescription className="text-xs">
+            {t("explorer.empty")}
+          </EmptyDescription>
+        </Empty>
       )}
       {entries.map((entry) => (
         <Row

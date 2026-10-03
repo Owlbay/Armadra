@@ -121,11 +121,11 @@
 
 - `cli/armadra-hook/mcp.ts`：`armadra-hook mcp` 在 stdio 上讲 MCP（逐行 JSON-RPC，手写，不引 SDK）。`initialize` 回 `tools` 能力、`serverInfo` 与 `instructions`（`collab/skill.ts::mcpInstructions`：画布规则按工具名写，信任规则逐字相同）；`tools/list` 就是 `hook-client/verbs.ts::VERB_TOOLS`；`tools/call` = 一次 `POST <tool.path>`，请求由 `loadSession` / `headersFor` / `controlBody` / `send` 组成，与 `armadra-hook canvas|context|browser` 逐字节相同；`binding: "session"` 的工具从环境补 `sessionId` / `generation`，`handoff-read` 无绑定时与 CLI 同样拒绝；浏览器工具用长预算。另答 `ping`，通知一律不回。错误分两类：非 JSON-RPC、未知方法、未知工具是 JSON-RPC 错误（-32700 / -32600 / -32601 / -32602）；参数不对、没有端点、运行时 4xx 是 `isError: true` 的工具结果。`main.ts` 加子命令、`usage.ts` 加一行用法。
 - `core/acp/mcp.ts`：`canvasMcpServer`（命令 = `hookClient()`，参数 `["mcp"]`，环境 = `agentEnvironment` 同一份地址，不带令牌，有会话绑定就加）、`acpMcpServers(adapter, input)`（按适配器表 `injection.mcp`，ama 不加；本机没有客户端时为空）、`clientAcceptsMcpServers`（读 `AcpClient.features.mcpServers`）、`sessionOpener`。`host.ts` 的 `startAcp` 收 `mcpServers`，开会话（new / load / resume）经 opener 带上，结果多一个 `mcpInjected`（只在要求带时出现）；`startAdapter` 收 `canvasMcp`。客户端不支持时调用与原来一模一样。
-- `@armadra/agent` 侧：Owlbay/armadra-agent PR #97 给 `AcpClient` 开会话加可选的 `{ mcpServers }` 与 `AcpClient.features`（未合并、未发版）。发版并升级依赖后这里不用改就会真的带上。
+- `@armadra/agent` 侧：Owlbay/armadra-agent PR #97 给 `AcpClient` 开会话加可选的 `{ mcpServers }` 与 `AcpClient.features`，随 0.6.5 发布；本仓库已升到 0.6.5，`mcpInjected` 为 true（`core/acp/mcp.test.ts` 对假 ACP Agent 实测）。
 
 实测：`cli/armadra-hook/mcp.test.ts`（14：三个方法的线路、工具表与三份 `VERBS` 一致、`tools/call` 与 `armadra-hook canvas` 请求逐字节相同、会话绑定、错误形状、流式乱序与 EOF 排空）、`core/acp/mcp.test.ts`（10：服务器形状、适配器表、特性检测两路、对假 ACP Agent 起会话）；打包后的 `armadra-hook.js mcp` 手动跑通 `initialize` / `tools/list` / `tools/call`。
 
-没做：会话层调用 `startAdapter({ canvasMcp })`（G2-1 装配时传）；Windows 上 `hookClient()` 若落到 `.cmd` 兜底，部分 Agent 不经 shell 起不了它；当前锁定的 `@armadra/agent` 0.6.2 不支持传入，`mcpInjected` 恒为 false，直到 PR #97 发版升级。
+没做：会话层调用 `startAdapter({ canvasMcp })`（G2-1 装配时传）；Windows 上 `hookClient()` 若落到 `.cmd` 兜底，部分 Agent 不经 shell 起不了它。
 
 ## G1-6 ACP 会话视图页面（W1）
 
@@ -284,7 +284,18 @@
 
 ## G2-5 实时协同页面绑定与在线光标（R1）
 
-未开始。
+做了什么：
+
+- 页面 `apps/web/src/realtime/`：`doc.ts`（契约 §16.1 文档结构在页面这一侧的读写：按对象身份只写改过的实体与字段、便签正文按改动的那一段落到 `Y.Text`、读回逐条 zod 校验并沿用内容相同的本地对象与顺序）、`client.ts`（`…/sync` 帧、step1 / step2、退避重连、4403 转 forbidden、断线期间保留别人的 awareness、重连同步完清掉走了的）、`binding.ts`（本地动作 → 本地 origin 事务；非本地 origin → `applyRealtimeState` 灌入；手势中延后；同步完成前不读不写；本地编辑的 `dirty` 当场改回 `saved`）、`undo.ts`（`Y.UndoManager` 管五个根、只追踪本地来源、`captureTimeout: 0` 一个动作一条、合并会话期间放开）、`awareness.ts`（`awarenessStateSchema` 校验别人、按加入顺序取成员色、撞色 clientID 大的换、光标 50ms 节流）、`session.ts`（开板 `GET …/realtime`，`realtime || enabled` 就连；4403 换新文档只读重连；连不上两次复核，设置关着且不是实时板就退回租约）、`CursorLayer`、`OfflineBanner`、`RealtimeSetting`。
+- store 两个入口：`applyRealtimeState`（远端灌入，视口 / 选区留本地，不动历史、待存登记与保存态）、`setHistoryDelegate`（实时板上本地历史栈停用、撤销转给 `Y.UndoManager`）；`presence.ts` 加 `realtime` 链接，实时板的只读看同步层、不看租约。`use-board-sync` 在实时板上不再按 `board.changed` 重取、不往回合 HTTP 文档；自动保存对实时板不 PUT（视口也不存）。
+- `PresenceBar` 实时板上列 awareness：头像堆叠（自己在前、最多四个 + N）、点头像跟随光标、断线置灰写「已断开」、只读徽标；租约模式原样保留。`CursorLayer` 挂在 `ViewportPortal`：成员色箭头 + 名字标签、120ms 插值、离开 5 秒淡出，选区 1.5px 虚线一圈套一圈。顶部通知条堆栈加「离线编辑」。白板设置页加「实时协同」开关（`collab.realtime`，缺省开，成员不显示）。便签提交时按开始编辑那一刻的正文变基（`rebaseText`），同时输入两个人的字都留下。
+- core：`realtime/awareness.ts` 校验 awareness（契约 §16.4）：只留认识的键、形状不对或超过 16 KiB 的整条丢弃、`principalId` 按连接改写、别的连接登记过的 clientID 不能写；共享层 `awarenessStateSchema` / `AWARENESS_LIMITS`，两边上限逐条比对。契约 §16.4。
+- 展示页 `collab` 分区：在线条 1 / 3 / 6 人、跟随中、只读、断开，光标与选区，离线编辑（评论与角色留给 G2-6 / G2-9 加在后面）。
+- A 档探针 `realtime-e2e`（进 `tools/ci/e2e.json`）；租约语义的 `ui-features` presence 场景与 `server-e2e` 开头先关 `collab.realtime`。
+
+实测：web `realtime/` 8 个文件 51 例（含 `binding.test`、`undo.test`、`CursorLayer.test`、实时版 `two-windows.test`）、`PresenceBar.test` +4、`StickyNode.test` +1；core `awareness.test` 7 例、`sync.test` +2；shared `api-realtime.test` 3 例。`realtime-e2e` 本机通过（两上下文同时拖、光标与选区、同一便签同时输入收敛为「B 写的·中间·A 写的」、断网离线编辑与重连补齐、控制台无错）；`ui-features-e2e --only=presence,layout` 与 `server-e2e` 本机通过；`design-showcase --only=collab` 通过。`pnpm libs:build && pnpm -r --if-present test` 全绿，typecheck 与 `pnpm check` 通过。
+
+没做：实时板的视口不进文档、不再保存（刷新后回到上次租约模式时存下的视口）；白板对象的他人选区外框只画节点，`wb:` 项不画；跟随是跟光标而不是跟对方的视口；评论（G2-6）；拆出 G2-5b 的必要没有出现，光标层与本包一起做完。
 
 ## G2-6 评论（R2）
 
@@ -330,7 +341,9 @@
 
 ## G2-11 存量界面套用一：按钮、空态、手机对话框（WP-D3a）
 
-未开始。
+- 做了什么：本包文件集合里的手写 `<button>` 全部换成 `Button` / `Toggle`（`SettingsRow` 标签钮、三个节点徽标、手机底部导航、工具簇用量环、用量图例与热力格、Git 的 Reflog / 储藏 / 提交日志 / 分支树 / 提交详情），一文件一提交；文件树、资源抽屉、项目搜索、Agent 查看对话框的加载 / 错误 / 空态换 `Skeleton` / `Alert` / `Empty`（文案键不变，加载文字留给读屏）；新建 `panels/ResponsiveDialog.tsx`（≤767 换 `Sheet side=bottom`：顶部圆角 14、拖柄、最高 `100dvh-48px`、让出安全区），克隆仓库、新建文件夹 / 文件、Agent 查看、Git 储藏与日志菜单、工作树对话框接上；`TabsContent` 焦点环由调用方加 `panels/tabs-focus.ts` 的 `TABS_CONTENT_FOCUS`（生成文件不改）；状态胶囊的字改用 `-text` token、衬底 15% → 10%；展示页 `components` 补 TabsContent、ResponsiveDialog / AlertDialog / Sheet、Popover / HoverCard / BrandMark、ScrollArea，`states` 补列表与树里的行内形态。
+- 实测：守卫 `panels/no-raw-button.test.ts`（名单文件与 `panels/usage`、`panels/git`、`sidebar` 目录无 `<button`）；`ResponsiveDialog.test`（桌面 Dialog / 手机底部 Sheet / Esc）；`ui/status-pill-contrast.test.ts` 逐 tone 逐主题算三档阅读表面，深色 working 字在卡片衬底上约 4.6（原来拿图形色写字约 3.6，把衬底改回 15% 时该用例失败）；改动文件的既有用例未改断言。展示页探针 `components,states,mobile` 前后对照：控制台无 error，`components` Tab 可达 80/80 且都有焦点环（新增的 TabsContent 也有），对比度两主题全过。
+- 没做：`command` 样本没放进展示页（`CommandInput` 外层 `InputGroup` 的 `shadow-none!` 压掉了焦点环，生成文件不改，归 G3-11）；`resizable`、`chart`、`sonner`、`context-menu` 的样本未补；`QuickOpen` 与 `SidebarSearch` 用的是 `CommandEmpty`，保持不变；`NodeNameBadge`、`WebviewTabs`、`MobileFocusPage`、`SettingsDialog`、`IntegrationPage`、`references` / `resources` / `problems` / `github` 面板与 `HandoffBadge`、`LanguageStatus` 里的手写按钮不在本包文件集合，留给 G3-11；计划写的 `patterns` 分区不存在，样本补在 `states` 分区。
 
 <!-- G3 平台线 -->
 
