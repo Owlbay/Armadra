@@ -25,6 +25,8 @@ export interface SessionRow {
   updatedAt: string;
   /** 该 Runtime 实例里进程还活着。 */
   alive: boolean;
+  /** 会话的驱动方式；`acp` 的行带一个徽标（ACP 设计 §4.4）。 */
+  backend?: SessionSummary["backend"];
   /** 停留在当前状态多久（毫秒）。 */
   sinceMs: number;
 }
@@ -83,6 +85,7 @@ export function mergeSessions(
         pendingId: fresher ? status.pendingId : summary.pendingId,
         updatedAt,
         alive: summary.alive,
+        ...(summary.backend ? { backend: summary.backend } : {}),
         sinceMs: Math.max(0, now - millis(updatedAt)),
       } satisfies SessionRow;
     })

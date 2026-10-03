@@ -27,6 +27,7 @@ import {
   CONVERSATION_SCOPES,
   type ConversationScope,
 } from "../../../api/settings";
+import { AgentCredentials } from "./AgentCredentials";
 import { CONTROL_WIDTH } from "./GeneralPage";
 import {
   AlertDialog,
@@ -298,6 +299,8 @@ export function AgentPage() {
           </Button>
         </SettingsRow>
       </SettingsGroup>
+
+      <AgentCredentials />
     </>
   );
 }

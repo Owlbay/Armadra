@@ -348,14 +348,25 @@ describe("建会话请求里的账号绑定（S02 预留）", () => {
     ).toBe("new");
   });
 
-  it("凭据引用不上行：Runtime 没有凭据接口，发过去也没人读", () => {
+  it("凭据引用上行（契约 §20）：只是条目名，放不放行由 core 判", () => {
     const request = agentSessionRequest({
       id: "claude",
       account: {
         accountId: "default",
-        credentialRef: "keychain://armadra/claude/default",
+        providerId: "claude",
+        label: "Work",
+        credentialRef: "0123456789abcdef",
       },
     });
-    expect(JSON.stringify(request)).not.toContain("keychain");
+    expect(request).toEqual({
+      id: "claude",
+      accountId: "default",
+      credentialRef: "0123456789abcdef",
+    });
+    // 显示名不上行：它从来不决定会话能做什么。
+    expect(JSON.stringify(request)).not.toContain("Work");
+    expect(
+      agentSessionRequest({ id: "claude", account: { accountId: "default" } }),
+    ).toEqual({ id: "claude", accountId: "default" });
   });
 });

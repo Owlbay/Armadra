@@ -408,9 +408,15 @@ export function permits(
   );
 }
 
+/**
+ * `#pair=<票>`，桌面 Gateway 的二维码再带一段 `&fp=<信任锚指纹>`（契约 §17）。
+ * 指纹给原生 App 钉证书用；网页走的是已经装好的 CA，读到也不用它。
+ */
+const PAIRING_FRAGMENT = /^#pair=([A-Za-z0-9._~-]+)(?:&fp=[0-9a-f]{64})?$/;
+
 /** 地址栏里有没有一张待用的配对票（不取走）。 */
 export function hasPairingFragment(): boolean {
-  return /^#pair=[A-Za-z0-9._~-]+$/.test(globalThis.location?.hash ?? "");
+  return PAIRING_FRAGMENT.test(globalThis.location?.hash ?? "");
 }
 
 /**
@@ -423,7 +429,7 @@ export function hasPairingFragment(): boolean {
 export function takePairingTicket(): string {
   const location = globalThis.location;
   const hash = location?.hash ?? "";
-  const found = /^#pair=([A-Za-z0-9._~-]+)$/.exec(hash);
+  const found = PAIRING_FRAGMENT.exec(hash);
   if (!found) return "";
   try {
     globalThis.history?.replaceState(

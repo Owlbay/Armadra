@@ -20,7 +20,13 @@ vi.mock("@/agent/launch", () => ({
   customAgentFor: (id: string) =>
     id === "custom:pi" ? { baseAgent: "pi" } : undefined,
   permissionModeLabel: (mode: string) => mode,
+  agentAcpInfo: (id: string) =>
+    id === "codex"
+      ? { support: "official", program: "codex-acp", installed: true }
+      : undefined,
 }));
+const acp = vi.hoisted(() => ({ switchDriver: vi.fn() }));
+vi.mock("@/acp/api", () => ({ acpApi: acp }));
 
 import "./terminal-menu";
 
@@ -50,5 +56,40 @@ describe("terminal permissions", () => {
 
   it("keeps the supported Claude planning mode available", () => {
     expect(permissions("claude")).toContain("agent.permission.plan");
+  });
+});
+
+describe("driver items", () => {
+  function items(agent: Record<string, unknown>) {
+    const node = {
+      id: "test",
+      type: "terminal",
+      data: { kind: "terminal", agent },
+    } as CanvasNode;
+    return registration.factory!({ node, targetIds: [node.id] }).filter(
+      (item) => item.id.startsWith("agent.driver."),
+    );
+  }
+
+  it("offers both views with the current one disabled", () => {
+    expect(
+      items({ id: "codex" }).map((item) => [item.id, item.disabled]),
+    ).toEqual([
+      ["agent.driver.acp", false],
+      ["agent.driver.terminal", true],
+    ]);
+    expect(
+      items({ id: "codex", driver: "acp" }).map((item) => [
+        item.id,
+        item.disabled,
+      ]),
+    ).toEqual([
+      ["agent.driver.acp", true],
+      ["agent.driver.terminal", false],
+    ]);
+  });
+
+  it("does not appear for an agent without an ACP entry", () => {
+    expect(items({ id: "pi" })).toEqual([]);
   });
 });

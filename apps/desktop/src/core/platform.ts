@@ -32,6 +32,11 @@ export interface CorePlatform {
    * macOS 钥匙串、或 0600 文件。
    */
   readonly secrets?: SecretBackend | undefined;
+  /**
+   * 哪一种壳装配了这个 core。缺省是桌面壳。服务器壳的 Gateway 由命令行参数
+   * 打开（`apps/server` 的 `serve`），设置 `gateway.*` 不驱动它。
+   */
+  readonly shell?: "desktop" | "server";
   /** Hands a URL to the desktop. A server shell has nowhere to open one. */
   openExternal(url: string): Promise<void>;
   /**

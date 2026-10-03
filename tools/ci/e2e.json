@@ -1,0 +1,53 @@
+{
+  "$comment": "端到端探针清单，由 tools/ci/e2e.mjs 按档执行（docs/guides/ci-release.md §1.1）。每个工作包只追加自己的一行。args 里的 {out} 换成这一条的输出目录；requires 是运行前必须在场的东西（tmux、chrome）；devStack 为真的条目只在 ARMADRA_DEV_STACK=1 且有 Docker 时跑，否则记 skipped。",
+  "entries": [
+    {
+      "id": "core-terminal-smoke",
+      "tier": "a",
+      "script": "tools/probes/core-terminal-smoke.mjs",
+      "args": [],
+      "requires": ["tmux"],
+      "timeoutMinutes": 5
+    },
+    {
+      "id": "core-terminal-lifecycle",
+      "tier": "a",
+      "script": "tools/probes/core-terminal-lifecycle.mjs",
+      "args": [],
+      "requires": ["tmux"],
+      "timeoutMinutes": 5
+    },
+    {
+      "id": "server-e2e",
+      "tier": "a",
+      "script": "tools/probes/server-e2e.mjs",
+      "args": ["{out}"],
+      "requires": ["tmux", "chrome"],
+      "timeoutMinutes": 10
+    },
+    {
+      "id": "remote-e2e",
+      "tier": "a",
+      "script": "tools/probes/remote-e2e.mjs",
+      "args": ["{out}"],
+      "requires": ["tmux", "chrome"],
+      "timeoutMinutes": 10
+    },
+    {
+      "id": "ui-features-e2e",
+      "tier": "a",
+      "script": "tools/probes/ui-features-e2e.mjs",
+      "args": ["{out}"],
+      "requires": ["tmux", "chrome"],
+      "timeoutMinutes": 15
+    },
+    {
+      "id": "push-e2e",
+      "tier": "a",
+      "script": "tools/probes/push-e2e.mjs",
+      "args": ["{out}"],
+      "requires": [],
+      "timeoutMinutes": 5
+    }
+  ]
+}

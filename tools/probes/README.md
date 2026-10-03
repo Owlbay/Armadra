@@ -6,26 +6,13 @@
 
 按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.json` 的清单跑（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
-| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                      | 何时跑                              | 失败时       |
-| --- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
-| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`push-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`core-terminal-packaged`                                                                  | `nightly.yml`                       | 开 issue     |
-| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                   | 手动；清单在执行计划 §5             | 记进状态文档 |
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                     | 何时跑                              | 失败时       |
+| --- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`push-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`core-terminal-packaged`                                                                                 | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                  | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
-
-## 推送端到端（push-e2e）
-
-core → 假 APNs / FCM / Web Push / 中继的整条线（契约 §19）：服务器壳在临时数据目录里起来，环境变量只给 APNs `.p8` 与 FCM 服务账号的文件路径、`ARMADRA_PUSH_*_ENDPOINT` 指向 push-sink；用配对票换会话，建一个 Claude 终端节点，以 iOS 直连登记设备（带 X25519 公钥），向 hook 面报一次权限请求与一次 Stop，两条都夹着一段「终端原文」。断言 APNs 走 HTTP/2、provider token 是 ES256 且 kid / iss 对、正文是设备私钥解得开的信封、线上与明文里都没有那段原文；再依次改成 Android 直连（RS256 断言换令牌、`data.enc` 可解）、浏览器 Web Push（VAPID 由 push-sink 验签、aes128gcm 可解）与中继（起 `apps/push-relay`，设置改成 relay，苹果那一侧收到的仍是同一个信封）。
-
-```sh
-pnpm libs:build
-pnpm --filter @armadra/server build
-pnpm --filter @armadra/push-relay build
-node tools/probes/push-e2e.mjs [输出目录] [--sink http://127.0.0.1:8091]
-```
-
-push-sink 优先用 `--sink` / `ARMADRA_PUSH_SINK`，其次 `pnpm dev-stack up push-sink` 起的 127.0.0.1:8091，都没有就在探针进程里起一份（同一份 `tools/dev-stack/push-sink.mjs`），所以没有 Docker 也能跑。进程内那份拿得到 `.p8` 所在目录，APNs 签名记 `verified`；dev-stack 容器里没有这把钥，记 `unchecked`（形状照样验）。设备令牌带每次运行的随机前缀，共享的 sink 里只认自己的记录。产物默认在 `target/push-e2e/result.json`；临时目录、临时 HOME、随机端口，跑完删除，不碰任何真实账号与推送服务。
 
 ## 受控 Chromium
 
@@ -113,6 +100,15 @@ node tools/probes/core-terminal-packaged.mjs              # 打包版，从页�
 - **packaged**：需要先 `pnpm --filter @armadra/desktop dist`（本机没有 `CSC_LINK` 时 `dist.mjs` 自动跳过签名与公证）。按访达的方式启动：`PATH` 只给 launchd 那条（`/usr/bin:/bin:/usr/sbin:/sbin`），数据目录用 `ARMADRA_DATA_DIR`、Chromium profile 用 `--user-data-dir`、`HOME` 都指到临时目录（HOME 也得临时：打包版的 core 启动时会迁走各 CLI 旧的全局安装、清掉上一版写进 `~/.codex/config.toml` 的会话级信任记录；画布内的 Codex 经启动器带 `--dangerously-bypass-hook-trust`，不再写信任记录），不碰操作员的 `~/Library/Application Support/Armadra`。本机装了 tmux（Homebrew 等常见位置）时，会话必须是 `tmux` 后端，资源采样（`GET …/resources`）也必须给出这个会话的 pid——两处各自找 tmux，都得用补过的 PATH。调试端口是运行时选的空闲端口，不是固定值：机器上另一个 Electron 占着固定端口时，探针会连上别人的渲染进程，失败起来和打包出错一模一样。
 
 三个脚本都用 `mktemp` 的数据目录与各自私有的 tmux socket，跑完 `kill-server` 并删掉目录；不碰操作者自己的数据目录或 tmux server。
+
+## 节点凭据端到端
+
+```sh
+pnpm --filter @armadra/desktop build
+node tools/probes/credentials-e2e.mjs [输出目录]   # 默认 target/probes/credentials-e2e-<时间>/
+```
+
+不用真实账号（契约 §20）：一个基础 CLI 为 Claude 的自定义 Agent 指向 `fixtures/env-echo.mjs`（只打印变量长度），凭据值是一串假令牌。断言 CLI 进程看到的长度正确、节点 shell 的 `env` 里没有这个变量、值不在画面 / 日志 / 答复里、基础 CLI 不匹配时起终端被拒、条目删掉后同一 shell 重跑启动器拒绝起 CLI。临时数据目录与 HOME，密钥后端 `file-encrypted`，`ARMADRA_NO_GLOBAL_WRITES=1`；Windows 上跳过。产物 `result.json`。
 
 ## 本轮界面功能的端到端验证
 

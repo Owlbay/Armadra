@@ -43,14 +43,15 @@ export const TARGET_STATES = [
 export const OBSERVED_QUIET = "observed-quiet";
 
 /**
- * 一条状态**上报**过的通道（协作通道 §3.2 的 `hook` / `extension`）。
+ * 一条状态**上报**过的通道（协作通道 §3.2 的 `hook` / `extension`，以及 ACP
+ * 驱动的 `acp`——协议本身报回合与审批，ACP 会话视图设计 §4.1）。
  *
  * `observed` 与空不算：协作通道 §3.4 定死了「`observed` 不得满足空闲门」，
  * 因为一个从没人报过的节点上 `isAwaitingHuman` 恒为 `false`——那条路没法保证
  * 不替人回答权限提示。
  */
 export function stateSourceIsReported(source: string | undefined): boolean {
-  return source === "hook" || source === "extension";
+  return source === "hook" || source === "extension" || source === "acp";
 }
 
 /**

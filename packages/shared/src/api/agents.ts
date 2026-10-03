@@ -290,6 +290,8 @@ export const integrationRepairReportSchema = z.looseObject({
 
 export const answerApprovalRequestSchema = z.object({
   decision: z.enum(["allow", "deny"]),
+  /** An ACP approval's chosen option (contract §14.4). */
+  optionId: z.string().optional(),
 });
 
 /**
@@ -304,7 +306,8 @@ export const answerApprovalResponseSchema = z.looseObject({
   answer: z.enum(["allow", "deny"]),
   answeredAt: z.string().datetime({ offset: true }),
   revision: z.number(),
-  route: z.enum(["file", "keys", "none"]),
+  /** `acp`: answered on the pending `session/request_permission`. */
+  route: z.enum(["file", "keys", "none", "acp"]),
 });
 
 /**

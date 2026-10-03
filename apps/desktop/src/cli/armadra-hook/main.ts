@@ -24,6 +24,7 @@
  */
 
 import { runBrowser, runCanvas, runContext } from "./control.js";
+import { run as runCredential } from "./credential.js";
 import { run as runDoctor } from "./doctor.js";
 import { run as runHook } from "./hook.js";
 import { CLIENT_VERSION, USAGE } from "./usage.js";
@@ -59,6 +60,9 @@ export async function main(argv: string[]): Promise<number> {
       return runBrowser(argv.slice(1));
     case "doctor":
       return runDoctor();
+    case "credential":
+      // Internal: the canvas launcher's credential exchange (contract §20.4).
+      return runCredential();
     default:
       break;
   }

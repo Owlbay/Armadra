@@ -124,7 +124,7 @@ describe("the local split", () => {
     expect(isLocal("push.fcm.serviceAccountFile")).toBe(true);
     expect(isLocal("push.apns.keyId")).toBe(false);
     expect(isLocal("push.relayUrl")).toBe(false);
-    expect(localPaths()).toHaveLength(9);
+    expect(localPaths()).toHaveLength(10);
   });
 
   it("recognises a document written before the split", () => {
@@ -173,6 +173,8 @@ describe("SettingsStore", () => {
     expect((shared.terminal as JsonObject).detachedGraceMinutes).toBe(30);
     expect("backend" in (shared.terminal as JsonObject)).toBe(false);
     expect("power" in shared).toBe(false);
+    // Gateway 的配置整段在本机：监听接口、端口与证书文件都只对这台机器成立。
+    expect("gateway" in shared).toBe(false);
 
     const local = readJson(files.local);
     expect((local.terminal as JsonObject).backend).toBe("tmux");
@@ -183,6 +185,7 @@ describe("SettingsStore", () => {
     // 推送的两个密钥路径同理：缺省是空串，只有这两项、没有别的推送设置。
     expect(Object.keys(local).sort()).toEqual([
       "browser",
+      "gateway",
       "power",
       "push",
       "terminal",
