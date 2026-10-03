@@ -1018,4 +1018,17 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // Gateway（契约 §17）：状态与配置、铸配对票。只有 owner（route-scopes）。
+  {
+    path: "/api/gateway",
+    methods: ["GET", "PUT"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/gateway/pairing",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
 ];

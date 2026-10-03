@@ -1,14 +1,12 @@
+import { randomBytes } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
-import { cookieName } from "../../desktop/src/core/identity/http";
-import { canonicalOrigin } from "../../desktop/src/core/identity/origin";
-import type {
-  IdentityService,
-  Principal,
-} from "../../desktop/src/core/identity/service";
-import { IdentityError } from "../../desktop/src/core/identity/errors";
+import { cookieName } from "../identity/http";
+import { canonicalOrigin } from "../identity/origin";
+import type { IdentityService, Principal } from "../identity/service";
+import { IdentityError } from "../identity/errors";
 
 /**
- * 服务器壳的认证门。
+ * Gateway 的认证门（从服务器壳下沉，服务器壳与桌面对外服务共用）。
  *
  * 桌面壳靠 preload 注入凭据，因为壳和 core 在同一棵进程树里。服务器壳没有这条
  * 缝：页面在一台别的设备上，凭据必须自己跨进程边界走一趟。所以这一层存在，
@@ -50,6 +48,11 @@ export interface GateContext {
   readonly origins: ReadonlySet<string>;
   readonly service: IdentityService;
   readonly hostId: string;
+  /**
+   * 原生 App 的 WebSocket 票（Bearer 模式）。不给时 Bearer 模式的升级一律
+   * 401——浏览器 WS 带不了 `Authorization`，没有票就没有第二条路。
+   */
+  readonly wsTickets?: WsTickets;
 }
 
 export interface Refusal {
@@ -167,9 +170,23 @@ export interface Admission {
   readonly principal?: Principal;
   readonly accessToken?: string;
   readonly origin?: string;
+  /**
+   * Bearer 模式：请求来自原生 App 的固定来源。`origin` 是会话绑定的那个来源
+   * （App 配对时连的 Gateway 来源），`appOrigin` 是请求头里 App 自己的来源，
+   * CORS 只回它。
+   */
+  readonly bearer?: { readonly appOrigin: string };
 }
 
 export function admit(input: GateInput, context: GateContext): Admission {
+  const declared = singleHeader(input.headers, "origin");
+  if (
+    declared !== undefined &&
+    nativeAppOrigin(declared) &&
+    !context.origins.has(declared)
+  ) {
+    return admitBearer(input, context, declared);
+  }
   const refusal = screen(input, context);
   if (refusal !== undefined) return { refusal };
   const isApi = input.path === "/api" || input.path.startsWith("/api/");
@@ -235,4 +252,163 @@ function screen(input: GateInput, context: GateContext): Refusal | undefined {
   );
   if (accessToken === "" || origin === undefined) return UNAUTHENTICATED;
   return undefined;
+}
+
+/* ------------------------------ Bearer 模式 ------------------------------ */
+
+/**
+ * 原生 App 的来源（架构 §7「原生 App 的准入」）：页面打在包里，iOS 是
+ * `capacitor://localhost`，Android 是 `https://localhost`。CORS 只放行这两个。
+ */
+export const NATIVE_APP_ORIGINS: readonly string[] = [
+  "capacitor://localhost",
+  "https://localhost",
+];
+
+export function nativeAppOrigin(origin: string): boolean {
+  return NATIVE_APP_ORIGINS.includes(origin);
+}
+
+/** 原生 App 升级 WebSocket 时在 `Sec-WebSocket-Protocol` 里带的票的前缀。 */
+export const WS_TICKET_PROTOCOL = "armadra-ticket.";
+export const WS_TICKET_PATH = "/api/identity/ws-ticket";
+export const WS_TICKET_TTL_MS = 30_000;
+const WS_TICKET_LIMIT = 4096;
+
+/**
+ * 一次性 WebSocket 票：30 秒、用一次就没。票只在内存里——它比访问密钥活得
+ * 短得多，core 重启后丢掉正合适。兑出来的是签票那一刻的访问密钥与会话来源，
+ * 升级时照样再认证一次，所以撤销设备之后手里的票也换不出流。
+ */
+export class WsTickets {
+  private readonly tickets = new Map<
+    string,
+    { accessToken: string; origin: string; expiresAtMs: number }
+  >();
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  issue(input: { accessToken: string; origin: string }): {
+    ticket: string;
+    expiresAtMs: number;
+  } {
+    this.sweep();
+    if (this.tickets.size >= WS_TICKET_LIMIT) {
+      // 塞满的表是一次滥用；最老的那张先让位，而不是让下一次合法的升级失败。
+      const oldest = this.tickets.keys().next().value as string;
+      this.tickets.delete(oldest);
+    }
+    const ticket = randomBytes(32).toString("base64url");
+    const expiresAtMs = this.now() + WS_TICKET_TTL_MS;
+    this.tickets.set(ticket, { ...input, expiresAtMs });
+    return { ticket, expiresAtMs };
+  }
+
+  consume(ticket: string): { accessToken: string; origin: string } | undefined {
+    const found = this.tickets.get(ticket);
+    if (found === undefined) return undefined;
+    this.tickets.delete(ticket);
+    if (found.expiresAtMs <= this.now()) return undefined;
+    return { accessToken: found.accessToken, origin: found.origin };
+  }
+
+  private sweep(): void {
+    const now = this.now();
+    for (const [ticket, entry] of this.tickets) {
+      if (entry.expiresAtMs <= now) this.tickets.delete(ticket);
+    }
+  }
+}
+
+/** `Sec-WebSocket-Protocol` 里的那张票；没有或不止一张都按没有。 */
+export function protocolTicket(headers: IncomingHttpHeaders): string {
+  const raw = singleHeader(headers, "sec-websocket-protocol");
+  if (raw === undefined) return "";
+  const found = raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.startsWith(WS_TICKET_PROTOCOL));
+  return found.length === 1
+    ? (found[0] as string).slice(WS_TICKET_PROTOCOL.length)
+    : "";
+}
+
+/** 单独一个 Bearer，重复或不是 Bearer 一律当没有。 */
+export function bearerToken(headers: IncomingHttpHeaders): string {
+  const raw = singleHeader(headers, "authorization");
+  if (raw === undefined) return "";
+  const separator = raw.indexOf(" ");
+  if (separator < 0) return "";
+  if (raw.slice(0, separator).toLowerCase() !== "bearer") return "";
+  const token = raw.slice(separator + 1).trim();
+  return token === "" || /[\s,]/.test(token) ? "" : token;
+}
+
+/**
+ * 原生 App 这条门。和 Cookie 模式的差别只有三处：
+ *
+ *   1. **会话来源**不是请求头里的 Origin（App 的来源对谁都一样，绑不住任何
+ *      东西），而是 App 连上的这个 Gateway 来源：`https://<Host>`，必须在来源
+ *      白名单里。配对票就绑在它上面。
+ *   2. **凭据**只认 `Authorization: Bearer`，Cookie 一律不看——不是环境凭据，
+ *      所以也没有 CSRF 可言，`Sec-Fetch-Site` 那道同理不查。
+ *   3. **升级**带不了头，只认 `Sec-WebSocket-Protocol` 里的一次性票。
+ */
+function admitBearer(
+  input: GateInput,
+  context: GateContext,
+  appOrigin: string,
+): Admission {
+  if (loopbackOnlyPath(input.path)) {
+    return {
+      refusal: {
+        status: 404,
+        body: { code: "notFound", message: `没有这个接口：${input.path}` },
+      },
+    };
+  }
+  const host = singleHeader(input.headers, "host");
+  const origin =
+    host === undefined ? undefined : canonicalOrigin(`https://${host}`);
+  if (origin === undefined || !context.origins.has(origin)) {
+    return { refusal: FORBIDDEN };
+  }
+  const bearer = { appOrigin };
+  const isApi = input.path === "/api" || input.path.startsWith("/api/");
+  if (input.upgrade === true) {
+    const ticket = protocolTicket(input.headers);
+    const redeemed =
+      ticket === "" ? undefined : context.wsTickets?.consume(ticket);
+    if (redeemed === undefined || redeemed.origin !== origin) {
+      return { refusal: UNAUTHENTICATED };
+    }
+    return authenticated(context, redeemed.accessToken, origin, bearer);
+  }
+  if (!isApi) return { bearer };
+  // 预检不带凭据（浏览器规定），只回 CORS；真正的请求再过下面那道。
+  if (input.method.toUpperCase() === "OPTIONS") return { origin, bearer };
+  if (anonymousPath(input.path) && input.path !== WS_TICKET_PATH) {
+    return { origin, bearer };
+  }
+  const accessToken = bearerToken(input.headers);
+  if (accessToken === "") return { refusal: UNAUTHENTICATED };
+  return authenticated(context, accessToken, origin, bearer);
+}
+
+function authenticated(
+  context: GateContext,
+  accessToken: string,
+  origin: string,
+  bearer: { appOrigin: string },
+): Admission {
+  try {
+    const principal = context.service.authenticate({
+      accessToken,
+      hostId: context.hostId,
+      origin,
+    });
+    return { principal, accessToken, origin, bearer };
+  } catch {
+    return { refusal: UNAUTHENTICATED };
+  }
 }

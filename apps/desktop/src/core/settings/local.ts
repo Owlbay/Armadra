@@ -49,6 +49,7 @@ export type JsonObject = { [key: string]: JsonValue };
  * | `agents.probes`          | The CLI version cache — what was found on this box's PATH                      |
  * | `language.probes`        | Same, for language servers                                                     |
  * | `language.servers`       | Per-server executable path and argument overrides, resolved on this filesystem |
+ * | `gateway`                | Which interfaces and port *this* machine listens on, and its certificate files |
  *
  * `agents.custom[]` is deliberately **not** here: a custom agent definition is
  * what the user configured, and it is meant to follow them. Only the probe
@@ -62,6 +63,7 @@ export const LOCAL_PATHS: readonly (readonly string[])[] = [
   ["agents", "probes"],
   ["language", "probes"],
   ["language", "servers"],
+  ["gateway"],
 ];
 
 /** The same paths as dotted strings, for the settings page and for tests. */

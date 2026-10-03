@@ -16,7 +16,7 @@
 | `macos-14`       | macos-aarch64  |
 | `windows-latest` | windows-x86_64 |
 
-三行跑同一串步骤：
+三行跑同一串步骤（另有一个只在 ubuntu 上跑的 `e2e` 作业，见 §1.1）：
 
 1. `pnpm install --frozen-lockfile`
 2. `pnpm check`（libs:build、prettier、typecheck、`repo:check`、
@@ -41,6 +41,47 @@
 
 缓存：只有 `actions/setup-node` 的 `cache: pnpm`。R7d 之后仓库里没有第二条工具链，
 Rust 与 Go 的 setup、缓存与检查步骤一并删除。
+
+### 1.1 端到端分档
+
+`tools/probes/` 下的端到端探针按「要不要用户的东西」分三档（[补全架构](../design/completion-architecture.md) §12）。
+A 档与 B 档由 `tools/ci/e2e.mjs` 执行，清单在 `tools/ci/e2e.json`：
+
+```sh
+pnpm libs:build
+pnpm --filter @armadra/web build
+pnpm --filter @armadra/desktop build
+pnpm --filter @armadra/server build
+node apps/desktop/scripts/ensure-node-pty.mjs   # Linux：给 Node 编一份 node-pty
+node tools/ci/e2e.mjs --tier a            # 全部 A 档
+node tools/ci/e2e.mjs --tier a --only server-e2e
+node tools/ci/e2e.mjs --tier b --list     # 只列出清单
+```
+
+| 档  | 在哪跑                                            | 失败时   |
+| --- | ------------------------------------------------- | -------- |
+| A   | `ci.yml` 的 `e2e` 作业（ubuntu，每个 PR 与 main） | 阻断合并 |
+| B   | `nightly.yml`（每天一次，可手动触发）             | 开 issue |
+| C   | 手动，需要真实账号或真机                          | —        |
+
+- **清单一条一行。** 每条写 `id`、`tier`、`script`、`args`（`{out}` 换成这一条的
+  输出目录）、`requires`（`tmux` / `chrome`）与 `timeoutMinutes`；外部服务替身由
+  `tools/dev-stack/` 提供的条目加 `devStack: true`。工作包只追加自己的一行，
+  `tools/ci/e2e.test.mjs` 校验清单形状、脚本存在与 A 档必有的五条。
+- **逐条记账，跑完全部再判。** 每条探针的输出写进 `<out>/<id>/output.log`，
+  探针自己的 `result.json` 与截图也落在 `<out>/<id>/`；汇总在 `<out>/result.json`
+  （默认 `target/e2e/<档>/`）。任一条失败或超时，退出码非零，但后面的条目照跑。
+  超时按进程组杀，探针起的 Chrome、core 与 Vite 一起收掉。CI 把整个目录作为
+  `e2e-tier-a` 产物上传。
+- **dev-stack 门控。** `ARMADRA_DEV_STACK=1` 且 `docker info` 答得上时，先
+  `pnpm dev-stack up`、跑完 `down`；否则 `devStack` 条目记 `skipped`，不算失败。
+  `up` 本身失败时这些条目记 `failed`。
+- **Chrome 与 tmux。** Chrome 取 `CHROME_PATH`，否则找各平台的常见安装位置；缺
+  `requires` 里的任何一样，那一条直接记 `failed` 并写明缺什么。`e2e` 作业用
+  `browser-actions/setup-chrome` 装 stable，apt 装 tmux 与 xvfb，并放开 Ubuntu 24.04
+  对非特权用户命名空间的 AppArmor 限制，好让 Chrome 的沙箱起得来。
+- `pnpm ci:workflows` 断言 `ci.yml` 有跑 `--tier a` 的 `e2e` 作业且在 ubuntu 上，
+  `nightly.yml` 有 `schedule` 与 `workflow_dispatch` 并跑 `--tier b`。
 
 ## 2. release.yml
 

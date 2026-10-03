@@ -55,6 +55,10 @@ const { report, step } = h;
 report.failures = [];
 const HOST_ID = "fake-remote";
 const HOST_NAME = "假远端";
+/** 资源面板里的平台名（core 的 `platformName()`）：假远端就是这台机器。 */
+const PLATFORM =
+  { darwin: "macos", win32: "windows", linux: "linux" }[process.platform] ??
+  "unknown";
 /** ⌘（macOS）或 Ctrl 的 CDP 修饰位。 */
 const MOD = process.platform === "darwin" ? 4 : 2;
 
@@ -697,13 +701,13 @@ async function scenario(ctx) {
     const hostCards = () =>
       page.evaluate(`
         const text = document.body.innerText;
-        return { local: text.includes("本机\\n接电源"), remote: text.includes("远程\\n${HOST_NAME}") };
+        return { local: /本机\\n(接电源|电池|充电中|电源状态未知)/.test(text), remote: text.includes("远程\\n${HOST_NAME}") };
       `);
     // 远端主机的数是「上一轮登记、下一轮取回」的缓存（§44）：刚打开时那张卡
     // 各项为空，等 Worker 答过一轮再看。
     const opened = Date.now();
     await page.waitFor(
-      `return document.body.innerText.includes("macos\\n远程\\n${HOST_NAME}");`,
+      `return document.body.innerText.includes("${PLATFORM}\\n远程\\n${HOST_NAME}");`,
       {
         what: "远端主机卡拿到第一轮数字",
         timeout: 30_000,

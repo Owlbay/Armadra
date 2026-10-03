@@ -74,6 +74,19 @@ node apps/server/out/main.js serve --listen 0.0.0.0:8443 \
 `armadra-server pairing https://…/#pair=<两分钟一次性票>`——用它在新设备上完成配对，
 之后是 `__Host-` 前缀的会话 Cookie；POSIX 上 `kill -USR2 <pid>` 再铸一张。
 
+TLS、准入、CSP 与页面托管不在 `apps/server` 里，而在 core 的 Gateway 域
+（`apps/desktop/src/core/gateway/`）：`serve` 解析完参数就调 `openGateway`，桌面壳的
+「对外服务」用的是同一个。两者的差别只在配置从哪来：服务器壳来自命令行，
+`/api/gateway` 报 `managedBy: "shell"`、`PUT` 答 409；桌面壳来自设置 `gateway.*`
+（整段是本机路径，不随账号走），`PUT /api/gateway` 写设置并当场开、关或重开。
+桌面缺省的证书来源是 `<数据目录>/tls/` 的**本地 CA**（`ca.key` 0600）加它签的叶证书，
+叶证书的 SAN 覆盖主机名与当前私网地址，地址变了只重签叶证书；`GET /ca.crt` 匿名发出 CA，
+`POST /api/gateway/pairing` 给出 `#pair=<票>&fp=<指纹>` 的网页链接与 `armadra://pair` 深链。
+原生 App 走 Bearer 模式（来源 `capacitor://localhost` / `https://localhost`），WebSocket 先
+`POST /api/identity/ws-ticket` 换 30 秒一次性票，经 `Sec-WebSocket-Protocol: armadra-ticket.<票>` 升级。
+桌面壳的页面产物按 `ARMADRA_GATEWAY_WEB_ROOT`、core 旁的 `../renderer`、检出里的 `apps/web/dist` 依次找，
+都没有就只服务 API。形状见 [契约](../contracts/core-json-api.md) §17。
+
 运维相关的四条命令只写文件，**绝不调用 launchctl / systemctl / sc.exe**：
 
 ```sh

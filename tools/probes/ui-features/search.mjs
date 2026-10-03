@@ -34,31 +34,49 @@ export default async function search({ stack, output, report, scenario }) {
     "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod\n".repeat(
       44,
     );
-  for (let group = 0; group < FILES / 1000; group += 1) {
-    const directory = join(
-      project,
-      "big",
-      `g${String(group).padStart(2, "0")}`,
-    );
-    mkdirSync(directory, { recursive: true });
-    for (let index = 0; index < 1000; index += 1) {
-      writeFileSync(join(directory, `f${index}.txt`), body);
+  // 文件数贴着 core 的扫描上限（MAX_SCANNED_ENTRIES 4 万）；要更慢只能让每个
+  // 文件更大。
+  const fill = (scale) => {
+    const content = body.repeat(scale);
+    for (let group = 0; group < FILES / 1000; group += 1) {
+      const directory = join(
+        project,
+        "big",
+        `g${String(group).padStart(2, "0")}`,
+      );
+      mkdirSync(directory, { recursive: true });
+      for (let index = 0; index < 1000; index += 1) {
+        writeFileSync(join(directory, `f${index}.txt`), content);
+      }
     }
-  }
+  };
+  const SCALES = [1, 4, 8];
+  fill(SCALES[0]);
   writeFileSync(join(project, "README.md"), "# search\n");
   const { workspace, board } = await stack.workspace("搜索取消", project);
 
-  // 基线：整轮不取消要多久、扫了多少。
-  const started = Date.now();
-  const full = await stack.api(`/api/workspaces/${workspace.id}/file-search`, {
-    method: "POST",
-    body: JSON.stringify({ query: "zzneedlezz" }),
-  });
-  const baseline = {
-    ms: Date.now() - started,
-    scanned: full.scanned,
-    timedOut: full.timedOut,
-  };
+  // 基线：整轮不取消要多久、扫了多少。文件系统快的机器（Linux 的页缓存上
+  // 3.6 万个 3 KB 的文件半秒就扫完）留给取消的窗口太窄，那就把文件加大再量。
+  let baseline;
+  for (let round = 0; ; round += 1) {
+    const started = Date.now();
+    const full = await stack.api(
+      `/api/workspaces/${workspace.id}/file-search`,
+      {
+        method: "POST",
+        body: JSON.stringify({ query: "zzneedlezz" }),
+      },
+    );
+    baseline = {
+      ms: Date.now() - started,
+      scanned: full.scanned,
+      timedOut: full.timedOut,
+      fileKb: Math.round((body.length * SCALES[round]) / 1024),
+    };
+    if (baseline.ms > 1_200 || full.timedOut || round === SCALES.length - 1)
+      break;
+    fill(SCALES[round + 1]);
+  }
   run.check(baseline.ms > 600, "大目录整轮扫描足够慢，取消有窗口", baseline);
 
   const page = await stack.browser.page(await stack.browser.context());
