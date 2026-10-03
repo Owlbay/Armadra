@@ -13,10 +13,14 @@ import { Switch } from "@/ui/switch";
  * （契约 §16.2）。全局设置，只有 owner 能改，成员不显示。
  */
 export function RealtimeSetting() {
-  const t = useT();
+  // 成员读不到设置文档（`GET /api/settings` 是 403）：连请求都不发。
   const member = useAccess().member;
+  return member ? null : <RealtimeSettingRow />;
+}
+
+function RealtimeSettingRow() {
+  const t = useT();
   const { settings, save } = useRuntimeSettings();
-  if (member) return null;
   const enabled = settings.data
     ? completionSettingsSchema.parse(settings.data).collab.realtime
     : true;

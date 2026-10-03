@@ -211,7 +211,7 @@ function MemberAvatar({ color, label }: { color: string; label: string }) {
       className="size-5 after:hidden data-[size=sm]:size-5"
       style={{ boxShadow: `0 0 0 2px ${color}` }}
     >
-      <AvatarFallback className="bg-card text-[10px] font-medium text-foreground">
+      <AvatarFallback className="bg-card text-[length:var(--text-caption)] font-medium text-foreground">
         {initialOf(label)}
       </AvatarFallback>
     </Avatar>
