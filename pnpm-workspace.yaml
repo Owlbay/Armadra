@@ -49,3 +49,6 @@ overrides:
   # Pulled in by shadcn through socks and @modelcontextprotocol/sdk's
   # express-rate-limit.
   "ip-address@<10.7.1": 10.7.1
+  # GHSA-hxh3-vqpv-xpqv: hono before 4.13.7. Pulled in by shadcn's
+  # @modelcontextprotocol/sdk (directly and via @hono/node-server).
+  "hono@<4.13.7": 4.13.7
