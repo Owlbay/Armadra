@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -31,7 +31,10 @@ function guarded(): string[] {
 
 describe("手写 <button> 守卫（设计系统 §7 第 8 步）", () => {
   it("真的扫到了功能代码，而不是空跑", () => {
-    const files = guarded().map((file) => relative(SRC, file));
+    // Windows 上 relative() 给反斜杠，统一成 / 再比。
+    const files = guarded().map((file) =>
+      relative(SRC, file).split(sep).join("/"),
+    );
     expect(files.length).toBeGreaterThan(500);
     expect(files).toContain("panels/settings/SettingsRow.tsx");
     expect(files).toContain("shell/MobileFocusPage.tsx");
