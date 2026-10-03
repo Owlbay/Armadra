@@ -141,6 +141,7 @@ jobs:
           pnpm --filter @armadra/web build
           pnpm --filter @armadra/desktop build
           pnpm --filter @armadra/server build
+          pnpm --filter @armadra/push-relay build
           # node-pty 只带 macOS / Windows 的预编译；Linux 上给 Node 编一份，
           # 否则 core 的直连终端起不来（与 desktop 的 pretest 同一个脚本）。
           node apps/desktop/scripts/ensure-node-pty.mjs

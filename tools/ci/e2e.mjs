@@ -14,6 +14,7 @@
  *   pnpm --filter @armadra/web build
  *   pnpm --filter @armadra/desktop build
  *   pnpm --filter @armadra/server build
+ *   pnpm --filter @armadra/push-relay build
  *
  * Tier A needs tmux and a Chrome / Chromium (CHROME_PATH, or the usual install
  * locations). Entries marked `devStack` only run when ARMADRA_DEV_STACK=1 and
