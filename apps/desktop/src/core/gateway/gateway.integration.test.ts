@@ -565,4 +565,21 @@ describe("安全收尾（G3-8）", () => {
     });
     expect(created.status).toBe(201);
   });
+
+  it("对外服务的改动与配对票进审计，票本身不进（安全审查 M5）", async () => {
+    const payload = await pairing();
+    const audit = await remote("/api/identity/audit?action=gateway&limit=100", {
+      person: owner,
+    });
+    expect(audit.status).toBe(200);
+    const entries = (
+      JSON.parse(audit.body) as {
+        entries: { action: string; detail: unknown }[];
+      }
+    ).entries;
+    const actions = entries.map((entry) => entry.action);
+    expect(actions).toContain("gateway.configure");
+    expect(actions).toContain("gateway.pairing.issue");
+    expect(audit.body).not.toContain(payload.ticket);
+  });
 });

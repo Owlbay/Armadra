@@ -1,6 +1,15 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { EventBus } from "../bus";
+import { emptyRequest } from "../http/router";
+import { CoreServer } from "../http/server";
+import {
+  type AuditEvent,
+  installAuditSink,
+  resetAuditSink,
+} from "../identity/audit";
+import type { CorePlatform } from "../platform";
 import { plainFileBackend } from "../secrets";
 import { tempDir } from "../testing/temp-dir";
 import {
@@ -9,6 +18,7 @@ import {
   AmaCredentials,
   amaKeyVariable,
   amaSecretName,
+  installAmaCredentialRoutes,
   setAmaCredentials,
 } from "./ama-credentials";
 
@@ -77,5 +87,48 @@ describe("ama's model keys", () => {
     ]);
     // The only copy at rest is the secret store's entry.
     expect(existsSync(join(root, "integration"))).toBe(false);
+  });
+});
+
+describe("ama key routes", () => {
+  it("audit set and clear by provider, never the key (security review M5)", async () => {
+    const root = tempDir("armadra-ama-routes-");
+    const credentials = new AmaCredentials(
+      plainFileBackend(join(root, "secrets")),
+    );
+    const log = { error() {}, warn() {}, info() {}, debug() {} };
+    const server = new CoreServer({
+      platform: { log } as unknown as CorePlatform,
+      bus: new EventBus(),
+      version: "test",
+    });
+    installAmaCredentialRoutes(server, credentials);
+    const audited: AuditEvent[] = [];
+    installAuditSink((event) => audited.push(event));
+    try {
+      const body = Buffer.from(JSON.stringify({ apiKey: FAKE_KEY }));
+      const put = await server.router.dispatch(
+        "PUT",
+        "/api/agents/ama/credentials/deepseek",
+        {
+          ...emptyRequest("PUT", "/api/agents/ama/credentials/deepseek"),
+          body,
+          json: <T>() => JSON.parse(body.toString("utf8")) as T,
+        },
+      );
+      expect(put.status).toBe(200);
+      const cleared = await server.router.dispatch(
+        "DELETE",
+        "/api/agents/ama/credentials/deepseek",
+      );
+      expect(cleared.status).toBe(200);
+      expect(audited).toEqual([
+        { action: "ama.credential.set", target: "deepseek" },
+        { action: "ama.credential.clear", target: "deepseek" },
+      ]);
+      expect(JSON.stringify(audited)).not.toContain(FAKE_KEY);
+    } finally {
+      resetAuditSink();
+    }
   });
 });

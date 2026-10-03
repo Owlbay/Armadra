@@ -11,6 +11,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { CoreRequest } from "../../http/router";
+import {
+  type AuditEvent,
+  installAuditSink,
+  resetAuditSink,
+} from "../../identity/audit";
 import { runAs } from "../../identity/gate";
 import type { CoreContext } from "../../main";
 import type { SecretBackend, SecretBackendKind } from "../../secrets/backend";
@@ -140,6 +145,9 @@ describe("/api/credentials", () => {
   it("stores the value in the secret store and only ever answers isSet", async () => {
     const backend = memoryBackend();
     const { core } = withRoutes(backend);
+    const audited: AuditEvent[] = [];
+    installAuditSink((event) => audited.push(event));
+    opened.push({ close: () => resetAuditSink() });
     const created = await core.call("POST", "/api/credentials", {
       providerId: "claude",
       kind: "oauth-token",
@@ -196,6 +204,16 @@ describe("/api/credentials", () => {
     const again = await core.call("DELETE", `/api/credentials/${entry.ref}`);
     expect(again.body).toMatchObject({ code: "credential_not_found" });
     expect(again.status).toBe(404);
+
+    // 增改删各一条审计，只有条目名与种类，值一个字节都没有（安全审查 M5）。
+    expect(audited.map((event) => event.action)).toEqual([
+      "credential.create",
+      "credential.update",
+      "credential.delete",
+    ]);
+    expect(audited.every((event) => event.target === entry.ref)).toBe(true);
+    expect(JSON.stringify(audited)).not.toContain(VALUE);
+    expect(JSON.stringify(audited)).not.toContain("another-value");
   });
 
   it("refuses a kind outside the table, a disabled kind and a malformed body", async () => {
