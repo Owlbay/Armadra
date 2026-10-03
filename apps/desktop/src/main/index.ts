@@ -36,6 +36,7 @@ import {
 } from "./runtime-process";
 import { type PageSource, startPageSource } from "./static-server";
 import { traceLifecycle } from "./trace";
+import { installDiagnostics } from "./diagnostics";
 import { installUpdates } from "./updates";
 import {
   endpointsSnapshot,
@@ -63,7 +64,11 @@ import {
   setHostRect,
 } from "./browser";
 import { clearBrowsingData } from "./browser/clear-data";
-import { setDriveEnvironment, setSecretChannel } from "./runtime-process";
+import {
+  setCrashChannel,
+  setDriveEnvironment,
+  setSecretChannel,
+} from "./runtime-process";
 import { secretChannel } from "./secrets";
 import { pickDirectory } from "./dialogs";
 import { openExternal, showItemInFolder } from "./external";
@@ -99,6 +104,16 @@ const lifecycle = new DesktopLifecycle();
 const runtime = new RuntimeProcess();
 const development = !app.isPackaged;
 const updates = installUpdates(lifecycle, runtime);
+/**
+ * 可选崩溃上报（外部服务 §11.2）：设置里没填 DSN 就什么都不加载。在 ready
+ * 之前装，好让启动阶段的异常也算数；core 交来的错误经同一个通道。
+ */
+const diagnostics = installDiagnostics({
+  dataDir: dataDir(),
+  release: app.getVersion(),
+  environment: app.isPackaged ? "production" : "development",
+});
+setCrashChannel(diagnostics);
 /** Set by `start()` before any window exists; every origin decision reads it. */
 let page: PageSource | null = null;
 

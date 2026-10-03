@@ -9,7 +9,7 @@
 | 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                   | 何时跑                              | 失败时       |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | ------------ |
 | A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e`、`push-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`                                                         | `nightly.yml`                       | 开 issue     |
+| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`crash-report-e2e`                                     | `nightly.yml`                       | 开 issue     |
 | C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                                                                | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
@@ -147,6 +147,16 @@ node tools/probes/realtime-e2e.mjs [输出目录]
 ```
 
 验证：第一台打开即切到实时（`GET …/realtime`）、两边在线条列出对方；两边同时各拖一个节点，两边与 core 物化的表一致；成员光标与选区外框；同一张便签一个在开头、一个在结尾同时输入，提交后收敛且两个人的字都在；断网（探针注入的 WebSocket 包装切断 `…/sync` 并拒绝重连）时顶部「离线编辑」、在线条置灰，期间的拖动对方看不到，恢复后自动重连补齐。最后一台开评论模式在便签上放钉并发送，另一台经 `board.comment` 看到评论钉（契约 §16.3）。产物默认在 `target/realtime-e2e/`。租约模式的多设备场景（`ui-features` 的 presence、`server-e2e`）开头先把 `collab.realtime` 关掉。
+
+## 崩溃上报对 GlitchTip（dev-stack）
+
+```sh
+pnpm dev-stack up glitchtip
+pnpm libs:build
+node tools/probes/crash-report-e2e.mjs [输出目录]   # 默认 target/crash-report-e2e/
+```
+
+[外部服务](../../docs/design/external-services.md) §11.2：真 `@sentry/node`，经 core 的请求错误路径（500 → `platform.reportError` → `apps/server/src/diagnostics.ts`）发到 dev-stack 的 GlitchTip，再用它的 API 取回事件，断言里面没有环境变量的值与名字、家目录、路径里的用户名、令牌、ANSI / 终端输出、用户与 extra，面包屑没有 data；没配 DSN 时同一路径不发。组织、项目与只读令牌由容器里的 `manage.py shell` 现建。用例本体是 `apps/server/src/diagnostics.devstack.test.ts`（平时 skipped），e2e 清单里是 B 档的 dev-stack 条目。
 
 ## Agent 协作端到端（真 Claude Code + 真 Codex CLI）
 
