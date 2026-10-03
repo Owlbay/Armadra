@@ -58,6 +58,17 @@ const USAGE_REASONS: ReadonlySet<string> = new Set([
   "network",
   "parse",
   "no_windows",
+  "unsupported",
+  "policy_off",
+]);
+
+/**
+ * `unavailable` 也可能带原因：`policy_off`（出站政策默认关）与 `unsupported`
+ * （端点答了网页）。其余 `unavailable` 就是「本机没有凭据」。
+ */
+export const UNAVAILABLE_REASONS: ReadonlySet<string> = new Set([
+  "unsupported",
+  "policy_off",
 ]);
 
 /**

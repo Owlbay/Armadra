@@ -29,6 +29,9 @@ const BASE =
 const DIGEST =
   "3b1f8c0d5e2a47698d0c1b3f5a7e9d2c4b6a8e0f1d3c5b7a9e1f3d5c7b9a1e3f";
 
+const FEED_URL = `${BASE}/latest-darwin-aarch64-mac.yml`;
+const FEED_DIGEST = "e".repeat(64);
+
 function bundleUrl(): string {
   return `${BASE}/Armadra_0.2.0_darwin-aarch64.app.tar.gz`;
 }
@@ -72,13 +75,23 @@ function answer(): HostAnswer {
         sha256: "d".repeat(64),
         signed: true,
       },
+      // The target's electron-updater feed, which `latest.json` names by digest.
+      {
+        component: "manifest",
+        target: "",
+        url: FEED_URL,
+        sizeBytes: 300,
+        sha256: FEED_DIGEST,
+        signed: true,
+      },
     ],
   };
 }
 
 function manifest(url: string, signature: string): string {
   return `{"version":"0.2.0","notes":"","pub_date":"1970-01-01T00:00:00Z",
-    "platforms":{"darwin-aarch64":{"signature":"${signature}","url":"${url}"}}}`;
+    "platforms":{"darwin-aarch64":{"signature":"${signature}","url":"${url}",
+    "feed":{"url":"${FEED_URL}","sha256":"${FEED_DIGEST}"}}}}`;
 }
 
 /**
@@ -395,7 +408,7 @@ it("platform keys follow the release targets", () => {
 /* ------------------- what the electron-updater feed adds ------------------ */
 
 /**
- * `latest-mac.yml` is the manifest an electron-builder release publishes. The
+ * `latest-darwin-aarch64-mac.yml` is the manifest an electron-builder release publishes. The
  * dialect changes; not one of the rules above does — the digest still comes
  * from the Host's list, the file still has to sit in the same release, and the
  * version still has to be the one the Host offered.
@@ -403,7 +416,7 @@ it("platform keys follow the release targets", () => {
 describe("the electron-updater dialect", () => {
   function electronAnswer(): HostAnswer {
     const host = answer();
-    artifact(host, 0).url = `${BASE}/latest-mac.yml`;
+    artifact(host, 0).url = `${BASE}/latest-darwin-aarch64-mac.yml`;
     artifact(host, 1).url = `${BASE}/Armadra-0.2.0-arm64-mac.zip`;
     return host;
   }
@@ -425,7 +438,9 @@ describe("the electron-updater dialect", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.packageUrl).toBe(`${BASE}/Armadra-0.2.0-arm64-mac.zip`);
-    expect(result.value.manifestUrl).toBe(`${BASE}/latest-mac.yml`);
+    expect(result.value.manifestUrl).toBe(
+      `${BASE}/latest-darwin-aarch64-mac.yml`,
+    );
     expect(result.value.sha256).toBe(DIGEST);
     // No minisign signature exists in this dialect, and the offer says so
     // rather than claiming one: what makes the bytes trustworthy here is the
@@ -487,7 +502,8 @@ describe("the electron-updater dialect", () => {
 
   it("a loopback release server is read only when the caller allowed it", () => {
     const host = electronAnswer();
-    artifact(host, 0).url = "http://127.0.0.1:8123/v0.2.0/latest-mac.yml";
+    artifact(host, 0).url =
+      "http://127.0.0.1:8123/v0.2.0/latest-darwin-aarch64-mac.yml";
     artifact(host, 1).url = "http://127.0.0.1:8123/v0.2.0/Armadra.zip";
     const target = pointer(host, "darwin-aarch64", true);
     expect(target.ok).toBe(true);

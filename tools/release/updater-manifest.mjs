@@ -12,10 +12,41 @@
  * the staged directory before it calls this. An unsigned bundle is left out
  * with a stated reason rather than published without one: a manifest entry
  * without a signature is an offer to install whatever the endpoint serves.
+ *
+ * 每个平台条目还带 `feed: { url, sha256 }`：这个目标的 electron-updater 清单
+ * （`stage-desktop.mjs` 暂存的 `latest-<target>….yml`）在哪、是哪份字节。桌面壳下载前
+ * 先取这份 yml、核对 sha256 与它描述的包，再交给 electron-updater——latest.json
+ * 是签过名的那一份，yml 由它点名，而不是由「同一目录里恰好有一份」。
+ *
+ * 可选的 `rollout: { percent, seed }` 是灰度：客户端拿安装 id 与 seed 的哈希落在
+ * 百分比之内才接受这次更新（`shell-core/updates/offer.ts::rolloutAccepts`）。seed
+ * 缺省是版本号，所以同一台机器在同一个版本的灰度里结论不变，换一个版本重新抽。
+ * 这里不写 electron-updater 自己的 `stagingPercentage`：两道闸各用各的 id，同一台
+ * 机器会被筛两次。
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { desktopAssets } from "./artifacts.mjs";
+import { desktopAssets, updaterFeedFile } from "./artifacts.mjs";
+
+/** The sha256 of a file, hex. */
+function digest(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+/**
+ * 灰度字段。百分比是 0–100 的整数；seed 缺省为版本号。不给就是全量，不写字段。
+ */
+export function normalizeRollout(rollout, version) {
+  if (rollout === undefined || rollout === null) return null;
+  const percent = Number(rollout.percent);
+  if (!Number.isInteger(percent) || percent < 0 || percent > 100)
+    throw new Error(
+      `rollout percent must be an integer 0-100, got ${rollout.percent}`,
+    );
+  const seed = String(rollout.seed ?? "").trim() || version;
+  return { percent, seed };
+}
 
 /** Platforms are named "<os>-<arch>", the same spelling the Host uses. */
 const PLATFORM_OS = { darwin: "darwin", linux: "linux", windows: "windows" };
@@ -41,6 +72,7 @@ export function buildManifest({
   downloadUrl,
   targets,
   pub = "",
+  rollout,
 }) {
   const platforms = {};
   const skipped = [];
@@ -69,10 +101,14 @@ export function buildManifest({
       skipped.push({ target, asset: updater.name, reason: "bundleMissing" });
       continue;
     }
-    platforms[platformKey(target)] = {
-      signature,
-      url: downloadUrl(updater.name),
-    };
+    const entry = { signature, url: downloadUrl(updater.name) };
+    const feedName = updaterFeedFile(target);
+    const feedPath = join(directory, feedName);
+    // A missing feed is not skipped here: the bundle can still be verified and
+    // installed by hand. `assemble.mjs` reports it as a hole in the release.
+    if (existsSync(feedPath))
+      entry.feed = { url: downloadUrl(feedName), sha256: digest(feedPath) };
+    platforms[platformKey(target)] = entry;
   }
   const manifest = {
     version,
@@ -81,6 +117,8 @@ export function buildManifest({
     platforms,
   };
   if (pub) manifest.pub_date = pub;
+  const gate = normalizeRollout(rollout, version);
+  if (gate !== null) manifest.rollout = gate;
   return { manifest, skipped };
 }
 
@@ -91,6 +129,7 @@ export function writeManifest(options) {
     version: manifest.version,
     notes: manifest.notes,
     pub_date: manifest.pub_date,
+    ...(manifest.rollout ? { rollout: manifest.rollout } : {}),
     platforms: Object.fromEntries(
       Object.keys(manifest.platforms)
         .sort()

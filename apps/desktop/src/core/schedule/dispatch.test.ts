@@ -20,7 +20,7 @@ import {
   type AutomationTarget,
   create,
 } from "./types";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { NO_CUSTOM_AGENTS } from "../agent/registry";
 import type { TerminalBridge } from "../collab/service";
@@ -75,6 +75,23 @@ function state(database: DatabaseSync, value: string | null): void {
     .run("node-1", "ws", "claude", value, "2026-09-20T00:00:00Z");
 }
 
+/**
+ * 目标终端此刻的画面（画面门经 `capture` 取）。缺省是 Claude 的输入框：首投
+ * 要求看得见提示符，而这里的大多数用例说的是状态，不是画面。
+ */
+const CLAUDE_PROMPT = "────────\n❯ \n────────\n  ? for shortcuts";
+const AUTO_MODE_DIALOG = [
+  " Make auto mode your default permission mode?",
+  " ❯ 1. Yes, set auto mode as my default permission mode",
+  "   2. No, keep the current mode",
+  " Enter to confirm · Esc to cancel",
+].join("\n");
+const screen = { current: CLAUDE_PROMPT };
+
+beforeEach(() => {
+  screen.current = CLAUDE_PROMPT;
+});
+
 interface Written {
   sessionId: string;
   generation: number;
@@ -87,7 +104,7 @@ function bridge(written: Written[], live = 7): TerminalBridge {
       written.push({ sessionId, generation, data });
     },
     async capture() {
-      return { lines: 0, data: "" };
+      return { lines: 4, data: screen.current };
     },
     async foreground() {
       return undefined;
@@ -199,6 +216,74 @@ describe("Agent 目标的探测", () => {
     const { database, dispatcher } = setUp({ bridged: false });
     state(database, "idle");
     expect((await dispatcher.supports(agentTargetOf())).state).toBe("unknown");
+  });
+});
+
+describe("画面门", () => {
+  /** Hook 报过一轮结束的空闲：不是首投。 */
+  function reportedIdle(database: DatabaseSync): void {
+    database.prepare("DELETE FROM agent_status").run();
+    database
+      .prepare(
+        "INSERT INTO agent_status (node_id, workspace_id, agent_id, state, state_source, updated_at, last_event_at) " +
+          "VALUES ('node-1', 'ws', 'claude', 'idle', 'hook', ?, ?)",
+      )
+      .run("2026-09-20T00:00:00Z", "2026-09-20T00:00:00Z");
+  }
+
+  it("停在对话框上不投：报过空闲也算忙，理由是 TARGET_NOT_AT_PROMPT", async () => {
+    const { database, store, dispatcher, written } = setUp();
+    reportedIdle(database);
+    screen.current = `${CLAUDE_PROMPT}\n${AUTO_MODE_DIALOG}`;
+    expect(await dispatcher.supports(agentTargetOf())).toEqual({
+      state: "busy",
+      generation: 7,
+      reason: "TARGET_NOT_AT_PROMPT",
+    });
+    const receipt = await dispatcher.dispatch(runFor(store, agentTargetOf()));
+    expect(receipt?.outcome).toBe(AutomationOutcome.NOT_DISPATCHED);
+    expect(receipt?.reasonCode).toBe("TARGET_NOT_AT_PROMPT");
+    expect(written).toHaveLength(0);
+
+    // 人在终端里答掉之后，下一拍看到的是输入框，投出去。
+    screen.current = `${AUTO_MODE_DIALOG}\n${CLAUDE_PROMPT}`;
+    const again = runFor(store, agentTargetOf());
+    again.operationId = `${again.operationId}-2`;
+    expect((await dispatcher.dispatch(again))?.outcome).toBe(
+      AutomationOutcome.DELIVERED,
+    );
+    expect(written).toHaveLength(1);
+  });
+
+  it("首投（没有一条回合结束的真上报）看不见提示符：算忙", async () => {
+    const { database, dispatcher } = setUp();
+    state(database, null);
+    screen.current = " Claude Code vX.Y.Z\n loading…";
+    expect(await dispatcher.supports(agentTargetOf())).toEqual({
+      state: "busy",
+      generation: 7,
+      reason: "TARGET_NOT_AT_PROMPT",
+    });
+  });
+
+  it("平常的投递不要求提示符，只拦对话框与选择菜单", async () => {
+    const { database, dispatcher } = setUp();
+    reportedIdle(database);
+    screen.current = "some output\nthat is not a known dialog";
+    expect((await dispatcher.supports(agentTargetOf())).state).toBe("ready");
+    screen.current = `${CLAUDE_PROMPT}\n Something new?\n ❯ 1. Yes\n   2. No`;
+    expect((await dispatcher.supports(agentTargetOf())).state).toBe("busy");
+  });
+
+  it("没有画面特征的 Agent 不取画面", async () => {
+    const { database, dispatcher } = setUp();
+    database
+      .prepare("UPDATE nodes SET data_json = ? WHERE id = 'node-1'")
+      .run(JSON.stringify({ agent: { id: "opencode" } }));
+    screen.current = AUTO_MODE_DIALOG;
+    const target = agentTargetOf();
+    target.agentLaunch = { ...target.agentLaunch!, agentId: "opencode" };
+    expect((await dispatcher.supports(target)).state).toBe("ready");
   });
 });
 

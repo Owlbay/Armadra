@@ -7,6 +7,10 @@
  * 我拉起的」（读 `launcher.json`、探 Host 的版本），独立 Host 进程拆掉之后那套
  * 判断没有对象了，一并删掉；装更新前只停 Runtime。
  *
+ * 它还记着「什么时候再问」：自动检查的间隔（不短于 6 小时，带抖动）、发布索引
+ * 上一次的 `ETag` 与正文，以及决定灰度归属的安装 id——都是 `<data dir>/updates/`
+ * 下的小文件，与 `pending-restart.json` 放在一起。
+ *
  * The rule that shapes the module: **the restart proves itself.** A new shell
  * reads `pending-restart.json` and compares the versions before it says
  * anything about an update; a mismatch is reported as "the update did not
@@ -14,6 +18,7 @@
  * forgotten.
  */
 
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -176,4 +181,121 @@ export function verifyRestart(
     previousVersion: pending.previousVersion,
     previousPackageUrl: pending.previousPackageUrl,
   };
+}
+
+/* --------------------------- when to ask again ---------------------------- */
+
+/**
+ * The shortest interval between two automatic checks (external services §3.1).
+ * GitHub allows 60 anonymous API calls an hour per IP, and an office behind one
+ * NAT shares that; checking every six hours, with a 304 for an unchanged index,
+ * keeps a room full of installations well inside it.
+ */
+export const MIN_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+/** Spread so installations started together do not ask together. */
+export const CHECK_JITTER_MS = 30 * 60 * 1000;
+/** Nothing is asked while the app is still starting (first-run, pairing). */
+export const FIRST_CHECK_DELAY_MS = 60 * 1000;
+
+/**
+ * How long until the next automatic check. `random` is in [0, 1). A check that
+ * never happened is due after the start-up delay; otherwise not before the
+ * interval plus jitter has passed since the last one — whatever the clock says,
+ * never sooner than the start-up delay, so a restart is not a check.
+ */
+export function nextCheckDelayMs(
+  lastCheckedAtMs: number | null,
+  nowMs: number,
+  random: number,
+): number {
+  const jitter = Math.floor(Math.min(Math.max(random, 0), 1) * CHECK_JITTER_MS);
+  if (lastCheckedAtMs === null) return FIRST_CHECK_DELAY_MS + jitter;
+  const due = lastCheckedAtMs + MIN_CHECK_INTERVAL_MS + jitter;
+  return Math.max(FIRST_CHECK_DELAY_MS, due - nowMs);
+}
+
+/* ---------------------------- the release index --------------------------- */
+
+/**
+ * The last answer the release index gave, kept so the next check can ask
+ * `If-None-Match` and reuse the body on a 304 (which does not count against the
+ * rate limit). Keyed by everything that changes what the answer means — the
+ * source and the channel — so switching to beta never reuses a stable answer.
+ */
+export interface ReleaseCache {
+  key: string;
+  etag: string;
+  body: string;
+  checkedAtMs: number;
+}
+
+/** `<data dir>/updates/release-index.json`. */
+export function releaseCachePath(dataDir: string): string {
+  return join(dataDir, "updates", "release-index.json");
+}
+
+export function releaseCacheKey(source: string, channel: string): string {
+  return `${source}\n${channel}`;
+}
+
+/** The cached answer, or `null` when there is none (or it is unreadable). */
+export function readReleaseCache(dataDir: string): ReleaseCache | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(releaseCachePath(dataDir), "utf8"));
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const record = parsed as Record<string, unknown>;
+  if (
+    typeof record.key !== "string" ||
+    typeof record.etag !== "string" ||
+    typeof record.body !== "string" ||
+    typeof record.checkedAtMs !== "number"
+  ) {
+    return null;
+  }
+  return {
+    key: record.key,
+    etag: record.etag,
+    body: record.body,
+    checkedAtMs: record.checkedAtMs,
+  };
+}
+
+/** Best-effort: a cache that cannot be written only costs one full answer. */
+export function writeReleaseCache(dataDir: string, cache: ReleaseCache): void {
+  try {
+    mkdirSync(join(dataDir, "updates"), { recursive: true });
+    writeFileSync(releaseCachePath(dataDir), JSON.stringify(cache));
+  } catch {
+    // Nothing depends on it.
+  }
+}
+
+/* ------------------------------ install id -------------------------------- */
+
+/**
+ * A random id for this installation, made once and kept in
+ * `<data dir>/updates/install-id`. It decides which side of a staged rollout
+ * this installation falls on (`offer.ts::rolloutAccepts`) and is never sent
+ * anywhere. A file that cannot be written still yields an id for this run.
+ */
+export function installId(dataDir: string): string {
+  const path = join(dataDir, "updates", "install-id");
+  try {
+    const existing = readFileSync(path, "utf8").trim();
+    if (/^[0-9a-f-]{36}$/.test(existing)) return existing;
+  } catch {
+    // Made below.
+  }
+  const id = randomUUID();
+  try {
+    mkdirSync(join(dataDir, "updates"), { recursive: true });
+    writeFileSync(path, `${id}\n`);
+  } catch {
+    // This run still has an id; the next one draws again.
+  }
+  return id;
 }

@@ -417,16 +417,19 @@ targetState(status: AgentStatus | undefined, live: number | undefined): TargetSt
 
 登记的特征（来源：CLI 安装包里的字符串或本机实际画面；单测用自编的画面文本）：
 
-| CLI                 | 已知对话框                                                                                                                                                      | 提示符                                                                  |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Claude              | 目录信任（`Yes, I trust this folder`）、bypass 警告（`running in Bypass Permissions mode`）、把 auto 设为缺省（`Make auto mode your default permission mode?`） | 输入框里单独一个 `❯`，或页脚 `? for shortcuts` / `(shift+tab to cycle)` |
-| Codex               | 目录信任（`Trust this folder?`）、升级提示（`Update available`）                                                                                                | `›` 后面不是编号（对话框的选项是 `› 1.`）                               |
-| Copilot             | 目录信任（`Confirm folder trust`，依据官方文档，未在本机核实）                                                                                                  | 未核实，不给：首投不要求提示符                                          |
-| Pi / OMP / OpenCode | 没有已知会挡住输入的启动对话框，不登记，整条门不跑                                                                                                              | —                                                                       |
+| CLI      | 已知对话框                                                                                                                                                      | 提示符                                                                  |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Claude   | 目录信任（`Yes, I trust this folder`）、bypass 警告（`running in Bypass Permissions mode`）、把 auto 设为缺省（`Make auto mode your default permission mode?`） | 输入框里单独一个 `❯`，或页脚 `? for shortcuts` / `(shift+tab to cycle)` |
+| Codex    | 目录信任、升级提示（两种形态）、Hook 审查、模型迁移、登录、限额换模型、完全访问警告、装 MCP、重建本地库（id 与出处见契约 §22）                                  | `›` 后面不是编号，也不是启动 / 接回中的占位                             |
+| Copilot  | 目录信任（`Confirm folder trust`，依据官方文档，未在本机核实）                                                                                                  | 未核实，不给：首投不要求提示符                                          |
+| Pi / OMP | 信任项目目录（`Trust project folder?`；Pi 取自 1.0.0 安装包，OMP 按同源推断、未核实）                                                                           | 未核实，不给                                                            |
+| OpenCode | 官方文档没有启动对话框，不登记，整条门不跑                                                                                                                      | —                                                                       |
 
 退回排队之后，人在终端里答掉对话框**不会产生任何上报**（Hook 早报过空闲或开场），所以出队泵把「队头的理由是 `TARGET_NOT_AT_PROMPT`」也算进 2 秒快探的候选（`send-pump.ts::silentStarter`），每次探都重新看一眼画面；对话框一直不答，这条按 TTL 过期，发送方收到带说明的终态回执（契约 §12.3）。
 
-这是 §12 第 3 条的一个收窄的例外：只认登记过的对话框，只在首投时要求提示符，不做通用的屏幕理解。没登记的对话框照旧可能被答掉；每家 CLI 改版时要回来改特征表。
+另有一条通用判据（2026-10 补）：最后一处提示符之后出现高亮的编号选项（`❯ 1.` / `› 2.`）或菜单页脚（`Enter to confirm`、`esc to cancel`、`Press Enter to continue`、`[y/N]`），当作没登记的对话框（`<cli>.unrecognized-menu`）排队。回车在任何选择菜单上都是「选缺省项」，宁可排队。计划投递（`schedule/dispatch.ts`）写入前过同一道门（`collab/screen.ts`），退回按「忙」等下一拍，运行的 `reasonCode` 记 `TARGET_NOT_AT_PROMPT`。
+
+这是 §12 第 3 条的一个收窄的例外：只认登记过的对话框与选择菜单的样子，只在首投时要求提示符，不做通用的屏幕理解。不长成菜单、也没登记的对话框照旧可能被答掉；每家 CLI 改版时要回来改特征表。
 
 ### §4.4 状态存哪
 

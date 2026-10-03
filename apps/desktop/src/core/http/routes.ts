@@ -475,6 +475,19 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 实时协同（契约 §16.1–§16.2）：同步流与一块板的实时状态。
+  {
+    path: "/api/workspaces/{workspaceId}/boards/{boardId}/sync",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workspaces/{workspaceId}/boards/{boardId}/realtime",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/workspaces/{workspaceId}/deliveries",
     methods: ["GET"],
@@ -775,6 +788,19 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // ama 的模型密钥（契约 §12.4）：只答有没有、存在哪，从不答值。
+  {
+    path: "/api/agents/ama/credentials",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/agents/ama/credentials/{provider}",
+    methods: ["PUT", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/agents/{agentId}/integration",
     methods: ["GET"],
@@ -855,12 +881,20 @@ export const ROUTES: readonly RouteEntry[] = [
   },
   {
     path: "/api/execution-hosts/{hostId}",
-    methods: ["PUT", "DELETE"],
+    // GET：Worker 舰队（契约 §21.2）加的单台主机读取。
+    methods: ["GET", "PUT", "DELETE"],
     surface: "runtime",
     implemented: true,
   },
   {
     path: "/api/execution-hosts/{hostId}/validate",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  // Worker 舰队（G1-2，契约 §21.2）：重连并重新同步画布注入。
+  {
+    path: "/api/execution-hosts/{hostId}/resync",
     methods: ["POST"],
     surface: "runtime",
     implemented: true,
@@ -970,6 +1004,13 @@ export const ROUTES: readonly RouteEntry[] = [
   {
     // 契约 §20.4：画布启动器兑换节点凭据。只在本机 hook 通道上，带节点 token。
     path: "/credential",
+    methods: ["POST"],
+    surface: "hook",
+    implemented: true,
+  },
+  {
+    // 契约 §12.4：画布启动器 `run/ama` 兑换 ama 的模型密钥。同一道门，外加节点是 ama。
+    path: "/credential/ama",
     methods: ["POST"],
     surface: "hook",
     implemented: true,

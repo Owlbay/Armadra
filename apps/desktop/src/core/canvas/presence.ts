@@ -148,6 +148,11 @@ export class CanvasPresence {
   private readonly ttlMs: number;
   private readonly idleMs: number;
   private timer: ReturnType<typeof setInterval> | undefined;
+  /**
+   * 实时板判定（补全架构 §6.3）：实时板上租约不再拦写入，也不再显示「谁在
+   * 编辑」——那由 awareness 给出；在线表只用于显示谁在看。实时域装配时登记。
+   */
+  private realtime: (boardId: string) => boolean = () => false;
 
   constructor(private readonly options: CanvasPresenceOptions) {
     this.now = options.now ?? Date.now;
@@ -165,6 +170,22 @@ export class CanvasPresence {
   stop(): void {
     if (this.timer !== undefined) clearInterval(this.timer);
     this.timer = undefined;
+  }
+
+  /** 登记实时板判定；返回撤销函数。 */
+  setRealtimeProbe(probe: (boardId: string) => boolean): () => void {
+    this.realtime = probe;
+    return () => {
+      if (this.realtime === probe) this.realtime = () => false;
+    };
+  }
+
+  private isRealtime(boardId: string): boolean {
+    try {
+      return this.realtime(boardId);
+    } catch {
+      return false;
+    }
   }
 
   /** 一次心跳：登记或续期，必要时顺手把空着的租约给它。 */
@@ -267,6 +288,8 @@ export class CanvasPresence {
       input.source,
     );
     client.lastActiveAt = at;
+    // 实时板没有租约可拿：人人都能写，拿租约只是登记在线。
+    if (this.isRealtime(boardId)) return this.view(boardId, entry);
     const holder = entry.lease?.clientId;
     if (holder !== undefined && holder !== input.clientId && !input.takeover) {
       throw leaseHeld(this.deviceOf(entry, holder));
@@ -292,6 +315,8 @@ export class CanvasPresence {
     clientId: string | undefined,
     source?: PresenceSource,
   ): void {
+    // 实时板上写入经同步流进文档，租约不拦（补全架构 §6.3）。
+    if (this.isRealtime(boardId)) return;
     const entry = this.boards.get(boardId);
     if (entry === undefined || entry.workspaceId !== workspaceId) {
       if (clientId === undefined) return;
@@ -461,6 +486,7 @@ export class CanvasPresence {
         deviceKey: deviceKey(client.source?.deviceId ?? ""),
         lastSeenAt: stamp(client.lastSeenAt),
       }));
+    if (entry.lease !== null && this.isRealtime(boardId)) entry.lease = null;
     const holder =
       entry.lease === null
         ? undefined

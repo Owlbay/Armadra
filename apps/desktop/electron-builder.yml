@@ -47,6 +47,12 @@ files:
   # and that path has to be a real file on disk rather than an entry in an
   # archive only an asar-aware require can read.
   - "!out/session-host/**/*"
+  # `out/agent/` (the bundled ama) and `out/agent-host/` (its host adapter)
+  # likewise: after-pack.mjs places them under `resources/`, where the
+  # `<data>/bin/ama` launcher and ama's `require` of the profile's `host` can
+  # read them as plain files (docs/design/coordinator-agent.md §2.5).
+  - "!out/agent/**/*"
+  - "!out/agent-host/**/*"
 
 # `node-pty` is the one native Node addon in this shell (R2, the TypeScript
 # core's terminal domain). It must be OUTSIDE the asar: the addon resolves

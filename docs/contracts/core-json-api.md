@@ -467,6 +467,32 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - 发送方节点已经不在画布上、目标节点已经不在画布上（收件箱外键填不了），或者是收件箱唤醒（来源就是目标自己）时不写回执，投递记录与事件照发。
 - 每条终态只通知一次；清扫只删回执已经写过的、或者不需要回执的终态行。
 
+### 12.4 Armadra Agent 的模型密钥：`/api/agents/ama/credentials`
+
+设计见 [协调 Agent](../design/coordinator-agent.md) §7。代码在 `core/agent/ama-credentials.ts`，共享层 `amaCredentialStatusSchema`。
+
+| 方法与路径                                      | 请求体              | 答复                     |
+| ----------------------------------------------- | ------------------- | ------------------------ |
+| `GET /api/agents/ama/credentials`               | —                   | 状态                     |
+| `PUT /api/agents/ama/credentials/{provider}`    | `{ "apiKey": "…" }` | 状态（已存）             |
+| `DELETE /api/agents/ama/credentials/{provider}` | —                   | 状态（删一个不在的也成） |
+
+```json
+{
+  "backend": "keychain",
+  "providers": [
+    { "id": "anthropic", "isSet": false },
+    { "id": "deepseek", "isSet": true }
+  ]
+}
+```
+
+- 答复**从不带值**，只有每家是否已设与后端（`keychain` / `dpapi` / `libsecret` / `file-encrypted` / `file`）。供应商列表由 core 给（ama 需要 key 的内置供应商），页面不自己列；不在列表里的 `provider` 答 `400 bad_request`，`apiKey` 不是非空单行也是 `400`；密钥后端打不开答 `503 secret_unavailable`。
+- 每家一条密钥条目 `armadra-ama-<provider>`，这是值唯一的落点。不写任何 key 文件，profile 没有 `authFile`（ama 自己用户级的 `auth.json` 与登录照常可用）。
+- 怎么到 ama：与节点凭据（§20.4）同一条兑换路。画布启动器 `run/ama` 在 `ARMADRA_NODE_ID` 门之后调 `armadra-hook credential --ama`，后者带节点 token 经本机 hook 通道 `POST /credential/ama`（体 `{ "nodeId": "…" }`）兑换；门与 `/credential` 相同（应用 bearer、节点 token 必须验过），外加节点在画布上是 ama（或以它为基础的自定义 Agent），否则 `403 forbidden`；密钥后端打不开 `503 secret_unavailable`。答复 `{ "variables": [{ "variable": "AMA_API_KEY_DEEPSEEK", "value": "…" }] }`，带 `cache-control: no-store`、不记日志。启动器只认 `AMA_API_KEY_<供应商>` 这十五个名字，设在自己的进程里再 `exec` ama：值不进节点 shell 的环境、启动行与 shell 历史，不落盘（启动器按换行切答复，不用 here-doc）。兑换失败或名字不认识时拒绝启动；一个都没设时照常启动。ama 起的子进程不继承 `AMA_*`（ama 自己剥掉）。
+- 限制：Windows 的启动器（`armadra-launch.exe`）与执行主机（SSH）那份不做这段兑换，那里的 ama 只用它自己的 `auth.json` 与环境变量。
+- 权限：`/api/agents` 一族，读 `settings:read`、写 `settings:write`。
+
 ## 13. 画布启动器
 
 设计见 [画布启动器](../design/canvas-launcher.md)。注入（Hook、技能、画布说明）不再写在敲进节点 shell 的启动行上，而由数据目录里每个 CLI 一个的启动器 `integration/run/<cli>`（Windows `run\<cli>.exe`）在 CLI 启动时追加；启动器只在环境里有 `ARMADRA_NODE_ID` 时注入，没有时原样启动程序。启动行只剩「启动器 + 程序 + 程序前置词 + CLI 自己的旗标」。
@@ -592,7 +618,52 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 16. 实时协同：`…/boards/{boardId}/sync` 与评论
 
-预留，由 G1-9（§16.1–§16.2）、G2-6（§16.3）与 G2-5（§16.4）填写。
+实现：`apps/desktop/src/core/realtime/`；共享常量与 zod：`packages/shared/src/api/realtime.ts`。§16.3（评论路由）与 §16.4（awareness 形状）由 G2-6 / G2-5 填写。
+
+### 16.1 `WS /api/workspaces/{id}/boards/{boardId}/sync`
+
+一块板一条流，帧全是二进制（文本帧以 `4400` 关流）。外层一个 lib0 varUint 的消息类型，与 `y-websocket` 同一套编码：
+
+| 类型 | 名称            | 内容                                                                                       |
+| ---- | --------------- | ------------------------------------------------------------------------------------------ |
+| `0`  | sync            | `y-protocols/sync` 的消息：子类型 `0` step1（状态向量）、`1` step2（缺的更新）、`2` update |
+| `1`  | awareness       | `y-protocols/awareness` 的更新（形状见 §16.4）                                             |
+| `3`  | query awareness | 无载荷；core 回一帧当前全部 awareness                                                      |
+
+- **握手**：升级成功后 core 先发自己的 step1 与当前 awareness；客户端发自己的 step1，core 回 step2。断线重连同样走 step1 / step2，离线期间的本地改动随之补齐。
+- **升级前**（HTTP 状态行，没有 socket）：板不存在或不在这个工作空间 `404`；没有 `canvas:read` `403`；设置 `collab.realtime` 关着而且这块板还不是实时板 `409 realtime_disabled`。第一个连上的客户端把板切到实时（§16.2），之后不再切回，除非设置关掉（见下）。
+- **写权限**：step2 / update 帧要 `canvas:write`。只读连接发来**会改变文档**的写帧，core 丢弃它并以 `4403` 关流；回答服务端 step1 的空 step2 放过。授权变化时复核：失去读权限、或者本来能写现在不能写，都以 `4403` 关流。
+- **关闭码**：`1001` core 退出或板的文档被逐出（重连即可）；`1009` 单帧超过 16 MiB；`4400` 坏帧（解不开的消息或更新）；`4403` 见上（不要以写者身份重连，按只读处理）。
+- **能力**：`GET /api/identity/hello` 的 `capabilities` 含 `canvas.realtime.v1` 表示这个 core 说这套协议。
+
+文档结构（`Y.Doc` 的根类型）：
+
+| 根               | 类型                         | 内容                                                                                                                                                                                                                                                      |
+| ---------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nodes`          | `Y.Map<nodeId, Y.Map>`       | 每个节点一张 `Y.Map`，键与 `CanvasNode` 同名：`type title color position size collapsed expandedHeight parentId labels note data createdAt updatedAt`，值是 JSON、按字段 LWW；`data.content` 是字符串时放在键 `content` 的 `Y.Text` 里，`data` 里不再带它 |
+| `edges`          | `Y.Map<edgeId, JSON>`        | `{ source, target, kind, role?, createdAt, updatedAt }`，整条 LWW                                                                                                                                                                                         |
+| `whiteboard`     | `Y.Map<itemId, string>`      | 白板 `items[]` 的每一项一条 JSON 串，按 item LWW                                                                                                                                                                                                          |
+| `whiteboardRefs` | `Y.Map<referenceId, string>` | 白板 `references[]` 的每一项一条 JSON 串                                                                                                                                                                                                                  |
+| `meta`           | `Y.Map`                      | `whiteboardEnvelope`：白板 JSON 去掉两个数组后的外壳（JSON 串）；`whiteboardRaw`：认不出外壳的白板原文。视口不进文档                                                                                                                                      |
+
+`id` 与 `boardId` 不存进节点与边的值里，由键与所在的板给出。core 不解析白板 item 的内容，只认外壳：`items` / `references` 两个数组、每项有唯一的字符串 `id`。
+
+### 16.2 物化与 `board.changed`
+
+- **真相**：`boards.realtime = 1` 的板，真相是 `board_snapshots.state` 加其后的 `board_updates`；`nodes` / `edges` / `whiteboard_json` 是物化出来的缓存。每条更新逐条落库（`seq` 递增，`principal_id` 为 `null` 表示 core 自己的写者）；每 500 条或最后一个客户端离开时写快照并删掉 `seq ≤ 快照` 的行；core 重启按快照 + 更新重放，表落后时补物化。
+- **物化**：最后一次更新之后 1 秒、最后一个客户端离开、core 退出，或任何人读这块板（`GET …/document` 与 core 内部的读）之前，把文档投影写进表。表真的变了才前进 `updatedAt` 并广播 `board.changed`。对实时客户端，`board.changed` 只说明表追上了文档，**不要**据此重新加载。白板物化时 `items` 按 `z` 再按 `id` 排、`references` 按 `id` 排，节点与边按 `createdAt` 再按 `id` 排。
+- **清理**：文档里表放不下的东西（校验不过的节点、悬挂或校验不过的边、指向非组的 `parentId`、撞名的 `data.handle`、已属于别的板的 id）在物化前由 core 以一次事务从文档里删掉或清掉，清理本身作为一条更新同步给所有客户端。
+- **旧写法**：实时板上带 `clientId` 的 `PUT …/document` 答 `409 { "code": "realtime_active" }`；租约（§9）在实时板上不拦写入，`canvas.presence` 的 `lease` 恒为 `null`，在线表只用于显示。
+- **core 自己的写者**（控制动词、调度、依赖编排）照旧调用保存：请求相对它读到的那一份做三方 diff，在文档副本上试写并过一遍与非实时板相同的拒绝（`400` 校验 / 撞名、`409` 修订号旧了），通过后以 `origin: "core"` 的事务写进文档再物化；文档里别人并发改的、写者没碰的字段原样保留。没有客户端时 core 也加载文档，空闲 60 秒后卸载。
+- **实时状态**：`GET /api/workspaces/{id}/boards/{boardId}/realtime`（`canvas:read`）答
+
+  ```json
+  { "realtime": true, "materializedSeq": 42, "enabled": true }
+  ```
+
+  `enabled` 是设置 `collab.realtime`（缺省 `true`）。页面在 `realtime || enabled` 时连 `…/sync`，否则留在租约 + CAS。
+
+- **关回租约模式**：设置关掉之后，新板不再切换；已经是实时板的，在没有客户端连着时（卸载或下一次 core 写入）先物化、再标 `realtime = 0` 并删掉更新流与快照，表重新成为真相。有客户端连着的板继续服务到它们离开。
 
 ## 17. Gateway：`/api/gateway*`
 
@@ -776,11 +847,76 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 
 ## 21. 跨主机交接与 Worker 舰队
 
-预留，由 G1-2 填写。
+### 21.1 跨执行主机交接：`POST /api/workspaces/{workspaceId}/handoffs`
+
+请求形状不变。来源 Agent 跑在 SSH 终端里、而那台主机不是工作空间所在的机器时，不再一律 501：
+
+- 文件引用与 Git 指纹照旧在工作空间所在的机器上读（路径相对工作空间根）。
+- 要读转录（`includeTranscript: true`，且来源的状态是已验证、当前代次的）时，转录尾巴到来源那台主机上读：控制端经那台主机 Worker 的 `handoff.capture`（参数加 `transcriptOnly: true`，`paths` 为空）读，与本机同一个读法、同一组历史适配器归一化。那台主机必须在执行主机登记里、配了 Worker、Worker 连得上并提供 `remote.handoff.v1`；任何一条不满足答 **501 `handoff_host_offline`**，不回退到读控制端磁盘上同名的路径。不读转录时不连那台主机。
+- 目标在哪台主机都接受：材料是文本与相对路径。`bundle.target.executionHost` 照实写目标的主机。
+- 冻结的材料多一个可选字段 `capturedOn: string`：来源转录在哪台执行主机上读的（主机 id）。来源与工作空间在同一台执行主机上、或在另一台执行主机上读到时都有；在控制端本机读、或没有读转录时不出现。旧行没有这个字段，读回照常。
+
+| 情况                                                | 答复                                   |
+| --------------------------------------------------- | -------------------------------------- |
+| 来源主机已登记、有 Worker、连得上                   | 200，`bundle.capturedOn` 为那台主机 id |
+| 来源主机不在登记里，或登记了但没配 Worker           | 501 `handoff_host_offline`             |
+| Worker 连不上、握手失败、缺 `remote.handoff.v1`     | 501 `handoff_host_offline`             |
+| 不读转录（`includeTranscript: false` 或来源未验证） | 200，不连来源主机，无 `capturedOn`     |
+
+### 21.2 Worker 舰队
+
+控制连接每次握手成功，控制端按主机记下 Worker 的 `runtimeVersion` 与能力集合；连接断了只把 `connected` 置假。「过旧」是：版本比这个控制端旧（点分数字比，预发布低于同号正式版，构建元数据不比），或缺这个控制端的 Worker 会声明的任何一个能力。比控制端新的不算过旧；版本读不出来时只按能力判。
+
+- `GET /api/execution-hosts` 与新增的 `GET /api/execution-hosts/{id}`（`""` 是本机；不存在 404 `not_found`）：SSH 行在握过手之后多一个 `worker`：
+
+  ```json
+  {
+    "version": "0.1.0",
+    "capabilities": ["remote.execution.v1", "remote.handoff.v1"],
+    "outdated": false,
+    "connected": true,
+    "checkedAt": "2026-10-03T08:00:00.000Z"
+  }
+  ```
+
+  没握过手的主机没有 `worker`；本机行永远没有。
+
+- `POST /api/execution-hosts/{id}/resync`：丢掉这台主机的控制连接，重新握手（刚升级的 Worker 在这里报新版本），再把画布注入重新同步一次（开过画布 SSH 终端的主机立刻同步并重开中继；没开过的只清掉「待升级」记号）。答复与 `GET …/{id}` 同形。不存在 404 `not_found`；没配 Worker 501 `unsupported`；连不上或握手失败按远端的错误码答（如 503 `unavailable`）。权限与其余执行主机写路由相同（`settings:write`）。
+- `GET /api/agents/{id}/integration` 多一个 `outdatedHosts: [{ hostId, name?, version? }]`：舰队判为过旧的主机，加上注入同步时 Worker 只有 `remote.integration.v1` 的主机（§13.4），按主机 id 去重排序。每个 CLI 的集成状态给的是同一份表；没有远端域的 core 不给这个字段。`GET /api/agents` 的行**不**带它。
 
 ## 22. 投递画面门补充
 
-预留，由 G1-3 填写。
+画面门（[投递设计](../design/agent-delivery.md) §4.3「画面门」）的判据在 `core/agent/screen-gate.ts`，「取画面 → 判定 → 退回理由」在 `core/collab/screen.ts::checkScreen`；`send`（§12）与计划投递共用这一份。线上没有新路由，变化只在理由码与判据。
+
+**计划投递**（`core/schedule/dispatch.ts`）：Agent 目标的探测在状态、半截输入、冷启动之后再过画面门；停在对话框上、或首投时看不见提示符，探测答 `busy` 并带 `reason: "TARGET_NOT_AT_PROMPT"`。运行进 `WAITING_TARGET`，`reasonCode` 记探测给的理由（没有理由仍是 `TARGET_NOT_IDLE`，理由变了跟着改写），下一拍再探；写入前的复核退回时收据是 `NOT_DISPATCHED` + `TARGET_NOT_AT_PROMPT`（其余仍是 `TARGET_NOT_READY`）。「首投」= 没有一条晚于冷启动、来自 `hook` / `extension` / `acp` 的回合结束上报（`idle` / `done` / `error`）。
+
+**判据**：
+
+- 只看最后 60 行，按位置判：对话框特征或选择菜单出现在最后一处提示符**之后**才拦；一行同时像提示符和对话框按对话框算。
+- 选择菜单（通用，id `<cli>.unrecognized-menu`）：高亮的编号选项（`❯ 1.` / `› 2.` / `> 1.`），或页脚 `Enter to confirm` / `Esc to cancel` / `enter continue · esc …` / `Press Enter to continue` / `[y/N]`。只对有画面特征的 CLI 生效。
+- 对话框特征不论 `verified` 都用；提示符特征只用 `verified: true` 的（没核实的提示符不要求，以免永远投不进去）。没有对话框、也没有核实过的提示符的 CLI 不取画面。
+
+**对话框 id**（`verified` 为真 = 对过本机安装包字符串或实际画面）：
+
+| id                                  | verified | 出处                                       |
+| ----------------------------------- | -------- | ------------------------------------------ |
+| `claude.workspace-trust`            | 是       | Claude Code 2.1.286 安装包字符串           |
+| `claude.bypass-permissions-warning` | 是       | 同上                                       |
+| `claude.auto-mode-default`          | 是       | 同上与本机画面                             |
+| `codex.folder-trust`                | 是       | Codex 0.159.3 画面、0.160.0 安装包字符串   |
+| `codex.update`                      | 是       | 两种形态：0.155.1 画面、0.160.0 「✨」横幅 |
+| `codex.hooks-review`                | 是       | Codex 0.160.0 安装包字符串                 |
+| `codex.model-migration`             | 是       | 同上                                       |
+| `codex.sign-in`                     | 是       | 同上                                       |
+| `codex.rate-limit-switch`           | 是       | 同上                                       |
+| `codex.full-access-warning`         | 是       | 同上                                       |
+| `codex.mcp-install`                 | 是       | 同上                                       |
+| `codex.database-rebuilt`            | 是       | 同上                                       |
+| `copilot.folder-trust`              | 否       | GitHub 官方文档，本机未安装                |
+| `pi.project-trust`                  | 是       | Pi 1.0.0 安装包字符串                      |
+| `omp.project-trust`                 | 否       | 按同源的 Pi 推断，本机未安装               |
+
+提示符：Claude（单独一个 `❯`、`? for shortcuts`、`(shift+tab to cycle)`）与 Codex（`›` 后面不是编号，也不是 `Waiting for startup` / `Resuming session` / `Forking session`）已核实；Copilot、Pi、OMP、OpenCode 不登记。OpenCode 官方文档没有启动对话框，整条门不跑。
 
 ## 23. 权限补充：自己创建的终端与工作流关卡
 

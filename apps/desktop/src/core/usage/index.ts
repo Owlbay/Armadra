@@ -120,7 +120,22 @@ export function install(context: CoreContext): UsageDomain {
     body: await service.copilot.state(),
   }));
 
+  // 设备流（github.com）与额度读取一起在 `usage.copilotUsage` 后面，默认关
+  // （外部服务 §9.3）。登出只删本地令牌、不联网，所以不受它管。
+  const copilotDisabled = () =>
+    service.policyAllows("copilot")
+      ? undefined
+      : {
+          status: 409,
+          body: {
+            code: "copilot_usage_disabled",
+            message: "Copilot usage is turned off in settings",
+          },
+        };
+
   router.handle("POST", "/api/usage/copilot/login", async () => {
+    const disabled = copilotDisabled();
+    if (disabled !== undefined) return disabled;
     try {
       return {
         status: 200,
@@ -142,6 +157,8 @@ export function install(context: CoreContext): UsageDomain {
   });
 
   router.handle("POST", "/api/usage/copilot/poll", async () => {
+    const disabled = copilotDisabled();
+    if (disabled !== undefined) return disabled;
     const result = await service.copilot.poll(globalThis.fetch);
     if (result.progress === "authorized") {
       // 一个新令牌该在下一次板子轮询时出现，而不是五分钟以后。
@@ -180,8 +197,9 @@ export function install(context: CoreContext): UsageDomain {
     sources: statusSources(process.env.ARMADRA_STATUS_PAGE_BASE),
   });
   router.handle("GET", "/api/usage/status", async () => {
+    // 归一化在只有旧键 `usage.statusPage` 时把它的值抄给 `statusBadges`。
     const enabled =
-      settingsDomain()?.settings.get("usage.statusPage") !== false;
+      settingsDomain()?.settings.get("usage.statusBadges") !== false;
     if (!enabled) {
       return { status: 200, body: { enabled: false, providers: [] } };
     }

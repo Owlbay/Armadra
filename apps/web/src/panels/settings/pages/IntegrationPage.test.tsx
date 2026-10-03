@@ -14,6 +14,7 @@ const mock = vi.hoisted(() => ({
   installIntegration: vi.fn(),
   uninstallIntegration: vi.fn(),
   repair: vi.fn(),
+  resync: vi.fn(),
 }));
 
 vi.mock("@/api/client", async () => {
@@ -26,6 +27,7 @@ vi.mock("@/api/client", async () => {
       installAgentIntegration: (id: string) => mock.installIntegration(id),
       uninstallAgentIntegration: (id: string) => mock.uninstallIntegration(id),
       repairAgentIntegration: (id: string) => mock.repair(id),
+      resyncExecutionHost: (id: string) => mock.resync(id),
     },
   };
 });
@@ -69,6 +71,7 @@ describe("IntegrationPage", () => {
     mock.installIntegration.mockReset();
     mock.uninstallIntegration.mockReset();
     mock.repair.mockReset();
+    mock.resync.mockReset();
   });
 
   it("lists every leftover entry before offering the repair", async () => {
@@ -289,6 +292,63 @@ describe("IntegrationPage", () => {
         ),
       ),
     ).toBeTruthy();
+  });
+
+  /**
+   * Worker 过旧的执行主机（契约 §21.2）：页首一组，每台一个徽标与「重新同步」；
+   * 同步成功后重读集成状态，徽标随之消失。
+   */
+  it("offers a resync for each execution host with an outdated Worker", async () => {
+    const base = {
+      agentId: "claude",
+      mode: "canvas",
+      hook: { installed: true, revision: 4 },
+      skill: { installed: true, revision: 12 },
+      legacy: { found: [] },
+      revision: 4,
+    };
+    mock.integration
+      .mockResolvedValueOnce({
+        ...base,
+        outdatedHosts: [{ hostId: "far", name: "Build box", version: "0.0.9" }],
+      })
+      .mockResolvedValue({ ...base, outdatedHosts: [] });
+    mock.resync.mockResolvedValue({
+      executionHostId: "far",
+      name: "Build box",
+      kind: "ssh",
+      workerConfigured: true,
+      workspaceCount: 0,
+    });
+    view();
+    expect(await screen.findByText("Build box")).toBeTruthy();
+    expect(
+      screen.getByText(
+        zh("integration.outdatedHost.version").replace("{version}", "0.0.9"),
+      ),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: zh("integration.resync") }),
+    );
+    await waitFor(() => expect(mock.resync).toHaveBeenCalledWith("far"));
+    await waitFor(() => expect(screen.queryByText("Build box")).toBeNull());
+  });
+
+  it("draws no outdated group when every Worker is current", async () => {
+    mock.integration.mockResolvedValue({
+      agentId: "claude",
+      mode: "canvas",
+      hook: { installed: true, revision: 4 },
+      skill: { installed: true, revision: 12 },
+      legacy: { found: [] },
+      revision: 4,
+      outdatedHosts: [],
+    });
+    view();
+    expect(await screen.findByText("Claude Code")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: zh("integration.resync") }),
+    ).toBeNull();
   });
 
   /**

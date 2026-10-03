@@ -37,11 +37,50 @@ export function webAsset(version) {
 }
 
 /**
+ * electron-updater 的「通道」名：桌面壳下载前设 `autoUpdater.channel` 为它。
+ *
+ * 一次发布把六个目标的产物放进同一个扁平目录，而 electron-builder 的清单名只按
+ * 平台区分——两台 macOS runner 都写 `latest-mac.yml`，两台 Windows runner 都写
+ * `latest.yml`，合并时后到的覆盖先到的。按目标起通道名，每个目标就有自己的一份。
+ */
+export function updaterChannel(target) {
+  return `latest-${target}`;
+}
+
+/**
+ * 某目标的 electron-updater 清单在发布里的文件名。
+ *
+ * 这是 electron-updater（6.8.9）对通道 `updaterChannel(target)` 自己算出的名字：
+ * `<channel><平台后缀>.yml`，macOS 后缀 `-mac`，Linux 后缀 `-linux`（非 x64 再加
+ * `-<process.arch>`），Windows 没有后缀（`providers/Provider.js::getChannelFilePrefix`）。
+ * 名字对不上，下载一步就是 404；`apps/desktop` 里有一条测试拿钉住的 electron-updater
+ * 自己的算法核对这里。
+ */
+export function updaterFeedFile(target) {
+  const [system, arch] = target.split("-");
+  const channel = updaterChannel(target);
+  if (system === "darwin") return `${channel}-mac.yml`;
+  if (system === "windows") return `${channel}.yml`;
+  if (system === "linux")
+    return `${channel}-linux${arch === "x86_64" ? "" : "-arm64"}.yml`;
+  throw new Error(`no updater feed for target ${target}`);
+}
+
+/** 每个目标一份 electron-updater 清单。 */
+export const UPDATER_FEEDS = TARGETS.map(updaterFeedFile);
+
+/** 文件名是哪个目标的 electron-updater 清单；不是清单则为 ""。 */
+export function feedTarget(name) {
+  return TARGETS.find((target) => updaterFeedFile(target) === name) ?? "";
+}
+
+/**
  * The component a published name declares. A name that follows no convention
  * declares none, and nothing matches it.
  */
 export function assetComponent(name) {
   if (MANIFEST_ASSETS.includes(name)) return "manifest";
+  if (feedTarget(name) !== "") return "manifest";
   const separator = name.indexOf("_");
   if (separator < 0) return "";
   const prefixes = { Armadra: "desktop", "armadra-web": "web" };

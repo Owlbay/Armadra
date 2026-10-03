@@ -25,6 +25,7 @@
 
 import { runBrowser, runCanvas, runContext } from "./control.js";
 import { run as runCredential } from "./credential.js";
+import { run as runAmaKeys } from "./ama-keys.js";
 import { run as runDoctor } from "./doctor.js";
 import { run as runHook } from "./hook.js";
 import { run as runMcp } from "./mcp.js";
@@ -65,8 +66,9 @@ export async function main(argv: string[]): Promise<number> {
       // The canvas tools as an MCP server on stdio, for ACP sessions (§5.8).
       return runMcp(argv.slice(1));
     case "credential":
-      // Internal: the canvas launcher's credential exchange (contract §20.4).
-      return runCredential();
+      // Internal: the canvas launcher's credential exchange (contract §20.4);
+      // `--ama` is `run/ama`'s model keys (§12.4).
+      return argv[1] === "--ama" ? runAmaKeys() : runCredential();
     default:
       break;
   }

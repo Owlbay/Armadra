@@ -751,7 +751,7 @@ async function main() {
     { timeout: 120_000, interval: 1000 },
   );
   check(
-    "Codex 没有停在升级或 Hook 审查提示上（画布注入的 Hook 已被信任）",
+    "Codex 没有停在升级或 Hook 审查提示上（画布内带 --dangerously-bypass-hook-trust，不靠信任记录）",
     stuck === undefined,
     stuck,
   );

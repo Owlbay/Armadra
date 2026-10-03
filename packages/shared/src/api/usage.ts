@@ -52,6 +52,8 @@ export const usageProviderSchema = z.object({
    * `status: "error"` 的原因代码（Runtime `UsageFailure`：`expired_credentials`、
    * `network`、`unauthorized` …）。只有代码，没有上游文本；新 Runtime 可能多出
    * 前端还不认识的值，所以是字符串而不是枚举，前端认不出的按通用原因显示。
+   * `status: "unavailable"` 也可能带两个原因：`policy_off`（借用登录令牌的
+   * 额度端点按出站政策默认关，外部服务 §9.3）、`unsupported`（端点答了网页）。
    */
   reason: z.string().optional(),
   credentialSource: usageCredentialSourceSchema,

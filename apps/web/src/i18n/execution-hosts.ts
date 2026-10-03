@@ -31,6 +31,12 @@ export const executionHosts: MessageModule = {
     "executionHosts.importFailed": "导入失败",
     "executionHosts.importInvalid": "不是导出的 JSON",
     "executionHosts.packageNote": "不含密码或密钥",
+    "executionHosts.worker.version": "Worker {version}", // i18n-exempt
+    "executionHosts.worker.outdated": "Worker 待升级",
+    "executionHosts.resync": "重新同步",
+    "executionHosts.resyncing": "同步中",
+    "executionHosts.resynced": "已重新同步 {name}",
+    "executionHosts.resyncFailed": "重新同步失败",
 
     "executionHosts.current": "当前工作区",
     "executionHosts.switch": "切换",
@@ -83,6 +89,12 @@ export const executionHosts: MessageModule = {
     "executionHosts.importFailed": "Import failed",
     "executionHosts.importInvalid": "Not an exported package",
     "executionHosts.packageNote": "No password or key travels",
+    "executionHosts.worker.version": "Worker {version}",
+    "executionHosts.worker.outdated": "Worker outdated",
+    "executionHosts.resync": "Resync",
+    "executionHosts.resyncing": "Resyncing",
+    "executionHosts.resynced": "Resynced {name}",
+    "executionHosts.resyncFailed": "Resync failed",
 
     "executionHosts.current": "This workspace",
     "executionHosts.switch": "Switch",

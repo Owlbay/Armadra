@@ -49,7 +49,7 @@ import { install as installDependencies } from "./dependencies";
 import { install as installGit } from "./git";
 import { install as installAcp } from "./acp";
 import { install as installWorkflow } from "./workflow";
-import { install as installRealtime } from "./realtime";
+import { install as installRealtime, realtimeDomain } from "./realtime";
 import { install as installPush } from "./push";
 import { gatewayDomainOf, install as installGateway } from "./gateway";
 
@@ -291,6 +291,7 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
   // singleton, so a second core started in the same process would otherwise be
   // the one this core stops.
   const language = languageDomain();
+  const realtime = realtimeDomain();
 
   // Step 3.
   const listeners: { server: Server; spec: ListenSpec }[] = [];
@@ -334,6 +335,15 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
       log.warn("could not stop the gateway", { error: describe(error) });
     }
     await server.close();
+    // 实时板：活动文档物化、写快照。更新早已逐条落库，这一步只是让表与快照
+    // 在退出时追平，下次启动不必重放。
+    try {
+      realtime?.stop();
+    } catch (error) {
+      log.warn("could not settle the realtime boards", {
+        error: describe(error),
+      });
+    }
     // Language servers are child processes of this one, and nothing else ends
     // them: a core that exits without this leaves one running per workspace it
     // opened. They are also the only domain that holds an OS resource outside

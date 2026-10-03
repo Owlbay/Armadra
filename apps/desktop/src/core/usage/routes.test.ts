@@ -24,6 +24,7 @@ import { EventBus } from "../bus";
 import { openDatabase, type OpenedDatabase } from "../db/open";
 import { CoreServer } from "../http/server";
 import { createLog, nodePlatform } from "../platform";
+import { install as installSettings, settingsDomain } from "../settings";
 import { install } from "./index";
 import { readTokenFile } from "./secret-store";
 
@@ -122,14 +123,18 @@ async function harness(): Promise<Harness> {
     bus: new EventBus(),
     version: "0.0.0-test",
   });
-  const domain = install({
+  const context = {
     dataDir,
     db: opened,
     server,
     bus: new EventBus(),
     platform,
     log: createLog("error"),
-  });
+  };
+  // 设备流在 `usage.copilotUsage` 后面（默认关）；这组用例走的是打开之后的路。
+  installSettings(context);
+  settingsDomain()!.settings.patch({ usage: { copilotUsage: true } });
+  const domain = install(context);
   const listener = server.createListener();
   await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
   const port = (listener.address() as AddressInfo).port;
@@ -275,6 +280,31 @@ describe("用量的九条路由", () => {
     const result = await json("/api/usage/copilot/poll", "POST");
     expect(result.progress).toBe("expired");
     expect(result.pending).toBeUndefined();
+  });
+
+  it("copilotUsage 关着时设备流不联网，答 409；登出照常", async () => {
+    settingsDomain()!.settings.patch({ usage: { copilotUsage: false } });
+    for (const path of [
+      "/api/usage/copilot/login",
+      "/api/usage/copilot/poll",
+    ]) {
+      const response = await fetch(`${state.base}${path}`, { method: "POST" });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        code: "copilot_usage_disabled",
+      });
+    }
+    expect(state.oauth.requests).toEqual([]);
+    const out = await json("/api/usage/copilot/logout", "POST");
+    expect(out.signedIn).toBe(false);
+  });
+
+  it("状态徽标读 usage.statusBadges，关着时一个请求都不发", async () => {
+    settingsDomain()!.settings.patch({ usage: { statusBadges: false } });
+    expect(await json("/api/usage/status")).toEqual({
+      enabled: false,
+      providers: [],
+    });
   });
 
   it("重新打开的设置页继续显示用户正在敲的那个码", async () => {

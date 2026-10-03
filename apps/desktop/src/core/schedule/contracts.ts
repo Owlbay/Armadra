@@ -32,6 +32,11 @@ export type TargetState =
 export interface TargetStatus {
   readonly state: TargetState;
   readonly generation: number;
+  /**
+   * `busy` 的具体理由，进运行的 `reasonCode`。缺席时内核记 `TARGET_NOT_IDLE`；
+   * 画面门退回时是 `TARGET_NOT_AT_PROMPT`（契约 §22）。
+   */
+  readonly reason?: string;
 }
 
 /** 一次探测允许做什么。 */
