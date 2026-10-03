@@ -6,13 +6,13 @@ import { useT } from "../../../../app/preferences-store";
 import { Button } from "../../../../ui/button";
 import { Input } from "../../../../ui/input";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../../../../ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "../../../ResponsiveDialog";
 import { ReadError } from "../../forms";
 import { redactRemoteUrl } from "../../actions/refs";
 import type { NamePrompt, NamePromptValue, StashDiffTarget } from "./context";
@@ -70,21 +70,23 @@ export function NamePromptDialog({
   };
 
   return (
-    <Dialog
+    <ResponsiveDialog
       open={prompt !== null}
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
     >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t(promptTitleKey(prompt))}</DialogTitle>
+      <ResponsiveDialogContent>
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {t(promptTitleKey(prompt))}
+          </ResponsiveDialogTitle>
           {prompt?.reference && (
-            <DialogDescription className="break-all font-mono">
+            <ResponsiveDialogDescription className="break-all font-mono">
               {prompt.reference}
-            </DialogDescription>
+            </ResponsiveDialogDescription>
           )}
-        </DialogHeader>
+        </ResponsiveDialogHeader>
         {fields.name && (
           <Input
             value={value.name}
@@ -144,13 +146,13 @@ export function NamePromptDialog({
             {prompt.oid.slice(0, 12)}
           </p>
         )}
-        <DialogFooter>
+        <ResponsiveDialogFooter>
           <Button disabled={!action} onClick={submit}>
             {t("gitRepo.confirm")}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 
@@ -186,19 +188,21 @@ export function StashDiffDialog({
       ].filter((section) => section.patch.trim() !== "")
     : [];
   return (
-    <Dialog
+    <ResponsiveDialog
       open={target !== null}
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
     >
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>{t("gitLog.stash.diffTitle")}</DialogTitle>
-          <DialogDescription className="break-all font-mono">
+      <ResponsiveDialogContent className="max-w-3xl">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {t("gitLog.stash.diffTitle")}
+          </ResponsiveDialogTitle>
+          <ResponsiveDialogDescription className="break-all font-mono">
             {target?.oid.slice(0, 12)}
-          </DialogDescription>
-        </DialogHeader>
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
         {detail.isPending && target && (
           <p role="status" className="text-xs">
             {t("gitRepo.loading")}
@@ -223,7 +227,7 @@ export function StashDiffDialog({
             </pre>
           </section>
         ))}
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

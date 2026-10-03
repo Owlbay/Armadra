@@ -9,12 +9,12 @@ import { useT } from "../app/preferences-store";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "./ResponsiveDialog";
 import { Input } from "@/ui/input";
 import { Progress } from "@/ui/progress";
 
@@ -149,11 +149,11 @@ export function CloneRepoDialog({
   const ready = url.trim().length > 0 && parent.trim().length > 0;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="z-[var(--z-dialog)]">
-        <DialogHeader>
-          <DialogTitle>{t("launcher.clone")}</DialogTitle>
-        </DialogHeader>
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent className="z-[var(--z-dialog)]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{t("launcher.clone")}</ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
 
         {/* 分组卡片：标签左 / 控件右（§24.2「分组表单」） */}
         <div className="grid grid-cols-[72px_1fr] items-center gap-x-3 gap-y-3 rounded-[var(--r-card)] border border-border bg-[var(--card)] p-4">
@@ -214,7 +214,7 @@ export function CloneRepoDialog({
           </Badge>
         )}
 
-        <DialogFooter>
+        <ResponsiveDialogFooter>
           <Button
             variant="ghost"
             onClick={() => {
@@ -230,8 +230,8 @@ export function CloneRepoDialog({
           >
             {t("clone.start")}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

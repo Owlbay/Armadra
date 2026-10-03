@@ -4,6 +4,7 @@ import type { GitLogCommit } from "@armadra/shared";
 
 import { useT, usePreferencesStore } from "../../../app/preferences-store";
 import { cn } from "../../../lib/cn";
+import { Button } from "../../../ui/button";
 import {
   LANE_WIDTH,
   MAX_LANES,
@@ -351,17 +352,18 @@ function UncommittedRow({
 }) {
   const t = useT();
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       aria-pressed={selected}
       onClick={onSelect}
       style={{ height, paddingLeft: gutter }}
-      className="flex w-full min-w-0 items-center gap-2 pr-3 text-left text-xs italic text-muted-foreground hover:bg-muted aria-pressed:bg-muted"
+      className="h-auto justify-start rounded-none border-0 font-normal active:not-aria-[haspopup]:translate-y-0 w-full min-w-0 gap-2 pr-3 text-left text-xs italic text-muted-foreground hover:bg-muted aria-pressed:bg-muted"
     >
       <span className="min-w-0 flex-1 truncate">
         {t("gitLog.table.uncommitted")}
       </span>
-    </button>
+    </Button>
   );
 }
 
@@ -390,14 +392,15 @@ function CommitRow({
 }) {
   const badges = useMemo(() => refBadges(commit.refs), [commit.refs]);
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       aria-pressed={selected}
       data-commit={commit.oid}
       onClick={onSelect}
       style={{ height, paddingLeft: gutter }}
       className={cn(
-        "relative flex w-full min-w-0 items-center gap-2 pr-3 text-left text-xs hover:bg-muted aria-pressed:bg-muted",
+        "h-auto justify-start rounded-none border-0 font-normal active:not-aria-[haspopup]:translate-y-0 relative w-full min-w-0 gap-2 pr-3 text-left text-xs hover:bg-muted aria-pressed:bg-muted",
         mine && "font-medium text-foreground",
       )}
     >
@@ -447,6 +450,6 @@ function CommitRow({
           {commit.oid.slice(0, 7)}
         </span>
       )}
-    </button>
+    </Button>
   );
 }

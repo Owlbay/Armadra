@@ -15,6 +15,7 @@ import {
 } from "../lib/usage";
 import { useCanvasStore } from "../store/canvas-store";
 import { useCompactLayout } from "../platform/layout";
+import { Button } from "@/ui/button";
 import { IconButton } from "@/ui/icon-button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui/tooltip";
 
@@ -143,14 +144,16 @@ export function ClusterUsage() {
   return (
     <Tooltip delayDuration={500}>
       <TooltipTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-sm"
           data-slot="cluster-usage"
           data-level={ringLevel ?? "none"}
           aria-label={t("usage.dockLabel", { value: detail })}
           aria-pressed={usagePanel !== "closed"}
           onClick={open}
-          className="grid size-7 shrink-0 place-items-center rounded-full p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="grid size-7 place-items-center rounded-full p-0"
           style={
             {
               "--pct": percent ?? 0,
@@ -165,7 +168,7 @@ export function ClusterUsage() {
           <span className="grid size-[22px] place-items-center rounded-full bg-panel text-[length:var(--text-caption)] leading-none font-medium tabular-nums text-foreground">
             {percent === null ? "—" : Math.round(percent)}
           </span>
-        </button>
+        </Button>
       </TooltipTrigger>
       <TooltipContent side="left">{detail}</TooltipContent>
     </Tooltip>

@@ -11,12 +11,12 @@ import { useEffect, useState } from "react";
 import { useT } from "../app/preferences-store";
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "./ResponsiveDialog";
 import { Input } from "@/ui/input";
 
 export interface FileEntryDialogProps {
@@ -54,11 +54,11 @@ export function FileEntryDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="z-[var(--z-dialog)]">
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-        </DialogHeader>
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent className="z-[var(--z-dialog)]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{title}</ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -80,7 +80,7 @@ export function FileEntryDialog({
               confirm();
             }}
           />
-          <DialogFooter className="mt-4">
+          <ResponsiveDialogFooter className="mt-4">
             <Button
               type="button"
               variant="ghost"
@@ -91,9 +91,9 @@ export function FileEntryDialog({
             <Button type="submit" disabled={!ready || pending}>
               {confirmLabel}
             </Button>
-          </DialogFooter>
+          </ResponsiveDialogFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
