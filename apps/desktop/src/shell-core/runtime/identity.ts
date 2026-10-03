@@ -249,7 +249,9 @@ export function staleRuntimeRecord(
     address.kind === "socket"
       ? record.socket === address.path
       : address.kind === "pipe"
-        ? record.pipe === address.name
+        ? // The core publishes the full `\\.\pipe\<name>` (core/main.ts).
+          record.pipe === address.name ||
+          record.pipe === `\\\\.\\pipe\\${address.name}`
         : record.http === `http://${address.authority}`;
   if (!holds) {
     return {

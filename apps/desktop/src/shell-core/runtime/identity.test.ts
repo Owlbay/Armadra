@@ -153,6 +153,31 @@ describe("the published endpoint record", () => {
     expect(staleRuntimeRecord("not json", address).ok).toBe(false);
   });
 
+  it("matches a Windows record by its pipe, as the core publishes it", () => {
+    const pipe = {
+      kind: "pipe",
+      name: "armadra-runtime-0123456789abcdef",
+    } as const;
+    const record = (published: string) =>
+      JSON.stringify({ runtime: { processId: 4242, pipe: published } });
+    // core/main.ts writes the full `\\.\pipe\<name>`.
+    expect(
+      staleRuntimeRecord(
+        record("\\\\.\\pipe\\armadra-runtime-0123456789abcdef"),
+        pipe,
+      ).ok,
+    ).toBe(true);
+    expect(
+      staleRuntimeRecord(record("armadra-runtime-0123456789abcdef"), pipe).ok,
+    ).toBe(true);
+    expect(
+      staleRuntimeRecord(
+        record("\\\\.\\pipe\\armadra-runtime-ffffffffffffffff"),
+        pipe,
+      ).ok,
+    ).toBe(false);
+  });
+
   it("yields the bases the page should use", () => {
     expect(
       publishedRuntimeBases(

@@ -42,6 +42,7 @@ import {
   findLaunchExe,
   shimTargetFor,
   windowsLauncherFiles,
+  configuredLaunchExe,
   windowsShimPath,
   writeWindowsLauncherFiles,
 } from "./windows-launcher";
@@ -699,9 +700,7 @@ function launchExeOf(
   options: InjectionOptions,
   env: NodeJS.ProcessEnv,
 ): string | undefined {
-  const override = options.launchExe ?? env.ARMADRA_LAUNCH_EXE;
-  if (override === undefined) return findLaunchExe();
-  return isFile(override) ? override : undefined;
+  return configuredLaunchExe(env, options.launchExe);
 }
 
 /**
