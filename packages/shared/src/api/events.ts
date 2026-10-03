@@ -25,6 +25,11 @@ import {
 } from "./language.js";
 import { resourceSnapshotSchema } from "./resources.js";
 import { sshPromptSchema } from "./ssh.js";
+import {
+  workflowDraftEventSchema,
+  workflowGateEventSchema,
+  workflowRunEventSchema,
+} from "./workflows.js";
 
 /** `WS /api/workspaces/{id}/events` — plan §5.4 / §7. */
 export const workspaceEventSchema = z.discriminatedUnion("type", [
@@ -226,6 +231,10 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
     size: z.number().int().nonnegative().nullish(),
     mtime: z.string().nullish(),
   }),
+  /** Workflow drafts, runs and gates (contract §15.4). */
+  workflowDraftEventSchema,
+  workflowRunEventSchema,
+  workflowGateEventSchema,
 ]);
 
 export type FileChangedEvent = Extract<
