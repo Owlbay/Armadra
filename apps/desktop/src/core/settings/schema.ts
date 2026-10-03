@@ -21,7 +21,7 @@ import {
   MFA_REQUIRE_CHOICES,
   OAUTH_PROVIDER_KINDS,
   PASSWORD_MIN_LENGTH_RANGE,
-  PUSH_TRANSPORTS,
+  PUSH_TRANSPORT_CHOICES,
 } from "./completion-settings";
 import { normalizeCustomAgents } from "./custom-agents";
 import { clone, isJsonObject, type JsonObject, type JsonValue } from "./local";
@@ -287,7 +287,11 @@ function normalizeGateway(document: JsonObject): void {
 function normalizePush(document: JsonObject): void {
   const defaults = COMPLETION_SETTINGS_DEFAULTS.push;
   const push = section(document, "push");
-  push.transport = choice(push.transport, PUSH_TRANSPORTS, defaults.transport);
+  push.transport = choice(
+    push.transport,
+    PUSH_TRANSPORT_CHOICES,
+    defaults.transport,
+  );
   push.relayUrl = shortText(push.relayUrl);
   const apns = section(push, "apns");
   apns.keyFile = fileText(apns.keyFile);
@@ -467,7 +471,7 @@ export interface CompletionSettings {
     };
   };
   readonly push: {
-    readonly transport: Choice<typeof PUSH_TRANSPORTS>;
+    readonly transport: Choice<typeof PUSH_TRANSPORT_CHOICES>;
     readonly relayUrl: string;
     readonly apns: {
       readonly keyFile: string;

@@ -20,7 +20,7 @@ export const GATEWAY_TLS_SOURCES = ["localCa", "file", "acme"] as const;
  * `push.transport`：原生 App 的推送走哪条路（Web Push 走 `push.webpush`，与它
  * 无关）。`log` = 没配置，只写 debug 日志、接口照常答 `queued`。
  */
-export const PUSH_TRANSPORTS = ["log", "direct", "relay"] as const;
+export const PUSH_TRANSPORT_CHOICES = ["log", "direct", "relay"] as const;
 /**
  * `identity.breachCheck`。`auto` = 服务器壳与开了 Gateway 的桌面按 `warn`，
  * 其余按 `off`（架构 §8.3）；具体判定在身份域。

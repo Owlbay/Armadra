@@ -9,7 +9,7 @@ import {
   MFA_REQUIRE_CHOICES,
   OAUTH_PROVIDER_KINDS,
   PASSWORD_MIN_LENGTH_RANGE,
-  PUSH_TRANSPORTS,
+  PUSH_TRANSPORT_CHOICES,
   UPDATE_CHANNEL_CHOICES,
 } from "../completion-settings.js";
 
@@ -114,7 +114,7 @@ export const gatewaySettingsSchema = z.looseObject({
 
 export const pushSettingsSchema = z.looseObject({
   transport: z
-    .enum(PUSH_TRANSPORTS)
+    .enum(PUSH_TRANSPORT_CHOICES)
     .catch(D.push.transport)
     .default(D.push.transport),
   relayUrl: shortSetting.default(""),
