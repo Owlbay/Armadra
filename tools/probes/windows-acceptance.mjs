@@ -834,9 +834,12 @@ async function runFull(options, result, record, out) {
       );
     }
     const launcherRuns = {};
-    if (!launcherReady) {
-      record.skip("launcher.dialects", "包里没有 armadra-launch.exe");
-      record.skip("launcher.credential", "包里没有 armadra-launch.exe");
+    if (!launcherReady || sessions.length === 0) {
+      const reason = launcherReady
+        ? "没有起来的终端"
+        : "包里没有 armadra-launch.exe";
+      record.skip("launcher.dialects", reason);
+      record.skip("launcher.credential", reason);
     } else {
       for (const session of sessions) {
         const { dialect } = session;
@@ -1134,93 +1137,105 @@ async function runFull(options, result, record, out) {
     }
 
     say("重启存活");
-    await record.check("restart.survives", async () => {
-      const shellPids = sessions.map((session) => session.pid).filter(Boolean);
-      await app.kill();
-      await sleep(3_000);
-      const hostAlive = hostPid ? alive(hostPid) : false;
-      const shellsAlive = shellPids.every(alive);
-      const leftovers = appProcesses(exe)
-        .filter((row) => row.pid !== hostPid)
-        .map((row) => row.pid);
-      await app.start();
-      const back = {};
-      for (const session of sessions) {
-        const row = await app.api("GET", `/api/terminals/${session.id}`);
-        const marker = `ACC-back-${session.dialect}-${randomBytes(3).toString("hex")}-OK`;
-        const typed = await app.terminal(
-          session.id,
-          [`${markerLine(session.dialect, marker)}\r`],
-          marker,
-          45_000,
-        );
-        back[session.dialect] = {
-          status: row.body?.status ?? null,
-          samePid: row.body?.pid === session.pid,
-          echoed: typed.ok,
+    if (sessions.length === 0)
+      record.skip("restart.survives", "没有起来的终端");
+    else
+      await record.check("restart.survives", async () => {
+        const shellPids = sessions
+          .map((session) => session.pid)
+          .filter(Boolean);
+        await app.kill();
+        await sleep(3_000);
+        const hostAlive = hostPid ? alive(hostPid) : false;
+        const shellsAlive = shellPids.every(alive);
+        const leftovers = appProcesses(exe)
+          .filter((row) => row.pid !== hostPid)
+          .map((row) => row.pid);
+        await app.start();
+        const back = {};
+        for (const session of sessions) {
+          const row = await app.api("GET", `/api/terminals/${session.id}`);
+          const marker = `ACC-back-${session.dialect}-${randomBytes(3).toString("hex")}-OK`;
+          const typed = await app.terminal(
+            session.id,
+            [`${markerLine(session.dialect, marker)}\r`],
+            marker,
+            45_000,
+          );
+          back[session.dialect] = {
+            status: row.body?.status ?? null,
+            samePid: row.body?.pid === session.pid,
+            echoed: typed.ok,
+          };
+        }
+        return {
+          ok:
+            hostAlive &&
+            shellsAlive &&
+            Object.values(back).every(
+              (entry) => entry.status === "running" && entry.echoed,
+            ),
+          warn: leftovers.length > 0,
+          detail: {
+            hostAlive,
+            shellsAlive,
+            leftoversAfterKill: leftovers,
+            back,
+          },
         };
-      }
-      return {
-        ok:
-          hostAlive &&
-          shellsAlive &&
-          Object.values(back).every(
-            (entry) => entry.status === "running" && entry.echoed,
-          ),
-        warn: leftovers.length > 0,
-        detail: { hostAlive, shellsAlive, leftoversAfterKill: leftovers, back },
-      };
-    });
+      });
 
     say("ConPTY 关闭");
-    await record.check("conpty.close", async () => {
-      const consolesBefore = hostPid
-        ? childrenOf(hostPid).filter((row) =>
-            /^(conhost|OpenConsole)\.exe$/i.test(row.name),
-          )
-        : [];
-      const detail = { consolesBefore: consolesBefore.length, sessions: {} };
-      for (const session of sessions) {
-        const answer = await app.api(
-          "POST",
-          `/api/terminals/${session.id}/terminate`,
-          {
-            mode: "session",
-          },
-        );
-        let gone = false;
-        try {
-          await waitFor(
-            `${session.dialect} 的 shell 退出`,
-            () => !alive(session.pid),
-            {
-              timeout: 20_000,
-            },
-          );
-          gone = true;
-        } catch {
-          gone = false;
-        }
-        detail.sessions[session.dialect] = {
-          status: answer.status,
-          shellGone: gone,
-        };
-      }
-      await sleep(2_000);
-      const consolesAfter =
-        hostPid && alive(hostPid)
+    if (sessions.length === 0) record.skip("conpty.close", "没有起来的终端");
+    else
+      await record.check("conpty.close", async () => {
+        const consolesBefore = hostPid
           ? childrenOf(hostPid).filter((row) =>
               /^(conhost|OpenConsole)\.exe$/i.test(row.name),
             )
           : [];
-      detail.consolesAfter = consolesAfter.length;
-      return {
-        ok:
-          Object.values(detail.sessions).every((entry) => entry.shellGone) &&
-          consolesAfter.length === 0,
-        detail,
-      };
-    });
+        const detail = { consolesBefore: consolesBefore.length, sessions: {} };
+        for (const session of sessions) {
+          const answer = await app.api(
+            "POST",
+            `/api/terminals/${session.id}/terminate`,
+            {
+              mode: "session",
+            },
+          );
+          let gone = false;
+          try {
+            await waitFor(
+              `${session.dialect} 的 shell 退出`,
+              () => !alive(session.pid),
+              {
+                timeout: 20_000,
+              },
+            );
+            gone = true;
+          } catch {
+            gone = false;
+          }
+          detail.sessions[session.dialect] = {
+            status: answer.status,
+            shellGone: gone,
+          };
+        }
+        await sleep(2_000);
+        const consolesAfter =
+          hostPid && alive(hostPid)
+            ? childrenOf(hostPid).filter((row) =>
+                /^(conhost|OpenConsole)\.exe$/i.test(row.name),
+              )
+            : [];
+        detail.consolesAfter = consolesAfter.length;
+        return {
+          ok:
+            Object.values(detail.sessions).every((entry) => entry.shellGone) &&
+            consolesAfter.length === 0,
+          detail,
+        };
+      });
   };
 
   const teardown = async () => {
