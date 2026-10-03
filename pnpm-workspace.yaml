@@ -3,6 +3,7 @@ packages:
   - apps/desktop
   - apps/server
   - apps/push-relay
+  - apps/mobile
   - packages/*
 
 allowBuilds:

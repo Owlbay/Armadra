@@ -31,3 +31,12 @@ apps/desktop/release/
 # 本地 dev-stack 生成的开发密钥与挂载目录（tools/dev-stack/dev-stack.mjs 首次 up 时生成）
 tools/dev-stack/.data/
 target-main/
+
+# 手机壳：拷进来的页面产物与 Swift 包的构建目录（apps/mobile/scripts/prepare-web.mjs）
+apps/mobile/www/
+apps/mobile/ios/App/App/public/
+apps/mobile/ios/capacitor-cordova-ios-plugins/
+apps/mobile/android/app/src/main/assets/public/
+apps/mobile/android/capacitor-cordova-android-plugins/
+apps/mobile/ios/ArmadraNativeKit/.build/
+apps/mobile/ios/ArmadraNativeKit/.swiftpm/
