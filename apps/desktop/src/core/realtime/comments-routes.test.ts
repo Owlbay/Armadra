@@ -11,6 +11,7 @@ import {
 } from "../identity/gate";
 import { IdentityStore } from "../identity/store";
 import type { ShareRole } from "../identity/roles";
+import { TriggerRules } from "../push/triggers";
 import { type Fixture, fixture } from "../workspaces/fixture";
 import { createWorkspace } from "../workspaces/table";
 import {
@@ -232,6 +233,17 @@ describe("评论路由（契约 §16.3）", () => {
       mentions: [VIEWER],
     });
     expect(JSON.stringify(event)).not.toContain("看看");
+    // 推送域的规则直接认这条事件：叫被提及的人，深链到锚定的节点。
+    const draft = new TriggerRules().draft(
+      workspace,
+      event!.event as unknown as Parameters<TriggerRules["draft"]>[1],
+    );
+    expect(draft).toMatchObject({
+      kind: "comment",
+      workspaceId: workspace,
+      nodeId: "n9",
+      principals: [VIEWER],
+    });
 
     // 改正文只叫新加的人。
     const id = (created.body as { id: string }).id;
