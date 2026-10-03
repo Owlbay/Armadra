@@ -339,7 +339,7 @@ CSRF 与 Origin 校验（[服务器账号、中转与共享](../design/server-ac
 | 画布启动器与垫片    | `<数据目录>/integration/run/<cli>`、`shims/<cli>`、`launcher.json`（Windows 为 `.exe` + `.launch`） | —                                               |
 | Hook 客户端启动器   | `<数据目录>/bin/armadra-hook`（Windows 为 `.exe`，兜底 `.cmd`）                                     | —                                               |
 | 随包 ama 启动器     | `<数据目录>/bin/ama`（Windows 为 `armadra-hook.exe` 的拷贝 `ama.exe` + `ama.launch`）               | `ARMADRA_AMA_BUNDLE`、`ARMADRA_AMA_HOST`        |
-| ama 的密钥文件      | `<数据目录>/integration/ama/auth.json`（0600，每次画布启动前由 core 写；不是注入产物）              | —                                               |
+| ama 的模型密钥      | 只在密钥后端（`armadra-ama-<供应商>`）；`run/ama` 凭节点 token 经 hook 通道兑换、只设给 ama 进程    | —                                               |
 | 账号偏好            | `<数据目录>/settings.json`                                                                          | —                                               |
 | 本机偏好            | `<数据目录>/worker-settings.json`                                                                   | —                                               |
 | 模型目录缓存        | `<数据目录>/models-catalog.json`（0600）                                                            | —                                               |
