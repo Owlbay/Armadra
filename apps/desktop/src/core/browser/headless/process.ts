@@ -72,9 +72,14 @@ export function chromiumArgs(options: LaunchOptions): string[] {
 export const spawnChromium: Launcher = (options) => {
   mkdirSync(options.profileDir, { recursive: true, mode: 0o700 });
   const child = spawn(options.executable, chromiumArgs(options), {
-    // 0/1/2 as usual, then the CDP pair. `ignore` on stdin because Chromium
-    // reads nothing, `pipe` on stderr so a launch failure has a message.
-    stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
+    // 0/1/2 as usual, then the CDP pair. stderr is `ignore`, not an unread
+    // `pipe`: nobody read that pipe, so once Chromium had logged enough to fill
+    // it, its next log line blocked — every thread that logs stops, the CDP
+    // pipe's included, and the first command timed out (`Target.
+    // setDiscoverTargets did not answer in time`, on a Windows runner). What
+    // Chromium logs can carry page URLs and console text, which do not belong
+    // in the core's log either; a launch failure is reported by the exit.
+    stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
     // Not detached: the browser belongs to this process's group, so a signal
     // that ends the core ends it too.
     detached: false,
