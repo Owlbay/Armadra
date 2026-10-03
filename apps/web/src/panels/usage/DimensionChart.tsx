@@ -5,6 +5,7 @@ import { Area, AreaChart, ReferenceLine, XAxis } from "recharts";
 
 import { useT } from "../../app/preferences-store";
 import { ColorDot } from "@/ui/color-dot";
+import { Toggle } from "@/ui/toggle";
 import {
   ChartContainer,
   ChartTooltip,
@@ -139,17 +140,16 @@ export function DimensionChart({
       )}
       <div className="flex flex-col gap-0.5">
         {series.map((item) => (
-          <button
+          <Toggle
             key={item.key}
-            type="button"
             data-slot="usage-legend-item"
             data-series={item.key}
             data-dimmed={focused !== null && focused !== item.key}
-            aria-pressed={focused === item.key}
-            onClick={() =>
+            pressed={focused === item.key}
+            onPressedChange={() =>
               setFocused((current) => (current === item.key ? null : item.key))
             }
-            className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-xs transition-opacity hover:bg-muted data-[dimmed=true]:opacity-40"
+            className="h-auto min-w-0 justify-start gap-1.5 rounded-md px-1 py-0.5 text-left text-xs font-normal transition-opacity data-[dimmed=true]:opacity-40"
           >
             <ColorDot color={item.color} size={8} />
             <span className="min-w-0 flex-1 truncate" title={item.label}>
@@ -160,7 +160,7 @@ export function DimensionChart({
                 value: sum > 0 ? Math.round((share(item) / sum) * 100) : 0,
               })}
             </span>
-          </button>
+          </Toggle>
         ))}
       </div>
       {noteBelow}
