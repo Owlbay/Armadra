@@ -173,8 +173,8 @@ Rust↔Go 的归档互通，以及需要受管二进制路径的 `agent:smoke` /
 
 Windows 特有的部分（ConPTY、会话宿主与命名管道、`armadra-launch.exe` 在 cmd / pwsh 7 / Windows
 PowerShell 5.1 里的读法、DPAPI、NSIS 安装与卸载）由 `tools/probes/windows-acceptance.mjs` 一键走完，
-写出一份 `result.json`。它只用 Node 22 自带的东西，可以只把 `windows-acceptance.mjs` 与
-`windows-acceptance-lib.mjs` 两个文件拷到 Windows 机器上。
+写出一份 `result.json`。它只用 Node 22 自带的东西，可以只把 `tools/probes/` 下的 `windows-acceptance.mjs`、
+`windows-acceptance-lib.mjs` 与 `probe-home.mjs` 三个文件拷到 Windows 机器上（数据目录、HOME 与凭据变量的隔离同其他探针）。
 
 **要准备的**：一台 Windows 10 22H2 / 11（x64 或 arm64）、Node 22+、要验的安装包
 （`pnpm --filter @armadra/desktop dist` 在 Windows 上打出的 `Armadra-Setup-<版本>-<架构>.exe`，或 Release

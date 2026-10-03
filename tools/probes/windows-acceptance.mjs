@@ -4,7 +4,7 @@
 // 状态 → 文件监听 → 保活 → 重启存活 → ConPTY 关闭 → 卸载」，把每一项写进
 // `result.json`。人跑一次、把这个文件贴回来，就是一次 C 档验收的记录。
 //
-// 用法（Node 22+，不依赖仓库里的包：只拷本文件与 windows-acceptance-lib.mjs 两个文件过去也能跑）：
+// 用法（Node 22+，不依赖仓库里的包：只拷本文件、windows-acceptance-lib.mjs 与 probe-home.mjs 三个文件过去也能跑）：
 //
 //   node windows-acceptance.mjs --installer Armadra-Setup-0.1.0-x64.exe
 //   node windows-acceptance.mjs --app "C:\Users\me\AppData\Local\Programs\Armadra\Armadra.exe"
@@ -71,6 +71,7 @@ import {
   summarize,
   userConfigTargets,
 } from "./windows-acceptance-lib.mjs";
+import { isolatedEnv, probeHome } from "./probe-home.mjs";
 
 export * from "./windows-acceptance-lib.mjs";
 
@@ -482,12 +483,9 @@ class App {
         `--user-data-dir=${this.userDataDir}`,
       ],
       {
-        env: {
-          ...process.env,
-          ARMADRA_DATA_DIR: this.dataDir,
-          USERPROFILE: this.home,
-          HOME: this.home,
-        },
+        // 临时 HOME（probe-home.mjs：HOME / USERPROFILE、XDG、各 CLI 的配置目录、
+        // git 全局配置），并去掉指向真实账号的凭据变量。
+        env: isolatedEnv(this.home, { ARMADRA_DATA_DIR: this.dataDir }),
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: false,
       },
@@ -805,9 +803,10 @@ async function runFull(options, result, record, out) {
 
     say("起应用");
     dataDir = join(work, "data");
-    const home = join(work, "home");
     mkdirSync(dataDir, { recursive: true });
-    mkdirSync(home, { recursive: true });
+    const isolated = probeHome("armadra-acceptance-home-");
+    cleanup.push(() => isolated.remove());
+    const home = isolated.path;
     if (options.withCodex) {
       const auth = join(realHome, ".codex", "auth.json");
       if (existsSync(auth)) {
@@ -818,10 +817,9 @@ async function runFull(options, result, record, out) {
     app = new App({
       exe,
       dataDir,
-      home,
+      home: isolated,
       userDataDir: join(work, "electron"),
     });
-    cleanup.push(() => app?.kill());
     const started = await record.check("app.start", async () => {
       const endpoints = await app.start();
       const health = await app.api("GET", "/api/health");
@@ -1453,6 +1451,13 @@ async function runFull(options, result, record, out) {
     } catch (error) {
       result.teardownError =
         error instanceof Error ? error.message : String(error);
+    }
+    for (const undo of cleanup.reverse()) {
+      try {
+        await undo();
+      } catch {
+        // 尽力而为。
+      }
     }
     const after = snapshot(targets);
     const changed = diffSnapshots(before, after);
