@@ -191,7 +191,7 @@ ACP 是同一个 Agent 节点的另一种驱动方式，不是第二条 Agent �
 | Copilot  | `copilot --acp --stdio` | 原生 | 不支持   |
 | ama      | `ama --mode acp`        | 原生 | `resume` |
 
-表的来源是 `core/acp/adapters.ts`；各家的版本区间与 `compatibility.json` 的 `verified` 等真适配器端到端（G3-7）后再填。
+表的来源是 `core/acp/adapters.ts`；各家的版本区间与 `compatibility.json` 的 `verified` 等 C 档场景 12 真跑（`--record-compat`）后再填。
 
 - 页面：节点头 `⋯` 或右键在「会话视图 / 终端视图」之间切换（`POST /api/acp/nodes/{id}/driver`，同一行上以另一种驱动接回 CLI 自己的会话）；会话视图里是消息流、工具调用、文件差异与权限卡。设置 → Agent 的「缺省视图」写 `agents.defaultDriver`；新建菜单的「新建 Agent…」向导只列有 ACP 入口的 Agent。
 - 画布工具：ACP 下没有终端可敲 `armadra-hook canvas`，core 开会话时把 `armadra-hook mcp`（stdio MCP，工具表即动词表）放进 `mcpServers`；ama 不加，它的画布工具来自宿主适配器。
@@ -204,7 +204,7 @@ ACP 是同一个 Agent 节点的另一种驱动方式，不是第二条 Agent �
 
 工作流把一次协作沉淀成模板：协调者经 `workflow-propose` 交草案，人在工作面板「工作流」页确认成模板、填参数起跑，或在自动化里定时运行；每次运行在画布上建一个 Frame 与各角色节点，关卡停下等人答复，运行记录可回看与对比（契约 §15）。
 
-模型密钥只在密钥后端（`armadra-ama-<供应商>`），启动器凭节点 token 经 hook 通道兑换、只设给 ama 进程；Windows 启动器与 SSH 执行主机不兑换。`runners` 不支持 `--cwd` 与 `--resume`。
+模型密钥只在密钥后端（`armadra-ama-<供应商>`），启动器凭节点 token 经 hook 通道兑换、只设给 ama 进程；Windows 上由 `armadra-launch.exe` 兑换；SSH 执行主机不兑换。`runners` 不支持 `--cwd` 与 `--resume`。
 
 ## 对话交接
 

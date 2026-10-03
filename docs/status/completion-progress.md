@@ -841,7 +841,7 @@
 **没做**
 
 - G0-1 至 G0-8 各节由本包按各自 PR 正文补记（经协调者授权；这些包合入早于进度载体启用）。
-- 文档里写的「未合入」包（G3-2、G3-7）以本节写成时为准（G3-8 在本节写作中合入，已按它的一节更新），合入后由该包或后续收口更新对应行。
+- G3-2、G3-7、G3-8 在本节写作中陆续合入，各文档已按它们的节更新。
 
 ### 需用户提供（汇总，按优先级）
 
@@ -856,11 +856,12 @@
 **P1：三平台与真实环境验收**
 
 - [ ] Windows 代码签名三选一（Azure Artifact Signing / OV 证书文件 / 自托管 runner + USB 令牌）与变量 `ARMADRA_WIN_PUBLISHER_NAME`。解锁：签名安装包、`Get-AuthenticodeSignature` 为 `Valid`、Windows 自动更新安装。（G3-3；U13）
-- [ ] 一台 Windows 机器。解锁：Windows 真机验收包（G3-2）、节点凭据 T9；Windows 启动器的凭据与 ama 密钥兑换要在真机上补写并验证后才能开放。（G3-2、G1-1、G1-7；U5）
+- [ ] 一台 Windows 10 / 11 机器。解锁：按开发指南「Windows 真机验收」跑 `windows-acceptance.mjs --installer`（有 Codex 加 `--with-codex`）并回传 `result.json`；节点凭据 T9。（G3-2、G1-1；U5）
 - [ ] GPG 签名专用密钥 → `ARMADRA_LINUX_GPG_KEY`、`ARMADRA_LINUX_GPG_PASSPHRASE`；首个签名发布后把 `armadra-linux.gpg` 提交到 `apps/web/public/`。解锁：Linux `.asc` 与 rpm 签名。（G3-3）
 - [ ] 稳定域名与一台公网可达主机（或反向代理）。解锁：passkey 的 RP ID 与真手机注册登录、手机网页不装 CA 直接访问、Let's Encrypt 生产签发（[服务器部署](../guides/server-deployment.md)第 3 节）、OAuth 回调地址、通用链接、商店审核演示服务器、对公网部署跑 `server-e2e` 与性能探针。（G1-10、G1-11、G1-12、G3-5、G3-1、G3-6；U6、U11）
 - [ ] 测试账号：两个 Claude 订阅（一个 `/login`、一个 `setup-token`）、两个带 Copilot 的 GitHub 账号与 B 的细粒度 PAT；Codex / Pi / OMP / OpenCode 的 API key。解锁：CLI 协作 §7.4 的 T1–T8，通过一项就打开 `CREDENTIAL_KINDS` 里对应种类；能在隔离 HOME 下登录的 Claude 凭据还解锁打包版冒烟带真 Claude。（G1-1；U1）
-- [ ] 装好并登录 OpenCode / OMP / Copilot 的机器，以及 `npm i -g @agentclientprotocol/claude-agent-acp @agentclientprotocol/codex-acp pi-acp`。解锁：`agent-e2e --only 10,12`、画面门里 `verified: false` 的特征翻真、`compatibility.json` 记实跑版本、Copilot 在 `--acp` 下的权限旗标核实。（G1-3、G1-4、G2-1、G3-7；U2、U3）
+- [ ] 装好并登录 OpenCode / OMP / Copilot 的机器，以及 `npm i -g @agentclientprotocol/claude-agent-acp @agentclientprotocol/codex-acp pi-acp`。解锁：按 `tools/probes/README.md`「C 档运行手册」跑 `ARMADRA_E2E_REAL=1 agent-e2e --only 10,12 --record-compat`、画面门里 `verified: false` 的特征翻真、`compatibility.json` 记实跑版本、Copilot 在 `--acp` 下的权限旗标核实。（G1-3、G1-4、G2-1、G3-7；U2、U3）
+- [ ] ama 的真模型供应商 key（`ARMADRA_E2E_AMA_PROVIDER` / `_MODEL` / `_KEY`）。解锁：场景 11 `--real-model`（真模型分派与 ama → ama）。（G3-7）
 
 **P2：手机、分发与远端**
 

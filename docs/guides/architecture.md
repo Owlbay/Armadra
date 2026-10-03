@@ -539,9 +539,10 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
 逐包的「没做」见[补全进度](../status/completion-progress.md)，需要用户提供的条件汇总在
 同一文档 G4-1 一节。这里只列影响架构判断的几条：
 
-- **Windows 真机**：session host、启动行方言、`.cmd` 绕过与 `.exe` 启动器只在 Windows CI
-  上跑过，没有在真机上长时间运行（进度 §13、§33、§54、§57、§61）；Windows 启动器没有兑换段：
-  节点凭据一律答 `credential_unsupported_here`，ama 不兑换模型密钥、用它自己的 `auth.json`。
+- **Windows 真机**：打包版的验收包（`tools/probes/windows-acceptance.mjs`）在 Windows Server
+  runner 上每晚跑，还没有在用户自己的 Windows 10 / 11、真 CLI 与长时间保活下跑过。节点凭据与
+  ama 密钥在 Windows 上由 `armadra-launch.exe` 兑换；包里没有它时节点凭据答
+  `credential_unsupported_here`。
 - **签名发布**：签名、公证、GPG 与更新清单的流程都已写好（[CI 与发布](ci-release.md)），
   但没有真证书。未签名的发布包在 `ARMADRA_UPDATES_DEV=1` 下能检查、下载、校验、暂存，
   「安装」答 `notSigned`；本地 `dist` 是 `localBuild`；更新器从不报没发生过的 `upToDate`
@@ -549,7 +550,7 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   报 `noReleaseSource`，壳侧定时检查在跑）。
 - **ACP 的未竟项**：`elicitation/create`、按模型选择（`session/set_config_option`）、`pi-acp`
   的映射文件；ACP 驱动下不做节点凭据与 ama 密钥兑换；SSH 节点不能切到 ACP（`acp_unsupported`）。
-  六家真适配器的端到端属于 G3-7，未合入。
+  六家真适配器的端到端探针已备（`agent-e2e` 场景 12，C 档），还没有真跑。
 - **Gateway / 手机**：配对只有两分钟票与二维码 / 链接，没有设计里的 8 位配对码；设备表没有
   「平台」「最近访问」；`tls-alpn-01` 未做；推送中继写完不部署，UnifiedPush 未做；真机、商店与
   真 APNs / FCM 都要用户的账号。
