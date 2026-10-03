@@ -48,6 +48,9 @@ export const executionHosts: MessageModule = {
     "executionHosts.fleet.event.handshake": "握手",
     "executionHosts.fleet.event.disconnected": "断开",
     "executionHosts.fleet.event.failed": "失败",
+    "executionHosts.showcase.fleet": "舰队",
+    "executionHosts.showcase.resyncingAll": "正在全部重新同步",
+    "executionHosts.showcase.single": "一台 Worker 主机，正在同步",
 
     "executionHosts.current": "当前工作区",
     "executionHosts.switch": "切换",
@@ -118,6 +121,9 @@ export const executionHosts: MessageModule = {
     "executionHosts.fleet.event.handshake": "Handshake",
     "executionHosts.fleet.event.disconnected": "Disconnected",
     "executionHosts.fleet.event.failed": "Failed",
+    "executionHosts.showcase.fleet": "Fleet",
+    "executionHosts.showcase.resyncingAll": "Resyncing all",
+    "executionHosts.showcase.single": "One Worker host, resyncing",
 
     "executionHosts.current": "This workspace",
     "executionHosts.switch": "Switch",

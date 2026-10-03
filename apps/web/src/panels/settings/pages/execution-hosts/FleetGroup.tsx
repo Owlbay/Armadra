@@ -10,7 +10,6 @@ import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui/popover";
 import { Spinner } from "@/ui/spinner";
-import { StatusPill } from "@/ui/status-pill";
 import {
   Table,
   TableBody,
@@ -77,6 +76,8 @@ export function FleetGroup({
       {hosts.map((host) => (
         <SettingsRow
           key={host.executionHostId || "local"}
+          // 窄屏时控件折到下一行、并在行内换行，不把主机名挤成一列字。
+          className={ROW_WRAP}
           label={label(host)}
           footnote={
             host.ssh
@@ -90,15 +91,21 @@ export function FleetGroup({
             </Badge>
           )}
           {host.worker && (
-            <StatusPill
-              tone={host.worker.connected ? "working" : "idle"}
-              pulse={false}
-              label={t(
+            <Badge
+              variant="secondary"
+              className={cn(
+                "font-normal",
+                host.worker.connected
+                  ? "text-success-text"
+                  : "text-muted-foreground",
+              )}
+            >
+              {t(
                 host.worker.connected
                   ? "executionHosts.fleet.online"
                   : "executionHosts.fleet.offline",
               )}
-            />
+            </Badge>
           )}
           {host.worker &&
             (host.worker.outdated ? (
@@ -153,6 +160,9 @@ export function FleetGroup({
     </SettingsGroup>
   );
 }
+
+const ROW_WRAP =
+  "flex-wrap [&>.settings-row-controls]:shrink [&>.settings-row-controls]:flex-wrap [&>.settings-row-controls]:justify-end";
 
 const DOT: Record<ExecutionHostHealth["event"], string> = {
   handshake: "bg-[var(--success)]",
