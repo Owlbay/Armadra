@@ -9,6 +9,7 @@ import { terminalHandle } from "../nodes/terminal-registry";
 import { canFocusOnPhone } from "./mobile-focus";
 import { useHeadlessBrowser } from "../nodes/browser/availability";
 import { MOBILE_CONTROL_KEYS, MOBILE_KEYS } from "./mobile-keys";
+import { useVisibleArea } from "../mobile/keyboard";
 import { cn } from "@/lib/cn";
 import { Button } from "@/ui/button";
 import {
@@ -39,6 +40,7 @@ export function MobileFocusPage() {
   const selectNodes = useCanvasStore((state) => state.selectNodes);
 
   const headlessBrowser = useHeadlessBrowser(compact);
+  const visible = useVisibleArea();
 
   const node = nodes?.find((item) => item.id === focusNodeId);
   const focusable = React.useMemo(
@@ -53,6 +55,11 @@ export function MobileFocusPage() {
     return null;
   const Body = NODE_BODY[node.type];
   const meta = nodeMeta(node.type);
+  // ACP 驱动的终端节点体是会话视图：输入走 PromptBox，PTY 按键条没有对象。
+  // （与 `acp/driver.ts::driverOf` 同一条判断；不 import 它，免得把设置页的
+  // 钩子拖进首屏。）
+  const acp =
+    node.data.kind === "terminal" && node.data.agent?.driver === "acp";
 
   return (
     <div
@@ -65,6 +72,8 @@ export function MobileFocusPage() {
         // 软键盘弹起时可视高度会缩，dvh 跟着变，工具条不会被顶出屏幕。
         "h-[100dvh]",
       )}
+      // iOS 的软键盘不缩视口：键盘弹起时按可视视口摆，输入框坐在键盘上沿。
+      style={visible ? { height: visible.height, top: visible.top } : undefined}
     >
       <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-2">
         <Button
@@ -112,6 +121,9 @@ export function MobileFocusPage() {
           "relative min-h-0 flex-1 overflow-hidden",
           "[&_[data-slot=connection-handle]]:hidden",
           "[&_.node-frame]:rounded-none [&_.node-frame]:border-0",
+          // 会话视图的输入框在手机上 16px，否则 iOS 聚焦时放大整页（设计系统 §2.3）。
+          "[&_[data-slot=acp-session-view]_textarea]:text-[length:var(--text-input-touch)]",
+          "[&_[data-slot=acp-session-view]]:pb-[env(safe-area-inset-bottom)]",
         )}
         data-node-type={node.type}
         data-min-width={meta.minSize.width}
@@ -123,7 +135,7 @@ export function MobileFocusPage() {
         </React.Suspense>
       </div>
 
-      {node.type === "terminal" && <TerminalKeyBar nodeId={node.id} />}
+      {node.type === "terminal" && !acp && <TerminalKeyBar nodeId={node.id} />}
     </div>
   );
 }
@@ -132,7 +144,7 @@ export function MobileFocusPage() {
  * 软键盘工具条。触摸键盘上没有 Esc / Tab / 方向键，`sendKeys` 把它们原样写进
  * PTY；粘贴走终端自己的剪贴板路径，和右键菜单是同一条。
  */
-function TerminalKeyBar({ nodeId }: { nodeId: string }) {
+export function TerminalKeyBar({ nodeId }: { nodeId: string }) {
   const t = useT();
   const [controls, setControls] = React.useState(false);
 
