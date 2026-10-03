@@ -788,6 +788,19 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // ama 的模型密钥（契约 §12.4）：只答有没有、存在哪，从不答值。
+  {
+    path: "/api/agents/ama/credentials",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/agents/ama/credentials/{provider}",
+    methods: ["PUT", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/agents/{agentId}/integration",
     methods: ["GET"],
@@ -991,6 +1004,13 @@ export const ROUTES: readonly RouteEntry[] = [
   {
     // 契约 §20.4：画布启动器兑换节点凭据。只在本机 hook 通道上，带节点 token。
     path: "/credential",
+    methods: ["POST"],
+    surface: "hook",
+    implemented: true,
+  },
+  {
+    // 契约 §12.4：画布启动器 `run/ama` 兑换 ama 的模型密钥。同一道门，外加节点是 ama。
+    path: "/credential/ama",
     methods: ["POST"],
     surface: "hook",
     implemented: true,

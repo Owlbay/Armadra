@@ -14,12 +14,12 @@ import type { HookRequest, HookResponse } from "./http.js";
 
 /**
  * Value of the `X-Armadra-Hook-Client` header. Bumped when the wire behaviour
- * of this client changes so the runtime can flag stale installs — the
- * TypeScript port changed no wire behaviour, so it stays on the Rust client's
- * number. Lives here rather than in the CLI's `usage.ts` because every user of
+ * of this client changes so the runtime can flag stale installs. 5 since the
+ * seventh built-in (`ama`) and its two approval events; the same number as
+ * `core/hook/install/events.ts` and `packages/shared`. Lives here rather than in the CLI's `usage.ts` because every user of
  * the shared client (the CLI, the MCP bridge, the ama adapter) sends it.
  */
-export const HOOK_CLIENT_REVISION = "4";
+export const HOOK_CLIENT_REVISION = "5";
 
 export interface Session {
   nodeId: string;

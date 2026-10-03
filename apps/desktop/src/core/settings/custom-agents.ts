@@ -26,6 +26,7 @@ export const BUILTIN_AGENT_IDS = [
   "pi",
   "omp",
   "copilot",
+  "ama",
 ] as const;
 
 /** What a base adapter may declare, and therefore what a custom entry may narrow. */

@@ -159,6 +159,19 @@ const PROFILES: Readonly<Record<string, LaunchProfile>> = {
     exitCommand: "/exit",
     promptFlag: "--interactive",
   },
+  // Our own agent: every mode is a real `--permission-mode` of its pipeline.
+  ama: {
+    permissionFlag: {
+      default: [],
+      "auto-edit": ["--permission-mode", "auto-edit"],
+      "full-auto": ["--permission-mode", "full-auto"],
+      plan: ["--permission-mode", "plan"],
+    },
+    modelFlag: "--model",
+    sessionIdFlag: "--session-id",
+    resume: { style: "flag", flag: "--resume" },
+    exitCommand: "/exit",
+  },
 };
 
 export function launchProfile(agentId: string): LaunchProfile | undefined {
@@ -395,12 +408,15 @@ export function quote(value: string): string {
 /**
  * argv[0] basenames that mean "this pane is still running that agent".
  *
- * The pane gate's vocabulary. A `custom:<name>` entry has no registry row, so
- * the suffix is the best guess there is — and a guess is enough here, because
- * the gate only ever refuses, never grants.
+ * The pane gate's vocabulary: the registry's `expectedProcess` for a built-in
+ * (ama runs on the bundled runtime, so its list names that too). A
+ * `custom:<name>` entry has no registry row, so the suffix is the best guess
+ * there is — and a guess is enough here, because the gate only ever refuses,
+ * never grants.
  */
 export function expectedProcesses(agentId: string): string[] {
-  if (definition(agentId) !== undefined) return [agentId];
+  const builtin = definition(agentId);
+  if (builtin !== undefined) return [...builtin.expectedProcess];
   const suffix = agentId.startsWith("custom:")
     ? agentId.slice("custom:".length)
     : "";
@@ -434,6 +450,6 @@ export function paneRunsAgent(
 function lineNamesProgram(line: string, name: string): boolean {
   return line.split(/[\s/\\]+/).some((raw) => {
     const token = raw.endsWith(".exe") ? raw.slice(0, -4) : raw;
-    return token === name || token === `${name}.js`;
+    return token === name || token === `${name}.js` || token === `${name}.cjs`;
   });
 }

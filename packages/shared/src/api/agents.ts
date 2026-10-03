@@ -387,3 +387,19 @@ export type IntegrationRepairReport = z.infer<
 export type AnswerApprovalRequest = z.infer<typeof answerApprovalRequestSchema>;
 export type ContextLink = z.infer<typeof contextLinkSchema>;
 export type ContextLinkContent = z.infer<typeof contextLinkContentSchema>;
+
+/**
+ * `GET /api/agents/ama/credentials`（契约 §12.4）：Armadra Agent 的模型密钥。
+ * 只说哪家供应商设了、存在哪个后端（与 `copilotBackendSchema` 同一组取值），
+ * 从不带值；供应商列表由 core 给，页面不自己列。
+ */
+export const amaCredentialStatusSchema = z.object({
+  backend: z.enum(["keychain", "dpapi", "libsecret", "file-encrypted", "file"]),
+  providers: z.array(z.object({ id: z.string(), isSet: z.boolean() })),
+});
+export type AmaCredentialStatus = z.infer<typeof amaCredentialStatusSchema>;
+
+/** `PUT /api/agents/ama/credentials/{provider}` 的请求体。 */
+export const amaCredentialRequestSchema = z.object({
+  apiKey: z.string().min(1),
+});

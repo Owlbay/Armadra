@@ -44,6 +44,7 @@ export function stateSourceFor(provider: string): string | undefined {
     case "pi":
     case "omp":
     case "opencode":
+    case "ama":
       return "extension";
     default:
       return undefined;
