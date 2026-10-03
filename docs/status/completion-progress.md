@@ -69,7 +69,9 @@
 
 ## G1-8 工作流引擎（C2）
 
-未开始。
+- 做了什么：`core/workflow/{types,draft,store,dispatch,engine,service,routes,registry,task-runs,index}.ts`；迁移 `0030_workflow.sql`（草案、模板、运行、步骤、runner 任务五张表）；控制动词 `workflow-propose`（工具 `canvas_workflow_propose`）；bus 事件 `workflow.draft` / `workflow.run` / `workflow.gate`（core 与共享层同步）；`packages/shared/src/api/workflows.ts` 的 zod；契约 §15.1–§15.4。运行建 Frame + 起点便签 + 角色节点，节点经依赖编排的启动路径起、提示词经投递队列投，完成判定复用 `dependencies/evaluate.ts`。
+- 实测：`core/workflow/*.test.ts`（草案校验、引擎三种步骤、关卡、取消、无页面推进、重启续跑、重投、路由与动词）；`node tools/probes/workflow-e2e.mjs`（真 core + 假 CLI `custom:wfecho` 走通 prompt → collect 两步模板）本机通过。
+- 没做：页面（草案卡、模板库、运行记录，G2 的包）；`wait` 动词与 runner 适配（G2-4，`task-runs.ts` 只有存取）；自动化目标（G2-3）；成员访问 `/api/workflows/*` 仍一律 403（按运行查画布的收窄留给 G2-9）；`workflow-e2e` 等 G0-4 的 `tools/ci/e2e.json` 合入后登记进 A 档。
 
 ## G1-9 实时协同 core（R0）
 

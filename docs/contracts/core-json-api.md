@@ -557,7 +557,161 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 15. 工作流与 runners：`/api/workflows/*`
 
-预留，由 G1-8（§15.1–§15.4）、G2-4（§15.5）与 G2-3（§15.6）填写。
+协调者把一次协作沉淀成**草案**，人确认后成为**模板**，模板按参数**运行**（设计 `design/coordinator-agent.md` §5、`design/completion-architecture.md` §5.4）。表在迁移 `0030_workflow.sql`（`workflow_drafts` / `workflow_templates` / `workflow_runs` / `workflow_run_steps` / `workflow_task_runs`）。zod 在 `packages/shared/src/api/workflows.ts`，core 的手写校验在 `core/workflow/draft.ts`，两边规则相同。§15.5（`wait` 动词与 `workflow_task_runs` 行）由 G2-4、§15.6（自动化目标 `WORKFLOW_RUN`）由 G2-3 填写。
+
+权限按前缀（`http/route-scopes.ts`）：读 `canvas:read`，写 `agent:launch`。路径里没有工作空间，服务器壳上的成员一律 `403 forbidden`；关卡答复的收紧见 §23。失败一律 `{ code, message }`，`code` 是 snake_case 的稳定码。
+
+### 15.1 草案 JSON 与 `workflow-propose`
+
+控制动词 `workflow-propose`（`collab/control/index.ts::VERBS`；工具名 `canvas_workflow_propose`）：`args.draft` 是草案 JSON（JSON 调用时是对象，命令行上是它的 JSON 字符串，两种都收），`--dry-run` 只校验不落库。成功回 `{ draftId, status: "pending", title }` 并推 `workflow.draft`；草案不成立回 `400 invalid_draft`，消息指出第一处问题。
+
+```json
+{
+  "version": 1,
+  "title": "双人代码审查",
+  "params": [
+    { "name": "scopeA", "type": "string", "label": null, "default": null }
+  ],
+  "roles": [
+    {
+      "id": "reviewerA",
+      "agentId": "claude",
+      "title": null,
+      "permissionMode": "plan",
+      "model": null,
+      "worktree": null
+    },
+    { "id": "lead", "agentId": "codex" }
+  ],
+  "links": [{ "from": "lead", "to": "reviewerA", "role": "supervises" }],
+  "steps": [
+    {
+      "id": "s1",
+      "kind": "prompt",
+      "role": "reviewerA",
+      "prompt": "审查 {{scopeA}}，结论 canvas post 给 lead",
+      "after": []
+    },
+    {
+      "id": "s2",
+      "kind": "collect",
+      "role": "lead",
+      "from": ["s1"],
+      "prompt": "汇总到便签",
+      "after": ["s1"]
+    },
+    { "id": "s3", "kind": "gate", "label": "合并前人工确认", "after": ["s2"] }
+  ],
+  "source": {
+    "boardId": "…",
+    "nodeIds": ["…"],
+    "proposedBy": "ama",
+    "sessionId": "…"
+  }
+}
+```
+
+- `version` ≥ 1 的整数；模板改一次就要更大（§15.2）。`title` 1–160 字。
+- `params[]` ≤ 32：`name` 匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$`，`type` 是 `string` / `path` / `text`（缺省 `string`），可选 `label`、`default`。提示词里 `{{name}}` 在起跑时代入；没声明的 `{{…}}` 原样留着。
+- `roles[]` 1–8：`id` 匹配 `^[A-Za-z][A-Za-z0-9_-]{0,31}$`；`agentId` 是注册表 id 或 `custom:…`；`permissionMode` 是 `default` / `auto-edit` / `full-auto` / `plan` 或 null（这个 CLI 有没有这个模式在起跑时查）；`model` ≤ 120 字；`worktree` 是 worktree 名或相对路径，起跑时与 `canvas team` 一样备好检出，角色的终端开在里面。
+- `links[]` ≤ 32：两个不同角色之间的线，`role` 是 `peer`（缺省）或 `supervises`（`from` 是主）。
+- `steps[]` 1–32，`id` 同角色的规则、草案内唯一；`after` 是别的步骤 id，不能成环。`kind`：
+  - `prompt`：把 `prompt`（代入参数后 ≤ 2000 字）投给 `role` 的节点；
+  - `collect`：先把 `from` 里各步骤的产出放进 `role` 节点的收件箱，再投 `prompt`（末尾加一句「来源步骤的结论在收件箱里」，代入后连这一句 ≤ 2000 字）；`from` 必须都写在它的 `after` 里；
+  - `gate`：停下等人答复（§15.3），`label` 1–160 字。
+- `source` 可选，原样存着；未知字段丢掉。
+
+### 15.2 草案与模板
+
+| 方法与路径                                | 说明                                                                                            |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `GET /api/workflows/drafts`               | `?boardId=`、`?status=pending\|confirmed\|discarded` 过滤，新的在前，最多 200 条 → `{ drafts }` |
+| `GET /api/workflows/drafts/{id}`          | `{ draft }`                                                                                     |
+| `POST /api/workflows/drafts/{id}/confirm` | `{ name?, draft? }`：`draft` 给了就是人改过的那份（重新校验）→ `{ draft, template }`            |
+| `POST /api/workflows/drafts/{id}/discard` | `{ draft }`                                                                                     |
+| `GET /api/workflows/templates`            | `{ templates }`，最近改过的在前                                                                 |
+| `POST /api/workflows/templates`           | `{ name?, template }` → `201 { template }`；`name` 缺省取 `template.title`                      |
+| `GET /api/workflows/templates/{id}`       | `{ template }`                                                                                  |
+| `PUT /api/workflows/templates/{id}`       | `{ name?, template }`，`template.version` 必须大于库里那份，否则 `409 template_version_stale`   |
+| `DELETE /api/workflows/templates/{id}`    | `204`；已有的运行不受影响（运行存的是起跑时的模板快照）                                         |
+
+草案行：`{ id, workspaceId, boardId, proposerNodeId, status, templateId, draft, createdAt, updatedAt }`，`status` 是 `pending` / `confirmed` / `discarded`；不是 `pending` 的草案再确认或丢弃回 `409 draft_not_pending`。模板行：`{ id, name, version, createdFromDraft, template, createdAt, updatedAt }`。
+
+### 15.3 运行、步骤与关卡
+
+| 方法与路径                                     | 说明                                                                                         |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `POST /api/workflows/runs`                     | `{ templateId, params?, boardId? }` → `201 { run }`；`boardId` 缺省取模板的 `source.boardId` |
+| `GET /api/workflows/runs`                      | `?templateId=`、`?boardId=`、`?limit=`（1–200，缺省 50），新的在前 → `{ runs }`              |
+| `GET /api/workflows/runs/{id}`                 | `{ run }`                                                                                    |
+| `POST /api/workflows/runs/{id}/cancel`         | `{ run }`；已结束回 `409 run_finished`                                                       |
+| `POST /api/workflows/runs/{id}/gates/{stepId}` | `{ decision: "approve" \| "reject", note? }` → `{ run }`；不在等人回 `409 gate_not_waiting`  |
+
+起跑当场拒绝的：缺参数或参数未声明（`400 missing_param` / `bad_request`）、代入后超长（`400 prompt_too_long`）、角色的 CLI 没有那个权限模式（`400 permission_mode_unsupported`）、这台机器不认识的 `agentId`（`400 invalid_draft`）、画布不存在（`404`）、worktree 备不好（Git 的拒绝原样）。这些都在动画布之前。
+
+起跑之后 core 在画布上建一个 Frame（标题是模板标题），里面一张起点便签和每个角色一个 Agent 终端节点；便签向每个角色连一条 `supervises` 线，草案的 `links` 照原样连。角色节点由依赖编排的启动路径起终端、敲启动行；提示词是投递队列里的一条（`origin: "first-task"`，发起方是起点便签），门链、租约、回执与 `canvas send` 相同。**页面开不开都一样**；重启后按库里的状态续跑。
+
+```json
+{
+  "run": {
+    "id": "0192…",
+    "templateId": "0192…",
+    "templateVersion": 1,
+    "title": "双人代码审查",
+    "workspaceId": "ws",
+    "boardId": "board",
+    "frameId": "node-frame",
+    "params": { "scopeA": "src/a" },
+    "status": "waiting",
+    "reason": null,
+    "roles": { "reviewerA": "node-a", "lead": "node-l" },
+    "startedAt": "2026-10-03T08:00:00.000Z",
+    "endedAt": null,
+    "steps": [
+      {
+        "stepId": "s1",
+        "kind": "prompt",
+        "role": "reviewerA",
+        "status": "done",
+        "nodeId": "node-a",
+        "startedAt": "2026-10-03T08:00:00.000Z",
+        "endedAt": "2026-10-03T08:03:10.000Z",
+        "reason": null,
+        "outputs": [
+          {
+            "key": "review",
+            "body": "结论…",
+            "at": "2026-10-03T08:03:00.000Z",
+            "target": "node-l"
+          }
+        ],
+        "decision": null,
+        "note": null
+      }
+    ]
+  }
+}
+```
+
+- 运行 `status`：`running` / `waiting`（有关卡在等人）/ `succeeded` / `failed` / `cancelled`；`reason` 是 `<stepId>:<步骤 reason>`（失败时）或 `cancelledByUser`。
+- 步骤 `status`：`pending` / `running` / `waiting`（关卡）/ `done` / `failed` / `skipped`（它等的步骤没成功）/ `cancelled`。一步在 `after` 全部 `done` 时开始；全部步骤结束后，全 `done` 记 `succeeded`，否则 `failed`。
+- `prompt` / `collect` 何时算完：投递落地之后，角色节点**下一轮干净地结束**（判定与 §8 的依赖边相同：只认基准之后的结束）。失败的 `reason`：`turnFailed` / `turnInterrupted`（这一轮出错或被中断）、`nodeDeleted`、`nodeExited`（终端退出而这一轮没结束）、`roleMissing`、`QUEUE_FULL`，以及投递三次都没投进去时最后一次排队项的码（如 `TARGET_STARTING`）。
+- `outputs`：角色节点在这一步开始之后 `canvas post` 的正文（最多 8 条，回执与引擎放进收件箱的副本不算），`target` 是收件节点。关卡的答复记在 `decision` 与 `note`。
+- 取消：没结束的步骤记 `cancelled`、还排着的提示词收回，节点留在画布上。
+
+### 15.4 事件
+
+三帧经 `WS /api/workspaces/{id}/events`，帧里不带正文，页面据此重读上面的路由：
+
+```text
+{ "type": "workflow.draft", "draftId": "…", "boardId": "…", "status": "pending" }
+{ "type": "workflow.run", "runId": "…", "boardId": "…", "status": "running", "stepId": "s1", "stepStatus": "done" }
+{ "type": "workflow.gate", "runId": "…", "boardId": "…", "stepId": "s3", "label": "合并前人工确认", "state": "waiting" }
+```
+
+- `workflow.draft`：草案出现、被确认或丢弃。
+- `workflow.run`：运行或其中一步换了状态；只有运行换状态时没有 `stepId` / `stepStatus`。
+- `workflow.gate`：`state` 是 `waiting` / `approved` / `rejected` / `cancelled`。
 
 ## 16. 实时协同：`…/boards/{boardId}/sync` 与评论
 
