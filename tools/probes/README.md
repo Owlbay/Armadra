@@ -9,7 +9,7 @@
 | 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                   | 何时跑                              | 失败时       |
 | --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
 | A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`crash-report-e2e`                                                     | `nightly.yml`                       | 开 issue     |
+| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`crash-report-e2e`、`mobile-shell-e2e`                                 | `nightly.yml`                       | 开 issue     |
 | C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                                                                                | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
@@ -347,3 +347,14 @@ node tools/probes/update-e2e.mjs [输出目录] [--app <Armadra.app>] [--release
 本地演练签名：macOS `ARMADRA_MAC_ADHOC_SIGN=1`（ad-hoc 身份 `-`，`codesign --verify --deep --strict` 能过，`node apps/desktop/scripts/signing-electron.mjs verify-mac`）；Windows `New-SelfSignedCertificate -Type CodeSigningCert` 导出的 `.pfx` 走 `CSC_LINK` 路径，`Get-AuthenticodeSignature` 得 `UnknownError`（`signatureState` 报 `unknown`）；Linux `node tools/release/sign-gpg.mjs keygen --out <dir>` 出一天期的演练密钥。ad-hoc 与自签证书都过不了 Squirrel.Mac / Windows 对更新包签名者的校验，所以安装那一段只有真证书（[CI 与发布](../../docs/guides/ci-release.md) §3）才能走通。
 
 不碰已安装的 Armadra、用户的 HOME 与钥匙串，也不连任何真实发布地址：全部是回环。
+
+## 手机壳冒烟（Capacitor，B 档）
+
+`mobile-shell-e2e.mjs` 在模拟器里走原生 App 的「连接 → 配对 → 画布」：起临时 core、在回环上开 Gateway（本地 CA），把配对深链 `armadra://pair?…` 交给 UI 用例——iOS 是 `AppUITests`（XCUITest，链接经 `TEST_RUNNER_ARMADRA_PAIR_LINK`），Android 是 `ConnectFlowTest`（插桩，`adb reverse` 接回环，链接经插桩参数 `armadraPairLink`）。App 先取 `/ca.crt` 按指纹钉住信任锚、再配对，页面进画布（底部导航出现）。要模拟器，所以不进 `tools/ci/e2e.d/` 的清单，由 `nightly.yml` 的 `mobile-ios` / `mobile-android` 作业直接跑。
+
+```sh
+pnpm libs:build && pnpm --filter @armadra/web build && pnpm --filter @armadra/desktop build
+pnpm --filter @armadra/mobile sync
+node tools/probes/mobile-shell-e2e.mjs --platform ios [--device "iPhone 16"|auto] [输出目录]
+node tools/probes/mobile-shell-e2e.mjs --platform android [输出目录]   # 模拟器已起、adb 看得到
+```

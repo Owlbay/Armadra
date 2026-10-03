@@ -155,11 +155,131 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # 手机壳（补全计划 G3-1）：原生层单测、不签名的模拟器 / debug 构建，再在模拟器里
+  # 跑「连接 → 配对 → 画布」（tools/probes/mobile-shell-e2e.mjs）。产物名见
+  # tools/release/artifacts.mjs 的 mobileAssets；真机、签名与商店上传要用户的证书。
+  mobile-ios:
+    name: mobile (ios simulator)
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: 构建页面、core 与手机壳的 www
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm libs:build
+          pnpm --filter @armadra/web build
+          pnpm --filter @armadra/desktop build
+          pnpm --filter @armadra/mobile sync
+      - name: ArmadraNativeKit 单测（钉扎判定、推送解密、深链）
+        run: swift test --package-path apps/mobile/ios/ArmadraNativeKit
+      # 「Sign to Run Locally」：不要证书，但模拟器只在有 application-identifier
+      # 时才给钥匙串（CODE_SIGNING_ALLOWED=NO 的包存不进会话）。
+      - name: 模拟器构建（本地签名，不要证书）
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./apps/mobile/package.json').version")
+          xcodebuild build -project apps/mobile/ios/App/App.xcodeproj -scheme App \
+            -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath target/mobile/ios MARKETING_VERSION="$version"
+          name=$(node --input-type=module -e "import { mobileAssets } from './tools/release/artifacts.mjs'; console.log(mobileAssets('$version')[1].name)")
+          ditto -c -k --keepParent \
+            target/mobile/ios/Build/Products/Debug-iphonesimulator/App.app \
+            "target/mobile/$name"
+      - name: 连接 → 配对 → 画布（XCUITest）
+        run: node tools/probes/mobile-shell-e2e.mjs --platform ios target/mobile-shell-e2e/ios
+      - name: 上传产物
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-ios
+          path: |
+            target/mobile/*.zip
+            target/mobile-shell-e2e/ios/result.json
+            target/mobile-shell-e2e/ios/*.log
+            target/mobile-shell-e2e/ios/*.xcresult
+          if-no-files-found: warn
+
+  mobile-android:
+    name: mobile (android emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: pnpm install --frozen-lockfile
+      - name: 构建页面、core 与手机壳的 www
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm libs:build
+          pnpm --filter @armadra/web build
+          pnpm --filter @armadra/desktop build
+          node apps/desktop/scripts/ensure-node-pty.mjs
+          pnpm --filter @armadra/mobile sync
+      - name: armadra-native-core 单测（钉扎判定、推送解密、深链）与 debug APK
+        shell: bash
+        working-directory: apps/mobile/android
+        run: |
+          set -euo pipefail
+          ./gradlew :armadra-native-core:test :app:assembleDebug --no-daemon --stacktrace
+          version=$(node -p "require('../package.json').version")
+          name=$(node --input-type=module -e "import { mobileAssets } from '../../../tools/release/artifacts.mjs'; console.log(mobileAssets('$version')[0].name)")
+          mkdir -p ../../../target/mobile
+          cp app/build/outputs/apk/debug/app-debug.apk "../../../target/mobile/$name"
+      # 模拟器要 KVM：在一次性的 runner 上放开 /dev/kvm。
+      - name: 放开 KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: 连接 → 配对 → 画布（插桩用例）
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: node tools/probes/mobile-shell-e2e.mjs --platform android target/mobile-shell-e2e/android
+      - name: 上传产物
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-android
+          path: |
+            target/mobile/*.apk
+            target/mobile-shell-e2e/android/result.json
+            target/mobile-shell-e2e/android/*.log
+            apps/mobile/android/armadra-native-core/build/reports/tests/
+          if-no-files-found: warn
+
   # 任一作业失败就开一个 issue；已经有一个开着的同名 issue 时改成在下面追加评论，
   # 免得每晚一个。只在 main 上报（手动在分支上触发的失败看运行页即可）。
   report:
     name: 失败开 issue
-    needs: [linux, macos]
+    needs: [linux, macos, mobile-ios, mobile-android]
     if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -176,11 +296,13 @@ jobs:
           LINUX_FAILED: ${{ needs.linux.outputs.failed }}
           MACOS_RESULT: ${{ needs.macos.result }}
           MACOS_FAILED: ${{ needs.macos.outputs.failed }}
+          MOBILE_IOS_RESULT: ${{ needs.mobile-ios.result }}
+          MOBILE_ANDROID_RESULT: ${{ needs.mobile-android.result }}
         run: |
           set -euo pipefail
           title="夜间 B 档失败"
-          body="$(printf '运行：%s\n\n| 作业 | 结果 | 失败的条目 |\n| --- | --- | --- |\n| linux | %s | %s |\n| macos | %s | %s |\n\n条目为空而结果是 failure 时，失败在打包或 glibc 校验，看运行日志。\n' \
-            "$RUN_URL" "$LINUX_RESULT" "${LINUX_FAILED:--}" "$MACOS_RESULT" "${MACOS_FAILED:--}")"
+          body="$(printf '运行：%s\n\n| 作业 | 结果 | 失败的条目 |\n| --- | --- | --- |\n| linux | %s | %s |\n| macos | %s | %s |\n| mobile-ios | %s | mobile-shell-e2e |\n| mobile-android | %s | mobile-shell-e2e |\n\n条目为空而结果是 failure 时，失败在打包或 glibc 校验，看运行日志。\n' \
+            "$RUN_URL" "$LINUX_RESULT" "${LINUX_FAILED:--}" "$MACOS_RESULT" "${MACOS_FAILED:--}" "$MOBILE_IOS_RESULT" "$MOBILE_ANDROID_RESULT")"
           existing="$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
             --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)"
           if [ -n "$existing" ]; then

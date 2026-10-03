@@ -512,7 +512,27 @@
 
 ## G3-1 Capacitor 移动壳
 
-未开始。
+**做了什么**
+
+- `apps/mobile`（`@armadra/mobile`，Capacitor 8.5.2 精确版本）：`capacitor.config.ts` 不配 `server.url`，`scripts/prepare-web.mjs` 把 `apps/web/dist` 拷进 `www/` 并把插件桥（`src/bridge.ts`，`registerPlugin("ArmadraNative")` 打成 IIFE）插在页面模块脚本之前；页面仍不依赖 `@capacitor/core`。
+- iOS：`ArmadraBridgeViewController` 装插件；`ArmadraNativePlugin.swift` 钥匙串存会话（首次启动清残留）、挂 WKWebView 认证挑战按信任锚指纹钉扎（配对时取 `/ca.crt` 按指纹核对后才存锚）、AVFoundation 扫码、APNs 令牌 + 设备 X25519 公钥（`ARMADRA_MOBILE_RELAY_URL` 时先换中继令牌）、`armadra://` 深链；Notification Service Extension 解密信封；纯逻辑在 SPM 包 `ios/ArmadraNativeKit`；`AppUITests`（XCUITest）。
+- Android：`SecureStore`（Keystore AES-GCM）、`PinningWebViewClient`（`onReceivedSslError` 只放行验得到钉住锚的叶证书）、`AnchorFetch`（两步取锚，不用信任一切的 TrustManager）、Google 代码扫描器、`ArmadraMessagingService`（FCM 数据消息解密）、深链；纯逻辑在纯 JVM 模块 `android/armadra-native-core`（BC 1.86）；插桩 `ConnectFlowTest`。
+- 页面：`mobile/entry.ts` 认 `#link=`（原生收到配对深链后写入）进连接页并预填；修了 G2-10 的会话密钥形状（`native-bridge.ts` 原先只认 43 位半段，App 重启后读回的会话一律作废）。
+- 发布与 CI：`tools/release/artifacts.mjs::mobileAssets`（`armadra-mobile_<v>_android-debug.apk`、`armadra-mobile_<v>_ios-simulator.app.zip`）；`apps/mobile/package.json` 进版本清单；`nightly.yml` 的 `mobile-ios` / `mobile-android`；探针 `tools/probes/mobile-shell-e2e.mjs`；`repo.rules.json` 加 `apps/*` 包名规则；客户端平台指南加原生一节与真机 / 商店清单。
+
+**实测**
+
+- `swift test`（ArmadraNativeKit）14 例、`armadra-native-core` 12 例 JUnit（本机 JDK 25 + BC 与 CI 上 Gradle 都过）、`@armadra/mobile` vitest 9 例；`pnpm libs:build && pnpm -r --if-present test` 本机全绿；`pnpm check` 通过。
+- 本机：`xcodebuild build-for-testing`（iphonesimulator，App + NotificationService + AppUITests）通过；core 起在回环、Gateway 本地 CA、铸出带 `fp` 的原生深链（探针前半段）通过。
+- CI `nightly`（分支上 workflow_dispatch，run 37132390772）两条都绿：`mobile-ios`——`swift test`、本地签名的模拟器构建、iPhone 17 Pro 上 XCUITest「没有 Gateway 是连接页」与「深链 → 钉扎 → 配对 → 画布 → 重开仍在画布」，产出 `armadra-mobile_0.1.0_ios-simulator.app.zip`（9.4 MB）；`mobile-android`——`armadra-native-core:test`、API 34 模拟器里同一条流程（logcat：取到 2 张证书、TLS 放行），产出 `armadra-mobile_0.1.0_android-debug.apk`（14 MB）。
+- 实跑中修掉的三处：会话密钥形状（见上）、模拟器包关掉签名时钥匙串不可用（改「Sign to Run Locally」）、配对票两分钟被 macOS 上的编译耗尽（探针先编完再铸票）；另外关掉了 Capacitor 的插件调用日志（会把会话密钥写进设备日志）。
+
+**没做**
+
+- 真机、签名、TestFlight / Play 上传、APNs / FCM 生产密钥：需用户提供（计划 §5 的 U8–U10，清单在[客户端平台](../guides/client-platforms.md)）；真机推送与 NSE 解密只有单测。
+- 本机 Xcode 27 的 CoreSimulator 过旧且没装 iOS 运行时，模拟器只在 CI 上跑；本机没有 Android SDK。
+- Android 上系统已信任的证书（ACME / 反代真证书）由系统校验，指纹不参与（WebView 无钩子）；FCM 令牌轮换不主动重登记；通用链接（`apple-app-site-association` / `assetlinks.json`）等域名（外部服务 §5.3）。
+- 探针要模拟器，不进 `tools/ci/e2e.d/` 的清单，由夜间作业直接跑。
 
 ## G3-2 Windows 真机验收包
 
