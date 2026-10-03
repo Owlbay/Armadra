@@ -35,9 +35,14 @@ export type AgentHistory = z.infer<typeof agentHistorySchema>;
 /**
  * An execution host whose Worker is older than this build expects (contract
  * §21.2): canvas launches there carry a stale injection until it is resynced.
+ * Reported on the integration state (`GET /api/agents/{id}/integration`)
+ * only — the hosts are the same for every agent, so the agent rows do not
+ * repeat them.
  */
 export const outdatedHostSchema = z.looseObject({
   hostId: z.string().min(1),
+  /** The host's name in the registry, when it is still there. */
+  name: z.string().optional(),
   /** The Worker version the host reported, when it reported one. */
   version: z.string().optional(),
 });
@@ -120,8 +125,6 @@ export const agentInfoSchema = z.object({
    * because a runtime that predates the field simply does not say.
    */
   history: agentHistorySchema.optional(),
-  /** Execution hosts whose Worker is out of date for this agent (§21.2). */
-  outdatedHosts: z.array(outdatedHostSchema).optional(),
   /**
    * How this CLI speaks the Agent Client Protocol on this machine (contract
    * §14.1). Absent from a core without ACP, and for an agent without a path.
@@ -266,7 +269,10 @@ export const integrationStateSchema = z.looseObject({
     })
     .optional(),
   clientBin: z.string().optional(),
-  /** Execution hosts whose Worker needs a resync (contract §21.2). */
+  /**
+   * Execution hosts whose Worker needs an upgrade and a resync (contract
+   * §21.2). Present from a core with the Worker fleet; usually empty.
+   */
   outdatedHosts: z.array(outdatedHostSchema).optional(),
   /** Something worked but deserves a sentence in the settings page. */
   warning: z.string().optional(),
