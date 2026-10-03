@@ -76,7 +76,7 @@ describe("the ama host adapter", () => {
     expect(tools.map((tool) => tool.name)).toEqual(
       VERB_TOOLS.map((tool) => tool.name),
     );
-    // ama's own `task` is left alone: the runners that replace it come later.
+    // ama's own `task` is left alone: the runners route it to the board.
     expect(api.tools.disable).not.toHaveBeenCalled();
     expect(instructions).toHaveLength(1);
     expect([...handlers.keys()].sort()).toEqual([...AMA_EVENTS].sort());
