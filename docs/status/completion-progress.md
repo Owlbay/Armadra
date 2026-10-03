@@ -889,8 +889,39 @@
 
 ## G4-2 启动兼容退役
 
-未开始。
+推迟。条件是「上一个发布版（含启动器）已发出、本版是其后的第一个版本」（补全计划 G4-2）。现有的 v0.1.0 只是 Draft、不含画布启动器（启动器在 #14–#19 合入），含启动器的第一个版本是 0.2.0，还没有发出。0.2.0 发出之后，下一个版本再执行 G4-2。在那之前，`launchWords` / `launchArgs` 与页面的旧 core 退路保留。
 
 ## G4-3 发布演练 0.2.0
 
-未开始。
+只做本机演练（用户决定）：没有推标签，没有建 GitHub Release 或草稿，也没有跑 `release.yml`。
+
+做了什么：
+
+- 版本：`node tools/release/version.mjs set 0.2.0`，改了根、`apps/desktop`、`apps/server`、`apps/mobile` 四处 `package.json`。演练中发现 core 的 `VERSION`（`core/instance.ts`）与 armadra-hook 的 `CLIENT_VERSION`（`cli/armadra-hook/usage.ts`）是手写常量，`set` 不会改它们，结果 `instance.test` / `hook.test` 红了。现在把这两处加进 `VERSION_SITES`，`set` 会一起改，`release:check` 也会一起看；`version.test` 加了一条用例覆盖。iOS 工程的 `MARKETING_VERSION` 缺省值同步改为 0.2.0（CI 打包时仍由命令行覆盖）；Android 的版本名与版本号从 `apps/mobile/package.json` 推出（200）。`apps/web`、`packages/shared` 是不发布的私有包，不在 `VERSION_SITES` 里，保持不变。
+- 兼容表 `tools/release/compatibility.json`：
+  - `minimumInstalled` 保持 0.1.0。v0.1.0 的 13 个迁移与现在 `core/db/migrations/` 的 0001–0013 逐字节相同，之后只新增到 0035，0.1.0 的库能直接迁上来。
+  - `agent` 为 `@armadra/agent` 0.6.7、`hostApi` 1，与桌面壳的 devDependency、lockfile 一致（`release:check` 校验通过）。
+  - `acp` 记上 2026-10-04 实跑通过的 `claude` → claude-agent-acp `min 0.85.1`、`pi` → pi-acp `min 0.0.34`。改动与 #77 的两个提交逐字相同，两边合并时不会冲突。其余五家仍为 null。
+- 新增 `CHANGELOG.md`（中文），内容是 0.1.0 以来的变化，按 PR 编号归类到 #77 为止。`repo.rules.json` 根目录白名单与[仓库结构](../design/repository-structure.md)的目录树已登记它。
+
+实测（macOS arm64，2026-10-04）：
+
+- `pnpm release:check`：版本 0.2.0，六处一致；agent 钉住的版本与安装的一致。
+- `pnpm release:test`：139 项，138 过、1 跳过（dev-stack 条目在没有设 `ARMADRA_DEV_STACK=1` 时按设计跳过），0 失败。
+- `pnpm release:dry-run --keep`：0.2.0 全矩阵通过，22 个文件进 `SHA256SUMS`，6 个更新平台。产物矩阵逐项核对过：
+  - darwin-aarch64 / x86_64：`.dmg`、`.zip`
+  - linux-aarch64 / x86_64：`.AppImage`、`.deb`、`.rpm`
+  - windows-aarch64 / x86_64：`-setup.exe`、`-portable.zip`
+  - 另有 `armadra-web_0.2.0.tar.gz`
+  - 每个文件都有 minisign `.sig`
+  - 6 份清单：`latest-darwin-{aarch64,x86_64}-mac.yml`、`latest-linux-x86_64-linux.yml`、`latest-linux-aarch64-linux-arm64.yml`、`latest-windows-{aarch64,x86_64}.yml`，`version` 都是 0.2.0，`sha512` / `size` 与包相符
+  - `latest.json` 的 `version` 为 0.2.0，6 个平台都有 `url`、`signature`（可信注释带 `version:0.2.0`）与 `feed.sha256`
+  - 发布说明围栏为 `{"minimumInstalled":"0.1.0"}`
+  - 本机没有装 `minisign` 二进制，签名只用 Node 实现验过
+- 对着 dev-stack `release`（`pnpm dev-stack up release`，127.0.0.1:8090，开发公钥 `tools/dev-stack/.data/release/minisign.pub`）跑 `release:dry-run --against`：全平台一次，加上 6 个 `--target` 各一次，都通过（ETag 304、`SHA256SUMS` / `latest.json` 验签、各平台清单与包）。这个服务固定发 99.0.0 夹具，所以又在宿主机上用同一个入口起了 0.2.0（`RELEASE_VERSION=0.2.0 MOCK_RELEASE_PORT=8093 node tools/dev-stack/release-entry.mjs`）。还用 `mock-release-server.mjs` 把上面演练出的 0.2.0 目录按 `v0.2.0` 托管出来。这两份 0.2.0 都以客户端视角 `--against` 验过，6 个平台都通过。用完 `pnpm dev-stack down`。
+
+没做 / 需用户提供：
+
+- 真签名与公证：Apple、Windows、GPG 证书与 minisign 发布密钥都没有，见上面「需用户提供」P0 / P1。拿到之前，正式发布按「未签名」处理，说明顶部会列出未签名的平台。
+- `release.yml` 的发布说明目前取 GitHub 的 `generate-notes`，不读 `CHANGELOG.md`。发版时需要手工把 0.2.0 一节贴进草稿，或者另开一个包让 `assemble.mjs --notes-from` 读这一节。
+- 打包版的「检查 → 下载 → 暂存」这次没有对 0.2.0 重跑。G3-3 已用 `update-e2e` 对 dev-stack 走通过，这次没有改壳侧代码。

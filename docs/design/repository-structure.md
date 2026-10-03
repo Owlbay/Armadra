@@ -54,7 +54,7 @@
 │   └── research/              研究材料
 ├── assets/brand/              Logo 源文件（第 2 步已迁入）
 ├── .github/workflows/         CI
-├── AGENTS.md CLAUDE.md README.md LICENSE
+├── AGENTS.md CLAUDE.md README.md CHANGELOG.md LICENSE
 ├── armadra.sh                 开发者入口，内部只调用 tools/ 与包脚本
 ├── package.json pnpm-workspace.yaml tsconfig.base.json
 ├── Cargo.toml Cargo.lock

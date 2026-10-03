@@ -14,6 +14,7 @@ import {
 import type { SshHost } from "../settings/ssh-hosts";
 import { SettingsStore } from "../settings/store";
 import { state as integrationState } from "../hook/install/integration";
+import { VERSION } from "../instance";
 import { tempDir } from "../testing/temp-dir";
 import { WORKER_CAPABILITIES } from "./capabilities";
 import {
@@ -69,10 +70,10 @@ describe("isOutdated", () => {
   });
 
   it("defaults to this build's version and capability list", () => {
-    expect(isOutdated("0.1.0", WORKER_CAPABILITIES)).toBe(false);
+    expect(isOutdated(VERSION, WORKER_CAPABILITIES)).toBe(false);
     expect(
       isOutdated(
-        "0.1.0",
+        VERSION,
         WORKER_CAPABILITIES.filter(
           (name) => name !== INTEGRATION_V2_CAPABILITY,
         ),
@@ -242,7 +243,7 @@ describe("execution host rows carry the Worker", () => {
       host: HOST as SshHost,
       worker: HOST.worker,
       askpass: {} as never,
-      version: "0.1.0",
+      version: VERSION,
       spawn: start,
       node: async () => ({
         version: "v24.0.0",
@@ -259,7 +260,7 @@ describe("execution host rows carry the Worker", () => {
       expect(answer.status).toBe(200);
       const found = row(answer.body);
       expect(found.worker).toMatchObject({
-        version: "0.1.0",
+        version: VERSION,
         outdated: false,
         connected: true,
       });
@@ -284,7 +285,7 @@ describe("execution host rows carry the Worker", () => {
       resync: async (hostId) => {
         asked.push(hostId);
         workerFleet().handshake(hostId, {
-          runtimeVersion: "0.1.0",
+          runtimeVersion: VERSION,
           capabilities: WORKER_CAPABILITIES,
         });
       },
