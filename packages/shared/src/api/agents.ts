@@ -3,6 +3,7 @@ import { z } from "zod";
 import { agentProbeSchema } from "../agent-capabilities.js";
 import { AGENT_CAPABILITIES, AGENT_IDS, PROMPT_MODES } from "../agents.js";
 import { agentIdSchema } from "../domain/index.js";
+import { agentAcpInfoSchema } from "./acp.js";
 
 /**
  * @deprecated A `LaunchWord` (`shell.ts`) as an older core answered it: a
@@ -30,6 +31,17 @@ export const agentHistorySchema = z.object({
   transcript: historyStateSchema,
 });
 export type AgentHistory = z.infer<typeof agentHistorySchema>;
+
+/**
+ * An execution host whose Worker is older than this build expects (contract
+ * §21.2): canvas launches there carry a stale injection until it is resynced.
+ */
+export const outdatedHostSchema = z.looseObject({
+  hostId: z.string().min(1),
+  /** The Worker version the host reported, when it reported one. */
+  version: z.string().optional(),
+});
+export type OutdatedHost = z.infer<typeof outdatedHostSchema>;
 
 /** `GET /api/agents` — registry entry plus local detection. */
 export const agentInfoSchema = z.object({
@@ -108,6 +120,13 @@ export const agentInfoSchema = z.object({
    * because a runtime that predates the field simply does not say.
    */
   history: agentHistorySchema.optional(),
+  /** Execution hosts whose Worker is out of date for this agent (§21.2). */
+  outdatedHosts: z.array(outdatedHostSchema).optional(),
+  /**
+   * How this CLI speaks the Agent Client Protocol on this machine (contract
+   * §14.1). Absent from a core without ACP, and for an agent without a path.
+   */
+  acp: agentAcpInfoSchema.optional(),
 });
 
 export const agentListSchema = z.array(agentInfoSchema);
@@ -247,6 +266,8 @@ export const integrationStateSchema = z.looseObject({
     })
     .optional(),
   clientBin: z.string().optional(),
+  /** Execution hosts whose Worker needs a resync (contract §21.2). */
+  outdatedHosts: z.array(outdatedHostSchema).optional(),
   /** Something worked but deserves a sentence in the settings page. */
   warning: z.string().optional(),
 });
