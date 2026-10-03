@@ -7,7 +7,8 @@ import { EventBus } from "../bus";
 import type { WorkspaceEvent } from "../bus";
 import { createBoard } from "../canvas/boards";
 import { putContextLinks } from "../canvas/context-links";
-import { type OpenedDatabase, openDatabase } from "../db/open";
+import type { OpenedDatabase } from "../db/open";
+import { openFreshDatabase } from "../db/fresh.fixture";
 import { CoreServer } from "../http/server";
 import type { CoreRequest } from "../http/router";
 import { createLog, nodePlatform } from "../platform";
@@ -173,10 +174,10 @@ export interface AgentFixture {
 
 export function agentFixture(): AgentFixture {
   const directory = canonicalize(mkdtempSync(join(tmpdir(), "armadra-agent-")));
-  const opened: OpenedDatabase = openDatabase({
-    file: join(directory, "canvas.db"),
-    migrationsDir: migrationsDir(),
-  });
+  const opened: OpenedDatabase = openFreshDatabase(
+    join(directory, "canvas.db"),
+    migrationsDir(),
+  );
   const database = opened.database;
   const log = createLog("error");
   const platform = nodePlatform({
