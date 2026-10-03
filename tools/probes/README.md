@@ -101,6 +101,15 @@ node tools/probes/core-terminal-packaged.mjs              # 打包版，从页�
 
 三个脚本都用 `mktemp` 的数据目录与各自私有的 tmux socket，跑完 `kill-server` 并删掉目录；不碰操作者自己的数据目录或 tmux server。
 
+## 节点凭据端到端
+
+```sh
+pnpm --filter @armadra/desktop build
+node tools/probes/credentials-e2e.mjs [输出目录]   # 默认 target/probes/credentials-e2e-<时间>/
+```
+
+不用真实账号（契约 §20）：一个基础 CLI 为 Claude 的自定义 Agent 指向 `fixtures/env-echo.mjs`（只打印变量长度），凭据值是一串假令牌。断言 CLI 进程看到的长度正确、节点 shell 的 `env` 里没有这个变量、值不在画面 / 日志 / 答复里、基础 CLI 不匹配时起终端被拒、条目删掉后同一 shell 重跑启动器拒绝起 CLI。临时数据目录与 HOME，密钥后端 `file-encrypted`，`ARMADRA_NO_GLOBAL_WRITES=1`；Windows 上跳过。产物 `result.json`。
+
 ## 本轮界面功能的端到端验证
 
 真 core（`apps/desktop/out/core/main.js`）、真 Vite 页面、新 profile 的无头 Chrome，经浏览器级 CDP 连接驱动；多设备场景用两个独立的 browser context 当两台设备。场景拆在 `ui-features/` 里，共用一套临时环境（`harness.mjs`），媒体夹具与截图像素统计在 `fixtures.mjs`。
