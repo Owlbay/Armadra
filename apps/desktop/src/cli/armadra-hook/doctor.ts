@@ -6,9 +6,9 @@ import {
   envVar,
   loadEndpoint,
   nodeToken,
-} from "./endpoint.js";
-import type { Endpoint } from "./endpoint.js";
-import { getRequest, send } from "./http.js";
+} from "../../hook-client/endpoint.js";
+import type { Endpoint } from "../../hook-client/endpoint.js";
+import { getRequest, send } from "../../hook-client/http.js";
 import { HOOK_CLIENT_REVISION } from "./usage.js";
 
 export async function run(): Promise<number> {
