@@ -116,7 +116,7 @@ describe("the collaboration skill", () => {
     const text = developerInstructions("/x/SKILL.md");
     const [first, zh, en] = text.split("\n");
     expect(first).toBe(`[Armadra canvas rules r${SKILLS_REVISION}]`);
-    expect(SKILLS_REVISION).toBe(16);
+    expect(SKILLS_REVISION).toBe(17);
     expect(zh).toContain("ARMADRA_NODE_ID");
     expect(en).toContain("only when ARMADRA_NODE_ID is set");
     expect(text.indexOf(canvasRules())).toBeGreaterThan(first?.length ?? 0);

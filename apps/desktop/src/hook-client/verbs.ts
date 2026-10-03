@@ -336,6 +336,17 @@ const CANVAS: Record<ControlVerb, Row> = {
     },
     required: ["draft"],
   },
+  wait: {
+    description:
+      "Long-poll a task opened with open-agent --task-id: answers {status, since, events}; status is running, done, failed, blocked or needsInput. Never answer the member's approvals for it.",
+    properties: {
+      task: str("the task id given to open-agent --task-id"),
+      node: str("the task's node id (optional check)"),
+      since: str("the `since` from the previous answer; omit the first time"),
+      timeout: int(`seconds to wait for news, 0–60 (default 30)`, 0),
+    },
+    required: ["task"],
+  },
 };
 
 // ---------------------------------------------------------------------------

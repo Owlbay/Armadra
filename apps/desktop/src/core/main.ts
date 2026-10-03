@@ -35,6 +35,7 @@ import {
   createLog,
   logLevel,
   nodePlatform,
+  reportError,
 } from "./platform";
 import { install as installLanguage, languageDomain } from "./language";
 import { install as installRemote } from "./remote";
@@ -363,6 +364,12 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
   };
   process.on("SIGTERM", onSignal);
   process.on("SIGINT", onSignal);
+  // 没人接住的异常（含按缺省规则转成异常的未处理拒绝）：报给壳（外部服务
+  // §11.2）。用 monitor 而不是 `uncaughtException`——它不改变进程照旧崩溃这件事。
+  const onUncaught = (error: unknown): void => {
+    reportError(platform, error, { source: "uncaught" });
+  };
+  process.on("uncaughtExceptionMonitor", onUncaught);
 
   // Step 5.
   try {
@@ -386,6 +393,7 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
     stop: async () => {
       process.off("SIGTERM", onSignal);
       process.off("SIGINT", onSignal);
+      process.off("uncaughtExceptionMonitor", onUncaught);
       await stop();
     },
   };

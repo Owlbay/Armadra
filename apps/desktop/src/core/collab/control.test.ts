@@ -65,15 +65,27 @@ afterEach(() => {
 });
 
 describe("the dispatcher", () => {
-  it("publishes exactly the nineteen verbs plus help, and derives help from them", async () => {
+  it("publishes exactly the twenty verbs plus help, and derives help from them", async () => {
     const dispatcher = controlDispatcher();
     expect(dispatcher?.verbs).toEqual([...VERBS]);
-    expect(VERBS).toHaveLength(20);
+    expect(VERBS).toHaveLength(21);
     const body = ok(await run(me, "help"));
     expect(body.result).toMatchObject({ protocol: "armadra.mailbox.v1" });
     // Derived, not restated: a verb added without a help line would be
     // invisible, and a line left behind would be a lie.
     expect((body.result as { verbs: string[] }).verbs).toEqual([...VERBS]);
+    // The ids `open-agent --agent` takes here: the ama adapter registers one
+    // runner per id (contract §15.5).
+    fixture.customAgents.push({
+      id: "custom:review",
+      label: "review",
+      launchCmd: "review",
+      baseAgent: "claude",
+    });
+    const again = ok(await run(me, "help"));
+    expect((again.result as { agents: string[] }).agents).toEqual(
+      expect.arrayContaining(["claude", "codex", "ama", "custom:review"]),
+    );
   });
 
   it("refuses an unknown verb by name and lists the real ones", async () => {

@@ -30,14 +30,20 @@ export const SWEEP_INTERVAL_MS = 3_600_000;
 /** `ARMADRA_PERM_WAIT_SECS` for a CLI that supports hook replies. */
 export const PERM_WAIT_SECONDS = 45;
 
+/** The built-ins that wait for the canvas' answer to a permission request. */
+export const ANSWERS_ON_CANVAS: readonly string[] = ["claude", "ama"];
+
 /**
  * The extra PTY variable that switches the hook client from "report and exit"
  * to "write the request, wait for an answer file, print the decision"
  * (contract §5.5).
  *
- * Only Claude implements a hook that can answer a permission request, and the
- * user can turn it off with `hooks.replyApprovals`. Everything else gets an
- * empty list, which is the same as not being injected at all.
+ * Claude implements a hook that can answer a permission request; `ama` does
+ * the same through its host adapter's approval broker (`agent-host/ama/
+ * approvals.ts`, contract §15.5), which writes the same request file into the
+ * same pending directory and polls for the same answer file. The user can turn
+ * both off with `hooks.replyApprovals`. Everything else gets an empty list,
+ * which is the same as not being injected at all.
  */
 export function permissionWaitEnvironment(
   agentId: string,
@@ -48,7 +54,9 @@ export function permissionWaitEnvironment(
    */
   baseOf: (agentId: string) => string = (id) => id,
 ): readonly (readonly [string, string])[] {
-  if (baseOf(agentId) !== "claude" || !replyApprovals) return [];
+  if (!ANSWERS_ON_CANVAS.includes(baseOf(agentId)) || !replyApprovals) {
+    return [];
+  }
   return [["ARMADRA_PERM_WAIT_SECS", String(PERM_WAIT_SECONDS)]];
 }
 
