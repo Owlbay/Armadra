@@ -54,6 +54,12 @@ async function dragNode(page, id, dx, dy) {
 
 export default async function presence({ stack, output, report, scenario }) {
   const run = scenario(report, "多设备画布（§41）", output);
+  // 这一场验的是租约 + CAS（契约 §9）；实时协同缺省开，这里先关掉，新板留在
+  // 租约模式。实时那条路由 realtime-e2e 验。
+  await stack.api("/api/settings", {
+    method: "PATCH",
+    body: JSON.stringify({ collab: { realtime: false } }),
+  });
   const project = join(stack.scratch, "presence-project");
   mkdirSync(project, { recursive: true });
   writeFileSync(join(project, "README.md"), "# presence\n");
@@ -277,5 +283,9 @@ export default async function presence({ stack, output, report, scenario }) {
   run.consoleClean(first, phone);
   await phone.close();
   await first.close();
+  await stack.api("/api/settings", {
+    method: "PATCH",
+    body: JSON.stringify({ collab: { realtime: true } }),
+  });
   run.entry.status = "passed";
 }
