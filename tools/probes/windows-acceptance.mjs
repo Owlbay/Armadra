@@ -458,6 +458,12 @@ const PAGE_HELPERS = `(() => {
   return { httpBase, wsBase };
 })()`;
 
+/**
+ * 页面里的工具，没装（页面刚换过一次地址）就先装：每次调用都从页面自己的桥现读
+ * 地址。
+ */
+const HELPERS = `(globalThis.__acceptance ?? (${PAGE_HELPERS}, globalThis.__acceptance))`;
+
 class App {
   constructor({ exe, dataDir, home, userDataDir, log }) {
     Object.assign(this, { exe, dataDir, home, userDataDir, log });
@@ -499,17 +505,25 @@ class App {
       return failed ? `core 没起来：${this.output.slice(-1500)}` : undefined;
     });
     this.page = await cdp(url);
+    // 页面可能比 core 先到，或换过一次地址：等到经页面问得到 /api/health 为止。
+    let last;
     const endpoints = await waitFor(
-      "页面上的桥",
+      "经页面问到 core 的 /api/health",
       async () => {
         try {
-          return await this.page.evaluate(PAGE_HELPERS);
-        } catch {
+          const ready = await this.page.evaluate(
+            `(async () => { delete globalThis.__acceptance; const helpers = ${HELPERS}; const health = await helpers.api("GET", "/api/health"); return health.status === 200 ? { httpBase: helpers.httpBase, wsBase: helpers.wsBase } : null; })()`,
+          );
+          return ready ?? undefined;
+        } catch (error) {
+          last = error instanceof Error ? error.message : String(error);
           return undefined;
         }
       },
-      { timeout: 60_000, interval: 1_000 },
-    );
+      { timeout: 90_000, interval: 1_000 },
+    ).catch((error) => {
+      throw new Error(`${error.message}；最后一次：${last ?? "无"}`);
+    });
     return endpoints;
   }
 
@@ -519,13 +533,13 @@ class App {
 
   async api(method, path, body) {
     return await this.page.evaluate(
-      `globalThis.__acceptance.api(${JSON.stringify(method)}, ${JSON.stringify(path)}, ${JSON.stringify(body)})`,
+      `${HELPERS}.api(${JSON.stringify(method)}, ${JSON.stringify(path)}, ${JSON.stringify(body)})`,
     );
   }
 
   async terminal(sessionId, lines, waitFor, timeoutMs = 30_000) {
     return await this.page.evaluate(
-      `globalThis.__acceptance.terminal(${JSON.stringify(sessionId)}, "acceptance", ${JSON.stringify(lines)}, ${JSON.stringify(waitFor)}, ${timeoutMs})`,
+      `${HELPERS}.terminal(${JSON.stringify(sessionId)}, "acceptance", ${JSON.stringify(lines)}, ${JSON.stringify(waitFor)}, ${timeoutMs})`,
     );
   }
 
@@ -1087,7 +1101,7 @@ async function runFull(options, result, record, out) {
         return { ok: false, detail: { registered } };
       // 页面开着事件流时由探针（应用之外）改文件。
       const waiting = app.evaluate(
-        `globalThis.__acceptance.events(${JSON.stringify(workspaceId)}, "file.changed", () => {}, 20000)`,
+        `${HELPERS}.events(${JSON.stringify(workspaceId)}, "file.changed", () => {}, 20000)`,
       );
       await sleep(1_500);
       writeFileSync(file, `two ${Date.now()}\n`);
