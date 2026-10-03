@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { verifyServedRelease } from "../release/dry-run.mjs";
 import { verifyDetached } from "../release/minisign.mjs";
 import { startMockReleaseServer } from "../release/mock-release-server.mjs";
 import { OWNER, REPO, buildReleaseFixture } from "./release-entry.mjs";
@@ -52,6 +53,12 @@ test("release：现造的发布能被列出、下载并用现生成的公钥验�
       verifyDetached(fixture.publicKey, entry.signature, bundle).ok,
       true,
     );
+    // 客户端的整条路：检查（带 ETag 再查一次得 304）→ 取清单 → 逐条校验。
+    const served = await verifyServedRelease({
+      source: server.source,
+      publicKeyText: fixture.publicKey,
+    });
+    assert.deepEqual(served.problems, []);
     const tampered = Buffer.concat([bundle, Buffer.from("x")]);
     assert.equal(
       verifyDetached(fixture.publicKey, entry.signature, tampered).reason,
