@@ -414,7 +414,16 @@
 
 ## G3-6 服务端性能基线与多主机管理页面
 
-未开始。
+**做了什么**
+
+- 性能探针 `tools/probes/server-perf.mjs`：对真的服务器壳加 30 个终端、6 个事件流、一块 2000 对象的实时板，量建会话、`board.changed` 扇出、终端吞吐、实时板批量 / 冷同步 / 物化 / 单字段更新、同时关掉全部终端时其余请求被堵多久，以及服务器壳与 tmux 的 RSS / CPU；`--cpu-prof` 找热点；按平台基线（`server-perf-baseline.json`）比对，差 20% 以上且超过绝对容差即失败。进 `e2e.json` B 档；纯函数用例进 `release:test`。结果与解读：[服务端性能基线](server-performance-baseline.md)。
+- 热点修复（按 profile）：关终端走同步 `ps`、每次接终端流同步 `tmux -V`、每次建终端同步 `infocmp`，三处都堵事件循环。改成异步 `readProcessTable()`、可用后缓存探测、`infocmp` 每进程一次。
+- 舰队健康记录：`remote/fleet.ts` 每台主机留最近 20 条握手 / 断开 / 验证或重新同步失败，执行主机行带可选 `health`（契约 §21.3），共享层 `executionHostHealthSchema`。
+- 执行主机页的舰队视图 `execution-hosts/FleetGroup.tsx`：在线 / 离线、Worker 版本或待升级、健康记录（点开明细表）、逐台与全部重新同步；页面 15 秒刷新。展示页 `integration` 分区放它的真样本。
+
+**实测**（Apple M1 Max，本机负载 12–14，三次中位数）：扇出 p50 1.3 ms / p95 2.2 ms；终端吞吐 24.4 MiB/s；实时板 2000 对象到在线客户端 170 ms、冷同步 67 ms、物化 58 ms、单字段更新 p95 1.6 ms；稳态 RSS 183 MiB。同时关 30 个终端时其余请求最慢从 0.8–1.3 s 降到 0.08–0.17 s。
+
+**没做**：基线只有 `darwin-arm64`；ubuntu 的 B 档第一次跑出结果后再补录 `linux-x64`（之前只报告不判）。夜间作业的构建步骤归 G3-4。休眠判据 `hibernator.ts::processesUnder` 仍是同步 `ps`（它本身是同步接口，未在本次负载里出现）。展示页 `integration` 分区里 CLI 分组（启动器 / ACP）的样本归集成设置页的实现包。
 
 ## G3-7 真 CLI 端到端：场景 11 / 12 与三家 TUI
 
