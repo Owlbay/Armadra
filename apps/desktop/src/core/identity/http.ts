@@ -2,7 +2,7 @@ import type { ServerResponse } from "node:http";
 import { MAX_FRAME_BYTES, PROTOCOL_MAJOR, PROTOCOL_MINOR } from "./protocol";
 import type { CoreRequest } from "../http/router";
 import type { AccountsService } from "./accounts";
-import { handleAccounts } from "./accounts-http";
+import { type IdentitySecurity, handleAccounts } from "./accounts-http";
 import { IdentityError, identityFailure } from "./errors";
 import { nativeOrigin } from "./origin";
 import type {
@@ -42,6 +42,21 @@ export interface IdentityHttpOptions {
   readonly accounts?: AccountsService;
   /** 额外的能力名，各域装配时追加。 */
   readonly capabilities?: () => readonly string[];
+  /**
+   * 加固（契约 §18.1–§18.4）：口令策略、锁定、passkey、MFA、会话列表。没有它时
+   * 登录照旧、那几条路径 404。
+   */
+  readonly security?: IdentitySecurity;
+}
+
+/**
+ * 请求的来源地址：socket 的对端，IPv4 映射地址去掉前缀。不读
+ * `X-Forwarded-For`——它谁都能写；反向代理后面看到的是代理，限流按代理算，
+ * 宁紧勿松。
+ */
+export function remoteAddress(request: CoreRequest): string {
+  const raw = request.raw.socket?.remoteAddress ?? "";
+  return (raw.startsWith("::ffff:") ? raw.slice(7) : raw).slice(0, 64);
 }
 
 /* ------------------------------ 凭据的读取 -------------------------------- */
@@ -215,6 +230,8 @@ export class IdentityHttp {
       origin,
       csrfToken,
     };
+    const remoteIp = remoteAddress(request);
+    const userAgent = (header(request, "user-agent") ?? "").slice(0, 256);
     try {
       switch (`${request.method} ${action}`) {
         case "POST pair": {
@@ -226,6 +243,8 @@ export class IdentityHttp {
             hostId,
             instanceId: this.options.instanceId,
             origin,
+            remoteIp,
+            userAgent,
           });
           sessionCookies(request, response, hostId, credentials);
           this.json(
@@ -342,23 +361,43 @@ export class IdentityHttp {
           // 账号 / 组 / 共享这一面（R6b）。认证在它内部按需发生：`login` 与
           // 邀请接受之前调用方可能还没有会话，而其余动作都要求一个。
           const accounts = this.options.accounts;
+          // 和配对同一条规矩：原生传输的密钥在响应体里，浏览器会话才发
+          // Cookie（而且只在 HTTPS 的权威来源上带 Secure）。
+          const issue = (credentials: SessionCredentials) => {
+            sessionCookies(request, response, hostId, credentials);
+            return this.credentialJson(request, credentials);
+          };
+          const security = this.options.security;
           const answered =
             accounts === undefined
               ? undefined
-              : handleAccounts(action, request, {
+              : await handleAccounts(action, request, {
                   accounts,
                   authenticate: () => this.service.authenticate(actor),
-                  login: (input) => {
-                    const credentials = this.service.loginWithPassword({
-                      ...input,
-                      hostId,
-                      origin,
-                    });
-                    // 和配对同一条规矩：原生传输的密钥在响应体里，浏览器会话
-                    // 才发 Cookie（而且只在 HTTPS 的权威来源上带 Secure）。
-                    sessionCookies(request, response, hostId, credentials);
-                    return this.credentialJson(request, credentials);
-                  },
+                  login: (input) =>
+                    issue(
+                      this.service.loginWithPassword({
+                        ...input,
+                        hostId,
+                        origin,
+                        remoteIp,
+                        userAgent,
+                      }),
+                    ),
+                  ...(security === undefined
+                    ? {}
+                    : {
+                        security: {
+                          security,
+                          service: this.service,
+                          actor,
+                          hostId,
+                          origin,
+                          remoteIp,
+                          userAgent,
+                          issue,
+                        },
+                      }),
                 });
           if (answered !== undefined) {
             this.json(response, cors, answered.status, answered.body);
@@ -375,6 +414,12 @@ export class IdentityHttp {
       const failure = identityFailure(
         error instanceof SyntaxError ? new IdentityError("invalid") : error,
       );
+      if (failure.retryAfterMs !== undefined) {
+        response.setHeader(
+          "retry-after",
+          String(Math.max(1, Math.ceil(failure.retryAfterMs / 1000))),
+        );
+      }
       this.json(response, cors, failure.status, {
         code: failure.code,
         message: failure.message,
