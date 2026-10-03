@@ -7,7 +7,8 @@
  *     update。step1 只读者也能发（它只问「我缺什么」）；step2 / update 是写，
  *     要 `canvas:write`，没有的人发来一帧就丢弃并以 4403 关流。
  *   * `1` awareness：光标、选区、在看哪个节点。只读者也能发——让别人看见自己在
- *     看是在线表一直有的语义。
+ *     看是在线表一直有的语义。形状不对的状态丢弃，身份按连接改写
+ *     （`awareness.ts`，契约 §16.4）。
  *   * `3` query awareness：回一份当前全部 awareness。
  *
  * 这里不认 socket：连接只要求一个能 `send` 与 `close` 的对端，测试用两个内存
@@ -19,6 +20,8 @@ import * as encoding from "lib0/encoding";
 import * as awarenessProtocol from "y-protocols/awareness";
 import * as syncProtocol from "y-protocols/sync";
 import * as Y from "yjs";
+
+import { sanitizeAwarenessUpdate } from "./awareness";
 
 export const MESSAGE_SYNC = 0;
 export const MESSAGE_AWARENESS = 1;
@@ -45,6 +48,10 @@ export interface SyncPeer {
 export interface SyncRoom {
   readonly doc: Y.Doc;
   readonly awareness: awarenessProtocol.Awareness;
+  /** 同一块板上的全部连接；awareness 据此认 clientID 归谁（§16.4）。 */
+  readonly connections?: ReadonlySet<{
+    readonly awarenessIds: ReadonlySet<number>;
+  }>;
 }
 
 export interface ConnectionOptions {
@@ -104,7 +111,13 @@ export class SyncConnection {
         case MESSAGE_SYNC:
           return this.receiveSync(decoder);
         case MESSAGE_AWARENESS: {
-          const update = decoding.readVarUint8Array(decoder);
+          // 形状不对的状态丢掉，`principalId` 换成这条连接的（契约 §16.4）。
+          const update = sanitizeAwarenessUpdate(
+            decoding.readVarUint8Array(decoder),
+            this.principalId,
+            (id) => this.foreignAwareness(id),
+          );
+          if (update === undefined) return true;
           awarenessProtocol.applyAwarenessUpdate(
             this.room.awareness,
             update,
@@ -125,6 +138,13 @@ export class SyncConnection {
       this.close(CLOSE_BAD_FRAME, "bad frame");
       return false;
     }
+  }
+
+  private foreignAwareness(clientId: number): boolean {
+    for (const conn of this.room.connections ?? []) {
+      if (conn !== this && conn.awarenessIds.has(clientId)) return true;
+    }
+    return false;
   }
 
   private receiveSync(decoder: decoding.Decoder): boolean {

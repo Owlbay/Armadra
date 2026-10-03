@@ -58,7 +58,13 @@ export type AcpErrorCode =
   | "acp_session_failed"
   | "acp_mode_unsupported"
   | "acp_mode_unavailable"
-  | "acp_not_installed";
+  | "acp_not_installed"
+  // 会话与路由（契约 §14.2，G2-1）。
+  | "acp_unsupported"
+  | "acp_session"
+  | "acp_no_raw_write"
+  | "acp_protocol"
+  | "awaiting_approval";
 
 /** 一条挂起的 `session/request_permission`。 */
 export interface AcpPendingPermission {

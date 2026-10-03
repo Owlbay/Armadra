@@ -14,7 +14,11 @@ import {
 import { serializeWhiteboard } from "../canvas/whiteboard/serialize";
 import { useCanvasStore } from "../store/canvas-store";
 import { clearLocalEdits, localEdits } from "../store/canvas/pending";
-import { isReadOnly, presenceClientId } from "../store/canvas/presence";
+import {
+  isRealtimeBoard,
+  isReadOnly,
+  presenceClientId,
+} from "../store/canvas/presence";
 import {
   CanvasSaveQueue,
   MAX_CONFLICT_REPLAYS,
@@ -234,6 +238,11 @@ export function startAutosave(): () => void {
     editTimer = null;
     const state = useCanvasStore.getState();
     if (state.saveState !== "dirty") return;
+    // 实时板：文档经 `…/sync` 同步，表由 core 物化；HTTP 保存只会撞 409。
+    if (isRealtimeBoard(state)) {
+      useCanvasStore.setState({ saveState: "saved", saveError: null });
+      return;
+    }
     // 只读时落下来的只可能是排版副产物（文字自适应高度之类），写出去也会被
     // 423 拒；丢掉，远端那份才是真的。
     if (isReadOnly(state)) {
@@ -262,8 +271,9 @@ export function startAutosave(): () => void {
     const state = useCanvasStore.getState();
     // 有编辑在路上就不必单独存视口了，那次 PUT 会带上它。
     if (state.saveState !== "saved" && state.saveState !== "idle") return;
-    // 视口也存在画布文档里：只读的一方平移只是自己看，不写。
-    if (isReadOnly(state)) return;
+    // 视口也存在画布文档里：只读的一方平移只是自己看，不写。实时板的视口
+    // 不进文档（补全架构 §6.2），也不再单独 PUT。
+    if (isReadOnly(state) || isRealtimeBoard(state)) return;
     const next = target();
     if (!next) return;
     // 刚刚那次编辑保存已经把这个视口带走了，不必再 PUT 一遍。

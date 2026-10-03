@@ -115,10 +115,9 @@ describe("feature detection", () => {
     expect(clientAcceptsMcpServers({ features: { mcpServers: "yes" } })).toBe(
       false,
     );
-    const declared =
-      (AcpClient as { features?: { mcpServers?: unknown } }).features
-        ?.mcpServers === true;
-    expect(clientAcceptsMcpServers()).toBe(declared);
+    // The pinned `@armadra/agent` (≥ 0.6.5) takes `mcpServers` on session open.
+    expect(AcpClient.features.mcpServers).toBe(true);
+    expect(clientAcceptsMcpServers()).toBe(true);
   });
 
   it("passes the servers as the third argument when the client takes them", async () => {
@@ -172,7 +171,7 @@ describe("startAcp with mcpServers", () => {
     });
     sessions.push(session);
     expect(session.sessionId).toMatch(/^fake-/);
-    expect(session.mcpInjected).toBe(clientAcceptsMcpServers());
+    expect(session.mcpInjected).toBe(true);
   });
 
   it("leaves mcpInjected out when none were asked for", async () => {
@@ -222,7 +221,7 @@ describe.skipIf(process.platform === "win32")(
         canvasMcp: INPUT,
       });
       sessions.push(on);
-      expect(on.mcpInjected).toBe(clientAcceptsMcpServers());
+      expect(on.mcpInjected).toBe(true);
 
       const off = await startAdapter(withoutMcp, {
         cwd: tmpdir(),

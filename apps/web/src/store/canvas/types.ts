@@ -15,6 +15,18 @@ import type { StoreApi } from "zustand";
 import type { WhiteboardDoc } from "../../canvas/whiteboard/model";
 import type { CommitOptions } from "./history";
 
+export interface RealtimeLink {
+  boardId: string;
+  writable: boolean;
+}
+
+/** 实时板文档的投影（`realtime/doc.ts::readRemote`）。 */
+export interface RealtimeState {
+  nodes: CanvasNode[];
+  edges: BoardDocument["edges"];
+  whiteboard: WhiteboardDoc;
+}
+
 export type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
 
 export interface BoardBrief {
@@ -115,6 +127,12 @@ export interface CanvasState {
    * 旧快照不参与只读判定（`presence.ts`）。
    */
   presence: BoardPresence | null;
+  /**
+   * 这块板走实时协同（补全架构 §6.4，`realtime/session.ts` 写）。`writable`
+   * 为假时画布只读：还没完成第一次同步，或者 core 以 4403 说了没有写权限。
+   * 属于别的板的旧值不参与判定。
+   */
+  realtime: RealtimeLink | null;
 }
 
 export interface CanvasActions {
@@ -130,9 +148,16 @@ export interface CanvasActions {
    * `canvas/sync/merge.ts`。
    */
   mergeRemoteDocument: (document: BoardDocument) => void;
+  /**
+   * 实时板的远端灌入（补全架构 §6.4，`realtime/binding.ts` 调）：`Y.Doc` 的
+   * 投影直接成为节点、连线与白板。文档就是真相，所以没有变基——视口、选区
+   * 留本地，历史、待存登记与保存态一律不动。
+   */
+  applyRealtimeState: (state: RealtimeState) => void;
   setSaveState: (state: SaveState) => void;
   setSaveError: (message: string | null) => void;
   setPresence: (presence: BoardPresence | null) => void;
+  setRealtime: (realtime: RealtimeLink | null) => void;
   setPanel: <K extends keyof PanelState>(key: K, value: PanelState[K]) => void;
 
   selectNodes: (ids: string[]) => void;

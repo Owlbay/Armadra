@@ -25,7 +25,7 @@ minimumReleaseAgeExclude:
   - "@xyflow/system@0.0.80"
   - react-resizable-panels@4.12.4
   - electron@42.11.6
-  - "@armadra/agent@0.6.2"
+  - "@armadra/agent@0.6.5"
 
 storeDir: .pnpm-store
 
@@ -60,3 +60,8 @@ overrides:
   # web app; mermaid's latest release still accepts the vulnerable range, so a
   # mermaid bump alone would not move it.
   "dompurify@>=3.4.13 <3.4.16": 3.4.16
+  # 整棵树只留一份 `@peculiar/asn1-schema`（不是安全修复，是正确性）。它按模块
+  # 实例登记 ASN.1 结构：`@simplewebauthn/server` 与 `@peculiar/x509` 解析到
+  # 2.9.4、而 `asn1-ecc` 用 2.10.0 时，ES256 签名的解包在 2.9.4 的登记表里找
+  # 不到 `ECDSASigValue`，passkey 断言一律校验失败。
+  "@peculiar/asn1-schema": 2.10.0

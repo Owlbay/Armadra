@@ -26,6 +26,7 @@ import {
   resetPresenceClient,
 } from "@/store/canvas/presence";
 import { TooltipProvider } from "@/ui/tooltip";
+import { useRealtimeStore } from "@/realtime/session";
 import { PresenceBar } from "./PresenceBar";
 
 /**
@@ -102,6 +103,13 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetPresenceClient();
+  useCanvasStore.getState().setRealtime(null);
+  useRealtimeStore.setState({
+    boardId: null,
+    status: "off",
+    peers: [],
+    following: null,
+  });
 });
 
 describe("presence", () => {
@@ -186,5 +194,67 @@ describe("presence", () => {
     await vi.waitFor(() =>
       expect(isReadOnly(useCanvasStore.getState())).toBe(false),
     );
+  });
+});
+
+/** 实时板（补全架构 §6.4、设计系统 §5.6）：在线表来自 awareness。 */
+describe("presence on a realtime board", () => {
+  const peer = (clientId: number, name: string, color: number) => ({
+    clientId,
+    state: { principalId: "", deviceId: `d${clientId}`, name, color },
+  });
+
+  function live(peers: ReturnType<typeof peer>[], writable = true) {
+    useCanvasStore.getState().setRealtime({ boardId: board.id, writable });
+    useRealtimeStore.setState({
+      boardId: board.id,
+      status: "online",
+      peers,
+    });
+  }
+
+  it("draws nothing when only this page is here, and ignores the lease", () => {
+    applyPresence(presence(OTHER, [ME, OTHER]));
+    live([]);
+    expect(isReadOnly(useCanvasStore.getState())).toBe(false);
+    const { container } = mount();
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("stacks avatars (self first, at most four) and folds the rest into +N", () => {
+    live([
+      peer(2, "Ann", 2),
+      peer(3, "Bob", 3),
+      peer(4, "Cy", 4),
+      peer(5, "Di", 5),
+      peer(6, "Ed", 6),
+    ]);
+    mount();
+    const bar = screen.getByLabelText("在线成员");
+    expect(bar.dataset.mode).toBe("realtime");
+    expect(screen.getByLabelText("你")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "跟随 Ann" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "跟随 Di" })).toBeNull();
+    expect(screen.getByLabelText("另外 2 人").textContent).toBe("+2");
+    expect(screen.queryByText("接管")).toBeNull();
+  });
+
+  it("follows a peer on click and stops on the second click", () => {
+    live([peer(2, "Ann", 2)]);
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "跟随 Ann" }));
+    expect(useRealtimeStore.getState().following).toBe(2);
+    fireEvent.click(screen.getByRole("button", { name: "取消跟随 Ann" }));
+    expect(useRealtimeStore.getState().following).toBeNull();
+  });
+
+  it("greys out and says disconnected while offline; badges read-only", () => {
+    live([peer(2, "Ann", 2)], false);
+    useRealtimeStore.setState({ status: "offline" });
+    mount();
+    expect(screen.getByLabelText("在线成员").dataset.offline).toBe("true");
+    expect(screen.getByText("已断开")).toBeTruthy();
+    expect(screen.getByText("只读")).toBeTruthy();
+    expect(isReadOnly(useCanvasStore.getState())).toBe(true);
   });
 });

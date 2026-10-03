@@ -13,6 +13,7 @@ import {
   type WhiteboardSize,
 } from "../../../app/preferences-store";
 import { colorHex } from "../../../canvas/whiteboard/palette";
+import { RealtimeSetting } from "../../../realtime/RealtimeSetting";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { CONTROL_WIDTH } from "./GeneralPage";
@@ -233,6 +234,8 @@ export function WhiteboardPage() {
           </Select>
         </SettingsRow>
       </SettingsGroup>
+
+      <RealtimeSetting />
     </>
   );
 }

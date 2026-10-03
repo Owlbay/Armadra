@@ -20,9 +20,21 @@ vi.mock("@/terminal/TerminalSurface", async () => {
   const React = await import("react");
   return {
     BELL_FLASH_MS: 600,
-    TerminalSurface: React.forwardRef(() => (
-      <div data-testid="terminal-surface" />
-    )),
+    // 表面一挂上就报「已退出」：节点头要不要把它带到会话视图上，是下面那条用例。
+    TerminalSurface: React.forwardRef(
+      (props: { onStatusChange?: (status: unknown) => void }, _ref) => {
+        React.useEffect(() => {
+          props.onStatusChange?.({
+            connection: "exited",
+            exitCode: 0,
+            error: null,
+            render: "live",
+          });
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, []);
+        return <div data-testid="terminal-surface" />;
+      },
+    ),
   };
 });
 vi.mock("@/acp/SessionView", () => ({
@@ -114,6 +126,28 @@ describe("TerminalNode body", () => {
     expect(screen.queryByTestId("session-view")).toBeNull();
   });
 
+  it("does not carry the terminal's exit onto the session view", async () => {
+    const terminal = terminalNode({ kind: "terminal", agent: { id: "codex" } });
+    const view = renderNode(terminal);
+    expect(await screen.findByText(/已退出/)).toBeTruthy();
+    view.rerenderNode(
+      <QueryClientProvider client={new QueryClient()}>
+        <TerminalNode
+          id="n1"
+          node={terminalNode({
+            kind: "terminal",
+            agent: { id: "codex", driver: "acp" },
+          })}
+          selected={false}
+          collapsed={false}
+          focused={false}
+        />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByTestId("session-view")).toBeTruthy();
+    expect(screen.queryByText(/已退出/)).toBeNull();
+  });
+
   it("switches through the core from the header menu and records the new driver", async () => {
     const node = terminalNode({
       kind: "terminal",
@@ -149,6 +183,8 @@ describe("TerminalNode body", () => {
           {
             agent: { id: "codex", driver: "acp" },
             sessionId: "22222222-2222-4222-8222-222222222222",
+            // 上一种驱动留下的退出码不属于新的这一代。
+            lastExitCode: null,
           },
           { history: "ignore" },
         ),
