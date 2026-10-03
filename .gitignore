@@ -27,4 +27,7 @@ apps/desktop/release/
 
 # Claude Code 本机私有设置（impeccable 安装器写入的 hook）
 .claude/settings.local.json
+
+# 本地 dev-stack 生成的开发密钥与挂载目录（tools/dev-stack/dev-stack.mjs 首次 up 时生成）
+tools/dev-stack/.data/
 target-main/
