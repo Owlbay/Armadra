@@ -224,6 +224,26 @@ export interface WorkspaceEventPayloads {
     readonly sessionId: string;
     readonly resumed: boolean;
   };
+  /*
+   * 一条评论变了（契约 §16.3）。不带正文：页面据此重新拉列表，推送域按
+   * `mentions`（被提及的 principal，不含作者）叫人。
+   */
+  "board.comment": {
+    readonly boardId: string;
+    readonly action:
+      | "created"
+      | "updated"
+      | "resolved"
+      | "reopened"
+      | "deleted";
+    readonly comment: {
+      readonly id: string;
+      readonly parentId: string | null;
+      readonly anchorKind: "node" | "item" | "point";
+      readonly anchorId?: string;
+    };
+    readonly mentions: readonly string[];
+  };
 }
 
 export type WorkspaceEventType = keyof WorkspaceEventPayloads;
