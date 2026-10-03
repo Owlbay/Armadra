@@ -744,7 +744,14 @@
 
 **补丁（真跑反馈）**：共用装配的 Claude / Codex 前提改为可选（`preflight.mjs`；没有 `~/.codex/auth.json` 的机器 Codex 记 skipped、依赖它的场景跳过，其余照跑），`--preflight` / `--setup-only`，场景 10 加 `ARMADRA_E2E_TUI_ONLY`（没选的家连凭据都不读），只选了两家时跳过沿环 send（两家成不了不回头的环，core 判成环拒收，还会挡住下一步的排队回执；实跑 claude、pi 撞上）；场景 12 终端视图的信任对话框改为等到「<编号>. Yes」画出来再答；真跑抓到的画面表明 Claude Code 2.1.287 是没编号的箭头菜单（「❯ No, exit / Yes, I trust this folder / Enter to confirm」），于是抽出 `trust-dialog.mjs` 供场景 1–10 的 `waitAgentUp` 与场景 12 共用：编号菜单按编号；箭头菜单两个选项与「Enter to confirm」都在才认，下移一次、重取画面核对 ❯ 在「Yes」上才回车；其余一律不答，超时带画面失败；场景 11 真模型的「便签里是成员回报的结果」接受转述（主体与结论都在）。自检：`preflight.test.mjs` 6 条、`trust-dialog.test.mjs` 3 条（进 `release:test`），场景 12 的假 TUI 改成箭头菜单（选项晚一秒、缺省光标在「No」、光标不在「Yes」时回车即退出）；临时 HOME 无 auth.json、PATH 全是假 CLI 时 `--preflight` 与 `--setup-only` 跳过场景 1、只建 claude 节点、没起任何真 CLI；场景 11 两种、场景 12 自检全过。
 
-**没做**：场景 11 真模型版、场景 12 真跑、OpenCode / OMP / Copilot 交互式 TUI 的真跑与画面门特征核实——按手册由用户（或经用户直接授权的会话）跑；`compatibility.json` 各家 `verified` 仍为 null（没有真跑证据）。Copilot 三条权限旗标在 `--acp` 下是否生效、OMP `acp` 是否接受 `--model=`、Pi 的 `settings.json` 键名未经实跑核实，真跑结果出来后按装机结果修。
+**真跑记录**（2026-10-04，macOS，经用户直接授权的会话按手册跑；本包的代理没有起真 CLI）：Claude Code 2.1.287、Pi 1.0.0、claude-agent-acp 0.85.1、pi-acp 0.0.34、ama 0.6.7（经 packy 中转，模型 kimi-k2.5）；Codex 记 skipped（没有 `~/.codex/auth.json`），OpenCode / OMP / Copilot 未装。
+
+- 场景 12（`ARMADRA_E2E_ACP_ONLY=claude,pi`）：Pi 全过，`compatibility.json` 记 pi-acp `verified.min = 0.0.34`；Claude 除 `switchToTerminal` 外全过——那一步碰上没编号的信任菜单，没答、超时失败（fail-closed），本 PR 已能识别，待重跑；Claude 的 `verified` 仍为 null。
+- 场景 11 `--real-model`：全过（含 ama → ama），只有「便签里是成员回报的结果」因真模型转述而失败——断言过严，本 PR 已改。
+- 场景 10（`ARMADRA_E2E_TUI_ONLY=claude,pi`）：22 项通过，1 项失败——两家时的沿环 send 被 core 判成环，本 PR 改为少于三家时跳过。
+- 每次跑完配置哈希比对都干净。两次跑之间，cc-switch 切换供应商改过 `~/.codex/config.toml`，不是探针造成的，没有还原。
+
+**没做**：Claude 的终端视图切换与场景 10 的两家环在修复后的重跑；Codex（ChatGPT 登录）与 OpenCode / OMP / Copilot 的真跑与画面门特征核实；codex-acp、claude-agent-acp 的 `verified` 仍为 null。Copilot 三条权限旗标在 `--acp` 下是否生效、OMP `acp` 是否接受 `--model=`、Pi 的 `settings.json` 键名未经实跑核实，真跑结果出来后按装机结果修。
 
 ## G3-8 安全收尾：泄露检查、公网加固、安全审查
 
@@ -862,8 +869,8 @@
 - [ ] GPG 签名专用密钥 → `ARMADRA_LINUX_GPG_KEY`、`ARMADRA_LINUX_GPG_PASSPHRASE`；首个签名发布后把 `armadra-linux.gpg` 提交到 `apps/web/public/`。解锁：Linux `.asc` 与 rpm 签名。（G3-3）
 - [ ] 稳定域名与一台公网可达主机（或反向代理）。解锁：passkey 的 RP ID 与真手机注册登录、手机网页不装 CA 直接访问、Let's Encrypt 生产签发（[服务器部署](../guides/server-deployment.md)第 3 节）、OAuth 回调地址、通用链接、商店审核演示服务器、对公网部署跑 `server-e2e` 与性能探针。（G1-10、G1-11、G1-12、G3-5、G3-1、G3-6；U6、U11）
 - [ ] 测试账号：两个 Claude 订阅（一个 `/login`、一个 `setup-token`）、两个带 Copilot 的 GitHub 账号与 B 的细粒度 PAT；Codex / Pi / OMP / OpenCode 的 API key。解锁：CLI 协作 §7.4 的 T1–T8，通过一项就打开 `CREDENTIAL_KINDS` 里对应种类；能在隔离 HOME 下登录的 Claude 凭据还解锁打包版冒烟带真 Claude。（G1-1；U1）
-- [ ] 装好并登录 OpenCode / OMP / Copilot 的机器，以及 `npm i -g @agentclientprotocol/claude-agent-acp @agentclientprotocol/codex-acp pi-acp`。解锁：按 `tools/probes/README.md`「C 档运行手册」跑 `ARMADRA_E2E_REAL=1 agent-e2e --only 10,12 --record-compat`、画面门里 `verified: false` 的特征翻真、`compatibility.json` 记实跑版本、Copilot 在 `--acp` 下的权限旗标核实。（G1-3、G1-4、G2-1、G3-7；U2、U3）
-- [ ] ama 的真模型供应商 key（`ARMADRA_E2E_AMA_PROVIDER` / `_MODEL` / `_KEY`）。解锁：场景 11 `--real-model`（真模型分派与 ama → ama）。（G3-7）
+- [ ] 装好并登录 OpenCode / OMP / Copilot 的机器、用 ChatGPT 登录的 Codex（`~/.codex/auth.json`），以及 `npm i -g @agentclientprotocol/codex-acp`（Claude 与 Pi 的适配器 2026-10-04 已在本机实跑，pi-acp 0.0.34 已记入）。解锁：按 `tools/probes/README.md`「C 档运行手册」跑 `ARMADRA_E2E_REAL=1 agent-e2e --only 10,12 --record-compat`、画面门里 `verified: false` 的特征翻真、`compatibility.json` 记实跑版本、Copilot 在 `--acp` 下的权限旗标核实。（G1-3、G1-4、G2-1、G3-7；U2、U3）
+- [x] ama 的真模型供应商 key：2026-10-04 场景 11 `--real-model` 已实跑（kimi-k2.5 经中转），断言修正后待一次复跑确认。（G3-7）
 
 **P2：手机、分发与远端**
 
