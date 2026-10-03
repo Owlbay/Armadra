@@ -174,6 +174,24 @@ async function openTerminal(who: Person, nodeId?: string): Promise<string> {
   return (JSON.parse(answer.body) as { id: string }).id;
 }
 
+/**
+ * 已经有一个终端行：创建者写死（「谁起的」由上面的 HTTP 用例覆盖）。Windows 的
+ * CI 上服务器壳起不了真终端，审批与 ACP 的判定只要行在就够。
+ */
+function terminalRow(creator: string): string {
+  const id = randomUUID();
+  database()
+    .prepare(
+      "INSERT INTO terminal_sessions (id, workspace_id, cwd, shell, status, created_at, creator_principal_id) " +
+        "VALUES (?, ?, ?, 'sh', 'exited', ?, ?)",
+    )
+    .run(id, w1, tmpdir(), new Date().toISOString(), creator);
+  return id;
+}
+
+/** 服务器壳在 Windows 的 CI 上起不了真终端（没有会话宿主）。 */
+const spawns = process.platform !== "win32";
+
 async function creatorOf(sessionId: string): Promise<string> {
   const answer = await call(`/api/terminals/${sessionId}`, { person: viewer });
   expect(answer.status).toBe(200);
@@ -244,23 +262,26 @@ afterAll(async () => {
 });
 
 describe("自己起的终端（契约 §23.1）", () => {
-  it("operator 写得进自己的，另一个 operator 与 editor 不行，driver 行", async () => {
-    const mine = await openTerminal(operatorA);
-    expect(await creatorOf(mine)).toBe(operatorA.principalId);
-    const paste = `/api/terminals/${mine}/paste`;
-    expect(await passes(operatorA, paste)).toBe(true);
-    expect(await passes(operatorB, paste)).toBe(false);
-    expect(await passes(editor, paste)).toBe(false);
-    expect(await passes(viewer, paste)).toBe(false);
-    expect(await passes(driver, paste)).toBe(true);
-  });
+  it.runIf(spawns)(
+    "operator 写得进自己的，另一个 operator 与 editor 不行，driver 行",
+    async () => {
+      const mine = await openTerminal(operatorA);
+      expect(await creatorOf(mine)).toBe(operatorA.principalId);
+      const paste = `/api/terminals/${mine}/paste`;
+      expect(await passes(operatorA, paste)).toBe(true);
+      expect(await passes(operatorB, paste)).toBe(false);
+      expect(await passes(editor, paste)).toBe(false);
+      expect(await passes(viewer, paste)).toBe(false);
+      expect(await passes(driver, paste)).toBe(true);
+    },
+  );
 
   it("审批：operator 答自己终端上的；别人起的、自动化起的只有 driver", async () => {
-    const mine = await openTerminal(operatorA);
-    const others = await openTerminal(driver);
+    const mine = terminalRow(operatorA.principalId);
+    const others = terminalRow(driver.principalId);
     // 自动化冷启动起的终端：创建者是自动化的创建者，也就是 owner。
-    const automated = await openTerminal(admin);
-    expect(await creatorOf(automated)).toBe("");
+    const automated = terminalRow("");
+    expect(await creatorOf(mine)).toBe(operatorA.principalId);
 
     const answer = (id: string) => `/api/approvals/${id}/answer`;
     const onMine = pendingApproval(mine);
@@ -281,38 +302,41 @@ describe("自己起的终端（契约 §23.1）", () => {
     ).toBe(true);
   });
 
-  it("创建者 = 触发者：A 的协调者建的节点，谁的页面替它起终端都是 A 的", async () => {
-    // `open-agent` / ama runner 在建节点时记下的那一笔。
-    const nodeId = randomUUID();
-    recordNodeCreator(
-      database(),
-      { nodeId, workspaceId: w1 },
-      operatorA.principalId,
-    );
-    const byDriver = await openTerminal(driver, nodeId);
-    expect(await creatorOf(byDriver)).toBe(operatorA.principalId);
-    const byOwner = await openTerminal(admin, nodeId);
-    expect(await creatorOf(byOwner)).toBe(operatorA.principalId);
-    expect(await passes(operatorA, `/api/terminals/${byDriver}/paste`)).toBe(
-      true,
-    );
-    expect(await passes(operatorB, `/api/terminals/${byDriver}/paste`)).toBe(
-      false,
-    );
-    const onTeam = pendingApproval(byOwner);
-    expect(await passes(operatorB, `/api/approvals/${onTeam}/answer`)).toBe(
-      false,
-    );
-    expect(
-      await passes(operatorA, `/api/approvals/${onTeam}/answer`, "POST", {
-        decision: "deny",
-      }),
-    ).toBe(true);
-    // 驱动切换按节点判；请求体故意不成立，放行之后由域答 400，不真的切。
-    const driverSwitch = `/api/acp/nodes/${nodeId}/driver`;
-    expect(await passes(operatorB, driverSwitch)).toBe(false);
-    expect(await passes(operatorA, driverSwitch)).toBe(true);
-  });
+  it.runIf(spawns)(
+    "创建者 = 触发者：A 的协调者建的节点，谁的页面替它起终端都是 A 的",
+    async () => {
+      // `open-agent` / ama runner 在建节点时记下的那一笔。
+      const nodeId = randomUUID();
+      recordNodeCreator(
+        database(),
+        { nodeId, workspaceId: w1 },
+        operatorA.principalId,
+      );
+      const byDriver = await openTerminal(driver, nodeId);
+      expect(await creatorOf(byDriver)).toBe(operatorA.principalId);
+      const byOwner = await openTerminal(admin, nodeId);
+      expect(await creatorOf(byOwner)).toBe(operatorA.principalId);
+      expect(await passes(operatorA, `/api/terminals/${byDriver}/paste`)).toBe(
+        true,
+      );
+      expect(await passes(operatorB, `/api/terminals/${byDriver}/paste`)).toBe(
+        false,
+      );
+      const onTeam = pendingApproval(byOwner);
+      expect(await passes(operatorB, `/api/approvals/${onTeam}/answer`)).toBe(
+        false,
+      );
+      expect(
+        await passes(operatorA, `/api/approvals/${onTeam}/answer`, "POST", {
+          decision: "deny",
+        }),
+      ).toBe(true);
+      // 驱动切换按节点判；请求体故意不成立，放行之后由域答 400，不真的切。
+      const driverSwitch = `/api/acp/nodes/${nodeId}/driver`;
+      expect(await passes(operatorB, driverSwitch)).toBe(false);
+      expect(await passes(operatorA, driverSwitch)).toBe(true);
+    },
+  );
 });
 
 describe("ACP 与工作流按对象落到画布（契约 §23.3）", () => {
@@ -322,7 +346,7 @@ describe("ACP 与工作流按对象落到画布（契约 §23.3）", () => {
     expect(await open(editor)).toBe(false);
     expect(await open(outsider)).toBe(false);
     expect(await open(operatorA)).toBe(true);
-    const mine = await openTerminal(operatorA);
+    const mine = terminalRow(operatorA.principalId);
     expect(await passes(viewer, `/api/acp/sessions/${mine}/log`, "GET")).toBe(
       true,
     );
