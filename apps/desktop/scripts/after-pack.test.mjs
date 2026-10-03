@@ -4,12 +4,26 @@ import test from "node:test";
 import {
   bundleResources,
   copyWithRetry,
+  electronNoticePlacements,
+  noticeResources,
+  placeElectronNotices,
   migrationResources,
   placeLaunchExe,
   placements,
   platformFor,
 } from "./after-pack.mjs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { LAUNCH_EXE_RESOURCE } from "./launch-exe.mjs";
 
 test("only the platform/arch pairs this shell ships are packaged", () => {
@@ -76,7 +90,7 @@ test("an error that is not a sharing violation is not retried", () => {
   assert.equal(calls, 1);
 });
 
-test("a platform's placements are its out/ bundles plus every migration, nothing else", () => {
+test("a platform's placements are its out/ bundles, the notices and every migration, nothing else", () => {
   for (const platform of ["win32", "darwin", "linux"]) {
     const placed = placements(platform);
     // Nothing is an executable any more: the core runs on the Electron the
@@ -87,9 +101,11 @@ test("a platform's placements are its out/ bundles plus every migration, nothing
     );
     assert.deepEqual(
       placed.map((p) => `${p.from} -> ${p.to}`),
-      [...bundleResources(platform), ...migrationResources()].map(
-        (r) => `${r.from} -> ${r.to}`,
-      ),
+      [
+        ...bundleResources(platform),
+        ...noticeResources(),
+        ...migrationResources(),
+      ].map((r) => `${r.from} -> ${r.to}`),
     );
   }
   // Only Windows carries the session host; every platform carries the hook
@@ -162,4 +178,72 @@ test("a Windows target also gets the canvas launcher, built only on a Windows ho
     elsewhere[0],
     /WARNING .*armadra-launch\.exe.*without injection/,
   );
+});
+
+test("every bundle carries the generated notices and ama's own, from files that exist", () => {
+  assert.deepEqual(
+    noticeResources().map((r) => r.to),
+    ["THIRD_PARTY_NOTICES.md", "agent/LICENSE", "agent/THIRD_PARTY_NOTICES.md"],
+  );
+  const app = fileURLToPath(new URL("..", import.meta.url));
+  for (const resource of noticeResources())
+    assert.ok(existsSync(join(app, resource.from)), resource.from);
+});
+
+test("Electron's notices go back into Contents/Resources on macOS and beside the executable elsewhere", () => {
+  const dirs = { appOutDir: "OUT", resourcesDir: "RES" };
+  assert.deepEqual(
+    electronNoticePlacements("darwin", dirs).map((p) => `${p.from} -> ${p.to}`),
+    [
+      `LICENSE -> ${join("RES", "LICENSE.electron.txt")}`,
+      `LICENSES.chromium.html -> ${join("RES", "LICENSES.chromium.html")}`,
+    ],
+  );
+  assert.deepEqual(
+    electronNoticePlacements("win32", dirs).map((p) => p.to),
+    [
+      join("OUT", "LICENSE.electron.txt"),
+      join("OUT", "LICENSES.chromium.html"),
+    ],
+  );
+
+  const dir = mkdtempSync(join(tmpdir(), "armadra-after-pack-"));
+  try {
+    const dist = join(dir, "dist");
+    mkdirSync(dist);
+    writeFileSync(join(dist, "LICENSE"), "electron");
+    writeFileSync(join(dist, "LICENSES.chromium.html"), "<html>");
+    const mac = {
+      appOutDir: join(dir, "mac"),
+      resourcesDir: join(dir, "mac/Resources"),
+    };
+    const options = { dist, copy: (from, to) => copyFileSync(from, to) };
+    assert.equal(placeElectronNotices("darwin", mac, options).length, 2);
+    assert.equal(
+      readFileSync(join(mac.resourcesDir, "LICENSE.electron.txt"), "utf8"),
+      "electron",
+    );
+    // Windows/Linux: what electron-builder already placed is left alone.
+    const linux = {
+      appOutDir: join(dir, "linux"),
+      resourcesDir: join(dir, "linux/resources"),
+    };
+    mkdirSync(linux.appOutDir);
+    writeFileSync(join(linux.appOutDir, "LICENSE.electron.txt"), "packager's");
+    assert.deepEqual(placeElectronNotices("linux", linux, options), [
+      join(linux.appOutDir, "LICENSES.chromium.html"),
+    ]);
+    assert.equal(
+      readFileSync(join(linux.appOutDir, "LICENSE.electron.txt"), "utf8"),
+      "packager's",
+    );
+    // A distribution without them fails the build rather than ship without.
+    rmSync(join(dist, "LICENSE"));
+    assert.throws(
+      () => placeElectronNotices("darwin", mac, options),
+      /notices must ship with the bundle/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

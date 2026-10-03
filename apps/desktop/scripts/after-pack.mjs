@@ -26,6 +26,7 @@ import {
   mkdirSync,
   readdirSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -189,17 +190,92 @@ export function migrationResources(from = join(app, MIGRATIONS_FROM)) {
 }
 
 /**
- * Everything this hook places for a platform: the `out/` bundles, then the
- * migrations the core reads at start-up.
+ * The third-party notices that ship inside every bundle (external-services
+ * §11.3), as `{from, to}` pairs under the resources directory:
+ *
+ * - the repository's generated `THIRD_PARTY_NOTICES.md` (`tools/notices.mjs`),
+ *   which Settings → About also shows;
+ * - the bundled ama's own `LICENSE` and `THIRD_PARTY_NOTICES.md`, beside the
+ *   `agent/ama.cjs` they describe — `@armadra/agent` is bundled into that one
+ *   file, so its notices would otherwise not travel at all.
+ */
+export function noticeResources() {
+  return [
+    { from: "../../THIRD_PARTY_NOTICES.md", to: "THIRD_PARTY_NOTICES.md" },
+    { from: "node_modules/@armadra/agent/LICENSE", to: "agent/LICENSE" },
+    {
+      from: "node_modules/@armadra/agent/THIRD_PARTY_NOTICES.md",
+      to: "agent/THIRD_PARTY_NOTICES.md",
+    },
+  ];
+}
+
+/**
+ * Electron's own two notice files, which its license and Chromium's require to
+ * accompany the binaries: `LICENSE` (published as `LICENSE.electron.txt`) and
+ * `LICENSES.chromium.html`.
+ *
+ * electron-builder copies them next to the executable on Windows and Linux but
+ * drops them on macOS (electron/electron#34236), so on macOS they are put back
+ * into `Contents/Resources/`; on the other two they are put where they belong
+ * only if the packager left them out. `{from, to}` with `from` relative to the
+ * Electron distribution and `to` an absolute path.
+ */
+export function electronNoticePlacements(
+  platformName,
+  { appOutDir, resourcesDir },
+) {
+  const into = platformName === "darwin" ? resourcesDir : appOutDir;
+  return [
+    { from: "LICENSE", to: join(into, "LICENSE.electron.txt") },
+    {
+      from: "LICENSES.chromium.html",
+      to: join(into, "LICENSES.chromium.html"),
+    },
+  ];
+}
+
+/** The unpacked Electron distribution this checkout installed. */
+export function electronDist() {
+  const require = createRequire(join(app, "package.json"));
+  return join(dirname(require.resolve("electron/package.json")), "dist");
+}
+
+/** Places Electron's notices; returns the destinations written. */
+export function placeElectronNotices(
+  platformName,
+  dirs,
+  { dist = electronDist(), copy = copyWithRetry, exists = existsSync } = {},
+) {
+  const written = [];
+  for (const placement of electronNoticePlacements(platformName, dirs)) {
+    if (platformName !== "darwin" && exists(placement.to)) continue;
+    const source = join(dist, placement.from);
+    if (!exists(source))
+      throw new Error(
+        `after-pack: ${source} is missing; Electron's notices must ship with the bundle`,
+      );
+    mkdirSync(dirname(placement.to), { recursive: true });
+    copy(source, placement.to);
+    written.push(placement.to);
+  }
+  return written;
+}
+
+/**
+ * Everything this hook places for a platform: the `out/` bundles, the
+ * third-party notices, then the migrations the core reads at start-up.
  *
  * There are no sidecar binaries any more. The core is one of those `out/`
  * bundles and runs on the Electron the app already ships, so nothing here is
  * marked executable.
  */
 export function placements(platformName) {
-  return [...bundleResources(platformName), ...migrationResources()].map(
-    (resource) => ({ ...resource, executable: false }),
-  );
+  return [
+    ...bundleResources(platformName),
+    ...noticeResources(),
+    ...migrationResources(),
+  ].map((resource) => ({ ...resource, executable: false }));
 }
 
 export default async function afterPack(context) {
@@ -221,6 +297,11 @@ export default async function afterPack(context) {
       chmodSync(destination, 0o755);
     console.log(`after-pack: placed ${placement.to}`);
   }
+  for (const placed of placeElectronNotices(platformName, {
+    appOutDir: context.appOutDir,
+    resourcesDir,
+  }))
+    console.log(`after-pack: placed ${placed}`);
   placeHookLauncher(platformName, resourcesDir);
   placeLaunchExe(platformName, resourcesDir);
 }
