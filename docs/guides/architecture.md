@@ -69,6 +69,10 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 [开发指南](development.md#无窗口服务器壳)，进度见
 [TypeScript Core 实施进度](../status/typescript-core-status.md) §11。
 
+`apps/push-relay` 是商店版 App 的最小推送中继（无状态，只转发端到端加密的信封），
+复用 core `push/transport-direct.ts` 的 APNs / FCM 客户端；是否运营由发布方定，
+见它的 [README](../../apps/push-relay/README.md) 与契约 §19。
+
 ## 3. 画布层
 
 窗口浮层以侧栏之外的可用画布区域为布局容器。标题栏图标共用 44px 高度的
