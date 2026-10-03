@@ -109,9 +109,21 @@ export const runtimeSettingsSchema = z.looseObject({
       refreshMinutes: z.number().int().nonnegative().optional(),
       providers: z.record(z.string(), z.boolean()).optional(),
       codexCliFallback: z.boolean().optional(),
-      /** Provider 状态页徽标（roadmap §3.9），默认开。 */
+      /** Provider 状态页徽标（roadmap §3.9），默认开。旧键，读 `statusBadges`。 */
       statusPage: z.boolean().optional(),
+      statusBadges: z.boolean().optional(),
+      /** 借用登录令牌读额度的两个端点，默认关（外部服务 §9.3）。 */
+      claudeUsage: z.boolean().optional(),
+      copilotUsage: z.boolean().optional(),
       cost: z.looseObject({ enabled: z.boolean().optional() }).optional(),
+    })
+    .optional(),
+  /** `models.catalog.autoRefresh`：models.dev 目录的每日后台抓取，默认开。 */
+  models: z
+    .looseObject({
+      catalog: z
+        .looseObject({ autoRefresh: z.boolean().optional() })
+        .optional(),
     })
     .optional(),
   /**
@@ -210,8 +222,12 @@ export interface RuntimeSettingsPatch {
     providers?: Record<string, boolean>;
     codexCliFallback?: boolean;
     statusPage?: boolean;
+    statusBadges?: boolean;
+    claudeUsage?: boolean;
+    copilotUsage?: boolean;
     cost?: { enabled?: boolean };
   };
+  models?: { catalog?: { autoRefresh?: boolean } };
   logs?: { retentionDays?: number };
   /** 更新通道与两个开关（S03 §4.1）。 */
   updates?: {
