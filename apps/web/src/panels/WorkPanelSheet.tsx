@@ -52,6 +52,7 @@ export const WORK_PANEL_WIDTH = {
   github: "var(--scm-w)",
   automation: "var(--scm-w)",
   handoff: "var(--scm-w)",
+  workflow: "var(--scm-w)",
 } as const;
 
 /** 右侧停靠的那几块。 */

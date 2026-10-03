@@ -16,7 +16,9 @@ import {
   configurationHash,
   invalid,
   num,
+  workflowTarget,
 } from "./plan";
+import { checkWorkflowTarget } from "./workflow-target";
 import {
   launchSpecToJson,
   planConfigFromJson,
@@ -303,7 +305,11 @@ export class ScheduleService implements Authorizer {
     // 命令目标指名一个这个 core 冻结过的会话，所以定义在这里就核。Agent 目标
     // 指名的是一个画布节点，那个会话合法地来来去去，没有什么可以提前查——投递方
     // 在每次探测和每次写入时重新核节点的身份。
-    if (!agentTarget(target)) {
+    if (workflowTarget(target)) {
+      // 工作流目标（契约 §15.6）：模板、版本、画布与参数现在就核，版本 0 冻结
+      // 成当前那一版——定义时拒，而不是到点才发现。
+      checkWorkflowTarget(caller.workspaceId, target, payload);
+    } else if (!agentTarget(target)) {
       const record = this.store.commandSession(target.sessionId);
       if (record === undefined) throw notFound("找不到这个命令会话");
       if (

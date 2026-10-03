@@ -147,6 +147,8 @@ export class TriggerRules {
         };
       }
       case "workflow.gate": {
+        // 只有「开始等人」叫人：答复与取消是结果，不是新的问题。
+        if (str(event.state) !== "waiting") return undefined;
         const nodeId = str(event.nodeId);
         return {
           kind: "workflowGate",

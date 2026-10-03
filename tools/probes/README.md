@@ -6,11 +6,11 @@
 
 按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.d/` 的清单跑（一条一个文件 `<id>.json`，新增探针就新增一个文件）（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
-| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                   | 何时跑                              | 失败时       |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | ------------ |
-| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e`、`push-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`crash-report-e2e`、`mobile-shell-e2e`                 | `nightly.yml`                       | 开 issue     |
-| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                                                                | 手动；清单在执行计划 §5             | 记进状态文档 |
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                   | 何时跑                              | 失败时       |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`crash-report-e2e`、`mobile-shell-e2e`                                 | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                                                                                | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
 
@@ -149,6 +149,15 @@ node tools/probes/realtime-e2e.mjs [输出目录]
 ```
 
 验证：第一台打开即切到实时（`GET …/realtime`）、两边在线条列出对方；两边同时各拖一个节点，两边与 core 物化的表一致；成员光标与选区外框；同一张便签一个在开头、一个在结尾同时输入，提交后收敛且两个人的字都在；断网（探针注入的 WebSocket 包装切断 `…/sync` 并拒绝重连）时顶部「离线编辑」、在线条置灰，期间的拖动对方看不到，恢复后自动重连补齐。最后一台开评论模式在便签上放钉并发送，另一台经 `board.comment` 看到评论钉（契约 §16.3）。产物默认在 `target/realtime-e2e/`。租约模式的多设备场景（`ui-features` 的 presence、`server-e2e`）开头先把 `collab.realtime` 关掉。
+
+## 工作流端到端
+
+```sh
+pnpm --filter @armadra/desktop build
+node tools/probes/workflow-e2e.mjs [输出目录]
+```
+
+不开页面、不用真账号：临时 HOME 里起 core，注册一个假 CLI 的自定义 Agent，经 `/api/workflows/*` 建两步模板（prompt → collect）并起跑，断言运行 `succeeded`、产出与收件箱；再经控制 socket 配对出本机主人，在 `/api/automations/*` 定义一个「运行工作流」的一次性计划（契约 §15.6）并激活，等调度到点起跑，断言多出一次带计划参数的成功运行、自动化运行落 `SUCCEEDED` 且只起了一次。产物默认在 `target/workflow-e2e/`。
 
 ## 崩溃上报对 GlitchTip（dev-stack）
 

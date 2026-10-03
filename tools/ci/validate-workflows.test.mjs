@@ -264,7 +264,7 @@ test("a malformed file is reported as a problem rather than crashing the run", (
   }
 });
 
-test("the release workflow has the five jobs the design names, and publishes only drafts", () => {
+test("the release workflow has the five jobs the design names plus the channel checks, and publishes only drafts", () => {
   const document = parseYaml(
     readFileSync(join(root, ".github/workflows/release.yml"), "utf8"),
   );
@@ -274,8 +274,26 @@ test("the release workflow has the five jobs the design names, and publishes onl
     "build",
     "notarize",
     "assemble",
+    // Distribution channels (completion plan G3-9): rendered and installed
+    // from the draft's artifacts, never pushed from here.
+    "channels",
+    "channels-macos",
+    "channels-windows",
   ]);
   assert.deepEqual(document.on.push.tags, ["v*"]);
+  const text = readFileSync(
+    join(root, ".github/workflows/release.yml"),
+    "utf8",
+  );
+  for (const secret of [
+    "HOMEBREW_TAP_TOKEN",
+    "SCOOP_BUCKET_TOKEN",
+    "WINGET_TOKEN",
+  ])
+    assert.ok(
+      !text.includes(secret),
+      `release.yml must not publish with ${secret}`,
+    );
   // Six targets, one runner each.
   assert.equal(document.jobs.build.strategy.matrix.include.length, 6);
   const targets = document.jobs.build.strategy.matrix.include.map(
@@ -288,6 +306,33 @@ test("the release workflow has the five jobs the design names, and publishes onl
   assert.match(create, /--draft/);
   assert.ok(!/gh release edit .*--draft=false/.test(create));
   assert.ok(!/--latest/.test(create));
+});
+
+test("channels are pushed only once a release is published, each behind its own secret", () => {
+  const document = parseYaml(
+    readFileSync(join(root, ".github/workflows/distribute.yml"), "utf8"),
+  );
+  assert.deepEqual(document.on.release.types, ["published"]);
+  assert.deepEqual(document.permissions, { contents: "read" });
+  const secrets = {
+    "publish-tap": "HOMEBREW_TAP_TOKEN",
+    "publish-scoop": "SCOOP_BUCKET_TOKEN",
+    "publish-winget": "WINGET_TOKEN",
+  };
+  for (const [job, secret] of Object.entries(secrets)) {
+    const steps = document.jobs[job].steps;
+    assert.equal(document.jobs[job].needs, "render");
+    assert.match(
+      document.jobs[job].if,
+      /needs\.render\.outputs\.stable == 'true'/,
+    );
+    // The first step decides whether the secret is there; every later step is
+    // skipped without it, so a missing token skips rather than fails.
+    assert.equal(steps[0].id, "token");
+    assert.equal(steps[0].env.TOKEN, `\${{ secrets.${secret} }}`);
+    for (const step of steps.slice(1))
+      assert.equal(step.if, "steps.token.outputs.enabled == 'true'");
+  }
 });
 
 test("tier A runs as ci.yml's e2e job on ubuntu, tier B on a nightly schedule", () => {
