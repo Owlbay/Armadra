@@ -74,7 +74,7 @@ describe("agent registry", () => {
       }),
     ).not.toContain("nativeRecurrence");
   });
-  it("covers the six built-in CLIs with a full permission table", () => {
+  it("covers the seven built-in CLIs with a full permission table", () => {
     expect(AGENT_IDS).toEqual([
       "claude",
       "codex",
@@ -82,8 +82,9 @@ describe("agent registry", () => {
       "pi",
       "omp",
       "copilot",
+      "ama",
     ]);
-    expect(AGENT_LIST).toHaveLength(6);
+    expect(AGENT_LIST).toHaveLength(7);
     for (const agent of AGENT_LIST) {
       expect(agent.launchCmd.length).toBeGreaterThan(0);
       expect(agent.color).toMatch(/^#[0-9a-f]{6}$/);
@@ -98,6 +99,30 @@ describe("agent registry", () => {
     }
     expect(AGENT_REGISTRY.opencode.promptFlag).toBeDefined();
     expect(AGENT_REGISTRY.claude.sessionIdFlag).toBe("--session-id");
+  });
+
+  // coordinator-agent.md §2.2: every permission mode has a real flag, there
+  // is no `subagent`, and the process gate accepts the bundled runner the
+  // launcher execs into.
+  it("registers Armadra's own agent with a flag for every mode", () => {
+    const ama = AGENT_REGISTRY.ama;
+    expect(ama.launchCmd).toBe("ama");
+    expect(ama.color).toBe("#2f6fed");
+    for (const mode of PERMISSION_MODES.filter((one) => one !== "default")) {
+      expect(ama.permissionFlag[mode]).toEqual(["--permission-mode", mode]);
+    }
+    expect(ama.capabilities).not.toContain("subagent");
+    expect(ama.capabilities).toContain("usage");
+    expect(ama.expectedProcess).toEqual(
+      expect.arrayContaining(["ama", "ama.cjs", "Electron"]),
+    );
+    expect(
+      assembleLaunchCommand({
+        agentId: "ama",
+        permissionMode: "plan",
+        prompt: "hi",
+      }),
+    ).toEqual({ command: "ama --permission-mode plan hi" });
   });
 
   it("recognises built-in ids only", () => {
@@ -122,7 +147,7 @@ describe("agent registry", () => {
 
 describe("hook events", () => {
   it("lists every provider's event names exactly once", () => {
-    expect(HOOK_CLIENT_REVISION).toBe(4);
+    expect(HOOK_CLIENT_REVISION).toBe(5);
     for (const id of AGENT_IDS) {
       const events = hookEventsFor(id);
       expect(events.length > 0).toBe(
@@ -153,6 +178,12 @@ describe("hook events", () => {
     expect(HOOK_EVENTS.omp).toContain("auto_compaction_end");
     expect(HOOK_EVENTS.pi).not.toContain("auto_compaction_end");
     expect(HOOK_EVENTS.copilot).toContain("agentStop");
+    // ama reports in Pi's vocabulary plus its own two approval events.
+    for (const event of HOOK_EVENTS.pi) {
+      expect(HOOK_EVENTS.ama).toContain(event);
+    }
+    expect(HOOK_EVENTS.ama).toContain("tool_approval_requested");
+    expect(HOOK_EVENTS.ama).toContain("tool_approval_resolved");
   });
 
   // Copilot reads a non-zero exit or a crash on `preToolUse` as a denial. A
@@ -500,7 +531,52 @@ describe("assembleLaunchArgv", () => {
   });
 });
 
-describe("the typed canvas injection", () => {
+/** docs/design/canvas-launcher.md §2.2 / §8.1: the line starts the launcher. */
+describe("a launch line through the canvas launcher", () => {
+  it("puts the launcher first, then the program and its words, then the flags", () => {
+    expect(
+      assembleLaunchCommand({
+        agentId: "codex",
+        programOverride:
+          "/Users/me/Library/Application Support/Armadra/integration/run/codex",
+        programArgs: ["/opt/homebrew/bin/codex"],
+        resume: "019a",
+        model: "gpt-5",
+      }).command,
+    ).toBe(
+      "'/Users/me/Library/Application Support/Armadra/integration/run/codex' /opt/homebrew/bin/codex resume 019a --model gpt-5",
+    );
+    expect(
+      assembleLaunchCommand({
+        agentId: "codex",
+        programOverride:
+          "C:\\Users\\me\\AppData\\Roaming\\Armadra\\integration\\run\\codex.exe",
+        programArgs: [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\npm\\codex.js",
+        ],
+        model: "gpt-5",
+        dialect: "powershell",
+      }).command,
+    ).toBe(
+      "C:\\Users\\me\\AppData\\Roaming\\Armadra\\integration\\run\\codex.exe 'C:\\Program Files\\nodejs\\node.exe' C:\\npm\\codex.js --model gpt-5",
+    );
+  });
+
+  it("keeps a prompt on the line after the CLI's flags", () => {
+    expect(
+      assembleLaunchCommand({
+        agentId: "claude",
+        programOverride: "/d/run/claude",
+        programArgs: ["/bin/claude"],
+        model: "opus",
+        prompt: "hi there",
+      }).command,
+    ).toBe("/d/run/claude /bin/claude --model opus 'hi there'");
+  });
+});
+
+describe("the typed canvas injection of an older core (deprecated)", () => {
   it("appends the runtime's words verbatim, in front of a prompt", () => {
     expect(
       assembleLaunchCommand({
@@ -588,6 +664,7 @@ describe("Windows npm wrappers and Eco quitting", () => {
       pi: "/quit",
       omp: "/exit",
       copilot: "/exit",
+      ama: "/exit",
     });
   });
 });

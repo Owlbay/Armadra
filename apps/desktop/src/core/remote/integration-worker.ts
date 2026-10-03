@@ -8,7 +8,9 @@
  *    socket、这个控制端的端点文件与节点令牌目录。根按版本分目录，两个不同版本的
  *    控制端连同一台主机时互不覆盖；
  *  * `integration.sync`：控制端先只报路径与哈希，Worker 答哪些缺了或不一样，控制
- *    端再把这些的内容发来。一样的文件不重写；每个路径必须落在注入目录之内；
+ *    端再把这些的内容发来。一样的文件不重写；每个路径必须落在注入目录之内。
+ *    第一次同步顺带清掉旧版本写进这台机器 `~/.codex/config.toml` 的会话旗标
+ *    信任记录（迁移 v2，docs/design/canvas-launcher.md §10.2），只做一次；
  *  * `hook.listen` / `hook.reply`：中继。Hook 客户端连 socket 发一个 HTTP 请求，
  *    Worker 把它原样推给控制端（`hook.request`），控制端交给自己的 Hook 服务，
  *    再用 `hook.reply` 把答复送回来。socket 随 Worker 会话生死：连接断了它就
@@ -19,7 +21,6 @@ import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
-  existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -36,11 +37,15 @@ import {
 } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
+import { globalWritesDisabled } from "../hook/install/inject";
 import {
-  globalWritesDisabled,
-  trustCodexSessionHooks,
-} from "../hook/install/inject";
-import { configHome } from "../hook/install/shared";
+  type MigrationRecord,
+  type SessionTrustMigration,
+  clearCodexSessionTrust,
+  migrationPath,
+  readMigration,
+} from "../hook/install/migrate";
+import { configHome, writeAtomically } from "../hook/install/shared";
 import { badRequest } from "../workspaces/support";
 import type { WorkerSession } from "./session";
 
@@ -162,17 +167,17 @@ export interface SyncResult {
   /** 缺内容、要控制端再发一次的路径。 */
   readonly missing: readonly string[];
   readonly written: number;
-  /** Codex 信任记录是否改动；没写（没有 Codex、关着全局写入）是 `null`。 */
-  readonly trustChanged: boolean | null;
 }
 
 /**
  * 按哈希落文件。每个路径都必须在 `<状态目录>/integration/` 之内：这个动作不是
- * 一个通用的「写这台机器上任意文件」。
+ * 一个通用的「写这台机器上任意文件」。旧控制端还会带 `codexCommand`，忽略——
+ * Codex 的 Hook 信任改由启动器的 `--dangerously-bypass-hook-trust` 给。
  */
 export function sync(
   stateDir: string | undefined,
   args: Record<string, unknown>,
+  env: NodeJS.ProcessEnv = process.env,
 ): SyncResult {
   const fence = join(stateBase(stateDir), "integration") + sep;
   const missing: string[] = [];
@@ -201,25 +206,35 @@ export function sync(
     writeFile(target, entry.content, entry.mode);
     written += 1;
   }
-  let trustChanged: boolean | null = null;
-  const command = args.codexCommand;
-  if (
-    typeof command === "string" &&
-    missing.length === 0 &&
-    !globalWritesDisabled(process.env)
-  ) {
-    // 与本机同一条规矩：这台机器没用过 Codex 就不替它建 `~/.codex`。
-    const home = configHome("codex");
-    if (existsSync(home)) {
-      try {
-        trustChanged = trustCodexSessionHooks(home, command).changed;
-      } catch {
-        // 认不出的 config.toml 不改写；Codex 的 Hook 因此不跑，技能与说明照样在。
-        trustChanged = false;
-      }
-    }
-  }
-  return { missing, written, trustChanged };
+  clearSessionTrustOnce(stateDir, env);
+  return { missing, written };
+}
+
+/**
+ * 迁移 v2 在执行主机上的那一步：旧 Worker 收到 `codexCommand` 时往这台机器的
+ * `~/.codex/config.toml` 写过 `/<session-flags>/` 信任记录，这里清掉一次，结果
+ * 记进 `<状态目录>/integration/global-migration.json`。记录里已有
+ * `sessionTrust` 就什么也不做，失败也算做过——与本机同一条规矩。没有
+ * `~/.codex` 不建，认不出的文件不改，备份在它旁边。关着全局写入（测试）不做。
+ */
+export function clearSessionTrustOnce(
+  stateDir: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  now: Date = new Date(),
+): SessionTrustMigration | undefined {
+  if (globalWritesDisabled(env)) return undefined;
+  const base = stateBase(stateDir);
+  const existing = readMigration(base);
+  if (existing?.sessionTrust !== undefined) return existing.sessionTrust;
+  const sessionTrust = clearCodexSessionTrust(configHome("codex", env), now);
+  const record: MigrationRecord = {
+    version: 2,
+    migratedAt: existing?.migratedAt ?? sessionTrust.at,
+    agents: existing?.agents ?? {},
+    sessionTrust,
+  };
+  writeAtomically(migrationPath(base), `${JSON.stringify(record, null, 2)}\n`);
+  return sessionTrust;
 }
 
 /* ---------------------------------- 中继 ---------------------------------- */

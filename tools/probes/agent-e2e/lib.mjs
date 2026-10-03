@@ -619,18 +619,18 @@ export async function setup() {
   const agents = await api("/api/agents");
   const claudeRow = agents.find((row) => row.id === "claude");
   const codexRow = agents.find((row) => row.id === "codex");
-  report.launch = {
-    claude: { path: claudeRow?.resolvedPath, args: claudeRow?.launchArgs },
-    codex: { path: codexRow?.resolvedPath, args: codexRow?.launchArgs },
-  };
-  const injected =
-    claudeRow?.launchArgs?.[0] === "--settings" &&
-    String(claudeRow.launchArgs[1]).startsWith(data);
-  if (!injected)
-    throw new Error(
-      `Claude 不是启动时注入（launchArgs=${JSON.stringify(claudeRow?.launchArgs)}），不能用真实配置目录`,
-    );
-  note("Claude 启动时注入", claudeRow.launchArgs.join(" "));
+  // 注入只由数据目录里的启动器追加（canvas-launcher §8.1）：Claude 用真实配置目录。
+  const claudeArgs = (await api("/api/agents/claude/integration")).launchArgs;
+  const runDir = join(data, "integration", "run");
+  report.launch = { claude: claudeRow?.launcher, codex: codexRow?.launcher };
+  if (
+    report.launch.claude !== join(runDir, "claude") ||
+    report.launch.codex !== join(runDir, "codex") ||
+    claudeArgs[0] !== "--settings" ||
+    !String(claudeArgs[1]).startsWith(data)
+  )
+    throw new Error(`没有经临时数据目录里的启动器注入，不能用真实配置目录`);
+  note("启动器", report.launch);
 
   const hookBin = join(data, "bin", "armadra-hook");
   if (!existsSync(hookBin)) throw new Error(`没有 ${hookBin}`);

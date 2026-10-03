@@ -2,6 +2,18 @@
 
 这些入口只核验底层可行性，不启动应用服务，不构成完整浏览器或 Windows 持久终端实现。全部命令从仓库根目录运行；无需修改根 manifest。
 
+## 分档
+
+按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.json` 的清单跑（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
+
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                          | 何时跑                              | 失败时       |
+| --- | ----------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`core-terminal-packaged`                                                      | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                       | 手动；清单在执行计划 §5             | 记进状态文档 |
+
+其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
+
 ## 受控 Chromium
 
 需要 Node.js 22+（内置 WebSocket/fetch）和已安装的 Chrome/Chromium；脚本不下载浏览器。默认探测系统常见安装路径，也可显式选择可执行文件：
@@ -85,7 +97,7 @@ node tools/probes/core-terminal-packaged.mjs              # 打包版，从页�
 ```
 
 - **smoke**：起一个 core，开终端，打字看回显，关掉 WS 再开一次确认看得见刚才那屏（`sawEarlierOutput`），最后销毁会话；顺带验证不存在的会话在升级前就被 404 拒掉。
-- **packaged**：需要先 `pnpm --filter @armadra/desktop dist`（本机没有 `CSC_LINK` 时 `dist.mjs` 自动跳过签名与公证）。按访达的方式启动：`PATH` 只给 launchd 那条（`/usr/bin:/bin:/usr/sbin:/sbin`），数据目录用 `ARMADRA_DATA_DIR`、Chromium profile 用 `--user-data-dir`、`HOME` 都指到临时目录（HOME 也得临时：打包版的 core 启动时会迁走各 CLI 旧的全局安装、往 `~/.codex/config.toml` 写信任记录），不碰操作员的 `~/Library/Application Support/Armadra`。本机装了 tmux（Homebrew 等常见位置）时，会话必须是 `tmux` 后端，资源采样（`GET …/resources`）也必须给出这个会话的 pid——两处各自找 tmux，都得用补过的 PATH。调试端口是运行时选的空闲端口，不是固定值：机器上另一个 Electron 占着固定端口时，探针会连上别人的渲染进程，失败起来和打包出错一模一样。
+- **packaged**：需要先 `pnpm --filter @armadra/desktop dist`（本机没有 `CSC_LINK` 时 `dist.mjs` 自动跳过签名与公证）。按访达的方式启动：`PATH` 只给 launchd 那条（`/usr/bin:/bin:/usr/sbin:/sbin`），数据目录用 `ARMADRA_DATA_DIR`、Chromium profile 用 `--user-data-dir`、`HOME` 都指到临时目录（HOME 也得临时：打包版的 core 启动时会迁走各 CLI 旧的全局安装、清掉上一版写进 `~/.codex/config.toml` 的会话级信任记录；画布内的 Codex 经启动器带 `--dangerously-bypass-hook-trust`，不再写信任记录），不碰操作员的 `~/Library/Application Support/Armadra`。本机装了 tmux（Homebrew 等常见位置）时，会话必须是 `tmux` 后端，资源采样（`GET …/resources`）也必须给出这个会话的 pid——两处各自找 tmux，都得用补过的 PATH。调试端口是运行时选的空闲端口，不是固定值：机器上另一个 Electron 占着固定端口时，探针会连上别人的渲染进程，失败起来和打包出错一模一样。
 
 三个脚本都用 `mktemp` 的数据目录与各自私有的 tmux socket，跑完 `kill-server` 并删掉目录；不碰操作者自己的数据目录或 tmux server。
 
@@ -141,14 +153,14 @@ node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,3,4,5,6,7,8,9,10] [--
 3. **依赖编排与组队**：`open-agent --after <上游> --after-turn next`、`team --member … --chain`；再关掉页面触发一次，断言由 core 自己起进程并投出任务。
 4. **节能休眠**：`ARMADRA_TEST_ECO_IDLE_SECONDS=20`（`core/terminal/hibernate.ts::ecoTestOverride`，只有启动 core 的进程能给，设置的 5 分钟下限不变），关掉页面让 Claude 与 Codex 都睡着、确认 CLI 进程退出；重开页面点节点唤醒，断言同一会话 id 起下一代、恢复行带同一个 provider 会话 id、接回的 Claude 仍带 `--permission-mode acceptEdits`、还记得之前让它记的数。
 
-5. **画布内注入（Claude / Codex）**：同一份环境只差启动行上的注入参数，画布外看不到画布说明与技能、Hook 不打到 core，画布内都生效。
-6. **画布内注入（OpenCode / Pi / OMP / Copilot）**：每个 CLI 一个临时 HOME，非交互跑一轮（提示词一行）。画布外直接起，环境里带着节点身份但没有注入；画布内由 core 在这个节点的终端里起（`POST /api/terminals` 带 nodeId 与 agent，环境是 core 给的那份），参数用 `GET /api/agents` 的 `launchArgs`。断言模型答得出技能名与 `armadra-hook canvas`、扩展或 Hook 的事件回到 core 写出这个节点的状态行；画布外都没有。OpenCode 另用 `debug skill` / `debug config` 不经模型核对。凭据只复制：Pi 复制 `auth.json` 里 API key 形式的那一条；OMP 用同一把 key 经环境变量交给临时 `models.yml`；OpenCode 用包里的原生二进制（npm 包装脚本没跑 postinstall 起不来）和它自带的免费模型；Copilot 的登录在钥匙串里，`gh auth token` 取出的令牌经 `COPILOT_GITHUB_TOKEN` 交给这一个进程。认不上的 CLI 记「未能认证」并跳过，不回退到真实目录。
+5. **画布内注入（Claude / Codex）**：经 `GET /api/agents` 的 `launcher`（数据目录里的 `run/<cli>`，[画布启动器](../../docs/design/canvas-launcher.md) §13.3）起 `<launcher> <程序> … "<prompt>"`，每家三遍：画布内（带 `ARMADRA_NODE_ID`）会话里有带修订标记的画布规则与技能、Codex 打出 `--dangerously-bypass-hook-trust` 的警告、Hook 打到 core——注入的旗标落在位置参数 prompt 之后也照样生效；画布外重跑同一行（只去掉 `ARMADRA_NODE_ID`）与行上没有启动器的裸程序都什么也不加载、Hook 不打到 core。Codex 用一个只放了 `auth.json` 的新 CODEX_HOME，三遍跑完里面没有 `config.toml`；另核 `/api/agents/{id}/integration` 的 `launchArgs`（Codex 的旗标与八个 `-c hooks.*`）、`globalWrites` 为空、迁移记录 `version: 2` 且 `sessionTrust.removed` 为空。
+6. **画布内注入（OpenCode / Pi / OMP / Copilot）**：每个 CLI 一个临时 HOME，非交互跑一轮（提示词一行）。画布外直接起，环境里带着节点身份但没有注入；画布内由 core 在这个节点的终端里起（`POST /api/terminals` 带 nodeId 与 agent，环境是 core 给的那份），经 `GET /api/agents` 的 `launcher` 起；节点终端的环境里有 `ARMADRA_SHIMS`、没有 `OPENCODE_CONFIG_*` / `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`（这些由启动器只给 CLI 进程）。断言模型答得出技能名与 `armadra-hook canvas`、扩展或 Hook 的事件回到 core 写出这个节点的状态行；画布外都没有。OpenCode 另用 `debug skill` / `debug config` 不经模型核对。凭据只复制：Pi 复制 `auth.json` 里 API key 形式的那一条；OMP 用同一把 key 经环境变量交给临时 `models.yml`；OpenCode 用包里的原生二进制（npm 包装脚本没跑 postinstall 起不来）和它自带的免费模型；Copilot 的登录在钥匙串里，`gh auth token` 取出的令牌经 `COPILOT_GITHUB_TOKEN` 交给这一个进程。认不上的 CLI 记「未能认证」并跳过，不回退到真实目录。
 7. **Claude 的权限请求在画布里答复**：节点用「自动编辑」（`--permission-mode acceptEdits`，盖过操作员设置里的 bypass），经页面让 Claude 跑一条 `node -e` 写文件；断言节点状态 blocked 带 pendingId、请求文件在 `pending/`、节点头的「允许 / 拒绝」可点且没被遮住；允许后文件写出来，拒绝后文件不存在，终端里不残留 Claude 自己的权限对话框。
 8. **休眠后经 `send` 唤醒**：关页面让 Claude 睡着，`canvas send` 当场答排队（`TARGET_STARTING`），同一会话 id 起下一代、进程带 `--resume <同一个 id>` 且仍带 `--permission-mode acceptEdits`，投递 `delivered` 并跑完一轮；重开页面问一句，确认接回的是原来那段对话。
 9. **组队带 worktree**（§59）：不用真 CLI，自己另起一套 core（临时 git 仓库当工作区，假 CLI 是一段记下自己工作目录再停在 shell 里的 sh），`--only 9` 单跑时不检查 CLI 登录、不起 Vite 与 Chrome。`team --member "…|worktree=名字"` 与按路径的成员各建出一条检出与绑定的 Frame、同名的两个成员共用一个 Frame、成员终端从节点 `cwd` 起在检出里；`open-agent --worktree` 按分支名进同一个 Frame；`--dry-run` 不建，Git 拒绝时画布不多一个节点。
 10. **六家互读**（设计 cli-collaboration §8）：claude、codex、opencode、pi、omp、copilot 各起一个**交互式 TUI** 节点，按这个顺序以 `peer` 连成环。每个节点经页面敲一句跑完一轮；环上每个下游以自己的节点身份（`canvasAs` / `contextAs`，换的只是 `ARMADRA_NODE_ID`）`context summary` 与 `context transcript` 读上游，断言非空且「来源」落在那一家的根下（OpenCode 是 `opencode:<id>`）；沿环 `send` 一轮，每条都 `delivered` 且目标真的跑了一轮；半截输入门造一条排队，`DELETE /api/workspaces/{id}/deliveries/{queueId}` 拒收，发送方收件箱（`inboxOf`）出现 `receipt:<queueId>`、投递记录有 `cancelled`；Pi → 下游走一次交接 prepare → accept（材料里有转录摘录、目标收件箱多一条）；会话索引（`conversationsRows`，只取这次的工作目录）每家都有、同一个文件不被两家各认一次，`GET /api/usage/cost` 每家 `source` 不是 none 且 24 小时里记到了用量。`result.json` 的 `sixWay` 记每家每步的通过 / 失败 / 跳过矩阵、每个节点的 `agent_status.transcript_path` 与分段耗时。另外四家的临时 HOME 与凭据和场景 6 是同一个函数（`prepareCliHomes`），但 Pi / OMP 的 agent 目录、`COPILOT_HOME` 与 OpenCode 的 `XDG_DATA_HOME` 指到 core 自己的根（core 才认得出这些会话；Pi 与 OMP 因此共用一个目录）；它们的启动行经页面的「自定义启动命令」（localStorage `armadra.launchOverrides`）换成临时包装脚本，注入参数照常由页面拼上。Claude 用「自动编辑」起：操作员缺省是 bypass 时新版 Claude 先弹「把 auto 设成缺省？」，缺省选项是「是」，一条投递的回车就会改掉 `~/.claude/settings.json`（首跑踩中，已改回；收尾因此单独比对 `permissions.defaultMode`）。Claude 的转录在真实目录，探针把**这一次**的那个文件硬链接进 core 的临时 `CLAUDE_CONFIG_DIR`，索引与成本才扫得到。没装或认证不上的那家整家记 skipped 并写原因，环只连能跑的几家；没跑完首轮的节点不往里投。`--only 10` 单跑约 1.5 分钟（2026-10-02 实测三家：84 秒），花费是每家三轮左右「回复 OK」（首轮、环上一轮、交接目标收到通知后多一轮）。
 
-隔离：数据目录、工作空间、浏览器 profile 与 CODEX_HOME 全部 `mktemp`，结束删除并停掉自己的 tmux 服务器。Codex 用临时 CODEX_HOME（只复制 `~/.codex/auth.json`，关掉启动时的升级检查，预先信任工作目录；token 超过 7 天没刷新就拒跑）。Claude 的登录在钥匙串里，临时 `CLAUDE_CONFIG_DIR` 认证不上，所以 Claude 进程用真实配置目录——前提是 Armadra 对 Claude 走启动时注入（`--settings` 指向数据目录里的文件），探针启动前就检查这一点；core 自己的 `CLAUDE_CONFIG_DIR` 指向临时目录，技能文件只写在那里。终端子进程的环境按白名单建，于是 `SHELL` 换成一个临时包装脚本（导出临时 CODEX_HOME、去掉 CLAUDE_CONFIG_DIR、`exec zsh -f`）。跑前跑后比对 `~/.claude/settings.json`、`~/.codex` 的 `config.toml` / `hooks.json` / `auth.json`、另外四个 CLI 的配置与凭据文件，以及两个 CLI 的版本；Claude 仍会像平常一样在 `~/.claude.json` 与 `~/.claude/projects/` 里记下这个临时目录的会话。
+隔离：数据目录、工作空间、浏览器 profile 与 CODEX_HOME 全部 `mktemp`，结束删除并停掉自己的 tmux 服务器。Codex 用临时 CODEX_HOME（只复制 `~/.codex/auth.json`，关掉启动时的升级检查，预先信任工作目录；token 超过 7 天没刷新就拒跑）。Claude 的登录在钥匙串里，临时 `CLAUDE_CONFIG_DIR` 认证不上，所以 Claude 进程用真实配置目录——前提是 Armadra 对 Claude 只经数据目录里的启动器注入（`--settings` 指向数据目录里的文件），探针启动前就检查这一点；core 自己的 `CLAUDE_CONFIG_DIR` 指向临时目录，技能文件只写在那里。终端子进程的环境按白名单建，于是 `SHELL` 换成一个临时包装脚本（导出临时 CODEX_HOME、去掉 CLAUDE_CONFIG_DIR、`exec zsh -f`）。跑前跑后比对 `~/.claude/settings.json`、`~/.codex` 的 `config.toml` / `hooks.json` / `auth.json`、另外四个 CLI 的配置与凭据文件，以及两个 CLI 的版本；Claude 仍会像平常一样在 `~/.claude.json` 与 `~/.claude/projects/` 里记下这个临时目录的会话。
 
 产物默认在 `target/agent-e2e/`：`result.json`（逐条断言、时间线、投递记录、控制台错误、配置比对）、每个场景的截图与 `core.log`。一次全量约 4–5 分钟（实测 245 秒），花费是十几轮「回复 OK」量级的 token。
 
@@ -217,7 +229,7 @@ node tools/probes/packaged-smoke.mjs [输出目录] [--app <Armadra.app>]
 
 直接执行 `apps/desktop/release/mac-arm64/Armadra.app` 里的二进制，按访达的方式给环境（launchd 的 PATH、`SHELL=/bin/zsh`），`HOME`、`ARMADRA_DATA_DIR`、`--user-data-dir` 都在 `mktemp` 的目录里，Chromium 用 `--use-mock-keychain`（临时 HOME 下没有登录钥匙串）。不安装、不替换 `/Applications/Armadra.app`，也不碰正在运行的那个 Armadra（单实例锁按 `--user-data-dir` 算）。
 
-1. **升级后自动迁移全局安装**：临时 HOME 里预先造出旧版装进各 CLI 全局目录的东西（Claude `settings.json` 的 Hook、Codex `hooks.json`、Copilot `hooks/armadra.json`、OpenCode / Pi / OMP 的状态模块、`skills/armadra`）和用户自己的条目。断言我们的都清掉、清之前有备份（用户也编辑的文件备份在旁边，只有我们写的备份进数据目录）、用户的 Hook / 设置 / 技能原样留着；Codex 的信任记录写进的是临时 HOME 的 `~/.codex/config.toml`。
+1. **升级后自动迁移全局安装**：临时 HOME 里预先造出旧版装进各 CLI 全局目录的东西（Claude `settings.json` 的 Hook、Codex `hooks.json`、Copilot `hooks/armadra.json`、OpenCode / Pi / OMP 的状态模块、`skills/armadra`）和用户自己的条目。断言我们的都清掉、清之前有备份（用户也编辑的文件备份在旁边，只有我们写的备份进数据目录）、用户的 Hook / 设置 / 技能原样留着；临时 HOME 的 `~/.codex/config.toml` 预置一条上一版的会话级信任记录和用户自己的行，起打包版后我们的记录被清掉、用户的行留着，画布里起过 Codex（启动器方案，零写入，带 `--dangerously-bypass-hook-trust`）之后也没有写回。
 2. **编辑器的 PDF 与视频**：视频夹具由打包版自己的 MediaRecorder 录出来；截图里 PDF 区域不是空白，`<video>` 读得出 320×240、没有解码错误，播一下之后画面不是一块纯色。
 3. **节能休眠与唤醒**：真 Codex（临时 HOME 里的 `~/.codex`，只复制 `auth.json`；mise 的 Node 目录用一个符号链接给过去）。`ARMADRA_TEST_ECO_IDLE_SECONDS=20`，页面离开画布后 Codex 进程退出、会话记成休眠；回到画布节点显示「休眠中」，点节点后同一会话 id 起下一代、进程带同一个 provider 会话 id，问「之前让你记的数加一」答 418。
 4. **控制台**：渲染进程没有 error 级别的输出与未捕获异常。

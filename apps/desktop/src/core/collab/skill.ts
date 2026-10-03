@@ -94,11 +94,20 @@ The full skill is at \`${skillPath}\`; read it when you need the details.
 
 /**
  * Codex's form. Codex has no per-launch skill loading, so this is all it is
- * told up front: the rules and the absolute path of the full skill. Kept to
- * that because it rides on a launch line a person sees.
+ * told up front: the rules and the absolute path of the full skill.
+ *
+ * It lands in the session record, and `codex resume` outside the board reads
+ * it back (docs/design/canvas-launcher.md §7.3). So the first line names the
+ * revision that wrote it, and the rules say they only hold where
+ * `ARMADRA_NODE_ID` is set — the hard guarantee is still the hook client
+ * doing nothing without it.
  */
 export function developerInstructions(skillPath: string): string {
-  return `${canvasRules()}
+  return `[Armadra canvas rules r${SKILLS_REVISION}]
+以下规则只在环境变量 ARMADRA_NODE_ID 已设置（本会话由 Armadra 画布启动，\`armadra-hook\` 可用）时生效；没有它时忽略本段。
+The rules below apply only when ARMADRA_NODE_ID is set (this session was started from an Armadra board); otherwise ignore this section.
+
+${canvasRules()}
 
 完整说明在 ${skillPath}，需要时用读文件工具读取。Full skill: ${skillPath}`;
 }

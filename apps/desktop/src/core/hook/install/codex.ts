@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { HOOK_CLIENT_REVISION } from "./events";
@@ -43,7 +42,7 @@ import { readDocument, removeTrustState } from "./toml-state";
  *
  * Re-verified on Codex 0.155.1 (2026-09-26) for hooks passed with `-c`: the
  * `currentHash` `codex app-server`'s `hooks/list` reports for a session-flag
- * hook equals {@link hookHash} for all three shapes tried (with a matcher,
+ * hook equals that hash for all three shapes tried (with a matcher,
  * without, and `SessionEnd`'s 1s timeout), and with those hashes written into
  * a temporary `CODEX_HOME/config.toml` the hooks report `trusted` and fire
  * under `codex exec`.
@@ -197,42 +196,4 @@ function survivingKeys(events: JsonObject, keySource: string): string[] {
     });
   }
   return keys;
-}
-
-/**
- * Reproduces `codex_config::fingerprint::version_for_toml` over Codex's
- * `NormalizedHookIdentity`. See the module note for the derivation.
- *
- * The canonicalization is "every object's keys sorted" — which `serde_json`'s
- * BTreeMap gives the Rust side for free and is written out here.
- */
-export function hookHash(
-  event: string,
-  matcher: string | undefined,
-  command: string,
-  timeoutSec: number,
-): string {
-  const identity: Record<string, unknown> = {
-    event_name: event,
-    ...(matcher === undefined ? {} : { matcher }),
-    hooks: [{ async: false, command, timeout: timeoutSec, type: "command" }],
-  };
-  const digest = createHash("sha256")
-    .update(canonicalJson(identity), "utf8")
-    .digest("hex");
-  return `sha256:${digest}`;
-}
-
-/** Compact JSON with every object's keys in sorted order. */
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalJson).join(",")}]`;
-  }
-  if (typeof value === "object" && value !== null) {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, item]) => item !== undefined)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
 }

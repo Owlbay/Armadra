@@ -7,6 +7,7 @@ import {
   agentEnvironment,
   agentPath,
   asRecord,
+  canvasPath,
   childEnvironment,
   contextSessionEnvironment,
   defaultShell,
@@ -91,6 +92,43 @@ describe("the agent PATH", () => {
       if (entry === "/usr/bin") continue;
       expect(seen.has(entry)).toBe(false);
       seen.add(entry);
+    }
+  });
+});
+
+describe("a canvas node's PATH", () => {
+  /** docs/design/canvas-launcher.md §4.3: the shims first, then the rest. */
+  it("puts the shims directory first and keeps the agent PATH after it", () => {
+    const shims = "/data/integration/shims";
+    const ambient = { PATH: ["/usr/bin", "/bin"].join(delimiter) };
+    const path = canvasPath(shims, ambient, undefined);
+    expect(path).toBe([shims, agentPath(ambient)].join(delimiter));
+    // 普通终端的 PATH 不带垫片。
+    expect(asRecord(childEnvironment({ ambient })).PATH).toBe(
+      agentPath(ambient),
+    );
+  });
+
+  it("lists the shims once, even when the ambient PATH already has them", () => {
+    const shims = "/data/integration/shims";
+    const path = canvasPath(
+      shims,
+      { PATH: ["/usr/bin", shims, "/bin"].join(delimiter) },
+      undefined,
+    ).split(delimiter);
+    expect(path[0]).toBe(shims);
+    expect(path.filter((entry) => entry === shims)).toHaveLength(1);
+  });
+
+  it("keeps the hook client's directory, as every terminal gets it", () => {
+    const directory = mkdtempSync(join(tmpdir(), "armadra-canvas-path-"));
+    try {
+      const hookBin = join(directory, "armadra-hook");
+      writeFileSync(hookBin, "", "utf8");
+      const path = canvasPath("/s", { PATH: "/usr/bin" }, hookBin);
+      expect(path.split(delimiter)).toContain(directory);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 });

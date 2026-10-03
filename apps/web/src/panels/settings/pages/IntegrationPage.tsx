@@ -28,13 +28,15 @@ import {
  *
  * Hook、技能与画布说明只在从画布启动 CLI 时交给它：产物生成在应用数据目录
  * 里，由启动行与节点终端的环境带过去，画布外启动的 CLI 什么都看不到。所以
- * 这里不再有「安装 / 卸载」——每种 CLI 一行，回答四件事：
+ * 这里不再有「安装 / 卸载」——每种 CLI 一行，回答四件事（启动器见
+ * [画布启动器](../../../../../docs/design/canvas-launcher.md) §8.2）：
  *
  *  1. **注入方式**——画布内注入。
  *  2. **Hook / 技能**——注入产物是不是当前版本。唯一的动作是「重新生成」，
  *     平时不用点：每次从画布启动都会先确保它们是最新的。
- *  3. **全局写入**——只有 Codex 有：它只认用户 `config.toml` 里的信任记录，
- *     这是整个集成唯一写进 CLI 自己配置的地方，徽标上写明写在哪。
+ *  3. **启动器警告**——画布内启动少带了东西（Windows 没有启动器、Codex 太旧
+ *     不带 Hook）；原因在悬停提示里。数据目录之外不写任何文件，所以不再有
+ *     「信任记录写在…」。
  *  4. **迁移与旧残留**——升级时清掉的旧全局安装（备份在哪），以及更早的产品
  *     名留下的条目与「修复」。
  */
@@ -117,7 +119,14 @@ function AgentIntegrationRow({ agent }: { agent: AgentInfo }) {
   }
   const ready = integration.hook.installed;
   const legacy = integration.legacy.found;
-  const migrated = integration.migration?.removed.length ?? 0;
+  const sessionTrust = integration.migration?.sessionTrust;
+  const migrated =
+    (integration.migration?.removed.length ?? 0) +
+    (sessionTrust?.removed.length ?? 0);
+  const backups = [
+    ...(integration.migration?.backups ?? []),
+    ...(sessionTrust?.backup ? [sessionTrust.backup] : []),
+  ];
 
   // 状态徽标放在名字下面、动作按钮留在右边：几样东西挤在一行时右侧不收缩，
   // 左列被压成一条窄缝，名字被推出视口。
@@ -154,16 +163,13 @@ function AgentIntegrationRow({ agent }: { agent: AgentInfo }) {
             : t("integration.skill.missing")}
         </Badge>
 
-        {(integration.globalWrites ?? []).map((path) => (
-          <Badge key={path} variant="outline" title={path}>
-            {t("integration.globalWrite", { path: shortenHome(path) })}
+        {integration.launcherWarning && (
+          <Badge variant="destructive" title={integration.launcherWarning}>
+            {t("integration.launcherWarning")}
           </Badge>
-        ))}
+        )}
         {migrated > 0 && (
-          <Badge
-            variant="secondary"
-            title={integration.migration?.backups.join("\n")}
-          >
+          <Badge variant="secondary" title={backups.join("\n")}>
             {t("integration.migrated")}
           </Badge>
         )}

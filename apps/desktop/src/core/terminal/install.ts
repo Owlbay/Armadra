@@ -15,8 +15,7 @@ import { handleForNode } from "../canvas/handles";
 import { type EnvPairs, agentEnvironment, setHookClient } from "./environment";
 import { launcherClientBinary } from "../hook/install/shared";
 import { collab, setTerminalBridge } from "../agent";
-import { canvasEnvironment, nodeDialect } from "../agent/canvas-launch";
-import type { ShellDialect } from "./shell";
+import { canvasEnvironment } from "../agent/canvas-launch";
 import { listAgents } from "../agent/list";
 import { baseAgent } from "../agent/registry";
 import { parseCustomAgents } from "../settings/custom-agents";
@@ -258,13 +257,9 @@ export function install(
       customAgents: () =>
         parseCustomAgents(settingsDomain()?.settings.snapshot() ?? {}),
     };
-  // `dialect`：这个终端要跑的 shell 的方言。Codex 那两个由启动行展开的环境变
-  // 量要按它写（`hook/install/inject.ts::codexTomlString`）。
-  const ownedEnvironment = (
-    nodeId: string,
-    agentId: string,
-    dialect: ShellDialect,
-  ) => {
+  // `ssh`：这个终端是 SSH 会话——本机的垫片目录在执行主机上不存在，那边的
+  // `PATH` 由远端 shell 命令前置远端的垫片（`remote/integration.ts`）。
+  const ownedEnvironment = (nodeId: string, agentId: string, ssh: boolean) => {
     try {
       issueNodeToken(context.dataDir, nodeId);
     } catch (failure) {
@@ -290,15 +285,15 @@ export function install(
         settingsDomain()?.settings.get("hooks.replyApprovals") !== false,
         (id) => baseAgent(agentSettings(), id),
       ),
-      // 画布注入的环境半边（OpenCode 的配置目录、Copilot 的说明目录）；也是
-      // 注入产物确保为最新的时刻——这个终端就要起这个 CLI 了。
+      // 画布启动器的终端半边：`ARMADRA_SHIMS` 与把垫片目录放在最前的 `PATH`
+      // （画布启动器设计 §4.3）；也是注入产物与启动器确保为最新的时刻——这个
+      // 终端就要起这个 CLI 了。注入自己的环境变量只由启动器给 CLI 进程设。
       ...canvasEnvironment(
         agentSettings(),
         context.dataDir,
         agentId,
-        nodeId,
         (message, fields) => context.log.warn(message, fields),
-        dialect,
+        { ssh },
       ),
     ];
   };
@@ -320,8 +315,8 @@ export function install(
         ? policy
         : { ...policy, idleMinutes: ecoOverride.idleMinutes };
     },
-    environment: (nodeId, agentId, dialect) =>
-      ownedEnvironment(nodeId, agentId, dialect),
+    environment: (nodeId, agentId, ssh) =>
+      ownedEnvironment(nodeId, agentId, ssh),
     // 与依赖编排拼启动行时同一个来源：本机解析到的程序路径；画布注入的 argv
     // 由恢复行经 `agent/canvas-launch.ts` 从数据目录取。
     program: (agentId) => {
@@ -363,7 +358,7 @@ export function install(
       ? ownedEnvironment(
           body.nodeId as string,
           (body.agent as { id: string }).id,
-          nodeDialect(body.shell, body.ssh !== undefined),
+          body.ssh !== undefined,
         )
       : [];
     const session = await manager.spawn({
@@ -639,7 +634,7 @@ export function install(
         env: ownedEnvironment(
           request.nodeId,
           request.agentId,
-          nodeDialect(request.shell, request.sshHostId !== undefined),
+          request.sshHostId !== undefined,
         ),
       });
       return { sessionId: session.id, generation: session.generation };
@@ -655,11 +650,7 @@ export function install(
       ownerNodeId: request.nodeId,
       agentId: request.agentId,
       // 冷启动起的是本机缺省的 shell，启动行（`schedule/cold-start.ts`）也按它写。
-      env: ownedEnvironment(
-        request.nodeId,
-        request.agentId,
-        nodeDialect(undefined),
-      ),
+      env: ownedEnvironment(request.nodeId, request.agentId, false),
     });
     void typeLaunchLine(
       manager,

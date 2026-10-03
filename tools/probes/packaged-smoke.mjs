@@ -7,7 +7,8 @@
 //      西（Claude settings.json 里的 Hook、Codex hooks.json 条目、Copilot 的
 //      hooks/armadra.json、OpenCode / Pi / OMP 的状态模块、skills/armadra），外
 //      加用户自己的条目。起打包版后断言：先备份再清理、只清我们的、用户的原样
-//      留着、迁移只记一次；Codex 的信任记录写进的是临时 HOME 的 config.toml。
+//      留着、迁移只记一次；上一版写进 config.toml 的会话级信任记录被清掉，画布
+//      里起过 Codex 之后也没有写回。
 //   2. 编辑器的 PDF 与视频：打包版的 Electron 里内置 PDF 查看器与 H.264 解码是
 //      否真的可用（无头 Chrome 的结论不能搬过来）。截图看 PDF 区域不是空白，
 //      <video> 读得出画面尺寸、没有解码错误。
@@ -231,9 +232,10 @@ async function main() {
     join(homedir(), ".codex/auth.json"),
     join(home, ".codex/auth.json"),
   );
+  // 外加上一版写进来的一条会话级信任记录：迁移第二步要把它清掉，其余原样留着。
   writeFileSync(
     join(home, ".codex/config.toml"),
-    `model_reasoning_effort = "low"\ncheck_for_update_on_startup = false\n\n[projects."${projectReal}"]\ntrust_level = "trusted"\n`,
+    `model_reasoning_effort = "low"\ncheck_for_update_on_startup = false\n\n[projects."${projectReal}"]\ntrust_level = "trusted"\n\n[hooks.state."/<session-flags>/config.toml:session_start:0:0"]\ntrusted_hash = "sha256:0000"\n`,
   );
   // Node 与全局装的 codex 在 mise 的目录里；core 按 HOME 找那里（agentPath），
   // 临时 HOME 里放一个指过去的链接（只读用）。
@@ -372,24 +374,24 @@ async function main() {
   );
   check("用户自己的技能原样留着", existsSync(legacy.userSkill));
   const codexConfig = await waitFor(
-    "Codex 信任记录写进临时 HOME",
+    "旧的会话级信任记录从临时 HOME 清掉",
     () => {
       const text = readFileSync(join(home, ".codex/config.toml"), "utf8");
-      return text.includes('"/<session-flags>/config.toml:session_start:0:0"')
-        ? text
-        : undefined;
+      return text.includes("/<session-flags>/") ? undefined : text;
     },
     { timeout: 30_000 },
   ).catch(() => readFileSync(join(home, ".codex/config.toml"), "utf8"));
   check(
-    "Codex 的信任记录写进的是临时 HOME 的 ~/.codex/config.toml，用户原有的行还在",
-    codexConfig.includes('"/<session-flags>/config.toml:session_start:0:0"') &&
-      codexConfig.includes('model_reasoning_effort = "low"'),
+    "迁移清掉了 ~/.codex/config.toml 里上一版的会话级信任记录，用户原有的行还在",
+    !codexConfig.includes("/<session-flags>/") &&
+      codexConfig.includes('model_reasoning_effort = "low"') &&
+      codexConfig.includes('trust_level = "trusted"'),
+    codexConfig.slice(0, 400),
   );
 
-  // 用户那条示例 Hook 在临时 HOME 里没有信任记录，Codex 起来会先问「要不要审
-  // 查新 Hook」。断言做完就拿掉它：之后 Codex 若还问，那问的只能是我们的
-  // Hook——信任记录没写对。
+  // 用户那条示例 Hook 断言做完就拿掉，免得后面 Codex 的会话里多跑一条与本测
+  // 无关的 Hook。画布内的 Codex 带 --dangerously-bypass-hook-trust，不靠信任
+  // 记录；下面休眠与唤醒之后再确认 config.toml 没被写回信任记录。
   writeFileSync(
     legacy.codexHooks,
     `${JSON.stringify({ hooks: {} }, null, 2)}\n`,
@@ -890,6 +892,12 @@ async function main() {
     await shot("packaged-resumed");
   }
 
+  check(
+    "画布里起过 Codex 之后，临时 HOME 的 config.toml 里仍没有我们的信任记录",
+    !readFileSync(join(home, ".codex/config.toml"), "utf8").includes(
+      "/<session-flags>/",
+    ),
+  );
   check(
     "渲染进程没有控制台错误",
     report.consoleErrors.length === 0,

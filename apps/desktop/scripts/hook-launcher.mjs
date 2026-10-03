@@ -17,7 +17,8 @@
  *
  * Compiling only works on a Windows host. `after-pack.mjs` calls this for a
  * Windows target; the core falls back to the `.cmd` launcher when no `.exe`
- * sits next to the bundle.
+ * sits next to the bundle. The canvas launcher (`launch-exe.mjs`) is built by
+ * the same {@link compileCSharp}.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
@@ -64,9 +65,34 @@ export function cscArguments(source, output) {
 }
 
 /**
- * Compiles the launcher into `output` and returns its path. Throws with the
- * compiler's own output when it fails, or when there is no compiler.
+ * Compiles one C# console program from `source` into `output` and returns its
+ * path. Throws with the compiler's own output when it fails, or when there is
+ * no compiler. `name` prefixes the messages. Shared by this launcher and the
+ * canvas launcher (`launch-exe.mjs`).
  */
+export function compileCSharp(
+  source,
+  output,
+  { env = process.env, run = spawnSync, name = "hook-launcher" } = {},
+) {
+  const csc = findCsc({ env });
+  if (csc === undefined) {
+    throw new Error(
+      `${name}: no csc.exe under ${cscCandidates(env).join(", ")}`,
+    );
+  }
+  mkdirSync(dirname(output), { recursive: true });
+  const result = run(csc, cscArguments(source, output), { encoding: "utf8" });
+  if (result.error !== undefined) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(
+      `${name}: csc exited ${result.status}\n${result.stdout ?? ""}${result.stderr ?? ""}`,
+    );
+  }
+  return output;
+}
+
+/** Compiles the hook launcher into `output` and returns its path. */
 export function compileHookLauncher(
   output,
   {
@@ -75,21 +101,7 @@ export function compileHookLauncher(
     run = spawnSync,
   } = {},
 ) {
-  const csc = findCsc({ env });
-  if (csc === undefined) {
-    throw new Error(
-      `hook-launcher: no csc.exe under ${cscCandidates(env).join(", ")}`,
-    );
-  }
-  mkdirSync(dirname(output), { recursive: true });
-  const result = run(csc, cscArguments(source, output), { encoding: "utf8" });
-  if (result.error !== undefined) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(
-      `hook-launcher: csc exited ${result.status}\n${result.stdout ?? ""}${result.stderr ?? ""}`,
-    );
-  }
-  return output;
+  return compileCSharp(source, output, { env, run, name: "hook-launcher" });
 }
 
 // `node scripts/hook-launcher.mjs <out>` builds it by hand, e.g. into `out/cli`

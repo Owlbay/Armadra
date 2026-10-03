@@ -57,13 +57,12 @@ export interface HibernatorOptions {
   readonly policy: () => EcoPolicy;
   /**
    * 节点令牌与地址变量——与 `POST /api/terminals` 起 Agent 终端时同一份。
-   * `dialect` 是接回来的那一代要跑的 shell 的方言：Codex 从环境里展开的值要
-   * 按它写。
+   * `ssh`：节点终端是 SSH 会话，本机的垫片目录不进它的环境。
    */
   readonly environment: (
     nodeId: string,
     agentId: string,
-    dialect: ShellDialect,
+    ssh: boolean,
   ) => EnvPairs;
   /**
    * 本机解析到的程序路径（`GET /api/agents` 那一行的 `resolvedPath`）。缺席时
@@ -441,10 +440,8 @@ export class Hibernator {
     }
     const settings = this.options.settings();
     // 下一代在同一行上起，跑的是同一个 shell；SSH 节点的行由远端的 shell 读。
-    const dialect = nodeDialect(
-      hibernated.shell ?? undefined,
-      node.data.ssh !== null && typeof node.data.ssh === "object",
-    );
+    const ssh = node.data.ssh !== null && typeof node.data.ssh === "object";
+    const dialect = nodeDialect(hibernated.shell ?? undefined, ssh);
     let line: string;
     try {
       line = resumeLine(settings, agentId, node.data, providerSessionId, {
@@ -463,7 +460,7 @@ export class Hibernator {
     try {
       revived = await this.manager.revive(
         sessionId,
-        this.options.environment(nodeId, agentId, dialect),
+        this.options.environment(nodeId, agentId, ssh),
       );
     } catch (error) {
       return fail("spawnFailed", error);

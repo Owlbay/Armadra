@@ -30,7 +30,7 @@ import {
 } from "./hibernate";
 import { Hibernator, resumeLine } from "./hibernator";
 import { nodeDialect } from "../agent/canvas-launch";
-import { artifactLayout, prepareInjection } from "../hook/install/inject";
+import { launcherPath, prepareInjection } from "../hook/install/inject";
 import { quoteShellWord } from "./shell";
 import { tempDir } from "../testing/temp-dir";
 import { TerminalManager } from "./manager";
@@ -130,11 +130,14 @@ beforeEach(() => {
   cli = new FakeCli();
   injectionDir = tempDir("armadra-hibernator-injection-");
   writeFileSync(join(injectionDir, "armadra-hook"), "#!/bin/sh\n", "utf8");
+  // Windows' launcher is a copy of armadra-launch.exe; any bytes do here.
+  writeFileSync(join(injectionDir, "armadra-launch.exe"), "MZ", "utf8");
   prepareInjection("claude", {
     dataDir: injectionDir,
     env: {
       ...process.env,
       ARMADRA_HOOK_BIN: join(injectionDir, "armadra-hook"),
+      ARMADRA_LAUNCH_EXE: join(injectionDir, "armadra-launch.exe"),
     },
   });
   now = Date.parse("2026-09-26T08:00:00.000Z");
@@ -454,13 +457,11 @@ describe("hibernated → resuming → running", () => {
     });
     expect(cli.created.map((spec) => spec.generation)).toEqual([1, 2]);
     // 同一段对话：`--resume` 后面是 hook 报过的那个 provider 会话 id，模型与
-    // 权限模式读节点现在的设置，画布注入的 argv 跟在最后（恢复时要重带）。
+    // 权限模式读节点现在的设置；行经画布启动器起，注入由它重带（行上没有）。
     expect(cli.typed).toHaveLength(1);
-    expect(
-      cli.typed[0]?.startsWith(
-        `/opt/bin/claude --resume prov-1 --permission-mode acceptEdits --model opus --settings ${quoteShellWord(artifactLayout(injectionDir, "claude").settings as string, nodeDialect(undefined))}`,
-      ),
-    ).toBe(true);
+    expect(cli.typed[0]?.trimEnd()).toBe(
+      `${quoteShellWord(launcherPath(injectionDir, "claude"), nodeDialect(undefined))} /opt/bin/claude --resume prov-1 --permission-mode acceptEdits --model opus`,
+    );
     // 旧的那条 idle 属于上一代：投递门链要等接回来的 CLI 自己再报一条。
     const restored = fixture.database
       .prepare("SELECT restored FROM agent_status WHERE node_id = ?")

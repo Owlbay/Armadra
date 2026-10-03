@@ -32,6 +32,8 @@ const zh = {
   "agent.stateSource.hook.note": "状态来自 CLI 的 Hook 上报。", // i18n-exempt
   "agent.stateSource.extension": "扩展上报",
   "agent.stateSource.extension.note": "状态来自 CLI 进程内的扩展上报。",
+  "agent.stateSource.acp": "ACP 上报", // i18n-exempt
+  "agent.stateSource.acp.note": "状态来自 ACP 会话。", // i18n-exempt
   "agent.stateSource.observed": "终端观测",
   "agent.stateSource.observed.note":
     "没有适配器，状态由终端输出推测；交接与消息投递仍会被拒绝。",
@@ -64,6 +66,9 @@ const en: Record<keyof typeof zh, string> = {
   "agent.stateSource.extension": "Reported by extension",
   "agent.stateSource.extension.note":
     "The state comes from an extension inside the CLI's own process.",
+  "agent.stateSource.acp": "Reported over ACP",
+  "agent.stateSource.acp.note":
+    "The state comes from the Agent Client Protocol session.",
   "agent.stateSource.observed": "Observed in the terminal",
   "agent.stateSource.observed.note":
     "No adapter: the state is a guess from terminal output. Handoffs and message delivery are still refused.",

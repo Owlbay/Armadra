@@ -1,21 +1,33 @@
-// 场景 5：画布内注入只在画布里生效（设计 canvas-only-integration §7）。
+// 场景 5：画布注入只在画布里生效（设计 canvas-launcher §13.3）。
 //
-// 同一台机器、同一份环境（节点身份 ARMADRA_NODE_ID 也带着），唯一的差别是
-// 启动行上有没有 core 给的注入参数（`GET /api/agents` 的 `launchArgs`）：
+// 注入不在启动行上：`GET /api/agents` 的每行答这台机器上的启动器 `launcher`
+// （`<数据目录>/integration/run/<cli>`），行是 `<launcher> <程序> <旗标…>`，启动
+// 器只在环境里有 ARMADRA_NODE_ID 时把注入接在调用者的全部参数之后。这里对
+// Claude 与 Codex 各跑三遍：
 //
-//   * 画布外：Codex 在临时 CODEX_HOME 里跑一轮，会话记录里没有画布说明，Hook
-//     一次都没打到 core；Claude 的 init 里没有我们的插件，也没有插件技能
-//     `armadra:armadra`，Hook 同样一次没打到。
-//   * 画布内：同样的命令加上注入参数，Codex 的会话记录里出现画布规则与完整
-//     技能的路径、Hook 打到 core；Claude 的 init 里出现插件与插件技能、Hook
-//     打到 core。
+//   * 画布内：`<launcher> <程序> … "<prompt>"`，环境带源节点的身份。prompt 是位
+//     置参数，注入的旗标落在它后面——两家都得照样接受。Codex 的会话记录里有
+//     `[Armadra canvas rules r<N>]` 与完整技能的路径、stderr 有
+//     `--dangerously-bypass-hook-trust` 的警告、Hook 打到 core；Claude 的 init
+//     里有我们的插件与插件技能、Hook 打到 core。
+//   * 画布外重跑同一行：只去掉 ARMADRA_NODE_ID（「shell 历史里重跑」）。没有
+//     画布说明、没有插件、Hook 没打到 core。
+//   * 行上没有启动器：裸程序，节点身份还在。没有全局安装，所以同样什么都没有。
 //
 // 「Hook 打到 core」看的是源节点那一行 `agent_status` 的 last_event_at 有没有
-// 前进：外面那次跑完它必须原地不动，里面那次跑完它必须变。Claude 只能用真实
-// 配置目录，而我们对 Claude 只做逐次注入，不写它的全局文件；那里若还留着旧版
-// 装的 `skills/armadra`（升级后真实应用第一次启动才会清），照实记下来。
+// 前进。Codex 用一个只放了 auth.json 的新 CODEX_HOME：三遍跑完里面**没有**
+// config.toml——会话级旗标代替了信任记录，数据目录之外一个字节不写。Claude 只能
+// 用真实配置目录（钥匙串里的登录只认它），我们对它只经启动器注入、不写它的全
+// 局文件；收尾的 fingerprint 守着这一点。
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { note, scenario } from "./lib.mjs";
@@ -67,108 +79,176 @@ function claudeInit(stdout) {
 }
 
 export default async function run5(ctx) {
-  const { api, codexHome, data, project, source, status } = ctx;
+  const { api, codexHome, data, project, scratch, source, status } = ctx;
   const s = scenario("5-canvas-only");
   try {
     const rows = await api("/api/agents");
-    const claudeArgs = rows.find((row) => row.id === "claude")?.launchArgs;
-    const codexArgs = rows.find((row) => row.id === "codex")?.launchArgs;
+    const runDir = join(data, "integration", "run");
+    const row = (id) => rows.find((entry) => entry.id === id);
+    for (const id of ["claude", "codex"]) {
+      s.check(
+        `${id} 的行答数据目录里的启动器，不再答 launchWords / launchArgs`,
+        row(id)?.launcher === join(runDir, id) &&
+          row(id)?.launchWords === undefined &&
+          row(id)?.launchArgs === undefined,
+        row(id)?.launcher,
+      );
+    }
+    const claudeLauncher = row("claude")?.launcher;
+    const codexLauncher = row("codex")?.launcher;
+    const claudeProgram = row("claude")?.resolvedPath || "claude";
+    const codexProgram = row("codex")?.resolvedPath || "codex";
+
+    const claudeState = await api("/api/agents/claude/integration");
+    const codexState = await api("/api/agents/codex/integration");
     s.check(
-      "core 给 Claude 的注入：--settings / --plugin-dir / --append-system-prompt-file",
+      "Claude 的启动器追加 --settings / --plugin-dir / --append-system-prompt-file",
       ["--settings", "--plugin-dir", "--append-system-prompt-file"].every(
-        (flag) => claudeArgs?.includes(flag),
+        (flag) => claudeState.launchArgs.includes(flag),
       ),
-      claudeArgs,
+      claudeState.launchArgs,
+    );
+    const codexHooks = codexState.launchArgs.filter((arg) =>
+      arg.startsWith("hooks."),
     );
     s.check(
-      "core 给 Codex 的注入：-c 的 Hook、developer_instructions、关升级检查",
-      codexArgs?.includes("check_for_update_on_startup=false") &&
-        codexArgs.some((arg) => arg.startsWith("hooks.SessionStart=")) &&
-        codexArgs.some((arg) => arg.startsWith("developer_instructions=")),
-      codexArgs?.filter((arg) => !arg.startsWith("developer_instructions=")),
+      "Codex 的启动器追加 --dangerously-bypass-hook-trust、八个 -c hooks.*、developer_instructions、关升级检查",
+      codexState.launchArgs[0] === "--dangerously-bypass-hook-trust" &&
+        codexHooks.length === 8 &&
+        codexState.launchArgs.includes("check_for_update_on_startup=false") &&
+        codexState.launchArgs.some((arg) =>
+          arg.startsWith("developer_instructions="),
+        ),
+      {
+        hooks: codexHooks.map((arg) => arg.slice(0, arg.indexOf("="))),
+        warning: codexState.launcherWarning,
+      },
     );
-    const trust = readFileSync(join(codexHome, "config.toml"), "utf8");
     s.check(
-      "Codex 的信任记录只写进了临时 CODEX_HOME",
-      trust.includes('"/<session-flags>/config.toml:session_start:0:0"'),
+      "集成状态不再列全局写入",
+      claudeState.globalWrites.length === 0 &&
+        codexState.globalWrites.length === 0,
+    );
+    const record = JSON.parse(
+      readFileSync(join(data, "integration", "global-migration.json"), "utf8"),
+    );
+    s.check(
+      "迁移记录升到 version 2，临时 CODEX_HOME 里没有要清的会话信任记录",
+      record.version === 2 &&
+        Array.isArray(record.sessionTrust?.removed) &&
+        record.sessionTrust.removed.length === 0,
+      record.sessionTrust,
     );
 
-    // 两边共用的环境：带着源节点的身份，只差启动行。
-    const base = { ...process.env };
+    // 共用的环境：画布内带源节点的身份，画布外只少这一个变量。
+    const inside = { ...process.env };
     for (const name of ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "TMUX"])
-      delete base[name];
-    base.ARMADRA_NODE_ID = source.id;
-    base.ARMADRA_ENDPOINT_FILE = join(data, "hook-endpoint.env");
+      delete inside[name];
+    inside.ARMADRA_NODE_ID = source.id;
+    inside.ARMADRA_ENDPOINT_FILE = join(data, "hook-endpoint.env");
+    const outside = { ...inside };
+    delete outside.ARMADRA_NODE_ID;
     const lastEvent = () => status(source.id)?.last_event_at ?? null;
+    const prompt = "Reply with just OK.";
 
     /* ------------------------------- Codex -------------------------------- */
 
-    const codexEnv = { ...base, CODEX_HOME: codexHome };
-    delete codexEnv.CLAUDE_CONFIG_DIR;
-    const prompt = "Reply with just OK.";
-    let before = lastEvent();
-    const outside = await run(
-      "codex",
-      [
-        "exec",
-        "--skip-git-repo-check",
-        "-c",
-        "check_for_update_on_startup=false",
-        prompt,
-      ],
-      { cwd: project, env: codexEnv },
-    );
-    const outsideRollout = newestRollout(codexHome);
-    const outsideText = outsideRollout
-      ? readFileSync(outsideRollout, "utf8")
-      : "";
-    s.check(
-      "画布外：Codex 跑完一轮",
-      outside.code === 0,
-      outside.stderr.slice(-300),
-    );
-    s.check(
-      "画布外：Codex 的会话里没有画布说明，也没有 armadra 技能",
-      outsideText !== "" &&
-        !outsideText.includes("画布规则") &&
-        !outsideText.includes("skills/armadra"),
-      outsideRollout,
-    );
-    s.check("画布外：Codex 的 Hook 没有打到 core", lastEvent() === before, {
-      before,
-      after: lastEvent(),
-    });
+    // 新的 CODEX_HOME，只有登录：看跑完之后有没有冒出 config.toml。
+    const freshHome = join(scratch, "codex-home-5");
+    mkdirSync(freshHome, { recursive: true });
+    copyFileSync(join(codexHome, "auth.json"), join(freshHome, "auth.json"));
+    const codexEnv = (env) => {
+      const next = { ...env, CODEX_HOME: freshHome };
+      delete next.CLAUDE_CONFIG_DIR;
+      return next;
+    };
+    // prompt 是位置参数，启动器的注入接在它后面。
+    const codexLine = [codexProgram, "exec", "--skip-git-repo-check", prompt];
 
-    before = lastEvent();
-    const inside = await run(
-      "codex",
-      ["exec", "--skip-git-repo-check", ...(codexArgs ?? []), prompt],
-      { cwd: project, env: codexEnv },
-    );
-    const insideRollout = newestRollout(codexHome);
-    const insideText = insideRollout ? readFileSync(insideRollout, "utf8") : "";
+    let before = lastEvent();
+    const codexIn = await run(codexLauncher, codexLine, {
+      cwd: project,
+      env: codexEnv(inside),
+    });
+    const inRollout = newestRollout(freshHome);
+    const inText = inRollout ? readFileSync(inRollout, "utf8") : "";
     s.check(
-      "画布内：Codex 跑完一轮",
-      inside.code === 0,
-      inside.stderr.slice(-300),
+      "画布内：Codex 跑完一轮（注入的旗标在 prompt 之后）",
+      codexIn.code === 0,
+      codexIn.stderr.slice(-300),
     );
     s.check(
-      "画布内：Codex 的会话里有画布规则与完整技能的路径",
-      insideRollout !== outsideRollout &&
-        insideText.includes("画布规则") &&
-        insideText.includes(join("integration", "codex", "skills", "armadra")),
-      insideRollout,
+      "画布内：Codex 的会话里有带修订标记的画布规则与完整技能的路径",
+      /\[Armadra canvas rules r\d+\]/.test(inText) &&
+        inText.includes(join("integration", "codex", "skills", "armadra")),
+      inRollout,
+    );
+    s.check(
+      "画布内：Codex 打出 --dangerously-bypass-hook-trust 的警告",
+      codexIn.stderr.includes("`--dangerously-bypass-hook-trust` is enabled"),
     );
     s.check("画布内：Codex 的 Hook 打到了 core", lastEvent() !== before, {
       before,
       after: lastEvent(),
     });
 
+    const codexOutside = async (label, program, args, env) => {
+      before = lastEvent();
+      const answer = await run(program, args, {
+        cwd: project,
+        env: codexEnv(env),
+      });
+      const rollout = newestRollout(freshHome);
+      const text = rollout ? readFileSync(rollout, "utf8") : "";
+      s.check(
+        `${label}：Codex 跑完一轮`,
+        answer.code === 0,
+        answer.stderr.slice(-300),
+      );
+      s.check(
+        `${label}：Codex 的会话里没有画布规则，也没有 armadra 技能`,
+        rollout !== inRollout &&
+          text !== "" &&
+          !text.includes("Armadra canvas rules") &&
+          !text.includes("skills/armadra"),
+        rollout,
+      );
+      s.check(
+        `${label}：没有 --dangerously-bypass-hook-trust`,
+        !answer.stderr.includes("--dangerously-bypass-hook-trust"),
+      );
+      s.check(`${label}：Codex 的 Hook 没有打到 core`, lastEvent() === before, {
+        before,
+        after: lastEvent(),
+      });
+      return rollout;
+    };
+    await codexOutside("画布外重跑同一行", codexLauncher, codexLine, outside);
+    await codexOutside(
+      "行上没有启动器",
+      codexLine[0],
+      codexLine.slice(1),
+      inside,
+    );
+    s.check(
+      "新的 CODEX_HOME 里没有生成 config.toml",
+      !existsSync(join(freshHome, "config.toml")),
+    );
+    s.check(
+      "共用的临时 CODEX_HOME 的 config.toml 里没有会话信任记录",
+      !readFileSync(join(codexHome, "config.toml"), "utf8").includes(
+        "<session-flags>",
+      ),
+    );
+
     /* ------------------------------- Claude ------------------------------- */
 
     // 真实配置目录：钥匙串里的登录只认它。
-    const claudeEnv = { ...base };
-    delete claudeEnv.CLAUDE_CONFIG_DIR;
+    const claudeEnv = (env) => {
+      const next = { ...env };
+      delete next.CLAUDE_CONFIG_DIR;
+      return next;
+    };
     const legacySkill = existsSync(
       join(homedir(), ".claude/skills/armadra/SKILL.md"),
     );
@@ -177,65 +257,84 @@ export default async function run5(ctx) {
         "真实 ~/.claude/skills/armadra 仍在：旧版的全局安装，升级后真实应用第一次启动会备份并清掉；探针不碰它",
       );
     const claudeLine = [
+      claudeProgram,
       "-p",
       "--output-format",
       "stream-json",
       "--verbose",
       "--max-turns",
       "1",
+      prompt,
     ];
-    before = lastEvent();
-    const claudeOutside = await run("claude", [...claudeLine, prompt], {
-      cwd: project,
-      env: claudeEnv,
-    });
-    const outsideInit = claudeInit(claudeOutside.stdout);
-    s.check(
-      "画布外：Claude 起来了",
-      outsideInit !== undefined,
-      claudeOutside.stderr.slice(-300),
-    );
-    s.check(
-      "画布外：Claude 没有我们的插件与插件技能",
-      outsideInit !== undefined &&
-        !(outsideInit.plugins ?? []).some((plugin) =>
-          String(plugin.name ?? plugin).includes("armadra"),
-        ) &&
-        !(outsideInit.skills ?? []).includes("armadra:armadra"),
-      {
-        plugins: outsideInit?.plugins,
-        skills: outsideInit?.skills?.filter((name) => name.includes("armadra")),
-        legacyGlobalSkill: legacySkill,
-      },
-    );
-    s.check("画布外：Claude 的 Hook 没有打到 core", lastEvent() === before, {
-      before,
-      after: lastEvent(),
+    const ours = (init) => ({
+      plugin: (init?.plugins ?? []).some((plugin) =>
+        String(plugin.name ?? plugin).includes("armadra"),
+      ),
+      skill: (init?.skills ?? []).includes("armadra:armadra"),
     });
 
     before = lastEvent();
-    const claudeInside = await run(
-      "claude",
-      [...claudeLine, ...(claudeArgs ?? []), prompt],
-      { cwd: project, env: claudeEnv },
-    );
-    const insideInit = claudeInit(claudeInside.stdout);
+    const claudeIn = await run(claudeLauncher, claudeLine, {
+      cwd: project,
+      env: claudeEnv(inside),
+    });
+    const inInit = claudeInit(claudeIn.stdout);
     s.check(
-      "画布内：Claude 加载了我们的插件与插件技能",
-      insideInit !== undefined &&
-        (insideInit.plugins ?? []).some((plugin) =>
-          String(plugin.name ?? plugin).includes("armadra"),
-        ) &&
-        (insideInit.skills ?? []).includes("armadra:armadra"),
+      "画布内：Claude 加载了我们的插件与插件技能（注入的旗标在 prompt 之后）",
+      inInit !== undefined && ours(inInit).plugin && ours(inInit).skill,
       {
-        plugins: insideInit?.plugins,
-        skills: insideInit?.skills?.filter((name) => name.includes("armadra")),
+        plugins: inInit?.plugins,
+        skills: inInit?.skills?.filter((name) => name.includes("armadra")),
+        stderr: claudeIn.stderr.slice(-300),
       },
     );
     s.check("画布内：Claude 的 Hook 打到了 core", lastEvent() !== before, {
       before,
       after: lastEvent(),
     });
+
+    const claudeOutside = async (label, program, args, env) => {
+      before = lastEvent();
+      const answer = await run(program, args, {
+        cwd: project,
+        env: claudeEnv(env),
+      });
+      const init = claudeInit(answer.stdout);
+      s.check(
+        `${label}：Claude 起来了`,
+        init !== undefined,
+        answer.stderr.slice(-300),
+      );
+      s.check(
+        `${label}：Claude 没有我们的插件与插件技能`,
+        init !== undefined && !ours(init).plugin && !ours(init).skill,
+        {
+          plugins: init?.plugins,
+          skills: init?.skills?.filter((name) => name.includes("armadra")),
+          legacyGlobalSkill: legacySkill,
+        },
+      );
+      s.check(
+        `${label}：Claude 的 Hook 没有打到 core`,
+        lastEvent() === before,
+        {
+          before,
+          after: lastEvent(),
+        },
+      );
+    };
+    await claudeOutside(
+      "画布外重跑同一行",
+      claudeLauncher,
+      claudeLine,
+      outside,
+    );
+    await claudeOutside(
+      "行上没有启动器",
+      claudeLine[0],
+      claudeLine.slice(1),
+      inside,
+    );
   } catch (error) {
     s.fail(error);
   }
