@@ -40,3 +40,8 @@ overrides:
   # before 7.29.1. Pulled in by shadcn (and its @dotenvx/dotenvx) in the web
   # app and by electron's @electron/get; undici 6.x/8.x are unaffected.
   "undici@>=7.0.0 <7.29.1": 7.29.1
+  # GHSA-6j4f-fj2g-mc7p, GHSA-qhr7-859c-m2p7, GHSA-q2hr-2g5m-vwhr:
+  # brace-expansion 4.x/5.x before 5.0.12. Pulled in via minimatch 10 by
+  # shadcn's ts-morph and by electron-builder's app-builder-lib; the 1.x/2.x
+  # copies used elsewhere are unaffected.
+  "brace-expansion@>=4.0.0 <5.0.12": 5.0.12
