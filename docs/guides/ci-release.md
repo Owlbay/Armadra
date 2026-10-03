@@ -52,6 +52,7 @@ pnpm libs:build
 pnpm --filter @armadra/web build
 pnpm --filter @armadra/desktop build
 pnpm --filter @armadra/server build
+node apps/desktop/scripts/ensure-node-pty.mjs   # Linux：给 Node 编一份 node-pty
 node tools/ci/e2e.mjs --tier a            # 全部 A 档
 node tools/ci/e2e.mjs --tier a --only server-e2e
 node tools/ci/e2e.mjs --tier b --list     # 只列出清单
