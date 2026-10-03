@@ -210,8 +210,10 @@ describe("the pending directory", () => {
     writeFileSync(join(directory, "notes.txt"), "not ours");
     // Nothing is old yet.
     expect(sweepOrphans(directory, ORPHAN_MINUTES * 60_000)).toBe(0);
-    // Everything is old enough now, but only our own extensions go.
-    expect(sweepOrphans(directory, -1)).toBe(2);
+    // Everything is old enough now, but only our own extensions go. A whole
+    // minute of slack, not -1: on Windows a just-written file's mtime can land
+    // a few milliseconds after `Date.now()`, which read as "not old yet".
+    expect(sweepOrphans(directory, -60_000)).toBe(2);
     expect(readFileSync(join(directory, "notes.txt"), "utf8")).toBe("not ours");
   });
 });
