@@ -14,8 +14,10 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
+  AGENT_PACKAGE,
   compareVersions,
   parseVersion,
+  readAgentPin,
   readCompatibility,
 } from "./compatibility.mjs";
 
@@ -102,6 +104,47 @@ export function checkVersions({ base = root, tag = "", compatibility } = {}) {
   return { version: expected, problems };
 }
 
+/**
+ * The pinned `@armadra/agent` (compatibility.json's `agent`) against what is
+ * installed: the desktop manifest's devDependency must be that exact version,
+ * and the lockfile's specifier and resolved version too. Returns problems.
+ */
+export function checkAgentPin({ base = root, agent } = {}) {
+  const problems = [];
+  let pin;
+  try {
+    pin = agent ?? readAgentPin();
+  } catch (error) {
+    return [String(error instanceof Error ? error.message : error)];
+  }
+  const manifest = JSON.parse(
+    readFileSync(base + "apps/desktop/package.json", "utf8"),
+  );
+  const declared =
+    manifest.devDependencies?.[AGENT_PACKAGE] ??
+    manifest.dependencies?.[AGENT_PACKAGE];
+  if (declared !== pin.version) {
+    problems.push(
+      `apps/desktop/package.json pins ${AGENT_PACKAGE} at ${declared ?? "nothing"}, compatibility.json at ${pin.version}`,
+    );
+  }
+  const lock = readFileSync(base + "pnpm-lock.yaml", "utf8");
+  const entry = new RegExp(
+    `'${AGENT_PACKAGE.replace("/", "\\/")}':\\n\\s+specifier: (\\S+)\\n\\s+version: (\\S+)`,
+  ).exec(lock);
+  if (entry === null) {
+    problems.push(`pnpm-lock.yaml installs no ${AGENT_PACKAGE}`);
+  } else {
+    const installed = entry[2].replace(/\(.*$/, "");
+    if (entry[1] !== pin.version || installed !== pin.version) {
+      problems.push(
+        `pnpm-lock.yaml has ${AGENT_PACKAGE} ${entry[1]} → ${installed}, compatibility.json pins ${pin.version}`,
+      );
+    }
+  }
+  return problems;
+}
+
 /** Write a new version into every site. */
 export function setVersion(next, base = root) {
   const version = parseVersion(next).text;
@@ -146,6 +189,7 @@ function main(argv) {
   const { version, problems } = checkVersions({
     tag: tag.startsWith("v") ? tag : "",
   });
+  problems.push(...checkAgentPin());
   for (const problem of problems) console.error(`✗ ${problem}`);
   if (problems.length > 0) {
     console.error(
@@ -154,7 +198,7 @@ function main(argv) {
     return 1;
   }
   console.log(
-    `Version ${version} agrees across ${VERSION_SITES.length} files${tag ? ` and tag ${tag}` : ""}.`,
+    `Version ${version} agrees across ${VERSION_SITES.length} files${tag ? ` and tag ${tag}` : ""}; ${AGENT_PACKAGE} pinned as installed.`,
   );
   return 0;
 }

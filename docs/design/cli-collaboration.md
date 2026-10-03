@@ -153,6 +153,8 @@ OpenCode 库的读法：每次扫描用 `new DatabaseSync(path, { readOnly: true
 
 本部分不实施。方向：交接材料由 SSH 终端所在主机上的 Worker 采集，前提是那台主机已经注册为执行主机、并且 Worker 在线；做不到时继续返回 501。改动集中在 `handoff/store.ts` 和 `remote/`，落地前另写一节设计。
 
+> 2026-10-03 已由补全计划 G1-2 实施：来源转录经那台主机 Worker 的 `handoff.capture`（`transcriptOnly`）读，`capturedOn` 记主机；读不了答 501 `handoff_host_offline`。形状见契约 [§21.1](../contracts/core-json-api.md)。
+
 ## §7 多账号调研（只出结论）
 
 2026-10-02 在本机只读调研。版本：Claude Code 2.1.286、Codex 0.159.3、Copilot CLI 1.0.89、Pi 0.99.2、OMP 18.4.4、OpenCode 1.18.33（本机 npm 包没跑 postinstall、缺原生二进制，所以这一行只依据官方文档和本机数据目录）。证据有四类：本仓源码与注释；各 CLI 的 `--help`、安装包里的文档和字符串；本机配置目录的**文件名与键名**（没有读任何值）；官方文档。来源标注：**源**＝CLI 安装包里的源码或字符串，**仓**＝本仓源码，**文**＝官方文档，**推**＝推断，**测**＝要用真实账号实测（列在 §7.4）。

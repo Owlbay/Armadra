@@ -38,6 +38,11 @@ export const integration: MessageModule = {
     "integration.repair.removed": "移除 {count} 处",
     "integration.repair.kept": "保留 {count} 处（不是我们写的）",
     "integration.backup": "原文件已备份到 {path}",
+    "integration.outdatedHost": "Worker 待升级",
+    "integration.outdatedHost.version": "Worker 待升级 · {version}",
+    "integration.resync": "重新同步",
+    "integration.resynced": "已重新同步 {name}",
+    "integration.resyncFailed": "重新同步失败",
   },
   en: {
     "integration.nav": "Integration",
@@ -68,5 +73,10 @@ export const integration: MessageModule = {
     "integration.repair.removed": "Removed {count}",
     "integration.repair.kept": "Kept {count} (not written by us)",
     "integration.backup": "The original was backed up to {path}",
+    "integration.outdatedHost": "Worker outdated",
+    "integration.outdatedHost.version": "Worker outdated · {version}",
+    "integration.resync": "Resync",
+    "integration.resynced": "Resynced {name}",
+    "integration.resyncFailed": "Resync failed",
   },
 };

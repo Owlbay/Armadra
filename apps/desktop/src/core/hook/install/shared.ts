@@ -154,6 +154,90 @@ export function launcherClientBinary(
   );
 }
 
+/* ------------------------------ the ama bundle ----------------------------- */
+
+/** The name the bundled agent runs under, and its launcher's file name. */
+export const AMA_LAUNCHER_NAME = "ama";
+
+/**
+ * Where a file the build places beside the core is: the override, then the
+ * packaged `<resources>/<relative>`, then the built tree's `out/<relative>`.
+ * An override that is set but not a file is "none", never a guess.
+ */
+function bundled(
+  relative: string,
+  override: string | undefined,
+): string | undefined {
+  if (override !== undefined && override !== "") {
+    return isFile(override) ? override : undefined;
+  }
+  const candidates: string[] = [];
+  if (process.resourcesPath !== undefined) {
+    candidates.push(join(process.resourcesPath, relative));
+  }
+  candidates.push(join(dirname(process.execPath), relative));
+  // `out/core/main.js` → `out/<relative>`; the server shell's single
+  // `out/main.js` → `out/<relative>` beside it.
+  candidates.push(join(__dirname, "..", relative));
+  candidates.push(join(__dirname, relative));
+  return candidates.find(isFile);
+}
+
+/**
+ * The bundled `ama` runtime (`@armadra/agent`'s `dist/bundle/ama.cjs`, copied
+ * by the build): `ARMADRA_AMA_BUNDLE`, then `<resources>/agent/ama.cjs`, then
+ * `out/agent/ama.cjs` (docs/design/coordinator-agent.md §2.5).
+ */
+export function agentBundle(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return bundled(join("agent", "ama.cjs"), env.ARMADRA_AMA_BUNDLE);
+}
+
+/**
+ * The host adapter ama loads through the profile's `host`:
+ * `ARMADRA_AMA_HOST`, then `<resources>/agent-host/ama-armadra.cjs`, then
+ * `out/agent-host/ama-armadra.cjs`.
+ */
+export function agentHostBundle(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return bundled(join("agent-host", "ama-armadra.cjs"), env.ARMADRA_AMA_HOST);
+}
+
+/**
+ * Writes `<dataDir>/bin/ama` — the same launcher as the hook client's, naming
+ * the bundled runtime — and returns its path, or `undefined` without a
+ * bundle. Beside `armadra-hook`, whose directory every canvas terminal has
+ * on `PATH`, so the registry's `launchCmd: "ama"` resolves to it. On Windows
+ * the compiled `armadra-hook.exe` is copied as `ama.exe`: it reads the
+ * `.launch` named after itself.
+ */
+export function agentLauncherBinary(
+  launcher: ClientLauncher & { readonly bundle?: string },
+): string | undefined {
+  const bundle = launcher.bundle ?? agentBundle();
+  if (bundle === undefined) return undefined;
+  const platform = launcher.platform ?? process.platform;
+  const hookExe =
+    launcher.windowsExe ??
+    (launcher.bundleCandidates ?? defaultBundleCandidates())
+      .filter(isFile)
+      .map((client) => join(dirname(client), `${CLIENT_NAME}.exe`))[0];
+  return writeLauncher(
+    join(launcher.dataDir, "bin"),
+    {
+      runner: launcher.runner ?? process.execPath,
+      bundle,
+      ...(platform === "win32" && hookExe !== undefined
+        ? { windowsExe: hookExe }
+        : {}),
+    },
+    platform,
+    { name: AMA_LAUNCHER_NAME },
+  );
+}
+
 /**
  * The sidecar's file names. On Windows the launcher is `armadra-hook.exe`
  * (a console program that runs the bundle on the shell's own Electron without

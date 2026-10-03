@@ -25,6 +25,8 @@ import {
 import { ORPHAN_MINUTES, pendingDir, sweepOrphans } from "./approvals";
 import { armProbeSweep } from "./probe";
 import { installRoutes } from "./routes";
+import { AmaCredentials, setAmaCredentials } from "./ama-credentials";
+import { secretsFor } from "../secrets";
 import { installHookBridge } from "./hook-bridge";
 
 /**
@@ -142,7 +144,21 @@ export function install(context: CoreContext): CollabContext {
   };
   assembled = withHandoff;
   setControlDispatcher(createControlDispatcher(withHandoff));
-  installRoutes({ server: context.server, collab: withHandoff });
+  // ama 的模型密钥（协调 Agent §7、契约 §12.4）：只存在密钥后端；画布启动器
+  // `run/ama` 凭节点 token 经 hook 通道兑换、只设给 ama 进程。读后端是异步的
+  // （钥匙串是个进程），装配时先在后台读一遍。
+  const amaKeys = new AmaCredentials(secretsFor(context).backend);
+  setAmaCredentials(amaKeys);
+  installRoutes({
+    server: context.server,
+    collab: withHandoff,
+    amaCredentials: amaKeys,
+  });
+  amaKeys.load().catch((error: unknown) => {
+    context.log.warn("could not read ama's model keys", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
   // The hook surface authenticates; these two families answer.
   installHookBridge(context.db.database, contextLinkReader);
   // The skill half of the install unit (docs/design/agent-integration.md §2).

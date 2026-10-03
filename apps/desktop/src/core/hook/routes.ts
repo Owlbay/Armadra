@@ -10,6 +10,7 @@ import {
   uninstall as uninstallIntegration,
 } from "./install/integration";
 import { repair as repairIntegration } from "./install/repair";
+import { outdatedHosts } from "../remote/fleet";
 import type { HookService } from "./service";
 
 /**
@@ -78,7 +79,11 @@ function describe(failure: unknown): string {
 }
 
 function installRoutesFor(context: CoreContext): void {
-  const options = (): IntegrationOptions => ({ dataDir: context.dataDir });
+  const options = (): IntegrationOptions => ({
+    dataDir: context.dataDir,
+    // Worker 舰队的过旧主机（契约 §21.2）。
+    outdatedHosts,
+  });
   const guard = (run: () => unknown): HandlerResult => {
     try {
       return { status: 200, body: run() };

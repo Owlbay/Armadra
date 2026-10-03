@@ -254,6 +254,8 @@ export interface RemoteWorkerOptions {
   readonly languageLink?: boolean;
   /** 握手成功、连接可用。 */
   readonly onConnected?: () => void;
+  /** 握手成功时对方报的版本与能力（Worker 舰队据此判过旧，`remote/fleet.ts`）。 */
+  readonly onHandshake?: (probe: WorkerProbe) => void;
   /** 一个握手成功过的连接断了。 */
   readonly onDisconnected?: () => void;
 }
@@ -317,13 +319,15 @@ export class RemoteWorker {
       const previous = this.supervisor.connection;
       if (previous !== undefined && previous !== connection) previous.close();
       this.supervisor.succeeded(connection, accepted.versionBadge);
-      this.options.onConnected?.();
-      return {
+      const probe: WorkerProbe = {
         ...accepted,
         platform: hello.platform,
         architecture: hello.architecture,
         runtimeVersion: hello.runtimeVersion,
       };
+      this.options.onHandshake?.(probe);
+      this.options.onConnected?.();
+      return probe;
     } catch (failure) {
       connection.close();
       this.supervisor.failed();

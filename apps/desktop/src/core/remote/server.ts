@@ -40,38 +40,17 @@ import {
   REMOTE_CAPABILITY,
   type WorkerHello,
 } from "./handshake";
+import { WORKER_CAPABILITIES } from "./capabilities";
 import { LANGUAGE_CAPABILITY, LANGUAGE_OPERATIONS } from "./language";
 import {
-  FILES_CAPABILITY,
-  GIT_CAPABILITY,
-  ASSETS_CAPABILITY,
-  HANDOFF_CAPABILITY,
-  INTEGRATION_CAPABILITY,
-  INTEGRATION_V2_CAPABILITY,
-  TRANSFER_CAPABILITY,
-  GIT_OPERATIONS_CAPABILITY,
   OPERATIONS,
-  RESOURCES_CAPABILITY,
-  WATCH_CAPABILITY,
   type Operation,
   type OperationContext,
 } from "./operations";
 import { WorkerSession } from "./session";
 
-/** 这个构建的 Worker（控制连接）声明的能力。 */
-export const WORKER_CAPABILITIES: readonly string[] = [
-  REMOTE_CAPABILITY,
-  FILES_CAPABILITY,
-  GIT_CAPABILITY,
-  GIT_OPERATIONS_CAPABILITY,
-  WATCH_CAPABILITY,
-  RESOURCES_CAPABILITY,
-  INTEGRATION_CAPABILITY,
-  INTEGRATION_V2_CAPABILITY,
-  HANDOFF_CAPABILITY,
-  TRANSFER_CAPABILITY,
-  ASSETS_CAPABILITY,
-];
+/** 这个构建的 Worker（控制连接）声明的能力；定义在 `capabilities.ts`。 */
+export { WORKER_CAPABILITIES };
 
 /** 语言连接（`--language-link`）声明的能力。 */
 export const LANGUAGE_LINK_CAPABILITIES: readonly string[] = [

@@ -36,6 +36,31 @@ describe("launch parameters", () => {
       "full-auto",
     ]);
     expect(supportedPermissionModes("unknown-cli")).toEqual(["default"]);
+    // ama: every mode is a real `--permission-mode` of its own pipeline.
+    expect(supportedPermissionModes("ama")).toEqual([...PERMISSION_MODES]);
+  });
+
+  it("starts ama with its own flags", () => {
+    expect(
+      planLaunch(NO_CUSTOM, {
+        agentId: "ama",
+        permissionMode: "plan",
+        model: "openai/gpt-x",
+        sessionId: "s-1",
+        prompt: "review",
+      }).args,
+    ).toEqual([
+      "--permission-mode",
+      "plan",
+      "--model",
+      "openai/gpt-x",
+      "--session-id",
+      "s-1",
+      "review",
+    ]);
+    expect(
+      planLaunch(NO_CUSTOM, { agentId: "ama", resume: "s-1" }).args,
+    ).toEqual(["--resume", "s-1"]);
   });
 
   it("refuses a permission mode the CLI cannot express instead of guessing", () => {
@@ -187,8 +212,11 @@ describe("launch parameters", () => {
 
   it("names the program a pane must still be running", () => {
     for (const agent of AGENT_REGISTRY) {
-      expect(expectedProcesses(agent.id)).toEqual([agent.id]);
+      expect(expectedProcesses(agent.id)).toContain(agent.id);
+      expect(expectedProcesses(agent.id)).toEqual([...agent.expectedProcess]);
     }
+    // The launcher execs the bundled runtime: tmux sees it, not `ama`.
+    expect(expectedProcesses("ama")).toContain("Electron");
     expect(expectedProcesses("custom:wrapper")).toEqual(["wrapper"]);
     expect(expectedProcesses("custom:")).toEqual([]);
   });
@@ -205,6 +233,11 @@ describe("launch parameters", () => {
       false,
     );
     expect(paneRunsAgent({ children: ["codex"] }, ["codex"])).toBe(true);
+    expect(
+      paneRunsAgent({ command: "node /opt/agent/ama.cjs --profile p" }, [
+        "ama",
+      ]),
+    ).toBe(true);
     // An empty expectation never grants: the gate only ever refuses.
     expect(paneRunsAgent({ command: "claude" }, [])).toBe(false);
   });
@@ -225,6 +258,7 @@ describe("launch parameters", () => {
       pi: "/quit",
       omp: "/exit",
       copilot: "/exit",
+      ama: "/exit",
     });
     expect(
       exitCommand(

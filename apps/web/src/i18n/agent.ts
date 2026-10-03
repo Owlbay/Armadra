@@ -6,6 +6,14 @@ import type { MessageModule } from "./index";
  */
 const zh = {
   "agent.restart": "重启 Agent",
+  "agent.amaKeys": "Armadra Agent 的模型密钥",
+  "agent.amaKeys.provider": "供应商",
+  "agent.amaKeys.key": "API Key",
+  "agent.amaKeys.save": "保存",
+  "agent.amaKeys.clear": "清除",
+  "agent.amaKeys.set": "已设置",
+  "agent.amaKeys.saved": "已保存",
+  "agent.amaKeys.failed": "保存失败",
   "agent.permissionMode": "权限模式",
   "agent.mode.default": "默认",
   "agent.mode.auto-edit": "自动编辑",
@@ -41,6 +49,14 @@ const zh = {
 
 const en: Record<keyof typeof zh, string> = {
   "agent.restart": "Restart agent",
+  "agent.amaKeys": "Armadra Agent model keys",
+  "agent.amaKeys.provider": "Provider",
+  "agent.amaKeys.key": "API key",
+  "agent.amaKeys.save": "Save",
+  "agent.amaKeys.clear": "Clear",
+  "agent.amaKeys.set": "Set",
+  "agent.amaKeys.saved": "Saved",
+  "agent.amaKeys.failed": "Could not save",
   "agent.permissionMode": "Permission mode",
   "agent.mode.default": "Default",
   "agent.mode.auto-edit": "Auto edit",

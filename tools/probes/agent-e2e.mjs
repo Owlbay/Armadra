@@ -22,6 +22,9 @@
 //   6. 组队带 worktree：`team --member "…|worktree=名字"` 建出检出与绑定的
 //      Frame，成员的终端起在检出里。用假 CLI、自己一套 core，`--only 6` 单跑
 //      时不需要真 CLI 的登录。
+//   11. 协调者 ama（设计 coordinator-agent §8 第 1–4 步）：本地脚本化模型服务驱动
+//      随包的 ama，`canvas_team` 起两个成员、收件箱唤醒、`inbox → ack → sticky`
+//      写汇总。和场景 9 一样自己起一套 core，不要真模型、不要真密钥。
 //   10. 六家互读（设计 cli-collaboration §8）：六种 CLI 各起一个交互式 TUI 节点
 //      连成环，下游 `context summary / transcript` 读上游、沿环 send、拒收一条
 //      排队看回执、交接 prepare → accept、会话索引与成本每家都有。没装或认证
@@ -44,7 +47,7 @@
 //
 // 用法（仓库根目录）：
 //   pnpm libs:build && pnpm --filter @armadra/desktop build
-//   node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,…,10] [--backend direct]
+//   node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,…,11] [--backend direct]
 //
 // 产物：<输出目录>/result.json、每个场景的截图、core.log。
 import {
@@ -65,6 +68,7 @@ import scenario7 from "./agent-e2e/scenario-7-claude-approval.mjs";
 import scenario8 from "./agent-e2e/scenario-8-send-wakes.mjs";
 import scenario9 from "./agent-e2e/scenario-9-team-worktree.mjs";
 import scenario10 from "./agent-e2e/scenario-10-six-way-context.mjs";
+import scenario11 from "./agent-e2e/scenario-11-coordinator.mjs";
 
 const SCENARIOS = [
   ["1", scenario1],
@@ -84,7 +88,12 @@ async function main() {
     report.safety.before ??= fingerprint();
     await scenario9();
   }
-  if (![...only].some((id) => id !== "9")) return;
+  // 场景 11 同样自己起一套 core、用脚本化模型：不要登录、不起页面。
+  if (only.has("11")) {
+    report.safety.before ??= fingerprint();
+    await scenario11();
+  }
+  if (![...only].some((id) => id !== "9" && id !== "11")) return;
   const ctx = await setup();
   for (const [id, run] of SCENARIOS) if (only.has(id)) await run(ctx);
 
