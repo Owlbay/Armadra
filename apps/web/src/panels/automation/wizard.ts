@@ -1,4 +1,7 @@
-import type { AutomationScheduleKind } from "@armadra/shared";
+import type {
+  AutomationScheduleKind,
+  WorkflowRunTarget,
+} from "@armadra/shared";
 
 import { isAbsoluteExecutable, type PathRules } from "@/lib/host-path";
 import { validCron, validTimezone } from "./model";
@@ -63,6 +66,11 @@ export type WizardTarget = {
       nodeId: string;
       agentLaunch: AgentLaunchSpec;
       coldStart: boolean;
+    }
+  | {
+      /** 到点起一次工作流运行（契约 §15.6）；参数在载荷里。 */
+      kind: "workflow";
+      workflowRun: WorkflowRunTarget;
     }
 );
 
@@ -234,6 +242,15 @@ function planTarget(target: WizardTarget): AutomationPlanConfig["target"] {
   if (target.kind === "command") {
     return { ...base, kind: AutomationTargetKind.NON_INTERACTIVE_COMMAND };
   }
+  if (target.kind === "workflow") {
+    return {
+      ...base,
+      sessionId: "",
+      generation: 0n,
+      kind: AutomationTargetKind.WORKFLOW_RUN,
+      workflowRun: target.workflowRun,
+    };
+  }
   return {
     ...base,
     kind: AutomationTargetKind.AGENT_SESSION_PROMPT,
@@ -266,6 +283,11 @@ export function targetFromConfig(
     sessionId: target.sessionId,
     generation: target.generation,
   };
+  if (target.kind === AutomationTargetKind.WORKFLOW_RUN) {
+    return target.workflowRun
+      ? { ...base, kind: "workflow", workflowRun: target.workflowRun }
+      : null;
+  }
   if (target.kind !== AutomationTargetKind.AGENT_SESSION_PROMPT) {
     return { ...base, kind: "command" };
   }
@@ -287,11 +309,18 @@ export function buildPlanConfig(
   const title = state.title.trim();
   if (!title || title.length > 200)
     return { ok: false, field: "title", messageKey: "automation.wizard.title" };
-  if (!target.sessionId)
+  if (
+    target.kind === "workflow"
+      ? !target.workflowRun.templateId
+      : !target.sessionId
+  )
     return {
       ok: false,
       field: "session",
-      messageKey: "automation.wizard.session",
+      messageKey:
+        target.kind === "workflow"
+          ? "automation.wizard.workflowRequired"
+          : "automation.wizard.session",
     };
   // An agent plan carries the prompt it will type. Saving an empty one would
   // create a plan that can only ever write nothing into somebody's terminal.

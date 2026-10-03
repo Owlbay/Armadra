@@ -1,6 +1,11 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { AutomationScheduleKind, NativeRecurrence } from "@armadra/shared";
+import {
+  workflowRunPayload,
+  workflowRunPayloadSchema,
+  type AutomationScheduleKind,
+  type NativeRecurrence,
+} from "@armadra/shared";
 
 import { Button } from "@/ui/button";
 import { Input } from "@/ui/input";
@@ -22,6 +27,9 @@ import { validCron, validTimezone } from "./model";
 import { TimezonePicker } from "./TimezonePicker";
 import { translateNativeRecurrence } from "./native-recurrence";
 import { allCommandSessions, automationKeys } from "./queries";
+import { workflowsApi } from "@/workflow/api";
+import { defaultParams, filledParams, missingParams } from "@/workflow/model";
+import { workflowKeys } from "@/workflow/store";
 import {
   buildLaunchSpec,
   buildPlanConfig,
@@ -64,11 +72,17 @@ export interface CreatePlanRequest {
  * still reviews and confirms, and the plan is created as a draft.
  */
 export interface CreatePlanPrefill {
-  targetKind: "agent";
+  targetKind: "agent" | "workflow";
+  /** Agent 目标的节点；工作流目标为空串。 */
   nodeId: string;
   title: string;
-  /** `native` when this came from an observed CLI loop rather than the wizard. */
-  origin: "native";
+  /**
+   * `native` when this came from an observed CLI loop rather than the wizard;
+   * `workflow` when the workflow library asked to schedule a template.
+   */
+  origin: "native" | "workflow";
+  /** 工作流目标：模板与它的参数初值（契约 §15.6）。 */
+  workflow?: { templateId: string; params: Record<string, string> };
   /**
    * The repeat rule the card observed, if it read one. Translated into the
    * schedule fields where that is possible and shown verbatim where it is
@@ -193,9 +207,41 @@ export function CreatePlanForm({
       payload: stored.data,
     }));
   }, [edit, stored.data]);
-  const [targetKind, setTargetKind] = React.useState<"command" | "agent">(
-    frozenTarget?.kind ?? prefill?.targetKind ?? "command",
+  const [targetKind, setTargetKind] = React.useState<
+    "command" | "agent" | "workflow"
+  >(frozenTarget?.kind ?? prefill?.targetKind ?? "command");
+  // 工作流目标（契约 §15.6）：模板在当前画布上起跑，参数冻结进载荷。
+  const boardId = useCanvasStore((store) => store.boardId);
+  const templates = useQuery({
+    queryKey: workflowKeys.templates(),
+    queryFn: () => workflowsApi.templates(),
+    retry: false,
+  });
+  const [templateId, setTemplateId] = React.useState(
+    (frozenTarget?.kind === "workflow"
+      ? frozenTarget.workflowRun.templateId
+      : "") ||
+      (prefill?.workflow?.templateId ?? ""),
   );
+  const template = templates.data?.find((item) => item.id === templateId);
+  const [paramValues, setParamValues] = React.useState<Record<string, string>>(
+    () => prefill?.workflow?.params ?? {},
+  );
+  // 编辑一个工作流计划：参数从存着的载荷里读回来。
+  const loadedParams = React.useRef(false);
+  React.useEffect(() => {
+    if (frozenTarget?.kind !== "workflow" || loadedParams.current) return;
+    if (!stored.data) return;
+    loadedParams.current = true;
+    try {
+      const parsed = workflowRunPayloadSchema.safeParse(
+        JSON.parse(stored.data),
+      );
+      if (parsed.success) setParamValues(parsed.data.params);
+    } catch {
+      // 读不出来就从空的开始；保存时按模板再校验一遍。
+    }
+  }, [frozenTarget, stored.data]);
   const [agentNodeId, setAgentNodeId] = React.useState(
     (frozenTarget?.kind === "agent" ? frozenTarget.nodeId : "") ||
       (prefill?.nodeId ?? ""),
@@ -271,12 +317,35 @@ export function CreatePlanForm({
     };
   }
 
+  /** 工作流目标的载荷：缺参数时给出错误，返回 `null`。 */
+  function workflowPayload(): string | null {
+    if (!template) {
+      setError({
+        field: "session",
+        messageKey: "automation.wizard.workflowRequired",
+      });
+      return null;
+    }
+    const values = { ...defaultParams(template.template), ...paramValues };
+    if (missingParams(template.template, values).length > 0) {
+      setError({
+        field: "payload",
+        messageKey: "automation.wizard.workflowParamsMissing",
+      });
+      return null;
+    }
+    return workflowRunPayload(filledParams(paramValues));
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
     // An edit re-sends the plan's own frozen target. Everything else the form
     // shows is editable; the target is displayed and left alone.
     if (edit && frozenTarget) {
+      const payload =
+        frozenTarget.kind === "workflow" ? workflowPayload() : state.payload;
+      if (payload === null) return;
       const config = buildPlanConfig(state, frozenTarget);
       if (!config.ok) {
         setError({ field: config.field, messageKey: config.messageKey });
@@ -285,8 +354,42 @@ export function CreatePlanForm({
       onCreate({
         planId: edit.planId,
         config: config.config,
-        payload: state.payload,
+        payload,
         expectedRevision: edit.expectedRevision,
+      });
+      return;
+    }
+    if (targetKind === "workflow") {
+      const payload = workflowPayload();
+      if (payload === null || !template) return;
+      if (!boardId) {
+        setError({
+          field: "session",
+          messageKey: "automation.wizard.workflowRequired",
+        });
+        return;
+      }
+      const config = buildPlanConfig(state, {
+        kind: "workflow",
+        workspaceId,
+        executionHostId: hostId,
+        sessionId: "",
+        generation: 0n,
+        workflowRun: {
+          templateId: template.id,
+          templateVersion: template.version,
+          boardId,
+        },
+      });
+      if (!config.ok) {
+        setError({ field: config.field, messageKey: config.messageKey });
+        return;
+      }
+      onCreate({
+        planId: randomId("plan"),
+        config: config.config,
+        payload,
+        expectedRevision: 0n,
       });
       return;
     }
@@ -420,7 +523,9 @@ export function CreatePlanForm({
                 {t(`automation.wizard.targetKind.${targetKind}`)} ·{" "}
                 {frozenTarget?.kind === "agent"
                   ? frozenTarget.agentLaunch.agentId
-                  : (frozenTarget?.sessionId ?? "")}
+                  : frozenTarget?.kind === "workflow"
+                    ? (template?.name ?? frozenTarget.workflowRun.templateId)
+                    : (frozenTarget?.sessionId ?? "")}
               </p>,
             )}
             <p className="text-[11px] text-muted-foreground">
@@ -433,7 +538,7 @@ export function CreatePlanForm({
             <Select
               value={targetKind}
               onValueChange={(value) =>
-                setTargetKind(value as "command" | "agent")
+                setTargetKind(value as "command" | "agent" | "workflow")
               }
             >
               <SelectTrigger size="sm" className="w-full">
@@ -446,12 +551,71 @@ export function CreatePlanForm({
                 <SelectItem value="agent" disabled={agents.length === 0}>
                   {t("automation.wizard.targetKind.agent")}
                 </SelectItem>
+                <SelectItem
+                  value="workflow"
+                  disabled={(templates.data?.length ?? 0) === 0 || !boardId}
+                >
+                  {t("automation.wizard.targetKind.workflow")}
+                </SelectItem>
               </SelectContent>
             </Select>,
           )
         )}
 
-        {edit ? null : targetKind === "agent" ? (
+        {!edit && targetKind === "workflow"
+          ? field(
+              t("automation.wizard.workflowTemplate"),
+              <Select
+                value={templateId}
+                onValueChange={(value) => {
+                  setTemplateId(value);
+                  const picked = templates.data?.find(
+                    (item) => item.id === value,
+                  );
+                  if (picked && !state.title.trim()) set("title", picked.name);
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className="w-full"
+                  data-slot="automation-workflow-template"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="z-[var(--z-dialog)]">
+                  {(templates.data ?? []).map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>,
+              problem("session"),
+            )
+          : null}
+
+        {targetKind === "workflow" && template
+          ? template.template.params.map((param) => (
+              <React.Fragment key={param.name}>
+                {field(
+                  param.label ?? param.name,
+                  <Input
+                    data-param={param.name}
+                    value={paramValues[param.name] ?? ""}
+                    placeholder={param.default ?? ""}
+                    onChange={(event) =>
+                      setParamValues((current) => ({
+                        ...current,
+                        [param.name]: event.target.value,
+                      }))
+                    }
+                  />,
+                )}
+              </React.Fragment>
+            ))
+          : null}
+
+        {edit || targetKind === "workflow" ? null : targetKind === "agent" ? (
           <>
             {field(
               t("automation.wizard.agentNode"),
@@ -514,7 +678,7 @@ export function CreatePlanForm({
             problem("session"),
           )}
 
-        {edit || targetKind === "agent" ? null : mode === "existing" ? (
+        {edit || targetKind !== "command" ? null : mode === "existing" ? (
           field(
             t("automation.wizard.sessionId"),
             <Select value={sessionId} onValueChange={setSessionId}>
@@ -599,17 +763,23 @@ export function CreatePlanForm({
           problem("title"),
         )}
 
-        {field(
-          targetKind === "agent"
-            ? t("automation.wizard.prompt")
-            : t("automation.wizard.payload"),
-          <Textarea
-            rows={3}
-            value={state.payload}
-            onChange={(event) => set("payload", event.target.value)}
-          />,
-          problem("payload"),
-        )}
+        {targetKind === "workflow"
+          ? problem("payload") && (
+              <p role="status" className="text-[11px] text-destructive">
+                {problem("payload")}
+              </p>
+            )
+          : field(
+              targetKind === "agent"
+                ? t("automation.wizard.prompt")
+                : t("automation.wizard.payload"),
+              <Textarea
+                rows={3}
+                value={state.payload}
+                onChange={(event) => set("payload", event.target.value)}
+              />,
+              problem("payload"),
+            )}
 
         {field(
           t("automation.wizard.scheduleKind"),

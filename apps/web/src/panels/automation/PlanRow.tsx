@@ -12,7 +12,10 @@ import {
 } from "@/ui/alert-dialog";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
+import { useQuery } from "@tanstack/react-query";
 import { useT } from "@/app/preferences-store";
+import { workflowsApi } from "@/workflow/api";
+import { workflowKeys } from "@/workflow/store";
 import { digestLabel, instant, planStateKey, scheduleKind } from "./model";
 import {
   AutomationPlanState,
@@ -61,6 +64,17 @@ export function PlanRow({
   onDisableAndDetach,
 }: PlanRowProps) {
   const t = useT();
+  // 工作流目标（契约 §15.6）：显示模板名，读不到就显示 id。
+  const workflowRun = snapshot.plan?.config?.target?.workflowRun;
+  const templates = useQuery({
+    queryKey: workflowKeys.templates(),
+    queryFn: () => workflowsApi.templates(),
+    enabled: Boolean(workflowRun),
+    retry: false,
+  });
+  const templateName = templates.data?.find(
+    (item) => item.id === workflowRun?.templateId,
+  )?.name;
   const [confirm, setConfirm] = React.useState<"activate" | "runNow" | null>(
     null,
   );
@@ -111,7 +125,9 @@ export function PlanRow({
         </dd>
         <dt className="text-muted-foreground">{t("automation.target")}</dt>
         <dd className="min-w-0 truncate select-text">
-          {plan.config?.target?.sessionId}
+          {workflowRun
+            ? `${t("automation.wizard.targetKind.workflow")} · ${templateName ?? workflowRun.templateId}`
+            : plan.config?.target?.sessionId}
         </dd>
         {zone ? (
           <>
