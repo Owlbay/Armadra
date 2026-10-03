@@ -119,7 +119,12 @@ describe("the local split", () => {
     // follow them; only the probe cache underneath it is local.
     expect(isLocal("agents.custom")).toBe(false);
     expect(localPaths()).toContain("agents.probes");
-    expect(localPaths()).toHaveLength(8);
+    // 推送密钥的文件路径指的是这台机器上的文件；其余推送项跟着账号走。
+    expect(isLocal("push.apns.keyFile")).toBe(true);
+    expect(isLocal("push.fcm.serviceAccountFile")).toBe(true);
+    expect(isLocal("push.apns.keyId")).toBe(false);
+    expect(isLocal("push.relayUrl")).toBe(false);
+    expect(localPaths()).toHaveLength(10);
   });
 
   it("recognises a document written before the split", () => {
@@ -177,12 +182,18 @@ describe("SettingsStore", () => {
     // Only the local paths are in it. `browser.executablePath` is one of them
     // and `normalize` always writes it, so an empty string here is the
     // documented "detect a browser" and not a leak of the account's half.
+    // 推送的两个密钥路径同理：缺省是空串，只有这两项、没有别的推送设置。
     expect(Object.keys(local).sort()).toEqual([
       "browser",
       "gateway",
       "power",
+      "push",
       "terminal",
     ]);
+    expect(local.push).toEqual({
+      apns: { keyFile: "" },
+      fcm: { serviceAccountFile: "" },
+    });
     expect("usage" in local).toBe(false);
     expect("detachedGraceMinutes" in (local.terminal as JsonObject)).toBe(
       false,

@@ -221,6 +221,19 @@ export function admit(input: GateInput, context: GateContext): Admission {
   }
 }
 
+/**
+ * OAuth 回调（契约 §18.5）：从提供方跳回来的顶层导航，没有 `Origin`、
+ * `Sec-Fetch-Site: cross-site`。它不认会话——安全性来自一次性的 `state` 与
+ * 浏览器绑定 Cookie（`core/identity/oauth/flow.ts`），所以 Origin 与
+ * `Sec-Fetch-Site` 两道对它不适用。只放行 GET、只放行这一种路径。
+ */
+export function oauthCallbackPath(method: string, path: string): boolean {
+  return (
+    method.toUpperCase() === "GET" &&
+    /^\/api\/identity\/oauth\/[a-z0-9][a-z0-9-]{0,31}\/callback$/.test(path)
+  );
+}
+
 /** 会话之前的三道：面、Origin、`Sec-Fetch-Site`，外加「有没有会话凭据」。 */
 function screen(input: GateInput, context: GateContext): Refusal | undefined {
   if (loopbackOnlyPath(input.path)) {
@@ -228,6 +241,9 @@ function screen(input: GateInput, context: GateContext): Refusal | undefined {
       status: 404,
       body: { code: "notFound", message: `没有这个接口：${input.path}` },
     };
+  }
+  if (input.upgrade !== true && oauthCallbackPath(input.method, input.path)) {
+    return undefined;
   }
   const isApi = input.path === "/api" || input.path.startsWith("/api/");
   const origin = singleHeader(input.headers, "origin");

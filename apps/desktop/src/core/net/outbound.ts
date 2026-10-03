@@ -103,6 +103,43 @@ export const OUTBOUND = {
     defaultOn: false,
     documented: true,
   },
+  // 推送直连（契约 §19.5）：只在 `push.transport = "direct"` 且配了 APNs `.p8` /
+  // FCM 服务账号时才连；Web Push 的端点是浏览器给的订阅地址、中继地址是用户
+  // 配的，都不在这张表里。测试用 `ARMADRA_PUSH_APNS_ENDPOINT` /
+  // `ARMADRA_PUSH_FCM_ENDPOINT` 换成 dev-stack 的 push-sink。
+  apnsProduction: {
+    url: "https://api.push.apple.com",
+    purpose: "APNs 推送（生产，push.apns.production = true）",
+    cadence: "每条通知 1 次，失败最多再试 2 次",
+    switch: "push.transport",
+    defaultOn: false,
+    documented: true,
+  },
+  apnsSandbox: {
+    url: "https://api.sandbox.push.apple.com",
+    purpose: "APNs 推送（sandbox）",
+    cadence: "每条通知 1 次，失败最多再试 2 次",
+    switch: "push.transport",
+    defaultOn: false,
+    documented: true,
+  },
+  fcmSend: {
+    url: "https://fcm.googleapis.com",
+    purpose: "FCM v1 推送（/v1/projects/<id>/messages:send）",
+    cadence: "每条通知 1 次，失败最多再试 2 次",
+    switch: "push.transport",
+    defaultOn: false,
+    documented: true,
+  },
+  fcmToken: {
+    // 服务账号 JSON 里的 `token_uri` 优先；这是它缺席时的缺省。
+    url: "https://oauth2.googleapis.com/token",
+    purpose: "FCM 服务账号断言换 access token",
+    cadence: "约每小时 1 次（令牌到期前一分钟）",
+    switch: "push.transport",
+    defaultOn: false,
+    documented: true,
+  },
   crashReport: {
     // 地址是用户填的 DSN（自托管 GlitchTip / Sentry 协议），这里只是占位主机。
     // 发的是壳（`main/diagnostics.ts`、`apps/server/src/diagnostics.ts`），core
@@ -118,12 +155,17 @@ export const OUTBOUND = {
 
 export type OutboundId = keyof typeof OUTBOUND;
 
+/** FCM 服务账号断言的 OAuth scope：长得像地址，但不是要连的地方。 */
+export const FCM_MESSAGING_SCOPE =
+  "https://www.googleapis.com/auth/firebase.messaging";
+
 /**
  * 长得像地址、但 core 从不去连的字面量，各带一句为什么。
  */
 export const NOT_DIALLED: Readonly<Record<string, string>> = {
   // Codex `id_token` 里那段 claim 的名字，只用来解 JWT。
   "https://api.openai.com/auth": "JWT claim 名",
+  [FCM_MESSAGING_SCOPE]: "OAuth scope 名（FCM 服务账号断言）",
 };
 
 /** Copilot 额度在 GitHub API 根（或 `ARMADRA_GITHUB_API_BASE`）下的路径。 */
