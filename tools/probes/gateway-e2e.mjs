@@ -8,7 +8,14 @@
 //   2. 用配对票成为 owner，建一块画布，签一张只读邀请；
 //   3. 第三个上下文（同样只信 CA、Cookie 不共享）兑换邀请注册成员，读得到被
 //      共享的画布、写被拒、`/api/gateway` 403；
-//   4. 关掉 Gateway，连接被拒。
+//   4. 「从页面开关」（G2-7）：无头 Chrome 打开网页配对链接，页面自己配对成
+//      owner；后台服务页里有 CA 安装引导、对外服务开着、二维码里是同一个来源、
+//      已配对设备表里有这台；在页面上点开关关掉 Gateway，回环上读到已关，
+//      再从回环打开继续后面的步骤；
+//   5. 关掉 Gateway，连接被拒。
+//
+// 第 4 步要页面产物（`apps/web/dist`，CI 的 e2e 作业先 build）与 Chrome；
+// 没有页面产物记 `page: "skipped"`。
 //
 // 设了 `ARMADRA_DEV_STACK=1` 且 dev-stack 的 step-ca 在跑时，加一段「指定文件」
 // 来源：在 step-ca 容器里给 127.0.0.1 签一张叶证书（链 = 叶 + 中间 CA），切过去
@@ -29,7 +36,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { harness } from "./shell-e2e-lib.mjs";
+import { harness, sleep, startChrome } from "./shell-e2e-lib.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const output = resolve(process.argv[2] ?? join(root, "target/gateway-e2e"));
@@ -139,6 +146,10 @@ function fingerprint(pem) {
     .digest("hex");
 }
 
+/** 页面产物：有就让 Gateway 托管它（第 4 步），没有就给一个空目录。 */
+const webDist = join(root, "apps/web/dist");
+const hasPage = existsSync(join(webDist, "index.html"));
+
 async function startCore(dataDir) {
   const entry = join(root, "apps/desktop/out/core/main.js");
   const child = spawn(
@@ -151,7 +162,9 @@ async function startCore(dataDir) {
         ARMADRA_CORE: "ts",
         ARMADRA_NO_GLOBAL_WRITES: "1",
         ARMADRA_SECRET_BACKEND: "file",
-        ARMADRA_GATEWAY_WEB_ROOT: temp("armadra-gateway-web-"),
+        ARMADRA_GATEWAY_WEB_ROOT: hasPage
+          ? webDist
+          : temp("armadra-gateway-web-"),
       },
     },
   );
@@ -323,6 +336,12 @@ await h.run(async () => {
     String(gateway.status),
   );
 
+  if (hasPage) await fromThePage(base, origin);
+  else {
+    report.page = "skipped";
+    step("没有 apps/web/dist，「从页面开关」一段 skipped");
+  }
+
   if (process.env.ARMADRA_DEV_STACK === "1") {
     const leaf = stepCaLeaf(temp("armadra-gateway-stepca-"));
     if (leaf === undefined) {
@@ -379,3 +398,82 @@ await h.run(async () => {
   }
   check(!closed.running && refused, "关掉之后连接被拒");
 });
+
+/**
+ * 第 4 步：页面上的对外服务（补全计划 G2-7）。Chrome 带 `--ignore-certificate-errors`，
+ * 只为本地 CA；页面经 Gateway 打开，所有请求走 Gateway 的 Cookie 模式。
+ */
+async function fromThePage(base, origin) {
+  const pairing = JSON.parse(
+    (await local(base, "POST", "/api/gateway/pairing", {})).body,
+  );
+  const chrome = await startChrome(h);
+  const page = await chrome.open({ name: "gateway-page" });
+  await page.navigate(pairing.webUrl);
+  await page.settle();
+  await page.waitFor(`return document.body.innerText.includes("服务所有者");`, {
+    what: "配对链接打开即配对成 owner",
+    timeout: 30_000,
+  });
+  step("网页配对链接在浏览器里配对成 owner", origin);
+
+  const guide = await page.waitFor(
+    `const link = [...document.querySelectorAll("a[download]")]
+       .find((node) => node.getAttribute("href")?.endsWith("/ca.crt"));
+     return link && document.body.innerText.includes("安装证书")
+       ? link.getAttribute("href") : null;`,
+    { what: "配对页的 CA 安装引导" },
+  );
+  check(
+    guide === `${origin}/ca.crt`,
+    "经 Gateway 打开的配对页给出 CA 安装引导与下载",
+    guide,
+  );
+
+  const qr = await page.waitFor(
+    `return document.querySelector('[role="switch"][aria-label="对外服务"]')
+       ?.getAttribute("aria-checked") === "true"
+       && document.querySelector("svg[data-qr-text]")?.getAttribute("data-qr-text");`,
+    { what: "对外服务开着、二维码出来" },
+  );
+  check(
+    typeof qr === "string" && qr.startsWith(`${origin}/#pair=`),
+    "页面上的二维码是这个 Gateway 的配对链接",
+    String(qr).slice(0, 48),
+  );
+  await page.waitFor(
+    `return [...document.querySelectorAll("table td")]
+       .some((cell) => cell.innerText.includes("Gateway 配对"));`,
+    { what: "已配对设备表里有这台" },
+  );
+  step("已配对设备表里有这台");
+  await page.capture("gateway-page-on");
+  await page.evaluate(
+    `document.querySelector("table")?.scrollIntoView({ block: "center" }); return true;`,
+  );
+  await sleep(300);
+  await page.capture("gateway-page-devices");
+
+  await page.click('[role="switch"][aria-label="对外服务"]');
+  let after = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    after = JSON.parse((await local(base, "GET", "/api/gateway")).body);
+    if (!after.enabled) break;
+    await sleep(200);
+  }
+  check(
+    after && !after.enabled && !after.running,
+    "在页面上点开关关掉对外服务（PUT 经 Gateway 自己）",
+  );
+  report.page = "ok";
+
+  // 后面的步骤还要它开着：从回环再打开，端口已写回设置，来源不变。
+  const reopened = JSON.parse(
+    (await local(base, "PUT", "/api/gateway", { enabled: true })).body,
+  );
+  check(
+    reopened.running && reopened.origin === origin,
+    "从回环再打开，来源不变",
+    reopened.origin,
+  );
+}

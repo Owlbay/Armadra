@@ -50,6 +50,14 @@
       "timeoutMinutes": 15
     },
     {
+      "id": "gateway-e2e",
+      "tier": "a",
+      "script": "tools/probes/gateway-e2e.mjs",
+      "args": ["{out}"],
+      "requires": ["chrome"],
+      "timeoutMinutes": 5
+    },
+    {
       "id": "acp-e2e",
       "tier": "a",
       "script": "tools/probes/acp-e2e.mjs",
