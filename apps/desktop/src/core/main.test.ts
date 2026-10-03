@@ -20,6 +20,7 @@ import { install as installTerminals } from "./terminal/install";
 import { install as installWorkflow } from "./workflow";
 import { read } from "./endpoints";
 import { ROUTES } from "./http/routes";
+import { selfGuarded } from "./http/route-scopes";
 import { parseAnnouncement } from "./instance";
 import { endpointsFile } from "./paths";
 import { tempDir } from "./testing/temp-dir";
@@ -286,6 +287,29 @@ describe("what the core answers", () => {
     }
     expect(missing, "写着已实现却没人注册").toEqual([]);
     expect(undeclared, "答得出来却没打标记").toEqual([]);
+  });
+
+  /**
+   * 路由 scope 的覆盖率，补上路由表之外的那一半（安全审查 2026-10）：整段
+   * 接管的前缀（身份、OAuth、GitHub、自动化、工作流）不在路由表里，路由门照样
+   * 按 `route-scopes.ts` 判它们。每个前缀下的读写都必须有声明，或者在自己认
+   * 身份的 `SELF_GUARDED` 里——缺一条，成员在那里就是缺省拒绝之外的一个洞。
+   */
+  it("整段接管的前缀也都声明了 scope 或自己认身份", async () => {
+    const { core } = await start(temporary());
+    const prefixes = core.server.rawPrefixes();
+    expect(prefixes.length).toBeGreaterThan(0);
+    const undeclared: string[] = [];
+    for (const prefix of prefixes) {
+      const probe = `${prefix.replace(/\/$/, "")}/probe`;
+      if (selfGuarded(probe)) continue;
+      for (const method of ["GET", "POST", "PUT", "DELETE"]) {
+        if (core.server.router.requiredScope(method, probe) === undefined) {
+          undeclared.push(`${method} ${prefix}`);
+        }
+      }
+    }
+    expect(undeclared).toEqual([]);
   });
 
   it("answers a path nobody claimed with 404, not 501", async () => {

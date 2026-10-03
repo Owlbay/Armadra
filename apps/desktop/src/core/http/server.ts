@@ -282,6 +282,11 @@ export class CoreServer {
   }
 
   /** 这条路径落在某个整段接管的前缀里（三张 JSON 面就是这么装的）。 */
+  /** 整段接管的前缀，按登记顺序（长的在前）。路由 scope 的覆盖率用例逐个问。 */
+  rawPrefixes(): readonly string[] {
+    return this.rawRoutes.map((route) => route.prefix);
+  }
+
   rawHandled(path: string): boolean {
     return this.rawRoutes.some((route) => path.startsWith(route.prefix));
   }
