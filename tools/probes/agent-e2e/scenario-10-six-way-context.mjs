@@ -50,6 +50,7 @@ import { basename, dirname, join } from "node:path";
 import {
   cliEnvLines,
   note,
+  output,
   prepareCliHomes,
   putDocument,
   report,
@@ -143,6 +144,19 @@ function under(text, root) {
 function originOf(text) {
   const match = /来源：([^，\n]+?)(?:，读了|\n|$)/.exec(text ?? "");
   return match?.[1]?.trim();
+}
+
+/**
+ * 把这一家 TUI 的画面存成 `<输出目录>/screens/<id>-<阶段>.txt`：OpenCode / OMP /
+ * Copilot 的画面门特征（`agent/screen-gate.ts` 里 `verified: false` 的那些）要拿
+ * 真实画面核对后才能翻成已核实（G1-3、G3-7）。
+ */
+async function recordScreen(id, phase, text) {
+  try {
+    const dir = join(output, "screens");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${id}-${phase}.txt`), text ?? "");
+  } catch {}
 }
 
 export default async function run10(ctx) {
@@ -340,8 +354,10 @@ export default async function run10(ctx) {
             );
           }
           mark(id, "tui", true);
+          await recordScreen(id, "tui-up", await screen(node.id, 60));
         } catch (error) {
           mark(id, "tui", false, error.message);
+          await recordScreen(id, "tui-failed", await screen(node.id, 60));
           s.check(`${id} TUI 起来`, false, {
             error: error.message,
             screen: (await screen(node.id, 30))

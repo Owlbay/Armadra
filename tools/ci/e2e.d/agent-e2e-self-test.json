@@ -1,0 +1,8 @@
+{
+  "id": "agent-e2e-self-test",
+  "tier": "a",
+  "script": "tools/probes/agent-e2e.mjs",
+  "args": ["{out}", "--only", "11,12", "--self-test"],
+  "requires": ["tmux", "chrome"],
+  "timeoutMinutes": 15
+}

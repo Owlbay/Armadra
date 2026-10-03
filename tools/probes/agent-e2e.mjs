@@ -25,6 +25,11 @@
 //   11. 协调者 ama（设计 coordinator-agent §8 第 1–4 步）：本地脚本化模型服务驱动
 //      随包的 ama，`canvas_team` 起两个成员、收件箱唤醒、`inbox → ack → sticky`
 //      写汇总。和场景 9 一样自己起一套 core，不要真模型、不要真密钥。
+//   12. 六家 ACP（设计 acp-session-view §11）：六家各起一个 ACP 驱动的节点，各两轮
+//      「回复 OK」，Claude 的审批经页面拒绝、切到终端视图再切回、OpenCode 休眠
+//      再唤醒、沿环 send 与下游读上游。每家的 ACP 入口经一个隔离包装脚本起（临
+//      时 HOME / 配置目录、只复制凭据），没装的记 skipped。`--self-test` 把六家
+//      换成假 ACP Agent 与假 TUI，证明探针本身。
 //   10. 六家互读（设计 cli-collaboration §8）：六种 CLI 各起一个交互式 TUI 节点
 //      连成环，下游 `context summary / transcript` 读上游、沿环 send、拒收一条
 //      排队看回执、交接 prepare → accept、会话索引与成本每家都有。没装或认证
@@ -45,16 +50,26 @@
 //   * 端口随机，数据目录、工作空间、浏览器 profile 全部 mktemp，结束时删掉并停掉
 //     自己起的 tmux 服务器。
 //
+// C 档开关：起真 CLI、花真额度的场景（1–8、10、11 的 `--real-model`、12）只在
+// `ARMADRA_E2E_REAL=1` 时跑，否则在起任何进程之前退出；9、11（脚本化模型）与
+// `--self-test` 不要它。运行手册（要装什么、登录什么、花多少）见
+// tools/probes/README.md「C 档运行手册」。
+//
 // 用法（仓库根目录）：
 //   pnpm libs:build && pnpm --filter @armadra/desktop build
-//   node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,…,11] [--backend direct]
+//   node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,…,12] [--backend direct]
+//        [--self-test] [--real-model] [--record-compat]
 //
 // 产物：<输出目录>/result.json、每个场景的截图、core.log。
 import {
   fingerprint,
   finalize,
   only,
+  REAL_FLAG,
+  realAllowed,
+  realModel,
   report,
+  selfTest,
   setup,
   state,
 } from "./agent-e2e/lib.mjs";
@@ -69,6 +84,7 @@ import scenario8 from "./agent-e2e/scenario-8-send-wakes.mjs";
 import scenario9 from "./agent-e2e/scenario-9-team-worktree.mjs";
 import scenario10 from "./agent-e2e/scenario-10-six-way-context.mjs";
 import scenario11 from "./agent-e2e/scenario-11-coordinator.mjs";
+import scenario12 from "./agent-e2e/scenario-12-acp.mjs";
 
 const SCENARIOS = [
   ["1", scenario1],
@@ -82,7 +98,27 @@ const SCENARIOS = [
   ["10", scenario10],
 ];
 
+/** 自己起一套 core 的场景：不走 `setup()`（不要真 CLI 的登录，也不起共用页面）。 */
+const STANDALONE = new Set(["9", "11", "12"]);
+
 async function main() {
+  // C 档门：要起真 CLI / 真模型的，没设开关就在起任何进程之前退出。
+  const shared = [...only].filter((id) => !STANDALONE.has(id));
+  const real = [
+    ...shared,
+    ...(only.has("11") && realModel && !selfTest ? ["11 --real-model"] : []),
+    ...(only.has("12") && !selfTest ? ["12"] : []),
+  ];
+  if (selfTest && shared.length > 0)
+    throw new Error(
+      `--self-test 只覆盖场景 11 / 12（9 本来就不要真 CLI）；去掉 ${shared.join("、")}`,
+    );
+  if (real.length > 0 && !realAllowed)
+    throw new Error(
+      `场景 ${real.join("、")} 会起真 CLI、用真账号与额度：按 tools/probes/README.md「C 档运行手册」准备好后以 ${REAL_FLAG}=1 运行；只验证探针本身用 --only 11,12 --self-test`,
+    );
+  report.mode = selfTest ? "self-test" : real.length > 0 ? "real" : "mock";
+
   // 场景 9 用假 CLI、自己起一套 core：单跑它时不要真 CLI 的登录，也不起页面。
   if (only.has("9")) {
     report.safety.before ??= fingerprint();
@@ -93,7 +129,12 @@ async function main() {
     report.safety.before ??= fingerprint();
     await scenario11();
   }
-  if (![...only].some((id) => id !== "9" && id !== "11")) return;
+  // 场景 12 自己起 core、页面与六家 ACP 入口的隔离包装。
+  if (only.has("12")) {
+    report.safety.before ??= fingerprint();
+    await scenario12();
+  }
+  if (shared.length === 0) return;
   const ctx = await setup();
   for (const [id, run] of SCENARIOS) if (only.has(id)) await run(ctx);
 

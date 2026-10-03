@@ -6,11 +6,11 @@
 
 按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.d/` 的清单跑（一条一个文件 `<id>.json`，新增探针就新增一个文件）（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
-| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                   | 何时跑                              | 失败时       |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
-| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`crash-report-e2e`、`mobile-shell-e2e`                                 | `nightly.yml`                       | 开 issue     |
-| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                                                                                | 手动；清单在执行计划 §5             | 记进状态文档 |
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                                                                           | 何时跑                              | 失败时       |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e`、`agent-e2e-self-test`（场景 11 / 12 的 `--self-test`） | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`crash-report-e2e`、`mobile-shell-e2e`                                                                                         | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度，`ARMADRA_E2E_REAL=1`，见「C 档运行手册」）、`canvas-stress`（真实会话）                                                                                                                                              | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
 
@@ -202,9 +202,10 @@ node tools/probes/ui-features-e2e.mjs [输出目录] [--only=presence,editor,fil
 
 node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,3,4,5,6]
 
-node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,3,4,5,6,7,8,9,10,11] [--backend direct]
+ARMADRA_E2E_REAL=1 node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,…,12] [--backend direct] [--real-model] [--record-compat]
+node tools/probes/agent-e2e.mjs [输出目录] --only 11,12 --self-test # 不起真 CLI，只证明探针本身
 
-```
+````
 
 入口只装配与收尾；各场景在 `agent-e2e/scenario-*.mjs`，共用的临时环境、core / Vite / Chrome 装配与断言工具在 `agent-e2e/lib.mjs`。
 
@@ -223,20 +224,73 @@ node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,3,4,5,6,7,8,9,10,11] 
 8. **休眠后经 `send` 唤醒**：关页面让 Claude 睡着，`canvas send` 当场答排队（`TARGET_STARTING`），同一会话 id 起下一代、进程带 `--resume <同一个 id>` 且仍带 `--permission-mode acceptEdits`，投递 `delivered` 并跑完一轮；重开页面问一句，确认接回的是原来那段对话。
 9. **组队带 worktree**（§59）：不用真 CLI，自己另起一套 core（临时 git 仓库当工作区，假 CLI 是一段记下自己工作目录再停在 shell 里的 sh），`--only 9` 单跑时不检查 CLI 登录、不起 Vite 与 Chrome。`team --member "…|worktree=名字"` 与按路径的成员各建出一条检出与绑定的 Frame、同名的两个成员共用一个 Frame、成员终端从节点 `cwd` 起在检出里；`open-agent --worktree` 按分支名进同一个 Frame；`--dry-run` 不建，Git 拒绝时画布不多一个节点。
 10. **六家互读**（设计 cli-collaboration §8）：claude、codex、opencode、pi、omp、copilot 各起一个**交互式 TUI** 节点，按这个顺序以 `peer` 连成环。每个节点经页面敲一句跑完一轮；环上每个下游以自己的节点身份（`canvasAs` / `contextAs`，换的只是 `ARMADRA_NODE_ID`）`context summary` 与 `context transcript` 读上游，断言非空且「来源」落在那一家的根下（OpenCode 是 `opencode:<id>`）；沿环 `send` 一轮，每条都 `delivered` 且目标真的跑了一轮；半截输入门造一条排队，`DELETE /api/workspaces/{id}/deliveries/{queueId}` 拒收，发送方收件箱（`inboxOf`）出现 `receipt:<queueId>`、投递记录有 `cancelled`；Pi → 下游走一次交接 prepare → accept（材料里有转录摘录、目标收件箱多一条）；会话索引（`conversationsRows`，只取这次的工作目录）每家都有、同一个文件不被两家各认一次，`GET /api/usage/cost` 每家 `source` 不是 none 且 24 小时里记到了用量。`result.json` 的 `sixWay` 记每家每步的通过 / 失败 / 跳过矩阵、每个节点的 `agent_status.transcript_path` 与分段耗时。另外四家的临时 HOME 与凭据和场景 6 是同一个函数（`prepareCliHomes`），但 Pi / OMP 的 agent 目录、`COPILOT_HOME` 与 OpenCode 的 `XDG_DATA_HOME` 指到 core 自己的根（core 才认得出这些会话；Pi 与 OMP 因此共用一个目录）；它们的启动行经页面的「自定义启动命令」（localStorage `armadra.launchOverrides`）换成临时包装脚本，注入参数照常由页面拼上。Claude 用「自动编辑」起：操作员缺省是 bypass 时新版 Claude 先弹「把 auto 设成缺省？」，缺省选项是「是」，一条投递的回车就会改掉 `~/.claude/settings.json`（首跑踩中，已改回；收尾因此单独比对 `permissions.defaultMode`）。Claude 的转录在真实目录，探针把**这一次**的那个文件硬链接进 core 的临时 `CLAUDE_CONFIG_DIR`，索引与成本才扫得到。没装或认证不上的那家整家记 skipped 并写原因，环只连能跑的几家；没跑完首轮的节点不往里投。`--only 10` 单跑约 1.5 分钟（2026-10-02 实测三家：84 秒），花费是每家三轮左右「回复 OK」（首轮、环上一轮、交接目标收到通知后多一轮）。
-11. **协调者 ama**（设计 coordinator-agent §8 第 1–4 步）：不用真模型、不用真密钥，和场景 9 一样自己另起一套 core，`--only 11` 单跑。本地起一个 OpenAI 兼容的脚本化模型服务（`agent-e2e/mock-model.mjs::mockModelServer`），临时 HOME 下 ama 的 `config.json` 把内置 `deepseek` 的 `baseUrl` 指到它；假 key 经 `PUT /api/agents/ama/credentials/deepseek` 存进 core（文件密钥后端），由 `run/ama` 凭节点 token 兑换、只设给 ama 进程（`AMA_API_KEY_DEEPSEEK`）。协调者节点的启动行按 `GET /api/agents` 的 `launcher` 与 `resolvedPath`（`<数据目录>/bin/ama`）拼，交给 `sh -c` 跑。断言：注入只有 `--profile`、没有 key 文件；key 到了模型服务（请求头 `Bearer`），却不在节点 shell 的环境、数据目录里除密钥后端外的任何文件与 core 日志里；`agent_status` 有 ama 行且来源 `extension`；`canvas_team` 建出两个成员与两条边；成员 `canvas post` 后收件箱唤醒，协调者 `canvas_inbox → canvas_ack → canvas_sticky` 写出汇总便签、两条结论都确认；画布外同一 profile 的 `ama -p` 工具表里没有画布工具。约 15 秒。
+起真 CLI 或真模型的场景（1–8、10、11 的 `--real-model`、12）没设 `ARMADRA_E2E_REAL=1` 时在起任何进程之前就报错退出；9、11（脚本化模型）与 `--self-test` 不要它。各场景自己起的 core 用 `tools/probes/probe-home.mjs` 的临时 HOME；真 CLI 场景是唯一的例外（Claude 的登录在钥匙串里，只认真实配置目录），下面逐家写明。
+
+11. **协调者 ama**（设计 coordinator-agent §8 第 1–4 步）：不用真模型、不用真密钥，和场景 9 一样自己另起一套 core，`--only 11` 单跑。本地起一个 OpenAI 兼容的脚本化模型服务（`agent-e2e/mock-model.mjs::mockModelServer`），临时 HOME 下 ama 的 `config.json` 把内置 `deepseek` 的 `baseUrl` 指到它；假 key 经 `PUT /api/agents/ama/credentials/deepseek` 存进 core（文件密钥后端），由 `run/ama` 凭节点 token 兑换、只设给 ama 进程（`AMA_API_KEY_DEEPSEEK`）。协调者节点的启动行按 `GET /api/agents` 的 `launcher` 与 `resolvedPath`（`<数据目录>/bin/ama`）拼，交给 `sh -c` 跑。断言：注入只有 `--profile`、没有 key 文件；key 到了模型服务（请求头 `Bearer`），却不在节点 shell 的环境、数据目录里除密钥后端外的任何文件与 core 日志里；`agent_status` 有 ama 行且来源 `extension`；`canvas_team` 建出两个成员与两条边；成员 `canvas post` 后收件箱唤醒，协调者 `canvas_inbox → canvas_ack → canvas_sticky` 写出汇总便签、两条结论都确认；画布外同一 profile 的 `ama -p` 工具表里没有画布工具。约 15 秒。这套 core 的 PATH 最前面是真 CLI 的替身（`isolated.mjs::blockRealClis`），收尾断言除开场探 `--version` 外没有任何调用。`--real-model`（C 档）换成真模型，见「C 档运行手册」；`--real-model --self-test` 用脚本化模型冒充真供应商走同一条路径。第 5 步（ama → ama）两种模式都跑：真模型时第二个 ama 用同一个供应商，只断言回报非空、便签写出。
+12. **六家 ACP**（设计 acp-session-view §11）：六家各一个以 ACP 驱动的节点，`peer` 连成环。预检每家的 ACP 入口与凭据（装不上的整家 skipped）；`POST /api/acp/sessions` 带「Reply with just OK.」起会话，断言 `state_source = acp`、回合 `done`、镜像有 assistant 记录；Claude 切 `default` 模式后经页面输入框发一条写文件的 prompt，审批卡上经页面点「拒绝」，断言 `answer = deny`、`request_json.options` 形状、审计 `route = acp`、文件没写；倒着沿环 `canvas send` 一轮（每家第二轮，倒着发是为了不撞三跳上限），每条 `delivered`，下游 `context summary` 读得到上游；经页面节点菜单把 Claude 切到终端视图再切回（两次 `resumed: true`、会话 id 不变、终端进程带 `--resume <id> --permission-mode acceptEdits`），Copilot 切换答 `resumed: false` 且事件流有那条 `acp.driver`；OpenCode 休眠后 `/wake`，pid 换了、会话 id 没变；有 `usage_update` 的家上下文用量 < 5 万；页面没有控制台错误；没有任何未经隔离包装的真 CLI 被调用。每家的 ACP 入口经 core PATH 最前面的隔离包装脚本起（`scenario-12-acp.mjs::realPlan`），其余真 CLI 名字是替身。`--self-test` 把六家换成 `exec -a <程序名>` 起的假 ACP Agent，终端视图里是假 TUI（信任对话框缺省项是「No, exit」，回车即退出——证明探针按编号答）。`ARMADRA_E2E_ACP_ONLY=claude,pi` 只跑其中几家。自检约 3 分钟。
 
 隔离：数据目录、工作空间、浏览器 profile 与 CODEX_HOME 全部 `mktemp`，结束删除并停掉自己的 tmux 服务器。Codex 用临时 CODEX_HOME（只复制 `~/.codex/auth.json`，关掉启动时的升级检查，预先信任工作目录；token 超过 7 天没刷新就拒跑）。Claude 的登录在钥匙串里，临时 `CLAUDE_CONFIG_DIR` 认证不上，所以 Claude 进程用真实配置目录——前提是 Armadra 对 Claude 只经数据目录里的启动器注入（`--settings` 指向数据目录里的文件），探针启动前就检查这一点；core 自己的 `CLAUDE_CONFIG_DIR` 指向临时目录，技能文件只写在那里。终端子进程的环境按白名单建，于是 `SHELL` 换成一个临时包装脚本（导出临时 CODEX_HOME、去掉 CLAUDE_CONFIG_DIR、`exec zsh -f`）。跑前跑后比对 `~/.claude/settings.json`、`~/.codex` 的 `config.toml` / `hooks.json` / `auth.json`、另外四个 CLI 的配置与凭据文件，以及两个 CLI 的版本；Claude 仍会像平常一样在 `~/.claude.json` 与 `~/.claude/projects/` 里记下这个临时目录的会话。
 
 产物默认在 `target/agent-e2e/`：`result.json`（逐条断言、时间线、投递记录、控制台错误、配置比对）、每个场景的截图与 `core.log`。一次全量约 4–5 分钟（实测 245 秒），花费是十几轮「回复 OK」量级的 token。
 
-没验证的：会话宿主后端（Windows）；OpenCode / OMP / Copilot 的交互式 TUI（场景 10 写了它们的路径，但 2026-10-02 这台机器上三家都没装、记 skipped；Pi 的 TUI 真跑过）；打包版见「打包版冒烟」一节。
+没验证的：会话宿主后端（Windows）；OpenCode / OMP / Copilot 的交互式 TUI（场景 10 写了它们的路径，但 2026-10-02 这台机器上三家都没装、记 skipped；Pi 的 TUI 真跑过）——场景 10 把每家 TUI 起来时（或起不来时）的画面存进 `<输出目录>/screens/<id>-tui-*.txt`，拿它核对 `agent/screen-gate.ts` 里 `verified: false` 的特征；场景 11 的真模型版与场景 12 的真跑还没有做过（只有 `--self-test`）；打包版见「打包版冒烟」一节。
+
+### C 档运行手册（场景 10、11 `--real-model`、12）
+
+这些命令会用操作员自己的账号与额度。先跑一次自检确认探针本身没坏，再跑真的。
+
+**0. 构建与自检**（不要账号、不联网，约 4 分钟）：
+
+```sh
+pnpm install --frozen-lockfile && pnpm libs:build && pnpm --filter @armadra/desktop build
+node tools/probes/agent-e2e.mjs target/agent-e2e-self --only 11,12 --self-test
+````
+
+**1. 备份**（探针只比对、不替你还原）：
+
+```sh
+mkdir -m 700 -p ~/armadra-e2e-backup && cd ~ && tar czf ~/armadra-e2e-backup/before.tgz \
+  $(ls -d .claude/settings.json .claude/settings.local.json .claude.json .codex/config.toml .codex/hooks.json .codex/auth.json \
+        .config/opencode .pi/agent .omp/agent .copilot/config.json 2>/dev/null)
+```
+
+`result.json` 的 `safety.blamed` 非空、或 `safety.claudeState.blamed` 非空、或 `status` 不是 `ok` 且列出了配置文件时：停下，用 `tar xzf ~/armadra-e2e-backup/before.tgz -C ~` 还原，把 `result.json` 的 `safety` 一段贴回来。
+
+**2. 要装、要登录的**（缺哪家那家记 skipped，不影响其余）：
+
+| 家        | 装                                                         | 登录 / 凭据（探针只复制，不写回）                                                                                                   | 场景 12 用的模型                                         |
+| --------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Claude    | `claude`；`npm i -g @agentclientprotocol/claude-agent-acp` | 在自己终端里 `claude` 登录过（钥匙串）。用真实配置目录：跑前跑后比指纹与 `permissions.defaultMode`                                  | `ARMADRA_E2E_CLAUDE_MODEL`，缺省 `haiku`                 |
+| Codex     | `codex`；`npm i -g @agentclientprotocol/codex-acp`         | `~/.codex/auth.json`，**7 天内**在自己终端里跑过一次 codex（否则拒跑：临时目录里刷新会轮换真实那份）                                | 缺省模型，`model_reasoning_effort = "low"`               |
+| OpenCode  | `npm i -g opencode-ai`（要包里的原生二进制）               | 无（用自带的免费模型）                                                                                                              | `ARMADRA_E2E_OPENCODE_MODEL`，缺省 `opencode/big-pickle` |
+| Pi        | `pi`；`npm i -g pi-acp`                                    | `~/.pi/agent/auth.json` 里有 API key 形式的 `moonshotai-cn`                                                                         | `moonshotai-cn/kimi-k2.6`，thinking off                  |
+| OMP       | `omp`                                                      | 同 Pi 的那把 key（经临时 `models.yml`）                                                                                             | `moonshot-cn/kimi-k2.6`                                  |
+| Copilot   | `copilot`                                                  | `gh auth login`（`gh auth token` 取得到令牌；只经 `COPILOT_GITHUB_TOKEN` 给这一个进程）                                             | `gpt-5-mini`                                             |
+| ama（11） | 随包                                                       | `ARMADRA_E2E_AMA_KEY`（只进临时文件密钥后端）；`ARMADRA_E2E_AMA_PROVIDER` 缺省 deepseek，`ARMADRA_E2E_AMA_MODEL` 缺省 deepseek-chat | 同左                                                     |
+
+**3. 命令**：
+
+```sh
+# 场景 12：六家 ACP（可用 ARMADRA_E2E_ACP_ONLY=claude,codex,pi 只跑装了的几家）；
+# 全部通过的那几家用 --record-compat 把版本写进 tools/release/compatibility.json
+ARMADRA_E2E_REAL=1 node tools/probes/agent-e2e.mjs target/agent-e2e-acp --only 12 --record-compat
+# 场景 11：真模型驱动协调者（成员与派任务都是假 CLI）
+ARMADRA_E2E_REAL=1 ARMADRA_E2E_AMA_KEY=<key> node tools/probes/agent-e2e.mjs target/agent-e2e-coord --only 11 --real-model
+# 场景 10：六家交互式 TUI（OpenCode / OMP / Copilot 的画面存进 screens/）
+ARMADRA_E2E_REAL=1 node tools/probes/agent-e2e.mjs target/agent-e2e-tui --only 10
+```
+
+**4. 花费与时长**（估计）：场景 12 每家两轮「Reply with just OK.」，Claude 多一轮审批（被拒，不执行），约 5–10 分钟；Claude（haiku）与 Codex（low）各是订阅里几轮的量，Pi / OMP 是 Moonshot 几千 token（几分钱人民币），OpenCode 免费模型，Copilot 的 `gpt-5-mini` 不计高级请求。场景 11 约 10–15 次模型请求、输入十万 token 量级（工具表大），DeepSeek 价位约 0.5–1 元人民币，约 1–2 分钟。场景 10 每家约三轮，约 2 分钟。
+
+**5. 每一步断言什么**：见上面场景 10、11、12 的条目；逐条结果在 `result.json` 的 `scenarios`，场景 12 另有 `acp.families`（每家每步 passed / failed / skipped 与原因）、`acp.versions`（`initialize` 报的版本）、`acp.usage`（上下文用量）、`acp.recorded`（写进兼容表的区间）。
+
 ```
 
 pnpm --filter @armadra/server build
 pnpm --filter @armadra/web build
 node tools/probes/server-e2e.mjs [输出目录]
 
-````
+```
 
 `apps/server/out/main.js serve` 用临时数据目录启动并托管 `apps/web/dist`（自签名 HTTPS，Chrome 带 `--ignore-certificate-errors`）。无头 Chrome 开两个互不共享 Cookie 的浏览器上下文：管理员打开启动日志里的配对链接完成配对，在「账号与共享」生成只读邀请；成员在另一个上下文打开 `#invite=` 链接注册。之后依次验证：成员打开共享画布与逐页打开设置都没有任何 403（逐条记在 `memberForbidden`、`memberSettings`），设置导航里没有本机管理的那几页（`memberSettingsNav`），界面没有报错横幅与控制台错误；只读时右上角写「只读」、便签拖不动、不发被拒的保存，直接写接口是 403；管理员改成「编辑」后下一拍心跳解除只读、拖动落盘；撤销共享后成员的事件流以 4403 关闭、下一个请求 403、页面离开那块工作空间，他手里的写租约当场释放（管理员打开画布时没有「正在编辑」）；同一浏览器上下文再开一个管理员窗口，它写「本机另一个窗口正在编辑」，点「接管」不弹确认、一次拿到租约，先开的窗口转只读，审计里有一条 `canvas.lease.takeover`（`takeoverAudit`）；最后管理员在服务器壳上新建浏览器节点，起始页是探针自己的回环页面，取画面流上的像素确认第一帧到了。
 
@@ -261,7 +315,7 @@ node tools/probes/server-perf.mjs [输出目录] [--cpu-prof 目录] [--no-basel
 pnpm libs:build
 pnpm --filter @armadra/desktop build
 node tools/probes/remote-e2e.mjs [输出目录]
-````
+```
 
 「远端」就是这台机器：core 本来就读 `ARMADRA_REMOTE_WORKER_LAUNCHER` 替换每条 `ssh` 启动行的 argv[0]（`core/remote/index.ts`），探针把它指到临时目录里的一个假 ssh——按 `ssh(1)` 的规则吃掉选项与目的主机，把剩下的远端命令交给本机 `/bin/sh -c`；Worker 就是 `apps/desktop/out/core/main.js worker --stdio`。执行主机登记与 mock-lsp 的语言服务器设置走接口，其余全在界面上：设置 → SSH 打开远程项目；资源管理器打开文件、编辑、⌘S 落盘；Git 窗口的状态、勾选暂存、提交；日志页右键「获取远端更新」看进行中的提示与百分比，再对一次 upload-pack 睡 30 秒的 fetch 点「取消」；打开 `notes.md` 看 mock-lsp 的诊断（并按进程树确认它跑在 `worker --stdio --language-link` 下面）；在远端磁盘上改开着的文件看编辑器跟上（登记答 `mode: events`）；资源面板按主机筛选；设置 → 执行主机把一个本机工作空间切到假远端再切回来。最后一步走接口：画布上建一个连到假远端的 SSH Agent 节点、开它的终端（与页面同一个请求），敲页面为 SSH 节点敲的那一行 `claude --model probe`；执行主机上的 `claude` 是一个假 CLI，报告它经垫片收到的注入 argv、远端 shell 里的节点身份与端点文件、读到的说明与技能，并照 settings.json 的 Hook 命令报一次 SessionStart，探针在库里看到它经 Worker 中继到达。画布 SSH 终端的 `ssh` 是同一个假 ssh（放在 core 的 `PATH` 最前面），它和真 ssh 一样不带本机的 `ARMADRA_*` 过去；core 带着 `ARMADRA_NO_GLOBAL_WRITES=1`，不碰操作员的 CLI 配置。
 

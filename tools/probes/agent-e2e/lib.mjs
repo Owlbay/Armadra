@@ -1,7 +1,6 @@
 // agent-e2e 的共用部分：报告、等待、临时环境与 core / Vite / Chrome 的装配。
 // 入口在 ../agent-e2e.mjs，场景在同目录的 scenario-*.mjs。
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { once } from "node:events";
 import {
   copyFileSync,
@@ -22,13 +21,20 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
+import {
+  claudeDefaultMode,
+  claudeStateBlame,
+  claudeStateDigest,
+  fingerprint,
+} from "./safety.mjs";
+
 export const root = fileURLToPath(new URL("../../../", import.meta.url));
 const argv = process.argv.slice(2);
 const onlyFlag = argv.indexOf("--only");
 export const only =
   onlyFlag >= 0
     ? new Set(argv[onlyFlag + 1].split(",").map((part) => part.trim()))
-    : new Set(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]);
+    : new Set(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]);
 // `--backend direct`：终端后端改成 direct（非 tmux）再跑。缺省按平台（macOS
 // 装了 tmux 就是 tmux）。
 const backendFlag = argv.indexOf("--backend");
@@ -41,6 +47,33 @@ const positional = argv.filter(
 );
 export const output = resolve(positional[0] ?? join(root, "target/agent-e2e"));
 mkdirSync(output, { recursive: true });
+
+/* ------------------------------ C 档的开关 ------------------------------- */
+
+/**
+ * 起真 CLI、花真额度的场景（1–8、10、11 的 `--real-model`、12）只在
+ * `ARMADRA_E2E_REAL=1` 时跑：曾有一次真跑把 Claude 的启动对话框当成了投递目标、
+ * 改掉了操作员的 ~/.claude/settings.json。没设就在起任何进程之前报错退出。
+ */
+export const REAL_FLAG = "ARMADRA_E2E_REAL";
+export const realAllowed = process.env[REAL_FLAG] === "1";
+/**
+ * `--self-test`：场景 11 / 12 把真 CLI / 真模型换成假 ACP Agent、假 TUI 与脚本化
+ * 模型，其余装配（隔离目录、包装脚本、指纹、断言）照真跑那条路走——证明探针
+ * 本身没烂。不要登录、不联网、不花额度，不需要 `ARMADRA_E2E_REAL`。
+ */
+export const selfTest = argv.includes("--self-test");
+/** `--real-model`：场景 11 用真模型（供应商与 key 从环境变量读，见 README）。 */
+export const realModel = argv.includes("--real-model");
+/** `--record-compat`：场景 12 真跑通过的那几家，把版本写进 compatibility.json。 */
+export const recordCompat = argv.includes("--record-compat");
+
+export function requireReal(what) {
+  if (selfTest || realAllowed) return;
+  throw new Error(
+    `${what}会起真 CLI、用真账号与额度：确认按 tools/probes/README.md「C 档运行手册」准备好之后，以 ${REAL_FLAG}=1 运行；只验证探针本身用 --self-test`,
+  );
+}
 
 /** 秒级休眠阈值。20 秒：比一轮「回复 OK」长，又不至于让场景等几分钟。 */
 export const ECO_IDLE_SECONDS = 20;
@@ -174,262 +207,18 @@ export async function putDocument(api, documentPath, mutate) {
   );
 }
 
-/* -------------------------- 操作员配置的字节快照 -------------------------- */
-
-const guarded = [
-  join(homedir(), ".claude/settings.json"),
-  join(homedir(), ".codex/config.toml"),
-  join(homedir(), ".codex/hooks.json"),
-  join(homedir(), ".codex/auth.json"),
-  // 旧版装进各 CLI 全局目录的东西：迁移只该在真实应用里发生，探针一个都不碰。
-  join(homedir(), ".claude/skills/armadra/SKILL.md"),
-  join(homedir(), ".codex/skills/armadra/SKILL.md"),
-  join(homedir(), ".copilot/hooks/armadra.json"),
-  join(homedir(), ".config/opencode/plugins/armadra-status.js"),
-  join(homedir(), ".pi/agent/extensions/armadra-status.ts"),
-  join(homedir(), ".omp/agent/extensions/armadra-status.ts"),
-  // 场景 6 的四个 CLI：凭据只复制出去，配置一个字节都不该变。
-  join(homedir(), ".config/opencode/opencode.json"),
-  join(homedir(), ".local/share/opencode/auth.json"),
-  join(homedir(), ".pi/agent/auth.json"),
-  join(homedir(), ".pi/agent/settings.json"),
-  join(homedir(), ".omp/agent/config.yml"),
-  join(homedir(), ".omp/agent/models.yml"),
-  join(homedir(), ".copilot/config.json"),
-];
-export function fingerprint() {
-  const answer = {};
-  for (const file of guarded) {
-    try {
-      answer[file] = createHash("sha256")
-        .update(readFileSync(file))
-        .digest("hex");
-    } catch {
-      answer[file] = null;
-    }
-  }
-  return answer;
-}
-
-/**
- * 操作员 Claude 的缺省权限模式。字节比对只在新内容提到临时目录时才怪探针，可
- * Claude 自己的启动对话框（「把 auto 设成缺省？」）被一次投递答掉时，改的正是
- * 这一项、内容里没有临时目录——场景 10 首跑就这样漏过去了。单独盯住它。
- */
-export function claudeDefaultMode() {
-  try {
-    return (
-      JSON.parse(readFileSync(join(homedir(), ".claude/settings.json"), "utf8"))
-        ?.permissions?.defaultMode ?? null
-    );
-  } catch {
-    return undefined;
-  }
-}
-
-/* ------------------- 另外四个 CLI 的临时 HOME（场景 6、10） ------------------- */
-
-export function which(program) {
-  try {
-    return execFileSync("which", [program], { encoding: "utf8" }).trim();
-  } catch {
-    return undefined;
-  }
-}
-
-/** 包里的原生 OpenCode：`<全局 node_modules>/opencode-ai/node_modules/opencode-<平台>/bin/opencode`。 */
-export function opencodeBinary() {
-  try {
-    const wrapper = execFileSync("which", ["opencode"], {
-      encoding: "utf8",
-    }).trim();
-    const prefix = join(wrapper, "..", "..", "lib", "node_modules");
-    const native = join(
-      prefix,
-      "opencode-ai",
-      "node_modules",
-      `opencode-${process.platform}-${process.arch}`,
-      "bin",
-      "opencode",
-    );
-    return existsSync(native) ? native : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * OpenCode / Pi / OMP / Copilot 的临时 HOME 与凭据。答
- * `{ [id]: { program, home, agentDir?, copilotHome?, xdgData?, secrets?, model? } }`，
- * 认证不上的那一家是 `{ skip }`。凭据只**复制**，绝不写操作员的配置目录
- * （本机实测见场景 6 顶部）：
- *
- *   * Pi：复制 ~/.pi/agent/auth.json 里的 moonshotai-cn 那一条（API key，不会
- *     刷新；OAuth 那条不复制，刷新会轮换真实那份），模型 kimi-k2.6。
- *   * OMP：同一把 key 经环境变量交给临时 models.yml 里的一个提供商（OMP 自带的
- *     moonshot 指向国际站，这把 key 在那边无效）。
- *   * OpenCode：用包里的原生二进制和它自带的免费模型，不需要凭据。
- *   * Copilot：登录在钥匙串里，`gh auth token` 取出的令牌经
- *     COPILOT_GITHUB_TOKEN 交给这一个进程（不写任何文件，不打印）。
- *
- * `dirs` 把 Pi / OMP 的 agent 目录（`pi` / `omp`）、`COPILOT_HOME`（`copilot`）
- * 与 OpenCode 的 `XDG_DATA_HOME`（`xdgData`）指到给定位置——场景 10 指到 core
- * 的根，core 才认得出这些会话；缺省都在各自的临时 HOME 里（场景 6）。
- */
-export function prepareCliHomes(scratch, { dirs = {} } = {}) {
-  const clis = {};
-  const home = (id) => {
-    const path = join(scratch, `home-${id}`);
-    mkdirSync(path, { recursive: true });
-    return path;
-  };
-  const piAuth = (() => {
-    try {
-      return JSON.parse(
-        readFileSync(join(homedir(), ".pi/agent/auth.json"), "utf8"),
-      )["moonshotai-cn"];
-    } catch {
-      return undefined;
-    }
-  })();
-
-  /* OpenCode */
-  {
-    const program = opencodeBinary();
-    if (program) {
-      const h = home("opencode");
-      clis.opencode = {
-        program,
-        home: h,
-        xdgData: dirs.xdgData ?? `${h}/.local/share`,
-        // 免费模型的名单随 OpenCode 的在线目录变（新 HOME 里内置的那份已经
-        // 过期）：跑之前先 `models --refresh` 刷一次目录再挑。
-        model: "opencode/big-pickle",
-      };
-    } else {
-      clis.opencode = { skip: "没有找到 OpenCode 的原生二进制" };
-    }
-  }
-
-  /* Pi */
-  if (which("pi") && piAuth?.type === "api_key") {
-    const h = home("pi");
-    const agentDir = dirs.pi ?? join(h, ".pi/agent");
-    mkdirSync(agentDir, { recursive: true });
-    writeFileSync(
-      join(agentDir, "auth.json"),
-      JSON.stringify({ "moonshotai-cn": piAuth }),
-      { mode: 0o600 },
-    );
-    clis.pi = {
-      program: which("pi"),
-      home: h,
-      agentDir,
-      model: "moonshotai-cn/kimi-k2.6",
-    };
-  } else {
-    clis.pi = {
-      skip: "没有 pi，或 ~/.pi/agent/auth.json 里没有 API key 形式的凭据",
-    };
-  }
-
-  /* OMP */
-  if (which("omp") && piAuth?.type === "api_key") {
-    const h = home("omp");
-    const agentDir = dirs.omp ?? join(h, ".omp/agent");
-    mkdirSync(agentDir, { recursive: true });
-    writeFileSync(
-      join(agentDir, "models.yml"),
-      [
-        "providers:",
-        "  moonshot-cn:",
-        "    baseUrl: https://api.moonshot.cn/v1",
-        "    apiKey: MOONSHOT_API_KEY",
-        "    api: openai-completions",
-        "    authHeader: true",
-        "    models:",
-        "      - id: kimi-k2.6",
-        "        name: Kimi K2.6",
-        "        reasoning: false",
-        "        input: [text]",
-        "",
-      ].join("\n"),
-    );
-    clis.omp = {
-      program: which("omp"),
-      home: h,
-      // OMP 也认 PI_CODING_AGENT_DIR（core 的环境里带着一个）：指到它自己的目录。
-      agentDir,
-      secrets: { MOONSHOT_API_KEY: piAuth.key },
-      model: "moonshot-cn/kimi-k2.6",
-    };
-  } else {
-    clis.omp = { skip: "没有 omp，或没有可复制的 API key" };
-  }
-
-  /* Copilot */
-  let token;
-  try {
-    token = execFileSync("gh", ["auth", "token"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {}
-  if (which("copilot") && token) {
-    const h = home("copilot");
-    const copilotHome = dirs.copilot ?? join(h, ".copilot");
-    mkdirSync(copilotHome, { recursive: true });
-    // 只复制非凭据的那份（信任过的目录、上次登录的账号名）：没有它 Copilot 会
-    // 在第一次启动时问这些。
-    try {
-      copyFileSync(
-        join(homedir(), ".copilot/config.json"),
-        join(copilotHome, "config.json"),
-      );
-    } catch {}
-    clis.copilot = {
-      program: which("copilot"),
-      home: h,
-      copilotHome,
-      secrets: { COPILOT_GITHUB_TOKEN: token },
-      model: "gpt-5-mini",
-    };
-  } else {
-    clis.copilot = { skip: "没有 copilot，或 `gh auth token` 取不到令牌" };
-  }
-  return clis;
-}
-
-/**
- * 包装脚本里换环境的那几行：HOME 与各 CLI 的配置目录换成临时的，再读 0600 的
- * 凭据文件（凭据不进脚本正文、不进命令行）。答脚本行，不含 shebang。
- */
-export function cliEnvLines(scratch, id, cli) {
-  const secretsFile = join(scratch, `secrets-${id}.sh`);
-  writeFileSync(
-    secretsFile,
-    Object.entries(cli.secrets ?? {})
-      .map(([name, value]) => `export ${name}='${value.replaceAll("'", "")}'`)
-      .join("\n") + "\n",
-    { mode: 0o600 },
-  );
-  const h = cli.home;
-  return [
-    `export HOME='${h}'`,
-    `export XDG_CONFIG_HOME='${h}/.config' XDG_DATA_HOME='${cli.xdgData ?? `${h}/.local/share`}' XDG_STATE_HOME='${h}/.local/state' XDG_CACHE_HOME='${h}/.cache'`,
-    `export COPILOT_HOME='${cli.copilotHome ?? `${h}/.copilot`}' PI_CODING_AGENT_DIR='${cli.agentDir ?? `${h}/.pi/agent`}'`,
-    "unset CLAUDE_CONFIG_DIR CODEX_HOME CLAUDECODE",
-    `. '${secretsFile}'`,
-  ];
-}
+export * from "./safety.mjs";
+export * from "./cli-homes.mjs";
+export * from "./isolated.mjs";
 
 /* --------------------------------- 装配 ---------------------------------- */
 
 /** 起临时环境、core、Vite 与 Chrome，挂上页面；答场景共用的上下文。 */
 export async function setup() {
   const before = fingerprint();
-  report.safety.before = before;
-  report.safety.claudeDefaultMode = { before: claudeDefaultMode() };
+  // 先跑过的独立场景（12）已经记过开场的那一份：以最早的为准。
+  report.safety.before ??= before;
+  report.safety.claudeDefaultMode ??= { before: claudeDefaultMode() };
 
   // Codex 的 token：临时目录里刷新会轮换 refresh token。
   const auth = JSON.parse(
@@ -1375,7 +1164,6 @@ export async function setup() {
     agents,
     claudeRow,
     codexRow,
-    injected,
     hookBin,
     workspace,
     boards,
@@ -1434,15 +1222,20 @@ export function finalize() {
     } catch {}
   }
   const after = fingerprint();
-  // CLI 自己升级也算改了操作员的机器。
-  try {
-    report.safety.versionsAfter = {
-      claude: execFileSync("claude", ["--version"], {
-        encoding: "utf8",
-      }).trim(),
-      codex: execFileSync("codex", ["--version"], { encoding: "utf8" }).trim(),
-    };
-  } catch {}
+  // CLI 自己升级也算改了操作员的机器。只在开场记过版本（真跑了 CLI）时复核：
+  // 只跑假 CLI 的场景连 `--version` 也不起真 CLI。
+  if (report.versions !== undefined) {
+    try {
+      report.safety.versionsAfter = {
+        claude: execFileSync("claude", ["--version"], {
+          encoding: "utf8",
+        }).trim(),
+        codex: execFileSync("codex", ["--version"], {
+          encoding: "utf8",
+        }).trim(),
+      };
+    } catch {}
+  }
   const versionsKept =
     report.versions === undefined ||
     JSON.stringify(report.versions) ===
@@ -1462,6 +1255,17 @@ export function finalize() {
       )
         report.safety.blamed.push(file);
     } catch {}
+  }
+  const claudeState = report.safety.claudeState;
+  if (claudeState !== undefined) {
+    const verdict = claudeStateBlame(
+      claudeState.before,
+      claudeStateDigest(),
+      claudeState.scratchRoots ?? [],
+    );
+    // 摘要本身不进报告：只留结论。
+    report.safety.claudeState = verdict;
+    report.safety.blamed.push(...verdict.blamed);
   }
   const mode = report.safety.claudeDefaultMode;
   if (mode !== undefined) {
