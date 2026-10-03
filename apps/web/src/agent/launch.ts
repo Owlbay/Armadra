@@ -3,6 +3,7 @@ import {
   agentDefinition,
   assembleLaunchArgv,
   assembleLaunchCommand,
+  type AgentAcpInfo,
   type AgentInfo,
   type CreateTerminalAgent,
   type CustomAgent,
@@ -44,6 +45,14 @@ export function setAgentRegistry(agents: readonly AgentInfo[]): void {
 
 function registryEntry(id: string | undefined): AgentInfo | undefined {
   return id ? registry.find((agent) => agent.id === id) : undefined;
+}
+
+/**
+ * 这家 CLI 在这台机器上怎么说 ACP（契约 §14.1）。没有这个键就是没有 ACP
+ * 入口；列表还没到时同样答不上来，切换项不出现。
+ */
+export function agentAcpInfo(id: string | undefined): AgentAcpInfo | undefined {
+  return registryEntry(id)?.acp;
 }
 
 export function agentLabel(id: string | undefined): string {
