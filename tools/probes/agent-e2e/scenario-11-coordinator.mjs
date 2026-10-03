@@ -909,7 +909,13 @@ export default async function run() {
     });
     s.check(
       "便签里是成员回报的结果",
-      JSON.stringify(taskSticky.data ?? {}).includes(TASK_RESULT),
+      // 脚本化模型逐字附原文；真模型会转述（实跑：「任务汇总：src/z 没有问题」），
+      // 认回报的主体与结论，不认前缀。
+      real
+        ? ["src/z", "没有问题"].every((part) =>
+            JSON.stringify(taskSticky.data ?? {}).includes(part),
+          )
+        : JSON.stringify(taskSticky.data ?? {}).includes(TASK_RESULT),
       taskSticky.data,
     );
     const runs = database

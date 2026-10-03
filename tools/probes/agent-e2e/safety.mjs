@@ -171,3 +171,18 @@ export function claudeDefaultMode() {
     return undefined;
   }
 }
+
+/**
+ * 画面进报告之前：去掉控制序列与不可见字符、遮掉像令牌的长串，只留最后 40 行。
+ * 画面里是 CLI 自己的界面（对话框、页脚），不是终端原始输出流。
+ */
+export function sanitizeScreen(text) {
+  return String(text ?? "")
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+    .replace(/[A-Za-z0-9_\-]{32,}/g, "<redacted>")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .slice(-40)
+    .join("\n");
+}

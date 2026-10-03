@@ -6,7 +6,9 @@
     "adapters": {
       "claude": {
         "program": "claude-agent-acp",
-        "verified": null
+        "verified": {
+          "min": "0.85.1"
+        }
       },
       "codex": {
         "program": "codex-acp",
@@ -18,7 +20,9 @@
       },
       "pi": {
         "program": "pi-acp",
-        "verified": null
+        "verified": {
+          "min": "0.0.34"
+        }
       },
       "omp": {
         "program": "omp",
