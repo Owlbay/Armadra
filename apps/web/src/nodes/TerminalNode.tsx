@@ -62,6 +62,7 @@ import { registerTerminalHandle } from "./terminal-registry";
 import { canUseAcp, driverOf, switchDriver } from "@/acp/driver";
 // 副作用：注册 Agent 专属的右键菜单项（重启 / 权限模式 / 回收）
 import "./terminal-menu";
+import { WorkflowStepBadge } from "@/workflow/node-steps";
 
 /**
  * ACP 驱动的节点体（ACP 设计 §6）。按需加载：消息流带着 Markdown 渲染，
@@ -222,6 +223,21 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
           },
         }
       : undefined;
+  // 答不了的人看见的是同一个「在等审批」，按钮换成一枚「等待接管」（设计系统
+  // §5.8、§5.16 权限态）——否则头部只剩一个胶囊，不知道该等谁。
+  const awaitingDriver =
+    agent &&
+    !canAnswer &&
+    agentStatus?.state === "blocked" &&
+    agentStatus.pendingId ? (
+      <Badge
+        variant="outline"
+        data-slot="awaiting-driver"
+        className="h-[18px] px-1.5 text-[length:var(--text-caption)]"
+      >
+        {t("node.awaitingDriver")}
+      </Badge>
+    ) : null;
 
   const exited =
     surface.connection === "exited" || surface.connection === "failed";
@@ -540,7 +556,18 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
             }
           : {})}
         // 简洁模式：头部只留状态胶囊与审批（ACP 设计 §8 第 3 条）。
-        headerChips={simple ? null : headerChips}
+        headerChips={
+          simple ? (
+            awaitingDriver
+          ) : (
+            <>
+              {headerChips}
+              {/* 工作流运行中的步号，紧挨状态胶囊（设计系统 §4）。 */}
+              <WorkflowStepBadge nodeId={id} />
+              {awaitingDriver}
+            </>
+          )
+        }
         headerActions={headerActions}
         menuItems={menuItems}
       >
