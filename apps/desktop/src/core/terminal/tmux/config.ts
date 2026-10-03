@@ -33,7 +33,10 @@ set -g prefix None
 set -g status off
 set -g history-limit 5000
 set -g escape-time 0
-set -g allow-passthrough on
+# \`-q\`: allow-passthrough is tmux 3.3+, and MINIMUM_VERSION is 3.2 (Ubuntu
+# 22.04 ships 3.2a). Without it 3.2 opens every session on a config-error
+# screen that swallows keystrokes until dismissed (nightly packaged smoke).
+set -gq allow-passthrough on
 set -g set-clipboard on
 set -g default-terminal "{terminal}"
 set -ga terminal-overrides ",*:Tc"

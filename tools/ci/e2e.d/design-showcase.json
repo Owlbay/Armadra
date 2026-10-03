@@ -1,0 +1,8 @@
+{
+  "id": "design-showcase",
+  "tier": "a",
+  "script": "tools/probes/design-showcase.mjs",
+  "args": ["{out}"],
+  "requires": ["chrome"],
+  "timeoutMinutes": 15
+}

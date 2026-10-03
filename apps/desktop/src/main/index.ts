@@ -1,4 +1,5 @@
 import { app, dialog, ipcMain, safeStorage, session } from "electron";
+import { writeSync } from "node:fs";
 import { join } from "node:path";
 import {
   ALL_CHANNELS,
@@ -14,6 +15,7 @@ import {
 import { dataDir } from "../shell-core/paths";
 import { DEFAULT_DEV_RENDERER_URL } from "../shell-core/window-rules";
 import {
+  APP_NAME,
   iconPath,
   setAboutPanel,
   setApplicationName,
@@ -34,6 +36,7 @@ import {
 } from "./runtime-process";
 import { type PageSource, startPageSource } from "./static-server";
 import { traceLifecycle } from "./trace";
+import { installDiagnostics } from "./diagnostics";
 import { installUpdates } from "./updates";
 import {
   endpointsSnapshot,
@@ -61,7 +64,11 @@ import {
   setHostRect,
 } from "./browser";
 import { clearBrowsingData } from "./browser/clear-data";
-import { setDriveEnvironment, setSecretChannel } from "./runtime-process";
+import {
+  setCrashChannel,
+  setDriveEnvironment,
+  setSecretChannel,
+} from "./runtime-process";
 import { secretChannel } from "./secrets";
 import { pickDirectory } from "./dialogs";
 import { openExternal, showItemInFolder } from "./external";
@@ -73,6 +80,18 @@ import {
 import { applyShortcuts, releaseShortcuts } from "./shortcuts";
 import { createTray, destroyTray, refreshGateway } from "./tray";
 import { ownsRuntime } from "../shell-core/runtime/identity";
+import { versionLine } from "./version-flag";
+
+// `armadra --version` answers and leaves before anything below is assembled:
+// no window, no Runtime, no data directory (see version-flag.ts). The write is
+// synchronous because stdout to a pipe is not on every platform.
+{
+  const line = versionLine(process.argv, APP_NAME, app.getVersion());
+  if (line !== null) {
+    writeSync(1, line);
+    process.exit(0);
+  }
+}
 
 /**
  * The application's assembly. Everything with a rule worth stating lives in
@@ -85,6 +104,16 @@ const lifecycle = new DesktopLifecycle();
 const runtime = new RuntimeProcess();
 const development = !app.isPackaged;
 const updates = installUpdates(lifecycle, runtime);
+/**
+ * 可选崩溃上报（外部服务 §11.2）：设置里没填 DSN 就什么都不加载。在 ready
+ * 之前装，好让启动阶段的异常也算数；core 交来的错误经同一个通道。
+ */
+const diagnostics = installDiagnostics({
+  dataDir: dataDir(),
+  release: app.getVersion(),
+  environment: app.isPackaged ? "production" : "development",
+});
+setCrashChannel(diagnostics);
 /** Set by `start()` before any window exists; every origin decision reads it. */
 let page: PageSource | null = null;
 

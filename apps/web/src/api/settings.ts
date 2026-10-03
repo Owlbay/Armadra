@@ -128,6 +128,13 @@ export const runtimeSettingsSchema = z.looseObject({
     })
     .optional(),
   /**
+   * `diagnostics.crashReportDsn`：可选崩溃上报（外部服务 §11.2）。空串 = 关
+   * （缺省）；壳只在它是合格 DSN 时才加载 SDK。
+   */
+  diagnostics: z
+    .looseObject({ crashReportDsn: z.string().optional() })
+    .optional(),
+  /**
    * `language.*`（语言服务设计 §1.2、§3.3）。
    *
    * `servers.<serverId>` 是用户自己的覆盖：可执行路径、参数、开关，以及
@@ -230,6 +237,8 @@ export interface RuntimeSettingsPatch {
     cost?: { enabled?: boolean };
   };
   models?: { catalog?: { autoRefresh?: boolean } };
+  /** 崩溃上报的 DSN；空串关掉。 */
+  diagnostics?: { crashReportDsn?: string };
   logs?: { retentionDays?: number };
   /** 更新通道与两个开关（S03 §4.1）。 */
   updates?: {

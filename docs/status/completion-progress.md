@@ -367,7 +367,16 @@
 
 ## G2-4 `HostApi.runners` 与 `wait` 动词（C4）
 
-未开始。
+做了什么：
+
+- core：控制动词 `wait`（`collab/control/wait.ts`，契约 §15.5）：`--task [--node] [--since] [--timeout 0–60]` 长轮询，答 `{ status, since, events[] }`，`status` 五值；`done` 认成员 `post` 的 `task:<id>:result`（或 `:result:<轮次>`），没有时认投递之后这一轮干净地结束（依赖编排同一份判定）；`blocked` 带 `approvalId`，只报告；游标是 `<post 序号>-<状态>`；结束时写 `workflow_task_runs` 并把结果 post 标成已收。只有起任务的协调者能等。
+- `open-agent` 认 `--task-id`（幂等：同一协调者、节点还在就答回原节点；节点删了就新建并换绑；别人用过回 `409 task_conflict`）与 `--name`（标题）；带任务 id 时记 `workflow_task_runs` 并经 `workflow/dispatch.ts::launchRoleNode` 由 core 起终端。权限模式不支持改回 `400 permission_mode_unsupported`（附 `supported`）。`help` 的结果多 `agents`（内置 + `custom:*`）。
+- ama 适配器：`agent-host/ama/runners.ts` 为六家内置 CLI 与每个 `custom:*` 注册 runner（`start` = `open-agent --task-id <会话:任务>`，提示词末尾附回报键；`wait()` 循环 `wait`；`blocked` / `needsInput` 只改状态栏；`send` 走队列、键换到下一轮；`stop` 与中止只 `interrupt`）；`agent-host/ama/approvals.ts` 审批回答者按契约 §5.5 写 pending 目录、带 `pendingId` 上报、轮询答复文件，等不到就让给终端对话框。core 给 ama 节点也注入 `ARMADRA_PERM_WAIT_SECS`（同一个 `hooks.replyApprovals`）。
+- 成员技能加「任务末尾有 `task:<id>:result` 键就用它回报」一句，`SKILLS_REVISION` 16 → 17；ama 的 profile 配置加 `tools.default: ["+task"]`（`task` 不在 ama 缺省预设里，codemode 又只在 Node ≥ 25 开）；适配器的工具说明加一段 `task` 的用法。
+
+实测：`wait.test`（9）、`runners.test`（10）、`approvals.test`（适配器 4、core 3）；`agent-e2e --only 11` 全部通过，新增的派任务一段：成员 post「派任务」→ 唤醒 → 模型调 `task(agent="custom:taskecho")` → core 起假 CLI 成员并投任务 → runner `wait` → 假 CLI 按键 post → `task` 结果回到模型 → 便签写出结果，`workflow_task_runs` 一行 done。
+
+没做：`ama` 自己不能作为 runner（ama 把 id 为 `ama` 的 runner 当成它的子会话类型、从不调用，要改 ama）；`--cwd` 与 `--resume` 不支持（`open-agent` 没有这两个参数，runner 忽略 `resume` 并记日志）；提示词连回报说明受投递上限 2000 字约束；成员节点的 `creator_principal_id` 继承协调者创建者（§8.2）没做；e2e 没覆盖 `blocked`（单测覆盖）。
 
 ## G2-5 实时协同页面绑定与在线光标（R1）
 
@@ -537,7 +546,21 @@
 
 ## G3-4 Linux 打包验证与夜间冒烟
 
-未开始。
+做了什么：
+
+- 清单拆成一条一个文件：`tools/ci/e2e.json` → `tools/ci/e2e.d/<id>.json`（文件名即 `id`，按档再按 `id` 排序，隐藏文件忽略，旧单文件被合并带回即报错）；条目加 `platforms`，`requires` 认 `docker`；`e2e.mjs` 在 `GITHUB_OUTPUT` 写失败条目。
+- `nightly.yml`：`linux`（ubuntu-22.04：`dist`、glibc 基线、`xvfb-run` 下 B 档）、`macos`（macos-14：`dist`、B 档）、`report`（失败且在 main 上时用默认 `GITHUB_TOKEN` 开「夜间 B 档失败」issue 或追加评论）。`validate-workflows` 断言各系统有作业、有开 issue 的作业、不读 secret。
+- B 档条目：`packaged-smoke --no-real-cli`（darwin、linux）、`deb-install`（linux，`ubuntu:22.04` 容器 apt 安装、`ldd`、`--version`）。
+- 修出来的 Linux 问题：tmux 3.2（22.04 的 3.2a）不认 `allow-passthrough`，每个新会话停在配置报错页吞键 → `set -gq`；deb 依赖缺 `libgbm1`、`libasound2`；`desktopName` + `syncDesktopName`（窗口与 `armadra.desktop` 对上）；新增 `armadra --version`。
+
+实测（本机 Docker，ubuntu:22.04 arm64 容器）：`dist` 出 AppImage / deb / rpm；glibc 基线 12 个二进制通过；`xvfb-run` 下 `packaged-smoke --no-real-cli` 对 AppImage 全部 20 项通过（迁移、PDF、H.264 视频、tmux 终端回显、无控制台错误）；`linux-arm64-unpacked/armadra --version` 无显示器答出 `Armadra 0.1.0`；deb 的依赖闭包对照 `ldd` 补齐后无缺口。
+
+没做 / 限制：
+
+- 分支上手动触发的 nightly（run 37122980815）：linux 作业 `deb-install`（amd64，干净 ubuntu:22.04）与 `packaged-smoke` 通过，macos 作业 `packaged-smoke` 通过；`report` 因不在 main 跳过，issue 上报未实跑。
+- arm64 AppImage 的运行时要 `libz.so`（开发包里的无版本名），干净系统上 `APPIMAGE_EXTRACT_AND_RUN` 会报缺库；x64 runner 有 `zlib1g-dev`，未改打包。
+- `update-e2e`、`server-perf`、`server-container-e2e` 不设单独作业：条目写 `platforms: ["linux"]`，在 `linux` 作业里打包后执行（作业设 `ARMADRA_DEV_STACK=1`、装 Chrome）；原 `server-image` 作业由 `server-container-e2e` 条目取代。
+- macOS 作业与 issue 上报只在 GitHub 上首跑时验证；deb 容器验证没有复用 dev-stack 的 compose（直接 `docker run`）。
 
 ## G3-5 服务器部署：镜像、公网部署指南、备份升级
 
@@ -603,7 +626,23 @@
 
 ## G3-10 可选崩溃上报（W-CRASH）
 
-未开始。
+做了什么：
+
+- 剥离规则 `core/diagnostics/crash.ts`（纯函数，不依赖 SDK）：删 `user` / `request` / `extra` / `server_name` / `modules` / `threads` 与任何层级的环境变量、命令行、工作目录、请求头、局部变量、源码行；面包屑只留类别 / 级别 / 时间 / 一句话，控制台与网络类整条丢；每个字符串去 ANSI 与控制字符、替换环境变量的值、家目录、路径里的用户名、令牌形状、地址里的账号与查询串，再截断。
+- `CorePlatform.reportError`（可选）与 `reportError(platform, error, {source})`：缺省只写本地日志；core 在请求 500 与 `uncaughtExceptionMonitor` 两处调用。桌面 core 子进程经 fork 的 IPC（`ARMADRA_CRASH_REPORT_IPC=1` 时）把剥离后的错误交给主进程。
+- 桌面壳 `main/diagnostics.ts`（`@sentry/electron` 7.20.0）与服务器壳 `apps/server/src/diagnostics.ts`（`@sentry/node` 10.75.0）：只有 DSN 合格时才加载 SDK；`defaultIntegrations: false`，不开 minidump、会话、OTel、网络 / 控制台集成，`ipcMode: 0`；设置文档每 5 秒看一次，关掉立即停发、打开不用重启。服务器壳 `ARMADRA_CRASH_REPORT_DSN` 优先。
+- 设置 → 通用 → 诊断：开关 + DSN 输入（合格才存，关掉即清空）；出站表登记 `crashReport`。
+
+实测：
+
+- dev-stack GlitchTip：`node tools/probes/crash-report-e2e.mjs` 通过（真 `@sentry/node` 经 core 500 路径发出，取回的事件里没有环境变量、家目录、令牌、终端输出、用户与 extra；没配 DSN 不发）。
+- 桌面路径（临时 Electron 脚本，未入库）：fork 的子进程经 `nodePlatform.reportError` → IPC → 主进程 `@sentry/electron` → GlitchTip 收到，标签 `process: core`，栈路径 `~/…`；主进程错误同样收到。
+- 打包后的服务器壳 `out/main.js serve` 带 DSN 启动日志「崩溃上报已打开」（只写主机）。
+
+没做：
+
+- 页面（渲染进程）的 JS 错误不上报：页面不装 SDK，`ipcMode: 0` 也不开渲染进程通道。
+- core 子进程因未接住异常退出时，IPC 消息是同步写管道的尽力而为；服务器壳会等最多 2 秒送出再以 1 退出。
 
 ## G3-11 存量界面套用二：对话框与其余页面（WP-D3b）
 

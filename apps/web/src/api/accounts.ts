@@ -101,10 +101,8 @@ async function call<T>(
   const method = options.method ?? "GET";
   const headers: Record<string, string> = { Accept: "application/json" };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
-  if (method !== "GET") {
-    const csrf = await ensureCsrf();
-    if (csrf) headers["X-Armadra-CSRF"] = csrf;
-  }
+  const csrf = method === "GET" ? "" : await ensureCsrf();
+  if (csrf) headers["X-Armadra-CSRF"] = csrf;
   let response: Response;
   try {
     response = await fetch(`${RUNTIME_URL}${PREFIX}${action}`, {
@@ -122,7 +120,8 @@ async function call<T>(
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     // 403 可能是 CSRF 过期：作废本地这枚，下一次写请求重新取。
-    if (response.status === 403) forgetCsrf();
+    // 别的窗口这期间换来的新令牌不动（`forgetCsrf` 只作废被拒的那一枚）。
+    if (response.status === 403) forgetCsrf(csrf);
     const body = (payload ?? {}) as { code?: unknown; message?: unknown };
     throw new IdentityRequestError(
       response.status,

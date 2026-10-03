@@ -82,6 +82,11 @@ export const modals: MessageModule = {
       "文件列表默认隐藏 .DS_Store、Thumbs.db、desktop.ini。",
     "settings.splashAnimation": "启动动画",
     "settings.splashAnimation.note": "关闭后打开应用直接进入界面。",
+    "settings.diagnostics.crashReports": "崩溃上报",
+    "settings.diagnostics.crashReports.note":
+      "仅发送脱敏后的错误信息到你自托管的服务。",
+    "settings.diagnostics.dsn": "DSN",
+    "settings.diagnostics.dsnInvalid": "DSN 无效",
 
     "settings.notifyDone": "后台完成通知",
     "settings.notifyNeedsYou": "需要你时通知",
@@ -379,6 +384,11 @@ export const modals: MessageModule = {
       "File lists hide .DS_Store, Thumbs.db and desktop.ini by default.",
     "settings.splashAnimation": "Startup animation",
     "settings.splashAnimation.note": "Off opens straight into the app.",
+    "settings.diagnostics.crashReports": "Crash reports",
+    "settings.diagnostics.crashReports.note":
+      "Sends only scrubbed error details to your self-hosted server.",
+    "settings.diagnostics.dsn": "DSN",
+    "settings.diagnostics.dsnInvalid": "Invalid DSN",
 
     "settings.notifyDone": "Notify when finished",
     "settings.notifyNeedsYou": "Notify when input is needed",

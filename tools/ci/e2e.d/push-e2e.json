@@ -1,0 +1,8 @@
+{
+  "id": "push-e2e",
+  "tier": "a",
+  "script": "tools/probes/push-e2e.mjs",
+  "args": ["{out}"],
+  "requires": [],
+  "timeoutMinutes": 5
+}

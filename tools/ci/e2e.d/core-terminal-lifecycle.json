@@ -1,0 +1,8 @@
+{
+  "id": "core-terminal-lifecycle",
+  "tier": "a",
+  "script": "tools/probes/core-terminal-lifecycle.mjs",
+  "args": [],
+  "requires": ["tmux"],
+  "timeoutMinutes": 5
+}

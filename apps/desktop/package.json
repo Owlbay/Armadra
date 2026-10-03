@@ -9,6 +9,7 @@
   "version": "0.1.0",
   "private": true,
   "main": "./out/main/index.js",
+  "desktopName": "armadra.desktop",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build && node scripts/launch-exe.mjs --if-windows",
@@ -19,6 +20,7 @@
     "test": "vitest run && vitest run --config vitest.live.config.mts && node --test scripts/*.test.mjs"
   },
   "dependencies": {
+    "@sentry/electron": "7.20.0",
     "@simplewebauthn/server": "14.0.3",
     "acme-client": "5.4.0",
     "electron-updater": "6.8.9",

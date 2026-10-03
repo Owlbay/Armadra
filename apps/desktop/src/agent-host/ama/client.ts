@@ -16,9 +16,9 @@ import {
   render,
   renderError,
 } from "../../cli/armadra-hook/control.js";
-import { envVar } from "../../hook-client/endpoint.js";
+import { type Endpoint, envVar } from "../../hook-client/endpoint.js";
 import { isSuccess, postJsonRequest } from "../../hook-client/http.js";
-import { canonicalJsonBytes } from "../../hook-client/json.js";
+import { canonicalJsonBytes, tryParseJson } from "../../hook-client/json.js";
 import type { JsonValue } from "../../hook-client/json.js";
 import {
   type Session,
@@ -36,6 +36,21 @@ const HOOK_PROTOCOL_VERSION = 1;
 export const AMA_HOOK_ROUTE = "/hook/ama";
 
 export type CallOutcome = { ok: string } | { error: string };
+
+/**
+ * A control verb's answer as data, for the runners (`runners.ts`): the
+ * success body, the refusal's `{code, message}`, or a transport failure that
+ * never got an answer.
+ */
+export type ControlAnswer =
+  | { readonly kind: "ok"; readonly body: Record<string, unknown> }
+  | {
+      readonly kind: "refused";
+      readonly status: number;
+      readonly code: string;
+      readonly message: string;
+    }
+  | { readonly kind: "unreachable"; readonly error: string };
 
 /**
  * `sessionId` and `generation` for a `binding: "session"` verb, from the
@@ -95,6 +110,65 @@ export async function callVerb(
 }
 
 /**
+ * `POST /control/<verb>` with raw `args`, answered as data. `totalMs` is the
+ * per-candidate budget: `wait` holds the request for up to its `--timeout`.
+ */
+export async function callControl(
+  verb: string,
+  args: Record<string, JsonValue>,
+  totalMs?: number,
+): Promise<ControlAnswer> {
+  const loaded = loadSession();
+  if ("error" in loaded) return { kind: "unreachable", error: loaded.error };
+  const body = controlBody(loaded.ok.nodeId, args);
+  const outcome = await send(
+    loaded.ok,
+    (current, candidate) =>
+      postJsonRequest(
+        `/control/${encodeURIComponent(verb)}`,
+        headersFor(current, candidate),
+        body,
+      ),
+    totalMs,
+  );
+  if ("error" in outcome) return { kind: "unreachable", error: outcome.error };
+  const parsed = tryParseJson(outcome.ok.body);
+  const object =
+    parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  if (isSuccess(outcome.ok)) return { kind: "ok", body: object };
+  return {
+    kind: "refused",
+    status: outcome.ok.status,
+    code: typeof object.code === "string" ? object.code : "error",
+    message:
+      typeof object.message === "string"
+        ? object.message
+        : renderError(outcome.ok),
+  };
+}
+
+/** `POST /context-link/<verb>`: the prose the CLI would print, or `undefined`. */
+export async function callContext(
+  verb: string,
+  args: Record<string, JsonValue>,
+): Promise<string | undefined> {
+  const loaded = loadSession();
+  if ("error" in loaded) return undefined;
+  const body = controlBody(loaded.ok.nodeId, args);
+  const outcome = await send(loaded.ok, (current, candidate) =>
+    postJsonRequest(
+      `/context-link/${encodeURIComponent(verb)}`,
+      headersFor(current, candidate),
+      body,
+    ),
+  );
+  if ("error" in outcome || !isSuccess(outcome.ok)) return undefined;
+  return render(outcome.ok);
+}
+
+/**
  * One status report: `POST /hook/ama` with the payload, the node id and — when
  * the terminal has a session binding — the next `sourceRevision` of the same
  * sequence file the command client advances. Best effort: never throws.
@@ -102,6 +176,23 @@ export async function callVerb(
 export async function report(
   payload: Record<string, JsonValue>,
 ): Promise<number | undefined> {
+  return (await reportTo(payload))?.status;
+}
+
+/**
+ * {@link report} with the extra envelope fields of a permission request
+ * (`pendingId`, contract §5.5) and a `prepare` step run for each candidate
+ * just before the request goes out — where the approval broker writes its
+ * request file, next to the runtime that will answer it. Answers the status
+ * and the candidate that answered.
+ */
+export async function reportTo(
+  payload: Record<string, JsonValue>,
+  options: {
+    readonly pendingId?: string;
+    readonly prepare?: (candidate: Endpoint) => void;
+  } = {},
+): Promise<{ status: number; candidate: Endpoint } | undefined> {
   try {
     const binding = loadBinding();
     let session: Session;
@@ -123,11 +214,21 @@ export async function report(
       version: HOOK_PROTOCOL_VERSION,
       payload,
       terminalBinding,
+      ...(options.pendingId === undefined
+        ? {}
+        : { pendingId: options.pendingId }),
     });
-    const outcome = await send(session, (current, candidate) =>
-      postJsonRequest(AMA_HOOK_ROUTE, headersFor(current, candidate), body),
-    );
-    return "error" in outcome ? undefined : outcome.ok.status;
+    const outcome = await send(session, (current, candidate) => {
+      options.prepare?.(candidate);
+      return postJsonRequest(
+        AMA_HOOK_ROUTE,
+        headersFor(current, candidate),
+        body,
+      );
+    });
+    return "error" in outcome
+      ? undefined
+      : { status: outcome.ok.status, candidate: outcome.candidate };
   } catch {
     return undefined;
   }

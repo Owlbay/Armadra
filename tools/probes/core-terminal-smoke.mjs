@@ -19,6 +19,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { createRequire } from "node:module";
+import { isolatedEnv, probeHome } from "./probe-home.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -32,11 +33,15 @@ const require = createRequire(join(repo, "apps/desktop/package.json"));
 const { WebSocket } = require("ws");
 
 export async function startCore({ dataDir, port = 0 }) {
+  // 临时 HOME：core 与它起的 tmux 不读操作员的配置（`~/.tmux.conf`、CLI
+  // 登录状态）。随 core 退出删掉。
+  const home = probeHome("armadra-core-terminal-home-");
   const child = spawn(
     process.execPath,
     [coreEntry, "--listen", `tcp:127.0.0.1:${port}`, "--data-dir", dataDir],
-    { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env } },
+    { stdio: ["ignore", "pipe", "pipe"], env: isolatedEnv(home) },
   );
+  child.once("exit", () => home.remove());
   let stderr = "";
   child.stderr.setEncoding("utf8");
   // The address is on stderr, not stdout: stdout carries the one-line

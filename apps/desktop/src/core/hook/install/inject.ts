@@ -292,6 +292,10 @@ export const AMA_CONFIG = {
   version: 1,
   permission: { mode: "default" },
   compaction: { enabled: true },
+  // `task` 不在 ama 的缺省预设里（只在 codemode 脚本里，而 codemode 只在
+  // Node ≥ 25 开）。画布上它由适配器的 runner 接到画布节点（契约 §15.5），
+  // 协调者得直接看得到它。
+  tools: { default: ["+task"] },
 } as const;
 
 /**
