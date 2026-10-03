@@ -14,6 +14,8 @@ interface MenuItem {
   label?: string;
   enabled?: boolean;
   type?: string;
+  checked?: boolean;
+  click?: () => void;
 }
 
 const built: MenuItem[][] = [];
@@ -120,6 +122,8 @@ const templateFlags: boolean[] = [];
 /** What the fake Runtime answers next, per path. `null` = the fetch fails. */
 let answers: Record<string, string | null> = {};
 const requested: string[] = [];
+/** Every non-GET request, with its body. */
+const writes: { method: string; path: string; body: unknown }[] = [];
 
 beforeEach(() => {
   vi.resetModules();
@@ -129,6 +133,7 @@ beforeEach(() => {
   reveals.length = 0;
   quits.length = 0;
   requested.length = 0;
+  writes.length = 0;
   iconEmpty = false;
   images.length = 0;
   templateFlags.length = 0;
@@ -137,9 +142,15 @@ beforeEach(() => {
     "/api/usage/cost": COST,
     "/api/settings": "{}",
   };
-  vi.stubGlobal("fetch", async (url: string) => {
+  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
     const path = url.replace("http://runtime", "");
     requested.push(path);
+    if (init?.method && init.method !== "GET")
+      writes.push({
+        method: init.method,
+        path,
+        body: JSON.parse(String(init.body)),
+      });
     const body = answers[path];
     if (body === null || body === undefined) throw new Error("unreachable");
     return { ok: true, text: async () => body };
@@ -225,6 +236,7 @@ describe("the polling loop", () => {
     expect(requested).toEqual([
       "/api/usage",
       "/api/usage/cost",
+      "/api/gateway",
       "/api/settings",
     ]);
 
@@ -306,5 +318,60 @@ describe("a tray icon that will not load", () => {
     expect(trays).toHaveLength(0);
     expect(written.join("")).toContain("Tray icon could not be loaded");
     write.mockRestore();
+  });
+});
+
+describe("the external-access item", () => {
+  const status = (enabled: boolean, managedBy = "settings") =>
+    JSON.stringify({ enabled, running: enabled, managedBy });
+  const item = () =>
+    lastMenu().find((entry) => entry.label === "External access");
+
+  it("is a check box that mirrors gateway.enabled", async () => {
+    answers["/api/gateway"] = status(false);
+    const module = await startTray();
+    expect(item()).toMatchObject({ type: "checkbox", checked: false });
+    module.destroyTray();
+  });
+
+  it("flips the setting through PUT /api/gateway and draws what the core answered", async () => {
+    answers["/api/gateway"] = status(false);
+    const module = await startTray();
+    // The core answers the PUT with the reconciled status.
+    answers["/api/gateway"] = status(true);
+    item()?.click?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(writes).toEqual([
+      { method: "PUT", path: "/api/gateway", body: { enabled: true } },
+    ]);
+    expect(item()?.checked).toBe(true);
+    module.destroyTray();
+  });
+
+  it("is absent while the state is unknown or the server shell owns the gateway", async () => {
+    answers["/api/gateway"] = null;
+    const module = await startTray();
+    expect(item()).toBeUndefined();
+
+    answers["/api/gateway"] = status(true, "shell");
+    await module.refreshGateway();
+    expect(item()).toBeUndefined();
+
+    // The page changed it: `app:gateway-refresh` re-reads without waiting for the poll.
+    answers["/api/gateway"] = status(true);
+    await module.refreshGateway();
+    expect(item()?.checked).toBe(true);
+    module.destroyTray();
+  });
+
+  it("reads only the fields it needs", async () => {
+    const { gatewayItemState } = await import("./tray");
+    expect(gatewayItemState(null)).toBeNull();
+    expect(gatewayItemState("not json")).toBeNull();
+    expect(gatewayItemState(status(true, "shell"))).toBeNull();
+    expect(
+      gatewayItemState(JSON.stringify({ managedBy: "settings" })),
+    ).toBeNull();
+    expect(gatewayItemState(status(false))).toEqual({ enabled: false });
   });
 });
