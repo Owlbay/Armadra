@@ -10,7 +10,7 @@ function step(
 ): WorkflowRunJson["steps"][number] {
   return {
     stepId,
-    kind: "agent",
+    kind: "prompt",
     role: "dev",
     status,
     nodeId,
