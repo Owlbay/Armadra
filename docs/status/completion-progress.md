@@ -585,7 +585,21 @@
 
 ## G3-9 分发渠道与许可证声明（W-DIST + W-NOTICES）
 
-未开始。
+做了什么：
+
+- 第三方声明：`tools/notices.mjs` 由 `pnpm licenses list --prod --json` 生成根 `THIRD_PARTY_NOTICES.md`（逐包带 LICENSE / NOTICE 原文，单列 Electron / Chromium 与 ama 的随包声明），`pnpm check` 的 `notices:check` 防漂移；`after-pack.mjs` 把它与 ama 的 `LICENSE` / `THIRD_PARTY_NOTICES.md` 放进 `resources/`，Electron 的 `LICENSE.electron.txt` / `LICENSES.chromium.html` 在 macOS 放回 `Contents/Resources/`（`node_modules/electron` 没解包时先跑它的 `install.js`）；设置 → 关于 → 开源许可显示全文。
+- 渠道：`tools/release/templates/`（cask、Scoop、winget 三件套、AUR `armadra-bin` 的 PKGBUILD）+ `publish-channels.mjs`（`render` 从 `SHA256SUMS` 渲染，`push` 提交进 tap / bucket）。`release.yml` 的 `channels` / `channels-macos` / `channels-windows` 渲染并试装、不推送；新 `distribute.yml` 在 Release 转正后推 tap / bucket / winget，各缺 secret 就跳过。GHCR 镜像沿用 G3-5 的 `server-image.yml`。Flathub / Snap / apt-rpm 只写结论（[CI 与发布](../guides/ci-release.md) §3.1）。
+
+实测（2026-10-03，macOS）：
+
+- 本地 tap 上 `brew style`、`brew audit --cask --strict` 通过；从本地 HTTP 服务器 `brew install --cask --appdir=<临时>` 装假 dmg 成功并卸载。`brew audit --new` 因仓库私有 GitHub API 404。
+- PKGBUILD：archlinux 容器 `makepkg --printsrcinfo` 通过，`namcap` 只有 x86_64 字面量与 Maintainer 告警。winget 三件套对官方 1.10.0 JSON schema、Scoop manifest 对 Scoop `schema.json` 校验通过（ajv）。
+- `pnpm check`、`pnpm release:test`、`pnpm -r --if-present test` 全绿。
+
+没做：
+
+- 真推送（需用户建 tap / bucket 仓库、winget-pkgs fork 与三个 PAT）；`distribute.yml` 要合入后才能手动触发验证。
+- 被 electron-vite 打进 `out/` 的桌面 devDependencies 不在 `--prod` 列表里，未单独列声明。
 
 ## G3-10 可选崩溃上报（W-CRASH）
 
