@@ -452,6 +452,133 @@ export function probeLaunchConfig({ client }) {
   ].join("\r\n");
 }
 
+/* ------------------------------ app & install ---------------------------- */
+
+/**
+ * 装进页面的小工具：经页面自己的地址与身份调 core（core 判的就是这个来源），
+ * 终端经 WebSocket 附着、输入、等输出。
+ */
+export const PAGE_HELPERS = `(() => {
+  const bridge = globalThis.window?.armadra;
+  if (!bridge?.transport) throw new Error("window.armadra 上没有壳的桥");
+  const { httpBase, wsBase } = bridge.transport.endpointsSync();
+  async function api(method, path, body) {
+    const response = await fetch(httpBase + path, {
+      method,
+      headers: body === undefined ? {} : { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await response.text();
+    let json = null;
+    try { json = text === "" ? null : JSON.parse(text); } catch { json = { raw: text.slice(0, 500) }; }
+    return { status: response.status, body: json };
+  }
+  function terminal(sessionId, writer, lines, waitFor, timeoutMs) {
+    return new Promise((done) => {
+      const socket = new WebSocket(wsBase + "/api/terminals/" + sessionId + "/ws?writer=" + writer);
+      let output = "";
+      let hello = null;
+      let inputId = 0;
+      const finish = (ok, reason) => {
+        clearTimeout(timer);
+        try { socket.close(); } catch {}
+        done({ ok, reason, hello, tail: output.slice(-2000) });
+      };
+      const timer = setTimeout(() => finish(waitFor === null, "timeout"), timeoutMs);
+      socket.onmessage = (event) => {
+        const frame = JSON.parse(event.data);
+        if (frame.type === "hello") {
+          hello = frame;
+          for (const line of lines) {
+            inputId += 1;
+            socket.send(JSON.stringify({ type: "input", data: line, inputId }));
+          }
+          if (waitFor === null) setTimeout(() => finish(true, "sent"), 500);
+          return;
+        }
+        if (frame.type === "output" || frame.type === "snapshot") {
+          output += frame.data;
+          if (waitFor !== null && output.includes(waitFor)) finish(true, "matched");
+        }
+      };
+      socket.onerror = () => finish(false, "socket error");
+    });
+  }
+  async function events(workspaceId, type, trigger, timeoutMs) {
+    return await new Promise((done) => {
+      const socket = new WebSocket(wsBase + "/api/workspaces/" + workspaceId + "/events");
+      const timer = setTimeout(() => { try { socket.close(); } catch {} done({ ok: false, reason: "timeout" }); }, timeoutMs);
+      socket.onopen = () => { setTimeout(() => trigger(), 300); };
+      socket.onmessage = (event) => {
+        const frame = JSON.parse(event.data);
+        if (frame.type === type) { clearTimeout(timer); socket.close(); done({ ok: true, event: frame }); }
+      };
+      socket.onerror = () => { clearTimeout(timer); done({ ok: false, reason: "socket error" }); };
+    });
+  }
+  globalThis.__acceptance = { httpBase, wsBase, api, terminal, events };
+  return { httpBase, wsBase };
+})()`;
+
+export function newestUninstaller(installDir) {
+  try {
+    return readdirSync(installDir)
+      .filter((name) => /^Uninstall .*\.exe$/i.test(name))
+      .map((name) => join(installDir, name))[0];
+  } catch {
+    return undefined;
+  }
+}
+
+export function findFile(root, name, depth = 6) {
+  if (depth < 0) return undefined;
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+  for (const entry of entries)
+    if (entry.isFile() && entry.name.toLowerCase() === name)
+      return join(root, entry.name);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const found = findFile(join(root, entry.name), name, depth - 1);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+export function logFindings(dataDir) {
+  const files = [];
+  const walk = (directory, depth) => {
+    if (depth < 0) return;
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(directory, entry.name);
+      if (entry.isDirectory()) walk(full, depth - 1);
+      else if (entry.isFile() && /\.(log|jsonl)$/i.test(entry.name))
+        files.push(full);
+    }
+  };
+  walk(dataDir, 3);
+  const findings = [];
+  let bytes = 0;
+  for (const file of files) {
+    const text = readFileSync(file, "utf8");
+    bytes += Buffer.byteLength(text);
+    for (const line of text.split(/\r?\n/))
+      if (/\b(error|fatal|uncaught|unhandled)\b/i.test(line))
+        findings.push(`${basename(file)}: ${line.slice(0, 300)}`);
+  }
+  return { files: files.map((file) => basename(file)), bytes, findings };
+}
+
 /* --------------------------------- dry run --------------------------------- */
 
 export function selfTests() {
