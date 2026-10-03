@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join as nativeJoin } from "node:path";
+import { AMA_KEY_VARIABLES } from "../../agent/ama-credentials";
 import { variablesFor } from "../../agent/credentials/inject";
 import { storedProbe } from "../../agent/probe";
 import { eventKey } from "./codex";
@@ -132,12 +133,6 @@ export interface ArtifactLayout {
   readonly profile?: string;
   /** ama's `profile.config`. */
   readonly config?: string;
-  /**
-   * ama's `profile.authFile`. **Not an artifact**: written 0600 by the
-   * launch path before every start, never by {@link prepareInjection}, never
-   * in the marker (§7).
-   */
-  readonly authFile?: string;
   /** ama's `profile.sessionDir`: `<data>/ama/sessions`. */
   readonly sessionDir?: string;
   /** The marker naming the revision and client that wrote all of the above. */
@@ -202,7 +197,6 @@ export function artifactLayout(
         skillDir: join(dir, SKILLS_ROOT),
         config: join(dir, "config.json"),
         profile: join(dir, "profile.json"),
-        authFile: join(dir, "auth.json"),
         sessionDir: join(dataDir, "ama", "sessions"),
       };
     case "copilot": {
@@ -301,9 +295,12 @@ export const AMA_CONFIG = {
 } as const;
 
 /**
- * ama's `profile.json`. Paths only, never a key: the key file is named, not
- * included, and `authEnv: false` keeps ama from reading a provider key out of
- * the PTY environment. `trustProject` is left out (false): a repository's own
+ * ama's `profile.json`. Paths only, never a key and no key file: the keys the
+ * settings hold reach ama as `AMA_API_KEY_<PROVIDER>` on its own process,
+ * set by the launcher after a node-token exchange (contract §12.4), so ama
+ * must read its environment (`authEnv` stays at its default). Without
+ * `authFile` ama's own user-level `auth.json` — its `ama auth` / ChatGPT
+ * login — keeps working. `trustProject` is left out (false): a repository's own
  * `.ama/` hooks and skills stay behind ama's trust prompt, as they would
  * outside the canvas.
  */
@@ -317,8 +314,6 @@ export function amaProfile(
     instructions: [layout.instructions as string],
     skillDirs: [layout.skillDir as string],
     config: layout.config as string,
-    authFile: layout.authFile as string,
-    authEnv: false,
     sessionDir: layout.sessionDir as string,
   };
 }
@@ -748,6 +743,9 @@ function writeLaunchers(
     args: injection.args,
     env: injection.env,
     credential: { client: clientBin, variables: variablesFor(agentId) },
+    ...(agentId === "ama"
+      ? { amaKeys: { client: clientBin, variables: AMA_KEY_VARIABLES } }
+      : {}),
   };
   let written: string[];
   let warning: string | undefined;

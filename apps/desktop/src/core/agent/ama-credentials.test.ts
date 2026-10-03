@@ -1,16 +1,16 @@
-import { readFileSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { plainFileBackend } from "../secrets";
 import { tempDir } from "../testing/temp-dir";
 import {
   AMA_KEY_PROVIDERS,
+  AMA_KEY_VARIABLES,
   AmaCredentials,
+  amaKeyVariable,
   amaSecretName,
   setAmaCredentials,
 } from "./ama-credentials";
-import { writeAmaAuth } from "./canvas-launch";
-import { artifactLayout } from "../hook/install/inject";
 
 const FAKE_KEY = "sk-test-not-a-real-key";
 
@@ -55,37 +55,27 @@ describe("ama's model keys", () => {
     }
   });
 
-  it("writes auth.json 0600 at the path the profile names, before a start", async () => {
-    const root = tempDir("armadra-ama-auth-");
-    const dataDir = join(root, "data");
-    // No credentials domain at all: an empty file, not a stale one.
-    const empty = writeAmaAuth(dataDir);
-    expect(empty).toBe(artifactLayout(dataDir, "ama").authFile);
-    expect(JSON.parse(readFileSync(empty, "utf8"))).toEqual({
-      version: 1,
-      providers: {},
-    });
-
+  it("hands the launcher ama's own variables for the keys that are set", async () => {
+    const root = tempDir("armadra-ama-vars-");
     const credentials = new AmaCredentials(
       plainFileBackend(join(root, "secrets")),
     );
+    expect(await credentials.variables()).toEqual([]);
     await credentials.set("openai", FAKE_KEY);
-    setAmaCredentials(credentials);
-    const path = writeAmaAuth(dataDir);
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
-      version: 1,
-      providers: { openai: { apiKey: FAKE_KEY } },
-    });
-    if (process.platform !== "win32") {
-      expect(statSync(path).mode & 0o777).toBe(0o600);
-      expect(statSync(join(dataDir, "integration", "ama")).mode & 0o077).toBe(
-        0,
-      );
+    await credentials.set("deepseek", "sk-other");
+    expect(await credentials.variables()).toEqual([
+      { variable: "AMA_API_KEY_OPENAI", value: FAKE_KEY },
+      { variable: "AMA_API_KEY_DEEPSEEK", value: "sk-other" },
+    ]);
+    for (const provider of AMA_KEY_PROVIDERS) {
+      expect(AMA_KEY_VARIABLES).toContain(amaKeyVariable(provider));
     }
-
-    // Cleared in the settings: gone from the file at the next start.
+    // Cleared in the settings: gone at the next start.
     await credentials.clear("openai");
-    writeAmaAuth(dataDir);
-    expect(readFileSync(path, "utf8")).not.toContain(FAKE_KEY);
+    expect((await credentials.variables()).map((v) => v.variable)).toEqual([
+      "AMA_API_KEY_DEEPSEEK",
+    ]);
+    // The only copy at rest is the secret store's entry.
+    expect(existsSync(join(root, "integration"))).toBe(false);
   });
 });

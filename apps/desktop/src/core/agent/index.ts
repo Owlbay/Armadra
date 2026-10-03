@@ -144,8 +144,9 @@ export function install(context: CoreContext): CollabContext {
   };
   assembled = withHandoff;
   setControlDispatcher(createControlDispatcher(withHandoff));
-  // ama 的模型密钥（协调 Agent §7）：存在密钥后端，启动前由启动路径写成 0600
-  // 的 auth.json。读后端是异步的（钥匙串是个进程），装配时先在后台读一遍。
+  // ama 的模型密钥（协调 Agent §7、契约 §12.4）：只存在密钥后端；画布启动器
+  // `run/ama` 凭节点 token 经 hook 通道兑换、只设给 ama 进程。读后端是异步的
+  // （钥匙串是个进程），装配时先在后台读一遍。
   const amaKeys = new AmaCredentials(secretsFor(context).backend);
   setAmaCredentials(amaKeys);
   installRoutes({

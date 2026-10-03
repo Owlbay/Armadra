@@ -988,6 +988,13 @@ export const ROUTES: readonly RouteEntry[] = [
     implemented: true,
   },
   {
+    // 契约 §12.4：画布启动器 `run/ama` 兑换 ama 的模型密钥。同一道门，外加节点是 ama。
+    path: "/credential/ama",
+    methods: ["POST"],
+    surface: "hook",
+    implemented: true,
+  },
+  {
     // R6c: a browser node on a shell with no window. The desktop build never
     // answers it — there the page is a `<webview>` the person is looking at.
     path: "/api/workspaces/{workspaceId}/browser/{nodeId}/stream",

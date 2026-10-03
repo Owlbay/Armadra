@@ -467,8 +467,6 @@ describe("ama's injection (coordinator-agent §2.4)", () => {
       instructions: [layout.instructions],
       skillDirs: [join(dataDir, "integration", "ama", "skills")],
       config: layout.config,
-      authFile: join(dataDir, "integration", "ama", "auth.json"),
-      authEnv: false,
       sessionDir: join(dataDir, "ama", "sessions"),
     });
     expect(JSON.parse(readFileSync(layout.config as string, "utf8"))).toEqual({
@@ -479,8 +477,20 @@ describe("ama's injection (coordinator-agent §2.4)", () => {
     expect(existsSync(layout.skill)).toBe(true);
     expect(readFileSync(layout.instructions as string, "utf8")).not.toBe("");
     // The key file is the launch path's, never an artifact.
-    expect(report.written).not.toContain(layout.authFile);
-    expect(existsSync(layout.authFile as string)).toBe(false);
+    // The launcher exchanges ama's keys on the hook surface; the names it may
+    // set are ama's own, and no value is in it.
+    if (!windows) {
+      const launcher = launcherText("ama");
+      expect(launcher).toContain(hookBin);
+      expect(launcher).toContain(" credential --ama)");
+      expect(launcher).toContain("AMA_API_KEY_DEEPSEEK)");
+    }
+    // No key file at all: the keys reach ama on its process environment.
+    expect(profile.authFile).toBeUndefined();
+    expect(existsSync(join(layout.dir, "auth.json"))).toBe(false);
+    expect(report.written.some((path) => path.endsWith("auth.json"))).toBe(
+      false,
+    );
     const marker = readFileSync(layout.marker, "utf8");
     expect(marker).not.toContain("auth.json");
 

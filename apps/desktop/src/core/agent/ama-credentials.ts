@@ -1,6 +1,5 @@
 import type { CoreServer } from "../http/server";
 import type { HandlerResult, RouteMatch, CoreRequest } from "../http/router";
-import { writeSecret } from "../paths";
 import {
   type SecretBackend,
   type SecretBackendKind,
@@ -12,15 +11,18 @@ import { DomainError, badRequest, jsonObject } from "../workspaces/support";
 /**
  * The model keys of the bundled `ama` (docs/design/coordinator-agent.md §7).
  *
- * Stored per provider in the secret backend (`armadra-ama-<provider>`), and
- * handed to ama only as a file: before every canvas start the launch path
- * writes `<data>/integration/ama/auth.json` (0600, directory 0700) and the
- * profile names its path. Never in the PTY environment, never on the launch
- * line, never in `injection.json`, never in an API answer — the routes say
- * whether a key is set and where it lives, and nothing else.
+ * Stored per provider in the secret backend (`armadra-ama-<provider>`) and
+ * nowhere else at rest. They reach ama the way node credentials reach a CLI
+ * (contract §20.4, §12.4): the canvas launcher `run/ama` runs
+ * `armadra-hook credential --ama`, which presents this node's verified token
+ * on the local hook surface and gets `AMA_API_KEY_<PROVIDER>=<key>` lines back;
+ * the launcher sets them on the ama process alone and `exec`s it. Never on
+ * disk, never in the node shell's environment, never on the launch line or in
+ * a log, never in a `/api` answer — those say whether a key is set and where
+ * it lives, and nothing else. ama strips every `AMA_*` variable from the
+ * processes it starts.
  *
- * Reading the backend is asynchronous (a keychain is a process) and the launch
- * path is not, so the values are held here: loaded once at assembly and kept
+ * The values are held in memory once read (a keychain is a process), and kept
  * current by every write through {@link AmaCredentials.set} / `clear`.
  */
 
@@ -67,14 +69,24 @@ export interface AmaCredentialStatus {
   }[];
 }
 
-/** ama's `auth.json` (its `AuthFile`, API-key entries only). */
-export function amaAuthFile(keys: ReadonlyMap<string, string>): string {
-  const providers: Record<string, { apiKey: string }> = {};
-  for (const provider of AMA_KEY_PROVIDERS) {
-    const key = keys.get(provider);
-    if (key !== undefined) providers[provider] = { apiKey: key };
-  }
-  return `${JSON.stringify({ version: 1, providers }, null, 2)}\n`;
+/**
+ * The variable ama reads one provider's key from: its own
+ * `AMA_API_KEY_<PROVIDER>` (every built-in lists one in its `envKeys`), not
+ * the vendor's name — a vendor variable the user's shell already exports is
+ * left as it is.
+ */
+export function amaKeyVariable(provider: AmaKeyProvider): string {
+  return `AMA_API_KEY_${provider.toUpperCase()}`;
+}
+
+/** Every name the launcher may set: it refuses any other in an answer. */
+export const AMA_KEY_VARIABLES: readonly string[] =
+  AMA_KEY_PROVIDERS.map(amaKeyVariable);
+
+/** One `NAME=value` the launcher sets on the ama process. */
+export interface AmaKeyVariable {
+  readonly variable: string;
+  readonly value: string;
 }
 
 export class AmaCredentials {
@@ -122,13 +134,19 @@ export class AmaCredentials {
   }
 
   /**
-   * Writes ama's `auth.json` from what is held, 0600 in a 0700 directory.
-   * Synchronous: the launch path calls it right before the terminal starts.
-   * An empty `providers` is written too, so a key cleared in the settings is
-   * gone from the file at the next start.
+   * The set keys as the variables ama reads — for the hook surface's
+   * `/credential/ama` and nothing else. A value with a line break cannot be
+   * one `NAME=value` line and is left out.
    */
-  writeAuthFile(path: string): void {
-    writeSecret(path, amaAuthFile(this.keys));
+  async variables(): Promise<AmaKeyVariable[]> {
+    await this.load();
+    const out: AmaKeyVariable[] = [];
+    for (const provider of AMA_KEY_PROVIDERS) {
+      const value = this.keys.get(provider);
+      if (value === undefined || /[\r\n\0]/.test(value)) continue;
+      out.push({ variable: amaKeyVariable(provider), value });
+    }
+    return out;
   }
 }
 
