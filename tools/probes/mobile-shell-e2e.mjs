@@ -195,30 +195,50 @@ function simulator(name) {
   throw new Error("没有可用的 iPhone 模拟器");
 }
 
-async function ios(link) {
+const UI_TEST = "AppUITests/ConnectFlowUITests";
+
+/** 配对票只有两分钟：先把要编译的都编完、跑完「没有 Gateway」那条，再现铸一张。 */
+async function ios(mint) {
   const target = simulator(device);
   step("iOS 模拟器", target);
   // 先自己起好：xcodebuild 跑完不关它，之后才读得到 App 的设备日志。
   await run("simulator-boot", "xcrun", ["simctl", "boot", target]);
-  const project = join(root, "apps/mobile/ios/App/App.xcodeproj");
-  const code = await run(
-    "xcodebuild-test",
+  const common = [
+    "-project",
+    join(root, "apps/mobile/ios/App/App.xcodeproj"),
+    "-scheme",
+    "App",
+    "-configuration",
+    "Debug",
+    "-destination",
+    `platform=iOS Simulator,name=${target}`,
+    "-derivedDataPath",
+    join(output, "DerivedData"),
+  ];
+  const built = await run("xcodebuild-build", "xcodebuild", [
+    "build-for-testing",
+    ...common,
+  ]);
+  check(built === 0, "模拟器构建（本地签名）", `xcodebuild exit ${built}`);
+  if (built !== 0) return;
+  const first = await run("xcodebuild-test-1", "xcodebuild", [
+    "test-without-building",
+    ...common,
+    "-resultBundlePath",
+    join(output, "AppUITests-1.xcresult"),
+    `-only-testing:${UI_TEST}/test1WithoutAGatewayTheAppOpensOnTheConnectScreen`,
+  ]);
+  check(first === 0, "XCUITest：没有 Gateway 时是连接页", `exit ${first}`);
+  const link = await mint();
+  const second = await run(
+    "xcodebuild-test-2",
     "xcodebuild",
     [
-      "test",
-      "-project",
-      project,
-      "-scheme",
-      "App",
-      "-configuration",
-      "Debug",
-      "-destination",
-      `platform=iOS Simulator,name=${target}`,
-      "-derivedDataPath",
-      join(output, "DerivedData"),
+      "test-without-building",
+      ...common,
       "-resultBundlePath",
-      join(output, "AppUITests.xcresult"),
-      "-only-testing:AppUITests",
+      join(output, "AppUITests-2.xcresult"),
+      `-only-testing:${UI_TEST}/test2PairsThroughThePinnedGatewayAndOpensTheCanvas`,
     ],
     { env: { ...process.env, TEST_RUNNER_ARMADRA_PAIR_LINK: link } },
   );
@@ -230,36 +250,46 @@ async function ios(link) {
     "log",
     "show",
     "--last",
-    "10m",
+    "15m",
     "--style",
     "compact",
     "--predicate",
-    'subsystem == "dev.armadra.mobile" OR process == "App"',
+    'subsystem == "dev.armadra.mobile"',
   ]);
   check(
-    code === 0,
-    "XCUITest：连接页 → 配对 → 画布",
-    `xcodebuild exit ${code}`,
+    second === 0,
+    "XCUITest：深链 → 钉扎 → 配对 → 画布 → 重开仍在画布",
+    `exit ${second}`,
   );
 }
 
-async function android(link, port) {
+async function android(mint, port) {
   const reversed = await run("adb-reverse", "adb", [
     "reverse",
     `tcp:${port}`,
     `tcp:${port}`,
   ]);
   check(reversed === 0, "adb reverse 把模拟器回环接到宿主", `tcp:${port}`);
+  const gradlew = join(root, "apps/mobile/android/gradlew");
+  const cwd = join(root, "apps/mobile/android");
+  const built = await run(
+    "gradle-build",
+    gradlew,
+    [":app:assembleDebug", ":app:assembleDebugAndroidTest", "--stacktrace"],
+    { cwd },
+  );
+  check(built === 0, "debug APK 与插桩 APK", `gradle exit ${built}`);
+  if (built !== 0) return;
+  const link = await mint();
   const code = await run(
     "gradle-connected",
-    join(root, "apps/mobile/android/gradlew"),
+    gradlew,
     [
       ":app:connectedDebugAndroidTest",
       `-Pandroid.testInstrumentationRunnerArguments.armadraPairLink=${link}`,
-      "--no-daemon",
       "--stacktrace",
     ],
-    { cwd: join(root, "apps/mobile/android") },
+    { cwd },
   );
   // 失败时最有用的是 WebView 控制台与插件自己的几行（不含任何密钥）。
   await run("logcat", "adb", [
@@ -267,11 +297,13 @@ async function android(link, port) {
     "-d",
     "-s",
     "ArmadraNative:*",
-    "Capacitor:*",
-    "Capacitor/Console:*",
     "chromium:*",
   ]);
-  check(code === 0, "插桩用例：连接页 → 配对 → 画布", `gradle exit ${code}`);
+  check(
+    code === 0,
+    "插桩用例：连接页 → 钉扎 → 配对 → 画布 → 重开仍在画布",
+    `gradle exit ${code}`,
+  );
 }
 
 await h.run(async () => {
@@ -307,21 +339,24 @@ await h.run(async () => {
   );
   const origin = new URL(opened.origin);
 
-  const pairing = JSON.parse(
-    (
-      await local(base, "POST", "/api/gateway/pairing", {
-        deviceName: `mobile-shell-e2e ${platform}`,
-      })
-    ).body,
-  );
-  check(
-    typeof pairing.deepLink === "string" &&
-      pairing.deepLink.startsWith("armadra://pair?") &&
-      pairing.deepLink.includes(`fp=${pairing.fingerprint}`),
-    "配对载荷带原生深链与信任锚指纹",
-    pairing.fingerprint,
-  );
+  const mint = async () => {
+    const pairing = JSON.parse(
+      (
+        await local(base, "POST", "/api/gateway/pairing", {
+          deviceName: `mobile-shell-e2e ${platform}`,
+        })
+      ).body,
+    );
+    check(
+      typeof pairing.deepLink === "string" &&
+        pairing.deepLink.startsWith("armadra://pair?") &&
+        pairing.deepLink.includes(`fp=${pairing.fingerprint}`),
+      "配对载荷带原生深链与信任锚指纹（现铸，两分钟内用）",
+      pairing.fingerprint,
+    );
+    return pairing.deepLink;
+  };
 
-  if (platform === "ios") await ios(pairing.deepLink);
-  else await android(pairing.deepLink, origin.port);
+  if (platform === "ios") await ios(mint);
+  else await android(mint, origin.port);
 });
