@@ -57,6 +57,7 @@ import {
   INJECTED_ENV,
   PROBE_TOKEN,
   Recorder,
+  TEARDOWN_CHECKS,
   diffSnapshots,
   launchLine,
   loopLine,
@@ -290,9 +291,16 @@ async function waitFor(what, test, { timeout = 60_000, interval = 500 } = {}) {
 
 /* ----------------------------------- CDP ----------------------------------- */
 
-async function attachToRenderer(port) {
+/**
+ * 调试端口上应用自己的回环页面。应用退了、或 core 起不来（壳会弹一个模态错误框，
+ * 页面永远不出现）时立刻放弃，原因来自 `dead()`。
+ */
+async function attachToRenderer(port, dead = () => undefined) {
   let seen = [];
-  for (let attempt = 0; attempt < 240; attempt += 1) {
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    const reason = dead();
+    if (reason !== undefined) throw new Error(reason);
     try {
       const targets = await (
         await fetch(`http://127.0.0.1:${port}/json/list`, {
@@ -481,7 +489,15 @@ class App {
     this.child.stdout.on("data", (chunk) => (this.output += chunk));
     this.child.stderr.on("data", (chunk) => (this.output += chunk));
     this.exited = new Promise((done) => this.child.once("exit", done));
-    const url = await attachToRenderer(port);
+    const url = await attachToRenderer(port, () => {
+      if (this.child.exitCode !== null)
+        return `应用退出了（${this.child.exitCode}）：${this.output.slice(-1500)}`;
+      const failed =
+        /Runtime process exited before becoming ready|core could not start/.exec(
+          this.output,
+        );
+      return failed ? `core 没起来：${this.output.slice(-1500)}` : undefined;
+    });
     this.page = await cdp(url);
     const endpoints = await waitFor(
       "页面上的桥",
@@ -630,14 +646,20 @@ async function runFull(options, result, record, out) {
   let installDir;
   let exe = options.app;
 
-  try {
+  let hostPid;
+  let dataDir;
+  let installed = false;
+  // 中途放弃时收尾的几项照样做：已经装上的要卸掉，用户配置照样比对。
+  const abort = (reason) => record.skipRest(reason, TEARDOWN_CHECKS);
+
+  const phases = async () => {
     say("预检");
     const preflightOk = await record.check("preflight.platform", async () => ({
       ok: isWindows && Number(process.versions.node.split(".")[0]) >= 22,
       detail: { platform: process.platform, node: process.version },
     }));
     if (!preflightOk) {
-      record.skipRest("不是 Windows 或 Node 太旧");
+      abort("不是 Windows 或 Node 太旧");
       return;
     }
     result.machine = machineInfo();
@@ -657,9 +679,7 @@ async function runFull(options, result, record, out) {
         };
       });
       if (!ok) {
-        record.skipRest(
-          "机器上已有 Armadra 安装；先卸载它，或用 --app 对着它跑",
-        );
+        abort("机器上已有 Armadra 安装；先卸载它，或用 --app 对着它跑");
         return;
       }
     } else {
@@ -707,9 +727,10 @@ async function runFull(options, result, record, out) {
         };
       });
       if (!ok) {
-        record.skipRest("没装上");
+        abort("没装上");
         return;
       }
+      installed = true;
     } else {
       record.skip("install.silent", "--app 模式");
       installDir = dirname(exe);
@@ -769,7 +790,7 @@ async function runFull(options, result, record, out) {
     };
 
     say("起应用");
-    const dataDir = join(work, "data");
+    dataDir = join(work, "data");
     const home = join(work, "home");
     mkdirSync(dataDir, { recursive: true });
     mkdirSync(home, { recursive: true });
@@ -796,8 +817,7 @@ async function runFull(options, result, record, out) {
       };
     });
     if (!started) {
-      record.skipRest("应用没起来");
-      result.appOutput = app.output.slice(-4000);
+      abort("应用没起来");
       return;
     }
 
@@ -823,9 +843,7 @@ async function runFull(options, result, record, out) {
     });
     const workspaceId = created.body?.id;
     if (typeof workspaceId !== "string") {
-      record.skipRest(
-        `建不了工作空间：${JSON.stringify(created).slice(0, 300)}`,
-      );
+      abort(`建不了工作空间：${JSON.stringify(created).slice(0, 300)}`);
       return;
     }
     const shells = [
@@ -886,7 +904,6 @@ async function runFull(options, result, record, out) {
       };
     });
 
-    let hostPid;
     await record.check("sessionHost.process", async () => {
       const processes = appProcesses(exe);
       const host = processes.find(
@@ -1313,20 +1330,24 @@ async function runFull(options, result, record, out) {
         detail,
       };
     });
+  };
 
-    await record.check("app.logs", async () => {
-      const found = logFindings(dataDir);
-      return {
-        ok: true,
-        warn: found.findings.length > 0,
-        detail: { ...found, findings: found.findings.slice(0, 30) },
-      };
-    });
-
+  const teardown = async () => {
     say("收尾");
-    await app.kill();
-    app = undefined;
+    if (app !== undefined) {
+      await app.kill();
+      app = undefined;
+    }
     // 会话都终止了，宿主会自己空闲退出；等一会儿，还在就结束它（卸载要删它的映像）。
+    if (exe !== undefined && dataDir !== undefined && isWindows) {
+      try {
+        hostPid ??= appProcesses(exe).find((row) =>
+          row.commandLine.includes(dataDir),
+        )?.pid;
+      } catch {
+        // 找不到就算了。
+      }
+    }
     if (hostPid) {
       try {
         await waitFor("会话宿主空闲退出", () => !alive(hostPid), {
@@ -1341,7 +1362,21 @@ async function runFull(options, result, record, out) {
       }
     }
 
-    if (options.installer) {
+    if (
+      record.entry("app.logs").status === "pending" &&
+      dataDir !== undefined
+    ) {
+      await record.check("app.logs", async () => {
+        const found = logFindings(dataDir);
+        return {
+          ok: true,
+          warn: found.findings.length > 0,
+          detail: { ...found, findings: found.findings.slice(0, 30) },
+        };
+      });
+    }
+
+    if (installed) {
       await record.check("uninstall.silent", async () => {
         const uninstaller = newestUninstaller(installDir);
         if (uninstaller === undefined)
@@ -1383,29 +1418,34 @@ async function runFull(options, result, record, out) {
           },
         };
       });
-    } else {
-      record.skip("uninstall.silent", "--app 模式");
+    } else if (record.entry("uninstall.silent").status === "pending") {
+      record.skip(
+        "uninstall.silent",
+        options.installer ? "没有装上" : "--app 模式",
+      );
     }
+  };
+
+  let appOutput = "";
+  try {
+    await phases();
+  } catch (error) {
+    result.error = error instanceof Error ? error.stack : String(error);
+    abort(`中止：${error instanceof Error ? error.message : String(error)}`);
   } finally {
-    for (const undo of cleanup.reverse()) {
-      try {
-        await undo();
-      } catch {
-        // 尽力而为。
-      }
+    appOutput = app?.output ?? "";
+    try {
+      await teardown();
+    } catch (error) {
+      result.teardownError =
+        error instanceof Error ? error.message : String(error);
     }
     const after = snapshot(targets);
     const changed = diffSnapshots(before, after);
-    const entry = record.entry("userConfig.untouched");
-    if (entry.status === "pending")
-      record.set(
-        "userConfig.untouched",
-        changed.length === 0 ? "pass" : "fail",
-        {
-          watched: targets.length,
-          changed,
-        },
-      );
+    record.set("userConfig.untouched", changed.length === 0 ? "pass" : "fail", {
+      watched: targets.length,
+      changed,
+    });
     record.skipRest("前面的步骤中止");
     const failed = result.checks.some((check) => check.status === "fail");
     if (!(options.keep && failed)) {
@@ -1417,7 +1457,7 @@ async function runFull(options, result, record, out) {
     } else {
       result.leftover = work;
     }
-    writeFileSync(join(out, "app-output.log"), app?.output ?? "");
+    writeFileSync(join(out, "app-output.log"), appOutput);
   }
 }
 

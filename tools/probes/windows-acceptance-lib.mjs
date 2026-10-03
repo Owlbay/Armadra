@@ -62,6 +62,13 @@ export const CHECKS = [
 
 const CHECK_IDS = new Set(CHECKS.map((check) => check.id));
 
+/** 中途放弃时也要做的收尾项：日志、卸载、用户配置比对。 */
+export const TEARDOWN_CHECKS = [
+  "app.logs",
+  "uninstall.silent",
+  "userConfig.untouched",
+];
+
 /* --------------------------------- options -------------------------------- */
 
 export function parseArgs(argv) {
@@ -257,9 +264,11 @@ export class Recorder {
     }
   }
 
-  skipRest(reason) {
+  /** 还没跑的项都记 skip；`keep` 里的留给收尾去做。 */
+  skipRest(reason, keep = []) {
     for (const check of this.result.checks)
-      if (check.status === "pending") this.skip(check.id, reason);
+      if (check.status === "pending" && !keep.includes(check.id))
+        this.skip(check.id, reason);
   }
 }
 
