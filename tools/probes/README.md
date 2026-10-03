@@ -157,6 +157,16 @@ node tools/probes/workflow-e2e.mjs [输出目录]
 
 不开页面、不用真账号：临时 HOME 里起 core，注册一个假 CLI 的自定义 Agent，经 `/api/workflows/*` 建两步模板（prompt → collect）并起跑，断言运行 `succeeded`、产出与收件箱；再经控制 socket 配对出本机主人，在 `/api/automations/*` 定义一个「运行工作流」的一次性计划（契约 §15.6）并激活，等调度到点起跑，断言多出一次带计划参数的成功运行、自动化运行落 `SUCCEEDED` 且只起了一次。产物默认在 `target/workflow-e2e/`。
 
+## 崩溃上报对 GlitchTip（dev-stack）
+
+```sh
+pnpm dev-stack up glitchtip
+pnpm libs:build
+node tools/probes/crash-report-e2e.mjs [输出目录]   # 默认 target/crash-report-e2e/
+```
+
+[外部服务](../../docs/design/external-services.md) §11.2：真 `@sentry/node`，经 core 的请求错误路径（500 → `platform.reportError` → `apps/server/src/diagnostics.ts`）发到 dev-stack 的 GlitchTip，再用它的 API 取回事件，断言里面没有环境变量的值与名字、家目录、路径里的用户名、令牌、ANSI / 终端输出、用户与 extra，面包屑没有 data；没配 DSN 时同一路径不发。组织、项目与只读令牌由容器里的 `manage.py shell` 现建。用例本体是 `apps/server/src/diagnostics.devstack.test.ts`（平时 skipped），e2e 清单里是 B 档的 dev-stack 条目。
+
 ## Agent 协作端到端（真 Claude Code + 真 Codex CLI）
 
 用真 CLI 把投递、依赖编排、组队与节能休眠走一遍。页面必须真的挂着这些终端节点：CLI 起来时的终端查询由 xterm 经页面写回 PTY，[状态文档](../../docs/status/typescript-core-status.md) §31.7 那个「Codex 首条任务投不出去」只在页面挂着时出现。每个 Agent 节点都由页面挂载、由页面敲启动行。

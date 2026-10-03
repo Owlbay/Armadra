@@ -23,6 +23,9 @@ The \`armadra-hook canvas|context|browser <verb>\` commands in the canvas rules 
 拆任务给别的 Agent：\`canvas_team\` 或 \`canvas_open_agent\`；成员的结论用 \`canvas_inbox\` 读、\`canvas_ack\` 确认；汇总写进 \`canvas_sticky\`。
 To split work, use \`canvas_team\` / \`canvas_open_agent\`; read members' results with \`canvas_inbox\`, acknowledge with \`canvas_ack\`, and write the summary with \`canvas_sticky\`.
 
+要把一件事交给某个 CLI 并等它的结果，用 \`task\`（\`agent\` 填 \`claude\`、\`codex\` 等或 \`custom:<id>\`）：它在画布上起一个成员节点、把结果带回来。成员停在权限请求上时等人处理，不要替人回答。
+To hand one job to a CLI and wait for its result, use \`task\` with \`agent\` set to \`claude\`, \`codex\`, … or \`custom:<id>\`: it opens a member node on the board and brings the result back. When the member waits on a permission request, a person answers it — never you.
+
 ${TRUST_RULE}`;
 }
 

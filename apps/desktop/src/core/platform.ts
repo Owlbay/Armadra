@@ -1,5 +1,12 @@
 import { execFile } from "node:child_process";
 
+import {
+  CRASH_REPORT_ENV,
+  type ErrorSource,
+  crashReportMessage,
+  scrubContext,
+  scrubText,
+} from "./diagnostics/crash";
 import type { SecretBackend } from "./secrets/backend";
 
 /**
@@ -44,6 +51,51 @@ export interface CorePlatform {
    * request — the core does not wait for a shell to answer.
    */
   notify(channel: string, payload: unknown): void;
+  /**
+   * 一个没人接住的错误（外部服务 §11.2）。壳注入：打开了崩溃上报的壳把它交给
+   * Sentry 协议的 SDK（剥离之后）；没打开、或者壳没给，就只写本地日志——见
+   * {@link reportError}。core 自己不 import 任何 SDK。
+   */
+  reportError?(error: unknown, context: ErrorContext): void;
+}
+
+/** 报错时带的上下文：只有来源，别的一概不带（路径、请求体都可能含用户数据）。 */
+export interface ErrorContext {
+  readonly source: ErrorSource;
+}
+
+/**
+ * 报一个错误。壳给了 `reportError` 就交给它，否则写一行本地日志。日志里只有
+ * 剥离过的错误名与消息。
+ */
+export function reportError(
+  platform: Pick<CorePlatform, "log" | "reportError">,
+  error: unknown,
+  context: ErrorContext,
+): void {
+  try {
+    if (platform.reportError !== undefined) {
+      platform.reportError(error, context);
+      return;
+    }
+    logError(platform.log, error, context);
+  } catch {
+    // 报错本身不能再抛：调用点多半在 catch 里或进程退出的路上。
+  }
+}
+
+export function logError(
+  log: CoreLog,
+  error: unknown,
+  context: ErrorContext,
+): void {
+  const scrub = scrubContext();
+  const name = error instanceof Error ? error.name : "Error";
+  const message = error instanceof Error ? error.message : String(error);
+  log.error("unhandled error", {
+    source: context.source,
+    error: `${name}: ${scrubText(message, scrub)}`,
+  });
 }
 
 export interface CoreLog {
@@ -118,7 +170,22 @@ export function nodePlatform(options: {
     log,
     openExternal: (url) => openExternal(url),
     notify: (channel, payload) => log.debug("notify", { channel, payload }),
+    reportError: (error, context) => {
+      logError(log, error, context);
+      forwardToShell(error, context);
+    },
   };
+}
+
+/**
+ * 桌面壳 spawn 的 core：壳设了 {@link CRASH_REPORT_ENV}，错误剥离后经 fork 的
+ * IPC 交给壳（壳决定发不发——开关与 DSN 只在壳那边读）。不是被这样起的 core
+ * 什么都不发。
+ */
+function forwardToShell(error: unknown, context: ErrorContext): void {
+  if (process.env[CRASH_REPORT_ENV] !== "1") return;
+  if (typeof process.send !== "function" || !process.connected) return;
+  process.send(crashReportMessage(error, context.source, scrubContext()));
 }
 
 /**

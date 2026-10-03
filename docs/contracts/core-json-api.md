@@ -670,7 +670,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 15. 工作流与 runners：`/api/workflows/*`
 
-协调者把一次协作沉淀成**草案**，人确认后成为**模板**，模板按参数**运行**（设计 `design/coordinator-agent.md` §5、`design/completion-architecture.md` §5.4）。表在迁移 `0034_workflow.sql`（`workflow_drafts` / `workflow_templates` / `workflow_runs` / `workflow_run_steps` / `workflow_task_runs`）。zod 在 `packages/shared/src/api/workflows.ts`，core 的手写校验在 `core/workflow/draft.ts`，两边规则相同。§15.5（`wait` 动词与 `workflow_task_runs` 行）由 G2-4、§15.6（自动化目标 `WORKFLOW_RUN`）由 G2-3 填写。
+协调者把一次协作沉淀成**草案**，人确认后成为**模板**，模板按参数**运行**（设计 `design/coordinator-agent.md` §5、`design/completion-architecture.md` §5.4）。表在迁移 `0034_workflow.sql`（`workflow_drafts` / `workflow_templates` / `workflow_runs` / `workflow_run_steps` / `workflow_task_runs`）。zod 在 `packages/shared/src/api/workflows.ts`，core 的手写校验在 `core/workflow/draft.ts`，两边规则相同。§15.5 是 `wait` 动词与 `workflow_task_runs` 行；§15.6（自动化目标 `WORKFLOW_RUN`）由 G2-3 填写。
 
 权限按前缀（`http/route-scopes.ts`）：读 `canvas:read`，写 `agent:launch`。路径里没有工作空间，服务器壳上的路由门按草案 / 运行 / 画板查出画布再判，成员的逐条权限与关卡答复见 §23.3。失败一律 `{ code, message }`，`code` 是 snake_case 的稳定码。
 
@@ -855,6 +855,59 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - **闸门**按模板（`automation_gates.node_id = "workflow:<templateId>"`）：同一个模板同一时刻只有一个定时运行在跑，`FORBID` / `QUEUE_ONE` 照常生效。
 - **起跑即投递**：工作流运行的 id 由这次投递的 `operationId` 推出（SHA-256 → UUID 形），重试与超时之后的复核认得出「已经起过」，不会起第二次。起跑当场被拒（§15.3 那几种）记 `FAILED`，理由码是 `WORKFLOW_` + 拒绝码大写（如 `WORKFLOW_PERMISSION_MODE_UNSUPPORTED`）。
 - **收据跟着运行走**：运行在跑记 `RUNNING`（理由 `WORKFLOW_RUNNING` / 有关卡在等人时 `WORKFLOW_WAITING`），结束记 `SUCCEEDED` / `FAILED` / `CANCELLED`（理由 `WORKFLOW_SUCCEEDED` / `WORKFLOW_FAILED` / `WORKFLOW_CANCELLED`）；自动化运行因此从起跑占着闸门直到工作流运行结束。
+
+### 15.5 `wait` 动词、`open-agent --task-id` 与 `workflow_task_runs`
+
+协调者 `ama` 的 `task(agent=<id>)` 经宿主适配器的 runner 落成画布节点（设计 `design/completion-architecture.md` §5.3）。两处 hook 面控制动词（`/control/<verb>`，调用方是协调者节点，要节点令牌）：
+
+**`open-agent` 的两个参数**
+
+- `task-id`：幂等键，1–100 个字母、数字或 `.` `_` `:` `-`（runner 用 `<ama 会话 id>:<ama 任务 id>`）。同一个协调者再用同一个 `task-id` 起：节点还在就答回那个节点（`result.reused: true`，不建、不投、不起）；节点已删就新建，任务行换绑过去。被别的协调者用过回 `409 task_conflict`。带它时 core 记一行 `workflow_task_runs`（`runner_id` = `agent`），并把节点交给依赖编排的启动路径起终端、敲启动行（与工作流角色节点同一条，页面开不开都一样）；`result` 多 `taskRunId` 与 `reused`。
+- `name`：节点标题，与 `title` 同义（两者都给时取 `title`）。
+- 权限模式这个 CLI 没有：`400 permission_mode_unsupported`，附 `supported: [...]`（与 §15.3 同码；`team` 同此）。
+
+**`wait`**
+
+| 参数      | 说明                                                                 |
+| --------- | -------------------------------------------------------------------- |
+| `task`    | 必填，`open-agent --task-id` 给过的 id                               |
+| `node`    | 可选，任务所在节点；对不上回 `409 task_node_mismatch`（附 `nodeId`） |
+| `since`   | 上一次答回来的 `since` 原样；第一次省略。格式不对回 `400`            |
+| `timeout` | 秒，0–60，缺省 30；`30s` 也收。超出回 `400`                          |
+
+只有起这个任务的协调者能等它（别的节点 `403 forbidden`），没有这个任务 `404 task_not_found`。答复在 `result` 里：
+
+```json
+{
+  "status": "blocked",
+  "since": "42-blocked",
+  "taskId": "sess:t1",
+  "nodeId": "node-m",
+  "approvalId": "node-m-1730000000000-123",
+  "reason": "approval",
+  "events": [
+    {
+      "type": "post",
+      "seq": 42,
+      "key": "task:sess:t1:progress",
+      "body": "…",
+      "at": "2026-10-03T08:00:00.000Z"
+    },
+    { "type": "status", "state": "blocked", "at": "2026-10-03T08:00:01.000Z" }
+  ]
+}
+```
+
+- `status` 五值：`running`（在做，或第一条任务还在排队）/ `done` / `failed` / `blocked`（成员停在权限请求上，带 `approvalId`；**只报告，动词与 runner 都不替人回答**）/ `needsInput`（成员在等人回话，`reason: "question"`）。
+- `done`：成员 `post` 了键为 `task:<taskId>:result`（或 `task:<taskId>:result:<轮次>`）的消息，`result: { text, key }` 是那条正文；或者投递之后成员这一轮干净地结束（判定同 §8 的依赖边），此时没有 `result`，runner 改读 `context summary`。
+- `failed` 的 `reason`：`nodeDeleted`、`turnFailed` / `turnInterrupted`、投递排队项过期或被取消时它最后一次的码（如 `TARGET_STARTING`）。
+- `events`：游标之后成员发出的、键是 `task:<taskId>` 或以 `task:<taskId>:` 开头的 `post`（`seq` 是收件箱序号，递增，一次最多 32 条，不漏不重），以及状态变化（`agent_status.state` 与游标里记的不同才报一条）。没有新事件、也没结束时，请求挂到 `timeout` 再答当时的状态；`since` 不变。
+- `since` 是不透明字符串（现为 `<post 序号>-<状态>`），调用方原样带回。
+- 结束（`done` / `failed`）时 core 写 `workflow_task_runs` 的 `status`、`ended_at` 与 `result_json`（`{ text }` 或 `{ reason }`，只写第一次），并把那条结果 `post` 标成已收——runner 已替协调者取走它，收件箱唤醒不再提示一遍。
+
+**`help`** 的 `result` 多一个 `agents`：这台机器上 `open-agent --agent` 认的 id（内置的与设置里的 `custom:*`）。ama 的适配器为其中每个内置 CLI（`ama` 除外：ama 把名为 `ama` 的 runner 当成它自己的子会话）与每个 `custom:*` 注册一个 runner。
+
+**审批**：`ama` 节点也注入 `ARMADRA_PERM_WAIT_SECS`（与 Claude 同一个开关 `hooks.replyApprovals`，ACP 会话不注入）。适配器的审批回答者按 §5.5 写 `<pending>/<id>.json`、带 `pendingId` 报 `tool_approval_requested`，轮询 `<id>.answer`；请求文件与上报只有工具名与原因，不带工具输入。等不到就让给 ama 自己在终端里的对话框。
 
 ## 16. 实时协同：`…/boards/{boardId}/sync` 与评论
 
