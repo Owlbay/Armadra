@@ -4,7 +4,7 @@ import type { AcpSessionUpdate, TerminalNodeData } from "@armadra/shared";
 
 import { onWorkspaceConnection, onWorkspaceEvent } from "@/api/events";
 import { useT } from "@/app/preferences-store";
-import { useAccess } from "@/app/use-access";
+import { useCanAnswer } from "@/app/use-access";
 import { isResolvedApproval } from "@/agent/status-store";
 import { useCanvasStore } from "@/store/canvas-store";
 import { Alert, AlertAction, AlertTitle } from "@/ui/alert";
@@ -204,9 +204,9 @@ export function SessionView({
 }) {
   const t = useT();
   const workspaceId = useCanvasStore((state) => state.workspace?.id ?? null);
-  const canAnswer = useAccess().can("approval:answer", workspaceId ?? "");
   const session = useAcpSession(nodeId, data);
   const sessionId = session.sessionId;
+  const canAnswer = useCanAnswer(workspaceId ?? "", sessionId);
   const log = useAcpLog(sessionId, nodeId);
   const connected = useConnected(workspaceId);
   const view = useAcpStore((state) =>
