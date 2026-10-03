@@ -16,7 +16,12 @@ import {
   internal,
   payloadTooLarge,
 } from "./errors";
-import { routeGuard } from "../identity/gate";
+import {
+  onAccessChanged,
+  requestIdentity,
+  routeGuard,
+  runAs,
+} from "../identity/gate";
 import { type HookHealth, NO_HOOK_SERVICE, healthDocument } from "./health";
 import { type CoreRequest, type HandlerResult, Router } from "./router";
 
@@ -39,6 +44,11 @@ import { type CoreRequest, type HandlerResult, Router } from "./router";
  *      has to bite while reading, not after.
  *   3. **Envelope.** Every answer is JSON; every failure is `{ code, message }`.
  */
+
+/**
+ * 授权变了、复核不过时关流用的码（与实时同步的 4403 同一个，契约 §16.1）。
+ */
+export const CLOSE_ACCESS_REVOKED = 4403;
 
 /** How long `close()` waits for a listener before giving up on it. */
 export const CLOSE_GRACE_MS = 2_000;
@@ -185,13 +195,19 @@ export class CoreServer {
         }
       }
     } catch (error) {
-      this.options.platform.log.error("request failed", {
-        path,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      // 没人接住的错误才走到这里；按 §11.2 报给壳（没开上报就只是这行日志）。
-      reportError(this.options.platform, error, { source: "http" });
-      answer = internal("核心处理请求时失败");
+      if (error instanceof SyntaxError) {
+        // 一份坏的 JSON 是调用方的错，不是 core 的。它的消息里引着请求体的
+        // 开头（可能正是一个凭据值），所以不进日志、不进崩溃上报。
+        answer = badRequest("请求体不是合法的 JSON");
+      } else {
+        this.options.platform.log.error("request failed", {
+          path,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        // 没人接住的错误才走到这里；按 §11.2 报给壳（没开上报就只是这行日志）。
+        reportError(this.options.platform, error, { source: "http" });
+        answer = internal("核心处理请求时失败");
+      }
     }
     this.send(
       response,
@@ -266,6 +282,11 @@ export class CoreServer {
   }
 
   /** 这条路径落在某个整段接管的前缀里（三张 JSON 面就是这么装的）。 */
+  /** 整段接管的前缀，按登记顺序（长的在前）。路由 scope 的覆盖率用例逐个问。 */
+  rawPrefixes(): readonly string[] {
+    return this.rawRoutes.map((route) => route.prefix);
+  }
+
   rawHandled(path: string): boolean {
     return this.rawRoutes.some((route) => path.startsWith(route.prefix));
   }
@@ -316,8 +337,27 @@ export class CoreServer {
         socket.destroy();
         return;
       }
+      // 升级时的那个人。长连接不会再经过任何请求级的门，所以授权一变（撤销
+      // 设备或会话、登出、停用账号、收回共享）就按同一道路由门复核一次，不过就
+      // 以 4403 关流——终端、语言服务、浏览器画面这些流自己不复核，靠的就是这里。
+      const identity = requestIdentity();
       this.websockets.handleUpgrade(request, socket, head, (connection) => {
         registration.open(connection, found.params, core);
+        if (identity === undefined) return;
+        const stop = onAccessChanged(() => {
+          if (connection.readyState !== connection.OPEN) return;
+          const subject =
+            identity.revalidate === undefined
+              ? identity.subject
+              : identity.revalidate();
+          const allowed =
+            subject !== undefined &&
+            runAs({ ...identity, subject }, () =>
+              routeGuard()(core, this.router.requiredScope("GET", path)),
+            ).allowed;
+          if (!allowed) connection.close(CLOSE_ACCESS_REVOKED, "forbidden");
+        });
+        connection.once("close", stop);
       });
     })();
   }

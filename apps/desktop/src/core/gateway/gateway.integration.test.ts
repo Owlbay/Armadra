@@ -500,3 +500,108 @@ describe("关掉即断流", () => {
     expect(reopened.tls.fingerprint).toBe(fingerprintOf(ca));
   });
 });
+
+describe("安全收尾（G3-8）", () => {
+  it("账号 / 组 / 共享的写路由在 Cookie 会话上要 CSRF（安全审查 M1）", async () => {
+    const withoutCsrf = (
+      method: string,
+      path: string,
+      body: unknown,
+    ): Promise<Answer> =>
+      remote(path, {
+        method,
+        body,
+        headers: { cookie: owner.cookie },
+      });
+    for (const [method, path, body] of [
+      ["POST", "/api/identity/principals", { displayName: "无 CSRF" }],
+      ["POST", "/api/identity/groups", { name: "无 CSRF" }],
+      ["POST", "/api/identity/invitations", { role: "viewer" }],
+      [
+        "PUT",
+        "/api/identity/grants",
+        {
+          workspaceId,
+          subjectKind: "principal",
+          subjectId: "0123456789abcdef0123456789abcdef",
+          role: "viewer",
+        },
+      ],
+    ] as const) {
+      const refused = await withoutCsrf(method, path, body);
+      expect(refused.status, `${method} ${path}`).toBe(403);
+    }
+    // 带上 CSRF 就过；读不要。
+    const created = await remote("/api/identity/groups", {
+      method: "POST",
+      person: owner,
+      body: { name: "带 CSRF" },
+    });
+    expect(created.status).toBe(201);
+    expect(
+      (
+        await remote("/api/identity/groups", {
+          headers: { cookie: owner.cookie },
+        })
+      ).status,
+    ).toBe(200);
+  });
+
+  it("原生 App 的 Bearer 写不要 CSRF（契约 §17.4）", async () => {
+    const payload = await pairing();
+    const paired = await remote("/api/identity/pair", {
+      method: "POST",
+      origin: APP,
+      body: { ticket: payload.ticket },
+    });
+    const bearer = (
+      JSON.parse(paired.body) as { native: { accessToken: string } }
+    ).native.accessToken;
+    const created = await remote("/api/identity/groups", {
+      method: "POST",
+      origin: APP,
+      bearer,
+      body: { name: "App" },
+    });
+    expect(created.status).toBe(201);
+  });
+
+  it("每个答案都带 HSTS 与 nosniff；接口是沙箱 CSP、缺省不缓存", async () => {
+    const api = await remote("/api/identity/session", { person: owner });
+    expect(api.status).toBe(200);
+    expect(api.headers["strict-transport-security"]).toMatch(/max-age=\d+/);
+    expect(api.headers["x-content-type-options"]).toBe("nosniff");
+    expect(String(api.headers["content-security-policy"])).toContain("sandbox");
+    expect(api.headers["cache-control"]).toBe("no-store");
+    // 门拒掉的答案同样带。
+    const refused = await remote("/api/workspaces", {
+      origin: "https://evil.example",
+    });
+    expect(refused.status).toBe(403);
+    expect(refused.headers["strict-transport-security"]).toMatch(/max-age/);
+    const page = await remote("/", { origin: null });
+    expect(page.headers["strict-transport-security"]).toMatch(/max-age/);
+    expect(String(page.headers["content-security-policy"])).toContain(
+      "default-src 'self'",
+    );
+    const anchor = await remote("/ca.crt", { origin: null });
+    expect(anchor.headers["strict-transport-security"]).toMatch(/max-age/);
+  });
+
+  it("对外服务的改动与配对票进审计，票本身不进（安全审查 M5）", async () => {
+    const payload = await pairing();
+    const audit = await remote("/api/identity/audit?action=gateway&limit=100", {
+      person: owner,
+    });
+    expect(audit.status).toBe(200);
+    const entries = (
+      JSON.parse(audit.body) as {
+        entries: { action: string; detail: unknown }[];
+      }
+    ).entries;
+    const actions = entries.map((entry) => entry.action);
+    expect(actions).toContain("gateway.configure");
+    expect(actions).toContain("gateway.pairing.issue");
+    expect(audit.body).not.toContain(payload.ticket);
+  });
+});

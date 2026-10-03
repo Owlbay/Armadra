@@ -7,6 +7,7 @@ import {
   SecretUnavailable,
 } from "../secrets";
 import { DomainError, badRequest, jsonObject } from "../workspaces/support";
+import { audit } from "../identity/audit";
 
 /**
  * The model keys of the bundled `ama` (docs/design/coordinator-agent.md §7).
@@ -243,6 +244,7 @@ export function installAmaCredentialRoutes(
     answered(async (match, request) => {
       const provider = providerOf(match);
       await credentials.set(provider, apiKeyOf(request));
+      audit({ action: "ama.credential.set", target: provider });
       return { status: 200, body: await credentials.status() };
     }),
   );
@@ -250,7 +252,9 @@ export function installAmaCredentialRoutes(
     "DELETE",
     "/api/agents/ama/credentials/{provider}",
     answered(async (match) => {
-      await credentials.clear(providerOf(match));
+      const provider = providerOf(match);
+      await credentials.clear(provider);
+      audit({ action: "ama.credential.clear", target: provider });
       return { status: 200, body: await credentials.status() };
     }),
   );

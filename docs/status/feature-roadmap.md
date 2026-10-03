@@ -180,7 +180,8 @@ Armadra 是 local-first 的 AI Coding 画布：把真实 CLI Agent（Claude Code
 | **桌面 Gateway**：设置 / 托盘开关、本地 CA / 指定文件 / ACME、二维码与链接配对、CA 安装引导、原生 App 的 Bearer 与一次性 WS 票、设备表      | ✅   | 补全 G1-10、G2-7、G3-11；契约 §17；没有 8 位配对码                                            |
 | 身份加固：口令策略、限流与锁定、passkey、TOTP 与恢复码、会话与锁定管理、审计筛选与 CSV 导出、两步登录页                                     | ✅   | 补全 G1-11、G2-8；契约 §18.1–§18.4、§18.6；passkey 在 IP 主机上如实不可用                     |
 | OAuth / OIDC / SSO：GitHub 与通用 OIDC，绑定、登录、白名单建号、SSO 登出                                                                    | ✅   | 补全 G1-12、G2-8；契约 §18.5；dex / Keycloak 测过，真应用见 §4                                |
-| 口令泄露检查（HIBP k-匿名）                                                                                                                 | ⬜   | 调用点在 `identity/policy.ts::checkBreach`，恒答 `skipped`；补全 G3-8 未合入                  |
+| 口令泄露检查（HIBP k-匿名，`auto / off / warn / block`，`auto` 在服务器壳与开了 Gateway 的桌面上按 `warn`，查不成只记审计）                 | ✅   | 补全 G3-8；契约 §18.1                                                                         |
+| 安全审查：中危及以上 9 条修复并有测试（跨画布节点、成员带 owner 凭据、SVG 资产、账号写 CSRF、长连接复核、配对限流、审计、Gateway 响应头）   | ✅   | 补全 G3-8；[安全审查](security-review-2026-10.md)；低危 10 条只列出                           |
 | Agent 权限角色：自己起的终端 operator 可驱动与答审批，别人的要 driver；创建者 = 触发者；ACP 与工作流按对象落到画布                          | ✅   | 补全 G2-9；契约 §23                                                                           |
 | Worker 舰队：版本与能力、过旧提示、健康记录、逐台 / 全部重新同步                                                                            | ✅   | 补全 G1-2、G3-6；契约 §21.2–§21.3                                                             |
 | 服务端性能基线（扇出、终端吞吐、实时板、RSS）与按平台比对                                                                                   | 🔶   | 补全 G3-6；[基线](server-performance-baseline.md)只有 `darwin-arm64`                          |

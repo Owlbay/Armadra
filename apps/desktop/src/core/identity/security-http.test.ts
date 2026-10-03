@@ -21,6 +21,7 @@ import { IdentityHttp } from "./http";
 import { totpAt } from "./mfa/totp";
 import { allScopes } from "./scopes";
 import { IdentityService } from "./service";
+import { startHibp } from "./hibp.fixture";
 import { SoftAuthenticator } from "./soft-authenticator.fixture";
 import { IdentityStore } from "./store";
 
@@ -244,6 +245,126 @@ describe("口令策略（§18.1）", () => {
         )
       ).status,
     ).toBe(201);
+  });
+});
+
+describe("凭据换会话的那几条也限流（§18.1）", () => {
+  it("配对票猜错 20 次后 429；只有失败才扣，成功的刷新不占桶", async () => {
+    const fixture = await harness();
+    const admin = await owner(fixture);
+    // 成功的请求不扣：连刷 25 次 CSRF 都过。
+    const refreshToken = await (async () => {
+      const ticket = fixture.service.issueBootstrap({
+        hostId: fixture.service.hostId(),
+        instanceId: INSTANCE,
+        origin: fixture.origin,
+        deviceName: "第二台",
+        scopes: allScopes(),
+      });
+      const paired = await call(fixture, "POST", "pair", {
+        ticket: ticket.ticket,
+      });
+      return ((await paired.json()) as { native: { refreshToken: string } })
+        .native.refreshToken;
+    })();
+    for (let index = 0; index < 25; index += 1) {
+      const renewed = await fetch(`${fixture.base}/api/identity/session/csrf`, {
+        method: "POST",
+        headers: {
+          origin: fixture.origin,
+          authorization: `Bearer ${refreshToken}`,
+        },
+      });
+      expect(renewed.status, `csrf #${index}`).toBe(200);
+    }
+    for (let index = 0; index < 20; index += 1) {
+      const wrong = await call(fixture, "POST", "pair", {
+        ticket: `bogus-${index}`,
+      });
+      expect(wrong.status).not.toBe(429);
+    }
+    const limited = await call(fixture, "POST", "pair", { ticket: "bogus" });
+    expect(limited.status).toBe(429);
+    expect(await code(limited)).toBe("rate_limited");
+    expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
+    // 同一个桶：刷新也挡在门外。
+    const refresh = await call(fixture, "POST", "session/refresh", {}, admin);
+    expect(refresh.status).toBe(429);
+  });
+});
+
+describe("泄露检查（§18.1，HIBP fixture）", () => {
+  async function setup(mode: "off" | "warn" | "block", base: string) {
+    const fixture = await harness();
+    const admin = await owner(fixture);
+    fixture.settings.value = {
+      ...fixture.settings.value,
+      breachCheck: mode,
+      breachBase: base,
+    };
+    const created = await call(
+      fixture,
+      "POST",
+      "principals",
+      { displayName: "Hibp" },
+      admin,
+    );
+    const { principalId } = (await created.json()) as { principalId: string };
+    const set = (password: string) =>
+      call(
+        fixture,
+        "POST",
+        "credentials",
+        { principalId, kind: "password", password },
+        admin,
+      );
+    const actions = async () =>
+      (
+        (await (
+          await call(fixture, "GET", "audit?limit=100", undefined, admin)
+        ).json()) as { entries: { action: string; detail: unknown }[] }
+      ).entries;
+    return { set, actions };
+  }
+
+  it("三档：off 不查、warn 照设并标出、block 拒", async () => {
+    const hibp = await startHibp();
+    closing.push(() => hibp.close());
+    const off = await setup("off", hibp.base);
+    const offAnswer = await off.set("armadra-pwned-fixture");
+    expect(offAnswer.status).toBe(201);
+    expect(await offAnswer.json()).not.toHaveProperty("passwordBreached");
+
+    const warn = await setup("warn", hibp.base);
+    const warned = await warn.set("armadra-pwned-fixture");
+    expect(warned.status).toBe(201);
+    expect(await warned.json()).toMatchObject({ passwordBreached: true });
+    const clean = await warn.set("a distinctly unbreached phrase 42");
+    expect(await clean.json()).not.toHaveProperty("passwordBreached");
+    const entries = await warn.actions();
+    const hit = entries.find(
+      (entry) => entry.action === "identity.password.breached",
+    );
+    expect(hit?.detail).toMatchObject({ mode: "warn" });
+    // 审计里没有口令，也没有哈希。
+    expect(JSON.stringify(entries)).not.toContain("pwned-fixture");
+
+    const block = await setup("block", hibp.base);
+    const blocked = await block.set("armadra-pwned-fixture");
+    expect(blocked.status).toBe(400);
+    expect(await code(blocked)).toBe("password_breached");
+    expect((await block.set("a distinctly unbreached phrase 42")).status).toBe(
+      201,
+    );
+  });
+
+  it("离线时不阻止设口令，只记一条审计", async () => {
+    const offline = await setup("block", "http://127.0.0.1:9");
+    const answer = await offline.set("armadra-pwned-fixture");
+    expect(answer.status).toBe(201);
+    expect((await offline.actions()).map((entry) => entry.action)).toContain(
+      "identity.password.breach_check_failed",
+    );
   });
 });
 
@@ -653,16 +774,22 @@ describe("会话列表与撤销（§18.4）", () => {
     ).toBe(401);
   });
 
-  it("写操作要 CSRF", async () => {
+  it("Bearer 传输的写不核对 CSRF（不是环境凭据）；Cookie 会话那一半在 gateway.integration", async () => {
     const fixture = await harness();
     const admin = await owner(fixture);
+    // 桌面壳与原生 App 的页面在 Bearer 传输上不发 CSRF 头（契约 §17.4）：
+    // 要求它只会让这两种传输上的每一次写都 403。
     const response = await call(
       fixture,
       "POST",
       "sessions/revoke-others",
       {},
-      { ...admin, csrfToken: "x".repeat(43) },
+      { ...admin, csrfToken: "" },
     );
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(200);
+    // 没有凭据仍是 401。
+    expect(
+      (await call(fixture, "POST", "sessions/revoke-others", {})).status,
+    ).toBe(401);
   });
 });

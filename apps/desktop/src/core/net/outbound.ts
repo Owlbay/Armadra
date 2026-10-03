@@ -149,6 +149,16 @@ export const OUTBOUND = {
     defaultOn: false,
     documented: true,
   },
+  hibpRange: {
+    // k-匿名范围接口：只发 SHA-1 前 5 位，带 `Add-Padding`（外部服务 §7.4）。
+    // `ARMADRA_HIBP_BASE` 换成 dev-stack 的 hibp fixture。
+    url: "https://api.pwnedpasswords.com",
+    purpose: "泄露口令检查（设口令与持邀请注册时）",
+    cadence: "每次设口令 1 次，4 秒超时",
+    switch: "identity.breachCheck",
+    defaultOn: false,
+    documented: true,
+  },
   crashReport: {
     // 地址是用户填的 DSN（自托管 GlitchTip / Sentry 协议），这里只是占位主机。
     // 发的是壳（`main/diagnostics.ts`、`apps/server/src/diagnostics.ts`），core

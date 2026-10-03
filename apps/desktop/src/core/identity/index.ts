@@ -17,6 +17,7 @@ import {
 } from "./gate";
 import { API_PREFIX, IdentityHttp } from "./http";
 import { installOAuth } from "./oauth";
+import { resolveBreachMode } from "./policy";
 import { createRouteGuard } from "./route-access";
 import { IdentityService } from "./service";
 import { IdentityStore } from "./store";
@@ -103,6 +104,12 @@ export function installIdentity(context: CoreContext): void {
         rpId: current.identity.rpId,
         publicOrigins: publicOrigin === "" ? [] : [publicOrigin],
         mfaRequireFor: current.identity.mfa.requireFor,
+        // `auto`：服务器壳与开了 Gateway 的桌面按 `warn`（架构 §8.3）。
+        breachCheck: resolveBreachMode(
+          current.identity.breachCheck,
+          context.platform.shell === "server" || current.gateway.enabled,
+        ),
+        breachBase: process.env.ARMADRA_HIBP_BASE?.trim() ?? "",
       };
     },
   });

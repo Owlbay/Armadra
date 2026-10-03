@@ -195,7 +195,6 @@ pnpm --filter @armadra/server build    # 服务器壳 → apps/server/out/main.j
 | 另外三家 CLI 与 ACP    | Claude / Codex / Pi 已真跑；ACP 只对假 Agent 测过      | 装好 OpenCode / OMP / Copilot 与适配器的机器 |
 | 多账号 CLI             | Claude / Copilot 的节点凭据已开放，其余种类待实测      | 测试账号与凭据                               |
 | 公网登录               | passkey、OAuth 在本地与假提供方上验证                  | 域名与证书、OAuth 应用                       |
-| 口令泄露检查           | 调用点已留                                             | —（开发中）                                  |
 
 逐项状态以 [功能预期总表](docs/status/feature-roadmap.md) 与 [补全进度](docs/status/completion-progress.md) 为准。
 

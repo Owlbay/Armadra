@@ -43,4 +43,45 @@ describe("未接住的请求错误", () => {
       await server.close();
     }
   });
+
+  it("没接住的坏 JSON 是 400，消息里引着的请求体不进日志也不上报（安全审查 L）", async () => {
+    const reported: unknown[] = [];
+    const logged: unknown[] = [];
+    const log = {
+      error: (...args: unknown[]) => logged.push(args),
+      warn() {},
+      info() {},
+      debug() {},
+    };
+    const server = new CoreServer({
+      platform: {
+        log,
+        reportError: (error: unknown) => reported.push(error),
+      } as unknown as CorePlatform,
+      bus: new EventBus(),
+      version: "test",
+    });
+    server.router.handle(
+      "POST",
+      "/api/workspaces/{workspaceId}/boards",
+      (_match, request) => ({ status: 200, body: request.json() }),
+    );
+    const listener = server.createListener();
+    await new Promise<void>((resolve) =>
+      listener.listen(0, "127.0.0.1", resolve),
+    );
+    const { port } = listener.address() as AddressInfo;
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${port}/api/workspaces/w1/boards`,
+        { method: "POST", body: "sk-ant-oat01-SECRET-not-json" },
+      );
+      expect(response.status).toBe(400);
+      expect(await response.text()).not.toContain("SECRET");
+      expect(reported).toEqual([]);
+      expect(JSON.stringify(logged)).not.toContain("SECRET");
+    } finally {
+      await server.close();
+    }
+  });
 });
