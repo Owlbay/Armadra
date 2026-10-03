@@ -4,12 +4,12 @@
 
 ## 分档
 
-按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.json` 的清单跑（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
+按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.d/` 的清单跑（一条一个文件 `<id>.json`，新增探针就新增一个文件）（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
 | 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                   | 何时跑                              | 失败时       |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | ------------ |
 | A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e`、`push-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`core-terminal-packaged`、`server-perf`、`update-e2e`                                                                                                  | `nightly.yml`                       | 开 issue     |
+| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`crash-report-e2e`                                     | `nightly.yml`                       | 开 issue     |
 | C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                                                                | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
@@ -289,8 +289,11 @@ node tools/probes/timezone-picker.mjs [输出目录]
 
 ```sh
 pnpm --filter @armadra/desktop dist        # 没有 CSC_LINK 时自动跳过签名与公证
-node tools/probes/packaged-smoke.mjs [输出目录] [--app <Armadra.app>]
+node tools/probes/packaged-smoke.mjs [输出目录] [--app <Armadra.app | *.AppImage | linux-unpacked>] [--no-real-cli]
+xvfb-run -a node tools/probes/packaged-smoke.mjs --no-real-cli   # Linux，没有桌面时
 ```
+
+B 档（`nightly.yml` 的 `linux` 与 `macos` 作业）带 `--no-real-cli`：不要真 Codex 与它的登录，第 3 步换成一个普通终端节点——打包版按桌面会话的 PATH 起来后找得到 tmux、起得来 shell、页面敲的 `echo` 有回显（`packaged-shell.png`）。第 1、2、4 步照旧。Linux 上不给 `--app` 时取 `apps/desktop/release/` 里的 AppImage（没有就取 `linux-unpacked/`）；AppImage 用 `APPIMAGE_EXTRACT_AND_RUN=1` 起，不要 FUSE；环境是桌面会话的 PATH（`/usr/local/sbin:…:/bin`）、`SHELL=/bin/bash`，透传 `DISPLAY` / `XAUTHORITY` / `WAYLAND_DISPLAY` / `XDG_RUNTIME_DIR` / `DBUS_SESSION_BUS_ADDRESS`，Chromium 用 `--password-store=basic`；以 root 运行（容器里调试）时加 `--no-sandbox`。
 
 直接执行 `apps/desktop/release/mac-arm64/Armadra.app` 里的二进制，按访达的方式给环境（launchd 的 PATH、`SHELL=/bin/zsh`），`HOME`、`ARMADRA_DATA_DIR`、`--user-data-dir` 都在 `mktemp` 的目录里，Chromium 用 `--use-mock-keychain`（临时 HOME 下没有登录钥匙串）。不安装、不替换 `/Applications/Armadra.app`，也不碰正在运行的那个 Armadra（单实例锁按 `--user-data-dir` 算）。
 
@@ -300,6 +303,17 @@ node tools/probes/packaged-smoke.mjs [输出目录] [--app <Armadra.app>]
 4. **控制台**：渲染进程没有 error 级别的输出与未捕获异常。
 
 产物默认在 `target/packaged-smoke/`：`result.json`、`app.log`、`packaged-media.png`、`packaged-before-hibernate.png`、`packaged-hibernated.png`、`packaged-resumed.png`。没验证：Claude（登录在钥匙串里，临时 HOME 认证不上）、签名与公证后的包、自动更新。
+
+## deb 安装验证
+
+Linux 上 `dist` 出的 `.deb` 在干净的 `ubuntu:22.04` 容器里装一次（B 档，`nightly.yml` 的 `linux` 作业）。要 Docker；架构跟着 Docker 主机（x64 runner 验 amd64 包，Apple 芯片上验 arm64 包）。
+
+```sh
+pnpm --filter @armadra/desktop dist
+node tools/probes/deb-install.mjs [输出目录] [--deb <Armadra_x.y.z_arch.deb>] [--image ubuntu:22.04]
+```
+
+断言：`apt-get install` 从官方源把依赖都解出来；`/usr/bin/armadra` 指向 `/opt/Armadra/armadra`；`ldd` 没有 `not found`；`armadra --version` 答出 `apps/desktop/package.json` 的版本（`main/version-flag.ts`：在任何窗口、数据目录与 core 之前答完退出，不要显示器）。容器 `--rm`、只读挂载 release 目录，不碰本机的 apt 与 `/opt`。产物默认在 `target/deb-install/`：`result.json`、`container.log`。没验证：桌面环境里从应用菜单启动、rpm 包。
 
 ## 自动更新端到端
 

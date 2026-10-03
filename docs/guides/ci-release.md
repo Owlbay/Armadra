@@ -45,7 +45,7 @@ Rust 与 Go 的 setup、缓存与检查步骤一并删除。
 ### 1.1 端到端分档
 
 `tools/probes/` 下的端到端探针按「要不要用户的东西」分三档（[补全架构](../design/completion-architecture.md) §12）。
-A 档与 B 档由 `tools/ci/e2e.mjs` 执行，清单在 `tools/ci/e2e.json`：
+A 档与 B 档由 `tools/ci/e2e.mjs` 执行，清单是 `tools/ci/e2e.d/` 目录，一条一个文件：
 
 ```sh
 pnpm libs:build
@@ -64,10 +64,14 @@ node tools/ci/e2e.mjs --tier b --list     # 只列出清单
 | B   | `nightly.yml`（每天一次，可手动触发）             | 开 issue |
 | C   | 手动，需要真实账号或真机                          | —        |
 
-- **清单一条一行。** 每条写 `id`、`tier`、`script`、`args`（`{out}` 换成这一条的
-  输出目录）、`requires`（`tmux` / `chrome`）与 `timeoutMinutes`；外部服务替身由
-  `tools/dev-stack/` 提供的条目加 `devStack: true`。工作包只追加自己的一行，
-  `tools/ci/e2e.test.mjs` 校验清单形状、脚本存在与 A 档必有的五条。
+- **清单一条一个文件。** 每条是 `tools/ci/e2e.d/<id>.json`，写 `id`（与文件名一致）、
+  `tier`、`script`、`args`（`{out}` 换成这一条的输出目录）、`requires`（`tmux` /
+  `chrome` / `docker`）与 `timeoutMinutes`；外部服务替身由 `tools/dev-stack/` 提供的条目加
+  `devStack: true`；只在某些系统上有意义的条目加 `platforms`（`darwin` / `linux` /
+  `win32`，取 `process.platform`），别的系统上记 `skipped`。工作包新增探针就新增一个文件，不改别人的条目，合并时不冲突。
+  运行顺序由加载器定：先 A 档后 B 档，同档按 `id` 排序，与文件添加先后无关。
+  `tools/ci/e2e.test.mjs` 校验清单形状、文件名与 `id` 一致、脚本存在、A 档必有的
+  五条，以及旧的单文件 `tools/ci/e2e.json` 没有被合并带回来。
 - **逐条记账，跑完全部再判。** 每条探针的输出写进 `<out>/<id>/output.log`，
   探针自己的 `result.json` 与截图也落在 `<out>/<id>/`；汇总在 `<out>/result.json`
   （默认 `target/e2e/<档>/`）。任一条失败或超时，退出码非零，但后面的条目照跑。
@@ -80,8 +84,29 @@ node tools/ci/e2e.mjs --tier b --list     # 只列出清单
   `requires` 里的任何一样，那一条直接记 `failed` 并写明缺什么。`e2e` 作业用
   `browser-actions/setup-chrome` 装 stable，apt 装 tmux 与 xvfb，并放开 Ubuntu 24.04
   对非特权用户命名空间的 AppArmor 限制，好让 Chrome 的沙箱起得来。
+- **B 档的夜间作业。** `nightly.yml` 每个系统一条作业，各自打包后跑
+  `e2e.mjs --tier b`，条目靠 `platforms` 分到对应系统：
+  - `linux`（ubuntu-22.04，与发布同一个 glibc 基线）：桌面壳 `dist` 出
+    AppImage / deb / rpm（不签名），
+    `verify-linux-glibc-baseline.sh` 断言基线，再在 `xvfb-run` 下跑 B 档：
+    `packaged-smoke --no-real-cli` 起 AppImage（`APPIMAGE_EXTRACT_AND_RUN`，不要
+    FUSE），`deb-install` 在 `ubuntu:22.04` 容器里 `apt-get install` 那个 deb、`ldd`
+    没有缺库、`armadra --version` 答出版本；另跑 `server-perf`、
+    `server-container-e2e`（构建服务器壳镜像、对着容器跑 `server-e2e`，不推送）、`crash-report-e2e` 与
+    `update-e2e`。作业设 `ARMADRA_DEV_STACK=1`、装 Chrome，`devStack` 条目先
+    `pnpm dev-stack up`。
+  - `macos`（macos-14）：同样打包，跑 `packaged-smoke --no-real-cli`。
+  - `report`：前两条任一失败、且在 main 上时，用默认的 `GITHUB_TOKEN`（作业级
+    `issues: write`）开一个「夜间 B 档失败」issue，已有开着的同名 issue 就追加评论；
+    正文是运行链接与每条作业失败的条目（`e2e.mjs` 在 `GITHUB_OUTPUT` 里写
+    `failed=<id,…>`）。夜间工作流不读任何 secret。
+  - 要打好的包才能跑的新探针只需新增一个 B 档条目并写明
+    `platforms`，在对应作业里打包之后执行，不必加作业。
 - `pnpm ci:workflows` 断言 `ci.yml` 有跑 `--tier a` 的 `e2e` 作业且在 ubuntu 上，
-  `nightly.yml` 有 `schedule` 与 `workflow_dispatch` 并跑 `--tier b`。
+  `nightly.yml` 有 `schedule` 与 `workflow_dispatch` 并跑 `--tier b`；B 档条目
+  `platforms` 里的每个系统都有一条在该系统 runner 上跑 `--tier b` 的作业；有一条
+  `failure()` 门控、`needs` 全部 B 档作业、带 `issues: write` 的开 issue 作业；
+  除 `GITHUB_TOKEN` 外不引用 secret。
 
 ## 2. release.yml
 
