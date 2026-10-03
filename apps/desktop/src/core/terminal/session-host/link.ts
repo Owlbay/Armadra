@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { connect, type Socket } from "node:net";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import {
   type ClientMessage,
   FrameDecoder,
@@ -340,7 +340,7 @@ export class Link {
  * aim this core at somebody else's host.
  */
 export function currentSid(): string {
-  const output = execFileSync("whoami", ["/user", "/fo", "csv", "/nh"], {
+  const output = execFileSync(systemWhoami(), ["/user", "/fo", "csv", "/nh"], {
     encoding: "utf8",
     windowsHide: true,
   });
@@ -350,6 +350,18 @@ export function currentSid(): string {
     throw new Error(`could not read this user's SID from: ${output.trim()}`);
   }
   return sid;
+}
+
+/**
+ * Windows' own `whoami.exe`, by absolute path. A bare `whoami` resolves on
+ * `PATH`, and Git for Windows' `usr\bin` (on `PATH` for anyone who chose "Git
+ * and optional Unix tools", and for every GitHub Actions bash step) ships the
+ * GNU one, which answers `/user` with "extra operand" — and the core then
+ * cannot reach any session host at all.
+ */
+export function systemWhoami(env: NodeJS.ProcessEnv = process.env): string {
+  const root = env.SystemRoot ?? env.SYSTEMROOT ?? env.windir ?? "C:\\Windows";
+  return win32.join(root, "System32", "whoami.exe");
 }
 
 /** The pipe this user's host of this data directory listens on. */
