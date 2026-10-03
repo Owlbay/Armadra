@@ -565,7 +565,91 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 17. Gateway：`/api/gateway*`
 
-预留，由 G1-10 填写。
+Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补全架构](../design/completion-architecture.md) §7）。服务器壳的 `serve` 用命令行参数打开它；桌面壳按设置 `gateway.*` 打开它。下面三条路由在 core 的主监听器上与 Gateway 上都答，路由门按 `settings:read` / `settings:write` 判——只有 owner，成员一律 403 `forbidden`。字段名 camelCase，时间是带时区的 ISO 8601，错误 `{ code, message }`。
+
+### 17.1 `GET /api/gateway`
+
+```json
+{
+  "enabled": true,
+  "running": true,
+  "managedBy": "settings",
+  "listen": "private",
+  "port": 8443,
+  "publicOrigin": "",
+  "address": { "host": "0.0.0.0", "port": 8443 },
+  "origin": "https://192.168.1.20:8443",
+  "origins": [
+    "https://192.168.1.20:8443",
+    "https://mac.local:8443",
+    "https://127.0.0.1:8443"
+  ],
+  "tls": {
+    "source": "localCa",
+    "certFile": "",
+    "keyFile": "",
+    "acmeEmail": "",
+    "fingerprint": "5f1c…（64 位小写十六进制）",
+    "subject": "CN=192.168.1.20",
+    "names": ["192.168.1.20", "mac.local", "127.0.0.1"],
+    "notAfter": "2027-11-04T00:00:00.000Z",
+    "caAvailable": true
+  },
+  "error": null
+}
+```
+
+- `managedBy`：`settings`（桌面壳）或 `shell`（服务器壳，配置来自命令行；这时 `enabled` 恒为 `true`，`port` 是实际绑定的端口）。
+- `listen` / `port` / `publicOrigin` / `tls.{certFile,keyFile,acmeEmail}` 是设置里的值；`address`、`origin`、`origins` 与 `tls` 的其余字段是运行中的事实，没在运行时为 `null` / `[]`。
+- `origin` 是首选来源（二维码用它）：公网来源优先，否则第一个私网地址，然后主机名，最后 `127.0.0.1`。`origins` 是来源白名单：Origin / Host 必须命中其中之一。`https://localhost` 永远不在里面（它是 Android 版 App 的来源）。
+- `tls.source`：`localCa`、`file`、`acme`、`selfSigned`（只有服务器壳没给证书时）。`fingerprint` 是**信任锚** DER 的 SHA-256：本地 CA 时是 CA，其余是叶证书。`caAvailable` 表示 `GET /ca.crt` 有东西可发。
+- `error`：最近一次没能开启的原因，开着或关着时为 `null`。`code` 取值：`acme_unavailable`（ACME 来源尚未实现）、`tls_files_missing`、`port_in_use`、`port_forbidden`、`identity_unavailable`（库没过统一库迁移）、`gateway_failed`（其余，`message` 是原因）。
+
+### 17.2 `PUT /api/gateway`
+
+请求体是设置 `gateway.*` 的子集，未给的键不动：
+
+```json
+{
+  "enabled": true,
+  "listen": "private",
+  "port": 0,
+  "publicOrigin": "",
+  "tls": { "source": "localCa", "certFile": "", "keyFile": "", "acmeEmail": "" }
+}
+```
+
+- `listen`：`loopback` 只绑 `127.0.0.1`；`private` 绑 `0.0.0.0` 但只接受落在回环与本机私网地址（RFC 1918、`100.64.0.0/10`、IPv6 ULA）上的连接；`all` 不筛。
+- `port`：0–65535；`0` = 由内核分配，开启后把实际端口写回设置，之后固定。
+- `publicOrigin`：空串或一个规范拼法的 `https` 来源（反向代理时填）。
+- 不认识的键、类型或取值错误一律 400 `bad_request`，不让规范化悄悄退回缺省。
+- 回答是写入并对账之后的 §17.1。开着时改了任何键会重开监听；`enabled: false` 即刻停止监听并断开经它进来的每一条连接（升级过的流也在内）。没能开启不算请求失败：200，原因在 `error`。
+- 服务器壳上答 409 `gateway_managed_by_shell`。
+
+### 17.3 `POST /api/gateway/pairing`
+
+请求体可选：`{ "origin"?: string, "deviceName"?: string }`。`origin` 必须在 `origins` 里（否则 400 `invalid_origin`），缺省用首选来源；`deviceName` 1–64 字符，缺省「Gateway 配对」。没在运行时 409 `gateway_not_running`。
+
+```json
+{
+  "origin": "https://192.168.1.20:8443",
+  "ticket": "0123…ef.AbC…",
+  "fingerprint": "5f1c…",
+  "expiresAt": "2026-10-03T08:02:00.000Z",
+  "webUrl": "https://192.168.1.20:8443/#pair=0123…ef.AbC…&fp=5f1c…",
+  "deepLink": "armadra://pair?host=192.168.1.20%3A8443&ticket=0123…&fp=5f1c…"
+}
+```
+
+- 票两分钟、一次性，绑在 `origin` 上；兑换走 `POST /api/identity/pair`（§3），配出来的设备拿 owner 的全套授权。成员走邀请。
+- 网页链接把票与指纹放在片段里（不上请求行、不进日志）；页面认 `#pair=<票>` 与 `#pair=<票>&fp=<64 位十六进制>` 两种。
+- 原生 App 按 `fp` 钉信任锚，不装 CA；锚变了（重置 CA、换证书文件）就重新扫码，不自动信任新证书。
+
+### 17.4 Gateway 上的匿名面与原生 App
+
+- `GET /ca.crt`：匿名，`application/x-x509-ca-cert`，PEM。本地 CA 时是 CA；服务器壳的自签名证书是它自己；指定文件时是链文件里的最后一张，只有一张时 404 `ca_unavailable`。只在 Gateway 上，core 的回环监听没有它。
+- 来源是 `capacitor://localhost` 或 `https://localhost`（且不在 `origins` 里）的请求走 **Bearer 模式**：会话绑定的来源是 App 连上的 Gateway 来源 `https://<Host>`（必须在 `origins` 里，否则 403）；凭据只认 `Authorization: Bearer <访问密钥>`，Cookie 不看、没有 CSRF；`POST /api/identity/pair`、`/session/refresh` 与登录把密钥放在响应体的 `native` 里、不发 Cookie（与桌面壳的原生传输同一形状，§3）；CORS 只回 App 自己的来源，预检放行 `authorization, content-type, x-armadra-csrf`。
+- `POST /api/identity/ws-ticket`（只在 Gateway 的 Bearer 模式下）：要 Bearer 会话，回 `{ "ticket": string, "expiresAt": string }`，票 30 秒、一次性、只在内存里。浏览器 WebSocket 带不了头，App 升级时在 `Sec-WebSocket-Protocol` 里带 `armadra-ticket.<票>`，服务端回同一个子协议。Cookie 模式请求它答 400 `bearer_required`。
 
 ## 18. 身份扩展：口令策略、passkey、MFA、会话、OAuth、审计
 

@@ -65,7 +65,10 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
   通知与窗口，能给页面的东西只有 `src/shared/ipc.ts` 那张表。
 
 第四个目录 `apps/server` 是无窗口服务器壳：同一份 `apps/web` 产物、同一套 core，
-对外只有 TLS 一个面，认证走设备配对与可撤销会话。用法见
+对外只有 TLS 一个面，认证走设备配对与可撤销会话。对外的那一层（TLS、本地 CA、
+准入、CSP、页面托管、配对载荷）在 core 的 Gateway 域 `core/gateway/`：服务器壳的
+`serve` 只是「解析参数 → `openGateway`」，桌面壳按设置 `gateway.*` 开关同一个
+Gateway（契约 §17）。用法见
 [开发指南](development.md#无窗口服务器壳)，进度见
 [TypeScript Core 实施进度](../status/typescript-core-status.md) §11。
 
