@@ -6,13 +6,26 @@
 
 按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.json` 的清单跑（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
-| 档  | 本目录的探针（计划中新增的见架构 §12）                                                          | 何时跑                              | 失败时       |
-| --- | ----------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
-| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`core-terminal-packaged`                                                      | `nightly.yml`                       | 开 issue     |
-| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                       | 手动；清单在执行计划 §5             | 记进状态文档 |
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                      | 何时跑                              | 失败时       |
+| --- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`push-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`core-terminal-packaged`                                                                  | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                   | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
+
+## 推送端到端（push-e2e）
+
+core → 假 APNs / FCM / Web Push / 中继的整条线（契约 §19）：服务器壳在临时数据目录里起来，环境变量只给 APNs `.p8` 与 FCM 服务账号的文件路径、`ARMADRA_PUSH_*_ENDPOINT` 指向 push-sink；用配对票换会话，建一个 Claude 终端节点，以 iOS 直连登记设备（带 X25519 公钥），向 hook 面报一次权限请求与一次 Stop，两条都夹着一段「终端原文」。断言 APNs 走 HTTP/2、provider token 是 ES256 且 kid / iss 对、正文是设备私钥解得开的信封、线上与明文里都没有那段原文；再依次改成 Android 直连（RS256 断言换令牌、`data.enc` 可解）、浏览器 Web Push（VAPID 由 push-sink 验签、aes128gcm 可解）与中继（起 `apps/push-relay`，设置改成 relay，苹果那一侧收到的仍是同一个信封）。
+
+```sh
+pnpm libs:build
+pnpm --filter @armadra/server build
+pnpm --filter @armadra/push-relay build
+node tools/probes/push-e2e.mjs [输出目录] [--sink http://127.0.0.1:8091]
+```
+
+push-sink 优先用 `--sink` / `ARMADRA_PUSH_SINK`，其次 `pnpm dev-stack up push-sink` 起的 127.0.0.1:8091，都没有就在探针进程里起一份（同一份 `tools/dev-stack/push-sink.mjs`），所以没有 Docker 也能跑。进程内那份拿得到 `.p8` 所在目录，APNs 签名记 `verified`；dev-stack 容器里没有这把钥，记 `unchecked`（形状照样验）。设备令牌带每次运行的随机前缀，共享的 sink 里只认自己的记录。产物默认在 `target/push-e2e/result.json`；临时目录、临时 HOME、随机端口，跑完删除，不碰任何真实账号与推送服务。
 
 ## 受控 Chromium
 
