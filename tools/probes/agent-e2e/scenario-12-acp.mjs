@@ -88,6 +88,7 @@ import {
   recordCompat,
   report,
   requireReal,
+  sanitizeScreen,
   root,
   scenario,
   selfTest,
@@ -130,13 +131,24 @@ const name = process.argv[2];
 const args = process.argv.slice(3);
 const out = (text) => process.stdout.write(text);
 out("fake " + name + " TUI argv: " + args.join(" ") + "\r\n");
-out("Do you trust the files in this folder?\r\n> 2. No, exit\r\n  1. Yes, I trust this folder\r\n");
+// 新版的问句不含「trust the files」，选项晚一秒才画出来：探针得等到编号出现。
+out("Quick safety check: is this a project you created or one you trust?\r\n");
+let shown = false;
+setTimeout(() => {
+  shown = true;
+  out("> 2. No, exit\r\n  1. Yes, I trust this folder\r\n");
+}, 1000);
 let trusted = false;
 let line = "";
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdin.on("data", (chunk) => {
   for (const ch of chunk.toString("utf8")) {
     if (!trusted) {
+      // 选项还没出来就有按键：等于在没看清的对话框上替人答了。
+      if (!shown) {
+        out("\r\nanswered before the options were shown\r\n");
+        process.exit(4);
+      }
       if (ch === "1") {
         trusted = true;
         out("\r\nearlier conversation: OK\r\n? for shortcuts\r\n> ");
@@ -198,14 +210,17 @@ function realPlan(scratch, shims, project) {
   const skip = (id, why) => {
     plan[id] = { skip: why };
   };
-  const homes = prepareCliHomes(scratch);
+  // 没选的家连凭据都不读。
+  const homes = prepareCliHomes(scratch, { only: CHOSEN });
   const found = (id) => acpAdapterInstalled(id);
 
   /* Claude：真实配置目录（钥匙串），最便宜的模型，关自动更新。 */
   {
     const acp = found("claude");
     const tui = which("claude");
-    if (!acp.installed) skip("claude", "没有 claude-agent-acp（npm i -g）");
+    if (!CHOSEN.has("claude")) skip("claude", "ARMADRA_E2E_ACP_ONLY 没选这家");
+    else if (!acp.installed)
+      skip("claude", "没有 claude-agent-acp（npm i -g）");
     else if (tui === undefined) skip("claude", "没有 claude（终端视图要用）");
     else {
       const env = [
@@ -228,13 +243,15 @@ function realPlan(scratch, shims, project) {
   {
     const acp = found("codex");
     let auth;
-    try {
-      auth = JSON.parse(
-        readFileSync(join(homedir(), ".codex/auth.json"), "utf8"),
-      );
-    } catch {}
+    if (CHOSEN.has("codex"))
+      try {
+        auth = JSON.parse(
+          readFileSync(join(homedir(), ".codex/auth.json"), "utf8"),
+        );
+      } catch {}
     const refreshed = Date.parse(auth?.last_refresh ?? "");
-    if (!acp.installed) skip("codex", "没有 codex-acp（npm i -g）");
+    if (!CHOSEN.has("codex")) skip("codex", "ARMADRA_E2E_ACP_ONLY 没选这家");
+    else if (!acp.installed) skip("codex", "没有 codex-acp（npm i -g）");
     else if (auth === undefined) skip("codex", "没有 ~/.codex/auth.json");
     else if (
       !Number.isFinite(refreshed) ||
@@ -924,10 +941,12 @@ export default async function run12() {
         const toTerminal = await switchDriver(id, "terminal");
         terminal = await terminalRow(id);
         // 先认清画面：提示符（页脚）、信任对话框，或者别的——别的一律不答。
+        let lastScreen = "";
         atPrompt = await waitFor(
           "Claude 终端视图到提示符",
           async () => {
             const text = await capture(terminal.id);
+            lastScreen = text;
             const footer = Math.max(
               text.lastIndexOf("? for shortcuts"),
               text.lastIndexOf("shift+tab to cycle"),
@@ -935,20 +954,17 @@ export default async function run12() {
             const trust = Math.max(
               text.lastIndexOf("trust this folder"),
               text.lastIndexOf("trust the files"),
+              text.lastIndexOf("one you trust"),
             );
             if (footer >= 0 && footer > trust) return true;
             if (trust >= 0) {
-              // 从对话框的问句起找「<编号>. Yes」：选项在问句之后。
-              const asked = [
-                text.lastIndexOf("trust the files"),
-                text.lastIndexOf("Do you trust"),
-                trust,
-              ].filter((index) => index >= 0);
-              const yes = /([1-9])\.\s*Yes/.exec(
-                text.slice(Math.min(...asked)),
-              );
-              if (yes === null)
-                throw new Error("信任对话框里认不出「Yes」那一项，不答");
+              // 对话框在画面底部：在最后 40 行里找最后一个「<编号>. Yes」（新版
+              // 的问句不一定含 trust，「trust this folder」可能就在选项里，从它
+              // 往后找会漏掉前面的编号）。问句先画出来、选项晚一步到，这时还没
+              // 有编号——继续等，不答；等到超时就带着画面失败。
+              const tail = text.split("\n").slice(-40).join("\n");
+              const yes = [...tail.matchAll(/([1-9])\.\s*Yes\b/g)].at(-1);
+              if (yes === undefined) return false;
               note("Claude 问是否信任临时工作目录，经页面按编号", yes[1]);
               await clickInNode(id, ".xterm");
               await page.call("Input.insertText", { text: yes[1] });
@@ -957,7 +973,13 @@ export default async function run12() {
             return false;
           },
           { timeout: 90_000, interval: 1000 },
-        );
+        ).catch((error) => {
+          // 认不出的画面不答（不按回车、不猜编号）：带着画面失败，结果里看得到
+          // 真实的对话框长什么样。
+          const screenTail = sanitizeScreen(lastScreen);
+          report.acp.claudeTerminalScreen = screenTail;
+          throw new Error(`${error.message}；最后的画面：\n${screenTail}`);
+        });
         const argv = processLines().find(
           (line) =>
             providerSession !== undefined &&
