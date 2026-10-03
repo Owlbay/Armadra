@@ -4,7 +4,7 @@ import {
   PERMISSION_MODES,
   permissionModeSchema,
   type PermissionMode,
-} from "./domain/index.js";
+} from "./domain/primitives.js";
 import {
   posixQuote,
   shellCommandLine,
@@ -27,6 +27,7 @@ export const AGENT_IDS = [
   "pi",
   "omp",
   "copilot",
+  "ama",
 ] as const;
 export type BuiltinAgentId = (typeof AGENT_IDS)[number];
 
@@ -50,7 +51,7 @@ export type PromptMode = (typeof PROMPT_MODES)[number];
  * The three later entries were added with the M2 capability work:
  *
  *   * `nativeRecurrence` — the CLI runs loops/cron of its own that we can
- *     *observe*. No built-in adapter claims it yet: none of the seven exposes a
+ *     *observe*. No built-in adapter claims it yet: none of the built-ins exposes a
  *     readable job list, and §1 forbids inferring a capability from a name. The
  *     vocabulary exists so an adapter that gains one can declare it.
  *   * `structuredInputAck` — a delivered prompt can be tied back to the turn it
@@ -283,6 +284,45 @@ export const AGENT_REGISTRY: Readonly<Record<BuiltinAgentId, AgentDefinition>> =
         "supportsModelSelection",
       ],
       expectedProcess: ["copilot"],
+    },
+    ama: {
+      id: "ama",
+      label: "Armadra Agent",
+      color: "#2f6fed",
+      launchCmd: "ama",
+      promptMode: "argv",
+      permissionFlag: {
+        default: [],
+        "auto-edit": ["--permission-mode", "auto-edit"],
+        "full-auto": ["--permission-mode", "full-auto"],
+        plan: ["--permission-mode", "plan"],
+      },
+      modelFlag: "--model",
+      sessionIdFlag: "--session-id",
+      resume: { style: "flag", flag: "--resume" },
+      exitCommand: "/exit",
+      // Our own agent (docs/design/coordinator-agent.md §2.2). No `subagent`:
+      // the canvas rules want it to open sibling nodes (`canvas open-agent` /
+      // team) rather than hide work inside its own process.
+      capabilities: [
+        "hooks",
+        "resume",
+        "contextLink",
+        "browser",
+        "usage",
+        "structuredInputAck",
+        "supportsModelSelection",
+      ],
+      // The launcher execs into the bundled runtime, so tmux's
+      // `pane_current_command` sees the runner rather than `ama`.
+      expectedProcess: [
+        "ama",
+        "ama.cjs",
+        "armadra",
+        "Armadra",
+        "Electron",
+        "electron",
+      ],
     },
   };
 

@@ -74,7 +74,7 @@ describe("agent registry", () => {
       }),
     ).not.toContain("nativeRecurrence");
   });
-  it("covers the six built-in CLIs with a full permission table", () => {
+  it("covers the seven built-in CLIs with a full permission table", () => {
     expect(AGENT_IDS).toEqual([
       "claude",
       "codex",
@@ -82,8 +82,9 @@ describe("agent registry", () => {
       "pi",
       "omp",
       "copilot",
+      "ama",
     ]);
-    expect(AGENT_LIST).toHaveLength(6);
+    expect(AGENT_LIST).toHaveLength(7);
     for (const agent of AGENT_LIST) {
       expect(agent.launchCmd.length).toBeGreaterThan(0);
       expect(agent.color).toMatch(/^#[0-9a-f]{6}$/);
@@ -98,6 +99,30 @@ describe("agent registry", () => {
     }
     expect(AGENT_REGISTRY.opencode.promptFlag).toBeDefined();
     expect(AGENT_REGISTRY.claude.sessionIdFlag).toBe("--session-id");
+  });
+
+  // coordinator-agent.md §2.2: every permission mode has a real flag, there
+  // is no `subagent`, and the process gate accepts the bundled runner the
+  // launcher execs into.
+  it("registers Armadra's own agent with a flag for every mode", () => {
+    const ama = AGENT_REGISTRY.ama;
+    expect(ama.launchCmd).toBe("ama");
+    expect(ama.color).toBe("#2f6fed");
+    for (const mode of PERMISSION_MODES.filter((one) => one !== "default")) {
+      expect(ama.permissionFlag[mode]).toEqual(["--permission-mode", mode]);
+    }
+    expect(ama.capabilities).not.toContain("subagent");
+    expect(ama.capabilities).toContain("usage");
+    expect(ama.expectedProcess).toEqual(
+      expect.arrayContaining(["ama", "ama.cjs", "Electron"]),
+    );
+    expect(
+      assembleLaunchCommand({
+        agentId: "ama",
+        permissionMode: "plan",
+        prompt: "hi",
+      }),
+    ).toEqual({ command: "ama --permission-mode plan hi" });
   });
 
   it("recognises built-in ids only", () => {
@@ -122,7 +147,7 @@ describe("agent registry", () => {
 
 describe("hook events", () => {
   it("lists every provider's event names exactly once", () => {
-    expect(HOOK_CLIENT_REVISION).toBe(4);
+    expect(HOOK_CLIENT_REVISION).toBe(5);
     for (const id of AGENT_IDS) {
       const events = hookEventsFor(id);
       expect(events.length > 0).toBe(
@@ -153,6 +178,12 @@ describe("hook events", () => {
     expect(HOOK_EVENTS.omp).toContain("auto_compaction_end");
     expect(HOOK_EVENTS.pi).not.toContain("auto_compaction_end");
     expect(HOOK_EVENTS.copilot).toContain("agentStop");
+    // ama reports in Pi's vocabulary plus its own two approval events.
+    for (const event of HOOK_EVENTS.pi) {
+      expect(HOOK_EVENTS.ama).toContain(event);
+    }
+    expect(HOOK_EVENTS.ama).toContain("tool_approval_requested");
+    expect(HOOK_EVENTS.ama).toContain("tool_approval_resolved");
   });
 
   // Copilot reads a non-zero exit or a crash on `preToolUse` as a denial. A
@@ -633,6 +664,7 @@ describe("Windows npm wrappers and Eco quitting", () => {
       pi: "/quit",
       omp: "/exit",
       copilot: "/exit",
+      ama: "/exit",
     });
   });
 });

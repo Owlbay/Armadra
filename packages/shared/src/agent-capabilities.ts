@@ -240,6 +240,7 @@ export const AGENT_MODEL_SUGGESTIONS: Readonly<
   pi: [],
   omp: [],
   copilot: [],
+  ama: [],
 };
 
 export function modelSuggestions(agentId: string): readonly string[] {

@@ -13,8 +13,11 @@ import type { BuiltinAgentId } from "./agents.js";
  * already installed are asked to reinstall rather than silently kept: their
  * recorded `client_revision` is what tells the settings page whether the
  * configuration on disk is the one this build writes.
+ *
+ * 5 — Armadra's own agent (`ama`) joined the list with its two approval
+ * events (docs/design/coordinator-agent.md §2.1).
  */
-export const HOOK_CLIENT_REVISION = 4;
+export const HOOK_CLIENT_REVISION = 5;
 
 /** Claude Code — merged into `~/.claude/settings.json` under `hooks`. */
 export const CLAUDE_HOOK_EVENTS = [
@@ -122,6 +125,17 @@ export const COPILOT_HOOK_EVENTS = [
   "sessionEnd",
 ] as const;
 
+/**
+ * Armadra's own agent (`ama`) — the host adapter reports in Pi's vocabulary
+ * (same extension payload) plus the two approval events its runtime raises
+ * (docs/design/coordinator-agent.md §2.1 / §2.3).
+ */
+export const AMA_HOOK_EVENTS = [
+  ...PI_HOOK_EVENTS,
+  "tool_approval_requested",
+  "tool_approval_resolved",
+] as const;
+
 export const HOOK_EVENTS: Readonly<Record<BuiltinAgentId, readonly string[]>> =
   {
     claude: CLAUDE_HOOK_EVENTS,
@@ -130,6 +144,7 @@ export const HOOK_EVENTS: Readonly<Record<BuiltinAgentId, readonly string[]>> =
     pi: PI_HOOK_EVENTS,
     omp: OMP_HOOK_EVENTS,
     copilot: COPILOT_HOOK_EVENTS,
+    ama: AMA_HOOK_EVENTS,
   };
 
 export type ClaudeHookEvent = (typeof CLAUDE_HOOK_EVENTS)[number];
@@ -138,6 +153,7 @@ export type OpencodeHookEvent = (typeof OPENCODE_HOOK_EVENTS)[number];
 export type PiHookEvent = (typeof PI_HOOK_EVENTS)[number];
 export type OmpHookEvent = (typeof OMP_HOOK_EVENTS)[number];
 export type CopilotHookEvent = (typeof COPILOT_HOOK_EVENTS)[number];
+export type AmaHookEvent = (typeof AMA_HOOK_EVENTS)[number];
 
 export function hookEventsFor(agentId: BuiltinAgentId): readonly string[] {
   return HOOK_EVENTS[agentId];
