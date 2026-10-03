@@ -376,7 +376,7 @@ function Comments({
                   key={thread.root.id}
                   data-thread-anchor={key}
                   data-active={key === pinKey ? "true" : undefined}
-                  className="rounded-[var(--r-card)] data-[active=true]:ring-2 data-[active=true]:ring-[var(--brand)] data-[active=true]:ring-offset-4 data-[active=true]:ring-offset-popover"
+                  className="-mx-2 rounded-[var(--r-card)] px-2 py-1 data-[active=true]:bg-[var(--hover)]"
                 >
                   {renderThread(thread, options)}
                 </div>
