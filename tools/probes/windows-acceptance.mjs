@@ -1150,28 +1150,39 @@ async function runFull(options, result, record, out) {
       await app.kill();
       app = undefined;
     }
-    // 会话都终止了，宿主会自己空闲退出；等一会儿，还在就结束它（卸载要删它的映像）。
+    // 先等 core 等随主进程退出（core 还活着时结束宿主，它会再起一个），再结束
+    // 会话宿主：会话都终止了，但宿主空闲三十分钟才退，卸载要删它的映像。
+    // 到点还在的进程记进卸载项的 detail。
+    let lingering = [];
     if (exe !== undefined && dataDir !== undefined && isWindows) {
+      const isHost = (row) =>
+        /session-host[\\/]host\.cjs/i.test(row.commandLine);
       try {
-        hostPid ??= appProcesses(exe).find((row) =>
-          row.commandLine.includes(dataDir),
-        )?.pid;
+        await waitFor(
+          "core 与渲染进程退出",
+          () => appProcesses(exe).every(isHost),
+          { timeout: 20_000, interval: 1_000 },
+        );
       } catch {
-        // 找不到就算了。
+        // 下面一并结束。
       }
-    }
-    if (hostPid) {
       try {
-        await waitFor("会话宿主空闲退出", () => !alive(hostPid), {
-          timeout: 15_000,
-        });
+        lingering = appProcesses(exe).map(({ pid, commandLine }) => ({
+          pid,
+          role: isHost({ commandLine }) ? "sessionHost" : "other",
+          commandLine: commandLine.slice(0, 160),
+        }));
       } catch {
+        lingering = [];
+      }
+      for (const { pid } of lingering) {
         try {
-          process.kill(hostPid);
+          process.kill(pid);
         } catch {
           // 已经退了。
         }
       }
+      if (lingering.length > 0) await sleep(2_000);
     }
 
     if (
@@ -1188,30 +1199,6 @@ async function runFull(options, result, record, out) {
       });
     }
 
-    // 卸载要删的映像不能还有人在跑：等这份安装的进程都退出，还在的结束掉并记下。
-    let lingering = [];
-    if (installed && exe !== undefined) {
-      try {
-        await waitFor(
-          "这份安装的进程都退出",
-          () => appProcesses(exe).length === 0,
-          { timeout: 20_000, interval: 1_000 },
-        );
-      } catch {
-        lingering = appProcesses(exe).map(({ pid, commandLine }) => ({
-          pid,
-          commandLine: commandLine.slice(0, 200),
-        }));
-        for (const { pid } of lingering) {
-          try {
-            process.kill(pid);
-          } catch {
-            // 已经退了。
-          }
-        }
-        await sleep(2_000);
-      }
-    }
     if (installed) {
       await record.check("uninstall.silent", async () => {
         const uninstaller = newestUninstaller(installDir);
@@ -1219,10 +1206,13 @@ async function runFull(options, result, record, out) {
           return { ok: false, detail: { reason: "安装目录里没有卸载程序" } };
         spawnSync(uninstaller, ["/S"], { stdio: "ignore", timeout: 300_000 });
         // NSIS 卸载程序把自己拷到临时目录再跑，先返回：按结果轮询。
+        // 删文件在前、删注册表项与快捷方式在后：两样都等到。
         try {
-          await waitFor("安装目录清空", () => !existsSync(exe), {
-            timeout: 180_000,
-          });
+          await waitFor(
+            "卸载程序做完",
+            () => !existsSync(exe) && registeredInstalls().length === 0,
+            { timeout: 180_000, interval: 2_000 },
+          );
         } catch {
           // 结论在下面。
         }
@@ -1245,9 +1235,11 @@ async function runFull(options, result, record, out) {
             !existsSync(exe) &&
             registered.length === 0 &&
             shortcuts.length === 0,
-          warn: left.length > 0 || lingering.length > 0,
+          warn:
+            left.length > 0 ||
+            lingering.some((row) => row.role !== "sessionHost"),
           detail: {
-            lingeringBeforeUninstall: lingering,
+            endedBeforeUninstall: lingering,
             exeGone: !existsSync(exe),
             leftInInstallDir: left,
             registered,
