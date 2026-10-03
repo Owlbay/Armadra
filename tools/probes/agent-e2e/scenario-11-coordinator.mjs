@@ -3,7 +3,8 @@
 // 不用真模型、不用真密钥：本地起一个 OpenAI 兼容的脚本化模型服务
 // （`mock-model.mjs::mockModelServer`），临时 HOME 下 ama 的 `config.json` 把内置的
 // `deepseek` 指到它；key 经 `PUT /api/agents/ama/credentials/deepseek` 存进 core，
-// 由 core 在启动前写成 0600 的 `auth.json`。和场景 9 一样自己起一套 core，不起
+// 由画布启动器 `run/ama` 凭节点 token 经 hook 通道兑换、只设给 ama 进程
+// （`AMA_API_KEY_DEEPSEEK`，契约 §12.4）。和场景 9 一样自己起一套 core，不起
 // 页面与 Chrome，`--only 11` 单跑。
 //
 // 闭环（脚本化模型按对话走）：
@@ -14,10 +15,11 @@
 //      → `canvas_sticky` 写汇总 → 回一句话。
 //
 // 断言：`agent_status` 有 ama 行且 `stateSource = extension`；两个成员节点与两条
-// 边；便签出现、内容是汇总；`auth.json` 0600、带假 key、不在注入产物与标记里；
+// 边；便签出现、内容是汇总；key 到了模型服务（请求头）却不在任何落盘文件、
+// 核心日志与节点 shell 的环境里；
 // 画布外对照：同一个 profile 不带 `ARMADRA_NODE_ID` 时工具表里没有画布工具。
 // `workflow_propose` 不在本包（B2）。
-import { execFile, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   createWriteStream,
@@ -25,9 +27,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -128,6 +130,49 @@ function coordinatorScript(body) {
       return { text: "汇总已写到便签。" };
     default:
       return { text: "好的。" };
+  }
+}
+
+/** 目录下正文含 `needle` 的文件（跳过 `skip` 里的目录与套接字）。 */
+function filesContaining(root, needle, skip) {
+  const found = [];
+  const walk = (dir) => {
+    if (skip.includes(dir)) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.isFile()) {
+        try {
+          if (readFileSync(path).includes(needle)) found.push(path);
+        } catch {}
+      }
+    }
+  };
+  walk(root);
+  return found;
+}
+
+/**
+ * 协调者窗格进程（`sh -c` 那个节点 shell）的环境：Linux 读
+ * `/proc/<pid>/environ`，macOS 用 `ps eww`（同一用户的进程看得到环境）。
+ */
+function paneEnvironment(data) {
+  try {
+    const pid = execFileSync(
+      "tmux",
+      ["-S", join(data, "tmux.sock"), "list-panes", "-a", "-F", "#{pane_pid}"],
+      { encoding: "utf8" },
+    )
+      .trim()
+      .split("\n")[0];
+    if (!pid) return undefined;
+    if (existsSync(`/proc/${pid}/environ`))
+      return readFileSync(`/proc/${pid}/environ`, "utf8");
+    return execFileSync("ps", ["eww", "-o", "command=", "-p", pid], {
+      encoding: "utf8",
+    });
+  } catch {
+    return undefined;
   }
 }
 
@@ -362,27 +407,12 @@ export default async function run() {
       },
     });
     note("协调者已起", line);
-    const authFile = join(data, "integration", "ama", "auth.json");
-    const authMode = existsSync(authFile)
-      ? statSync(authFile).mode & 0o777
-      : undefined;
+    const profile = JSON.parse(readFileSync(profilePath, "utf8"));
     s.check(
-      "启动前写了 0600 的 auth.json，带这把 key",
-      authMode === 0o600 &&
-        JSON.parse(readFileSync(authFile, "utf8")).providers?.deepseek
-          ?.apiKey === FAKE_KEY,
-      authMode?.toString(8),
-    );
-    const marker = readFileSync(
-      join(data, "integration", "ama", "injection.json"),
-      "utf8",
-    );
-    const profile = readFileSync(profilePath, "utf8");
-    s.check(
-      "key 不在注入标记与 profile 里",
-      !marker.includes(FAKE_KEY) &&
-        !profile.includes(FAKE_KEY) &&
-        !marker.includes("auth.json"),
+      "没有 key 文件：profile 不指 authFile，数据目录里没有 auth.json",
+      profile.authFile === undefined &&
+        !existsSync(join(data, "integration", "ama", "auth.json")),
+      profile,
     );
 
     const database = new DatabaseSync(join(data, "canvas.db"), {
@@ -414,6 +444,21 @@ export default async function run() {
       note("协调者终端画面", await capture());
       throw error;
     });
+    s.check(
+      "key 经启动器的兑换到了 ama：模型服务收到 Bearer <这把 key>",
+      mock.headers[0]?.authorization === `Bearer ${FAKE_KEY}`,
+      mock.headers[0]?.authorization === `Bearer ${FAKE_KEY}`
+        ? undefined
+        : mock.headers[0]?.authorization === undefined
+          ? "请求没带 key"
+          : "带的不是这把",
+    );
+    const pane = paneEnvironment(data);
+    s.check(
+      "节点 shell 的环境里没有这把 key（只在 ama 进程里）",
+      pane !== undefined && !pane.includes(FAKE_KEY),
+      pane === undefined ? "读不到窗格进程的环境" : undefined,
+    );
     s.check(
       "agent_status 有 ama 行，来源是 extension",
       statusRow.agent_id === "ama" && statusRow.state_source === "extension",
@@ -551,6 +596,18 @@ export default async function run() {
     }).catch(() => undefined);
     s.check("两条结论都 ack 了", unread() === 0, { unread: unread() });
 
+    const leaked = filesContaining(data, FAKE_KEY, [join(data, "secrets")]);
+    s.check(
+      "数据目录里除密钥后端外没有文件含这把 key",
+      leaked.length === 0,
+      leaked,
+    );
+    const coreLog = join(output, "core-coordinator.log");
+    s.check(
+      "core 日志里没有这把 key",
+      !existsSync(coreLog) || !readFileSync(coreLog, "utf8").includes(FAKE_KEY),
+    );
+
     /* -------------------- 4. 画布外对照：同一 profile -------------------- */
 
     const before = mock.requests.length;
@@ -565,7 +622,12 @@ export default async function run() {
           "hi",
         ],
         {
-          env: { PATH: process.env.PATH, HOME: home },
+          // 画布外没有兑换：key 是用户自己 shell 里的，与平常一样。
+          env: {
+            PATH: process.env.PATH,
+            HOME: home,
+            AMA_API_KEY_DEEPSEEK: FAKE_KEY,
+          },
           cwd: project,
           timeout: 60_000,
         },

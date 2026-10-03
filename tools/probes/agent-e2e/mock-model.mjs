@@ -16,6 +16,8 @@ import { cleanups } from "./lib.mjs";
  */
 export async function mockModelServer(script) {
   const requests = [];
+  // 每次请求的头（小写键）：场景据此断言 key 真的到了模型那一侧。
+  const headers = [];
   let calls = 0;
   const server = createServer((request, response) => {
     const chunks = [];
@@ -38,6 +40,7 @@ export async function mockModelServer(script) {
       const index = calls;
       calls += 1;
       requests.push(body);
+      headers.push({ ...request.headers });
       let reply;
       try {
         reply = (await script(body, index)) ?? { text: "ok" };
@@ -121,6 +124,7 @@ export async function mockModelServer(script) {
   return {
     baseUrl: `http://127.0.0.1:${port}/v1`,
     requests,
+    headers,
     close: () => new Promise((done) => server.close(done)),
   };
 }
