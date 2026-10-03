@@ -60,6 +60,9 @@ function useAcpSession(nodeId: string, data: TerminalNodeData) {
       })
       .then((session) => {
         if (cancelled) return;
+        // 先收起「正在起」：写回会话 id 会让这个 effect 自己被清理（依赖
+        // 变了），清理之后的 `finally` 不再动状态，骨架屏就永远不走。
+        setStarting(false);
         useCanvasStore
           .getState()
           .updateNodeData(
@@ -69,10 +72,9 @@ function useAcpSession(nodeId: string, data: TerminalNodeData) {
           );
       })
       .catch(() => {
-        if (!cancelled) setFailed(true);
-      })
-      .finally(() => {
-        if (!cancelled) setStarting(false);
+        if (cancelled) return;
+        setFailed(true);
+        setStarting(false);
       });
     return () => {
       cancelled = true;

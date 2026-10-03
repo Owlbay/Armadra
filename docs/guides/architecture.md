@@ -252,6 +252,22 @@ stdio 上讲 MCP（`initialize` / `tools/list` / `tools/call` 手写，不引 SD
 文件；ama 不加）；`@armadra/agent` 的 `AcpClient` 声明 `features.mcpServers` 才带，旧版照旧
 开会话、答 `mcpInjected: false`。
 
+ACP 只是同一个 Agent 节点的另一种驱动方式（`core/acp/`，[ACP 会话视图](../design/acp-session-view.md)，
+契约 §14）。节点数据 `agent.driver: "acp"` 的节点不开 PTY：core 直接起适配器
+（`host.ts`，协议栈是 `@armadra/agent/acp`），会话是 `terminal_sessions` 里
+`backend_kind = 'acp'` 的一行。ACP 是终端管理器的**一个后端**（`bridge.ts`），所以行、代次、
+人类租约、退出通知、Eco 休眠（同一行上起下一代并 `session/load`）只有一份实现：`writeSubmit`
+（括号粘贴加回车）落为 `session/prompt`，单个 `ESC` 落为 `session/cancel`，`capture` 读镜像，
+`send` 的门链、收件箱唤醒、`interrupt`、依赖编排与调度一行不改。状态是第四种来源 `acp`：
+`session.ts` 说出回合边界的信号，经 `hook/normalize` 的 `case "acp"`（`normalize.ts`）与
+`hook/ingest.ts::apply` 进同一个 reducer；`request_permission` 进同一张 `agent_approvals`，
+答复经 `agent/approvals.ts` 的 `"acp"` 路由回到挂起的请求，回合取消、退出、切换、休眠时一律
+回 `cancelled`。每条 `session/update` 先写镜像 `<数据目录>/acp/<nodeId>/<会话 id>.acp.jsonl`
+（`mirror.ts`；读取方经 `history/acp-mirror.ts`，连线读取认得这个后缀）再发 `acp.update`。
+驱动切换（`POST /api/acp/nodes/{id}/driver`）结束当前驱动、在同一行上以另一种驱动接回 CLI
+自己的会话；画布注入在 ACP 下只留入口认得的那一半（`agent/canvas-launch.ts::acpInjection`），
+其余由 MCP 承担。
+
 浏览器节点的 Agent 工具是 `armadra-hook browser <动词>`，动词清单只有一份
 （`core/browser/verb-spec.ts`，`--help` 与技能都由它生成）；执行下沉在 core
 （`core/browser/cdp/`），CDP 调用经一张白名单，执行任意 JS 不开放
