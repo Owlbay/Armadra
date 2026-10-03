@@ -74,7 +74,25 @@
 
 ## G1-7 `ama` 第七个内置 Agent 与宿主适配器（C1）
 
-未开始。
+做了什么：
+
+- core 七处一致：`agent/registry.ts` 的 ama 条目与 `expectedProcess`（各家与共享层相同；`expectedProcesses()` 改读它，`.cjs` 后缀也认）、`stateSourceFor("ama") = extension`（`registry.ts` 与 `hook/store.ts` 两份）、`normalize/index.ts` 的 ama 走 Pi 的分支、`launch.ts` 四种权限模式都有 `--permission-mode` 旗标；自定义 Agent、画布校验、Hook 能力表、启动时准备的列表都加 ama；`HOOK_CLIENT_REVISION` core 与 hook-client 对齐为 5。
+- 注入：`<数据目录>/integration/ama/{profile.json,config.json,instructions.md,skills/armadra/SKILL.md}`，启动器只追加 `--profile <路径>`；profile 只有路径、`authEnv: false`、不信任项目目录，适配器换了位置会重写。执行主机（SSH）与全局迁移跳过 ama。
+- 模型密钥：`/api/agents/ama/credentials`（契约 §12.4），按供应商存进密钥后端，每次画布启动前写 0600 的 `auth.json`；设置 → Agent 加「Armadra Agent 的模型密钥」一组。
+- 启动器按名字参数化（`launcher.ts`、`windows-launcher.cs` 报错前缀随自身文件名）；`<数据目录>/bin/ama` 与 `armadra-hook` 同形；检测 CLI 先找 `<数据目录>/bin`。
+- 适配器 `apps/desktop/src/agent-host/ama/{main,client,events,tools,instructions}.ts`：无 `ARMADRA_NODE_ID` 不激活；工具表从 `hook-client/verbs.ts` 生成（读 / 写 / 执行归类，参数按 ama 接受的 Schema 子集），事件按 Pi 词汇上报 `/hook/ama`；信任规则挪到 `hook-client/trust-rule.ts` 与 core 共用。
+- 打包：electron-vite 复制钉住的 `ama.cjs`、`ama-sandbox.cjs`，打 `agent-host/ama-armadra.cjs`；after-pack 放进 `resources/`、不进 asar；服务器壳构建同样两件事。`compatibility.json` 记 `agent { package, version: 0.6.2, hostApi: 1 }`，`release:check` 校验它与桌面壳 devDependency、lockfile 一致；`host-api.test.ts` 断言 `HOST_API_VERSION`。
+
+实测：
+
+- `node tools/probes/agent-e2e.mjs <输出> --only 11`：15 项全过（脚本化模型服务、随包 ama、`canvas_team` 建两个成员与两条边、收件箱唤醒后 `inbox → ack → sticky`、`agent_status` 来源 `extension`、`auth.json` 0600、画布外同一 profile 无画布工具）。
+- 单测：registry / launch / normalize / inject / shared / ama-credentials / routes / agent-host / hook.test / after-pack / version 全过；完整验证见 PR。
+
+没做：
+
+- `HostApi.runners` 与 `workflow_propose`：归 G1-8（契约 §15）；在那之前 ama 的 `task` 保持原样，画布规则要它用 `canvas_team` / `canvas_open_agent`。
+- Windows 不另编 `agent/ama.exe`：`<数据目录>/bin/ama.exe` 是 `cli/armadra-hook.exe` 的拷贝（按自身文件名读 `.launch`），签名随原文件。
+- 审批画布直答（`approvals.setBroker`）：G2；第一版在节点终端里答。
 
 ## G1-8 工作流引擎（C2）
 

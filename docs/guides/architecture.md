@@ -30,6 +30,8 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 │ 启动时打到 stdout 的一致）；不一致时按 endpoints.json 与进程表确认    │
 │ 是同一数据目录、由桌面启动的旧 core 后发 SIGTERM 再重拉               │
 │  └── 随包资源：`resources/cli/armadra-hook.js`、`resources/migrations/`│
+│      `resources/agent/ama.cjs`（钉住的 @armadra/agent）与             │
+│      `resources/agent-host/ama-armadra.cjs`（它的宿主适配器）         │
 │      （Windows 另有 `resources/session-host/host.cjs` 与              │
 │      `resources/cli/armadra-hook.exe`、`armadra-launch.exe` 启动器）  │
 │  └── 回环 HTTP 静态服务：内核分配端口，页面从这里加载                 │
@@ -51,6 +53,7 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 ┌───────────────────────────────▼──────────────────────────────────────┐
 │ src/cli/armadra-hook  各 CLI 的 hook 与技能调用的小客户端（单文件 JS）│
 │ src/hook-client  端点、令牌、HTTP 与动词工具表（CLI 与适配器共用）    │
+│ src/agent-host/ama  ama 的宿主适配器：画布工具、状态上报（进程内）    │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -332,6 +335,8 @@ CSRF 与 Origin 校验（[服务器账号、中转与共享](../design/server-ac
 | 画布注入产物        | `<数据目录>/integration/<cli>/`                                                                     | —                                               |
 | 画布启动器与垫片    | `<数据目录>/integration/run/<cli>`、`shims/<cli>`、`launcher.json`（Windows 为 `.exe` + `.launch`） | —                                               |
 | Hook 客户端启动器   | `<数据目录>/bin/armadra-hook`（Windows 为 `.exe`，兜底 `.cmd`）                                     | —                                               |
+| 随包 ama 启动器     | `<数据目录>/bin/ama`（Windows 为 `armadra-hook.exe` 的拷贝 `ama.exe` + `ama.launch`）               | `ARMADRA_AMA_BUNDLE`、`ARMADRA_AMA_HOST`        |
+| ama 的密钥文件      | `<数据目录>/integration/ama/auth.json`（0600，每次画布启动前由 core 写；不是注入产物）              | —                                               |
 | 账号偏好            | `<数据目录>/settings.json`                                                                          | —                                               |
 | 本机偏好            | `<数据目录>/worker-settings.json`                                                                   | —                                               |
 | 模型目录缓存        | `<数据目录>/models-catalog.json`（0600）                                                            | —                                               |

@@ -467,6 +467,30 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - 发送方节点已经不在画布上、目标节点已经不在画布上（收件箱外键填不了），或者是收件箱唤醒（来源就是目标自己）时不写回执，投递记录与事件照发。
 - 每条终态只通知一次；清扫只删回执已经写过的、或者不需要回执的终态行。
 
+### 12.4 Armadra Agent 的模型密钥：`/api/agents/ama/credentials`
+
+设计见 [协调 Agent](../design/coordinator-agent.md) §7。代码在 `core/agent/ama-credentials.ts`，共享层 `amaCredentialStatusSchema`。
+
+| 方法与路径                                      | 请求体              | 答复                     |
+| ----------------------------------------------- | ------------------- | ------------------------ |
+| `GET /api/agents/ama/credentials`               | —                   | 状态                     |
+| `PUT /api/agents/ama/credentials/{provider}`    | `{ "apiKey": "…" }` | 状态（已存）             |
+| `DELETE /api/agents/ama/credentials/{provider}` | —                   | 状态（删一个不在的也成） |
+
+```json
+{
+  "backend": "keychain",
+  "providers": [
+    { "id": "anthropic", "isSet": false },
+    { "id": "deepseek", "isSet": true }
+  ]
+}
+```
+
+- 答复**从不带值**，只有每家是否已设与后端（`keychain` / `dpapi` / `libsecret` / `file-encrypted` / `file`）。供应商列表由 core 给（ama 需要 key 的内置供应商），页面不自己列；不在列表里的 `provider` 答 `400 bad_request`，`apiKey` 不是非空单行也是 `400`；密钥后端打不开答 `503 secret_unavailable`。
+- 每家一条密钥条目 `armadra-ama-<provider>`。core 在每次画布启动 ama 之前把已设的写成 `<数据目录>/integration/ama/auth.json`（0600、目录 0700，ama 的 `{ version: 1, providers: { <id>: { apiKey } } }`），profile 只写它的路径；它不在注入产物与 `injection.json` 里，不进 PTY 环境、不进启动行，进程退出不删。
+- 权限：`/api/agents` 一族，读 `settings:read`、写 `settings:write`。
+
 ## 13. 画布启动器
 
 设计见 [画布启动器](../design/canvas-launcher.md)。注入（Hook、技能、画布说明）不再写在敲进节点 shell 的启动行上，而由数据目录里每个 CLI 一个的启动器 `integration/run/<cli>`（Windows `run\<cli>.exe`）在 CLI 启动时追加；启动器只在环境里有 `ARMADRA_NODE_ID` 时注入，没有时原样启动程序。启动行只剩「启动器 + 程序 + 程序前置词 + CLI 自己的旗标」。
