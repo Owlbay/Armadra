@@ -372,6 +372,15 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   `contextIsolation: true`、`nodeIntegration: false`，唯一桥是 preload。
 - CSP 见 `apps/desktop/src/shell-core/csp.ts`：`connect-src` 只留本机 core 的
   http/ws，`<webview>` 供浏览器节点使用。
+- core 自己拥有的密钥（Copilot 令牌、GitHub PAT 等）只经 `core/secrets` 的
+  `SecretBackend { kind, get, set, delete }` 存取，名字一律 `armadra-*`：macOS 桌面壳
+  走 `security(1)` 钥匙串（`keychain`）；Windows / Linux 桌面壳的 core 是 fork 出的
+  `ELECTRON_RUN_AS_NODE` 子进程，封与解经 fork 的 IPC 通道问主进程的 `safeStorage`
+  （`main/secrets.ts`，`dpapi` / `libsecret`；Linux 的 `basic_text` / `unknown` 当作
+  没有钥匙串）；服务器壳用 `<数据目录>/secrets/master.key` 做 AES-256-GCM
+  （`file-encrypted`）；其余与 `ARMADRA_SECRET_BACKEND=file` 是 0600 明文（`file`）。
+  壳说了要用 `safeStorage` 而通道不在时拒绝，不降级成明文。旧名字的条目第一次读写时
+  一次性迁移，记录在 `secrets/migrated.json`。设置页只显示种类。
 - 服务器壳默认不监听非回环地址，对外服务是显式动作；它的配对码不可复用，
   token 不出现在 URL 里，撤销设备后正在进行的流立即终止。
 - 服务器壳认证出的主体经 `AsyncLocalStorage` 跟着请求走（`core/identity/gate.ts` 的
