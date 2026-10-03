@@ -21,7 +21,7 @@ import { install as installWorkflow } from "./workflow";
 import { read } from "./endpoints";
 import { ROUTES } from "./http/routes";
 import { selfGuarded } from "./http/route-scopes";
-import { parseAnnouncement } from "./instance";
+import { parseAnnouncement, VERSION } from "./instance";
 import { endpointsFile } from "./paths";
 import { tempDir } from "./testing/temp-dir";
 
@@ -228,7 +228,7 @@ describe("what the core answers", () => {
     expect(first).toEqual(second);
     expect(first).toEqual({
       status: "ok",
-      version: "0.1.0",
+      version: VERSION,
       instanceId: core.instanceId,
       build: expect.any(String) as string,
       // R3 brought the hook service up with the core: the endpoint file names
