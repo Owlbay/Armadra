@@ -263,15 +263,23 @@ export class HeadlessNode {
         ).map((info) => ({ type: info.type, cpuTime: info.cpuTime })),
       )
       .catch((error: unknown) => String((error as Error).message));
-    // Does the active page answer at all? A command that needs nothing from
-    // the page's JavaScript, with a short bound.
-    const tab = this.activeTab();
-    if (tab !== undefined) {
+    // Does the active page answer at all — and each of its cross-origin
+    // iframes, which live in renderers of their own? A command that needs
+    // nothing from the page's JavaScript, with a short bound.
+    const ping = async (sessionId: string): Promise<string> => {
       const asked = Date.now();
-      report.page = await connection
-        .send("Page.getFrameTree", {}, tab.sessionId, 3_000)
+      return connection
+        .send("Page.getFrameTree", {}, sessionId, 3_000)
         .then(() => `answered in ${Date.now() - asked} ms`)
         .catch((error: unknown) => String((error as Error).message));
+    };
+    const tab = this.activeTab();
+    if (tab !== undefined) {
+      report.page = await ping(tab.sessionId);
+      const frames: Record<string, string> = {};
+      for (const child of tab.session.childFrames())
+        frames[child.sessionId] = await ping(child.sessionId);
+      report.frames = frames;
     }
     return report;
   }

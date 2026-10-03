@@ -20,7 +20,9 @@ describe("the CDP wire trace", () => {
       toClient.write(
         `${JSON.stringify({ method, params: { url: "https://private" }, sessionId: "s1" })}\0`,
       );
-    return { connection, sent, answer, event };
+    const raw = (message: unknown) =>
+      toClient.write(`${JSON.stringify(message)}\0`);
+    return { connection, sent, answer, event, raw };
   }
   const tick = () => new Promise((done) => setTimeout(done, 10));
 
@@ -60,6 +62,30 @@ describe("the CDP wire trace", () => {
       }),
     ]);
     quiet.connection.close();
+  });
+
+  it("names the child session a target event brings, never its address", async () => {
+    const { connection, raw } = wire(true);
+    raw({
+      method: "Target.attachedToTarget",
+      sessionId: "page",
+      params: {
+        sessionId: "child-1",
+        targetInfo: { type: "iframe", url: "https://private/frame" },
+      },
+    });
+    raw({
+      method: "Target.detachedFromTarget",
+      sessionId: "page",
+      params: { sessionId: "child-1" },
+    });
+    await tick();
+    expect(connection.traced().map((entry) => entry.child)).toEqual([
+      "child-1:iframe",
+      "child-1",
+    ]);
+    expect(JSON.stringify(connection.traced())).not.toContain("private");
+    connection.close();
   });
 
   it("marks a command that timed out", async () => {
