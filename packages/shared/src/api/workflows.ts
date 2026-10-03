@@ -344,4 +344,54 @@ export const workflowGateEventSchema = z.object({
   stepId: z.string(),
   label: z.string(),
   state: z.enum(["waiting", "approved", "rejected", "cancelled"]),
+  /** 运行的 Frame（推送深链打开它）。 */
+  nodeId: z.string().optional(),
 });
+
+/* ------------------------------- §15.6 ------------------------------------ */
+
+/** 自动化目标的种类名（`/api/automations/*` 的 `target.kind`）。 */
+export const WORKFLOW_RUN_TARGET_KIND = "AUTOMATION_TARGET_KIND_WORKFLOW_RUN";
+
+/**
+ * 自动化目标 `WORKFLOW_RUN` 的 `target.workflowRun`：起哪个模板的哪一版、在哪块
+ * 画布上。`templateVersion` 给 0 表示「定义时的当前版」，core 存成具体的数；
+ * 之后模板改过，计划到点按 `TARGET_UNSUPPORTED` 跳过，要人重新存。
+ */
+export const workflowRunTargetSchema = z.object({
+  templateId: z.string().min(1).max(128),
+  templateVersion: z.number().int().min(0),
+  boardId: z.string().min(1).max(128),
+});
+
+export type WorkflowRunTarget = z.infer<typeof workflowRunTargetSchema>;
+
+/** 这种计划的载荷：`{"params":{名字:值}}` 的 UTF-8（参数按模板校验）。 */
+export const workflowRunPayloadSchema = z.object({
+  params: z
+    .record(
+      z.string().regex(WORKFLOW_PARAM_PATTERN),
+      z.string().max(WORKFLOW_LIMITS.paramValue),
+    )
+    .default({}),
+});
+
+export type WorkflowRunPayload = z.infer<typeof workflowRunPayloadSchema>;
+
+/** 计划载荷的文本：键按名字排好，同样的参数总是同一份字节（同一个摘要）。 */
+export function workflowRunPayload(params: Record<string, string>): string {
+  const sorted: Record<string, string> = {};
+  for (const name of Object.keys(params).sort()) {
+    sorted[name] = params[name] as string;
+  }
+  return JSON.stringify({ params: sorted });
+}
+
+/** 收据里与工作流目标有关的理由码（`automation_runs.reasonCode`）。 */
+export const WORKFLOW_RUN_REASONS = [
+  "WORKFLOW_RUNNING",
+  "WORKFLOW_WAITING",
+  "WORKFLOW_SUCCEEDED",
+  "WORKFLOW_FAILED",
+  "WORKFLOW_CANCELLED",
+] as const;
