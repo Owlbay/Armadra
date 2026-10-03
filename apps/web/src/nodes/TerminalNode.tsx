@@ -101,6 +101,16 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
     // 表面还没挂上，谈不上在渲染；第一次 `onStatusChange` 就会覆盖它。
     render: "offscreen",
   });
+  // 换到会话视图：终端表面已经卸下，它最后报的「已退出」属于上一种驱动的那
+  // 一代进程，不能挂在新会话的节点头上。
+  React.useEffect(() => {
+    if (driver !== "acp") return;
+    setSurface((current) =>
+      current.connection === "idle" && current.exitCode === null
+        ? current
+        : { ...current, connection: "idle", exitCode: null, error: null },
+    );
+  }, [driver]);
   const [findOpen, setFindOpen] = React.useState(false);
   const workspaceId = useCanvasStore((state) => state.workspace?.id ?? null);
   const [query, setQuery] = React.useState("");
