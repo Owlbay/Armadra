@@ -11,6 +11,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { request as httpsRequest } from "node:https";
 import os from "node:os";
 import { basename, join, resolve } from "node:path";
 
@@ -577,6 +578,29 @@ export function logFindings(dataDir) {
         findings.push(`${basename(file)}: ${line.slice(0, 300)}`);
   }
   return { files: files.map((file) => basename(file)), bytes, findings };
+}
+
+/** 对一个 https 来源发一次请求：握得上 TLS、拿到状态码就算到了（证书不在这里验）。 */
+export function httpsProbe(origin) {
+  return new Promise((done) => {
+    const url = new URL("/api/identity/hello", origin);
+    const req = httpsRequest(
+      url,
+      { rejectUnauthorized: false, timeout: 10_000 },
+      (response) => {
+        const certificate = response.socket.getPeerCertificate?.();
+        response.resume();
+        done({
+          ok: true,
+          status: response.statusCode,
+          subject: certificate?.subject?.CN ?? null,
+        });
+      },
+    );
+    req.on("error", (error) => done({ ok: false, error: error.message }));
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.end();
+  });
 }
 
 /* --------------------------------- dry run --------------------------------- */

@@ -42,7 +42,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { request as httpsRequest } from "node:https";
 import { createServer } from "node:net";
 import os from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -60,6 +59,7 @@ import {
   Recorder,
   TEARDOWN_CHECKS,
   findFile,
+  httpsProbe,
   logFindings,
   newestUninstaller,
   diffSnapshots,
@@ -251,6 +251,13 @@ function childrenOf(pid) {
   return powershellJson(
     `Get-CimInstance Win32_Process -Filter "ParentProcessId=${Number(pid)}" | Select-Object ProcessId,Name`,
   ).map((row) => ({ pid: row.ProcessId, name: row.Name }));
+}
+
+/** 会话宿主名下的控制台宿主进程（每个 ConPTY 一个，外加它自己的）。 */
+function consolesOf(pid) {
+  return childrenOf(pid).filter((row) =>
+    /^(conhost|OpenConsole)\.exe$/i.test(row.name),
+  );
 }
 
 function alive(pid) {
@@ -500,28 +507,6 @@ class App {
 
 /* ---------------------------------- phases --------------------------------- */
 
-function httpsProbe(origin) {
-  return new Promise((done) => {
-    const url = new URL("/api/identity/hello", origin);
-    const req = httpsRequest(
-      url,
-      { rejectUnauthorized: false, timeout: 10_000 },
-      (response) => {
-        const certificate = response.socket.getPeerCertificate?.();
-        response.resume();
-        done({
-          ok: true,
-          status: response.statusCode,
-          subject: certificate?.subject?.CN ?? null,
-        });
-      },
-    );
-    req.on("error", (error) => done({ ok: false, error: error.message }));
-    req.on("timeout", () => req.destroy(new Error("timeout")));
-    req.end();
-  });
-}
-
 async function runFull(options, result, record, out) {
   const work = mkdtempSync(join(os.tmpdir(), "armadra-acceptance-"));
   const cleanup = [];
@@ -743,6 +728,19 @@ async function runFull(options, result, record, out) {
       ["powershell", result.machine.shells.powershell],
     ].filter(([, path]) => path);
     const sessions = [];
+    // 起终端之前会话宿主自己的控制台宿主（它以 CREATE_NO_WINDOW 起时有一个）：
+    // ConPTY 关闭证明比的是终止之后回到这个数，而不是 0。
+    let consoleBaseline;
+    try {
+      const host = appProcesses(exe).find(
+        (row) =>
+          /session-host[\\/]host\.cjs/i.test(row.commandLine) &&
+          row.commandLine.includes(dataDir),
+      );
+      if (host !== undefined) consoleBaseline = consolesOf(host.pid).length;
+    } catch {
+      // 没有基线时退回「比终止前少」。
+    }
     await record.check("terminal.shells", async () => {
       const detail = {};
       for (const [dialect, shell] of shells) {
@@ -1215,12 +1213,12 @@ async function runFull(options, result, record, out) {
     if (sessions.length === 0) record.skip("conpty.close", "没有起来的终端");
     else
       await record.check("conpty.close", async () => {
-        const consolesBefore = hostPid
-          ? childrenOf(hostPid).filter((row) =>
-              /^(conhost|OpenConsole)\.exe$/i.test(row.name),
-            )
-          : [];
-        const detail = { consolesBefore: consolesBefore.length, sessions: {} };
+        const consolesBefore = hostPid ? consolesOf(hostPid) : [];
+        const detail = {
+          consoleBaseline: consoleBaseline ?? null,
+          consolesBefore: consolesBefore.length,
+          sessions: {},
+        };
         for (const session of sessions) {
           const answer = await app.api(
             "POST",
@@ -1249,16 +1247,17 @@ async function runFull(options, result, record, out) {
         }
         await sleep(2_000);
         const consolesAfter =
-          hostPid && alive(hostPid)
-            ? childrenOf(hostPid).filter((row) =>
-                /^(conhost|OpenConsole)\.exe$/i.test(row.name),
-              )
-            : [];
+          hostPid && alive(hostPid) ? consolesOf(hostPid) : [];
         detail.consolesAfter = consolesAfter.length;
+        const consolesReleased =
+          consoleBaseline === undefined
+            ? consolesAfter.length < consolesBefore.length ||
+              consolesAfter.length === 0
+            : consolesAfter.length <= consoleBaseline;
         return {
           ok:
             Object.values(detail.sessions).every((entry) => entry.shellGone) &&
-            consolesAfter.length === 0,
+            consolesReleased,
           detail,
         };
       });
