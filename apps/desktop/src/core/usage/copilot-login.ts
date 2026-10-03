@@ -8,15 +8,15 @@
  *    用户要在 `verification_uri` 里敲的 `user_code`。
  * 2. `POST {oauth}/login/oauth/access_token` 按 GitHub 指定的间隔轮询，直到它答出一
  *    个 `access_token`（或者 `expired_token` / `access_denied`）。
- * 3. 令牌进 {@link SecretStore}——macOS 钥匙串，或者别处一个 0600 文件，设置页把后者
- *    标成降级。
+ * 3. 令牌进 {@link SecretStore}——壳给的密钥后端（钥匙串 / DPAPI / libsecret /
+ *    加密文件），没有时一个 0600 文件，设置页把后者标成降级。
  *
  * 进行中的流**只在内存里**：一次半完成的登录不值得持久化，而 `device_code` 是一个
  * 等价于 bearer 的密钥，不能到磁盘、也不能到一条 API 响应里。
  */
 
 import type { Fetcher } from "./providers";
-import type { SecretBackend, SecretStore } from "./secret-store";
+import type { SecretBackendKind, SecretStore } from "./secret-store";
 
 /**
  * GitHub Copilot 编辑器集成的公开设备流 client id。设备流的 client id 不是密钥
@@ -77,7 +77,7 @@ export type LoginProgress =
 /** 给设置页的登录态。报令牌**在哪儿**，从不报令牌。 */
 export interface AuthState {
   readonly signedIn: boolean;
-  readonly backend: SecretBackend;
+  readonly backend: SecretBackendKind;
   readonly pending?: LoginPrompt;
 }
 
@@ -264,7 +264,7 @@ export class CopilotLogin {
     return this.store.read();
   }
 
-  backend(): SecretBackend {
+  backend(): SecretBackendKind {
     return this.store.backend();
   }
 }

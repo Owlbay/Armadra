@@ -4,8 +4,8 @@
  * 它和 Worker 的 git 凭据处理是**两件事**：SSH 密钥和 git credential helper 属于
  * 执行主机，而 API 令牌属于这台机器。
  *
- * 支持两种来源。已有的 `gh` 登录只被按需读取，什么都不存；粘进来的令牌写进 OS
- * 密钥存储的一个引用名下——令牌本身从不进数据库、日志、项目目录，也不进任何一条
+ * 支持两种来源。已有的 `gh` 登录只被按需读取，什么都不存；粘进来的令牌写进 core
+ * 统一的密钥后端（`core/secrets`）的一个引用名下——令牌本身从不进数据库、日志、项目目录，也不进任何一条
  * core 送回去的 protobuf 消息。
  *
  * 令牌按请求产生，只在内存里待一小会儿，加一个短缓存，好让一页 Issue 不去敲十几
@@ -14,19 +14,17 @@
  */
 
 import { execFile } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeSync,
-  fsyncSync,
-  closeSync,
-} from "node:fs";
 import { join } from "node:path";
+
+import {
+  type LegacySecret,
+  type ResolvedSecrets,
+  type SecretBackendKind,
+  legacyFile,
+  legacyKeychain,
+  migrateLegacySecrets,
+  migrationRecordFile,
+} from "../secrets";
 
 import {
   GithubCredentialSource,
@@ -67,8 +65,16 @@ export function validToken(value: string): boolean {
 
 const HOST_PATTERN = /^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/;
 
-/** 通用密码的 service 名。account 带着 API 主机，企业版和公有版不会撞。 */
-const KEYCHAIN_SERVICE = "armadra-github-api";
+/**
+ * 统一 `armadra-*` 前缀之前的钥匙串地址：service 是它，account 是引用名。新条目
+ * 的名字见 {@link secretName}。
+ */
+export const LEGACY_KEYCHAIN_SERVICE = "armadra-github-api";
+
+/** 一个引用名在密钥后端里的名字：`armadra-github-api@github.com`。 */
+export function secretName(reference: string): string {
+  return `armadra-github-${reference}`;
+}
 
 /**
  * 令牌缓存的有效期：让钥匙串提示或一次 gh 调用不必每个请求都来一遍，又不让一个
@@ -96,23 +102,101 @@ export interface SecretStore {
 }
 
 /**
- * 挑这台机器能给的最强的存储。macOS 用登录钥匙串；别的地方退到数据目录下一个
- * 0600 文件，**并且报告自己退了**。
- *
- * `ARMADRA_GITHUB_SECRET_STORE=file` 强制退化。它是给无人值守的运行和核验用的
- * ——那些场合不该往操作者真正的钥匙串里写——也给任何宁愿把值留在 core 自己目录
- * 里的人。更弱的保护仍然如实报告，所以选它永远不会看起来像钥匙串。
+ * GitHub 线上的两档：OS 凭据库（钥匙串 / DPAPI / libsecret）与数据目录里的文件
+ * （明文 0600 或服务器壳的加密文件）。
  */
-export function openSecretStore(
-  dataDir: string,
-  env: NodeJS.ProcessEnv = process.env,
-): SecretStore {
-  const fallback = new FileSecretStore(join(dataDir, "github-credentials"));
-  if ((env.ARMADRA_GITHUB_SECRET_STORE ?? "").trim().toLowerCase() === "file") {
-    return fallback;
+export function storeKindOf(kind: SecretBackendKind): SecretStoreKind {
+  return kind === "keychain" || kind === "dpapi" || kind === "libsecret"
+    ? "os_keychain"
+    : "file_fallback";
+}
+
+/** 旧的 0600 文件名：`api@github.com` → `api_at_github_com.token`。 */
+function legacyFileName(name: string): string {
+  return `${name.replace(/@/g, "_at_").replace(/[.:]/g, "_")}.token`;
+}
+
+/**
+ * 一个引用名的旧位置：旧 service 名下的钥匙串条目（只在当前后端就是钥匙串时去
+ * 敲）与 `github-credentials/` 下的 0600 文件。
+ */
+export function githubLegacySecrets(
+  secrets: ResolvedSecrets,
+  name: string,
+): LegacySecret[] {
+  const to = secretName(name);
+  const items: LegacySecret[] = [];
+  if (secrets.backend.kind === "keychain") {
+    items.push(
+      legacyKeychain(`github.keychain:${name}`, to, secrets.security, {
+        service: LEGACY_KEYCHAIN_SERVICE,
+        account: name,
+      }),
+    );
   }
-  if (process.platform === "darwin") return new KeychainSecretStore();
-  return fallback;
+  items.push(
+    legacyFile(
+      `github.file:${name}`,
+      to,
+      join(secrets.dataDir, "github-credentials", legacyFileName(name)),
+    ),
+  );
+  return items;
+}
+
+/**
+ * 经 core 统一的密钥后端存令牌。`references` 给出库里记着的引用名，它们的旧条目
+ * 在第一次读写时一次性搬过来。
+ */
+export function githubSecretStore(
+  secrets: ResolvedSecrets,
+  references: () => readonly string[] = () => [],
+): SecretStore {
+  const backend = secrets.backend;
+  let migrated: Promise<unknown> | undefined;
+  const ready = async (): Promise<void> => {
+    migrated ??= migrateLegacySecrets(
+      backend,
+      references()
+        .filter((name) => name !== "")
+        .flatMap((name) => githubLegacySecrets(secrets, name)),
+      migrationRecordFile(secrets.dataDir),
+    );
+    await migrated.catch(() => undefined);
+  };
+  return {
+    kind: () => storeKindOf(backend.kind),
+    async put(name, token) {
+      if (!validToken(token)) throw githubError("invalid");
+      await ready();
+      try {
+        await backend.set(secretName(name), token);
+      } catch {
+        throw githubError("unavailable");
+      }
+    },
+    async get(name) {
+      await ready();
+      let token: string | undefined;
+      try {
+        token = await backend.get(secretName(name));
+      } catch {
+        throw githubError("unavailable");
+      }
+      if (token === undefined || !validToken(token)) {
+        throw githubError("unavailable");
+      }
+      return token;
+    },
+    async delete(name) {
+      await ready();
+      try {
+        await backend.delete(secretName(name));
+      } catch {
+        throw githubError("unavailable");
+      }
+    },
+  };
 }
 
 /** 一个子进程的输出，超时和最小环境都在里面。 */
@@ -161,117 +245,6 @@ function minimalEnv(): NodeJS.ProcessEnv {
     if (value !== undefined) env[name] = value;
   }
   return env;
-}
-
-class KeychainSecretStore implements SecretStore {
-  kind(): SecretStoreKind {
-    return "os_keychain";
-  }
-
-  /**
-   * 经钥匙串工具的交互提示写，而不是它的 `-w` 参数：参数值会出现在进程命令行
-   * 里，这个用户的任何进程都读得到。
-   */
-  async put(name: string, token: string): Promise<void> {
-    if (!validToken(token)) throw githubError("invalid");
-    await run(
-      "security",
-      ["add-generic-password", "-a", name, "-s", KEYCHAIN_SERVICE, "-U", "-w"],
-      { stdin: `${token}\n${token}\n` },
-    );
-    // 即使两次提示对不上，工具也退 0，所以这次写靠读回来确认而不是信它。
-    const stored = await this.get(name).catch(() => "");
-    if (stored !== token) throw githubError("unavailable");
-  }
-
-  async get(name: string): Promise<string> {
-    const result = await run("security", [
-      "find-generic-password",
-      "-a",
-      name,
-      "-s",
-      KEYCHAIN_SERVICE,
-      "-w",
-    ]);
-    if (!result.ok) throw githubError("unavailable");
-    const token = result.stdout.replace(/[\r\n]+$/, "");
-    if (!validToken(token)) throw githubError("unavailable");
-    return token;
-  }
-
-  async delete(name: string): Promise<void> {
-    const result = await run("security", [
-      "delete-generic-password",
-      "-a",
-      name,
-      "-s",
-      KEYCHAIN_SERVICE,
-    ]);
-    if (result.ok) return;
-    // 已经不在了正是调用方要的状态。
-    try {
-      await this.get(name);
-    } catch {
-      return;
-    }
-    throw githubError("unavailable");
-  }
-}
-
-class FileSecretStore implements SecretStore {
-  constructor(private readonly directory: string) {}
-
-  kind(): SecretStoreKind {
-    return "file_fallback";
-  }
-
-  private path(name: string): string {
-    // 引用名的形状是固定的，但路径还是从一个清洗过的名字拼出来：一个存进来的值
-    // 永远逃不出这个目录。
-    const cleaned = name.replace(/@/g, "_at_").replace(/[.:]/g, "_");
-    if (cleaned === "" || /[/\\]/.test(cleaned) || cleaned.includes("..")) {
-      throw githubError("invalid");
-    }
-    return join(this.directory, `${cleaned}.token`);
-  }
-
-  async put(name: string, token: string): Promise<void> {
-    if (!validToken(token)) throw githubError("invalid");
-    const path = this.path(name);
-    mkdirSync(this.directory, { recursive: true, mode: 0o700 });
-    const temporary = `${path}.new`;
-    rmSync(temporary, { force: true });
-    // 从创建那一刻就是 0600，之后不再放宽，所以这个值不会有一瞬间是全世界可读的。
-    const handle = openSync(temporary, "wx", 0o600);
-    try {
-      writeSync(handle, token);
-      fsyncSync(handle);
-    } finally {
-      closeSync(handle);
-    }
-    renameSync(temporary, path);
-    return Promise.resolve();
-  }
-
-  async get(name: string): Promise<string> {
-    const path = this.path(name);
-    if (!existsSync(path)) throw githubError("unavailable");
-    const info = statSync(path);
-    // 被放宽过的文件不再被信任：别的东西已经有过读它的机会，所以凭据报告成不可用
-    // 而不是照用不误。
-    if (process.platform !== "win32" && (info.mode & 0o077) !== 0) {
-      throw githubError("unavailable");
-    }
-    if (info.size > 4096) throw githubError("unavailable");
-    const token = readFileSync(path, "utf8").replace(/[\r\n]+$/, "");
-    if (!validToken(token)) throw githubError("unavailable");
-    return Promise.resolve(token);
-  }
-
-  async delete(name: string): Promise<void> {
-    rmSync(this.path(name), { force: true });
-    return Promise.resolve();
-  }
 }
 
 /**
@@ -363,7 +336,12 @@ export class CredentialService {
     const record = this.config();
     const status = create(GithubCredentialStatusSchema, {
       source: sourceOf(record.source),
-      store: storeOf(record.secretStore),
+      // 存着的令牌报它**现在**在哪儿：旧条目迁移可能把它从文件搬进了 OS 存储。
+      store: storeOf(
+        record.source === GITHUB_SOURCE_TOKEN_REF
+          ? this.secrets.kind()
+          : record.secretStore,
+      ),
       apiBase: record.apiBase,
       enterprise: record.apiBase !== PUBLIC_API_BASE,
       revision: BigInt(record.revision),

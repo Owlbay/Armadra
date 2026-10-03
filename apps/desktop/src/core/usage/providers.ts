@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { configRoot } from "../history/home";
+import type { SecretBackendKind } from "../secrets";
 import type {
   CredentialSource,
   UsageCredits,
@@ -655,10 +656,15 @@ export function githubApiBase(): string {
 export async function fetchCopilot(
   fetcher: Fetcher,
   token: string | undefined,
-  backend: "keychain" | "file",
+  backend: SecretBackendKind,
 ): Promise<ProviderResult> {
   if (token === undefined) return { report: undefined, source: "none" };
-  const source: CredentialSource = backend === "keychain" ? "keychain" : "file";
+  // 用量快照只分「OS 凭据库」与「文件」两档：DPAPI / libsecret 算前者，数据目录里
+  // 的加密文件算后者。
+  const source: CredentialSource =
+    backend === "keychain" || backend === "dpapi" || backend === "libsecret"
+      ? "keychain"
+      : "file";
   const user = (await getJson(
     fetcher,
     `${githubApiBase()}/copilot_internal/user`,

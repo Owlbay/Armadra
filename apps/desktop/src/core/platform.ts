@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
 
+import type { SecretBackend } from "./secrets/backend";
+
 /**
  * The one seam between the core and whichever shell assembled it.
  *
@@ -24,6 +26,12 @@ export interface CorePlatform {
   readonly resourcesPath?: string | undefined;
   /** Three levels, filtered by `ARMADRA_LOG`. */
   readonly log: CoreLog;
+  /**
+   * 壳给的密钥后端（服务器壳：master key 封装的 `file-encrypted`）。不给时 core
+   * 按 `core/secrets` 的表自己挑：桌面壳的 `safeStorage` 经 fork 的 IPC 通道、
+   * macOS 钥匙串、或 0600 文件。
+   */
+  readonly secrets?: SecretBackend | undefined;
   /** Hands a URL to the desktop. A server shell has nowhere to open one. */
   openExternal(url: string): Promise<void>;
   /**
