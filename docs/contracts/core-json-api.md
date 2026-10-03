@@ -577,7 +577,87 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 20. 节点凭据：`/api/credentials*`
 
-预留，由 G1-1 填写。
+设计见 [补全架构](../design/completion-architecture.md) §9.1 与 [CLI 协作](../design/cli-collaboration.md) §7.3。一个节点可以绑定一条具名凭据，起终端时由 core 校验、CLI 启动时由画布启动器现取并只设给 CLI 进程。代码在 `core/agent/credentials/`，共享层 `packages/shared/src/api/credentials.ts`。
+
+**值的去向**：只在执行主机的 SecretStore（条目名 `armadra-credential-<ref>`）。库表 `agent_credentials` 只记 `ref`、`providerId`、`kind`、`label`、`createdAt`、`lastUsedAt`。值不进节点 shell 的环境、启动行、shell 历史、画布持久化、日志，也不进任何 `/api/*` 答复；**唯一带值的是 §20.4 那条本机回环的 hook 答复**，答给启动器，带 `Cache-Control: no-store`，不记日志。
+
+### 20.1 `kind` 表
+
+`kind` 只能从下表选，变量名由 core 写死（`core/agent/credentials/inject.ts::CREDENTIAL_KINDS`），不上线、不让用户填。`enabled: false` 的行列在表里，新建与启动都拒绝，等 CLI 协作 §7.4 用真实账号测过再开。
+
+| `providerId` | `kind`              | 变量                      | `enabled`   |
+| ------------ | ------------------- | ------------------------- | ----------- |
+| `claude`     | `oauth-token`       | `CLAUDE_CODE_OAUTH_TOKEN` | 是          |
+| `claude`     | `api-key`           | `ANTHROPIC_API_KEY`       | 否（T1）    |
+| `copilot`    | `github-token`      | `COPILOT_GITHUB_TOKEN`    | 是          |
+| `codex`      | `api-key`           | `CODEX_API_KEY`           | 否（T4）    |
+| `pi` / `omp` | `api-key:anthropic` | `ANTHROPIC_API_KEY`       | 否（T5/T6） |
+| `pi` / `omp` | `api-key:openai`    | `OPENAI_API_KEY`          | 否（T5/T6） |
+| `pi` / `omp` | `api-key:moonshot`  | `MOONSHOT_API_KEY`        | 否（T5/T6） |
+| `opencode`   | `api-key:anthropic` | `ANTHROPIC_API_KEY`       | 否（T7）    |
+| `opencode`   | `api-key:openai`    | `OPENAI_API_KEY`          | 否（T7）    |
+
+`providerId` 是基础 CLI 的 id；`custom:` 条目按它的 `baseAgent` 匹配。
+
+### 20.2 条目路由
+
+只有 owner（路由门按全局 `settings:read` / `settings:write`，成员一律 `403 forbidden`）。
+
+- `GET /api/credentials` →
+
+  ```json
+  {
+    "backend": "keychain",
+    "available": true,
+    "kinds": [
+      { "providerId": "claude", "kind": "oauth-token", "enabled": true }
+    ],
+    "entries": [
+      {
+        "ref": "3f9c2a1b7d4e8f60",
+        "providerId": "claude",
+        "kind": "oauth-token",
+        "label": "Work",
+        "isSet": true,
+        "lastUsedAt": 1790000000000
+      }
+    ]
+  }
+  ```
+
+  `backend` 是密钥后端自报的种类（`keychain` / `dpapi` / `libsecret` / `file-encrypted` / `file`）。`available: false` 时多一个 `reason`：`credential_backend_insecure`（后端是 `file`）或 `credential_unsupported_here`（Windows，启动器还不能兑换）。`isSet` 是值在不在（后端打不开也答 `false`）；`lastUsedAt` 从没被取用过时缺席。
+
+- `POST /api/credentials`，体 `{ providerId, kind, label, value }` → `201` 条目。`ref` 由 core 生成（16 位小写十六进制）。`value` 单行、去首尾空白、最长 8192。
+- `PATCH /api/credentials/{ref}`，体 `{ label?, value? }`（至少一个）→ `200` 条目。`providerId` 与 `kind` 不可改：换种类就是另一条凭据。
+- `DELETE /api/credentials/{ref}` → `204`。先删值后删行。绑定着它的节点下次起终端时被拒（`credential_mismatch`）。
+
+### 20.3 `POST /api/terminals` 的 `credentialRef`
+
+`agent` 段多一个可选的 `credentialRef`（条目名，1–200 字符）。页面从节点数据 `agent.account.credentialRef` 取（`apps/web/src/agent/launch.ts::agentSessionRequest`）。core 在起任何进程之前校验，不满足时整个请求被拒、不建会话行：
+
+| 状态 | `code`                        | 何时                                                |
+| ---- | ----------------------------- | --------------------------------------------------- |
+| 400  | `bad_request`                 | `credentialRef` 不是非空字符串或超长                |
+| 400  | `credential_mismatch`         | 条目不存在，或它的 `providerId` 不是节点的基础 CLI  |
+| 400  | `credential_kind_disabled`    | 条目的 `kind` 在 §20.1 里是 `enabled: false`        |
+| 400  | `credential_unsupported_here` | SSH 节点（凭据在控制端，不经 SSH 下发），或 Windows |
+| 409  | `credential_backend_insecure` | 这台主机的密钥后端自报 `file`                       |
+
+通过后节点终端的环境里只多一个变量 `ARMADRA_CREDENTIAL_REF=<ref>`（名字，不是值）。依赖编排、冷启动与节能唤醒没有请求体，读节点数据里的绑定照样带上这个变量；那里不预先校验，绑定失效时由 §20.4 拒绝、启动器拒绝起 CLI，而不是悄悄用默认登录。
+
+条目路由的其余错误码：`credential_not_found`（404，`PATCH` / `DELETE` 一个不存在的 `ref`）、`credential_unavailable`（503，密钥后端这一刻打不开）。
+
+### 20.4 启动器兑换：hook 面的 `POST /credential`
+
+只在本机 hook 服务（Unix socket / 回环端口，契约 §5.2）上，不在主监听器、Gateway 或执行主机上。
+
+- 调用方：画布启动器 `run/<cli>`（POSIX）在 `ARMADRA_NODE_ID` 与 `ARMADRA_CREDENTIAL_REF` 都在时执行 `armadra-hook credential`，后者发这一条。
+- 请求：头 `X-Armadra-Hook-Token`（应用 bearer）与 `X-Armadra-Node-Token`（必须验过，`legacy` 不行）；体 `{ "nodeId", "ref" }`。
+- 只答这个节点此刻绑定的那一条：起终端时记下的绑定，core 重启后改读节点数据 `agent.account.credentialRef` 与 `agent.id`；每次都重新做 §20.3 的校验。
+- 成功 `200 { "variable": "CLAUDE_CODE_OAUTH_TOKEN", "value": "…" }`，并更新 `lastUsedAt`；日志只记 `nodeId` 与 `ref`。失败：`403 forbidden`（token 不对、或节点没绑这一条）、§20.3 的各码、`409 credential_unset`（值不在）、`503 credential_unavailable`。
+- 客户端把 `NAME=value` 打到 stdout，启动器用命令替换接住，只认这家 CLI 在 §20.1 里的变量名（字面的 `case` 分支，没有 `eval`），在自己的进程里 `export` 后 `exec` CLI。客户端失败或名字不认识时启动器打一行原因、退出码非零，不起 CLI。
+
+**威胁模型**：这防的是误泄露（shell 的 `env` 输出、回滚缓冲区、shell 历史、日志、磁盘），不是同一用户的主动读取——持有节点 token 的进程本来就能兑换。CLI 起的子进程（bash 工具、MCP 服务器）会继承这个变量；设置页的脚注写明这一点，并建议用权限最窄的凭据（`setup-token`、只开 Copilot Requests 的细粒度 PAT）。
 
 ## 21. 跨主机交接与 Worker 舰队
 
