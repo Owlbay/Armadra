@@ -104,9 +104,10 @@ export function Reflog({
       <ol className="space-y-1">
         {entries.map((entry) => (
           <li key={entry.selector} className="min-w-0">
-            <button
+            <Button
               type="button"
-              className="w-full rounded-md border border-border p-2 text-left hover:bg-accent"
+              variant="ghost"
+              className="h-auto w-full flex-col items-stretch justify-start gap-0 rounded-md border-border p-2 text-left text-[length:inherit] font-normal whitespace-normal hover:bg-accent"
               aria-expanded={selected === entry.selector}
               onClick={() =>
                 setSelected(selected === entry.selector ? null : entry.selector)
@@ -126,7 +127,7 @@ export function Reflog({
                 <span>{entry.loggedAt}</span>
                 <span>{entry.committerName}</span>
               </span>
-            </button>
+            </Button>
             {selected === entry.selector && (
               <ReflogActions
                 entry={entry}

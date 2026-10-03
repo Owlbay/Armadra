@@ -674,7 +674,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 16. 实时协同：`…/boards/{boardId}/sync` 与评论
 
-实现：`apps/desktop/src/core/realtime/`；共享常量与 zod：`packages/shared/src/api/realtime.ts`。§16.3（评论路由）与 §16.4（awareness 形状）由 G2-6 / G2-5 填写。
+实现：`apps/desktop/src/core/realtime/`；共享常量与 zod：`packages/shared/src/api/realtime.ts`。§16.3（评论路由）由 G2-6 填写。
 
 ### 16.1 `WS /api/workspaces/{id}/boards/{boardId}/sync`
 
@@ -720,6 +720,37 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
   `enabled` 是设置 `collab.realtime`（缺省 `true`）。页面在 `realtime || enabled` 时连 `…/sync`，否则留在租约 + CAS。
 
 - **关回租约模式**：设置关掉之后，新板不再切换；已经是实时板的，在没有客户端连着时（卸载或下一次 core 写入）先物化、再标 `realtime = 0` 并删掉更新流与快照，表重新成为真相。有客户端连着的板继续服务到它们离开。
+
+### 16.4 awareness 状态
+
+`…/sync` 的 awareness 帧（类型 `1`）里每个 clientID 一份状态，JSON：
+
+```json
+{
+  "principalId": "",
+  "deviceId": "Yk3…（页面的 clientId）",
+  "name": "macOS · Chrome",
+  "color": 2,
+  "cursor": { "x": 120.5, "y": -40 },
+  "selection": ["9b1c…", "wb:item-1"],
+  "focusNodeId": "9b1c…"
+}
+```
+
+| 字段          | 规则                                                                                                                        |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `principalId` | core 一律改写成这条连接的 principal（本机壳的 owner 为 `""`），客户端填什么都不算                                           |
+| `deviceId`    | 必填，1–128 字符：页面的 `clientId`（同一个人的两个窗口各一个）                                                             |
+| `name`        | 必填，≤ 80 字符，只用于显示                                                                                                 |
+| `color`       | 必填，整数 `1..8`：成员色序号（设计系统 §2.5）。页面加入时取在场者没用的最小一个（从 2 起），各观看者看到的同一个人颜色相同 |
+| `cursor`      | 可选，画布坐标（有限数）；指针离开画布时省略                                                                                |
+| `selection`   | 可选，≤ 256 个 id（每个 1–128 字符）；白板对象带 `wb:` 前缀                                                                 |
+| `focusNodeId` | 可选，正在看的节点 id                                                                                                       |
+
+- core 只留上表里的键；形状不对或序列化后超过 16 KiB 的状态**整条丢弃**（不转发、不断流），`null`（离开）照常转发。
+- 一条连接只能写自己登记过的 clientID：别的连接已经登记的 clientID 在它发来的帧里被丢掉。
+- 页面按共享层 `awarenessStateSchema` 再校验一次，认不出的不进在线表、不画光标。
+- 共享层 `AWARENESS_LIMITS` 与 core `realtime/awareness.ts` 的上限逐条一致（`awareness.test.ts` 守）。
 
 ## 17. Gateway：`/api/gateway*`
 

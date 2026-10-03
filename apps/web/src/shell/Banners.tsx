@@ -16,6 +16,7 @@ import { usePreferencesStore, useT } from "../app/preferences-store";
 import { useAccess } from "../app/use-access";
 import { useEnabledAgents } from "../app/use-agents";
 import { useCanvasStore, type PanelState } from "../store/canvas-store";
+import { useOfflineBanner } from "../realtime/OfflineBanner";
 import { cn } from "@/lib/cn";
 import { Button } from "@/ui/button";
 import { IconButton } from "@/ui/icon-button";
@@ -109,6 +110,19 @@ export function Banners() {
   });
 
   const items: ReactNode[] = [];
+  const offline = useOfflineBanner();
+
+  // 实时板断线（补全架构 §6.4）：本地照常编辑，重连后自动补齐。
+  if (offline) {
+    items.push(
+      <Banner
+        key="realtime-offline"
+        tone="warn"
+        icon={offline.icon}
+        text={offline.text}
+      />,
+    );
+  }
 
   if (saveState === "error" && !dismissed.includes("save")) {
     items.push(

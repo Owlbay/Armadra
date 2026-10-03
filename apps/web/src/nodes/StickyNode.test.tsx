@@ -75,6 +75,37 @@ describe("StickyNode", () => {
     });
   });
 
+  it("keeps someone else's concurrent edit when committing (realtime board)", () => {
+    const base = {
+      ...node,
+      data: { kind: "sticky", content: "hello" },
+    } as CanvasNode;
+    const view = (current: CanvasNode) => (
+      <StickyNode
+        id="n1"
+        node={current}
+        selected={false}
+        collapsed={false}
+        focused={false}
+      />
+    );
+    const { rerender } = render(view(base));
+    fireEvent.click(screen.getByRole("button", { name: "便签" }));
+    const textarea = screen.getByLabelText("便签") as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "hello world" } });
+    // 编辑期间另一个人在前面加了字（实时板的远端灌入）。
+    rerender(
+      view({
+        ...base,
+        data: { kind: "sticky", content: "say hello" },
+      } as CanvasNode),
+    );
+    fireEvent.blur(screen.getByLabelText("便签"));
+    expect(store.updateNodeData).toHaveBeenCalledWith("n1", {
+      content: "say hello world",
+    });
+  });
+
   it("does not write per keystroke", () => {
     renderSticky();
     fireEvent.click(screen.getByRole("button", { name: "便签" }));

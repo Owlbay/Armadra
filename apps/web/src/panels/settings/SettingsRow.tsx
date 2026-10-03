@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 
 import { cn } from "@/lib/cn";
+import { Button } from "@/ui/button";
 
 /**
  * 一行设置：左标签（13px）/ 右控件，行高 44（§24.1 + §24.2 的 8pt 网格）。
@@ -10,7 +11,7 @@ import { cn } from "@/lib/cn";
  * 每张卡片最多一条（§14 第 1 条的例外）。
  *
  * `onClick` 把**标签那一半**变成按钮并在末尾补一个 `›`（用于「点进子页」的
- * 行）。刻意不把整行做成 `<button>`：这些行右边常常还有自己的按钮，套在
+ * 行）。刻意不把整行做成按钮：这些行右边常常还有自己的按钮，套在
  * 一个按钮里既不合法也点不准。
  */
 export function SettingsRow({
@@ -49,14 +50,15 @@ export function SettingsRow({
       )}
     >
       {label === null ? null : onClick ? (
-        <button
+        <Button
           type="button"
+          variant="ghost"
           onClick={onClick}
-          className="-mx-1 flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-1 py-1 transition-colors hover:bg-muted/50"
+          className="-mx-1 h-auto min-w-0 flex-1 justify-between gap-2 rounded-md px-1 py-1 font-normal whitespace-normal hover:bg-muted/50"
         >
           {text}
           <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-        </button>
+        </Button>
       ) : (
         text
       )}
