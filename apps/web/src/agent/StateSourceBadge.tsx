@@ -22,6 +22,8 @@ import { useT } from "@/app/preferences-store";
 const SOURCE_STYLES: Record<AgentStateSource, string> = {
   hook: "bg-[var(--brand)]",
   extension: "bg-[var(--brand)]",
+  // ACP 会话由协议本身报回合，与上报同等（ACP 会话视图 §4.1）。
+  acp: "bg-[var(--brand)]",
   observed: "border border-[var(--border-strong)] bg-transparent",
 };
 
