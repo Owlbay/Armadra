@@ -147,6 +147,10 @@ export default defineConfig(({ command }) => ({
   },
   build: {
     rolldownOptions: {
+      // 生产入口只有应用本身：`showcase.html`（设计展示页）只给开发服务器用，
+      // 显式列出来，以后有人加第二个入口时也不会把展示页带进 dist/
+      // （设计展示页 §1 第 2 条；`src/showcase/production.test.ts` 守着）。
+      input: fileURLToPath(new URL("./index.html", import.meta.url)),
       output: {
         codeSplitting: {
           groups: vendorGroups,
