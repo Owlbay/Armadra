@@ -111,18 +111,36 @@
   --caution: #ffd60a;
   --success: #32d74b;
   --success-soft: rgb(50 215 75 / 16%);
+  /* 状态色三件套（设计系统 §2.3）：`--<s>` 是图形，`--<s>-text` 是文字（≥4.5:1，
+     也用于叠在 `-soft` 上），深色下大多与图形同值，浅色下分开。 */
+  --warn-text: #ff9f0a;
+  --success-text: #32d74b;
 
   /* Agent 正在工作时的“陶土色”，与 Claude 品牌色同源（§3.4） */
   --agent-working: #d97757;
   --agent-working-soft: rgb(217 119 87 / 18%);
+  --working-text: #e08a6e;
 
-  /* ── Agent 品牌色（与主题无关，两套主题共用） ─────────────────────── */
+  /* ── Agent 品牌色（设计系统 §2.4） ────────────────────────────────
+     两层：`--agent-<id>` 是标识色（头像底、色点、色标），`--agent-<id>-text`
+     是文字色（会话行里的 Agent 名、发言人）。深色下标识色保持各家原值，文字色
+     在不够 4.5:1 时提亮；浅色主题两者合一，统一换成压暗值（见浅色块）。 */
   --agent-claude: #d97757;
   --agent-codex: #10a37f;
   --agent-opencode: #a78bfa;
   --agent-pi: #e8b86d;
   --agent-omp: #d4a373;
   --agent-copilot: #a371f7;
+  --agent-ama: #1cb5c9;
+  --agent-claude-text: #e08a6e;
+  --agent-codex-text: #2fbd97;
+  --agent-opencode-text: var(--agent-opencode);
+  --agent-pi-text: var(--agent-pi);
+  --agent-omp-text: var(--agent-omp);
+  --agent-copilot-text: #b78df7;
+  --agent-ama-text: var(--agent-ama);
+  /* 实底头像上的字 */
+  --on-agent: #1c1c1c;
 
   /* ── 节点/会话状态语义色（§3.4 状态胶囊） ─────────────────────────── */
   --status-working: var(--agent-working);
@@ -143,6 +161,17 @@
   --node-color-6: #6ac4dc;
   --node-color-7: #ff9f0a;
 
+  /* ── 成员色八色环（设计系统 §2.5；只做图形，≥3:1） ───────────────
+     深色前七条与节点调色板同值；自己永远是 `--member-1`。 */
+  --member-1: var(--node-color-1);
+  --member-2: var(--node-color-2);
+  --member-3: var(--node-color-3);
+  --member-4: var(--node-color-4);
+  --member-5: var(--node-color-5);
+  --member-6: var(--node-color-6);
+  --member-7: var(--node-color-7);
+  --member-8: #f272a8;
+
   /* ── 圆角 ────────────────────────────────────────────────────────── */
   /* `--r-*` 是原始值，`--radius*` 是 §4.3 与 shadcn 组件都要读的名字。
      分两层是因为 Tailwind 的 `@theme` 也会写 `--radius-sm` 这类名字，
@@ -156,6 +185,8 @@
   --r-card: 10px;
   --r-panel: 12px;
   --r-dialog: 14px;
+  /* 头像、胶囊圆点、光标标签 */
+  --r-pill: 999px;
   /* shadcn 组件的控件（按钮、输入框、下拉）写 `rounded-lg`、菜单项写
      `rounded-md`：映射到 §24.2 的语义档，控件 10 / 菜单项 6。菜单容器
      `rounded-lg` 10 = 菜单项 6 + 内边距 4，同心。 */
@@ -170,11 +201,19 @@
   --text-section: 15px;
   --text-body: 13px;
   --text-caption: 11px;
+  /* 登录页、向导、手机整页的页标题 */
+  --text-display: 22px;
+  /* 代码块、差异、终端默认 */
+  --text-code: 12px;
+  /* 手机上输入框的字号：不到 16px 时 iOS 聚焦会缩放页面 */
+  --text-input-touch: 16px;
 
   /* ── 动效（§24.2：只动 opacity/transform，120–180ms ease-out） ───── */
   --dur-fast: 120ms;
   --dur-base: 150ms;
   --dur-slow: 180ms;
+  /* 手机整页推入、Sheet 升起、向导步进 */
+  --dur-page: 220ms;
   --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
 
   /* ── 阴影（§24.3-3；浅色下整体减半） ─────────────────────────────── */
@@ -216,6 +255,12 @@
   --z-focus: 40;
   --z-menu: 46;
   --z-dialog: 55;
+  /* 画布内的成员光标、评论钉、投递流光（节点与 pills 之上） */
+  --z-canvas-overlay: 8;
+  /* 手机焦点页（`shell/MobileFocusPage`），盖住对话框 */
+  --z-focus-page: 60;
+  /* sonner：高于一切对话框，低于开屏 */
+  --z-toast: 70;
   /* 开屏动画：盖住一切，包括对话框——它出现时 App 才刚开始挂载 */
   --z-splash: 90;
 
@@ -316,16 +361,48 @@
 
   --danger: #d70015;
   --danger-soft: rgb(215 0 21 / 10%);
-  --danger-text: #d70015;
+  /* 浅色四处 AA 修正（设计系统 §2.3）：危险文字叠在 10% 衬底上、warn / caution /
+     success 对白底，旧值都不到 4.5:1。 */
+  --danger-text: #b8000f;
   --danger-solid: #d70015;
-  --warn: #b26200;
-  --warn-soft: rgb(178 98 0 / 12%);
-  --caution: #9a7500;
-  --success: #1d8a35;
-  --success-soft: rgb(29 138 53 / 12%);
+  --warn: #a35a00;
+  --warn-soft: rgb(163 90 0 / 10%);
+  --warn-text: #8f4e00;
+  --caution: #7f6000;
+  --success: #177a2e;
+  --success-soft: rgb(23 122 46 / 10%);
+  --success-text: #15702a;
 
   --agent-working: #b8532f;
   --agent-working-soft: rgb(184 83 47 / 14%);
+  --working-text: #9e4526;
+
+  /* Agent 色在白底上原值都不到 3:1：标识与文字合一，统一用压暗值（§2.4）。
+     比设计表再压暗约 5%：表里的值只对白底算到 4.5，侧栏 `--panel` 上差一点。 */
+  --agent-claude: #a85c43;
+  --agent-codex: #0c7f63;
+  --agent-opencode: #7763b3;
+  --agent-pi: #886c3f;
+  --agent-omp: #8a6a4a;
+  --agent-copilot: #835bc6;
+  --agent-ama: #137c8a;
+  --agent-claude-text: var(--agent-claude);
+  --agent-codex-text: var(--agent-codex);
+  --agent-opencode-text: var(--agent-opencode);
+  --agent-pi-text: var(--agent-pi);
+  --agent-omp-text: var(--agent-omp);
+  --agent-copilot-text: var(--agent-copilot);
+  --agent-ama-text: var(--agent-ama);
+  --on-agent: #ffffff;
+
+  --member-1: #0066cc;
+  --member-2: #177a2e;
+  --member-3: #8a6900;
+  --member-4: #d70015;
+  --member-5: #8d3fc9;
+  --member-6: #2b8fa8;
+  --member-7: #a35a00;
+  --member-8: #c14d84;
 
   /* 浅色下阴影减半（§24.2 最后一行） */
   --shadow-node: 0 1px 2px rgb(0 0 0 / 10%), 0 8px 24px rgb(0 0 0 / 9%);
@@ -354,8 +431,8 @@
   --ring: var(--focus-ring);
 
   --chart-1: #007aff;
-  --chart-2: #1d8a35;
-  --chart-3: #b26200;
+  --chart-2: #177a2e;
+  --chart-3: #a35a00;
   --chart-4: #8d3fc9;
   --chart-5: #2b8fa8;
 
