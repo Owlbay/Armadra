@@ -11,6 +11,7 @@ import {
   CollapsibleTrigger,
 } from "@/ui/collapsible";
 import { Spinner } from "@/ui/spinner";
+import { ExportMenu } from "./ExportMenu";
 import { ToolCallRow } from "./ToolCallRow";
 import type { AcpItem } from "./store";
 
@@ -38,7 +39,19 @@ function Thought({ text }: { text: string }) {
   );
 }
 
-function Message({ item }: { item: MessageItem }) {
+/** 会话视图里消息的来源：输出到画板时记进新对象（ACP 设计 §7）。 */
+export interface MessageSource {
+  nodeId: string;
+  sessionId: string;
+}
+
+function Message({
+  item,
+  source,
+}: {
+  item: MessageItem;
+  source?: MessageSource | undefined;
+}) {
   if (item.role === "thought") return <Thought text={item.text} />;
   if (item.role === "user") {
     return (
@@ -50,13 +63,19 @@ function Message({ item }: { item: MessageItem }) {
       </div>
     );
   }
-  return (
+  const body = (
     <div
       data-role="assistant"
       className="sticky-markdown text-[13px] leading-relaxed"
     >
       <Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown>
     </div>
+  );
+  if (!source || item.text.trim() === "") return body;
+  return (
+    <ExportMenu text={item.text} source={{ ...source, messageId: item.id }}>
+      {body}
+    </ExportMenu>
   );
 }
 
@@ -67,9 +86,12 @@ function Message({ item }: { item: MessageItem }) {
 export function MessageList({
   items,
   streaming,
+  source,
 }: {
   items: readonly AcpItem[];
   streaming: boolean;
+  /** 给了才有「输出到画板」。 */
+  source?: MessageSource | undefined;
 }) {
   const t = useT();
   return (
@@ -78,7 +100,7 @@ export function MessageList({
         item.kind === "tool" ? (
           <ToolCallRow key={item.id} call={item.call} />
         ) : (
-          <Message key={item.id} item={item} />
+          <Message key={item.id} item={item} source={source} />
         ),
       )}
       {streaming && (

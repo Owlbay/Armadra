@@ -654,6 +654,20 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - 回合被取消、适配器退出、切换驱动、休眠：挂起的请求一律回 `cancelled`，审批行 `answer = "cancelled"`、`answered_by = "core"`，审计照写（`route: "acp"`），并以 `agent.approval`（`request.resolved = true`、`decision: "cancelled"`）通知各端收起按钮。core 启动时把上一个进程留下的未答 ACP 审批同样记成 `cancelled`。
 - core 从不替人选项，也从不自动回答 `request_permission`；`allow_always` 由适配器自己在进程内记忆。
 
+### 14.5 输出到画板：`POST /api/workspaces/{workspaceId}/exports/{exportId}/text`
+
+会话视图把 Agent 回复里的代码块落成编辑器节点（[ACP 会话视图](../design/acp-session-view.md) §7）时先把代码写成文件。`exportId` 是来源 Agent 节点的 uuid；文件落在工作区根下 `.armadra/exports/acp/<exportId>/<name>`，`.armadra` 带自忽略的 `.gitignore`，不进 `git status`。通用文件路由不允许在 `.armadra` 里建目录，所以这是单独一条路由，与 PNG 导出（`…/exports/{exportId}/png`）同一张权限表（`assets:read`）。
+
+```json
+{ "name": "msg-3-1.ts", "content": "export const a = 1;\n" }
+```
+
+答复与 PNG 导出同形：`{ "path": "<绝对路径>", "relativePath": ".armadra/exports/acp/<exportId>/msg-3-1.ts", "bytes": 20 }`。同名覆盖。
+
+- `name` 是单个文件名：`[A-Za-z0-9_-][A-Za-z0-9._-]{0,119}`，不含 `..`；`exportId` 不是 uuid、`name` 不合规、缺 `name` / `content`、正文超过 1 MiB 一律 400 `bad_request`。
+- 只读打开的工作空间 403 `forbidden`；远端工作空间 501 `unsupported`（Worker 没有对应操作，不在本机落一份对方看不到的文件）。
+- 页面只把它用于输出到画板；共享层 `exportTextRequestSchema`。
+
 ## 15. 工作流与 runners：`/api/workflows/*`
 
 预留，由 G1-8（§15.1–§15.4）、G2-4（§15.5）与 G2-3（§15.6）填写。
