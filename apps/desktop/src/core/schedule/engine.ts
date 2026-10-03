@@ -909,9 +909,16 @@ export class ScheduleEngine {
       status = { state: "unknown", generation: 0 };
     }
     if (status.state === "busy" || status.state === "unknown") {
-      if (run.run.state === AutomationRunState.WAITING_TARGET) return;
+      // 探测给了理由就记它（画面门的 `TARGET_NOT_AT_PROMPT`），理由变了才重写。
+      const reason = status.reason ?? "TARGET_NOT_IDLE";
+      if (
+        run.run.state === AutomationRunState.WAITING_TARGET &&
+        run.run.reasonCode === reason
+      ) {
+        return;
+      }
       run.run.state = AutomationRunState.WAITING_TARGET;
-      run.run.reasonCode = "TARGET_NOT_IDLE";
+      run.run.reasonCode = reason;
       this.store.writeRun(run.run, run.revision);
       return;
     }

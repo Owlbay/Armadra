@@ -217,6 +217,29 @@ describe("物化与投递", () => {
     expect(h.dispatcher.dispatched).toHaveLength(0);
   });
 
+  it("探测给了理由就记它：画面门退回的 TARGET_NOT_AT_PROMPT，理由变了跟着改", async () => {
+    const h = harness();
+    h.dispatcher.status = {
+      state: "busy",
+      generation: 7,
+      reason: "TARGET_NOT_AT_PROMPT",
+    };
+    await activated(h, "p1");
+    await h.engine.tick();
+    const plan = h.engine.getPlan("ws", "p1").plan;
+    let run = h.engine.getRun("ws", plan.activeRunId).run;
+    expect(run.state).toBe(AutomationRunState.WAITING_TARGET);
+    expect(run.reasonCode).toBe("TARGET_NOT_AT_PROMPT");
+    expect(h.dispatcher.dispatched).toHaveLength(0);
+
+    h.dispatcher.status = { state: "busy", generation: 7 };
+    h.advance(1_000);
+    await h.engine.tick();
+    run = h.engine.getRun("ws", plan.activeRunId).run;
+    expect(run.state).toBe(AutomationRunState.WAITING_TARGET);
+    expect(run.reasonCode).toBe("TARGET_NOT_IDLE");
+  });
+
   it("目标离线就跳过这一次", async () => {
     const h = harness();
     h.dispatcher.status = { state: "offline", generation: 0 };
