@@ -674,7 +674,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 16. 实时协同：`…/boards/{boardId}/sync` 与评论
 
-实现：`apps/desktop/src/core/realtime/`；共享常量与 zod：`packages/shared/src/api/realtime.ts`。§16.3（评论路由）由 G2-6 填写。
+实现：`apps/desktop/src/core/realtime/`；共享常量与 zod：`packages/shared/src/api/realtime.ts`。评论路由在 `realtime/comments-routes.ts`（§16.3）。
 
 ### 16.1 `WS /api/workspaces/{id}/boards/{boardId}/sync`
 
@@ -720,6 +720,67 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
   `enabled` 是设置 `collab.realtime`（缺省 `true`）。页面在 `realtime || enabled` 时连 `…/sync`，否则留在租约 + CAS。
 
 - **关回租约模式**：设置关掉之后，新板不再切换；已经是实时板的，在没有客户端连着时（卸载或下一次 core 写入）先物化、再标 `realtime = 0` 并删掉更新流与快照，表重新成为真相。有客户端连着的板继续服务到它们离开。
+
+### 16.3 评论：`/api/workspaces/{id}/boards/{boardId}/comments*` 与 `board.comment`
+
+评论不进 `Y.Doc`，落 `board_comments`；实时板与租约板一样可用。读要 `canvas:read`，写要 `canvas:write`（路由门与域内各判一次）。板不存在或不在这个工作空间 `404`。
+
+一条评论：
+
+```json
+{
+  "id": "0192…",
+  "boardId": "0191…",
+  "anchor": { "kind": "node", "id": "9b1c…" },
+  "body": "请 @[Vera](principal:3f2a…) 看一下",
+  "authorPrincipalId": "",
+  "parentId": null,
+  "createdAtMs": 1760000000000,
+  "updatedAtMs": 1760000000000,
+  "resolvedAtMs": null,
+  "mentions": ["3f2a…"]
+}
+```
+
+| 字段                | 规则                                                                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `anchor`            | 三选一：`{kind:"node", id}`、`{kind:"item", id}`（白板 item id）、`{kind:"point", x, y}`（画布坐标，有限数）；id 1–200 字符          |
+| `body`              | 去掉首尾空白后 1–10 000 字符。提及写成 `@[显示名](principal:<id>)`                                                                   |
+| `authorPrincipalId` | 写入时取请求的 principal（本机壳的 owner 为 `""`），客户端不能指定                                                                   |
+| `parentId`          | 回复指向一条**顶层**评论（只有一层）；回复的锚点随父评论，请求里的 `anchor` 被忽略                                                   |
+| `resolvedAtMs`      | 只有顶层评论能解决；回复随父评论                                                                                                     |
+| `mentions`          | core 认出来的提及：正文里的 principal 存在、没停用、对这个工作空间有 `canvas:read`；认不出的记号照原文留着，不叫任何人。最多认 20 个 |
+
+| 方法与路径                            | 权限                             | 请求                                                                                                                | 应答                                                                                          |
+| ------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `GET …/comments`                      | `canvas:read`                    | 查询 `anchorKind=node\|item&anchorId=…`（只要这个锚点的，含回复）、`resolved=false`（去掉已解决的线程与它们的回复） | `200 { comments: [评论…], people: [{principalId, name}] }`，按创建时间；`people` 是可提及的人 |
+| `POST …/comments`                     | `canvas:write`                   | `{ anchor, body, parentId? }`                                                                                       | `201` 评论                                                                                    |
+| `PATCH …/comments/{commentId}`        | `canvas:write`，且是作者         | `{ body }`                                                                                                          | `200` 评论；不是作者 `403 forbidden`（owner 也不能改别人的话）                                |
+| `DELETE …/comments/{commentId}`       | `canvas:write`，且是作者或 owner | —                                                                                                                   | `204`；顶层评论的回复一起删；记审计 `canvas.comment.delete`                                   |
+| `POST …/comments/{commentId}/resolve` | `canvas:write`                   | `{ resolved?: boolean }`（缺省 `true`）                                                                             | `200` 评论；回复 `400`                                                                        |
+
+校验失败 `400 bad_request`，评论不存在 `404 not_found`。
+
+**事件** `board.comment`（工作空间事件流）：每次写入一帧，不带正文：
+
+```json
+{
+  "type": "board.comment",
+  "boardId": "0191…",
+  "action": "created",
+  "comment": {
+    "id": "0192…",
+    "parentId": null,
+    "anchorKind": "node",
+    "anchorId": "9b1c…"
+  },
+  "mentions": ["3f2a…"]
+}
+```
+
+`action` 为 `created | updated | resolved | reopened | deleted`；`anchorId` 在点锚时省略。`mentions` 是这一次**新叫到**的人且不含作者：新建时是全部提及，改正文时只是新加的，其余动作为空。页面收到后重新拉列表；推送域（§19）按 `mentions` 给有 `canvas:read` 的人发「有人在评论里提到了你」，深链指向锚定的节点。
+
+**对 Agent 可读**：Agent 经上下文连线读一个节点（`context summary | transcript | terminal`）时，回答末尾附上锚在该节点上、未解决的评论线程（提及换成 `@显示名`，至多 8 KiB），与正文一起脱敏、计入这条连线的读取预算。白板对象与已解决的线程不附。
 
 ### 16.4 awareness 状态
 
