@@ -9,7 +9,12 @@ import { VERB_TOOLS } from "../../hook-client/verbs";
 import { AMA_EVENTS, payloadOf, subscribeEvents } from "./events";
 import { canvasToolNote } from "./instructions";
 import { ADAPTER_ID, create, hostApi } from "./main";
-import { canvasTools, permissionOf, toolDefinition } from "./tools";
+import {
+  AMA_SCHEMA_KEYWORDS,
+  canvasTools,
+  permissionOf,
+  toolDefinition,
+} from "./tools";
 
 /** A HostApi that records what the adapter did with it. */
 function fakeApi(env: NodeJS.ProcessEnv) {
@@ -92,6 +97,33 @@ describe("the tool table", () => {
     for (const name of names) expect(name).toMatch(/^[a-z][a-z0-9_]{1,63}$/);
   });
 
+  it("states every parameter schema in the subset ama accepts", () => {
+    const allowed = new Set<string>(AMA_SCHEMA_KEYWORDS);
+    const visit = (schema: unknown, path: string): string[] => {
+      const node = schema as Record<string, unknown>;
+      const bad = Object.keys(node)
+        .filter((key) => !allowed.has(key))
+        .map((key) => `${path}.${key}`);
+      for (const [key, child] of Object.entries(
+        (node.properties as Record<string, unknown>) ?? {},
+      ))
+        bad.push(...visit(child, `${path}.${key}`));
+      if (node.items !== undefined) bad.push(...visit(node.items, `${path}[]`));
+      return bad;
+    };
+    for (const tool of canvasTools()) {
+      expect(visit(tool.parameters, tool.name)).toEqual([]);
+    }
+    // The bound is not lost: it moved into the description.
+    const inbox = canvasTools().find((tool) => tool.name === "canvas_inbox");
+    const limit = (
+      inbox?.parameters as {
+        properties: Record<string, { description?: string }>;
+      }
+    ).properties.limit;
+    expect(limit?.description).toMatch(/≥ 1/);
+  });
+
   it("files reading as read and stopping another agent as execute", () => {
     const byName = new Map(VERB_TOOLS.map((tool) => [tool.name, tool]));
     const permission = (name: string) =>
@@ -142,7 +174,9 @@ describe("status reports", () => {
       file: () => "/tmp/s.jsonl",
       cwd: () => "/work",
     };
-    expect(payloadOf("before_agent_start", { prompt: "review" }, session)).toEqual({
+    expect(
+      payloadOf("before_agent_start", { prompt: "review" }, session),
+    ).toEqual({
       hookEventName: "before_agent_start",
       provider: "ama",
       sessionId: "s-1",
@@ -151,12 +185,18 @@ describe("status reports", () => {
       prompt: "review",
     });
     expect(
-      payloadOf("model_select", { model: { id: "gpt-x", provider: "openai" } }, session)
-        .modelId,
+      payloadOf(
+        "model_select",
+        { model: { id: "gpt-x", provider: "openai" } },
+        session,
+      ).modelId,
     ).toBe("gpt-x");
     expect(
-      payloadOf("tool_approval_requested", { toolName: "bash", requestId: "r" }, session)
-        .toolName,
+      payloadOf(
+        "tool_approval_requested",
+        { toolName: "bash", requestId: "r" },
+        session,
+      ).toolName,
     ).toBe("bash");
   });
 

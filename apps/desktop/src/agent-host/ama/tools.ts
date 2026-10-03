@@ -17,7 +17,11 @@ import type {
   ToolPermission,
   ToolResult,
 } from "@armadra/agent/host";
-import { VERB_TOOLS, type VerbTool } from "../../hook-client/verbs.js";
+import {
+  type JsonSchema,
+  VERB_TOOLS,
+  type VerbTool,
+} from "../../hook-client/verbs.js";
 import { type CallOutcome, callVerb } from "./client.js";
 
 /** Verbs that only read. Anything not listed in either table is `write`. */
@@ -48,6 +52,55 @@ export function permissionOf(tool: VerbTool): ToolPermission {
 
 export type Caller = (tool: VerbTool, input: unknown) => Promise<CallOutcome>;
 
+/**
+ * The JSON Schema keywords ama accepts in a tool's parameters (its
+ * `agent/schema.ts` subset): a host tool with any other keyword makes
+ * `create()` fail and ama exit 6. Measured against 0.6.2.
+ */
+export const AMA_SCHEMA_KEYWORDS = [
+  "type",
+  "title",
+  "description",
+  "properties",
+  "required",
+  "additionalProperties",
+  "items",
+  "enum",
+  "default",
+] as const;
+
+/**
+ * The verb table's schema in ama's subset. A bound the subset cannot state
+ * (`minimum`, `minItems`) moves into the description, where the model still
+ * reads it; the runtime enforces it either way and answers a precise refusal.
+ */
+export function amaSchema(schema: JsonSchema): ToolDefinition["parameters"] {
+  const notes: string[] = [];
+  if (schema.minimum !== undefined) notes.push(`≥ ${schema.minimum}`);
+  if (schema.minItems !== undefined) notes.push(`at least ${schema.minItems}`);
+  const out: Record<string, unknown> = {};
+  if (schema.type !== undefined) out.type = schema.type;
+  const description = [schema.description, ...notes]
+    .filter((part) => part !== undefined && part !== "")
+    .join("; ");
+  if (description !== "") out.description = description;
+  if (schema.enum !== undefined) out.enum = [...schema.enum];
+  if (schema.items !== undefined) out.items = amaSchema(schema.items);
+  if (schema.properties !== undefined) {
+    out.properties = Object.fromEntries(
+      Object.entries(schema.properties).map(([key, child]) => [
+        key,
+        amaSchema(child),
+      ]),
+    );
+  }
+  if (schema.required !== undefined) out.required = [...schema.required];
+  if (schema.additionalProperties !== undefined) {
+    out.additionalProperties = schema.additionalProperties;
+  }
+  return out as ToolDefinition["parameters"];
+}
+
 /** One verb as an ama tool definition. */
 export function toolDefinition(
   tool: VerbTool,
@@ -58,7 +111,7 @@ export function toolDefinition(
     name: tool.name,
     label: `${tool.group} ${tool.verb}`,
     description: tool.description,
-    parameters: tool.inputSchema as ToolDefinition["parameters"],
+    parameters: amaSchema(tool.inputSchema),
     permission,
     annotations: {
       readOnly: permission === "read",

@@ -95,9 +95,7 @@ function safe<T>(read: () => T): T | undefined {
   }
 }
 
-export type Reporter = (
-  payload: Record<string, JsonValue>,
-) => Promise<unknown>;
+export type Reporter = (payload: Record<string, JsonValue>) => Promise<unknown>;
 
 /** Subscribes every event in {@link AMA_EVENTS}; answers the unsubscribers. */
 export function subscribeEvents(
@@ -109,7 +107,11 @@ export function subscribeEvents(
       let reported: Promise<unknown>;
       try {
         reported = send(
-          payloadOf(name, (event ?? {}) as Record<string, unknown>, api.session),
+          payloadOf(
+            name,
+            (event ?? {}) as Record<string, unknown>,
+            api.session,
+          ),
         ).catch(() => undefined);
       } catch {
         return undefined;
