@@ -77,7 +77,11 @@ export * from "./windows-acceptance-lib.mjs";
 
 const isWindows = process.platform === "win32";
 
-/** Windows PowerShell 5.1：从 pwsh 7 里起它要去掉 PSModulePath（G3-3 的结论）。 */
+/**
+ * Windows PowerShell 5.1：从 pwsh 7 里起它要去掉 PSModulePath（G3-3 的结论）。
+ * 只有终止错误算失败：一条非终止错误（某个注册表路径不在）也会让 `-Command`
+ * 的退出码变 1，而 stderr 是空的。
+ */
 function powershell(command, { timeout = 60_000 } = {}) {
   const env = { ...process.env };
   for (const name of Object.keys(env))
@@ -91,7 +95,7 @@ function powershell(command, { timeout = 60_000 } = {}) {
       "Bypass",
       "-EncodedCommand",
       Buffer.from(
-        `$ProgressPreference='SilentlyContinue'; ${command}`,
+        `$ProgressPreference='SilentlyContinue'; try { ${command} } catch { [Console]::Error.WriteLine($_); exit 1 }; exit 0`,
         "utf16le",
       ).toString("base64"),
     ],
@@ -611,18 +615,21 @@ async function runFull(options, result, record, out) {
       return;
     }
     result.machine = machineInfo();
-    const existing = registeredInstalls();
+    let existing = [];
     if (options.installer) {
-      const ok = await record.check("preflight.existing", async () => ({
-        ok: existing.length === 0,
-        detail: {
-          registered: existing.map((row) => ({
-            name: row.DisplayName,
-            version: row.DisplayVersion,
-            location: row.InstallLocation,
-          })),
-        },
-      }));
+      const ok = await record.check("preflight.existing", async () => {
+        existing = registeredInstalls();
+        return {
+          ok: existing.length === 0,
+          detail: {
+            registered: existing.map((row) => ({
+              name: row.DisplayName,
+              version: row.DisplayVersion,
+              location: row.InstallLocation,
+            })),
+          },
+        };
+      });
       if (!ok) {
         record.skipRest(
           "机器上已有 Armadra 安装；先卸载它，或用 --app 对着它跑",
@@ -630,6 +637,11 @@ async function runFull(options, result, record, out) {
         return;
       }
     } else {
+      try {
+        existing = registeredInstalls();
+      } catch {
+        // 只是记录。
+      }
       record.set("preflight.existing", "skip", {
         reason: "--app 模式",
         registered: existing.map((row) => ({

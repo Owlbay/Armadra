@@ -176,6 +176,8 @@ export function summarize(result) {
     ...failed.map((check) => check.id),
     ...selfFailed.map((test) => `selfTest.${test.name}`),
   ];
+  // 脚本自己中途抛错：后面的项都成了 skip，不能因此算通过。
+  if (result.error) result.failures.push("probe.error");
   if (result.failures.length > 0) return "failed";
   if (result.options.mode === "dryRun") return "dryRun";
   if (result.checks.some((check) => check.status === "pending"))

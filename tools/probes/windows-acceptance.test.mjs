@@ -96,6 +96,12 @@ test("a failed check fails the run; a pending one leaves it incomplete", () => {
   assert.deepEqual(result.failures, [result.checks[6].id]);
   assert.deepEqual(validateResult({ ...result, status: "failed" }), []);
   assert.ok(validateResult({ ...result, checks: [] }).length > 0);
+  // The probe threw half-way: everything after is skipped, and that is a failure.
+  const aborted = newResult(parseArgs(["--app", "x.exe"]));
+  for (const check of aborted.checks) check.status = "skip";
+  aborted.error = "Error: boom";
+  assert.equal(summarize(aborted), "failed");
+  assert.deepEqual(aborted.failures, ["probe.error"]);
 });
 
 test("the snapshot sees a changed file and a new directory, not an untouched one", () => {
