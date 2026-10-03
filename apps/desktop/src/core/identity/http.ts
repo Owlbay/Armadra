@@ -83,7 +83,7 @@ export function nativeRequest(request: CoreRequest): boolean {
   return !isSecure(request) && origin !== undefined && nativeOrigin(origin);
 }
 
-function isSecure(request: CoreRequest): boolean {
+export function isSecure(request: CoreRequest): boolean {
   return (request.raw.socket as { encrypted?: boolean }).encrypted === true;
 }
 
@@ -133,7 +133,7 @@ export function credential(
     : cookieCredential(request, hostId, purpose);
 }
 
-function sessionCookies(
+export function sessionCookies(
   request: CoreRequest,
   response: ServerResponse,
   hostId: string,

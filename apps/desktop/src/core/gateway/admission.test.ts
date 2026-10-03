@@ -13,6 +13,7 @@ import {
   gate,
   impliedOrigin,
   loopbackOnlyPath,
+  oauthCallbackPath,
   protocolTicket,
   safeMethod,
 } from "./admission";
@@ -433,5 +434,51 @@ describe("Bearer 模式（原生 App）", () => {
         "sec-websocket-protocol": "armadra-ticket.a, armadra-ticket.b",
       }),
     ).toBe("");
+  });
+});
+
+describe("OAuth 回调（契约 §18.5）", () => {
+  it("提供方跳回的跨站 GET 没有 Origin 也放行，且不认会话", () => {
+    const { value, seen } = context();
+    const path = "/api/identity/oauth/corp/callback";
+    expect(oauthCallbackPath("GET", path)).toBe(true);
+    expect(
+      admit(
+        { method: "GET", path, headers: { "sec-fetch-site": "cross-site" } },
+        value,
+      ),
+    ).toEqual({});
+    expect(seen).toEqual([]);
+  });
+
+  it("只放行 GET 与这一种路径；其余跨站或无 Origin 的身份路由照旧拒", () => {
+    const { value } = context();
+    for (const [method, path] of [
+      ["POST", "/api/identity/oauth/corp/callback"],
+      ["GET", "/api/identity/oauth/corp/start"],
+      ["GET", "/api/identity/oauth/Corp/callback"],
+      ["GET", "/api/identity/oauth/corp/callback/x"],
+      ["GET", "/api/identity/session"],
+    ] as const) {
+      expect(
+        admit(
+          { method, path, headers: { "sec-fetch-site": "cross-site" } },
+          value,
+        ).refusal,
+        `${method} ${path}`,
+      ).toMatchObject({ status: 403 });
+    }
+    // 升级不算。
+    expect(
+      admit(
+        {
+          method: "GET",
+          path: "/api/identity/oauth/corp/callback",
+          headers: {},
+          upgrade: true,
+        },
+        value,
+      ).refusal,
+    ).toMatchObject({ status: 403 });
   });
 });

@@ -32,8 +32,8 @@ import { ID_PATTERN, newId, validName } from "./tokens";
  * core 自己的面，加路径不影响任何对账。R6 的服务器壳要改成设计里的写法时，改
  * 的是这一个文件的分发表。
  *
- * 做不到的按设计要求**返回 501 且形状一致**：OAuth 绑定的 start / callback、开放
- * 注册。passkey、MFA、会话列表、锁定（契约 §18.1–§18.4）在本文件下半部分，
+ * 做不到的按设计要求**返回 501 且形状一致**：开放注册。OAuth / OIDC 在
+ * `oauth/`（契约 §18.5），自己挂更长的原样前缀。passkey、MFA、会话列表、锁定（契约 §18.1–§18.4）在本文件下半部分，
  * 由 {@link IdentitySecurity} 驱动；没有它时那几条路径按 404 回答。
  */
 
@@ -207,11 +207,8 @@ function credentials(
   context: AccountsHttpContext,
 ): Answer | Promise<Answer> | undefined {
   const accounts = context.accounts;
-  // OAuth 的形状现在就在表里，答案是 501（G1-12 做实）。passkey 有自己的
-  // `passkey/*` 路由（契约 §18.2），这里的旧占位路径不再存在。
-  if (segments[1] === "oauth" && method === "POST") {
-    return notImplemented(`OAuth 绑定 ${segments[2] ?? ""}`.trim());
-  }
+  // passkey 与 OAuth 都有了自己的路由（`passkey/*` 契约 §18.2、`oauth/*`
+  // 契约 §18.5），`credentials/{passkey,oauth}/*` 的旧占位路径不再存在。
   if (segments.length === 1 && method === "GET") {
     const principalId = request.query.get("principalId") ?? "";
     return {
