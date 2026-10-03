@@ -1,6 +1,6 @@
 # 外部服务与依赖：全清单与接入设计
 
-> 状态：目标设计（2026-10-03）。本文盘点**成品 Armadra 会碰到的每一个外部服务、账户、证书与第三方 API**，逐项给出用途、选项对比（2026 年价格与可用性，附来源）、推荐、能在本机验证到哪一步、用户必须提供什么、密钥放在哪、没配置时的降级行为。现状以源码为准，本文里「现状」一栏写的是 2026-10-03 `main`（aaca2b03）上的代码；凡是本文新提的环境变量、secret 名与配置键都带「新」字。
+> 状态：部分实施（2026-10-04）。已实施：W-DEVSTACK、W-SECRETS、W-UPD、W-OUTBOUND、W-SIGN-MAC / WIN / LINUX、W-ACME、W-AUTH-OIDC、W-AUTH-PASSKEY（不含 HIBP）、W-PUSH（不含 UnifiedPush）、W-MOBILE、W-PAIR-FP、W-DIST、W-NOTICES、W-CRASH（[补全进度](../status/completion-progress.md)）。未实施：HIBP 泄露检查（G3-8）、W-MAIL、W-FORGE、W-MIRROR；§13 的条目全部仍待用户提供，汇总在补全进度 G4-1 一节。本文盘点**成品 Armadra 会碰到的每一个外部服务、账户、证书与第三方 API**，逐项给出用途、选项对比（2026 年价格与可用性，附来源）、推荐、能在本机验证到哪一步、用户必须提供什么、密钥放在哪、没配置时的降级行为。现状以源码为准，本文里「现状」一栏写的是 2026-10-03 `main`（aaca2b03）上的代码；凡是本文新提的环境变量、secret 名与配置键都带「新」字。
 > 范围：发布签名与公证、更新托管、分发渠道、手机壳与推送、网关连通与 TLS、认证、实时协同基础设施、模型提供商、Git 托管 API、遥测与许可证、密钥存放。不写各 CLI 自己的账户（Armadra 不碰它们，[AGENTS.md](../../AGENTS.md)），不写计费。
 > 配套：总体架构见 [完成架构](completion-architecture.md)，批次见 [完成计划](completion-plan.md)；发布流水线现状见 [CI 与发布](../guides/ci-release.md)，更新链路见 [发布、更新与服务安装](updates-and-service-install.md)，账号模型见 [服务器账号、中转与共享](server-accounts-and-sharing.md)，`ama` 的供应商目录见 [协调 Agent](coordinator-agent.md) §7。
 

@@ -1,6 +1,6 @@
 # CLI 接入、通信与共享上下文（后续规划第一部分）
 
-> 状态：已实施（2026-10-02）——H0、H1、H2、H3、R1、M1、E1 已合入 main（PR #9）；场景 10 首跑踩中的启动对话框问题由投递画面门修掉（[投递设计](agent-delivery.md) §4.3「画面门」，进度 §62.3）；E1 本机实跑 Claude / Codex / Pi 通过（OpenCode / OMP / Copilot 未安装，记 skipped，待装机补跑）；X1（多账号调研）结论见 §7，第二阶段待实测（§7.4）。对应[后续规划](product-roadmap.md)第一部分。现状以[功能预期总表](../status/feature-roadmap.md)与源码为准。
+> 状态：已实施（2026-10-02）——H0、H1、H2、H3、R1、M1、E1 已合入 main（PR #9）；场景 10 首跑踩中的启动对话框问题由投递画面门修掉（[投递设计](agent-delivery.md) §4.3「画面门」，进度 §62.3）；E1 本机实跑 Claude / Codex / Pi 通过（OpenCode / OMP / Copilot 未安装，记 skipped，待装机补跑）；X1（多账号调研）结论见 §7；第二阶段已实施（补全 G1-1，契约 §20：只开 Claude `oauth-token` 与 Copilot `github-token`，Windows 未开放），§7.4 的 T1–T9 真账号实测待用户提供。跨执行主机交接（§6）已由补全 G1-2 放开。对应[后续规划](product-roadmap.md)第一部分。现状以[功能预期总表](../status/feature-roadmap.md)与源码为准。
 > 范围：`apps/desktop/src/core/{history,conversations,usage,collab,handoff,hook,agent}`、`apps/web/src/{agent,nodes,settings,usage}`、`packages/shared/src`、`tools/probes/agent-e2e`。
 > 前置：[Agent 协作](../guides/agent-collaboration.md)（现状）、[Agent 推式投递](agent-delivery.md)（`send` 与投递队列）、[Agent 协作通道](agent-collaboration-channels.md)（各 CLI 的 Hook 通道）、[远端画布注入](remote-canvas-injection.md)。
 
