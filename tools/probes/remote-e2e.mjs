@@ -438,9 +438,15 @@ async function scenario(ctx) {
     await sleep(300);
     await page.click('button[aria-label="源码控制"]');
     await page.click('[role="tab"]', "提交", { exact: true });
+    // 只认 Git 面板里、带勾选框的那一行：画布上 README.md 编辑器节点的标题
+    // 也写着「README.md」，按全页文字等会在没切到「提交」页时就放行。
     await page.waitFor(
-      `return [...document.querySelectorAll("label, div, span")].some((node) => node.innerText?.trim() === "README.md");`,
-      { what: "Git 状态列出改过的 README.md" },
+      `const tab = [...document.querySelectorAll('[role="tab"]')].find((node) => node.textContent.trim() === "提交");
+       if (tab?.getAttribute("aria-selected") !== "true") return false;
+       const panel = document.querySelector('[data-slot="sheet-content"]');
+       return [...(panel?.querySelectorAll('button[role="checkbox"], input[type="checkbox"]') ?? [])]
+         .some((box) => box.closest("label, div")?.innerText?.includes("README.md"));`,
+      { what: "「提交」页列出改过的 README.md" },
     );
     await page.capture("03a-git-status");
     const status = git(project, "status", "--porcelain");

@@ -398,7 +398,13 @@ async function page(h, call, listeners, sessionId, { width, height, name }) {
     await clickAt(point);
     return point;
   };
-  const locateSource = (selector, text, exact = false) => `(() => {
+  /*
+   * 量两次、隔 50ms，位置没变才算找到：面板与弹层是滑进来的（Sheet 从底边
+   * 滑入 40px、200ms），滑到一半量下的坐标，等鼠标按下去时元素已经不在那里，
+   * 点击落空却不报错——remote-e2e 的「提交」页签就这样偶发点不中，Git 面板
+   * 停在「日志」页，下一步等不到勾选框。
+   */
+  const locateSource = (selector, text, exact = false) => `(async () => {
       const all = [...document.querySelectorAll(${JSON.stringify(selector)})]
         .filter((node) => node.getClientRects().length > 0 && !node.disabled);
       const text = ${JSON.stringify(text ?? null)};
@@ -408,7 +414,11 @@ async function page(h, call, listeners, sessionId, { width, height, name }) {
         node.getAttribute("aria-label") === text)).at(-1);
       if (!found) return null;
       found.scrollIntoView({ block: "center", inline: "center" });
+      const first = found.getBoundingClientRect();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (!found.isConnected) return null;
       const rect = found.getBoundingClientRect();
+      if (Math.abs(rect.left - first.left) > 0.5 || Math.abs(rect.top - first.top) > 0.5) return null;
       return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     })()`;
   /** 聚焦输入框、清空、输入。经 `Input.insertText` 走真实的输入事件。 */
