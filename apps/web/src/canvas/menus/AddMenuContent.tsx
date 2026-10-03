@@ -16,6 +16,8 @@ import { useT } from "@/app/preferences-store";
 import { commandKeysLabel } from "@/keybindings";
 import { useSshHosts } from "@/panels/settings/ssh-hosts";
 import { buildAddMenu, type AddMenuContext } from "./add-menu";
+import { useDefaultDriverSync } from "@/acp/driver";
+import { useSimpleMode, visibleAddMenu } from "@/acp/simple-mode";
 
 /**
  * 把 `buildAddMenu` 的规格渲染成 Radix 菜单项（§13.3）。
@@ -48,9 +50,14 @@ export function AddMenuContent({ ctx, kind }: AddMenuContentProps) {
   // `t` 按 locale 记忆化，所以切语言时菜单会重建，平时不会每帧重算。
   const hosts = useSshHosts();
   const browser = useCanCreateBrowser();
+  // 两样都影响菜单：缺省驱动决定 Agent 项写什么，简洁模式决定留哪几项。
+  const driver = useDefaultDriverSync();
+  const simple = useSimpleMode();
   const items = React.useMemo(
-    () => buildAddMenu(ctx.agents, t, hosts, browser),
-    [ctx.agents, hosts, t, browser],
+    // 简洁模式只在菜单上收起：快捷键与命令面板照旧能建终端。
+    () => visibleAddMenu(buildAddMenu(ctx.agents, t, hosts, browser), simple),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ctx.agents, hosts, t, browser, driver, simple],
   );
   const Item = kind === "context" ? ContextMenuItem : DropdownMenuItem;
   const Label = kind === "context" ? ContextMenuLabel : DropdownMenuLabel;
@@ -71,7 +78,7 @@ export function AddMenuContent({ ctx, kind }: AddMenuContentProps) {
         return (
           <React.Fragment key={item.id}>
             {newGroup && previous ? <Separator /> : null}
-            {newGroup ? (
+            {newGroup && item.group !== "start" ? (
               <Label className="px-2.5 pt-1.5 pb-1 text-xs font-medium text-muted-foreground">
                 {t(`add.group.${item.group}`)}
               </Label>

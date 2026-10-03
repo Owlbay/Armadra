@@ -1,16 +1,20 @@
 import * as React from "react";
 import { Plus } from "lucide-react";
 import {
+  AGENT_DRIVERS,
   AGENT_IDS,
   supportedPermissionModes,
   customAgentSchema,
   type BuiltinAgentId,
   type AgentCapability,
+  type AgentDriver,
   type CustomAgent,
   type PermissionMode,
 } from "@armadra/shared";
 import { toast } from "sonner";
 import { CapabilityInheritance } from "@/agent/CapabilityInheritance";
+import { driverSettingOf } from "@/acp/driver";
+import { useSimpleModeStore } from "@/acp/simple-mode";
 
 import { useAgentsQuery } from "../../../app/use-agents";
 import {
@@ -81,6 +85,9 @@ export function AgentPage() {
   const setPermissionMode = usePreferencesStore(
     (state) => state.setDefaultPermissionMode,
   );
+
+  const simpleMode = useSimpleModeStore((state) => state.simpleMode);
+  const setSimpleMode = useSimpleModeStore((state) => state.setSimpleMode);
 
   const list = agents.data ?? [];
   // 自定义 Agent 也在 `GET /api/agents` 里（§24.1），但三态、启动命令这两组
@@ -222,6 +229,43 @@ export function AgentPage() {
               ))}
             </SelectContent>
           </Select>
+        </SettingsRow>
+      </SettingsGroup>
+
+      {/* 普通用户入口（ACP 设计 §8）：缺省驱动与简洁模式。 */}
+      <SettingsGroup>
+        <SettingsRow label={t("acp.settings.defaultDriver")}>
+          <Select
+            value={driverSettingOf(settings.data)}
+            disabled={!settings.data}
+            onValueChange={(value) =>
+              save.mutate({ agents: { defaultDriver: value as AgentDriver } })
+            }
+          >
+            <SelectTrigger
+              aria-label={t("acp.settings.defaultDriver")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="z-[var(--z-dialog)]">
+              {[...AGENT_DRIVERS].reverse().map((driver) => (
+                <SelectItem key={driver} value={driver}>
+                  {t(
+                    driver === "acp" ? "acp.view.session" : "acp.view.terminal",
+                  )}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </SettingsRow>
+        <SettingsRow label={t("acp.settings.simpleMode")}>
+          <Switch
+            checked={simpleMode}
+            aria-label={t("acp.settings.simpleMode")}
+            onCheckedChange={setSimpleMode}
+          />
         </SettingsRow>
       </SettingsGroup>
 

@@ -33,6 +33,7 @@ import { useAgentModels } from "../agent/models";
 import { useNodeCapabilities } from "@/agent/capabilities";
 import { PendingLaunchButton } from "@/agent/PendingLaunchButton";
 import { StateSourceBadge } from "@/agent/StateSourceBadge";
+import { useSimpleMode } from "@/acp/simple-mode";
 import {
   agentHeaderState,
   useAgentStatus,
@@ -213,6 +214,7 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
 
   const exited =
     surface.connection === "exited" || surface.connection === "failed";
+  const simple = useSimpleMode();
   // 节能休眠（终端宿主设计 §7.2）：进程不在，不占内存，也没有人在驱动它。
   const hibernated = surface.render === "hibernated";
 
@@ -519,14 +521,15 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
           : {})}
         {...(header.glow ? { glow: header.glow } : {})}
         {...(approval ? { approval } : {})}
-        {...(agent && !exited
+        {...(agent && !exited && !simple
           ? {
               headerMark: (
                 <StateSourceBadge source={agentStatus?.stateSource} />
               ),
             }
           : {})}
-        headerChips={headerChips}
+        // 简洁模式：头部只留状态胶囊与审批（ACP 设计 §8 第 3 条）。
+        headerChips={simple ? null : headerChips}
         headerActions={headerActions}
         menuItems={menuItems}
       >
