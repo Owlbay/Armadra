@@ -1,6 +1,7 @@
-// windows-acceptance.mjs 的纯函数一半（补全计划 G3-2）：检查项表、参数、结果文件、
-// 用户配置快照、各 shell 的启动行与探针自己的 `.launch`、干跑的自检。不起进程、不碰
-// 系统，任何平台都能导入；测试（windows-acceptance.test.mjs）与探针共用它。
+// windows-acceptance.mjs 不依赖 Windows 的一半（补全计划 G3-2）：检查项表、参数、结果
+// 文件、用户配置快照、各 shell 的启动行与探针自己的 `.launch`、页内工具、调试端口与
+// CDP、干跑的自检。不起进程，任何平台都能导入；测试（windows-acceptance.test.mjs）
+// 与探针共用它。
 import { createHash } from "node:crypto";
 import {
   mkdirSync,
@@ -12,8 +13,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { request as httpsRequest } from "node:https";
+import { createServer } from "node:net";
 import os from "node:os";
 import { basename, join, resolve } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 export const SCHEMA = "armadra-windows-acceptance/1";
 
@@ -601,6 +604,137 @@ export function httpsProbe(origin) {
     req.on("timeout", () => req.destroy(new Error("timeout")));
     req.end();
   });
+}
+
+/* ------------------------------- ports & CDP ------------------------------ */
+
+export async function freePort() {
+  return await new Promise((done, fail) => {
+    const server = createServer();
+    server.on("error", fail);
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address();
+      server.close(() => done(port));
+    });
+  });
+}
+
+export async function waitFor(
+  what,
+  test,
+  { timeout = 60_000, interval = 500 } = {},
+) {
+  const deadline = Date.now() + timeout;
+  let last;
+  while (Date.now() < deadline) {
+    last = await test();
+    if (last) return last;
+    await sleep(interval);
+  }
+  throw new Error(`等待超时（${Math.round(timeout / 1000)}s）：${what}`);
+}
+
+/* ----------------------------------- CDP ----------------------------------- */
+
+/**
+ * 调试端口上应用自己的回环页面。应用退了、或 core 起不来（壳会弹一个模态错误框，
+ * 页面永远不出现）时立刻放弃，原因来自 `dead()`。
+ */
+export async function attachToRenderer(port, dead = () => undefined) {
+  let seen = [];
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    const reason = dead();
+    if (reason !== undefined) throw new Error(reason);
+    try {
+      const targets = await (
+        await fetch(`http://127.0.0.1:${port}/json/list`, {
+          signal: AbortSignal.timeout(5_000),
+        })
+      ).json();
+      seen = targets.map((target) => `${target.type} ${target.url}`);
+      const page = targets.find(
+        (target) =>
+          target.type === "page" &&
+          target.webSocketDebuggerUrl &&
+          /^https?:\/\/(127\.0\.0\.1|localhost)[:/]/.test(target.url ?? ""),
+      );
+      if (page) return page.webSocketDebuggerUrl;
+    } catch {
+      // 应用还在起。
+    }
+    await sleep(500);
+  }
+  throw new Error(
+    `调试端口 ${port} 上没有回环页面；看到 ${JSON.stringify(seen)}`,
+  );
+}
+
+/** 页面里最长的一次等待（起 Codex 九十秒）再留余量。 */
+const CDP_TIMEOUT_MS = 180_000;
+
+export async function cdp(url) {
+  const socket = new WebSocket(url);
+  const pending = new Map();
+  let next = 1;
+  await new Promise((done, fail) => {
+    socket.addEventListener("open", done, { once: true });
+    socket.addEventListener("error", () => fail(new Error("CDP 连不上")), {
+      once: true,
+    });
+  });
+  socket.addEventListener("message", (event) => {
+    const message = JSON.parse(String(event.data));
+    const waiter = pending.get(message.id);
+    if (waiter === undefined) return;
+    pending.delete(message.id);
+    if (message.error) waiter.fail(new Error(JSON.stringify(message.error)));
+    else waiter.done(message.result);
+  });
+  // 应用退出或页面卡住时不能一直等：每次调用都有上限，连接断了全部失败。
+  socket.addEventListener("close", () => {
+    for (const waiter of pending.values())
+      waiter.fail(new Error("CDP 连接断了"));
+    pending.clear();
+  });
+  const send = (method, params) =>
+    new Promise((done, fail) => {
+      const id = next;
+      next += 1;
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        fail(
+          new Error(`CDP ${method} 在 ${CDP_TIMEOUT_MS / 1000}s 内没有回答`),
+        );
+      }, CDP_TIMEOUT_MS);
+      pending.set(id, {
+        done: (value) => {
+          clearTimeout(timer);
+          done(value);
+        },
+        fail: (error) => {
+          clearTimeout(timer);
+          fail(error);
+        },
+      });
+      socket.send(JSON.stringify({ id, method, params }));
+    });
+  return {
+    async evaluate(expression) {
+      const result = await send("Runtime.evaluate", {
+        expression,
+        awaitPromise: true,
+        returnByValue: true,
+        userGesture: true,
+      });
+      if (result.exceptionDetails)
+        throw new Error(
+          `页面里抛错：${JSON.stringify(result.exceptionDetails).slice(0, 500)}`,
+        );
+      return result.result.value;
+    },
+    close: () => socket.close(),
+  };
 }
 
 /* --------------------------------- dry run --------------------------------- */
