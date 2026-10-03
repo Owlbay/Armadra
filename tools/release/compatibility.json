@@ -18,7 +18,9 @@
       },
       "pi": {
         "program": "pi-acp",
-        "verified": null
+        "verified": {
+          "min": "0.0.34"
+        }
       },
       "omp": {
         "program": "omp",
