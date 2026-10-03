@@ -16,6 +16,7 @@ import type { UsageSnapshot } from "./snapshot";
 import { UsageService } from "./service";
 import { StatusService, statusSources } from "./status";
 import { catalogPrices, modelsDomain } from "../models";
+import { secretsFor } from "../secrets";
 
 export { emptySnapshot, USAGE_PROVIDER_IDS } from "./snapshot";
 export type {
@@ -32,7 +33,7 @@ export type { ProviderStatus, StatusIndicator } from "./status";
 export { CopilotLogin } from "./copilot-login";
 export type { AuthState, LoginProgress, LoginPrompt } from "./copilot-login";
 export { SecretStore } from "./secret-store";
-export type { SecretBackend } from "./secret-store";
+export type { SecretBackend, SecretBackendKind } from "./secret-store";
 export {
   BUILT_IN_PRICES,
   CostService,
@@ -76,6 +77,7 @@ export function install(context: CoreContext): UsageDomain {
   const service = new UsageService({
     settings: settingsDomain()?.settings,
     dataDir: context.dataDir,
+    secrets: secretsFor(context),
     // 目录域装在用量域**后面**，所以这里问的是「扫描那一刻」的那份目录，而不是
     // 装配这一刻的（那时候它还不存在）。
     catalogPrices: () => catalogPrices(modelsDomain()?.catalog.current()),

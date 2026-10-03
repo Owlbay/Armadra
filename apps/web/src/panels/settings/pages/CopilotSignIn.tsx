@@ -79,9 +79,11 @@ export function CopilotSignIn({ disabled }: { disabled?: boolean }) {
       <SettingsRow
         label={t("settings.copilotAccount")}
         footnote={
-          auth.data?.backend === "file"
-            ? t("settings.copilotFileBackend")
-            : undefined
+          auth.data === undefined
+            ? undefined
+            : auth.data.backend === "file"
+              ? t("settings.copilotFileBackend")
+              : t(`settings.secretBackend.${auth.data.backend}`)
         }
       >
         <Button

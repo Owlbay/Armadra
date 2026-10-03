@@ -22,6 +22,7 @@ import type { CoreLog } from "../../desktop/src/core/platform";
 import { type ListenAddress, loopbackHost } from "./cli";
 import { type Admission, type Refusal, admit, impliedOrigin } from "./auth";
 import { serverPlatform } from "./platform-node";
+import { serverSecrets } from "./secrets";
 import { type TlsMaterial, resolveTls } from "./tls";
 import {
   type WebRoot,
@@ -161,7 +162,10 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
     ...(options.moduleDir === undefined
       ? {}
       : { moduleDir: options.moduleDir }),
-    platform: serverPlatform,
+    platform: (base) => ({
+      ...serverPlatform(base),
+      secrets: serverSecrets(base.dataDir, env),
+    }),
   });
   const log = core.platform.log;
   if (!core.db.unified) {

@@ -24,6 +24,7 @@ import {
   DRIVE_ADDRESS_ENV,
   DRIVE_TOKEN_ENV,
 } from "../shell-core/browser/drive";
+import type { SecretChannel } from "./secrets";
 
 /**
  * The two variables the browser drive channel travels on (§4.2).
@@ -58,6 +59,16 @@ export const CORE_PROCESS_MARKER = "core/main.js";
 
 export function setDriveEnvironment(address: string, token: string): void {
   driveEnvironment = { [DRIVE_ADDRESS_ENV]: address, [DRIVE_TOKEN_ENV]: token };
+}
+
+/**
+ * 密钥通道（`main/secrets.ts`）：spawn 时给 core 的环境变量，以及在新 child 上挂
+ * `safeStorage` 应答。每次 spawn 都重挂，重启的 core 也有通道。
+ */
+let secretChannel: SecretChannel | undefined;
+
+export function setSecretChannel(channel: SecretChannel): void {
+  secretChannel = channel;
 }
 
 /**
@@ -150,7 +161,11 @@ export class RuntimeProcess {
     // loopback port and the token is one random value per shell run, so both
     // exist only here and in the environment of this one child. Nothing is
     // written to disk, and a Runtime this shell did not start has no channel.
-    const env = { ...process.env, ...driveEnvironment };
+    const env = {
+      ...process.env,
+      ...driveEnvironment,
+      ...(secretChannel?.environment() ?? {}),
+    };
     // `child_process.fork`, not `utilityProcess.fork`: everything below this
     // line — the announcement reader, the exit bookkeeping, the SIGKILL
     // fallback — is written against a `ChildProcess`, and `utilityProcess` has
@@ -162,6 +177,7 @@ export class RuntimeProcess {
       silent: true,
       env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
     });
+    secretChannel?.attach(child);
     child.on("error", (error) => {
       this.exited = true;
       process.stderr.write(

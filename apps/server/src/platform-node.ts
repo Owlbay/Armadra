@@ -6,10 +6,9 @@ import type { CoreLog, CorePlatform } from "../../desktop/src/core/platform";
  * core 与壳之间只有这一条缝，而服务器壳能填的比桌面壳少三样，每一样都是**明确
  * 的缺席**而不是一个悄悄的空实现：
  *
- *   * **没有 `safeStorage`**。`sealSecret` / `unsealSecret` 两个都不提供（成对
- *     可选，缺其一是编程错误），core 因此落到已有的那条路径：凭据降级为数据
- *     目录下的 0600 文件，并在设置页标注「已降级」。服务器上没有登录会话持有的
- *     钥匙串，假装有一个才是错的。
+ *   * **没有 `safeStorage`**。密钥后端由 `secrets.ts` 另给：数据目录里一把
+ *     master key 做 AES-256-GCM 封装，自报 `file-encrypted`。服务器上没有登录
+ *     会话持有的钥匙串，假装有一个才是错的。
  *   * **没有 `resourcesPath`**。没有应用包，迁移目录与静态资源都从检出或部署
  *     目录里找。
  *   * **`openExternal` 是 no-op**。无头机器上没有「打开一个链接」这件事；调用

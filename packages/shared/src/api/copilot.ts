@@ -11,8 +11,18 @@ export const copilotLoginPromptSchema = z.object({
   expiresAt: z.string(),
 });
 
-/** token 存在哪：`keychain` 是 OS 钥匙串，`file` 是带 0600 的降级方案。 */
-export const copilotBackendSchema = z.enum(["keychain", "file"]);
+/**
+ * token 存在哪（core `SecretBackendKind`）：`keychain` 是 macOS 钥匙串，`dpapi` /
+ * `libsecret` 是桌面壳的 `safeStorage`，`file-encrypted` 是服务器壳 master key
+ * 封装的文件，`file` 是带 0600 的降级方案。
+ */
+export const copilotBackendSchema = z.enum([
+  "keychain",
+  "dpapi",
+  "libsecret",
+  "file-encrypted",
+  "file",
+]);
 
 export const copilotAuthSchema = z.object({
   signedIn: z.boolean(),
