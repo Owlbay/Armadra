@@ -121,6 +121,8 @@ export interface TerminalSession {
    * 用 CLI 自己的 resume 接回来。活着的行恒为 `null`。
    */
   readonly hibernation: "hibernated" | null;
+  /** 创建者 = 触发者（契约 §23）；空串是本机 owner。读行时才带，起会话的回答里缺席。 */
+  readonly creatorPrincipalId?: string;
 }
 
 /**
@@ -779,6 +781,7 @@ export class TerminalManager {
       attachState: String(row.attach_state),
       lastOutputAt: (row.last_output_at as string | null) ?? null,
       hibernation: rowHibernated(row) ? "hibernated" : null,
+      creatorPrincipalId: String(row.creator_principal_id ?? ""),
     };
   }
 

@@ -251,7 +251,9 @@ describe("设置 → 账号与共享", () => {
   it("没有会话时给登录表单", async () => {
     mocks.resume.mockResolvedValue(null);
     mount();
-    expect(await screen.findByRole("button", { name: "登录" })).toBeTruthy();
+    // 登录分两步（设计系统 §5.9）：先账号「继续」，再口令。
+    expect(await screen.findByRole("heading", { name: "登录" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "继续" })).toBeTruthy();
     expect(screen.getByLabelText("账号标识")).toBeTruthy();
   });
 

@@ -123,17 +123,25 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
     write: "canvas:read",
   },
   // ACP 会话（契约 §14）：看会话与看终端同一档，开会话、发提示与开终端同一档。
-  // 路径里没有工作空间，成员在路由门按会话行查出画布之前一律 403（G2-1 补
-  // 与 `/api/terminals/{id}` 相同的那段查找）。
+  // 路径里没有工作空间：服务器壳的路由门按会话行 / 节点查出画布再判，往别人
+  // 起的会话里写与切换别人节点的驱动要 `terminal:drive`（契约 §23）。
   {
     pattern: /^\/api\/acp\//,
     read: "terminal:read",
     write: "terminal:create",
   },
   // 工作流（契约 §15）：看草案、模板与运行记录是看画布；确认草案、改模板、
-  // 起一次运行会开节点与 Agent，要 operator 那一档（`agent:launch`）。关卡
-  // 答复的权限由契约 §23 收紧。路径里没有工作空间，成员在 G1-8 补上按运行
-  // 查画布之前一律 403。
+  // 起一次运行会开节点与 Agent，要 operator 那一档（`agent:launch`）。路径里
+  // 没有工作空间：服务器壳的路由门按草案 / 运行 / 画板查出画布再判，改模板
+  // 只有 owner（`identity/route-access.ts`）。
+  //
+  // 关卡答复（契约 §23）：放行或拦下一次运行，与起跑同一档，要运行所在画布
+  // 上的 operator——不是替 Agent 代答，所以不是 `approval:answer`。
+  {
+    pattern: /^\/api\/workflows\/runs\/[^/]+\/gates\//,
+    read: "canvas:read",
+    write: "agent:launch",
+  },
   {
     pattern: /^\/api\/workflows/,
     read: "canvas:read",

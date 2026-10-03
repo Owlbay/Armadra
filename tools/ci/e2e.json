@@ -105,6 +105,15 @@
       "requires": ["chrome"],
       "devStack": true,
       "timeoutMinutes": 40
+    },
+    {
+      "id": "update-e2e",
+      "tier": "b",
+      "script": "tools/probes/update-e2e.mjs",
+      "args": ["{out}", "--build", "--require-dev-stack"],
+      "requires": [],
+      "devStack": true,
+      "timeoutMinutes": 45
     }
   ]
 }

@@ -672,7 +672,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 协调者把一次协作沉淀成**草案**，人确认后成为**模板**，模板按参数**运行**（设计 `design/coordinator-agent.md` §5、`design/completion-architecture.md` §5.4）。表在迁移 `0034_workflow.sql`（`workflow_drafts` / `workflow_templates` / `workflow_runs` / `workflow_run_steps` / `workflow_task_runs`）。zod 在 `packages/shared/src/api/workflows.ts`，core 的手写校验在 `core/workflow/draft.ts`，两边规则相同。§15.5（`wait` 动词与 `workflow_task_runs` 行）由 G2-4、§15.6（自动化目标 `WORKFLOW_RUN`）由 G2-3 填写。
 
-权限按前缀（`http/route-scopes.ts`）：读 `canvas:read`，写 `agent:launch`。路径里没有工作空间，服务器壳上的成员一律 `403 forbidden`；关卡答复的收紧见 §23。失败一律 `{ code, message }`，`code` 是 snake_case 的稳定码。
+权限按前缀（`http/route-scopes.ts`）：读 `canvas:read`，写 `agent:launch`。路径里没有工作空间，服务器壳上的路由门按草案 / 运行 / 画板查出画布再判，成员的逐条权限与关卡答复见 §23.3。失败一律 `{ code, message }`，`code` 是 snake_case 的稳定码。
 
 ### 15.1 草案 JSON 与 `workflow-propose`
 
@@ -1256,7 +1256,27 @@ TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时
 
 ### 18.6 审计查询
 
-预留，由 G2-8 填写。
+查的是 `audit_log`（迁移 `accounts`），写入点见各节的「审计」一行与 `core/identity/audit.ts` 的 `SECURITY_AUDIT_ACTIONS`。实现在 `accounts-http.ts` 的审计一段，形状的 zod 在 `identity-security.ts` 的 §18.6 小节。两条都只读；谁能调与原来一样：带 `workspaceId` 要那块画布的 `workspace:share`，不带要 `identity:manage`（owner）。
+
+筛选参数（查询串，都可选，彼此 AND）：
+
+| 参数                 | 意思                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------- |
+| `principalId`        | 动作的发起者                                                                                            |
+| `workspaceId`        | 动作所在的工作空间                                                                                      |
+| `action`（可重复）   | 动作或动作族：`identity.login` 命中它自己与 `identity.login.*`（不命中 `identity.loginx`）；多个之间 OR |
+| `sinceMs`、`untilMs` | 时间窗，`sinceMs <= atMs < untilMs`，毫秒                                                               |
+| `beforeId`           | 翻页游标：只要 `id < beforeId` 的                                                                       |
+| `limit`              | 一页几行，1–500，缺省或越界取 100（只对 `GET audit`）                                                   |
+
+数字参数写错（非整数、负数、`beforeId` 为 0）答 400 `INVALID_ARGUMENT`，不悄悄当成「不筛」；`action` 超过 20 个或单个超过 128 字符同样 400。
+
+| 方法与路径         | 答案                                                                                                                                                                          |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET audit`        | `{ entries: [{ id, atMs, principalId, deviceId, action, target, workspaceId, detail }], nextBeforeId }`，从新到旧；`nextBeforeId` 是下一页的 `beforeId`，0 表示没有更早的了   |
+| `GET audit/export` | `text/csv; charset=utf-8`，`Content-Disposition: attachment; filename="armadra-audit.csv"`；同样的筛选、不分页，从新到旧最多 10000 行；错误照旧是 JSON 的 `{ code, message }` |
+
+CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,action,target,workspaceId,detail`；`time` 是 ISO 8601（UTC），`detail` 是 JSON 文本（没有时空）；含逗号、引号或换行的单元格加引号、引号双写；以 `=`、`+`、`-`、`@`、制表或回车开头的单元格前面补一个 `'`（表格软件的公式注入）。页面的「结果」由动作名推出：`.failed`、`identity.lockout` 记为失败，其余为成功。
 
 ## 19. 推送：`/api/push/devices*`
 
@@ -1540,4 +1560,58 @@ TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时
 
 ## 23. 权限补充：自己创建的终端与工作流关卡
 
-预留，由 G2-9 填写。
+补全架构 §8.2 的角色决定。判定只有一处：`core/identity/route-access.ts`（路由门），触发者的记法在 `core/identity/creators.ts`。不做节点级的「驱动者名单」。
+
+### 23.1 角色阶梯
+
+| 角色     | 画布 | 起 Agent | 驱动 / 审批自己起的 | 驱动 / 审批别人起的 | 工作流关卡 |
+| -------- | ---- | -------- | ------------------- | ------------------- | ---------- |
+| viewer   | 看   | 否       | —                   | 否                  | 否         |
+| editor   | 改   | 否       | —                   | 否                  | 否         |
+| operator | 改   | 是       | 是                  | 否                  | 是         |
+| driver   | 改   | 是       | 是                  | 是                  | 是         |
+
+「自己起的」= `terminal_sessions.creator_principal_id` 等于请求主体。下列路由对「自己的」要 `terminal:create@workspace`（operator），对「别人的」要括号里的那条（driver）：
+
+| 路由                                               | 「自己的」按什么判                                       | 别人的要          |
+| -------------------------------------------------- | -------------------------------------------------------- | ----------------- |
+| `/api/terminals/{id}/…` 的写（含 `…/ws`）          | 会话行                                                   | `terminal:drive`  |
+| `POST /api/acp/sessions/{id}/prompt\|cancel\|mode` | 会话行                                                   | `terminal:drive`  |
+| `POST /api/acp/nodes/{nodeId}/driver`              | 节点最近的会话行；还没起过时是节点记下的触发者           | `terminal:drive`  |
+| `POST /api/approvals/{pendingId}/answer`           | 审批行的 `session_id` 那一行；旧行没有时按节点最近的会话 | `approval:answer` |
+| `POST /api/control/confirm/{requestId}`            | 不判（只在内存里，查不到终端）                           | `approval:answer` |
+
+### 23.2 创建者 = 触发者
+
+| 终端怎么起来的                                                | 创建者                                              |
+| ------------------------------------------------------------- | --------------------------------------------------- |
+| 人从页面起（`POST /api/terminals`、`POST /api/acp/sessions`） | 本人；节点记过触发者时是那个触发者                  |
+| 控制动词 `open-agent` / `open-terminal` / `team` 建的节点     | 调用方节点终端的创建者                              |
+| ama 的 runner 建的节点                                        | 同上（经 `open-agent`）                             |
+| 工作流的角色节点（`POST /api/workflows/runs`）                | 起跑的人                                            |
+| 定时冷启动                                                    | 自动化的创建者；自动化只有 owner 能建，所以是 owner |
+| 依赖编排、休眠接回、切换驱动、重启接回                        | 节点记下的触发者；接回同一行时沿用那一行的          |
+| 桌面壳、没有请求主体                                          | owner（空串）                                       |
+
+节点的触发者在建节点、存盘之前写进 `node_creators`（迁移 0035），只由 core 写，不在画布文档里。库里的触发器让任何一条起终端的路插入的会话行都继承它；没有记录的节点仍按 0028 的判法（起它的那个人）。`POST /api/acp/sessions` 答的是已经活着的会话、或原地接回的同一行时，创建者不被这次请求改写。
+
+终端会话的 JSON（`GET /api/terminals/{id}`）多一个可选字段 `creatorPrincipalId`（空串是 owner）；页面据它决定对 operator 摆不摆「自己起的」审批按钮（`apps/web/src/app/use-access.ts::useCanAnswer`），判定仍在 core。
+
+一处可接受的隐式提权：editor 能改节点里的启动命令（节点数据），operator 起这个节点时执行它——与「editor 改便签、Agent 读便签」同一信任层级。Agent 之间的驱动仍由连线编译（投递设计 §3.2），与人无关。
+
+### 23.3 工作流
+
+`/api/workflows/*` 路径里没有工作空间，服务器壳的路由门按对象查画布再判（§15）：
+
+| 路由                                          | 画布从哪来               | 要                                |
+| --------------------------------------------- | ------------------------ | --------------------------------- |
+| `GET drafts?boardId=`、`GET runs?boardId=`    | 查询串的画板；不带是 403 | `canvas:read`                     |
+| `GET drafts/{id}`、`GET runs/{id}`            | 草案 / 运行行            | `canvas:read`                     |
+| `POST drafts/{id}/confirm\|discard`           | 草案行                   | `agent:launch`                    |
+| `POST runs` `{ boardId }`                     | 请求体的画板             | `agent:launch`                    |
+| `POST runs/{id}/cancel`                       | 运行行                   | `agent:launch`                    |
+| `POST runs/{id}/gates/{stepId}`               | 运行行                   | `agent:launch`（operator）        |
+| `GET templates`、`GET templates/{id}`         | 模板是本机共用的一份库   | 在任意一块画布上有 `agent:launch` |
+| `POST templates`、`PUT/DELETE templates/{id}` | —                        | 只有 owner                        |
+
+关卡答复是放行或拦下一次运行，与起跑同一档，不是替 Agent 代答，所以要 operator 而不是 `approval:answer`。声明在 `http/route-scopes.ts` 单列一行，常量 `core/workflow/routes.ts::GATE_SCOPE`。

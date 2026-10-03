@@ -9,7 +9,7 @@
 | 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                   | 何时跑                              | 失败时       |
 | --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
 | A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`core-terminal-packaged`、`server-perf`                                                                                                                                | `nightly.yml`                       | 开 issue     |
+| B   | `packaged-smoke`、`core-terminal-packaged`、`server-perf`、`update-e2e`                                                                                                                  | `nightly.yml`                       | 开 issue     |
 | C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                                                                                | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
@@ -299,3 +299,25 @@ node tools/probes/packaged-smoke.mjs [输出目录] [--app <Armadra.app>]
 4. **控制台**：渲染进程没有 error 级别的输出与未捕获异常。
 
 产物默认在 `target/packaged-smoke/`：`result.json`、`app.log`、`packaged-media.png`、`packaged-before-hibernate.png`、`packaged-hibernated.png`、`packaged-resumed.png`。没验证：Claude（登录在钥匙串里，临时 HOME 认证不上）、签名与公证后的包、自动更新。
+
+## 自动更新端到端
+
+签名、公证与自动更新（G3-3）的整条更新路径，在真打包版上走，结果记在 [补全进度](../../docs/status/completion-progress.md) 的 G3-3 节。
+
+```sh
+ARMADRA_DIST_RELEASE=1 pnpm --filter @armadra/desktop dist   # 发布包：不带本地构建的停更标记
+pnpm dev-stack up release
+node tools/probes/update-e2e.mjs [输出目录] [--app <Armadra.app>] [--release-dir <dist 输出>] \
+  [--build] [--require-dev-stack] [--install --next <更高版本的 dist 输出>]
+```
+
+两段，各记进 `<输出目录>/result.json`（默认 `target/update-e2e/`）：
+
+1. **dev-stack**：对 `127.0.0.1:8090` 的 `release` 服务做「检查（带 ETag 再查得 304）→ 取 `latest.json`、`SHA256SUMS`、本目标的清单与包 → 用服务的 minisign 公钥（`tools/dev-stack/.data/release/minisign.pub`）验每个签名与摘要」。服务发的是占位包，这一段止于「验过」。没起服务时记 `skipped`（`--require-dev-stack` 时记失败）。
+2. **package**：打包版在临时 HOME / 数据目录 / Chromium profile 下起，带 `ARMADRA_UPDATES_DEV=1`，发布源指向一个本机 `mock-release-server`（与 dev-stack 服务同一份代码），它把**这个包自己的字节**按更高版本号发布、用一次性 minisign 密钥签名。经页面自己的桥（`window.armadra.updates`）走「检查 → 有更新 → 下载（electron-updater 的 sha512，再核 Host 的 sha256）→ 暂存」，并断言临时 HOME 里暂存的文件就是发布的字节。然后：
+   - **未签名的包**（`signatureState` 为 unsigned / unknown）：「重启安装」必须答 `notSigned`，不停后台、不写待重启记录、应用照常在跑；
+   - **签过名的包**（或 Linux，没有代码签名可言）：只有给了 `--install --next <dir>`（第二次 `dist`，带 `ARMADRA_DIST_VERSION=<更高版本>`）才走「安装 → 重启 → 版本号变」，被更新的是沙盒里的一份副本，判据是重启后 `restartReport()` 报 `completed` 与新版本号。
+
+本地演练签名：macOS `ARMADRA_MAC_ADHOC_SIGN=1`（ad-hoc 身份 `-`，`codesign --verify --deep --strict` 能过，`node apps/desktop/scripts/signing-electron.mjs verify-mac`）；Windows `New-SelfSignedCertificate -Type CodeSigningCert` 导出的 `.pfx` 走 `CSC_LINK` 路径，`Get-AuthenticodeSignature` 得 `UnknownError`（`signatureState` 报 `unknown`）；Linux `node tools/release/sign-gpg.mjs keygen --out <dir>` 出一天期的演练密钥。ad-hoc 与自签证书都过不了 Squirrel.Mac / Windows 对更新包签名者的校验，所以安装那一段只有真证书（[CI 与发布](../../docs/guides/ci-release.md) §3）才能走通。
+
+不碰已安装的 Armadra、用户的 HOME 与钥匙串，也不连任何真实发布地址：全部是回环。

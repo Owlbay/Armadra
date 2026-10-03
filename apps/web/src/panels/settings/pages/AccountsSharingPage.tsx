@@ -15,7 +15,6 @@ import {
   listGroups,
   listInvitations,
   listPrincipals,
-  loginWithPassword,
   putGrant,
   putGroupMember,
   redeemInvitation,
@@ -36,7 +35,8 @@ import {
 } from "../../../api/identity";
 import { localizedFailure } from "../../../api/request";
 import { useWorkspacesQuery } from "../../../app/workspaces-query";
-import { useT } from "../../../app/preferences-store";
+import { usePreferencesStore, useT } from "../../../app/preferences-store";
+import { SignIn } from "../../../session/SignIn";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { CONTROL_WIDTH } from "./GeneralPage";
@@ -117,7 +117,16 @@ export function AccountsSharingPage() {
           }}
         />
       )}
-      {session === null && !invite && <SignIn onSignedIn={setSession} />}
+      {session === null && !invite && (
+        <SignIn
+          onSignedIn={(next, mfaEnrollmentRequired) => {
+            setSession(next);
+            // 策略要求第二因素而还没登记：带去「安全」那一页登记（契约 §18.3）。
+            if (mfaEnrollmentRequired)
+              usePreferencesStore.getState().setLastSettingsSection("security");
+          }}
+        />
+      )}
       {session && <MyAccount session={session} />}
       {session && canManage && (
         <>
@@ -315,64 +324,6 @@ function FormDialog({
 }
 
 /* ------------------------------ 登录与兑换 ------------------------------- */
-
-function SignIn({
-  onSignedIn,
-}: {
-  onSignedIn: (session: IdentitySession) => void;
-}) {
-  const t = useT();
-  const [account, setAccount] = React.useState("");
-  const [password, setPasswordValue] = React.useState("");
-  const [busy, setBusy] = React.useState(false);
-  return (
-    <SettingsGroup title={t("sharing.signIn")}>
-      <form
-        className="flex flex-col gap-3 px-4 py-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (busy || !account.trim() || !password) return;
-          setBusy(true);
-          void loginWithPassword(account.trim(), password).then(
-            (session) => {
-              setPasswordValue("");
-              setBusy(false);
-              onSignedIn(session);
-            },
-            (error: unknown) => {
-              setPasswordValue("");
-              setBusy(false);
-              toast.error(failureText(error, t));
-            },
-          );
-        }}
-      >
-        <Input
-          aria-label={t("sharing.accountId")}
-          placeholder={t("sharing.accountId")}
-          autoComplete="username"
-          value={account}
-          disabled={busy}
-          onChange={(event) => setAccount(event.target.value)}
-        />
-        <Input
-          type="password"
-          aria-label={t("sharing.password")}
-          placeholder={t("sharing.password")}
-          autoComplete="current-password"
-          value={password}
-          disabled={busy}
-          onChange={(event) => setPasswordValue(event.target.value)}
-        />
-        <div>
-          <Button type="submit" size="sm" disabled={busy}>
-            {t("sharing.signIn")}
-          </Button>
-        </div>
-      </form>
-    </SettingsGroup>
-  );
-}
 
 function RedeemDialog({
   token,
