@@ -1,6 +1,5 @@
-> 状态：目标设计。本文是 S03（[平台总纲 §3](./canvas-platform-design.md#3-范围矩阵)）与路线图 [§3.8](../status/feature-roadmap.md#38-github)、[§3.12](../status/feature-roadmap.md#312-桌面壳服务集成与项目结构本轮新增详见-44-45) 中「下载 / 安装 / 签名发布 / 真正注册系统服务」的完整方案；已交付部分以 [实施记录 S03 行](../status/platform-implementation-status.md) 与源码为准。
-> 2026-09-19：桌面壳已换成 Electron，本文提到 Tauri 的部分是换壳之前写下的，只作为当时的方案记录；壳的现状见 [Electron 迁移](./electron-migration.md) 与 [架构](../guides/architecture.md)。
-> 后续变更：Rust Runtime、Go Host、`crates/`、`proto/` 已整体合并重写为 TypeScript core（`apps/desktop/src/core/`），由 Electron 桌面壳与新增的无窗口服务器壳（`apps/server`）装配。本文写于 Go Host 负责签名验证、服务安装与自升级，Rust/Cargo 是构建工具链的阶段：凡是提到 `apps/host`、`armadra-host`、Go 具体文件（`internal/updates/*.go`、`internal/servicedef/*.go`、`cmd/armadra-host/*.go`）的地方，对应职责现在落在服务器壳（`apps/server`）与 core；凡是提到 `Cargo.toml`、`cargo test`、Tauri 相关构建产物的地方，构建与测试现在是 pnpm/Node 工具链。本文的结论与流程设计（唯一发布来源、统一签名、安装需人工确认、兼容范围声明、先替换后停止等）仍然成立，只是承载它们的具体二进制、文件路径与语言未必对得上；不确定新载体的具体文件时用「服务器壳」「core」等笼统说法标注，不编造路径。§5 的 Go/Rust 代码布局表格整体是历史记录，仅供追溯当时的文件分工。
+> 现状入口：Go Host、Rust Runtime 与 Tauri 壳都已删除，业务由 TypeScript core（`apps/desktop/src/core/`）执行，Electron 桌面壳与无窗口服务器壳（`apps/server`）装配它。架构现状见 [架构](../guides/architecture.md)，发布、签名与自动更新的现状见 [CI 与发布](../guides/ci-release.md)，补全的目标与工作包见 [补全架构](./completion-architecture.md) §11 与 [补全执行计划](./completion-plan.md)（G1-15 更新链路、G3-3 签名公证与自动更新、G3-5 服务器部署）。
+> 以下正文写于 Go Host 负责验签、服务安装与自升级的阶段，保留作历史；其中的结论（唯一发布来源、安装需人工确认、兼容范围声明等）仍可参考，文件路径与载体以上面几份为准。
 
 # 应用发布、自动更新与服务器模式安装
 
