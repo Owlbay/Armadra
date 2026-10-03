@@ -7,9 +7,15 @@
  * when the network is down, and a release pipeline is exactly the thing one
  * cannot afford to leave untested until the day it runs for real.
  *
- * It binds loopback on an ephemeral port. The Host accepts a plain-HTTP
- * release source only on loopback, which is what makes this usable without
- * inventing a certificate.
+ * It binds loopback on an ephemeral port by default. The Host accepts a
+ * plain-HTTP release source only on loopback, which is what makes this usable
+ * without inventing a certificate.
+ *
+ * The listen address is configurable so the same server runs inside the
+ * dev-stack container (`tools/dev-stack/`): there it listens on `0.0.0.0`,
+ * Docker publishes it on the host's loopback, and `publicBase` keeps the
+ * download links pointing at that loopback address rather than at the
+ * container's own.
  */
 import { createReadStream, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
@@ -84,11 +90,14 @@ export async function startMockReleaseServer({
   faults = {},
   owner = "armadra",
   repo = "armadra",
+  host = "127.0.0.1",
+  port: listenPort = 0,
+  publicBase,
 }) {
   const server = createServer();
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise((resolve) => server.listen(listenPort, host, resolve));
   const port = server.address().port;
-  const base = `http://127.0.0.1:${port}`;
+  const base = publicBase ?? `http://127.0.0.1:${port}`;
   const documents = [];
   for (const release of releases) {
     documents.push(await describeRelease({ ...release, base }));
@@ -188,8 +197,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     );
     process.exit(2);
   }
+  // 监听地址可配（dev-stack 容器里用）；不设时与之前一样是回环上的临时端口。
+  const env = process.env;
   const server = await startMockReleaseServer({
     releases: [{ directory, tag, body: readFileSync(notePath, "utf8") }],
+    host: env.MOCK_RELEASE_HOST || undefined,
+    port: env.MOCK_RELEASE_PORT ? Number(env.MOCK_RELEASE_PORT) : undefined,
+    publicBase: env.MOCK_RELEASE_PUBLIC_BASE || undefined,
   });
   console.log(`Serving ${directory} as ${tag}`);
   console.log(`--updates-source ${server.source}`);

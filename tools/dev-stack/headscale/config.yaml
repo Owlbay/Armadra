@@ -1,0 +1,63 @@
+# dev-stack 可选 profile `headscale` 的最小配置：只用来按文档验证「自托管
+# 控制面」这条离网访问路线，不进 CI。密钥由 headscale 首次启动时在卷里生成。
+server_url: http://127.0.0.1:8094
+listen_addr: 0.0.0.0:8080
+metrics_listen_addr: 127.0.0.1:9090
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+derp:
+  # 不连公网 DERP；内嵌一个区域只为满足「至少一个 DERP 区域」的启动要求。
+  server:
+    enabled: true
+    region_id: 999
+    region_code: dev
+    region_name: dev-stack
+    stun_listen_addr: 0.0.0.0:3478
+    private_key_path: /var/lib/headscale/derp_server_private.key
+    automatically_add_embedded_derp_region: true
+    ipv4: 127.0.0.1
+  urls: []
+  paths: []
+  auto_update_enabled: false
+  update_frequency: 24h
+
+disable_check_updates: true
+
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+    write_ahead_log: true
+
+log:
+  level: warn
+  format: text
+
+policy:
+  mode: file
+  path: ""
+
+dns:
+  magic_dns: false
+  base_domain: armadra.test
+  override_local_dns: false
+  nameservers:
+    global: []
+    split: {}
+  search_domains: []
+  extra_records: []
+
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+
+logtail:
+  enabled: false
