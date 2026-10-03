@@ -1,0 +1,23 @@
+{
+  "name": "@armadra/push-relay",
+  "description": "Armadra 商店版 App 的最小推送中继（无状态，端到端加密载荷）",
+  "homepage": "https://github.com/yovinchen/Armadra",
+  "author": {
+    "name": "YoVinchen",
+    "email": "gzh298255@gmail.com"
+  },
+  "version": "0.1.0",
+  "private": true,
+  "main": "./out/main.js",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11"
+  }
+}

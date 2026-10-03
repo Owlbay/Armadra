@@ -50,6 +50,8 @@ export type JsonObject = { [key: string]: JsonValue };
  * | `language.probes`        | Same, for language servers                                                     |
  * | `language.servers`       | Per-server executable path and argument overrides, resolved on this filesystem |
  * | `gateway`                | Which interfaces and port *this* machine listens on, and its certificate files |
+ * | `push.apns.keyFile`      | Path of the APNs `.p8` on this filesystem (contents never leave the file)      |
+ * | `push.fcm.serviceAccountFile` | Path of the FCM service-account JSON, same reason                         |
  *
  * `agents.custom[]` is deliberately **not** here: a custom agent definition is
  * what the user configured, and it is meant to follow them. Only the probe
@@ -64,6 +66,8 @@ export const LOCAL_PATHS: readonly (readonly string[])[] = [
   ["language", "probes"],
   ["language", "servers"],
   ["gateway"],
+  ["push", "apns", "keyFile"],
+  ["push", "fcm", "serviceAccountFile"],
 ];
 
 /** The same paths as dotted strings, for the settings page and for tests. */

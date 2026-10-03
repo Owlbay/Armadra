@@ -1008,7 +1008,50 @@ TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时
 
 ### 18.5 OAuth / OIDC
 
-预留，由 G1-12 填写。
+实现在 `core/identity/oauth/`（`providers.ts` 协议、`flow.ts` 状态与决定、`http.ts` 路由），挂在比 `/api/identity/` 更长的原样前缀 `/api/identity/oauth/` 上；形状的 zod 在 `identity-security.ts` 的 §18.5 小节。一条代码路径：**通用 OIDC**（发现文档 `/.well-known/openid-configuration`，文档里的 `issuer` 必须与配置逐字节相同（只忽略末尾斜杠）；授权码 + PKCE S256 + `state` + `nonce`；`id_token` 按 JWKS 验签，只收 RS256 / ES256，核 `iss`、`aud`（多个时 `azp`）、`exp` / `iat` / `nbf`（容 60 秒）、`nonce`；缺邮箱时补一次 userinfo，`sub` 必须相同），以及唯一的特例 **GitHub**（`/login/oauth/authorize` + `access_token`，主体是 `GET /user` 的数字 `id`，邮箱取 `GET /user/emails` 里 `primary` 的那条与它的 `verified`）。外呼只许 HTTPS 或回环明文 HTTP，超时 10 秒，发现文档与 JWKS 缓存 1 小时，遇到不认识的 `kid` 重取一次 JWKS。
+
+**提供方**在设置 `identity.oauth.providers[] { id, kind: "github" | "oidc", issuer?, clientId, scopes, allowSignup, allowedDomains, enabled }`（不加迁移）；`scopes` 空时 OIDC 用 `openid email profile`、GitHub 用 `read:user user:email`。`clientSecret` 在 SecretStore（条目名 `armadra-oidc-<id>`），不入库、不出接口；OIDC 公开客户端（PKCE）可以没有，GitHub 必须有。**公网来源**是 `gateway.publicOrigin` 加上壳注入的、主机名不是 IP 字面量的 HTTPS 来源（服务器壳的 `--public-origin`）；回调固定 `<公网来源>/api/identity/oauth/{id}/callback`，`start` 必须从其中一个来源发起。
+
+**绑定**写 `identity_credentials(kind='oauth', provider, subject)`：`provider` 列是由 issuer 派生的键（`oidc:` + issuer 的 SHA-256 前 43 个 base64url 字符；GitHub 是 `github`）而不是设置里的 `id`——换了 issuer 而保留 `id` 时，旧绑定不会被新 issuer 的同名主体冒领。一个第三方身份只能绑一个 principal（唯一索引）。
+
+| 方法与路径                                                                     | 谁能调                            | 答案                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------ | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET oauth/providers`                                                          | 匿名                              | `{ configured, providers: [{ id, kind }] }`：`configured` = 有公网来源；只列能用的（开着、有公网来源、GitHub 有 secret）                                                                                                                                                           |
+| 同上                                                                           | `identity:manage`                 | 每行再加 `issuer?, clientId, enabled, allowSignup, allowedDomains, hasClientSecret, usable, callbackUrls`（每个公网来源一条，填到提供方的回调）；列全部提供方                                                                                                                      |
+| `PUT oauth/providers/{id}/secret` `{ clientSecret }`（写）                     | `identity:manage`                 | `{ id, hasClientSecret: true }`                                                                                                                                                                                                                                                    |
+| `DELETE oauth/providers/{id}/secret`（写）                                     | `identity:manage`                 | `{ id, hasClientSecret: false }`                                                                                                                                                                                                                                                   |
+| `POST oauth/{id}/start` `{ mode?: "login" \| "bind", returnTo?, deviceName? }` | `login` 匿名；`bind` 已登录（写） | `{ authorizeUrl, expiresAtMs }`，同时下发浏览器绑定 Cookie（`armadra_<hostId>_oauth`，HTTPS 上换成 `__Host-armadra_` 前缀，`HttpOnly; SameSite=Lax; Path=/`，10 分钟）。页面随后 `location.assign(authorizeUrl)`。`returnTo` 只收站内路径（`/` 开头、不是 `//`、无片段），缺省 `/` |
+| `GET oauth/{id}/callback?state&code`（或 `error`）                             | 提供方跳回                        | 302 到 `<发起时的来源><returnTo>#oauth=<结果>`；`state` 不认识时答 JSON 400 `oauth_state_invalid`                                                                                                                                                                                  |
+| `GET oauth/bindings`                                                           | 已登录                            | `{ bindings: [{ credentialId, providerId, kind, createdAtMs }] }`：我的；设置里认不出的提供方 `providerId` 为空串                                                                                                                                                                  |
+| `DELETE oauth/bindings/{credentialId}`（写）                                   | 本人                              | `{ credentialId, revoked: true }`；别人的答 404（owner 撤别人的走 `DELETE credentials/{id}`）                                                                                                                                                                                      |
+| `POST oauth/{id}/logout` `{ returnTo? }`                                       | 匿名                              | `{ endSessionUrl }`：OIDC 发现文档有 `end_session_endpoint` 时是 RP 发起登出的地址（`client_id` + `post_logout_redirect_uri`），否则 `null`；本机会话仍由 `POST session/logout` 结束                                                                                               |
+
+**回调**是从提供方跳回的顶层导航（没有 `Origin`、`Sec-Fetch-Site: cross-site`、`SameSite=Strict` 的会话 Cookie 带不上），所以它不认会话：`state` 内存里 10 分钟、**取出即删**（重放、过期、浏览器绑定 Cookie 不对都是 `oauth_state_invalid`），`bind` 的发起者在 `start` 时就记进状态。Gateway 的门只对 `GET /api/identity/oauth/{id}/callback` 放开 Origin 与 `Sec-Fetch-Site` 两道（`core/gateway/admission.ts` 的 `oauthCallbackPath`）。跳回片段的 `oauth=`：
+
+| `oauth=`   | 意思                                                                                           |
+| ---------- | ---------------------------------------------------------------------------------------------- |
+| `bound`    | 绑到了发起者名下（已绑在本人名下也是它）                                                       |
+| `signedIn` | 已绑定的 principal 登录，会话 Cookie 已下发；审计 `identity.login`（`detail.method: "oauth"`） |
+| `signedUp` | 建了一个 `member`（无授予，owner 再共享）并登录                                                |
+| `mfa`      | 这个人登记过 TOTP：带 `challengeId`，页面接 §18.3 的 `POST mfa/verify`；不发会话               |
+| `error`    | 带 `code`（下表）；不发会话、不改绑定                                                          |
+
+决定：配了 `allowedDomains` 时三条路都要求 `email_verified = true` 且邮箱域名精确命中（大小写不计，子域不算）；`bind` 绑到发起者；`login` 已绑则登录（principal 停用了按「没绑」答），没绑且 `allowSignup` **并且** `allowedDomains` 非空才建号（这就是 SSO；不设域名的建号等于「有这家账号的任何人都能进来」），否则 `oauth_not_bound`。
+
+| `code`                     | HTTP | 意思                                                                        |
+| -------------------------- | ---- | --------------------------------------------------------------------------- |
+| `oauth_not_configured`     | 404  | 没有公网来源、不是从公网来源发起、提供方不存在或停用、GitHub 没有 secret    |
+| `oauth_browser_required`   | 400  | Gateway 的 Bearer 模式（原生 App）发起；授权要在浏览器会话里走              |
+| `oauth_state_invalid`      | 400  | `state` 不认识、过期、用过，或浏览器绑定 Cookie 不对                        |
+| `oauth_denied`             | 403  | 用户在提供方取消（`error=access_denied`）                                   |
+| `oauth_provider_error`     | 502  | 发现文档、JWKS、令牌交换或用户信息失败；发现文档 `issuer` 不符；不支持 S256 |
+| `oauth_token_invalid`      | 401  | `id_token` 签名、算法、`iss` / `aud` / `azp`、时效或 `nonce` 不过           |
+| `oauth_email_unverified`   | 403  | 提供方说邮箱没验证                                                          |
+| `oauth_domain_not_allowed` | 403  | 邮箱域名不在 `allowedDomains`                                               |
+| `oauth_not_bound`          | 401  | 这个第三方身份没有绑定账号（且不允许建号）                                  |
+| `oauth_already_bound`      | 409  | 这个第三方身份已经绑在别的账号上                                            |
+
+审计：`identity.oauth.bind`、`identity.oauth.unbind`、`identity.oauth.signup`、`identity.oauth.failed`（`detail.code`）、`identity.oauth.secret.set` / `.clear`。`credentials/oauth/*` 的旧 501 占位路径已退役（404）。
 
 ### 18.6 审计查询
 
@@ -1016,7 +1059,98 @@ TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时
 
 ## 19. 推送：`/api/push/devices*`
 
-预留，由 G1-13 填写。
+设计见[补全架构](../design/completion-architecture.md) §10 与[外部服务](../design/external-services.md) §5.2。代码在 `core/push/`，共享层 `api/push.ts`。表 `push_devices` / `push_outbox`（迁移 `*_push.sql`）。
+
+`/api/push/*` 不经路由门（`http/route-scopes.ts` 的 `SELF_GUARDED`），推送域自己认请求身份，**只碰请求主体自己的设备**：服务器壳的匿名主体答 401 `unauthenticated`；桌面壳的本机请求没有请求身份（主体是本机 owner、没有设备），看配置与列表可以，登记与测试答 409 `device_required`——桌面有系统通知，不用推送。错误一律 `{ code, message }`。
+
+### 19.1 `GET /api/push/config`
+
+```json
+{
+  "webpush": {
+    "enabled": true,
+    "publicKey": "BJ…（P-256 未压缩点，base64url）"
+  },
+  "native": { "transport": "direct", "status": "ready", "platforms": ["ios"] }
+}
+```
+
+- `webpush.publicKey`：VAPID 公钥，页面订阅时作 `applicationServerKey`。密钥对首次用到时生成在 `<数据目录>/push/vapid.json`（0600）；文件损坏不重新生成（浏览器订阅绑在旧公钥上），此时为 `null`。设置 `push.webpush.enabled = false` 时也是 `null`。
+- `native.transport`：原生 App 走哪条路，`log` / `direct` / `relay`（设置 `push.transport`，环境变量 `ARMADRA_PUSH_TRANSPORT` 优先；设置停在 `log` 而服务器壳给了 `ARMADRA_PUSH_RELAY_URL` 就是 `relay`，给了 APNs / FCM 文件就是 `direct`）。`status` 为 `notConfigured` 时接口照常答 `queued`，通知只写 debug 日志。`platforms` 是现在发得出去的原生平台。App 按 `transport` 决定登记平台令牌（`direct`）还是先向中继换中继令牌（`relay`）。
+
+### 19.2 `PUT /api/push/devices`
+
+登记这次请求所属的那台身份设备（请求体里没有设备 id）。覆盖式：同一台设备重新订阅就是替换这一行、清掉撤销状态。
+
+浏览器：
+
+```json
+{
+  "platform": "web",
+  "transport": "webpush",
+  "locale": "zh-CN",
+  "subscription": {
+    "endpoint": "https://…",
+    "keys": { "p256dh": "…", "auth": "…" }
+  }
+}
+```
+
+原生 App：
+
+```json
+{
+  "platform": "ios",
+  "transport": "direct",
+  "token": "<APNs / FCM 令牌，或中继令牌>",
+  "publicKey": "<设备 X25519 公钥，32 字节 base64url>",
+  "appVersion": "1.0.0",
+  "locale": "en"
+}
+```
+
+- `web` 只能配 `webpush`，`ios` / `android` 只能配 `direct` / `relay`。`endpoint` 必须是 https（回环上的 http 只给测试）；`p256dh` 是 65 字节 P-256 点，`auth` 是 16 字节。
+- `relay` 必须带 `publicKey`：经中继的载荷一律端到端加密。`direct` 带了也加密，不带时 APNs 发明文提示、FCM 发明文数据。
+- `locale` 只认 `zh-CN` / `en`，其余当作没给（按中文渲染）。
+- 答 200 `{ "device": <§19.3 的设备> }`；身份设备已撤销答 403 `forbidden`；形状不对答 400 `bad_request`。
+
+### 19.3 列表、撤销、测试
+
+- `GET /api/push/devices` → `{ "devices": [ … ] }`，只列请求主体名下还有效的登记（桌面本机 owner 列全部）。一项是 `{ deviceId, platform, transport, appVersion, locale, encrypted, createdAt, current }`——**没有令牌、没有公钥本身**；`encrypted` 说厂商看到的是不是密文，`current` 说是不是发请求的这台。
+- `DELETE /api/push/devices/{deviceId}` → `{ "revoked": true }`（已经撤销过是 `false`）。只能撤自己名下的，owner 例外；别人的与不存在的同样答 404 `not_found`。
+- `POST /api/push/test` → 202 `{ "queued": true, "id": "<队列行 id>" }`，给发请求的这台设备发一条 `kind: "test"`。这台设备没登记或已撤销答 409 `device_required`。
+
+### 19.4 载荷
+
+一条通知就是这些键，**没有别的**（共享层 `pushPayloadSchema` 是 `strict`）：
+
+```json
+{
+  "v": 1,
+  "kind": "approval",
+  "title": "支付服务",
+  "body": "Claude Code 等待审批",
+  "url": "armadra://w/<workspaceId>/n/<nodeId>",
+  "tag": "approval:<pendingId>"
+}
+```
+
+- `kind`：`approval`、`agentDone`、`agentError`、`deliveryFailed`、`schedule`、`resources`、`comment`、`workflowGate`、`test`。
+- `title` 是工作空间名（≤ 64 字），`body` 是按 `kind` 与设备语言写死的一句（≤ 120 字，只会出现 Agent 注册表里的名字），`url` 是深链（与画布无关的通知是 `armadra://`），`tag` 相同的新通知替换旧的（≤ 128 字）。
+- 不含终端原文、文件内容、命令、提示词、评论正文、拒收码。载荷因此可以落库（`push_outbox.payload_blob`）。
+
+### 19.5 三条传输的线上形状
+
+- **Web Push**：`POST <endpoint>`，`Authorization: vapid t=<ES256 JWT>, k=<VAPID 公钥>`（`aud` = 端点来源，12 小时有效，`sub` = 设置 `push.webpush.subject` / `ARMADRA_PUSH_VAPID_SUBJECT`，缺省取 https 公网来源，再缺省 `mailto:push@armadra.invalid`），`Content-Encoding: aes128gcm`（RFC 8291，单记录 4096），`TTL: 3600`，`Urgency`（审批 `high`），`Topic` = tag 的摘要。正文是 §19.4 的 JSON。
+- **direct**：APNs HTTP/2 `POST /3/device/<token>`，provider token ES256（`kid` / `iss` / `iat`，50 分钟换新），`apns-topic` = bundle id，`apns-push-type: alert`，`apns-collapse-id` = tag 的摘要；有设备公钥时正文是 `{ "aps": { "alert": { "title-loc-key": "ARMADRA_PUSH_TITLE", "loc-key": "ARMADRA_PUSH_BODY" }, "mutable-content": 1, … }, "enc": <信封> }`。FCM v1 `POST /v1/projects/<id>/messages:send`，access token 由服务账号断言（RS256）换取；`message.data.enc` 是信封的 JSON 字符串，`android.priority: HIGH`。密钥只从文件读：`ARMADRA_PUSH_APNS_KEY_FILE` / `_KEY_ID` / `_TEAM_ID` / `_BUNDLE_ID` / `_PRODUCTION`、`ARMADRA_PUSH_FCM_CREDENTIALS_FILE` / `_PROJECT_ID`，或设置 `push.apns.*` / `push.fcm.*`（两个文件路径是本机设置）。`ARMADRA_PUSH_APNS_ENDPOINT` / `ARMADRA_PUSH_FCM_ENDPOINT` 只给测试。
+- **relay**：`POST <relayUrl>/v1/push` `{ relayToken, envelope, collapseId, urgent }`，中继的完整接口见 [`apps/push-relay/README.md`](../../apps/push-relay/README.md)。
+- **信封**：`{ "v": 1, "alg": "x25519-hkdf-sha256-a256gcm", "epk", "salt", "iv", "ct" }`，全部 base64url。`epk` 是一次性 X25519 公钥；钥 = HKDF-SHA256(ECDH(epk, 设备公钥), salt, `"armadra-push-v1" ‖ 0x00 ‖ epk ‖ 设备公钥`, 32)；`ct` = AES-256-GCM(钥, iv, §19.4 的 JSON) ‖ 16 字节标签。
+
+### 19.6 触发、收件人与重试
+
+- 推送订阅工作空间事件：`agent.approval`（新请求；`request.resolved` 的答复不推）、`agent.status`（**进入** `done` 推 `agentDone`，进入出错推 `agentError`；`restored` 行不推）、`agent.delivery`（`outcome` 为 `refused` / `failed` / `expired` / `cancelled`（回执），深链指向发送方节点）、`schedule.*`、`resources.threshold`、`board.comment`（只推给 `mentions` 里的 principal，没有提及不推）、`workflow.gate`。后四种事件由各自的域发布，推送只按 `type` 与其中的 `nodeId` / `automationId` / `metric` / `comment.{id,anchorKind,anchorId,mentions}` / `runId` / `stepId` 认。
+- 收件人：登记有效、身份设备未撤销、principal 未停用，且该 principal 对事件所在工作空间有 `canvas:read`（owner 恒有）。
+- 先入队（`push_outbox`）再发；总共最多 3 次尝试（失败后 5 秒、30 秒各再试一次），只有网络错误、429 与 5xx 再试。平台说令牌作废（Web Push 404 / 410，APNs 410 / `BadDeviceToken` / `Unregistered`，FCM `UNREGISTERED`，中继 410 / `badToken`）立即停、设备登记撤销（`revoked_reason = 'gone'`）。终态行保留 7 天。App 按旧配置登记的（例如登记时是 `direct`，现在改成 `relay`）只记日志，等 App 按新配置重新登记。
 
 ## 20. 节点凭据：`/api/credentials*`
 

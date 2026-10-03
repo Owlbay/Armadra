@@ -2,6 +2,7 @@ packages:
   - apps/web
   - apps/desktop
   - apps/server
+  - apps/push-relay
   - packages/*
 
 allowBuilds:
