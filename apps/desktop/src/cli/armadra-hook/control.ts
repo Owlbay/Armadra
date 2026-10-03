@@ -10,13 +10,17 @@
  * a second source of truth that drifts the first time a verb is added.
  */
 
-import { envVar } from "./endpoint.js";
+import { envVar } from "../../hook-client/endpoint.js";
 import { percentEncodeSegment } from "./hook.js";
-import { canonicalJsonBytes, tryParseJson } from "./json.js";
-import type { JsonValue } from "./json.js";
-import { isSuccess, postJsonRequest, totalTimeoutMs } from "./http.js";
-import type { HookResponse } from "./http.js";
-import { headersFor, loadSession, send } from "./session.js";
+import { canonicalJsonBytes, tryParseJson } from "../../hook-client/json.js";
+import type { JsonValue } from "../../hook-client/json.js";
+import {
+  isSuccess,
+  postJsonRequest,
+  totalTimeoutMs,
+} from "../../hook-client/http.js";
+import type { HookResponse } from "../../hook-client/http.js";
+import { headersFor, loadSession, send } from "../../hook-client/session.js";
 import { FILE_SUFFIX, STDIN_VALUE, TextReader } from "./text-input.js";
 import type { TextSources } from "./text-input.js";
 import { BROWSER_VERBS, CONTEXT_VERBS } from "./usage.js";
