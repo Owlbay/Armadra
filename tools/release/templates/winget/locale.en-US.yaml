@@ -1,0 +1,22 @@
+# Rendered by tools/release/publish-channels.mjs for {{repo}} {{tag}}.
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
+PackageIdentifier: {{wingetId}}
+PackageVersion: {{version}}
+PackageLocale: en-US
+Publisher: {{owner}}
+PublisherUrl: https://github.com/{{owner}}
+PublisherSupportUrl: https://github.com/{{repo}}/issues
+PackageName: Armadra
+PackageUrl: https://github.com/{{repo}}
+License: MIT
+LicenseUrl: https://github.com/{{repo}}/blob/v{{version}}/LICENSE
+ShortDescription: Infinite canvas where AI coding agents collaborate
+Tags:
+  - ai
+  - agents
+  - canvas
+  - developer-tools
+  - terminal
+ReleaseNotesUrl: https://github.com/{{repo}}/releases/tag/v{{version}}
+ManifestType: defaultLocale
+ManifestVersion: 1.10.0
