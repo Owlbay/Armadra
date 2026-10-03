@@ -406,7 +406,21 @@
 
 ## G3-4 Linux 打包验证与夜间冒烟
 
-未开始。
+做了什么：
+
+- 清单拆成一条一个文件：`tools/ci/e2e.json` → `tools/ci/e2e.d/<id>.json`（文件名即 `id`，按档再按 `id` 排序，隐藏文件忽略，旧单文件被合并带回即报错）；条目加 `platforms`，`requires` 认 `docker`；`e2e.mjs` 在 `GITHUB_OUTPUT` 写失败条目。
+- `nightly.yml`：`linux`（ubuntu-22.04：`dist`、glibc 基线、`xvfb-run` 下 B 档）、`macos`（macos-14：`dist`、B 档）、`report`（失败且在 main 上时用默认 `GITHUB_TOKEN` 开「夜间 B 档失败」issue 或追加评论）。`validate-workflows` 断言各系统有作业、有开 issue 的作业、不读 secret。
+- B 档条目：`packaged-smoke --no-real-cli`（darwin、linux）、`deb-install`（linux，`ubuntu:22.04` 容器 apt 安装、`ldd`、`--version`）。
+- 修出来的 Linux 问题：tmux 3.2（22.04 的 3.2a）不认 `allow-passthrough`，每个新会话停在配置报错页吞键 → `set -gq`；deb 依赖缺 `libgbm1`、`libasound2`；`desktopName` + `syncDesktopName`（窗口与 `armadra.desktop` 对上）；新增 `armadra --version`。
+
+实测（本机 Docker，ubuntu:22.04 arm64 容器）：`dist` 出 AppImage / deb / rpm；glibc 基线 12 个二进制通过；`xvfb-run` 下 `packaged-smoke --no-real-cli` 对 AppImage 全部 20 项通过（迁移、PDF、H.264 视频、tmux 终端回显、无控制台错误）；`linux-arm64-unpacked/armadra --version` 无显示器答出 `Armadra 0.1.0`；deb 的依赖闭包对照 `ldd` 补齐后无缺口。
+
+没做 / 限制：
+
+- `deb-install` 本机只做了依赖闭包核对，没在干净容器里跑完（本机镜像源 16 kB/s）；由夜间作业首跑验证。
+- arm64 AppImage 的运行时要 `libz.so`（开发包里的无版本名），干净系统上 `APPIMAGE_EXTRACT_AND_RUN` 会报缺库；x64 runner 有 `zlib1g-dev`，未改打包。
+- `update-e2e` 没有单独作业：G3-3 新增 `tools/ci/e2e.d/update-e2e.json` 并写 `platforms`，在对应系统作业里打包后执行。
+- macOS 作业与 issue 上报只在 GitHub 上首跑时验证；deb 容器验证没有复用 dev-stack 的 compose（直接 `docker run`）。
 
 ## G3-5 服务器部署：镜像、公网部署指南、备份升级
 
