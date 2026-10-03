@@ -22,6 +22,8 @@ export const gateway: MessageModule = {
     "gateway.fingerprint": "指纹",
     "gateway.ca.download": "下载 CA",
     "gateway.starting": "正在生成证书",
+    "gateway.acme.renewFailed": "证书续期失败",
+    "gateway.acme.retryAt": "{time} 重试",
     "gateway.error.acme_misconfigured": "ACME 需要邮箱与对外域名",
     "gateway.error.acme_port_unavailable": "ACME 验证端口不可用",
     "gateway.error.acme_failed": "ACME 证书签发失败",
@@ -52,6 +54,8 @@ export const gateway: MessageModule = {
     "gateway.devices.confirmNote": "它会立即退出，要再用需重新配对。",
     "gateway.devices.cancel": "取消",
     "gateway.devices.revokeFailed": "没能撤销",
+    "gateway.devices.current": "当前",
+    "gateway.devices.more": "加载更多",
     "gateway.ca.title": "安装证书",
     "gateway.ca.ios.1": "下载证书，在弹窗里选「允许」。",
     "gateway.ca.ios.2":
@@ -88,6 +92,8 @@ export const gateway: MessageModule = {
     "gateway.fingerprint": "Fingerprint",
     "gateway.ca.download": "Download CA",
     "gateway.starting": "Generating certificate",
+    "gateway.acme.renewFailed": "Certificate renewal failed",
+    "gateway.acme.retryAt": "Retrying {time}",
     "gateway.error.acme_misconfigured":
       "ACME needs an email and a public domain",
     "gateway.error.acme_port_unavailable": "ACME challenge port unavailable",
@@ -120,6 +126,8 @@ export const gateway: MessageModule = {
       "It is signed out right away and has to pair again.",
     "gateway.devices.cancel": "Cancel",
     "gateway.devices.revokeFailed": "Could not revoke",
+    "gateway.devices.current": "Current",
+    "gateway.devices.more": "Load more",
     "gateway.ca.title": "Install certificate",
     "gateway.ca.ios.1": "Download the certificate and tap Allow.",
     "gateway.ca.ios.2":

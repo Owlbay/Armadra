@@ -299,9 +299,9 @@ function LegacyBadge({ findings }: { findings: LegacyIntegrationFinding[] }) {
     <Popover>
       <PopoverTrigger asChild>
         <Badge asChild variant="destructive">
-          <button type="button">
+          <Button variant="ghost" size="xs" type="button">
             {t("integration.legacy.count", { count: findings.length })}
-          </button>
+          </Button>
         </Badge>
       </PopoverTrigger>
       {/* 设置对话框在 --z-dialog 上，弹层与它同层、后挂载，才不会被盖住。 */}

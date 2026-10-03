@@ -6,7 +6,12 @@ import type {
 import { KeyRound, Plus } from "lucide-react";
 
 import { useT } from "../../../../app/preferences-store";
-import { ConfirmRemove, SecuritySection, useDateTime } from "./parts";
+import {
+  ConfirmRemove,
+  SecuritySection,
+  SecuritySectionSkeleton,
+  useDateTime,
+} from "./parts";
 import { Alert, AlertTitle } from "@/ui/alert";
 import { Button } from "@/ui/button";
 import { Spinner } from "@/ui/spinner";
@@ -31,6 +36,7 @@ export function PasskeyList({
   busy,
   onAdd,
   onRemove,
+  loading = false,
 }: {
   list: PasskeyListAnswer | undefined;
   /** 这个浏览器有没有 WebAuthn。 */
@@ -39,11 +45,16 @@ export function PasskeyList({
   busy: string | null;
   onAdd(): void;
   onRemove(passkey: Passkey): void;
+  /** 第一次取数中（还没有 `list`）。 */
+  loading?: boolean;
 }) {
   const t = useT();
   const date = useDateTime("date");
   const [confirm, setConfirm] = React.useState<Passkey | null>(null);
-  if (list === undefined) return null;
+  if (list === undefined)
+    return loading ? (
+      <SecuritySectionSkeleton title={t("security.passkeys")} />
+    ) : null;
 
   const unavailable = `security.passkeys.unavailable.${list.reason}`;
   const reason = !list.available

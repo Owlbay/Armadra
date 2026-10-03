@@ -51,12 +51,12 @@ import {
 } from "@/ui/alert-dialog";
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { IconButton } from "@/ui/icon-button";
 import { Input } from "@/ui/input";
 import {
@@ -263,16 +263,16 @@ function FormDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   return (
-    <Dialog
+    <ResponsiveDialog
       open={open}
       onOpenChange={(next) => {
         if (!next && !busy) onClose();
       }}
     >
-      <DialogContent className="z-[var(--z-dialog)] sm:max-w-[400px]">
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-        </DialogHeader>
+      <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[400px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{title}</ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
         <form
           className="flex flex-col gap-3"
           onSubmit={(event) => {
@@ -303,7 +303,7 @@ function FormDialog({
               }
             />
           ))}
-          <DialogFooter>
+          <ResponsiveDialogFooter>
             <Button
               type="button"
               variant="ghost"
@@ -316,10 +316,10 @@ function FormDialog({
             <Button type="submit" size="sm" disabled={busy}>
               {submitLabel}
             </Button>
-          </DialogFooter>
+          </ResponsiveDialogFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 
@@ -574,16 +574,16 @@ function GroupDialog({
       ),
   );
   return (
-    <Dialog
+    <ResponsiveDialog
       open
       onOpenChange={(next) => {
         if (!next) onClose();
       }}
     >
-      <DialogContent className="z-[var(--z-dialog)] sm:max-w-[480px]">
-        <DialogHeader>
-          <DialogTitle>{group.name}</DialogTitle>
-        </DialogHeader>
+      <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[480px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{group.name}</ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
         <div className="settings-group divide-y divide-border/60 rounded-lg border border-border/70 bg-card">
           {group.members.length === 0 && (
             <SettingsRow label={t("sharing.groups.empty")} />
@@ -670,7 +670,7 @@ function GroupDialog({
             </Button>
           </SettingsRow>
         </div>
-        <DialogFooter>
+        <ResponsiveDialogFooter>
           {!restricted && (
             <Button
               type="button"
@@ -688,9 +688,9 @@ function GroupDialog({
           <Button type="button" size="sm" onClick={onClose}>
             {t("sharing.save")}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 
@@ -797,11 +797,13 @@ function Invitations({ groupsOnly }: { groupsOnly?: Group[] }) {
           {t("sharing.invites.create")}
         </Button>
       </SettingsRow>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="z-[var(--z-dialog)] sm:max-w-[440px]">
-          <DialogHeader>
-            <DialogTitle>{t("sharing.invites.create")}</DialogTitle>
-          </DialogHeader>
+      <ResponsiveDialog open={open} onOpenChange={setOpen}>
+        <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[440px]">
+          <ResponsiveDialogHeader>
+            <ResponsiveDialogTitle>
+              {t("sharing.invites.create")}
+            </ResponsiveDialogTitle>
+          </ResponsiveDialogHeader>
           <div className="settings-group divide-y divide-border/60 rounded-lg border border-border/70 bg-card">
             {groupsOnly ? (
               <SettingsRow label={t("sharing.groups")}>
@@ -862,7 +864,7 @@ function Invitations({ groupsOnly }: { groupsOnly?: Group[] }) {
               </Button>
             </div>
           )}
-          <DialogFooter>
+          <ResponsiveDialogFooter>
             <Button
               type="button"
               size="sm"
@@ -882,9 +884,9 @@ function Invitations({ groupsOnly }: { groupsOnly?: Group[] }) {
             >
               {t("sharing.invites.generate")}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </ResponsiveDialogFooter>
+        </ResponsiveDialogContent>
+      </ResponsiveDialog>
     </SettingsGroup>
   );
 }

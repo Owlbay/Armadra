@@ -329,7 +329,12 @@ export function mergeUpdatesState(
 function hostNotes(host: HostSide): string[] {
   if (host.kind === "blocked") return [`updates.blocked.${host.reason}`];
   if (host.kind === "failed") return [host.messageKey];
-  if (host.kind === "answered" && host.verdict !== "upToDate") {
+  // 「有新版本」不是需要解释的情况：没有原因码时不补一句「不认识的原因」。
+  if (
+    host.kind === "answered" &&
+    host.verdict !== "upToDate" &&
+    !(host.verdict === "available" && host.reasonCode === "")
+  ) {
     return [reasonKey(host.reasonCode)];
   }
   return [];

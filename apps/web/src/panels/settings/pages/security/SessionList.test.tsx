@@ -23,6 +23,25 @@ const row = (id: string, current: boolean, name: string) => ({
 });
 
 describe("SessionList", () => {
+  it("第一次取数时是标题加 Skeleton，取不到时整块不出现", () => {
+    const props = {
+      sessions: undefined,
+      everyone: false,
+      canSeeEveryone: false,
+      busy: null,
+      onEveryone: vi.fn(),
+      onRevoke: vi.fn(),
+      onRevokeOthers: vi.fn(),
+    };
+    const { container, rerender } = render(<SessionList {...props} loading />);
+    expect(screen.getByText("会话与设备")).toBeTruthy();
+    expect(
+      container.querySelector('[data-slot="security-loading"]'),
+    ).toBeTruthy();
+    rerender(<SessionList {...props} />);
+    expect(container.textContent).toBe("");
+  });
+
   it("当前设备排第一、带徽标、没有退出钮；其余可退出，「退出其他全部」先确认", () => {
     const onRevoke = vi.fn();
     const onRevokeOthers = vi.fn();

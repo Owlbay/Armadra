@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import { useT } from "@/app/preferences-store";
 
 import { MAX_TABS, tabLetter, type TabsControl } from "./webview-tabs";
+import { Button } from "@/ui/button";
 
 /**
  * 浏览器节点的标签条。
@@ -39,12 +40,14 @@ export function WebviewTabs({ control }: { control: TabsControl }) {
           data-slot="browser-tab"
           data-tab-id={tab.id}
         >
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             type="button"
             role="tab"
             aria-selected={tab.id === control.activeId}
             title={tab.address}
-            className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm pl-1.5 text-left"
+            className="flex h-full min-w-0 flex-1 items-center justify-start gap-1.5 rounded-sm pr-0 pl-1.5 text-left text-[length:inherit] font-normal hover:bg-transparent"
             onClick={() => control.select(tab.id)}
           >
             {tab.favicon ? (
@@ -71,16 +74,18 @@ export function WebviewTabs({ control }: { control: TabsControl }) {
                 data-slot="browser-tab-loading"
               />
             )}
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
             type="button"
             aria-label={t("browser.tabs.close")}
             data-slot="browser-tab-close"
-            className="grid size-4 shrink-0 place-items-center rounded-[2px] opacity-0 hover:bg-background/80 focus-visible:opacity-100 group-hover:opacity-100"
+            className="grid size-4 shrink-0 place-items-center rounded-[2px] p-0 opacity-0 hover:bg-background/80 focus-visible:opacity-100 group-hover:opacity-100"
             onClick={() => control.close(tab.id)}
           >
             <X className="size-2.5" />
-          </button>
+          </Button>
         </div>
       ))}
       <IconButton

@@ -8,11 +8,11 @@ import {
   type GatewayStatus,
 } from "@armadra/shared";
 
-import { useT } from "../../../../app/preferences-store";
+import { usePreferencesStore, useT } from "../../../../app/preferences-store";
 import { CONTROL_WIDTH } from "../GeneralPage";
 import { SettingsGroup } from "../../SettingsGroup";
 import { SettingsRow } from "../../SettingsRow";
-import { Alert, AlertTitle } from "@/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/ui/alert";
 import { Button } from "@/ui/button";
 import {
   Collapsible,
@@ -29,7 +29,11 @@ import {
 } from "@/ui/select";
 import { Spinner } from "@/ui/spinner";
 import { Switch } from "@/ui/switch";
-import { GatewayDevices, type GatewayDevice } from "./GatewayDevices";
+import {
+  GatewayDevices,
+  type GatewayDevice,
+  type GatewayDevicesProps,
+} from "./GatewayDevices";
 import { PairingCard } from "./PairingCard";
 
 const KNOWN_ERRORS = new Set([
@@ -91,6 +95,11 @@ export interface GatewayPanelProps {
   devices: readonly GatewayDevice[] | null;
   revoking: string | null;
   onRevoke(device: GatewayDevice): void;
+  /** 设备表的其余选项：当前设备、撤销权、分页。 */
+  deviceOptions?: Omit<
+    GatewayDevicesProps,
+    "devices" | "revoking" | "onRevoke"
+  >;
   /** 展示页用：钉住时钟、展开「更多选项」。 */
   now?: number;
   defaultMoreOpen?: boolean;
@@ -113,14 +122,21 @@ export function GatewayPanel({
   devices,
   revoking,
   onRevoke,
+  deviceOptions,
   now,
   defaultMoreOpen = false,
 }: GatewayPanelProps) {
   const t = useT();
+  const locale = usePreferencesStore((state) => state.locale);
   const locked = status.managedBy === "shell" || saving;
   const tlsSource =
     status.tls.source === "selfSigned" ? "localCa" : status.tls.source;
   const starting = status.enabled && !status.running && !status.error;
+  // ACME 续期失败时旧证书继续服务（契约 §17.1 `tls.acme`）；这里只说发生了
+  // 什么与下次什么时候再试，没有失败就什么都不画。
+  const acme = status.enabled && status.running ? status.tls.acme : null;
+  const renewFailed = acme ? acme.failures > 0 : false;
+  const retryAt = renewFailed && acme?.renewAt ? new Date(acme.renewAt) : null;
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
@@ -276,6 +292,21 @@ export function GatewayPanel({
           <AlertTitle>{t(gatewayErrorKey(status.error.code))}</AlertTitle>
         </Alert>
       )}
+      {renewFailed && (
+        <Alert variant="destructive" data-slot="gateway-acme-renew-failed">
+          <AlertTitle>{t("gateway.acme.renewFailed")}</AlertTitle>
+          {retryAt && (
+            <AlertDescription className="tabular-nums">
+              {t("gateway.acme.retryAt", {
+                time: retryAt.toLocaleString(locale, {
+                  dateStyle: "medium",
+                  timeStyle: "short",
+                }),
+              })}
+            </AlertDescription>
+          )}
+        </Alert>
+      )}
       {starting && (
         <Alert>
           <Spinner aria-hidden />
@@ -302,6 +333,7 @@ export function GatewayPanel({
           devices={devices}
           revoking={revoking}
           onRevoke={onRevoke}
+          {...deviceOptions}
         />
       )}
     </div>

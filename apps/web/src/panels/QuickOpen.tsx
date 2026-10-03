@@ -55,6 +55,7 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/ui/command";
+import { COMMAND_INPUT_FOCUS } from "./tabs-focus";
 
 /** 输入去抖：一次键入不该变成一次全工作区扫描。 */
 const DEBOUNCE_MS = 150;
@@ -195,6 +196,7 @@ export function QuickOpen() {
       className="z-[var(--z-dialog)]"
     >
       <CommandInput
+        className={COMMAND_INPUT_FOCUS}
         placeholder={t("quickOpen.placeholder")}
         value={query}
         onValueChange={setQuery}

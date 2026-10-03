@@ -122,9 +122,11 @@ function FileDiff({
       className="min-w-0 rounded-md border border-border"
       data-path={file.path}
     >
-      <button
+      <Button
+        variant="ghost"
+        size="xs"
         type="button"
-        className="flex w-full min-w-0 items-center gap-2 px-2 py-1.5 text-left text-[12px] hover:bg-accent disabled:cursor-default disabled:hover:bg-transparent"
+        className="flex h-auto w-full justify-start font-normal min-w-0 items-center gap-2 px-2 py-1.5 text-left text-[12px] hover:bg-accent disabled:cursor-default disabled:opacity-100 disabled:hover:bg-transparent"
         disabled={!inlineable}
         aria-expanded={inlineable ? expanded : undefined}
         onClick={onToggle}
@@ -144,7 +146,7 @@ function FileDiff({
             +{String(file.additions)} −{String(file.deletions)}
           </span>
         )}
-      </button>
+      </Button>
       {!inlineable && !file.binary && (
         <p className="px-2 pb-1.5 text-[11px] text-muted-foreground">
           {t("github.review.noPatch")}
@@ -175,11 +177,13 @@ function FileDiff({
                       </td>
                       <td className="w-6 shrink-0 px-1 text-center select-none">
                         {canWrite && anchor && !draft ? (
-                          <button
+                          <Button
+                            variant="ghost"
+                            size="xs"
                             type="button"
                             data-slot="github-inline-comment"
                             aria-label={t("github.review.inlineAdd")}
-                            className="rounded-[var(--r-control)] px-1 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-accent"
+                            className="h-auto rounded-[var(--r-control)] px-1 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-accent"
                             onClick={() =>
                               onDraft(key!, {
                                 path: anchor.path,
@@ -190,7 +194,7 @@ function FileDiff({
                             }
                           >
                             +
-                          </button>
+                          </Button>
                         ) : null}
                       </td>
                       <td

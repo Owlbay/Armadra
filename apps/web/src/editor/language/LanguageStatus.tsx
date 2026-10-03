@@ -68,22 +68,29 @@ export function LanguageStatus({
     <span className="ml-auto flex items-center gap-2">
       {ownership === "follower" && <span>{t("lsp.following")}</span>}
       {(counts.errors > 0 || counts.warnings > 0) && (
-        <button
+        <Button
+          variant="ghost"
+          size="xs"
           type="button"
-          className="hover:text-[var(--text)]"
+          className="h-auto px-1 py-0 text-[length:inherit] font-normal text-inherit hover:text-[var(--text)]"
           onClick={() => setPanel("problems", "drawer")}
         >
           {t("problems.summary", {
             errors: String(counts.errors),
             warnings: String(counts.warnings),
           })}
-        </button>
+        </Button>
       )}
       <Popover>
         <PopoverTrigger asChild>
-          <button type="button" className="hover:text-[var(--text)]">
+          <Button
+            variant="ghost"
+            size="xs"
+            type="button"
+            className="h-auto px-1 py-0 text-[length:inherit] font-normal text-inherit hover:text-[var(--text)]"
+          >
             {label}
-          </button>
+          </Button>
         </PopoverTrigger>
         <PopoverContent
           side="top"

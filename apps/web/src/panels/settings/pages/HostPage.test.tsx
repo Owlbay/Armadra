@@ -20,9 +20,21 @@ let member = false;
 vi.mock("../../../app/use-access", () => ({
   useAccess: () => ({ member, can: () => !member, session: undefined }),
 }));
-vi.mock("./HostIdentityPanel", () => ({
-  HostIdentityPanel: () => null,
-}));
+// 「设备登录」只报一条会话上来：设备表只有一份，在对外服务那一块（G3-11）。
+let identitySession: IdentitySession | null = null;
+vi.mock("./HostIdentityPanel", async () => {
+  const { useEffect } = await import("react");
+  return {
+    HostIdentityPanel: ({
+      onSession,
+    }: {
+      onSession?(session: IdentitySession | null): void;
+    }) => {
+      useEffect(() => onSession?.(identitySession), [onSession]);
+      return null;
+    },
+  };
+});
 
 import { HostPage } from "./HostPage";
 import { usePreferencesStore } from "../../../app/preferences-store";
@@ -30,6 +42,7 @@ import {
   IdentityRequestError,
   IdentityTransportError,
   type IdentityHello,
+  type IdentitySession,
 } from "../../../api/identity";
 import { SETTINGS_SECTIONS } from "../nav";
 import { TestProviders } from "../../../app/test-harness";
@@ -139,10 +152,10 @@ function fakeCore(options: {
         if (typeof devices === "number")
           return answer(devices, { code: "UNAUTHENTICATED", message: "" });
         return answer(200, {
-          devices: devices.map((device) => ({
+          devices: devices.map((device, index) => ({
             ...device,
             principalId: "p",
-            epoch: 1,
+            epoch: index + 1,
             createdAtMs: Date.UTC(2026, 9, 1),
             revokedAtMs: 0,
           })),
@@ -150,6 +163,8 @@ function fakeCore(options: {
           hasMore: false,
         });
       }
+      if (url.pathname === "/api/identity/devices/revoke")
+        return answer(200, { revoked: true });
       return answer(404, { code: "not_found", message: "" });
     }),
   );
@@ -164,8 +179,36 @@ const hello: IdentityHello = {
   protocol: { major: 1, minor: 1 },
 };
 
+function sessionFor(deviceId: string, manage: boolean): IdentitySession {
+  return {
+    hostId: "h",
+    expiresAtUnixMs: 0,
+    device: {
+      deviceId,
+      principalId: "p",
+      displayName: "Mac",
+      role: "owner",
+      createdAtUnixMs: 1,
+      revision: 1,
+    },
+    scopes: [
+      { permission: "identity:read", workspaceId: "", executionHostId: "" },
+      ...(manage
+        ? [
+            {
+              permission: "identity:manage",
+              workspaceId: "",
+              executionHostId: "",
+            },
+          ]
+        : []),
+    ],
+  };
+}
+
 beforeEach(() => {
   member = false;
+  identitySession = null;
   probe.mockReset();
   usePreferencesStore.setState({ locale: "zh-CN" });
   // 缺省是成员：`/api/gateway` 403，对外服务这一块不出现。
@@ -376,5 +419,72 @@ describe("HostPage · 对外服务", () => {
       (screen.getByRole("switch", { name: "对外服务" }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
+  });
+
+  it("lists paired devices once, marks this device and revokes the displayed revision", async () => {
+    identitySession = sessionFor("d-mac", true);
+    const calls = fakeCore({
+      status: runningStatus(),
+      devices: [
+        { deviceId: "d-mac", name: "Mac", role: "owner" },
+        { deviceId: "d-phone", name: "iPhone", role: "owner" },
+      ],
+    });
+    render(<HostPage />);
+    expect(await screen.findByText("iPhone")).toBeTruthy();
+    // 只有一份设备表
+    expect(screen.getAllByRole("table")).toHaveLength(1);
+    const mac = screen.getByText("Mac").closest("tr") as HTMLElement;
+    expect(within(mac).getByText("当前")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "撤销 iPhone" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "撤销" }));
+    await waitFor(() =>
+      expect(
+        calls.find((call) => call.path === "/api/identity/devices/revoke")
+          ?.body,
+      ).toEqual({ deviceId: "d-phone", expectedRevision: 2 }),
+    );
+  });
+
+  it("a member without the gateway block still sees its devices, read-only without manage", async () => {
+    member = true;
+    identitySession = sessionFor("d-mac", false);
+    fakeCore({
+      status: 403,
+      devices: [{ deviceId: "d-mac", name: "Mac", role: "member" }],
+    });
+    render(<HostPage />);
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("Mac")).toBeTruthy();
+    expect(within(table).queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("switch", { name: "对外服务" })).toBeNull();
+  });
+
+  it("says when ACME renewal keeps failing and when it retries", async () => {
+    const running = runningStatus();
+    fakeCore({
+      status: {
+        ...running,
+        tls: {
+          ...running.tls,
+          source: "acme",
+          acme: {
+            directory: "https://acme.test/dir",
+            profile: null,
+            names: ["armadra.example"],
+            notAfter: "2026-10-20T00:00:00.000Z",
+            renewAt: "2026-10-05T08:00:00.000Z",
+            failures: 2,
+            lastError: { code: "acme_failed", message: "raw CA detail" },
+          },
+        },
+      },
+    });
+    render(<HostPage />);
+    const alert = await screen.findByText("证书续期失败");
+    expect(alert.closest("[role=alert]")?.textContent).toMatch(/重试/);
+    expect(document.body.textContent).not.toContain("raw CA detail");
   });
 });

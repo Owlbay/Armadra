@@ -11,12 +11,12 @@ import { useCanvasStore } from "@/store/canvas-store";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { ScrollArea } from "@/ui/scroll-area";
 import {
   Select,
@@ -191,11 +191,11 @@ export function HandoffDialog() {
   };
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && close()}>
-      <DialogContent className="z-[var(--z-dialog)] sm:max-w-[560px]">
-        <DialogHeader>
-          <DialogTitle>{t("handoff.title")}</DialogTitle>
-        </DialogHeader>
+    <ResponsiveDialog open={open} onOpenChange={(next) => !next && close()}>
+      <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[560px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{t("handoff.title")}</ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
         <p className="text-[length:var(--text-caption)] text-muted-foreground">
           {t("handoff.trust")} {t("handoff.sourceRunning")}
         </p>
@@ -304,7 +304,7 @@ export function HandoffDialog() {
             </div>
           )}
         </ScrollArea>
-        <DialogFooter>
+        <ResponsiveDialogFooter>
           {!view && !source?.handoffId && (
             <Button
               disabled={
@@ -345,9 +345,9 @@ export function HandoffDialog() {
               </Button>
             </>
           )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 

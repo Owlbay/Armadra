@@ -23,6 +23,7 @@ import { WindowDragLayer } from "../shell/WindowDragLayer";
 import { useCanvasStore } from "../store/canvas-store";
 import { onIdentitySessionChange } from "../api/identity";
 import { Toaster } from "@/ui/sonner";
+import { useCompactLayout } from "@/platform/layout";
 import { TooltipProvider } from "@/ui/tooltip";
 import { useCommandDispatch } from "./commands";
 import { useAgentNotifications } from "./notifications";
@@ -73,6 +74,7 @@ export function App() {
 function AppShell() {
   const workspace = useCanvasStore((state) => state.workspace);
   const minimapCollapsed = useMinimapPreferences((state) => state.collapsed);
+  const compact = useCompactLayout();
 
   const queryClient = useQueryClient();
   // Every /api call made before this device paired was refused. Once the Host
@@ -124,7 +126,12 @@ function AppShell() {
       <MobileBottomNav />
       <MobileFocusPage />
       <Overlays />
-      <Toaster position="bottom-right" />
+      {/* 手机上提示从顶部出：底部是焦点页的输入框与按键条，sonner 落在那里
+          会短暂盖住正在打字的地方（G2-10 遗留）。顶部让出状态栏安全区。 */}
+      <Toaster
+        position={compact ? "top-center" : "bottom-right"}
+        mobileOffset={{ top: "calc(env(safe-area-inset-top) + 8px)" }}
+      />
     </div>
   );
 }

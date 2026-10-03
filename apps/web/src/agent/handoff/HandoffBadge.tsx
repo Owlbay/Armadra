@@ -9,6 +9,7 @@ import { useCanvasStore } from "@/store/canvas-store";
 import { Badge } from "@/ui/badge";
 import { isSettled } from "./HandoffDialog";
 import { openHandoff } from "./handoff-targets";
+import { Button } from "@/ui/button";
 
 /**
  * 节点头部的交接标记（design §7.3 第 6 条）。
@@ -56,7 +57,9 @@ export function HandoffBadge({ nodeId }: { nodeId: string }) {
       variant="outline"
       className="h-[18px] cursor-pointer px-1.5 text-[length:var(--text-caption)]"
     >
-      <button
+      <Button
+        variant="ghost"
+        size="xs"
         type="button"
         title={t(`handoff.${active.state}`)}
         onClick={() =>
@@ -70,7 +73,7 @@ export function HandoffBadge({ nodeId }: { nodeId: string }) {
       >
         <Share2 className="size-2.5" />
         <span className="truncate">{t(`handoff.${active.state}`)}</span>
-      </button>
+      </Button>
     </Badge>
   );
 }

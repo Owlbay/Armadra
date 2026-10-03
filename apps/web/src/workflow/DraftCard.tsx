@@ -18,6 +18,7 @@ import {
 import { Input } from "@/ui/input";
 import { useCanvasStore } from "@/store/canvas-store";
 import { workflowErrorKey, workflowsApi } from "./api";
+import { useWorkflowStepSync } from "./node-steps";
 import { openWorkflowPanel, useWorkflowEvents, workflowKeys } from "./store";
 
 /**
@@ -29,6 +30,8 @@ import { openWorkflowPanel, useWorkflowEvents, workflowKeys } from "./store";
  */
 export function DraftLayer() {
   useWorkflowEvents();
+  // 画布节点头部的「第 n 步」读这张表（设计系统 §4）。
+  useWorkflowStepSync();
   const boardId = useCanvasStore((state) => state.boardId);
   // 工作流路由对成员一律 403（契约 §15）：成员不取、不显示草案卡。
   const member = useAccess().member;

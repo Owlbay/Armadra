@@ -6,7 +6,12 @@ import { useT } from "../../../app/preferences-store";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { Button } from "@/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/ui/dialog";
+import {
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { ScrollArea } from "@/ui/scroll-area";
 import { Spinner } from "@/ui/spinner";
 
@@ -63,11 +68,13 @@ export function AboutPage() {
         </SettingsRow>
       </SettingsGroup>
 
-      <Dialog open={licenses} onOpenChange={setLicenses}>
-        <DialogContent className="z-[var(--z-dialog)] sm:max-w-[720px]">
-          <DialogHeader>
-            <DialogTitle>{t("settings.licenses")}</DialogTitle>
-          </DialogHeader>
+      <ResponsiveDialog open={licenses} onOpenChange={setLicenses}>
+        <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[720px]">
+          <ResponsiveDialogHeader>
+            <ResponsiveDialogTitle>
+              {t("settings.licenses")}
+            </ResponsiveDialogTitle>
+          </ResponsiveDialogHeader>
           {notices.data === undefined ? (
             <div className="flex h-24 items-center justify-center">
               <Spinner aria-label={t("settings.licenses.loading")} />
@@ -79,8 +86,8 @@ export function AboutPage() {
               </pre>
             </ScrollArea>
           )}
-        </DialogContent>
-      </Dialog>
+        </ResponsiveDialogContent>
+      </ResponsiveDialog>
     </>
   );
 }

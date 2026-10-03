@@ -1,13 +1,18 @@
-import { useEffect, useId } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 
 import { useT } from "../../../app/preferences-store";
-import { hasPairingFragment } from "../../../api/identity";
+import {
+  hasPairingFragment,
+  type IdentitySession,
+} from "../../../api/identity";
 import { useHostConnection } from "../../../host/use-host-connection";
 import { SettingsGroup } from "../SettingsGroup";
+import { Alert, AlertTitle } from "@/ui/alert";
 import { Button } from "@/ui/button";
+import { Spinner } from "@/ui/spinner";
 import { HostIdentityPanel } from "./HostIdentityPanel";
 import { PageCaGuide } from "./gateway/CaInstallGuide";
-import { GatewaySection } from "./gateway/GatewaySection";
+import { GatewaySection, type GatewayIdentity } from "./gateway/GatewaySection";
 
 /**
  * 设置 → 后台服务。
@@ -22,6 +27,22 @@ export function HostPage() {
   const t = useT();
   const id = useId();
   const { state, check, cancel } = useHostConnection();
+  // 设备表只有一份（对外服务那一块）；「设备登录」报上这台设备是谁、能不能
+  // 管理。撤销了自己就让「设备登录」重新取一次会话（得到的是已退出）。
+  const [identity, setIdentity] = useState<GatewayIdentity | null>(null);
+  const [identityEpoch, setIdentityEpoch] = useState(0);
+  const onSession = useCallback((session: IdentitySession | null) => {
+    setIdentity(
+      session
+        ? {
+            deviceId: session.device.deviceId,
+            canManage: session.scopes.some(
+              (scope) => scope.permission === "identity:manage",
+            ),
+          }
+        : null,
+    );
+  }, []);
   // 从配对链接打开时自己检查一次：身份面要先确认服务身份才会取走票，这一步
   // 让人再点一次「检查连接」只是多一道没人知道的门槛。其余时候照旧等人点。
   useEffect(() => {
@@ -52,6 +73,10 @@ export function HostPage() {
               disabled={state.status === "checking"}
               onClick={() => void check()}
             >
+              {state.status === "checking" && (
+                // 设计系统 §3.4：加载态是按钮里的 Spinner；状态行另有朗读。
+                <Spinner role="presentation" aria-hidden />
+              )}
               {t("host.check")}
             </Button>
             {state.status === "checking" && (
@@ -66,19 +91,29 @@ export function HostPage() {
               </Button>
             )}
           </div>
-          <p
-            id={`${id}-status`}
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-            className={
-              state.status === "error"
-                ? "break-words text-[13px] leading-5 text-destructive"
-                : "break-words text-[13px] leading-5 text-muted-foreground"
-            }
-          >
-            {t(message)}
-          </p>
+          {state.status === "error" ? (
+            <Alert
+              variant="destructive"
+              id={`${id}-status`}
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              <AlertTitle className="font-normal break-words">
+                {t(message)}
+              </AlertTitle>
+            </Alert>
+          ) : (
+            <p
+              id={`${id}-status`}
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className="break-words text-[13px] leading-5 text-muted-foreground"
+            >
+              {t(message)}
+            </p>
+          )}
         </div>
         {state.status === "connected" && (
           <details className="min-w-0 px-4 py-3">
@@ -122,9 +157,14 @@ export function HostPage() {
           </details>
         )}
       </SettingsGroup>
-      <GatewaySection />
+      <GatewaySection
+        identity={identity}
+        onCurrentRevoked={() => setIdentityEpoch((epoch) => epoch + 1)}
+      />
       <HostIdentityPanel
+        key={identityEpoch}
         hello={state.status === "connected" ? state.hello : undefined}
+        onSession={onSession}
       />
     </>
   );

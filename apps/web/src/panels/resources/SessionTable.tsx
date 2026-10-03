@@ -43,6 +43,7 @@ import {
   unknownReasonKey,
   type SessionSort,
 } from "./metrics";
+import { Button } from "@/ui/button";
 
 export function SessionTable({
   sessions,
@@ -125,17 +126,19 @@ export function SessionTable({
         {t("resources.host.filter")}
       </span>
       {(["all", ...hosts] as const).map((value) => (
-        <button
+        <Button
+          variant="ghost"
+          size="xs"
           key={value === "all" ? "all" : (value ?? "unknown")}
           type="button"
           data-slot="resource-host-filter"
           data-host={value === "all" ? "all" : (value ?? "unknown")}
           data-active={host === value ? "true" : undefined}
           onClick={() => setHost(value)}
-          className="max-w-32 truncate rounded-[var(--r-control)] px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent data-[active=true]:bg-accent data-[active=true]:text-foreground"
+          className="block h-auto max-w-32 truncate rounded-[var(--r-control)] px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground hover:bg-accent data-[active=true]:bg-accent data-[active=true]:text-foreground"
         >
           {value === "all" ? t("resources.host.filter.all") : hostLabel(value)}
-        </button>
+        </Button>
       ))}
     </div>
   );
@@ -164,16 +167,18 @@ export function SessionTable({
       <div className="flex items-center gap-1 pb-1">
         {/* 排序只换看的顺序，测不出来的一律排在最后，不当 0 混进来。 */}
         {(["cpu", "memory", "name"] as const).map((key) => (
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             key={key}
             type="button"
             onClick={() => onSorted(key)}
             data-active={sort === key ? "true" : undefined}
             title={t("resources.sort.hint")}
-            className="rounded-[var(--r-control)] px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent data-[active=true]:bg-accent data-[active=true]:text-foreground"
+            className="h-auto rounded-[var(--r-control)] px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground hover:bg-accent data-[active=true]:bg-accent data-[active=true]:text-foreground"
           >
             {t(`resources.sort.${key}`)}
-          </button>
+          </Button>
         ))}
       </div>
 
