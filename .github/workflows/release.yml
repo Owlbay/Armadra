@@ -3,6 +3,8 @@
 # 五个作业：verify 拦住版本与标签不一致的发布，build 按目标矩阵打包并把打包器
 # 的产物改名成发布用的名字，web 打服务器壳要托管的前端产物，assemble 汇总校验
 # 清单与签名并只创建 draft Release，notarize 在缺少 secret 时跳过并在说明里标注。
+# 之后的 channels / channels-macos / channels-windows 渲染并试装分发渠道清单，
+# 不推送；推送在 Release 转正后由 distribute.yml 做（ci-release.md §3.1）。
 # 发布是人的动作：本工作流永远不会把 Release 从 draft 转正。
 name: release
 
@@ -630,3 +632,145 @@ jobs:
             args+=(--prerelease)
           fi
           gh release create "$RELEASE_TAG" "${args[@]}" artifacts/*
+
+  # 分发渠道（外部服务 §4，ci-release.md §3.1）：从刚汇总的 SHA256SUMS 渲染 Homebrew
+  # cask、Scoop、winget 与 AUR 的 PKGBUILD，并在后面两个作业里各自装一遍。这里只渲染
+  # 与校验，不推送任何渠道：Release 此时还是 draft，下载地址对外是 404。推送在人把
+  # Release 转正之后由 distribute.yml 做。预发布不进渠道。
+  channels:
+    needs: [verify, assemble]
+    if: needs.verify.outputs.prerelease != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assembled
+          path: artifacts
+      # 两份：channels/ 指向 GitHub Release（发布时用的就是它），channels-local/
+      # 指向 127.0.0.1:8765，给下面两个作业从本地起的静态服务器上真装一遍。
+      - name: 渲染渠道清单
+        shell: bash
+        run: |
+          set -euo pipefail
+          for variant in channels channels-local; do
+            base=()
+            [ "$variant" = channels-local ] && base=(--download-base http://127.0.0.1:8765)
+            node tools/release/publish-channels.mjs render \
+              --sums artifacts/SHA256SUMS \
+              --version "${{ needs.verify.outputs.version }}" \
+              --repo "${{ github.repository }}" \
+              --out "rendered/$variant" "${base[@]}"
+          done
+      # makepkg 不许 root 跑，所以在 Arch 容器里建一个普通用户；namcap 的告警只打印。
+      - name: PKGBUILD 过 makepkg --printsrcinfo 与 namcap
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD/rendered/channels/aur:/pkg:ro" archlinux:latest bash -euo pipefail -c '
+            sed -i "/^\[options\]/a DisableSandbox" /etc/pacman.conf
+            pacman -Syu --noconfirm --needed namcap >/dev/null
+            useradd -m builder
+            install -o builder -m 644 /pkg/PKGBUILD /home/builder/PKGBUILD
+            cd /home/builder
+            su builder -c "makepkg --printsrcinfo"
+            namcap PKGBUILD
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-channels
+          path: rendered
+          if-no-files-found: error
+
+  # brew style / audit 用一个本地 tap；install 从本地静态服务器装进临时 appdir，
+  # 顺带断言 after-pack 放回 Contents/Resources/ 的两份 Electron 声明与第三方声明。
+  channels-macos:
+    needs: [verify, channels]
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-channels
+          path: rendered
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-darwin-*
+          merge-multiple: true
+          path: serve/v${{ needs.verify.outputs.version }}
+      - name: brew style、audit 与 install --cask
+        shell: bash
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_ANALYTICS: "1"
+        run: |
+          set -euo pipefail
+          brew tap-new --no-git armadra-release/local
+          tap="$(brew --repository armadra-release/local)"
+          mkdir -p "$tap/Casks"
+          cp rendered/channels/homebrew/Casks/armadra.rb "$tap/Casks/"
+          brew style --cask armadra-release/local/armadra
+          brew audit --cask --strict armadra-release/local/armadra
+          cp rendered/channels-local/homebrew/Casks/armadra.rb "$tap/Casks/"
+          (cd serve && python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1 &)
+          sleep 2
+          appdir="$RUNNER_TEMP/apps"
+          mkdir -p "$appdir"
+          brew install --cask --appdir="$appdir" armadra-release/local/armadra
+          resources="$appdir/Armadra.app/Contents/Resources"
+          for name in LICENSE.electron.txt LICENSES.chromium.html THIRD_PARTY_NOTICES.md agent/THIRD_PARTY_NOTICES.md; do
+            [ -s "$resources/$name" ] || { echo "::error::$name 不在 $resources"; exit 1; }
+          done
+          brew uninstall --cask armadra-release/local/armadra
+
+  # winget validate 校验三件套；Scoop 从本地静态服务器装便携 zip，装好后找得到
+  # armadra.exe 与它旁边的 Electron 声明。
+  channels-windows:
+    needs: [verify, channels]
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-channels
+          path: rendered
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-windows-x86_64
+          path: serve/v${{ needs.verify.outputs.version }}
+      - name: winget validate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -Force | Out-Null
+            Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery | Out-Null
+            Repair-WinGetPackageManager -AllUsers -Latest
+          }
+          $dir = Get-ChildItem -Directory -Recurse rendered/channels/winget/manifests | Where-Object { Test-Path (Join-Path $_.FullName 'Owlbay.Armadra.yaml') } | Select-Object -First 1
+          winget validate --manifest $dir.FullName --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: scoop install
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-RestMethod -Uri https://get.scoop.sh -OutFile "$env:RUNNER_TEMP\install-scoop.ps1"
+          & "$env:RUNNER_TEMP\install-scoop.ps1" -RunAsAdmin
+          $env:PATH = "$env:USERPROFILE\scoop\shims;$env:PATH"
+          $server = Start-Process python -ArgumentList '-m','http.server','8765','--bind','127.0.0.1' -WorkingDirectory serve -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 2
+          scoop install rendered/channels-local/scoop/bucket/armadra.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $app = "$env:USERPROFILE\scoop\apps\armadra\current"
+          foreach ($name in 'armadra.exe', 'LICENSE.electron.txt', 'LICENSES.chromium.html', 'resources\THIRD_PARTY_NOTICES.md') {
+            if (-not (Test-Path (Join-Path $app $name))) { Write-Host "::error::$name 不在 $app"; exit 1 }
+          }
+          scoop uninstall armadra
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Stop-Process -Id $server.Id
