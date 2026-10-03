@@ -512,11 +512,24 @@ export function windowsExecutables(releaseDir) {
   return found.sort();
 }
 
+/** The environment minus `PSModulePath` (any casing). */
+export function withoutModulePath(env) {
+  return Object.fromEntries(
+    Object.entries(env).filter(([key]) => key.toLowerCase() !== "psmodulepath"),
+  );
+}
+
 /** `Get-AuthenticodeSignature`'s status of one file, as PowerShell spells it. */
 export function authenticodeStatus(
   path,
   run = (file, args) =>
-    execFileSync(file, args, { encoding: "utf8", stdio: "pipe" }),
+    execFileSync(file, args, {
+      encoding: "utf8",
+      stdio: "pipe",
+      // Windows PowerShell 5.1 started from a PowerShell 7 step inherits 7's
+      // module path and cannot load Get-AuthenticodeSignature's module.
+      env: withoutModulePath(process.env),
+    }),
 ) {
   const literal = path.replace(/'/g, "''");
   const output = run("powershell.exe", [

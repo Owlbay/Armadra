@@ -19,7 +19,8 @@ vi.mock("electron", () => ({
   },
 }));
 
-const { signatureState, windowsSignatureState } = await import("./environment");
+const { signatureState, windowsPowerShellEnv, windowsSignatureState } =
+  await import("./environment");
 
 describe("Windows: Authenticode decides, and only Valid is signed", () => {
   it("maps PowerShell's status onto the four states", () => {
@@ -50,6 +51,17 @@ describe("Windows: Authenticode decides, and only Valid is signed", () => {
         throw new Error("spawn powershell.exe ENOENT");
       }),
     ).toBe("unknown");
+  });
+
+  it("starts Windows PowerShell without an inherited PSModulePath", () => {
+    // PowerShell 7's module path makes 5.1 fail to load the module that
+    // carries Get-AuthenticodeSignature, silently.
+    const env = windowsPowerShellEnv({
+      PATH: "C:\\Windows",
+      PSModulePath: "C:\\Program Files\\PowerShell\\7\\Modules",
+    });
+    expect(env).toEqual({ PATH: "C:\\Windows" });
+    expect(windowsPowerShellEnv({ psmodulepath: "x" })).toEqual({});
   });
 
   it("quotes the path as a PowerShell literal", () => {
@@ -102,8 +114,13 @@ describe.runIf(process.platform === "win32")(
     function ps(command: string): string {
       return execFileSync(
         "powershell.exe",
-        ["-NoProfile", "-NonInteractive", "-Command", command],
-        { encoding: "utf8", timeout: 60_000 },
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `$ErrorActionPreference = 'Stop'; ${command}`,
+        ],
+        { encoding: "utf8", timeout: 60_000, env: windowsPowerShellEnv() },
       ).trim();
     }
 

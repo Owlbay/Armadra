@@ -82,11 +82,35 @@ export function signatureState(
 /** Runs one PowerShell command and returns what it printed. */
 export type PowerShell = (command: string) => string;
 
+/**
+ * The environment Windows PowerShell 5.1 is started with: this one, without
+ * `PSModulePath`. A process started from PowerShell 7 inherits a module path
+ * that lists 7's modules first, and 5.1 then fails to load
+ * `Microsoft.PowerShell.Security` — `Get-AuthenticodeSignature` "not
+ * recognised", exit code 0, no status. Without the variable 5.1 builds its
+ * own default.
+ */
+export function windowsPowerShellEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const copy = { ...env };
+  for (const key of Object.keys(copy)) {
+    if (key.toLowerCase() === "psmodulepath") delete copy[key];
+  }
+  return copy;
+}
+
 const powershell: PowerShell = (command) =>
   execFileSync(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-Command", command],
-    { encoding: "utf8", timeout: 15_000, windowsHide: true, stdio: "pipe" },
+    {
+      encoding: "utf8",
+      timeout: 15_000,
+      windowsHide: true,
+      stdio: "pipe",
+      env: windowsPowerShellEnv(),
+    },
   );
 
 /**

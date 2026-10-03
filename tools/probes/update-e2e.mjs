@@ -70,6 +70,7 @@ import {
   sha512Base64,
 } from "../release/stage-desktop.mjs";
 import { writeManifest } from "../release/updater-manifest.mjs";
+import { withoutModulePath } from "../../apps/desktop/scripts/signing-electron.mjs";
 import {
   LAUNCHD_PATH,
   attachToRenderer,
@@ -177,7 +178,8 @@ export function expectedSignature(app, platform = process.platform) {
           "-Command",
           `(Get-AuthenticodeSignature -LiteralPath '${app.replace(/'/g, "''")}').Status.ToString()`,
         ],
-        { encoding: "utf8" },
+        // Windows PowerShell 5.1 under a PowerShell 7 parent: see signing-electron.mjs.
+        { encoding: "utf8", env: withoutModulePath(process.env) },
       ).trim();
       return status === "Valid"
         ? "signed"
