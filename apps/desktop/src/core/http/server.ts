@@ -195,13 +195,19 @@ export class CoreServer {
         }
       }
     } catch (error) {
-      this.options.platform.log.error("request failed", {
-        path,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      // 没人接住的错误才走到这里；按 §11.2 报给壳（没开上报就只是这行日志）。
-      reportError(this.options.platform, error, { source: "http" });
-      answer = internal("核心处理请求时失败");
+      if (error instanceof SyntaxError) {
+        // 一份坏的 JSON 是调用方的错，不是 core 的。它的消息里引着请求体的
+        // 开头（可能正是一个凭据值），所以不进日志、不进崩溃上报。
+        answer = badRequest("请求体不是合法的 JSON");
+      } else {
+        this.options.platform.log.error("request failed", {
+          path,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        // 没人接住的错误才走到这里；按 §11.2 报给壳（没开上报就只是这行日志）。
+        reportError(this.options.platform, error, { source: "http" });
+        answer = internal("核心处理请求时失败");
+      }
     }
     this.send(
       response,
