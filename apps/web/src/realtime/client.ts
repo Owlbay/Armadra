@@ -82,6 +82,8 @@ export class RealtimeClient {
   private synced = false;
   private stopped = false;
   private currentStatus: ClientStatus = "connecting";
+  /** 这次连接以来收到过 awareness 的 clientID。 */
+  private readonly seen = new Set<number>();
 
   constructor(options: RealtimeClientOptions) {
     this.options = options;
@@ -153,6 +155,7 @@ export class RealtimeClient {
     socket.onopen = () => {
       if (this.socket !== socket) return;
       opened = true;
+      this.seen.clear();
       this.attempt = 0;
       this.refusals = 0;
       const encoder = encoding.createEncoder();
@@ -171,13 +174,8 @@ export class RealtimeClient {
     socket.onclose = (event) => {
       if (this.socket !== socket) return;
       this.socket = null;
-      // 别人的光标留着没意义：重连后 core 会再发一份当前的。
-      const others = [...this.awareness.getStates().keys()].filter(
-        (id) => id !== this.doc.clientID,
-      );
-      if (others.length > 0) {
-        awarenessProtocol.removeAwarenessStates(this.awareness, others, this);
-      }
+      // 别人的状态先留着：断线期间在线条照样列出他们（置灰）。重连同步完时
+      // 把这段时间没再出现的人清掉（`pruneStale`）。
       if (event.code === REALTIME_CLOSE.forbidden) {
         this.stopped = true;
         this.setStatus("forbidden");
@@ -248,19 +246,31 @@ export class RealtimeClient {
           this.synced = true;
         }
         if (subtype === syncProtocol.messageYjsSyncStep2) {
+          this.pruneStale();
           this.setStatus("online");
         }
         return;
       }
       if (type === REALTIME_MESSAGE.awareness) {
-        awarenessProtocol.applyAwarenessUpdate(
-          this.awareness,
-          decoding.readVarUint8Array(decoder),
-          this,
-        );
+        const update = decoding.readVarUint8Array(decoder);
+        for (const id of awarenessClients(update)) this.seen.add(id);
+        awarenessProtocol.applyAwarenessUpdate(this.awareness, update, this);
       }
     } catch {
       // 解不开的帧丢掉；core 不会发这种东西，发了也不该把页面打断。
+    }
+  }
+
+  /**
+   * 重连后 core 先发当前全部 awareness、再答 step2；到 step2 时还没出现过的
+   * 别人就是断线期间走了的，清掉。
+   */
+  private pruneStale(): void {
+    const stale = [...this.awareness.getStates().keys()].filter(
+      (id) => id !== this.doc.clientID && !this.seen.has(id),
+    );
+    if (stale.length > 0) {
+      awarenessProtocol.removeAwarenessStates(this.awareness, stale, this);
     }
   }
 
@@ -295,6 +305,19 @@ export function awarenessFrame(
     awarenessProtocol.encodeAwarenessUpdate(awareness, clients),
   );
   return encoding.toUint8Array(encoder);
+}
+
+/** 一条 awareness 更新里有哪些 clientID（编码见 `y-protocols/awareness`）。 */
+function awarenessClients(update: Uint8Array): number[] {
+  const decoder = decoding.createDecoder(update);
+  const count = decoding.readVarUint(decoder);
+  const ids: number[] = [];
+  for (let index = 0; index < count; index += 1) {
+    ids.push(decoding.readVarUint(decoder));
+    decoding.readVarUint(decoder);
+    decoding.readVarString(decoder);
+  }
+  return ids;
 }
 
 function bytesOf(data: unknown): Uint8Array | null {

@@ -53,6 +53,8 @@ export function nextCursors(
   return next;
 }
 
+const NO_PEERS: Peer[] = [];
+
 export function CursorLayer() {
   const active = useRealtimeStore((view) => view.boardId !== null);
   if (!active) return null;
@@ -61,7 +63,10 @@ export function CursorLayer() {
 
 function Cursors() {
   const t = useT();
-  const peers = useRealtimeStore((view) => view.peers);
+  const allPeers = useRealtimeStore((view) => view.peers);
+  const offline = useRealtimeStore((view) => view.status !== "online");
+  // 断线时别人的光标与选区都是旧的：淡出，重连后再画（在线条照样列人）。
+  const peers = offline ? NO_PEERS : allPeers;
   const following = useRealtimeStore((view) => view.following);
   const follow = useRealtimeStore((view) => view.follow);
   const zoom = useStore((state) => state.transform[2]);
@@ -111,12 +116,12 @@ function Cursors() {
   }, [domNode, flow]);
 
   // 跟随：相机跟着那个人的光标走；人走了就停。
-  const followed = peers.find((peer) => peer.clientId === following);
+  const followed = allPeers.find((peer) => peer.clientId === following);
   const followX = followed?.state.cursor?.x;
   const followY = followed?.state.cursor?.y;
   React.useEffect(() => {
     if (following === null) return;
-    if (!peers.some((peer) => peer.clientId === following)) {
+    if (!allPeers.some((peer) => peer.clientId === following)) {
       follow(null);
       return;
     }
@@ -125,7 +130,7 @@ function Cursors() {
       zoom: flow.getZoom(),
       duration: 120,
     });
-  }, [flow, follow, followX, followY, following, peers]);
+  }, [allPeers, flow, follow, followX, followY, following]);
 
   const scale = zoom > 0 ? 1 / zoom : 1;
 

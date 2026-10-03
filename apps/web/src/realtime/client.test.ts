@@ -6,7 +6,12 @@ import * as syncProtocol from "y-protocols/sync";
 import * as Y from "yjs";
 import { REALTIME_CLOSE, REALTIME_MESSAGE } from "@armadra/shared";
 
-import { RealtimeClient, type ClientStatus, type SocketLike } from "./client";
+import {
+  RealtimeClient,
+  awarenessFrame,
+  type ClientStatus,
+  type SocketLike,
+} from "./client";
 
 /** 一个内存里的「core」：一份文档，说同一套帧。 */
 class FakeSocket implements SocketLike {
@@ -156,6 +161,29 @@ describe("…/sync 客户端（契约 §16.1）", () => {
     expect(kindOf(sockets[1]!.sent[0]!)).toEqual([0, 0]);
     serve(server, sockets[1]!);
     expect(statuses.at(-1)).toBe("online");
+    client.destroy();
+  });
+
+  it("断线期间别人的状态留着；重连同步完时清掉没再出现的人", () => {
+    const server = new Y.Doc();
+    const { client, awareness, sockets, timers } = setup();
+    const stay = new Awareness(new Y.Doc());
+    const gone = new Awareness(new Y.Doc());
+    stay.setLocalState({ deviceId: "s", name: "S", color: 2 });
+    gone.setLocalState({ deviceId: "g", name: "G", color: 3 });
+    sockets[0]!.open();
+    sockets[0]!.deliver(awarenessFrame(stay, [stay.clientID]));
+    sockets[0]!.deliver(awarenessFrame(gone, [gone.clientID]));
+    serve(server, sockets[0]!);
+    sockets[0]!.drop(1006);
+    expect(awareness.getStates().has(gone.clientID)).toBe(true);
+
+    timers.shift()!();
+    sockets[1]!.open();
+    sockets[1]!.deliver(awarenessFrame(stay, [stay.clientID]));
+    serve(server, sockets[1]!);
+    expect(awareness.getStates().has(stay.clientID)).toBe(true);
+    expect(awareness.getStates().has(gone.clientID)).toBe(false);
     client.destroy();
   });
 
