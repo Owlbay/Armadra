@@ -15,7 +15,13 @@ import { shellArgs, withWorkspace } from "../args";
 import { render } from "../render";
 import { decodePng } from "../cdp/png";
 import { discoverBrowser } from "./discover";
+import { CDP_TRACE_ENV } from "./connection";
 import { HeadlessBackend } from "./index";
+
+// The wire trace (method names and ids only) is on for this file: a command
+// that stalls on a CI runner prints what was in flight and what the browser
+// said last, instead of only "did not answer in time".
+process.env[CDP_TRACE_ENV] = "1";
 
 /**
  * Every verb against a REAL headless Chromium and a real page.
@@ -160,8 +166,20 @@ async function run(
   source: Record<string, unknown> = {},
 ): Promise<string> {
   const payload = withWorkspace(shellArgs(verb, source), workspace);
-  const result = await backend!.drive("live-verbs", verb, payload);
-  return render(verb, source, result);
+  try {
+    const result = await backend!.drive("live-verbs", verb, payload);
+    return render(verb, source, result);
+  } catch (error) {
+    if (/did not answer in time/.test(String(error))) {
+      const report = await backend!.node("live-verbs")?.diagnose();
+      // eslint-disable-next-line no-console
+      console.error(
+        `[live verbs] ${verb} stalled:`,
+        JSON.stringify(report ?? "no node"),
+      );
+    }
+    throw error;
+  }
 }
 
 async function fails(

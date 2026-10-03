@@ -222,6 +222,60 @@ export class HeadlessNode {
     }));
   }
 
+  /**
+   * What this node's browser looks like right now, for a stall that needs
+   * explaining: commands still waiting, the tail of the wire trace (only with
+   * `ARMADRA_CDP_TRACE=1`), and three short questions to Chromium — which
+   * targets it has, how busy each of its processes has been, and whether the
+   * active page answers at all. No URLs, titles or page text.
+   */
+  async diagnose(): Promise<Record<string, unknown>> {
+    const connection = this.connection;
+    const report: Record<string, unknown> = {
+      alive: this.isAlive(),
+      pid: this.process?.pid ?? null,
+      uptimeMs: this.launchedAt === null ? null : Date.now() - this.launchedAt,
+      tabs: [...this.tabs.values()].map((tab) => ({
+        active: tab.targetId === this.activeTargetId,
+        sessionId: tab.sessionId,
+      })),
+      pending: connection?.pending() ?? [],
+      trace: connection?.traced().slice(-120) ?? [],
+    };
+    if (connection === undefined || !connection.isOpen()) return report;
+    report.targets = await connection
+      .send("Target.getTargets", {}, undefined, 3_000)
+      .then((answer) =>
+        (
+          (answer as { targetInfos?: { type?: string; attached?: boolean }[] })
+            .targetInfos ?? []
+        ).map((target) => ({ type: target.type, attached: target.attached })),
+      )
+      .catch((error: unknown) => String((error as Error).message));
+    // Which Chromium processes there are and how much CPU each has used: a
+    // renderer pegged at 100% and one sitting idle are different stalls.
+    report.processes = await connection
+      .send("SystemInfo.getProcessInfo", {}, undefined, 3_000)
+      .then((answer) =>
+        (
+          (answer as { processInfo?: { type?: string; cpuTime?: number }[] })
+            .processInfo ?? []
+        ).map((info) => ({ type: info.type, cpuTime: info.cpuTime })),
+      )
+      .catch((error: unknown) => String((error as Error).message));
+    // Does the active page answer at all? A command that needs nothing from
+    // the page's JavaScript, with a short bound.
+    const tab = this.activeTab();
+    if (tab !== undefined) {
+      const asked = Date.now();
+      report.page = await connection
+        .send("Page.getFrameTree", {}, tab.sessionId, 3_000)
+        .then(() => `answered in ${Date.now() - asked} ms`)
+        .catch((error: unknown) => String((error as Error).message));
+    }
+    return report;
+  }
+
   activeTab(): Tab | undefined {
     const active = this.tabs.get(this.activeTargetId);
     if (active !== undefined) return active;

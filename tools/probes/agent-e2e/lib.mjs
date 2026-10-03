@@ -21,6 +21,7 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
+import { stepTrustDialog } from "./trust-dialog.mjs";
 import {
   claudeDefaultMode,
   claudeStateBlame,
@@ -67,6 +68,13 @@ export const selfTest = argv.includes("--self-test");
 export const realModel = argv.includes("--real-model");
 /** `--record-compat`：场景 12 真跑通过的那几家，把版本写进 compatibility.json。 */
 export const recordCompat = argv.includes("--record-compat");
+/** `--preflight`：只答各家前提与场景计划，不起 core、不起 CLI 会话。 */
+export const preflight = argv.includes("--preflight");
+/**
+ * `--setup-only`：走完共用装配（core、页面、按前提建的节点）就收尾，不跑场景。
+ * 用来在 PATH 上全是假 CLI、HOME 是临时目录时证明「缺哪家都不让装配崩」。
+ */
+export const setupOnly = argv.includes("--setup-only");
 
 export function requireReal(what) {
   if (selfTest || realAllowed) return;
@@ -129,6 +137,12 @@ export function scenario(id) {
     },
     finish() {
       entry.status = entry.checks.every((c) => c.ok) ? "passed" : "failed";
+    },
+    /** 前提不满足（没装、认证不上、没选）：整场景记 skipped 并写原因。 */
+    skip(reason) {
+      entry.status = "skipped";
+      entry.reason = reason;
+      console.log(`  skip  [${id}] ${reason}`);
     },
     fail(error) {
       entry.checks.push({
@@ -213,30 +227,26 @@ export * from "./isolated.mjs";
 
 /* --------------------------------- 装配 ---------------------------------- */
 
-/** 起临时环境、core、Vite 与 Chrome，挂上页面；答场景共用的上下文。 */
-export async function setup() {
+/**
+ * 起临时环境、core、Vite 与 Chrome，挂上页面；答场景共用的上下文。`clis` 是
+ * `preflight.mjs::cliPrerequisites` 的结果：没装或认证不上的那家不建节点、不
+ * 预热，依赖它的场景由入口记 skipped（`ctx.clis` 照传给场景）。
+ */
+export async function setup(clis) {
   const before = fingerprint();
   // 先跑过的独立场景（12）已经记过开场的那一份：以最早的为准。
   report.safety.before ??= before;
   report.safety.claudeDefaultMode ??= { before: claudeDefaultMode() };
-
-  // Codex 的 token：临时目录里刷新会轮换 refresh token。
-  const auth = JSON.parse(
-    readFileSync(join(homedir(), ".codex/auth.json"), "utf8"),
+  const hasClaude = clis.claude.ok;
+  const hasCodex = clis.codex.ok;
+  // Codex 的 token 是否过期已在开跑前检查过（临时目录里刷新会轮换真实那份）。
+  const auth = clis.codex.auth;
+  const refreshedAt = clis.codex.refreshedAt;
+  report.versions = Object.fromEntries(
+    ["claude", "codex"]
+      .filter((id) => clis[id].ok)
+      .map((id) => [id, clis[id].version]),
   );
-  const refreshedAt = Date.parse(auth.last_refresh ?? "");
-  if (
-    !Number.isFinite(refreshedAt) ||
-    Date.now() - refreshedAt > 7 * 86_400_000
-  ) {
-    throw new Error(
-      "~/.codex/auth.json 超过 7 天没刷新：在临时 CODEX_HOME 里刷新会让真实那份失效，先在自己的终端里跑一次 codex 再来",
-    );
-  }
-  report.versions = {
-    claude: execFileSync("claude", ["--version"], { encoding: "utf8" }).trim(),
-    codex: execFileSync("codex", ["--version"], { encoding: "utf8" }).trim(),
-  };
   note("CLI 版本", report.versions);
 
   const scratch = mkdtempSync(join(tmpdir(), "armadra-agent-e2e-"));
@@ -252,10 +262,11 @@ export async function setup() {
 
   const codexHome = join(scratch, "codex-home");
   mkdirSync(codexHome);
-  copyFileSync(
-    join(homedir(), ".codex/auth.json"),
-    join(codexHome, "auth.json"),
-  );
+  if (hasCodex)
+    copyFileSync(
+      join(homedir(), ".codex/auth.json"),
+      join(codexHome, "auth.json"),
+    );
   // 省 token：低推理强度。另外两条都是「启动时不上报的 CLI 屏幕上停着一个
   // 安静的提示」（设计 §4.3 的误判面），第一条任务会成为它的答案：
   //   * 目录信任——预先信任工作目录；
@@ -270,16 +281,17 @@ export async function setup() {
   // 一个全新的 CODEX_HOME，会在它自己的 sqlite 迁移上撞车（「migration 2: no
   // such column」，进程直接退出）。操作员自己的 CODEX_HOME 早就迁移过，碰不到
   // 这个；这一下让临时目录也处在那个状态。约两千 token。
-  execFileSync(
-    "codex",
-    ["exec", "--skip-git-repo-check", "Reply with just OK."],
-    {
-      cwd: project,
-      env: { ...process.env, CODEX_HOME: codexHome },
-      stdio: "ignore",
-      timeout: 120_000,
-    },
-  );
+  if (hasCodex)
+    execFileSync(
+      "codex",
+      ["exec", "--skip-git-repo-check", "Reply with just OK."],
+      {
+        cwd: project,
+        env: { ...process.env, CODEX_HOME: codexHome },
+        stdio: "ignore",
+        timeout: 120_000,
+      },
+    );
   const claudeInstallHome = join(scratch, "claude-install-home");
   mkdirSync(claudeInstallHome);
 
@@ -413,10 +425,11 @@ export async function setup() {
   const runDir = join(data, "integration", "run");
   report.launch = { claude: claudeRow?.launcher, codex: codexRow?.launcher };
   if (
-    report.launch.claude !== join(runDir, "claude") ||
-    report.launch.codex !== join(runDir, "codex") ||
-    claudeArgs[0] !== "--settings" ||
-    !String(claudeArgs[1]).startsWith(data)
+    (hasClaude &&
+      (report.launch.claude !== join(runDir, "claude") ||
+        claudeArgs[0] !== "--settings" ||
+        !String(claudeArgs[1]).startsWith(data))) ||
+    (hasCodex && report.launch.codex !== join(runDir, "codex"))
   )
     throw new Error(`没有经临时数据目录里的启动器注入，不能用真实配置目录`);
   note("启动器", report.launch);
@@ -480,17 +493,26 @@ export async function setup() {
     createdAt: stamp,
     updatedAt: stamp,
   });
-  const seeded = [source, codexA, codexB, claudeA];
+  // 没装或认证不上的那家不建节点：页面挂上去就会敲启动行。
+  const seeded = [
+    source,
+    ...(hasCodex ? [codexA, codexB] : []),
+    ...(hasClaude ? [claudeA] : []),
+  ];
   await api(documentPath, {
     method: "PUT",
     body: JSON.stringify({
       expectedUpdatedAt: initial.board.updatedAt,
       nodes: seeded,
       edges: [
-        edge(source, codexA, "supervises"),
-        edge(source, codexB, "supervises"),
-        edge(source, claudeA, "supervises"),
-        edge(codexA, codexB, "peer"),
+        ...(hasCodex
+          ? [
+              edge(source, codexA, "supervises"),
+              edge(source, codexB, "supervises"),
+              edge(codexA, codexB, "peer"),
+            ]
+          : []),
+        ...(hasClaude ? [edge(source, claudeA, "supervises")] : []),
       ],
       viewport: { x: 30, y: 60, zoom: 0.4 },
       whiteboard: "",
@@ -907,32 +929,33 @@ export async function setup() {
       `${agent} 起到提示符`,
       async () => {
         const text = await screen(nodeId);
-        // Claude 进一个新目录先问信任；那一下是人的事，经页面按回车。
-        if (
-          agent === "claude" &&
-          !trusted &&
-          /trust/i.test(text) &&
-          /folder|files/i.test(text)
-        ) {
-          if (page === undefined) return false;
-          // 缺省高亮的是「No, exit」：先下移到「Yes, I trust this folder」再回车。
-          // 开场事件在信任之前还是之后到，决定了首投放行门会不会把正文打进这
-          // 个对话框里——记下来。
-          report.trustPrompt = {
-            statusWhileAsking: statusSummary(nodeId),
-            at: new Date().toISOString(),
-          };
-          note(
-            "Claude 问是否信任工作目录，经页面选「信任」并回车",
-            report.trustPrompt,
-          );
-          await page.focusNode(nodeId);
-          await page.key("ArrowDown", 40);
-          await sleep(300);
-          await page.enter();
-          trusted = true;
-          await sleep(1500);
-          return false;
+        // Claude 进一个新目录先问信任；那一下是人的事，经页面答——只答认得出
+        // 的那两种形态（`trust-dialog.mjs`），认不出就等到超时。
+        if (agent === "claude" && !trusted && page !== undefined) {
+          const step = await stepTrustDialog(text, {
+            capture: () => screen(nodeId),
+            focus: () => page.focusNode(nodeId),
+            down: () => page.key("ArrowDown", 40),
+            enter: () => page.enter(),
+            type: (value) => page.type(value),
+            sleep,
+          });
+          if (step === "answered") {
+            // 开场事件在信任之前还是之后到，决定了首投放行门会不会把正文打进
+            // 这个对话框里——记下来。
+            report.trustPrompt = {
+              statusWhileAsking: statusSummary(nodeId),
+              at: new Date().toISOString(),
+            };
+            note(
+              "Claude 问是否信任工作目录，经页面选「信任」",
+              report.trustPrompt,
+            );
+            trusted = true;
+            await sleep(1500);
+            return false;
+          }
+          if (step === "waiting") return false;
         }
         if (agent === "codex") {
           if (/Update available|Update now/i.test(text))
@@ -1140,6 +1163,7 @@ export async function setup() {
   });
 
   return {
+    clis,
     auth,
     refreshedAt,
     scratch,
@@ -1226,14 +1250,12 @@ export function finalize() {
   // 只跑假 CLI 的场景连 `--version` 也不起真 CLI。
   if (report.versions !== undefined) {
     try {
-      report.safety.versionsAfter = {
-        claude: execFileSync("claude", ["--version"], {
-          encoding: "utf8",
-        }).trim(),
-        codex: execFileSync("codex", ["--version"], {
-          encoding: "utf8",
-        }).trim(),
-      };
+      report.safety.versionsAfter = Object.fromEntries(
+        Object.keys(report.versions).map((id) => [
+          id,
+          execFileSync(id, ["--version"], { encoding: "utf8" }).trim(),
+        ]),
+      );
     } catch {}
   }
   const versionsKept =
@@ -1281,12 +1303,16 @@ export function finalize() {
     report.safety.blamed.length === 0;
   const errors = report.consoleErrors.length;
   const scenarios = Object.values(report.scenarios);
-  report.status =
-    report.error === undefined &&
-    report.safety.untouched &&
-    errors === 0 &&
-    scenarios.length > 0 &&
-    scenarios.every((entry) => entry.status === "passed")
+  const preflightOnly =
+    report.status === "preflight" && report.error === undefined;
+  report.status = preflightOnly
+    ? "preflight"
+    : report.error === undefined &&
+        report.safety.untouched &&
+        errors === 0 &&
+        scenarios.length > 0 &&
+        scenarios.some((entry) => entry.status === "passed") &&
+        scenarios.every((entry) => ["passed", "skipped"].includes(entry.status))
       ? "ok"
       : "failed";
   report.seconds = Math.round((Date.now() - started) / 1000);
@@ -1300,5 +1326,5 @@ export function finalize() {
   for (const [id, entry] of Object.entries(report.scenarios))
     console.log(`  ${entry.status.padEnd(7)} ${id}`);
   console.log(`  报告  ${join(output, "result.json")}`);
-  process.exit(report.status === "ok" ? 0 : 1);
+  process.exit(report.status === "ok" || preflightOnly ? 0 : 1);
 }

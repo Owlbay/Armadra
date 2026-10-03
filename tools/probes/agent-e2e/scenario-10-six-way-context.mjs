@@ -47,6 +47,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { chosenFamilies } from "./preflight.mjs";
 import {
   cliEnvLines,
   note,
@@ -237,7 +238,11 @@ export default async function run10(ctx) {
   try {
     /* ------------------------------ 准备 ------------------------------ */
 
+    // Claude / Codex 的前提在开跑前查过（`preflight.mjs`）；`ARMADRA_E2E_TUI_ONLY`
+    // 只跑名单里的几家（没选的连凭据都不读）。
+    const chosen = chosenFamilies(process.env.ARMADRA_E2E_TUI_ONLY, FAMILIES);
     const homes = prepareCliHomes(scratch, {
+      only: chosen,
       dirs: {
         pi: environment.PI_CODING_AGENT_DIR,
         omp: environment.PI_CODING_AGENT_DIR,
@@ -245,18 +250,21 @@ export default async function run10(ctx) {
         xdgData: environment.XDG_DATA_HOME,
       },
     });
+    for (const id of FAMILIES) {
+      if (!chosen.has(id)) sixWay.skipped[id] = "ARMADRA_E2E_TUI_ONLY 没选这家";
+      else if (ctx.clis?.[id] !== undefined && !ctx.clis[id].ok)
+        sixWay.skipped[id] = ctx.clis[id].reason;
+      else if (homes[id]?.skip) sixWay.skipped[id] = homes[id].skip;
+    }
     const overrides = {};
     for (const id of ["opencode", "pi", "omp", "copilot"]) {
       const cli = homes[id];
-      if (cli.skip) continue;
+      if (cli.skip || sixWay.skipped[id] !== undefined) continue;
       if (id === "opencode") {
         cli.model = pickFreeModel(scratch, cli);
         note("OpenCode 用的免费模型", cli.model);
       }
       overrides[id] = writeTuiWrapper(scratch, id, cli);
-    }
-    for (const id of FAMILIES) {
-      if (homes[id]?.skip) sixWay.skipped[id] = homes[id].skip;
     }
     const active = FAMILIES.filter((id) => sixWay.skipped[id] === undefined);
     for (const id of FAMILIES) {
@@ -448,6 +456,16 @@ export default async function run10(ctx) {
     /* --------------------------- 3. 沿环 send --------------------------- */
 
     await timed("send", async () => {
+      // 只有两家时成不了不回头的环：A → B 之后 B 再投给 A，投递链判成环、core
+      // 正确地拒收；而且这一轮的来源链会挡住下一步的排队回执（实跑 claude、pi
+      // 两家时撞上）。跳过并写原因，与场景 12 同一规矩。
+      if (ring.length < 3) {
+        const why = `只有 ${ring.length} 家，成不了不回头的环（投递链会判成环）`;
+        for (const node of ring)
+          matrix[familyOf[node.id]].send = `skipped: ${why}`;
+        s.check("沿环 send：跳过", true, why);
+        return;
+      }
       const before = Object.fromEntries(
         ring.map((node) => [node.id, deliveriesTo(node.id).length]),
       );
@@ -684,10 +702,34 @@ export default async function run10(ctx) {
         doubled.map(([path, providers]) => ({ path, providers })),
       );
 
-      await api("/api/usage/cost/refresh", { method: "POST" }).catch((error) =>
-        note("成本刷新失败", error.message),
-      );
-      const cost = await api("/api/usage/cost");
+      // 手动刷新有 30 秒冷却（`usage/cost.ts::MANUAL_COOLDOWN_MS`）：冷却里答的
+      // 是上一趟扫描的旧汇总。两家时整场只有五十来秒，上一趟（页面打开时那
+      // 一趟）还在冷却里，那时转录还是空的、Claude 那份也还没链接进来——实跑
+      // claude、pi 两家时两家都读成 0。所以按 `scannedAt` 认：没有在转录写完
+      // 之后扫过，就等到 `refreshAvailableAt` 再刷，最多三次。
+      const turnsDone = Date.now();
+      let cost;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        cost = await api("/api/usage/cost/refresh", { method: "POST" }).catch(
+          (error) => {
+            note("成本刷新失败", error.message);
+            return undefined;
+          },
+        );
+        cost ??= await api("/api/usage/cost");
+        const scanned = Date.parse(cost?.scannedAt ?? "");
+        if (Number.isFinite(scanned) && scanned >= turnsDone) break;
+        const ready = Date.parse(cost?.refreshAvailableAt ?? "");
+        const wait = Number.isFinite(ready)
+          ? Math.min(Math.max(ready - Date.now(), 0) + 500, 35_000)
+          : 5_000;
+        note("成本汇总是转录写完之前扫的，等冷却过了再刷", {
+          scannedAt: cost?.scannedAt ?? null,
+          waitMs: wait,
+        });
+        await sleep(wait);
+      }
+      sixWay.costScannedAt = cost?.scannedAt ?? null;
       const byAgent = cost?.ranges?.["24h"]?.byAgent ?? [];
       sixWay.cost = {};
       for (const id of active) {

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CdpConnection } from "./connection";
-import { spawnChromium, type BrowserProcess } from "./process";
+import { chromiumArgs, spawnChromium, type BrowserProcess } from "./process";
 
 /**
  * A browser that logs a lot before it answers.
@@ -51,4 +51,18 @@ describe.skipIf(process.platform === "win32")("the browser process", () => {
       connection.close();
     },
   );
+});
+
+describe("the switches", () => {
+  const options = {
+    executable: "/chrome",
+    profileDir: "/profile",
+    width: 800,
+    height: 600,
+  };
+  it("turns the GPU off on macOS, and only there", () => {
+    expect(chromiumArgs(options, "darwin")).toContain("--disable-gpu");
+    expect(chromiumArgs(options, "linux")).not.toContain("--disable-gpu");
+    expect(chromiumArgs(options, "win32")).not.toContain("--disable-gpu");
+  });
 });

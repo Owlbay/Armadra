@@ -183,13 +183,30 @@ await h.run(async () => {
 
   await admin.navigate(pairing);
   await admin.settle();
-  await admin.waitFor(
-    `return document.body.innerText.includes("服务所有者");`,
-    {
+  await admin
+    .waitFor(`return document.body.innerText.includes("服务所有者");`, {
       what: "配对完成（后台服务页出现「服务所有者」）",
       timeout: 30_000,
-    },
-  );
+    })
+    .catch(async (error) => {
+      // 夜间的容器里偶发停在这里：留下页面、接口应答与服务器输出，下次能看出
+      // 是没连上、配对被拒，还是页面没走到后台服务页。
+      await admin.capture("01-admin-pairing-failed").catch(() => undefined);
+      report.pairingFailure = {
+        url: await admin
+          .evaluate(`return location.origin + location.pathname;`)
+          .catch(() => null),
+        text: (await admin.text().catch(() => "")).slice(0, 800),
+        traffic: admin.traffic.slice(-40),
+        errors: admin.drain().errors.map((entry) => entry.text),
+        // 配对票只在片段里：抹掉再记。
+        server: server
+          .tail()
+          .slice(-3000)
+          .replace(/#pair=\S+/g, "#pair=…"),
+      };
+      throw error;
+    });
   await admin.capture("01-admin-paired");
   check(
     !(await admin.evaluate(`return location.hash;`)),
@@ -755,7 +772,11 @@ await h.run(async () => {
       await admin.capture("11-admin-browser-stream-failed");
       report.browserFailure = {
         text: (await admin.text()).slice(0, 600),
-        server: server.tail().slice(-3000),
+        // 配对票只在片段里：抹掉再记。
+        server: server
+          .tail()
+          .slice(-3000)
+          .replace(/#pair=\S+/g, "#pair=…"),
       };
       throw error;
     });
