@@ -4,6 +4,7 @@ import {
   AGENT_REGISTRY,
   AGENT_STATE_SOURCES,
   OBSERVED,
+  STATE_SOURCE_ACP,
   STATE_SOURCE_EXTENSION,
   STATE_SOURCE_HOOK,
   customInfo,
@@ -47,6 +48,9 @@ describe("the agent registry", () => {
     expect(stateSourceIsReported(STATE_SOURCE_HOOK)).toBe(true);
     expect(stateSourceIsReported(STATE_SOURCE_EXTENSION)).toBe(true);
     expect(stateSourceIsReported(OBSERVED)).toBe(false);
+    // ACP 驱动：协议本身报回合，与 hook 一样算上报。
+    expect(stateSourceIsReported(STATE_SOURCE_ACP)).toBe(true);
+    expect(AGENT_STATE_SOURCES as readonly string[]).toContain("acp");
     expect(stateSourceIsReported(undefined)).toBe(false);
     expect(stateSourceIsReported(null)).toBe(false);
     expect(stateSourceIsReported("")).toBe(false);

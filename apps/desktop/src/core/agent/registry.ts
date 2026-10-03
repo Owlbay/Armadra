@@ -56,11 +56,18 @@ export const STATE_SOURCE_EXTENSION = "extension";
  * hint and nothing more; see {@link stateSourceIsReported}.
  */
 export const OBSERVED = "observed";
+/**
+ * A session the core drives over the Agent Client Protocol (ACP 会话视图设计
+ * §4.1): the protocol itself reports every turn and every permission request,
+ * so it is as much a report as `hook`. Set by `core/acp`, never by a client.
+ */
+export const STATE_SOURCE_ACP = "acp";
 
 export const AGENT_STATE_SOURCES = [
   STATE_SOURCE_HOOK,
   STATE_SOURCE_EXTENSION,
   OBSERVED,
+  STATE_SOURCE_ACP,
 ] as const;
 
 /**
@@ -99,7 +106,11 @@ export function stateSourceFor(provider: string): string | undefined {
  * accidentally spell it as "the source is set".
  */
 export function stateSourceIsReported(source: string | null | undefined) {
-  return source === STATE_SOURCE_HOOK || source === STATE_SOURCE_EXTENSION;
+  return (
+    source === STATE_SOURCE_HOOK ||
+    source === STATE_SOURCE_EXTENSION ||
+    source === STATE_SOURCE_ACP
+  );
 }
 
 /**
