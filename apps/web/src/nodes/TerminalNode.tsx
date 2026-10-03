@@ -223,7 +223,7 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
           visible={!collapsed}
         />
       )}
-      {agent && <AccountBindingBadge agent={agent} />}
+      {agent && <AccountBindingBadge agent={agent} nodeId={id} />}
       {agent && <HandoffBadge nodeId={id} />}
       {/*
         启动前在等谁（Agent 自动化设计 §6）。等待与启动都归 core，这里读的是
