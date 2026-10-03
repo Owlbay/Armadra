@@ -36,6 +36,7 @@ import {
 import { Dialog, DialogContent, DialogTitle } from "@/ui/dialog";
 import { IconButton } from "@/ui/icon-button";
 import { cn } from "@/lib/cn";
+import { Button } from "@/ui/button";
 
 /** 分区 id → 页面。顺序由 `nav.ts` 决定，这里只管挂组件。 */
 const SECTION_PAGES: Record<string, () => React.ReactElement> = {
@@ -185,14 +186,16 @@ function NavItem({
   const t = useT();
   const Icon = section.icon;
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="xs"
       type="button"
       data-active={active}
       aria-current={active ? "page" : undefined}
       title={t(section.labelKey)}
       aria-label={t(section.labelKey)}
       className={cn(
-        "flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] text-muted-foreground transition-colors",
+        "flex h-8 w-full items-center justify-start gap-2 rounded-lg px-2 text-left text-[13px] font-normal text-muted-foreground transition-colors",
         "hover:bg-muted hover:text-foreground",
         "data-[active=true]:bg-raised data-[active=true]:text-foreground",
       )}
@@ -200,6 +203,6 @@ function NavItem({
     >
       <Icon className="size-4 shrink-0" strokeWidth={1.5} />
       <span className="settings-nav-label truncate">{t(section.labelKey)}</span>
-    </button>
+    </Button>
   );
 }

@@ -26,6 +26,7 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/ui/command";
+import { COMMAND_INPUT_FOCUS } from "./tabs-focus";
 
 /** 一次最多列这么多个跳转目标，超过靠输入过滤。 */
 const MAX_NODE_RESULTS = 50;
@@ -100,6 +101,7 @@ export function CommandPalette() {
       description={t("palette.description")}
     >
       <CommandInput
+        className={COMMAND_INPUT_FOCUS}
         placeholder={t("palette.placeholder")}
         value={query}
         onValueChange={setQuery}

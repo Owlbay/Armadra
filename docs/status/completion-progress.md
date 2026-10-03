@@ -381,12 +381,12 @@
 
 - core：控制动词 `wait`（`collab/control/wait.ts`，契约 §15.5）：`--task [--node] [--since] [--timeout 0–60]` 长轮询，答 `{ status, since, events[] }`，`status` 五值；`done` 认成员 `post` 的 `task:<id>:result`（或 `:result:<轮次>`），没有时认投递之后这一轮干净地结束（依赖编排同一份判定）；`blocked` 带 `approvalId`，只报告；游标是 `<post 序号>-<状态>`；结束时写 `workflow_task_runs` 并把结果 post 标成已收。只有起任务的协调者能等。
 - `open-agent` 认 `--task-id`（幂等：同一协调者、节点还在就答回原节点；节点删了就新建并换绑；别人用过回 `409 task_conflict`）与 `--name`（标题）；带任务 id 时记 `workflow_task_runs` 并经 `workflow/dispatch.ts::launchRoleNode` 由 core 起终端。权限模式不支持改回 `400 permission_mode_unsupported`（附 `supported`）。`help` 的结果多 `agents`（内置 + `custom:*`）。
-- ama 适配器：`agent-host/ama/runners.ts` 为六家内置 CLI 与每个 `custom:*` 注册 runner（`start` = `open-agent --task-id <会话:任务>`，提示词末尾附回报键；`wait()` 循环 `wait`；`blocked` / `needsInput` 只改状态栏；`send` 走队列、键换到下一轮；`stop` 与中止只 `interrupt`）；`agent-host/ama/approvals.ts` 审批回答者按契约 §5.5 写 pending 目录、带 `pendingId` 上报、轮询答复文件，等不到就让给终端对话框。core 给 ama 节点也注入 `ARMADRA_PERM_WAIT_SECS`（同一个 `hooks.replyApprovals`）。
+- ama 适配器：`agent-host/ama/runners.ts` 为六家内置 CLI、`ama` 自己（`@armadra/agent` 0.6.7 起调宿主注入的 `ama` runner，场景 11 第 5 步实测 ama → ama）与每个 `custom:*` 注册 runner（`start` = `open-agent --task-id <会话:任务>`，提示词末尾附回报键；`wait()` 循环 `wait`；`blocked` / `needsInput` 只改状态栏；`send` 走队列、键换到下一轮；`stop` 与中止只 `interrupt`）；`agent-host/ama/approvals.ts` 审批回答者按契约 §5.5 写 pending 目录、带 `pendingId` 上报、轮询答复文件，等不到就让给终端对话框。core 给 ama 节点也注入 `ARMADRA_PERM_WAIT_SECS`（同一个 `hooks.replyApprovals`）。
 - 成员技能加「任务末尾有 `task:<id>:result` 键就用它回报」一句，`SKILLS_REVISION` 16 → 17；ama 的 profile 配置加 `tools.default: ["+task"]`（`task` 不在 ama 缺省预设里，codemode 又只在 Node ≥ 25 开）；适配器的工具说明加一段 `task` 的用法。
 
 实测：`wait.test`（9）、`runners.test`（10）、`approvals.test`（适配器 4、core 3）；`agent-e2e --only 11` 全部通过，新增的派任务一段：成员 post「派任务」→ 唤醒 → 模型调 `task(agent="custom:taskecho")` → core 起假 CLI 成员并投任务 → runner `wait` → 假 CLI 按键 post → `task` 结果回到模型 → 便签写出结果，`workflow_task_runs` 一行 done。
 
-没做：`ama` 自己不能作为 runner（ama 把 id 为 `ama` 的 runner 当成它的子会话类型、从不调用，要改 ama）；`--cwd` 与 `--resume` 不支持（`open-agent` 没有这两个参数，runner 忽略 `resume` 并记日志）；提示词连回报说明受投递上限 2000 字约束；成员节点的 `creator_principal_id` 继承协调者创建者（§8.2）没做；e2e 没覆盖 `blocked`（单测覆盖）。
+没做：`--cwd` 与 `--resume` 不支持（`open-agent` 没有这两个参数，runner 忽略 `resume` 并记日志）；提示词连回报说明受投递上限 2000 字约束；成员节点的 `creator_principal_id` 继承协调者创建者（§8.2）没做；e2e 没覆盖 `blocked`（单测覆盖）。
 
 ## G2-5 实时协同页面绑定与在线光标（R1）
 
@@ -512,7 +512,27 @@
 
 ## G3-1 Capacitor 移动壳
 
-未开始。
+**做了什么**
+
+- `apps/mobile`（`@armadra/mobile`，Capacitor 8.5.2 精确版本）：`capacitor.config.ts` 不配 `server.url`，`scripts/prepare-web.mjs` 把 `apps/web/dist` 拷进 `www/` 并把插件桥（`src/bridge.ts`，`registerPlugin("ArmadraNative")` 打成 IIFE）插在页面模块脚本之前；页面仍不依赖 `@capacitor/core`。
+- iOS：`ArmadraBridgeViewController` 装插件；`ArmadraNativePlugin.swift` 钥匙串存会话（首次启动清残留）、挂 WKWebView 认证挑战按信任锚指纹钉扎（配对时取 `/ca.crt` 按指纹核对后才存锚）、AVFoundation 扫码、APNs 令牌 + 设备 X25519 公钥（`ARMADRA_MOBILE_RELAY_URL` 时先换中继令牌）、`armadra://` 深链；Notification Service Extension 解密信封；纯逻辑在 SPM 包 `ios/ArmadraNativeKit`；`AppUITests`（XCUITest）。
+- Android：`SecureStore`（Keystore AES-GCM）、`PinningWebViewClient`（`onReceivedSslError` 只放行验得到钉住锚的叶证书）、`AnchorFetch`（两步取锚，不用信任一切的 TrustManager）、Google 代码扫描器、`ArmadraMessagingService`（FCM 数据消息解密）、深链；纯逻辑在纯 JVM 模块 `android/armadra-native-core`（BC 1.86）；插桩 `ConnectFlowTest`。
+- 页面：`mobile/entry.ts` 认 `#link=`（原生收到配对深链后写入）进连接页并预填；修了 G2-10 的会话密钥形状（`native-bridge.ts` 原先只认 43 位半段，App 重启后读回的会话一律作废）。
+- 发布与 CI：`tools/release/artifacts.mjs::mobileAssets`（`armadra-mobile_<v>_android-debug.apk`、`armadra-mobile_<v>_ios-simulator.app.zip`）；`apps/mobile/package.json` 进版本清单；`nightly.yml` 的 `mobile-ios` / `mobile-android`；探针 `tools/probes/mobile-shell-e2e.mjs`；`repo.rules.json` 加 `apps/*` 包名规则；客户端平台指南加原生一节与真机 / 商店清单。
+
+**实测**
+
+- `swift test`（ArmadraNativeKit）14 例、`armadra-native-core` 12 例 JUnit（本机 JDK 25 + BC 与 CI 上 Gradle 都过）、`@armadra/mobile` vitest 9 例；`pnpm libs:build && pnpm -r --if-present test` 本机全绿；`pnpm check` 通过。
+- 本机：`xcodebuild build-for-testing`（iphonesimulator，App + NotificationService + AppUITests）通过；core 起在回环、Gateway 本地 CA、铸出带 `fp` 的原生深链（探针前半段）通过。
+- CI `nightly`（分支上 workflow_dispatch，run 37132390772）两条都绿：`mobile-ios`——`swift test`、本地签名的模拟器构建、iPhone 17 Pro 上 XCUITest「没有 Gateway 是连接页」与「深链 → 钉扎 → 配对 → 画布 → 重开仍在画布」，产出 `armadra-mobile_0.1.0_ios-simulator.app.zip`（9.4 MB）；`mobile-android`——`armadra-native-core:test`、API 34 模拟器里同一条流程（logcat：取到 2 张证书、TLS 放行），产出 `armadra-mobile_0.1.0_android-debug.apk`（14 MB）。
+- 实跑中修掉的三处：会话密钥形状（见上）、模拟器包关掉签名时钥匙串不可用（改「Sign to Run Locally」）、配对票两分钟被 macOS 上的编译耗尽（探针先编完再铸票）；另外关掉了 Capacitor 的插件调用日志（会把会话密钥写进设备日志）。
+
+**没做**
+
+- 真机、签名、TestFlight / Play 上传、APNs / FCM 生产密钥：需用户提供（计划 §5 的 U8–U10，清单在[客户端平台](../guides/client-platforms.md)）；真机推送与 NSE 解密只有单测。
+- 本机 Xcode 27 的 CoreSimulator 过旧且没装 iOS 运行时，模拟器只在 CI 上跑；本机没有 Android SDK。
+- Android 上系统已信任的证书（ACME / 反代真证书）由系统校验，指纹不参与（WebView 无钩子）；FCM 令牌轮换不主动重登记；通用链接（`apple-app-site-association` / `assetlinks.json`）等域名（外部服务 §5.3）。
+- 探针要模拟器，不进 `tools/ci/e2e.d/` 的清单，由夜间作业直接跑。
 
 ## G3-2 Windows 真机验收包
 
@@ -614,13 +634,13 @@
 
 - C 档开关：`agent-e2e` 起真 CLI / 真模型的场景（1–8、10、11 `--real-model`、12）没设 `ARMADRA_E2E_REAL=1` 就在起任何进程之前退出；`--self-test` 把场景 11 / 12 换成脚本化模型、假 ACP Agent 与假 TUI，其余装配与断言同一份代码。新增 A 档 `tools/ci/e2e.d/agent-e2e-self-test.json`（`--only 11,12 --self-test`），探针本身不会烂掉。
 - 场景 12「六家 ACP」（`agent-e2e/scenario-12-acp.mjs`，设计 acp-session-view §11）：预检、六家各两轮、Claude 审批经页面拒绝、倒着沿环 send（避开三跳上限）与 `context summary`、经页面菜单切终端视图再切回（Claude `resumed: true`、进程带 `--resume <id> --permission-mode acceptEdits`；Copilot `resumed: false`）、OpenCode 休眠与 `/wake`、用量 < 5 万、控制台无错。隔离：core 用 `probe-home.mjs` 的临时 HOME，PATH 最前面是每家的隔离包装（临时 HOME / 配置目录、只复制凭据），其余真 CLI 名字是替身（调用即记、以 97 退出，收尾断言没有调用）。Claude 只能用真实配置目录（钥匙串）：包装换回真实 HOME、去掉 `CLAUDE_CONFIG_DIR`、关自动更新、缺省 `haiku`；终端视图的信任对话框按「Yes」的编号答，认不出的画面不答、先结束终端再切回（切回时 core 敲 `/exit`+回车，敲进对话框就是替人答）。`--record-compat` 把全部通过的那几家的 `initialize` 版本并进 `compatibility.json`。
-- 场景 11 `--real-model`：真供应商（`ARMADRA_E2E_AMA_PROVIDER` / `_MODEL` / `_KEY`），用户的话写成明确指令、成员一律用假 CLI，断言放宽到画布结果（成员与边、两条 ack、汇总便签、`task` 一行 done、key 不落盘不进日志不进节点 shell）；这套 core 的 PATH 同样挂真 CLI 替身。
+- 场景 11 `--real-model`：真供应商（`ARMADRA_E2E_AMA_PROVIDER` / `_MODEL` / `_KEY`），用户的话写成明确指令、成员一律用假 CLI，断言放宽到画布结果（成员与边、两条 ack、汇总便签、`task` 一行 done、第 5 步 `task(agent="ama")` 起的第二个 ama 用同一个真模型回报非空结果、key 不落盘不进日志不进节点 shell）；这套 core 的 PATH 同样挂真 CLI 替身。
 - 守门：`~/.claude/settings.local.json`、`.credentials.json` 进字节指纹；`~/.claude.json` 比顶层键摘要（计数 / 缓存类键与 `projects` 只记不判，其余任何变化判失败，报告只留结论不留内容）；只跑假 CLI 时收尾不再起 `claude` / `codex --version`。
 - 场景 10 把每家 TUI 起来时（或起不来时）的画面存进 `<输出目录>/screens/`，供核对画面门里 `verified: false` 的特征。
 - 修了 `lib.mjs::setup()` 返回里引用未定义的 `injected`（真跑场景 1–8、10 会在装配末尾抛 ReferenceError）；`lib.mjs` 超 1500 行上限，拆出 `safety.mjs`（配置守门）、`cli-homes.mjs`（四家临时 HOME）、`isolated.mjs`（自起 core、`hookIn` / `canvasAsIn` / `contextAsIn`、`acpAdapterInstalled`、`promptViaApi`、`watchWorkspaceEvents`、`blockRealClis`、`startPageStack`），`lib.mjs` 全部再导出。
 - 运行手册：`tools/probes/README.md`「C 档运行手册」（备份与还原命令、每家要装 / 要登录的、命令、花费、每步断言）。
 
-**实测**（本机，未起任何真 CLI、未用真账号）：`--only 11`（脚本化模型）25 项全过；`--only 11 --real-model --self-test` 19 项全过；`--only 12 --self-test` 六家 40 项全过，约 164 秒；没设开关时 `--only 12` / `--only 2` / `--only 11 --real-model` 都在起进程前退出。
+**实测**（本机，未起任何真 CLI、未用真账号）：`--only 11`（脚本化模型，含 ama → ama 第 5 步）30 项全过；`--only 11 --real-model --self-test` 23 项全过；`--only 12 --self-test` 六家 40 项全过，约 164 秒；没设开关时 `--only 12` / `--only 2` / `--only 11 --real-model` 都在起进程前退出。
 
 **没做**：场景 11 真模型版、场景 12 真跑、OpenCode / OMP / Copilot 交互式 TUI 的真跑与画面门特征核实——按手册由用户（或经用户直接授权的会话）跑；`compatibility.json` 各家 `verified` 仍为 null（没有真跑证据）。Copilot 三条权限旗标在 `--acp` 下是否生效、OMP `acp` 是否接受 `--model=`、Pi 的 `settings.json` 键名未经实跑核实，真跑结果出来后按装机结果修。
 
@@ -668,7 +688,26 @@
 
 ## G3-11 存量界面套用二：对话框与其余页面（WP-D3b）
 
-未开始。
+**做了什么**
+
+- 对话框接 `ResponsiveDialog`（≤767 走底部 Sheet）：Overlays 里的起名、Agent 设置、SSH 口令、交接，编辑器的另存为 / 迁移，Agent 凭据、主机密钥、关于、账号与共享、快捷键、节点标注、GitHub 状态映射、Mermaid 导入，新建 Agent 向导（原来手写的 Sheet 分支删掉）。`AlertDialog`（确认类）保持居中。
+- 空态 / 加载 / 错误换 `Empty / Skeleton / Alert`：自动化抽屉与运行记录、计划表单的提示框、工作流面板的错误与无权限、后台服务页的连接状态、身份面的错误、编辑器节点（慢读延时 Skeleton、失败 Alert +「重试」）、安全页通行密钥与会话列表的首次加载、Agent 设置页自定义 Agent 空态、更新页（下载中 `Progress`、失败 `Alert destructive`）。
+- 后台服务页两份设备表并成一份：身份面只报会话（`onSession`），对外服务的设备表（`GatewayDevices`）标「当前」、按管理权给撤销、分页「加载更多」；成员（读不到 `/api/gateway`）也能看到自己的设备；撤销了本机就让身份面重新取会话。
+- 对外服务显示 ACME 续期失败（`tls.acme.failures > 0`）：`Alert destructive` + 下次重试时间。
+- 终端节点头部：运行中工作流步骤的「第 n 步」（`workflow/node-steps.tsx`，运行列表每块画板只取一次，挂在 `DraftLayer`）；答不了审批的人看到「等待接管」。
+- `CommandInput` 调用处补焦点环（`COMMAND_INPUT_FOCUS`，守卫测试）；手机上 sonner 改从顶部出；浅色主题图片棋盘格改为卡片底与掺 10% 前景色两档；删除旧别名 `--accent-text / --accent-soft`（`tokens.test` 断言不再出现）。
+- 剩下的手写 `<button>` 全部换 `Button`，`no-raw-button` 守卫改为扫整个 `src/`（`ui/` 与测试除外）。
+- 展示页：协调者（ama 分派三成员、第 n 步、草案卡）与更新（十一种状态，抽出 `UpdateStatusRows` / `UpdateStatusNotes` 复用）换成真样本；对外服务加续期失败与「当前」设备；组件分区补 `command`；通用五态加「等待接管」；占位组件删除。
+
+**实测**
+
+- `design-showcase.mjs --diff`（与开工前基线比）：84 张全部生成，`status: ok`，控制台无错误；对比度深色 84 对最低 3.25、浅色 85 对最低 3.07；`components` Tab 可达 81/81 且每处都有焦点环；减少动效静止、强制颜色焦点可见。36 张有变化，集中在 coordinator / updates / gateway（新样本）、states、components、mobile（按键条换 `Button`），canvas 的 2–5% 是流光动画帧。
+- 代表截图：[协调者](assets/g3-11/coordinator-dark-1440.png)、[更新十一态](assets/g3-11/updates-dark-1440.png)、[对外服务](assets/g3-11/gateway-light-1440.png)、[组件](assets/g3-11/components-light-1024.png)、[通用五态（手机）](assets/g3-11/states-dark-390.png)、[手机](assets/g3-11/mobile-dark-390.png)。
+
+**没做**
+
+- `AlertDialog` 没有手机底部形态（`ResponsiveDialog` 只对应 `Dialog`）；命令面板、设置对话框、合并 / 编辑预览这类整屏对话框保持原样。
+- 设备表仍没有「平台」「最近访问」两列（接口不给）；协调者的右侧分派抽屉（设计系统 §5.4）没有实现组件，展示页用画布上的真节点表达。
 
 <!-- G4 收口 -->
 

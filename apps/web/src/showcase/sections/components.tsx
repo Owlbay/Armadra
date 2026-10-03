@@ -121,6 +121,15 @@ import {
   SHORTCUT,
   STATUS_TONES,
 } from "../fixtures/components";
+import { COMMAND_INPUT_FOCUS } from "@/panels/tabs-focus";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/ui/command";
 
 /**
  * `components` 分区（设计展示页 §2.1）：设计系统 §3.1 + §3.2 的组件。
@@ -738,6 +747,25 @@ function Gallery() {
             ))}
           </div>
         </ScrollArea>
+      </Sample>
+      <Sample name="command" wide>
+        <Command className="h-auto rounded-[var(--r-card)] border">
+          <CommandInput
+            className={COMMAND_INPUT_FOCUS}
+            aria-label={t("showcase.sample.search")}
+            placeholder={t("showcase.sample.search")}
+          />
+          <CommandList>
+            <CommandEmpty>{t("showcase.sample.emptyTitle")}</CommandEmpty>
+            <CommandGroup>
+              {SESSIONS.slice(0, 3).map((session) => (
+                <CommandItem key={session.id} value={session.title}>
+                  {session.title}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
       </Sample>
       <Sample name="empty" wide>
         <Empty className="border border-dashed border-border">

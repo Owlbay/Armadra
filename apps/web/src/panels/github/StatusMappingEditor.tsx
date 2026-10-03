@@ -5,14 +5,14 @@ import { Trash2 } from "lucide-react";
 
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+  ResponsiveDialogTrigger,
+} from "@/panels/ResponsiveDialog";
 import { IconButton } from "@/ui/icon-button";
 import { Input } from "@/ui/input";
 import { useT } from "@/app/preferences-store";
@@ -121,17 +121,21 @@ export function StatusMappingEditor({
   const none = draft.source === GithubStatusSource.NONE;
 
   return (
-    <Dialog open={open} onOpenChange={reset}>
-      <DialogTrigger asChild>
+    <ResponsiveDialog open={open} onOpenChange={reset}>
+      <ResponsiveDialogTrigger asChild>
         <Button size="sm" variant="outline" className="min-h-10">
           {t("github.mapping.configure")}
         </Button>
-      </DialogTrigger>
-      <DialogContent className="z-[var(--z-dialog)] max-h-[85dvh] max-w-[560px] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{t("github.mapping.title")}</DialogTitle>
-          <DialogDescription>{t("github.mapping.note")}</DialogDescription>
-        </DialogHeader>
+      </ResponsiveDialogTrigger>
+      <ResponsiveDialogContent className="z-[var(--z-dialog)] max-h-[85dvh] max-w-[560px] overflow-y-auto">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {t("github.mapping.title")}
+          </ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
+            {t("github.mapping.note")}
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
 
         {!canWrite && (
           <p role="status" className="text-[12px] text-muted-foreground">
@@ -419,7 +423,7 @@ export function StatusMappingEditor({
             </section>
           )}
 
-          <DialogFooter>
+          <ResponsiveDialogFooter>
             {canWrite && (
               <Button
                 type="submit"
@@ -439,9 +443,9 @@ export function StatusMappingEditor({
             >
               {t("github.cancel")}
             </Button>
-          </DialogFooter>
+          </ResponsiveDialogFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

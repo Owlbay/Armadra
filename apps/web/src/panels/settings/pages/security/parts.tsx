@@ -10,6 +10,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/ui/alert-dialog";
+import { Skeleton } from "@/ui/skeleton";
 
 /** 安全页的一块：标题行（右侧可放一个动作）+ 内容。 */
 export function SecuritySection({
@@ -29,6 +30,18 @@ export function SecuritySection({
       </div>
       {children}
     </section>
+  );
+}
+
+/** 分区第一次取数时的占位（设计系统 §5.16 加载态）：标题照常，两行 Skeleton。 */
+export function SecuritySectionSkeleton({ title }: { title: string }) {
+  return (
+    <SecuritySection title={title}>
+      <div data-slot="security-loading" className="flex flex-col gap-2">
+        <Skeleton className="h-9 w-full" />
+        <Skeleton className="h-9 w-full" />
+      </div>
+    </SecuritySection>
   );
 }
 

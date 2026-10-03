@@ -26,8 +26,26 @@ import {
 
 export type GatewayDevice = IdentityDevicePage["devices"][number];
 
+export interface GatewayDevicesProps {
+  devices: readonly GatewayDevice[];
+  /** 正在撤销的设备 id。 */
+  revoking: string | null;
+  onRevoke(device: GatewayDevice): void;
+  /** 这台设备自己的 id（有身份会话时）。 */
+  currentDeviceId?: string | null;
+  /** 没有管理权时撤销列不出现。 */
+  canRevoke?: boolean;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onMore?(): void;
+}
+
 /**
  * 已配对设备（设计系统 §5.12）：名称 · 添加时间 · 权限 · 撤销。
+ *
+ * 这一页唯一的一份设备表：对外服务配对的设备与「设备登录」配对的设备是同一
+ * 张身份表，以前两处各画一份，现在只在这里画（G3-11）。当前这台带「当前」，
+ * 不止一页时底部「加载更多」。
  *
  * 和对外服务开没开无关：关掉监听不会让已经配过的设备失效，所以列表照样在，
  * 撤销也照样能做。撤销中那一行显示 Spinner，失败由调用方弹 sonner。
@@ -36,12 +54,12 @@ export function GatewayDevices({
   devices,
   revoking,
   onRevoke,
-}: {
-  devices: readonly GatewayDevice[];
-  /** 正在撤销的设备 id。 */
-  revoking: string | null;
-  onRevoke(device: GatewayDevice): void;
-}) {
+  currentDeviceId = null,
+  canRevoke = true,
+  hasMore = false,
+  loadingMore = false,
+  onMore,
+}: GatewayDevicesProps) {
   const t = useT();
   const locale = usePreferencesStore((state) => state.locale);
   const [confirm, setConfirm] = React.useState<GatewayDevice | null>(null);
@@ -73,6 +91,11 @@ export function GatewayDevices({
               <TableRow key={device.deviceId}>
                 <TableCell className="max-w-[16rem] truncate font-medium">
                   {device.name || device.deviceId}
+                  {device.deviceId === currentDeviceId && (
+                    <Badge variant="secondary" className="ml-2">
+                      {t("gateway.devices.current")}
+                    </Badge>
+                  )}
                 </TableCell>
                 <TableCell className="text-muted-foreground tabular-nums">
                   {device.createdAtMs > 0
@@ -91,7 +114,7 @@ export function GatewayDevices({
                   </Badge>
                 </TableCell>
                 <TableCell className="text-right">
-                  {revoking === device.deviceId ? (
+                  {!canRevoke ? null : revoking === device.deviceId ? (
                     <Spinner
                       className="ml-auto"
                       aria-label={t("gateway.devices.revoke")}
@@ -120,6 +143,19 @@ export function GatewayDevices({
           </TableBody>
         </Table>
       </div>
+      {hasMore && onMore && (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="self-start"
+          disabled={loadingMore}
+          onClick={onMore}
+        >
+          {loadingMore && <Spinner role="presentation" aria-hidden />}
+          {t("gateway.devices.more")}
+        </Button>
+      )}
       <AlertDialog
         open={confirm !== null}
         onOpenChange={(open) => {

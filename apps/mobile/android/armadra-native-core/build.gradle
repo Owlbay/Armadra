@@ -1,0 +1,18 @@
+// 原生壳里不依赖 Android SDK 的那一半：钉扎判定、推送信封、深链。纯 JVM 模块，
+// `./gradlew :armadra-native-core:test` 不需要模拟器；样本与 iOS 共用 `apps/mobile/fixtures/`。
+apply plugin: 'java-library'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+dependencies {
+    // X25519：Android 13 以前的系统没有 XDH，用 Bouncy Castle 的轻量实现。
+    implementation "org.bouncycastle:bcprov-jdk18on:$rootProject.ext.bouncyCastleVersion"
+    testImplementation "junit:junit:$rootProject.ext.junitVersion"
+}
+
+test {
+    systemProperty 'armadra.fixtures', file('../../fixtures').absolutePath
+}

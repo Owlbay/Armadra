@@ -133,6 +133,20 @@ describe("mergeUpdatesState", () => {
     }
   });
 
+  it("does not call an offered release an unknown reason", () => {
+    const view = mergeUpdatesState(answered("available"), {
+      state: "unsupported",
+      reason: "notDesktop",
+    });
+    expect(view.detailKeys).not.toContain("updates.reason.unknown");
+    expect(
+      mergeUpdatesState(answered("unavailable", "NEW_CODE"), {
+        state: "unsupported",
+        reason: "notDesktop",
+      }).detailKeys,
+    ).toContain("updates.reason.unknown");
+  });
+
   it("says which half of the configuration is missing", () => {
     const view = mergeUpdatesState(answered("upToDate"), {
       state: "notConfigured",

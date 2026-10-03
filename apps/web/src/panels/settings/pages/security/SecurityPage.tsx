@@ -297,6 +297,7 @@ function SecuritySettings({ session }: { session: IdentitySession }) {
       {mfaFirst && mfaBlock}
       <PasskeyList
         list={passkeys.data}
+        loading={passkeys.isLoading}
         supported={webauthnAvailable()}
         busy={passkeyBusy}
         onAdd={addPasskey}
@@ -338,6 +339,7 @@ function SecuritySettings({ session }: { session: IdentitySession }) {
       />
       <SessionList
         sessions={sessions.data}
+        loading={sessions.isLoading}
         everyone={everyone}
         canSeeEveryone={manage}
         names={names}

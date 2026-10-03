@@ -1,0 +1,32 @@
+package dev.armadra.mobile.core;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+
+import org.junit.Test;
+
+public class DeepLinkTest {
+    @Test
+    public void classifiesTheTwoKinds() {
+        String pair = "armadra://pair?host=192.168.1.20%3A8443&ticket=abc_DEF-123&fp=" + "a".repeat(64);
+        assertEquals(DeepLink.Kind.PAIR, DeepLink.parse(pair).kind);
+        assertEquals(DeepLink.Kind.NODE, DeepLink.parse("armadra://w/ws_1/n/node_1").kind);
+        assertEquals(DeepLink.Kind.NODE, DeepLink.parse("armadra://w/ws_1").kind);
+        assertNull(DeepLink.parse("armadra://w/ws_1/x/y"));
+        assertNull(DeepLink.parse("https://armadra.dev/pair"));
+        assertNull(DeepLink.parse("armadra://pair?host=a&x=<script>"));
+        assertNull(DeepLink.parse("armadra://w/a'+alert(1)+'"));
+        assertNull(DeepLink.parse("armadra://w/" + "a".repeat(3000)));
+    }
+
+    @Test
+    public void scriptsMatchTheIosSpelling() {
+        assertEquals("location.hash='#push='+encodeURIComponent(\"armadra:\\/\\/w\\/ws_1\\/n\\/node_1\");",
+                DeepLink.parse("armadra://w/ws_1/n/node_1").script());
+        String pair = DeepLink.parse("armadra://pair?host=h%3A1&ticket=t&fp=f").script();
+        assertTrue(pair.startsWith("history.replaceState(null,'',location.pathname+'#link='+encodeURIComponent("));
+        assertTrue(pair.endsWith("location.reload();"));
+        assertEquals("\"a\\u2028\\\"\"", DeepLink.literal("a" + (char) 0x2028 + "\""));
+    }
+}

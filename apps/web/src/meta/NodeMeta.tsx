@@ -8,12 +8,12 @@ import { useCanvasStore } from "@/store/canvas-store";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { DropdownMenuItem } from "@/ui/dropdown-menu";
 import { IconButton } from "@/ui/icon-button";
 import { Input } from "@/ui/input";
@@ -35,7 +35,7 @@ import { MAX_LABELS, nodeLabels, nodeNote } from "./model";
  * 所以三个入口都不在节点体里，而是在每种节点共用的 `···` 菜单里
  * （`NodeShell`）；便签另外把标签 chip 画在自己的正文里（`StickyNode`）。
  *
- * 编辑面板一律是 Dialog（Radix портal 到 body），无论开合都不改变节点尺寸。
+ * 编辑面板一律是 ResponsiveDialog（Radix портal 到 body），无论开合都不改变节点尺寸。
  */
 
 /* ------------------------------ 头部菜单项 ------------------------------- */
@@ -79,8 +79,8 @@ export function NodeMetaMenuItems({ node }: { node: CanvasNode }) {
 /* -------------------------------- 编辑面板 -------------------------------- */
 
 /**
- * 标注面板的宿主。每个节点外壳挂一份，只在事件指向自己时才渲染 Dialog；
- * Dialog 走 portal，开合都不影响节点布局。
+ * 标注面板的宿主。每个节点外壳挂一份，只在事件指向自己时才渲染 ResponsiveDialog；
+ * ResponsiveDialog 走 portal，开合都不影响节点布局。
  */
 export function NodeAnnotationHost({ node }: { node: CanvasNode }) {
   const [kind, setKind] = React.useState<NodeAnnotationKind | null>(null);
@@ -108,20 +108,23 @@ function NodeAnnotationDialog({
 }) {
   const t = useT();
   return (
-    <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
-      <DialogContent className="z-[var(--z-dialog)] sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>
+    <ResponsiveDialog
+      open
+      onOpenChange={(open) => (open ? undefined : onClose())}
+    >
+      <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-sm">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
             {kind === "note" ? t("meta.note") : t("meta.labels")}
-          </DialogTitle>
-        </DialogHeader>
+          </ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
         {kind === "note" ? (
           <NoteEditor node={node} onDone={onClose} />
         ) : (
           <LabelEditor node={node} onDone={onClose} />
         )}
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 
@@ -151,11 +154,11 @@ function NoteEditor({
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}
       />
-      <DialogFooter>
+      <ResponsiveDialogFooter>
         <Button size="sm" onClick={commit}>
           {t("dialog.save")}
         </Button>
-      </DialogFooter>
+      </ResponsiveDialogFooter>
     </>
   );
 }
@@ -194,11 +197,11 @@ function LabelEditor({
           if (event.key === "Enter") add(draft);
         }}
       />
-      <DialogFooter>
+      <ResponsiveDialogFooter>
         <Button size="sm" onClick={onDone}>
           {t("dialog.save")}
         </Button>
-      </DialogFooter>
+      </ResponsiveDialogFooter>
     </>
   );
 }

@@ -29,12 +29,20 @@
 //   断言：成员节点与连线、`workflow_task_runs` 一行 done 且带结果、task 结果与
 //   便签里是假 CLI 回报的正文。
 //
+// ama → ama（`@armadra/agent` ≥ 0.6.7 调宿主注入的 `ama` runner）：
+//   5. 再 post 一条「交给 ama」→ 唤醒 → 模型调 `task(agent="ama")` → 适配器的
+//      `ama` runner 经 `open-agent --agent ama --task-id` 在画布上起第二个 ama
+//      节点（同一个脚本化模型服务，凭它自己的节点兑换 key）→ 那个 ama 读到任务，
+//      调 `canvas_post` 按任务末尾的键回报 → 协调者的 `task` 拿到结果写进便签。
+//   断言：`workflow_task_runs` 有一行 `runner_id = ama`、done 且带结果；成员节点
+//   是 ama、从协调者连线；便签里是第二个 ama 回报的正文。
+//
 // 真模型（`--real-model`，C 档，`ARMADRA_E2E_REAL=1`）：同一条闭环交给真模型走。
 // 供应商与 key 从环境变量读（`ARMADRA_E2E_AMA_PROVIDER`，缺省 deepseek；
 // `ARMADRA_E2E_AMA_MODEL`，缺省 deepseek-chat；`ARMADRA_E2E_AMA_KEY` 必填；可选
 // `ARMADRA_E2E_AMA_BASE_URL`），key 照样只经 core 的密钥后端兑换给 ama。用户的话
 // 写成明确的指令（成员一律用假 CLI `custom:taskecho`），断言放宽到画布上的结果：
-// 两个成员与边、两条结论都 ack、汇总便签、`task` 跑完一行；看不到模型请求的那
+// 两个成员与边、两条结论都 ack、汇总便签、`task` 跑完一行、第 5 步的第二个 ama（同一个真模型）回报了非空结果；看不到模型请求的那
 // 几条（工具表、请求头、画布外对照）不判。成员与派任务都不是真 CLI：这套 core
 // 的 PATH 最前面是一组替身（`blockRealClis`），任何节点想起 claude / codex 等都
 // 会被拦下并记进报告。`--real-model --self-test` 用脚本化模型冒充真供应商，走一
@@ -79,6 +87,9 @@ const FAKE_KEY = "sk-agent-e2e-fake-key";
 const DISPATCH = "派任务：请 taskecho 检查 src/z";
 const TASK_PROMPT = "检查 src/z，结论按任务末尾的键回报";
 const TASK_RESULT = "taskecho 回报：src/z 没有问题";
+const DISPATCH_AMA = "交给 ama：请另一个 ama 复核 src/w";
+const AMA_TASK_PROMPT = "复核 src/w，结论按任务末尾的键回报";
+const AMA_RESULT = "第二个 ama 回报：src/w 已复核";
 
 /**
  * 派任务用的假 CLI（自定义 Agent `custom:taskecho`，借 Claude 的 hook 适配）：
@@ -162,8 +173,10 @@ const REAL_PROMPT = [
   "1. 调一次 canvas_team 建两个成员，agent 一律用 custom:taskecho，标题分别是 reviewer-a 与 reviewer-b，任务写「审查 src/x」「审查 src/y」；建完回一句话就结束这一轮，不要等待。",
   "2. 之后你会被唤醒：调 canvas_inbox 读结论，每条用 canvas_ack 确认，再用 canvas_sticky 写一张标题是「审查汇总」、内容以「汇总：」开头的便签。",
   "3. 如果收件箱里有「派任务」的信：调 task 工具，agent=custom:taskecho，prompt 用信里给的那句，等它的结果；然后 ack 那封信，用 canvas_sticky 写一张标题是「任务汇总」、内容以「任务汇总：」开头并附上结果原文的便签。",
+  "4. 如果收件箱里有「交给 ama」的信：调 task 工具，agent=ama，prompt 用信里给的那句，等它的结果；然后 ack 那封信，用 canvas_sticky 写一张标题是「复核汇总」、内容以「复核汇总：」开头并附上结果原文的便签。",
   "全程不要调用别的 Agent 或 shell 命令。",
 ].join(" ");
+const REAL_DISPATCH_AMA = `交给 ama：请调用 task 工具，agent=ama，prompt=「${AMA_TASK_PROMPT}」，拿到结果后写进「复核汇总」便签。`;
 const REAL_DISPATCH = `派任务：请调用 task 工具，agent=custom:taskecho，prompt=「${TASK_PROMPT}」，拿到结果后写进「任务汇总」便签。`;
 
 /**
@@ -233,6 +246,23 @@ function inboxIds(messages) {
 function coordinatorScript(body) {
   const messages = body.messages ?? [];
   const last = messages[messages.length - 1];
+  // 第二个 ama（成员）：任务在它的用户消息里，按末尾的键 post 回去。
+  const memberTask = messages.find(
+    (m) => m.role === "user" && textOf(m).includes(AMA_TASK_PROMPT),
+  );
+  if (memberTask !== undefined) {
+    if (lastToolCall(messages) === "canvas_post") return { text: "已回报。" };
+    const target = /--to (\S+) --key (\S+)/.exec(textOf(memberTask));
+    if (target === null) return { text: "任务里没有回报的键。" };
+    return {
+      toolCalls: [
+        {
+          name: "canvas_post",
+          arguments: { to: target[1], key: target[2], body: AMA_RESULT },
+        },
+      ],
+    };
+  }
   if (last?.role === "user") {
     if (textOf(last).includes("审查"))
       return {
@@ -256,6 +286,20 @@ function coordinatorScript(body) {
     case "canvas_inbox": {
       const ids = inboxIds(messages);
       if (ids.length === 0) return { text: "收件箱是空的。" };
+      // 交给另一个 ama 的那条：宿主注入的 `ama` runner 在画布上起一个 ama 节点。
+      if (inboxText(messages).includes("交给 ama"))
+        return {
+          toolCalls: [
+            {
+              name: "task",
+              arguments: {
+                agent: "ama",
+                prompt: AMA_TASK_PROMPT,
+                background: false,
+              },
+            },
+          ],
+        };
       // 派任务的那条：交给画布上的成员做，等它回来再 ack。
       if (inboxText(messages).includes("派任务"))
         return {
@@ -911,6 +955,92 @@ export default async function run() {
       existsSync(taskLog) &&
         readFileSync(taskLog, "utf8").includes(TASK_PROMPT),
     );
+
+    /* --------- 5. ama → ama：task(agent="ama") → 画布上的第二个 ama --------- */
+
+    const amaDispatched = await canvasAsIn(
+      context,
+      dispatcher.id,
+      "post",
+      "--to",
+      lead.id,
+      "--key",
+      "dispatch-ama",
+      "--body",
+      real ? REAL_DISPATCH_AMA : DISPATCH_AMA,
+    );
+    s.check(
+      "交给 ama 的那条 post 成功",
+      amaDispatched.code === 0,
+      amaDispatched.stderr,
+    );
+    const amaSticky = await waitFor(
+      "协调者把第二个 ama 的结果写进便签",
+      async () =>
+        (await document()).nodes.find(
+          (node) =>
+            node.type === "sticky" &&
+            // 真模型按指令写「复核汇总」；脚本化模型（含 --self-test）附原文。
+            (JSON.stringify(node.data ?? {}).includes(AMA_RESULT) ||
+              (real && JSON.stringify(node.data ?? {}).includes("复核汇总"))),
+        ),
+      { timeout: 240_000, interval: 1000 },
+    ).catch(async (error) => {
+      note("协调者终端画面", await capture());
+      const all = (sql, ...params) => database.prepare(sql).all(...params);
+      note("ama → ama 诊断", {
+        runs: all("SELECT * FROM workflow_task_runs"),
+        status: all("SELECT node_id, agent_id, state FROM agent_status"),
+        queue: all(
+          "SELECT target_node_id, origin, state, last_reason FROM agent_send_queue",
+        ),
+      });
+      throw error;
+    });
+    s.check(
+      "便签里是第二个 ama 回报的结果",
+      amaSticky !== undefined,
+      amaSticky?.data,
+    );
+    const amaRun = database
+      .prepare(
+        "SELECT runner_id, node_id, status, result_json FROM workflow_task_runs WHERE runner_id = 'ama'",
+      )
+      .all();
+    s.check(
+      "workflow_task_runs 有一行 ama：done、带第二个 ama 的结果",
+      amaRun.length === 1 &&
+        amaRun[0].status === "done" &&
+        (real
+          ? String(amaRun[0].result_json ?? "").length > 2
+          : String(amaRun[0].result_json).includes(AMA_RESULT)),
+      amaRun,
+    );
+    const afterAma = await document();
+    const amaNode = afterAma.nodes.find(
+      (node) => node.id === amaRun[0]?.node_id,
+    );
+    s.check(
+      "第二个 ama 节点在画布上，从协调者连了一条线",
+      amaNode?.data?.agent?.id === "ama" &&
+        amaNode.id !== lead.id &&
+        afterAma.edges.some(
+          (edge) => edge.source === lead.id && edge.target === amaNode.id,
+        ),
+      { title: amaNode?.title, agent: amaNode?.data?.agent },
+    );
+    // 真模型看不到请求：只在脚本化模型时判。
+    if (!real)
+      s.check(
+        "第二个 ama 真的调了模型（脚本化服务收到带任务的请求）",
+        mock.requests.some((request) =>
+          (request.messages ?? []).some(
+            (message) =>
+              message.role === "user" &&
+              textOf(message).includes(AMA_TASK_PROMPT),
+          ),
+        ),
+      );
 
     const leaked = filesContaining(data, secret, [join(data, "secrets")]);
     s.check(

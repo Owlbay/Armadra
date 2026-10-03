@@ -45,11 +45,19 @@ vi.mock("@/acp/SessionView", () => ({
 vi.mock("@/panels/resources/MemoryBadge", () => ({ MemoryBadge: () => null }));
 
 const switchDriver = vi.hoisted(() => vi.fn());
+// 服务器壳上「答得了审批」由会话决定；缺省答得了（桌面壳的情形）。
+const access = vi.hoisted(() => ({ canAnswer: true }));
+vi.mock("@/app/use-access", async (original) => ({
+  ...(await original<typeof import("@/app/use-access")>()),
+  useCanAnswer: () => access.canAnswer,
+}));
 vi.mock("@/acp/api", () => ({
   acpApi: { switchDriver },
 }));
 
 import { setAgentRegistry } from "@/agent/launch";
+import { useAgentStatusStore } from "@/agent/status-store";
+import { useWorkflowNodeSteps } from "@/workflow/node-steps";
 import { installDomPolyfills } from "@/app/test-harness";
 import { renderFlow } from "@/canvas/test-support";
 import { useCanvasStore } from "@/store/canvas-store";
@@ -103,6 +111,9 @@ const codexRow = {
 
 beforeEach(() => {
   switchDriver.mockReset();
+  access.canAnswer = true;
+  useAgentStatusStore.setState({ statuses: {} });
+  useWorkflowNodeSteps.setState({ steps: {} });
   setAgentRegistry([codexRow] as never);
 });
 
@@ -205,5 +216,33 @@ describe("TerminalNode body", () => {
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
     await screen.findByRole("menu");
     expect(screen.queryByRole("menuitemradio")).toBeNull();
+  });
+
+  it("shows who it waits for instead of approval buttons to someone who cannot answer", () => {
+    access.canAnswer = false;
+    useAgentStatusStore.setState({
+      statuses: {
+        n1: {
+          nodeId: "n1",
+          workspaceId: "w",
+          agentId: "codex",
+          state: "blocked",
+          pendingId: "p1",
+          unread: false,
+          verified: true,
+          restored: false,
+          updatedAt: "2026-10-03T00:00:00.000Z",
+        },
+      } as never,
+    });
+    renderNode(terminalNode({ kind: "terminal", agent: { id: "codex" } }));
+    expect(screen.getByText("等待接管")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "允许" })).toBeNull();
+  });
+
+  it("puts the running workflow step in front of the status pill", () => {
+    useWorkflowNodeSteps.setState({ steps: { n1: 2 } });
+    renderNode(terminalNode({ kind: "terminal", agent: { id: "codex" } }));
+    expect(screen.getByText("第 2 步")).toBeTruthy();
   });
 });

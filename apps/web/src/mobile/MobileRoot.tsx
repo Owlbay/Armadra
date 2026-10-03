@@ -36,6 +36,7 @@ export function MobileRoot({ entry }: { entry: Entry }) {
     <ConnectScreen
       mode="native"
       {...(entry.origin ? { origin: entry.origin } : {})}
+      {...(entry.link ? { initialLink: entry.link } : {})}
       canScan={bridge.canScan}
       onScan={() => bridge.scan()}
       onConnect={(link) => connectNative(link)}

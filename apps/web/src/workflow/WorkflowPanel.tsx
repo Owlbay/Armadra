@@ -6,6 +6,7 @@ import { useAccess } from "@/app/use-access";
 import { WorkPanelSheet } from "@/panels/WorkPanelSheet";
 import { TABS_CONTENT_FOCUS } from "@/panels/tabs-focus";
 import { useCanvasStore } from "@/store/canvas-store";
+import { Alert, AlertTitle } from "@/ui/alert";
 import { IconButton } from "@/ui/icon-button";
 import { ScrollArea } from "@/ui/scroll-area";
 import { SheetTitle } from "@/ui/sheet";
@@ -101,13 +102,17 @@ export function WorkflowPanel() {
               <ScrollArea className="min-h-0 flex-1">
                 <div className="min-w-0 p-3">
                   {member ? (
-                    <p role="status" className="text-[12px] text-destructive">
-                      {t("workflow.error.forbidden")}
-                    </p>
+                    <Alert>
+                      <AlertTitle className="font-normal">
+                        {t("workflow.error.forbidden")}
+                      </AlertTitle>
+                    </Alert>
                   ) : failure ? (
-                    <p role="status" className="text-[12px] text-destructive">
-                      {t(workflowErrorKey(failure))}
-                    </p>
+                    <Alert variant="destructive">
+                      <AlertTitle className="font-normal break-words">
+                        {t(workflowErrorKey(failure))}
+                      </AlertTitle>
+                    </Alert>
                   ) : templates.isPending ? (
                     <div
                       className="space-y-2"

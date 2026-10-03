@@ -333,6 +333,8 @@ describe("the canvas runners", () => {
       ...BUILTIN_RUNNER_IDS,
       "custom:review",
     ]);
+    // `ama` too: another ama node on the board (ama ≥ 0.6.7 calls it).
+    expect(provided[0]?.id).toBe("ama");
     expect(provided.every((runner) => runner.description !== "")).toBe(true);
     release();
     expect(released).toHaveLength(BUILTIN_RUNNER_IDS.length + 1);

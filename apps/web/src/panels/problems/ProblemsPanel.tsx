@@ -16,6 +16,7 @@ import { IconButton } from "@/ui/icon-button";
 import { ScrollArea } from "@/ui/scroll-area";
 import { SheetTitle } from "@/ui/sheet";
 import { WorkPanelSheet } from "../WorkPanelSheet";
+import { Button } from "@/ui/button";
 
 /**
  * 问题面板（语言服务设计 §1.1「诊断」、§4.2）。
@@ -109,10 +110,12 @@ function DiagnosticRow({
   const line = diagnostic.range.start.line + 1;
   return (
     <li>
-      <button
+      <Button
+        variant="ghost"
+        size="xs"
         type="button"
         disabled={!path}
-        className="flex w-full min-w-0 items-start gap-2 rounded-[var(--radius-sm)] px-1 py-1 text-left hover:bg-[var(--hover)] disabled:cursor-default disabled:hover:bg-transparent"
+        className="flex h-auto w-full justify-start font-normal min-w-0 items-start gap-2 rounded-[var(--radius-sm)] px-1 py-1 text-left hover:bg-[var(--hover)] disabled:cursor-default disabled:opacity-100 disabled:hover:bg-transparent"
         onClick={() => {
           if (path) openFileInEditor(path, { line });
         }}
@@ -129,7 +132,7 @@ function DiagnosticRow({
             {diagnostic.code !== undefined ? ` · ${diagnostic.code}` : ""}
           </span>
         </span>
-      </button>
+      </Button>
     </li>
   );
 }

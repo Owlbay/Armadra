@@ -119,7 +119,12 @@ export async function auditRelease({ directory, version, publicKeyText }) {
       problems.push(`${name} declares no component the updater can read`);
       continue;
     }
-    if (component === "manifest" || component === "web") continue;
+    if (
+      component === "manifest" ||
+      component === "web" ||
+      component === "mobile"
+    )
+      continue;
     if (assetTarget(name) === "")
       problems.push(`${name} declares no target the updater can read`);
   }

@@ -205,14 +205,17 @@ function KeyButton({
   onPress: () => void;
 }) {
   return (
-    <button
+    <Button
+      variant="outline"
+      size="xs"
       type="button"
       aria-pressed={pressed}
       className={cn(
-        "min-h-10 min-w-11 shrink-0 rounded-md border border-border px-2",
-        "font-mono text-[13px] leading-none",
+        "h-auto min-h-10 min-w-11 shrink-0 rounded-md border border-border px-2",
+        "font-mono text-[13px] leading-none font-normal",
+        // 按下（Ctrl 锁住）是选中态：品牌浅底 + 品牌字（设计系统 §3.4）。
         pressed
-          ? "border-[var(--brand)] text-[var(--brand-text)]"
+          ? "border-[var(--brand)] bg-[var(--brand-soft)] text-[var(--brand-text)]"
           : "bg-card text-foreground",
       )}
       // 按下不抢终端的焦点，否则每按一个键软键盘就收一次。
@@ -221,6 +224,6 @@ function KeyButton({
       onClick={onPress}
     >
       {label}
-    </button>
+    </Button>
   );
 }

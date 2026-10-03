@@ -4,13 +4,13 @@ import { toast } from "sonner";
 import { useT } from "@/app/preferences-store";
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui/tabs";
 import { Textarea } from "@/ui/textarea";
 
@@ -124,17 +124,19 @@ export function ImportMermaidDialog() {
     : null;
 
   return (
-    <Dialog
+    <ResponsiveDialog
       open={dialog.open}
       onOpenChange={(open) => {
         if (!open) closeMermaidImport();
       }}
     >
-      <DialogContent className="z-[var(--z-dialog)] sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>{t("mermaid.title")}</DialogTitle>
-          <DialogDescription>{t("mermaid.description")}</DialogDescription>
-        </DialogHeader>
+      <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-3xl">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{t("mermaid.title")}</ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
+            {t("mermaid.description")}
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
 
         {/* 宽屏并排，窄屏切页签——并排在 390px 上两边都没法用。 */}
         <div className="hidden gap-3 sm:grid sm:grid-cols-2">
@@ -166,16 +168,16 @@ export function ImportMermaidDialog() {
           <p className="text-destructive text-sm break-words">{message}</p>
         ) : null}
 
-        <DialogFooter>
+        <ResponsiveDialogFooter>
           <Button variant="ghost" onClick={closeMermaidImport}>
             {t("mermaid.cancel")}
           </Button>
           <Button disabled={!ready} onClick={() => void confirm()}>
             {t("mermaid.import")}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 
