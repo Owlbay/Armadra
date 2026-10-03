@@ -6,11 +6,11 @@
 
 按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.json` 的清单跑（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
-| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                         | 何时跑                              | 失败时       |
-| --- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
-| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`core-terminal-packaged`                                                                     | `nightly.yml`                       | 开 issue     |
-| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                      | 手动；清单在执行计划 §5             | 记进状态文档 |
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                            | 何时跑                              | 失败时       |
+| --- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`core-terminal-packaged`                                                                                        | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                         | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
 
@@ -46,6 +46,19 @@ node tools/probes/git-tool-window.mjs [输出目录]
 ```
 
 产物默认在 `target/git-tool-window/`：桌面 1440×900 的 `log-desktop.png`（三栏）、`log-maximized.png`、`commit-desktop.png`、`commit-maximized.png`，手机 390×844 的 `mobile-commits.png` / `mobile-branches.png` / `mobile-details.png` / `mobile-diff.png`（日志页的四级导航）与 `mobile-commit.png`，加一份 `result.json`。手机那几张按应用自己的行为开成最大化（`shell/MobileBottomNav.tsx`），桌面停在底部。端口随机（不用 1420 / 1421 / 43120 / 43121），数据目录与浏览器 profile 都是 `mktemp` 出来的，跑完删除；不读写操作员自己的数据目录、凭据或任何远端。页面入口（`apps/web/git-window-probe.html` 与 `src/git-window-probe.tsx`）由脚本临时写入、结束时删除——应用首页要先选工作空间，而这次要看的是窗口本身。
+
+## 设计展示页截图
+
+[设计展示页](../../docs/design/design-showcase.md) §3 的探针：只起一个随机端口的 Vite 开发服务器与新 profile 的无头 Chrome，不起 core 与 tmux，`ARMADRA_DATA_DIR` 指到空的临时目录，跑完删除。
+
+```sh
+pnpm libs:build
+node tools/probes/design-showcase.mjs [输出目录] [--only=tokens,acp] [--theme=dark] [--width=390] [--diff=<上一次的输出目录>]
+```
+
+矩阵：`ShowcaseApp.tsx` 登记的 14 个分区 × 深浅两套主题 × 1440×900 / 1024×768 / 390×844 三种视口，每张是 `showcase.html?theme=…&only=1#<分区>` 的整页截图，文件名 `<分区>-<主题>-<宽>.png`。另做五项核验：深浅主题各执行一次 `window.__showcaseContrast()`，按浏览器算出的颜色核算设计系统 §2.1–§2.5 的每一对（文字 4.5、图形 3），低于阈值即失败；`components` 分区按 Tab 走一遍，每个可聚焦元素都要命中 `:focus-visible` 且看得见焦点环（Radix 漫游焦点组的根按一个落点算）；`prefers-reduced-motion: reduce` 下 `canvas` 分区没有在跑的动画、隔 700ms 的两张图逐字节相同（额外存 `canvas-<主题>-1440-reduced-motion.png`）；`forced-colors: active` 下焦点仍有轮廓（额外存 `components-<主题>-1440-forced-colors.png`）；控制台 error 与未捕获异常算失败。`apps/web/dist/` 存在时（CI 先构建）顺带确认产物里没有展示页的文件与代码。
+
+产物默认在 `target/design-showcase/`：全部 PNG 与 `result.json`（分区、主题、视口、每张耗时、对比度表、Tab 结果、两项媒体模拟、控制台）。`--diff` 逐像素比较同名 PNG，差异超过 0.5% 的列进 `changed`，给改样式前后对照用。功能分区在实现包落地前是骨架占位；画布分区的节点体是静态内容（真终端要连 core）。没有验证：真实触屏、系统高对比主题本身（只模拟了 `forced-colors`）、Windows 与 Linux 上的字体渲染差异（CI 只在 Linux 跑）。
 
 ## 连线拖拽成功率
 
