@@ -183,11 +183,17 @@ export function state(
 ): IntegrationState {
   requireInjected(agentId);
   const env = options.env ?? process.env;
-  const home = options.home ?? configHome(agentId, env);
+  // ama never had a global install, so there is no config home to scan.
+  const home =
+    agentId === "ama" ? undefined : (options.home ?? configHome(agentId, env));
   const layout = artifactLayout(options.dataDir, agentId);
   const marker = readMarker(options.dataDir, agentId);
   const hookFile =
-    layout.settings ?? layout.module ?? layout.pluginHooks ?? layout.marker;
+    layout.settings ??
+    layout.module ??
+    layout.pluginHooks ??
+    layout.profile ??
+    layout.marker;
   const hookInstalled = marker !== undefined && isPresent(hookFile);
   const skillRevision = revisionOf(layout.skill);
   const injection = canvasInjection({ dataDir: options.dataDir, agentId });
@@ -211,7 +217,7 @@ export function state(
       path: layout.skill,
       revision: skillRevision ?? 0,
     },
-    legacy: { found: scanIn(agentId, home) },
+    legacy: { found: home === undefined ? [] : scanIn(agentId, home) },
     revision: INTEGRATION_REVISION,
     stale: marker !== undefined && marker.revision !== INTEGRATION_REVISION,
     ...(marker === undefined ? {} : { installedRevision: marker.revision }),
@@ -289,6 +295,7 @@ export function prepareAtStartup(options: IntegrationOptions): StartupReport {
     "pi",
     "omp",
     "copilot",
+    "ama",
   ]) {
     try {
       prepareInjection(agentId, injectionOptions(agentId, options));
