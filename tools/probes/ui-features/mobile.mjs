@@ -197,9 +197,9 @@ export default async function mobile({ stack, output, report, scenario }) {
       "会话就绪、输入框可用",
       { timeout: 30_000 },
     );
-    await page.clickOn(
-      `return document.querySelector('[data-slot="mobile-focus"] textarea');`,
-      "输入框",
+    // 前面场景留下的 toast 可能正好浮在输入框上：直接把焦点交给输入框。
+    await page.evaluate(
+      `document.querySelector('[data-slot="mobile-focus"] textarea').focus(); return true;`,
     );
     await page.type("hello from the phone");
     await page.key("Enter");
@@ -224,6 +224,15 @@ export default async function mobile({ stack, output, report, scenario }) {
 
     run.consoleClean(page);
     run.entry.status = "passed";
+  } catch (error) {
+    // 页面在 finally 里就关了，入口补不了截图：这里先留一张，带上焦点页的字。
+    await run.shot(page, "failure-mobile-page").catch(() => undefined);
+    const text = await page
+      .evaluate(
+        `return document.querySelector('[data-slot="mobile-focus"]')?.innerText ?? document.body.innerText;`,
+      )
+      .catch(() => "");
+    throw new Error(`${error.message}\n页面：${String(text).slice(0, 600)}`);
   } finally {
     await page.close();
     await stack.api("/api/gateway", {
