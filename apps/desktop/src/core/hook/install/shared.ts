@@ -176,8 +176,10 @@ function bundled(
     candidates.push(join(process.resourcesPath, relative));
   }
   candidates.push(join(dirname(process.execPath), relative));
-  // `out/core/main.js` → `out/<relative>`.
+  // `out/core/main.js` → `out/<relative>`; the server shell's single
+  // `out/main.js` → `out/<relative>` beside it.
   candidates.push(join(__dirname, "..", relative));
+  candidates.push(join(__dirname, relative));
   return candidates.find(isFile);
 }
 
