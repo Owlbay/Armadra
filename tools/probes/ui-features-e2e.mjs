@@ -3,6 +3,7 @@
 //
 // 用法（仓库根目录）：
 //   pnpm libs:build && pnpm --filter @armadra/desktop build
+//   pnpm --filter @armadra/web build   # 手机场景（mobile）经 Gateway 托管页面产物
 //   node tools/probes/ui-features-e2e.mjs [输出目录] [--only=presence,editor,...]
 //
 // 产物默认在 target/ui-features-e2e/：result.json 与每个场景的截图。
@@ -35,6 +36,7 @@ import integration, {
 } from "./ui-features/integration.mjs";
 import keybindings from "./ui-features/keybindings.mjs";
 import layout from "./ui-features/layout.mjs";
+import mobile, { WEB_DIST } from "./ui-features/mobile.mjs";
 import presence from "./ui-features/presence.mjs";
 import resources, {
   startStatusFixture,
@@ -51,6 +53,7 @@ const SCENARIOS = {
   integration,
   resources,
   layout,
+  mobile,
 };
 
 const args = process.argv.slice(2);
@@ -92,6 +95,9 @@ try {
       ARMADRA_STATUS_PAGE_BASE: fixture.base,
       ARMADRA_REMOTE_WORKER_LAUNCHER: shims.launcher,
       PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+      // 手机场景经 Gateway 打开页面：它托管构建好的页面产物（没有就跳过那一场）。
+      ARMADRA_GATEWAY_WEB_ROOT: WEB_DIST,
+      ARMADRA_SECRET_BACKEND: "file",
     },
   });
   stack.cleanups.push(() => home.remove());
@@ -127,7 +133,9 @@ try {
       console.error(`  FAIL  ${message}`);
     }
   }
-  report.status = report.scenarios.every((entry) => entry.status === "passed")
+  report.status = report.scenarios.every(
+    (entry) => entry.status === "passed" || entry.status === "skipped",
+  )
     ? "ok"
     : "failed";
 } catch (error) {

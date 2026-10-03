@@ -1,4 +1,4 @@
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -11,6 +11,7 @@ const posixOnly = it.skipIf(process.platform === "win32");
 
 import { type MainIo, main } from "./main";
 import { tempDir } from "../../desktop/src/core/testing/temp-dir";
+import { selfSignedCertificate } from "../../desktop/src/core/gateway/tls";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -237,5 +238,65 @@ describe("upgrade", () => {
 
   it("没有候选也没有 --rollback 是 2", async () => {
     expect(await run(["upgrade"])).toMatchObject({ code: 2 });
+  });
+});
+
+describe("serve --acme", () => {
+  it("与 --tls-cert / --tls-key 二选一，缺对外来源也拒绝，都在起 core 之前", async () => {
+    const dataDir = temporary();
+    const both = await run([
+      "serve",
+      "--data-dir",
+      dataDir,
+      "--web-root",
+      dataDir,
+      "--acme",
+      "ops@armadra.test",
+      "--public-origin",
+      "https://armadra.example.com",
+      "--tls-cert",
+      "/tmp/a.crt",
+      "--tls-key",
+      "/tmp/a.key",
+    ]);
+    expect(both.code).toBe(1);
+    expect(both.err).toContain("二选一");
+    // 环境变量与 --acme 等价。
+    const noOrigin = await run(
+      ["serve", "--data-dir", dataDir, "--web-root", dataDir],
+      { ARMADRA_ACME_EMAIL: "ops@armadra.test" },
+    );
+    expect(noOrigin.code).toBe(1);
+    expect(noOrigin.err).toContain("--public-origin");
+  });
+
+  it("install 不认 --acme（服务定义用 --env ARMADRA_ACME_EMAIL=…）", async () => {
+    expect(await run(["install", "--acme", "ops@armadra.test"])).toMatchObject({
+      code: 2,
+    });
+  });
+
+  it("status 报 ACME 来源、到期时间与连续失败次数", async () => {
+    const dataDir = temporary();
+    const directory = join(dataDir, "tls", "acme");
+    mkdirSync(directory, { recursive: true });
+    const { cert } = selfSignedCertificate(
+      ["armadra.example.com"],
+      new Date("2026-10-01T00:00:00Z"),
+    );
+    writeFileSync(join(directory, "cert.pem"), cert);
+    writeFileSync(
+      join(directory, "state.json"),
+      JSON.stringify({ failures: 2 }),
+    );
+    const json = JSON.parse(
+      (await run(["status", "--data-dir", dataDir, "--output", "json"])).out,
+    );
+    expect(json.tls.kind).toBe("ACME");
+    expect(json.tls.acmeFailures).toBe(2);
+    expect(typeof json.tls.notAfter).toBe("string");
+    const text = await run(["status", "--data-dir", dataDir]);
+    expect(text.out).toContain("TLS：ACME");
+    expect(text.out).toContain("续期已连续失败 2 次");
   });
 });

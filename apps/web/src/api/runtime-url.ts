@@ -64,6 +64,89 @@ function loopbackBase(base: string, protocol: string): boolean {
   );
 }
 
+/* ------------------------------ 原生 App 的来源 ----------------------------- */
+
+/**
+ * 原生 App（Capacitor）里页面打在包里：iOS 是 `capacitor://localhost`，Android
+ * 是 `https://localhost`（架构 §7「原生 App 的准入」）。页面来源推不出 core 在
+ * 哪，所以连接页配对成功后把 Gateway 的来源记下来，之后每次启动从这里读。
+ *
+ * 来源不是凭据（凭据在钥匙串里，见 `mobile/native-bridge.ts`），放 localStorage
+ * 足够；但只有原生 App 的页面认它——桌面窗口与经 Gateway 打开的网页各有自己的
+ * 答案，一个残留的值不该改变它们连到哪。
+ */
+const SAVED_ORIGIN_KEY = "armadra.runtimeOrigin";
+
+const NATIVE_APP_PAGES = new Set([
+  "capacitor://localhost",
+  "https://localhost",
+]);
+
+/** 页面是不是原生 App 打在包里的那一份：来源对得上，而且 Capacitor 说自己是原生。 */
+export function isNativeAppPage(
+  pageUrl: string = globalThis.location?.href ?? "",
+): boolean {
+  let url: URL;
+  try {
+    url = new URL(pageUrl);
+  } catch {
+    return false;
+  }
+  if (!NATIVE_APP_PAGES.has(`${url.protocol}//${url.host}`)) return false;
+  const capacitor = (
+    globalThis as { Capacitor?: { isNativePlatform?: () => boolean } }
+  ).Capacitor;
+  try {
+    return capacitor?.isNativePlatform?.() === true;
+  } catch {
+    return false;
+  }
+}
+
+/** 规范成 `https://host[:port]`；不是干净的 HTTPS 来源一律 `null`。 */
+export function gatewayOrigin(value: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (url.pathname !== "/" && url.pathname !== "")
+  )
+    return null;
+  return url.origin;
+}
+
+/** 连接页记下的 Gateway 来源；没有或认不出是 `null`。 */
+export function savedRuntimeOrigin(): string | null {
+  try {
+    const value = globalThis.localStorage?.getItem(SAVED_ORIGIN_KEY);
+    return value ? gatewayOrigin(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveRuntimeOrigin(origin: string): void {
+  const clean = gatewayOrigin(origin);
+  if (clean === null) throw new Error("not an https origin");
+  globalThis.localStorage?.setItem(SAVED_ORIGIN_KEY, clean);
+}
+
+export function forgetRuntimeOrigin(): void {
+  try {
+    globalThis.localStorage?.removeItem(SAVED_ORIGIN_KEY);
+  } catch {
+    /* 存储不可用时本来也没有记下什么。 */
+  }
+}
+
 /** An explicit relative/empty URL opts a web deployment into its own origin. */
 export function resolveRuntimeUrl(
   configured: string | undefined,
@@ -71,12 +154,16 @@ export function resolveRuntimeUrl(
 ): string {
   const shell = shellEndpoints();
   // 显式配置永远优先：桌面开发模式靠它连外部 Runtime。
-  if (configured === undefined)
+  if (configured === undefined) {
+    // 原生 App：只认连接页记下的来源。Android 的页面来源 `https://localhost`
+    // 长得像服务器壳，但那是包里的文件，不是 core。
+    if (isNativeAppPage(pageUrl)) return savedRuntimeOrigin() ?? LOCAL_RUNTIME;
     return (
       // 壳先问：它拉起的 Runtime 端口是内核分配的，页面地址推不出来，而且开发
       // 模式下页面来源是 Vite，回环默认端口多半是别人的 Runtime。
       shell?.httpBase ?? serverShellOrigin(pageUrl) ?? LOCAL_RUNTIME
     );
+  }
   // Vite 开发服务器发现 Runtime 后会把这个值定义成 `""`，让浏览器标签页走同源
   // 代理。壳里的页面不该走那条弯路：壳知道内核分配的端口，打包版也从不经代理，
   // 而且代理在连接关闭时会往主进程日志里刷 EPIPE。非空的显式地址仍然最优先。

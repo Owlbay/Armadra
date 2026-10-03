@@ -18,6 +18,12 @@ Armadra 使用同一套 React 页面。桌面端通过 Electron 壳提供本机�
 - 源码控制在手机上是三级导航：分区列表 → 分区详情 → 单文件差异，每一级都有「返回」。
 - 终端输入带序号，Runtime 落到 pty 后回 `ack`，重连时按 `hello.acknowledgedInput` 只重发未确认且十秒内的输入——超时的结果未知，不自动重发。
 
+## 连接页、推送与原生 App 的页面一半（G2-10）
+
+- 手机浏览器扫桌面「对外服务」的二维码打开 `https://…/#pair=<票>&fp=…`：窄屏下是连接页（地址、「连接」、CA 安装引导），点「连接」配对后进画布；宽屏仍由设置页「后台服务」那一页配对。
+- 登录后手机布局里问一次推送权限；浏览器走 Web Push，worker 在站点根 `/sw.js`。点通知经 `#push=armadra://w/<工作空间>/n/<节点>` 打开节点焦点页。
+- 原生 App 的页面打在包里，没有来源时是连接页（贴配对链接或扫码）；配对后 Gateway 来源记在本地、会话凭据在钥匙串，请求带 Bearer，WebSocket 升级前换一次性票。原生插件约定见 `apps/web/src/mobile/native-bridge.ts` 文件头。
+
 ## 经 Host 访问（H02）
 
 Go Host 用 `--serve-web <dist>` 在它自己的 HTTPS 来源上托管这份前端，并把 `/api` 前缀下的请求与 WebSocket 反向代理到本机 Runtime（socket、命名管道或回环 TCP，地址来自共享的 `endpoints.json`）。此时前端自动使用同源地址，**不需要 `VITE_RUNTIME_URL`**。

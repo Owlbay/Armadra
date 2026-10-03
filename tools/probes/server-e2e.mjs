@@ -26,14 +26,24 @@
 //   node tools/probes/server-e2e.mjs [输出目录]
 //
 // 产物：<输出目录>/result.json 与各步截图，默认 target/server-e2e/。
+//
+// 容器模式（补全计划 G3-5，B 档）：`--container=<镜像>` 时不用本机的构建产物，
+// 改为 `docker run` 那个镜像（`apps/server/docker/Dockerfile`），只发布到
+// 127.0.0.1 的随机端口，对外来源就是它；共享项目是挂进容器的临时目录
+// （`/projects`）。容器里没有 Chrome，第 7 步（浏览器节点）记 skipped。
+//   docker build -f apps/server/docker/Dockerfile -t armadra-server:local .
+//   node tools/probes/server-e2e.mjs --container=armadra-server:local [输出目录]
+// 加 `--build` 时探针先自己 `docker build` 出这个标签（CI 的 B 档条目这样用）。
+import { execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   child,
+  freePort,
   harness,
   killTmux,
   sleep,
@@ -41,7 +51,16 @@ import {
 } from "./shell-e2e-lib.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const output = resolve(process.argv[2] ?? join(root, "target/server-e2e"));
+const args = process.argv.slice(2);
+const image =
+  args
+    .find((argument) => argument.startsWith("--container="))
+    ?.slice("--container=".length) || undefined;
+const build = args.includes("--build");
+const output = resolve(
+  args.find((argument) => !argument.startsWith("--")) ??
+    join(root, "target/server-e2e"),
+);
 mkdirSync(output, { recursive: true });
 const h = harness(output);
 const { report, step } = h;
@@ -58,34 +77,92 @@ function check(ok, name, detail = "") {
 }
 
 await h.run(async () => {
-  for (const [what, file] of [
-    ["core", "apps/desktop/out/core/main.js"],
-    ["服务器壳", "apps/server/out/main.js"],
-    ["前端产物", "apps/web/dist/index.html"],
-  ]) {
+  for (const [what, file] of image !== undefined
+    ? []
+    : [
+        ["core", "apps/desktop/out/core/main.js"],
+        ["服务器壳", "apps/server/out/main.js"],
+        ["前端产物", "apps/web/dist/index.html"],
+      ]) {
     if (!existsSync(join(root, file)))
       throw new Error(`${what}未构建：${file}（见文件头的构建命令）`);
   }
 
   /* ------------------------------ 服务器壳 ------------------------------- */
 
-  const data = h.temp("armadra-server-e2e-");
-  h.cleanups.push(() => killTmux(data));
-  const server = child(
-    h,
-    process.execPath,
-    [
-      join(root, "apps/server/out/main.js"),
-      "serve",
-      "--data-dir",
-      data,
-      "--web-root",
-      join(root, "apps/web/dist"),
-    ],
-    { cwd: root, env: { ...process.env, ARMADRA_LOG: "warn" } },
-  );
+  // 共享项目：本机模式是临时目录本身；容器模式挂进容器的 `/projects`。
+  const projectRoot = h.temp("armadra-server-e2e-project-");
+  let projectPath = projectRoot;
+  let server;
+  if (image === undefined) {
+    const data = h.temp("armadra-server-e2e-");
+    h.cleanups.push(() => killTmux(data));
+    server = child(
+      h,
+      process.execPath,
+      [
+        join(root, "apps/server/out/main.js"),
+        "serve",
+        "--data-dir",
+        data,
+        "--web-root",
+        join(root, "apps/web/dist"),
+      ],
+      { cwd: root, env: { ...process.env, ARMADRA_LOG: "warn" } },
+    );
+  } else {
+    if (build) {
+      execFileSync(
+        "docker",
+        [
+          "build",
+          "-f",
+          join(root, "apps/server/docker/Dockerfile"),
+          "-t",
+          image,
+          root,
+        ],
+        { stdio: "inherit" },
+      );
+      step("镜像已构建", image);
+    }
+    const port = await freePort();
+    const name = `armadra-server-e2e-${randomUUID().slice(0, 8)}`;
+    // 容器里是 uid 10001：目录要让它写得进去。
+    chmodSync(projectRoot, 0o777);
+    projectPath = "/projects";
+    // 先于临时目录被删：容器写下的文件归容器用户，在容器里清掉再停它。
+    h.cleanups.push(() => {
+      try {
+        execFileSync(
+          "docker",
+          ["exec", name, "sh", "-c", "rm -rf /projects/* /projects/.[!.]*"],
+          { stdio: "ignore" },
+        );
+      } catch {}
+      execFileSync("docker", ["rm", "-f", "-v", name], { stdio: "ignore" });
+    });
+    server = child(h, "docker", [
+      "run",
+      "--rm",
+      "--name",
+      name,
+      "-p",
+      `127.0.0.1:${port}:${port}`,
+      "-e",
+      `ARMADRA_LISTEN=0.0.0.0:${port}`,
+      "-e",
+      `ARMADRA_PUBLIC_ORIGIN=https://127.0.0.1:${port}`,
+      "-e",
+      "ARMADRA_LOG=warn",
+      "-v",
+      `${projectRoot}:/projects`,
+      image,
+    ]);
+    report.container = { image, name, port };
+  }
   let pairing = "";
-  for (let attempt = 0; attempt < 300 && !pairing; attempt += 1) {
+  for (let attempt = 0; attempt < 600 && !pairing; attempt += 1) {
     if (server.process.exitCode !== null)
       throw new Error(`服务器壳退出：${server.tail()}`);
     pairing = /armadra-server pairing (\S+)/.exec(server.tail())?.[1] ?? "";
@@ -141,11 +218,10 @@ await h.run(async () => {
     body: { collab: { realtime: false } },
   });
 
-  const projectRoot = h.temp("armadra-server-e2e-project-");
   writeFileSync(join(projectRoot, "README.md"), "# 共享项目\n");
   const shared = await adminApi("/api/workspaces", {
     method: "POST",
-    body: { name: "共享项目", rootPath: projectRoot },
+    body: { name: "共享项目", rootPath: projectPath },
   });
   const boards = await adminApi(`/api/workspaces/${shared.id}/boards`);
   const board = boards[0];
@@ -534,10 +610,12 @@ await h.run(async () => {
     `return fetch("/api/health").then((answer) => answer.json());`,
   );
   report.capabilities = health.capabilities;
-  check(
-    health.capabilities?.headlessBrowser === true,
-    "health 报 headlessBrowser 能力位",
-  );
+  if (image === undefined) {
+    check(
+      health.capabilities?.headlessBrowser === true,
+      "health 报 headlessBrowser 能力位",
+    );
+  }
   // 起始页是探针自己的回环页面：不访问外网，画面里也有一段认得出的内容。
   const page = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -638,6 +716,19 @@ await h.run(async () => {
   }
   second.drain();
   await second.navigate("about:blank");
+  if (image !== undefined) {
+    // 镜像里不带 Chrome，探针页也在宿主的回环上，容器连不到。
+    report.browserNode = "skipped";
+    step("容器模式：浏览器节点一步 skipped");
+    const errors = admin.drain().errors;
+    report.adminErrors = errors;
+    check(
+      errors.length === 0,
+      "管理员一侧没有控制台错误",
+      errors.map((error) => error.text).join(" | "),
+    );
+    return;
+  }
   await admin.click('[data-slot="dock"] button', "新建");
   await admin.click('[role="menuitem"]', "新建浏览器");
   await admin.waitFor(
