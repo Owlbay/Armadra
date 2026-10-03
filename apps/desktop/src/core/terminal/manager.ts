@@ -158,6 +158,22 @@ export interface SpawnRequest {
    * lets one decorated backend serve every terminal.
    */
   readonly sshHostId?: string | undefined;
+  /**
+   * The backend to create this session with; the effective one when absent.
+   * Only `acp` is ever named (`core/acp`): a node driven over ACP is the same
+   * row in the same table, created by a different backend.
+   */
+  readonly backend?: BackendKind | undefined;
+}
+
+/** {@link TerminalManager.revive} 的选项。 */
+export interface ReviveOptions {
+  /** 不止休眠的行：任何已经结束的行都可以在原地起下一代。 */
+  readonly ended?: boolean;
+  /** 下一代用哪个后端；缺省是这一行原来的（ACP 仍是 ACP）。 */
+  readonly backend?: BackendKind;
+  /** 下一代跑的程序；`null` = 只起 shell。缺省沿用行上的。 */
+  readonly command?: string | null;
 }
 
 export interface SessionRecord {
@@ -453,7 +469,7 @@ export class TerminalManager {
           ? {}
           : { sshHostId: request.sshHostId }),
       };
-      const kind = this.effective;
+      const kind = request.backend ?? this.effective;
       const handle = await this.backend(kind).create(spec);
 
       const createdAt = this.now();
@@ -646,7 +662,11 @@ export class TerminalManager {
    * 往画布里写一笔。同一个 key 上已经有别的活会话（有人在这期间起了新的），就
    * 拒绝——休眠已经被取代了，再起一个就是同一个节点上的第二个 CLI。
    */
-  async revive(sessionId: string, env: EnvPairs): Promise<TerminalSession> {
+  async revive(
+    sessionId: string,
+    env: EnvPairs,
+    options: ReviveOptions = {},
+  ): Promise<TerminalSession> {
     const row = this.database
       .prepare("SELECT * FROM terminal_sessions WHERE id = ?")
       .get(sessionId) as Record<string, unknown> | undefined;
@@ -659,7 +679,11 @@ export class TerminalManager {
         )
         .get(sessionId) as Record<string, unknown> | undefined;
       if (current === undefined) throw notFound("Terminal session not found");
-      if (!rowHibernated(current)) {
+      // `ended`：驱动方式的切换与 ACP 会话的接回在同一行上起下一代，不需要
+      // 休眠留下的那份承诺——行以什么方式结束的都行（ACP 设计 §4.2）。还在跑的
+      // 行不在此列。
+      const endedOk = options.ended === true && current.status !== "running";
+      if (!rowHibernated(current) && !endedOk) {
         throw conflict("Terminal session is not hibernated");
       }
       const holder = this.byKey.get(key);
@@ -672,7 +696,10 @@ export class TerminalManager {
       }
       const nextGeneration = Number(current.generation ?? 0) + 1;
       const workspaceId = String(row.workspace_id);
-      const command = (row.command as string | null) ?? undefined;
+      const command =
+        options.command !== undefined
+          ? (options.command ?? undefined)
+          : ((row.command as string | null) ?? undefined);
       const spec: TerminalSpec = {
         sessionKey: key,
         workspaceId,
@@ -688,16 +715,25 @@ export class TerminalManager {
         ),
         size: { cols: DEFAULT_COLS, rows: DEFAULT_ROWS },
       };
-      const kind = this.effective;
+      // 一个 ACP 行接回来仍是 ACP，终端行仍是终端；切换驱动时调用方点名。
+      const kind: BackendKind =
+        options.backend ??
+        (row.backend_kind === "acp" ? "acp" : this.effective);
       const handle = await this.backend(kind).create(spec);
       this.database
         .prepare(
           `UPDATE terminal_sessions SET generation = ?, backend_kind = ?, backend_ref = ?,
-               status = 'running', exit_code = NULL, ended_at = NULL,
+               command = ?, status = 'running', exit_code = NULL, ended_at = NULL,
                attach_state = 'detached', termination_intent = 'none',
                last_output_at = NULL WHERE id = ?`,
         )
-        .run(handle.generation, kind, handle.backendRef ?? null, sessionId);
+        .run(
+          handle.generation,
+          kind,
+          handle.backendRef ?? null,
+          command ?? null,
+          sessionId,
+        );
       this.inputs.forget(sessionId);
       this.drives.forget(sessionId);
       this.remember({

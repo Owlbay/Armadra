@@ -64,15 +64,26 @@ export function sessionKey(value: string): SessionKey {
   return value as SessionKey;
 }
 
-/** `terminal_sessions.backend_kind`. The strings are contractual. */
-export type BackendKind = "direct" | "tmux" | "sessionHost";
+/**
+ * `terminal_sessions.backend_kind`. The strings are contractual.
+ *
+ * `acp` is not a terminal: it is the same node driven over the Agent Client
+ * Protocol (`core/acp/bridge.ts`, ACP 设计 §4.1). It is a backend all the same
+ * so that the row, the generation, the drive lease, the exit notice and Eco
+ * hibernation are the manager's one implementation rather than a second one.
+ * It is never the effective kind: only a request that names it gets it.
+ */
+export type BackendKind = "direct" | "tmux" | "sessionHost" | "acp";
 
 /**
  * Parsing an unknown value as `direct` would claim a session this build cannot
  * reach is reachable, so unknown rows stay unknown.
  */
 export function parseBackendKind(value: string): BackendKind | undefined {
-  return value === "direct" || value === "tmux" || value === "sessionHost"
+  return value === "direct" ||
+    value === "tmux" ||
+    value === "sessionHost" ||
+    value === "acp"
     ? value
     : undefined;
 }
