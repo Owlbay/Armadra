@@ -55,10 +55,73 @@ export function compareVersions(left, right) {
   return a.prerelease < b.prerelease ? -1 : 1;
 }
 
-/** Read and validate compatibility.json. */
+/**
+ * Keys compatibility.json carries beside the fence. They describe what this
+ * release was verified against, not which installs may move to it, so they
+ * never enter the release note's fence — which stays strict.
+ */
+const SIDE_KEYS = ["acp"];
+
+function readDocument(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+/** Read and validate compatibility.json's fence half. */
 export function readCompatibility(path = COMPATIBILITY_FILE) {
-  const document = JSON.parse(readFileSync(path, "utf8"));
-  return normalize(document);
+  const document = readDocument(path);
+  const fence = { ...document };
+  for (const key of SIDE_KEYS) {
+    if (key in fence) normalizeSide(key, fence[key]);
+    delete fence[key];
+  }
+  return normalize(fence);
+}
+
+/**
+ * The `acp` key: the ACP protocol version and, per adapter, its program and
+ * the version range a real run verified (`null` until one has —
+ * docs/design/acp-session-view.md §12). The program names must match
+ * `apps/desktop/src/core/acp/adapters.ts`; that test reads this file.
+ */
+export function readAcpCompatibility(path = COMPATIBILITY_FILE) {
+  return normalizeAcp(readDocument(path).acp);
+}
+
+function normalizeSide(key, value) {
+  if (key === "acp") return normalizeAcp(value);
+  throw new Error(`unknown compatibility key: ${key}`);
+}
+
+export function normalizeAcp(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new Error("acp must be an object");
+  if (value.protocolVersion !== 1)
+    throw new Error("acp.protocolVersion must be 1");
+  const adapters = value.adapters;
+  if (adapters === null || typeof adapters !== "object")
+    throw new Error("acp.adapters must be an object");
+  const result = {};
+  for (const [id, entry] of Object.entries(adapters)) {
+    if (typeof entry?.program !== "string" || entry.program === "")
+      throw new Error(`acp.adapters.${id}.program must be a program name`);
+    const verified = entry.verified;
+    if (verified === null) {
+      result[id] = { program: entry.program, verified: null };
+      continue;
+    }
+    if (typeof verified !== "object")
+      throw new Error(`acp.adapters.${id}.verified must be null or a range`);
+    const min = parseVersion(verified.min).text;
+    const max =
+      verified.max === undefined ? undefined : parseVersion(verified.max).text;
+    if (max && compareVersions(min, max) > 0)
+      throw new Error(`acp.adapters.${id}.verified.min is above max`);
+    result[id] = {
+      program: entry.program,
+      verified: max ? { min, max } : { min },
+    };
+  }
+  return { protocolVersion: 1, adapters: result };
 }
 
 /**
