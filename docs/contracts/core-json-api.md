@@ -670,7 +670,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 15. 工作流与 runners：`/api/workflows/*`
 
-协调者把一次协作沉淀成**草案**，人确认后成为**模板**，模板按参数**运行**（设计 `design/coordinator-agent.md` §5、`design/completion-architecture.md` §5.4）。表在迁移 `0030_workflow.sql`（`workflow_drafts` / `workflow_templates` / `workflow_runs` / `workflow_run_steps` / `workflow_task_runs`）。zod 在 `packages/shared/src/api/workflows.ts`，core 的手写校验在 `core/workflow/draft.ts`，两边规则相同。§15.5（`wait` 动词与 `workflow_task_runs` 行）由 G2-4、§15.6（自动化目标 `WORKFLOW_RUN`）由 G2-3 填写。
+协调者把一次协作沉淀成**草案**，人确认后成为**模板**，模板按参数**运行**（设计 `design/coordinator-agent.md` §5、`design/completion-architecture.md` §5.4）。表在迁移 `0034_workflow.sql`（`workflow_drafts` / `workflow_templates` / `workflow_runs` / `workflow_run_steps` / `workflow_task_runs`）。zod 在 `packages/shared/src/api/workflows.ts`，core 的手写校验在 `core/workflow/draft.ts`，两边规则相同。§15.5（`wait` 动词与 `workflow_task_runs` 行）由 G2-4、§15.6（自动化目标 `WORKFLOW_RUN`）由 G2-3 填写。
 
 权限按前缀（`http/route-scopes.ts`）：读 `canvas:read`，写 `agent:launch`。路径里没有工作空间，服务器壳上的成员一律 `403 forbidden`；关卡答复的收紧见 §23。失败一律 `{ code, message }`，`code` 是 snake_case 的稳定码。
 
