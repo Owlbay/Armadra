@@ -44,7 +44,12 @@ import {
   launchLine,
   rememberSession,
 } from "./cold-start";
-import { ScheduleError, agentTarget, big, num } from "./plan";
+import { ScheduleError, agentTarget, big, num, workflowTarget } from "./plan";
+import {
+  lookupWorkflowRun,
+  startWorkflowRun,
+  workflowTargetStatus,
+} from "./workflow-target";
 import { COMMAND_SESSION_READY, ScheduleStore } from "./store";
 import type { Dispatcher, ProbeOptions, TargetStatus } from "./engine";
 
@@ -125,6 +130,8 @@ export class TerminalDispatcher implements Dispatcher {
     if (target.executionHostId !== this.context.hostId) {
       return { state: "unsupported", generation: 0 };
     }
+    // 工作流目标（契约 §15.6）：不碰终端，只问模板与画布还在不在。
+    if (workflowTarget(target)) return workflowTargetStatus("", target);
     return agentTarget(target)
       ? this.supportsAgent(target, options.coldStart === true)
       : this.supportsCommand(target);
@@ -371,6 +378,20 @@ export class TerminalDispatcher implements Dispatcher {
     if (!sameBytes(digest, config.payloadSha256)) {
       throw unsupported("载荷与它被冻结时的摘要对不上");
     }
+    if (workflowTarget(target)) {
+      const status = workflowTargetStatus(run.workspaceId, target);
+      if (status.state !== "ready") {
+        return this.record(
+          run,
+          AutomationOutcome.NOT_DISPATCHED,
+          "TARGET_NOT_READY",
+        );
+      }
+      // 起跑就是这次投递；运行 id 从操作标识推出来，重试不会起第二次。
+      return startWorkflowRun(run, target, payload.payload, (outcome, reason) =>
+        this.record(run, outcome, reason),
+      );
+    }
     const status = await this.supports(target);
     if (status.state !== "ready") {
       // 探测和写入之间目标变了。这是**肯定的没投递**：什么都还没写出去，所以
@@ -413,6 +434,14 @@ export class TerminalDispatcher implements Dispatcher {
   /** 这次投递到底做了什么，从这个 core 自己的收据表里读。 */
   async lookup(run: AutomationRun): Promise<AutomationReceipt | undefined> {
     const stored = this.context.store.receipt(run.operationId);
+    // 工作流目标：「送到」之后还看得见结局——运行的状态就是证据。状态变了就
+    // 记一张序号更大的收据，内核据此推进；没变交回存着的那张。
+    if (workflowTarget(run.frozenConfig?.target)) {
+      const next = lookupWorkflowRun(run, stored, (outcome, reason, sequence) =>
+        this.record(run, outcome, reason, undefined, sequence),
+      );
+      if (next !== undefined) return next;
+    }
     if (stored === undefined) {
       // 没有记录就是没有证据。「没有证据」不等于「没有发生」，所以这里答
       // UNKNOWN 而不是 NOT_DISPATCHED——后者是可以重试的，而重试会再写一遍。
@@ -426,8 +455,9 @@ export class TerminalDispatcher implements Dispatcher {
     outcome: AutomationOutcome,
     reasonCode: string,
     _detail?: string,
+    sequence?: number,
   ): AutomationReceipt {
-    const receipt = this.receipt(run, outcome, reasonCode);
+    const receipt = this.receipt(run, outcome, reasonCode, sequence);
     this.context.store.putReceipt(receipt);
     return receipt;
   }
@@ -436,6 +466,7 @@ export class TerminalDispatcher implements Dispatcher {
     run: AutomationRun,
     outcome: AutomationOutcome,
     reasonCode: string,
+    sequence?: number,
   ): AutomationReceipt {
     return create(AutomationReceiptSchema, {
       operationId: run.operationId,
@@ -443,7 +474,7 @@ export class TerminalDispatcher implements Dispatcher {
       outcome,
       // 序号从这次投递的尝试次数来：同一次尝试重复观察得到同一个序号，而下一次
       // 尝试的收据一定比上一次大。
-      sequence: big(Math.max(1, run.dispatchAttempts)),
+      sequence: big(sequence ?? Math.max(1, run.dispatchAttempts)),
       observedAtUnixMs: big(Math.max(1, this.now())),
       reasonCode,
     });

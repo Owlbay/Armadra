@@ -819,12 +819,42 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 ```text
 { "type": "workflow.draft", "draftId": "…", "boardId": "…", "status": "pending" }
 { "type": "workflow.run", "runId": "…", "boardId": "…", "status": "running", "stepId": "s1", "stepStatus": "done" }
-{ "type": "workflow.gate", "runId": "…", "boardId": "…", "stepId": "s3", "label": "合并前人工确认", "state": "waiting" }
+{ "type": "workflow.gate", "runId": "…", "boardId": "…", "stepId": "s3", "label": "合并前人工确认", "state": "waiting", "nodeId": "node-frame" }
 ```
 
 - `workflow.draft`：草案出现、被确认或丢弃。
 - `workflow.run`：运行或其中一步换了状态；只有运行换状态时没有 `stepId` / `stepStatus`。
-- `workflow.gate`：`state` 是 `waiting` / `approved` / `rejected` / `cancelled`。
+- `workflow.gate`：`state` 是 `waiting` / `approved` / `rejected` / `cancelled`；`nodeId` 是运行的 Frame（运行还没有 Frame 时缺席）。推送只在 `waiting` 时叫人，深链打开这个 Frame（§19）。
+
+### 15.6 自动化目标 `WORKFLOW_RUN`
+
+定时运行一个模板走 §4 的自动化面：计划的 `target.kind` 是 `AUTOMATION_TARGET_KIND_WORKFLOW_RUN`，`target.workflowRun` 指明模板与画布，参数是计划的**载荷**。misfire、并发、授权复核与运行记录都与别的目标相同；到点时 core 调工作流服务起跑（与 `POST /api/workflows/runs` 同一条路），不往任何终端写。共享层的 zod 是 `workflowRunTargetSchema` / `workflowRunPayloadSchema`（`packages/shared/src/api/workflows.ts`）。
+
+```json
+{
+  "target": {
+    "executionHostId": "…",
+    "kind": "AUTOMATION_TARGET_KIND_WORKFLOW_RUN",
+    "sessionId": "",
+    "generation": "0",
+    "nodeId": "",
+    "coldStartPolicy": "AUTOMATION_COLD_START_POLICY_SKIP",
+    "workflowRun": {
+      "templateId": "0192…",
+      "templateVersion": 3,
+      "boardId": "board"
+    }
+  }
+}
+```
+
+载荷（UTF-8，`POST /api/automations/plans` 的 `payload`）：`{"params":{"scope":"src/a"}}`，名字同 §15.1 的参数名规则、值是 ≤ 2000 字的字符串；空对象表示全用模板的缺省值。
+
+- **定义时核**：模板存在；`templateVersion` 给 0 时存成模板当前的版本，给了别的数必须等于当前版本（否则 `conflict`）；画布属于计划的工作空间（否则 `not_found`）；参数按模板校验（缺参数、未声明的参数、代入后超长都是 `bad_request`）。工作流目标不能带会话、代数、节点或启动定义，冷启动策略归成 `SKIP`。
+- **版本冻结**：模板之后改过（`PUT …/templates/{id}` 让版本变大）或被删，到点的探测答「不受支持」，这次运行记 `SKIPPED` / `TARGET_UNSUPPORTED`，连续几次后计划标「需要处理」；要人按新版本重新保存计划。
+- **闸门**按模板（`automation_gates.node_id = "workflow:<templateId>"`）：同一个模板同一时刻只有一个定时运行在跑，`FORBID` / `QUEUE_ONE` 照常生效。
+- **起跑即投递**：工作流运行的 id 由这次投递的 `operationId` 推出（SHA-256 → UUID 形），重试与超时之后的复核认得出「已经起过」，不会起第二次。起跑当场被拒（§15.3 那几种）记 `FAILED`，理由码是 `WORKFLOW_` + 拒绝码大写（如 `WORKFLOW_PERMISSION_MODE_UNSUPPORTED`）。
+- **收据跟着运行走**：运行在跑记 `RUNNING`（理由 `WORKFLOW_RUNNING` / 有关卡在等人时 `WORKFLOW_WAITING`），结束记 `SUCCEEDED` / `FAILED` / `CANCELLED`（理由 `WORKFLOW_SUCCEEDED` / `WORKFLOW_FAILED` / `WORKFLOW_CANCELLED`）；自动化运行因此从起跑占着闸门直到工作流运行结束。
 
 ## 16. 实时协同：`…/boards/{boardId}/sync` 与评论
 
