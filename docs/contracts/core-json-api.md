@@ -1368,6 +1368,34 @@ TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时
 - `POST /api/execution-hosts/{id}/resync`：丢掉这台主机的控制连接，重新握手（刚升级的 Worker 在这里报新版本），再把画布注入重新同步一次（开过画布 SSH 终端的主机立刻同步并重开中继；没开过的只清掉「待升级」记号）。答复与 `GET …/{id}` 同形。不存在 404 `not_found`；没配 Worker 501 `unsupported`；连不上或握手失败按远端的错误码答（如 503 `unavailable`）。权限与其余执行主机写路由相同（`settings:write`）。
 - `GET /api/agents/{id}/integration` 多一个 `outdatedHosts: [{ hostId, name?, version? }]`：舰队判为过旧的主机，加上注入同步时 Worker 只有 `remote.integration.v1` 的主机（§13.4），按主机 id 去重排序。每个 CLI 的集成状态给的是同一份表；没有远端域的 core 不给这个字段。`GET /api/agents` 的行**不**带它。
 
+### 21.3 健康探测历史
+
+`GET /api/execution-hosts`、`GET …/{id}` 与 `POST …/resync` 的 SSH 行多一个可选的 `health`：这次运行里这台主机最近 20 条健康记录，旧的在前；一条都没有时不出现，本机行永远没有。只在内存里，core 重启从空开始。
+
+```json
+[
+  {
+    "at": "2026-10-03T08:00:00.000Z",
+    "event": "handshake",
+    "ok": true,
+    "version": "0.1.0"
+  },
+  { "at": "2026-10-03T08:05:00.000Z", "event": "disconnected", "ok": false },
+  {
+    "at": "2026-10-03T08:06:00.000Z",
+    "event": "failed",
+    "ok": false,
+    "code": "unreachable"
+  }
+]
+```
+
+| `event`        | 何时记                                                                                                                  |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `handshake`    | 控制连接握手成功（含验证与重新同步触发的握手）；`version` 是对方报的 `runtimeVersion`，没报时不出现                     |
+| `disconnected` | 控制连接从在线变为断开                                                                                                  |
+| `failed`       | `POST …/validate` 没过（`code` 是答复的 `reason`；`noWorkerConfigured` 不记）或 `POST …/resync` 失败（`code` 是错误码） |
+
 ## 22. 投递画面门补充
 
 画面门（[投递设计](../design/agent-delivery.md) §4.3「画面门」）的判据在 `core/agent/screen-gate.ts`，「取画面 → 判定 → 退回理由」在 `core/collab/screen.ts::checkScreen`；`send`（§12）与计划投递共用这一份。线上没有新路由，变化只在理由码与判据。

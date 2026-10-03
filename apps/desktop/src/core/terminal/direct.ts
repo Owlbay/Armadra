@@ -27,7 +27,7 @@ import {
   trimCaptured,
 } from "./backend";
 import { asRecord, childEnvironment } from "./environment";
-import { childCommands, processTable, terminateTree } from "./process";
+import { childCommands, readProcessTable, terminateTree } from "./process";
 import { type Pty, openPty, releasePty } from "./pty";
 import { ReplayScreen } from "./replay-screen";
 
@@ -352,7 +352,7 @@ export class DirectBackend implements TerminalBackend {
   async getForeground(key: SessionKey): Promise<ForegroundInfo> {
     const session = this.require(key);
     if (session.pid === undefined) return { children: [] };
-    const table = processTable();
+    const table = await readProcessTable();
     const argv = table.get(session.pid)?.argv;
     return {
       pid: session.pid,
