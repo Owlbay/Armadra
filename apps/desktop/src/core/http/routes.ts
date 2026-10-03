@@ -868,12 +868,20 @@ export const ROUTES: readonly RouteEntry[] = [
   },
   {
     path: "/api/execution-hosts/{hostId}",
-    methods: ["PUT", "DELETE"],
+    // GET：Worker 舰队（契约 §21.2）加的单台主机读取。
+    methods: ["GET", "PUT", "DELETE"],
     surface: "runtime",
     implemented: true,
   },
   {
     path: "/api/execution-hosts/{hostId}/validate",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  // Worker 舰队（G1-2，契约 §21.2）：重连并重新同步画布注入。
+  {
+    path: "/api/execution-hosts/{hostId}/resync",
     methods: ["POST"],
     surface: "runtime",
     implemented: true,

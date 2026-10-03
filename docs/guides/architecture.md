@@ -127,7 +127,11 @@ Git 的路由做完权限与参数解析后，按工作空间的 `executionHostI
 服务走同一台主机上的第二个 Worker（`worker --stdio --language-link`，
 `core/remote/language.ts`），语言服务器是它的子进程；长时间没有会话时控制端
 关掉这条连接（`core/remote/language-idle.ts`），下次按需重连。交接材料经 Worker
-在执行主机上采集（`handoff.capture`）。比一帧大的上传与下载分块传输、按 Worker
+在执行主机上采集（`handoff.capture`，`core/remote/handoff-worker.ts`）；来源
+Agent 在另一台执行主机的 SSH 终端里时，只有它的转录到那台主机上读
+（`core/handoff/remote-capture.ts`，读不了答 501 `handoff_host_offline`）。控制
+连接每次握手的版本与能力汇成 Worker 舰队（`core/remote/fleet.ts`）：执行主机行的
+`worker`、集成状态的 `outdatedHosts` 与「重新同步」都读它。比一帧大的上传与下载分块传输、按 Worker
 已收的字节续传（`core/remote/transfer.ts`）。画布 SSH 终端里的 CLI 由 Worker
 同步过去的产物与垫片注入，Hook 经 Worker 的 unix socket 中继回控制端
 （`core/remote/integration.ts`，见[远端画布注入](../design/remote-canvas-injection.md)）。

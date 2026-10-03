@@ -355,6 +355,16 @@ export const settingsApi = {
       executionHostValidationSchema,
       { method: "POST" },
     ),
+  /** 单台主机的一行，带上次握手见到的 Worker（契约 §21.2）。 */
+  executionHost: (hostId: string) =>
+    request(`/api/execution-hosts/${query(hostId)}`, executionHostSchema),
+  /** 重连这台主机的 Worker 并重新同步画布注入；答更新后的那一行。 */
+  resyncExecutionHost: (hostId: string) =>
+    request(
+      `/api/execution-hosts/${query(hostId)}/resync`,
+      executionHostSchema,
+      { method: "POST" },
+    ),
   /** 可携带的主机表；里面没有任何能用来认证的东西。 */
   exportExecutionHosts: () =>
     request("/api/execution-hosts/export", executionHostPackageSchema),
