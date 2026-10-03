@@ -122,6 +122,34 @@ describe("目录服务", () => {
     expect(again.catalog.models[0]?.modelId).toBe("claude-opus-5");
   });
 
+  it("models.catalog.autoRefresh 关着时后台一次都不抓，手动刷新照常", async () => {
+    let enabled = false;
+    let fetched = 0;
+    const catalog = new CatalogService({
+      dataDir: directory,
+      now: () => clock,
+      autoRefresh: () => enabled,
+      fetch: async () => {
+        fetched += 1;
+        return UPSTREAM;
+      },
+    });
+    // 没有缓存 = 过期，开关一开就该抓。
+    await catalog.tick();
+    expect(fetched).toBe(0);
+    expect(catalog.current().source).toBe("builtIn");
+
+    enabled = true;
+    await catalog.tick();
+    expect(fetched).toBe(1);
+    expect(catalog.current().source).toBe("network");
+
+    enabled = false;
+    clock += REFRESH_COOLDOWN_MS + 1;
+    await catalog.refresh();
+    expect(fetched).toBe(2);
+  });
+
   it("同时来的两次刷新共用那一次抓取", async () => {
     const catalog = service([UPSTREAM, OTHER]);
     const [first, second] = await Promise.all([
