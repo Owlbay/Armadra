@@ -656,7 +656,26 @@
 
 ## G3-11 存量界面套用二：对话框与其余页面（WP-D3b）
 
-未开始。
+**做了什么**
+
+- 对话框接 `ResponsiveDialog`（≤767 走底部 Sheet）：Overlays 里的起名、Agent 设置、SSH 口令、交接，编辑器的另存为 / 迁移，Agent 凭据、主机密钥、关于、账号与共享、快捷键、节点标注、GitHub 状态映射、Mermaid 导入，新建 Agent 向导（原来手写的 Sheet 分支删掉）。`AlertDialog`（确认类）保持居中。
+- 空态 / 加载 / 错误换 `Empty / Skeleton / Alert`：自动化抽屉与运行记录、计划表单的提示框、工作流面板的错误与无权限、后台服务页的连接状态、身份面的错误、编辑器节点（慢读延时 Skeleton、失败 Alert +「重试」）、安全页通行密钥与会话列表的首次加载、Agent 设置页自定义 Agent 空态、更新页（下载中 `Progress`、失败 `Alert destructive`）。
+- 后台服务页两份设备表并成一份：身份面只报会话（`onSession`），对外服务的设备表（`GatewayDevices`）标「当前」、按管理权给撤销、分页「加载更多」；成员（读不到 `/api/gateway`）也能看到自己的设备；撤销了本机就让身份面重新取会话。
+- 对外服务显示 ACME 续期失败（`tls.acme.failures > 0`）：`Alert destructive` + 下次重试时间。
+- 终端节点头部：运行中工作流步骤的「第 n 步」（`workflow/node-steps.tsx`，运行列表每块画板只取一次，挂在 `DraftLayer`）；答不了审批的人看到「等待接管」。
+- `CommandInput` 调用处补焦点环（`COMMAND_INPUT_FOCUS`，守卫测试）；手机上 sonner 改从顶部出；浅色主题图片棋盘格改为卡片底与掺 10% 前景色两档；删除旧别名 `--accent-text / --accent-soft`（`tokens.test` 断言不再出现）。
+- 剩下的手写 `<button>` 全部换 `Button`，`no-raw-button` 守卫改为扫整个 `src/`（`ui/` 与测试除外）。
+- 展示页：协调者（ama 分派三成员、第 n 步、草案卡）与更新（十一种状态，抽出 `UpdateStatusRows` / `UpdateStatusNotes` 复用）换成真样本；对外服务加续期失败与「当前」设备；组件分区补 `command`；通用五态加「等待接管」；占位组件删除。
+
+**实测**
+
+- `design-showcase.mjs --diff`（与开工前基线比）：84 张全部生成，`status: ok`，控制台无错误；对比度深色 84 对最低 3.25、浅色 85 对最低 3.07；`components` Tab 可达 81/81 且每处都有焦点环；减少动效静止、强制颜色焦点可见。36 张有变化，集中在 coordinator / updates / gateway（新样本）、states、components、mobile（按键条换 `Button`），canvas 的 2–5% 是流光动画帧。
+- 代表截图：[协调者](assets/g3-11/coordinator-dark-1440.png)、[更新十一态](assets/g3-11/updates-dark-1440.png)、[对外服务](assets/g3-11/gateway-light-1440.png)、[组件](assets/g3-11/components-light-1024.png)、[通用五态（手机）](assets/g3-11/states-dark-390.png)、[手机](assets/g3-11/mobile-dark-390.png)。
+
+**没做**
+
+- `AlertDialog` 没有手机底部形态（`ResponsiveDialog` 只对应 `Dialog`）；命令面板、设置对话框、合并 / 编辑预览这类整屏对话框保持原样。
+- 设备表仍没有「平台」「最近访问」两列（接口不给）；协调者的右侧分派抽屉（设计系统 §5.4）没有实现组件，展示页用画布上的真节点表达。
 
 <!-- G4 收口 -->
 
