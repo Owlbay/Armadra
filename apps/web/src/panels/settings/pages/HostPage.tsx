@@ -6,14 +6,17 @@ import { useHostConnection } from "../../../host/use-host-connection";
 import { SettingsGroup } from "../SettingsGroup";
 import { Button } from "@/ui/button";
 import { HostIdentityPanel } from "./HostIdentityPanel";
+import { PageCaGuide } from "./gateway/CaInstallGuide";
+import { GatewaySection } from "./gateway/GatewaySection";
 
 /**
  * 设置 → 后台服务。
  *
  * 以前这里有一个服务地址可以填：Runtime 与 Go Host 是两个进程，页面要能被指向
  * 另一台机器上的 Host。单一 core 之后没有第二个地址——桌面壳里端口由壳给，
- * 服务器壳里它就是这张页面的来源——所以这一页只剩「连得上吗」和「这台设备
- * 登录了吗」两件事。
+ * 服务器壳里它就是这张页面的来源——所以这一页说的是「连得上吗」「这台设备
+ * 登录了吗」，以及对外服务（Gateway，补全架构 §7）：开关、配对二维码与已配对
+ * 设备。经 Gateway 打开时顶上多一个 CA 安装引导。
  */
 export function HostPage() {
   const t = useT();
@@ -38,6 +41,7 @@ export function HostPage() {
       <p className="text-[13px] leading-5 text-muted-foreground">
         {t("host.note")}
       </p>
+      <PageCaGuide />
       <SettingsGroup>
         <div className="flex min-w-0 flex-col gap-3 px-4 py-3">
           <div className="flex flex-wrap gap-2">
@@ -118,6 +122,7 @@ export function HostPage() {
           </details>
         )}
       </SettingsGroup>
+      <GatewaySection />
       <HostIdentityPanel
         hello={state.status === "connected" ? state.hello : undefined}
       />

@@ -189,6 +189,13 @@ export const IPC = {
    * partition 由主进程按前缀判定。
    */
   browserClearData: spec("browser:clear-data", "invoke", "window"),
+
+  /**
+   * The page changed `gateway.*` (settings → external access); the tray's
+   * check mark re-reads `GET /api/gateway` instead of waiting for its poll.
+   * Carries nothing: the tray asks the core, not the page.
+   */
+  gatewayRefresh: spec("app:gateway-refresh", "invoke", "window"),
 } as const satisfies Record<string, ChannelSpec>;
 
 export type ChannelName = (typeof IPC)[keyof typeof IPC]["channel"];
@@ -226,6 +233,7 @@ export const IMPLEMENTED_CHANNELS: readonly string[] = [
   IPC.browserView.channel,
   IPC.browserControl.channel,
   IPC.browserClearData.channel,
+  IPC.gatewayRefresh.channel,
 ];
 
 /** What `browser:clear-data` answers. */
