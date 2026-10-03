@@ -68,9 +68,14 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      # 没有任何签名 secret：dist 自己报告跳过签名，产物照出。
+      # 没有任何签名 secret：dist 自己报告跳过签名，产物照出。发布构建
+      # （ARMADRA_DIST_RELEASE=1，不带本地构建的停更标记）：与 release.yml 出的包
+      # 同一种，update-e2e 也只认这种（AppImage 里的标记读不出来，本地构建会在
+      # 起来后答 localBuild）。
       - name: 打 Linux 包
         shell: bash
+        env:
+          ARMADRA_DIST_RELEASE: "1"
         run: |
           set -euo pipefail
           pnpm libs:build
