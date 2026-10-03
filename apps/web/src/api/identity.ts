@@ -18,6 +18,8 @@ import { RUNTIME_URL } from "./request";
  *    Cookie + 双提交的 CSRF 头。配对材料从地址栏的 `#pair=<票>` 来。
  *
  * 凭据只在内存里：不写 localStorage、不进 URL、不发往本源以外的任何地方。
+ * 同一浏览器里的几个窗口共用一条 Cookie 会话，也就共用一枚 CSRF：谁换了新的，
+ * 经同源的 `BroadcastChannel` 告诉其它窗口（见下面的「多窗口」）。
  */
 
 const PREFIX = "/api/identity/";
@@ -144,19 +146,76 @@ function announce(): void {
   }
 }
 
-/** 记住（或作废）一枚刚拿到的 CSRF 令牌。 */
+/* ------------------------------- 多窗口 -------------------------------- */
+
+/**
+ * 同一浏览器的几个窗口是**同一条会话**，core 每条会话只认一枚 CSRF，而
+ * `session/csrf` 每换一次就把上一枚作废。各窗口各换各的，就是互相作废：
+ * 新开的窗口换一枚，先开的那个下一次写就 403，它再换一枚，又轮到新窗口
+ * 403……「403 → 换一枚 → 重发一次」在两边同时换的时候也救不回来，新窗口
+ * 打开工作空间的那次写落空，画布就停在空白上。
+ *
+ * 所以换出来的新令牌经同源的 `BroadcastChannel` 告诉其它窗口，它们直接改用；
+ * 真要去换的时候先拿同一把 Web Lock，拿到锁再看一眼是不是别的窗口刚换过。
+ * 令牌仍然只在各窗口的内存里，不落任何存储。没有这两样 API 的环境（桌面壳的
+ * 单窗口、测试）退回各窗口各管各的。
+ */
+const CSRF_CHANNEL = "armadra.identity.csrf";
+const CSRF_RENEW_LOCK = "armadra.identity.csrf-renew";
+
+const csrfChannel: BroadcastChannel | null =
+  typeof BroadcastChannel === "function"
+    ? new BroadcastChannel(CSRF_CHANNEL)
+    : null;
+csrfChannel?.addEventListener("message", (event: MessageEvent) => {
+  const token = (event.data as { csrf?: unknown } | null)?.csrf;
+  if (typeof token === "string") adoptCsrf(token);
+});
+
+/** 别的窗口换来的令牌：直接改用，不再往外转。 */
+function adoptCsrf(value: string): void {
+  if (!SECRET.test(value) || value === csrf) return;
+  const had = csrf !== "";
+  csrf = value;
+  // 本来没有令牌的窗口这才算有了会话；已经有的只是换了一枚，不算会话变化。
+  if (!had) announce();
+}
+
+/** 在跨窗口的那把锁里跑；没有 Web Locks 时直接跑。 */
+function withRenewLock<T>(task: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
+  if (!locks?.request) return task();
+  return locks.request(CSRF_RENEW_LOCK, task) as Promise<T>;
+}
+
+/** 记住（或作废）一枚刚拿到的 CSRF 令牌；新的一枚告诉其它窗口。 */
 export function rememberCsrf(value: string): void {
   const next = SECRET.test(value) ? value : "";
   const changed = next !== csrf;
   csrf = next;
   renewing = null;
+  if (changed && next) csrfChannel?.postMessage({ csrf: next });
   if (changed) announce();
 }
 
-/** 收到 403 后作废本地这枚，下一次写请求会重新取。 */
-export function forgetCsrf(): void {
+/**
+ * 收到 403 后作废本地这枚，下一次写请求会重新取。给了 `rejected` 时只在手里
+ * 还是被拒的那一枚才作废：别的窗口这期间已经换来了新的，就留着用。
+ */
+export function forgetCsrf(rejected?: string): void {
+  if (rejected !== undefined && rejected !== csrf) return;
   csrf = "";
   renewing = null;
+}
+
+/**
+ * 一次写请求带着 `rejected` 被 403 了：给出该重发用的那枚。别的窗口已经换过
+ * 并告诉了这里，就用它，不再换（再换一次又会作废那个窗口手里的）；否则作废
+ * 本地这枚，在锁里换一枚。
+ */
+export async function replaceRejectedCsrf(rejected: string): Promise<string> {
+  forgetCsrf(rejected);
+  return ensureCsrf();
 }
 
 /** 仅供测试与 `api/request.ts` 读取当前内存值。 */
@@ -181,7 +240,8 @@ export function resetIdentityCredentials(): void {
  */
 export async function ensureCsrf(): Promise<string> {
   if (csrf) return csrf;
-  renewing ??= renewCsrf()
+  // 等锁的这段时间里别的窗口可能已经换好并告诉了这里：拿到锁先看一眼。
+  renewing ??= withRenewLock(() => (csrf ? Promise.resolve(csrf) : renewCsrf()))
     .catch(() => "")
     .finally(() => {
       renewing = null;

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { isServerShellServed, resolveRuntimeUrl } from "./runtime-url";
-import { ensureCsrf, forgetCsrf } from "./identity";
+import { ensureCsrf, replaceRejectedCsrf } from "./identity";
 import { t } from "../app/preferences-store";
 
 /**
@@ -174,17 +174,19 @@ export async function request<T>(
   const guarded = RUNTIME_VIA_SERVER_SHELL && unsafeMethod(init?.method);
   let response: Response;
   try {
-    response = await send(path, init, guarded ? await ensureCsrf() : "");
+    const used = guarded ? await ensureCsrf() : "";
+    response = await send(path, init, used);
     // A rotated token is the one failure worth retrying: the request never
     // reached a handler, so nothing was executed twice. Any other 403 is the
     // core refusing this device, and repeating it would not change that.
+    // Another window of this browser may have rotated it already and said so;
+    // then that one is used rather than rotating it away again.
     if (
       guarded &&
       response.status === 403 &&
       !(init?.body instanceof FormData)
     ) {
-      forgetCsrf();
-      const renewed = await ensureCsrf();
+      const renewed = await replaceRejectedCsrf(used);
       if (renewed) response = await send(path, init, renewed);
     }
   } catch (cause) {
