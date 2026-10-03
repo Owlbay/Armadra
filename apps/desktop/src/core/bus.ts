@@ -202,6 +202,29 @@ export interface WorkspaceEventPayloads {
     readonly size: number | null;
     readonly mtime: string | null;
   };
+  /**
+   * 工作流（契约 §15.4）：草案出现或换了状态、一次运行或它的某一步换了状态、
+   * 一个关卡开始等人或被答复。页面据此重读 `/api/workflows/*`，帧里不带正文。
+   */
+  "workflow.draft": {
+    readonly draftId: string;
+    readonly boardId: string;
+    readonly status: string;
+  };
+  "workflow.run": {
+    readonly runId: string;
+    readonly boardId: string;
+    readonly status: string;
+    readonly stepId?: string;
+    readonly stepStatus?: string;
+  };
+  "workflow.gate": {
+    readonly runId: string;
+    readonly boardId: string;
+    readonly stepId: string;
+    readonly label: string;
+    readonly state: "waiting" | "approved" | "rejected" | "cancelled";
+  };
 }
 
 export type WorkspaceEventType = keyof WorkspaceEventPayloads;
@@ -245,6 +268,9 @@ export const WORKSPACE_EVENT_TYPES = [
   "language.session",
   "language.server",
   "file.changed",
+  "workflow.draft",
+  "workflow.run",
+  "workflow.gate",
 ] as const satisfies readonly WorkspaceEventType[];
 
 export interface CoreEvents {
