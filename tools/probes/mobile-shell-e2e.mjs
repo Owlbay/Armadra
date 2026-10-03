@@ -198,6 +198,8 @@ function simulator(name) {
 async function ios(link) {
   const target = simulator(device);
   step("iOS 模拟器", target);
+  // 先自己起好：xcodebuild 跑完不关它，之后才读得到 App 的设备日志。
+  await run("simulator-boot", "xcrun", ["simctl", "boot", target]);
   const project = join(root, "apps/mobile/ios/App/App.xcodeproj");
   const code = await run(
     "xcodebuild-test",
@@ -217,11 +219,10 @@ async function ios(link) {
       "-resultBundlePath",
       join(output, "AppUITests.xcresult"),
       "-only-testing:AppUITests",
-      "CODE_SIGNING_ALLOWED=NO",
     ],
     { env: { ...process.env, TEST_RUNNER_ARMADRA_PAIR_LINK: link } },
   );
-  // App 的设备日志（Capacitor 在 debug 构建里把页面控制台也写进去），失败时看卡在哪。
+  // App 的设备日志（插件只记钉扎结果、不记密钥），失败时看卡在哪。
   await run("simulator-log", "xcrun", [
     "simctl",
     "spawn",
@@ -233,7 +234,7 @@ async function ios(link) {
     "--style",
     "compact",
     "--predicate",
-    'process == "App"',
+    'subsystem == "dev.armadra.mobile" OR process == "App"',
   ]);
   check(
     code === 0,

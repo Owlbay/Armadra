@@ -68,9 +68,9 @@ Go Host 用 `--serve-web <dist>` 在它自己的 HTTPS 来源上托管这份前�
 ```sh
 pnpm libs:build && pnpm --filter @armadra/web build
 pnpm --filter @armadra/mobile sync          # 拷页面产物进 www/、插插件桥、cap sync
-# iOS 模拟器（不签名）
+# iOS 模拟器（「Sign to Run Locally」，不要证书；关掉签名的包在模拟器上拿不到钥匙串）
 xcodebuild build -project apps/mobile/ios/App/App.xcodeproj -scheme App \
-  -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO
+  -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'
 # Android debug APK（要 Android SDK 与 JDK 21）
 (cd apps/mobile/android && ./gradlew :armadra-native-core:test :app:assembleDebug)
 ```

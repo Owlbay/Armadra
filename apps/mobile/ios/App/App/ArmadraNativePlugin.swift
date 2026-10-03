@@ -4,6 +4,7 @@ import Foundation
 import UIKit
 import UserNotifications
 import WebKit
+import os
 
 /// 原生插件 `ArmadraNative`：页面一半在 `apps/web/src/mobile/native-bridge.ts`，约定
 /// 写在那个文件头里（参数与返回都是一个对象）。
@@ -36,6 +37,8 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
     }
 
     private static let installedFlag = "dev.armadra.mobile.installed"
+    /// 只记结果（钉扎成没成、为什么），不记来源以外的任何参数，更不记密钥。
+    private static let log = Logger(subsystem: "dev.armadra.mobile", category: "native")
     /// 会话密钥：`<32 位十六进制标识>.<43 位 base64url>`（core `identity/tokens.ts`）。
     private static let secret = "^[0-9a-f]{32}\\.[A-Za-z0-9_-]{43}$"
 
@@ -129,14 +132,17 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
         AnchorFetch.run(origin: url) { [weak self] fetched in
             guard let self else { return }
             var pin = Pin(origin: origin, fingerprint: fingerprint)
+            Self.log.info("pin: fetched \(fetched?.count ?? -1, privacy: .public) certificate(s)")
             if let fetched {
                 guard let anchor = PinPolicy.anchor(presented: fetched, pin: pin) else {
+                    Self.log.error("pin: no fetched certificate matches the pinned fingerprint")
                     call.reject("fingerprint mismatch")
                     return
                 }
                 pin.anchor = anchor
             }
             guard let data = try? JSONEncoder().encode(pin), self.store.write(Account.pin, data) else {
+                Self.log.error("pin: keychain write failed")
                 call.reject("keychain unavailable")
                 return
             }
@@ -159,7 +165,9 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
             completionHandler(.performDefaultHandling, nil)
             return true
         }
-        if PinPolicy.evaluate(trust: trust, host: space.host, pin: pin) {
+        let trusted = PinPolicy.evaluate(trust: trust, host: space.host, pin: pin)
+        Self.log.info("tls: pinned origin \(trusted ? "trusted" : "refused", privacy: .public)")
+        if trusted {
             completionHandler(.useCredential, URLCredential(trust: trust))
         } else {
             // 不自动信任新证书（补全架构 §7「证书轮换」）：握手失败，页面提示重新扫码。
