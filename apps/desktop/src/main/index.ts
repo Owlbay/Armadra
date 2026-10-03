@@ -1,4 +1,5 @@
 import { app, dialog, ipcMain, safeStorage, session } from "electron";
+import { writeSync } from "node:fs";
 import { join } from "node:path";
 import {
   ALL_CHANNELS,
@@ -14,6 +15,7 @@ import {
 import { dataDir } from "../shell-core/paths";
 import { DEFAULT_DEV_RENDERER_URL } from "../shell-core/window-rules";
 import {
+  APP_NAME,
   iconPath,
   setAboutPanel,
   setApplicationName,
@@ -73,6 +75,18 @@ import {
 import { applyShortcuts, releaseShortcuts } from "./shortcuts";
 import { createTray, destroyTray, refreshGateway } from "./tray";
 import { ownsRuntime } from "../shell-core/runtime/identity";
+import { versionLine } from "./version-flag";
+
+// `armadra --version` answers and leaves before anything below is assembled:
+// no window, no Runtime, no data directory (see version-flag.ts). The write is
+// synchronous because stdout to a pipe is not on every platform.
+{
+  const line = versionLine(process.argv, APP_NAME, app.getVersion());
+  if (line !== null) {
+    writeSync(1, line);
+    process.exit(0);
+  }
+}
 
 /**
  * The application's assembly. Everything with a rule worth stating lives in
