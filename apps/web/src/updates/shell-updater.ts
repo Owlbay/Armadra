@@ -62,6 +62,7 @@ export const SHELL_REASONS = [
   "hostStopFailed",
   "installFailed",
   "updaterUnavailable",
+  "notSigned",
 ] as const;
 
 export type ShellReason = (typeof SHELL_REASONS)[number];

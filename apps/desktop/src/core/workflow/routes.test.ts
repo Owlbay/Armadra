@@ -7,7 +7,10 @@ import type { CoreRequest } from "../http/router";
 import { routeScope } from "../http/route-scopes";
 import { WorkflowEngine } from "./engine";
 import { setWorkflowDomain } from "./registry";
-import { answerWorkflowRequest, workflowRoutes } from "./routes";
+import { nodeCreator } from "../identity/creators";
+import { runAs } from "../identity/gate";
+import { scope } from "../identity/scopes";
+import { GATE_SCOPE, answerWorkflowRequest, workflowRoutes } from "./routes";
 import { WorkflowService } from "./service";
 
 /**
@@ -288,5 +291,58 @@ describe("/api/workflows", () => {
     expect(routeScope("POST", "/api/workflows/runs")?.permission).toBe(
       "agent:launch",
     );
+    // 关卡答复（契约 §23）：operator，不是替 Agent 代答的 `approval:answer`。
+    expect(
+      routeScope("POST", "/api/workflows/runs/r1/gates/s1")?.permission,
+    ).toBe(GATE_SCOPE);
+    expect(GATE_SCOPE).toBe("agent:launch");
+  });
+
+  it("records whoever started the run as its role nodes' creator (§23)", async () => {
+    const created = await call("POST", "/api/workflows/templates", {
+      name: "成员起跑",
+      template: DRAFT,
+    });
+    const templateId = (created.body.template as { id: string }).id;
+    const started = await runAs(
+      {
+        subject: {
+          principalId: "operator-1",
+          kind: "member",
+          scopes: [scope("identity:read")],
+        },
+      },
+      () =>
+        call("POST", "/api/workflows/runs", {
+          templateId,
+          params: { scope: "src" },
+          boardId: fixture.boardId,
+        }),
+    );
+    expect(started.status).toBe(201);
+    const row = fixture.database
+      .prepare("SELECT roles_json FROM workflow_runs WHERE id = ?")
+      .get((started.body.run as { id: string }).id) as { roles_json: string };
+    const roles = Object.values(JSON.parse(row.roles_json) as object);
+    expect(roles).toHaveLength(1);
+    for (const nodeId of roles) {
+      expect(nodeCreator(fixture.database, nodeId as string)).toBe(
+        "operator-1",
+      );
+    }
+    // 桌面壳、owner：记空串。
+    const local = await call("POST", "/api/workflows/runs", {
+      templateId,
+      params: { scope: "src" },
+      boardId: fixture.boardId,
+    });
+    const localRow = fixture.database
+      .prepare("SELECT roles_json FROM workflow_runs WHERE id = ?")
+      .get((local.body.run as { id: string }).id) as { roles_json: string };
+    for (const nodeId of Object.values(
+      JSON.parse(localRow.roles_json) as object,
+    )) {
+      expect(nodeCreator(fixture.database, nodeId as string)).toBe("");
+    }
   });
 });

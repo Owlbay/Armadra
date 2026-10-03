@@ -86,6 +86,11 @@ export const terminalSessionSchema = z.object({
    * 可以在同一个会话 id 上接回来。旧 core 不报这个字段。
    */
   hibernation: z.enum(["hibernated"]).nullable().optional(),
+  /**
+   * 创建者 = 触发者（契约 §23）：服务器壳上「自己起的终端」按它判，空串是本机
+   * owner。`GET /api/terminals/{id}` 带它，起会话的回答与旧 core 不带。
+   */
+  creatorPrincipalId: z.string().optional(),
 });
 
 /** `GET /api/terminals/backend` — which backend is in effect (plan §15.1). */

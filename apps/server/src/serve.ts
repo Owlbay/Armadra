@@ -1,5 +1,6 @@
 import { DOMAINS, type RunningCore, run } from "../../desktop/src/core/main";
-import { gatewayDomainOf } from "../../desktop/src/core/gateway";
+import { gatewayDomainOf, startAcme } from "../../desktop/src/core/gateway";
+import type { AcmeManager } from "../../desktop/src/core/gateway/acme";
 import {
   type Gateway,
   openGateway,
@@ -41,6 +42,12 @@ export interface ServeOptions {
   readonly webRoot: string;
   readonly certFile?: string | undefined;
   readonly keyFile?: string | undefined;
+  /**
+   * ACME 的联系邮箱（`--acme` / `ARMADRA_ACME_EMAIL`）：给了就由 core 的 ACME
+   * 管理器签证书并续期（`core/gateway/acme.ts`），其余 `ARMADRA_ACME_*` 从
+   * `env` 读。与 `certFile` / `keyFile` 互斥。
+   */
+  readonly acmeEmail?: string | undefined;
   readonly deviceName: string;
   /** 启动时铸一张配对票并打印。`--no-pairing` 时为假。 */
   readonly pairing: boolean;
@@ -115,6 +122,18 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
       `拒绝在 ${options.listen.host} 上监听而不声明对外来源：加 --public-origin https://主机名`,
     );
   }
+  const acmeEmail = options.acmeEmail?.trim() || undefined;
+  if (
+    acmeEmail !== undefined &&
+    (options.certFile !== undefined || options.keyFile !== undefined)
+  ) {
+    throw new Error("--acme 与 --tls-cert / --tls-key 只能二选一");
+  }
+  if (acmeEmail !== undefined && options.publicOrigins.length === 0) {
+    throw new Error(
+      "--acme 需要 --public-origin https://域名：证书签给对外来源的主机名",
+    );
+  }
   const webRoot = await openWebRoot(options.webRoot);
   const env: NodeJS.ProcessEnv = {
     ...(options.env ?? process.env),
@@ -154,25 +173,41 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
   const hasAdmin = () => store.transaction((tx) => tx.owner() !== undefined);
 
   let gateway: Gateway;
+  let acme: AcmeManager | undefined;
   try {
+    // ACME 先签（或读出数据目录里还能用的那张）再监听。
+    acme =
+      acmeEmail === undefined
+        ? undefined
+        : await startAcme(core, {
+            email: acmeEmail,
+            publicOrigins: options.publicOrigins,
+            env,
+          });
     gateway = await openGateway(core, {
       listen: options.listen,
       publicOrigins: options.publicOrigins,
       hosts: () => [options.listen.host],
-      tls: {
-        certFile: options.certFile,
-        keyFile: options.keyFile,
-        generated: "selfSigned",
-      },
+      tls:
+        acme !== undefined
+          ? { generated: "acme" }
+          : {
+              certFile: options.certFile,
+              keyFile: options.keyFile,
+              generated: "selfSigned",
+            },
       webRoot,
       deviceName: options.deviceName,
     });
   } catch (error) {
+    await acme?.close();
     await core.stop();
     throw error;
   }
+  // 续期成功后热换证书，已有连接不断。
+  acme?.onRenewed(() => gateway.refresh());
   // `/api/gateway` 报的就是这一个；它的配置来自命令行，设置页改不动它。
-  gatewayDomainOf(core.server)?.adopt(gateway);
+  gatewayDomainOf(core.server)?.adopt(gateway, acme);
   const origin = gateway.origin();
   const hostId = gateway.hostId;
 
@@ -209,7 +244,12 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
   const tls = gateway.tls();
   log.info("Armadra 服务器壳已就绪", {
     origin,
-    tls: tls.selfSigned ? "自签名" : tls.certFile,
+    tls:
+      tls.source === "acme"
+        ? `ACME（有效期至 ${tls.notAfter}）`
+        : tls.selfSigned
+          ? "自签名"
+          : tls.certFile,
     webRoot: webRoot.directory,
   });
   let pairingTicket: string | undefined;
@@ -238,6 +278,7 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
     invite,
     stop: async () => {
       await gateway.close();
+      await acme?.close();
       await core.stop();
     },
   };

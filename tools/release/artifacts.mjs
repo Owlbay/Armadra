@@ -131,10 +131,10 @@ export function assetTarget(name) {
  * drift apart.
  *
  * The names below are NOT electron-builder's own. It writes
- * `Armadra-0.1.0-arm64.dmg`, `Armadra Setup 0.1.0.exe` and
+ * `Armadra-0.1.0-arm64.dmg`, `Armadra-Setup-0.1.0-arm64.exe` and
  * `armadra_0.1.0_amd64.deb`, and none of those declares a target `assetTarget`
- * can read (it finds nothing in `arm64` or `amd64`, and a space in a
- * name is its own problem). `stage-desktop.mjs` looks each bundle up by `kind`
+ * can read (it finds nothing in `arm64` or `amd64`). None of them, and none
+ * of the names below, has a space: Azure Artifact Signing cannot sign one. `stage-desktop.mjs` looks each bundle up by `kind`
  * and renames it to the name here, so the rename is stated once rather than
  * repeated as a `find` in every release job.
  *

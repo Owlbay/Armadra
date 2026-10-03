@@ -12,9 +12,15 @@
 //      owner；后台服务页里有 CA 安装引导、对外服务开着、二维码里是同一个来源、
 //      已配对设备表里有这台；在页面上点开关关掉 Gateway，回环上读到已关，
 //      再从回环打开继续后面的步骤；
-//   5. 关掉 Gateway，连接被拒。
+//   5. 「成员注册 passkey 后用它登录」（G2-8）：公网来源设成
+//      `https://localhost:<端口>`（WebAuthn 不认 IP 字面量），无头 Chrome 的
+//      独立上下文里兑换邀请成为成员，CDP 的 WebAuthn 虚拟认证器代替指纹；
+//      在设置 → 安全里点「添加通行密钥」，清掉 Cookie 后在同一页点「使用通行
+//      密钥」登录回同一个成员；审计里有 `identity.passkey.add` 与
+//      `identity.login`（`method: "passkey"`）；
+//   6. 关掉 Gateway，连接被拒。
 //
-// 第 4 步要页面产物（`apps/web/dist`，CI 的 e2e 作业先 build）与 Chrome；
+// 第 4、5 步要页面产物（`apps/web/dist`，CI 的 e2e 作业先 build）与 Chrome；
 // 没有页面产物记 `page: "skipped"`。
 //
 // 设了 `ARMADRA_DEV_STACK=1` 且 dev-stack 的 step-ca 在跑时，加一段「指定文件」
@@ -336,10 +342,13 @@ await h.run(async () => {
     String(gateway.status),
   );
 
-  if (hasPage) await fromThePage(base, origin);
-  else {
+  if (hasPage) {
+    await fromThePage(base, origin);
+    await passkeyFromThePage(base, owner, workspaceId);
+  } else {
     report.page = "skipped";
-    step("没有 apps/web/dist，「从页面开关」一段 skipped");
+    report.passkey = "skipped";
+    step("没有 apps/web/dist，「从页面开关」与 passkey 两段 skipped");
   }
 
   if (process.env.ARMADRA_DEV_STACK === "1") {
@@ -476,4 +485,156 @@ async function fromThePage(base, origin) {
     "从回环再打开，来源不变",
     reopened.origin,
   );
+}
+
+/**
+ * 第 5 步：成员注册 passkey 后用它登录（补全计划 G2-8）。WebAuthn 只认域名，
+ * 所以先把公网来源设成 `https://localhost:<端口>`——Gateway 的来源集合与证书
+ * 主机名随之加上 localhost，RP ID 取它的主机名。认证器是 CDP 的虚拟认证器
+ * （内置、可发现凭据、用户验证自动通过），页面里跑的是真的
+ * `navigator.credentials.create / get`。
+ */
+async function passkeyFromThePage(base, owner, workspaceId) {
+  const port = new URL(
+    JSON.parse((await local(base, "GET", "/api/gateway")).body).origin,
+  ).port;
+  const publicOrigin = `https://localhost:${port}`;
+  const configured = JSON.parse(
+    (await local(base, "PUT", "/api/gateway", { publicOrigin })).body,
+  );
+  check(
+    configured.running && configured.publicOrigin === publicOrigin,
+    "公网来源设成 localhost（passkey 不认 IP）",
+    publicOrigin,
+  );
+  const invited = await owner.call("/api/identity/invitations", {
+    method: "POST",
+    body: { role: "viewer", targetWorkspaceId: workspaceId },
+  });
+  check(
+    invited.status === 201,
+    "owner 再签一张邀请给 passkey 成员",
+    invited.status === 201 ? "" : invited.body,
+  );
+  const token = JSON.parse(invited.body).token;
+
+  const chrome = await startChrome(h);
+  const page = await chrome.open({ name: "passkey-page", isolated: true });
+  await page.call("WebAuthn.enable", { enableUI: false });
+  const { authenticatorId } = await page.call(
+    "WebAuthn.addVirtualAuthenticator",
+    {
+      options: {
+        protocol: "ctap2",
+        transport: "internal",
+        hasResidentKey: true,
+        hasUserVerification: true,
+        isUserVerified: true,
+        automaticPresenceSimulation: true,
+      },
+    },
+  );
+  await page.navigate(`${publicOrigin}/`);
+  await page.settle();
+  const registered = await page.evaluate(`
+    const answer = await fetch("/api/identity/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: ${JSON.stringify(token)},
+        displayName: "通行密钥成员", password: "correct horse battery staple" }),
+    });
+    const body = await answer.json();
+    return { status: answer.status, principalId: body.device?.principalId ?? "" };
+  `);
+  check(
+    registered.status === 201 && registered.principalId !== "",
+    "页面里兑换邀请成为成员（localhost 来源）",
+  );
+  await page.navigate(`${publicOrigin}/`);
+  await page.settle();
+
+  const openSecurity = async () => {
+    await page.click("button", "设置");
+    await page.waitFor(
+      `return !!document.querySelector('[role="dialog"] nav');`,
+    );
+    await page.click('[role="dialog"] nav button', "安全");
+    await sleep(600);
+  };
+  await openSecurity();
+  await page.click('[role="dialog"] button', "添加通行密钥");
+  await page.waitFor(
+    `return [...document.querySelectorAll('[role="dialog"] table td')]
+       .some((cell) => cell.innerText.includes("Chrome"));`,
+    { what: "通行密钥表里出现新登记的一行", timeout: 30_000 },
+  );
+  const { credentials } = await page.call("WebAuthn.getCredentials", {
+    authenticatorId,
+  });
+  check(
+    credentials.length === 1 && credentials[0].isResidentCredential,
+    "虚拟认证器里有一把可发现凭据，页面列表里有这一行",
+    credentials[0]?.rpId,
+  );
+  check(
+    credentials[0]?.rpId === "localhost",
+    "RP ID 是公网来源的主机名",
+    credentials[0]?.rpId,
+  );
+  await page.capture("passkey-added");
+
+  // 登出：清掉这个上下文的 Cookie，页面重载后安全页就是登录。
+  await page.call("Network.clearBrowserCookies");
+  await page.navigate(`${publicOrigin}/`);
+  await page.settle();
+  await openSecurity();
+  await page.waitFor(
+    `return [...document.querySelectorAll('[role="dialog"] button')]
+       .some((node) => node.innerText.includes("使用通行密钥"));`,
+    { what: "没登录时安全页给出登录（含通行密钥按钮）" },
+  );
+  await page.capture("passkey-sign-in");
+  await page.click('[role="dialog"] button', "使用通行密钥");
+  await page.waitFor(
+    `return [...document.querySelectorAll('[role="dialog"] h3')]
+       .some((node) => node.innerText.includes("会话与设备"));`,
+    { what: "用通行密钥登录后安全页回来", timeout: 30_000 },
+  );
+  const who = await page.evaluate(`
+    const answer = await fetch("/api/identity/session");
+    const body = await answer.json();
+    return body.device?.principalId ?? "";
+  `);
+  check(
+    who === registered.principalId,
+    "通行密钥登录回同一个成员",
+    who.slice(0, 8),
+  );
+  await page.capture("passkey-signed-in");
+
+  const audit = JSON.parse(
+    (
+      await owner.call(
+        `/api/identity/audit?principalId=${registered.principalId}&action=identity.passkey&action=identity.login`,
+      )
+    ).body,
+  );
+  const actions = (audit.entries ?? []).map((entry) => entry.action);
+  check(
+    actions.includes("identity.passkey.add") &&
+      audit.entries.some(
+        (entry) =>
+          entry.action === "identity.login" &&
+          entry.detail?.method === "passkey",
+      ),
+    "审计里有登记与 passkey 登录（按动作族筛）",
+    actions.join(","),
+  );
+  const leaked = page.drain();
+  check(
+    leaked.errors.length === 0,
+    "passkey 这一段页面没有控制台错误",
+    JSON.stringify(leaked.errors).slice(0, 200),
+  );
+  report.passkey = "ok";
 }

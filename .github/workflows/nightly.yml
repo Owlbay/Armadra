@@ -155,3 +155,48 @@ jobs:
             target/mobile-shell-e2e/android/*.log
             apps/mobile/android/armadra-native-core/build/reports/tests/
           if-no-files-found: warn
+
+  # 服务器壳镜像（补全计划 G3-5）：按 apps/server/docker/Dockerfile 构建，起容器
+  # 只发布到回环，对着它跑容器模式的 server-e2e（配对、邀请、共享画布、撤销）。
+  # 只构建、不推送任何镜像仓库；发布到 GHCR 只在打标签时由 server-image.yml 做。
+  server-image:
+    name: server image (build + container e2e)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 xvfb 与中文字体，放开用户命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb fonts-noto-cjk
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - uses: browser-actions/setup-chrome@v2
+        id: chrome
+        with:
+          chrome-version: stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 容器模式 server-e2e
+        shell: bash
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          set -euo pipefail
+          xvfb-run -a node tools/probes/server-e2e.mjs \
+            --container=armadra-server:nightly --build target/e2e/server-container
+
+      - name: 上传端到端产物
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-server-container
+          path: target/e2e/server-container
+          if-no-files-found: ignore
+          retention-days: 14

@@ -13,6 +13,12 @@
  * (W2.2's read side keys off this field): a local build is indistinguishable
  * from a published one to `app.isPackaged`, so without this marker it would
  * poll a production update feed that never published its version.
+ *
+ * `ARMADRA_DIST_RELEASE=1` is the one thing that leaves the marker out: the
+ * release workflow sets it, and so does `tools/probes/update-e2e.mjs`, whose
+ * whole point is a package that updates. `ARMADRA_DIST_VERSION` packages under
+ * another version (`extraMetadata.version`) without touching the manifests —
+ * the probe's "next release" is the same tree with a higher number.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -124,7 +130,21 @@ function restrictArch(config, arch) {
   return result;
 }
 
-export function resolveConfig({ env = process.env, local = true } = {}) {
+/** The release-build switch: set, the package carries no disabled-updates marker. */
+export const RELEASE_ENV = "ARMADRA_DIST_RELEASE";
+/** Package under this version instead of the manifest's. */
+export const VERSION_ENV = "ARMADRA_DIST_VERSION";
+
+/** Whether this run is a local build (the default) or a release build. */
+export function isLocalBuild(env = process.env) {
+  const value = (env[RELEASE_ENV] ?? "").trim();
+  return value === "" || value === "0";
+}
+
+export function resolveConfig({
+  env = process.env,
+  local = isLocalBuild(env),
+} = {}) {
   const base = load(readFileSync(join(app, "electron-builder.yml"), "utf8"));
   const plan = signingPlan({ env });
   let config = restrictArch(
@@ -136,10 +156,21 @@ export function resolveConfig({ env = process.env, local = true } = {}) {
       extraMetadata: { armadraUpdates: "disabled" },
     });
   }
+  const version = (env[VERSION_ENV] ?? "").trim();
+  if (version !== "") {
+    if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version))
+      throw new Error(
+        `${VERSION_ENV} must be a semver version, not ${version}`,
+      );
+    config = mergeConfig(config, { extraMetadata: { version } });
+  }
   return { config, plan };
 }
 
-export async function dist({ env = process.env, local = true } = {}) {
+export async function dist({
+  env = process.env,
+  local = isLocalBuild(env),
+} = {}) {
   const { config, plan } = resolveConfig({ env, local });
   if (plan.mode === "refuse") {
     console.error(`✗ ${plan.message}`);
@@ -148,6 +179,12 @@ export async function dist({ env = process.env, local = true } = {}) {
   (plan.mode === "skip" ? console.warn : console.log)(
     `${plan.mode === "skip" ? "!" : "→"} ${plan.message}`,
   );
+  // electron-builder reads the notarization credentials from `process.env`
+  // itself; the plan names the set that must not be there (signing-electron.mjs).
+  for (const name of plan.unsetEnv ?? []) {
+    delete env[name];
+    delete process.env[name];
+  }
 
   execFileSync(process.execPath, [electronViteEntry(), "build"], {
     cwd: app,
