@@ -1,6 +1,7 @@
 # ACP 接入与会话视图（后续规划第二部分）
 
 > 状态：目标设计（2026-10-02），未开始实施。对应[后续规划](product-roadmap.md)第二部分「ACP 接入与会话视图」。现状以[功能预期总表](../status/feature-roadmap.md)与源码为准。
+> 修订（2026-10-03，以 [补全架构](completion-architecture.md) §4、§5.1 为准，正文保留原文）：契约节改 **§14**（§13 已被[画布启动器](canvas-launcher.md)占用），正文的「契约 §13.x」读作 §14.x，工作流节是 §15；协议栈改为依赖 `@armadra/agent/acp`（`core/acp/client.ts` 包装它的 `AcpClient`，单测用 `fakeAcpAgentPath()`），不再手写 `types.ts`、不需要 `core/acp/testing/fake-agent.mjs`；适配器表的 ama 一行按 `@armadra/agent` 0.6.2 定稿（`ama --mode acp --profile <path>`，`sessionId: "same"`，`resume: "resume"`，画布工具经 profile 的 `host` 适配器提供、不加 MCP），D12 / Q4 已结；0031 不再为 ACP 预留。
 > 范围：`apps/desktop/src/core/{acp,agent,hook,collab,terminal,history}`、`apps/desktop/src/cli/armadra-hook`、`apps/web/src/{acp,nodes,agent,canvas,i18n}`、`packages/shared/src`、`tools/probes/agent-e2e`。
 > 前置：[CLI 接入、通信与共享上下文](cli-collaboration.md)（第一部分，本地历史适配器与 `TranscriptEntry`）、[Agent 推式投递](agent-delivery.md)（五态、`send`、租约）、[画布内注入](canvas-only-integration.md)、[原生白板参考](../guides/native-whiteboard-references.md)、[协调 Agent](coordinator-agent.md)（第三部分，另一会话在做；本文只引用、不改它的文件）。
 > 设计约束：v3 曾整体移除 ACP 通道（[v3 契约](../contracts/v3-agent-terminal-plan.md) §5.10），原因是两套 Agent 通道让状态、权限和会话侧栏出现两种语义。本文的全部设计围绕一条：**ACP 只是同一个 Agent 节点的另一种驱动方式**，状态五态、审批、连线上下文、`send` 投递、会话侧栏仍走同一套 core 语义，没有第二套。

@@ -1,7 +1,7 @@
 # 画布工作平台实施记录
 
-> 目标范围见 [设计总纲](../design/canvas-platform-design.md)。本文件只记录经过核验的进度，不以设计文档代替实现。
-> 各批次的详细验证过程归档在 [实施批次记录](../history/platform-implementation-log.md)；本文件保留阶段状态、需求核对、提交登记、当前工作树与下一步。
+> 现状入口：本文记录的 Rust Runtime、Go Host、`crates/`、`proto/` 与 Tauri 壳都已删除，业务改由 TypeScript core（`apps/desktop/src/core/`）执行，Electron 桌面壳与无窗口服务器壳（`apps/server`）装配它。现状见 [架构](../guides/architecture.md)、[CI 与发布](../guides/ci-release.md) 与 [TypeScript Core 进度](./typescript-core-status.md)；剩余工作的目标与工作包见 [补全架构](../design/completion-architecture.md) 与 [补全执行计划](../design/completion-plan.md)，逐包进度记在 [补全进度](./completion-progress.md)。
+> 以下正文保留作历史：目标范围当时以 [设计总纲](../design/canvas-platform-design.md) 为准，各批次的详细验证过程归档在 [实施批次记录](../history/platform-implementation-log.md)。
 
 ## 接续基线
 
