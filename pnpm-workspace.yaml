@@ -28,3 +28,10 @@ minimumReleaseAgeExclude:
   - "@armadra/agent@0.6.2"
 
 storeDir: .pnpm-store
+
+# 整棵树只留一份 `@peculiar/asn1-schema`。它按模块实例登记 ASN.1 结构：
+# `@simplewebauthn/server` 与 `@peculiar/x509` 解析到 2.9.4、而 `asn1-ecc`
+# 用 2.10.0 时，ES256 签名的解包在 2.9.4 的登记表里找不到 `ECDSASigValue`，
+# passkey 断言一律校验失败。
+overrides:
+  "@peculiar/asn1-schema": 2.10.0
