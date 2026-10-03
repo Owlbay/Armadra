@@ -20,7 +20,7 @@ import {
   snapshot,
   summarize,
   validateResult,
-} from "./windows-acceptance.mjs";
+} from "./windows-acceptance-lib.mjs";
 
 const probe = join(
   dirname(fileURLToPath(import.meta.url)),
