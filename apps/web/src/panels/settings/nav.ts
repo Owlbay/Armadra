@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Server,
   ServerCog,
+  ShieldCheck,
   SlidersHorizontal,
   SquareTerminal,
   GitPullRequest,
@@ -138,6 +139,15 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
     labelKey: "sharing.nav",
     icon: Users,
     serverOnly: true,
+  },
+  {
+    // 登录方式、MFA、会话与设备说的是「我」，不是这台机器，所以成员也进得来
+    // （补全架构 §8.3）。
+    id: "security",
+    groupKey: "settings.group.connection",
+    labelKey: "security.nav",
+    icon: ShieldCheck,
+    ownerOnly: false,
   },
   {
     id: "github",

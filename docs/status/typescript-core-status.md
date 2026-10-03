@@ -2583,7 +2583,7 @@ H04 的前置（设计 `design/canvas-platform-design.md` §3 H04、`design/serv
 
 ### 60.5 发现但没有处理
 
-- 自定义 Agent（`custom:`，底层是 Claude）拿不到画布审批：`terminal/install.ts` 给 `permissionWaitEnvironment` 传的是原始 id，只认 `claude`。本节没有走这条路径，已另开任务。
+- **已修（9ba14061）**：自定义 Agent（`custom:`，底层是 Claude）拿不到画布审批：`terminal/install.ts` 给 `permissionWaitEnvironment` 传的是原始 id，只认 `claude`。本节没有走这条路径，已另开任务。
 - 本机操作员真实 HOME 里各 CLI 的旧全局安装在 16:12 已被迁走（`~/.copilot/hooks/armadra.json.armadra-backup-20260926081202` 等，`~/.claude/skills/armadra`、`~/.codex/skills/armadra` 已不在，`~/.codex/hooks.json` 为空）。复查过：本节的探针环境不会碰真实 HOME（同一环境起 core、假 HOME 里造旧安装，一个都没动），打包版冒烟与改过的 `core-terminal-packaged` 都用临时 HOME；迁移出自本机上别的进程（其他任务或操作员自己的 Armadra），记在这里。
 - 会话宿主后端（Windows）的 capture 仍是回放去转义，只多了右移与跳列的空格；要读成屏幕得接上 `replay-screen.ts`，留给 Windows 那一侧。
 

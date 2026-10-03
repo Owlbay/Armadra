@@ -44,6 +44,14 @@ import { editorFiles } from "./editor-files";
 import { terminal } from "./terminal";
 import { updates } from "./updates";
 import { usage } from "./usage";
+import { acp } from "./acp";
+import { workflow } from "./workflow";
+import { realtime } from "./realtime";
+import { gateway } from "./gateway";
+import { security } from "./security";
+import { push } from "./push";
+import { credentials } from "./credentials";
+import { mobileConnect } from "./mobile-connect";
 
 export type Locale = "zh-CN" | "en";
 
@@ -109,6 +117,14 @@ export const MESSAGE_MODULES = {
   usage,
   desktop,
   errors,
+  acp,
+  workflow,
+  realtime,
+  gateway,
+  security,
+  push,
+  credentials,
+  "mobile-connect": mobileConnect,
 } satisfies Record<string, MessageModule>;
 
 const modules: MessageModule[] = Object.values(MESSAGE_MODULES);

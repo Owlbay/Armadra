@@ -20,8 +20,8 @@ import {
   pollForAnswer,
   writeRequestFile,
 } from "./hook.js";
-import { asObject, parseJson } from "./json.js";
-import type { JsonValue } from "./json.js";
+import { asObject, parseJson } from "../../hook-client/json.js";
+import type { JsonValue } from "../../hook-client/json.js";
 import {
   launcherFileName,
   launcherScript,

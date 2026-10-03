@@ -11,12 +11,8 @@ import { VERB_NAMES, browserUsage } from "../../core/browser/verb-spec.js";
 /** Protocol version carried in every hook body. */
 export const HOOK_PROTOCOL_VERSION = 1;
 
-/**
- * Value of the `X-Armadra-Hook-Client` header. Bumped when the wire behaviour
- * of this client changes so the runtime can flag stale installs — this port
- * changes no wire behaviour at all, so it stays on the Rust client's number.
- */
-export const HOOK_CLIENT_REVISION = "4";
+/** Value of the `X-Armadra-Hook-Client` header; owned by the shared client. */
+export { HOOK_CLIENT_REVISION } from "../../hook-client/session.js";
 
 /** Upper bound on the hook payload we are willing to buffer, in bytes. */
 export const MAX_PAYLOAD_BYTES = 1024 * 1024;

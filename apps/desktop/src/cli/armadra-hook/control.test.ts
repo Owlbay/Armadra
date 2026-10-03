@@ -11,7 +11,7 @@ import {
   renderError,
 } from "./control.js";
 import type { Args } from "./control.js";
-import type { HookResponse } from "./http.js";
+import type { HookResponse } from "../../hook-client/http.js";
 
 function flags(input: string[]): Args {
   const parsed = parseFlags(input);

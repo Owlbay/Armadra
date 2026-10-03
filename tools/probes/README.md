@@ -2,6 +2,18 @@
 
 这些入口只核验底层可行性，不启动应用服务，不构成完整浏览器或 Windows 持久终端实现。全部命令从仓库根目录运行；无需修改根 manifest。
 
+## 分档
+
+按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.json` 的清单跑（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
+
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                          | 何时跑                              | 失败时       |
+| --- | ----------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`core-terminal-packaged`                                                      | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                       | 手动；清单在执行计划 §5             | 记进状态文档 |
+
+其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
+
 ## 受控 Chromium
 
 需要 Node.js 22+（内置 WebSocket/fetch）和已安装的 Chrome/Chromium；脚本不下载浏览器。默认探测系统常见安装路径，也可显式选择可执行文件：
@@ -85,7 +97,7 @@ node tools/probes/core-terminal-packaged.mjs              # 打包版，从页�
 ```
 
 - **smoke**：起一个 core，开终端，打字看回显，关掉 WS 再开一次确认看得见刚才那屏（`sawEarlierOutput`），最后销毁会话；顺带验证不存在的会话在升级前就被 404 拒掉。
-- **packaged**：需要先 `pnpm --filter @armadra/desktop dist`（本机没有 `CSC_LINK` 时 `dist.mjs` 自动跳过签名与公证）。按访达的方式启动：`PATH` 只给 launchd 那条（`/usr/bin:/bin:/usr/sbin:/sbin`），数据目录用 `ARMADRA_DATA_DIR`、Chromium profile 用 `--user-data-dir`、`HOME` 都指到临时目录（HOME 也得临时：打包版的 core 启动时会迁走各 CLI 旧的全局安装、往 `~/.codex/config.toml` 写信任记录），不碰操作员的 `~/Library/Application Support/Armadra`。本机装了 tmux（Homebrew 等常见位置）时，会话必须是 `tmux` 后端，资源采样（`GET …/resources`）也必须给出这个会话的 pid——两处各自找 tmux，都得用补过的 PATH。调试端口是运行时选的空闲端口，不是固定值：机器上另一个 Electron 占着固定端口时，探针会连上别人的渲染进程，失败起来和打包出错一模一样。
+- **packaged**：需要先 `pnpm --filter @armadra/desktop dist`（本机没有 `CSC_LINK` 时 `dist.mjs` 自动跳过签名与公证）。按访达的方式启动：`PATH` 只给 launchd 那条（`/usr/bin:/bin:/usr/sbin:/sbin`），数据目录用 `ARMADRA_DATA_DIR`、Chromium profile 用 `--user-data-dir`、`HOME` 都指到临时目录（HOME 也得临时：打包版的 core 启动时会迁走各 CLI 旧的全局安装、清掉上一版写进 `~/.codex/config.toml` 的会话级信任记录；画布内的 Codex 经启动器带 `--dangerously-bypass-hook-trust`，不再写信任记录），不碰操作员的 `~/Library/Application Support/Armadra`。本机装了 tmux（Homebrew 等常见位置）时，会话必须是 `tmux` 后端，资源采样（`GET …/resources`）也必须给出这个会话的 pid——两处各自找 tmux，都得用补过的 PATH。调试端口是运行时选的空闲端口，不是固定值：机器上另一个 Electron 占着固定端口时，探针会连上别人的渲染进程，失败起来和打包出错一模一样。
 
 三个脚本都用 `mktemp` 的数据目录与各自私有的 tmux socket，跑完 `kill-server` 并删掉目录；不碰操作者自己的数据目录或 tmux server。
 
@@ -217,7 +229,7 @@ node tools/probes/packaged-smoke.mjs [输出目录] [--app <Armadra.app>]
 
 直接执行 `apps/desktop/release/mac-arm64/Armadra.app` 里的二进制，按访达的方式给环境（launchd 的 PATH、`SHELL=/bin/zsh`），`HOME`、`ARMADRA_DATA_DIR`、`--user-data-dir` 都在 `mktemp` 的目录里，Chromium 用 `--use-mock-keychain`（临时 HOME 下没有登录钥匙串）。不安装、不替换 `/Applications/Armadra.app`，也不碰正在运行的那个 Armadra（单实例锁按 `--user-data-dir` 算）。
 
-1. **升级后自动迁移全局安装**：临时 HOME 里预先造出旧版装进各 CLI 全局目录的东西（Claude `settings.json` 的 Hook、Codex `hooks.json`、Copilot `hooks/armadra.json`、OpenCode / Pi / OMP 的状态模块、`skills/armadra`）和用户自己的条目。断言我们的都清掉、清之前有备份（用户也编辑的文件备份在旁边，只有我们写的备份进数据目录）、用户的 Hook / 设置 / 技能原样留着；Codex 的信任记录写进的是临时 HOME 的 `~/.codex/config.toml`。
+1. **升级后自动迁移全局安装**：临时 HOME 里预先造出旧版装进各 CLI 全局目录的东西（Claude `settings.json` 的 Hook、Codex `hooks.json`、Copilot `hooks/armadra.json`、OpenCode / Pi / OMP 的状态模块、`skills/armadra`）和用户自己的条目。断言我们的都清掉、清之前有备份（用户也编辑的文件备份在旁边，只有我们写的备份进数据目录）、用户的 Hook / 设置 / 技能原样留着；临时 HOME 的 `~/.codex/config.toml` 预置一条上一版的会话级信任记录和用户自己的行，起打包版后我们的记录被清掉、用户的行留着，画布里起过 Codex（启动器方案，零写入，带 `--dangerously-bypass-hook-trust`）之后也没有写回。
 2. **编辑器的 PDF 与视频**：视频夹具由打包版自己的 MediaRecorder 录出来；截图里 PDF 区域不是空白，`<video>` 读得出 320×240、没有解码错误，播一下之后画面不是一块纯色。
 3. **节能休眠与唤醒**：真 Codex（临时 HOME 里的 `~/.codex`，只复制 `auth.json`；mise 的 Node 目录用一个符号链接给过去）。`ARMADRA_TEST_ECO_IDLE_SECONDS=20`，页面离开画布后 Codex 进程退出、会话记成休眠；回到画布节点显示「休眠中」，点节点后同一会话 id 起下一代、进程带同一个 provider 会话 id，问「之前让你记的数加一」答 418。
 4. **控制台**：渲染进程没有 error 级别的输出与未捕获异常。
