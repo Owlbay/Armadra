@@ -5,6 +5,7 @@ import {
   connect as connectHttp2,
   constants as http2,
 } from "node:http2";
+import { FCM_MESSAGING_SCOPE, OUTBOUND } from "../net/outbound";
 import { type PushEnvelope, sealPayload, signJwt } from "./crypto";
 import {
   type PushPayload,
@@ -27,10 +28,11 @@ import {
  * dev-stack 的 push-sink。
  */
 
-export const APNS_PRODUCTION = "https://api.push.apple.com";
-export const APNS_SANDBOX = "https://api.sandbox.push.apple.com";
-export const FCM_ENDPOINT = "https://fcm.googleapis.com";
-const FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
+export const APNS_PRODUCTION = OUTBOUND.apnsProduction.url;
+export const APNS_SANDBOX = OUTBOUND.apnsSandbox.url;
+export const FCM_ENDPOINT = OUTBOUND.fcmSend.url;
+const FCM_TOKEN_ENDPOINT = OUTBOUND.fcmToken.url;
+const FCM_SCOPE = FCM_MESSAGING_SCOPE;
 /** Apple 要求 provider token 在 20–60 分钟之间换新；取 50 分钟。 */
 const APNS_TOKEN_TTL_MS = 50 * 60 * 1000;
 
@@ -298,7 +300,7 @@ export class FcmClient {
   private get tokenUri(): string {
     if (this.config.endpoint !== undefined)
       return `${this.config.endpoint}/token`;
-    return this.account.token_uri ?? "https://oauth2.googleapis.com/token";
+    return this.account.token_uri ?? FCM_TOKEN_ENDPOINT;
   }
 
   private get messagesUri(): string {
