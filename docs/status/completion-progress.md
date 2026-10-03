@@ -417,7 +417,7 @@
 
 没做 / 限制：
 
-- `deb-install` 本机只做了依赖闭包核对，没在干净容器里跑完（本机镜像源 16 kB/s）；由夜间作业首跑验证。
+- 分支上手动触发的 nightly（run 37122980815）：linux 作业 `deb-install`（amd64，干净 ubuntu:22.04）与 `packaged-smoke` 通过，macos 作业 `packaged-smoke` 通过；`report` 因不在 main 跳过，issue 上报未实跑。
 - arm64 AppImage 的运行时要 `libz.so`（开发包里的无版本名），干净系统上 `APPIMAGE_EXTRACT_AND_RUN` 会报缺库；x64 runner 有 `zlib1g-dev`，未改打包。
 - `update-e2e` 没有单独作业：G3-3 新增 `tools/ci/e2e.d/update-e2e.json` 并写 `platforms`，在对应系统作业里打包后执行。
 - macOS 作业与 issue 上报只在 GitHub 上首跑时验证；deb 容器验证没有复用 dev-stack 的 compose（直接 `docker run`）。
