@@ -1,0 +1,9 @@
+{
+  "id": "deb-install",
+  "tier": "b",
+  "script": "tools/probes/deb-install.mjs",
+  "args": ["{out}"],
+  "requires": ["docker"],
+  "platforms": ["linux"],
+  "timeoutMinutes": 20
+}

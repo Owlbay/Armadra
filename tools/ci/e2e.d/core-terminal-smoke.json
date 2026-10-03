@@ -1,0 +1,8 @@
+{
+  "id": "core-terminal-smoke",
+  "tier": "a",
+  "script": "tools/probes/core-terminal-smoke.mjs",
+  "args": [],
+  "requires": ["tmux"],
+  "timeoutMinutes": 5
+}

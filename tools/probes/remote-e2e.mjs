@@ -18,8 +18,8 @@
 // 配置；也因此**没有**验证真实的 ssh 传输、主机密钥与 askpass。
 //
 // 一切都是临时的、回环的：随机端口，mktemp 出来的数据目录、工作空间、Worker
-// 状态目录、裸仓库与浏览器 profile，跑完全部删除并停掉 tmux 服务器；不读写
-// 操作员自己的数据目录。
+// 状态目录、裸仓库、HOME 与浏览器 profile，跑完全部删除并停掉 tmux 服务器；
+// 不读写操作员自己的数据目录与 HOME。
 //
 // 用法（仓库根目录）：
 //   pnpm libs:build
@@ -48,6 +48,7 @@ import {
   startChrome,
   startVite,
 } from "./shell-e2e-lib.mjs";
+import { isolatedEnv, probeHome } from "./probe-home.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const output = resolve(process.argv[2] ?? join(root, "target/remote-e2e"));
@@ -231,15 +232,17 @@ await h.run(async () => {
   const data = join(base, "data");
   mkdirSync(data);
   h.cleanups.push(() => killTmux(data));
-  const environment = {
-    ...process.env,
+  // 临时 HOME：core、Worker 与画布终端都不读操作员的 CLI 登录状态与配置。
+  const home = probeHome("armadra-remote-e2e-home-");
+  h.cleanups.push(home.remove);
+  const environment = isolatedEnv(home, {
     ARMADRA_DATA_DIR: data,
     ARMADRA_LOG: process.env.ARMADRA_LOG ?? "warn",
     ARMADRA_REMOTE_WORKER_LAUNCHER: fakeSsh,
     // 探针不碰操作员的 CLI 配置：启动时的迁移、本机与执行主机上的 Codex 信任记录都不写。
     ARMADRA_NO_GLOBAL_WRITES: "1",
     PATH: `${sshBin}:${remoteCli}:${process.env.PATH ?? ""}`,
-  };
+  });
   const runtime = child(
     h,
     process.execPath,

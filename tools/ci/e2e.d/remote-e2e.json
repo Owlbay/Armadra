@@ -1,0 +1,8 @@
+{
+  "id": "remote-e2e",
+  "tier": "a",
+  "script": "tools/probes/remote-e2e.mjs",
+  "args": ["{out}"],
+  "requires": ["tmux", "chrome"],
+  "timeoutMinutes": 10
+}

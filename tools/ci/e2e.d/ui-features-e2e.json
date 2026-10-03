@@ -1,0 +1,8 @@
+{
+  "id": "ui-features-e2e",
+  "tier": "a",
+  "script": "tools/probes/ui-features-e2e.mjs",
+  "args": ["{out}"],
+  "requires": ["tmux", "chrome"],
+  "timeoutMinutes": 15
+}

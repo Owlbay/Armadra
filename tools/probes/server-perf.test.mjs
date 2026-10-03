@@ -1,5 +1,5 @@
 // server-perf.mjs 的纯函数：参数、分位数、`ps` 时间、与基线的比对规则。
-// 真正的负载在 B 档跑（tools/ci/e2e.json 的 server-perf）。
+// 真正的负载在 B 档跑（tools/ci/e2e.d/server-perf.json）。
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
