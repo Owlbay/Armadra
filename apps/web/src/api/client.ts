@@ -35,6 +35,7 @@ export {
   isUnsupportedOnRemote,
 } from "./request";
 export {
+  boardSyncUrl,
   initRuntimeSockets,
   languageSessionUrl,
   terminalWebSocketUrl,

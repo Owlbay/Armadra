@@ -252,6 +252,22 @@ stdio 上讲 MCP（`initialize` / `tools/list` / `tools/call` 手写，不引 SD
 文件；ama 不加）；`@armadra/agent` 的 `AcpClient` 声明 `features.mcpServers` 才带，旧版照旧
 开会话、答 `mcpInjected: false`。
 
+ACP 只是同一个 Agent 节点的另一种驱动方式（`core/acp/`，[ACP 会话视图](../design/acp-session-view.md)，
+契约 §14）。节点数据 `agent.driver: "acp"` 的节点不开 PTY：core 直接起适配器
+（`host.ts`，协议栈是 `@armadra/agent/acp`），会话是 `terminal_sessions` 里
+`backend_kind = 'acp'` 的一行。ACP 是终端管理器的**一个后端**（`bridge.ts`），所以行、代次、
+人类租约、退出通知、Eco 休眠（同一行上起下一代并 `session/load`）只有一份实现：`writeSubmit`
+（括号粘贴加回车）落为 `session/prompt`，单个 `ESC` 落为 `session/cancel`，`capture` 读镜像，
+`send` 的门链、收件箱唤醒、`interrupt`、依赖编排与调度一行不改。状态是第四种来源 `acp`：
+`session.ts` 说出回合边界的信号，经 `hook/normalize` 的 `case "acp"`（`normalize.ts`）与
+`hook/ingest.ts::apply` 进同一个 reducer；`request_permission` 进同一张 `agent_approvals`，
+答复经 `agent/approvals.ts` 的 `"acp"` 路由回到挂起的请求，回合取消、退出、切换、休眠时一律
+回 `cancelled`。每条 `session/update` 先写镜像 `<数据目录>/acp/<nodeId>/<会话 id>.acp.jsonl`
+（`mirror.ts`；读取方经 `history/acp-mirror.ts`，连线读取认得这个后缀）再发 `acp.update`。
+驱动切换（`POST /api/acp/nodes/{id}/driver`）结束当前驱动、在同一行上以另一种驱动接回 CLI
+自己的会话；画布注入在 ACP 下只留入口认得的那一半（`agent/canvas-launch.ts::acpInjection`），
+其余由 MCP 承担。
+
 浏览器节点的 Agent 工具是 `armadra-hook browser <动词>`，动词清单只有一份
 （`core/browser/verb-spec.ts`，`--help` 与技能都由它生成）；执行下沉在 core
 （`core/browser/cdp/`），CDP 调用经一张白名单，执行任意 JS 不开放
@@ -437,11 +453,14 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
 - **Windows 持久化会话**：session host 已实现并在 Windows CI 上通过，没有在真机上
   长时间运行过（进度 §13、§33）。启动行方言、`.cmd` 绕过与 `.exe` 启动器同样只在
   Windows CI 上跑过（进度 §54、§57、§61）。
-- **多人实时协同**：core 侧已实现（`core/realtime/`，契约 §16.1–§16.2）：每块板
+- **多人实时协同**：core 侧（`core/realtime/`，契约 §16.1–§16.2、§16.4）：每块板
   一个 `Y.Doc`，快照 + 更新流是实时板的真相，表由物化得来；core 自己的写者经
-  `saveBoard` 前的拦截写进文档；设置 `collab.realtime`（缺省开）关掉时退回租约模式。
-  页面侧（Yjs 绑定、`Y.UndoManager`、光标层）与评论路由尚未实现（G2-5、G2-6），在那之
-  前页面仍走 §5 的编辑租约。
+  `saveBoard` 前的拦截写进文档；awareness 按连接改写身份、校验形状。页面侧
+  （`apps/web/src/realtime/`）：开板时 `realtime || enabled` 就连 `…/sync`，
+  `Y.Doc` 与 `canvas-store` 双向绑定（origin 断开回声环），`Y.UndoManager` 接管
+  撤销，在线条与光标层来自 awareness，断线时本地照常编辑、重连补齐。设置
+  `collab.realtime`（缺省开）关掉时新板留在 §5 的编辑租约。评论（G2-6）尚未实现；
+  实时板的视口不进文档，只留在本窗口。
 - **自动更新**：electron-updater 已接通（`apps/desktop/src/main/updates/`），但未
   签名的构建里更新器是关闭的——「没签名 = 什么也验证不了 = `notConfigured`」，
   它绝不会报 `upToDate`（`shell-core/updates/availability.ts`）。

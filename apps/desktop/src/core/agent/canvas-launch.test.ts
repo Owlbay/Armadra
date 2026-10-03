@@ -20,7 +20,9 @@ import {
 import { launchLine as coldStartLine } from "../schedule/cold-start";
 import { resumeLine } from "../terminal/hibernator";
 import { tempDir } from "../testing/temp-dir";
+import { acpAdapter } from "../acp/adapters";
 import {
+  acpInjection,
   canvasEnvironment,
   canvasLaunch,
   canvasLaunchLine,
@@ -372,6 +374,25 @@ function callers(root: string, pattern: RegExp): string[] {
     .sort();
 }
 
+describe.runIf(POSIX)("the ACP driver's half of the injection", () => {
+  it("keeps only what each ACP entry point accepts, and nothing for Claude", () => {
+    // Claude 的适配器经 SDK 起 claude：Hook 设置与插件目录在 ACP 下没有参数，
+    // 画布工具全由 MCP 承担。
+    expect(
+      acpInjection(settings, dataDir, "claude", acpAdapter("claude")!),
+    ).toEqual({ env: [], args: [] });
+    // OpenCode 的配置目录是环境变量，ACP 入口照认。
+    const opencode = acpInjection(
+      settings,
+      dataDir,
+      "opencode",
+      acpAdapter("opencode")!,
+    );
+    expect(opencode.args).toEqual([]);
+    expect(opencode.env.map(([name]) => name)).toContain("OPENCODE_CONFIG_DIR");
+  });
+});
+
 describe("the single exit", () => {
   /**
    * `planLaunch` turns a node's agent into flags. Anything that calls it is
@@ -392,8 +413,15 @@ describe("the single exit", () => {
     );
   });
 
-  it("answers the injection argv from inject.ts to the integration state only", () => {
+  /**
+   * Two readers: the integration state (what the launcher carries), and the
+   * ACP driver's trimmed copy (`acpInjection`, ACP 会话视图设计 §5.8) — an ACP
+   * session is started by the core itself, with no launcher in between, so it
+   * takes the same injection and keeps only what its entry point accepts.
+   */
+  it("answers the injection argv from inject.ts to the integration state and the ACP trim only", () => {
     expect(callers(CORE, /(?<!function )\bcanvasInjection\(/)).toEqual([
+      "agent/canvas-launch.ts",
       "hook/install/integration.ts",
     ]);
   });

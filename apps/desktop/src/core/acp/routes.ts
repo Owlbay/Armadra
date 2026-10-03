@@ -1,0 +1,605 @@
+/**
+ * `/api/acp/*`（契约 §14.2；ACP 会话视图设计 §4.2、§9.2）。
+ *
+ * 会话就是 `terminal_sessions` 的一行，所以这里的每条路都落到终端管理器的
+ * 原语上，不另起一套：起会话 = `spawn`（后端 `acp`），提示 = `writeSubmit`
+ * （人类驾驶者，与终端里敲键同一条租约语义），取消 = `ESC`，接回 = 同一行上
+ * 起下一代（`revive`）。驱动切换先结束当前驱动、再在同一行上以另一种驱动起
+ * 下一代，用 CLI 自己的会话 id 接回，接不回就新开并如实答 `resumed: false`。
+ */
+
+import type { DatabaseSync } from "node:sqlite";
+
+import { canvasLaunchLine, nodeDialect } from "../agent/canvas-launch";
+import { PERMISSION_MODES, canResume } from "../agent/launch";
+import type { AgentSettings } from "../agent/registry";
+import { getAgentStatus } from "../agent/status";
+import { loadNode, loadSession, workspaceRoot } from "../collab/nodes";
+import { humanActor } from "../drive/lease";
+import { isAcpMirror } from "../history/acp-mirror";
+import type { CoreRequest, HandlerResult, RouteMatch } from "../http/router";
+import type { CoreContext } from "../main";
+import { TerminalError } from "../terminal/backend";
+import { hibernatedSession } from "../terminal/hibernate";
+import { resumeLine } from "../terminal/hibernator";
+import type { TerminalSession } from "../terminal/manager";
+import {
+  DomainError,
+  badRequest,
+  jsonObject,
+  optionalString,
+} from "../workspaces/support";
+import type { AcpAdapter } from "./adapters";
+import { AcpError } from "./client";
+import type { AcpStartPlan, AcpTerminalWiring } from "./index";
+import { AcpMirror, mirrorPath } from "./mirror";
+
+export interface AcpRouteDeps {
+  readonly wiring: () => AcpTerminalWiring | undefined;
+  readonly prepare: (nodeId: string, plan: AcpStartPlan) => void;
+  readonly settings: () => AgentSettings;
+  readonly adapterFor: (
+    settings: AgentSettings,
+    agentId: string,
+  ) => AcpAdapter | undefined;
+  readonly cwdOf: (path: string) => string;
+}
+
+/** 正在切换驱动或接回的节点：这段时间里投递把「没有会话」当「还早」。 */
+const busyNodes = new Map<string, Promise<unknown>>();
+
+export function acpSwitching(nodeId: string): boolean {
+  return busyNodes.has(nodeId);
+}
+
+/** 同一个节点上的起、停、切换一次一个。 */
+function exclusive<T>(nodeId: string, job: () => Promise<T>): Promise<T> {
+  const previous = busyNodes.get(nodeId) ?? Promise.resolve();
+  const next = previous.then(job, job);
+  const settled = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  busyNodes.set(nodeId, settled);
+  void settled.then(() => {
+    if (busyNodes.get(nodeId) === settled) busyNodes.delete(nodeId);
+  });
+  return next;
+}
+
+function failure(error: unknown): HandlerResult {
+  if (error instanceof DomainError) {
+    const { status, body } = error.response();
+    return { status, body };
+  }
+  if (error instanceof TerminalError) {
+    return {
+      status: error.status,
+      body: { code: error.code, message: error.message },
+    };
+  }
+  if (error instanceof AcpError) {
+    return { status: acpStatus(error.code), body: error.toJSON() };
+  }
+  if (error instanceof SyntaxError) {
+    return {
+      status: 400,
+      body: { code: "bad_request", message: "Request body is not valid JSON" },
+    };
+  }
+  throw error;
+}
+
+function acpStatus(code: string): number {
+  switch (code) {
+    case "acp_not_installed":
+    case "acp_unsupported":
+    case "acp_mode_unsupported":
+    case "acp_no_raw_write":
+      return 400;
+    case "acp_mode_unavailable":
+    case "acp_auth_required":
+    case "acp_session":
+    case "awaiting_approval":
+      return 409;
+    default:
+      return 502;
+  }
+}
+
+const domain = (status: number, code: string, message: string) =>
+  new DomainError(status, code, message);
+
+function param(match: RouteMatch, name: string): string {
+  const value = match.params[name];
+  if (value === undefined) throw badRequest(`${name} is missing`);
+  return value;
+}
+
+/** 人在会话视图里发的：与终端里敲键同一个人类驾驶者（`/drive` 同一条规矩）。 */
+function humanOf(wiring: AcpTerminalWiring, sessionId: string) {
+  const held = wiring.manager.driveLease(sessionId).holder;
+  return held?.kind === "human"
+    ? humanActor(held.id, held.displayName)
+    : humanActor("local", "");
+}
+
+function agentOf(node: { readonly data: Record<string, unknown> }) {
+  const agent = node.data.agent;
+  return agent !== null && typeof agent === "object"
+    ? (agent as Record<string, unknown>)
+    : {};
+}
+
+function text(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
+  const database: DatabaseSync = context.db.database;
+
+  const need = async (): Promise<AcpTerminalWiring> => {
+    const wiring = deps.wiring();
+    if (wiring === undefined) {
+      throw domain(
+        503,
+        "unavailable",
+        "The terminal domain is not assembled in this core",
+      );
+    }
+    await wiring.ready;
+    return wiring;
+  };
+
+  const route = (
+    method: string,
+    path: string,
+    handler: (
+      match: RouteMatch,
+      request: CoreRequest,
+    ) => Promise<HandlerResult>,
+  ) => {
+    context.server.router.handle(method, path, async (match, request) => {
+      try {
+        return await handler(match, request);
+      } catch (error) {
+        return failure(error);
+      }
+    });
+  };
+
+  /** 节点上这一行的下一代（接回）。休眠着的走休眠执行者，好让它的状态机对得上。 */
+  const relaunch = (
+    wiring: AcpTerminalWiring,
+    nodeId: string,
+    rowId: string,
+    agentId: string,
+  ): Promise<TerminalSession> =>
+    exclusive(nodeId, async () => {
+      if (wiring.manager.isAlive(rowId)) return wiring.manager.session(rowId);
+      if (hibernatedSession(database, nodeId)?.sessionId === rowId) {
+        await wiring.hibernator.wake(nodeId, "focus");
+        return wiring.manager.session(rowId);
+      }
+      return wiring.manager.revive(
+        rowId,
+        wiring.environment(nodeId, agentId, { acp: true }),
+        { ended: true },
+      );
+    });
+
+  /** 一个活着的 ACP 会话行；结束了的（休眠、重启、适配器退出）先接回。 */
+  const live = async (
+    wiring: AcpTerminalWiring,
+    rowId: string,
+  ): Promise<TerminalSession> => {
+    const row = wiring.manager.session(rowId);
+    if (row.backend !== "acp") {
+      throw domain(409, "acp_session", "This session is not driven over ACP");
+    }
+    if (wiring.manager.isAlive(rowId)) return row;
+    const nodeId = row.ownerNodeId;
+    if (nodeId === null || row.agentId === null) {
+      throw domain(409, "acp_exited", "The ACP session has ended");
+    }
+    if (loadSession(database, nodeId)?.sessionId !== rowId) {
+      throw domain(
+        409,
+        "conflict",
+        "This node has moved on to another session",
+      );
+    }
+    return relaunch(wiring, nodeId, rowId, row.agentId);
+  };
+
+  /* -------------------------------- 起会话 -------------------------------- */
+
+  route("POST", "/api/acp/sessions", async (_match, request) => {
+    const wiring = await need();
+    const body = jsonObject(request.body);
+    const workspaceId = optionalString(body, "workspaceId");
+    const nodeId = optionalString(body, "nodeId");
+    const cwd = optionalString(body, "cwd");
+    const agentId = optionalString(body, "agentId");
+    if (!workspaceId || !nodeId || !cwd || !agentId) {
+      throw badRequest("workspaceId, nodeId, cwd and agentId are required");
+    }
+    const permissionMode = optionalString(body, "permissionMode");
+    if (
+      permissionMode !== undefined &&
+      !(PERMISSION_MODES as readonly string[]).includes(permissionMode)
+    ) {
+      throw badRequest("permissionMode is not a known mode");
+    }
+    const model = optionalString(body, "model");
+    const resume = optionalString(body, "resume");
+    const prompt = optionalString(body, "prompt");
+    const settings = deps.settings();
+    if (deps.adapterFor(settings, agentId) === undefined) {
+      throw new AcpError(
+        "acp_unsupported",
+        `${agentId} has no ACP entry point`,
+      );
+    }
+
+    const row = await exclusive(nodeId, async () => {
+      const latest = loadSession(database, nodeId);
+      if (latest !== undefined) {
+        const existing = wiring.manager.session(latest.sessionId);
+        if (wiring.manager.isAlive(latest.sessionId)) {
+          // 两台设备同时挂载、或者重试：同一个节点只有一个活会话。
+          if (existing.backend === "acp") return existing;
+          throw domain(
+            409,
+            "conflict",
+            "A terminal is running for this node; switch its driver instead",
+          );
+        }
+        if (existing.backend === "acp") {
+          deps.prepare(nodeId, {
+            agentId,
+            permissionMode,
+            model,
+            resume:
+              resume ?? getAgentStatus(database, nodeId)?.sessionId ?? null,
+          });
+          return wiring.manager.revive(
+            latest.sessionId,
+            wiring.environment(nodeId, agentId, { acp: true }),
+            { ended: true },
+          );
+        }
+      }
+      deps.prepare(nodeId, {
+        agentId,
+        permissionMode,
+        model,
+        resume: resume ?? null,
+      });
+      const adapter = deps.adapterFor(settings, agentId) as AcpAdapter;
+      return wiring.manager.spawn({
+        workspaceId,
+        cwd: deps.cwdOf(cwd),
+        command: adapter.program,
+        kind: "terminal",
+        ownerNodeId: nodeId,
+        agentId,
+        backend: "acp",
+        env: wiring.environment(nodeId, agentId, { acp: true }),
+      });
+    });
+    if (prompt !== undefined && prompt.trim() !== "") {
+      await wiring.manager.writeSubmit(
+        row.id,
+        row.generation,
+        prompt,
+        humanOf(wiring, row.id),
+      );
+    }
+    return { status: 200, body: wiring.manager.session(row.id) };
+  });
+
+  /* --------------------------------- 回合 --------------------------------- */
+
+  route(
+    "POST",
+    "/api/acp/sessions/{sessionId}/prompt",
+    async (match, request) => {
+      const wiring = await need();
+      const body = jsonObject(request.body);
+      const prompt = optionalString(body, "text");
+      if (prompt === undefined || prompt.trim() === "") {
+        throw badRequest("text is required");
+      }
+      const row = await live(wiring, param(match, "sessionId"));
+      await wiring.manager.writeSubmit(
+        row.id,
+        row.generation,
+        prompt,
+        humanOf(wiring, row.id),
+      );
+      const turnId = wiring.backend.lastTurn(row.sessionKey) ?? "";
+      return { status: 200, body: { turnId } };
+    },
+  );
+
+  route("POST", "/api/acp/sessions/{sessionId}/cancel", async (match) => {
+    const wiring = await need();
+    const rowId = param(match, "sessionId");
+    const row = wiring.manager.session(rowId);
+    if (row.backend !== "acp") {
+      throw domain(409, "acp_session", "This session is not driven over ACP");
+    }
+    // 与节点头「打断这一轮」、`interrupt` 动词同一个原语：一个 ESC。
+    await wiring.backend.sessionByRow(rowId)?.cancel();
+    return { status: 204 };
+  });
+
+  route(
+    "POST",
+    "/api/acp/sessions/{sessionId}/mode",
+    async (match, request) => {
+      const wiring = await need();
+      const body = jsonObject(request.body);
+      const modeId = optionalString(body, "modeId");
+      if (modeId === undefined || modeId === "") {
+        throw badRequest("modeId is required");
+      }
+      const row = await live(wiring, param(match, "sessionId"));
+      const session = wiring.backend.sessionByRow(row.id);
+      if (session === undefined) {
+        throw domain(409, "acp_exited", "The ACP session has ended");
+      }
+      await session.setMode(modeId);
+      return { status: 204 };
+    },
+  );
+
+  /* --------------------------------- 镜像 --------------------------------- */
+
+  route("GET", "/api/acp/sessions/{sessionId}/log", async (match, request) => {
+    const wiring = await need();
+    const rowId = param(match, "sessionId");
+    const row = wiring.manager.session(rowId);
+    const afterRaw = Number(request.query.get("after") ?? "0");
+    const after =
+      Number.isFinite(afterRaw) && afterRaw > 0 ? Math.floor(afterRaw) : 0;
+    const session = wiring.backend.sessionByRow(rowId);
+    let path = session?.mirrorPath;
+    if (path === undefined && row.ownerNodeId !== null) {
+      const status = getAgentStatus(database, row.ownerNodeId);
+      if (isAcpMirror(status?.transcriptPath)) {
+        path = status?.transcriptPath;
+      } else if (status?.sessionId !== undefined) {
+        path = mirrorPath(context.dataDir, row.ownerNodeId, status.sessionId);
+      }
+    }
+    const read =
+      path === undefined
+        ? { entries: [], endOffset: 0 }
+        : new AcpMirror(path).read(after);
+    return {
+      status: 200,
+      body: {
+        entries: read.entries,
+        endOffset: read.endOffset,
+        modes: session?.modes ?? null,
+        ...(session === undefined ? {} : { pending: session.pending() }),
+      },
+    };
+  });
+
+  /* ------------------------------- 驱动切换 ------------------------------- */
+
+  route("POST", "/api/acp/nodes/{nodeId}/driver", async (match, request) => {
+    const wiring = await need();
+    const nodeId = param(match, "nodeId");
+    const body = jsonObject(request.body);
+    const driver = optionalString(body, "driver");
+    if (driver !== "acp" && driver !== "terminal") {
+      throw badRequest("driver must be acp or terminal");
+    }
+    const result = await switchDriver(wiring, nodeId, driver);
+    context.bus.emit("workspace.event", {
+      workspaceId: result.workspaceId,
+      event: {
+        type: "acp.driver",
+        nodeId,
+        driver,
+        sessionId: result.sessionId,
+        resumed: result.resumed,
+      },
+    });
+    return {
+      status: 200,
+      body: { sessionId: result.sessionId, resumed: result.resumed },
+    };
+  });
+
+  /**
+   * 设计 §4.2 的五步：审批挂着就拒；结束当前驱动（行记 `switch`）；读 CLI 的
+   * 会话 id；在**同一行**上以另一种驱动起下一代（能接回就接回）；投递队列不
+   * 动，出队门链在新驱动下重跑。第二步做完之前第四步不开始，这段时间里节点
+   * 「睡着」（`acpSwitching`），`send` 排队。
+   */
+  const switchDriver = (
+    wiring: AcpTerminalWiring,
+    nodeId: string,
+    driver: "acp" | "terminal",
+  ) =>
+    exclusive(nodeId, async () => {
+      const node = loadNode(database, nodeId);
+      if (node === undefined) {
+        throw domain(404, "not_found", "Node not found");
+      }
+      const agentId = node.agentId ?? undefined;
+      if (agentId === undefined) {
+        throw badRequest("This node does not run an agent");
+      }
+      const settings = deps.settings();
+      const adapter = deps.adapterFor(settings, agentId);
+      if (adapter === undefined) {
+        throw new AcpError(
+          "acp_unsupported",
+          `${agentId} has no ACP entry point`,
+        );
+      }
+      const status = getAgentStatus(database, nodeId);
+      if (status?.state === "blocked" || status?.state === "waiting") {
+        throw new AcpError(
+          "awaiting_approval",
+          "Answer the pending approval before switching",
+        );
+      }
+      const agent = agentOf(node);
+      const ssh = node.data.ssh !== null && typeof node.data.ssh === "object";
+      if (ssh && driver === "acp") {
+        throw new AcpError(
+          "acp_unsupported",
+          "An SSH node cannot be driven over ACP yet",
+        );
+      }
+
+      // 1. 结束当前驱动。
+      const latest = loadSession(database, nodeId);
+      let current: TerminalSession | undefined =
+        latest === undefined
+          ? undefined
+          : wiring.manager.session(latest.sessionId);
+      const wanted = driver === "acp" ? "acp" : "terminal";
+      const currentDriver =
+        current === undefined
+          ? undefined
+          : current.backend === "acp"
+            ? "acp"
+            : "terminal";
+      if (
+        current !== undefined &&
+        currentDriver === wanted &&
+        wiring.manager.isAlive(current.id)
+      ) {
+        return {
+          workspaceId: node.workspaceId,
+          sessionId: current.id,
+          resumed: true,
+        };
+      }
+      if (current !== undefined && wiring.manager.isAlive(current.id)) {
+        if (current.backend !== "acp") {
+          // 终端 → ACP：先礼后兵，敲 CLI 自己的退出命令等它把会话写完。
+          await wiring.hibernator.quitForSwitch(current.id);
+        }
+        try {
+          await wiring.manager.terminate(current.id, "session");
+        } catch (error) {
+          if (wiring.manager.isAlive(current.id)) throw error;
+        }
+        database
+          .prepare(
+            "UPDATE terminal_sessions SET termination_intent = 'switch' WHERE id = ?",
+          )
+          .run(current.id);
+        current = wiring.manager.session(current.id);
+      }
+
+      // 2. CLI 自己的会话 id。
+      const provider = getAgentStatus(database, nodeId)?.sessionId;
+      const cwd =
+        text(node.data.cwd) ?? workspaceRoot(database, node.workspaceId);
+      if (cwd === undefined) {
+        throw badRequest("The node has no working directory");
+      }
+
+      // 3. 起下一代。
+      if (driver === "acp") {
+        deps.prepare(nodeId, {
+          agentId,
+          permissionMode: text(agent.permissionMode),
+          model: text(agent.model),
+          resume: adapter.resume === "none" ? null : (provider ?? null),
+        });
+        const env = wiring.environment(nodeId, agentId, { acp: true });
+        const row =
+          current === undefined
+            ? await wiring.manager.spawn({
+                workspaceId: node.workspaceId,
+                cwd: deps.cwdOf(cwd),
+                command: adapter.program,
+                kind: "terminal",
+                ownerNodeId: nodeId,
+                agentId,
+                backend: "acp",
+                env,
+              })
+            : await wiring.manager.revive(current.id, env, {
+                ended: true,
+                backend: "acp",
+                command: adapter.program,
+              });
+        const session = wiring.backend.sessionByRow(row.id);
+        return {
+          workspaceId: node.workspaceId,
+          sessionId: row.id,
+          resumed: provider !== undefined && session?.resumed === true,
+        };
+      }
+
+      const env = wiring.environment(nodeId, agentId, { acp: false });
+      const row =
+        current === undefined
+          ? await wiring.manager.spawn({
+              workspaceId: node.workspaceId,
+              cwd: deps.cwdOf(cwd),
+              shell: text(node.data.shell),
+              kind: "terminal",
+              ownerNodeId: nodeId,
+              agentId,
+              env,
+            })
+          : await wiring.manager.revive(current.id, env, {
+              ended: true,
+              backend: wiring.manager.effectiveKind(),
+              command: null,
+            });
+      const resumable =
+        provider !== undefined &&
+        provider !== "" &&
+        canResume(settings, agentId);
+      const program = wiring.program(agentId).path;
+      const dialect = nodeDialect(text(node.data.shell));
+      const line = resumable
+        ? resumeLine(settings, agentId, node.data, provider, {
+            ...(program === undefined ? {} : { path: program }),
+            dataDir: context.dataDir,
+            nodeId,
+            dialect,
+          })
+        : canvasLaunchLine({
+            settings,
+            agentId,
+            dataDir: context.dataDir,
+            nodeId,
+            dialect,
+            ...(program === undefined ? {} : { program }),
+            ...(text(agent.permissionMode) === undefined
+              ? {}
+              : { permissionMode: text(agent.permissionMode) as string }),
+            ...(text(agent.model) === undefined
+              ? {}
+              : { model: text(agent.model) as string }),
+          });
+      void wiring
+        .typeLaunchLine(row.id, row.generation, line)
+        .catch((error: unknown) => {
+          context.log.warn("could not type the launch line after a switch", {
+            nodeId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      return {
+        workspaceId: node.workspaceId,
+        sessionId: row.id,
+        resumed: resumable,
+      };
+    });
+}

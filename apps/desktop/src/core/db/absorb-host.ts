@@ -140,8 +140,12 @@ export function absorbHostDatabase(options: {
         }
         // 列名逐条列出来，而不是 `INSERT INTO t SELECT * FROM legacy.t`：两边
         // 列序一致是今天的事实，靠事实而不是靠约束搬数据，有一天列序变了就会
-        // 悄悄把 `origin` 写进 `scopes`。
-        const columns = columnNames(database, table);
+        // 悄悄把 `origin` 写进 `scopes`。只搬两边都有的列：统一库之后加的列
+        // （例如会话的最近活动、来源 IP）旧库里没有，取它们的缺省值。
+        const legacyColumns = new Set(columnNames(database, source, "legacy"));
+        const columns = columnNames(database, table).filter((name) =>
+          legacyColumns.has(name),
+        );
         const names = columns.map(quoteIdentifier).join(", ");
         database.exec(
           `INSERT INTO main.${quoteIdentifier(table)} (${names}) ` +
@@ -198,9 +202,13 @@ function count(database: DatabaseSync, table: string, schema = "main"): number {
   return Number(row?.total ?? 0);
 }
 
-function columnNames(database: DatabaseSync, table: string): string[] {
+function columnNames(
+  database: DatabaseSync,
+  table: string,
+  schema: "main" | "legacy" = "main",
+): string[] {
   const rows = database
-    .prepare(`PRAGMA main.table_info(${quote(table)})`)
+    .prepare(`PRAGMA ${schema}.table_info(${quote(table)})`)
     .all() as { name: string }[];
   return rows.map((row) => row.name);
 }

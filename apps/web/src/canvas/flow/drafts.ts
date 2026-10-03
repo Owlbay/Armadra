@@ -73,6 +73,11 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+/** 草稿表一变就回调（非 React 的订阅方用，例如实时绑定等手势结束）。 */
+export function subscribeDrafts(listener: () => void): () => void {
+  return subscribe(listener);
+}
+
 export function useDrafts(): DraftMap {
   return React.useSyncExternalStore(subscribe, getDrafts, () => EMPTY);
 }

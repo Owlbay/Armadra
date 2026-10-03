@@ -49,7 +49,71 @@ export const PERM_WAIT_SECONDS = 45;
 
 export const DECISIONS = ["allow", "deny"] as const;
 
-export type ApprovalRoute = "file" | "keys" | "none";
+/**
+ * How a decision reached the CLI: an answer file the hook client was polling
+ * for, keys typed into the PTY, the pending `session/request_permission` of an
+ * ACP session (ACP 会话视图设计 §5.5), or nothing.
+ */
+export type ApprovalRoute = "file" | "keys" | "acp" | "none";
+
+/**
+ * The ACP half of the answer: the core's ACP domain registers it
+ * (`core/acp/index.ts`) and it answers the pending request with this option.
+ * `false` when no live session holds that request any more.
+ */
+export type AcpApprovalAnswerer = (
+  approval: AgentApproval,
+  optionId: string,
+) => boolean;
+
+let acpAnswerer: AcpApprovalAnswerer | undefined;
+
+export function setAcpApprovalAnswerer(
+  answerer: AcpApprovalAnswerer | undefined,
+): void {
+  acpAnswerer = answerer;
+}
+
+/** One option of an ACP permission request, as stored in `request_json`. */
+export interface AcpApprovalOption {
+  readonly optionId: string;
+  readonly kind: string;
+}
+
+/** The options of an ACP approval; `undefined` for any other approval. */
+export function acpOptionsOf(
+  request: unknown,
+): readonly AcpApprovalOption[] | undefined {
+  if (typeof request !== "object" || request === null) return undefined;
+  const raw = request as { protocol?: unknown; options?: unknown };
+  if (raw.protocol !== "acp" || !Array.isArray(raw.options)) return undefined;
+  return raw.options.filter(
+    (option): option is AcpApprovalOption =>
+      typeof option === "object" &&
+      option !== null &&
+      typeof (option as AcpApprovalOption).optionId === "string" &&
+      typeof (option as AcpApprovalOption).kind === "string",
+  );
+}
+
+/**
+ * The option an ACP answer selects. An explicit `optionId` must be one of the
+ * agent's and agree with the decision (`allow_*` for allow, `reject_*` for
+ * deny); without one, the first option of the decision's kind — the header's
+ * allow / deny buttons. `undefined`: nothing fits.
+ */
+export function acpOptionFor(
+  options: readonly AcpApprovalOption[],
+  decision: string,
+  optionId: string | undefined,
+): AcpApprovalOption | undefined {
+  const prefix = decision === "allow" ? "allow_" : "reject_";
+  if (optionId !== undefined) {
+    const chosen = options.find((option) => option.optionId === optionId);
+    return chosen?.kind.startsWith(prefix) === true ? chosen : undefined;
+  }
+  return options.find((option) => option.kind.startsWith(prefix));
+}
 
 export interface AgentApproval {
   readonly id: string;
@@ -149,6 +213,8 @@ export interface AnswerRequest {
    * second answer, because an answered row is not open to being answered.
    */
   readonly expectedRevision?: number;
+  /** An ACP approval's chosen option (contract §14.4). */
+  readonly optionId?: string;
 }
 
 export interface AnswerResult {
@@ -193,6 +259,33 @@ export async function answerApproval(
   const existing = getApproval(context, pendingId);
   const expected = request.expectedRevision ?? existing.revision;
 
+  // An ACP request is answered with one of the agent's own options. Checked
+  // before the CAS: a choice that cannot be delivered is not a decision.
+  const acpOptions = acpOptionsOf(existing.request);
+  const acpOption =
+    acpOptions === undefined
+      ? undefined
+      : acpOptionFor(acpOptions, decision, request.optionId);
+  if (
+    existing.answer === null &&
+    ((acpOptions !== undefined && acpOption === undefined) ||
+      (acpOptions === undefined && request.optionId !== undefined))
+  ) {
+    audit(context, existing, {
+      decision,
+      answeredBy,
+      expectedRevision: expected,
+      accepted: false,
+      route: "",
+      refusal: "option_invalid",
+    });
+    throw badRequest(
+      acpOptions === undefined
+        ? "optionId is only for ACP approvals"
+        : "optionId is not one of the agent's options for this decision",
+    );
+  }
+
   // A question somebody has already decided is not one to decide again.
   // Reloading would not produce a state in which answering is right, so this
   // is its own refusal rather than a revision conflict.
@@ -235,7 +328,11 @@ export async function answerApproval(
   // failure is reported as itself: the answer stands, and what could not
   // happen is the CLI hearing it.
   let route: ApprovalRoute = "none";
-  if (writeAnswerFile(pendingDir(context), pendingId, decision)) {
+  if (acpOption !== undefined) {
+    // ACP: the answer goes to the pending `session/request_permission`. Never
+    // typed into anything — an ACP session has no prompt to type at.
+    if (acpAnswerer?.(approval, acpOption.optionId) === true) route = "acp";
+  } else if (writeAnswerFile(pendingDir(context), pendingId, decision)) {
     route = "file";
   } else if (await typeIntoPty(context, approval, decision)) {
     route = "keys";
@@ -270,6 +367,53 @@ function resolvedPayload(
   return { ...approval, resolved: true, decision, answer: decision, route };
 }
 
+/**
+ * Closes an approval nobody answered: an ACP request withdrawn because its turn
+ * was cancelled, the adapter exited, the node switched driver or hibernated
+ * (ACP 会话视图设计 §5.5 第 4 条). Recorded as `cancelled` by `core`, audited
+ * like any other attempt, and published as a resolution so every header drops
+ * its buttons. An approval somebody already answered is left alone.
+ */
+export function cancelOpenApproval(
+  context: Pick<CollabContext, "database" | "publish">,
+  pendingId: string,
+): AgentApproval | undefined {
+  const row = context.database
+    .prepare(`${SELECT}WHERE id = ?`)
+    .get(pendingId) as ApprovalRow | undefined;
+  if (row === undefined || row.answer !== null) return undefined;
+  const existing = approvalOf(row);
+  const next = existing.revision + 1;
+  const updated = context.database
+    .prepare(
+      "UPDATE agent_approvals SET answer = 'cancelled', answered_by = 'core', answered_at = ?, revision = ? " +
+        "WHERE id = ? AND answer IS NULL AND revision = ?",
+    )
+    .run(rfc3339(), next, pendingId, existing.revision);
+  if (Number(updated.changes) === 0) return undefined;
+  const approval = approvalOf(
+    context.database
+      .prepare(`${SELECT}WHERE id = ?`)
+      .get(pendingId) as unknown as ApprovalRow,
+  );
+  audit(context, approval, {
+    decision: "cancelled",
+    answeredBy: "core",
+    expectedRevision: existing.revision,
+    applied: next,
+    accepted: true,
+    route: "acp",
+    refusal: "",
+  });
+  context.publish(approval.workspaceId, {
+    type: "agent.approval",
+    nodeId: approval.nodeId,
+    pendingId: approval.id,
+    request: resolvedPayload(approval, "cancelled", "acp"),
+  });
+  return approval;
+}
+
 /* ---------------------------------- audit --------------------------------- */
 
 export interface AuditEntry {
@@ -283,7 +427,7 @@ export interface AuditEntry {
 }
 
 function audit(
-  context: CollabContext,
+  context: Pick<CollabContext, "database">,
   approval: AgentApproval,
   entry: AuditEntry,
 ): void {

@@ -58,6 +58,22 @@
       "timeoutMinutes": 5
     },
     {
+      "id": "realtime-e2e",
+      "tier": "a",
+      "script": "tools/probes/realtime-e2e.mjs",
+      "args": ["{out}"],
+      "requires": ["tmux", "chrome"],
+      "timeoutMinutes": 10
+    },
+    {
+      "id": "acp-e2e",
+      "tier": "a",
+      "script": "tools/probes/acp-e2e.mjs",
+      "args": ["{out}"],
+      "requires": ["tmux", "chrome"],
+      "timeoutMinutes": 10
+    },
+    {
       "id": "server-perf",
       "tier": "b",
       "script": "tools/probes/server-perf.mjs",
