@@ -201,7 +201,27 @@
 
 ## G1-11 身份加固一：口令策略、限流锁定、passkey、TOTP（I1）
 
-未开始。
+**做了什么**
+
+- 迁移 `identity_hardening`（分支上编号取 main 当时最大号 +1，合入时按协调者的顺序改号）：`identity_credentials` 加 `sign_count / aaguid / transports_json / label` 与「一把 passkey 只属于一个人」的唯一索引；新表 `identity_mfa`（多一列 `last_time_step` 做重放防护）、`identity_recovery_codes`（同批共用盐）、`identity_lockouts`；`identity_sessions` 加 `last_seen_at_ms / remote_ip / user_agent`。`db/absorb-host.ts` 改成只搬新旧两边都有的列。
+- `identity/policy.ts`：长度（10–64 可配，缺省 12）、不含账号名、随包常见口令表 `common-passwords.txt`（1 万条，按常见词根 × 前后缀 × 键盘序列规则生成，只收长度 ≥ 10 的）；泄露检查调用点 `checkBreach` 恒为 `skipped`，G3-8 填。表以 `?raw` 内联，服务器壳的 esbuild 加了同名插件。
+- `identity/throttle.ts`：按来源 IP 的内存令牌桶 20 次 / 分钟；按 principal 5 次失败起锁 1 分钟、翻倍封顶 15 分钟，不看账号是否存在。
+- `identity/passkey.ts`：`@simplewebauthn/server` 14.0.3 做全部校验；RP ID 选取（覆盖 / 公网来源公共后缀 / 请求来源，IP 主机答 `passkey_unavailable_on_ip_host`）、内存挑战 2 分钟一次性、可发现凭据登录与 `userHandle` 核对。
+- `identity/mfa/`：TOTP（`otplib` 13.5.0，密钥在 SecretStore `armadra-totp-<id>`）、恢复码（scrypt）、两步登录中间票。
+- 路由（`accounts-http.ts`）：`passkey/*` 四条做实加列表与删除，`login` 两步与 `mfa/*`，`sessions*`，`lockouts*`；审计动作表 `SECURITY_AUDIT_ACTIONS`。共享层 zod 与契约 §18.1–§18.4。
+- 依赖：`pnpm-workspace.yaml` 加 `overrides` 把 `@peculiar/asn1-schema` 统一到 2.10.0——两份并存时 ES256 断言一律校验失败（`ECDSASigValue` 登记在另一份实例里）。
+
+**实测**
+
+- 软件认证器（`soft-authenticator.fixture.ts`）与真 Chromium 的 CDP 虚拟认证器（`passkey-cdp.live.integration.test.ts`，跑在 `vitest.live.config.mts`）注册 → 登录都过；`origin` / `challenge` / RP ID 不对、计数器回退、挑战重放即拒。
+- RFC 6238 SHA-1 向量、重放拒绝；`security-http.test.ts` 走真 HTTP 覆盖策略、锁定、两步登录、恢复码、passkey、会话列表；`accounts.integration.test.ts` 在整个 core 上跑两步登录。
+- 服务器壳 esbuild 产物与桌面 electron-vite 产物里都内联了口令表，CJS 打包后 passkey 与 TOTP 照常工作。
+
+**没做**
+
+- 泄露检查（HIBP）：G3-8。安全页、登录页的两步与 passkey 按钮：G2-8。OAuth：G1-12。
+- 策略要求 MFA 而本人未登记时不拦登录，只在会话里带 `mfaEnrollmentRequired: true`，由 G2-8 的页面把人带去登记。
+- 需用户提供：稳定域名（passkey 的 RP ID，外部服务 §7.2）；没有时以 IP 访问如实不可用，`https://localhost` 与虚拟认证器可完整验证。
 
 ## G1-12 OAuth / OIDC / SSO（I2）
 
@@ -274,7 +294,32 @@
 
 ## G2-1 ACP 会话语义（A2）
 
-未开始。
+做了什么：
+
+- ACP 是终端管理器的一个后端（`core/acp/bridge.ts::AcpBackend`，`BackendKind` 加 `acp`）：会话是 `terminal_sessions` 的 `acp` 行，行、代次、人类租约、输入围栏、退出通知、Eco 休眠只有一份实现。`writeSubmit`（括号粘贴 + 回车）→ `session/prompt`，单个 `ESC` → `session/cancel`，其余字节 `acp_no_raw_write`，`capture` 读镜像，`attach` 409。`manager.spawn` 可点名后端，`manager.revive` 支持在结束了的行上以另一种后端起下一代（驱动切换与 ACP 接回）。
+- `core/acp/session.ts`：一个节点一个适配器进程；回合排队、一次一个；先写镜像再发 `acp.update`，我方提示也发一帧；回放只在镜像空着时写进去、从不发给页面；审批进 `agent_approvals`（`request_json = { protocol: "acp", toolCall, options }`），取消 / 退出 / 切换 / 休眠一律回 `cancelled` 并记 `answered_by = core`。
+- `core/acp/normalize.ts` + `hook/normalize/index.ts` 的 `case "acp"`：§5.4 全表，经 `hook/ingest.ts::apply` 进同一个 reducer，来源 `acp`。
+- `agent/approvals.ts`：`ApprovalRoute` 加 `acp`、`optionId`（必须是 Agent 的选项且与决定同类）、`cancelOpenApproval`；core 启动时把上一进程留下的未答 ACP 审批记成 `cancelled`。
+- `core/acp/routes.ts`：`/api/acp/sessions`（节点不必已落盘，带 `prompt`）、`…/prompt`（结束了的行先原地接回）、`…/cancel`、`…/mode`、`…/log`、`/api/acp/nodes/{id}/driver`（同一行上切换，`resumed` 如实答）；路由门按会话行 / 节点查画布（`identity/route-access.ts`）。
+- 镜像 `core/acp/mirror.ts` + `history/acp-mirror.ts`（`readHistoryEntries` 先认 `.acp.jsonl`）；`agent/canvas-launch.ts::acpInjection` 按适配器表裁剪注入；ACP 节点的环境不带启动器 `PATH` 与 Hook 等答复变量（一个节点一个状态来源）。
+- 休眠：`stateSource = acp` 算上报，`resume: none`（Copilot）记 `noResume`，ACP 会话不敲退出命令、接回不敲恢复行（`hibernator.ts` 的 ACP 分支）；依赖编排与定时冷启动对 `driver: acp` 的节点起适配器、不敲启动行。
+- 前台门：ACP 会话的前台是适配器，它下面列这家 CLI 的进程名，`send` / `interrupt` 的门链不改。
+- `custom:` 条目的基础 CLI 自己是 ACP 入口（OpenCode、OMP、Copilot、ama）时，条目的启动程序顶替表里的程序（`adapters.ts::adapterFor`，`GET /api/agents` 同一条规则）。
+- 页面两处修正（G1-6 的文件）：会话视图写回会话 id 后骨架屏不退（`SessionView.tsx`）；切换驱动后节点头仍写「已退出」（`TerminalNode.tsx`、`driver.ts`）。
+- 契约 §14.2–§14.4；架构指南 ACP 一段；A 档 `acp-e2e`。
+
+实测：
+
+- 单测：`acp/{normalize,session,bridge,mirror,routes,driver-switch}.test.ts`、`terminal/hibernate.test.ts` 的 ACP 用例、`agent/approvals.test.ts`、`identity/route-access.test.ts`、`agent/canvas-launch.test.ts`，对 `@armadra/agent/acp` 的假 Agent（真子进程）。
+- `node tools/probes/acp-e2e.mjs`（本机 macOS，真 core + Vite + 无头 Chrome）：页面挂载起会话 → 一轮回复 → 审批卡点「拒绝」（`deny`、审计 `route = acp`）→ `armadra-hook canvas send` 投给另一个 ACP 节点（`delivered`）→ 节点菜单切到终端视图（PTY 起来、敲了恢复行）再切回（同一行、代次 1→2→3、CLI 会话 id 不变、之前的对话还在）→ Eco 秒级阈值休眠、页面发一句唤醒（适配器 pid 换了、会话 id 不变）→ 无控制台错误。
+
+没做：
+
+- `elicitation/create`（`@armadra/agent` 0.6.2 的客户端不交出这个请求）、模型经 `session/set_config_option`（起会话时不带模型）。
+- `pi-acp` 的 `mapFile`：按 `opaque` 处理（不读映射文件）。
+- ACP 驱动下的节点凭据兑换与 ama 的模型密钥（它们经画布启动器，ACP 直接起适配器）；SSH 节点不能切到 ACP（答 `acp_unsupported`）。
+- 画布工具注入：会话照常带 `canvasMcp`，`mcpInjected` 要等 `@armadra/agent` 支持传入 `mcpServers` 后才为真。
+- 真适配器（六家）的端到端在 G3-7。
 
 ## G2-2 输出到画板与普通用户入口（W2 + W3）
 

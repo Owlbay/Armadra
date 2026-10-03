@@ -185,7 +185,10 @@ export function hibernationBlockers(
   } else if (
     facts.state === undefined ||
     !QUIET_STATES.has(facts.state) ||
-    (facts.stateSource !== "hook" && facts.stateSource !== "extension")
+    (facts.stateSource !== "hook" &&
+      facts.stateSource !== "extension" &&
+      // ACP 流本身就是权威上报（ACP 设计 §5.3、§5.4）。
+      facts.stateSource !== "acp")
   ) {
     // `observed` 或空的来源不算：那条通道上「在等人」这件事根本观测不到。
     blockers.push("unknownState");

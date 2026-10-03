@@ -86,6 +86,10 @@ const AGENT_STATUS =
   /^\/api\/agent-status\/([^/]+)\/(read|transcript|suggest-title)$/;
 const CONTEXT_READS = /^\/api\/nodes\/([^/]+)\/context-reads$/;
 const APPROVAL = /^\/api\/approvals\/([^/]+)\/answer$/;
+/** ACP 会话（契约 §14.2）：会话行就是终端行，按会话行查画布。 */
+const ACP_SESSION = /^\/api\/acp\/sessions\/([^/]+)\/[^/]+$/;
+/** 驱动切换：按节点查画布。 */
+const ACP_DRIVER = /^\/api\/acp\/nodes\/([^/]+)\/driver$/;
 const CONFIRM = /^\/api\/control\/confirm\/([^/]+)$/;
 
 /** Agent 状态的三条路由各要什么。 */
@@ -169,6 +173,47 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
           return body;
         },
       };
+    }
+
+    // ACP 会话与终端同一套判定：开会话与开终端同一档（并记下创建者），读
+    // 镜像是看终端，往别人的会话里发提示要 `terminal:drive`。
+    if (path === "/api/acp/sessions" && method === "POST") {
+      const workspaceId = bodyWorkspace(request);
+      if (!allowed(subject, "terminal:create", workspaceId)) return DENY;
+      return {
+        allowed: true,
+        filter: (body) => {
+          const id = (body as { id?: unknown } | null)?.id;
+          if (typeof id === "string") {
+            lookups.recordCreator(id, subject.principalId);
+          }
+          return body;
+        },
+      };
+    }
+    const acpSession = ACP_SESSION.exec(path);
+    if (acpSession !== null) {
+      const sessionId = decodeURIComponent(acpSession[1] as string);
+      const workspaceId = lookups.sessionWorkspace(sessionId);
+      if (workspaceId === "") return DENY;
+      if (reading) return onWorkspace(subject, "terminal:read", workspaceId);
+      const own =
+        subject.principalId !== "" &&
+        lookups.sessionCreator(sessionId) === subject.principalId;
+      return onWorkspace(
+        subject,
+        own ? "terminal:create" : "terminal:drive",
+        workspaceId,
+      );
+    }
+    const acpDriver = ACP_DRIVER.exec(path);
+    if (acpDriver !== null) {
+      // 切换会结束当前进程、起另一个：与往别人的终端里写同一档。
+      return onWorkspace(
+        subject,
+        "terminal:drive",
+        lookups.nodeWorkspace(decodeURIComponent(acpDriver[1] as string)),
+      );
     }
 
     const session = TERMINAL_SESSION.exec(path);

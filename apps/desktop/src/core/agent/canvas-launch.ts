@@ -4,6 +4,7 @@ import {
   shellDialect,
 } from "../terminal/shell";
 import {
+  canvasInjection,
   currentLauncher,
   isInjected,
   prepareInjection,
@@ -217,4 +218,63 @@ export function canvasEnvironment(
     ["ARMADRA_SHIMS", shims],
     ["PATH", canvasPath(shims, options.ambient)],
   ];
+}
+
+/* ------------------------------- ACP 驱动 -------------------------------- */
+
+/** 适配器表里决定注入怎么复用的那两项（`core/acp/adapters.ts`）。 */
+export interface AcpInjectionRule {
+  readonly injection: { readonly reuse: readonly ("env" | "args")[] };
+  /** ama：注入只有一个 `--profile <path>`，由适配器表单独接（`profileFlag`）。 */
+  readonly profileFlag?: string;
+}
+
+export interface AcpInjection {
+  readonly env: readonly (readonly [string, string])[];
+  readonly args: readonly string[];
+  /** `profileFlag` 的值（ama 的 profile 路径）；没有就缺席。 */
+  readonly profilePath?: string;
+}
+
+/**
+ * 画布注入在 ACP 驱动下还能用的那一半（ACP 会话视图设计 §5.8）。
+ *
+ * 终端驱动的注入由启动器 `run/<cli>` 接在 CLI 的 argv 与环境上；ACP 驱动由
+ * core 直接起适配器，没有启动器，所以这里把同一份注入（`canvasInjection`，
+ * 产物先确保为最新）按适配器表的 `reuse` 裁剪：只留这家的 ACP 入口真认的
+ * 环境变量或 argv，其余（Hook 设置、插件目录、系统提示文件）在 ACP 下没有对应
+ * 的参数，画布工具改由 `session/new.mcpServers` 承担。终端驱动的注入产物与
+ * 启动行一个字节不改。
+ */
+export function acpInjection(
+  settings: AgentSettings,
+  dataDir: string,
+  agentId: string,
+  rule: AcpInjectionRule,
+  log?: (message: string, fields: Record<string, unknown>) => void,
+): AcpInjection {
+  const base = baseAgent(settings, agentId);
+  if (!isInjected(base)) return { env: [], args: [] };
+  try {
+    prepareInjection(base, { dataDir });
+  } catch (error) {
+    log?.("could not prepare the canvas injection", {
+      agentId: base,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  const injection = canvasInjection({ dataDir, agentId: base });
+  if (rule.profileFlag !== undefined) {
+    const at = injection.args.indexOf(rule.profileFlag);
+    const profilePath = at >= 0 ? injection.args[at + 1] : undefined;
+    return {
+      env: [],
+      args: [],
+      ...(profilePath === undefined ? {} : { profilePath }),
+    };
+  }
+  return {
+    env: rule.injection.reuse.includes("env") ? injection.env : [],
+    args: rule.injection.reuse.includes("args") ? injection.args : [],
+  };
 }

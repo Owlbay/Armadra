@@ -579,7 +579,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 14. ACP：`/api/acp/*` 与 `/api/agents` 行的 `acp`
 
-设计见 [ACP 会话视图](../design/acp-session-view.md) 与 [补全架构](../design/completion-architecture.md) §5.1。ACP 是同一个终端节点的另一种驱动方式；协议栈是 `@armadra/agent/acp`（精确版本），core 只包装它的 `AcpClient`（`core/acp/client.ts`）。§14.2–§14.4 由 G2-1 填写。
+设计见 [ACP 会话视图](../design/acp-session-view.md) 与 [补全架构](../design/completion-architecture.md) §5.1。ACP 是同一个终端节点的另一种驱动方式；协议栈是 `@armadra/agent/acp`（精确版本），core 只包装它的 `AcpClient`（`core/acp/client.ts`）。
 
 ### 14.1 `GET /api/agents` 行的 `acp`
 
@@ -611,6 +611,48 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - 起会话失败的错误码（G2-1 的路由原样答出，形状 `{ code, message }`）：`acp_not_installed`、`acp_spawn_failed`、`acp_exited`、`acp_initialize_failed`、`acp_initialize_timeout`、`acp_protocol_version`、`acp_auth_required`（Agent 要先在 CLI 里登录）、`acp_session_failed`、`acp_mode_unsupported`、`acp_mode_unavailable`。消息里不带适配器的 stderr。
 - 实跑验证过的版本区间记在 `tools/release/compatibility.json` 的 `acp` 键（`{ protocolVersion: 1, adapters: { <id>: { program, verified: null | { min, max? } } } }`），不进发布说明的兼容围栏；`program` 与适配器表由测试对齐。
 - 状态来源词汇多一个 `acp`（`agent_status.state_source`）：由 core 在 ACP 驱动的会话上写入，与 `hook` / `extension` 一样算上报（`stateSourceIsReported`），客户端无法自称。
+
+### 14.2 会话路由 `/api/acp/*`
+
+实现：`apps/desktop/src/core/acp/routes.ts`；形状：共享层 `api/acp.ts`。ACP 会话**就是** `terminal_sessions` 的一行（`backend: "acp"`，§5.1 的会话行形状不变），所以行、代次、人类租约（`POST /api/terminals/{id}/drive`）、`terminate`、`wake`、会话侧栏都照旧作用于它。路径里的 `{sessionId}` 是这一行的 id，不是 ACP 会话 id。权限与终端同一档：读要 `terminal:read`，开会话要 `terminal:create`（记创建者），往别人开的会话里写要 `terminal:drive`，按会话行查画布。
+
+| 方法与路径                              | 请求                                                                               | 应答                                                                                                          |
+| --------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `POST /api/acp/sessions`                | `{ workspaceId, nodeId, cwd, agentId, permissionMode?, model?, resume?, prompt? }` | `200` 会话行（§5.1，`backend: "acp"`）                                                                        |
+| `POST /api/acp/sessions/{id}/prompt`    | `{ text }`                                                                         | `200 { turnId }`；回合的结局经 `acp.turn`（§14.3）                                                            |
+| `POST /api/acp/sessions/{id}/cancel`    | 无                                                                                 | `204`；`session/cancel`，挂起的审批一律回 `cancelled`                                                         |
+| `POST /api/acp/sessions/{id}/mode`      | `{ modeId }`                                                                       | `204`                                                                                                         |
+| `GET /api/acp/sessions/{id}/log?after=` | 无                                                                                 | `200 { entries: TranscriptEntry[], endOffset, modes: { currentModeId, availableModes[] } \| null, pending? }` |
+| `POST /api/acp/nodes/{nodeId}/driver`   | `{ driver: "acp" \| "terminal" }`                                                  | `200 { sessionId, resumed }`                                                                                  |
+
+- **起会话**：`nodeId` 不必已经在画布文档里（新建向导先起会话、节点随后落盘）；同一个节点已经有活着的 ACP 会话时答那一行（两台设备同时挂载、重试都不起第二个）；有活着的**终端**会话时 `409 conflict`（先切换驱动）；节点最近那一行是结束了的 ACP 行时在同一行上起下一代并接回。`prompt` 在会话开好后作为第一条提示发出（人类驾驶者）。没有 ACP 入口的 Agent 答 `400 acp_unsupported`；起不来的原样答 §14.1 的错误码（`acp_not_installed` 400、`acp_mode_unsupported` 400、`acp_mode_unavailable` 409、`acp_auth_required` 409、其余 502）。`custom:` 条目借基础 CLI 的适配器；基础 CLI 自己就是 ACP 入口（`native`）时，条目的 `launchCmd` 与 `args` 顶替表里的程序。
+- **提示**：等同在终端里敲一行并回车——经 `writeSubmit`，人类驾驶者（抢占租约，永不被拒）。同一会话一次一个回合，后到的排队。会话行已经结束（休眠、core 重启、适配器自己退了）时先在**同一行**上起下一代并以 CLI 会话 id 接回，再发；这一行已被节点的另一行取代时 `409 conflict`。
+- **镜像**：`entries` 是镜像 `<数据目录>/acp/<nodeId>/<ACP 会话 id>.acp.jsonl` 从字节偏移 `after` 起的完整记录（`TranscriptEntry`：`{ role: "user" | "assistant", blocks[], endOffset, at? }`，相邻的助手文本已合并），`endOffset` 是下一次的 `after`。**core 先写镜像再发 `acp.update`**：页面先订阅再读，读回来之前到的分块已经在 `entries` 里。镜像只记对话：我方的提示、助手文本、工具调用（`tool_use`）与它的终态结果（`tool_result`，正文截到 8000 字符）；思考、计划、用量、模式变化只经事件。`modes` 与 `pending`（挂起的审批，形状 `{ pendingId, protocol: "acp", toolCall, options[] }`）描述活着的进程，没有进程时 `modes: null`、无 `pending`。
+- **驱动切换**（ACP 设计 §4.2）：节点在 `blocked` / `waiting` 时 `409 awaiting_approval`；SSH 节点切到 ACP 答 `400 acp_unsupported`。否则结束当前驱动（终端先敲 CLI 的退出命令等它自己退，再结束；ACP 回合里先 cancel 再收掉进程），行以 `termination_intent = 'switch'` 结束；再在**同一行**上以另一种驱动起下一代（代次 +1，行 id 不变）：ACP 侧以 `agent_status.session_id` 接回（适配器表 `resume: "none"` 的新开），终端侧起 shell 并敲 CLI 的恢复行（不能续接时敲普通启动行）。`resumed` 如实说接上了没有。已经是目标驱动且活着时什么都不动，答 `resumed: true`。切换期间节点算「睡着」，`send` 排队。节点数据里的 `agent.driver` 由页面写回（不进撤销栈）。
+- **其余路由在 ACP 行上**：`GET /api/terminals/{id}/ws` 升级前答 `409`（没有 PTY 可附着）；`POST …/paste` 只收带回车的整段（`enter: false` 答 `409 acp_no_raw_write`）；`GET …/capture` 是镜像尾部渲染成的散文；`terminate` 的 `interrupt` 是 `session/cancel`。协作动词与调度经终端桥写入：`writeSubmit`（括号粘贴 + 回车）落为 `session/prompt`，单个 `ESC` 落为 `session/cancel`，其他字节答 `acp_no_raw_write`。
+
+### 14.3 事件
+
+工作空间事件流（§5）多三种，`sessionId` 一律是会话行 id（一行一帧）：
+
+```text
+{ "type": "acp.update", "sessionId": "…", "nodeId": "…", "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "…" } } }
+{ "type": "acp.turn", "sessionId": "…", "nodeId": "…", "turnId": "3-2", "stopReason": "end_turn" }
+{ "type": "acp.driver", "nodeId": "…", "driver": "terminal", "sessionId": "…", "resumed": true }
+```
+
+- `acp.update.update` 是 ACP `session/update` 的 `update` 原样（v1 规范字段；`_meta` 不解释）；core 发出的一条之前已经写进镜像。我方发出的提示也以一条 `user_message_chunk` 发出，别的设备看得见是谁说了什么。`session/load` 的回放从不发出。
+- `acp.turn`：一次提示的结束。`stopReason` 是规范的五个值之一；提示以 JSON-RPC 错误结束时没有 `stopReason`，带 `error: { code, message }`（`acp_protocol`，或进程没了时 `acp_exited`）。
+- `acp.driver`：一次切换完成（§14.2）。
+- 状态不另起事件：ACP 会话的状态经同一条 `agent.status` 发出，`status.stateSource = "acp"`。归一化（ACP 设计 §5.4）：我方发出提示 → `working`（新回合），工具调用 → `working`，`request_permission` → `blocked`（带 `pendingId`），答了或取消了 → `working`，`end_turn` / `max_tokens` / `max_turn_requests` → `done`，`cancelled` → `done` + `interrupted`，`refusal` 或错误 → `done` + `errored`；会话开好（新开或接回）→ `session` / `start`，`sessionId` 是 ACP 会话 id、`transcriptPath` 是 CLI 自己的转录（会话 id 对得上且本地找得到时）或镜像。适配器退出走终端退出（`terminal.exit`），与 PTY 死掉同一条路。
+
+### 14.4 审批
+
+`session/request_permission` 进现有的 `agent_approvals`，`pendingId` 形如 `<nodeId>-<epochMs>-acp-<n>`，`request_json` 为 `{ "protocol": "acp", "toolCall": {…}, "options": [{ "optionId", "name", "kind" }] }`；`agent.approval` 事件的 `request` 是这条审批记录（ACP 载荷在它的 `request` 字段里）。
+
+- 答复：`POST /api/approvals/{pendingId}/answer { decision: "allow" | "deny", optionId? }`。ACP 审批的 `optionId` 必须是 Agent 给的选项之一且与 `decision` 同类（`allow_*` / `reject_*`），否则 `400 bad_request`（审计记 `option_invalid`）；不给 `optionId` 时取第一个同类选项（节点头的允许 / 拒绝）。别的审批带 `optionId` 同样 `400`。先记录（CAS 不变），再送达：应答的 `route` 为 `acp` 表示已回到挂起的请求，`none` 表示进程已经不在。
+- 回合被取消、适配器退出、切换驱动、休眠：挂起的请求一律回 `cancelled`，审批行 `answer = "cancelled"`、`answered_by = "core"`，审计照写（`route: "acp"`），并以 `agent.approval`（`request.resolved = true`、`decision: "cancelled"`）通知各端收起按钮。core 启动时把上一个进程留下的未答 ACP 审批同样记成 `cancelled`。
+- core 从不替人选项，也从不自动回答 `request_permission`；`allow_always` 由适配器自己在进程内记忆。
 
 ### 14.5 输出到画板：`POST /api/workspaces/{workspaceId}/exports/{exportId}/text`
 
@@ -800,7 +842,116 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 
 ## 18. 身份扩展：口令策略、passkey、MFA、会话、OAuth、审计
 
-预留，由 G1-11（§18.1–§18.4）、G1-12（§18.5）与 G2-8（§18.6）填写。
+规格是 [补全架构](../design/completion-architecture.md) §8.3；实现在 `core/identity/`（`policy.ts`、`throttle.ts`、`passkey.ts`、`mfa/`，路由在 `accounts-http.ts`），形状的 zod 在 `packages/shared/src/api/identity-security.ts`。和 §10 同一个前缀、同一套认证（Origin、会话凭据；下面标「写」的要 `X-Armadra-CSRF`）。整段 `/api/identity/` 不经路由门（`core/http/route-scopes.ts` 的 `SELF_GUARDED`），本人与 `identity:manage` 的判定在身份域里。
+
+**错误码**：身份域原有的五种仍是 UPPER_SNAKE（`UNAUTHENTICATED` / `PERMISSION_DENIED` / `INVALID_ARGUMENT` / `NOT_FOUND` / `CONFLICT`）；本节新增的具名拒绝是 snake_case，页面按 `code` 选文案。错误体只有 `{ code, message }`。迁移是 `identity_hardening`（`identity_credentials` 加 `sign_count / aaguid / transports_json / label`，新表 `identity_mfa`、`identity_recovery_codes`、`identity_lockouts`，`identity_sessions` 加 `last_seen_at_ms / remote_ip / user_agent`）。
+
+### 18.1 口令策略与锁定
+
+设口令（`POST credentials` `{ kind: "password" }`）与持邀请注册（`POST register`）先过策略，第一条不过的规则就是 `code`，HTTP 400：
+
+| `code`                   | 规则                                                                               |
+| ------------------------ | ---------------------------------------------------------------------------------- |
+| `password_too_short`     | 码点数 < `identity.passwordMinLength`（缺省 12，可配 10–64）                       |
+| `password_too_long`      | UTF-8 超过 1024 字节                                                               |
+| `password_contains_name` | 含显示名或 principal 标识（不分大小写；三个字符以下的名字不参与）                  |
+| `password_too_common`    | 在随包的常见口令表（`core/identity/common-passwords.txt`，1 万条）里，小写精确比对 |
+| `password_breached`      | 泄露检查命中（`identity.breachCheck`，G3-8 实现；调用点已在，今天恒为未检查）      |
+
+登录类请求（`login`、`mfa/verify`、`passkey/login/*`、`register`）的限流与锁定，HTTP 429，带 `Retry-After`（秒）：
+
+| `code`           | 什么时候                                                                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rate_limited`   | 同一来源地址（socket 对端，不读 `X-Forwarded-For`）超过每分钟 20 次                                                                               |
+| `account_locked` | 这个 `principalId` 连续 5 次口令或第二因素失败之后：锁 1 分钟，每多一次失败翻倍，封顶 15 分钟；锁着时不校验口令。成功清零，一小时没有新失败也清零 |
+
+锁定按调用方报上来的 `principalId` 计，**不看账号是否存在**：不存在的账号也会被锁、答同一个 429，锁定因此不泄露存在性。
+
+| 方法与路径                            | 谁能调            | 答案                                                                        |
+| ------------------------------------- | ----------------- | --------------------------------------------------------------------------- |
+| `GET lockouts`                        | `identity:manage` | `{ lockouts: [{ key, principalId, failures, lockedUntilMs }] }`，只列锁着的 |
+| `DELETE lockouts/{principalId}`（写） | `identity:manage` | `{ principalId, unlocked }`（原来是否锁着）                                 |
+
+审计：`identity.login.failed`（`detail.reason`：`password` / `mfa` / `passkey` / `locked`）、`identity.lockout`（新上锁）、`identity.lockout.clear`。
+
+### 18.2 passkey
+
+`@simplewebauthn/server` 校验；attestation 只收 `none`，不做证明链校验；登录走可发现凭据（不给 `allowCredentials`）。挑战在内存里 2 分钟、一次性。
+
+**RP ID**：`identity.rpId` 非空时用它（请求来源的主机必须是它或它的子域，否则 `passkey_rp_id_mismatch`）；否则取公网来源（`gateway.publicOrigin`）的主机名，多个公网来源取按标签的公共后缀（至少两段，取不到就用第一个）；都没有时取请求来源的主机。**主机是 IP 字面量时**一律 `passkey_unavailable_on_ip_host`。改 RP ID 会让已登记的 passkey 全部失效。
+
+| 方法与路径                                                               | 谁能调                           | 答案                                                                                                                                                     |
+| ------------------------------------------------------------------------ | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET passkey`                                                            | 已登录                           | `{ available, rpId, reason, passkeys: [{ credentialId, label, aaguid, transports, createdAtMs }] }`；不可用时 `available: false`、`reason` 是下表的 code |
+| `POST passkey/register/options` `{ label? }`（写）                       | 已登录（给自己登记）             | `{ challengeId, options }`，`options` 是 `PublicKeyCredentialCreationOptionsJSON`                                                                        |
+| `POST passkey/register/verify` `{ challengeId, response, label? }`（写） | 同一个人、同一个来源要的挑战     | 201 `{ credentialId, label, aaguid, transports, createdAtMs }`；`response` 是 `PublicKeyCredential.toJSON()`                                             |
+| `POST passkey/login/options` `{}`                                        | 匿名                             | `{ challengeId, options }`（`PublicKeyCredentialRequestOptionsJSON`）                                                                                    |
+| `POST passkey/login/verify` `{ challengeId, response, deviceName? }`     | 匿名                             | 与 `login` 同形的会话；**视为已满足第二因素**；失败一律 401 `UNAUTHENTICATED`                                                                            |
+| `DELETE passkey/{credentialId}`（写）                                    | 本人；别人的要 `identity:manage` | `{ credentialId, removed: true }`；看不到的答 404                                                                                                        |
+
+| `code`（400）                    | 意思                                        |
+| -------------------------------- | ------------------------------------------- |
+| `passkey_unavailable_on_ip_host` | 以 IP 访问，WebAuthn 不可用；口令照旧       |
+| `passkey_rp_id_mismatch`         | 请求来源不在配置的 RP ID 之下               |
+| `passkey_challenge_expired`      | 挑战不存在、用过或过期（2 分钟）            |
+| `passkey_verification_failed`    | 注册应答没过校验（来源、挑战、RP ID、签名） |
+
+计数器按库的判定写回 `sign_count`；回退（克隆的认证器）由库拒绝。审计：`identity.passkey.add`、`identity.passkey.remove`、`identity.login`（`detail.method: "passkey"`）。
+
+### 18.3 MFA：TOTP、恢复码与两步登录
+
+TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时间步；记最后用过的时间步，**同一个码第二次一律拒**。密钥在 SecretStore（条目名 `armadra-totp-<principalId>`），库里只有条目名。恢复码 10 个（`xxxxx-xxxxx`，大小写、空格与连字符不计），只存 scrypt 哈希，用掉即作废。
+
+**两步登录**：`POST login` 口令对了且这个人有**已确认**的 TOTP 时，不建会话，答：
+
+```json
+{
+  "mfaRequired": true,
+  "challengeId": "…",
+  "expiresAtMs": 1760000000000,
+  "methods": ["totp", "recovery"]
+}
+```
+
+然后 `POST mfa/verify { challengeId, code }`（匿名）换出与 `login` 同形的会话。中间票 5 分钟、绑定来源、最多试 5 次；第二因素失败与口令失败计入同一个锁定。没有登记 TOTP 而 `identity.mfa.requireFor` 覆盖这个人（`all`，或 `members` 下的非 owner）时照常建会话，响应体多一个 `mfaEnrollmentRequired: true`，页面据此把人带去登记。
+
+| 方法与路径                                 | 谁能调               | 答案                                                                                              |
+| ------------------------------------------ | -------------------- | ------------------------------------------------------------------------------------------------- |
+| `GET mfa`                                  | 已登录               | `{ enrolled, pending, enrolledAtMs, verifiedAtMs, recoveryCodesRemaining, requireFor, required }` |
+| `POST mfa/totp/enroll`（写）               | 已登录               | `{ secret, otpauthUri }`（只在这一次出现）；已确认过的答 409 `mfa_already_enrolled`               |
+| `POST mfa/totp/confirm` `{ code }`（写）   | 已登录               | `{ recoveryCodes }`（10 个，只在这一次出现）                                                      |
+| `POST mfa/verify` `{ challengeId, code }`  | 匿名                 | 会话                                                                                              |
+| `POST mfa/recovery-codes` `{ code }`（写） | 本人，要当前有效的码 | `{ recoveryCodes }`，旧的全部作废                                                                 |
+| `POST mfa/disable` `{ code }`（写）        | 本人，要当前有效的码 | `{ disabled: true }`                                                                              |
+| `POST mfa/reset` `{ principalId }`（写）   | `identity:manage`    | `{ principalId, reset }`：替丢了手机的人清掉 TOTP 与恢复码                                        |
+
+| `code`                   | HTTP | 意思                                           |
+| ------------------------ | ---- | ---------------------------------------------- |
+| `mfa_invalid_code`       | 401  | 码不对、用过（重放）或格式不对                 |
+| `mfa_challenge_expired`  | 401  | 中间票不存在、过期、来源不对或试满了，回到口令 |
+| `mfa_already_enrolled`   | 409  | 已有确认过的 TOTP，先停用                      |
+| `mfa_secret_unavailable` | 503  | SecretStore 读写不了 TOTP 密钥                 |
+
+审计：`identity.mfa.enroll`、`identity.mfa.disable`、`identity.mfa.reset`、`identity.mfa.recovery.used`、`identity.mfa.recovery.regenerate`、`identity.login`（`detail.method`：`totp` / `recovery`）。
+
+### 18.4 会话列表与撤销
+
+| 方法与路径                          | 谁能调                            | 答案                                                                                                                                                 |
+| ----------------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET sessions`                      | 已登录                            | `{ sessions: [{ sessionId, principalId, deviceId, deviceName, createdAtMs, lastSeenAtMs, expiresAtMs, remoteIp, userAgent, current }] }`，只列活着的 |
+| `GET sessions?all=1`                | `identity:manage`（owner 看全部） | 同上，所有人的                                                                                                                                       |
+| `DELETE sessions/{sessionId}`（写） | 本人；别人的要 `identity:manage`  | `{ sessionId, revoked: true }`；看不到的答 404                                                                                                       |
+| `POST sessions/revoke-others`（写） | 已登录                            | `{ revoked }`：撤掉我除当前之外的全部会话（「其它设备全部登出」）                                                                                    |
+
+`remoteIp` 是建会话那一刻的 socket 对端，`userAgent` 截到 256 字符；`lastSeenAtMs` 是最近一次认证成功，一分钟内不重写。撤销在下一个请求上生效（认证每次读库）。审计：`identity.session.revoke`、`identity.session.revoke-others`。
+
+### 18.5 OAuth / OIDC
+
+预留，由 G1-12 填写。
+
+### 18.6 审计查询
+
+预留，由 G2-8 填写。
 
 ## 19. 推送：`/api/push/devices*`
 
