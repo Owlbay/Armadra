@@ -21,6 +21,7 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
+import { stepTrustDialog } from "./trust-dialog.mjs";
 import {
   claudeDefaultMode,
   claudeStateBlame,
@@ -928,32 +929,33 @@ export async function setup(clis) {
       `${agent} 起到提示符`,
       async () => {
         const text = await screen(nodeId);
-        // Claude 进一个新目录先问信任；那一下是人的事，经页面按回车。
-        if (
-          agent === "claude" &&
-          !trusted &&
-          /trust/i.test(text) &&
-          /folder|files/i.test(text)
-        ) {
-          if (page === undefined) return false;
-          // 缺省高亮的是「No, exit」：先下移到「Yes, I trust this folder」再回车。
-          // 开场事件在信任之前还是之后到，决定了首投放行门会不会把正文打进这
-          // 个对话框里——记下来。
-          report.trustPrompt = {
-            statusWhileAsking: statusSummary(nodeId),
-            at: new Date().toISOString(),
-          };
-          note(
-            "Claude 问是否信任工作目录，经页面选「信任」并回车",
-            report.trustPrompt,
-          );
-          await page.focusNode(nodeId);
-          await page.key("ArrowDown", 40);
-          await sleep(300);
-          await page.enter();
-          trusted = true;
-          await sleep(1500);
-          return false;
+        // Claude 进一个新目录先问信任；那一下是人的事，经页面答——只答认得出
+        // 的那两种形态（`trust-dialog.mjs`），认不出就等到超时。
+        if (agent === "claude" && !trusted && page !== undefined) {
+          const step = await stepTrustDialog(text, {
+            capture: () => screen(nodeId),
+            focus: () => page.focusNode(nodeId),
+            down: () => page.key("ArrowDown", 40),
+            enter: () => page.enter(),
+            type: (value) => page.type(value),
+            sleep,
+          });
+          if (step === "answered") {
+            // 开场事件在信任之前还是之后到，决定了首投放行门会不会把正文打进
+            // 这个对话框里——记下来。
+            report.trustPrompt = {
+              statusWhileAsking: statusSummary(nodeId),
+              at: new Date().toISOString(),
+            };
+            note(
+              "Claude 问是否信任工作目录，经页面选「信任」",
+              report.trustPrompt,
+            );
+            trusted = true;
+            await sleep(1500);
+            return false;
+          }
+          if (step === "waiting") return false;
         }
         if (agent === "codex") {
           if (/Update available|Update now/i.test(text))
