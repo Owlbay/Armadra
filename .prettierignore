@@ -9,3 +9,5 @@ docs/research
 .claude/skills
 .claude/agents
 target-main
+# 生成文件（node tools/notices.mjs），正文是各包许可证原文
+THIRD_PARTY_NOTICES.md
