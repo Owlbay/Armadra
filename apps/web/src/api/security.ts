@@ -243,10 +243,33 @@ export async function clearLockout(principalId: string): Promise<void> {
 
 /* --------------------------------- OAuth --------------------------------- */
 
-export function oauthProviders(): Promise<OAuthProviderList> {
+/**
+ * 提供方。匿名时只有 `id` 与 `kind`；带着有 `identity:manage` 的会话再多出
+ * 回调地址、有没有密钥等（契约 §18.5）。
+ */
+export function oauthProviders(anonymous = true): Promise<OAuthProviderList> {
   return identityRequest("oauth/providers", oauthProviderListSchema, {
-    anonymous: true,
+    anonymous,
   });
+}
+
+export async function setOAuthSecret(
+  providerId: string,
+  clientSecret: string,
+): Promise<void> {
+  await identityRequest(
+    `oauth/providers/${encodeURIComponent(providerId)}/secret`,
+    ok,
+    { method: "PUT", body: { clientSecret } },
+  );
+}
+
+export async function clearOAuthSecret(providerId: string): Promise<void> {
+  await identityRequest(
+    `oauth/providers/${encodeURIComponent(providerId)}/secret`,
+    ok,
+    { method: "DELETE" },
+  );
 }
 
 export async function oauthBindings(): Promise<OAuthBinding[]> {

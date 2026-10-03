@@ -19,9 +19,10 @@ import { getAssertion, webauthnAvailable, webauthnCancelled } from "./webauthn";
 import { Alert, AlertTitle } from "@/ui/alert";
 import { BrandMark } from "@/ui/brand-mark";
 import { Button } from "@/ui/button";
-import { Field, FieldError, FieldLabel, FieldSeparator } from "@/ui/field";
+import { Field, FieldError, FieldLabel } from "@/ui/field";
 import { Input } from "@/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/ui/input-otp";
+import { Separator } from "@/ui/separator";
 import { Spinner } from "@/ui/spinner";
 
 export type SignInStep = "account" | "password" | "mfa" | "recovery";
@@ -46,6 +47,7 @@ export function SignIn({
   passkey = passkeyUsable(),
   initial,
   now: fixedNow,
+  autoFocus: focus = true,
 }: {
   onSignedIn(session: IdentitySession, mfaEnrollmentRequired: boolean): void;
   /** 不给时自己去问 `oauth/providers`。 */
@@ -61,11 +63,14 @@ export function SignIn({
   };
   /** 钉住时钟（展示页）。 */
   now?: number;
+  /** 展示页上一屏好几份，不抢焦点。 */
+  autoFocus?: boolean;
 }) {
   const t = useT();
+  const id = React.useId();
   const fetched = useQuery({
     queryKey: ["identity", "oauth", "providers"],
-    queryFn: oauthProviders,
+    queryFn: () => oauthProviders(),
     enabled: providers === undefined,
     retry: false,
     staleTime: 60_000,
@@ -226,13 +231,13 @@ export function SignIn({
           }}
         >
           <Field data-invalid={error !== "" || undefined}>
-            <FieldLabel htmlFor="sign-in-account">
+            <FieldLabel htmlFor={`${id}-account`}>
               {t("auth.account")}
             </FieldLabel>
             <Input
-              id="sign-in-account"
+              id={`${id}-account`}
               autoComplete="username webauthn"
-              autoFocus
+              autoFocus={focus}
               className="text-base md:text-sm"
               value={account}
               disabled={disabled}
@@ -249,7 +254,12 @@ export function SignIn({
             {t("auth.continue")}
           </Button>
           {(passkey || available.length > 0) && (
-            <FieldSeparator className="my-1">{t("auth.or")}</FieldSeparator>
+            // 「或」坐在任意底色上（设置对话框、整页），所以不给文字垫底色。
+            <div className="my-1 flex items-center gap-3 text-xs text-muted-foreground">
+              <Separator className="flex-1" />
+              {t("auth.or")}
+              <Separator className="flex-1" />
+            </div>
           )}
           {passkey && (
             <Button
@@ -303,14 +313,14 @@ export function SignIn({
             hidden
           />
           <Field data-invalid={error !== "" || undefined}>
-            <FieldLabel htmlFor="sign-in-password">
+            <FieldLabel htmlFor={`${id}-password`}>
               {t("auth.password")}
             </FieldLabel>
             <Input
-              id="sign-in-password"
+              id={`${id}-password`}
               type="password"
               autoComplete="current-password"
-              autoFocus
+              autoFocus={focus}
               className="text-base md:text-sm"
               value={password}
               disabled={disabled}
@@ -355,16 +365,16 @@ export function SignIn({
             data-invalid={error !== "" || undefined}
             className="items-center"
           >
-            <FieldLabel className="sr-only" htmlFor="sign-in-otp">
+            <FieldLabel className="sr-only" htmlFor={`${id}-otp`}>
               {t("auth.mfa.code")}
             </FieldLabel>
             <InputOTP
-              id="sign-in-otp"
+              id={`${id}-otp`}
               maxLength={6}
               inputMode="numeric"
               pattern="^[0-9]*$"
               autoComplete="one-time-code"
-              autoFocus
+              autoFocus={focus}
               value={code}
               disabled={disabled}
               aria-label={t("auth.mfa.code")}
@@ -409,13 +419,13 @@ export function SignIn({
           }}
         >
           <Field data-invalid={error !== "" || undefined}>
-            <FieldLabel htmlFor="sign-in-recovery">
+            <FieldLabel htmlFor={`${id}-recovery`}>
               {t("auth.mfa.recovery")}
             </FieldLabel>
             <Input
-              id="sign-in-recovery"
+              id={`${id}-recovery`}
               autoComplete="one-time-code"
-              autoFocus
+              autoFocus={focus}
               spellCheck={false}
               className="font-mono text-base md:text-sm"
               value={code}

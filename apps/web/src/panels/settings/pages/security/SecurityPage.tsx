@@ -25,7 +25,9 @@ import {
   passkeyRegisterOptions,
   passkeyRegisterVerify,
   regenerateRecoveryCodes,
+  clearOAuthSecret,
   removeOAuthBinding,
+  setOAuthSecret,
   removePasskey,
   revokeOtherSessions,
   revokeSession,
@@ -44,7 +46,7 @@ import {
 } from "../../../../session/webauthn";
 import { AuditLog } from "./AuditLog";
 import { MfaSetup, type MfaStage } from "./MfaSetup";
-import { OAuthBindings } from "./OAuthBindings";
+import { OAuthBindings, OAuthProviders } from "./OAuthBindings";
 import { PasskeyList } from "./PasskeyList";
 import { LockoutList, SessionList } from "./SessionList";
 import { Skeleton } from "@/ui/skeleton";
@@ -160,7 +162,7 @@ function SecuritySettings({ session }: { session: IdentitySession }) {
   });
   const providers = useQuery({
     queryKey: [...KEY, "providers"],
-    queryFn: oauthProviders,
+    queryFn: () => oauthProviders(false),
   });
   const bindings = useQuery({
     queryKey: [...KEY, "bindings"],
@@ -230,6 +232,7 @@ function SecuritySettings({ session }: { session: IdentitySession }) {
   const [sessionBusy, setSessionBusy] = React.useState<string | null>(null);
   const [oauthBusy, setOauthBusy] = React.useState<string | null>(null);
   const [lockBusy, setLockBusy] = React.useState<string | null>(null);
+  const [providerBusy, setProviderBusy] = React.useState<string | null>(null);
   const act = (
     setBusy: (value: string | null) => void,
     id: string,
@@ -309,7 +312,13 @@ function SecuritySettings({ session }: { session: IdentitySession }) {
       {!mfaFirst && mfaBlock}
       <OAuthBindings
         bindings={bindings.data}
-        providers={providers.data?.configured ? providers.data.providers : []}
+        providers={
+          providers.data?.configured
+            ? providers.data.providers.filter(
+                (provider) => provider.usable !== false,
+              )
+            : []
+        }
         busy={oauthBusy}
         onBind={(provider) => {
           setOauthBusy(provider.id);
@@ -354,6 +363,28 @@ function SecuritySettings({ session }: { session: IdentitySession }) {
           )
         }
       />
+      {manage && (
+        <OAuthProviders
+          providers={providers.data?.providers ?? []}
+          busy={providerBusy}
+          onSetSecret={(provider, secret) =>
+            act(
+              setProviderBusy,
+              provider.id,
+              () => setOAuthSecret(provider.id, secret),
+              "providers",
+            )
+          }
+          onClearSecret={(provider) =>
+            act(
+              setProviderBusy,
+              provider.id,
+              () => clearOAuthSecret(provider.id),
+              "providers",
+            )
+          }
+        />
+      )}
       {manage && (
         <LockoutList
           lockouts={lockouts.data}
