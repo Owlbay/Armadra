@@ -21,9 +21,10 @@
  * The result text is the member's `task:<id>:result` post (the instruction is
  * appended to every prompt), else its `context summary`.
  *
- * Not here: `ama` itself as a runner. ama files a runner whose id is `ama`
- * under its own sub-session type and never calls it (its `runner === "ama"`
- * short-circuit), so `task(agent="ama")` stays ama's own sub-agent.
+ * `ama` is one of them: since `@armadra/agent` 0.6.7 a host runner whose id
+ * is `ama` is called for `task(agent="ama")` (another ama node on the board),
+ * while ama's own sub-agent types (`general` / `explore` / `plan`) stay
+ * in-process sub-sessions.
  */
 
 import { randomUUID } from "node:crypto";
@@ -37,8 +38,9 @@ import type {
 import type { JsonValue } from "../../hook-client/json.js";
 import { type ControlAnswer, callContext, callControl } from "./client.js";
 
-/** The built-ins a runner is registered for (not `ama`: see the header). */
+/** The built-ins a runner is registered for, `ama` included (see the header). */
 export const BUILTIN_RUNNER_IDS = [
+  "ama",
   "claude",
   "codex",
   "opencode",
