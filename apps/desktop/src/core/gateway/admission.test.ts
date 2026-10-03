@@ -1,16 +1,21 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { describe, expect, it } from "vitest";
-import { IdentityError } from "../../desktop/src/core/identity/errors";
-import type { IdentityService } from "../../desktop/src/core/identity/service";
+import { IdentityError } from "../identity/errors";
+import type { IdentityService } from "../identity/service";
 import {
+  WS_TICKET_TTL_MS,
+  WsTickets,
   accessCookieName,
+  admit,
   anonymousPath,
+  bearerToken,
   cookieValue,
   gate,
   impliedOrigin,
   loopbackOnlyPath,
+  protocolTicket,
   safeMethod,
-} from "./auth";
+} from "./admission";
 
 const HOST = "0123456789abcdef0123456789abcdef";
 const ORIGIN = "https://armadra.example";
@@ -246,5 +251,187 @@ describe("认证门", () => {
     expect(cookieValue({ cookie: `${name}=one` }, name)).toBe("one");
     expect(cookieValue({ cookie: `${name}=one; ${name}=two` }, name)).toBe("");
     expect(cookieValue({}, name)).toBe("");
+  });
+});
+
+describe("Bearer 模式（原生 App）", () => {
+  const APP = "capacitor://localhost";
+  const host = new URL(ORIGIN).host;
+  const app = (extra: Record<string, string> = {}): IncomingHttpHeaders => ({
+    origin: APP,
+    host,
+    ...extra,
+  });
+
+  it("会话来源是 App 连上的 Gateway 来源，不是 App 自己的；不要 CSRF", () => {
+    const { value, seen } = context();
+    const admission = admit(
+      {
+        method: "POST",
+        path: "/api/workspaces",
+        headers: app({ authorization: "Bearer tok", cookie: "x=y" }),
+      },
+      value,
+    );
+    expect(admission.refusal).toBeUndefined();
+    expect(admission.bearer).toEqual({ appOrigin: APP });
+    expect(admission.origin).toBe(ORIGIN);
+    expect(seen).toEqual([
+      { accessToken: "tok", requireCsrf: false, csrfToken: "", origin: ORIGIN },
+    ]);
+  });
+
+  it("只有 capacitor://localhost 与 https://localhost 两个来源走这条", () => {
+    const { value } = context();
+    for (const origin of ["capacitor://localhost", "https://localhost"]) {
+      expect(
+        admit(
+          {
+            method: "GET",
+            path: "/api/workspaces",
+            headers: { origin, host, authorization: "Bearer t" },
+          },
+          value,
+        ).bearer,
+      ).toEqual({ appOrigin: origin });
+    }
+    expect(
+      admit(
+        {
+          method: "GET",
+          path: "/api/workspaces",
+          headers: {
+            origin: "capacitor://evil",
+            host,
+            authorization: "Bearer t",
+          },
+        },
+        value,
+      ).refusal?.status,
+    ).toBe(403);
+  });
+
+  it("Host 不在来源白名单里是 403；回环专用面仍是 404", () => {
+    const { value } = context();
+    expect(
+      admit(
+        {
+          method: "GET",
+          path: "/api/workspaces",
+          headers: {
+            origin: APP,
+            host: "attacker.example",
+            authorization: "Bearer t",
+          },
+        },
+        value,
+      ).refusal?.status,
+    ).toBe(403);
+    expect(
+      admit({ method: "POST", path: "/hook/x", headers: app() }, value).refusal
+        ?.status,
+    ).toBe(404);
+  });
+
+  it("没有 Bearer 是 401，Cookie 不算；预检与身份面不要凭据", () => {
+    const { value, seen } = context();
+    expect(
+      admit(
+        {
+          method: "GET",
+          path: "/api/workspaces",
+          headers: app({ cookie: `${accessCookieName(HOST)}=v` }),
+        },
+        value,
+      ).refusal?.status,
+    ).toBe(401);
+    expect(
+      admit(
+        { method: "OPTIONS", path: "/api/workspaces", headers: app() },
+        value,
+      ).refusal,
+    ).toBeUndefined();
+    expect(
+      admit(
+        { method: "POST", path: "/api/identity/pair", headers: app() },
+        value,
+      ).refusal,
+    ).toBeUndefined();
+    // ws-ticket 在身份面里，但它要会话。
+    expect(
+      admit(
+        { method: "POST", path: "/api/identity/ws-ticket", headers: app() },
+        value,
+      ).refusal?.status,
+    ).toBe(401);
+    expect(seen).toEqual([]);
+  });
+
+  it("认证失败是 401（不区分 CSRF，Bearer 没有 CSRF）", () => {
+    const { value } = context(new IdentityError("permission"));
+    expect(
+      admit(
+        {
+          method: "POST",
+          path: "/api/workspaces",
+          headers: app({ authorization: "Bearer tok" }),
+        },
+        value,
+      ).refusal?.status,
+    ).toBe(401);
+  });
+
+  it("升级只认 Sec-WebSocket-Protocol 里的一次性票", () => {
+    const tickets = new WsTickets();
+    const { value, seen } = context();
+    const withTickets = { ...value, wsTickets: tickets };
+    const { ticket } = tickets.issue({ accessToken: "tok", origin: ORIGIN });
+    const upgrade = (protocol?: string) =>
+      admit(
+        {
+          method: "GET",
+          path: "/api/workspaces/w/events",
+          headers: app(
+            protocol === undefined
+              ? {}
+              : { "sec-websocket-protocol": protocol },
+          ),
+          upgrade: true,
+        },
+        withTickets,
+      );
+    expect(upgrade().refusal?.status).toBe(401);
+    expect(upgrade(`armadra-ticket.${ticket}`).refusal).toBeUndefined();
+    expect(seen.at(-1)?.accessToken).toBe("tok");
+    // 用过就没了。
+    expect(upgrade(`armadra-ticket.${ticket}`).refusal?.status).toBe(401);
+  });
+
+  it("票 30 秒过期，绑在签票时的会话来源上", () => {
+    let now = 1_000;
+    const tickets = new WsTickets(() => now);
+    const issued = tickets.issue({ accessToken: "a", origin: ORIGIN });
+    expect(issued.expiresAtMs).toBe(1_000 + WS_TICKET_TTL_MS);
+    now += WS_TICKET_TTL_MS;
+    expect(tickets.consume(issued.ticket)).toBeUndefined();
+    const fresh = tickets.issue({ accessToken: "b", origin: ORIGIN });
+    expect(tickets.consume(fresh.ticket)).toEqual({
+      accessToken: "b",
+      origin: ORIGIN,
+    });
+  });
+
+  it("头的解析：重复或不合规的一律按没有", () => {
+    expect(bearerToken({ authorization: "Bearer abc" })).toBe("abc");
+    expect(bearerToken({ authorization: "Basic abc" })).toBe("");
+    expect(bearerToken({ authorization: "Bearer a,b" })).toBe("");
+    expect(
+      protocolTicket({ "sec-websocket-protocol": "x, armadra-ticket.t1" }),
+    ).toBe("t1");
+    expect(
+      protocolTicket({
+        "sec-websocket-protocol": "armadra-ticket.a, armadra-ticket.b",
+      }),
+    ).toBe("");
   });
 });

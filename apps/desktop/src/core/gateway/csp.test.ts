@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contentSecurityPolicy } from "../../desktop/src/shell-core/csp";
-import { serverContentSecurityPolicy } from "./csp";
+import { contentSecurityPolicy, serverContentSecurityPolicy } from "./csp";
 
 describe("服务器壳的 CSP", () => {
   it("与桌面壳同一个来源：指令集合逐条相同", () => {
