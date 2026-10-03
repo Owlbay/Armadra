@@ -1,0 +1,39 @@
+# B 档夜间作业（docs/guides/ci-release.md §1.1）：打包冒烟、update-e2e、
+# Capacitor 构建等需要打包或较慢的探针。清单是 tools/ci/e2e.json 里 tier b 的
+# 条目；具体作业由 G3-4 填。失败开 issue，不阻断合并。
+name: nightly
+
+on:
+  schedule:
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PNPM_VERSION: "11.18.0"
+  NODE_VERSION: "22"
+
+jobs:
+  e2e-b:
+    name: e2e (tier b)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # 骨架：B 档条目还没有时只列出清单；G3-4 换成构建、打包与真正的运行。
+      - name: B 档清单
+        run: node tools/ci/e2e.mjs --tier b --list

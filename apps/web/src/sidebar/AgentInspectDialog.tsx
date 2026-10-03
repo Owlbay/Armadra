@@ -15,14 +15,17 @@ import { useCallback, useEffect, useState } from "react";
 import { agentGateway } from "../agent/gateway";
 import { useT } from "../app/preferences-store";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { ScrollArea } from "@/ui/scroll-area";
+import { Alert, AlertTitle } from "@/ui/alert";
+import { Skeleton } from "@/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui/tabs";
+import { TABS_CONTENT_FOCUS } from "@/panels/tabs-focus";
 
 export interface AgentInspectTarget {
   workspaceId: string;
@@ -111,17 +114,19 @@ export function AgentInspectDialog({
   const panel = tab === "transcript" ? transcript : screen;
 
   return (
-    <Dialog
+    <ResponsiveDialog
       open={Boolean(target)}
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
     >
-      <DialogContent className="max-w-[min(64rem,92vw)]">
-        <DialogHeader>
-          <DialogTitle>{target?.title ?? ""}</DialogTitle>
-          <DialogDescription>{t("agentInspect.description")}</DialogDescription>
-        </DialogHeader>
+      <ResponsiveDialogContent className="max-w-[min(64rem,92vw)]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{target?.title ?? ""}</ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
+            {t("agentInspect.description")}
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
         <Tabs
           value={tab}
           onValueChange={(next) => setTab(next as AgentInspectTarget["tab"])}
@@ -132,16 +137,25 @@ export function AgentInspectDialog({
             </TabsTrigger>
             <TabsTrigger value="screen">{t("agentInspect.screen")}</TabsTrigger>
           </TabsList>
-          <TabsContent value={tab}>
+          <TabsContent value={tab} className={TABS_CONTENT_FOCUS}>
             <ScrollArea className="h-[min(60vh,32rem)] rounded-[var(--r-control)] border">
               {panel.loading ? (
-                <p className="p-3 text-[length:var(--text-caption)] text-muted-foreground">
-                  {t("agentInspect.loading")}
-                </p>
+                <div
+                  role="status"
+                  data-slot="agent-inspect-loading"
+                  className="flex flex-col gap-2 p-3"
+                >
+                  <span className="sr-only">{t("agentInspect.loading")}</span>
+                  <Skeleton className="h-3 w-3/4" />
+                  <Skeleton className="h-3 w-2/3" />
+                  <Skeleton className="h-3 w-1/2" />
+                </div>
               ) : panel.refusal ? (
-                <p className="p-3 text-[length:var(--text-caption)] text-muted-foreground">
-                  {panel.refusal}
-                </p>
+                <Alert className="m-3 w-auto">
+                  <AlertTitle className="font-normal break-words">
+                    {panel.refusal}
+                  </AlertTitle>
+                </Alert>
               ) : (
                 <pre className="p-3 text-[length:var(--text-caption)] whitespace-pre-wrap">
                   {panel.text}
@@ -155,7 +169,7 @@ export function AgentInspectDialog({
             ) : null}
           </TabsContent>
         </Tabs>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

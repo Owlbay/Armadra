@@ -11,6 +11,11 @@ import {
   browserSessionSchema,
   browserTabListSchema,
 } from "./browser.js";
+import {
+  acpDriverEventSchema,
+  acpTurnEventSchema,
+  acpUpdateEventSchema,
+} from "./acp.js";
 import { boardPresenceSchema } from "./boards.js";
 import { driveLeaseSchema } from "./drive.js";
 import { fileChangeKindSchema } from "./files.js";
@@ -59,6 +64,10 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
      */
     code: z.string().optional(),
   }),
+  /** ACP sessions (contract §14.3): one update, a turn's end, a driver switch. */
+  acpUpdateEventSchema,
+  acpTurnEventSchema,
+  acpDriverEventSchema,
   z.object({
     type: z.literal("terminal.exit"),
     sessionId: z.string(),

@@ -246,6 +246,38 @@ describe("服务器壳的装配", () => {
     expect(after.status).toBe(401);
   });
 
+  it("/api/gateway 报的是命令行开的这一个，设置改不动它；/ca.crt 匿名发自签名证书", async () => {
+    const paired = await call("/api/identity/pair", {
+      method: "POST",
+      body: JSON.stringify({ ticket: running.pair().ticket }),
+    });
+    expect(paired.status).toBe(200);
+    const session = JSON.parse(paired.body);
+    const cookie = (paired.headers["set-cookie"] as string[])
+      .map((value) => (value.split(";")[0] as string).trim())
+      .join("; ");
+    const status = await call("/api/gateway", { cookie });
+    expect(status.status).toBe(200);
+    const body = JSON.parse(status.body);
+    expect(body.managedBy).toBe("shell");
+    expect(body.running).toBe(true);
+    expect(body.origin).toBe(origin);
+    expect(body.tls.source).toBe("selfSigned");
+    expect(body.tls.fingerprint).toBe(running.tls.fingerprint);
+    const refused = await call("/api/gateway", {
+      method: "PUT",
+      cookie,
+      csrf: session.csrfToken,
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(refused.status).toBe(409);
+    expect(JSON.parse(refused.body).code).toBe("gateway_managed_by_shell");
+
+    const anchor = await call("/ca.crt", { origin: null });
+    expect(anchor.status).toBe(200);
+    expect(anchor.body).toBe(running.tls.cert);
+  });
+
   it("同源的只读请求不带 Origin：凭 Sec-Fetch-Site 与 Host 补上页面来源", async () => {
     // 浏览器对同源的 GET / HEAD 不发 Origin（Fetch 规范只对跨源与写方法发）。
     // 服务器壳的页面与接口同源，所以页面的每一个读请求都长这样——此前一律

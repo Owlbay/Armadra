@@ -120,6 +120,31 @@ export interface PublicDevice {
   readonly revokedAtMs: number;
 }
 
+/** 进 `identity.login` 审计的那一个字：这次是怎么证明身份的。 */
+export type LoginMethod =
+  | "password"
+  | "passkey"
+  | "totp"
+  | "recovery"
+  | "oauth";
+
+/** 会话列表的一行（契约 §18.4）。密钥与哈希不出这个域。 */
+export interface SessionView {
+  readonly sessionId: string;
+  readonly principalId: string;
+  readonly deviceId: string;
+  readonly deviceName: string;
+  readonly createdAtMs: number;
+  readonly lastSeenAtMs: number;
+  readonly expiresAtMs: number;
+  readonly remoteIp: string;
+  readonly userAgent: string;
+  readonly current: boolean;
+}
+
+/** 最近活动最多这么久写一次，免得每个请求都写库。 */
+export const LAST_SEEN_RESOLUTION_MS = 60 * 1000;
+
 export class IdentityService {
   private readonly clock: () => number;
 
@@ -256,6 +281,8 @@ export class IdentityService {
     hostId: string;
     instanceId: string;
     origin: string;
+    remoteIp?: string;
+    userAgent?: string;
   }): SessionCredentials {
     const ticketId = parseToken(request.ticket);
     if (
@@ -315,6 +342,9 @@ export class IdentityService {
         accessExpiresAtMs,
         expiresAtMs,
         revokedAtMs: 0,
+        lastSeenAtMs: now,
+        remoteIp: request.remoteIp ?? "",
+        userAgent: request.userAgent ?? "",
       };
       tx.createSession(session);
       // 一次性：第二次兑换在这里改不动任何行，整笔事务回滚。
@@ -348,19 +378,33 @@ export class IdentityService {
     hostId: string;
     origin: string;
     deviceName: string;
+    remoteIp?: string;
+    userAgent?: string;
   }): SessionCredentials {
+    this.verifyPassword(request);
+    return this.openSession({ ...request, method: "password" });
+  }
+
+  /**
+   * 只核对口令，不建会话：两步登录（契约 §18.3）的第一步，以及锁定计数的依据。
+   *
+   * 账号不存在、被停用、没设口令、口令不对，对调用方是同一个 401：区分它们等于
+   * 把「这个账号存在吗」做成一个探测接口。参数升级只发生在这一刻：明文口令在手，
+   * 而且这一次已经校验通过。
+   */
+  verifyPassword(request: {
+    principalId: string;
+    password: string;
+    hostId: string;
+    origin: string;
+  }): { principalId: string; kind: string } {
     if (
       !ID_PATTERN.test(request.principalId) ||
-      !this.audience(request.hostId, request.origin) ||
-      !validName(request.deviceName)
+      !this.audience(request.hostId, request.origin)
     ) {
       throw new IdentityError("unauthenticated");
     }
-    const sessionId = newId();
-    const deviceId = newId();
-    const secrets = makeSecrets(sessionId);
-    const credentials = this.store.transaction((tx) => {
-      const now = this.now();
+    return this.store.transaction((tx) => {
       const principal = tx.accounts.principal(request.principalId);
       const stored = tx.accounts.livePassword(request.principalId);
       if (
@@ -368,8 +412,6 @@ export class IdentityService {
         principal.disabledAtMs !== 0 ||
         stored === undefined
       ) {
-        // 账号不存在、被停用、没设口令，对调用方是同一个 401：区分它们等于
-        // 把「这个账号存在吗」做成一个探测接口。
         throw new IdentityError("unauthenticated");
       }
       const verified = verifyPassword(request.password, {
@@ -383,7 +425,6 @@ export class IdentityService {
       });
       if (!verified.ok) throw new IdentityError("unauthenticated");
       if (verified.upgrade) {
-        // 参数升级只发生在这一刻：明文口令在手，而且这一次已经校验通过。
         const derived = derivePassword(request.password, CURRENT_KDF);
         tx.accounts.updateCredentialSecret(
           stored.credentialId,
@@ -398,10 +439,45 @@ export class IdentityService {
           },
         );
       }
-      // 成员的快照只有底线：共享得来的授权**不进快照**，每次判定现编
-      // （`Authorizer.permits` 是「快照 ∪ 现编的授予」）。进了快照，撤销一条
-      // 共享要等这个会话过期才生效；设计 §2 那句「撤销后下一次请求重新编译」
-      // 说的就是这件事。
+      return { principalId: principal.principalId, kind: principal.kind };
+    });
+  }
+
+  /**
+   * 给一个已经证明过身份的 principal 建会话。调用方负责「证明过」：口令（无 MFA
+   * 要求时）、口令 + 第二因素、或 passkey。`method` 进审计。
+   *
+   * 和票据兑换（{@link consumeBootstrap}）落在同一张会话表上，区别只有：授权快照
+   * 是**编译出来的**而不是票里带的。owner 拿全量，其余 principal 拿
+   * `identity:read`——共享得来的授权**不进快照**，每次判定现编
+   * （`Authorizer.permits` 是「快照 ∪ 现编的授予」），撤销一条共享因此在下一个
+   * 请求上就生效。
+   */
+  openSession(request: {
+    principalId: string;
+    hostId: string;
+    origin: string;
+    deviceName: string;
+    method: LoginMethod;
+    remoteIp?: string;
+    userAgent?: string;
+  }): SessionCredentials {
+    if (
+      !ID_PATTERN.test(request.principalId) ||
+      !this.audience(request.hostId, request.origin) ||
+      !validName(request.deviceName)
+    ) {
+      throw new IdentityError("unauthenticated");
+    }
+    const sessionId = newId();
+    const deviceId = newId();
+    const secrets = makeSecrets(sessionId);
+    return this.store.transaction((tx) => {
+      const now = this.now();
+      const principal = tx.accounts.principal(request.principalId);
+      if (principal === undefined || principal.disabledAtMs !== 0) {
+        throw new IdentityError("unauthenticated");
+      }
       const granted =
         principal.kind === "owner" ? allScopes() : [scope("identity:read")];
       const encoded = encodeScopes(granted);
@@ -431,6 +507,9 @@ export class IdentityService {
         accessExpiresAtMs,
         expiresAtMs,
         revokedAtMs: 0,
+        lastSeenAtMs: now,
+        remoteIp: request.remoteIp ?? "",
+        userAgent: request.userAgent ?? "",
       };
       tx.createSession(session);
       tx.accounts.appendAudit({
@@ -440,7 +519,7 @@ export class IdentityService {
         action: "identity.login",
         target: sessionId,
         workspaceId: "",
-        detailJson: JSON.stringify({ method: "password" }),
+        detailJson: JSON.stringify({ method: request.method }),
       });
       return {
         ...secrets,
@@ -454,7 +533,96 @@ export class IdentityService {
         ),
       };
     });
-    return credentials;
+  }
+
+  /**
+   * 我的会话（契约 §18.4）。`all` 只给有 `identity:manage` 的人（owner）：列出
+   * 所有人的。只列还活着的；`current` 标出发这个请求的那一个。
+   */
+  listSessions(actor: AccessRequest, all = false): SessionView[] {
+    return this.store.transaction((tx) => {
+      const now = this.now();
+      const principal = this.authenticateIn(tx, actor, now);
+      if (all && !permits(principal.scopes, [scope("identity:manage")])) {
+        throw new IdentityError("permission");
+      }
+      return tx
+        .liveSessions(now, all ? undefined : principal.principalId)
+        .map(({ session, device }) => ({
+          sessionId: session.sessionId,
+          principalId: device.principalId,
+          deviceId: device.deviceId,
+          deviceName: device.name,
+          createdAtMs: session.createdAtMs,
+          lastSeenAtMs: session.lastSeenAtMs ?? 0,
+          expiresAtMs: session.expiresAtMs,
+          remoteIp: session.remoteIp ?? "",
+          userAgent: session.userAgent ?? "",
+          current: session.sessionId === principal.sessionId,
+        }));
+    });
+  }
+
+  /**
+   * 撤销一个会话。自己的随便撤；别人的要 `identity:manage`（owner 看全部、也能
+   * 撤全部）。撤销连带设备一起：一个登录建一台设备，留着设备没有意义，而且
+   * 设备撤销推进 epoch，是唯一不靠逐条找会话的办法。
+   */
+  revokeSessionById(actor: AccessRequest, sessionId: string): void {
+    if (!ID_PATTERN.test(sessionId)) throw new IdentityError("invalid");
+    this.store.transaction((tx) => {
+      const now = this.now();
+      const principal = this.authenticateIn(tx, actor, now);
+      const session = tx.session(sessionId);
+      if (session === undefined) throw new IdentityError("notFound");
+      const device = tx.device(session.deviceId);
+      if (device === undefined) throw new IdentityError("notFound");
+      if (
+        device.principalId !== principal.principalId &&
+        !permits(principal.scopes, [scope("identity:manage")])
+      ) {
+        // 别人的会话：不说它存不存在。
+        throw new IdentityError("notFound");
+      }
+      if (session.revokedAtMs !== 0) return;
+      tx.revokeSession(sessionId, now);
+      tx.accounts.appendAudit({
+        atMs: now,
+        principalId: principal.principalId,
+        deviceId: principal.deviceId,
+        action: "identity.session.revoke",
+        target: sessionId,
+        workspaceId: "",
+        detailJson: JSON.stringify({ owner: device.principalId }),
+      });
+    });
+    accessChanged();
+  }
+
+  /** 「其它设备全部登出」：撤掉我除这个之外的所有会话。返回撤了几个。 */
+  revokeOtherSessions(actor: AccessRequest): number {
+    const count = this.store.transaction((tx) => {
+      const now = this.now();
+      const principal = this.authenticateIn(tx, actor, now);
+      let revoked = 0;
+      for (const { session } of tx.liveSessions(now, principal.principalId)) {
+        if (session.sessionId === principal.sessionId) continue;
+        tx.revokeSession(session.sessionId, now);
+        revoked += 1;
+      }
+      tx.accounts.appendAudit({
+        atMs: now,
+        principalId: principal.principalId,
+        deviceId: principal.deviceId,
+        action: "identity.session.revoke-others",
+        target: principal.sessionId,
+        workspaceId: "",
+        detailJson: JSON.stringify({ revoked }),
+      });
+      return revoked;
+    });
+    accessChanged();
+    return count;
   }
 
   authenticate(request: AccessRequest): Principal {
@@ -726,6 +894,9 @@ export class IdentityService {
       throw new IdentityError("permission");
     }
     if (!permits(live.scopes, required)) throw new IdentityError("permission");
+    if (now - (live.session.lastSeenAtMs ?? 0) >= LAST_SEEN_RESOLUTION_MS) {
+      tx.touchSession(live.session.sessionId, now);
+    }
     return principalOf(
       this.store.hostId(),
       live.session,

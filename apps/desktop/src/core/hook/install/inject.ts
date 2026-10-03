@@ -8,6 +8,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join as nativeJoin } from "node:path";
+import { AMA_KEY_VARIABLES } from "../../agent/ama-credentials";
+import { variablesFor } from "../../agent/credentials/inject";
 import { storedProbe } from "../../agent/probe";
 import { eventKey } from "./codex";
 import {
@@ -29,6 +31,7 @@ import {
   type ClientEnvironment,
   InstallError,
   type JsonObject,
+  agentHostBundle,
   appendManagedGroup,
   hookCommand,
   resolveClientBinary,
@@ -76,6 +79,7 @@ export const INJECTED_AGENTS = [
   "pi",
   "omp",
   "copilot",
+  "ama",
 ] as const;
 
 export function isInjected(agentId: string): boolean {
@@ -125,6 +129,12 @@ export interface ArtifactLayout {
   readonly skillDir?: string;
   /** Copilot's `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`. */
   readonly instructionsDir?: string;
+  /** ama's `--profile` (docs/design/coordinator-agent.md §2.4). */
+  readonly profile?: string;
+  /** ama's `profile.config`. */
+  readonly config?: string;
+  /** ama's `profile.sessionDir`: `<data>/ama/sessions`. */
+  readonly sessionDir?: string;
   /** The marker naming the revision and client that wrote all of the above. */
   readonly marker: string;
 }
@@ -177,6 +187,17 @@ export function artifactLayout(
         skill: skillUnder(dir, join),
         skillDir: join(dir, SKILLS_ROOT, SKILL_NAME),
         ...(agentId === "omp" ? { overlay: join(dir, "overlay.yml") } : {}),
+      };
+    case "ama":
+      return {
+        dir,
+        marker,
+        instructions,
+        skill: skillUnder(dir, join),
+        skillDir: join(dir, SKILLS_ROOT),
+        config: join(dir, "config.json"),
+        profile: join(dir, "profile.json"),
+        sessionDir: join(dataDir, "ama", "sessions"),
       };
     case "copilot": {
       const pluginDir = join(dir, "plugin");
@@ -254,6 +275,52 @@ function json(value: unknown): string {
 export interface ArtifactTarget {
   readonly join?: PathJoin;
   readonly windows?: boolean;
+  /**
+   * ama's host adapter (`agent-host/ama-armadra.cjs`); {@link agentHostBundle}
+   * when absent. `null`: none — the profile then names no `host`, and ama
+   * starts without the canvas tools rather than failing on a missing file.
+   */
+  readonly amaHost?: string | null;
+}
+
+/**
+ * ama's `config.json`: the profile-level defaults (coordinator-agent §2.4).
+ * The node's own `--permission-mode` still wins — the command line is above
+ * the profile.
+ */
+export const AMA_CONFIG = {
+  version: 1,
+  permission: { mode: "default" },
+  compaction: { enabled: true },
+} as const;
+
+/**
+ * ama's `profile.json`. Paths only, never a key and no key file: the keys the
+ * settings hold reach ama as `AMA_API_KEY_<PROVIDER>` on its own process,
+ * set by the launcher after a node-token exchange (contract §12.4), so ama
+ * must read its environment (`authEnv` stays at its default). Without
+ * `authFile` ama's own user-level `auth.json` — its `ama auth` / ChatGPT
+ * login — keeps working. `trustProject` is left out (false): a repository's own
+ * `.ama/` hooks and skills stay behind ama's trust prompt, as they would
+ * outside the canvas.
+ */
+export function amaProfile(
+  layout: ArtifactLayout,
+  host: string | undefined,
+): Record<string, unknown> {
+  return {
+    version: 1,
+    ...(host === undefined ? {} : { host }),
+    instructions: [layout.instructions as string],
+    skillDirs: [layout.skillDir as string],
+    config: layout.config as string,
+    sessionDir: layout.sessionDir as string,
+  };
+}
+
+function amaHostOf(target: ArtifactTarget): string | undefined {
+  if (target.amaHost === null) return undefined;
+  return target.amaHost ?? agentHostBundle();
 }
 
 /**
@@ -347,6 +414,14 @@ export function artifactFiles(
       );
       break;
     }
+    case "ama":
+      // The adapter speaks the hook HTTP itself; `clientBin` is not named.
+      files.set(layout.config as string, json(AMA_CONFIG));
+      files.set(
+        layout.profile as string,
+        json(amaProfile(layout, amaHostOf(target))),
+      );
+      break;
     default:
       break;
   }
@@ -667,6 +742,10 @@ function writeLaunchers(
     shimDir: shimsDirectory(dataDir, nativeJoin),
     args: injection.args,
     env: injection.env,
+    credential: { client: clientBin, variables: variablesFor(agentId) },
+    ...(agentId === "ama"
+      ? { amaKeys: { client: clientBin, variables: AMA_KEY_VARIABLES } }
+      : {}),
   };
   let written: string[];
   let warning: string | undefined;
@@ -758,6 +837,7 @@ export function globalWritesDisabled(env: NodeJS.ProcessEnv): boolean {
 function current(
   dataDir: string,
   agentId: string,
+  env: NodeJS.ProcessEnv,
 ): InjectionMarker | undefined {
   const marker = readMarker(dataDir, agentId);
   if (marker === undefined || marker.revision !== INTEGRATION_REVISION) {
@@ -765,12 +845,23 @@ function current(
   }
   if (!isFile(marker.clientBin)) return undefined;
   const layout = artifactLayout(dataDir, agentId);
+  // ama's profile names the adapter bundle, which moves with the app: a
+  // profile naming another one is stale whatever the marker says.
+  if (
+    layout.profile !== undefined &&
+    readOrEmpty(layout.profile) !==
+      json(amaProfile(layout, agentHostBundle(env)))
+  ) {
+    return undefined;
+  }
   const expected = [
     layout.settings,
     layout.module,
     layout.pluginHooks,
     layout.manifest,
     layout.overlay,
+    layout.config,
+    layout.profile,
     ...(skillContent() === undefined
       ? []
       : [layout.skill, layout.instructions]),
@@ -790,7 +881,7 @@ export function prepareInjection(
 ): PrepareReport {
   const env = options.env ?? process.env;
   const fresh =
-    options.force === true ? undefined : current(options.dataDir, agentId);
+    options.force === true ? undefined : current(options.dataDir, agentId, env);
   let clientBin: string;
   let written: string[] = [];
   if (fresh !== undefined) {
@@ -801,7 +892,11 @@ export function prepareInjection(
       launcher: { dataDir: options.dataDir },
       ...options.client,
     });
-    written = writeFiles(artifactFiles(options.dataDir, agentId, clientBin));
+    written = writeFiles(
+      artifactFiles(options.dataDir, agentId, clientBin, {
+        amaHost: agentHostBundle(env) ?? null,
+      }),
+    );
     const marker: InjectionMarker = {
       revision: INTEGRATION_REVISION,
       clientBin,
@@ -1000,6 +1095,13 @@ export function injectionFromLayout(
             ? []
             : [`--append-system-prompt=${instructions}`]),
         ],
+        env: [],
+      };
+    case "ama":
+      // One argument: everything else is in the profile, so the injection
+      // never nears an argv limit (coordinator-agent §2.4).
+      return {
+        args: isFile(layout.profile) ? ["--profile", layout.profile] : [],
         env: [],
       };
     case "copilot":

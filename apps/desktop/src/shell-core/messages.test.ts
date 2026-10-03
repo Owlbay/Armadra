@@ -23,6 +23,7 @@ describe("the shell's wording", () => {
       "tray.showWindow",
       "tray.quit",
       "tray.updateRestart",
+      "tray.gateway",
       "tray.usage.signedOut",
       "tray.usage.noData",
       "tray.usage.costToday",

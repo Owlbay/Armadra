@@ -12,6 +12,11 @@
  * so the fence in a release note can never disagree with the code that release
  * contains. It carries versions only: there is no cross-process protocol left
  * to declare a major for.
+ *
+ * One more key lives in the file and never in the fence: `agent`, the pinned
+ * `@armadra/agent` the build bundles and the host API its adapter speaks
+ * (docs/design/coordinator-agent.md §2.6). `version.mjs check` holds it
+ * against the desktop manifest and the lockfile.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -55,10 +60,103 @@ export function compareVersions(left, right) {
   return a.prerelease < b.prerelease ? -1 : 1;
 }
 
-/** Read and validate compatibility.json. */
+/**
+ * Keys compatibility.json carries beside the fence. They describe what this
+ * release was verified against, not which installs may move to it, so they
+ * never enter the release note's fence — which stays strict.
+ */
+const SIDE_KEYS = ["acp", "agent"];
+
+function readDocument(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+/** Read and validate compatibility.json's fence half. */
 export function readCompatibility(path = COMPATIBILITY_FILE) {
-  const document = JSON.parse(readFileSync(path, "utf8"));
-  return normalize(document);
+  const document = readDocument(path);
+  const fence = { ...document };
+  for (const key of SIDE_KEYS) {
+    if (key in fence) normalizeSide(key, fence[key]);
+    delete fence[key];
+  }
+  return normalize(fence);
+}
+
+/**
+ * The `acp` key: the ACP protocol version and, per adapter, its program and
+ * the version range a real run verified (`null` until one has —
+ * docs/design/acp-session-view.md §12). The program names must match
+ * `apps/desktop/src/core/acp/adapters.ts`; that test reads this file.
+ */
+export function readAcpCompatibility(path = COMPATIBILITY_FILE) {
+  return normalizeAcp(readDocument(path).acp);
+}
+
+function normalizeSide(key, value) {
+  if (key === "acp") return normalizeAcp(value);
+  if (key === "agent") return normalizeAgentPin(value);
+  throw new Error(`unknown compatibility key: ${key}`);
+}
+
+export function normalizeAcp(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new Error("acp must be an object");
+  if (value.protocolVersion !== 1)
+    throw new Error("acp.protocolVersion must be 1");
+  const adapters = value.adapters;
+  if (adapters === null || typeof adapters !== "object")
+    throw new Error("acp.adapters must be an object");
+  const result = {};
+  for (const [id, entry] of Object.entries(adapters)) {
+    if (typeof entry?.program !== "string" || entry.program === "")
+      throw new Error(`acp.adapters.${id}.program must be a program name`);
+    const verified = entry.verified;
+    if (verified === null) {
+      result[id] = { program: entry.program, verified: null };
+      continue;
+    }
+    if (typeof verified !== "object")
+      throw new Error(`acp.adapters.${id}.verified must be null or a range`);
+    const min = parseVersion(verified.min).text;
+    const max =
+      verified.max === undefined ? undefined : parseVersion(verified.max).text;
+    if (max && compareVersions(min, max) > 0)
+      throw new Error(`acp.adapters.${id}.verified.min is above max`);
+    result[id] = {
+      program: entry.program,
+      verified: max ? { min, max } : { min },
+    };
+  }
+  return { protocolVersion: 1, adapters: result };
+}
+
+/** The package the `agent` key may name. */
+export const AGENT_PACKAGE = "@armadra/agent";
+
+/**
+ * The `agent` key: `{ package, version, hostApi }`. The version is exact — an
+ * upgrade is one explicit change in this file, the desktop manifest and the
+ * lockfile together.
+ */
+export function readAgentPin(path = COMPATIBILITY_FILE) {
+  return normalizeAgentPin(readDocument(path).agent);
+}
+
+export function normalizeAgentPin(agent) {
+  if (agent === null || typeof agent !== "object" || Array.isArray(agent))
+    throw new Error("compatibility.json has no agent pin");
+  for (const key of Object.keys(agent)) {
+    if (!["package", "version", "hostApi"].includes(key))
+      throw new Error(`unknown agent pin key: ${key}`);
+  }
+  if (agent.package !== AGENT_PACKAGE)
+    throw new Error(`agent.package must be ${AGENT_PACKAGE}`);
+  const version = parseVersion(agent.version).text;
+  if (version !== agent.version)
+    throw new Error(`agent.version must be an exact version: ${agent.version}`);
+  if (!Number.isSafeInteger(agent.hostApi) || agent.hostApi < 1)
+    throw new Error("agent.hostApi must be a positive integer");
+  return { package: AGENT_PACKAGE, version, hostApi: agent.hostApi };
 }
 
 /**

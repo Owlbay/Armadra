@@ -50,3 +50,32 @@ export function audit(event: AuditEvent): void {
     // 见上：审计不改变调用方的结果。
   }
 }
+
+/**
+ * 身份加固（契约 §18.1–§18.4）写的审计动作，安全页（G2-8）按它们筛选。
+ * `identity.login` 的 `detail.method` 是 `password | passkey | totp | recovery | oauth`。
+ */
+export const SECURITY_AUDIT_ACTIONS = [
+  "identity.login",
+  "identity.login.failed",
+  "identity.lockout",
+  "identity.lockout.clear",
+  "identity.passkey.add",
+  "identity.passkey.remove",
+  "identity.mfa.enroll",
+  "identity.mfa.disable",
+  "identity.mfa.reset",
+  "identity.mfa.recovery.used",
+  "identity.mfa.recovery.regenerate",
+  "identity.session.revoke",
+  "identity.session.revoke-others",
+  // OAuth / OIDC（契约 §18.5，G1-12）。登录本身仍是 `identity.login`，`method: "oauth"`。
+  "identity.oauth.bind",
+  "identity.oauth.unbind",
+  "identity.oauth.signup",
+  "identity.oauth.failed",
+  "identity.oauth.secret.set",
+  "identity.oauth.secret.clear",
+] as const;
+
+export type SecurityAuditAction = (typeof SECURITY_AUDIT_ACTIONS)[number];

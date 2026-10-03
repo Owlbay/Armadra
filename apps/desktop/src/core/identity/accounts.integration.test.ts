@@ -7,8 +7,10 @@
  *      这个进程里真的应用过）；
  *   2. 建一个成员、设口令、`/api/identity/login` 换出一个会话，而这个会话的
  *      授权就是编译出来的那一份；
- *   3. 做不到的那几条（passkey、OAuth 绑定、开放注册）是 **501 且形状一致**
- *      的 `{ code, message }`，不是 404 也不是半个实现。
+ *   3. 做不到的那几条（OAuth 绑定、开放注册）是 **501 且形状一致**的
+ *      `{ code, message }`，不是 404 也不是半个实现；
+ *   4. 两步登录（契约 §18.3）在装配好的 core 上走得通：登记 TOTP 之后口令只换
+ *      中间票，码换会话；回环 IP 来源上 passkey 如实答不可用。
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -20,6 +22,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { type RunningCore, run } from "../main";
 import { identityInstanceId } from "./index";
+import { totpAt } from "./mfa/totp";
 import { allScopes } from "./scopes";
 import { IdentityService } from "./service";
 import { IdentityStore } from "./store";
@@ -240,11 +243,34 @@ describe("账号这一面", () => {
   it("做不到的那几条是 501，形状和其余失败一致", async () => {
     const { core, base } = await start();
     const session = await pair(core, base);
+    // passkey 的旧占位路径（`credentials/passkey/*`）随 §18.2 做实一起退役，
+    // 现在的路由在 `passkey/*`，见下一条用例与 `security-http.test.ts`。
+    // OAuth 的旧占位路径同样退役；没有公网来源时 `oauth/*` 答
+    // `oauth_not_configured`（契约 §18.5）。
+    const retired = await call(
+      session,
+      "POST",
+      "/api/identity/credentials/oauth/github/start",
+      {},
+    );
+    expect(retired.status).toBe(404);
+    const providers = await call(
+      session,
+      "GET",
+      "/api/identity/oauth/providers",
+    );
+    expect(await providers.json()).toMatchObject({ configured: false });
+    const oauth = await call(
+      session,
+      "POST",
+      "/api/identity/oauth/github/start",
+      {},
+    );
+    expect(oauth.status).toBe(404);
+    expect(((await oauth.json()) as { code: string }).code).toBe(
+      "oauth_not_configured",
+    );
     for (const [method, path] of [
-      ["POST", "/api/identity/credentials/passkey/register"],
-      ["POST", "/api/identity/credentials/passkey/assert"],
-      ["POST", "/api/identity/credentials/oauth/github/start"],
-      ["POST", "/api/identity/credentials/oauth/github/callback"],
       ["POST", "/api/identity/register"],
     ] as const) {
       const response = await call(session, method, path, {});
@@ -256,6 +282,81 @@ describe("账号这一面", () => {
       expect(body.code, path).toBe("NOT_IMPLEMENTED");
       expect(typeof body.message).toBe("string");
     }
+  });
+
+  it("两步登录：登记 TOTP 后口令只换中间票，码换会话", async () => {
+    const { core, base } = await start();
+    const session = await pair(core, base);
+    const member = (await (
+      await call(session, "POST", "/api/identity/principals", {
+        displayName: "同事",
+      })
+    ).json()) as { principalId: string };
+    await call(session, "POST", "/api/identity/credentials", {
+      principalId: member.principalId,
+      kind: "password",
+      password: "correct horse battery",
+    });
+    const signIn = () =>
+      fetch(`${base}/api/identity/login`, {
+        method: "POST",
+        headers: { origin: base, "content-type": "application/json" },
+        body: JSON.stringify({
+          principalId: member.principalId,
+          password: "correct horse battery",
+        }),
+      });
+    const first = (await (await signIn()).json()) as {
+      csrfToken: string;
+      native: { accessToken: string };
+    };
+    const own: Session = {
+      base,
+      accessToken: first.native.accessToken,
+      csrfToken: first.csrfToken,
+      principalId: member.principalId,
+    };
+    const { secret } = (await (
+      await call(own, "POST", "/api/identity/mfa/totp/enroll", {})
+    ).json()) as { secret: string };
+    expect(
+      (
+        await call(own, "POST", "/api/identity/mfa/totp/confirm", {
+          code: totpAt(secret, Date.now()),
+        })
+      ).status,
+    ).toBe(200);
+
+    const step = (await (await signIn()).json()) as {
+      mfaRequired: boolean;
+      challengeId: string;
+    };
+    expect(step.mfaRequired).toBe(true);
+    const verified = await fetch(`${base}/api/identity/mfa/verify`, {
+      method: "POST",
+      headers: { origin: base, "content-type": "application/json" },
+      body: JSON.stringify({
+        challengeId: step.challengeId,
+        code: totpAt(secret, Date.now() + 30_000),
+      }),
+    });
+    expect(verified.status).toBe(200);
+    const issued = (await verified.json()) as {
+      device: { principalId: string };
+    };
+    expect(issued.device.principalId).toBe(member.principalId);
+
+    // 回环 IP 来源：passkey 如实不可用，而不是让浏览器抛错。
+    const passkey = await call(
+      session,
+      "POST",
+      "/api/identity/passkey/register/options",
+      {},
+    );
+    expect(passkey.status).toBe(400);
+    expect((await passkey.json()) as { code: string }).toMatchObject({
+      code: "passkey_unavailable_on_ip_host",
+    });
   });
 
   it("不存在的账号接口仍然是 404，不是 501", async () => {

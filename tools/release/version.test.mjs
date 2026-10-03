@@ -13,6 +13,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   VERSION_SITES,
+  checkAgentPin,
   checkVersions,
   readVersions,
   setVersion,
@@ -22,6 +23,11 @@ import {
   compareVersions,
   extractFence,
   normalize,
+  normalizeAcp,
+  normalizeAgentPin,
+  readAcpCompatibility,
+  readAgentPin,
+  readCompatibility,
   releaseNote,
   renderFence,
 } from "./compatibility.mjs";
@@ -168,6 +174,44 @@ test("the fence round-trips and refuses what a reader would refuse", () => {
   );
 });
 
+test("the acp key sits beside the fence and never enters it", () => {
+  const fence = readCompatibility();
+  assert.equal("acp" in fence, false);
+  assert.match(
+    renderFence(fence),
+    /^```armadra-compatibility\n\{"minimumInstalled"/,
+  );
+  const acp = readAcpCompatibility();
+  assert.equal(acp.protocolVersion, 1);
+  assert.equal(acp.adapters.claude.program, "claude-agent-acp");
+  // The fence itself still refuses it: a reader parses the fence strictly.
+  assert.throws(
+    () => normalize({ minimumInstalled: "0.1.0", acp: {} }),
+    /unknown compatibility key/,
+  );
+  assert.deepEqual(
+    normalizeAcp({
+      protocolVersion: 1,
+      adapters: {
+        codex: { program: "codex-acp", verified: { min: "1.10.0" } },
+      },
+    }).adapters.codex,
+    { program: "codex-acp", verified: { min: "1.10.0" } },
+  );
+  for (const bad of [
+    { protocolVersion: 2, adapters: {} },
+    { protocolVersion: 1, adapters: { x: { program: "", verified: null } } },
+    {
+      protocolVersion: 1,
+      adapters: {
+        x: { program: "x", verified: { min: "2.0.0", max: "1.0.0" } },
+      },
+    },
+  ]) {
+    assert.throws(() => normalizeAcp(bad));
+  }
+});
+
 test("a release note carries the fence and says when nothing notarised it", () => {
   const range = { minimumInstalled: "0.1.0" };
   const plain = releaseNote({
@@ -185,4 +229,37 @@ test("a release note carries the fence and says when nothing notarised it", () =
   });
   assert.match(unsigned.split("\n")[0], /^> Not notarised.*macOS, Windows/);
   assert.deepEqual(extractFence(unsigned), range);
+});
+
+test("the agent pin agrees with the desktop manifest and the lockfile", () => {
+  assert.deepEqual(checkAgentPin(), []);
+  const pin = readAgentPin();
+  assert.equal(pin.package, "@armadra/agent");
+  assert.equal(pin.hostApi, 1);
+  // Never in the fence: a reader parses it strictly.
+  assert.ok(!renderFence(readCompatibility()).includes("agent"));
+});
+
+test("an agent pin that moved alone fails the check", () => {
+  const base = mkdtempSync(join(tmpdir(), "armadra-agent-pin-")) + "/";
+  try {
+    mkdirSync(base + "apps/desktop", { recursive: true });
+    cpSync(
+      root + "apps/desktop/package.json",
+      base + "apps/desktop/package.json",
+    );
+    cpSync(root + "pnpm-lock.yaml", base + "pnpm-lock.yaml");
+    const moved = { ...readAgentPin(), version: "9.9.9" };
+    const problems = checkAgentPin({ base, agent: moved });
+    assert.equal(problems.length, 2);
+    assert.match(problems[0], /apps\/desktop\/package\.json pins/);
+    assert.match(problems[1], /pnpm-lock\.yaml/);
+    assert.throws(() => normalizeAgentPin({ ...moved, version: "^0.6.2" }));
+    assert.throws(() => normalizeAgentPin({ ...moved, package: "other" }));
+    assert.throws(() => normalizeAgentPin({ ...moved, extra: 1 }));
+    // A fence is parsed strictly: the agent key is refused there.
+    assert.throws(() => normalize({ minimumInstalled: "0.1.0", agent: moved }));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });

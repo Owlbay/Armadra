@@ -48,6 +48,27 @@ describe("canvas presence and the edit lease", () => {
     throw new Error("expected a refusal");
   }
 
+  it("实时板上租约不拦写入，也不显示谁在编辑（补全架构 §6.3）", () => {
+    beat(A, true);
+    beat(B, true);
+    // 非实时板：A 拿着租约，B 写被拒。
+    expect(refusal(() => presence.authorizeWrite(WS, BOARD, B)).code).toBe(
+      LEASE_HELD,
+    );
+    const undo = presence.setRealtimeProbe((id) => id === BOARD);
+    expect(() => presence.authorizeWrite(WS, BOARD, B)).not.toThrow();
+    expect(beat(B, true).lease).toBeNull();
+    expect(
+      presence.acquire(WS, BOARD, {
+        clientId: B,
+        deviceName: B,
+        takeover: false,
+      }).lease,
+    ).toBeNull();
+    expect(beat(A).clients.map((client) => client.clientId)).toEqual([A, B]);
+    undo();
+  });
+
   it("hands a lone client the lease on its first heartbeat, and stays quiet after", () => {
     const first = beat(A);
     expect(first.lease?.clientId).toBe(A);

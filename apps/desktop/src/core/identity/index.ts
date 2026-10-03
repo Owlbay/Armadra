@@ -2,7 +2,10 @@ import type { CoreContext } from "../main";
 import { confirmWorkspace } from "../collab/control/close";
 import { instanceId } from "../instance";
 import { coreCapabilities } from "../schedule/capabilities";
+import { secretsFor } from "../secrets";
+import { completionSettings, settingsDomain } from "../settings";
 import { AccountsService } from "./accounts";
+import { createIdentitySecurity } from "./accounts-http";
 import { installAuditSink } from "./audit";
 import { Authorizer } from "./authorize";
 import { startControlChannel } from "./control";
@@ -86,11 +89,29 @@ export function installIdentity(context: CoreContext): void {
   // 身份域不该知道有哪些域存在，所以这里只转发；自动化面板认的
   // `automation.plans.v1` 就是这样传到页面的。
   const accounts = new AccountsService({ store });
+  // 加固（契约 §18.1–§18.4）：TOTP 密钥进这一轮的 SecretStore，设置每次现读。
+  const security = createIdentitySecurity({
+    store,
+    secrets: () => secretsFor(context).backend,
+    settings: () => {
+      const current = completionSettings(
+        settingsDomain()?.settings.snapshot() ?? {},
+      );
+      const publicOrigin = current.gateway.publicOrigin;
+      return {
+        passwordMinLength: current.identity.passwordMinLength,
+        rpId: current.identity.rpId,
+        publicOrigins: publicOrigin === "" ? [] : [publicOrigin],
+        mfaRequireFor: current.identity.mfa.requireFor,
+      };
+    },
+  });
   const http = new IdentityHttp({
     service,
     accounts,
     instanceId: runInstance,
     capabilities: coreCapabilities,
+    security,
   });
 
   // 判定入口与审计写入点（设计 §4）。装上之后它们仍然对 owner 恒真、对每条
@@ -135,7 +156,7 @@ export function installIdentity(context: CoreContext): void {
 
   // OAuth / OIDC 的挂点（契约 §18.5）。它自己登记更长的原样前缀，所以放在
   // 哪一行都先于下面这条整段接管；放在这里是为了让它拿到同一份服务。
-  installOAuth(context, { store, service, accounts });
+  installOAuth(context, { store, service, accounts, security });
 
   context.server.raw(API_PREFIX, (request, response, cors) =>
     http.handle(request, response, cors),

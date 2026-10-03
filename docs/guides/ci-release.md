@@ -16,7 +16,7 @@
 | `macos-14`       | macos-aarch64  |
 | `windows-latest` | windows-x86_64 |
 
-三行跑同一串步骤：
+三行跑同一串步骤（另有一个只在 ubuntu 上跑的 `e2e` 作业，见 §1.1）：
 
 1. `pnpm install --frozen-lockfile`
 2. `pnpm check`（libs:build、prettier、typecheck、`repo:check`、
@@ -41,6 +41,47 @@
 
 缓存：只有 `actions/setup-node` 的 `cache: pnpm`。R7d 之后仓库里没有第二条工具链，
 Rust 与 Go 的 setup、缓存与检查步骤一并删除。
+
+### 1.1 端到端分档
+
+`tools/probes/` 下的端到端探针按「要不要用户的东西」分三档（[补全架构](../design/completion-architecture.md) §12）。
+A 档与 B 档由 `tools/ci/e2e.mjs` 执行，清单在 `tools/ci/e2e.json`：
+
+```sh
+pnpm libs:build
+pnpm --filter @armadra/web build
+pnpm --filter @armadra/desktop build
+pnpm --filter @armadra/server build
+node apps/desktop/scripts/ensure-node-pty.mjs   # Linux：给 Node 编一份 node-pty
+node tools/ci/e2e.mjs --tier a            # 全部 A 档
+node tools/ci/e2e.mjs --tier a --only server-e2e
+node tools/ci/e2e.mjs --tier b --list     # 只列出清单
+```
+
+| 档  | 在哪跑                                            | 失败时   |
+| --- | ------------------------------------------------- | -------- |
+| A   | `ci.yml` 的 `e2e` 作业（ubuntu，每个 PR 与 main） | 阻断合并 |
+| B   | `nightly.yml`（每天一次，可手动触发）             | 开 issue |
+| C   | 手动，需要真实账号或真机                          | —        |
+
+- **清单一条一行。** 每条写 `id`、`tier`、`script`、`args`（`{out}` 换成这一条的
+  输出目录）、`requires`（`tmux` / `chrome`）与 `timeoutMinutes`；外部服务替身由
+  `tools/dev-stack/` 提供的条目加 `devStack: true`。工作包只追加自己的一行，
+  `tools/ci/e2e.test.mjs` 校验清单形状、脚本存在与 A 档必有的五条。
+- **逐条记账，跑完全部再判。** 每条探针的输出写进 `<out>/<id>/output.log`，
+  探针自己的 `result.json` 与截图也落在 `<out>/<id>/`；汇总在 `<out>/result.json`
+  （默认 `target/e2e/<档>/`）。任一条失败或超时，退出码非零，但后面的条目照跑。
+  超时按进程组杀，探针起的 Chrome、core 与 Vite 一起收掉。CI 把整个目录作为
+  `e2e-tier-a` 产物上传。
+- **dev-stack 门控。** `ARMADRA_DEV_STACK=1` 且 `docker info` 答得上时，先
+  `pnpm dev-stack up`、跑完 `down`；否则 `devStack` 条目记 `skipped`，不算失败。
+  `up` 本身失败时这些条目记 `failed`。
+- **Chrome 与 tmux。** Chrome 取 `CHROME_PATH`，否则找各平台的常见安装位置；缺
+  `requires` 里的任何一样，那一条直接记 `failed` 并写明缺什么。`e2e` 作业用
+  `browser-actions/setup-chrome` 装 stable，apt 装 tmux 与 xvfb，并放开 Ubuntu 24.04
+  对非特权用户命名空间的 AppArmor 限制，好让 Chrome 的沙箱起得来。
+- `pnpm ci:workflows` 断言 `ci.yml` 有跑 `--tier a` 的 `e2e` 作业且在 ubuntu 上，
+  `nightly.yml` 有 `schedule` 与 `workflow_dispatch` 并跑 `--tier b`。
 
 ## 2. release.yml
 
@@ -214,6 +255,41 @@ LiveAgent 还用 `dmgbuild` 重建 DMG 并自己 `notarytool submit` + `stapler 
 `gh release create` 带 `--verify-tag`：标签不存在时拒绝，而不是替我们建一个指向当前
 提交的标签。预发布按标签里有没有 `-` 判定（`v0.2.0-rc.1`），与 semver 的读法一致。
 `latest.json` 仍由 `tools/release/updater-manifest.mjs` 生成并随产物一起上传。
+
+**更新清单是两份。** `latest.json`（minisign 签名）之外，每个目标还发一份
+electron-updater 自己读的清单——桌面壳下载时走 `provider: generic`，只认 yml。
+electron-builder 写的 `latest-mac.yml` / `latest.yml` 只按平台起名，两台 macOS
+runner、两台 Windows runner 合进同一个目录会互相覆盖，所以 `stage-desktop.mjs` 把它
+改写成按目标命名的一份：`latest-<target>` 是 electron-updater 的通道名，文件名是它
+自己对这个通道算出的名字（`latest-darwin-aarch64-mac.yml`、`latest-windows-x86_64.yml`、
+`latest-linux-aarch64-linux-arm64.yml`……，`artifacts.mjs::updaterFeedFile`；
+`apps/desktop/src/shell-core/updates/feed.test.ts` 用钉住的 electron-updater 核对）。
+改写时只留这个目标的更新包，`url` / `path` 换成发布名，`sha512` 写 base64；打包器
+清单里的条目按字节对上暂存的包，对不上就在构建作业里失败。`--require-updater` 下
+缺清单也失败。
+
+`assemble.mjs` 再核一遍：每个目标的清单都在、版本对、`files[].url` 是本次发布的
+文件、清单的 sha512 与 `SHA256SUMS` 的 sha256 说的是同一份字节。`latest.json` 的每个
+平台条目带 `feed: { url, sha256 }` 点名这份清单；桌面壳下载前先取它、核对 sha256 与
+它描述的包，再把 `autoUpdater.channel` 设成 `latest-<target>` 交给 electron-updater。
+清单本身的 Ed25519 签名等 electron-builder 27 稳定后另做（外部服务 §2.4）。
+
+**灰度**：`assemble.mjs --rollout <percent>` 给 `latest.json` 写
+`rollout: { percent, seed }`，seed 缺省为版本号；客户端用安装 id（数据目录
+`updates/install-id`）与 seed 的哈希落在百分比内才接受。不写 electron-updater 的
+`stagingPercentage`，免得同一台机器被两道闸各筛一次。放量就是改百分比重发
+`latest.json`（及其 `.sig`）。
+
+**检查**：桌面壳自己问 `GET …/releases`（发布源来自 `ARMADRA_UPDATER_SOURCE`，或由
+已发布构建的 `github.com/<owner>/<repo>` 更新地址推出 `api.github.com/repos/…`），
+带上一次的 `ETag` 发 `If-None-Match`，304 不计入匿名限额；自动检查启动约一分钟后
+一次，之后间隔不短于 6 小时并加抖动，`updates.autoCheck` 关掉就不查。`updates.channel`
+为 `beta` 才考虑预发布，缓存按发布源与通道分开。
+
+本地对着 dev-stack 验一遍：`pnpm dev-stack up release`，然后
+`pnpm release:dry-run --against http://127.0.0.1:8090/repos/armadra/armadra --pubkey tools/dev-stack/.data/release/minisign.pub`
+——检查（带 ETag 再查一次应得 304）→ 取 `SHA256SUMS` 与 `latest.json` 并验签 → 逐个
+目标取清单与它点名的包，核对 sha512、sha256、索引 digest 与 minisign 签名。
 
 仍然只创建 **draft**：LiveAgent 会直接发布并 `--latest`，我们不。产物清单与说明要
 人审阅，更新检查会跳过 draft，所以未发布前任何客户端都看不到它。

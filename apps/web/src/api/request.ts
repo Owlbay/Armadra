@@ -66,6 +66,14 @@ const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   // 机器上」——切换执行主机能解决它。
   unsupported_on_remote: "error.unsupportedOnRemote",
   git_execution_required: "gitRepo.executionRequired",
+  // 节点凭据（契约 §20）：起终端与凭据页的拒绝。
+  credential_not_found: "credentials.error.credential_not_found",
+  credential_mismatch: "credentials.error.credential_mismatch",
+  credential_kind_disabled: "credentials.error.credential_kind_disabled",
+  credential_unsupported_here: "credentials.error.credential_unsupported_here",
+  credential_backend_insecure: "credentials.error.credential_backend_insecure",
+  credential_unset: "credentials.error.credential_unset",
+  credential_unavailable: "credentials.error.credential_unavailable",
   UNAUTHENTICATED: "error.unauthenticated",
   PERMISSION_DENIED: "error.permissionDenied",
   NOT_FOUND: "error.notFound",

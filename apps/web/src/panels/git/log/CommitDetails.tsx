@@ -199,15 +199,16 @@ export function CommitDetails({
             </li>
           ) : (
             <li key={`file:${row.path}`} className="min-w-0">
-              <button
+              <Button
                 type="button"
+                variant="ghost"
                 aria-pressed={file === row.path}
                 onClick={() => {
                   setFile(row.path);
                   onOpenFile?.(row.path);
                 }}
                 style={{ paddingLeft: `${row.depth * 12}px` }}
-                className="flex w-full min-w-0 items-center gap-2 rounded py-0.5 pr-1 text-left hover:bg-muted aria-pressed:bg-muted"
+                className="h-auto w-full min-w-0 justify-start gap-2 rounded border-0 py-0.5 pr-1 text-left text-[length:inherit] font-normal hover:bg-muted aria-pressed:bg-muted"
               >
                 <span className="w-3 shrink-0 font-mono">
                   {row.file?.status.slice(0, 1)}
@@ -226,7 +227,7 @@ export function CommitDetails({
                     ? t("gitRepo.binaryFile")
                     : `+${row.file?.additions} −${row.file?.deletions}`}
                 </span>
-              </button>
+              </Button>
             </li>
           ),
         )}

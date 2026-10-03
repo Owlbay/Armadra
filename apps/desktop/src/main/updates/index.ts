@@ -1,4 +1,8 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import { IPC } from "../../shared/ipc";
+import { dataDir } from "../../shell-core/paths";
 import type { Staged } from "../../shell-core/updates/notify";
 import type { DesktopLifecycle } from "../lifecycle";
 import {
@@ -47,15 +51,26 @@ export function installUpdates(
     // The window's own `close` handler hides it while the app is not quitting,
     // so without this flip the window merely hides and the install never runs.
     onBeforeRestart: markQuitting,
-    settings: async () => "",
+    // core 写的 `<data dir>/settings.json`：`updates.channel`、`updates.autoCheck`、
+    // `updates.notify` 都在这份文档里。读不到就是默认值（stable、自动检查、通知）。
+    settings: () => readFile(join(dataDir(), "settings.json")),
     ...overrides,
   };
   const updates = new UpdatesController(deps);
   controller = updates;
+  // 自动检查：启动后约一分钟一次，之后每六小时以上（带抖动）。本地构建与没配置
+  // 发布源的构建在 `checkRelease` 里第一步就返回，不碰网络。
+  // 定时器 unref 过，不会拖住退出。
+  updates.startSchedule();
   return {
     handlers: {
       [IPC.updatesState.channel]: () => updates.state(),
-      [IPC.updatesCheck.channel]: (verdict: unknown) => updates.check(verdict),
+      // 页面带着一份 Host 答复来时照旧交叉核对它；什么都没带就是「现在检查」，
+      // 由壳自己去问发布索引。
+      [IPC.updatesCheck.channel]: (verdict: unknown) =>
+        verdict === undefined || verdict === null
+          ? updates.checkRelease({ manual: true })
+          : updates.check(verdict),
       [IPC.updatesDismiss.channel]: () => updates.dismiss(),
       [IPC.updatesCancel.channel]: () => updates.cancel(),
       [IPC.updatesDownload.channel]: () => updates.download(),

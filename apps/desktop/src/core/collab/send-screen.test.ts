@@ -203,8 +203,10 @@ describe("the screen gate", () => {
       captured += 1;
       return capture(...args);
     };
-    const pi = fixture.agentNode("pi", "pi");
-    const piSession = fixture.session(pi, "pi");
+    // 目标原先是 Pi；Pi 1.0 登记了「信任项目目录」对话框之后有画面特征了，
+    // 换成仍然没有的 OpenCode。断言不变。
+    const pi = fixture.agentNode("opencode", "opencode");
+    const piSession = fixture.session(pi, "opencode");
     fixture.link(me, pi);
     fixture.terminal.drive.set(pi, {
       nodeId: pi,
@@ -214,7 +216,7 @@ describe("the screen gate", () => {
       lease: freeLease(0),
       driveGeneration: 0,
     } as never);
-    fixture.terminal.foreground = { command: "pi" };
+    fixture.terminal.foreground = { command: "opencode" };
     fixture.terminal.capture = AUTO_MODE_DIALOG;
     const body = ok(await run("send", { to: pi, body: "做这件事" }));
     expect(body).toMatchObject({ outcome: "delivered" });

@@ -156,6 +156,30 @@ beforeEach(() => {
 });
 
 describe("SessionsSection", () => {
+  it("marks an ACP-driven session row and leaves PTY rows alone", async () => {
+    sessions.mockResolvedValue([
+      session({
+        nodeId: "019ff7d1-0d12-7421-833d-2c5e8d64ed40",
+        title: "接口重构",
+        agentId: "codex",
+        state: "working",
+        backend: "acp",
+      }),
+      session({
+        nodeId: "019ff7d1-0d12-7421-833d-2c5e8d64ed41",
+        title: "登录修复",
+        agentId: "claude",
+        state: "working",
+        backend: "tmux",
+      }),
+    ]);
+    const { container } = renderSection();
+    await screen.findByText("接口重构");
+    const badges = container.querySelectorAll('[data-slot="session-row-acp"]');
+    expect(badges).toHaveLength(1);
+    expect(badges[0]?.textContent).toBe("ACP");
+  });
+
   it("lists the live sessions grouped by status, newest buckets first", async () => {
     renderSection();
 

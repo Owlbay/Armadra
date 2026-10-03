@@ -467,6 +467,32 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - 发送方节点已经不在画布上、目标节点已经不在画布上（收件箱外键填不了），或者是收件箱唤醒（来源就是目标自己）时不写回执，投递记录与事件照发。
 - 每条终态只通知一次；清扫只删回执已经写过的、或者不需要回执的终态行。
 
+### 12.4 Armadra Agent 的模型密钥：`/api/agents/ama/credentials`
+
+设计见 [协调 Agent](../design/coordinator-agent.md) §7。代码在 `core/agent/ama-credentials.ts`，共享层 `amaCredentialStatusSchema`。
+
+| 方法与路径                                      | 请求体              | 答复                     |
+| ----------------------------------------------- | ------------------- | ------------------------ |
+| `GET /api/agents/ama/credentials`               | —                   | 状态                     |
+| `PUT /api/agents/ama/credentials/{provider}`    | `{ "apiKey": "…" }` | 状态（已存）             |
+| `DELETE /api/agents/ama/credentials/{provider}` | —                   | 状态（删一个不在的也成） |
+
+```json
+{
+  "backend": "keychain",
+  "providers": [
+    { "id": "anthropic", "isSet": false },
+    { "id": "deepseek", "isSet": true }
+  ]
+}
+```
+
+- 答复**从不带值**，只有每家是否已设与后端（`keychain` / `dpapi` / `libsecret` / `file-encrypted` / `file`）。供应商列表由 core 给（ama 需要 key 的内置供应商），页面不自己列；不在列表里的 `provider` 答 `400 bad_request`，`apiKey` 不是非空单行也是 `400`；密钥后端打不开答 `503 secret_unavailable`。
+- 每家一条密钥条目 `armadra-ama-<provider>`，这是值唯一的落点。不写任何 key 文件，profile 没有 `authFile`（ama 自己用户级的 `auth.json` 与登录照常可用）。
+- 怎么到 ama：与节点凭据（§20.4）同一条兑换路。画布启动器 `run/ama` 在 `ARMADRA_NODE_ID` 门之后调 `armadra-hook credential --ama`，后者带节点 token 经本机 hook 通道 `POST /credential/ama`（体 `{ "nodeId": "…" }`）兑换；门与 `/credential` 相同（应用 bearer、节点 token 必须验过），外加节点在画布上是 ama（或以它为基础的自定义 Agent），否则 `403 forbidden`；密钥后端打不开 `503 secret_unavailable`。答复 `{ "variables": [{ "variable": "AMA_API_KEY_DEEPSEEK", "value": "…" }] }`，带 `cache-control: no-store`、不记日志。启动器只认 `AMA_API_KEY_<供应商>` 这十五个名字，设在自己的进程里再 `exec` ama：值不进节点 shell 的环境、启动行与 shell 历史，不落盘（启动器按换行切答复，不用 here-doc）。兑换失败或名字不认识时拒绝启动；一个都没设时照常启动。ama 起的子进程不继承 `AMA_*`（ama 自己剥掉）。
+- 限制：Windows 的启动器（`armadra-launch.exe`）与执行主机（SSH）那份不做这段兑换，那里的 ama 只用它自己的 `auth.json` 与环境变量。
+- 权限：`/api/agents` 一族，读 `settings:read`、写 `settings:write`。
+
 ## 13. 画布启动器
 
 设计见 [画布启动器](../design/canvas-launcher.md)。注入（Hook、技能、画布说明）不再写在敲进节点 shell 的启动行上，而由数据目录里每个 CLI 一个的启动器 `integration/run/<cli>`（Windows `run\<cli>.exe`）在 CLI 启动时追加；启动器只在环境里有 `ARMADRA_NODE_ID` 时注入，没有时原样启动程序。启动行只剩「启动器 + 程序 + 程序前置词 + CLI 自己的旗标」。
@@ -553,7 +579,94 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 14. ACP：`/api/acp/*` 与 `/api/agents` 行的 `acp`
 
-预留，由 G1-4（§14.1）与 G2-1（§14.2–§14.4）填写。
+设计见 [ACP 会话视图](../design/acp-session-view.md) 与 [补全架构](../design/completion-architecture.md) §5.1。ACP 是同一个终端节点的另一种驱动方式；协议栈是 `@armadra/agent/acp`（精确版本），core 只包装它的 `AcpClient`（`core/acp/client.ts`）。
+
+### 14.1 `GET /api/agents` 行的 `acp`
+
+每一行多一个可选的 `acp`：这家 CLI 在这台机器上怎么说 ACP（代码在 `core/agent/list.ts`，表在 `core/acp/adapters.ts`；共享层 `agentAcpInfoSchema`）。`custom:` 条目答它 `baseAgent` 的；没有 ACP 入口的行不带这个键。
+
+```json
+{
+  "id": "codex",
+  "acp": {
+    "support": "official",
+    "program": "codex-acp",
+    "installed": true,
+    "version": "1.10.2",
+    "resume": "load"
+  }
+}
+```
+
+| 字段        | 含义                                                                                                                                                 |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `support`   | `native`（CLI 自带入口：`opencode acp`、`omp acp`、`copilot --acp`、`ama --mode acp`）/ `official`（官方适配器）/ `community`（社区适配器 `pi-acp`） |
+| `program`   | 在补齐过的 `PATH` 上找的程序名：`claude-agent-acp`、`codex-acp`、`opencode`、`pi-acp`、`omp`、`copilot`、`ama`                                       |
+| `installed` | `program` 每次请求都按 `resolveCommand`（与 `resolvedPath` 同一条规则）探，不缓存                                                                    |
+| `version`   | 可选：本进程最近一次对这家起会话或探测时 `initialize` 报的 `agentInfo.version`。列表从不为它起进程，没有就缺席；`installed: false` 时也缺席          |
+| `resume`    | 跨进程接回用哪个方法：`load`（`session/load`，回放）/ `resume`（`session/resume`，不回放）/ `none`（只能新开，Copilot；这样的会话不休眠）            |
+
+- 七家的表：`claude` 官方 `load`、`codex` 官方 `load`、`opencode` 原生 `load`、`pi` 社区 `load`、`omp` 原生 `load`、`copilot` 原生 `none`、`ama` 原生 `resume`。`resume` 是偏好：起会话时按 Agent 在 `initialize` 声明的能力协商，偏好的方法不支持就用另一个，两个都不支持就新开并如实告诉页面没有接上。
+- 权限模式在 ACP 下的落点（`session/set_mode` 的模式 id 或启动 argv）不在行上；没有落点的模式（OpenCode 的 `auto-edit` / `full-auto`，Pi 除 `default` 外的三个）不出现在会话视图里，以它起会话答 `acp_mode_unsupported`。`plan` 在 Agent 不提供对应模式 id 时拒绝启动（`acp_mode_unavailable`），不以可写模式起。
+- 起会话失败的错误码（G2-1 的路由原样答出，形状 `{ code, message }`）：`acp_not_installed`、`acp_spawn_failed`、`acp_exited`、`acp_initialize_failed`、`acp_initialize_timeout`、`acp_protocol_version`、`acp_auth_required`（Agent 要先在 CLI 里登录）、`acp_session_failed`、`acp_mode_unsupported`、`acp_mode_unavailable`。消息里不带适配器的 stderr。
+- 实跑验证过的版本区间记在 `tools/release/compatibility.json` 的 `acp` 键（`{ protocolVersion: 1, adapters: { <id>: { program, verified: null | { min, max? } } } }`），不进发布说明的兼容围栏；`program` 与适配器表由测试对齐。
+- 状态来源词汇多一个 `acp`（`agent_status.state_source`）：由 core 在 ACP 驱动的会话上写入，与 `hook` / `extension` 一样算上报（`stateSourceIsReported`），客户端无法自称。
+
+### 14.2 会话路由 `/api/acp/*`
+
+实现：`apps/desktop/src/core/acp/routes.ts`；形状：共享层 `api/acp.ts`。ACP 会话**就是** `terminal_sessions` 的一行（`backend: "acp"`，§5.1 的会话行形状不变），所以行、代次、人类租约（`POST /api/terminals/{id}/drive`）、`terminate`、`wake`、会话侧栏都照旧作用于它。路径里的 `{sessionId}` 是这一行的 id，不是 ACP 会话 id。权限与终端同一档：读要 `terminal:read`，开会话要 `terminal:create`（记创建者），往别人开的会话里写要 `terminal:drive`，按会话行查画布。
+
+| 方法与路径                              | 请求                                                                               | 应答                                                                                                          |
+| --------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `POST /api/acp/sessions`                | `{ workspaceId, nodeId, cwd, agentId, permissionMode?, model?, resume?, prompt? }` | `200` 会话行（§5.1，`backend: "acp"`）                                                                        |
+| `POST /api/acp/sessions/{id}/prompt`    | `{ text }`                                                                         | `200 { turnId }`；回合的结局经 `acp.turn`（§14.3）                                                            |
+| `POST /api/acp/sessions/{id}/cancel`    | 无                                                                                 | `204`；`session/cancel`，挂起的审批一律回 `cancelled`                                                         |
+| `POST /api/acp/sessions/{id}/mode`      | `{ modeId }`                                                                       | `204`                                                                                                         |
+| `GET /api/acp/sessions/{id}/log?after=` | 无                                                                                 | `200 { entries: TranscriptEntry[], endOffset, modes: { currentModeId, availableModes[] } \| null, pending? }` |
+| `POST /api/acp/nodes/{nodeId}/driver`   | `{ driver: "acp" \| "terminal" }`                                                  | `200 { sessionId, resumed }`                                                                                  |
+
+- **起会话**：`nodeId` 不必已经在画布文档里（新建向导先起会话、节点随后落盘）；同一个节点已经有活着的 ACP 会话时答那一行（两台设备同时挂载、重试都不起第二个）；有活着的**终端**会话时 `409 conflict`（先切换驱动）；节点最近那一行是结束了的 ACP 行时在同一行上起下一代并接回。`prompt` 在会话开好后作为第一条提示发出（人类驾驶者）。没有 ACP 入口的 Agent 答 `400 acp_unsupported`；起不来的原样答 §14.1 的错误码（`acp_not_installed` 400、`acp_mode_unsupported` 400、`acp_mode_unavailable` 409、`acp_auth_required` 409、其余 502）。`custom:` 条目借基础 CLI 的适配器；基础 CLI 自己就是 ACP 入口（`native`）时，条目的 `launchCmd` 与 `args` 顶替表里的程序。
+- **提示**：等同在终端里敲一行并回车——经 `writeSubmit`，人类驾驶者（抢占租约，永不被拒）。同一会话一次一个回合，后到的排队。会话行已经结束（休眠、core 重启、适配器自己退了）时先在**同一行**上起下一代并以 CLI 会话 id 接回，再发；这一行已被节点的另一行取代时 `409 conflict`。
+- **镜像**：`entries` 是镜像 `<数据目录>/acp/<nodeId>/<ACP 会话 id>.acp.jsonl` 从字节偏移 `after` 起的完整记录（`TranscriptEntry`：`{ role: "user" | "assistant", blocks[], endOffset, at? }`，相邻的助手文本已合并），`endOffset` 是下一次的 `after`。**core 先写镜像再发 `acp.update`**：页面先订阅再读，读回来之前到的分块已经在 `entries` 里。镜像只记对话：我方的提示、助手文本、工具调用（`tool_use`）与它的终态结果（`tool_result`，正文截到 8000 字符）；思考、计划、用量、模式变化只经事件。`modes` 与 `pending`（挂起的审批，形状 `{ pendingId, protocol: "acp", toolCall, options[] }`）描述活着的进程，没有进程时 `modes: null`、无 `pending`。
+- **驱动切换**（ACP 设计 §4.2）：节点在 `blocked` / `waiting` 时 `409 awaiting_approval`；SSH 节点切到 ACP 答 `400 acp_unsupported`。否则结束当前驱动（终端先敲 CLI 的退出命令等它自己退，再结束；ACP 回合里先 cancel 再收掉进程），行以 `termination_intent = 'switch'` 结束；再在**同一行**上以另一种驱动起下一代（代次 +1，行 id 不变）：ACP 侧以 `agent_status.session_id` 接回（适配器表 `resume: "none"` 的新开），终端侧起 shell 并敲 CLI 的恢复行（不能续接时敲普通启动行）。`resumed` 如实说接上了没有。已经是目标驱动且活着时什么都不动，答 `resumed: true`。切换期间节点算「睡着」，`send` 排队。节点数据里的 `agent.driver` 由页面写回（不进撤销栈）。
+- **其余路由在 ACP 行上**：`GET /api/terminals/{id}/ws` 升级前答 `409`（没有 PTY 可附着）；`POST …/paste` 只收带回车的整段（`enter: false` 答 `409 acp_no_raw_write`）；`GET …/capture` 是镜像尾部渲染成的散文；`terminate` 的 `interrupt` 是 `session/cancel`。协作动词与调度经终端桥写入：`writeSubmit`（括号粘贴 + 回车）落为 `session/prompt`，单个 `ESC` 落为 `session/cancel`，其他字节答 `acp_no_raw_write`。
+
+### 14.3 事件
+
+工作空间事件流（§5）多三种，`sessionId` 一律是会话行 id（一行一帧）：
+
+```text
+{ "type": "acp.update", "sessionId": "…", "nodeId": "…", "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "…" } } }
+{ "type": "acp.turn", "sessionId": "…", "nodeId": "…", "turnId": "3-2", "stopReason": "end_turn" }
+{ "type": "acp.driver", "nodeId": "…", "driver": "terminal", "sessionId": "…", "resumed": true }
+```
+
+- `acp.update.update` 是 ACP `session/update` 的 `update` 原样（v1 规范字段；`_meta` 不解释）；core 发出的一条之前已经写进镜像。我方发出的提示也以一条 `user_message_chunk` 发出，别的设备看得见是谁说了什么。`session/load` 的回放从不发出。
+- `acp.turn`：一次提示的结束。`stopReason` 是规范的五个值之一；提示以 JSON-RPC 错误结束时没有 `stopReason`，带 `error: { code, message }`（`acp_protocol`，或进程没了时 `acp_exited`）。
+- `acp.driver`：一次切换完成（§14.2）。
+- 状态不另起事件：ACP 会话的状态经同一条 `agent.status` 发出，`status.stateSource = "acp"`。归一化（ACP 设计 §5.4）：我方发出提示 → `working`（新回合），工具调用 → `working`，`request_permission` → `blocked`（带 `pendingId`），答了或取消了 → `working`，`end_turn` / `max_tokens` / `max_turn_requests` → `done`，`cancelled` → `done` + `interrupted`，`refusal` 或错误 → `done` + `errored`；会话开好（新开或接回）→ `session` / `start`，`sessionId` 是 ACP 会话 id、`transcriptPath` 是 CLI 自己的转录（会话 id 对得上且本地找得到时）或镜像。适配器退出走终端退出（`terminal.exit`），与 PTY 死掉同一条路。
+
+### 14.4 审批
+
+`session/request_permission` 进现有的 `agent_approvals`，`pendingId` 形如 `<nodeId>-<epochMs>-acp-<n>`，`request_json` 为 `{ "protocol": "acp", "toolCall": {…}, "options": [{ "optionId", "name", "kind" }] }`；`agent.approval` 事件的 `request` 是这条审批记录（ACP 载荷在它的 `request` 字段里）。
+
+- 答复：`POST /api/approvals/{pendingId}/answer { decision: "allow" | "deny", optionId? }`。ACP 审批的 `optionId` 必须是 Agent 给的选项之一且与 `decision` 同类（`allow_*` / `reject_*`），否则 `400 bad_request`（审计记 `option_invalid`）；不给 `optionId` 时取第一个同类选项（节点头的允许 / 拒绝）。别的审批带 `optionId` 同样 `400`。先记录（CAS 不变），再送达：应答的 `route` 为 `acp` 表示已回到挂起的请求，`none` 表示进程已经不在。
+- 回合被取消、适配器退出、切换驱动、休眠：挂起的请求一律回 `cancelled`，审批行 `answer = "cancelled"`、`answered_by = "core"`，审计照写（`route: "acp"`），并以 `agent.approval`（`request.resolved = true`、`decision: "cancelled"`）通知各端收起按钮。core 启动时把上一个进程留下的未答 ACP 审批同样记成 `cancelled`。
+- core 从不替人选项，也从不自动回答 `request_permission`；`allow_always` 由适配器自己在进程内记忆。
+
+### 14.5 输出到画板：`POST /api/workspaces/{workspaceId}/exports/{exportId}/text`
+
+会话视图把 Agent 回复里的代码块落成编辑器节点（[ACP 会话视图](../design/acp-session-view.md) §7）时先把代码写成文件。`exportId` 是来源 Agent 节点的 uuid；文件落在工作区根下 `.armadra/exports/acp/<exportId>/<name>`，`.armadra` 带自忽略的 `.gitignore`，不进 `git status`。通用文件路由不允许在 `.armadra` 里建目录，所以这是单独一条路由，与 PNG 导出（`…/exports/{exportId}/png`）同一张权限表（`assets:read`）。
+
+```json
+{ "name": "msg-3-1.ts", "content": "export const a = 1;\n" }
+```
+
+答复与 PNG 导出同形：`{ "path": "<绝对路径>", "relativePath": ".armadra/exports/acp/<exportId>/msg-3-1.ts", "bytes": 20 }`。同名覆盖。
+
+- `name` 是单个文件名：`[A-Za-z0-9_-][A-Za-z0-9._-]{0,119}`，不含 `..`；`exportId` 不是 uuid、`name` 不合规、缺 `name` / `content`、正文超过 1 MiB 一律 400 `bad_request`。
+- 只读打开的工作空间 403 `forbidden`；远端工作空间 501 `unsupported`（Worker 没有对应操作，不在本机落一份对方看不到的文件）。
+- 页面只把它用于输出到画板；共享层 `exportTextRequestSchema`。
 
 ## 15. 工作流与 runners：`/api/workflows/*`
 
@@ -715,31 +828,579 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 16. 实时协同：`…/boards/{boardId}/sync` 与评论
 
-预留，由 G1-9（§16.1–§16.2）、G2-6（§16.3）与 G2-5（§16.4）填写。
+实现：`apps/desktop/src/core/realtime/`；共享常量与 zod：`packages/shared/src/api/realtime.ts`。§16.3（评论路由）由 G2-6 填写。
+
+### 16.1 `WS /api/workspaces/{id}/boards/{boardId}/sync`
+
+一块板一条流，帧全是二进制（文本帧以 `4400` 关流）。外层一个 lib0 varUint 的消息类型，与 `y-websocket` 同一套编码：
+
+| 类型 | 名称            | 内容                                                                                       |
+| ---- | --------------- | ------------------------------------------------------------------------------------------ |
+| `0`  | sync            | `y-protocols/sync` 的消息：子类型 `0` step1（状态向量）、`1` step2（缺的更新）、`2` update |
+| `1`  | awareness       | `y-protocols/awareness` 的更新（形状见 §16.4）                                             |
+| `3`  | query awareness | 无载荷；core 回一帧当前全部 awareness                                                      |
+
+- **握手**：升级成功后 core 先发自己的 step1 与当前 awareness；客户端发自己的 step1，core 回 step2。断线重连同样走 step1 / step2，离线期间的本地改动随之补齐。
+- **升级前**（HTTP 状态行，没有 socket）：板不存在或不在这个工作空间 `404`；没有 `canvas:read` `403`；设置 `collab.realtime` 关着而且这块板还不是实时板 `409 realtime_disabled`。第一个连上的客户端把板切到实时（§16.2），之后不再切回，除非设置关掉（见下）。
+- **写权限**：step2 / update 帧要 `canvas:write`。只读连接发来**会改变文档**的写帧，core 丢弃它并以 `4403` 关流；回答服务端 step1 的空 step2 放过。授权变化时复核：失去读权限、或者本来能写现在不能写，都以 `4403` 关流。
+- **关闭码**：`1001` core 退出或板的文档被逐出（重连即可）；`1009` 单帧超过 16 MiB；`4400` 坏帧（解不开的消息或更新）；`4403` 见上（不要以写者身份重连，按只读处理）。
+- **能力**：`GET /api/identity/hello` 的 `capabilities` 含 `canvas.realtime.v1` 表示这个 core 说这套协议。
+
+文档结构（`Y.Doc` 的根类型）：
+
+| 根               | 类型                         | 内容                                                                                                                                                                                                                                                      |
+| ---------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nodes`          | `Y.Map<nodeId, Y.Map>`       | 每个节点一张 `Y.Map`，键与 `CanvasNode` 同名：`type title color position size collapsed expandedHeight parentId labels note data createdAt updatedAt`，值是 JSON、按字段 LWW；`data.content` 是字符串时放在键 `content` 的 `Y.Text` 里，`data` 里不再带它 |
+| `edges`          | `Y.Map<edgeId, JSON>`        | `{ source, target, kind, role?, createdAt, updatedAt }`，整条 LWW                                                                                                                                                                                         |
+| `whiteboard`     | `Y.Map<itemId, string>`      | 白板 `items[]` 的每一项一条 JSON 串，按 item LWW                                                                                                                                                                                                          |
+| `whiteboardRefs` | `Y.Map<referenceId, string>` | 白板 `references[]` 的每一项一条 JSON 串                                                                                                                                                                                                                  |
+| `meta`           | `Y.Map`                      | `whiteboardEnvelope`：白板 JSON 去掉两个数组后的外壳（JSON 串）；`whiteboardRaw`：认不出外壳的白板原文。视口不进文档                                                                                                                                      |
+
+`id` 与 `boardId` 不存进节点与边的值里，由键与所在的板给出。core 不解析白板 item 的内容，只认外壳：`items` / `references` 两个数组、每项有唯一的字符串 `id`。
+
+### 16.2 物化与 `board.changed`
+
+- **真相**：`boards.realtime = 1` 的板，真相是 `board_snapshots.state` 加其后的 `board_updates`；`nodes` / `edges` / `whiteboard_json` 是物化出来的缓存。每条更新逐条落库（`seq` 递增，`principal_id` 为 `null` 表示 core 自己的写者）；每 500 条或最后一个客户端离开时写快照并删掉 `seq ≤ 快照` 的行；core 重启按快照 + 更新重放，表落后时补物化。
+- **物化**：最后一次更新之后 1 秒、最后一个客户端离开、core 退出，或任何人读这块板（`GET …/document` 与 core 内部的读）之前，把文档投影写进表。表真的变了才前进 `updatedAt` 并广播 `board.changed`。对实时客户端，`board.changed` 只说明表追上了文档，**不要**据此重新加载。白板物化时 `items` 按 `z` 再按 `id` 排、`references` 按 `id` 排，节点与边按 `createdAt` 再按 `id` 排。
+- **清理**：文档里表放不下的东西（校验不过的节点、悬挂或校验不过的边、指向非组的 `parentId`、撞名的 `data.handle`、已属于别的板的 id）在物化前由 core 以一次事务从文档里删掉或清掉，清理本身作为一条更新同步给所有客户端。
+- **旧写法**：实时板上带 `clientId` 的 `PUT …/document` 答 `409 { "code": "realtime_active" }`；租约（§9）在实时板上不拦写入，`canvas.presence` 的 `lease` 恒为 `null`，在线表只用于显示。
+- **core 自己的写者**（控制动词、调度、依赖编排）照旧调用保存：请求相对它读到的那一份做三方 diff，在文档副本上试写并过一遍与非实时板相同的拒绝（`400` 校验 / 撞名、`409` 修订号旧了），通过后以 `origin: "core"` 的事务写进文档再物化；文档里别人并发改的、写者没碰的字段原样保留。没有客户端时 core 也加载文档，空闲 60 秒后卸载。
+- **实时状态**：`GET /api/workspaces/{id}/boards/{boardId}/realtime`（`canvas:read`）答
+
+  ```json
+  { "realtime": true, "materializedSeq": 42, "enabled": true }
+  ```
+
+  `enabled` 是设置 `collab.realtime`（缺省 `true`）。页面在 `realtime || enabled` 时连 `…/sync`，否则留在租约 + CAS。
+
+- **关回租约模式**：设置关掉之后，新板不再切换；已经是实时板的，在没有客户端连着时（卸载或下一次 core 写入）先物化、再标 `realtime = 0` 并删掉更新流与快照，表重新成为真相。有客户端连着的板继续服务到它们离开。
+
+### 16.4 awareness 状态
+
+`…/sync` 的 awareness 帧（类型 `1`）里每个 clientID 一份状态，JSON：
+
+```json
+{
+  "principalId": "",
+  "deviceId": "Yk3…（页面的 clientId）",
+  "name": "macOS · Chrome",
+  "color": 2,
+  "cursor": { "x": 120.5, "y": -40 },
+  "selection": ["9b1c…", "wb:item-1"],
+  "focusNodeId": "9b1c…"
+}
+```
+
+| 字段          | 规则                                                                                                                        |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `principalId` | core 一律改写成这条连接的 principal（本机壳的 owner 为 `""`），客户端填什么都不算                                           |
+| `deviceId`    | 必填，1–128 字符：页面的 `clientId`（同一个人的两个窗口各一个）                                                             |
+| `name`        | 必填，≤ 80 字符，只用于显示                                                                                                 |
+| `color`       | 必填，整数 `1..8`：成员色序号（设计系统 §2.5）。页面加入时取在场者没用的最小一个（从 2 起），各观看者看到的同一个人颜色相同 |
+| `cursor`      | 可选，画布坐标（有限数）；指针离开画布时省略                                                                                |
+| `selection`   | 可选，≤ 256 个 id（每个 1–128 字符）；白板对象带 `wb:` 前缀                                                                 |
+| `focusNodeId` | 可选，正在看的节点 id                                                                                                       |
+
+- core 只留上表里的键；形状不对或序列化后超过 16 KiB 的状态**整条丢弃**（不转发、不断流），`null`（离开）照常转发。
+- 一条连接只能写自己登记过的 clientID：别的连接已经登记的 clientID 在它发来的帧里被丢掉。
+- 页面按共享层 `awarenessStateSchema` 再校验一次，认不出的不进在线表、不画光标。
+- 共享层 `AWARENESS_LIMITS` 与 core `realtime/awareness.ts` 的上限逐条一致（`awareness.test.ts` 守）。
 
 ## 17. Gateway：`/api/gateway*`
 
-预留，由 G1-10 填写。
+Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补全架构](../design/completion-architecture.md) §7）。服务器壳的 `serve` 用命令行参数打开它；桌面壳按设置 `gateway.*` 打开它。下面三条路由在 core 的主监听器上与 Gateway 上都答，路由门按 `settings:read` / `settings:write` 判——只有 owner，成员一律 403 `forbidden`。字段名 camelCase，时间是带时区的 ISO 8601，错误 `{ code, message }`。
+
+### 17.1 `GET /api/gateway`
+
+```json
+{
+  "enabled": true,
+  "running": true,
+  "managedBy": "settings",
+  "listen": "private",
+  "port": 8443,
+  "publicOrigin": "",
+  "address": { "host": "0.0.0.0", "port": 8443 },
+  "origin": "https://192.168.1.20:8443",
+  "origins": [
+    "https://192.168.1.20:8443",
+    "https://mac.local:8443",
+    "https://127.0.0.1:8443"
+  ],
+  "tls": {
+    "source": "localCa",
+    "certFile": "",
+    "keyFile": "",
+    "acmeEmail": "",
+    "fingerprint": "5f1c…（64 位小写十六进制）",
+    "subject": "CN=192.168.1.20",
+    "names": ["192.168.1.20", "mac.local", "127.0.0.1"],
+    "notAfter": "2027-11-04T00:00:00.000Z",
+    "caAvailable": true
+  },
+  "error": null
+}
+```
+
+- `managedBy`：`settings`（桌面壳）或 `shell`（服务器壳，配置来自命令行；这时 `enabled` 恒为 `true`，`port` 是实际绑定的端口）。
+- `listen` / `port` / `publicOrigin` / `tls.{certFile,keyFile,acmeEmail}` 是设置里的值；`address`、`origin`、`origins` 与 `tls` 的其余字段是运行中的事实，没在运行时为 `null` / `[]`。
+- `origin` 是首选来源（二维码用它）：公网来源优先，否则第一个私网地址，然后主机名，最后 `127.0.0.1`。`origins` 是来源白名单：Origin / Host 必须命中其中之一。`https://localhost` 永远不在里面（它是 Android 版 App 的来源）。
+- `tls.source`：`localCa`、`file`、`acme`、`selfSigned`（只有服务器壳没给证书时）。`fingerprint` 是**信任锚** DER 的 SHA-256：本地 CA 时是 CA，其余是叶证书。`caAvailable` 表示 `GET /ca.crt` 有东西可发。
+- `error`：最近一次没能开启的原因，开着或关着时为 `null`。`code` 取值：`acme_unavailable`（ACME 来源尚未实现）、`tls_files_missing`、`port_in_use`、`port_forbidden`、`identity_unavailable`（库没过统一库迁移）、`gateway_failed`（其余，`message` 是原因）。
+
+### 17.2 `PUT /api/gateway`
+
+请求体是设置 `gateway.*` 的子集，未给的键不动：
+
+```json
+{
+  "enabled": true,
+  "listen": "private",
+  "port": 0,
+  "publicOrigin": "",
+  "tls": { "source": "localCa", "certFile": "", "keyFile": "", "acmeEmail": "" }
+}
+```
+
+- `listen`：`loopback` 只绑 `127.0.0.1`；`private` 绑 `0.0.0.0` 但只接受落在回环与本机私网地址（RFC 1918、`100.64.0.0/10`、IPv6 ULA）上的连接；`all` 不筛。
+- `port`：0–65535；`0` = 由内核分配，开启后把实际端口写回设置，之后固定。
+- `publicOrigin`：空串或一个规范拼法的 `https` 来源（反向代理时填）。
+- 不认识的键、类型或取值错误一律 400 `bad_request`，不让规范化悄悄退回缺省。
+- 回答是写入并对账之后的 §17.1。开着时改了任何键会重开监听；`enabled: false` 即刻停止监听并断开经它进来的每一条连接（升级过的流也在内）。没能开启不算请求失败：200，原因在 `error`。
+- 服务器壳上答 409 `gateway_managed_by_shell`。
+
+### 17.3 `POST /api/gateway/pairing`
+
+请求体可选：`{ "origin"?: string, "deviceName"?: string }`。`origin` 必须在 `origins` 里（否则 400 `invalid_origin`），缺省用首选来源；`deviceName` 1–64 字符，缺省「Gateway 配对」。没在运行时 409 `gateway_not_running`。
+
+```json
+{
+  "origin": "https://192.168.1.20:8443",
+  "ticket": "0123…ef.AbC…",
+  "fingerprint": "5f1c…",
+  "expiresAt": "2026-10-03T08:02:00.000Z",
+  "webUrl": "https://192.168.1.20:8443/#pair=0123…ef.AbC…&fp=5f1c…",
+  "deepLink": "armadra://pair?host=192.168.1.20%3A8443&ticket=0123…&fp=5f1c…"
+}
+```
+
+- 票两分钟、一次性，绑在 `origin` 上；兑换走 `POST /api/identity/pair`（§3），配出来的设备拿 owner 的全套授权。成员走邀请。
+- 网页链接把票与指纹放在片段里（不上请求行、不进日志）；页面认 `#pair=<票>` 与 `#pair=<票>&fp=<64 位十六进制>` 两种。
+- 原生 App 按 `fp` 钉信任锚，不装 CA；锚变了（重置 CA、换证书文件）就重新扫码，不自动信任新证书。
+
+### 17.4 Gateway 上的匿名面与原生 App
+
+- `GET /ca.crt`：匿名，`application/x-x509-ca-cert`，PEM。本地 CA 时是 CA；服务器壳的自签名证书是它自己；指定文件时是链文件里的最后一张，只有一张时 404 `ca_unavailable`。只在 Gateway 上，core 的回环监听没有它。
+- 来源是 `capacitor://localhost` 或 `https://localhost`（且不在 `origins` 里）的请求走 **Bearer 模式**：会话绑定的来源是 App 连上的 Gateway 来源 `https://<Host>`（必须在 `origins` 里，否则 403）；凭据只认 `Authorization: Bearer <访问密钥>`，Cookie 不看、没有 CSRF；`POST /api/identity/pair`、`/session/refresh` 与登录把密钥放在响应体的 `native` 里、不发 Cookie（与桌面壳的原生传输同一形状，§3）；CORS 只回 App 自己的来源，预检放行 `authorization, content-type, x-armadra-csrf`。
+- `POST /api/identity/ws-ticket`（只在 Gateway 的 Bearer 模式下）：要 Bearer 会话，回 `{ "ticket": string, "expiresAt": string }`，票 30 秒、一次性、只在内存里。浏览器 WebSocket 带不了头，App 升级时在 `Sec-WebSocket-Protocol` 里带 `armadra-ticket.<票>`，服务端回同一个子协议。Cookie 模式请求它答 400 `bearer_required`。
 
 ## 18. 身份扩展：口令策略、passkey、MFA、会话、OAuth、审计
 
-预留，由 G1-11（§18.1–§18.4）、G1-12（§18.5）与 G2-8（§18.6）填写。
+规格是 [补全架构](../design/completion-architecture.md) §8.3；实现在 `core/identity/`（`policy.ts`、`throttle.ts`、`passkey.ts`、`mfa/`，路由在 `accounts-http.ts`），形状的 zod 在 `packages/shared/src/api/identity-security.ts`。和 §10 同一个前缀、同一套认证（Origin、会话凭据；下面标「写」的要 `X-Armadra-CSRF`）。整段 `/api/identity/` 不经路由门（`core/http/route-scopes.ts` 的 `SELF_GUARDED`），本人与 `identity:manage` 的判定在身份域里。
+
+**错误码**：身份域原有的五种仍是 UPPER_SNAKE（`UNAUTHENTICATED` / `PERMISSION_DENIED` / `INVALID_ARGUMENT` / `NOT_FOUND` / `CONFLICT`）；本节新增的具名拒绝是 snake_case，页面按 `code` 选文案。错误体只有 `{ code, message }`。迁移是 `identity_hardening`（`identity_credentials` 加 `sign_count / aaguid / transports_json / label`，新表 `identity_mfa`、`identity_recovery_codes`、`identity_lockouts`，`identity_sessions` 加 `last_seen_at_ms / remote_ip / user_agent`）。
+
+### 18.1 口令策略与锁定
+
+设口令（`POST credentials` `{ kind: "password" }`）与持邀请注册（`POST register`）先过策略，第一条不过的规则就是 `code`，HTTP 400：
+
+| `code`                   | 规则                                                                               |
+| ------------------------ | ---------------------------------------------------------------------------------- |
+| `password_too_short`     | 码点数 < `identity.passwordMinLength`（缺省 12，可配 10–64）                       |
+| `password_too_long`      | UTF-8 超过 1024 字节                                                               |
+| `password_contains_name` | 含显示名或 principal 标识（不分大小写；三个字符以下的名字不参与）                  |
+| `password_too_common`    | 在随包的常见口令表（`core/identity/common-passwords.txt`，1 万条）里，小写精确比对 |
+| `password_breached`      | 泄露检查命中（`identity.breachCheck`，G3-8 实现；调用点已在，今天恒为未检查）      |
+
+登录类请求（`login`、`mfa/verify`、`passkey/login/*`、`register`）的限流与锁定，HTTP 429，带 `Retry-After`（秒）：
+
+| `code`           | 什么时候                                                                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rate_limited`   | 同一来源地址（socket 对端，不读 `X-Forwarded-For`）超过每分钟 20 次                                                                               |
+| `account_locked` | 这个 `principalId` 连续 5 次口令或第二因素失败之后：锁 1 分钟，每多一次失败翻倍，封顶 15 分钟；锁着时不校验口令。成功清零，一小时没有新失败也清零 |
+
+锁定按调用方报上来的 `principalId` 计，**不看账号是否存在**：不存在的账号也会被锁、答同一个 429，锁定因此不泄露存在性。
+
+| 方法与路径                            | 谁能调            | 答案                                                                        |
+| ------------------------------------- | ----------------- | --------------------------------------------------------------------------- |
+| `GET lockouts`                        | `identity:manage` | `{ lockouts: [{ key, principalId, failures, lockedUntilMs }] }`，只列锁着的 |
+| `DELETE lockouts/{principalId}`（写） | `identity:manage` | `{ principalId, unlocked }`（原来是否锁着）                                 |
+
+审计：`identity.login.failed`（`detail.reason`：`password` / `mfa` / `passkey` / `locked`）、`identity.lockout`（新上锁）、`identity.lockout.clear`。
+
+### 18.2 passkey
+
+`@simplewebauthn/server` 校验；attestation 只收 `none`，不做证明链校验；登录走可发现凭据（不给 `allowCredentials`）。挑战在内存里 2 分钟、一次性。
+
+**RP ID**：`identity.rpId` 非空时用它（请求来源的主机必须是它或它的子域，否则 `passkey_rp_id_mismatch`）；否则取公网来源（`gateway.publicOrigin`）的主机名，多个公网来源取按标签的公共后缀（至少两段，取不到就用第一个）；都没有时取请求来源的主机。**主机是 IP 字面量时**一律 `passkey_unavailable_on_ip_host`。改 RP ID 会让已登记的 passkey 全部失效。
+
+| 方法与路径                                                               | 谁能调                           | 答案                                                                                                                                                     |
+| ------------------------------------------------------------------------ | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET passkey`                                                            | 已登录                           | `{ available, rpId, reason, passkeys: [{ credentialId, label, aaguid, transports, createdAtMs }] }`；不可用时 `available: false`、`reason` 是下表的 code |
+| `POST passkey/register/options` `{ label? }`（写）                       | 已登录（给自己登记）             | `{ challengeId, options }`，`options` 是 `PublicKeyCredentialCreationOptionsJSON`                                                                        |
+| `POST passkey/register/verify` `{ challengeId, response, label? }`（写） | 同一个人、同一个来源要的挑战     | 201 `{ credentialId, label, aaguid, transports, createdAtMs }`；`response` 是 `PublicKeyCredential.toJSON()`                                             |
+| `POST passkey/login/options` `{}`                                        | 匿名                             | `{ challengeId, options }`（`PublicKeyCredentialRequestOptionsJSON`）                                                                                    |
+| `POST passkey/login/verify` `{ challengeId, response, deviceName? }`     | 匿名                             | 与 `login` 同形的会话；**视为已满足第二因素**；失败一律 401 `UNAUTHENTICATED`                                                                            |
+| `DELETE passkey/{credentialId}`（写）                                    | 本人；别人的要 `identity:manage` | `{ credentialId, removed: true }`；看不到的答 404                                                                                                        |
+
+| `code`（400）                    | 意思                                        |
+| -------------------------------- | ------------------------------------------- |
+| `passkey_unavailable_on_ip_host` | 以 IP 访问，WebAuthn 不可用；口令照旧       |
+| `passkey_rp_id_mismatch`         | 请求来源不在配置的 RP ID 之下               |
+| `passkey_challenge_expired`      | 挑战不存在、用过或过期（2 分钟）            |
+| `passkey_verification_failed`    | 注册应答没过校验（来源、挑战、RP ID、签名） |
+
+计数器按库的判定写回 `sign_count`；回退（克隆的认证器）由库拒绝。审计：`identity.passkey.add`、`identity.passkey.remove`、`identity.login`（`detail.method: "passkey"`）。
+
+### 18.3 MFA：TOTP、恢复码与两步登录
+
+TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时间步；记最后用过的时间步，**同一个码第二次一律拒**。密钥在 SecretStore（条目名 `armadra-totp-<principalId>`），库里只有条目名。恢复码 10 个（`xxxxx-xxxxx`，大小写、空格与连字符不计），只存 scrypt 哈希，用掉即作废。
+
+**两步登录**：`POST login` 口令对了且这个人有**已确认**的 TOTP 时，不建会话，答：
+
+```json
+{
+  "mfaRequired": true,
+  "challengeId": "…",
+  "expiresAtMs": 1760000000000,
+  "methods": ["totp", "recovery"]
+}
+```
+
+然后 `POST mfa/verify { challengeId, code }`（匿名）换出与 `login` 同形的会话。中间票 5 分钟、绑定来源、最多试 5 次；第二因素失败与口令失败计入同一个锁定。没有登记 TOTP 而 `identity.mfa.requireFor` 覆盖这个人（`all`，或 `members` 下的非 owner）时照常建会话，响应体多一个 `mfaEnrollmentRequired: true`，页面据此把人带去登记。
+
+| 方法与路径                                 | 谁能调               | 答案                                                                                              |
+| ------------------------------------------ | -------------------- | ------------------------------------------------------------------------------------------------- |
+| `GET mfa`                                  | 已登录               | `{ enrolled, pending, enrolledAtMs, verifiedAtMs, recoveryCodesRemaining, requireFor, required }` |
+| `POST mfa/totp/enroll`（写）               | 已登录               | `{ secret, otpauthUri }`（只在这一次出现）；已确认过的答 409 `mfa_already_enrolled`               |
+| `POST mfa/totp/confirm` `{ code }`（写）   | 已登录               | `{ recoveryCodes }`（10 个，只在这一次出现）                                                      |
+| `POST mfa/verify` `{ challengeId, code }`  | 匿名                 | 会话                                                                                              |
+| `POST mfa/recovery-codes` `{ code }`（写） | 本人，要当前有效的码 | `{ recoveryCodes }`，旧的全部作废                                                                 |
+| `POST mfa/disable` `{ code }`（写）        | 本人，要当前有效的码 | `{ disabled: true }`                                                                              |
+| `POST mfa/reset` `{ principalId }`（写）   | `identity:manage`    | `{ principalId, reset }`：替丢了手机的人清掉 TOTP 与恢复码                                        |
+
+| `code`                   | HTTP | 意思                                           |
+| ------------------------ | ---- | ---------------------------------------------- |
+| `mfa_invalid_code`       | 401  | 码不对、用过（重放）或格式不对                 |
+| `mfa_challenge_expired`  | 401  | 中间票不存在、过期、来源不对或试满了，回到口令 |
+| `mfa_already_enrolled`   | 409  | 已有确认过的 TOTP，先停用                      |
+| `mfa_secret_unavailable` | 503  | SecretStore 读写不了 TOTP 密钥                 |
+
+审计：`identity.mfa.enroll`、`identity.mfa.disable`、`identity.mfa.reset`、`identity.mfa.recovery.used`、`identity.mfa.recovery.regenerate`、`identity.login`（`detail.method`：`totp` / `recovery`）。
+
+### 18.4 会话列表与撤销
+
+| 方法与路径                          | 谁能调                            | 答案                                                                                                                                                 |
+| ----------------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET sessions`                      | 已登录                            | `{ sessions: [{ sessionId, principalId, deviceId, deviceName, createdAtMs, lastSeenAtMs, expiresAtMs, remoteIp, userAgent, current }] }`，只列活着的 |
+| `GET sessions?all=1`                | `identity:manage`（owner 看全部） | 同上，所有人的                                                                                                                                       |
+| `DELETE sessions/{sessionId}`（写） | 本人；别人的要 `identity:manage`  | `{ sessionId, revoked: true }`；看不到的答 404                                                                                                       |
+| `POST sessions/revoke-others`（写） | 已登录                            | `{ revoked }`：撤掉我除当前之外的全部会话（「其它设备全部登出」）                                                                                    |
+
+`remoteIp` 是建会话那一刻的 socket 对端，`userAgent` 截到 256 字符；`lastSeenAtMs` 是最近一次认证成功，一分钟内不重写。撤销在下一个请求上生效（认证每次读库）。审计：`identity.session.revoke`、`identity.session.revoke-others`。
+
+### 18.5 OAuth / OIDC
+
+实现在 `core/identity/oauth/`（`providers.ts` 协议、`flow.ts` 状态与决定、`http.ts` 路由），挂在比 `/api/identity/` 更长的原样前缀 `/api/identity/oauth/` 上；形状的 zod 在 `identity-security.ts` 的 §18.5 小节。一条代码路径：**通用 OIDC**（发现文档 `/.well-known/openid-configuration`，文档里的 `issuer` 必须与配置逐字节相同（只忽略末尾斜杠）；授权码 + PKCE S256 + `state` + `nonce`；`id_token` 按 JWKS 验签，只收 RS256 / ES256，核 `iss`、`aud`（多个时 `azp`）、`exp` / `iat` / `nbf`（容 60 秒）、`nonce`；缺邮箱时补一次 userinfo，`sub` 必须相同），以及唯一的特例 **GitHub**（`/login/oauth/authorize` + `access_token`，主体是 `GET /user` 的数字 `id`，邮箱取 `GET /user/emails` 里 `primary` 的那条与它的 `verified`）。外呼只许 HTTPS 或回环明文 HTTP，超时 10 秒，发现文档与 JWKS 缓存 1 小时，遇到不认识的 `kid` 重取一次 JWKS。
+
+**提供方**在设置 `identity.oauth.providers[] { id, kind: "github" | "oidc", issuer?, clientId, scopes, allowSignup, allowedDomains, enabled }`（不加迁移）；`scopes` 空时 OIDC 用 `openid email profile`、GitHub 用 `read:user user:email`。`clientSecret` 在 SecretStore（条目名 `armadra-oidc-<id>`），不入库、不出接口；OIDC 公开客户端（PKCE）可以没有，GitHub 必须有。**公网来源**是 `gateway.publicOrigin` 加上壳注入的、主机名不是 IP 字面量的 HTTPS 来源（服务器壳的 `--public-origin`）；回调固定 `<公网来源>/api/identity/oauth/{id}/callback`，`start` 必须从其中一个来源发起。
+
+**绑定**写 `identity_credentials(kind='oauth', provider, subject)`：`provider` 列是由 issuer 派生的键（`oidc:` + issuer 的 SHA-256 前 43 个 base64url 字符；GitHub 是 `github`）而不是设置里的 `id`——换了 issuer 而保留 `id` 时，旧绑定不会被新 issuer 的同名主体冒领。一个第三方身份只能绑一个 principal（唯一索引）。
+
+| 方法与路径                                                                     | 谁能调                            | 答案                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------ | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET oauth/providers`                                                          | 匿名                              | `{ configured, providers: [{ id, kind }] }`：`configured` = 有公网来源；只列能用的（开着、有公网来源、GitHub 有 secret）                                                                                                                                                           |
+| 同上                                                                           | `identity:manage`                 | 每行再加 `issuer?, clientId, enabled, allowSignup, allowedDomains, hasClientSecret, usable, callbackUrls`（每个公网来源一条，填到提供方的回调）；列全部提供方                                                                                                                      |
+| `PUT oauth/providers/{id}/secret` `{ clientSecret }`（写）                     | `identity:manage`                 | `{ id, hasClientSecret: true }`                                                                                                                                                                                                                                                    |
+| `DELETE oauth/providers/{id}/secret`（写）                                     | `identity:manage`                 | `{ id, hasClientSecret: false }`                                                                                                                                                                                                                                                   |
+| `POST oauth/{id}/start` `{ mode?: "login" \| "bind", returnTo?, deviceName? }` | `login` 匿名；`bind` 已登录（写） | `{ authorizeUrl, expiresAtMs }`，同时下发浏览器绑定 Cookie（`armadra_<hostId>_oauth`，HTTPS 上换成 `__Host-armadra_` 前缀，`HttpOnly; SameSite=Lax; Path=/`，10 分钟）。页面随后 `location.assign(authorizeUrl)`。`returnTo` 只收站内路径（`/` 开头、不是 `//`、无片段），缺省 `/` |
+| `GET oauth/{id}/callback?state&code`（或 `error`）                             | 提供方跳回                        | 302 到 `<发起时的来源><returnTo>#oauth=<结果>`；`state` 不认识时答 JSON 400 `oauth_state_invalid`                                                                                                                                                                                  |
+| `GET oauth/bindings`                                                           | 已登录                            | `{ bindings: [{ credentialId, providerId, kind, createdAtMs }] }`：我的；设置里认不出的提供方 `providerId` 为空串                                                                                                                                                                  |
+| `DELETE oauth/bindings/{credentialId}`（写）                                   | 本人                              | `{ credentialId, revoked: true }`；别人的答 404（owner 撤别人的走 `DELETE credentials/{id}`）                                                                                                                                                                                      |
+| `POST oauth/{id}/logout` `{ returnTo? }`                                       | 匿名                              | `{ endSessionUrl }`：OIDC 发现文档有 `end_session_endpoint` 时是 RP 发起登出的地址（`client_id` + `post_logout_redirect_uri`），否则 `null`；本机会话仍由 `POST session/logout` 结束                                                                                               |
+
+**回调**是从提供方跳回的顶层导航（没有 `Origin`、`Sec-Fetch-Site: cross-site`、`SameSite=Strict` 的会话 Cookie 带不上），所以它不认会话：`state` 内存里 10 分钟、**取出即删**（重放、过期、浏览器绑定 Cookie 不对都是 `oauth_state_invalid`），`bind` 的发起者在 `start` 时就记进状态。Gateway 的门只对 `GET /api/identity/oauth/{id}/callback` 放开 Origin 与 `Sec-Fetch-Site` 两道（`core/gateway/admission.ts` 的 `oauthCallbackPath`）。跳回片段的 `oauth=`：
+
+| `oauth=`   | 意思                                                                                           |
+| ---------- | ---------------------------------------------------------------------------------------------- |
+| `bound`    | 绑到了发起者名下（已绑在本人名下也是它）                                                       |
+| `signedIn` | 已绑定的 principal 登录，会话 Cookie 已下发；审计 `identity.login`（`detail.method: "oauth"`） |
+| `signedUp` | 建了一个 `member`（无授予，owner 再共享）并登录                                                |
+| `mfa`      | 这个人登记过 TOTP：带 `challengeId`，页面接 §18.3 的 `POST mfa/verify`；不发会话               |
+| `error`    | 带 `code`（下表）；不发会话、不改绑定                                                          |
+
+决定：配了 `allowedDomains` 时三条路都要求 `email_verified = true` 且邮箱域名精确命中（大小写不计，子域不算）；`bind` 绑到发起者；`login` 已绑则登录（principal 停用了按「没绑」答），没绑且 `allowSignup` **并且** `allowedDomains` 非空才建号（这就是 SSO；不设域名的建号等于「有这家账号的任何人都能进来」），否则 `oauth_not_bound`。
+
+| `code`                     | HTTP | 意思                                                                        |
+| -------------------------- | ---- | --------------------------------------------------------------------------- |
+| `oauth_not_configured`     | 404  | 没有公网来源、不是从公网来源发起、提供方不存在或停用、GitHub 没有 secret    |
+| `oauth_browser_required`   | 400  | Gateway 的 Bearer 模式（原生 App）发起；授权要在浏览器会话里走              |
+| `oauth_state_invalid`      | 400  | `state` 不认识、过期、用过，或浏览器绑定 Cookie 不对                        |
+| `oauth_denied`             | 403  | 用户在提供方取消（`error=access_denied`）                                   |
+| `oauth_provider_error`     | 502  | 发现文档、JWKS、令牌交换或用户信息失败；发现文档 `issuer` 不符；不支持 S256 |
+| `oauth_token_invalid`      | 401  | `id_token` 签名、算法、`iss` / `aud` / `azp`、时效或 `nonce` 不过           |
+| `oauth_email_unverified`   | 403  | 提供方说邮箱没验证                                                          |
+| `oauth_domain_not_allowed` | 403  | 邮箱域名不在 `allowedDomains`                                               |
+| `oauth_not_bound`          | 401  | 这个第三方身份没有绑定账号（且不允许建号）                                  |
+| `oauth_already_bound`      | 409  | 这个第三方身份已经绑在别的账号上                                            |
+
+审计：`identity.oauth.bind`、`identity.oauth.unbind`、`identity.oauth.signup`、`identity.oauth.failed`（`detail.code`）、`identity.oauth.secret.set` / `.clear`。`credentials/oauth/*` 的旧 501 占位路径已退役（404）。
+
+### 18.6 审计查询
+
+预留，由 G2-8 填写。
 
 ## 19. 推送：`/api/push/devices*`
 
-预留，由 G1-13 填写。
+设计见[补全架构](../design/completion-architecture.md) §10 与[外部服务](../design/external-services.md) §5.2。代码在 `core/push/`，共享层 `api/push.ts`。表 `push_devices` / `push_outbox`（迁移 `*_push.sql`）。
+
+`/api/push/*` 不经路由门（`http/route-scopes.ts` 的 `SELF_GUARDED`），推送域自己认请求身份，**只碰请求主体自己的设备**：服务器壳的匿名主体答 401 `unauthenticated`；桌面壳的本机请求没有请求身份（主体是本机 owner、没有设备），看配置与列表可以，登记与测试答 409 `device_required`——桌面有系统通知，不用推送。错误一律 `{ code, message }`。
+
+### 19.1 `GET /api/push/config`
+
+```json
+{
+  "webpush": {
+    "enabled": true,
+    "publicKey": "BJ…（P-256 未压缩点，base64url）"
+  },
+  "native": { "transport": "direct", "status": "ready", "platforms": ["ios"] }
+}
+```
+
+- `webpush.publicKey`：VAPID 公钥，页面订阅时作 `applicationServerKey`。密钥对首次用到时生成在 `<数据目录>/push/vapid.json`（0600）；文件损坏不重新生成（浏览器订阅绑在旧公钥上），此时为 `null`。设置 `push.webpush.enabled = false` 时也是 `null`。
+- `native.transport`：原生 App 走哪条路，`log` / `direct` / `relay`（设置 `push.transport`，环境变量 `ARMADRA_PUSH_TRANSPORT` 优先；设置停在 `log` 而服务器壳给了 `ARMADRA_PUSH_RELAY_URL` 就是 `relay`，给了 APNs / FCM 文件就是 `direct`）。`status` 为 `notConfigured` 时接口照常答 `queued`，通知只写 debug 日志。`platforms` 是现在发得出去的原生平台。App 按 `transport` 决定登记平台令牌（`direct`）还是先向中继换中继令牌（`relay`）。
+
+### 19.2 `PUT /api/push/devices`
+
+登记这次请求所属的那台身份设备（请求体里没有设备 id）。覆盖式：同一台设备重新订阅就是替换这一行、清掉撤销状态。
+
+浏览器：
+
+```json
+{
+  "platform": "web",
+  "transport": "webpush",
+  "locale": "zh-CN",
+  "subscription": {
+    "endpoint": "https://…",
+    "keys": { "p256dh": "…", "auth": "…" }
+  }
+}
+```
+
+原生 App：
+
+```json
+{
+  "platform": "ios",
+  "transport": "direct",
+  "token": "<APNs / FCM 令牌，或中继令牌>",
+  "publicKey": "<设备 X25519 公钥，32 字节 base64url>",
+  "appVersion": "1.0.0",
+  "locale": "en"
+}
+```
+
+- `web` 只能配 `webpush`，`ios` / `android` 只能配 `direct` / `relay`。`endpoint` 必须是 https（回环上的 http 只给测试）；`p256dh` 是 65 字节 P-256 点，`auth` 是 16 字节。
+- `relay` 必须带 `publicKey`：经中继的载荷一律端到端加密。`direct` 带了也加密，不带时 APNs 发明文提示、FCM 发明文数据。
+- `locale` 只认 `zh-CN` / `en`，其余当作没给（按中文渲染）。
+- 答 200 `{ "device": <§19.3 的设备> }`；身份设备已撤销答 403 `forbidden`；形状不对答 400 `bad_request`。
+
+### 19.3 列表、撤销、测试
+
+- `GET /api/push/devices` → `{ "devices": [ … ] }`，只列请求主体名下还有效的登记（桌面本机 owner 列全部）。一项是 `{ deviceId, platform, transport, appVersion, locale, encrypted, createdAt, current }`——**没有令牌、没有公钥本身**；`encrypted` 说厂商看到的是不是密文，`current` 说是不是发请求的这台。
+- `DELETE /api/push/devices/{deviceId}` → `{ "revoked": true }`（已经撤销过是 `false`）。只能撤自己名下的，owner 例外；别人的与不存在的同样答 404 `not_found`。
+- `POST /api/push/test` → 202 `{ "queued": true, "id": "<队列行 id>" }`，给发请求的这台设备发一条 `kind: "test"`。这台设备没登记或已撤销答 409 `device_required`。
+
+### 19.4 载荷
+
+一条通知就是这些键，**没有别的**（共享层 `pushPayloadSchema` 是 `strict`）：
+
+```json
+{
+  "v": 1,
+  "kind": "approval",
+  "title": "支付服务",
+  "body": "Claude Code 等待审批",
+  "url": "armadra://w/<workspaceId>/n/<nodeId>",
+  "tag": "approval:<pendingId>"
+}
+```
+
+- `kind`：`approval`、`agentDone`、`agentError`、`deliveryFailed`、`schedule`、`resources`、`comment`、`workflowGate`、`test`。
+- `title` 是工作空间名（≤ 64 字），`body` 是按 `kind` 与设备语言写死的一句（≤ 120 字，只会出现 Agent 注册表里的名字），`url` 是深链（与画布无关的通知是 `armadra://`），`tag` 相同的新通知替换旧的（≤ 128 字）。
+- 不含终端原文、文件内容、命令、提示词、评论正文、拒收码。载荷因此可以落库（`push_outbox.payload_blob`）。
+
+### 19.5 三条传输的线上形状
+
+- **Web Push**：`POST <endpoint>`，`Authorization: vapid t=<ES256 JWT>, k=<VAPID 公钥>`（`aud` = 端点来源，12 小时有效，`sub` = 设置 `push.webpush.subject` / `ARMADRA_PUSH_VAPID_SUBJECT`，缺省取 https 公网来源，再缺省 `mailto:push@armadra.invalid`），`Content-Encoding: aes128gcm`（RFC 8291，单记录 4096），`TTL: 3600`，`Urgency`（审批 `high`），`Topic` = tag 的摘要。正文是 §19.4 的 JSON。
+- **direct**：APNs HTTP/2 `POST /3/device/<token>`，provider token ES256（`kid` / `iss` / `iat`，50 分钟换新），`apns-topic` = bundle id，`apns-push-type: alert`，`apns-collapse-id` = tag 的摘要；有设备公钥时正文是 `{ "aps": { "alert": { "title-loc-key": "ARMADRA_PUSH_TITLE", "loc-key": "ARMADRA_PUSH_BODY" }, "mutable-content": 1, … }, "enc": <信封> }`。FCM v1 `POST /v1/projects/<id>/messages:send`，access token 由服务账号断言（RS256）换取；`message.data.enc` 是信封的 JSON 字符串，`android.priority: HIGH`。密钥只从文件读：`ARMADRA_PUSH_APNS_KEY_FILE` / `_KEY_ID` / `_TEAM_ID` / `_BUNDLE_ID` / `_PRODUCTION`、`ARMADRA_PUSH_FCM_CREDENTIALS_FILE` / `_PROJECT_ID`，或设置 `push.apns.*` / `push.fcm.*`（两个文件路径是本机设置）。`ARMADRA_PUSH_APNS_ENDPOINT` / `ARMADRA_PUSH_FCM_ENDPOINT` 只给测试。
+- **relay**：`POST <relayUrl>/v1/push` `{ relayToken, envelope, collapseId, urgent }`，中继的完整接口见 [`apps/push-relay/README.md`](../../apps/push-relay/README.md)。
+- **信封**：`{ "v": 1, "alg": "x25519-hkdf-sha256-a256gcm", "epk", "salt", "iv", "ct" }`，全部 base64url。`epk` 是一次性 X25519 公钥；钥 = HKDF-SHA256(ECDH(epk, 设备公钥), salt, `"armadra-push-v1" ‖ 0x00 ‖ epk ‖ 设备公钥`, 32)；`ct` = AES-256-GCM(钥, iv, §19.4 的 JSON) ‖ 16 字节标签。
+
+### 19.6 触发、收件人与重试
+
+- 推送订阅工作空间事件：`agent.approval`（新请求；`request.resolved` 的答复不推）、`agent.status`（**进入** `done` 推 `agentDone`，进入出错推 `agentError`；`restored` 行不推）、`agent.delivery`（`outcome` 为 `refused` / `failed` / `expired` / `cancelled`（回执），深链指向发送方节点）、`schedule.*`、`resources.threshold`、`board.comment`（只推给 `mentions` 里的 principal，没有提及不推）、`workflow.gate`。后四种事件由各自的域发布，推送只按 `type` 与其中的 `nodeId` / `automationId` / `metric` / `comment.{id,anchorKind,anchorId,mentions}` / `runId` / `stepId` 认。
+- 收件人：登记有效、身份设备未撤销、principal 未停用，且该 principal 对事件所在工作空间有 `canvas:read`（owner 恒有）。
+- 先入队（`push_outbox`）再发；总共最多 3 次尝试（失败后 5 秒、30 秒各再试一次），只有网络错误、429 与 5xx 再试。平台说令牌作废（Web Push 404 / 410，APNs 410 / `BadDeviceToken` / `Unregistered`，FCM `UNREGISTERED`，中继 410 / `badToken`）立即停、设备登记撤销（`revoked_reason = 'gone'`）。终态行保留 7 天。App 按旧配置登记的（例如登记时是 `direct`，现在改成 `relay`）只记日志，等 App 按新配置重新登记。
 
 ## 20. 节点凭据：`/api/credentials*`
 
-预留，由 G1-1 填写。
+设计见 [补全架构](../design/completion-architecture.md) §9.1 与 [CLI 协作](../design/cli-collaboration.md) §7.3。一个节点可以绑定一条具名凭据，起终端时由 core 校验、CLI 启动时由画布启动器现取并只设给 CLI 进程。代码在 `core/agent/credentials/`，共享层 `packages/shared/src/api/credentials.ts`。
+
+**值的去向**：只在执行主机的 SecretStore（条目名 `armadra-credential-<ref>`）。库表 `agent_credentials` 只记 `ref`、`providerId`、`kind`、`label`、`createdAt`、`lastUsedAt`。值不进节点 shell 的环境、启动行、shell 历史、画布持久化、日志，也不进任何 `/api/*` 答复；**唯一带值的是 §20.4 那条本机回环的 hook 答复**，答给启动器，带 `Cache-Control: no-store`，不记日志。
+
+### 20.1 `kind` 表
+
+`kind` 只能从下表选，变量名由 core 写死（`core/agent/credentials/inject.ts::CREDENTIAL_KINDS`），不上线、不让用户填。`enabled: false` 的行列在表里，新建与启动都拒绝，等 CLI 协作 §7.4 用真实账号测过再开。
+
+| `providerId` | `kind`              | 变量                      | `enabled`   |
+| ------------ | ------------------- | ------------------------- | ----------- |
+| `claude`     | `oauth-token`       | `CLAUDE_CODE_OAUTH_TOKEN` | 是          |
+| `claude`     | `api-key`           | `ANTHROPIC_API_KEY`       | 否（T1）    |
+| `copilot`    | `github-token`      | `COPILOT_GITHUB_TOKEN`    | 是          |
+| `codex`      | `api-key`           | `CODEX_API_KEY`           | 否（T4）    |
+| `pi` / `omp` | `api-key:anthropic` | `ANTHROPIC_API_KEY`       | 否（T5/T6） |
+| `pi` / `omp` | `api-key:openai`    | `OPENAI_API_KEY`          | 否（T5/T6） |
+| `pi` / `omp` | `api-key:moonshot`  | `MOONSHOT_API_KEY`        | 否（T5/T6） |
+| `opencode`   | `api-key:anthropic` | `ANTHROPIC_API_KEY`       | 否（T7）    |
+| `opencode`   | `api-key:openai`    | `OPENAI_API_KEY`          | 否（T7）    |
+
+`providerId` 是基础 CLI 的 id；`custom:` 条目按它的 `baseAgent` 匹配。
+
+### 20.2 条目路由
+
+只有 owner（路由门按全局 `settings:read` / `settings:write`，成员一律 `403 forbidden`）。
+
+- `GET /api/credentials` →
+
+  ```json
+  {
+    "backend": "keychain",
+    "available": true,
+    "kinds": [
+      { "providerId": "claude", "kind": "oauth-token", "enabled": true }
+    ],
+    "entries": [
+      {
+        "ref": "3f9c2a1b7d4e8f60",
+        "providerId": "claude",
+        "kind": "oauth-token",
+        "label": "Work",
+        "isSet": true,
+        "lastUsedAt": 1790000000000
+      }
+    ]
+  }
+  ```
+
+  `backend` 是密钥后端自报的种类（`keychain` / `dpapi` / `libsecret` / `file-encrypted` / `file`）。`available: false` 时多一个 `reason`：`credential_backend_insecure`（后端是 `file`）或 `credential_unsupported_here`（Windows，启动器还不能兑换）。`isSet` 是值在不在（后端打不开也答 `false`）；`lastUsedAt` 从没被取用过时缺席。
+
+- `POST /api/credentials`，体 `{ providerId, kind, label, value }` → `201` 条目。`ref` 由 core 生成（16 位小写十六进制）。`value` 单行、去首尾空白、最长 8192。
+- `PATCH /api/credentials/{ref}`，体 `{ label?, value? }`（至少一个）→ `200` 条目。`providerId` 与 `kind` 不可改：换种类就是另一条凭据。
+- `DELETE /api/credentials/{ref}` → `204`。先删值后删行。绑定着它的节点下次起终端时被拒（`credential_mismatch`）。
+
+### 20.3 `POST /api/terminals` 的 `credentialRef`
+
+`agent` 段多一个可选的 `credentialRef`（条目名，1–200 字符）。页面从节点数据 `agent.account.credentialRef` 取（`apps/web/src/agent/launch.ts::agentSessionRequest`）。core 在起任何进程之前校验，不满足时整个请求被拒、不建会话行：
+
+| 状态 | `code`                        | 何时                                                |
+| ---- | ----------------------------- | --------------------------------------------------- |
+| 400  | `bad_request`                 | `credentialRef` 不是非空字符串或超长                |
+| 400  | `credential_mismatch`         | 条目不存在，或它的 `providerId` 不是节点的基础 CLI  |
+| 400  | `credential_kind_disabled`    | 条目的 `kind` 在 §20.1 里是 `enabled: false`        |
+| 400  | `credential_unsupported_here` | SSH 节点（凭据在控制端，不经 SSH 下发），或 Windows |
+| 409  | `credential_backend_insecure` | 这台主机的密钥后端自报 `file`                       |
+
+通过后节点终端的环境里只多一个变量 `ARMADRA_CREDENTIAL_REF=<ref>`（名字，不是值）。依赖编排、冷启动与节能唤醒没有请求体，读节点数据里的绑定照样带上这个变量；那里不预先校验，绑定失效时由 §20.4 拒绝、启动器拒绝起 CLI，而不是悄悄用默认登录。
+
+条目路由的其余错误码：`credential_not_found`（404，`PATCH` / `DELETE` 一个不存在的 `ref`）、`credential_unavailable`（503，密钥后端这一刻打不开）。
+
+### 20.4 启动器兑换：hook 面的 `POST /credential`
+
+只在本机 hook 服务（Unix socket / 回环端口，契约 §5.2）上，不在主监听器、Gateway 或执行主机上。
+
+- 调用方：画布启动器 `run/<cli>`（POSIX）在 `ARMADRA_NODE_ID` 与 `ARMADRA_CREDENTIAL_REF` 都在时执行 `armadra-hook credential`，后者发这一条。
+- 请求：头 `X-Armadra-Hook-Token`（应用 bearer）与 `X-Armadra-Node-Token`（必须验过，`legacy` 不行）；体 `{ "nodeId", "ref" }`。
+- 只答这个节点此刻绑定的那一条：起终端时记下的绑定，core 重启后改读节点数据 `agent.account.credentialRef` 与 `agent.id`；每次都重新做 §20.3 的校验。
+- 成功 `200 { "variable": "CLAUDE_CODE_OAUTH_TOKEN", "value": "…" }`，并更新 `lastUsedAt`；日志只记 `nodeId` 与 `ref`。失败：`403 forbidden`（token 不对、或节点没绑这一条）、§20.3 的各码、`409 credential_unset`（值不在）、`503 credential_unavailable`。
+- 客户端把 `NAME=value` 打到 stdout，启动器用命令替换接住，只认这家 CLI 在 §20.1 里的变量名（字面的 `case` 分支，没有 `eval`），在自己的进程里 `export` 后 `exec` CLI。客户端失败或名字不认识时启动器打一行原因、退出码非零，不起 CLI。
+
+**威胁模型**：这防的是误泄露（shell 的 `env` 输出、回滚缓冲区、shell 历史、日志、磁盘），不是同一用户的主动读取——持有节点 token 的进程本来就能兑换。CLI 起的子进程（bash 工具、MCP 服务器）会继承这个变量；设置页的脚注写明这一点，并建议用权限最窄的凭据（`setup-token`、只开 Copilot Requests 的细粒度 PAT）。
 
 ## 21. 跨主机交接与 Worker 舰队
 
-预留，由 G1-2 填写。
+### 21.1 跨执行主机交接：`POST /api/workspaces/{workspaceId}/handoffs`
+
+请求形状不变。来源 Agent 跑在 SSH 终端里、而那台主机不是工作空间所在的机器时，不再一律 501：
+
+- 文件引用与 Git 指纹照旧在工作空间所在的机器上读（路径相对工作空间根）。
+- 要读转录（`includeTranscript: true`，且来源的状态是已验证、当前代次的）时，转录尾巴到来源那台主机上读：控制端经那台主机 Worker 的 `handoff.capture`（参数加 `transcriptOnly: true`，`paths` 为空）读，与本机同一个读法、同一组历史适配器归一化。那台主机必须在执行主机登记里、配了 Worker、Worker 连得上并提供 `remote.handoff.v1`；任何一条不满足答 **501 `handoff_host_offline`**，不回退到读控制端磁盘上同名的路径。不读转录时不连那台主机。
+- 目标在哪台主机都接受：材料是文本与相对路径。`bundle.target.executionHost` 照实写目标的主机。
+- 冻结的材料多一个可选字段 `capturedOn: string`：来源转录在哪台执行主机上读的（主机 id）。来源与工作空间在同一台执行主机上、或在另一台执行主机上读到时都有；在控制端本机读、或没有读转录时不出现。旧行没有这个字段，读回照常。
+
+| 情况                                                | 答复                                   |
+| --------------------------------------------------- | -------------------------------------- |
+| 来源主机已登记、有 Worker、连得上                   | 200，`bundle.capturedOn` 为那台主机 id |
+| 来源主机不在登记里，或登记了但没配 Worker           | 501 `handoff_host_offline`             |
+| Worker 连不上、握手失败、缺 `remote.handoff.v1`     | 501 `handoff_host_offline`             |
+| 不读转录（`includeTranscript: false` 或来源未验证） | 200，不连来源主机，无 `capturedOn`     |
+
+### 21.2 Worker 舰队
+
+控制连接每次握手成功，控制端按主机记下 Worker 的 `runtimeVersion` 与能力集合；连接断了只把 `connected` 置假。「过旧」是：版本比这个控制端旧（点分数字比，预发布低于同号正式版，构建元数据不比），或缺这个控制端的 Worker 会声明的任何一个能力。比控制端新的不算过旧；版本读不出来时只按能力判。
+
+- `GET /api/execution-hosts` 与新增的 `GET /api/execution-hosts/{id}`（`""` 是本机；不存在 404 `not_found`）：SSH 行在握过手之后多一个 `worker`：
+
+  ```json
+  {
+    "version": "0.1.0",
+    "capabilities": ["remote.execution.v1", "remote.handoff.v1"],
+    "outdated": false,
+    "connected": true,
+    "checkedAt": "2026-10-03T08:00:00.000Z"
+  }
+  ```
+
+  没握过手的主机没有 `worker`；本机行永远没有。
+
+- `POST /api/execution-hosts/{id}/resync`：丢掉这台主机的控制连接，重新握手（刚升级的 Worker 在这里报新版本），再把画布注入重新同步一次（开过画布 SSH 终端的主机立刻同步并重开中继；没开过的只清掉「待升级」记号）。答复与 `GET …/{id}` 同形。不存在 404 `not_found`；没配 Worker 501 `unsupported`；连不上或握手失败按远端的错误码答（如 503 `unavailable`）。权限与其余执行主机写路由相同（`settings:write`）。
+- `GET /api/agents/{id}/integration` 多一个 `outdatedHosts: [{ hostId, name?, version? }]`：舰队判为过旧的主机，加上注入同步时 Worker 只有 `remote.integration.v1` 的主机（§13.4），按主机 id 去重排序。每个 CLI 的集成状态给的是同一份表；没有远端域的 core 不给这个字段。`GET /api/agents` 的行**不**带它。
 
 ## 22. 投递画面门补充
 
-预留，由 G1-3 填写。
+画面门（[投递设计](../design/agent-delivery.md) §4.3「画面门」）的判据在 `core/agent/screen-gate.ts`，「取画面 → 判定 → 退回理由」在 `core/collab/screen.ts::checkScreen`；`send`（§12）与计划投递共用这一份。线上没有新路由，变化只在理由码与判据。
+
+**计划投递**（`core/schedule/dispatch.ts`）：Agent 目标的探测在状态、半截输入、冷启动之后再过画面门；停在对话框上、或首投时看不见提示符，探测答 `busy` 并带 `reason: "TARGET_NOT_AT_PROMPT"`。运行进 `WAITING_TARGET`，`reasonCode` 记探测给的理由（没有理由仍是 `TARGET_NOT_IDLE`，理由变了跟着改写），下一拍再探；写入前的复核退回时收据是 `NOT_DISPATCHED` + `TARGET_NOT_AT_PROMPT`（其余仍是 `TARGET_NOT_READY`）。「首投」= 没有一条晚于冷启动、来自 `hook` / `extension` / `acp` 的回合结束上报（`idle` / `done` / `error`）。
+
+**判据**：
+
+- 只看最后 60 行，按位置判：对话框特征或选择菜单出现在最后一处提示符**之后**才拦；一行同时像提示符和对话框按对话框算。
+- 选择菜单（通用，id `<cli>.unrecognized-menu`）：高亮的编号选项（`❯ 1.` / `› 2.` / `> 1.`），或页脚 `Enter to confirm` / `Esc to cancel` / `enter continue · esc …` / `Press Enter to continue` / `[y/N]`。只对有画面特征的 CLI 生效。
+- 对话框特征不论 `verified` 都用；提示符特征只用 `verified: true` 的（没核实的提示符不要求，以免永远投不进去）。没有对话框、也没有核实过的提示符的 CLI 不取画面。
+
+**对话框 id**（`verified` 为真 = 对过本机安装包字符串或实际画面）：
+
+| id                                  | verified | 出处                                       |
+| ----------------------------------- | -------- | ------------------------------------------ |
+| `claude.workspace-trust`            | 是       | Claude Code 2.1.286 安装包字符串           |
+| `claude.bypass-permissions-warning` | 是       | 同上                                       |
+| `claude.auto-mode-default`          | 是       | 同上与本机画面                             |
+| `codex.folder-trust`                | 是       | Codex 0.159.3 画面、0.160.0 安装包字符串   |
+| `codex.update`                      | 是       | 两种形态：0.155.1 画面、0.160.0 「✨」横幅 |
+| `codex.hooks-review`                | 是       | Codex 0.160.0 安装包字符串                 |
+| `codex.model-migration`             | 是       | 同上                                       |
+| `codex.sign-in`                     | 是       | 同上                                       |
+| `codex.rate-limit-switch`           | 是       | 同上                                       |
+| `codex.full-access-warning`         | 是       | 同上                                       |
+| `codex.mcp-install`                 | 是       | 同上                                       |
+| `codex.database-rebuilt`            | 是       | 同上                                       |
+| `copilot.folder-trust`              | 否       | GitHub 官方文档，本机未安装                |
+| `pi.project-trust`                  | 是       | Pi 1.0.0 安装包字符串                      |
+| `omp.project-trust`                 | 否       | 按同源的 Pi 推断，本机未安装               |
+
+提示符：Claude（单独一个 `❯`、`? for shortcuts`、`(shift+tab to cycle)`）与 Codex（`›` 后面不是编号，也不是 `Waiting for startup` / `Resuming session` / `Forking session`）已核实；Copilot、Pi、OMP、OpenCode 不登记。OpenCode 官方文档没有启动对话框，整条门不跑。
 
 ## 23. 权限补充：自己创建的终端与工作流关卡
 

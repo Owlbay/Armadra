@@ -19,6 +19,7 @@ export const HOOKS_CAPABLE = [
   "pi",
   "omp",
   "copilot",
+  "ama",
 ] as const;
 
 /** Providers whose adapter reports subagent cards. */

@@ -1,9 +1,12 @@
 import {
+  Check,
   History,
   KeyRound,
+  MessagesSquare,
   Recycle,
   RotateCcw,
   SlidersHorizontal,
+  SquareTerminal,
   Tag,
 } from "lucide-react";
 import { supportedPermissionModes, type PermissionMode } from "@armadra/shared";
@@ -16,6 +19,8 @@ import { useCanvasStore } from "@/store/canvas-store";
 import { customAgentFor, permissionModeLabel } from "@/agent/launch";
 import { t } from "@/app/preferences-store";
 import { openNodeAnnotation } from "@/meta/annotations";
+import { canUseAcp, driverOf, switchDriver } from "@/acp/driver";
+import { visibleNodeMenu } from "@/acp/simple-mode";
 import { openAgentSettings } from "./agent-settings";
 import { terminalHandle } from "./terminal-registry";
 
@@ -76,6 +81,28 @@ export function registerTerminalNodeMenu(): () => void {
       },
     ];
 
+    // 驱动方式（ACP 设计 §4.2）：当前那一项打钩并置灰；没有 ACP 入口的
+    // Agent 不出现。
+    if (canUseAcp(agent)) {
+      const driver = driverOf(agent);
+      items.push(
+        {
+          id: "agent.driver.acp",
+          label: t("acp.view.session"),
+          icon: driver === "acp" ? Check : MessagesSquare,
+          disabled: driver === "acp",
+          run: () => void switchDriver(node.id, "acp"),
+        },
+        {
+          id: "agent.driver.terminal",
+          label: t("acp.view.terminal"),
+          icon: driver === "terminal" ? Check : SquareTerminal,
+          disabled: driver === "terminal",
+          run: () => void switchDriver(node.id, "terminal"),
+        },
+      );
+    }
+
     for (const mode of supportedPermissionModes(
       customAgentFor(agent.id)?.baseAgent ?? agent.id,
     )) {
@@ -93,7 +120,8 @@ export function registerTerminalNodeMenu(): () => void {
       });
     }
 
-    return items;
+    // 简洁模式不显示「回收 / 权限模式 / 终端视图」（ACP 设计 §8 第 3 条）。
+    return visibleNodeMenu(items);
   });
   return dispose;
 }

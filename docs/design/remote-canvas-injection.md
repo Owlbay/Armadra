@@ -45,7 +45,7 @@ Codex 的 Hook 信任与本机一样靠会话级旗标 `--dangerously-bypass-hoo
 
 - 远端登录 shell 的 profile 若整条重设 `PATH`（不是在前面追加），垫片目录就丢了，CLI 照常启动但不带注入。macOS 的 `path_helper` 会把已有条目挪到系统路径之后：真 CLI 若装在 `/usr/local/bin` 这类系统路径里，同样绕过垫片。Linux 执行主机的常见配置不受影响。
 - 只有六个内置 CLI 有垫片。`custom:` 条目若改了程序名（`launchCmd`），远端不注入。
-- 执行主机的 Worker 待升级时，集成页还没有提示：控制端只在 `RemoteIntegration.outdatedWorkers()` 里记着，集成状态与 API 都没有给出这一项。
+- 执行主机的 Worker 待升级时，集成页与执行主机页各有一个「Worker 待升级」徽标与「重新同步」（2026-10-03 起，G1-2）：`RemoteIntegration.outdatedWorkers()` 与 Worker 舰队（`core/remote/fleet.ts`）一起给出集成状态的 `outdatedHosts`（契约 [§21.2](../contracts/core-json-api.md)）。
 - 核心重启后，SSH 终端（tmux 窗格）还活着，但中继要等这台主机的控制连接下次建立时才重开（远端工作空间一打开就会建立；只有 SSH 终端的主机要等下一次开终端）。
 - 端到端用的是假 ssh（`tools/probes/remote-e2e.mjs` 场景 8）：同一台机器上的 `/bin/sh -c`，没有验证真实 sshd 对远端命令的处理。
 

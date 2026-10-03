@@ -29,10 +29,16 @@
  * plus the Worker version handshake — so `core/remote` registers it, next to
  * the host-key file, the askpass helper and the Worker connections it needs.
  * This file only owns the registry that route reads.
+ *
+ * The Worker fleet (contract §21.2) is read here but kept in `core/remote`:
+ * each SSH row carries `worker { version, capabilities, outdated, connected,
+ * checkedAt }` from the last handshake, `GET …/{id}` answers one row, and
+ * `POST …/{id}/resync` asks the remote domain to reconnect and re-sync.
  */
 
 import { badRequest, coreError, type ErrorResponse } from "../http/errors";
 import type { CoreRequest, HandlerResult } from "../http/router";
+import { fleetHooks, workerFleet } from "../remote/fleet";
 import { isJsonObject, type JsonObject, type JsonValue } from "./local";
 import { isParseFailure, readJsonBody } from "./routes";
 import {
@@ -98,7 +104,83 @@ function view(
     // on it, and asking is `UNSUPPORTED` rather than a quiet fall back here.
     workerConfigured: host.worker !== undefined,
     workspaceCount: counts.get(host.id) ?? 0,
+    ...workerField(host.id),
   };
+}
+
+/** 上次握手见到的 Worker；没握过手不出现（契约 §21.2）。 */
+function workerField(hostId: string): { worker?: JsonObject } {
+  const status = workerFleet().status(hostId);
+  if (status === undefined) return {};
+  return {
+    worker: {
+      version: status.version,
+      capabilities: [...status.capabilities],
+      outdated: status.outdated,
+      connected: status.connected,
+      checkedAt: status.checkedAt,
+    },
+  };
+}
+
+/** `GET /api/execution-hosts/{id}` — one row of the listing; `""` is this machine. */
+export function getExecutionHost(
+  deps: ExecutionHostDeps,
+  hostId: string,
+): HandlerResult | ErrorResponse {
+  const row = single(deps, hostId);
+  if (row === undefined) {
+    return coreError(404, "not_found", "No such execution host");
+  }
+  return { status: 200, body: row };
+}
+
+function single(
+  deps: ExecutionHostDeps,
+  hostId: string,
+): JsonObject | undefined {
+  const counts = deps.workspaceCounts();
+  if (hostId === "") return view(null, counts);
+  const host = parseRegistry(deps).find((entry) => entry.id === hostId);
+  return host === undefined ? undefined : view(host, counts);
+}
+
+/**
+ * `POST /api/execution-hosts/{id}/resync` — reconnect the host's Worker (a
+ * fresh handshake: an upgraded Worker reports its new version here) and
+ * re-sync the canvas injection to it. Answers the row as `GET …/{id}` would.
+ */
+export async function resyncExecutionHost(
+  deps: ExecutionHostDeps,
+  hostId: string,
+): Promise<HandlerResult | ErrorResponse> {
+  const host = parseRegistry(deps).find((entry) => entry.id === hostId);
+  if (host === undefined) {
+    return coreError(404, "not_found", "No such execution host");
+  }
+  if (host.worker === undefined) {
+    return coreError(
+      501,
+      "unsupported",
+      `执行主机 ${host.name} 没有配置 Worker，没有可重新同步的东西`,
+    );
+  }
+  const hooks = fleetHooks();
+  if (hooks === undefined) {
+    return coreError(501, "unsupported", "这个 core 没有装配远端执行");
+  }
+  try {
+    await hooks.resync(hostId);
+  } catch (failure) {
+    const status = (failure as { status?: unknown }).status;
+    const code = (failure as { code?: unknown }).code;
+    return coreError(
+      typeof status === "number" ? status : 502,
+      typeof code === "string" ? code : "unavailable",
+      failure instanceof Error ? failure.message : String(failure),
+    );
+  }
+  return { status: 200, body: single(deps, hostId) ?? {} };
 }
 
 /**
@@ -212,6 +294,7 @@ export function deleteExecutionHost(
     deps,
     hosts.filter((host) => host.id !== hostId),
   );
+  workerFleet().forget(hostId);
   return { status: 200, body: listing(deps) };
 }
 

@@ -1,3 +1,5 @@
+import { type AcpResume, type AcpSupport, adapterFor } from "../acp/adapters";
+import { rememberedAcpVersion } from "../acp/host";
 import {
   type HistoryAvailability,
   availabilityOf,
@@ -9,6 +11,7 @@ import {
   type AgentSettings,
   customInfo,
   detect,
+  resolveCommand,
 } from "./registry";
 
 /**
@@ -61,6 +64,22 @@ export interface AgentListRow extends AgentInfo {
    * 列表要便宜。
    */
   readonly history: HistoryAvailability;
+  /**
+   * 这家 CLI 在本机怎么说 ACP（契约 §14.1）。`installed` 在补齐过的 PATH 上找
+   * 适配器程序，每次请求都探；`version` 只读最近一次起会话或探测时
+   * `initialize` 报的值，没有就缺席——列表从不为它起进程。没有 ACP 入口的行
+   * 不带这个键。
+   */
+  readonly acp?: AgentAcpInfo;
+}
+
+/** `GET /api/agents` 行的 `acp`（契约 §14.1）。 */
+export interface AgentAcpInfo {
+  readonly support: AcpSupport;
+  readonly program: string;
+  readonly installed: boolean;
+  readonly version?: string;
+  readonly resume: AcpResume;
 }
 
 export function listAgents(options: ListAgentsOptions): AgentListRow[] {
@@ -68,10 +87,38 @@ export function listAgents(options: ListAgentsOptions): AgentListRow[] {
     ...detect(),
     ...options.settings.customAgents().map((custom) => customInfo(custom)),
   ];
-  return rows.map((row) => ({
-    ...withIntegration(row, options),
-    history: availabilityOf(row.id, options.settings, options.env),
-  }));
+  return rows.map((row) => {
+    const acp = acpOf(row, options);
+    return {
+      ...withIntegration(row, options),
+      history: availabilityOf(row.id, options.settings, options.env),
+      ...(acp === undefined ? {} : { acp }),
+    };
+  });
+}
+
+/**
+ * ACP 那一半。一个 `custom:` 条目借它基础适配器的：ACP 入口是那家 CLI 的
+ * 适配器程序，与用户给它起的标签无关——只有基础 CLI 自己就是 ACP 入口
+ * （`native`）时，条目的启动程序就是它的入口（`acp/adapters.ts::adapterFor`）。
+ */
+function acpOf(
+  row: AgentInfo,
+  options: ListAgentsOptions,
+): AgentAcpInfo | undefined {
+  const provider = row.baseAgent ?? row.id;
+  const adapter = adapterFor(options.settings, row.id);
+  if (adapter === undefined) return undefined;
+  const installed =
+    resolveCommand(adapter.program, options.env ?? process.env) !== undefined;
+  const version = installed ? rememberedAcpVersion(provider) : undefined;
+  return {
+    support: adapter.support,
+    program: adapter.program,
+    installed,
+    ...(version === undefined ? {} : { version }),
+    resume: adapter.resume,
+  };
 }
 
 /**

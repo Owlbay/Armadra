@@ -1,4 +1,42 @@
 {
-  "$comment": "发布兼容范围的唯一来源，渲染进 Release 说明的 armadra-compatibility 围栏（docs/design/updates-and-service-install.md §1.4）。minimumInstalled 不得高于当前版本，由 tools/release/version.mjs check 锁定；桌面壳与服务器壳同版本发布，两者的版本一致性由同一条检查看住。",
-  "minimumInstalled": "0.1.0"
+  "$comment": "发布兼容范围的唯一来源，渲染进 Release 说明的 armadra-compatibility 围栏（docs/design/updates-and-service-install.md §1.4）。minimumInstalled 不得高于当前版本，由 tools/release/version.mjs check 锁定；桌面壳与服务器壳同版本发布，两者的版本一致性由同一条检查看住。acp 记各家 ACP 入口实跑验证过的版本区间（docs/design/acp-session-view.md §12），verified 为 null 表示还没有真跑记录（G3-7 填）；它不进围栏，程序名与 apps/desktop/src/core/acp/adapters.ts 的表由 adapters.test.ts 对齐。 agent 是随桌面壳打包的 @armadra/agent 精确版本与适配器的宿主 API 版本（docs/design/coordinator-agent.md §2.6），同样不进围栏；version.mjs check 校验它与 apps/desktop/package.json、pnpm-lock.yaml 一致，升级是一次显式改动。",
+  "minimumInstalled": "0.1.0",
+  "acp": {
+    "protocolVersion": 1,
+    "adapters": {
+      "claude": {
+        "program": "claude-agent-acp",
+        "verified": null
+      },
+      "codex": {
+        "program": "codex-acp",
+        "verified": null
+      },
+      "opencode": {
+        "program": "opencode",
+        "verified": null
+      },
+      "pi": {
+        "program": "pi-acp",
+        "verified": null
+      },
+      "omp": {
+        "program": "omp",
+        "verified": null
+      },
+      "copilot": {
+        "program": "copilot",
+        "verified": null
+      },
+      "ama": {
+        "program": "ama",
+        "verified": null
+      }
+    }
+  },
+  "agent": {
+    "package": "@armadra/agent",
+    "version": "0.6.5",
+    "hostApi": 1
+  }
 }

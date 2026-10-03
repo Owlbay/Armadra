@@ -43,7 +43,17 @@ export type UsageFailure =
   | "provider_error"
   | "network"
   | "parse"
-  | "no_windows";
+  | "no_windows"
+  /**
+   * 端点答了一页 HTML（挑战页、改版）。和下一个一样随 `unavailable` 报，
+   * 不算错误。
+   */
+  | "unsupported"
+  /**
+   * 这家的额度端点要借用 CLI 的登录令牌，有条款风险，出站政策默认关
+   * （`usage.claudeUsage` / `usage.copilotUsage`，外部服务 §9.3）。
+   */
+  | "policy_off";
 
 /**
  * One rate-limit window. `label` is a unit abbreviation (`5h`, `7d`), not
@@ -71,7 +81,10 @@ export interface UsageCredits {
 export interface ProviderUsage {
   readonly id: UsageProviderId;
   readonly status: UsageStatus;
-  /** Only with `status: "error"`. */
+  /**
+   * With `status: "error"`; with `unavailable` only `unsupported` or
+   * `policy_off`.
+   */
   readonly reason?: UsageFailure;
   readonly credentialSource: CredentialSource;
   readonly windows: readonly UsageWindow[];
