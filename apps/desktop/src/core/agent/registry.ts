@@ -1,10 +1,10 @@
 import { accessSync, constants, statSync } from "node:fs";
-import { delimiter, isAbsolute, join, sep } from "node:path";
-import { agentPath } from "../terminal/environment";
+import { delimiter, dirname, isAbsolute, join, sep } from "node:path";
+import { agentPath, hookClient } from "../terminal/environment";
 import { type ShimTarget, fileProbe, shimTarget } from "./windows-shim";
 
 /**
- * The six agent CLIs this build knows, and what each of them can do.
+ * The seven agent CLIs this build knows, and what each of them can do.
  *
  * Ported from the pre-merge implementation. Only what the core needs lives here
  * — ids, labels, launch programs and capabilities. The canonical registry
@@ -21,6 +21,7 @@ export const AGENT_IDS = [
   "pi",
   "omp",
   "copilot",
+  "ama",
 ] as const;
 
 export type AgentId = (typeof AGENT_IDS)[number];
@@ -87,9 +88,12 @@ export function stateSourceFor(provider: string): string | undefined {
     // Pi, Oh My Pi and opencode report from a module inside the CLI's own
     // process. Same socket, same bearer, same node token: a different
     // transport, not a different authority.
+    // `ama` reports through its host adapter, a module inside its own process
+    // (docs/design/coordinator-agent.md §2.3).
     case "pi":
     case "omp":
     case "opencode":
+    case "ama":
       return STATE_SOURCE_EXTENSION;
     default:
       return undefined;
@@ -137,6 +141,12 @@ export interface AgentDefinition {
   readonly promptMode: string;
   readonly capabilities: readonly AgentCapability[];
   /**
+   * argv[0] basenames that mean "this pane is still running that agent"
+   * (`packages/shared`'s `expectedProcess`). A CLI the launcher execs into a
+   * runner (ama on the bundled Electron) is seen by tmux as the runner.
+   */
+  readonly expectedProcess: readonly string[];
+  /**
    * 这家 CLI **启动完成时一条 hook 事件都不发**。
    *
    * 不是「没装适配」，也不是「适配坏了」：事件全部 enabled，第一条仍然要等人
@@ -153,6 +163,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     color: "#d97757",
     launchCmd: "claude",
     promptMode: "argv",
+    expectedProcess: ["claude"],
     capabilities: [
       "hooks",
       "resume",
@@ -170,6 +181,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     color: "#10a37f",
     launchCmd: "codex",
     promptMode: "argv",
+    expectedProcess: ["codex"],
     // 实测 0.155.1（2026-09-21，真机）：`session_start` 等六个事件全部 enabled，
     // 进程起到「Ask Codex to do anything」提示符也一条都不发；`agent_status`
     // 里根本没有这个节点的行，直到人手动提交一次输入
@@ -191,6 +203,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     color: "#a78bfa",
     launchCmd: "opencode",
     promptMode: "flag-prompt",
+    expectedProcess: ["opencode"],
     capabilities: [
       "hooks",
       "resume",
@@ -206,6 +219,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     color: "#e8b86d",
     launchCmd: "pi",
     promptMode: "argv",
+    expectedProcess: ["pi"],
     // `hooks` means "there is a status source", not "there is a hooks key in a
     // settings file": Pi's is an in-process extension on the same socket.
     capabilities: [
@@ -223,6 +237,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     color: "#d4a373",
     launchCmd: "omp",
     promptMode: "argv",
+    expectedProcess: ["omp"],
     // Same extension API as Pi, under its own config home.
     capabilities: [
       "hooks",
@@ -239,12 +254,40 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     color: "#a371f7",
     launchCmd: "copilot",
     promptMode: "flag-prompt",
+    expectedProcess: ["copilot"],
     // A command hook like Claude's.
     capabilities: [
       "hooks",
       "resume",
       "browser",
       "contextLink",
+      "structuredInputAck",
+      "supportsModelSelection",
+    ],
+  },
+  {
+    id: "ama",
+    label: "Armadra Agent",
+    color: "#2f6fed",
+    launchCmd: "ama",
+    promptMode: "argv",
+    // The launcher execs the bundled runtime, so tmux's `pane_current_command`
+    // names the runner rather than `ama` (docs/design/coordinator-agent.md §2.2).
+    expectedProcess: [
+      "ama",
+      "ama.cjs",
+      "armadra",
+      "Armadra",
+      "Electron",
+      "electron",
+    ],
+    // Our own agent. No `subagent`: the canvas rules want sibling nodes.
+    capabilities: [
+      "hooks",
+      "resume",
+      "contextLink",
+      "browser",
+      "usage",
       "structuredInputAck",
       "supportsModelSelection",
     ],
@@ -442,7 +485,11 @@ export function resolveCommand(
   if (looksLikePath) {
     return isExecutable(command) ? command : withPlatformSuffix(command);
   }
-  for (const directory of agentPath(ambient).split(delimiter)) {
+  // `<data>/bin` holds the `armadra-hook` launcher and the bundled `ama`'s; a
+  // node terminal has it on PATH, so detection looks there too.
+  const client = hookClient();
+  const bin = client === undefined ? undefined : dirname(client);
+  for (const directory of agentPath(ambient, bin).split(delimiter)) {
     if (directory === "") continue;
     const candidate = join(directory, command);
     if (isExecutable(candidate)) return candidate;

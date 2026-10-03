@@ -756,3 +756,31 @@ describe("Pi and Oh My Pi payloads", () => {
     expect(event?.idle).toBe(true);
   });
 });
+
+describe("ama (the host adapter's reports, Pi's vocabulary)", () => {
+  const ama = (payload: unknown) => normalize("ama", "node-a", payload);
+
+  it("settles on agent_settled, attributed to ama", () => {
+    const event = ama({
+      hookEventName: "agent_settled",
+      provider: "ama",
+      sessionId: "ama-1",
+    });
+    expect(event?.agentId).toBe("ama");
+    expect(event?.state).toBe(DONE);
+    expect(event?.idle).toBe(true);
+    expect(event?.sessionId).toBe("ama-1");
+  });
+
+  it("works on a prompt and blocks on an approval request", () => {
+    const prompt = ama({ hookEventName: "before_agent_start", prompt: "go" });
+    expect(prompt?.state).toBe(WORKING);
+    expect(
+      ama({ hookEventName: "tool_approval_requested", toolName: "bash" })
+        ?.state,
+    ).toBe(BLOCKED);
+    expect(
+      ama({ hookEventName: "tool_approval_resolved", toolName: "bash" })?.state,
+    ).toBe(WORKING);
+  });
+});
