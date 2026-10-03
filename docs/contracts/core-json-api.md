@@ -553,7 +553,38 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 14. ACP：`/api/acp/*` 与 `/api/agents` 行的 `acp`
 
-预留，由 G1-4（§14.1）与 G2-1（§14.2–§14.4）填写。
+设计见 [ACP 会话视图](../design/acp-session-view.md) 与 [补全架构](../design/completion-architecture.md) §5.1。ACP 是同一个终端节点的另一种驱动方式；协议栈是 `@armadra/agent/acp`（精确版本），core 只包装它的 `AcpClient`（`core/acp/client.ts`）。§14.2–§14.4 由 G2-1 填写。
+
+### 14.1 `GET /api/agents` 行的 `acp`
+
+每一行多一个可选的 `acp`：这家 CLI 在这台机器上怎么说 ACP（代码在 `core/agent/list.ts`，表在 `core/acp/adapters.ts`；共享层 `agentAcpInfoSchema`）。`custom:` 条目答它 `baseAgent` 的；没有 ACP 入口的行不带这个键。
+
+```json
+{
+  "id": "codex",
+  "acp": {
+    "support": "official",
+    "program": "codex-acp",
+    "installed": true,
+    "version": "1.10.2",
+    "resume": "load"
+  }
+}
+```
+
+| 字段        | 含义                                                                                                                                                 |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `support`   | `native`（CLI 自带入口：`opencode acp`、`omp acp`、`copilot --acp`、`ama --mode acp`）/ `official`（官方适配器）/ `community`（社区适配器 `pi-acp`） |
+| `program`   | 在补齐过的 `PATH` 上找的程序名：`claude-agent-acp`、`codex-acp`、`opencode`、`pi-acp`、`omp`、`copilot`、`ama`                                       |
+| `installed` | `program` 每次请求都按 `resolveCommand`（与 `resolvedPath` 同一条规则）探，不缓存                                                                    |
+| `version`   | 可选：本进程最近一次对这家起会话或探测时 `initialize` 报的 `agentInfo.version`。列表从不为它起进程，没有就缺席；`installed: false` 时也缺席          |
+| `resume`    | 跨进程接回用哪个方法：`load`（`session/load`，回放）/ `resume`（`session/resume`，不回放）/ `none`（只能新开，Copilot；这样的会话不休眠）            |
+
+- 七家的表：`claude` 官方 `load`、`codex` 官方 `load`、`opencode` 原生 `load`、`pi` 社区 `load`、`omp` 原生 `load`、`copilot` 原生 `none`、`ama` 原生 `resume`。`resume` 是偏好：起会话时按 Agent 在 `initialize` 声明的能力协商，偏好的方法不支持就用另一个，两个都不支持就新开并如实告诉页面没有接上。
+- 权限模式在 ACP 下的落点（`session/set_mode` 的模式 id 或启动 argv）不在行上；没有落点的模式（OpenCode 的 `auto-edit` / `full-auto`，Pi 除 `default` 外的三个）不出现在会话视图里，以它起会话答 `acp_mode_unsupported`。`plan` 在 Agent 不提供对应模式 id 时拒绝启动（`acp_mode_unavailable`），不以可写模式起。
+- 起会话失败的错误码（G2-1 的路由原样答出，形状 `{ code, message }`）：`acp_not_installed`、`acp_spawn_failed`、`acp_exited`、`acp_initialize_failed`、`acp_initialize_timeout`、`acp_protocol_version`、`acp_auth_required`（Agent 要先在 CLI 里登录）、`acp_session_failed`、`acp_mode_unsupported`、`acp_mode_unavailable`。消息里不带适配器的 stderr。
+- 实跑验证过的版本区间记在 `tools/release/compatibility.json` 的 `acp` 键（`{ protocolVersion: 1, adapters: { <id>: { program, verified: null | { min, max? } } } }`），不进发布说明的兼容围栏；`program` 与适配器表由测试对齐。
+- 状态来源词汇多一个 `acp`（`agent_status.state_source`）：由 core 在 ACP 驱动的会话上写入，与 `hook` / `extension` 一样算上报（`stateSourceIsReported`），客户端无法自称。
 
 ## 15. 工作流与 runners：`/api/workflows/*`
 

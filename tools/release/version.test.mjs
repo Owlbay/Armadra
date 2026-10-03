@@ -22,6 +22,9 @@ import {
   compareVersions,
   extractFence,
   normalize,
+  normalizeAcp,
+  readAcpCompatibility,
+  readCompatibility,
   releaseNote,
   renderFence,
 } from "./compatibility.mjs";
@@ -166,6 +169,44 @@ test("the fence round-trips and refuses what a reader would refuse", () => {
     () => normalize({ ...range, maximumInstalled: "0.0.1" }),
     /minimumInstalled is above maximumInstalled/,
   );
+});
+
+test("the acp key sits beside the fence and never enters it", () => {
+  const fence = readCompatibility();
+  assert.equal("acp" in fence, false);
+  assert.match(
+    renderFence(fence),
+    /^```armadra-compatibility\n\{"minimumInstalled"/,
+  );
+  const acp = readAcpCompatibility();
+  assert.equal(acp.protocolVersion, 1);
+  assert.equal(acp.adapters.claude.program, "claude-agent-acp");
+  // The fence itself still refuses it: a reader parses the fence strictly.
+  assert.throws(
+    () => normalize({ minimumInstalled: "0.1.0", acp: {} }),
+    /unknown compatibility key/,
+  );
+  assert.deepEqual(
+    normalizeAcp({
+      protocolVersion: 1,
+      adapters: {
+        codex: { program: "codex-acp", verified: { min: "1.10.0" } },
+      },
+    }).adapters.codex,
+    { program: "codex-acp", verified: { min: "1.10.0" } },
+  );
+  for (const bad of [
+    { protocolVersion: 2, adapters: {} },
+    { protocolVersion: 1, adapters: { x: { program: "", verified: null } } },
+    {
+      protocolVersion: 1,
+      adapters: {
+        x: { program: "x", verified: { min: "2.0.0", max: "1.0.0" } },
+      },
+    },
+  ]) {
+    assert.throws(() => normalizeAcp(bad));
+  }
 });
 
 test("a release note carries the fence and says when nothing notarised it", () => {
