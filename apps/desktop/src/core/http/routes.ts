@@ -610,6 +610,13 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 输出到画板的代码块（契约 §14.5，G2-2）。
+  {
+    path: "/api/workspaces/{workspaceId}/exports/{exportId}/text",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/workspaces/{workspaceId}/assets",
     methods: ["POST"],

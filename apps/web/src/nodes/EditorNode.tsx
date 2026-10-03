@@ -25,6 +25,7 @@ import { Button } from "@/ui/button";
 import { DropdownMenuItem } from "@/ui/dropdown-menu";
 import { IconButton } from "@/ui/icon-button";
 import { NodeShell } from "./NodeShell";
+import { SourceBadge } from "@/acp/SourceBadge";
 import { onEditorReveal, takePendingReveal } from "./editor-reveal";
 import type { NodeBodyProps } from "./registry";
 import { Centered } from "./editor/Centered";
@@ -593,6 +594,14 @@ export function EditorNode({ id, node, selected }: NodeBodyProps) {
     <NodeShell
       node={node}
       selected={selected}
+      {...(node.data.kind === "editor" && node.data.source
+        ? {
+            // 输出到画板的代码块：来自哪个 Agent，点一下跳回去（ACP 设计 §7）。
+            headerChips: (
+              <SourceBadge source={node.data.source} at={node.createdAt} />
+            ),
+          }
+        : {})}
       headerActions={headerActions}
       menuItems={menuItems}
     >

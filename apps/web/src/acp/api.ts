@@ -12,6 +12,8 @@ import {
   answerApprovalRequestSchema,
   answerApprovalResponseSchema,
   createAcpSessionRequestSchema,
+  exportPngResponseSchema,
+  exportTextRequestSchema,
   terminalSessionSchema,
   type AgentDriver,
   type CreateAcpSessionRequest,
@@ -59,6 +61,24 @@ export const acpApi = {
       {
         method: "POST",
         ...json(answerApprovalRequestSchema.parse({ decision, optionId })),
+      },
+    ),
+  /**
+   * 输出到画板的代码块（契约 §14.5）：写到
+   * `.armadra/exports/acp/<nodeId>/<name>`，答回工作区相对路径。
+   */
+  exportText: (
+    workspaceId: string,
+    nodeId: string,
+    name: string,
+    content: string,
+  ) =>
+    request(
+      `/api/workspaces/${query(workspaceId)}/exports/${query(nodeId)}/text`,
+      exportPngResponseSchema,
+      {
+        method: "POST",
+        ...json(exportTextRequestSchema.parse({ name, content })),
       },
     ),
   /** 输入框聚焦拿人类租约，失焦或提交交还（ACP 设计 §5.6）。 */

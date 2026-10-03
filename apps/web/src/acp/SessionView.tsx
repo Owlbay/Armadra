@@ -301,7 +301,11 @@ export function SessionView({
   } else {
     body = (
       <>
-        <MessageList items={view.items} streaming={view.streaming} />
+        <MessageList
+          items={view.items}
+          streaming={view.streaming}
+          source={sessionId ? { nodeId, sessionId } : undefined}
+        />
         {!pinned &&
           permissions.map((permission) => (
             <PermissionCard

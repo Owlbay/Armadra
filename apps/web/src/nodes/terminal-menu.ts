@@ -20,6 +20,7 @@ import { customAgentFor, permissionModeLabel } from "@/agent/launch";
 import { t } from "@/app/preferences-store";
 import { openNodeAnnotation } from "@/meta/annotations";
 import { canUseAcp, driverOf, switchDriver } from "@/acp/driver";
+import { visibleNodeMenu } from "@/acp/simple-mode";
 import { openAgentSettings } from "./agent-settings";
 import { terminalHandle } from "./terminal-registry";
 
@@ -119,7 +120,8 @@ export function registerTerminalNodeMenu(): () => void {
       });
     }
 
-    return items;
+    // 简洁模式不显示「回收 / 权限模式 / 终端视图」（ACP 设计 §8 第 3 条）。
+    return visibleNodeMenu(items);
   });
   return dispose;
 }
