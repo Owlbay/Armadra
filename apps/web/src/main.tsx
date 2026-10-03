@@ -24,7 +24,8 @@ initRuntimeSockets().finally(() => {
     <StrictMode>
       <MotionConfig
         reducedMotion="user"
-        transition={{ duration: 0.16, ease: [0.2, 0, 0, 1] }}
+        // 与 tokens.css 的 `--ease-out` 同一条曲线（设计系统 §2.10）
+        transition={{ duration: 0.16, ease: [0.32, 0.72, 0, 1] }}
       >
         <App />
       </MotionConfig>
