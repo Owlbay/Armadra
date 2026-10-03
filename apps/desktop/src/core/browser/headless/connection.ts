@@ -155,9 +155,19 @@ export class CdpConnection {
       waiter.settle(message.result ?? null);
       return;
     }
-    if (typeof message.method === "string") {
+    // Events stop at close. Chromium keeps writing until the pipe drains — a
+    // screencast frame can still be in the buffer after the node stopped — and
+    // a handler that answers it would be talking to a browser that is gone.
+    if (typeof message.method === "string" && !this.closed) {
       for (const handler of this.handlers) {
-        handler(message.method, message.params, message.sessionId ?? "");
+        // This runs inside the pipe's `data` listener: a handler that threw
+        // would escape as an uncaught exception and take the whole core down,
+        // not just this node. One bad event is dropped instead.
+        try {
+          handler(message.method, message.params, message.sessionId ?? "");
+        } catch {
+          // Nothing to tell: the event was the browser's, not a caller's.
+        }
       }
     }
   }

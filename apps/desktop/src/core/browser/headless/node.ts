@@ -549,8 +549,13 @@ export class HeadlessNode {
    * about pixels) and a person's own input, whose gate is the lease rather
    * than the allowlist — see the note at the top of `viewer.ts`. Everything an
    * agent causes goes through {@link CdpSession.send}.
+   *
+   * `async` on purpose: with no browser running, {@link need} throws, and the
+   * callers that fire and forget (`void this.raw(…).catch(…)`, the frame ack
+   * among them) only catch a rejection. A synchronous throw from the frame ack
+   * escaped the pipe's `data` listener as an uncaught exception.
    */
-  private raw(
+  private async raw(
     method: string,
     params: Record<string, unknown>,
     sessionId: string,
