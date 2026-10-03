@@ -902,7 +902,7 @@
   - `minimumInstalled` 保持 0.1.0。v0.1.0 的 13 个迁移与现在 `core/db/migrations/` 的 0001–0013 逐字节相同，之后只新增到 0035，0.1.0 的库能直接迁上来。
   - `agent` 为 `@armadra/agent` 0.6.7、`hostApi` 1，与桌面壳的 devDependency、lockfile 一致（`release:check` 校验通过）。
   - `acp` 记上 2026-10-04 实跑通过的 `claude` → claude-agent-acp `min 0.85.1`、`pi` → pi-acp `min 0.0.34`。改动与 #77 的两个提交逐字相同，两边合并时不会冲突。其余五家仍为 null。
-- 新增 `CHANGELOG.md`（中文），内容是 0.1.0 以来的变化，按 PR 编号归类到 #75 为止。`repo.rules.json` 根目录白名单与[仓库结构](../design/repository-structure.md)的目录树已登记它。
+- 新增 `CHANGELOG.md`（中文），内容是 0.1.0 以来的变化，按 PR 编号归类到 #77 为止。`repo.rules.json` 根目录白名单与[仓库结构](../design/repository-structure.md)的目录树已登记它。
 
 实测（macOS arm64，2026-10-04）：
 
@@ -924,5 +924,4 @@
 
 - 真签名与公证：Apple、Windows、GPG 证书与 minisign 发布密钥都没有，见上面「需用户提供」P0 / P1。拿到之前，正式发布按「未签名」处理，说明顶部会列出未签名的平台。
 - `release.yml` 的发布说明目前取 GitHub 的 `generate-notes`，不读 `CHANGELOG.md`。发版时需要手工把 0.2.0 一节贴进草稿，或者另开一个包让 `assemble.mjs --notes-from` 读这一节。
-- #76、#77 还没合入：CHANGELOG 只写到 #75；兼容表里的两条实测版本与 #77 相同。两者合入后，在「工程」里补一行。
 - 打包版的「检查 → 下载 → 暂存」这次没有对 0.2.0 重跑。G3-3 已用 `update-e2e` 对 dev-stack 走通过，这次没有改壳侧代码。
