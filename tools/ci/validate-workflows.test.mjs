@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { parseYaml } from "./workflow-yaml.mjs";
 import {
+  checkE2eTiers,
   checkWorkflow,
   checkWorkflowDirectory,
 } from "./validate-workflows.mjs";
@@ -287,4 +288,44 @@ test("the release workflow has the five jobs the design names, and publishes onl
   assert.match(create, /--draft/);
   assert.ok(!/gh release edit .*--draft=false/.test(create));
   assert.ok(!/--latest/.test(create));
+});
+
+test("tier A runs as ci.yml's e2e job on ubuntu, tier B on a nightly schedule", () => {
+  const read = (name) =>
+    parseYaml(readFileSync(join(root, ".github/workflows", name), "utf8"));
+  const documents = {
+    "ci.yml": read("ci.yml"),
+    "nightly.yml": read("nightly.yml"),
+  };
+  assert.deepEqual(checkE2eTiers(documents), []);
+  assert.equal(documents["ci.yml"].jobs.e2e["runs-on"], "ubuntu-latest");
+
+  const ciWithout = structuredClone(documents["ci.yml"]);
+  delete ciWithout.jobs.e2e;
+  assert.deepEqual(checkE2eTiers({ ...documents, "ci.yml": ciWithout }), [
+    "ci.yml: has no e2e job running tier A",
+  ]);
+
+  const ciElsewhere = structuredClone(documents["ci.yml"]);
+  ciElsewhere.jobs.e2e["runs-on"] = "macos-14";
+  ciElsewhere.jobs.e2e.steps = [{ run: "node tools/ci/e2e.mjs --tier b" }];
+  assert.deepEqual(checkE2eTiers({ ...documents, "ci.yml": ciElsewhere }), [
+    "ci.yml: job e2e does not run node tools/ci/e2e.mjs --tier a",
+    "ci.yml: job e2e must run on ubuntu (tmux, xvfb)",
+  ]);
+
+  assert.deepEqual(checkE2eTiers({ "ci.yml": documents["ci.yml"] }), [
+    "nightly.yml: is missing; tier B has nowhere to run",
+  ]);
+  const manual = parseYaml(
+    "name: nightly\non:\n  push:\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n",
+  );
+  assert.deepEqual(
+    checkE2eTiers({ "ci.yml": documents["ci.yml"], "nightly.yml": manual }),
+    [
+      "nightly.yml: has no schedule trigger",
+      "nightly.yml: cannot be run by hand (workflow_dispatch)",
+      "nightly.yml: no job runs node tools/ci/e2e.mjs --tier b",
+    ],
+  );
 });
