@@ -502,6 +502,17 @@ export class UpdatesController {
     try {
       // 走到这一步必然已经下载过，模块早就加载好了；这里只是把句柄再取一次。
       const { autoUpdater } = this.updater();
+      // On macOS `quitAndInstall` only *asks* Squirrel.Mac, which then fetches
+      // the staged zip and checks it against this app's designated requirement
+      // — a different signer (a rotated certificate, an ad-hoc rehearsal build)
+      // is refused there, asynchronously, as an `error` event. Without this the
+      // page would sit in "installing" while nothing happens.
+      autoUpdater.once("error", (error: unknown) => {
+        const now = this.state();
+        if (now.state === "downloaded" && now.phase === "installing") {
+          this.failInstall(transferReason(error));
+        }
+      });
       this.deps.onBeforeRestart();
       // Never returns: the installer replaces this process.
       autoUpdater.quitAndInstall();

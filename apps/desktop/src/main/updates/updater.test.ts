@@ -368,6 +368,27 @@ describe("stopping the background before an install (§2.3, R5)", () => {
     });
     updater.quitAndInstall = FakeUpdater.prototype.quitAndInstall;
   });
+
+  it("an installer that refuses the update later is reported, not waited on forever", async () => {
+    const controller = await staged();
+    const state = await controller.install();
+    expect(state).toMatchObject({ state: "downloaded", phase: "installing" });
+    // Squirrel.Mac checks the staged bundle against this app's designated
+    // requirement after `quitAndInstall` returned, and says no as an event.
+    updater.emit(
+      "error",
+      new Error(
+        "Code signature at URL did not pass validation: code failed to satisfy specified code requirement(s)",
+      ),
+    );
+    expect(controller.state()).toMatchObject({
+      state: "failed",
+      reason: "signatureMismatch",
+    });
+    expect(existsSync(join(directory, "updates", "pending-restart.json"))).toBe(
+      false,
+    );
+  });
 });
 
 /* ----------------- staged on an unsigned package (G3-3) ------------------ */
@@ -422,7 +443,10 @@ describe("an unsigned package stages but never installs", () => {
 
   it("the same package, signed, installs", async () => {
     const { controller } = await subject({
-      environment: () => ({ ...unsignedPackage("unsigned")(), signature: "signed" }),
+      environment: () => ({
+        ...unsignedPackage("unsigned")(),
+        signature: "signed",
+      }),
     });
     await controller.check(verdict());
     await controller.download();
