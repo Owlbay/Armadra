@@ -178,6 +178,22 @@ describe("AccountPage usage controls", () => {
     expect(screen.queryByRole("button", { name: "登出" })).toBeNull();
   });
 
+  it("Copilot 一行只说令牌存在哪儿", async () => {
+    getSettings.mockResolvedValue({ usage: { enabled: true } });
+    copilotAuth.mockResolvedValue({ signedIn: true, backend: "dpapi" });
+    render(
+      <TestProviders>
+        <AccountPage />
+      </TestProviders>,
+    );
+    await screen.findByText("令牌经 Windows DPAPI 加密保存。");
+    expect(
+      screen.queryByText(
+        "本平台没有可用的钥匙串，令牌存在权限 0600 的文件里。",
+      ),
+    ).toBeNull();
+  });
+
   it("已登录时提供登出，文件后端会说明这是降级", async () => {
     getSettings.mockResolvedValue({ usage: { enabled: true } });
     copilotAuth.mockResolvedValue({ signedIn: true, backend: "file" });

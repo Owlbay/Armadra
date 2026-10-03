@@ -66,6 +66,10 @@ export const modals: MessageModule = {
     "settings.copilotPrompt": "在 {value} 输入下面的验证码：",
     "settings.copilotFileBackend":
       "本平台没有可用的钥匙串，令牌存在权限 0600 的文件里。",
+    "settings.secretBackend.keychain": "令牌存在钥匙串里。",
+    "settings.secretBackend.dpapi": "令牌经 Windows DPAPI 加密保存。",
+    "settings.secretBackend.libsecret": "令牌经系统密钥环加密保存。",
+    "settings.secretBackend.file-encrypted": "令牌加密保存在数据目录里。",
     "settings.copilot.authorized": "已登录",
     "settings.copilot.expired": "验证码已过期，请重新登录",
     "settings.copilot.denied": "已在 GitHub 上拒绝授权",
@@ -355,6 +359,13 @@ export const modals: MessageModule = {
     "settings.copilotPrompt": "Enter this code at {value}:",
     "settings.copilotFileBackend":
       "No keychain on this platform; the token is kept in a 0600 file.",
+    "settings.secretBackend.keychain": "The token is kept in the keychain.",
+    "settings.secretBackend.dpapi":
+      "The token is encrypted with Windows DPAPI.",
+    "settings.secretBackend.libsecret":
+      "The token is encrypted with the system keyring.",
+    "settings.secretBackend.file-encrypted":
+      "The token is encrypted in the data directory.",
     "settings.copilot.authorized": "Signed in",
     "settings.copilot.expired": "The code expired. Sign in again.",
     "settings.copilot.denied": "Authorization was declined on GitHub",
