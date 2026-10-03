@@ -579,7 +579,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 ## 14. ACP：`/api/acp/*` 与 `/api/agents` 行的 `acp`
 
-设计见 [ACP 会话视图](../design/acp-session-view.md) 与 [补全架构](../design/completion-architecture.md) §5.1。ACP 是同一个终端节点的另一种驱动方式；协议栈是 `@armadra/agent/acp`（精确版本），core 只包装它的 `AcpClient`（`core/acp/client.ts`）。§14.2–§14.4 由 G2-1 填写。
+设计见 [ACP 会话视图](../design/acp-session-view.md) 与 [补全架构](../design/completion-architecture.md) §5.1。ACP 是同一个终端节点的另一种驱动方式；协议栈是 `@armadra/agent/acp`（精确版本），core 只包装它的 `AcpClient`（`core/acp/client.ts`）。
 
 ### 14.1 `GET /api/agents` 行的 `acp`
 
@@ -611,6 +611,48 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - 起会话失败的错误码（G2-1 的路由原样答出，形状 `{ code, message }`）：`acp_not_installed`、`acp_spawn_failed`、`acp_exited`、`acp_initialize_failed`、`acp_initialize_timeout`、`acp_protocol_version`、`acp_auth_required`（Agent 要先在 CLI 里登录）、`acp_session_failed`、`acp_mode_unsupported`、`acp_mode_unavailable`。消息里不带适配器的 stderr。
 - 实跑验证过的版本区间记在 `tools/release/compatibility.json` 的 `acp` 键（`{ protocolVersion: 1, adapters: { <id>: { program, verified: null | { min, max? } } } }`），不进发布说明的兼容围栏；`program` 与适配器表由测试对齐。
 - 状态来源词汇多一个 `acp`（`agent_status.state_source`）：由 core 在 ACP 驱动的会话上写入，与 `hook` / `extension` 一样算上报（`stateSourceIsReported`），客户端无法自称。
+
+### 14.2 会话路由 `/api/acp/*`
+
+实现：`apps/desktop/src/core/acp/routes.ts`；形状：共享层 `api/acp.ts`。ACP 会话**就是** `terminal_sessions` 的一行（`backend: "acp"`，§5.1 的会话行形状不变），所以行、代次、人类租约（`POST /api/terminals/{id}/drive`）、`terminate`、`wake`、会话侧栏都照旧作用于它。路径里的 `{sessionId}` 是这一行的 id，不是 ACP 会话 id。权限与终端同一档：读要 `terminal:read`，开会话要 `terminal:create`（记创建者），往别人开的会话里写要 `terminal:drive`，按会话行查画布。
+
+| 方法与路径                              | 请求                                                                               | 应答                                                                                                          |
+| --------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `POST /api/acp/sessions`                | `{ workspaceId, nodeId, cwd, agentId, permissionMode?, model?, resume?, prompt? }` | `200` 会话行（§5.1，`backend: "acp"`）                                                                        |
+| `POST /api/acp/sessions/{id}/prompt`    | `{ text }`                                                                         | `200 { turnId }`；回合的结局经 `acp.turn`（§14.3）                                                            |
+| `POST /api/acp/sessions/{id}/cancel`    | 无                                                                                 | `204`；`session/cancel`，挂起的审批一律回 `cancelled`                                                         |
+| `POST /api/acp/sessions/{id}/mode`      | `{ modeId }`                                                                       | `204`                                                                                                         |
+| `GET /api/acp/sessions/{id}/log?after=` | 无                                                                                 | `200 { entries: TranscriptEntry[], endOffset, modes: { currentModeId, availableModes[] } \| null, pending? }` |
+| `POST /api/acp/nodes/{nodeId}/driver`   | `{ driver: "acp" \| "terminal" }`                                                  | `200 { sessionId, resumed }`                                                                                  |
+
+- **起会话**：`nodeId` 不必已经在画布文档里（新建向导先起会话、节点随后落盘）；同一个节点已经有活着的 ACP 会话时答那一行（两台设备同时挂载、重试都不起第二个）；有活着的**终端**会话时 `409 conflict`（先切换驱动）；节点最近那一行是结束了的 ACP 行时在同一行上起下一代并接回。`prompt` 在会话开好后作为第一条提示发出（人类驾驶者）。没有 ACP 入口的 Agent 答 `400 acp_unsupported`；起不来的原样答 §14.1 的错误码（`acp_not_installed` 400、`acp_mode_unsupported` 400、`acp_mode_unavailable` 409、`acp_auth_required` 409、其余 502）。`custom:` 条目借基础 CLI 的适配器；基础 CLI 自己就是 ACP 入口（`native`）时，条目的 `launchCmd` 与 `args` 顶替表里的程序。
+- **提示**：等同在终端里敲一行并回车——经 `writeSubmit`，人类驾驶者（抢占租约，永不被拒）。同一会话一次一个回合，后到的排队。会话行已经结束（休眠、core 重启、适配器自己退了）时先在**同一行**上起下一代并以 CLI 会话 id 接回，再发；这一行已被节点的另一行取代时 `409 conflict`。
+- **镜像**：`entries` 是镜像 `<数据目录>/acp/<nodeId>/<ACP 会话 id>.acp.jsonl` 从字节偏移 `after` 起的完整记录（`TranscriptEntry`：`{ role: "user" | "assistant", blocks[], endOffset, at? }`，相邻的助手文本已合并），`endOffset` 是下一次的 `after`。**core 先写镜像再发 `acp.update`**：页面先订阅再读，读回来之前到的分块已经在 `entries` 里。镜像只记对话：我方的提示、助手文本、工具调用（`tool_use`）与它的终态结果（`tool_result`，正文截到 8000 字符）；思考、计划、用量、模式变化只经事件。`modes` 与 `pending`（挂起的审批，形状 `{ pendingId, protocol: "acp", toolCall, options[] }`）描述活着的进程，没有进程时 `modes: null`、无 `pending`。
+- **驱动切换**（ACP 设计 §4.2）：节点在 `blocked` / `waiting` 时 `409 awaiting_approval`；SSH 节点切到 ACP 答 `400 acp_unsupported`。否则结束当前驱动（终端先敲 CLI 的退出命令等它自己退，再结束；ACP 回合里先 cancel 再收掉进程），行以 `termination_intent = 'switch'` 结束；再在**同一行**上以另一种驱动起下一代（代次 +1，行 id 不变）：ACP 侧以 `agent_status.session_id` 接回（适配器表 `resume: "none"` 的新开），终端侧起 shell 并敲 CLI 的恢复行（不能续接时敲普通启动行）。`resumed` 如实说接上了没有。已经是目标驱动且活着时什么都不动，答 `resumed: true`。切换期间节点算「睡着」，`send` 排队。节点数据里的 `agent.driver` 由页面写回（不进撤销栈）。
+- **其余路由在 ACP 行上**：`GET /api/terminals/{id}/ws` 升级前答 `409`（没有 PTY 可附着）；`POST …/paste` 只收带回车的整段（`enter: false` 答 `409 acp_no_raw_write`）；`GET …/capture` 是镜像尾部渲染成的散文；`terminate` 的 `interrupt` 是 `session/cancel`。协作动词与调度经终端桥写入：`writeSubmit`（括号粘贴 + 回车）落为 `session/prompt`，单个 `ESC` 落为 `session/cancel`，其他字节答 `acp_no_raw_write`。
+
+### 14.3 事件
+
+工作空间事件流（§5）多三种，`sessionId` 一律是会话行 id（一行一帧）：
+
+```text
+{ "type": "acp.update", "sessionId": "…", "nodeId": "…", "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "…" } } }
+{ "type": "acp.turn", "sessionId": "…", "nodeId": "…", "turnId": "3-2", "stopReason": "end_turn" }
+{ "type": "acp.driver", "nodeId": "…", "driver": "terminal", "sessionId": "…", "resumed": true }
+```
+
+- `acp.update.update` 是 ACP `session/update` 的 `update` 原样（v1 规范字段；`_meta` 不解释）；core 发出的一条之前已经写进镜像。我方发出的提示也以一条 `user_message_chunk` 发出，别的设备看得见是谁说了什么。`session/load` 的回放从不发出。
+- `acp.turn`：一次提示的结束。`stopReason` 是规范的五个值之一；提示以 JSON-RPC 错误结束时没有 `stopReason`，带 `error: { code, message }`（`acp_protocol`，或进程没了时 `acp_exited`）。
+- `acp.driver`：一次切换完成（§14.2）。
+- 状态不另起事件：ACP 会话的状态经同一条 `agent.status` 发出，`status.stateSource = "acp"`。归一化（ACP 设计 §5.4）：我方发出提示 → `working`（新回合），工具调用 → `working`，`request_permission` → `blocked`（带 `pendingId`），答了或取消了 → `working`，`end_turn` / `max_tokens` / `max_turn_requests` → `done`，`cancelled` → `done` + `interrupted`，`refusal` 或错误 → `done` + `errored`；会话开好（新开或接回）→ `session` / `start`，`sessionId` 是 ACP 会话 id、`transcriptPath` 是 CLI 自己的转录（会话 id 对得上且本地找得到时）或镜像。适配器退出走终端退出（`terminal.exit`），与 PTY 死掉同一条路。
+
+### 14.4 审批
+
+`session/request_permission` 进现有的 `agent_approvals`，`pendingId` 形如 `<nodeId>-<epochMs>-acp-<n>`，`request_json` 为 `{ "protocol": "acp", "toolCall": {…}, "options": [{ "optionId", "name", "kind" }] }`；`agent.approval` 事件的 `request` 是这条审批记录（ACP 载荷在它的 `request` 字段里）。
+
+- 答复：`POST /api/approvals/{pendingId}/answer { decision: "allow" | "deny", optionId? }`。ACP 审批的 `optionId` 必须是 Agent 给的选项之一且与 `decision` 同类（`allow_*` / `reject_*`），否则 `400 bad_request`（审计记 `option_invalid`）；不给 `optionId` 时取第一个同类选项（节点头的允许 / 拒绝）。别的审批带 `optionId` 同样 `400`。先记录（CAS 不变），再送达：应答的 `route` 为 `acp` 表示已回到挂起的请求，`none` 表示进程已经不在。
+- 回合被取消、适配器退出、切换驱动、休眠：挂起的请求一律回 `cancelled`，审批行 `answer = "cancelled"`、`answered_by = "core"`，审计照写（`route: "acp"`），并以 `agent.approval`（`request.resolved = true`、`decision: "cancelled"`）通知各端收起按钮。core 启动时把上一个进程留下的未答 ACP 审批同样记成 `cancelled`。
+- core 从不替人选项，也从不自动回答 `request_permission`；`allow_always` 由适配器自己在进程内记忆。
 
 ## 15. 工作流与 runners：`/api/workflows/*`
 

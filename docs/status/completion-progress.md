@@ -257,7 +257,32 @@
 
 ## G2-1 ACP 会话语义（A2）
 
-未开始。
+做了什么：
+
+- ACP 是终端管理器的一个后端（`core/acp/bridge.ts::AcpBackend`，`BackendKind` 加 `acp`）：会话是 `terminal_sessions` 的 `acp` 行，行、代次、人类租约、输入围栏、退出通知、Eco 休眠只有一份实现。`writeSubmit`（括号粘贴 + 回车）→ `session/prompt`，单个 `ESC` → `session/cancel`，其余字节 `acp_no_raw_write`，`capture` 读镜像，`attach` 409。`manager.spawn` 可点名后端，`manager.revive` 支持在结束了的行上以另一种后端起下一代（驱动切换与 ACP 接回）。
+- `core/acp/session.ts`：一个节点一个适配器进程；回合排队、一次一个；先写镜像再发 `acp.update`，我方提示也发一帧；回放只在镜像空着时写进去、从不发给页面；审批进 `agent_approvals`（`request_json = { protocol: "acp", toolCall, options }`），取消 / 退出 / 切换 / 休眠一律回 `cancelled` 并记 `answered_by = core`。
+- `core/acp/normalize.ts` + `hook/normalize/index.ts` 的 `case "acp"`：§5.4 全表，经 `hook/ingest.ts::apply` 进同一个 reducer，来源 `acp`。
+- `agent/approvals.ts`：`ApprovalRoute` 加 `acp`、`optionId`（必须是 Agent 的选项且与决定同类）、`cancelOpenApproval`；core 启动时把上一进程留下的未答 ACP 审批记成 `cancelled`。
+- `core/acp/routes.ts`：`/api/acp/sessions`（节点不必已落盘，带 `prompt`）、`…/prompt`（结束了的行先原地接回）、`…/cancel`、`…/mode`、`…/log`、`/api/acp/nodes/{id}/driver`（同一行上切换，`resumed` 如实答）；路由门按会话行 / 节点查画布（`identity/route-access.ts`）。
+- 镜像 `core/acp/mirror.ts` + `history/acp-mirror.ts`（`readHistoryEntries` 先认 `.acp.jsonl`）；`agent/canvas-launch.ts::acpInjection` 按适配器表裁剪注入；ACP 节点的环境不带启动器 `PATH` 与 Hook 等答复变量（一个节点一个状态来源）。
+- 休眠：`stateSource = acp` 算上报，`resume: none`（Copilot）记 `noResume`，ACP 会话不敲退出命令、接回不敲恢复行（`hibernator.ts` 的 ACP 分支）；依赖编排与定时冷启动对 `driver: acp` 的节点起适配器、不敲启动行。
+- 前台门：ACP 会话的前台是适配器，它下面列这家 CLI 的进程名，`send` / `interrupt` 的门链不改。
+- `custom:` 条目的基础 CLI 自己是 ACP 入口（OpenCode、OMP、Copilot、ama）时，条目的启动程序顶替表里的程序（`adapters.ts::adapterFor`，`GET /api/agents` 同一条规则）。
+- 页面两处修正（G1-6 的文件）：会话视图写回会话 id 后骨架屏不退（`SessionView.tsx`）；切换驱动后节点头仍写「已退出」（`TerminalNode.tsx`、`driver.ts`）。
+- 契约 §14.2–§14.4；架构指南 ACP 一段；A 档 `acp-e2e`。
+
+实测：
+
+- 单测：`acp/{normalize,session,bridge,mirror,routes,driver-switch}.test.ts`、`terminal/hibernate.test.ts` 的 ACP 用例、`agent/approvals.test.ts`、`identity/route-access.test.ts`、`agent/canvas-launch.test.ts`，对 `@armadra/agent/acp` 的假 Agent（真子进程）。
+- `node tools/probes/acp-e2e.mjs`（本机 macOS，真 core + Vite + 无头 Chrome）：页面挂载起会话 → 一轮回复 → 审批卡点「拒绝」（`deny`、审计 `route = acp`）→ `armadra-hook canvas send` 投给另一个 ACP 节点（`delivered`）→ 节点菜单切到终端视图（PTY 起来、敲了恢复行）再切回（同一行、代次 1→2→3、CLI 会话 id 不变、之前的对话还在）→ Eco 秒级阈值休眠、页面发一句唤醒（适配器 pid 换了、会话 id 不变）→ 无控制台错误。
+
+没做：
+
+- `elicitation/create`（`@armadra/agent` 0.6.2 的客户端不交出这个请求）、模型经 `session/set_config_option`（起会话时不带模型）。
+- `pi-acp` 的 `mapFile`：按 `opaque` 处理（不读映射文件）。
+- ACP 驱动下的节点凭据兑换与 ama 的模型密钥（它们经画布启动器，ACP 直接起适配器）；SSH 节点不能切到 ACP（答 `acp_unsupported`）。
+- 画布工具注入：会话照常带 `canvasMcp`，`mcpInjected` 要等 `@armadra/agent` 支持传入 `mcpServers` 后才为真。
+- 真适配器（六家）的端到端在 G3-7。
 
 ## G2-2 输出到画板与普通用户入口（W2 + W3）
 
