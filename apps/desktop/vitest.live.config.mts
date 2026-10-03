@@ -7,7 +7,11 @@ import { defineConfig } from "vitest/config";
  */
 export default defineConfig({
   test: {
-    include: ["src/core/browser/headless/*live.integration.test.ts"],
+    include: [
+      "src/core/browser/headless/*live.integration.test.ts",
+      // passkey 对真 Chromium 的 WebAuthn（CDP 虚拟认证器）。
+      "src/core/identity/*live.integration.test.ts",
+    ],
     environment: "node",
     pool: "forks",
     setupFiles: ["src/core/testing/setup.ts"],
