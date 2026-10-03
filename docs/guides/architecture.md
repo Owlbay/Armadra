@@ -46,16 +46,39 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 ┌───────────────────────────────▼──────────────────────────────────────┐
 │ apps/desktop/src/core  TypeScript + node:http(s) + ws + node:sqlite    │
 │ 工作空间与画布、终端（tmux / 直连 PTY / SSH / Windows session-host）、 │
-│ 文件、Git、GitHub、身份、调度与自动化、语言服务、浏览器、Hook 服务、   │
-│ 会话索引、协作动词、用量快照                                          │
+│ ACP 会话（终端管理器的第四种后端）、文件、Git、GitHub、身份（口令策略、│
+│ passkey、TOTP、OAuth / OIDC、审计）、调度与自动化、工作流、实时协同与  │
+│ 评论、推送、Gateway（TLS / 本地 CA / ACME / 配对）、密钥后端、出站表、 │
+│ 崩溃上报剥离、语言服务、浏览器、Hook 服务、会话索引、协作动词、用量快照│
 └───────────────────────────────┬──────────────────────────────────────┘
                                 │ 本机回环 TCP / Unix socket
 ┌───────────────────────────────▼──────────────────────────────────────┐
 │ src/cli/armadra-hook  各 CLI 的 hook 与技能调用的小客户端（单文件 JS）│
 │ src/hook-client  端点、令牌、HTTP 与动词工具表（CLI 与适配器共用）    │
 │ src/agent-host/ama  ama 的宿主适配器：画布工具、状态上报、子任务、审批│
+│ （runners 把 ama 的 `task` 落成画布节点，`wait` 动词等结果）          │
 └──────────────────────────────────────────────────────────────────────┘
 ```
+
+补全阶段（[补全架构](../design/completion-architecture.md)）在 core 里新增或做实的域：
+
+| 目录                                    | 职责                                                                                    | 契约     |
+| --------------------------------------- | --------------------------------------------------------------------------------------- | -------- |
+| `core/acp/`                             | ACP 传输、适配器表、会话、镜像、驱动切换、`armadra-hook mcp` 注入、输出到画板的文本导出 | §14      |
+| `core/workflow/`                        | 草案、模板、运行、关卡、runner 任务；自动化目标「运行工作流」                           | §15      |
+| `core/realtime/`                        | 每块板一个 `Y.Doc`、更新流与快照、物化、awareness 校验、评论                            | §16      |
+| `core/gateway/`                         | 对外 TLS 面：本地 CA、指定文件、ACME、准入（Cookie / Bearer）、配对载荷                 | §17      |
+| `core/identity/`（加固与 `oauth/`）     | 口令策略、限流锁定、passkey、TOTP 与恢复码、OAuth / OIDC、审计筛选与导出、创建者记录    | §18、§23 |
+| `core/push/`                            | 设备登记、发送队列、触发规则、Web Push / APNs·FCM 直连 / 中继三条传输                   | §19      |
+| `core/agent/credentials/`               | 节点凭据：`kind → 变量名` 封闭表、条目、经 hook 面兑换                                  | §20      |
+| `core/remote/fleet.ts`、`core/handoff/` | Worker 舰队（版本、能力、健康记录、重新同步）与跨执行主机交接                           | §21      |
+| `core/secrets/`                         | 按平台的密钥后端（钥匙串、`safeStorage`、`file-encrypted`）                             | —        |
+| `core/net/outbound.ts`                  | core 全部出站地址的登记表，扫描测试强制                                                 | —        |
+| `core/diagnostics/`                     | 崩溃上报的剥离规则；SDK 只在壳里、只在用户填了 DSN 时加载                               | —        |
+
+core 之外的同类新增：`src/hook-client/`（动词工具表，`armadra-hook` 与 ama 适配器共用）、
+`src/agent-host/ama/`（ama 宿主适配器与 runners）、`apps/mobile`（Capacitor 手机壳）、
+`apps/push-relay`（商店版推送中继）、`tools/dev-stack/`（本地假外部服务）。
 
 三条边界不变：
 
@@ -254,7 +277,14 @@ Agent 之间的协作走 core 的两个动词表面：
 每个角色一个 Agent 节点），角色节点交给依赖编排的启动路径起，提示词经投递队列投出
 （发起方是起点便签）；步骤是否完成用与依赖边相同的判定。引擎订阅 `agent.status` /
 `agent.delivery` / `terminal.exit` 并每 30 秒扫一次，页面不在、重启之后都照样推进。契约见
-[core JSON 契约](../contracts/core-json-api.md) §15。
+[core JSON 契约](../contracts/core-json-api.md) §15。自动化可以把「运行工作流」作为目标定时起跑
+（`schedule/workflow-target.ts`，§15.6）。
+
+协调者 `ama`（第七个内置 Agent，随包的 `@armadra/agent`）的子任务经宿主适配器的 runners
+（`agent-host/ama/runners.ts`）落成画布节点：`start` 是 `open-agent --task-id`，`wait()`
+循环控制动词 `wait`（`collab/control/wait.ts`，长轮询，`running / done / failed / blocked /
+needsInput`），成员按 `task:<id>:result` 键 `post` 回报，任务行记在 `workflow_task_runs`
+（契约 §15.5）。
 
 所有 Agent 终端都能调用 `armadra-hook canvas help` 读取短帮助。画布启动的 CLI 带着
 画布说明（一段「画布规则」）与按需技能：协作只走 `armadra-hook canvas`，要别的 Agent
@@ -331,6 +361,14 @@ ACP 只是同一个 Agent 节点的另一种驱动方式（`core/acp/`，[ACP �
   正在编辑的一方，别人手里的租约让 `PUT …/document` 答 423 `canvas_lease_held`（判在
   CAS 之前），本页转只读并在右上角显示谁在编辑、可确认接管。core 自己的写者（控制
   动词、调度、依赖编排）不经租约。契约见 [core JSON 契约](../contracts/core-json-api.md) §9。
+- **实时板**（设置 `collab.realtime`，缺省开）不走租约：core 每块板一个 `Y.Doc`
+  （`core/realtime/`），更新流 `board_updates` + 快照 `board_snapshots` 是实时板的真相，
+  `nodes` / `edges` 与 `whiteboard_json` 由去抖物化得来（`boards.materialized_seq` 记到哪一条），
+  core 自己的写者经 `saveBoard` 前的拦截写进文档，实时板上带 `clientId` 的直写答 409
+  `realtime_active`。页面（`apps/web/src/realtime/`）把 `Y.Doc` 与 `canvas-store` 双向绑定，
+  `Y.UndoManager` 接管撤销，在线条与光标来自 awareness（core 按连接改写身份、校验形状），
+  断线时本地照常编辑、重连补齐；视口不进文档。评论存 `board_comments`，`@` 提及发
+  `board.comment` 事件，Agent 经连线读节点时附上未解决的评论线程。契约 §16。
 - 控制动词新建节点时，core 在 `board.changed` **之后**再广播一条
   `node.created{boardId, nodeId, nodeType, originNodeId}`。前者只说「板变新了」，
   后者说「新出现的是哪一个、谁要的」：正开着这块板的页面据此把新节点选中并把
@@ -354,6 +392,17 @@ SQLite 的迁移只有一个目录——`apps/desktop/src/core/db/migrations/`�
 | `context_links`                       | 供 Agent 查询的链接视图                             |
 | `hook_installs`                       | 每个 CLI 的 hook 安装记录                           |
 | `conversations`                       | 会话索引（provider + session id → 标题）            |
+
+补全阶段新增的迁移（0030–0035）：
+
+| 迁移                          | 表 / 列                                                                                                                                                                                                  | 域                                    |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `0030_agent_credentials.sql`  | `agent_credentials`：节点凭据条目（名字、Agent、`kind`），值不在库里，在密钥后端                                                                                                                         | `core/agent/credentials/`，契约 §20   |
+| `0031_realtime.sql`           | `boards.realtime`、`boards.materialized_seq`；`board_updates`（Yjs 更新流）、`board_snapshots`（快照）、`board_comments`（评论与回复、锚点、解决状态）                                                   | `core/realtime/`，契约 §16            |
+| `0032_identity_hardening.sql` | `identity_credentials` 加 passkey 的计数器 / AAGUID / transports / 标签；`identity_mfa`（TOTP，带重放防护）、`identity_recovery_codes`、`identity_lockouts`；`identity_sessions` 加最近访问、来源 IP、UA | `core/identity/`，契约 §18            |
+| `0033_push.sql`               | `push_devices`（挂在身份设备上的推送登记）、`push_outbox`（发送队列，终态留 7 天）                                                                                                                       | `core/push/`，契约 §19                |
+| `0034_workflow.sql`           | `workflow_drafts`、`workflow_templates`、`workflow_runs`、`workflow_run_steps`、`workflow_task_runs`（runner 任务）                                                                                      | `core/workflow/`，契约 §15            |
+| `0035_node_creators.sql`      | `node_creators`（节点的触发者）与触发器 `terminal_sessions_inherit_creator`（之后起的会话行继承创建者）                                                                                                  | `core/identity/creators.ts`，契约 §23 |
 
 `core/db/open.ts` 在同一 `BEGIN IMMEDIATE` 事务内先检查迁移账本，再执行已知迁移与启动恢复。未知版本、校验和不符、脏记录、损坏账本、无账本的非空 schema 或迁移历史缺口均拒绝启动；失败回滚并关闭连接，不改名、删除或重建原库。账本表与校验和算法沿用最初那套（SHA-384），所以装过旧版本的库照常打得开。既有 SQL 迁移文件保持原字节。
 
@@ -465,20 +514,31 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   失去写权的客户端当场交出画布写租约。没有请求主体时放行——桌面壳里没有第二个人，行为
   不变。设计见[服务器账号与共享](../design/server-accounts-and-sharing.md) §6，契约见
   [core JSON 契约](../contracts/core-json-api.md) §10。
+- 身份加固（契约 §18）：口令策略与随包常见口令表、按 IP 限流与按人锁定、passkey
+  （`@simplewebauthn/server`，IP 主机上如实不可用）、TOTP 与恢复码、OAuth / OIDC（PKCE、
+  `state` 一次性、JWKS 验签、绑定键按 issuer 派生）、审计筛选与 CSV 导出；新增写路由带
+  `X-Armadra-CSRF`。Agent 角色阶梯（契约 §23）：自己起的终端 operator 即可驱动与答审批，
+  别人的要 driver。
 
 ## 8. 未实现
 
-- **Windows 持久化会话**：session host 已实现并在 Windows CI 上通过，没有在真机上
-  长时间运行过（进度 §13、§33）。启动行方言、`.cmd` 绕过与 `.exe` 启动器同样只在
-  Windows CI 上跑过（进度 §54、§57、§61）。
-- **多人实时协同**：core 侧（`core/realtime/`，契约 §16.1–§16.2、§16.4）：每块板
-  一个 `Y.Doc`，快照 + 更新流是实时板的真相，表由物化得来；core 自己的写者经
-  `saveBoard` 前的拦截写进文档；awareness 按连接改写身份、校验形状。页面侧
-  （`apps/web/src/realtime/`）：开板时 `realtime || enabled` 就连 `…/sync`，
-  `Y.Doc` 与 `canvas-store` 双向绑定（origin 断开回声环），`Y.UndoManager` 接管
-  撤销，在线条与光标层来自 awareness，断线时本地照常编辑、重连补齐。设置
-  `collab.realtime`（缺省开）关掉时新板留在 §5 的编辑租约。评论（G2-6）尚未实现；
-  实时板的视口不进文档，只留在本窗口。
-- **自动更新**：electron-updater 已接通（`apps/desktop/src/main/updates/`），但未
-  签名的构建里更新器是关闭的——「没签名 = 什么也验证不了 = `notConfigured`」，
-  它绝不会报 `upToDate`（`shell-core/updates/availability.ts`）。
+逐包的「没做」见[补全进度](../status/completion-progress.md)，需要用户提供的条件汇总在
+同一文档 G4-1 一节。这里只列影响架构判断的几条：
+
+- **Windows 真机**：session host、启动行方言、`.cmd` 绕过与 `.exe` 启动器只在 Windows CI
+  上跑过，没有在真机上长时间运行（进度 §13、§33、§54、§57、§61）；节点凭据与 ama 模型密钥
+  的兑换在 Windows 启动器里没有实现，一律答 `credential_unsupported_here`。
+- **签名发布**：签名、公证、GPG 与更新清单的流程都已写好（[CI 与发布](ci-release.md)），
+  但没有真证书。未签名的发布包在 `ARMADRA_UPDATES_DEV=1` 下能检查、下载、校验、暂存，
+  「安装」答 `notSigned`；本地 `dist` 是 `localBuild`；更新器从不报没发生过的 `upToDate`
+  （`shell-core/updates/availability.ts`）。设置页的「检查」按钮仍不调壳（`use-update-state.ts`
+  报 `noReleaseSource`，壳侧定时检查在跑）。
+- **ACP 的未竟项**：`elicitation/create`、按模型选择（`session/set_config_option`）、`pi-acp`
+  的映射文件；ACP 驱动下不做节点凭据与 ama 密钥兑换；SSH 节点不能切到 ACP（`acp_unsupported`）。
+  六家真适配器的端到端属于 G3-7，未合入。
+- **Gateway / 手机**：配对只有两分钟票与二维码 / 链接，没有设计里的 8 位配对码；设备表没有
+  「平台」「最近访问」；`tls-alpn-01` 未做；推送中继写完不部署，UnifiedPush 未做；真机、商店与
+  真 APNs / FCM 都要用户的账号。
+- **口令泄露检查**：调用点 `identity/policy.ts::checkBreach` 恒答 `skipped`（G3-8 未合入）。
+- **外部服务里留到之后的三项**：W-MAIL（SMTP）、W-FORGE（GitLab / Gitea）、W-MIRROR（更新镜像），
+  见[外部服务](../design/external-services.md) §15。
