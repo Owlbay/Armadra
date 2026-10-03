@@ -1,4 +1,5 @@
 import { app } from "electron";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -45,13 +46,17 @@ export function packagedUpdateMode(): unknown {
  * Whether this package carries a platform signature that makes an update
  * trustworthy. See `SignatureState` for why `unknown` is refused.
  *
- * macOS is the only platform that can be answered cheaply and honestly: a
- * signed `.app` carries `Contents/_CodeSignature/CodeResources`, and an
- * unsigned one does not. (This says the bundle was signed, not that Gatekeeper
- * accepts it — `codesign --verify` would, and it is a subprocess on every
- * start. electron-updater performs the real check at install time, which is
- * where a broken signature has to stop things anyway; this read only decides
- * whether the shell may claim it is able to check at all.)
+ * macOS is answered cheaply: a signed `.app` carries
+ * `Contents/_CodeSignature/CodeResources`, and an unsigned one does not.
+ * (This says the bundle was signed, not that Gatekeeper accepts it — the
+ * release workflow asserts `codesign --verify --deep --strict` on every
+ * bundle before it is uploaded, and Squirrel.Mac checks the update against
+ * the running app's designated requirement at install time.)
+ *
+ * Windows asks Authenticode itself (`windowsSignatureState`): only `Valid` —
+ * a signature that chains to a trusted root and covers these bytes — is
+ * `signed`. A self-signed rehearsal certificate is `unknown`, which is
+ * refused exactly like no signature at all.
  */
 export function signatureState(
   platform: string = process.platform,
@@ -70,11 +75,59 @@ export function signatureState(
   // trustworthy is the feed's own digest plus the sha256 the Host published,
   // and both are checked whether or not anything was signed.
   if (platform === "linux") return "notApplicable";
-  // Windows Authenticode is not read here, and `unknown` is refused: the
-  // research doc states the order plainly — sign first, then turn on automatic
-  // updates, because an unsigned automatic update is a step backwards in
-  // trust. W2.3 owns the signing and replaces this line.
+  if (platform === "win32") return cachedWindowsState(executable);
   return "unknown";
+}
+
+/** Runs one PowerShell command and returns what it printed. */
+export type PowerShell = (command: string) => string;
+
+const powershell: PowerShell = (command) =>
+  execFileSync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", command],
+    { encoding: "utf8", timeout: 15_000, windowsHide: true, stdio: "pipe" },
+  );
+
+/**
+ * `Get-AuthenticodeSignature`'s verdict on one file, as a `SignatureState`.
+ *
+ * `Valid` is the only `signed`; `NotSigned` is `unsigned`; everything else —
+ * `UnknownError` (a self-signed or otherwise untrusted chain), `HashMismatch`,
+ * `NotTrusted`, `NotSupportedFileFormat`, a PowerShell that would not start —
+ * is `unknown`, and `unknown` is refused (external services §2.2).
+ */
+export function windowsSignatureState(
+  executable: string,
+  run: PowerShell = powershell,
+): SignatureState {
+  const literal = executable.replace(/'/g, "''");
+  let status: string;
+  try {
+    status = run(
+      `(Get-AuthenticodeSignature -LiteralPath '${literal}').Status.ToString()`,
+    ).trim();
+  } catch {
+    return "unknown";
+  }
+  if (status === "Valid") return "signed";
+  if (status === "NotSigned") return "unsigned";
+  return "unknown";
+}
+
+/**
+ * One PowerShell start per process: the executable does not change while it
+ * runs, and the updater asks on every check.
+ */
+const windowsStates = new Map<string, SignatureState>();
+
+function cachedWindowsState(executable: string): SignatureState {
+  let state = windowsStates.get(executable);
+  if (state === undefined) {
+    state = windowsSignatureState(executable);
+    windowsStates.set(executable, state);
+  }
+  return state;
 }
 
 /**
@@ -124,15 +177,32 @@ function packagedEndpoint(): string[] {
 }
 
 /**
+ * Whether a plain-HTTP release server on loopback may be read.
+ *
+ * A development build always may for the manifest and the feed (it has no
+ * certificate to offer a local server either); the *index* additionally needs
+ * `ARMADRA_UPDATES_DEV=1`. A packaged build may only with
+ * `ARMADRA_UPDATES_DEV=1`, which is how `tools/probes/update-e2e.mjs` walks a
+ * real package against the dev-stack `release` service. Loopback only, never
+ * another host, and the platform signature is still what decides whether the
+ * staged bytes are ever installed (`installRefusal`).
+ */
+export function allowInsecureLoopback(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return !app.isPackaged || developmentOverride(env);
+}
+
+/**
  * The release index this shell asks, or `null` when it was given none it can
- * read. A loopback `http:` source is accepted only from a development build
- * with `ARMADRA_UPDATES_DEV=1`, the same exception the manifest fetch makes.
+ * read. A loopback `http:` source is accepted only with
+ * `ARMADRA_UPDATES_DEV=1`, the same exception the manifest fetch makes.
  */
 export function releaseSource(env = process.env): string | null {
   return releaseSourceFor(
     env[SOURCE_ENV] ?? "",
     [...configuredEndpoints(env), ...packagedEndpoint()],
-    !app.isPackaged && developmentOverride(env),
+    developmentOverride(env),
   );
 }
 

@@ -17,6 +17,8 @@ import {
   configuredEndpoints,
   developmentOverride,
   initialState,
+  installRefusal,
+  installable,
   markerDisables,
   missingUpdaterConfig,
   shouldEnableUpdater,
@@ -181,4 +183,31 @@ it("the release address comes from the environment, comma separated", () => {
     "http://127.0.0.1:8123/v0.2.0",
     "https://releases.invalid/latest",
   ]);
+});
+
+/**
+ * G3-3: `ARMADRA_UPDATES_DEV=1` lets an unsigned package walk check → download
+ * → verify → stage, and never lets it install.
+ */
+it("only a signed or notApplicable package may install what it staged", () => {
+  expect(installable("signed")).toBe(true);
+  expect(installable("notApplicable")).toBe(true);
+  expect(installable("unsigned")).toBe(false);
+  expect(installable("unknown")).toBe(false);
+
+  for (const signature of ["unsigned", "unknown"] as const) {
+    const unsigned = environment({ signature, developmentOverride: true });
+    // It may check (the override makes it "trustworthy enough to look")…
+    expect(shouldEnableUpdater(unsigned)).toBe(true);
+    // …and it may not install.
+    expect(installRefusal(unsigned)).toBe("notSigned");
+  }
+  expect(installRefusal(environment())).toBeNull();
+  expect(
+    installRefusal(environment({ signature: "notApplicable" })),
+  ).toBeNull();
+  // A development build is not a package to replace; electron-updater judges it.
+  expect(
+    installRefusal(environment({ packaged: false, signature: "unsigned" })),
+  ).toBeNull();
 });

@@ -361,8 +361,73 @@ describe("stopping the background before an install (§2.3, R5)", () => {
       false,
     );
     // …and the tray must stop offering a restart that would fail the same way.
-    expect(announcements).toContainEqual({ ready: false, version: "" });
+    expect(announcements).toContainEqual({
+      ready: false,
+      version: "",
+      installable: false,
+    });
     updater.quitAndInstall = FakeUpdater.prototype.quitAndInstall;
+  });
+});
+
+/* ----------------- staged on an unsigned package (G3-3) ------------------ */
+
+describe("an unsigned package stages but never installs", () => {
+  /** A packaged build whose platform signature says it cannot be trusted. */
+  function unsignedPackage(signature: "unsigned" | "unknown") {
+    return () => ({
+      packaged: true,
+      marker: undefined,
+      publishConfigured: true,
+      signature,
+      developmentOverride: true,
+    });
+  }
+
+  for (const signature of ["unsigned", "unknown"] as const) {
+    it(`a ${signature} package is checked, verified and staged, then not installed`, async () => {
+      const notices: string[] = [];
+      const announcements: unknown[] = [];
+      const { controller } = await subject({
+        environment: unsignedPackage(signature),
+        notify: (_title, body) => notices.push(body),
+      });
+      controller.onStaged((update) => announcements.push(update));
+      expect((await controller.check(verdict())).state).toBe("available");
+      // The whole transfer path runs: electron-updater's download and the
+      // Host's digest, exactly as for a signed package.
+      expect((await controller.download()).state).toBe("downloaded");
+      expect(announcements).toEqual([
+        { ready: true, version: "0.2.0", installable: false },
+      ]);
+      // The notification says what is true: verified, staged, not installing.
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatch(/unsigned/);
+      expect(notices[0]).not.toMatch(/^Restart/);
+
+      expect(await controller.install()).toEqual({
+        state: "downloaded",
+        offer: expect.objectContaining({ version: "0.2.0" }),
+        phase: "ready",
+        problem: "notSigned",
+      });
+      // Nothing was stopped, written or handed to an installer.
+      expect(updater.installs).toBe(0);
+      expect(restarts).toBe(0);
+      expect(
+        existsSync(join(directory, "updates", "pending-restart.json")),
+      ).toBe(false);
+    });
+  }
+
+  it("the same package, signed, installs", async () => {
+    const { controller } = await subject({
+      environment: () => ({ ...unsignedPackage("unsigned")(), signature: "signed" }),
+    });
+    await controller.check(verdict());
+    await controller.download();
+    await controller.install();
+    expect(updater.installs).toBe(1);
   });
 });
 
