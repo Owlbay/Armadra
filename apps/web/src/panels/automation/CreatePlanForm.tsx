@@ -7,6 +7,7 @@ import {
   type NativeRecurrence,
 } from "@armadra/shared";
 
+import { Alert, AlertDescription, AlertTitle } from "@/ui/alert";
 import { Button } from "@/ui/button";
 import { Input } from "@/ui/input";
 import {
@@ -481,12 +482,11 @@ export function CreatePlanForm({
         )}
 
         {prefill?.origin === "native" ? (
-          <p
-            role="status"
-            className="rounded-md border border-border px-3 py-2 text-[11px] text-muted-foreground"
-          >
-            {t("automation.wizard.fromNative")}
-          </p>
+          <Alert role="status">
+            <AlertDescription className="text-[11px]">
+              {t("automation.wizard.fromNative")}
+            </AlertDescription>
+          </Alert>
         ) : null}
 
         {/*
@@ -494,33 +494,32 @@ export function CreatePlanForm({
           让人自己决定怎么写——不硬凑一个「差不多」的周期。
         */}
         {translated ? (
-          <div
+          <Alert
             role="status"
             data-slot="native-recurrence"
             data-translated={translated.ok ? "true" : "false"}
-            className="min-w-0 space-y-1 rounded-md border border-border px-3 py-2 text-[11px] text-muted-foreground"
           >
-            <p>
-              {translated.ok
-                ? t("automation.wizard.recurrenceTranslated")
-                : t(`automation.wizard.recurrence.${translated.reason}`)}
-            </p>
-            <p className="min-w-0 break-all font-mono select-text">
-              {t(`automation.wizard.dialect.${translated.source.dialect}`)} ·{" "}
-              {translated.source.rule}
-            </p>
-          </div>
+            <AlertDescription className="min-w-0 space-y-1 text-[11px] [&_p:not(:last-child)]:mb-0">
+              <p>
+                {translated.ok
+                  ? t("automation.wizard.recurrenceTranslated")
+                  : t(`automation.wizard.recurrence.${translated.reason}`)}
+              </p>
+              <p className="min-w-0 break-all font-mono select-text">
+                {t(`automation.wizard.dialect.${translated.source.dialect}`)} ·{" "}
+                {translated.source.rule}
+              </p>
+            </AlertDescription>
+          </Alert>
         ) : null}
 
         {edit ? (
           <>
-            <p
-              role="status"
-              data-slot="automation-edit-notice"
-              className="rounded-md border border-border px-3 py-2 text-[11px] text-muted-foreground"
-            >
-              {t("automation.wizard.editNote")}
-            </p>
+            <Alert role="status" data-slot="automation-edit-notice">
+              <AlertDescription className="text-[11px]">
+                {t("automation.wizard.editNote")}
+              </AlertDescription>
+            </Alert>
             {field(
               t("automation.wizard.targetKind"),
               <p className="min-w-0 truncate rounded-md border border-border px-3 py-2 text-[12px] text-muted-foreground select-text">
@@ -957,9 +956,11 @@ export function CreatePlanForm({
           {t(edit ? "automation.wizard.saved" : "automation.wizard.created")}
         </p>
         {edit && stored.isError ? (
-          <p role="status" className="text-[11px] text-destructive">
-            {t("automation.wizard.payloadUnavailable")}
-          </p>
+          <Alert variant="destructive">
+            <AlertTitle className="text-[12px] font-normal">
+              {t("automation.wizard.payloadUnavailable")}
+            </AlertTitle>
+          </Alert>
         ) : null}
         <Button
           type="submit"

@@ -2,6 +2,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
+import { Empty, EmptyHeader, EmptyTitle } from "@/ui/empty";
 import {
   Select,
   SelectContent,
@@ -72,9 +73,13 @@ export function RunHistory({
       </Select>
 
       {runs.isSuccess && rows.length === 0 && (
-        <p className="text-[12px] text-muted-foreground">
-          {t("automation.emptyRuns")}
-        </p>
+        <Empty data-slot="automation-runs-empty">
+          <EmptyHeader>
+            <EmptyTitle className="text-[13px] font-normal text-muted-foreground">
+              {t("automation.emptyRuns")}
+            </EmptyTitle>
+          </EmptyHeader>
+        </Empty>
       )}
 
       {rows.map(({ run }) =>
