@@ -23,6 +23,7 @@ import { TerminalPage } from "./settings/pages/TerminalPage";
 import { UpdatesPage } from "./settings/pages/UpdatesPage";
 import { WhiteboardPage } from "./settings/pages/WhiteboardPage";
 import { WorkspacePage } from "./settings/pages/WorkspacePage";
+import { SecurityPage } from "./settings/pages/security/SecurityPage";
 import { subpageTitleKey } from "./settings/subpage";
 import {
   DEFAULT_SETTINGS_SECTION,
@@ -45,6 +46,7 @@ const SECTION_PAGES: Record<string, () => React.ReactElement> = {
   integration: IntegrationPage,
   host: HostPage,
   accounts: AccountsSharingPage,
+  security: SecurityPage,
   github: GithubPage,
   terminal: TerminalPage,
   browser: BrowserPage,

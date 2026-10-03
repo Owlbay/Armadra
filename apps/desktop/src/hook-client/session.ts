@@ -11,7 +11,15 @@ import { discoverCandidates, envVar, nodeToken } from "./endpoint.js";
 import type { Endpoint } from "./endpoint.js";
 import { send as httpSend } from "./http.js";
 import type { HookRequest, HookResponse } from "./http.js";
-import { HOOK_CLIENT_REVISION } from "./usage.js";
+
+/**
+ * Value of the `X-Armadra-Hook-Client` header. Bumped when the wire behaviour
+ * of this client changes so the runtime can flag stale installs — the
+ * TypeScript port changed no wire behaviour, so it stays on the Rust client's
+ * number. Lives here rather than in the CLI's `usage.ts` because every user of
+ * the shared client (the CLI, the MCP bridge, the ama adapter) sends it.
+ */
+export const HOOK_CLIENT_REVISION = "4";
 
 export interface Session {
   nodeId: string;
