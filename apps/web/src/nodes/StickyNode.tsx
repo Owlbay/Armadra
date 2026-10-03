@@ -9,6 +9,7 @@ import { openNodeAnnotation } from "@/meta/annotations";
 import { formatRelativeTime } from "@/lib/format";
 import { useCanvasStore } from "@/store/canvas-store";
 import { useT } from "@/app/preferences-store";
+import { rebaseText } from "@/realtime/doc";
 import type { NodeBodyProps } from "./registry";
 
 /**
@@ -20,6 +21,9 @@ export function StickyNode({ id, node }: NodeBodyProps) {
   const content = node.data.kind === "sticky" ? node.data.content : "";
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(content);
+  // 开始编辑那一刻的正文：编辑期间别人（实时板上的另一个人）改了正文时，
+  // 提交按它把这次的改动落到最新的正文上，而不是整段盖掉（`rebaseText`）。
+  const base = React.useRef(content);
 
   React.useEffect(() => {
     if (!editing) setDraft(content);
@@ -35,8 +39,9 @@ export function StickyNode({ id, node }: NodeBodyProps) {
    */
   function commit(value: string) {
     setEditing(false);
-    if (value !== content) {
-      useCanvasStore.getState().updateNodeData(id, { content: value });
+    const next = rebaseText(base.current, value, content);
+    if (next !== content) {
+      useCanvasStore.getState().updateNodeData(id, { content: next });
     }
   }
 
@@ -50,7 +55,9 @@ export function StickyNode({ id, node }: NodeBodyProps) {
     () => () => {
       const last = pending.current;
       if (!last.editing || last.draft === last.content) return;
-      useCanvasStore.getState().updateNodeData(id, { content: last.draft });
+      useCanvasStore.getState().updateNodeData(id, {
+        content: rebaseText(base.current, last.draft, last.content),
+      });
     },
     [id],
   );
@@ -83,11 +90,13 @@ export function StickyNode({ id, node }: NodeBodyProps) {
           aria-label={t("node.sticky")}
           className="sticky-markdown min-h-0 flex-1 cursor-text overflow-auto px-2 py-1.5 text-xs leading-relaxed"
           onClick={() => {
+            base.current = content;
             setDraft(content);
             setEditing(true);
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
+              base.current = content;
               setDraft(content);
               setEditing(true);
             }
