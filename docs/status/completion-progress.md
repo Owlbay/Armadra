@@ -516,7 +516,24 @@
 
 ## G3-2 Windows 真机验收包
 
-未开始。
+做了什么：
+
+- 验收探针 `tools/probes/windows-acceptance.mjs`（纯函数与 CDP 在 `windows-acceptance-lib.mjs`，临时 HOME 用 `probe-home.mjs`）：`--installer` 静默装 NSIS 包到临时目录、`--app` 对着已装的跑、`--dry-run` 只验脚本；22 项检查（安装与包内布局、Authenticode、更新器状态、sessionHost 后端、cmd / pwsh 7 / 5.1 三个终端的回显与 capture、会话宿主进程与命名管道、三种 shell 里 `armadra-launch.exe` 的参数 / 注入 / 门 / 凭据兑换、DPAPI 凭据状态、回环 Gateway 的 TLS 与关闭、文件监听、保活与资源采样、杀主进程后接回、ConPTY 关闭证明、日志、静默卸载、真实用户配置前后快照），写 `result.json`（形状与回传方式见开发指南「Windows 真机验收」）。干跑进 `pnpm release:test`（三平台）；`nightly.yml` 新增 `windows-acceptance` 作业在 windows runner 上打包并完整跑一遍（保活两分钟），失败进 report 作业的 issue 表。
+- 会话宿主后端的 capture 接 `replay-screen.ts`（状态 §60.5 第三条）：字节排成当前一屏，多帧回放只在首帧重来、多条附着只由最新的一条喂屏幕。
+- Windows 启动器兑换节点凭据与 ama 密钥：`.launch` 多 `credential=` / `credential-var=` / `ama-keys=` / `ama-var=`，`armadra-launch.exe` 起 `armadra-hook credential [--ama]` 读标准输出，名字不在名单、客户端失败或缺席都拒绝启动；core 在有 `armadra-launch.exe` 时对 Windows 开放节点凭据（没有时仍 `credential_unsupported_here`）。契约 §20.2–§20.4、§12.4 与文案同步。
+- 探针在 runner 上跑出来、随包修掉的 Windows 问题（之前打包版 Windows 实际不可用）：桌面壳让 core 听 `unix:C:\…\runtime.sock`，core 拒绝、窗口弹「后台未就绪」——改为命名管道（`main/runtime-process.ts`）；会话宿主取 SID 的裸 `whoami` 在 PATH 有 Git usr\bin 时是 GNU 版——改系统 `whoami.exe` 绝对路径；包外的 `session-host/host.cjs` 找不到 `node-pty`——从 `app.asar.unpacked` 加载；页面一松开终端，会话宿主后端把关连接当成会话退出、行被记 `exited`——主动松开不再报退出；会话宿主建会话只带注入的变量、终端环境继承表按大小写精确匹配，Windows 的 `SystemRoot` / `ComSpec` / `TEMP` 全丢、PowerShell 5.1 起不来（8009001d）——补基础环境并在 Windows 上不分大小写、补系统变量（不含 `PSModulePath`）。
+
+实测：
+
+- windows runner（Windows Server 2025 Datacenter 10.0.26100，pwsh 7.6.6，PowerShell 5.1）上的未签名本地包，`nightly` 运行 37141727509 的 `windows-acceptance` 产物：`status: passed`，20 项过、`install.signature` warn（未签名）、`agent.codex` skip（runner 无 Codex），全程 218 秒；保活两分钟内会话宿主 83→67 MB、句柄 267 不变，杀主进程后三个 shell 同 pid 接回并应答，终止后会话宿主名下的控制台宿主 3→0，卸载后安装目录、注册表卸载项与两个快捷方式都不在，真实用户配置 16 处未变。
+- CI 的 Windows 作业：`windows-launch.test.ts` 新增三例（凭据兑换、拒绝、ama 多行）真编 `armadra-launch.exe` 跑过；`session-host/capture.test.ts`（命名管道 + 假控制台）与 `runtime-process.test.ts` 的管道占用用例在 Windows 上跑。
+- 本机：`pnpm libs:build && pnpm -r --if-present test` 全绿；`pnpm check` 通过。
+
+没做：
+
+- 真机（用户的 Windows 10 / 11、真 CLI、30 分钟保活、用户自己的 shell 配置）没有跑：需用户按开发指南跑一次 `--installer`（有 Codex 时加 `--with-codex`）并回传 `result.json`。
+- 会话宿主空闲三十分钟才退：应用退出后马上卸载或升级时，宿主仍占着 `Armadra.exe`。electron-builder 的 NSIS 会按安装目录结束进程，但一次 runner 运行里卸载后仍留下了 `armadra.exe`（删除与进程退出赛跑）；探针收尾时先结束它再卸载，并把结束掉的进程记进 detail。是否让宿主在没有会话且没有 core 连着时提早退出，留给后续。
+- `agent.codex` 只验「启动行是 `run\codex.exe`、画面出现 Codex」，不验对话；Claude / Copilot 等其他 CLI 与 SSH 节点未覆盖。
 
 ## G3-3 签名、公证与自动更新端到端
 
