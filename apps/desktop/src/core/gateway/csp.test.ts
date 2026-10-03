@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { contentSecurityPolicy, serverContentSecurityPolicy } from "./csp";
+import {
+  GATEWAY_API_HEADERS,
+  GATEWAY_RESPONSE_HEADERS,
+  contentSecurityPolicy,
+  nativeAppContentSecurityPolicy,
+  serverContentSecurityPolicy,
+} from "./csp";
 
 describe("服务器壳的 CSP", () => {
   it("与桌面壳同一个来源：指令集合逐条相同", () => {
@@ -35,5 +41,39 @@ describe("服务器壳的 CSP", () => {
     ]) {
       expect(policy).toContain(directive);
     }
+  });
+});
+
+describe("原生 App（Capacitor）的 CSP", () => {
+  it("指令集合与桌面壳相同，只多出连 Gateway 的 https / wss", () => {
+    const names = (policy: string) =>
+      policy.split("; ").map((directive) => directive.split(" ")[0]);
+    const policy = nativeAppContentSecurityPolicy();
+    expect(names(policy)).toEqual(names(contentSecurityPolicy()));
+    expect(policy).toContain("connect-src 'self' https: wss:");
+    expect(policy).toContain("img-src 'self' data: blob: https:");
+    // 手机上的回环端口不是 Armadra；连接只走 TLS。
+    expect(policy).not.toContain("127.0.0.1");
+    expect(policy).not.toContain("localhost");
+    const connect = policy
+      .split("; ")
+      .find((directive) => directive.startsWith("connect-src"));
+    expect(connect).not.toMatch(/\shttp:|\sws:/);
+    expect(policy).toContain("default-src 'self'");
+    expect(policy).toContain("object-src 'none'");
+  });
+});
+
+describe("Gateway 的响应头", () => {
+  it("每个答案都有 HSTS 与 nosniff；接口再加沙箱 CSP 与缺省不缓存", () => {
+    expect(GATEWAY_RESPONSE_HEADERS["strict-transport-security"]).toMatch(
+      /max-age=\d{8,}/,
+    );
+    expect(GATEWAY_RESPONSE_HEADERS["x-content-type-options"]).toBe("nosniff");
+    expect(GATEWAY_API_HEADERS["content-security-policy"]).toContain(
+      "default-src 'none'",
+    );
+    expect(GATEWAY_API_HEADERS["content-security-policy"]).toContain("sandbox");
+    expect(GATEWAY_API_HEADERS["cache-control"]).toBe("no-store");
   });
 });

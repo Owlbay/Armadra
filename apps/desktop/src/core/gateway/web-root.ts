@@ -3,7 +3,7 @@ import { lstat, realpath } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import { existsSync } from "node:fs";
 import { dirname, extname, join, resolve, sep } from "node:path";
-import { serverContentSecurityPolicy } from "./csp";
+import { TRANSPORT_SECURITY, serverContentSecurityPolicy } from "./csp";
 
 /**
  * 托管 `apps/web` 的构建产物。
@@ -167,7 +167,7 @@ export function staticHeaders(file?: ServedFile): Record<string, string> {
     "x-content-type-options": "nosniff",
     "referrer-policy": "no-referrer",
     // 页面只在 TLS 上服务；一年的 HSTS 是这类部署的下限。
-    "strict-transport-security": "max-age=31536000",
+    "strict-transport-security": TRANSPORT_SECURITY,
     "cache-control": file?.cacheControl ?? "no-store",
     ...(file === undefined ? {} : { "content-type": file.contentType }),
   };

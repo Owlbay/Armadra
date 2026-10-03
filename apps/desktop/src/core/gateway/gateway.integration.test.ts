@@ -566,6 +566,28 @@ describe("安全收尾（G3-8）", () => {
     expect(created.status).toBe(201);
   });
 
+  it("每个答案都带 HSTS 与 nosniff；接口是沙箱 CSP、缺省不缓存", async () => {
+    const api = await remote("/api/identity/session", { person: owner });
+    expect(api.status).toBe(200);
+    expect(api.headers["strict-transport-security"]).toMatch(/max-age=\d+/);
+    expect(api.headers["x-content-type-options"]).toBe("nosniff");
+    expect(String(api.headers["content-security-policy"])).toContain("sandbox");
+    expect(api.headers["cache-control"]).toBe("no-store");
+    // 门拒掉的答案同样带。
+    const refused = await remote("/api/workspaces", {
+      origin: "https://evil.example",
+    });
+    expect(refused.status).toBe(403);
+    expect(refused.headers["strict-transport-security"]).toMatch(/max-age/);
+    const page = await remote("/", { origin: null });
+    expect(page.headers["strict-transport-security"]).toMatch(/max-age/);
+    expect(String(page.headers["content-security-policy"])).toContain(
+      "default-src 'self'",
+    );
+    const anchor = await remote("/ca.crt", { origin: null });
+    expect(anchor.headers["strict-transport-security"]).toMatch(/max-age/);
+  });
+
   it("对外服务的改动与配对票进审计，票本身不进（安全审查 M5）", async () => {
     const payload = await pairing();
     const audit = await remote("/api/identity/audit?action=gateway&limit=100", {

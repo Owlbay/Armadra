@@ -33,6 +33,7 @@ import {
   originsFor,
 } from "./network";
 import { type PairingTicket, pairingLinks } from "./pairing";
+import { GATEWAY_API_HEADERS, GATEWAY_RESPONSE_HEADERS } from "./csp";
 import { type TlsMaterial, resolveTls } from "./tls";
 import { type WebRoot, resolveFile, sendFile, staticHeaders } from "./web-root";
 
@@ -292,6 +293,15 @@ async function handle(
 ): Promise<void> {
   const path = pathOf(request);
   const method = (request.method ?? "GET").toUpperCase();
+  // 每一个经 Gateway 的答案都带 HSTS 与 nosniff；接口与健康检查再加沙箱 CSP
+  // 与缺省不缓存（`csp.ts`）。core 的 `writeHead` 只覆盖它自己写的那几个名字，
+  // 所以答案自己给了缓存策略时以它为准。静态产物在 `sendFile` 里另写一份。
+  const api = path === "/health" || path === "/api" || path.startsWith("/api/");
+  for (const [name, value] of Object.entries(
+    api ? GATEWAY_API_HEADERS : GATEWAY_RESPONSE_HEADERS,
+  )) {
+    response.setHeader(name, value);
+  }
   if (path === CA_PATH && (method === "GET" || method === "HEAD")) {
     sendAnchor(response, state.tls(), method);
     return;
@@ -315,7 +325,7 @@ async function handle(
     refuse(response, admission.refusal);
     return;
   }
-  if (path === "/health" || path === "/api" || path.startsWith("/api/")) {
+  if (api) {
     if (admission.bearer !== undefined && admission.origin !== undefined) {
       if (path === WS_TICKET_PATH) {
         answerWsTicket(response, method, admission, state.context);
