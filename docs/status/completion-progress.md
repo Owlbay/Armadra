@@ -659,7 +659,7 @@
 
 **实测**（本机，未起任何真 CLI、未用真账号）：`--only 11`（脚本化模型，含 ama → ama 第 5 步）30 项全过；`--only 11 --real-model --self-test` 23 项全过；`--only 12 --self-test` 六家 40 项全过，约 164 秒；没设开关时 `--only 12` / `--only 2` / `--only 11 --real-model` 都在起进程前退出。
 
-**补丁（真跑反馈）**：共用装配的 Claude / Codex 前提改为可选（`preflight.mjs`；没有 `~/.codex/auth.json` 的机器 Codex 记 skipped、依赖它的场景跳过，其余照跑），`--preflight` / `--setup-only`，场景 10 加 `ARMADRA_E2E_TUI_ONLY`（没选的家连凭据都不读）；场景 12 终端视图的信任对话框改为等到「<编号>. Yes」画出来再答（只在画面最后 40 行里找；真跑时 Claude Code 2.1.287 在选项画出来之前就被判「认不出」），超时带画面失败、始终不按回车；场景 11 真模型的「便签里是成员回报的结果」接受转述（主体与结论都在）。自检：`preflight.test.mjs` 6 条（进 `release:test`）；临时 HOME 无 auth.json、PATH 全是假 CLI 时 `--preflight` 与 `--setup-only` 跳过场景 1、只建 claude 节点、没起任何真 CLI；场景 11 两种、场景 12 自检全过。
+**补丁（真跑反馈）**：共用装配的 Claude / Codex 前提改为可选（`preflight.mjs`；没有 `~/.codex/auth.json` 的机器 Codex 记 skipped、依赖它的场景跳过，其余照跑），`--preflight` / `--setup-only`，场景 10 加 `ARMADRA_E2E_TUI_ONLY`（没选的家连凭据都不读），只选了两家时跳过沿环 send（两家成不了不回头的环，core 判成环拒收，还会挡住下一步的排队回执；实跑 claude、pi 撞上）；场景 12 终端视图的信任对话框改为等到「<编号>. Yes」画出来再答（只在画面最后 40 行里找；真跑时 Claude Code 2.1.287 在选项画出来之前就被判「认不出」），超时带画面失败、始终不按回车；场景 11 真模型的「便签里是成员回报的结果」接受转述（主体与结论都在）。自检：`preflight.test.mjs` 6 条（进 `release:test`）；临时 HOME 无 auth.json、PATH 全是假 CLI 时 `--preflight` 与 `--setup-only` 跳过场景 1、只建 claude 节点、没起任何真 CLI；场景 11 两种、场景 12 自检全过。
 
 **没做**：场景 11 真模型版、场景 12 真跑、OpenCode / OMP / Copilot 交互式 TUI 的真跑与画面门特征核实——按手册由用户（或经用户直接授权的会话）跑；`compatibility.json` 各家 `verified` 仍为 null（没有真跑证据）。Copilot 三条权限旗标在 `--acp` 下是否生效、OMP `acp` 是否接受 `--model=`、Pi 的 `settings.json` 键名未经实跑核实，真跑结果出来后按装机结果修。
 

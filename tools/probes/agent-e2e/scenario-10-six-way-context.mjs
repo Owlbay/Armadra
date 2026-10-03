@@ -456,6 +456,16 @@ export default async function run10(ctx) {
     /* --------------------------- 3. 沿环 send --------------------------- */
 
     await timed("send", async () => {
+      // 只有两家时成不了不回头的环：A → B 之后 B 再投给 A，投递链判成环、core
+      // 正确地拒收；而且这一轮的来源链会挡住下一步的排队回执（实跑 claude、pi
+      // 两家时撞上）。跳过并写原因，与场景 12 同一规矩。
+      if (ring.length < 3) {
+        const why = `只有 ${ring.length} 家，成不了不回头的环（投递链会判成环）`;
+        for (const node of ring)
+          matrix[familyOf[node.id]].send = `skipped: ${why}`;
+        s.check("沿环 send：跳过", true, why);
+        return;
+      }
       const before = Object.fromEntries(
         ring.map((node) => [node.id, deliveriesTo(node.id).length]),
       );

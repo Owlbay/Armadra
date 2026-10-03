@@ -290,7 +290,7 @@ ARMADRA_E2E_REAL=1 node tools/probes/agent-e2e.mjs target/agent-e2e-acp --only 1
 ARMADRA_E2E_REAL=1 ARMADRA_E2E_AMA_KEY=<key> node tools/probes/agent-e2e.mjs target/agent-e2e-coord --only 11 --real-model
 # 开跑前看计划：各家前提（Claude / Codex 的 --version、auth.json 刷新时间）与哪些场景会跳过；不起 core
 ARMADRA_E2E_REAL=1 node tools/probes/agent-e2e.mjs target/agent-e2e-plan --only 1,2,3,4,5,7,8,10 --preflight
-# 场景 10：六家交互式 TUI（OpenCode / OMP / Copilot 的画面存进 screens/）；ARMADRA_E2E_TUI_ONLY=claude,pi 只跑这几家
+# 场景 10：六家交互式 TUI（OpenCode / OMP / Copilot 的画面存进 screens/）；ARMADRA_E2E_TUI_ONLY=claude,pi 只跑这几家（少于三家时沿环 send 记 skipped）
 ARMADRA_E2E_REAL=1 node tools/probes/agent-e2e.mjs target/agent-e2e-tui --only 10
 ```
 
