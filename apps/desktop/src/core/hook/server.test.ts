@@ -67,7 +67,7 @@ describe.skipIf(process.platform === "win32")("the hook unix socket", () => {
       path,
       `POST /hook/claude HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n` +
         `X-Armadra-Hook-Token: ${one.bearer}\r\nX-Armadra-Node-Token: ${token}\r\n` +
-        `X-Armadra-Hook-Client: 4\r\nContent-Length: ${Buffer.byteLength(body)}\r\n` +
+        `X-Armadra-Hook-Client: 5\r\nContent-Length: ${Buffer.byteLength(body)}\r\n` +
         `Connection: close\r\n\r\n${body}`,
     );
     expect(reported.startsWith("HTTP/1.1 204"), reported).toBe(true);

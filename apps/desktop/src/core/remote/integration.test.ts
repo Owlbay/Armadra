@@ -509,6 +509,19 @@ describe("Codex's trust on an execution host", () => {
         expect(args).not.toHaveProperty("codexCommand");
       }
       expect(integration.outdatedWorkers()).toEqual(["old"]);
+
+      // 「重新同步」（契约 §21.2）：升级后的 Worker 重新定位、同步、开中继，
+      // 待升级记号随之消失；没开过终端的主机什么也不发。
+      capabilities.set("old", true);
+      const before = calls.length;
+      await integration.resync("old");
+      const resynced = calls.slice(before).map(([operation]) => operation);
+      expect(resynced[0]).toBe("integration.locate");
+      expect(resynced).toContain("hook.listen");
+      expect(integration.outdatedWorkers()).toEqual([]);
+      const idle = calls.length;
+      await integration.resync("never-opened");
+      expect(calls.length).toBe(idle);
       integration.stop();
     } finally {
       unregister();

@@ -33,8 +33,11 @@ export function normalizeAs(
       return opencode.normalize(nodeId, agentId, payload);
     // One parser for both: OMP is a fork of Pi's extension API and the
     // vocabularies differ by an alias, not by a shape.
+    // `ama`'s host adapter reports Pi's vocabulary in the same payload shape,
+    // plus two approval events `pi.ts` already maps (coordinator-agent §2.3).
     case "pi":
     case "omp":
+    case "ama":
       return pi.normalize(nodeId, agentId, payload);
     default:
       return claude.normalize(nodeId, agentId, payload);

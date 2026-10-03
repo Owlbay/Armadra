@@ -92,14 +92,29 @@ test("a platform's placements are its out/ bundles plus every migration, nothing
       ),
     );
   }
-  // Only Windows carries the session host; every platform carries the hook.
-  assert.deepEqual(
-    bundleResources("darwin").map((r) => r.to),
-    ["cli/armadra-hook.js", "tray.png"],
-  );
+  // Only Windows carries the session host; every platform carries the hook
+  // and the bundled ama with its host adapter.
+  const ama = [
+    "agent/ama.cjs",
+    "agent/ama-sandbox.cjs",
+    "agent-host/ama-armadra.cjs",
+  ];
+  for (const platform of ["darwin", "linux"]) {
+    assert.deepEqual(
+      bundleResources(platform).map((r) => r.to),
+      ["cli/armadra-hook.js", "tray.png", ...ama],
+    );
+  }
   assert.deepEqual(
     bundleResources("win32").map((r) => r.to),
-    ["cli/armadra-hook.js", "tray.png", "session-host/host.cjs"],
+    ["cli/armadra-hook.js", "tray.png", ...ama, "session-host/host.cjs"],
+  );
+  // The paths the core looks for (`hook/install/shared.ts::agentBundle`,
+  // `agentHostBundle`) under `process.resourcesPath`.
+  assert.ok(
+    bundleResources("darwin").some(
+      (r) => r.from === "out/agent/ama.cjs" && r.to === "agent/ama.cjs",
+    ),
   );
 });
 

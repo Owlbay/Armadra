@@ -375,4 +375,29 @@ describe("board documents", () => {
       }),
     ).toThrowError(/reload before saving/);
   });
+
+  it("实时板上直写被拒：表不是这块板的真相（补全架构 §6.3）", () => {
+    core.database
+      .prepare("UPDATE boards SET realtime = 1 WHERE id = ?")
+      .run(board.id);
+    const request = {
+      expectedUpdatedAt: board.updatedAt,
+      nodes: [stickyNode(board.id)],
+      edges: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+    };
+    // 没有实时域接手（core 写者）与带 clientId（HTTP）两条路都拒。
+    expect(() =>
+      saveBoard(core.database, workspaceId, board.id, request),
+    ).toThrowError(/realtime mode/);
+    expect(() =>
+      saveBoard(core.database, workspaceId, board.id, {
+        ...request,
+        clientId: "client-aaaaaaaa",
+      }),
+    ).toThrowError(/realtime mode/);
+    expect(loadBoard(core.database, workspaceId, board.id).nodes).toHaveLength(
+      0,
+    );
+  });
 });

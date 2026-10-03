@@ -1,0 +1,29 @@
+/*
+ * 强制态（设计展示页 §2.2）：只在展示页加载。
+ *
+ * 组件矩阵里「悬停」「焦点」两列不能靠真的指针与键盘，于是给样本打
+ * `data-hover` / `data-focus`，这里按 shadcn 组件同一套规则画出来：
+ * 悬停叠一层 `--hover`，焦点是 `--ring` 边 + 3px 50% 的环（与生成组件的
+ * `focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50`
+ * 一致）。不进 layer：Tailwind 的工具类都在 layer 里，这里自然压得住。
+ */
+
+[data-hover] {
+  background-image: linear-gradient(var(--hover), var(--hover));
+}
+
+[data-focus] {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent);
+}
+
+[data-focus][aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+
+/* forced-colors 下不画假环：系统颜色里只有真焦点才该有轮廓。 */
+@media (forced-colors: active) {
+  [data-focus] {
+    box-shadow: none;
+  }
+}

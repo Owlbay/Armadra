@@ -1,6 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
-import { badRequest, conflict, rfc3339 } from "../workspaces/support";
-import { getBoard } from "./boards";
+import {
+  DomainError,
+  badRequest,
+  conflict,
+  rfc3339,
+} from "../workspaces/support";
+import { type Board, getBoard } from "./boards";
 import type {
   BoardDocument,
   CanvasEdge,
@@ -63,7 +68,82 @@ interface EdgeRow {
   updated_at: string;
 }
 
+/* --------------------------- 实时板（契约 §16.2） -------------------------- */
+
+/**
+ * 实时板的两个挂点，由 `core/realtime` 装配时登记（按库登记：同一进程里的两个
+ * core 各有各的）。
+ *
+ *   * `beforeLoad`：读一块实时板之前，把文档里还没物化的更新先落进表，读到的
+ *     就是文档的当前投影。
+ *   * `save`：core 自己的写者（控制动词、调度、依赖编排）对实时板的保存。
+ *     拦截把请求与文档 diff 后以 `origin: "core"` 的事务写进文档，再物化。
+ *
+ * 没登记时实时板一律拒写：表不是这块板的真相，绕过文档写表等于丢掉别人的
+ * 编辑。
+ */
+export interface RealtimeBoardHooks {
+  beforeLoad(
+    database: DatabaseSync,
+    workspaceId: string,
+    boardId: string,
+  ): void;
+  save(
+    database: DatabaseSync,
+    workspaceId: string,
+    boardId: string,
+    request: SaveBoardRequest,
+  ): BoardDocument;
+}
+
+const realtimeHooks = new WeakMap<DatabaseSync, RealtimeBoardHooks>();
+
+/** 登记（`undefined` 撤销）这个库的实时挂点。返回撤销函数。 */
+export function setRealtimeHooks(
+  database: DatabaseSync,
+  hooks: RealtimeBoardHooks | undefined,
+): () => void {
+  if (hooks === undefined) realtimeHooks.delete(database);
+  else realtimeHooks.set(database, hooks);
+  return () => {
+    if (realtimeHooks.get(database) === hooks) realtimeHooks.delete(database);
+  };
+}
+
+/** 409 `realtime_active`：这块板已经切到实时，表不能直接写（契约 §16.2）。 */
+export function realtimeActive(): DomainError {
+  return new DomainError(
+    409,
+    "realtime_active",
+    "Board is in realtime mode; edits go through the sync stream",
+  );
+}
+
+/** `boards.realtime`：这块板的真相是不是 `Y.Doc`。 */
+export function isRealtimeBoard(
+  database: DatabaseSync,
+  boardId: string,
+): boolean {
+  const row = database
+    .prepare("SELECT realtime FROM boards WHERE id = ?")
+    .get(boardId) as { realtime: number | bigint } | undefined;
+  return row !== undefined && Number(row.realtime) === 1;
+}
+
 export function loadBoard(
+  database: DatabaseSync,
+  workspaceId: string,
+  boardId: string,
+): BoardDocument {
+  const hooks = realtimeHooks.get(database);
+  if (hooks !== undefined && isRealtimeBoard(database, boardId)) {
+    hooks.beforeLoad(database, workspaceId, boardId);
+  }
+  return readBoard(database, workspaceId, boardId);
+}
+
+/** 只读表、不经实时挂点。物化自己读回结果用它，免得再触发一次物化。 */
+export function readBoard(
   database: DatabaseSync,
   workspaceId: string,
   boardId: string,
@@ -200,6 +280,9 @@ function orderNode(node: Record<string, unknown>): CanvasNode {
  * orphan cleanup and the upserts. A save that fails part way takes the
  * cleanup back with it — a node that still exists must never be missing its
  * status.
+ *
+ * 实时板（契约 §16.2）：带 `clientId` 的写（HTTP 那条路，旧页面）一律 409
+ * `realtime_active`；core 自己的写者交给实时挂点，经文档写入；没有挂点也拒。
  */
 export function saveBoard(
   database: DatabaseSync,
@@ -208,20 +291,79 @@ export function saveBoard(
   request: SaveBoardRequest,
 ): BoardDocument {
   const board = getBoard(database, workspaceId, boardId);
+  if (isRealtimeBoard(database, board.id)) {
+    const hooks = realtimeHooks.get(database);
+    if (request.clientId !== undefined || hooks === undefined) {
+      throw realtimeActive();
+    }
+    return hooks.save(database, workspaceId, boardId, request);
+  }
   validateDocument(board.id, request.nodes, request.edges);
   validateViewport(request.viewport);
-
-  const viewportJson = JSON.stringify({
-    x: request.viewport.x,
-    y: request.viewport.y,
-    zoom: request.viewport.zoom,
-  });
   let whiteboard = board.whiteboard;
   if (request.whiteboard !== undefined) {
     validateWhiteboard(request.whiteboard);
     whiteboard = request.whiteboard;
   }
+  writeDocument(database, board, {
+    expectedUpdatedAt: request.expectedUpdatedAt,
+    nodes: request.nodes,
+    edges: request.edges,
+    viewportJson: JSON.stringify({
+      x: request.viewport.x,
+      y: request.viewport.y,
+      zoom: request.viewport.zoom,
+    }),
+    whiteboard,
+  });
+  return readBoard(database, workspaceId, boardId);
+}
 
+/**
+ * 物化入口：把实时板文档的投影写进表（补全架构 §6.3）。
+ *
+ * 只给 `core/realtime` 用。与 `saveBoard` 同一套校验与差异写入，区别只有两处：
+ * 没有调用方的修订号可比（文档就是真相，CAS 比的是此刻表里的那一份），视口
+ * 不进文档，所以原样保留。
+ */
+export function materializeBoard(
+  database: DatabaseSync,
+  workspaceId: string,
+  boardId: string,
+  projection: {
+    readonly nodes: readonly CanvasNode[];
+    readonly edges: readonly CanvasEdge[];
+    readonly whiteboard: string;
+  },
+): BoardDocument {
+  const board = getBoard(database, workspaceId, boardId);
+  validateDocument(board.id, projection.nodes, projection.edges);
+  validateWhiteboard(projection.whiteboard);
+  writeDocument(database, board, {
+    expectedUpdatedAt: board.updatedAt,
+    nodes: projection.nodes,
+    edges: projection.edges,
+    viewportJson: JSON.stringify(board.viewport),
+    whiteboard: projection.whiteboard,
+  });
+  return readBoard(database, workspaceId, boardId);
+}
+
+interface DocumentWrite {
+  readonly expectedUpdatedAt: string;
+  readonly nodes: readonly CanvasNode[];
+  readonly edges: readonly CanvasEdge[];
+  readonly viewportJson: string;
+  readonly whiteboard: string;
+}
+
+function writeDocument(
+  database: DatabaseSync,
+  board: Board,
+  request: DocumentWrite,
+): void {
+  const viewportJson = request.viewportJson;
+  const whiteboard = request.whiteboard;
   database.exec("BEGIN IMMEDIATE");
   try {
     const nextUpdatedAt = rfc3339();
@@ -349,7 +491,6 @@ export function saveBoard(
     database.exec("ROLLBACK");
     throw error;
   }
-  return loadBoard(database, workspaceId, boardId);
 }
 
 export type { BoardDocument, CanvasEdge, CanvasNode, SaveBoardRequest };

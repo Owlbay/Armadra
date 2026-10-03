@@ -18,7 +18,14 @@ import { Button } from "@/ui/button";
  * 验证地址只显示成可复制的文本，不做成会自动打开的链接——设置页里冒出一个
  * 外部跳转不该由一次开关点击触发。
  */
-export function CopilotSignIn({ disabled }: { disabled?: boolean }) {
+export function CopilotSignIn({
+  disabled,
+  signInDisabled,
+}: {
+  disabled?: boolean;
+  /** `usage.copilotUsage` 关着：不能开始登录，但已登录的仍可登出。 */
+  signInDisabled?: boolean;
+}) {
   const t = useT();
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState<CopilotLoginProgress | null>(null);
@@ -90,7 +97,11 @@ export function CopilotSignIn({ disabled }: { disabled?: boolean }) {
           variant="secondary"
           size="sm"
           disabled={
-            disabled || auth.isLoading || login.isPending || logout.isPending
+            disabled ||
+            (!signedIn && signInDisabled) ||
+            auth.isLoading ||
+            login.isPending ||
+            logout.isPending
           }
           onClick={() => (signedIn ? logout.mutate() : login.mutate())}
         >

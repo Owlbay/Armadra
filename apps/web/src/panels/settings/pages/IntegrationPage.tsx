@@ -1,5 +1,5 @@
-import { useMutation } from "@tanstack/react-query";
-import { Wrench } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { RefreshCw, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import type {
   AgentHistory,
@@ -39,6 +39,10 @@ import {
  *     「信任记录写在…」。
  *  4. **迁移与旧残留**——升级时清掉的旧全局安装（备份在哪），以及更早的产品
  *     名留下的条目与「修复」。
+ *
+ * 页首另有一组「Worker 待升级」的执行主机（契约 §21.2，集成状态的
+ * `outdatedHosts`）：那些主机上 SSH 终端里的画布启动带的是旧注入，每台一个
+ * 「重新同步」。各 CLI 的集成状态给的是同一份主机表，所以只画一次。
  */
 export function IntegrationPage() {
   const t = useT();
@@ -46,18 +50,68 @@ export function IntegrationPage() {
   const list = agents.data ?? [];
 
   return (
+    <>
+      {list[0] && <OutdatedWorkers agent={list[0]} />}
+      <SettingsGroup>
+        {list.map((agent) => (
+          <AgentIntegrationRow key={agent.id} agent={agent} />
+        ))}
+        {/* 一行都没有时整页是空白的——没有 CLI 与还没读完看起来一模一样。 */}
+        {list.length === 0 && (
+          <SettingsRow
+            label={t(
+              agents.isPending ? "integration.loading" : "integration.empty",
+            )}
+          />
+        )}
+      </SettingsGroup>
+    </>
+  );
+}
+
+/** 过旧 Worker 的执行主机，每台一行：徽标 + 「重新同步」。没有就什么都不画。 */
+function OutdatedWorkers({ agent }: { agent: AgentInfo }) {
+  const t = useT();
+  const client = useQueryClient();
+  const { integration } = useAgentIntegration(agent);
+  const resync = useMutation({
+    mutationFn: (hostId: string) => runtimeApi.resyncExecutionHost(hostId),
+    onSuccess: (host) => {
+      void client.invalidateQueries({ queryKey: ["agent-integration"] });
+      void client.invalidateQueries({ queryKey: ["execution-hosts"] });
+      toast.success(
+        t("integration.resynced", { name: host.name || host.executionHostId }),
+      );
+    },
+    onError: (cause: Error) =>
+      toast.error(t("integration.resyncFailed"), {
+        description: cause.message,
+      }),
+  });
+  const hosts = integration?.outdatedHosts ?? [];
+  if (hosts.length === 0) return null;
+  return (
     <SettingsGroup>
-      {list.map((agent) => (
-        <AgentIntegrationRow key={agent.id} agent={agent} />
+      {hosts.map((host) => (
+        <SettingsRow key={host.hostId} label={host.name || host.hostId}>
+          <Badge variant="destructive">
+            {host.version
+              ? t("integration.outdatedHost.version", {
+                  version: host.version,
+                })
+              : t("integration.outdatedHost")}
+          </Badge>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={resync.isPending}
+            onClick={() => resync.mutate(host.hostId)}
+          >
+            <RefreshCw />
+            {t("integration.resync")}
+          </Button>
+        </SettingsRow>
       ))}
-      {/* 一行都没有时整页是空白的——没有 CLI 与还没读完看起来一模一样。 */}
-      {list.length === 0 && (
-        <SettingsRow
-          label={t(
-            agents.isPending ? "integration.loading" : "integration.empty",
-          )}
-        />
-      )}
     </SettingsGroup>
   );
 }

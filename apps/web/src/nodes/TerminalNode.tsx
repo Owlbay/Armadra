@@ -17,6 +17,9 @@ import { Popover, PopoverAnchor, PopoverContent } from "@/ui/popover";
 import {
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -30,6 +33,7 @@ import { useAgentModels } from "../agent/models";
 import { useNodeCapabilities } from "@/agent/capabilities";
 import { PendingLaunchButton } from "@/agent/PendingLaunchButton";
 import { StateSourceBadge } from "@/agent/StateSourceBadge";
+import { useSimpleMode } from "@/acp/simple-mode";
 import {
   agentHeaderState,
   useAgentStatus,
@@ -55,8 +59,15 @@ import { NodeShell } from "./NodeShell";
 import type { NodeBodyProps } from "./registry";
 import { answerApproval } from "./runtime-extras";
 import { registerTerminalHandle } from "./terminal-registry";
+import { canUseAcp, driverOf, switchDriver } from "@/acp/driver";
 // 副作用：注册 Agent 专属的右键菜单项（重启 / 权限模式 / 回收）
 import "./terminal-menu";
+
+/**
+ * ACP 驱动的节点体（ACP 设计 §6）。按需加载：消息流带着 Markdown 渲染，
+ * 一块只有终端的画布不该为它付体积。
+ */
+const SessionView = React.lazy(() => import("@/acp/SessionView"));
 
 /** 清未读（本地 + 回执）。已读时是空操作，可以随手调。 */
 function markNodeRead(nodeId: string): void {
@@ -80,6 +91,8 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
       data.ssh.hostId)
     : null;
   const agentStatus = useAgentStatus(id);
+  // 节点体二选一（ACP 设计 §4.1）：头部、徽标、菜单两种驱动共用。
+  const driver = driverOf(agent);
   const surfaceRef = React.useRef<TerminalSurfaceHandle>(null);
 
   const [surface, setSurface] = React.useState<TerminalSurfaceStatus>({
@@ -150,7 +163,11 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
    * 里；这里只负责在合适的时刻叫它一次。
    */
   const reported = Boolean(agentStatus?.lastEventAt);
-  const sessionId = surface.binding?.sessionId ?? null;
+  // ACP 会话没有 PTY 绑定：会话行的 id 就在节点数据里。
+  const sessionId =
+    driver === "acp"
+      ? (data?.sessionId ?? null)
+      : (surface.binding?.sessionId ?? null);
   const generation = surface.binding?.generation ?? null;
   React.useEffect(() => {
     if (!agent || !reported) return;
@@ -169,7 +186,8 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
     const handle = surfaceRef.current;
     if (!handle) return;
     return registerTerminalHandle(id, handle);
-  }, [id]);
+    // 换回终端视图时表面才挂上，句柄要在那时补登记。
+  }, [id, driver]);
 
   // 胶囊 / 光晕的映射表在 status-store：会话侧栏与子代理卡片读同一张表。
   const header = agent ? agentHeaderState(agentStatus) : {};
@@ -196,6 +214,7 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
 
   const exited =
     surface.connection === "exited" || surface.connection === "failed";
+  const simple = useSimpleMode();
   // 节能休眠（终端宿主设计 §7.2）：进程不在，不占内存，也没有人在驱动它。
   const hibernated = surface.render === "hibernated";
 
@@ -223,7 +242,7 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
           visible={!collapsed}
         />
       )}
-      {agent && <AccountBindingBadge agent={agent} />}
+      {agent && <AccountBindingBadge agent={agent} nodeId={id} />}
       {agent && <HandoffBadge nodeId={id} />}
       {/*
         启动前在等谁（Agent 自动化设计 §6）。等待与启动都归 core，这里读的是
@@ -412,6 +431,26 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
           unknown 不画按钮，免得点开一个用不了的菜单。
           改模型不重启已经在跑的会话：那会杀掉用户正在进行的对话。写进
           节点数据，下一次启动的启动行带上它，并如实说明这一点。 */}
+      {/* 会话视图 / 终端视图（ACP 设计 §4.2）：当前那一项打钩；没有 ACP
+          入口的 Agent 不出现。 */}
+      {agent && canUseAcp(agent) && (
+        <>
+          <DropdownMenuRadioGroup
+            value={driver}
+            onValueChange={(value) =>
+              void switchDriver(id, value === "acp" ? "acp" : "terminal")
+            }
+          >
+            <DropdownMenuRadioItem value="acp">
+              {t("acp.view.session")}
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="terminal">
+              {t("acp.view.terminal")}
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+          <DropdownMenuSeparator />
+        </>
+      )}
       {agent && modelSelectable && (
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
@@ -460,6 +499,7 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
       onKeyDown={(event) => {
         // ⌘F / Ctrl+F 在终端里打开头部的搜索框，而不是浏览器查找
         if (
+          driver === "terminal" &&
           (event.metaKey || event.ctrlKey) &&
           event.key.toLowerCase() === "f"
         ) {
@@ -481,26 +521,43 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
           : {})}
         {...(header.glow ? { glow: header.glow } : {})}
         {...(approval ? { approval } : {})}
-        {...(agent && !exited
+        {...(agent && !exited && !simple
           ? {
               headerMark: (
                 <StateSourceBadge source={agentStatus?.stateSource} />
               ),
             }
           : {})}
-        headerChips={headerChips}
+        // 简洁模式：头部只留状态胶囊与审批（ACP 设计 §8 第 3 条）。
+        headerChips={simple ? null : headerChips}
         headerActions={headerActions}
         menuItems={menuItems}
       >
-        <TerminalSurface
-          ref={surfaceRef}
-          nodeId={id}
-          data={data}
-          collapsed={collapsed}
-          onStatusChange={onStatusChange}
-          onBell={onBell}
-          onFind={onFind}
-        />
+        {/* 换驱动时节点体淡入（设计系统 §5.1），尺寸不变。 */}
+        <div
+          key={driver}
+          className="h-full w-full"
+          data-driver={driver}
+          style={{
+            animation: "armadra-fade-in var(--dur-fast) var(--ease-out)",
+          }}
+        >
+          {driver === "acp" ? (
+            <React.Suspense fallback={null}>
+              <SessionView nodeId={id} data={data} />
+            </React.Suspense>
+          ) : (
+            <TerminalSurface
+              ref={surfaceRef}
+              nodeId={id}
+              data={data}
+              collapsed={collapsed}
+              onStatusChange={onStatusChange}
+              onBell={onBell}
+              onFind={onFind}
+            />
+          )}
+        </div>
       </NodeShell>
     </div>
   );

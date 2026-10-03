@@ -11,7 +11,9 @@
  *   3. `session/load` 回放的 `session/update` 标 `replay`，会话层不写镜像、
  *      不发给页面（§5.3）；
  *   4. 权限模式落到 `session/set_mode`；`plan` 找不到对应模式 id 时拒绝启动
- *      ——说了只读却以可写模式起来比起不来更糟。
+ *      ——说了只读却以可写模式起来比起不来更糟；
+ *   5. 开会话（new / load / resume）带 `mcpServers`（画布工具，§5.8，`mcp.ts`）
+ *      ——客户端不支持时照旧开，结果里 `mcpInjected: false`。
  *
  * 会话、桥、归一化与路由在 G2-1；这里不碰数据库。
  */
@@ -20,6 +22,7 @@ import type { PermissionMode } from "../agent/launch";
 import { launchTargetOf, resolveCommand } from "../agent/registry";
 import { agentPath } from "../terminal/environment";
 import { type AcpAdapter, type AcpResume, acpLaunchPlan } from "./adapters";
+import { type CanvasMcpInput, acpMcpServers, sessionOpener } from "./mcp";
 import {
   AcpError,
   type AcpExit,
@@ -30,6 +33,7 @@ import {
 } from "./client";
 import type {
   AcpInitializeResult,
+  AcpMcpServer,
   AcpSessionModeState,
   AcpSessionNotification,
 } from "./types";
@@ -71,6 +75,8 @@ export interface AcpStartOptions {
   readonly requireMode?: boolean;
   /** 接回这个会话；`method` 是适配器表的偏好。 */
   readonly resume?: { readonly sessionId: string; readonly method: AcpResume };
+  /** 开会话时交给 Agent 的 MCP 服务器（§5.8）；缺席或空 = 不带。 */
+  readonly mcpServers?: readonly AcpMcpServer[];
   readonly initializeTimeoutMs?: number;
   readonly onUpdate?: (
     notification: AcpSessionNotification,
@@ -97,6 +103,11 @@ export interface AcpHostSession {
   readonly modes: AcpSessionModeState | null;
   /** 要求了模式：落上了没有。没要求时缺席。 */
   readonly modeApplied?: boolean;
+  /**
+   * 要求带 MCP 服务器：真的随开会话发出去了没有（客户端旧版不支持时为
+   * false，会话照样可用、只是没有画布工具）。没要求时缺席。
+   */
+  readonly mcpInjected?: boolean;
 }
 
 /* -------------------------------- 版本缓存 -------------------------------- */
@@ -181,6 +192,7 @@ export async function startAcp(
       versions.set(options.agentId, capabilities.agent.version);
     }
 
+    const opener = sessionOpener(process_.client, options.mcpServers ?? []);
     let opened: AcpOpenMethod = "new";
     let sessionId: string | undefined;
     let modes: AcpSessionModeState | null = null;
@@ -198,11 +210,11 @@ export async function startAcp(
         try {
           if (method === "load") {
             replaying = id;
-            const result = await process_.client.loadSession(id, options.cwd);
+            const result = await opener.loadSession(id, options.cwd);
             modes = result.modes ?? null;
             opened = "load";
           } else {
-            const result = await process_.client.resumeSession(id, options.cwd);
+            const result = await opener.resumeSession(id, options.cwd);
             modes = result.modes ?? null;
             opened = "resume";
           }
@@ -221,7 +233,7 @@ export async function startAcp(
 
     if (sessionId === undefined) {
       try {
-        const result = await process_.client.newSession(options.cwd);
+        const result = await opener.newSession(options.cwd);
         sessionId = result.sessionId;
         modes = result.modes ?? null;
       } catch (error) {
@@ -259,6 +271,9 @@ export async function startAcp(
       capabilities,
       modes,
       ...(modeApplied === undefined ? {} : { modeApplied }),
+      ...((options.mcpServers?.length ?? 0) === 0
+        ? {}
+        : { mcpInjected: opener.mcpInjected }),
     };
   } catch (error) {
     await process_.terminate();
@@ -354,13 +369,24 @@ function rpcCode(error: unknown): number | undefined {
 export interface AcpAdapterStart
   extends Omit<
     AcpStartOptions,
-    "program" | "args" | "modeId" | "requireMode" | "resume" | "agentId"
+    | "program"
+    | "args"
+    | "modeId"
+    | "requireMode"
+    | "resume"
+    | "agentId"
+    | "mcpServers"
   > {
   readonly mode?: PermissionMode;
   readonly profilePath?: string;
   readonly injectionArgs?: readonly string[];
   /** 接回这个 CLI 会话 id；方法按适配器表。 */
   readonly resumeSessionId?: string;
+  /**
+   * 画布工具注入的输入（§5.8）：适配器表 `injection.mcp` 为真时据此带
+   * `armadra-hook mcp`；缺席不带。
+   */
+  readonly canvasMcp?: CanvasMcpInput;
 }
 
 /**
@@ -396,9 +422,12 @@ export function startAdapter(
   const target = launchTargetOf(resolved, ambient);
   const env: NodeJS.ProcessEnv = { ...ambient, PATH: agentPath(ambient) };
   const mode = options.mode ?? "default";
+  const { canvasMcp, ...rest } = options;
+  const mcpServers = acpMcpServers(adapter, canvasMcp);
   return startAcp({
-    ...options,
+    ...rest,
     env,
+    ...(mcpServers.length === 0 ? {} : { mcpServers }),
     agentId: adapter.agentId,
     program: target?.program ?? resolved,
     args: [...(target?.args ?? []), ...plan.args],

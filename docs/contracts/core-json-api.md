@@ -467,6 +467,32 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - 发送方节点已经不在画布上、目标节点已经不在画布上（收件箱外键填不了），或者是收件箱唤醒（来源就是目标自己）时不写回执，投递记录与事件照发。
 - 每条终态只通知一次；清扫只删回执已经写过的、或者不需要回执的终态行。
 
+### 12.4 Armadra Agent 的模型密钥：`/api/agents/ama/credentials`
+
+设计见 [协调 Agent](../design/coordinator-agent.md) §7。代码在 `core/agent/ama-credentials.ts`，共享层 `amaCredentialStatusSchema`。
+
+| 方法与路径                                      | 请求体              | 答复                     |
+| ----------------------------------------------- | ------------------- | ------------------------ |
+| `GET /api/agents/ama/credentials`               | —                   | 状态                     |
+| `PUT /api/agents/ama/credentials/{provider}`    | `{ "apiKey": "…" }` | 状态（已存）             |
+| `DELETE /api/agents/ama/credentials/{provider}` | —                   | 状态（删一个不在的也成） |
+
+```json
+{
+  "backend": "keychain",
+  "providers": [
+    { "id": "anthropic", "isSet": false },
+    { "id": "deepseek", "isSet": true }
+  ]
+}
+```
+
+- 答复**从不带值**，只有每家是否已设与后端（`keychain` / `dpapi` / `libsecret` / `file-encrypted` / `file`）。供应商列表由 core 给（ama 需要 key 的内置供应商），页面不自己列；不在列表里的 `provider` 答 `400 bad_request`，`apiKey` 不是非空单行也是 `400`；密钥后端打不开答 `503 secret_unavailable`。
+- 每家一条密钥条目 `armadra-ama-<provider>`，这是值唯一的落点。不写任何 key 文件，profile 没有 `authFile`（ama 自己用户级的 `auth.json` 与登录照常可用）。
+- 怎么到 ama：与节点凭据（§20.4）同一条兑换路。画布启动器 `run/ama` 在 `ARMADRA_NODE_ID` 门之后调 `armadra-hook credential --ama`，后者带节点 token 经本机 hook 通道 `POST /credential/ama`（体 `{ "nodeId": "…" }`）兑换；门与 `/credential` 相同（应用 bearer、节点 token 必须验过），外加节点在画布上是 ama（或以它为基础的自定义 Agent），否则 `403 forbidden`；密钥后端打不开 `503 secret_unavailable`。答复 `{ "variables": [{ "variable": "AMA_API_KEY_DEEPSEEK", "value": "…" }] }`，带 `cache-control: no-store`、不记日志。启动器只认 `AMA_API_KEY_<供应商>` 这十五个名字，设在自己的进程里再 `exec` ama：值不进节点 shell 的环境、启动行与 shell 历史，不落盘（启动器按换行切答复，不用 here-doc）。兑换失败或名字不认识时拒绝启动；一个都没设时照常启动。ama 起的子进程不继承 `AMA_*`（ama 自己剥掉）。
+- 限制：Windows 的启动器（`armadra-launch.exe`）与执行主机（SSH）那份不做这段兑换，那里的 ama 只用它自己的 `auth.json` 与环境变量。
+- 权限：`/api/agents` 一族，读 `settings:read`、写 `settings:write`。
+
 ## 13. 画布启动器
 
 设计见 [画布启动器](../design/canvas-launcher.md)。注入（Hook、技能、画布说明）不再写在敲进节点 shell 的启动行上，而由数据目录里每个 CLI 一个的启动器 `integration/run/<cli>`（Windows `run\<cli>.exe`）在 CLI 启动时追加；启动器只在环境里有 `ARMADRA_NODE_ID` 时注入，没有时原样启动程序。启动行只剩「启动器 + 程序 + 程序前置词 + CLI 自己的旗标」。
@@ -586,17 +612,160 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - 实跑验证过的版本区间记在 `tools/release/compatibility.json` 的 `acp` 键（`{ protocolVersion: 1, adapters: { <id>: { program, verified: null | { min, max? } } } }`），不进发布说明的兼容围栏；`program` 与适配器表由测试对齐。
 - 状态来源词汇多一个 `acp`（`agent_status.state_source`）：由 core 在 ACP 驱动的会话上写入，与 `hook` / `extension` 一样算上报（`stateSourceIsReported`），客户端无法自称。
 
+### 14.5 输出到画板：`POST /api/workspaces/{workspaceId}/exports/{exportId}/text`
+
+会话视图把 Agent 回复里的代码块落成编辑器节点（[ACP 会话视图](../design/acp-session-view.md) §7）时先把代码写成文件。`exportId` 是来源 Agent 节点的 uuid；文件落在工作区根下 `.armadra/exports/acp/<exportId>/<name>`，`.armadra` 带自忽略的 `.gitignore`，不进 `git status`。通用文件路由不允许在 `.armadra` 里建目录，所以这是单独一条路由，与 PNG 导出（`…/exports/{exportId}/png`）同一张权限表（`assets:read`）。
+
+```json
+{ "name": "msg-3-1.ts", "content": "export const a = 1;\n" }
+```
+
+答复与 PNG 导出同形：`{ "path": "<绝对路径>", "relativePath": ".armadra/exports/acp/<exportId>/msg-3-1.ts", "bytes": 20 }`。同名覆盖。
+
+- `name` 是单个文件名：`[A-Za-z0-9_-][A-Za-z0-9._-]{0,119}`，不含 `..`；`exportId` 不是 uuid、`name` 不合规、缺 `name` / `content`、正文超过 1 MiB 一律 400 `bad_request`。
+- 只读打开的工作空间 403 `forbidden`；远端工作空间 501 `unsupported`（Worker 没有对应操作，不在本机落一份对方看不到的文件）。
+- 页面只把它用于输出到画板；共享层 `exportTextRequestSchema`。
+
 ## 15. 工作流与 runners：`/api/workflows/*`
 
 预留，由 G1-8（§15.1–§15.4）、G2-4（§15.5）与 G2-3（§15.6）填写。
 
 ## 16. 实时协同：`…/boards/{boardId}/sync` 与评论
 
-预留，由 G1-9（§16.1–§16.2）、G2-6（§16.3）与 G2-5（§16.4）填写。
+实现：`apps/desktop/src/core/realtime/`；共享常量与 zod：`packages/shared/src/api/realtime.ts`。§16.3（评论路由）与 §16.4（awareness 形状）由 G2-6 / G2-5 填写。
+
+### 16.1 `WS /api/workspaces/{id}/boards/{boardId}/sync`
+
+一块板一条流，帧全是二进制（文本帧以 `4400` 关流）。外层一个 lib0 varUint 的消息类型，与 `y-websocket` 同一套编码：
+
+| 类型 | 名称            | 内容                                                                                       |
+| ---- | --------------- | ------------------------------------------------------------------------------------------ |
+| `0`  | sync            | `y-protocols/sync` 的消息：子类型 `0` step1（状态向量）、`1` step2（缺的更新）、`2` update |
+| `1`  | awareness       | `y-protocols/awareness` 的更新（形状见 §16.4）                                             |
+| `3`  | query awareness | 无载荷；core 回一帧当前全部 awareness                                                      |
+
+- **握手**：升级成功后 core 先发自己的 step1 与当前 awareness；客户端发自己的 step1，core 回 step2。断线重连同样走 step1 / step2，离线期间的本地改动随之补齐。
+- **升级前**（HTTP 状态行，没有 socket）：板不存在或不在这个工作空间 `404`；没有 `canvas:read` `403`；设置 `collab.realtime` 关着而且这块板还不是实时板 `409 realtime_disabled`。第一个连上的客户端把板切到实时（§16.2），之后不再切回，除非设置关掉（见下）。
+- **写权限**：step2 / update 帧要 `canvas:write`。只读连接发来**会改变文档**的写帧，core 丢弃它并以 `4403` 关流；回答服务端 step1 的空 step2 放过。授权变化时复核：失去读权限、或者本来能写现在不能写，都以 `4403` 关流。
+- **关闭码**：`1001` core 退出或板的文档被逐出（重连即可）；`1009` 单帧超过 16 MiB；`4400` 坏帧（解不开的消息或更新）；`4403` 见上（不要以写者身份重连，按只读处理）。
+- **能力**：`GET /api/identity/hello` 的 `capabilities` 含 `canvas.realtime.v1` 表示这个 core 说这套协议。
+
+文档结构（`Y.Doc` 的根类型）：
+
+| 根               | 类型                         | 内容                                                                                                                                                                                                                                                      |
+| ---------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nodes`          | `Y.Map<nodeId, Y.Map>`       | 每个节点一张 `Y.Map`，键与 `CanvasNode` 同名：`type title color position size collapsed expandedHeight parentId labels note data createdAt updatedAt`，值是 JSON、按字段 LWW；`data.content` 是字符串时放在键 `content` 的 `Y.Text` 里，`data` 里不再带它 |
+| `edges`          | `Y.Map<edgeId, JSON>`        | `{ source, target, kind, role?, createdAt, updatedAt }`，整条 LWW                                                                                                                                                                                         |
+| `whiteboard`     | `Y.Map<itemId, string>`      | 白板 `items[]` 的每一项一条 JSON 串，按 item LWW                                                                                                                                                                                                          |
+| `whiteboardRefs` | `Y.Map<referenceId, string>` | 白板 `references[]` 的每一项一条 JSON 串                                                                                                                                                                                                                  |
+| `meta`           | `Y.Map`                      | `whiteboardEnvelope`：白板 JSON 去掉两个数组后的外壳（JSON 串）；`whiteboardRaw`：认不出外壳的白板原文。视口不进文档                                                                                                                                      |
+
+`id` 与 `boardId` 不存进节点与边的值里，由键与所在的板给出。core 不解析白板 item 的内容，只认外壳：`items` / `references` 两个数组、每项有唯一的字符串 `id`。
+
+### 16.2 物化与 `board.changed`
+
+- **真相**：`boards.realtime = 1` 的板，真相是 `board_snapshots.state` 加其后的 `board_updates`；`nodes` / `edges` / `whiteboard_json` 是物化出来的缓存。每条更新逐条落库（`seq` 递增，`principal_id` 为 `null` 表示 core 自己的写者）；每 500 条或最后一个客户端离开时写快照并删掉 `seq ≤ 快照` 的行；core 重启按快照 + 更新重放，表落后时补物化。
+- **物化**：最后一次更新之后 1 秒、最后一个客户端离开、core 退出，或任何人读这块板（`GET …/document` 与 core 内部的读）之前，把文档投影写进表。表真的变了才前进 `updatedAt` 并广播 `board.changed`。对实时客户端，`board.changed` 只说明表追上了文档，**不要**据此重新加载。白板物化时 `items` 按 `z` 再按 `id` 排、`references` 按 `id` 排，节点与边按 `createdAt` 再按 `id` 排。
+- **清理**：文档里表放不下的东西（校验不过的节点、悬挂或校验不过的边、指向非组的 `parentId`、撞名的 `data.handle`、已属于别的板的 id）在物化前由 core 以一次事务从文档里删掉或清掉，清理本身作为一条更新同步给所有客户端。
+- **旧写法**：实时板上带 `clientId` 的 `PUT …/document` 答 `409 { "code": "realtime_active" }`；租约（§9）在实时板上不拦写入，`canvas.presence` 的 `lease` 恒为 `null`，在线表只用于显示。
+- **core 自己的写者**（控制动词、调度、依赖编排）照旧调用保存：请求相对它读到的那一份做三方 diff，在文档副本上试写并过一遍与非实时板相同的拒绝（`400` 校验 / 撞名、`409` 修订号旧了），通过后以 `origin: "core"` 的事务写进文档再物化；文档里别人并发改的、写者没碰的字段原样保留。没有客户端时 core 也加载文档，空闲 60 秒后卸载。
+- **实时状态**：`GET /api/workspaces/{id}/boards/{boardId}/realtime`（`canvas:read`）答
+
+  ```json
+  { "realtime": true, "materializedSeq": 42, "enabled": true }
+  ```
+
+  `enabled` 是设置 `collab.realtime`（缺省 `true`）。页面在 `realtime || enabled` 时连 `…/sync`，否则留在租约 + CAS。
+
+- **关回租约模式**：设置关掉之后，新板不再切换；已经是实时板的，在没有客户端连着时（卸载或下一次 core 写入）先物化、再标 `realtime = 0` 并删掉更新流与快照，表重新成为真相。有客户端连着的板继续服务到它们离开。
 
 ## 17. Gateway：`/api/gateway*`
 
-预留，由 G1-10 填写。
+Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补全架构](../design/completion-architecture.md) §7）。服务器壳的 `serve` 用命令行参数打开它；桌面壳按设置 `gateway.*` 打开它。下面三条路由在 core 的主监听器上与 Gateway 上都答，路由门按 `settings:read` / `settings:write` 判——只有 owner，成员一律 403 `forbidden`。字段名 camelCase，时间是带时区的 ISO 8601，错误 `{ code, message }`。
+
+### 17.1 `GET /api/gateway`
+
+```json
+{
+  "enabled": true,
+  "running": true,
+  "managedBy": "settings",
+  "listen": "private",
+  "port": 8443,
+  "publicOrigin": "",
+  "address": { "host": "0.0.0.0", "port": 8443 },
+  "origin": "https://192.168.1.20:8443",
+  "origins": [
+    "https://192.168.1.20:8443",
+    "https://mac.local:8443",
+    "https://127.0.0.1:8443"
+  ],
+  "tls": {
+    "source": "localCa",
+    "certFile": "",
+    "keyFile": "",
+    "acmeEmail": "",
+    "fingerprint": "5f1c…（64 位小写十六进制）",
+    "subject": "CN=192.168.1.20",
+    "names": ["192.168.1.20", "mac.local", "127.0.0.1"],
+    "notAfter": "2027-11-04T00:00:00.000Z",
+    "caAvailable": true
+  },
+  "error": null
+}
+```
+
+- `managedBy`：`settings`（桌面壳）或 `shell`（服务器壳，配置来自命令行；这时 `enabled` 恒为 `true`，`port` 是实际绑定的端口）。
+- `listen` / `port` / `publicOrigin` / `tls.{certFile,keyFile,acmeEmail}` 是设置里的值；`address`、`origin`、`origins` 与 `tls` 的其余字段是运行中的事实，没在运行时为 `null` / `[]`。
+- `origin` 是首选来源（二维码用它）：公网来源优先，否则第一个私网地址，然后主机名，最后 `127.0.0.1`。`origins` 是来源白名单：Origin / Host 必须命中其中之一。`https://localhost` 永远不在里面（它是 Android 版 App 的来源）。
+- `tls.source`：`localCa`、`file`、`acme`、`selfSigned`（只有服务器壳没给证书时）。`fingerprint` 是**信任锚** DER 的 SHA-256：本地 CA 时是 CA，其余是叶证书。`caAvailable` 表示 `GET /ca.crt` 有东西可发。
+- `error`：最近一次没能开启的原因，开着或关着时为 `null`。`code` 取值：`acme_unavailable`（ACME 来源尚未实现）、`tls_files_missing`、`port_in_use`、`port_forbidden`、`identity_unavailable`（库没过统一库迁移）、`gateway_failed`（其余，`message` 是原因）。
+
+### 17.2 `PUT /api/gateway`
+
+请求体是设置 `gateway.*` 的子集，未给的键不动：
+
+```json
+{
+  "enabled": true,
+  "listen": "private",
+  "port": 0,
+  "publicOrigin": "",
+  "tls": { "source": "localCa", "certFile": "", "keyFile": "", "acmeEmail": "" }
+}
+```
+
+- `listen`：`loopback` 只绑 `127.0.0.1`；`private` 绑 `0.0.0.0` 但只接受落在回环与本机私网地址（RFC 1918、`100.64.0.0/10`、IPv6 ULA）上的连接；`all` 不筛。
+- `port`：0–65535；`0` = 由内核分配，开启后把实际端口写回设置，之后固定。
+- `publicOrigin`：空串或一个规范拼法的 `https` 来源（反向代理时填）。
+- 不认识的键、类型或取值错误一律 400 `bad_request`，不让规范化悄悄退回缺省。
+- 回答是写入并对账之后的 §17.1。开着时改了任何键会重开监听；`enabled: false` 即刻停止监听并断开经它进来的每一条连接（升级过的流也在内）。没能开启不算请求失败：200，原因在 `error`。
+- 服务器壳上答 409 `gateway_managed_by_shell`。
+
+### 17.3 `POST /api/gateway/pairing`
+
+请求体可选：`{ "origin"?: string, "deviceName"?: string }`。`origin` 必须在 `origins` 里（否则 400 `invalid_origin`），缺省用首选来源；`deviceName` 1–64 字符，缺省「Gateway 配对」。没在运行时 409 `gateway_not_running`。
+
+```json
+{
+  "origin": "https://192.168.1.20:8443",
+  "ticket": "0123…ef.AbC…",
+  "fingerprint": "5f1c…",
+  "expiresAt": "2026-10-03T08:02:00.000Z",
+  "webUrl": "https://192.168.1.20:8443/#pair=0123…ef.AbC…&fp=5f1c…",
+  "deepLink": "armadra://pair?host=192.168.1.20%3A8443&ticket=0123…&fp=5f1c…"
+}
+```
+
+- 票两分钟、一次性，绑在 `origin` 上；兑换走 `POST /api/identity/pair`（§3），配出来的设备拿 owner 的全套授权。成员走邀请。
+- 网页链接把票与指纹放在片段里（不上请求行、不进日志）；页面认 `#pair=<票>` 与 `#pair=<票>&fp=<64 位十六进制>` 两种。
+- 原生 App 按 `fp` 钉信任锚，不装 CA；锚变了（重置 CA、换证书文件）就重新扫码，不自动信任新证书。
+
+### 17.4 Gateway 上的匿名面与原生 App
+
+- `GET /ca.crt`：匿名，`application/x-x509-ca-cert`，PEM。本地 CA 时是 CA；服务器壳的自签名证书是它自己；指定文件时是链文件里的最后一张，只有一张时 404 `ca_unavailable`。只在 Gateway 上，core 的回环监听没有它。
+- 来源是 `capacitor://localhost` 或 `https://localhost`（且不在 `origins` 里）的请求走 **Bearer 模式**：会话绑定的来源是 App 连上的 Gateway 来源 `https://<Host>`（必须在 `origins` 里，否则 403）；凭据只认 `Authorization: Bearer <访问密钥>`，Cookie 不看、没有 CSRF；`POST /api/identity/pair`、`/session/refresh` 与登录把密钥放在响应体的 `native` 里、不发 Cookie（与桌面壳的原生传输同一形状，§3）；CORS 只回 App 自己的来源，预检放行 `authorization, content-type, x-armadra-csrf`。
+- `POST /api/identity/ws-ticket`（只在 Gateway 的 Bearer 模式下）：要 Bearer 会话，回 `{ "ticket": string, "expiresAt": string }`，票 30 秒、一次性、只在内存里。浏览器 WebSocket 带不了头，App 升级时在 `Sec-WebSocket-Protocol` 里带 `armadra-ticket.<票>`，服务端回同一个子协议。Cookie 模式请求它答 400 `bearer_required`。
 
 ## 18. 身份扩展：口令策略、passkey、MFA、会话、OAuth、审计
 
@@ -717,15 +886,160 @@ TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时
 
 ## 20. 节点凭据：`/api/credentials*`
 
-预留，由 G1-1 填写。
+设计见 [补全架构](../design/completion-architecture.md) §9.1 与 [CLI 协作](../design/cli-collaboration.md) §7.3。一个节点可以绑定一条具名凭据，起终端时由 core 校验、CLI 启动时由画布启动器现取并只设给 CLI 进程。代码在 `core/agent/credentials/`，共享层 `packages/shared/src/api/credentials.ts`。
+
+**值的去向**：只在执行主机的 SecretStore（条目名 `armadra-credential-<ref>`）。库表 `agent_credentials` 只记 `ref`、`providerId`、`kind`、`label`、`createdAt`、`lastUsedAt`。值不进节点 shell 的环境、启动行、shell 历史、画布持久化、日志，也不进任何 `/api/*` 答复；**唯一带值的是 §20.4 那条本机回环的 hook 答复**，答给启动器，带 `Cache-Control: no-store`，不记日志。
+
+### 20.1 `kind` 表
+
+`kind` 只能从下表选，变量名由 core 写死（`core/agent/credentials/inject.ts::CREDENTIAL_KINDS`），不上线、不让用户填。`enabled: false` 的行列在表里，新建与启动都拒绝，等 CLI 协作 §7.4 用真实账号测过再开。
+
+| `providerId` | `kind`              | 变量                      | `enabled`   |
+| ------------ | ------------------- | ------------------------- | ----------- |
+| `claude`     | `oauth-token`       | `CLAUDE_CODE_OAUTH_TOKEN` | 是          |
+| `claude`     | `api-key`           | `ANTHROPIC_API_KEY`       | 否（T1）    |
+| `copilot`    | `github-token`      | `COPILOT_GITHUB_TOKEN`    | 是          |
+| `codex`      | `api-key`           | `CODEX_API_KEY`           | 否（T4）    |
+| `pi` / `omp` | `api-key:anthropic` | `ANTHROPIC_API_KEY`       | 否（T5/T6） |
+| `pi` / `omp` | `api-key:openai`    | `OPENAI_API_KEY`          | 否（T5/T6） |
+| `pi` / `omp` | `api-key:moonshot`  | `MOONSHOT_API_KEY`        | 否（T5/T6） |
+| `opencode`   | `api-key:anthropic` | `ANTHROPIC_API_KEY`       | 否（T7）    |
+| `opencode`   | `api-key:openai`    | `OPENAI_API_KEY`          | 否（T7）    |
+
+`providerId` 是基础 CLI 的 id；`custom:` 条目按它的 `baseAgent` 匹配。
+
+### 20.2 条目路由
+
+只有 owner（路由门按全局 `settings:read` / `settings:write`，成员一律 `403 forbidden`）。
+
+- `GET /api/credentials` →
+
+  ```json
+  {
+    "backend": "keychain",
+    "available": true,
+    "kinds": [
+      { "providerId": "claude", "kind": "oauth-token", "enabled": true }
+    ],
+    "entries": [
+      {
+        "ref": "3f9c2a1b7d4e8f60",
+        "providerId": "claude",
+        "kind": "oauth-token",
+        "label": "Work",
+        "isSet": true,
+        "lastUsedAt": 1790000000000
+      }
+    ]
+  }
+  ```
+
+  `backend` 是密钥后端自报的种类（`keychain` / `dpapi` / `libsecret` / `file-encrypted` / `file`）。`available: false` 时多一个 `reason`：`credential_backend_insecure`（后端是 `file`）或 `credential_unsupported_here`（Windows，启动器还不能兑换）。`isSet` 是值在不在（后端打不开也答 `false`）；`lastUsedAt` 从没被取用过时缺席。
+
+- `POST /api/credentials`，体 `{ providerId, kind, label, value }` → `201` 条目。`ref` 由 core 生成（16 位小写十六进制）。`value` 单行、去首尾空白、最长 8192。
+- `PATCH /api/credentials/{ref}`，体 `{ label?, value? }`（至少一个）→ `200` 条目。`providerId` 与 `kind` 不可改：换种类就是另一条凭据。
+- `DELETE /api/credentials/{ref}` → `204`。先删值后删行。绑定着它的节点下次起终端时被拒（`credential_mismatch`）。
+
+### 20.3 `POST /api/terminals` 的 `credentialRef`
+
+`agent` 段多一个可选的 `credentialRef`（条目名，1–200 字符）。页面从节点数据 `agent.account.credentialRef` 取（`apps/web/src/agent/launch.ts::agentSessionRequest`）。core 在起任何进程之前校验，不满足时整个请求被拒、不建会话行：
+
+| 状态 | `code`                        | 何时                                                |
+| ---- | ----------------------------- | --------------------------------------------------- |
+| 400  | `bad_request`                 | `credentialRef` 不是非空字符串或超长                |
+| 400  | `credential_mismatch`         | 条目不存在，或它的 `providerId` 不是节点的基础 CLI  |
+| 400  | `credential_kind_disabled`    | 条目的 `kind` 在 §20.1 里是 `enabled: false`        |
+| 400  | `credential_unsupported_here` | SSH 节点（凭据在控制端，不经 SSH 下发），或 Windows |
+| 409  | `credential_backend_insecure` | 这台主机的密钥后端自报 `file`                       |
+
+通过后节点终端的环境里只多一个变量 `ARMADRA_CREDENTIAL_REF=<ref>`（名字，不是值）。依赖编排、冷启动与节能唤醒没有请求体，读节点数据里的绑定照样带上这个变量；那里不预先校验，绑定失效时由 §20.4 拒绝、启动器拒绝起 CLI，而不是悄悄用默认登录。
+
+条目路由的其余错误码：`credential_not_found`（404，`PATCH` / `DELETE` 一个不存在的 `ref`）、`credential_unavailable`（503，密钥后端这一刻打不开）。
+
+### 20.4 启动器兑换：hook 面的 `POST /credential`
+
+只在本机 hook 服务（Unix socket / 回环端口，契约 §5.2）上，不在主监听器、Gateway 或执行主机上。
+
+- 调用方：画布启动器 `run/<cli>`（POSIX）在 `ARMADRA_NODE_ID` 与 `ARMADRA_CREDENTIAL_REF` 都在时执行 `armadra-hook credential`，后者发这一条。
+- 请求：头 `X-Armadra-Hook-Token`（应用 bearer）与 `X-Armadra-Node-Token`（必须验过，`legacy` 不行）；体 `{ "nodeId", "ref" }`。
+- 只答这个节点此刻绑定的那一条：起终端时记下的绑定，core 重启后改读节点数据 `agent.account.credentialRef` 与 `agent.id`；每次都重新做 §20.3 的校验。
+- 成功 `200 { "variable": "CLAUDE_CODE_OAUTH_TOKEN", "value": "…" }`，并更新 `lastUsedAt`；日志只记 `nodeId` 与 `ref`。失败：`403 forbidden`（token 不对、或节点没绑这一条）、§20.3 的各码、`409 credential_unset`（值不在）、`503 credential_unavailable`。
+- 客户端把 `NAME=value` 打到 stdout，启动器用命令替换接住，只认这家 CLI 在 §20.1 里的变量名（字面的 `case` 分支，没有 `eval`），在自己的进程里 `export` 后 `exec` CLI。客户端失败或名字不认识时启动器打一行原因、退出码非零，不起 CLI。
+
+**威胁模型**：这防的是误泄露（shell 的 `env` 输出、回滚缓冲区、shell 历史、日志、磁盘），不是同一用户的主动读取——持有节点 token 的进程本来就能兑换。CLI 起的子进程（bash 工具、MCP 服务器）会继承这个变量；设置页的脚注写明这一点，并建议用权限最窄的凭据（`setup-token`、只开 Copilot Requests 的细粒度 PAT）。
 
 ## 21. 跨主机交接与 Worker 舰队
 
-预留，由 G1-2 填写。
+### 21.1 跨执行主机交接：`POST /api/workspaces/{workspaceId}/handoffs`
+
+请求形状不变。来源 Agent 跑在 SSH 终端里、而那台主机不是工作空间所在的机器时，不再一律 501：
+
+- 文件引用与 Git 指纹照旧在工作空间所在的机器上读（路径相对工作空间根）。
+- 要读转录（`includeTranscript: true`，且来源的状态是已验证、当前代次的）时，转录尾巴到来源那台主机上读：控制端经那台主机 Worker 的 `handoff.capture`（参数加 `transcriptOnly: true`，`paths` 为空）读，与本机同一个读法、同一组历史适配器归一化。那台主机必须在执行主机登记里、配了 Worker、Worker 连得上并提供 `remote.handoff.v1`；任何一条不满足答 **501 `handoff_host_offline`**，不回退到读控制端磁盘上同名的路径。不读转录时不连那台主机。
+- 目标在哪台主机都接受：材料是文本与相对路径。`bundle.target.executionHost` 照实写目标的主机。
+- 冻结的材料多一个可选字段 `capturedOn: string`：来源转录在哪台执行主机上读的（主机 id）。来源与工作空间在同一台执行主机上、或在另一台执行主机上读到时都有；在控制端本机读、或没有读转录时不出现。旧行没有这个字段，读回照常。
+
+| 情况                                                | 答复                                   |
+| --------------------------------------------------- | -------------------------------------- |
+| 来源主机已登记、有 Worker、连得上                   | 200，`bundle.capturedOn` 为那台主机 id |
+| 来源主机不在登记里，或登记了但没配 Worker           | 501 `handoff_host_offline`             |
+| Worker 连不上、握手失败、缺 `remote.handoff.v1`     | 501 `handoff_host_offline`             |
+| 不读转录（`includeTranscript: false` 或来源未验证） | 200，不连来源主机，无 `capturedOn`     |
+
+### 21.2 Worker 舰队
+
+控制连接每次握手成功，控制端按主机记下 Worker 的 `runtimeVersion` 与能力集合；连接断了只把 `connected` 置假。「过旧」是：版本比这个控制端旧（点分数字比，预发布低于同号正式版，构建元数据不比），或缺这个控制端的 Worker 会声明的任何一个能力。比控制端新的不算过旧；版本读不出来时只按能力判。
+
+- `GET /api/execution-hosts` 与新增的 `GET /api/execution-hosts/{id}`（`""` 是本机；不存在 404 `not_found`）：SSH 行在握过手之后多一个 `worker`：
+
+  ```json
+  {
+    "version": "0.1.0",
+    "capabilities": ["remote.execution.v1", "remote.handoff.v1"],
+    "outdated": false,
+    "connected": true,
+    "checkedAt": "2026-10-03T08:00:00.000Z"
+  }
+  ```
+
+  没握过手的主机没有 `worker`；本机行永远没有。
+
+- `POST /api/execution-hosts/{id}/resync`：丢掉这台主机的控制连接，重新握手（刚升级的 Worker 在这里报新版本），再把画布注入重新同步一次（开过画布 SSH 终端的主机立刻同步并重开中继；没开过的只清掉「待升级」记号）。答复与 `GET …/{id}` 同形。不存在 404 `not_found`；没配 Worker 501 `unsupported`；连不上或握手失败按远端的错误码答（如 503 `unavailable`）。权限与其余执行主机写路由相同（`settings:write`）。
+- `GET /api/agents/{id}/integration` 多一个 `outdatedHosts: [{ hostId, name?, version? }]`：舰队判为过旧的主机，加上注入同步时 Worker 只有 `remote.integration.v1` 的主机（§13.4），按主机 id 去重排序。每个 CLI 的集成状态给的是同一份表；没有远端域的 core 不给这个字段。`GET /api/agents` 的行**不**带它。
 
 ## 22. 投递画面门补充
 
-预留，由 G1-3 填写。
+画面门（[投递设计](../design/agent-delivery.md) §4.3「画面门」）的判据在 `core/agent/screen-gate.ts`，「取画面 → 判定 → 退回理由」在 `core/collab/screen.ts::checkScreen`；`send`（§12）与计划投递共用这一份。线上没有新路由，变化只在理由码与判据。
+
+**计划投递**（`core/schedule/dispatch.ts`）：Agent 目标的探测在状态、半截输入、冷启动之后再过画面门；停在对话框上、或首投时看不见提示符，探测答 `busy` 并带 `reason: "TARGET_NOT_AT_PROMPT"`。运行进 `WAITING_TARGET`，`reasonCode` 记探测给的理由（没有理由仍是 `TARGET_NOT_IDLE`，理由变了跟着改写），下一拍再探；写入前的复核退回时收据是 `NOT_DISPATCHED` + `TARGET_NOT_AT_PROMPT`（其余仍是 `TARGET_NOT_READY`）。「首投」= 没有一条晚于冷启动、来自 `hook` / `extension` / `acp` 的回合结束上报（`idle` / `done` / `error`）。
+
+**判据**：
+
+- 只看最后 60 行，按位置判：对话框特征或选择菜单出现在最后一处提示符**之后**才拦；一行同时像提示符和对话框按对话框算。
+- 选择菜单（通用，id `<cli>.unrecognized-menu`）：高亮的编号选项（`❯ 1.` / `› 2.` / `> 1.`），或页脚 `Enter to confirm` / `Esc to cancel` / `enter continue · esc …` / `Press Enter to continue` / `[y/N]`。只对有画面特征的 CLI 生效。
+- 对话框特征不论 `verified` 都用；提示符特征只用 `verified: true` 的（没核实的提示符不要求，以免永远投不进去）。没有对话框、也没有核实过的提示符的 CLI 不取画面。
+
+**对话框 id**（`verified` 为真 = 对过本机安装包字符串或实际画面）：
+
+| id                                  | verified | 出处                                       |
+| ----------------------------------- | -------- | ------------------------------------------ |
+| `claude.workspace-trust`            | 是       | Claude Code 2.1.286 安装包字符串           |
+| `claude.bypass-permissions-warning` | 是       | 同上                                       |
+| `claude.auto-mode-default`          | 是       | 同上与本机画面                             |
+| `codex.folder-trust`                | 是       | Codex 0.159.3 画面、0.160.0 安装包字符串   |
+| `codex.update`                      | 是       | 两种形态：0.155.1 画面、0.160.0 「✨」横幅 |
+| `codex.hooks-review`                | 是       | Codex 0.160.0 安装包字符串                 |
+| `codex.model-migration`             | 是       | 同上                                       |
+| `codex.sign-in`                     | 是       | 同上                                       |
+| `codex.rate-limit-switch`           | 是       | 同上                                       |
+| `codex.full-access-warning`         | 是       | 同上                                       |
+| `codex.mcp-install`                 | 是       | 同上                                       |
+| `codex.database-rebuilt`            | 是       | 同上                                       |
+| `copilot.folder-trust`              | 否       | GitHub 官方文档，本机未安装                |
+| `pi.project-trust`                  | 是       | Pi 1.0.0 安装包字符串                      |
+| `omp.project-trust`                 | 否       | 按同源的 Pi 推断，本机未安装               |
+
+提示符：Claude（单独一个 `❯`、`? for shortcuts`、`(shift+tab to cycle)`）与 Codex（`›` 后面不是编号，也不是 `Waiting for startup` / `Resuming session` / `Forking session`）已核实；Copilot、Pi、OMP、OpenCode 不登记。OpenCode 官方文档没有启动对话框，整条门不跑。
 
 ## 23. 权限补充：自己创建的终端与工作流关卡
 

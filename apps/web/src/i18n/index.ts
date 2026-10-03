@@ -52,6 +52,7 @@ import { security } from "./security";
 import { push } from "./push";
 import { credentials } from "./credentials";
 import { mobileConnect } from "./mobile-connect";
+import { showcase } from "./showcase";
 
 export type Locale = "zh-CN" | "en";
 
@@ -125,6 +126,7 @@ export const MESSAGE_MODULES = {
   push,
   credentials,
   "mobile-connect": mobileConnect,
+  showcase,
 } satisfies Record<string, MessageModule>;
 
 const modules: MessageModule[] = Object.values(MESSAGE_MODULES);

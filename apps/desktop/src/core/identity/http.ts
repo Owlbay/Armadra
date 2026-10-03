@@ -61,8 +61,24 @@ export function remoteAddress(request: CoreRequest): string {
 
 /* ------------------------------ 凭据的读取 -------------------------------- */
 
-/** 这个请求走不走原生传输：明文连接 + 壳能呈现的回环 HTTP 来源。 */
+/**
+ * Gateway 认定为原生 App（Bearer 模式，架构 §7）的那些请求：TLS 上来、来源是
+ * App 的固定来源，凭据和桌面壳的原生传输一样走 `Authorization` 与响应体，不发
+ * Cookie。由 `core/gateway/listener.ts` 在转交之前标上；按请求对象记，请求
+ * 结束就随它回收。
+ */
+const bearerTransports = new WeakSet<object>();
+
+export function markBearerTransport(raw: object): void {
+  bearerTransports.add(raw);
+}
+
+/**
+ * 这个请求走不走原生传输：明文连接 + 壳能呈现的回环 HTTP 来源，或者 Gateway
+ * 标过的 Bearer 模式请求。
+ */
 export function nativeRequest(request: CoreRequest): boolean {
+  if (bearerTransports.has(request.raw)) return true;
   const origin = header(request, "origin");
   return !isSecure(request) && origin !== undefined && nativeOrigin(origin);
 }

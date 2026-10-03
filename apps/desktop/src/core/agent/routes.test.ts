@@ -517,3 +517,49 @@ describe("没有转录文件也读得到：OpenCode 的库与 Pi 的兜底定位
     );
   });
 });
+
+describe("/api/agents/ama/credentials", () => {
+  it("stores a key and answers only whether it is set", async () => {
+    const key = "sk-route-test-not-real";
+    const put = await fixture.call(
+      "PUT",
+      "/api/agents/ama/credentials/anthropic",
+      { apiKey: key },
+    );
+    expect(put.status).toBe(200);
+    expect(JSON.stringify(put.body)).not.toContain(key);
+    const status = put.body as {
+      backend: string;
+      providers: { id: string; isSet: boolean }[];
+    };
+    expect(status.providers.find((entry) => entry.id === "anthropic")).toEqual({
+      id: "anthropic",
+      isSet: true,
+    });
+    const read = await fixture.call("GET", "/api/agents/ama/credentials");
+    expect(JSON.stringify(read.body)).not.toContain(key);
+    const cleared = await fixture.call(
+      "DELETE",
+      "/api/agents/ama/credentials/anthropic",
+    );
+    expect(
+      (cleared.body as typeof status).providers.some((entry) => entry.isSet),
+    ).toBe(false);
+  });
+
+  it("refuses an unknown provider and a key that is not one line", async () => {
+    const unknown = await fixture.call(
+      "PUT",
+      "/api/agents/ama/credentials/chatgpt",
+      { apiKey: "x" },
+    );
+    expect(unknown.status).toBe(400);
+    expect(unknown.body).toMatchObject({ code: "bad_request" });
+    const multiline = await fixture.call(
+      "PUT",
+      "/api/agents/ama/credentials/openai",
+      { apiKey: "a\nb" },
+    );
+    expect(multiline.status).toBe(400);
+  });
+});

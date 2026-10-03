@@ -31,6 +31,7 @@ import {
   describe,
 } from "./shared";
 import { revisionOf } from "./skills";
+import type { OutdatedHost } from "../../remote/fleet";
 
 /**
  * What the settings page reads and does for one CLI's integration
@@ -106,6 +107,12 @@ export interface IntegrationState {
   readonly migration?: MigrationSummary;
   /** Absolute path of the hook client the artifacts name. */
   readonly clientBin?: string;
+  /**
+   * Execution hosts whose Worker is out of date (contract §21.2): canvas
+   * launches in SSH terminals there carry a stale injection until the host is
+   * resynced. Present whenever the core has a remote domain; usually `[]`.
+   */
+  readonly outdatedHosts?: readonly OutdatedHost[];
   readonly warning?: string;
 }
 
@@ -118,6 +125,8 @@ export interface IntegrationOptions {
   readonly now?: () => Date;
   /** Windows: the `armadra-launch.exe` to copy (`InjectionOptions.launchExe`). */
   readonly launchExe?: string;
+  /** The Worker fleet's outdated hosts (`remote/fleet.ts::outdatedHosts`). */
+  readonly outdatedHosts?: () => readonly OutdatedHost[];
 }
 
 function requireInjected(agentId: string): void {
@@ -183,11 +192,17 @@ export function state(
 ): IntegrationState {
   requireInjected(agentId);
   const env = options.env ?? process.env;
-  const home = options.home ?? configHome(agentId, env);
+  // ama never had a global install, so there is no config home to scan.
+  const home =
+    agentId === "ama" ? undefined : (options.home ?? configHome(agentId, env));
   const layout = artifactLayout(options.dataDir, agentId);
   const marker = readMarker(options.dataDir, agentId);
   const hookFile =
-    layout.settings ?? layout.module ?? layout.pluginHooks ?? layout.marker;
+    layout.settings ??
+    layout.module ??
+    layout.pluginHooks ??
+    layout.profile ??
+    layout.marker;
   const hookInstalled = marker !== undefined && isPresent(hookFile);
   const skillRevision = revisionOf(layout.skill);
   const injection = canvasInjection({ dataDir: options.dataDir, agentId });
@@ -211,7 +226,7 @@ export function state(
       path: layout.skill,
       revision: skillRevision ?? 0,
     },
-    legacy: { found: scanIn(agentId, home) },
+    legacy: { found: home === undefined ? [] : scanIn(agentId, home) },
     revision: INTEGRATION_REVISION,
     stale: marker !== undefined && marker.revision !== INTEGRATION_REVISION,
     ...(marker === undefined ? {} : { installedRevision: marker.revision }),
@@ -223,6 +238,9 @@ export function state(
     ...(launcherWarning === undefined ? {} : { launcherWarning }),
     ...(migration === undefined ? {} : { migration }),
     ...(marker === undefined ? {} : { clientBin: marker.clientBin }),
+    ...(options.outdatedHosts === undefined
+      ? {}
+      : { outdatedHosts: options.outdatedHosts() }),
     ...(warning === undefined ? {} : { warning }),
   };
 }
@@ -289,6 +307,7 @@ export function prepareAtStartup(options: IntegrationOptions): StartupReport {
     "pi",
     "omp",
     "copilot",
+    "ama",
   ]) {
     try {
       prepareInjection(agentId, injectionOptions(agentId, options));

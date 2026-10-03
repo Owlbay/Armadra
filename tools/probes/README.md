@@ -6,11 +6,11 @@
 
 按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.json` 的清单跑（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
-| 档  | 本目录的探针（计划中新增的见架构 §12）                                                          | 何时跑                              | 失败时       |
-| --- | ----------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
-| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`core-terminal-packaged`                                                      | `nightly.yml`                       | 开 issue     |
-| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                       | 手动；清单在执行计划 §5             | 记进状态文档 |
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                            | 何时跑                              | 失败时       |
+| --- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase` | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`core-terminal-packaged`                                                                                        | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度）、`canvas-stress`（真实会话）                                                                         | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
 
@@ -46,6 +46,19 @@ node tools/probes/git-tool-window.mjs [输出目录]
 ```
 
 产物默认在 `target/git-tool-window/`：桌面 1440×900 的 `log-desktop.png`（三栏）、`log-maximized.png`、`commit-desktop.png`、`commit-maximized.png`，手机 390×844 的 `mobile-commits.png` / `mobile-branches.png` / `mobile-details.png` / `mobile-diff.png`（日志页的四级导航）与 `mobile-commit.png`，加一份 `result.json`。手机那几张按应用自己的行为开成最大化（`shell/MobileBottomNav.tsx`），桌面停在底部。端口随机（不用 1420 / 1421 / 43120 / 43121），数据目录与浏览器 profile 都是 `mktemp` 出来的，跑完删除；不读写操作员自己的数据目录、凭据或任何远端。页面入口（`apps/web/git-window-probe.html` 与 `src/git-window-probe.tsx`）由脚本临时写入、结束时删除——应用首页要先选工作空间，而这次要看的是窗口本身。
+
+## 设计展示页截图
+
+[设计展示页](../../docs/design/design-showcase.md) §3 的探针：只起一个随机端口的 Vite 开发服务器与新 profile 的无头 Chrome，不起 core 与 tmux，`ARMADRA_DATA_DIR` 指到空的临时目录，跑完删除。
+
+```sh
+pnpm libs:build
+node tools/probes/design-showcase.mjs [输出目录] [--only=tokens,acp] [--theme=dark] [--width=390] [--diff=<上一次的输出目录>]
+```
+
+矩阵：`ShowcaseApp.tsx` 登记的 14 个分区 × 深浅两套主题 × 1440×900 / 1024×768 / 390×844 三种视口，每张是 `showcase.html?theme=…&only=1#<分区>` 的整页截图，文件名 `<分区>-<主题>-<宽>.png`。另做五项核验：深浅主题各执行一次 `window.__showcaseContrast()`，按浏览器算出的颜色核算设计系统 §2.1–§2.5 的每一对（文字 4.5、图形 3），低于阈值即失败；`components` 分区按 Tab 走一遍，每个可聚焦元素都要命中 `:focus-visible` 且看得见焦点环（Radix 漫游焦点组的根按一个落点算）；`prefers-reduced-motion: reduce` 下 `canvas` 分区没有在跑的动画、隔 700ms 的两张图逐字节相同（额外存 `canvas-<主题>-1440-reduced-motion.png`）；`forced-colors: active` 下焦点仍有轮廓（额外存 `components-<主题>-1440-forced-colors.png`）；控制台 error 与未捕获异常算失败。`apps/web/dist/` 存在时（CI 先构建）顺带确认产物里没有展示页的文件与代码。
+
+产物默认在 `target/design-showcase/`：全部 PNG 与 `result.json`（分区、主题、视口、每张耗时、对比度表、Tab 结果、两项媒体模拟、控制台）。`--diff` 逐像素比较同名 PNG，差异超过 0.5% 的列进 `changed`，给改样式前后对照用。功能分区在实现包落地前是骨架占位；画布分区的节点体是静态内容（真终端要连 core）。没有验证：真实触屏、系统高对比主题本身（只模拟了 `forced-colors`）、Windows 与 Linux 上的字体渲染差异（CI 只在 Linux 跑）。
 
 ## 连线拖拽成功率
 
@@ -101,6 +114,15 @@ node tools/probes/core-terminal-packaged.mjs              # 打包版，从页�
 
 三个脚本都用 `mktemp` 的数据目录与各自私有的 tmux socket，跑完 `kill-server` 并删掉目录；不碰操作者自己的数据目录或 tmux server。
 
+## 节点凭据端到端
+
+```sh
+pnpm --filter @armadra/desktop build
+node tools/probes/credentials-e2e.mjs [输出目录]   # 默认 target/probes/credentials-e2e-<时间>/
+```
+
+不用真实账号（契约 §20）：一个基础 CLI 为 Claude 的自定义 Agent 指向 `fixtures/env-echo.mjs`（只打印变量长度），凭据值是一串假令牌。断言 CLI 进程看到的长度正确、节点 shell 的 `env` 里没有这个变量、值不在画面 / 日志 / 答复里、基础 CLI 不匹配时起终端被拒、条目删掉后同一 shell 重跑启动器拒绝起 CLI。临时数据目录与 HOME，密钥后端 `file-encrypted`，`ARMADRA_NO_GLOBAL_WRITES=1`；Windows 上跳过。产物 `result.json`。
+
 ## 本轮界面功能的端到端验证
 
 真 core（`apps/desktop/out/core/main.js`）、真 Vite 页面、新 profile 的无头 Chrome，经浏览器级 CDP 连接驱动；多设备场景用两个独立的 browser context 当两台设备。场景拆在 `ui-features/` 里，共用一套临时环境（`harness.mjs`），媒体夹具与截图像素统计在 `fixtures.mjs`。
@@ -138,7 +160,7 @@ node tools/probes/ui-features-e2e.mjs [输出目录] [--only=presence,editor,fil
 
 node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,3,4,5,6]
 
-node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,3,4,5,6,7,8,9,10] [--backend direct]
+node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,3,4,5,6,7,8,9,10,11] [--backend direct]
 
 ```
 
@@ -159,6 +181,7 @@ node tools/probes/agent-e2e.mjs [输出目录] [--only 1,2,3,4,5,6,7,8,9,10] [--
 8. **休眠后经 `send` 唤醒**：关页面让 Claude 睡着，`canvas send` 当场答排队（`TARGET_STARTING`），同一会话 id 起下一代、进程带 `--resume <同一个 id>` 且仍带 `--permission-mode acceptEdits`，投递 `delivered` 并跑完一轮；重开页面问一句，确认接回的是原来那段对话。
 9. **组队带 worktree**（§59）：不用真 CLI，自己另起一套 core（临时 git 仓库当工作区，假 CLI 是一段记下自己工作目录再停在 shell 里的 sh），`--only 9` 单跑时不检查 CLI 登录、不起 Vite 与 Chrome。`team --member "…|worktree=名字"` 与按路径的成员各建出一条检出与绑定的 Frame、同名的两个成员共用一个 Frame、成员终端从节点 `cwd` 起在检出里；`open-agent --worktree` 按分支名进同一个 Frame；`--dry-run` 不建，Git 拒绝时画布不多一个节点。
 10. **六家互读**（设计 cli-collaboration §8）：claude、codex、opencode、pi、omp、copilot 各起一个**交互式 TUI** 节点，按这个顺序以 `peer` 连成环。每个节点经页面敲一句跑完一轮；环上每个下游以自己的节点身份（`canvasAs` / `contextAs`，换的只是 `ARMADRA_NODE_ID`）`context summary` 与 `context transcript` 读上游，断言非空且「来源」落在那一家的根下（OpenCode 是 `opencode:<id>`）；沿环 `send` 一轮，每条都 `delivered` 且目标真的跑了一轮；半截输入门造一条排队，`DELETE /api/workspaces/{id}/deliveries/{queueId}` 拒收，发送方收件箱（`inboxOf`）出现 `receipt:<queueId>`、投递记录有 `cancelled`；Pi → 下游走一次交接 prepare → accept（材料里有转录摘录、目标收件箱多一条）；会话索引（`conversationsRows`，只取这次的工作目录）每家都有、同一个文件不被两家各认一次，`GET /api/usage/cost` 每家 `source` 不是 none 且 24 小时里记到了用量。`result.json` 的 `sixWay` 记每家每步的通过 / 失败 / 跳过矩阵、每个节点的 `agent_status.transcript_path` 与分段耗时。另外四家的临时 HOME 与凭据和场景 6 是同一个函数（`prepareCliHomes`），但 Pi / OMP 的 agent 目录、`COPILOT_HOME` 与 OpenCode 的 `XDG_DATA_HOME` 指到 core 自己的根（core 才认得出这些会话；Pi 与 OMP 因此共用一个目录）；它们的启动行经页面的「自定义启动命令」（localStorage `armadra.launchOverrides`）换成临时包装脚本，注入参数照常由页面拼上。Claude 用「自动编辑」起：操作员缺省是 bypass 时新版 Claude 先弹「把 auto 设成缺省？」，缺省选项是「是」，一条投递的回车就会改掉 `~/.claude/settings.json`（首跑踩中，已改回；收尾因此单独比对 `permissions.defaultMode`）。Claude 的转录在真实目录，探针把**这一次**的那个文件硬链接进 core 的临时 `CLAUDE_CONFIG_DIR`，索引与成本才扫得到。没装或认证不上的那家整家记 skipped 并写原因，环只连能跑的几家；没跑完首轮的节点不往里投。`--only 10` 单跑约 1.5 分钟（2026-10-02 实测三家：84 秒），花费是每家三轮左右「回复 OK」（首轮、环上一轮、交接目标收到通知后多一轮）。
+11. **协调者 ama**（设计 coordinator-agent §8 第 1–4 步）：不用真模型、不用真密钥，和场景 9 一样自己另起一套 core，`--only 11` 单跑。本地起一个 OpenAI 兼容的脚本化模型服务（`agent-e2e/mock-model.mjs::mockModelServer`），临时 HOME 下 ama 的 `config.json` 把内置 `deepseek` 的 `baseUrl` 指到它；假 key 经 `PUT /api/agents/ama/credentials/deepseek` 存进 core（文件密钥后端），由 `run/ama` 凭节点 token 兑换、只设给 ama 进程（`AMA_API_KEY_DEEPSEEK`）。协调者节点的启动行按 `GET /api/agents` 的 `launcher` 与 `resolvedPath`（`<数据目录>/bin/ama`）拼，交给 `sh -c` 跑。断言：注入只有 `--profile`、没有 key 文件；key 到了模型服务（请求头 `Bearer`），却不在节点 shell 的环境、数据目录里除密钥后端外的任何文件与 core 日志里；`agent_status` 有 ama 行且来源 `extension`；`canvas_team` 建出两个成员与两条边；成员 `canvas post` 后收件箱唤醒，协调者 `canvas_inbox → canvas_ack → canvas_sticky` 写出汇总便签、两条结论都确认；画布外同一 profile 的 `ama -p` 工具表里没有画布工具。约 15 秒。
 
 隔离：数据目录、工作空间、浏览器 profile 与 CODEX_HOME 全部 `mktemp`，结束删除并停掉自己的 tmux 服务器。Codex 用临时 CODEX_HOME（只复制 `~/.codex/auth.json`，关掉启动时的升级检查，预先信任工作目录；token 超过 7 天没刷新就拒跑）。Claude 的登录在钥匙串里，临时 `CLAUDE_CONFIG_DIR` 认证不上，所以 Claude 进程用真实配置目录——前提是 Armadra 对 Claude 只经数据目录里的启动器注入（`--settings` 指向数据目录里的文件），探针启动前就检查这一点；core 自己的 `CLAUDE_CONFIG_DIR` 指向临时目录，技能文件只写在那里。终端子进程的环境按白名单建，于是 `SHELL` 换成一个临时包装脚本（导出临时 CODEX_HOME、去掉 CLAUDE_CONFIG_DIR、`exec zsh -f`）。跑前跑后比对 `~/.claude/settings.json`、`~/.codex` 的 `config.toml` / `hooks.json` / `auth.json`、另外四个 CLI 的配置与凭据文件，以及两个 CLI 的版本；Claude 仍会像平常一样在 `~/.claude.json` 与 `~/.claude/projects/` 里记下这个临时目录的会话。
 

@@ -9,6 +9,7 @@ import { openNodeAnnotation } from "@/meta/annotations";
 import { formatRelativeTime } from "@/lib/format";
 import { useCanvasStore } from "@/store/canvas-store";
 import { useT } from "@/app/preferences-store";
+import { SourceBadge } from "@/acp/SourceBadge";
 import type { NodeBodyProps } from "./registry";
 
 /**
@@ -18,6 +19,7 @@ import type { NodeBodyProps } from "./registry";
 export function StickyNode({ id, node }: NodeBodyProps) {
   const t = useT();
   const content = node.data.kind === "sticky" ? node.data.content : "";
+  const source = node.data.kind === "sticky" ? node.data.source : undefined;
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(content);
 
@@ -98,6 +100,8 @@ export function StickyNode({ id, node }: NodeBodyProps) {
       )}
       {/* 标签（§17）：便签把它画在自己正文的底栏里——节点头部不许多出一行。 */}
       <div className="flex shrink-0 items-center gap-1.5 px-2 pb-1 text-[length:var(--text-caption)] text-muted-foreground">
+        {/* 输出到画板的便签：来自哪个 Agent，点一下跳回去（ACP 设计 §7）。 */}
+        {source && <SourceBadge source={source} at={node.createdAt} />}
         <NodeLabelChips node={node} />
         <Button
           variant="ghost"

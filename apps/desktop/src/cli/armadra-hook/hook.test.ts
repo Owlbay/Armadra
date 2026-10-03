@@ -248,6 +248,43 @@ describe("launcher", () => {
     );
   });
 
+  it("writes the same launcher under another name for the bundled ama", () => {
+    expect(launcherFileName("linux", "ama")).toBe("ama");
+    expect(launcherFileName("win32", "ama")).toBe("ama.exe");
+    const directory = path.join(tempdir(), "bin");
+    const target = { runner: "/opt/Armadra", bundle: "/res/agent/ama.cjs" };
+    const posix = writeLauncher(directory, target, "linux", { name: "ama" });
+    expect(posix).toBe(path.join(directory, "ama"));
+    const script = fs.readFileSync(posix, "utf8");
+    expect(script).toContain("ELECTRON_RUN_AS_NODE=1");
+    expect(script).toContain('exec "/opt/Armadra" "/res/agent/ama.cjs" "$@"');
+    expect(script).toContain("Armadra launcher for ama");
+    // The hook client's own launcher is untouched beside it.
+    expect(fs.existsSync(path.join(directory, "armadra-hook"))).toBe(false);
+
+    // Windows: the compiled hook launcher is reused, reading `ama.launch`.
+    const built = path.join(tempdir(), "armadra-hook.exe");
+    fs.writeFileSync(built, "MZ launcher");
+    const windows = writeLauncher(
+      directory,
+      {
+        runner: "C:\\A\\armadra.exe",
+        bundle: "C:\\A\\ama.cjs",
+        windowsExe: built,
+      },
+      "win32",
+      { name: "ama" },
+    );
+    expect(windows).toBe(path.join(directory, "ama.exe"));
+    expect(fs.readFileSync(path.join(directory, "ama.launch"), "utf8")).toBe(
+      "C:\\A\\armadra.exe\r\nC:\\A\\ama.cjs\r\n",
+    );
+    expect(fs.existsSync(path.join(directory, "ama.cmd"))).toBe(true);
+    expect(() =>
+      writeLauncher(directory, target, "linux", { name: "../x" }),
+    ).toThrow(/launcher name/);
+  });
+
   it("refuses a launch config the .exe would misread", () => {
     expect(() =>
       windowsLaunchConfig({ runner: "C:\\a\nb.exe", bundle: "C:\\b.js" }),

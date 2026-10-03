@@ -157,6 +157,9 @@ describe("界面文案", () => {
       if (path.startsWith("/src/i18n/")) continue;
       if (/\.test\.tsx?$/.test(path)) continue;
       if (path.endsWith("test-harness.tsx")) continue;
+      // 设计展示页的假数据：消息正文、文件名、成员名是数据不是界面文案
+      // （设计展示页 §2.2）。
+      if (path.startsWith("/src/showcase/fixtures/")) continue;
       stripComments(source)
         .split("\n")
         .forEach((line, index) => {
