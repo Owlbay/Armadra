@@ -9,14 +9,18 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { envVar, isValidNodeId, pendingDir } from "./endpoint.js";
-import type { Endpoint } from "./endpoint.js";
+import {
+  envVar,
+  isValidNodeId,
+  pendingDir,
+} from "../../hook-client/endpoint.js";
+import type { Endpoint } from "../../hook-client/endpoint.js";
 import { loadBinding } from "./binding.js";
-import { canonicalJsonBytes, parseJson } from "./json.js";
-import type { JsonValue } from "./json.js";
-import { postJsonRequest, send as httpSend } from "./http.js";
-import { headersFor, loadSession, send } from "./session.js";
-import type { Session } from "./session.js";
+import { canonicalJsonBytes, parseJson } from "../../hook-client/json.js";
+import type { JsonValue } from "../../hook-client/json.js";
+import { postJsonRequest, send as httpSend } from "../../hook-client/http.js";
+import { headersFor, loadSession, send } from "../../hook-client/session.js";
+import type { Session } from "../../hook-client/session.js";
 import { HOOK_PROTOCOL_VERSION, MAX_PAYLOAD_BYTES } from "./usage.js";
 
 /**

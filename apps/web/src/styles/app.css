@@ -69,8 +69,10 @@
   /* ── 状态色 ──────────────────────────────────────────────────────── */
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
+  --color-success-text: var(--success-text);
   --color-warn: var(--warn);
   --color-warn-soft: var(--warn-soft);
+  --color-warn-text: var(--warn-text);
   --color-caution: var(--caution);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
@@ -78,6 +80,7 @@
   --color-danger-solid: var(--danger-solid);
   --color-working: var(--agent-working);
   --color-working-soft: var(--agent-working-soft);
+  --color-working-text: var(--working-text);
 
   /* ── Agent 品牌色 ────────────────────────────────────────────────── */
   --color-agent-claude: var(--agent-claude);
@@ -86,6 +89,25 @@
   --color-agent-pi: var(--agent-pi);
   --color-agent-omp: var(--agent-omp);
   --color-agent-copilot: var(--agent-copilot);
+  --color-agent-ama: var(--agent-ama);
+  --color-agent-claude-text: var(--agent-claude-text);
+  --color-agent-codex-text: var(--agent-codex-text);
+  --color-agent-opencode-text: var(--agent-opencode-text);
+  --color-agent-pi-text: var(--agent-pi-text);
+  --color-agent-omp-text: var(--agent-omp-text);
+  --color-agent-copilot-text: var(--agent-copilot-text);
+  --color-agent-ama-text: var(--agent-ama-text);
+  --color-on-agent: var(--on-agent);
+
+  /* ── 成员色（§2.5） ──────────────────────────────────────────────── */
+  --color-member-1: var(--member-1);
+  --color-member-2: var(--member-2);
+  --color-member-3: var(--member-3);
+  --color-member-4: var(--member-4);
+  --color-member-5: var(--member-5);
+  --color-member-6: var(--member-6);
+  --color-member-7: var(--member-7);
+  --color-member-8: var(--member-8);
 
   /* ── 圆角 ────────────────────────────────────────────────────────── */
   --radius-sm: var(--r-sm);
@@ -97,6 +119,7 @@
   --radius-card: var(--r-card);
   --radius-panel: var(--r-panel);
   --radius-dialog: var(--r-dialog);
+  --radius-pill: var(--r-pill);
 
   /* ── 字体 ────────────────────────────────────────────────────────── */
   --font-sans: var(--font-ui);

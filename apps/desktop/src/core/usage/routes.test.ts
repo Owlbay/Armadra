@@ -7,7 +7,14 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -138,7 +145,6 @@ async function harness(): Promise<Harness> {
       rmSync(dataDir, { recursive: true, force: true });
       delete process.env.ARMADRA_GITHUB_OAUTH_BASE;
       delete process.env.ARMADRA_GITHUB_API_BASE;
-      delete process.env.ARMADRA_SECRET_BACKEND;
       delete process.env.CLAUDE_CONFIG_DIR;
       delete process.env.CODEX_HOME;
       delete process.env.PI_CODING_AGENT_DIR;
@@ -226,14 +232,33 @@ describe("用量的九条路由", () => {
     // 令牌进的是 0600 文件后端，而不是响应。
     expect(JSON.stringify(authorized)).not.toContain("gho_test_token");
     expect(
-      readTokenFile(join(state.dataDir, "secrets/Armadra Copilot.token")),
+      readTokenFile(join(state.dataDir, "secrets/armadra-copilot.token")),
     ).toBe("gho_test_token");
 
     const out = await json("/api/usage/copilot/logout", "POST");
     expect(out.signedIn).toBe(false);
     expect(
-      readTokenFile(join(state.dataDir, "secrets/Armadra Copilot.token")),
+      readTokenFile(join(state.dataDir, "secrets/armadra-copilot.token")),
     ).toBeUndefined();
+  });
+
+  it("旧名字下的令牌第一次读时搬到 armadra-copilot，只搬一次", async () => {
+    const legacy = join(state.dataDir, "secrets/Armadra Copilot.token");
+    mkdirSync(join(state.dataDir, "secrets"), { recursive: true });
+    writeFileSync(legacy, "gho_legacy_token", { mode: 0o600 });
+
+    const before = await json("/api/usage/copilot", "GET");
+    expect(before.signedIn).toBe(true);
+    expect(before.backend).toBe("file");
+    expect(existsSync(legacy)).toBe(false);
+    expect(
+      readTokenFile(join(state.dataDir, "secrets/armadra-copilot.token")),
+    ).toBe("gho_legacy_token");
+    expect(
+      JSON.parse(
+        readFileSync(join(state.dataDir, "secrets/migrated.json"), "utf8"),
+      ).migrated,
+    ).toContain("copilot.file");
   });
 
   it("用户拒绝是一个终态，而不是继续轮询", async () => {

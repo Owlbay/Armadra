@@ -1,0 +1,43 @@
+# dev-stack 专用的 dex 配置。下面的用户、口令与客户端密钥都是公开的开发夹具，
+# 不是凭据：只在本机回环上可达，内存存储，容器一停就没。
+issuer: http://127.0.0.1:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  skipApprovalScreen: true
+  responseTypes: ["code"]
+
+enablePasswordDB: true
+
+# 口令是 "password"（dex 官方示例里的同一个 bcrypt 哈希）。
+staticPasswords:
+  - email: "dev@armadra.test"
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: "dev"
+    userID: "6f1d2c1e-6a43-4c0e-9d3b-8f1b2b0a0001"
+
+staticClients:
+  # 公开客户端：授权码 + PKCE；dex 允许公开客户端回调到任意回环端口。
+  - id: armadra-dev
+    name: "Armadra dev-stack (public)"
+    public: true
+    redirectURIs:
+      - "https://localhost:8443/api/identity/oauth/callback"
+      - "http://127.0.0.1/callback"
+  # 回环客户端：不列回调，dex 对这种公开客户端放行 http://localhost:<任意端口>/…
+  # （RFC 8252 的原生应用回环回调），测试可以绑临时端口。
+  - id: armadra-dev-loopback
+    name: "Armadra dev-stack (loopback)"
+    public: true
+  # 机密客户端：密钥是开发夹具。
+  - id: armadra-dev-confidential
+    name: "Armadra dev-stack (confidential)"
+    secret: "dev-stack-fixture-not-a-secret"
+    redirectURIs:
+      - "https://localhost:8443/api/identity/oauth/callback"
+      - "http://127.0.0.1/callback"

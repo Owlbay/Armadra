@@ -55,6 +55,8 @@ const Toaster = ({ ...props }: ToasterProps) => {
           "--normal-text": "var(--popover-foreground)",
           "--normal-border": "var(--border)",
           "--border-radius": "var(--radius)",
+          // sonner 自带 z-index 999999999，会盖过开屏；挂到 token 栈（设计系统 §2.11）
+          zIndex: "var(--z-toast)",
         } as React.CSSProperties
       }
       toastOptions={{

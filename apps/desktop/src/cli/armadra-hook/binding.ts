@@ -10,9 +10,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { envVar, isValidNodeId, nodeToken } from "./endpoint.js";
-import { loadSession } from "./session.js";
-import type { Session } from "./session.js";
+import {
+  envVar,
+  isValidNodeId,
+  nodeToken,
+} from "../../hook-client/endpoint.js";
+import { loadSession } from "../../hook-client/session.js";
+import type { Session } from "../../hook-client/session.js";
 
 const MAX_COUNT = 9_007_199_254_740_991n;
 

@@ -47,6 +47,11 @@ import { install as installBrowser } from "./browser";
 import { install as installSchedule } from "./schedule";
 import { install as installDependencies } from "./dependencies";
 import { install as installGit } from "./git";
+import { install as installAcp } from "./acp";
+import { install as installWorkflow } from "./workflow";
+import { install as installRealtime } from "./realtime";
+import { install as installPush } from "./push";
+import { install as installGateway } from "./gateway";
 
 /**
  * The core process.
@@ -177,9 +182,21 @@ export const DOMAINS: readonly ((context: CoreContext) => void)[] = [
   // Git last among the domains that own routes: it reads the workspace table
   // and subscribes to `file.changed`, both of which have to exist first.
   installGit,
-  // Last: the hook service publishes an endpoint file, and nothing may be
-  // advertised before the domains that answer a hook report exist.
+  // 补全计划的四个域（G0-3 先放空骨架，顺序在这里定死）。ACP 在终端之后：
+  // 它的会话行是 `terminal_sessions` 的一种，桥经终端域组合。工作流在 ACP
+  // 之后：一次运行要开节点、投递，两种驱动都得已经在。实时协同在工作流之后：
+  // 控制动词与工作流都经 `saveBoard` 写板，拦截挂在它们全部就位之后。推送
+  // 最后订阅 bus：它要转发前面每个域的事件。
+  installAcp,
+  installWorkflow,
+  installRealtime,
+  installPush,
+  // The hook service publishes an endpoint file, and nothing may be advertised
+  // before the domains that answer a hook report exist.
   installHooks,
+  // Gateway 真正最后：它对外监听，开始监听的那一刻每条路由、每个对外公布的
+  // 端点都必须已经就位。
+  installGateway,
 ];
 
 export async function run(options: RunOptions = {}): Promise<RunningCore> {

@@ -61,7 +61,7 @@ export function MobileFocusPage() {
       aria-label={t("mobile.focus.label")}
       data-slot="mobile-focus"
       className={cn(
-        "fixed inset-0 z-[var(--z-modal,60)] flex flex-col bg-background",
+        "fixed inset-0 z-[var(--z-focus-page)] flex flex-col bg-background",
         // 软键盘弹起时可视高度会缩，dvh 跟着变，工具条不会被顶出屏幕。
         "h-[100dvh]",
       )}

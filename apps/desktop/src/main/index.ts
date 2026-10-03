@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, session } from "electron";
+import { app, dialog, ipcMain, safeStorage, session } from "electron";
 import { join } from "node:path";
 import {
   ALL_CHANNELS,
@@ -61,7 +61,8 @@ import {
   setHostRect,
 } from "./browser";
 import { clearBrowsingData } from "./browser/clear-data";
-import { setDriveEnvironment } from "./runtime-process";
+import { setDriveEnvironment, setSecretChannel } from "./runtime-process";
+import { secretChannel } from "./secrets";
 import { pickDirectory } from "./dialogs";
 import { openExternal, showItemInFolder } from "./external";
 import {
@@ -312,6 +313,8 @@ async function start(): Promise<void> {
   // variable's: a double-clicked application inherits nobody's shell.
   setPackagedShell(app.isPackaged);
   registerIpc();
+  // core 拿不到 `safeStorage`，封与解经 fork 的 IPC 问这里（W-SECRETS）。
+  setSecretChannel(secretChannel(safeStorage));
 
   // The drive channel binds BEFORE the Runtime is spawned, because its address
   // and one-time token only reach the Runtime through that spawn's environment.

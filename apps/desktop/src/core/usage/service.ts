@@ -3,6 +3,8 @@
  * `UsageService`。
  */
 
+import { join } from "node:path";
+
 import type { SettingsStore } from "../settings/store";
 import { BUILT_IN_PRICES, CostService, type PriceTable } from "./cost";
 import { CopilotLogin } from "./copilot-login";
@@ -17,7 +19,17 @@ import {
   type Fetcher,
   type ProviderReport,
 } from "./providers";
-import { SecretStore } from "./secret-store";
+import {
+  type LegacySecret,
+  type ResolvedSecrets,
+  SecretStore,
+  legacyFile,
+  legacyKeychain,
+  migrateLegacySecrets,
+  migrationRecordFile,
+  resolveSecretBackend,
+  secretsDirectory,
+} from "../secrets";
 import {
   emptySnapshot,
   USAGE_PROVIDER_IDS,
@@ -36,12 +48,46 @@ const TICK_INTERVAL_MS = 30_000;
 /** `POST /api/usage/refresh` 是一次用户手势；30 秒一次足够，也挡住一个卡住的 UI。 */
 export const MANUAL_REFRESH_COOLDOWN_MS = 30_000;
 
-/** Copilot 令牌存在哪个 service 名下。 */
-export const COPILOT_SECRET_SERVICE = "Armadra Copilot";
+/** Copilot 令牌存在哪个名字下。 */
+export const COPILOT_SECRET_SERVICE = "armadra-copilot";
+
+/** 统一 `armadra-*` 前缀之前的名字：钥匙串 service 与文件名都是它。 */
+export const LEGACY_COPILOT_SERVICE = "Armadra Copilot";
+
+/**
+ * Copilot 令牌的旧位置：macOS 钥匙串里旧 service 名的条目（只在当前后端就是钥匙串
+ * 时去敲），以及数据目录里旧名字的 0600 文件。
+ */
+export function copilotLegacySecrets(secrets: ResolvedSecrets): LegacySecret[] {
+  const items: LegacySecret[] = [];
+  if (secrets.backend.kind === "keychain") {
+    items.push(
+      legacyKeychain(
+        "copilot.keychain",
+        COPILOT_SECRET_SERVICE,
+        secrets.security,
+        { service: LEGACY_COPILOT_SERVICE },
+      ),
+    );
+  }
+  items.push(
+    legacyFile(
+      "copilot.file",
+      COPILOT_SECRET_SERVICE,
+      join(
+        secretsDirectory(secrets.dataDir),
+        `${LEGACY_COPILOT_SERVICE}.token`,
+      ),
+    ),
+  );
+  return items;
+}
 
 export interface UsageServiceOptions {
   readonly settings: SettingsStore | undefined;
   readonly dataDir: string;
+  /** 这一轮 core 的密钥后端；不给时按数据目录与环境自己挑（不接壳的 IPC）。 */
+  readonly secrets?: ResolvedSecrets;
   readonly fetch?: Fetcher;
   readonly now?: () => number;
   /**
@@ -75,8 +121,18 @@ export class UsageService {
           ? BUILT_IN_PRICES
           : [BUILT_IN_PRICES, options.catalogPrices()],
     );
+    const secrets =
+      options.secrets ?? resolveSecretBackend({ dataDir: options.dataDir });
+    // 旧名字下的令牌在第一次读写时搬过来，装配本身不碰任何存储。
+    let migrated: Promise<unknown> | undefined;
+    const migrate = () =>
+      (migrated ??= migrateLegacySecrets(
+        secrets.backend,
+        copilotLegacySecrets(secrets),
+        migrationRecordFile(secrets.dataDir),
+      ));
     this.copilot = new CopilotLogin(
-      new SecretStore(COPILOT_SECRET_SERVICE, options.dataDir),
+      new SecretStore(secrets.backend, COPILOT_SECRET_SERVICE, migrate),
       this.now,
     );
   }

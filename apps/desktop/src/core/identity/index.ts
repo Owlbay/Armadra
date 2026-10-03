@@ -13,6 +13,7 @@ import {
   requestIdentity,
 } from "./gate";
 import { API_PREFIX, IdentityHttp } from "./http";
+import { installOAuth } from "./oauth";
 import { createRouteGuard } from "./route-access";
 import { IdentityService } from "./service";
 import { IdentityStore } from "./store";
@@ -131,6 +132,10 @@ export function installIdentity(context: CoreContext): void {
       });
     });
   });
+
+  // OAuth / OIDC 的挂点（契约 §18.5）。它自己登记更长的原样前缀，所以放在
+  // 哪一行都先于下面这条整段接管；放在这里是为了让它拿到同一份服务。
+  installOAuth(context, { store, service, accounts });
 
   context.server.raw(API_PREFIX, (request, response, cors) =>
     http.handle(request, response, cors),

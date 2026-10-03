@@ -42,8 +42,17 @@ export const createTerminalRequestSchema = z.object({
  * does. It is a third value rather than a flavour of `direct`, because the
  * two differ in the one way that matters — whether a terminal survives a
  * restart — and the UI must not imply the wrong answer.
+ *
+ * `acp` is a session the core drives over the Agent Client Protocol
+ * (docs/design/acp-session-view.md §4.1): a row in the same table, but no PTY
+ * behind it — the page reads its log instead of attaching.
  */
-export const TERMINAL_BACKENDS = ["direct", "tmux", "sessionHost"] as const;
+export const TERMINAL_BACKENDS = [
+  "direct",
+  "tmux",
+  "sessionHost",
+  "acp",
+] as const;
 export const terminalBackendKindSchema = z.enum(TERMINAL_BACKENDS);
 export const TERMINAL_ATTACH_STATES = ["detached", "live", "exited"] as const;
 export const terminalAttachStateSchema = z.enum(TERMINAL_ATTACH_STATES);

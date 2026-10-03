@@ -155,6 +155,57 @@ Rust↔Go 的归档互通，以及需要受管二进制路径的 `agent:smoke` /
 
 本机想演练完整的清单 + 签名 + 校验用 `pnpm release:dry-run`，它自带一次性密钥，不碰任何真实密钥。
 
+## 本地 dev-stack
+
+`tools/dev-stack/` 用 Docker Compose 在本机起一组外部服务的替身，供探针与集成测试对着跑
+（设计见 [外部服务](../design/external-services.md) §14）。Docker 是可选的：没装、没启动或没有
+compose 插件时，`pnpm dev-stack up` 打印原因并退出 0，依赖它的用例记 `skipped`。
+
+```sh
+pnpm dev-stack up                      # 起全部非 profile 服务，并从宿主机跑健康检查
+pnpm dev-stack up dex mailpit          # 只起其中几个
+pnpm dev-stack up --profile ntfy       # 加上可选 profile（headscale / ntfy）
+pnpm dev-stack health --json           # 只跑健康检查
+pnpm dev-stack logs keycloak -f
+pnpm dev-stack down                    # 加 --volumes 连卷一起删
+```
+
+镜像全部钉到明确版本，端口只绑 `127.0.0.1`。端口与健康检查的唯一来源是
+`tools/dev-stack/services.mjs`，`stack.test.mjs` 守住它与 `docker-compose.yml` 一致。
+
+| 服务             | 端口          | 用途                                                         |
+| ---------------- | ------------- | ------------------------------------------------------------ |
+| `release`        | 8090          | 假 GitHub Releases：`latest.json`、下载、minisign 验签       |
+| `pebble`         | 14000 / 15000 | ACME（验证一律放行，改 `PEBBLE_VA_ALWAYS_VALID=0` 测真挑战） |
+| `step-ca`        | 9000          | 第二个 ACME 实现与本地 CA 根（`/roots.pem`）                 |
+| `dex`            | 5556          | OIDC，issuer `http://127.0.0.1:5556/dex`                     |
+| `keycloak`       | 8080          | OIDC，issuer `http://127.0.0.1:8080/realms/armadra`          |
+| `mailpit`        | 1025 / 8025   | SMTP 与收件 API                                              |
+| `gitea`          | 3000          | Gitea API，管理员 `armadra-dev`                              |
+| `glitchtip`      | 8000          | 崩溃上报（带 postgres 与 redis，均不对外）                   |
+| `push-sink`      | 8091          | 假 APNs（h2c）/ FCM / Web Push / 推送中继，记录请求          |
+| `hibp`           | 8092          | Pwned Passwords range API 固定响应                           |
+| `armadra-server` | 8443          | 容器化服务器壳（`Dockerfile.dev` 占位，自签名 TLS）          |
+| `headscale`      | 8094          | 可选 profile，只做文档验证，不进 CI                          |
+| `ntfy`           | 8093          | 可选 profile，UnifiedPush 分发                               |
+
+开发夹具与密钥：
+
+- dex 与 Keycloak 的用户都是 `dev@armadra.test` / `password`，公开客户端 `armadra-dev`（PKCE S256），
+  机密客户端 `armadra-dev-confidential`。回调要绑临时端口时：dex 用不列回调的公开客户端
+  `armadra-dev-loopback`（放行 `http://localhost:<任意端口>/…`），Keycloak 的 `armadra-dev` 直接放行
+  `http://127.0.0.1:<任意端口>/…`。Keycloak 另有一个 `emailVerified: false` 的 `unverified` 用户。
+  这些是写在 `tools/dev-stack/dex/`、`keycloak/` 里的公开夹具，不是凭据。
+- Keycloak 管理员口令、GlitchTip 的 `SECRET_KEY` 与库口令、Gitea 管理员口令在首次 `up` 时随机生成到
+  `tools/dev-stack/.data/dev.env`（已 gitignore），只在本机。
+- `release` 每次启动现生成 minisign 密钥对，私钥只在容器内存里，公钥写到 `.data/release/minisign.pub`。
+- `push-sink` 的请求用 `GET /_sink/requests` 取、`DELETE` 清；把 `<kid>.pem` 放进
+  `.data/push-sink/apns/` 后 APNs 令牌会验签。设备令牌以 `bad` / `gone` 开头分别答「令牌无效」/「已注销」。
+- `hibp` 里 `password`、`123456`、`qwerty`、`armadra-pwned-fixture` 一定命中。
+
+`armadra-server` 第一次 `up` 要在容器里装依赖并构建页面与服务器壳，耗时几分钟；源码变了用
+`pnpm dev-stack up armadra-server --build` 重建。
+
 ## 来源与凭据
 
 core 的 CORS 只放行回环 HTTP 来源：桌面壳放行的是自己静态服务的那个来源（端口由内核分配，
@@ -185,6 +236,8 @@ preload 注入页面，没有票据链；服务器壳的设备配对与可撤销
 | `ARMADRA_HOOK_TIMEOUT_MS`                       | Agent 扩展模块上报的超时（默认 1500 ms，上限 60000）。只有测试驱动会调大它：进程级回退路径要在同一预算里起一个子进程            |
 | `ARMADRA_REMOTE_WORKER_LAUNCHER`                | 替换远端 Worker 启动行的 argv[0]（默认 `ssh`）。必须是绝对路径、不含空白；SSH 选项与远端命令原样保留。测试与自建隧道用          |
 | `ARMADRA_STATUS_PAGE_BASE`                      | 用量页的 Provider 状态页改读 `<地址>/<anthropic\|openai\|github>/api/v2/status.json`（探针用本机 fixture，不碰真网络）          |
+| `ARMADRA_SECRET_BACKEND`                        | `=file` 强制密钥后端为 0600 明文文件（测试与无人值守；测试的 setup 默认设了它，不碰开发者的钥匙串）                             |
+| `ARMADRA_SECRET_MASTER_KEY_FILE`                | 服务器壳的 master key 换个位置（如 systemd `LoadCredential=`）；不设时用 `<数据目录>/secrets/master.key`，首启生成              |
 
 脚本发现 core 端口占用时直接报错。节点身份、Hook token、端点与权限等待变量由 core 注入 Agent 终端，无需手工配置。
 core 不监听 TCP 时 `hook-endpoint.env` 不写 `ARMADRA_HOOK_PORT`，Hook 客户端只走 `hook.sock`。

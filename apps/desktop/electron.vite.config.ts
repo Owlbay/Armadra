@@ -134,6 +134,11 @@ const coreConfig: UserConfig = {
  *
  * `codeSplitting: false` keeps it to the one file the launcher names; nothing
  * but the shell's own externals is external, so the bundle is self-contained.
+ *
+ * `src/hook-client/` (endpoint discovery, node token, HTTP, the verb tool
+ * table) is shared source, not a package: it is inlined into this same file
+ * through the CLI's imports, and the adapters that reuse it inline it into
+ * their own bundles the same way. `ssr.noExternal` is what keeps it inside.
  */
 const cliConfig: UserConfig = {
   build: {
