@@ -1,8 +1,10 @@
 import { z } from "zod";
 import {
   workflowDraftRowSchema,
+  workflowFrozenScheduleSchema,
   workflowRunSchema,
   workflowTemplateSchema,
+  workflowUpgradeResultSchema,
   type WorkflowDraft,
   type WorkflowDraftRow,
   type WorkflowRunJson,
@@ -32,7 +34,11 @@ const confirmSchema = z.object({
 const templatesSchema = z.object({
   templates: z.array(workflowTemplateSchema),
 });
-const templateSchema = z.object({ template: workflowTemplateSchema });
+/** 改模板的答复：多一列冻结在旧版本上的计划（契约 §15.6）。 */
+const updatedTemplateSchema = z.object({
+  template: workflowTemplateSchema,
+  frozenSchedules: z.array(workflowFrozenScheduleSchema).default([]),
+});
 const runsSchema = z.object({ runs: z.array(workflowRunSchema) });
 const runSchema = z.object({ run: workflowRunSchema });
 
@@ -73,10 +79,21 @@ export const workflowsApi = {
     templateId: string,
     input: { name?: string; template: WorkflowDraft },
   ) =>
-    request(`${BASE}/templates/${id(templateId)}`, templateSchema, {
+    request(`${BASE}/templates/${id(templateId)}`, updatedTemplateSchema, {
       method: "PUT",
       ...json(input),
-    }).then((body) => body.template),
+    }),
+  /** 把冻结在旧版本上的计划升到模板的当前版本（只升参数相容的）。 */
+  upgradeSchedules: (
+    templateId: string,
+    workspaceId: string,
+    scheduleIds: readonly string[],
+  ) =>
+    request(
+      `${BASE}/templates/${id(templateId)}/upgrade-schedules${search({ workspaceId })}`,
+      workflowUpgradeResultSchema,
+      { method: "POST", ...json({ scheduleIds }) },
+    ),
   deleteTemplate: (templateId: string) =>
     request(`${BASE}/templates/${id(templateId)}`, noContentSchema, {
       method: "DELETE",

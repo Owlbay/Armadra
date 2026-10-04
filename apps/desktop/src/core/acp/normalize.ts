@@ -21,8 +21,12 @@
  * | `turn` 正常结束      | `done`（`errored: false`）                                 |
  * | `turn` `cancelled`   | `done`，`interrupted`                                      |
  * | `turn` 拒答或出错    | `done`，`errored`，`lastMessage` 记错误                    |
- * | `elicitation`        | `waiting`，`awaitingInput`（core 从不自动答）              |
+ * | `elicitation`        | `waiting`，`pendingId`（core 从不自动答，契约 §26.1）      |
  * | `closed`             | `session` / `end`                                          |
+ *
+ * elicitation 不置 `awaitingInput`：那条「问题未答时回合结束改写成 waiting」的
+ * 规则是给 Hook 模式里看不见答复的提问用的；ACP 的答复（或取消）一定经
+ * `permissionSettled` 回来，挂着它只会让答完之后的 `done` 被改写成 `waiting`。
  *
  * 适配器退出不在这里：那是终端域的退出通知（`terminalGoneEvent`），与 PTY
  * 死亡同一条路。
@@ -60,7 +64,7 @@ export type AcpSignal =
       readonly stopReason?: string | undefined;
       readonly error?: string | undefined;
     }
-  | { readonly signal: "elicitation" }
+  | { readonly signal: "elicitation"; readonly pendingId: string }
   | { readonly signal: "closed" };
 
 /** `lastMessage` 的上限与共享 schema 一致；提示只留开头，够认出是哪一轮。 */
@@ -170,8 +174,11 @@ function eventOf(
       return event;
     }
     case "elicitation": {
+      if (typeof signal.pendingId !== "string" || signal.pendingId === "") {
+        return undefined;
+      }
       const event = stateEvent(nodeId, agentId, WAITING);
-      event.awaitingInput = true;
+      event.pendingId = signal.pendingId;
       return event;
     }
     default:

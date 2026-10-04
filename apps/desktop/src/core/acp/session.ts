@@ -16,19 +16,36 @@
  *     options }`）；答复从 `agent/approvals.ts` 的 `"acp"` 路由回到这里。
  *     回合被取消、适配器退出、切换驱动、休眠：挂起的请求一律回 `cancelled`，
  *     审批行记 `cancelled` / `core`。core 从不替人选项。
+ *   * **elicitation**（契约 §26.1）：`elicitation/create` 同样进
+ *     `agent_approvals`（`request_json = { protocol: "acp", elicitation }`），
+ *     状态 `waiting`（带 `pendingId`）；答复经同一条审批路由回到这里，取消、
+ *     退出、休眠一律回 `cancel`。core 从不替人填表。
+ *   * **模型**（契约 §26.2）：目录来自开会话答的配置项，`config_option_update`
+ *     与 `setModel` 更新它。
  */
 
 import type { WorkspaceEvent } from "../bus";
 import { AcpError } from "./client";
 import type {
+  AcpElicitationSettlement,
   AcpExit,
+  AcpPendingElicitation,
   AcpPendingPermission,
   AcpPermissionSettlement,
 } from "./client";
+import { type StoredElicitation, storedElicitation } from "./elicitation";
+import {
+  type AcpModelCatalog,
+  type AcpModelState,
+  configOptionsOf,
+  modelCatalogOf,
+  modelStateOf,
+} from "./models";
 import type { AcpHostSession, AcpUpdateMeta } from "./host";
 import type { AcpMirror } from "./mirror";
 import type { AcpSignal } from "./normalize";
 import type {
+  AcpElicitationResult,
   AcpPermissionOption,
   AcpSessionModeState,
   AcpSessionNotification,
@@ -72,6 +89,11 @@ export interface AcpSessionCallbacks {
     pending: AcpPendingPermission,
     settlement: AcpPermissionSettlement,
   ) => void;
+  readonly onElicitation: (pending: AcpPendingElicitation) => void;
+  readonly onElicitationSettled: (
+    pending: AcpPendingElicitation,
+    settlement: AcpElicitationSettlement,
+  ) => void;
   readonly onExit: (exit: AcpExit) => void;
 }
 
@@ -91,6 +113,13 @@ export interface AcpPendingView {
   readonly protocol: "acp";
   readonly toolCall: AcpToolCallUpdate;
   readonly options: readonly AcpPermissionOption[];
+}
+
+/** 页面重载时要画的那张 elicitation 卡（契约 §26.1，`…/log` 的 `elicitations`）。 */
+export interface AcpPendingElicitationView {
+  readonly pendingId: string;
+  readonly protocol: "acp";
+  readonly elicitation: StoredElicitation;
 }
 
 let permissionSeq = 0;
@@ -120,12 +149,21 @@ export class AcpSession implements AcpSessionIdentity {
   /** pendingId → 挂起表里的 id。 */
   private readonly permissions = new Map<string, AcpPendingPermission>();
   private readonly byProcessId = new Map<string, string>();
+  /** pendingId → 挂起表里的 elicitation 与存进审批行的那一份。 */
+  private readonly elicitations = new Map<
+    string,
+    {
+      readonly pending: AcpPendingElicitation;
+      readonly stored: StoredElicitation;
+    }
+  >();
   private turns = 0;
   private queue: Promise<void> = Promise.resolve();
   private running: string | undefined;
   private queued = 0;
   private closed = false;
   private modeState: AcpSessionModeState | null = null;
+  private modelCatalog: AcpModelCatalog | null = null;
 
   constructor(options: AcpSessionOptions) {
     this.options = options;
@@ -149,6 +187,9 @@ export class AcpSession implements AcpSessionIdentity {
       onPermission: (pending) => this.onPermission(pending),
       onPermissionSettled: (pending, settlement) =>
         this.onPermissionSettled(pending, settlement),
+      onElicitation: (pending) => this.onElicitation(pending),
+      onElicitationSettled: (pending, settlement) =>
+        this.onElicitationSettled(pending, settlement),
       onExit: (exit) => this.onExit(exit),
     };
   }
@@ -160,6 +201,7 @@ export class AcpSession implements AcpSessionIdentity {
   opened(host: AcpHostSession): void {
     this.host = host;
     this.modeState = host.modes;
+    this.modelCatalog = host.models;
     const mirror = this.options.mirrorFor(host.sessionId);
     this.mirror = mirror;
     this.sink.signal({
@@ -197,6 +239,11 @@ export class AcpSession implements AcpSessionIdentity {
     return this.modeState;
   }
 
+  /** 模型目录（`…/log` 的 `models`）；不给选时为 `null`。 */
+  get models(): AcpModelState | null {
+    return modelStateOf(this.modelCatalog);
+  }
+
   get mirrorPath(): string | undefined {
     return this.mirror?.path;
   }
@@ -213,6 +260,15 @@ export class AcpSession implements AcpSessionIdentity {
       protocol: "acp",
       toolCall: pending.toolCall,
       options: pending.options,
+    }));
+  }
+
+  /** 挂起的 elicitation（`…/log` 的 `elicitations`）。 */
+  pendingElicitations(): AcpPendingElicitationView[] {
+    return [...this.elicitations.entries()].map(([pendingId, entry]) => ({
+      pendingId,
+      protocol: "acp",
+      elicitation: entry.stored,
     }));
   }
 
@@ -326,6 +382,47 @@ export class AcpSession implements AcpSessionIdentity {
   }
 
   /**
+   * 落模型（`session/set_config_option`）。目录里没有答 `acp_model_unavailable`，
+   * 客户端没有这个能力答 `acp_model_unsupported`。
+   */
+  async setModel(modelId: string): Promise<void> {
+    const host = this.host;
+    if (host === undefined || !this.alive) {
+      throw new AcpError("acp_exited", "the ACP agent is not running");
+    }
+    const catalog = this.modelCatalog;
+    if (
+      catalog === null ||
+      !catalog.availableModels.some((model) => model.modelId === modelId)
+    ) {
+      throw new AcpError(
+        "acp_model_unavailable",
+        `the agent offers no model ${modelId}`,
+      );
+    }
+    const answer = await host.process.setConfigOption(
+      host.sessionId,
+      catalog.configId,
+      modelId,
+    );
+    this.modelCatalog = modelCatalogOf(answer) ?? {
+      ...catalog,
+      currentModelId: modelId,
+    };
+  }
+
+  /**
+   * 答一条挂起的 elicitation（内容已由审批层按 schema 校验）。不认识或已经
+   * 结束的答 `false`。
+   */
+  answerElicitation(pendingId: string, result: AcpElicitationResult): boolean {
+    const entry = this.elicitations.get(pendingId);
+    const host = this.host;
+    if (entry === undefined || host === undefined) return false;
+    return host.process.answerElicitation(entry.pending.id, result);
+  }
+
+  /**
    * 答一条挂起的审批。`optionId` 必须是 Agent 给的选项之一；`null` = 回
    * `cancelled`。不认识或已经结束的答 `false`。
    */
@@ -338,7 +435,7 @@ export class AcpSession implements AcpSessionIdentity {
 
   /** 这条审批归不归这个会话管。 */
   owns(pendingId: string): boolean {
-    return this.permissions.has(pendingId);
+    return this.permissions.has(pendingId) || this.elicitations.has(pendingId);
   }
 
   /**
@@ -383,6 +480,15 @@ export class AcpSession implements AcpSessionIdentity {
       if (typeof modeId === "string" && this.modeState !== null) {
         this.modeState = { ...this.modeState, currentModeId: modeId };
       }
+    }
+    if (
+      (update.sessionUpdate as string) === "config_option_update" &&
+      this.modelCatalog !== null
+    ) {
+      // 只在已经有目录时跟：没有 `configOptions` 能力就没有改模型的路，跟了
+      // 也只是画一个改不了的 Select。
+      const next = modelCatalogOf(configOptionsOf(update));
+      if (next !== null) this.modelCatalog = next;
     }
     try {
       this.mirror?.update(update, false);
@@ -435,6 +541,39 @@ export class AcpSession implements AcpSessionIdentity {
     this.permissions.delete(pendingId);
     if (settlement.by === "cancelled") this.sink.cancelled(pendingId);
     // 答了（或被取消了）：回合还在就回到 working，直到它的 stopReason。
+    if (this.running !== undefined && this.host?.process.alive === true) {
+      this.sink.signal({ signal: "permissionSettled" });
+    }
+  }
+
+  private onElicitation(pending: AcpPendingElicitation): void {
+    // 一个进程一个会话：没带 sessionId 的也是这个会话的。
+    if (
+      pending.sessionId !== "" &&
+      this.host !== undefined &&
+      pending.sessionId !== this.host.sessionId
+    ) {
+      return;
+    }
+    const pendingId = pendingIdFor(this.nodeId);
+    const stored = storedElicitation(pending.request);
+    this.elicitations.set(pendingId, { pending, stored });
+    this.byProcessId.set(pending.id, pendingId);
+    this.sink.signal(
+      { signal: "elicitation", pendingId },
+      { protocol: "acp", elicitation: stored },
+    );
+  }
+
+  private onElicitationSettled(
+    pending: AcpPendingElicitation,
+    settlement: AcpElicitationSettlement,
+  ): void {
+    const pendingId = this.byProcessId.get(pending.id);
+    if (pendingId === undefined) return;
+    this.byProcessId.delete(pending.id);
+    this.elicitations.delete(pendingId);
+    if (settlement.by === "cancelled") this.sink.cancelled(pendingId);
     if (this.running !== undefined && this.host?.process.alive === true) {
       this.sink.signal({ signal: "permissionSettled" });
     }
