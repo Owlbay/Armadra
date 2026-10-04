@@ -13,7 +13,11 @@ import {
   runAs,
 } from "../identity/gate";
 import type { CorePlatform } from "../platform";
-import { CLOSE_ACCESS_REVOKED, CoreServer } from "./server";
+import {
+  CLOSE_ACCESS_EXPIRED,
+  CLOSE_ACCESS_REVOKED,
+  CoreServer,
+} from "./server";
 
 /**
  * 已经升级的流在授权变化之后复核（安全审查 2026-10 的 M3）：终端、语言服务、
@@ -125,6 +129,86 @@ describe("长连接在授权变化后复核", () => {
     allow = false;
     accessChanged();
     await new Promise((done) => setTimeout(done, 50));
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+    socket.close();
+  });
+});
+
+/**
+ * 安全审查 L1：原来只有授权变化才复核，访问令牌（15 分钟）到期本身不断流——
+ * 一条升级过的终端流能比签给它的令牌活得久。现在到期那一刻按会话再认一次。
+ */
+describe("长连接在访问令牌到期时复核", () => {
+  const settle = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+  it("到期而没有刷新：以 4401 关（不是 4403，页面照常重连）", async () => {
+    const port = await serve({
+      subject: MEMBER,
+      accessExpiresAtMs: Date.now() + 150,
+      renew: () => undefined,
+    });
+    installRouteGuard(() => ({ allowed: true }));
+    const { socket, code } = await open(port);
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+    expect(await code).toBe(CLOSE_ACCESS_EXPIRED);
+  });
+
+  it("刷新过就续到新的到期时刻；之后不再刷新就关", async () => {
+    let expiresAt = Date.now() + 150;
+    let renewals = 0;
+    const port = await serve({
+      subject: MEMBER,
+      accessExpiresAtMs: expiresAt,
+      renew: () => {
+        renewals += 1;
+        // 第一次到期时页面已经刷新过一次；第二次没有。
+        if (renewals === 1) expiresAt = Date.now() + 200;
+        return expiresAt > Date.now()
+          ? { subject: MEMBER, accessExpiresAtMs: expiresAt }
+          : undefined;
+      },
+    });
+    installRouteGuard(() => ({ allowed: true }));
+    const { socket, code } = await open(port);
+    await settle(250);
+    expect(renewals).toBe(1);
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+    expect(await code).toBe(CLOSE_ACCESS_EXPIRED);
+    expect(renewals).toBe(2);
+  });
+
+  it("刷新过、但门不再放行：以 4403 关；判定用复核后的主体", async () => {
+    const renewed: AuthorizationSubject = {
+      principalId: "p-renewed",
+      kind: "member",
+      scopes: [],
+    };
+    const port = await serve({
+      subject: MEMBER,
+      accessExpiresAtMs: Date.now() + 150,
+      renew: () => ({
+        subject: renewed,
+        accessExpiresAtMs: Date.now() + 60_000,
+      }),
+    });
+    let upgraded = false;
+    installRouteGuard(() => {
+      const who = requestIdentity()?.subject.principalId;
+      if (!upgraded) {
+        upgraded = true;
+        return { allowed: true };
+      }
+      return { allowed: who !== "p-renewed" };
+    });
+    const { code } = await open(port);
+    expect(await code).toBe(CLOSE_ACCESS_REVOKED);
+  });
+
+  it("没有到期时刻（桌面壳）不设定时", async () => {
+    const port = await serve({ subject: MEMBER, renew: () => undefined });
+    installRouteGuard(() => ({ allowed: true }));
+    const { socket } = await open(port);
+    await settle(200);
     expect(socket.readyState).toBe(WebSocket.OPEN);
     socket.close();
   });

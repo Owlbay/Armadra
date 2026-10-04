@@ -666,6 +666,35 @@ export class IdentityService {
   }
 
   /**
+   * 长连接的复核（安全审查 L1）：按**会话**而不是某一把访问令牌认——页面刷新过
+   * 之后旧令牌不再匹配，而会话还是同一个。会话失效（登出、撤销、停用、过期）或
+   * 访问期已过而没有刷新，一律 `unauthenticated`。只给 core 内部用：调用方必须
+   * 已经在升级前用访问令牌认过这个会话。
+   */
+  sessionAccess(request: {
+    readonly sessionId: string;
+    readonly hostId: string;
+    readonly origin: string;
+  }): Principal {
+    if (!this.audience(request.hostId, request.origin)) {
+      throw new IdentityError("unauthenticated");
+    }
+    return this.store.transaction((tx) => {
+      const now = this.now();
+      const live = this.liveSession(tx, request.sessionId, request.origin, now);
+      if (now >= live.session.accessExpiresAtMs) {
+        throw new IdentityError("unauthenticated");
+      }
+      return principalOf(
+        this.store.hostId(),
+        live.session,
+        live.device,
+        live.scopes,
+      );
+    });
+  }
+
+  /**
    * 轮转三把密钥。用过的刷新票再也换不出东西——重放不是「重试」，是拒绝。最初
    * 那个 30 天的绝对期限跨轮转保留。
    */

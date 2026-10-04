@@ -50,11 +50,26 @@ export interface RequestIdentity {
    */
   readonly revalidate?: () => AuthorizationSubject | undefined;
   /**
+   * 升级时访问令牌的到期时刻（毫秒）。有它和 {@link renew} 时，长连接在这一刻
+   * 复核一次（安全审查 L1）：访问令牌 15 分钟，流不能比它活得更久而不再认人。
+   */
+  readonly accessExpiresAtMs?: number;
+  /**
+   * 按会话复核：会话仍有效、访问期还没过（页面刷新过就是新的到期时刻）时给出
+   * 当前主体与到期时刻，否则 `undefined`。
+   */
+  readonly renew?: () => SessionRenewal | undefined;
+  /**
    * 这次请求来自身份域里的哪台设备（会话绑着的那一行 `identity_devices`）。
    * 服务器壳认证出会话时带上；桌面壳没有，那里只有「本机」一台设备。在线表拿它
    * 判「是不是同一个人的另一个窗口」，设备名也优先用它的。
    */
   readonly device?: { readonly deviceId: string; readonly deviceName: string };
+}
+
+export interface SessionRenewal {
+  readonly subject: AuthorizationSubject;
+  readonly accessExpiresAtMs: number;
 }
 
 const OWNER_SUBJECT: AuthorizationSubject = {

@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { isIPv4, isIPv6 } from "node:net";
 import type { OAuthProvider } from "../../settings/schema";
 import type { Mfa } from "../mfa";
 import type { IdentityService, SessionCredentials } from "../service";
@@ -38,8 +39,38 @@ import {
 
 /** 一条流程记录活多久。 */
 export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
-/** 同时挂着的流程上限；满了挤掉最老的。 */
-const MAX_PENDING = 1000;
+/** 同时挂着的流程上限（全部来源合计）。 */
+export const MAX_PENDING = 1000;
+/**
+ * 一个来源地址（IPv6 按 /64）同时挂着的上限；满了挤掉它自己最老的那条。
+ *
+ * 安全审查 L4：原来是一张表满了挤最老的，发起只受每地址的限流，从多个地址
+ * 撒 `start` 就能把别人半途的登录挤掉。分桶后一个地址只能挤自己；总表满了
+ * 挤的是挂得最多的那个地址最老的一条，只挂一两条的正常用户排在最后。
+ */
+export const MAX_PENDING_PER_ADDRESS = 50;
+
+/**
+ * 分桶用的来源键：IPv4（含 IPv4 映射的 IPv6）按整个地址；IPv6 按前 64 位——
+ * 一台主机通常拿到整个 /64，按单个地址分桶等于没分。
+ */
+export function addressBucket(remoteIp: string): string {
+  const raw = remoteIp.trim().toLowerCase();
+  const mapped = raw.startsWith("::ffff:") ? raw.slice(7) : raw;
+  if (isIPv4(mapped)) return mapped;
+  if (!isIPv6(raw)) return raw;
+  const [head = "", tail] = raw.split("::");
+  const left = head === "" ? [] : head.split(":");
+  const right = tail === undefined || tail === "" ? [] : tail.split(":");
+  const groups =
+    tail === undefined
+      ? left
+      : [...left, ...Array(8 - left.length - right.length).fill("0"), ...right];
+  return `${groups
+    .slice(0, 4)
+    .map((group) => group.replace(/^0+(?=.)/, ""))
+    .join(":")}::/64`;
+}
 
 export type FlowMode = "login" | "bind";
 
@@ -78,6 +109,11 @@ export type FlowOutcome =
       readonly kind: "session";
       readonly credentials: SessionCredentials;
       readonly signedUp: boolean;
+      /**
+       * `identity.mfa.requireFor` 覆盖这个人而还没登记 TOTP：放进来，页面带去
+       * 登记（与口令登录的 `mfaEnrollmentRequired` 同一条，契约 §18.3）。
+       */
+      readonly mfaEnrollmentRequired: boolean;
       readonly origin: string;
       readonly returnTo: string;
     }
@@ -98,6 +134,8 @@ export interface OAuthFlowOptions {
   readonly service: IdentityService;
   /** 有就接 MFA：登记过 TOTP 的人 OAuth 登录后还要过第二因素。 */
   readonly mfa?: Mfa;
+  /** `identity.mfa.requireFor` 是否覆盖这个角色；没有就当不覆盖。 */
+  readonly mfaRequired?: (role: "owner" | "member") => boolean;
   readonly fetcher?: FetchLike;
   readonly github?: GithubEndpoints;
   /** `armadra-oidc-<id>` 里的 client secret；公开客户端没有。 */
@@ -165,10 +203,7 @@ export class OAuthFlow {
         : (await this.directory.discover(provider.issuer ?? ""))
             .authorizationEndpoint;
     this.prune();
-    if (this.pending.size >= MAX_PENDING) {
-      const oldest = this.pending.keys().next().value;
-      if (oldest !== undefined) this.pending.delete(oldest);
-    }
+    this.makeRoom(addressBucket(input.remoteIp));
     const state = randomBytes(32).toString("base64url");
     const binding = randomBytes(32).toString("base64url");
     const codeVerifier = randomBytes(48).toString("base64url");
@@ -376,8 +411,9 @@ export class OAuthFlow {
         }
         return {
           principalId: principal.principalId,
+          role: principal.kind === "owner" ? "owner" : "member",
           signedUp: false,
-        };
+        } as const;
       }
       if (!provider.allowSignup || provider.allowedDomains.length === 0) {
         throw fail("oauth_not_bound", "这个第三方身份没有绑定账号", 401);
@@ -408,7 +444,7 @@ export class OAuthFlow {
         workspaceId: "",
         detailJson: JSON.stringify({ provider: provider.id }),
       });
-      return { principalId, signedUp: true };
+      return { principalId, role: "member", signedUp: true } as const;
     });
 
     const mfa = this.options.mfa;
@@ -441,9 +477,37 @@ export class OAuthFlow {
       kind: "session",
       credentials,
       signedUp: resolved.signedUp,
+      mfaEnrollmentRequired: this.options.mfaRequired?.(resolved.role) === true,
       origin: record.origin,
       returnTo: record.returnTo,
     };
+  }
+
+  /**
+   * 给这个来源腾一个位置：它自己满了挤它自己最老的；总表满了挤挂得最多的
+   * 那个来源最老的一条（`pending` 按插入顺序，所以每个桶第一个遇到的就是最老的）。
+   */
+  private makeRoom(bucket: string): void {
+    const counts = new Map<string, number>();
+    const oldest = new Map<string, string>();
+    for (const [state, record] of this.pending) {
+      const key = addressBucket(record.remoteIp);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+      if (!oldest.has(key)) oldest.set(key, state);
+    }
+    if ((counts.get(bucket) ?? 0) >= MAX_PENDING_PER_ADDRESS) {
+      this.pending.delete(oldest.get(bucket) as string);
+      return;
+    }
+    if (this.pending.size < MAX_PENDING) return;
+    let heaviest: string | undefined;
+    for (const [key, count] of counts) {
+      if (heaviest === undefined || count > (counts.get(heaviest) ?? 0)) {
+        heaviest = key;
+      }
+    }
+    if (heaviest !== undefined)
+      this.pending.delete(oldest.get(heaviest) as string);
   }
 
   private prune(): void {

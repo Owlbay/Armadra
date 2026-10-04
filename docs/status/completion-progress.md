@@ -1181,7 +1181,36 @@
 
 ## G5-20 安全杂项（R-07、R-10、R-14、R-16、R-17）
 
-待填（第 2 组）。
+**做了什么**
+
+- L1 长连接到期复核（R-07）：`RequestIdentity` 加 `accessExpiresAtMs` 与 `renew()`；`CoreServer.upgrade` 在访问令牌到期那一刻按会话复核一次。刷新过就续到新的到期时刻；没刷新以 **4401**（`CLOSE_ACCESS_EXPIRED`）关，页面照常重连；刷新过但路由门不放行，以 4403 关。`IdentityService.sessionAccess` 按会话认，不按某一把访问令牌。Gateway 的 `revalidate` 也改用它，所以刷新过访问令牌的流不会再被一次无关的授权变化以 4403 关掉——原来事件流会因此误报「共享被收回」。原生 App 换 WS 票遇 401 时，先轮转访问令牌再换票（`mobile/entry.ts::ticketWithRefresh`）。
+- L4 OAuth 挂起表分桶（R-10）：`oauth/flow.ts` 按来源地址分桶，IPv6 按 /64、IPv4 映射地址按 IPv4。每个地址最多 50 条，满了挤掉它自己最老的一条；总数最多 1000 条，满了挤掉挂得最多的那个地址最老的一条。
+- L8（R-14）：`github/http.ts` 与 `schedule/api.ts` 的写请求改用 `csrfRequired`，只在 Cookie 会话上核 CSRF，Bearer 写不再 403。
+- L10（R-16）：ama 的 `/credential/ama` 读节点 `agent.model`（`<供应商>/<模型>` 或带 `provider` 的对象），只答这一家。不收密钥的供应商答空。没设模型时答全部，并写审计 `ama.credential.unscoped`（安全页文案中英文同步）。
+- R-17：OAuth 登录时，若 `identity.mfa.requireFor` 覆盖此人而他还没登记 TOTP，跳回片段带 `mfaEnrollmentRequired=true`。回调本来就落在安全页，那一页的登记提示照常显示。
+- 契约 §3.2、§12.4、§17.4、§18.5 已追加相应说明；安全审查 §3 的 L1、L4、L8、L10 四行标为「已修（G5-20）」，并写明对应测试。
+
+**实测**（macOS arm64）
+
+- 每条修复都做了反证：把实现换回原样，新用例按预期失败；用上新实现后通过。
+  - `server-revoke.test`：到期复核 3 例。
+  - `gateway.integration.test`：刷新后流仍保持，登出后以 4403 关。
+  - `oauth.test`：分桶 3 例、R-17 两例。
+  - `github/http.test`、`schedule/api.test`：Bearer 写不核 CSRF，Cookie 写仍要。
+  - `ama-credentials.test`、`ama-keys.test`：按供应商只答一家，没设模型时答全部并写审计。
+  - 另有 `service.test` 测 `sessionAccess`，`entry.test` 测换票时的刷新。
+- 全量验证见 PR。
+
+**接口**
+
+- 新关闭码 4401：表示访问令牌到期、没有刷新。页面不要把它当成「授权被收回」，照常重连即可。
+- `IdentityService.sessionAccess({ sessionId, hostId, origin })`：只给 core 内部用。
+- `AmaCredentials.variables(only?)`、`amaKeyScope(model)`、`persistedAmaModel(db, nodeId)`：G5-04 的 ACP 驱动可以复用这一套按供应商兑换。
+
+**没做 / 限制**
+
+- 浏览器（Cookie 模式）页面的 HTTP 请求在访问令牌过期后不会自动刷新，这是原有的限制，本包没改。因此 Cookie 会话的流到期关掉后，要等页面做下一次 `resumeIdentity` / 刷新才连得回来。
+- ama 运行中换到另一家的模型时拿不到那家的密钥，要在节点上改模型后重启。
 
 ## G5-21 Windows 会话宿主退出（R-68）
 

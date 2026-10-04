@@ -22,6 +22,7 @@ import {
   routeGuard,
   runAs,
 } from "../identity/gate";
+import type { AuthorizationSubject } from "../identity/authorize";
 import { type HookHealth, NO_HOOK_SERVICE, healthDocument } from "./health";
 import { type CoreRequest, type HandlerResult, Router } from "./router";
 
@@ -49,6 +50,15 @@ import { type CoreRequest, type HandlerResult, Router } from "./router";
  * 授权变了、复核不过时关流用的码（与实时同步的 4403 同一个，契约 §16.1）。
  */
 export const CLOSE_ACCESS_REVOKED = 4403;
+
+/**
+ * 访问令牌到期、会话没有刷新时关流用的码（安全审查 L1）。与 4403 分开：这不是
+ * 授权被收回，页面照常重连——重连在升级前过门，凭据刷新之后就进得来。
+ */
+export const CLOSE_ACCESS_EXPIRED = 4401;
+
+/** `setTimeout` 能等的最长时间；再远的到期分段等。 */
+const MAX_TIMER_MS = 2_147_483_647;
 
 /** How long `close()` waits for a listener before giving up on it. */
 export const CLOSE_GRACE_MS = 2_000;
@@ -344,20 +354,59 @@ export class CoreServer {
       this.websockets.handleUpgrade(request, socket, head, (connection) => {
         registration.open(connection, found.params, core);
         if (identity === undefined) return;
+        const permitted = (subject: AuthorizationSubject) =>
+          runAs({ ...identity, subject }, () =>
+            routeGuard()(core, this.router.requiredScope("GET", path)),
+          ).allowed;
         const stop = onAccessChanged(() => {
           if (connection.readyState !== connection.OPEN) return;
           const subject =
             identity.revalidate === undefined
               ? identity.subject
               : identity.revalidate();
-          const allowed =
-            subject !== undefined &&
-            runAs({ ...identity, subject }, () =>
-              routeGuard()(core, this.router.requiredScope("GET", path)),
-            ).allowed;
-          if (!allowed) connection.close(CLOSE_ACCESS_REVOKED, "forbidden");
+          if (subject === undefined || !permitted(subject)) {
+            connection.close(CLOSE_ACCESS_REVOKED, "forbidden");
+          }
         });
-        connection.once("close", stop);
+        // 访问令牌到期时再认一次（安全审查 L1）：授权没变的流原来能一直活下去，
+        // 比签给它的令牌活得久。刷新过就续到新的到期时刻，没刷新以 4401 关，
+        // 刷新过但门不放行（授权变了）以 4403 关。
+        let timer: NodeJS.Timeout | undefined;
+        const expire = (atMs: number) => {
+          timer = setTimeout(
+            () => {
+              timer = undefined;
+              if (connection.readyState !== connection.OPEN) return;
+              if (Date.now() < atMs) {
+                expire(atMs);
+                return;
+              }
+              const renewed = identity.renew?.();
+              if (
+                renewed === undefined ||
+                renewed.accessExpiresAtMs <= Date.now()
+              ) {
+                connection.close(CLOSE_ACCESS_EXPIRED, "expired");
+              } else if (!permitted(renewed.subject)) {
+                connection.close(CLOSE_ACCESS_REVOKED, "forbidden");
+              } else {
+                expire(renewed.accessExpiresAtMs);
+              }
+            },
+            Math.min(Math.max(atMs - Date.now(), 0), MAX_TIMER_MS),
+          );
+          timer.unref();
+        };
+        if (
+          identity.accessExpiresAtMs !== undefined &&
+          identity.renew !== undefined
+        ) {
+          expire(identity.accessExpiresAtMs);
+        }
+        connection.once("close", () => {
+          stop();
+          if (timer !== undefined) clearTimeout(timer);
+        });
       });
     })();
   }
