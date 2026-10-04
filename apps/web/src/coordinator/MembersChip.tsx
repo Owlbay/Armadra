@@ -1,6 +1,7 @@
 import { useT } from "@/app/preferences-store";
 import { useCanvasStore } from "@/store/canvas-store";
 import { Badge } from "@/ui/badge";
+import { Button } from "@/ui/button";
 import { memberCount } from "./model";
 import { openDispatchDrawer } from "./store";
 
@@ -19,16 +20,23 @@ export function MembersChip({ nodeId }: { nodeId: string }) {
     <Badge
       asChild
       variant="secondary"
-      className="h-[18px] cursor-pointer px-1.5 text-[length:var(--text-caption)]"
+      className="h-[18px] px-1.5 text-[length:var(--text-caption)]"
     >
-      <button
+      <Button
+        variant="secondary"
+        size="xs"
         type="button"
         data-slot="coordinator-members-chip"
+        data-no-drag="true"
         aria-haspopup="dialog"
-        onClick={() => openDispatchDrawer(nodeId)}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          openDispatchDrawer(nodeId);
+        }}
       >
         {t("coordinator.members", { count })}
-      </button>
+      </Button>
     </Badge>
   );
 }
