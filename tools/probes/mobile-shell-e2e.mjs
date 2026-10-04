@@ -314,6 +314,8 @@ async function android(mint, port, assetUrl) {
     "chromium:*",
     // 进程崩了时插桩只说「Process crashed」：栈在 AndroidRuntime 里。
     "AndroidRuntime:E",
+    // 页面里的 console（只有错误与提示，不含密钥）。
+    "Capacitor/Console:*",
   ]);
   check(
     code === 0,

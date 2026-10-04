@@ -60,7 +60,8 @@ public class ConnectFlowTest {
         }
         // 失败时把页面上看得到的字（连接页的错误提示）带进断言，CI 日志里就能看出卡在哪。
         String page = eval(scenario, "(function(){var n=document.querySelector('[data-slot=\"mobile-connect\"]');"
-                + "return location.href+' | '+(n?n.innerText:document.body.innerText).slice(0,600);})()");
+                + "return location.href+' | oauth='+localStorage.getItem('armadra.oauth.native')+' | '"
+                + "+(n?n.innerText:document.body.innerText).slice(0,600);})()");
         throw new AssertionError("timed out waiting for " + what + ": " + page);
     }
 
@@ -122,8 +123,8 @@ public class ConnectFlowTest {
         Intent link = new Intent(Intent.ACTION_VIEW, Uri.parse("armadra://oauth?state=e2e-state&code=e2e-code"),
                 InstrumentationRegistry.getInstrumentation().getTargetContext(), MainActivity.class);
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(link)) {
-            waitFor(scenario, "document.querySelector('[data-slot=\"security-page\"]')"
-                    + " && localStorage.getItem('armadra.oauth.native')===null && location.hash===''",
+            waitFor(scenario, "localStorage.getItem('armadra.oauth.native')===null", "the oauth link completed");
+            waitFor(scenario, "document.querySelector('[data-slot=\"security-page\"]') && location.hash===''",
                     "security page after the oauth link");
         }
     }

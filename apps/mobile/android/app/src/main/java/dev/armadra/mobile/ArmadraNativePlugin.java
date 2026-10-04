@@ -90,6 +90,7 @@ public class ArmadraNativePlugin extends Plugin {
         if (launchLink != null && handledLaunch.get() != launch) {
             handledLaunch = new WeakReference<>(launch);
             pendingScript = launchLink.script();
+            Log.i(TAG, "deep link at launch: " + launchLink.kind);
         }
         getBridge().addWebViewListener(new WebViewListener() {
             @Override
@@ -103,6 +104,7 @@ public class ArmadraNativePlugin extends Plugin {
                 if (pendingScript != null) {
                     String script = pendingScript;
                     pendingScript = null;
+                    Log.i(TAG, "deep link handed to the page");
                     webView.evaluateJavascript(script, null);
                 }
             }
