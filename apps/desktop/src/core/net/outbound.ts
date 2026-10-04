@@ -170,6 +170,17 @@ export const OUTBOUND = {
     defaultOn: false,
     documented: true,
   },
+  smtp: {
+    // 地址是用户配置的 `ARMADRA_SMTP_URL` / `--smtp-url`（契约 §28），这里只是
+    // 占位主机；不是 HTTPS，所以不会出现在源码扫描里。只有服务器壳会配，桌面壳
+    // 没有这个设置。
+    url: "smtp://<ARMADRA_SMTP_URL 的主机>",
+    purpose: "可选邮件通道（只发邀请与口令重置链接）",
+    cadence: "事件驱动：管理员点「发送邮件」时，每来源每分钟至多 5 封",
+    switch: null,
+    defaultOn: false,
+    documented: true,
+  },
 } as const satisfies Record<string, OutboundEndpoint>;
 
 export type OutboundId = keyof typeof OUTBOUND;

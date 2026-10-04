@@ -34,6 +34,7 @@
     "0032_identity_hardening.sql": "4f34a06a6e5a6db1aa045d5ed0bf0616537a27f70a91429075de15966f3e9db2",
     "0033_push.sql": "73f976b0c35198d23b671d1ad58a2bd5c2a4ef8c160d00c978aaa7e6a916e3f6",
     "0034_workflow.sql": "8ec9eef1c1b01d45d48936c4b07a2ebd3e59b8fbe634910625f5ff2a9c3382ad",
-    "0035_node_creators.sql": "270cfb359b9712a68779536e35feba71f3cb85e857d47bfd581af462cba03a8c"
+    "0035_node_creators.sql": "270cfb359b9712a68779536e35feba71f3cb85e857d47bfd581af462cba03a8c",
+    "0036_password_resets.sql": "23c87aaeb8896df65264a86ae003fcd5abbec13213a733fdbe8de854a3707aff"
   }
 }

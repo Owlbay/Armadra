@@ -524,26 +524,31 @@ function requestIdentityOf(
 ): RequestIdentity {
   const principal = admission.principal;
   if (principal === undefined) return ANONYMOUS;
-  const accessToken = admission.accessToken ?? "";
   const origin = admission.origin ?? "";
+  // 长连接的复核按会话认（升级前已经用访问令牌认过它）：页面刷新过访问令牌，
+  // 流照旧；会话失效、或访问期已过而没有刷新，就不再给主体——被关掉的 socket
+  // 由页面带着新凭据重连，门在升级前。
+  const renew = () => {
+    try {
+      const current = context.service.sessionAccess({
+        sessionId: principal.sessionId,
+        hostId: context.hostId,
+        origin,
+      });
+      return {
+        subject: subjectOf(current),
+        accessExpiresAtMs: current.accessExpiresAtMs,
+      };
+    } catch {
+      return undefined;
+    }
+  };
   return {
     subject: subjectOf(principal),
     device: { deviceId: principal.deviceId, deviceName: principal.deviceName },
-    // 长连接的复核：会话还在就给出当前主体。访问密钥过期（页面会刷新出一把
-    // 新的）也算失效——被关掉的 socket 由页面带着新凭据重连，门在升级前。
-    revalidate: () => {
-      try {
-        return subjectOf(
-          context.service.authenticate({
-            accessToken,
-            hostId: context.hostId,
-            origin,
-          }),
-        );
-      } catch {
-        return undefined;
-      }
-    },
+    accessExpiresAtMs: principal.accessExpiresAtMs,
+    renew,
+    revalidate: () => renew()?.subject,
   };
 }
 

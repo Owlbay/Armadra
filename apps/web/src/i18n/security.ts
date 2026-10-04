@@ -187,6 +187,8 @@ export const security: MessageModule = {
     "security.audit.action.credential.delete": "删除节点凭据",
     "security.audit.action.ama.credential.set": "设置 ama 模型密钥",
     "security.audit.action.ama.credential.clear": "清除 ama 模型密钥",
+    "security.audit.action.ama.credential.unscoped":
+      "ama 节点未设模型，兑换了全部模型密钥",
 
     "security.showcase.passwordError": "口令错误",
     "security.showcase.locked": "锁定",
@@ -389,6 +391,8 @@ export const security: MessageModule = {
     "security.audit.action.credential.delete": "Node credential removed",
     "security.audit.action.ama.credential.set": "ama model key set",
     "security.audit.action.ama.credential.clear": "ama model key cleared",
+    "security.audit.action.ama.credential.unscoped":
+      "ama node without a model redeemed every model key",
 
     "security.showcase.passwordError": "Wrong password",
     "security.showcase.locked": "Locked",

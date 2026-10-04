@@ -210,25 +210,26 @@ node windows-acceptance.mjs --dry-run                                           
 | `failures[]`        | `fail` 项的 id                                                                                      |
 | `leftover`、`error` | 没删掉的临时目录；脚本自己的异常                                                                    |
 
-| id                                     | 验什么                                                                                                |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `preflight.platform` / `.existing`     | Windows + Node 22；`--installer` 时没有已登记的 Armadra 安装                                          |
-| `install.silent` / `.layout`           | `/S /D=<临时目录>` 静默安装；包里有 `armadra-hook.exe`、`armadra-launch.exe`、会话宿主、`conpty.node` |
-| `install.signature`                    | 安装包、`Armadra.exe`、`armadra-launch.exe` 的 Authenticode；未签名记 `warn`                          |
-| `app.start` / `app.updater`            | 临时目录里起应用、页面与 core 应答；更新器状态（签名、是否本地构建）                                  |
-| `terminal.backend` / `terminal.shells` | 后端是 `sessionHost`；cmd / pwsh 7 / 5.1 各起一个终端，输入回显、`capture` 读得到                     |
-| `sessionHost.process`                  | 会话宿主进程与 `\\.\pipe\armadra-session-*` 在                                                        |
-| `launcher.dialects` / `.credential`    | 三种 shell 里经 `armadra-launch.exe` 起程序：参数原样、注入在后、门关不注入；凭据兑换只进 CLI 进程    |
-| `credentials.status`                   | `GET /api/credentials`：`dpapi` 且 `available`                                                        |
-| `gateway.loopback`                     | 回环上开 Gateway 能握 TLS，关掉后不再监听                                                             |
-| `files.watch`                          | 外部改文件后收到 `file.changed`                                                                       |
-| `agent.codex`                          | `--with-codex`：经页面起 Codex，启动行是 `run\codex.exe`                                              |
-| `soak`                                 | 保活：进程都在、终端仍应答；会话宿主内存涨三倍以上或句柄多 2000 记 `warn`                             |
-| `restart.survives`                     | 杀主进程后宿主与 shell 都在，重启后同一会话接回并应答                                                 |
-| `conpty.close`                         | 终止会话后 shell 与它的 `conhost` / `OpenConsole` 都退出                                              |
-| `app.logs`                             | 数据目录日志里的 error / fatal 行（有就 `warn`，内容附在 detail）                                     |
-| `uninstall.silent`                     | 卸载后 `Armadra.exe`、注册表卸载项、开始菜单与桌面快捷方式都不在                                      |
-| `userConfig.untouched`                 | 真实用户配置前后逐字节相同                                                                            |
+| id                                     | 验什么                                                                                                                                         |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `preflight.platform` / `.existing`     | Windows + Node 22；`--installer` 时没有已登记的 Armadra 安装                                                                                   |
+| `install.silent` / `.layout`           | `/S /D=<临时目录>` 静默安装；包里有 `armadra-hook.exe`、`armadra-launch.exe`、会话宿主、`conpty.node`                                          |
+| `install.signature`                    | 安装包、`Armadra.exe`、`armadra-launch.exe` 的 Authenticode；未签名记 `warn`                                                                   |
+| `app.start` / `app.updater`            | 临时目录里起应用、页面与 core 应答；更新器状态（签名、是否本地构建）                                                                           |
+| `terminal.backend` / `terminal.shells` | 后端是 `sessionHost`；cmd / pwsh 7 / 5.1 各起一个终端，输入回显、`capture` 读得到                                                              |
+| `sessionHost.process`                  | 会话宿主进程与 `\\.\pipe\armadra-session-*` 在                                                                                                 |
+| `launcher.dialects` / `.credential`    | 三种 shell 里经 `armadra-launch.exe` 起程序：参数原样、注入在后、门关不注入；凭据兑换只进 CLI 进程                                             |
+| `credentials.status`                   | `GET /api/credentials`：`dpapi` 且 `available`                                                                                                 |
+| `gateway.loopback`                     | 回环上开 Gateway 能握 TLS，关掉后不再监听                                                                                                      |
+| `files.watch`                          | 外部改文件后收到 `file.changed`                                                                                                                |
+| `agent.codex`                          | `--with-codex`：经页面起 Codex，启动行是 `run\codex.exe`                                                                                       |
+| `soak`                                 | 保活：进程都在、终端仍应答；会话宿主内存涨三倍以上或句柄多 2000 记 `warn`                                                                      |
+| `restart.survives`                     | 杀主进程后宿主与 shell 都在，重启后同一会话接回并应答                                                                                          |
+| `conpty.close`                         | 终止会话后 shell 与它的 `conhost` / `OpenConsole` 都退出                                                                                       |
+| `sessionHost.leaves`                   | 应用退出后（没有会话、没有 core 连着）会话宿主 45 秒内自己退出，不用结束进程                                                                   |
+| `app.logs`                             | 数据目录日志里的 error / fatal 行（有就 `warn`，内容附在 detail）                                                                              |
+| `uninstall.silent`                     | 卸载后 `Armadra.exe`、注册表卸载项、开始菜单与桌面快捷方式都不在；卸载前起的空闲宿主经 `shutdownIfIdle` 自己退出，卸载后没有残留 `Armadra.exe` |
+| `userConfig.untouched`                 | 真实用户配置前后逐字节相同                                                                                                                     |
 
 `result.json` 不含凭据；终端内容只在某项失败时带最后一小段，探针自己的标记行之外没有别的输入。
 CI 有两处：三个平台的 `pnpm release:test` 跑干跑（Windows 上顺带核对三种 shell 与 `csc` 都探测得到），
@@ -322,6 +323,7 @@ preload 注入页面，没有票据链；服务器壳的设备配对与可撤销
 | `ARMADRA_COPILOT_CLIENT_ID`                     | Copilot 设备流换成自己的 GitHub OAuth 应用（企业部署）；设备流本身在 `usage.copilotUsage` 后面，默认关                                                                               |
 | `ARMADRA_SECRET_BACKEND`                        | `=file` 强制密钥后端为 0600 明文文件（测试与无人值守；测试的 setup 默认设了它，不碰开发者的钥匙串）；`=file-encrypted` 用数据目录里的 master key 封存（探针用，节点凭据拒绝 `file`） |
 | `ARMADRA_SECRET_MASTER_KEY_FILE`                | 服务器壳的 master key 换个位置（如 systemd `LoadCredential=`）；不设时用 `<数据目录>/secrets/master.key`，首启生成                                                                   |
+| `ARMADRA_SMTP_URL` / `ARMADRA_SMTP_FROM`        | 服务器壳的可选邮件通道（同 `serve --smtp-url` / `--smtp-from`，契约 §28）：`smtp(s)://用户:口令@主机:端口`，口令可写 `secret://armadra-smtp`；不设则不发信、页面不显示「发送邮件」   |
 
 脚本发现 core 端口占用时直接报错。节点身份、Hook token、端点与权限等待变量由 core 注入 Agent 终端，无需手工配置。
 core 不监听 TCP 时 `hook-endpoint.env` 不写 `ARMADRA_HOOK_PORT`，Hook 客户端只走 `hook.sock`。

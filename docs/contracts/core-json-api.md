@@ -57,7 +57,7 @@ R7a 之前 GitHub 与自动化两块面板走的是 `/rpc/armadra.v1.*`：二进
 `/api/github/*` 与 `/api/automations/*` 都要求：
 
 - 恰好一个 `Origin` 头；
-- 写操作要 `X-Armadra-CSRF`（至多一个）；
+- 写操作在 Cookie 会话上要 `X-Armadra-CSRF`（至多一个）；`Authorization: Bearer` 传输（桌面壳的原生传输、Gateway 上的原生 App）不核，与 §17.4、§18 同一条规则（`core/identity/http.ts::csrfRequired`，安全审查 L8）；
 - 一份会话凭据——原生传输（明文 + 回环来源）读 `Authorization: Bearer`，浏览器会话读 Cookie。
 
 **明文回环上没带凭据的一次调用按本机主人处理**（`core/identity/service.ts` 的 `localOwner`）。桌面壳的会话是原生的，密钥在壳里，既不发 Cookie 也到不了 `apps/web/src/api/request.ts` 的那个 `fetch`；而那台壳就在同一台机器上。TLS 的服务器壳上这条路不存在，凭据仍然是必须的。主人必须是一台**没被撤销的真设备**——自动化的授权记录要拿它的 epoch 复核，一个编出来的设备标识会让计划在第一次投递时被自己的复核拒掉。
@@ -369,6 +369,8 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 角色是 `viewer` ⊂ `editor` ⊂ `operator` ⊂ `driver`，编译表只在 `core/identity/roles.ts`。
 
+G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：设成功之后撤掉这个人的其它会话（安全审查 L2）——本人换口令时留下发请求的这个会话，owner 或 `identity:manage` 替人设时那个人的会话全部撤掉；这个人手里还没用的口令重置令牌（§25）一并作废，审计 `identity.credential.set` 的 `detail` 多 `revokedSessions`。`POST invitations` 的 `ttlMs` 缺省 7 天、最长 30 天（安全审查 L3），更长的夹到 30 天，不是正整数答 400 `INVALID_ARGUMENT`；答案的 `expiresAtMs` 是夹过之后的。替某人签发口令重置链接是 `POST principals/{id}/password-reset`，见 §25。
+
 **判定在哪里生效**（R8）：
 
 - **成员会话的授权快照只有 `identity:read`**，共享得来的授权每次判定时现编（`Authorizer.permits` = 快照 ∪ 现编）。所以撤销一条共享之后的**下一个请求**就是 403，不用等会话过期。`GET session` 报的 `scopes` 是现编之后的那份。
@@ -490,6 +492,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - 答复**从不带值**，只有每家是否已设与后端（`keychain` / `dpapi` / `libsecret` / `file-encrypted` / `file`）。供应商列表由 core 给（ama 需要 key 的内置供应商），页面不自己列；不在列表里的 `provider` 答 `400 bad_request`，`apiKey` 不是非空单行也是 `400`；密钥后端打不开答 `503 secret_unavailable`。
 - 每家一条密钥条目 `armadra-ama-<provider>`，这是值唯一的落点。不写任何 key 文件，profile 没有 `authFile`（ama 自己用户级的 `auth.json` 与登录照常可用）。
 - 怎么到 ama：与节点凭据（§20.4）同一条兑换路。画布启动器 `run/ama` 在 `ARMADRA_NODE_ID` 门之后调 `armadra-hook credential --ama`，后者带节点 token 经本机 hook 通道 `POST /credential/ama`（体 `{ "nodeId": "…" }`）兑换；门与 `/credential` 相同（应用 bearer、节点 token 必须验过），外加节点在画布上是 ama（或以它为基础的自定义 Agent），否则 `403 forbidden`；密钥后端打不开 `503 secret_unavailable`。答复 `{ "variables": [{ "variable": "AMA_API_KEY_DEEPSEEK", "value": "…" }] }`，带 `cache-control: no-store`、不记日志。启动器只认 `AMA_API_KEY_<供应商>` 这十五个名字，设在自己的进程里再 `exec` ama：值不进节点 shell 的环境、启动行与 shell 历史，不落盘（启动器按换行切答复，不用 here-doc）。兑换失败或名字不认识时拒绝启动；一个都没设时照常启动。ama 起的子进程不继承 `AMA_*`（ama 自己剥掉）。
+- **只答节点用得到的那一家**（安全审查 L10）：core 读节点数据的 `agent.model`（ama 的 `<供应商>/<模型>`，或带 `provider` 字段的对象），只答这一家的变量；这一家不收密钥（`ollama`、`lmstudio`、`chatgpt`、ama 自己 config 里的自定义供应商）时 `variables` 为空。节点没设模型时 ama 从已设的里挑缺省，只能答全部已设的，并记一条审计 `ama.credential.unscoped`（`target` 是节点标识，`detail` 只有 `{ reason: "no_model" }`）。运行中在 ama 里换到别家的模型拿不到那家的密钥，要在节点上改模型后重启。
 - Windows：启动器 `run\ama.exe` 的 `.launch` 带 `ama-keys=<客户端>` 与 `ama-var=<名字>` 行，做同一段兑换（客户端子进程的标准输出按换行切，`\r\n` 也认）。
 - 限制：执行主机（SSH）那份不做这段兑换，那里的 ama 只用它自己的 `auth.json` 与环境变量。
 - 权限：`/api/agents` 一族，读 `settings:read`、写 `settings:write`。
@@ -869,6 +872,8 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - `task-id`：幂等键，1–100 个字母、数字或 `.` `_` `:` `-`（runner 用 `<ama 会话 id>:<ama 任务 id>`）。同一个协调者再用同一个 `task-id` 起：节点还在就答回那个节点（`result.reused: true`，不建、不投、不起）；节点已删就新建，任务行换绑过去。被别的协调者用过回 `409 task_conflict`。带它时 core 记一行 `workflow_task_runs`（`runner_id` = `agent`），并把节点交给依赖编排的启动路径起终端、敲启动行（与工作流角色节点同一条，页面开不开都一样）；`result` 多 `taskRunId` 与 `reused`。
 - `name`：节点标题，与 `title` 同义（两者都给时取 `title`）。
 - 权限模式这个 CLI 没有：`400 permission_mode_unsupported`，附 `supported: [...]`（与 §15.3 同码；`team` 同此）。
+- `cwd`：成员终端开在哪个目录。工作区根下的相对路径或落在工作区里的绝对路径，按 core 所在机器的路径规则解析并解开符号链接后判断；在工作区外（含经 `..` 或符号链接出去）回 `400 cwd_outside_workspace`，目录不存在或不是目录回 `400 bad_request`，与 `worktree` 同给回 `400 bad_request`，远端执行主机上的工作区回 `400 cwd_unsupported`。成立时写进节点数据的 `cwd`（解开链接后的绝对路径），`result` 与演练结果多 `cwd`。
+- `resume`：接回这个 CLI 自己的一段会话（1–200 个字母、数字或 `.` `_` `:` `-`），core 起节点时敲的是 `agent/launch.ts` 的 resume 行（Claude `--resume <id>`、Codex `resume <id>` …）。值是这块画布上一个成员节点的 id 时（runner 的 `sessionRef.sessionId` 就是节点 id），取那个节点上报过的会话 id。这个 CLI 不能续接（或自定义条目关掉了 `resume`）、节点跑的不是同一家、或节点从没报过会话 id，回 `400 resume_unsupported`。成立时写进节点数据的 `agent.resume`，节点交给依赖编排的启动路径由 core 起（不带 `task-id` 也一样），`result` 多 `resume`（实际接回的会话 id）。ama 的 runner 把 `request.cwd` / `request.resume` 映射成这两个参数，遇到 `cwd_outside_workspace` / `cwd_unsupported` / `resume_unsupported` 时去掉那一个再起一次（成员开在工作区根、或新开会话）。
 
 **`wait`**
 
@@ -1039,20 +1044,22 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 }
 ```
 
-| 字段          | 规则                                                                                                                        |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `principalId` | core 一律改写成这条连接的 principal（本机壳的 owner 为 `""`），客户端填什么都不算                                           |
-| `deviceId`    | 必填，1–128 字符：页面的 `clientId`（同一个人的两个窗口各一个）                                                             |
-| `name`        | 必填，≤ 80 字符，只用于显示                                                                                                 |
-| `color`       | 必填，整数 `1..8`：成员色序号（设计系统 §2.5）。页面加入时取在场者没用的最小一个（从 2 起），各观看者看到的同一个人颜色相同 |
-| `cursor`      | 可选，画布坐标（有限数）；指针离开画布时省略                                                                                |
-| `selection`   | 可选，≤ 256 个 id（每个 1–128 字符）；白板对象带 `wb:` 前缀                                                                 |
-| `focusNodeId` | 可选，正在看的节点 id                                                                                                       |
+| 字段          | 规则                                                                                                                           |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `principalId` | core 一律改写成这条连接的 principal（本机壳的 owner 为 `""`），客户端填什么都不算                                              |
+| `deviceId`    | 必填，1–128 字符：页面的 `clientId`（同一个人的两个窗口各一个）                                                                |
+| `name`        | 必填，≤ 80 字符，只用于显示                                                                                                    |
+| `color`       | 必填，整数 `1..8`：成员色序号（设计系统 §2.5）。页面加入时取在场者没用的最小一个（从 2 起），各观看者看到的同一个人颜色相同    |
+| `cursor`      | 可选，画布坐标（有限数）；指针离开画布时省略                                                                                   |
+| `selection`   | 可选，≤ 256 个 id（每个 1–128 字符）；白板对象带 `wb:` 前缀                                                                    |
+| `focusNodeId` | 可选，正在看的节点 id                                                                                                          |
+| `viewport`    | 可选，`{ x, y, zoom }`：视口**中心**的画布坐标（有限数）与缩放（`0.01..100`）。页面节流约 100ms 写；跟随时对上它，没有就跟光标 |
 
 - core 只留上表里的键；形状不对或序列化后超过 16 KiB 的状态**整条丢弃**（不转发、不断流），`null`（离开）照常转发。
 - 一条连接只能写自己登记过的 clientID：别的连接已经登记的 clientID 在它发来的帧里被丢掉。
 - 页面按共享层 `awarenessStateSchema` 再校验一次，认不出的不进在线表、不画光标。
 - 共享层 `AWARENESS_LIMITS` 与 core `realtime/awareness.ts` 的上限逐条一致（`awareness.test.ts` 守）。
+- 实时板的视口不进文档、也不 PUT：页面按 `boardId` 记在本机 `localStorage`（`armadra.realtimeViewport.<boardId>`），开板时恢复；`viewport` 只用于跟随，core 不读。
 
 ## 17. Gateway：`/api/gateway*`
 
@@ -1161,7 +1168,7 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 - 来源是 `capacitor://localhost` 或 `https://localhost`（且不在 `origins` 里）的请求走 **Bearer 模式**：会话绑定的来源是 App 连上的 Gateway 来源 `https://<Host>`（必须在 `origins` 里，否则 403）；凭据只认 `Authorization: Bearer <访问密钥>`，Cookie 不看、没有 CSRF；`POST /api/identity/pair`、`/session/refresh` 与登录把密钥放在响应体的 `native` 里、不发 Cookie（与桌面壳的原生传输同一形状，§3）；CORS 只回 App 自己的来源，预检放行 `authorization, content-type, x-armadra-csrf`。
 - **响应头**（`core/gateway/csp.ts`）：经 Gateway 的每个答案都带 `Strict-Transport-Security: max-age=31536000`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`；`/api/**` 与 `/health` 再带 `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; sandbox`、`X-Frame-Options: DENY`，以及缺省的 `Cache-Control: no-store`（答案自己写了缓存策略时以它为准，如资产）。静态产物用页面的 CSP（`serverContentSecurityPolicy`）。画布资产（`GET …/assets/{assetId}`）无论经不经 Gateway 都带 `default-src 'none'; …; sandbox`：直接导航到一张 SVG 时它是一份沙箱里的文档，脚本不跑。
 - **原生 App 包里页面的 CSP**（`nativeAppContentSecurityPolicy()`）：桌面那一份摘掉回环授权，`connect-src` 加 `https: wss:`、`img-src` / `media-src` 加 `https:`（Gateway 地址配对前未知，证书由原生层钉扎）；其余逐字继承。
-- **长连接复核**：经 Gateway 升级的流（事件、实时同步、终端、语言服务、浏览器画面）在授权变化（撤销设备或会话、登出、停用账号、收回共享）时按同一道路由门、用复核后的主体再判一次，不过即以 **4403** 关流（`core/http/server.ts`）。
+- **长连接复核**：经 Gateway 升级的流（事件、实时同步、终端、语言服务、浏览器画面）在授权变化（撤销设备或会话、登出、停用账号、收回共享）时按同一道路由门、用复核后的主体再判一次，不过即以 **4403** 关流（`core/http/server.ts`）。复核按**会话**认，不按升级时那一把访问密钥：页面刷新过访问密钥，流照旧。访问密钥到期（15 分钟）那一刻再按会话复核一次（安全审查 L1）：刷新过就续到新的到期时刻；没刷新以 **4401** 关（不是授权被收回，页面照常重连，升级前的门要新凭据——原生 App 换 WS 票遇 401 先轮转再换）；刷新过而门不再放行以 **4403** 关。没有请求身份的流（桌面壳）不设这个定时。
 - `POST /api/identity/ws-ticket`（只在 Gateway 的 Bearer 模式下）：要 Bearer 会话，回 `{ "ticket": string, "expiresAt": string }`，票 30 秒、一次性、只在内存里。浏览器 WebSocket 带不了头，App 升级时在 `Sec-WebSocket-Protocol` 里带 `armadra-ticket.<票>`，服务端回同一个子协议。Cookie 模式请求它答 400 `bearer_required`。
 
 ## 18. 身份扩展：口令策略、passkey、MFA、会话、OAuth、审计
@@ -1232,6 +1239,8 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 
 计数器按库的判定写回 `sign_count`；回退（克隆的认证器）由库拒绝。审计：`identity.passkey.add`、`identity.passkey.remove`、`identity.login`（`detail.method: "passkey"`）。
 
+G5-02 追加：`PATCH passkey/{credentialId}` `{ label }`（写）给自己的 passkey 改名，答 `{ credentialId, label }`。`label` 1–64 个字符（按字符不按字节）、首尾无空白、无控制字符，否则 400 `INVALID_ARGUMENT`。只有本人：别人的（调用方有 `identity:manage` 也一样）、撤销了的、不存在的同样答 404。审计 `identity.passkey.rename`。
+
 ### 18.3 MFA：TOTP、恢复码与两步登录
 
 TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时间步；记最后用过的时间步，**同一个码第二次一律拒**。密钥在 SecretStore（条目名 `armadra-totp-<principalId>`），库里只有条目名。恢复码 10 个（`xxxxx-xxxxx`，大小写、空格与连字符不计），只存 scrypt 哈希，用掉即作废。
@@ -1279,6 +1288,8 @@ TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时
 
 `remoteIp` 是建会话那一刻的 socket 对端，`userAgent` 截到 256 字符；`lastSeenAtMs` 是最近一次认证成功，一分钟内不重写。撤销在下一个请求上生效（认证每次读库）。审计：`identity.session.revoke`、`identity.session.revoke-others`。
 
+G5-02 追加：`GET devices`（我的设备，`{ devices, nextId, hasMore }`）的每一行多两个可选字段。`platform` 由这台设备最近那个会话的 UA 归出来，取 `macos / windows / linux / ios / android / web / unknown` 之一：认得出浏览器、说不出系统的是 `web`，空 UA 与认不出的是 `unknown`。UA 原文不在这个答案里。`lastSeenAtMs` 是这台设备所有会话（含已撤销、已过期的）里最大的 `lastSeenAtMs`。设备上没有任何会话时两项都不带；`lastSeenAtMs` 为 0（迁移 0032 之前的会话）时也不带。共享层 `DEVICE_PLATFORMS`。
+
 ### 18.5 OAuth / OIDC
 
 实现在 `core/identity/oauth/`（`providers.ts` 协议、`flow.ts` 状态与决定、`http.ts` 路由），挂在比 `/api/identity/` 更长的原样前缀 `/api/identity/oauth/` 上；形状的 zod 在 `identity-security.ts` 的 §18.5 小节。一条代码路径：**通用 OIDC**（发现文档 `/.well-known/openid-configuration`，文档里的 `issuer` 必须与配置逐字节相同（只忽略末尾斜杠）；授权码 + PKCE S256 + `state` + `nonce`；`id_token` 按 JWKS 验签，只收 RS256 / ES256，核 `iss`、`aud`（多个时 `azp`）、`exp` / `iat` / `nbf`（容 60 秒）、`nonce`；缺邮箱时补一次 userinfo，`sub` 必须相同），以及唯一的特例 **GitHub**（`/login/oauth/authorize` + `access_token`，主体是 `GET /user` 的数字 `id`，邮箱取 `GET /user/emails` 里 `primary` 的那条与它的 `verified`）。外呼只许 HTTPS 或回环明文 HTTP，超时 10 秒，发现文档与 JWKS 缓存 1 小时，遇到不认识的 `kid` 重取一次 JWKS。
@@ -1308,6 +1319,10 @@ TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时
 | `signedUp` | 建了一个 `member`（无授予，owner 再共享）并登录                                                |
 | `mfa`      | 这个人登记过 TOTP：带 `challengeId`，页面接 §18.3 的 `POST mfa/verify`；不发会话               |
 | `error`    | 带 `code`（下表）；不发会话、不改绑定                                                          |
+
+`signedIn` / `signedUp` 时，`identity.mfa.requireFor` 覆盖这个人而他还没登记 TOTP，片段再带 `mfaEnrollmentRequired=true`：照常发会话，页面带去登记（与口令登录答案里的 `mfaEnrollmentRequired` 同一条，§18.3；R-17）。
+
+**挂起的 `state`** 按来源地址分桶（安全审查 L4）：每个地址（IPv6 按 /64，IPv4 映射地址按 IPv4）同时至多 50 条，满了挤它自己最老的；全部合计至多 1000 条，满了挤挂得最多的那个地址最老的一条。从多个地址撒 `start` 挤不掉别人半途的登录。
 
 决定：配了 `allowedDomains` 时三条路都要求 `email_verified = true` 且邮箱域名精确命中（大小写不计，子域不算）；`bind` 绑到发起者；`login` 已绑则登录（principal 停用了按「没绑」答），没绑且 `allowSignup` **并且** `allowedDomains` 非空才建号（这就是 SSO；不设域名的建号等于「有这家账号的任何人都能进来」），否则 `oauth_not_bound`。
 
@@ -1736,7 +1751,19 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 25. 口令重置链接：`/api/identity/…/password-reset`
 
-预留，由 G5-02 填写。
+设计见 [G5 剩余事项计划](../design/g5-remaining-plan.md) §0。邮箱是可选的，所以没有「输入邮箱自助重置」。做法是 owner（或组 admin 对本组成员）替某人签发一枚一次性、24 小时有效的令牌，链接 `<来源>/#reset=<令牌>` 由签发人亲手交给对方。代码在 `core/identity/password-reset.ts`（令牌原语），判定与事务在 `accounts.ts`，路由在 `accounts-http.ts`，表 `identity_password_resets`（迁移 `0036_password_resets.sql`），共享层 `identity-security.ts` 的 §25 小节。与 §10 / §18 同一个前缀、同一套认证；整段 `/api/identity/` 不经路由门，判定在身份域里。
+
+| 方法与路径                                       | 谁能调                                                                                                       | 答案                                                                                                                       |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `POST principals/{id}/password-reset` `{}`（写） | owner 与 `identity:manage` 对任何成员；组 `admin` 只对自己所管的组里角色是 `member` 的人；owner 只有自己能签 | 201 `{ token, expiresAtMs }`：明文只在这一次出现；同一个人手里还没用的旧令牌随之作废                                       |
+| `GET password-reset/{token}`                     | 匿名                                                                                                         | `{ displayName, expiresAtMs }`                                                                                             |
+| `POST password-reset/{token}` `{ password }`     | 匿名                                                                                                         | `{ principalId, revokedSessions }`（泄露检查 `warn` 命中时多 `passwordBreached: true`）；之后拿 `principalId` 与新口令登录 |
+
+- **令牌**与邀请同形（`<32 位十六进制>.<43 位 base64url>`）。库里只存 `sha256("armadra/identity/v1/reset\0<令牌>")`，用途 `reset` 与会话、配对票的哈希分开。
+- **签发**：目标不存在 404；停用了的人与服务账号 400 `INVALID_ARGUMENT`；没有权限 403 `PERMISSION_DENIED`；没登录 401。审计 `identity.password.reset.issue`（`target` 是那个人，`detail.expiresAtMs`）。
+- **打开与使用**：认不出的令牌（不存在、用过、作废、过期、那个人停用了）一律 404 `password_reset_invalid`，不分是哪一种。两条都走配对与刷新那只「失败才扣」的 IP 桶（§18.1）：桶空了 429 `rate_limited` 带 `Retry-After`，认不出的令牌扣一次，好令牌不扣。
+- **设新口令**先过口令策略与泄露检查（§18.1，`names` 是那个人的显示名与 principalId）。不合格答规则名（400），令牌不作废。过了之后同一笔事务里令牌作废、换口令凭据、撤掉这个人的**全部**会话（`revokedSessions` 是撤掉的数目），并清掉这个人的登录锁定。审计 `identity.password.reset.use`，`target` 是那个人，`detail` 是 `{ credentialId, issuedBy, revokedSessions }`。
+- 令牌明文与哈希都不进审计、日志与其它答案。MFA 不受影响：设了 TOTP 的人用新口令登录仍要第二因素（丢了手机走 §18.3 的 `mfa/reset`）。
 
 ## 26. ACP 补充：elicitation、模型、凭据、SSH
 
@@ -1776,7 +1803,47 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 28. 邮件通道：`/api/mail/*`
 
-预留，由 G5-13 填写。
+可选的 SMTP 通知通道：把邀请（§10）与口令重置（§25）链接发到一个邮箱。邀请与重置仍然设计成「管理员亲手把链接交给人」，邮件只是多一个出口。实现在 `core/mail/`。
+
+### 28.1 配置
+
+只有服务器壳配：`serve --smtp-url` / `ARMADRA_SMTP_URL`（`smtp(s)://用户:口令@主机:端口`）与 `--smtp-from` / `ARMADRA_SMTP_FROM`（缺省是用户名，不是邮箱地址时必须给）。口令位置可写 `secret://armadra-<名字>`，发信时从服务器壳的密钥后端现取（`armadra-server secrets set armadra-smtp` 经标准输入写入）。`smtp://` 走 STARTTLS，主机不是回环时强制升级（`?requireTLS=false` 放开）；`smtps://` 缺省端口 465、`smtp://` 缺省 587。地址写错，服务器壳拒绝启动。桌面壳没有设置键，永远是未配置。出站登记在 `core/net/outbound.ts` 的 `smtp`。
+
+### 28.2 `GET /api/mail/status`
+
+已登录即可（匿名 401 `unauthenticated`）：
+
+```json
+{ "configured": true, "from": "noreply@example.com" }
+```
+
+未配置时 `{ "configured": false, "from": null }`。不认识这条路由的旧 core 答 404，页面同样按未配置处理。
+
+### 28.3 `POST /api/mail/invitation`、`POST /api/mail/password-reset`
+
+```json
+{ "invitationId": "<32 位十六进制>", "token": "<签发时拿到的令牌>", "to": "someone@example.com", "locale": "zh" }
+{ "principalId": "<32 位十六进制>", "token": "<签发时拿到的令牌>", "to": "someone@example.com", "locale": "en" }
+```
+
+- **令牌由调用方交回**：库里只有哈希，链接只能由刚签出它的那个页面连同 id 一起交过来。core 核对令牌属于这张邀请 / 这个人、没用过、没过期，再按链接自己的规则判调用方：邀请与签发、作废同一套（工作空间邀请要 `workspace:share`，组邀请要能管那个组，两者都无要 `identity:manage`）；重置与签发同一套（§25）。
+- 正文只有链接与过期时间（UTC），链接是 Gateway 对外来源加 `#invite=<令牌>` / `#reset=<令牌>`；纯文本，没有签发人、角色或工作空间名。主题与正文按 `locale`（`zh` / `en`）选，没给时按 `Accept-Language`，都认不出用英文。
+- 每个来源地址每分钟至多 5 封（socket 对端，不读 `X-Forwarded-For`），核对通过之后才计数，发送失败也计。
+- 审计 `mail.invitation.send` / `mail.password-reset.send`：`target` 是邀请 id / 被重置的人，`detail` 只有 `{ toHash, delivered }`；`toHash` 是 `sha256("armadra/mail/v1\0" + 小写地址)` 的前 32 位十六进制。地址与令牌不进审计与日志。
+- 成功答 `200 { "sent": true }`（SMTP 服务器已收下）。
+
+| 状态 | `code`                | 何时                                                                        |
+| ---- | --------------------- | --------------------------------------------------------------------------- |
+| 400  | `bad_request`         | 请求体不对：id 或令牌形状不对、邀请令牌的前缀不是这个 id、`to` 不是邮箱地址 |
+| 401  | `unauthenticated`     | 匿名                                                                        |
+| 403  | `forbidden`           | 不能签发这条链接的人                                                        |
+| 404  | `not_found`           | 没有这张邀请 / 这个人；或这台 core 还没有口令重置（§25）                    |
+| 409  | `mail_not_configured` | 没配 SMTP                                                                   |
+| 409  | `link_invalid`        | 令牌不对、已用过（含作废）或已过期                                          |
+| 429  | `rate_limited`        | 这个来源这一分钟已发 5 封；带 `Retry-After`（秒）                           |
+| 502  | `mail_send_failed`    | SMTP 没收下（连不上、认证失败、拒收），不带服务器原话                       |
+
+写方法照常经 Gateway 准入：Cookie 会话要 `X-Armadra-CSRF`。
 
 ## 29. 托管平台（forge）：`/api/forge/*`
 
@@ -1784,4 +1851,42 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 30. 页面错误上报：`/api/diagnostics/client-error`
 
-预留，由 G5-19 填写。
+可选崩溃上报（外部服务 §11.2）的页面一侧：页面自己的 JS 错误（`window` 的 `error` 与 `unhandledrejection`）经同一个 DSN 发出。实现在 `core/diagnostics/{client-report,routes}.ts`、`main/diagnostics.ts`、`apps/web/src/diagnostics/`。
+
+### 30.1 开关
+
+设置键 `diagnostics.reportPageErrors`（布尔，缺省 `false`）。**收**的条件是它为真、且壳的崩溃上报此刻在发：服务器壳按自己的 `active()` 答（DSN 可能来自 `ARMADRA_CRASH_REPORT_DSN`），桌面壳的 core 按设置里的 `diagnostics.crashReportDsn` 合不合格答。页面在通用页诊断区、DSN 已保存时多一个「包含页面错误」开关。
+
+### 30.2 `GET /api/diagnostics/client-error`
+
+```json
+{ "enabled": false }
+```
+
+页面据此决定收不收，答案缓存一分钟；设置页改了开关时丢掉缓存。关着的时候页面一条错误也不留。
+
+### 30.3 `POST /api/diagnostics/client-error`
+
+请求体只认四个键（不认识的键 400）：
+
+```json
+{
+  "kind": "error",
+  "name": "TypeError",
+  "message": "Cannot read properties of undefined (reading 'x')",
+  "stack": "TypeError: …\n    at render (index-abc123.js:12:34)"
+}
+```
+
+- `kind`：`error` | `rejection`。`name` ≤ 128、`message` ≤ 2000、`stack` ≤ 8000 字符，超了 400（不截）。被 reject 的不是 `Error` 的值只发 `{ name: "NonError", message: "non-error <类型>" }`，不发内容。
+- 回答：收下 `202 { "accepted": true }`；关着 `200 { "accepted": false }`（不看请求体）。
+
+| 状态 | `code`            | 何时                                                                          |
+| ---- | ----------------- | ----------------------------------------------------------------------------- |
+| 400  | `bad_request`     | 请求体不是 JSON、多了键、类型或长度不对                                       |
+| 401  | `unauthenticated` | 服务器壳的匿名主体（没有会话）                                                |
+| 429  | `rate_limited`    | 这台设备每分钟超过 5 条，或整台 core 每分钟超过 60 条；带 `Retry-After`（秒） |
+
+- **身份**：登录即可，路由门不判（`route-scopes.ts` 的 `SELF_GUARDED`）；桌面壳的本机请求算本机 owner。限流按设备（没有设备按 principal），形状不对的请求不扣桶。
+- **剥离**：两道。页面先剥（`crash-scrub.ts`：路径里的用户名、令牌形状、Armadra 会话密钥 `<32 位十六进制>.<43 位 base64url>`、地址里的账号 / 查询串 / 片段，栈帧里的地址与路径只留文件名，消息截到 300 字）；收件一侧（core 或桌面主进程）按本机的家目录与环境变量再剥一遍同一套规则，再交 `platform.reportError`（来源 `page`）。事件发出前壳的 `beforeSend` 还有第三道（§11.2 的整段删键）。终端输出、文件正文、凭据、请求数据不进事件；core 不记这条错误的正文。
+- **桌面壳**：页面不走这个路由，经 IPC `diagnostics:report`（`window` 档）交给主进程；主进程读同一份设置再判、同样每分钟 5 条、再剥离，交 `@sentry/electron`，标签 `process: renderer`、`source: page`。`ipcMode` 仍为 0：SDK 不给渲染进程开任何通道，浏览器节点的 guest 没有 preload，也就没有这条路。IPC 答 `{ accepted }`，从不拒绝。

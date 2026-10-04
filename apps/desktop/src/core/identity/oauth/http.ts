@@ -523,7 +523,13 @@ export class OAuthHttp {
           this.options.service.hostId(),
           outcome.credentials,
         );
-        finish({ oauth: outcome.signedUp ? "signedUp" : "signedIn" });
+        finish({
+          oauth: outcome.signedUp ? "signedUp" : "signedIn",
+          // 策略要求第二因素而还没登记：页面带去登记（契约 §18.5）。
+          ...(outcome.mfaEnrollmentRequired
+            ? { mfaEnrollmentRequired: "true" }
+            : {}),
+        });
         return;
       }
       if (outcome.kind === "mfa") {

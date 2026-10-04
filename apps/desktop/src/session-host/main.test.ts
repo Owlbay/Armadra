@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { USAGE, parseArguments, run } from "./main";
+import {
+  ORPHAN_EXIT_ENV,
+  USAGE,
+  orphanExitFromEnv,
+  parseArguments,
+  run,
+} from "./main";
+import { runShutdownIfIdle } from "./shutdown-if-idle";
 
 /**
  * The command line, which is the one interface of this program that a person
@@ -73,5 +80,84 @@ describe("run", () => {
       run({ argv: [], platform: "win32", log: (line) => lines.push(line) }),
     ).resolves.toBe(2);
     expect(lines.join("\n")).toContain(USAGE);
+  });
+});
+
+describe("the orphan exit override", () => {
+  it("takes a positive whole number of milliseconds from the environment", () => {
+    expect(orphanExitFromEnv({ [ORPHAN_EXIT_ENV]: "120000" })).toBe(120_000);
+  });
+
+  it("ignores anything else and keeps the default", () => {
+    for (const raw of ["", "0", "-5", "1e3", "abc", "10s"]) {
+      expect(orphanExitFromEnv({ [ORPHAN_EXIT_ENV]: raw })).toBeUndefined();
+    }
+    expect(orphanExitFromEnv({})).toBeUndefined();
+  });
+});
+
+/** What the NSIS installer runs before it touches `Armadra.exe`. */
+describe("shutdown-if-idle", () => {
+  it("asks the host of the one data directory it is given, and exits 0", async () => {
+    const asked: unknown[] = [];
+    const lines: string[] = [];
+    await expect(
+      runShutdownIfIdle({
+        argv: ["C:\\Users\\a\\AppData\\Local\\Armadra"],
+        platform: "win32",
+        log: (line) => lines.push(line),
+        request: async (request) => {
+          asked.push(request);
+          return { kind: "left", pid: 7 };
+        },
+      }),
+    ).resolves.toBe(0);
+    expect(asked).toEqual([
+      {
+        dataDir: "C:\\Users\\a\\AppData\\Local\\Armadra",
+        client: "armadra-installer",
+        waitMs: 5_000,
+      },
+    ]);
+    expect(lines.join("\n")).toContain('"kind":"left"');
+  });
+
+  it("exits 0 whatever the host answered, so an uninstall is never blocked by it", async () => {
+    await expect(
+      runShutdownIfIdle({
+        argv: ["C:\\data"],
+        platform: "win32",
+        log: () => {},
+        request: async () => ({ kind: "failed", reason: "timed out" }),
+      }),
+    ).resolves.toBe(0);
+  });
+
+  it("refuses a command line that is not exactly one data directory", async () => {
+    for (const argv of [[], ["a", "b"], [" "]]) {
+      await expect(
+        runShutdownIfIdle({
+          argv,
+          platform: "win32",
+          log: () => {},
+          request: async () => {
+            throw new Error("must not be asked");
+          },
+        }),
+      ).resolves.toBe(2);
+    }
+  });
+
+  it("does nothing off Windows", async () => {
+    await expect(
+      runShutdownIfIdle({
+        argv: ["/data"],
+        platform: "linux",
+        log: () => {},
+        request: async () => {
+          throw new Error("must not be asked");
+        },
+      }),
+    ).resolves.toBe(0);
   });
 });

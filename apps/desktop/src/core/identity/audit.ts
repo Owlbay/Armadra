@@ -62,6 +62,10 @@ export const SECURITY_AUDIT_ACTIONS = [
   "identity.lockout.clear",
   "identity.passkey.add",
   "identity.passkey.remove",
+  // G5-02：passkey 改名、口令重置链接（契约 §25）。令牌不进 `detail`。
+  "identity.passkey.rename",
+  "identity.password.reset.issue",
+  "identity.password.reset.use",
   "identity.mfa.enroll",
   "identity.mfa.disable",
   "identity.mfa.reset",
@@ -87,6 +91,8 @@ export const SECURITY_AUDIT_ACTIONS = [
   "credential.delete",
   "ama.credential.set",
   "ama.credential.clear",
+  // G5-20（安全审查 L10）：ama 节点没设模型，兑换只能答全部已设的密钥。
+  "ama.credential.unscoped",
 ] as const;
 
 export type SecurityAuditAction = (typeof SECURITY_AUDIT_ACTIONS)[number];

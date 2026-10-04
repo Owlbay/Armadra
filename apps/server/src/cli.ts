@@ -1,8 +1,8 @@
 /**
  * 服务器壳的命令行。
  *
- * 七条子命令，一张表：`serve | install | uninstall | status | logs | upgrade |
- * version`。解析是纯函数——没有 I/O、不读环境以外的东西、不打印——所以每条规则
+ * 八条子命令，一张表：`serve | install | uninstall | status | logs | upgrade |
+ * secrets | version`。解析是纯函数——没有 I/O、不读环境以外的东西、不打印——所以每条规则
  * 都能单测，而「拒绝」是解析结果的一种，不是一个 `process.exit`。
  *
  * 两条规则写在这里而不是在执行处，因为它们必须在任何副作用之前成立：
@@ -22,6 +22,7 @@ export const USAGE = `用法: armadra-server <命令> [选项]
   status       报告版本、监听、TLS、已生成的定义与漂移
   logs         读日志文件的尾部
   upgrade      校验候选可执行文件并旁写替换（没有 --confirm 只打印计划）
+  secrets      密钥后端：rotate 换 master key；set NAME 从标准输入写一个条目
   version      打印版本报告
 
 serve:
@@ -35,6 +36,10 @@ serve:
                          续期；与 --tls-cert/--tls-key 互斥。等同 ARMADRA_ACME_EMAIL
   --device-name NAME     配对时记录的设备名，默认「服务器配对」
   --no-pairing           启动时不铸配对码
+  --smtp-url URL         可选邮件通道：smtp(s)://用户:口令@主机:端口，口令可写
+                         secret://armadra-smtp（先 secrets set armadra-smtp）。
+                         等同 ARMADRA_SMTP_URL
+  --smtp-from ADDRESS    发件人地址，缺省是用户名。等同 ARMADRA_SMTP_FROM
 
 install:
   --service-dir DIR      定义文件写入的绝对目录（必须显式给）
@@ -62,6 +67,10 @@ upgrade:
   --rollback             回到上一次成功升级换下来的那个可执行文件
   --confirm              真的替换；不给只打印计划
 
+secrets:
+  rotate                 换一把 master key 并重封全部条目；中途中断再跑一次即可
+  set NAME               从标准输入读值写进 NAME（armadra- 开头），值不进命令行
+
 通用:
   --data-dir DIR         数据目录
   --output json          机器可读输出（status / version / upgrade）
@@ -77,6 +86,7 @@ export type CommandName =
   | "status"
   | "logs"
   | "upgrade"
+  | "secrets"
   | "version";
 
 const COMMANDS: readonly CommandName[] = [
@@ -86,6 +96,7 @@ const COMMANDS: readonly CommandName[] = [
   "status",
   "logs",
   "upgrade",
+  "secrets",
   "version",
 ];
 
@@ -101,6 +112,8 @@ const FLAGS: Record<CommandName, readonly string[]> = {
     "--acme",
     "--device-name",
     "--no-pairing",
+    "--smtp-url",
+    "--smtp-from",
     "--output",
   ],
   install: [
@@ -132,8 +145,15 @@ const FLAGS: Record<CommandName, readonly string[]> = {
     "--data-dir",
     "--output",
   ],
+  secrets: ["--data-dir", "--output"],
   version: ["--output"],
 };
+
+/**
+ * 认位置参数的子命令与上限：`secrets <rotate | set NAME>`。别的子命令见到不带
+ * `--` 的参数仍是解析错误。
+ */
+const POSITIONALS: Partial<Record<CommandName, number>> = { secrets: 2 };
 
 /** 不带值的 flag。其余一律 `--flag value` 或 `--flag=value`。 */
 const SWITCHES = new Set(["--no-pairing", "--rollback", "--confirm"]);
@@ -145,6 +165,8 @@ export interface ParsedCommand {
   readonly kind: "run";
   readonly command: CommandName;
   readonly values: ReadonlyMap<string, readonly string[]>;
+  /** 位置参数（只有 {@link POSITIONALS} 里的子命令有）。 */
+  readonly positionals: readonly string[];
 }
 
 export type ParseResult =
@@ -162,9 +184,17 @@ export function parseCommandLine(argv: readonly string[]): ParseResult {
   const command = head as CommandName;
   const accepted = FLAGS[command];
   const values = new Map<string, string[]>();
+  const positionals: string[] = [];
   for (let index = 0; index < rest.length; index += 1) {
     const argument = rest[index] as string;
     if (argument === "--help" || argument === "-h") return { kind: "help" };
+    if (!argument.startsWith("-") && (POSITIONALS[command] ?? 0) > 0) {
+      if (positionals.length >= (POSITIONALS[command] ?? 0)) {
+        return { kind: "error", reason: `${command} 多了参数：${argument}` };
+      }
+      positionals.push(argument);
+      continue;
+    }
     const equals = argument.indexOf("=");
     const flag = equals < 0 ? argument : argument.slice(0, equals);
     if (!accepted.includes(flag)) {
@@ -192,7 +222,7 @@ export function parseCommandLine(argv: readonly string[]): ParseResult {
     }
     values.set(flag, existing === undefined ? [value] : [...existing, value]);
   }
-  return { kind: "run", command, values };
+  return { kind: "run", command, values, positionals };
 }
 
 /* ------------------------------- 取值的帮手 ------------------------------- */

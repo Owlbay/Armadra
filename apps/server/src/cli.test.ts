@@ -1,4 +1,10 @@
+import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { previousKeyFile } from "../../desktop/src/core/secrets";
+import { tempDir } from "../../desktop/src/core/testing/temp-dir";
 import {
   loopbackHost,
   many,
@@ -7,6 +13,8 @@ import {
   single,
   switched,
 } from "./cli";
+import { main } from "./main";
+import { masterKeyFile, serverSecrets } from "./secrets";
 
 describe("命令行", () => {
   it("没有参数时打印帮助", () => {
@@ -83,5 +91,153 @@ describe("命令行", () => {
     // 别人的 /etc/hosts 说了算的东西不是回环。
     expect(loopbackHost("local.example")).toBe(false);
     expect(loopbackHost("0.0.0.0")).toBe(false);
+  });
+});
+
+describe("secrets 子命令与邮件 flag 的解析", () => {
+  it("secrets 认位置参数，别的子命令仍然不认", () => {
+    expect(parseCommandLine(["secrets", "rotate"])).toMatchObject({
+      kind: "run",
+      command: "secrets",
+      positionals: ["rotate"],
+    });
+    expect(
+      parseCommandLine(["secrets", "set", "armadra-smtp", "--data-dir", "/d"]),
+    ).toMatchObject({ kind: "run", positionals: ["set", "armadra-smtp"] });
+    expect(parseCommandLine(["secrets", "set", "a", "b"])).toMatchObject({
+      kind: "error",
+    });
+    expect(parseCommandLine(["status", "rotate"])).toMatchObject({
+      kind: "error",
+    });
+  });
+
+  it("serve 认 --smtp-url 与 --smtp-from", () => {
+    const parsed = parseCommandLine([
+      "serve",
+      "--smtp-url",
+      "smtps://bot@x.test:secret://armadra-smtp@mail.x.test",
+      "--smtp-from=noreply@x.test",
+    ]);
+    if (parsed.kind !== "run") throw new Error("解析失败");
+    expect(single(parsed.values, "--smtp-url")).toBe(
+      "smtps://bot@x.test:secret://armadra-smtp@mail.x.test",
+    );
+    expect(single(parsed.values, "--smtp-from")).toBe("noreply@x.test");
+  });
+});
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+async function cli(
+  argv: string[],
+  options: { env?: NodeJS.ProcessEnv; stdin?: string } = {},
+) {
+  let out = "";
+  let err = "";
+  const code = await main(argv, {
+    stdout: (line) => {
+      out += line;
+    },
+    stderr: (line) => {
+      err += line;
+    },
+    env: options.env ?? {},
+    moduleDir: here,
+    ...(options.stdin === undefined
+      ? {}
+      : { stdin: async () => options.stdin as string }),
+  });
+  return { code, out, err };
+}
+
+describe("secrets rotate / set", () => {
+  it("set 从标准输入写条目，值不进输出；rotate 换钥匙后条目照样读得出", async () => {
+    const dataDir = tempDir("armadra-secrets-cli-");
+    expect((await cli(["secrets", "rotate", "--data-dir", dataDir])).code).toBe(
+      1,
+    );
+    const set = await cli(
+      ["secrets", "set", "armadra-smtp", "--data-dir", dataDir],
+      {
+        stdin: "smtp-pass-1\n",
+      },
+    );
+    expect(set.code).toBe(0);
+    expect(set.out).toContain("armadra-smtp");
+    expect(set.out + set.err).not.toContain("smtp-pass-1");
+    const key = masterKeyFile(dataDir, {}).path;
+    const before = readFileSync(key, "utf8");
+
+    const rotated = await cli([
+      "secrets",
+      "rotate",
+      "--data-dir",
+      dataDir,
+      "--output",
+      "json",
+    ]);
+    expect(rotated.code).toBe(0);
+    expect(JSON.parse(rotated.out)).toMatchObject({
+      command: "secrets rotate",
+      resealed: 1,
+      resumed: false,
+    });
+    expect(readFileSync(key, "utf8")).not.toBe(before);
+    expect(existsSync(previousKeyFile(key))).toBe(false);
+    await expect(serverSecrets(dataDir, {}).get("armadra-smtp")).resolves.toBe(
+      "smtp-pass-1",
+    );
+  });
+
+  it("中途中断（新钥匙已写、条目还是旧钥匙封的）：再跑一次做完", async () => {
+    const dataDir = tempDir("armadra-secrets-cli-");
+    await serverSecrets(dataDir, {}).set("armadra-smtp", "smtp-pass-2");
+    const key = masterKeyFile(dataDir, {}).path;
+    // 照 `rotateMasterKey` 的顺序停在「旧钥匙留成 .previous、新钥匙已写」之后。
+    writeFileSync(previousKeyFile(key), readFileSync(key), { mode: 0o600 });
+    writeFileSync(key, `${randomBytes(32).toString("base64")}\n`);
+    const resumed = await cli(["secrets", "rotate", "--data-dir", dataDir]);
+    expect(resumed.code).toBe(0);
+    expect(resumed.out).toContain("接着上次中断的轮换做完");
+    expect(existsSync(previousKeyFile(key))).toBe(false);
+    await expect(serverSecrets(dataDir, {}).get("armadra-smtp")).resolves.toBe(
+      "smtp-pass-2",
+    );
+  });
+
+  it("拒绝的用法", async () => {
+    const dataDir = tempDir("armadra-secrets-cli-");
+    expect((await cli(["secrets", "--data-dir", dataDir])).code).toBe(2);
+    expect(
+      (await cli(["secrets", "rotate", "now", "--data-dir", dataDir])).code,
+    ).toBe(2);
+    expect(
+      (
+        await cli(["secrets", "set", "smtp", "--data-dir", dataDir], {
+          stdin: "x",
+        })
+      ).code,
+    ).toBe(2);
+    expect(
+      (
+        await cli(["secrets", "set", "armadra-smtp", "--data-dir", dataDir], {
+          stdin: "\n",
+        })
+      ).code,
+    ).toBe(2);
+    expect(
+      (
+        await cli(["secrets", "rotate", "--data-dir", dataDir], {
+          env: { ARMADRA_SECRET_BACKEND: "file" },
+        })
+      ).code,
+    ).toBe(2);
+    // 什么都没写出来。
+    expect(
+      existsSync(join(dataDir, "secrets"))
+        ? readdirSync(join(dataDir, "secrets"))
+        : [],
+    ).toEqual([]);
   });
 });

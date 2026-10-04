@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { devicePlatformSchema } from "@armadra/shared";
 
 import { fetchNativeTicket, isNativeShell } from "../host/native-session";
 import { isNativeApp, nativeBridge } from "../mobile/native-bridge";
@@ -88,6 +89,10 @@ export const identityDevicesSchema = z.object({
       epoch: z.number().default(0),
       createdAtMs: z.number().default(0),
       revokedAtMs: z.number().default(0),
+      /** 由最近那个会话的 UA 归出的平台（契约 §18.4）；没有会话时不带。 */
+      platform: devicePlatformSchema.optional().catch(undefined),
+      /** 这台设备所有会话里最晚的活动；没记过时不带。 */
+      lastSeenAtMs: z.number().optional(),
     }),
   ),
   nextId: z.string().default(""),
@@ -291,7 +296,7 @@ function remember(
 /* --------------------------------- 传输 ---------------------------------- */
 
 interface CallOptions {
-  readonly method?: "GET" | "POST" | "PUT" | "DELETE";
+  readonly method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   readonly body?: unknown;
   readonly signal?: AbortSignal;
   /** 用刷新密钥而不是访问密钥当 Bearer：刷新 / 换 CSRF / 登出三条。 */

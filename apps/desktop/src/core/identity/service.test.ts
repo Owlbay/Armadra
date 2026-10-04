@@ -7,6 +7,7 @@ import {
   ACCESS_TTL_MS,
   BOOTSTRAP_TTL_MS,
   IdentityService,
+  devicePlatform,
   SESSION_TTL_MS,
 } from "./service";
 import { allScopes, scope } from "./scopes";
@@ -404,6 +405,75 @@ describe("rotating a session", () => {
   });
 });
 
+describe("re-checking a long-lived stream's session (security review L1)", () => {
+  it("follows the session across a refresh, not the access token it began with", () => {
+    const fix = fixture();
+    const { credentials } = pair(fix);
+    const session = {
+      sessionId: credentials.principal.sessionId,
+      hostId: fix.hostId,
+      origin: ORIGIN,
+    };
+    expect(fix.service.sessionAccess(session).accessExpiresAtMs).toBe(
+      credentials.accessExpiresAtMs,
+    );
+    // The access token's fifteen minutes run out with no refresh: refused.
+    fix.advance(ACCESS_TTL_MS);
+    expect(kind(() => fix.service.sessionAccess(session))).toBe(
+      "unauthenticated",
+    );
+    // The page refreshes: the old access token is dead, the session is not.
+    const rotated = fix.service.refresh({
+      refreshToken: credentials.refreshToken,
+      csrfToken: credentials.csrfToken,
+      hostId: fix.hostId,
+      origin: ORIGIN,
+    });
+    expect(
+      kind(() =>
+        fix.service.authenticate({
+          accessToken: credentials.accessToken,
+          hostId: fix.hostId,
+          origin: ORIGIN,
+        }),
+      ),
+    ).toBe("unauthenticated");
+    expect(fix.service.sessionAccess(session).accessExpiresAtMs).toBe(
+      rotated.accessExpiresAtMs,
+    );
+    // Logged out: refused, whatever the clock says.
+    fix.service.logoutRefresh({
+      refreshToken: rotated.refreshToken,
+      csrfToken: rotated.csrfToken,
+      hostId: fix.hostId,
+      origin: ORIGIN,
+    });
+    expect(kind(() => fix.service.sessionAccess(session))).toBe(
+      "unauthenticated",
+    );
+  });
+
+  it("refuses another origin or host", () => {
+    const fix = fixture();
+    const { credentials } = pair(fix);
+    const sessionId = credentials.principal.sessionId;
+    expect(
+      kind(() =>
+        fix.service.sessionAccess({
+          sessionId,
+          hostId: fix.hostId,
+          origin: "http://127.0.0.1:9",
+        }),
+      ),
+    ).toBe("unauthenticated");
+    expect(
+      kind(() =>
+        fix.service.sessionAccess({ sessionId, hostId: "x", origin: ORIGIN }),
+      ),
+    ).toBe("unauthenticated");
+  });
+});
+
 describe("logging out and revoking", () => {
   it("revokes its own session and refuses it afterwards", () => {
     const fix = fixture();
@@ -620,5 +690,43 @@ describe("listing devices", () => {
         }),
       ),
     ).toBe("permission");
+  });
+});
+
+describe("devicePlatform", () => {
+  it("UA 归成平台：移动端先判，认得出浏览器而说不出系统的是 web", () => {
+    const cases: [string, string][] = [
+      [
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
+        "ios",
+      ],
+      [
+        "Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15",
+        "ios",
+      ],
+      [
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/126.0",
+        "android",
+      ],
+      [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0",
+        "windows",
+      ],
+      [
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 Electron/38.0",
+        "macos",
+      ],
+      [
+        "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+        "linux",
+      ],
+      ["Mozilla/5.0 (X11; CrOS x86_64 15359.58.0) Chrome/126.0", "linux"],
+      ["Mozilla/5.0 Chrome/126.0", "web"],
+      ["armadra-test/1.0", "unknown"],
+      ["", "unknown"],
+    ];
+    for (const [ua, platform] of cases) {
+      expect(devicePlatform(ua), ua).toBe(platform);
+    }
   });
 });

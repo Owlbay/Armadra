@@ -686,6 +686,109 @@ describe("passkey（§18.2）", () => {
     }
   });
 
+  it("改名：本人 1–64 个字符；别人的（owner 也算）与撤销了的答 404", async () => {
+    const fixture = await harness();
+    const admin = await owner(fixture);
+    const principalId = await member(fixture, admin);
+    const session = await credentialsOf(await login(fixture, principalId));
+    const authenticator = new SoftAuthenticator();
+    const begun = (await (
+      await call(fixture, "POST", "passkey/register/options", {}, session)
+    ).json()) as {
+      challengeId: string;
+      options: { challenge: string; rp: { id: string }; user: { id: string } };
+    };
+    const added = await call(
+      fixture,
+      "POST",
+      "passkey/register/verify",
+      {
+        challengeId: begun.challengeId,
+        response: authenticator.create(begun.options, fixture.origin),
+      },
+      session,
+    );
+    const { credentialId } = (await added.json()) as { credentialId: string };
+
+    const renamed = await call(
+      fixture,
+      "PATCH",
+      `passkey/${credentialId}`,
+      { label: "工作用 YubiKey" },
+      session,
+    );
+    expect(renamed.status).toBe(200);
+    expect(await renamed.json()).toEqual({
+      credentialId,
+      label: "工作用 YubiKey",
+    });
+    const listed = (await (
+      await call(fixture, "GET", "passkey", undefined, session)
+    ).json()) as { passkeys: { label: string }[] };
+    expect(listed.passkeys[0]?.label).toBe("工作用 YubiKey");
+
+    for (const label of ["", " 前后空白 ", "x".repeat(65), "换\n行", 42]) {
+      const refused = await call(
+        fixture,
+        "PATCH",
+        `passkey/${credentialId}`,
+        { label },
+        session,
+      );
+      expect(refused.status, String(label)).toBe(400);
+    }
+    // 64 个字符（不是字节）正好可以。
+    expect(
+      (
+        await call(
+          fixture,
+          "PATCH",
+          `passkey/${credentialId}`,
+          { label: "钥".repeat(64) },
+          session,
+        )
+      ).status,
+    ).toBe(200);
+
+    expect(
+      (
+        await call(
+          fixture,
+          "PATCH",
+          `passkey/${credentialId}`,
+          { label: "owner 改的" },
+          admin,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await call(fixture, "PATCH", `passkey/${credentialId}`, {
+          label: "没登录",
+        })
+      ).status,
+    ).toBe(401);
+
+    await call(
+      fixture,
+      "DELETE",
+      `passkey/${credentialId}`,
+      undefined,
+      session,
+    );
+    expect(
+      (
+        await call(
+          fixture,
+          "PATCH",
+          `passkey/${credentialId}`,
+          { label: "撤销之后" },
+          session,
+        )
+      ).status,
+    ).toBe(404);
+  });
+
   it("没登录不能登记", async () => {
     const fixture = await harness();
     const response = await call(
@@ -791,5 +894,102 @@ describe("会话列表与撤销（§18.4）", () => {
     expect(
       (await call(fixture, "POST", "sessions/revoke-others", {})).status,
     ).toBe(401);
+  });
+});
+
+describe("换口令撤其它会话（L2）与邀请有效期上限（L3）", () => {
+  it("本人换口令：撤掉自己其它会话、留下当前这个，答复带 revokedSessions", async () => {
+    const fixture = await harness();
+    const admin = await owner(fixture);
+    const principalId = await member(fixture, admin);
+    const current = await credentialsOf(await login(fixture, principalId));
+    const other = await credentialsOf(await login(fixture, principalId));
+    const another = await credentialsOf(await login(fixture, principalId));
+
+    const changed = await call(
+      fixture,
+      "POST",
+      "credentials",
+      { principalId, kind: "password", password: "a brand new passphrase" },
+      current,
+    );
+    expect(changed.status).toBe(201);
+    expect(await changed.json()).toMatchObject({ revokedSessions: 2 });
+    expect(
+      (await call(fixture, "GET", "sessions", undefined, current)).status,
+    ).toBe(200);
+    for (const session of [other, another]) {
+      expect(
+        (await call(fixture, "GET", "sessions", undefined, session)).status,
+      ).toBe(401);
+    }
+    // owner 的会话不受影响。
+    expect(
+      (await call(fixture, "GET", "sessions", undefined, admin)).status,
+    ).toBe(200);
+  });
+
+  it("owner 替人设口令：那个人的会话全部撤掉", async () => {
+    const fixture = await harness();
+    const admin = await owner(fixture);
+    const principalId = await member(fixture, admin);
+    const session = await credentialsOf(await login(fixture, principalId));
+    const reset = await call(
+      fixture,
+      "POST",
+      "credentials",
+      { principalId, kind: "password", password: "a brand new passphrase" },
+      admin,
+    );
+    expect(await reset.json()).toMatchObject({ revokedSessions: 1 });
+    expect(
+      (await call(fixture, "GET", "sessions", undefined, session)).status,
+    ).toBe(401);
+    expect(
+      (await call(fixture, "GET", "sessions", undefined, admin)).status,
+    ).toBe(200);
+  });
+
+  it("邀请 ttlMs 夹到 30 天；不是正整数答 400", async () => {
+    const fixture = await harness();
+    const admin = await owner(fixture);
+    const group = (await (
+      await call(fixture, "POST", "groups", { name: "前端" }, admin)
+    ).json()) as { groupId: string };
+    const day = 24 * 60 * 60 * 1000;
+    const before = Date.now();
+    const long = await call(
+      fixture,
+      "POST",
+      "invitations",
+      { role: "viewer", targetGroupId: group.groupId, ttlMs: 365 * day },
+      admin,
+    );
+    expect(long.status).toBe(201);
+    const { expiresAtMs } = (await long.json()) as { expiresAtMs: number };
+    expect(expiresAtMs).toBeGreaterThanOrEqual(before + 30 * day);
+    expect(expiresAtMs).toBeLessThanOrEqual(Date.now() + 30 * day);
+
+    const short = (await (
+      await call(
+        fixture,
+        "POST",
+        "invitations",
+        { role: "viewer", targetGroupId: group.groupId, ttlMs: day },
+        admin,
+      )
+    ).json()) as { expiresAtMs: number };
+    expect(short.expiresAtMs).toBeLessThanOrEqual(Date.now() + day);
+
+    for (const ttlMs of [0, -1, 1.5]) {
+      const refused = await call(
+        fixture,
+        "POST",
+        "invitations",
+        { role: "viewer", targetGroupId: group.groupId, ttlMs },
+        admin,
+      );
+      expect(refused.status, String(ttlMs)).toBe(400);
+    }
   });
 });

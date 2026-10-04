@@ -3,6 +3,7 @@ import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
 
 import { boardSyncUrl, runtimeApi } from "../api/client";
+import { containerSize, getFlow } from "../canvas/flow/flow-context";
 import { useCanvasStore } from "../store/canvas-store";
 import { presenceClientId, presenceDeviceName } from "../store/canvas/presence";
 import {
@@ -10,6 +11,7 @@ import {
   startLocalPresence,
   type LocalPresence,
   type Peer,
+  type PresenceViewport,
 } from "./awareness";
 import { bindStore, type Binding } from "./binding";
 import {
@@ -18,6 +20,11 @@ import {
   type SocketFactory,
 } from "./client";
 import { installUndo, type RealtimeUndo } from "./undo";
+import {
+  loadBoardViewport,
+  saveBoardViewport,
+  viewportCenter,
+} from "./viewport";
 
 /**
  * 一块实时板的生命周期（补全架构 §6.4）：开板时问 core 这块板走不走实时
@@ -27,6 +34,8 @@ import { installUndo, type RealtimeUndo } from "./undo";
  *   * 第一次同步完成之前画布只读：空文档的投影会把画布清空，在它之前落下的
  *     本地编辑也没有可对的基线。
  *   * `4403`：换一份全新的文档以只读重连（本地写不回去的改动作废）。
+ *   * 视口不进文档：开板时换成本机记着的那份（`viewport.ts`），之后每次
+ *     变化写回本机，刷新回到自己上次的位置。
  *   * 一直连不上时复核状态：core 说这块板不是实时板、设置也关着（升级被
  *     `409 realtime_disabled` 拒了），就退回租约模式。
  */
@@ -42,7 +51,10 @@ export interface RealtimeView {
   peers: Peer[];
   /** 自己的成员色序号（2..8）；画别人看到的颜色用，自己的光标不画。 */
   selfColor: number | null;
-  /** 正在跟随谁的光标（awareness clientID）。 */
+  /**
+   * 正在跟随谁（awareness clientID）：对方报了视口就跟视口，没报就跟光标
+   * （`CursorLayer`）。
+   */
   following: number | null;
   follow: (clientId: number | null) => void;
 }
@@ -90,6 +102,11 @@ export function broadcastCursor(cursor: { x: number; y: number } | null): void {
   live?.presence?.setCursor(cursor);
 }
 
+/** 自己的视口中心与缩放（画布坐标）；`null` = 画布卸载了。 */
+export function broadcastViewport(viewport: PresenceViewport | null): void {
+  live?.presence?.setViewport(viewport);
+}
+
 export interface StartOptions {
   workspaceId: string;
   boardId: string;
@@ -117,6 +134,9 @@ export function startRealtime(options: StartOptions): () => void {
   awareness.setLocalState(null);
 
   useCanvasStore.getState().setRealtime({ boardId, writable: false });
+  // 视口不在文档里：换成本机上次停的地方（没记过就留着打开时算的那份）。
+  const savedViewport = loadBoardViewport(boardId);
+  if (savedViewport) useCanvasStore.getState().setViewport(savedViewport);
   useRealtimeStore.setState({
     ...IDLE,
     boardId,
@@ -174,10 +194,19 @@ export function startRealtime(options: StartOptions): () => void {
   };
   awareness.on("change", onAwareness);
 
-  // 选区与正在看的节点随 store 写进 awareness。
+  // 选区与正在看的节点随 store 写进 awareness；视口记到本机。
   const offStore = useCanvasStore.subscribe((state, previous) => {
+    if (state.boardId !== boardId) return;
+    const viewport = state.document?.board.viewport;
+    if (
+      viewport &&
+      viewport !== previous.document?.board.viewport &&
+      state.document?.board.id === boardId
+    ) {
+      saveBoardViewport(boardId, viewport);
+    }
     const presence = live?.presence;
-    if (!presence || state.boardId !== boardId) return;
+    if (!presence) return;
     if (
       state.selectedNodeIds !== previous.selectedNodeIds ||
       state.selectedItemIds !== previous.selectedItemIds
@@ -216,6 +245,12 @@ export function startRealtime(options: StartOptions): () => void {
       ...state.selectedItemIds,
     ]);
     if (state.focusNodeId) mine.presence.setFocus(state.focusNodeId);
+    // 视口之后随相机变化由 `CursorLayer` 报；这里先报一次当前的。
+    const flow = getFlow();
+    const center = flow
+      ? viewportCenter(flow.getViewport(), containerSize())
+      : null;
+    if (center) mine.presence.setViewport(center);
     state.setRealtime({ boardId, writable: !readOnly });
     onAwareness();
   }

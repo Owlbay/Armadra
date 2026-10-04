@@ -11,7 +11,10 @@
  *   * `start` = `open-agent --agent <id> --task <prompt> --task-id <id>`: the
  *     core builds the node, links it, launches it and queues the task; the
  *     same `--task-id` answers the same node (ama retrying after a crash
- *     starts nothing twice).
+ *     starts nothing twice). ama's `cwd` and `resume` go along as `--cwd` /
+ *     `--resume`; one the core turns down (`cwd_outside_workspace`,
+ *     `resume_unsupported`) is dropped and the call repeated, so the member
+ *     starts in the workspace root or fresh instead of not at all.
  *   * `wait()` loops the `wait` verb until `done` or `failed`; `blocked` and
  *     `needsInput` only update ama's status line — **the runner never answers
  *     an approval**, a person does, on the canvas or in the member's terminal.
@@ -323,6 +326,36 @@ function describeRunner(agentId: string): string {
     : `Canvas node running ${agentId} (its own login, model and permissions); the user sees and can steer it on the board.`;
 }
 
+/** Why an optional `open-agent` argument was left out, for ama's log. */
+const FALLBACK_NOTES: Record<string, string> = {
+  "permission-mode": "no such permission mode; using its default",
+  cwd: "the directory is not usable on the board; starting in the workspace root",
+  resume: "this CLI cannot resume that session; starting fresh",
+};
+
+/**
+ * The argument a refusal is about, when leaving it out is safe: a CLI without
+ * that mode falls back to its default, which is never wider than full-auto or
+ * auto-edit — `plan` is the one mode whose fallback would be wider, so it is
+ * not retried; a directory outside the workspace (or a remote one) starts in
+ * the workspace root; a session the CLI cannot resume starts fresh.
+ */
+function droppable(
+  code: string,
+  mode: string,
+  present: Record<string, JsonValue>,
+): string | undefined {
+  const name =
+    code === "permission_mode_unsupported" && mode !== "plan"
+      ? "permission-mode"
+      : code === "cwd_outside_workspace" || code === "cwd_unsupported"
+        ? "cwd"
+        : code === "resume_unsupported"
+          ? "resume"
+          : undefined;
+  return name !== undefined && name in present ? name : undefined;
+}
+
 /** The runner for one agent id. */
 export function canvasRunner(agentId: string, deps: RunnerDeps): HostRunner {
   return {
@@ -343,31 +376,30 @@ export function canvasRunner(agentId: string, deps: RunnerDeps): HostRunner {
         ...(request.model === undefined ? {} : { model: request.model }),
       };
       const mode = canvasMode(request.mode);
-      let answer = await deps.control("open-agent", {
-        ...args,
+      // What the core may turn down, each with its own code; dropping one is
+      // never wider than keeping it (§5.3).
+      const optional: Record<string, JsonValue> = {
         ...(mode === "default" ? {} : { "permission-mode": mode }),
-      });
-      // A CLI without that mode: fall back to its default, which is never
-      // wider than full-auto or auto-edit. `plan` is the one mode whose
-      // fallback would be wider, so it is not retried.
-      if (
-        answer.kind === "refused" &&
-        answer.code === "permission_mode_unsupported" &&
-        mode !== "plan"
-      ) {
-        deps.log("info", `${agentId} has no ${mode} mode; using its default`);
-        answer = await deps.control("open-agent", args);
+        ...(request.cwd === undefined || request.cwd === ""
+          ? {}
+          : { cwd: request.cwd }),
+        ...(request.resume === undefined || request.resume === ""
+          ? {}
+          : { resume: request.resume }),
+      };
+      let answer = await deps.control("open-agent", { ...args, ...optional });
+      for (;;) {
+        if (answer.kind !== "refused") break;
+        const dropped = droppable(answer.code, mode, optional);
+        if (dropped === undefined) break;
+        deps.log("info", `${agentId}: ${FALLBACK_NOTES[dropped]}`);
+        delete optional[dropped];
+        answer = await deps.control("open-agent", { ...args, ...optional });
       }
       if (answer.kind !== "ok") throw new Error(refusalText(answer));
       const result = answer.body.result as { id?: unknown } | undefined;
       if (typeof result?.id !== "string") {
         throw new Error("open-agent answered no node id");
-      }
-      if (request.resume !== undefined) {
-        deps.log(
-          "info",
-          `canvas runners do not resume a session; ${agentId} starts fresh`,
-        );
       }
       return new CanvasTask(result.id, agentId, key, request, deps);
     },
