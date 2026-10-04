@@ -285,6 +285,20 @@ export async function disableMfa(code: string): Promise<void> {
   await identityRequest("mfa/disable", ok, { method: "POST", body: { code } });
 }
 
+/**
+ * 替丢了手机的人清掉 TOTP 与恢复码（`identity:manage`，契约 §18.3）。答这个人
+ * 原来有没有开两步验证。
+ */
+export async function resetMfa(principalId: string): Promise<boolean> {
+  return (
+    await identityRequest(
+      "mfa/reset",
+      z.object({ reset: z.boolean().default(false) }).passthrough(),
+      { method: "POST", body: { principalId } },
+    )
+  ).reset;
+}
+
 /* --------------------------------- 会话 ---------------------------------- */
 
 export async function listSessions(all = false): Promise<IdentitySessionRow[]> {
