@@ -15,11 +15,14 @@
 //   4b. 「手机页输入配对码」（契约 §24）：设置页的配对卡上有 8 位配对码；独立
 //      上下文、390 宽的手机视口打开 Gateway 地址（不带 `#pair=`），连接页上
 //      输满 8 位自动兑换并进入画布；同一枚码再兑是 404；
+//   4c. 「口令重置链接」（契约 §25，G5-03）：owner 替第 3 步的成员签重置令牌；
+//      独立上下文打开 `#reset=`，整页「设置新口令」，设好后成员原来的会话被撤、
+//      令牌再用 404；「去登录」落在整页登录的口令步，新口令登录进画布；
 //   5. 「成员注册 passkey 后用它登录」（G2-8）：公网来源设成
 //      `https://localhost:<端口>`（WebAuthn 不认 IP 字面量），无头 Chrome 的
 //      独立上下文里兑换邀请成为成员，CDP 的 WebAuthn 虚拟认证器代替指纹；
 //      在设置 → 安全里点「添加通行密钥」，清掉 Cookie 后在同一页点「使用通行
-//      密钥」登录回同一个成员；审计里有 `identity.passkey.add` 与
+//      密钥」登录回同一个成员（没登录时是整页登录）；审计里有 `identity.passkey.add` 与
 //      `identity.login`（`method: "passkey"`）；
 //   6. 关掉 Gateway，连接被拒。
 //
@@ -336,6 +339,7 @@ await h.run(async () => {
   });
   check(registered.status === 201, "另一个上下文兑换邀请注册成员");
   member.adopt(registered);
+  const memberId = JSON.parse(registered.body).device?.principalId ?? "";
   const read = await member.call(`/api/workspaces/${workspaceId}/boards`);
   check(read.status === 200, "成员读得到被共享的画布");
   const write = await member.call(`/api/workspaces/${workspaceId}/boards`, {
@@ -354,11 +358,13 @@ await h.run(async () => {
     await fromThePage(base, origin);
     // 在 passkey 那段之前：它把对外来源设成 localhost，配对码随之关掉。
     await codeFromThePhone(base, origin);
+    await resetFromThePage(origin, owner, member, memberId);
     await passkeyFromThePage(base, owner, workspaceId);
   } else {
     report.page = "skipped";
     report.passkey = "skipped";
-    step("没有 apps/web/dist，「从页面开关」与 passkey 两段 skipped");
+    report.passwordReset = "skipped";
+    step("没有 apps/web/dist，「从页面开关」、重置与 passkey 几段 skipped");
   }
 
   if (process.env.ARMADRA_DEV_STACK === "1") {
@@ -555,6 +561,93 @@ async function codeFromThePhone(base, origin) {
 }
 
 /**
+ * 第 4c 步：口令重置链接（契约 §25，G5-03）。owner 替成员签一枚重置令牌；独立
+ * 上下文（没有会话）打开 `#reset=<令牌>`，整页「设置新口令」显示是谁的，设好
+ * 之后成员原来那条会话被撤；「去登录」落在整页登录的口令步，账号已填，用新
+ * 口令登录进画布。同一枚令牌再用是 404。
+ */
+async function resetFromThePage(origin, owner, member, memberId) {
+  const issued = await owner.call(
+    `/api/identity/principals/${memberId}/password-reset`,
+    { method: "POST", body: {} },
+  );
+  check(
+    issued.status === 201,
+    "owner 替成员签发重置链接",
+    String(issued.status),
+  );
+  const { token } = JSON.parse(issued.body);
+  const before = await member.call("/api/identity/session");
+  check(before.status === 200, "成员原来的会话还在");
+
+  chrome ??= await startChrome(h);
+  const page = await chrome.open({ name: "reset-page", isolated: true });
+  await page.navigate(`${origin}/#reset=${token}`);
+  await page.settle();
+  await page.waitFor(
+    `return document.querySelector('[data-slot="reset-password"] h1')
+       ?.innerText.includes("设置新口令") &&
+       document.body.innerText.includes("成员");`,
+    { what: "整页「设置新口令」显示是谁的", timeout: 30_000 },
+  );
+  check(
+    (await page.evaluate("return location.hash;")) === "",
+    "令牌从地址栏抹掉",
+  );
+  await page.capture("reset-page");
+  const type = async (label, text) => {
+    await page.evaluate(
+      `const field = [...document.querySelectorAll("label")]
+         .find((node) => node.innerText.trim() === ${JSON.stringify(label)});
+       document.getElementById(field.htmlFor).focus(); return true;`,
+    );
+    await page.call("Input.insertText", { text });
+  };
+  const fresh = "new horse battery staple 2026";
+  await type("新口令", fresh);
+  await type("再输一次", fresh);
+  await page.click("button", "设置口令");
+  await page.waitFor(
+    `return document.querySelector('[data-slot="reset-password"] h1')
+       ?.innerText.includes("口令已设置");`,
+    { what: "设好新口令", timeout: 30_000 },
+  );
+  await page.capture("reset-done");
+  const after = await member.call("/api/identity/session");
+  check(after.status === 401, "成员原来的会话被撤", String(after.status));
+  const reused = await context(origin).call(
+    `/api/identity/password-reset/${encodeURIComponent(token)}`,
+  );
+  check(reused.status === 404, "同一枚令牌再打开是 404", String(reused.status));
+
+  await page.click("button", "去登录");
+  await page.waitFor(
+    `return !!document.querySelector('[data-slot="sign-in"] input[type="password"]');`,
+    { what: "整页登录的口令步" },
+  );
+  await type("口令", fresh);
+  await page.capture("reset-sign-in");
+  await page.click('[data-slot="sign-in"] button[type="submit"]');
+  await page.waitFor(
+    `return !document.querySelector('[data-slot="identity-page"]');`,
+    { what: "新口令登录后进入画布", timeout: 30_000 },
+  );
+  const who = await page.evaluate(`
+    const answer = await fetch("/api/identity/session");
+    const body = await answer.json();
+    return body.device?.principalId ?? "";
+  `);
+  check(who === memberId, "新口令登录回同一个成员", who.slice(0, 8));
+  const leaked = page.drain();
+  check(
+    leaked.errors.length === 0,
+    "重置这一段页面没有控制台错误",
+    JSON.stringify(leaked.errors).slice(0, 200),
+  );
+  report.passwordReset = "ok";
+}
+
+/**
  * 第 5 步：成员注册 passkey 后用它登录（补全计划 G2-8）。WebAuthn 只认域名，
  * 所以先把公网来源设成 `https://localhost:<端口>`——Gateway 的来源集合与证书
  * 主机名随之加上 localhost，RP ID 取它的主机名。认证器是 CDP 的虚拟认证器
@@ -650,18 +743,23 @@ async function passkeyFromThePage(base, owner, workspaceId) {
   );
   await page.capture("passkey-added");
 
-  // 登出：清掉这个上下文的 Cookie，页面重载后安全页就是登录。
+  // 登出：清掉这个上下文的 Cookie，页面重载后就是整页登录（G5-03）。
   await page.call("Network.clearBrowserCookies");
   await page.navigate(`${publicOrigin}/`);
   await page.settle();
-  await openSecurity();
   await page.waitFor(
-    `return [...document.querySelectorAll('[role="dialog"] button')]
-       .some((node) => node.innerText.includes("使用通行密钥"));`,
-    { what: "没登录时安全页给出登录（含通行密钥按钮）" },
+    `return !!document.querySelector('[data-slot="identity-page"]') &&
+       [...document.querySelectorAll("button")]
+         .some((node) => node.innerText.includes("使用通行密钥"));`,
+    { what: "没登录时是整页登录（含通行密钥按钮）" },
   );
   await page.capture("passkey-sign-in");
-  await page.click('[role="dialog"] button', "使用通行密钥");
+  await page.click("button", "使用通行密钥");
+  await page.waitFor(
+    `return !document.querySelector('[data-slot="identity-page"]');`,
+    { what: "用通行密钥登录后进入画布", timeout: 30_000 },
+  );
+  await openSecurity();
   await page.waitFor(
     `return [...document.querySelectorAll('[role="dialog"] h3')]
        .some((node) => node.innerText.includes("会话与设备"));`,
