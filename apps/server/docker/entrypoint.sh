@@ -5,6 +5,7 @@
 #   ARMADRA_LISTEN         监听地址，镜像缺省 0.0.0.0:8443
 #   ARMADRA_TLS_CERT / ARMADRA_TLS_KEY   运维给的证书（与 ACME 互斥）
 #   ARMADRA_ACME_EMAIL     给了就走 ACME（服务器壳自己读，见 server-deployment.md）
+#   ARMADRA_BROWSER_PATH   浏览器节点的 Chromium；镜像带了 Chromium 时缺省指向它
 #
 # 第一个参数不是 serve 时原样交给 armadra-server（status、version、logs…）。
 set -eu
@@ -27,6 +28,11 @@ case " $* " in
     fi
     ;;
 esac
+
+# 镜像带 Chromium（构建参数 WITH_CHROMIUM=1）而运维没指定时，浏览器节点用它。
+if [ -z "${ARMADRA_BROWSER_PATH:-}" ] && [ -x /usr/bin/chromium ]; then
+  export ARMADRA_BROWSER_PATH=/usr/bin/chromium
+fi
 
 tls=""
 if [ -n "${ARMADRA_TLS_CERT:-}" ] || [ -n "${ARMADRA_TLS_KEY:-}" ]; then
