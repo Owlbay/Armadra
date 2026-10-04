@@ -408,6 +408,7 @@ export async function openAgent(
         runnerId: agentId,
         nodeId: node.id,
         now: nowMs,
+        task,
       });
     }
   }

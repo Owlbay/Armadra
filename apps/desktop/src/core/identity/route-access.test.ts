@@ -89,6 +89,7 @@ const lookups = {
   boardWorkspace: (id: string) => (id === "b1" ? "w1" : ""),
   workflowDraftWorkspace: (id: string) => (id === "d1" ? "w1" : ""),
   workflowRunWorkspace: (id: string) => (id === "r1" ? "w1" : ""),
+  workflowTaskWorkspace: (id: string) => (id === "k1" ? "w1" : ""),
   confirmWorkspace: (id: string) => (id === "c1" ? "w1" : ""),
 };
 
@@ -345,6 +346,22 @@ describe("契约 §23：创建者 = 触发者与工作流", () => {
     expect(
       row(decide, "POST", "/api/workflows/runs", { templateId: "x1" }),
     ).toBe("owner");
+  });
+
+  it("分派抽屉：任务列表按画板看画布，重试是 operator（契约 §15.7）", () => {
+    const { decide } = harness();
+    expect(
+      row(decide, "GET", "/api/workflows/tasks", undefined, { boardId: "b1" }),
+    ).toBe("owner,driver,operator,editor,viewer");
+    expect(
+      row(decide, "GET", "/api/workflows/tasks", undefined, { boardId: "b9" }),
+    ).toBe("owner");
+    expect(row(decide, "GET", "/api/workflows/tasks")).toBe("owner");
+    expect(row(decide, "POST", "/api/workflows/tasks/k1/retry")).toBe(
+      "owner,driver,operator",
+    );
+    expect(row(decide, "POST", "/api/workflows/tasks/k9/retry")).toBe("owner");
+    expect(row(decide, "GET", "/api/workflows/tasks/k1/retry")).toBe("owner");
   });
 
   it("节点记过触发者时，起它的人不改写创建者", () => {
