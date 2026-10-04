@@ -12,6 +12,9 @@
 //      owner；后台服务页里有 CA 安装引导、对外服务开着、二维码里是同一个来源、
 //      已配对设备表里有这台；在页面上点开关关掉 Gateway，回环上读到已关，
 //      再从回环打开继续后面的步骤；
+//   4b. 「手机页输入配对码」（契约 §24）：设置页的配对卡上有 8 位配对码；独立
+//      上下文、390 宽的手机视口打开 Gateway 地址（不带 `#pair=`），连接页上
+//      输满 8 位自动兑换并进入画布；同一枚码再兑是 404；
 //   5. 「成员注册 passkey 后用它登录」（G2-8）：公网来源设成
 //      `https://localhost:<端口>`（WebAuthn 不认 IP 字面量），无头 Chrome 的
 //      独立上下文里兑换邀请成为成员，CDP 的 WebAuthn 虚拟认证器代替指纹；
@@ -159,6 +162,8 @@ function fingerprint(pem) {
 /** 页面产物：有就让 Gateway 托管它（第 4 步），没有就给一个空目录。 */
 const webDist = join(root, "apps/web/dist");
 const hasPage = existsSync(join(webDist, "index.html"));
+/** 第 4、4b 步共用一个无头 Chrome（在顶层 await 之前声明）。 */
+let chrome;
 
 async function startCore(dataDir) {
   const entry = join(root, "apps/desktop/out/core/main.js");
@@ -347,6 +352,8 @@ await h.run(async () => {
 
   if (hasPage) {
     await fromThePage(base, origin);
+    // 在 passkey 那段之前：它把对外来源设成 localhost，配对码随之关掉。
+    await codeFromThePhone(base, origin);
     await passkeyFromThePage(base, owner, workspaceId);
   } else {
     report.page = "skipped";
@@ -419,7 +426,7 @@ async function fromThePage(base, origin) {
   const pairing = JSON.parse(
     (await local(base, "POST", "/api/gateway/pairing", {})).body,
   );
-  const chrome = await startChrome(h);
+  chrome ??= await startChrome(h);
   const page = await chrome.open({ name: "gateway-page" });
   await page.navigate(pairing.webUrl);
   await page.settle();
@@ -459,6 +466,15 @@ async function fromThePage(base, origin) {
     { what: "已配对设备表里有这台" },
   );
   step("已配对设备表里有这台");
+  const shownCode = await page.waitFor(
+    `return document.querySelector("[data-pairing-code]")?.textContent ?? null;`,
+    { what: "配对卡上的配对码" },
+  );
+  check(
+    /^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(String(shownCode)),
+    "配对卡上有 XXXX-XXXX 的配对码",
+    String(shownCode),
+  );
   await page.capture("gateway-page-on");
   await page.evaluate(
     `document.querySelector("table")?.scrollIntoView({ block: "center" }); return true;`,
@@ -488,6 +504,54 @@ async function fromThePage(base, origin) {
     "从回环再打开，来源不变",
     reopened.origin,
   );
+}
+
+/**
+ * 第 4b 步：手机页输入配对码（契约 §24，设计系统 §5.12）。独立的浏览器上下文
+ * （没有会话）、手机视口，打开的是不带票的 Gateway 地址——人照着配对卡手输
+ * 地址的样子。
+ */
+async function codeFromThePhone(base, origin) {
+  const pairing = JSON.parse(
+    (await local(base, "POST", "/api/gateway/pairing", {})).body,
+  );
+  check(
+    /^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(pairing.code ?? ""),
+    "回环档位的配对载荷带 8 位配对码",
+    pairing.code,
+  );
+  chrome ??= await startChrome(h);
+  const phone = await chrome.open({
+    isolated: true,
+    width: 390,
+    height: 844,
+    name: "gateway-phone",
+  });
+  await phone.navigate(`${origin}/`);
+  await phone.settle();
+  await phone.waitFor(
+    `return document.querySelectorAll('[data-slot="input-otp-slot"]').length === 8;`,
+    { what: "手机连接页的 8 位配对码", timeout: 30_000 },
+  );
+  await phone.capture("gateway-phone-code");
+  await phone.evaluate(
+    `document.querySelector("input[data-input-otp]")?.focus(); return true;`,
+  );
+  await phone.call("Input.insertText", {
+    text: pairing.code.replace("-", "").toLowerCase(),
+  });
+  await phone.waitFor(
+    `return !document.querySelector('[data-slot="mobile-connect"]');`,
+    { what: "输满自动兑换、配对并进入画布", timeout: 30_000 },
+  );
+  step("手机页输入配对码配对成 owner");
+  await phone.capture("gateway-phone-paired");
+  const again = await context(origin).call(
+    "/api/gateway/pairing-code/exchange",
+    { method: "POST", body: { code: pairing.code } },
+  );
+  check(again.status === 404, "同一枚配对码再兑是 404", String(again.status));
+  report.pairingCode = "ok";
 }
 
 /**

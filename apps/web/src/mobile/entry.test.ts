@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   compact: true,
   saved: null as string | null,
   restored: false,
+  session: null as unknown,
   install: vi.fn(),
 }));
 
@@ -29,6 +30,10 @@ vi.mock("../api/request", async (original) => ({
 vi.mock("../api/identity", async (original) => ({
   ...(await original<typeof import("../api/identity")>()),
   restoreNativeCredentials: async () => mocks.restored,
+  resumeIdentity: async () => {
+    if (mocks.session instanceof Error) throw mocks.session;
+    return mocks.session;
+  },
 }));
 
 import { prepareEntry } from "./entry";
@@ -40,6 +45,7 @@ beforeEach(() => {
     compact: true,
     saved: null,
     restored: false,
+    session: null,
   });
   mocks.install.mockReset();
 });
@@ -62,8 +68,25 @@ describe("入口分支", () => {
     await expect(prepareEntry()).resolves.toMatchObject({
       kind: "connect",
       mode: "web",
+      via: "ticket",
     });
     expect(location.hash).toBe("#pair=abc");
+    mocks.compact = false;
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+  });
+
+  it("经 Gateway、窄屏、没带票：没有会话 → 配对码；有会话或问不到 → 画布", async () => {
+    mocks.served = true;
+    await expect(prepareEntry()).resolves.toMatchObject({
+      kind: "connect",
+      mode: "web",
+      via: "code",
+    });
+    mocks.session = { principalId: "p" };
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+    mocks.session = new Error("offline");
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+    mocks.session = null;
     mocks.compact = false;
     await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
   });

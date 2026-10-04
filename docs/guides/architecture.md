@@ -370,7 +370,8 @@ ACP 只是同一个 Agent 节点的另一种驱动方式（`core/acp/`，[ACP �
   `realtime_active`。页面（`apps/web/src/realtime/`）把 `Y.Doc` 与 `canvas-store` 双向绑定，
   `Y.UndoManager` 接管撤销，在线条与光标来自 awareness（core 按连接改写身份、校验形状），
   断线时本地照常编辑、重连补齐；视口不进文档。评论存 `board_comments`，`@` 提及发
-  `board.comment` 事件，Agent 经连线读节点时附上未解决的评论线程。契约 §16。
+  `board.comment` 事件，Agent 经连线读节点或白板引用时附上未解决的评论线程；正文在页面按
+  Markdown 渲染（不渲染裸 HTML），钉按屏幕距离聚合。契约 §16。
 - 控制动词新建节点时，core 在 `board.changed` **之后**再广播一条
   `node.created{boardId, nodeId, nodeType, originNodeId}`。前者只说「板变新了」，
   后者说「新出现的是哪一个、谁要的」：正开着这块板的页面据此把新节点选中并把
@@ -553,7 +554,7 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
 - **ACP 的未竟项**：`elicitation/create`、按模型选择（`session/set_config_option`）、`pi-acp`
   的映射文件；ACP 驱动下不做节点凭据与 ama 密钥兑换；SSH 节点不能切到 ACP（`acp_unsupported`）。
   六家真适配器的端到端探针已备（`agent-e2e` 场景 12，C 档），还没有真跑。
-- **Gateway / 手机**：配对只有两分钟票与二维码 / 链接，没有设计里的 8 位配对码；设备表没有
+- **Gateway / 手机**：配对是两分钟票（二维码 / 链接），私网档位上另有 8 位配对码（契约 §24）；设备表没有
   「平台」「最近访问」；`tls-alpn-01` 未做；推送中继写完不部署，UnifiedPush 未做；真机、商店与
   真 APNs / FCM 都要用户的账号。
 - **安全审查的低危项**：页面上口令策略拒绝码与 `warn` 档的提示、GitHub / 自动化两面对 Bearer 写仍要 CSRF 等，见[安全审查](../status/security-review-2026-10.md) §3。

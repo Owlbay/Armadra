@@ -7,7 +7,8 @@ import { memberColorVar } from "@/ui/member-dot";
 /**
  * 评论钉（设计系统 §4）：24px 圆，`--card` 底、2px 成员色边、里面是计数；
  * 有未解决的线程时右上一个 `--brand` 小点，全部解决后整体 `--faint`；
- * 缩放 < 0.5 只画一个点。按 `1 / zoom` 反缩放，屏幕上尺寸不变。
+ * 缩放 < 0.5 只画一个点。按 `1 / zoom` 反缩放，屏幕上尺寸不变。屏幕上挨得
+ * 太近的几枚钉聚成一枚，里面画「+N」（N 是聚进来的钉数）。
  */
 export interface CommentPinProps
   extends Omit<React.ComponentProps<typeof Button>, "children" | "color"> {
@@ -20,11 +21,23 @@ export interface CommentPinProps
   label: string;
   /** 只画点（缩放 < 0.5）。 */
   dot?: boolean;
+  /** 聚进这一枚的钉数（≥ 2）；有它就画「+N」而不是评论条数。 */
+  merged?: number;
 }
 
 export const CommentPin = React.forwardRef<HTMLButtonElement, CommentPinProps>(
   function CommentPin(
-    { count, open, color, label, dot = false, className, style, ...props },
+    {
+      count,
+      open,
+      color,
+      label,
+      dot = false,
+      merged,
+      className,
+      style,
+      ...props
+    },
     ref,
   ) {
     const border = open ? memberColorVar(color) : "var(--faint)";
@@ -36,6 +49,7 @@ export const CommentPin = React.forwardRef<HTMLButtonElement, CommentPinProps>(
         aria-label={label}
         data-comment-pin
         data-open={open ? "true" : undefined}
+        data-merged={merged}
         className={cn(
           "relative rounded-full border-2 bg-card p-0 font-medium text-foreground shadow-sm hover:bg-card",
           dot
@@ -51,7 +65,12 @@ export const CommentPin = React.forwardRef<HTMLButtonElement, CommentPinProps>(
         }}
         {...props}
       >
-        {!dot && (count > 99 ? "99+" : count)}
+        {!dot &&
+          (merged !== undefined
+            ? `+${merged > 99 ? 99 : merged}`
+            : count > 99
+              ? "99+"
+              : count)}
         {!dot && open && (
           <span
             aria-hidden

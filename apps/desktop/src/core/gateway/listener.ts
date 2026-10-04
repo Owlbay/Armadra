@@ -84,6 +84,9 @@ export interface Gateway {
   readonly hostId: string;
   readonly service: IdentityService;
   readonly webRoot: WebRoot | undefined;
+  /** 监听档位（服务器壳缺省 `all`）；配对短码按它与对外来源决定开不开。 */
+  readonly mode: ListenMode;
+  readonly publicOrigins: readonly string[];
   /** 当前的首选来源（公网来源优先，否则第一个自己的地址）。 */
   origin(): string;
   origins(): readonly string[];
@@ -204,6 +207,8 @@ export async function openGateway(
     hostId,
     service,
     webRoot: options.webRoot,
+    mode,
+    publicOrigins: [...options.publicOrigins],
     origin: () => origins[0] as string,
     origins: () => origins,
     tls: () => tls,

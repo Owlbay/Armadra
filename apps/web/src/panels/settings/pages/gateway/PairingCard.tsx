@@ -7,6 +7,7 @@ import { useT } from "../../../../app/preferences-store";
 import { encodeQr, pairingQrText, qrPath } from "../../../../host/qr";
 import { Button } from "@/ui/button";
 import { Card, CardContent } from "@/ui/card";
+import { Kbd } from "@/ui/kbd";
 import {
   Select,
   SelectContent,
@@ -82,9 +83,11 @@ export interface PairingCardProps {
 }
 
 /**
- * 配对卡：二维码 · 地址 · 复制链接 / 新配对码 · 倒计时 · 指纹与 CA 下载。
+ * 配对卡：二维码 · 地址 · 复制链接 / 新配对码 · 配对码与倒计时 · 指纹与 CA
+ * 下载（设计系统 §5.12）。
  *
- * 票两分钟一次性（契约 §17.3）。归零后图变淡、按钮变成主按钮；不自动续，
+ * 票两分钟一次性（契约 §17.3）；私网档位上同时有一枚 8 位配对码（§24），与票
+ * 同生同灭，过期时随倒计时一起收起。归零后图变淡、按钮变成主按钮；不自动续，
  * 免得一张开着没人看的页面每两分钟铸一张票。
  */
 export function PairingCard({
@@ -180,14 +183,37 @@ export function PairingCard({
             </Button>
           </div>
           {pairing && (
-            <p
-              className={`text-[12px] tabular-nums ${expired ? "text-destructive" : "text-muted-foreground"}`}
+            <div
+              className="flex flex-wrap items-center gap-2 text-[12px] tabular-nums"
               aria-live="off"
             >
-              {expired
-                ? t("gateway.pair.expired")
-                : t("gateway.pair.expiresIn", { time: countdown(remaining) })}
-            </p>
+              {pairing.code && !expired && (
+                <>
+                  <span className="text-muted-foreground">
+                    {t("gateway.pairCode.label")}
+                  </span>
+                  <Kbd
+                    data-pairing-code
+                    className="h-6 px-1.5 font-mono text-[13px] tracking-[0.12em] text-foreground select-text"
+                  >
+                    {pairing.code}
+                  </Kbd>
+                </>
+              )}
+              <span
+                className={
+                  expired ? "text-destructive" : "text-muted-foreground"
+                }
+              >
+                {expired
+                  ? t("gateway.pair.expired")
+                  : pairing.code
+                    ? countdown(remaining)
+                    : t("gateway.pair.expiresIn", {
+                        time: countdown(remaining),
+                      })}
+              </span>
+            </div>
           )}
           {fingerprint && (
             <div className="mt-auto flex min-w-0 flex-col gap-2 border-t border-border/60 pt-3">

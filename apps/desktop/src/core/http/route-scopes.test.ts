@@ -21,6 +21,8 @@ describe("路由要求的 scope", () => {
         // 「这台 core 是谁、支持什么」，两者都要在一次配对之前就说得出来。
         if (entry.path.endsWith("/health")) continue;
         if (entry.path === "/api/identity/hello") continue;
+        // 配对短码换票同理：手机还没有身份，短码就是凭据（契约 §24）。
+        if (entry.path === "/api/gateway/pairing-code/exchange") continue;
         if (router.requiredScope(method, entry.path) === undefined) {
           missing.push(`${method} ${entry.path}`);
         }

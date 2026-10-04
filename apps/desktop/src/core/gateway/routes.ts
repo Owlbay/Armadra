@@ -6,6 +6,7 @@ import {
   GATEWAY_TLS_SOURCES,
 } from "../settings/completion-settings";
 import { canonicalOrigin } from "../identity/origin";
+import { remoteAddress } from "../identity/http";
 
 /**
  * `/api/gateway*` 的三条（契约 §17）。owner 才进得来——路由门按
@@ -14,8 +15,18 @@ import { canonicalOrigin } from "../identity/origin";
  *   * `GET /api/gateway`：状态。
  *   * `PUT /api/gateway`：改配置（`gateway.*` 的子集，未给的键不动），然后
  *     按新配置开、关或重开；关掉即刻停止监听并断开经它进来的流。
- *   * `POST /api/gateway/pairing`：铸一张配对票，回网页链接与原生深链。
+ *   * `POST /api/gateway/pairing`：铸一张配对票，回网页链接与原生深链；私网
+ *     档位上连同一枚 8 位短码。
+ *   * `POST /api/gateway/pairing-code/exchange`：短码换票（契约 §24）。匿名——
+ *     手机还没有身份，短码就是凭据；档位与限流在 Gateway 域里判。
  */
+
+export interface PairingCodeExchange {
+  readonly code: string;
+  readonly remoteIp: string;
+  /** 请求的来源（经 Gateway 时是页面来源，原生 App 是会话来源）。 */
+  readonly origin: string | undefined;
+}
 
 export interface GatewayRouteDeps {
   status(): Record<string, unknown>;
@@ -25,6 +36,7 @@ export interface GatewayRouteDeps {
     origin?: string;
     deviceName?: string;
   }): Record<string, unknown> | ErrorResponse;
+  exchangeCode(input: PairingCodeExchange): HandlerResult;
 }
 
 export function getGateway(deps: GatewayRouteDeps): HandlerResult {
@@ -75,6 +87,34 @@ export function postPairing(
   const answer = deps.pair(out);
   if ("status" in answer && "body" in answer) return answer as ErrorResponse;
   return { status: 200, body: answer };
+}
+
+export function postPairingCodeExchange(
+  deps: GatewayRouteDeps,
+  request: CoreRequest,
+): HandlerResult {
+  let body: unknown;
+  try {
+    body = request.json();
+  } catch {
+    return badRequest("请求体不是 JSON");
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return badRequest("请求体必须是对象");
+  }
+  const input = body as Record<string, unknown>;
+  for (const key of Object.keys(input)) {
+    if (key !== "code") return badRequest(`不认识的键：${key}`);
+  }
+  if (typeof input.code !== "string" || input.code.length > 32) {
+    return badRequest("code 必须是字符串");
+  }
+  const origin = request.headers.origin;
+  return deps.exchangeCode({
+    code: input.code,
+    remoteIp: remoteAddress(request),
+    origin: typeof origin === "string" ? canonicalOrigin(origin) : undefined,
+  });
 }
 
 const MAX_PATH = 4096;

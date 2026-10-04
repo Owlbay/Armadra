@@ -99,3 +99,88 @@ describe("连接页 · 手机浏览器", () => {
     expect(screen.getByRole("button", { name: "Scan QR code" })).toBeTruthy();
   });
 });
+
+describe("连接页 · 配对码", () => {
+  // `input-otp` 聚焦时探一下密码管理器的徽标位置；jsdom 没有这个方法。
+  beforeEach(() => {
+    document.elementFromPoint = () => null;
+  });
+
+  function typeCode(value: string) {
+    const input = screen.getByLabelText("配对码");
+    fireEvent.change(input, { target: { value } });
+  }
+
+  it("手机浏览器手输地址打开：一上来就是 8 位配对码，输满自动兑换", async () => {
+    const onCode = vi.fn(async () => null);
+    const onSignIn = vi.fn();
+    render(
+      <ConnectScreen
+        mode="web"
+        origin="https://192.168.1.8:8443"
+        codeFirst
+        onCode={onCode}
+        onSignIn={onSignIn}
+        onConnect={vi.fn()}
+      />,
+    );
+    expect(
+      document.querySelectorAll("[data-slot=input-otp-slot]"),
+    ).toHaveLength(8);
+    expect(
+      document.querySelectorAll("[data-slot=input-otp-group]"),
+    ).toHaveLength(2);
+    // 没有「改用配对链接」：这一页没有票。
+    expect(screen.queryByRole("button", { name: "改用配对链接" })).toBeNull();
+    typeCode("3f7k9q2m");
+    await waitFor(() => expect(onCode).toHaveBeenCalledWith("3F7K9Q2M"));
+    fireEvent.click(screen.getByRole("button", { name: "账号登录" }));
+    expect(onSignIn).toHaveBeenCalled();
+  });
+
+  it("兑换失败：错误在下面，输入清空", async () => {
+    const onCode = vi.fn(async () => "codeInvalid" as const);
+    render(
+      <ConnectScreen
+        mode="web"
+        origin="https://192.168.1.8:8443"
+        codeFirst
+        onCode={onCode}
+        onConnect={vi.fn()}
+      />,
+    );
+    typeCode("3F7K9Q2M");
+    await waitFor(() =>
+      expect(screen.getByText("配对码不对或已过期")).toBeTruthy(),
+    );
+    expect((screen.getByLabelText("配对码") as HTMLInputElement).value).toBe(
+      "",
+    );
+  });
+
+  it("原生 App：第三个入口「输入配对码」，可以切回链接", async () => {
+    const onCode = vi.fn(async () => null);
+    render(
+      <ConnectScreen
+        mode="native"
+        origin="https://10.0.0.2:8443"
+        canScan
+        onScan={vi.fn()}
+        onCode={onCode}
+        onConnect={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "扫码" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "输入配对码" }));
+    expect(screen.queryByLabelText("配对链接")).toBeNull();
+    typeCode("ABCD2345");
+    await waitFor(() => expect(onCode).toHaveBeenCalledWith("ABCD2345"));
+    fireEvent.click(screen.getByRole("button", { name: "改用配对链接" }));
+    expect(screen.getByLabelText("配对链接")).toBeTruthy();
+  });
+
+  it("没给 onCode 就没有这个入口", () => {
+    render(<ConnectScreen mode="native" onConnect={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "输入配对码" })).toBeNull();
+  });
+});
