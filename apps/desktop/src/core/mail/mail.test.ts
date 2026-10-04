@@ -625,12 +625,11 @@ describe("POST /api/mail/password-reset", () => {
     const target = h.member("丙");
     const bystander = h.member("路人");
     const issued = h.accounts.issuePasswordReset(h.owner, target.principalId);
-    const refused = await h.call(
-      bystander,
-      "POST",
-      MAIL_ROUTES.passwordReset,
-      { principalId: target.principalId, token: issued.token, to: "a@x.test" },
-    );
+    const refused = await h.call(bystander, "POST", MAIL_ROUTES.passwordReset, {
+      principalId: target.principalId,
+      token: issued.token,
+      to: "a@x.test",
+    });
     expect(refused.status).toBe(403);
     expect(refused.body.code).toBe("forbidden");
     const missing = await h.call(h.owner, "POST", MAIL_ROUTES.passwordReset, {
