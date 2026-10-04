@@ -38,6 +38,16 @@ export type CdpEventHandler = (
  * long is a page a verb has lost, and every verb above has its own bound. */
 export const CALL_TIMEOUT_MS = 30_000;
 
+/**
+ * Longest the FIRST command after a launch may take. It is not a page being
+ * slow: it is the browser process coming up, opening its profile and the pipe,
+ * before anything can answer. A cold start measured 7–10 s on the Windows
+ * runner with three browsers starting side by side, and its tail crossed the
+ * 30 s command bound — every browser of that run failed on its first command
+ * at the same moment.
+ */
+export const STARTUP_TIMEOUT_MS = 90_000;
+
 interface Waiter {
   settle: (value: unknown) => void;
   fail: (error: Error) => void;

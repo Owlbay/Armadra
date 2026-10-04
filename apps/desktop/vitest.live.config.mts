@@ -14,6 +14,10 @@ export default defineConfig({
     ],
     environment: "node",
     pool: "forks",
+    // One file at a time: each of these starts its own Chromium, and three
+    // cold starts side by side on a four-core Windows runner were what pushed
+    // a first CDP command past its bound (all three failed together).
+    fileParallelism: false,
     setupFiles: ["src/core/testing/setup.ts"],
     testTimeout: 120_000,
     hookTimeout: 60_000,

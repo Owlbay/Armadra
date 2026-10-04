@@ -12,7 +12,7 @@ import { CdpRefusal, DRIVE_CODES } from "../cdp/codes";
 import { CdpSession } from "../cdp/session";
 import type { VerbDialog, VerbHost, VerbTab } from "../cdp/verbs";
 import { jailMessage, jailWritePath } from "../cdp/workspace-path";
-import { CdpConnection } from "./connection";
+import { CdpConnection, STARTUP_TIMEOUT_MS } from "./connection";
 import type { BrowserProcess, Launcher } from "./process";
 import { spawnChromium } from "./process";
 import {
@@ -141,7 +141,14 @@ export class HeadlessNode {
       this.lost("the browser process exited");
     });
 
-    await connection.send("Target.setDiscoverTargets", { discover: true });
+    // The first command waits for the browser to come up (`STARTUP_TIMEOUT_MS`);
+    // everything after it is held to the ordinary command bound.
+    await connection.send(
+      "Target.setDiscoverTargets",
+      { discover: true },
+      undefined,
+      STARTUP_TIMEOUT_MS,
+    );
     // Downloads land in a private directory under a name this process chose,
     // and stay there until `download --accept`. Bytes a page picked do not
     // enter somebody's project because a driven page asked for them.
