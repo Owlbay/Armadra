@@ -107,3 +107,10 @@ test("ARMADRA_DIST_VERSION packages under another version without touching the m
     /semver/,
   );
 });
+
+test("only a Linux arm64 build packs AppImages with the static-runtime toolset", () => {
+  const arm = resolveConfig({ env: { ARMADRA_DIST_ARCH: "arm64" } }).config;
+  assert.equal(arm.toolsets?.appimage, "1.0.3");
+  const x64 = resolveConfig({ env: { ARMADRA_DIST_ARCH: "x64" } }).config;
+  assert.equal(x64.toolsets?.appimage, undefined);
+});

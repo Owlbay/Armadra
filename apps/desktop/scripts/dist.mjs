@@ -141,6 +141,28 @@ export function isLocalBuild(env = process.env) {
   return value === "" || value === "0";
 }
 
+/**
+ * The AppImage toolset a Linux arm64 build packs with.
+ *
+ * electron-builder's default (`0.0.0`, AppImageKit 12) ships an arm64 runtime
+ * that is dynamically linked against the unversioned `libz.so` — a name only
+ * the zlib *development* package provides — so on a clean system the AppImage
+ * stops before it has extracted anything:
+ * `error while loading shared libraries: libz.so`. Putting a zlib into the
+ * image cannot help; the runtime is what fails to load. Toolset `1.0.3` packs
+ * the static type-2 runtime instead, which needs no shared library at all.
+ * The default toolset's x64 runtime links the versioned `libz.so.1`, which
+ * every glibc system has (zlib1g is essential on Debian/Ubuntu), so x64 keeps
+ * the toolset its releases have always shipped with.
+ */
+export const ARM64_APPIMAGE_TOOLSET = "1.0.3";
+
+export function appImageToolset(arch) {
+  return arch === "arm64"
+    ? { toolsets: { appimage: ARM64_APPIMAGE_TOOLSET } }
+    : {};
+}
+
 export function resolveConfig({
   env = process.env,
   local = isLocalBuild(env),
@@ -148,7 +170,10 @@ export function resolveConfig({
   const base = load(readFileSync(join(app, "electron-builder.yml"), "utf8"));
   const plan = signingPlan({ env });
   let config = restrictArch(
-    mergeConfig(base, configOverride(plan, env)),
+    mergeConfig(
+      mergeConfig(base, configOverride(plan, env)),
+      appImageToolset(distArch(env)),
+    ),
     distArch(env),
   );
   if (local) {

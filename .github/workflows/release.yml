@@ -109,6 +109,17 @@ jobs:
           else
             printf 'publish=false\n' >> "$GITHUB_OUTPUT"
           fi
+      # 发布说明是 CHANGELOG.md 里本版那一节（tools/release/changelog.mjs）。缺了这一节
+      # 在这里就失败，而不是两个小时的构建之后；真建 Release 时标题还标着「未发布」也算缺。
+      - name: CHANGELOG.md 有本版一节
+        shell: bash
+        env:
+          PUBLISH: ${{ steps.version.outputs.publish }}
+        run: |
+          set -euo pipefail
+          released=()
+          [ "$PUBLISH" = "true" ] && released=(--released)
+          node tools/release/changelog.mjs check --version "${{ steps.version.outputs.version }}" "${released[@]}"
       - run: node tools/ci/validate-workflows.mjs
       - run: node --test tools/release/*.test.mjs
       - run: pnpm libs:build
@@ -473,6 +484,14 @@ jobs:
           fi
           node apps/desktop/scripts/signing-electron.mjs verify-windows --dir apps/desktop/release
 
+      # 打进 out/ 的第三方包都要在 THIRD_PARTY_NOTICES.md 里：--prod 之外被打包器整段
+      # 带进来的构建期依赖由 tools/notices.mjs 的 BUNDLED_DEV_DEPENDENCIES 列出，这里按
+      # 产物里的 #region 注释与 CSS 版权头核一遍。out/ 各平台相同，查一台就够。
+      - name: 第三方声明覆盖打进包里的依赖
+        if: matrix.target == 'linux-x86_64'
+        shell: bash
+        run: node tools/notices.mjs --scan apps/desktop/out
+
       # 产物已经落地，先断言它能在承诺的系统上启动，再去改名上传。
       - name: 校验 Linux 的 glibc 基线
         if: startsWith(matrix.target, 'linux-')
@@ -547,8 +566,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.sha }}
-          # generate-notes 要能看到上一个标签，浅克隆里没有。
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -557,25 +574,6 @@ jobs:
           pattern: release-*
           merge-multiple: true
           path: artifacts
-      # 变更清单交给 GitHub 自己生成：它按两个标签之间合并的 PR 写，比任何我们
-      # 自己维护的清单都更接近真实发生的事。标签还不存在时（分支演练）它会失败，
-      # 那就退回一行标题，说明照样有兼容性围栏。
-      - name: 取 GitHub 生成的变更说明
-        id: notes
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
-        run: |
-          set -euo pipefail
-          path="$RUNNER_TEMP/generated-notes.md"
-          if ! gh api "repos/$GH_REPO/releases/generate-notes" \
-            -f tag_name="$RELEASE_TAG" --jq ".body" > "$path" 2>/dev/null; then
-            printf 'Armadra %s\n' "$RELEASE_TAG" > "$path"
-          fi
-          [ -s "$path" ] || printf 'Armadra %s\n' "$RELEASE_TAG" > "$path"
-          printf 'path=%s\n' "$path" >> "$GITHUB_OUTPUT"
       # Linux 包的 GPG 签名（外部服务 §2.3）：rpm 先 rpmsign --addsign 改写包，
       # 再给 AppImage / deb / rpm 各出 .asc，并导出公钥 armadra-linux.gpg 作
       # Release 资产。必须在 assemble.mjs 之前：校验和与 minisign 签的是最终字节。
@@ -596,25 +594,41 @@ jobs:
           sudo apt-get install --no-install-recommends -y rpm
           node tools/release/sign-gpg.mjs sign --dir artifacts --published apps/web/public/armadra-linux.gpg
           node tools/release/sign-gpg.mjs verify --dir artifacts --public-key artifacts/armadra-linux.gpg
+      # 说明正文取 CHANGELOG.md 本版一节，兼容性围栏由 assemble 追加；建 Release 的
+      # 那一次还要求标题已去掉「未发布」（verify 作业已先查过一遍）。
+      # 配了镜像的公开地址（变量 ARMADRA_MIRROR_PUBLIC_URL，例如 https://updates.armadra.dev）
+      # 时，另写一份链接指向镜像的 latest.json 到 mirror/，同一把钥匙签；mirror 作业把它
+      # 盖在镜像里那一版的 latest.json 上（tools/release/mirror.mjs）。
       - name: 生成清单、校验列表与说明
         shell: bash
         env:
           ARMADRA_RELEASE_SIGNING_KEY: ${{ secrets.ARMADRA_RELEASE_SIGNING_KEY }}
+          PUBLISH: ${{ needs.verify.outputs.publish }}
+          MIRROR_PUBLIC_URL: ${{ vars.ARMADRA_MIRROR_PUBLIC_URL }}
         run: |
           set -euo pipefail
+          released=()
+          [ "$PUBLISH" = "true" ] && released=(--require-released)
+          mirror=()
+          [ -n "${MIRROR_PUBLIC_URL:-}" ] && mirror=(--mirror-base "$MIRROR_PUBLIC_URL" --mirror-out mirror)
           node tools/release/assemble.mjs \
             --dir artifacts \
             --version "${{ needs.verify.outputs.version }}" \
             --repo "${{ github.repository }}" \
             --tag "${{ needs.verify.outputs.tag }}" \
             --unnotarized "${{ needs.notarize.outputs.unnotarized }}" \
-            --notes-from "${{ steps.notes.outputs.path }}" \
+            --changelog CHANGELOG.md "${released[@]}" "${mirror[@]}" \
             --note release-note.md
       - uses: actions/upload-artifact@v4
         with:
           name: release-assembled
           path: artifacts
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-mirror-manifest
+          path: mirror
+          if-no-files-found: ignore
       # 只创建 draft：产物清单与说明由人审阅后再点击发布，更新检查会跳过
       # draft，所以未发布前任何客户端都看不到它。
       - name: 创建 draft Release
@@ -632,6 +646,44 @@ jobs:
             args+=(--prerelease)
           fi
           gh release create "$RELEASE_TAG" "${args[@]}" artifacts/*
+
+  # 更新镜像（W-MIRROR，外部服务 §3.3，ci-release.md §3.3）：把这一版传进 S3 兼容桶
+  # （Cloudflare R2）的 releases/download/v<版本>/，包先、清单后，传完 rclone check。
+  # 只传带版本的路径——那里没有客户端会去问；「最新」在人把 Release 转正后由
+  # distribute.yml 的 mirror 作业提上去。四个设置一个都没有就跳过，给了一半就失败。
+  mirror:
+    needs: [verify, assemble]
+    if: needs.verify.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assembled
+          path: artifacts
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: release-mirror-manifest
+          path: mirror
+      - name: 传到镜像桶
+        shell: bash
+        env:
+          ARMADRA_MIRROR_ENDPOINT: ${{ vars.CLOUDFLARE_ACCOUNT_ID && format('https://{0}.r2.cloudflarestorage.com', vars.CLOUDFLARE_ACCOUNT_ID) || '' }}
+          ARMADRA_MIRROR_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
+          ARMADRA_MIRROR_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          ARMADRA_MIRROR_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          manifest=()
+          [ -s mirror/latest.json ] && manifest=(--manifest mirror)
+          node tools/release/mirror.mjs stage --dir artifacts --version "${{ needs.verify.outputs.version }}" "${manifest[@]}"
 
   # 分发渠道（外部服务 §4，ci-release.md §3.1）：从刚汇总的 SHA256SUMS 渲染 Homebrew
   # cask、Scoop、winget 与 AUR 的 PKGBUILD，并在后面两个作业里各自装一遍。这里只渲染
