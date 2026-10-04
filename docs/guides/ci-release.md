@@ -475,6 +475,14 @@ CLI 需要的宽沙箱权限过不了审核。服务器壳镜像推 GHCR 由 `se
 `Contents/Resources/`（Windows / Linux 上 electron-builder 已放在可执行文件旁，缺了才补）。
 设置 → 关于 → 开源许可显示的就是这份文件。
 
+`--prod` 看不到被打包器整段打进 `out/` 的构建期依赖（页面 CSS 里的 `tailwindcss` 与
+`tw-animate-css`），它们列在 `tools/notices.mjs` 的 `BUNDLED_DEV_DEPENDENCIES`，照样读许可证
+原文进同一张表。名单够不够全由 `node tools/notices.mjs --scan apps/desktop/out` 对构建产物核：
+rolldown 在未压缩的 JS 里给每个模块留 `//#region <路径>`，CSS 留 `/*! 包名 v版本` 版权头；
+从 `node_modules` 来的包既不在 `--prod` 表里、也不在名单里（工作区自己的 `@armadra/*` 除外）
+就失败。`release.yml` 的 `linux-x86_64` 构建打完包跑它。新加一个会被打进页面或 core 的构建期
+依赖时，把它加进名单再重新生成。
+
 ### 3.2 依赖安全：覆盖、补丁与构建期豁免
 
 Dependabot 警报按三种办法收口，理由都写在 `pnpm-workspace.yaml` 对应条目旁：
