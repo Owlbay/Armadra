@@ -52,6 +52,24 @@ export function coreEntry(
 }
 
 /**
+ * 壳起的 core 拿到的环境：壳自己的环境叠上这一轮的通道变量，再去掉
+ * `ARMADRA_LOOPBACK_OWNER`。
+ *
+ * 那个变量让 core 把明文回环上没带凭据的调用当成本机主人（契约 §3.2，安全审查
+ * L9），只给探针与开发命令起的裸 core 用。壳的页面带着票据换来的 Bearer，hook
+ * 与启动器走 hook 服务的令牌，没有哪个调用方要它；从操作员的 shell 或探针的
+ * 临时环境里继承下来也不能让桌面壳退回旧规则。
+ */
+export function coreEnvironment(
+  base: NodeJS.ProcessEnv,
+  extra: Record<string, string> = {},
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, ...extra };
+  delete env.ARMADRA_LOOPBACK_OWNER;
+  return env;
+}
+
+/**
  * 命令行里证明「这是壳起的 core」的那一小段，给孤儿进程清扫用。
  *
  * 另一半是 `--desktop-control-stdin`，它是把一个人从终端里手跑的 core 挡在接管
@@ -178,12 +196,11 @@ export class RuntimeProcess {
     // loopback port and the token is one random value per shell run, so both
     // exist only here and in the environment of this one child. Nothing is
     // written to disk, and a Runtime this shell did not start has no channel.
-    const env = {
-      ...process.env,
+    const env = coreEnvironment(process.env, {
       ...driveEnvironment,
       ...(secretChannel?.environment() ?? {}),
       ...(crashChannel?.environment() ?? {}),
-    };
+    });
     // `child_process.fork`, not `utilityProcess.fork`: everything below this
     // line — the announcement reader, the exit bookkeeping, the SIGKILL
     // fallback — is written against a `ChildProcess`, and `utilityProcess` has

@@ -1,12 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { openDatabase } from "../db/open";
 import { Router, emptyRequest } from "../http/router";
 import { tempDir } from "../testing/temp-dir";
 import type { AuthorizationSubject } from "./authorize";
 import { runAs } from "./gate";
+import { anonymousLoopbackOwner, setLoopbackAnonymousOwner } from "./http";
 import { type ShareRole, roleScopes } from "./roles";
 import { createRouteGuard } from "./route-access";
 import { type Scope, permits, scope } from "./scopes";
@@ -142,12 +143,35 @@ function row(
 }
 
 describe("路由门的矩阵", () => {
+  afterEach(() => setLoopbackAnonymousOwner(false));
+
   it("没有请求身份（桌面壳）时一律放行", () => {
     const { decide } = harness();
     expect(decide(undefined, "DELETE", "/api/workspaces/w1").allowed).toBe(
       true,
     );
     expect(decide(undefined, "GET", "/api/settings").allowed).toBe(true);
+  });
+
+  // 安全审查 L9：路由门对「没有请求身份」放行，GitHub 与自动化两面自己认人。
+  // 回环匿名不再被当成本机主人：两面按 401 回答（`github/http.test.ts`、
+  // `schedule/api.test.ts` 端到端测那一句），只有裸 core 显式打开时例外。
+  it("回环匿名：路由门不替两面认人，缺省 401", () => {
+    const { decide } = harness();
+    expect(
+      decide(undefined, "POST", "/api/github/get-credential").allowed,
+    ).toBe(true);
+    expect(decide(undefined, "GET", "/api/automations/plans").allowed).toBe(
+      true,
+    );
+    const anonymous = {
+      ...emptyRequest("GET", "/api/automations/plans"),
+      headers: { origin: "http://127.0.0.1:1420" },
+      raw: { socket: {} },
+    } as unknown as Parameters<typeof anonymousLoopbackOwner>[0];
+    expect(anonymousLoopbackOwner(anonymous, "")).toBe(false);
+    setLoopbackAnonymousOwner(true);
+    expect(anonymousLoopbackOwner(anonymous, "")).toBe(true);
   });
 
   it("画布读写按角色链收窄，非成员一律不放", () => {

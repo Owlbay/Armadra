@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { type OpenedDatabase, openDatabase } from "../db/open";
-import { cookieName } from "../identity/http";
+import { cookieName, setLoopbackAnonymousOwner } from "../identity/http";
 import { allScopes } from "../identity/scopes";
 import { IdentityService } from "../identity/service";
 import { IdentityStore } from "../identity/store";
@@ -34,6 +34,7 @@ const INSTANCE = "0123456789abcdef0123456789abcdef";
 const closing: (() => void)[] = [];
 const directories: string[] = [];
 afterEach(() => {
+  setLoopbackAnonymousOwner(false);
   for (const close of closing.splice(0)) close();
   for (const directory of directories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
@@ -366,7 +367,7 @@ describe("自动化的 JSON 面", () => {
     expect(listed.status).toBe(200);
   });
 
-  it("明文回环上没带凭据按本机主人算，其余照常认证", async () => {
+  it("回环匿名缺省是 401：桌面壳不再按本机主人处理（契约 §3.2，安全审查 L9）", async () => {
     const fixture = setUp();
     const anonymous = await fixture.call(
       "GET",
@@ -374,7 +375,27 @@ describe("自动化的 JSON 面", () => {
       undefined,
       { anonymous: true },
     );
-    // 壳与 core 在同一台机器上，页面手上没有会话密钥：这条路存在，否则面板打不开。
+    expect(anonymous.status).toBe(401);
+    expect(anonymous.body).toMatchObject({ code: "unauthenticated" });
+    const written = await fixture.call(
+      "POST",
+      "/api/automations/plans/p/pause?workspaceId=ws",
+      { expectedRevision: "1" },
+      { anonymous: true },
+    );
+    expect(written.status).toBe(401);
+  });
+
+  it("显式打开（ARMADRA_LOOPBACK_OWNER=1）时明文回环上没带凭据按本机主人算", async () => {
+    setLoopbackAnonymousOwner(true);
+    const fixture = setUp();
+    const anonymous = await fixture.call(
+      "GET",
+      "/api/automations/plans?workspaceId=ws",
+      undefined,
+      { anonymous: true },
+    );
+    // 探针与开发命令起的裸 core：页面不在壳里、拿不到票，这条路留给它们。
     expect(anonymous.status).toBe(200);
     expect(anonymous.body).toMatchObject({ plans: [], hasMore: false });
   });

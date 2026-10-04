@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { isServerShellServed, resolveRuntimeUrl } from "./runtime-url";
-import { ensureCsrf, replaceRejectedCsrf } from "./identity";
+import {
+  ensureCsrf,
+  renewShellBearer,
+  replaceRejectedCsrf,
+  shellBearer,
+} from "./identity";
 import { t } from "../app/preferences-store";
 
 /**
@@ -153,7 +158,23 @@ function unsafeMethod(method: string | undefined): boolean {
   return value !== "GET" && value !== "HEAD";
 }
 
-async function send(path: string, init: RequestInit | undefined, csrf: string) {
+/**
+ * 要会话的两面（契约 §3.2）：GitHub 与自动化。桌面壳里它们带票据换来的
+ * Bearer——core 不再把回环上没带凭据的调用当成本机主人（安全审查 L9）。其余
+ * 路由在桌面壳里不认凭据，照旧不带。
+ */
+const SESSION_SURFACES = ["/api/github/", "/api/automations/"] as const;
+
+function sessionSurface(path: string): boolean {
+  return SESSION_SURFACES.some((prefix) => path.startsWith(prefix));
+}
+
+async function send(
+  path: string,
+  init: RequestInit | undefined,
+  csrf: string,
+  bearer = "",
+) {
   return fetch(`${RUNTIME_URL}${path}`, {
     ...init,
     headers: {
@@ -161,6 +182,7 @@ async function send(path: string, init: RequestInit | undefined, csrf: string) {
         ? {}
         : { "Content-Type": "application/json" }),
       ...(csrf ? { "X-Armadra-CSRF": csrf } : {}),
+      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
       ...init?.headers,
     },
   });
@@ -190,7 +212,14 @@ export async function request<T>(
   let response: Response;
   try {
     const used = guarded ? await ensureCsrf() : "";
-    response = await send(path, init, used);
+    const bearer = sessionSurface(path) ? await shellBearer() : "";
+    response = await send(path, init, used, bearer);
+    // 访问密钥 15 分钟就过期：401 说明这次请求没进处理器，换一枚再发一次
+    // 不会把任何事做两遍。
+    if (bearer && response.status === 401) {
+      const renewed = await renewShellBearer(bearer);
+      if (renewed) response = await send(path, init, used, renewed);
+    }
     // A rotated token is the one failure worth retrying: the request never
     // reached a handler, so nothing was executed twice. Any other 403 is the
     // core refusing this device, and repeating it would not change that.

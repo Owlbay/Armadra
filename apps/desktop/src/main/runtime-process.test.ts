@@ -20,6 +20,7 @@ import {
   addressIsHeld,
   CORE_PROCESS_MARKER,
   coreEntry,
+  coreEnvironment,
   externalRuntimeBase,
   localEndpoint,
   ownedRuntimeAddress,
@@ -300,6 +301,20 @@ describe("壳启动的 core", () => {
     expect(coreEntry({ ARMADRA_CORE_ENTRY: "/elsewhere/main.js" })).toBe(
       "/elsewhere/main.js",
     );
+  });
+
+  it("不把回环匿名按主人的开关带给 core（安全审查 L9）", () => {
+    const env = coreEnvironment(
+      { PATH: "/bin", ARMADRA_LOOPBACK_OWNER: "1" },
+      { ARMADRA_BROWSER_DRIVE: "x" },
+    );
+    expect(env.ARMADRA_LOOPBACK_OWNER).toBeUndefined();
+    expect(env.PATH).toBe("/bin");
+    expect(env.ARMADRA_BROWSER_DRIVE).toBe("x");
+    expect(
+      coreEnvironment({}, { ARMADRA_LOOPBACK_OWNER: "1" })
+        .ARMADRA_LOOPBACK_OWNER,
+    ).toBeUndefined();
   });
 
   it("孤儿清扫认的是 core 的那段命令行", () => {
