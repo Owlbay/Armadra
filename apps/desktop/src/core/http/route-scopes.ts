@@ -47,6 +47,13 @@ export const SELF_GUARDED: readonly RegExp[] = [
   /^\/(api\/)?health$/,
   /^\/api\/identity\//,
   /^\/api\/push\//,
+  // 配对短码换票先于任何身份存在（契约 §24），与 `#pair=` 换票同一档。
+  /^\/api\/gateway\/pairing-code\/exchange$/,
+  // 邮件：能签发那条链接的人才能发（owner，或组 admin 对本组成员），那是身份
+  // 域的判定，路由门的全局 scope 说不出「本组」（契约 §28）。
+  /^\/api\/mail\//,
+  // 页面错误上报：登录即可，域自己认会话并限流（契约 §30）。
+  /^\/api\/diagnostics\/client-error$/,
 ];
 
 export function selfGuarded(path: string): boolean {
@@ -97,12 +104,32 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
     write: "identity:manage",
   },
   // 审计只读；导出 CSV 也是 GET。
+  // 口令重置链接（契约 §25）：打开链接与设新口令先于身份存在，令牌本身就是
+  // 凭据；签发是「管别人的」那一档（组 admin 对本组成员由身份域放行）。
+  {
+    pattern: /^\/api\/identity\/password-reset\//,
+    read: null,
+    write: null,
+  },
+  {
+    pattern: /^\/api\/identity\/principals\/[^/]+\/password-reset$/,
+    read: "identity:read",
+    write: "identity:manage",
+  },
   {
     pattern: /^\/api\/identity\/audit/,
     read: "identity:read",
     write: "identity:read",
   },
 
+  // 配对短码换票（契约 §24）：手机还没有任何身份，短码本身就是凭据；限流与
+  // 档位（公网 `all` 档关掉）在 Gateway 域里判。签发短码随配对票一起，落在下面
+  // owner 那一档。
+  {
+    pattern: /^\/api\/gateway\/pairing-code\/exchange$/,
+    read: null,
+    write: null,
+  },
   // Gateway 与节点凭据只有 owner：要的是全局授权，共享只发工作空间上的授权，
   // 所以成员在这里一律 403（与设置同一档）。契约 §17、§20。
   {
@@ -114,6 +141,20 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
     pattern: /^\/api\/credentials/,
     read: "settings:read",
     write: "settings:write",
+  },
+  // 邮件通道（契约 §28）：自己认身份（{@link SELF_GUARDED}），这一行是清单——
+  // 发的是邀请与重置链接，与签发它们同一档。
+  {
+    pattern: /^\/api\/mail\//,
+    read: "identity:read",
+    write: "identity:manage",
+  },
+  // 页面错误上报（契约 §30）：登录即可（{@link SELF_GUARDED}），与推送设备
+  // 同样记成看得见画布的那一档。
+  {
+    pattern: /^\/api\/diagnostics\/client-error$/,
+    read: "canvas:read",
+    write: "canvas:read",
   },
   // 推送设备：登录即可（{@link SELF_GUARDED}），推送域只碰请求主体自己的设备。
   // 声明的这一档只是清单：注册一台设备收的是「看得见的画布」上的通知。契约 §19。
@@ -153,6 +194,13 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
   // 的 `apiCaller`、`schedule/api.ts` 的 `caller`），它们看得见 `workspaceId`。
   {
     pattern: /^\/api\/github\//,
+    read: "github:read",
+    write: "github:write",
+  },
+  // 托管平台（契约 §29）与 GitHub 同一档：forge 是把 GitHub 面推广到别的
+  // 平台，读写的是同一类东西（issue、PR、检查）。
+  {
+    pattern: /^\/api\/forge\//,
     read: "github:read",
     write: "github:write",
   },
