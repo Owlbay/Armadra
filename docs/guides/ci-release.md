@@ -114,9 +114,8 @@ node tools/ci/e2e.mjs --tier b --list     # 只列出清单
 （补发那个标签），也可以留空（在当前分支上演练）。`dry_run` 默认勾选，此时全部
 作业照跑但不创建 Release。`concurrency` 不取消进行中的发布。
 
-**版本住在仓库里，标签只是指向它的名字。** 这一点与许多流水线相反，也与
-LiveAgent 相反——它用 `prepare-app-version-from-tag.mjs` 从标签解出版本、写进一份
-生成的打包配置，仓库里根本不存版本。我们不这么做，因为版本写在仓库里
+**版本住在仓库里，标签只是指向它的名字。** 这一点与许多流水线相反——常见做法是从标签
+解出版本、写进一份生成的打包配置，仓库里根本不存版本。我们不这么做，因为版本写在仓库里
 （根 `package.json` 是源；桌面、服务器、手机三壳的 manifest 与 core、armadra-hook
 的版本常量都要与它一致，`version.mjs set` 一起改、`check` 一起看，见
 `tools/release/version.mjs` 的 `VERSION_SITES`），两种壳
@@ -154,9 +153,8 @@ LiveAgent 相反——它用 `prepare-app-version-from-tag.mjs` 从标签解出�
 
 glibc 的符号版本是单向的：在 Ubuntu 24.04（glibc 2.39）上链接出来的二进制会记下
 `GLIBC_2.38` / `GLIBC_2.39` 的引用，到 22.04 上动态链接器直接拒绝启动
-（`version 'GLIBC_2.38' not found`），而构建过程一切正常，没有任何一处会提。
-LiveAgent 就是这样发出去过一个版本（`Stack-Cairn/LiveAgent#714`），修法是把
-Linux 行钉在 `ubuntu-22.04` 并在产物上断言基线。两条缺一不可：runner 决定这次
+（`version 'GLIBC_2.38' not found`），而构建过程一切正常，没有任何一处会提，
+问题只会在用户那里暴露。所以把 Linux 行钉在 `ubuntu-22.04` 并在产物上断言基线。两条缺一不可：runner 决定这次
 能不能过，断言拦住下一次——某个构建依赖开始要更新的 glibc 符号时，它是唯一会出声
 的地方。
 
@@ -329,9 +327,9 @@ secrets `ARMADRA_LINUX_GPG_KEY`（armored 私钥）/ `ARMADRA_LINUX_GPG_PASSPHRA
 rpm 用 `rpm --import` 之后 `rpm -K`。本地演练：`node tools/release/sign-gpg.mjs keygen --out <dir>`
 出一把一天期的密钥。
 
-LiveAgent 还用 `dmgbuild` 重建 DMG 并自己 `notarytool submit` + `stapler staple`，
-那是为了拿到确定性的 Finder 布局（背景图、图标位置）——它把 bundler 的 DMG 丢掉，
-所以必须自己公证。我们没有这个需求，也就没搬这一段。
+用 `dmgbuild` 重建 DMG 再自己 `notarytool submit` + `stapler staple` 的做法，是为了拿到
+确定性的 Finder 布局（背景图、图标位置）——丢掉 bundler 的 DMG 就必须自己公证。我们没有
+这个需求，不做这一段。
 
 ### 2.7 发布说明与 draft
 
@@ -381,7 +379,7 @@ runner、两台 Windows runner 合进同一个目录会互相覆盖，所以 `st
 ——检查（带 ETag 再查一次应得 304）→ 取 `SHA256SUMS` 与 `latest.json` 并验签 → 逐个
 目标取清单与它点名的包，核对 sha512、sha256、索引 digest 与 minisign 签名。
 
-仍然只创建 **draft**：LiveAgent 会直接发布并 `--latest`，我们不。产物清单与说明要
+仍然只创建 **draft**，不直接发布、不加 `--latest`。产物清单与说明要
 人审阅，更新检查会跳过 draft，所以未发布前任何客户端都看不到它。
 
 ## 3. 密钥清单
@@ -411,7 +409,7 @@ updater 包排除在外。
 | `WINGET_TOKEN`                                                | `distribute.yml` 用 wingetcreate 向 `microsoft/winget-pkgs` 提 PR（对 fork `contents` + `pull_requests: write`） | 跳过 winget，告警                            |
 | 变量 `ARMADRA_HOMEBREW_TAP` / `ARMADRA_SCOOP_BUCKET`          | tap / bucket 仓库名，缺省 `Owlbay/homebrew-tap` / `Owlbay/scoop-bucket`                                          | 用缺省                                       |
 
-证书与公证密码两个名字沿用 LiveAgent 的拼写；工作流同时接受早先的
+证书与公证密码用当前的两个 secret 名字；工作流同时接受早先的
 `APPLE_CERTIFICATE` 与 `APPLE_PASSWORD`（`${{ secrets.A || secrets.B }}`），
 已经配好的仓库不用改 secret。
 
