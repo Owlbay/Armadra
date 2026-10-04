@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   AutomationOutcome,
+  AutomationPlanState,
   type AutomationReceipt,
   type AutomationRun,
   type AutomationTarget,
@@ -11,8 +12,13 @@ import { workspaceOfBoard } from "../workflow/engine";
 import { workflowDomain } from "../workflow/registry";
 import { runById, templateById } from "../workflow/store";
 import { DomainError } from "../workspaces/support";
+import type { WorkflowDraft } from "../workflow/types";
+import type { CoreRequest } from "../http/router";
 import { ScheduleError, invalid, workflowParams } from "./plan";
+import { planConfigFromJson, planConfigToJson } from "./json";
 import type { TargetStatus } from "./contracts";
+import type { Caller, ScheduleService } from "./service";
+import type { ScheduleStore } from "./store";
 
 /**
  * 自动化目标 `WORKFLOW_RUN`（补全架构 §5.4「再运行与定时」、契约 §15.6）。
@@ -222,4 +228,242 @@ export function lookupWorkflowRun(
   }
   const sequence = Math.max(Number(stored?.sequence ?? 0n), 0) + 1;
   return receipt(outcome, reason, sequence);
+}
+
+/* ------------------------------ 模板升级 ---------------------------------- */
+
+/**
+ * 一个冻结在旧版本上的计划，按新模板能不能直接升级（契约 §15.6 的追加句）：
+ *
+ *   * `compatible`：存着的参数按新模板全部成立（不缺、没有多出来的、代入后
+ *     不超长），可以直接改到新版本；
+ *   * `missing_params`：新模板多了没有缺省值的参数，要人补；
+ *   * `param_mismatch`：存着的参数新模板里没有了，或代入后提示词超长。
+ */
+export type FrozenReason = "compatible" | "missing_params" | "param_mismatch";
+
+export interface ParamCompatibility {
+  readonly reason: FrozenReason;
+  readonly missingParams: readonly string[];
+  readonly unknownParams: readonly string[];
+}
+
+export interface FrozenSchedule extends ParamCompatibility {
+  readonly scheduleId: string;
+  readonly workspaceId: string;
+  readonly templateVersion: number;
+}
+
+/** 存着的参数对新模板相容吗。纯函数，不读库。 */
+export function paramCompatibility(
+  template: WorkflowDraft,
+  params: Readonly<Record<string, string>>,
+): ParamCompatibility {
+  const declared = new Set(template.params.map((param) => param.name));
+  const unknownParams = Object.keys(params)
+    .filter((name) => !declared.has(name))
+    .sort();
+  const missingParams = template.params
+    .filter((param) => (params[param.name] ?? param.default ?? "") === "")
+    .map((param) => param.name);
+  if (unknownParams.length > 0) {
+    return { reason: "param_mismatch", missingParams, unknownParams };
+  }
+  if (missingParams.length > 0) {
+    return { reason: "missing_params", missingParams, unknownParams };
+  }
+  try {
+    checkRendered(template, resolveParams(template, params));
+  } catch (error) {
+    if (error instanceof DomainError) {
+      return { reason: "param_mismatch", missingParams, unknownParams };
+    }
+    throw error;
+  }
+  return { reason: "compatible", missingParams, unknownParams };
+}
+
+/** 一次升级的结果：改到新版本的，与没改的（带原因）。 */
+export interface UpgradeResult {
+  readonly upgraded: readonly { scheduleId: string; revision: number }[];
+  readonly frozen: readonly {
+    scheduleId: string;
+    reason: FrozenReason | "not_found" | "forbidden" | "conflict" | "failed";
+    missingParams: readonly string[];
+    unknownParams: readonly string[];
+  }[];
+}
+
+/**
+ * 工作流域借调度域做的两件事：改模板之后列出冻结在旧版本上的计划，与把能升的
+ * 计划改到新版本。调度域装配时登记（`workflow/registry.ts`），没装就没有。
+ */
+export interface WorkflowScheduleBridge {
+  frozen(templateId: string): FrozenSchedule[];
+  upgrade(
+    request: CoreRequest,
+    templateId: string,
+    scheduleIds: readonly string[],
+  ): Promise<UpgradeResult>;
+}
+
+export interface WorkflowScheduleBridgeDeps {
+  readonly store: ScheduleStore;
+  readonly service: ScheduleService;
+  /** 这次请求背后的主体（自动化 JSON 面同一套认法）。 */
+  readonly caller: (
+    request: CoreRequest,
+    workspaceId: string,
+    mutation: boolean,
+  ) => Caller;
+  /** 认不出主体时的失败 → `{ status, code, message }`（自动化面同一套分档）。 */
+  readonly failure: (error: unknown) => {
+    status: number;
+    code: string;
+    message: string;
+  };
+}
+
+const NONE: readonly string[] = [];
+
+export function workflowScheduleBridge(
+  deps: WorkflowScheduleBridgeDeps,
+): WorkflowScheduleBridge {
+  const { store, service } = deps;
+  const currentTemplate = (templateId: string) => {
+    const domain = workflowDomain();
+    if (domain === undefined) return undefined;
+    return templateById(domain.service.database, templateId);
+  };
+  return {
+    frozen(templateId) {
+      const template = currentTemplate(templateId);
+      if (template === undefined) return [];
+      const found: FrozenSchedule[] = [];
+      for (const ref of store.everyPlanRef()) {
+        const plan = store.planOrUndefined(ref.workspaceId, ref.planId)?.value;
+        const config = plan?.config;
+        const workflow = config?.target?.workflowRun;
+        if (
+          plan === undefined ||
+          config === undefined ||
+          workflow === undefined ||
+          workflow.templateId !== templateId ||
+          workflow.templateVersion === template.version ||
+          plan.state === AutomationPlanState.DELETED
+        ) {
+          continue;
+        }
+        let compatibility: ParamCompatibility;
+        try {
+          const payload = store.payload(ref.workspaceId, config.payloadRef);
+          compatibility = paramCompatibility(
+            template.template,
+            workflowParams(payload.payload),
+          );
+        } catch {
+          compatibility = {
+            reason: "param_mismatch",
+            missingParams: NONE,
+            unknownParams: NONE,
+          };
+        }
+        found.push({
+          scheduleId: ref.planId,
+          workspaceId: ref.workspaceId,
+          templateVersion: workflow.templateVersion,
+          ...compatibility,
+        });
+      }
+      return found;
+    },
+
+    async upgrade(request, templateId, scheduleIds) {
+      const template = currentTemplate(templateId);
+      if (template === undefined) {
+        throw new DomainError(404, "not_found", "没有这个模板。");
+      }
+      const workspaceId = request.query.get("workspaceId") ?? "";
+      let caller: Caller;
+      try {
+        caller = deps.caller(request, workspaceId, true);
+      } catch (error) {
+        const failure = deps.failure(error);
+        throw new DomainError(failure.status, failure.code, failure.message);
+      }
+      const upgraded: { scheduleId: string; revision: number }[] = [];
+      const frozen: UpgradeResult["frozen"][number][] = [];
+      const skip = (
+        scheduleId: string,
+        reason: UpgradeResult["frozen"][number]["reason"],
+        detail?: ParamCompatibility,
+      ) =>
+        frozen.push({
+          scheduleId,
+          reason,
+          missingParams: detail?.missingParams ?? NONE,
+          unknownParams: detail?.unknownParams ?? NONE,
+        });
+      for (const scheduleId of new Set(scheduleIds)) {
+        try {
+          const snapshot = service.engine.getPlan(workspaceId, scheduleId);
+          const workflow = snapshot.plan.config?.target?.workflowRun;
+          if (workflow === undefined || workflow.templateId !== templateId) {
+            skip(scheduleId, "not_found");
+            continue;
+          }
+          if (workflow.templateVersion === template.version) {
+            upgraded.push({ scheduleId, revision: snapshot.revision });
+            continue;
+          }
+          const payload = service.payload(caller, scheduleId);
+          const compatibility = paramCompatibility(
+            template.template,
+            workflowParams(payload),
+          );
+          if (compatibility.reason !== "compatible") {
+            skip(scheduleId, compatibility.reason, compatibility);
+            continue;
+          }
+          // 只换模板版本，其余配置与载荷原样：改配置会把计划退回草稿，原来
+          // 启用着的，用同一个调用方按新的一版重新启用。
+          const wasActive = snapshot.plan.state === AutomationPlanState.ACTIVE;
+          const config = planConfigFromJson(
+            planConfigToJson(snapshot.plan.config!),
+          );
+          config.target!.workflowRun!.templateVersion = template.version;
+          let defined = await service.define(
+            caller,
+            scheduleId,
+            config,
+            payload,
+            snapshot.revision,
+          );
+          if (wasActive) {
+            defined = await service.activate(
+              caller,
+              scheduleId,
+              defined.revision,
+              Number(defined.plan.configVersion),
+              service.configDigest(defined),
+            );
+          }
+          upgraded.push({ scheduleId, revision: defined.revision });
+        } catch (error) {
+          if (!(error instanceof ScheduleError)) throw error;
+          skip(
+            scheduleId,
+            error.code === "notFound"
+              ? "not_found"
+              : error.code === "authorization"
+                ? "forbidden"
+                : error.code === "conflict"
+                  ? "conflict"
+                  : "failed",
+          );
+        }
+      }
+      return { upgraded, frozen };
+    },
+  };
 }

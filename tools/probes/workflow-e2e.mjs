@@ -14,7 +14,11 @@
  *   6. 定时触发一次（G2-3，契约 §15.6）：经控制 socket 配对出本机主人，在
  *      `/api/automations/*` 定义一个「运行工作流」的一次性计划、激活，等调度
  *      到点起跑；断言工作流多出一次带计划参数的运行且 `succeeded`，自动化运行
- *      跟着落 `SUCCEEDED`，没有起第二次。
+ *      跟着落 `SUCCEEDED`，没有起第二次；
+ *   7. 模板升级（G5-08）：计划激活之后、到点之前改模板（v2 换了 s1 的提示词、
+ *      多一个有缺省值的参数），`PUT` 答出这个计划冻结在 v1 且参数相容，
+ *      `upgrade-schedules` 把它升到 v2 并保持启用；到点起的那次运行是 v2，
+ *      s1 的产出是新提示词的。
  *
  * 不用真实账号、不碰操作员的数据目录与配置：HOME、XDG、CLAUDE_CONFIG_DIR 全
  * 指到临时目录，跑完删除。前置：`pnpm --filter @armadra/desktop build`。
@@ -299,7 +303,8 @@ async function scheduleOnce({
       config: {
         workspaceId,
         title: "workflow-e2e 定时",
-        schedule: { once: { atUnixMs: String(Date.now() + 4_000) } },
+        // 留出改模板、升级计划的时间（到点之前做完）。
+        schedule: { once: { atUnixMs: String(Date.now() + 10_000) } },
         target: {
           executionHostId: hostId,
           kind: "AUTOMATION_TARGET_KIND_WORKFLOW_RUN",
@@ -325,7 +330,54 @@ async function scheduleOnce({
       configSha256: defined.configSha256,
     }),
   });
-  note("定时计划已激活", { planId, at: "+4s" });
+  note("定时计划已激活", { planId, at: "+10s" });
+
+  // 改模板 → 计划冻结在旧版本 → 升级到新版本（契约 §15.6 的追加句）。
+  const revised = {
+    ...TEMPLATE,
+    version: template.version + 1,
+    params: [
+      ...TEMPLATE.params,
+      { name: "depth", type: "string", default: "deep" },
+    ],
+    steps: TEMPLATE.steps.map((step) =>
+      step.id === "s1"
+        ? { ...step, prompt: "revisit {{topic}} {{depth}} and post to lead" }
+        : step,
+    ),
+  };
+  const updated = await api(`/api/workflows/templates/${template.id}`, {
+    method: "PUT",
+    body: JSON.stringify({ template: revised }),
+  });
+  const listed = updated.frozenSchedules?.find(
+    (item) => item.scheduleId === planId,
+  );
+  if (
+    listed?.reason !== "compatible" ||
+    listed.templateVersion !== template.version
+  ) {
+    throw new Error(
+      `改模板没有列出冻结的计划：${JSON.stringify(updated.frozenSchedules)}`,
+    );
+  }
+  const upgraded = await api(
+    `/api/workflows/templates/${template.id}/upgrade-schedules${query}`,
+    { method: "POST", body: JSON.stringify({ scheduleIds: [planId] }) },
+  );
+  if (!upgraded.upgraded.some((item) => item.scheduleId === planId)) {
+    throw new Error(`计划没有升级：${JSON.stringify(upgraded)}`);
+  }
+  const { plans } = await api(`/api/automations/plans${query}`);
+  const current = plans.find((item) => item.plan.id === planId)?.plan;
+  if (
+    current?.state !== "AUTOMATION_PLAN_STATE_ACTIVE" ||
+    current.config.target.workflowRun.templateVersion !== revised.version
+  ) {
+    throw new Error(`升级后的计划不对：${JSON.stringify(current)}`);
+  }
+  note("模板改版、计划已升级", { version: revised.version });
+
   const automation = await waitFor(
     "定时运行结束",
     async () => {
@@ -362,12 +414,18 @@ async function scheduleOnce({
     throw new Error(`定时应当只起一次运行：${scheduled.length}`);
   }
   const [second] = scheduled;
-  if (second.status !== "succeeded" || second.params.topic !== "CHANGELOG") {
+  if (
+    second.status !== "succeeded" ||
+    second.params.topic !== "CHANGELOG" ||
+    second.templateVersion !== template.version + 1
+  ) {
     throw new Error(`定时起的运行不对：${JSON.stringify(second)}`);
   }
   const s1 = second.steps.find((step) => step.stepId === "s1");
   if (
-    !s1?.outputs.some((output) => output.body.includes("look at CHANGELOG"))
+    !s1?.outputs.some((output) =>
+      output.body.includes("revisit CHANGELOG deep"),
+    )
   ) {
     throw new Error(`定时运行的 s1 没有产出：${JSON.stringify(s1)}`);
   }
