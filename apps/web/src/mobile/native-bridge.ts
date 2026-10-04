@@ -3,7 +3,8 @@ import { isNativeAppPage } from "../api/runtime-url";
 /**
  * 页面与原生 App（Capacitor，架构 §10）之间的那道桥。
  *
- * 原生只补网页做不到的四件事：钥匙串、证书钉扎、扫码、推送令牌。页面这一半
+ * 原生只补网页做不到的几件事：钥匙串、证书钉扎、扫码、推送令牌、用系统浏览器
+ * 打开授权页（原生 OAuth，R-56）。页面这一半
  * 在这里；原生那一半是 G3-1 的插件 `ArmadraNative`（经
  * `window.Capacitor.Plugins.ArmadraNative` 取，页面不依赖 `@capacitor/core`）。
  * 不在 Capacitor 里时 {@link nativeBridge} 是空实现：每个方法都答「没有」，
@@ -18,7 +19,13 @@ import { isNativeAppPage } from "../api/runtime-url";
  * | `clearSession()`                      | —                                                    |
  * | `pin({ origin, fingerprint })`        | —（之后对该来源的 TLS 只认这个信任锚指纹）           |
  * | `scan()`                              | `{ text?: string }`（取消时没有 `text`）             |
- * | `pushRegistration()`                  | `{ registration?: { platform, transport, token, publicKey? } }` |
+ * | `pushRegistration()`                  | `{ registration?: { platform, transport, token?, publicKey?, unifiedpush? } }` |
+ * | `pushRotated()`                       | `{ rotated: boolean }`（推送令牌或 UnifiedPush 端点换过、还没重新登记） |
+ * | `ackPushRotation()`                   | —（重新登记成功之后清掉上面那个标记）                |
+ * | `openExternal({ url })`               | —（系统浏览器打开；只收 https / 回环 http）          |
+ *
+ * 事件（`addListener`）：`pushTokenRotated`——App 开着时令牌换了（Android
+ * `onNewToken`、UnifiedPush 新端点、iOS 启动时 APNs 给了新令牌）。
  */
 
 /** 钥匙串里的一份会话：哪个 Gateway，加两把密钥。 */
@@ -32,9 +39,12 @@ export interface StoredSession {
 export interface NativePushRegistration {
   readonly platform: "ios" | "android";
   readonly transport: "direct" | "relay";
-  readonly token: string;
-  /** 设备的 X25519 公钥（base64url）；中继必需。 */
+  /** APNs / FCM 令牌或中继令牌；只有 UnifiedPush 端点的 Android 可以没有。 */
+  readonly token?: string;
+  /** 设备的 X25519 公钥（base64url）；中继与 UnifiedPush 必需。 */
   readonly publicKey?: string;
+  /** Android：用户自己的 UnifiedPush 分发器给的端点（契约 §27.2）。 */
+  readonly unifiedpush?: { readonly endpoint: string };
 }
 
 export interface NativeBridge {
@@ -48,6 +58,18 @@ export interface NativeBridge {
   pin(origin: string, fingerprint: string): Promise<void>;
   scan(): Promise<string | null>;
   pushRegistration(): Promise<NativePushRegistration | null>;
+  /** 推送令牌换过、还没重新登记。 */
+  pushRotated(): Promise<boolean>;
+  /** 重新登记成功：清掉「换过」的标记。 */
+  ackPushRotation(): Promise<void>;
+  /** App 开着时令牌换了；返回取消订阅。 */
+  onPushRotated(listener: () => void): () => void;
+  /** 用系统浏览器打开；打不开（没有插件方法、地址不对）是 `false`。 */
+  openExternal(url: string): Promise<boolean>;
+}
+
+interface PluginListenerHandle {
+  remove(): Promise<void> | void;
 }
 
 interface ArmadraNativePlugin {
@@ -57,6 +79,13 @@ interface ArmadraNativePlugin {
   pin?(options: { origin: string; fingerprint: string }): Promise<unknown>;
   scan?(): Promise<unknown>;
   pushRegistration?(): Promise<unknown>;
+  pushRotated?(): Promise<unknown>;
+  ackPushRotation?(): Promise<unknown>;
+  openExternal?(options: { url: string }): Promise<unknown>;
+  addListener?(
+    event: string,
+    listener: () => void,
+  ): Promise<PluginListenerHandle> | PluginListenerHandle;
 }
 
 /** 会话密钥：`<32 位十六进制标识>.<43 位 base64url>`（core `identity/tokens.ts::parseToken`）。 */
@@ -93,17 +122,40 @@ function storedSession(value: unknown): StoredSession | null {
   return { origin, accessToken, refreshToken };
 }
 
+/**
+ * UnifiedPush 端点：https，回环上的 http 只给测试；不带用户名口令与片段（与
+ * core 登记时的规矩一致，契约 §27.2）。
+ */
+export function unifiedPushEndpoint(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 4096) return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  const loopback =
+    url.hostname === "127.0.0.1" ||
+    url.hostname === "localhost" ||
+    url.hostname === "[::1]";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
+    return null;
+  if (url.username || url.password || url.hash) return null;
+  return value;
+}
+
 function pushRegistration(value: unknown): NativePushRegistration | null {
   if (!value || typeof value !== "object") return null;
   const registration = (value as { registration?: unknown }).registration;
   if (!registration || typeof registration !== "object") return null;
-  const { platform, transport, token, publicKey } = registration as Record<
-    string,
-    unknown
-  >;
+  const { platform, transport, token, publicKey, unifiedpush } =
+    registration as Record<string, unknown>;
   if (platform !== "ios" && platform !== "android") return null;
   if (transport !== "direct" && transport !== "relay") return null;
-  if (typeof token !== "string" || token === "" || token.length > 4096)
+  if (
+    token !== undefined &&
+    (typeof token !== "string" || token === "" || token.length > 4096)
+  )
     return null;
   if (
     publicKey !== undefined &&
@@ -111,12 +163,38 @@ function pushRegistration(value: unknown): NativePushRegistration | null {
   )
     return null;
   if (transport === "relay" && publicKey === undefined) return null;
+  let endpoint: string | null = null;
+  if (unifiedpush !== undefined) {
+    // 只有 Android，而且必须带公钥：分发器只该见到密文。
+    endpoint = unifiedPushEndpoint(
+      (unifiedpush as { endpoint?: unknown } | null)?.endpoint,
+    );
+    if (endpoint === null || platform !== "android" || publicKey === undefined)
+      return null;
+  }
+  if (token === undefined && endpoint === null) return null;
   return {
     platform,
     transport,
-    token,
+    ...(typeof token === "string" ? { token } : {}),
     ...(typeof publicKey === "string" ? { publicKey } : {}),
+    ...(endpoint === null ? {} : { unifiedpush: { endpoint } }),
   };
+}
+
+/** 交给系统浏览器的地址：https，或回环上的 http（开发与 dev-stack）。 */
+export function externalUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) return false;
+    if (url.protocol === "https:") return true;
+    return (
+      url.protocol === "http:" &&
+      (url.hostname === "127.0.0.1" || url.hostname === "localhost")
+    );
+  } catch {
+    return false;
+  }
 }
 
 const WEB_BRIDGE: NativeBridge = {
@@ -128,6 +206,10 @@ const WEB_BRIDGE: NativeBridge = {
   pin: () => Promise.resolve(),
   scan: () => Promise.resolve(null),
   pushRegistration: () => Promise.resolve(null),
+  pushRotated: () => Promise.resolve(false),
+  ackPushRotation: () => Promise.resolve(),
+  onPushRotated: () => () => undefined,
+  openExternal: () => Promise.resolve(false),
 };
 
 /**
@@ -190,6 +272,41 @@ export function nativeBridge(): NativeBridge {
         pushRegistration,
         null,
       ),
+    pushRotated: () =>
+      quiet(
+        native.pushRotated && (() => native.pushRotated!()),
+        (value) => (value as { rotated?: unknown } | null)?.rotated === true,
+        false,
+      ),
+    ackPushRotation: () =>
+      quiet(
+        native.ackPushRotation && (() => native.ackPushRotation!()),
+        () => undefined,
+        undefined,
+      ),
+    onPushRotated(listener) {
+      if (typeof native.addListener !== "function") return () => undefined;
+      let handle: PluginListenerHandle | null = null;
+      let removed = false;
+      void Promise.resolve(native.addListener("pushTokenRotated", listener))
+        .then((found) => {
+          handle = found;
+          if (removed) void handle.remove();
+        })
+        .catch(() => undefined);
+      return () => {
+        removed = true;
+        if (handle) void handle.remove();
+      };
+    },
+    openExternal: (url) =>
+      externalUrl(url)
+        ? quiet(
+            native.openExternal && (() => native.openExternal!({ url })),
+            () => true,
+            false,
+          )
+        : Promise.resolve(false),
   };
 }
 
@@ -214,7 +331,8 @@ export interface NativeTransport {
   refresh(): Promise<boolean>;
 }
 
-function sameOrigin(target: string, origin: string): boolean {
+/** `target` 是不是发往 `origin`（`wss:` 当作 `https:`）。 */
+export function sameOrigin(target: string, origin: string): boolean {
   try {
     const url = new URL(target);
     const scheme = url.protocol === "wss:" ? "https:" : url.protocol;
