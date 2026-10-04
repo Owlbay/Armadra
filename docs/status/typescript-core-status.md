@@ -2,6 +2,7 @@
 
 > 本文只记已验证的事实：跑过的命令、量到的数字、当场看见的结论。目标设计在 [TypeScript Core](../design/typescript-core.md)，不在这里。
 > 每条结论后面跟的是复现它的命令。
+> 本文各节是当时的记录，不回改；之后的补全（G0–G4）与 G5 改动逐包记在[补全进度](./completion-progress.md)，现状以[架构](../guides/architecture.md)为准。下文个别节已被后续工作取代的，在节首注明。
 
 ## 1. 阶段状态
 
@@ -471,6 +472,8 @@ R7 要删 `proto/`、`packages/protocol`、`packages/host-client` 与 core 的 `
 
 ### 15.4 更新：发布侧暂时没有来源
 
+> 后续：G5-17 起设置页的「检查」经壳的 `updates:check` 问发布索引，`noReleaseSource` 只在壳没有发布源时出现（补全进度 G5-17）。
+
 `host/updates-session.ts`（host-client 的 updates 面）删除。桌面壳那一半照常：staged 包的下载、安装、取消与重启报告都走 `apps/desktop/src/main/updates/**` 的桥。发布侧——「有没有新版本」——**没有来源**：R5 计划里的 `core/updates` 没有写，而 Go Host 的那条面在 `ARMADRA_CORE=ts` 下本来就连不上。所以 `updates/use-update-state.ts` 把发布侧固定报 `blocked: noReleaseSource`，`mergeUpdatesState` 的那条规则照旧成立：**任何一边没回答，都不写「已是最新」**。补上 `core/updates` 之后这里换一个真的来源即可，合并逻辑一行不动。
 
 Go Host 的「对外服务」开关（`/host/external-service`）与它的设置面板一并删除：那是 Host 自己的一条管理路由，服务器壳由运维用 `armadra-server` 起，页面不再是它的开关。
@@ -498,6 +501,8 @@ R7 要删 `proto/`、`packages/protocol`、`packages/host-client` 与 core 里�
 **摘要换了一个数。** `configSha256` 与 `command_sessions.launch_sha256` 从「protobuf 字节的 SHA-256」改成「规范 JSON（键排序、无空白、UTF-8）的 SHA-256」。直接后果是**已经激活的计划要重新授权一次**；产品未发布，这是可接受的代价，换来的是摘要不再依赖一份 protobuf 序列化器的字段顺序。`convert-legacy.test.ts` 有一条用例就是断言这个数**确实变了**，而不是希望它没变。
 
 ### 16.2 三张面上的认证多一条
+
+> 后续：「明文回环 + 无凭据 = 本机主人」自 0.2.0 起只在显式打开 `loopbackAnonymousOwner` 的裸 core 上成立；桌面壳的页面与托盘都带自己的会话（补全进度 G5-24、G5-28，契约 §3.2）。
 
 `/api/github/*` 与 `/api/automations/*` 本来只认会话凭据。问题是页面经 `apps/web/src/api/request.ts` 打这一面，而**桌面壳的会话是原生的**：密钥在壳里，既不发 Cookie 也到不了那个 `fetch`（`HostIdentityClient` 只会发 `/rpc/` 的 protobuf 帧，令牌是它的私有字段）。
 
@@ -2674,6 +2679,8 @@ H04 的前置（设计 `design/canvas-platform-design.md` §3 H04、`design/serv
 - 画面门只认登记过的对话框；CLI 改版换了文字就认不出，没登记的对话框照旧可能被答掉。`schedule/dispatch.ts` 的计划投递有自己的门链，没有接画面门。
 
 ## 63. 画布启动器：页面经 `launcher` 拼行、集成页去掉信任记录、场景 5 改为经启动器（2026-10-02）
+
+> 后续：页面对旧 core 的 `launchWords` / `launchArgs` 退路与 `LegacyLaunchWord` 已在 G5-17 删除（契约 §13.1）。
 
 [画布启动器](../design/canvas-launcher.md) §17 的 WP5，叠在 WP1（启动器生成与注入）、WP2（启动行出口与契约 §13）之上。
 

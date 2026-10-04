@@ -190,6 +190,7 @@ armadra.example.com {
 2. 服务器上还没有管理员时，第一张被兑换的票就成为管理员（owner）。票过期了：`docker compose kill -s SIGUSR2 armadra`
    （裸机 `kill -USR2 <pid>`）再铸一张。
 3. 之后在「设置 → 账号与共享」生成邀请、建组、按工作空间共享；撤销共享即刻断开对方的事件流并释放写租约。
+4. 成员忘了口令：在同一页成员行的「…」菜单「签发重置链接」（一次性、24 小时，打开是整页「设置新口令」，设好后撤掉此人全部会话），把链接交给对方，配了邮件（第 10 节）时可直接发信；同一菜单还有「重置两步验证」。登录页的「忘记口令」只提示联系管理员。没有会话打开站点时是整页登录。
 
 ## 6. 备份与恢复
 
@@ -271,8 +272,9 @@ node apps/server/out/main.js upgrade --rollback --confirm && systemctl restart a
 - `relay`：经推送中继（`push.relayUrl`）转发，给商店版 App 用：`.p8` 与服务账号属于发布方，只在中继上。core 交出的是按设备
   X25519 公钥端到端加密的信封，中继看不到正文，也不存表。中继是 [`apps/push-relay`](../../apps/push-relay/README.md)，单独部署：
   只需出站 HTTPS 与那一组 APNs / FCM 凭据，放在第 3 节同样的 HTTPS 入口后面；是否运营由发布方决定。
+- UnifiedPush：Android App 装了 UnifiedPush 分发器时，设备登记带分发器给的端点，core 对这类设备直接 POST 加密信封到端点，不看 `push.transport`（契约 §27.2）。
 
-推送正文不含终端原文与文件内容。本地联调用 dev-stack 的 `push-sink`（假 APNs / FCM / 中继，`http://127.0.0.1:8091`）。
+每台设备可以只收部分种类（手机推送提示里的开关，契约 §27.1）。推送正文不含终端原文与文件内容。本地联调用 dev-stack 的 `push-sink`（假 APNs / FCM / 中继，`http://127.0.0.1:8091`）。
 
 ## 10. 邮件（可选）
 
