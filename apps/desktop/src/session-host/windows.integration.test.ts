@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { signHello } from "../core/terminal/session-host/auth";
@@ -11,6 +11,9 @@ import {
   pipeEndpoint,
 } from "../core/terminal/session-host/protocol";
 import { loadNodePty } from "../core/terminal/pty";
+import { requestShutdownIfIdle } from "../core/terminal/session-host/shutdown";
+import { lockPath } from "./lock";
+import { run } from "./main";
 import { AlreadyServing, SessionHost } from "./server";
 
 /**
@@ -74,9 +77,12 @@ interface Harness {
   readonly host: SessionHost;
   readonly endpoint: string;
   readonly key: Buffer;
+  readonly left: string[];
 }
 
-async function serve(): Promise<Harness> {
+async function serve(
+  options: { orphanExitMs?: number } = {},
+): Promise<Harness> {
   const dataDir = mkdtempSync(join(tmpdir(), "armadra-conpty-"));
   const key = randomBytes(32);
   // A name in the real pipe namespace, derived the way production derives it,
@@ -91,13 +97,18 @@ async function serve(): Promise<Harness> {
     key,
     version: "armadra-session-host/integration",
     tickMs: 60_000,
+    ...(options.orphanExitMs === undefined
+      ? {}
+      : { orphanExitMs: options.orphanExitMs }),
   });
+  const left: string[] = [];
+  host.onLeaving((reason) => left.push(reason));
   await host.listen();
   scrap.push(() => {
     void host.close();
     rmSync(dataDir, { recursive: true, force: true });
   });
-  return { host, endpoint, key };
+  return { host, endpoint, key, left };
 }
 
 async function connect(
@@ -317,3 +328,94 @@ describe.skipIf(!windows)("a real ConPTY behind a real named pipe", () => {
     expect(harness.host.sessionCount).toBe(1);
   });
 });
+
+/**
+ * R-68 on a real pipe and a real console: the host leaves when it holds no
+ * live session and no core is connected, and never while a console lives.
+ */
+describe.skipIf(!windows)("leaving, with a real ConPTY", () => {
+  it("stays for a live console with nobody connected, then leaves once it is destroyed", async () => {
+    const harness = await serve({ orphanExitMs: 500 });
+    const client = await connect(harness);
+    const id = client.ids.issue();
+    const created = await client.link.request(id, createMessage(id, SPEC));
+    expect(created.type, JSON.stringify(created)).toBe("ok");
+    client.link.close();
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(harness.left).toEqual([]);
+    expect(harness.host.sessionCount).toBe(1);
+
+    const again = await connect(harness);
+    const ask = again.ids.issue();
+    expect(
+      await again.link.request(ask, { type: "shutdownIfIdle", id: ask }),
+    ).toMatchObject({ type: "ok", leaving: false });
+    const destroy = again.ids.issue();
+    const answer = await again.link.request(destroy, {
+      type: "destroy",
+      id: destroy,
+      sessionKey: "node-a",
+    });
+    expect(answer.type, JSON.stringify(answer)).toBe("ok");
+    again.link.close();
+    await until(() => harness.left.length > 0, "the orphan exit", 5_000);
+    expect(harness.left[0]).toMatch(/no live session and no client/);
+  });
+});
+
+/**
+ * The process entry itself — derived pipe name (`whoami`), key file, lock —
+ * run in this process, the way `host.cjs` runs it.
+ */
+describe.runIf(process.platform === "win32")(
+  "the host entry on Windows",
+  () => {
+    function dataDirectory(): string {
+      const dataDir = mkdtempSync(join(tmpdir(), "armadra-entry-"));
+      scrap.push(() => rmSync(dataDir, { recursive: true, force: true }));
+      return dataDir;
+    }
+
+    it("exits by itself when no core ever connects, and releases its lock", async () => {
+      const dataDir = dataDirectory();
+      const lines: string[] = [];
+      const code = await run({
+        argv: [dataDir],
+        orphanExitMs: 300,
+        log: (line) => lines.push(line),
+      });
+      expect(code).toBe(0);
+      expect(lines.join("\n")).toMatch(/no live session and no client/);
+      expect(existsSync(lockPath(dataDir))).toBe(false);
+    }, 30_000);
+
+    it("leaves on shutdownIfIdle sent the way the shell and the installer send it", async () => {
+      const dataDir = dataDirectory();
+      const lines: string[] = [];
+      const exited = run({
+        argv: [dataDir],
+        orphanExitMs: 60_000,
+        log: (line) => lines.push(line),
+      });
+      let outcome: Awaited<ReturnType<typeof requestShutdownIfIdle>> = {
+        kind: "absent",
+        reason: "not asked yet",
+      };
+      const deadline = Date.now() + 15_000;
+      // The host is starting in this same process; ask until it answers.
+      while (outcome.kind === "absent" && Date.now() < deadline) {
+        outcome = await requestShutdownIfIdle({ dataDir, client: "test" });
+        if (outcome.kind === "absent") {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+      // The pid is this test process, which of course stays.
+      expect(outcome).toEqual({ kind: "leaving", pid: process.pid });
+      await expect(exited).resolves.toBe(0);
+      expect(lines.join("\n")).toContain(
+        "session host leaving: shutdownIfIdle",
+      );
+      expect(existsSync(lockPath(dataDir))).toBe(false);
+    }, 30_000);
+  },
+);

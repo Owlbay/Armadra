@@ -198,6 +198,30 @@ const sessionHostConfig: UserConfig = {
 };
 
 /**
+ * The session host's companion: `out/session-host/shutdown-if-idle.cjs`, which
+ * the NSIS installer runs (same `ELECTRON_RUN_AS_NODE=1 <Electron>` launch)
+ * to ask a leftover host to leave before it touches `Armadra.exe`
+ * (`build/installer.nsh`). Its own build because the bundle is one file per
+ * entry, and into the same directory without emptying it.
+ */
+const sessionHostShutdownConfig: UserConfig = {
+  ...sessionHostConfig,
+  build: {
+    ...sessionHostConfig.build,
+    emptyOutDir: false,
+    rollupOptions: {
+      ...sessionHostConfig.build?.rollupOptions,
+      input: {
+        "shutdown-if-idle": resolve(
+          here,
+          "src/session-host/shutdown-if-idle.ts",
+        ),
+      },
+    },
+  },
+};
+
+/**
  * The seventh target: ama's host adapter (docs/design/coordinator-agent.md
  * §2.5, §3).
  *
@@ -263,6 +287,7 @@ function buildCore(): Plugin {
       await build(coreConfig);
       await build(cliConfig);
       await build(sessionHostConfig);
+      await build(sessionHostShutdownConfig);
       await build(agentHostConfig);
       copyAgentBundle();
     },

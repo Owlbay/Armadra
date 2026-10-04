@@ -26,6 +26,7 @@ import {
   DesktopLifecycle,
   quitFailureDialog,
   runQuitSequence,
+  sessionHostRelease,
 } from "./lifecycle";
 import {
   RuntimeProcess,
@@ -307,7 +308,11 @@ let quitRequested = false;
 async function requestQuit(): Promise<void> {
   if (!lifecycle.state.beginQuit()) return;
   quitRequested = true;
-  const outcome = await runQuitSequence(lifecycle, runtime);
+  const outcome = await runQuitSequence(
+    lifecycle,
+    runtime,
+    runtime.owns() ? sessionHostRelease(dataDir()) : undefined,
+  );
   if (!outcome.ok) {
     quitRequested = false;
     process.stderr.write(
