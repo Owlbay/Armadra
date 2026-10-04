@@ -99,6 +99,18 @@ export const passkeyRegisterVerifyRequestSchema = z.object({
   label: z.string().max(128).optional(),
 });
 
+/** passkey 名字的上限（字符数）：`PATCH passkey/{credentialId}`（G5-02）。 */
+export const PASSKEY_LABEL_MAX = 64;
+
+/** `PATCH passkey/{credentialId}`：只有本人；1–64 个字符、首尾无空白。 */
+export const passkeyRenameRequestSchema = z.object({
+  label: z.string().min(1).max(PASSKEY_LABEL_MAX),
+});
+export const passkeyRenameSchema = z.object({
+  credentialId: z.string(),
+  label: z.string(),
+});
+
 export const passkeyLoginVerifyRequestSchema = z.object({
   challengeId: z.string(),
   response: z.record(z.string(), z.unknown()),
@@ -181,6 +193,31 @@ export type IdentitySessionRow = z.infer<typeof identitySessionSchema>;
 export const identitySessionListSchema = z.object({
   sessions: z.array(identitySessionSchema),
 });
+
+/**
+ * `GET devices` 一行多的两列（G5-02）：`platform` 由这台设备最近那个会话的 UA
+ * 归出来（UA 原文不出 core），`lastSeenAtMs` 是它所有会话里最晚的活动。设备上
+ * 没有会话时两项都不带。
+ */
+export const DEVICE_PLATFORMS = [
+  "macos",
+  "windows",
+  "linux",
+  "ios",
+  "android",
+  "web",
+  "unknown",
+] as const;
+export const devicePlatformSchema = z.enum(DEVICE_PLATFORMS);
+export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
+
+/** `POST credentials` 设口令的答案：L2 撤掉了这个人几个其它会话。 */
+export const passwordSetSchema = z.object({
+  credentialId: z.string(),
+  revokedSessions: z.number().int().nonnegative(),
+  passwordBreached: z.boolean().optional(),
+});
+export type PasswordSet = z.infer<typeof passwordSetSchema>;
 
 /* ------------------------------------------------------------------------- */
 /* §18.5 OAuth / OIDC（G1-12）                                                */
@@ -317,3 +354,41 @@ export const auditPageSchema = z.object({
   nextBeforeId: z.number().int().nonnegative(),
 });
 export type AuditPage = z.infer<typeof auditPageSchema>;
+
+/* ------------------------------------------------------------------------- */
+/* §25 口令重置链接（G5-02）                                                  */
+/* ------------------------------------------------------------------------- */
+
+/** 令牌有效期 24 小时。 */
+export const PASSWORD_RESET_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** 认不出的令牌（不存在、用过、作废、过期、人停用了）一律这一个 404。 */
+export const PASSWORD_RESET_CODES = ["password_reset_invalid"] as const;
+export type PasswordResetCode = (typeof PASSWORD_RESET_CODES)[number];
+
+/** `POST principals/{id}/password-reset` 的答案（201）：明文只在这一次出现。 */
+export const passwordResetIssuedSchema = z.object({
+  token: z.string(),
+  expiresAtMs: z.number().int().positive(),
+});
+export type PasswordResetIssued = z.infer<typeof passwordResetIssuedSchema>;
+
+/** `GET password-reset/{token}`（匿名）。 */
+export const passwordResetInfoSchema = z.object({
+  displayName: z.string(),
+  expiresAtMs: z.number().int().positive(),
+});
+export type PasswordResetInfo = z.infer<typeof passwordResetInfoSchema>;
+
+/** `POST password-reset/{token}`（匿名）的请求。 */
+export const passwordResetRequestSchema = z.object({
+  password: z.string().min(1),
+});
+
+/** `POST password-reset/{token}` 的答案：之后拿 `principalId` 与新口令登录。 */
+export const passwordResetDoneSchema = z.object({
+  principalId: z.string(),
+  revokedSessions: z.number().int().nonnegative(),
+  passwordBreached: z.boolean().optional(),
+});
+export type PasswordResetDone = z.infer<typeof passwordResetDoneSchema>;
