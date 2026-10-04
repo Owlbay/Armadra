@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   mkdtempSync,
@@ -8,7 +9,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { fakeAcpAgentPath } from "@armadra/agent/acp";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { featureAgentPath } from "../../acp/feature-fixture";
+import { type AcpCore, FAKE_AGENT, acpCore, until } from "../../acp/fixture";
+import { getAgentStatus } from "../status";
+import { AmaCredentials, setAmaCredentials } from "../ama-credentials";
 
 import type { CoreRequest } from "../../http/router";
 import {
@@ -771,3 +778,188 @@ describe.skipIf(process.platform === "win32")(
     });
   },
 );
+
+/**
+ * ACP 驱动的节点（契约 §26.4）：适配器不经画布启动器，core 在起它之前按 §20.4
+ * 同一个兑换取值、只设给适配器进程。假 Agent 把变量的 sha256 说出来，用例比
+ * 摘要——值本身不该出现在镜像、答复、节点数据、会话行或日志里。
+ */
+describe("an ACP-driven node", () => {
+  let acp: AcpCore | undefined;
+  afterEach(async () => {
+    setAmaCredentials(undefined);
+    await acp?.stop();
+    acp = undefined;
+  });
+
+  const digest = (value: string) =>
+    createHash("sha256").update(value).digest("hex");
+
+  async function reply(
+    core: AcpCore,
+    rowId: string,
+    nodeId: string,
+    text: string,
+  ): Promise<string> {
+    const before = (
+      await core.core.call("GET", `/api/acp/sessions/${rowId}/log`)
+    ).body as { entries: unknown[] };
+    await core.core.call("POST", `/api/acp/sessions/${rowId}/prompt`, { text });
+    const log = await until(
+      async () =>
+        (await core.core.call("GET", `/api/acp/sessions/${rowId}/log`))
+          .body as {
+          entries: { role: string; blocks: { text?: string }[] }[];
+        },
+      (body) => body.entries.length >= before.entries.length + 2,
+    );
+    expect(getAgentStatus(core.core.database, nodeId)?.stateSource).toBe("acp");
+    return log.entries.at(-1)?.blocks.at(-1)?.text ?? "";
+  }
+
+  function logged(core: AcpCore): string[] {
+    const lines: string[] = [];
+    for (const level of ["debug", "info", "warn", "error"] as const) {
+      vi.spyOn(core.core.log, level).mockImplementation(
+        (message: string, fields?: unknown) => {
+          lines.push(JSON.stringify([message, fields ?? null]));
+        },
+      );
+    }
+    return lines;
+  }
+
+  it("redeems the node credential into the adapter's environment only", async () => {
+    const backend = memoryBackend();
+    acp = await acpCore({
+      agentPath: featureAgentPath(fakeAcpAgentPath()),
+      baseAgent: "copilot",
+      credentialSecrets: backend,
+    });
+    const lines = logged(acp);
+    const created = await acp.core.call("POST", "/api/credentials", {
+      providerId: "copilot",
+      kind: "github-token",
+      label: "Bot",
+      value: VALUE,
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const ref = (created.body as { ref: string }).ref;
+    const nodeId = await acp.node({ credentialRef: ref });
+    const opened = await acp.core.call("POST", "/api/acp/sessions", {
+      workspaceId: acp.workspaceId,
+      nodeId,
+      cwd: acp.core.directory,
+      agentId: FAKE_AGENT,
+    });
+    expect(opened.status, JSON.stringify(opened.body)).toBe(200);
+    const rowId = (opened.body as { id: string }).id;
+    expect(await reply(acp, rowId, nodeId, "[env COPILOT_GITHUB_TOKEN]")).toBe(
+      `env COPILOT_GITHUB_TOKEN ${digest(VALUE)}`,
+    );
+
+    // 值哪里都不在：答复、会话行、节点数据、镜像、日志。
+    const log = await acp.core.call("GET", `/api/acp/sessions/${rowId}/log`);
+    const row = await acp.core.call("GET", `/api/terminals/${rowId}`);
+    const nodes = acp.core.database
+      .prepare("SELECT data_json FROM nodes")
+      .all();
+    const mirror = readFileSync(
+      getAgentStatus(acp.core.database, nodeId)?.transcriptPath as string,
+      "utf8",
+    );
+    for (const text of [
+      JSON.stringify(opened.body),
+      JSON.stringify(log.body),
+      JSON.stringify(row.body),
+      JSON.stringify(nodes),
+      mirror,
+      lines.join("\n"),
+    ]) {
+      expect(text).not.toContain(VALUE);
+    }
+    // 兑换记了一笔（只有节点与条目名）。
+    expect(lines.join("\n")).toContain("node credential taken");
+  });
+
+  it("refuses to start the adapter when the bound value is gone", async () => {
+    const backend = memoryBackend();
+    acp = await acpCore({
+      agentPath: featureAgentPath(fakeAcpAgentPath()),
+      baseAgent: "copilot",
+      credentialSecrets: backend,
+    });
+    const created = await acp.core.call("POST", "/api/credentials", {
+      providerId: "copilot",
+      kind: "github-token",
+      label: "Bot",
+      value: VALUE,
+    });
+    const ref = (created.body as { ref: string }).ref;
+    backend.values.clear();
+    const nodeId = await acp.node({ credentialRef: ref });
+    const opened = await acp.core.call("POST", "/api/acp/sessions", {
+      workspaceId: acp.workspaceId,
+      nodeId,
+      cwd: acp.core.directory,
+      agentId: FAKE_AGENT,
+    });
+    expect(opened.status).toBe(409);
+    expect(opened.body).toMatchObject({ code: "credential_unset" });
+  });
+
+  it("refuses a member without credential:use before an adapter starts (H2)", async () => {
+    const backend = memoryBackend();
+    acp = await acpCore({
+      agentPath: featureAgentPath(fakeAcpAgentPath()),
+      baseAgent: "copilot",
+      credentialSecrets: backend,
+    });
+    const created = await acp.core.call("POST", "/api/credentials", {
+      providerId: "copilot",
+      kind: "github-token",
+      label: "Owner's",
+      value: VALUE,
+    });
+    const ref = (created.body as { ref: string }).ref;
+    const nodeId = await acp.node({ credentialRef: ref });
+    const member = {
+      subject: { principalId: "p-member", kind: "member" as const, scopes: [] },
+    };
+    const core = acp;
+    const opened = await runAs(member, () =>
+      core.core.call("POST", "/api/acp/sessions", {
+        workspaceId: core.workspaceId,
+        nodeId,
+        cwd: core.core.directory,
+        agentId: FAKE_AGENT,
+      }),
+    );
+    expect(opened.status).toBe(403);
+    expect(opened.body).toMatchObject({ code: "credential_forbidden" });
+  });
+
+  it("gives an ama node's adapter the model keys, and nobody else's", async () => {
+    acp = await acpCore({
+      agentPath: featureAgentPath(fakeAcpAgentPath()),
+      baseAgent: "ama",
+    });
+    const keys = new AmaCredentials(memoryBackend());
+    await keys.set("anthropic", VALUE);
+    setAmaCredentials(keys);
+    const lines = logged(acp);
+    const nodeId = await acp.node();
+    const opened = await acp.core.call("POST", "/api/acp/sessions", {
+      workspaceId: acp.workspaceId,
+      nodeId,
+      cwd: acp.core.directory,
+      agentId: FAKE_AGENT,
+    });
+    expect(opened.status, JSON.stringify(opened.body)).toBe(200);
+    const rowId = (opened.body as { id: string }).id;
+    expect(await reply(acp, rowId, nodeId, "[env AMA_API_KEY_ANTHROPIC]")).toBe(
+      `env AMA_API_KEY_ANTHROPIC ${digest(VALUE)}`,
+    );
+    expect(lines.join("\n")).not.toContain(VALUE);
+  });
+});
