@@ -24,6 +24,8 @@ export const gatewayErrorSchema = z.object({
 /** `tls.acme` of §17.1: the renewal state while the ACME source is serving. */
 export const gatewayAcmeStatusSchema = z.object({
   directory: z.string(),
+  /** Challenge type in use; older cores omit it (they only did `http-01`). */
+  challenge: z.enum(["http-01", "tls-alpn-01"]).optional(),
   profile: z.enum(["shortlived", "classic"]).nullable(),
   names: z.array(z.string()),
   notAfter: z.string().datetime({ offset: true }).nullable(),

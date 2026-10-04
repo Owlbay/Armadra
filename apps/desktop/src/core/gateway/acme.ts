@@ -20,7 +20,13 @@ import {
   type ServerResponse,
 } from "node:http";
 import { Agent as HttpsAgent } from "node:https";
-import { isIP } from "node:net";
+import {
+  type Server as NetServer,
+  type Socket,
+  createServer as createNetServer,
+  isIP,
+} from "node:net";
+import { type SecureContext, createSecureContext } from "node:tls";
 import { join } from "node:path";
 import * as acme from "acme-client";
 import { OUTBOUND } from "../net/outbound";
@@ -35,6 +41,7 @@ import {
   set,
   subjectAltName,
 } from "./der";
+import { type AcmeTlsResponder, identifierOf, routeAcmeTls } from "./alpn";
 import { loopbackHost } from "./network";
 import {
   ACME_ACCOUNT_KEY,
@@ -43,16 +50,21 @@ import {
   ACME_KEY,
   ACME_STATE,
   SELF_SIGNED_DIR,
+  acmeChallengeCertificate,
 } from "./tls";
 
 /**
  * Gateway 的第四种证书来源：ACME 内建（外部服务 §6.3，补全计划 G3-5）。
  *
- *   * **签发**：`acme-client` 走 `http-01`——本模块自己在 `ARMADRA_ACME_HTTP_PORT`
- *     （缺省 80）上开一个明文监听，只答 `/.well-known/acme-challenge/<令牌>`，
- *     其余请求 308 到对外来源。监听一直开着：续期也要用它。`tls-alpn-01` 不做
- *     ——它要在 TLS 握手里按 ALPN 换证书，而 80 端口在容器与反向代理部署里都是
- *     现成的。
+ *   * **签发**：`acme-client` 走 RFC 8555，挑战类型由 `ARMADRA_ACME_CHALLENGE`
+ *     选（缺省 `http-01`）。
+ *       - `http-01`：本模块自己在 `ARMADRA_ACME_HTTP_PORT`（缺省 80）上开一个
+ *         明文监听，只答 `/.well-known/acme-challenge/<令牌>`，其余请求 308 到
+ *         对外来源。监听一直开着：续期也要用它。
+ *       - `tls-alpn-01`（RFC 8737）：不开 80。验证握手打的是 Gateway 自己的
+ *         TLS 端口，ALPN 为 `acme-tls/1` 时出示挑战证书（`./alpn.ts`）。首签时
+ *         Gateway 还没监听，本模块在同一个地址上临时开一个只答验证握手的监听，
+ *         签完就关；续期走 Gateway 的监听（它把本管理器当 {@link AcmeTlsResponder}）。
  *   * **存放**：`<数据目录>/tls/acme/`，目录 0700，账户密钥、证书链、私钥与
  *     `state.json` 都是 0600。先写私钥再写证书，各自先写临时文件再改名。
  *   * **续期**：证书寿命过去三分之二时续（剩三分之一）。失败按 1、2、4…小时
@@ -66,7 +78,8 @@ import {
  * `ARMADRA_ACME_DIRECTORY`（缺省 Let's Encrypt 生产目录）、`ARMADRA_ACME_PROFILE`
  * （`shortlived` | `classic`；名字里有 IP 而没给时取 `shortlived`，IP 证书只有它）、
  * `ARMADRA_ACME_CA_BUNDLE`（信任目录服务器的 PEM 文件，Pebble / step-ca 用）、
- * `ARMADRA_ACME_HTTP_PORT` 与 `ARMADRA_ACME_HTTP_HOST`（挑战监听）。
+ * `ARMADRA_ACME_HTTP_PORT` 与 `ARMADRA_ACME_HTTP_HOST`（`http-01` 的挑战监听）、
+ * `ARMADRA_ACME_CHALLENGE`（`http-01` | `tls-alpn-01`）。
  */
 
 export const ACME_PROFILES = ["shortlived", "classic"] as const;
@@ -77,6 +90,9 @@ export const ACME_ALERT_AFTER = 3;
 /** 证书寿命过去这么多就续。 */
 export const ACME_RENEW_AT_FRACTION = 2 / 3;
 export const ACME_DEFAULT_HTTP_PORT = 80;
+
+export const ACME_CHALLENGES = ["http-01", "tls-alpn-01"] as const;
+export type AcmeChallengeType = (typeof ACME_CHALLENGES)[number];
 
 const HOUR_MS = 60 * 60 * 1000;
 const RETRY_BASE_MS = HOUR_MS;
@@ -98,6 +114,10 @@ export interface AcmeConfig {
   readonly httpHost: string;
   /** 挑战监听上非挑战请求重定向去的地方。 */
   readonly redirectOrigin: string;
+  /** 缺省 `http-01`。 */
+  readonly challenge?: AcmeChallengeType | undefined;
+  /** `tls-alpn-01` 首签时临时监听的地址：就是 Gateway 自己的监听地址。 */
+  readonly tlsListen?: { readonly host: string; readonly port: number };
 }
 
 export class AcmeError extends Error {
@@ -117,6 +137,8 @@ export function acmeConfigFrom(input: {
   readonly email: string;
   readonly publicOrigins: readonly string[];
   readonly env: NodeJS.ProcessEnv;
+  /** Gateway 的监听地址；`tls-alpn-01` 要它，且端口不能是 0。 */
+  readonly tlsListen?: { readonly host: string; readonly port: number };
 }): AcmeConfig {
   const email = input.email.trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -174,6 +196,27 @@ export function acmeConfigFrom(input: {
       `ARMADRA_ACME_HTTP_PORT 不是端口：${portText}`,
     );
   }
+  const challengeText = env.ARMADRA_ACME_CHALLENGE?.trim() ?? "";
+  if (
+    challengeText !== "" &&
+    !(ACME_CHALLENGES as readonly string[]).includes(challengeText)
+  ) {
+    throw new AcmeError(
+      "acme_misconfigured",
+      `ARMADRA_ACME_CHALLENGE 只认 ${ACME_CHALLENGES.join(" / ")}`,
+    );
+  }
+  const challenge: AcmeChallengeType =
+    challengeText === "" ? "http-01" : (challengeText as AcmeChallengeType);
+  if (
+    challenge === "tls-alpn-01" &&
+    (input.tlsListen === undefined || input.tlsListen.port === 0)
+  ) {
+    throw new AcmeError(
+      "acme_misconfigured",
+      "tls-alpn-01 要一个固定的 Gateway 端口（验证握手打的就是它）",
+    );
+  }
   const bundlePath = env.ARMADRA_ACME_CA_BUNDLE?.trim() ?? "";
   let caBundle: string | undefined;
   if (bundlePath !== "") {
@@ -196,12 +239,19 @@ export function acmeConfigFrom(input: {
     httpPort,
     httpHost: env.ARMADRA_ACME_HTTP_HOST?.trim() || "0.0.0.0",
     redirectOrigin: (input.publicOrigins[0] as string).replace(/\/+$/, ""),
+    challenge,
+    ...(challenge === "tls-alpn-01" && input.tlsListen !== undefined
+      ? { tlsListen: { ...input.tlsListen } }
+      : {}),
   };
 }
 
 /* ------------------------------- 签发 ------------------------------------ */
 
-/** `http-01` 的应答表：令牌 → key authorization。 */
+/**
+ * 挂着的挑战：`http-01` 是令牌 → key authorization，`tls-alpn-01` 是标识（域名
+ * 或 IP，小写）→ key authorization。
+ */
 export type ChallengeResponder = Map<string, string>;
 
 export interface IssueRequest {
@@ -211,6 +261,8 @@ export interface IssueRequest {
   readonly certificateKey: string;
   readonly profile?: AcmeProfile | undefined;
   readonly challenges: ChallengeResponder;
+  /** 缺省 `http-01`。 */
+  readonly challenge?: AcmeChallengeType | undefined;
 }
 
 /** 一次签发；测试换成假的。返回 PEM 证书链（叶证书在前）。 */
@@ -245,25 +297,30 @@ export function acmeClientIssuer(
       ...(request.profile === undefined ? {} : { profile: request.profile }),
     } as Parameters<typeof client.createOrder>[0]);
     const authorizations = await client.getAuthorizations(order);
+    const type = request.challenge ?? "http-01";
     for (const authz of authorizations) {
       if (authz.status === "valid") continue;
       const challenge = authz.challenges.find(
-        (candidate) => candidate.type === "http-01",
+        (candidate) => candidate.type === type,
       );
       if (challenge === undefined) {
         throw new AcmeError(
           "acme_failed",
-          `${authz.identifier.value} 没有 http-01 挑战可做`,
+          `${authz.identifier.value} 没有 ${type} 挑战可做`,
         );
       }
       const keyAuthorization =
         await client.getChallengeKeyAuthorization(challenge);
-      request.challenges.set(challenge.token, keyAuthorization);
+      const key =
+        type === "http-01"
+          ? challenge.token
+          : authz.identifier.value.toLowerCase();
+      request.challenges.set(key, keyAuthorization);
       try {
         await client.completeChallenge(challenge);
         await client.waitForValidStatus(challenge);
       } finally {
-        request.challenges.delete(challenge.token);
+        request.challenges.delete(key);
       }
     }
     const csr = certificateRequest(request.names, request.certificateKey);
@@ -276,6 +333,7 @@ export function acmeClientIssuer(
 
 export interface AcmeStatus {
   readonly directory: string;
+  readonly challenge: AcmeChallengeType;
   readonly profile: AcmeProfile | null;
   readonly names: readonly string[];
   readonly notAfter: string | null;
@@ -318,12 +376,14 @@ const REAL_TIMERS: Timers = {
   clear: (handle) => clearTimeout(handle as NodeJS.Timeout),
 };
 
-export class AcmeManager {
+export class AcmeManager implements AcmeTlsResponder {
   readonly directory: string;
   private readonly issuer: AcmeIssuer;
   private readonly now: () => Date;
   private readonly timers: Timers;
   private readonly challenges: ChallengeResponder = new Map();
+  /** `tls-alpn-01` 的挑战证书，按 key authorization 记，挑战结束就丢。 */
+  private readonly alpnContexts = new Map<string, SecureContext>();
   private readonly renewedListeners: (() => void)[] = [];
   private state: PersistedState;
   private server: Server | undefined;
@@ -347,11 +407,22 @@ export class AcmeManager {
 
   /** 开挑战监听，手里没有可用的证书就当场签；然后排上续期。 */
   async start(): Promise<void> {
-    if (this.options.listen !== false) await this.listen();
+    const listen = this.options.listen !== false;
+    if (listen && this.challenge() === "http-01") await this.listen();
     try {
       const current = this.current();
       if (current === undefined) {
-        const ok = await this.renew();
+        // tls-alpn-01 的首签：Gateway 还没监听，在它的地址上临时答验证握手。
+        const temporary =
+          listen && this.challenge() === "tls-alpn-01"
+            ? await this.listenTls()
+            : undefined;
+        let ok: boolean;
+        try {
+          ok = await this.renew();
+        } finally {
+          await closeServer(temporary);
+        }
         if (!ok) {
           const error = this.state.lastError;
           throw new AcmeError(
@@ -381,10 +452,38 @@ export class AcmeManager {
       : undefined;
   }
 
+  /** 有 `tls-alpn-01` 挑战在等验证（{@link AcmeTlsResponder}）。 */
+  pending(): boolean {
+    return this.challenge() === "tls-alpn-01" && this.challenges.size > 0;
+  }
+
+  /**
+   * 这个 SNI 的挑战证书（{@link AcmeTlsResponder}）。只答正在等的标识；证书
+   * 现签、按 key authorization 记住，同一次验证的几次握手（CA 会从多处验）用
+   * 同一张。
+   */
+  context(servername: string): SecureContext | undefined {
+    if (this.challenge() !== "tls-alpn-01") return undefined;
+    const identifier = identifierOf(servername);
+    const keyAuthorization = this.challenges.get(identifier);
+    if (keyAuthorization === undefined) return undefined;
+    const known = this.alpnContexts.get(keyAuthorization);
+    if (known !== undefined) return known;
+    const material = acmeChallengeCertificate(
+      identifier,
+      keyAuthorization,
+      this.now(),
+    );
+    const context = createSecureContext(material);
+    this.alpnContexts.set(keyAuthorization, context);
+    return context;
+  }
+
   status(): AcmeStatus {
     const current = this.current(true);
     return {
       directory: this.config.directoryUrl,
+      challenge: this.challenge(),
       profile: this.config.profile ?? null,
       names: [...this.config.names],
       notAfter:
@@ -422,7 +521,19 @@ export class AcmeManager {
     }
   }
 
+  private challenge(): AcmeChallengeType {
+    return this.config.challenge ?? "http-01";
+  }
+
   private async renewOnce(): Promise<boolean> {
+    try {
+      return await this.attempt();
+    } finally {
+      this.alpnContexts.clear();
+    }
+  }
+
+  private async attempt(): Promise<boolean> {
     const at = this.now();
     try {
       const certificateKey = generateKeyPairSync("ec", {
@@ -437,6 +548,7 @@ export class AcmeManager {
         certificateKey,
         profile: this.config.profile,
         challenges: this.challenges,
+        challenge: this.challenge(),
       });
       const leaf = new X509Certificate(chain);
       if (!leaf.checkPrivateKey(createPrivate(certificateKey))) {
@@ -640,6 +752,36 @@ export class AcmeManager {
     this.server = server;
   }
 
+  /**
+   * `tls-alpn-01` 首签用的临时监听：只答验证握手，别的连接直接断。地址就是
+   * Gateway 将要监听的那个，签完关掉再让 Gateway 绑上去。
+   */
+  private async listenTls(): Promise<NetServer> {
+    const address = this.config.tlsListen;
+    if (address === undefined) {
+      throw new AcmeError("acme_misconfigured", "tls-alpn-01 没有监听地址");
+    }
+    const sockets = new Set<Socket>();
+    const server = createNetServer((socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+      routeAcmeTls(socket, this, (other) => other.destroy());
+    });
+    openSockets.set(server, sockets);
+    await new Promise<void>((done, failed) => {
+      server.once("error", (error: NodeJS.ErrnoException) => {
+        failed(
+          new AcmeError(
+            "acme_port_unavailable",
+            `tls-alpn-01 的验证端口 ${address.host}:${address.port} 开不了：${error.code ?? error.message}`,
+          ),
+        );
+      });
+      server.listen(address.port, address.host, () => done());
+    });
+    return server;
+  }
+
   private answer(request: IncomingMessage, response: ServerResponse): void {
     const path = new URL(request.url ?? "/", "http://acme").pathname;
     if (path.startsWith(CHALLENGE_PREFIX)) {
@@ -714,6 +856,17 @@ function sanNames(parsed: X509Certificate): string[] {
         .toLowerCase(),
     )
     .filter((entry) => entry !== "");
+}
+
+/** 临时监听上还开着的连接：关监听时一并断开，不等半截的握手超时。 */
+const openSockets = new WeakMap<NetServer, Set<Socket>>();
+
+async function closeServer(server: NetServer | undefined): Promise<void> {
+  if (server === undefined) return;
+  await new Promise<void>((done) => {
+    server.close(() => done());
+    for (const socket of openSockets.get(server) ?? []) socket.destroy();
+  });
 }
 
 /** 0600 的临时文件改名过去：断电时留下的要么是旧的，要么是完整的新的。 */

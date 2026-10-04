@@ -149,6 +149,25 @@ export const SERVICES = [
       expect(JSON.parse(body).healthy === true, body);
     },
   },
+  {
+    name: "pebble-va",
+    ports: [14100, 15100],
+    profile: "pebble-va",
+    purpose: "真回连挑战地址的 ACME：tls-alpn-01 / http-01（§6.3）",
+    check: async () => {
+      const { status, body } = await get("https://127.0.0.1:14100/dir");
+      expect(status === 200, `status ${status}`);
+      expect(JSON.parse(body).newAccount, "no newAccount in directory");
+    },
+  },
+  {
+    name: "caddy",
+    ports: [8444],
+    profile: "caddy",
+    purpose: "反向代理演练，部署指南 §3.3（§4.4）",
+    // 上游没起时 Caddy 答 502；这里只确认代理本身在听。
+    check: () => tcpOpen(HOST, 8444),
+  },
 ];
 
 /** Compose services that exist only to back another one. */
@@ -234,6 +253,25 @@ function smtpBanner(host, port, timeoutMs = 5000) {
 }
 
 /** Run one service's check; never throws. */
+function tcpOpen(host, port, timeoutMs = 5000) {
+  return new Promise((done, failed) => {
+    const socket = connect({ host, port });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      failed(new Error(`tcp ${port} timeout`));
+    }, timeoutMs);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.destroy();
+      done(true);
+    });
+    socket.once("error", (error) => {
+      clearTimeout(timer);
+      failed(error);
+    });
+  });
+}
+
 export async function checkService(service) {
   const started = Date.now();
   try {

@@ -238,16 +238,15 @@ describe("assembleLaunchCommand", () => {
     ).toBe("opencode");
   });
 
-  it("honours a program override and extra args", () => {
+  it("honours a program override and quotes it", () => {
     expect(
       assembleLaunchCommand({
         agentId: "custom:mine",
         baseAgent: "claude",
         programOverride: "/opt/my tools/claude",
-        extraArgs: ["--flag", "value with space"],
         prompt: "hi",
       }).command,
-    ).toBe("'/opt/my tools/claude' --flag 'value with space' hi");
+    ).toBe("'/opt/my tools/claude' hi");
   });
 
   it("collapses a multi-line prompt into one shell-safe line", () => {
@@ -422,14 +421,13 @@ describe("自定义 Agent", () => {
     expect(command).not.toContain("API_KEY");
   });
 
-  it("still honours a launch-command override and extra args", () => {
+  it("still honours a launch-command override", () => {
     const { command } = assembleLaunchCommand({
       agentId: "custom:echo",
       custom: echo,
       programOverride: "/opt/wrapper",
-      extraArgs: ["--late"],
     });
-    expect(command).toBe("/opt/wrapper hello 'two words' --late");
+    expect(command).toBe("/opt/wrapper hello 'two words'");
   });
 });
 
@@ -573,66 +571,6 @@ describe("a launch line through the canvas launcher", () => {
         prompt: "hi there",
       }).command,
     ).toBe("/d/run/claude /bin/claude --model opus 'hi there'");
-  });
-});
-
-describe("the typed canvas injection of an older core (deprecated)", () => {
-  it("appends the runtime's words verbatim, in front of a prompt", () => {
-    expect(
-      assembleLaunchCommand({
-        agentId: "codex",
-        shellWords: [
-          "-c",
-          { prefix: "hooks.Stop=", env: "ARMADRA_CODEX_HOOK" },
-        ],
-      }).command,
-    ).toBe('codex -c "hooks.Stop=${ARMADRA_CODEX_HOOK}"');
-    expect(
-      assembleLaunchCommand({
-        agentId: "codex",
-        programOverride: "C:\\Program Files\\codex.exe",
-        shellWords: [
-          "-c",
-          { prefix: "hooks.Stop=", env: "ARMADRA_CODEX_HOOK" },
-        ],
-        dialect: "powershell",
-      }).command,
-    ).toBe(
-      "& 'C:\\Program Files\\codex.exe' -c \"hooks.Stop=${env:ARMADRA_CODEX_HOOK}\"",
-    );
-    expect(
-      assembleLaunchCommand({
-        agentId: "codex",
-        programOverride: "C:\\Program Files\\codex.exe",
-        shellWords: [
-          "-c",
-          { prefix: "hooks.Stop=", env: "ARMADRA_CODEX_HOOK" },
-        ],
-        dialect: "cmd",
-      }).command,
-    ).toBe(
-      '"C:\\Program Files\\codex.exe" -c "hooks.Stop=%ARMADRA_CODEX_HOOK%"',
-    );
-    expect(
-      assembleLaunchCommand({
-        agentId: "claude",
-        shellWords: ["--settings", "/d/s.json"],
-        prompt: "hi there",
-      }).command,
-    ).toBe("claude --settings /d/s.json 'hi there'");
-    expect(
-      assembleLaunchCommand({
-        agentId: "copilot",
-        shellWords: ["--plugin-dir", "/d/p"],
-        prompt: "go",
-      }).command,
-    ).toBe("copilot --plugin-dir /d/p --interactive go");
-  });
-
-  it("never puts them into a frozen argv", () => {
-    expect(
-      assembleLaunchArgv({ agentId: "codex", shellWords: ["-c", "x"] }).args,
-    ).toEqual([]);
   });
 });
 

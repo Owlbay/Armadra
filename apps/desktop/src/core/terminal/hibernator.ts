@@ -30,7 +30,7 @@ import {
   scheduledFor,
 } from "./hibernate";
 import type { SessionRecord, TerminalManager } from "./manager";
-import { processTable } from "./process";
+import { readProcessTable } from "./process";
 
 /**
  * Eco 休眠的执行者：巡检、结束、接回（终端宿主设计 §7.2）。
@@ -82,7 +82,7 @@ export interface HibernatorOptions {
   readonly processes?: (
     panePid: number,
     agentNames: readonly string[],
-  ) => { shellChildren: string[]; agentDescendants: string[] };
+  ) => Promise<{ shellChildren: string[]; agentDescendants: string[] }>;
   readonly clock?: () => number;
   readonly delay?: (ms: number) => Promise<void>;
   readonly log?: (message: string, fields?: Record<string, unknown>) => void;
@@ -273,7 +273,7 @@ export class Hibernator {
           );
     let background = false;
     if (isAgent === true && foreground?.pid !== undefined) {
-      const tree = (this.options.processes ?? processesUnder)(
+      const tree = await (this.options.processes ?? processesUnder)(
         foreground.pid,
         names,
       );
@@ -690,14 +690,14 @@ function text(value: unknown): string | undefined {
 
 /**
  * pane shell 的直接子进程，与其中那个 Agent 的整棵子树（不含它自己）。
- * 一次 `ps`；Windows 上表是空的，于是两样都是空——那边的会话由 session-host
- * 持有，这条判据如实答「没看到后台作业」。
+ * 一次异步 `ps`（不在事件循环上等子进程）；Windows 上表是空的，于是两样都是
+ * 空——那边的会话由 session-host 持有，这条判据如实答「没看到后台作业」。
  */
-export function processesUnder(
+export async function processesUnder(
   panePid: number,
   agentNames: readonly string[],
-): { shellChildren: string[]; agentDescendants: string[] } {
-  const table = processTable();
+): Promise<{ shellChildren: string[]; agentDescendants: string[] }> {
+  const table = await readProcessTable();
   const direct = [...table.entries()].filter(
     ([, row]) => row.parent === panePid,
   );
