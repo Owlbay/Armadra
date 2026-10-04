@@ -977,7 +977,27 @@
 
 ## G5-08 工作流编辑器与模板升级（R-36、R-37）
 
-待填（第 1 组）。
+**做了什么**
+
+- 编辑器（`web/workflow/TemplateEditor.tsx`，设计 §5.5）：左列步骤用 `Item` 列出，可以拖柄拖动排序，也可以用键盘（空格拿起、方向键移动、空格放下），排序用 `@dnd-kit/sortable`。「+」菜单可以加提示、汇总、关卡三种步骤。新步骤默认依赖上一步，汇总步骤也默认从上一步汇总，加完自动选中。每一步都能删，别的步骤对它的依赖和汇总来源会一起去掉；只剩一步时不能删。右侧表单的依赖复选框跟着步骤变化，会成环的选项不让勾；汇总步骤多一列「汇总来源」，勾上的来源会自动加进依赖。角色可以增删，可以改名称和 CLI（`Select`）；正被步骤使用的角色、或只剩一个角色时，删除按钮不可用。删角色时，连着它的协作连线一起删掉。提示词或关卡说明为空、汇总没有来源时，「保存」不可用。纯函数在 `workflow/model.ts`（`addStep / removeStep / moveStep / dependsOn / addRole / removeRole / updateRole / roleInUse / incompleteSteps / canSaveDraft`）。
+- 模板升级 core（`core/schedule/workflow-target.ts`）：`paramCompatibility` 把冻结计划的参数和新模板比对，结果分三种：`compatible`、`missing_params`（新模板多了没有缺省值的参数）、`param_mismatch`（存着的参数新模板不认了，或者代入后超长）。`workflowScheduleBridge` 由调度域装配时登记到 `workflow/registry.ts`，提供两项：`frozen(templateId)` 扫出冻结在旧版本上的计划（已删除的不算）；`upgrade(request, templateId, ids)` 只改 `templateVersion`，经 `ScheduleService.define` 落库；原来启用的计划，用同一个调用方按新版本重新 `activate`。认调用方的方式与 `/api/automations/*` 相同（`AutomationApi.caller` 改为公开），只有计划的创建者能改。
+- 路由（`core/workflow/routes.ts`）：`PUT /api/workflows/templates/{id}` 的答复新增 `frozenSchedules` 字段；新增 `POST /api/workflows/templates/{id}/upgrade-schedules?workspaceId=`，请求体 `{ scheduleIds }`，答复 `{ upgraded, frozen }`。路由权限沿用改模板那一档（`route-access` 的工作流分支：服务器壳上只有 owner）。共享层新增 `workflowFrozenScheduleSchema` 和 `workflowUpgradeResultSchema`。契约 §15.6 追加了一条「模板升级」。
+- 页面：编辑器保存后，如果有冻结的计划，toast 提示「N 个定时计划仍按旧版本」；本工作空间里有参数相容的计划时，toast 上带「更新到最新版本」按钮。自动化计划行（`PlanRow`）发现计划的模板版本低于当前版本时，显示 `FrozenScheduleAlert`：标题「模板已更新到 vN」，有管理权限时带「更新到最新版本」按钮；不相容时说明要补哪些参数、或哪些参数新版本不认。编辑一个工作流计划时，按模板当前版本保存（参数表单本来就是按当前版本画的），所以不相容的计划经一次编辑、补上参数就能升级。
+- 探针 `workflow-e2e` 新增第 7 步：计划激活后、到点之前改模板（v2 换了 s1 的提示词，并新增一个有缺省值的参数）→ `PUT` 答出这个计划冻结在 v1、参数相容 → `upgrade-schedules` 把它升到 v2 并保持启用 → 到点起跑的运行是 v2，s1 的产出来自新提示词。
+
+**实测**（macOS arm64）
+
+- 新用例：`schedule/workflow-target.test.ts` 7 条（相容判定四种情况；改模板列出冻结计划 → 升级后启用的仍启用、草稿仍是草稿、探测回到 `ready`、重复升级是幂等的；不相容的不动，列出 `missingParams` / `unknownParams`；请求体不对、找不到模板、认不出调用方时答 `{ code, message }`）；`workflow.test.tsx` 新增 9 条（加步骤、删步骤、角色增删、成环项不可勾、冻结提示与升级按钮、纯函数）；shared `api-workflows.test` 新增 1 条。
+- `node tools/probes/workflow-e2e.mjs`：通过（包括新加的第 7 步，「模板改版、计划已升级 {version:2}」→ 定时运行 `SUCCEEDED`）。
+- 真浏览器（隔离数据目录与临时 HOME 下起 core，Vite 开发页）：打开编辑器，加一个提示步骤（正文为空时「保存」不可用），用指针拖动和键盘各排了一次序，加了两个角色、删了一个、改了名称，保存后库里的模板是 v2，步骤顺序、依赖和角色都与界面一致；toast 出现「1 个定时计划仍按旧版本」和「更新到最新版本」，点击后计划从 v1 升到当前的 v4，仍是 `ACTIVE`。再把模板改成需要必填参数 `owner`，冻结提示组件显示「模板已更新到 v5」，点「更新到最新版本」后显示「需要补参数：owner」，计划保持不动。
+- 全量结果见本包 PR 正文。
+
+**偏离**
+
+- 计划写的是「自动化表单显示冻结提示」，实际放在自动化计划行（`PlanRow`）上，编辑表单改为直接按当前版本保存，因为参数表单本来就按当前版本画。
+- 浏览器开发页（明文回环）里拿不到自动化面板需要的身份会话（要桌面壳的原生会话，或 HTTPS 的服务器壳），所以计划行里的提示组件是挂在同一个真页面上单独验证的；整个面板没有在浏览器里打开过。
+
+**没做**：升级只按参数集判断能不能自动升；新模板改了步骤或角色、但参数照旧时，同样当作相容自动升级（与「保存即新版本」的语义一致）。没有批量升级的入口，冻结计划逐个在计划行上更新，或在编辑器保存后的 toast 里一次更新。
 
 ## G5-09 协调者分派抽屉与完成节点边框（R-38、R-39）
 
