@@ -1000,7 +1000,32 @@
 
 ## G5-03 身份页面：整页登录、忘记口令、重置页、passkey 改名、MFA 重置、L7（R-02 页面、R-03 页面、R-04、R-05 页面、R-06、R-13）
 
-待填（第 2 组）。
+**做了什么**
+
+- 整页入口（R-06）：新 `app/IdentityGate.tsx` 包在 `App.tsx` 的壳外面。服务器壳 / Gateway 来源（HTTPS 页面）没有会话时渲染整页 `SignIn`（无侧栏、360 列、BrandMark 居中）；地址栏带 `#reset=<令牌>` 时渲染整页「设置新口令」，同一标签页里贴进链接（只改片段）也接得住；带 `#invite=` / `#pair=` / `#oauth=` 时照旧进壳由设置页接手；问不到会话（离线、旧 core）照旧进壳。登出、换会话广播后重问会话。策略要求 MFA 而未登记时登录后直接打开「安全」。桌面窗口与原生 App 不经过它。
+- 重置页（R-05 页面）：`session/ResetPassword.tsx`，先 `GET` 显示是谁的、几点前有效；认不出一律「链接已失效 · 请联系管理员重新签发」；两次输入核对；设好后「去登录」落在整页登录的口令步，账号已填成那个人的 principalId。
+- 忘记口令：登录口令步一个 link，点开只给一句「请联系管理员为你签发重置链接」（邮箱可选，没有自助重置）。
+- 签发重置链接：`panels/settings/pages/ResetLinkDialog.tsx`，打开即签，链接 + 二维码（复用配对卡的 `QrImage`）+ 复制 + 过期时间；服务器配了邮件（`GET /api/mail/status.configured`，404 当未配置）时多一行「发送邮件」。账号与共享页成员行改成「…」菜单：签发重置链接 · 重置两步验证 · 停用；owner 那一行只有 owner 自己看得到「签发重置链接」。组管理员在组对话框里对角色是 member 的人有同一个按钮。邀请对话框生成链接后同样有「发送邮件」（`MailLinkForm`）。新 `api/mail.ts`。
+- owner 重置 MFA（R-04）：成员行菜单「重置两步验证」→ `AlertDialog` 确认 → `POST /api/identity/mfa/reset`（`api/security.ts::resetMfa`），toast 区分「已重置」与「本来就没开」。
+- passkey 改名（R-03 页面）：安全页通行密钥行多一个铅笔按钮，名称格内联成 `Field` + `Input`，Enter / 保存提交，Esc 取消，1–64 字符。
+- 设备两列（R-02 页面）：`GatewayDevices.tsx` 加「平台」「最近访问」，没有值画「—」。
+- L7（R-13）：`password_too_short / password_too_long / password_contains_name / password_too_common / password_breached` 各有中英文案（`security.error.*`，`sign-in-errors.ts::passwordFailure`）。重置页、设口令、添加成员、兑换邀请的对话框把它显示在输入框下面，对话框不关；`warn` 档命中时重置页给 `Alert`，账号与共享页页顶给 `Alert`「这个口令出现在已知泄露里」。`api/accounts.ts::setPassword` 改为答 `{ revokedSessions, passwordBreached }`，`createMember` 答 `{ principal, passwordBreached }`，`redeemInvitation` 多带 `passwordBreached`。
+- core 小接线（G5-13 留下的）：`AccountsService.requirePasswordResetRights`（`requireResetRights` 的公开包装，不签不写）；`mail/index.ts::linkChecks()` 加 `passwordReset`：先按签发规则认调用方（403 / 404），再 `inspectPasswordReset` 认令牌并核对属于这个人，不对一律 409 `link_invalid`。契约 §28 删掉「还没有口令重置」的 404 说明并补了这条顺序。
+- 展示页 `auth` 分区：整页登录、设新口令、链接失效、泄露提示、忘记口令；通行密钥样本带改名入口。i18n：`password-reset`、`mail` 两个空模块填上，`security` / `sharing` / `host-identity` 追加，中英同步。架构文档 §7 身份一段加一句整页入口。
+
+**实测**（macOS arm64）
+
+- 新增 / 扩充用例：`IdentityGate.test`（6）、`ResetPassword.test`（9）、`SignIn.test`（+2）、`PasskeyList.test`（+2）、`GatewayDevices.test`（2）、`AccountsSharingPage.test`（+5：成员菜单签链接与发邮件、没配邮件不出现、MFA 重置先确认、策略错误内联与 warn 提示、组管理员签链接）；core `mail.test` 把旧的 404 用例换成 3 条真身份域用例（发信、令牌不是这个人 / 被作废 / 伪造 409、路人 403 与无此人 404）。
+- `gateway-e2e` 加第 4c 段：owner 签重置令牌 → 新上下文打开 `#reset=`、整页设新口令 → 成员原会话 401、令牌再用 404 → 「去登录」口令步新口令登录回同一成员，页面无控制台错误；passkey 段改为在整页登录上点「使用通行密钥」。本机整条探针全过。
+- 真浏览器（无头 Chrome，桌面 core + Gateway，假 HIBP 接 `ARMADRA_HIBP_BASE`）走过：成员菜单、MFA 重置确认与结果（成员 `mfa.enrolled` 变 false）、重置链接对话框、整页登录、忘记口令、重置页、弱口令拒绝、`warn` 命中提示、新口令登录、passkey 内联改名（core 里标签已变）、设口令策略错误内联与页顶泄露提示。
+- `design-showcase --only=auth` 6 张图，深浅对比度与控制台通过。
+- 全量验证结果见 PR。
+
+**没做 / 限制**
+
+- 「重置两步验证」放在账号与共享页的成员行菜单，而不是安全页：安全页只管自己，没有「看别人」的视图；成员表本来就在账号与共享页。
+- 「发送邮件」只在桌面 Gateway 未配 SMTP（按钮隐藏）与单测里的假客户端上验过；真 SMTP 由用户提供。
+- 计划写的 `password_common` 实际规则名是 `password_too_common`，另补了 `password_too_long`。
 
 ## G5-04 ACP core 补充（R-26 core、R-27 core、R-28、R-29）
 

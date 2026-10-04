@@ -538,6 +538,8 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   - 身份：口令 scrypt + 策略 + 泄露检查（HIBP k-匿名，`identity.breachCheck`）；passkey、TOTP、OAuth 的
     密钥在 SecretStore；登录、配对、刷新按来源地址限流，按 principal 锁定；登录失败与锁定、MFA 与
     passkey 变更、OAuth 绑定、Gateway 开关与配对票、节点凭据与 ama 密钥的增删全部进审计。
+    服务器壳 / Gateway 来源的页面没有会话时由 `apps/web/src/app/IdentityGate.tsx` 渲染整页登录（无侧栏），
+    `#reset=<令牌>` 渲染整页「设置新口令」；带邀请、配对、OAuth 回调片段时照旧进壳由设置页接手。
   - 已知约束：operator 能开 shell，就是能以 core 的系统用户执行任意命令；服务器壳应跑在专用用户或
     容器里。审查记录见[安全审查 2026-10](../status/security-review-2026-10.md)。
 
