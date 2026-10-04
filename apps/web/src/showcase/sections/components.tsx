@@ -1,5 +1,7 @@
 import * as React from "react";
 import { ChevronDown, MoreHorizontal, Plus, Save, Search } from "lucide-react";
+import { Bar, BarChart, XAxis } from "recharts";
+import { toast } from "sonner";
 
 import { useT } from "@/app/preferences-store";
 import { agentLabel } from "@/agent/launch";
@@ -10,6 +12,14 @@ import {
   AccordionTrigger,
 } from "@/ui/accordion";
 import {
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+  ResponsiveAlertDialogTrigger,
   ResponsiveDialog,
   ResponsiveDialogClose,
   ResponsiveDialogContent,
@@ -20,16 +30,6 @@ import {
 } from "@/panels/ResponsiveDialog";
 import { TABS_CONTENT_FOCUS } from "@/panels/tabs-focus";
 import { AgentAvatar } from "@/ui/agent-avatar";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/ui/alert-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/ui/alert";
 import { Avatar, AvatarFallback, AvatarGroup } from "@/ui/avatar";
 import { Badge } from "@/ui/badge";
@@ -43,6 +43,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/ui/card";
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/ui/chart";
 import { Checkbox } from "@/ui/checkbox";
 import {
   Collapsible,
@@ -50,6 +56,13 @@ import {
   CollapsibleTrigger,
 } from "@/ui/collapsible";
 import { ColorDot } from "@/ui/color-dot";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/ui/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -78,6 +91,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/ui/popover";
 import { Progress } from "@/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/ui/radio-group";
 import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/ui/resizable";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -95,6 +113,7 @@ import {
 } from "@/ui/sheet";
 import { Skeleton } from "@/ui/skeleton";
 import { Slider } from "@/ui/slider";
+import { Toaster } from "@/ui/sonner";
 import { Spinner } from "@/ui/spinner";
 import { StatusPill } from "@/ui/status-pill";
 import { Switch } from "@/ui/switch";
@@ -116,6 +135,7 @@ import {
   AGENT_IDS,
   BADGE_VARIANTS,
   BUTTON_VARIANTS,
+  CHART_POINTS,
   MEMBERS,
   SESSIONS,
   SHORTCUT,
@@ -386,6 +406,10 @@ function Sample({
     </div>
   );
 }
+
+const CHART_CONFIG = {
+  tokens: { label: "tokens", color: "var(--brand)" },
+} satisfies ChartConfig;
 
 function Gallery() {
   const t = useT();
@@ -681,26 +705,28 @@ function Gallery() {
             </ResponsiveDialogFooter>
           </ResponsiveDialogContent>
         </ResponsiveDialog>
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
+        <ResponsiveAlertDialog>
+          <ResponsiveAlertDialogTrigger asChild>
             <Button variant="destructive" size="sm">
               {t("showcase.sample.delete")}
             </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{t("showcase.sample.delete")}</AlertDialogTitle>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>
-                {t("showcase.sample.cancel")}
-              </AlertDialogCancel>
-              <AlertDialogAction variant="destructive">
+          </ResponsiveAlertDialogTrigger>
+          <ResponsiveAlertDialogContent>
+            <ResponsiveAlertDialogHeader>
+              <ResponsiveAlertDialogTitle>
                 {t("showcase.sample.delete")}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+              </ResponsiveAlertDialogTitle>
+            </ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogFooter>
+              <ResponsiveAlertDialogCancel>
+                {t("showcase.sample.cancel")}
+              </ResponsiveAlertDialogCancel>
+              <ResponsiveAlertDialogAction variant="destructive">
+                {t("showcase.sample.delete")}
+              </ResponsiveAlertDialogAction>
+            </ResponsiveAlertDialogFooter>
+          </ResponsiveAlertDialogContent>
+        </ResponsiveAlertDialog>
         <Sheet>
           <SheetTrigger asChild>
             <Button variant="ghost" size="sm">
@@ -766,6 +792,85 @@ function Gallery() {
             </CommandGroup>
           </CommandList>
         </Command>
+      </Sample>
+      <Sample name="resizable" wide>
+        {/* 面板组自己写了内联的 100% 高：高度给外面这一层。 */}
+        <div className="h-24 w-full overflow-hidden rounded-[var(--r-card)] border">
+          <ResizablePanelGroup orientation="horizontal">
+            <ResizablePanel defaultSize="40%">
+              <div className="flex h-full items-center justify-center text-muted-foreground">
+                {t("showcase.sample.session")}
+              </div>
+            </ResizablePanel>
+            <ResizableHandle
+              withHandle
+              aria-label={t("showcase.sample.more")}
+            />
+            <ResizablePanel defaultSize="60%">
+              <div className="flex h-full items-center justify-center text-muted-foreground">
+                {t("showcase.sample.terminal")}
+              </div>
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        </div>
+      </Sample>
+      <Sample name="chart" wide>
+        <ChartContainer config={CHART_CONFIG} className="h-32 w-full">
+          <BarChart
+            data={[...CHART_POINTS]}
+            accessibilityLayer={false}
+            margin={{ left: 0, right: 0, top: 4, bottom: 0 }}
+          >
+            <XAxis dataKey="day" tickLine={false} axisLine={false} />
+            <ChartTooltip content={<ChartTooltipContent hideLabel />} />
+            <Bar
+              dataKey="tokens"
+              fill="var(--color-tokens)"
+              radius={3}
+              isAnimationActive={false}
+            />
+          </BarChart>
+        </ChartContainer>
+      </Sample>
+      <Sample name="sonner · context-menu" wide>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => toast.success(t("showcase.sample.save"))}
+          >
+            <Save />
+            {t("showcase.sample.save")}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              toast.error(t("showcase.sample.alertTitle"), {
+                action: {
+                  label: t("showcase.sample.retry"),
+                  onClick: () => undefined,
+                },
+              })
+            }
+          >
+            {t("showcase.sample.alertTitle")}
+          </Button>
+        </div>
+        <ContextMenu>
+          <ContextMenuTrigger className="flex h-16 w-full items-center justify-center rounded-[var(--r-card)] border border-dashed text-muted-foreground">
+            {SESSIONS[0].title}
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem>{t("showcase.sample.details")}</ContextMenuItem>
+            <ContextMenuItem>{t("showcase.sample.save")}</ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem variant="destructive">
+              {t("showcase.sample.delete")}
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+        <Toaster />
       </Sample>
       <Sample name="empty" wide>
         <Empty className="border border-dashed border-border">

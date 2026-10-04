@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { WorkflowRunJson } from "./api";
-import { nodeSteps } from "./node-steps";
+import { doneNodes, nodeSteps } from "./node-steps";
 
 function step(
   stepId: string,
@@ -43,5 +43,21 @@ describe("nodeSteps", () => {
         run("succeeded", [step("y", "running", "n-y")]),
       ]),
     ).toEqual({ "n-b": 2, "n-x": 1 });
+  });
+});
+
+describe("doneNodes", () => {
+  it("marks finished role nodes of live runs, unless another step runs there", () => {
+    expect(
+      doneNodes([
+        run("running", [
+          step("a", "done", "n-a"),
+          step("b", "running", "n-b"),
+          step("c", "done", "n-b"),
+          step("d", "failed", "n-d"),
+        ]),
+        run("succeeded", [step("y", "done", "n-y")]),
+      ]),
+    ).toEqual({ "n-a": true });
   });
 });

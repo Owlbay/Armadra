@@ -9,9 +9,16 @@ import { Outbox, PushDispatcher } from "./outbox";
 import { ApnsClient, FcmClient, directSender } from "./transport-direct";
 import { logSender } from "./transport-log";
 import { relaySender } from "./transport-relay";
+import { unifiedPushSender } from "./transport-unifiedpush";
 import { loadVapidKeys, webPushSender } from "./transport-webpush";
 import { type Draft, type EventFrame, TriggerRules, render } from "./triggers";
 import type { PushDevice, PushSender } from "./types";
+
+/** 设备要不要收这一种（契约 §27.1）：没设过偏好 = 全部；测试恒收。 */
+export function wants(device: PushDevice, kind: Draft["kind"]): boolean {
+  if (kind === "test" || device.kinds === null) return true;
+  return (device.kinds as readonly string[]).includes(kind);
+}
 
 /**
  * 推送域的装配体：设备、队列、发送循环、触发规则与按设置选出的发送器。
@@ -65,6 +72,7 @@ export class PushService {
   private readonly clock: () => number;
   private vapid: VapidKeys | null | undefined;
   private senders: Senders | undefined;
+  private unifiedpush: PushSender | undefined;
 
   constructor(private readonly options: PushServiceOptions) {
     this.clock = options.clock ?? Date.now;
@@ -191,6 +199,14 @@ export class PushService {
   }
 
   senderFor(device: PushDevice): PushSender {
+    // UnifiedPush 按设备走（契约 §27.2）：端点是这台手机自己报上来的，与
+    // `push.transport` 无关，不需要任何服务端配置。
+    if (device.unifiedpushEndpoint !== "") {
+      this.unifiedpush ??= unifiedPushSender(
+        this.options.fetch === undefined ? {} : { fetch: this.options.fetch },
+      );
+      return this.unifiedpush;
+    }
     const config = this.config();
     const fingerprint = JSON.stringify(config);
     if (this.senders?.fingerprint !== fingerprint) {
@@ -251,6 +267,7 @@ export class PushService {
     let queued = 0;
     for (const { device, principalKind } of recipients) {
       if (only !== undefined && !only(device)) continue;
+      if (!wants(device, draft.kind)) continue;
       if (
         draft.principals !== undefined &&
         !draft.principals.includes(device.principalId)

@@ -12,15 +12,15 @@ import { useT } from "../../app/preferences-store";
 import { Button } from "../../ui/button";
 import { Badge } from "../../ui/badge";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../../ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 
 export interface ChangesHunksProps {
   workspaceId: string;
@@ -256,19 +256,21 @@ function HunkSession({
             </div>
           </section>
         ))}
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={confirmation !== null}
         onOpenChange={(open) => {
           if (!open) setConfirmation(null);
         }}
       >
-        <AlertDialogContent className="max-h-[90dvh] overflow-y-auto">
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("gitHunk.revertTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
+        <ResponsiveAlertDialogContent className="max-h-[90dvh] overflow-y-auto">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
+              {t("gitHunk.revertTitle")}
+            </ResponsiveAlertDialogTitle>
+            <ResponsiveAlertDialogDescription>
               {t("gitHunk.revertDescription")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
+            </ResponsiveAlertDialogDescription>
+          </ResponsiveAlertDialogHeader>
           <p className="break-all text-xs font-medium">{file}</p>
           {confirmation && <HunkBody hunk={confirmation.hunk} />}
           {!confirmationCurrent && (
@@ -276,9 +278,11 @@ function HunkSession({
               {t("gitHunk.stale")}
             </p>
           )}
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("gitHunk.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("gitHunk.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               disabled={busy || !confirmationCurrent}
               onClick={() => {
                 if (confirmation && confirmationCurrent && !busy) {
@@ -288,10 +292,10 @@ function HunkSession({
               }}
             >
               {t("gitHunk.revert")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </section>
   );
 }

@@ -23,7 +23,7 @@ import type { HookResponse } from "../../hook-client/http.js";
 import { headersFor, loadSession, send } from "../../hook-client/session.js";
 import { FILE_SUFFIX, STDIN_VALUE, TextReader } from "./text-input.js";
 import type { TextSources } from "./text-input.js";
-import { BROWSER_VERBS, CONTEXT_VERBS } from "./usage.js";
+import { BROWSER_VERBS, CANVAS_USAGE, CONTEXT_VERBS } from "./usage.js";
 
 /** The `{flag: value}` object a control route carries as `args`. */
 export type Args = Record<string, JsonValue>;
@@ -105,6 +105,11 @@ export async function runCanvas(args: string[]): Promise<number> {
   const verb = args[0];
   if (verb === undefined)
     return fail("usage: armadra-hook canvas <verb> [--flag value]...");
+  // The verb table, offline: no endpoint, no node token, nothing sent.
+  if (verb === "--help" || verb === "-h") {
+    process.stdout.write(CANVAS_USAGE);
+    return 0;
+  }
   if (verb.startsWith("-"))
     return fail(`expected a canvas verb, got \`${verb}\``);
   const parsed = parseFlags(args.slice(1));

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  gatewayAcmeStatusSchema,
   gatewayConfigPatchSchema,
   gatewayPairingPayloadSchema,
   gatewayStatusSchema,
@@ -51,6 +52,27 @@ describe("gateway api (contract §17)", () => {
       error: { code: "port_in_use", message: "x" },
     });
     expect(stopped.error?.code).toBe("port_in_use");
+  });
+
+  it("tls.acme carries the challenge type; older cores omit it", () => {
+    const acme = {
+      directory: "https://acme-v02.api.letsencrypt.org/directory",
+      profile: null,
+      names: ["armadra.example.com"],
+      notAfter: "2026-12-30T08:00:00.000Z",
+      renewAt: "2026-11-30T08:00:00.000Z",
+      failures: 0,
+      lastError: null,
+    };
+    expect(
+      gatewayAcmeStatusSchema.parse({ ...acme, challenge: "tls-alpn-01" })
+        .challenge,
+    ).toBe("tls-alpn-01");
+    expect(gatewayAcmeStatusSchema.parse(acme).challenge).toBeUndefined();
+    expect(
+      gatewayAcmeStatusSchema.safeParse({ ...acme, challenge: "dns-01" })
+        .success,
+    ).toBe(false);
   });
 
   it("a config patch is a strict subset of gateway.*", () => {

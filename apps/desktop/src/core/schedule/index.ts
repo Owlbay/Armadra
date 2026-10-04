@@ -93,6 +93,9 @@ export function install(context: CoreContext): ScheduleDomain | undefined {
       },
     },
     hostId,
+    // 到点 / 失败 / 要人处理（契约 §27.3）：推送是这条事件流的订阅者之一。
+    publish: (workspaceId, event) =>
+      context.bus.emit("workspace.event", { workspaceId, event }),
   });
   const service = new ScheduleService({
     store,

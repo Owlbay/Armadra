@@ -53,6 +53,7 @@ export const WORK_PANEL_WIDTH = {
   automation: "var(--scm-w)",
   handoff: "var(--scm-w)",
   workflow: "var(--scm-w)",
+  dispatch: "var(--drawer-w)",
 } as const;
 
 /** 右侧停靠的那几块。 */

@@ -75,11 +75,16 @@ export function recordTaskStart(
     readonly runnerId: string;
     readonly nodeId: string;
     readonly now: number;
+    /**
+     * 第一条任务的正文（`--task`）。记在 `result_json.task`：分派抽屉的「重试」
+     * 要把它再投一次（G5-09）；结束时写进的 `text` / `reason` 与它并存。
+     */
+    readonly task?: string | undefined;
   },
 ): { readonly inserted: boolean; readonly run: TaskRun } {
   const changes = database
     .prepare(
-      `INSERT OR IGNORE INTO workflow_task_runs (${COLUMNS}) VALUES (?, ?, ?, ?, 'running', ?, NULL, NULL)`,
+      `INSERT OR IGNORE INTO workflow_task_runs (${COLUMNS}) VALUES (?, ?, ?, ?, 'running', ?, NULL, ?)`,
     )
     .run(
       task.taskId,
@@ -87,6 +92,7 @@ export function recordTaskStart(
       task.runnerId,
       task.nodeId,
       task.now,
+      task.task === undefined ? null : JSON.stringify({ task: task.task }),
     );
   return {
     inserted: Number(changes.changes) > 0,
@@ -104,6 +110,20 @@ export function taskRun(
   return row === undefined ? undefined : taskRunOf(row);
 }
 
+/** 任务行里记着的第一条任务正文；没带 `--task` 起的任务没有。 */
+export function taskPrompt(run: TaskRun): string | undefined {
+  const result = run.result;
+  if (result === null || typeof result !== "object") return undefined;
+  const task = (result as { task?: unknown }).task;
+  return typeof task === "string" && task !== "" ? task : undefined;
+}
+
+/** 只留下任务正文的 `result_json`（重开一次时用）。 */
+function promptOnly(run: TaskRun | undefined): string | null {
+  const task = run === undefined ? undefined : taskPrompt(run);
+  return task === undefined ? null : JSON.stringify({ task });
+}
+
 /** 重试时节点已经不在了：换成新起的那个节点，状态回到 `running`。 */
 export function rebindTask(
   database: DatabaseSync,
@@ -114,9 +134,27 @@ export function rebindTask(
   database
     .prepare(
       "UPDATE workflow_task_runs SET node_id = ?, status = 'running', started_at = ?, " +
-        "ended_at = NULL, result_json = NULL WHERE task_id = ?",
+        "ended_at = NULL, result_json = ? WHERE task_id = ?",
     )
-    .run(nodeId, now, taskId);
+    .run(nodeId, now, promptOnly(taskRun(database, taskId)), taskId);
+}
+
+/**
+ * 人从分派抽屉点「重试」：已结束的任务回到 `running`、重新计时，节点不变。
+ * 只有 `failed` / `stopped` 的才改，答有没有改到。
+ */
+export function reopenTask(
+  database: DatabaseSync,
+  taskId: string,
+  now: number,
+): boolean {
+  const changes = database
+    .prepare(
+      "UPDATE workflow_task_runs SET status = 'running', started_at = ?, ended_at = NULL, " +
+        "result_json = ? WHERE task_id = ? AND status IN ('failed','stopped')",
+    )
+    .run(now, promptOnly(taskRun(database, taskId)), taskId);
+  return Number(changes.changes) > 0;
 }
 
 /** 结束一次任务。只有还在 `running` 的才改，答有没有改到。 */
@@ -127,6 +165,15 @@ export function finishTask(
   result: unknown,
   now: number,
 ): boolean {
+  // 起任务时记下的正文（`task`）留着：结束写的是 `text` / `reason`，两者并存。
+  const previous = taskRun(database, taskId);
+  const task = previous === undefined ? undefined : taskPrompt(previous);
+  const merged =
+    task === undefined
+      ? result
+      : result !== null && typeof result === "object" && !Array.isArray(result)
+        ? { ...(result as Record<string, unknown>), task }
+        : { task };
   const changes = database
     .prepare(
       "UPDATE workflow_task_runs SET status = ?, ended_at = ?, result_json = ? " +
@@ -135,7 +182,7 @@ export function finishTask(
     .run(
       status,
       now,
-      result === undefined ? null : JSON.stringify(result),
+      merged === undefined || merged === null ? null : JSON.stringify(merged),
       taskId,
     );
   return Number(changes.changes) > 0;
@@ -151,6 +198,51 @@ export function taskRunsFor(
     )
     .all(coordinatorNodeId) as unknown as TaskRunRecord[];
   return rows.map(taskRunOf);
+}
+
+/**
+ * 一块画板上的任务行（分派抽屉，契约 §15.7）：协调者节点在这块板上的。新的在
+ * 前，最多 `limit` 行。
+ */
+export function taskRunsForBoard(
+  database: DatabaseSync,
+  boardId: string,
+  limit = 200,
+): TaskRun[] {
+  const rows = database
+    .prepare(
+      `SELECT ${COLUMNS} FROM workflow_task_runs WHERE coordinator_node_id IN ` +
+        "(SELECT id FROM nodes WHERE board_id = ?) ORDER BY started_at DESC LIMIT ?",
+    )
+    .all(boardId, limit) as unknown as TaskRunRecord[];
+  return rows.map(taskRunOf);
+}
+
+/**
+ * 页面看到的一行（契约 §15.7）。不带任务正文与成员的结果正文：抽屉只要状态、
+ * 时刻与「能不能重试」，正文留在库里。
+ */
+export function taskRowJson(run: TaskRun): Record<string, unknown> {
+  const result = run.result as { reason?: unknown } | null;
+  const reason =
+    result !== null &&
+    typeof result === "object" &&
+    typeof result.reason === "string"
+      ? result.reason
+      : null;
+  return {
+    taskId: run.taskId,
+    coordinatorNodeId: run.coordinatorNodeId,
+    runnerId: run.runnerId,
+    nodeId: run.nodeId,
+    status: run.status,
+    startedAt: new Date(run.startedAt).toISOString(),
+    endedAt: run.endedAt === null ? null : new Date(run.endedAt).toISOString(),
+    reason,
+    retryable:
+      (run.status === "failed" || run.status === "stopped") &&
+      taskPrompt(run) !== undefined,
+  };
 }
 
 export function taskRunJson(run: TaskRun): Record<string, unknown> {

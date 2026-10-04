@@ -170,6 +170,11 @@ export interface ResourceServiceOptions {
    * 任何只要一次采样的调用方不必先装一个租约簿。
    */
   readonly power?: () => PowerState;
+  /**
+   * 每份发出去的样本再交给它一次：阈值判定（`thresholds.ts`，契约 §27.4）。
+   * 抛错不影响采样。
+   */
+  readonly onSample?: (snapshot: ResourceSnapshot) => void;
 }
 
 export class ResourceService {
@@ -254,6 +259,15 @@ export class ResourceService {
   /** 丢掉一个订阅。未知 id 被忽略：一个面板关两次不是错误。 */
   unsubscribe(subscriptionId: string): void {
     this.watchers.delete(subscriptionId);
+  }
+
+  /** 采样循环这一拍会不会采这个工作空间：有活订阅、且有人连着事件流。 */
+  watching(workspaceId: string): boolean {
+    return (
+      this.timer !== undefined &&
+      this.subscribedWorkspaces().includes(workspaceId) &&
+      this.audience(workspaceId) > 0
+    );
   }
 
   /** 现在至少有一个活订阅的工作空间。 */
@@ -377,13 +391,16 @@ export class ResourceService {
         // 不采样，而不是采完再丢掉——采样本身才是那笔开销。
         if (this.audience(workspaceId) === 0) continue;
         try {
+          const snapshot = this.snapshot(workspaceId);
           this.options.bus.emit("workspace.event", {
             workspaceId,
-            event: {
-              type: "resource.sample",
-              snapshot: this.snapshot(workspaceId),
-            } as never,
+            event: { type: "resource.sample", snapshot } as never,
           });
+          try {
+            this.options.onSample?.(snapshot);
+          } catch {
+            // 阈值判定出错不停采样。
+          }
         } catch {
           // 一次采样失败不该停掉循环：下一拍再试。
         }

@@ -20,6 +20,8 @@ const api = vi.hoisted(() => ({
   prompt: vi.fn(),
   cancel: vi.fn(),
   setMode: vi.fn(),
+  setModel: vi.fn(),
+  answerElicitation: vi.fn(),
   switchDriver: vi.fn(),
   answer: vi.fn(),
   drive: vi.fn(),
@@ -28,7 +30,7 @@ vi.mock("./api", () => ({ acpApi: api }));
 
 const store = vi.hoisted(() => ({
   workspace: { id: "w1", rootPath: "/repo" },
-  document: null,
+  document: null as null | { nodes: Record<string, unknown>[] },
   updateNodeData: vi.fn(),
 }));
 vi.mock("@/store/canvas-store", () => {
@@ -70,8 +72,40 @@ beforeEach(() => {
   api.drive.mockResolvedValue({});
   api.answer.mockResolvedValue({});
   api.cancel.mockResolvedValue(undefined);
+  api.setModel.mockResolvedValue(undefined);
+  api.answerElicitation.mockResolvedValue({});
+  store.updateNodeData.mockReset();
+  store.document = null;
   useAcpStore.getState().reset();
 });
+
+const MODELS = {
+  currentModelId: "small",
+  availableModels: [
+    { modelId: "small", name: "Small" },
+    { modelId: "large", name: "Large" },
+  ],
+};
+
+/**
+ * 选一个模型。jsdom 里 Radix 的 Select 打不开（缺 pointer capture），走窄屏
+ * 的「⋯」菜单——同一个回调。
+ */
+async function pickModel(name: string) {
+  const original = window.matchMedia;
+  window.matchMedia = ((query: string) => ({
+    ...original(query),
+    matches: query.includes("767"),
+  })) as typeof window.matchMedia;
+  try {
+    render(<SessionView nodeId="n1" data={data} />);
+    const more = await screen.findByRole("button", { name: "更多" });
+    fireEvent.pointerDown(more, { button: 0, pointerType: "mouse" });
+    fireEvent.click(await screen.findByRole("menuitemradio", { name }));
+  } finally {
+    window.matchMedia = original;
+  }
+}
 
 afterEach(cleanup);
 
@@ -334,5 +368,105 @@ describe("SessionView", () => {
     expect(await screen.findByText("会话没有启动")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await waitFor(() => expect(api.createSession).toHaveBeenCalledTimes(2));
+  });
+
+  it("draws an elicitation from the event stream, answers it and folds it away", async () => {
+    render(<SessionView nodeId="n1" data={data} />);
+    await screen.findByText("向它说第一句话");
+    emit({
+      type: "agent.approval",
+      nodeId: "n1",
+      pendingId: "n1-1-acp-e1",
+      request: {
+        request: {
+          protocol: "acp",
+          elicitation: {
+            message: "Pick a color",
+            mode: "form",
+            requestedSchema: {
+              type: "object",
+              properties: {
+                color: {
+                  type: "string",
+                  enum: ["red", "blue"],
+                  default: "red",
+                },
+              },
+              required: ["color"],
+            },
+          },
+        },
+      },
+    });
+    expect(await screen.findByText("Pick a color")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "提交" }));
+    await waitFor(() =>
+      expect(api.answerElicitation).toHaveBeenCalledWith("n1-1-acp-e1", {
+        action: "accept",
+        content: { color: "red" },
+      }),
+    );
+    expect(screen.queryByText("Pick a color")).toBeNull();
+  });
+
+  it("restores pending elicitations and the model catalog from the log", async () => {
+    api.log.mockResolvedValue({
+      ...emptyLog,
+      models: MODELS,
+      elicitations: [
+        {
+          pendingId: "e1",
+          protocol: "acp",
+          elicitation: { message: "Which branch?", mode: "form" },
+        },
+      ],
+    } satisfies AcpLogResponse);
+    render(<SessionView nodeId="n1" data={data} />);
+    expect(await screen.findByText("Which branch?")).toBeTruthy();
+    expect((await screen.findByLabelText("模型")).textContent).toContain(
+      "Small",
+    );
+    // 一个 turn 结束时挂起的 elicitation 已由 core 回了 cancel。
+    emit({
+      type: "acp.turn",
+      sessionId: SESSION,
+      nodeId: "n1",
+      turnId: "t",
+      stopReason: "cancelled",
+    });
+    await waitFor(() => expect(screen.queryByText("Which branch?")).toBeNull());
+  });
+
+  it("changes the model and writes agent.model back to the node", async () => {
+    store.document = {
+      nodes: [{ id: "n1", data: { ...data, agent: { ...data.agent } } }],
+    };
+    api.log.mockResolvedValue({ ...emptyLog, models: MODELS });
+    await pickModel("Large");
+    await waitFor(() =>
+      expect(api.setModel).toHaveBeenCalledWith(SESSION, "large"),
+    );
+    await waitFor(() =>
+      expect(store.updateNodeData).toHaveBeenCalledWith(
+        "n1",
+        { agent: { id: "codex", driver: "acp", model: "large" } },
+        { history: "ignore" },
+      ),
+    );
+    expect(
+      useAcpStore.getState().sessions[SESSION]?.models?.currentModelId,
+    ).toBe("large");
+  });
+
+  it("puts the previous model back when the change is refused", async () => {
+    api.setModel.mockRejectedValue(new Error("acp_model_unavailable"));
+    api.log.mockResolvedValue({ ...emptyLog, models: MODELS });
+    await pickModel("Large");
+    await waitFor(() =>
+      expect(
+        useAcpStore.getState().sessions[SESSION]?.models?.currentModelId,
+      ).toBe("small"),
+    );
+    expect(store.updateNodeData).not.toHaveBeenCalled();
   });
 });

@@ -29,6 +29,7 @@ import {
   removeOAuthBinding,
   setOAuthSecret,
   removePasskey,
+  renamePasskey,
   revokeOtherSessions,
   revokeSession,
   startOAuth,
@@ -307,6 +308,19 @@ function SecuritySettings({ session }: { session: IdentitySession }) {
             passkey.credentialId,
             () => removePasskey(passkey.credentialId),
             "passkeys",
+          )
+        }
+        onRename={(passkey, label) =>
+          renamePasskey(passkey.credentialId, label).then(
+            async () => {
+              await refresh("passkeys");
+              toast.success(t("security.passkeys.renamed"));
+              return true;
+            },
+            (error: unknown) => {
+              fail(error);
+              return false;
+            },
           )
         }
       />

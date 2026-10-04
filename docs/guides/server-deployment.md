@@ -55,6 +55,25 @@ node apps/server/out/main.js install --service-dir /etc/systemd/system --run-as 
 非 root 账号绑不了 80 / 443：用防火墙把 80→8080、443→8443 转发，或者在 unit 里加
 `AmbientCapabilities=CAP_NET_BIND_SERVICE` 后直接监听 443 并去掉 `ARMADRA_ACME_HTTP_PORT`。
 
+### 2.3 浏览器节点（可选 Chromium）
+
+缺省镜像不带浏览器：服务器壳上的浏览器节点要一个 Chromium，找不到时页面不给「新建浏览器」入口。要它就带构建参数自己构建：
+
+```sh
+docker build --build-arg WITH_CHROMIUM=1 -f apps/server/docker/Dockerfile -t armadra-server:chromium .
+```
+
+镜像里多装 Debian 的 `chromium` 与中日韩字体（解压后多约 770 MiB，缺省镜像约 440 MiB），入口脚本设 `ARMADRA_BROWSER_PATH=/usr/bin/chromium`（自己设了
+就以你的为准），`GET /health` 的 `capabilities.headlessBrowser` 变为 `true`。
+
+- **Chromium 自己的沙箱是关的**（`/etc/chromium.d/armadra` 里的 `--no-sandbox`）：容器缺省的 seccomp 不放用户命名空间，
+  SUID 沙箱也要 `CAP_SYS_ADMIN`，两条都起不来。隔离靠容器本身——uid 10001、没有额外 capability、只挂 `/data` 与项目目录。
+  能给容器配允许用户命名空间的 seccomp 时，删掉那个文件即可恢复沙箱。
+- `/dev/shm` 缺省只有 64 MiB，同一个文件里加了 `--disable-dev-shm-usage`；也可以 `--shm-size=1g` 后删掉它。
+- 浏览器节点能打开容器网络里够得到的任何地址：内网有不该被访问的服务时，用容器网络或防火墙限制出站。
+- 验证：`node tools/probes/server-e2e.mjs --container=armadra-server:chromium [--build --with-chromium]` 会照走浏览器节点一步
+  （探针页在容器自己的回环上），缺省镜像则记 skipped。
+
 ## 3. 域名与证书
 
 服务器壳只说 HTTPS（`__Host-` Cookie 要求安全上下文），证书有四个来源，`status` 与 `GET /api/gateway` 的 `tls.source` 会说明是哪一个。
@@ -62,7 +81,10 @@ node apps/server/out/main.js install --service-dir /etc/systemd/system --run-as 
 ### 3.1 ACME 内建（直接对公网时推荐）
 
 `serve --acme <邮箱>` 或环境变量 `ARMADRA_ACME_EMAIL`。启动时向 Let's Encrypt 给 `--public-origin` 的每个主机名签一张证书，
-走 `http-01`：服务器壳自己在 80 端口（`ARMADRA_ACME_HTTP_PORT`，镜像里是 8080）答挑战，那个端口上别的请求一律 308 到 HTTPS。
+缺省走 `http-01`：服务器壳自己在 80 端口（`ARMADRA_ACME_HTTP_PORT`，镜像里是 8080）答挑战，那个端口上别的请求一律 308 到 HTTPS。
+不想开 80 时设 `ARMADRA_ACME_CHALLENGE=tls-alpn-01`：CA 的验证握手打对外 443（ALPN `acme-tls/1`），由服务器壳自己的 TLS
+监听出示挑战证书，不再开明文端口。首签时监听还没起，服务器壳在 `--listen` 的地址上临时答一次验证再正式监听；外部 443
+要转到 `--listen` 的端口，中间不能有终止 TLS 的代理（3.3 的反代场景用不了它）。
 
 - 证书、私钥、账户密钥与续期状态在 `<数据目录>/tls/acme/`（目录 0700，文件 0600）。
 - 寿命过去三分之二时自动续，续好当场热换，连接不断。失败按 1、2、4…小时退避（最多 12 小时），**一直用旧证书**直到它过期；
@@ -76,9 +98,13 @@ node apps/server/out/main.js install --service-dir /etc/systemd/system --run-as 
 | `ARMADRA_ACME_PROFILE`                              | `shortlived`（6 天）或 `classic`；对外来源是公网 IP 时自动取 `shortlived`（IP 证书只有它） |
 | `ARMADRA_ACME_CA_BUNDLE`                            | 私有 ACME CA（step-ca 等）的根证书 PEM 路径                                                |
 | `ARMADRA_ACME_HTTP_PORT` / `ARMADRA_ACME_HTTP_HOST` | 挑战监听的端口与地址                                                                       |
+| `ARMADRA_ACME_CHALLENGE`                            | `http-01`（缺省）或 `tls-alpn-01`                                                          |
 
 本地演练：`pnpm dev-stack up pebble`，`ARMADRA_ACME_DIRECTORY=https://127.0.0.1:14000/dir`，
-`ARMADRA_ACME_CA_BUNDLE` 指向 Pebble 镜像里的 `/test/certs/pebble.minica.pem`（`docker compose cp` 取出）。
+`ARMADRA_ACME_CA_BUNDLE` 指向 Pebble 镜像里的 `/test/certs/pebble.minica.pem`（`docker compose cp` 取出）。这一份 Pebble 不回连挑战；
+要真验证用 `pnpm dev-stack up pebble-va --profile pebble-va`（目录 `https://127.0.0.1:14100/dir`），它按
+`host.docker.internal` 回连 `tls-alpn-01` 的 5001 与 `http-01` 的 5002 端口——对外来源写 `https://host.docker.internal`，
+监听与挑战端口绑在本机回环上即可（macOS 的容器运行时转得到，Linux 上宿主回环对容器不通）。
 
 ### 3.2 运维给的证书
 
@@ -126,7 +152,8 @@ server {
 }
 ```
 
-Caddy（2.8+；`Host` 缺省就原样转发）：
+Caddy（2.8+；`Host` 缺省就原样转发；同一份配置换成环境变量后在 `tools/dev-stack/caddy/Caddyfile`，
+`node tools/probes/server-e2e.mjs --proxy=caddy` 经它走完配对、邀请、事件流与撤销，`pnpm dev-stack up caddy --profile caddy` 可手动演练）：
 
 ```caddyfile
 armadra.example.com {

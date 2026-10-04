@@ -35,6 +35,8 @@ export interface AcpCore {
     title?: string;
     /** 节点绑定的凭据条目名（`agent.account.credentialRef`，契约 §20.3）。 */
     credentialRef?: string;
+    /** SSH 节点：`data.ssh.hostId`（契约 §26 的 SSH 小节）。 */
+    sshHostId?: string;
   }): Promise<string>;
   /** 连一条边（`link`）。 */
   link(source: string, target: string): Promise<void>;
@@ -63,8 +65,8 @@ export async function until<T>(
 export async function acpCore(
   options: {
     minimal?: boolean;
-    /** 换一个假 Agent 程序（契约 §26 的用例：`feature-fixture.ts`）。 */
-    agentPath?: string;
+    /** 假 Agent 开会话答模型配置项（契约 §26.2 的用例：`--config-options`）。 */
+    configOptions?: boolean;
     /** 自定义条目的基础 CLI；缺省 `opencode`。 */
     baseAgent?: string;
     /** 节点凭据用的密钥后端（缺省按数据目录解析）。 */
@@ -98,8 +100,9 @@ export async function acpCore(
           label: "Fake ACP",
           launchCmd: process.execPath,
           args: [
-            options.agentPath ?? fakeAcpAgentPath(),
+            fakeAcpAgentPath(),
             ...(options.minimal ? ["--minimal"] : []),
+            ...(options.configOptions ? ["--config-options"] : []),
           ],
           baseAgent: options.baseAgent ?? "opencode",
         },
@@ -171,6 +174,9 @@ export async function acpCore(
           data: {
             kind: "terminal",
             cwd: core.directory,
+            ...(input.sshHostId === undefined
+              ? {}
+              : { ssh: { hostId: input.sshHostId } }),
             agent: {
               id: input.agentId ?? FAKE_AGENT,
               driver: input.driver ?? "acp",

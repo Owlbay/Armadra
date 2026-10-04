@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   cacheControlFor,
   contentTypeFor,
+  desktopWebRootCandidates,
+  firstWebRoot,
   hashedAsset,
   openWebRoot,
   resolveFile,
@@ -86,5 +88,52 @@ describe("静态托管", () => {
     expect(headers["x-content-type-options"]).toBe("nosniff");
     expect(headers["content-security-policy"]).toContain("default-src 'self'");
     expect(headers["cache-control"]).toBe("no-store");
+  });
+});
+
+describe("桌面壳 Gateway 的产物位置", () => {
+  it("环境变量、打包版资源目录（asar 外、unpacked、asar 里）、入口旁边、检出，按这个顺序", () => {
+    const resources = resolve("/Applications/Armadra.app/Contents/Resources");
+    const entry = join(resources, "app.asar", "out", "core", "main.js");
+    const checkout = tempDir("armadra-checkout-");
+    mkdirSync(join(checkout, "apps/web/dist"), { recursive: true });
+    writeFileSync(
+      join(checkout, "apps/web/dist/index.html"),
+      "<!doctype html>",
+    );
+    const nested = join(checkout, "apps/desktop");
+    mkdirSync(nested, { recursive: true });
+    expect(
+      desktopWebRootCandidates({
+        env: { ARMADRA_GATEWAY_WEB_ROOT: "/srv/web" },
+        resourcesPath: resources,
+        entry,
+        cwd: nested,
+      }),
+    ).toEqual([
+      resolve("/srv/web"),
+      join(resources, "renderer"),
+      join(resources, "app.asar.unpacked", "out", "renderer"),
+      // 入口旁边的 `../renderer` 与它是同一个，去重。
+      join(resources, "app.asar", "out", "renderer"),
+      join(checkout, "apps/web/dist"),
+    ]);
+    // 开发版：没有资源目录，入口在检出的 out/ 里。
+    expect(
+      desktopWebRootCandidates({
+        env: {},
+        entry: join(checkout, "apps/desktop/out/core/main.js"),
+        cwd: tempDir("armadra-elsewhere-"),
+      }),
+    ).toEqual([join(checkout, "apps/desktop/out/renderer")]);
+  });
+
+  it("取第一个有 index.html 的；都没有就是 undefined", async () => {
+    const empty = tempDir("armadra-webroot-empty-");
+    const { root } = fixture();
+    expect(await firstWebRoot([empty, root])).toMatchObject({
+      directory: resolve(root),
+    });
+    expect(await firstWebRoot([empty])).toBeUndefined();
   });
 });

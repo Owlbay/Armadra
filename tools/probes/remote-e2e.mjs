@@ -4,7 +4,8 @@
 // 空间用一遍：建工作空间、文件树与编辑保存、Git 状态 / 暂存 / 提交与一次 fetch
 // 长操作的进度和取消、远端语言服务、文件监听推送、资源面板按主机筛选、把工作
 // 空间在本机与远端之间来回切换；画布上一个 SSH 终端里的 Agent 拿到远端的画布
-// 注入（技能、说明与 Hook，经 Worker 中继回到 core）；本机工作空间里一个跑在
+// 注入（技能、说明与 Hook，经 Worker 中继回到 core）；同一台主机上的 SSH 节点以
+// ACP 驱动（适配器经 ssh 起在那边，答一轮、切终端再切回）；本机工作空间里一个跑在
 // 假远端 SSH 终端里的 Agent 把交接材料交给本机 Agent，转录经那台主机的 Worker
 // 读（契约 §21.1），执行主机页显示 Worker 版本并重新同步（§21.2）。每一步都截图。
 //
@@ -982,6 +983,137 @@ async function scenario(ctx) {
         : `${status.session_id} · ${status.last_event_at ?? ""}`,
     );
     await page.capture("08-remote-injection");
+    await api(`/api/terminals/${session.id}/terminate`, {
+      method: "POST",
+      body: { mode: "process" },
+      allowFailure: true,
+    });
+  });
+
+  /* ---------- 8b. SSH 节点以 ACP 驱动：一轮回复、切终端再切回（§26） ---------- */
+
+  await attempt(ctx, "08b-remote-acp", async () => {
+    const workspaceId = ctx.remote.id;
+    // 假 ACP Agent（`@armadra/agent/acp` 的那一个）登记成基础 CLI 为 OpenCode
+    // 的自定义条目：适配器经假 ssh 起在「执行主机」上，装没装由 Worker 的
+    // `agents.probe` 答。
+    const fakeAgent = join(
+      root,
+      "apps/desktop/node_modules/@armadra/agent/dist/drivers/acp/testing/fake-agent-main.js",
+    );
+    await api("/api/settings", {
+      method: "PATCH",
+      body: {
+        agents: {
+          custom: [
+            {
+              id: "custom:remote-acp",
+              label: "Remote ACP",
+              launchCmd: process.execPath,
+              args: [fakeAgent],
+              baseAgent: "opencode",
+            },
+          ],
+        },
+      },
+    });
+    const board = (await api(`/api/workspaces/${workspaceId}/boards`)).body[0];
+    const documentPath = `/api/workspaces/${workspaceId}/boards/${board.id}/document`;
+    const current = (await api(documentPath)).body;
+    const stamp = new Date().toISOString();
+    const nodeId = randomUUID();
+    await api(documentPath, {
+      method: "PUT",
+      body: {
+        expectedUpdatedAt: current.board.updatedAt,
+        nodes: [
+          ...current.nodes,
+          {
+            id: nodeId,
+            boardId: board.id,
+            type: "terminal",
+            title: "远端 ACP",
+            color: "#0a84ff",
+            position: { x: 1500, y: 600 },
+            size: { width: 520, height: 330 },
+            labels: [],
+            note: "",
+            data: {
+              kind: "terminal",
+              cwd: ctx.project,
+              agent: { id: "custom:remote-acp", driver: "acp" },
+              ssh: { hostId: HOST_ID },
+            },
+            createdAt: stamp,
+            updatedAt: stamp,
+          },
+        ],
+        edges: current.edges,
+        viewport: current.board.viewport ?? { x: 0, y: 0, zoom: 1 },
+        whiteboard: current.whiteboard ?? "",
+      },
+    });
+    const texts = async (sessionId) =>
+      (await api(`/api/acp/sessions/${sessionId}/log`)).body.entries.flatMap(
+        (entry) => entry.blocks.map((block) => block.text ?? ""),
+      );
+    const waitText = async (sessionId, wanted) => {
+      for (let round = 0; round < 150; round += 1) {
+        if ((await texts(sessionId)).includes(wanted)) return true;
+        await sleep(100);
+      }
+      return false;
+    };
+    const session = (
+      await api("/api/acp/sessions", {
+        method: "POST",
+        body: {
+          workspaceId,
+          nodeId,
+          cwd: ctx.project,
+          agentId: "custom:remote-acp",
+          prompt: "远端一轮",
+        },
+      })
+    ).body;
+    check(
+      session.backend === "acp" &&
+        (await waitText(session.id, "echo: 远端一轮")),
+      "SSH 节点以 ACP 驱动：适配器在执行主机上答了一轮",
+      session.id,
+    );
+    await page.capture("08b-remote-acp");
+
+    const toTerminal = await api(`/api/acp/nodes/${nodeId}/driver`, {
+      method: "POST",
+      body: { driver: "terminal" },
+    });
+    const asTerminal = (await api(`/api/terminals/${session.id}`)).body;
+    check(
+      toTerminal.body.sessionId === session.id &&
+        asTerminal.backend !== "acp" &&
+        asTerminal.generation === session.generation + 1,
+      "切到终端：同一行下一代，经 SSH 起",
+      `${asTerminal.backend} · 第 ${asTerminal.generation} 代`,
+    );
+    const toAcp = await api(`/api/acp/nodes/${nodeId}/driver`, {
+      method: "POST",
+      body: { driver: "acp" },
+    });
+    check(
+      toAcp.body.sessionId === session.id && toAcp.body.resumed === true,
+      "切回 ACP：接回同一个会话",
+      JSON.stringify(toAcp.body),
+    );
+    await api(`/api/acp/sessions/${session.id}/prompt`, {
+      method: "POST",
+      body: { text: "切回之后" },
+    });
+    check(
+      await waitText(session.id, "echo: 切回之后"),
+      "切回之后远端适配器照常答复",
+    );
+    await page.capture("08b-remote-acp-switched");
     await api(`/api/terminals/${session.id}/terminate`, {
       method: "POST",
       body: { mode: "process" },

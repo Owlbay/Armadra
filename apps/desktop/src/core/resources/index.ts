@@ -29,6 +29,8 @@ import {
 } from "./power";
 import { KeepAwake } from "./keep-awake";
 import { HostAwareResourceService } from "./hosts";
+import { ThresholdMonitor, ThresholdWatch } from "./thresholds";
+import { DEFAULT_MEMORY_WARN_BYTES } from "../settings/schema";
 import type { ResourceService, SubscribeRequest } from "./service";
 import {
   OrphanError,
@@ -100,6 +102,16 @@ export function install(context: CoreContext): ResourceDomain {
     }
   });
   keepAwake.start();
+  // 会话内存越线（契约 §27.4）：判定在 core，推送据此叫人。
+  const thresholds = new ThresholdMonitor((workspaceId, event) =>
+    context.bus.emit("workspace.event", { workspaceId, event }),
+  );
+  const memoryWarnBytes = (): number => {
+    const value = settingsDomain()?.settings.get("resources.memoryWarnBytes");
+    return typeof value === "number" && value > 0
+      ? value
+      : DEFAULT_MEMORY_WARN_BYTES;
+  };
   // 远端主机的总览与 SSH 会话的远端进程树叠在本机那一份上（`hosts.ts`）。
   const service = new HostAwareResourceService({
     database: context.db.database,
@@ -107,7 +119,23 @@ export function install(context: CoreContext): ResourceDomain {
     bus: context.bus,
     dataDir: context.dataDir,
     power: () => power.state(),
+    onSample: (snapshot) =>
+      thresholds.observe(
+        snapshot.workspaceId,
+        snapshot.sessions,
+        memoryWarnBytes(),
+      ),
   });
+  // 没人看着时：有设备登记了推送才自己慢慢采。
+  const watch = new ThresholdWatch({
+    monitor: thresholds,
+    workspaces: () => runningWorkspaces(context),
+    sample: (workspaceId) => service.snapshot(workspaceId).sessions,
+    threshold: memoryWarnBytes,
+    wanted: () => pushRecipients(context),
+    watched: (workspaceId) => service.watching(workspaceId),
+  });
+  watch.start();
   const { router } = context.server;
 
   // 工作空间不存在时先答 404，和 Rust 的 `db::get_workspace(...)?` 同一个位置。
@@ -275,12 +303,45 @@ export function install(context: CoreContext): ResourceDomain {
     power,
     stop: () => {
       unsubscribe();
+      watch.stop();
       keepAwake.stop();
       service.stop();
       power.stop();
     },
   };
   return assembled;
+}
+
+/** 现在有在跑的终端会话的工作空间。 */
+function runningWorkspaces(context: CoreContext): string[] {
+  try {
+    return (
+      context.db.database
+        .prepare(
+          "SELECT DISTINCT workspace_id FROM terminal_sessions WHERE status = 'running'",
+        )
+        .all() as { workspace_id: string }[]
+    ).map((row) => row.workspace_id);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 有没有一台还有效的推送设备。直接问表而不是 import 推送域：资源域装在推送
+ * 之前，而且没过统一库迁移的库里根本没有这张表（答「没有」）。
+ */
+function pushRecipients(context: CoreContext): boolean {
+  try {
+    const row = context.db.database
+      .prepare(
+        "SELECT 1 AS ok FROM push_devices WHERE revoked_at_ms = 0 LIMIT 1",
+      )
+      .get() as { ok?: number } | undefined;
+    return row?.ok === 1;
+  } catch {
+    return false;
+  }
 }
 
 const LEASE_SOURCES: readonly PowerLeaseSource[] = [

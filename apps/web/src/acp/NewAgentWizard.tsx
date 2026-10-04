@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Copy } from "lucide-react";
+import { Copy, FolderOpen } from "lucide-react";
 import { toast } from "sonner";
 import {
   supportedPermissionModes,
@@ -17,6 +17,7 @@ import {
   ResponsiveDialogHeader,
   ResponsiveDialogTitle,
 } from "@/panels/ResponsiveDialog";
+import { isDesktop, pickDirectory } from "@/platform";
 import { useCompactLayout } from "@/platform/layout";
 import { useCanvasStore } from "@/store/canvas-store";
 import { AgentAvatar } from "@/ui/agent-avatar";
@@ -155,6 +156,7 @@ export function WizardBody({
   onCancel,
   onCreate,
   onOpenSettings,
+  onPickFolder,
 }: {
   state: WizardState;
   onChange: (patch: Partial<WizardState>) => void;
@@ -164,6 +166,8 @@ export function WizardBody({
   onCancel: () => void;
   onCreate: () => void;
   onOpenSettings: () => void;
+  /** 「选择文件夹…」：只有桌面壳、本机工作空间才给（系统选择器选的是本机路径）。 */
+  onPickFolder?: () => void;
 }) {
   const t = useT();
   const listed = wizardAgents(agents);
@@ -267,6 +271,17 @@ export function WizardBody({
             ))}
           </SelectContent>
         </Select>
+        {onPickFolder && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="self-start"
+            onClick={onPickFolder}
+          >
+            <FolderOpen />
+            {t("wizard.folder.pick")}
+          </Button>
+        )}
       </Field>
     );
   } else {
@@ -423,16 +438,21 @@ export function NewAgentWizard() {
   const compact = useCompactLayout();
   const agents = useAgentsQuery().data ?? [];
   const rootPath = useCanvasStore((state) => state.workspace?.rootPath ?? "");
+  const local = useCanvasStore(
+    (state) => (state.workspace?.executionHostId ?? "") === "",
+  );
   const nodes = useCanvasStore((state) => state.document?.nodes);
+  /** 这次打开里经系统选择器选过的目录：排在根之后，选中即用。 */
+  const [picked, setPicked] = React.useState<string | null>(null);
   const folders = React.useMemo(
     () =>
-      folderChoices(
-        rootPath,
-        (nodes ?? []).map((node) =>
+      folderChoices(rootPath, [
+        picked ?? undefined,
+        ...(nodes ?? []).map((node) =>
           node.data.kind === "terminal" ? node.data.cwd : undefined,
         ),
-      ),
-    [nodes, rootPath],
+      ]),
+    [nodes, picked, rootPath],
   );
   const [state, setState] = React.useState<WizardState>(() =>
     initialWizardState(agents, rootPath),
@@ -440,7 +460,10 @@ export function NewAgentWizard() {
 
   // 每次打开都从第一步开始；Agent 列表晚到时补上缺省选中。
   React.useEffect(() => {
-    if (open) setState(initialWizardState(agents, rootPath));
+    if (open) {
+      setState(initialWizardState(agents, rootPath));
+      setPicked(null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   React.useEffect(() => {
@@ -466,6 +489,13 @@ export function NewAgentWizard() {
     }
   };
 
+  const pickFolder = async () => {
+    const path = await pickDirectory();
+    if (!path) return;
+    setPicked(path);
+    change({ folder: path });
+  };
+
   const openSettings = () => {
     closeNewAgentWizard();
     usePreferencesStore.getState().setLastSettingsSection("integration");
@@ -482,6 +512,9 @@ export function NewAgentWizard() {
       onCancel={closeNewAgentWizard}
       onCreate={() => void create()}
       onOpenSettings={openSettings}
+      {...(isDesktop() && local
+        ? { onPickFolder: () => void pickFolder() }
+        : {})}
     />
   );
 

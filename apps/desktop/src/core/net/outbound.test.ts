@@ -94,12 +94,21 @@ describe("出站地址表", () => {
   it("崩溃上报：DSN 为空即关，缺省关（外部服务 §11.2）", () => {
     expect(OUTBOUND.crashReport.switch).toBe("diagnostics.crashReportDsn");
     expect(OUTBOUND.crashReport.defaultOn).toBe(false);
+    // UnifiedPush 的端点是用户给的：没有开关，设备没有端点就不连。
+    expect(OUTBOUND.unifiedPush.switch).toBeNull();
+    expect(OUTBOUND.unifiedPush.defaultOn).toBe(false);
   });
 
   it("邮件通道：不配置即不联网，地址是用户给的", () => {
     expect(OUTBOUND.smtp.switch).toBeNull();
     expect(OUTBOUND.smtp.defaultOn).toBe(false);
     expect(OUTBOUND.smtp.url.startsWith("smtp://")).toBe(true);
+  });
+
+  it("托管平台：不配置即不联网，地址是用户给的（契约 §29）", () => {
+    expect(OUTBOUND.forgeApi.switch).toBeNull();
+    expect(OUTBOUND.forgeApi.defaultOn).toBe(false);
+    expect(OUTBOUND.forgeApi.url).toContain("<");
   });
 
   it("未登记的地址不算登记，前缀只按路径边界匹配", () => {

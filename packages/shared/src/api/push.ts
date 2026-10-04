@@ -39,6 +39,18 @@ export const PUSH_KINDS = [
 export const pushKindSchema = z.enum(PUSH_KINDS);
 export type PushKind = (typeof PUSH_KINDS)[number];
 
+/**
+ * The kinds a device can switch off (§27.1). `test` is not one of them: a
+ * person who asks for a test notification wants to see it.
+ */
+export const PUSH_PREFERENCE_KINDS = PUSH_KINDS.filter(
+  (kind): kind is Exclude<PushKind, "test"> => kind !== "test",
+);
+export type PushPreferenceKind = (typeof PUSH_PREFERENCE_KINDS)[number];
+export const pushPreferenceKindSchema = z.enum(
+  PUSH_PREFERENCE_KINDS as [PushPreferenceKind, ...PushPreferenceKind[]],
+);
+
 /** `GET /api/push/config` (§19.1). */
 export const pushConfigSchema = z.object({
   webpush: z.object({
@@ -70,17 +82,33 @@ export const webPushRegistrationSchema = z.object({
   locale: z.enum(["zh-CN", "en"]).optional(),
 });
 
-/** `PUT /api/push/devices` body for a native app (§19.2). */
-export const nativePushRegistrationSchema = z.object({
-  platform: z.enum(["ios", "android"]),
-  transport: z.enum(["direct", "relay"]),
-  /** APNs / FCM token for `direct`, the relay token for `relay`. */
-  token: z.string().min(1).max(4096),
-  /** The device's X25519 public key (32 bytes, base64url). Required for relay. */
-  publicKey: base64url.optional(),
-  appVersion: z.string().max(64).optional(),
-  locale: z.enum(["zh-CN", "en"]).optional(),
-});
+/** `PUT /api/push/devices` body for a native app (§19.2, §27.2). */
+export const nativePushRegistrationSchema = z
+  .object({
+    platform: z.enum(["ios", "android"]),
+    transport: z.enum(["direct", "relay"]),
+    /**
+     * APNs / FCM token for `direct`, the relay token for `relay`. May be left
+     * out by an Android app that only has a UnifiedPush endpoint.
+     */
+    token: z.string().min(1).max(4096).optional(),
+    /**
+     * The device's X25519 public key (32 bytes, base64url). Required for relay
+     * and for UnifiedPush.
+     */
+    publicKey: base64url.optional(),
+    /**
+     * Android only: the endpoint the user's own UnifiedPush distributor (ntfy
+     * and the like) handed out. When present, notifications go there instead
+     * of `transport`, always sealed to `publicKey`.
+     */
+    unifiedpush: z.object({ endpoint: z.string().url().max(4096) }).optional(),
+    appVersion: z.string().max(64).optional(),
+    locale: z.enum(["zh-CN", "en"]).optional(),
+  })
+  .refine((value) => value.token !== undefined || value.unifiedpush, {
+    message: "token or unifiedpush is required",
+  });
 
 export const pushRegistrationSchema = z.union([
   webPushRegistrationSchema,
@@ -97,6 +125,10 @@ export const pushDeviceSchema = z.object({
   locale: z.string(),
   /** Whether what reaches the vendor is ciphertext. */
   encrypted: z.boolean(),
+  /** The kinds this device receives (§27.1); every kind until narrowed. */
+  kinds: z.array(pushPreferenceKindSchema).optional(),
+  /** Notifications reach this device through UnifiedPush (§27.2). */
+  unifiedpush: z.boolean().optional(),
   createdAt: z.string().datetime({ offset: true }),
   /** This is the device the request came from. */
   current: z.boolean(),
@@ -107,6 +139,12 @@ export const pushDeviceResponseSchema = z.object({ device: pushDeviceSchema });
 export const pushDeviceListSchema = z.object({
   devices: z.array(pushDeviceSchema),
 });
+/** `PATCH /api/push/devices/{deviceId}` body (§27.1). */
+export const pushDevicePreferencesSchema = z.object({
+  kinds: z.array(pushPreferenceKindSchema),
+});
+export type PushDevicePreferences = z.infer<typeof pushDevicePreferencesSchema>;
+
 export const pushRevokeResponseSchema = z.object({ revoked: z.boolean() });
 export const pushTestResponseSchema = z.object({
   queued: z.literal(true),

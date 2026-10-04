@@ -228,6 +228,60 @@ describe("IntegrationPage", () => {
     ).toBe("/Users/dev/.codex/config.toml.armadra-backup-20261002");
   });
 
+  /** 版本过旧与 ACP 未装各一个徽标；都正常时两个都不出现。 */
+  it("marks an out-of-date install and a missing ACP adapter", async () => {
+    mock.agents.mockReset().mockResolvedValue([
+      {
+        ...claude,
+        acp: {
+          support: "official",
+          program: "claude-agent-acp",
+          installed: false,
+          resume: "load",
+        },
+      },
+    ]);
+    mock.integration.mockResolvedValue({
+      agentId: "claude",
+      mode: "canvas",
+      hook: { installed: true, revision: 4 },
+      skill: { installed: true, revision: 12 },
+      legacy: { found: [] },
+      revision: 416,
+      installedRevision: 412,
+      stale: true,
+    });
+    view();
+    expect(await screen.findByText(zh("integration.stale"))).toBeTruthy();
+    expect(screen.getByText(zh("integration.acp.missing"))).toBeTruthy();
+  });
+
+  it("shows neither badge when current and the adapter is there", async () => {
+    mock.agents.mockReset().mockResolvedValue([
+      {
+        ...claude,
+        acp: {
+          support: "official",
+          program: "claude-agent-acp",
+          installed: true,
+          resume: "load",
+        },
+      },
+    ]);
+    mock.integration.mockResolvedValue({
+      agentId: "claude",
+      mode: "canvas",
+      hook: { installed: true, revision: 4 },
+      skill: { installed: true, revision: 12 },
+      legacy: { found: [] },
+      revision: 412,
+    });
+    view();
+    expect(await screen.findByText(zh("integration.mode.canvas"))).toBeTruthy();
+    expect(screen.queryByText(zh("integration.stale"))).toBeNull();
+    expect(screen.queryByText(zh("integration.acp.missing"))).toBeNull();
+  });
+
   /** 历史数据三项：没有数据写状态词，不写 0。 */
   it("shows the three history badges with a state word each", async () => {
     mock.agents.mockReset().mockResolvedValue([

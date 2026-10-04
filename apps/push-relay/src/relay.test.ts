@@ -103,6 +103,8 @@ function device(relayToken: string, publicKey: string): PushDevice {
     authSecret: "",
     appVersion: "",
     locale: "",
+    kinds: null,
+    unifiedpushEndpoint: "",
     createdAtMs: 1,
     revokedAtMs: 0,
   };

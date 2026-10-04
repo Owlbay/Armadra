@@ -4,6 +4,9 @@ import {
   finishTask,
   rebindTask,
   recordTaskStart,
+  reopenTask,
+  taskPrompt,
+  taskRowJson,
   taskRun,
   taskRunJson,
   taskRunsFor,
@@ -62,5 +65,49 @@ describe("task runs", () => {
     });
     expect(taskRunsFor(fixture.database, "lead")).toHaveLength(1);
     expect(taskRunsFor(fixture.database, "other")).toHaveLength(0);
+  });
+
+  it("keeps the task text through finish, rebind and reopen", () => {
+    recordTaskStart(fixture.database, {
+      taskId: "t2",
+      coordinatorNodeId: "lead",
+      runnerId: "claude",
+      nodeId: "n1",
+      now: 1_000,
+      task: "审查 src/x",
+    });
+    expect(reopenTask(fixture.database, "t2", 1_500)).toBe(false);
+    finishTask(
+      fixture.database,
+      "t2",
+      "failed",
+      { reason: "turnFailed" },
+      2_000,
+    );
+    let run = taskRun(fixture.database, "t2")!;
+    expect(run.result).toEqual({ reason: "turnFailed", task: "审查 src/x" });
+    expect(taskRowJson(run)).toMatchObject({
+      status: "failed",
+      reason: "turnFailed",
+      retryable: true,
+    });
+    expect(reopenTask(fixture.database, "t2", 3_000)).toBe(true);
+    run = taskRun(fixture.database, "t2")!;
+    expect(run).toMatchObject({
+      status: "running",
+      startedAt: 3_000,
+      endedAt: null,
+    });
+    expect(taskPrompt(run)).toBe("审查 src/x");
+    rebindTask(fixture.database, "t2", "n3", 4_000);
+    expect(taskPrompt(taskRun(fixture.database, "t2")!)).toBe("审查 src/x");
+    finishTask(fixture.database, "t2", "done", null, 5_000);
+    expect(taskRun(fixture.database, "t2")!.result).toEqual({
+      task: "审查 src/x",
+    });
+    expect(taskRowJson(taskRun(fixture.database, "t2")!)).toMatchObject({
+      retryable: false,
+      reason: null,
+    });
   });
 });

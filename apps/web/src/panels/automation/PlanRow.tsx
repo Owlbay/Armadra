@@ -1,15 +1,15 @@
 import * as React from "react";
 
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { useQuery } from "@tanstack/react-query";
@@ -262,29 +262,29 @@ export function PlanRow({
         </div>
       )}
 
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={confirm !== null}
         onOpenChange={(open) => {
           if (!open) setConfirm(null);
         }}
       >
-        <AlertDialogContent className="z-[var(--z-dialog)]">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+        <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t(
                 confirm === "runNow"
                   ? "automation.confirmRunNow"
                   : "automation.confirmActivate",
               )}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
+            </ResponsiveAlertDialogTitle>
+            <ResponsiveAlertDialogDescription>
               {t(
                 confirm === "runNow"
                   ? "automation.confirmRunNowNote"
                   : "automation.confirmActivateNote",
               )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
+            </ResponsiveAlertDialogDescription>
+          </ResponsiveAlertDialogHeader>
           <dl className="grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
             <dt className="text-muted-foreground">
               {t("automation.configVersion")}
@@ -301,11 +301,11 @@ export function PlanRow({
               {digest}
             </dd>
           </dl>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="min-h-10">
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel className="min-h-10">
               {t("automation.cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               className="min-h-10"
               disabled={busy}
               onClick={() => {
@@ -320,10 +320,10 @@ export function PlanRow({
                   ? "automation.runNow"
                   : "automation.activate",
               )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </section>
   );
 }

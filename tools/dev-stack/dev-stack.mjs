@@ -225,6 +225,18 @@ export async function main(argv) {
 
   ensureDevEnv();
   if (command === "down") {
+    // 点了名就只停这几个：dev-stack 在各 worktree 之间共用一个 compose 项目，
+    // 不点名的 down 会把别人正在用的服务一起停掉。
+    if (options.names.length > 0) {
+      const args = [
+        "rm",
+        "-s",
+        "-f",
+        ...(options.volumes ? ["-v"] : []),
+        ...options.names,
+      ];
+      return compose(args, { profiles: ALL_PROFILES }).status ?? 1;
+    }
     const args = ["down", "--remove-orphans"];
     if (options.volumes) args.push("--volumes");
     return compose(args, { profiles: ALL_PROFILES }).status ?? 1;
@@ -253,7 +265,8 @@ export async function main(argv) {
       ...services.filter((s) => s.profile).map((s) => s.profile),
     ]),
   ];
-  const upArgs = ["up", "-d", "--remove-orphans"];
+  // 不带 --remove-orphans：别的 worktree 起的、不在这次 profile 里的服务不算孤儿。
+  const upArgs = ["up", "-d"];
   if (options.build) upArgs.push("--build");
   upArgs.push(...options.names);
   const up = compose(upArgs, { profiles });

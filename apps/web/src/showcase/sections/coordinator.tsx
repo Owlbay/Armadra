@@ -15,6 +15,8 @@ import "../../styles/canvas.css";
 import { useT } from "@/app/preferences-store";
 import { agentColorVar } from "@/agent/launch";
 import { edgeTypes } from "@/canvas/flow/edges/edge-types";
+import { DispatchView } from "@/coordinator/DispatchDrawer";
+import { buildDispatch } from "@/coordinator/model";
 import { NodeShell } from "@/nodes/NodeShell";
 import { Badge } from "@/ui/badge";
 import { ColorDot } from "@/ui/color-dot";
@@ -26,7 +28,11 @@ import {
   COORDINATOR_EDGES,
   COORDINATOR_IDS,
   COORDINATOR_NODES,
+  DISPATCH_NOW,
+  DISPATCH_STATES,
+  DISPATCH_TASKS,
   DRAFT,
+  SUMMARY_NODE,
   WORKING_STEP,
 } from "../fixtures/coordinator";
 
@@ -34,7 +40,9 @@ import {
  * `coordinator` 分区（设计展示页 §2.1，设计系统 §5.4）：ama 分派三个成员。
  *
  * 画布上的真组件：节点外壳、状态胶囊、主从边（「驱动」）、运行中成员头部的
- * 「第 n 步」（`WorkflowStepBadge`）；ama 头部多一枚「3 成员」。右边是
+ * 「第 n 步」与已完成成员的 1px `--success` 外框（`WorkflowStepBadge`）；ama
+ * 头部多一枚「3 成员」。下面是真的分派抽屉内容（`DispatchView`，数据由
+ * `buildDispatch` 从同一份夹具算出）：有数据、空、离线三种；右边是
  * `workflow_propose` 落下的真草案卡。节点体是静态的一行字——真终端要连 core。
  */
 
@@ -110,8 +118,9 @@ export default function CoordinatorSection() {
   React.useEffect(() => {
     useWorkflowNodeSteps.setState({
       steps: { [COORDINATOR_IDS.working]: WORKING_STEP },
+      done: { [COORDINATOR_IDS.done]: true },
     });
-    return () => useWorkflowNodeSteps.setState({ steps: {} });
+    return () => useWorkflowNodeSteps.setState({ steps: {}, done: {} });
   }, []);
 
   // 手机宽度下整块等比缩小，不出横向滚动（同 canvas 分区）。
@@ -168,9 +177,61 @@ export default function CoordinatorSection() {
           </ReactFlow>
         </div>
       </div>
-      <div className="min-w-0 max-w-[360px]">
-        <DraftCard row={DRAFT} />
+      <div className="flex min-w-0 flex-wrap items-start gap-6">
+        <DrawerFrame>
+          <DispatchView model={DISPATCH} onFocusLead={() => {}} />
+        </DrawerFrame>
+        <DrawerFrame>
+          <DispatchView model={EMPTY} onFocusLead={() => {}} />
+        </DrawerFrame>
+        <DrawerFrame>
+          <DispatchView model={DISPATCH} offline />
+        </DrawerFrame>
+        <div className="min-w-0 max-w-[360px]">
+          <DraftCard row={DRAFT} />
+        </div>
       </div>
     </div>
+  );
+}
+
+const DISPATCH = buildDispatch({
+  coordinatorId: COORDINATOR_IDS.lead,
+  nodes: [...COORDINATOR_NODES, SUMMARY_NODE],
+  edges: COORDINATOR_EDGES.map((edge) => ({
+    ...edge,
+    boardId: SUMMARY_NODE.boardId,
+    kind: "link" as const,
+    role: "supervises" as const,
+    createdAt: SUMMARY_NODE.createdAt,
+    updatedAt: SUMMARY_NODE.createdAt,
+  })),
+  tasks: DISPATCH_TASKS,
+  states: DISPATCH_STATES,
+  now: DISPATCH_NOW,
+});
+
+const EMPTY = buildDispatch({
+  coordinatorId: COORDINATOR_IDS.lead,
+  nodes: COORDINATOR_NODES.slice(0, 1),
+  edges: [],
+  tasks: [],
+  states: {},
+  now: DISPATCH_NOW,
+});
+
+/** 抽屉的样子：`--drawer-w` 宽、面板底、1px 边、40px 头部（与真抽屉同一套）。 */
+function DrawerFrame({ children }: { children: React.ReactNode }) {
+  const t = useT();
+  return (
+    <section
+      data-showcase-dispatch
+      className="w-[min(100%,var(--drawer-w))] min-w-0 overflow-hidden rounded-[var(--r-panel)] border border-border bg-[var(--panel)]"
+    >
+      <div className="flex h-10 items-center border-b border-border px-3 text-[13px] font-semibold">
+        {t("coordinator.title")}
+      </div>
+      {children}
+    </section>
   );
 }

@@ -13,6 +13,9 @@
  * data operation wearing a preference's clothes.
  */
 
+import { accessSync, constants, statSync } from "node:fs";
+import { delimiter, isAbsolute, join } from "node:path";
+
 import type { SshHost } from "../settings/ssh-hosts";
 import { nodeProbeArgv } from "../terminal/ssh/argv";
 import { redactSecrets, tail } from "../terminal/ssh/redact";
@@ -122,4 +125,70 @@ export function unsupportedMessage(host: SshHost, probe: NodeProbe): string {
     return `无法在执行主机 ${host.name} 上探测 Node：${probe.detail}`;
   }
   return `执行主机 ${host.name} 上没有 Node。这个构建的远端 Worker 是一份 JavaScript 包，需要目标机自带 Node ${MINIMUM_NODE_MAJOR} 或更新`;
+}
+
+/* ------------------------------ agents.probe ------------------------------ */
+
+/** 一次最多问这么多个程序。 */
+const MAX_PROGRAMS = 32;
+
+/**
+ * 能问的程序：裸程序名，或一个绝对路径（`custom:` 条目的启动程序）。别的
+ * （相对路径、带控制字符）不问，答 `null`。
+ */
+const PROGRAM_NAME = /^[A-Za-z0-9._@+-]{1,128}$/u;
+
+export interface AgentsProbe {
+  /** Worker 这台机器的 `process.platform`。 */
+  readonly platform: string;
+  /** 程序 → 在这台机器的 `PATH` 上找到的路径；没有为 `null`。 */
+  readonly programs: Readonly<Record<string, string | null>>;
+}
+
+function executable(path: string): boolean {
+  try {
+    if (!statSync(path).isFile()) return false;
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `agents.probe`（Worker 侧，契约 §26 的 SSH 小节）：执行主机上装没装这些
+ * 程序。按 Worker 自己的 `PATH` 找——Worker 与 SSH 节点的 ACP 适配器都由同一种
+ * 非交互 `ssh` 起，看到的是同一个环境。只读、不起任何进程。
+ */
+export function probeAgents(
+  args: Record<string, unknown>,
+  env: NodeJS.ProcessEnv = process.env,
+): AgentsProbe {
+  const requested = Array.isArray(args.programs)
+    ? args.programs.filter(
+        (value): value is string => typeof value === "string",
+      )
+    : [];
+  const directories = (env.PATH ?? "")
+    .split(delimiter)
+    .filter((entry) => entry !== "" && isAbsolute(entry));
+  const programs: Record<string, string | null> = {};
+  for (const program of requested.slice(0, MAX_PROGRAMS)) {
+    if (isAbsolute(program)) {
+      programs[program] =
+        !/[\u0000-\u001f\u007f]/u.test(program) && executable(program)
+          ? program
+          : null;
+      continue;
+    }
+    if (!PROGRAM_NAME.test(program)) {
+      programs[program] = null;
+      continue;
+    }
+    programs[program] =
+      directories
+        .map((directory) => join(directory, program))
+        .find((candidate) => executable(candidate)) ?? null;
+  }
+  return { platform: process.platform, programs };
 }

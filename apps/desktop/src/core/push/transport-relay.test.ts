@@ -41,6 +41,8 @@ function device(publicKey: string): PushDevice {
     authSecret: "",
     appVersion: "1.0.0",
     locale: "zh-CN",
+    kinds: null,
+    unifiedpushEndpoint: "",
     createdAtMs: 1,
     revokedAtMs: 0,
   };

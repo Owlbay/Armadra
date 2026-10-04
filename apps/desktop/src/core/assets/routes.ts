@@ -91,8 +91,8 @@ export function install(context: CoreContext): void {
     }),
   );
 
-  // 输出到画板的代码块（契约 §14.5）。远端工作空间的 Worker 没有对应的操作，
-  // 答 501——页面把这一项当失败提示，不在本机落一份对方看不到的文件。
+  // 输出到画板的代码块（契约 §14.5）：落在来源 Agent 节点的工作目录里（在
+  // 工作区内时），远端工作空间经 Worker 的 `assets.exportText` 落在那台机器上。
   server.router.handle(
     "POST",
     "/api/workspaces/{workspaceId}/exports/{exportId}/text",
@@ -105,26 +105,42 @@ export function install(context: CoreContext): void {
           "This workspace is opened read-only",
         );
       }
-      if (isRemote(workspace)) {
-        throw new DomainError(
-          501,
-          "unsupported",
-          "Text exports are not available on a remote workspace",
-        );
-      }
       const body = jsonObject(request.body);
       const name = optionalString(body, "name");
       const content = optionalString(body, "content");
       if (name === undefined || content === undefined) {
         throw badRequest("Export body needs a name and a content");
       }
+      const exportId = match.params.exportId ?? "";
+      const cwd = agentCwd(database, workspace.id, exportId);
+      if (isRemote(workspace)) {
+        const bytes = Buffer.from(content, "utf8");
+        return {
+          status: 200,
+          body: await withStaged(
+            workspace,
+            bytes,
+            INLINE_FILE_BYTES,
+            (carried) =>
+              executeOn(workspace, "assets.exportText", {
+                exportId,
+                name,
+                ...(cwd === undefined ? {} : { cwd }),
+                ...(carried.transfer === undefined
+                  ? { content }
+                  : { transfer: carried.transfer }),
+              }),
+          ),
+        };
+      }
       return {
         status: 200,
         body: writeTextExport(
           canonicalDirectory(workspace.rootPath),
-          match.params.exportId ?? "",
+          exportId,
           name,
           content,
+          cwd,
         ),
       };
     }),
@@ -239,6 +255,24 @@ export function install(context: CoreContext): void {
       };
     }),
   );
+}
+
+/**
+ * 来源 Agent 节点的工作目录：这个工作空间里归它的最近一个终端会话的 `cwd`。
+ * 页面不传路径——写到哪里只由 core 自己记的会话决定。
+ */
+export function agentCwd(
+  database: CoreContext["db"]["database"],
+  workspaceId: string,
+  nodeId: string,
+): string | undefined {
+  const row = database
+    .prepare(
+      "SELECT cwd FROM terminal_sessions WHERE workspace_id = ? AND owner_node_id = ? " +
+        "ORDER BY (status = 'running') DESC, generation DESC, created_at DESC LIMIT 1",
+    )
+    .get(workspaceId, nodeId.toLowerCase()) as { cwd: string } | undefined;
+  return row?.cwd === "" ? undefined : row?.cwd;
 }
 
 /** 资产答案的 CSP：图片用不到任何来源，文档化的 SVG 什么都做不了。 */

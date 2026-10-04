@@ -1173,7 +1173,7 @@ export const ROUTES: readonly RouteEntry[] = [
   },
   {
     path: "/api/push/devices/{deviceId}",
-    methods: ["DELETE"],
+    methods: ["PATCH", "DELETE"],
     surface: "runtime",
     implemented: true,
   },
@@ -1199,6 +1199,80 @@ export const ROUTES: readonly RouteEntry[] = [
   },
   {
     path: "/api/mail/password-reset",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  // 托管平台（契约 §29）：与 GitHub 同一档权限（`route-scopes.ts`）；
+  // `resolve` 是读，登记时声明 `github:read`。
+  {
+    path: "/api/forge/configs",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/configs/{host}",
+    methods: ["PUT", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/configs/{host}/{owner}/{name}",
+    methods: ["PUT", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/resolve",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/issues",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/issues/{number}",
+    methods: ["GET", "PATCH"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/pulls",
+    methods: ["GET", "POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}/files",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}/checks",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}/merge",
     methods: ["POST"],
     surface: "runtime",
     implemented: true,

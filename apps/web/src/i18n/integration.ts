@@ -25,6 +25,8 @@ export const integration: MessageModule = {
     "integration.history.cost": "成本：{state}",
     "integration.history.transcript": "转录：{state}",
     "integration.launcherWarning": "注入受限",
+    "integration.stale": "待重新生成",
+    "integration.acp.missing": "ACP 未安装", // i18n-exempt
     "integration.migrated": "已清理全局安装",
     "integration.regenerate": "重新生成",
     "integration.regenerated": "注入产物已重新生成",
@@ -60,6 +62,8 @@ export const integration: MessageModule = {
     "integration.history.cost": "Cost: {state}",
     "integration.history.transcript": "Transcript: {state}",
     "integration.launcherWarning": "Injection limited",
+    "integration.stale": "Out of date",
+    "integration.acp.missing": "ACP not installed",
     "integration.migrated": "Global install removed",
     "integration.regenerate": "Regenerate",
     "integration.regenerated": "Injection regenerated",

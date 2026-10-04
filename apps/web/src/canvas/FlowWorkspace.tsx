@@ -16,14 +16,14 @@ import { CursorLayer } from "../realtime/CursorLayer";
 import { CommentLayer } from "../realtime/comments/CommentLayer";
 
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { ContextMenu, ContextMenuTrigger } from "@/ui/context-menu";
 import { useT } from "@/app/preferences-store";
 import { usePreferencesStore, useResolvedTheme } from "@/app/preferences-store";
@@ -496,27 +496,31 @@ function FlowWorkspaceInner() {
 
       {menus}
 
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={pendingDelete !== null}
         onOpenChange={(open) => {
           if (!open) setPendingDelete(null);
         }}
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("delete.session.title")}</AlertDialogTitle>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("delete.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
+        <ResponsiveAlertDialogContent>
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
+              {t("delete.session.title")}
+            </ResponsiveAlertDialogTitle>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("delete.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               className={DANGER_ACTION_CLASS}
               onClick={confirmDelete}
             >
               {t("delete.session.confirm")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </ContextMenu>
   );
 }

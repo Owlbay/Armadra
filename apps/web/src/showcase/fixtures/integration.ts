@@ -1,4 +1,9 @@
-import type { ExecutionHost, ExecutionHostHealth } from "@armadra/shared";
+import type {
+  AgentInfo,
+  ExecutionHost,
+  ExecutionHostHealth,
+  IntegrationState,
+} from "@armadra/shared";
 
 /**
  * `integration` 分区的假数据（设计展示页 §2.1）：执行主机的舰队。纯对象，
@@ -92,4 +97,78 @@ export const FLEET: ExecutionHost[] = [
   GPU_NODE,
   NEW_HOST,
   TERMINAL_ONLY,
+];
+
+/* ------------------------------ CLI 分组 ------------------------------ */
+
+/** 一种 CLI：画布启动器 + ACP 入口（`acp` 为空的没有 ACP 入口）。 */
+function cli(
+  id: string,
+  label: string,
+  acpInstalled: boolean | null,
+): AgentInfo {
+  return {
+    id,
+    label,
+    color: "#d97757",
+    launchCmd: id,
+    promptMode: "argv",
+    args: [],
+    capabilities: ["hooks"],
+    resolvedPath: `/usr/local/bin/${id}`,
+    installed: true,
+    clientRevision: 3,
+    ...(acpInstalled === null
+      ? {}
+      : {
+          acp: {
+            support: "official",
+            program: `${id}-acp`,
+            installed: acpInstalled,
+            resume: "load",
+          },
+        }),
+  } as AgentInfo;
+}
+
+function state(
+  agentId: string,
+  extra: Partial<IntegrationState> = {},
+): IntegrationState {
+  return {
+    agentId,
+    mode: "canvas",
+    hook: { installed: true, revision: 4, path: `run/${agentId}` },
+    skill: { installed: true, revision: 16 },
+    legacy: { found: [] },
+    revision: 416,
+    stale: false,
+    launchArgs: [],
+    launchEnv: [],
+    globalWrites: [],
+    ...extra,
+  } as IntegrationState;
+}
+
+/** 正常 · 版本过旧（带一台 Worker 待升级的主机）· 启动器异常 · ACP 未装。 */
+export const CLI_GROUP: readonly {
+  agent: AgentInfo;
+  integration: IntegrationState;
+}[] = [
+  { agent: cli("claude", "Claude Code", true), integration: state("claude") },
+  {
+    agent: cli("codex", "Codex", true),
+    integration: state("codex", {
+      stale: true,
+      installedRevision: 412,
+      outdatedHosts: [{ hostId: "gpu-01", name: "gpu-01", version: "0.0.9" }],
+    }),
+  },
+  {
+    agent: cli("copilot", "Copilot", null),
+    integration: state("copilot", {
+      launcherWarning: "armadra-launch.exe is missing",
+    }),
+  },
+  { agent: cli("pi", "Pi", false), integration: state("pi") },
 ];

@@ -164,6 +164,89 @@ describe("提示条", () => {
     expect(mocks.subscribe).toHaveBeenCalled();
   });
 
+  it("开启之后换成「收哪些」开关，关掉一种就 PATCH 这台设备，完成后收起", async () => {
+    const ALL = [
+      "approval",
+      "agentDone",
+      "agentError",
+      "deliveryFailed",
+      "schedule",
+      "resources",
+      "comment",
+      "workflowGate",
+    ];
+    mocks.request.mockImplementation(
+      async (path: string, _schema: unknown, init?: { body?: string }) => {
+        if (path === "/api/push/config") return CONFIG;
+        if (path === "/api/push/devices")
+          return {
+            devices: [
+              { deviceId: "other", current: false, kinds: ALL },
+              { deviceId: "d1", current: true, kinds: ALL },
+            ],
+          };
+        return {
+          device: {
+            deviceId: "d1",
+            kinds: JSON.parse(init?.body ?? "{}").kinds,
+          },
+        };
+      },
+    );
+    mocks.subscribe.mockResolvedValue({ ok: true, deviceId: "d1" });
+    render(<PushPermission />);
+    fireEvent.click(await screen.findByRole("button", { name: "开启" }));
+    const agentDone = await screen.findByRole("switch", { name: "Agent 完成" });
+    expect(agentDone.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(agentDone);
+    await waitFor(() =>
+      expect(
+        mocks.request.mock.calls.some(
+          ([path]) => path === "/api/push/devices/d1",
+        ),
+      ).toBe(true),
+    );
+    const patch = mocks.request.mock.calls.find(
+      ([path]) => path === "/api/push/devices/d1",
+    )!;
+    expect(patch[2].method).toBe("PATCH");
+    expect(JSON.parse(patch[2].body).kinds).toEqual(
+      ALL.filter((kind) => kind !== "agentDone"),
+    );
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("switch", { name: "Agent 完成" })
+          .getAttribute("aria-checked"),
+      ).toBe("false"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "完成" }));
+    expect(screen.queryByRole("switch", { name: "Agent 完成" })).toBeNull();
+    // 问过了：下次不再出。
+    expect(localStorage.getItem("armadra.push.asked")).toBe("1");
+  });
+
+  it("保存失败退回原样并提示", async () => {
+    mocks.request.mockImplementation(async (path: string) => {
+      if (path === "/api/push/config") return CONFIG;
+      if (path === "/api/push/devices")
+        return { devices: [{ deviceId: "d1", current: true }] };
+      throw new Error("500");
+    });
+    mocks.subscribe.mockResolvedValue({ ok: true, deviceId: "d1" });
+    render(<PushPermission />);
+    fireEvent.click(await screen.findByRole("button", { name: "开启" }));
+    const approval = await screen.findByRole("switch", { name: "等待审批" });
+    fireEvent.click(approval);
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("switch", { name: "等待审批" })
+          .getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+  });
+
   it("宽屏、没登录（配置取不到）或权限已定时都不出", async () => {
     mocks.compact = false;
     render(<PushPermission />);

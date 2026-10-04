@@ -140,6 +140,17 @@ export const OUTBOUND = {
     defaultOn: false,
     documented: true,
   },
+  unifiedPush: {
+    // 地址是 Android App 登记时报上来的、用户自己的 UnifiedPush 分发器端点
+    // （自托管 ntfy 等，契约 §27.2），这里只是占位主机。正文一律是对设备公钥
+    // 封好的信封；不跟随重定向。设备没有端点就不连。
+    url: "https://<UnifiedPush 分发端点>",
+    purpose: "UnifiedPush 推送（用户自己的 ntfy / 分发器，设备登记时给出）",
+    cadence: "每条通知 1 次，失败最多再试 2 次",
+    switch: null,
+    defaultOn: false,
+    documented: true,
+  },
   acmeLetsEncrypt: {
     // `ARMADRA_ACME_DIRECTORY` 可换成别的 CA（step-ca、ZeroSSL…）。
     url: "https://acme-v02.api.letsencrypt.org/directory",
@@ -177,6 +188,17 @@ export const OUTBOUND = {
     url: "smtp://<ARMADRA_SMTP_URL 的主机>",
     purpose: "可选邮件通道（只发邀请与口令重置链接）",
     cadence: "事件驱动：管理员点「发送邮件」时，每来源每分钟至多 5 封",
+    switch: null,
+    defaultOn: false,
+    documented: true,
+  },
+  forgeApi: {
+    // 地址是用户在 `/api/forge/configs` 配的 API 根（契约 §29，Gitea / Forgejo；
+    // G5-15 起含 GitLab），这里只是占位主机。HTTPS，回环主机也收明文 HTTP。
+    // GitHub 仓库仍走上面的 `githubApi`。
+    url: "https://<用户配置的托管平台 API 根>",
+    purpose: "Git 窗口的托管区（自托管 Gitea / Forgejo）",
+    cadence: "用户动作 + 轮询；配置令牌时核验 1 次",
     switch: null,
     defaultOn: false,
     documented: true,

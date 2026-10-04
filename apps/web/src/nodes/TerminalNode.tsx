@@ -63,6 +63,7 @@ import { canUseAcp, driverOf, switchDriver } from "@/acp/driver";
 // 副作用：注册 Agent 专属的右键菜单项（重启 / 权限模式 / 回收）
 import "./terminal-menu";
 import { WorkflowStepBadge } from "@/workflow/node-steps";
+import { MembersChip } from "@/coordinator/MembersChip";
 
 /**
  * ACP 驱动的节点体（ACP 设计 §6）。按需加载：消息流带着 Markdown 渲染，
@@ -562,6 +563,8 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
           ) : (
             <>
               {headerChips}
+              {/* 协调者的「N 成员」：点开分派抽屉（设计系统 §5.4）。 */}
+              {agent?.id === "ama" ? <MembersChip nodeId={id} /> : null}
               {/* 工作流运行中的步号，紧挨状态胶囊（设计系统 §4）。 */}
               <WorkflowStepBadge nodeId={id} />
               {awaitingDriver}
