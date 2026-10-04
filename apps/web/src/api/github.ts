@@ -472,6 +472,8 @@ export type GithubPullFilter = z.infer<typeof githubPullFilterSchema>;
 export const githubExternalReferenceSchema = z.object({
   referenceId: text,
   workspaceId: text,
+  /** `github` | `gitea` | `gitlab`（契约 §29.6）；旧 core 不带，按 `github`。 */
+  forge: z.string().catch("github").default("github"),
   repository: githubRepositoryRefSchema.optional(),
   kind: enumOf(GithubReferenceKind),
   number: bigint,
@@ -659,6 +661,7 @@ export const githubStatusMapping = zero<GithubStatusMapping>({
 export const githubExternalReference = zero<GithubExternalReference>({
   referenceId: "",
   workspaceId: "",
+  forge: "github",
   kind: GithubReferenceKind.UNSPECIFIED,
   number: 0n,
   targetKind: GithubReferenceTargetKind.UNSPECIFIED,

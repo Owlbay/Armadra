@@ -1,0 +1,108 @@
+{
+  "$comment": "按 GitLab REST v4（17.x）的答复形状整理的回放夹具：字段拼法、分页头与拒绝体照官方文档的示例答复，主机名、编号与 SHA 换成了虚构值。不连任何真实账号。",
+  "apiBase": "https://gitlab.example.test/api/v4",
+  "interactions": [
+    {
+      "name": "granular",
+      "request": {
+        "method": "GET",
+        "path": "/projects/acme%2Fapp/issues"
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "content-type": "application/json",
+          "www-authenticate": "Bearer realm=\"\", error=\"insufficient_granular_scope\", error_description=\"Access denied: Your Personal Access Token lacks the required permissions: [read_issue].\""
+        },
+        "body": {
+          "error": "insufficient_granular_scope",
+          "error_description": "Access denied: Your Personal Access Token lacks the required permissions: [read_issue] for \"Project #42\".",
+          "scope": "read_issue"
+        }
+      }
+    },
+    {
+      "name": "scope",
+      "request": {
+        "method": "PUT",
+        "path": "/projects/acme%2Fapp/issues/7"
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "content-type": "application/json",
+          "www-authenticate": "Bearer realm=\"\", error=\"insufficient_scope\", error_description=\"The request requires higher privileges than provided by the access token.\", scope=\"api\""
+        },
+        "body": {
+          "error": "insufficient_scope",
+          "error_description": "The request requires higher privileges than provided by the access token.",
+          "scope": "api"
+        }
+      }
+    },
+    {
+      "name": "forbidden",
+      "request": {
+        "method": "GET",
+        "path": "/projects/acme%2Fapp/merge_requests"
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "message": "403 Forbidden <script>x</script>"
+        }
+      }
+    },
+    {
+      "name": "unauthorized",
+      "request": {
+        "method": "GET",
+        "path": "/user"
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "message": "401 Unauthorized"
+        }
+      }
+    },
+    {
+      "name": "head-changed",
+      "request": {
+        "method": "PUT",
+        "path": "/projects/acme%2Fapp/merge_requests/12/merge"
+      },
+      "response": {
+        "status": 409,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "message": "SHA does not match HEAD of source branch: 0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c"
+        }
+      }
+    },
+    {
+      "name": "not-mergeable",
+      "request": {
+        "method": "PUT",
+        "path": "/projects/acme%2Fapp/merge_requests/12/merge"
+      },
+      "response": {
+        "status": 405,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "message": "405 Method Not Allowed"
+        }
+      }
+    }
+  ]
+}

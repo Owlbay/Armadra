@@ -12,7 +12,7 @@
 | B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`server-e2e --proxy=caddy`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                | `nightly.yml`                       | 开 issue     |
 | C   | `agent-e2e`（真 CLI 与额度，`ARMADRA_E2E_REAL=1`，见「C 档运行手册」）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                                                        | 手动；清单在执行计划 §5             | 记进状态文档 |
 
-其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
+其余脚本（`browser-cdp`、`git-tool-window`、`forge-panel`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
 
 探针起的 core、服务器壳、桌面壳一律用临时 HOME（`probe-home.mjs`：HOME、XDG、各 CLI 配置目录与 git 全局配置都指进 mktemp 目录，并去掉指向真实账号的凭据变量），不读写操作员自己的 HOME。新写的探针也照此办；Vite / pnpm 这类工具链进程不在此列。
 
@@ -60,6 +60,17 @@ node tools/probes/git-tool-window.mjs [输出目录]
 ```
 
 产物默认在 `target/git-tool-window/`：桌面 1440×900 的 `log-desktop.png`（三栏）、`log-maximized.png`、`commit-desktop.png`、`commit-maximized.png`，手机 390×844 的 `mobile-commits.png` / `mobile-branches.png` / `mobile-details.png` / `mobile-diff.png`（日志页的四级导航）与 `mobile-commit.png`，加一份 `result.json`。手机那几张按应用自己的行为开成最大化（`shell/MobileBottomNav.tsx`），桌面停在底部。端口随机（不用 1420 / 1421 / 43120 / 43121），数据目录与浏览器 profile 都是 `mktemp` 出来的，跑完删除；不读写操作员自己的数据目录、凭据或任何远端。页面入口（`apps/web/git-window-probe.html` 与 `src/git-window-probe.tsx`）由脚本临时写入、结束时删除——应用首页要先选工作空间，而这次要看的是窗口本身。
+
+## Git 托管面板截图
+
+真机渲染 Git 托管面板与「Git 托管」设置页（契约 §29，G5-15）：临时数据目录里的 core、回放 `apps/desktop/src/core/forge/fixtures/gitlab/` 的本机假 GitLab、Vite 开发服务器与无头 Chrome；`ARMADRA_DEV_STACK=1` 时再对 dev-stack 的真 Gitea 现建令牌与私有仓库（跑完删掉）。页面里的 GitHub 会话直接置成可用，会话握手不在这里验。
+
+```sh
+pnpm --filter @armadra/desktop build
+[ARMADRA_DEV_STACK=1] node tools/probes/forge-panel.mjs [输出目录]
+```
+
+产物默认在 `target/forge-panel/`：`settings.png`、`gitlab-list.png`、`gitlab-detail.png`、`gitlab-issues.png`、`unknown.png`，有 Gitea 时加 `gitea-list.png`、`gitea-detail.png`，以及 `result.json`。页面入口（`apps/web/forge-panel-probe.html` 与 `src/forge-panel-probe.tsx`）由脚本临时写入、结束时删除。
 
 ## 设计展示页截图
 

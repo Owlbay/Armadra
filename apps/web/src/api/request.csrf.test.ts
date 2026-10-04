@@ -30,10 +30,12 @@ const { request, RUNTIME_VIA_SERVER_SHELL } = await import("./request");
 
 let calls: { url: string; init: RequestInit }[];
 let status: number[];
+let bodies: unknown[];
 
 beforeEach(() => {
   calls = [];
   status = [200];
+  bodies = [];
   csrf.ensure.mockReset().mockResolvedValue(csrf.value);
   csrf.replace.mockReset().mockResolvedValue("b".repeat(43));
   vi.stubGlobal(
@@ -41,11 +43,14 @@ beforeEach(() => {
     vi.fn(async (url: string, init: RequestInit) => {
       calls.push({ url, init });
       const code = status.shift() ?? 200;
-      return {
+      const body = bodies.shift() ?? { ok: true };
+      const response = {
         ok: code >= 200 && code < 300,
         status: code,
-        json: async () => ({ ok: true }),
-      } as unknown as Response;
+        json: async () => body,
+        clone: () => response,
+      };
+      return response as unknown as Response;
     }),
   );
 });
@@ -87,5 +92,25 @@ describe("the server shell's CSRF header", () => {
     expect(
       (calls[1]?.init.headers as Record<string, string>)["X-Armadra-CSRF"],
     ).toBe("b".repeat(43));
+  });
+
+  it("does not resend a write a handler already refused with its own code", async () => {
+    status = [403];
+    bodies = [{ code: "forge_scope", message: "x" }];
+    await expect(
+      request("/api/forge/repos/h/o/n/pulls/1/merge", schema, {
+        method: "POST",
+        body: "{}",
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "forge_scope" });
+    expect(csrf.replace).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("still renews on the gateway's own CSRF refusal", async () => {
+    status = [403, 200];
+    bodies = [{ code: "forbidden", message: "CSRF" }];
+    await request("/api/settings", schema, { method: "PATCH", body: "{}" });
+    expect(calls).toHaveLength(2);
   });
 });

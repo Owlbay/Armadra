@@ -34,7 +34,15 @@ export type GithubBlockReason =
 export type GithubSessionState =
   | { status: "idle" }
   | { status: "connecting" }
-  | { status: "blocked"; reason: GithubBlockReason }
+  | {
+      status: "blocked";
+      reason: GithubBlockReason;
+      /**
+       * 只在 `noCredential` 时有：GitHub 用不了，但同一条会话仍能用 Gitea /
+       * GitLab（契约 §29），面板要知道这台设备能不能写。
+       */
+      canWrite?: boolean;
+    }
   | {
       status: "ready";
       client: GithubApi;
@@ -139,17 +147,20 @@ export const useGithubSession = create<GithubSessionStore>((set, get) => {
       set({ client: github });
       // 一条拿不出令牌的会话不是「可用，只是列表为空」：每一次请求都会栽在认证
       // 上，所以面板直说，并指向 GitHub 那一节设置。
+      const canWrite = permits(session, "github:write", scope);
       let credential: GithubCredentialStatus;
       try {
         credential = await github.getCredential();
       } catch {
         if (live())
-          set({ state: { status: "blocked", reason: "noCredential" } });
+          set({
+            state: { status: "blocked", reason: "noCredential", canWrite },
+          });
         return;
       }
       if (!live()) return;
       if (!credential.available) {
-        set({ state: { status: "blocked", reason: "noCredential" } });
+        set({ state: { status: "blocked", reason: "noCredential", canWrite } });
         return;
       }
       set({
@@ -158,7 +169,7 @@ export const useGithubSession = create<GithubSessionStore>((set, get) => {
           client: github,
           session,
           hello,
-          canWrite: permits(session, "github:write", scope),
+          canWrite,
           credential,
         },
       });

@@ -10,8 +10,8 @@ import type { MessageModule } from "./index";
 const zh = {
   /* 页与入口 */
   "github.title": "GitHub",
-  "cluster.github": "GitHub",
-  "cmd.app.github": "GitHub 面板",
+  "cluster.github": "Git 托管",
+  "cmd.app.github": "Git 托管面板",
   "github.tab.issues": "Issues",
   "github.tab.pulls": "Pull requests",
   "github.reload": "刷新",
@@ -32,7 +32,7 @@ const zh = {
   "github.blocked.noPermission": "这台设备没有该工作空间的 GitHub 权限",
   "github.blocked.noCredential": "Host 现在拿不到可用的 GitHub 凭据",
   "github.blocked.action": "前往设置 → 连接",
-  "github.blocked.credentialAction": "前往设置 → GitHub",
+  "github.blocked.credentialAction": "前往设置 → Git 托管",
 
   /* 仓库与筛选 */
   "github.repository": "仓库",
@@ -350,7 +350,7 @@ const zh = {
   "github.error.unknownOutcome": "请求已发出但结果未知，刷新后核对远端状态",
 
   /* 设置 → GitHub */
-  "github.nav": "GitHub",
+  "github.nav": "Git 托管",
   "github.settings.note": "GitHub API 凭据由 Host 保管，令牌不会回到界面。",
   "github.settings.source": "凭据来源",
   "github.settings.apiBase": "API base",
@@ -383,8 +383,8 @@ const zh = {
 
 const en: Record<keyof typeof zh, string> = {
   "github.title": "GitHub",
-  "cluster.github": "GitHub",
-  "cmd.app.github": "GitHub panel",
+  "cluster.github": "Git hosting",
+  "cmd.app.github": "Git hosting panel",
   "github.tab.issues": "Issues",
   "github.tab.pulls": "Pull requests",
   "github.reload": "Reload",
@@ -406,7 +406,7 @@ const en: Record<keyof typeof zh, string> = {
   "github.blocked.noCredential":
     "The Host cannot produce a usable GitHub credential",
   "github.blocked.action": "Go to Settings → Connections",
-  "github.blocked.credentialAction": "Go to Settings → GitHub",
+  "github.blocked.credentialAction": "Go to Settings → Git hosting",
 
   "github.repository": "Repository",
   "github.remoteUrl": "Remote URL",
@@ -731,7 +731,7 @@ const en: Record<keyof typeof zh, string> = {
   "github.error.unknownOutcome":
     "The request was sent but its result is unknown; reload and check the remote",
 
-  "github.nav": "GitHub",
+  "github.nav": "Git hosting",
   "github.settings.note":
     "The Host holds the GitHub API credential; a token never comes back to this page.",
   "github.settings.source": "Credential source",

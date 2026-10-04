@@ -2,7 +2,12 @@ import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ExecutionHost } from "@armadra/shared";
 
-import { useT } from "@/app/preferences-store";
+import { useT, usePreferencesStore } from "@/app/preferences-store";
+import { ForgeHosted, PullBody, forgeKeys } from "@/panels/github/ForgeHosted";
+import {
+  ForgeConfigs,
+  forgeConfigKeys,
+} from "@/panels/settings/pages/ForgeConfigs";
 import {
   AgentIntegrationRow,
   OutdatedWorkers,
@@ -17,6 +22,15 @@ import {
   GPU_NODE,
   LOCAL,
 } from "../fixtures/integration";
+import {
+  FORGE_CONFIGS,
+  GITEA_DETECTION,
+  GITEA_PULLS,
+  GITLAB_CHECKS,
+  GITLAB_DETECTION,
+  GITLAB_FILES,
+  GITLAB_MR,
+} from "../fixtures/forge";
 
 const noop = () => undefined;
 
@@ -48,6 +62,9 @@ function Sample({
  * CLI 分组：集成设置页真的行组件，集成状态预先放进 query 缓存（永不过期，
  * 不去请求 core）——正常、版本过旧（页首带一台 Worker 待升级的主机）、启动器
  * 异常、ACP 未装各一行。
+ *
+ * 托管平台（{@link ForgeSamples}）：Gitea 的 PR 列表、GitLab 的 MR 详情与设置页
+ * 的配置行。
  */
 function CliGroup() {
   const client = useQueryClient();
@@ -71,6 +88,63 @@ function CliGroup() {
         ))}
       </SettingsGroup>
     </div>
+  );
+}
+
+/**
+ * 托管平台（G5-15）：Git 托管面板里 Gitea 的 PR 列表、GitLab 的 MR 详情，与
+ * 设置页的按主机 / 仓库配置。数据预先放进 query 缓存（永不过期），不请求 core。
+ */
+function ForgeSamples() {
+  const t = useT();
+  const locale = usePreferencesStore((state) => state.locale);
+  const client = useQueryClient();
+  useState(() => {
+    client.setQueryDefaults(["forge"], { staleTime: Infinity, retry: false });
+    client.setQueryData(forgeKeys.pulls(GITEA_DETECTION.repository, "open"), {
+      pages: [{ items: GITEA_PULLS, nextCursor: null }],
+      pageParams: [null],
+    });
+    const repo = GITLAB_DETECTION.repository;
+    client.setQueryData(forgeKeys.files(repo, GITLAB_MR.number), GITLAB_FILES);
+    client.setQueryData(
+      forgeKeys.checks(repo, GITLAB_MR.number),
+      GITLAB_CHECKS,
+    );
+    client.setQueryData(forgeConfigKeys.all, FORGE_CONFIGS);
+    return true;
+  });
+  return (
+    <>
+      <div className="flex min-w-0 flex-col gap-6">
+        <Sample caption={t("forge.showcase.gitea")}>
+          <div className="rounded-lg border border-border">
+            <ForgeHosted
+              detection={GITEA_DETECTION}
+              locale={locale}
+              canWrite
+              open
+            />
+          </div>
+        </Sample>
+      </div>
+      <div className="flex min-w-0 flex-col gap-6">
+        <Sample caption={t("forge.showcase.gitlab")}>
+          <div className="min-w-0 space-y-3 rounded-lg border border-border p-3">
+            <PullBody
+              forge="gitlab"
+              repo={GITLAB_DETECTION.repository}
+              pull={GITLAB_MR}
+              locale={locale}
+              canWrite
+            />
+          </div>
+        </Sample>
+        <Sample caption={t("forge.showcase.settings")}>
+          <ForgeConfigs />
+        </Sample>
+      </div>
+    </>
   );
 }
 
@@ -113,6 +187,7 @@ export default function IntegrationSection() {
           />
         </Sample>
       </div>
+      <ForgeSamples />
     </div>
   );
 }

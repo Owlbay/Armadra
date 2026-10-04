@@ -1283,7 +1283,29 @@
 
 ## G5-15 托管平台 forge 二：GitLab 与 Git 面板（R-83 后半）
 
-待填（第 4 组）。
+**做了什么**
+
+- core `forge/gitlab.ts`：`PRIVATE-TOKEN`；项目按 `owner%2Fname` 寻址；merge request ↔ pull request（`iid`、`opened/locked/closed/merged`、source / target 分支、`draft`、`detailed_merge_status` 映射 `mergeable`）；MR 列表的 `closed` 按 `all` 取再滤掉开着的；差异来自 `merge_requests/{iid}/diffs` 按页取、增删行从补丁里数；检查用 commit statuses（同名取 id 最大，允许失败记 neutral）；合并带 `sha`，`squash` 对应 `squash: true`，`rebase` 答 400，远端 409 → `HEAD_CHANGED`、405 / 422 → `NOT_MERGEABLE`，答复没到 merged 答 `unknown_outcome`。403 的 `error` 为 `insufficient_granular_scope` / `insufficient_scope` 时译成新拒绝种类 `scopeMissing` → `403 forge_scope`（`transport.ts` 加 `refuse` 钩子与 `X-Next-Page` 页码）。`CONFIGURABLE_FORGES` 加 `gitlab`，`apiBase` 存成 `…/api/v4`。公共拆解挪到 `forge/wire.ts`（Gitea 行为不变）。
+- `ExternalReference` 带 `forge`（`github` | `gitea` | `gitlab`，写入缺省 `github`，读出总有值）：Gitea / GitLab 的连接经 `ForgeService.referenceRepository` 核对（平台必须是这台机器识别出的那个，API 根取自配置）；GitHub 连接的 id 算法不变，GitHub 详情只列 `forge: github` 的连接。没有新迁移（0038 已有列）。
+- 页面：Git 托管面板（原 GitHub 面板）先经 `/api/forge/resolve` 认平台——GitHub 照旧，Gitea / GitLab 走 `panels/github/ForgeHosted.tsx`（issue 列表 / 详情 / 开关，PR·MR 列表 / 详情 / 文件 / 检查 / 合并确认 / 新建，按状态筛、加载更多），认不出或没令牌指去设置；拿不到 GitHub 凭据不再挡别的平台（`github-session` 的 `noCredential` 带 `canWrite`）；旧 core 没有 forge 域（501 / 404）时按 GitHub。设置页导航名改「Git 托管」，GitHub 卡片下加「其他平台」（`ForgeConfigs.tsx`：按主机或仓库选 Gitea / GitLab、地址、令牌；令牌不回填、按 revision 改删、可清除令牌）。连接徽标对非 GitHub 带平台名。页面 API `apps/web/src/api/forge.ts`。
+- i18n：`github.ts` 键全保留（`github.nav` / `cluster.github` / `cmd.app.github` / `credentialAction` 改文案为「Git 托管」），新增 `forge.ts`，中英同步。
+- 顺带修：服务器壳的 CSRF 重发只认 Gateway 的拒绝（`code: forbidden` 或无 code），处理器自己的 403（`forge_scope` 等）不再被当成令牌轮换把写重发一次（`api/request.ts`）。
+- 文档：契约 §5.2 加 `forge` 一句，§29 引言 / §29.3 / §29.5（`forge_scope` 行）追加，新增 §29.6 GitLab；架构域表；探针 `tools/probes/forge-panel.mjs`（手动）与 README。
+
+**实测**（macOS arm64）
+
+- `forge/gitlab.test`（19 条，对 `core/forge/fixtures/gitlab/*.json` 回放）：认证头与只发到配置的根、翻页、issue 开关、MR 映射与 closed 含已合并、草稿前缀、文件跨页与二进制 / 改名、检查去重与 neutral、合并核 head / 不重试 / 409 / 405、`insufficient_granular_scope` 与 `insufficient_scope` → `scopeMissing` 且原话不外传、没令牌不发请求。`forge/gitlab.routes.test`（9 条）：经 `/api/forge/*` 配置核验、识别、读写、`forge_scope`、Gitea↔GitLab 换平台丢令牌、外部连接带 `forge` 与拒绝。`github/*`、`forge/*` 既有用例不改断言通过。
+- 页面：`GithubDrawer.test` 加 Gitea / GitLab 形态 8 条（只走 forge 面不碰 GitHub 客户端、MR 合并只给 merge / squash 且带屏上 head、范围不足的文案、关 issue、认不出指去设置、无 GitHub 凭据仍可用、只读设备无写控件、旧 core 退回 GitHub）；`GithubPage.test` 加 4 条（列表、新增、按 revision 编辑 / 清令牌、删除）；`request.csrf.test` 加 2 条。唯一改的旧断言：「前往设置 → GitHub」→「前往设置 → Git 托管」（设置页改名）。
+- dev-stack `gitea`：`ARMADRA_DEV_STACK=1` 跑 `gitea.devstack.integration.test` 回归通过；用完 `pnpm dev-stack down gitea` 只停自己起的。
+- 真浏览器：`forge-panel.mjs`（真 core + 回放 GitLab + dev-stack 真 Gitea + 无头 Chrome）截设置页、GitLab 列表 / 详情 / issues、Gitea 列表 / 详情、认不出的远端；`design-showcase --only=integration` 6 张，对比度与控制台通过。
+- 全量验证结果见 PR。
+
+**没做 / 限制**
+
+- 没连真实 GitLab：夹具按 GitLab REST v4 文档的答复形状整理（不是从真实实例录的），需用户提供实例与令牌时再对一次（§4 B 档「可选」那条）。
+- GitLab 多级子组（`group/sub/project`）不支持：识别只认远端地址最后两段。MR 的 `rebase` 合并、合并队列 / 流水线后自动合并不接。
+- Gitea / GitLab 那一面没有状态映射、评审、检出与合并后清理（GitHub 专有的那几块）；连接徽标点开只打开面板，不定位到 Gitea / GitLab 的条目。
+- 配置仍是整台机器一份（不按工作空间）。
 
 ## G5-16 Gateway 与服务端收尾（R-18、R-19、R-73、R-74、R-75）
 

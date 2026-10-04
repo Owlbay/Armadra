@@ -69,8 +69,13 @@ export interface ForgeResponse {
 export interface TransportOptions {
   readonly base: string;
   readonly token: TokenSource;
-  /** 令牌放进哪个头、怎么拼：Gitea 是 `Authorization: token <t>`。 */
+  /** 令牌放进哪个头、怎么拼：Gitea 是 `Authorization: token <t>`，GitLab 是 `PRIVATE-TOKEN`。 */
   readonly authorize: (token: string) => Record<string, string>;
+  /**
+   * 平台自己的拒绝细分：先于通用的状态码翻译。只看答复里的固定机器码，答
+   * `undefined` 交回通用翻译；远端原话从不带出去。
+   */
+  readonly refuse?: (status: number, body: Buffer) => ForgeError | undefined;
   readonly fetch?: typeof globalThis.fetch;
   readonly timeoutMs?: number;
   readonly userAgent?: string;
@@ -201,10 +206,15 @@ export class ForgeTransport {
       return {
         status: result.status,
         body: data,
-        nextPage: nextPage(result.headers.get("link") ?? ""),
+        nextPage:
+          nextPage(result.headers.get("link") ?? "") ||
+          headerPage(result.headers.get("x-next-page") ?? ""),
       };
     }
-    throw classify(result.status, read);
+    throw (
+      this.options.refuse?.(result.status, data) ??
+      classify(result.status, read)
+    );
   }
 }
 
@@ -248,6 +258,13 @@ export function nextPage(link: string): number {
     if (Number.isInteger(page) && page >= 2 && page <= 10_000) return page;
   }
   return 0;
+}
+
+/** GitLab 的 `X-Next-Page`：只认一个页码数字。 */
+export function headerPage(value: string): number {
+  if (!/^[0-9]{1,5}$/.test(value.trim())) return 0;
+  const page = Number(value.trim());
+  return page >= 2 && page <= 10_000 ? page : 0;
 }
 
 export function decodeJson<T>(response: ForgeResponse): T {
