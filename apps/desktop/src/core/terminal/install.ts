@@ -26,6 +26,7 @@ import {
   createAcpBackend,
   prepareAcpStart,
   provideAcpTerminal,
+  sshHostOf,
 } from "../acp";
 import { acpSwitching } from "../acp/routes";
 import { loadNode } from "../collab/nodes";
@@ -459,7 +460,9 @@ export function install(
     backend: acpBackend,
     ready,
     environment: (nodeId, agentId, options) =>
-      ownedEnvironment(nodeId, agentId, false, undefined, options),
+      ownedEnvironment(nodeId, agentId, options.ssh === true, undefined, {
+        acp: options.acp,
+      }),
     typeLaunchLine: (sessionId, generation, line) =>
       typeLaunchLine(manager, sessionId, generation, line),
     program: programOf,
@@ -481,9 +484,9 @@ export function install(
     readonly agentId: string;
     readonly cwd: string;
   }) => {
-    const agent = loadNode(context.db.database, request.nodeId)?.data.agent as
-      | Record<string, unknown>
-      | undefined;
+    const data = loadNode(context.db.database, request.nodeId)?.data;
+    const ssh = sshHostOf(data) !== undefined;
+    const agent = data?.agent as Record<string, unknown> | undefined;
     prepareAcpStart(request.nodeId, {
       agentId: request.agentId,
       permissionMode:
@@ -495,14 +498,15 @@ export function install(
     });
     return manager.spawn({
       workspaceId: request.workspaceId,
-      cwd: resolve(request.cwd),
+      // 执行主机上的路径不按本机的规则解析。
+      cwd: ssh ? request.cwd : resolve(request.cwd),
       command: acpAdapter(baseAgent(acpAgentSettings(), request.agentId))
         ?.program,
       kind: "terminal",
       ownerNodeId: request.nodeId,
       agentId: request.agentId,
       backend: "acp",
-      env: ownedEnvironment(request.nodeId, request.agentId, false, undefined, {
+      env: ownedEnvironment(request.nodeId, request.agentId, ssh, undefined, {
         acp: true,
       }),
     });
@@ -789,10 +793,8 @@ export function install(
       await ready;
       // 以 ACP 驱动的节点起的是适配器（ACP 设计 §4.4 依赖编排一行）：会话开好
       // 就能收 prompt，第一条任务照旧经投递队列，不敲启动行。
-      if (
-        request.sshHostId === undefined &&
-        drivenOverAcp(request.nodeId, request.agentId)
-      ) {
+      // SSH 节点也一样：适配器经 `ssh` 起在执行主机上（契约 §26 的 SSH 小节）。
+      if (drivenOverAcp(request.nodeId, request.agentId)) {
         const session = await spawnAcpForNode(request);
         return {
           sessionId: session.id,

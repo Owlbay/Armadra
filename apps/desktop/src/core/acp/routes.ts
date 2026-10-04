@@ -33,6 +33,7 @@ import { type AcpAdapter, cliResumeId } from "./adapters";
 import { AcpError } from "./client";
 import type { AcpStartPlan, AcpTerminalWiring } from "./index";
 import { AcpMirror, mirrorPath } from "./mirror";
+import { sshHostOf } from "./ssh";
 
 export interface AcpRouteDeps {
   readonly wiring: () => AcpTerminalWiring | undefined;
@@ -133,6 +134,11 @@ function agentOf(node: { readonly data: Record<string, unknown> }) {
     : {};
 }
 
+/** 这个节点是不是 SSH 节点（节点还没落盘时不是）。 */
+function sshOf(database: DatabaseSync, nodeId: string): string | undefined {
+  return sshHostOf(loadNode(database, nodeId)?.data);
+}
+
 function text(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
@@ -185,7 +191,10 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
       }
       return wiring.manager.revive(
         rowId,
-        wiring.environment(nodeId, agentId, { acp: true }),
+        wiring.environment(nodeId, agentId, {
+          acp: true,
+          ssh: sshOf(database, nodeId) !== undefined,
+        }),
         { ended: true },
       );
     });
@@ -244,6 +253,8 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
       );
     }
 
+    // SSH 节点：适配器起在执行主机上，`cwd` 是那边的路径，不按本机规则解析。
+    const ssh = sshOf(database, nodeId) !== undefined;
     const row = await exclusive(nodeId, async () => {
       const latest = loadSession(database, nodeId);
       if (latest !== undefined) {
@@ -267,7 +278,7 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
           });
           return wiring.manager.revive(
             latest.sessionId,
-            wiring.environment(nodeId, agentId, { acp: true }),
+            wiring.environment(nodeId, agentId, { acp: true, ssh }),
             { ended: true },
           );
         }
@@ -281,13 +292,13 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
       const adapter = deps.adapterFor(settings, agentId) as AcpAdapter;
       return wiring.manager.spawn({
         workspaceId,
-        cwd: deps.cwdOf(cwd),
+        cwd: ssh ? cwd : deps.cwdOf(cwd),
         command: adapter.program,
         kind: "terminal",
         ownerNodeId: nodeId,
         agentId,
         backend: "acp",
-        env: wiring.environment(nodeId, agentId, { acp: true }),
+        env: wiring.environment(nodeId, agentId, { acp: true, ssh }),
       });
     });
     if (prompt !== undefined && prompt.trim() !== "") {
@@ -482,13 +493,11 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
         );
       }
       const agent = agentOf(node);
-      const ssh = node.data.ssh !== null && typeof node.data.ssh === "object";
-      if (ssh && driver === "acp") {
-        throw new AcpError(
-          "acp_unsupported",
-          "An SSH node cannot be driven over ACP yet",
-        );
-      }
+      // SSH 节点（契约 §26 的 SSH 小节）：ACP 侧的适配器、终端侧的 shell 都经
+      // `ssh` 起在执行主机上；工作目录是那边的路径。
+      const sshHostId = sshHostOf(node.data);
+      const ssh = sshHostId !== undefined;
+      const cwdFor = (path: string) => (ssh ? path : deps.cwdOf(path));
 
       // 1. 结束当前驱动。
       const latest = loadSession(database, nodeId);
@@ -553,12 +562,12 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
           model: text(agent.model),
           resume: adapter.resume === "none" ? null : (provider ?? null),
         });
-        const env = wiring.environment(nodeId, agentId, { acp: true });
+        const env = wiring.environment(nodeId, agentId, { acp: true, ssh });
         const row =
           current === undefined
             ? await wiring.manager.spawn({
                 workspaceId: node.workspaceId,
-                cwd: deps.cwdOf(cwd),
+                cwd: cwdFor(cwd),
                 command: adapter.program,
                 kind: "terminal",
                 ownerNodeId: nodeId,
@@ -579,29 +588,35 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
         };
       }
 
-      const env = wiring.environment(nodeId, agentId, { acp: false });
+      const env = wiring.environment(nodeId, agentId, { acp: false, ssh });
       const row =
         current === undefined
           ? await wiring.manager.spawn({
               workspaceId: node.workspaceId,
-              cwd: deps.cwdOf(cwd),
+              // 终端侧本机跑的是 `ssh`：从本机能进的目录起。
+              cwd: ssh ? context.dataDir : deps.cwdOf(cwd),
               shell: text(node.data.shell),
               kind: "terminal",
               ownerNodeId: nodeId,
               agentId,
+              ...(sshHostId === undefined ? {} : { sshHostId }),
               env,
             })
           : await wiring.manager.revive(current.id, env, {
               ended: true,
               backend: wiring.manager.effectiveKind(),
               command: null,
+              ...(sshHostId === undefined
+                ? {}
+                : { sshHostId, cwd: context.dataDir }),
             });
       const resumable =
         provider !== undefined &&
         provider !== "" &&
         canResume(settings, agentId);
-      const program = wiring.program(agentId).path;
-      const dialect = nodeDialect(text(node.data.shell));
+      // 本机解析到的程序路径在执行主机上不存在：SSH 节点只敲程序名。
+      const program = ssh ? undefined : wiring.program(agentId).path;
+      const dialect = nodeDialect(text(node.data.shell), ssh);
       const line = resumable
         ? resumeLine(settings, agentId, node.data, provider, {
             ...(program === undefined ? {} : { path: program }),
@@ -615,6 +630,7 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
             dataDir: context.dataDir,
             nodeId,
             dialect,
+            ...(ssh ? { ssh: true } : {}),
             ...(program === undefined ? {} : { program }),
             ...(text(agent.permissionMode) === undefined
               ? {}
