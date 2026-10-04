@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { dataDir, endpointsFile } from "../shell-core/paths";
+import { attachTicketChannel } from "./core-ticket";
 import {
   type HealthResponse,
   PROBE_INTERVAL_MS,
@@ -214,6 +215,9 @@ export class RuntimeProcess {
     });
     secretChannel?.attach(child);
     crashChannel?.attach(child);
+    // Windows 上票经这条 IPC 通道签（`core-ticket.ts`）；别的平台用不着它，
+    // 挂上也无妨。
+    attachTicketChannel(child);
     child.on("error", (error) => {
       this.exited = true;
       process.stderr.write(

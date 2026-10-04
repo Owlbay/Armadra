@@ -3,7 +3,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDatabase } from "../db/open";
-import { controlSocketPath, startControlChannel } from "./control";
+import {
+  TICKET_MESSAGE,
+  controlSocketPath,
+  startControlChannel,
+  startTicketIpc,
+} from "./control";
 import { IdentityService } from "./service";
 import { IdentityStore } from "./store";
 import { tempDir } from "../testing/temp-dir";
@@ -160,3 +165,94 @@ describe.skipIf(process.platform === "win32")(
     });
   },
 );
+
+/**
+ * Windows 上的取票路：fork 的 IPC 通道（契约 §3.2，安全审查 L9）。与平台无关
+ * 地验——通道是注入的。
+ */
+describe("fork 的 IPC 通道上签票", () => {
+  function ipc() {
+    const dataDir = tempDir("armadra-control-ipc-");
+    const opened = openDatabase({
+      file: join(dataDir, "canvas.db"),
+      migrationsDir,
+    });
+    closing.push(opened.close);
+    const service = new IdentityService(
+      new IdentityStore(opened.database),
+      INSTANCE,
+    );
+    const listeners: ((message: unknown) => void)[] = [];
+    const sent: unknown[] = [];
+    const channel = {
+      connected: true,
+      send: (message: unknown) => {
+        sent.push(message);
+        return true;
+      },
+      on: (_event: "message", listener: (message: unknown) => void) => {
+        listeners.push(listener);
+      },
+    };
+    expect(startTicketIpc({ service, instanceId: INSTANCE }, channel)).toBe(
+      true,
+    );
+    const deliver = (message: unknown) => {
+      for (const listener of listeners) listener(message);
+    };
+    return { service, sent, deliver };
+  }
+
+  it("答私有通道同一个形状，按 id 对上；别的消息不理", () => {
+    const { service, sent, deliver } = ipc();
+    deliver({ type: "armadra:secrets", id: 1, op: "seal", data: "" });
+    expect(sent).toEqual([]);
+    deliver({
+      type: TICKET_MESSAGE,
+      id: 7,
+      origin: ORIGIN,
+      deviceName: "本机桌面",
+    });
+    expect(sent).toHaveLength(1);
+    const answer = sent[0] as {
+      type: string;
+      id: number;
+      status: number;
+      body: Record<string, unknown>;
+    };
+    expect(answer.type).toBe(TICKET_MESSAGE);
+    expect(answer.id).toBe(7);
+    expect(answer.status).toBe(200);
+    expect(answer.body).toMatchObject({
+      hostId: service.hostId(),
+      hostInstanceId: INSTANCE,
+      origin: ORIGIN,
+    });
+    expect(String(answer.body.ticket)).toMatch(
+      /^[0-9a-f]{32}\.[A-Za-z0-9_-]{43}$/,
+    );
+  });
+
+  it("壳呈现不了的来源照样拒", () => {
+    const { sent, deliver } = ipc();
+    deliver({
+      type: TICKET_MESSAGE,
+      id: 1,
+      origin: "https://example.com",
+      deviceName: "x",
+    });
+    expect((sent[0] as { status: number }).status).toBe(400);
+  });
+
+  it("不是 fork 出来的进程（没有通道）不开", () => {
+    expect(
+      startTicketIpc(
+        {
+          service: undefined as never,
+          instanceId: INSTANCE,
+        },
+        { on: () => undefined },
+      ),
+    ).toBe(false);
+  });
+});

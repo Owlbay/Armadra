@@ -8,7 +8,7 @@ import { AccountsService } from "./accounts";
 import { createIdentitySecurity } from "./accounts-http";
 import { installAuditSink } from "./audit";
 import { Authorizer } from "./authorize";
-import { startControlChannel } from "./control";
+import { startControlChannel, startTicketIpc } from "./control";
 import {
   currentSubject,
   installAccessGate,
@@ -56,7 +56,12 @@ export {
   BROWSER_SESSION_CAPABILITY,
   NATIVE_SESSION_CAPABILITY,
 } from "./http";
-export { CONTROL_SOCKET, TICKET_PATH, controlSocketPath } from "./control";
+export {
+  CONTROL_SOCKET,
+  TICKET_MESSAGE,
+  TICKET_PATH,
+  controlSocketPath,
+} from "./control";
 
 /**
  * 这一轮 core 的实例标识，按身份域的拼法：32 位十六进制。
@@ -180,6 +185,15 @@ export function installIdentity(context: CoreContext): void {
   context.server.raw(API_PREFIX, (request, response, cors) =>
     http.handle(request, response, cors),
   );
+
+  // Windows 上私有通道还不开（`control.ts` 的 TODO），票经 fork 的 IPC 通道
+  // 签：回环不再放行匿名请求（契约 §3.2），壳的页面没有票就什么都打不了。
+  if (process.platform === "win32") {
+    startTicketIpc(
+      { service, instanceId: runInstance },
+      process as unknown as Parameters<typeof startTicketIpc>[1],
+    );
+  }
 
   // 私有通道是异步绑的，但装配是同步的：起不来不该拖住 core，壳会在取票时拿到
   // 一个明确的失败，而不是一个永远起不来的进程。
