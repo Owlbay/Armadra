@@ -34,10 +34,19 @@
 //   docker build -f apps/server/docker/Dockerfile -t armadra-server:local .
 //   node tools/probes/server-e2e.mjs --container=armadra-server:local [输出目录]
 // 加 `--build` 时探针先自己 `docker build` 出这个标签（CI 的 B 档条目这样用）。
+//
+// 反向代理模式（G5-16）：`--proxy=caddy` 时本机的服务器壳只监听回环、对外来源
+// 是 `https://localhost:<代理端口>`，前面放一个 Caddy 容器，配置就是
+// `tools/dev-stack/caddy/Caddyfile`（部署指南 §3.3 那一份），上游的 CA 从
+// `GET /ca.crt` 取。整条线（配对、邀请、事件流、撤销）都经代理走。容器只发布
+// 到 127.0.0.1；macOS 上经 `host.docker.internal` 回到宿主回环，Linux 上用
+// `--network host`。
+//   node tools/probes/server-e2e.mjs --proxy=caddy [输出目录]
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,6 +67,16 @@ const image =
     .find((argument) => argument.startsWith("--container="))
     ?.slice("--container=".length) || undefined;
 const build = args.includes("--build");
+const proxy =
+  args
+    .find((argument) => argument.startsWith("--proxy="))
+    ?.slice("--proxy=".length) || undefined;
+if (proxy !== undefined && proxy !== "caddy")
+  throw new Error(`--proxy 只认 caddy：${proxy}`);
+if (proxy !== undefined && image !== undefined)
+  throw new Error("--proxy 与 --container 不能一起用");
+/** 与 `tools/dev-stack/docker-compose.yml` 的 caddy 服务同一个镜像。 */
+const CADDY_IMAGE = "caddy:2.10.2-alpine";
 const output = resolve(
   args.find((argument) => !argument.startsWith("--")) ??
     join(root, "target/server-e2e"),
@@ -75,6 +94,96 @@ function check(ok, name, detail = "") {
     report.failures.push({ name, detail });
     console.error(`  FAIL  ${name}${detail ? ` — ${detail}` : ""}`);
   }
+}
+
+/**
+ * 部署指南 §3.3 的 Caddy：先从服务器壳的 `GET /ca.crt` 取上游的根，再用仓库里
+ * 那份 Caddyfile 起容器，等到经它的 `/health` 是 200。
+ */
+async function startCaddy({ upstream, port }) {
+  const anchor = await httpsText({
+    host: "127.0.0.1",
+    port: upstream,
+    path: "/ca.crt",
+  });
+  if (anchor.status !== 200 || !anchor.body.includes("BEGIN CERTIFICATE"))
+    throw new Error(`取不到上游的 CA：${anchor.status}`);
+  const trust = h.temp("armadra-server-e2e-caddy-");
+  writeFileSync(join(trust, "upstream.crt"), anchor.body);
+  chmodSync(trust, 0o755);
+  const name = `armadra-caddy-e2e-${randomUUID().slice(0, 8)}`;
+  h.cleanups.push(() => {
+    try {
+      execFileSync("docker", ["rm", "-f", name], { stdio: "ignore" });
+    } catch {}
+  });
+  const linux = process.platform === "linux";
+  const caddy = child(h, "docker", [
+    "run",
+    "--rm",
+    "--name",
+    name,
+    ...(linux
+      ? ["--network", "host"]
+      : [
+          "--add-host",
+          "host.docker.internal:host-gateway",
+          "-p",
+          `127.0.0.1:${port}:${port}`,
+        ]),
+    "-v",
+    `${join(root, "tools/dev-stack/caddy/Caddyfile")}:/etc/caddy/Caddyfile:ro`,
+    "-v",
+    `${trust}:/etc/caddy/upstream:ro`,
+    "-e",
+    `ARMADRA_CADDY_SITE=localhost:${port}`,
+    "-e",
+    `ARMADRA_CADDY_UPSTREAM=https://${linux ? "127.0.0.1" : "host.docker.internal"}:${upstream}`,
+    "-e",
+    "ARMADRA_CADDY_SERVER_NAME=localhost",
+    CADDY_IMAGE,
+  ]);
+  let health = { status: 0 };
+  for (let attempt = 0; attempt < 300 && health.status !== 200; attempt += 1) {
+    if (caddy.process.exitCode !== null)
+      throw new Error(`Caddy 退出：${caddy.tail()}`);
+    health = await httpsText({
+      host: "127.0.0.1",
+      port,
+      servername: "localhost",
+      path: "/health",
+      headers: { host: `localhost:${port}` },
+    }).catch((error) => ({ status: 0, body: error.message }));
+    if (health.status !== 200) await sleep(200);
+  }
+  if (health.status !== 200)
+    throw new Error(
+      `经 Caddy 的 /health 不是 200：${health.status} ${caddy.tail()}`,
+    );
+  report.proxy = { kind: "caddy", image: CADDY_IMAGE, name, port, upstream };
+  step("Caddy 已在前面", `https://localhost:${port} → 127.0.0.1:${upstream}`);
+}
+
+/** 不验证书的 HTTPS GET（上游自签、Caddy 内部 CA），只给探针自己用。 */
+function httpsText(options) {
+  return new Promise((done, failed) => {
+    const request = httpsRequest(
+      { ...options, rejectUnauthorized: false, agent: false, timeout: 5000 },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () =>
+          done({
+            status: response.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+          }),
+        );
+      },
+    );
+    request.on("timeout", () => request.destroy(new Error("timeout")));
+    request.on("error", failed);
+    request.end();
+  });
 }
 
 await h.run(async () => {
@@ -95,7 +204,11 @@ await h.run(async () => {
   const projectRoot = h.temp("armadra-server-e2e-project-");
   let projectPath = projectRoot;
   let server;
+  let behindProxy;
   if (image === undefined) {
+    if (proxy !== undefined) {
+      behindProxy = { upstream: await freePort(), port: await freePort() };
+    }
     const data = h.temp("armadra-server-e2e-");
     h.cleanups.push(() => killTmux(data));
     // 临时 HOME：服务器壳里的 core 不读操作员的 CLI 登录状态与配置。
@@ -111,6 +224,14 @@ await h.run(async () => {
         data,
         "--web-root",
         join(root, "apps/web/dist"),
+        ...(behindProxy === undefined
+          ? []
+          : [
+              "--listen",
+              `127.0.0.1:${behindProxy.upstream}`,
+              "--public-origin",
+              `https://localhost:${behindProxy.port}`,
+            ]),
       ],
       { cwd: root, env: isolatedEnv(home, { ARMADRA_LOG: "warn" }) },
     );
@@ -173,6 +294,7 @@ await h.run(async () => {
     if (!pairing) await sleep(100);
   }
   if (!pairing) throw new Error(`启动日志里没有配对链接：${server.tail()}`);
+  if (behindProxy !== undefined) await startCaddy(behindProxy);
   const origin = new URL(pairing).origin;
   step("服务器壳已启动", origin);
 
