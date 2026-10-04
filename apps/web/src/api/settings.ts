@@ -197,7 +197,11 @@ export const runtimeSettingsSchema = z.looseObject({
     .optional(),
   /** 资源面板打开时的采样间隔；Runtime 侧会夹在 500ms–60s 之间。 */
   resources: z
-    .looseObject({ intervalMs: z.number().int().positive().optional() })
+    .looseObject({
+      intervalMs: z.number().int().positive().optional(),
+      /** 会话内存提醒阈值（契约 §27.4）：core 越线发事件、推送叫人。 */
+      memoryWarnBytes: z.number().int().positive().optional(),
+    })
     .optional(),
   /**
    * 用户改过的键位（§24.1 快捷键页；终端宿主设计 §10）。
@@ -275,7 +279,7 @@ export interface RuntimeSettingsPatch {
   /** 实时协同（契约 §16.2）：关掉就回到租约 + CAS。 */
   collab?: { realtime?: boolean };
   /** 资源面板采样间隔；Runtime 侧会夹回 500ms–60s。 */
-  resources?: { intervalMs?: number };
+  resources?: { intervalMs?: number; memoryWarnBytes?: number };
   /**
    * 分平台的键位覆盖：`{ mac: { "canvas.tidy": "Mod+Shift+K" } }`，外加
    * `profile` 与 `profiles.<id>`。`null` 删掉一条（回到上一层），
