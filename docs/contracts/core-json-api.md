@@ -441,7 +441,7 @@ G5-25 追加：`GET /api/usage` 与 `POST /api/usage/refresh` 里 Claude 那一�
 
 - 数据是成本扫描（本节上文）最近一趟的 Claude 日桶与小时桶，读快照时现算；成本扫描关着（`usage.cost.enabled`）或还没扫过就没有这个字段。设置 `usage.claudeLocalWindow`（缺省 `true`）关掉也没有。
 - `used` 是输入 + 输出 + 缓存写的 token；缓存读不计。
-- `five_hour`：从上一个窗口之外第一条活动所在的本地整点起算，持续 5 小时，`resetsAtMs` 是结束时刻；最近的窗口已经结束时报从当前整点起、`used: 0` 的窗口。`seven_day`：含今天在内的 7 个本地日，滚动，没有 `resetsAtMs`。
+- `five_hour`：从上一个窗口之外第一条活动所在的本地整点起算，持续 5 小时，`resetsAtMs` 是结束时刻；最近的窗口已经结束时报从当前整点起、`used: 0`、没有 `resetsAtMs` 的窗口（下一条活动才开窗口）。`seven_day`：含今天在内的 7 个本地日，滚动，没有 `resetsAtMs`。
 - `limit` 只在知道这一档额度时才有；没有就只报用量，页面不算百分比。
 
 ### 12.2 `/api/agents` 行的历史数据可用性

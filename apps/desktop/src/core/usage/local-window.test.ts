@@ -5,7 +5,6 @@ import { join } from "node:path";
 
 import { ScanState } from "./cost";
 import {
-  FIVE_HOUR_MS,
   estimateLocalWindows,
   hourStartMs,
   type ScannedBuckets,
@@ -113,7 +112,7 @@ describe("Claude 本地额度窗口估算", () => {
     expect(seven?.used).toBe(5 + 7 + 11);
   });
 
-  it("最近的窗口已经结束：报从当前整点起、用量为零的窗口", async () => {
+  it("最近的窗口已经结束：报从当前整点起、用量为零、没有结束时刻的窗口", async () => {
     write("claude/projects/demo/c.jsonl", [
       line("o1", local(4, 6, 0), { input_tokens: 40 }),
     ]);
@@ -124,9 +123,7 @@ describe("Claude 本地额度窗口估算", () => {
     ).windows;
     expect(five?.used).toBe(0);
     expect(five?.windowStartMs).toBe(new Date(2026, 9, 4, 14).getTime());
-    expect(five?.resetsAtMs).toBe(
-      new Date(2026, 9, 4, 14).getTime() + FIVE_HOUR_MS,
-    );
+    expect(five).not.toHaveProperty("resetsAtMs");
     expect(seven?.used).toBe(40);
   });
 

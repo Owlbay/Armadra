@@ -8,7 +8,7 @@
  *
  *   * 5 小时窗口照 CLI 的做法，从窗口外的第一条活动所在的整点开始，持续 5 小时；
  *     超过之后下一条活动开新窗口。最近一个窗口已经结束就报一个从当前整点开始、
- *     用量为零的窗口。小时桶只保留 48 小时，够用。
+ *     用量为零、没有结束时刻的窗口。小时桶只保留 48 小时，够用。
  *   * 7 天窗口按本地日历日滚动：含今天在内的 7 个本地日。日桶是全部历史。
  *   * `used` 计输入、输出与缓存写；缓存读不计——它在一份长会话里是其余三项的几十
  *     倍，计进去这个数字就只剩缓存读。
@@ -29,7 +29,7 @@ export interface LocalWindowEstimate {
   /** 单位缩写，和额度窗口同一套 i18n 键（`usage.window.5h` / `7d`）。 */
   readonly label: "5h" | "7d";
   readonly windowStartMs: number;
-  /** 5 小时窗口在这一刻结束；7 天窗口是滚动的，没有。 */
+  /** 进行中的 5 小时窗口在这一刻结束；空闲的 5 小时窗口与滚动的 7 天窗口没有。 */
   readonly resetsAtMs?: number;
   /** 输入 + 输出 + 缓存写，token。 */
   readonly used: number;
@@ -109,12 +109,11 @@ export function fiveHourWindow(
   }
   const extra = limited("five_hour", limits);
   if (start === undefined || nowMs >= start + FIVE_HOUR_MS) {
-    const now = floorHour(nowMs);
+    // 下一条活动才开窗口，所以没有结束时刻。
     return {
       key: "five_hour",
       label: "5h",
-      windowStartMs: now,
-      resetsAtMs: now + FIVE_HOUR_MS,
+      windowStartMs: floorHour(nowMs),
       used: 0,
       ...extra,
     };
