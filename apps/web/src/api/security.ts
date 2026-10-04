@@ -41,6 +41,8 @@ import {
   identityText,
   type IdentitySession,
 } from "./identity";
+import { isNativeApp } from "../mobile/native-bridge";
+import { startNativeOAuth } from "../mobile/native-oauth";
 
 /**
  * 安全页与登录的客户端：契约 §18.1–§18.6（`/api/identity/` 下的口令登录两步、
@@ -370,13 +372,16 @@ export async function removeOAuthBinding(credentialId: string): Promise<void> {
 
 /**
  * 发起授权：拿到提供方地址后整页跳过去，回来时落在 `returnTo#oauth=…`。
- * `navigate` 留给测试。
+ * 原生 App 里改由系统浏览器打开，结果经 `armadra://oauth` 深链回来
+ * （`mobile/native-oauth.ts`，R-56）。`navigate` 留给测试。
  */
 export async function startOAuth(
   providerId: string,
   mode: "login" | "bind",
   navigate: (url: string) => void = (url) => globalThis.location.assign(url),
 ): Promise<void> {
+  if (isNativeApp())
+    return startNativeOAuth(providerId, mode, browserDeviceName());
   const location = globalThis.location;
   const started = await identityRequest(
     `oauth/${encodeURIComponent(providerId)}/start`,

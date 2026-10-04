@@ -4,6 +4,7 @@ import { hasInvitationFragment } from "../api/accounts";
 import { hasPairingFragment } from "../api/identity";
 import { hasOAuthFragment } from "../api/security";
 import { RUNTIME_VIA_SERVER_SHELL } from "../api/request";
+import { isNativeApp } from "../mobile/native-bridge";
 import { useCanvasStore } from "../store/canvas-store";
 import { usePreferencesStore } from "./preferences-store";
 
@@ -14,21 +15,30 @@ import { usePreferencesStore } from "./preferences-store";
  * 「安全」，那一页取走结果（登录、第二步、已绑定或错误）。只看一次，片段由
  * 那几页抹掉。
  *
+ * 原生 App 只认 `#oauth=`：原生 OAuth 收尾后入口把结果写成同一种片段（R-56）。
+ *
  * 必须挂在浮层闸门之外（`Overlays.tsx`）：设置对话框只在打开之后才挂载，把
  * 这段判断放进对话框里，等于链接打开后什么都不会发生。
  */
-export function useLinkFragments(serverShell = RUNTIME_VIA_SERVER_SHELL): void {
+export function useLinkFragments(
+  serverShell = RUNTIME_VIA_SERVER_SHELL,
+  nativeApp = isNativeApp(),
+): void {
   useEffect(() => {
-    if (!serverShell) return;
-    const section = hasInvitationFragment()
-      ? "accounts"
-      : hasPairingFragment()
-        ? "host"
-        : hasOAuthFragment()
-          ? "security"
-          : undefined;
+    if (!serverShell && !nativeApp) return;
+    const section = !serverShell
+      ? hasOAuthFragment()
+        ? "security"
+        : undefined
+      : hasInvitationFragment()
+        ? "accounts"
+        : hasPairingFragment()
+          ? "host"
+          : hasOAuthFragment()
+            ? "security"
+            : undefined;
     if (section === undefined) return;
     usePreferencesStore.getState().setLastSettingsSection(section);
     useCanvasStore.getState().setPanel("settings", true);
-  }, [serverShell]);
+  }, [serverShell, nativeApp]);
 }

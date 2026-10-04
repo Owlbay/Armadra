@@ -45,6 +45,16 @@ describe("useLinkFragments", () => {
     expect(usePreferencesStore.getState().lastSettingsSection).toBe("security");
   });
 
+  it("原生 App 只认 OAuth 回调（原生 OAuth 收尾后的片段）", () => {
+    window.history.replaceState(null, "", "#pair=abc.def");
+    renderHook(() => useLinkFragments(false, true));
+    expect(useCanvasStore.getState().panels.settings).toBe(false);
+    window.history.replaceState(null, "", "#oauth=bound");
+    renderHook(() => useLinkFragments(false, true));
+    expect(useCanvasStore.getState().panels.settings).toBe(true);
+    expect(usePreferencesStore.getState().lastSettingsSection).toBe("security");
+  });
+
   it("不是服务器壳、或者没有片段，什么都不做", () => {
     window.history.replaceState(null, "", "#pair=abc.def");
     renderHook(() => useLinkFragments(false));

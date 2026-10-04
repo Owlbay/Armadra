@@ -11,6 +11,11 @@ import { RUNTIME_URL, RUNTIME_VIA_SERVER_SHELL } from "../api/request";
 import { savedRuntimeOrigin } from "../api/runtime-url";
 import { isCompactLayout } from "../platform/layout";
 import { installNativeTransport, isNativeApp } from "./native-bridge";
+import {
+  completeNativeOAuth,
+  isNativeOAuthLink,
+  oauthFragment,
+} from "./native-oauth";
 
 /** 入口画什么：画布本体，或者连接页。 */
 export type Entry =
@@ -37,8 +42,9 @@ export type Entry =
 const LINK_FRAGMENT = /^#link=(.+)$/;
 
 /**
- * 原生 App 收到 `armadra://pair?…` 深链时把它写进 `#link=` 再重载（入口在挂载前
- * 就定了）。取走即从地址栏抹掉；认不出是 `null`。
+ * 原生 App 收到 `armadra://pair?…`（配对）或 `armadra://oauth?…`（原生 OAuth 的
+ * 回调，R-56）深链时把它写进 `#link=` 再重载（入口在挂载前就定了）。取走即从
+ * 地址栏抹掉；认不出是 `null`。
  */
 export function takeLinkFragment(): string | null {
   const location = globalThis.location;
@@ -55,7 +61,9 @@ export function takeLinkFragment(): string | null {
   }
   try {
     const link = decodeURIComponent(found[1]!);
-    return link.startsWith("armadra://pair?") ? link : null;
+    return link.startsWith("armadra://pair?") || isNativeOAuthLink(link)
+      ? link
+      : null;
   } catch {
     return null;
   }
@@ -94,6 +102,45 @@ export async function ticketWithRefresh(
   }
 }
 
+function installTransport(origin: string): void {
+  installNativeTransport({
+    origin,
+    authorization: currentAccessToken,
+    wsTicket: () => ticketWithRefresh(fetchWsTicket, refreshOnce),
+    refresh: refreshOnce,
+  });
+}
+
+/**
+ * 原生 OAuth 的深链回来了（R-56）：装好传输、读回钥匙串里的会话，再收尾。
+ * 结果写成 `#oauth=…` 片段交给「安全」那一页（`use-link-fragments` 打开它）。
+ * 收尾之后有会话（原来就有，或者这次登录拿到的）进画布，否则回连接页。
+ */
+async function finishNativeOAuth(
+  origin: string | null,
+  link: string,
+): Promise<Entry> {
+  if (origin === null) return { kind: "connect", mode: "native" };
+  installTransport(origin);
+  const restored = await restoreNativeCredentials();
+  const outcome = await completeNativeOAuth(link);
+  try {
+    const location = globalThis.location;
+    globalThis.history?.replaceState(
+      null,
+      "",
+      `${location.pathname}${location.search}${oauthFragment(outcome)}`,
+    );
+  } catch {
+    /* 写不进地址栏：结果看不到，但登录本身不受影响。 */
+  }
+  const signedIn =
+    outcome.result === "signedIn" || outcome.result === "signedUp";
+  return restored || signedIn
+    ? { kind: "app" }
+    : { kind: "connect", mode: "native", origin };
+}
+
 /**
  * 挂载之前决定入口（`main.tsx`）。桌面窗口与普通网页一个分支都不进，直接是
  * 画布——不发请求、不等任何东西。
@@ -109,6 +156,8 @@ export async function prepareEntry(): Promise<Entry> {
   if (isNativeApp()) {
     const origin = savedRuntimeOrigin();
     const link = takeLinkFragment();
+    if (link !== null && isNativeOAuthLink(link))
+      return finishNativeOAuth(origin, link);
     if (link !== null)
       return {
         kind: "connect",
@@ -117,12 +166,7 @@ export async function prepareEntry(): Promise<Entry> {
         link,
       };
     if (origin === null) return { kind: "connect", mode: "native" };
-    installNativeTransport({
-      origin,
-      authorization: currentAccessToken,
-      wsTicket: () => ticketWithRefresh(fetchWsTicket, refreshOnce),
-      refresh: refreshOnce,
-    });
+    installTransport(origin);
     return (await restoreNativeCredentials())
       ? { kind: "app" }
       : { kind: "connect", mode: "native", origin };
