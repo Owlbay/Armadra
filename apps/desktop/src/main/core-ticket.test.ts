@@ -224,7 +224,7 @@ describe("Windows 上经 fork 的 IPC 取票", () => {
     expect(ticket.origin).toBe(ORIGIN);
   });
 
-  it("core 拒绝来源是 originUnsupported；没有通道是 hostUnavailable", async () => {
+  it("core 拒绝来源是 originUnsupported；没有通道（接管或外接的 core）是 channelUnavailable", async () => {
     child((request) => ({
       type: TICKET_MESSAGE,
       id: request.id,
@@ -247,6 +247,6 @@ describe("Windows 上经 fork 的 IPC 取票", () => {
         deviceName: "本机桌面",
         platform: "win32",
       }),
-    ).rejects.toMatchObject({ reason: "hostUnavailable" });
+    ).rejects.toMatchObject({ reason: "channelUnavailable" });
   });
 });

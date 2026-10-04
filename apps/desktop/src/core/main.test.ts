@@ -530,6 +530,22 @@ describe("what the core answers", () => {
       expect(elsewhere.status).toBe(401);
     });
 
+    it("反复配对（页面重载、托盘）设备列表不增长", async () => {
+      const { core } = await start(temporary());
+      await loopbackSession(core, base(core), "http://127.0.0.1:50001");
+      await loopbackSession(core, base(core), "http://127.0.0.1:50002");
+      const tray = await loopbackSession(
+        core,
+        base(core),
+        new URL(base(core)).origin,
+      );
+      const answer = await tray.fetch("/api/identity/devices");
+      expect(answer.status).toBe(200);
+      expect(
+        ((await answer.json()) as { devices: unknown[] }).devices,
+      ).toHaveLength(1);
+    });
+
     it("ws-ticket 只发给带着会话的原生传输", async () => {
       const { core } = await start(temporary());
       const anonymous = await fetch(`${base(core)}/api/identity/ws-ticket`, {

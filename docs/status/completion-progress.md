@@ -1683,8 +1683,12 @@
 
 **没做 / 限制**
 
-- Windows 的 IPC 取票只有单元测试，没在真 Windows 上跑；接管上一个 core 或外接 Runtime 时没有 IPC 通道，Windows 上页面拿不到票。
-- 托盘每次启动配一台设备，页面每次加载也配一台（原有行为），设备列表里会多出同名「本机桌面」。
+- Windows 的 IPC 取票只有单元测试，没在真 Windows 上跑。
+
+**后续（fix/g5-28-local-device-reuse）**
+
+- 本机设备复用：`consumeBootstrap` 对回环明文来源的票复用主人名下同名、未撤销、会话全来自回环明文来源的那台设备（`service.ts::reusableLocalDevice`，`store.ts::deviceSessionOrigins`），页面与托盘反复配对设备列表不再增长；经 Gateway 配对的设备不受影响。用例 `service.test`「本机设备复用」3 例、`main.test`「反复配对设备列表不增长」。
+- Windows 接管 / 外接的 core：壳没有 IPC 通道时取票答 `channelUnavailable`（`shell-core/ticket.ts`、`shared/ipc.ts`），页面记下壳签不出票的原因（`identity.ts::shellSessionFailure`）并在顶部挂通知条，文案请人重开应用，「重连」再试一次；配上对即消失。用例 `core-ticket.test`、`Banners.session.test`。没有另开取票退路：hook 服务的应用令牌节点进程也拿得到，用它签主人票会把权限放大给 Agent。
 - 下载把整个文件读进内存再存；很大的文件会占内存。
 - 语言服务与浏览器画面两条流只经全局 `WebSocket` 覆盖，没有单独实测。
 

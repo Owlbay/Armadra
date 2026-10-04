@@ -279,6 +279,17 @@ export class IdentityTx {
     return rows.map(toDevice);
   }
 
+  /** 这台设备签过会话的那些来源（去重）。本机设备复用的判据用它。 */
+  deviceSessionOrigins(deviceId: string): string[] {
+    return (
+      this.database
+        .prepare(
+          "SELECT DISTINCT origin FROM identity_sessions WHERE device_id = ?",
+        )
+        .all(deviceId) as { origin: string }[]
+    ).map((row) => row.origin);
+  }
+
   session(sessionId: string): IdentitySession | undefined {
     const row = this.database
       .prepare(

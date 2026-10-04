@@ -1,6 +1,6 @@
 import { IdentityError } from "./errors";
 import { accessChanged } from "./gate";
-import { validOrigin } from "./origin";
+import { nativeOrigin, validOrigin } from "./origin";
 import { CURRENT_KDF, derivePassword, verifyPassword } from "./passwords";
 import {
   type Scope,
@@ -350,7 +350,12 @@ export class IdentityService {
         owner = { principalId: newId(), createdAtMs: now };
         tx.createOwner(owner);
       }
-      const device: IdentityDevice = {
+      // 桌面壳的页面与托盘每次启动都配一次对（来源是内核分配的回环端口，每次
+      // 都不同）。原来每次都新建一台「本机桌面」，设备列表越积越多；现在回环
+      // 明文来源的票复用同一台本机设备，只多一条会话。
+      const device: IdentityDevice = (nativeOrigin(ticket.origin)
+        ? reusableLocalDevice(tx, owner.principalId, ticket.deviceName)
+        : undefined) ?? {
         deviceId,
         principalId: owner.principalId,
         name: ticket.deviceName,
@@ -359,13 +364,13 @@ export class IdentityService {
         createdAtMs: now,
         revokedAtMs: 0,
       };
-      tx.createDevice(device);
+      if (device.deviceId === deviceId) tx.createDevice(device);
       const accessExpiresAtMs = now + ACCESS_TTL_MS;
       const expiresAtMs = now + SESSION_TTL_MS;
       const session: IdentitySession = {
         sessionId,
-        deviceId,
-        deviceEpoch: 1,
+        deviceId: device.deviceId,
+        deviceEpoch: device.epoch,
         origin: ticket.origin,
         scopes: ticket.scopes,
         accessHash: digest("access", secrets.accessToken),
@@ -1054,4 +1059,33 @@ function deviceColumns(
       ? { lastSeenAtMs: activity.lastSeenAtMs }
       : {}),
   };
+}
+
+/**
+ * 可以复用的本机设备（桌面壳的页面与托盘）：主人名下、同名、没被撤销，而且它
+ * 签过的每一条会话都来自回环明文来源——经 Gateway 配对的手机（HTTPS 来源）与
+ * 口令登录的设备永远不会被认成本机设备。有多台时取最早的那台，答案稳定。
+ */
+function reusableLocalDevice(
+  tx: IdentityTx,
+  principalId: string,
+  name: string,
+): IdentityDevice | undefined {
+  let found: IdentityDevice | undefined;
+  let cursor = "";
+  for (;;) {
+    const page = tx.devices(cursor, 200, principalId);
+    if (page.length === 0) break;
+    for (const device of page) {
+      if (device.revokedAtMs !== 0 || device.name !== name) continue;
+      if (found !== undefined && found.createdAtMs <= device.createdAtMs)
+        continue;
+      const origins = tx.deviceSessionOrigins(device.deviceId);
+      if (origins.length === 0 || !origins.every(nativeOrigin)) continue;
+      found = device;
+    }
+    cursor = page[page.length - 1]?.deviceId ?? "";
+    if (page.length < 200) break;
+  }
+  return found;
 }

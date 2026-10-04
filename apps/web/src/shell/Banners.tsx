@@ -1,7 +1,8 @@
-import { useState, type ReactNode } from "react";
+import { useState, useSyncExternalStore, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  KeyRound,
   PlugZap,
   Recycle,
   Repeat2,
@@ -9,6 +10,11 @@ import {
   X,
 } from "lucide-react";
 import { runtimeApi } from "../api/client";
+import {
+  onIdentitySessionChange,
+  shellBearer,
+  shellSessionFailure,
+} from "../api/identity";
 import { useDeliveryStore } from "../agent/delivery-store";
 import { requestCenterOnNode } from "../canvas/flow/flow-context";
 import { usePresenceBarVisible } from "../canvas/PresenceBar";
@@ -111,6 +117,24 @@ export function Banners() {
 
   const items: ReactNode[] = [];
   const offline = useOfflineBanner();
+  // 桌面壳签不出票：每个请求都会 401，说清楚原因（契约 §3.2）。
+  const shellFailure = useSyncExternalStore(
+    onIdentitySessionChange,
+    shellSessionFailure,
+  );
+
+  if (shellFailure !== null) {
+    items.push(
+      <Banner
+        key="shell-session"
+        tone="danger"
+        icon={<KeyRound />}
+        text={t(`hostNative.blocked.${shellFailure}`)}
+        actionLabel={t("banner.runtimeRetry")}
+        onAction={() => void shellBearer()}
+      />,
+    );
+  }
 
   // 实时板断线（补全架构 §6.4）：本地照常编辑，重连后自动补齐。
   if (offline) {
