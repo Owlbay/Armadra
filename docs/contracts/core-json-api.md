@@ -672,8 +672,9 @@ G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：�
 答复与 PNG 导出同形：`{ "path": "<绝对路径>", "relativePath": ".armadra/exports/acp/<exportId>/msg-3-1.ts", "bytes": 20 }`。同名覆盖。
 
 - `name` 是单个文件名：`[A-Za-z0-9_-][A-Za-z0-9._-]{0,119}`，不含 `..`；`exportId` 不是 uuid、`name` 不合规、缺 `name` / `content`、正文超过 1 MiB 一律 400 `bad_request`。
-- 只读打开的工作空间 403 `forbidden`；远端工作空间 501 `unsupported`（Worker 没有对应操作，不在本机落一份对方看不到的文件）。
+- 只读打开的工作空间 403 `forbidden`。远端工作空间不再答 501：经 Worker 操作 `assets.exportText`（能力 `remote.assets.v1`；正文超过帧内上限时先分块传输）写在执行主机上，答复里的 `path` 是那台机器上的路径。
 - 页面只把它用于输出到画板；共享层 `exportTextRequestSchema`。
+- 落点跟着来源 Agent 的工作目录：core 按 `exportId` 找这个工作空间里归该节点的最近一个终端会话，取它的 `cwd`；`cwd` 存在、解开符号链接后严格在工作区根之内、且不在 `.armadra` / `.git` 里时，文件落在 `<cwd>/.armadra/exports/acp/<exportId>/<name>`（那个 `.armadra` 同样自忽略），否则退回工作区根。`relativePath` 始终相对工作区根（例 `packages/api/.armadra/exports/acp/<exportId>/msg-3-1.ts`），编辑器节点直接用它。请求体不带路径，写到哪里只由 core 记的会话决定。
 
 ## 15. 工作流与 runners：`/api/workflows/*`
 
