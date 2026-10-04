@@ -1635,6 +1635,59 @@
 - R-90 后台标签页的渲染进程为什么不回答，根因还没查明。修掉的是现场里紧挨在卡住前面的双重附加。下次再卡住时，`pages` 字段能区分是浏览器侧还是渲染侧不回答。
 - R-89 的修复是推断的，CI 上要看夜间作业以后还会不会出现「配对重试后完成」。
 
+## G5-28 回环全部收紧（L9 收尾）
+
+**做了什么**
+
+- core：回环监听上的门 `core/identity/loopback.ts`，经新的 `CoreServer.admission(gate)` 装上（`http/server.ts`，判在读请求体之前，升级在路由门之前）。回环匿名按主人关着时（两种壳都是）由身份域装：除 `/health`、`/api/health`、`/api/identity/*` 与配对短码换票外，每条 `/api/` 都要会话（回环明文读 Bearer，否则读 Cookie 并对写方法核 CSRF），每条流都要 `Sec-WebSocket-Protocol: armadra-ticket.<票>`。不报 Origin 的调用同样 401。认出的会话经 `runAs` 进请求身份，路由门、事件订阅、4401 / 4403 复核与 Gateway 一致。
+- 与 Gateway 共用一份：`WsTickets`、`protocolTicket`、`anonymousPath`、`sessionIdentity` 搬到 `core/identity/transport.ts`（`gateway/admission.ts` 原样转出）；Gateway 的交接 listener 标 `admitted`，不过回环的门。`POST /api/identity/ws-ticket` 在回环上由身份域答（只给回环明文来源的原生传输），形状同 §17.4。
+- Windows 取票：私有通道在 Windows 不开，壳经 fork 的 IPC 通道取票（`armadra:identity-ticket`，core `identity/control.ts::startTicketIpc` 与 `issueShellTicket`，壳 `main/core-ticket.ts`）。原来 Windows 的页面拿不到票，G5-24 之后 GitHub / 自动化两面在那里已是 401，这次一起修。
+- 页面：`api/shell-transport.ts` 在桌面壳里给全局 `fetch` / `WebSocket` 装请求层，复用原生 App 的 `bearerFetch` / `ticketedWebSocket`（加了 `prepare`、`socketOrigin`、`refresh(rejected)`、`ws:` 的同源判断）：还没会话先向壳要票配对，401 时复核 → 刷新 → 重新要票只重发一次，流先换票；访问密钥到期前两分钟主动轮转（`identity.ts`），流不必因 4401 重连。`api/request.ts` 去掉 G5-24 的两面特判。`<img>` 资源在壳里也经 `fetch` 取 `blob:`（`needsBearerFetch`）。
+- 编辑器「下载」（G5-22 遗留）：`api/assets.ts::downloadRuntimeFile` 经 `fetch` 取回再交给 `blob:` 链接，三种环境都带凭据（桌面与原生 App 的 Bearer、服务器壳同源 Cookie）；取不回提示「下载失败」。原来桌面里是用系统浏览器打开地址，会 401。
+- 托盘：`shell-core/core-session.ts`，同一张票换自己的会话（来源是 core 自己的回环基址），401 先刷新、再重新配对。
+- 探针：`tools/probes/probe-session.mjs`（经私有通道要票配对、陌生来源守门 `strangerRefused`）；`packaged-smoke` 改用它，并断言陌生回环来源打 `/api/settings` 与升级事件流都是 401。起裸 core 却没走 `isolatedEnv` 的 `acp-e2e`、`credentials-e2e`、`agent-e2e/lib`、`agent-e2e/isolated`、`scenario-9` 补上 `LOOPBACK_OWNER_ENV`。
+- 文档：契约 §3.2 「自 0.3.0 起」改为「自 0.2.0 起」并追加一段；安全审查 L9 标全部修复；开发指南、架构、CHANGELOG 0.2.0 各补一条。
+
+**调用方核对**
+
+| 调用方                                                                            | 打哪里、带什么                                                                                                                         | 结论                                                      |
+| --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `armadra-hook` 全部动词、`hook` 事件、`credential`（含 `--ama`）、`doctor`、`mcp` | hook 服务自己的监听，应用令牌 + 节点 token                                                                                             | 不经 core 主监听，不受影响                                |
+| `run/<cli>` 启动器、PATH 垫片、Windows 启动器                                     | 只调 `armadra-hook credential`                                                                                                         | 不受影响                                                  |
+| 桌面页面：全部 `/api/`、事件流、终端、realtime、语言服务、浏览器画面、图片、下载  | 全局请求层带 Bearer / 一次性票                                                                                                         | Electron 实测 200 / 升级成功                              |
+| 桌面页面：身份面                                                                  | `/api/identity/*`，自己认凭据                                                                                                          | 不变                                                      |
+| 托盘：`/api/usage`、`/api/usage/cost`、`/api/gateway`、`/api/settings`            | `CoreSession` 的 Bearer                                                                                                                | 实测库里有来源为 core 基址的会话                          |
+| 壳的 `/health`                                                                    | 不要会话                                                                                                                               | 不受影响                                                  |
+| 手机经 Gateway（网页 Cookie、原生 App Bearer + WS 票）                            | Gateway 的门，交接 listener 标 `admitted`                                                                                              | 不受影响，`gateway.integration`、`gateway-e2e` 通过       |
+| 服务器壳                                                                          | 页面经 Gateway；回环监听现在也要会话                                                                                                   | 仓库里没有调用方打它的回环；`server-e2e`、`push-e2e` 通过 |
+| 浏览器里经 Vite 开发                                                              | 连桌面壳起的 core 会 401                                                                                                               | 用 `armadra.sh run web`（带 `ARMADRA_LOOPBACK_OWNER=1`）  |
+| 探针：裸 core                                                                     | `isolatedEnv` / `LOOPBACK_OWNER_ENV`                                                                                                   | A 档 12 项通过                                            |
+| 探针：桌面壳起的 core                                                             | `packaged-smoke` 用 `probe-session.mjs`；`core-terminal-packaged`、`browser-agent-electron`、`windows-acceptance` 在页面里调，走请求层 | packaged-smoke 通过                                       |
+
+**实测**（macOS arm64，2026-10-05）
+
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：4587 通过 / 46 跳过，live 4 项、脚本测试通过；`pnpm --filter @armadra/web test` 3424 通过，`typecheck` 通过；`pnpm --filter @armadra/server test` 87 通过 / 4 跳过；`pnpm check` 通过。
+- 新增用例：`main.test`「回环上没带会话的请求」6 例；`control.test` 的 IPC 签票 3 例；`core-ticket.test` 的 Windows IPC 2 例；`core-session.test` 4 例；页面 `shell-transport.test` 8 例、`assets.test`（壳里经 fetch、下载）3 例、`EditorNode.test` 的下载。`realtime/socket.integration`、`events/socket.integration`、`gateway.integration` 改成带会话与票。
+- `node tools/ci/e2e.mjs --tier a`：12 项全过；`packaged-smoke`（打包版）通过，`回环匿名 {"settings":401,"upgrade":401}`，PDF、视频、终端回显都正常，控制台无错误。
+- 真 Electron 开发构建（`ARMADRA_DATA_DIR` 与 HOME 都是临时的，环境里故意带 `ARMADRA_LOOPBACK_OWNER=1`）：页面 `fetch /api/settings` 200；陌生回环来源 `/api/settings` 与事件流升级 401，不报 Origin 401；页面事件流升级成功；终端回显；realtime 同步流收到第一帧、画板切成实时；重载后画布加载、未断开；设置页正常；托盘会话在库里；页面没有 401 与 error。
+
+**接口**
+
+- `CoreServer.admission(gate)`、`createListener({ admitted })`；`AdmissionVerdict` / `RequestAdmission`（`http/server.ts`）。
+- `core/identity/loopback.ts`：`createLoopbackAdmission`、`loopbackSessionPath`；`core/identity/transport.ts`：`WsTickets`、`protocolTicket`、`anonymousPath`、`sessionIdentity`、`subjectOf`。
+- `IdentityHttpOptions.wsTickets`；`POST /api/identity/ws-ticket` → `{ ticket, expiresAt }`。
+- `core/identity/control.ts`：`issueShellTicket`、`startTicketIpc`、`TICKET_MESSAGE`；壳 `main/core-ticket.ts`：`attachTicketChannel`。
+- 页面：`installShellTransport()`、`shellWsTicket()`、`downloadRuntimeFile(url, name)`；`NativeTransport` 多 `socketOrigin`、`prepare`、`refresh(rejected)`。
+- 壳：`shell-core/core-session.ts::CoreSession`；`TrayOptions.request`。
+- 测试：`core/testing/loopback-session.ts::loopbackSession`；探针 `tools/probes/probe-session.mjs`。
+
+**没做 / 限制**
+
+- Windows 的 IPC 取票只有单元测试，没在真 Windows 上跑；接管上一个 core 或外接 Runtime 时没有 IPC 通道，Windows 上页面拿不到票。
+- 托盘每次启动配一台设备，页面每次加载也配一台（原有行为），设备列表里会多出同名「本机桌面」。
+- 下载把整个文件读进内存再存；很大的文件会占内存。
+- 语言服务与浏览器画面两条流只经全局 `WebSocket` 覆盖，没有单独实测。
+
 ## G5-29 G5 残项：本地额度开关、手机 MFA、GitLab 子组 / 变基 / 自动合并、Gitea 与 GitLab 补齐
 
 做了什么：

@@ -300,39 +300,44 @@ core 的 CORS 只放行回环 HTTP 来源：桌面壳放行的是自己静态服
 所以每次启动都不同），开发时再加上 Vite 的 `http://127.0.0.1:1420`。自定义 scheme 一律拒绝。
 CSP（`apps/desktop/src/shell-core/csp.ts`）只允许本机 core 的 http/ws。桌面壳里凭据经
 preload 注入页面，没有票据链；服务器壳的设备配对与可撤销会话见上面的「无窗口服务器壳」。
-GitHub 与自动化两面要会话：桌面壳的页面带票据换来的 `Authorization: Bearer`（CORS 放行这个头），
-明文回环上没带凭据的调用自 0.3.0 起是 401；只有设了 `ARMADRA_LOOPBACK_OWNER=1` 的裸 core
-按本机主人处理（契约 §3.2）。
+自 0.2.0 起 core 回环监听上的每一条 `/api/` 与每一条流都要会话（契约 §3.2）：桌面壳的页面在全局
+`fetch` / `WebSocket` 上装了请求层（`apps/web/src/api/shell-transport.ts`），请求带票据换来的
+`Authorization: Bearer`（CORS 放行这个头），流先 `POST /api/identity/ws-ticket` 换一张一次性票、经
+`Sec-WebSocket-Protocol` 升级；托盘经 `shell-core/core-session.ts` 用自己的会话。没带会话的调用（包括
+`curl` 与本机别的回环端口上的网页）一律 401，只有 `/health`、`/api/health`、`/api/identity/*` 与配对短码
+换票例外。只有设了 `ARMADRA_LOOPBACK_OWNER=1` 的裸 core 不装这道门、按本机主人处理；所以浏览器里经
+Vite 开发页面时，core 要由 `armadra.sh run web` 起（它带这个变量），连桌面壳起的 core 会处处 401。探针要从
+Node 直接打桌面壳起的 core 时用 `tools/probes/probe-session.mjs`（经私有通道要票配对）。
 分进程时代的票据链见 [桌面壳原生 Host 会话](../history/host-native-session.md) 与
 [设备认证](../history/host-device-auth.md)，两份都是历史文档。
 
 ## 环境变量与数据
 
-| 变量                                            | 作用                                                                                                                                                                                               |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ARMADRA_RUNTIME_HOST` / `ARMADRA_RUNTIME_PORT` | 没有 `--listen` 时的监听地址，默认 `127.0.0.1:43120`；设置后 `armadra.sh run web` 用固定端口而非随机端口                                                                                           |
-| `ARMADRA_RUNTIME_LISTEN`                        | 桌面壳持有的 core 在私有 socket 之外额外监听的一个 `--listen` spec（开发用）                                                                                                                       |
-| `ARMADRA_WEB_PORT`                              | `armadra.sh run web` 的前端端口                                                                                                                                                                    |
-| `VITE_RUNTIME_URL`                              | 前端连接地址；设置后 Vite 不装代理。不设时浏览器开发走 Vite 代理（地址取自 endpoints.json），桌面壳里取 preload 给的 `httpBase`                                                                    |
-| `ARMADRA_DATA_DIR`                              | core 的数据目录，`endpoints.json` 与 core 的 socket 都在这里                                                                                                                                       |
-| `ARMADRA_DATABASE_URL`                          | SQLite 连接，例如 `sqlite://…?mode=rwc`                                                                                                                                                            |
-| `ARMADRA_CORE_MIGRATIONS_DIR`                   | 迁移目录，覆盖「包内 `resources/migrations` → 往上找检出」这条查找顺序（测试与夹具用）                                                                                                             |
-| `ARMADRA_LOG`                                   | 日志级别，默认 `info`                                                                                                                                                                              |
-| `ARMADRA_CRASH_REPORT_DSN`                      | 服务器壳的可选崩溃上报 DSN（自托管 GlitchTip / Sentry 协议）；设了就以它为准，不设时读设置 `diagnostics.crashReportDsn`，两处都空则不发（外部服务 §11.2）                                          |
-| `ARMADRA_LOOPBACK_OWNER`                        | `=1` 让裸 core 把明文回环上没带凭据的 GitHub / 自动化调用当成本机主人（契约 §3.2）。只给探针（`tools/probes/probe-home.mjs` 统一设）与 `armadra.sh run web`；桌面壳不把它带给 core，服务器壳不听它 |
-| `ARMADRA_HOOK_DEBUG`                            | Hook 调试                                                                                                                                                                                          |
-| `ARMADRA_DESKTOP_OWNS_RUNTIME`                  | 开发也由壳持有 core（默认连外部 core）                                                                                                                                                             |
-| `ARMADRA_DESKTOP_PACKAGED`                      | 按打包布局解析随包资源的位置，不必真打包                                                                                                                                                           |
-| `ARMADRA_DESKTOP_LIFECYCLE_TRACE`               | 打印启动 / 退出编排的事件                                                                                                                                                                          |
-| `ARMADRA_UPDATES_DEV`                           | `=1` 让未打包的构建也接更新器，用来对着本地发布服务走一遍流程；它不放松安装校验，未签名的包照样会被拒                                                                                              |
-| `ARMADRA_UPDATER_ENDPOINTS`                     | 逗号分隔的更新清单地址，覆盖 `electron-builder.yml` 里的占位 `publish.url`；仓库里从不写死真实地址                                                                                                 |
-| `ARMADRA_HOOK_TIMEOUT_MS`                       | Agent 扩展模块上报的超时（默认 1500 ms，上限 60000）。只有测试驱动会调大它：进程级回退路径要在同一预算里起一个子进程                                                                               |
-| `ARMADRA_REMOTE_WORKER_LAUNCHER`                | 替换远端 Worker 启动行的 argv[0]（默认 `ssh`）。必须是绝对路径、不含空白；SSH 选项与远端命令原样保留。测试与自建隧道用                                                                             |
-| `ARMADRA_STATUS_PAGE_BASE`                      | 用量页的 Provider 状态页改读 `<地址>/<anthropic\|openai\|github>/api/v2/status.json`（探针用本机 fixture，不碰真网络）                                                                             |
-| `ARMADRA_COPILOT_CLIENT_ID`                     | Copilot 设备流换成自己的 GitHub OAuth 应用（企业部署）；设备流本身在 `usage.copilotUsage` 后面，默认关                                                                                             |
-| `ARMADRA_SECRET_BACKEND`                        | `=file` 强制密钥后端为 0600 明文文件（测试与无人值守；测试的 setup 默认设了它，不碰开发者的钥匙串）；`=file-encrypted` 用数据目录里的 master key 封存（探针用，节点凭据拒绝 `file`）               |
-| `ARMADRA_SECRET_MASTER_KEY_FILE`                | 服务器壳的 master key 换个位置（如 systemd `LoadCredential=`）；不设时用 `<数据目录>/secrets/master.key`，首启生成                                                                                 |
-| `ARMADRA_SMTP_URL` / `ARMADRA_SMTP_FROM`        | 服务器壳的可选邮件通道（同 `serve --smtp-url` / `--smtp-from`，契约 §28）：`smtp(s)://用户:口令@主机:端口`，口令可写 `secret://armadra-smtp`；不设则不发信、页面不显示「发送邮件」                 |
+| 变量                                            | 作用                                                                                                                                                                                                   |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ARMADRA_RUNTIME_HOST` / `ARMADRA_RUNTIME_PORT` | 没有 `--listen` 时的监听地址，默认 `127.0.0.1:43120`；设置后 `armadra.sh run web` 用固定端口而非随机端口                                                                                               |
+| `ARMADRA_RUNTIME_LISTEN`                        | 桌面壳持有的 core 在私有 socket 之外额外监听的一个 `--listen` spec（开发用）                                                                                                                           |
+| `ARMADRA_WEB_PORT`                              | `armadra.sh run web` 的前端端口                                                                                                                                                                        |
+| `VITE_RUNTIME_URL`                              | 前端连接地址；设置后 Vite 不装代理。不设时浏览器开发走 Vite 代理（地址取自 endpoints.json），桌面壳里取 preload 给的 `httpBase`                                                                        |
+| `ARMADRA_DATA_DIR`                              | core 的数据目录，`endpoints.json` 与 core 的 socket 都在这里                                                                                                                                           |
+| `ARMADRA_DATABASE_URL`                          | SQLite 连接，例如 `sqlite://…?mode=rwc`                                                                                                                                                                |
+| `ARMADRA_CORE_MIGRATIONS_DIR`                   | 迁移目录，覆盖「包内 `resources/migrations` → 往上找检出」这条查找顺序（测试与夹具用）                                                                                                                 |
+| `ARMADRA_LOG`                                   | 日志级别，默认 `info`                                                                                                                                                                                  |
+| `ARMADRA_CRASH_REPORT_DSN`                      | 服务器壳的可选崩溃上报 DSN（自托管 GlitchTip / Sentry 协议）；设了就以它为准，不设时读设置 `diagnostics.crashReportDsn`，两处都空则不发（外部服务 §11.2）                                              |
+| `ARMADRA_LOOPBACK_OWNER`                        | `=1` 让裸 core 不装回环监听上的门，把明文回环上没带凭据的调用当成本机主人（契约 §3.2）。只给探针（`tools/probes/probe-home.mjs` 统一设）与 `armadra.sh run web`；桌面壳不把它带给 core，服务器壳不听它 |
+| `ARMADRA_HOOK_DEBUG`                            | Hook 调试                                                                                                                                                                                              |
+| `ARMADRA_DESKTOP_OWNS_RUNTIME`                  | 开发也由壳持有 core（默认连外部 core）                                                                                                                                                                 |
+| `ARMADRA_DESKTOP_PACKAGED`                      | 按打包布局解析随包资源的位置，不必真打包                                                                                                                                                               |
+| `ARMADRA_DESKTOP_LIFECYCLE_TRACE`               | 打印启动 / 退出编排的事件                                                                                                                                                                              |
+| `ARMADRA_UPDATES_DEV`                           | `=1` 让未打包的构建也接更新器，用来对着本地发布服务走一遍流程；它不放松安装校验，未签名的包照样会被拒                                                                                                  |
+| `ARMADRA_UPDATER_ENDPOINTS`                     | 逗号分隔的更新清单地址，覆盖 `electron-builder.yml` 里的占位 `publish.url`；仓库里从不写死真实地址                                                                                                     |
+| `ARMADRA_HOOK_TIMEOUT_MS`                       | Agent 扩展模块上报的超时（默认 1500 ms，上限 60000）。只有测试驱动会调大它：进程级回退路径要在同一预算里起一个子进程                                                                                   |
+| `ARMADRA_REMOTE_WORKER_LAUNCHER`                | 替换远端 Worker 启动行的 argv[0]（默认 `ssh`）。必须是绝对路径、不含空白；SSH 选项与远端命令原样保留。测试与自建隧道用                                                                                 |
+| `ARMADRA_STATUS_PAGE_BASE`                      | 用量页的 Provider 状态页改读 `<地址>/<anthropic\|openai\|github>/api/v2/status.json`（探针用本机 fixture，不碰真网络）                                                                                 |
+| `ARMADRA_COPILOT_CLIENT_ID`                     | Copilot 设备流换成自己的 GitHub OAuth 应用（企业部署）；设备流本身在 `usage.copilotUsage` 后面，默认关                                                                                                 |
+| `ARMADRA_SECRET_BACKEND`                        | `=file` 强制密钥后端为 0600 明文文件（测试与无人值守；测试的 setup 默认设了它，不碰开发者的钥匙串）；`=file-encrypted` 用数据目录里的 master key 封存（探针用，节点凭据拒绝 `file`）                   |
+| `ARMADRA_SECRET_MASTER_KEY_FILE`                | 服务器壳的 master key 换个位置（如 systemd `LoadCredential=`）；不设时用 `<数据目录>/secrets/master.key`，首启生成                                                                                     |
+| `ARMADRA_SMTP_URL` / `ARMADRA_SMTP_FROM`        | 服务器壳的可选邮件通道（同 `serve --smtp-url` / `--smtp-from`，契约 §28）：`smtp(s)://用户:口令@主机:端口`，口令可写 `secret://armadra-smtp`；不设则不发信、页面不显示「发送邮件」                     |
 
 脚本发现 core 端口占用时直接报错。节点身份、Hook token、端点与权限等待变量由 core 注入 Agent 终端，无需手工配置。
 core 不监听 TCP 时 `hook-endpoint.env` 不写 `ARMADRA_HOOK_PORT`，Hook 客户端只走 `hook.sock`。

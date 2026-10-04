@@ -109,19 +109,38 @@ async function handle(
     });
     return;
   }
+  let input: unknown;
   try {
-    const input = JSON.parse(body.toString("utf8") || "null") as {
+    input = JSON.parse(body.toString("utf8") || "null");
+  } catch {
+    input = undefined;
+  }
+  const issued = issueShellTicket(options, input);
+  answer(issued.status, issued.body);
+}
+
+/**
+ * 签一张给桌面壳页面的票：私有通道（Unix socket）与 fork 的 IPC 通道共用这一段。
+ * 答的是 `armadra-host pair` 印的那个形状；拒绝是 `{ code, message }`。
+ */
+export function issueShellTicket(
+  options: Pick<ControlOptions, "service" | "instanceId">,
+  input: unknown,
+): { status: number; body: Record<string, unknown> } {
+  try {
+    const request = input as {
       origin?: unknown;
       deviceName?: unknown;
     } | null;
     if (
-      !input ||
-      typeof input.origin !== "string" ||
-      typeof input.deviceName !== "string" ||
-      !validName(input.deviceName) ||
+      !request ||
+      typeof request !== "object" ||
+      typeof request.origin !== "string" ||
+      typeof request.deviceName !== "string" ||
+      !validName(request.deviceName) ||
       // 这条通道只给桌面壳签票，壳的来源永远是回环明文 HTTP。别的来源（比如
       // R6 的服务器壳要给手机配对的那种）走的是另一条路，不是这里。
-      !nativeOrigin(input.origin)
+      !nativeOrigin(request.origin)
     ) {
       throw new IdentityError("invalid");
     }
@@ -129,29 +148,108 @@ async function handle(
     const ticket = options.service.issueBootstrap({
       hostId,
       instanceId: options.instanceId,
-      origin: input.origin,
-      deviceName: input.deviceName,
+      origin: request.origin,
+      deviceName: request.deviceName,
       // 壳配对的是本机自己，拿全套授权。空授权不会悄悄扩张成全权，得写出来。
       scopes: allScopes(),
     });
     // `armadra-host pair --output protobuf` 解码后的那个形状，逐字对齐：毫秒是
     // 十进制字符串，因为页面拿 bigint 比较它。
-    answer(200, {
-      hostId,
-      hostInstanceId: options.instanceId,
-      origin: input.origin,
-      ticket: ticket.ticket,
-      expiresAtUnixMs: String(ticket.expiresAtMs),
-    });
+    return {
+      status: 200,
+      body: {
+        hostId,
+        hostInstanceId: options.instanceId,
+        origin: request.origin,
+        ticket: ticket.ticket,
+        expiresAtUnixMs: String(ticket.expiresAtMs),
+      },
+    };
   } catch (error) {
-    const failure = identityFailure(
-      error instanceof SyntaxError ? new IdentityError("invalid") : error,
-    );
-    answer(failure.status, {
-      code: failure.code,
-      message: failure.message,
-    });
+    const failure = identityFailure(error);
+    return {
+      status: failure.status,
+      body: { code: failure.code, message: failure.message },
+    };
   }
+}
+
+/* --------------------------- fork 的 IPC 通道 ---------------------------- */
+
+/**
+ * Windows 上的取票路（契约 §3.2，安全审查 L9）。
+ *
+ * 私有通道在 Windows 上还不开（见上面的 TODO），而回环不再放行匿名请求之后，
+ * 壳的页面没有票就什么都打不了。桌面壳的 core 是 `child_process.fork` 出来的，
+ * fork 自带一条只连着父进程的 IPC 通道——只有起它的那个壳能在上面说话，这比
+ * 文件权限更窄。所以 Windows 上票经这条通道签（`main/core-ticket.ts` 那一头），
+ * 和密钥封存（`core/secrets/ipc.ts`）同一条通道、同一种「带 id 的请求 / 应答」。
+ *
+ *     壳 → core  { type: "armadra:identity-ticket", id, origin, deviceName }
+ *     core → 壳  { type: "armadra:identity-ticket", id, status, body }
+ *
+ * `status` / `body` 与私有通道的 HTTP 答案逐字相同，壳那一头按同一套规矩核对。
+ */
+export const TICKET_MESSAGE = "armadra:identity-ticket";
+
+export interface TicketIpcRequest {
+  readonly type: typeof TICKET_MESSAGE;
+  readonly id: number;
+  readonly origin: string;
+  readonly deviceName: string;
+}
+
+export interface TicketIpcResponse {
+  readonly type: typeof TICKET_MESSAGE;
+  readonly id: number;
+  readonly status: number;
+  readonly body: Record<string, unknown>;
+}
+
+/** fork 的子进程那一端：`process` 本身就满足它。 */
+export interface TicketIpcChannel {
+  send?: ((message: unknown) => boolean) | undefined;
+  readonly connected?: boolean;
+  on(event: "message", listener: (message: unknown) => void): unknown;
+}
+
+function ticketRequest(message: unknown): message is TicketIpcRequest {
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    (message as { type?: unknown }).type === TICKET_MESSAGE &&
+    typeof (message as { id?: unknown }).id === "number"
+  );
+}
+
+/**
+ * 在 fork 的 IPC 通道上应答取票。没有通道（不是壳 fork 的 core）时什么也不做，
+ * 返回 `false`。别的消息不归这里管，原样忽略。
+ */
+export function startTicketIpc(
+  options: Pick<ControlOptions, "service" | "instanceId">,
+  channel: TicketIpcChannel,
+): boolean {
+  if (channel.send === undefined) return false;
+  channel.on("message", (message) => {
+    if (!ticketRequest(message)) return;
+    const issued = issueShellTicket(options, {
+      origin: message.origin,
+      deviceName: message.deviceName,
+    });
+    const response: TicketIpcResponse = {
+      type: TICKET_MESSAGE,
+      id: message.id,
+      status: issued.status,
+      body: issued.body,
+    };
+    try {
+      if (channel.connected !== false) channel.send?.(response);
+    } catch {
+      // 壳已经不在：没有人等这张票。
+    }
+  });
+  return true;
 }
 
 function read(

@@ -9,12 +9,19 @@ import { initRuntimeSockets } from "./api/client";
 import { MobileRoot } from "./mobile/MobileRoot";
 import { prepareEntry, type Entry } from "./mobile/entry";
 import { installPageErrorReporting } from "./diagnostics/report";
+import { installShellTransport } from "./api/shell-transport";
 
 /**
  * 开屏动画先挂：它有自己的 root，不等下面那个 Promise，所以 Runtime 该连连、
  * App 该挂挂，动画只是浮在上面的一层（`splash/mount.tsx`）。
  */
 mountSplash();
+
+/**
+ * 桌面壳里每个发往 core 的请求与流都带票据换来的凭据（契约 §3.2）：装在全局
+ * `fetch` / `WebSocket` 上，所以先于任何一次请求装好。不在壳里什么也不做。
+ */
+installShellTransport();
 
 /** 页面错误上报（契约 §30）：默认关，core 答「开」之前一条也不收。 */
 installPageErrorReporting();

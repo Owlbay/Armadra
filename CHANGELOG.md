@@ -53,6 +53,7 @@
 - 安全收尾：泄露口令检查、公网加固、安全审查（#73）。
 - 出站地址表与用量端点政策（#40）；密钥后端按平台补齐（#25）。
 - 同浏览器多窗口不再互相作废 CSRF（#58）。
+- 桌面壳不再放行回环匿名请求（安全审查 L9，#114 与 G5-28）：core 回环监听上的每一条 `/api/` 与每一条 WebSocket 都要会话，本机别的回环端口上的网页与不带凭据的本机进程一律 401。桌面页面的请求带票据换来的 Bearer、流先换一次性票，托盘用自己的会话；只有设了 `ARMADRA_LOOPBACK_OWNER=1` 的裸 core（探针、`armadra.sh run web`）照旧放行。
 - 依赖安全告警修复：undici、brace-expansion、ip-address、hono、fast-uri、dompurify（#46）。
 
 ### Gateway、推送与手机

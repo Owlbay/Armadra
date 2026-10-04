@@ -66,6 +66,7 @@ import {
   pdfDocument,
   regionStats,
 } from "./ui-features/fixtures.mjs";
+import { probeSession, strangerRefused } from "./probe-session.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const argv = process.argv.slice(2);
@@ -526,10 +527,13 @@ async function main() {
   };
   const origin = JSON.parse(readFileSync(join(data, "endpoints.json"), "utf8"))
     .runtime.http;
+  // 桌面壳起的 core 不放行回环上没带凭据的请求（契约 §3.2，安全审查 L9）：
+  // 探针和托盘一样经私有通道要票、配对，之后带 Bearer。
+  const session = await probeSession({ dataDir: data, base: origin });
   const api = async (path, init = {}) => {
-    const answer = await fetch(new URL(path, origin), {
-      headers: { "Content-Type": "application/json" },
+    const answer = await session.fetch(path, {
       ...init,
+      headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
     });
     const text = await answer.text();
     if (!answer.ok)
@@ -565,6 +569,12 @@ async function main() {
       permissions: { read: true, write: true, execute: true },
     }),
   });
+  // 安全审查 L9 的守门：本机另一个回环端口上的网页直接打接口、连事件流都被拒。
+  report.loopback = await strangerRefused(origin, workspace.id);
+  note("回环匿名", report.loopback);
+  if (report.loopback.settings !== 401 || report.loopback.upgrade !== 401) {
+    throw new Error(`回环匿名没有被拒：${JSON.stringify(report.loopback)}`);
+  }
   const boards = await api(`/api/workspaces/${workspace.id}/boards`);
   const board =
     boards[0] ??

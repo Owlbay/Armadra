@@ -32,6 +32,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { LOOPBACK_OWNER_ENV } from "./probe-home.mjs";
 import {
   child,
   harness,
@@ -90,6 +91,8 @@ await h.run(async () => {
     ARMADRA_SECRET_BACKEND: "file",
     // Eco 的秒级阈值；开关仍听设置，第 6 步才打开。
     ARMADRA_TEST_ECO_IDLE_SECONDS: "3",
+    // 裸 core 显式打开回环匿名按主人（契约 §3.2）：探针的页面不在壳里、拿不到票。
+    ...LOOPBACK_OWNER_ENV,
   };
   const runtime = child(
     h,
