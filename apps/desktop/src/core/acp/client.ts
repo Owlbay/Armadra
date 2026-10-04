@@ -14,12 +14,18 @@
  *   * **审批挂起表**：`session/request_permission` 进表、交给 `onPermission`，
  *     由人经 `answerPermission` 答；`cancel(sessionId)`、进程退出时表里该会话的
  *     请求一律回 `cancelled`（规范要求）。只认 Agent 自己给的 `optionId`。
+ *   * **elicitation 与配置项**（契约 §26）：`AcpClient.features` 自报
+ *     `elicitation` / `configOptions` 时才接 `elicitation/create`、才发
+ *     `session/set_config_option`；旧版客户端两样都没有，行为与之前完全相同
+ *     （Agent 发来的 `elicitation/create` 由客户端答 method not found）。
+ *     `elicitation/create` 与审批同一张挂起表的规矩：取消、退出一律回 `cancel`。
  */
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 
 import {
   AcpClient,
+  type AcpClientOptions,
   type AcpContentBlock,
   type AcpImplementationInfo,
   type AcpPermissionOption,
@@ -32,6 +38,11 @@ import {
 
 import { STDERR_TAIL_BYTES } from "../language/limits";
 import { redactSecrets } from "../terminal/ssh/redact";
+import type {
+  AcpElicitationParams,
+  AcpElicitationResult,
+  AcpSessionConfigOption,
+} from "./types";
 
 /** 错误一律 `{ code, message }`（AGENTS.md）。 */
 export class AcpError extends Error {
@@ -58,6 +69,9 @@ export type AcpErrorCode =
   | "acp_session_failed"
   | "acp_mode_unsupported"
   | "acp_mode_unavailable"
+  // 按模型选择（契约 §26.2）。
+  | "acp_model_unsupported"
+  | "acp_model_unavailable"
   | "acp_not_installed"
   // 会话与路由（契约 §14.2，G2-1）。
   | "acp_unsupported"
@@ -74,6 +88,64 @@ export interface AcpPendingPermission {
   readonly toolCall: AcpToolCallUpdate;
   readonly options: readonly AcpPermissionOption[];
   readonly createdAt: number;
+}
+
+/** 一条挂起的 `elicitation/create`（契约 §26.1）。 */
+export interface AcpPendingElicitation {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly request: AcpElicitationParams;
+  readonly createdAt: number;
+}
+
+/** 一条挂起的 elicitation 是怎么结束的。 */
+export type AcpElicitationSettlement =
+  | { readonly by: "answer"; readonly result: AcpElicitationResult }
+  /** 回合被取消、连接关闭或进程退出：一律 `cancel`，没有人答。 */
+  | { readonly by: "cancelled"; readonly result: { action: "cancel" } };
+
+/** `@armadra/agent` 的 `AcpClient` 自报的可选能力（旧版没有 `features`）。 */
+export interface AcpClientFeatures {
+  /** 开会话时可带 MCP 服务器（G1-5）。 */
+  readonly mcpServers: boolean;
+  /** 接 `elicitation/create`：构造参数里的 `onElicitation`。 */
+  readonly elicitation: boolean;
+  /** `setConfigOption(sessionId, configId, value)` 与开会话答的 `configOptions`。 */
+  readonly configOptions: boolean;
+}
+
+/** 这一版客户端的可选能力；`client` 只给测试换。 */
+export function acpClientFeatures(
+  client: { readonly features?: unknown } = AcpClient as unknown as {
+    readonly features?: unknown;
+  },
+): AcpClientFeatures {
+  const features =
+    typeof client.features === "object" && client.features !== null
+      ? (client.features as Record<string, unknown>)
+      : {};
+  return {
+    mcpServers: features.mcpServers === true,
+    elicitation: features.elicitation === true,
+    configOptions: features.configOptions === true,
+  };
+}
+
+/** 有 `elicitation` 能力的客户端多收的那个回调（上游加上之前的形状约定）。 */
+interface ElicitationHandler {
+  onElicitation?(
+    params: AcpElicitationParams,
+    signal: AbortSignal,
+  ): Promise<AcpElicitationResult>;
+}
+
+/** 有 `configOptions` 能力的客户端多的那个方法。 */
+interface ConfigCapableClient {
+  setConfigOption(
+    sessionId: string,
+    configId: string,
+    value: string,
+  ): Promise<{ configOptions?: AcpSessionConfigOption[] | null } | null>;
 }
 
 /** 一条挂起审批是怎么结束的。 */
@@ -104,6 +176,12 @@ export interface AcpSpawnOptions {
     pending: AcpPendingPermission,
     settlement: AcpPermissionSettlement,
   ) => void;
+  /** 新的一条挂起 elicitation 进表（客户端有这个能力时才会有）。 */
+  readonly onElicitation?: (pending: AcpPendingElicitation) => void;
+  readonly onElicitationSettled?: (
+    pending: AcpPendingElicitation,
+    settlement: AcpElicitationSettlement,
+  ) => void;
   /** stderr 原始块（已脱敏）；由调用方决定是否进 debug 日志。 */
   readonly onStderr?: (text: string) => void;
   readonly onProtocolError?: (reason: string) => void;
@@ -132,6 +210,11 @@ interface PendingEntry {
   readonly resolve: (result: AcpRequestPermissionResult) => void;
 }
 
+interface ElicitationEntry {
+  readonly pending: AcpPendingElicitation;
+  readonly resolve: (result: AcpElicitationResult) => void;
+}
+
 /** `terminate()` 先关 stdin 等它自己退的时长（ACP Agent 读到 EOF 应当退出）。 */
 const GRACE_MS = 2_000;
 /** SIGTERM 之后再等多久才 SIGKILL。 */
@@ -149,7 +232,9 @@ export class AcpProcess {
   private readonly options: AcpSpawnOptions;
   private readonly stderr = new Tail();
   private readonly pending = new Map<string, PendingEntry>();
+  private readonly elicitations = new Map<string, ElicitationEntry>();
   private nextPermission = 0;
+  private nextElicitation = 0;
   private terminating = false;
   private exitInfo: AcpExit | undefined;
 
@@ -177,7 +262,7 @@ export class AcpProcess {
     if (child.stdin === null || child.stdout === null) {
       throw new AcpError("acp_spawn_failed", "ACP agent has no stdio pipes");
     }
-    this.client = new AcpClient({
+    const clientOptions: AcpClientOptions & ElicitationHandler = {
       input: child.stdout,
       output: child.stdin,
       ...(options.clientInfo === undefined
@@ -186,7 +271,17 @@ export class AcpProcess {
       onUpdate: (notification) => options.onUpdate?.(notification),
       onPermission: (params, signal) => this.hold(params, signal),
       onProtocolError: (_line, reason) => options.onProtocolError?.(reason),
-    });
+      // 旧版客户端不认这个键、也不声明这个能力：不传，线路与之前逐字节相同。
+      ...(acpClientFeatures().elicitation
+        ? {
+            onElicitation: (
+              params: AcpElicitationParams,
+              signal: AbortSignal,
+            ) => this.holdElicitation(params, signal),
+          }
+        : {}),
+    };
+    this.client = new AcpClient(clientOptions);
 
     child.stderr?.on("data", (chunk: Buffer) => {
       this.stderr.push(chunk);
@@ -279,13 +374,68 @@ export class AcpProcess {
     return true;
   }
 
+  /** 挂起的 elicitation 的快照（创建先后为序）。 */
+  pendingElicitations(sessionId?: string): AcpPendingElicitation[] {
+    return [...this.elicitations.values()]
+      .map((entry) => entry.pending)
+      .filter(
+        (pending) => sessionId === undefined || pending.sessionId === sessionId,
+      );
+  }
+
   /**
-   * `session/cancel`：发通知，并让该会话挂起的审批一律回 `cancelled`（规范
-   * 要求）。进程已退出时什么也不做。
+   * 答一条挂起的 elicitation。内容由调用方按 `requestedSchema` 校验过；这里
+   * 只保证 `content` 只随 `accept` 走。答过、已被取消或不认识的 id 答 `false`。
+   */
+  answerElicitation(id: string, result: AcpElicitationResult): boolean {
+    const entry = this.elicitations.get(id);
+    if (entry === undefined) return false;
+    const answer: AcpElicitationResult =
+      result.action === "accept"
+        ? { action: "accept", content: result.content ?? {} }
+        : { action: result.action };
+    this.elicitations.delete(id);
+    entry.resolve(answer);
+    this.options.onElicitationSettled?.(entry.pending, {
+      by: "answer",
+      result: answer,
+    });
+    return true;
+  }
+
+  /**
+   * `session/cancel`：发通知，并让该会话挂起的审批一律回 `cancelled`、挂起的
+   * elicitation 一律回 `cancel`（规范要求）。进程已退出时什么也不做。
    */
   async cancel(sessionId: string): Promise<void> {
     if (!this.alive) return;
+    for (const pending of this.pendingElicitations(sessionId)) {
+      this.dropElicitation(pending.id);
+    }
     await this.client.cancel(sessionId);
+  }
+
+  /**
+   * `session/set_config_option`（契约 §26.2）。客户端没有这个能力时答
+   * `acp_model_unsupported`；答复里的 `configOptions` 原样交回。
+   */
+  async setConfigOption(
+    sessionId: string,
+    configId: string,
+    value: string,
+  ): Promise<AcpSessionConfigOption[] | undefined> {
+    if (!acpClientFeatures().configOptions) {
+      throw new AcpError(
+        "acp_model_unsupported",
+        "this build's ACP client cannot set session config options",
+      );
+    }
+    const answer = await (
+      this.client as unknown as ConfigCapableClient
+    ).setConfigOption(sessionId, configId, value);
+    return Array.isArray(answer?.configOptions)
+      ? answer.configOptions
+      : undefined;
   }
 
   prompt(sessionId: string, prompt: AcpContentBlock[], signal?: AbortSignal) {
@@ -371,8 +521,45 @@ export class AcpProcess {
     });
   }
 
+  /** `onElicitation`：进表，等人答或被 abort。 */
+  private holdElicitation(
+    params: AcpElicitationParams,
+    signal: AbortSignal,
+  ): Promise<AcpElicitationResult> {
+    this.nextElicitation += 1;
+    const pending: AcpPendingElicitation = {
+      id: `elicit-${this.pid}-${this.nextElicitation}`,
+      sessionId: typeof params.sessionId === "string" ? params.sessionId : "",
+      request: params,
+      createdAt: Date.now(),
+    };
+    return new Promise((resolve) => {
+      this.elicitations.set(pending.id, { pending, resolve });
+      const aborted = () => this.dropElicitation(pending.id);
+      if (signal.aborted) {
+        aborted();
+        return;
+      }
+      signal.addEventListener("abort", aborted, { once: true });
+      this.options.onElicitation?.(pending);
+    });
+  }
+
+  /** 一条挂起的 elicitation 被取消（cancel、断开、退出）：回 `cancel`。 */
+  private dropElicitation(id: string): void {
+    const entry = this.elicitations.get(id);
+    if (entry === undefined) return;
+    this.elicitations.delete(id);
+    entry.resolve({ action: "cancel" });
+    this.options.onElicitationSettled?.(entry.pending, {
+      by: "cancelled",
+      result: { action: "cancel" },
+    });
+  }
+
   private settleAll(): void {
     for (const id of [...this.pending.keys()]) this.drop(id);
+    for (const id of [...this.elicitations.keys()]) this.dropElicitation(id);
   }
 }
 

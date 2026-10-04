@@ -333,4 +333,21 @@ describe("the ACP session routes", () => {
       "assistant",
     ]);
   });
+
+  it("has no model choice while the client lacks configOptions (§26.2)", async () => {
+    // `@armadra/agent` 0.6.7 的客户端不自报 `configOptions`：与之前一样，没有
+    // 目录、改不了模型，日志里也没有挂起的 elicitation。
+    open = await acpCore();
+    const nodeId = await open.node();
+    const row = await session(open, nodeId);
+    const log = await open.core.call("GET", `/api/acp/sessions/${row.id}/log`);
+    expect(log.body).toMatchObject({ models: null, elicitations: [] });
+    const set = await open.core.call(
+      "PUT",
+      `/api/acp/sessions/${row.id}/model`,
+      { modelId: "anything" },
+    );
+    expect(set.status).toBe(409);
+    expect(set.body).toMatchObject({ code: "acp_model_unavailable" });
+  });
 });

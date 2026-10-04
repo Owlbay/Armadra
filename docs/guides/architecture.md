@@ -64,7 +64,7 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 
 | 目录                                    | 职责                                                                                         | 契约     |
 | --------------------------------------- | -------------------------------------------------------------------------------------------- | -------- |
-| `core/acp/`                             | ACP 传输、适配器表、会话、镜像、驱动切换、`armadra-hook mcp` 注入、输出到画板的文本导出      | §14      |
+| `core/acp/`                             | ACP 传输、适配器表、会话、镜像、驱动切换、`armadra-hook mcp` 注入、输出到画板的文本导出      | §14、§26 |
 | `core/workflow/`                        | 草案、模板、运行、关卡、runner 任务；自动化目标「运行工作流」                                | §15      |
 | `core/realtime/`                        | 每块板一个 `Y.Doc`、更新流与快照、物化、awareness 校验、评论                                 | §16      |
 | `core/gateway/`                         | 对外 TLS 面：本地 CA、指定文件、ACME、准入（Cookie / Bearer）、配对载荷                      | §17      |
@@ -316,7 +316,10 @@ ACP 只是同一个 Agent 节点的另一种驱动方式（`core/acp/`，[ACP �
 （`mirror.ts`；读取方经 `history/acp-mirror.ts`，连线读取认得这个后缀）再发 `acp.update`。
 驱动切换（`POST /api/acp/nodes/{id}/driver`）结束当前驱动、在同一行上以另一种驱动接回 CLI
 自己的会话；画布注入在 ACP 下只留入口认得的那一半（`agent/canvas-launch.ts::acpInjection`），
-其余由 MCP 承担。
+其余由 MCP 承担。`elicitation/create` 也进同一张审批表（状态 `waiting`，内容只交给 Agent），
+模型目录来自开会话答的 `configOptions`；这两样按 `AcpClient.features` 判断有无。`pi-acp` 的
+ACP 会话 id 经它的映射文件对回 Pi 的会话文件（`adapters.ts`）。适配器不经画布启动器，节点凭据与
+ama 模型密钥由 core 在起适配器前按启动器同一个兑换取值、只设给适配器进程（契约 §26）。
 
 浏览器节点的 Agent 工具是 `armadra-hook browser <动词>`，动词清单只有一份
 （`core/browser/verb-spec.ts`，`--help` 与技能都由它生成）；执行下沉在 core
@@ -551,8 +554,10 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   「安装」答 `notSigned`；本地 `dist` 是 `localBuild`；更新器从不报没发生过的 `upToDate`
   （`shell-core/updates/availability.ts`）。设置页的「检查」按钮仍不调壳（`use-update-state.ts`
   报 `noReleaseSource`，壳侧定时检查在跑）。
-- **ACP 的未竟项**：`elicitation/create`、按模型选择（`session/set_config_option`）、`pi-acp`
-  的映射文件；ACP 驱动下不做节点凭据与 ama 密钥兑换；SSH 节点不能切到 ACP（`acp_unsupported`）。
+- **ACP 的未竟项**：`elicitation/create` 与按模型选择（`session/set_config_option`）core 已就绪
+  （契约 §26），但要 `@armadra/agent` 的 `AcpClient` 自报 `features.elicitation` /
+  `features.configOptions`，0.6.7 还没有，在那之前行为与之前相同；SSH 节点不能切到 ACP
+  （`acp_unsupported`）。
   六家真适配器的端到端探针已备（`agent-e2e` 场景 12，C 档），还没有真跑。
 - **Gateway / 手机**：配对是两分钟票（二维码 / 链接），私网档位上另有 8 位配对码（契约 §24）；设备表没有
   「平台」「最近访问」；`tls-alpn-01` 未做；推送中继写完不部署，UnifiedPush 未做；真机、商店与

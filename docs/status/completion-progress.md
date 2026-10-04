@@ -979,7 +979,31 @@
 
 ## G5-04 ACP core 补充（R-26 core、R-27 core、R-28、R-29）
 
-待填（第 1 组）。
+**做了什么**（契约 §26.1–§26.4，§14.2 / §14.4 各追加一句）
+
+- 客户端能力：`client.ts::acpClientFeatures()` 读 `AcpClient.features` 的 `elicitation` / `configOptions`。有 `elicitation` 时构造参数多传 `onElicitation`，挂起表与权限请求同一套规矩：取消、断开、退出一律回 `{ action: "cancel" }`。有 `configOptions` 时 `setConfigOption(sessionId, configId, value)` 才发。两样都没有时线路与之前逐字节相同。
+- elicitation（R-26 core）：`elicitation/create` 进 `agent_approvals`，`request_json = { protocol: "acp", elicitation }`，存进去的表单按规范子集收过（`elicitation.ts`）。节点状态 `waiting` 带 `pendingId`，不再置 `awaitingInput`，否则答完之后的 `done` 会被改写成 `waiting`；`normalize.test` 的断言随之改了。答复 `POST /api/approvals/{id}/answer { elicitation: { action, content? } }` 先按请求自己的 schema 校验，再走同一个 CAS；`content` 只交给 Agent，不进审批行、审计、事件与答复。节点头的 allow / deny 也能答。`GET …/log` 多 `elicitations`。
+- 模型（R-27 core）：目录取自开会话答的 `configOptions`（`category: "model"`，没有时看 `initialize` 答的；分组摊平），`config_option_update` 跟着更新。新路由 `PUT /api/acp/sessions/{id}/model { modelId }`；`GET …/log` 多 `models`。起会话时节点数据 `agent.model` 在目录里就落上，落不上也不拦启动。
+- `pi-acp` 映射（R-28）：适配器表 `pi` 行写死 `~/.pi/acp/sessions.json`（`{ "<ACP id>": { "sessionFile" } }`）。会话开好时 `transcriptPath` 指向 Pi 会话文件；接回 ACP 时把 Pi id 反查成 ACP id，切回终端时把 ACP id 映射回 Pi id。读不到时退回 `opaque` 的做法。
+- 凭据（R-29）：适配器不经画布启动器，`AcpRuntime.open` 起适配器之前做兑换。节点凭据走 `CredentialsDomain.redeem`，与 §20.4 同一绑定、同一套校验；`credential:use` 已在 `ownedEnvironment` 拦过。基础 CLI 是 ama 时取 §12.4 的模型密钥。值只设进适配器进程的环境；兑换失败拒绝起会话，原样答 §20 的码。
+
+**实测**（macOS arm64）
+
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 4257 过 / 46 跳过，1 条失败是 `agent/probe.test.ts`「真起一个假 CLI」在满载下 8 s 超时，单跑通过，与本包无关；live 4 过，脚本 65 过 / 2 跳过；web 3239 过；shared 320 过；server 79 过 / 2 跳过；mobile 9 过；push-relay 9 过。`pnpm --filter @armadra/web typecheck`、`pnpm check` 通过。
+- 新用例：`acp/features.test.ts`（把 `AcpClient` 换成补出两个能力的子类，配一个会发 elicitation、答 `configOptions` 的假 Agent，真子进程）覆盖 elicitation 的接受、拒绝、取消与退出，模型目录与改模型，路由与审批答复的校验，内容不落库，以及等待时拒绝切换。`routes.test` 覆盖客户端没有能力时 `models: null`、`PUT …/model` 409。`adapters.test` 覆盖映射文件的正反查与退回。`credentials.test` 新增「ACP 驱动的节点」四条：值的摘要进了适配器环境、不在答复 / 会话行 / 节点数据 / 镜像 / 日志；值不在时 409；成员 403；ama 密钥。
+
+**偏离**
+
+- 计划写的是「模型目录来自 `initialize` 答的 `configOptions`」；规范里它在开会话的答复里，所以以开会话的为准，`initialize` 的只作后备。
+- 计划没列 `core/http/routes.ts`，但新路由要进路由表，否则装配时就抛错，所以加了一行。
+- elicitation 的状态不置 `awaitingInput`，理由见上。
+
+**没做 / 需要上游**
+
+- `@armadra/agent` 0.6.7 的 `AcpClient` 没有 `features.elicitation` / `features.configOptions`，这两样在真机上要等上游发版、升依赖之后才生效。上游要加：`onElicitation`、`clientCapabilities.elicitation`、`setConfigOption` 与 `configOptions` 的类型，假 Agent 也要会发 elicitation、会答 `configOptions`。升依赖之后删掉 `acp/feature-fixture.ts`，改用上游的假 Agent。
+- `~/.pi/acp/sessions.json` 的路径与形状没有和真 `pi-acp` 核对过（B 档真跑）。
+- ama 密钥与终端驱动一样，不要求 `credential:use`；L10（按节点只发用得到的那一家）没有做。
+- 页面（`ElicitationCard`、模型 Select）归 G5-05，SSH 归 G5-06。
 
 ## G5-05 ACP 页面补充（R-26 页面、R-27 页面、R-31）
 
