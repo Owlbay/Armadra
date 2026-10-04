@@ -196,6 +196,16 @@ export const IPC = {
    * Carries nothing: the tray asks the core, not the page.
    */
   gatewayRefresh: spec("app:gateway-refresh", "invoke", "window"),
+
+  /**
+   * 页面的一条 JS 错误（G5-19，契约 §30）：`{ kind, name, message, stack }`，
+   * 页面已剥离过。主进程按 `diagnostics.reportPageErrors` 与 DSN 再判、限流、
+   * 再剥离，才交给 `@sentry/electron`（`ipcMode` 仍是 0，SDK 不开渲染进程通道）。
+   * 答 `{ accepted }`，从不拒绝——上报失败不能再变成页面上的一个错误。
+   *
+   * `window`：只有这扇窗口的页面装了 preload；浏览器节点的 guest 没有这条路。
+   */
+  diagnosticsReport: spec("diagnostics:report", "invoke", "window"),
 } as const satisfies Record<string, ChannelSpec>;
 
 export type ChannelName = (typeof IPC)[keyof typeof IPC]["channel"];
@@ -234,6 +244,7 @@ export const IMPLEMENTED_CHANNELS: readonly string[] = [
   IPC.browserControl.channel,
   IPC.browserClearData.channel,
   IPC.gatewayRefresh.channel,
+  IPC.diagnosticsReport.channel,
 ];
 
 /** What `browser:clear-data` answers. */
