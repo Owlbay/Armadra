@@ -38,8 +38,9 @@ const CHANNELS = ["stable", "beta"] as const;
 /**
  * 设置 → 更新（S03 / docs/design/updates-and-service-install.md §4）。
  *
- * 两个来源：发布侧判断「有没有可用发布」，桌面壳判断「能不能装」。R7c 之后
- * 发布侧暂时没有来源（core 还没有 `core/updates`），桌面壳那一半照常工作。
+ * 两个来源：发布侧判断「有没有可用发布」，桌面壳判断「能不能装」。桌面上「检查」
+ * 由壳经 `updates:check` 自己问发布索引，壳的答复就是发布侧；浏览器里没有壳，
+ * 不问。
  * 合并规则全在 `updates/state.ts` 的纯函数里，这里只负责把它渲染成行——
  * 包括那条最重要的：任何一边没回答，都不写「已是最新」。
  */
@@ -53,6 +54,7 @@ export function UpdatesPage() {
   const restart = useUpdateState((store) => store.restart);
   const start = useUpdateState((store) => store.start);
   const check = useUpdateState((store) => store.check);
+  const refresh = useUpdateState((store) => store.refresh);
   const download = useUpdateState((store) => store.download);
   const install = useUpdateState((store) => store.install);
   const dismiss = useUpdateState((store) => store.dismiss);
@@ -80,18 +82,21 @@ export function UpdatesPage() {
     void check();
   }, [check]);
 
-  // Design §2.1: 30 seconds after start, then every six hours. A person who is
-  // never told a release exists cannot decide to install it — but the switch
-  // is theirs, and off means off.
+  // Design §2.1: 30 seconds after start, then every six hours. The shell runs
+  // the check itself on its own schedule (and honours the same switch); the
+  // page only reads its answer back. Off means off.
+  const runRefresh = React.useCallback(() => {
+    void refresh();
+  }, [refresh]);
   React.useEffect(() => {
     if (!autoCheck || !installed) return;
-    const first = setTimeout(runCheck, FIRST_CHECK_DELAY_MS);
-    const repeat = setInterval(runCheck, CHECK_INTERVAL_MS);
+    const first = setTimeout(runRefresh, FIRST_CHECK_DELAY_MS);
+    const repeat = setInterval(runRefresh, CHECK_INTERVAL_MS);
     return () => {
       clearTimeout(first);
       clearInterval(repeat);
     };
-  }, [autoCheck, installed, runCheck]);
+  }, [autoCheck, installed, runRefresh]);
 
   const view = mergeUpdatesState(host, shell);
 

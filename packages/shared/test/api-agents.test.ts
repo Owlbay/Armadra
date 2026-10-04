@@ -40,9 +40,7 @@ describe("runtime agents API", () => {
       launcher: "/data/integration/run/claude",
     });
     expect(current.launcher).toBe("/data/integration/run/claude");
-    expect(current.launchArgs).toBeUndefined();
-    expect(current.launchWords).toBeUndefined();
-    // 旧 core 的两个字段保留一版，给新页面对旧 core 的退路。
+    // 旧 core 的 launchWords / launchArgs 自 0.2.0 起退役：行上不再有这两个字段。
     const older = agentInfoSchema.parse({
       ...row,
       id: "codex",
@@ -51,7 +49,8 @@ describe("runtime agents API", () => {
       launchWords: ["-c", { prefix: "hooks.Stop=", env: "ARMADRA_CODEX_HOOK" }],
     });
     expect(older.launcher).toBeUndefined();
-    expect(older.launchWords).toHaveLength(2);
+    expect(older).not.toHaveProperty("launchArgs");
+    expect(older).not.toHaveProperty("launchWords");
   });
 
   it("reads the launcher half of an integration state", () => {

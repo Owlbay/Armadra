@@ -158,9 +158,12 @@ export async function shellState(): Promise<ShellUpdateState> {
   );
 }
 
-/** Hands the Host's answer to the shell and returns the state it reached. */
+/**
+ * Hands a Host answer to the shell, or — with none — has the shell ask the
+ * release index itself ("check now"). Returns the state it reached.
+ */
 export async function shellCheck(
-  verdict: ShellHostVerdict,
+  verdict?: ShellHostVerdict,
 ): Promise<ShellUpdateState> {
   return (
     (await shellCall<ShellUpdateState>(

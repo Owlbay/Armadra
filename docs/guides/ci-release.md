@@ -275,8 +275,9 @@ app-builder-lib 只要看到 `APPLE_ID` 就走 Apple ID 分支，所以**两套�
 
 **打包后断言**：签过名的构建在上传前跑
 `node apps/desktop/scripts/signing-electron.mjs verify-mac`，对每个 `.app` 做
-`codesign --verify --deep --strict`。更新器的 `signatureState` 只看 `_CodeSignature/CodeResources`
-在不在，这一步挡住「有签名目录但 Gatekeeper 不认」的包。
+`codesign --verify --deep --strict`，挡住「有签名目录但 Gatekeeper 不认」的包。更新器的
+`signatureState` 在运行时也跑同一条 `codesign --verify --deep --strict`（每进程一次），ad-hoc
+签名答 `unknown`，与未签名一样不装。
 
 证书选 **Developer ID Application（G2 链）**：旧的 Developer ID Sub-CA 2027-02-01 到期，
 之后签出的东西必须来自 G2 链证书。
