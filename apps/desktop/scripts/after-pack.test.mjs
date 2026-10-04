@@ -123,7 +123,13 @@ test("a platform's placements are its out/ bundles, the notices and every migrat
   }
   assert.deepEqual(
     bundleResources("win32").map((r) => r.to),
-    ["cli/armadra-hook.js", "tray.png", ...ama, "session-host/host.cjs"],
+    [
+      "cli/armadra-hook.js",
+      "tray.png",
+      ...ama,
+      "session-host/host.cjs",
+      "session-host/shutdown-if-idle.cjs",
+    ],
   );
   // The paths the core looks for (`hook/install/shared.ts::agentBundle`,
   // `agentHostBundle`) under `process.resourcesPath`.
