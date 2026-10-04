@@ -1744,7 +1744,47 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 28. 邮件通道：`/api/mail/*`
 
-预留，由 G5-13 填写。
+可选的 SMTP 通知通道：把邀请（§10）与口令重置（§25）链接发到一个邮箱。邀请与重置仍然设计成「管理员亲手把链接交给人」，邮件只是多一个出口。实现在 `core/mail/`。
+
+### 28.1 配置
+
+只有服务器壳配：`serve --smtp-url` / `ARMADRA_SMTP_URL`（`smtp(s)://用户:口令@主机:端口`）与 `--smtp-from` / `ARMADRA_SMTP_FROM`（缺省是用户名，不是邮箱地址时必须给）。口令位置可写 `secret://armadra-<名字>`，发信时从服务器壳的密钥后端现取（`armadra-server secrets set armadra-smtp` 经标准输入写入）。`smtp://` 走 STARTTLS，主机不是回环时强制升级（`?requireTLS=false` 放开）；`smtps://` 缺省端口 465、`smtp://` 缺省 587。地址写错，服务器壳拒绝启动。桌面壳没有设置键，永远是未配置。出站登记在 `core/net/outbound.ts` 的 `smtp`。
+
+### 28.2 `GET /api/mail/status`
+
+已登录即可（匿名 401 `unauthenticated`）：
+
+```json
+{ "configured": true, "from": "noreply@example.com" }
+```
+
+未配置时 `{ "configured": false, "from": null }`。不认识这条路由的旧 core 答 404，页面同样按未配置处理。
+
+### 28.3 `POST /api/mail/invitation`、`POST /api/mail/password-reset`
+
+```json
+{ "invitationId": "<32 位十六进制>", "token": "<签发时拿到的令牌>", "to": "someone@example.com", "locale": "zh" }
+{ "principalId": "<32 位十六进制>", "token": "<签发时拿到的令牌>", "to": "someone@example.com", "locale": "en" }
+```
+
+- **令牌由调用方交回**：库里只有哈希，链接只能由刚签出它的那个页面连同 id 一起交过来。core 核对令牌属于这张邀请 / 这个人、没用过、没过期，再按链接自己的规则判调用方：邀请与签发、作废同一套（工作空间邀请要 `workspace:share`，组邀请要能管那个组，两者都无要 `identity:manage`）；重置与签发同一套（§25）。
+- 正文只有链接与过期时间（UTC），链接是 Gateway 对外来源加 `#invite=<令牌>` / `#reset=<令牌>`；纯文本，没有签发人、角色或工作空间名。主题与正文按 `locale`（`zh` / `en`）选，没给时按 `Accept-Language`，都认不出用英文。
+- 每个来源地址每分钟至多 5 封（socket 对端，不读 `X-Forwarded-For`），核对通过之后才计数，发送失败也计。
+- 审计 `mail.invitation.send` / `mail.password-reset.send`：`target` 是邀请 id / 被重置的人，`detail` 只有 `{ toHash, delivered }`；`toHash` 是 `sha256("armadra/mail/v1\0" + 小写地址)` 的前 32 位十六进制。地址与令牌不进审计与日志。
+- 成功答 `200 { "sent": true }`（SMTP 服务器已收下）。
+
+| 状态 | `code`                | 何时                                                                        |
+| ---- | --------------------- | --------------------------------------------------------------------------- |
+| 400  | `bad_request`         | 请求体不对：id 或令牌形状不对、邀请令牌的前缀不是这个 id、`to` 不是邮箱地址 |
+| 401  | `unauthenticated`     | 匿名                                                                        |
+| 403  | `forbidden`           | 不能签发这条链接的人                                                        |
+| 404  | `not_found`           | 没有这张邀请 / 这个人；或这台 core 还没有口令重置（§25）                    |
+| 409  | `mail_not_configured` | 没配 SMTP                                                                   |
+| 409  | `link_invalid`        | 令牌不对、已用过（含作废）或已过期                                          |
+| 429  | `rate_limited`        | 这个来源这一分钟已发 5 封；带 `Retry-After`（秒）                           |
+| 502  | `mail_send_failed`    | SMTP 没收下（连不上、认证失败、拒收），不带服务器原话                       |
+
+写方法照常经 Gateway 准入：Cookie 会话要 `X-Armadra-CSRF`。
 
 ## 29. 托管平台（forge）：`/api/forge/*`
 
