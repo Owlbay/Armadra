@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, inject, it } from "vitest";
 
 import { migrationsDir } from "../agent/fixture";
 import { openFreshDatabase } from "./fresh.fixture";
@@ -59,5 +59,17 @@ describe("a fixture database from the template", () => {
     expect(seen).toEqual([]);
     one.close();
     two.close();
+  });
+
+  it("copies the run's shared template, and does not fsync every commit", () => {
+    const dir = migrationsDir();
+    const shared = inject("armadraDbTemplate");
+    expect(shared?.file).toBeTruthy();
+    const opened = openFreshDatabase(join(scratch(), "c.db"), dir);
+    const { synchronous } = opened.database
+      .prepare("PRAGMA synchronous")
+      .get() as { synchronous: number };
+    expect(synchronous).toBe(0);
+    opened.close();
   });
 });

@@ -130,6 +130,25 @@ describe("tabs are the browser's targets", () => {
     made.close();
   });
 
+  it("attaches a tab it opened once, though Chromium announces it first", async () => {
+    fake.announceCreated = true;
+    const made = backend();
+    const node = await made.ensure("node-a");
+    await node.host().requestTab("new", "", "https://second.test/");
+    await settle();
+    expect(node.listTabs()).toHaveLength(2);
+    for (const id of fake.targetIds()) {
+      expect(
+        fake
+          .called("Target.attachToTarget")
+          .filter((call) => call.params.targetId === id),
+      ).toHaveLength(1);
+    }
+    // One session per tab, so one preparation per tab.
+    expect(fake.called("Page.setInterceptFileChooserDialog")).toHaveLength(2);
+    made.close();
+  });
+
   it("adopts a page the page itself opened", async () => {
     const made = backend();
     const node = await made.ensure("node-a");

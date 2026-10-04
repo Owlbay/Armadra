@@ -83,9 +83,27 @@ export class FakePage {
   /** Called after each command, to let a test mutate the page. */
   after?: (sent: Sent) => void;
 
+  /** Child sessions that take commands and do not answer, until `wake`. */
+  readonly hung = new Set<string>();
+  private readonly waiting: { session: string; done: () => void }[] = [];
+
+  /** A hung child answers again: everything it held resolves, emptily. */
+  wake(session: string): void {
+    this.hung.delete(session);
+    for (const each of this.waiting.splice(0)) {
+      if (each.session === session) each.done();
+      else this.waiting.push(each);
+    }
+  }
+
   readonly dispatch: CdpDispatch = async (method, params, session) => {
     const record = { method, params, session: session ?? "" };
     this.sent.push(record);
+    if (session !== undefined && this.hung.has(session)) {
+      return new Promise((done) => {
+        this.waiting.push({ session, done: () => done({}) });
+      });
+    }
     try {
       return this.answer(method, params, session ?? "");
     } finally {

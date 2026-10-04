@@ -173,8 +173,10 @@ export async function collectDocs(session: CdpSession): Promise<{
   docs: FrameDoc[];
   owners: Map<string, FrameDoc>;
 }> {
+  // Only the children that answer are read; a silent one is skipped, and its
+  // frame is not read through the page either — it is not the page's.
   const children = session.childFrames();
-  const childTargets = new Set(children.map((child) => child.targetId));
+  const childTargets = session.childTargetIds();
   const docs: FrameDoc[] = [];
   const add = (
     sessionId: string,

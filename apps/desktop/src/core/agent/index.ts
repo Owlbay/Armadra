@@ -215,6 +215,7 @@ export function install(context: CoreContext): CollabContext {
   const removed = sweepOrphans(
     pendingDir(withHandoff),
     ORPHAN_MINUTES * 60_000,
+    Date.now(),
   );
   if (removed > 0) {
     context.log.info("cleared orphaned permission requests", { removed });

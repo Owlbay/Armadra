@@ -1,6 +1,15 @@
+import {
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { permissionWaitEnvironment } from "./approvals";
+import { permissionWaitEnvironment, sweepOrphans } from "./approvals";
 
 /**
  * 只有 Claude 的 Hook 会等画布的答复。自定义 Agent 按它借用的内置 CLI 判：底层
@@ -27,5 +36,24 @@ describe("the approval wait variable", () => {
       permissionWaitEnvironment("custom:review", true, baseOf),
     ).toHaveLength(1);
     expect(permissionWaitEnvironment("custom:fast", true, baseOf)).toEqual([]);
+  });
+});
+
+describe("the orphan sweep", () => {
+  it("judges age by the clock it is given, not the process's", () => {
+    const directory = mkdtempSync(join(tmpdir(), "armadra-hook-sweep-"));
+    try {
+      const written = Date.UTC(2026, 0, 1, 12, 0, 0);
+      for (const name of ["a.json", "a.answer", "keep.txt"]) {
+        const path = join(directory, name);
+        writeFileSync(path, "{}");
+        utimesSync(path, written / 1000, written / 1000);
+      }
+      expect(sweepOrphans(directory, 1_000, written + 1_000)).toBe(0);
+      expect(sweepOrphans(directory, 1_000, written + 1_001)).toBe(2);
+      expect(readdirSync(directory)).toEqual(["keep.txt"]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
