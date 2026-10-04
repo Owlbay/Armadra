@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
 import {
   CHECKS,
   diffSnapshots,
+  idleHostVerdict,
+  isSessionHost,
   launchLine,
   markerLine,
   newResult,
@@ -142,4 +144,37 @@ test("launch lines quote for each shell and the marker never appears in its own 
   assert.equal(config[0], "armadra-launch 1");
   assert.ok(config.includes("gate=ARMADRA_NODE_ID"));
   assert.ok(config.includes("credential-var=ARMADRA_PROBE_TOKEN"));
+});
+
+test("the idle host before the uninstall passes only when it was asked to leave", () => {
+  const listening =
+    "session host listening on \\\\.\\pipe\\armadra-session-x\n";
+  const asked = `${listening}shutdownIfIdle on connection 1: leaving\nsession host leaving: shutdownIfIdle\n`;
+  assert.equal(idleHostVerdict({ pid: 9, log: asked }).ok, true);
+  // Killed by name: no reason in its own log.
+  assert.equal(idleHostVerdict({ pid: 9, log: listening }).ok, false);
+  // Left on its own clock rather than because it was asked.
+  assert.equal(
+    idleHostVerdict({
+      pid: 9,
+      log: `${listening}session host leaving: no live session and no client for 10000ms\n`,
+    }).ok,
+    false,
+  );
+  assert.equal(idleHostVerdict({ pid: 9, log: asked, alive: true }).ok, false);
+  assert.equal(idleHostVerdict({ started: false, log: "" }).ok, false);
+});
+
+test("a session host is told apart by its bundle on the command line", () => {
+  assert.equal(
+    isSessionHost(
+      String.raw`"C:\x\Armadra.exe" C:\x\resources\session-host\host.cjs C:\data`,
+    ),
+    true,
+  );
+  assert.equal(
+    isSessionHost(String.raw`"C:\x\Armadra.exe" --type=renderer`),
+    false,
+  );
+  assert.equal(isSessionHost(undefined), false);
 });

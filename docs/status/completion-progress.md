@@ -1203,7 +1203,24 @@
 
 ## G5-21 Windows 会话宿主退出（R-68）
 
-待填（第 2 组）。
+做了什么：
+
+- 会话宿主（`session-host/server.ts`）：没有活会话**且**没有通过握手的连接（core 的控制连接）时 10 秒后退出（`DEFAULT_ORPHAN_EXIT_MS`）；core 连上或建会话即取消，有活会话时永不因此退出；会话都结束但 core 连着时仍按原来的 30 分钟空闲。退出原因记进宿主日志（`session host leaving: <原因>`）。
+- 新请求 `shutdownIfIdle`（宿主协议，进程内部）：没有活会话答 `ok {leaving: true}`，应答写出后退出，之后的 `create` 答 `draining`；有会话答 `leaving: false`，会话不动。客户端 `core/terminal/session-host/shutdown.ts::requestShutdownIfIdle`：只读密钥不新建、全程有界不抛，结论 `absent / busy / left / leaving / failed`。
+- 壳：Windows 上壳自己起的 core 停下后（关闭 / 托盘退出）发一次（3 秒上限，失败不挡退出）；`lifecycle.ts::runQuitSequence` 多一个可选 `afterStop`。
+- 安装包：`apps/desktop/build/installer.nsh` 定义 `customCheckAppRunning`，先以 `ELECTRON_RUN_AS_NODE=1` 跑 `resources\session-host\shutdown-if-idle.cjs <数据目录>`（`ARMADRA_DATA_DIR`，否则 `%LOCALAPPDATA%\Armadra`；等宿主进程最多 5 秒），再走 electron-builder 原来的检查与结束进程；安装目录里没有这个文件（旧版）就跳过。`shutdown-if-idle.cjs` 是 electron-vite 的单独产物，after-pack 放进 `resources/session-host/`。
+- 探针 `windows-acceptance`：新增 `sessionHost.leaves`（应用退出后宿主自己退出，断言）；`uninstall.silent` 卸载前自己起一个空闲宿主（`ARMADRA_SESSION_HOST_ORPHAN_EXIT_MS=600000`），断言日志里是 `shutdownIfIdle` 让它走的、卸载后没有残留 `Armadra.exe`；收尾时不再先结束宿主。
+
+实测：
+
+- 本分支手动触发的 `nightly` 运行 37190639392 的 `windows-acceptance`（windows runner，未签名本地包）：`status: passed`；`sessionHost.leaves` 宿主 pid 1020 在应用退出后 10 秒自己退出；`uninstall.silent` 卸载前起的宿主日志为 `client greeted …: armadra-installer` → `shutdownIfIdle … leaving` → `session host leaving: shutdownIfIdle`，卸载后 `Armadra.exe`、注册表卸载项、快捷方式与残留进程都没有；`install.layout` 见到 `shutdown-if-idle.cjs`。
+- PR CI 的 Windows 作业：`session-host/server.test.ts`（真命名管道，43 例）、`windows.integration.test.ts`（真 ConPTY + 进程入口 `run()`，9 例）、`main.test.ts`、`lifecycle.test.ts` 都跑了。
+- 本机：`pnpm libs:build && pnpm -r --if-present test` 全绿；`pnpm check`、`pnpm release:test` 通过。
+
+没做：
+
+- 有活会话时宿主不走，安装程序照旧按 electron-builder 流程结束进程（会话随之结束）——有意如此；真机上「带活会话升级」的体验要用户的 Windows 机器。
+- 只在安装程序环境里没有 `ARMADRA_DATA_DIR`、而用户的 core 用了别的数据目录时，助手找不到那个宿主，退回结束进程。
 
 ## G5-22 手机原生补充（R-54、R-55、R-56）
 
