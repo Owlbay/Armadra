@@ -71,14 +71,20 @@ export function loopbackOnlyPath(path: string): boolean {
   );
 }
 
-/** 不需要会话的那几条：健康探针，以及身份域自己的登录面。 */
+/**
+ * 不需要会话的那几条：健康探针、身份域自己的登录面，以及配对短码换票（契约
+ * §24：手机还没有身份，短码就是凭据，限流与档位在 Gateway 域里判）。
+ */
 export function anonymousPath(path: string): boolean {
   return (
     path === "/health" ||
     path === "/api/health" ||
-    path.startsWith("/api/identity/")
+    path.startsWith("/api/identity/") ||
+    path === PAIRING_CODE_EXCHANGE_PATH
   );
 }
+
+export const PAIRING_CODE_EXCHANGE_PATH = "/api/gateway/pairing-code/exchange";
 
 /**
  * 同源只读请求里浏览器没发的那个 Origin。

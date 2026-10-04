@@ -980,14 +980,14 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 }
 ```
 
-| 字段                | 规则                                                                                                                                 |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `anchor`            | 三选一：`{kind:"node", id}`、`{kind:"item", id}`（白板 item id）、`{kind:"point", x, y}`（画布坐标，有限数）；id 1–200 字符          |
-| `body`              | 去掉首尾空白后 1–10 000 字符。提及写成 `@[显示名](principal:<id>)`                                                                   |
-| `authorPrincipalId` | 写入时取请求的 principal（本机壳的 owner 为 `""`），客户端不能指定                                                                   |
-| `parentId`          | 回复指向一条**顶层**评论（只有一层）；回复的锚点随父评论，请求里的 `anchor` 被忽略                                                   |
-| `resolvedAtMs`      | 只有顶层评论能解决；回复随父评论                                                                                                     |
-| `mentions`          | core 认出来的提及：正文里的 principal 存在、没停用、对这个工作空间有 `canvas:read`；认不出的记号照原文留着，不叫任何人。最多认 20 个 |
+| 字段                | 规则                                                                                                                                                  |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `anchor`            | 三选一：`{kind:"node", id}`、`{kind:"item", id}`（白板 item id）、`{kind:"point", x, y}`（画布坐标，有限数）；id 1–200 字符                           |
+| `body`              | 去掉首尾空白后 1–10 000 字符。提及写成 `@[显示名](principal:<id>)`。页面按 Markdown（GFM）渲染：不渲染裸 HTML、链接只开 `http(s)`、图片只显示替代文字 |
+| `authorPrincipalId` | 写入时取请求的 principal（本机壳的 owner 为 `""`），客户端不能指定                                                                                    |
+| `parentId`          | 回复指向一条**顶层**评论（只有一层）；回复的锚点随父评论，请求里的 `anchor` 被忽略                                                                    |
+| `resolvedAtMs`      | 只有顶层评论能解决；回复随父评论                                                                                                                      |
+| `mentions`          | core 认出来的提及：正文里的 principal 存在、没停用、对这个工作空间有 `canvas:read`；认不出的记号照原文留着，不叫任何人。最多认 20 个                  |
 
 | 方法与路径                            | 权限                             | 请求                                                                                                                | 应答                                                                                          |
 | ------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
@@ -1018,7 +1018,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 `action` 为 `created | updated | resolved | reopened | deleted`；`anchorId` 在点锚时省略。`mentions` 是这一次**新叫到**的人且不含作者：新建时是全部提及，改正文时只是新加的，其余动作为空。页面收到后重新拉列表；推送域（§19）按 `mentions` 给有 `canvas:read` 的人发「有人在评论里提到了你」，深链指向锚定的节点。
 
-**对 Agent 可读**：Agent 经上下文连线读一个节点（`context summary | transcript | terminal`）时，回答末尾附上锚在该节点上、未解决的评论线程（提及换成 `@显示名`，至多 8 KiB），与正文一起脱敏、计入这条连线的读取预算。白板对象与已解决的线程不附。
+**对 Agent 可读**：Agent 经上下文连线读一个节点（`context summary | transcript | terminal`）时，回答末尾附上锚在该节点上、未解决的评论线程（提及换成 `@显示名`，至多 8 KiB），与正文一起脱敏、计入这条连线的读取预算。已解决的线程不附。白板引用（链接文档里 `kind: "shape"` 的一项）同样附上：白板对象取锚点 `item`（`sourceShapeId` 去掉 `wb:` 前缀与原样两种都认），Frame（`shapeType: "group"`）取锚在那个分组节点上的；评论只从读者自己的板查，同样至多 8 KiB、脱敏，有评论时这一段计入读取预算（`context_reads` 的目标记为引用的 id），没有评论时回答与以前逐字节相同。
 
 ### 16.4 awareness 状态
 
@@ -1151,6 +1151,7 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 - 票两分钟、一次性，绑在 `origin` 上；兑换走 `POST /api/identity/pair`（§3），配出来的设备拿 owner 的全套授权。成员走邀请。
 - 网页链接把票与指纹放在片段里（不上请求行、不进日志）；页面认 `#pair=<票>` 与 `#pair=<票>&fp=<64 位十六进制>` 两种。
 - 原生 App 按 `fp` 钉信任锚，不装 CA；锚变了（重置 CA、换证书文件）就重新扫码，不自动信任新证书。
+- 私网档位上回答多一个 `code`（8 位配对码，`XXXX-XXXX`），其余档位为 `null`，见 §24。
 
 ### 17.4 Gateway 上的匿名面与原生 App
 
@@ -1690,7 +1691,46 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 24. Gateway 配对短码：`/api/gateway/pairing-code/*`
 
-预留，由 G5-01 填写。
+二维码与配对链接之外的第三条路：手机上手输 8 位配对码，换出与 `#pair=` 同一张票（§17.3），再照常 `POST /api/identity/pair`。实现在 `core/gateway/pairing-code.ts`。
+
+### 24.1 签发：`POST /api/gateway/pairing` 多一个 `code`
+
+§17.3 的回答多一个键：
+
+```json
+{ "…": "§17.3 的其余键", "code": "3F7K-9Q2M" }
+```
+
+- 字母表 `[A-Z2-9]`（34 个字符，没有 `0` / `1`），8 位，显示成 `XXXX-XXXX`。与票同生同灭：过期时刻就是票的 `expiresAt`（两分钟）；一次性；票先被扫码兑掉，配对码跟着作废；Gateway 关掉、重开或换档时全部作废。只在 core 内存里，不落库、不进日志与审计（审计 `gateway.pairing.issue` 只多一个布尔 `code`）。
+- **档位**：配了对外来源（`publicOrigin`、ACME）一律不签；否则 `loopback` / `private` 档签，`all` 档只在绑定地址本身是回环或私网字面量时签（服务器壳绑在 `192.168.x.x` 上）。不签时 `code` 为 `null`。旧 core 不带这个键。
+
+### 24.2 `POST /api/gateway/pairing-code/exchange`
+
+请求体只认 `{ "code": string }`（大小写、连字符与空白都不算；不认识的键 400）。**匿名**：手机还没有身份，配对码就是凭据——路由门不判（`route-scopes.ts` 的 `SELF_GUARDED`），Gateway 准入把它当匿名面（`admission.ts::anonymousPath`，Cookie 模式与 Bearer 模式都是），Origin 那道照旧。回答与 §17.3 同形（没有 `code` 键）：
+
+```json
+{
+  "origin": "https://192.168.1.20:8443",
+  "ticket": "0123…ef.AbC…",
+  "fingerprint": "5f1c…",
+  "expiresAt": "2026-10-03T08:02:00.000Z",
+  "webUrl": "https://192.168.1.20:8443/#pair=0123…ef.AbC…&fp=5f1c…",
+  "deepLink": "armadra://pair?host=192.168.1.20%3A8443&ticket=0123…&fp=5f1c…"
+}
+```
+
+| 状态 | `code`                  | 何时                                                                                                                    |
+| ---- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 400  | `bad_request`           | 请求体不是 `{ code: string }`                                                                                           |
+| 403  | `pairing_code_disabled` | 这个 Gateway 不签配对码（24.1 的档位）                                                                                  |
+| 404  | `pairing_code_invalid`  | 码不对、过期、用过，或票已被兑掉——一律同一个答案                                                                        |
+| 409  | `gateway_not_running`   | 没在运行                                                                                                                |
+| 409  | `origin_mismatch`       | 码对了，但请求的 Origin（Bearer 模式是会话来源 `https://<Host>`）不是票绑定的来源；码**不作废**，换到配对卡上的地址再输 |
+| 429  | `rate_limited`          | 试错太多；带 `Retry-After`（秒）                                                                                        |
+
+- **限流**：按来源地址的令牌桶（与登录同一种，`identity/throttle.ts::IpBuckets`，每分钟 20 次），另有一只全局桶（每分钟 200 次）挡分散来源的撒网；只有 404 才扣，桶空时连对的码也不看。来源地址是 socket 对端，不读 `X-Forwarded-For`。
+- 兑换成功与失败进审计：`gateway.pairing.code.exchange`（`origin`、`remoteIp`）、`gateway.pairing.code.reject`（`remoteIp`）；码与票都不记。
+- **页面**：设置页配对卡在倒计时旁显示配对码（过期即收起）。手机浏览器经 Gateway 打开、窄屏、没带 `#pair=` 也没有会话时，连接页先给 8 位 `InputOTP`（两组四位），输满自动兑换并配对；页上另有「账号登录」直接进页面。原生 App 只在已经记下（并钉过信任锚）一个 Gateway 来源时给「输入配对码」入口——App 不装 CA，没钉过的 Gateway 连不上；换出的 `fingerprint` 照样再钉一次，锚变了就失败，不自动信任新证书。
 
 ## 25. 口令重置链接：`/api/identity/…/password-reset`
 

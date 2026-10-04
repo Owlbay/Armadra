@@ -177,15 +177,22 @@ describe("认证门", () => {
     ).toBeUndefined();
   });
 
-  it("健康检查与身份面不要会话，其余都要", () => {
+  it("健康检查、身份面与配对短码换票不要会话，其余都要", () => {
     const ctx = context();
-    for (const path of ["/health", "/api/health", "/api/identity/pair"]) {
+    for (const path of [
+      "/health",
+      "/api/health",
+      "/api/identity/pair",
+      "/api/gateway/pairing-code/exchange",
+    ]) {
       expect(anonymousPath(path)).toBe(true);
       expect(
         gate({ method: "POST", path, headers: headers() }, ctx.value),
       ).toBeUndefined();
     }
     expect(ctx.seen).toHaveLength(0);
+    expect(anonymousPath("/api/gateway/pairing")).toBe(false);
+    expect(anonymousPath("/api/gateway/pairing-code/exchange/x")).toBe(false);
   });
 
   it("写方法要 CSRF，只读方法不要", () => {

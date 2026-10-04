@@ -99,9 +99,32 @@ export const gatewayPairingPayloadSchema = z.object({
   webUrl: z.string().url(),
   /** `armadra://pair?host=…&ticket=…&fp=…`. */
   deepLink: z.string().startsWith("armadra://pair?"),
+  /**
+   * 8-character pairing code shown as `XXXX-XXXX` (§24). `null` when the
+   * gateway is on the public `all` tier or has a public origin; absent on the
+   * exchange answer and on older cores.
+   */
+  code: z
+    .string()
+    .regex(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/)
+    .nullable()
+    .optional(),
 });
 
 export type GatewayPairingPayload = z.infer<typeof gatewayPairingPayloadSchema>;
+
+/** Pairing-code alphabet: `[A-Z2-9]`, no 0 / 1 (§24). */
+export const GATEWAY_PAIRING_CODE_PATTERN = /^[A-Z2-9]{8}$/;
+export const GATEWAY_PAIRING_CODE_LENGTH = 8;
+
+/** `POST /api/gateway/pairing-code/exchange` request body (§24). */
+export const gatewayPairingCodeExchangeSchema = z
+  .object({ code: z.string().min(1).max(32) })
+  .strict();
+
+export type GatewayPairingCodeExchange = z.infer<
+  typeof gatewayPairingCodeExchangeSchema
+>;
 
 /** `POST /api/identity/ws-ticket` on the gateway, Bearer mode only (§17.4). */
 export const gatewayWsTicketSchema = z.object({

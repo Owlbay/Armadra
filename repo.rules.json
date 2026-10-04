@@ -19,6 +19,7 @@
     "migrations.lock",
     "package.json",
     "packages",
+    "patches",
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
     "repo.rules.json",

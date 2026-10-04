@@ -55,6 +55,26 @@ describe("PairingCard", () => {
     expect(screen.queryByRole("link", { name: "下载 CA" })).toBeNull();
   });
 
+  it("私网档位上画「配对码 XXXX-XXXX 倒计时」，过期时收起配对码", () => {
+    const props = {
+      pairing: { ...pairing, code: "3F7K-9Q2M" },
+      busy: false,
+      origins: [pairing.origin],
+      fingerprint: FP,
+      caHref: null,
+      onNewPairing: vi.fn(),
+    };
+    const { rerender } = render(
+      <PairingCard {...props} now={EXPIRES - 179_000} />,
+    );
+    expect(screen.getByText("配对码")).toBeTruthy();
+    expect(screen.getByText("3F7K-9Q2M").tagName).toBe("KBD");
+    expect(screen.getByText("2:59")).toBeTruthy();
+    rerender(<PairingCard {...props} now={EXPIRES + 1} />);
+    expect(screen.queryByText("3F7K-9Q2M")).toBeNull();
+    expect(screen.getByText("已过期")).toBeTruthy();
+  });
+
   it("formats the clock and the fingerprint the way certificate dialogs do", () => {
     expect(countdown(120_000)).toBe("2:00");
     expect(countdown(59_001)).toBe("1:00");

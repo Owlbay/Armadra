@@ -14,10 +14,12 @@
 //      置灰，期间
 //      拖动的节点第一台看不到；恢复网络后自动重连，第一台看到这次拖动、横幅
 //      消失。
-//   6. 评论：一边在节点上放评论，另一边经事件看到钉；
-//   7. 跟随视口：B 点 A 的头像跟随，A 缩放、平移，B 的视口中心与缩放对上 A，
+//   7. 评论：A 在便签上放钉，B 经事件看到；
+//   8. 白板对象上的评论：A 在一个白板形状上放钉、正文写 Markdown，B 看到
+//      渲染后的加粗与 http(s) 链接，裸 HTML 不出现；评论锚在 item 上。
+//   9. 跟随视口：B 点 A 的头像跟随，A 缩放、平移，B 的视口中心与缩放对上 A，
 //      画布四周描一圈 A 的成员色；
-//   8. 刷新后视口不变：B 刷新页面，回到刷新前自己的视口（本机记着，不进
+//  10. 刷新后视口不变：B 刷新页面，回到刷新前自己的视口（本机记着，不进
 //      文档、也不 PUT 回 core）。
 //
 // 断网用页面里的 WebSocket 包装实现（`Page.addScriptToEvaluateOnNewDocument`
@@ -180,6 +182,39 @@ try {
     { kind: "sticky", content: "中间" },
   );
   await stack.seedBoard(workspace.id, board.id, [left, right, shared]);
+  // 一个白板形状（第 8 步在它上面评论）：在左边便签与共写便签之间的空处。
+  const shapeId = "0190a000-0000-7000-8000-00000000c0de";
+  {
+    const path = `/api/workspaces/${workspace.id}/boards/${board.id}/document`;
+    const current = await stack.api(path);
+    await stack.api(path, {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedUpdatedAt: current.board.updatedAt,
+        nodes: current.nodes,
+        edges: current.edges,
+        viewport: { x: 0, y: 0, zoom: 1 },
+        whiteboard: JSON.stringify({
+          engine: "armadra-flow",
+          version: 2,
+          items: [
+            {
+              id: shapeId,
+              kind: "shape",
+              geo: "rectangle",
+              x: 120,
+              y: 340,
+              w: 160,
+              h: 60,
+              z: 1,
+              style: { color: "black", size: "m" },
+            },
+          ],
+          references: [],
+        }),
+      }),
+    });
+  }
   const url = stack.boardUrl(workspace.id, board.id);
   const realtimePath = `/api/workspaces/${workspace.id}/boards/${board.id}/realtime`;
   const documentPath = `/api/workspaces/${workspace.id}/boards/${board.id}/document`;
@@ -408,7 +443,73 @@ try {
   await run.shot(a, "realtime-7-comment-a");
   await run.shot(b, "realtime-7-comment-pin-b");
 
-  /* ------------------------ 8. 跟随视口（§16.4） ------------------------ */
+  /* ------------------- 8. 白板对象上的评论（G5-12） -------------------- */
+  const shapeCenter = await a.until(
+    `const node = document.querySelector('.react-flow__node[data-id="wb:${shapeId}"]');
+     if (!node) return null;
+     const r = node.getBoundingClientRect();
+     return r.width > 0 ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;`,
+    "A 渲染出白板形状",
+  );
+  await a.click(shapeCenter.x, shapeCenter.y);
+  await a.until(
+    `const box = document.querySelector('[data-slot="popover-content"] [data-slot="comment-composer"] textarea');
+     if (!box) return false; box.focus(); return true;`,
+    "A 在白板形状上的评论输入框出现",
+  );
+  await a.type(
+    "**加粗** [链接](https://example.com) [坏](javascript:alert(1)) <b>raw</b>",
+  );
+  await a.clickOn(
+    `return [...document.querySelectorAll('[data-slot="popover-content"] [data-slot="comment-composer"] button')].find((node) => node.textContent.trim() === "发送")`,
+    "A 发送白板对象上的评论",
+  );
+  await b.until(
+    `return document.querySelectorAll('[data-comment-pin]').length >= 2`,
+    "B 看到白板对象上的第二枚钉",
+  );
+  const itemComments = (await stack.api(commentsPath)).comments.filter(
+    (comment) => comment.anchor.kind === "item",
+  );
+  run.check(
+    itemComments.length === 1 && itemComments[0].anchor.id === shapeId,
+    "评论锚在白板对象（item）上",
+    { comment: itemComments[0] },
+  );
+  // B 打开这枚钉：Markdown 渲染，链接只留 http(s)，裸 HTML 不出现。
+  await b.clickOn(
+    `return [...document.querySelectorAll('[data-comment-pin]')].find((pin) => {
+       const r = pin.getBoundingClientRect();
+       const shape = document.querySelector('.react-flow__node[data-id="wb:${shapeId}"]')?.getBoundingClientRect();
+       return shape && Math.abs(r.left + r.width / 2 - shape.right) < 20 && Math.abs(r.top + r.height / 2 - shape.top) < 20;
+     })`,
+    "B 打开白板对象上的钉",
+  );
+  const rendered = await b.until(
+    `const body = [...document.querySelectorAll('[data-slot="comment"]')].find((node) => node.textContent.includes("加粗"));
+     if (!body) return null;
+     return {
+       strong: body.querySelector("strong")?.textContent ?? null,
+       hrefs: [...body.querySelectorAll("a")].map((a) => a.getAttribute("href")),
+       raw: !!body.querySelector("b"),
+       text: body.textContent,
+     };`,
+    "B 看到渲染后的评论正文",
+  );
+  run.check(
+    rendered.strong === "加粗" &&
+      rendered.hrefs.length === 1 &&
+      rendered.hrefs[0] === "https://example.com" &&
+      !rendered.raw,
+    "评论正文按 Markdown 渲染，只开 http(s) 链接，裸 HTML 不出现",
+    rendered,
+  );
+  await run.shot(b, "realtime-8-item-comment-b");
+
+  /* ------------------------ 9. 跟随视口（§16.4） ------------------------ */
+  // 收起上一步打开的评论弹层。
+  await b.key("Escape");
+  await a.key("Escape");
   await b.clickOn(
     `return document.querySelector('[data-slot="presence-bar"] [data-peer][aria-pressed="false"]')`,
     "B 点 A 的头像跟随",
@@ -455,7 +556,7 @@ try {
     a: await viewportOf(a),
     b: await viewportOf(b),
   });
-  await run.shot(b, "realtime-8-follow-viewport-b");
+  await run.shot(b, "realtime-9-follow-viewport-b");
   await b.clickOn(
     `return document.querySelector('[data-slot="presence-bar"] [data-peer][aria-pressed="true"]')`,
     "B 取消跟随",
@@ -465,7 +566,7 @@ try {
     "B 的跟随描边消失",
   );
 
-  /* ------------------------ 9. 刷新后视口不变 -------------------------- */
+  /* ------------------------ 10. 刷新后视口不变 ------------------------- */
   // 视口落 store 节流 300ms，再写本机。
   await sleep(1000);
   const kept = await viewportOf(b);
@@ -510,7 +611,7 @@ try {
     "实时板的视口没有 PUT 回 core",
     { core: coreView, kept },
   );
-  await run.shot(b, "realtime-9-reload-viewport-b");
+  await run.shot(b, "realtime-10-reload-viewport-b");
 
   run.consoleClean(a, b);
   await a.close();
