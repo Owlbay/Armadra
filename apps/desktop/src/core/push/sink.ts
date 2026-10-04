@@ -90,7 +90,7 @@ export async function inMemorySink(): Promise<{
   };
   const sink = module.createPushSink({});
   const fetcher = async (
-    input: RequestInfo | URL,
+    input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
     const url = new URL(input instanceof Request ? input.url : String(input));
