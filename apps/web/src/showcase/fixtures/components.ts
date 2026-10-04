@@ -81,3 +81,14 @@ export const ACCORDION_ITEMS = [
 ] as const;
 
 export const SHORTCUT = ["⌘", "K"] as const;
+
+/** `chart` 样本：一周的 token 用量（千），数值只是为了有高有低。 */
+export const CHART_POINTS = [
+  { day: "09-28", tokens: 42 },
+  { day: "09-29", tokens: 18 },
+  { day: "09-30", tokens: 64 },
+  { day: "10-01", tokens: 37 },
+  { day: "10-02", tokens: 81 },
+  { day: "10-03", tokens: 55 },
+  { day: "10-04", tokens: 29 },
+] as const;
