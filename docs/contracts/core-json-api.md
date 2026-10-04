@@ -1740,7 +1740,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 27. 推送补充：设备偏好、UnifiedPush、调度与资源事件
 
-补 §19：每台设备收哪些种类、没有 Google 服务的 Android 走用户自己的 UnifiedPush 分发器，以及两族一直被推送监听、却没有人发的事件。表 `push_devices` 多两列（迁移 `0037_push_preferences.sql`）：`kinds_json`（空串 = 全部）与 `unifiedpush_endpoint`（空串 = 没有）。代码在 `core/push/`（`transport-unifiedpush.ts`）、`core/schedule/engine.ts`、`core/resources/thresholds.ts`，共享层 `api/push.ts`。
+补 §19：每台设备收哪些种类、没有 Google 服务的 Android 走用户自己的 UnifiedPush 分发器，以及两族一直被推送监听、却没有人发的事件。表 `push_devices` 多两列（迁移 `0036_push_preferences.sql`）：`kinds_json`（空串 = 全部）与 `unifiedpush_endpoint`（空串 = 没有）。代码在 `core/push/`（`transport-unifiedpush.ts`）、`core/schedule/engine.ts`、`core/resources/thresholds.ts`，共享层 `api/push.ts`。
 
 ### 27.1 设备偏好：`PATCH /api/push/devices/{deviceId}`
 
