@@ -1431,7 +1431,7 @@
 - core `oauth.test` 共 42 例（新增原生一路 5 例：绑定 → 登录、`nativeState` 不对后记录作废、浏览器与原生不能互走收尾、提供方拒绝与提供方不一致、`native=1` 只认原生传输）。web 新增 `native-oauth`、`push-rotation`、`assets` 三个测试文件，`native-bridge`、`entry`、`use-link-fragments`、`PushPermission` 加了用例。
 - ArmadraNativeKit `swift test` 18 例；armadra-native-core 用 javac + JUnit 本地跑 15 例（`DeepLinkTest`、`ExternalUrlTest` 新增）。本机 iOS 模拟器构建（不签名）通过。
 - 对构建出的 core 经 Gateway 的 Bearer 模式实测：资产不带 Bearer 答 401，带了答 200 `image/png`；`POST oauth/e2e/native` 答 400 `oauth_state_invalid`。
-- 夜间 `workflow_dispatch`（本分支）：`mobile-ios` 全过（含 OAuth 深链一步），`mobile-android` 见 PR。
+- 夜间 `workflow_dispatch`（本分支，run 37200252911）：`mobile-ios` 与 `mobile-android` 都全过。Android 的三条插桩用例全过，logcat 里能看到冷启动深链交给了页面。中途修了两处：一是冷启动时 Capacitor 会漏掉 `onPageLoaded`，改为另按页面进度轮询；二是插桩框架按启动 intent 认活动，不能清掉 intent 的 data。有一次 b 用例报 `script timed out`，是模拟器偶发，重跑失败作业后通过。
 - `pnpm libs:build && pnpm -r --if-present test`：desktop 4418 过 / 43 跳过，live 4 过，脚本 65 过；web 3311 过；shared 321 过；server 86 过 / 4 跳过；mobile 9 过；push-relay 9 过；0 失败。`pnpm --filter @armadra/web typecheck` 与 `pnpm check` 通过。
 
 **没做 / 限制**
