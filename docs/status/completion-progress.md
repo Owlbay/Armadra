@@ -1025,7 +1025,7 @@
 
 **没做 / 需要上游**
 
-- `@armadra/agent` 0.6.7 的 `AcpClient` 没有 `features.elicitation` / `features.configOptions`，这两样在真机上要等上游发版、升依赖之后才生效。上游要加：`onElicitation`、`clientCapabilities.elicitation`、`setConfigOption` 与 `configOptions` 的类型，假 Agent 也要会发 elicitation、会答 `configOptions`。升依赖之后删掉 `acp/feature-fixture.ts`，改用上游的假 Agent。
+- 上游已补：`@armadra/agent` 0.6.8 的 `AcpClient` 带 `features.elicitation` / `features.configOptions`（`onElicitation`、`clientCapabilities.elicitation`、`setConfigOption`、`configOptions` 类型），假 Agent 会发 elicitation（`[elicit]`）、`--config-options` 时答 `configOptions`。依赖已升到 0.6.8，`acp/feature-fixture.ts` 已删，`features.test` 与凭据用例改用上游的真客户端与假 Agent。
 - `~/.pi/acp/sessions.json` 的路径与形状没有和真 `pi-acp` 核对过（B 档真跑）。
 - ama 密钥与终端驱动一样，不要求 `credential:use`；L10（按节点只发用得到的那一家）没有做。
 - 页面（`ElicitationCard`、模型 Select）归 G5-05，SSH 归 G5-06。

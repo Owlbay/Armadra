@@ -557,10 +557,9 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   （`shell-core/updates/availability.ts`）。设置页的「检查」经 `updates:check`（不带答复）由壳
   自己问发布索引，`noReleaseSource` 只在壳没有发布源时出现；macOS 的签名状态由
   `codesign --verify --deep --strict` 判定，ad-hoc 签名按 `unknown` 不装。
-- **ACP 的未竟项**：`elicitation/create` 与按模型选择（`session/set_config_option`）core 已就绪
-  （契约 §26），但要 `@armadra/agent` 的 `AcpClient` 自报 `features.elicitation` /
-  `features.configOptions`，0.6.7 还没有，在那之前行为与之前相同；SSH 节点不能切到 ACP
-  （`acp_unsupported`）。
+- **ACP 的未竟项**：`elicitation/create` 与按模型选择（`session/set_config_option`）
+  （契约 §26）随 `@armadra/agent` 0.6.8 的 `AcpClient`（`features.elicitation` /
+  `features.configOptions`）生效；SSH 节点不能切到 ACP（`acp_unsupported`）。
   六家真适配器的端到端探针已备（`agent-e2e` 场景 12，C 档），还没有真跑。
 - **Gateway / 手机**：配对是两分钟票（二维码 / 链接），私网档位上另有 8 位配对码（契约 §24）；设备表没有
   「平台」「最近访问」；推送中继写完不部署，UnifiedPush 未做；真机、商店与
