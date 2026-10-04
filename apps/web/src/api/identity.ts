@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { devicePlatformSchema } from "@armadra/shared";
 
-import { fetchNativeTicket, isNativeShell } from "../host/native-session";
+import {
+  HostNativeSessionError,
+  type NativeSessionFailure,
+  fetchNativeTicket,
+  isNativeShell,
+} from "../host/native-session";
 import { isNativeApp, nativeBridge } from "../mobile/native-bridge";
 import { RUNTIME_URL } from "./request";
 
@@ -247,6 +252,7 @@ export function resetIdentityCredentials(): void {
   refresh = "";
   accessExpiresAt = 0;
   renewing = null;
+  shellFailure = null;
   clearShellRefresh();
 }
 
@@ -563,6 +569,38 @@ export function currentAccessToken(): string {
 let shellRenewal: Promise<string> | null = null;
 
 /**
+ * 桌面壳最近一次取不到会话的原因（壳签不出票：core 还没起来、Windows 上 core
+ * 不是这个壳起的……）。有它时页面挂一条通知条说清楚，而不是让每个请求静默
+ * 401；配上对就清掉。
+ */
+let shellFailure: NativeSessionFailure | null = null;
+
+export function shellSessionFailure(): NativeSessionFailure | null {
+  return shellFailure;
+}
+
+function noteShellFailure(next: NativeSessionFailure | null): void {
+  if (next === shellFailure) return;
+  shellFailure = next;
+  announce();
+}
+
+/** `resumeIdentity` 那一串，记下壳签不出票的原因；失败答 `null`。 */
+function resumeShell(): Promise<IdentitySession | null> {
+  return resumeIdentity().then(
+    (session) => {
+      if (session) noteShellFailure(null);
+      return session;
+    },
+    (error: unknown) => {
+      if (error instanceof HostNativeSessionError)
+        noteShellFailure(error.reason);
+      return null;
+    },
+  );
+}
+
+/**
  * 桌面壳里每个请求要带的访问密钥（契约 §3.2）。
  *
  * 自 0.2.0 起 core 不再放行回环上没带凭据的请求（安全审查 L9），所以壳里的
@@ -573,8 +611,7 @@ let shellRenewal: Promise<string> | null = null;
 export async function shellBearer(): Promise<string> {
   if (!isNativeShell()) return "";
   if (!access) {
-    await (shellRenewal ??= resumeIdentity()
-      .catch(() => null)
+    await (shellRenewal ??= resumeShell()
       .then(() => access)
       .finally(() => {
         shellRenewal = null;
@@ -596,8 +633,7 @@ export async function shellBearer(): Promise<string> {
 export async function renewShellBearer(rejected: string): Promise<string> {
   if (!isNativeShell()) return "";
   if (access && access !== rejected) return access;
-  shellRenewal ??= resumeIdentity()
-    .catch(() => null)
+  shellRenewal ??= resumeShell()
     .then(() => access)
     .finally(() => {
       shellRenewal = null;
@@ -640,11 +676,7 @@ function scheduleShellRefresh(): void {
 function rotateShellBearer(): Promise<string> {
   shellRenewal ??= refreshIdentity()
     .then(() => access)
-    .catch(() =>
-      resumeIdentity()
-        .catch(() => null)
-        .then(() => access),
-    )
+    .catch(() => resumeShell().then(() => access))
     .finally(() => {
       shellRenewal = null;
     });

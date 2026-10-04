@@ -14,6 +14,8 @@ export const hostNative: MessageModule = {
       "桌面壳返回的本机票据无法验证；请重启应用后再试。",
     "hostNative.blocked.shellUnavailable":
       "桌面壳没有响应取票请求，无法自动登录后台服务。",
+    "hostNative.blocked.channelUnavailable":
+      "后台服务不是这次启动的应用起的，拿不到本机票据。请退出 Armadra 后重新打开。",
   },
   en: {
     "hostNative.blocked.hostUnavailable":
@@ -28,5 +30,7 @@ export const hostNative: MessageModule = {
       "The desktop shell returned a local ticket that could not be verified. Restart the app and try again.",
     "hostNative.blocked.shellUnavailable":
       "The desktop shell did not answer the ticket request, so automatic sign-in to the background service is unavailable.",
+    "hostNative.blocked.channelUnavailable":
+      "The background service was not started by this app, so no local ticket is available. Quit Armadra and open it again.",
   },
 };
