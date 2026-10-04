@@ -1685,3 +1685,31 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 | `POST templates`、`PUT/DELETE templates/{id}` | —                        | 只有 owner                        |
 
 关卡答复是放行或拦下一次运行，与起跑同一档，不是替 Agent 代答，所以要 operator 而不是 `approval:answer`。声明在 `http/route-scopes.ts` 单列一行，常量 `core/workflow/routes.ts::GATE_SCOPE`。
+
+## 24. Gateway 配对短码：`/api/gateway/pairing-code/*`
+
+预留，由 G5-01 填写。
+
+## 25. 口令重置链接：`/api/identity/…/password-reset`
+
+预留，由 G5-02 填写。
+
+## 26. ACP 补充：elicitation、模型、凭据、SSH
+
+预留，由 G5-04 填写（SSH 小节由 G5-06 追加）。
+
+## 27. 推送补充：设备偏好、UnifiedPush、调度与资源事件
+
+预留，由 G5-10 填写。事件形状 G5-00 已在 `core/bus.ts` 与 `packages/shared/src/api/events.ts` 定义：`schedule.fired { planId, runId, nodeId? }`、`schedule.failed { planId, runId, nodeId?, reasonCode }`、`schedule.attention { planId, nodeId?, reasonCode }`、`resources.threshold { sessionId, nodeId?, metric, value, threshold }`；不带命令、参数与输出。
+
+## 28. 邮件通道：`/api/mail/*`
+
+预留，由 G5-13 填写。
+
+## 29. 托管平台（forge）：`/api/forge/*`
+
+预留，由 G5-14 填写（GitLab 小节由 G5-15 追加）。
+
+## 30. 页面错误上报：`/api/diagnostics/client-error`
+
+预留，由 G5-19 填写。

@@ -1,7 +1,7 @@
 # 补全进度
 
 > 状态：已验证进度。逐包记录 [补全执行计划](../design/completion-plan.md) §2 的工作包；框架与决定见 [补全架构](../design/completion-architecture.md)。
-> 规矩：每节由对应工作包合入时填写「做了什么 / 实测 / 没做」，只改自己那一节；节标题与顺序由 G0-1 预建，不改。实测写命令与结果（通过数、产物路径、PR）；没做写原因与归宿（需用户提供、后续包、外部条件）。
+> 规矩：每节由对应工作包合入时填写「做了什么 / 实测 / 没做」，只改自己那一节；节标题与顺序由 G0-1 预建，不改。G5 各节（[G5 剩余事项计划](../design/g5-remaining-plan.md) §3）由 G5-00 预建，规矩相同。实测写命令与结果（通过数、产物路径、PR）；没做写原因与归宿（需用户提供、后续包、外部条件）。
 
 <!-- G0 基线 -->
 
@@ -925,3 +925,132 @@
 - 真签名与公证：Apple、Windows、GPG 证书与 minisign 发布密钥都没有，见上面「需用户提供」P0 / P1。拿到之前，正式发布按「未签名」处理，说明顶部会列出未签名的平台。
 - `release.yml` 的发布说明目前取 GitHub 的 `generate-notes`，不读 `CHANGELOG.md`。发版时需要手工把 0.2.0 一节贴进草稿，或者另开一个包让 `assemble.mjs --notes-from` 读这一节。
 - 打包版的「检查 → 下载 → 暂存」这次没有对 0.2.0 重跑。G3-3 已用 `update-e2e` 对 dev-stack 走通过，这次没有改壳侧代码。
+
+<!-- G5 剩余事项（g5-remaining-plan.md §3；节由 G5-00 预建，各包只填自己那一节） -->
+
+## G5-00 骨架与编号
+
+**做了什么**
+
+- 路由 scope（`core/http/route-scopes.ts`）：`/api/identity/password-reset/` 不要求权限（令牌即凭据），`/api/identity/principals/{id}/password-reset` 归 `identity:manage`；`/api/gateway/pairing-code/exchange` 不要求权限并进 `SELF_GUARDED`（其余 `/api/gateway/pairing-code*` 仍是 owner 那一档）；`/api/forge/` 与 GitHub 同档（`github:read` / `github:write`）；`/api/mail/`（清单 `identity:read` / `identity:manage`）与 `/api/diagnostics/client-error`（清单 `canvas:read`）进 `SELF_GUARDED`，由域自己认身份。
+- 装配（`core/main.ts`）：`core/forge/`、`core/mail/`、`core/diagnostics/index.ts` 三个空骨架域。forge 在 GitHub 与 Git 之后；邮件与页面错误上报在推送之后、hook 服务之前。G5-13 / G5-14 / G5-19 只填各自的 `install`，不再改 `main.ts`。
+- 事件（`core/bus.ts`、共享层 `api/events.ts`）：`schedule.fired { planId, runId, nodeId? }`、`schedule.failed { planId, runId, nodeId?, reasonCode }`、`schedule.attention { planId, nodeId?, reasonCode }`、`resources.threshold { sessionId, nodeId?, metric, value, threshold }`。这里只定义形状，不发事件；四个都已进 `WORKSPACE_EVENT_TYPES`（共 32 个）。
+- 设置键：`diagnostics.reportPageErrors`（缺省 false）、`usage.claudeLocalWindow`（缺省 true）。两份 `completion-settings.ts` 仍逐字节相同；core 归一、共享层 zod、页面 `api/settings.ts` 的类型同步更新，坏值退回缺省。
+- i18n：预登记 `coordinator`、`forge`、`mail`、`diagnostics`、`password-reset` 五个空模块。展示页模块改为只在 `import.meta.env.DEV` 下挂进 `MESSAGE_MODULES`（R-72 的一项）。`i18n.test` 的全集断言改为开发态断言；`production.test` 改在 `NODE_ENV=production` 下真构建，断言 `dist/` 里没有 showcase 的键。原先 Vitest 的 `NODE_ENV=test` 让构建里 `DEV` 为真，即使有泄漏也查不出。桌面壳 tsconfig 也会检查 `i18n/index.ts`，所以文件头加了 `vite/client` 类型引用。
+- 契约 §24–§30 节标题，内容为「预留」；§27 先记下上面四个事件的形状。架构文档的域表加了 `core/mail/`、`core/forge/` 两行，`core/diagnostics/` 一行补上页面错误上报。本文件预建 G5-00 到 G5-27 共 28 节。
+
+**实测**（macOS arm64）
+
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 4238 过 / 46 跳过，脚本 65 过；web 3239 过；shared 320 过；server 79 过 / 2 跳过；mobile 9 过；push-relay 9 过；0 失败。
+- `pnpm --filter @armadra/web typecheck`、`pnpm check` 通过。
+- 反证：把 showcase 改回无条件挂载后，`production.test` 报出 `showcase.title` 进了 `assets/preferences-store-*.js`，测试按预期失败。
+
+**没做**：这里不写任何路由与事件的发送，各由对应包实现。迁移号 0036–0038 也不由本包占用。
+
+## G5-01 Gateway 配对短码与手机输入（R-01）
+
+待填（第 1 组）。
+
+## G5-02 身份 core：重置链接、passkey 改名、设备两列（R-02 核心、R-03、R-05、R-08、R-09）
+
+待填（第 1 组）。
+
+## G5-03 身份页面：整页登录、忘记口令、重置页、passkey 改名、MFA 重置、L7（R-02 页面、R-03 页面、R-04、R-05 页面、R-06、R-13）
+
+待填（第 2 组）。
+
+## G5-04 ACP core 补充（R-26 core、R-27 core、R-28、R-29）
+
+待填（第 1 组）。
+
+## G5-05 ACP 页面补充（R-26 页面、R-27 页面、R-31）
+
+待填（第 2 组）。
+
+## G5-06 SSH 节点的 ACP（R-30）
+
+待填（第 2 组）。
+
+## G5-07 协调者 runners：`--cwd` / `--resume` 与 `blocked` 覆盖（R-33、R-34）
+
+待填（第 1 组）。
+
+## G5-08 工作流编辑器与模板升级（R-36、R-37）
+
+待填（第 1 组）。
+
+## G5-09 协调者分派抽屉与完成节点边框（R-38、R-39）
+
+待填（第 3 组）。
+
+## G5-10 推送补充（R-50、R-51、R-52）
+
+待填（第 1 组）。
+
+## G5-11 实时协同补充（R-44、R-45、R-46）
+
+待填（第 1 组）。
+
+## G5-12 评论补充（R-47、R-48、R-49）
+
+待填（第 1 组）。
+
+## G5-13 邮件通道 W-MAIL 与 `secrets rotate`（R-82、R-24）
+
+待填（第 2 组）。
+
+## G5-14 托管平台 forge 一：抽象与 Gitea / Forgejo（R-83 前半）
+
+待填（第 3 组）。
+
+## G5-15 托管平台 forge 二：GitLab 与 Git 面板（R-83 后半）
+
+待填（第 4 组）。
+
+## G5-16 Gateway 与服务端收尾（R-18、R-19、R-73、R-74、R-75）
+
+待填（第 2 组）。
+
+## G5-17 启动兼容退役与更新页接线（R-59、R-60、R-61）
+
+待填（第 3 组）。
+
+## G5-18 发布流水线收尾（R-62、R-63、R-64、R-65 作业、R-66、R-67）
+
+待填（第 3 组）。
+
+## G5-19 页面错误上报（R-69、R-12）
+
+待填（第 2 组）。
+
+## G5-20 安全杂项（R-07、R-10、R-14、R-16、R-17）
+
+待填（第 2 组）。
+
+## G5-21 Windows 会话宿主退出（R-68）
+
+待填（第 2 组）。
+
+## G5-22 手机原生补充（R-54、R-55、R-56）
+
+待填（第 3 组）。
+
+## G5-23 零碎界面与 G2-2 遗留（R-43、R-71、R-72 其余）
+
+待填（第 3 组）。
+
+## G5-24 桌面回环收紧（R-15）
+
+待填（第 4 组）。
+
+## G5-25 Claude 本地额度窗口估算（R-70）
+
+待填（第 3 组）。
+
+## G5-26 依赖审计（R-84、R-85、R-86、R-87）
+
+待填（第 0 组）。
+
+## G5-27 不稳定用例（R-88、R-89、R-90）
+
+待填（第 3 组）。
