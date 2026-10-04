@@ -91,10 +91,13 @@ node tools/ci/e2e.mjs --tier b --list     # 只列出清单
     `verify-linux-glibc-baseline.sh` 断言基线，再在 `xvfb-run` 下跑 B 档：
     `packaged-smoke --no-real-cli` 起 AppImage（`APPIMAGE_EXTRACT_AND_RUN`，不要
     FUSE），`deb-install` 在 `ubuntu:22.04` 容器里 `apt-get install` 那个 deb、`ldd`
-    没有缺库、`armadra --version` 答出版本；另跑 `server-perf`、
+    没有缺库、`armadra --version` 答出版本，并在同一个容器里用 `APPIMAGE_EXTRACT_AND_RUN`
+    起同架构的 AppImage；另跑 `server-perf`、
     `server-container-e2e`（构建服务器壳镜像、对着容器跑 `server-e2e`，不推送）、`crash-report-e2e` 与
     `update-e2e`。作业设 `ARMADRA_DEV_STACK=1`、装 Chrome，`devStack` 条目先
     `pnpm dev-stack up`。
+  - `linux-arm64`（ubuntu-22.04-arm）：打 arm64 包、断言 glibc 基线，只跑 `deb-install`
+    （`--only deb-install`；其余 B 档条目与架构无关）。
   - `macos`（macos-14）：同样打包，跑 `packaged-smoke --no-real-cli`。
   - `report`：前两条任一失败、且在 main 上时，用默认的 `GITHUB_TOKEN`（作业级
     `issues: write`）开一个「夜间 B 档失败」issue，已有开着的同名 issue 就追加评论；
@@ -217,6 +220,22 @@ electron-builder 的 AppImage 由 app-builder 自己打，不经 linuxdeploy，�
 宿主的 GTK/Wayland 栈拷进镜像——Electron 自带 Chromium，运行时才链接系统 GTK。
 上一代壳需要一个剥离 `libwayland-client/cursor/egl` 的后处理步骤（那些库不是自包含的，
 镜像里自带一份等于把同一套协议的两个版本混在一起），随那个打包器一起删掉了。
+
+**arm64 用静态运行时。** electron-builder 缺省的 AppImage 工具集（`toolsets.appimage: 0.0.0`，
+AppImageKit 12）里 arm64 的运行时动态链接**无版本号**的 `libz.so`——那个名字只有 zlib 的开发包
+提供，干净系统上 AppImage 在解包之前就报 `error while loading shared libraries: libz.so`；往镜像里
+放 zlib 没用，起不来的是运行时本身。`scripts/dist.mjs` 对 arm64 构建合入
+`toolsets.appimage: 1.0.3`（`ARM64_APPIMAGE_TOOLSET`，静态的 type-2 运行时 20251108，没有任何
+`NEEDED`）；x64 的旧运行时链接的是 `libz.so.1`（zlib1g 在 Debian / Ubuntu 是必装的），保持不变。
+夜间 `linux-arm64` 作业（`ubuntu-22.04-arm`）打包后跑 `deb-install`：同一个干净 `ubuntu:22.04`
+容器里装 deb、再用 `APPIMAGE_EXTRACT_AND_RUN` 起 AppImage，两者都要答出版本。
+
+**更新缓存目录。** electron-updater 把下载放在系统缓存目录下的 `updaterCacheDirName`，NSIS 安装包
+也把自己的副本留在那里给下一次差分下载用。electron-builder 从包名推这个名字，作用域包名得出
+`@armadradesktop-updater`，配置里没有能改它的键（`publish.updaterCacheDirName` 会被覆盖）。
+`scripts/after-pack.mjs` 把这次构建的 `AppInfo.updaterCacheDirName` 钉成 `armadra-updater`（deb / rpm
+在 afterPack 之后还会重写一次 `app-update.yml`，NSIS 也从它取存放路径），并改写 electron-builder
+自己已经写好的那份 `app-update.yml`。旧名字目录里已有的下载缓存不再被读，只占一点盘。
 
 ### 2.5 各平台的系统依赖与缓存
 
@@ -361,7 +380,11 @@ runner、两台 Windows runner 合进同一个目录会互相覆盖，所以 `st
 文件、清单的 sha512 与 `SHA256SUMS` 的 sha256 说的是同一份字节。`latest.json` 的每个
 平台条目带 `feed: { url, sha256 }` 点名这份清单；桌面壳下载前先取它、核对 sha256 与
 它描述的包，再把 `autoUpdater.channel` 设成 `latest-<target>` 交给 electron-updater。
-清单本身的 Ed25519 签名等 electron-builder 27 稳定后另做（外部服务 §2.4）。
+清单本身的 Ed25519 签名等 electron-builder 27 稳定后另做（外部服务 §2.4）。2026-10-04 核对：
+npm 上 `latest` 仍是 26.15.3（本仓库钉的版本），`v26` 线到 26.17.0，27 只有 `next` 标签的
+`27.0.0-alpha.9`（2026-09-26）。alpha 不进发布流水线，继续等；27 的 `latest` 出来后升级、在
+`electron-builder.yml` 加 `updateManifest.publicKey`、CI 用新的 `ELECTRON_BUILDER_UPDATE_SIGN_KEY`
+签 `latest*.yml`，并跑一次 `release:dry-run` 与 `release.yml` 全矩阵演练。
 
 **灰度**：`assemble.mjs --rollout <percent>` 给 `latest.json` 写
 `rollout: { percent, seed }`，seed 缺省为版本号；客户端用安装 id（数据目录
