@@ -1304,7 +1304,22 @@
 
 ## G5-25 Claude 本地额度窗口估算（R-70）
 
-待填（第 3 组）。
+做了什么：
+
+- `core/usage/local-window.ts`（新）：拿成本扫描器最近一趟的 Claude 日桶与小时桶（不再开文件）估两个窗口。5 小时窗口从上一个窗口之外第一条活动所在的本地整点起算、持续 5 小时，已结束则报从当前整点起的空窗口；7 天窗口是含今天的 7 个本地日。`used` = 输入 + 输出 + 缓存写（缓存读不计）。`limit` 只在调用方给了额度时才有。
+- `CostService.scannedBuckets()` 交出最近一趟的两组桶；`UsageService` 在读快照（`snapshot()` / `refresh()`）时，对 `reason: "policy_off"` 的 Claude 行现算 `estimate: { source: "local", windows: [{ key, label, windowStartMs, resetsAtMs?, used, limit? }] }`。设置 `usage.claudeLocalWindow` 关、成本扫描关或还没扫过时不挂。可选 `claudeWindowLimits` 供给额度，装配时没有接（仓库里没有订阅档额度的目录），所以现在只报 token。
+- 共享层 `usageEstimateSchema`；页面 `panels/usage/LocalEstimate.tsx`，用量卡、账号页明细（`shell/ProviderDetail.tsx`，`AccountPage` 本身没改）与用量环的无障碍名都标「本地估算 / Local estimate」；没有额度时只报 token 数、不画进度条，有额度才画百分比。契约 §12.1 追加一段。
+
+实测（macOS arm64，2026-10-04）：
+
+- `local-window.test`（夹具转录经 `ScanState` 扫临时目录：窗口起点、恰好 5 小时的边界、7 天首日边界、窗口已过期、无额度 / 有额度、缓存读不计）、`usage/routes.test`（夹具写在测试自己的 `CLAUDE_CONFIG_DIR`：`policy_off` 旁带估算，关掉设置后不带）、共享层 schema 用例、页面 `LocalEstimate.test`（卡片、账号页明细中英、用量环）。没有读过本机 `~/.claude`。
+
+没做 / 限制：
+
+- 没有订阅档额度来源：不读 Claude 凭据就不知道是哪一档，所以 `limit` 目前总是缺省，只报用量。
+- 契约里的形状是 `estimate.windows[]`（两个窗口各带 `windowStartMs`），不是计划里写的单个窗口。
+- 设置页没有 `usage.claudeLocalWindow` 的开关（计划要求 `AccountPage` 不改）；只能经设置接口改。
+- 估算依赖成本扫描节奏（后台 5 分钟一趟），不比扫描更新。
 
 ## G5-26 依赖审计
 

@@ -416,6 +416,34 @@ G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：�
 - 只有请求数而没有 token 时，`status` 仍是 `"ok"`。
 - OpenCode 按 token 计（`source: "local"`、`unit: "tokens"`），用量来自它库里 assistant 消息的 `tokens`。定价规则不变：价格表认得的模型按表算；认不出、而 OpenCode 自己在消息里记了大于零的 `cost` 时，用它记的数作这个模型的 `costUsd`，这个模型算有价格（不让 `complete` 变假，也不进 `unpricedModels`）。它记 0 的按没有价格处理。
 
+G5-25 追加：`GET /api/usage` 与 `POST /api/usage/refresh` 里 Claude 那一行因出站政策关着而是 `status: "unavailable"`、`reason: "policy_off"` 时，多一个可选字段 `estimate`（代码在 `core/usage/local-window.ts`，共享层 `usageEstimateSchema`）——本机转录估出来的额度窗口，不是额度端点的答案，界面标「本地估算」：
+
+```json
+{
+  "source": "local",
+  "windows": [
+    {
+      "key": "five_hour",
+      "label": "5h",
+      "windowStartMs": 1791093600000,
+      "resetsAtMs": 1791111600000,
+      "used": 1250000
+    },
+    {
+      "key": "seven_day",
+      "label": "7d",
+      "windowStartMs": 1790524800000,
+      "used": 8400000
+    }
+  ]
+}
+```
+
+- 数据是成本扫描（本节上文）最近一趟的 Claude 日桶与小时桶，读快照时现算；成本扫描关着（`usage.cost.enabled`）或还没扫过就没有这个字段。设置 `usage.claudeLocalWindow`（缺省 `true`）关掉也没有。
+- `used` 是输入 + 输出 + 缓存写的 token；缓存读不计。
+- `five_hour`：从上一个窗口之外第一条活动所在的本地整点起算，持续 5 小时，`resetsAtMs` 是结束时刻；最近的窗口已经结束时报从当前整点起、`used: 0` 的窗口。`seven_day`：含今天在内的 7 个本地日，滚动，没有 `resetsAtMs`。
+- `limit` 只在知道这一档额度时才有；没有就只报用量，页面不算百分比。
+
 ### 12.2 `/api/agents` 行的历史数据可用性
 
 `GET /api/agents` 的每一行（内置与 `custom:` 条目）多一个 `history`，说本机有没有这家 CLI 的本地历史，三项分别对应会话索引、本地成本与连线读取的转录（代码在 `core/history/availability.ts`）。不新开路由；共享层 `agentInfoSchema.history` 可选，旧 runtime 不带这个字段时页面不画这三项。
