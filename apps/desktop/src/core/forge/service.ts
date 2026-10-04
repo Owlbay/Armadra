@@ -417,8 +417,11 @@ export class ForgeService {
     } catch {
       throw githubError("invalid");
     }
-    // GitHub 域的连接表按两段 owner / name 存；多级子组的仓库这一版不连。
-    if (nestedOwner(repo.owner)) throw githubError("invalid");
+    // 多级子组只有 GitLab 有：owner 列存完整的命名空间路径（`group/sub`），
+    // name 是最后一段，现有两列装得下，不加迁移。别的平台不收多段 owner。
+    if (nestedOwner(repo.owner) && forge !== "gitlab") {
+      throw githubError("invalid");
+    }
     const detection = this.detect(repo);
     if (detection.forge !== forge || detection.apiBase === null) {
       throw githubError("invalid");

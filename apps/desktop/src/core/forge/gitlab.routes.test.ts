@@ -473,7 +473,7 @@ describe("读写", () => {
 });
 
 describe("外部连接带 forge", () => {
-  const link = (h: Harness, forge: string, apiBase = "") =>
+  const link = (h: Harness, forge: string, apiBase = "", owner = "acme") =>
     linkReference(
       h.github.service,
       h.github.caller,
@@ -481,7 +481,7 @@ describe("外部连接带 forge", () => {
         reference: create(GithubExternalReferenceSchema, {
           forge,
           repository: create(GithubRepositoryRefSchema, {
-            owner: "acme",
+            owner,
             name: "app",
             host: HOST,
             apiBase,
@@ -535,6 +535,48 @@ describe("外部连接带 forge", () => {
       link(h, "gitlab", "https://evil.example.test/api/v4"),
     ).toThrow();
     expect(() => link(h, "svn")).toThrow();
+  });
+
+  it("GitLab 多级子组的仓库也能连：owner 列存完整命名空间路径，列表原样带回", async () => {
+    const h = await harness();
+    await configure(h);
+    const linked = link(h, "gitlab", "", "platform/web");
+    expect(linked.forge).toBe("gitlab");
+    expect(linked.repository).toMatchObject({
+      owner: "platform/web",
+      name: "app",
+      apiBase: GITLAB_FIXTURE.apiBase,
+      host: HOST,
+    });
+    expect(
+      h.github.db.database
+        .prepare("SELECT owner, name FROM github_references")
+        .get(),
+    ).toEqual({ owner: "platform/web", name: "app" });
+    // 与两段的 acme/app 是两条不同的连接；同一条再连一次是冲突，不是第二条。
+    expect(link(h, "gitlab").referenceId).not.toBe(linked.referenceId);
+    expect(() => link(h, "gitlab", "", "platform/web")).toThrow();
+    const listed = listReferences(
+      h.github.service,
+      h.github.caller,
+      create(ListGithubReferencesRequestSchema, {}),
+    );
+    expect(
+      listed.references.map((reference) => reference.repository?.owner).sort(),
+    ).toEqual(["acme", "platform/web"]);
+    // 越级、空段照样拒绝。
+    expect(() => link(h, "gitlab", "", "platform/../web")).toThrow();
+    expect(() => link(h, "gitlab", "", "platform//web")).toThrow();
+  });
+
+  it("Gitea 不收多段 owner 的连接", async () => {
+    const h = await harness();
+    await h.call("PUT", `/api/forge/configs/${HOST}`, {
+      forge: "gitea",
+      apiBase: "https://gitlab.example.test",
+    });
+    expect(link(h, "gitea").forge).toBe("gitea");
+    expect(() => link(h, "gitea", "", "platform/web")).toThrow();
   });
 
   it("GitHub 的连接照旧：forge 空串按 github，答复里是 github", async () => {
