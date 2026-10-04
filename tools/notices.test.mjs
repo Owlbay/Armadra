@@ -12,10 +12,14 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  BUNDLED_DEV_DEPENDENCIES,
   NOTICES_FILE,
+  bundledDevPackages,
   noticeFiles,
   packagesFrom,
   renderNotices,
+  scanBundle,
+  unlistedBundled,
 } from "./notices.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -130,4 +134,108 @@ test("the committed notices are the generated shape (the byte comparison is `--c
   // node-pty's copyright lines (external-services §11.3) come through verbatim.
   assert.match(committed, /Christopher Jeffrey/);
   assert.match(committed, /Microsoft Corporation/);
+});
+
+test("the build is scanned for bundled packages: JS #region paths and CSS banners", () => {
+  const { dir } = fixture();
+  try {
+    const repo = join(dir, "repo");
+    const store = join(
+      repo,
+      "node_modules/.pnpm/left-pad@1.3.0/node_modules/left-pad",
+    );
+    const scoped = join(
+      repo,
+      "node_modules/.pnpm/@scope+thing@2.0.0/node_modules/@scope/thing",
+    );
+    for (const [path, version] of [
+      [store, "1.3.0"],
+      [scoped, "2.0.0"],
+    ]) {
+      mkdirSync(path, { recursive: true });
+      writeFileSync(join(path, "package.json"), JSON.stringify({ version }));
+    }
+    const out = join(repo, "apps/desktop/out");
+    mkdirSync(join(out, "core"), { recursive: true });
+    mkdirSync(join(out, "renderer/assets"), { recursive: true });
+    writeFileSync(
+      join(out, "core/main.js"),
+      [
+        "//#region \\0rolldown/runtime.js",
+        "//#endregion",
+        "//#region ../../node_modules/.pnpm/left-pad@1.3.0/node_modules/left-pad/index.js",
+        "//#endregion",
+        "//#region ../../node_modules/.pnpm/@scope+thing@2.0.0/node_modules/@scope/thing/dist/a.js",
+        "//#region ../../node_modules/.pnpm/@scope+thing@2.0.0/node_modules/@scope/thing/dist/b.js",
+        "//#region src/core/main.ts",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(out, "renderer/assets/index.css"),
+      "/*! tailwindcss v4.3.3 | MIT License | https://tailwindcss.com */\n:root{}",
+    );
+    const scanned = scanBundle(out, { resolveFrom: repo });
+    assert.deepEqual(scanned, [
+      { name: "@scope/thing", version: "2.0.0" },
+      { name: "left-pad", version: "1.3.0" },
+      { name: "tailwindcss", version: "4.3.3" },
+    ]);
+    const listing = {
+      MIT: [{ name: "left-pad", versions: ["1.3.0"], paths: [store] }],
+    };
+    assert.deepEqual(
+      unlistedBundled({ scanned, listing }).map((p) => p.name),
+      ["@scope/thing", "tailwindcss"],
+    );
+    assert.deepEqual(
+      unlistedBundled({
+        scanned,
+        listing,
+        bundled: [
+          { name: "@scope/thing", version: "2.0.0" },
+          { name: "tailwindcss", version: "4.3.3" },
+        ],
+      }),
+      [],
+    );
+    // A different installed version is not covered by the listed one.
+    assert.equal(
+      unlistedBundled({
+        scanned: [{ name: "left-pad", version: "1.4.0" }],
+        listing,
+      }).length,
+      1,
+    );
+    // The workspace's own packages are never third-party.
+    assert.deepEqual(
+      unlistedBundled({
+        scanned: [{ name: "@armadra/agent", version: "0.6.7" }],
+        listing,
+      }),
+      [],
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bundled devDependencies are read from their installs and rendered beside the production ones", () => {
+  const bundled = bundledDevPackages();
+  assert.deepEqual(
+    bundled.map((p) => p.name),
+    BUNDLED_DEV_DEPENDENCIES.map((p) => p.name),
+  );
+  for (const pkg of bundled) {
+    assert.match(pkg.version, /^\d+\.\d+\.\d+/);
+    assert.notEqual(pkg.license, "Unknown");
+  }
+  const text = renderNotices({
+    listing: {},
+    bundled: [{ ...bundled[0] }, { ...bundled[0] }],
+    read: () => [{ name: "LICENSE", text: "MIT text" }],
+  });
+  assert.equal(text.split(`### ${bundled[0].name}@`).length - 1, 1);
+  const committed = readFileSync(join(root, NOTICES_FILE), "utf8");
+  for (const pkg of bundled)
+    assert.ok(committed.includes(`### ${pkg.name}@${pkg.version}`), pkg.name);
 });

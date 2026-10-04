@@ -2,14 +2,14 @@ import * as React from "react";
 
 import { usePreferencesStore, useT } from "../../../../app/preferences-store";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Skeleton } from "@/ui/skeleton";
 
 /** 安全页的一块：标题行（右侧可放一个动作）+ 内容。 */
@@ -84,27 +84,32 @@ export function ConfirmRemove({
 }) {
   const t = useT();
   return (
-    <AlertDialog
+    <ResponsiveAlertDialog
       open={open}
       onOpenChange={(next) => {
         if (!next) onCancel();
       }}
     >
-      <AlertDialogContent className="z-[var(--z-dialog)]">
-        <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-        </AlertDialogHeader>
+      <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+        <ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogTitle>{title}</ResponsiveAlertDialogTitle>
+        </ResponsiveAlertDialogHeader>
         {subject && (
           <p className="text-[13px] font-medium break-words">{subject}</p>
         )}
-        <AlertDialogFooter>
-          <AlertDialogCancel>{t("security.cancel")}</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" onClick={onConfirm}>
+        <ResponsiveAlertDialogFooter>
+          <ResponsiveAlertDialogCancel>
+            {t("security.cancel")}
+          </ResponsiveAlertDialogCancel>
+          <ResponsiveAlertDialogAction
+            variant="destructive"
+            onClick={onConfirm}
+          >
             {action}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+          </ResponsiveAlertDialogAction>
+        </ResponsiveAlertDialogFooter>
+      </ResponsiveAlertDialogContent>
+    </ResponsiveAlertDialog>
   );
 }
 

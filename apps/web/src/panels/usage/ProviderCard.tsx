@@ -5,12 +5,14 @@ import { formatRelativeTime } from "../../lib/format";
 import { paceDelta } from "../../lib/cost";
 import {
   usageIsStale,
+  usageLocalEstimate,
   usagePercent,
   usageReasonKey,
   usageResetLabel,
   usageWindowLabel,
 } from "../../lib/usage";
 import { Badge } from "@/ui/badge";
+import { LocalEstimate } from "./LocalEstimate";
 import { useProviderIncident } from "./provider-status";
 
 /**
@@ -34,6 +36,7 @@ export function ProviderCard({
   const fetchedAt = Date.parse(provider.fetchedAt ?? "");
   const stale = provider.status === "ok" && usageIsStale(provider, now);
   const incident = useProviderIncident(provider.id);
+  const estimate = usageLocalEstimate(provider);
 
   return (
     <section
@@ -72,7 +75,14 @@ export function ProviderCard({
         )}
       </div>
 
-      {provider.status !== "ok" ? (
+      {estimate ? (
+        <>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {t(usageReasonKey(provider.reason))}
+          </p>
+          <LocalEstimate provider={provider} windows={estimate} now={now} />
+        </>
+      ) : provider.status !== "ok" ? (
         <p className="text-xs leading-relaxed text-muted-foreground">
           {t(
             provider.status === "error"

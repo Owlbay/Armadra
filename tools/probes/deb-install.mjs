@@ -8,13 +8,17 @@
 //   2. 装到的位置与入口：/usr/bin/armadra 指向 /opt/Armadra/armadra。
 //   3. 二进制在 22.04（glibc 2.35，发布承诺的基线）上起得来并答出版本——不要显
 //      示器、不要数据目录（main/version-flag.ts）。
+//   4. 同一目录里有同架构的 AppImage 时，在装好 deb 依赖的同一个容器里用
+//      APPIMAGE_EXTRACT_AND_RUN 起它并答出版本：Electron 要的库由 deb 拉齐，剩下
+//      能缺的只有 AppImage 运行时自己的依赖（arm64 旧运行时要开发包里的 libz.so，
+//      scripts/dist.mjs 的 ARM64_APPIMAGE_TOOLSET）。
 //
 // 容器是一次性的（--rm），只读挂载 release 目录；不碰本机的 apt 与 /opt。架构
 // 跟着 Docker 主机走：x64 runner 验 amd64 包，Apple 芯片上验 arm64 包。
 //
 // 用法（仓库根目录）：
 //   pnpm --filter @armadra/desktop dist
-//   node tools/probes/deb-install.mjs [输出目录] [--deb <Armadra_x.y.z_arch.deb>] [--image ubuntu:22.04]
+//   node tools/probes/deb-install.mjs [输出目录] [--deb <Armadra_x.y.z_arch.deb>] [--appimage <x.AppImage>] [--image ubuntu:22.04]
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -32,7 +36,7 @@ const option = (name) => {
   const index = argv.indexOf(name);
   return index >= 0 ? argv[index + 1] : undefined;
 };
-const valued = new Set(["--deb", "--image"]);
+const valued = new Set(["--deb", "--appimage", "--image"]);
 const positional = argv.filter(
   (value, index) => !value.startsWith("--") && !valued.has(argv[index - 1]),
 );
@@ -54,6 +58,20 @@ function findDeb() {
   return name ? join(release, name) : undefined;
 }
 
+/** deb 的架构（`amd64` / `arm64`）→ electron-builder 给 AppImage 名字里写的那个。 */
+export const APPIMAGE_ARCH = { amd64: "x86_64", arm64: "arm64" };
+
+function findAppImage(deb) {
+  const arch = /_(amd64|arm64)\.deb$/.exec(basename(deb))?.[1];
+  const token = APPIMAGE_ARCH[arch];
+  if (!token) return undefined;
+  const name = readdirSync(dirname(deb))
+    .filter((file) => file.endsWith(`-${token}.AppImage`))
+    .sort()
+    .at(-1);
+  return name ? join(dirname(deb), name) : undefined;
+}
+
 // Everything inside the container is one script, so a failure anywhere stops it
 // and the markers below say how far it got.
 const SCRIPT = `
@@ -68,6 +86,13 @@ echo "@@missing $missing"
 # root 下 Chromium 不肯起沙箱；--version 在那之前就答了，带上只为不依赖这一点。
 armadra --no-sandbox --version > /tmp/version.txt 2>/tmp/version.err || { cat /tmp/version.err; exit 11; }
 echo "@@version $(head -n 1 /tmp/version.txt)"
+if [ -n "\${APPIMAGE:-}" ]; then
+  cp "/pkg/$APPIMAGE" /tmp/armadra.AppImage
+  chmod +x /tmp/armadra.AppImage
+  (cd /tmp && APPIMAGE_EXTRACT_AND_RUN=1 ./armadra.AppImage --no-sandbox --version > /tmp/appimage.txt 2>/tmp/appimage.err) \
+    || { cat /tmp/appimage.err; echo "@@broken-appimage $(head -n 1 /tmp/appimage.err)"; exit 12; }
+  echo "@@appimage $(head -n 1 /tmp/appimage.txt)"
+fi
 `;
 
 const report = { status: "failed", image, checks: [] };
@@ -85,6 +110,12 @@ try {
       "没有 .deb：先在 Linux 上跑 `pnpm --filter @armadra/desktop dist`",
     );
   report.deb = deb;
+  const appImage = option("--appimage")
+    ? resolve(option("--appimage"))
+    : findAppImage(deb);
+  if (appImage !== undefined && dirname(appImage) !== dirname(deb))
+    throw new Error("--appimage 要与 deb 在同一目录（容器只挂那一个）");
+  report.appImage = appImage;
   const run = spawnSync(
     "docker",
     [
@@ -94,6 +125,8 @@ try {
       `${dirname(deb)}:/pkg:ro`,
       "-e",
       `DEB=${basename(deb)}`,
+      "-e",
+      `APPIMAGE=${appImage === undefined ? "" : basename(appImage)}`,
       image,
       "bash",
       "-c",
@@ -128,6 +161,13 @@ try {
     marker("version")?.endsWith(` ${version}`),
     marker("version"),
   );
+  if (appImage !== undefined)
+    check(
+      `AppImage（APPIMAGE_EXTRACT_AND_RUN）答出 ${version}`,
+      marker("appimage")?.endsWith(` ${version}`),
+      marker("appimage") ?? marker("broken-appimage"),
+    );
+  else console.log("  skip  同目录没有同架构的 AppImage");
 } catch (error) {
   report.error = error instanceof Error ? error.message : String(error);
   console.error(`  FAIL  ${report.error}`);

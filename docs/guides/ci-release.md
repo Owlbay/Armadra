@@ -91,11 +91,14 @@ node tools/ci/e2e.mjs --tier b --list     # 只列出清单
     `verify-linux-glibc-baseline.sh` 断言基线，再在 `xvfb-run` 下跑 B 档：
     `packaged-smoke --no-real-cli` 起 AppImage（`APPIMAGE_EXTRACT_AND_RUN`，不要
     FUSE），`deb-install` 在 `ubuntu:22.04` 容器里 `apt-get install` 那个 deb、`ldd`
-    没有缺库、`armadra --version` 答出版本；另跑 `server-perf`、
+    没有缺库、`armadra --version` 答出版本，并在同一个容器里用 `APPIMAGE_EXTRACT_AND_RUN`
+    起同架构的 AppImage；另跑 `server-perf`、
     `server-container-e2e`（构建服务器壳镜像、对着容器跑 `server-e2e`，不推送）、`server-caddy-e2e`
     （本机服务器壳前面放 Caddy 容器、按部署指南 §3.3 的配置跑 `server-e2e --proxy=caddy`）、`crash-report-e2e` 与
     `update-e2e`。作业设 `ARMADRA_DEV_STACK=1`、装 Chrome，`devStack` 条目先
     `pnpm dev-stack up`。
+  - `linux-arm64`（ubuntu-22.04-arm）：打 arm64 包、断言 glibc 基线，只跑 `deb-install`
+    （`--only deb-install`；其余 B 档条目与架构无关）。
   - `macos`（macos-14）：同样打包，跑 `packaged-smoke --no-real-cli`。
   - `report`：前两条任一失败、且在 main 上时，用默认的 `GITHUB_TOKEN`（作业级
     `issues: write`）开一个「夜间 B 档失败」issue，已有开着的同名 issue 就追加评论；
@@ -219,6 +222,22 @@ electron-builder 的 AppImage 由 app-builder 自己打，不经 linuxdeploy，�
 上一代壳需要一个剥离 `libwayland-client/cursor/egl` 的后处理步骤（那些库不是自包含的，
 镜像里自带一份等于把同一套协议的两个版本混在一起），随那个打包器一起删掉了。
 
+**arm64 用静态运行时。** electron-builder 缺省的 AppImage 工具集（`toolsets.appimage: 0.0.0`，
+AppImageKit 12）里 arm64 的运行时动态链接**无版本号**的 `libz.so`——那个名字只有 zlib 的开发包
+提供，干净系统上 AppImage 在解包之前就报 `error while loading shared libraries: libz.so`；往镜像里
+放 zlib 没用，起不来的是运行时本身。`scripts/dist.mjs` 对 arm64 构建合入
+`toolsets.appimage: 1.0.3`（`ARM64_APPIMAGE_TOOLSET`，静态的 type-2 运行时 20251108，没有任何
+`NEEDED`）；x64 的旧运行时链接的是 `libz.so.1`（zlib1g 在 Debian / Ubuntu 是必装的），保持不变。
+夜间 `linux-arm64` 作业（`ubuntu-22.04-arm`）打包后跑 `deb-install`：同一个干净 `ubuntu:22.04`
+容器里装 deb、再用 `APPIMAGE_EXTRACT_AND_RUN` 起 AppImage，两者都要答出版本。
+
+**更新缓存目录。** electron-updater 把下载放在系统缓存目录下的 `updaterCacheDirName`，NSIS 安装包
+也把自己的副本留在那里给下一次差分下载用。electron-builder 从包名推这个名字，作用域包名得出
+`@armadradesktop-updater`，配置里没有能改它的键（`publish.updaterCacheDirName` 会被覆盖）。
+`scripts/after-pack.mjs` 把这次构建的 `AppInfo.updaterCacheDirName` 钉成 `armadra-updater`（deb / rpm
+在 afterPack 之后还会重写一次 `app-update.yml`，NSIS 也从它取存放路径），并改写 electron-builder
+自己已经写好的那份 `app-update.yml`。旧名字目录里已有的下载缓存不再被读，只占一点盘。
+
 ### 2.5 各平台的系统依赖与缓存
 
 - **Linux**：只要 `file`（AppImage 用）与 `rpm` 包提供的 `rpmbuild`。
@@ -335,12 +354,13 @@ rpm 用 `rpm --import` 之后 `rpm -K`。本地演练：`node tools/release/sign
 
 ### 2.7 发布说明与 draft
 
-变更清单交给 GitHub 自己生成：
-`gh api repos/<repo>/releases/generate-notes -f tag_name=<tag> --jq .body`，它按两个
-标签之间合并的 PR 写，比任何手工维护的清单都更接近真实发生的事。结果喂给
-`assemble.mjs --notes-from`，由 `compatibility.mjs` 的 `releaseNote()` 在外面套上
-未签名平台的提示与兼容性围栏。标签还不存在时（分支演练）这条 API 会失败，退回
-一行标题，围栏照样有。
+说明正文是 `CHANGELOG.md` 里本版那一节：从 `## X.Y.Z` 起（标题后可跟「（未发布）」或
+「（2026-10-10）」），到下一个二级标题止（`tools/release/changelog.mjs`）。`verify` 作业先
+`changelog.mjs check` 一次，缺这一节就在构建之前失败；`assemble` 作业把它交给
+`assemble.mjs --changelog CHANGELOG.md`，由 `compatibility.mjs` 的 `releaseNote()` 在外面
+套上未签名平台的提示与兼容性围栏，`latest.json` 的 `notes` 也是这段正文。真建 Release
+的那一次（`publish`）还带 `--released` / `--require-released`：标题仍标「未发布」就失败——
+打标签前把它改成发布日期。分支演练与 `pnpm release:dry-run` 只要求这一节存在。
 
 `gh release create` 带 `--verify-tag`：标签不存在时拒绝，而不是替我们建一个指向当前
 提交的标签。预发布按标签里有没有 `-` 判定（`v0.2.0-rc.1`），与 semver 的读法一致。
@@ -362,7 +382,11 @@ runner、两台 Windows runner 合进同一个目录会互相覆盖，所以 `st
 文件、清单的 sha512 与 `SHA256SUMS` 的 sha256 说的是同一份字节。`latest.json` 的每个
 平台条目带 `feed: { url, sha256 }` 点名这份清单；桌面壳下载前先取它、核对 sha256 与
 它描述的包，再把 `autoUpdater.channel` 设成 `latest-<target>` 交给 electron-updater。
-清单本身的 Ed25519 签名等 electron-builder 27 稳定后另做（外部服务 §2.4）。
+清单本身的 Ed25519 签名等 electron-builder 27 稳定后另做（外部服务 §2.4）。2026-10-04 核对：
+npm 上 `latest` 仍是 26.15.3（本仓库钉的版本），`v26` 线到 26.17.0，27 只有 `next` 标签的
+`27.0.0-alpha.9`（2026-09-26）。alpha 不进发布流水线，继续等；27 的 `latest` 出来后升级、在
+`electron-builder.yml` 加 `updateManifest.publicKey`、CI 用新的 `ELECTRON_BUILDER_UPDATE_SIGN_KEY`
+签 `latest*.yml`，并跑一次 `release:dry-run` 与 `release.yml` 全矩阵演练。
 
 **灰度**：`assemble.mjs --rollout <percent>` 给 `latest.json` 写
 `rollout: { percent, seed }`，seed 缺省为版本号；客户端用安装 id（数据目录
@@ -390,26 +414,29 @@ runner、两台 Windows runner 合进同一个目录会互相覆盖，所以 `st
 `assemble` 会把这件事写进 Release 说明顶部，`latest.json` 会把没有签名的
 updater 包排除在外。
 
-| Secret / 变量                                                 | 谁用                                                                                                             | 缺了会怎样                                   |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| `APPLE_CERTIFICATE_P12_BASE64`                                | macOS 代码签名（base64 的 Developer ID Application .p12，G2 链）                                                 | 不签名，首次打开有 Gatekeeper 提示           |
-| `APPLE_CERTIFICATE_PASSWORD`                                  | 导入上面的证书                                                                                                   | 只给一半：构建失败                           |
-| `APPLE_SIGNING_IDENTITY`                                      | 指定用哪张证书；缺则取第一张                                                                                     | 钥匙串里有多张时可能选错                     |
-| `APPLE_API_KEY_P8_BASE64`                                     | 公证（推荐）：App Store Connect API key 的 .p8，base64                                                           | 退回 Apple ID；两套都没有就不公证            |
-| `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID`                    | 同上的 key id 与 issuer                                                                                          | 三个只给一部分：构建失败                     |
-| `APPLE_ID` / `APPLE_TEAM_ID`                                  | 公证（回退）                                                                                                     | 不公证，`notarize` 作业把 macOS 列进说明     |
-| `APPLE_APP_SPECIFIC_PASSWORD`                                 | 公证回退用的 app 专用密码                                                                                        | 同上                                         |
-| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` | Windows：Azure Artifact Signing 的 Entra 凭据                                                                    | 与下面三个变量、发布者名一起：缺一个构建失败 |
-| 变量 `AZURE_SIGNING_ENDPOINT` / `_ACCOUNT` / `_PROFILE`       | Windows：Artifact Signing 账户、证书配置                                                                         | 同上                                         |
-| 变量 `ARMADRA_WIN_PUBLISHER_NAME`                             | Windows：证书主体 CN，钉进 `publisherName`                                                                       | Azure 路径必需；证书文件路径缺省取证书 CN    |
-| `WINDOWS_CERT_BASE64` / `WINDOWS_CERT_PASSWORD`               | Windows：OV 证书文件（与 Azure、令牌三选一）                                                                     | 不签名，SmartScreen 提示，不自动更新         |
-| 变量 `ARMADRA_WIN_CERT_SHA1`                                  | Windows：自托管 runner 证书库里的令牌证书                                                                        | 同上                                         |
-| `ARMADRA_LINUX_GPG_KEY` / `ARMADRA_LINUX_GPG_PASSPHRASE`      | Linux 包的 `.asc` 与 rpm 签名                                                                                    | 不带 `.asc`，rpm 不签名，说明里写明          |
-| `ARMADRA_RELEASE_SIGNING_KEY`                                 | 每个产物与 `SHA256SUMS` 的 minisign 签名，`latest.json` 引用的也是它                                             | 产物不带签名，`latest.json` 为空，说明里写明 |
-| `HOMEBREW_TAP_TOKEN`                                          | `distribute.yml` 推 Homebrew tap（细粒度 PAT，只对 tap 仓库 `contents: write`）                                  | 跳过 tap，告警                               |
-| `SCOOP_BUCKET_TOKEN`                                          | `distribute.yml` 推 Scoop bucket（同上，只对 bucket 仓库）                                                       | 跳过 Scoop，告警                             |
-| `WINGET_TOKEN`                                                | `distribute.yml` 用 wingetcreate 向 `microsoft/winget-pkgs` 提 PR（对 fork `contents` + `pull_requests: write`） | 跳过 winget，告警                            |
-| 变量 `ARMADRA_HOMEBREW_TAP` / `ARMADRA_SCOOP_BUCKET`          | tap / bucket 仓库名，缺省 `Owlbay/homebrew-tap` / `Owlbay/scoop-bucket`                                          | 用缺省                                       |
+| Secret / 变量                                                     | 谁用                                                                                                             | 缺了会怎样                                   |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `APPLE_CERTIFICATE_P12_BASE64`                                    | macOS 代码签名（base64 的 Developer ID Application .p12，G2 链）                                                 | 不签名，首次打开有 Gatekeeper 提示           |
+| `APPLE_CERTIFICATE_PASSWORD`                                      | 导入上面的证书                                                                                                   | 只给一半：构建失败                           |
+| `APPLE_SIGNING_IDENTITY`                                          | 指定用哪张证书；缺则取第一张                                                                                     | 钥匙串里有多张时可能选错                     |
+| `APPLE_API_KEY_P8_BASE64`                                         | 公证（推荐）：App Store Connect API key 的 .p8，base64                                                           | 退回 Apple ID；两套都没有就不公证            |
+| `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID`                        | 同上的 key id 与 issuer                                                                                          | 三个只给一部分：构建失败                     |
+| `APPLE_ID` / `APPLE_TEAM_ID`                                      | 公证（回退）                                                                                                     | 不公证，`notarize` 作业把 macOS 列进说明     |
+| `APPLE_APP_SPECIFIC_PASSWORD`                                     | 公证回退用的 app 专用密码                                                                                        | 同上                                         |
+| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET`     | Windows：Azure Artifact Signing 的 Entra 凭据                                                                    | 与下面三个变量、发布者名一起：缺一个构建失败 |
+| 变量 `AZURE_SIGNING_ENDPOINT` / `_ACCOUNT` / `_PROFILE`           | Windows：Artifact Signing 账户、证书配置                                                                         | 同上                                         |
+| 变量 `ARMADRA_WIN_PUBLISHER_NAME`                                 | Windows：证书主体 CN，钉进 `publisherName`                                                                       | Azure 路径必需；证书文件路径缺省取证书 CN    |
+| `WINDOWS_CERT_BASE64` / `WINDOWS_CERT_PASSWORD`                   | Windows：OV 证书文件（与 Azure、令牌三选一）                                                                     | 不签名，SmartScreen 提示，不自动更新         |
+| 变量 `ARMADRA_WIN_CERT_SHA1`                                      | Windows：自托管 runner 证书库里的令牌证书                                                                        | 同上                                         |
+| `ARMADRA_LINUX_GPG_KEY` / `ARMADRA_LINUX_GPG_PASSPHRASE`          | Linux 包的 `.asc` 与 rpm 签名                                                                                    | 不带 `.asc`，rpm 不签名，说明里写明          |
+| `ARMADRA_RELEASE_SIGNING_KEY`                                     | 每个产物与 `SHA256SUMS` 的 minisign 签名，`latest.json` 引用的也是它                                             | 产物不带签名，`latest.json` 为空，说明里写明 |
+| `HOMEBREW_TAP_TOKEN`                                              | `distribute.yml` 推 Homebrew tap（细粒度 PAT，只对 tap 仓库 `contents: write`）                                  | 跳过 tap，告警                               |
+| `SCOOP_BUCKET_TOKEN`                                              | `distribute.yml` 推 Scoop bucket（同上，只对 bucket 仓库）                                                       | 跳过 Scoop，告警                             |
+| `WINGET_TOKEN`                                                    | `distribute.yml` 用 wingetcreate 向 `microsoft/winget-pkgs` 提 PR（对 fork `contents` + `pull_requests: write`） | 跳过 winget，告警                            |
+| 变量 `ARMADRA_HOMEBREW_TAP` / `ARMADRA_SCOOP_BUCKET`              | tap / bucket 仓库名，缺省 `Owlbay/homebrew-tap` / `Owlbay/scoop-bucket`                                          | 用缺省                                       |
+| `CLOUDFLARE_R2_ACCESS_KEY_ID` / `CLOUDFLARE_R2_SECRET_ACCESS_KEY` | 更新镜像（§3.3）：R2 的 S3 API 令牌，只授权镜像那个桶的读写                                                      | 与下面两个变量一起：全缺跳过，缺一半失败     |
+| 变量 `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_R2_BUCKET`             | 镜像：端点 `https://<账户>.r2.cloudflarestorage.com` 与桶名                                                      | 同上                                         |
+| 变量 `ARMADRA_MIRROR_PUBLIC_URL`                                  | 镜像桶的公开地址（例如 `https://updates.armadra.dev`），`assemble` 据此另签一份链接指向镜像的 `latest.json`      | 镜像里的 `latest.json` 仍指向 GitHub 下载    |
 
 证书与公证密码用当前的两个 secret 名字；工作流同时接受早先的
 `APPLE_CERTIFICATE` 与 `APPLE_PASSWORD`（`${{ secrets.A || secrets.B }}`），
@@ -476,6 +503,14 @@ CLI 需要的宽沙箱权限过不了审核。服务器壳镜像推 GHCR 由 `se
 `Contents/Resources/`（Windows / Linux 上 electron-builder 已放在可执行文件旁，缺了才补）。
 设置 → 关于 → 开源许可显示的就是这份文件。
 
+`--prod` 看不到被打包器整段打进 `out/` 的构建期依赖（页面 CSS 里的 `tailwindcss` 与
+`tw-animate-css`），它们列在 `tools/notices.mjs` 的 `BUNDLED_DEV_DEPENDENCIES`，照样读许可证
+原文进同一张表。名单够不够全由 `node tools/notices.mjs --scan apps/desktop/out` 对构建产物核：
+rolldown 在未压缩的 JS 里给每个模块留 `//#region <路径>`，CSS 留 `/*! 包名 v版本` 版权头；
+从 `node_modules` 来的包既不在 `--prod` 表里、也不在名单里（工作区自己的 `@armadra/*` 除外）
+就失败。`release.yml` 的 `linux-x86_64` 构建打完包跑它。新加一个会被打进页面或 core 的构建期
+依赖时，把它加进名单再重新生成。
+
 ### 3.2 依赖安全：覆盖、补丁与构建期豁免
 
 Dependabot 警报按三种办法收口，理由都写在 `pnpm-workspace.yaml` 对应条目旁：
@@ -495,6 +530,29 @@ Dependabot 警报按三种办法收口，理由都写在 `pnpm-workspace.yaml` �
 | ---------------------------- | ------------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `braces@3.0.3`               | GHSA-vfj7-8cjw-p6xm | `micromatch` ← `fast-glob` ← `shadcn` / `ts-morph`（web 开发依赖）   | 只有开发者手动跑 `shadcn` CLI 时加载；匹配的模式来自仓库自己的配置，不是外部输入                                            |
 | `http-cache-semantics@4.2.0` | GHSA-ch52-4w7c-c8xp | `cacheable-request` ← `got@11` ← `@electron/get`（electron-builder） | 只在安装 / 打包时下载 Electron 用；是单用户的私有缓存，不是多用户共享缓存，警报说的跨用户泄露没有发生条件；4.3.0 未修此问题 |
+
+### 3.3 更新镜像（W-MIRROR）
+
+桶里与 GitHub Release 同形的两处（`tools/release/mirror.mjs`，传输用 rclone，PATH 上没有就跑钉住的
+`rclone/rclone` 镜像；远端配置走 `RCLONE_CONFIG_MIRROR_*` 环境变量，不落盘）：
+
+- `releases/download/v<版本>/`：`release.yml` 的 `mirror` 作业在建 draft 时传（只在 `publish` 时跑）。
+  先传包、再传清单（`latest.json`、`SHA256SUMS`、`latest-*.yml` 与各自的 `.sig`），读到清单的客户端
+  不会去拿还没到的包；传完 `rclone check --one-way`。配了 `ARMADRA_MIRROR_PUBLIC_URL` 时，
+  `assemble.mjs --mirror-base` 另写一份 `latest.json`（链接指向镜像这一处，同一把钥匙、同一句可信注释
+  `file:latest.json version:X`），它盖掉镜像里那一份；`SHA256SUMS` 仍是发布自己的，不列它。
+- `releases/latest/download/`：只有清单。人把 Release 转正后，`distribute.yml` 的 `mirror` 作业把那一版的
+  清单服务端复制过来（`mirror.mjs promote`）；预发布不提。清单里的地址都指向带版本的那一处，所以这里
+  不需要包，旧版本的包也不会被覆盖。
+
+客户端的检查地址：`ARMADRA_UPDATER_ENDPOINTS=https://github.com/<repo>/releases/latest/download/latest.json,https://updates.armadra.dev/releases/latest/download/latest.json`，
+按顺序尝试。`node tools/release/mirror.mjs verify --base <公开地址> --pubkey <minisign.pub>` 像客户端那样读一遍
+（签名、每个平台的 feed 与包、所有地址都在镜像之下）。
+
+本地演练：`pnpm dev-stack up s3 --profile s3`（versitygw，`127.0.0.1:8095`，访问键在
+`tools/dev-stack/services.mjs` 的 `S3_DEV`），`ARMADRA_DEV_STACK=1 node --test tools/release/mirror.test.mjs`
+建一个一次性的桶、`stage` + `promote`，再用 `rclone serve http` 把桶当公开地址、`verifyMirror` 读回。
+真 R2 与域名要用户提供（补全进度 G5-18「需用户提供」）。
 
 ## 4. 本地怎么先验
 

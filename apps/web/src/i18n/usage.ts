@@ -44,6 +44,7 @@ export const usage: MessageModule = {
     "usage.reason.unsupported": "用量接口返回了网页而不是数据，暂不支持",
     "usage.reason.policy_off":
       "额度读取已默认关闭，可在「设置 → 账号与用量」开启",
+    "usage.estimate.local": "本地估算",
     /* 出站政策（外部服务 §9.3）。 */
     "usage.policy.claude":
       "使用 Claude Code 的登录令牌调用未公开端点，可能违反 Anthropic 条款",
@@ -168,6 +169,7 @@ export const usage: MessageModule = {
       "The usage endpoint returned a web page instead of data; not supported",
     "usage.reason.policy_off":
       "Quota reading is off by default; turn it on under Settings → Account & usage",
+    "usage.estimate.local": "Local estimate",
     "usage.policy.claude":
       "Calls an undocumented endpoint with Claude Code's sign-in token; may violate Anthropic's terms",
     "usage.policy.copilot":

@@ -23,6 +23,8 @@
  *     reports.
  */
 
+import type { LocalWindowEstimates } from "./local-window";
+
 /** Every provider the core has a module for, in the order the snapshot lists them. */
 export const USAGE_PROVIDER_IDS = ["claude", "codex", "copilot"] as const;
 
@@ -91,6 +93,11 @@ export interface ProviderUsage {
   readonly credits?: UsageCredits;
   readonly viaCli?: boolean;
   readonly fetchedAt: string | null;
+  /**
+   * 只跟着 `reason: "policy_off"` 出现：额度端点关着，用本机转录估出来的窗口
+   * （`local-window.ts`，契约 §12.1）。不是额度端点的答案，界面标「本地估算」。
+   */
+  readonly estimate?: LocalWindowEstimates;
 }
 
 export interface UsageSnapshot {
