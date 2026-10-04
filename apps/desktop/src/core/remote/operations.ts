@@ -98,6 +98,7 @@ import {
   transferStatus,
   writeChunk,
 } from "./transfer-worker";
+import { probeAgents } from "./node-probe";
 import {
   listenHooks,
   locate as locateIntegration,
@@ -774,6 +775,12 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
     replyHook(context.session, args),
   ),
 
+  /**
+   * 这台机器上装没装这些 Agent 程序（SSH 节点的 ACP，契约 §26）；只读。能力位
+   * 复用 `remote.integration.v1`：没有这个动作的旧 Worker 答 501。
+   */
+  "agents.probe": read((_context, _root, args) => probeAgents(args)),
+
   /* ------------------------------ 交接 ------------------------------ */
   /** 交接材料里要在执行主机上读的：文件引用、Git 指纹、SSH Agent 的转录尾巴。 */
   "handoff.capture": read((_c, root, args) => handoffCapture(root, args)),
@@ -831,7 +838,11 @@ export function capabilityOf(operation: string): string | undefined {
   if (operation.startsWith("git.")) return GIT_CAPABILITY;
   if (operation.startsWith("resources.")) return RESOURCES_CAPABILITY;
   if (operation.startsWith("handoff.")) return HANDOFF_CAPABILITY;
-  if (operation.startsWith("integration.") || operation.startsWith("hook.")) {
+  if (
+    operation.startsWith("integration.") ||
+    operation.startsWith("hook.") ||
+    operation.startsWith("agents.")
+  ) {
     return INTEGRATION_CAPABILITY;
   }
   return undefined;

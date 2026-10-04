@@ -16,7 +16,10 @@ export const WATCH_CAPABILITY = "remote.watch.v1";
 /** 远端主机总览与会话进程树的一轮读取。 */
 export const RESOURCES_CAPABILITY = "remote.resources.v1";
 
-/** 画布注入的产物同步与 Hook 中继。 */
+/**
+ * 画布注入的产物同步与 Hook 中继；SSH 节点的 ACP 也用它（`agents.probe` 问
+ * 适配器装没装，画布工具经同一条中继）。
+ */
 export const INTEGRATION_CAPABILITY = "remote.integration.v1";
 /**
  * 同一组动作的第二版：`integration.sync` 不再接受 `codexCommand`、不再写
