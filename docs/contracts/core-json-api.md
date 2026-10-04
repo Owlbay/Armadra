@@ -1850,4 +1850,42 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 30. 页面错误上报：`/api/diagnostics/client-error`
 
-预留，由 G5-19 填写。
+可选崩溃上报（外部服务 §11.2）的页面一侧：页面自己的 JS 错误（`window` 的 `error` 与 `unhandledrejection`）经同一个 DSN 发出。实现在 `core/diagnostics/{client-report,routes}.ts`、`main/diagnostics.ts`、`apps/web/src/diagnostics/`。
+
+### 30.1 开关
+
+设置键 `diagnostics.reportPageErrors`（布尔，缺省 `false`）。**收**的条件是它为真、且壳的崩溃上报此刻在发：服务器壳按自己的 `active()` 答（DSN 可能来自 `ARMADRA_CRASH_REPORT_DSN`），桌面壳的 core 按设置里的 `diagnostics.crashReportDsn` 合不合格答。页面在通用页诊断区、DSN 已保存时多一个「包含页面错误」开关。
+
+### 30.2 `GET /api/diagnostics/client-error`
+
+```json
+{ "enabled": false }
+```
+
+页面据此决定收不收，答案缓存一分钟；设置页改了开关时丢掉缓存。关着的时候页面一条错误也不留。
+
+### 30.3 `POST /api/diagnostics/client-error`
+
+请求体只认四个键（不认识的键 400）：
+
+```json
+{
+  "kind": "error",
+  "name": "TypeError",
+  "message": "Cannot read properties of undefined (reading 'x')",
+  "stack": "TypeError: …\n    at render (index-abc123.js:12:34)"
+}
+```
+
+- `kind`：`error` | `rejection`。`name` ≤ 128、`message` ≤ 2000、`stack` ≤ 8000 字符，超了 400（不截）。被 reject 的不是 `Error` 的值只发 `{ name: "NonError", message: "non-error <类型>" }`，不发内容。
+- 回答：收下 `202 { "accepted": true }`；关着 `200 { "accepted": false }`（不看请求体）。
+
+| 状态 | `code`            | 何时                                                                          |
+| ---- | ----------------- | ----------------------------------------------------------------------------- |
+| 400  | `bad_request`     | 请求体不是 JSON、多了键、类型或长度不对                                       |
+| 401  | `unauthenticated` | 服务器壳的匿名主体（没有会话）                                                |
+| 429  | `rate_limited`    | 这台设备每分钟超过 5 条，或整台 core 每分钟超过 60 条；带 `Retry-After`（秒） |
+
+- **身份**：登录即可，路由门不判（`route-scopes.ts` 的 `SELF_GUARDED`）；桌面壳的本机请求算本机 owner。限流按设备（没有设备按 principal），形状不对的请求不扣桶。
+- **剥离**：两道。页面先剥（`crash-scrub.ts`：路径里的用户名、令牌形状、Armadra 会话密钥 `<32 位十六进制>.<43 位 base64url>`、地址里的账号 / 查询串 / 片段，栈帧里的地址与路径只留文件名，消息截到 300 字）；收件一侧（core 或桌面主进程）按本机的家目录与环境变量再剥一遍同一套规则，再交 `platform.reportError`（来源 `page`）。事件发出前壳的 `beforeSend` 还有第三道（§11.2 的整段删键）。终端输出、文件正文、凭据、请求数据不进事件；core 不记这条错误的正文。
+- **桌面壳**：页面不走这个路由，经 IPC `diagnostics:report`（`window` 档）交给主进程；主进程读同一份设置再判、同样每分钟 5 条、再剥离，交 `@sentry/electron`，标签 `process: renderer`、`source: page`。`ipcMode` 仍为 0：SDK 不给渲染进程开任何通道，浏览器节点的 guest 没有 preload，也就没有这条路。IPC 答 `{ accepted }`，从不拒绝。

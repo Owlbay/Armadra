@@ -1177,7 +1177,26 @@
 
 ## G5-19 页面错误上报（R-69、R-12）
 
-待填（第 2 组）。
+**做了什么**
+
+- 页面 `diagnostics/report.ts`：挂 `window` 的 `error` / `unhandledrejection`，默认关。只有 `GET /api/diagnostics/client-error` 答 `enabled: true` 才收（答案缓存一分钟，问不到当作关）。每分钟最多 5 条；没有 `error` 对象的（跨源 `Script error.`、资源加载）不报；被 reject 的非 `Error` 值只发类型，不发内容；上报自己出的错一律吞掉，不会再触发上报。`crash-scrub.ts` 是 core 剥离规则的页面版，栈帧里的地址与路径只留文件名。入口在 `main.tsx`，挂一次。
+- 通用页诊断区：DSN 保存后多一行「包含页面错误」开关（`diagnostics.reportPageErrors`），切换后丢掉页面的 `enabled` 缓存。i18n `diagnostics` 模块中英同步。
+- core `diagnostics/`：`client-report.ts`（请求体只认 `{ kind, name, message, stack }`，超长 400；服务端按本机家目录与环境变量再剥离；限流每台设备每分钟 5 条、整台 core 60 条，形状不对不扣桶）、`routes.ts`（`GET` 答 `{ enabled }`，`POST` 答 202 / 200 `accepted:false` / 400 / 401 / 429 + `Retry-After`）、`index.ts` 装配。`enabled` = 设置打开且壳在发：新增可选的 `CorePlatform.crashReportingActive()`，服务器壳按 `diagnostics.active()` 回答（DSN 可来自环境变量），桌面壳的 core 不给，按设置里的 DSN 判断。路由表加一行。来源 `page` 的错误只进上报，`logError` 不把正文写进本机日志。
+- L6（R-12）：`crash.ts` 认 Armadra 会话密钥 `<32 位十六进制>.<43 位 base64url>`，并去掉地址片段（`#pair=` 配对票）；`ERROR_SOURCES` 加 `page`；新增 `pageErrorsFromSettings`。
+- 桌面壳：IPC `diagnostics:report`（`window` 档），preload 暴露 `window.armadra.diagnostics.report`。主进程 `main/diagnostics.ts::reportPage` 读同一份设置再判一次，用同一个 `ClientReports` 限流并再剥离，然后交 `@sentry/electron`，标签 `process: renderer`、`source: page`；`ipcMode` 仍为 0。
+- 服务器壳：`serve.ts` 给 core 提供 `crashReportingActive`；`diagnostics.ts` 只改了注释。
+- 契约 §30 已填写；外部服务 §11.2 加了「页面错误」一段；架构文档 `core/diagnostics/` 一行已更新。
+
+**实测**（macOS arm64）
+
+- 新增与改动的用例：`crash.test`（会话密钥形状、地址片段、`page` 来源、`pageErrorsFromSettings`）；`client-report.test`（栈只留文件名、请求体、再剥离、页面版与 core 版剥离逐条一致、关着不收不计数、每台设备与全局限流、路由的 401 / 400 / 202 / 429、`pageErrorsEnabled`、`page` 来源不进日志）；`main/diagnostics.test`（关着不发、没 DSN 不加载 SDK、再剥离与标签、每分钟 5 条、关掉即停）；`ipc.test`；web 的 `report.test`、`crash-scrub.test`、`GeneralPage.test`。
+- dev-stack GlitchTip：`ARMADRA_DEV_STACK=1` 跑 `apps/server/src/diagnostics.devstack.test.ts`（即 `crash-report-e2e`），新增一条：真 core 路由 `POST /api/diagnostics/client-error`，页面侧故意不剥离，事件到达 GlitchTip，带标签 `source: page`、`shell: server`；事件里没有环境变量值、会话密钥、家目录、路径与地址里的用户名、查询串、地址主机，栈里只剩 `index-probe.js`、`canvas.ts` 这样的文件名。三条用例全过。
+- 全量验证结果见 PR。
+
+**没做 / 限制**
+
+- 页面在一个真窗口里抛错、一路走 IPC 发到 GlitchTip 这条链路没有自动化。主进程一侧由单测覆盖（假 SDK），服务器一侧由上面的 dev-stack 用例覆盖。
+- 真实收件端（用户自己的 GlitchTip DSN）需要用户提供（计划 §4 B 档）。
 
 ## G5-20 安全杂项（R-07、R-10、R-14、R-16、R-17）
 

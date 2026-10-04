@@ -8,12 +8,16 @@ import { mountSplash } from "./splash/mount";
 import { initRuntimeSockets } from "./api/client";
 import { MobileRoot } from "./mobile/MobileRoot";
 import { prepareEntry, type Entry } from "./mobile/entry";
+import { installPageErrorReporting } from "./diagnostics/report";
 
 /**
  * 开屏动画先挂：它有自己的 root，不等下面那个 Promise，所以 Runtime 该连连、
  * App 该挂挂，动画只是浮在上面的一层（`splash/mount.tsx`）。
  */
 mountSplash();
+
+/** 页面错误上报（契约 §30）：默认关，core 答「开」之前一条也不收。 */
+installPageErrorReporting();
 
 /**
  * 终端与事件流的 WebSocket 地址在桌面壳里不等于 HTTP 地址（roadmap §4.4），

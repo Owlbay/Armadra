@@ -134,6 +134,8 @@ function registerIpc(): void {
     [IPC.identityTicket.channel]: nativeTicket,
     [IPC.appLocale.channel]: () => app.getLocale(),
     [IPC.windowIsFocused.channel]: () => getMainWindow()?.isFocused() ?? false,
+    // 页面错误上报（契约 §30）：开关、限流与再剥离都在 `main/diagnostics.ts`。
+    [IPC.diagnosticsReport.channel]: (report) => diagnostics.reportPage(report),
     [IPC.gatewayRefresh.channel]: async () => {
       await refreshGateway();
       return { ok: true };
