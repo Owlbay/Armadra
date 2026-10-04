@@ -1157,7 +1157,27 @@
 
 ## G5-14 托管平台 forge 一：抽象与 Gitea / Forgejo（R-83 前半）
 
-待填（第 3 组）。
+**做了什么**
+
+- core `forge/`：`types.ts` 的 `Forge` 接口（issue 列表 / 详情 / 开关，PR 列表 / 建 / 详情 / 文件差异 / 检查 / 合并）与统一记录；`github.ts` 把 `core/github/` 的 `GithubClient` + `endpoints.ts` 装进接口（同一份凭据与 API 根，401 / 403 照旧记到凭据状态上）；`gitea.ts`（Gitea / Forgejo，`Authorization: token`，检查用 commit statuses，补丁从 `pulls/{n}.diff` 按文件切，草稿按 `WIP:` 前缀）；`transport.ts` 是非 GitHub 平台的传输（只收 HTTPS 与回环明文 HTTP、重定向当错误、读重试一次、写不重试报 `unknown_outcome`、响应 8 MiB 上限、15 秒超时）。
+- 识别（`service.ts`）：`github.com` 与 GitHub 凭据里企业版根的主机 → GitHub；其余按配置表，仓库一行优先于主机一行。配置 `PUT /api/forge/configs/{host}[/{owner}/{name}]`：先用令牌调 `GET /user` 核验，再存进 SecretStore `armadra-forge-<id>`；换 API 根而不给新令牌时丢掉旧令牌；GitHub 主机不能在这里另配。
+- 路由（`routes.ts`，路由表加 12 行）：`GET /api/forge/configs`、配置的 `PUT` / `DELETE`、`POST /api/forge/resolve`（声明 `github:read`）、`GET /api/forge/repos/{host}/{owner}/{name}` 与其下 issues / pulls / files / checks / merge。错误码见契约 §29.5。
+- 迁移 `0037_forge.sql`：`forge_config`，`github_references` 加 `forge` 列（缺省 `github`）。出站表加 `forgeApi`（地址由用户配置，`switch: null`）。共享层 `api/forge.ts` 的 zod。
+- 文档：契约 §29、架构文档 `core/forge/` 一行与迁移表。
+
+**实测**（macOS arm64）
+
+- `forge/gitea.test`（对进程内假 Gitea）：认证头、Link 翻页、PR 编号不当 issue、拒绝翻译与远端原话不外传、读重试 / 写不重试、补丁切分（含改名与二进制）、检查去重与汇总、合并先核 head、路径与重定向拒绝。
+- `forge/forge.test`：迁移列与缺省值；识别（公有 / 企业版 GitHub、主机与仓库配置、resolve 三种远端写法且不回显地址里的凭据）；配置的核验、令牌只在 SecretStore、CAS、换根丢令牌、删除连条目；全部路由的形状与 400 / 403 / 404 / 409 / 429 / 502 / 504；GitHub 经同一客户端（Bearer、`sha` 透传、401 记 `TOKEN_REJECTED`、没凭据不发请求）；路由门的 scope。
+- `github/*.test` 全部不改断言通过。
+- dev-stack `gitea`（1.27.3）：`ARMADRA_DEV_STACK=1` 跑 `forge/gitea.devstack.integration.test`，管理员口令现建令牌与私有仓库，预置分支、文件、issue、commit status，经 `/api/forge/*` 走完识别 → 列表 → 关 issue → 建 PR → 差异 → 检查 → 合并，结束删仓库与令牌。
+- 全量验证结果见 PR。
+
+**没做 / 限制**
+
+- 页面（Git 工具窗口「托管」区、设置页按仓库选平台与令牌）与 GitLab 归 G5-15；`ExternalReference` 带 `forge` 也在 G5-15，这里只加了列。
+- 配置是整台机器一份（不按工作空间），与 GitHub 凭据一致。
+- 真实托管平台账号由用户提供；只对 dev-stack Gitea 与进程内假 Gitea 验过，Forgejo 未单独跑（同一套 API）。
 
 ## G5-15 托管平台 forge 二：GitLab 与 Git 面板（R-83 后半）
 

@@ -76,7 +76,7 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 | `core/net/outbound.ts`                  | core 全部出站地址的登记表，扫描测试强制                                                                                 | —        |
 | `core/diagnostics/`                     | 崩溃上报的剥离规则；SDK 只在壳里、只在用户填了 DSN 时加载；页面错误上报（`client-report.ts` 限流与再剥离，`routes.ts`） | §30      |
 | `core/mail/`                            | 可选 SMTP 通知通道：邀请与重置链接；只有服务器壳 `--smtp-url` 配，nodemailer 首封才加载                                 | §28      |
-| `core/forge/`                           | 托管平台抽象：GitHub、Gitea / Forgejo、GitLab（G5-14 / G5-15，现为空骨架）                                              | §29      |
+| `core/forge/`                           | 托管平台抽象：`Forge` 接口，GitHub（经 `core/github/` 的客户端）与 Gitea / Forgejo；GitLab 待 G5-15                     | §29      |
 
 core 之外的同类新增：`src/hook-client/`（动词工具表，`armadra-hook` 与 ama 适配器共用）、
 `src/agent-host/ama/`（ama 宿主适配器与 runners）、`apps/mobile`（Capacitor 手机壳）、
@@ -410,6 +410,7 @@ SQLite 的迁移只有一个目录——`apps/desktop/src/core/db/migrations/`�
 | `0033_push.sql`               | `push_devices`（挂在身份设备上的推送登记）、`push_outbox`（发送队列，终态留 7 天）                                                                                                                       | `core/push/`，契约 §19                |
 | `0034_workflow.sql`           | `workflow_drafts`、`workflow_templates`、`workflow_runs`、`workflow_run_steps`、`workflow_task_runs`（runner 任务）                                                                                      | `core/workflow/`，契约 §15            |
 | `0035_node_creators.sql`      | `node_creators`（节点的触发者）与触发器 `terminal_sessions_inherit_creator`（之后起的会话行继承创建者）                                                                                                  | `core/identity/creators.ts`，契约 §23 |
+| `0037_forge.sql`              | `forge_config`（每仓库 / 每主机的托管平台、API 根与令牌条目名），`github_references` 加 `forge` 列                                                                                                       | `core/forge/`，契约 §29               |
 
 `core/db/open.ts` 在同一 `BEGIN IMMEDIATE` 事务内先检查迁移账本，再执行已知迁移与启动恢复。未知版本、校验和不符、脏记录、损坏账本、无账本的非空 schema 或迁移历史缺口均拒绝启动；失败回滚并关闭连接，不改名、删除或重建原库。账本表与校验和算法沿用最初那套（SHA-384），所以装过旧版本的库照常打得开。既有 SQL 迁移文件保持原字节。
 
