@@ -42,4 +42,11 @@ export interface ReviveOptions {
   readonly backend?: BackendKind;
   /** 下一代跑的程序；`null` = 只起 shell。缺省沿用行上的。 */
   readonly command?: string | null;
+  /**
+   * 下一代经 `ssh` 起在这台执行主机上（SSH 节点从 ACP 切回终端）。行上不存
+   * 主机，所以由调用方按节点数据点名；缺席就是本机。
+   */
+  readonly sshHostId?: string | undefined;
+  /** 这一代的起点目录；缺省沿用行上的（行上的不改）。 */
+  readonly cwd?: string | undefined;
 }

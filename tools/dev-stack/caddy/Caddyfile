@@ -1,0 +1,20 @@
+# 部署指南 §3.3 的 Caddy 配置，换成环境变量好在本机演练：
+#   ARMADRA_CADDY_SITE         对外地址（指南里是 armadra.example.com）
+#   ARMADRA_CADDY_UPSTREAM     服务器壳的 TLS 监听（指南里是 https://127.0.0.1:8443）
+#   ARMADRA_CADDY_SERVER_NAME  上游证书的校验名：对外来源的主机名
+# 上游的 CA 取自服务器壳的 GET /ca.crt，放在 /etc/caddy/upstream/upstream.crt。
+# 本机演练没有公网域名：对外证书用 Caddy 自己的内部 CA（tls internal）。
+{
+	admin off
+	auto_https disable_redirects
+}
+
+{$ARMADRA_CADDY_SITE} {
+	tls internal
+	reverse_proxy {$ARMADRA_CADDY_UPSTREAM} {
+		transport http {
+			tls_server_name {$ARMADRA_CADDY_SERVER_NAME}
+			tls_trust_pool file /etc/caddy/upstream/upstream.crt
+		}
+	}
+}

@@ -92,7 +92,8 @@ node tools/ci/e2e.mjs --tier b --list     # 只列出清单
     `packaged-smoke --no-real-cli` 起 AppImage（`APPIMAGE_EXTRACT_AND_RUN`，不要
     FUSE），`deb-install` 在 `ubuntu:22.04` 容器里 `apt-get install` 那个 deb、`ldd`
     没有缺库、`armadra --version` 答出版本；另跑 `server-perf`、
-    `server-container-e2e`（构建服务器壳镜像、对着容器跑 `server-e2e`，不推送）、`crash-report-e2e` 与
+    `server-container-e2e`（构建服务器壳镜像、对着容器跑 `server-e2e`，不推送）、`server-caddy-e2e`
+    （本机服务器壳前面放 Caddy 容器、按部署指南 §3.3 的配置跑 `server-e2e --proxy=caddy`）、`crash-report-e2e` 与
     `update-e2e`。作业设 `ARMADRA_DEV_STACK=1`、装 Chrome，`devStack` 条目先
     `pnpm dev-stack up`。
   - `macos`（macos-14）：同样打包，跑 `packaged-smoke --no-real-cli`。

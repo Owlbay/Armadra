@@ -23,6 +23,7 @@ import {
   type RemoteFile,
   type RemoteIntegrationSite,
   fingerprint,
+  remoteClientBin,
   remoteIntegrationFiles,
   remoteInjectionReady,
   shimDirectory,
@@ -130,6 +131,27 @@ export class RemoteIntegration implements RemoteListener {
    * 不支持或任何一步失败，答 `undefined`。
    */
   async terminal(hostId: string, env: EnvPairs): Promise<EnvPairs | undefined> {
+    return (await this.node(hostId, env))?.env;
+  }
+
+  /**
+   * SSH 节点的 ACP 会话要的画布工具（契约 §26 的 SSH 小节）：与 {@link terminal}
+   * 同一套准备（产物、节点令牌、中继），答执行主机上 Hook 客户端的路径与它要
+   * 带的环境。`armadra-hook mcp` 经同一条中继 socket 回到本机 Hook 服务。
+   */
+  async canvas(
+    hostId: string,
+    env: EnvPairs,
+  ): Promise<{ readonly client: string; readonly env: EnvPairs } | undefined> {
+    const prepared = await this.node(hostId, env);
+    if (prepared === undefined) return undefined;
+    return { client: remoteClientBin(prepared.site.root), env: prepared.env };
+  }
+
+  private async node(
+    hostId: string,
+    env: EnvPairs,
+  ): Promise<{ site: RemoteIntegrationSite; env: EnvPairs } | undefined> {
     const lookup = new Map(env.map(([key, value]) => [key, value]));
     const nodeId = lookup.get("ARMADRA_NODE_ID");
     if (nodeId === undefined || lookup.get("ARMADRA_AGENT_ID") === undefined) {
@@ -150,7 +172,7 @@ export class RemoteIntegration implements RemoteListener {
       const token = issueNodeToken(this.options.dataDir, nodeId);
       await this.sync(hostId, [tokenFile(site, nodeId, token)]);
       await this.listen(hostId, state);
-      return remoteEnvironment(env, site);
+      return { site, env: remoteEnvironment(env, site) };
     } catch (failure) {
       this.options.log?.("could not prepare the remote canvas injection", {
         hostId,

@@ -21,17 +21,21 @@ docker run --rm -p 127.0.0.1:8443:8443 \
 
 环境变量：
 
-| 变量                                   | 缺省           | 说明                                               |
-| -------------------------------------- | -------------- | -------------------------------------------------- |
-| `ARMADRA_PUBLIC_ORIGIN`                | 无（必填）     | 对外来源，多个用空格或逗号分开                     |
-| `ARMADRA_LISTEN`                       | `0.0.0.0:8443` | 容器里的 HTTPS 监听                                |
-| `ARMADRA_TLS_CERT` / `ARMADRA_TLS_KEY` | 无             | 运维给的证书（挂进容器的路径），与 ACME 互斥       |
-| `ARMADRA_ACME_EMAIL`                   | 无             | 给了就走 ACME（等同 `serve --acme`）               |
-| `ARMADRA_ACME_DIRECTORY`               | Let's Encrypt  | 别的 ACME CA（step-ca、ZeroSSL…）                  |
-| `ARMADRA_ACME_PROFILE`                 | CA 缺省        | `shortlived` / `classic`；IP 来源自动 `shortlived` |
-| `ARMADRA_ACME_CA_BUNDLE`               | 无             | 信任 ACME 目录服务器的 PEM（私有 CA）              |
-| `ARMADRA_ACME_HTTP_PORT`               | `8080`         | http-01 挑战监听（镜像里非 root，绑不了 80）       |
-| `ARMADRA_DATA_DIR`                     | `/data`        | 数据目录，卷挂在这里                               |
+| 变量                                   | 缺省           | 说明                                                |
+| -------------------------------------- | -------------- | --------------------------------------------------- |
+| `ARMADRA_PUBLIC_ORIGIN`                | 无（必填）     | 对外来源，多个用空格或逗号分开                      |
+| `ARMADRA_LISTEN`                       | `0.0.0.0:8443` | 容器里的 HTTPS 监听                                 |
+| `ARMADRA_TLS_CERT` / `ARMADRA_TLS_KEY` | 无             | 运维给的证书（挂进容器的路径），与 ACME 互斥        |
+| `ARMADRA_ACME_EMAIL`                   | 无             | 给了就走 ACME（等同 `serve --acme`）                |
+| `ARMADRA_ACME_DIRECTORY`               | Let's Encrypt  | 别的 ACME CA（step-ca、ZeroSSL…）                   |
+| `ARMADRA_ACME_PROFILE`                 | CA 缺省        | `shortlived` / `classic`；IP 来源自动 `shortlived`  |
+| `ARMADRA_ACME_CA_BUNDLE`               | 无             | 信任 ACME 目录服务器的 PEM（私有 CA）               |
+| `ARMADRA_ACME_HTTP_PORT`               | `8080`         | http-01 挑战监听（镜像里非 root，绑不了 80）        |
+| `ARMADRA_ACME_CHALLENGE`               | `http-01`      | `tls-alpn-01` 时不开 80，验证握手走 HTTPS 端口      |
+| `ARMADRA_DATA_DIR`                     | `/data`        | 数据目录，卷挂在这里                                |
+| `ARMADRA_BROWSER_PATH`                 | 见说明         | 浏览器节点的 Chromium；带 Chromium 构建时缺省指向它 |
+
+构建参数 `WITH_CHROMIUM=1`：装 Chromium 给服务器壳上的浏览器节点用（沙箱与共享内存的取舍见部署指南 §2.3）。
 
 第一个参数不是 `serve` 时原样交给 `armadra-server`：`docker compose exec armadra node /app/out/main.js status`
 或 `docker run --rm armadra-server:local version`。
