@@ -1372,7 +1372,7 @@ G5-02 追加：`GET devices`（我的设备，`{ devices, nextId, hasMore }`）�
 | `mfa`      | 这个人登记过 TOTP：带 `challengeId`，页面接 §18.3 的 `POST mfa/verify`；不发会话               |
 | `error`    | 带 `code`（下表）；不发会话、不改绑定                                                          |
 
-**原生 App**（R-56）：`start?native=1` 发起的记录不认浏览器绑定，认 `nativeState`。回调对这种记录**不取走**、不认 Cookie，只 302 到 `armadra://oauth?state=<state>&code=<授权码>`（提供方拒绝时是 `&error=<原样，至多 64 字符>`），由 App 带着 `nativeState` 调 `POST oauth/{id}/native` 收尾——那一次才取出即删；`nativeState` 不对、提供方或来源与发起时不同、浏览器发起的记录走 `native`，都答 `oauth_state_invalid`。授权码在深链里被别的 App 截走也换不到会话：收尾要 `nativeState`（只在发起它的 App 本机）与 PKCE verifier（只在 core）。提供方那边仍只登记 `<公网来源>/api/identity/oauth/{id}/callback`。
+**原生 App**（R-56）：`start?native=1` 发起的记录不认浏览器绑定，认 `nativeState`。回调对这种记录**不取走**、不认 Cookie，只 302 到 `armadra://oauth?state=<state>&code=<授权码>`（提供方拒绝时是 `&error=<原样，至多 64 字符>`），由 App 带着 `nativeState` 调 `POST oauth/{id}/native` 收尾——那一次才取出即删；`nativeState` 不对、提供方或来源与发起时不同、浏览器发起的记录走 `native`，都答 `oauth_state_invalid`。授权码在深链里被别的 App 截走也换不到会话：收尾要 `nativeState`（只在发起它的 App 本机）与 PKCE verifier（只在 core）。提供方那边仍只登记 `<公网来源>/api/identity/oauth/{id}/callback`。App 里没有会话时收尾答 `mfa`：App 不写 `#oauth=` 片段，在入口整页接着做第二步（同一个登录组件，`POST mfa/verify { challengeId, code }`，会话照原生传输的规矩进钥匙串），中间票不进地址栏；已有会话时仍写片段交给「安全」页。
 
 `signedIn` / `signedUp` 时，`identity.mfa.requireFor` 覆盖这个人而他还没登记 TOTP，片段再带 `mfaEnrollmentRequired=true`：照常发会话，页面带去登记（与口令登录答案里的 `mfaEnrollmentRequired` 同一条，§18.3；R-17）。
 

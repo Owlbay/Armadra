@@ -191,6 +191,33 @@ describe("原生 OAuth 的深链（R-56）", () => {
     });
     expect(location.hash).toBe("#oauth=error&code=oauth_not_bound");
 
+    // 没会话而走到第二因素：入口接着做第二步，中间票不进地址栏。
+    history.replaceState(null, "", "/");
+    mocks.complete.mockResolvedValueOnce({
+      result: "mfa",
+      code: "",
+      challengeId: "ch-1",
+    });
+    open();
+    await expect(prepareEntry()).resolves.toEqual({
+      kind: "mfa",
+      origin: "https://h:8443",
+      challengeId: "ch-1",
+    });
+    expect(location.hash).toBe("");
+
+    // 有会话时走到第二因素仍交给「安全」页（片段照写）。
+    mocks.restored = true;
+    mocks.complete.mockResolvedValueOnce({
+      result: "mfa",
+      code: "",
+      challengeId: "ch-2",
+    });
+    open();
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+    expect(location.hash).toBe("#oauth=mfa&challengeId=ch-2");
+    mocks.restored = false;
+
     mocks.saved = null;
     mocks.complete.mockClear();
     open();
