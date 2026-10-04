@@ -1149,6 +1149,7 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 - 票两分钟、一次性，绑在 `origin` 上；兑换走 `POST /api/identity/pair`（§3），配出来的设备拿 owner 的全套授权。成员走邀请。
 - 网页链接把票与指纹放在片段里（不上请求行、不进日志）；页面认 `#pair=<票>` 与 `#pair=<票>&fp=<64 位十六进制>` 两种。
 - 原生 App 按 `fp` 钉信任锚，不装 CA；锚变了（重置 CA、换证书文件）就重新扫码，不自动信任新证书。
+- 私网档位上回答多一个 `code`（8 位配对码，`XXXX-XXXX`），其余档位为 `null`，见 §24。
 
 ### 17.4 Gateway 上的匿名面与原生 App
 
@@ -1688,7 +1689,46 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 24. Gateway 配对短码：`/api/gateway/pairing-code/*`
 
-预留，由 G5-01 填写。
+二维码与配对链接之外的第三条路：手机上手输 8 位配对码，换出与 `#pair=` 同一张票（§17.3），再照常 `POST /api/identity/pair`。实现在 `core/gateway/pairing-code.ts`。
+
+### 24.1 签发：`POST /api/gateway/pairing` 多一个 `code`
+
+§17.3 的回答多一个键：
+
+```json
+{ "…": "§17.3 的其余键", "code": "3F7K-9Q2M" }
+```
+
+- 字母表 `[A-Z2-9]`（34 个字符，没有 `0` / `1`），8 位，显示成 `XXXX-XXXX`。与票同生同灭：过期时刻就是票的 `expiresAt`（两分钟）；一次性；票先被扫码兑掉，配对码跟着作废；Gateway 关掉、重开或换档时全部作废。只在 core 内存里，不落库、不进日志与审计（审计 `gateway.pairing.issue` 只多一个布尔 `code`）。
+- **档位**：配了对外来源（`publicOrigin`、ACME）一律不签；否则 `loopback` / `private` 档签，`all` 档只在绑定地址本身是回环或私网字面量时签（服务器壳绑在 `192.168.x.x` 上）。不签时 `code` 为 `null`。旧 core 不带这个键。
+
+### 24.2 `POST /api/gateway/pairing-code/exchange`
+
+请求体只认 `{ "code": string }`（大小写、连字符与空白都不算；不认识的键 400）。**匿名**：手机还没有身份，配对码就是凭据——路由门不判（`route-scopes.ts` 的 `SELF_GUARDED`），Gateway 准入把它当匿名面（`admission.ts::anonymousPath`，Cookie 模式与 Bearer 模式都是），Origin 那道照旧。回答与 §17.3 同形（没有 `code` 键）：
+
+```json
+{
+  "origin": "https://192.168.1.20:8443",
+  "ticket": "0123…ef.AbC…",
+  "fingerprint": "5f1c…",
+  "expiresAt": "2026-10-03T08:02:00.000Z",
+  "webUrl": "https://192.168.1.20:8443/#pair=0123…ef.AbC…&fp=5f1c…",
+  "deepLink": "armadra://pair?host=192.168.1.20%3A8443&ticket=0123…&fp=5f1c…"
+}
+```
+
+| 状态 | `code`                  | 何时                                                                                                                    |
+| ---- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 400  | `bad_request`           | 请求体不是 `{ code: string }`                                                                                           |
+| 403  | `pairing_code_disabled` | 这个 Gateway 不签配对码（24.1 的档位）                                                                                  |
+| 404  | `pairing_code_invalid`  | 码不对、过期、用过，或票已被兑掉——一律同一个答案                                                                        |
+| 409  | `gateway_not_running`   | 没在运行                                                                                                                |
+| 409  | `origin_mismatch`       | 码对了，但请求的 Origin（Bearer 模式是会话来源 `https://<Host>`）不是票绑定的来源；码**不作废**，换到配对卡上的地址再输 |
+| 429  | `rate_limited`          | 试错太多；带 `Retry-After`（秒）                                                                                        |
+
+- **限流**：按来源地址的令牌桶（与登录同一种，`identity/throttle.ts::IpBuckets`，每分钟 20 次），另有一只全局桶（每分钟 200 次）挡分散来源的撒网；只有 404 才扣，桶空时连对的码也不看。来源地址是 socket 对端，不读 `X-Forwarded-For`。
+- 兑换成功与失败进审计：`gateway.pairing.code.exchange`（`origin`、`remoteIp`）、`gateway.pairing.code.reject`（`remoteIp`）；码与票都不记。
+- **页面**：设置页配对卡在倒计时旁显示配对码（过期即收起）。手机浏览器经 Gateway 打开、窄屏、没带 `#pair=` 也没有会话时，连接页先给 8 位 `InputOTP`（两组四位），输满自动兑换并配对；页上另有「账号登录」直接进页面。原生 App 只在已经记下（并钉过信任锚）一个 Gateway 来源时给「输入配对码」入口——App 不装 CA，没钉过的 Gateway 连不上；换出的 `fingerprint` 照样再钉一次，锚变了就失败，不自动信任新证书。
 
 ## 25. 口令重置链接：`/api/identity/…/password-reset`
 

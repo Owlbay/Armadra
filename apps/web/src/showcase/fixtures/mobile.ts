@@ -4,12 +4,15 @@
 export const MOBILE_ORIGIN = "https://192.168.1.8:8443";
 export const MOBILE_CA_HREF = `${MOBILE_ORIGIN}/ca.crt`;
 export const MOBILE_LINK = `${MOBILE_ORIGIN}/#pair=k7f3.Qm9yZXN0LWdyZWVu&fp=${"3f7a".repeat(16)}`;
+/** 配对码页的样本：输到一半（契约 §24）。 */
+export const MOBILE_CODE = "3F7K9Q";
 export const MOBILE_NODE_ID = "5a7d2c1e-3b4f-4e6a-9c8d-0f1e2d3c4b5a";
 
 /** 分区里的样本，一块 390×844 的屏幕一个。 */
 export const MOBILE_SAMPLES = [
   "native",
   "web",
+  "code",
   "error",
   "push",
   "focusAcp",

@@ -23,6 +23,7 @@ import {
 } from "../fixtures/acp";
 import {
   MOBILE_CA_HREF,
+  MOBILE_CODE,
   MOBILE_LINK,
   MOBILE_ORIGIN,
   MOBILE_SAMPLES,
@@ -83,6 +84,18 @@ function Screen({
                 platform="ios"
               />
             }
+          />
+        );
+      case "code":
+        return (
+          <ConnectScreen
+            mode="web"
+            origin={MOBILE_ORIGIN}
+            codeFirst
+            initialCode={MOBILE_CODE}
+            onCode={never}
+            onSignIn={noop}
+            onConnect={never}
           />
         );
       case "error":

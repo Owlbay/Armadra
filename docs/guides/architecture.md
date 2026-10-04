@@ -553,7 +553,7 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
 - **ACP 的未竟项**：`elicitation/create`、按模型选择（`session/set_config_option`）、`pi-acp`
   的映射文件；ACP 驱动下不做节点凭据与 ama 密钥兑换；SSH 节点不能切到 ACP（`acp_unsupported`）。
   六家真适配器的端到端探针已备（`agent-e2e` 场景 12，C 档），还没有真跑。
-- **Gateway / 手机**：配对只有两分钟票与二维码 / 链接，没有设计里的 8 位配对码；设备表没有
+- **Gateway / 手机**：配对是两分钟票（二维码 / 链接），私网档位上另有 8 位配对码（契约 §24）；设备表没有
   「平台」「最近访问」；`tls-alpn-01` 未做；推送中继写完不部署，UnifiedPush 未做；真机、商店与
   真 APNs / FCM 都要用户的账号。
 - **安全审查的低危项**：页面上口令策略拒绝码与 `warn` 档的提示、GitHub / 自动化两面对 Bearer 写仍要 CSRF 等，见[安全审查](../status/security-review-2026-10.md) §3。

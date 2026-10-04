@@ -4,6 +4,7 @@ import {
   hasPairingFragment,
   refreshIdentity,
   restoreNativeCredentials,
+  resumeIdentity,
 } from "../api/identity";
 import { RUNTIME_URL, RUNTIME_VIA_SERVER_SHELL } from "../api/request";
 import { savedRuntimeOrigin } from "../api/runtime-url";
@@ -25,6 +26,11 @@ export type Entry =
       readonly kind: "connect";
       readonly mode: "web";
       readonly origin: string;
+      /**
+       * `ticket`：扫码打开、地址栏带着 `#pair=`，只差「连接」；`code`：手输地址
+       * 打开、还没有会话，先是配对码（契约 §24）。
+       */
+      readonly via: "ticket" | "code";
     };
 
 const LINK_FRAGMENT = /^#link=(.+)$/;
@@ -75,7 +81,8 @@ function refreshOnce(): Promise<boolean> {
  *    传输，没有记下的 Gateway、或钥匙串里没有它的会话 → 连接页。
  *  - **手机浏览器**：经 Gateway 打开、窄屏、地址栏带着 `#pair=` → 连接页。票
  *    留在地址栏里直到点「连接」：CA 引导的最后一步是「回到这一页刷新」，刷新
- *    之后还得配得上。宽屏照旧由设置页「后台服务」那一页配对。
+ *    之后还得配得上。没带票又没有会话 → 连接页的配对码（契约 §24）。宽屏照旧
+ *    由设置页「后台服务」那一页配对。
  */
 export async function prepareEntry(): Promise<Entry> {
   if (isNativeApp()) {
@@ -99,12 +106,14 @@ export async function prepareEntry(): Promise<Entry> {
       ? { kind: "app" }
       : { kind: "connect", mode: "native", origin };
   }
-  if (RUNTIME_VIA_SERVER_SHELL && isCompactLayout() && hasPairingFragment()) {
-    return {
-      kind: "connect",
-      mode: "web",
-      origin: RUNTIME_URL,
-    };
+  if (!RUNTIME_VIA_SERVER_SHELL || !isCompactLayout()) return { kind: "app" };
+  if (hasPairingFragment()) {
+    return { kind: "connect", mode: "web", origin: RUNTIME_URL, via: "ticket" };
   }
-  return { kind: "app" };
+  // 手输地址打开的：有会话照常进画布；没有就先给配对码，连接页上留一个
+  // 「账号登录」给有账号的人。问不到（离线、core 旧）按有会话处理，不挡路。
+  const session = await resumeIdentity().catch(() => undefined);
+  return session === null
+    ? { kind: "connect", mode: "web", origin: RUNTIME_URL, via: "code" }
+    : { kind: "app" };
 }

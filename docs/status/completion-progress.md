@@ -949,7 +949,25 @@
 
 ## G5-01 Gateway 配对短码与手机输入（R-01）
 
-待填（第 1 组）。
+**做了什么**
+
+- core `gateway/pairing-code.ts`：8 位配对码，字母表 `[A-Z2-9]`，显示为 `XXXX-XXXX`。码随配对票一起签，过期时刻与票相同，一次性使用；票先被扫码兑掉时码随之作废，查的是 `identity_tickets.consumed_at_ms`。码只存在内存里，同时最多 32 枚；Gateway 关闭、重开或换档时全部作废。限流按来源地址用 `IpBuckets`（每分钟 20 次），另设一只全局桶（每分钟 200 次），只在猜错时扣令牌。开放范围：`loopback` / `private` 档开放；`all` 档只在绑定地址是回环或私网字面量时开放；配了对外来源一律关闭。
+- `POST /api/gateway/pairing` 的回答多一个 `code`，不签码时为 `null`。新增 `POST /api/gateway/pairing-code/exchange { code }`，回答与 §17.3 同形。在 Gateway 准入里它是匿名路径（`admission.ts::anonymousPath`），Cookie 模式和 Bearer 模式都适用；路由表加了一行。请求的 Origin 与票绑定的来源不一致时答 409 `origin_mismatch`，码不作废。审计新增 `gateway.pairing.code.exchange` / `.reject`，码与票都不记。`Gateway` 接口多出 `mode`、`publicOrigins` 两个字段。
+- 共享层 `api/gateway.ts`：载荷加可选 `code`，新增换码请求体的 schema。
+- 页面：配对卡按设计系统 §5.12 显示「配对码 `Kbd` 倒计时」，过期后收起。手机浏览器经 Gateway 打开、窄屏、没带 `#pair=` 且没有会话时（`entry.ts` 先 `resumeIdentity` 判断），连接页先显示 8 位 `InputOTP`（两组四位），输满后自动兑换并配对；同一页另有「账号登录」，点了直接进页面。原生 App 只在已经记下 Gateway 来源时出现第三个入口「输入配对码」，兑换出的指纹会再钉一次。i18n 的 `gateway`、`mobile-connect` 中英文同步。
+- 展示页：`gateway` 的运行中样本带上配对码，`mobile` 加一屏「输入配对码」。`gateway-e2e` 加一段 4b：配对卡上有配对码；在独立上下文、390 宽视口下输入短码，配对成功并进入画布；同一枚码再兑答 404。
+- 契约 §24 已填写，§17.3 追加一句；架构文档「Gateway / 手机」一条已更新。
+
+**实测**（macOS arm64）
+
+- 新增与改动的用例：`pairing-code.test`（字母表、规范化、一次性、过期、票作废、来源不一致、来源桶与全局桶、上限、撞码重抽、开放档位）、`routes.test`（请求体，以及域内 `all` 档答 403、`code: null`）、`admission.test`、`gateway.integration.test`（换码 → 配对 → 码与票都失效；扫码先兑后码作废；来源不一致答 409 且码保留；Bearer 模式；未知来源 403），以及 web 的 `ConnectScreen` / `connect` / `entry` / `PairingCard` 测试。
+- `node tools/probes/gateway-e2e.mjs`：全部通过，包括 4b。`node tools/probes/design-showcase.mjs --only=gateway,mobile`：12 张截图，控制台无 error。
+- 全量验证结果见 PR。
+
+**没做 / 限制**
+
+- 原生 App 首次连接（还没钉过信任锚）不能用配对码：App 不装 CA，连不上未钉扎的 Gateway，仍需扫码或贴链接。
+- 设计系统首行状态里「8 位配对码没有做」一句没改，留给汇总时一起更新，以免与并行包冲突。
 
 ## G5-02 身份 core：重置链接、passkey 改名、设备两列（R-02 核心、R-03、R-05、R-08、R-09）
 
