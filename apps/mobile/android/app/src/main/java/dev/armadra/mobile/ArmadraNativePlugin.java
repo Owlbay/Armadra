@@ -20,10 +20,12 @@ import com.google.mlkit.vision.barcode.common.Barcode;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning;
 import dev.armadra.mobile.core.DeepLink;
+import dev.armadra.mobile.core.ExternalUrl;
 import dev.armadra.mobile.core.Pin;
 import dev.armadra.mobile.core.PinPolicy;
 import dev.armadra.mobile.core.PushEnvelope;
 import java.io.InputStream;
+import java.lang.ref.WeakReference;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -33,8 +35,11 @@ import java.security.cert.X509Certificate;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
+import kotlin.Unit;
 import org.json.JSONObject;
+import org.unifiedpush.android.connector.UnifiedPush;
 
 /**
  * 原生插件 {@code ArmadraNative}：页面一半在 {@code apps/web/src/mobile/native-bridge.ts}，
@@ -45,10 +50,14 @@ import org.json.JSONObject;
  *   <li>{@code pin}：取 {@code /ca.crt} 按指纹核对后存为信任锚，之后由
  *       {@link PinningWebViewClient} 只认它；失败必须 reject；
  *   <li>{@code scan}：Google 代码扫描器（Play 服务提供界面，不要相机权限）；
- *   <li>{@code pushRegistration}：FCM 令牌 + 设备 X25519 公钥；配了中继时先换中继令牌。
+ *   <li>{@code pushRegistration}：装了 UnifiedPush 分发器时向它要端点（契约 §27.2），否则 FCM 令牌 + 设备
+ *       X25519 公钥，配了中继时先换中继令牌；
+ *   <li>{@code pushRotated / ackPushRotation}：令牌或端点换过的标记（R-54，{@link PushRotation}）；换的那一刻
+ *       插件开着就发 {@code pushTokenRotated} 事件；
+ *   <li>{@code openExternal}：系统浏览器打开原生 OAuth 的授权页（R-56），只开 https 与回环 http。
  * </ul>
  *
- * 深链（{@code armadra://…}，含点通知）改写页面的地址片段（{@link DeepLink#script()}）。
+ * 深链（{@code armadra://…}，含点通知与 OAuth 回调）改写页面的地址片段（{@link DeepLink#script()}）。
  */
 @CapacitorPlugin(
         name = "ArmadraNative",
@@ -57,18 +66,32 @@ public class ArmadraNativePlugin extends Plugin {
     static final String TAG = "ArmadraNative";
     /** 会话密钥：{@code <32 位十六进制标识>.<43 位 base64url>}（core {@code identity/tokens.ts}）。 */
     private static final Pattern SECRET = Pattern.compile("^[0-9a-f]{32}\\.[A-Za-z0-9_-]{43}$");
+    /** 等 UnifiedPush 分发器给端点的上限；过了退回 FCM。 */
+    private static final long UNIFIEDPUSH_TIMEOUT_MS = 30_000;
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private SecureStore store;
     private volatile Pin pin;
     private boolean pageLoaded = false;
     private String pendingScript;
+    /** 已经交过深链的那个启动 intent。 */
+    private static WeakReference<Intent> handledLaunch = new WeakReference<>(null);
 
     @Override
     public void load() {
         store = new SecureStore(getContext());
         pin = Pin.decode(store.read(SecureStore.PIN));
         getBridge().setWebViewClient(new PinningWebViewClient(getBridge(), () -> pin));
+        PushRotation.setListener(() -> notifyListeners("pushTokenRotated", new JSObject()));
+        // 冷启动时带来的深链（App 在系统浏览器里走 OAuth 时被系统回收了）：页面加载完再交。同一个
+        // intent 只交一次（活动重建时 getIntent() 还是它）；不改 intent 本身——测试框架按它认活动。
+        Intent launch = getActivity() == null ? null : getActivity().getIntent();
+        DeepLink launchLink = launch == null || launch.getData() == null ? null : DeepLink.parse(launch.getData().toString());
+        if (launchLink != null && handledLaunch.get() != launch) {
+            handledLaunch = new WeakReference<>(launch);
+            Log.i(TAG, "deep link at launch: " + launchLink.kind);
+            deliver(launchLink.script());
+        }
         getBridge().addWebViewListener(new WebViewListener() {
             @Override
             public void onPageStarted(WebView webView) {
@@ -78,11 +101,7 @@ public class ArmadraNativePlugin extends Plugin {
             @Override
             public void onPageLoaded(WebView webView) {
                 pageLoaded = true;
-                if (pendingScript != null) {
-                    String script = pendingScript;
-                    pendingScript = null;
-                    webView.evaluateJavascript(script, null);
-                }
+                flushPending();
             }
         });
     }
@@ -210,6 +229,38 @@ public class ArmadraNativePlugin extends Plugin {
 
     private void register(PluginCall call) {
         Notifications.ensureChannel(getContext());
+        // 用户装了 UnifiedPush 分发器（多半是没有 Google 服务的手机）：走它，不看 FCM。
+        if (!UnifiedPush.getDistributors(getContext()).isEmpty()) {
+            registerUnifiedPush(call);
+            return;
+        }
+        registerFcm(call);
+    }
+
+    private void registerUnifiedPush(PluginCall call) {
+        AtomicBoolean settled = new AtomicBoolean(false);
+        UnifiedPush.tryUseCurrentOrDefaultDistributor(getActivity(), linked -> {
+            if (!linked) {
+                if (settled.compareAndSet(false, true)) registerFcm(call);
+                return Unit.INSTANCE;
+            }
+            ArmadraUnifiedPushService.await(endpoint -> {
+                if (!settled.compareAndSet(false, true)) return;
+                if (endpoint == null) registerFcm(call);
+                else worker.execute(() -> finishRegistration(call, null, endpoint));
+            });
+            getBridge().executeOnMainThread(() -> getBridge().getWebView().postDelayed(() -> {
+                if (settled.compareAndSet(false, true)) {
+                    ArmadraUnifiedPushService.deliver(null);
+                    registerFcm(call);
+                }
+            }, UNIFIEDPUSH_TIMEOUT_MS));
+            UnifiedPush.register(getContext(), ArmadraUnifiedPushService.INSTANCE, null, null);
+            return Unit.INSTANCE;
+        });
+    }
+
+    private void registerFcm(PluginCall call) {
         FirebaseMessaging messaging;
         try {
             messaging = FirebaseMessaging.getInstance();
@@ -224,11 +275,12 @@ public class ArmadraNativePlugin extends Plugin {
                 return;
             }
             String token = task.getResult();
-            worker.execute(() -> finishRegistration(call, token));
+            worker.execute(() -> finishRegistration(call, token, null));
         });
     }
 
-    private void finishRegistration(PluginCall call, String token) {
+    /** {@code token} 与 {@code endpoint} 二选一：FCM（或中继）令牌，或 UnifiedPush 端点。 */
+    private void finishRegistration(PluginCall call, String token, String endpoint) {
         byte[] key = store.readBytes(SecureStore.DEVICE_KEY);
         if (key == null || key.length != 32) {
             key = PushEnvelope.generatePrivateKey(new SecureRandom());
@@ -240,6 +292,20 @@ public class ArmadraNativePlugin extends Plugin {
         String publicKey = PushEnvelope.publicKey(key);
         String relay = getConfig().getString("relayUrl", "").trim();
         String transport = "direct";
+        if (endpoint != null) {
+            // UnifiedPush 一律端到端加密到设备公钥，不经中继。
+            JSObject registration = new JSObject();
+            registration.put("platform", "android");
+            registration.put("transport", transport);
+            registration.put("publicKey", publicKey);
+            JSObject unifiedpush = new JSObject();
+            unifiedpush.put("endpoint", endpoint);
+            registration.put("unifiedpush", unifiedpush);
+            JSObject result = new JSObject();
+            result.put("registration", registration);
+            call.resolve(result);
+            return;
+        }
         if (!relay.isEmpty()) {
             token = relayToken(relay, token);
             transport = "relay";
@@ -284,7 +350,47 @@ public class ArmadraNativePlugin extends Plugin {
         }
     }
 
+    @PluginMethod
+    public void pushRotated(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("rotated", PushRotation.pending(getContext()));
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void ackPushRotation(PluginCall call) {
+        PushRotation.clear(getContext());
+        call.resolve();
+    }
+
+    // ------------------------------------------------------------ 系统浏览器
+
+    /** 原生 OAuth 的授权页（R-56）：系统浏览器里走完，回调经 {@code armadra://oauth} 深链回来。 */
+    @PluginMethod
+    public void openExternal(PluginCall call) {
+        String url = call.getString("url");
+        if (!ExternalUrl.browsable(url)) {
+            call.reject("bad url");
+            return;
+        }
+        try {
+            Intent view = new Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    .addCategory(Intent.CATEGORY_BROWSABLE)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getActivity().startActivity(view);
+            call.resolve();
+        } catch (Exception noBrowser) {
+            call.reject("no browser");
+        }
+    }
+
     // ---------------------------------------------------------------- 深链
+
+    @Override
+    protected void handleOnDestroy() {
+        PushRotation.setListener(null);
+        super.handleOnDestroy();
+    }
 
     @Override
     protected void handleOnNewIntent(Intent intent) {
@@ -296,15 +402,36 @@ public class ArmadraNativePlugin extends Plugin {
         deliver(link.script());
     }
 
-    /** 页面还在加载（冷启动）时先记着，加载完再执行。 */
+    /**
+     * 页面还在加载（冷启动）时先记着，加载完再执行。「加载完」不只靠 {@code onPageLoaded}：Capacitor 只在
+     * {@code onPageFinished} 时进度恰为 100 才回调，冷启动时会漏，所以另外每 250ms 看一次进度，至多 30 秒。
+     */
     private void deliver(String script) {
         getBridge().executeOnMainThread(() -> {
-            WebView webView = getBridge().getWebView();
-            if (webView == null || !pageLoaded) {
-                pendingScript = script;
-                return;
-            }
-            webView.evaluateJavascript(script, null);
+            pendingScript = script;
+            flushPending();
+            if (pendingScript != null) pollPending(120);
         });
+    }
+
+    /** 主线程上：页面在就交出去。 */
+    private void flushPending() {
+        WebView webView = getBridge().getWebView();
+        if (pendingScript == null || webView == null) return;
+        boolean ready = pageLoaded || (webView.getUrl() != null && webView.getProgress() == 100);
+        if (!ready) return;
+        String script = pendingScript;
+        pendingScript = null;
+        Log.i(TAG, "deep link handed to the page");
+        webView.evaluateJavascript(script, null);
+    }
+
+    private void pollPending(int remaining) {
+        WebView webView = getBridge().getWebView();
+        if (pendingScript == null || remaining <= 0 || webView == null) return;
+        webView.postDelayed(() -> {
+            flushPending();
+            pollPending(remaining - 1);
+        }, 250);
     }
 }

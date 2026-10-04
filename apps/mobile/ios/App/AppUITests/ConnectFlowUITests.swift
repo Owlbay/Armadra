@@ -52,5 +52,11 @@ final class ConnectFlowUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(button(app, ["画布", "Canvas"]).waitForExistence(timeout: 60), "canvas after relaunch")
         XCTAssertFalse(button(app, ["连接", "Connect"]).exists)
+        // 原生 OAuth 的深链（R-56）：App 写进 `#link=` 重载，入口收尾（本机没有挂起的流程，答失败、
+        // 不发请求），结果打开「安全」页；会话不受影响，不回连接页。
+        app.open(try XCTUnwrap(URL(string: "armadra://oauth?state=e2e-state&code=e2e-code")))
+        let security = app.webViews.descendants(matching: .any).matching(NSPredicate(format: "label IN %@", ["安全", "Security"])).firstMatch
+        XCTAssertTrue(security.waitForExistence(timeout: 60), "security page after the oauth link")
+        XCTAssertFalse(button(app, ["连接", "Connect"]).exists)
     }
 }

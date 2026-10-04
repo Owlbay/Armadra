@@ -151,6 +151,106 @@ describe("原生插件", () => {
   });
 });
 
+describe("推送轮换、UnifiedPush 与系统浏览器（G5-22）", () => {
+  const KEY = "a".repeat(43);
+
+  it("UnifiedPush：只给 Android、必须带公钥、端点要 https 或回环 http；可以没有令牌", async () => {
+    const pushRegistration = vi.fn();
+    inApp({ pushRegistration });
+    const bridge = nativeBridge();
+    const up = (endpoint: string, extra: Record<string, unknown> = {}) => ({
+      registration: {
+        platform: "android",
+        transport: "direct",
+        publicKey: KEY,
+        unifiedpush: { endpoint },
+        ...extra,
+      },
+    });
+    pushRegistration.mockResolvedValueOnce(up("https://ntfy.example/up1?up=1"));
+    await expect(bridge.pushRegistration()).resolves.toEqual({
+      platform: "android",
+      transport: "direct",
+      publicKey: KEY,
+      unifiedpush: { endpoint: "https://ntfy.example/up1?up=1" },
+    });
+    pushRegistration.mockResolvedValueOnce(up("http://127.0.0.1:8093/t?up=1"));
+    await expect(bridge.pushRegistration()).resolves.not.toBeNull();
+    for (const bad of [
+      up("http://ntfy.example/t"),
+      up("https://user:pw@ntfy.example/t"),
+      up("https://ntfy.example/t#x"),
+      up("javascript:alert(1)"),
+      up("https://ntfy.example/t", { platform: "ios" }),
+      up("https://ntfy.example/t", { publicKey: undefined }),
+      { registration: { platform: "android", transport: "direct" } },
+    ]) {
+      pushRegistration.mockResolvedValueOnce(bad);
+      await expect(bridge.pushRegistration()).resolves.toBeNull();
+    }
+  });
+
+  it("令牌换过：查询、确认与事件订阅；插件旧（没有这些方法）时都是「没有」", async () => {
+    const remove = vi.fn();
+    let fire: () => void = () => undefined;
+    const plugin = {
+      pushRotated: vi.fn(async () => ({ rotated: true })),
+      ackPushRotation: vi.fn(async () => undefined),
+      addListener: vi.fn(async (_event: string, listener: () => void) => {
+        fire = listener;
+        return { remove };
+      }),
+    };
+    inApp(plugin);
+    const bridge = nativeBridge();
+    await expect(bridge.pushRotated()).resolves.toBe(true);
+    await bridge.ackPushRotation();
+    expect(plugin.ackPushRotation).toHaveBeenCalledTimes(1);
+    const heard = vi.fn();
+    const stop = bridge.onPushRotated(heard);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(plugin.addListener).toHaveBeenCalledWith("pushTokenRotated", heard);
+    fire();
+    expect(heard).toHaveBeenCalledTimes(1);
+    stop();
+    expect(remove).toHaveBeenCalledTimes(1);
+
+    inApp({});
+    const old = nativeBridge();
+    await expect(old.pushRotated()).resolves.toBe(false);
+    expect(old.onPushRotated(() => undefined)).toBeTypeOf("function");
+    await expect(old.openExternal("https://idp.example/a")).resolves.toBe(
+      false,
+    );
+  });
+
+  it("系统浏览器只开 https 与回环 http", async () => {
+    const openExternal = vi.fn(async () => undefined);
+    inApp({ openExternal });
+    const bridge = nativeBridge();
+    await expect(
+      bridge.openExternal("https://idp.example/authorize?x=1"),
+    ).resolves.toBe(true);
+    await expect(bridge.openExternal("http://127.0.0.1:5556/a")).resolves.toBe(
+      true,
+    );
+    for (const bad of [
+      "http://idp.example/a",
+      "javascript:alert(1)",
+      "armadra://oauth?state=x",
+      "https://u:p@idp.example/",
+    ]) {
+      await expect(bridge.openExternal(bad)).resolves.toBe(false);
+    }
+    expect(openExternal).toHaveBeenCalledTimes(2);
+    openExternal.mockRejectedValueOnce(new Error("no browser"));
+    await expect(bridge.openExternal("https://idp.example/")).resolves.toBe(
+      false,
+    );
+  });
+});
+
 describe("Bearer fetch", () => {
   function base(statuses: number[]) {
     return vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {

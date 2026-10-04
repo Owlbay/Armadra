@@ -15,8 +15,11 @@ import os
 /// | `pin({ origin, fingerprint })` | 取 `/ca.crt` 按指纹核对后存为信任锚；之后对该来源的 TLS 只认它 |
 /// | `scan()`                      | 相机扫二维码，取消时没有 `text`                             |
 /// | `pushRegistration()`          | APNs 令牌 + 设备 X25519 公钥；配了中继时先换中继令牌         |
+/// | `pushRotated()` / `ackPushRotation()` | 启动时 APNs 给了与上次登记不同的令牌（R-54，`PushTokenLedger`） |
+/// | `openExternal({ url })`       | 系统浏览器打开原生 OAuth 的授权页（R-56），只开 https 与回环 http |
 ///
-/// 另外两件页面不调用的事：深链（`armadra://…`）与点通知，都改写页面的地址片段
+/// 令牌换过的那一刻还发 `pushTokenRotated` 事件。
+/// 另外两件页面不调用的事：深链（`armadra://…`，含 OAuth 回调）与点通知，都改写页面的地址片段
 /// （`DeepLink.script`）。
 @objc(ArmadraNativePlugin)
 public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandlerProtocol {
@@ -29,6 +32,9 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
         CAPPluginMethod(name: "pin", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "scan", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "pushRegistration", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "pushRotated", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "ackPushRotation", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "openExternal", returnType: CAPPluginReturnPromise),
     ]
 
     private enum Account {
@@ -43,6 +49,9 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
     private static let secret = "^[0-9a-f]{32}\\.[A-Za-z0-9_-]{43}$"
 
     private let store: SecretStore = KeychainStore()
+    private let ledger = PushTokenLedger()
+    /// 这一次 `pushRegistration` 拿到的 APNs 令牌（登记成功时记进 `ledger`）。
+    private var pendingToken: String?
     private var currentPin: Pin?
     private var pendingScript: String?
     private var loadingObservation: NSKeyValueObservation?
@@ -74,6 +83,16 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
             self?.finishPush(nil, error: "registration failed")
         })
         bridge?.notificationRouter.pushNotificationHandler = self
+        refreshTokenIfRegistered()
+    }
+
+    /// 开过推送的：启动时向 APNs 再要一次令牌，与上次登记的不同就标「换过」（R-54）。
+    private func refreshTokenIfRegistered() {
+        guard ledger.registered else { return }
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized else { return }
+            DispatchQueue.main.async { UIApplication.shared.registerForRemoteNotifications() }
+        }
     }
 
     deinit {
@@ -212,12 +231,17 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
     }
 
     private func registered(token: Data) {
-        guard pushCall != nil else { return }
+        let hex = token.map { String(format: "%02x", $0) }.joined()
+        guard pushCall != nil else {
+            // 没人在等：启动时的那一次。换了就告诉页面。
+            if ledger.observe(token: hex) { notifyListeners("pushTokenRotated", data: [:]) }
+            return
+        }
         guard let key = DeviceKey.loadOrCreate(store) else {
             finishPush(nil, error: "keychain unavailable")
             return
         }
-        let hex = token.map { String(format: "%02x", $0) }.joined()
+        pendingToken = hex
         let publicKey = DeviceKey.publicKey(key)
         let relay = getConfig().getString("relayUrl", "")?.trimmingCharacters(in: .whitespaces) ?? ""
         guard !relay.isEmpty else {
@@ -244,9 +268,35 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
         guard let call = pushCall else { return }
         pushCall = nil
         if let registration {
+            if let token = pendingToken { ledger.didRegister(token: token) }
+            pendingToken = nil
             call.resolve(["registration": registration])
         } else {
             call.reject(error ?? "failed")
+        }
+    }
+
+    @objc func pushRotated(_ call: CAPPluginCall) {
+        call.resolve(["rotated": ledger.rotated])
+    }
+
+    @objc func ackPushRotation(_ call: CAPPluginCall) {
+        ledger.acknowledge()
+        call.resolve()
+    }
+
+    // MARK: - 系统浏览器
+
+    /// 原生 OAuth 的授权页（R-56）：在系统浏览器里走完，回调经 `armadra://oauth` 深链回来。
+    @objc func openExternal(_ call: CAPPluginCall) {
+        guard let url = ExternalUrl.browsable(call.getString("url") ?? "") else {
+            call.reject("bad url")
+            return
+        }
+        DispatchQueue.main.async {
+            UIApplication.shared.open(url, options: [:]) { opened in
+                opened ? call.resolve() : call.reject("no browser")
+            }
         }
     }
 

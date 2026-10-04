@@ -2,6 +2,7 @@ import * as React from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { useAssetUrl } from "@/api/assets";
 import { runtimeApi } from "@/api/client";
 import { cn } from "@/lib/cn";
 import { ScrollArea } from "@/ui/scroll-area";
@@ -59,7 +60,7 @@ export function MarkdownPreview({
           remarkPlugins={[remarkGfm]}
           components={{
             img: ({ src, alt }) => (
-              <img
+              <PreviewImage
                 src={resolve(typeof src === "string" ? src : undefined)}
                 alt={alt ?? ""}
               />
@@ -84,4 +85,10 @@ export function MarkdownPreview({
       </div>
     </ScrollArea>
   );
+}
+
+/** 预览里的图：原生 App 里经 `useAssetUrl` 带上 Bearer（R-55）。 */
+function PreviewImage({ src, alt }: { src: string | undefined; alt: string }) {
+  const resolved = useAssetUrl(src);
+  return <img src={resolved ?? undefined} alt={alt} />;
 }
