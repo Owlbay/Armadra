@@ -10,6 +10,7 @@
 
 - `minimumInstalled` 仍为 0.1.0：迁移只新增（0001–0013 与 0.1.0 逐字节相同，新增到 0035），0.1.0 的数据库可以直接升上来。
 - 随桌面壳打包的 `@armadra/agent` 为 0.6.7，宿主 API 版本 1。
+- `GET /api/agents` 的行不再有启动兼容字段 `launchWords` / `launchArgs`（从没有公开版本带过旧启动格式），页面只经 `launcher` 拼行。
 - ACP 入口实测通过的版本：claude-agent-acp 0.85.1 起、pi-acp 0.0.34 起；其余五家（codex-acp、opencode、omp、copilot、ama）还没有真跑记录。
 
 ### 架构与壳（#5–#13）
@@ -80,4 +81,3 @@
 
 - 证书与发布源要由维护者提供；没有时发布按「未签名」处理，系统首次安装会警告。
 - 手机壳不随本版上架商店。
-- 启动兼容字段（`launchWords` / `launchArgs`）本版仍保留，在含启动器的版本发出之后的下一个版本移除。

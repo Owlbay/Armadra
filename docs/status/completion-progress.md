@@ -1186,7 +1186,25 @@
 
 ## G5-17 启动兼容退役与更新页接线（R-59、R-60、R-61）
 
-待填（第 3 组）。
+**做了什么**
+
+- R-59（G4-2 并进 G5）：删 `LegacyLaunchWord`、`shellEnvWord`、环境形的 `renderLaunchWord` / `verbatimWord` / `batchSafeWord` 分支（`packages/shared/src/shell.ts` 与 `core/terminal/shell.ts` 逐字节同步，`LaunchWord` 退化为 `string`）；共享层删 `launchWordSchema` 与 `/api/agents` 行上的 `launchWords` / `launchArgs`（`z.object` 剥掉旧 core 多答的字段）；`assembleLaunchCommand` 删 `shellWords` / `extraArgs`；`web/agent/launch.ts` 删旧 core 退路，没有 `launcher` 就是裸行。`/integration` 的 `launchArgs` 不变。契约 §13.1 追加一句，CHANGELOG 0.2.0 的「已知限制」那句改进「兼容性」。
+- R-60：更新页「检查」调壳 `updates:check`（不带答复 = 壳自己问发布索引），壳的答复即发布侧（`HostSide` 新增 `{kind:"shell"}`，`state.ts::hostAfterShell`）；`noReleaseSource` 只在壳答 `notConfigured` 缺 endpoints、或人按了检查而壳原样答 `idle`（没有可问的索引）时出现；浏览器里不问。页面定时器改为 `refresh()` 只读回壳的状态——检查由壳自己的计划（`startSchedule`，同样认 `updates.autoCheck`）跑，页面不再绕过壳的间隔。
+- R-61：`environment.ts::signatureState` 在 macOS 跑 `codesign --verify --deep --strict`（每进程一次缓存），通过且不是 ad-hoc 才是 `signed`，「not signed at all」是 `unsigned`，ad-hoc / 校验失败 / 起不来是 `unknown`；`update-e2e.mjs::expectedSignature` 同一判法。
+
+**实测**
+
+- `use-update-state.test`（新）、`state.test`、`UpdatesPage.test`（定时器只调 `refresh`）、`environment.test`（macOS 分支用替身；本机真 `codesign` 对临时 bundle：未签 → `unsigned`，`-s -` ad-hoc → `unknown`）、`launch.test` / `shell.test` / `agents.test` / `api-agents.test` 改断言（理由：字段按计划删除）；`list.test`、`integration.test` 不用改（行上本来就不答，`/integration` 的 `launchArgs` 保留）；`release:test` 通过。
+- `node tools/probes/update-e2e.mjs <out> --build` 对 0.2.0 的 macOS arm64 产物：check → download → verify → staged，安装答 `notSigned`（未签名包）。dev-stack 那一腿本机没起 `release` 服务，未跑（CI 的 linux 作业带 `--require-dev-stack`）。
+
+**接口**
+
+- `useUpdateState` 多 `refresh()`；`shellCheck(verdict?)` 可不带答复；`state.ts` 导出 `NO_RELEASE_SOURCE`、`hostAfterShell(shell, checked)`。
+- `signatureState(platform, executable, packaged, codesign?)`，`macSignatureState(bundle, run?)`。
+
+**没做 / 需用户提供**
+
+- 真 Developer ID 证书下的 `signed` 分支只用替身验证；证书由维护者提供。
 
 ## G5-18 发布流水线收尾（R-62、R-63、R-64、R-65 作业、R-66、R-67）
 

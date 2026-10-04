@@ -5,16 +5,6 @@ import { AGENT_CAPABILITIES, AGENT_IDS, PROMPT_MODES } from "../agents.js";
 import { agentIdSchema } from "../domain/index.js";
 import { agentAcpInfoSchema } from "./acp.js";
 
-/**
- * @deprecated A `LaunchWord` (`shell.ts`) as an older core answered it: a
- * literal value, or a prefix and a variable (`LegacyLaunchWord`). Only for
- * {@link agentInfoSchema}'s deprecated `launchWords`.
- */
-export const launchWordSchema = z.union([
-  z.string(),
-  z.object({ prefix: z.string(), env: z.string() }),
-]);
-
 /** One of `history.index` / `cost` / `transcript` (contract §12.2). */
 export const HISTORY_STATES = [
   "available",
@@ -101,24 +91,11 @@ export const agentInfoSchema = z.object({
    * node (`ARMADRA_NODE_ID` set). A `custom:` entry answers its base CLI's.
    *
    * Absent when there is no current launcher — not written yet, no data
-   * directory, Windows without `armadra-launch.exe` — and from an older core:
-   * the line is then bare (or, for an older core, built from the deprecated
-   * fields below).
+   * directory, Windows without `armadra-launch.exe`: the line is then bare.
+   * The injected argv is not on the row; `GET /api/agents/{id}/integration`
+   * answers it as `launchArgs` (contract §13.2).
    */
   launcher: z.string().optional(),
-  /**
-   * @deprecated An older core's injection argv, appended to the typed line.
-   * A current core answers {@link launcher} instead and no longer sends this;
-   * the page reads it only as the fallback for that older core (§8.1), kept
-   * one release. The argv itself is in `GET /api/agents/{id}/integration`.
-   */
-  launchArgs: z.array(z.string()).optional(),
-  /**
-   * @deprecated An older core's injection as typed words, Codex's naming
-   * environment variables its node terminal carried. Same fallback as
-   * {@link launchArgs}; a current core never sends it.
-   */
-  launchWords: z.array(launchWordSchema).optional(),
   /**
    * Whether this machine has the CLI's local history (contract §12.2): the
    * session index, local cost, and transcripts read over a link. Optional
