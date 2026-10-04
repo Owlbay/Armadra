@@ -489,7 +489,10 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
 
 - 桌面壳里的 core 只绑回环地址；CORS 只放行回环 HTTP 来源（`http://127.0.0.1:*`、
   `http://localhost:*`，以及 Unix socket / 命名管道调用者用的无端口形式）。
-  自定义 scheme 不在放行之列，页面也不再用任何一种。
+  自定义 scheme 不在放行之列，页面也不再用任何一种。CORS 只决定浏览器读不读得到答案，不是鉴权：
+  回环监听上除 `/health`、`/api/health`、`/api/identity/*` 与配对短码换票外，每条 `/api/` 与每条流都要
+  会话（`identity/loopback.ts` 经 `CoreServer.admission`，契约 §3.2）；只有显式打开回环匿名的裸 core
+  （探针、`armadra.sh run web`）没有这道门。
 - Hook 表面有独立鉴权（per-node token）和独立 body 上限，优先走 Unix socket。
 - 所有路径参数都限制在工作区根目录内（core 的路径解析）；导入的图片
   字节复制进 `.armadra/assets/`，不暴露原位置。
@@ -528,7 +531,9 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   不变。设计见[服务器账号与共享](../design/server-accounts-and-sharing.md) §6，契约见
   [core JSON 契约](../contracts/core-json-api.md) §10。
 - **信任边界（补全后，[补全架构](../design/completion-architecture.md) §8.1）**：
-  - 页面 ↔ core：桌面本机是回环 + preload 票换 Bearer；Gateway / 服务器壳是 TLS + `__Host-` 会话
+  - 页面 ↔ core：桌面本机是回环 + preload 票换 Bearer（页面在全局 `fetch` / `WebSocket` 上统一带 Bearer
+    与一次性 WS 票，`api/shell-transport.ts`；托盘用自己的会话，`shell-core/core-session.ts`；Windows
+    经 fork 的 IPC 取票）；Gateway / 服务器壳是 TLS + `__Host-` 会话
     Cookie（`HttpOnly; SameSite=Strict; Secure`）+ Origin 白名单 + 写操作的 CSRF 双提交；原生 App 走
     Bearer（只认 `capacitor://localhost` / `https://localhost`，WS 用 30 秒一次性票）。CSRF 只在
     Cookie 会话上核对，Bearer 不是环境凭据（`identity/http.ts::csrfRequired`）。Gateway 的每个答案带

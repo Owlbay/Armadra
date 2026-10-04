@@ -62,7 +62,17 @@ R7a 之前 GitHub 与自动化两块面板走的是 `/rpc/armadra.v1.*`：二进
 
 **明文回环上没带凭据的一次调用按本机主人处理**（`core/identity/service.ts` 的 `localOwner`）。桌面壳的会话是原生的，密钥在壳里，既不发 Cookie 也到不了 `apps/web/src/api/request.ts` 的那个 `fetch`；而那台壳就在同一台机器上。TLS 的服务器壳上这条路不存在，凭据仍然是必须的。主人必须是一台**没被撤销的真设备**——自动化的授权记录要拿它的 epoch 复核，一个编出来的设备标识会让计划在第一次投递时被自己的复核拒掉。
 
-**自 0.3.0 起桌面壳不再按主人处理回环匿名请求**（安全审查 L9）：上面那条路只在 core 的启动选项 `loopbackAnonymousOwner`（`core/main.ts`，缺省 `false`；不传时读 `ARMADRA_LOOPBACK_OWNER=1`）打开时存在，判定在 `core/identity/http.ts::anonymousLoopbackOwner`。桌面壳的页面在这两面上带票据换来的 `Authorization: Bearer`（`apps/web/src/api/request.ts`，401 时换一枚重发一次；回环 CORS 的 `access-control-allow-headers` 因此多了 `authorization`），壳不把这个变量带给 core；服务器壳显式传 `false`。只有探针（`tools/probes/probe-home.mjs`）与 `armadra.sh run web` 起的裸 core 打开它。关着时明文回环上没带凭据的调用照 401 回答（GitHub 面 `UNAUTHENTICATED`、自动化面 `unauthenticated`）。
+**自 0.2.0 起桌面壳不再按主人处理回环匿名请求**（安全审查 L9）：上面那条路只在 core 的启动选项 `loopbackAnonymousOwner`（`core/main.ts`，缺省 `false`；不传时读 `ARMADRA_LOOPBACK_OWNER=1`）打开时存在，判定在 `core/identity/http.ts::anonymousLoopbackOwner`。桌面壳的页面在这两面上带票据换来的 `Authorization: Bearer`（`apps/web/src/api/request.ts`，401 时换一枚重发一次；回环 CORS 的 `access-control-allow-headers` 因此多了 `authorization`），壳不把这个变量带给 core；服务器壳显式传 `false`。只有探针（`tools/probes/probe-home.mjs`）与 `armadra.sh run web` 起的裸 core 打开它。关着时明文回环上没带凭据的调用照 401 回答（GitHub 面 `UNAUTHENTICATED`、自动化面 `unauthenticated`）。
+
+**自 0.2.0 起 core 回环监听上的每一条 `/api/` 与每一条流都要会话**（安全审查 L9 收尾，G5-28）：上面两面之外，路由表里其余 `/api/` 路由与 WebSocket 原来没有请求身份、按本机主人放行，本机任何一个回环端口上的网页都能读设置、开终端、连事件流。现在 `loopbackAnonymousOwner` 关着时（两种壳都是），身份域在 core 自己的监听上装一道门（`core/identity/loopback.ts`，经 `CoreServer.admission`）：
+
+- **不要会话的**只有 `/health`、`/api/health`、`/api/identity/*`（hello、配对、刷新、登录等各自认自己的凭据）与 `/api/gateway/pairing-code/exchange`（§24），与 Gateway 的匿名面是同一张名单（`core/identity/transport.ts::anonymousPath`）。CORS 预检照旧不要凭据。
+- **HTTP**：恰好一个 `Origin`，加一份会话凭据——回环明文来源读 `Authorization: Bearer`，别的来源读 Cookie 且写方法要 `X-Armadra-CSRF`。不报 `Origin` 的调用（`curl`、本机别的进程）没有会话可言，同样 401。
+- **WebSocket**：浏览器的升级带不了头，凭据是 `Sec-WebSocket-Protocol: armadra-ticket.<票>`。票由 `POST /api/identity/ws-ticket`（带 Bearer，只发给回环明文来源的原生传输，否则 400 `bearer_required`）换来，答 `{ ticket, expiresAt }`，30 秒、一次性，绑着签票时的来源，升级的来源对不上不认——与 Gateway 上原生 App 的票（§17.4）同一个形状与做法。升级被拒时状态行是 `401 unauthenticated`。
+- 拒绝一律是 401 `{ "code": "unauthenticated", "message": "需要一个已配对设备的会话" }`；Cookie 会话 CSRF 不对是 403 `forbidden`。门判在读请求体之前，路由存不存在也不先回答（没带会话打一条不存在的路径同样 401）。
+- 认出来的会话进这次请求的身份（`runAs`），路由门、事件订阅与长连接的到期复核（4401 / 4403，§17.4）与 Gateway 进来的请求走同一条路。经 Gateway 交接进 core 的请求已在 TLS 一侧认过人，不再过这道门。
+
+调用方：桌面壳的页面在全局 `fetch` / `WebSocket` 上装了请求层（`apps/web/src/api/shell-transport.ts`，复用原生 App 的 `bearerFetch` / `ticketedWebSocket`）：每个发往 core 的请求带 Bearer、每条流先换票；还没有会话先向壳要票配对，401 时复核 → 刷新 → 重新要票，只重发一次；访问密钥到期前两分钟主动轮转，流不必因 4401 重连。`<img>` 与编辑器的「下载」带不了头，经 `fetch` 取回再交给 `blob:` 地址（`api/assets.ts`）。托盘经 `shell-core/core-session.ts` 用同一张票换自己的会话，来源是 core 自己的回环基址。Windows 上 core 的私有通道还不开，壳经 fork 的 IPC 通道取票（`armadra:identity-ticket`，`core/identity/control.ts::startTicketIpc`、`main/core-ticket.ts`）。
 
 ### 3.3 稳定的 `code`
 

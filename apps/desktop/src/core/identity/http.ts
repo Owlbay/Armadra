@@ -5,6 +5,7 @@ import type { AccountsService } from "./accounts";
 import { type IdentitySecurity, handleAccounts } from "./accounts-http";
 import { IdentityError, identityFailure } from "./errors";
 import { nativeOrigin } from "./origin";
+import type { WsTickets } from "./transport";
 import type {
   AccessRequest,
   IdentityService,
@@ -47,6 +48,12 @@ export interface IdentityHttpOptions {
    * 登录照旧、那几条路径 404。
    */
   readonly security?: IdentitySecurity;
+  /**
+   * 回环监听上的 WebSocket 票（契约 §3.2，安全审查 L9）。给了才答
+   * `POST ws-ticket`：桌面壳的页面拿访问密钥换一张，升级时由回环的门兑换
+   * （`identity/loopback.ts`）。经 Gateway 来的那一张由 Gateway 自己签。
+   */
+  readonly wsTickets?: WsTickets;
 }
 
 /**
@@ -97,7 +104,7 @@ export function csrfRequired(request: CoreRequest): boolean {
 /**
  * 明文回环上没带凭据的一次调用，要不要按本机主人处理（契约 §3.2，安全审查 L9）。
  *
- * 缺省**不**：自 0.3.0 起桌面壳的页面经票据换来的 Bearer 打这两面（GitHub、
+ * 缺省**不**：自 0.2.0 起桌面壳的页面经票据换来的 Bearer 打这两面（GitHub、
  * 自动化），本机另一个回环端口上的网页再也冒充不了主人。只有探针与开发命令
  * 起的裸 core（页面不在壳里、拿不到票）经 `ARMADRA_LOOPBACK_OWNER=1` 显式打开；
  * 桌面壳与服务器壳都不开（`core/main.ts` 的 `loopbackAnonymousOwner`）。
@@ -394,6 +401,29 @@ export class IdentityHttp {
           );
           clearSessionCookies(request, response, hostId);
           this.json(response, cors, 200, { closed: true });
+          return;
+        }
+        case "POST ws-ticket": {
+          const tickets = this.options.wsTickets;
+          // 只给原生传输：浏览器会话（Cookie）的流经 Gateway 的门认 Cookie，用
+          // 不着票。
+          if (tickets === undefined || !nativeRequest(request)) {
+            this.json(response, cors, 400, {
+              code: "bearer_required",
+              message: "WebSocket 票只发给原生传输",
+            });
+            return;
+          }
+          this.service.authenticate(actor);
+          const issued = tickets.issue({
+            accessToken: actor.accessToken,
+            origin: actor.origin,
+          });
+          response.setHeader("cache-control", "no-store");
+          this.json(response, cors, 200, {
+            ticket: issued.ticket,
+            expiresAt: new Date(issued.expiresAtMs).toISOString(),
+          });
           return;
         }
         case "GET devices": {

@@ -28,6 +28,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { LOOPBACK_OWNER_ENV } from "../probe-home.mjs";
 
 import {
   cleanups,
@@ -78,7 +79,12 @@ async function setupFake() {
   const hook = join(root, "apps/desktop/out/cli/armadra-hook.js");
   for (const file of [binary, hook])
     if (!existsSync(file)) throw new Error(`未构建：${file}`);
-  const environment = { ...process.env, ARMADRA_DATA_DIR: data };
+  // 裸 core 显式打开回环匿名按主人（契约 §3.2）：探针不在壳里、拿不到票。
+  const environment = {
+    ...process.env,
+    ARMADRA_DATA_DIR: data,
+    ...LOOPBACK_OWNER_ENV,
+  };
   delete environment.TMUX;
   delete environment.TMUX_PANE;
   const log = createWriteStream(join(output, "core-worktree.log"));

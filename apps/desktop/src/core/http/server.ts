@@ -17,6 +17,7 @@ import {
   payloadTooLarge,
 } from "./errors";
 import {
+  type RequestIdentity,
   onAccessChanged,
   requestIdentity,
   routeGuard,
@@ -84,6 +85,7 @@ export class CoreServer {
   private readonly bodyLimits = new Map<string, number>();
   private readonly options: CoreServerOptions;
   private readonly capabilityProbes = new Map<string, () => boolean>();
+  private admissionGate: RequestAdmission | undefined;
 
   constructor(options: CoreServerOptions) {
     this.options = options;
@@ -128,15 +130,29 @@ export class CoreServer {
   }
 
   /**
+   * 回环监听上的准入（契约 §3.2，安全审查 L9）：身份域装配时放进来，判每一个
+   * 直接打到这台 core 自己监听上的请求与升级要不要凭据、是谁。没装时一律放行——
+   * 那是裸 core 显式打开回环匿名（`ARMADRA_LOOPBACK_OWNER=1`）或没有身份域的
+   * 单元测试。
+   *
+   * 经 Gateway 交接进来的请求不过这道门（{@link createListener} 的 `admitted`）：
+   * Gateway 在 TLS 那一侧已经认过人，并把身份放进了这次请求（`runAs`）。
+   */
+  admission(gate: RequestAdmission | undefined): void {
+    this.admissionGate = gate;
+  }
+
+  /**
    * A server per listener. One address per `http.Server` is a Node fact, so
    * the router and the upgrade handler are shared and the servers are not.
    */
-  createListener(): Server {
+  createListener(options: { readonly admitted?: boolean } = {}): Server {
+    const admitted = options.admitted === true;
     const server = createServer((request, response) => {
-      void this.serve(request, response);
+      void this.serve(request, response, admitted);
     });
     server.on("upgrade", (request, socket, head) => {
-      this.upgrade(request, socket, head);
+      this.upgrade(request, socket, head, admitted);
     });
     this.servers.push(server);
     return server;
@@ -145,6 +161,7 @@ export class CoreServer {
   private async serve(
     request: IncomingMessage,
     response: ServerResponse,
+    admitted = false,
   ): Promise<void> {
     const origin = request.headers.origin;
     const headers = corsHeaders(Array.isArray(origin) ? origin[0] : origin);
@@ -160,6 +177,34 @@ export class CoreServer {
       return;
     }
     const url = new URL(request.url ?? "/", "http://core");
+    const gate = admitted ? undefined : this.admissionGate;
+    if (gate !== undefined) {
+      // 在读请求体之前判：一个没带凭据的请求不该让 core 先缓冲它的 12 MB。
+      const verdict = gate(coreRequest(request, url, EMPTY_BODY), false);
+      if ("refusal" in verdict) {
+        return this.send(
+          response,
+          verdict.refusal.status,
+          verdict.refusal.body,
+          headers,
+        );
+      }
+      if (verdict.identity !== undefined) {
+        const identity = verdict.identity;
+        return runAs(identity, () =>
+          this.serveAdmitted(request, response, headers, url),
+        );
+      }
+    }
+    return this.serveAdmitted(request, response, headers, url);
+  }
+
+  private async serveAdmitted(
+    request: IncomingMessage,
+    response: ServerResponse,
+    headers: Record<string, string>,
+    url: URL,
+  ): Promise<void> {
     const path = url.pathname;
     let answer: HandlerResult | ErrorResponse;
     try {
@@ -310,6 +355,7 @@ export class CoreServer {
     request: IncomingMessage,
     socket: Duplex,
     head: Buffer,
+    admitted = false,
   ): void {
     const origin = request.headers.origin;
     if (!websocketOriginAllowed(Array.isArray(origin) ? origin[0] : origin)) {
@@ -327,7 +373,46 @@ export class CoreServer {
       socket.destroy();
       return;
     }
-    const core = coreRequest(request, url, Buffer.alloc(0));
+    const core = coreRequest(request, url, EMPTY_BODY);
+    const gate = admitted ? undefined : this.admissionGate;
+    if (gate !== undefined) {
+      // 浏览器的升级带不了 `Authorization`：凭据是 `Sec-WebSocket-Protocol` 里
+      // 那张一次性票（契约 §3.2），由门兑换、认证。
+      const verdict = gate(core, true);
+      if ("refusal" in verdict) {
+        socket.write(
+          `HTTP/1.1 ${verdict.refusal.status} ${verdict.refusal.body.code}\r\nConnection: close\r\n\r\n`,
+        );
+        socket.destroy();
+        return;
+      }
+      if (verdict.identity !== undefined) {
+        const identity = verdict.identity;
+        runAs(identity, () =>
+          this.upgradeAdmitted(
+            request,
+            socket,
+            head,
+            core,
+            found,
+            registration,
+          ),
+        );
+        return;
+      }
+    }
+    this.upgradeAdmitted(request, socket, head, core, found, registration);
+  }
+
+  private upgradeAdmitted(
+    request: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+    core: CoreRequest,
+    found: NonNullable<ReturnType<Router["match"]>>,
+    registration: StreamRegistration,
+  ): void {
+    const path = core.path;
     // 升级前和 HTTP 同一道路由门：终端的 socket 能写，事件流能读，都得先过它。
     if (!routeGuard()(core, this.router.requiredScope("GET", path)).allowed) {
       socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
@@ -473,6 +558,27 @@ export interface StreamRefusal {
   readonly status: number;
   readonly reason?: string;
 }
+
+/**
+ * 回环监听上的一次准入裁决（{@link CoreServer.admission}）。拒绝时是一个可以
+ * 直接写出去的 `{ code, message }`；放行时可以带上这次请求是谁——之后的路由门、
+ * 事件订阅与长连接的复核都按它判。放行而不带身份的是不要会话的路径。
+ */
+export type AdmissionVerdict =
+  | {
+      readonly refusal: {
+        readonly status: number;
+        readonly body: { readonly code: string; readonly message: string };
+      };
+    }
+  | { readonly identity?: RequestIdentity };
+
+export type RequestAdmission = (
+  request: CoreRequest,
+  upgrade: boolean,
+) => AdmissionVerdict;
+
+const EMPTY_BODY = Buffer.alloc(0);
 
 interface StreamRegistration {
   readonly open: StreamHandler;

@@ -8,19 +8,21 @@ import { AccountsService } from "./accounts";
 import { createIdentitySecurity } from "./accounts-http";
 import { installAuditSink } from "./audit";
 import { Authorizer } from "./authorize";
-import { startControlChannel } from "./control";
+import { startControlChannel, startTicketIpc } from "./control";
 import {
   currentSubject,
   installAccessGate,
   installRouteGuard,
   requestIdentity,
 } from "./gate";
-import { API_PREFIX, IdentityHttp } from "./http";
+import { API_PREFIX, IdentityHttp, loopbackAnonymousOwner } from "./http";
+import { createLoopbackAdmission } from "./loopback";
 import { installOAuth } from "./oauth";
 import { resolveBreachMode } from "./policy";
 import { createRouteGuard } from "./route-access";
 import { IdentityService } from "./service";
 import { IdentityStore } from "./store";
+import { WsTickets } from "./transport";
 
 export { IdentityService } from "./service";
 export { IdentityStore } from "./store";
@@ -54,7 +56,12 @@ export {
   BROWSER_SESSION_CAPABILITY,
   NATIVE_SESSION_CAPABILITY,
 } from "./http";
-export { CONTROL_SOCKET, TICKET_PATH, controlSocketPath } from "./control";
+export {
+  CONTROL_SOCKET,
+  TICKET_MESSAGE,
+  TICKET_PATH,
+  controlSocketPath,
+} from "./control";
 
 /**
  * 这一轮 core 的实例标识，按身份域的拼法：32 位十六进制。
@@ -113,13 +120,23 @@ export function installIdentity(context: CoreContext): void {
       };
     },
   });
+  // 回环监听上的门（契约 §3.2，安全审查 L9）：回环匿名按主人关着（两种壳都
+  // 是）时，`/api/` 与每条流都要一个会话；只有探针与开发命令起的裸 core 显式
+  // 打开它，那里不装。
+  const wsTickets = loopbackAnonymousOwner() ? undefined : new WsTickets();
   const http = new IdentityHttp({
     service,
     accounts,
     instanceId: runInstance,
     capabilities: coreCapabilities,
     security,
+    ...(wsTickets === undefined ? {} : { wsTickets }),
   });
+  context.server.admission(
+    wsTickets === undefined
+      ? undefined
+      : createLoopbackAdmission({ service, tickets: wsTickets }),
+  );
 
   // 判定入口与审计写入点（设计 §4）。装上之后它们仍然对 owner 恒真、对每条
   // 动作各写一条——真正变了的只有「问的是库，而不是那个恒真的兜底实现」。
@@ -168,6 +185,15 @@ export function installIdentity(context: CoreContext): void {
   context.server.raw(API_PREFIX, (request, response, cors) =>
     http.handle(request, response, cors),
   );
+
+  // Windows 上私有通道还不开（`control.ts` 的 TODO），票经 fork 的 IPC 通道
+  // 签：回环不再放行匿名请求（契约 §3.2），壳的页面没有票就什么都打不了。
+  if (process.platform === "win32") {
+    startTicketIpc(
+      { service, instanceId: runInstance },
+      process as unknown as Parameters<typeof startTicketIpc>[1],
+    );
+  }
 
   // 私有通道是异步绑的，但装配是同步的：起不来不该拖住 core，壳会在取票时拿到
   // 一个明确的失败，而不是一个永远起不来的进程。

@@ -11,7 +11,12 @@ vi.mock("./runtime-url", async (original) => ({
   savedRuntimeOrigin: () => mocks.saved,
 }));
 
-import { acquireAssetUrl, needsBearerFetch, useAssetUrl } from "./assets";
+import {
+  acquireAssetUrl,
+  downloadRuntimeFile,
+  needsBearerFetch,
+  useAssetUrl,
+} from "./assets";
 
 const GATEWAY = "https://192.168.1.8:8443";
 const ASSET = `${GATEWAY}/api/workspaces/w1/assets/0011223344556677.png`;
@@ -45,6 +50,75 @@ describe("needsBearerFetch（R-55）", () => {
     expect(needsBearerFetch("data:image/png;base64,AA", true, GATEWAY)).toBe(
       false,
     );
+  });
+});
+
+describe("needsBearerFetch：桌面壳（契约 §3.2）", () => {
+  const CORE = "http://127.0.0.1:5123";
+  it("壳里对 core 的回环来源经 fetch 取，别处的原样用", () => {
+    const asset = `${CORE}/api/workspaces/w1/assets/a.png`;
+    expect(needsBearerFetch(asset, false, null, true, CORE)).toBe(true);
+    expect(needsBearerFetch(asset, false, null, false, CORE)).toBe(false);
+    expect(
+      needsBearerFetch("http://127.0.0.1:9/a.png", false, null, true, CORE),
+    ).toBe(false);
+    expect(
+      needsBearerFetch("data:image/png;base64,AA", false, null, true, CORE),
+    ).toBe(false);
+  });
+});
+
+describe("downloadRuntimeFile", () => {
+  it("经 fetch 取回，交给一个 blob: 链接存下", async () => {
+    const load = vi.fn(async () => ({
+      ok: true,
+      blob: async () => new Blob(["x"]),
+    })) as unknown as typeof fetch;
+    const clicked: { href: string; download: string }[] = [];
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        clicked.push({ href: this.href, download: this.download });
+      });
+    try {
+      await expect(
+        downloadRuntimeFile("http://core/file-download?path=a", "a.bin", load),
+      ).resolves.toBe(true);
+    } finally {
+      click.mockRestore();
+    }
+    expect(load).toHaveBeenCalledWith("http://core/file-download?path=a", {
+      cache: "no-store",
+    });
+    expect(clicked).toEqual([{ href: "blob:test/1", download: "a.bin" }]);
+    expect(document.querySelector("a[download]")).toBeNull();
+  });
+
+  it("取不回（401、网络错误）答 false，不点任何链接", async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click");
+    try {
+      const refused = vi.fn(async () => ({ ok: false, status: 401 }));
+      await expect(
+        downloadRuntimeFile(
+          "http://core/x",
+          "x",
+          refused as unknown as typeof fetch,
+        ),
+      ).resolves.toBe(false);
+      const offline = vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      });
+      await expect(
+        downloadRuntimeFile(
+          "http://core/x",
+          "x",
+          offline as unknown as typeof fetch,
+        ),
+      ).resolves.toBe(false);
+      expect(click).not.toHaveBeenCalled();
+    } finally {
+      click.mockRestore();
+    }
   });
 });
 

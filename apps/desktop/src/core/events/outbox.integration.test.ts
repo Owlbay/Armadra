@@ -43,6 +43,9 @@ async function start(): Promise<RunningCore> {
     env: {
       ARMADRA_CORE_MIGRATIONS_DIR: migrationsDir,
       ARMADRA_LOG: "error",
+      // 这里验的是游标与补发，不是回环的门（那在 `main.test.ts`）：裸 core
+      // 显式打开回环匿名（契约 §3.2）。
+      ARMADRA_LOOPBACK_OWNER: "1",
     },
     stdout: () => {},
   });
