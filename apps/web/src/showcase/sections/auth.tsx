@@ -109,7 +109,10 @@ export default function AuthSection() {
               onSignIn={noop}
               initial={{
                 kind: "ready",
-                info: { displayName: "陈一", expiresAtMs: NOW + 86_400_000 },
+                info: {
+                  displayName: MEMBERS[0]!.displayName,
+                  expiresAtMs: NOW + 86_400_000,
+                },
               }}
             />
           </Card>
