@@ -1036,7 +1036,26 @@
 
 ## G5-06 SSH 节点的 ACP（R-30）
 
-待填（第 2 组）。
+**做了什么**
+
+- `core/acp/ssh.ts`（新）：节点数据带 `ssh.hostId` 时，ACP 适配器起在执行主机上。本机起的是不带 TTY 的 `ssh … -- <目的主机> <远端命令>`（`terminal/ssh/argv.ts::streamArgv`），askpass、主机密钥文件与 `ARMADRA_REMOTE_WORKER_LAUNCHER` 都和 Worker 共用一套；这条 `ssh` 的 stdio 就是 ACP 传输。远端命令把每个词放进单引号，值里有 `'`、`\`、`!` 或控制字符时拒绝。命令先 `cd` 进节点的 `cwd`（没有就用工作空间根），进不去就失败。
+- `host.ts` 只多了 `transport` 参数（`AcpTransport`），以及可以直接传入的 `mcpServers`。协商、开会话、接回、模式与模型都没改。
+- Worker 新增 `agents.probe { programs }` → `{ platform, programs }`（`remote/node-probe.ts::probeAgents`，登记在 `operations.ts`）。它只读，能力位复用 `remote.integration.v1`。程序没装答 `acp_not_installed`。`acp_unsupported` 只剩四种情况：主机没登记、没配 Worker、Worker 过旧（对这个动作答 501）、主机不是 POSIX。
+- 画布工具：新增 `RemoteIntegration.canvas`，和远端画布注入走同一套准备和同一条中继 socket，答执行主机上 Hook 客户端的路径，作为 `mcpServers` 里的 `armadra-hook mcp`。
+- 凭据在远端不兑换：节点凭据、ama 密钥都不设，条目名也不带过去。转录一律认本机镜像。
+- `acp/routes.ts` 去掉了「SSH 节点不能切 ACP」的拒绝。起会话、接回、切换都按节点决定 `ssh`，工作目录不按本机规则解析。切回终端时，下一代经 `ssh` 起在同一台主机上：`ReviveOptions` 多了 `sshHostId` 与 `cwd`，敲的是只带程序名的启动行。依赖编排与定时冷启动对 SSH 的 ACP 节点也起适配器（`terminal/install.ts`）。
+- 契约新增 §26.5，§14.2 里那一句改成指向它。
+
+**实测**
+
+- `acp/ssh.test.ts`：11 例，覆盖远端命令的引号与拒绝、`streamArgv`、`agents.probe`、各种错误码，以及用假 ssh 加真 fake ACP Agent 走完整条路由：一轮回复 → 切终端（行上 `sshHostId`）→ 切回 ACP 接回 → 再答一轮。
+- `vitest src/core/{acp,remote,terminal}`：50 个文件，566 例全过。
+- `remote-e2e` 新增 08b 步：远端工作空间里的 SSH 节点以 ACP 驱动，用真 Worker 和假 ssh，答一轮 → 切终端（tmux，第 2 代）→ 切回（`resumed: true`）→ 再答一轮。整个探针全绿。
+
+**没做**
+
+- 远端适配器不带终端启动器的注入 argv / env，也不带 ama 的 profile；ama 在执行主机上本来就不支持。
+- 没有用真 sshd 和真 CLI 实跑（与 remote-e2e 一样，只验证假 ssh 这条传输）。
 
 ## G5-07 协调者 runners：`--cwd` / `--resume` 与 `blocked` 覆盖（R-33、R-34）
 
