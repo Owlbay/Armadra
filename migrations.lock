@@ -36,6 +36,7 @@
     "0034_workflow.sql": "8ec9eef1c1b01d45d48936c4b07a2ebd3e59b8fbe634910625f5ff2a9c3382ad",
     "0035_node_creators.sql": "270cfb359b9712a68779536e35feba71f3cb85e857d47bfd581af462cba03a8c",
     "0036_password_resets.sql": "23c87aaeb8896df65264a86ae003fcd5abbec13213a733fdbe8de854a3707aff",
-    "0037_push_preferences.sql": "0443ddc660bee9bee71e8af323da4bde4e2520a49808f60e79e5199d362398cc"
+    "0037_push_preferences.sql": "0443ddc660bee9bee71e8af323da4bde4e2520a49808f60e79e5199d362398cc",
+    "0038_forge.sql": "2feff1914b864421586af1841a5b5072d7972f0f10ca1c1164966660a288c8c8"
   }
 }

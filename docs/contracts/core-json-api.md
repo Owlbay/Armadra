@@ -1910,7 +1910,95 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 29. 托管平台（forge）：`/api/forge/*`
 
-预留，由 G5-14 填写（GitLab 小节由 G5-15 追加）。
+把 §5 的 GitHub 面推广到自托管平台：Gitea / Forgejo（两者同一套 `/api/v1`，记作 `gitea`），GitLab 由 G5-15 追加小节。实现在 `core/forge/`（`Forge` 接口 + `github.ts` / `gitea.ts`），页面一侧的 zod 在共享层 `api/forge.ts`。`/api/github/*`（§5）不变；GitHub 远端在这一面经同一个客户端、同一份凭据。
+
+权限与 §5 同一档：读 `github:read`，写 `github:write`（`http/route-scopes.ts`）；`POST /api/forge/resolve` 只是读，登记时声明 `github:read`。写方法照常经 Gateway 准入：Cookie 会话要 `X-Armadra-CSRF`。错误一律 `{ code, message }`，`message` 是固定文案，远端原话（含错误消息里的 HTML）不往外传。
+
+### 29.1 识别
+
+仓库由 git 远端地址的主机名（小写、不含端口）与最后两段 `owner/name` 定。按序：
+
+1. `github.com`、`www.github.com`、`ssh.github.com` → `github`；GitHub 凭据（§5）配的企业版根的主机 → `github`。这两条不查配置表，GitHub 主机不能在 §29.3 另配。
+2. 配置表里写到这个仓库的一行 `<host>/<owner>/<name>`。
+3. 配置表里只写主机的一行 `<host>`。
+4. 都没有：`forge: null`，页面不显示「托管」区。
+
+配置在迁移 `0038_forge.sql` 的 `forge_config(repo_key, forge, api_base, credential_ref, account_login, revision, …)`；同一迁移给 `github_references` 加了 `forge` 列（缺省 `github`）。
+
+### 29.2 `GET /api/forge/repos/{host}/{owner}/{name}`、`POST /api/forge/resolve`
+
+`resolve` 的请求体 `{ "remoteUrl": "<git 远端地址>" }`（https / http / ssh / git 与 scp 写法；地址可能带凭据，所以不放查询串，答复里也没有它）。两者答同一个形状：
+
+```json
+{
+  "repository": { "host": "git.example.com", "owner": "acme", "name": "app" },
+  "forge": "gitea",
+  "source": "config",
+  "configKey": "git.example.com",
+  "apiBase": "https://git.example.com/api/v1",
+  "webUrl": "https://git.example.com/acme/app",
+  "credential": true,
+  "accountLogin": "bot"
+}
+```
+
+`forge` 是 `github` | `gitea` | `gitlab` | `null`；`source` 是 `github` | `config` | `null`；`credential` 只看存着没有、不花远端配额（GitHub 远端：§5 配了凭据且凭据的根就是这个远端的根）。不认识的仓库其余字段都是 `null`、`credential: false`。
+
+### 29.3 配置：`/api/forge/configs*`
+
+| 方法与路径                                     | 答复                                |
+| ---------------------------------------------- | ----------------------------------- |
+| `GET /api/forge/configs`                       | `{ configs: [配置行…] }`，按键排序  |
+| `PUT /api/forge/configs/{host}`                | 配置行（整台主机）                  |
+| `PUT /api/forge/configs/{host}/{owner}/{name}` | 配置行（这个仓库，优先于主机那行）  |
+| `DELETE …同上…?expectedRevision=<n>`           | `{ removed: true }`；令牌条目一起删 |
+
+`PUT` 请求体 `{ forge: "gitea", apiBase, token?, expectedRevision? }`：
+
+- `apiBase` 给站点根或 `…/api/v1` 都行，存成 `…/api/v1`。只收 HTTPS；回环主机（`localhost`、`127.0.0.1`、`[::1]`）也收明文 HTTP。不收带凭据、查询或片段的地址。
+- `token` 不给 = 保留已存的令牌，但 `apiBase` 变了就丢掉它（旧令牌不能发到新地址）；`""` = 删掉令牌；非空 = 先用它调一次 `GET /user` 核验，远端认了才存，`accountLogin` 是它答的登录名。
+- 令牌只进 SecretStore，条目名 `armadra-forge-<16 位十六进制>`，库里只有条目名；令牌不进响应、审计与日志。
+- `expectedRevision` 是 CAS：新建是 0（缺省），否则必须等于读到的 `revision`。
+
+配置行：`{ repoKey, forge, apiBase, credential, accountLogin, revision, createdAtMs, updatedAtMs }`（`credential` 是布尔，没有令牌时 `accountLogin` 为 `null`）。
+
+### 29.4 issue 与 PR：`/api/forge/repos/{host}/{owner}/{name}/…`
+
+| 方法与路径                  | 请求                                                               | 答复                                                  |
+| --------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------- |
+| `GET issues`                | 查询 `state=open\|closed\|all`（缺省 open）、`cursor`、`limit≤100` | `{ items: [issue…], nextCursor }`，列表里 `body` 为空 |
+| `GET issues/{number}`       |                                                                    | issue                                                 |
+| `PATCH issues/{number}`     | `{ state: "open" \| "closed" }`                                    | issue                                                 |
+| `GET pulls`                 | 同 issues（`closed` 含已合并）                                     | `{ items: [pull…], nextCursor }`                      |
+| `POST pulls`                | `{ title, body?, head, base, draft? }`                             | `201` pull                                            |
+| `GET pulls/{number}`        |                                                                    | pull                                                  |
+| `GET pulls/{number}/files`  |                                                                    | `{ files: [file…] }`（至多 300 个）                   |
+| `GET pulls/{number}/checks` |                                                                    | checks                                                |
+| `POST pulls/{number}/merge` | `{ method?: "merge"\|"squash"\|"rebase", headSha }`                | `{ merged: true, sha }`                               |
+
+- issue：`{ number, title, body, state: "open"|"closed", author, labels: string[], commentCount, url, createdAtMs, updatedAtMs, closedAtMs }`。同一编号空间里的 PR 不算 issue（读、改都答 404）。
+- pull：`{ number, title, body, state: "open"|"closed"|"merged", draft, author, baseRef, headRef, headSha, mergeable: "mergeable"|"conflicting"|"unknown", url, createdAtMs, updatedAtMs, mergedAtMs }`。
+- file：`{ path, previousPath, status: "added"|"modified"|"removed"|"renamed"|"other", additions, deletions, patch }`；`patch` 从第一个 `@@` 起，二进制为 `null`。Gitea 的补丁从 `pulls/{n}.diff` 按文件切出来。
+- checks：`{ headSha, rollup: "pending"|"success"|"failure"|"neutral"|"none", checks: [{ name, state, url }] }`。Gitea 用 commit statuses（同一个 context 只留最新的；`error` 记 failure，`warning` 记 neutral），GitHub 用 check runs + commit status（§5 同源）。`url` 只收 http(s)。
+- `cursor` 是页码串（2–1000），从不是远端 URL。
+- 合并：`headSha` 必须是完整对象名；远端 head 不是它就 409，不会合进评审者没看到的东西。Gitea 草稿按标题前缀 `WIP:` 认，`draft: true` 建 PR 时加这个前缀。
+- 写永远不重试；读在远端 5xx / 断连时重试一次。重定向一律当错误。
+
+### 29.5 错误
+
+| 状态 | `code`                      | 何时                                                                                      |
+| ---- | --------------------------- | ----------------------------------------------------------------------------------------- |
+| 400  | `bad_request`               | 参数不对：主机 / owner / 名字、编号、状态、游标、分支名、SHA、地址、令牌形状、GitHub 主机 |
+| 403  | `forge_forbidden`           | 远端说这个令牌没有这项权限（不是路由门的 `forbidden`）                                    |
+| 404  | `not_found`                 | 没有这个仓库 / issue / PR / 配置行                                                        |
+| 409  | `forge_not_configured`      | 没识别出平台，或识别出了却没有令牌；不发匿名请求                                          |
+| 409  | `conflict`                  | `expectedRevision` 对不上；head 变了、已合并、不可合并                                    |
+| 429  | `rate_limited`              | 远端限流                                                                                  |
+| 502  | `forge_credential_rejected` | 远端不认令牌（远端 401；不答 401，免得页面以为自己的会话过期）                            |
+| 502  | `forge_unavailable`         | 连不上、远端 5xx、答复坏了                                                                |
+| 504  | `unknown_outcome`           | 写已发出、结果没读到：重新读再决定，不要直接重试                                          |
+
+出站登记在 `core/net/outbound.ts` 的 `forgeApi`（地址是用户配的，不配置即不联网）。
 
 ## 30. 页面错误上报：`/api/diagnostics/client-error`
 

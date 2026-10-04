@@ -192,6 +192,17 @@ export const OUTBOUND = {
     defaultOn: false,
     documented: true,
   },
+  forgeApi: {
+    // 地址是用户在 `/api/forge/configs` 配的 API 根（契约 §29，Gitea / Forgejo；
+    // G5-15 起含 GitLab），这里只是占位主机。HTTPS，回环主机也收明文 HTTP。
+    // GitHub 仓库仍走上面的 `githubApi`。
+    url: "https://<用户配置的托管平台 API 根>",
+    purpose: "Git 窗口的托管区（自托管 Gitea / Forgejo）",
+    cadence: "用户动作 + 轮询；配置令牌时核验 1 次",
+    switch: null,
+    defaultOn: false,
+    documented: true,
+  },
 } as const satisfies Record<string, OutboundEndpoint>;
 
 export type OutboundId = keyof typeof OUTBOUND;
