@@ -1,0 +1,41 @@
+diff --git a/package.json b/package.json
+index 07414ce546284a47c4c3f89f95a42c1d807414c9..890cf49769c14b7599078b3dec6a86854aa7ed5b 100644
+--- a/package.json
++++ b/package.json
+@@ -18,8 +18,7 @@
+         "@peculiar/x509": "^1.11.0",
+         "asn1js": "^3.0.5",
+         "axios": "^1.7.2",
+-        "debug": "^4.3.5",
+-        "node-forge": "^1.3.1"
++        "debug": "^4.3.5"
+     },
+     "devDependencies": {
+         "@types/node": "^20.14.10",
+diff --git a/src/crypto/forge.js b/src/crypto/forge.js
+deleted file mode 100644
+index 4bf942c8bbd504e900e7ec5f93e6a3cc372a6138..0000000000000000000000000000000000000000
+diff --git a/src/index.js b/src/index.js
+index e463ac04b8f1ae58e02a967500125628b1027b6b..afef4b394d293a89f4a09b9cc128edbfa2594760 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -31,7 +31,6 @@ exports.directory = {
+  */
+ 
+ exports.crypto = require('./crypto');
+-exports.forge = require('./crypto/forge');
+ 
+ /**
+  * Axios
+diff --git a/types/index.d.ts b/types/index.d.ts
+index 59a064a56136df78dcf5c5fa2e722ecd9a03d5a6..952998f5f3ed578eba20712436bb7958bb02a29d 100644
+--- a/types/index.d.ts
++++ b/types/index.d.ts
+@@ -175,7 +175,6 @@ export interface CryptoLegacyInterface {
+     createCsr(data: CsrOptions, key?: PrivateKeyBuffer | PrivateKeyString): Promise<[PrivateKeyBuffer, CsrBuffer]>;
+ }
+ 
+-export const forge: CryptoLegacyInterface;
+ 
+ /**
+  * Axios

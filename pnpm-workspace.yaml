@@ -73,3 +73,15 @@ overrides:
   # CommonJS. mermaid's range (^11.1.0 … ^14.0.0) admits it too, so the whole
   # tree resolves to this one copy.
   "uuid@<11.1.1": 11.1.1
+  # GHSA-86w9-cpqp-85rv: node-forge through 1.4.0, no fixed release. Only
+  # acme-client depends on it, and only for its legacy `forge` export, which
+  # this repository never touches (`core/gateway/acme.ts` builds its own CSR;
+  # acme-client's account-key JWS uses node:crypto). The patch below drops that
+  # export and its file, and this entry drops the dependency, so node-forge is
+  # not installed or shipped at all. Remove both once acme-client releases
+  # without node-forge.
+  "acme-client>node-forge": "-"
+
+# Each patch keeps its reason next to the override it pairs with above.
+patchedDependencies:
+  acme-client@5.4.0: patches/acme-client@5.4.0.patch

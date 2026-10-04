@@ -13,6 +13,10 @@ overrides:
   dompurify@>=3.4.13 <3.4.16: 3.4.16
   '@peculiar/asn1-schema': 2.10.0
   uuid@<11.1.1: 11.1.1
+  acme-client>node-forge: '-'
+
+patchedDependencies:
+  acme-client@5.4.0: 81656416973a885c6f191b75702d2d99d185d06fa3d0724c6a246f18e8cc9ca9
 
 importers:
 
@@ -38,7 +42,7 @@ importers:
         version: 14.0.3
       acme-client:
         specifier: 5.4.0
-        version: 5.4.0(supports-color@7.2.0)
+        version: 5.4.0(patch_hash=81656416973a885c6f191b75702d2d99d185d06fa3d0724c6a246f18e8cc9ca9)(supports-color@7.2.0)
       electron-updater:
         specifier: 6.8.9
         version: 6.8.9(supports-color@7.2.0)
@@ -4646,10 +4650,6 @@ packages:
   node-api-version@0.2.1:
     resolution: {integrity: sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q==}
 
-  node-forge@1.4.0:
-    resolution: {integrity: sha512-LarFH0+6VfriEhqMMcLX2F7SwSXeWwnEAJEsYm5QKWchiVYVvJyV9v7UDvUv+w5HO23ZpQTXDv/GxdDdMyOuoQ==}
-    engines: {node: '>= 6.13.0'}
-
   node-gyp@12.4.0:
     resolution: {integrity: sha512-OMcPNvqTCFUnNaBlmdgq+lfNqY7gTiSmNRDjY3uAXRyudeKZEZxu3CLtjMQrx4zZxCX2b/mpNqTtwuCJgXhHkw==}
     engines: {node: ^20.17.0 || >=22.9.0}
@@ -8455,13 +8455,12 @@ snapshots:
       mime-types: 3.0.2
       negotiator: 1.1.0
 
-  acme-client@5.4.0(supports-color@7.2.0):
+  acme-client@5.4.0(patch_hash=81656416973a885c6f191b75702d2d99d185d06fa3d0724c6a246f18e8cc9ca9)(supports-color@7.2.0):
     dependencies:
       '@peculiar/x509': 1.14.3
       asn1js: 3.0.10
       axios: 1.20.0(debug@4.4.3(supports-color@7.2.0))(supports-color@7.2.0)
       debug: 4.4.3(supports-color@7.2.0)
-      node-forge: 1.4.0
     transitivePeerDependencies:
       - supports-color
 
@@ -10730,8 +10729,6 @@ snapshots:
   node-api-version@0.2.1:
     dependencies:
       semver: 7.8.5
-
-  node-forge@1.4.0: {}
 
   node-gyp@12.4.0:
     dependencies:
