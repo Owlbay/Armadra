@@ -17,6 +17,7 @@ import {
 import {
   GitlabForge,
   gitlabApiBase,
+  gitlabMergeMethods,
   gitlabRefusal,
   gitlabWebRoot,
   lineCounts,
@@ -335,16 +336,19 @@ describe("合并", () => {
     ).toBe("HEAD_CHANGED");
     expect(stale.requests.map((request) => request.method)).toEqual(["GET"]);
 
+    // 项目是合并提交（`merge_method: merge`）：没有变基这一种，连 MR 都不读。
+    const plain = forgeOver(["merge-requests", "merge", "merge-methods"]);
     expect(
       (
         await rejection(
-          stale.forge.merge(REPO, 12, {
+          plain.forge.merge(REPO, 12, {
             method: "rebase",
             headSha: GITLAB_FIXTURE.sha,
           }),
         )
       ).reason,
     ).toBe("MERGE_METHOD_UNSUPPORTED");
+    expect(plain.requests.map((r) => r.path)).toEqual(["/projects/acme%2Fapp"]);
 
     const raced = forgeOver(["merge-requests", "refusals"], ["head-changed"]);
     const error = await rejection(
@@ -371,6 +375,90 @@ describe("合并", () => {
         )
       ).reason,
     ).toBe("NOT_MERGEABLE");
+  });
+});
+
+describe("合并方式与变基", () => {
+  it("项目设置 → 能用的方式", () => {
+    expect(gitlabMergeMethods({ merge_method: "merge" })).toEqual([
+      "merge",
+      "squash",
+    ]);
+    expect(
+      gitlabMergeMethods({
+        merge_method: "rebase_merge",
+        squash_option: "default_on",
+      }),
+    ).toEqual(["merge", "rebase", "squash"]);
+    expect(
+      gitlabMergeMethods({ merge_method: "ff", squash_option: "never" }),
+    ).toEqual(["rebase"]);
+    expect(
+      gitlabMergeMethods({ merge_method: "ff", squash_option: "always" }),
+    ).toEqual(["squash"]);
+    // 老版本没有这两个字段：按合并提交、可 squash。
+    expect(gitlabMergeMethods({})).toEqual(["merge", "squash"]);
+  });
+
+  it("merge-options 读项目设置", async () => {
+    const { forge, requests } = forgeOver(
+      ["merge-methods"],
+      ["project-rebase-merge"],
+    );
+    expect(await forge.mergeOptions(REPO)).toEqual({
+      methods: ["merge", "rebase", "squash"],
+    });
+    expect(requests.map((r) => [r.method, r.path])).toEqual([
+      ["GET", "/projects/acme%2Fapp"],
+    ]);
+  });
+
+  it("源分支落后：先发变基、答 REBASE_STARTED，不在同一次里合", async () => {
+    const { forge, requests } = forgeOver(
+      ["merge-requests", "merge", "merge-methods"],
+      ["project-ff", "need-rebase"],
+    );
+    const error = await rejection(
+      forge.merge(REPO, 12, { method: "rebase", headSha: GITLAB_FIXTURE.sha }),
+    );
+    expect([error.kind, error.reason]).toEqual(["conflict", "REBASE_STARTED"]);
+    expect(requests.map((r) => [r.method, r.path])).toEqual([
+      ["GET", "/projects/acme%2Fapp"],
+      ["GET", "/projects/acme%2Fapp/merge_requests/12"],
+      ["PUT", "/projects/acme%2Fapp/merge_requests/12/rebase"],
+    ]);
+  });
+
+  it("不落后：照常带 sha 合并，不 squash，由项目设置快进", async () => {
+    const { forge, requests } = forgeOver(
+      ["merge-requests", "merge", "merge-methods"],
+      ["project-ff"],
+    );
+    expect(
+      await forge.merge(REPO, 12, {
+        method: "rebase",
+        headSha: GITLAB_FIXTURE.sha,
+      }),
+    ).toEqual({ merged: true, sha: GITLAB_FIXTURE.mergedSha });
+    const put = requests.find((r) => r.method === "PUT");
+    expect(put?.path).toBe("/projects/acme%2Fapp/merge_requests/12/merge");
+    expect(put?.body).toEqual({ sha: GITLAB_FIXTURE.sha, squash: false });
+    expect(requests.some((r) => r.path.endsWith("/rebase"))).toBe(false);
+  });
+
+  it("head 变了时不发变基", async () => {
+    const { forge, requests } = forgeOver(
+      ["merge-requests", "merge-methods"],
+      ["project-ff", "need-rebase"],
+    );
+    const error = await rejection(
+      forge.merge(REPO, 12, {
+        method: "rebase",
+        headSha: GITLAB_FIXTURE.oldSha,
+      }),
+    );
+    expect(error.reason).toBe("HEAD_CHANGED");
+    expect(requests.some((r) => r.method === "PUT")).toBe(false);
   });
 });
 

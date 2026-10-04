@@ -69,6 +69,8 @@ export const forge: MessageModule = {
     "forge.failure.unsupported": "这个 Host 没有托管平台服务",
     "forge.failure.network": "连不上 Host",
     "forge.failure.failed": "请求失败",
+    "forge.failure.rebaseStarted":
+      "已开始变基，没有合并；等新的 head 出来再核对",
 
     "forge.settings.others": "其他平台",
     "forge.settings.empty": "还没有配置",
@@ -159,6 +161,8 @@ export const forge: MessageModule = {
     "forge.failure.unsupported": "This Host has no hosting platform service",
     "forge.failure.network": "Cannot reach the Host",
     "forge.failure.failed": "Request failed",
+    "forge.failure.rebaseStarted":
+      "Rebase started, nothing merged; review the new head when it appears",
 
     "forge.settings.others": "Other platforms",
     "forge.settings.empty": "Nothing configured yet",

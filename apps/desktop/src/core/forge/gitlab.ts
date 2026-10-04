@@ -16,7 +16,11 @@
  *   * 检查用 commit statuses（流水线的作业也写在这里），同名只留 id 最大的那条；
  *     允许失败的作业失败记 `neutral`。
  *   * 合并：`PUT …/merge` 带 `sha`，远端 head 变了就 409；`squash` 对应
- *     `squash: true`；`rebase` 在 GitLab 是另一个异步动作，这里不接。
+ *     `squash: true`。能用哪几种看项目的 `merge_method` / `squash_option`
+ *     （{@link GitlabForge.mergeOptions}）。`rebase` 只在项目要线性历史
+ *     （`ff` / `rebase_merge`）时有：源分支落后目标时先发 `PUT …/rebase`
+ *     （异步），答 `REBASE_STARTED`——变基会换 head，评审者要先看新的 head
+ *     再合；不落后就照常 `PUT …/merge`，由项目设置决定快进或半线性。
  *   * 草稿：建草稿 MR 加标题前缀 `Draft: `，读时看 `draft`。
  */
 
@@ -32,7 +36,9 @@ import {
   type ForgeFileStatus,
   type ForgeIssue,
   type ForgeIssueState,
+  type ForgeMergeMethod,
   type ForgeMergeable,
+  type ForgeMergeOptions,
   type ForgeMerged,
   type ForgePage,
   type ForgePull,
@@ -143,6 +149,30 @@ interface WireMergeRequest {
   merged_at?: string | null;
   merge_commit_sha?: string | null;
   squash_commit_sha?: string | null;
+}
+
+/**
+ * 项目设置 → 能用的合并方式。`merge_method`：`merge`（合并提交）只有 merge；
+ * `rebase_merge`（半线性）有 merge 与「先变基再合」；`ff`（只快进）只有 rebase。
+ * `squash_option`：`never` 去掉 squash，`always` 只剩 squash，其余加上 squash。
+ */
+export function gitlabMergeMethods(project: {
+  merge_method?: string;
+  squash_option?: string;
+}): ForgeMergeMethod[] {
+  if (project.squash_option === "always") return ["squash"];
+  const methods: ForgeMergeMethod[] =
+    project.merge_method === "ff"
+      ? ["rebase"]
+      : project.merge_method === "rebase_merge"
+        ? ["merge", "rebase"]
+        : ["merge"];
+  if (project.squash_option !== "never") methods.push("squash");
+  return methods;
+}
+interface WireProject {
+  merge_method?: string;
+  squash_option?: string;
 }
 interface WireDiff {
   old_path?: string;
@@ -417,10 +447,25 @@ export class GitlabForge implements Forge {
   }
 
   async getPull(repo: ForgeRepo, number: number): Promise<ForgePull> {
+    return toPull(await this.rawPull(repo, number));
+  }
+
+  private async rawPull(
+    repo: ForgeRepo,
+    number: number,
+  ): Promise<WireMergeRequest> {
     const response = await this.http.get(
       projectPath(repo, `/merge_requests/${numbered(number)}`),
     );
-    return toPull(decodeJson<WireMergeRequest>(response));
+    return decodeJson<WireMergeRequest>(response);
+  }
+
+  private async project(repo: ForgeRepo): Promise<WireProject> {
+    return decodeJson<WireProject>(await this.http.get(projectPath(repo)));
+  }
+
+  async mergeOptions(repo: ForgeRepo): Promise<ForgeMergeOptions> {
+    return { methods: gitlabMergeMethods(await this.project(repo)) };
   }
 
   async createPull(
@@ -514,14 +559,29 @@ export class GitlabForge implements Forge {
   ): Promise<ForgeMerged> {
     if (!validSha(input.headSha)) throw forgeError("invalid", "SHA_INVALID");
     if (input.method === "rebase") {
-      throw forgeError("invalid", "MERGE_METHOD_UNSUPPORTED");
+      const methods = gitlabMergeMethods(await this.project(repo));
+      if (!methods.includes("rebase")) {
+        throw forgeError("invalid", "MERGE_METHOD_UNSUPPORTED");
+      }
     }
-    const before = await this.getPull(repo, number);
+    const raw = await this.rawPull(repo, number);
+    const before = toPull(raw);
     if (before.state === "merged")
       throw forgeError("conflict", "ALREADY_MERGED");
     if (before.state !== "open") throw forgeError("conflict", "NOT_OPEN");
     if (before.headSha !== input.headSha) {
       throw forgeError("conflict", "HEAD_CHANGED");
+    }
+    if (
+      input.method === "rebase" &&
+      raw.detailed_merge_status === "need_rebase"
+    ) {
+      // 变基是异步的，而且会换 head：发出去就停，不在同一次请求里接着合。
+      await this.http.write(
+        "PUT",
+        projectPath(repo, `/merge_requests/${numbered(number)}/rebase`),
+      );
+      throw forgeError("conflict", "REBASE_STARTED");
     }
     let response;
     try {

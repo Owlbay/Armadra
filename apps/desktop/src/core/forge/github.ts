@@ -23,6 +23,7 @@ import {
   type GithubRepositoryRef,
 } from "../github/types";
 import {
+  ALL_MERGE_METHODS,
   type CreatePullInput,
   DEFAULT_LIMIT,
   type Forge,
@@ -33,6 +34,7 @@ import {
   type ForgeFileStatus,
   type ForgeIssue,
   type ForgeIssueState,
+  type ForgeMergeOptions,
   type ForgeMerged,
   type ForgePage,
   type ForgePull,
@@ -430,5 +432,9 @@ export class GithubForge implements Forge {
       );
       return { merged: true as const, sha };
     });
+  }
+
+  async mergeOptions(_repo: ForgeRepo): Promise<ForgeMergeOptions> {
+    return { methods: ALL_MERGE_METHODS };
   }
 }

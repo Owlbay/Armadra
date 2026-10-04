@@ -95,6 +95,18 @@ export interface ForgeMerged {
   readonly sha: string | null;
 }
 
+/** 这个仓库现在能用的合并方式（契约 §29.4 `merge-options`）。 */
+export interface ForgeMergeOptions {
+  readonly methods: readonly ForgeMergeMethod[];
+}
+
+/** 三种都给：GitHub 与 Gitea 不再按仓库设置细分。 */
+export const ALL_MERGE_METHODS: readonly ForgeMergeMethod[] = [
+  "merge",
+  "squash",
+  "rebase",
+];
+
 export interface ForgePage<T> {
   readonly items: readonly T[];
   /** 下一页的页码串；没有下一页时 `null`。游标是页码，从不是远端 URL。 */
@@ -150,6 +162,7 @@ export interface Forge {
     number: number,
     input: MergeInput,
   ): Promise<ForgeMerged>;
+  mergeOptions(repo: ForgeRepo): Promise<ForgeMergeOptions>;
 }
 
 /**

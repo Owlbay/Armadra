@@ -2011,6 +2011,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 | `GET pulls/{number}/files`  |                                                                    | `{ files: [file…] }`（至多 300 个）                   |
 | `GET pulls/{number}/checks` |                                                                    | checks                                                |
 | `POST pulls/{number}/merge` | `{ method?: "merge"\|"squash"\|"rebase", headSha }`                | `{ merged: true, sha }`                               |
+| `GET merge-options`         |                                                                    | `{ methods: ("merge"\|"squash"\|"rebase")[] }`        |
 
 - issue：`{ number, title, body, state: "open"|"closed", author, labels: string[], commentCount, url, createdAtMs, updatedAtMs, closedAtMs }`。同一编号空间里的 PR 不算 issue（读、改都答 404）。
 - pull：`{ number, title, body, state: "open"|"closed"|"merged", draft, author, baseRef, headRef, headSha, mergeable: "mergeable"|"conflicting"|"unknown", url, createdAtMs, updatedAtMs, mergedAtMs }`。
@@ -2034,6 +2035,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 | 502  | `forge_credential_rejected` | 远端不认令牌（远端 401；不答 401，免得页面以为自己的会话过期）                              |
 | 502  | `forge_unavailable`         | 连不上、远端 5xx、答复坏了                                                                  |
 | 504  | `unknown_outcome`           | 写已发出、结果没读到：重新读再决定，不要直接重试                                            |
+| 409  | `rebase_started`            | GitLab 的 `rebase` 先发出了变基（§29.6）：没有合并，head 会变，读到新 head 核对后再合       |
 
 出站登记在 `core/net/outbound.ts` 的 `forgeApi`（地址是用户配的，不配置即不联网）。
 
@@ -2049,7 +2051,8 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 - **列表的 `closed`**：GitLab 的 MR `state=closed` 不含已合并，core 按 `all` 取再滤掉开着的，所以一页可能不满；`nextCursor` 仍是远端的下一页。
 - **文件**：来自 `merge_requests/{iid}/diffs`（GitLab 15.7 起），按页取到 300 个；`additions` / `deletions` 从补丁里数；没有 `@@` 的（二进制、过大被折叠、纯改名）`patch` 为 `null`。
 - **检查**：commit statuses（流水线作业也在这里），同名只留 id 最大的；`success` → success，`failed` → failure（`allow_failure` 的 → neutral），`canceled` → failure，`skipped` / `manual` → neutral，其余 → pending。
-- **合并**：`PUT …/merge` 带 `sha: headSha`（远端 head 变了答 409 → `conflict`），`method: "squash"` 对应 `squash: true`；`rebase` 在 GitLab 是另一个异步动作，这一面答 `bad_request`。远端 405 / 422（草稿、流水线未过、冲突）→ `conflict`。答复里的 MR 还没到 `merged`（排进了合并队列）时答 `unknown_outcome`：重新读再决定。
+- **合并**：`PUT …/merge` 带 `sha: headSha`（远端 head 变了答 409 → `conflict`），`method: "squash"` 对应 `squash: true`。
+- **合并方式**：`GET merge-options` 读项目的 `merge_method` / `squash_option`：`merge`（合并提交）→ `merge`；`rebase_merge`（半线性）→ `merge`、`rebase`；`ff`（只快进）→ `rebase`；再按 `squash_option` 加上 `squash`（`never` 不加，`always` 只剩 `squash`）。Gitea 与 GitHub 不细分，三种都给、不发请求。`method: "rebase"` 只在项目有这一种时收（否则 `bad_request`）：MR 的 `detailed_merge_status` 是 `need_rebase` 时先发 `PUT …/rebase`（异步）并答 `409 rebase_started`——变基会换 head，评审者读到新 head 核对后再合；不落后就照常 `PUT …/merge`（不带 `squash`），由项目设置快进或带合并提交。远端 405 / 422（草稿、流水线未过、冲突）→ `conflict`。答复里的 MR 还没到 `merged`（排进了合并队列）时答 `unknown_outcome`：重新读再决定。
 - **范围不足**：403 的答复里 `error` 是 `insufficient_scope`（经典令牌）或 `insufficient_granular_scope`（细粒度令牌）时答 `403 forge_scope`；别的 403 仍是 `forge_forbidden`。远端的说明文字不往外传。
 - **外部连接**：`GithubExternalReference.forge` 为 `gitea` / `gitlab` 时（§5.2），仓库必须正是这台机器对它识别出的那个平台，`apiBase` 取自配置（请求里给了别的根就拒绝）；GitHub 的 issue / PR 详情只列 `forge: github` 的连接。
 

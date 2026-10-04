@@ -156,6 +156,12 @@ export const forgeMergedSchema = z.object({
   sha: z.string().nullable(),
 });
 
+/** `GET …/merge-options` (§29.4): the methods this repository accepts now. */
+export const forgeMergeOptionsSchema = z.object({
+  methods: z.array(z.enum(["merge", "squash", "rebase"])),
+});
+export type ForgeMergeOptions = z.infer<typeof forgeMergeOptionsSchema>;
+
 /** Refusal codes of `/api/forge/*` besides the shared ones (§29.5). */
 export const FORGE_ERROR_CODES = [
   "forge_not_configured",
@@ -166,4 +172,5 @@ export const FORGE_ERROR_CODES = [
   "unknown_outcome",
   "rate_limited",
   "conflict",
+  "rebase_started",
 ] as const;

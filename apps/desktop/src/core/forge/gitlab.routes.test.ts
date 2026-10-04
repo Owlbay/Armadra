@@ -83,6 +83,7 @@ async function harness(pick: string[] = []): Promise<Harness> {
       "merge",
       "refusals",
       "subgroups",
+      "merge-methods",
     ],
     pick,
   );
@@ -376,6 +377,31 @@ describe("读写", () => {
       status: 400,
       body: { code: "bad_request" },
     });
+  });
+
+  it("merge-options 按项目设置；变基先发出时答 409 rebase_started", async () => {
+    const plain = await harness();
+    await configure(plain);
+    expect(
+      (await plain.call("GET", `${REPO_PATH}/merge-options`)).body,
+    ).toEqual({ methods: ["merge", "squash"] });
+
+    const h = await harness(["project-rebase-merge", "need-rebase"]);
+    await configure(h);
+    expect((await h.call("GET", `${REPO_PATH}/merge-options`)).body).toEqual({
+      methods: ["merge", "rebase", "squash"],
+    });
+    const started = await h.call("POST", `${REPO_PATH}/pulls/12/merge`, {
+      method: "rebase",
+      headSha: GITLAB_FIXTURE.sha,
+    });
+    expect(started).toMatchObject({
+      status: 409,
+      body: { code: "rebase_started" },
+    });
+    expect(
+      h.tape.requests.filter((r) => r.method === "PUT").map((r) => r.path),
+    ).toEqual(["/projects/acme%2Fapp/merge_requests/12/rebase"]);
   });
 
   it("细粒度令牌缺范围：403 forge_scope，远端原话不外传", async () => {

@@ -82,6 +82,7 @@ const forgeApi = vi.hoisted(() => ({
   forgePullChecks: vi.fn(),
   mergeForgePull: vi.fn(),
   createForgePull: vi.fn(),
+  forgeMergeOptions: vi.fn(),
 }));
 
 vi.mock("../../api/forge", async (original) => ({
@@ -1151,6 +1152,52 @@ describe("Gitea and GitLab remotes (§29)", () => {
         { method: "squash", headSha: MR_SHA },
       ),
     );
+  });
+
+  it("GitLab: offers the project's own merge methods; a started rebase is not a failure", async () => {
+    ready(client());
+    forgeApi.resolveForge.mockResolvedValue(detection("gitlab"));
+    forgeApi.forgePulls.mockResolvedValue({
+      items: [forgePull(12, "Login rework")],
+      nextCursor: null,
+    });
+    forgeApi.forgePull.mockResolvedValue(forgePull(12, "Login rework"));
+    forgeApi.forgePullFiles.mockResolvedValue([]);
+    forgeApi.forgePullChecks.mockResolvedValue({
+      headSha: MR_SHA,
+      rollup: "none",
+      checks: [],
+    });
+    forgeApi.forgeMergeOptions.mockResolvedValue(["rebase"]);
+    forgeApi.mergeForgePull.mockRejectedValue(
+      new RuntimeRequestError(409, "已开始变基", "rebase_started"),
+    );
+    renderDrawer();
+    await resolveRemote("git@git.example.test:acme/app.git");
+    fireEvent.click(await screen.findByText("Login rework"));
+    await waitFor(() => {
+      const select = document.querySelector(
+        "[data-slot=forge-merge] select",
+      ) as HTMLSelectElement | null;
+      expect(
+        [...(select?.options ?? [])].map((option) => option.value),
+      ).toEqual(["rebase"]);
+    });
+    fireEvent.click(screen.getByText(/^合并 · /));
+    fireEvent.click(await screen.findByRole("button", { name: "合并" }));
+    await waitFor(() =>
+      expect(forgeApi.mergeForgePull).toHaveBeenCalledWith(
+        { host: "git.example.test", owner: "acme", name: "app" },
+        12,
+        { method: "rebase", headSha: MR_SHA },
+      ),
+    );
+    await waitFor(() =>
+      expect(toasts.message).toHaveBeenCalledWith(
+        "已开始变基，没有合并；等新的 head 出来再核对",
+      ),
+    );
+    expect(toasts.error).not.toHaveBeenCalled();
   });
 
   it("GitLab subgroup: shows the full namespace and lists under it", async () => {

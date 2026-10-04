@@ -37,6 +37,7 @@ export const FORGE_ROUTES = {
   pullFiles: `${REPO}/pulls/{number}/files`,
   pullChecks: `${REPO}/pulls/{number}/checks`,
   pullMerge: `${REPO}/pulls/{number}/merge`,
+  mergeOptions: `${REPO}/merge-options`,
 } as const;
 
 const MERGE_METHODS: readonly ForgeMergeMethod[] = [
@@ -84,6 +85,13 @@ export function forgeFailure(error: unknown): HandlerResult {
     case "scopeMissing":
       return coreError(403, "forge_scope", "这个令牌缺少所需的范围");
     case "conflict":
+      if (error.reason === "REBASE_STARTED") {
+        return coreError(
+          409,
+          "rebase_started",
+          "已开始变基，没有合并；等新的 head 出来、核对后再合",
+        );
+      }
       return coreError(
         409,
         "conflict",
@@ -363,6 +371,17 @@ export function installRoutes(server: CoreServer, service: ForgeService): void {
       return {
         status: 200,
         body: await service.forgeFor(repo).checks(repo, number),
+      };
+    }),
+  );
+  router.handle(
+    "GET",
+    FORGE_ROUTES.mergeOptions,
+    guarded(async (match) => {
+      const repo = repoOf(match);
+      return {
+        status: 200,
+        body: await service.forgeFor(repo).mergeOptions(repo),
       };
     }),
   );

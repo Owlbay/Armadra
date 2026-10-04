@@ -1277,4 +1277,10 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/merge-options",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
 ];

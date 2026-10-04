@@ -36,7 +36,9 @@ import {
   createForgePull,
   forgeFailureKey,
   forgeIssue,
+  forgeFailure,
   forgeIssues,
+  forgeMergeOptions,
   forgePull,
   forgePullChecks,
   forgePullFiles,
@@ -74,6 +76,8 @@ export const forgeKeys = {
     ["forge", "files", repoKey(repo), number] as const,
   checks: (repo: ForgeRepo, number: number) =>
     ["forge", "checks", repoKey(repo), number] as const,
+  mergeOptions: (repo: ForgeRepo) =>
+    ["forge", "merge-options", repoKey(repo)] as const,
 };
 
 function when(ms: number | null, locale: string): string {
@@ -564,8 +568,21 @@ export function PullBody({
 }) {
   const t = useT();
   const client = useQueryClient();
-  const methods = mergeMethods(forge);
-  const [method, setMethod] = React.useState<ForgeMergeMethod>("merge");
+  const options = useQuery({
+    queryKey: forgeKeys.mergeOptions(repo),
+    queryFn: () => forgeMergeOptions(repo),
+    enabled: canWrite && pull.state === "open",
+    retry: false,
+    staleTime: 60_000,
+  });
+  // GitLab 按项目设置给（只快进的项目只有 rebase）；问不到时退回平台缺省。
+  const methods =
+    options.data && options.data.length > 0
+      ? options.data
+      : mergeMethods(forge);
+  const [picked, setPicked] = React.useState<ForgeMergeMethod>("merge");
+  const method = methods.includes(picked) ? picked : (methods[0] ?? "merge");
+  const setMethod = setPicked;
   const [confirm, setConfirm] = React.useState(false);
   const files = useQuery({
     queryKey: forgeKeys.files(repo, pull.number),
@@ -584,7 +601,15 @@ export function PullBody({
       toast.success(t("forge.merge.done"));
       void client.invalidateQueries({ queryKey: forgeKeys.all });
     },
-    onError: (error) => toast.error(t(forgeFailureKey(error))),
+    onError: (error) => {
+      // 变基已发出：不是失败，等新的 head 出来、核对后再合。
+      if (forgeFailure(error) === "rebaseStarted") {
+        toast.message(t(forgeFailureKey(error)));
+        void client.invalidateQueries({ queryKey: forgeKeys.all });
+        return;
+      }
+      toast.error(t(forgeFailureKey(error)));
+    },
   });
 
   return (

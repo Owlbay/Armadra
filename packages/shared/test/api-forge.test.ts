@@ -5,6 +5,7 @@ import {
   forgeDetectionSchema,
   forgeFilesSchema,
   forgeIssuePageSchema,
+  forgeMergeOptionsSchema,
   forgeMergedSchema,
   forgePullSchema,
   mergeForgePullSchema,
@@ -135,6 +136,12 @@ describe("forge API", () => {
     expect(forgeMergedSchema.parse({ merged: true, sha: null }).merged).toBe(
       true,
     );
+    expect(
+      forgeMergeOptionsSchema.parse({ methods: ["rebase", "squash"] }).methods,
+    ).toEqual(["rebase", "squash"]);
+    expect(
+      forgeMergeOptionsSchema.safeParse({ methods: ["fast-forward"] }).success,
+    ).toBe(false);
     expect(mergeForgePullSchema.safeParse({ headSha: "abc" }).success).toBe(
       false,
     );

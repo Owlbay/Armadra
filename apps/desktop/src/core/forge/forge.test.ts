@@ -551,6 +551,12 @@ describe("/api/forge/repos/…（§29.4）", () => {
       status: 200,
       body: { merged: true, sha: "d".repeat(40) },
     });
+    // Gitea 不按仓库设置细分合并方式：三种都给，不发请求。
+    const before = h.gitea.requests.length;
+    expect((await h.call("GET", `${REPO_PATH}/merge-options`)).body).toEqual({
+      methods: ["merge", "squash", "rebase"],
+    });
+    expect(h.gitea.requests.length).toBe(before);
     const pulls = await h.call("GET", `${REPO_PATH}/pulls`, undefined, {
       state: "closed",
     });

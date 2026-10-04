@@ -10,6 +10,7 @@
  */
 
 import {
+  ALL_MERGE_METHODS,
   type CreatePullInput,
   DEFAULT_LIMIT,
   type Forge,
@@ -20,6 +21,7 @@ import {
   type ForgeFileStatus,
   type ForgeIssue,
   type ForgeIssueState,
+  type ForgeMergeOptions,
   type ForgeMerged,
   type ForgePage,
   type ForgePull,
@@ -463,5 +465,10 @@ export class GiteaForge implements Forge {
     } catch {
       return { merged: true, sha: null };
     }
+  }
+
+  /** 不按仓库的 `allow_*` 细分：远端不收的方式由合并本身答 405 / 422。 */
+  async mergeOptions(_repo: ForgeRepo): Promise<ForgeMergeOptions> {
+    return { methods: ALL_MERGE_METHODS };
   }
 }

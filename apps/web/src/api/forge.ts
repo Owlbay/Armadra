@@ -12,6 +12,7 @@ import {
   forgeFilesSchema,
   forgeIssuePageSchema,
   forgeIssueSchema,
+  forgeMergeOptionsSchema,
   forgeMergedSchema,
   forgePullPageSchema,
   forgePullSchema,
@@ -57,6 +58,7 @@ export type ForgeFailure =
   | "conflict"
   | "rateLimited"
   | "unknownOutcome"
+  | "rebaseStarted"
   | "invalid"
   | "unavailable"
   | "unsupported"
@@ -84,6 +86,8 @@ export function forgeFailure(error: unknown): ForgeFailure {
       return "rateLimited";
     case "unknown_outcome":
       return "unknownOutcome";
+    case "rebase_started":
+      return "rebaseStarted";
     case "bad_request":
       return "invalid";
     case "forge_unavailable":
@@ -243,6 +247,15 @@ export function mergeForgePull(
   });
 }
 
+/** 这个仓库现在能用的合并方式（GitLab 按项目设置，§29.6）。 */
+export async function forgeMergeOptions(
+  repo: ForgeRepo,
+): Promise<ForgeMergeMethod[]> {
+  return (
+    await request(`${repoPath(repo)}/merge-options`, forgeMergeOptionsSchema)
+  ).methods;
+}
+
 /** 平台显示名：品牌名不翻译。 */
 export const FORGE_NAMES: Record<string, string> = {
   github: "GitHub",
@@ -250,7 +263,7 @@ export const FORGE_NAMES: Record<string, string> = {
   gitlab: "GitLab",
 };
 
-/** 各平台能用的合并方式：GitLab 的 rebase 是另一个异步动作，不接。 */
+/** 问不到 `merge-options`（旧 core）时各平台的合并方式。 */
 export function mergeMethods(forge: string): ForgeMergeMethod[] {
   return forge === "gitlab"
     ? ["merge", "squash"]
