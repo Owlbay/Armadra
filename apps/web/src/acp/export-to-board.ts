@@ -16,6 +16,9 @@
  *
  * 每条路的画布改动都是一段同步代码，包在一个合并会话里：一次操作一条历史，
  * 撤销一次全回。异步的部分（写文件、渲染、上传）全在合并会话之前做完。
+ *
+ * 代码块写在来源 Agent 的工作目录里（core 按该节点的会话找，契约 §14.5），
+ * 远端工作空间写在执行主机上。建出的节点亮一次未读光晕（`canvas/node-flash`）。
  */
 import type { ContentSource, Position, Size } from "@armadra/shared";
 import { MAX_STICKY_CONTENT } from "@armadra/shared";
@@ -24,6 +27,7 @@ import { toast } from "sonner";
 import { t } from "@/app/preferences-store";
 import { createContentReference } from "@/canvas/create-content-reference";
 import { revealCreatedNode } from "@/canvas/created-node";
+import { flashNodes } from "@/canvas/node-flash";
 import { nodeDropPosition } from "@/canvas/placement";
 import { uploadAsset } from "@/canvas/assets";
 import {
@@ -247,6 +251,7 @@ export function exportSticky(
   });
   if (!id) return null;
   revealCreatedNode(id);
+  flashNodes([id]);
   return { nodeIds: [id], itemIds: [] };
 }
 
@@ -314,6 +319,7 @@ export async function exportCode(
   });
   if (ids.length === 0) return null;
   revealCreatedNode(ids[0] as string);
+  flashNodes(ids);
   return { nodeIds: ids, itemIds: [] };
 }
 
