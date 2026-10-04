@@ -3,7 +3,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
 import { EventBus } from "../bus";
-import { type OpenedDatabase, openDatabase } from "../db/open";
+import type { OpenedDatabase } from "../db/open";
+import { openFreshDatabase } from "../db/fresh.fixture";
 import { CoreServer } from "../http/server";
 import type { CoreRequest } from "../http/router";
 import type { CoreContext } from "../main";
@@ -56,10 +57,10 @@ export function fixture(
   // refuses a path any segment of which is a link. A test must exercise that
   // rule with a crafted link, not trip over the platform's own.
   const directory = canonicalize(tempDir("armadra-core-"));
-  const opened: OpenedDatabase = openDatabase({
-    file: join(directory, "canvas.db"),
-    migrationsDir: migrationsDir(),
-  });
+  const opened: OpenedDatabase = openFreshDatabase(
+    join(directory, "canvas.db"),
+    migrationsDir(),
+  );
   const log = createLog("error");
   const platform = nodePlatform({
     dataDir: directory,

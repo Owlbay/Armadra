@@ -6,7 +6,8 @@ import type { DatabaseSync } from "node:sqlite";
 import type { WorkspaceEvent } from "../bus";
 import { createBoard } from "../canvas/boards";
 import { getContextLinks, putContextLinks } from "../canvas/context-links";
-import { type OpenedDatabase, openDatabase } from "../db/open";
+import type { OpenedDatabase } from "../db/open";
+import { openFreshDatabase } from "../db/fresh.fixture";
 import { createLog } from "../platform";
 import { type Caller, loadNode } from "../collab/nodes";
 import type { AgentSettings, CustomAgent } from "../agent/registry";
@@ -65,10 +66,10 @@ export function browserFixture(
   const directory = canonicalize(
     mkdtempSync(join(tmpdir(), "armadra-browser-")),
   );
-  const opened: OpenedDatabase = openDatabase({
-    file: join(directory, "canvas.db"),
-    migrationsDir: migrationsDir(),
-  });
+  const opened: OpenedDatabase = openFreshDatabase(
+    join(directory, "canvas.db"),
+    migrationsDir(),
+  );
   const database = opened.database;
   const workspace = createWorkspace(database, {
     name: "fixture",

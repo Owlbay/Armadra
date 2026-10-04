@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openDatabase } from "../db/open";
+import { openFreshDatabase } from "../db/fresh.fixture";
 import { AccountsService } from "../identity/accounts";
 import { type AuthorizationSubject, Authorizer } from "../identity/authorize";
 import { scope } from "../identity/scopes";
@@ -39,10 +39,10 @@ export interface FixtureOptions {
 
 export function pushFixture(options: FixtureOptions = {}) {
   const dataDir = tempDir("armadra-push-");
-  const opened = openDatabase({
-    file: join(dataDir, "canvas.db"),
-    migrationsDir: resolve(here, "../db/migrations"),
-  });
+  const opened = openFreshDatabase(
+    join(dataDir, "canvas.db"),
+    resolve(here, "../db/migrations"),
+  );
   const database = opened.database;
   const store = new IdentityStore(database);
   const identity = new IdentityService(store, INSTANCE);
