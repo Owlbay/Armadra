@@ -1,4 +1,5 @@
-import type { CanvasNode, WorkflowDraftRow } from "@armadra/shared";
+import type { AgentState, CanvasNode, WorkflowDraftRow } from "@armadra/shared";
+import type { DispatchTask } from "@/coordinator/api";
 
 /**
  * `coordinator` 分区的假数据（设计展示页 §2.1，设计系统 §5.4）：ama 派出三个
@@ -70,6 +71,69 @@ export const BODY_LINES: Record<string, string> = {
   [COORDINATOR_IDS.working]: "> 读取 src/y/store.ts",
   [COORDINATOR_IDS.failed]: "✗ 本轮失败：上下文超限",
 };
+
+/** 分派抽屉（设计系统 §5.4）：三个成员的任务行，失败那行可重试。 */
+function task(
+  nodeId: string,
+  runnerId: string,
+  patch: Partial<DispatchTask>,
+): DispatchTask {
+  return {
+    taskId: `sess:${runnerId}`,
+    coordinatorNodeId: COORDINATOR_IDS.lead,
+    runnerId,
+    nodeId,
+    status: "running",
+    startedAt: AT,
+    endedAt: null,
+    reason: null,
+    retryable: false,
+    ...patch,
+  };
+}
+
+export const DISPATCH_NOW = Date.parse("2026-10-03T09:14:00.000Z");
+
+export const DISPATCH_TASKS: DispatchTask[] = [
+  task(COORDINATOR_IDS.done, "claude", {
+    status: "done",
+    endedAt: "2026-10-03T09:12:00.000Z",
+  }),
+  task(COORDINATOR_IDS.working, "codex", {
+    startedAt: "2026-10-03T09:01:00.000Z",
+  }),
+  task(COORDINATOR_IDS.failed, "pi", {
+    status: "failed",
+    startedAt: "2026-10-03T09:02:00.000Z",
+    endedAt: "2026-10-03T09:05:30.000Z",
+    reason: "turnFailed",
+    retryable: true,
+  }),
+];
+
+export const DISPATCH_STATES: Record<string, AgentState> = {
+  [COORDINATOR_IDS.lead]: "working",
+  [COORDINATOR_IDS.working]: "working",
+};
+
+/** ama 输出到画板的汇总便签。 */
+export const SUMMARY_NODE: CanvasNode = {
+  id: "00000000-0000-4000-8000-0000000000c5",
+  boardId: BOARD,
+  type: "sticky",
+  title: "审查结论",
+  color: "#0a84ff",
+  labels: [],
+  note: "",
+  position: { x: 0, y: 0 },
+  data: {
+    kind: "sticky",
+    content: "",
+    source: { nodeId: COORDINATOR_IDS.lead, sessionId: "ama" },
+  },
+  createdAt: AT,
+  updatedAt: AT,
+} as CanvasNode;
 
 export const DRAFT: WorkflowDraftRow = {
   id: "draft-1",

@@ -914,11 +914,27 @@ G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：�
 - `failed` 的 `reason`：`nodeDeleted`、`turnFailed` / `turnInterrupted`、投递排队项过期或被取消时它最后一次的码（如 `TARGET_STARTING`）。
 - `events`：游标之后成员发出的、键是 `task:<taskId>` 或以 `task:<taskId>:` 开头的 `post`（`seq` 是收件箱序号，递增，一次最多 32 条，不漏不重），以及状态变化（`agent_status.state` 与游标里记的不同才报一条）。没有新事件、也没结束时，请求挂到 `timeout` 再答当时的状态；`since` 不变。
 - `since` 是不透明字符串（现为 `<post 序号>-<状态>`），调用方原样带回。
-- 结束（`done` / `failed`）时 core 写 `workflow_task_runs` 的 `status`、`ended_at` 与 `result_json`（`{ text }` 或 `{ reason }`，只写第一次），并把那条结果 `post` 标成已收——runner 已替协调者取走它，收件箱唤醒不再提示一遍。
+- 结束（`done` / `failed`）时 core 写 `workflow_task_runs` 的 `status`、`ended_at` 与 `result_json`（`{ text }` 或 `{ reason }`，只写第一次），并把那条结果 `post` 标成已收——runner 已替协调者取走它，收件箱唤醒不再提示一遍。带 `task` 起的任务在开始时就写 `result_json.task`（第一条任务的正文，G5-09 追加），结束写的 `text` / `reason` 与它并存，换绑与重试都保留它；它只给 §15.7 的重试用，不出现在任何答复里。
 
 **`help`** 的 `result` 多一个 `agents`：这台机器上 `open-agent --agent` 认的 id（内置的与设置里的 `custom:*`）。ama 的适配器为其中每个内置 CLI（`ama` 除外：ama 把名为 `ama` 的 runner 当成它自己的子会话）与每个 `custom:*` 注册一个 runner。
 
 **审批**：`ama` 节点也注入 `ARMADRA_PERM_WAIT_SECS`（与 Claude 同一个开关 `hooks.replyApprovals`，ACP 会话不注入）。适配器的审批回答者按 §5.5 写 `<pending>/<id>.json`、带 `pendingId` 报 `tool_approval_requested`，轮询 `<id>.answer`；请求文件与上报只有工具名与原因，不带工具输入。等不到就让给 ama 自己在终端里的对话框。
+
+### 15.7 分派抽屉：`/api/workflows/tasks`
+
+协调者（ama）经 §15.5 分派出去的任务，页面右侧「分派」抽屉读这一面（设计系统 §5.4，G5-09）。
+
+| 方法与路径                                 | 说明                                                                                                   |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `GET /api/workflows/tasks?boardId=`        | 协调者节点在这块画板上的任务行，新的在前，最多 200 行 → `{ tasks }`；缺 `boardId` 回 `400 bad_request` |
+| `POST /api/workflows/tasks/{taskId}/retry` | 把起任务时的正文从协调者节点再投给同一个成员节点 → `{ task }`（行回到 `running`、重新计时）            |
+
+任务行：`{ taskId, coordinatorNodeId, runnerId, nodeId, status, startedAt, endedAt, reason, retryable }`。`status` 同 §15.5（`running` / `done` / `failed` / `stopped`）；`reason` 是失败时记下的理由（`turnFailed` 等），否则 `null`；`retryable` = 失败或停止、且库里记着任务正文。任务正文与成员的结果正文都不进答复。
+
+- 重试走投递队列（`origin: "first-task"`，发起方是协调者节点），门链、租约与回执与 `canvas send` 相同，不替人回答任何提示。拒绝：没有这个任务 `404 not_found`；不是 `failed` / `stopped` `409 task_not_failed`；没记正文（不带 `--task` 起的）`409 task_prompt_missing`；成员节点已不在协调者那块画板上 `409 task_node_missing`；目标队伍满了 `409 queue_full`。
+- 权限：列表是 `canvas:read`（按 `boardId` 查画布），重试是 `agent:launch`（按任务的协调者节点查画布）；服务器壳的路由门在 `identity/route-access.ts`。
+- 没有专门的事件：抽屉开着时每 5 秒重读，`workflow.*` 帧到达时也重读。
+- 汇总便签由页面在画布文档里认：来源是这个协调者（`data.source.nodeId`）或与它连着线的便签。`canvas sticky` 写的便签自 G5-09 起带 `data.source = { nodeId: <写它的节点>, sessionId: "" }`。
 
 ## 16. 实时协同：`…/boards/{boardId}/sync` 与评论
 

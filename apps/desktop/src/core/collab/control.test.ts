@@ -201,6 +201,13 @@ describe("the verbs that add a node", () => {
       expect(node).toBeDefined();
       expect(node?.size).toBeUndefined();
     }
+    // 便签记下写它的节点：分派抽屉据此认出协调者的汇总（设计系统 §5.4）。
+    const written = document.nodes.find((entry) => entry.id === note);
+    expect(written?.data).toMatchObject({
+      kind: "sticky",
+      content: "hi",
+      source: { nodeId: me, sessionId: "" },
+    });
   });
 
   /**

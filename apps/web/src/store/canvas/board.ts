@@ -24,6 +24,7 @@ const WORK_PANELS = [
   "automation",
   "handoff",
   "workflow",
+  "dispatch",
   "problems",
   "usage",
 ] as const;

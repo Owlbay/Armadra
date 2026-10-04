@@ -45,6 +45,11 @@
 //   路（`POST /api/approvals/{id}/answer`）答「允许」→ 假 CLI 拿到允许、按键回报
 //   → 任务行 done、便签里是审批之后的结果。只在脚本化模型时跑。
 //
+// 页面上的分派抽屉（设计系统 §5.4，G5-09）：
+//   7. 起 Vite + 无头 Chrome 打开这块画布，点协调者节点头部的「N 成员」→ 右侧
+//      抽屉里列出这三次 `task` 的成员行（与 `workflow_task_runs` 同样是 done）
+//      与协调者写的汇总便签。只在脚本化模型时跑。
+//
 // 真模型（`--real-model`，C 档，`ARMADRA_E2E_REAL=1`）：同一条闭环交给真模型走。
 // 供应商与 key 从环境变量读（`ARMADRA_E2E_AMA_PROVIDER`，缺省 deepseek；
 // `ARMADRA_E2E_AMA_MODEL`，缺省 deepseek-chat；`ARMADRA_E2E_AMA_KEY` 必填；可选
@@ -89,6 +94,7 @@ import {
   selfTest,
   sleep,
   startIsolatedCore,
+  startPageStack,
   waitFor,
 } from "./lib.mjs";
 
@@ -547,7 +553,7 @@ async function setupCore(scratch, home, probeEnv) {
     environment,
     logName: "core-coordinator.log",
   });
-  return { api, data, project, hook, home, blocked };
+  return { api, data, project, hook, home, blocked, environment };
 }
 
 export default async function run() {
@@ -1286,6 +1292,65 @@ export default async function run() {
       blockedCalls.length === 0,
       blockedCalls.slice(0, 5),
     );
+
+    /* -------------------- 7. 页面：分派抽屉（G5-09） -------------------- */
+
+    if (!real) {
+      const taskRows = database
+        .prepare(
+          "SELECT node_id, status FROM workflow_task_runs WHERE coordinator_node_id = ?",
+        )
+        .all(lead.id);
+      const stack = await startPageStack(context.environment);
+      const page = await stack.open("coordinator");
+      page.drain();
+      await page.navigate(
+        `${stack.web}/?workspace=${workspace.id}&board=${board.id}`,
+      );
+      await page.settle();
+      const chip = `.react-flow__node[data-id="${lead.id}"] [data-slot="coordinator-members-chip"]`;
+      await page.waitFor(
+        `return !!document.querySelector(${JSON.stringify(chip)});`,
+        { what: "协调者节点头部的「N 成员」", timeout: 60_000 },
+      );
+      await page.evaluate(
+        `document.querySelector(${JSON.stringify(chip)}).click(); return 1;`,
+      );
+      await page
+        .waitFor(
+          `return document.querySelectorAll('[data-slot="dispatch-member"]').length >= ${taskRows.length} && !!document.querySelector('[data-slot="dispatch-summary"]');`,
+          { what: "分派抽屉里的成员行与汇总", timeout: 30_000 },
+        )
+        .catch(async (error) => {
+          await page.capture("11-dispatch-drawer-failed").catch(() => {});
+          throw error;
+        });
+      const drawer = await page.evaluate(`
+        const rows = [...document.querySelectorAll('[data-slot="dispatch-member"]')]
+          .map((row) => ({ nodeId: row.dataset.nodeId, tone: row.dataset.tone }));
+        const summaries = [...document.querySelectorAll('[data-slot="dispatch-summary"]')]
+          .map((row) => row.innerText.trim());
+        return { rows, summaries };
+      `);
+      s.check(
+        `抽屉里有这 ${taskRows.length} 次 task 的成员行，状态与任务行一致`,
+        taskRows.length === 3 &&
+          taskRows.every(
+            (row) =>
+              row.status === "done" &&
+              drawer.rows.some(
+                (item) => item.nodeId === row.node_id && item.tone === "done",
+              ),
+          ),
+        { taskRows, drawer },
+      );
+      s.check(
+        "抽屉里有协调者的汇总便签与「打开」",
+        drawer.summaries.length >= 1,
+        drawer.summaries,
+      );
+      await page.capture("11-dispatch-drawer");
+    }
 
     /* -------------------- 4. 画布外对照：同一 profile -------------------- */
 

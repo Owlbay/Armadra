@@ -1153,7 +1153,24 @@
 
 ## G5-09 协调者分派抽屉与完成节点边框（R-38、R-39）
 
-待填（第 3 组）。
+**做了什么**
+
+- core：`workflow_task_runs.result_json` 在起任务时就记 `task`（第一条任务正文，`open-agent --task`），结束写的 `text` / `reason` 与它并存，换绑与重试保留（不加迁移）。`GET /api/workflows/tasks?boardId=`（`canvas:read`）答协调者在这块板上的任务行，不带任何正文；`POST /api/workflows/tasks/{taskId}/retry`（`agent:launch`）把正文从协调者经投递队列再投给同一个成员、行回到 `running`（拒绝码 `task_not_failed` / `task_prompt_missing` / `task_node_missing` / `queue_full`）。服务器壳路由门按画板 / 任务的协调者节点查画布。契约 §15.7 新增，§15.5 追加一句。
+- `canvas sticky` 写的便签带 `data.source = { nodeId: <写它的节点>, sessionId: "" }`：便签头部出现「来自 ·<节点名>」，抽屉据此认出汇总。
+- 页面：`apps/web/src/coordinator/`（`DispatchDrawer` / `DispatchView` / `buildDispatch` / `MembersChip`）。工作面板新增 `dispatch`（右侧 `--drawer-w`，一次只开一个）；ama 节点头部「N 成员」点开。行：ama 一行 + 成员（任务行 ∪ 主从线下没有任务行的终端；左侧 2px Agent 色、状态胶囊、耗时、失败行「重试」，不能起 Agent 的人看到「只读」）+ 汇总便签「打开」；空态一句 +「对 ama 说」（选中、居中并聚焦 ama 终端）；离线顶部 `Alert`、整棵树置灰；抽屉开着每 5 秒重读，`workflow.*` 帧也重读。
+- `workflow/node-steps.tsx`：运行中的运行里已完成、且没有别的步骤在跑的角色节点画 1px `--success` 外框（`nodes.css` 用 `:has([data-workflow-done])`，选中时让给品牌色）。
+- 展示页 `coordinator` 分区换真组件：已完成成员的绿框、`DispatchView` 有数据 / 空 / 离线三态。
+
+**实测**
+
+- `routes.test`（列表、重试、三种拒绝、权限前缀）、`task-runs.test`（正文跨结束 / 换绑 / 重开保留）、`route-access.test`（任务列表与重试的成员权限）、`control.test`（便签来源）；`DispatchDrawer.test`（模型、五态、chip → 抽屉 → 重试）、`node-steps.test`（完成外框）。
+- `agent-e2e --only 11`：真 core + Vite + 无头 Chrome，点 lead 头部的「N 成员」，抽屉里三次 `task` 的成员行都是「已完成」、两个 `canvas_team` 成员「空闲」，汇总便签带「打开」。
+- `design-showcase --only=coordinator`：三视口两主题 6 张，对比度与控制台无错。
+
+**没做 / 限制**
+
+- 重试之后任务行回到 `running`，结束仍要协调者再 `wait` 才落库；协调者不再等时这一行停在「运行中」（胶囊按成员的 Agent 状态细分「需要你」）。
+- 抽屉没有专门的事件，靠 5 秒轮询；没带 `--task` 起的任务（以及本包之前起的任务）没有正文，不给「重试」。
 
 ## G5-10 推送补充（R-50、R-51、R-52）
 

@@ -19,7 +19,9 @@ import { workflowKeys } from "./store";
  */
 export const useWorkflowNodeSteps = create<{
   steps: Readonly<Record<string, number>>;
-}>(() => ({ steps: {} }));
+  /** 运行中的运行里已完成、且眼下没有别的步骤在跑的角色节点。 */
+  done?: Readonly<Record<string, true>>;
+}>(() => ({ steps: {}, done: {} }));
 
 /** 运行中的运行里，正在跑的步骤 → 节点 → 从 1 起的步号。 */
 export function nodeSteps(
@@ -34,6 +36,25 @@ export function nodeSteps(
     });
   }
   return steps;
+}
+
+/**
+ * 运行中的运行里，已经做完自己那一步的角色节点（设计系统 §4「完成的节点边框
+ * 1px `--success`」）。同一个节点还有一步在跑就不算——那时它画的是「第 n 步」。
+ */
+export function doneNodes(
+  runs: readonly WorkflowRunJson[],
+): Record<string, true> {
+  const running = nodeSteps(runs);
+  const done: Record<string, true> = {};
+  for (const run of runs) {
+    if (run.status !== "running" && run.status !== "waiting") continue;
+    for (const step of run.steps) {
+      if (step.status === "done" && step.nodeId && !running[step.nodeId])
+        done[step.nodeId] = true;
+    }
+  }
+  return done;
 }
 
 /**
@@ -52,15 +73,26 @@ export function useWorkflowStepSync(): void {
   });
   const data = runs.data;
   React.useEffect(() => {
-    useWorkflowNodeSteps.setState({ steps: data ? nodeSteps(data) : {} });
+    useWorkflowNodeSteps.setState({
+      steps: data ? nodeSteps(data) : {},
+      done: data ? doneNodes(data) : {},
+    });
   }, [data]);
 }
 
-/** 节点头部的「第 n 步」；不在运行中的步骤里就不画。 */
+/**
+ * 节点头部的「第 n 步」；不在运行中的步骤里就不画。已完成的角色节点画一个不
+ * 占位的标记，节点外框据此换成 1px `--success`（`styles/nodes.css`）。
+ */
 export function WorkflowStepBadge({ nodeId }: { nodeId: string }) {
   const t = useT();
   const step = useWorkflowNodeSteps((state) => state.steps[nodeId]);
-  if (!step) return null;
+  const done = useWorkflowNodeSteps((state) => state.done?.[nodeId] === true);
+  if (!step) {
+    return done ? (
+      <span data-workflow-done="true" hidden aria-hidden="true" />
+    ) : null;
+  }
   return (
     <Badge
       variant="secondary"
