@@ -22,6 +22,10 @@
  *     （异步），答 `REBASE_STARTED`——变基会换 head，评审者要先看新的 head
  *     再合；不落后就照常 `PUT …/merge`，由项目设置决定快进或半线性。
  *   * 草稿：建草稿 MR 加标题前缀 `Draft: `，读时看 `draft`。
+ *   * 流水线通过后合并：`PUT …/merge` 带 `merge_when_pipeline_succeeds`
+ *     （17.11 起叫 `auto_merge`，两个都带）；项目开了合并列车时改为
+ *     `POST /merge_trains/merge_requests/{iid}` 排进列车。撤销用
+ *     `cancel_merge_when_pipeline_succeeds`。
  */
 
 import {
@@ -38,6 +42,7 @@ import {
   type ForgeIssueState,
   type ForgeMergeMethod,
   type ForgeMergeable,
+  type ForgeAutoMerge,
   type ForgeMergeOptions,
   type ForgeMerged,
   type ForgePage,
@@ -149,6 +154,7 @@ interface WireMergeRequest {
   merged_at?: string | null;
   merge_commit_sha?: string | null;
   squash_commit_sha?: string | null;
+  merge_when_pipeline_succeeds?: boolean;
 }
 
 /**
@@ -173,6 +179,7 @@ export function gitlabMergeMethods(project: {
 interface WireProject {
   merge_method?: string;
   squash_option?: string;
+  merge_trains_enabled?: boolean;
 }
 interface WireDiff {
   old_path?: string;
@@ -278,6 +285,7 @@ export function toPull(value: WireMergeRequest): ForgePull {
     createdAtMs: timeMs(value.created_at) ?? 0,
     updatedAtMs: timeMs(value.updated_at) ?? 0,
     mergedAtMs: state === "merged" ? timeMs(value.merged_at) : null,
+    autoMerge: state === "open" && value.merge_when_pipeline_succeeds === true,
   };
 }
 
@@ -465,7 +473,105 @@ export class GitlabForge implements Forge {
   }
 
   async mergeOptions(repo: ForgeRepo): Promise<ForgeMergeOptions> {
-    return { methods: gitlabMergeMethods(await this.project(repo)) };
+    const project = await this.project(repo);
+    return {
+      methods: gitlabMergeMethods(project),
+      autoMerge: true,
+      mergeTrain: project.merge_trains_enabled === true,
+    };
+  }
+
+  /**
+   * 流水线通过后合并。与 {@link merge} 一样先核 head、不重试；方式必须是项目
+   * 现在收的那几种之一。流水线已经过了时 GitLab 当场合并，答 `merged: true`。
+   */
+  async autoMerge(
+    repo: ForgeRepo,
+    number: number,
+    input: MergeInput,
+  ): Promise<ForgeAutoMerge> {
+    if (!validSha(input.headSha)) throw forgeError("invalid", "SHA_INVALID");
+    const project = await this.project(repo);
+    if (!gitlabMergeMethods(project).includes(input.method)) {
+      throw forgeError("invalid", "MERGE_METHOD_UNSUPPORTED");
+    }
+    const before = await this.getPull(repo, number);
+    if (before.state === "merged")
+      throw forgeError("conflict", "ALREADY_MERGED");
+    if (before.state !== "open") throw forgeError("conflict", "NOT_OPEN");
+    if (before.headSha !== input.headSha) {
+      throw forgeError("conflict", "HEAD_CHANGED");
+    }
+    const squash = input.method === "squash";
+    const index = numbered(number);
+    if (project.merge_trains_enabled === true) {
+      // 201：已排进列车；202：等流水线过了再排。两者都是「排上了」。
+      await this.mergeWrite(() =>
+        this.http.write(
+          "POST",
+          projectPath(repo, `/merge_trains/merge_requests/${index}`),
+          { sha: input.headSha, squash, auto_merge: true },
+        ),
+      );
+      return { merged: false, sha: null, train: true };
+    }
+    const response = await this.mergeWrite(() =>
+      this.http.write(
+        "PUT",
+        projectPath(repo, `/merge_requests/${index}/merge`),
+        {
+          sha: input.headSha,
+          squash,
+          merge_when_pipeline_succeeds: true,
+          auto_merge: true,
+        },
+      ),
+    );
+    let after: WireMergeRequest;
+    try {
+      after = decodeJson<WireMergeRequest>(response);
+    } catch {
+      throw forgeError("unknownOutcome", "RESPONSE_MALFORMED");
+    }
+    if (after.state === "merged") {
+      const sha = after.merge_commit_sha ?? after.squash_commit_sha ?? "";
+      return { merged: true, sha: validSha(sha) ? sha : null, train: false };
+    }
+    if (after.merge_when_pipeline_succeeds === true) {
+      return { merged: false, sha: null, train: false };
+    }
+    // 既没合也没排上：说不清发生了什么，让调用方重新读。
+    throw forgeError("unknownOutcome", "AUTO_MERGE_NOT_SET");
+  }
+
+  async cancelAutoMerge(repo: ForgeRepo, number: number): Promise<void> {
+    const before = await this.getPull(repo, number);
+    if (!before.autoMerge) throw forgeError("conflict", "NOT_SCHEDULED");
+    await this.http.write(
+      "POST",
+      projectPath(
+        repo,
+        `/merge_requests/${numbered(number)}/cancel_merge_when_pipeline_succeeds`,
+      ),
+    );
+  }
+
+  /** 合并类写的拒绝翻译：409 是 head 变了，405 / 422 是现在合不了。 */
+  private async mergeWrite<T>(work: () => Promise<T>): Promise<T> {
+    try {
+      return await work();
+    } catch (error) {
+      if (error instanceof ForgeError && error.reason === "CONFLICT") {
+        throw forgeError("conflict", "HEAD_CHANGED");
+      }
+      if (
+        error instanceof ForgeError &&
+        (error.reason === "NOT_ALLOWED" || error.reason === "UNPROCESSABLE")
+      ) {
+        throw forgeError("conflict", "NOT_MERGEABLE");
+      }
+      throw error;
+    }
   }
 
   async createPull(

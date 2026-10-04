@@ -84,6 +84,7 @@ async function harness(pick: string[] = []): Promise<Harness> {
       "refusals",
       "subgroups",
       "merge-methods",
+      "auto-merge",
     ],
     pick,
   );
@@ -384,12 +385,18 @@ describe("读写", () => {
     await configure(plain);
     expect(
       (await plain.call("GET", `${REPO_PATH}/merge-options`)).body,
-    ).toEqual({ methods: ["merge", "squash"] });
+    ).toEqual({
+      methods: ["merge", "squash"],
+      autoMerge: true,
+      mergeTrain: false,
+    });
 
     const h = await harness(["project-rebase-merge", "need-rebase"]);
     await configure(h);
     expect((await h.call("GET", `${REPO_PATH}/merge-options`)).body).toEqual({
       methods: ["merge", "rebase", "squash"],
+      autoMerge: true,
+      mergeTrain: false,
     });
     const started = await h.call("POST", `${REPO_PATH}/pulls/12/merge`, {
       method: "rebase",
@@ -402,6 +409,32 @@ describe("读写", () => {
     expect(
       h.tape.requests.filter((r) => r.method === "PUT").map((r) => r.path),
     ).toEqual(["/projects/acme%2Fapp/merge_requests/12/rebase"]);
+  });
+
+  it("流水线通过后合并：POST 排上、DELETE 撤销", async () => {
+    const h = await harness(["merge-scheduled"]);
+    await configure(h);
+    const queued = await h.call("POST", `${REPO_PATH}/pulls/12/auto-merge`, {
+      method: "merge",
+      headSha: GITLAB_FIXTURE.sha,
+    });
+    expect(queued).toEqual({
+      status: 200,
+      body: { merged: false, sha: null, train: false },
+    });
+    const bad = await h.call("POST", `${REPO_PATH}/pulls/12/auto-merge`, {
+      method: "fast-forward",
+      headSha: GITLAB_FIXTURE.sha,
+    });
+    expect(bad.status).toBe(400);
+
+    const set = await harness(["auto-merge-set"]);
+    await configure(set);
+    expect(
+      await set.call("DELETE", `${REPO_PATH}/pulls/12/auto-merge`),
+    ).toEqual({ status: 200, body: { cancelled: true } });
+    const idle = await h.call("DELETE", `${REPO_PATH}/pulls/12/auto-merge`);
+    expect(idle).toMatchObject({ status: 409, body: { code: "conflict" } });
   });
 
   it("细粒度令牌缺范围：403 forge_scope，远端原话不外传", async () => {

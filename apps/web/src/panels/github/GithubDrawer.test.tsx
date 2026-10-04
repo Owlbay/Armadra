@@ -83,6 +83,8 @@ const forgeApi = vi.hoisted(() => ({
   mergeForgePull: vi.fn(),
   createForgePull: vi.fn(),
   forgeMergeOptions: vi.fn(),
+  autoMergeForgePull: vi.fn(),
+  cancelAutoMergeForgePull: vi.fn(),
 }));
 
 vi.mock("../../api/forge", async (original) => ({
@@ -1168,7 +1170,11 @@ describe("Gitea and GitLab remotes (§29)", () => {
       rollup: "none",
       checks: [],
     });
-    forgeApi.forgeMergeOptions.mockResolvedValue(["rebase"]);
+    forgeApi.forgeMergeOptions.mockResolvedValue({
+      methods: ["rebase"],
+      autoMerge: false,
+      mergeTrain: false,
+    });
     forgeApi.mergeForgePull.mockRejectedValue(
       new RuntimeRequestError(409, "已开始变基", "rebase_started"),
     );
@@ -1198,6 +1204,84 @@ describe("Gitea and GitLab remotes (§29)", () => {
       ),
     );
     expect(toasts.error).not.toHaveBeenCalled();
+  });
+
+  async function openGitlabPull(
+    options: { autoMerge: boolean; mergeTrain: boolean },
+    pull = forgePull(12, "Login rework"),
+  ) {
+    ready(client());
+    forgeApi.resolveForge.mockResolvedValue(detection("gitlab"));
+    forgeApi.forgePulls.mockResolvedValue({ items: [pull], nextCursor: null });
+    forgeApi.forgePull.mockResolvedValue(pull);
+    forgeApi.forgePullFiles.mockResolvedValue([]);
+    forgeApi.forgePullChecks.mockResolvedValue({
+      headSha: MR_SHA,
+      rollup: "pending",
+      checks: [{ name: "build", state: "pending", url: null }],
+    });
+    forgeApi.forgeMergeOptions.mockResolvedValue({
+      methods: ["merge", "squash"],
+      ...options,
+    });
+    renderDrawer();
+    await resolveRemote("git@git.example.test:acme/app.git");
+    fireEvent.click(await screen.findByText(pull.title));
+  }
+
+  it("GitLab: merge when the pipeline succeeds, against the head on screen", async () => {
+    forgeApi.autoMergeForgePull.mockResolvedValue({
+      merged: false,
+      sha: null,
+      train: false,
+    });
+    await openGitlabPull({ autoMerge: true, mergeTrain: false });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "流水线通过后合并" }),
+    );
+    expect(await screen.findByText("流水线通过后合并这个请求？")).toBeTruthy();
+    const dialog = screen.getByRole("alertdialog");
+    fireEvent.click(
+      [...dialog.querySelectorAll("button")].find(
+        (button) => button.textContent === "流水线通过后合并",
+      )!,
+    );
+    await waitFor(() =>
+      expect(forgeApi.autoMergeForgePull).toHaveBeenCalledWith(
+        { host: "git.example.test", owner: "acme", name: "app" },
+        12,
+        { method: "merge", headSha: MR_SHA },
+      ),
+    );
+    expect(forgeApi.mergeForgePull).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(toasts.success).toHaveBeenCalledWith("已设为流水线通过后合并"),
+    );
+  });
+
+  it("GitLab: a merge train project says so; a queued request offers cancel instead", async () => {
+    await openGitlabPull({ autoMerge: true, mergeTrain: true });
+    expect(
+      await screen.findByRole("button", { name: "加入合并列车" }),
+    ).toBeTruthy();
+    cleanup();
+
+    forgeApi.cancelAutoMergeForgePull.mockResolvedValue(undefined);
+    await openGitlabPull(
+      { autoMerge: true, mergeTrain: false },
+      { ...forgePull(13, "Queued change"), autoMerge: true },
+    );
+    expect(await screen.findByText("已设自动合并")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "流水线通过后合并" }),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "取消自动合并" }));
+    await waitFor(() =>
+      expect(forgeApi.cancelAutoMergeForgePull).toHaveBeenCalledWith(
+        { host: "git.example.test", owner: "acme", name: "app" },
+        13,
+      ),
+    );
   });
 
   it("GitLab subgroup: shows the full namespace and lists under it", async () => {

@@ -66,6 +66,11 @@ export interface ForgePull {
   readonly createdAtMs: number;
   readonly updatedAtMs: number;
   readonly mergedAtMs: number | null;
+  /**
+   * 已排进「流水线通过后合并」（GitLab 的 auto-merge / merge when pipeline
+   * succeeds）。没有这个概念的平台恒为 `false`。
+   */
+  readonly autoMerge: boolean;
 }
 
 export interface ForgeFile {
@@ -98,6 +103,20 @@ export interface ForgeMerged {
 /** 这个仓库现在能用的合并方式（契约 §29.4 `merge-options`）。 */
 export interface ForgeMergeOptions {
   readonly methods: readonly ForgeMergeMethod[];
+  /** 能不能「流水线通过后合并」（{@link Forge.autoMerge}）。 */
+  readonly autoMerge: boolean;
+  /** 项目开了合并列车：自动合并排进列车，而不是直接合。 */
+  readonly mergeTrain: boolean;
+}
+
+/**
+ * 「流水线通过后合并」的结果：流水线已经过了时远端当场合并（`merged: true`），
+ * 否则是排上了（`merged: false`）。`train` 表示排进的是合并列车。
+ */
+export interface ForgeAutoMerge {
+  readonly merged: boolean;
+  readonly sha: string | null;
+  readonly train: boolean;
 }
 
 /** 三种都给：GitHub 与 Gitea 不再按仓库设置细分。 */
@@ -163,6 +182,14 @@ export interface Forge {
     input: MergeInput,
   ): Promise<ForgeMerged>;
   mergeOptions(repo: ForgeRepo): Promise<ForgeMergeOptions>;
+  /** 流水线通过后合并；只有 GitLab 有。同样核对 head。 */
+  autoMerge?(
+    repo: ForgeRepo,
+    number: number,
+    input: MergeInput,
+  ): Promise<ForgeAutoMerge>;
+  /** 撤掉还没发生的自动合并。 */
+  cancelAutoMerge?(repo: ForgeRepo, number: number): Promise<void>;
 }
 
 /**

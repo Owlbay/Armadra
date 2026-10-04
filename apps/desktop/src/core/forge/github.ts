@@ -101,6 +101,8 @@ export function fromGithubPull(pull: GithubPullRequest): ForgePull {
     createdAtMs: ms(pull.createdAtUnixMs),
     updatedAtMs: ms(pull.updatedAtUnixMs),
     mergedAtMs: msOrNull(pull.mergedAtUnixMs),
+    // GitHub 的自动合并只在 GraphQL 里；这一面不接。
+    autoMerge: false,
   };
 }
 
@@ -435,6 +437,6 @@ export class GithubForge implements Forge {
   }
 
   async mergeOptions(_repo: ForgeRepo): Promise<ForgeMergeOptions> {
-    return { methods: ALL_MERGE_METHODS };
+    return { methods: ALL_MERGE_METHODS, autoMerge: false, mergeTrain: false };
   }
 }

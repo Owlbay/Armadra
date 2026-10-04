@@ -38,6 +38,7 @@ export const FORGE_ROUTES = {
   pullChecks: `${REPO}/pulls/{number}/checks`,
   pullMerge: `${REPO}/pulls/{number}/merge`,
   mergeOptions: `${REPO}/merge-options`,
+  pullAutoMerge: `${REPO}/pulls/{number}/auto-merge`,
 } as const;
 
 const MERGE_METHODS: readonly ForgeMergeMethod[] = [
@@ -372,6 +373,45 @@ export function installRoutes(server: CoreServer, service: ForgeService): void {
         status: 200,
         body: await service.forgeFor(repo).checks(repo, number),
       };
+    }),
+  );
+  // 流水线通过后合并（GitLab，§29.6）：没有这个能力的平台答 400。
+  router.handle(
+    "POST",
+    FORGE_ROUTES.pullAutoMerge,
+    guarded(async (match, request) => {
+      const repo = repoOf(match);
+      const number = numberOf(match);
+      const input = body(request);
+      const method = input.method ?? "merge";
+      if (!MERGE_METHODS.includes(method as ForgeMergeMethod)) {
+        bad("method 只能是 merge、squash 或 rebase");
+      }
+      const headSha = stringField(input, "headSha", {
+        required: true,
+        max: 64,
+      });
+      const forge = service.forgeFor(repo);
+      if (forge.autoMerge === undefined) bad("这个平台没有流水线通过后合并");
+      const result = await forge.autoMerge(repo, number, {
+        method: method as ForgeMergeMethod,
+        headSha,
+      });
+      return { status: 200, body: result };
+    }),
+  );
+  router.handle(
+    "DELETE",
+    FORGE_ROUTES.pullAutoMerge,
+    guarded(async (match) => {
+      const repo = repoOf(match);
+      const number = numberOf(match);
+      const forge = service.forgeFor(repo);
+      if (forge.cancelAutoMerge === undefined) {
+        bad("这个平台没有流水线通过后合并");
+      }
+      await forge.cancelAutoMerge(repo, number);
+      return { status: 200, body: { cancelled: true } };
     }),
   );
   router.handle(

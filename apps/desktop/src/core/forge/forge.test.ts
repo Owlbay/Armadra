@@ -555,7 +555,21 @@ describe("/api/forge/repos/…（§29.4）", () => {
     const before = h.gitea.requests.length;
     expect((await h.call("GET", `${REPO_PATH}/merge-options`)).body).toEqual({
       methods: ["merge", "squash", "rebase"],
+      autoMerge: false,
+      mergeTrain: false,
     });
+    expect(h.gitea.requests.length).toBe(before);
+    // 没有「流水线通过后合并」：400，不发请求。
+    expect(
+      (
+        await h.call("POST", `${REPO_PATH}/pulls/3/auto-merge`, {
+          headSha: SHA,
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (await h.call("DELETE", `${REPO_PATH}/pulls/3/auto-merge`)).status,
+    ).toBe(400);
     expect(h.gitea.requests.length).toBe(before);
     const pulls = await h.call("GET", `${REPO_PATH}/pulls`, undefined, {
       state: "closed",

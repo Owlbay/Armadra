@@ -5,6 +5,7 @@ import {
   forgeDetectionSchema,
   forgeFilesSchema,
   forgeIssuePageSchema,
+  forgeAutoMergeSchema,
   forgeMergeOptionsSchema,
   forgeMergedSchema,
   forgePullSchema,
@@ -142,6 +143,16 @@ describe("forge API", () => {
     expect(
       forgeMergeOptionsSchema.safeParse({ methods: ["fast-forward"] }).success,
     ).toBe(false);
+    // 只有 methods 的旧答复：两个开关缺省关。
+    expect(forgeMergeOptionsSchema.parse({ methods: ["merge"] })).toEqual({
+      methods: ["merge"],
+      autoMerge: false,
+      mergeTrain: false,
+    });
+    expect(
+      forgeAutoMergeSchema.parse({ merged: false, sha: null, train: true })
+        .train,
+    ).toBe(true);
     expect(mergeForgePullSchema.safeParse({ headSha: "abc" }).success).toBe(
       false,
     );

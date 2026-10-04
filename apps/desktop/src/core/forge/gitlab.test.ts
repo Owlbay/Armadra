@@ -407,6 +407,8 @@ describe("合并方式与变基", () => {
     );
     expect(await forge.mergeOptions(REPO)).toEqual({
       methods: ["merge", "rebase", "squash"],
+      autoMerge: true,
+      mergeTrain: false,
     });
     expect(requests.map((r) => [r.method, r.path])).toEqual([
       ["GET", "/projects/acme%2Fapp"],
@@ -459,6 +461,123 @@ describe("合并方式与变基", () => {
     );
     expect(error.reason).toBe("HEAD_CHANGED");
     expect(requests.some((r) => r.method === "PUT")).toBe(false);
+  });
+});
+
+describe("流水线通过后合并与合并列车", () => {
+  const ALL = [
+    "merge-requests",
+    "merge",
+    "merge-methods",
+    "auto-merge",
+  ] as const;
+
+  it("排上：PUT …/merge 带 merge_when_pipeline_succeeds 与 auto_merge，答 merged: false", async () => {
+    const { forge, requests } = forgeOver(ALL, ["merge-scheduled"]);
+    expect(
+      await forge.autoMerge(REPO, 12, {
+        method: "squash",
+        headSha: GITLAB_FIXTURE.sha,
+      }),
+    ).toEqual({ merged: false, sha: null, train: false });
+    const writes = requests.filter((r) => r.method !== "GET");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({
+      method: "PUT",
+      path: "/projects/acme%2Fapp/merge_requests/12/merge",
+      body: {
+        sha: GITLAB_FIXTURE.sha,
+        squash: true,
+        merge_when_pipeline_succeeds: true,
+        auto_merge: true,
+      },
+    });
+  });
+
+  it("流水线已经过了：远端当场合并，交回合并提交", async () => {
+    const { forge } = forgeOver(ALL);
+    expect(
+      await forge.autoMerge(REPO, 12, {
+        method: "merge",
+        headSha: GITLAB_FIXTURE.sha,
+      }),
+    ).toEqual({ merged: true, sha: GITLAB_FIXTURE.mergedSha, train: false });
+  });
+
+  it("答复既没合也没排上：结果未知，不重试", async () => {
+    const { forge, requests } = forgeOver(ALL, ["merge-ignored"]);
+    const error = await rejection(
+      forge.autoMerge(REPO, 12, {
+        method: "merge",
+        headSha: GITLAB_FIXTURE.sha,
+      }),
+    );
+    expect([error.kind, error.reason]).toEqual([
+      "unknownOutcome",
+      "AUTO_MERGE_NOT_SET",
+    ]);
+    expect(requests.filter((r) => r.method === "PUT")).toHaveLength(1);
+  });
+
+  it("项目开了合并列车：排进列车，不直接 PUT merge", async () => {
+    const { forge, requests } = forgeOver(ALL, ["project-train"]);
+    expect((await forge.mergeOptions(REPO)).mergeTrain).toBe(true);
+    expect(
+      await forge.autoMerge(REPO, 12, {
+        method: "merge",
+        headSha: GITLAB_FIXTURE.sha,
+      }),
+    ).toEqual({ merged: false, sha: null, train: true });
+    const writes = requests.filter((r) => r.method !== "GET");
+    expect(writes).toEqual([
+      expect.objectContaining({
+        method: "POST",
+        path: "/projects/acme%2Fapp/merge_trains/merge_requests/12",
+        body: { sha: GITLAB_FIXTURE.sha, squash: false, auto_merge: true },
+      }),
+    ]);
+  });
+
+  it("方式不在项目设置里、head 变了：都不写", async () => {
+    const { forge, requests } = forgeOver(ALL);
+    expect(
+      (
+        await rejection(
+          forge.autoMerge(REPO, 12, {
+            method: "rebase",
+            headSha: GITLAB_FIXTURE.sha,
+          }),
+        )
+      ).reason,
+    ).toBe("MERGE_METHOD_UNSUPPORTED");
+    expect(
+      (
+        await rejection(
+          forge.autoMerge(REPO, 12, {
+            method: "merge",
+            headSha: GITLAB_FIXTURE.oldSha,
+          }),
+        )
+      ).reason,
+    ).toBe("HEAD_CHANGED");
+    expect(requests.every((r) => r.method === "GET")).toBe(true);
+  });
+
+  it("MR 上的 merge_when_pipeline_succeeds 映射成 autoMerge；撤销只对排上的发", async () => {
+    const set = forgeOver(ALL, ["auto-merge-set"]);
+    expect((await set.forge.getPull(REPO, 12)).autoMerge).toBe(true);
+    await set.forge.cancelAutoMerge(REPO, 12);
+    expect(set.requests.at(-1)).toMatchObject({
+      method: "POST",
+      path: "/projects/acme%2Fapp/merge_requests/12/cancel_merge_when_pipeline_succeeds",
+    });
+
+    const idle = forgeOver(ALL);
+    expect((await idle.forge.getPull(REPO, 12)).autoMerge).toBe(false);
+    expect((await rejection(idle.forge.cancelAutoMerge(REPO, 12))).reason).toBe(
+      "NOT_SCHEDULED",
+    );
+    expect(idle.requests.every((r) => r.method === "GET")).toBe(true);
   });
 });
 

@@ -27,6 +27,8 @@ import { useT } from "@/app/preferences-store";
 import { openExternal } from "@/platform";
 import { Check, Field, selectClass } from "../git/forms";
 import {
+  autoMergeForgePull,
+  cancelAutoMergeForgePull,
   type ForgeDetection,
   type ForgeIssue,
   type ForgeListState,
@@ -577,13 +579,17 @@ export function PullBody({
   });
   // GitLab 按项目设置给（只快进的项目只有 rebase）；问不到时退回平台缺省。
   const methods =
-    options.data && options.data.length > 0
-      ? options.data
+    options.data && options.data.methods.length > 0
+      ? options.data.methods
       : mergeMethods(forge);
   const [picked, setPicked] = React.useState<ForgeMergeMethod>("merge");
   const method = methods.includes(picked) ? picked : (methods[0] ?? "merge");
   const setMethod = setPicked;
-  const [confirm, setConfirm] = React.useState(false);
+  /** 确认框问的是哪一种：直接合并，或流水线通过后合并。 */
+  const [confirm, setConfirm] = React.useState<"merge" | "auto" | null>(null);
+  const train = options.data?.mergeTrain === true;
+  const canAutoMerge =
+    options.data?.autoMerge === true && !pull.autoMerge && !pull.draft;
   const files = useQuery({
     queryKey: forgeKeys.files(repo, pull.number),
     queryFn: () => forgePullFiles(repo, pull.number),
@@ -593,6 +599,31 @@ export function PullBody({
     queryKey: forgeKeys.checks(repo, pull.number),
     queryFn: () => forgePullChecks(repo, pull.number),
     retry: false,
+  });
+  const autoMerge = useMutation({
+    mutationFn: () =>
+      autoMergeForgePull(repo, pull.number, { method, headSha: pull.headSha }),
+    onSuccess: (result) => {
+      toast.success(
+        t(
+          result.merged
+            ? "forge.merge.done"
+            : result.train
+              ? "forge.autoMerge.trainDone"
+              : "forge.autoMerge.done",
+        ),
+      );
+      void client.invalidateQueries({ queryKey: forgeKeys.all });
+    },
+    onError: (error) => toast.error(t(forgeFailureKey(error))),
+  });
+  const cancelAutoMerge = useMutation({
+    mutationFn: () => cancelAutoMergeForgePull(repo, pull.number),
+    onSuccess: () => {
+      toast.success(t("forge.autoMerge.cancelled"));
+      void client.invalidateQueries({ queryKey: forgeKeys.all });
+    },
+    onError: (error) => toast.error(t(forgeFailureKey(error))),
   });
   const merge = useMutation({
     mutationFn: () =>
@@ -623,6 +654,9 @@ export function PullBody({
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <Badge variant="secondary">{t(`forge.state.${pull.state}`)}</Badge>
         {pull.draft && <Badge variant="outline">{t("forge.draft")}</Badge>}
+        {pull.autoMerge && (
+          <Badge variant="outline">{t("forge.autoMerge.set")}</Badge>
+        )}
         {pull.state === "open" && (
           <Badge
             variant={
@@ -731,24 +765,52 @@ export function PullBody({
           <Button
             size="sm"
             className="min-h-10"
-            disabled={merge.isPending || !pull.headSha}
-            onClick={() => setConfirm(true)}
+            disabled={merge.isPending || autoMerge.isPending || !pull.headSha}
+            onClick={() => setConfirm("merge")}
           >
             {t("forge.merge")} · {shortSha(pull.headSha)}
           </Button>
+          {canAutoMerge && (
+            <Button
+              size="sm"
+              variant="secondary"
+              className="min-h-10"
+              disabled={merge.isPending || autoMerge.isPending || !pull.headSha}
+              onClick={() => setConfirm("auto")}
+            >
+              {t(train ? "forge.autoMerge.train" : "forge.autoMerge")}
+            </Button>
+          )}
+          {pull.autoMerge && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="min-h-10"
+              disabled={cancelAutoMerge.isPending}
+              onClick={() => cancelAutoMerge.mutate()}
+            >
+              {t("forge.autoMerge.cancel")}
+            </Button>
+          )}
         </section>
       )}
 
       <ResponsiveAlertDialog
-        open={confirm}
+        open={confirm !== null}
         onOpenChange={(next) => {
-          if (!next) setConfirm(false);
+          if (!next) setConfirm(null);
         }}
       >
         <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
           <ResponsiveAlertDialogHeader>
             <ResponsiveAlertDialogTitle>
-              {t("forge.merge.confirm")}
+              {t(
+                confirm === "auto"
+                  ? train
+                    ? "forge.autoMerge.confirmTrain"
+                    : "forge.autoMerge.confirm"
+                  : "forge.merge.confirm",
+              )}
             </ResponsiveAlertDialogTitle>
           </ResponsiveAlertDialogHeader>
           <dl className="grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
@@ -767,13 +829,21 @@ export function PullBody({
             </ResponsiveAlertDialogCancel>
             <ResponsiveAlertDialogAction
               className="min-h-10"
-              disabled={merge.isPending}
+              disabled={merge.isPending || autoMerge.isPending}
               onClick={() => {
-                setConfirm(false);
-                merge.mutate();
+                const which = confirm;
+                setConfirm(null);
+                if (which === "auto") autoMerge.mutate();
+                else merge.mutate();
               }}
             >
-              {t("forge.merge")}
+              {t(
+                confirm === "auto"
+                  ? train
+                    ? "forge.autoMerge.train"
+                    : "forge.autoMerge"
+                  : "forge.merge",
+              )}
             </ResponsiveAlertDialogAction>
           </ResponsiveAlertDialogFooter>
         </ResponsiveAlertDialogContent>

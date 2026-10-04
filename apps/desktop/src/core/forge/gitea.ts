@@ -175,6 +175,7 @@ function toPull(value: WirePull): ForgePull {
     createdAtMs: timeMs(value.created_at) ?? 0,
     updatedAtMs: timeMs(value.updated_at) ?? 0,
     mergedAtMs: merged ? timeMs(value.merged_at) : null,
+    autoMerge: false,
   };
 }
 
@@ -469,6 +470,6 @@ export class GiteaForge implements Forge {
 
   /** 不按仓库的 `allow_*` 细分：远端不收的方式由合并本身答 405 / 422。 */
   async mergeOptions(_repo: ForgeRepo): Promise<ForgeMergeOptions> {
-    return { methods: ALL_MERGE_METHODS };
+    return { methods: ALL_MERGE_METHODS, autoMerge: false, mergeTrain: false };
   }
 }

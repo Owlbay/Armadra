@@ -2000,21 +2000,23 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ### 29.4 issue 与 PR：`/api/forge/repos/{host}/{owner}/{name}/…`
 
-| 方法与路径                  | 请求                                                               | 答复                                                  |
-| --------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------- |
-| `GET issues`                | 查询 `state=open\|closed\|all`（缺省 open）、`cursor`、`limit≤100` | `{ items: [issue…], nextCursor }`，列表里 `body` 为空 |
-| `GET issues/{number}`       |                                                                    | issue                                                 |
-| `PATCH issues/{number}`     | `{ state: "open" \| "closed" }`                                    | issue                                                 |
-| `GET pulls`                 | 同 issues（`closed` 含已合并）                                     | `{ items: [pull…], nextCursor }`                      |
-| `POST pulls`                | `{ title, body?, head, base, draft? }`                             | `201` pull                                            |
-| `GET pulls/{number}`        |                                                                    | pull                                                  |
-| `GET pulls/{number}/files`  |                                                                    | `{ files: [file…] }`（至多 300 个）                   |
-| `GET pulls/{number}/checks` |                                                                    | checks                                                |
-| `POST pulls/{number}/merge` | `{ method?: "merge"\|"squash"\|"rebase", headSha }`                | `{ merged: true, sha }`                               |
-| `GET merge-options`         |                                                                    | `{ methods: ("merge"\|"squash"\|"rebase")[] }`        |
+| 方法与路径                         | 请求                                                               | 答复                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `GET issues`                       | 查询 `state=open\|closed\|all`（缺省 open）、`cursor`、`limit≤100` | `{ items: [issue…], nextCursor }`，列表里 `body` 为空                 |
+| `GET issues/{number}`              |                                                                    | issue                                                                 |
+| `PATCH issues/{number}`            | `{ state: "open" \| "closed" }`                                    | issue                                                                 |
+| `GET pulls`                        | 同 issues（`closed` 含已合并）                                     | `{ items: [pull…], nextCursor }`                                      |
+| `POST pulls`                       | `{ title, body?, head, base, draft? }`                             | `201` pull                                                            |
+| `GET pulls/{number}`               |                                                                    | pull                                                                  |
+| `GET pulls/{number}/files`         |                                                                    | `{ files: [file…] }`（至多 300 个）                                   |
+| `GET pulls/{number}/checks`        |                                                                    | checks                                                                |
+| `POST pulls/{number}/merge`        | `{ method?: "merge"\|"squash"\|"rebase", headSha }`                | `{ merged: true, sha }`                                               |
+| `GET merge-options`                |                                                                    | `{ methods: ("merge"\|"squash"\|"rebase")[], autoMerge, mergeTrain }` |
+| `POST pulls/{number}/auto-merge`   | `{ method?, headSha }`                                             | `{ merged, sha, train }`                                              |
+| `DELETE pulls/{number}/auto-merge` |                                                                    | `{ cancelled: true }`                                                 |
 
 - issue：`{ number, title, body, state: "open"|"closed", author, labels: string[], commentCount, url, createdAtMs, updatedAtMs, closedAtMs }`。同一编号空间里的 PR 不算 issue（读、改都答 404）。
-- pull：`{ number, title, body, state: "open"|"closed"|"merged", draft, author, baseRef, headRef, headSha, mergeable: "mergeable"|"conflicting"|"unknown", url, createdAtMs, updatedAtMs, mergedAtMs }`。
+- pull：`{ number, title, body, state: "open"|"closed"|"merged", draft, author, baseRef, headRef, headSha, mergeable: "mergeable"|"conflicting"|"unknown", url, createdAtMs, updatedAtMs, mergedAtMs, autoMerge }`。`autoMerge` 是「已排进流水线通过后合并」（§29.6），GitHub 与 Gitea 恒为 `false`。
 - file：`{ path, previousPath, status: "added"|"modified"|"removed"|"renamed"|"other", additions, deletions, patch }`；`patch` 从第一个 `@@` 起，二进制为 `null`。Gitea 的补丁从 `pulls/{n}.diff` 按文件切出来。
 - checks：`{ headSha, rollup: "pending"|"success"|"failure"|"neutral"|"none", checks: [{ name, state, url }] }`。Gitea 用 commit statuses（同一个 context 只留最新的；`error` 记 failure，`warning` 记 neutral），GitHub 用 check runs + commit status（§5 同源）。`url` 只收 http(s)。
 - `cursor` 是页码串（2–1000），从不是远端 URL。
@@ -2053,6 +2055,7 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 - **检查**：commit statuses（流水线作业也在这里），同名只留 id 最大的；`success` → success，`failed` → failure（`allow_failure` 的 → neutral），`canceled` → failure，`skipped` / `manual` → neutral，其余 → pending。
 - **合并**：`PUT …/merge` 带 `sha: headSha`（远端 head 变了答 409 → `conflict`），`method: "squash"` 对应 `squash: true`。
 - **合并方式**：`GET merge-options` 读项目的 `merge_method` / `squash_option`：`merge`（合并提交）→ `merge`；`rebase_merge`（半线性）→ `merge`、`rebase`；`ff`（只快进）→ `rebase`；再按 `squash_option` 加上 `squash`（`never` 不加，`always` 只剩 `squash`）。Gitea 与 GitHub 不细分，三种都给、不发请求。`method: "rebase"` 只在项目有这一种时收（否则 `bad_request`）：MR 的 `detailed_merge_status` 是 `need_rebase` 时先发 `PUT …/rebase`（异步）并答 `409 rebase_started`——变基会换 head，评审者读到新 head 核对后再合；不落后就照常 `PUT …/merge`（不带 `squash`），由项目设置快进或带合并提交。远端 405 / 422（草稿、流水线未过、冲突）→ `conflict`。答复里的 MR 还没到 `merged`（排进了合并队列）时答 `unknown_outcome`：重新读再决定。
+- **流水线通过后合并**：`merge-options` 的 `autoMerge` 恒为 `true`，`mergeTrain` 是项目的 `merge_trains_enabled`（Premium）。`POST pulls/{number}/auto-merge` 与合并一样先核 head、方式必须在 `methods` 里、不重试：没开合并列车时 `PUT …/merge` 带 `merge_when_pipeline_succeeds: true` 与 `auto_merge: true`（17.11 起的新名，老版本忽略它），答复的 MR 已 `merged` 就答 `{ merged: true, sha, train: false }`（流水线已过、当场合并），`merge_when_pipeline_succeeds` 为真答 `{ merged: false, sha: null, train: false }`，两样都不是答 `unknown_outcome`；开了合并列车时改为 `POST /merge_trains/merge_requests/{iid}`（`sha`、`squash`、`auto_merge: true`；201 已上车、202 等流水线过了再上），答 `{ merged: false, sha: null, train: true }`。`DELETE pulls/{number}/auto-merge` 只对 `autoMerge` 为真的 MR 发 `POST …/cancel_merge_when_pipeline_succeeds`，否则 `409 conflict`。Gitea 与 GitHub 的 `autoMerge` / `mergeTrain` 为 `false`，这两条路由答 `400 bad_request`。
 - **范围不足**：403 的答复里 `error` 是 `insufficient_scope`（经典令牌）或 `insufficient_granular_scope`（细粒度令牌）时答 `403 forge_scope`；别的 403 仍是 `forge_forbidden`。远端的说明文字不往外传。
 - **外部连接**：`GithubExternalReference.forge` 为 `gitea` / `gitlab` 时（§5.2），仓库必须正是这台机器对它识别出的那个平台，`apiBase` 取自配置（请求里给了别的根就拒绝）；GitHub 的 issue / PR 详情只列 `forge: github` 的连接。
 

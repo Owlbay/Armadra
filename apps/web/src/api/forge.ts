@@ -11,6 +11,7 @@ import {
   forgeDetectionSchema,
   forgeFilesSchema,
   forgeIssuePageSchema,
+  forgeAutoMergeSchema,
   forgeIssueSchema,
   forgeMergeOptionsSchema,
   forgeMergedSchema,
@@ -247,13 +248,35 @@ export function mergeForgePull(
   });
 }
 
-/** 这个仓库现在能用的合并方式（GitLab 按项目设置，§29.6）。 */
-export async function forgeMergeOptions(
+export type ForgeMergeOptions = z.infer<typeof forgeMergeOptionsSchema>;
+
+/** 这个仓库现在能用的合并方式与自动合并（GitLab 按项目设置，§29.6）。 */
+export function forgeMergeOptions(repo: ForgeRepo): Promise<ForgeMergeOptions> {
+  return request(`${repoPath(repo)}/merge-options`, forgeMergeOptionsSchema);
+}
+
+/** 流水线通过后合并（GitLab）；项目开了合并列车时排进列车。 */
+export function autoMergeForgePull(
   repo: ForgeRepo,
-): Promise<ForgeMergeMethod[]> {
-  return (
-    await request(`${repoPath(repo)}/merge-options`, forgeMergeOptionsSchema)
-  ).methods;
+  number: number,
+  input: { method: ForgeMergeMethod; headSha: string },
+) {
+  return request(
+    `${repoPath(repo)}/pulls/${number}/auto-merge`,
+    forgeAutoMergeSchema,
+    { method: "POST", ...json(input) },
+  );
+}
+
+export async function cancelAutoMergeForgePull(
+  repo: ForgeRepo,
+  number: number,
+): Promise<void> {
+  await request(
+    `${repoPath(repo)}/pulls/${number}/auto-merge`,
+    z.object({ cancelled: z.boolean() }),
+    { method: "DELETE" },
+  );
 }
 
 /** 平台显示名：品牌名不翻译。 */
