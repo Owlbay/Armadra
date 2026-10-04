@@ -257,9 +257,30 @@ services:
       - "127.0.0.1:8093:8093"
     restart: unless-stopped
 
+  # S3 兼容桶（更新镜像 W-MIRROR 的替身，外部服务 §3.3）：versitygw 的 posix 后端，
+  # 桶就是 /data 下的目录。只认 services.mjs 里那对回环用的固定访问键。
+  s3:
+    image: versity/versitygw:v1.0.17
+    profiles: ["s3"]
+    command:
+      - --access
+      - armadra-dev
+      - --secret
+      - armadra-dev-mirror
+      - --port
+      - ":8095"
+      - posix
+      - /data
+    volumes:
+      - s3:/data
+    ports:
+      - "127.0.0.1:8095:8095"
+    restart: unless-stopped
+
 volumes:
   step-ca:
   gitea:
   glitchtip-postgres:
   armadra-server:
   headscale:
+  s3:
