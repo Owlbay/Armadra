@@ -21,6 +21,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LOOPBACK_OWNER_ENV } from "../probe-home.mjs";
 
 export const root = fileURLToPath(new URL("../../../", import.meta.url));
 export const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -111,6 +112,8 @@ export async function startStack(options = {}) {
     XDG_CONFIG_HOME: join(home, ".config"),
     ARMADRA_DATA_DIR: data,
     ARMADRA_LOG: options.log ?? "info",
+    // 页面停在普通浏览器里，拿不到壳的票（契约 §3.2）。
+    ...LOOPBACK_OWNER_ENV,
     ...options.env,
   };
   const runtime = spawn(

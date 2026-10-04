@@ -142,7 +142,8 @@ start_runtime() {
   fi
   # 旧地址不能当成本次启动的结果：先清掉再等它自己写进来。
   rm -f "$(armadra_data_dir)/endpoints.json" 2>/dev/null || true
-  node apps/desktop/out/core/main.js --listen "${listen}" &
+  # 浏览器里的页面拿不到壳的票：GitHub 与自动化两面按本机主人打（契约 §3.2）。
+  ARMADRA_LOOPBACK_OWNER=1 node apps/desktop/out/core/main.js --listen "${listen}" &
   RUNTIME_PID=$!
   trap 'kill "${RUNTIME_PID}" 2>/dev/null || true' EXIT INT TERM
   for _ in $(seq 1 40); do

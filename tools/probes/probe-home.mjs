@@ -60,11 +60,21 @@ export function probeHome(prefix = "armadra-probe-home-") {
 }
 
 /**
- * 给 Armadra 进程的完整环境：当前环境去掉凭据变量，叠上临时 HOME，再叠上
- * 调用方自己的键（`extra` 最后，所以它能覆盖前面任何一个）。
+ * 探针起的裸 core 把明文回环上没带凭据的调用当成本机主人（契约 §3.2）。
+ *
+ * 自 0.3.0 起 core 缺省不这么做（安全审查 L9）：桌面壳的页面带票据换来的
+ * Bearer。探针的页面停在普通浏览器里、拿不到壳的票，直接打 HTTP 的探针也不配对，
+ * 所以由这里统一显式打开。桌面壳与服务器壳都不听它——经它们起的 core 照样要凭据。
+ */
+export const LOOPBACK_OWNER_ENV = { ARMADRA_LOOPBACK_OWNER: "1" };
+
+/**
+ * 给 Armadra 进程的完整环境：当前环境去掉凭据变量，叠上临时 HOME 与
+ * {@link LOOPBACK_OWNER_ENV}，再叠上调用方自己的键（`extra` 最后，所以它能覆盖
+ * 前面任何一个）。
  */
 export function isolatedEnv(home, extra = {}) {
   const base = { ...process.env };
   for (const name of CREDENTIAL_VARIABLES) delete base[name];
-  return { ...base, ...home.env, ...extra };
+  return { ...base, ...home.env, ...LOOPBACK_OWNER_ENV, ...extra };
 }
