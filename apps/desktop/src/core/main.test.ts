@@ -30,6 +30,7 @@ import { selfGuarded } from "./http/route-scopes";
 import { parseAnnouncement, VERSION } from "./instance";
 import { endpointsFile } from "./paths";
 import { tempDir } from "./testing/temp-dir";
+import { TEST_ORIGIN, loopbackSession } from "./testing/loopback-session";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = resolve(here, "db/migrations");
@@ -59,6 +60,7 @@ function upgrade(
   core: RunningCore,
   path: string,
   origin?: string,
+  protocol?: string,
 ): Promise<string> {
   const tcp = core.bound.find((spec) => spec.kind === "tcp");
   if (tcp?.kind !== "tcp") throw new Error("no TCP listener");
@@ -69,6 +71,9 @@ function upgrade(
           `Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n` +
           `Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n` +
           (origin === undefined ? "" : `Origin: ${origin}\r\n`) +
+          (protocol === undefined
+            ? ""
+            : `Sec-WebSocket-Protocol: ${protocol}\r\n`) +
           `\r\n`,
       );
     });
@@ -292,9 +297,10 @@ describe("what the core answers", () => {
 
   it("answers a route it has not written with 501 naming that path", async () => {
     const { core } = await start(temporary());
+    const session = await loopbackSession(core, base(core));
     // askpass 那两条在表里但**故意**不在 HTTP 面上（助手走它自己的 0600 socket），
     // 所以主监听器上能观察到 501 的只剩它们。
-    const response = await fetch(`${base(core)}/api/ssh/askpass/prompts/x`);
+    const response = await session.fetch("/api/ssh/askpass/prompts/x");
     expect(response.status).toBe(501);
     expect(await response.json()).toEqual({
       code: "not_implemented",
@@ -357,7 +363,8 @@ describe("what the core answers", () => {
 
   it("answers a path nobody claimed with 404, not 501", async () => {
     const { core } = await start(temporary());
-    const response = await fetch(`${base(core)}/api/invented`);
+    const session = await loopbackSession(core, base(core));
+    const response = await session.fetch("/api/invented");
     expect(response.status).toBe(404);
     expect((await response.json()).code).toBe("not_found");
   });
@@ -429,13 +436,126 @@ describe("what the core answers", () => {
    */
   it("lets a stream that exists answer its own refusal", async () => {
     const { core } = await start(temporary());
+    const session = await loopbackSession(core, base(core));
     expect(
       await upgrade(
         core,
         "/api/workspaces/ws-1/events",
-        "http://127.0.0.1:1420",
+        TEST_ORIGIN,
+        await session.wsProtocol(),
       ),
     ).toMatch(/^HTTP\/1\.1 404/);
+  });
+
+  /**
+   * 安全审查 L9：本机另一个回环端口上的网页（或任何不带会话的本机进程）调
+   * core 的 `/api/` 与流，一律被拒。只有不要会话的那几条放行。
+   */
+  describe("回环上没带会话的请求（契约 §3.2，安全审查 L9）", () => {
+    const STRANGER = "http://127.0.0.1:8080";
+
+    it("别的回环来源与不报来源的调用打 /api/ 都是 401", async () => {
+      const { core } = await start(temporary());
+      const callers: Record<string, string>[] = [{ origin: STRANGER }, {}];
+      for (const headers of callers) {
+        const settings = await fetch(`${base(core)}/api/settings`, { headers });
+        expect(settings.status).toBe(401);
+        expect(await settings.json()).toEqual({
+          code: "unauthenticated",
+          message: "需要一个已配对设备的会话",
+        });
+        const write = await fetch(`${base(core)}/api/workspaces`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ name: "x", rootPath: "/tmp" }),
+        });
+        expect(write.status).toBe(401);
+      }
+      // 带着一个编出来的 Bearer 也一样。
+      const forged = await fetch(`${base(core)}/api/settings`, {
+        headers: {
+          origin: STRANGER,
+          authorization: `Bearer ${"0".repeat(32)}.${"a".repeat(43)}`,
+        },
+      });
+      expect(forged.status).toBe(401);
+    });
+
+    it("不要会话的那几条照旧：健康检查、hello、预检", async () => {
+      const { core } = await start(temporary());
+      const headers = { origin: STRANGER };
+      expect((await fetch(`${base(core)}/health`, { headers })).status).toBe(
+        200,
+      );
+      expect(
+        (await fetch(`${base(core)}/api/health`, { headers })).status,
+      ).toBe(200);
+      expect(
+        (await fetch(`${base(core)}/api/identity/hello`, { headers })).status,
+      ).toBe(200);
+      const preflight = await fetch(`${base(core)}/api/settings`, {
+        method: "OPTIONS",
+        headers,
+      });
+      expect(preflight.status).toBe(204);
+    });
+
+    it("没带票的升级是 401；票只认签它的来源、只用一次", async () => {
+      const { core } = await start(temporary());
+      const session = await loopbackSession(core, base(core));
+      const workspace = (await (
+        await session.fetch("/api/workspaces")
+      ).json()) as { id: string }[];
+      const events = `/api/workspaces/${workspace[0]?.id}/events`;
+      expect(await upgrade(core, events, STRANGER)).toMatch(/^HTTP\/1\.1 401/);
+      expect(
+        await upgrade(core, events, STRANGER, await session.wsProtocol()),
+      ).toMatch(/^HTTP\/1\.1 401/);
+      const protocol = await session.wsProtocol();
+      expect(await upgrade(core, events, TEST_ORIGIN, protocol)).toMatch(
+        /^HTTP\/1\.1 101/,
+      );
+      expect(await upgrade(core, events, TEST_ORIGIN, protocol)).toMatch(
+        /^HTTP\/1\.1 401/,
+      );
+    });
+
+    it("配对之后带 Bearer 是 200；会话绑在来源上，换个来源不认", async () => {
+      const { core } = await start(temporary());
+      const session = await loopbackSession(core, base(core));
+      expect((await session.fetch("/api/settings")).status).toBe(200);
+      const elsewhere = await fetch(`${base(core)}/api/settings`, {
+        headers: { ...session.headers, origin: STRANGER },
+      });
+      expect(elsewhere.status).toBe(401);
+    });
+
+    it("ws-ticket 只发给带着会话的原生传输", async () => {
+      const { core } = await start(temporary());
+      const anonymous = await fetch(`${base(core)}/api/identity/ws-ticket`, {
+        method: "POST",
+        headers: { origin: STRANGER },
+      });
+      expect(anonymous.status).toBe(401);
+    });
+
+    it("显式打开回环匿名（裸 core）时这道门不在", async () => {
+      const dataDir = temporary();
+      const core = await run({
+        argv: ["--listen", "tcp:127.0.0.1:0", "--data-dir", dataDir],
+        env: {
+          ARMADRA_CORE_MIGRATIONS_DIR: migrationsDir,
+          ARMADRA_LOG: "error",
+          ARMADRA_LOOPBACK_OWNER: "1",
+        },
+        stdout: () => {},
+      });
+      running.push(core);
+      const settings = await fetch(`${base(core)}/api/settings`, {
+        headers: { origin: STRANGER },
+      });
+      expect(settings.status).toBe(200);
+    });
   });
 
   it("stops accepting once it has stopped", async () => {

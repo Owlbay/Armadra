@@ -16,6 +16,10 @@ import { WebSocket } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { type RunningCore, run } from "../main";
+import {
+  type LoopbackSession,
+  loopbackSession,
+} from "../testing/loopback-session";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = resolve(here, "../db/migrations");
@@ -59,10 +63,26 @@ function createWorkspace(core: RunningCore, id: string): void {
     .run(id, id, `/tmp/${id}`, "2026-09-19T00:00:00Z", "2026-09-19T00:00:00Z");
 }
 
-function open(core: RunningCore, workspaceId: string): Promise<WebSocket> {
+/**
+ * 页面的做法（契约 §3.2）：回环上的会话先换一张一次性票，经
+ * `Sec-WebSocket-Protocol` 升级。每台 core 配一次对。
+ */
+const sessions = new Map<RunningCore, Promise<LoopbackSession>>();
+
+async function open(
+  core: RunningCore,
+  workspaceId: string,
+): Promise<WebSocket> {
+  let session = sessions.get(core);
+  if (session === undefined) {
+    session = loopbackSession(core, `http://${origin(core)}`);
+    sessions.set(core, session);
+  }
+  const own = await session;
   const socket = new WebSocket(
     `ws://${origin(core)}/api/workspaces/${workspaceId}/events`,
-    { origin: `http://${origin(core)}` },
+    [await own.wsProtocol()],
+    { origin: own.origin },
   );
   sockets.push(socket);
   return new Promise((resolve_, reject) => {

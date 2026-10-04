@@ -18,6 +18,10 @@ import * as Y from "yjs";
 import { listBoards } from "../canvas/boards";
 import { loadBoard } from "../canvas/documents";
 import { type RunningCore, run } from "../main";
+import {
+  type LoopbackSession,
+  loopbackSession,
+} from "../testing/loopback-session";
 import { createWorkspace } from "../workspaces/table";
 import { projectDoc, nodesOf } from "./doc";
 import { REALTIME_CAPABILITY } from "./index";
@@ -71,10 +75,28 @@ function board(core: RunningCore): { workspaceId: string; boardId: string } {
   return { workspaceId: workspace.id, boardId: first.id };
 }
 
-function open(core: RunningCore, path: string): Promise<WebSocket> {
-  const socket = new WebSocket(`ws://${host(core)}${path}`, {
-    origin: `http://${host(core)}`,
-  });
+/**
+ * 回环上的会话（契约 §3.2）：同步流和页面一样先换一张一次性票，经
+ * `Sec-WebSocket-Protocol` 升级；HTTP 带 Bearer。
+ */
+const sessions = new Map<RunningCore, Promise<LoopbackSession>>();
+
+function session(core: RunningCore): Promise<LoopbackSession> {
+  let found = sessions.get(core);
+  if (found === undefined) {
+    found = loopbackSession(core, `http://${host(core)}`);
+    sessions.set(core, found);
+  }
+  return found;
+}
+
+async function open(core: RunningCore, path: string): Promise<WebSocket> {
+  const own = await session(core);
+  const socket = new WebSocket(
+    `ws://${host(core)}${path}`,
+    [await own.wsProtocol()],
+    { origin: own.origin },
+  );
   socket.binaryType = "nodebuffer";
   sockets.push(socket);
   return new Promise((resolve_, reject) => {
@@ -124,11 +146,12 @@ async function http(
   path: string,
   body?: unknown,
 ): Promise<{ status: number; body: unknown }> {
+  const own = await session(core);
   const response = await fetch(`http://${host(core)}${path}`, {
     method,
     headers: {
       "content-type": "application/json",
-      origin: `http://${host(core)}`,
+      ...own.headers,
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });

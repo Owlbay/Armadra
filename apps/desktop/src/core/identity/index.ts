@@ -15,12 +15,14 @@ import {
   installRouteGuard,
   requestIdentity,
 } from "./gate";
-import { API_PREFIX, IdentityHttp } from "./http";
+import { API_PREFIX, IdentityHttp, loopbackAnonymousOwner } from "./http";
+import { createLoopbackAdmission } from "./loopback";
 import { installOAuth } from "./oauth";
 import { resolveBreachMode } from "./policy";
 import { createRouteGuard } from "./route-access";
 import { IdentityService } from "./service";
 import { IdentityStore } from "./store";
+import { WsTickets } from "./transport";
 
 export { IdentityService } from "./service";
 export { IdentityStore } from "./store";
@@ -113,13 +115,23 @@ export function installIdentity(context: CoreContext): void {
       };
     },
   });
+  // 回环监听上的门（契约 §3.2，安全审查 L9）：回环匿名按主人关着（两种壳都
+  // 是）时，`/api/` 与每条流都要一个会话；只有探针与开发命令起的裸 core 显式
+  // 打开它，那里不装。
+  const wsTickets = loopbackAnonymousOwner() ? undefined : new WsTickets();
   const http = new IdentityHttp({
     service,
     accounts,
     instanceId: runInstance,
     capabilities: coreCapabilities,
     security,
+    ...(wsTickets === undefined ? {} : { wsTickets }),
   });
+  context.server.admission(
+    wsTickets === undefined
+      ? undefined
+      : createLoopbackAdmission({ service, tickets: wsTickets }),
+  );
 
   // 判定入口与审计写入点（设计 §4）。装上之后它们仍然对 owner 恒真、对每条
   // 动作各写一条——真正变了的只有「问的是库，而不是那个恒真的兜底实现」。

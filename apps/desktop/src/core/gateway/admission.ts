@@ -1,9 +1,26 @@
-import { randomBytes } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import { cookieName } from "../identity/http";
 import { canonicalOrigin } from "../identity/origin";
 import type { IdentityService, Principal } from "../identity/service";
 import { IdentityError } from "../identity/errors";
+import {
+  WS_TICKET_PATH,
+  type WsTickets,
+  anonymousPath,
+  protocolTicket,
+} from "../identity/transport";
+
+// 与 core 回环监听上的门共用（`identity/transport.ts`）；这里原样转出，调用方
+// 不必知道它们搬过家。
+export {
+  PAIRING_CODE_EXCHANGE_PATH,
+  WS_TICKET_PATH,
+  WS_TICKET_PROTOCOL,
+  WS_TICKET_TTL_MS,
+  WsTickets,
+  anonymousPath,
+  protocolTicket,
+} from "../identity/transport";
 
 /**
  * Gateway 的认证门（从服务器壳下沉，服务器壳与桌面对外服务共用）。
@@ -70,21 +87,6 @@ export function loopbackOnlyPath(path: string): boolean {
     path === "/verify"
   );
 }
-
-/**
- * 不需要会话的那几条：健康探针、身份域自己的登录面，以及配对短码换票（契约
- * §24：手机还没有身份，短码就是凭据，限流与档位在 Gateway 域里判）。
- */
-export function anonymousPath(path: string): boolean {
-  return (
-    path === "/health" ||
-    path === "/api/health" ||
-    path.startsWith("/api/identity/") ||
-    path === PAIRING_CODE_EXCHANGE_PATH
-  );
-}
-
-export const PAIRING_CODE_EXCHANGE_PATH = "/api/gateway/pairing-code/exchange";
 
 /**
  * 同源只读请求里浏览器没发的那个 Origin。
@@ -289,70 +291,6 @@ export const NATIVE_APP_ORIGINS: readonly string[] = [
 
 export function nativeAppOrigin(origin: string): boolean {
   return NATIVE_APP_ORIGINS.includes(origin);
-}
-
-/** 原生 App 升级 WebSocket 时在 `Sec-WebSocket-Protocol` 里带的票的前缀。 */
-export const WS_TICKET_PROTOCOL = "armadra-ticket.";
-export const WS_TICKET_PATH = "/api/identity/ws-ticket";
-export const WS_TICKET_TTL_MS = 30_000;
-const WS_TICKET_LIMIT = 4096;
-
-/**
- * 一次性 WebSocket 票：30 秒、用一次就没。票只在内存里——它比访问密钥活得
- * 短得多，core 重启后丢掉正合适。兑出来的是签票那一刻的访问密钥与会话来源，
- * 升级时照样再认证一次，所以撤销设备之后手里的票也换不出流。
- */
-export class WsTickets {
-  private readonly tickets = new Map<
-    string,
-    { accessToken: string; origin: string; expiresAtMs: number }
-  >();
-
-  constructor(private readonly now: () => number = Date.now) {}
-
-  issue(input: { accessToken: string; origin: string }): {
-    ticket: string;
-    expiresAtMs: number;
-  } {
-    this.sweep();
-    if (this.tickets.size >= WS_TICKET_LIMIT) {
-      // 塞满的表是一次滥用；最老的那张先让位，而不是让下一次合法的升级失败。
-      const oldest = this.tickets.keys().next().value as string;
-      this.tickets.delete(oldest);
-    }
-    const ticket = randomBytes(32).toString("base64url");
-    const expiresAtMs = this.now() + WS_TICKET_TTL_MS;
-    this.tickets.set(ticket, { ...input, expiresAtMs });
-    return { ticket, expiresAtMs };
-  }
-
-  consume(ticket: string): { accessToken: string; origin: string } | undefined {
-    const found = this.tickets.get(ticket);
-    if (found === undefined) return undefined;
-    this.tickets.delete(ticket);
-    if (found.expiresAtMs <= this.now()) return undefined;
-    return { accessToken: found.accessToken, origin: found.origin };
-  }
-
-  private sweep(): void {
-    const now = this.now();
-    for (const [ticket, entry] of this.tickets) {
-      if (entry.expiresAtMs <= now) this.tickets.delete(ticket);
-    }
-  }
-}
-
-/** `Sec-WebSocket-Protocol` 里的那张票；没有或不止一张都按没有。 */
-export function protocolTicket(headers: IncomingHttpHeaders): string {
-  const raw = singleHeader(headers, "sec-websocket-protocol");
-  if (raw === undefined) return "";
-  const found = raw
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.startsWith(WS_TICKET_PROTOCOL));
-  return found.length === 1
-    ? (found[0] as string).slice(WS_TICKET_PROTOCOL.length)
-    : "";
 }
 
 /** 单独一个 Bearer，重复或不是 Bearer 一律当没有。 */

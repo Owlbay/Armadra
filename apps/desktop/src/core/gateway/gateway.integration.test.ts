@@ -26,6 +26,10 @@ import { accessChanged } from "../identity/gate";
 import { type RunningCore, run } from "../main";
 import { settingsDomain } from "../settings";
 import { tempDir } from "../testing/temp-dir";
+import {
+  type LoopbackSession,
+  loopbackSession,
+} from "../testing/loopback-session";
 import { fingerprintOf } from "./tls";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -45,6 +49,8 @@ interface Person {
 
 let core: RunningCore;
 let loopback: string;
+/** 回环监听上本机主人的会话（契约 §3.2：回环匿名不再按主人放行）。 */
+let session: LoopbackSession;
 let origin: string;
 let ca: string;
 let owner: Person;
@@ -63,8 +69,9 @@ function local(method: string, path: string, body?: unknown): Promise<Answer> {
         method,
         headers:
           payload === undefined
-            ? {}
+            ? { ...session.headers }
             : {
+                ...session.headers,
                 "content-type": "application/json",
                 "content-length": String(Buffer.byteLength(payload)),
               },
@@ -206,6 +213,7 @@ beforeAll(async () => {
   const tcp = core.bound.find((spec) => spec.kind === "tcp");
   if (tcp?.kind !== "tcp") throw new Error("no TCP listener");
   loopback = `http://${tcp.host}:${tcp.port}`;
+  session = await loopbackSession(core, loopback);
 }, 60_000);
 
 afterAll(async () => {

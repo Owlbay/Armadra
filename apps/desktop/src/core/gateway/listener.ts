@@ -9,10 +9,10 @@ import type { Duplex } from "node:stream";
 import { allowOrigins } from "../http/cors";
 import type { CoreContext } from "../main";
 import { identityInstanceId } from "../identity";
-import type { AuthorizationSubject } from "../identity/authorize";
 import { type RequestIdentity, runAs } from "../identity/gate";
 import { markBearerTransport } from "../identity/http";
-import { IdentityService, type Principal } from "../identity/service";
+import { IdentityService } from "../identity/service";
+import { sessionIdentity } from "../identity/transport";
 import { IdentityStore } from "../identity/store";
 import { allScopes } from "../identity/scopes";
 import type { CoreLog } from "../platform";
@@ -136,7 +136,9 @@ export async function openGateway(
 
   let hosts = [...options.hosts()];
   let tls = resolve(hosts);
-  const delegate = core.server.createListener();
+  // 交接点上的请求已经在这里认过人、放进了请求身份（`runAs`）：core 回环监听
+  // 上的那道门（`identity/loopback.ts`）不再对它们判一遍。
+  const delegate = core.server.createListener({ admitted: true });
   const https = createHttpsServer({ cert: tls.cert, key: tls.key });
   // 先于下面的连接筛选登记：它替换的是 TLS 自己的握手入口。
   if (options.acme !== undefined) interceptAcmeTls(https, options.acme);
@@ -510,46 +512,18 @@ const ANONYMOUS: RequestIdentity = {
   subject: { principalId: "", kind: "member", scopes: [] },
 };
 
-function subjectOf(principal: Principal): AuthorizationSubject {
-  return {
-    principalId: principal.principalId,
-    kind: principal.role === "member" ? "member" : "owner",
-    scopes: principal.scopes,
-  };
-}
-
 function requestIdentityOf(
   admission: Admission,
   context: GateContext,
 ): RequestIdentity {
   const principal = admission.principal;
   if (principal === undefined) return ANONYMOUS;
-  const origin = admission.origin ?? "";
-  // 长连接的复核按会话认（升级前已经用访问令牌认过它）：页面刷新过访问令牌，
-  // 流照旧；会话失效、或访问期已过而没有刷新，就不再给主体——被关掉的 socket
-  // 由页面带着新凭据重连，门在升级前。
-  const renew = () => {
-    try {
-      const current = context.service.sessionAccess({
-        sessionId: principal.sessionId,
-        hostId: context.hostId,
-        origin,
-      });
-      return {
-        subject: subjectOf(current),
-        accessExpiresAtMs: current.accessExpiresAtMs,
-      };
-    } catch {
-      return undefined;
-    }
-  };
-  return {
-    subject: subjectOf(principal),
-    device: { deviceId: principal.deviceId, deviceName: principal.deviceName },
-    accessExpiresAtMs: principal.accessExpiresAtMs,
-    renew,
-    revalidate: () => renew()?.subject,
-  };
+  return sessionIdentity(
+    context.service,
+    context.hostId,
+    principal,
+    admission.origin ?? "",
+  );
 }
 
 function refuse(response: ServerResponse, refusal: Refusal): void {
