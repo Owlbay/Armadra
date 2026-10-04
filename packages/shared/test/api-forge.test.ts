@@ -57,8 +57,13 @@ describe("forge API", () => {
       ],
     });
     expect("token" in listed.configs[0]!).toBe(false);
+    // G5-15 起 GitLab 也能配；GitHub 仍只走 §5 的凭据面。
     expect(
       putForgeConfigSchema.safeParse({ forge: "gitlab", apiBase: "https://x" })
+        .success,
+    ).toBe(true);
+    expect(
+      putForgeConfigSchema.safeParse({ forge: "github", apiBase: "https://x" })
         .success,
     ).toBe(false);
     expect(
