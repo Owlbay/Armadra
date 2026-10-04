@@ -400,6 +400,8 @@ export function SignIn({
               value={code}
               disabled={disabled}
               aria-label={t("auth.mfa.code")}
+              // Field 竖排给每个子元素 w-full，格子组要在整行里居中。
+              containerClassName="justify-center"
               onChange={setCode}
               onComplete={(value: string) => submitCode(value)}
             >
