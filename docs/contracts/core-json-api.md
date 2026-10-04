@@ -932,6 +932,7 @@ G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：�
 - 重试走投递队列（`origin: "first-task"`，发起方是协调者节点），门链、租约与回执与 `canvas send` 相同，不替人回答任何提示。拒绝：没有这个任务 `404 not_found`；不是 `failed` / `stopped` `409 task_not_failed`；没记正文（不带 `--task` 起的）`409 task_prompt_missing`；成员节点已不在协调者那块画板上 `409 task_node_missing`；目标队伍满了 `409 queue_full`。
 - 权限：列表是 `canvas:read`（按 `boardId` 查画布），重试是 `agent:launch`（按任务的协调者节点查画布）；服务器壳的路由门在 `identity/route-access.ts`。
 - 没有专门的事件：抽屉开着时每 5 秒重读，`workflow.*` 帧到达时也重读。
+- 汇总便签由页面在画布文档里认：来源是这个协调者（`data.source.nodeId`）或与它连着线的便签。`canvas sticky` 写的便签自 G5-09 起带 `data.source = { nodeId: <写它的节点>, sessionId: "" }`。
 
 ## 16. 实时协同：`…/boards/{boardId}/sync` 与评论
 
