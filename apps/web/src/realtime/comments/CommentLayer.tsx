@@ -102,7 +102,7 @@ export function anchorAt(
   return { kind: "point", x: Math.round(point.x), y: Math.round(point.y) };
 }
 
-interface PinGroup {
+export interface PinGroup {
   key: string;
   anchor: CommentAnchor;
   threads: CommentThreadData[];
@@ -130,6 +130,40 @@ export function pinGroups(comments: readonly BoardComment[]): PinGroup[] {
     groups.set(key, group);
   }
   return [...groups.values()];
+}
+
+/** 屏幕上两枚钉的中心距离小于它就聚成一枚（钉是 24px 圆，再近就叠住了）。 */
+export const CLUSTER_RADIUS_PX = 24;
+
+/** 屏幕上挨得太近的几枚钉聚成的一枚；只有一枚时就是它自己。 */
+export interface PinCluster {
+  /** 第一枚钉的锚点键：弹层开合与抽屉定位都按它。 */
+  key: string;
+  at: { x: number; y: number };
+  groups: PinGroup[];
+}
+
+/**
+ * 按屏幕距离聚钉：画布坐标的距离乘缩放就是屏幕距离，所以缩放一变就得重算。
+ * 贪心按顺序归入第一个中心够近的簇，簇心取它的第一枚钉——钉不会因为后来者
+ * 加入而挪位置。几十枚钉的量，两两比较足够。
+ */
+export function clusterPins(
+  pins: readonly { group: PinGroup; at: { x: number; y: number } }[],
+  zoom: number,
+  radius = CLUSTER_RADIUS_PX,
+): PinCluster[] {
+  const limit = radius / (zoom > 0 ? zoom : 1);
+  const clusters: PinCluster[] = [];
+  for (const pin of pins) {
+    const near = clusters.find(
+      (cluster) =>
+        Math.hypot(cluster.at.x - pin.at.x, cluster.at.y - pin.at.y) < limit,
+    );
+    if (near) near.groups.push(pin.group);
+    else clusters.push({ key: pin.group.key, at: pin.at, groups: [pin.group] });
+  }
+  return clusters;
 }
 
 const NO_NODES: CanvasNode[] = [];
@@ -247,8 +281,18 @@ function Comments({
     />
   );
 
-  const groups = pinGroups(comments);
   const threads = threadsOf(comments);
+  // 先按锚点聚、再按屏幕距离聚；缩放一变屏幕距离就变，所以跟着 zoom 重算。
+  const clusters = React.useMemo(() => {
+    const placed: { group: PinGroup; at: { x: number; y: number } }[] = [];
+    for (const group of pinGroups(comments)) {
+      const at = anchorPosition(group.anchor, nodes, items);
+      if (!at) continue;
+      if (onlyOpen && mode && !group.open) continue;
+      placed.push({ group, at });
+    }
+    return clusterPins(placed, zoom);
+  }, [comments, nodes, items, onlyOpen, mode, zoom]);
   const dot = zoom < 0.5;
 
   // 评论模式下点钉：抽屉里滚到它的线程，而不是再开一个弹层。
@@ -271,37 +315,53 @@ function Comments({
         className="absolute top-0 left-0"
         style={{ zIndex: "var(--z-canvas-overlay)" }}
       >
-        {groups.map((group) => {
-          const at = anchorPosition(group.anchor, nodes, items);
-          if (!at) return null;
-          if (onlyOpen && mode && !group.open) return null;
+        {clusters.map((cluster) => {
+          const first = cluster.groups[0]!;
+          const merged = cluster.groups.length > 1;
+          const count = cluster.groups.reduce(
+            (sum, group) => sum + group.count,
+            0,
+          );
+          const open = cluster.groups.some((group) => group.open);
+          const members = cluster.groups.map((group) => group.key);
+          const clusterThreads = cluster.groups.flatMap(
+            (group) => group.threads,
+          );
           return (
             <div
-              key={group.key}
+              key={cluster.key}
               // 钉上的按下不该变成画布的框选或拖动。
               onPointerDown={(event) => event.stopPropagation()}
               className="absolute top-0 left-0 origin-top-left"
               style={{
-                transform: `translate(${at.x}px, ${at.y}px) scale(${scale}) translate(-50%, -50%)`,
+                transform: `translate(${cluster.at.x}px, ${cluster.at.y}px) scale(${scale}) translate(-50%, -50%)`,
               }}
             >
               <Popover
-                open={!mode && pinKey === group.key}
-                onOpenChange={(value) => openPin(value ? group.key : null)}
+                open={!mode && pinKey !== null && members.includes(pinKey)}
+                onOpenChange={(value) => openPin(value ? cluster.key : null)}
               >
                 <PopoverTrigger asChild>
                   <CommentPin
-                    count={group.count}
-                    open={group.open}
+                    count={count}
+                    merged={merged ? cluster.groups.length : undefined}
+                    open={open}
                     dot={dot}
-                    color={authorColor(people, group.firstAuthor, selfId)}
-                    label={t("comments.pin", { count: group.count })}
+                    color={authorColor(people, first.firstAuthor, selfId)}
+                    label={
+                      merged
+                        ? t("comments.cluster", {
+                            pins: cluster.groups.length,
+                            count,
+                          })
+                        : t("comments.pin", { count })
+                    }
                   />
                 </PopoverTrigger>
                 <PopoverContent align="start" className="w-80 p-0">
                   <ScrollArea className="max-h-[420px]">
                     <div className="flex flex-col gap-4 p-3">
-                      {group.threads.map((thread, index) => (
+                      {clusterThreads.map((thread, index) => (
                         <React.Fragment key={thread.root.id}>
                           {index > 0 && <Separator />}
                           {renderThread(thread, { compact: false })}
