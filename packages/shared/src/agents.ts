@@ -435,23 +435,6 @@ export interface AssembleLaunchCommandInput {
    */
   programArgs?: readonly string[];
   /**
-   * @deprecated Extra argv appended after the flags — an older core's
-   * injection argv (`launchArgs`). A current core's canvas launcher appends
-   * the injection itself (docs/design/canvas-launcher.md §8.1): the page puts
-   * the launcher in {@link programOverride} and the CLI's program in front of
-   * {@link programArgs} instead. Kept one release for the page's fallback to
-   * an older core. A custom entry's own argv comes from {@link custom}.
-   */
-  extraArgs?: readonly string[];
-  /**
-   * @deprecated Words appended to the *typed* line, in front of the prompt:
-   * an older core's injection as `launchWords`, some of which read an
-   * environment variable of the node's terminal. Quoted with {@link dialect}
-   * like the rest. Same fallback as {@link extraArgs}; not part of
-   * {@link assembleLaunchArgv} — a frozen plan never carries the injection.
-   */
-  shellWords?: readonly LaunchWord[];
-  /**
    * The dialect of the shell the line is typed into (`shellDialect` of the
    * node terminal's shell). POSIX when absent.
    */
@@ -571,9 +554,9 @@ export function assembleLaunchArgv(
     args.push(base.sessionIdFlag, input.sessionId);
   }
 
-  // The custom entry's own argv comes first: it is part of how that program is
-  // invoked (`npx -y my-cli`), while `extraArgs` is a per-launch addition.
-  args.push(...(custom?.args ?? []), ...(input.extraArgs ?? []));
+  // The custom entry's own argv: it is part of how that program is invoked
+  // (`npx -y my-cli`).
+  args.push(...(custom?.args ?? []));
 
   const prompt = input.prompt ? collapsePrompt(input.prompt) : "";
   let stdinPrompt: string | undefined;
@@ -603,15 +586,7 @@ export function assembleLaunchCommand(
   input: AssembleLaunchCommandInput,
 ): LaunchCommand {
   const { program, args, stdinPrompt } = assembleLaunchArgv(input);
-  // The prompt, when it is on the line, stays last: the injected words go in
-  // front of it. How many words it took is what the same launch without it
-  // lacks — one positional, or a flag and its value.
-  const withoutPrompt = input.prompt
-    ? assembleLaunchArgv({ ...input, prompt: undefined }).args.length
-    : args.length;
-  const words: LaunchWord[] = [...args];
-  words.splice(withoutPrompt, 0, ...(input.shellWords ?? []));
-  words.unshift(...(input.programArgs ?? []));
+  const words: LaunchWord[] = [...(input.programArgs ?? []), ...args];
   return {
     command: shellCommandLine(program, words, input.dialect ?? "posix"),
     ...(stdinPrompt ? { stdinPrompt } : {}),
