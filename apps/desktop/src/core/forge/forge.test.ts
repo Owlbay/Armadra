@@ -551,6 +551,26 @@ describe("/api/forge/repos/…（§29.4）", () => {
       status: 200,
       body: { merged: true, sha: "d".repeat(40) },
     });
+    // Gitea 不按仓库设置细分合并方式：三种都给，不发请求。
+    const before = h.gitea.requests.length;
+    expect((await h.call("GET", `${REPO_PATH}/merge-options`)).body).toEqual({
+      methods: ["merge", "squash", "rebase"],
+      autoMerge: false,
+      mergeTrain: false,
+    });
+    expect(h.gitea.requests.length).toBe(before);
+    // 没有「流水线通过后合并」：400，不发请求。
+    expect(
+      (
+        await h.call("POST", `${REPO_PATH}/pulls/3/auto-merge`, {
+          headSha: SHA,
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (await h.call("DELETE", `${REPO_PATH}/pulls/3/auto-merge`)).status,
+    ).toBe(400);
+    expect(h.gitea.requests.length).toBe(before);
     const pulls = await h.call("GET", `${REPO_PATH}/pulls`, undefined, {
       state: "closed",
     });
@@ -561,6 +581,75 @@ describe("/api/forge/repos/…（§29.4）", () => {
     for (const request of h.gitea.requests) {
       expect(request.authorization).toBe(`token ${FAKE_GITEA.token}`);
     }
+  });
+
+  it("Gitea：合并后删源分支只删评审者看到的那个 head；fork 与没合并的不删", async () => {
+    const h = await harness();
+    await configureHost(h);
+    const base = {
+      body: "",
+      state: "closed" as const,
+      merged: true,
+      mergeable: true,
+      base: "main",
+      sha: SHA,
+      files: [],
+      diff: "",
+    };
+    h.gitea.pulls.push(
+      { ...base, number: 5, title: "merged", head: "feature/x" },
+      { ...base, number: 6, title: "fork", head: "feature/y", fork: true },
+      {
+        ...base,
+        number: 7,
+        title: "open",
+        head: "feature/z",
+        state: "open",
+        merged: false,
+      },
+    );
+    h.gitea.branches.set("feature/x", {
+      sha: "b".repeat(40),
+      protected: false,
+    });
+    const pull = (await h.call("GET", `${REPO_PATH}/pulls/6`)).body;
+    expect(pull.fromFork).toBe(true);
+    expect((await h.call("GET", `${REPO_PATH}/pulls/5`)).body.fromFork).toBe(
+      false,
+    );
+    const drop = (number: number) =>
+      h.call("DELETE", `${REPO_PATH}/pulls/${number}/branch`, undefined, {
+        headSha: SHA,
+      });
+    // 分支走到了别的提交：上面有这次合并没带走的东西。
+    expect((await drop(5)).body).toEqual({
+      deleted: false,
+      reasonCode: "BRANCH_MOVED",
+    });
+    h.gitea.branches.set("feature/x", { sha: SHA, protected: true });
+    expect((await drop(5)).body.reasonCode).toBe("BRANCH_PROTECTED");
+    h.gitea.branches.set("feature/x", { sha: SHA, protected: false });
+    expect(await drop(5)).toEqual({
+      status: 200,
+      body: { deleted: true, reasonCode: "" },
+    });
+    expect(h.gitea.branches.has("feature/x")).toBe(false);
+    expect(
+      h.gitea.requests.filter((r) => r.method === "DELETE").map((r) => r.path),
+    ).toEqual(["/api/v1/repos/acme/app/branches/feature/x"]);
+    expect((await drop(5)).body.reasonCode).toBe("ALREADY_DELETED");
+    expect((await drop(6)).body.reasonCode).toBe("FORK_BRANCH");
+    expect((await drop(7)).body.reasonCode).toBe("NOT_MERGED");
+    expect(
+      (
+        await h.call("DELETE", `${REPO_PATH}/pulls/5/branch`, undefined, {
+          headSha: "abc",
+        })
+      ).status,
+    ).toBe(400);
+    expect(h.gitea.requests.filter((r) => r.method === "DELETE")).toHaveLength(
+      1,
+    );
   });
 
   it("参数不对 400；远端 403 / 401 / 5xx 写各有自己的码", async () => {

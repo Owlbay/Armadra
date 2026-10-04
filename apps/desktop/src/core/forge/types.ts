@@ -66,6 +66,13 @@ export interface ForgePull {
   readonly createdAtMs: number;
   readonly updatedAtMs: number;
   readonly mergedAtMs: number | null;
+  /**
+   * 已排进「流水线通过后合并」（GitLab 的 auto-merge / merge when pipeline
+   * succeeds）。没有这个概念的平台恒为 `false`。
+   */
+  readonly autoMerge: boolean;
+  /** head 分支在别人的仓库里：本地检出不沿用它的名字，合并后也不删它。 */
+  readonly fromFork: boolean;
 }
 
 export interface ForgeFile {
@@ -93,6 +100,42 @@ export interface ForgeChecks {
 export interface ForgeMerged {
   readonly merged: true;
   readonly sha: string | null;
+}
+
+/** 这个仓库现在能用的合并方式（契约 §29.4 `merge-options`）。 */
+export interface ForgeMergeOptions {
+  readonly methods: readonly ForgeMergeMethod[];
+  /** 能不能「流水线通过后合并」（{@link Forge.autoMerge}）。 */
+  readonly autoMerge: boolean;
+  /** 项目开了合并列车：自动合并排进列车，而不是直接合。 */
+  readonly mergeTrain: boolean;
+}
+
+/**
+ * 「流水线通过后合并」的结果：流水线已经过了时远端当场合并（`merged: true`），
+ * 否则是排上了（`merged: false`）。`train` 表示排进的是合并列车。
+ */
+export interface ForgeAutoMerge {
+  readonly merged: boolean;
+  readonly sha: string | null;
+  readonly train: boolean;
+}
+
+/** 三种都给：GitHub 与 Gitea 不再按仓库设置细分。 */
+export const ALL_MERGE_METHODS: readonly ForgeMergeMethod[] = [
+  "merge",
+  "squash",
+  "rebase",
+];
+
+/**
+ * 合并后删源分支的结果（与 GitHub 面 `delete-branch` 同形）。没删时
+ * `reasonCode` 说为什么：`NOT_MERGED`、`FORK_BRANCH`、`BRANCH_MOVED`（分支上有
+ * 这次合并没带走的提交）、`BRANCH_PROTECTED`、`ALREADY_DELETED`。
+ */
+export interface ForgeBranchDeletion {
+  readonly deleted: boolean;
+  readonly reasonCode: string;
 }
 
 export interface ForgePage<T> {
@@ -150,6 +193,24 @@ export interface Forge {
     number: number,
     input: MergeInput,
   ): Promise<ForgeMerged>;
+  mergeOptions(repo: ForgeRepo): Promise<ForgeMergeOptions>;
+  /** 流水线通过后合并；只有 GitLab 有。同样核对 head。 */
+  autoMerge?(
+    repo: ForgeRepo,
+    number: number,
+    input: MergeInput,
+  ): Promise<ForgeAutoMerge>;
+  /** 撤掉还没发生的自动合并。 */
+  cancelAutoMerge?(repo: ForgeRepo, number: number): Promise<void>;
+  /**
+   * 合并后删源分支：PR 必须已合并、不是 fork，分支还指着评审者看到的那个
+   * head，且没受保护。GitHub 走自己的 `delete-branch`（§5），这里不接。
+   */
+  deleteBranch?(
+    repo: ForgeRepo,
+    number: number,
+    headSha: string,
+  ): Promise<ForgeBranchDeletion>;
 }
 
 /**

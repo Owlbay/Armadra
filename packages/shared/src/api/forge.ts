@@ -96,6 +96,10 @@ export const forgePullSchema = z.object({
   createdAtMs: z.number().int(),
   updatedAtMs: z.number().int(),
   mergedAtMs: z.number().int().nullable(),
+  /** Queued to merge when the pipeline succeeds (GitLab, §29.6). */
+  autoMerge: z.boolean().default(false),
+  /** The head branch lives in another repository. */
+  fromFork: z.boolean().default(false),
 });
 export type ForgePull = z.infer<typeof forgePullSchema>;
 
@@ -156,6 +160,30 @@ export const forgeMergedSchema = z.object({
   sha: z.string().nullable(),
 });
 
+/** `GET …/merge-options` (§29.4): the methods this repository accepts now. */
+export const forgeMergeOptionsSchema = z.object({
+  methods: z.array(z.enum(["merge", "squash", "rebase"])),
+  /** "Merge when the pipeline succeeds" is available (GitLab). */
+  autoMerge: z.boolean().default(false),
+  /** The project runs merge trains: auto-merge joins the train. */
+  mergeTrain: z.boolean().default(false),
+});
+export type ForgeMergeOptions = z.infer<typeof forgeMergeOptionsSchema>;
+
+/** `POST …/pulls/{number}/auto-merge`: merged now, or queued (maybe on a train). */
+export const forgeAutoMergeSchema = z.object({
+  merged: z.boolean(),
+  sha: z.string().nullable(),
+  train: z.boolean(),
+});
+export type ForgeAutoMerge = z.infer<typeof forgeAutoMergeSchema>;
+
+/** `DELETE …/pulls/{number}/branch`: deleted, or why not (`reasonCode`). */
+export const forgeBranchDeletionSchema = z.object({
+  deleted: z.boolean(),
+  reasonCode: z.string(),
+});
+
 /** Refusal codes of `/api/forge/*` besides the shared ones (§29.5). */
 export const FORGE_ERROR_CODES = [
   "forge_not_configured",
@@ -166,4 +194,5 @@ export const FORGE_ERROR_CODES = [
   "unknown_outcome",
   "rate_limited",
   "conflict",
+  "rebase_started",
 ] as const;

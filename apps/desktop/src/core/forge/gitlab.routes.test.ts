@@ -82,6 +82,10 @@ async function harness(pick: string[] = []): Promise<Harness> {
       "statuses",
       "merge",
       "refusals",
+      "subgroups",
+      "merge-methods",
+      "auto-merge",
+      "cleanup",
     ],
     pick,
   );
@@ -206,6 +210,120 @@ describe("配置与识别", () => {
   });
 });
 
+describe("多级子组", () => {
+  const NESTED = "git@gitlab.example.test:platform/web/app.git";
+
+  it("主机配成 GitLab：远端整条路径除最后一段都是 owner，项目整条编码，网页地址带子组", async () => {
+    const h = await harness();
+    await configure(h);
+    for (const remoteUrl of [
+      NESTED,
+      "https://gitlab.example.test/platform/web/app.git",
+      "ssh://git@gitlab.example.test:2222/platform/web/app",
+    ]) {
+      const resolved = await h.call("POST", "/api/forge/resolve", {
+        remoteUrl,
+      });
+      expect(resolved.body).toMatchObject({
+        repository: { host: HOST, owner: "platform/web", name: "app" },
+        forge: "gitlab",
+        webUrl: "https://gitlab.example.test/platform/web/app",
+        credential: true,
+      });
+    }
+    const base = `/api/forge/repos/${HOST}/${encodeURIComponent("platform/web")}/app`;
+    expect((await h.call("GET", base)).body.repository.owner).toBe(
+      "platform/web",
+    );
+    const pulls = await h.call("GET", `${base}/pulls`);
+    expect(pulls.status).toBe(200);
+    expect(pulls.body.items.map((pull: any) => pull.number)).toEqual([31]);
+    expect(h.tape.requests.at(-1)?.path).toBe(
+      "/projects/platform%2Fweb%2Fapp/merge_requests",
+    );
+    const pull = await h.call("GET", `${base}/pulls/31`);
+    expect(pull.body.url).toBe(
+      "https://gitlab.example.test/platform/web/app/-/merge_requests/31",
+    );
+  });
+
+  it("GitLab 装在子路径下：http(s) 远端先去掉站点前缀；仓库一行按最长的 owner 先认", async () => {
+    const h = await harness();
+    // 不给令牌就不核验：这里只看识别。
+    const saved = await h.call("PUT", `/api/forge/configs/${HOST}`, {
+      forge: "gitlab",
+      apiBase: "https://gitlab.example.test/code",
+    });
+    expect(saved.status).toBe(200);
+    const viaWeb = await h.call("POST", "/api/forge/resolve", {
+      remoteUrl: "https://gitlab.example.test/code/platform/web/app.git",
+    });
+    expect(viaWeb.body).toMatchObject({
+      repository: { owner: "platform/web", name: "app" },
+      webUrl: "https://gitlab.example.test/code/platform/web/app",
+    });
+    // ssh 远端没有站点前缀。
+    const viaSsh = await h.call("POST", "/api/forge/resolve", {
+      remoteUrl: NESTED,
+    });
+    expect(viaSsh.body.repository.owner).toBe("platform/web");
+
+    const repoKey = `${HOST}/${encodeURIComponent("platform/web")}/app`;
+    const row = await h.call("PUT", `/api/forge/configs/${repoKey}`, {
+      forge: "gitlab",
+      apiBase: "https://gitlab.example.test",
+    });
+    expect(row.body.repoKey).toBe(`${HOST}/platform/web/app`);
+    const deep = await h.call("POST", "/api/forge/resolve", {
+      remoteUrl: "git@gitlab.example.test:platform/web/app.git",
+    });
+    expect(deep.body).toMatchObject({
+      configKey: `${HOST}/platform/web/app`,
+      repository: { owner: "platform/web", name: "app" },
+      webUrl: "https://gitlab.example.test/platform/web/app",
+    });
+  });
+
+  it("Gitea 与 GitHub 不认多级 owner：配置拒绝、识别按最后两段、直接寻址认不出", async () => {
+    const h = await harness();
+    const refused = await h.call(
+      "PUT",
+      `/api/forge/configs/${HOST}/${encodeURIComponent("platform/web")}/app`,
+      { forge: "gitea", apiBase: "https://gitlab.example.test" },
+    );
+    expect(refused).toMatchObject({
+      status: 400,
+      body: { code: "bad_request" },
+    });
+    await h.call("PUT", `/api/forge/configs/${HOST}`, {
+      forge: "gitea",
+      apiBase: "https://gitlab.example.test",
+    });
+    const flat = await h.call("POST", "/api/forge/resolve", {
+      remoteUrl: NESTED,
+    });
+    expect(flat.body).toMatchObject({
+      repository: { owner: "web", name: "app" },
+      forge: "gitea",
+    });
+    const nested = await h.call(
+      "GET",
+      `/api/forge/repos/${HOST}/${encodeURIComponent("platform/web")}/app`,
+    );
+    expect(nested.body).toMatchObject({ forge: null, credential: false });
+    const github = await h.call(
+      "GET",
+      `/api/forge/repos/github.com/${encodeURIComponent("a/b")}/c`,
+    );
+    expect(github.body.forge).toBeNull();
+    const deep = await h.call(
+      "GET",
+      `/api/forge/repos/${HOST}/${encodeURIComponent("a/../b")}/c`,
+    );
+    expect(deep.status).toBe(400);
+  });
+});
+
 describe("读写", () => {
   it("issue / MR 列表与详情、文件、检查、合并都走 GitLab 的形状", async () => {
     const h = await harness();
@@ -261,6 +379,76 @@ describe("读写", () => {
       status: 400,
       body: { code: "bad_request" },
     });
+  });
+
+  it("merge-options 按项目设置；变基先发出时答 409 rebase_started", async () => {
+    const plain = await harness();
+    await configure(plain);
+    expect(
+      (await plain.call("GET", `${REPO_PATH}/merge-options`)).body,
+    ).toEqual({
+      methods: ["merge", "squash"],
+      autoMerge: true,
+      mergeTrain: false,
+    });
+
+    const h = await harness(["project-rebase-merge", "need-rebase"]);
+    await configure(h);
+    expect((await h.call("GET", `${REPO_PATH}/merge-options`)).body).toEqual({
+      methods: ["merge", "rebase", "squash"],
+      autoMerge: true,
+      mergeTrain: false,
+    });
+    const started = await h.call("POST", `${REPO_PATH}/pulls/12/merge`, {
+      method: "rebase",
+      headSha: GITLAB_FIXTURE.sha,
+    });
+    expect(started).toMatchObject({
+      status: 409,
+      body: { code: "rebase_started" },
+    });
+    expect(
+      h.tape.requests.filter((r) => r.method === "PUT").map((r) => r.path),
+    ).toEqual(["/projects/acme%2Fapp/merge_requests/12/rebase"]);
+  });
+
+  it("流水线通过后合并：POST 排上、DELETE 撤销", async () => {
+    const h = await harness(["merge-scheduled"]);
+    await configure(h);
+    const queued = await h.call("POST", `${REPO_PATH}/pulls/12/auto-merge`, {
+      method: "merge",
+      headSha: GITLAB_FIXTURE.sha,
+    });
+    expect(queued).toEqual({
+      status: 200,
+      body: { merged: false, sha: null, train: false },
+    });
+    const bad = await h.call("POST", `${REPO_PATH}/pulls/12/auto-merge`, {
+      method: "fast-forward",
+      headSha: GITLAB_FIXTURE.sha,
+    });
+    expect(bad.status).toBe(400);
+
+    const set = await harness(["auto-merge-set"]);
+    await configure(set);
+    expect(
+      await set.call("DELETE", `${REPO_PATH}/pulls/12/auto-merge`),
+    ).toEqual({ status: 200, body: { cancelled: true } });
+    const idle = await h.call("DELETE", `${REPO_PATH}/pulls/12/auto-merge`);
+    expect(idle).toMatchObject({ status: 409, body: { code: "conflict" } });
+  });
+
+  it("合并后删源分支：DELETE pulls/{n}/branch?headSha=", async () => {
+    const h = await harness(["merged-mr"]);
+    await configure(h);
+    expect(
+      await h.call("DELETE", `${REPO_PATH}/pulls/12/branch`, undefined, {
+        headSha: GITLAB_FIXTURE.sha,
+      }),
+    ).toEqual({ status: 200, body: { deleted: true, reasonCode: "" } });
+    expect(
+      (await h.call("DELETE", `${REPO_PATH}/pulls/12/branch`)).status,
+    ).toBe(400);
   });
 
   it("细粒度令牌缺范围：403 forge_scope，远端原话不外传", async () => {

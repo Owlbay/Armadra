@@ -17,6 +17,7 @@ import {
 import {
   GitlabForge,
   gitlabApiBase,
+  gitlabMergeMethods,
   gitlabRefusal,
   gitlabWebRoot,
   lineCounts,
@@ -96,6 +97,22 @@ describe("认证与 issue", () => {
       order_by: "updated_at",
       sort: "desc",
     });
+  });
+
+  it("多级子组：owner 带斜杠，整条路径编码成一段；每段仍要合格", async () => {
+    const { forge, requests } = forgeOver(["subgroups"]);
+    const nested = { ...REPO, owner: "platform/web" };
+    const page = await forge.listPulls(nested, LIST);
+    expect(page.items.map((pull) => pull.number)).toEqual([31]);
+    expect(requests[0]?.path).toBe(
+      "/projects/platform%2Fweb%2Fapp/merge_requests",
+    );
+    for (const owner of ["platform//web", "../web", "platform/"]) {
+      expect(
+        (await rejection(forge.getPull({ ...REPO, owner }, 31))).reason,
+      ).toBe("REPOSITORY_INVALID");
+    }
+    expect(requests).toHaveLength(1);
   });
 
   it("issue 的 iid 是编号，opened ↔ open，Link 头给下一页", async () => {
@@ -319,16 +336,19 @@ describe("合并", () => {
     ).toBe("HEAD_CHANGED");
     expect(stale.requests.map((request) => request.method)).toEqual(["GET"]);
 
+    // 项目是合并提交（`merge_method: merge`）：没有变基这一种，连 MR 都不读。
+    const plain = forgeOver(["merge-requests", "merge", "merge-methods"]);
     expect(
       (
         await rejection(
-          stale.forge.merge(REPO, 12, {
+          plain.forge.merge(REPO, 12, {
             method: "rebase",
             headSha: GITLAB_FIXTURE.sha,
           }),
         )
       ).reason,
     ).toBe("MERGE_METHOD_UNSUPPORTED");
+    expect(plain.requests.map((r) => r.path)).toEqual(["/projects/acme%2Fapp"]);
 
     const raced = forgeOver(["merge-requests", "refusals"], ["head-changed"]);
     const error = await rejection(
@@ -355,6 +375,271 @@ describe("合并", () => {
         )
       ).reason,
     ).toBe("NOT_MERGEABLE");
+  });
+});
+
+describe("合并方式与变基", () => {
+  it("项目设置 → 能用的方式", () => {
+    expect(gitlabMergeMethods({ merge_method: "merge" })).toEqual([
+      "merge",
+      "squash",
+    ]);
+    expect(
+      gitlabMergeMethods({
+        merge_method: "rebase_merge",
+        squash_option: "default_on",
+      }),
+    ).toEqual(["merge", "rebase", "squash"]);
+    expect(
+      gitlabMergeMethods({ merge_method: "ff", squash_option: "never" }),
+    ).toEqual(["rebase"]);
+    expect(
+      gitlabMergeMethods({ merge_method: "ff", squash_option: "always" }),
+    ).toEqual(["squash"]);
+    // 老版本没有这两个字段：按合并提交、可 squash。
+    expect(gitlabMergeMethods({})).toEqual(["merge", "squash"]);
+  });
+
+  it("merge-options 读项目设置", async () => {
+    const { forge, requests } = forgeOver(
+      ["merge-methods"],
+      ["project-rebase-merge"],
+    );
+    expect(await forge.mergeOptions(REPO)).toEqual({
+      methods: ["merge", "rebase", "squash"],
+      autoMerge: true,
+      mergeTrain: false,
+    });
+    expect(requests.map((r) => [r.method, r.path])).toEqual([
+      ["GET", "/projects/acme%2Fapp"],
+    ]);
+  });
+
+  it("源分支落后：先发变基、答 REBASE_STARTED，不在同一次里合", async () => {
+    const { forge, requests } = forgeOver(
+      ["merge-requests", "merge", "merge-methods"],
+      ["project-ff", "need-rebase"],
+    );
+    const error = await rejection(
+      forge.merge(REPO, 12, { method: "rebase", headSha: GITLAB_FIXTURE.sha }),
+    );
+    expect([error.kind, error.reason]).toEqual(["conflict", "REBASE_STARTED"]);
+    expect(requests.map((r) => [r.method, r.path])).toEqual([
+      ["GET", "/projects/acme%2Fapp"],
+      ["GET", "/projects/acme%2Fapp/merge_requests/12"],
+      ["PUT", "/projects/acme%2Fapp/merge_requests/12/rebase"],
+    ]);
+  });
+
+  it("不落后：照常带 sha 合并，不 squash，由项目设置快进", async () => {
+    const { forge, requests } = forgeOver(
+      ["merge-requests", "merge", "merge-methods"],
+      ["project-ff"],
+    );
+    expect(
+      await forge.merge(REPO, 12, {
+        method: "rebase",
+        headSha: GITLAB_FIXTURE.sha,
+      }),
+    ).toEqual({ merged: true, sha: GITLAB_FIXTURE.mergedSha });
+    const put = requests.find((r) => r.method === "PUT");
+    expect(put?.path).toBe("/projects/acme%2Fapp/merge_requests/12/merge");
+    expect(put?.body).toEqual({ sha: GITLAB_FIXTURE.sha, squash: false });
+    expect(requests.some((r) => r.path.endsWith("/rebase"))).toBe(false);
+  });
+
+  it("head 变了时不发变基", async () => {
+    const { forge, requests } = forgeOver(
+      ["merge-requests", "merge-methods"],
+      ["project-ff", "need-rebase"],
+    );
+    const error = await rejection(
+      forge.merge(REPO, 12, {
+        method: "rebase",
+        headSha: GITLAB_FIXTURE.oldSha,
+      }),
+    );
+    expect(error.reason).toBe("HEAD_CHANGED");
+    expect(requests.some((r) => r.method === "PUT")).toBe(false);
+  });
+});
+
+describe("流水线通过后合并与合并列车", () => {
+  const ALL = [
+    "merge-requests",
+    "merge",
+    "merge-methods",
+    "auto-merge",
+  ] as const;
+
+  it("排上：PUT …/merge 带 merge_when_pipeline_succeeds 与 auto_merge，答 merged: false", async () => {
+    const { forge, requests } = forgeOver(ALL, ["merge-scheduled"]);
+    expect(
+      await forge.autoMerge(REPO, 12, {
+        method: "squash",
+        headSha: GITLAB_FIXTURE.sha,
+      }),
+    ).toEqual({ merged: false, sha: null, train: false });
+    const writes = requests.filter((r) => r.method !== "GET");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({
+      method: "PUT",
+      path: "/projects/acme%2Fapp/merge_requests/12/merge",
+      body: {
+        sha: GITLAB_FIXTURE.sha,
+        squash: true,
+        merge_when_pipeline_succeeds: true,
+        auto_merge: true,
+      },
+    });
+  });
+
+  it("流水线已经过了：远端当场合并，交回合并提交", async () => {
+    const { forge } = forgeOver(ALL);
+    expect(
+      await forge.autoMerge(REPO, 12, {
+        method: "merge",
+        headSha: GITLAB_FIXTURE.sha,
+      }),
+    ).toEqual({ merged: true, sha: GITLAB_FIXTURE.mergedSha, train: false });
+  });
+
+  it("答复既没合也没排上：结果未知，不重试", async () => {
+    const { forge, requests } = forgeOver(ALL, ["merge-ignored"]);
+    const error = await rejection(
+      forge.autoMerge(REPO, 12, {
+        method: "merge",
+        headSha: GITLAB_FIXTURE.sha,
+      }),
+    );
+    expect([error.kind, error.reason]).toEqual([
+      "unknownOutcome",
+      "AUTO_MERGE_NOT_SET",
+    ]);
+    expect(requests.filter((r) => r.method === "PUT")).toHaveLength(1);
+  });
+
+  it("项目开了合并列车：排进列车，不直接 PUT merge", async () => {
+    const { forge, requests } = forgeOver(ALL, ["project-train"]);
+    expect((await forge.mergeOptions(REPO)).mergeTrain).toBe(true);
+    expect(
+      await forge.autoMerge(REPO, 12, {
+        method: "merge",
+        headSha: GITLAB_FIXTURE.sha,
+      }),
+    ).toEqual({ merged: false, sha: null, train: true });
+    const writes = requests.filter((r) => r.method !== "GET");
+    expect(writes).toEqual([
+      expect.objectContaining({
+        method: "POST",
+        path: "/projects/acme%2Fapp/merge_trains/merge_requests/12",
+        body: { sha: GITLAB_FIXTURE.sha, squash: false, auto_merge: true },
+      }),
+    ]);
+  });
+
+  it("方式不在项目设置里、head 变了：都不写", async () => {
+    const { forge, requests } = forgeOver(ALL);
+    expect(
+      (
+        await rejection(
+          forge.autoMerge(REPO, 12, {
+            method: "rebase",
+            headSha: GITLAB_FIXTURE.sha,
+          }),
+        )
+      ).reason,
+    ).toBe("MERGE_METHOD_UNSUPPORTED");
+    expect(
+      (
+        await rejection(
+          forge.autoMerge(REPO, 12, {
+            method: "merge",
+            headSha: GITLAB_FIXTURE.oldSha,
+          }),
+        )
+      ).reason,
+    ).toBe("HEAD_CHANGED");
+    expect(requests.every((r) => r.method === "GET")).toBe(true);
+  });
+
+  it("MR 上的 merge_when_pipeline_succeeds 映射成 autoMerge；撤销只对排上的发", async () => {
+    const set = forgeOver(ALL, ["auto-merge-set"]);
+    expect((await set.forge.getPull(REPO, 12)).autoMerge).toBe(true);
+    await set.forge.cancelAutoMerge(REPO, 12);
+    expect(set.requests.at(-1)).toMatchObject({
+      method: "POST",
+      path: "/projects/acme%2Fapp/merge_requests/12/cancel_merge_when_pipeline_succeeds",
+    });
+
+    const idle = forgeOver(ALL);
+    expect((await idle.forge.getPull(REPO, 12)).autoMerge).toBe(false);
+    expect((await rejection(idle.forge.cancelAutoMerge(REPO, 12))).reason).toBe(
+      "NOT_SCHEDULED",
+    );
+    expect(idle.requests.every((r) => r.method === "GET")).toBe(true);
+  });
+});
+
+describe("fork、流水线与合并后清理", () => {
+  const ALL = ["merge-requests", "statuses", "cleanup"] as const;
+
+  it("source / target 项目不同记 fromFork", async () => {
+    expect((await forgeOver(ALL).forge.getPull(REPO, 12)).fromFork).toBe(false);
+    expect(
+      (await forgeOver(ALL, ["fork-mr"]).forge.getPull(REPO, 12)).fromFork,
+    ).toBe(true);
+  });
+
+  it("检查带上跑在这个 head 上的流水线；旧 head 的流水线不算", async () => {
+    const current = await forgeOver(ALL, ["pipeline-mr"]).forge.checks(
+      REPO,
+      12,
+    );
+    expect(current.checks[0]).toEqual({
+      name: "pipeline #5120",
+      state: "failure",
+      url: "https://gitlab.example.test/acme/app/-/pipelines/5120",
+    });
+    expect(current.rollup).toBe("failure");
+    const stale = await forgeOver(ALL, ["stale-pipeline-mr"]).forge.checks(
+      REPO,
+      12,
+    );
+    expect(
+      stale.checks.some((check) => check.name.startsWith("pipeline")),
+    ).toBe(false);
+  });
+
+  it("合并后删源分支：分支名整条编码，核对 head 再删", async () => {
+    const { forge, requests } = forgeOver(ALL, ["merged-mr"]);
+    expect(await forge.deleteBranch(REPO, 12, GITLAB_FIXTURE.sha)).toEqual({
+      deleted: true,
+      reasonCode: "",
+    });
+    expect(requests.map((r) => [r.method, r.path])).toEqual([
+      ["GET", "/projects/acme%2Fapp/merge_requests/12"],
+      ["GET", "/projects/acme%2Fapp/repository/branches/feature%2Flogin"],
+      ["DELETE", "/projects/acme%2Fapp/repository/branches/feature%2Flogin"],
+    ]);
+  });
+
+  it("分支动过、受保护、已不在、来自 fork、还没合并：都不删", async () => {
+    const cases: [string[], string][] = [
+      [["merged-mr", "branch-moved"], "BRANCH_MOVED"],
+      [["merged-mr", "branch-protected"], "BRANCH_PROTECTED"],
+      [["merged-mr", "branch-gone"], "ALREADY_DELETED"],
+      [["fork-mr"], "FORK_BRANCH"],
+      [[], "NOT_MERGED"],
+    ];
+    for (const [pick, reasonCode] of cases) {
+      const { forge, requests } = forgeOver(ALL, pick);
+      expect(await forge.deleteBranch(REPO, 12, GITLAB_FIXTURE.sha)).toEqual({
+        deleted: false,
+        reasonCode,
+      });
+      expect(requests.some((r) => r.method === "DELETE")).toBe(false);
+    }
   });
 });
 

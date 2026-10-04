@@ -1687,3 +1687,34 @@
 - 托盘每次启动配一台设备，页面每次加载也配一台（原有行为），设备列表里会多出同名「本机桌面」。
 - 下载把整个文件读进内存再存；很大的文件会占内存。
 - 语言服务与浏览器画面两条流只经全局 `WebSocket` 覆盖，没有单独实测。
+
+## G5-29 G5 残项：本地额度开关、手机 MFA、GitLab 子组 / 变基 / 自动合并、Gitea 与 GitLab 补齐
+
+做了什么：
+
+- G5-25 残项：设置 → 账号与用量的「本地成本统计」下面加了「Claude 本地额度估算」开关（shadcn `Switch` + `SettingsRow`），写 `usage.claudeLocalWindow`，默认开。成本扫描关着时开关禁用，保存后重新取用量。中英文案已同步。
+- G5-22 残项：原生 App 没有会话、OAuth 登录走到第二因素时，入口（`mobile/entry.ts`）新增 `kind: "mfa"` 分支，不再退回连接页。整页 `mobile/NativeMfa.tsx` 复用登录组件 `SignIn` 的两步验证步骤和 `POST mfa/verify`，验证码对了就进画布；策略要求登记第二因素时打开「安全」页。页面上有「返回连接页」。中间票不写进地址栏。已有会话时仍写 `#oauth=` 片段交给「安全」页。契约 §18.5 追加了一句。
+- GitLab 多级子组：owner 可以是 `group/sub/…`，每段都要合格，最多 20 段。项目路径整条 URL 编码。`resolve` 的认法：先按仓库一行找，从最长的 owner 往短找；再看主机那一行是不是 `gitlab`。http(s) 远端会先去掉 GitLab 子路径部署时的站点前缀。GitHub 和 Gitea 不接受多段 owner，给 Gitea 配多段键会答 400。页面上的配置键和仓库路径把多段 owner 编成一段，Git 面板显示完整路径。外部连接不支持多段 owner。
+- GitLab 合并方式 rebase：新路由 `GET merge-options`，按项目的 `merge_method` / `squash_option` 给出可用方式；Gitea 和 GitHub 三种都给，不发请求。只有 `ff` / `rebase_merge` 项目接受 `rebase`。源分支落后（`need_rebase`）时先发 `PUT …/rebase`，并答 `409 rebase_started`：变基会换 head，要等新 head 出来、核对后再合。不落后就照常带 sha 合并。页面的合并方式取自 `merge-options`；变基已发出时给提示，不当失败处理。
+- GitLab 合并队列：新路由 `POST / DELETE pulls/{n}/auto-merge`，也就是「流水线通过后合并」。会先核对 head，`PUT merge` 同时带 `merge_when_pipeline_succeeds` 和 `auto_merge`。流水线已经过了就当场合并；排上了答 `merged: false`。项目开了合并列车（`merge_trains_enabled`）时改走 `POST merge_trains/merge_requests/{iid}`，答 `train: true`。撤销只对已排上的 MR 发 `cancel_merge_when_pipeline_succeeds`。pull 新增 `autoMerge` 字段。页面有「流水线通过后合并 / 加入合并列车」（带确认）和「取消自动合并」。
+- Gitea 与 GitLab 补上 GitHub 已有的三样：
+  - CI 状态映射：详情头部加 CI 汇总徽标；GitLab 的检查列表最前面加当前 head 的 `pipeline #id`，旧 head 的流水线不算。
+  - 检出：复用「检出到 worktree」。pull 新增 `fromFork`；fork 的 head 名不会沿用成本地分支名。
+  - 合并后删分支：新路由 `DELETE pulls/{n}/branch?headSha=`。只有已合并、不是 fork、分支仍指着评审时的 head、且没受保护时才删，否则答 `reasonCode`（`NOT_MERGED` / `FORK_BRANCH` / `BRANCH_MOVED` / `BRANCH_PROTECTED` / `ALREADY_DELETED`）。页面的合并后清理抽成 `MergeCleanupView`，与 GitHub 共用，移除本地检出那一半也跟着有了。
+- 路由表新增 3 行（`merge-options`、`auto-merge`、`branch`），共享层 zod 同步新增。契约 §29.1 / §29.4 / §29.5（`rebase_started`）/ §29.6 都是追加，没有改节号。回放夹具新增 `subgroups`、`merge-methods`、`auto-merge`、`cleanup`，按 GitLab REST v4 文档的形状整理，不是从真实实例录的。假 Gitea 加了 fork 与分支路由。`tools/probes/forge-panel.mjs` 多截几张图。
+
+实测（macOS arm64，2026-10-05）：
+
+- core 的 `forge/gitlab.test`、`gitlab.routes.test`、`forge.test` 新增：子组的寻址、识别和拒绝；合并方式表、变基已发出、不落后直接合、head 变了不发变基；自动合并的排上、当场合并、结果未知、合并列车、方式不符、撤销；fromFork、流水线检查、删分支的五种拒绝；Gitea 的删分支与 fork。其中有 3 条旧断言改了：`merge-options` 答复多了 `autoMerge` / `mergeTrain`，GitLab 的「rebase 不接」改成在 `merge_method: merge` 项目下不接。
+- web：`AccountPage.test` 2 条，`NativeMfa.test` 2 条，`entry.test` 补了 mfa 分支，`api/forge.test`（新）覆盖路径编码，`GithubDrawer.test` 新增子组 1 条，`ForgeHosted.test`（新，原文件逼近 1500 行上限）6 条：项目合并方式与变基提示、自动合并、合并列车 / 撤销、CI 徽标与检出、删分支、fork。GitHub 清理的既有用例没改断言，照样通过。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`（4595 过 / 46 跳过，脚本全过）、web test（3431 过；首轮 `IdentityGate.test` 的 `#reset=` 一条在高负载下超时，单跑三次都过，本包没碰它）、shared 316、server 87 / 4 跳过、mobile 9，`pnpm --filter @armadra/web typecheck` 与 `pnpm check` 通过。
+- 截图（真 core + 回放 GitLab + 无头 Chrome）：`forge-panel.mjs` 截了 `gitlab-detail`（CI 徽标、合并方式、流水线通过后合并、检出）、`gitlab-auto-merge`、`gitlab-merged`、`gitlab-subgroup`。设置页与手机 MFA 页用同一套临时入口截了中英两版。
+
+没做 / 限制：
+
+- 评审（review）不做：Gitea 和 GitLab 的评审模型与 GitHub 差得多（GitLab 是 approvals + discussions），不是低成本的部分。GitHub 那种「按标签 / Projects 字段分组 issue」的状态映射也不做，因为它要按工作空间存配置（新表）。这里做的「状态映射」是 CI 状态到徽标的映射。
+- 合并列车只按文档对夹具验过：API 是 Premium 功能，没有真实实例。撤销用的是 `cancel_merge_when_pipeline_succeeds`，已上车的 MR 能不能这样撤下来没有验证。
+- Gitea 的合并方式不读仓库的 `allow_*` 设置，三种都给；远端不收的方式由合并本身答 405 / 422。Gitea 的 `merge_when_checks_succeed` 没接。
+- 多级子组的仓库不能作外部连接（GitHub 域的连接表按两段存）。
+- fork 的 PR 检出不会自动取 `refs/merge-requests/<iid>/head` / `refs/pull/<n>/head`，起点要自己填。
+- 都没有连真实的 GitLab / Gitea 实例。

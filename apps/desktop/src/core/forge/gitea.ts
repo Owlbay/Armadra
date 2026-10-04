@@ -10,16 +10,20 @@
  */
 
 import {
+  ALL_MERGE_METHODS,
   type CreatePullInput,
   DEFAULT_LIMIT,
   type Forge,
   type ForgeCheck,
   type ForgeCheckState,
+  type ForgeBranchDeletion,
   type ForgeChecks,
+  ForgeError,
   type ForgeFile,
   type ForgeFileStatus,
   type ForgeIssue,
   type ForgeIssueState,
+  type ForgeMergeOptions,
   type ForgeMerged,
   type ForgePage,
   type ForgePull,
@@ -87,6 +91,13 @@ interface WireIssue {
 interface WireBranch {
   ref?: string;
   sha?: string;
+  repo_id?: number;
+}
+/** `GET /repos/{o}/{r}/branches/{b}`。 */
+interface WireRepoBranch {
+  name?: string;
+  commit?: { id?: string } | null;
+  protected?: boolean;
 }
 interface WirePull {
   number?: number;
@@ -173,7 +184,25 @@ function toPull(value: WirePull): ForgePull {
     createdAtMs: timeMs(value.created_at) ?? 0,
     updatedAtMs: timeMs(value.updated_at) ?? 0,
     mergedAtMs: merged ? timeMs(value.merged_at) : null,
+    autoMerge: false,
+    fromFork: forked(value.head?.repo_id, value.base?.repo_id),
   };
+}
+
+/** 两边仓库 id 都在且不同才算 fork；缺字段（老版本）按同仓库。 */
+export function forked(head: unknown, base: unknown): boolean {
+  return (
+    typeof head === "number" &&
+    typeof base === "number" &&
+    head > 0 &&
+    base > 0 &&
+    head !== base
+  );
+}
+
+/** 分支名进路径：逐段编码，斜杠留着（Gitea 的分支路由吃整条剩余路径）。 */
+function branchPath(name: string): string {
+  return name.split("/").map(encodeURIComponent).join("/");
 }
 
 function fileStatus(value: string | undefined): ForgeFileStatus {
@@ -464,4 +493,41 @@ export class GiteaForge implements Forge {
       return { merged: true, sha: null };
     }
   }
+
+  async deleteBranch(
+    repo: ForgeRepo,
+    number: number,
+    headSha: string,
+  ): Promise<ForgeBranchDeletion> {
+    if (!validSha(headSha)) throw forgeError("invalid", "SHA_INVALID");
+    const pull = await this.getPull(repo, number);
+    if (pull.state !== "merged") return refused("NOT_MERGED");
+    if (pull.fromFork) return refused("FORK_BRANCH");
+    if (!validRefName(pull.headRef) || pull.headRef === pull.baseRef) {
+      return refused("BRANCH_PROTECTED");
+    }
+    const path = repoPath(repo, `/branches/${branchPath(pull.headRef)}`);
+    let branch: WireRepoBranch;
+    try {
+      branch = decodeJson<WireRepoBranch>(await this.http.get(path));
+    } catch (error) {
+      if (error instanceof ForgeError && error.kind === "notFound") {
+        return refused("ALREADY_DELETED");
+      }
+      throw error;
+    }
+    if (branch.protected === true) return refused("BRANCH_PROTECTED");
+    if (branch.commit?.id !== headSha) return refused("BRANCH_MOVED");
+    await this.http.write("DELETE", path);
+    return { deleted: true, reasonCode: "" };
+  }
+
+  /** 不按仓库的 `allow_*` 细分：远端不收的方式由合并本身答 405 / 422。 */
+  async mergeOptions(_repo: ForgeRepo): Promise<ForgeMergeOptions> {
+    return { methods: ALL_MERGE_METHODS, autoMerge: false, mergeTrain: false };
+  }
+}
+
+function refused(reasonCode: string): ForgeBranchDeletion {
+  return { deleted: false, reasonCode };
 }

@@ -44,6 +44,10 @@ export const CASSETTES = [
   "statuses",
   "merge",
   "refusals",
+  "subgroups",
+  "merge-methods",
+  "auto-merge",
+  "cleanup",
 ] as const;
 export type CassetteName = (typeof CASSETTES)[number];
 

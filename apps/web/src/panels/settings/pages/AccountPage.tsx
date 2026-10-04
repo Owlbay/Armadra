@@ -57,6 +57,8 @@ export function AccountPage() {
   // Runtime 侧默认开（settings.rs 归一化时补 `true`）。
   const usageEnabled = settings.data?.usage?.enabled !== false;
   const costEnabled = settings.data?.usage?.cost?.enabled !== false;
+  // 缺省开（G5-25）；估算来自成本扫描，扫描关着时这一项没有意义。
+  const claudeLocalWindow = settings.data?.usage?.claudeLocalWindow !== false;
   const cliFallback = settings.data?.usage?.codexCliFallback === true;
   const statusBadges =
     (settings.data?.usage?.statusBadges ?? settings.data?.usage?.statusPage) !==
@@ -217,6 +219,27 @@ export function AccountPage() {
                   onSuccess: () =>
                     void queryClient.invalidateQueries({
                       queryKey: ["usage-cost"],
+                    }),
+                },
+              )
+            }
+          />
+        </SettingsRow>
+        <SettingsRow
+          label={t("settings.claudeLocalWindow")}
+          footnote={t("settings.claudeLocalWindowHint")}
+        >
+          <Switch
+            checked={claudeLocalWindow}
+            disabled={busy || !costEnabled}
+            aria-label={t("settings.claudeLocalWindow")}
+            onCheckedChange={(next) =>
+              save.mutate(
+                { usage: { claudeLocalWindow: next } },
+                {
+                  onSuccess: () =>
+                    void queryClient.invalidateQueries({
+                      queryKey: ["usage"],
                     }),
                 },
               )

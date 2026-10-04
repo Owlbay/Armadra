@@ -23,6 +23,7 @@ import {
   type GithubRepositoryRef,
 } from "../github/types";
 import {
+  ALL_MERGE_METHODS,
   type CreatePullInput,
   DEFAULT_LIMIT,
   type Forge,
@@ -33,6 +34,7 @@ import {
   type ForgeFileStatus,
   type ForgeIssue,
   type ForgeIssueState,
+  type ForgeMergeOptions,
   type ForgeMerged,
   type ForgePage,
   type ForgePull,
@@ -99,6 +101,9 @@ export function fromGithubPull(pull: GithubPullRequest): ForgePull {
     createdAtMs: ms(pull.createdAtUnixMs),
     updatedAtMs: ms(pull.updatedAtUnixMs),
     mergedAtMs: msOrNull(pull.mergedAtUnixMs),
+    // GitHub 的自动合并只在 GraphQL 里；这一面不接。
+    autoMerge: false,
+    fromFork: pull.fromFork,
   };
 }
 
@@ -430,5 +435,9 @@ export class GithubForge implements Forge {
       );
       return { merged: true as const, sha };
     });
+  }
+
+  async mergeOptions(_repo: ForgeRepo): Promise<ForgeMergeOptions> {
+    return { methods: ALL_MERGE_METHODS, autoMerge: false, mergeTrain: false };
   }
 }

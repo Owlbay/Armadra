@@ -19,8 +19,10 @@
 //   [ARMADRA_DEV_STACK=1] node tools/probes/forge-panel.mjs [输出目录]
 //
 // 产物（默认 target/forge-panel/）：settings.png、gitlab-list.png、
-// gitlab-detail.png、gitlab-issues.png、unknown.png，有 Gitea 时再加
-// gitea-list.png、gitea-detail.png；以及 result.json。
+// gitlab-detail.png（CI 汇总徽标、合并方式、流水线通过后合并、检出）、
+// gitlab-auto-merge.png（确认框）、gitlab-merged.png（合并后清理）、
+// gitlab-subgroup.png（多级子组）、gitlab-issues.png、unknown.png，有 Gitea
+// 时再加 gitea-list.png、gitea-detail.png；以及 result.json。
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
@@ -558,8 +560,39 @@ createRoot(document.getElementById("root")!).render(
   await clickText("[data-slot=forge-pull] button", "Draft: 登录改版");
   await waitText("src/login.ts");
   await clickText("summary", "src/login.ts");
+  await waitText("流水线通过后合并");
   await capture("gitlab-detail");
+  await clickText("[data-slot=forge-merge] button", "流水线通过后合并");
+  await waitText("流水线通过后合并这个请求？");
+  await capture("gitlab-auto-merge");
+  await clickText('[role="alertdialog"] button', "取消");
   await clickText('button[aria-label="返回"]', "");
+  await evaluate(`
+    const select = document.querySelector("[data-slot=forge-hosted] select");
+    // 合成的 change 事件进不了 React 的受控 select：直接调它的 onChange。
+    const key = Object.keys(select).find((name) => name.startsWith("__reactProps$"));
+    // 「已关闭」对 MR 按 state=all 取（含已合并），夹具里有这条录像。
+    select[key].onChange({ target: { value: "closed" } });
+    return true;
+  `);
+  await waitText("Bump deps");
+  await clickText("[data-slot=forge-pull] button", "Bump deps");
+  await waitText("删除远端分支 · deps");
+  await evaluate(`
+    document.querySelector("[data-slot=github-cleanup]")?.scrollIntoView({ block: "end" });
+    return true;
+  `);
+  await sleep(500);
+  await capture("gitlab-merged");
+
+  await load("panel");
+  await resolveRemote(`http://localhost:${gitlabPort}/platform/web/app.git`);
+  await waitText("子组里的改动");
+  await capture("gitlab-subgroup");
+
+  await load("panel");
+  await resolveRemote(`http://localhost:${gitlabPort}/acme/app.git`);
+  await waitText("Merge requests");
   await clickText('[role="tab"]', "Issues");
   await waitText("登录页按钮错位");
   await capture("gitlab-issues");

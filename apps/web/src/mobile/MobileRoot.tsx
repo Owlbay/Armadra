@@ -6,6 +6,7 @@ import { ConnectScreen, type ConnectFailure } from "./ConnectScreen";
 import { connectNative, connectWeb, connectWithCode } from "./connect";
 import type { Entry } from "./entry";
 import { nativeBridge } from "./native-bridge";
+import { NativeMfa } from "./NativeMfa";
 import { PushPermission } from "./PushPermission";
 import { usePushOpen } from "./push-open";
 import { usePushRotation } from "./push-rotation";
@@ -15,9 +16,21 @@ import { usePushRotation } from "./push-rotation";
  * 、「点通知进焦点页」与推送令牌轮换后的重新登记。桌面窗口里 `entry` 恒为 `app`，这两样也不出现
  * （提示只在手机布局与原生 App 里问；深链只有通知会带来）。
  */
-export function MobileRoot({ entry }: { entry: Entry }) {
+export function MobileRoot({ entry: initial }: { entry: Entry }) {
+  const [entry, setEntry] = React.useState(initial);
   const [connected, setConnected] = React.useState(entry.kind === "app");
   if (connected) return <ConnectedApp />;
+  if (entry.kind === "mfa") {
+    return (
+      <NativeMfa
+        challengeId={entry.challengeId}
+        onSignedIn={() => setConnected(true)}
+        onBack={() =>
+          setEntry({ kind: "connect", mode: "native", origin: entry.origin })
+        }
+      />
+    );
+  }
   if (entry.kind !== "connect") return null;
   if (entry.mode === "web") {
     const done = (failure: ConnectFailure | null) => {
