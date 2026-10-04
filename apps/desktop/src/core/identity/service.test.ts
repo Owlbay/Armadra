@@ -404,6 +404,75 @@ describe("rotating a session", () => {
   });
 });
 
+describe("re-checking a long-lived stream's session (security review L1)", () => {
+  it("follows the session across a refresh, not the access token it began with", () => {
+    const fix = fixture();
+    const { credentials } = pair(fix);
+    const session = {
+      sessionId: credentials.principal.sessionId,
+      hostId: fix.hostId,
+      origin: ORIGIN,
+    };
+    expect(fix.service.sessionAccess(session).accessExpiresAtMs).toBe(
+      credentials.accessExpiresAtMs,
+    );
+    // The access token's fifteen minutes run out with no refresh: refused.
+    fix.advance(ACCESS_TTL_MS);
+    expect(kind(() => fix.service.sessionAccess(session))).toBe(
+      "unauthenticated",
+    );
+    // The page refreshes: the old access token is dead, the session is not.
+    const rotated = fix.service.refresh({
+      refreshToken: credentials.refreshToken,
+      csrfToken: credentials.csrfToken,
+      hostId: fix.hostId,
+      origin: ORIGIN,
+    });
+    expect(
+      kind(() =>
+        fix.service.authenticate({
+          accessToken: credentials.accessToken,
+          hostId: fix.hostId,
+          origin: ORIGIN,
+        }),
+      ),
+    ).toBe("unauthenticated");
+    expect(fix.service.sessionAccess(session).accessExpiresAtMs).toBe(
+      rotated.accessExpiresAtMs,
+    );
+    // Logged out: refused, whatever the clock says.
+    fix.service.logoutRefresh({
+      refreshToken: rotated.refreshToken,
+      csrfToken: rotated.csrfToken,
+      hostId: fix.hostId,
+      origin: ORIGIN,
+    });
+    expect(kind(() => fix.service.sessionAccess(session))).toBe(
+      "unauthenticated",
+    );
+  });
+
+  it("refuses another origin or host", () => {
+    const fix = fixture();
+    const { credentials } = pair(fix);
+    const sessionId = credentials.principal.sessionId;
+    expect(
+      kind(() =>
+        fix.service.sessionAccess({
+          sessionId,
+          hostId: fix.hostId,
+          origin: "http://127.0.0.1:9",
+        }),
+      ),
+    ).toBe("unauthenticated");
+    expect(
+      kind(() =>
+        fix.service.sessionAccess({ sessionId, hostId: "x", origin: ORIGIN }),
+      ),
+    ).toBe("unauthenticated");
+  });
+});
+
 describe("logging out and revoking", () => {
   it("revokes its own session and refuses it afterwards", () => {
     const fix = fixture();
