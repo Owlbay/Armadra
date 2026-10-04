@@ -28,10 +28,10 @@ Armadra 使用同一套 React 页面。桌面端通过 Electron 壳提供本机�
 
 桌面壳与服务器壳共用 core 的 Gateway 域（`core/gateway/`，契约 §17）：同一套 TLS、准入、页面托管与配对。
 
-- 桌面：设置 → 后台服务与对外服务 →「对外服务」开关（托盘有同名勾选项）。监听档 `loopback` / `private` / `all`，`private` 只收回环与私网来源；端口 0 开启后写回。证书来源：本地 CA（`<数据目录>/tls/ca.{crt,key}` 签叶证书，地址变了或剩 30 天就重签叶证书）、指定文件、ACME（`http-01`，续期失败时页面出 Alert 与下次重试时间）。关掉即断开经它进来的连接。服务器壳上同一页只读（`managedBy: "shell"`）。
-- 配对：运行中出配对卡——二维码、复制链接、两分钟倒计时、信任锚指纹、下载 CA。链接是 `…/#pair=<票>&fp=<指纹>`，原生 App 用 `armadra://pair?host=…&ticket=…&fp=…`。手机浏览器打开后先按 CA 引导装证书，再点「连接」。没有 8 位短码。
+- 桌面：设置 → 后台服务与对外服务 →「对外服务」开关（托盘有同名勾选项）。监听档 `loopback` / `private` / `all`，`private` 只收回环与私网来源；端口 0 开启后写回。证书来源：本地 CA（`<数据目录>/tls/ca.{crt,key}` 签叶证书，地址变了或剩 30 天就重签叶证书）、指定文件、ACME（`http-01` 或 `tls-alpn-01`，后者要先固定端口；续期失败时页面出 Alert 与下次重试时间）。关掉即断开经它进来的连接。服务器壳上同一页只读（`managedBy: "shell"`）。
+- 配对：运行中出配对卡——二维码、复制链接、两分钟倒计时、信任锚指纹、下载 CA。链接是 `…/#pair=<票>&fp=<指纹>`，原生 App 用 `armadra://pair?host=…&ticket=…&fp=…`。手机浏览器打开后先按 CA 引导装证书，再点「连接」。`loopback` / `private` 档（以及绑在回环或私网地址上的 `all` 档）的配对卡另给一个 8 位配对码 `XXXX-XXXX`，与票同时过期、一次性：手机浏览器在连接页输入它即可配对（`POST /api/gateway/pairing-code/exchange`，契约 §24）；原生 App 只在已钉过信任锚之后多一个「输入配对码」入口。
 - 准入：网页用 `__Host-` Cookie + CSRF；原生 App 用 Bearer（来源只认 `capacitor://localhost` / `https://localhost`），WebSocket 升级前换一次性 `ws-ticket`。未配对的设备只拿到页面外壳与静态资源，`/api` 一律 401。
-- 已配对设备在同一页一张表里：名称、添加时间、权限、「当前」标记、撤销；成员也能看到自己的设备。没有「平台」「最近访问」两列（接口不给）。
+- 已配对设备在同一页一张表里：名称、平台、添加时间、最近访问、权限、「当前」标记、撤销；成员也能看到自己的设备。「平台」由最近一次会话的 UA 归类得出，UA 原文不出 core。
 - 公网部署（域名、ACME、反向代理、备份升级）见[服务器部署](server-deployment.md)。
 
 已知限制：项目列表是**本设备**的偏好，新手机不会自动列出电脑上已有的项目。
@@ -64,7 +64,7 @@ Armadra 使用同一套 React 页面。桌面端通过 Electron 壳提供本机�
 - 商店版走发布方的推送中继：构建时设 `ARMADRA_MOBILE_RELAY_URL`（写进 `capacitor.config.ts` 的 `plugins.ArmadraNative.relayUrl`），App 先向中继 `/v1/register` 换中继令牌，再以 `transport: "relay"` 登记；不设时以 `direct` 登记，适合自己构建、自己持有 APNs / FCM 密钥的部署。
 - 推送令牌换了（R-54）：页面对开过推送的设备在启动时与收到 `pushTokenRotated` 时向插件要一份新登记、`PUT /api/push/devices`，成功后清标记（`apps/web/src/mobile/push-rotation.ts`）。
 - 图片（R-55）：`<img>` 带不了 Bearer。页面里指向 Gateway 的图片地址经 `useAssetUrl`（`apps/web/src/api/assets.ts`）用带 Bearer 的 `fetch` 换成 `blob:`，白板图片与 Markdown 预览都走它；浏览器与桌面里原样用地址。
-- 第三方登录（R-56）：App 里点 GitHub / OIDC，页面以 `start?native=1` 拿授权地址与一次性 `nativeState`（记在本机），交系统浏览器；提供方跳回 core 的回调，回调把 `state` 与授权码转成 `armadra://oauth?…` 深链交回 App，入口在挂载前带着 `nativeState` 调 `POST oauth/{id}/native` 收尾，结果写成 `#oauth=` 打开「安全」页（契约 §18.5）。提供方那边只登记原来那一个 https 回调地址。
+- 第三方登录（R-56）：App 里点 GitHub / OIDC，页面以 `start?native=1` 拿授权地址与一次性 `nativeState`（记在本机），交系统浏览器；提供方跳回 core 的回调，回调把 `state` 与授权码转成 `armadra://oauth?…` 深链交回 App，入口在挂载前带着 `nativeState` 调 `POST oauth/{id}/native` 收尾，结果写成 `#oauth=` 打开「安全」页（契约 §18.5）。提供方那边只登记原来那一个 https 回调地址。App 里没有会话、OAuth 登录走到第二因素时，入口进整页验证码页（`mobile/NativeMfa.tsx`，复用登录页的两步验证），验证通过进画布。
 - 系统本来就信任的证书（ACME、反向代理的真证书）在 Android 上由系统校验，WebView 没有别的钩子，指纹不再参与；iOS 照样按指纹判。
 - 钉扎、信封与深链的判定在不依赖 UI 的模块里：iOS `ios/ArmadraNativeKit`（`swift test`），Android `android/armadra-native-core`（纯 JVM，`./gradlew :armadra-native-core:test`），两边读同一份样本 `apps/mobile/fixtures/`，`src/fixtures.test.ts` 守着样本与 core 的实现一致。
 

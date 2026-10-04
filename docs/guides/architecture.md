@@ -60,23 +60,27 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-补全阶段（[补全架构](../design/completion-architecture.md)）在 core 里新增或做实的域：
+补全阶段与 G5（[补全架构](../design/completion-architecture.md)、[G5 剩余事项计划](../design/g5-remaining-plan.md)）在 core 里新增或做实的域：
 
-| 目录                                    | 职责                                                                                                                    | 契约     |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------- |
-| `core/acp/`                             | ACP 传输、适配器表、会话、镜像、驱动切换、`armadra-hook mcp` 注入、输出到画板的文本导出                                 | §14、§26 |
-| `core/workflow/`                        | 草案、模板、运行、关卡、runner 任务；自动化目标「运行工作流」                                                           | §15      |
-| `core/realtime/`                        | 每块板一个 `Y.Doc`、更新流与快照、物化、awareness 校验、评论                                                            | §16      |
-| `core/gateway/`                         | 对外 TLS 面：本地 CA、指定文件、ACME、准入（Cookie / Bearer）、配对载荷                                                 | §17      |
-| `core/identity/`（加固与 `oauth/`）     | 口令策略、限流锁定、passkey、TOTP 与恢复码、OAuth / OIDC、审计筛选与导出、创建者记录                                    | §18、§23 |
-| `core/push/`                            | 设备登记与偏好、队列、触发规则、Web Push / 直连 / 中继 / UnifiedPush                                                    | §19、§27 |
-| `core/agent/credentials/`               | 节点凭据：`kind → 变量名` 封闭表、条目、经 hook 面兑换                                                                  | §20      |
-| `core/remote/fleet.ts`、`core/handoff/` | Worker 舰队（版本、能力、健康记录、重新同步）与跨执行主机交接                                                           | §21      |
-| `core/secrets/`                         | 按平台的密钥后端（钥匙串、`safeStorage`、`file-encrypted`）                                                             | —        |
-| `core/net/outbound.ts`                  | core 全部出站地址的登记表，扫描测试强制                                                                                 | —        |
-| `core/diagnostics/`                     | 崩溃上报的剥离规则；SDK 只在壳里、只在用户填了 DSN 时加载；页面错误上报（`client-report.ts` 限流与再剥离，`routes.ts`） | §30      |
-| `core/mail/`                            | 可选 SMTP 通知通道：邀请与重置链接；只有服务器壳 `--smtp-url` 配，nodemailer 首封才加载                                 | §28      |
-| `core/forge/`                           | 托管平台抽象：`Forge` 接口，GitHub（经 `core/github/` 的客户端）、Gitea / Forgejo 与 GitLab（`PRIVATE-TOKEN`）          | §29      |
+| 目录                                                      | 职责                                                                                                                                                                                                               | 契约         |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------ |
+| `core/acp/`                                               | ACP 传输、适配器表、会话、镜像、驱动切换、`armadra-hook mcp` 注入、输出到画板的文本导出；elicitation 与模型目录、SSH 节点的远端适配器（`ssh.ts`）                                                                  | §14、§26     |
+| `core/workflow/`                                          | 草案、模板、运行、关卡、runner 任务（含协调者分派抽屉的任务列表与重试）；自动化目标「运行工作流」与冻结计划的模板升级                                                                                              | §15          |
+| `core/realtime/`                                          | 每块板一个 `Y.Doc`、更新流与快照、物化、awareness 校验（含视口）、评论                                                                                                                                             | §16          |
+| `core/gateway/`                                           | 对外 TLS 面：本地 CA、指定文件、ACME（`http-01` / `tls-alpn-01`，`alpn.ts`）、准入（Cookie / Bearer）、配对载荷与 8 位配对码（`pairing-code.ts`）                                                                  | §17、§24     |
+| `core/identity/`（加固与 `oauth/`）                       | 口令策略、限流锁定、passkey（含改名）、TOTP 与恢复码、OAuth / OIDC（含原生 App 收尾）、审计筛选与导出、创建者记录                                                                                                  | §18、§23     |
+| `core/identity/password-reset.ts`                         | 口令重置链接：owner / 组 admin 签发一次性令牌（库里只存哈希，24 小时），设新口令时撤掉此人全部会话                                                                                                                 | §25          |
+| `core/identity/loopback.ts`、`transport.ts`               | 回环监听上的门（经 `CoreServer.admission`）：除健康检查、`/api/identity/*` 与配对短码换票外每条 `/api/` 要会话、每条流要一次性票；与 Gateway 共用票与会话认法；Windows 取票走 fork 的 IPC（`control.ts`）          | §3.2、§17.4  |
+| `core/push/`                                              | 设备登记与偏好、队列、触发规则（含调度与资源阈值事件）、Web Push / 直连 / 中继 / UnifiedPush                                                                                                                       | §19、§27     |
+| `core/schedule/events.ts`、`core/resources/thresholds.ts` | `schedule.fired / failed / attention` 与 `resources.threshold` 事件（推送规则的来源）                                                                                                                              | §27.3、§27.4 |
+| `core/usage/local-window.ts`                              | Claude 本地额度窗口估算（5 小时 / 7 天，只报 token；设置 `usage.claudeLocalWindow`）                                                                                                                               | §12.1        |
+| `core/agent/credentials/`                                 | 节点凭据：`kind → 变量名` 封闭表、条目、经 hook 面兑换                                                                                                                                                             | §20          |
+| `core/remote/fleet.ts`、`core/handoff/`                   | Worker 舰队（版本、能力、健康记录、重新同步）与跨执行主机交接                                                                                                                                                      | §21          |
+| `core/secrets/`                                           | 按平台的密钥后端（钥匙串、`safeStorage`、`file-encrypted`）                                                                                                                                                        | —            |
+| `core/net/outbound.ts`                                    | core 全部出站地址的登记表，扫描测试强制                                                                                                                                                                            | —            |
+| `core/diagnostics/`                                       | 崩溃上报的剥离规则；SDK 只在壳里、只在用户填了 DSN 时加载；页面错误上报（`client-report.ts` 限流与再剥离，`routes.ts`）                                                                                            | §30          |
+| `core/mail/`                                              | 可选 SMTP 通知通道：邀请与重置链接；只有服务器壳 `--smtp-url` 配，nodemailer 首封才加载                                                                                                                            | §28          |
+| `core/forge/`                                             | 托管平台抽象：`Forge` 接口，GitHub（经 `core/github/` 的客户端）、Gitea / Forgejo 与 GitLab（`PRIVATE-TOKEN`，多级子组、合并方式、流水线通过后合并与合并列车）；按主机 / 仓库的配置与令牌、fork 检出、合并后删分支 | §29          |
 
 core 之外的同类新增：`src/hook-client/`（动词工具表，`armadra-hook` 与 ama 适配器共用）、
 `src/agent-host/ama/`（ama 宿主适配器与 runners）、`apps/mobile`（Capacitor 手机壳）、
@@ -147,7 +151,7 @@ codex）：根目录（`history/home.ts`，规则与 `hook/install/shared.ts::co
 全部）、契约与界面都不用改。
 
 **工作面板一次只开一个**（`panels/WorkPanelSheet.tsx`）：资源管理器、资源、
-问题、用量、GitHub、自动化、交接停在右侧，宽度来自一张表——右上工具簇也读
+问题、用量、Git 托管（GitHub / Gitea / GitLab）、自动化、协调者分派、交接停在右侧，宽度来自一张表——右上工具簇也读
 那张表，好让开着抽屉时它自己让开。Git 是唯一停在**底部**的一块
 （[Git 工具窗口](../design/git-tool-window.md)）：它是「日志 / 提交」两个页签
 的窗口，日志页三栏要的是宽度而不是高度，所以它不在那张宽度表里，高度记进偏
@@ -388,7 +392,7 @@ SSH 节点的适配器起在执行主机上（`ssh.ts`）：`host.ts` 的 transp
 - 节点的默认尺寸只有一份，在 `apps/web/src/nodes/registry.ts`：控制动词建节点
   时**不写 `size`**，页面投影时按类型补（`canvas/sync/project.ts`）。
 
-SQLite 的迁移只有一个目录——`apps/desktop/src/core/db/migrations/`，0001 起一条
+SQLite 的迁移只有一个目录——`apps/desktop/src/core/db/migrations/`，0001–0038 一条
 连续序列，字节由根 `migrations.lock` 守住（R7d 把原先分散在两处的来源合成一处）。
 基础表由 `0001_initial.sql` 创建；`0002_agent_mailbox.sql` 增量添加消息箱：
 
@@ -404,7 +408,39 @@ SQLite 的迁移只有一个目录——`apps/desktop/src/core/db/migrations/`�
 | `hook_installs`                       | 每个 CLI 的 hook 安装记录                           |
 | `conversations`                       | 会话索引（provider + session id → 标题）            |
 
-补全阶段新增的迁移（0030–0035）：
+0003–0029（补全之前）：
+
+| 迁移                                | 表 / 列                                                                                                      |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `0003_retire_kanban.sql`            | Kanban 退役：`legacy_kanban_archives`、`legacy_node_label_archives` 只读归档，触发器挡住旧列写回             |
+| `0004_agent_handoffs.sql`           | `agent_handoffs`（冻结的交接包）、`agent_handoff_outbox`                                                     |
+| `0005_browser_sessions.sql`         | `browser_sessions`（浏览器节点的会话与 profile 目录，不存 Cookie 与页面内容）                                |
+| `0006_agent_prompt_deliveries.sql`  | `agent_prompt_deliveries`（计划投递在粘贴之前落的一行，重复执行由它回答）                                    |
+| `0007_handoff_attempts.sql`         | `agent_handoff_outbox.attempts`                                                                              |
+| `0008_write_ownership.sql`          | `write_ownership`（分进程时代的写入所有权；机制已删，表保留）                                                |
+| `0009_workspace_execution_host.sql` | `workspaces.execution_host_id`（远端执行主机）                                                               |
+| `0010_host_imports.sql`             | `host_imports`（分进程时代的反向导入账本，历史）                                                             |
+| `0011_domain_ownership.sql`         | `write_ownership` 补其余五个域的行（历史）                                                                   |
+| `0012_browser_process.sql`          | `browser_sessions` 加 pid、启动时刻、CDP 端口、租约代次、当前地址                                            |
+| `0013_agent_status_source.sql`      | `agent_status.state_source`（`hook` / `extension` / `observed`）                                             |
+| `0014_retire_gemini.sql`            | 清掉已移除 CLI 的状态、会话索引与 Hook 安装行                                                                |
+| `0015_unified_core.sql`             | **单向门**：身份表（`identity_*`、`store_meta`）并入 `canvas.db`，应用前先做备份（见下文）                   |
+| `0016_agent_domain.sql`             | Agent 域：`agent_approval_audit`、`agent_drain_cursor`，审批 / 投递 / 交接 / 消息箱 / 状态加 `revision` 等列 |
+| `0017_event_outbox.sql`             | 事件 outbox `events`；自动化 `automation_*` 与 `command_roots` / `command_sessions`                          |
+| `0018_github.sql`                   | `github_config`、`github_references`、`github_status_mappings`                                               |
+| `0019_accounts.sql`                 | 多 principal：`identity_principals`、组与成员、授予、邀请、凭据、`audit_log`；设备与会话表重建               |
+| `0020_automation_json.sql`          | 自动化载荷从 protobuf 字节改为 JSON 文本（五张表重建）                                                       |
+| `0021_agent_names.sql`              | `node_handles`（Agent 的名字，带唯一约束）                                                                   |
+| `0022_terminal_drive.sql`           | `terminal_sessions.drive_generation`（驱动权代次）                                                           |
+| `0023_agent_send_queue.sql`         | `agent_send_queue`（`send` 的推式投递队列）                                                                  |
+| `0024_edge_roles.sql`               | `edges.role`（`peer` / `supervises`）                                                                        |
+| `0025_context_reads.sql`            | `context_read_cursors`、`context_reads`（上下文读取游标与审计）                                              |
+| `0026_delivery_target_state.sql`    | `agent_deliveries.target_state`（放行或拦下的依据）                                                          |
+| `0027_agent_dependencies.sql`       | `agent_dependencies`、`agent_dependency_launches`（依赖编排）                                                |
+| `0028_terminal_creator.sql`         | `terminal_sessions.creator_principal_id`                                                                     |
+| `0029_send_queue_receipts.sql`      | `agent_send_queue.notified_at`、`settled_by`（投递终态回执）                                                 |
+
+补全阶段与 G5 新增的迁移（0030–0038）：
 
 | 迁移                          | 表 / 列                                                                                                                                                                                                  | 域                                    |
 | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
@@ -414,6 +450,7 @@ SQLite 的迁移只有一个目录——`apps/desktop/src/core/db/migrations/`�
 | `0033_push.sql`               | `push_devices`（挂在身份设备上的推送登记）、`push_outbox`（发送队列，终态留 7 天）                                                                                                                       | `core/push/`，契约 §19                |
 | `0034_workflow.sql`           | `workflow_drafts`、`workflow_templates`、`workflow_runs`、`workflow_run_steps`、`workflow_task_runs`（runner 任务）                                                                                      | `core/workflow/`，契约 §15            |
 | `0035_node_creators.sql`      | `node_creators`（节点的触发者）与触发器 `terminal_sessions_inherit_creator`（之后起的会话行继承创建者）                                                                                                  | `core/identity/creators.ts`，契约 §23 |
+| `0036_password_resets.sql`    | `identity_password_resets`（一次性口令重置令牌，库里只存哈希，24 小时有效，签新即作废旧的）                                                                                                              | `core/identity/`，契约 §25            |
 | `0037_push_preferences.sql`   | `push_devices` 加 `kinds_json`（设备要收的推送种类，空串 = 全部）与 `unifiedpush_endpoint`（UnifiedPush 端点）                                                                                           | `core/push/`，契约 §27                |
 | `0038_forge.sql`              | `forge_config`（每仓库 / 每主机的托管平台、API 根与令牌条目名），`github_references` 加 `forge` 列                                                                                                       | `core/forge/`，契约 §29               |
 
@@ -432,8 +469,9 @@ core 里没有第二个，所以 2026-09-20 连同 `/api/ownership`、`/api/owne
 
 ## 6. 进程、端口与文件位置
 
-来源与凭据检查**按壳分档**。桌面壳里 core 就在壳的进程树内，壳经 preload 直接把
-凭据注入页面，没有中间的票据链。服务器壳保留完整的设备配对、可撤销凭据、会话轮转、
+来源与凭据检查**按壳分档**。桌面壳里 core 就在壳的进程树内，页面经 preload 向壳要一张
+一次性配对票（macOS / Linux 走私有通道，Windows 走 fork 的 IPC），换成自己的会话后所有请求带
+Bearer、所有流先换一次性票（§7）。服务器壳保留完整的设备配对、可撤销凭据、会话轮转、
 CSRF 与 Origin 校验（[服务器账号、中转与共享](../design/server-accounts-and-sharing.md)）。
 分进程时代的票据链设计见 [桌面壳原生 Host 会话](../history/host-native-session.md)
 与[设备认证](../history/host-device-auth.md)，两份都是历史文档。
@@ -527,8 +565,8 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   后端、状态页，被共享过任意一块画布即放行）、本机管理（设置、执行主机、SSH、数据、
   用量、集成、GitHub、自动化等，只给 owner）。组内 `admin` 能管本组成员与只指向本组的
   邀请。工作空间列表按授权过滤；授权一变，已开的事件流重新判定，不够就以 4403 关掉，
-  失去写权的客户端当场交出画布写租约。没有请求主体时放行——桌面壳里没有第二个人，行为
-  不变。设计见[服务器账号与共享](../design/server-accounts-and-sharing.md) §6，契约见
+  失去写权的客户端当场交出画布写租约。没有请求主体时按本机 owner 判——自 0.2.0 起这只剩 core
+  自己的内部调用与显式打开回环匿名的裸 core，桌面壳的页面与托盘都带着自己的会话。设计见[服务器账号与共享](../design/server-accounts-and-sharing.md) §6，契约见
   [core JSON 契约](../contracts/core-json-api.md) §10。
 - **信任边界（补全后，[补全架构](../design/completion-architecture.md) §8.1）**：
   - 页面 ↔ core：桌面本机是回环 + preload 票换 Bearer（页面在全局 `fetch` / `WebSocket` 上统一带 Bearer
@@ -559,26 +597,25 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
 
 ## 8. 未实现
 
-逐包的「没做」见[补全进度](../status/completion-progress.md)，需要用户提供的条件汇总在
-同一文档 G4-1 一节。这里只列影响架构判断的几条：
+G5 全部合入后，代码侧没有挂着的工作包；剩下的都要用户提供账号、证书、设备或域名，逐条见
+[用户待办清单](../status/user-action-checklist.md)，逐包的「没做」见[补全进度](../status/completion-progress.md)。
+这里只列影响架构判断的几条：
 
 - **Windows 真机**：打包版的验收包（`tools/probes/windows-acceptance.mjs`）在 Windows Server
-  runner 上每晚跑，还没有在用户自己的 Windows 10 / 11、真 CLI 与长时间保活下跑过。节点凭据与
-  ama 密钥在 Windows 上由 `armadra-launch.exe` 兑换；包里没有它时节点凭据答
-  `credential_unsupported_here`。
-- **签名发布**：签名、公证、GPG 与更新清单的流程都已写好（[CI 与发布](ci-release.md)），
-  但没有真证书。未签名的发布包在 `ARMADRA_UPDATES_DEV=1` 下能检查、下载、校验、暂存，
+  runner 上每晚跑，还没有在用户自己的 Windows 10 / 11、真 CLI 与长时间保活下跑过；Windows 的 IPC 取票
+  （§6）只有单元测试与 runner。节点凭据与 ama 密钥在 Windows 上由 `armadra-launch.exe` 兑换；包里没有它时
+  节点凭据答 `credential_unsupported_here`。
+- **签名发布**：签名、公证、GPG、更新清单与更新镜像（R2）的流程都已写好（[CI 与发布](ci-release.md)），
+  但没有真证书与真桶。未签名的发布包在 `ARMADRA_UPDATES_DEV=1` 下能检查、下载、校验、暂存，
   「安装」答 `notSigned`；本地 `dist` 是 `localBuild`；更新器从不报没发生过的 `upToDate`
   （`shell-core/updates/availability.ts`）。设置页的「检查」经 `updates:check`（不带答复）由壳
   自己问发布索引，`noReleaseSource` 只在壳没有发布源时出现；macOS 的签名状态由
   `codesign --verify --deep --strict` 判定，ad-hoc 签名按 `unknown` 不装。
-- **ACP 的未竟项**：`elicitation/create` 与按模型选择（`session/set_config_option`）
-  （契约 §26）随 `@armadra/agent` 0.6.8 的 `AcpClient`（`features.elicitation` /
-  `features.configOptions`）生效；SSH 节点不能切到 ACP（`acp_unsupported`）。
-  六家真适配器的端到端探针已备（`agent-e2e` 场景 12，C 档），还没有真跑。
-- **Gateway / 手机**：配对是两分钟票（二维码 / 链接），私网档位上另有 8 位配对码（契约 §24）；设备表没有
-  「平台」「最近访问」；推送中继写完不部署；UnifiedPush 已接（契约 §27.2，Android App 装了分发器时
-  向它要端点）；真机、商店与真 APNs / FCM 都要用户的账号。
-- **安全审查的低危项**：页面上口令策略拒绝码与 `warn` 档的提示、GitHub / 自动化两面对 Bearer 写仍要 CSRF 等，见[安全审查](../status/security-review-2026-10.md) §3。
-- **外部服务里留到之后的三项**：W-MAIL（SMTP）、W-FORGE（GitLab / Gitea）、W-MIRROR（更新镜像），
-  见[外部服务](../design/external-services.md) §15。
+- **ACP 真适配器**：elicitation 与按模型选择随 `@armadra/agent` 0.6.8 生效，SSH 节点可以切到 ACP（§4）。
+  六家真适配器里 Claude 与 Pi 已实跑并记入 `compatibility.json`，Codex / OpenCode / OMP / Copilot 等装好并登录的机器。
+- **Gateway / 手机**：配对是两分钟票（二维码 / 链接），私网档位上另有 8 位配对码（契约 §24）；设备表带
+  「平台」「最近访问」；推送中继写完不部署（App 证明 L5 未做，见[安全审查](../status/security-review-2026-10.md) §3）；
+  原生 OAuth、令牌轮换、UnifiedPush 已接，真机、商店与真 APNs / FCM 都要用户的账号。
+- **托管平台**：Gitea 对 dev-stack 的真 Gitea 验过；GitLab（含子组、合并列车）只对按 REST v4 文档整理的夹具验过，
+  没有连真实实例。评审与「按标签 / Projects 字段分组 issue」只有 GitHub 有。
+- **可选外部服务**：SMTP（只对 Mailpit 验过）、崩溃上报的真实 DSN、OAuth 应用都在用户手里，不配即不启用。

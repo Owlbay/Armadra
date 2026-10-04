@@ -298,8 +298,8 @@ pnpm dev-stack down gitea              # 只停并删这几个
 
 core 的 CORS 只放行回环 HTTP 来源：桌面壳放行的是自己静态服务的那个来源（端口由内核分配，
 所以每次启动都不同），开发时再加上 Vite 的 `http://127.0.0.1:1420`。自定义 scheme 一律拒绝。
-CSP（`apps/desktop/src/shell-core/csp.ts`）只允许本机 core 的 http/ws。桌面壳里凭据经
-preload 注入页面，没有票据链；服务器壳的设备配对与可撤销会话见上面的「无窗口服务器壳」。
+CSP（`apps/desktop/src/shell-core/csp.ts`）只允许本机 core 的 http/ws。桌面壳里页面经
+preload 向壳要一张一次性配对票、换成自己的会话（Windows 经 fork 的 IPC 取票）；服务器壳的设备配对与可撤销会话见上面的「无窗口服务器壳」。
 自 0.2.0 起 core 回环监听上的每一条 `/api/` 与每一条流都要会话（契约 §3.2）：桌面壳的页面在全局
 `fetch` / `WebSocket` 上装了请求层（`apps/web/src/api/shell-transport.ts`），请求带票据换来的
 `Authorization: Bearer`（CORS 放行这个头），流先 `POST /api/identity/ws-ticket` 换一张一次性票、经

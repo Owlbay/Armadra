@@ -191,12 +191,14 @@ ACP 是同一个 Agent 节点的另一种驱动方式，不是第二条 Agent �
 | Copilot  | `copilot --acp --stdio` | 原生 | 不支持   |
 | ama      | `ama --mode acp`        | 原生 | `resume` |
 
-表的来源是 `core/acp/adapters.ts`；各家的版本区间与 `compatibility.json` 的 `verified` 等 C 档场景 12 真跑（`--record-compat`）后再填。
+表的来源是 `core/acp/adapters.ts`；版本区间记在 `tools/release/compatibility.json`，由 C 档场景 12 真跑（`--record-compat`）填：Claude（claude-agent-acp 0.85.1）与 Pi（pi-acp 0.0.34）已记入；Codex、OpenCode、OMP、Copilot 等装好并登录的机器（[用户待办清单](../status/user-action-checklist.md)）。
 
 - 页面：节点头 `⋯` 或右键在「会话视图 / 终端视图」之间切换（`POST /api/acp/nodes/{id}/driver`，同一行上以另一种驱动接回 CLI 自己的会话）；会话视图里是消息流、工具调用、文件差异与权限卡。设置 → Agent 的「缺省视图」写 `agents.defaultDriver`；新建菜单的「新建 Agent…」向导只列有 ACP 入口的 Agent。
 - 画布工具：ACP 下没有终端可敲 `armadra-hook canvas`，core 开会话时把 `armadra-hook mcp`（stdio MCP，工具表即动词表）放进 `mcpServers`；ama 不加，它的画布工具来自宿主适配器。
 - 输出到画板：助手消息的 `⋯` 可落成便签、白板文字、编辑器节点（代码块写进 `.armadra/exports/acp/<nodeId>/`）或 Mermaid 白板对象，带回指来源节点的引用。
-- 限制：不支持 `elicitation`、按模型选择；ACP 驱动下不兑换节点凭据与 ama 模型密钥；SSH 节点不能切到 ACP。
+- 表单与模型：Agent 发 `elicitation/create` 时会话视图出表单卡，答复只交给 Agent、不落库；开会话答出模型目录时输入框旁可换模型（`PUT /api/acp/sessions/{id}/model`，契约 §26.1–§26.2）。
+- 凭据：适配器起之前由 core 兑换节点凭据与 ama 模型密钥，只设给适配器进程（契约 §26.4）。
+- SSH 节点：适配器经 `ssh` 起在执行主机上，画布工具走 Worker 的 Hook 中继，凭据在远端不兑换（契约 §26.5）。
 
 ## 协调者与 runners
 
@@ -204,7 +206,7 @@ ACP 是同一个 Agent 节点的另一种驱动方式，不是第二条 Agent �
 
 工作流把一次协作沉淀成模板：协调者经 `workflow-propose` 交草案，人在工作面板「工作流」页确认成模板、填参数起跑，或在自动化里定时运行；每次运行在画布上建一个 Frame 与各角色节点，关卡停下等人答复，运行记录可回看与对比（契约 §15）。
 
-模型密钥只在密钥后端（`armadra-ama-<供应商>`），启动器凭节点 token 经 hook 通道兑换、只设给 ama 进程；Windows 上由 `armadra-launch.exe` 兑换；SSH 执行主机不兑换。`runners` 不支持 `--cwd` 与 `--resume`。
+模型密钥只在密钥后端（`armadra-ama-<供应商>`），启动器凭节点 token 经 hook 通道兑换、只设给 ama 进程；Windows 上由 `armadra-launch.exe` 兑换；SSH 执行主机不兑换。runner 把 `task` 的 `cwd` / `resume` 映射成 `open-agent --cwd` / `--resume`（`--cwd` 只认本机工作区内的目录），core 拒绝时去掉那一项重起一次；ama 节点头部的「N 成员」打开分派抽屉，列出各成员任务的状态与汇总便签，失败的任务可重试（契约 §15.5、§15.7）。
 
 ## 对话交接
 
