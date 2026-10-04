@@ -2,7 +2,7 @@
  * 托管平台域的服务：按远端地址识别平台、管每仓库（或每主机）的配置与令牌、
  * 给出对着这台机器配置的那个 {@link Forge}。
  *
- * 识别顺序（契约 §29.1）：
+ * 识别顺序（契约 §29.1；GitLab 的差异见 §29.6）：
  *
  *   1. `github.com`（含 `www.` / `ssh.`）→ GitHub；GitHub 凭据里配了企业版根时，
  *      那个根的主机 → GitHub。这两条不看配置表：GitHub 的凭据只在 §5 那一面配。
@@ -26,8 +26,13 @@ import {
 } from "../github/remote";
 import { GITHUB_SOURCE_NONE } from "../github/store";
 import type { GithubService } from "../github/service";
+import { githubError } from "../github/errors";
+import { GithubRepositoryRefSchema } from "../github/schema";
+import type { GithubRepositoryRef } from "../github/types";
+import { create } from "../contract/message";
 import { GiteaForge, giteaApiBase, giteaWebRoot } from "./gitea";
 import { GithubForge } from "./github";
+import { GitlabForge, gitlabApiBase, gitlabWebRoot } from "./gitlab";
 import type { ForgeConfigRecord, ForgeStore } from "./store";
 import { loopbackHost } from "./transport";
 import {
@@ -206,7 +211,7 @@ export class ForgeService {
       source: "config",
       configKey: config.repoKey,
       apiBase: config.apiBase,
-      webUrl: `${giteaWebRoot(config.apiBase)}/${repo.owner}/${repo.name}`,
+      webUrl: `${webRoot(config.forge, config.apiBase)}/${repo.owner}/${repo.name}`,
       credential: config.credentialRef !== "",
       accountLogin:
         config.credentialRef !== "" && config.accountLogin !== ""
@@ -241,21 +246,30 @@ export class ForgeService {
       return new GithubForge(service);
     }
     const config = this.configFor(repo) as ForgeConfigRecord;
-    if (config.forge === "gitea") {
-      return this.gitea(config.apiBase, () => this.token(config.credentialRef));
+    if (config.forge === "github") {
+      // 表里的 CHECK 允许它，但 `configure` 从不写它：GitHub 只认 §5 的凭据。
+      throw forgeError("notConfigured", "FORGE_UNSUPPORTED");
     }
-    // GitLab 由 G5-15 接上；表里先有这一种，免得以后改迁移。
-    throw forgeError("notConfigured", "FORGE_UNSUPPORTED");
+    return this.client(config.forge, config.apiBase, () =>
+      this.token(config.credentialRef),
+    );
   }
 
-  private gitea(apiBase: string, token: () => Promise<string>): GiteaForge {
-    return new GiteaForge({
+  private client(
+    forge: ConfigurableForge,
+    apiBase: string,
+    token: () => Promise<string>,
+  ): GiteaForge | GitlabForge {
+    const options = {
       apiBase,
       token,
       ...(this.options.fetch === undefined
         ? {}
         : { fetch: this.options.fetch }),
-    });
+    };
+    return forge === "gitlab"
+      ? new GitlabForge(options)
+      : new GiteaForge(options);
   }
 
   private async token(reference: string): Promise<string> {
@@ -265,6 +279,37 @@ export class ForgeService {
     } catch {
       throw forgeError("unavailable", "SECRET_UNAVAILABLE");
     }
+  }
+
+  /**
+   * 一条指向 Gitea / GitLab 的外部连接（契约 §29.6）用的仓库引用：平台与 API 根
+   * 必须就是这台机器对这个仓库的识别结果，API 根与主机从配置里取，不从请求里取。
+   * 不符抛 GitHub 域的 `invalid`（连接走的是 `/api/github/link-reference`）。
+   */
+  referenceRepository(
+    forge: "gitea" | "gitlab",
+    ref: GithubRepositoryRef | undefined,
+  ): GithubRepositoryRef {
+    if (ref === undefined) throw githubError("invalid");
+    let repo: ForgeRepo;
+    try {
+      repo = forgeRepo(ref.host, ref.owner, ref.name);
+    } catch {
+      throw githubError("invalid");
+    }
+    const detection = this.detect(repo);
+    if (detection.forge !== forge || detection.apiBase === null) {
+      throw githubError("invalid");
+    }
+    if (ref.apiBase !== "" && ref.apiBase !== detection.apiBase) {
+      throw githubError("invalid");
+    }
+    return create(GithubRepositoryRefSchema, {
+      owner: repo.owner,
+      name: repo.name,
+      apiBase: detection.apiBase,
+      host: repo.host,
+    });
   }
 
   /* --------------------------------- 配置 --------------------------------- */
@@ -284,7 +329,10 @@ export class ForgeService {
     const host = repoKey.split("/")[0] as string;
     // GitHub 的主机由 §5 的凭据管；在这里给它另配一个平台只会让两处说法打架。
     if (this.githubHost(host)) throw forgeError("invalid", "GITHUB_HOST");
-    const apiBase = giteaApiBase(input.apiBase);
+    const apiBase =
+      forge === "gitlab"
+        ? gitlabApiBase(input.apiBase)
+        : giteaApiBase(input.apiBase);
     if (apiBase === undefined) throw forgeError("invalid", "API_BASE_INVALID");
     if (
       input.token !== undefined &&
@@ -310,7 +358,11 @@ export class ForgeService {
     } else if (input.token !== undefined) {
       const token = input.token;
       // 先核验再存：不存一个远端不认的令牌，也不声称一个没连上过的账号。
-      accountLogin = await this.gitea(apiBase, async () => token).viewer();
+      accountLogin = await this.client(
+        forge,
+        apiBase,
+        async () => token,
+      ).viewer();
       if (credentialRef === "") {
         credentialRef = `armadra-forge-${this.newId()}`;
         created = credentialRef;
@@ -359,6 +411,11 @@ export class ForgeService {
       // 删不掉的条目没有行再指向它；下次同名不会被复用（id 是随机的）。
     }
   }
+}
+
+/** API 根 → 站点根。 */
+export function webRoot(forge: ForgeKind, apiBase: string): string {
+  return forge === "gitlab" ? gitlabWebRoot(apiBase) : giteaWebRoot(apiBase);
 }
 
 function publicConfig(record: ForgeConfigRecord): PublicForgeConfig {

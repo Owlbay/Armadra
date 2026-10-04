@@ -1,0 +1,408 @@
+{
+  "$comment": "按 GitLab REST v4（17.x）的答复形状整理的回放夹具：字段拼法、分页头与拒绝体照官方文档的示例答复，主机名、编号与 SHA 换成了虚构值。不连任何真实账号。",
+  "apiBase": "https://gitlab.example.test/api/v4",
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/projects/acme%2Fapp/issues",
+        "query": {
+          "state": "opened",
+          "per_page": "2"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json",
+          "x-page": "1",
+          "x-per-page": "2",
+          "x-total": "3",
+          "x-total-pages": "2",
+          "x-next-page": "2",
+          "x-prev-page": "",
+          "link": "<https://gitlab.example.test/api/v4/projects/acme%2Fapp/issues?id=42&order_by=updated_at&page=2&per_page=2&sort=desc&state=opened>; rel=\"next\", <https://gitlab.example.test/api/v4/projects/acme%2Fapp/issues?id=42&order_by=updated_at&page=1&per_page=2&sort=desc&state=opened>; rel=\"first\", <https://gitlab.example.test/api/v4/projects/acme%2Fapp/issues?id=42&order_by=updated_at&page=2&per_page=2&sort=desc&state=opened>; rel=\"last\""
+        },
+        "body": [
+          {
+            "id": 1007,
+            "iid": 7,
+            "project_id": 42,
+            "title": "登录页按钮错位",
+            "description": "复现步骤见附件",
+            "state": "opened",
+            "created_at": "2026-09-20T08:00:00.000Z",
+            "updated_at": "2026-10-01T09:30:00.000Z",
+            "closed_at": null,
+            "closed_by": null,
+            "labels": ["bug", "ui"],
+            "milestone": null,
+            "assignees": [],
+            "author": {
+              "id": 2,
+              "username": "alice",
+              "name": "Alice",
+              "state": "active",
+              "locked": false,
+              "avatar_url": "https://gitlab.example.test/uploads/-/system/user/avatar/2/avatar.png",
+              "web_url": "https://gitlab.example.test/alice"
+            },
+            "type": "ISSUE",
+            "assignee": null,
+            "user_notes_count": 3,
+            "merge_requests_count": 0,
+            "upvotes": 0,
+            "downvotes": 0,
+            "due_date": null,
+            "confidential": false,
+            "discussion_locked": null,
+            "issue_type": "issue",
+            "web_url": "https://gitlab.example.test/acme/app/-/issues/7",
+            "time_stats": {
+              "time_estimate": 0,
+              "total_time_spent": 0,
+              "human_time_estimate": null,
+              "human_total_time_spent": null
+            },
+            "task_completion_status": {
+              "count": 0,
+              "completed_count": 0
+            },
+            "has_tasks": false,
+            "_links": {
+              "self": "https://gitlab.example.test/api/v4/projects/42/issues/7",
+              "notes": "https://gitlab.example.test/api/v4/projects/42/issues/7/notes",
+              "award_emoji": "https://gitlab.example.test/api/v4/projects/42/issues/7/award_emoji",
+              "project": "https://gitlab.example.test/api/v4/projects/42",
+              "closed_as_duplicate_of": null
+            },
+            "references": {
+              "short": "#7",
+              "relative": "#7",
+              "full": "acme/app#7"
+            },
+            "severity": "UNKNOWN",
+            "moved_to_id": null,
+            "service_desk_reply_to": null
+          },
+          {
+            "id": 1005,
+            "iid": 5,
+            "project_id": 42,
+            "title": "Support SSO",
+            "description": "",
+            "state": "opened",
+            "created_at": "2026-09-20T08:00:00.000Z",
+            "updated_at": "2026-10-01T09:30:00.000Z",
+            "closed_at": null,
+            "closed_by": null,
+            "labels": [],
+            "milestone": null,
+            "assignees": [],
+            "author": {
+              "id": 2,
+              "username": "alice",
+              "name": "Alice",
+              "state": "active",
+              "locked": false,
+              "avatar_url": "https://gitlab.example.test/uploads/-/system/user/avatar/2/avatar.png",
+              "web_url": "https://gitlab.example.test/alice"
+            },
+            "type": "ISSUE",
+            "assignee": null,
+            "user_notes_count": 0,
+            "merge_requests_count": 0,
+            "upvotes": 0,
+            "downvotes": 0,
+            "due_date": null,
+            "confidential": false,
+            "discussion_locked": null,
+            "issue_type": "issue",
+            "web_url": "https://gitlab.example.test/acme/app/-/issues/5",
+            "time_stats": {
+              "time_estimate": 0,
+              "total_time_spent": 0,
+              "human_time_estimate": null,
+              "human_total_time_spent": null
+            },
+            "task_completion_status": {
+              "count": 0,
+              "completed_count": 0
+            },
+            "has_tasks": false,
+            "_links": {
+              "self": "https://gitlab.example.test/api/v4/projects/42/issues/5",
+              "notes": "https://gitlab.example.test/api/v4/projects/42/issues/5/notes",
+              "award_emoji": "https://gitlab.example.test/api/v4/projects/42/issues/5/award_emoji",
+              "project": "https://gitlab.example.test/api/v4/projects/42",
+              "closed_as_duplicate_of": null
+            },
+            "references": {
+              "short": "#5",
+              "relative": "#5",
+              "full": "acme/app#5"
+            },
+            "severity": "UNKNOWN",
+            "moved_to_id": null,
+            "service_desk_reply_to": null
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/projects/acme%2Fapp/issues",
+        "query": {
+          "state": "opened",
+          "per_page": "2",
+          "page": "2"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json",
+          "x-page": "2",
+          "x-per-page": "2",
+          "x-total": "3",
+          "x-total-pages": "2",
+          "x-next-page": "",
+          "x-prev-page": "1"
+        },
+        "body": [
+          {
+            "id": 1002,
+            "iid": 2,
+            "project_id": 42,
+            "title": "Docs typo",
+            "description": "",
+            "state": "opened",
+            "created_at": "2026-09-20T08:00:00.000Z",
+            "updated_at": "2026-10-01T09:30:00.000Z",
+            "closed_at": null,
+            "closed_by": null,
+            "labels": ["docs"],
+            "milestone": null,
+            "assignees": [],
+            "author": {
+              "id": 2,
+              "username": "alice",
+              "name": "Alice",
+              "state": "active",
+              "locked": false,
+              "avatar_url": "https://gitlab.example.test/uploads/-/system/user/avatar/2/avatar.png",
+              "web_url": "https://gitlab.example.test/alice"
+            },
+            "type": "ISSUE",
+            "assignee": null,
+            "user_notes_count": 1,
+            "merge_requests_count": 0,
+            "upvotes": 0,
+            "downvotes": 0,
+            "due_date": null,
+            "confidential": false,
+            "discussion_locked": null,
+            "issue_type": "issue",
+            "web_url": "https://gitlab.example.test/acme/app/-/issues/2",
+            "time_stats": {
+              "time_estimate": 0,
+              "total_time_spent": 0,
+              "human_time_estimate": null,
+              "human_total_time_spent": null
+            },
+            "task_completion_status": {
+              "count": 0,
+              "completed_count": 0
+            },
+            "has_tasks": false,
+            "_links": {
+              "self": "https://gitlab.example.test/api/v4/projects/42/issues/2",
+              "notes": "https://gitlab.example.test/api/v4/projects/42/issues/2/notes",
+              "award_emoji": "https://gitlab.example.test/api/v4/projects/42/issues/2/award_emoji",
+              "project": "https://gitlab.example.test/api/v4/projects/42",
+              "closed_as_duplicate_of": null
+            },
+            "references": {
+              "short": "#2",
+              "relative": "#2",
+              "full": "acme/app#2"
+            },
+            "severity": "UNKNOWN",
+            "moved_to_id": null,
+            "service_desk_reply_to": null
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/projects/acme%2Fapp/issues/7"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": 1007,
+          "iid": 7,
+          "project_id": 42,
+          "title": "登录页按钮错位",
+          "description": "复现步骤见附件",
+          "state": "opened",
+          "created_at": "2026-09-20T08:00:00.000Z",
+          "updated_at": "2026-10-01T09:30:00.000Z",
+          "closed_at": null,
+          "closed_by": null,
+          "labels": ["bug", "ui"],
+          "milestone": null,
+          "assignees": [],
+          "author": {
+            "id": 2,
+            "username": "alice",
+            "name": "Alice",
+            "state": "active",
+            "locked": false,
+            "avatar_url": "https://gitlab.example.test/uploads/-/system/user/avatar/2/avatar.png",
+            "web_url": "https://gitlab.example.test/alice"
+          },
+          "type": "ISSUE",
+          "assignee": null,
+          "user_notes_count": 3,
+          "merge_requests_count": 0,
+          "upvotes": 0,
+          "downvotes": 0,
+          "due_date": null,
+          "confidential": false,
+          "discussion_locked": null,
+          "issue_type": "issue",
+          "web_url": "https://gitlab.example.test/acme/app/-/issues/7",
+          "time_stats": {
+            "time_estimate": 0,
+            "total_time_spent": 0,
+            "human_time_estimate": null,
+            "human_total_time_spent": null
+          },
+          "task_completion_status": {
+            "count": 0,
+            "completed_count": 0
+          },
+          "has_tasks": false,
+          "_links": {
+            "self": "https://gitlab.example.test/api/v4/projects/42/issues/7",
+            "notes": "https://gitlab.example.test/api/v4/projects/42/issues/7/notes",
+            "award_emoji": "https://gitlab.example.test/api/v4/projects/42/issues/7/award_emoji",
+            "project": "https://gitlab.example.test/api/v4/projects/42",
+            "closed_as_duplicate_of": null
+          },
+          "references": {
+            "short": "#7",
+            "relative": "#7",
+            "full": "acme/app#7"
+          },
+          "severity": "UNKNOWN",
+          "moved_to_id": null,
+          "service_desk_reply_to": null
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "PUT",
+        "path": "/projects/acme%2Fapp/issues/7"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": 1007,
+          "iid": 7,
+          "project_id": 42,
+          "title": "登录页按钮错位",
+          "description": "复现步骤见附件",
+          "state": "closed",
+          "created_at": "2026-09-20T08:00:00.000Z",
+          "updated_at": "2026-10-01T09:30:00.000Z",
+          "closed_at": "2026-10-03T12:00:00.000Z",
+          "closed_by": {
+            "id": 3,
+            "username": "maintainer",
+            "name": "Maintainer",
+            "state": "active",
+            "locked": false,
+            "avatar_url": "https://gitlab.example.test/uploads/-/system/user/avatar/3/avatar.png",
+            "web_url": "https://gitlab.example.test/maintainer"
+          },
+          "labels": ["bug", "ui"],
+          "milestone": null,
+          "assignees": [],
+          "author": {
+            "id": 2,
+            "username": "alice",
+            "name": "Alice",
+            "state": "active",
+            "locked": false,
+            "avatar_url": "https://gitlab.example.test/uploads/-/system/user/avatar/2/avatar.png",
+            "web_url": "https://gitlab.example.test/alice"
+          },
+          "type": "ISSUE",
+          "assignee": null,
+          "user_notes_count": 3,
+          "merge_requests_count": 0,
+          "upvotes": 0,
+          "downvotes": 0,
+          "due_date": null,
+          "confidential": false,
+          "discussion_locked": null,
+          "issue_type": "issue",
+          "web_url": "https://gitlab.example.test/acme/app/-/issues/7",
+          "time_stats": {
+            "time_estimate": 0,
+            "total_time_spent": 0,
+            "human_time_estimate": null,
+            "human_total_time_spent": null
+          },
+          "task_completion_status": {
+            "count": 0,
+            "completed_count": 0
+          },
+          "has_tasks": false,
+          "_links": {
+            "self": "https://gitlab.example.test/api/v4/projects/42/issues/7",
+            "notes": "https://gitlab.example.test/api/v4/projects/42/issues/7/notes",
+            "award_emoji": "https://gitlab.example.test/api/v4/projects/42/issues/7/award_emoji",
+            "project": "https://gitlab.example.test/api/v4/projects/42",
+            "closed_as_duplicate_of": null
+          },
+          "references": {
+            "short": "#7",
+            "relative": "#7",
+            "full": "acme/app#7"
+          },
+          "severity": "UNKNOWN",
+          "moved_to_id": null,
+          "service_desk_reply_to": null
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/projects/acme%2Fapp/issues/404"
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "message": "404 Not found"
+        }
+      }
+    }
+  ]
+}

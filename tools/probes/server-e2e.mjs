@@ -190,6 +190,35 @@ function httpsText(options) {
   });
 }
 
+/** 配对最多试几次（每次一张新票）。 */
+const PAIRING_ATTEMPTS = 3;
+
+/**
+ * 让服务器壳再铸一张配对票（SIGUSR2，`apps/server/src/main.ts`），等启动日志
+ * 里出现与 `previous` 不同的那一行。
+ */
+async function freshPairingLink(previous) {
+  if (report.container !== undefined)
+    execFileSync(
+      "docker",
+      ["kill", "--signal", "USR2", report.container.name],
+      { stdio: "ignore" },
+    );
+  else currentServer.process.kill("SIGUSR2");
+  for (let wait = 0; wait < 100; wait += 1) {
+    const links = [
+      ...currentServer.tail().matchAll(/armadra-server pairing (\S+)/g),
+    ].map((match) => match[1]);
+    const latest = links.at(-1);
+    if (latest !== undefined && latest !== previous) return latest;
+    await sleep(100);
+  }
+  throw new Error("服务器壳没有铸出新的配对票");
+}
+
+/** 正在跑的服务器壳（本机进程或 `docker run` 客户端）。 */
+let currentServer;
+
 await h.run(async () => {
   for (const [what, file] of image !== undefined
     ? []
@@ -299,6 +328,7 @@ await h.run(async () => {
     if (!pairing) await sleep(100);
   }
   if (!pairing) throw new Error(`启动日志里没有配对链接：${server.tail()}`);
+  currentServer = server;
   if (behindProxy !== undefined) await startCaddy(behindProxy);
   const origin = new URL(pairing).origin;
   step("服务器壳已启动", origin);
@@ -308,32 +338,57 @@ await h.run(async () => {
 
   /* ------------------------------ 1. 配对 -------------------------------- */
 
-  await admin.navigate(pairing);
-  await admin.settle();
-  await admin
-    .waitFor(`return document.body.innerText.includes("服务所有者");`, {
-      what: "配对完成（后台服务页出现「服务所有者」）",
-      timeout: 30_000,
-    })
-    .catch(async (error) => {
-      // 夜间的容器里偶发停在这里：留下页面、接口应答与服务器输出，下次能看出
-      // 是没连上、配对被拒，还是页面没走到后台服务页。
-      await admin.capture("01-admin-pairing-failed").catch(() => undefined);
-      report.pairingFailure = {
-        url: await admin
-          .evaluate(`return location.origin + location.pathname;`)
-          .catch(() => null),
-        text: (await admin.text().catch(() => "")).slice(0, 800),
-        traffic: admin.traffic.slice(-40),
-        errors: admin.drain().errors.map((entry) => entry.text),
-        // 配对票只在片段里：抹掉再记。
-        server: server
-          .tail()
-          .slice(-3000)
-          .replace(/#pair=\S+/g, "#pair=…"),
-      };
-      throw error;
-    });
+  // 一次配对等不到就留下现场，再要一张新票重来，最多三次。票是一次性的，
+  // 第一次可能已经被页面取走了：新票由服务器壳收到 SIGUSR2 时铸（容器里经
+  // `docker kill --signal`）。重试过的配对照样记进报告，偶发不会被悄悄吞掉。
+  report.pairingFailures = [];
+  let link = pairing;
+  for (let attempt = 1; ; attempt += 1) {
+    await admin.navigate(link);
+    await admin.settle();
+    const paired = await admin
+      .waitFor(`return document.body.innerText.includes("服务所有者");`, {
+        what: "配对完成（后台服务页出现「服务所有者」）",
+        timeout: 30_000,
+      })
+      .then(
+        () => true,
+        async (error) => {
+          // 留下页面、接口应答与服务器输出，看得出是没连上、配对被拒，还是
+          // 页面没走到后台服务页。
+          await admin
+            .capture(`01-admin-pairing-failed-${attempt}`)
+            .catch(() => undefined);
+          report.pairingFailures.push({
+            attempt,
+            error: String(error?.message ?? error),
+            url: await admin
+              .evaluate(`return location.origin + location.pathname;`)
+              .catch(() => null),
+            text: (await admin.text().catch(() => "")).slice(0, 800),
+            traffic: admin.traffic.slice(-40),
+            errors: admin.drain().errors.map((entry) => entry.text),
+            // 配对票只在片段里：抹掉再记。
+            server: server
+              .tail()
+              .slice(-3000)
+              .replace(/#pair=\S+/g, "#pair=…"),
+          });
+          // Windows 上的本机进程收不到 SIGUSR2：铸不了新票就不重试。
+          const canMint =
+            report.container !== undefined || process.platform !== "win32";
+          if (attempt >= PAIRING_ATTEMPTS || !canMint) throw error;
+          return false;
+        },
+      );
+    if (paired) break;
+    console.error(`  RETRY 配对第 ${attempt} 次没等到，换一张新票再试`);
+    link = await freshPairingLink(link);
+    // 同源只换片段不会重载页面：先离开，新票由一次完整的加载接住。
+    await admin.navigate("about:blank");
+  }
+  if (report.pairingFailures.length > 0)
+    step("配对重试后完成", `${report.pairingFailures.length} 次没等到`);
   await admin.capture("01-admin-paired");
   check(
     !(await admin.evaluate(`return location.hash;`)),
@@ -540,7 +595,7 @@ await h.run(async () => {
     "集成",
     "终端",
     "工作区",
-    "GitHub",
+    "Git 托管",
     "SSH",
     "执行主机",
     "数据",

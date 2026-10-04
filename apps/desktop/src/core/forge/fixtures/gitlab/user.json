@@ -1,0 +1,31 @@
+{
+  "$comment": "按 GitLab REST v4（17.x）的答复形状整理的回放夹具：字段拼法、分页头与拒绝体照官方文档的示例答复，主机名、编号与 SHA 换成了虚构值。不连任何真实账号。",
+  "apiBase": "https://gitlab.example.test/api/v4",
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/user"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": 7,
+          "username": "bot",
+          "name": "Bot",
+          "state": "active",
+          "locked": false,
+          "avatar_url": "https://gitlab.example.test/uploads/-/system/user/avatar/7/avatar.png",
+          "web_url": "https://gitlab.example.test/bot",
+          "bio": "",
+          "created_at": "2026-01-01T00:00:00.000Z",
+          "is_admin": false,
+          "two_factor_enabled": false
+        }
+      }
+    }
+  ]
+}

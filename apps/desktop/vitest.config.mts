@@ -28,6 +28,8 @@ export default defineConfig({
     // Each file's `tempDir()` directories are removed after it (and any tmux
     // server under them stopped).
     setupFiles: ["src/core/testing/setup.ts"],
+    // One migrated database template for the whole run (fixtures copy it).
+    globalSetup: ["src/core/testing/db-template.global.ts"],
     // The Host and Runtime process tests wait on real timeouts.
     testTimeout: 60_000,
   },

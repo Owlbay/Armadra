@@ -76,7 +76,7 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 | `core/net/outbound.ts`                  | core 全部出站地址的登记表，扫描测试强制                                                                                 | —        |
 | `core/diagnostics/`                     | 崩溃上报的剥离规则；SDK 只在壳里、只在用户填了 DSN 时加载；页面错误上报（`client-report.ts` 限流与再剥离，`routes.ts`） | §30      |
 | `core/mail/`                            | 可选 SMTP 通知通道：邀请与重置链接；只有服务器壳 `--smtp-url` 配，nodemailer 首封才加载                                 | §28      |
-| `core/forge/`                           | 托管平台抽象：`Forge` 接口，GitHub（经 `core/github/` 的客户端）与 Gitea / Forgejo；GitLab 待 G5-15                     | §29      |
+| `core/forge/`                           | 托管平台抽象：`Forge` 接口，GitHub（经 `core/github/` 的客户端）、Gitea / Forgejo 与 GitLab（`PRIVATE-TOKEN`）          | §29      |
 
 core 之外的同类新增：`src/hook-client/`（动词工具表，`armadra-hook` 与 ama 适配器共用）、
 `src/agent-host/ama/`（ama 宿主适配器与 runners）、`apps/mobile`（Capacitor 手机壳）、

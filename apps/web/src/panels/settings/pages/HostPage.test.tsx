@@ -252,6 +252,47 @@ describe("HostPage", () => {
     }
   });
 
+  it("checks when a pairing link lands in a page that is already open", async () => {
+    probe.mockResolvedValue(hello);
+    const original = window.location.hash;
+    try {
+      render(<HostPage />);
+      expect(probe).not.toHaveBeenCalled();
+      await act(async () => {
+        window.history.replaceState(null, "", "#pair=abc.def");
+        window.dispatchEvent(new HashChangeEvent("hashchange"));
+        await Promise.resolve();
+      });
+      expect(probe).toHaveBeenCalledTimes(1);
+    } finally {
+      window.history.replaceState(
+        null,
+        "",
+        original || window.location.pathname,
+      );
+    }
+  });
+
+  it("retries a failed check by itself while a pairing ticket waits, twice at most", async () => {
+    probe.mockRejectedValue(new IdentityTransportError());
+    const original = window.location.hash;
+    window.history.replaceState(null, "", "#pair=abc.def");
+    try {
+      render(<HostPage />);
+      await waitFor(() => expect(probe).toHaveBeenCalledTimes(3), {
+        timeout: 4_000,
+      });
+      await new Promise((done) => setTimeout(done, 1_500));
+      expect(probe).toHaveBeenCalledTimes(3);
+    } finally {
+      window.history.replaceState(
+        null,
+        "",
+        original || window.location.pathname,
+      );
+    }
+  });
+
   it("keeps a confirmed identity in expandable details", async () => {
     probe.mockResolvedValue(hello);
     render(<HostPage />);

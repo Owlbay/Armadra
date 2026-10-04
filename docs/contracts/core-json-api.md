@@ -152,6 +152,8 @@ JSON 本身不定义键的顺序，所以一份「原样 stringify」的文本�
 - **列表不带正文。** `list-issues` / `list-pulls` 的每条记录 `body` 都是 `""`：一百条正文装不进一次合理的响应，而一个被截断的正文比一个缺席的更糟——详情请求会把整份拿回来。
 - **令牌从不外传。** `configure-credential` 的 `token` 是这一面上唯一会外发的值，而且只是入站；`get-credential` 答的是一份状态（哪种来源、能不能用、账号名），永远不是一次回声。
 
+外部连接（`link-reference` / `list-references` 的 `GithubExternalReference`）带 `forge`：`github` | `gitea` | `gitlab`。请求里不给或给空串按 `github`，答复里总有值；指向 Gitea / GitLab 的连接由 §29.6 核对仓库，API 根取自那一面的配置。
+
 `list-issues` 的分组来自 Projects v2 字段时，core 按 cursor 把 project 的条目翻完，最多 50 页（5000 条）；翻到上界还有下一页，响应的 `statusGroupsPartial` 为 `true`——没读到的 Issue 落在「未分组」，但它们其实可能有 Status。
 
 ### 5.3 枚举名
@@ -415,6 +417,34 @@ G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：�
 - 窗口合计（`totals`、`today`、`last30Days`、`daily`）、`byModel`、`peak` 与 `unpricedModels` 只合并 token，不含请求数；`sessions` 与 `activeIntervals` / `longestStreak` 把只有请求数的会话和时间段也算进去。`currentSession` 只看按 token 计的会话。
 - 只有请求数而没有 token 时，`status` 仍是 `"ok"`。
 - OpenCode 按 token 计（`source: "local"`、`unit: "tokens"`），用量来自它库里 assistant 消息的 `tokens`。定价规则不变：价格表认得的模型按表算；认不出、而 OpenCode 自己在消息里记了大于零的 `cost` 时，用它记的数作这个模型的 `costUsd`，这个模型算有价格（不让 `complete` 变假，也不进 `unpricedModels`）。它记 0 的按没有价格处理。
+
+G5-25 追加：`GET /api/usage` 与 `POST /api/usage/refresh` 里 Claude 那一行因出站政策关着而是 `status: "unavailable"`、`reason: "policy_off"` 时，多一个可选字段 `estimate`（代码在 `core/usage/local-window.ts`，共享层 `usageEstimateSchema`）——本机转录估出来的额度窗口，不是额度端点的答案，界面标「本地估算」：
+
+```json
+{
+  "source": "local",
+  "windows": [
+    {
+      "key": "five_hour",
+      "label": "5h",
+      "windowStartMs": 1791093600000,
+      "resetsAtMs": 1791111600000,
+      "used": 1250000
+    },
+    {
+      "key": "seven_day",
+      "label": "7d",
+      "windowStartMs": 1790524800000,
+      "used": 8400000
+    }
+  ]
+}
+```
+
+- 数据是成本扫描（本节上文）最近一趟的 Claude 日桶与小时桶，读快照时现算；成本扫描关着（`usage.cost.enabled`）或还没扫过就没有这个字段。设置 `usage.claudeLocalWindow`（缺省 `true`）关掉也没有。
+- `used` 是输入 + 输出 + 缓存写的 token；缓存读不计。
+- `five_hour`：从上一个窗口之外第一条活动所在的本地整点起算，持续 5 小时，`resetsAtMs` 是结束时刻；最近的窗口已经结束时报从当前整点起、`used: 0`、没有 `resetsAtMs` 的窗口（下一条活动才开窗口）。`seven_day`：含今天在内的 7 个本地日，滚动，没有 `resetsAtMs`。
+- `limit` 只在知道这一档额度时才有；没有就只报用量，页面不算百分比。
 
 ### 12.2 `/api/agents` 行的历史数据可用性
 
@@ -1914,7 +1944,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 29. 托管平台（forge）：`/api/forge/*`
 
-把 §5 的 GitHub 面推广到自托管平台：Gitea / Forgejo（两者同一套 `/api/v1`，记作 `gitea`），GitLab 由 G5-15 追加小节。实现在 `core/forge/`（`Forge` 接口 + `github.ts` / `gitea.ts`），页面一侧的 zod 在共享层 `api/forge.ts`。`/api/github/*`（§5）不变；GitHub 远端在这一面经同一个客户端、同一份凭据。
+把 §5 的 GitHub 面推广到自托管平台：Gitea / Forgejo（两者同一套 `/api/v1`，记作 `gitea`）与 GitLab（§29.6）。实现在 `core/forge/`（`Forge` 接口 + `github.ts` / `gitea.ts` / `gitlab.ts`），页面一侧的 zod 在共享层 `api/forge.ts`。`/api/github/*`（§5）不变；GitHub 远端在这一面经同一个客户端、同一份凭据。
 
 权限与 §5 同一档：读 `github:read`，写 `github:write`（`http/route-scopes.ts`）；`POST /api/forge/resolve` 只是读，登记时声明 `github:read`。写方法照常经 Gateway 准入：Cookie 会话要 `X-Armadra-CSRF`。错误一律 `{ code, message }`，`message` 是固定文案，远端原话（含错误消息里的 HTML）不往外传。
 
@@ -1957,7 +1987,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 | `PUT /api/forge/configs/{host}/{owner}/{name}` | 配置行（这个仓库，优先于主机那行）  |
 | `DELETE …同上…?expectedRevision=<n>`           | `{ removed: true }`；令牌条目一起删 |
 
-`PUT` 请求体 `{ forge: "gitea", apiBase, token?, expectedRevision? }`：
+`PUT` 请求体 `{ forge: "gitea" | "gitlab", apiBase, token?, expectedRevision? }`（`gitlab` 的差异见 §29.6）：
 
 - `apiBase` 给站点根或 `…/api/v1` 都行，存成 `…/api/v1`。只收 HTTPS；回环主机（`localhost`、`127.0.0.1`、`[::1]`）也收明文 HTTP。不收带凭据、查询或片段的地址。
 - `token` 不给 = 保留已存的令牌，但 `apiBase` 变了就丢掉它（旧令牌不能发到新地址）；`""` = 删掉令牌；非空 = 先用它调一次 `GET /user` 核验，远端认了才存，`accountLogin` 是它答的登录名。
@@ -1990,19 +2020,35 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ### 29.5 错误
 
-| 状态 | `code`                      | 何时                                                                                      |
-| ---- | --------------------------- | ----------------------------------------------------------------------------------------- |
-| 400  | `bad_request`               | 参数不对：主机 / owner / 名字、编号、状态、游标、分支名、SHA、地址、令牌形状、GitHub 主机 |
-| 403  | `forge_forbidden`           | 远端说这个令牌没有这项权限（不是路由门的 `forbidden`）                                    |
-| 404  | `not_found`                 | 没有这个仓库 / issue / PR / 配置行                                                        |
-| 409  | `forge_not_configured`      | 没识别出平台，或识别出了却没有令牌；不发匿名请求                                          |
-| 409  | `conflict`                  | `expectedRevision` 对不上；head 变了、已合并、不可合并                                    |
-| 429  | `rate_limited`              | 远端限流                                                                                  |
-| 502  | `forge_credential_rejected` | 远端不认令牌（远端 401；不答 401，免得页面以为自己的会话过期）                            |
-| 502  | `forge_unavailable`         | 连不上、远端 5xx、答复坏了                                                                |
-| 504  | `unknown_outcome`           | 写已发出、结果没读到：重新读再决定，不要直接重试                                          |
+| 状态 | `code`                      | 何时                                                                                        |
+| ---- | --------------------------- | ------------------------------------------------------------------------------------------- |
+| 400  | `bad_request`               | 参数不对：主机 / owner / 名字、编号、状态、游标、分支名、SHA、地址、令牌形状、GitHub 主机   |
+| 403  | `forge_forbidden`           | 远端说这个令牌没有这项权限（不是路由门的 `forbidden`）                                      |
+| 403  | `forge_scope`               | 远端明说令牌缺范围（GitLab 的 `insufficient_scope` / `insufficient_granular_scope`，§29.6） |
+| 404  | `not_found`                 | 没有这个仓库 / issue / PR / 配置行                                                          |
+| 409  | `forge_not_configured`      | 没识别出平台，或识别出了却没有令牌；不发匿名请求                                            |
+| 409  | `conflict`                  | `expectedRevision` 对不上；head 变了、已合并、不可合并                                      |
+| 429  | `rate_limited`              | 远端限流                                                                                    |
+| 502  | `forge_credential_rejected` | 远端不认令牌（远端 401；不答 401，免得页面以为自己的会话过期）                              |
+| 502  | `forge_unavailable`         | 连不上、远端 5xx、答复坏了                                                                  |
+| 504  | `unknown_outcome`           | 写已发出、结果没读到：重新读再决定，不要直接重试                                            |
 
 出站登记在 `core/net/outbound.ts` 的 `forgeApi`（地址是用户配的，不配置即不联网）。
+
+### 29.6 GitLab
+
+GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §29.3 按主机或仓库配置，路由与形状同 §29.4；与 Gitea 的差异：
+
+- **地址与认证**：`apiBase` 给站点根或 `…/api/v4` 都行，存成 `…/api/v4`。令牌放在 `PRIVATE-TOKEN` 头里；读要 `read_api`，写要 `api`。配置时用它调一次 `GET /user`，`accountLogin` 是答复的 `username`。
+- **寻址**：项目按 `owner%2Fname`（远端地址最后两段）寻址；多级子组的仓库不在这一版里。
+- **merge request ↔ pull request**：`number` 是 MR 的 `iid`；`opened` / `locked` → `open`，`closed` → `closed`，`merged` → `merged`；`source_branch` / `target_branch` → `headRef` / `baseRef`，`sha` → `headSha`；`draft` 看 `draft`（旧版本 `work_in_progress`），`draft: true` 建 MR 时加标题前缀 `Draft: `。`mergeable`：`has_conflicts`、`detailed_merge_status` 为 `conflict` / `broken_status`、或 `merge_status` 为 `cannot_be_merged` → `conflicting`；`detailed_merge_status` 为 `mergeable`（老版本只有 `merge_status: can_be_merged`）→ `mergeable`；其余（流水线、审批、检查中）→ `unknown`。
+- **issue**：编号是 issue 的 `iid`，与 MR 是两套编号；`description` → `body`，`user_notes_count` → `commentCount`；开关用 `state_event: close | reopen`。
+- **列表的 `closed`**：GitLab 的 MR `state=closed` 不含已合并，core 按 `all` 取再滤掉开着的，所以一页可能不满；`nextCursor` 仍是远端的下一页。
+- **文件**：来自 `merge_requests/{iid}/diffs`（GitLab 15.7 起），按页取到 300 个；`additions` / `deletions` 从补丁里数；没有 `@@` 的（二进制、过大被折叠、纯改名）`patch` 为 `null`。
+- **检查**：commit statuses（流水线作业也在这里），同名只留 id 最大的；`success` → success，`failed` → failure（`allow_failure` 的 → neutral），`canceled` → failure，`skipped` / `manual` → neutral，其余 → pending。
+- **合并**：`PUT …/merge` 带 `sha: headSha`（远端 head 变了答 409 → `conflict`），`method: "squash"` 对应 `squash: true`；`rebase` 在 GitLab 是另一个异步动作，这一面答 `bad_request`。远端 405 / 422（草稿、流水线未过、冲突）→ `conflict`。答复里的 MR 还没到 `merged`（排进了合并队列）时答 `unknown_outcome`：重新读再决定。
+- **范围不足**：403 的答复里 `error` 是 `insufficient_scope`（经典令牌）或 `insufficient_granular_scope`（细粒度令牌）时答 `403 forge_scope`；别的 403 仍是 `forge_forbidden`。远端的说明文字不往外传。
+- **外部连接**：`GithubExternalReference.forge` 为 `gitea` / `gitlab` 时（§5.2），仓库必须正是这台机器对它识别出的那个平台，`apiBase` 取自配置（请求里给了别的根就拒绝）；GitHub 的 issue / PR 详情只列 `forge: github` 的连接。
 
 ## 30. 页面错误上报：`/api/diagnostics/client-error`
 

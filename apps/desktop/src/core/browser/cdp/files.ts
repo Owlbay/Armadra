@@ -107,7 +107,7 @@ export async function capture(
     // 跨源 iframe 是另一个渲染进程画的：`captureBeyondViewport` 把视图临时撑到
     // 整页大小再截，而那个进程不会为此重画，视口以外的 iframe 截出来是空白。
     // 有跨源 iframe 时改成一屏一屏滚过去截、再拼起来；没有时仍是一次截完。
-    if (session.childFrames().length > 0) {
+    if (session.childTargetIds().size > 0) {
       if (format === "png") return stitchedCapture(session, path);
       note =
         "页面含跨源 iframe，jpeg 不做分段拼接，视口以外的 iframe 可能是空白；要完整的整页请用 png";
@@ -292,7 +292,7 @@ export async function pdf(host: VerbHost, args: Args): Promise<unknown> {
     // cross-origin iframe (checked on Electron 42: the promise hangs, and the
     // app can die with it on quit). Refused up front rather than hung on;
     // the timeout is for whatever else might stall it.
-    if (host.session.childFrames().length > 0)
+    if (host.session.childTargetIds().size > 0)
       refuse(
         DRIVE_CODES.refused,
         "桌面浏览器节点打印不了含跨源 iframe 的页面；可以用 capture --full-page 截整页",

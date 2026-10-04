@@ -197,7 +197,7 @@ export const OUTBOUND = {
     // G5-15 起含 GitLab），这里只是占位主机。HTTPS，回环主机也收明文 HTTP。
     // GitHub 仓库仍走上面的 `githubApi`。
     url: "https://<用户配置的托管平台 API 根>",
-    purpose: "Git 窗口的托管区（自托管 Gitea / Forgejo）",
+    purpose: "Git 窗口的托管区（自托管 Gitea / Forgejo、GitLab）",
     cadence: "用户动作 + 轮询；配置令牌时核验 1 次",
     switch: null,
     defaultOn: false,

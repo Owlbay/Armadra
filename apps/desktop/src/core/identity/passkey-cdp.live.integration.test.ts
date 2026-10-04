@@ -16,7 +16,10 @@ import { createServer, type Server } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { CdpConnection } from "../browser/headless/connection";
+import {
+  CdpConnection,
+  STARTUP_TIMEOUT_MS,
+} from "../browser/headless/connection";
 import { discoverBrowser } from "../browser/headless/discover";
 import {
   type BrowserProcess,
@@ -149,9 +152,13 @@ describe.skipIf(found.path === undefined)("passkey 对真 Chromium", () => {
     const cdp = new CdpConnection(browser.write, browser.read);
     cleanup.push(() => cdp.close());
 
-    const { targetId } = (await cdp.send("Target.createTarget", {
-      url: `${origin}/`,
-    })) as { targetId: string };
+    // The first command waits for the browser to come up, not for a page.
+    const { targetId } = (await cdp.send(
+      "Target.createTarget",
+      { url: `${origin}/` },
+      undefined,
+      STARTUP_TIMEOUT_MS,
+    )) as { targetId: string };
     const { sessionId } = (await cdp.send("Target.attachToTarget", {
       targetId,
       flatten: true,

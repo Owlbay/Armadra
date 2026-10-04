@@ -13,8 +13,9 @@ export const forgeKindSchema = z.enum(FORGE_KINDS);
 export type ForgeKind = (typeof FORGE_KINDS)[number];
 
 /** Forges configurable through `/api/forge/configs` (GitHub uses §5). */
-export const CONFIGURABLE_FORGES = ["gitea"] as const;
+export const CONFIGURABLE_FORGES = ["gitea", "gitlab"] as const;
 export const configurableForgeSchema = z.enum(CONFIGURABLE_FORGES);
+export type ConfigurableForge = (typeof CONFIGURABLE_FORGES)[number];
 
 export const forgeRepoSchema = z.object({
   host: z.string(),
@@ -56,6 +57,7 @@ export const forgeConfigListSchema = z.object({
 /** `PUT /api/forge/configs/{host}[/{owner}/{name}]` body. */
 export const putForgeConfigSchema = z.object({
   forge: configurableForgeSchema,
+  /** Site root or API root (`…/api/v1` for Gitea, `…/api/v4` for GitLab). */
   apiBase: z.string().min(1).max(2048),
   /** Omit to keep the stored token (dropped if `apiBase` changes); `""` removes it. */
   token: z.string().max(512).optional(),
@@ -159,6 +161,7 @@ export const FORGE_ERROR_CODES = [
   "forge_not_configured",
   "forge_credential_rejected",
   "forge_forbidden",
+  "forge_scope",
   "forge_unavailable",
   "unknown_outcome",
   "rate_limited",

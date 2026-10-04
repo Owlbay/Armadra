@@ -136,7 +136,9 @@ export function writeManifest(options) {
         .map((key) => [key, manifest.platforms[key]]),
     ),
   };
-  const path = join(options.directory, "latest.json");
+  // `output` puts the file elsewhere: the mirror's copy names the same bundles
+  // at the mirror's addresses and must not replace the release's own.
+  const path = options.output ?? join(options.directory, "latest.json");
   writeFileSync(path, JSON.stringify(ordered, null, 2) + "\n");
   return { path, manifest: ordered, skipped };
 }

@@ -3,6 +3,8 @@
  *
  *   node tools/notices.mjs            重新生成根目录的 THIRD_PARTY_NOTICES.md
  *   node tools/notices.mjs --check    与仓库里的那份逐字节比较，不同就失败
+ *   node tools/notices.mjs --scan apps/desktop/out
+ *                                     查构建产物里打进去的第三方包都在声明里
  *
  * 来源是 `pnpm licenses list --prod --json`：工作区所有包的生产依赖。每个包的
  * 许可证正文从它安装目录里的 LICENSE / NOTICE 等文件原样读出——MIT、BSD、
@@ -13,12 +15,25 @@
  * （macOS 是 `Contents/Resources/`），`@armadra/agent`（ama）自带的声明随
  * `resources/agent/` 一起带，Armadra 自己的 LICENSE。
  *
+ * `--prod` 漏掉一类：构建期依赖（devDependencies）里被打包器整段打进 `out/` 的
+ * 包——页面 CSS 里的 tailwindcss 与 tw-animate-css 就是。它们由 `BUNDLED_DEV_DEPENDENCIES`
+ * 显式列出、照样读声明文件并进同一张表。名单是否够全由 `--scan` 对构建产物核：
+ * rolldown 在未压缩的 JS 里给每个模块留 `//#region <路径>` 注释，CSS 里留
+ * `/*! 包名 v版本` 的版权头；凡是从 `node_modules` 来的包，既不在 `--prod` 里、
+ * 也不在名单里、又不是工作区自己的 `@armadra/*`，就失败。release.yml 打完包跑它。
+ *
  * 输出只取决于锁文件装出来的东西：按名字与版本排序，不写绝对路径与时间，
  * 换行统一为 LF。所以 `--check` 能在三个平台的 CI 上防漂移——依赖变了却没有
  * 重新生成，`pnpm check` 就红。
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -34,6 +49,126 @@ export const ELECTRON_NOTICES = [
   "LICENSE.electron.txt",
   "LICENSES.chromium.html",
 ];
+
+/**
+ * 不是生产依赖、却被打包器整段打进 `apps/desktop/out/` 的包（工作区目录 + 包名）。
+ * 版本、许可证与声明文件从装好的那一份读。
+ *
+ * - tailwindcss：页面 CSS 的 preflight 与工具类由它生成，产物里带它的版权头。
+ * - tw-animate-css：`apps/web/src/index.css` `@import` 它的动画类，原样进 CSS。
+ */
+export const BUNDLED_DEV_DEPENDENCIES = [
+  { workspace: "apps/web", name: "tailwindcss" },
+  { workspace: "apps/web", name: "tw-animate-css" },
+];
+
+/** 读一个已装包的 package.json 成为与 `packagesFrom` 同形的一行。 */
+function packageRecord(directory) {
+  const manifest = JSON.parse(
+    readFileSync(join(directory, "package.json"), "utf8"),
+  );
+  const author =
+    typeof manifest.author === "string"
+      ? manifest.author
+      : (manifest.author?.name ?? "");
+  return {
+    name: manifest.name,
+    version: manifest.version,
+    license:
+      typeof manifest.license === "string"
+        ? manifest.license
+        : (manifest.license?.type ?? "Unknown"),
+    author,
+    homepage: manifest.homepage ?? "",
+    path: directory,
+  };
+}
+
+/** `BUNDLED_DEV_DEPENDENCIES` 装出来的样子；没装就抛（`pnpm install` 之后才跑）。 */
+export function bundledDevPackages(
+  cwd = root,
+  list = BUNDLED_DEV_DEPENDENCIES,
+) {
+  return list.map(({ workspace, name }) => {
+    const directory = join(cwd, workspace, "node_modules", name);
+    if (!existsSync(join(directory, "package.json")))
+      throw new Error(
+        `${name} is listed as bundled from ${workspace} but is not installed there`,
+      );
+    return packageRecord(realpathSync(directory));
+  });
+}
+
+/**
+ * 构建产物里来自 `node_modules` 的包：`[{ name, version }]`，按名字与版本排序去重。
+ *
+ * JS 认 rolldown 的 `//#region <相对路径>` 注释，路径里最后一个 `node_modules/`
+ * 之后的一段（或带作用域的两段）就是包名，版本读那个目录的 package.json——路径
+ * 相对的是构建时的工作目录，所以按 `resolveFrom`（缺省仓库根）找。CSS 认
+ * `/*! 包名 v版本` 这种保留注释。
+ */
+export function scanBundle(outDir, { resolveFrom = root } = {}) {
+  const found = new Map();
+  const add = (name, version) =>
+    found.set(`${name}@${version}`, { name, version });
+  const walk = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        walk(path);
+        continue;
+      }
+      if (/\.(c|m)?js$/.test(entry.name)) {
+        const text = readFileSync(path, "utf8");
+        for (const match of text.matchAll(/^\/\/#region (\S+)$/gm)) {
+          const region = match[1].replace(/\\/g, "/");
+          const at = region.lastIndexOf("node_modules/");
+          if (at < 0) continue;
+          const rest = region.slice(at + "node_modules/".length).split("/");
+          const name = rest[0].startsWith("@")
+            ? `${rest[0]}/${rest[1]}`
+            : rest[0];
+          const relativeDir =
+            `${region.slice(0, at)}node_modules/${name}`.replace(
+              /^(\.\.\/)+/,
+              "",
+            );
+          const manifest = join(resolveFrom, relativeDir, "package.json");
+          const version = existsSync(manifest)
+            ? JSON.parse(readFileSync(manifest, "utf8")).version
+            : "?";
+          add(name, version);
+        }
+      } else if (entry.name.endsWith(".css")) {
+        const text = readFileSync(path, "utf8");
+        for (const match of text.matchAll(
+          /\/\*!\s*(@?[a-z0-9][\w./-]*)\s+v(\d+\.\d+\.\d+[\w.-]*)/gi,
+        ))
+          add(match[1], match[2]);
+      }
+    }
+  };
+  walk(outDir);
+  return [...found.values()].sort(
+    (a, b) =>
+      a.name.localeCompare(b.name, "en") ||
+      a.version.localeCompare(b.version, "en"),
+  );
+}
+
+/**
+ * 扫出来却不在声明里的包：既不在 `--prod` 的表里、也不在显式名单里，
+ * 也不是工作区自己的 `@armadra/*`。
+ */
+export function unlistedBundled({ scanned, listing, bundled = [] }) {
+  const covered = new Set(
+    [...packagesFrom(listing), ...bundled].map((p) => `${p.name}@${p.version}`),
+  );
+  return scanned.filter(
+    (p) =>
+      !p.name.startsWith("@armadra/") && !covered.has(`${p.name}@${p.version}`),
+  );
+}
 
 /** 跑 `pnpm licenses list --prod --json`，返回解析后的对象。 */
 export function pnpmLicenses(cwd = root) {
@@ -131,14 +266,27 @@ function installedVersion(directory) {
  */
 export function renderNotices({
   listing,
+  bundled = [],
   agentVersion = "",
   read = noticeFiles,
 }) {
-  const packages = packagesFrom(listing);
+  const seen = new Set();
+  const packages = [...packagesFrom(listing), ...bundled]
+    .filter((pkg) => {
+      const key = `${pkg.name}@${pkg.version}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort(
+      (a, b) =>
+        (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) ||
+        (a.version < b.version ? -1 : a.version > b.version ? 1 : 0),
+    );
   const lines = [
     "# Third-party notices",
     "",
-    "<!-- Generated by `node tools/notices.mjs` from `pnpm licenses list --prod --json`. Do not edit by hand; `node tools/notices.mjs --check` runs in `pnpm check`. -->",
+    "<!-- Generated by `node tools/notices.mjs` from `pnpm licenses list --prod --json` plus the build-time packages bundled into the application (`BUNDLED_DEV_DEPENDENCIES`). Do not edit by hand; `node tools/notices.mjs --check` runs in `pnpm check`. -->",
     "",
     "Armadra is distributed under the MIT License (see `LICENSE`). It includes the third-party software listed below.",
     "",
@@ -176,13 +324,48 @@ export function renderNotices({
 export function currentNotices(cwd = root) {
   return renderNotices({
     listing: pnpmLicenses(cwd),
+    bundled: bundledDevPackages(cwd),
     agentVersion: installedVersion(
       join(cwd, "apps/desktop/node_modules/@armadra/agent"),
     ),
   });
 }
 
+function scan(outDir) {
+  const scanned = scanBundle(outDir);
+  const missing = unlistedBundled({
+    scanned,
+    listing: pnpmLicenses(root),
+    bundled: bundledDevPackages(root),
+  });
+  if (missing.length > 0) {
+    for (const pkg of missing)
+      console.error(
+        `✗ ${pkg.name}@${pkg.version} is bundled into ${outDir} but not in ${NOTICES_FILE}`,
+      );
+    console.error(
+      "Add it to BUNDLED_DEV_DEPENDENCIES in tools/notices.mjs (or make it a production dependency) and regenerate.",
+    );
+    return 1;
+  }
+  console.log(
+    `${scanned.length} bundled package(s) in ${outDir}, all in ${NOTICES_FILE}`,
+  );
+  return 0;
+}
+
 function main(argv) {
+  const scanAt = argv.indexOf("--scan");
+  if (scanAt >= 0) {
+    const outDir = argv[scanAt + 1];
+    if (!outDir || !existsSync(outDir)) {
+      console.error(
+        "usage: node tools/notices.mjs --scan <built out/ directory>",
+      );
+      return 2;
+    }
+    return scan(outDir);
+  }
   const target = join(root, NOTICES_FILE);
   const expected = currentNotices(root);
   if (argv.includes("--check")) {

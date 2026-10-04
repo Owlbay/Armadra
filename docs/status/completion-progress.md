@@ -1283,7 +1283,29 @@
 
 ## G5-15 托管平台 forge 二：GitLab 与 Git 面板（R-83 后半）
 
-待填（第 4 组）。
+**做了什么**
+
+- core `forge/gitlab.ts`：`PRIVATE-TOKEN`；项目按 `owner%2Fname` 寻址；merge request ↔ pull request（`iid`、`opened/locked/closed/merged`、source / target 分支、`draft`、`detailed_merge_status` 映射 `mergeable`）；MR 列表的 `closed` 按 `all` 取再滤掉开着的；差异来自 `merge_requests/{iid}/diffs` 按页取、增删行从补丁里数；检查用 commit statuses（同名取 id 最大，允许失败记 neutral）；合并带 `sha`，`squash` 对应 `squash: true`，`rebase` 答 400，远端 409 → `HEAD_CHANGED`、405 / 422 → `NOT_MERGEABLE`，答复没到 merged 答 `unknown_outcome`。403 的 `error` 为 `insufficient_granular_scope` / `insufficient_scope` 时译成新拒绝种类 `scopeMissing` → `403 forge_scope`（`transport.ts` 加 `refuse` 钩子与 `X-Next-Page` 页码）。`CONFIGURABLE_FORGES` 加 `gitlab`，`apiBase` 存成 `…/api/v4`。公共拆解挪到 `forge/wire.ts`（Gitea 行为不变）。
+- `ExternalReference` 带 `forge`（`github` | `gitea` | `gitlab`，写入缺省 `github`，读出总有值）：Gitea / GitLab 的连接经 `ForgeService.referenceRepository` 核对（平台必须是这台机器识别出的那个，API 根取自配置）；GitHub 连接的 id 算法不变，GitHub 详情只列 `forge: github` 的连接。没有新迁移（0038 已有列）。
+- 页面：Git 托管面板（原 GitHub 面板）先经 `/api/forge/resolve` 认平台——GitHub 照旧，Gitea / GitLab 走 `panels/github/ForgeHosted.tsx`（issue 列表 / 详情 / 开关，PR·MR 列表 / 详情 / 文件 / 检查 / 合并确认 / 新建，按状态筛、加载更多），认不出或没令牌指去设置；拿不到 GitHub 凭据不再挡别的平台（`github-session` 的 `noCredential` 带 `canWrite`）；旧 core 没有 forge 域（501 / 404）时按 GitHub。设置页导航名改「Git 托管」，GitHub 卡片下加「其他平台」（`ForgeConfigs.tsx`：按主机或仓库选 Gitea / GitLab、地址、令牌；令牌不回填、按 revision 改删、可清除令牌）。连接徽标对非 GitHub 带平台名。页面 API `apps/web/src/api/forge.ts`。
+- i18n：`github.ts` 键全保留（`github.nav` / `cluster.github` / `cmd.app.github` / `credentialAction` 改文案为「Git 托管」），新增 `forge.ts`，中英同步。
+- 顺带修：服务器壳的 CSRF 重发只认 Gateway 的拒绝（`code: forbidden` 或无 code），处理器自己的 403（`forge_scope` 等）不再被当成令牌轮换把写重发一次（`api/request.ts`）。
+- 文档：契约 §5.2 加 `forge` 一句，§29 引言 / §29.3 / §29.5（`forge_scope` 行）追加，新增 §29.6 GitLab；架构域表；探针 `tools/probes/forge-panel.mjs`（手动）与 README。
+
+**实测**（macOS arm64）
+
+- `forge/gitlab.test`（19 条，对 `core/forge/fixtures/gitlab/*.json` 回放）：认证头与只发到配置的根、翻页、issue 开关、MR 映射与 closed 含已合并、草稿前缀、文件跨页与二进制 / 改名、检查去重与 neutral、合并核 head / 不重试 / 409 / 405、`insufficient_granular_scope` 与 `insufficient_scope` → `scopeMissing` 且原话不外传、没令牌不发请求。`forge/gitlab.routes.test`（9 条）：经 `/api/forge/*` 配置核验、识别、读写、`forge_scope`、Gitea↔GitLab 换平台丢令牌、外部连接带 `forge` 与拒绝。`github/*`、`forge/*` 既有用例不改断言通过。
+- 页面：`GithubDrawer.test` 加 Gitea / GitLab 形态 8 条（只走 forge 面不碰 GitHub 客户端、MR 合并只给 merge / squash 且带屏上 head、范围不足的文案、关 issue、认不出指去设置、无 GitHub 凭据仍可用、只读设备无写控件、旧 core 退回 GitHub）；`GithubPage.test` 加 4 条（列表、新增、按 revision 编辑 / 清令牌、删除）；`request.csrf.test` 加 2 条。唯一改的旧断言：「前往设置 → GitHub」→「前往设置 → Git 托管」（设置页改名）。
+- dev-stack `gitea`：`ARMADRA_DEV_STACK=1` 跑 `gitea.devstack.integration.test` 回归通过；用完 `pnpm dev-stack down gitea` 只停自己起的。
+- 真浏览器：`forge-panel.mjs`（真 core + 回放 GitLab + dev-stack 真 Gitea + 无头 Chrome）截设置页、GitLab 列表 / 详情 / issues、Gitea 列表 / 详情、认不出的远端；`design-showcase --only=integration` 6 张，对比度与控制台通过。
+- 全量验证结果见 PR。
+
+**没做 / 限制**
+
+- 没连真实 GitLab：夹具按 GitLab REST v4 文档的答复形状整理（不是从真实实例录的），需用户提供实例与令牌时再对一次（§4 B 档「可选」那条）。
+- GitLab 多级子组（`group/sub/project`）不支持：识别只认远端地址最后两段。MR 的 `rebase` 合并、合并队列 / 流水线后自动合并不接。
+- Gitea / GitLab 那一面没有状态映射、评审、检出与合并后清理（GitHub 专有的那几块）；连接徽标点开只打开面板，不定位到 Gitea / GitLab 的条目。
+- 配置仍是整台机器一份（不按工作空间）。
 
 ## G5-16 Gateway 与服务端收尾（R-18、R-19、R-73、R-74、R-75）
 
@@ -1333,7 +1355,34 @@
 
 ## G5-18 发布流水线收尾（R-62、R-63、R-64、R-65 作业、R-66、R-67）
 
-待填（第 3 组）。
+**做了什么**
+
+- R-63 发布说明：`tools/release/changelog.mjs` 取 `CHANGELOG.md` 里 `## X.Y.Z` 那一节（标题后可跟括注，到下一个二级标题为止）。`release.yml` 的 `verify` 先 `changelog.mjs check`，缺节在构建之前就失败；`assemble` 改用 `assemble.mjs --changelog CHANGELOG.md`，不再取 GitHub 的 `generate-notes`，兼容性围栏照旧由 `releaseNote()` 追加。真建 Release（`publish`）时带 `--released` / `--require-released`，标题仍标「未发布」也算失败。`release:dry-run` 用同一段正文。
+- R-62 更新器缓存目录：`after-pack.mjs` 把这次构建的 `AppInfo.updaterCacheDirName` 钉成 `armadra-updater`，并改写已经写好的 `app-update.yml`。deb / rpm 在 afterPack 之后还会重写一次，NSIS 也从它取安装包副本的存放路径，所以钉 getter，不只改文件。配置里没有可用的键（`publish.updaterCacheDirName` 会被覆盖）；改包名又会连 Linux 包名一起改。
+- R-64 arm64 AppImage：根因不是镜像里缺 zlib，而是 electron-builder 缺省工具集（AppImageKit 12）的 arm64 **运行时**动态链接无版本号的 `libz.so`，在解包之前就失败，所以计划里「把 `libz.so.1` 放进 `usr/lib`」不起作用。`scripts/dist.mjs` 对 arm64 合入 `toolsets.appimage: 1.0.3`（静态 type-2 运行时，无 `NEEDED`）；x64 的旧运行时链接 `libz.so.1`，不改。`deb-install` 探针在同一个干净容器里装 deb 之后，再用 `APPIMAGE_EXTRACT_AND_RUN` 起同架构的 AppImage。`nightly.yml` 加 `linux-arm64` 作业（`ubuntu-22.04-arm`，打包、glibc 基线、`--only deb-install`），`report` 也看它。
+- R-67 第三方声明：`tools/notices.mjs` 的 `BUNDLED_DEV_DEPENDENCIES` 列出被打进 `out/` 的构建期依赖（`tailwindcss`、`tw-animate-css`，页面 CSS），读许可证原文进同一张表；`--scan apps/desktop/out` 按产物里 rolldown 的 `//#region` 路径与 CSS 的 `/*! 包名 v版本` 核名单（`@armadra/*` 除外），`release.yml` 的 `linux-x86_64` 构建打包后跑。`THIRD_PARTY_NOTICES.md` 重新生成。
+- R-65 镜像作业（W-MIRROR）：`tools/release/mirror.mjs`（rclone，PATH 上没有就用钉住的 `rclone/rclone:1.71.1` 镜像；远端配置走 `RCLONE_CONFIG_MIRROR_*`）。`stage` 把发布传到桶里 `releases/download/v<版本>/`，先传包、后传清单，最后 `rclone check`；`promote` 把那一版的清单服务端复制到 `releases/latest/download/`；`verify` 像客户端那样读一遍。`release.yml` 的 `mirror` 作业在 `publish` 时 `stage`，`distribute.yml` 的 `mirror` 作业在转正后 `promote`（draft 不会经镜像先到客户端，预发布不提）。设置一个都没有就跳过，缺一部分就失败。配了变量 `ARMADRA_MIRROR_PUBLIC_URL` 时，`assemble.mjs --mirror-base` 另写一份链接指向镜像的 `latest.json`，用同一把钥匙、同一句可信注释签名，否则镜像只镜像了检查（发布的 `latest.json` 里地址都指向 GitHub）。dev-stack 加 `s3` profile（versitygw，`127.0.0.1:8095`，`S3_DEV`）。
+- R-66 electron-builder 27：2026-10-04 核对，npm 上 `latest` 仍是 26.15.3，27 只有 `next` 标签的 `27.0.0-alpha.9`，所以不升，记在 `ci-release.md` §2.7。
+- 文档：`ci-release.md` §2.4（arm64 运行时、缓存目录）、§2.7（说明来源、electron-builder 27）、§3 密钥表（R2 三项与 `ARMADRA_MIRROR_PUBLIC_URL`）、新增 §3.3 更新镜像、§3.1 声明名单；开发指南 dev-stack 表；外部服务 §3.3 现状；探针 README 的 deb-install。
+
+**实测**（macOS arm64 + Docker）
+
+- `pnpm release:test`、`pnpm ci:workflows`、`pnpm release:dry-run`（说明取 CHANGELOG 0.2.0 一节）、`pnpm check` 通过；新增用例：`changelog.test`（取节、整段版本比较、CRLF、缺节 / 空节 / 未发布、assemble 缺节在签名前失败、正文进说明且带围栏）、`mirror.test`（配置三态、rclone 环境、stage / promote 顺序、容器挂载与回环改写、本地 HTTP 读回、镜像版 latest.json 的签名与地址、指回 GitHub 时报错）、`notices.test`（`#region` 与 CSS 版权头扫描、名单覆盖、构建期包进声明）、`after-pack.test`（改写 yml、钉 AppInfo）、`dist.test`（只有 arm64 换工具集）。
+- dev-stack `s3`：`ARMADRA_DEV_STACK=1 node --test tools/release/mirror.test.mjs` 真跑 rclone：建桶、`stage`（44 个文件 check 0 差异）、`promote`（16 份清单），再用 `rclone serve http` 把桶当公开地址，`verifyMirror` 通过（latest.json 签名、6 个平台的 feed 与包、地址都在镜像下）。
+- `ubuntu:22.04` arm64 容器里 `ARMADRA_DIST_RELEASE=1 pnpm --filter @armadra/desktop dist`：旧工具集的 AppImage 在干净系统上报 `libz.so: cannot open shared object file`（`readelf` 看到运行时 `NEEDED libz.so`）；换工具集之后 `deb-install`（arm64 deb + AppImage）五项全过，两边都答 `Armadra 0.2.0`。同一次构建的 unpacked、deb 里的 `app-update.yml` 都是 `updaterCacheDirName: armadra-updater`。
+- `node tools/notices.mjs --scan apps/desktop/out`：327 个打进去的包都在声明里；把 tailwindcss 从名单拿掉即报缺。
+
+**没做 / 限制**
+
+- 计划写的 dev-stack `minio` profile 改成了 `s3`（versitygw）：MinIO 的官方镜像在 Docker Hub 与 quay.io 都已拉不到。
+- 计划写的「`libz.so.1` 放进 `usr/lib`」没有做，原因见上（起不来的是运行时本身）。`1.0.3` 在 electron-builder 里标为 beta 工具集，只用于 arm64。Windows 的 NSIS 安装包副本路径跟着 AppInfo 走，没有在 Windows 上装过一次核对实际目录。
+- 镜像的 `stage` / `promote` 只在本地 S3 替身上跑过；真 R2、域名与 `ARMADRA_MIRROR_PUBLIC_URL` 要用户提供。客户端多端点（`ARMADRA_UPDATER_ENDPOINTS`）没有改。
+- Ed25519 清单签名等 electron-builder 27 正式版。
+
+**需用户提供**
+
+- [ ] 域名 + Cloudflare R2：secrets `CLOUDFLARE_R2_ACCESS_KEY_ID` / `CLOUDFLARE_R2_SECRET_ACCESS_KEY`，变量 `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_R2_BUCKET` / `ARMADRA_MIRROR_PUBLIC_URL`；桶的公开自定义域名。验：发布一次后 `node tools/release/mirror.mjs verify --base <域名> --pubkey <公钥>`。
+- [ ] 发版前把 `CHANGELOG.md` 的「## 0.2.0（未发布）」改成发布日期，否则 `publish` 在 `verify` 就失败。
 
 ## G5-19 页面错误上报（R-69、R-12）
 
@@ -1475,7 +1524,7 @@
 
 没做：
 
-- G5-03 名下三处确认框还在用 `ui/alert-dialog`。
+- ~~G5-03 名下三处确认框还在用 `ui/alert-dialog`。~~ 后续 `fix/g5-23-identity-dialogs` 已接上（`AccountsSharingPage` 含成员菜单「重置两步验证」、`security/parts.tsx::ConfirmRemove`、`GatewayDevices`），并加扫描用例 `panels/no-raw-alert-dialog.test.ts`：除 `ResponsiveDialog.tsx` 外不得直接 import `ui/alert-dialog`。
 - 旧版 Worker 没有 `assets.exportText`：对它的远端导出要先「重新同步」执行主机，否则报 Worker 的未知操作错误。
 
 ## G5-24 桌面回环收紧（R-15）
@@ -1484,7 +1533,22 @@
 
 ## G5-25 Claude 本地额度窗口估算（R-70）
 
-待填（第 3 组）。
+做了什么：
+
+- `core/usage/local-window.ts`（新）：拿成本扫描器最近一趟的 Claude 日桶与小时桶（不再开文件）估两个窗口。5 小时窗口从上一个窗口之外第一条活动所在的本地整点起算、持续 5 小时，已结束则报从当前整点起、没有结束时刻的空窗口；7 天窗口是含今天的 7 个本地日。`used` = 输入 + 输出 + 缓存写（缓存读不计）。`limit` 只在调用方给了额度时才有。
+- `CostService.scannedBuckets()` 交出最近一趟的两组桶；`UsageService` 在读快照（`snapshot()` / `refresh()`）时，对 `reason: "policy_off"` 的 Claude 行现算 `estimate: { source: "local", windows: [{ key, label, windowStartMs, resetsAtMs?, used, limit? }] }`。设置 `usage.claudeLocalWindow` 关、成本扫描关或还没扫过时不挂。可选 `claudeWindowLimits` 供给额度，装配时没有接（仓库里没有订阅档额度的目录），所以现在只报 token。
+- 共享层 `usageEstimateSchema`；页面 `panels/usage/LocalEstimate.tsx`，用量卡、账号页明细（`shell/ProviderDetail.tsx`，`AccountPage` 本身没改）与用量环的无障碍名都标「本地估算 / Local estimate」；没有额度时只报 token 数、不画进度条，有额度才画百分比。契约 §12.1 追加一段。
+
+实测（macOS arm64，2026-10-04）：
+
+- `local-window.test`（夹具转录经 `ScanState` 扫临时目录：窗口起点、恰好 5 小时的边界、7 天首日边界、窗口已过期、无额度 / 有额度、缓存读不计）、`usage/routes.test`（夹具写在测试自己的 `CLAUDE_CONFIG_DIR`：`policy_off` 旁带估算，关掉设置后不带）、共享层 schema 用例、页面 `LocalEstimate.test`（卡片、账号页明细中英、用量环）。没有读过本机 `~/.claude`。
+
+没做 / 限制：
+
+- 没有订阅档额度来源：不读 Claude 凭据就不知道是哪一档，所以 `limit` 目前总是缺省，只报用量。
+- 契约里的形状是 `estimate.windows[]`（两个窗口各带 `windowStartMs`），不是计划里写的单个窗口。
+- 设置页没有 `usage.claudeLocalWindow` 的开关（计划要求 `AccountPage` 不改）；只能经设置接口改。
+- 估算依赖成本扫描节奏（后台 5 分钟一趟），不比扫描更新。
 
 ## G5-26 依赖审计
 
@@ -1512,4 +1576,21 @@
 
 ## G5-27 不稳定用例（R-88、R-89、R-90）
 
-待填（第 3 组）。
+做了什么：
+
+- R-88 `approvals.test`「sweeps the files a killed client left behind」：CI 现场（run 37179985659）是 `sweepOrphans(dir, -1)` 得 0——Windows 上文件 mtime 比进程的 `Date.now()` 超前 ≥1 ms，`now - mtime > -1` 不成立。`core/agent/approvals.ts` 与 `core/hook/approvals.ts` 的 `sweepOrphans(directory, olderThanMs, now)` 改由调用方传时间（生产传 `Date.now()`）；用例用 `utimesSync` 钉住 mtime 并注入时钟，含「恰在阈值」「时钟落后于 mtime」两条。
+- mailbox `beforeEach` 10 秒超时（run 37197020176）：在 Windows CI 上给夹具各阶段计时（临时提交，已删）。两次提交在默认 `synchronous` 下中位 35 ms、p99 696 ms、最长 1.09 s，关掉后都是 0 ms；迁移模板每个测试文件建一次，中位 187 ms、最长 3.2 s，正好落在文件的第一个 `beforeEach`。夹具连接改成 `PRAGMA synchronous = OFF`（只用于测试库，生产的 `db/open.ts` 不动）；模板由 `testing/db-template.global.ts`（vitest `globalSetup`）整轮只建一次，再 `provide` 给各文件，没提供时仍退回每个文件自己建。
+- R-90 macOS 无头 `DOM.getDocument` 卡住：重新读 #78 的现场（job 111302997144），卡住的会话 `FEA8…` 在 `tabs` 里是**后台标签页**，不是 iframe 子会话。在它前面，`tabs new` 对同一个新目标发了两次 `Target.attachToTarget`：Chromium 先发 `targetCreated`、后答 `createTarget`，事件处理与 `openTab` 各附加了一次，同一页挂了两个调试会话。`headless/node.ts` 的 `attach` 改成按目标只附加一次，后来的调用方等待前一次。`diagnose()` 对每个标签页都问两件事：`Page.getFrameTree`（由浏览器进程回答）和 `DOM.getDocument`（由渲染进程回答）。原先只问前者，看不出渲染进程卡住。按计划，`cdp/session.ts` 给跨源 iframe 子会话单独设 5 秒超时（`CHILD_TIMEOUT_MS`）。超时的子会话标为静默：`childFrames()` 不再列出它，快照、文本查找、定位都跳过它；它只要再回答一条命令就恢复。快照仍用 `childTargetIds()` 排除静默子会话的框架，不经页面会话读它。整页截图和打印按有没有跨源 iframe 判断。
+- Windows 上 `browser/headless/*.live` 同时超时（#109 run 37201663502）：三个 live 文件（两个浏览器、一个 passkey）一起失败，都卡在各自 Chromium 的**第一条**命令上（`Target.setDiscoverTargets` / `createTarget` 30 秒没答）。passing run 里 Windows 冷启动到首个标签页是 7–10 秒，三个文件是并行起三个 Chromium，`vitest.live.config.mts` 的注释写的却是「一个文件、一个 fork」。现在改为 `fileParallelism: false`，一次只跑一个文件；启动后的第一条命令单独给 `STARTUP_TIMEOUT_MS`（90 秒），这一段等的是浏览器进程起来，不是页面在应答，之后的命令仍是 30 秒上限。
+- R-89 `server-container-e2e` 配对卡住：没有任何一次 CI 留下现场（ci / nightly 最近的失败 run 都翻过），本机容器模式连跑 15 次也都通过，所以**没能复现，修复是从代码推断的**。原来「后台服务」页只在挂载时看一次地址栏：自动检查失败一次，或者页面开着时片段换了，票就停在地址栏里，没有人去取。现在 `HostPage` 也监听 `hashchange`；带着票的检查失败后，隔 1 秒自动重试，最多两次。`HostIdentityPanel` 在可用状态下也监听 `hashchange`，取到票就配对。探针 `server-e2e.mjs` 每次没等到都留现场（`pairingFailures[]`，每次一张截图，票已抹掉），然后用 SIGUSR2 让服务器壳铸一张新票（容器里用 `docker kill --signal USR2`），先离开到 `about:blank` 再整页加载，最多三次。重试过就记一条「配对重试后完成」，偶发不会被悄悄吞掉。Windows 上的本机进程收不到 SIGUSR2，不重试。
+
+实测（macOS arm64，2026-10-04）：
+
+- `approvals.test` + `hook/approvals.test`、`collab/mailbox.test` + `db/fresh.fixture.test` 各连跑 20 次，全部通过（vitest 4.1 没有 `--repeat` 参数，用 shell 循环跑）。
+- `verbs.live` 连跑 20 次通过，`core/browser` 的单元测试 273 项通过；新加的「标签页只附加一次」「子会话不答就跳过」用例去掉修复后都会失败。
+- `server-e2e --container` 用本分支的镜像跑了 8 + 5 次，全部通过。故意让首张票作废时：修复前的镜像三次都配不上，修复后的镜像在第二次配对成功。
+
+没做 / 残留：
+
+- R-90 后台标签页的渲染进程为什么不回答，根因还没查明。修掉的是现场里紧挨在卡住前面的双重附加。下次再卡住时，`pages` 字段能区分是浏览器侧还是渲染侧不回答。
+- R-89 的修复是推断的，CI 上要看夜间作业以后还会不会出现「配对重试后完成」。

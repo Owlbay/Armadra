@@ -166,6 +166,21 @@ async function send(path: string, init: RequestInit | undefined, csrf: string) {
   });
 }
 
+/**
+ * 这个 403 是不是 Gateway 的 CSRF 拒绝（`code: "forbidden"`，或没有 code）。
+ * 带别的码的 403 已经到过处理器——例如托管平台的 `forge_scope`：远端拒了这次
+ * 写，换一枚令牌再发一遍就是把写重试了一次。
+ */
+async function csrfRefusal(response: Response): Promise<boolean> {
+  if (typeof response.clone !== "function") return true;
+  const body = (await response
+    .clone()
+    .json()
+    .catch(() => null)) as { code?: unknown } | null;
+  const code = body && typeof body === "object" ? body.code : undefined;
+  return code === undefined || code === "forbidden";
+}
+
 export async function request<T>(
   path: string,
   schema: z.ZodType<T>,
@@ -184,7 +199,8 @@ export async function request<T>(
     if (
       guarded &&
       response.status === 403 &&
-      !(init?.body instanceof FormData)
+      !(init?.body instanceof FormData) &&
+      (await csrfRefusal(response))
     ) {
       const renewed = await replaceRejectedCsrf(used);
       if (renewed) response = await send(path, init, renewed);

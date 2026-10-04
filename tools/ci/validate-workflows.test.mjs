@@ -274,6 +274,9 @@ test("the release workflow has the five jobs the design names plus the channel c
     "build",
     "notarize",
     "assemble",
+    // The update mirror (G5-18): the draft's files into the versioned path
+    // of an S3-compatible bucket; "latest" moves only in distribute.yml.
+    "mirror",
     // Distribution channels (completion plan G3-9): rendered and installed
     // from the draft's artifacts, never pushed from here.
     "channels",
@@ -306,6 +309,24 @@ test("the release workflow has the five jobs the design names plus the channel c
   assert.match(create, /--draft/);
   assert.ok(!/gh release edit .*--draft=false/.test(create));
   assert.ok(!/--latest/.test(create));
+  // The mirror gets only what a real draft gets, and only the versioned path.
+  assert.equal(
+    document.jobs.mirror.if,
+    "needs.verify.outputs.publish == 'true'",
+  );
+  const mirrorRun = document.jobs.mirror.steps.at(-1).run;
+  assert.match(mirrorRun, /mirror\.mjs stage/);
+  assert.ok(!/promote/.test(mirrorRun));
+});
+
+test("the mirror's latest moves only once a stable release is published", () => {
+  const document = parseYaml(
+    readFileSync(join(root, ".github/workflows/distribute.yml"), "utf8"),
+  );
+  const job = document.jobs.mirror;
+  assert.equal(job.needs, "render");
+  assert.match(job.if, /needs\.render\.outputs\.stable == 'true'/);
+  assert.match(job.steps.at(-1).run, /mirror\.mjs promote/);
 });
 
 test("channels are pushed only once a release is published, each behind its own secret", () => {
@@ -394,7 +415,7 @@ test("tier B runs on every system its entries name, reports failures as issues a
 
   const noMac = structuredClone(nightly);
   delete noMac.jobs.macos;
-  noMac.jobs.report.needs = ["linux"];
+  noMac.jobs.report.needs = ["linux", "linux-arm64"];
   assert.deepEqual(check(noMac), [
     "nightly.yml: no job runs --tier b on darwin, where packaged-smoke must run",
   ]);
@@ -406,7 +427,7 @@ test("tier B runs on every system its entries name, reports failures as issues a
   ]);
 
   const partial = structuredClone(nightly);
-  partial.jobs.report.needs = ["linux"];
+  partial.jobs.report.needs = ["linux", "linux-arm64"];
   delete partial.jobs.report.permissions;
   assert.deepEqual(check(partial), [
     "nightly.yml: job report does not need macos, so their failures open no issue",
