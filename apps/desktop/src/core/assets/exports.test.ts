@@ -135,6 +135,8 @@ describe("the text export route", () => {
   });
 });
 
+let sessions = 0;
+
 /** 给一个节点记一行终端会话：core 从这里读 Agent 的工作目录。 */
 function recordSession(
   core: Fixture,
@@ -148,7 +150,8 @@ function recordSession(
       "INSERT INTO terminal_sessions (id, workspace_id, owner_node_id, cwd, shell, status, created_at) " +
         "VALUES (?, ?, ?, ?, '/bin/sh', 'exited', ?)",
     )
-    .run(`s-${createdAt}`, workspaceId, nodeId, cwd, createdAt);
+    // 同一毫秒里连记两条时 created_at 相同：id 另加序号，免得撞主键。
+    .run(`s-${createdAt}-${++sessions}`, workspaceId, nodeId, cwd, createdAt);
 }
 
 /** 代码块落在来源 Agent 的工作目录里（在工作区内时）。 */

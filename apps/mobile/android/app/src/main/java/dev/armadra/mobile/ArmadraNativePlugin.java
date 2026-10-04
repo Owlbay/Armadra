@@ -89,8 +89,8 @@ public class ArmadraNativePlugin extends Plugin {
         DeepLink launchLink = launch == null || launch.getData() == null ? null : DeepLink.parse(launch.getData().toString());
         if (launchLink != null && handledLaunch.get() != launch) {
             handledLaunch = new WeakReference<>(launch);
-            pendingScript = launchLink.script();
             Log.i(TAG, "deep link at launch: " + launchLink.kind);
+            deliver(launchLink.script());
         }
         getBridge().addWebViewListener(new WebViewListener() {
             @Override
@@ -101,12 +101,7 @@ public class ArmadraNativePlugin extends Plugin {
             @Override
             public void onPageLoaded(WebView webView) {
                 pageLoaded = true;
-                if (pendingScript != null) {
-                    String script = pendingScript;
-                    pendingScript = null;
-                    Log.i(TAG, "deep link handed to the page");
-                    webView.evaluateJavascript(script, null);
-                }
+                flushPending();
             }
         });
     }
@@ -407,15 +402,36 @@ public class ArmadraNativePlugin extends Plugin {
         deliver(link.script());
     }
 
-    /** 页面还在加载（冷启动）时先记着，加载完再执行。 */
+    /**
+     * 页面还在加载（冷启动）时先记着，加载完再执行。「加载完」不只靠 {@code onPageLoaded}：Capacitor 只在
+     * {@code onPageFinished} 时进度恰为 100 才回调，冷启动时会漏，所以另外每 250ms 看一次进度，至多 30 秒。
+     */
     private void deliver(String script) {
         getBridge().executeOnMainThread(() -> {
-            WebView webView = getBridge().getWebView();
-            if (webView == null || !pageLoaded) {
-                pendingScript = script;
-                return;
-            }
-            webView.evaluateJavascript(script, null);
+            pendingScript = script;
+            flushPending();
+            if (pendingScript != null) pollPending(120);
         });
+    }
+
+    /** 主线程上：页面在就交出去。 */
+    private void flushPending() {
+        WebView webView = getBridge().getWebView();
+        if (pendingScript == null || webView == null) return;
+        boolean ready = pageLoaded || (webView.getUrl() != null && webView.getProgress() == 100);
+        if (!ready) return;
+        String script = pendingScript;
+        pendingScript = null;
+        Log.i(TAG, "deep link handed to the page");
+        webView.evaluateJavascript(script, null);
+    }
+
+    private void pollPending(int remaining) {
+        WebView webView = getBridge().getWebView();
+        if (pendingScript == null || remaining <= 0 || webView == null) return;
+        webView.postDelayed(() -> {
+            flushPending();
+            pollPending(remaining - 1);
+        }, 250);
     }
 }
