@@ -25,6 +25,7 @@ import dev.armadra.mobile.core.Pin;
 import dev.armadra.mobile.core.PinPolicy;
 import dev.armadra.mobile.core.PushEnvelope;
 import java.io.InputStream;
+import java.lang.ref.WeakReference;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -73,6 +74,8 @@ public class ArmadraNativePlugin extends Plugin {
     private volatile Pin pin;
     private boolean pageLoaded = false;
     private String pendingScript;
+    /** 已经交过深链的那个启动 intent。 */
+    private static WeakReference<Intent> handledLaunch = new WeakReference<>(null);
 
     @Override
     public void load() {
@@ -80,12 +83,12 @@ public class ArmadraNativePlugin extends Plugin {
         pin = Pin.decode(store.read(SecureStore.PIN));
         getBridge().setWebViewClient(new PinningWebViewClient(getBridge(), () -> pin));
         PushRotation.setListener(() -> notifyListeners("pushTokenRotated", new JSObject()));
-        // 冷启动时带来的深链（App 在系统浏览器里走 OAuth 时被系统回收了）：页面加载完再交，交过就从
-        // intent 上摘掉，重建活动时不再交第二次。
+        // 冷启动时带来的深链（App 在系统浏览器里走 OAuth 时被系统回收了）：页面加载完再交。同一个
+        // intent 只交一次（活动重建时 getIntent() 还是它）；不改 intent 本身——测试框架按它认活动。
         Intent launch = getActivity() == null ? null : getActivity().getIntent();
         DeepLink launchLink = launch == null || launch.getData() == null ? null : DeepLink.parse(launch.getData().toString());
-        if (launchLink != null) {
-            launch.setData(null);
+        if (launchLink != null && handledLaunch.get() != launch) {
+            handledLaunch = new WeakReference<>(launch);
             pendingScript = launchLink.script();
         }
         getBridge().addWebViewListener(new WebViewListener() {
