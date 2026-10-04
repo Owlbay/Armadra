@@ -19,8 +19,13 @@ vi.mock("electron", () => ({
   },
 }));
 
-const { signatureState, windowsPowerShellEnv, windowsSignatureState } =
-  await import("./environment");
+const {
+  macSignatureState,
+  signatureState,
+  windowsPowerShellEnv,
+  windowsSignatureState,
+} = await import("./environment");
+type Codesign = import("./environment").Codesign;
 
 describe("Windows: Authenticode decides, and only Valid is signed", () => {
   it("maps PowerShell's status onto the four states", () => {
@@ -76,29 +81,148 @@ describe("Windows: Authenticode decides, and only Valid is signed", () => {
   });
 });
 
-describe("the other platforms", () => {
-  it("macOS reads _CodeSignature; Linux has nothing to read; unpackaged is unsigned", () => {
-    const root = mkdtempSync(join(tmpdir(), "armadra-signature-"));
-    try {
-      const contents = join(root, "Armadra.app", "Contents");
-      const executable = join(contents, "MacOS", "Armadra");
-      mkdirSync(join(contents, "MacOS"), { recursive: true });
-      expect(signatureState("darwin", executable, true)).toBe("unsigned");
-      mkdirSync(join(contents, "_CodeSignature"), { recursive: true });
-      writeFileSync(join(contents, "_CodeSignature", "CodeResources"), "");
-      expect(signatureState("darwin", executable, true)).toBe("signed");
-      expect(signatureState("linux", "/opt/Armadra/armadra", true)).toBe(
-        "notApplicable",
-      );
-      expect(signatureState("darwin", executable, false)).toBe("unsigned");
-      expect(signatureState("freebsd", "/usr/local/bin/armadra", true)).toBe(
-        "unknown",
-      );
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+/** A stand-in `codesign`: the verify answer, then the display answer. */
+function fakeCodesign(
+  verify: { status: number | null; stderr?: string },
+  display: { status: number | null; stderr?: string } = { status: 0 },
+  calls: (readonly string[])[] = [],
+): Codesign {
+  return (args) => {
+    calls.push(args);
+    const answer = args[0] === "--verify" ? verify : display;
+    return { status: answer.status, stdout: "", stderr: answer.stderr ?? "" };
+  };
+}
+
+describe("macOS: codesign --verify --deep --strict decides, ad-hoc is unknown", () => {
+  const executable = "/Applications/Armadra.app/Contents/MacOS/Armadra";
+
+  it("verifies the bundle the executable is in", () => {
+    const calls: (readonly string[])[] = [];
+    expect(
+      signatureState(
+        "darwin",
+        executable,
+        true,
+        fakeCodesign(
+          { status: 0 },
+          {
+            status: 0,
+            stderr:
+              "Identifier=dev.armadra\nAuthority=Developer ID Application: X\nTeamIdentifier=ABCDE12345\n",
+          },
+          calls,
+        ),
+      ),
+    ).toBe("signed");
+    expect(calls[0]).toEqual([
+      "--verify",
+      "--deep",
+      "--strict",
+      "/Applications/Armadra.app",
+    ]);
+  });
+
+  it("maps codesign's answers onto the states", () => {
+    const bundle = "/Applications/Armadra.app";
+    expect(
+      macSignatureState(
+        bundle,
+        fakeCodesign({
+          status: 1,
+          stderr: "/Applications/Armadra.app: code object is not signed at all",
+        }),
+      ),
+    ).toBe("unsigned");
+    expect(
+      macSignatureState(
+        bundle,
+        fakeCodesign(
+          { status: 0 },
+          { status: 0, stderr: "Signature=adhoc\nTeamIdentifier=not set\n" },
+        ),
+      ),
+    ).toBe("unknown");
+    // Tampered, half-signed, or a codesign that would not start.
+    expect(
+      macSignatureState(
+        bundle,
+        fakeCodesign({ status: 3, stderr: "a sealed resource is missing" }),
+      ),
+    ).toBe("unknown");
+    expect(macSignatureState(bundle, fakeCodesign({ status: null }))).toBe(
+      "unknown",
+    );
+    expect(
+      macSignatureState(
+        bundle,
+        fakeCodesign({ status: 0 }, { status: 1, stderr: "" }),
+      ),
+    ).toBe("unknown");
   });
 });
+
+describe("the other platforms", () => {
+  it("Linux has nothing to read; unpackaged is unsigned", () => {
+    expect(signatureState("linux", "/opt/Armadra/armadra", true)).toBe(
+      "notApplicable",
+    );
+    expect(
+      signatureState(
+        "darwin",
+        "/Applications/Armadra.app/Contents/MacOS/Armadra",
+        false,
+      ),
+    ).toBe("unsigned");
+    expect(signatureState("freebsd", "/usr/local/bin/armadra", true)).toBe(
+      "unknown",
+    );
+  });
+});
+
+/**
+ * The real `codesign` on a throwaway bundle: unsigned, then ad-hoc signed
+ * (`-s -` uses no identity and no keychain).
+ */
+describe.runIf(process.platform === "darwin")(
+  "codesign on this macOS machine",
+  () => {
+    let root = "";
+    let bundle = "";
+
+    beforeAll(() => {
+      root = mkdtempSync(join(tmpdir(), "armadra-codesign-"));
+      bundle = join(root, "Probe.app");
+      const contents = join(bundle, "Contents");
+      mkdirSync(join(contents, "MacOS"), { recursive: true });
+      writeFileSync(
+        join(contents, "Info.plist"),
+        '<?xml version="1.0" encoding="UTF-8"?>\n' +
+          '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n' +
+          '<plist version="1.0"><dict>' +
+          "<key>CFBundleExecutable</key><string>Probe</string>" +
+          "<key>CFBundleIdentifier</key><string>dev.armadra.probe</string>" +
+          "<key>CFBundlePackageType</key><string>APPL</string>" +
+          "</dict></plist>\n",
+      );
+      writeFileSync(join(contents, "MacOS", "Probe"), "#!/bin/sh\nexit 0\n", {
+        mode: 0o755,
+      });
+    });
+
+    afterAll(() => {
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    it("an unsigned bundle is unsigned, an ad-hoc one unknown", () => {
+      expect(macSignatureState(bundle)).toBe("unsigned");
+      execFileSync("/usr/bin/codesign", ["-s", "-", "--force", bundle], {
+        stdio: "pipe",
+      });
+      expect(macSignatureState(bundle)).toBe("unknown");
+    });
+  },
+);
 
 /**
  * The real thing. A `.ps1` is the smallest file Authenticode signs; the
