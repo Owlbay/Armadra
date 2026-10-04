@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatProgress,
+  hostAfterShell,
   hostVerdictKind,
+  NO_RELEASE_SOURCE,
   mergeUpdatesState,
   reasonKey,
   shellReasonKey,
@@ -302,5 +304,48 @@ describe("formatProgress", () => {
   it("never renders a fraction of an unknown total", () => {
     expect(formatProgress(1_048_576, 4_194_304)).toBe("1.0 MB / 4.0 MB");
     expect(formatProgress(1_048_576, 0)).toBe("1.0 MB");
+  });
+});
+
+describe("the shell asked the release index itself", () => {
+  const shell: HostSide = { kind: "shell" };
+
+  it("its up to date is the whole answer", () => {
+    expect(
+      mergeUpdatesState(shell, { state: "upToDate", checkedAtMs: 3 }).state,
+    ).toBe("upToDate");
+  });
+
+  it("its refusal is explained by its own reason only", () => {
+    const view = mergeUpdatesState(shell, {
+      state: "unavailable",
+      reason: "sourceMalformed",
+      retryAfterMs: 0,
+      checkedAtMs: 1,
+    });
+    expect(view.detailKeys).toEqual(["updates.shellReason.sourceMalformed"]);
+  });
+
+  it("hostAfterShell says noReleaseSource only when the shell has none", () => {
+    expect(
+      hostAfterShell(
+        { state: "notConfigured", missing: { pubkey: false, endpoints: true } },
+        false,
+      ),
+    ).toEqual(NO_RELEASE_SOURCE);
+    expect(
+      hostAfterShell(
+        { state: "notConfigured", missing: { pubkey: true, endpoints: false } },
+        true,
+      ),
+    ).toEqual(shell);
+    expect(hostAfterShell({ state: "idle" }, true)).toEqual(NO_RELEASE_SOURCE);
+    expect(hostAfterShell({ state: "idle" }, false)).toEqual({
+      kind: "notAsked",
+    });
+    expect(
+      hostAfterShell({ state: "unsupported", reason: "notDesktop" }, true),
+    ).toEqual({ kind: "notAsked" });
+    expect(hostAfterShell({ state: "localBuild" }, true)).toEqual(shell);
   });
 });
