@@ -18,9 +18,12 @@ import {
   secretStoreKey,
 } from "../../github/model";
 import { githubKeys } from "../../github/queries";
+import { ForgeConfigs } from "./ForgeConfigs";
+import { FORGE_NAMES } from "../../../api/forge";
 
 /**
- * 设置 → GitHub（Git/GitHub 设计 §9）。
+ * 设置 → Git 托管（Git/GitHub 设计 §9，契约 §29.3）：上面是 GitHub 的凭据（§5），
+ * 下面是按主机 / 仓库配置的 Gitea 与 GitLab（{@link ForgeConfigs}）。
  *
  * 令牌只往外走一次：输入框是 password 类型，永远不回填、不从任何回应里读回来，
  * 保存成功后立即从组件状态里清掉。降级到 0600 文件时明说，不写成「已安全保存」。
@@ -105,7 +108,7 @@ export function GithubPage() {
         </p>
       ) : (
         <>
-          <SettingsGroup>
+          <SettingsGroup title={FORGE_NAMES.github}>
             <form
               className="flex min-w-0 flex-col gap-3 px-4 py-3"
               noValidate
@@ -298,6 +301,8 @@ export function GithubPage() {
               )}
             </dl>
           </SettingsGroup>
+
+          <ForgeConfigs />
         </>
       )}
     </>
