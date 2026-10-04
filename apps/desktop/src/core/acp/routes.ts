@@ -29,7 +29,7 @@ import {
   jsonObject,
   optionalString,
 } from "../workspaces/support";
-import type { AcpAdapter } from "./adapters";
+import { type AcpAdapter, cliResumeId } from "./adapters";
 import { AcpError } from "./client";
 import type { AcpStartPlan, AcpTerminalWiring } from "./index";
 import { AcpMirror, mirrorPath } from "./mirror";
@@ -98,6 +98,8 @@ function acpStatus(code: string): number {
     case "acp_no_raw_write":
       return 400;
     case "acp_mode_unavailable":
+    case "acp_model_unavailable":
+    case "acp_model_unsupported":
     case "acp_auth_required":
     case "acp_session":
     case "awaiting_approval":
@@ -355,6 +357,28 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
     },
   );
 
+  // 契约 §26.2：`session/set_config_option` 落模型。目录里没有、或客户端没有
+  // 这个能力时 409；节点数据里的 `agent.model` 由页面写回。
+  route(
+    "PUT",
+    "/api/acp/sessions/{sessionId}/model",
+    async (match, request) => {
+      const wiring = await need();
+      const body = jsonObject(request.body);
+      const modelId = optionalString(body, "modelId");
+      if (modelId === undefined || modelId === "") {
+        throw badRequest("modelId is required");
+      }
+      const row = await live(wiring, param(match, "sessionId"));
+      const session = wiring.backend.sessionByRow(row.id);
+      if (session === undefined) {
+        throw domain(409, "acp_exited", "The ACP session has ended");
+      }
+      await session.setModel(modelId);
+      return { status: 204 };
+    },
+  );
+
   /* --------------------------------- 镜像 --------------------------------- */
 
   route("GET", "/api/acp/sessions/{sessionId}/log", async (match, request) => {
@@ -384,7 +408,13 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
         entries: read.entries,
         endOffset: read.endOffset,
         modes: session?.modes ?? null,
-        ...(session === undefined ? {} : { pending: session.pending() }),
+        models: session?.models ?? null,
+        ...(session === undefined
+          ? {}
+          : {
+              pending: session.pending(),
+              elicitations: session.pendingElicitations(),
+            }),
       },
     };
   });
@@ -502,8 +532,13 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
         current = wiring.manager.session(current.id);
       }
 
-      // 2. CLI 自己的会话 id。
-      const provider = getAgentStatus(database, nodeId)?.sessionId;
+      // 2. CLI 自己的会话 id。`mapFile` 的适配器（pi-acp）：切回终端时把 ACP
+      // 会话 id 经映射文件对回 CLI 的（契约 §26.3），对不上就不接回。
+      const reported = getAgentStatus(database, nodeId)?.sessionId;
+      const provider =
+        driver === "terminal" && reported !== undefined && reported !== ""
+          ? cliResumeId(adapter, reported)
+          : reported;
       const cwd =
         text(node.data.cwd) ?? workspaceRoot(database, node.workspaceId);
       if (cwd === undefined) {

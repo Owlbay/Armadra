@@ -1,15 +1,21 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { PERMISSION_MODES, launchProfile } from "../agent/launch";
 import { AGENT_IDS } from "../agent/registry";
+import { tempDir } from "../testing/temp-dir";
 import {
   ACP_ADAPTERS,
+  type AcpAdapter,
   acpAdapter,
   acpLaunchPlan,
   acpPermissionModes,
+  acpResumeId,
+  cliResumeId,
+  mappedSession,
+  readSessionMap,
 } from "./adapters";
 
 /**
@@ -145,5 +151,82 @@ describe("acpLaunchPlan", () => {
     expect(
       acpLaunchPlan(acpAdapter("opencode")!, { injectionArgs: ["--nope"] }),
     ).toEqual({ args: ["acp"], modeId: "build" });
+  });
+});
+
+describe("pi-acp's session map (§26.3)", () => {
+  const homes: string[] = [];
+  afterEach(() => {
+    for (const home of homes.splice(0)) {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+  const pi = acpAdapter("pi") as AcpAdapter;
+  const UUID = "0198a3c4-1f2e-7a6b-8c9d-0e1f2a3b4c5d";
+
+  function home(content?: string): NodeJS.ProcessEnv {
+    const directory = tempDir("armadra-acp-home-");
+    homes.push(directory);
+    if (content !== undefined) {
+      mkdirSync(join(directory, ".pi", "acp"), { recursive: true });
+      writeFileSync(join(directory, ".pi", "acp", "sessions.json"), content);
+    }
+    return { HOME: directory, USERPROFILE: directory };
+  }
+
+  it("is pi's only, at ~/.pi/acp/sessions.json", () => {
+    expect(pi.sessionId).toBe("mapFile");
+    expect(pi.sessionMap).toEqual([".pi", "acp", "sessions.json"]);
+    for (const adapter of ACP_ADAPTERS) {
+      if (adapter.agentId === "pi") continue;
+      expect(adapter.sessionMap, adapter.agentId).toBeUndefined();
+      expect(readSessionMap(adapter, home("{}"))).toBeUndefined();
+    }
+  });
+
+  it("maps an ACP session id to pi's session file and back", () => {
+    const file = `/sessions/--work--/2026-10-04T08-00-00-000Z_${UUID}.jsonl`;
+    const env = home(
+      JSON.stringify({
+        "acp-1": { sessionFile: file },
+        "acp-2": "/sessions/--work--/no-uuid-here.jsonl",
+        "acp-3": { sessionFile: "relative/path.jsonl" },
+        "acp-4": { other: true },
+      }),
+    );
+    expect(mappedSession(pi, "acp-1", env)).toEqual({
+      acpSessionId: "acp-1",
+      sessionFile: file,
+      cliSessionId: UUID,
+    });
+    // 文件名里认不出 id：接回用文件路径。
+    expect(cliResumeId(pi, "acp-2", env)).toBe(
+      "/sessions/--work--/no-uuid-here.jsonl",
+    );
+    // 相对路径与别的形状不认。
+    expect(mappedSession(pi, "acp-3", env)).toBeUndefined();
+    expect(mappedSession(pi, "acp-4", env)).toBeUndefined();
+    // 切回终端：ACP 会话 id → pi 的会话 id；手里本来就是 pi 的也照用。
+    expect(cliResumeId(pi, "acp-1", env)).toBe(UUID);
+    expect(cliResumeId(pi, UUID, env)).toBe(UUID);
+    expect(cliResumeId(pi, "acp-9", env)).toBeUndefined();
+    // 接回 ACP：pi 的会话 id（或文件）反查成 ACP 会话 id。
+    expect(acpResumeId(pi, UUID, env)).toBe("acp-1");
+    expect(acpResumeId(pi, file, env)).toBe("acp-1");
+    expect(acpResumeId(pi, "acp-1", env)).toBe("acp-1");
+    expect(acpResumeId(pi, "unknown", env)).toBe("unknown");
+  });
+
+  it("falls back to opaque when the map is missing or not a map", () => {
+    for (const env of [home(), home("not json"), home("[1,2]")]) {
+      expect(readSessionMap(pi, env)).toBeUndefined();
+      expect(mappedSession(pi, "acp-1", env)).toBeUndefined();
+      expect(acpResumeId(pi, "acp-1", env)).toBe("acp-1");
+      expect(cliResumeId(pi, "acp-1", env)).toBeUndefined();
+    }
+    // 别的适配器原样。
+    const claude = acpAdapter("claude") as AcpAdapter;
+    expect(cliResumeId(claude, "abc", home())).toBe("abc");
+    expect(acpResumeId(claude, "abc", home())).toBe("abc");
   });
 });

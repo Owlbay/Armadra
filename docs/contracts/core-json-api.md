@@ -630,6 +630,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - **提示**：等同在终端里敲一行并回车——经 `writeSubmit`，人类驾驶者（抢占租约，永不被拒）。同一会话一次一个回合，后到的排队。会话行已经结束（休眠、core 重启、适配器自己退了）时先在**同一行**上起下一代并以 CLI 会话 id 接回，再发；这一行已被节点的另一行取代时 `409 conflict`。
 - **镜像**：`entries` 是镜像 `<数据目录>/acp/<nodeId>/<ACP 会话 id>.acp.jsonl` 从字节偏移 `after` 起的完整记录（`TranscriptEntry`：`{ role: "user" | "assistant", blocks[], endOffset, at? }`，相邻的助手文本已合并），`endOffset` 是下一次的 `after`。**core 先写镜像再发 `acp.update`**：页面先订阅再读，读回来之前到的分块已经在 `entries` 里。镜像只记对话：我方的提示、助手文本、工具调用（`tool_use`）与它的终态结果（`tool_result`，正文截到 8000 字符）；思考、计划、用量、模式变化只经事件。`modes` 与 `pending`（挂起的审批，形状 `{ pendingId, protocol: "acp", toolCall, options[] }`）描述活着的进程，没有进程时 `modes: null`、无 `pending`。
 - **驱动切换**（ACP 设计 §4.2）：节点在 `blocked` / `waiting` 时 `409 awaiting_approval`；SSH 节点切到 ACP 答 `400 acp_unsupported`。否则结束当前驱动（终端先敲 CLI 的退出命令等它自己退，再结束；ACP 回合里先 cancel 再收掉进程），行以 `termination_intent = 'switch'` 结束；再在**同一行**上以另一种驱动起下一代（代次 +1，行 id 不变）：ACP 侧以 `agent_status.session_id` 接回（适配器表 `resume: "none"` 的新开），终端侧起 shell 并敲 CLI 的恢复行（不能续接时敲普通启动行）。`resumed` 如实说接上了没有。已经是目标驱动且活着时什么都不动，答 `resumed: true`。切换期间节点算「睡着」，`send` 排队。节点数据里的 `agent.driver` 由页面写回（不进撤销栈）。
+- **§26 追加**：`PUT /api/acp/sessions/{id}/model { modelId }` → `204`（§26.2）；`GET …/log` 多 `models`（形状同 `modes`，`{ currentModelId, availableModels: [{ modelId, name, description? }] } | null`）与 `elicitations`（挂起的 elicitation，§26.1），后者与 `pending` 一样只在有进程时出现。
 - **其余路由在 ACP 行上**：`GET /api/terminals/{id}/ws` 升级前答 `409`（没有 PTY 可附着）；`POST …/paste` 只收带回车的整段（`enter: false` 答 `409 acp_no_raw_write`）；`GET …/capture` 是镜像尾部渲染成的散文；`terminate` 的 `interrupt` 是 `session/cancel`。协作动词与调度经终端桥写入：`writeSubmit`（括号粘贴 + 回车）落为 `session/prompt`，单个 `ESC` 落为 `session/cancel`，其他字节答 `acp_no_raw_write`。
 
 ### 14.3 事件
@@ -654,6 +655,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - 答复：`POST /api/approvals/{pendingId}/answer { decision: "allow" | "deny", optionId? }`。ACP 审批的 `optionId` 必须是 Agent 给的选项之一且与 `decision` 同类（`allow_*` / `reject_*`），否则 `400 bad_request`（审计记 `option_invalid`）；不给 `optionId` 时取第一个同类选项（节点头的允许 / 拒绝）。别的审批带 `optionId` 同样 `400`。先记录（CAS 不变），再送达：应答的 `route` 为 `acp` 表示已回到挂起的请求，`none` 表示进程已经不在。
 - 回合被取消、适配器退出、切换驱动、休眠：挂起的请求一律回 `cancelled`，审批行 `answer = "cancelled"`、`answered_by = "core"`，审计照写（`route: "acp"`），并以 `agent.approval`（`request.resolved = true`、`decision: "cancelled"`）通知各端收起按钮。core 启动时把上一个进程留下的未答 ACP 审批同样记成 `cancelled`。
 - core 从不替人选项，也从不自动回答 `request_permission`；`allow_always` 由适配器自己在进程内记忆。
+- **§26 追加**：`elicitation/create` 同样进 `agent_approvals`（`request_json = { protocol: "acp", elicitation }`，状态 `waiting` 带 `pendingId`），答复体多一种 `{ elicitation: { action, content? } }`，见 §26.1。
 
 ### 14.5 输出到画板：`POST /api/workspaces/{workspaceId}/exports/{exportId}/text`
 
@@ -856,6 +858,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - **闸门**按模板（`automation_gates.node_id = "workflow:<templateId>"`）：同一个模板同一时刻只有一个定时运行在跑，`FORBID` / `QUEUE_ONE` 照常生效。
 - **起跑即投递**：工作流运行的 id 由这次投递的 `operationId` 推出（SHA-256 → UUID 形），重试与超时之后的复核认得出「已经起过」，不会起第二次。起跑当场被拒（§15.3 那几种）记 `FAILED`，理由码是 `WORKFLOW_` + 拒绝码大写（如 `WORKFLOW_PERMISSION_MODE_UNSUPPORTED`）。
 - **收据跟着运行走**：运行在跑记 `RUNNING`（理由 `WORKFLOW_RUNNING` / 有关卡在等人时 `WORKFLOW_WAITING`），结束记 `SUCCEEDED` / `FAILED` / `CANCELLED`（理由 `WORKFLOW_SUCCEEDED` / `WORKFLOW_FAILED` / `WORKFLOW_CANCELLED`）；自动化运行因此从起跑占着闸门直到工作流运行结束。
+- **模板升级**（G5-08 追加）：`PUT /api/workflows/templates/{id}` 的答复多一列 `frozenSchedules: [{ scheduleId, workspaceId, templateVersion, reason, missingParams, unknownParams }]`，列出指向这个模板、仍冻结在旧版本上的计划（已删除的不列）；`reason` 是 `compatible`（存着的参数按新版本全部成立，可直接升级）、`missing_params`（新版本多了没有缺省值的参数，名字在 `missingParams`）或 `param_mismatch`（存着的参数新版本不认了，名字在 `unknownParams`，或代入后超长）。`POST /api/workflows/templates/{id}/upgrade-schedules?workspaceId=` `{ scheduleIds }`（1–200 个）把该工作空间里参数相容的计划改到模板当前版本 → `{ upgraded: [{ scheduleId, revision }], frozen: [{ scheduleId, reason, missingParams, unknownParams }] }`：只换 `templateVersion`，其余配置与载荷原样，原来启用的按新的一版重新启用（同 §4 的定义 + 激活，认人与 `/api/automations/*` 相同，只有计划的创建者能改）；不相容的原样不动，`frozen.reason` 另有 `not_found`（不是这个模板的计划）、`forbidden`、`conflict`、`failed`。已是当前版本的计划算进 `upgraded`。不相容的计划由人在编辑计划时按新版本补参数，保存即存成当前版本。路由权限与改模板相同（服务器壳上只有 owner）。
 
 ### 15.5 `wait` 动词、`open-agent --task-id` 与 `workflow_task_runs`
 
@@ -980,14 +983,14 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 }
 ```
 
-| 字段                | 规则                                                                                                                                 |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `anchor`            | 三选一：`{kind:"node", id}`、`{kind:"item", id}`（白板 item id）、`{kind:"point", x, y}`（画布坐标，有限数）；id 1–200 字符          |
-| `body`              | 去掉首尾空白后 1–10 000 字符。提及写成 `@[显示名](principal:<id>)`                                                                   |
-| `authorPrincipalId` | 写入时取请求的 principal（本机壳的 owner 为 `""`），客户端不能指定                                                                   |
-| `parentId`          | 回复指向一条**顶层**评论（只有一层）；回复的锚点随父评论，请求里的 `anchor` 被忽略                                                   |
-| `resolvedAtMs`      | 只有顶层评论能解决；回复随父评论                                                                                                     |
-| `mentions`          | core 认出来的提及：正文里的 principal 存在、没停用、对这个工作空间有 `canvas:read`；认不出的记号照原文留着，不叫任何人。最多认 20 个 |
+| 字段                | 规则                                                                                                                                                  |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `anchor`            | 三选一：`{kind:"node", id}`、`{kind:"item", id}`（白板 item id）、`{kind:"point", x, y}`（画布坐标，有限数）；id 1–200 字符                           |
+| `body`              | 去掉首尾空白后 1–10 000 字符。提及写成 `@[显示名](principal:<id>)`。页面按 Markdown（GFM）渲染：不渲染裸 HTML、链接只开 `http(s)`、图片只显示替代文字 |
+| `authorPrincipalId` | 写入时取请求的 principal（本机壳的 owner 为 `""`），客户端不能指定                                                                                    |
+| `parentId`          | 回复指向一条**顶层**评论（只有一层）；回复的锚点随父评论，请求里的 `anchor` 被忽略                                                                    |
+| `resolvedAtMs`      | 只有顶层评论能解决；回复随父评论                                                                                                                      |
+| `mentions`          | core 认出来的提及：正文里的 principal 存在、没停用、对这个工作空间有 `canvas:read`；认不出的记号照原文留着，不叫任何人。最多认 20 个                  |
 
 | 方法与路径                            | 权限                             | 请求                                                                                                                | 应答                                                                                          |
 | ------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
@@ -1018,7 +1021,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 `action` 为 `created | updated | resolved | reopened | deleted`；`anchorId` 在点锚时省略。`mentions` 是这一次**新叫到**的人且不含作者：新建时是全部提及，改正文时只是新加的，其余动作为空。页面收到后重新拉列表；推送域（§19）按 `mentions` 给有 `canvas:read` 的人发「有人在评论里提到了你」，深链指向锚定的节点。
 
-**对 Agent 可读**：Agent 经上下文连线读一个节点（`context summary | transcript | terminal`）时，回答末尾附上锚在该节点上、未解决的评论线程（提及换成 `@显示名`，至多 8 KiB），与正文一起脱敏、计入这条连线的读取预算。白板对象与已解决的线程不附。
+**对 Agent 可读**：Agent 经上下文连线读一个节点（`context summary | transcript | terminal`）时，回答末尾附上锚在该节点上、未解决的评论线程（提及换成 `@显示名`，至多 8 KiB），与正文一起脱敏、计入这条连线的读取预算。已解决的线程不附。白板引用（链接文档里 `kind: "shape"` 的一项）同样附上：白板对象取锚点 `item`（`sourceShapeId` 去掉 `wb:` 前缀与原样两种都认），Frame（`shapeType: "group"`）取锚在那个分组节点上的；评论只从读者自己的板查，同样至多 8 KiB、脱敏，有评论时这一段计入读取预算（`context_reads` 的目标记为引用的 id），没有评论时回答与以前逐字节相同。
 
 ### 16.4 awareness 状态
 
@@ -1737,7 +1740,35 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 26. ACP 补充：elicitation、模型、凭据、SSH
 
-预留，由 G5-04 填写（SSH 小节由 G5-06 追加）。
+补 §14 的四件事。代码在 `core/acp/{client,host,session,elicitation,models,adapters,index,routes}.ts` 与 `agent/approvals.ts`，共享层 `api/acp.ts`。
+
+**客户端能力**：协议栈仍是 `@armadra/agent/acp` 的 `AcpClient`。elicitation 与模型要它自报 `AcpClient.features.elicitation` / `features.configOptions`（构造参数 `onElicitation(params, signal)`、方法 `setConfigOption(sessionId, configId, value)`，并在 `initialize` 声明 `clientCapabilities.elicitation`）。core 按 `features` 判断：没有时线路与 §14 逐字节相同——不声明能力、Agent 发来的 `elicitation/create` 由客户端答 method not found，`models` 恒为 `null`。0.6.7 两样都没有。
+
+### 26.1 elicitation
+
+- Agent 发 `elicitation/create { sessionId?, message, mode?, requestedSchema?, url? }` → 一条审批，`pendingId` 与 §14.4 同形，`request_json` 为 `{ "protocol": "acp", "elicitation": { "message", "mode": "form" | "url", "requestedSchema"?, "url"? } }`；`agent.approval` 的 `request.request.elicitation` 就是它。节点状态 `waiting`、带 `pendingId`（不置 `awaitingInput`：答复或取消一定回来）。`GET …/log` 的 `elicitations` 列挂起的，形状 `{ pendingId, protocol: "acp", elicitation }`。
+- `requestedSchema` 只收规范允许的扁平字段：`string`（可带 `enum` / `enumNames` / `format` / `minLength` / `maxLength` / `default`）、`number` / `integer`（`minimum` / `maximum` / `default`）、`boolean`（`default`），`required` 只留表单里有的名字。认不出的字段（嵌套对象、数组）或超过 64 个字段时不存 `requestedSchema`，这条只能拒绝或取消。`message` 截到 4000 字符。
+- 答复：`POST /api/approvals/{pendingId}/answer { elicitation: { action: "accept" | "decline" | "cancel", content? }, decision? }`。`content` 只随 `accept`，必须是表单里有的字段、类型与约束都对、`required` 都在；URL 模式的 `accept` 不带内容。`decision` 可省，由 action 推出（`accept` → `allow`，`decline` / `cancel` → `deny`），给了且对不上答 `400`。节点头的 `{ decision }` 也能答：`deny` = `decline`，`allow` = 空表单的 `accept`（有必填项时 `400`）。不合规的答复 `400 bad_request`，审计记 `elicitation_invalid`；`optionId` 不适用（`400`）。应答与解决事件多 `elicitation: { action }`。
+- `content` 只交给 Agent：不进审批行、审计、日志、事件与答复。审批行 `answer` 记 `allow` / `deny`，CAS 与 §14.4 相同。
+- 回合被取消、适配器退出、休眠：挂起的 elicitation 一律回 `{ action: "cancel" }`，审批行记 `cancelled` / `core`（与 §14.4 同一条路）。节点在 `waiting` 时切换驱动答 `409 awaiting_approval`。core 从不替人填表。
+
+### 26.2 模型
+
+- 目录来自开会话（`session/new|load|resume`）答的 `configOptions`，没有时看 `initialize` 答的；取 `category: "model"` 的那一项（没有分类时 id 为 `model` 的那一项），可选值的分组摊平，最多 500 个。之后 Agent 的 `config_option_update` 更新它。
+- `PUT /api/acp/sessions/{id}/model { modelId }` → `session/set_config_option { sessionId, configId, value }` → `204`；以答复里的 `configOptions` 为准。目录里没有这个模型或没有目录答 `409 acp_model_unavailable`，客户端没有这个能力答 `409 acp_model_unsupported`，`modelId` 缺席 `400`。会话行已结束时与 `…/mode` 一样先接回。节点数据 `agent.model` 由页面写回。
+- 起会话（含接回、唤醒、切换驱动）时节点数据记着 `agent.model` 且目录里有就落上；目录里没有、或 Agent 拒了不拦启动（模型不是安全边界，与只读模式不同）。
+
+### 26.3 `pi-acp` 的映射文件
+
+- 适配器表 `sessionId: "mapFile"` 的那一行（`pi`）写死映射文件 `~/.pi/acp/sessions.json`，形状 `{ "<ACP 会话 id>": { "sessionFile": "<Pi 会话文件绝对路径>" } }`（值也可以直接是路径）。会话文件名里的 uuid 是 Pi 的会话 id。读不到、过大（> 4 MiB）、不是这个形状、或路径不是绝对路径时退回 `opaque`。
+- 会话开好时 `transcriptPath` 是映射到的 Pi 会话文件（存在时），否则是镜像。
+- 接回 ACP：手里的 id 是映射里的 ACP 会话 id 就用它，是 Pi 的会话 id 或会话文件就反查成 ACP 会话 id，查不到原样交给 `session/load`（接不回就新开）。切回终端：ACP 会话 id 映射回 Pi 的会话 id（文件名认不出时用文件路径）敲恢复行；映射里没有就敲普通启动行，`resumed: false`。
+
+### 26.4 节点凭据与 ama 模型密钥
+
+- ACP 适配器不经画布启动器，兑换由 core 在起适配器之前做：节点环境里有 `ARMADRA_CREDENTIAL_REF`（§20.3 的校验与 `credential:use` 已在这一步之前做过，成员答 `403 credential_forbidden`）时按 §20.4 同一个兑换（同一绑定、重新校验、更新 `lastUsedAt`、日志只记节点与条目名）取值；节点的基础 CLI 是 ama 时取 §12.4 的已设模型密钥（`AMA_API_KEY_<供应商>`）。
+- 值只设进适配器进程的环境：不进节点数据、镜像、日志、会话行或任何答复。兑换失败与启动器一样拒绝起会话，原样答 §20 的码（`credential_unset` 409、`credential_unavailable` 503、`credential_mismatch` / `credential_kind_disabled` 400 等），不悄悄用默认登录起；ama 密钥读不出时答 `503 secret_unavailable`。
+- 只开本机：SSH 节点上的 ACP（§26 的 SSH 小节）仍按 §20 拒绝凭据。
 
 ## 27. 推送补充：设备偏好、UnifiedPush、调度与资源事件
 

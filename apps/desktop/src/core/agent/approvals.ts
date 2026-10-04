@@ -13,6 +13,8 @@ import { agentIdOf, loadNode, loadSession } from "../collab/nodes";
 import type { CollabContext } from "../collab/service";
 import { conflict, badRequest, notFound, rfc3339 } from "../workspaces/support";
 import { getAgentStatus } from "./status";
+import { checkElicitationAnswer, elicitationOf } from "../acp/elicitation";
+import type { AcpElicitationResult } from "../acp/types";
 
 /**
  * Permission answers — the round trip closed by an answer file, and the CAS
@@ -72,6 +74,24 @@ export function setAcpApprovalAnswerer(
   answerer: AcpApprovalAnswerer | undefined,
 ): void {
   acpAnswerer = answerer;
+}
+
+/**
+ * The elicitation half (contract §26.1): the ACP domain registers it and it
+ * hands the checked answer to the pending `elicitation/create`. `false` when no
+ * live session holds that request any more.
+ */
+export type AcpElicitationAnswerer = (
+  approval: AgentApproval,
+  result: AcpElicitationResult,
+) => boolean;
+
+let elicitationAnswerer: AcpElicitationAnswerer | undefined;
+
+export function setAcpElicitationAnswerer(
+  answerer: AcpElicitationAnswerer | undefined,
+): void {
+  elicitationAnswerer = answerer;
 }
 
 /** One option of an ACP permission request, as stored in `request_json`. */
@@ -204,7 +224,12 @@ export function insertApproval(
 }
 
 export interface AnswerRequest {
-  readonly decision: string;
+  /**
+   * `allow` / `deny`. May be left out when {@link elicitation} is given: an
+   * elicitation's decision follows from its action (`accept` → allow,
+   * `decline` / `cancel` → deny).
+   */
+  readonly decision?: string;
   /** Who answered. The local user is `user`; a peer device is its principal. */
   readonly answeredBy?: string;
   /**
@@ -215,11 +240,70 @@ export interface AnswerRequest {
   readonly expectedRevision?: number;
   /** An ACP approval's chosen option (contract §14.4). */
   readonly optionId?: string;
+  /**
+   * The answer to an ACP `elicitation/create` (contract §26.1). The content is
+   * checked against the request's own schema and goes to the agent only: it
+   * is never stored, audited, logged or published.
+   */
+  readonly elicitation?: {
+    readonly action: unknown;
+    readonly content?: unknown;
+  };
 }
 
 export interface AnswerResult {
   readonly approval: AgentApproval;
   readonly route: ApprovalRoute;
+  /** The action an elicitation was answered with (never its content). */
+  readonly elicitation?: { readonly action: string };
+}
+
+/**
+ * An elicitation answer, settled before anything is recorded: the decision it
+ * implies and what goes to the agent. `undefined` for any other approval.
+ */
+function elicitationAnswer(
+  existing: AgentApproval,
+  request: AnswerRequest,
+):
+  | {
+      readonly ok: true;
+      readonly decision: string;
+      readonly result: AcpElicitationResult;
+    }
+  | { readonly ok: false; readonly message: string }
+  | undefined {
+  const stored = elicitationOf(existing.request);
+  if (stored === undefined) {
+    return request.elicitation === undefined
+      ? undefined
+      : {
+          ok: false,
+          message: "elicitation is only for ACP elicitation requests",
+        };
+  }
+  // The header's allow / deny buttons work too: deny declines, allow accepts
+  // an empty form (which only passes when nothing is required).
+  const answer =
+    request.elicitation ??
+    (request.decision === "allow"
+      ? { action: "accept" }
+      : request.decision === "deny"
+        ? { action: "decline" }
+        : undefined);
+  if (answer === undefined) {
+    return { ok: false, message: "Approval decision must be allow or deny" };
+  }
+  const checked = checkElicitationAnswer(stored, answer);
+  if (!checked.ok) return checked;
+  const decision = checked.result.action === "accept" ? "allow" : "deny";
+  if (request.decision !== undefined && request.decision !== decision) {
+    return {
+      ok: false,
+      message: `decision ${request.decision} does not match action ${checked.result.action}`,
+    };
+  }
+  return { ok: true, decision, result: checked.result };
 }
 
 /**
@@ -239,8 +323,25 @@ export async function answerApproval(
   if (!validPendingId(pendingId)) {
     throw badRequest("Approval id is invalid");
   }
-  const decision = request.decision;
   const answeredBy = request.answeredBy ?? "user";
+  // An elicitation is settled first: its decision follows from its action.
+  const asked = getApproval(context, pendingId);
+  const elicitation = elicitationAnswer(asked, request);
+  if (elicitation !== undefined && !elicitation.ok) {
+    const answered = asked.answer !== null;
+    audit(context, asked, {
+      decision: request.decision ?? "",
+      answeredBy,
+      expectedRevision: request.expectedRevision ?? asked.revision,
+      accepted: false,
+      route: "",
+      refusal: answered ? "already_answered" : "elicitation_invalid",
+    });
+    if (answered) throw conflict("Approval request was already answered");
+    throw badRequest(elicitation.message);
+  }
+  const decision =
+    elicitation?.ok === true ? elicitation.decision : (request.decision ?? "");
   if (!(DECISIONS as readonly string[]).includes(decision)) {
     // Audited even though nothing could have been written: a device sending a
     // decision this build does not know is worth seeing in the trail.
@@ -328,7 +429,12 @@ export async function answerApproval(
   // failure is reported as itself: the answer stands, and what could not
   // happen is the CLI hearing it.
   let route: ApprovalRoute = "none";
-  if (acpOption !== undefined) {
+  if (elicitation?.ok === true) {
+    // ACP elicitation: the checked answer goes to the pending request.
+    if (elicitationAnswerer?.(approval, elicitation.result) === true) {
+      route = "acp";
+    }
+  } else if (acpOption !== undefined) {
     // ACP: the answer goes to the pending `session/request_permission`. Never
     // typed into anything — an ACP session has no prompt to type at.
     if (acpAnswerer?.(approval, acpOption.optionId) === true) route = "acp";
@@ -348,23 +454,39 @@ export async function answerApproval(
     refusal: "",
   });
 
+  const action =
+    elicitation?.ok === true
+      ? { action: elicitation.result.action }
+      : undefined;
   context.publish(approval.workspaceId, {
     type: "agent.approval",
     nodeId: approval.nodeId,
     pendingId: approval.id,
     // Resolution reuses the event: `request.resolved` tells a client this is
     // the answer rather than a new question.
-    request: resolvedPayload(approval, decision, route),
+    request: resolvedPayload(approval, decision, route, action),
   });
-  return { approval, route };
+  return {
+    approval,
+    route,
+    ...(action === undefined ? {} : { elicitation: action }),
+  };
 }
 
 function resolvedPayload(
   approval: AgentApproval,
   decision: string,
   route: ApprovalRoute,
+  elicitation?: { readonly action: string },
 ): Record<string, unknown> {
-  return { ...approval, resolved: true, decision, answer: decision, route };
+  return {
+    ...approval,
+    resolved: true,
+    decision,
+    answer: decision,
+    route,
+    ...(elicitation === undefined ? {} : { elicitation }),
+  };
 }
 
 /**

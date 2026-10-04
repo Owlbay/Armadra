@@ -89,8 +89,8 @@ describe("ACP → AgentEvent (§5.4)", () => {
     ],
     [
       "elicitation/create",
-      { signal: "elicitation" },
-      { kind: "state", state: "waiting", awaitingInput: true },
+      { signal: "elicitation", pendingId: "p-1" },
+      { kind: "state", state: "waiting", pendingId: "p-1" },
     ],
     [
       "the session closed",
@@ -123,6 +123,17 @@ describe("ACP → AgentEvent (§5.4)", () => {
     ).toBeUndefined();
     expect(
       normalize(NODE, "claude", { signal: "permission", pendingId: "" }),
+    ).toBeUndefined();
+    expect(
+      normalize(NODE, "claude", { signal: "elicitation", pendingId: "" }),
+    ).toBeUndefined();
+  });
+
+  it("does not hold an elicitation as an unanswered question (§26.1)", () => {
+    // 答复一定经 permissionSettled 回来；挂着 awaitingInput 会把答完之后的
+    // done 改写成 waiting。
+    expect(
+      event({ signal: "elicitation", pendingId: "p-1" })?.awaitingInput,
     ).toBeUndefined();
   });
 

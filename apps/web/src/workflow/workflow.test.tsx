@@ -31,6 +31,7 @@ const api = vi.hoisted(() => ({
   discardDraft: vi.fn(),
   templates: vi.fn(),
   updateTemplate: vi.fn(),
+  upgradeSchedules: vi.fn(),
   deleteTemplate: vi.fn(),
   runs: vi.fn(),
   startRun: vi.fn(),
@@ -48,7 +49,12 @@ const { StartRunDialog, TemplateLibrary } = await import("./TemplateLibrary");
 const { RunPanel, gateLabel } = await import("./RunPanel");
 const { GateDialog } = await import("./GateDialog");
 const { RunCompare } = await import("./RunCompare");
-const { TemplateEditor, nextVersion } = await import("./TemplateEditor");
+const { TemplateEditor, nextVersion, upgradableSchedules } = await import(
+  "./TemplateEditor"
+);
+const { FrozenScheduleAlert, refusalMessage } = await import(
+  "./FrozenScheduleAlert"
+);
 const { useWorkflowView } = await import("./store");
 const model = await import("./model");
 
@@ -332,7 +338,10 @@ describe("两次运行对比", () => {
 
 describe("模板编辑器", () => {
   it("改选中步骤的提示词，保存时版本加一", async () => {
-    api.updateTemplate.mockResolvedValue(TEMPLATE);
+    api.updateTemplate.mockResolvedValue({
+      template: TEMPLATE,
+      frozenSchedules: [],
+    });
     render(
       <TestProviders>
         <TemplateEditor template={TEMPLATE} onClose={() => {}} />
@@ -348,6 +357,242 @@ describe("模板编辑器", () => {
     expect(input.template.version).toBe(2);
     expect(input.template.steps[0].prompt).toBe("仔细审查 {{scope}}");
     expect(nextVersion({ ...TEMPLATE, version: 4 }, BODY).version).toBe(5);
+  });
+});
+
+describe("模板编辑器：增删与角色", () => {
+  function open() {
+    api.updateTemplate.mockResolvedValue({
+      template: TEMPLATE,
+      frozenSchedules: [],
+    });
+    return render(
+      <TestProviders>
+        <TemplateEditor template={TEMPLATE} onClose={() => {}} />
+      </TestProviders>,
+    );
+  }
+
+  async function addKind(kind: string) {
+    const trigger = screen.getByRole("button", { name: "添加步骤" });
+    fireEvent.pointerDown(
+      trigger,
+      new PointerEvent("pointerdown", { bubbles: true, button: 0 }),
+    );
+    const item = await waitFor(() => {
+      const found = document.querySelector(
+        `[data-slot="workflow-editor-add-kind"][data-kind="${kind}"]`,
+      );
+      if (!found) throw new Error("menu not open");
+      return found;
+    });
+    fireEvent.click(item);
+  }
+
+  const stepIds = () =>
+    [...document.querySelectorAll('[data-slot="workflow-editor-step"]')].map(
+      (item) => item.getAttribute("data-step-id"),
+    );
+
+  it("加一步就选中它；正文空着不能保存，填上后保存的形状带新步骤与依赖", async () => {
+    open();
+    await addKind("prompt");
+    expect(stepIds()).toEqual(["s1", "s2", "step3"]);
+    expect(
+      document
+        .querySelector('[data-step-id="step3"]')
+        ?.getAttribute("data-selected"),
+    ).toBe("true");
+    const save = screen.getByText("保存").closest("button")!;
+    expect(save.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("提示词"), {
+      target: { value: "写总结" },
+    });
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(api.updateTemplate).toHaveBeenCalled());
+    const [, input] = api.updateTemplate.mock.calls[0]!;
+    expect(input.template.steps.at(-1)).toEqual({
+      id: "step3",
+      kind: "prompt",
+      role: "reviewer",
+      prompt: "写总结",
+      after: ["s2"],
+    });
+  });
+
+  it("删一步：别的步骤对它的依赖一起去掉；只剩一步时删不了", async () => {
+    open();
+    const removeS1 = screen.getByRole("button", { name: "删除步骤 s1" });
+    fireEvent.click(removeS1);
+    expect(stepIds()).toEqual(["s2"]);
+    fireEvent.click(screen.getByText("保存"));
+    await waitFor(() => expect(api.updateTemplate).toHaveBeenCalled());
+    const [, input] = api.updateTemplate.mock.calls[0]!;
+    expect(input.template.steps).toEqual([
+      { id: "s2", kind: "gate", label: "合并前确认", after: [] },
+    ]);
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "删除步骤 s2",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+
+  it("角色可加可删；有步骤在用的角色删不了", async () => {
+    open();
+    const reviewer = screen.getByRole("button", {
+      name: "删除角色 reviewer",
+    }) as HTMLButtonElement;
+    expect(reviewer.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "添加角色" }));
+    expect(
+      [...document.querySelectorAll('[data-slot="workflow-editor-role"]')].map(
+        (item) => item.getAttribute("data-role-id"),
+      ),
+    ).toEqual(["reviewer", "lead", "role3"]);
+    fireEvent.click(screen.getByRole("button", { name: "删除角色 lead" }));
+    fireEvent.change(screen.getByLabelText("role3 的名称"), {
+      target: { value: "复核" },
+    });
+    fireEvent.click(screen.getByText("保存"));
+    await waitFor(() => expect(api.updateTemplate).toHaveBeenCalled());
+    const [, input] = api.updateTemplate.mock.calls[0]!;
+    expect(input.template.roles.map((role: { id: string }) => role.id)).toEqual(
+      ["reviewer", "role3"],
+    );
+    expect(input.template.roles[1]).toMatchObject({
+      agentId: "claude",
+      title: "复核",
+    });
+    // lead 删了，连着它的协作连线也去掉。
+    expect(input.template.links).toEqual([]);
+  });
+
+  it("依赖里会成环的那一项不让勾", async () => {
+    open();
+    // 打开时选中第一步 s1。
+    const after = document.querySelector(
+      '[data-slot="workflow-editor-after"]',
+    )!;
+    const box = after.querySelector(
+      'button[role="checkbox"]',
+    ) as HTMLButtonElement;
+    // s2 等着 s1：s1 不能再依赖 s2。
+    expect(box.disabled).toBe(true);
+  });
+});
+
+describe("冻结的定时计划", () => {
+  it("本工作空间里参数相容的才直接升级", () => {
+    const base = {
+      templateVersion: 1,
+      missingParams: [],
+      unknownParams: [],
+    };
+    expect(
+      upgradableSchedules(
+        [
+          { ...base, scheduleId: "a", workspaceId: "ws", reason: "compatible" },
+          {
+            ...base,
+            scheduleId: "b",
+            workspaceId: "ws",
+            reason: "missing_params",
+          },
+          {
+            ...base,
+            scheduleId: "c",
+            workspaceId: "other",
+            reason: "compatible",
+          },
+        ],
+        "ws",
+      ),
+    ).toEqual(["a"]);
+  });
+
+  it("「更新到最新版本」升这一个计划；不相容时说出要补的参数", async () => {
+    api.upgradeSchedules.mockResolvedValue({
+      upgraded: [],
+      frozen: [
+        {
+          scheduleId: "plan-1",
+          reason: "missing_params",
+          missingParams: ["owner"],
+          unknownParams: [],
+        },
+      ],
+    });
+    render(
+      <TestProviders>
+        <FrozenScheduleAlert
+          templateId="tpl-1"
+          templateVersion={3}
+          workspaceId="ws"
+          planId="plan-1"
+          canManage
+        />
+      </TestProviders>,
+    );
+    expect(screen.getByText("模板已更新到 v3")).toBeTruthy();
+    fireEvent.click(screen.getByText("更新到最新版本"));
+    await waitFor(() =>
+      expect(api.upgradeSchedules).toHaveBeenCalledWith("tpl-1", "ws", [
+        "plan-1",
+      ]),
+    );
+    expect(await screen.findByText("需要补参数：owner")).toBeTruthy();
+    expect(
+      refusalMessage({
+        scheduleId: "x",
+        reason: "param_mismatch",
+        missingParams: [],
+        unknownParams: ["scope"],
+      }),
+    ).toEqual({ key: "workflow.frozen.mismatch", names: "scope" });
+  });
+
+  it("没有管理权限时只提示，不给按钮", () => {
+    render(
+      <TestProviders>
+        <FrozenScheduleAlert
+          templateId="tpl-1"
+          templateVersion={2}
+          workspaceId="ws"
+          planId="plan-1"
+          canManage={false}
+        />
+      </TestProviders>,
+    );
+    expect(screen.queryByText("更新到最新版本")).toBeNull();
+  });
+});
+
+describe("编辑器的纯函数", () => {
+  it("增删、拖排、成环判断与能否保存", () => {
+    const added = model.addStep(BODY, "collect");
+    expect(added.id).toBe("step3");
+    expect(added.draft.steps.at(-1)).toMatchObject({
+      kind: "collect",
+      from: ["s2"],
+      after: ["s2"],
+      prompt: "",
+    });
+    expect(model.canSaveDraft(added.draft)).toBe(false);
+    expect(model.incompleteSteps(added.draft)).toEqual(["step3"]);
+    const removed = model.removeStep(added.draft, "s2");
+    expect(removed.steps.at(-1)).toMatchObject({ from: [], after: [] });
+    const moved = model.moveStep(BODY, 1, 0);
+    expect(moved.steps.map((step) => step.id)).toEqual(["s2", "s1"]);
+    expect(model.moveStep(BODY, 0, 5)).toBe(BODY);
+    expect(model.dependsOn(BODY, "s2", "s1")).toBe(true);
+    expect(model.dependsOn(BODY, "s1", "s2")).toBe(false);
+    expect(model.nextId("step", ["step3"])).toBe("step2");
+    expect(model.roleInUse(BODY, "reviewer")).toBe(true);
+    expect(model.roleInUse(BODY, "lead")).toBe(false);
   });
 });
 
