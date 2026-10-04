@@ -1254,7 +1254,33 @@
 
 ## G5-22 手机原生补充（R-54、R-55、R-56）
 
-待填（第 3 组）。
+**做了什么**
+
+- 原生 OAuth（R-56）。core 的 `oauth/{id}/start?native=1` 只认原生传输：不发绑定 Cookie，答案多一个一次性的 `nativeState`。回调对原生记录不取走、不认 Cookie，只 302 到 `armadra://oauth?state=…&code=…`（或 `error=`）。新路由 `POST oauth/{id}/native { state, nativeState, code? | error? }` 收尾：与浏览器回调同一套决定，答 JSON，登录时会话密钥在 `session.native`。记录在这一步才取走；`nativeState`、提供方或来源对不上，浏览器发起的记录走这里，一律 `oauth_state_invalid`。提供方仍只登记原来那个 https 回调。
+- 页面（`mobile/native-oauth.ts`）：App 里 `startOAuth` 改走这一路，`state` 与 `nativeState` 记在本机，授权页交给插件的 `openExternal`（插件旧时答 `oauth_browser_required`）。深链经原生写进 `#link=` 再重载；入口在挂载前收尾，结果写成 `#oauth=` 片段，`use-link-fragments` 在 App 里也打开「安全」页。`state` 不是本机记着的那条时，不碰记录也不发请求。
+- 令牌轮换（R-54）：Android `onNewToken`、UnifiedPush 新端点，以及 iOS 启动时 APNs 给出与上次登记不同的令牌（`PushTokenLedger`），都会标「换过」并发 `pushTokenRotated`。页面（`mobile/push-rotation.ts`）对开过推送的设备在启动和收到事件时重新 `PUT /api/push/devices`，成功后 `ackPushRotation`。
+- 图片带 Bearer（R-55）：`api/assets.ts::useAssetUrl` 在 App 里把指向 Gateway 的图片地址经带 Bearer 的 `fetch` 换成 `blob:`，同一地址共用一份，最后一处卸载时回收。白板图片与 Markdown 预览的图都走它；浏览器与桌面照旧直接用地址。
+- G5-10 留下的 Android UnifiedPush 分发器接线：引入 `org.unifiedpush.android:connector` 3.3.5，Tink 换成 `tink-android`。装了分发器就向它要端点，登记成 `{ transport: "direct", publicKey, unifiedpush: { endpoint } }`，30 秒拿不到或分发器拒绝时退回 FCM。消息正文是 §19.5 的信封，与 FCM 共用 `PushDisplay` 解开后出通知。页面 `native-bridge.ts` 认这种登记：只限 Android，必须带公钥，端点须是 https 或回环 http，可以不带令牌。
+- 原生两侧：插件加 `openExternal`（只开 https 与回环 http）、`pushRotated`、`ackPushRotation`。`armadra://oauth?…` 与配对链接一样走 `#link=` 加重载。Android 冷启动带来的深链等页面加载完再交，同一个 intent 只交一次。判定放在不依赖 UI 的模块：`DeepLink` 的 OAUTH 类、`ExternalUrl`、`PushTokenLedger`。
+- `mobile-shell-e2e` 加两条：Android 断言资产直接 `<img>` 拿到 401、经带 Bearer 的 `fetch` 拿到 200 `image/png`；记一条挂起流程后用 `armadra://oauth` 深链冷启动，断言收尾请求已发出（记录被取走）、「安全」页打开。iOS 经深链打开后，断言「安全」页出现、仍在连接状态。
+
+**接口**：契约 §18.5 加两行与一段（`start?native=1`、`POST oauth/{id}/native`、原生回调的深链）；`oauth_browser_required` 只剩旧版 App 不带 `native=1` 的情况。共享层新增 `oauthNativeCompleteRequestSchema`、`oauthNativeOutcomeSchema`，`oauthStartSchema.nativeState?`。原生桥新增 `openExternal`、`pushRotated`、`ackPushRotation`、`onPushRotated`，`NativePushRegistration.token` 改为可选、加 `unifiedpush`（与 G5-10 的类型改动同形）。
+
+**实测**（macOS arm64）
+
+- core `oauth.test` 共 42 例（新增原生一路 5 例：绑定 → 登录、`nativeState` 不对后记录作废、浏览器与原生不能互走收尾、提供方拒绝与提供方不一致、`native=1` 只认原生传输）。web 新增 `native-oauth`、`push-rotation`、`assets` 三个测试文件，`native-bridge`、`entry`、`use-link-fragments`、`PushPermission` 加了用例。
+- ArmadraNativeKit `swift test` 18 例；armadra-native-core 用 javac + JUnit 本地跑 15 例（`DeepLinkTest`、`ExternalUrlTest` 新增）。本机 iOS 模拟器构建（不签名）通过。
+- 对构建出的 core 经 Gateway 的 Bearer 模式实测：资产不带 Bearer 答 401，带了答 200 `image/png`；`POST oauth/e2e/native` 答 400 `oauth_state_invalid`。
+- 夜间 `workflow_dispatch`（本分支）：`mobile-ios` 全过（含 OAuth 深链一步），`mobile-android` 见 PR。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 4418 过 / 43 跳过，live 4 过，脚本 65 过；web 3311 过；shared 321 过；server 86 过 / 4 跳过；mobile 9 过；push-relay 9 过；0 失败。`pnpm --filter @armadra/web typecheck` 与 `pnpm check` 通过。
+
+**没做 / 限制**
+
+- 真提供方走完整个系统浏览器流程没有在模拟器里跑：模拟器里的浏览器不信本地 CA，回调页打不开。core 一侧由 `oauth.test` 对假 issuer 走完，App 一侧由深链 e2e 覆盖。真机需要用户的提供方与证书（§4 B 档）。
+- App 里没有会话时，OAuth 登录若走到第二因素（`mfa`），入口会回到连接页，第二步接不上。现在原生 App 都是先配对、带着会话再登录或绑定，暂不受影响。
+- 编辑器里文件的「下载」链接仍是 `<a href>`，不带 Bearer。
+- UnifiedPush 要等 G5-10（#93）合入后才能端到端用上：core 在那之前不认 `unifiedpush` 登记，App 登记会失败，提示「开启失败」。
+- iOS 不做 UnifiedPush。
 
 ## G5-23 零碎界面与 G2-2 遗留（R-43、R-71、R-72 其余）
 
