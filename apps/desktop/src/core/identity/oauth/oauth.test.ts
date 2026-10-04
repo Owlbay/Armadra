@@ -21,7 +21,13 @@ import {
 } from "./harness.fixture";
 import { bindingKey } from "./providers";
 import { publicOriginsFrom } from "./http";
-import { safeReturnTo } from "./flow";
+import {
+  MAX_PENDING,
+  MAX_PENDING_PER_ADDRESS,
+  OAuthFlow,
+  addressBucket,
+  safeReturnTo,
+} from "./flow";
 import { installOAuth } from ".";
 import type { CoreContext } from "../../main";
 import { totpAt } from "../mfa/totp";
@@ -478,6 +484,82 @@ describe("拒绝分支（§18.5）", () => {
     expect(url.searchParams.get("post_logout_redirect_uri")).toBe(`${ORIGIN}/`);
     const gh = await (await call(h, "POST", "oauth/github/logout", {})).json();
     expect(gh).toEqual({ endSessionUrl: null });
+  });
+});
+
+describe("挂起的 state 按来源地址分桶（安全审查 L4）", () => {
+  const github = provider({ id: "github", kind: "github" });
+  function flow(): OAuthFlow {
+    // `begin` 只碰内存表与 GitHub 的授权地址：库与会话服务用不到。
+    return new OAuthFlow({
+      store: undefined as never,
+      service: undefined as never,
+      clientSecret: async () => undefined,
+    });
+  }
+  async function begin(target: OAuthFlow, remoteIp: string) {
+    const begun = await target.begin({
+      provider: github,
+      mode: "login",
+      principalId: "",
+      origin: ORIGIN,
+      redirectUri: `${ORIGIN}/api/identity/oauth/github/callback`,
+      returnTo: "/",
+      deviceName: "browser",
+      remoteIp,
+      userAgent: "test",
+    });
+    const state = new URL(begun.authorizeUrl).searchParams.get("state") ?? "";
+    return { state, binding: begun.binding };
+  }
+
+  it("多个地址撒 start 挤不掉别人半途的登录", async () => {
+    const target = flow();
+    const victim = await begin(target, "198.51.100.7");
+    // 原来是一张表满了挤最老的：受害者那条最老，第 1001 次 start 就把它挤掉。
+    for (let address = 0; address < 40; address += 1) {
+      for (let i = 0; i < MAX_PENDING_PER_ADDRESS; i += 1) {
+        await begin(target, `203.0.113.${address}`);
+      }
+    }
+    expect(target.pendingCount()).toBe(MAX_PENDING);
+    expect(target.take(victim.state, victim.binding).remoteIp).toBe(
+      "198.51.100.7",
+    );
+  });
+
+  it("一个地址满了只挤它自己最老的那条", async () => {
+    const target = flow();
+    const other = await begin(target, "198.51.100.7");
+    const first = await begin(target, "203.0.113.1");
+    for (let i = 0; i < MAX_PENDING_PER_ADDRESS; i += 1) {
+      await begin(target, "203.0.113.1");
+    }
+    expect(target.pendingCount()).toBe(MAX_PENDING_PER_ADDRESS + 1);
+    expect(() => target.take(first.state, first.binding)).toThrow();
+    expect(target.take(other.state, other.binding).remoteIp).toBe(
+      "198.51.100.7",
+    );
+  });
+
+  it("IPv6 按 /64 分桶，IPv4 映射地址按 IPv4", async () => {
+    expect(addressBucket("2001:db8:0:1::1")).toBe("2001:db8:0:1::/64");
+    expect(addressBucket("2001:0db8:0000:0001:ffff::9")).toBe(
+      "2001:db8:0:1::/64",
+    );
+    expect(addressBucket("::1")).toBe("0:0:0:0::/64");
+    expect(addressBucket("::ffff:192.0.2.1")).toBe("192.0.2.1");
+    expect(addressBucket("192.0.2.1")).toBe("192.0.2.1");
+    // 同一个 /64 里换地址也挤不出去别人，只挤自己。
+    const target = flow();
+    const victim = await begin(target, "2001:db8:1:2::5");
+    for (let i = 0; i < MAX_PENDING_PER_ADDRESS + 5; i += 1) {
+      await begin(target, `2001:db8:9:9::${(i + 1).toString(16)}`);
+    }
+    expect(target.pendingCount()).toBe(MAX_PENDING_PER_ADDRESS + 1);
+    expect(target.take(victim.state, victim.binding).remoteIp).toBe(
+      "2001:db8:1:2::5",
+    );
   });
 });
 
