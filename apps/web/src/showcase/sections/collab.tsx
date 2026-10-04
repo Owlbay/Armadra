@@ -3,7 +3,7 @@ import { CloudOff } from "lucide-react";
 import { PermissionCard } from "@/acp/PermissionCard";
 import { useT } from "@/app/preferences-store";
 import { RealtimePresenceView } from "@/canvas/PresenceBar";
-import { PeerCursor } from "@/realtime/CursorLayer";
+import { FollowFrame, PeerCursor } from "@/realtime/CursorLayer";
 import { Alert, AlertTitle } from "@/ui/alert";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
@@ -36,8 +36,8 @@ import { ACP_PERMISSION } from "../fixtures/acp";
 
 /**
  * `collab` 分区（设计展示页 §2.1，设计系统 §5.6）：实时板的在线条——头像
- * 堆叠 1 / 3 / 6 人、跟随中、只读、断开——成员光标与选区外框，以及「离线
- * 编辑」；评论（§5.7）：钉的四种样子、线程（可写 / 只读 / 离线）、输入框与
+ * 堆叠 1 / 3 / 6 人、跟随中、只读、断开——成员光标与选区外框、跟随视口
+ * （画布四周一圈对方的成员色），以及「离线编辑」；评论（§5.7）：钉的四种样子、线程（可写 / 只读 / 离线）、输入框与
  * 评论抽屉（空态、有已解决的折叠区）；角色（§5.8，契约 §23）：成员表（可改 /
  * 只读）与审批卡的三种看法——driver 答谁的都行、operator 答自己起的、operator
  * 看别人起的只有「等待接管」。
@@ -211,6 +211,26 @@ export default function CollabSection() {
               y={peer.state.cursor!.y}
             />
           ))}
+        </div>
+
+        <div
+          data-sample="follow-viewport"
+          className="relative h-[180px] w-[360px] overflow-hidden rounded-[var(--r-card)] border border-border"
+          style={{ background: "var(--canvas-bg)" }}
+        >
+          <div
+            className="absolute rounded-[var(--r-card)] border border-border bg-card"
+            style={{ left: 110, top: 50, width: 140, height: 80 }}
+          />
+          <RealtimePresenceView
+            peers={PEER_SETS[1]!}
+            offline={false}
+            readOnly={false}
+            following={PEER_SETS[1]![0]!.clientId}
+            onFollow={noop}
+            className="absolute top-2 right-2"
+          />
+          <FollowFrame color={memberColorVar(PEER_SETS[1]![0]!.state.color)} />
         </div>
 
         <Alert className="w-auto self-start">

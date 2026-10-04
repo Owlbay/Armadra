@@ -8,6 +8,7 @@ import * as Y from "yjs";
 
 import {
   CURSOR_THROTTLE_MS,
+  VIEWPORT_THROTTLE_MS,
   colorClash,
   peersOf,
   pickColor,
@@ -122,6 +123,57 @@ describe("awareness（契约 §16.4）", () => {
 
     presence.setCursor(null);
     expect(me.getLocalState()).not.toHaveProperty("cursor");
+    presence.destroy();
+  });
+
+  it("视口节流：间隔内只写最后一个，缩放夹进范围，null 立刻摘掉", () => {
+    const me = new Awareness(new Y.Doc());
+    let clock = 0;
+    const timers: (() => void)[] = [];
+    const presence = startLocalPresence(me, {
+      deviceId: "me",
+      name: "Mac",
+      now: () => clock,
+      setTimer: (run) => {
+        timers.push(run);
+        return timers.length;
+      },
+      clearTimer: () => {
+        timers.length = 0;
+      },
+    });
+    presence.setViewport({ x: 10, y: 20, zoom: 1 });
+    expect(me.getLocalState()).toMatchObject({
+      viewport: { x: 10, y: 20, zoom: 1 },
+    });
+    clock += 10;
+    presence.setViewport({ x: 11, y: 21, zoom: 1 });
+    presence.setViewport({ x: 12, y: 22, zoom: 1000 });
+    expect(me.getLocalState()).toMatchObject({ viewport: { x: 10 } });
+    clock += VIEWPORT_THROTTLE_MS;
+    timers.shift()!();
+    expect(me.getLocalState()).toMatchObject({
+      viewport: { x: 12, y: 22, zoom: 100 },
+    });
+    // 光标与视口各节流各的。
+    presence.setCursor({ x: 1, y: 1 });
+    expect(me.getLocalState()).toMatchObject({ cursor: { x: 1, y: 1 } });
+    presence.setViewport(null);
+    expect(me.getLocalState()).not.toHaveProperty("viewport");
+    presence.destroy();
+  });
+
+  it("视口经 awareness 送到对方，过校验进在线表", () => {
+    const remote = new Awareness(new Y.Doc());
+    const presence = startLocalPresence(remote, { deviceId: "r", name: "R" });
+    presence.setViewport({ x: -40, y: 80, zoom: 0.5 });
+    const me = new Awareness(new Y.Doc());
+    relay(remote, me);
+    expect(peersOf(me, me.clientID)[0]!.state.viewport).toEqual({
+      x: -40,
+      y: 80,
+      zoom: 0.5,
+    });
     presence.destroy();
   });
 });
