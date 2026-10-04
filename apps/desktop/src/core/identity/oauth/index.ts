@@ -17,7 +17,7 @@ import { type SecretContext, SecretStore, secretsFor } from "../../secrets";
 import { completionSettings, settingsDomain } from "../../settings";
 import type { OAuthProvider } from "../../settings/schema";
 import type { AccountsService } from "../accounts";
-import type { IdentitySecurity } from "../accounts-http";
+import { type IdentitySecurity, mfaRequiredFor } from "../accounts-http";
 import type { IdentityService } from "../service";
 import type { IdentityStore } from "../store";
 import { OAuthFlow } from "./flow";
@@ -69,10 +69,17 @@ export function createOAuthHttp(
         clear: (id) => entry(id).clear(),
       };
     })();
+  const security = deps.security;
   const flow = new OAuthFlow({
     store: deps.store,
     service: deps.service,
-    ...(deps.security === undefined ? {} : { mfa: deps.security.mfa }),
+    ...(security === undefined
+      ? {}
+      : {
+          mfa: security.mfa,
+          mfaRequired: (role: "owner" | "member") =>
+            mfaRequiredFor(role, security.settings().mfaRequireFor),
+        }),
     ...(deps.fetcher === undefined ? {} : { fetcher: deps.fetcher }),
     ...(deps.github === undefined ? {} : { github: deps.github }),
     clientSecret: (id) => secrets.read(id),

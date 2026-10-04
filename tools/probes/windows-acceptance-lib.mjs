@@ -59,8 +59,15 @@ export const CHECKS = [
     "应用主进程被杀后会话宿主与 shell 都在，重启后接回同一会话",
   ],
   ["conpty.close", "终止会话后 shell 进程与它的控制台宿主都退出"],
+  [
+    "sessionHost.leaves",
+    "应用退出后会话宿主没有会话、没有 core 连着，自己退出（不用结束进程）",
+  ],
   ["app.logs", "数据目录日志里的 error / fatal 行"],
-  ["uninstall.silent", "卸载程序 /S 后安装目录、注册表卸载项与快捷方式都不在"],
+  [
+    "uninstall.silent",
+    "卸载程序 /S 后安装目录、注册表卸载项与快捷方式都不在；卸载前起的空闲会话宿主经 shutdownIfIdle 自己退出，卸载后没有残留 Armadra.exe",
+  ],
   ["userConfig.untouched", "操作员真实用户配置在开始前与结束后逐字节相同"],
 ].map(([id, title]) => ({ id, title }));
 
@@ -68,10 +75,60 @@ const CHECK_IDS = new Set(CHECKS.map((check) => check.id));
 
 /** 中途放弃时也要做的收尾项：日志、卸载、用户配置比对。 */
 export const TEARDOWN_CHECKS = [
+  "sessionHost.leaves",
   "app.logs",
   "uninstall.silent",
   "userConfig.untouched",
 ];
+
+/* ------------------------------ session host ------------------------------ */
+
+/** 命令行是不是会话宿主（`ELECTRON_RUN_AS_NODE=1 Armadra.exe …\session-host\host.cjs <data>`）。 */
+export function isSessionHost(commandLine) {
+  return /session-host[\\/]host\.cjs/i.test(commandLine ?? "");
+}
+
+/**
+ * 卸载前探针自己起的那个空闲会话宿主的环境：没有会话、没人连着时宿主本该十秒后
+ * 自己走（R-68），这里放宽到十分钟，留给卸载程序去请它。
+ */
+export const IDLE_HOST_ENV = {
+  ELECTRON_RUN_AS_NODE: "1",
+  ARMADRA_SESSION_HOST_ORPHAN_EXIT_MS: "600000",
+};
+
+export function readText(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 那个宿主的结论：开始监听过、日志里是 `shutdownIfIdle` 让它走的（卸载程序经
+ * `shutdown-if-idle.cjs` 请走；按进程名结束不会留下这一行）、进程已不在。
+ */
+export function idleHostVerdict({
+  started = true,
+  pid,
+  log = "",
+  alive = false,
+}) {
+  const listening = log.includes("listening on");
+  const releasedByRequest = log.includes(
+    "session host leaving: shutdownIfIdle",
+  );
+  return {
+    ok: started && listening && releasedByRequest && !alive,
+    started,
+    listening,
+    releasedByRequest,
+    alive,
+    pid: pid ?? null,
+    logTail: log.slice(-800),
+  };
+}
 
 /* --------------------------------- options -------------------------------- */
 

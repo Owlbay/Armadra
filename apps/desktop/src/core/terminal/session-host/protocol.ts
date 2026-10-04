@@ -286,7 +286,15 @@ export type ClientMessage =
   | { type: "interrupt"; id: number; sessionKey: string }
   | { type: "kill"; id: number; sessionKey: string }
   | { type: "destroy"; id: number; sessionKey: string }
-  | { type: "flow"; id: number; sessionKey: string; paused: boolean };
+  | { type: "flow"; id: number; sessionKey: string; paused: boolean }
+  /**
+   * "Leave now if you hold nothing." Sent by the shell on an orderly quit and
+   * by the installer before it replaces or removes the executable the host
+   * runs on. Answered `ok` with `leaving`: `true` when the host owns no live
+   * session and is about to exit, `false` when a session keeps it — that one
+   * is never ended by this request.
+   */
+  | { type: "shutdownIfIdle"; id: number };
 
 export type HostMessage =
   | {
@@ -302,6 +310,8 @@ export type HostMessage =
       id: number;
       session?: SessionSummary;
       sessions?: SessionSummary[];
+      /** Only on the answer to `shutdownIfIdle`. */
+      leaving?: boolean;
     }
   | { type: "error"; id: number; code: HostErrorCode; message: string }
   | {

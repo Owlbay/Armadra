@@ -3,6 +3,7 @@ import {
   DesktopLifecycle,
   quitFailureDialog,
   runQuitSequence,
+  sessionHostRelease,
 } from "./lifecycle";
 import type { RuntimeProcess } from "./runtime-process";
 
@@ -58,5 +59,57 @@ describe("the failure dialog", () => {
     expect(text.title).toBe("Armadra 退出未完成");
     expect(text.body).toContain("应用尚未退出");
     expect(text.body).toContain("Core is still running");
+  });
+});
+
+describe("the session host on quit (Windows)", () => {
+  it("asks the host to leave after the core has stopped", async () => {
+    const lifecycle = new DesktopLifecycle();
+    const runtime = fakeRuntime("ok");
+    const order: string[] = [];
+    lifecycle.state.beginQuit();
+    const outcome = await runQuitSequence(lifecycle, runtime, async () => {
+      order.push(`release after ${runtime.stopped} stop`);
+    });
+    expect(outcome).toEqual({ ok: true });
+    expect(order).toEqual(["release after 1 stop"]);
+  });
+
+  it("still quits when asking the host fails", async () => {
+    const lifecycle = new DesktopLifecycle();
+    lifecycle.state.beginQuit();
+    const outcome = await runQuitSequence(
+      lifecycle,
+      fakeRuntime("ok"),
+      async () => {
+        throw new Error("pipe gone");
+      },
+    );
+    expect(outcome).toEqual({ ok: true });
+    expect(lifecycle.state.canExit()).toBe(true);
+  });
+
+  it("does not ask when the core did not stop", async () => {
+    const lifecycle = new DesktopLifecycle();
+    lifecycle.state.beginQuit();
+    let asked = 0;
+    await runQuitSequence(lifecycle, fakeRuntime("fail"), async () => {
+      asked += 1;
+    });
+    expect(asked).toBe(0);
+  });
+
+  it("is a Windows-only step that names this data directory", async () => {
+    expect(sessionHostRelease("/data", "darwin")).toBeUndefined();
+    expect(sessionHostRelease("/data", "linux")).toBeUndefined();
+    const asked: unknown[] = [];
+    const release = sessionHostRelease("C:\\data", "win32", async (request) => {
+      asked.push(request);
+      return { kind: "absent", reason: "no key" };
+    });
+    await release?.();
+    expect(asked).toEqual([
+      { dataDir: "C:\\data", client: "armadra-shell", timeoutMs: 3_000 },
+    ]);
   });
 });

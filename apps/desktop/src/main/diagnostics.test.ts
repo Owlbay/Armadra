@@ -178,3 +178,64 @@ describe("桌面壳崩溃上报", () => {
     await diagnostics.stop();
   });
 });
+
+describe("页面错误（契约 §30）", () => {
+  const page = {
+    kind: "error",
+    name: "TypeError",
+    message: `boom ${SECRET} at /Users/alice/proj`,
+    stack:
+      "TypeError: boom\n    at render (http://127.0.0.1:5173/assets/index-abc.js?v=1:1:2)",
+  };
+  const withPages = (on: boolean) =>
+    JSON.stringify({
+      diagnostics: { crashReportDsn: DSN, reportPageErrors: on },
+    });
+
+  it("没打开页面错误：不发", async () => {
+    const { sdk, calls } = fakeSdk();
+    const { diagnostics } = install({ text: withPages(false) }, sdk);
+    await diagnostics.refresh();
+    expect(diagnostics.reportPage(page)).toEqual({ accepted: false });
+    expect(calls.captured).toEqual([]);
+    await diagnostics.stop();
+  });
+
+  it("打开了但 DSN 没配：不发、不加载 SDK", async () => {
+    const { sdk, calls } = fakeSdk();
+    const { diagnostics, loadSdk } = install(
+      { text: JSON.stringify({ diagnostics: { reportPageErrors: true } }) },
+      sdk,
+    );
+    await diagnostics.refresh();
+    expect(diagnostics.reportPage(page)).toEqual({ accepted: false });
+    expect(loadSdk).not.toHaveBeenCalled();
+    expect(calls.captured).toEqual([]);
+    await diagnostics.stop();
+  });
+
+  it("打开：再剥离一次、栈只留文件名、标签 renderer / page、每分钟 5 条", async () => {
+    const { sdk, calls } = fakeSdk();
+    const document = { text: withPages(true) };
+    const { diagnostics } = install(document, sdk);
+    await diagnostics.refresh();
+    expect(diagnostics.reportPage(page)).toEqual({ accepted: true });
+    const [error, hint] = calls.captured[0] as [Error, Record<string, unknown>];
+    expect(error.message).toBe("boom [env] at ~/proj");
+    expect(error.stack).toContain("at render (index-abc.js:1:2)");
+    expect(error.stack).not.toContain("127.0.0.1");
+    expect(hint).toEqual({
+      tags: { shell: "desktop", process: "renderer", source: "page" },
+    });
+    for (let i = 0; i < 4; i += 1) diagnostics.reportPage(page);
+    expect(diagnostics.reportPage(page)).toEqual({ accepted: false });
+    expect(calls.captured).toHaveLength(5);
+    // 不认识的形状只答 false，不抛。
+    expect(diagnostics.reportPage({ kind: "x" })).toEqual({ accepted: false });
+    // 关掉立即停收。
+    document.text = withPages(false);
+    await diagnostics.refresh();
+    expect(diagnostics.reportPage(page)).toEqual({ accepted: false });
+    await diagnostics.stop();
+  });
+});

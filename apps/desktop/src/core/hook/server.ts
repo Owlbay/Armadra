@@ -13,7 +13,12 @@ import {
   credentialsDomain,
   persistedBinding,
 } from "../agent/credentials";
-import { amaCredentials } from "../agent/ama-credentials";
+import {
+  amaCredentials,
+  amaKeyScope,
+  persistedAmaModel,
+} from "../agent/ama-credentials";
+import { audit } from "../identity/audit";
 import { parseCustomAgents } from "../settings/custom-agents";
 import { settingsDomain } from "../settings";
 import { collabDispatcher } from "./collab";
@@ -282,10 +287,24 @@ export class HookServer {
         },
       };
     }
+    // 只答节点模型那一家（安全审查 L10）；没设模型时 ama 从已设的里挑缺省，
+    // 只能答全部，记一条审计。
+    const scope = amaKeyScope(persistedAmaModel(this.options.database, nodeId));
+    if (scope.kind === "unscoped") {
+      audit({
+        action: "ama.credential.unscoped",
+        target: nodeId,
+        detail: { reason: "no_model" },
+      });
+    }
     try {
       return {
         status: 200,
-        body: { variables: await keys.variables() },
+        body: {
+          variables: await keys.variables(
+            scope.kind === "provider" ? scope.providers : undefined,
+          ),
+        },
         headers: { "cache-control": "no-store" },
       };
     } catch {

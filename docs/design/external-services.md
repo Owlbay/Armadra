@@ -378,6 +378,7 @@ Pwned Passwords range API **免费、无需密钥、无限额**，k-匿名：只
 **方案**。`@sentry/electron`（桌面壳）与 `@sentry/node`（服务器壳）只在用户在「设置 → 通用 → 诊断」里**显式打开并填 DSN**时初始化（`ARMADRA_CRASH_REPORT_DSN` 作服务器壳配置键）；`beforeSend` 剥掉路径里的用户名、所有环境变量、`extra`；**不启用** minidump（Crashpad 转储含进程环境，可能带各 CLI 的 API key）——只报 JS 错误与 breadcrumbs；`autoSessionTracking: false`。core 自己不 import SDK（它不能依赖壳），壳通过 `platform` 注入一个 `reportError(error, context)`。
 **本地可验**：GlitchTip 容器（`glitchtip/glitchtip` + Postgres + Redis）收事件；单测断言 `beforeSend` 的剥离。
 **未配置时**：什么都不发；`process.on('uncaughtException')` 照旧写本地日志。
+**页面错误**（G5-19，契约 §30）：另一个开关 `diagnostics.reportPageErrors`（缺省关，DSN 生效后才显示）。页面自己挂 `error` / `unhandledrejection`，剥离后每分钟最多 5 条；桌面壳经 IPC `diagnostics:report` 交主进程（`ipcMode` 仍为 0），服务器壳 / Gateway 经 `POST /api/diagnostics/client-error`，收件一侧再剥离、限流。
 
 ### 11.3 许可证与声明
 
