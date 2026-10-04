@@ -30,10 +30,13 @@
 // 容器模式（补全计划 G3-5，B 档）：`--container=<镜像>` 时不用本机的构建产物，
 // 改为 `docker run` 那个镜像（`apps/server/docker/Dockerfile`），只发布到
 // 127.0.0.1 的随机端口，对外来源就是它；共享项目是挂进容器的临时目录
-// （`/projects`）。容器里没有 Chrome，第 7 步（浏览器节点）记 skipped。
+// （`/projects`）。缺省镜像里没有 Chromium，第 7 步（浏览器节点）记 skipped；
+// 镜像带 Chromium（构建参数 `WITH_CHROMIUM=1`，`health` 报 `headlessBrowser`）
+// 时照走，探针页由容器里自己的回环服务。
 //   docker build -f apps/server/docker/Dockerfile -t armadra-server:local .
 //   node tools/probes/server-e2e.mjs --container=armadra-server:local [输出目录]
-// 加 `--build` 时探针先自己 `docker build` 出这个标签（CI 的 B 档条目这样用）。
+// 加 `--build` 时探针先自己 `docker build` 出这个标签（CI 的 B 档条目这样用），
+// 再加 `--with-chromium` 时以 `--build-arg WITH_CHROMIUM=1` 构建。
 //
 // 反向代理模式（G5-16）：`--proxy=caddy` 时本机的服务器壳只监听回环、对外来源
 // 是 `https://localhost:<代理端口>`，前面放一个 Caddy 容器，配置就是
@@ -67,6 +70,7 @@ const image =
     .find((argument) => argument.startsWith("--container="))
     ?.slice("--container=".length) || undefined;
 const build = args.includes("--build");
+const withChromium = args.includes("--with-chromium");
 const proxy =
   args
     .find((argument) => argument.startsWith("--proxy="))
@@ -241,6 +245,7 @@ await h.run(async () => {
         "docker",
         [
           "build",
+          ...(withChromium ? ["--build-arg", "WITH_CHROMIUM=1"] : []),
           "-f",
           join(root, "apps/server/docker/Dockerfile"),
           "-t",
@@ -760,19 +765,37 @@ await h.run(async () => {
     );
   }
   // 起始页是探针自己的回环页面：不访问外网，画面里也有一段认得出的内容。
-  const page = createServer((_request, response) => {
-    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    response.end(
-      `<!doctype html><body style="margin:0;background:#0a84ff;color:#fff;font:48px sans-serif;display:grid;place-items:center;height:100vh">服务器壳里的浏览器</body>`,
+  const probePage = `<!doctype html><body style="margin:0;background:#0a84ff;color:#fff;font:48px sans-serif;display:grid;place-items:center;height:100vh">服务器壳里的浏览器</body>`;
+  let startPage;
+  if (image === undefined) {
+    const page = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(probePage);
+    });
+    page.listen(0, "127.0.0.1");
+    await once(page, "listening");
+    h.cleanups.push(() => page.close());
+    startPage = `http://127.0.0.1:${page.address().port}/`;
+  } else if (health.capabilities?.headlessBrowser === true) {
+    // 镜像带 Chromium：探针页放在容器自己的回环上（宿主的回环容器连不到），
+    // 随容器一起结束。
+    const port = 18_080;
+    execFileSync("docker", [
+      "exec",
+      "-d",
+      report.container.name,
+      "node",
+      "-e",
+      `require("node:http").createServer((q, r) => { r.writeHead(200, { "content-type": "text/html; charset=utf-8" }); r.end(${JSON.stringify(probePage)}); }).listen(${port}, "127.0.0.1");`,
+    ]);
+    startPage = `http://127.0.0.1:${port}/`;
+    report.container.chromium = true;
+  }
+  if (startPage !== undefined) {
+    await admin.evaluate(
+      `localStorage.setItem("armadra.browser.startPage", ${JSON.stringify(startPage)}); return true;`,
     );
-  });
-  page.listen(0, "127.0.0.1");
-  await once(page, "listening");
-  h.cleanups.push(() => page.close());
-  const startPage = `http://127.0.0.1:${page.address().port}/`;
-  await admin.evaluate(
-    `localStorage.setItem("armadra.browser.startPage", ${JSON.stringify(startPage)}); return true;`,
-  );
+  }
   await admin.navigate(`${origin}/?workspace=${shared.id}&board=${board.id}`);
   await admin.settle();
   await admin.waitFor(
@@ -859,10 +882,10 @@ await h.run(async () => {
   }
   second.drain();
   await second.navigate("about:blank");
-  if (image !== undefined) {
-    // 镜像里不带 Chrome，探针页也在宿主的回环上，容器连不到。
+  if (startPage === undefined) {
+    // 缺省镜像不带 Chromium。
     report.browserNode = "skipped";
-    step("容器模式：浏览器节点一步 skipped");
+    step("容器模式：镜像里没有 Chromium，浏览器节点一步 skipped");
     const errors = admin.drain().errors;
     report.adminErrors = errors;
     check(

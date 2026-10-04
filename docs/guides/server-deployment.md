@@ -55,6 +55,25 @@ node apps/server/out/main.js install --service-dir /etc/systemd/system --run-as 
 非 root 账号绑不了 80 / 443：用防火墙把 80→8080、443→8443 转发，或者在 unit 里加
 `AmbientCapabilities=CAP_NET_BIND_SERVICE` 后直接监听 443 并去掉 `ARMADRA_ACME_HTTP_PORT`。
 
+### 2.3 浏览器节点（可选 Chromium）
+
+缺省镜像不带浏览器：服务器壳上的浏览器节点要一个 Chromium，找不到时页面不给「新建浏览器」入口。要它就带构建参数自己构建：
+
+```sh
+docker build --build-arg WITH_CHROMIUM=1 -f apps/server/docker/Dockerfile -t armadra-server:chromium .
+```
+
+镜像里多装 Debian 的 `chromium` 与中日韩字体（解压后多约 770 MiB，缺省镜像约 440 MiB），入口脚本设 `ARMADRA_BROWSER_PATH=/usr/bin/chromium`（自己设了
+就以你的为准），`GET /health` 的 `capabilities.headlessBrowser` 变为 `true`。
+
+- **Chromium 自己的沙箱是关的**（`/etc/chromium.d/armadra` 里的 `--no-sandbox`）：容器缺省的 seccomp 不放用户命名空间，
+  SUID 沙箱也要 `CAP_SYS_ADMIN`，两条都起不来。隔离靠容器本身——uid 10001、没有额外 capability、只挂 `/data` 与项目目录。
+  能给容器配允许用户命名空间的 seccomp 时，删掉那个文件即可恢复沙箱。
+- `/dev/shm` 缺省只有 64 MiB，同一个文件里加了 `--disable-dev-shm-usage`；也可以 `--shm-size=1g` 后删掉它。
+- 浏览器节点能打开容器网络里够得到的任何地址：内网有不该被访问的服务时，用容器网络或防火墙限制出站。
+- 验证：`node tools/probes/server-e2e.mjs --container=armadra-server:chromium [--build --with-chromium]` 会照走浏览器节点一步
+  （探针页在容器自己的回环上），缺省镜像则记 skipped。
+
 ## 3. 域名与证书
 
 服务器壳只说 HTTPS（`__Host-` Cookie 要求安全上下文），证书有四个来源，`status` 与 `GET /api/gateway` 的 `tls.source` 会说明是哪一个。
