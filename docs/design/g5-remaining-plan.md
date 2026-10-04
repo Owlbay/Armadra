@@ -251,7 +251,7 @@ main 当前最大迁移 `0035_node_creators.sql`，契约最大节 §23。合入
 #### G5-10 推送补充（R-50、R-51、R-52）
 
 - 范围：（1）`core/schedule/engine.ts` 到点 / 失败 / 需处理时发 `schedule.fired` / `schedule.failed` / `schedule.attention`（形状由 G5-00 定，不带命令与输出）；`core/resources/` 的阈值判定从页面搬进 core（设置里已有阈值），越线发 `resources.threshold`（带 `sessionId`、`metric`、`value`）；（2）迁移 0037：`push_devices.kinds_json`（缺省全部），`PATCH /api/push/devices/{deviceId} { kinds }`，`triggers.ts` 按设备过滤；手机推送提示下多一组开关；（3）UnifiedPush：设备登记可带 `unifiedpush: { endpoint }`，传输 `transport-unifiedpush.ts` 向用户自己的 ntfy / 任意 UP 端点 POST 端到端信封（出站表登记为「用户配置的地址」），`push.transport` 不新增键——按设备有 UP 端点就走它。
-- 文件：`core/push/*`、`core/schedule/engine.ts`、`core/resources/{service,thresholds.ts（新）}.ts`、`core/db/migrations/0036_push_preferences.sql` + `migrations.lock`、共享层 `api/push.ts`、`apps/web/src/push/*`、`mobile/PushPermission.tsx`、`i18n/push.ts`、`core/net/outbound.ts`、契约 §27 与 §19 追加句。
+- 文件：`core/push/*`、`core/schedule/engine.ts`、`core/resources/{service,thresholds.ts（新）}.ts`、`core/db/migrations/0037_push_preferences.sql` + `migrations.lock`、共享层 `api/push.ts`、`apps/web/src/push/*`、`mobile/PushPermission.tsx`、`i18n/push.ts`、`core/net/outbound.ts`、契约 §27 与 §19 追加句。
 - 测试：`triggers.test` 四族事件真发；`transport-unifiedpush.test` 对 `push-sink` 的 UP 端点；`push-e2e` 加 UP 一条线与设备偏好过滤。dev-stack：`push-sink`、`ntfy`（profile）。
 
 #### G5-11 实时协同补充（R-44、R-45、R-46）
