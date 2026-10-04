@@ -43,6 +43,7 @@ import {
   webAsset,
 } from "./artifacts.mjs";
 import { verifyFeeds } from "./assemble.mjs";
+import { readReleaseNotes } from "./changelog.mjs";
 import { readCompatibility, releaseNote } from "./compatibility.mjs";
 import {
   parseChecksums,
@@ -340,11 +341,12 @@ async function main(argv) {
 
     stageAssets({ directory, version });
     const compatibility = readCompatibility();
-    const note = releaseNote({
-      version,
-      notes: `Armadra ${version} dry run.`,
-      compatibility,
-    });
+    // The note is what release.yml writes: this version's CHANGELOG.md section
+    // with the fence after it. A missing section fails here as it would there.
+    const changelog = readReleaseNotes({ version });
+    if (changelog.problem) problems.push(changelog.problem);
+    const notes = changelog.notes ?? `Armadra ${version} dry run.`;
+    const note = releaseNote({ version, notes, compatibility });
 
     // Neither the release note nor the public key is a release asset. The note
     // is the release's own body, and a key served from the same place as the
@@ -372,7 +374,7 @@ async function main(argv) {
     const manifest = writeManifest({
       directory,
       version,
-      notes: `Armadra ${version} dry run.`,
+      notes,
       targets: TARGETS,
       downloadUrl: (name) =>
         `${publicBase}/download/v${version}/${encodeURIComponent(name)}`,

@@ -3,7 +3,12 @@
  *
  *   node tools/release/assemble.mjs --dir <dir> --version X.Y.Z \
  *     --repo owner/name --tag vX.Y.Z [--unnotarized macOS,Windows] \
+ *     [--changelog CHANGELOG.md [--require-released] | --notes-from <file>] \
  *     [--note release-note.md]
+ *
+ * The release note's body is this version's section of `CHANGELOG.md`
+ * (`--changelog`, see changelog.mjs); a missing section fails before anything
+ * is signed. `--notes-from` reads a whole file instead, for tests and one-offs.
  *
  * In order: check that every file is one the updater can place, sign every
  * artifact, write latest.json from the signatures that produced, write
@@ -42,6 +47,7 @@ import {
   verifyChecksums,
   writeChecksums,
 } from "./checksums.mjs";
+import { readReleaseNotes } from "./changelog.mjs";
 import { readCompatibility, releaseNote } from "./compatibility.mjs";
 import { keyFromSecret, publicKeyFile } from "./minisign.mjs";
 import { SECRET_ENV, signDirectory, verifyDirectory } from "./sign.mjs";
@@ -256,11 +262,30 @@ async function main(argv) {
   const tag = flag(argv, "tag") || `v${version}`;
   if (!directory || !version || !repo) {
     console.error(
-      "usage: node tools/release/assemble.mjs --dir <dir> --version X.Y.Z --repo owner/name [--tag vX.Y.Z] [--unnotarized a,b] [--note file] [--rollout <percent>]",
+      "usage: node tools/release/assemble.mjs --dir <dir> --version X.Y.Z --repo owner/name [--tag vX.Y.Z] [--unnotarized a,b] [--changelog CHANGELOG.md [--require-released] | --notes-from file] [--note file] [--rollout <percent>]",
     );
     return 2;
   }
   const notesFile = flag(argv, "notes-from");
+  const changelog = flag(argv, "changelog");
+  if (notesFile && changelog) {
+    console.error("--notes-from and --changelog are two sources; give one");
+    return 2;
+  }
+  let notes = `Armadra ${version}.`;
+  if (notesFile) notes = readFileSync(notesFile, "utf8");
+  if (changelog) {
+    const read = readReleaseNotes({
+      file: resolve(changelog),
+      version,
+      requireReleased: argv.includes("--require-released"),
+    });
+    if (read.problem) {
+      console.error(`✗ ${read.problem}`);
+      return 1;
+    }
+    notes = read.notes;
+  }
   const result = await assemble({
     directory: resolve(directory),
     version,
@@ -270,7 +295,7 @@ async function main(argv) {
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean),
-    notes: notesFile ? readFileSync(notesFile, "utf8") : `Armadra ${version}.`,
+    notes,
     rollout: flag(argv, "rollout")
       ? { percent: Number(flag(argv, "rollout")) }
       : undefined,

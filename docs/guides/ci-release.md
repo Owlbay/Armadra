@@ -333,12 +333,13 @@ rpm 用 `rpm --import` 之后 `rpm -K`。本地演练：`node tools/release/sign
 
 ### 2.7 发布说明与 draft
 
-变更清单交给 GitHub 自己生成：
-`gh api repos/<repo>/releases/generate-notes -f tag_name=<tag> --jq .body`，它按两个
-标签之间合并的 PR 写，比任何手工维护的清单都更接近真实发生的事。结果喂给
-`assemble.mjs --notes-from`，由 `compatibility.mjs` 的 `releaseNote()` 在外面套上
-未签名平台的提示与兼容性围栏。标签还不存在时（分支演练）这条 API 会失败，退回
-一行标题，围栏照样有。
+说明正文是 `CHANGELOG.md` 里本版那一节：从 `## X.Y.Z` 起（标题后可跟「（未发布）」或
+「（2026-10-10）」），到下一个二级标题止（`tools/release/changelog.mjs`）。`verify` 作业先
+`changelog.mjs check` 一次，缺这一节就在构建之前失败；`assemble` 作业把它交给
+`assemble.mjs --changelog CHANGELOG.md`，由 `compatibility.mjs` 的 `releaseNote()` 在外面
+套上未签名平台的提示与兼容性围栏，`latest.json` 的 `notes` 也是这段正文。真建 Release
+的那一次（`publish`）还带 `--released` / `--require-released`：标题仍标「未发布」就失败——
+打标签前把它改成发布日期。分支演练与 `pnpm release:dry-run` 只要求这一节存在。
 
 `gh release create` 带 `--verify-tag`：标签不存在时拒绝，而不是替我们建一个指向当前
 提交的标签。预发布按标签里有没有 `-` 判定（`v0.2.0-rc.1`），与 semver 的读法一致。
