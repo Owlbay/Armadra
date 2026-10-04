@@ -89,6 +89,8 @@ export class HeadlessNode {
   private connection: CdpConnection | undefined;
   private readonly tabs = new Map<string, Tab>();
   private readonly bySession = new Map<string, Tab>();
+  /** Attaches in flight, by target: see {@link attach}. */
+  private readonly attaching = new Map<string, Promise<Tab>>();
   private activeTargetId = "";
   private viewport: Viewport = DEFAULT_VIEWPORT;
   private dialog: VerbDialog | undefined;
@@ -169,7 +171,28 @@ export class HeadlessNode {
     return targetId;
   }
 
-  private async attach(targetId: string, url: string): Promise<Tab> {
+  /**
+   * Attaches to a target once. Chromium announces a target it creates with
+   * `Target.targetCreated` BEFORE it answers the `Target.createTarget` that
+   * made it, so `openTab` and the event handler both reach here for every tab
+   * this process opens. Two `attachToTarget`s made two debugger sessions on
+   * one page — both prepared, one forgotten but still routed — and the live
+   * trace of a stalled `read --tab` showed exactly that pair right before it.
+   * The second caller now waits for the first one's attach.
+   */
+  private attach(targetId: string, url: string): Promise<Tab> {
+    const pending = this.attaching.get(targetId);
+    if (pending !== undefined) return pending;
+    const known = this.tabs.get(targetId);
+    if (known !== undefined) return Promise.resolve(known);
+    const started = this.attachNow(targetId, url).finally(() => {
+      this.attaching.delete(targetId);
+    });
+    this.attaching.set(targetId, started);
+    return started;
+  }
+
+  private async attachNow(targetId: string, url: string): Promise<Tab> {
     const connection = this.need();
     const attached = (await connection.send("Target.attachToTarget", {
       targetId,
@@ -263,24 +286,38 @@ export class HeadlessNode {
         ).map((info) => ({ type: info.type, cpuTime: info.cpuTime })),
       )
       .catch((error: unknown) => String((error as Error).message));
-    // Does the active page answer at all — and each of its cross-origin
-    // iframes, which live in renderers of their own? A command that needs
-    // nothing from the page's JavaScript, with a short bound.
-    const ping = async (sessionId: string): Promise<string> => {
+    // Does each tab answer at all — and each of its cross-origin iframes,
+    // which live in renderers of their own? Two questions, short-bounded:
+    // `Page.getFrameTree` is answered by the browser process, so on its own it
+    // says nothing about the renderer; `DOM.getDocument` (depth 0) is answered
+    // by the renderer's main thread. The stalled `read --tab` of the macOS
+    // runner was a background TAB whose browser side answered while its
+    // renderer did not; the active tab alone could not show that.
+    const ask = async (method: string, sessionId: string): Promise<string> => {
       const asked = Date.now();
       return connection
-        .send("Page.getFrameTree", {}, sessionId, 3_000)
+        .send(
+          method,
+          method === "DOM.getDocument" ? { depth: 0 } : {},
+          sessionId,
+          3_000,
+        )
         .then(() => `answered in ${Date.now() - asked} ms`)
         .catch((error: unknown) => String((error as Error).message));
     };
+    const ping = async (sessionId: string): Promise<string> =>
+      `${await ask("Page.getFrameTree", sessionId)}; renderer ${await ask("DOM.getDocument", sessionId)}`;
     const tab = this.activeTab();
-    if (tab !== undefined) {
-      report.page = await ping(tab.sessionId);
-      const frames: Record<string, string> = {};
-      for (const child of tab.session.childFrames())
+    if (tab !== undefined) report.page = await ping(tab.sessionId);
+    const pages: Record<string, string> = {};
+    const frames: Record<string, string> = {};
+    for (const each of this.tabs.values()) {
+      pages[each.sessionId] = await ping(each.sessionId);
+      for (const child of each.session.childFrames())
         frames[child.sessionId] = await ping(child.sessionId);
-      report.frames = frames;
     }
+    report.pages = pages;
+    report.frames = frames;
     return report;
   }
 
@@ -368,8 +405,9 @@ export class HeadlessNode {
           }
         )?.targetInfo;
         if (!info?.targetId || info.type !== "page") return;
-        if (this.tabs.has(info.targetId)) return;
         if (this.tabs.size === 0) return; // the first tab attaches itself
+        // `attach` is once per target: a tab `openTab` is opening is joined,
+        // not attached a second time.
         void this.attach(info.targetId, info.url ?? "").catch(() => undefined);
         return;
       }
@@ -479,6 +517,7 @@ export class HeadlessNode {
     this.viewer = undefined;
     this.tabs.clear();
     this.bySession.clear();
+    this.attaching.clear();
     this.connection?.close(reason);
     this.options.emit({
       type: "event",

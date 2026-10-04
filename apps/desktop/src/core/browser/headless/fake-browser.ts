@@ -62,6 +62,9 @@ export class FakeBrowser {
     };
   };
 
+  /** Whether `Target.createTarget` is preceded by `Target.targetCreated`. */
+  announceCreated = false;
+
   /** Which session id was handed out for a target. */
   sessionFor(targetId: string): string {
     return this.sessions.get(targetId) ?? "";
@@ -115,7 +118,16 @@ export class FakeBrowser {
       params: message.params ?? {},
       sessionId: message.sessionId ?? "",
     });
-    this.write({ id: message.id, result: this.answer(message) });
+    const result = this.answer(message);
+    // Chromium announces a target it created before it answers the command
+    // that created it.
+    if (message.method === "Target.createTarget" && this.announceCreated) {
+      const { targetId } = result as { targetId: string };
+      this.emit("Target.targetCreated", {
+        targetInfo: { targetId, type: "page", url: message.params?.url ?? "" },
+      });
+    }
+    this.write({ id: message.id, result });
   }
 
   private answer(message: {
