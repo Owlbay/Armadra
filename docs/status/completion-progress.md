@@ -1486,4 +1486,20 @@
 
 ## G5-27 不稳定用例（R-88、R-89、R-90）
 
-待填（第 3 组）。
+做了什么：
+
+- R-88 `approvals.test`「sweeps the files a killed client left behind」：CI 现场（run 37179985659）是 `sweepOrphans(dir, -1)` 得 0——Windows 上文件 mtime 比进程的 `Date.now()` 超前 ≥1 ms，`now - mtime > -1` 不成立。`core/agent/approvals.ts` 与 `core/hook/approvals.ts` 的 `sweepOrphans(directory, olderThanMs, now)` 改由调用方传时间（生产传 `Date.now()`）；用例用 `utimesSync` 钉住 mtime 并注入时钟，含「恰在阈值」「时钟落后于 mtime」两条。
+- mailbox `beforeEach` 10 秒超时（run 37197020176）：在 Windows CI 上给夹具各阶段计时（临时提交，已删）。两次提交在默认 `synchronous` 下中位 35 ms、p99 696 ms、最长 1.09 s，关掉后都是 0 ms；迁移模板每个测试文件建一次，中位 187 ms、最长 3.2 s，正好落在文件的第一个 `beforeEach`。夹具连接改成 `PRAGMA synchronous = OFF`（只用于测试库，生产的 `db/open.ts` 不动）；模板由 `testing/db-template.global.ts`（vitest `globalSetup`）整轮只建一次，再 `provide` 给各文件，没提供时仍退回每个文件自己建。
+- R-90 macOS 无头 `DOM.getDocument` 卡住：重新读 #78 的现场（job 111302997144），卡住的会话 `FEA8…` 在 `tabs` 里是**后台标签页**，不是 iframe 子会话。在它前面，`tabs new` 对同一个新目标发了两次 `Target.attachToTarget`：Chromium 先发 `targetCreated`、后答 `createTarget`，事件处理与 `openTab` 各附加了一次，同一页挂了两个调试会话。`headless/node.ts` 的 `attach` 改成按目标只附加一次，后来的调用方等待前一次。`diagnose()` 对每个标签页都问两件事：`Page.getFrameTree`（由浏览器进程回答）和 `DOM.getDocument`（由渲染进程回答）。原先只问前者，看不出渲染进程卡住。按计划，`cdp/session.ts` 给跨源 iframe 子会话单独设 5 秒超时（`CHILD_TIMEOUT_MS`）。超时的子会话标为静默：`childFrames()` 不再列出它，快照、文本查找、定位都跳过它；它只要再回答一条命令就恢复。快照仍用 `childTargetIds()` 排除静默子会话的框架，不经页面会话读它。整页截图和打印按有没有跨源 iframe 判断。
+- R-89 `server-container-e2e` 配对卡住：没有任何一次 CI 留下现场（ci / nightly 最近的失败 run 都翻过），本机容器模式连跑 15 次也都通过，所以**没能复现，修复是从代码推断的**。原来「后台服务」页只在挂载时看一次地址栏：自动检查失败一次，或者页面开着时片段换了，票就停在地址栏里，没有人去取。现在 `HostPage` 也监听 `hashchange`；带着票的检查失败后，隔 1 秒自动重试，最多两次。`HostIdentityPanel` 在可用状态下也监听 `hashchange`，取到票就配对。探针 `server-e2e.mjs` 每次没等到都留现场（`pairingFailures[]`，每次一张截图，票已抹掉），然后用 SIGUSR2 让服务器壳铸一张新票（容器里用 `docker kill --signal USR2`），先离开到 `about:blank` 再整页加载，最多三次。重试过就记一条「配对重试后完成」，偶发不会被悄悄吞掉。Windows 上的本机进程收不到 SIGUSR2，不重试。
+
+实测（macOS arm64，2026-10-04）：
+
+- `approvals.test` + `hook/approvals.test`、`collab/mailbox.test` + `db/fresh.fixture.test` 各连跑 20 次，全部通过（vitest 4.1 没有 `--repeat` 参数，用 shell 循环跑）。
+- `verbs.live` 连跑 20 次通过，`core/browser` 的单元测试 273 项通过；新加的「标签页只附加一次」「子会话不答就跳过」用例去掉修复后都会失败。
+- `server-e2e --container` 用本分支的镜像跑了 8 + 5 次，全部通过。故意让首张票作废时：修复前的镜像三次都配不上，修复后的镜像在第二次配对成功。
+
+没做 / 残留：
+
+- R-90 后台标签页的渲染进程为什么不回答，根因还没查明。修掉的是现场里紧挨在卡住前面的双重附加。下次再卡住时，`pages` 字段能区分是浏览器侧还是渲染侧不回答。
+- R-89 的修复是推断的，CI 上要看夜间作业以后还会不会出现「配对重试后完成」。
