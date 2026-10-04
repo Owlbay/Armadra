@@ -1047,9 +1047,29 @@
 
 待填（第 3 组）。
 
-## G5-26 依赖审计（R-84、R-85、R-86、R-87）
+## G5-26 依赖审计
 
-待填（第 0 组）。
+做了什么：
+
+- `ws` 8.18.3 → 8.21.0（与 Dependabot #4、手工 #13 同一改动；本包合入后由协调者关掉这两个 PR）。#13 里 `approvals.test` 阈值那一处归 G5-27，这里不带。
+- `uuid`（GHSA-w5hq-g745-h8pq，警报 #51）：`overrides` `"uuid@<11.1.1": 11.1.1`。旧的 7.0.3 来自 `@capacitor/cli` 的 `xcode`（手机壳开发依赖，不是 electron-builder），只调 `uuid.v4()`。mermaid 原本用 uuid 14.0.2，现在也解析到 11.1.1（mermaid 的范围是 `^11.1.0 || … || ^14.0.0`），整棵树只剩这一份。
+- `node-forge`（GHSA-86w9-cpqp-85rv，警报 #48，无修复版）：`acme-client` 最新仍是 5.4.0，仍依赖 `node-forge`。`acme.ts` 本来就自己拼 CSR，账户 JWS 走 `node:crypto`；`acme-client` 只在旧的 `forge` 导出里加载 `node-forge`。处理方式：`patches/acme-client@5.4.0.patch` 删掉 `forge` 导出、`src/crypto/forge.js` 与类型里那一行，再用 `"acme-client>node-forge": "-"` 去掉这个依赖。`node-forge` 不再安装，也不再出现在 `THIRD_PARTY_NOTICES.md` 里。
+- `braces`（#49）、`http-cache-semantics`（#50）都没有修复版（`http-cache-semantics` 今天发了 4.3.0，对照过源码，没有改 max-stale 那段），都只在构建期使用。锁在 lockfile 里，登记在 [CI 与发布](../guides/ci-release.md) §3.2。
+- `node tools/notices.mjs` 重新生成：少了 `node-forge`，`ws` / `uuid` 换了版本。
+
+实测（macOS arm64，2026-10-04）：
+
+- `require("acme-client")` 的导出只剩 `Client / directory / crypto / axios / setLogger`。`ARMADRA_DEV_STACK=1` 下 `acme.test` + `acme.pebble.test` 共 12 项全过，Pebble 真签发通过。
+- `xcode@3.0.1` + `uuid@11.1.1`：对 `apps/mobile/ios/App/App.xcodeproj` 做 `parseSync`、`generateUuid`、`addPbxGroup`、`writeSync`，都正常。
+- 全量验证见 PR。
+
+需用户在 GitHub 上 dismiss：
+
+- #49 `braces`、#50 `http-cache-semantics`：选「仅构建期 / 代码路径不可达」，理由见 ci-release §3.2。#48、#51 在本包合入后会随 lockfile 自动关闭，不用手动处理。
+
+没做：
+
+- 没有跑 `pnpm --filter @armadra/desktop dist`。`uuid` 不在桌面打包路径上；`acme-client` 由 `externalizeDepsPlugin` 外置，打包时从 `node_modules` 带上的是补丁后的版本。
 
 ## G5-27 不稳定用例（R-88、R-89、R-90）
 
