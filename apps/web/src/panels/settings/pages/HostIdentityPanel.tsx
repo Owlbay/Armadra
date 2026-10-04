@@ -128,6 +128,22 @@ export function HostIdentityPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 
+  // 页面开着时地址栏换上一张新票（同一标签页再贴一次配对链接只改片段）：
+  // 可用的身份面照样取走它配对，不等下一次挂载。
+  useEffect(() => {
+    if (!ready) return;
+    const onLink = () => {
+      if (working.current) return;
+      const pending = takePairingTicket();
+      if (!pending) return;
+      void run(async (current) => accept(current, await pairIdentity(pending)));
+    };
+    window.addEventListener("hashchange", onLink);
+    return () => window.removeEventListener("hashchange", onLink);
+    // 同上：只跟着「身份面能不能用」走。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
+
   const expiry =
     session && session.expiresAtUnixMs > 0
       ? new Intl.DateTimeFormat(locale, {

@@ -215,6 +215,19 @@ describe("HostIdentityPanel", () => {
     expect(mocks.resume).not.toHaveBeenCalled();
   });
 
+  it("pairs from a ticket that lands in the address bar while it is open", async () => {
+    render(<HostIdentityPanel hello={hello} />);
+    await waitFor(() => expect(mocks.resume).toHaveBeenCalled());
+    mocks.takeTicket.mockReturnValue("ticket-pasted-later");
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(mocks.pair).toHaveBeenCalledWith("ticket-pasted-later"),
+    );
+  });
+
   it("clears the pasted ticket immediately and uses no browser storage", async () => {
     render(<HostIdentityPanel hello={hello} />);
     const field = await screen.findByLabelText(

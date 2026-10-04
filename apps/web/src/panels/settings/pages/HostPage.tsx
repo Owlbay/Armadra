@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { useT } from "../../../app/preferences-store";
 import {
@@ -23,6 +23,10 @@ import { GatewaySection, type GatewayIdentity } from "./gateway/GatewaySection";
  * 登录了吗」，以及对外服务（Gateway，补全架构 §7）：开关、配对二维码与已配对
  * 设备。经 Gateway 打开时顶上多一个 CA 安装引导。
  */
+/** 带着配对票时检查失败的自动重试：次数与间隔。 */
+const AUTO_RETRIES = 2;
+const AUTO_RETRY_MS = 1_000;
+
 export function HostPage() {
   const t = useT();
   const id = useId();
@@ -45,11 +49,28 @@ export function HostPage() {
   }, []);
   // 从配对链接打开时自己检查一次：身份面要先确认服务身份才会取走票，这一步
   // 让人再点一次「检查连接」只是多一道没人知道的门槛。其余时候照旧等人点。
+  // 页面已经开着、地址栏里才换上一张新票（同一标签页再贴一次配对链接只改片
+  // 段、不重载）也要接住，否则那张票就停在地址栏里没人取。
+  const autoRetries = useRef(0);
   useEffect(() => {
-    if (hasPairingFragment()) void check();
-    // 只在打开这一页时看一次地址栏。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const onLink = () => {
+      if (!hasPairingFragment()) return;
+      autoRetries.current = 0;
+      void check();
+    };
+    onLink();
+    window.addEventListener("hashchange", onLink);
+    return () => window.removeEventListener("hashchange", onLink);
+  }, [check]);
+  // 带着票却没检查成功（服务刚起、第一次握手慢）：票还在地址栏里，隔一秒再
+  // 试，最多两次。人点的检查失败照旧只报错。
+  useEffect(() => {
+    if (state.status !== "error" || !hasPairingFragment()) return;
+    if (autoRetries.current >= AUTO_RETRIES) return;
+    autoRetries.current += 1;
+    const timer = setTimeout(() => void check(), AUTO_RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [state, check]);
   const message =
     state.status === "error"
       ? state.messageKey
