@@ -16,6 +16,7 @@ import {
   AMA_KEY_PROVIDERS,
   AMA_KEY_VARIABLES,
   AmaCredentials,
+  amaKeyScope,
   amaKeyVariable,
   amaSecretName,
   installAmaCredentialRoutes,
@@ -87,6 +88,43 @@ describe("ama's model keys", () => {
     ]);
     // The only copy at rest is the secret store's entry.
     expect(existsSync(join(root, "integration"))).toBe(false);
+  });
+
+  it("narrows the answer to the node's provider (security review L10)", async () => {
+    const root = tempDir("armadra-ama-scope-");
+    const credentials = new AmaCredentials(
+      plainFileBackend(join(root, "secrets")),
+    );
+    await credentials.set("openai", FAKE_KEY);
+    await credentials.set("deepseek", "sk-other");
+    // Before: every ama node redeemed every set key, whatever its model.
+    expect(await credentials.variables()).toHaveLength(2);
+    expect(await credentials.variables(["deepseek"])).toEqual([
+      { variable: "AMA_API_KEY_DEEPSEEK", value: "sk-other" },
+    ]);
+    expect(await credentials.variables([])).toEqual([]);
+  });
+
+  it("reads the provider off ama's `<provider>/<model>`", () => {
+    expect(amaKeyScope("deepseek/deepseek-chat")).toEqual({
+      kind: "provider",
+      providers: ["deepseek"],
+    });
+    expect(amaKeyScope("volcengine/doubao@coding")).toEqual({
+      kind: "provider",
+      providers: ["volcengine"],
+    });
+    expect(amaKeyScope({ id: "gpt-x", provider: "OpenAI" })).toEqual({
+      kind: "provider",
+      providers: ["openai"],
+    });
+    // A provider that takes no key here gets none, not all.
+    for (const keyless of ["ollama/qwen", "chatgpt/gpt-x", "packy/grok"]) {
+      expect(amaKeyScope(keyless)).toEqual({ kind: "provider", providers: [] });
+    }
+    for (const none of [undefined, "", "deepseek-chat", "/x", {}, 7]) {
+      expect(amaKeyScope(none)).toEqual({ kind: "unscoped" });
+    }
   });
 });
 

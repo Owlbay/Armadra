@@ -43,6 +43,8 @@ export interface OAuthHarness {
   readonly providers: OAuthProvider[];
   readonly security: ReturnType<typeof createIdentitySecurity>;
   publicOrigins: string[];
+  /** `identity.mfa.requireFor`，缺省 `none`；测试可改。 */
+  mfaRequireFor: "none" | "members" | "all";
   readonly secrets: Map<string, string>;
   close(): Promise<void>;
 }
@@ -73,6 +75,10 @@ export async function oauthHarness(options: {
   const store = new IdentityStore(opened.database);
   const service = new IdentityService(store, INSTANCE);
   const backend = plainFileBackend(join(directory, "secrets"));
+  const state = {
+    publicOrigins: [options.origin],
+    mfaRequireFor: "none" as OAuthHarness["mfaRequireFor"],
+  };
   const security = createIdentitySecurity({
     store,
     secrets: () => backend,
@@ -80,7 +86,7 @@ export async function oauthHarness(options: {
       passwordMinLength: 12,
       rpId: "",
       publicOrigins: [],
-      mfaRequireFor: "none",
+      mfaRequireFor: state.mfaRequireFor,
     }),
   });
   const identity = new IdentityHttp({
@@ -90,9 +96,6 @@ export async function oauthHarness(options: {
     security,
   });
   const secrets = new Map<string, string>();
-  const state = {
-    publicOrigins: [options.origin],
-  };
   const oauth = createOAuthHttp(undefined, {
     store,
     service,
@@ -159,6 +162,12 @@ export async function oauthHarness(options: {
     },
     set publicOrigins(value: string[]) {
       state.publicOrigins = value;
+    },
+    get mfaRequireFor() {
+      return state.mfaRequireFor;
+    },
+    set mfaRequireFor(value) {
+      state.mfaRequireFor = value;
     },
     secrets,
     close: async () => {

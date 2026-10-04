@@ -2,6 +2,10 @@ import type { ChildProcess } from "node:child_process";
 import { readFileSync, unwatchFile, watchFile } from "node:fs";
 import { join } from "node:path";
 import {
+  ClientReports,
+  type ClientReportOutcome,
+} from "../core/diagnostics/client-report";
+import {
   CRASH_REPORT_ENV,
   type ErrorSource,
   type ScrubContext,
@@ -9,6 +13,7 @@ import {
   dsnHost,
   errorFromMessage,
   isCrashReportMessage,
+  pageErrorsFromSettings,
   scrubBreadcrumb,
   scrubContext,
   scrubEvent,
@@ -26,6 +31,11 @@ import {
  * 交来的那些（core 那边已剥离一遍）。**不启用 minidump**——Crashpad 的转储含进
  * 程环境，可能带各 CLI 的 API key；不开会话追踪、不开性能追踪、不注入渲染进程、
  * 不开 Sentry 的渲染进程 IPC；每条事件与面包屑发出前再过一遍 `beforeSend` 剥离。
+ *
+ * 页面的 JS 错误（G5-19，契约 §30）不靠 SDK 的渲染进程集成：页面在
+ * `diagnostics.reportPageErrors` 打开时自己收、自己剥离，经 IPC
+ * `diagnostics:report` 交到 {@link Diagnostics.reportPage}；这里按设置再判一次、
+ * 限流、用本机的家目录与环境变量再剥一遍，才交给 SDK。
  */
 
 /** 用到的那一小块 SDK，测试注入假的。 */
@@ -71,6 +81,11 @@ export interface Diagnostics {
   attach(child: Pick<ChildProcess, "on">): void;
   /** 报一个主进程里的错误；关着时什么都不做。 */
   capture(error: unknown, source: ErrorSource): void;
+  /**
+   * 页面经 `diagnostics:report` 交来的一条（契约 §30）。没打开页面错误上报或
+   * 崩溃上报关着答 `{ accepted: false }`；形状不对、超限也只答 `false`。
+   */
+  reportPage(report: unknown): { accepted: boolean };
   stop(): Promise<void>;
 }
 
@@ -142,9 +157,24 @@ export function installDiagnostics(options: DiagnosticsOptions): Diagnostics {
   let sdk: SentryLike | undefined;
   let active: string | null = null;
   let configured: string | null = null;
+  let pageErrors = false;
   let applying: Promise<void> = Promise.resolve();
 
-  const read = (): string | null => dsnFromSettings(readSettings());
+  const read = (): string | null => {
+    const text = readSettings();
+    pageErrors = pageErrorsFromSettings(text);
+    return dsnFromSettings(text);
+  };
+
+  const pages = new ClientReports({
+    enabled: () => pageErrors && active !== null && sdk !== undefined,
+    report: (error) => {
+      sdk?.captureException(error, {
+        tags: { shell: "desktop", process: "renderer", source: "page" },
+      });
+    },
+    scrub: () => scrub,
+  });
 
   const apply = async (wanted: string | null): Promise<void> => {
     configured = wanted;
@@ -217,6 +247,10 @@ export function installDiagnostics(options: DiagnosticsOptions): Diagnostics {
       });
     },
     capture,
+    reportPage(report) {
+      const outcome: ClientReportOutcome = pages.accept("renderer", report);
+      return { accepted: outcome.kind === "accepted" };
+    },
     async stop() {
       process.off("uncaughtExceptionMonitor", onUncaught);
       if (watching) unwatchFile(settingsPath);

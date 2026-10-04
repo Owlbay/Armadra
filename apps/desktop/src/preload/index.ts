@@ -149,6 +149,17 @@ export interface ArmadraDesktopApi {
     refresh(): Promise<{ ok: boolean }>;
   };
   /**
+   * 页面的一条 JS 错误（契约 §30），页面已剥离过；主进程再判开关、限流、剥离。
+   */
+  readonly diagnostics: {
+    report(report: {
+      kind: "error" | "rejection";
+      name: string;
+      message: string;
+      stack: string;
+    }): Promise<{ accepted: boolean }>;
+  };
+  /**
    * The absolute path of a dropped or picked `File`. The page hands the path
    * to the Runtime, which is the process allowed to read it; the bytes never
    * travel through the renderer. Replaces the Rust shell's drag-drop event, and is
@@ -214,6 +225,10 @@ const api: ArmadraDesktopApi = {
   },
   gateway: {
     refresh: () => ipcRenderer.invoke(IPC.gatewayRefresh.channel),
+  },
+  diagnostics: {
+    report: (report) =>
+      ipcRenderer.invoke(IPC.diagnosticsReport.channel, report),
   },
   pathForFile: (file) => webUtils.getPathForFile(file),
 };

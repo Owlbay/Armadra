@@ -6,8 +6,11 @@ import * as Sentry from "@sentry/node";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { EventBus } from "../../desktop/src/core/bus";
+import { ClientReports } from "../../desktop/src/core/diagnostics/client-report";
+import { scrubContext } from "../../desktop/src/core/diagnostics/crash";
+import { installRoutes as installClientErrorRoutes } from "../../desktop/src/core/diagnostics/routes";
 import { CoreServer } from "../../desktop/src/core/http/server";
-import { createLog } from "../../desktop/src/core/platform";
+import { createLog, reportError } from "../../desktop/src/core/platform";
 import { tempDir } from "../../desktop/src/core/testing/temp-dir";
 import { CRASH_REPORT_DSN_ENV, installServerDiagnostics } from "./diagnostics";
 import { serverPlatform } from "./platform-node";
@@ -218,6 +221,99 @@ describe.skipIf(!enabled)("崩溃上报 → dev-stack GlitchTip", () => {
       );
     } finally {
       await stop();
+    }
+  }, 120_000);
+
+  /**
+   * 页面错误（契约 §30）：真 core 路由 `POST /api/diagnostics/client-error`
+   * → 服务端再剥离 → `platform.reportError` → 真 `@sentry/node` → GlitchTip。
+   * 页面那一侧故意不剥离，看服务端这一道够不够。
+   */
+  it("页面错误经 client-error 路由到达，且剥离过", async () => {
+    const marker = `probe-page-${randomBytes(6).toString("hex")}`;
+    const session = `${randomBytes(16).toString("hex")}.${randomBytes(32).toString("base64url")}`;
+    const env = {
+      [CRASH_REPORT_DSN_ENV]: seeded.dsn,
+      [envName]: secret,
+      HOME: homedir(),
+    };
+    const dataDir = tempDir("crash-probe-page-");
+    const log = createLog("error", () => {});
+    const diagnostics = installServerDiagnostics({
+      dataDir,
+      env,
+      release: "0.0.0-probe",
+      log,
+      loadSdk: () => Sentry,
+      watch: false,
+      exit: () => {},
+    });
+    await diagnostics.refresh();
+    const platform = {
+      ...serverPlatform({ dataDir, appVersion: "0", isPackaged: false, log }),
+      reportError: diagnostics.reportError,
+    };
+    const server = new CoreServer({
+      platform,
+      bus: new EventBus(),
+      version: "0",
+    });
+    const scrub = scrubContext(env);
+    installClientErrorRoutes(
+      server,
+      new ClientReports({
+        enabled: () => diagnostics.active() !== null,
+        report: (error) => reportError(platform, error, { source: "page" }),
+        scrub: () => scrub,
+      }),
+    );
+    const listener = server.createListener();
+    await new Promise<void>((resolve) =>
+      listener.listen(0, "127.0.0.1", resolve),
+    );
+    const { port } = listener.address() as AddressInfo;
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${port}/api/diagnostics/client-error`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            kind: "error",
+            name: "TypeError",
+            message: `${marker} key ${secret} session ${session} at ${homedir()}/secret-project/a.ts via https://probe-user:pw@gw.test/x?token=abc#pair=${session}`,
+            stack: [
+              `TypeError: ${marker}`,
+              "    at render (https://gw.test:8443/assets/index-probe.js?v=1:12:34)",
+              "    at load (/Users/probe-user/proj/src/canvas.ts:5:6)",
+            ].join("\n"),
+          }),
+        },
+      );
+      expect(response.status).toBe(202);
+      await Sentry.flush(5_000);
+      const event = await eventWith(seeded.token, marker, 60_000);
+      expect(event, "GlitchTip 没收到页面错误").not.toBe(null);
+      const text = JSON.stringify(event);
+      expect(text).toContain(marker);
+      expect(text).not.toContain(secret);
+      expect(text).not.toContain(session);
+      expect(text).not.toContain(homedir());
+      expect(text).not.toContain("probe-user");
+      expect(text).not.toContain("token=abc");
+      expect(text).not.toContain("gw.test:8443");
+      expect(text).toContain("index-probe.js");
+      expect(text).toContain("canvas.ts");
+      const tags = (event!.tags ?? []) as { key: string; value: string }[];
+      expect(tags).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ key: "source", value: "page" }),
+          expect.objectContaining({ key: "shell", value: "server" }),
+        ]),
+      );
+    } finally {
+      await server.close();
+      await diagnostics.stop();
     }
   }, 120_000);
 

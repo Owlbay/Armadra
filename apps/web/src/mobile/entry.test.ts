@@ -36,7 +36,8 @@ vi.mock("../api/identity", async (original) => ({
   },
 }));
 
-import { prepareEntry } from "./entry";
+import { IdentityRequestError } from "../api/identity";
+import { prepareEntry, ticketWithRefresh } from "./entry";
 
 beforeEach(() => {
   Object.assign(mocks, {
@@ -134,5 +135,33 @@ describe("入口分支", () => {
       `/#link=${encodeURIComponent("https://evil.example/#pair=x")}`,
     );
     await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+  });
+});
+
+describe("ticketWithRefresh", () => {
+  const expired = () => new IdentityRequestError(401, "UNAUTHENTICATED", "", 0);
+
+  it("访问密钥过期时轮转一次再换票", async () => {
+    const fetchTicket = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(expired())
+      .mockResolvedValueOnce("T2");
+    const refresh = vi.fn(async () => true);
+    await expect(ticketWithRefresh(fetchTicket, refresh)).resolves.toBe("T2");
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(fetchTicket).toHaveBeenCalledTimes(2);
+  });
+
+  it("刷新不成、或不是 401，原样抛出", async () => {
+    const refresh = vi.fn(async () => false);
+    await expect(
+      ticketWithRefresh(() => Promise.reject(expired()), refresh),
+    ).rejects.toBeInstanceOf(IdentityRequestError);
+    const other = new IdentityRequestError(403, "PERMISSION_DENIED", "", 0);
+    const untouched = vi.fn(async () => true);
+    await expect(
+      ticketWithRefresh(() => Promise.reject(other), untouched),
+    ).rejects.toBe(other);
+    expect(untouched).not.toHaveBeenCalled();
   });
 });

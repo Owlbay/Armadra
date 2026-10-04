@@ -93,6 +93,21 @@ describe("通用页的崩溃上报", () => {
     expect(runtimeSettings.calls).toBe(0);
   });
 
+  it("没有 DSN 时没有「包含页面错误」；有了才出现，缺省关，切换即存", () => {
+    render(<GeneralPage />);
+    expect(screen.queryByRole("switch", { name: "包含页面错误" })).toBeNull();
+    cleanup();
+    settings.data = { diagnostics: { crashReportDsn: DSN } };
+    render(<GeneralPage />);
+    const pages = screen.getByRole("switch", { name: "包含页面错误" });
+    expect(pages.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(pages);
+    expect(save.mutate).toHaveBeenCalledWith(
+      { diagnostics: { reportPageErrors: true } },
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
+  });
+
   it("DSN 规则与壳一致", () => {
     expect(isCrashReportDsn("http://k@127.0.0.1:8000/1")).toBe(true);
     expect(isCrashReportDsn("https://host/1")).toBe(false);

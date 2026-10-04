@@ -15,6 +15,11 @@ import type { SecretBackend } from "../secrets/backend";
 import { posixLauncher } from "../hook/install/launcher";
 import { type HookFixture, hookFixture } from "../hook/fixture";
 import {
+  type AuditEvent,
+  installAuditSink,
+  resetAuditSink,
+} from "../identity/audit";
+import {
   AMA_KEY_VARIABLES,
   AmaCredentials,
   setAmaCredentials,
@@ -47,6 +52,7 @@ function memoryBackend(): SecretBackend {
 const temporary: string[] = [];
 afterEach(() => {
   setAmaCredentials(undefined);
+  resetAuditSink();
   for (const dir of temporary.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -92,6 +98,57 @@ describe.skipIf(process.platform === "win32")(
         )
         .run(JSON.stringify({ id }), one.nodeId);
     }
+
+    it("answers only the node model's provider; without a model, all and audited (L10)", async () => {
+      const one = hookFixture();
+      hooks.push(one);
+      const keys = new AmaCredentials(memoryBackend());
+      await keys.set("deepseek", KEY);
+      await keys.set("openai", "sk-openai-FAKE");
+      setAmaCredentials(keys);
+      const events: AuditEvent[] = [];
+      installAuditSink((event) => events.push(event));
+      const token = one.service.issueNodeToken(one.nodeId);
+      const good = {
+        "x-armadra-hook-token": one.bearer,
+        "x-armadra-node-token": token,
+      };
+      const setAgent = (agent: Record<string, unknown>) =>
+        one.context.database
+          .prepare(
+            "UPDATE nodes SET data_json = json_set(data_json, '$.agent', json(?)) WHERE id = ?",
+          )
+          .run(JSON.stringify(agent), one.nodeId);
+
+      setAgent({ id: "ama", model: "deepseek/deepseek-chat" });
+      const scoped = await post(one, { nodeId: one.nodeId }, good);
+      expect(scoped.status).toBe(200);
+      expect(scoped.body).toEqual({
+        variables: [{ variable: "AMA_API_KEY_DEEPSEEK", value: KEY }],
+      });
+      expect(JSON.stringify(scoped.body)).not.toContain("sk-openai-FAKE");
+
+      setAgent({ id: "ama", model: "ollama/qwen3" });
+      expect((await post(one, { nodeId: one.nodeId }, good)).body).toEqual({
+        variables: [],
+      });
+      expect(events).toEqual([]);
+
+      setAgent({ id: "ama" });
+      const unscoped = await post(one, { nodeId: one.nodeId }, good);
+      expect(
+        (unscoped.body as { variables: unknown[] }).variables,
+      ).toHaveLength(2);
+      expect(events).toEqual([
+        {
+          action: "ama.credential.unscoped",
+          target: one.nodeId,
+          detail: { reason: "no_model" },
+        },
+      ]);
+      expect(JSON.stringify(events)).not.toContain(KEY);
+      resetAuditSink();
+    });
 
     it("answers the keys only to an ama node's verified token", async () => {
       const one = hookFixture();

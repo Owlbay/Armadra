@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 
+import { accessChanged } from "../identity/gate";
 import { type RunningCore, run } from "../main";
 import { settingsDomain } from "../settings";
 import { tempDir } from "../testing/temp-dir";
@@ -532,6 +533,60 @@ describe("原生 App 的 Bearer 模式", () => {
         })
       ).status,
     ).toBe(400);
+  });
+});
+
+describe("长连接按会话复核（安全审查 L1）", () => {
+  it("刷新过访问密钥的流照旧；登出之后以 4403 关", async () => {
+    const payload = await pairing();
+    const paired = await remote("/api/identity/pair", {
+      method: "POST",
+      origin: APP,
+      body: { ticket: payload.ticket },
+    });
+    expect(paired.status).toBe(200);
+    const first = JSON.parse(paired.body) as {
+      csrfToken: string;
+      native: { accessToken: string; refreshToken: string };
+    };
+    const issued = await remote("/api/identity/ws-ticket", {
+      method: "POST",
+      origin: APP,
+      bearer: first.native.accessToken,
+    });
+    const { ticket } = JSON.parse(issued.body) as { ticket: string };
+    const opened = await stream(`/api/workspaces/${workspaceId}/events`, {
+      headers: { origin: APP },
+      protocols: [`armadra-ticket.${ticket}`],
+    });
+    expect(opened.status).toBe(101);
+    if (!("socket" in opened)) return;
+
+    // 页面轮转了访问密钥：升级时那把已经作废，会话还是同一个。原来复核拿
+    // 升级时那把认，随后任何一次授权变化都会把这条流关掉。
+    const refreshed = await remote("/api/identity/session/refresh", {
+      method: "POST",
+      origin: APP,
+      bearer: first.native.refreshToken,
+      headers: { "x-armadra-csrf": first.csrfToken },
+    });
+    expect(refreshed.status).toBe(200);
+    const second = JSON.parse(refreshed.body) as {
+      csrfToken: string;
+      native: { refreshToken: string };
+    };
+    accessChanged();
+    await new Promise((done) => setTimeout(done, 100));
+    expect(opened.socket.readyState).toBe(WebSocket.OPEN);
+
+    const loggedOut = await remote("/api/identity/session/logout", {
+      method: "POST",
+      origin: APP,
+      bearer: second.native.refreshToken,
+      headers: { "x-armadra-csrf": second.csrfToken },
+    });
+    expect(loggedOut.status).toBeLessThan(300);
+    expect(await opened.closed).toBe(4403);
   });
 });
 

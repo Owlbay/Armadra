@@ -60,8 +60,27 @@ export function parseArguments(argv: readonly string[]): Arguments {
 export interface RunOptions {
   readonly argv?: readonly string[];
   readonly platform?: NodeJS.Platform;
+  readonly env?: NodeJS.ProcessEnv;
   readonly log?: (line: string) => void;
   readonly idleExitMs?: number;
+  readonly orphanExitMs?: number;
+}
+
+/**
+ * Overrides how long a host with no live session and no client stays
+ * (`server.ts` `DEFAULT_ORPHAN_EXIT_MS`). For the acceptance probe, which has
+ * to start a host and then hand it to an uninstaller; an environment variable
+ * rather than an option because the command line takes exactly one argument.
+ */
+export const ORPHAN_EXIT_ENV = "ARMADRA_SESSION_HOST_ORPHAN_EXIT_MS";
+
+/** A positive whole number of milliseconds, or nothing. */
+export function orphanExitFromEnv(env: NodeJS.ProcessEnv): number | undefined {
+  const raw = env[ORPHAN_EXIT_ENV];
+  if (raw === undefined || !/^[1-9][0-9]{0,8}$/.test(raw.trim())) {
+    return undefined;
+  }
+  return Number(raw.trim());
 }
 
 /**
@@ -107,6 +126,8 @@ export async function run(options: RunOptions = {}): Promise<number> {
     if (claim.tookOverStaleLock) {
       log("took over a lock left behind by a host that is no longer serving");
     }
+    const orphanExitMs =
+      options.orphanExitMs ?? orphanExitFromEnv(options.env ?? process.env);
     host = new SessionHost({
       dataDir,
       endpoint,
@@ -116,6 +137,7 @@ export async function run(options: RunOptions = {}): Promise<number> {
       ...(options.idleExitMs === undefined
         ? {}
         : { idleExitMs: options.idleExitMs }),
+      ...(orphanExitMs === undefined ? {} : { orphanExitMs }),
     });
     await host.listen();
   } catch (error) {
@@ -165,7 +187,7 @@ async function served(
           resolve();
         });
     };
-    host.onLeaving(() => leave("idle"));
+    host.onLeaving((reason) => leave(reason));
     for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"] as const) {
       // A signal this platform does not have throws on `process.on`; that is a
       // reason to skip it, not to fail to start.
