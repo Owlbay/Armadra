@@ -180,6 +180,9 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
     ],
     env,
     domains: DOMAINS,
+    // 回环匿名不按本机主人（契约 §3.2，安全审查 L9）：服务器壳的页面走 Cookie
+    // 会话，同机别的进程打 core 的回环监听也得带凭据；环境变量也开不了它。
+    loopbackAnonymousOwner: false,
     stdout,
     ...(options.moduleDir === undefined
       ? {}
