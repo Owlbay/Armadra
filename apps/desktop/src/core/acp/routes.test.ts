@@ -334,9 +334,9 @@ describe("the ACP session routes", () => {
     ]);
   });
 
-  it("has no model choice while the client lacks configOptions (§26.2)", async () => {
-    // `@armadra/agent` 0.6.7 的客户端不自报 `configOptions`：与之前一样，没有
-    // 目录、改不了模型，日志里也没有挂起的 elicitation。
+  it("has no model choice while the agent offers no config options (§26.2)", async () => {
+    // 假 Agent 不带 `--config-options` 时开会话不答 `configOptions`：没有目录、
+    // 改不了模型，日志里也没有挂起的 elicitation。
     open = await acpCore();
     const nodeId = await open.node();
     const row = await session(open, nodeId);

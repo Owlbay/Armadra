@@ -2,13 +2,12 @@ import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { fakeAcpAgentPath } from "@armadra/agent/acp";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { getAgentStatus } from "../agent/status";
 import type { WorkspaceEvent } from "../bus";
 import { tempDir } from "../testing/temp-dir";
 import { acpClientFeatures } from "./client";
-import { featureAgentPath } from "./feature-fixture";
 import { type AcpCore, FAKE_AGENT, acpCore, until } from "./fixture";
 import { type AcpHostSession, startAcp } from "./host";
 import { AcpMirror, mirrorPath } from "./mirror";
@@ -17,19 +16,11 @@ import { AcpSession, type AcpSessionSink } from "./session";
 
 /**
  * 契约 §26.1 / §26.2：客户端自报 `elicitation` / `configOptions` 时的那条路。
- * 上游 0.6.7 还没有这两样，用例把 `AcpClient` 换成 `feature-fixture.ts` 里补出
- * 能力的子类（就是要上游加的那一版的形状），对着会发 `elicitation/create`、
- * 答 `configOptions` 的假 Agent（真子进程）。
+ * 用的是上游（`@armadra/agent` ≥ 0.6.8）真的 `AcpClient` 与它的假 Agent（真子
+ * 进程）：`[elicit]` 发 `elicitation/create`，`--config-options` 答一个模型配置项。
  */
 
-vi.mock("@armadra/agent/acp", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@armadra/agent/acp")>();
-  const { withFeatures } = await import("./feature-fixture");
-  return { ...actual, AcpClient: withFeatures(actual.AcpClient) };
-});
-
 const NODE = "11111111-2222-4333-8444-555555555555";
-const AGENT = () => featureAgentPath(fakeAcpAgentPath());
 
 const sessions: AcpSession[] = [];
 const dirs: string[] = [];
@@ -80,7 +71,7 @@ async function open(options: { modelId?: string } = {}) {
   });
   const host: AcpHostSession = await startAcp({
     program: process.execPath,
-    args: [AGENT()],
+    args: [fakeAcpAgentPath(), "--config-options"],
     cwd: tmpdir(),
     ...(options.modelId === undefined ? {} : { modelId: options.modelId }),
     ...session.callbacks(),
@@ -273,7 +264,7 @@ describe("the routes with the features (§26)", () => {
   }
 
   it("lists the models with the log and sets one with PUT …/model", async () => {
-    core = await acpCore({ agentPath: AGENT() });
+    core = await acpCore({ configOptions: true });
     const { rowId } = await started(core);
     const log = await core.core.call("GET", `/api/acp/sessions/${rowId}/log`);
     expect((log.body as { models: unknown }).models).toEqual({
@@ -310,7 +301,7 @@ describe("the routes with the features (§26)", () => {
   });
 
   it("records an elicitation as an approval, checks the answer and never stores the content", async () => {
-    core = await acpCore({ agentPath: AGENT() });
+    core = await acpCore({ configOptions: true });
     const seen = events(core);
     const { nodeId, rowId } = await started(core);
     const prompt = await core.core.call(
@@ -420,7 +411,7 @@ describe("the routes with the features (§26)", () => {
   });
 
   it("lets the header's deny button decline an elicitation", async () => {
-    core = await acpCore({ agentPath: AGENT() });
+    core = await acpCore({ configOptions: true });
     const seen = events(core);
     const { rowId } = await started(core);
     await core.core.call("POST", `/api/acp/sessions/${rowId}/prompt`, {
@@ -450,7 +441,7 @@ describe("the routes with the features (§26)", () => {
   });
 
   it("refuses to switch drivers while an elicitation waits, and cancels it on cancel", async () => {
-    core = await acpCore({ agentPath: AGENT() });
+    core = await acpCore({ configOptions: true });
     const seen = events(core);
     const { nodeId, rowId } = await started(core);
     await core.core.call("POST", `/api/acp/sessions/${rowId}/prompt`, {

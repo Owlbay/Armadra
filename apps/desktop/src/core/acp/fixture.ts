@@ -65,8 +65,8 @@ export async function until<T>(
 export async function acpCore(
   options: {
     minimal?: boolean;
-    /** 换一个假 Agent 程序（契约 §26 的用例：`feature-fixture.ts`）。 */
-    agentPath?: string;
+    /** 假 Agent 开会话答模型配置项（契约 §26.2 的用例：`--config-options`）。 */
+    configOptions?: boolean;
     /** 自定义条目的基础 CLI；缺省 `opencode`。 */
     baseAgent?: string;
     /** 节点凭据用的密钥后端（缺省按数据目录解析）。 */
@@ -100,8 +100,9 @@ export async function acpCore(
           label: "Fake ACP",
           launchCmd: process.execPath,
           args: [
-            options.agentPath ?? fakeAcpAgentPath(),
+            fakeAcpAgentPath(),
             ...(options.minimal ? ["--minimal"] : []),
+            ...(options.configOptions ? ["--config-options"] : []),
           ],
           baseAgent: options.baseAgent ?? "opencode",
         },
