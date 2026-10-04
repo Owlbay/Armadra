@@ -54,6 +54,21 @@ import { badRequest } from "../workspaces/support";
  */
 export const SETTLE_MS = 120;
 
+/**
+ * When a newly created directory watcher looks again on its own, in ms.
+ *
+ * `fs.watch` returns before the platform stream is live. On macOS the FSEvents
+ * stream starts on its own thread a moment later and only reports what happens
+ * from then on: a file changed in that gap is never reported at all (measured:
+ * a write right after `fs.watch` was missed 11 times in 100; 50 ms later, 0).
+ * The version a registration answers is read before the watcher exists, so
+ * the gap is real, and an editor that opened a file just as something wrote it
+ * would show the old text until the next change. Two late looks — the same
+ * hash comparison an event triggers — close it; an unchanged file publishes
+ * nothing.
+ */
+export const STARTUP_RECHECK_MS = [250, 1_500] as const;
+
 export interface FileVersion {
   readonly path: string;
   readonly exists: boolean;
@@ -165,6 +180,8 @@ interface WatchedFile {
 interface WatchedDirectory {
   readonly watcher: FSWatcher;
   count: number;
+  /** The late looks of {@link STARTUP_RECHECK_MS}, cleared on close. */
+  readonly rechecks: readonly NodeJS.Timeout[];
 }
 
 interface WorkspaceWatch {
@@ -269,7 +286,12 @@ export function register(
           // arrives as an event from whichever watcher is still live.
         });
         watcher.unref();
-        entry.directories.set(parent, { watcher, count: 1 });
+        const rechecks = STARTUP_RECHECK_MS.map((delay) => {
+          const timer = setTimeout(() => collect(workspaceId, parent), delay);
+          timer.unref();
+          return timer;
+        });
+        entry.directories.set(parent, { watcher, count: 1, rechecks });
       } catch (error) {
         entry.reason = `The filesystem watcher rejected this folder: ${
           error instanceof Error ? error.message : String(error)
@@ -320,7 +342,7 @@ export function unregister(
     directory.count -= 1;
     if (directory.count === 0) {
       entry.directories.delete(parent);
-      directory.watcher.close();
+      closeDirectory(directory);
     }
   }
   if (entry.files.size === 0) release(workspaceId);
@@ -357,8 +379,13 @@ function release(workspaceId: string): void {
 }
 
 function closeDirectories(entry: WorkspaceWatch): void {
-  for (const directory of entry.directories.values()) directory.watcher.close();
+  for (const directory of entry.directories.values()) closeDirectory(directory);
   entry.directories.clear();
+}
+
+function closeDirectory(directory: WatchedDirectory): void {
+  directory.watcher.close();
+  for (const timer of directory.rechecks) clearTimeout(timer);
 }
 
 /**
