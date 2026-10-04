@@ -25,6 +25,11 @@ export interface Draft {
   /** 用在正文里的 Agent 名（注册表里的名字，不是用户写的任何东西）。 */
   readonly agentId?: string;
   readonly tag: string;
+  /**
+   * 同一种类里换一句正文（契约 §27.3）：调度的「失败」「要人处理」与「到点」
+   * 同属 `schedule`，设备偏好按种类开关，正文按这个分。
+   */
+  readonly variant?: "failed" | "attention";
   /** 只发给这些 principal（评论提及）；不给就是全部有权限的人。 */
   readonly principals?: readonly string[];
 }
@@ -115,12 +120,15 @@ export class TriggerRules {
         };
       }
       case "resources.threshold": {
+        // 只读标识与指标名；`value` / `threshold` 是数字，但正文不写它们——
+        // 锁屏上一句「超过了阈值」够叫人回来看，数字在面板里。
         const nodeId = str(event.nodeId);
+        const sessionId = str(event.sessionId);
         return {
           kind: "resources",
           workspaceId,
           ...(nodeId === undefined ? {} : { nodeId }),
-          tag: `resources:${str(event.metric) ?? ""}:${nodeId ?? ""}`,
+          tag: `resources:${str(event.metric) ?? ""}:${nodeId ?? sessionId ?? ""}`,
         };
       }
       case "board.comment": {
@@ -157,19 +165,28 @@ export class TriggerRules {
           tag: `gate:${str(event.runId) ?? ""}:${str(event.stepId) ?? ""}`,
         };
       }
-      default: {
-        // 调度到点：`schedule.*` 一族（`schedule.fired`、`schedule.due` ……）。
-        if (event.type.startsWith("schedule.")) {
-          const nodeId = str(event.nodeId);
-          return {
-            kind: "schedule",
-            workspaceId,
-            ...(nodeId === undefined ? {} : { nodeId }),
-            tag: `schedule:${str(event.automationId) ?? str(event.planId) ?? nodeId ?? ""}`,
-          };
-        }
-        return undefined;
+      case "schedule.fired":
+      case "schedule.failed":
+      case "schedule.attention": {
+        // 调度三时刻（契约 §27.3）：同一个计划的新通知替换旧的——到点之后的
+        // 失败顶掉「到点了」，不在锁屏上堆两条。
+        const nodeId = str(event.nodeId);
+        const planId = str(event.planId);
+        if (planId === undefined) return undefined;
+        return {
+          kind: "schedule",
+          workspaceId,
+          ...(nodeId === undefined ? {} : { nodeId }),
+          ...(event.type === "schedule.failed"
+            ? { variant: "failed" as const }
+            : event.type === "schedule.attention"
+              ? { variant: "attention" as const }
+              : {}),
+          tag: `schedule:${planId}`,
+        };
       }
+      default:
+        return undefined;
     }
   }
 
@@ -183,13 +200,17 @@ export class TriggerRules {
 
 type Locale = "zh-CN" | "en";
 
-const BODIES: Record<Locale, Record<PushKind, string>> = {
+type BodyKey = PushKind | "scheduleFailed" | "scheduleAttention";
+
+const BODIES: Record<Locale, Record<BodyKey, string>> = {
   "zh-CN": {
     approval: "{agent} 等待审批",
     agentDone: "{agent} 已完成",
     agentError: "{agent} 出错了",
     deliveryFailed: "有一条投递没有送达",
     schedule: "定时任务到点了",
+    scheduleFailed: "定时任务没有跑成",
+    scheduleAttention: "定时任务需要处理",
     resources: "资源用量超过了阈值",
     comment: "有人在评论里提到了你",
     workflowGate: "工作流在等待确认",
@@ -201,6 +222,8 @@ const BODIES: Record<Locale, Record<PushKind, string>> = {
     agentError: "{agent} hit an error",
     deliveryFailed: "A delivery was not accepted",
     schedule: "A scheduled task is due",
+    scheduleFailed: "A scheduled task failed",
+    scheduleAttention: "A scheduled task needs attention",
     resources: "A resource threshold was crossed",
     comment: "You were mentioned in a comment",
     workflowGate: "A workflow is waiting at a gate",
@@ -233,10 +256,13 @@ export function render(
   },
 ): PushPayload {
   const language: Locale = locale === "en" ? "en" : "zh-CN";
-  const body = BODIES[language][draft.kind].replace(
-    "{agent}",
-    names.agent(draft),
-  );
+  const key: BodyKey =
+    draft.kind === "schedule" && draft.variant === "failed"
+      ? "scheduleFailed"
+      : draft.kind === "schedule" && draft.variant === "attention"
+        ? "scheduleAttention"
+        : draft.kind;
+  const body = BODIES[language][key].replace("{agent}", names.agent(draft));
   return {
     v: 1,
     kind: draft.kind,

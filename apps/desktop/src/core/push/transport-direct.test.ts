@@ -93,6 +93,8 @@ function device(
     authSecret: "",
     appVersion: "1.0.0",
     locale: "zh-CN",
+    kinds: null,
+    unifiedpushEndpoint: "",
     createdAtMs: 1,
     revokedAtMs: 0,
   };
@@ -295,6 +297,7 @@ describe("重试", () => {
         authSecret: "",
         appVersion: "",
         locale: "",
+        unifiedpushEndpoint: "",
       });
       const client = apns(`http://127.0.0.1:${await closedPort()}`);
       const outbox = new Outbox(fixture.database, () => now);
@@ -344,6 +347,7 @@ describe("重试", () => {
         authSecret: "",
         appVersion: "",
         locale: "",
+        unifiedpushEndpoint: "",
       });
       const client = apns();
       const outbox = new Outbox(fixture.database);

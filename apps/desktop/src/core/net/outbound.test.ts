@@ -93,6 +93,9 @@ describe("出站地址表", () => {
   it("崩溃上报：DSN 为空即关，缺省关（外部服务 §11.2）", () => {
     expect(OUTBOUND.crashReport.switch).toBe("diagnostics.crashReportDsn");
     expect(OUTBOUND.crashReport.defaultOn).toBe(false);
+    // UnifiedPush 的端点是用户给的：没有开关，设备没有端点就不连。
+    expect(OUTBOUND.unifiedPush.switch).toBeNull();
+    expect(OUTBOUND.unifiedPush.defaultOn).toBe(false);
   });
 
   it("未登记的地址不算登记，前缀只按路径边界匹配", () => {

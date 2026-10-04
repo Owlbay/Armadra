@@ -140,6 +140,17 @@ export const OUTBOUND = {
     defaultOn: false,
     documented: true,
   },
+  unifiedPush: {
+    // 地址是 Android App 登记时报上来的、用户自己的 UnifiedPush 分发器端点
+    // （自托管 ntfy 等，契约 §27.2），这里只是占位主机。正文一律是对设备公钥
+    // 封好的信封；不跟随重定向。设备没有端点就不连。
+    url: "https://<UnifiedPush 分发端点>",
+    purpose: "UnifiedPush 推送（用户自己的 ntfy / 分发器，设备登记时给出）",
+    cadence: "每条通知 1 次，失败最多再试 2 次",
+    switch: null,
+    defaultOn: false,
+    documented: true,
+  },
   acmeLetsEncrypt: {
     // `ARMADRA_ACME_DIRECTORY` 可换成别的 CA（step-ca、ZeroSSL…）。
     url: "https://acme-v02.api.letsencrypt.org/directory",

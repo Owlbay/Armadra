@@ -1152,7 +1152,7 @@ export const ROUTES: readonly RouteEntry[] = [
   },
   {
     path: "/api/push/devices/{deviceId}",
-    methods: ["DELETE"],
+    methods: ["PATCH", "DELETE"],
     surface: "runtime",
     implemented: true,
   },
