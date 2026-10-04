@@ -1722,3 +1722,27 @@
 - 多级子组的仓库不能作外部连接（GitHub 域的连接表按两段存）。
 - fork 的 PR 检出不会自动取 `refs/merge-requests/<iid>/head` / `refs/pull/<n>/head`，起点要自己填。
 - 都没有连真实的 GitLab / Gitea 实例。
+
+## G5-30 G5 最后的小残项：验证码居中、fork 检出取平台引用、子组外部连接、passkey 用例导航
+
+做了什么：
+
+- 两步验证的六格验证码居中：竖排 `Field` 给每个子元素 `w-full`，`InputOTP` 的容器占满整行而格子组贴左。`SignIn` 的 MFA 步给容器加 `justify-center`，网页整页登录和手机原生 MFA 页（`NativeMfa` 复用 `SignIn`）都改过来了。设置 → 安全里登记 TOTP 的表单按设计系统左对齐，没动。
+- fork 的 PR / MR 检出（G5-29 残项）：仓库操作 `createWorktree` 新增可选的 `pullHead { remote, forge, number, headOid }`。core 在操作执行时才 fetch 平台发布的引用（GitLab `refs/merge-requests/<iid>/head`，Gitea `refs/pull/<n>/head`），引用由 core 按平台和编号拼，不收调用方给的 refspec。取到临时引用 `refs/armadra/checkout/<操作 id>`，用完即删；取到的提交和屏上 head 不符时操作 `failed`，不建分支、不留检出。页面上 Gitea / GitLab 的 fork 请求「起点」只读显示这条引用，有多个远端时可选远端（缺省 `origin`）。GitHub 和同仓库的请求照旧。共享层 zod 同步。
+- GitLab 多级子组的仓库能作外部连接（G5-29 残项）：`github_references` 的 `owner` 列原本就没有长度或格式的 CHECK，存完整命名空间路径（`group/sub`），`name` 是最后一段，不加迁移。连接标识的材料仍是 `owner/name`（`name` 不含 `/`，不会和两段仓库撞）。Gitea 和 GitHub 仍拒绝多段 owner。
+- 偶发（flakes-seen 最后一条）：`core/identity/passkey-cdp.live.integration.test.ts` 改成先开 `about:blank`，挂上会话、打开 `Page` 生命周期事件后自己 `Page.navigate`，按这次导航的 `frameId` / `loaderId` 等目标文档的 `load`，再断言 `location.origin` 与 `readyState` 才 evaluate。旧写法轮询 10 秒、到点不论成败都往下走，Windows 上页面还停在 `about:blank` 就跑了相对 URL 的 fetch。
+- 契约 §29.6 追加「外部连接的多级子组」与「fork 的 PR / MR 检出」两条；原来「外部连接不收多段 owner」一句改为注明 G5-30 起收。没有新迁移、没有改节号。
+
+实测（macOS arm64，2026-10-05）：
+
+- core `git/operations.test` 新增 4 条（本地裸仓库）：GitLab / Gitea 的引用只在检出时取、分支起点就是 fork 的提交、不留临时引用也不镜像平台引用；head 变了答 `failed` 且没有检出与分支；与 `startPoint` 混用、编号非法、未知远端在排队前就拒绝。`forge/gitlab.routes.test` 新增 2 条：子组连接入库与列出、与两段仓库区分、越级 / 空段拒绝；Gitea 两段能连、多段拒绝。共享层 `git-repository.test` 1 条。
+- web：`ForgeHosted.test` 新增 3 条（GitLab / Gitea 的 fork 起点、提交前不发操作、提交带 `pullHead`；同仓库请求不带）；`SignIn.test` 补居中断言。
+- passkey 真 Chromium 用例本机连跑 3 次通过；Windows 上的效果要看 CI。
+- 截图（临时入口 + 无头 Chrome，入口已删）：`target/g5-30-shots/{before,after}-{native,page}-{390,1440}-{zh-CN,en}.png`。改前格子组中心在 144 / 660（视口中心 195 / 720），改后 195 / 720，与标题对齐。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`（4613 过 / 53 跳过，live 4 过，脚本 68 过）、web test（3441 过）、shared 318 过，`pnpm --filter @armadra/web typecheck` 与 `pnpm check` 通过。
+
+没做 / 限制：
+
+- fork 检出的远端按名字选（缺省 `origin`），不按地址判断哪个远端是基仓库；选错了远端会因为取不到引用而失败，不会检出错的提交。
+- 子组连接的徽标点开仍只打开面板，不定位到具体 MR（同 G5-15）。
+- 都没有连真实的 GitLab / Gitea 实例。
