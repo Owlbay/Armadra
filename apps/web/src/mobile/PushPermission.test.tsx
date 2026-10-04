@@ -103,6 +103,7 @@ describe("开启", () => {
         token: "relay-token",
         publicKey: "pk",
       })),
+      ackPushRotation: vi.fn(async () => undefined),
     } as unknown as NativeBridge;
     mocks.request.mockResolvedValue({ device: {} });
     await expect(enablePush("zh-CN", bridge)).resolves.toBe("ok");
@@ -116,6 +117,9 @@ describe("开启", () => {
       publicKey: "pk",
       locale: "zh-CN",
     });
+    // 一份新的登记就是当前的令牌：「换过」的标记清掉，之后轮换由页面自己补登记。
+    expect(bridge.ackPushRotation).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem("armadra.push.native")).toBe("1");
     (bridge.pushRegistration as ReturnType<typeof vi.fn>).mockResolvedValue(
       null,
     );
