@@ -93,6 +93,8 @@ export async function startAcme(
     readonly email: string;
     readonly publicOrigins: readonly string[];
     readonly env?: NodeJS.ProcessEnv;
+    /** Gateway 的监听地址：`tls-alpn-01` 的验证握手打它。 */
+    readonly tlsListen?: { readonly host: string; readonly port: number };
   },
   options: Omit<AcmeManagerOptions, "log"> = {},
 ): Promise<AcmeManager> {
@@ -101,6 +103,7 @@ export async function startAcme(
       email: input.email,
       publicOrigins: input.publicOrigins,
       env: input.env ?? process.env,
+      ...(input.tlsListen === undefined ? {} : { tlsListen: input.tlsListen }),
     });
     const manager = new AcmeManager(context.dataDir, config, {
       log: context.log,
@@ -379,7 +382,11 @@ export class GatewayDomain {
       source === "acme"
         ? await startAcme(
             this.context,
-            { email: config.tls.acmeEmail, publicOrigins },
+            {
+              email: config.tls.acmeEmail,
+              publicOrigins,
+              tlsListen: { host: bindHost(mode), port: config.port },
+            },
             this.options.acme,
           )
         : undefined;
@@ -428,6 +435,7 @@ export class GatewayDomain {
               }
             : { generated: "localCa" },
       webRoot,
+      acme,
       deviceName: DEVICE_NAME,
     });
   }

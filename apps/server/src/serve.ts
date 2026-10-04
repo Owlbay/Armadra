@@ -199,6 +199,7 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
             email: acmeEmail,
             publicOrigins: options.publicOrigins,
             env,
+            tlsListen: options.listen,
           });
     gateway = await openGateway(core, {
       listen: options.listen,
@@ -213,6 +214,7 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
               generated: "selfSigned",
             },
       webRoot,
+      acme,
       deviceName: options.deviceName,
     });
   } catch (error) {

@@ -578,6 +578,46 @@ export function selfSignedCertificate(
   };
 }
 
+/** RFC 8737 的 `id-pe-acmeIdentifier`。 */
+export const ACME_IDENTIFIER_OID = "1.3.6.1.5.5.7.1.31";
+
+/**
+ * `tls-alpn-01` 的挑战证书（RFC 8737 §3）：自签名，SAN 只有这一个标识（域名进
+ * `dNSName`、IP 进 `iPAddress`），带一条**关键**扩展 `acmeIdentifier`，内容是
+ * key authorization 的 SHA-256。只在 ALPN 为 `acme-tls/1` 的握手里出示，验完
+ * 就扔，所以有效期只给一天。
+ */
+export function acmeChallengeCertificate(
+  identifier: string,
+  keyAuthorization: string,
+  now: Date,
+): { cert: string; key: string } {
+  const { privateKey, publicKey } = generateKeyPairSync("ec", {
+    namedCurve: "prime256v1",
+  });
+  const spki = publicKey.export({ type: "spki", format: "der" }) as Buffer;
+  // subject 留空：标识在 SAN 里，CN 的 64 字符上限管不到长域名。
+  const subject = sequence();
+  const digest = createHash("sha256").update(keyAuthorization).digest();
+  const cert = signCertificate({
+    subject,
+    issuer: subject,
+    spki,
+    signer: privateKey,
+    notBefore: new Date(now.getTime() - 60 * 60 * 1000),
+    notAfter: new Date(now.getTime() + DAY_MS),
+    extensions: [
+      extension("2.5.29.17", false, subjectAltName([identifier])),
+      // Authorization ::= OCTET STRING (SIZE (32))，再包进扩展值的 OCTET STRING。
+      extension(ACME_IDENTIFIER_OID, true, octetString(digest)),
+    ],
+  });
+  return {
+    cert,
+    key: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+  };
+}
+
 function pem(label: string, der: Buffer): string {
   const body = der.toString("base64").replace(/(.{64})/g, "$1\n");
   return `-----BEGIN ${label}-----\n${body}${body.endsWith("\n") ? "" : "\n"}-----END ${label}-----\n`;
