@@ -552,6 +552,41 @@ export function currentAccessToken(): string {
   return access;
 }
 
+/* ------------------------------ 桌面壳的 Bearer ------------------------------ */
+
+let shellRenewal: Promise<string> | null = null;
+
+/**
+ * 桌面壳里打 GitHub 与自动化两面要带的访问密钥（契约 §3.2）。
+ *
+ * 自 0.3.0 起 core 不再把回环上没带凭据的调用当成本机主人（安全审查 L9），所以
+ * 这两面在壳里必须带票据换来的 Bearer。还没有会话就先向壳要票配对；不在壳里
+ * （浏览器、原生 App 各有自己的凭据）或配不上对都是空串，让 core 照常拒绝。
+ */
+export async function shellBearer(): Promise<string> {
+  if (!isNativeShell()) return "";
+  if (!access) await resumeIdentity().catch(() => null);
+  return access;
+}
+
+/**
+ * 那枚访问密钥被拒（401）之后换一枚：先按会话复核、再刷新、最后重新向壳要票
+ * （`resumeIdentity` 那一串）。几个请求同时被拒只换一次；换不出新的是空串，
+ * 调用方就把那次 401 原样交出去。
+ */
+export async function renewShellBearer(rejected: string): Promise<string> {
+  if (!isNativeShell()) return "";
+  if (access && access !== rejected) return access;
+  shellRenewal ??= resumeIdentity()
+    .catch(() => null)
+    .then(() => access)
+    .finally(() => {
+      shellRenewal = null;
+    });
+  const renewed = await shellRenewal;
+  return renewed !== rejected ? renewed : "";
+}
+
 /** `POST /api/identity/ws-ticket`：原生 App 升级 WebSocket 前换的一次性票。 */
 export async function fetchWsTicket(): Promise<string> {
   const answer = await call(
