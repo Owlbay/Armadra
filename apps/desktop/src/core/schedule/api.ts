@@ -11,7 +11,7 @@ import {
 
 import type { CoreRequest } from "../http/router";
 import type { IdentityService } from "../identity/service";
-import { credential, nativeRequest } from "../identity/http";
+import { credential, csrfRequired, nativeRequest } from "../identity/http";
 import {
   IdentityError,
   identityFailure,
@@ -296,7 +296,8 @@ export class AutomationApi {
       accessToken: token,
       hostId,
       origin,
-      requireCsrf: mutation,
+      // 写只在 Cookie 会话上核 CSRF；Bearer 不是环境凭据（契约 §17.4，安全审查 L8）。
+      requireCsrf: mutation && csrfRequired(request),
       csrfToken: headerOf(request, "x-armadra-csrf") ?? "",
     });
     return {
