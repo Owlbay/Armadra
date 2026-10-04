@@ -24,7 +24,7 @@ const zh = {
   /* 不可用状态（§9：不出现伪按钮） */
   "github.blocked.noWorkspace": "先打开一个工作空间",
   "github.blocked.nativeSession":
-    "桌面壳未能建立本机会话，原因见「设置 → 连接 → 后台服务」",
+    "桌面壳未能建立本机会话，原因见「设置 → 连接 → 后台服务与对外服务」",
   "github.blocked.disconnected": "连不上 Host",
   "github.blocked.unsupported": "这个 Host 没有 GitHub 服务",
   "github.blocked.noSession": "这个 Host 不支持浏览器会话",
@@ -396,7 +396,7 @@ const en: Record<keyof typeof zh, string> = {
 
   "github.blocked.noWorkspace": "Open a workspace first",
   "github.blocked.nativeSession":
-    "The desktop shell could not open a local session; see Settings → Connection → Background service",
+    "The desktop shell could not open a local session; see Settings → Connections → Background and external services",
   "github.blocked.disconnected": "Cannot reach the Host",
   "github.blocked.unsupported": "This Host has no GitHub service",
   "github.blocked.noSession": "This Host does not support browser sessions",
@@ -405,7 +405,7 @@ const en: Record<keyof typeof zh, string> = {
     "This device has no GitHub permission for this workspace",
   "github.blocked.noCredential":
     "The Host cannot produce a usable GitHub credential",
-  "github.blocked.action": "Go to Settings → Connection",
+  "github.blocked.action": "Go to Settings → Connections",
   "github.blocked.credentialAction": "Go to Settings → GitHub",
 
   "github.repository": "Repository",
