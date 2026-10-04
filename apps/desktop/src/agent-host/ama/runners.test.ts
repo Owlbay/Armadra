@@ -153,6 +153,70 @@ describe("the canvas runners", () => {
     );
   });
 
+  it("passes ama's cwd and resume to open-agent", async () => {
+    const core = scriptedCore(() => ok({ id: "node-1" }));
+    const runner = canvasRunner("claude", deps(core.control));
+    await runner.start(request({ cwd: "/work/src", resume: "member-node" }));
+    expect(core.calls[0]!.args).toMatchObject({
+      cwd: "/work/src",
+      resume: "member-node",
+    });
+    await runner.start(request({ cwd: "" }));
+    expect("cwd" in core.calls[1]!.args).toBe(false);
+    expect("resume" in core.calls[1]!.args).toBe(false);
+  });
+
+  it("drops a cwd or resume the core turns down and starts anyway", async () => {
+    const refused = (code: string): ControlAnswer => ({
+      kind: "refused",
+      status: 400,
+      code,
+      message: code,
+    });
+    const core = scriptedCore((call) =>
+      call.args.cwd !== undefined
+        ? refused("cwd_outside_workspace")
+        : call.args.resume !== undefined
+          ? refused("resume_unsupported")
+          : call.args["permission-mode"] !== undefined
+            ? refused("permission_mode_unsupported")
+            : ok({ id: "node-1" }),
+    );
+    const d = deps(core.control);
+    const handle = await canvasRunner("opencode", d).start(
+      request({ cwd: "/elsewhere", resume: "s-1", mode: "auto-edit" }),
+    );
+    expect(handle.id).toBe("node-1");
+    expect(
+      core.calls.map((call) =>
+        ["cwd", "resume", "permission-mode"].filter(
+          (name) => name in call.args,
+        ),
+      ),
+    ).toEqual([
+      ["cwd", "resume", "permission-mode"],
+      ["resume", "permission-mode"],
+      ["permission-mode"],
+      [],
+    ]);
+    expect(d.log).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not drop what the core did not complain about", async () => {
+    const core = scriptedCore(() => ({
+      kind: "refused",
+      status: 400,
+      code: "bad_request",
+      message: "--cwd 的目录不存在",
+    }));
+    await expect(
+      canvasRunner("claude", deps(core.control)).start(
+        request({ cwd: "/work/missing" }),
+      ),
+    ).rejects.toThrow(/bad_request/);
+    expect(core.calls).toHaveLength(1);
+  });
+
   it("waits through blocked and needsInput without answering, then returns the posted result", async () => {
     const answers = [
       ok({
