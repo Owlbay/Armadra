@@ -1169,4 +1169,24 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 邮件通道（契约 §28）：只有服务器壳会配。能签那条链接的人才能发，身份由
+  // 邮件域自己认（`route-scopes.ts` 的 `SELF_GUARDED`）。
+  {
+    path: "/api/mail/status",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/mail/invitation",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/mail/password-reset",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
 ];

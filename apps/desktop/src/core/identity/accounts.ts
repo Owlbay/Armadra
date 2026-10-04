@@ -348,6 +348,42 @@ export class AccountsService {
   }
 
   /**
+   * 邮件通道（契约 §28）发一张邀请之前的判定：调用方得是能签发它的人（与签发、
+   * 作废同一套 {@link requireInvitationRights}），令牌得是这张邀请的、而且还能
+   * 兑换。库里只有哈希，链接只能由刚签出它的人连同令牌一起交过来。
+   *
+   * 不存在答 `notFound`（先判过 `identity:read` 才说，免得用 404 / 403 探 id）；
+   * 令牌不对、用过、过期一律 `conflict`——调用方是有权的人，这里不必含糊。
+   */
+  invitationForDelivery(
+    actor: AuthorizationSubject,
+    input: { invitationId: string; token: string },
+  ): { expiresAtMs: number } {
+    if (!ID_PATTERN.test(input.invitationId)) {
+      throw new IdentityError("invalid");
+    }
+    return this.options.store.transaction((tx) => {
+      const row = tx.accounts.invitation(input.invitationId);
+      if (row === undefined) {
+        this.require(tx.accounts, actor, [scope("identity:read")]);
+        throw new IdentityError("notFound");
+      }
+      this.requireInvitationRights(
+        tx.accounts,
+        actor,
+        row.targetGroupId,
+        row.targetWorkspaceId,
+      );
+      try {
+        this.redeemable(tx.accounts, input, this.now());
+      } catch {
+        throw new IdentityError("conflict");
+      }
+      return { expiresAtMs: row.expiresAtMs };
+    });
+  }
+
+  /**
    * 接受一张邀请：入组、或拿到一条工作空间授予，两者都有就都做。
    *
    * 一次性与过期都在同一笔事务里判：`consumeInvitation` 的 `consumed_at_ms = 0`
