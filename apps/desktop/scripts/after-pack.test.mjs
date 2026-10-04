@@ -10,6 +10,7 @@ import {
   migrationResources,
   placeLaunchExe,
   placements,
+  pinUpdaterCacheDir,
   placeUpdaterCacheDir,
   platformFor,
   UPDATER_CACHE_DIR_NAME,
@@ -291,15 +292,16 @@ test("app-update.yml caches under armadra-updater, not the scoped package name",
   }
 });
 
-test("the NSIS installer stores its copy in the same cache directory", () => {
-  const nsh = readFileSync(
-    fileURLToPath(new URL("../build/installer.nsh", import.meta.url)),
-    "utf8",
-  );
-  assert.match(
-    nsh,
-    new RegExp(
-      `!define APP_INSTALLER_STORE_FILE "${UPDATER_CACHE_DIR_NAME}\\\\installer\\.exe"`,
-    ),
-  );
+test("the build's AppInfo is pinned, so targets that write app-update.yml later agree", () => {
+  class AppInfo {
+    get updaterCacheDirName() {
+      return "@armadradesktop-updater";
+    }
+  }
+  const appInfo = new AppInfo();
+  assert.equal(pinUpdaterCacheDir(appInfo), true);
+  assert.equal(appInfo.updaterCacheDirName, UPDATER_CACHE_DIR_NAME);
+  assert.equal(pinUpdaterCacheDir(appInfo), false);
+  // Only this build's instance: another AppInfo is untouched.
+  assert.equal(new AppInfo().updaterCacheDirName, "@armadradesktop-updater");
 });

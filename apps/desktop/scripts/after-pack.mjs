@@ -318,17 +318,32 @@ export function placements(platformName) {
 
 /**
  * The directory electron-updater caches downloads in, under the OS cache
- * directory. `build/installer.nsh` stores the installed installer under the
- * same name.
+ * directory, and where the NSIS installer leaves its copy for the next
+ * differential download.
  *
- * electron-builder derives it from the package name and writes it into
- * `app-update.yml` itself; a scoped name gives `@armadradesktop-updater`. The
- * configuration has no key for it (a `publish.updaterCacheDirName` is
- * overwritten), and renaming the package would also rename the Linux
- * packages, so the file is rewritten here: electron-builder's own afterPack
- * handler that writes it runs before any user hook.
+ * electron-builder derives it from the package name (`AppInfo`'s
+ * `updaterCacheDirName` getter); a scoped name gives `@armadradesktop-updater`.
+ * The configuration has no key for it — a `publish.updaterCacheDirName` is
+ * overwritten — and renaming the package would also rename the Linux
+ * packages. So this hook does two things: it pins the getter on this build's
+ * `AppInfo`, which every later reader goes through (the deb / rpm targets
+ * write `app-update.yml` again after this hook, NSIS defines its store path
+ * from it), and it rewrites the `app-update.yml` electron-builder's own
+ * afterPack handler already wrote (system handlers run before user hooks).
  */
 export const UPDATER_CACHE_DIR_NAME = "armadra-updater";
+
+/** Pins `appInfo.updaterCacheDirName` for the rest of this build. */
+export function pinUpdaterCacheDir(appInfo, name = UPDATER_CACHE_DIR_NAME) {
+  if (!appInfo || appInfo.updaterCacheDirName === name) return false;
+  Object.defineProperty(appInfo, "updaterCacheDirName", {
+    value: name,
+    configurable: true,
+  });
+  if (appInfo.updaterCacheDirName !== name)
+    throw new Error("after-pack: could not pin updaterCacheDirName");
+  return true;
+}
 
 /** `app-update.yml` with `updaterCacheDirName` set to ours. */
 export function withUpdaterCacheDir(text, name = UPDATER_CACHE_DIR_NAME) {
@@ -373,6 +388,7 @@ export default async function afterPack(context) {
     resourcesDir,
   }))
     console.log(`after-pack: placed ${placed}`);
+  pinUpdaterCacheDir(context.packager.appInfo);
   if (placeUpdaterCacheDir(resourcesDir))
     console.log(
       `after-pack: app-update.yml caches in ${UPDATER_CACHE_DIR_NAME}`,
