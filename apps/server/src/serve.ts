@@ -172,6 +172,8 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
         ...serverPlatform(base),
         secrets: serverSecrets(base.dataDir, env),
         reportError: diagnostics.reportError,
+        // 页面错误上报（契约 §30）：DSN 可能来自环境变量，只有壳知道在不在发。
+        crashReportingActive: () => (diagnostics?.active() ?? null) !== null,
       };
     },
   });

@@ -1143,6 +1143,13 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 页面错误上报（契约 §30）：登录即可，诊断域自己认会话、限流、再剥离。
+  {
+    path: "/api/diagnostics/client-error",
+    methods: ["GET", "POST"],
+    surface: "runtime",
+    implemented: true,
+  },
   // 推送（契约 §19）：配置、设备登记与撤销、测试通知。只碰请求主体自己的设备，
   // 身份由推送域自己认（`route-scopes.ts` 的 `SELF_GUARDED`）。
   {
