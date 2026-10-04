@@ -24,4 +24,16 @@ final class DeepLinkTests: XCTestCase {
         // 一个 `'` 都拼不进去：认不出的字符在分类时就挡掉了。
         XCTAssertNil(DeepLink("armadra://w/a'+alert(1)+'"))
     }
+
+    func testOAuthCallbacksReloadLikePairing() {
+        let link = "armadra://oauth?state=s_T-1&code=a*b.c%2Fd"
+        XCTAssertEqual(DeepLink(link), .oauth(link))
+        XCTAssertEqual(DeepLink("armadra://oauth?state=s&error=access_denied")?.link, "armadra://oauth?state=s&error=access_denied")
+        let script = DeepLink(link)!.script
+        XCTAssertTrue(script.hasPrefix("history.replaceState(null,'',location.pathname+'#link='+encodeURIComponent("))
+        XCTAssertTrue(script.hasSuffix("location.reload();"))
+        XCTAssertNil(DeepLink("armadra://oauth"))
+        XCTAssertNil(DeepLink("armadra://oauth?state=a'+alert(1)+'"))
+        XCTAssertNil(DeepLink("armadra://oauthx?state=a"))
+    }
 }
