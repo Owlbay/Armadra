@@ -97,7 +97,8 @@ core 之外的同类新增：`src/hook-client/`（动词工具表，`armadra-hoo
 准入、CSP、页面托管、配对载荷）在 core 的 Gateway 域 `core/gateway/`：服务器壳的
 `serve` 只是「解析参数 → `openGateway`」，桌面壳按设置 `gateway.*` 开关同一个
 Gateway（契约 §17）。证书来源四种：本地 CA、指定文件、自签名，以及 ACME
-（`core/gateway/acme.ts`：`http-01`、证书在 `<数据目录>/tls/acme/`、寿命过三分之二续期并
+（`core/gateway/acme.ts`：`http-01` 或 `tls-alpn-01`（验证握手在 Gateway 的 TLS 监听上按
+ClientHello 的 ALPN 分流，`core/gateway/alpn.ts`）、证书在 `<数据目录>/tls/acme/`、寿命过三分之二续期并
 热换、失败保留旧证书）。容器镜像在 `apps/server/docker/`。用法见
 [开发指南](development.md#无窗口服务器壳)与[服务器部署指南](server-deployment.md)，进度见
 [TypeScript Core 实施进度](../status/typescript-core-status.md) §11。
@@ -562,7 +563,7 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   （`acp_unsupported`）。
   六家真适配器的端到端探针已备（`agent-e2e` 场景 12，C 档），还没有真跑。
 - **Gateway / 手机**：配对是两分钟票（二维码 / 链接），私网档位上另有 8 位配对码（契约 §24）；设备表没有
-  「平台」「最近访问」；`tls-alpn-01` 未做；推送中继写完不部署，UnifiedPush 未做；真机、商店与
+  「平台」「最近访问」；推送中继写完不部署，UnifiedPush 未做；真机、商店与
   真 APNs / FCM 都要用户的账号。
 - **安全审查的低危项**：页面上口令策略拒绝码与 `warn` 档的提示、GitHub / 自动化两面对 Bearer 写仍要 CSRF 等，见[安全审查](../status/security-review-2026-10.md) §3。
 - **外部服务里留到之后的三项**：W-MAIL（SMTP）、W-FORGE（GitLab / Gitea）、W-MIRROR（更新镜像），

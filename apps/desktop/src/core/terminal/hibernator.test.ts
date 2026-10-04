@@ -1,5 +1,6 @@
+import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { type AgentFixture, agentFixture } from "../agent/fixture";
@@ -28,7 +29,7 @@ import {
   hibernatedSession,
   scheduledFor,
 } from "./hibernate";
-import { Hibernator, resumeLine } from "./hibernator";
+import { Hibernator, processesUnder, resumeLine } from "./hibernator";
 import { nodeDialect } from "../agent/canvas-launch";
 import { launcherPath, prepareInjection } from "../hook/install/inject";
 import { quoteShellWord } from "./shell";
@@ -166,7 +167,7 @@ beforeEach(() => {
     nudge: (nodeId) => {
       nudged.push(nodeId);
     },
-    processes: () => background,
+    processes: async () => background,
     clock: () => now,
     // 等提示符与等前台都是轮询：让时钟随每一次「等」往前走，用例不真的睡。
     delay: async (ms) => {
@@ -583,4 +584,41 @@ function plan(nodeId: string, coldStartPolicy: string, dueMs: number): void {
 // 行上的那个标记是恢复的唯一依据，用一个常量守住拼写。
 it("休眠写进 termination_intent 的就是那个常量", () => {
   expect(HIBERNATE_INTENT).toBe("hibernate");
+});
+
+// 判据里的进程树是一次异步 `ps`：不在事件循环上同步等子进程（R-73）。
+describe.skipIf(process.platform === "win32")("processesUnder", () => {
+  it("异步列出 pane shell 的子进程与 Agent 的子孙", async () => {
+    const agent = `"${process.execPath}" -e "require('node:child_process').spawn('sleep',['37'],{stdio:'ignore'});setTimeout(()=>{},30000)"`;
+    // 自成一个进程组，收尾时整组一起结束。
+    const pane = spawn("sh", ["-c", `${agent} & sleep 41 & wait`], {
+      stdio: "ignore",
+      detached: true,
+    });
+    const name = basename(process.execPath);
+    try {
+      let tree: Awaited<ReturnType<typeof processesUnder>> | undefined;
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const pending = processesUnder(pane.pid as number, [name]);
+        expect(pending).toBeInstanceOf(Promise);
+        tree = await pending;
+        if (tree.agentDescendants.some((argv) => argv.includes("sleep 37"))) {
+          break;
+        }
+        await new Promise((done) => setTimeout(done, 100));
+      }
+      expect(
+        tree?.shellChildren.some((argv) => argv.includes("sleep 41")),
+      ).toBe(true);
+      expect(tree?.shellChildren.some((argv) => argv.includes(name))).toBe(
+        true,
+      );
+      expect(
+        tree?.agentDescendants.some((argv) => argv.includes("sleep 37")),
+      ).toBe(true);
+    } finally {
+      // 整个进程组一起收：sh、node 与两个 sleep。
+      process.kill(-(pane.pid as number), "SIGKILL");
+    }
+  }, 15_000);
 });

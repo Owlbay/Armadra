@@ -1109,6 +1109,7 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
   ```json
   {
     "directory": "https://acme-v02.api.letsencrypt.org/directory",
+    "challenge": "http-01",
     "profile": null,
     "names": ["armadra.example.com"],
     "notAfter": "2026-12-30T08:00:00.000Z",
@@ -1118,9 +1119,9 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
   }
   ```
 
-  `profile` 是 `shortlived` / `classic` / `null`（CA 缺省）；`renewAt` 是下一次续期，失败后是下一次重试；`failures` 是连续失败次数，到 3 次时 core 记一条错误日志通知运维，期间**继续用旧证书**直到它过期；`lastError` 是 `{ code, message }`。证书是公共 CA 签的，没有信任锚可发，`caAvailable` 为 `false`，`fingerprint` 是叶证书的、每次续期都会变。
+  `challenge` 是 `http-01` / `tls-alpn-01`（环境变量 `ARMADRA_ACME_CHALLENGE`，缺省 `http-01`；旧 core 不带这个键，即 `http-01`）。`profile` 是 `shortlived` / `classic` / `null`（CA 缺省）；`renewAt` 是下一次续期，失败后是下一次重试；`failures` 是连续失败次数，到 3 次时 core 记一条错误日志通知运维，期间**继续用旧证书**直到它过期；`lastError` 是 `{ code, message }`。证书是公共 CA 签的，没有信任锚可发，`caAvailable` 为 `false`，`fingerprint` 是叶证书的、每次续期都会变。
 
-- `error`：最近一次没能开启的原因，开着或关着时为 `null`。`code` 取值：`acme_misconfigured`（缺邮箱、缺对外来源、对外来源是回环地址或 `ARMADRA_ACME_*` 取值不对）、`acme_port_unavailable`（`http-01` 挑战端口开不了）、`acme_failed`（CA 拒绝或连不上，`message` 是原因）、`tls_files_missing`、`port_in_use`、`port_forbidden`、`identity_unavailable`（库没过统一库迁移）、`gateway_failed`（其余，`message` 是原因）。
+- `error`：最近一次没能开启的原因，开着或关着时为 `null`。`code` 取值：`acme_misconfigured`（缺邮箱、缺对外来源、对外来源是回环地址、`ARMADRA_ACME_*` 取值不对，或 `tls-alpn-01` 而端口为 0）、`acme_port_unavailable`（`http-01` 挑战端口开不了，或 `tls-alpn-01` 首签时 Gateway 的端口开不了）、`acme_failed`（CA 拒绝或连不上，`message` 是原因）、`tls_files_missing`、`port_in_use`、`port_forbidden`、`identity_unavailable`（库没过统一库迁移）、`gateway_failed`（其余，`message` 是原因）。
 
 ### 17.2 `PUT /api/gateway`
 

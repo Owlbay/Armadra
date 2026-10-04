@@ -205,3 +205,67 @@ export function defaultWebRoot(from: string): string | undefined {
     directory = parent;
   }
 }
+
+/**
+ * 桌面壳 Gateway 去哪里找页面产物，按先后：
+ *
+ *   1. `ARMADRA_GATEWAY_WEB_ROOT`；
+ *   2. 打包版：`<resources>/renderer`（产物放在 asar 外时）、
+ *      `<resources>/app.asar.unpacked/out/renderer`（`asarUnpack` 出来时）、
+ *      `<resources>/app.asar/out/renderer`（缺省：在 asar 里，core 以
+ *      `ELECTRON_RUN_AS_NODE` 跑，读 asar 的 `fs` 补丁照样在）；
+ *   3. core 入口旁边的 `../renderer`（`out/core/main.js` 与 `out/renderer/` 同级，
+ *      开发构建与 `ARMADRA_CORE_ENTRY` 指到别处时）；
+ *   4. 开发检出里的 `apps/web/dist`（从 `cwd` 往上找）。
+ *
+ * 纯函数：只排候选，存不存在由调用方逐个问。
+ */
+export function desktopWebRootCandidates(input: {
+  readonly env: NodeJS.ProcessEnv;
+  readonly resourcesPath?: string | undefined;
+  readonly entry?: string | undefined;
+  readonly cwd: string;
+}): string[] {
+  const candidates: string[] = [];
+  const configured = input.env.ARMADRA_GATEWAY_WEB_ROOT?.trim();
+  if (configured) candidates.push(resolve(configured));
+  if (input.resourcesPath !== undefined && input.resourcesPath !== "") {
+    candidates.push(
+      join(input.resourcesPath, "renderer"),
+      join(input.resourcesPath, "app.asar.unpacked", "out", "renderer"),
+      join(input.resourcesPath, "app.asar", "out", "renderer"),
+    );
+  }
+  if (input.entry !== undefined) {
+    candidates.push(resolve(dirname(input.entry), "../renderer"));
+  }
+  const checkout = checkoutWebRoot(input.cwd);
+  if (checkout !== undefined) candidates.push(checkout);
+  return [...new Set(candidates)];
+}
+
+function checkoutWebRoot(from: string): string | undefined {
+  let directory = resolve(from);
+  for (;;) {
+    const candidate = join(directory, "apps/web/dist");
+    if (existsSync(join(candidate, "index.html"))) return candidate;
+    const parent = dirname(directory);
+    if (parent === directory) return undefined;
+    directory = parent;
+  }
+}
+
+/** 候选里第一个有 `index.html`、开得起来的；都没有答 `undefined`。 */
+export async function firstWebRoot(
+  candidates: readonly string[],
+): Promise<WebRoot | undefined> {
+  for (const candidate of candidates) {
+    if (!existsSync(join(candidate, "index.html"))) continue;
+    try {
+      return await openWebRoot(candidate);
+    } catch {
+      /* 下一个。 */
+    }
+  }
+  return undefined;
+}
