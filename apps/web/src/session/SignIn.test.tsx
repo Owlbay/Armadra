@@ -124,6 +124,9 @@ describe("SignIn", () => {
     expect(
       await screen.findByRole("heading", { name: "两步验证" }),
     ).toBeTruthy();
+    // 六格占满整行宽，格子组居中而不是贴左。
+    const slots = document.querySelector('[data-slot="input-otp-group"]');
+    expect(slots?.parentElement?.className).toContain("justify-center");
     fireEvent.change(screen.getByLabelText("验证码"), {
       target: { value: "123456" },
     });
