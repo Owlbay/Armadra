@@ -538,6 +538,9 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   - 身份：口令 scrypt + 策略 + 泄露检查（HIBP k-匿名，`identity.breachCheck`）；passkey、TOTP、OAuth 的
     密钥在 SecretStore；登录、配对、刷新按来源地址限流，按 principal 锁定；登录失败与锁定、MFA 与
     passkey 变更、OAuth 绑定、Gateway 开关与配对票、节点凭据与 ama 密钥的增删全部进审计。
+    原生 App 的 OAuth 不用浏览器绑定 Cookie：发起时拿一次性 `nativeState`，回调只转成
+    `armadra://oauth` 深链，App 带着它收尾（契约 §18.5）。App 里指向 Gateway 的图片经带 Bearer 的
+    `fetch` 换成 `blob:`（`api/assets.ts`），不为 `<img>` 放宽准入。
   - 已知约束：operator 能开 shell，就是能以 core 的系统用户执行任意命令；服务器壳应跑在专用用户或
     容器里。审查记录见[安全审查 2026-10](../status/security-review-2026-10.md)。
 
