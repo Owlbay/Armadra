@@ -613,3 +613,128 @@ describe("目标类别", () => {
     ).rejects.toMatchObject({ code: "invalid" });
   });
 });
+
+describe("调度事件（契约 §27.3）", () => {
+  const types = (h: ReturnType<typeof harness>) =>
+    h.events.map(({ event }) => event.type);
+
+  it("到点发 schedule.fired，带计划、运行与目标节点", async () => {
+    const h = harness();
+    await activated(h, "p1");
+    await h.engine.tick();
+    const runId = h.engine.getPlan("ws", "p1").plan.activeRunId;
+    expect(h.events).toEqual([
+      {
+        workspaceId: "ws",
+        event: {
+          type: "schedule.fired",
+          planId: "p1",
+          runId,
+          nodeId: "node-1",
+        },
+      },
+    ]);
+    // 送到不是结束：没有 failed。
+    await h.engine.tick();
+    expect(types(h)).toEqual(["schedule.fired"]);
+  });
+
+  it("目标离线跳过与等到 TTL 过期发 schedule.failed，带稳定码", async () => {
+    const offline = harness();
+    offline.dispatcher.status = { state: "offline", generation: 0 };
+    await activated(offline, "p1");
+    await offline.engine.tick();
+    expect(offline.events.map(({ event }) => event)).toEqual([
+      expect.objectContaining({ type: "schedule.fired" }),
+      expect.objectContaining({
+        type: "schedule.failed",
+        planId: "p1",
+        nodeId: "node-1",
+        reasonCode: "TARGET_OFFLINE",
+      }),
+    ]);
+
+    const busy = harness();
+    busy.dispatcher.status = { state: "busy", generation: 7 };
+    await activated(busy, "p1", config({ busyTtlMs: 60_000 }));
+    await busy.engine.tick();
+    busy.advance(2 * MINUTE);
+    await busy.engine.tick();
+    expect(busy.events.at(-1)?.event).toMatchObject({
+      type: "schedule.failed",
+      reasonCode: "WAITING_EXPIRED",
+    });
+  });
+
+  it("执行方说失败发 failed；按策略跳过（并发上限、错过的槽位）不发", async () => {
+    const h = harness();
+    await activated(h, "p1");
+    await h.engine.tick();
+    const run = h.engine.getRun(
+      "ws",
+      h.engine.getPlan("ws", "p1").plan.activeRunId,
+    ).run;
+    h.engine.observe({
+      operationId: run.operationId,
+      requestSha256: run.requestSha256,
+      sequence: 2n,
+      observedAtUnixMs: BigInt(h.now),
+      outcome: AutomationOutcome.FAILED,
+      reasonCode: "EXIT_1",
+    } as never);
+    expect(h.events.at(-1)?.event).toMatchObject({
+      type: "schedule.failed",
+      reasonCode: "EXIT_1",
+    });
+
+    const skipped = harness({ now: 1_700_000_000_000 + 10 * MINUTE });
+    await activated(
+      skipped,
+      "p2",
+      config({ misfirePolicy: AutomationMisfirePolicy.SKIP }),
+    );
+    await skipped.engine.tick();
+    expect(
+      skipped.events.filter(({ event }) => event.type === "schedule.failed"),
+    ).toEqual([]);
+  });
+
+  it("要人处理只在标记抬起的那一下发一次", async () => {
+    const h = harness();
+    await activated(
+      h,
+      "p1",
+      config({ schedule: interval(1_700_000_000_000, MINUTE) }),
+    );
+    h.dispatcher.status = { state: "unsupported", generation: 1 };
+    await h.engine.tick();
+    h.advance(MINUTE);
+    await h.engine.tick();
+    h.advance(MINUTE);
+    await h.engine.tick();
+    const attention = h.events.filter(
+      ({ event }) => event.type === "schedule.attention",
+    );
+    expect(attention).toEqual([
+      {
+        workspaceId: "ws",
+        event: {
+          type: "schedule.attention",
+          planId: "p1",
+          nodeId: "node-1",
+          reasonCode: "TARGET_UNSUPPORTED",
+        },
+      },
+    ]);
+  });
+
+  it("订阅者抛错不影响调度", async () => {
+    const h = harness();
+    h.events.push = () => {
+      throw new Error("boom");
+    };
+    await activated(h, "p1");
+    await h.engine.tick();
+    expect(h.engine.getPlan("ws", "p1").plan.activeRunId).not.toBe("");
+  });
+});

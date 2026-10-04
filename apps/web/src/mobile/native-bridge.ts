@@ -33,8 +33,10 @@ export interface NativePushRegistration {
   readonly platform: "ios" | "android";
   readonly transport: "direct" | "relay";
   readonly token: string;
-  /** 设备的 X25519 公钥（base64url）；中继必需。 */
+  /** 设备的 X25519 公钥（base64url）；中继与 UnifiedPush 必需。 */
   readonly publicKey?: string;
+  /** Android：用户自己的 UnifiedPush 分发器给的端点（契约 §27.2）。 */
+  readonly unifiedpush?: { readonly endpoint: string };
 }
 
 export interface NativeBridge {

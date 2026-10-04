@@ -1132,7 +1132,27 @@
 
 ## G5-10 推送补充（R-50、R-51、R-52）
 
-待填（第 1 组）。
+**做了什么**
+
+- 调度事件（R-50，契约 §27.3）：`core/schedule/engine.ts` 在提交之后经 `EngineOptions.publish` 发 `schedule.fired`（槽位物化成一次要投递的运行）、`schedule.failed`（执行方失败、目标离线 / 不支持 / 换代跳过、等到 TTL 过期；按策略跳过与取消不发，判定在 `schedule/events.ts`）、`schedule.attention`（「需要处理」标记抬起的那一下）。只带 `planId` / `runId` / `nodeId` / `reasonCode`。
+- 资源阈值（R-50，契约 §27.4）：判定从页面搬进 core（`core/resources/thresholds.ts`）。阈值是新设置 `resources.memoryWarnBytes`（缺省 2 GiB，夹在 128 MiB – 128 GiB），设置页「终端 → 内存阈值」同时写它与本机偏好。页面开着时随采样循环判（`ResourceService` 的 `onSample`）；没人看着而库里有有效推送设备时每 30 秒自己采一轮（`ThresholdWatch`）。按 `sessionId:generation` 去重，回落到九成以下才重新上膛。
+- 设备偏好（R-51，契约 §27.1）：迁移 `0037_push_preferences.sql` 给 `push_devices` 加 `kinds_json` 与 `unifiedpush_endpoint`。`PATCH /api/push/devices/{deviceId} { kinds }` 只改自己的设备；入队前按设备过滤，`test` 恒收；全选存成「全部」；重新登记保留偏好。设备视图多 `kinds`、`unifiedpush`。手机推送提示「开启」之后换成每个种类一个开关（`mobile/PushPermission.tsx`，文案在 `i18n/push.ts`）。
+- UnifiedPush（R-52，契约 §27.2）：Android 登记可带 `unifiedpush: { endpoint }`（此时可以不给 `token`，必须给 `publicKey`）。有端点的设备一律走 `push/transport-unifiedpush.ts`，不看 `push.transport`：POST 对设备公钥封好的信封，不跟随重定向，404 / 410 撤销设备，429 / 5xx 重试。出站表登记为 `unifiedPush`（用户给的地址）。
+- 推送规则：`schedule.*` 只认上面三种、按 `planId` 认，`tag` 统一为 `schedule:<planId>`，正文分「到点了 / 没有跑成 / 需要处理」；`resources.threshold` 的 `tag` 是 `resources:<metric>:<nodeId 或 sessionId>`，正文不写数字。
+- dev-stack：`push-sink` 加 `/up/<topic>`（UnifiedPush 替身：`gone` 前缀答 404、超 4096 字节答 413）。计划里写的「push-sink 已有假 UnifiedPush 端点」与源码不符，本包补上了。
+- 探针 `push-e2e` 加三段：UnifiedPush 走 push-sink；dev-stack 的 `ntfy` 在时对真 ntfy 走一遍（不在则记跳过）；设备偏好只留审批后同一轮只到审批，恢复全部后两条都到。
+
+**接口**：`PATCH /api/push/devices/{deviceId}`；设备视图的 `kinds`、`unifiedpush`；登记体的 `unifiedpush.endpoint`；共享层 `PUSH_PREFERENCE_KINDS`、`pushDevicePreferencesSchema`；设置 `resources.memoryWarnBytes`；`EngineOptions.publish`；`ResourceServiceOptions.onSample`、`ResourceService.watching()`。
+
+**实测**（macOS arm64）
+
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 4260 过 / 46 跳过、2 失败，脚本 64 过、1 失败；web 3241 过；shared 320 过；server 79 过 / 2 跳过；mobile 9 过；push-relay 9 过。3 条失败都是迁移连续性断言（`migrations.test`、`unified.test`、`after-pack.test`），以及 `pnpm repo:check` 的「迁移编号不连续」，原因是 0036 由 G5-02 占用、还没合入。G5-02 合入之后这些检查应当都过。
+- `pnpm typecheck`、`pnpm format:check`、`ci:workflows`、`release:check`、`notices:check` 通过。
+- `node tools/probes/push-e2e.mjs`：用进程内 push-sink 全过；对 `pnpm dev-stack up push-sink ntfy --profile ntfy` 起的 push-sink 与真 ntfy v2.28.0 也全过。ntfy 存下的是信封，设备私钥能解。这两个容器只为这次验证启动，验证后已停掉并删除。
+
+**没做**：Android App 侧接 UnifiedPush 分发器的原生代码（取端点、交给 `pushRegistration()`），归手机原生包；`native-bridge.ts` 只给类型加了可选的 `unifiedpush`。桌面上的系统通知与内存徽标的本机提醒照旧，没有改成读 `resources.threshold` 事件。
+
+**已知限制**：与 Web Push 一样，UnifiedPush 端点允许回环上的 http，供本机测试与 dev-stack 使用。设置页不能逐台改别的设备的偏好，只有手机提示里那组开关，而且只改当前这台。
 
 ## G5-11 实时协同补充（R-44、R-45、R-46）
 

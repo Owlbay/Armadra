@@ -50,9 +50,11 @@ import type {
   EngineOptions,
   PlanSnapshot,
   RunSnapshot,
+  ScheduleEvent,
   TargetStatus,
 } from "./contracts";
 import { type Snapshot, ScheduleStore, conflict } from "./store";
+import { failedOutcome, targetNode } from "./events";
 
 /**
  * 持久化的调度内核。
@@ -90,6 +92,7 @@ export class ScheduleEngine {
   private readonly lease: number;
   private readonly dispatchTimeout: number;
   private readonly poll: number;
+  private readonly publishEvent: EngineOptions["publish"];
   readonly hostId: string;
   private ticking = false;
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -106,6 +109,7 @@ export class ScheduleEngine {
     this.dispatchTimeout =
       options.dispatchTimeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS;
     this.poll = options.pollIntervalMs ?? DEFAULT_POLL_MS;
+    this.publishEvent = options.publish;
     if (
       this.lease < 1_000 ||
       this.lease > 300_000 ||
@@ -142,6 +146,16 @@ export class ScheduleEngine {
   /** 此刻有没有运行占着目标门（防休眠租约读它，终端宿主设计 §9）。 */
   hasActiveRuns(): boolean {
     return this.store.activeRunCount() > 0;
+  }
+
+  /** 发一条调度事件。订阅者出错不回滚已经提交的状态。 */
+  private publish(workspaceId: string, event: ScheduleEvent): void {
+    if (this.publishEvent === undefined || workspaceId === "") return;
+    try {
+      this.publishEvent(workspaceId, event);
+    } catch {
+      // 推送失败不该让调度失败。
+    }
   }
 
   private now(): number {
@@ -660,7 +674,7 @@ export class ScheduleEngine {
       this.store.writePlan(plan, snapshot.revision);
       return;
     }
-    this.store.transact(() => {
+    const fired = this.store.transact(() => {
       const run = this.newRun({
         plan,
         config,
@@ -707,7 +721,16 @@ export class ScheduleEngine {
       run.requestSha256 = dispatchHash(run);
       this.store.writePlan(plan, snapshot.revision);
       this.store.writeRun(run, 0);
+      return run.state === AutomationRunState.DUE;
     });
+    if (fired) {
+      this.publish(config.workspaceId, {
+        type: "schedule.fired",
+        planId: plan.id,
+        runId,
+        ...targetNode(config.target),
+      });
+    }
   }
 
   private newRun(input: {
@@ -1210,6 +1233,7 @@ export class ScheduleEngine {
     const now = this.now();
     const planSnapshot = this.getPlan(run.workspaceId, run.planId);
     const plan = planSnapshot.plan;
+    const attentionBefore = plan.needsAttention;
     this.store.transact(() => {
       const wasActive = plan.activeRunId === run.id;
       if (wasActive) {
@@ -1281,6 +1305,24 @@ export class ScheduleEngine {
       this.store.writeRun(run, snapshot.revision);
       this.store.writePlan(plan, planSnapshot.revision);
     });
+    const node = targetNode(run.frozenConfig?.target);
+    if (failedOutcome(state, reason)) {
+      this.publish(run.workspaceId, {
+        type: "schedule.failed",
+        planId: plan.id,
+        runId: run.id,
+        ...node,
+        reasonCode: reason,
+      });
+    }
+    if (!attentionBefore && plan.needsAttention) {
+      this.publish(run.workspaceId, {
+        type: "schedule.attention",
+        planId: plan.id,
+        ...node,
+        reasonCode: plan.attentionReasonCode,
+      });
+    }
   }
 
   /**

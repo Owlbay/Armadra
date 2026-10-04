@@ -1,5 +1,5 @@
 /**
- * push-sink：假 APNs / FCM / Web Push 端点，兼作推送中继的替身。
+ * push-sink：假 APNs / FCM / Web Push / UnifiedPush 端点，兼作推送中继的替身。
  *
  * 只给 dev-stack 与测试用。它不投递任何东西，只做三件事：
  *
@@ -12,7 +12,8 @@
  *     `PUSH_SINK_APNS_KEY_DIR` 里放了 `<kid>.pem`（公钥或 .p8 私钥）时才验，
  *     否则记 `signature: "unchecked"`。
  *   * **按约定的令牌答错**：设备令牌以 `bad` 开头答「令牌无效」、以 `gone`
- *     开头答「已注销」，让调用方的清理路径有东西可测。
+ *     开头答「已注销」，让调用方的清理路径有东西可测。UnifiedPush 的
+ *     `/up/<topic>` 同理：topic 以 `gone` 开头答 404（端点已注销）。
  *
  * APNs 只说 HTTP/2，FCM 与 Web Push 说 HTTP/1.1；同一个端口两种都接——先看连接
  * 的头几个字节是不是 HTTP/2 前导（h2c prior knowledge），再交给对应的服务器。
@@ -29,6 +30,7 @@ const H2_PREFACE = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 const MAX_RECORDS = 1000;
 const APNS_MAX_PAYLOAD = 4096;
 const WEBPUSH_MAX_PAYLOAD = 4096;
+const UNIFIEDPUSH_MAX_PAYLOAD = 4096;
 
 function base64url(text) {
   return Buffer.from(text, "base64url");
@@ -356,6 +358,27 @@ export function createPushSink({
         subscription,
         jwt: { ...pick(check), signature: check.signature ?? null },
       });
+      return outcome;
+    }
+
+    // UnifiedPush (契约 §27.2): POST /up/<topic>. A distributor such as ntfy
+    // takes the body as-is and hands it to the app; the UnifiedPush spec caps
+    // it at 4096 bytes and says an unknown endpoint is 404.
+    const unifiedpush = /^\/up\/([^/]+)$/.exec(path);
+    if (unifiedpush && method === "POST") {
+      const topic = decodeURIComponent(unifiedpush[1]);
+      let outcome;
+      if (request.body.length > UNIFIEDPUSH_MAX_PAYLOAD)
+        outcome = failure(413, { reason: "payloadTooLarge" });
+      else if (topic.startsWith("gone"))
+        outcome = failure(404, { reason: "gone" });
+      else
+        outcome = success(200, {
+          id: randomUUID(),
+          event: "message",
+          topic,
+        });
+      record(request, outcome, { kind: "unifiedpush", topic });
       return outcome;
     }
 

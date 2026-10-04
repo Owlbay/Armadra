@@ -115,6 +115,14 @@ const DEFAULT_CONVERSATION_SCOPE = "workspaces";
 const DEFAULT_RESOURCE_INTERVAL_MS = 2_000;
 const MIN_RESOURCE_INTERVAL_MS = 500;
 const MAX_RESOURCE_INTERVAL_MS = 60_000;
+/**
+ * 会话内存的提醒阈值（契约 §27.4）：越线时 core 发 `resources.threshold`，推送
+ * 据此叫人；页面的徽标变色用同一个数。128 MiB – 128 GiB，低于下限的阈值会让
+ * 每个 shell 都在报警。
+ */
+export const DEFAULT_MEMORY_WARN_BYTES = 2 * 1024 * 1024 * 1024;
+const MIN_MEMORY_WARN_BYTES = 128 * 1024 * 1024;
+const MAX_MEMORY_WARN_BYTES = 128 * 1024 * 1024 * 1024;
 const DEFAULT_BROWSER_KEEP_ALIVE = true;
 const DEFAULT_BROWSER_HEADFUL = false;
 const MAX_BROWSER_EXECUTABLE_PATH = 4_096;
@@ -657,6 +665,11 @@ function normalizeResources(document: JsonObject): void {
           Math.max(interval, MIN_RESOURCE_INTERVAL_MS),
           MAX_RESOURCE_INTERVAL_MS,
         );
+  const warn = asUnsigned(resources.memoryWarnBytes);
+  resources.memoryWarnBytes =
+    warn === undefined
+      ? DEFAULT_MEMORY_WARN_BYTES
+      : Math.min(Math.max(warn, MIN_MEMORY_WARN_BYTES), MAX_MEMORY_WARN_BYTES);
   document.resources = resources;
 }
 
