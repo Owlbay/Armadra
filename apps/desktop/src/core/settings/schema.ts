@@ -239,6 +239,9 @@ function normalizeCompletion(document: JsonObject): void {
   document.models = models;
   const diagnostics = section(document, "diagnostics");
   diagnostics.crashReportDsn = shortText(diagnostics.crashReportDsn);
+  diagnostics.reportPageErrors =
+    asBool(diagnostics.reportPageErrors) ??
+    COMPLETION_SETTINGS_DEFAULTS.diagnostics.reportPageErrors;
   document.diagnostics = diagnostics;
   const agents = document.agents;
   if (isJsonObject(agents)) {
@@ -447,6 +450,7 @@ export function completionSettings(document: JsonValue): CompletionSettings {
       claudeUsage: usage.claudeUsage as boolean,
       copilotUsage: usage.copilotUsage as boolean,
       statusBadges: usage.statusBadges as boolean,
+      claudeLocalWindow: usage.claudeLocalWindow as boolean,
     },
     models: normalized.models as unknown as CompletionSettings["models"],
     diagnostics:
@@ -502,9 +506,13 @@ export interface CompletionSettings {
     readonly claudeUsage: boolean;
     readonly copilotUsage: boolean;
     readonly statusBadges: boolean;
+    readonly claudeLocalWindow: boolean;
   };
   readonly models: { readonly catalog: { readonly autoRefresh: boolean } };
-  readonly diagnostics: { readonly crashReportDsn: string };
+  readonly diagnostics: {
+    readonly crashReportDsn: string;
+    readonly reportPageErrors: boolean;
+  };
 }
 
 /** One `identity.oauth.providers[]` entry; the client secret is not here. */
@@ -583,6 +591,10 @@ function normalizeUsage(document: JsonObject): void {
   usage.copilotUsage =
     asBool(usage.copilotUsage) ??
     COMPLETION_SETTINGS_DEFAULTS.usage.copilotUsage;
+  // 本机转录估算只读本机文件、不外呼，所以默认开（G5-25）。
+  usage.claudeLocalWindow =
+    asBool(usage.claudeLocalWindow) ??
+    COMPLETION_SETTINGS_DEFAULTS.usage.claudeLocalWindow;
   const cost = section(usage, "cost");
   cost.enabled = asBool(cost.enabled) ?? DEFAULT_COST_ENABLED;
   usage.cost = cost;

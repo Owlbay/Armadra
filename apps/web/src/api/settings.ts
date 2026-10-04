@@ -116,6 +116,8 @@ export const runtimeSettingsSchema = z.looseObject({
       /** 借用登录令牌读额度的两个端点，默认关（外部服务 §9.3）。 */
       claudeUsage: z.boolean().optional(),
       copilotUsage: z.boolean().optional(),
+      /** 额度端点关着时按本机转录估算窗口（G5-25），默认开。 */
+      claudeLocalWindow: z.boolean().optional(),
       cost: z.looseObject({ enabled: z.boolean().optional() }).optional(),
     })
     .optional(),
@@ -132,7 +134,11 @@ export const runtimeSettingsSchema = z.looseObject({
    * （缺省）；壳只在它是合格 DSN 时才加载 SDK。
    */
   diagnostics: z
-    .looseObject({ crashReportDsn: z.string().optional() })
+    .looseObject({
+      crashReportDsn: z.string().optional(),
+      /** 页面 JS 错误也经同一个 DSN 上报（G5-19），默认关。 */
+      reportPageErrors: z.boolean().optional(),
+    })
     .optional(),
   /**
    * `language.*`（语言服务设计 §1.2、§3.3）。
@@ -234,11 +240,12 @@ export interface RuntimeSettingsPatch {
     statusBadges?: boolean;
     claudeUsage?: boolean;
     copilotUsage?: boolean;
+    claudeLocalWindow?: boolean;
     cost?: { enabled?: boolean };
   };
   models?: { catalog?: { autoRefresh?: boolean } };
   /** 崩溃上报的 DSN；空串关掉。 */
-  diagnostics?: { crashReportDsn?: string };
+  diagnostics?: { crashReportDsn?: string; reportPageErrors?: boolean };
   logs?: { retentionDays?: number };
   /** 更新通道与两个开关（S03 §4.1）。 */
   updates?: {
