@@ -67,6 +67,28 @@ vi.mock("@/host/github-session", () => {
   return { useGithubSession, GITHUB_CAPABILITY: "github.issues.v1" };
 });
 
+/**
+ * 托管平台面（契约 §29）：识别缺省答 GitHub，于是 GitHub 那一面的用例照旧；
+ * Gitea / GitLab 的用例各自换掉识别结果与列表。
+ */
+const forgeApi = vi.hoisted(() => ({
+  resolveForge: vi.fn(),
+  forgeIssues: vi.fn(),
+  forgeIssue: vi.fn(),
+  setForgeIssueState: vi.fn(),
+  forgePulls: vi.fn(),
+  forgePull: vi.fn(),
+  forgePullFiles: vi.fn(),
+  forgePullChecks: vi.fn(),
+  mergeForgePull: vi.fn(),
+  createForgePull: vi.fn(),
+}));
+
+vi.mock("../../api/forge", async (original) => ({
+  ...(await original<typeof import("../../api/forge")>()),
+  ...forgeApi,
+}));
+
 vi.mock("@/api/client", () => ({
   runtimeApi: {
     gitRepositoryBranches: vi.fn(async () => ({
@@ -83,6 +105,7 @@ vi.mock("@/api/client", () => ({
 }));
 
 import { runtimeApi } from "@/api/client";
+import { RuntimeRequestError } from "@/api/request";
 import { GithubDrawer } from "./GithubDrawer";
 import { useGithubFocus } from "./open";
 
@@ -297,7 +320,30 @@ beforeEach(() => {
   vi.mocked(runtimeApi.gitRepositoryWorktrees).mockReset();
   vi.mocked(runtimeApi.gitRepositoryWorktrees).mockResolvedValue([]);
   vi.mocked(runtimeApi.gitRepositoryOperate).mockClear();
+  for (const fn of Object.values(forgeApi)) fn.mockReset();
+  forgeApi.resolveForge.mockImplementation(async () =>
+    detection("github", { host: "github.com" }),
+  );
 });
+
+/** 一份识别结果（§29.2）。 */
+function detection(
+  forge: "github" | "gitea" | "gitlab" | null,
+  overrides: Record<string, unknown> = {},
+) {
+  const host = (overrides.host as string) ?? "git.example.test";
+  return {
+    repository: { host, owner: "acme", name: "app" },
+    forge,
+    source: forge === null ? null : forge === "github" ? "github" : "config",
+    configKey: forge === null || forge === "github" ? null : host,
+    apiBase: forge === null ? null : `https://${host}/api/v4`,
+    webUrl: forge === null ? null : `https://${host}/acme/app`,
+    credential: forge !== null,
+    accountLogin: forge === null ? null : "bot",
+    ...overrides,
+  };
+}
 afterEach(cleanup);
 
 describe("GitHub page availability", () => {
@@ -319,7 +365,9 @@ describe("GitHub page availability", () => {
     expect(
       await screen.findByText("Host 现在拿不到可用的 GitHub 凭据"),
     ).toBeTruthy();
-    expect(screen.getByText("前往设置 → GitHub")).toBeTruthy();
+    // 设置页改名「Git 托管」（G5-15）：按钮文案跟着改，去的仍是同一节。
+    fireEvent.click(screen.getByText("前往设置 → Git 托管"));
+    expect(store.setPanel).toHaveBeenCalledWith("settings", true);
   });
 
   it("says a Host with no GitHub service cannot be used for this", async () => {
@@ -1000,5 +1048,227 @@ describe("cleaning up after a merge", () => {
     expect(remove.disabled).toBe(true);
     expect(await screen.findByText(/不能安全移除/)).toBeTruthy();
     expect(runtimeApi.gitRepositoryOperate).not.toHaveBeenCalled();
+  });
+});
+
+describe("Gitea and GitLab remotes (§29)", () => {
+  const MR_SHA = "d".repeat(40);
+  const forgePull = (number: number, title: string) => ({
+    number,
+    title,
+    body: "",
+    state: "open" as const,
+    draft: false,
+    author: "alice",
+    baseRef: "main",
+    headRef: "feature/login",
+    headSha: MR_SHA,
+    mergeable: "mergeable" as const,
+    url: `https://git.example.test/acme/app/-/merge_requests/${number}`,
+    createdAtMs: 1_788_557_900_000,
+    updatedAtMs: 1_788_557_900_000,
+    mergedAtMs: null,
+  });
+
+  async function resolveRemote(url: string) {
+    const input = document.querySelector("input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: url } });
+    fireEvent.click(screen.getByText("解析仓库"));
+  }
+
+  it("Gitea: lists pull requests through the forge surface, never the GitHub client", async () => {
+    const api = client();
+    ready(api);
+    forgeApi.resolveForge.mockResolvedValue(
+      detection("gitea", { apiBase: "https://git.example.test/api/v1" }),
+    );
+    forgeApi.forgePulls.mockResolvedValue({
+      items: [forgePull(5, "Gitea change")],
+      nextCursor: null,
+    });
+    renderDrawer();
+    await resolveRemote("https://git.example.test/acme/app.git");
+    expect(await screen.findByText("Gitea change")).toBeTruthy();
+    expect(screen.getByText("Gitea")).toBeTruthy();
+    expect(screen.getByText("Pull requests")).toBeTruthy();
+    expect(forgeApi.resolveForge).toHaveBeenCalledWith(
+      "https://git.example.test/acme/app.git",
+    );
+    expect(firstCall<unknown>(forgeApi.forgePulls)).toEqual({
+      host: "git.example.test",
+      owner: "acme",
+      name: "app",
+    });
+    expect(api.resolveRepository).not.toHaveBeenCalled();
+    expect(api.listPulls).not.toHaveBeenCalled();
+  });
+
+  it("GitLab: calls them merge requests, merges the head on screen, offers no rebase", async () => {
+    ready(client());
+    forgeApi.resolveForge.mockResolvedValue(detection("gitlab"));
+    forgeApi.forgePulls.mockResolvedValue({
+      items: [forgePull(12, "Login rework")],
+      nextCursor: null,
+    });
+    forgeApi.forgePull.mockResolvedValue(forgePull(12, "Login rework"));
+    forgeApi.forgePullFiles.mockResolvedValue([
+      {
+        path: "src/login.ts",
+        previousPath: null,
+        status: "modified",
+        additions: 2,
+        deletions: 1,
+        patch: "@@ -1 +1 @@\n-a\n+b",
+      },
+    ]);
+    forgeApi.forgePullChecks.mockResolvedValue({
+      headSha: MR_SHA,
+      rollup: "failure",
+      checks: [{ name: "build", state: "failure", url: null }],
+    });
+    forgeApi.mergeForgePull.mockResolvedValue({ merged: true, sha: null });
+    renderDrawer();
+    await resolveRemote("git@git.example.test:acme/app.git");
+    expect(await screen.findByText("Merge requests")).toBeTruthy();
+    expect(screen.getByText("GitLab")).toBeTruthy();
+    fireEvent.click(await screen.findByText("Login rework"));
+    expect(await screen.findByText("src/login.ts")).toBeTruthy();
+    expect(await screen.findByText("build")).toBeTruthy();
+    const method = document.querySelector(
+      "[data-slot=forge-merge] select",
+    ) as HTMLSelectElement;
+    expect([...method.options].map((option) => option.value)).toEqual([
+      "merge",
+      "squash",
+    ]);
+    fireEvent.change(method, { target: { value: "squash" } });
+    fireEvent.click(screen.getByText(/^合并 · /));
+    fireEvent.click(await screen.findByRole("button", { name: "合并" }));
+    await waitFor(() =>
+      expect(forgeApi.mergeForgePull).toHaveBeenCalledWith(
+        { host: "git.example.test", owner: "acme", name: "app" },
+        12,
+        { method: "squash", headSha: MR_SHA },
+      ),
+    );
+  });
+
+  it("GitLab: a token missing a scope is named as such", async () => {
+    ready(client());
+    forgeApi.resolveForge.mockResolvedValue(detection("gitlab"));
+    forgeApi.forgePulls.mockRejectedValue(
+      new RuntimeRequestError(403, "这个令牌缺少所需的范围", "forge_scope"),
+    );
+    renderDrawer();
+    await resolveRemote("https://git.example.test/acme/app.git");
+    expect(
+      await screen.findByText("令牌缺少所需的范围，换一个范围足够的令牌"),
+    ).toBeTruthy();
+  });
+
+  it("closes a GitLab issue through the forge surface", async () => {
+    ready(client());
+    forgeApi.resolveForge.mockResolvedValue(detection("gitlab"));
+    forgeApi.forgePulls.mockResolvedValue({ items: [], nextCursor: null });
+    const issue = {
+      number: 7,
+      title: "Button misaligned",
+      body: "steps",
+      state: "open" as const,
+      author: "alice",
+      labels: ["bug"],
+      commentCount: 3,
+      url: "https://git.example.test/acme/app/-/issues/7",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      closedAtMs: null,
+    };
+    forgeApi.forgeIssues.mockResolvedValue({
+      items: [issue],
+      nextCursor: null,
+    });
+    forgeApi.forgeIssue.mockResolvedValue(issue);
+    forgeApi.setForgeIssueState.mockResolvedValue({
+      ...issue,
+      state: "closed",
+    });
+    renderDrawer();
+    await resolveRemote("https://git.example.test/acme/app.git");
+    await screen.findByText("Merge requests");
+    selectTab("Issues");
+    fireEvent.click(await screen.findByText("Button misaligned"));
+    fireEvent.click(await screen.findByText("关闭"));
+    await waitFor(() =>
+      expect(forgeApi.setForgeIssueState).toHaveBeenCalledWith(
+        { host: "git.example.test", owner: "acme", name: "app" },
+        7,
+        "closed",
+      ),
+    );
+  });
+
+  it("an unrecognized remote says so and points to the Git hosting settings", async () => {
+    ready(client());
+    forgeApi.resolveForge.mockResolvedValue(detection(null));
+    renderDrawer();
+    await resolveRemote("https://code.example.test/acme/app.git");
+    expect(await screen.findByText("这个远端没有识别出托管平台")).toBeTruthy();
+    fireEvent.click(screen.getByText("前往设置 → Git 托管"));
+    expect(store.setPanel).toHaveBeenCalledWith("settings", true);
+    expect(forgeApi.forgePulls).not.toHaveBeenCalled();
+  });
+
+  it("works for Gitea without any GitHub credential, and keeps writes", async () => {
+    const api = client();
+    session.state = {
+      status: "blocked",
+      reason: "noCredential",
+      canWrite: true,
+    };
+    session.client = api;
+    forgeApi.resolveForge.mockResolvedValue(detection("gitea"));
+    forgeApi.forgePulls.mockResolvedValue({
+      items: [forgePull(5, "Gitea change")],
+      nextCursor: null,
+    });
+    renderDrawer();
+    await resolveRemote("https://git.example.test/acme/app.git");
+    expect(await screen.findByText("Gitea change")).toBeTruthy();
+    // GitHub 的凭据提示只对 GitHub 远端有意义。
+    expect(screen.queryByText("Host 现在拿不到可用的 GitHub 凭据")).toBeNull();
+    expect(screen.getByText("新建")).toBeTruthy();
+  });
+
+  it("gives a read-only device no merge or create control on GitLab", async () => {
+    ready(client(), false);
+    forgeApi.resolveForge.mockResolvedValue(detection("gitlab"));
+    forgeApi.forgePulls.mockResolvedValue({
+      items: [forgePull(12, "Login rework")],
+      nextCursor: null,
+    });
+    forgeApi.forgePull.mockResolvedValue(forgePull(12, "Login rework"));
+    forgeApi.forgePullFiles.mockResolvedValue([]);
+    forgeApi.forgePullChecks.mockResolvedValue({
+      headSha: MR_SHA,
+      rollup: "none",
+      checks: [],
+    });
+    renderDrawer();
+    await resolveRemote("https://git.example.test/acme/app.git");
+    expect(screen.queryByText("新建")).toBeNull();
+    fireEvent.click(await screen.findByText("Login rework"));
+    expect(await screen.findByText("没有检查")).toBeTruthy();
+    expect(document.querySelector("[data-slot=forge-merge]")).toBeNull();
+  });
+
+  it("an older core without the forge domain falls back to GitHub", async () => {
+    const api = client();
+    ready(api);
+    forgeApi.resolveForge.mockRejectedValue(
+      new RuntimeRequestError(501, "not implemented", "not_implemented"),
+    );
+    renderDrawer();
+    await resolveRepository();
+    await waitFor(() => expect(api.resolveRepository).toHaveBeenCalled());
   });
 });
