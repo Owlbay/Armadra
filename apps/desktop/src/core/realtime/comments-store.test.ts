@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DomainError } from "../workspaces/support";
 import {
+  commentsOnItems,
   commentsOnNodes,
   createComment,
   deleteComment,
@@ -78,6 +79,18 @@ describe("评论存取", () => {
       ),
     ).toEqual([onNode.id, reply.id]);
     expect(commentsOnNodes(db, boardId, ["n1", "n2"])).toHaveLength(2);
+    const onItem = createComment(db, {
+      boardId,
+      anchor: { kind: "item", id: "i1" },
+      body: "白板上的",
+      authorPrincipalId: "p1",
+    });
+    expect(
+      commentsOnItems(db, boardId, ["i1", "n1"]).map((comment) => comment.id),
+    ).toEqual([onItem.id]);
+    expect(commentsOnItems(db, boardId, [])).toEqual([]);
+    expect(commentsOnNodes(db, boardId, ["i1"])).toEqual([]);
+    deleteComment(db, boardId, onItem.id);
 
     expect(
       updateCommentBody(db, boardId, onNode.id, "改过", 4_000),

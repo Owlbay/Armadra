@@ -1136,6 +1136,13 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 配对短码换票（契约 §24）：匿名，短码就是凭据；档位与限流在 Gateway 域里。
+  {
+    path: "/api/gateway/pairing-code/exchange",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
   // 推送（契约 §19）：配置、设备登记与撤销、测试通知。只碰请求主体自己的设备，
   // 身份由推送域自己认（`route-scopes.ts` 的 `SELF_GUARDED`）。
   {

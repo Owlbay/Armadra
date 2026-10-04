@@ -264,3 +264,22 @@ export function commentsOnNodes(
     .all(boardId, ...nodeIds) as unknown as CommentRow[];
   return rows.map(fromRow);
 }
+
+/**
+ * 锚在这些白板 item 上的评论（含回复）：白板引用随连线交出评论时用（G5-12）。
+ * 与 `commentsOnNodes` 同一个形状，只换锚点种类。
+ */
+export function commentsOnItems(
+  database: DatabaseSync,
+  boardId: string,
+  itemIds: readonly string[],
+): BoardComment[] {
+  if (itemIds.length === 0) return [];
+  const placeholders = itemIds.map(() => "?").join(",");
+  const rows = database
+    .prepare(
+      `${SELECT} WHERE board_id = ? AND anchor_kind = 'item' AND anchor_id IN (${placeholders}) ORDER BY created_at_ms, id`,
+    )
+    .all(boardId, ...itemIds) as unknown as CommentRow[];
+  return rows.map(fromRow);
+}

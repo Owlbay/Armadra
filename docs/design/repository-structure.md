@@ -57,6 +57,7 @@
 ├── AGENTS.md CLAUDE.md README.md CHANGELOG.md LICENSE
 ├── armadra.sh                 开发者入口，内部只调用 tools/ 与包脚本
 ├── package.json pnpm-workspace.yaml tsconfig.base.json
+├── patches/                   pnpm 依赖补丁，理由写在 pnpm-workspace.yaml 对应条目旁
 ├── Cargo.toml Cargo.lock
 └── repo.rules.json            §3 规则的机器可读版本，供 tools/repo-check 读取
 ```

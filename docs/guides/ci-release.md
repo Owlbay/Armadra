@@ -474,6 +474,26 @@ CLI 需要的宽沙箱权限过不了审核。服务器壳镜像推 GHCR 由 `se
 `Contents/Resources/`（Windows / Linux 上 electron-builder 已放在可执行文件旁，缺了才补）。
 设置 → 关于 → 开源许可显示的就是这份文件。
 
+### 3.2 依赖安全：覆盖、补丁与构建期豁免
+
+Dependabot 警报按三种办法收口，理由都写在 `pnpm-workspace.yaml` 对应条目旁：
+
+- **有修复版**：`overrides` 只覆盖受影响的区间、钉到最低修复版（如 `uuid@<11.1.1`），父包自己的
+  范围已经容得下；父包自己升过去后删掉那一条。
+- **没有修复版、但漏洞代码可以整个拿掉**：`patchedDependencies` + `"父包>子包": "-"`。
+  `acme-client` 只在旧的 `forge` 导出里用 `node-forge`，Armadra 不用它（CSR 在
+  `core/gateway/acme.ts` 自己拼，账户密钥的 JWS 走 `node:crypto`），所以
+  `patches/acme-client@5.4.0.patch` 删掉那个导出与文件，`node-forge` 不再安装、也不进包。
+  `acme-client` 发了不依赖 `node-forge` 的版本后，补丁与覆盖一起删。升 `acme-client` 时补丁
+  不再适用，`pnpm install` 会直接失败，不会悄悄失效。
+- **没有修复版、只在构建期**：锁在 `pnpm-lock.yaml` 的现有版本，登记在下表，等上游发版；
+  警报由维护者在 GitHub 上以「仅构建期 / 代码路径不可达」dismiss。
+
+| 包                           | 警报                | 经由                                                                 | 为什么不进运行时                                                                                                            |
+| ---------------------------- | ------------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `braces@3.0.3`               | GHSA-vfj7-8cjw-p6xm | `micromatch` ← `fast-glob` ← `shadcn` / `ts-morph`（web 开发依赖）   | 只有开发者手动跑 `shadcn` CLI 时加载；匹配的模式来自仓库自己的配置，不是外部输入                                            |
+| `http-cache-semantics@4.2.0` | GHSA-ch52-4w7c-c8xp | `cacheable-request` ← `got@11` ← `@electron/get`（electron-builder） | 只在安装 / 打包时下载 Electron 用；是单用户的私有缓存，不是多用户共享缓存，警报说的跨用户泄露没有发生条件；4.3.0 未修此问题 |
+
 ## 4. 本地怎么先验
 
 ```sh

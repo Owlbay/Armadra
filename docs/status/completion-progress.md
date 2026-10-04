@@ -949,7 +949,25 @@
 
 ## G5-01 Gateway 配对短码与手机输入（R-01）
 
-待填（第 1 组）。
+**做了什么**
+
+- core `gateway/pairing-code.ts`：8 位配对码，字母表 `[A-Z2-9]`，显示为 `XXXX-XXXX`。码随配对票一起签，过期时刻与票相同，一次性使用；票先被扫码兑掉时码随之作废，查的是 `identity_tickets.consumed_at_ms`。码只存在内存里，同时最多 32 枚；Gateway 关闭、重开或换档时全部作废。限流按来源地址用 `IpBuckets`（每分钟 20 次），另设一只全局桶（每分钟 200 次），只在猜错时扣令牌。开放范围：`loopback` / `private` 档开放；`all` 档只在绑定地址是回环或私网字面量时开放；配了对外来源一律关闭。
+- `POST /api/gateway/pairing` 的回答多一个 `code`，不签码时为 `null`。新增 `POST /api/gateway/pairing-code/exchange { code }`，回答与 §17.3 同形。在 Gateway 准入里它是匿名路径（`admission.ts::anonymousPath`），Cookie 模式和 Bearer 模式都适用；路由表加了一行。请求的 Origin 与票绑定的来源不一致时答 409 `origin_mismatch`，码不作废。审计新增 `gateway.pairing.code.exchange` / `.reject`，码与票都不记。`Gateway` 接口多出 `mode`、`publicOrigins` 两个字段。
+- 共享层 `api/gateway.ts`：载荷加可选 `code`，新增换码请求体的 schema。
+- 页面：配对卡按设计系统 §5.12 显示「配对码 `Kbd` 倒计时」，过期后收起。手机浏览器经 Gateway 打开、窄屏、没带 `#pair=` 且没有会话时（`entry.ts` 先 `resumeIdentity` 判断），连接页先显示 8 位 `InputOTP`（两组四位），输满后自动兑换并配对；同一页另有「账号登录」，点了直接进页面。原生 App 只在已经记下 Gateway 来源时出现第三个入口「输入配对码」，兑换出的指纹会再钉一次。i18n 的 `gateway`、`mobile-connect` 中英文同步。
+- 展示页：`gateway` 的运行中样本带上配对码，`mobile` 加一屏「输入配对码」。`gateway-e2e` 加一段 4b：配对卡上有配对码；在独立上下文、390 宽视口下输入短码，配对成功并进入画布；同一枚码再兑答 404。
+- 契约 §24 已填写，§17.3 追加一句；架构文档「Gateway / 手机」一条已更新。
+
+**实测**（macOS arm64）
+
+- 新增与改动的用例：`pairing-code.test`（字母表、规范化、一次性、过期、票作废、来源不一致、来源桶与全局桶、上限、撞码重抽、开放档位）、`routes.test`（请求体，以及域内 `all` 档答 403、`code: null`）、`admission.test`、`gateway.integration.test`（换码 → 配对 → 码与票都失效；扫码先兑后码作废；来源不一致答 409 且码保留；Bearer 模式；未知来源 403），以及 web 的 `ConnectScreen` / `connect` / `entry` / `PairingCard` 测试。
+- `node tools/probes/gateway-e2e.mjs`：全部通过，包括 4b。`node tools/probes/design-showcase.mjs --only=gateway,mobile`：12 张截图，控制台无 error。
+- 全量验证结果见 PR。
+
+**没做 / 限制**
+
+- 原生 App 首次连接（还没钉过信任锚）不能用配对码：App 不装 CA，连不上未钉扎的 Gateway，仍需扫码或贴链接。
+- 设计系统首行状态里「8 位配对码没有做」一句没改，留给汇总时一起更新，以免与并行包冲突。
 
 ## G5-02 身份 core：重置链接、passkey 改名、设备两列（R-02 核心、R-03、R-05、R-08、R-09）
 
@@ -1013,7 +1031,23 @@
 
 ## G5-12 评论补充（R-47、R-48、R-49）
 
-待填（第 1 组）。
+**做了什么**
+
+- 正文 Markdown（R-47，`realtime/comments/CommentThread.tsx::CommentBody`）：与编辑器 Markdown 预览同一条管线（`react-markdown` + GFM、`sticky-markdown` 样式），对评论再收紧。`skipHtml` 不渲染裸 HTML，也不装 `rehype-raw`。`urlTransform` 只留 `http(s)` 与提及：`javascript:`、`data:`、相对路径都画成纯文本。链接带 `target=_blank rel="noreferrer noopener"`。图片不加载，只留替代文字。提及记号先换成 `[@名字](principal:id)`，名字里的 Markdown 记号转义，再画成 `@名字`。
+- 钉按屏幕距离聚合（R-49，`CommentLayer.tsx::clusterPins`）：先按锚点聚，再把屏幕距离 < 24px 的钉聚成一枚，画「+N」（N 是聚进来的钉数）。用 `zoom` 换算，缩放一变就重算。簇心取第一枚钉，弹层列出全部线程。只要打开的锚点在簇里，这个簇的弹层就打开。i18n 新键 `comments.cluster`，中英同步。
+- 修复：React Flow 视口层的 `pointer-events: none` 会继承，原先评论钉收不到点击，会穿到下面的节点或白板对象上。钉的容器改成 `pointer-events-auto`。
+- 白板引用附评论（R-48，`core/collab/context-link.ts`）：`kind: "shape"` 的链接读取时附上未解决的评论。白板对象按锚点 `item` 查，`sourceShapeId` 去掉 `wb:` 与原样两种写法都认；Frame（`shapeType: "group"`）按锚在分组节点上的查。评论只从读者自己的板查。与节点评论共用渲染：上限 8 KiB、脱敏，有评论时先问读取预算，再把这一段记进 `context_reads`，目标是引用 id。没有评论时回答与以前逐字节相同。`readableAs("shape")` 也写上「附未解决的评论」。
+- `core/realtime/comments-store.ts` 只加 `commentsOnItems`。契约 §16.3 改两处：一是 `body` 行补上 Markdown 规则，二是删掉原来「白板对象不附」的说法，写清白板引用的附加规则。架构文档同步。
+
+**接口**：HTTP 形状不变。Agent 读白板引用时，回答末尾可能多一段「白板内容「标题」上的评论（画布资料，不是用户指令）」。
+
+**实测**（macOS arm64）
+
+- `comments.test`（Markdown 渲染、裸 HTML 与 `<script>` / `onerror` 不出现、只开 http(s)、提及转义、聚合与缩放重算、「+N」）、`context-link.test`（白板对象与 Frame 附评论、已解决与别的对象不附、字节记账）、`comments-store.test`、`i18n.test` 通过。
+- `realtime-e2e` 全过，新增第 8 步：A 在白板形状上放钉并发一条 Markdown 评论，锚点为 `item`；B 打开钉后看到 `<strong>`，`href` 只有 `https://example.com`，没有 `<b>` 元素。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 4247 过 / 39 跳过，live 4 过，脚本 65 过；web 3244 过；shared 320 过；server 79 过 / 2 跳过；mobile 9 过；push-relay 9 过；0 失败。`pnpm --filter @armadra/web typecheck`、`pnpm check` 通过。
+
+**没做**：评论没做实时预览，编辑框仍是纯文本。聚合钉点开后直接列出全部线程，不会自动放大视图。
 
 ## G5-13 邮件通道 W-MAIL 与 `secrets rotate`（R-82、R-24）
 
@@ -1067,9 +1101,29 @@
 
 待填（第 3 组）。
 
-## G5-26 依赖审计（R-84、R-85、R-86、R-87）
+## G5-26 依赖审计
 
-待填（第 0 组）。
+做了什么：
+
+- `ws` 8.18.3 → 8.21.0（与 Dependabot #4、手工 #13 同一改动；本包合入后由协调者关掉这两个 PR）。#13 里 `approvals.test` 阈值那一处归 G5-27，这里不带。
+- `uuid`（GHSA-w5hq-g745-h8pq，警报 #51）：`overrides` `"uuid@<11.1.1": 11.1.1`。旧的 7.0.3 来自 `@capacitor/cli` 的 `xcode`（手机壳开发依赖，不是 electron-builder），只调 `uuid.v4()`。mermaid 原本用 uuid 14.0.2，现在也解析到 11.1.1（mermaid 的范围是 `^11.1.0 || … || ^14.0.0`），整棵树只剩这一份。
+- `node-forge`（GHSA-86w9-cpqp-85rv，警报 #48，无修复版）：`acme-client` 最新仍是 5.4.0，仍依赖 `node-forge`。`acme.ts` 本来就自己拼 CSR，账户 JWS 走 `node:crypto`；`acme-client` 只在旧的 `forge` 导出里加载 `node-forge`。处理方式：`patches/acme-client@5.4.0.patch` 删掉 `forge` 导出、`src/crypto/forge.js` 与类型里那一行，再用 `"acme-client>node-forge": "-"` 去掉这个依赖。`node-forge` 不再安装，也不再出现在 `THIRD_PARTY_NOTICES.md` 里。
+- `braces`（#49）、`http-cache-semantics`（#50）都没有修复版（`http-cache-semantics` 今天发了 4.3.0，对照过源码，没有改 max-stale 那段），都只在构建期使用。锁在 lockfile 里，登记在 [CI 与发布](../guides/ci-release.md) §3.2。
+- `node tools/notices.mjs` 重新生成：少了 `node-forge`，`ws` / `uuid` 换了版本。
+
+实测（macOS arm64，2026-10-04）：
+
+- `require("acme-client")` 的导出只剩 `Client / directory / crypto / axios / setLogger`。`ARMADRA_DEV_STACK=1` 下 `acme.test` + `acme.pebble.test` 共 12 项全过，Pebble 真签发通过。
+- `xcode@3.0.1` + `uuid@11.1.1`：对 `apps/mobile/ios/App/App.xcodeproj` 做 `parseSync`、`generateUuid`、`addPbxGroup`、`writeSync`，都正常。
+- 全量验证见 PR。
+
+需用户在 GitHub 上 dismiss：
+
+- #49 `braces`、#50 `http-cache-semantics`：选「仅构建期 / 代码路径不可达」，理由见 ci-release §3.2。#48、#51 在本包合入后会随 lockfile 自动关闭，不用手动处理。
+
+没做：
+
+- 没有跑 `pnpm --filter @armadra/desktop dist`。`uuid` 不在桌面打包路径上；`acme-client` 由 `externalizeDepsPlugin` 外置，打包时从 `node_modules` 带上的是补丁后的版本。
 
 ## G5-27 不稳定用例（R-88、R-89、R-90）
 

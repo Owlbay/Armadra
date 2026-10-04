@@ -93,6 +93,7 @@ export const PAIRING: GatewayPairingPayload = {
   expiresAt: new Date(NOW + 179_000).toISOString(),
   webUrl: `${ORIGIN}/#pair=${TICKET}&fp=${FINGERPRINT}`,
   deepLink: `armadra://pair?host=192.168.1.8%3A8443&ticket=${TICKET}&fp=${FINGERPRINT}`,
+  code: "3F7K-9Q2M",
 };
 
 /** 已过期的那张：时钟走过了 `expiresAt`。 */
