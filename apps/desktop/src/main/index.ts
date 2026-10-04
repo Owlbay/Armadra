@@ -22,6 +22,7 @@ import {
   setDockIcon,
 } from "./branding";
 import { deviceName, issueCoreTicket } from "./core-ticket";
+import { CoreSession } from "../shell-core/core-session";
 import {
   DesktopLifecycle,
   quitFailureDialog,
@@ -378,8 +379,22 @@ async function start(): Promise<void> {
   // would miss the first window, and the menu is process-wide.
   onWindowCreated(installKeydownIntercept);
   installApplicationMenu();
+  // 托盘打 core 也带会话（契约 §3.2）：票经和页面同一条私有通道签，来源是
+  // core 自己的回环基址，与页面的会话分开。
+  const coreSession = new CoreSession({
+    base: async () => (await transportEndpoints()).httpBase,
+    ticket: async (origin) =>
+      (
+        await issueCoreTicket({
+          dataDir: dataDir(),
+          origin,
+          deviceName: deviceName(app.getLocale()),
+        })
+      ).ticket,
+  });
   createTray({
     runtimeBase: async () => (await transportEndpoints()).httpBase,
+    request: (path, init) => coreSession.fetch(path, init),
     quit: () => app.quit(),
   });
 

@@ -40,6 +40,11 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 let stopped = false;
 /** Where the core is; set by `createTray`, read by the gateway item. */
 let base: () => Promise<string> = async () => "";
+/** How a request reaches the core; set by `createTray`. */
+let send: (path: string, init?: RequestInit) => Promise<Response> = async (
+  path,
+  init,
+) => fetch(`${await base()}${path}`, init);
 /**
  * The external-access item (completion plan G2-7). `null` until the core has
  * answered `GET /api/gateway` once, and whenever it refuses or is the server
@@ -164,6 +169,12 @@ export interface TrayOptions {
   /** Where the Runtime is, resolved at poll time: the address is published
    * after startup and can change when the Runtime restarts. */
   readonly runtimeBase: () => Promise<string>;
+  /**
+   * 带会话发一个请求（契约 §3.2：core 不再放行回环上没带凭据的请求）。
+   * `main/index.ts` 给的是 `shell-core/core-session.ts` 那一份；不给时直接打
+   * `runtimeBase`，只有测试这么用。
+   */
+  readonly request?: (path: string, init?: RequestInit) => Promise<Response>;
   /** The graceful quit sequence. */
   readonly quit: () => void;
 }
@@ -180,12 +191,15 @@ export function createTray(options: TrayOptions): void {
     return;
   }
   base = options.runtimeBase;
+  send =
+    options.request ??
+    (async (path, init) => fetch(`${await base()}${path}`, init));
   tray = new Tray(image);
   tray.setToolTip("Armadra");
   redraw();
   // 左键留给「点一下把窗口叫回来」，菜单只从右键出。
   tray.on("click", () => revealWindow());
-  void poll(options.runtimeBase);
+  void poll();
 }
 
 export function destroyTray(): void {
@@ -198,12 +212,11 @@ export function destroyTray(): void {
 }
 
 async function fetchText(
-  base: string,
   path: string,
   init?: RequestInit,
 ): Promise<string | null> {
   try {
-    const response = await fetch(`${base}${path}`, {
+    const response = await send(path, {
       ...init,
       signal: AbortSignal.timeout(5_000),
     });
@@ -249,7 +262,7 @@ function setGateway(next: { enabled: boolean } | null): void {
  */
 export async function refreshGateway(): Promise<void> {
   if (stopped) return;
-  setGateway(gatewayItemState(await fetchText(await base(), "/api/gateway")));
+  setGateway(gatewayItemState(await fetchText("/api/gateway")));
 }
 
 /**
@@ -262,7 +275,7 @@ async function toggleGateway(): Promise<void> {
   toggling = true;
   redraw();
   try {
-    const answer = await fetchText(await base(), "/api/gateway", {
+    const answer = await fetchText("/api/gateway", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: !gateway.enabled }),
@@ -283,22 +296,21 @@ async function toggleGateway(): Promise<void> {
  * `usage.refreshMinutes` within the bounds `shell-core/usage.ts` sets, and is
  * re-read every round so a settings change takes effect without a restart.
  */
-async function poll(runtimeBase: () => Promise<string>): Promise<void> {
+async function poll(): Promise<void> {
   if (stopped) return;
   let interval = pollIntervalMs(null);
   try {
-    const base = await runtimeBase();
     const [usage, cost] = await Promise.all([
-      fetchText(base, "/api/usage"),
-      fetchText(base, "/api/usage/cost"),
+      fetchText("/api/usage"),
+      fetchText("/api/usage/cost"),
     ]);
     const next = traySummary(summary, { usage, cost }, strings());
     if (next !== summary) {
       summary = next;
       redraw();
     }
-    setGateway(gatewayItemState(await fetchText(base, "/api/gateway")));
-    const settings = await fetchText(base, "/api/settings");
+    setGateway(gatewayItemState(await fetchText("/api/gateway")));
+    const settings = await fetchText("/api/settings");
     interval = pollIntervalMs(
       settings === null ? null : refreshMinutes(settings),
     );
@@ -306,7 +318,7 @@ async function poll(runtimeBase: () => Promise<string>): Promise<void> {
     // Same rule as a failed fetch: keep the last reading and try again.
   }
   if (stopped) return;
-  timer = setTimeout(() => void poll(runtimeBase), interval);
+  timer = setTimeout(() => void poll(), interval);
   // The poll must never be the reason the process stays alive at quit.
   timer.unref?.();
 }
