@@ -9,10 +9,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fakeAcpAgentPath } from "@armadra/agent/acp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { featureAgentPath } from "../../acp/feature-fixture";
 import { type AcpCore, FAKE_AGENT, acpCore, until } from "../../acp/fixture";
 import { getAgentStatus } from "../status";
 import { AmaCredentials, setAmaCredentials } from "../ama-credentials";
@@ -832,7 +830,6 @@ describe("an ACP-driven node", () => {
   it("redeems the node credential into the adapter's environment only", async () => {
     const backend = memoryBackend();
     acp = await acpCore({
-      agentPath: featureAgentPath(fakeAcpAgentPath()),
       baseAgent: "copilot",
       credentialSecrets: backend,
     });
@@ -885,7 +882,6 @@ describe("an ACP-driven node", () => {
   it("refuses to start the adapter when the bound value is gone", async () => {
     const backend = memoryBackend();
     acp = await acpCore({
-      agentPath: featureAgentPath(fakeAcpAgentPath()),
       baseAgent: "copilot",
       credentialSecrets: backend,
     });
@@ -911,7 +907,6 @@ describe("an ACP-driven node", () => {
   it("refuses a member without credential:use before an adapter starts (H2)", async () => {
     const backend = memoryBackend();
     acp = await acpCore({
-      agentPath: featureAgentPath(fakeAcpAgentPath()),
       baseAgent: "copilot",
       credentialSecrets: backend,
     });
@@ -941,7 +936,6 @@ describe("an ACP-driven node", () => {
 
   it("gives an ama node's adapter the model keys, and nobody else's", async () => {
     acp = await acpCore({
-      agentPath: featureAgentPath(fakeAcpAgentPath()),
       baseAgent: "ama",
     });
     const keys = new AmaCredentials(memoryBackend());

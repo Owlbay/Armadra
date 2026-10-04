@@ -58,6 +58,7 @@ const { undo } = await import("@/store/canvas/history");
 const { emptyWhiteboard } = await import("@/canvas/whiteboard/model");
 const { availableExports, codeBlocks, exportFileName, exportToBoard } =
   await import("./export-to-board");
+const { NODE_FLASH_MS, useNodeFlash } = await import("@/canvas/node-flash");
 
 const stamp = "2026-10-03T00:00:00.000Z";
 const AGENT = "0f1a2b3c-4d5e-4f60-8a71-92b3c4d5e6f7";
@@ -226,6 +227,35 @@ describe("四条路", () => {
     undo();
     expect(newNodes()).toEqual([]);
     expect(state().document?.edges).toEqual([]);
+  });
+
+  it("代码块落在 Agent 工作目录（core 答回的相对路径原样用）；新节点亮一次未读光晕后熄掉", async () => {
+    vi.useFakeTimers();
+    try {
+      exportText.mockImplementation(
+        async (_workspace: string, nodeId: string, name: string) => ({
+          path: `/tmp/one/pkg/.armadra/exports/acp/${nodeId}/${name}`,
+          relativePath: `pkg/.armadra/exports/acp/${nodeId}/${name}`,
+          bytes: 10,
+        }),
+      );
+      const result = await exportToBoard(
+        "editor",
+        "```ts\nconst a = 1;\n```\n",
+        source,
+      );
+      const id = result!.nodeIds[0]!;
+      expect(newNodes()[0]?.data).toMatchObject({
+        path: `pkg/.armadra/exports/acp/${AGENT}/8c1e7a52-m3-1.ts`,
+      });
+      expect(useNodeFlash.getState().flashing[id]).toBe(true);
+      // 来源节点不亮：亮的是落成的那一个。
+      expect(useNodeFlash.getState().flashing[AGENT]).toBeUndefined();
+      vi.advanceTimersByTime(NODE_FLASH_MS);
+      expect(useNodeFlash.getState().flashing[id]).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("Mermaid flowchart：白板对象带来源，外面一个 Frame，一条引用指向 Frame；一次撤销全回", async () => {

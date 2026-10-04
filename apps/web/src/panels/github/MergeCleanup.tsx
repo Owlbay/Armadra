@@ -3,15 +3,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Button } from "@/ui/button";
 import { runtimeApi } from "@/api/client";
 import { useT } from "@/app/preferences-store";
@@ -214,29 +214,29 @@ export function MergeCleanup({
         </p>
       )}
 
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={confirm !== null}
         onOpenChange={(open) => {
           if (!open) setConfirm(null);
         }}
       >
-        <AlertDialogContent className="z-[var(--z-dialog)]">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+        <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t(
                 confirm === "worktree"
                   ? "github.cleanup.confirmWorktree"
                   : "github.cleanup.confirmBranch",
               )}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
+            </ResponsiveAlertDialogTitle>
+            <ResponsiveAlertDialogDescription>
               {t(
                 confirm === "worktree"
                   ? "github.cleanup.confirmWorktreeNote"
                   : "github.cleanup.confirmBranchNote",
               )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
+            </ResponsiveAlertDialogDescription>
+          </ResponsiveAlertDialogHeader>
           <dl className="grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
             <dt className="text-muted-foreground">{t("github.pull.head")}</dt>
             <dd className="min-w-0 truncate">{pull.headRef}</dd>
@@ -268,11 +268,11 @@ export function MergeCleanup({
               </>
             )}
           </dl>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="min-h-10">
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel className="min-h-10">
               {t("github.cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               className="min-h-10"
               onClick={() => {
                 const action = confirm;
@@ -286,10 +286,10 @@ export function MergeCleanup({
               }}
             >
               {t("github.cleanup.confirmAction")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </section>
   );
 }

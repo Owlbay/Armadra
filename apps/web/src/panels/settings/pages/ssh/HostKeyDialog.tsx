@@ -6,18 +6,16 @@ import type { SshHost, SshHostKey, SshHostKeyScan } from "@armadra/shared";
 
 import { runtimeApi } from "@/api/client";
 import { useT } from "@/app/preferences-store";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import {
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
   ResponsiveDialog,
   ResponsiveDialogContent,
   ResponsiveDialogFooter,
@@ -175,38 +173,40 @@ export function HostKeyDialog({ host }: { host: SshHost }) {
         </ResponsiveDialogContent>
       </ResponsiveDialog>
 
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={pending !== null}
         onOpenChange={(next) => {
           if (!next) setPending(null);
         }}
       >
-        <AlertDialogContent className="z-[var(--z-dialog)]">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+        <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t("ssh.hostKey.replaceTitle", {
                 fingerprint: pending?.fingerprint ?? "",
               })}
-            </AlertDialogTitle>
-          </AlertDialogHeader>
+            </ResponsiveAlertDialogTitle>
+          </ResponsiveAlertDialogHeader>
           <div className="flex flex-col gap-1">
             {scan?.known.map((fingerprint) => (
               <Known key={fingerprint} fingerprint={fingerprint} />
             ))}
           </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("ssh.dialog.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("ssh.dialog.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               onClick={() => {
                 if (pending)
                   trust.mutate({ line: pending.line, replace: true });
               }}
             >
               {t("ssh.hostKey.replaceConfirm")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </>
   );
 }

@@ -249,7 +249,11 @@ pnpm dev-stack up --profile ntfy       # 加上可选 profile（headscale / ntfy
 pnpm dev-stack health --json           # 只跑健康检查
 pnpm dev-stack logs keycloak -f
 pnpm dev-stack down                    # 加 --volumes 连卷一起删
+pnpm dev-stack down gitea              # 只停并删这几个
 ```
+
+各 worktree 共用同一个 compose 项目：`up` 不清理别处起的服务，几个 worktree 同时用时，
+`down` 点名只停自己起的那几个。
 
 镜像全部钉到明确版本，端口只绑 `127.0.0.1`。端口与健康检查的唯一来源是
 `tools/dev-stack/services.mjs`，`stack.test.mjs` 守住它与 `docker-compose.yml` 一致。

@@ -22,6 +22,7 @@ import {
   ScheduleEngine,
   type TargetStatus,
 } from "./engine";
+import type { ScheduleEvent } from "./contracts";
 import { configHash } from "./plan";
 import { ScheduleStore } from "./store";
 
@@ -108,6 +109,8 @@ export interface Harness {
   readonly store: ScheduleStore;
   readonly engine: ScheduleEngine;
   readonly dispatcher: FakeDispatcher;
+  /** 内核发出的调度事件（契约 §27.3），按发出顺序。 */
+  readonly events: { workspaceId: string; event: ScheduleEvent }[];
   /** 当前的假墙上时钟，毫秒。 */
   now: number;
   advance(ms: number): void;
@@ -117,6 +120,7 @@ export function harness(options: { now?: number } = {}): Harness {
   const { database, store } = openStore();
   const dispatcher = new FakeDispatcher();
   const state = { now: options.now ?? 1_700_000_000_000 };
+  const events: { workspaceId: string; event: ScheduleEvent }[] = [];
   const engine = new ScheduleEngine({
     store,
     dispatcher,
@@ -129,12 +133,14 @@ export function harness(options: { now?: number } = {}): Harness {
     claimLeaseMs: 30_000,
     dispatchTimeoutMs: 5_000,
     pollIntervalMs: 1_000,
+    publish: (workspaceId, event) => events.push({ workspaceId, event }),
   });
   return {
     database,
     store,
     engine,
     dispatcher,
+    events,
     get now() {
       return state.now;
     },

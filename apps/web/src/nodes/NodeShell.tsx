@@ -31,6 +31,7 @@ import { useCompactLayout } from "@/platform/layout";
 import { canFocusOnPhone } from "@/shell/mobile-focus";
 import { useHeadlessBrowser } from "./browser/availability";
 import { runCanvasCommand } from "@/canvas/commands";
+import { useNodeFlashing } from "@/canvas/node-flash";
 import { containerSize, getFlow } from "@/canvas/flow/flow-context";
 import { ConnectionHandles } from "@/canvas/flow/nodes/ConnectionHandles";
 import {
@@ -214,11 +215,13 @@ export function NodeShell({
   );
   const bodyRef = React.useRef<HTMLDivElement>(null);
   useNodeBodyGuards(bodyRef);
+  // 节点自己的状态光晕优先；没有时才亮「刚落成」那一次（`canvas/node-flash`）。
+  const flashing = useNodeFlashing(node.id);
 
   return (
     <div
       data-slot="node-shell"
-      data-glow={glow}
+      data-glow={glow ?? (flashing ? "unread" : undefined)}
       data-collapsed={collapsed ? "true" : undefined}
       data-selected={selected ? "true" : undefined}
       data-node-type={node.type}

@@ -11,6 +11,7 @@ import { FlowWorkspace } from "../canvas/FlowWorkspace";
 // 浮层都在 `./lazy` 里 `React.lazy` 包过，走各自的 chunk（§17 代码分割）；
 // `./Overlays` 是它们的挂载点，也是决定 chunk 什么时候才被取回来的闸门。
 import { Overlays } from "./Overlays";
+import { IdentityGate } from "./IdentityGate";
 import { useMinimapPreferences } from "./minimap-preferences";
 import { Banners } from "../shell/Banners";
 import { ControlsCluster } from "../shell/ControlsCluster";
@@ -56,7 +57,9 @@ export function App() {
     <QueryClientProvider client={queryClient}>
       <ReactFlowProvider>
         <TooltipProvider delayDuration={500}>
-          <AppShell />
+          <IdentityGate>
+            <AppShell />
+          </IdentityGate>
         </TooltipProvider>
       </ReactFlowProvider>
     </QueryClientProvider>

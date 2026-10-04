@@ -10,7 +10,13 @@ import { fileURLToPath } from "node:url";
  */
 
 export interface SinkRecord {
-  readonly kind: "apns" | "fcm" | "fcm-token" | "webpush" | "relay";
+  readonly kind:
+    | "apns"
+    | "fcm"
+    | "fcm-token"
+    | "webpush"
+    | "unifiedpush"
+    | "relay";
   readonly method: string;
   readonly path: string;
   readonly httpVersion: string;
@@ -19,6 +25,7 @@ export interface SinkRecord {
   readonly status: number;
   readonly deviceToken?: string | null;
   readonly subscription?: string;
+  readonly topic?: string;
   readonly jwt?: {
     readonly ok?: boolean;
     readonly reason?: string | null;

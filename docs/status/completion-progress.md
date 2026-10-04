@@ -1000,7 +1000,32 @@
 
 ## G5-03 身份页面：整页登录、忘记口令、重置页、passkey 改名、MFA 重置、L7（R-02 页面、R-03 页面、R-04、R-05 页面、R-06、R-13）
 
-待填（第 2 组）。
+**做了什么**
+
+- 整页入口（R-06）：新 `app/IdentityGate.tsx` 包在 `App.tsx` 的壳外面。服务器壳 / Gateway 来源（HTTPS 页面）没有会话时渲染整页 `SignIn`（无侧栏、360 列、BrandMark 居中）；地址栏带 `#reset=<令牌>` 时渲染整页「设置新口令」，同一标签页里贴进链接（只改片段）也接得住；带 `#invite=` / `#pair=` / `#oauth=` 时照旧进壳由设置页接手；问不到会话（离线、旧 core）照旧进壳。登出、换会话广播后重问会话。策略要求 MFA 而未登记时登录后直接打开「安全」。桌面窗口与原生 App 不经过它。
+- 重置页（R-05 页面）：`session/ResetPassword.tsx`，先 `GET` 显示是谁的、几点前有效；认不出一律「链接已失效 · 请联系管理员重新签发」；两次输入核对；设好后「去登录」落在整页登录的口令步，账号已填成那个人的 principalId。
+- 忘记口令：登录口令步一个 link，点开只给一句「请联系管理员为你签发重置链接」（邮箱可选，没有自助重置）。
+- 签发重置链接：`panels/settings/pages/ResetLinkDialog.tsx`，打开即签，链接 + 二维码（复用配对卡的 `QrImage`）+ 复制 + 过期时间；服务器配了邮件（`GET /api/mail/status.configured`，404 当未配置）时多一行「发送邮件」。账号与共享页成员行改成「…」菜单：签发重置链接 · 重置两步验证 · 停用；owner 那一行只有 owner 自己看得到「签发重置链接」。组管理员在组对话框里对角色是 member 的人有同一个按钮。邀请对话框生成链接后同样有「发送邮件」（`MailLinkForm`）。新 `api/mail.ts`。
+- owner 重置 MFA（R-04）：成员行菜单「重置两步验证」→ `AlertDialog` 确认 → `POST /api/identity/mfa/reset`（`api/security.ts::resetMfa`），toast 区分「已重置」与「本来就没开」。
+- passkey 改名（R-03 页面）：安全页通行密钥行多一个铅笔按钮，名称格内联成 `Field` + `Input`，Enter / 保存提交，Esc 取消，1–64 字符。
+- 设备两列（R-02 页面）：`GatewayDevices.tsx` 加「平台」「最近访问」，没有值画「—」。
+- L7（R-13）：`password_too_short / password_too_long / password_contains_name / password_too_common / password_breached` 各有中英文案（`security.error.*`，`sign-in-errors.ts::passwordFailure`）。重置页、设口令、添加成员、兑换邀请的对话框把它显示在输入框下面，对话框不关；`warn` 档命中时重置页给 `Alert`，账号与共享页页顶给 `Alert`「这个口令出现在已知泄露里」。`api/accounts.ts::setPassword` 改为答 `{ revokedSessions, passwordBreached }`，`createMember` 答 `{ principal, passwordBreached }`，`redeemInvitation` 多带 `passwordBreached`。
+- core 小接线（G5-13 留下的）：`AccountsService.requirePasswordResetRights`（`requireResetRights` 的公开包装，不签不写）；`mail/index.ts::linkChecks()` 加 `passwordReset`：先按签发规则认调用方（403 / 404），再 `inspectPasswordReset` 认令牌并核对属于这个人，不对一律 409 `link_invalid`。契约 §28 删掉「还没有口令重置」的 404 说明并补了这条顺序。
+- 展示页 `auth` 分区：整页登录、设新口令、链接失效、泄露提示、忘记口令；通行密钥样本带改名入口。i18n：`password-reset`、`mail` 两个空模块填上，`security` / `sharing` / `host-identity` 追加，中英同步。架构文档 §7 身份一段加一句整页入口。
+
+**实测**（macOS arm64）
+
+- 新增 / 扩充用例：`IdentityGate.test`（6）、`ResetPassword.test`（9）、`SignIn.test`（+2）、`PasskeyList.test`（+2）、`GatewayDevices.test`（2）、`AccountsSharingPage.test`（+5：成员菜单签链接与发邮件、没配邮件不出现、MFA 重置先确认、策略错误内联与 warn 提示、组管理员签链接）；core `mail.test` 把旧的 404 用例换成 3 条真身份域用例（发信、令牌不是这个人 / 被作废 / 伪造 409、路人 403 与无此人 404）。
+- `gateway-e2e` 加第 4c 段：owner 签重置令牌 → 新上下文打开 `#reset=`、整页设新口令 → 成员原会话 401、令牌再用 404 → 「去登录」口令步新口令登录回同一成员，页面无控制台错误；passkey 段改为在整页登录上点「使用通行密钥」。本机整条探针全过。
+- 真浏览器（无头 Chrome，桌面 core + Gateway，假 HIBP 接 `ARMADRA_HIBP_BASE`）走过：成员菜单、MFA 重置确认与结果（成员 `mfa.enrolled` 变 false）、重置链接对话框、整页登录、忘记口令、重置页、弱口令拒绝、`warn` 命中提示、新口令登录、passkey 内联改名（core 里标签已变）、设口令策略错误内联与页顶泄露提示。
+- `design-showcase --only=auth` 6 张图，深浅对比度与控制台通过。
+- 全量验证结果见 PR。
+
+**没做 / 限制**
+
+- 「重置两步验证」放在账号与共享页的成员行菜单，而不是安全页：安全页只管自己，没有「看别人」的视图；成员表本来就在账号与共享页。
+- 「发送邮件」只在桌面 Gateway 未配 SMTP（按钮隐藏）与单测里的假客户端上验过；真 SMTP 由用户提供。
+- 计划写的 `password_common` 实际规则名是 `password_too_common`，另补了 `password_too_long`。
 
 ## G5-04 ACP core 补充（R-26 core、R-27 core、R-28、R-29）
 
@@ -1025,7 +1050,7 @@
 
 **没做 / 需要上游**
 
-- `@armadra/agent` 0.6.7 的 `AcpClient` 没有 `features.elicitation` / `features.configOptions`，这两样在真机上要等上游发版、升依赖之后才生效。上游要加：`onElicitation`、`clientCapabilities.elicitation`、`setConfigOption` 与 `configOptions` 的类型，假 Agent 也要会发 elicitation、会答 `configOptions`。升依赖之后删掉 `acp/feature-fixture.ts`，改用上游的假 Agent。
+- 上游已补：`@armadra/agent` 0.6.8 的 `AcpClient` 带 `features.elicitation` / `features.configOptions`（`onElicitation`、`clientCapabilities.elicitation`、`setConfigOption`、`configOptions` 类型），假 Agent 会发 elicitation（`[elicit]`）、`--config-options` 时答 `configOptions`。依赖已升到 0.6.8，`acp/feature-fixture.ts` 已删，`features.test` 与凭据用例改用上游的真客户端与假 Agent。
 - `~/.pi/acp/sessions.json` 的路径与形状没有和真 `pi-acp` 核对过（B 档真跑）。
 - ama 密钥与终端驱动一样，不要求 `credential:use`；L10（按节点只发用得到的那一家）没有做。
 - 页面（`ElicitationCard`、模型 Select）归 G5-05，SSH 归 G5-06。
@@ -1128,11 +1153,48 @@
 
 ## G5-09 协调者分派抽屉与完成节点边框（R-38、R-39）
 
-待填（第 3 组）。
+**做了什么**
+
+- core：`workflow_task_runs.result_json` 在起任务时就记 `task`（第一条任务正文，`open-agent --task`），结束写的 `text` / `reason` 与它并存，换绑与重试保留（不加迁移）。`GET /api/workflows/tasks?boardId=`（`canvas:read`）答协调者在这块板上的任务行，不带任何正文；`POST /api/workflows/tasks/{taskId}/retry`（`agent:launch`）把正文从协调者经投递队列再投给同一个成员、行回到 `running`（拒绝码 `task_not_failed` / `task_prompt_missing` / `task_node_missing` / `queue_full`）。服务器壳路由门按画板 / 任务的协调者节点查画布。契约 §15.7 新增，§15.5 追加一句。
+- `canvas sticky` 写的便签带 `data.source = { nodeId: <写它的节点>, sessionId: "" }`：便签头部出现「来自 ·<节点名>」，抽屉据此认出汇总。
+- 页面：`apps/web/src/coordinator/`（`DispatchDrawer` / `DispatchView` / `buildDispatch` / `MembersChip`）。工作面板新增 `dispatch`（右侧 `--drawer-w`，一次只开一个）；ama 节点头部「N 成员」点开。行：ama 一行 + 成员（任务行 ∪ 主从线下没有任务行的终端；左侧 2px Agent 色、状态胶囊、耗时、失败行「重试」，不能起 Agent 的人看到「只读」）+ 汇总便签「打开」；空态一句 +「对 ama 说」（选中、居中并聚焦 ama 终端）；离线顶部 `Alert`、整棵树置灰；抽屉开着每 5 秒重读，`workflow.*` 帧也重读。
+- `workflow/node-steps.tsx`：运行中的运行里已完成、且没有别的步骤在跑的角色节点画 1px `--success` 外框（`nodes.css` 用 `:has([data-workflow-done])`，选中时让给品牌色）。
+- 展示页 `coordinator` 分区换真组件：已完成成员的绿框、`DispatchView` 有数据 / 空 / 离线三态。
+
+**实测**
+
+- `routes.test`（列表、重试、三种拒绝、权限前缀）、`task-runs.test`（正文跨结束 / 换绑 / 重开保留）、`route-access.test`（任务列表与重试的成员权限）、`control.test`（便签来源）；`DispatchDrawer.test`（模型、五态、chip → 抽屉 → 重试）、`node-steps.test`（完成外框）。
+- `agent-e2e --only 11`：真 core + Vite + 无头 Chrome，点 lead 头部的「N 成员」，抽屉里三次 `task` 的成员行都是「已完成」、两个 `canvas_team` 成员「空闲」，汇总便签带「打开」。
+- `design-showcase --only=coordinator`：三视口两主题 6 张，对比度与控制台无错。
+
+**没做 / 限制**
+
+- 重试之后任务行回到 `running`，结束仍要协调者再 `wait` 才落库；协调者不再等时这一行停在「运行中」（胶囊按成员的 Agent 状态细分「需要你」）。
+- 抽屉没有专门的事件，靠 5 秒轮询；没带 `--task` 起的任务（以及本包之前起的任务）没有正文，不给「重试」。
 
 ## G5-10 推送补充（R-50、R-51、R-52）
 
-待填（第 1 组）。
+**做了什么**
+
+- 调度事件（R-50，契约 §27.3）：`core/schedule/engine.ts` 在提交之后经 `EngineOptions.publish` 发 `schedule.fired`（槽位物化成一次要投递的运行）、`schedule.failed`（执行方失败、目标离线 / 不支持 / 换代跳过、等到 TTL 过期；按策略跳过与取消不发，判定在 `schedule/events.ts`）、`schedule.attention`（「需要处理」标记抬起的那一下）。只带 `planId` / `runId` / `nodeId` / `reasonCode`。
+- 资源阈值（R-50，契约 §27.4）：判定从页面搬进 core（`core/resources/thresholds.ts`）。阈值是新设置 `resources.memoryWarnBytes`（缺省 2 GiB，夹在 128 MiB – 128 GiB），设置页「终端 → 内存阈值」同时写它与本机偏好。页面开着时随采样循环判（`ResourceService` 的 `onSample`）；没人看着而库里有有效推送设备时每 30 秒自己采一轮（`ThresholdWatch`）。按 `sessionId:generation` 去重，回落到九成以下才重新上膛。
+- 设备偏好（R-51，契约 §27.1）：迁移 `0037_push_preferences.sql` 给 `push_devices` 加 `kinds_json` 与 `unifiedpush_endpoint`。`PATCH /api/push/devices/{deviceId} { kinds }` 只改自己的设备；入队前按设备过滤，`test` 恒收；全选存成「全部」；重新登记保留偏好。设备视图多 `kinds`、`unifiedpush`。手机推送提示「开启」之后换成每个种类一个开关（`mobile/PushPermission.tsx`，文案在 `i18n/push.ts`）。
+- UnifiedPush（R-52，契约 §27.2）：Android 登记可带 `unifiedpush: { endpoint }`（此时可以不给 `token`，必须给 `publicKey`）。有端点的设备一律走 `push/transport-unifiedpush.ts`，不看 `push.transport`：POST 对设备公钥封好的信封，不跟随重定向，404 / 410 撤销设备，429 / 5xx 重试。出站表登记为 `unifiedPush`（用户给的地址）。
+- 推送规则：`schedule.*` 只认上面三种、按 `planId` 认，`tag` 统一为 `schedule:<planId>`，正文分「到点了 / 没有跑成 / 需要处理」；`resources.threshold` 的 `tag` 是 `resources:<metric>:<nodeId 或 sessionId>`，正文不写数字。
+- dev-stack：`push-sink` 加 `/up/<topic>`（UnifiedPush 替身：`gone` 前缀答 404、超 4096 字节答 413）。计划里写的「push-sink 已有假 UnifiedPush 端点」与源码不符，本包补上了。
+- 探针 `push-e2e` 加三段：UnifiedPush 走 push-sink；dev-stack 的 `ntfy` 在时对真 ntfy 走一遍（不在则记跳过）；设备偏好只留审批后同一轮只到审批，恢复全部后两条都到。
+
+**接口**：`PATCH /api/push/devices/{deviceId}`；设备视图的 `kinds`、`unifiedpush`；登记体的 `unifiedpush.endpoint`；共享层 `PUSH_PREFERENCE_KINDS`、`pushDevicePreferencesSchema`；设置 `resources.memoryWarnBytes`；`EngineOptions.publish`；`ResourceServiceOptions.onSample`、`ResourceService.watching()`。
+
+**实测**（macOS arm64）
+
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 4260 过 / 46 跳过、2 失败，脚本 64 过、1 失败；web 3241 过；shared 320 过；server 79 过 / 2 跳过；mobile 9 过；push-relay 9 过。3 条失败都是迁移连续性断言（`migrations.test`、`unified.test`、`after-pack.test`），以及 `pnpm repo:check` 的「迁移编号不连续」，原因是 0036 由 G5-02 占用、还没合入。G5-02 合入之后这些检查应当都过。
+- `pnpm typecheck`、`pnpm format:check`、`ci:workflows`、`release:check`、`notices:check` 通过。
+- `node tools/probes/push-e2e.mjs`：用进程内 push-sink 全过；对 `pnpm dev-stack up push-sink ntfy --profile ntfy` 起的 push-sink 与真 ntfy v2.28.0 也全过。ntfy 存下的是信封，设备私钥能解。这两个容器只为这次验证启动，验证后已停掉并删除。
+
+**没做**：Android App 侧接 UnifiedPush 分发器的原生代码（取端点、交给 `pushRegistration()`），归手机原生包；`native-bridge.ts` 只给类型加了可选的 `unifiedpush`。桌面上的系统通知与内存徽标的本机提醒照旧，没有改成读 `resources.threshold` 事件。
+
+**已知限制**：与 Web Push 一样，UnifiedPush 端点允许回环上的 http，供本机测试与 dev-stack 使用。设置页不能逐台改别的设备的偏好，只有手机提示里那组开关，而且只改当前这台。
 
 ## G5-11 实时协同补充（R-44、R-45、R-46）
 
@@ -1363,7 +1425,39 @@
 
 ## G5-23 零碎界面与 G2-2 遗留（R-43、R-71、R-72 其余）
 
-待填（第 3 组）。
+做了什么：
+
+- R-71：`panels/ResponsiveDialog.tsx` 加 `ResponsiveAlertDialog*`。根仍是 Radix AlertDialog（`role="alertdialog"`、点遮罩不关），≤767 贴底：拖柄、顶部圆角 14、限高、让出安全区，底栏按钮竖排全宽、主操作在上。22 个确认框改用它（`BoardRow`、`remove-workspace`、`ControlConfirmDialog`、`FileTree`、git / github / resources / automation / settings 各页、`PresenceBar`、`FlowWorkspace`、`SessionRow`、`TemplateLibrary`）；G5-03 名下的 `AccountsSharingPage`、`security/*`、`GatewayDevices` 没动，留给它合入后接。
+- R-43：
+  - 向导第二步「选择文件夹…」（`pickDirectory`）：只在桌面壳、本机工作空间出现；选中的目录进候选并成为会话 `cwd`、写进节点。
+  - 代码块导出写到来源 Agent 的工作目录：core 按该节点最近的终端会话取 `cwd`，在工作区内就落 `<cwd>/.armadra/exports/acp/…`，否则退回根；`relativePath` 仍相对工作区根。请求体不带路径。
+  - 远端工作空间不再 501：Worker 新操作 `assets.exportText`（正文超过帧内上限走分块传输）。
+  - 建出的节点亮一次未读光晕（`canvas/node-flash.ts`，2 秒，不进文档）。
+- R-72 其余：
+  - `Spinner` 调用处原本都已传本地化 `aria-label` 或 `aria-hidden`；加了扫描用例 `panels/spinner-label.test.ts` 守住。
+  - `armadra-hook canvas --help` / `-h` 离线打印动词表（`usage.ts::CANVAS_USAGE`，与 `USAGE` 里那一节同一份文本）。
+  - `i18n/{automation,github}.ts` 改为「设置 → 连接 → 后台服务与对外服务」；英文分组名对齐为 Connections。
+  - 展示页 `components` 补 `resizable`、`chart`、`sonner`、`context-menu` 样本，确认框样本换成响应式版本。
+  - 展示页 `integration` 补 CLI 分组：集成页真的行组件、状态预放进 query 缓存，含正常、版本过旧（页首一台 Worker 待升级）、启动器异常、ACP 未装四种。
+  - 为此集成行加两个徽标：`stale` 时显示「待重新生成」，有 ACP 入口而适配器没装时显示「ACP 未安装」。
+- 契约 §14.5：改写「远端 501」一句，追加落点规则。
+
+实测：
+
+- 单测：
+  - `ResponsiveDialog.test`：确认框两种形态，以及取消 / 确认行为。
+  - `NewAgentWizard.test`：选择器选中、取消、无壳与远端不显示。
+  - `exports.test`：cwd 落点、最新会话、工作区外 / 不存在 / 符号链接出界都退回、远端经 `assets.exportText` 写在执行主机且本机无文件。
+  - `export-to-board.test`：光晕亮起后熄掉。
+  - `hook.test`：`canvas --help`。
+  - `IntegrationPage.test`：两个新徽标。
+- 改前改后各跑一次 `design-showcase --only=components,integration`：对比度、Tab 可达 84/84、焦点环、强制颜色、控制台都通过，12 张图有变化（新样本）。
+- 无头 Chrome 390 / 1440 实拍：390 宽的确认框贴底、两个按钮各 343px 全宽；1440 宽仍居中。另外拍了右键菜单、toast、resizable、chart、集成分区（深浅两套），见 PR。
+
+没做：
+
+- G5-03 名下三处确认框还在用 `ui/alert-dialog`。
+- 旧版 Worker 没有 `assets.exportText`：对它的远端导出要先「重新同步」执行主机，否则报 Worker 的未知操作错误。
 
 ## G5-24 桌面回环收紧（R-15）
 

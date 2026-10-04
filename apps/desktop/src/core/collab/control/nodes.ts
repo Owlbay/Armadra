@@ -408,6 +408,7 @@ export async function openAgent(
         runnerId: agentId,
         nodeId: node.id,
         now: nowMs,
+        task,
       });
     }
   }
@@ -1195,6 +1196,9 @@ function readInboxWake(args: Args): string | undefined {
   return wanted;
 }
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function sticky(
   context: CollabContext,
   caller: Caller,
@@ -1218,7 +1222,15 @@ export function sticky(
     "sticky",
     title,
     placement(document, caller.node.id),
-    { kind: "sticky", content },
+    {
+      kind: "sticky",
+      content,
+      // 来源是写它的节点（设计系统 §4「来源链接」）：节点头部显示「来自 ·<节点名>」，
+      // 协调者的分派抽屉据此认出它的汇总便签（§5.4）。没有会话的概念，留空串。
+      ...(UUID_PATTERN.test(caller.node.id)
+        ? { source: { nodeId: caller.node.id, sessionId: "" } }
+        : {}),
+    },
   );
   save(
     context,

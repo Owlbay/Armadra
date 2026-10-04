@@ -261,6 +261,65 @@ describe("登记", () => {
   });
 });
 
+describe("种类偏好与 UnifiedPush（契约 §27）", () => {
+  it("PATCH 只改自己的设备；不认识的种类 400；全选回到全部", async () => {
+    const { call, ownerIdentity, member, identityOf } = setup();
+    const someone = member("同事", { w1: "viewer" });
+    const unifiedpush = {
+      platform: "android",
+      transport: "direct",
+      publicKey: generateDeviceKeyPair().publicKey,
+      unifiedpush: { endpoint: "https://ntfy.example/upSecretTopic?up=1" },
+    };
+    const registered = await call(
+      identityOf(someone),
+      "PUT",
+      PUSH_ROUTES.devices,
+      unifiedpush,
+    );
+    expect(registered.status).toBe(200);
+    expect(registered.body.device).toMatchObject({
+      unifiedpush: true,
+      encrypted: true,
+      kinds: [
+        "approval",
+        "agentDone",
+        "agentError",
+        "deliveryFailed",
+        "schedule",
+        "resources",
+        "comment",
+        "workflowGate",
+      ],
+    });
+    // 端点和令牌一样不出接口。
+    expect(JSON.stringify(registered.body)).not.toContain("upSecretTopic");
+
+    const path = `/api/push/devices/${someone.deviceId}`;
+    const narrowed = await call(identityOf(someone), "PATCH", path, {
+      kinds: ["approval", "schedule", "approval"],
+    });
+    expect(narrowed.status).toBe(200);
+    expect(narrowed.body.device.kinds).toEqual(["approval", "schedule"]);
+    expect(
+      (await call(identityOf(someone), "PATCH", path, { kinds: ["test"] }))
+        .status,
+    ).toBe(400);
+    expect(
+      (await call(identityOf(someone), "PATCH", path, { kinds: "approval" }))
+        .status,
+    ).toBe(400);
+    // owner 也不替别人决定他的手机响不响。
+    expect(
+      (await call(ownerIdentity, "PATCH", path, { kinds: [] })).status,
+    ).toBe(404);
+    const all = await call(identityOf(someone), "PATCH", path, {
+      kinds: registered.body.device.kinds,
+    });
+    expect(all.body.device.kinds).toHaveLength(8);
+  });
+});
+
 describe("Web Push 一路到假端点", () => {
   it("登记 → 测试通知 → push-sink：VAPID 验签过、aes128gcm、浏览器能解", async () => {
     const { call, ownerIdentity, push } = setup();

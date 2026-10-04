@@ -3,6 +3,18 @@ import * as React from "react";
 import { cn } from "@/lib/cn";
 import { useCompactLayout } from "@/platform/layout";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/ui/alert-dialog";
+import {
   Dialog,
   DialogClose,
   DialogContent,
@@ -119,5 +131,102 @@ export function ResponsiveDialogDescription(
     <SheetDescription {...props} />
   ) : (
     <DialogDescription {...props} />
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* 确认框                                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `AlertDialog` 的手机形态（设计系统首行「对话框 ≤767 换成底部 Sheet」）。
+ *
+ * 根仍是 Radix 的 AlertDialog：`role="alertdialog"`、点遮罩不关、焦点先落在
+ * 「取消」，这些确认框该有的行为两种宽度都不变。≤767 只换内容层的外形——贴底、
+ * 顶部圆角 14、拖柄、让出安全区——底栏按钮竖排全宽，主操作在上、取消在下
+ * （拇指先够到的是取消）。生成的 `ui/alert-dialog` 不改，用法与它一一对应：
+ * 把 `AlertDialog*` 换成 `ResponsiveAlertDialog*` 即可。
+ */
+export function ResponsiveAlertDialog(
+  props: React.ComponentProps<typeof AlertDialog>,
+) {
+  const compact = useCompactLayout();
+  return (
+    <CompactContext.Provider value={compact}>
+      <AlertDialog {...props} />
+    </CompactContext.Provider>
+  );
+}
+
+export const ResponsiveAlertDialogTrigger = AlertDialogTrigger;
+export const ResponsiveAlertDialogAction = AlertDialogAction;
+export const ResponsiveAlertDialogCancel = AlertDialogCancel;
+export const ResponsiveAlertDialogTitle = AlertDialogTitle;
+export const ResponsiveAlertDialogDescription = AlertDialogDescription;
+export const ResponsiveAlertDialogMedia = AlertDialogMedia;
+
+/** 手机形态的外壳：压过生成组件的居中定位、限宽与缩放动画。 */
+const ALERT_SHEET = cn(
+  "top-auto bottom-0 left-0 w-full max-w-none sm:max-w-none translate-x-0 translate-y-0",
+  "data-[size=default]:max-w-none data-[size=sm]:max-w-none data-[size=default]:sm:max-w-none",
+  "max-h-[calc(100dvh-48px)] overflow-y-auto",
+  "rounded-none rounded-t-[14px] px-4 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))]",
+  "data-open:zoom-in-100 data-open:slide-in-from-bottom data-closed:zoom-out-100 data-closed:slide-out-to-bottom",
+);
+
+export function ResponsiveAlertDialogContent({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof AlertDialogContent>) {
+  const compact = useResponsiveDialogCompact();
+  if (!compact)
+    return (
+      <AlertDialogContent className={className} {...props}>
+        {children}
+      </AlertDialogContent>
+    );
+  return (
+    <AlertDialogContent
+      data-responsive="sheet"
+      // 调用方给桌面定的宽度在手机上一律不要：放在前面，被下面的类压掉。
+      className={cn(className, ALERT_SHEET)}
+      {...props}
+    >
+      <div
+        aria-hidden
+        data-slot="responsive-dialog-handle"
+        className="mx-auto h-1 w-9 shrink-0 rounded-full bg-[var(--border-strong)]"
+      />
+      {children}
+    </AlertDialogContent>
+  );
+}
+
+export function ResponsiveAlertDialogHeader(
+  props: React.ComponentProps<typeof AlertDialogHeader>,
+) {
+  const compact = useResponsiveDialogCompact();
+  return (
+    <AlertDialogHeader
+      {...props}
+      className={cn(compact && "place-items-start text-left", props.className)}
+    />
+  );
+}
+
+export function ResponsiveAlertDialogFooter(
+  props: React.ComponentProps<typeof AlertDialogFooter>,
+) {
+  const compact = useResponsiveDialogCompact();
+  return (
+    <AlertDialogFooter
+      {...props}
+      className={cn(
+        props.className,
+        compact &&
+          "flex flex-col-reverse gap-2 sm:flex-col-reverse sm:justify-start group-data-[size=sm]/alert-dialog-content:flex *:w-full",
+      )}
+    />
   );
 }

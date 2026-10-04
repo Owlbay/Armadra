@@ -66,6 +66,8 @@ export interface RouteAccessLookups {
   workflowDraftWorkspace(draftId: string): string;
   /** 工作流运行 → 工作空间。 */
   workflowRunWorkspace(runId: string): string;
+  /** 协调者任务 → 协调者节点所在画板的工作空间（契约 §15.7）。 */
+  workflowTaskWorkspace(taskId: string): string;
   /** 待确认的关闭请求 → 工作空间（只在内存里）。 */
   confirmWorkspace(requestId: string): string;
 }
@@ -123,6 +125,9 @@ const WORKFLOW_DRAFT =
 const WORKFLOW_RUNS = /^\/api\/workflows\/runs$/;
 const WORKFLOW_RUN =
   /^\/api\/workflows\/runs\/([^/]+)(\/cancel|\/gates\/[^/]+)?$/;
+/** 协调者任务（契约 §15.7）：列表按画板，重试按任务查。 */
+const WORKFLOW_TASKS = /^\/api\/workflows\/tasks$/;
+const WORKFLOW_TASK_RETRY = /^\/api\/workflows\/tasks\/([^/]+)\/retry$/;
 
 /** Agent 状态的三条路由各要什么。 */
 const AGENT_STATUS_PERMISSION: Readonly<Record<string, string>> = {
@@ -240,6 +245,23 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
         subject,
         reading ? "canvas:read" : "agent:launch",
         lookups.workflowRunWorkspace(decodeURIComponent(run[1] as string)),
+      );
+    }
+    // 分派抽屉（契约 §15.7）：看任务是看画布；重试是再投一次任务提示词，与
+    // 起跑同一档（operator）。
+    if (WORKFLOW_TASKS.test(path) && reading) {
+      return onWorkspace(
+        subject,
+        "canvas:read",
+        lookups.boardWorkspace(request.query.get("boardId") ?? ""),
+      );
+    }
+    const retry = WORKFLOW_TASK_RETRY.exec(path);
+    if (retry !== null && !reading) {
+      return onWorkspace(
+        subject,
+        "agent:launch",
+        lookups.workflowTaskWorkspace(decodeURIComponent(retry[1] as string)),
       );
     }
     return DENY;
@@ -522,6 +544,14 @@ function databaseLookups(database: DatabaseSync): RouteAccessLookups {
     workflowRunWorkspace: (id) =>
       text(
         "SELECT workspace_id FROM workflow_runs WHERE id = ?",
+        id,
+        "workspace_id",
+      ),
+    workflowTaskWorkspace: (id) =>
+      text(
+        "SELECT b.workspace_id AS workspace_id FROM workflow_task_runs t " +
+          "JOIN nodes n ON n.id = t.coordinator_node_id " +
+          "JOIN boards b ON b.id = n.board_id WHERE t.task_id = ?",
         id,
         "workspace_id",
       ),

@@ -13,6 +13,7 @@
 import type { CoreContext } from "../main";
 import type { CoreServer } from "../http/server";
 import { AccountsService } from "../identity/accounts";
+import { IdentityError } from "../identity/errors";
 import { IdentityStore } from "../identity/store";
 import { secretsFor } from "../secrets";
 import { installRoutes } from "./routes";
@@ -54,10 +55,27 @@ export function mailDomainOf(server: CoreServer): MailDomain | undefined {
   return domains.get(server);
 }
 
-/** 身份域的两道核对。口令重置那一道等身份域有了那一面（契约 §25）再接。 */
+/**
+ * 身份域的两道核对。口令重置：先按签发那一套认调用方（不是能签的人答 403，
+ * 没有这个人答 404），再认令牌——令牌认不出、用过、过期，或者不是这个人的，
+ * 一律 `conflict`（409 `link_invalid`），不分是哪一种（契约 §25、§28）。
+ */
 export function linkChecks(accounts: AccountsService): LinkChecks {
   return {
     invitation: (actor, input) => accounts.invitationForDelivery(actor, input),
+    passwordReset: (actor, input) => {
+      accounts.requirePasswordResetRights(actor, input.principalId);
+      let target: { principalId: string; expiresAtMs: number };
+      try {
+        target = accounts.inspectPasswordReset(input.token);
+      } catch {
+        throw new IdentityError("conflict");
+      }
+      if (target.principalId !== input.principalId) {
+        throw new IdentityError("conflict");
+      }
+      return { expiresAtMs: target.expiresAtMs };
+    },
   };
 }
 

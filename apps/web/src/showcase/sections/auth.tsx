@@ -12,6 +12,7 @@ import {
   LockoutList,
   SessionList,
 } from "@/panels/settings/pages/security/SessionList";
+import { ResetPassword } from "@/session/ResetPassword";
 import { SignIn } from "@/session/SignIn";
 import {
   ALL_SESSIONS,
@@ -76,8 +77,9 @@ const mfa = {
  * `auth` 分区（设计展示页 §2.1，设计系统 §5.9–§5.11）：真的登录组件与设置 →
  * 安全里的各块，喂假数据。
  *
- * 登录：账号（含通行密钥与第三方账号）· 口令错误 · 两步验证 · 恢复码 · 锁定
- * · 离线。安全页：通行密钥（列表、IP 访问）· 两步验证（要求、登记、恢复码、
+ * 登录：整页（服务器壳没有会话时，无侧栏）· 账号（含通行密钥与第三方账号）·
+ * 口令错误 · 忘记口令 · 两步验证 · 恢复码 · 锁定 · 离线。重置页：设新口令 ·
+ * 链接失效 · 设好且泄露检查 `warn` 档命中。安全页：通行密钥（列表、IP 访问）· 两步验证（要求、登记、恢复码、
  * 已开启）· 第三方账号 · 会话与设备（所有成员）· 锁定的账号 · 审计（展开一行
  * 由交互决定，这里是收起的首屏）。时钟钉住，截图稳定。
  */
@@ -85,6 +87,57 @@ export default function AuthSection() {
   const t = useT();
   return (
     <div className="flex flex-col gap-8">
+      <Sample caption={t("security.showcase.fullPage")}>
+        {/* 整页登录（`app/IdentityGate`）：没有侧栏，一列在视口里居中。 */}
+        <div className="flex h-[560px] overflow-hidden rounded-lg border border-border/70 bg-background px-6">
+          <div className="m-auto w-full">
+            <SignIn
+              autoFocus={false}
+              onSignedIn={noop}
+              providers={PROVIDERS}
+              passkey
+            />
+          </div>
+        </div>
+      </Sample>
+      <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+        <Sample caption={t("reset.title")}>
+          <Card>
+            <ResetPassword
+              token="showcase"
+              autoFocus={false}
+              onSignIn={noop}
+              initial={{
+                kind: "ready",
+                info: {
+                  displayName: MEMBERS[0]!.displayName,
+                  expiresAtMs: NOW + 86_400_000,
+                },
+              }}
+            />
+          </Card>
+        </Sample>
+        <Sample caption={t("reset.invalid")}>
+          <Card>
+            <ResetPassword
+              token="showcase"
+              autoFocus={false}
+              onSignIn={noop}
+              initial={{ kind: "invalid" }}
+            />
+          </Card>
+        </Sample>
+        <Sample caption={t("security.showcase.breached")}>
+          <Card>
+            <ResetPassword
+              token="showcase"
+              autoFocus={false}
+              onSignIn={noop}
+              initial={{ kind: "done", principalId: "", breached: true }}
+            />
+          </Card>
+        </Sample>
+      </div>
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
         <Sample caption={t("auth.title")}>
           <Card>
@@ -108,6 +161,17 @@ export default function AuthSection() {
                 account: "chen.yi",
                 error: t("auth.error.credentials"),
               }}
+            />
+          </Card>
+        </Sample>
+        <Sample caption={t("auth.forgot")}>
+          <Card>
+            <SignIn
+              autoFocus={false}
+              onSignedIn={noop}
+              providers={[]}
+              passkey={false}
+              initial={{ step: "password", account: "chen.yi", forgot: true }}
             />
           </Card>
         </Sample>
@@ -175,6 +239,7 @@ export default function AuthSection() {
               busy={PASSKEYS.passkeys[1]!.credentialId}
               onAdd={noop}
               onRemove={noop}
+              onRename={async () => true}
             />
           </Sample>
           <Sample caption={t("security.showcase.ipHost")}>

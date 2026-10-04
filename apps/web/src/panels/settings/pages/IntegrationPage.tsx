@@ -70,7 +70,7 @@ export function IntegrationPage() {
 }
 
 /** 过旧 Worker 的执行主机，每台一行：徽标 + 「重新同步」。没有就什么都不画。 */
-function OutdatedWorkers({ agent }: { agent: AgentInfo }) {
+export function OutdatedWorkers({ agent }: { agent: AgentInfo }) {
   const t = useT();
   const client = useQueryClient();
   const { integration } = useAgentIntegration(agent);
@@ -131,7 +131,7 @@ function repairDescription(
   return lines.join("\n");
 }
 
-function AgentIntegrationRow({ agent }: { agent: AgentInfo }) {
+export function AgentIntegrationRow({ agent }: { agent: AgentInfo }) {
   const t = useT();
   const refresh = useIntegrationRefresh();
   const { integration } = useAgentIntegration(agent);
@@ -217,6 +217,14 @@ function AgentIntegrationRow({ agent }: { agent: AgentInfo }) {
             : t("integration.skill.missing")}
         </Badge>
 
+        {/* 磁盘上的产物比这个版本写的旧：下次从画布启动会自己重写。 */}
+        {integration.stale && ready && (
+          <Badge variant="outline">{t("integration.stale")}</Badge>
+        )}
+        {/* 有 ACP 入口而适配器没装：向导里这家是灰的，原因在这里。 */}
+        {agent.acp && !agent.acp.installed && (
+          <Badge variant="outline">{t("integration.acp.missing")}</Badge>
+        )}
         {integration.launcherWarning && (
           <Badge variant="destructive" title={integration.launcherWarning}>
             {t("integration.launcherWarning")}

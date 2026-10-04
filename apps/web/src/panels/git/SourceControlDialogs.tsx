@@ -3,15 +3,15 @@
 import type { GitRestoreSource } from "@armadra/shared";
 import { useT } from "../../app/preferences-store";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../../ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 
 /** 待还原的文件：属于哪个仓库、是不是未跟踪，决定问法与可选动作。 */
 export type RestoreTarget = {
@@ -42,61 +42,67 @@ export function SourceControlDialogs({
   const t = useT();
   return (
     <>
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={confirmInit}
         onOpenChange={(next) => {
           if (!next) setConfirmInit(false);
         }}
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("scm.initTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
+        <ResponsiveAlertDialogContent>
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
+              {t("scm.initTitle")}
+            </ResponsiveAlertDialogTitle>
+            <ResponsiveAlertDialogDescription>
               {t("scm.initDescription")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("scm.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
+            </ResponsiveAlertDialogDescription>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("scm.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               onClick={() => {
                 setConfirmInit(false);
                 init();
               }}
             >
               {t("scm.initConfirm")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
 
       {/*
        * Restoring from the index and restoring from HEAD lose different work,
        * so they are two labelled actions rather than one “revert” whose
        * effect the user has to guess.
        */}
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={restore !== null}
         onOpenChange={(next) => {
           if (!next) setRestore(null);
         }}
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+        <ResponsiveAlertDialogContent>
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t("scm.revertTitle", { path: restore?.path ?? "" })}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
+            </ResponsiveAlertDialogTitle>
+            <ResponsiveAlertDialogDescription>
               {t(
                 restore?.untracked
                   ? "scm.restoreUntracked"
                   : "scm.restoreDescription",
               )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("scm.cancel")}</AlertDialogCancel>
+            </ResponsiveAlertDialogDescription>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("scm.cancel")}
+            </ResponsiveAlertDialogCancel>
             {restore?.untracked ? (
-              <AlertDialogAction
+              <ResponsiveAlertDialogAction
                 onClick={() => {
                   if (restore)
                     revert({
@@ -108,10 +114,10 @@ export function SourceControlDialogs({
                 }}
               >
                 {t("scm.restoreDelete")}
-              </AlertDialogAction>
+              </ResponsiveAlertDialogAction>
             ) : (
               (["index", "head"] as const).map((source) => (
-                <AlertDialogAction
+                <ResponsiveAlertDialogAction
                   key={source}
                   onClick={() => {
                     if (restore)
@@ -128,12 +134,12 @@ export function SourceControlDialogs({
                       ? "scm.restoreFromIndex"
                       : "scm.restoreFromHead",
                   )}
-                </AlertDialogAction>
+                </ResponsiveAlertDialogAction>
               ))
             )}
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </>
   );
 }

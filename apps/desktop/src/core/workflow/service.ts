@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { validAgentId } from "../agent/registry";
 import type { CollabContext } from "../collab/service";
 import { DomainError, uuidV7 } from "../workspaces/support";
+import { DeliveryRefused, deliverPrompt } from "./dispatch";
 import { parseDraft } from "./draft";
 import type { WorkflowEngine } from "./engine";
 import {
@@ -22,6 +23,13 @@ import {
   templateById,
   updateTemplate,
 } from "./store";
+import {
+  type TaskRun,
+  reopenTask,
+  taskPrompt,
+  taskRun,
+  taskRunsForBoard,
+} from "./task-runs";
 import {
   DRAFT_STATUSES,
   type DraftStatus,
@@ -279,6 +287,72 @@ export class WorkflowService {
       body.decision as GateDecision,
       (body.note as string | null | undefined) ?? undefined,
     );
+  }
+
+  /* ------------------------------ 协调者任务 ------------------------------ */
+
+  /** 一块画板上协调者分派出去的任务（契约 §15.7）。 */
+  tasks(boardId: unknown): TaskRun[] {
+    if (typeof boardId !== "string" || boardId === "") {
+      throw new DomainError(400, "bad_request", "boardId 不能缺。");
+    }
+    return taskRunsForBoard(this.database, boardId);
+  }
+
+  /**
+   * 分派抽屉的「重试」（契约 §15.7）：把起任务时的那条正文从协调者再投给同一
+   * 个成员节点（投递队列，门链与 `canvas send` 相同——不替人回答任何提示），
+   * 任务行回到 `running`。
+   */
+  retryTask(taskId: string): TaskRun {
+    const run = taskRun(this.database, taskId);
+    if (run === undefined) throw notFound("没有这个任务。");
+    if (run.status !== "failed" && run.status !== "stopped") {
+      throw new DomainError(409, "task_not_failed", "这个任务没有失败。");
+    }
+    const prompt = taskPrompt(run);
+    if (prompt === undefined) {
+      throw new DomainError(
+        409,
+        "task_prompt_missing",
+        "这个任务没有记下任务正文。",
+      );
+    }
+    const place = this.database
+      .prepare(
+        "SELECT b.workspace_id AS workspace_id FROM nodes n JOIN boards b ON b.id = n.board_id " +
+          "WHERE n.id = ? AND n.board_id = (SELECT board_id FROM nodes WHERE id = ?)",
+      )
+      .get(run.nodeId, run.coordinatorNodeId) as
+      | { workspace_id?: unknown }
+      | undefined;
+    if (typeof place?.workspace_id !== "string") {
+      throw new DomainError(
+        409,
+        "task_node_missing",
+        "成员节点已经不在画布上了。",
+      );
+    }
+    const collab = this.options.collab();
+    if (collab === undefined) {
+      throw new DomainError(409, "unsupported", "协作域还没有装好。");
+    }
+    try {
+      deliverPrompt(collab, {
+        workspaceId: place.workspace_id,
+        sourceNodeId: run.coordinatorNodeId,
+        targetNodeId: run.nodeId,
+        body: prompt,
+        nowSeconds: Math.floor(this.clock() / 1000),
+      });
+    } catch (error) {
+      if (error instanceof DeliveryRefused) {
+        throw new DomainError(409, "queue_full", error.message);
+      }
+      throw error;
+    }
+    reopenTask(this.database, taskId, this.clock());
+    return taskRun(this.database, taskId) as TaskRun;
   }
 
   /* --------------------------------- 发布 --------------------------------- */

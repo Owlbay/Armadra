@@ -6,7 +6,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { nextRevision } from "./binding.js";
 import {
@@ -28,7 +28,14 @@ import {
   windowsLaunchConfig,
   writeLauncher,
 } from "./launcher.js";
-import { CLIENT_VERSION, MAX_PAYLOAD_BYTES } from "./usage.js";
+import { runCanvas } from "./control.js";
+import { main } from "./main.js";
+import {
+  CANVAS_USAGE,
+  CLIENT_VERSION,
+  MAX_PAYLOAD_BYTES,
+  USAGE,
+} from "./usage.js";
 
 const temporaries: string[] = [];
 
@@ -320,5 +327,65 @@ describe("launcher", () => {
         "linux",
       ),
     ).toContain('exec "/opt/A B/armadra" "/opt/a.js" "$@"');
+  });
+});
+
+describe("canvas --help", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function captured(): { out: () => string; err: () => string } {
+    let out = "";
+    let err = "";
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      out += String(chunk);
+      return true;
+    });
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      err += String(chunk);
+      return true;
+    });
+    return { out: () => out, err: () => err };
+  }
+
+  it("prints the verb table and exits 0 without an endpoint", async () => {
+    for (const flag of ["--help", "-h"]) {
+      const io = captured();
+      expect(await main(["canvas", flag])).toBe(0);
+      expect(io.out()).toBe(CANVAS_USAGE);
+      expect(io.err()).toBe("");
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("lists the verbs an agent drives the canvas with", () => {
+    for (const verb of [
+      "help",
+      "post",
+      "inbox",
+      "ack",
+      "open-agent",
+      "team",
+      "open-browser",
+      "rename",
+      "link",
+      "send",
+      "outbox",
+      "cancel",
+    ]) {
+      expect(CANVAS_USAGE, verb).toMatch(new RegExp(`^  ${verb} `, "m"));
+    }
+    expect(CANVAS_USAGE.startsWith("CANVAS:\n")).toBe(true);
+  });
+
+  it("is the same section the full usage carries", () => {
+    expect(USAGE).toContain(`\n${CANVAS_USAGE}\nTEXT FROM STDIN OR A FILE`);
+  });
+
+  it("still refuses any other flag where a verb belongs", async () => {
+    const io = captured();
+    expect(await runCanvas(["--verbose"])).toBe(1);
+    expect(io.err()).toContain("expected a canvas verb");
   });
 });

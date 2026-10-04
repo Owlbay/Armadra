@@ -672,8 +672,9 @@ G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：�
 答复与 PNG 导出同形：`{ "path": "<绝对路径>", "relativePath": ".armadra/exports/acp/<exportId>/msg-3-1.ts", "bytes": 20 }`。同名覆盖。
 
 - `name` 是单个文件名：`[A-Za-z0-9_-][A-Za-z0-9._-]{0,119}`，不含 `..`；`exportId` 不是 uuid、`name` 不合规、缺 `name` / `content`、正文超过 1 MiB 一律 400 `bad_request`。
-- 只读打开的工作空间 403 `forbidden`；远端工作空间 501 `unsupported`（Worker 没有对应操作，不在本机落一份对方看不到的文件）。
+- 只读打开的工作空间 403 `forbidden`。远端工作空间不再答 501：经 Worker 操作 `assets.exportText`（能力 `remote.assets.v1`；正文超过帧内上限时先分块传输）写在执行主机上，答复里的 `path` 是那台机器上的路径。
 - 页面只把它用于输出到画板；共享层 `exportTextRequestSchema`。
+- 落点跟着来源 Agent 的工作目录：core 按 `exportId` 找这个工作空间里归该节点的最近一个终端会话，取它的 `cwd`；`cwd` 存在、解开符号链接后严格在工作区根之内、且不在 `.armadra` / `.git` 里时，文件落在 `<cwd>/.armadra/exports/acp/<exportId>/<name>`（那个 `.armadra` 同样自忽略），否则退回工作区根。`relativePath` 始终相对工作区根（例 `packages/api/.armadra/exports/acp/<exportId>/msg-3-1.ts`），编辑器节点直接用它。请求体不带路径，写到哪里只由 core 记的会话决定。
 
 ## 15. 工作流与 runners：`/api/workflows/*`
 
@@ -913,11 +914,27 @@ G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：�
 - `failed` 的 `reason`：`nodeDeleted`、`turnFailed` / `turnInterrupted`、投递排队项过期或被取消时它最后一次的码（如 `TARGET_STARTING`）。
 - `events`：游标之后成员发出的、键是 `task:<taskId>` 或以 `task:<taskId>:` 开头的 `post`（`seq` 是收件箱序号，递增，一次最多 32 条，不漏不重），以及状态变化（`agent_status.state` 与游标里记的不同才报一条）。没有新事件、也没结束时，请求挂到 `timeout` 再答当时的状态；`since` 不变。
 - `since` 是不透明字符串（现为 `<post 序号>-<状态>`），调用方原样带回。
-- 结束（`done` / `failed`）时 core 写 `workflow_task_runs` 的 `status`、`ended_at` 与 `result_json`（`{ text }` 或 `{ reason }`，只写第一次），并把那条结果 `post` 标成已收——runner 已替协调者取走它，收件箱唤醒不再提示一遍。
+- 结束（`done` / `failed`）时 core 写 `workflow_task_runs` 的 `status`、`ended_at` 与 `result_json`（`{ text }` 或 `{ reason }`，只写第一次），并把那条结果 `post` 标成已收——runner 已替协调者取走它，收件箱唤醒不再提示一遍。带 `task` 起的任务在开始时就写 `result_json.task`（第一条任务的正文，G5-09 追加），结束写的 `text` / `reason` 与它并存，换绑与重试都保留它；它只给 §15.7 的重试用，不出现在任何答复里。
 
 **`help`** 的 `result` 多一个 `agents`：这台机器上 `open-agent --agent` 认的 id（内置的与设置里的 `custom:*`）。ama 的适配器为其中每个内置 CLI（`ama` 除外：ama 把名为 `ama` 的 runner 当成它自己的子会话）与每个 `custom:*` 注册一个 runner。
 
 **审批**：`ama` 节点也注入 `ARMADRA_PERM_WAIT_SECS`（与 Claude 同一个开关 `hooks.replyApprovals`，ACP 会话不注入）。适配器的审批回答者按 §5.5 写 `<pending>/<id>.json`、带 `pendingId` 报 `tool_approval_requested`，轮询 `<id>.answer`；请求文件与上报只有工具名与原因，不带工具输入。等不到就让给 ama 自己在终端里的对话框。
+
+### 15.7 分派抽屉：`/api/workflows/tasks`
+
+协调者（ama）经 §15.5 分派出去的任务，页面右侧「分派」抽屉读这一面（设计系统 §5.4，G5-09）。
+
+| 方法与路径                                 | 说明                                                                                                   |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `GET /api/workflows/tasks?boardId=`        | 协调者节点在这块画板上的任务行，新的在前，最多 200 行 → `{ tasks }`；缺 `boardId` 回 `400 bad_request` |
+| `POST /api/workflows/tasks/{taskId}/retry` | 把起任务时的正文从协调者节点再投给同一个成员节点 → `{ task }`（行回到 `running`、重新计时）            |
+
+任务行：`{ taskId, coordinatorNodeId, runnerId, nodeId, status, startedAt, endedAt, reason, retryable }`。`status` 同 §15.5（`running` / `done` / `failed` / `stopped`）；`reason` 是失败时记下的理由（`turnFailed` 等），否则 `null`；`retryable` = 失败或停止、且库里记着任务正文。任务正文与成员的结果正文都不进答复。
+
+- 重试走投递队列（`origin: "first-task"`，发起方是协调者节点），门链、租约与回执与 `canvas send` 相同，不替人回答任何提示。拒绝：没有这个任务 `404 not_found`；不是 `failed` / `stopped` `409 task_not_failed`；没记正文（不带 `--task` 起的）`409 task_prompt_missing`；成员节点已不在协调者那块画板上 `409 task_node_missing`；目标队伍满了 `409 queue_full`。
+- 权限：列表是 `canvas:read`（按 `boardId` 查画布），重试是 `agent:launch`（按任务的协调者节点查画布）；服务器壳的路由门在 `identity/route-access.ts`。
+- 没有专门的事件：抽屉开着时每 5 秒重读，`workflow.*` 帧到达时也重读。
+- 汇总便签由页面在画布文档里认：来源是这个协调者（`data.source.nodeId`）或与它连着线的便签。`canvas sticky` 写的便签自 G5-09 起带 `data.source = { nodeId: <写它的节点>, sessionId: "" }`。
 
 ## 16. 实时协同：`…/boards/{boardId}/sync` 与评论
 
@@ -1418,7 +1435,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 }
 ```
 
-- `web` 只能配 `webpush`，`ios` / `android` 只能配 `direct` / `relay`。`endpoint` 必须是 https（回环上的 http 只给测试）；`p256dh` 是 65 字节 P-256 点，`auth` 是 16 字节。
+- `web` 只能配 `webpush`，`ios` / `android` 只能配 `direct` / `relay`。Android 还可带 UnifiedPush 端点（§27.2）。`endpoint` 必须是 https（回环上的 http 只给测试）；`p256dh` 是 65 字节 P-256 点，`auth` 是 16 字节。
 - `relay` 必须带 `publicKey`：经中继的载荷一律端到端加密。`direct` 带了也加密，不带时 APNs 发明文提示、FCM 发明文数据。
 - `locale` 只认 `zh-CN` / `en`，其余当作没给（按中文渲染）。
 - 答 200 `{ "device": <§19.3 的设备> }`；身份设备已撤销答 403 `forbidden`；形状不对答 400 `bad_request`。
@@ -1457,8 +1474,8 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ### 19.6 触发、收件人与重试
 
-- 推送订阅工作空间事件：`agent.approval`（新请求；`request.resolved` 的答复不推）、`agent.status`（**进入** `done` 推 `agentDone`，进入出错推 `agentError`；`restored` 行不推）、`agent.delivery`（`outcome` 为 `refused` / `failed` / `expired` / `cancelled`（回执），深链指向发送方节点）、`schedule.*`、`resources.threshold`、`board.comment`（只推给 `mentions` 里的 principal，没有提及不推）、`workflow.gate`。后四种事件由各自的域发布，推送只按 `type` 与其中的 `nodeId` / `automationId` / `metric` / `comment.{id,anchorKind,anchorId,mentions}` / `runId` / `stepId` 认。
-- 收件人：登记有效、身份设备未撤销、principal 未停用，且该 principal 对事件所在工作空间有 `canvas:read`（owner 恒有）。
+- 推送订阅工作空间事件：`agent.approval`（新请求；`request.resolved` 的答复不推）、`agent.status`（**进入** `done` 推 `agentDone`，进入出错推 `agentError`；`restored` 行不推）、`agent.delivery`（`outcome` 为 `refused` / `failed` / `expired` / `cancelled`（回执），深链指向发送方节点）、`schedule.*`、`resources.threshold`、`board.comment`（只推给 `mentions` 里的 principal，没有提及不推）、`workflow.gate`。后四种事件由各自的域发布，推送只按 `type` 与其中的 `nodeId` / `automationId` / `metric` / `comment.{id,anchorKind,anchorId,mentions}` / `runId` / `stepId` 认。`schedule.*` 只认 §27.3 的三种、按 `planId` 认；`resources.threshold` 的形状见 §27.4。
+- 收件人：登记有效、身份设备未撤销、principal 未停用，且该 principal 对事件所在工作空间有 `canvas:read`（owner 恒有）。设备设了种类偏好的，只收它选的种类（§27.1）。
 - 先入队（`push_outbox`）再发；总共最多 3 次尝试（失败后 5 秒、30 秒各再试一次），只有网络错误、429 与 5xx 再试。平台说令牌作废（Web Push 404 / 410，APNs 410 / `BadDeviceToken` / `Unregistered`，FCM `UNREGISTERED`，中继 410 / `badToken`）立即停、设备登记撤销（`revoked_reason = 'gone'`）。终态行保留 7 天。App 按旧配置登记的（例如登记时是 `direct`，现在改成 `relay`）只记日志，等 App 按新配置重新登记。
 
 ## 20. 节点凭据：`/api/credentials*`
@@ -1770,7 +1787,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 补 §14 的五件事。代码在 `core/acp/{client,host,session,elicitation,models,adapters,index,routes}.ts` 与 `agent/approvals.ts`，共享层 `api/acp.ts`。
 
-**客户端能力**：协议栈仍是 `@armadra/agent/acp` 的 `AcpClient`。elicitation 与模型要它自报 `AcpClient.features.elicitation` / `features.configOptions`（构造参数 `onElicitation(params, signal)`、方法 `setConfigOption(sessionId, configId, value)`，并在 `initialize` 声明 `clientCapabilities.elicitation`）。core 按 `features` 判断：没有时线路与 §14 逐字节相同——不声明能力、Agent 发来的 `elicitation/create` 由客户端答 method not found，`models` 恒为 `null`。0.6.7 两样都没有。
+**客户端能力**：协议栈仍是 `@armadra/agent/acp` 的 `AcpClient`。elicitation 与模型要它自报 `AcpClient.features.elicitation` / `features.configOptions`（构造参数 `onElicitation(params, signal)`、方法 `setConfigOption(sessionId, configId, value)`，并在 `initialize` 声明 `clientCapabilities.elicitation`）。core 按 `features` 判断：没有时线路与 §14 逐字节相同——不声明能力、Agent 发来的 `elicitation/create` 由客户端答 method not found，`models` 恒为 `null`。0.6.7 两样都没有，0.6.8 起两样都有。
 
 ### 26.1 elicitation
 
@@ -1812,7 +1829,40 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 27. 推送补充：设备偏好、UnifiedPush、调度与资源事件
 
-预留，由 G5-10 填写。事件形状 G5-00 已在 `core/bus.ts` 与 `packages/shared/src/api/events.ts` 定义：`schedule.fired { planId, runId, nodeId? }`、`schedule.failed { planId, runId, nodeId?, reasonCode }`、`schedule.attention { planId, nodeId?, reasonCode }`、`resources.threshold { sessionId, nodeId?, metric, value, threshold }`；不带命令、参数与输出。
+补 §19：每台设备收哪些种类、没有 Google 服务的 Android 走用户自己的 UnifiedPush 分发器，以及两族一直被推送监听、却没有人发的事件。表 `push_devices` 多两列（迁移 `0037_push_preferences.sql`）：`kinds_json`（空串 = 全部）与 `unifiedpush_endpoint`（空串 = 没有）。代码在 `core/push/`（`transport-unifiedpush.ts`）、`core/schedule/engine.ts`、`core/resources/thresholds.ts`，共享层 `api/push.ts`。
+
+### 27.1 设备偏好：`PATCH /api/push/devices/{deviceId}`
+
+```json
+{ "kinds": ["approval", "schedule"] }
+```
+
+- `kinds` 是这台设备**要收**的种类，取自 `approval`、`agentDone`、`agentError`、`deliveryFailed`、`schedule`、`resources`、`comment`、`workflowGate`（共享层 `PUSH_PREFERENCE_KINDS`）；去重、按这个顺序存。`test` 不在其中：测试通知恒收。空数组 = 只收测试。选满全部种类存成「全部」，以后新加的种类缺省也收。
+- 只改请求主体自己名下、还有效的登记；owner 也不替别人改（别人的、已撤销的、不存在的同样答 404 `not_found`）。不认识的种类、不是数组答 400 `bad_request`。
+- 答 200 `{ "device": <§19.3 的设备> }`。设备在接口上多两个键：`kinds`（要收的种类，没设过是全部）、`unifiedpush`（是否走 UnifiedPush；端点本身与令牌一样不出接口）。
+- `PUT /api/push/devices` 的覆盖式登记**保留**偏好（App 每次启动都重新登记，那不是人改了主意）。
+- 过滤在入队前：§19.6 的收件人里，设备不收这一种的不入队。
+
+### 27.2 UnifiedPush
+
+- Android 登记（§19.2）可多带 `"unifiedpush": { "endpoint": "<分发器给的端点>" }`，此时 `token` 可以不给（没有 FCM 令牌的手机）；必须带 `publicKey`。端点同 Web Push 的规矩：https，回环上的 http 只给测试，不带用户名口令与片段。`ios` / `web` 带它答 400。
+- 有端点的设备一律走它，**不看** `push.transport`，也没有服务端配置项：`POST <endpoint>`，`Content-Type: application/json`，`TTL: 3600`，`Urgency`（审批 `high`），`Topic` = tag 的摘要，正文是 §19.5 的信封（对设备公钥封好；分发器只见密文），不跟随重定向。2xx 算收下；404 / 410 是端点已注销，设备登记撤销（`revoked_reason = 'gone'`）；429 与 5xx 按 §19.6 重试；413 等其余 4xx 不重试。
+- 出站表把它登记为「用户配置的地址」（`core/net/outbound.ts` 的 `unifiedPush`）。dev-stack 的 `push-sink` 在 `/up/<topic>` 有替身（topic 以 `gone` 开头答 404、正文超 4096 字节答 413），`ntfy` profile 是真分发器（端点 `http://127.0.0.1:8093/<topic>?up=1`）。
+
+### 27.3 调度事件
+
+调度内核在**提交之后**发 `workspace.event`，只带标识与稳定码，不带命令、参数与输出：
+
+- `schedule.fired { planId, runId, nodeId? }`：一个槽位物化成一次要投递的运行（按策略跳过的槽位不发）。
+- `schedule.failed { planId, runId, nodeId?, reasonCode }`：一次运行没有跑成——执行方回报失败（`FAILED`），目标离线 / 不支持 / 换了代数而跳过（`TARGET_OFFLINE`、`TARGET_UNSUPPORTED`、`STALE_GENERATION`），或等到 TTL 都没等到目标（`WAITING_EXPIRED`）。并发上限、错过的槽位、暂停与改配置的取消是按设计不跑，不发。
+- `schedule.attention { planId, nodeId?, reasonCode }`：计划的「需要处理」标记抬起的那一下（连续两次不可修复的拒绝），一次。
+- `nodeId` 是目标节点（工作流目标没有）。推送把三者都算 `schedule` 种类，`tag` 都是 `schedule:<planId>`（新的替换旧的），正文分别是「定时任务到点了 / 没有跑成 / 需要处理」。
+
+### 27.4 资源阈值事件
+
+- `resources.threshold { sessionId, nodeId?, metric, value, threshold }`：一个会话的用量越过阈值的那一下发一次。`metric` 今天只有 `memory`（进程树 RSS 之和，字节），`threshold` 是设置 `resources.memoryWarnBytes`（缺省 2 GiB，夹在 128 MiB – 128 GiB；设置页「终端 → 内存阈值」同时写它与本机偏好）。
+- 去重按 `sessionId:generation`：同一次运行里在线上抖动不重发，回落到阈值九成以下再越线才再发，换代是新的一次；测不出来（`null`）不算越线。
+- 判定在 core：页面开着时随采样循环（`resource.sample`）判；没人看着、而库里有有效的推送设备时，core 每 30 秒自己采一轮。只是提醒，不终止、不休眠任何会话。推送 `tag` 是 `resources:<metric>:<nodeId 或 sessionId>`，正文不写数字。
 
 ## 28. 邮件通道：`/api/mail/*`
 
@@ -1839,7 +1889,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 { "principalId": "<32 位十六进制>", "token": "<签发时拿到的令牌>", "to": "someone@example.com", "locale": "en" }
 ```
 
-- **令牌由调用方交回**：库里只有哈希，链接只能由刚签出它的那个页面连同 id 一起交过来。core 核对令牌属于这张邀请 / 这个人、没用过、没过期，再按链接自己的规则判调用方：邀请与签发、作废同一套（工作空间邀请要 `workspace:share`，组邀请要能管那个组，两者都无要 `identity:manage`）；重置与签发同一套（§25）。
+- **令牌由调用方交回**：库里只有哈希，链接只能由刚签出它的那个页面连同 id 一起交过来。core 核对令牌属于这张邀请 / 这个人、没用过、没过期，再按链接自己的规则判调用方：邀请与签发、作废同一套（工作空间邀请要 `workspace:share`，组邀请要能管那个组，两者都无要 `identity:manage`）；重置与签发同一套（§25），先判调用方（403 / 404）再认令牌，令牌认不出、用过、作废、过期或不是这个人的，一律 409 `link_invalid`。
 - 正文只有链接与过期时间（UTC），链接是 Gateway 对外来源加 `#invite=<令牌>` / `#reset=<令牌>`；纯文本，没有签发人、角色或工作空间名。主题与正文按 `locale`（`zh` / `en`）选，没给时按 `Accept-Language`，都认不出用英文。
 - 每个来源地址每分钟至多 5 封（socket 对端，不读 `X-Forwarded-For`），核对通过之后才计数，发送失败也计。
 - 审计 `mail.invitation.send` / `mail.password-reset.send`：`target` 是邀请 id / 被重置的人，`detail` 只有 `{ toHash, delivered }`；`toHash` 是 `sha256("armadra/mail/v1\0" + 小写地址)` 的前 32 位十六进制。地址与令牌不进审计与日志。
@@ -1850,7 +1900,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 | 400  | `bad_request`         | 请求体不对：id 或令牌形状不对、邀请令牌的前缀不是这个 id、`to` 不是邮箱地址 |
 | 401  | `unauthenticated`     | 匿名                                                                        |
 | 403  | `forbidden`           | 不能签发这条链接的人                                                        |
-| 404  | `not_found`           | 没有这张邀请 / 这个人；或这台 core 还没有口令重置（§25）                    |
+| 404  | `not_found`           | 没有这张邀请 / 这个人                                                       |
 | 409  | `mail_not_configured` | 没配 SMTP                                                                   |
 | 409  | `link_invalid`        | 令牌不对、已用过（含作废）或已过期                                          |
 | 429  | `rate_limited`        | 这个来源这一分钟已发 5 封；带 `Retry-After`（秒）                           |

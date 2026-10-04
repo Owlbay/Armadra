@@ -80,7 +80,7 @@ import {
 import { handoffCapture } from "./handoff-worker";
 import { readRemoteResources } from "./resources-worker";
 import { unwatchFiles, watchFiles } from "./watch-worker";
-import { writePngExport } from "../assets/exports";
+import { writePngExport, writeTextExport } from "../assets/exports";
 import {
   assetExtension,
   decodeAssetDataUrl,
@@ -469,6 +469,18 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
       dataUrl,
     );
   }),
+  /** 输出到画板的代码块：落在 Agent 的工作目录（在工作区内时）或工作区根。 */
+  "assets.exportText": write((context, root, args) =>
+    writeTextExport(
+      canonicalDirectory(root),
+      text(args, "exportId"),
+      text(args, "name"),
+      typeof args.content === "string"
+        ? args.content
+        : takeTransfer(context.stateDir, args.transfer, true).toString("utf8"),
+      typeof args.cwd === "string" ? args.cwd : undefined,
+    ),
+  ),
 
   /* ------------------------------- git ------------------------------- */
   "git.status": read(

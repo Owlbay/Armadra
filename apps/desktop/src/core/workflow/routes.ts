@@ -2,6 +2,7 @@ import type { ServerResponse } from "node:http";
 import type { CoreRequest } from "../http/router";
 import { DomainError } from "../workspaces/support";
 import { workflowScheduleBridge } from "./registry";
+import { taskRowJson } from "./task-runs";
 import {
   type WorkflowService,
   draftJson,
@@ -267,6 +268,26 @@ export function workflowRoutes(service: WorkflowService): readonly Route[] {
         });
         return { status: 200, body: runBody(groups.id as string) };
       },
+    },
+
+    /* ------------------------------ 协调者任务 ------------------------------ */
+    {
+      method: "GET",
+      pattern: /^\/api\/workflows\/tasks$/,
+      handle: (request) => ({
+        status: 200,
+        body: {
+          tasks: service.tasks(query(request, "boardId")).map(taskRowJson),
+        },
+      }),
+    },
+    {
+      method: "POST",
+      pattern: new RegExp(`^/api/workflows/tasks/${ID}/retry$`),
+      handle: (_request, groups) => ({
+        status: 200,
+        body: { task: taskRowJson(service.retryTask(groups.id as string)) },
+      }),
     },
   ];
 }

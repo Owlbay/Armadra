@@ -176,6 +176,19 @@ describe("normalize", () => {
         "resources.intervalMs",
       ),
     ).toBe(60_000);
+    expect(at(normalize({}), "resources.memoryWarnBytes")).toBe(2 * 1024 ** 3);
+    expect(
+      at(
+        normalize({ resources: { memoryWarnBytes: 1 } }),
+        "resources.memoryWarnBytes",
+      ),
+    ).toBe(128 * 1024 ** 2);
+    expect(
+      at(
+        normalize({ resources: { memoryWarnBytes: 8 * 1024 ** 3 } }),
+        "resources.memoryWarnBytes",
+      ),
+    ).toBe(8 * 1024 ** 3);
     // The safest reading of a broken value is the conservative default, not a
     // machine that refuses to sleep.
     expect(at(normalize({ power: { policy: "always" } }), "power.policy")).toBe(

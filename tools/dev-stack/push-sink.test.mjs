@@ -245,3 +245,38 @@ test("中继替身：/relay/ 下的 POST 一律 202 并记录", async () => {
     JSON.stringify({ relayToken: "r1", ciphertext: "AAAA" }),
   );
 });
+
+test("UnifiedPush：/up/<topic> 收下记录，gone 前缀 404，超 4096 字节 413", async () => {
+  await fetch(`${sink.base}/_sink/requests`, { method: "DELETE" });
+  const body = JSON.stringify({ v: 1, ct: "AAAA" });
+  const ok = await fetch(`${sink.base}/up/upTopic1?up=1`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ttl: "3600" },
+    body,
+  });
+  assert.equal(ok.status, 200);
+  assert.equal((await ok.json()).topic, "upTopic1");
+  const gone = await fetch(`${sink.base}/up/goneTopic`, {
+    method: "POST",
+    body,
+  });
+  assert.equal(gone.status, 404);
+  const large = await fetch(`${sink.base}/up/upTopic1`, {
+    method: "POST",
+    body: "x".repeat(4097),
+  });
+  assert.equal(large.status, 413);
+  const { requests } = await (
+    await fetch(`${sink.base}/_sink/requests`)
+  ).json();
+  assert.deepEqual(
+    requests.map((item) => [item.kind, item.topic, item.status]),
+    [
+      ["unifiedpush", "upTopic1", 200],
+      ["unifiedpush", "goneTopic", 404],
+      ["unifiedpush", "upTopic1", 413],
+    ],
+  );
+  assert.equal(requests[0].headers.ttl, "3600");
+  assert.equal(Buffer.from(requests[0].body, "base64").toString(), body);
+});

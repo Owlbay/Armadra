@@ -69,6 +69,8 @@ export const showcase: MessageModule = {
     "showcase.sample.create": "新建",
     "showcase.sample.offline": "离线",
     "showcase.sample.retry": "重试",
+    "showcase.integration.cli":
+      "CLI 分组：正常 · 版本过旧 · 启动器异常 · ACP 未装", // i18n-exempt
     "showcase.tone.working": "运行中",
     "showcase.tone.attention": "需要你",
     "showcase.tone.failed": "已失败",
@@ -140,6 +142,8 @@ export const showcase: MessageModule = {
     "showcase.sample.create": "New",
     "showcase.sample.offline": "Offline",
     "showcase.sample.retry": "Retry",
+    "showcase.integration.cli":
+      "CLI group: normal · out of date · launcher warning · ACP not installed",
     "showcase.tone.working": "Running",
     "showcase.tone.attention": "Needs you",
     "showcase.tone.failed": "Failed",

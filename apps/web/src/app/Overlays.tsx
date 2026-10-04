@@ -10,6 +10,7 @@ import {
   HandoffDialog,
   HandoffHistoryDrawer,
   CodeActionMenu,
+  DispatchDrawer,
   EditPreviewDialog,
   MergeDialog,
   ProblemsPanel,
@@ -108,6 +109,9 @@ export function Overlays() {
       </Gate>
       <Gate open={panels.workflow !== "closed"}>
         <WorkflowPanel />
+      </Gate>
+      <Gate open={panels.dispatch !== "closed"}>
+        <DispatchDrawer />
       </Gate>
       {/* 事件流驱动的四个：必须先订阅，不能等状态。 */}
       <ControlConfirmDialog />

@@ -102,8 +102,10 @@ export function TerminalPage() {
   const t = useT();
   const terminal = usePreferencesStore((state) => state.terminal);
   const set = usePreferencesStore((state) => state.setTerminalPreference);
-  // 阈值只影响本机的徽标与提醒，所以和终端外观一样存在本地，不进 Runtime。
-  const memoryWarnBytes = usePreferencesStore(
+  // 阈值存两处：core 的设置（越线发 `resources.threshold`，推送据此叫人，
+  // 契约 §27.4）与本地偏好（徽标变色、本机提醒不等设置读回来）。显示以 core
+  // 为准。
+  const localMemoryWarnBytes = usePreferencesStore(
     (state) => state.sessionMemoryWarnBytes,
   );
   const setMemoryWarnBytes = usePreferencesStore(
@@ -113,6 +115,8 @@ export function TerminalPage() {
   const renderBudget = usePreferencesStore((state) => state.renderBudget);
   const setRenderBudget = usePreferencesStore((state) => state.setRenderBudget);
   const { settings, save } = useRuntimeSettings();
+  const memoryWarnBytes =
+    settings.data?.resources?.memoryWarnBytes ?? localMemoryWarnBytes;
   const runtimeTerminal = settings.data?.terminal;
 
   return (
@@ -321,7 +325,10 @@ export function TerminalPage() {
         >
           <Select
             value={String(memoryWarnBytes)}
-            onValueChange={(value) => setMemoryWarnBytes(Number(value))}
+            onValueChange={(value) => {
+              setMemoryWarnBytes(Number(value));
+              save.mutate({ resources: { memoryWarnBytes: Number(value) } });
+            }}
           >
             <SelectTrigger
               aria-label={t("resources.memory.thresholdLabel")}

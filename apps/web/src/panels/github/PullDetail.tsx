@@ -3,15 +3,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { Textarea } from "@/ui/textarea";
@@ -446,19 +446,21 @@ export function PullDetail({
             />
           )}
 
-          <AlertDialog
+          <ResponsiveAlertDialog
             open={confirm}
             onOpenChange={(next) => {
               if (!next) setConfirm(false);
             }}
           >
-            <AlertDialogContent className="z-[var(--z-dialog)]">
-              <AlertDialogHeader>
-                <AlertDialogTitle>{t("github.merge.confirm")}</AlertDialogTitle>
-                <AlertDialogDescription>
+            <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+              <ResponsiveAlertDialogHeader>
+                <ResponsiveAlertDialogTitle>
+                  {t("github.merge.confirm")}
+                </ResponsiveAlertDialogTitle>
+                <ResponsiveAlertDialogDescription>
                   {t("github.merge.note")}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
+                </ResponsiveAlertDialogDescription>
+              </ResponsiveAlertDialogHeader>
               <dl className="grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
                 <dt className="text-muted-foreground">
                   {t("github.repository")}
@@ -489,11 +491,11 @@ export function PullDetail({
                     : t("github.pull.noChecks")}
                 </dd>
               </dl>
-              <AlertDialogFooter>
-                <AlertDialogCancel className="min-h-10">
+              <ResponsiveAlertDialogFooter>
+                <ResponsiveAlertDialogCancel className="min-h-10">
                   {t("github.cancel")}
-                </AlertDialogCancel>
-                <AlertDialogAction
+                </ResponsiveAlertDialogCancel>
+                <ResponsiveAlertDialogAction
                   className="min-h-10"
                   disabled={busy}
                   onClick={() => {
@@ -503,10 +505,10 @@ export function PullDetail({
                   }}
                 >
                   {t("github.merge")}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+                </ResponsiveAlertDialogAction>
+              </ResponsiveAlertDialogFooter>
+            </ResponsiveAlertDialogContent>
+          </ResponsiveAlertDialog>
         </>
       )}
     </div>

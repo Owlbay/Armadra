@@ -12,6 +12,7 @@ import { runAs } from "../identity/gate";
 import { scope } from "../identity/scopes";
 import { GATE_SCOPE, answerWorkflowRequest, workflowRoutes } from "./routes";
 import { WorkflowService } from "./service";
+import { finishTask, recordTaskStart } from "./task-runs";
 
 /**
  * `/api/workflows/*` 与 `workflow-propose`（契约 §15.1–§15.3）：草案从动词进来、
@@ -344,5 +345,131 @@ describe("/api/workflows", () => {
     )) {
       expect(nodeCreator(fixture.database, nodeId as string)).toBe("");
     }
+  });
+});
+
+describe("协调者任务（契约 §15.7）", () => {
+  function seed(task: string | undefined) {
+    const member = fixture.agentNode("Member", "codex");
+    recordTaskStart(fixture.database, {
+      taskId: `sess:${member}`,
+      coordinatorNodeId: coordinator,
+      runnerId: "codex",
+      nodeId: member,
+      now: 1_000,
+      task,
+    });
+    return { member, taskId: `sess:${member}` };
+  }
+
+  it("lists a board's task rows without the task text", async () => {
+    const { member, taskId } = seed("审查 src/x");
+    finishTask(
+      fixture.database,
+      taskId,
+      "failed",
+      { reason: "turnFailed" },
+      5_000,
+    );
+    const listed = await call(
+      "GET",
+      `/api/workflows/tasks?boardId=${fixture.boardId}`,
+    );
+    expect(listed.status).toBe(200);
+    expect(listed.body.tasks).toEqual([
+      {
+        taskId,
+        coordinatorNodeId: coordinator,
+        runnerId: "codex",
+        nodeId: member,
+        status: "failed",
+        startedAt: new Date(1_000).toISOString(),
+        endedAt: new Date(5_000).toISOString(),
+        reason: "turnFailed",
+        retryable: true,
+      },
+    ]);
+    expect(JSON.stringify(listed.body)).not.toContain("审查 src/x");
+    const other = await call("GET", "/api/workflows/tasks?boardId=elsewhere");
+    expect(other.body.tasks).toEqual([]);
+    const missing = await call("GET", "/api/workflows/tasks");
+    expect(missing).toMatchObject({
+      status: 400,
+      body: { code: "bad_request" },
+    });
+  });
+
+  it("retry re-queues the task text from the coordinator and reopens the row", async () => {
+    const { member, taskId } = seed("审查 src/x");
+    const early = await call(
+      "POST",
+      `/api/workflows/tasks/${encodeURIComponent(taskId)}/retry`,
+    );
+    expect(early).toMatchObject({
+      status: 409,
+      body: { code: "task_not_failed" },
+    });
+    finishTask(fixture.database, taskId, "failed", { reason: "x" }, 5_000);
+    const retried = await call(
+      "POST",
+      `/api/workflows/tasks/${encodeURIComponent(taskId)}/retry`,
+    );
+    expect(retried.status).toBe(200);
+    expect(retried.body.task).toMatchObject({
+      taskId,
+      status: "running",
+      endedAt: null,
+      reason: null,
+      retryable: false,
+    });
+    const queued = fixture.database
+      .prepare(
+        "SELECT source_node_id, body FROM agent_send_queue WHERE target_node_id = ?",
+      )
+      .all(member) as { source_node_id: string; body: string }[];
+    expect(queued).toEqual([
+      { source_node_id: coordinator, body: "审查 src/x" },
+    ]);
+    // 再失败一次，正文还在。
+    finishTask(fixture.database, taskId, "failed", { reason: "y" }, 9_000);
+    const again = await call(
+      "GET",
+      `/api/workflows/tasks?boardId=${fixture.boardId}`,
+    );
+    expect(again.body.tasks).toEqual([
+      expect.objectContaining({ taskId, retryable: true, reason: "y" }),
+    ]);
+  });
+
+  it("refuses a retry without task text, for an unknown task or a deleted member", async () => {
+    const bare = seed(undefined);
+    finishTask(fixture.database, bare.taskId, "failed", null, 5_000);
+    expect(
+      await call(
+        "POST",
+        `/api/workflows/tasks/${encodeURIComponent(bare.taskId)}/retry`,
+      ),
+    ).toMatchObject({ status: 409, body: { code: "task_prompt_missing" } });
+    expect(await call("POST", "/api/workflows/tasks/nope/retry")).toMatchObject(
+      { status: 404, body: { code: "not_found" } },
+    );
+    const gone = seed("x");
+    finishTask(fixture.database, gone.taskId, "failed", null, 5_000);
+    fixture.database.prepare("DELETE FROM nodes WHERE id = ?").run(gone.member);
+    expect(
+      await call(
+        "POST",
+        `/api/workflows/tasks/${encodeURIComponent(gone.taskId)}/retry`,
+      ),
+    ).toMatchObject({ status: 409, body: { code: "task_node_missing" } });
+  });
+
+  it("reads with canvas:read and retries with agent:launch", () => {
+    expect(routeScope("GET", "/api/workflows/tasks")).toMatchObject({
+      permission: "canvas:read",
+    });
+    expect(routeScope("POST", "/api/workflows/tasks/t/retry")).toMatchObject({
+      permission: "agent:launch",
+    });
   });
 });
