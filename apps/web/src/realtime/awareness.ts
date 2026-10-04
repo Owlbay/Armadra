@@ -11,7 +11,8 @@ import {
  *
  *   * 自己：`deviceId` = 页面的 `clientId`，`name` = 设备名，`color` = 在场者
  *     没用过的最小成员色（从 2 起；1 留给「自己」，设计系统 §2.5）。光标按
- *     画布坐标、节流后写；选区与正在看的节点随 store 写。
+ *     画布坐标、节流后写；视口按中心的画布坐标 + 缩放、节流后写；选区与
+ *     正在看的节点随 store 写。
  *   * 别人：逐条过 `awarenessStateSchema`，认不出的不进在线表、不画光标。
  */
 
@@ -24,6 +25,16 @@ export interface Peer {
 
 /** 光标写入的最小间隔。 */
 export const CURSOR_THROTTLE_MS = 50;
+
+/** 视口写入的最小间隔：跟随的一方按 120ms 插值，比它密就够了。 */
+export const VIEWPORT_THROTTLE_MS = 100;
+
+/** 视口中心的画布坐标与缩放（契约 §16.4 `viewport`）。 */
+export interface PresenceViewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
 
 /** 别人的状态：校验过的、按 clientID 排好的。 */
 export function peersOf(awareness: Awareness, self: number): Peer[] {
@@ -65,6 +76,8 @@ export interface LocalPresence {
   setCursor(cursor: { x: number; y: number } | null): void;
   setSelection(selection: readonly string[]): void;
   setFocus(nodeId: string | null): void;
+  /** 自己的视口；`null` = 不再报（画布卸载）。 */
+  setViewport(viewport: PresenceViewport | null): void;
   destroy(): void;
 }
 
@@ -74,6 +87,22 @@ export interface LocalPresenceOptions {
   now?: () => number;
   setTimer?: (run: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
+}
+
+/** 缩放夹进契约的范围，坐标不是有限数时整份不报。 */
+function cleanViewport(value: PresenceViewport): PresenceViewport | undefined {
+  if (
+    !Number.isFinite(value.x) ||
+    !Number.isFinite(value.y) ||
+    !Number.isFinite(value.zoom)
+  ) {
+    return undefined;
+  }
+  const zoom = Math.min(
+    AWARENESS_LIMITS.maxZoom,
+    Math.max(AWARENESS_LIMITS.minZoom, value.zoom),
+  );
+  return { x: value.x, y: value.y, zoom };
 }
 
 function clip(value: string, length: number): string {
@@ -121,33 +150,53 @@ export function startLocalPresence(
   };
   awareness.on("change", onChange);
 
-  let lastCursorAt = -Infinity;
-  let queued: { x: number; y: number } | null | undefined;
-  let timer: unknown = null;
-  const writeCursor = (cursor: { x: number; y: number } | null) => {
-    lastCursorAt = now();
-    update({ cursor: cursor ?? undefined });
-  };
-
-  return {
-    setCursor: (cursor) => {
-      const wait = CURSOR_THROTTLE_MS - (now() - lastCursorAt);
-      // 离开画布马上写，别人那里光标立刻开始淡出。
-      if (cursor === null || wait <= 0) {
+  /**
+   * 按 `ms` 节流写一个字段：间隔够了马上写，不够就攒最后一份到期再写；
+   * `null`（离开 / 不再报）马上写，别人那里立刻知道。
+   */
+  const throttled = <T>(ms: number, write: (value: T | null) => void) => {
+    let lastAt = -Infinity;
+    let queued: T | null | undefined;
+    let timer: unknown = null;
+    const flush = (value: T | null) => {
+      lastAt = now();
+      write(value);
+    };
+    return {
+      set(value: T | null) {
+        const wait = ms - (now() - lastAt);
+        if (value === null || wait <= 0) {
+          if (timer !== null) clearTimer(timer);
+          timer = null;
+          queued = undefined;
+          flush(value);
+          return;
+        }
+        queued = value;
+        if (timer !== null) return;
+        timer = setTimer(() => {
+          timer = null;
+          if (queued !== undefined) flush(queued);
+          queued = undefined;
+        }, wait);
+      },
+      cancel() {
         if (timer !== null) clearTimer(timer);
         timer = null;
-        queued = undefined;
-        writeCursor(cursor);
-        return;
-      }
-      queued = cursor;
-      if (timer !== null) return;
-      timer = setTimer(() => {
-        timer = null;
-        if (queued !== undefined) writeCursor(queued);
-        queued = undefined;
-      }, wait);
-    },
+      },
+    };
+  };
+
+  const cursor = throttled<{ x: number; y: number }>(
+    CURSOR_THROTTLE_MS,
+    (value) => update({ cursor: value ?? undefined }),
+  );
+  const viewport = throttled<PresenceViewport>(VIEWPORT_THROTTLE_MS, (value) =>
+    update({ viewport: value ? cleanViewport(value) : undefined }),
+  );
+
+  return {
+    setCursor: (value) => cursor.set(value),
     setSelection: (selection) => {
       const ids = selection
         .filter((id) => id.length > 0 && id.length <= AWARENESS_LIMITS.idLength)
@@ -157,9 +206,10 @@ export function startLocalPresence(
     setFocus: (nodeId) => {
       update({ focusNodeId: nodeId ?? undefined });
     },
+    setViewport: (value) => viewport.set(value),
     destroy: () => {
-      if (timer !== null) clearTimer(timer);
-      timer = null;
+      cursor.cancel();
+      viewport.cancel();
       awareness.off("change", onChange);
     },
   };

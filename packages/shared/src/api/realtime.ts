@@ -80,6 +80,9 @@ export const AWARENESS_LIMITS = {
   selection: 256,
   /** 序列化之后一份状态的字节上限。 */
   stateBytes: 16 * 1024,
+  /** `viewport.zoom` 的取值范围（含两端）；画布自己只用 0.1–3。 */
+  minZoom: 0.01,
+  maxZoom: 100,
 } as const;
 
 const awarenessId = z.string().min(1).max(AWARENESS_LIMITS.idLength);
@@ -94,6 +97,8 @@ const awarenessId = z.string().min(1).max(AWARENESS_LIMITS.idLength);
  *     最小一个（从 2 起），所以各个观看者看到的同一个人颜色相同。
  *   * `cursor`：画布坐标；指针离开画布时省略。
  *   * `selection`：选中的节点 id（白板对象带 `wb:` 前缀）。
+ *   * `viewport`：视口中心的画布坐标与缩放。用中心而不是平移量，窗口大小
+ *     不同的两个人跟随时看到的是同一块地方。
  *
  * 认不出的状态（形状不对、超长）整条丢弃，不进在线表。
  */
@@ -107,6 +112,17 @@ export const awarenessStateSchema = z.object({
     .optional(),
   selection: z.array(awarenessId).max(AWARENESS_LIMITS.selection).optional(),
   focusNodeId: awarenessId.optional(),
+  viewport: z
+    .object({
+      x: z.number().finite(),
+      y: z.number().finite(),
+      zoom: z
+        .number()
+        .finite()
+        .min(AWARENESS_LIMITS.minZoom)
+        .max(AWARENESS_LIMITS.maxZoom),
+    })
+    .optional(),
 });
 
 export type AwarenessState = z.infer<typeof awarenessStateSchema>;
