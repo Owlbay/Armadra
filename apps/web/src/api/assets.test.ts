@@ -50,7 +50,7 @@ describe("needsBearerFetch（R-55）", () => {
 
 describe("acquireAssetUrl", () => {
   it("同一个地址共用一次取回；最后一个占用者走时回收", async () => {
-    const load = vi.fn(async () => new Response(new Blob(["png"])));
+    const load = vi.fn(async () => new Response("png"));
     const a = acquireAssetUrl(ASSET, load);
     const b = acquireAssetUrl(ASSET, load);
     await expect(a.ready).resolves.toBe("blob:test/1");
@@ -76,7 +76,7 @@ describe("acquireAssetUrl", () => {
       () => new Promise<Response>((done) => (finish = done)),
     );
     slow.release();
-    finish(new Response(new Blob(["png"])));
+    finish(new Response("png"));
     await expect(slow.ready).resolves.toBeNull();
     expect(revoked).toEqual(["blob:test/1"]);
   });
@@ -90,7 +90,7 @@ describe("useAssetUrl", () => {
 
     mocks.app = true;
     mocks.saved = GATEWAY;
-    const fetcher = vi.fn(async () => new Response(new Blob(["png"])));
+    const fetcher = vi.fn(async () => new Response("png"));
     vi.stubGlobal("fetch", fetcher);
     const hook = renderHook(() => useAssetUrl(ASSET));
     expect(hook.result.current).toBeUndefined();
