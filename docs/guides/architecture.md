@@ -554,8 +554,9 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
 - **签名发布**：签名、公证、GPG 与更新清单的流程都已写好（[CI 与发布](ci-release.md)），
   但没有真证书。未签名的发布包在 `ARMADRA_UPDATES_DEV=1` 下能检查、下载、校验、暂存，
   「安装」答 `notSigned`；本地 `dist` 是 `localBuild`；更新器从不报没发生过的 `upToDate`
-  （`shell-core/updates/availability.ts`）。设置页的「检查」按钮仍不调壳（`use-update-state.ts`
-  报 `noReleaseSource`，壳侧定时检查在跑）。
+  （`shell-core/updates/availability.ts`）。设置页的「检查」经 `updates:check`（不带答复）由壳
+  自己问发布索引，`noReleaseSource` 只在壳没有发布源时出现；macOS 的签名状态由
+  `codesign --verify --deep --strict` 判定，ad-hoc 签名按 `unknown` 不装。
 - **ACP 的未竟项**：`elicitation/create` 与按模型选择（`session/set_config_option`）core 已就绪
   （契约 §26），但要 `@armadra/agent` 的 `AcpClient` 自报 `features.elicitation` /
   `features.configOptions`，0.6.7 还没有，在那之前行为与之前相同；SSH 节点不能切到 ACP

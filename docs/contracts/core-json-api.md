@@ -517,6 +517,7 @@ G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：�
 - 拼法：`<launcher> <程序> [程序前置词…] <旗标…> [prompt]`。程序是 `launchTarget.program` / `resolvedPath` / `launchCmd` 中先有的那个（用户的启动命令覆盖优先），前置词是 `launchTarget.args`。启动器把注入接在调用者的全部参数之后，所以 prompt 在行上时注入的旗标落在它之后。
 - 自己 exec 的调用方（探针）直接 exec `<launcher> <程序> …`，并在环境里带 `ARMADRA_NODE_ID`。要看注入本身，读 §13.2 的 `launchArgs`。
 - **下线**：当前 core 不再答 `launchWords` 与 `launchArgs`。共享层把这两个字段留作可选、标为弃用一个版本：新页面对没有 `launcher` 的旧 core 退回读它们；旧页面对新 core 两个字段都读不到，拼出裸行（不注入，也不会截断）。
+- 自 0.2.0 起 `launchWords` / `launchArgs` 不再出现在 `GET /api/agents` 的行上：共享层 schema 去掉了这两个字段与 `launchWordSchema`，页面不再有旧 core 退路（§13.2 的 `launchArgs` 不受影响）。
 - SSH 节点不受影响：行仍是裸的 `<程序名> <旗标…>`，由执行主机 `PATH` 最前面的远端垫片交给远端启动器。
 
 节点终端的环境（`POST /api/terminals` 带 `agent` 与 `nodeId` 时、依赖编排、冷启动、节能唤醒）里，画布这一半只有两个变量：`ARMADRA_SHIMS=<数据目录>/integration/shims` 与以它开头的 `PATH`（其后与普通终端的 `PATH` 相同）。`OPENCODE_CONFIG_DIR`、`OPENCODE_CONFIG_CONTENT`、`COPILOT_CUSTOM_INSTRUCTIONS_DIRS`、`ARMADRA_CODEX_HOOK`、`ARMADRA_CODEX_INSTRUCTIONS` 不再出现在终端环境里：前三个由启动器只给 CLI 进程设，后两个已删除。SSH 节点的终端不带这两个（远端的 `ARMADRA_SHIMS` 由远端 shell 命令设）。§5 列的地址变量不变。

@@ -156,19 +156,6 @@ describe("启动行经画布启动器", () => {
     );
   });
 
-  it("有启动器时不读旧 core 的 launchWords / launchArgs", () => {
-    setAgentRegistry([
-      {
-        ...codex,
-        launchWords: ["-c", "hooks.Stop=x"],
-        launchArgs: ["-c", "hooks.Stop=x"],
-      },
-    ]);
-    expect(buildAgentLaunch({ id: "codex" }).command).toBe(
-      `'${launcher}' /opt/homebrew/bin/codex`,
-    );
-  });
-
   it("用户的启动命令与 npm 包装背后的程序都作启动器的参数", () => {
     usePreferencesStore.setState({
       launchOverrides: { codex: "/usr/local/bin/codex" },
@@ -209,19 +196,22 @@ describe("启动行经画布启动器", () => {
     );
   });
 
-  it("没有启动器也没有旧字段时是裸行", () => {
+  it("没有启动器时是裸行", () => {
     setAgentRegistry([{ ...codex, launcher: undefined }]);
     expect(buildAgentLaunch({ id: "codex" }).command).toBe(
       "/opt/homebrew/bin/codex",
     );
   });
 
-  it("旧 core 只答 launchArgs 时照旧逐个引用在行上", () => {
-    setAgentRegistry([
-      { ...codex, launcher: undefined, launchArgs: ["-c", "a b"] },
-    ]);
+  it("旧 core 的 launchWords / launchArgs 自 0.2.0 起退役，不再写上行", () => {
+    // 字段按计划删除（G4-2）：即使有旧 core 答了，页面也不再拼它们。
+    const legacy = {
+      launchArgs: ["-c", "a b"],
+      launchWords: ["-c", { prefix: "hooks.Stop=", env: "ARMADRA_CODEX_HOOK" }],
+    } as object;
+    setAgentRegistry([{ ...codex, launcher: undefined, ...legacy }]);
     expect(buildAgentLaunch({ id: "codex" }).command).toBe(
-      "/opt/homebrew/bin/codex -c 'a b'",
+      "/opt/homebrew/bin/codex",
     );
   });
 
@@ -233,7 +223,7 @@ describe("启动行经画布启动器", () => {
   });
 });
 
-describe("旧 core（launchWords）的启动行按节点终端的 shell 引用", () => {
+describe("启动行按节点终端的 shell 引用", () => {
   const codex: AgentInfo = {
     id: "codex",
     label: "Codex",
@@ -244,7 +234,6 @@ describe("旧 core（launchWords）的启动行按节点终端的 shell 引用",
     args: [],
     resolvedPath: "C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd",
     installed: true,
-    launchWords: ["-c", { prefix: "hooks.Stop=", env: "ARMADRA_CODEX_HOOK" }],
   };
 
   afterEach(() => {
@@ -264,30 +253,20 @@ describe("旧 core（launchWords）的启动行按节点终端的 shell 引用",
     expect(launchDialect({})).toBe("posix");
   });
 
-  it("cmd.exe 与 PowerShell 各用自己的引号和环境变量写法", () => {
+  it("cmd.exe 与 PowerShell 各用自己的引号写法", () => {
     setAgentRegistry([codex]);
-    expect(buildAgentLaunch({ id: "codex" }, undefined, "cmd").command).toBe(
-      '"C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd" -c "hooks.Stop=%ARMADRA_CODEX_HOOK%"',
+    expect(buildAgentLaunch({ id: "codex" }, "hi there", "cmd").command).toBe(
+      '"C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd" "hi there"',
     );
     expect(
-      buildAgentLaunch({ id: "codex" }, undefined, "powershell").command,
+      buildAgentLaunch({ id: "codex" }, "hi there", "powershell").command,
     ).toBe(
-      "& 'C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd' -c \"hooks.Stop=${env:ARMADRA_CODEX_HOOK}\"",
+      "& 'C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd' 'hi there'",
     );
     // 恢复行没有显式方言时按 core 的缺省 shell。
     setCoreHost({ platform: "win32", defaultShell: "cmd.exe" });
     expect(buildResumeLaunch("codex", "t-1").command).toBe(
-      '"C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd" resume t-1 -c "hooks.Stop=%ARMADRA_CODEX_HOOK%"',
-    );
-  });
-
-  it("Windows PowerShell 5.1 的 Codex 行写在 --% 后面", () => {
-    setAgentRegistry([codex]);
-    expect(
-      buildAgentLaunch({ id: "codex" }, undefined, "windows-powershell")
-        .command,
-    ).toBe(
-      "& 'C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd' -c --% \"hooks.Stop=%ARMADRA_CODEX_HOOK%\"",
+      '"C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd" resume t-1',
     );
   });
 
@@ -301,9 +280,7 @@ describe("旧 core（launchWords）的启动行按节点终端的 shell 引用",
     // 批处理挡不住的 `&` 与 `"`，直接起 node 时照常引用就能原样到达。
     expect(
       buildAgentLaunch({ id: "codex" }, 'fix "a" & b', "cmd").command,
-    ).toBe(
-      `"${node}" "${script}" -c "hooks.Stop=%ARMADRA_CODEX_HOOK%" ^"fix \\^"a\\^" ^& b^"`,
-    );
+    ).toBe(`"${node}" "${script}" ^"fix \\^"a\\^" ^& b^"`);
     // 没读出来时 .cmd 就是程序：这样的提示词宁可不启动。
     setAgentRegistry([codex]);
     expect(() =>
