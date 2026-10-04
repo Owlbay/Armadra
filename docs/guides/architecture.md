@@ -75,7 +75,7 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 | `core/secrets/`                         | 按平台的密钥后端（钥匙串、`safeStorage`、`file-encrypted`）                                  | —        |
 | `core/net/outbound.ts`                  | core 全部出站地址的登记表，扫描测试强制                                                      | —        |
 | `core/diagnostics/`                     | 崩溃上报的剥离规则；SDK 只在壳里、只在用户填了 DSN 时加载；页面错误上报（G5-19，现为空骨架） | §30      |
-| `core/mail/`                            | 可选 SMTP 通知通道：邀请与重置链接（G5-13，现为空骨架）                                      | §28      |
+| `core/mail/`                            | 可选 SMTP 通知通道：邀请与重置链接；只有服务器壳 `--smtp-url` 配，nodemailer 首封才加载      | §28      |
 | `core/forge/`                           | 托管平台抽象：GitHub、Gitea / Forgejo、GitLab（G5-14 / G5-15，现为空骨架）                   | §29      |
 
 core 之外的同类新增：`src/hook-client/`（动词工具表，`armadra-hook` 与 ama 适配器共用）、
