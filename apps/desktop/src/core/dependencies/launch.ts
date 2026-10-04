@@ -271,6 +271,8 @@ export function launchLine(
       : {};
   const permissionMode = stringField(agent, "permissionMode");
   const model = stringField(agent, "model");
+  // `open-agent --resume`（契约 §15.5）：接回 CLI 自己的那段会话。
+  const resume = stringField(agent, "resume");
   let row: ReturnType<typeof listAgents>[number] | undefined;
   try {
     row = listAgents({
@@ -291,6 +293,7 @@ export function launchLine(
     ssh,
     ...(permissionMode === undefined ? {} : { permissionMode }),
     ...(model === undefined ? {} : { model }),
+    ...(resume === undefined ? {} : { resume }),
     ...(row?.resolvedPath == null ? {} : { program: row.resolvedPath }),
   });
 }

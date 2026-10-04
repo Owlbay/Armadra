@@ -26,6 +26,7 @@ describe("realtime shapes (contract §16.2, §16.4)", () => {
       cursor: { x: 10.5, y: -4 },
       selection: ["a", "wb:b"],
       focusNodeId: "a",
+      viewport: { x: 1, y: 2, zoom: 0.5 },
       extra: true,
     });
     expect(state).toEqual({
@@ -36,6 +37,7 @@ describe("realtime shapes (contract §16.2, §16.4)", () => {
       cursor: { x: 10.5, y: -4 },
       selection: ["a", "wb:b"],
       focusNodeId: "a",
+      viewport: { x: 1, y: 2, zoom: 0.5 },
     });
   });
 
@@ -58,6 +60,10 @@ describe("realtime shapes (contract §16.2, §16.4)", () => {
         ),
       },
       { ...base, focusNodeId: "" },
+      { ...base, viewport: { x: 0, y: 0 } },
+      { ...base, viewport: { x: 0, y: 0, zoom: 0 } },
+      { ...base, viewport: { x: 0, y: Infinity, zoom: 1 } },
+      { ...base, viewport: { x: 0, y: 0, zoom: AWARENESS_LIMITS.maxZoom + 1 } },
       { name: "n", color: 1 },
     ]) {
       expect(awarenessStateSchema.safeParse(bad).success).toBe(false);

@@ -1,9 +1,13 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type AgentFixture,
   agentFixture,
   callerFor,
 } from "../../agent/fixture";
+import { launchLine } from "../../dependencies/launch";
 import { launchFor } from "../../dependencies/store";
 import { taskRun } from "../../workflow/task-runs";
 import { type ControlOutcome, controlDispatcher } from ".";
@@ -197,6 +201,175 @@ describe("open-agent --task-id", () => {
   });
 });
 
+/** 节点数据（存盘的那一份）。 */
+function nodeData(nodeId: string): Record<string, unknown> {
+  const row = fixture.database
+    .prepare("SELECT data_json FROM nodes WHERE id = ?")
+    .get(nodeId) as { data_json: string };
+  return JSON.parse(row.data_json) as Record<string, unknown>;
+}
+
+describe("open-agent --cwd", () => {
+  it("opens the member in a directory inside the workspace, relative or absolute", async () => {
+    mkdirSync(join(fixture.directory, "src", "app"), { recursive: true });
+    const relative = result(
+      await run(lead, "open-agent", { agent: "claude", cwd: "src/app" }),
+    );
+    expect(relative.cwd).toBe(join(fixture.directory, "src", "app"));
+    expect(nodeData(relative.id as string).cwd).toBe(
+      join(fixture.directory, "src", "app"),
+    );
+    const absolute = result(
+      await run(lead, "open-agent", {
+        agent: "claude",
+        cwd: join(fixture.directory, "src"),
+      }),
+    );
+    expect(nodeData(absolute.id as string).cwd).toBe(
+      join(fixture.directory, "src"),
+    );
+    // 工作区根本身也算在里面。
+    const rooted = result(
+      await run(lead, "open-agent", { agent: "claude", cwd: "." }),
+    );
+    expect(rooted.cwd).toBe(fixture.directory);
+    // 演练只报不建。
+    const dry = result(
+      await run(lead, "open-agent", {
+        agent: "claude",
+        cwd: "src",
+        "dry-run": true,
+      }),
+    );
+    expect(dry).toMatchObject({
+      dryRun: true,
+      cwd: join(fixture.directory, "src"),
+    });
+  });
+
+  it("refuses a directory outside the workspace, through .. or a symlink", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "armadra-outside-"));
+    try {
+      symlinkSync(outside, join(fixture.directory, "escape"));
+      const before = fixture.database
+        .prepare("SELECT COUNT(*) AS n FROM nodes")
+        .get() as { n: number };
+      for (const cwd of ["..", outside, "escape", join(outside, "missing")]) {
+        expect(
+          await run(lead, "open-agent", { agent: "claude", cwd }),
+        ).toMatchObject({
+          ok: false,
+          status: 400,
+          code: "cwd_outside_workspace",
+        });
+      }
+      const after = fixture.database
+        .prepare("SELECT COUNT(*) AS n FROM nodes")
+        .get() as { n: number };
+      expect(Number(after.n)).toBe(Number(before.n));
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a missing directory, a file, and --worktree alongside it", async () => {
+    expect(
+      await run(lead, "open-agent", { agent: "claude", cwd: "nope" }),
+    ).toMatchObject({ ok: false, status: 400, code: "bad_request" });
+    expect(
+      await run(lead, "open-agent", { agent: "claude", cwd: "canvas.db" }),
+    ).toMatchObject({ ok: false, status: 400 });
+    expect(
+      await run(lead, "open-agent", {
+        agent: "claude",
+        cwd: ".",
+        worktree: "fix",
+      }),
+    ).toMatchObject({ ok: false, status: 400 });
+  });
+});
+
+describe("open-agent --resume", () => {
+  it("launches the member in the core on the CLI's own resume line", async () => {
+    const body = result(
+      await run(lead, "open-agent", {
+        agent: "claude",
+        resume: "0199aa00-1111-7222-8333-444455556666",
+      }),
+    );
+    const nodeId = body.id as string;
+    expect(body.resume).toBe("0199aa00-1111-7222-8333-444455556666");
+    const data = nodeData(nodeId);
+    expect((data.agent as Record<string, unknown>).resume).toBe(
+      "0199aa00-1111-7222-8333-444455556666",
+    );
+    // 页面敲的是新开的行：带 --resume 的节点由 core 起，即使没有 --task-id。
+    expect(launchFor(fixture.database, nodeId)).toMatchObject({
+      state: "waiting",
+    });
+    expect(launchLine(fixture.collab, "claude", data)).toContain(
+      "--resume 0199aa00-1111-7222-8333-444455556666",
+    );
+    const codex = result(
+      await run(lead, "open-agent", { agent: "codex", resume: "thread-1" }),
+    );
+    expect(
+      launchLine(fixture.collab, "codex", nodeData(codex.id as string)),
+    ).toMatch(/codex\S* resume thread-1/);
+  });
+
+  it("takes a member's node id for the session that node reported", async () => {
+    const member = fixture.agentNode("old reviewer", "claude");
+    fixture.database
+      .prepare(
+        "INSERT INTO agent_status (node_id, workspace_id, agent_id, state, unread, session_id, verified, restored, " +
+          "updated_at, last_event_at) VALUES (?, ?, 'claude', 'done', 0, 'sess-claude-1', 1, 0, ?, ?)",
+      )
+      .run(
+        member,
+        fixture.workspaceId,
+        new Date().toISOString(),
+        new Date().toISOString(),
+      );
+    const body = result(
+      await run(lead, "open-agent", { agent: "claude", resume: member }),
+    );
+    expect(body.resume).toBe("sess-claude-1");
+    // 跑的不是同一家：接不回。
+    expect(
+      await run(lead, "open-agent", { agent: "codex", resume: member }),
+    ).toMatchObject({ ok: false, code: "resume_unsupported" });
+    // 从没报过会话 id：接不回。
+    const silent = fixture.agentNode("silent", "claude");
+    expect(
+      await run(lead, "open-agent", { agent: "claude", resume: silent }),
+    ).toMatchObject({ ok: false, code: "resume_unsupported" });
+  });
+
+  it("answers resume_unsupported for a CLI that cannot resume, and 400 for a malformed id", async () => {
+    fixture.customAgents.push({
+      id: "custom:once",
+      label: "once",
+      launchCmd: "once",
+      baseAgent: "claude",
+      disabledCapabilities: ["resume"],
+    });
+    const before = fixture.database
+      .prepare("SELECT COUNT(*) AS n FROM nodes")
+      .get() as { n: number };
+    expect(
+      await run(lead, "open-agent", { agent: "custom:once", resume: "s-1" }),
+    ).toMatchObject({ ok: false, status: 400, code: "resume_unsupported" });
+    expect(
+      await run(lead, "open-agent", { agent: "claude", resume: "a b; rm" }),
+    ).toMatchObject({ ok: false, status: 400, code: "bad_request" });
+    const after = fixture.database
+      .prepare("SELECT COUNT(*) AS n FROM nodes")
+      .get() as { n: number };
+    expect(Number(after.n)).toBe(Number(before.n));
+  });
+});
+
 describe("wait", () => {
   it("walks running → blocked → needsInput → done, the cursor neither losing nor repeating", async () => {
     const member = await openTask("s1:t1");
@@ -272,6 +445,42 @@ describe("wait", () => {
     // 带着答回来的游标再等：同样的 post 不再出现。
     const after = await wait("s1:t1", answer.since);
     expect(after.events.filter((event) => event.type === "post")).toEqual([]);
+  });
+
+  it("reports a turn held on an approval as blocked, and finishes once a person answers it", async () => {
+    const member = await openTask("s1:held");
+    deliverAll(member);
+    let answer = await wait("s1:held");
+    report(member, "working", 1_000);
+    answer = await wait("s1:held", answer.since);
+    expect(answer.status).toBe("running");
+
+    // 长轮询挂着时成员停到审批上：一有变化就答，带审批 id。
+    const pending = wait("s1:held", answer.since, 10);
+    report(member, "blocked", 2_000, { pendingId: "member-1-2-3" });
+    answer = await pending;
+    expect(answer).toMatchObject({
+      status: "blocked",
+      approvalId: "member-1-2-3",
+      reason: "approval",
+    });
+    expect(answer.events).toEqual([
+      expect.objectContaining({ type: "status", state: "blocked" }),
+    ]);
+    // 再等一次仍是 blocked：动词不替人答，也不把它当结束。
+    const still = await wait("s1:held", answer.since);
+    expect(still).toMatchObject({ status: "blocked", events: [] });
+    expect(taskRun(fixture.database, "s1:held")?.status).toBe("running");
+
+    // 人在页面上答了：成员接着干，这一轮干净地结束。
+    report(member, "working", 3_000);
+    answer = await wait("s1:held", answer.since);
+    expect(answer.status).toBe("running");
+    report(member, "done", 4_000);
+    answer = await wait("s1:held", answer.since);
+    expect(answer.status).toBe("done");
+    expect(answer.result).toBeUndefined();
+    expect(taskRun(fixture.database, "s1:held")?.status).toBe("done");
   });
 
   it("falls back to the member's turn ending after the delivery", async () => {

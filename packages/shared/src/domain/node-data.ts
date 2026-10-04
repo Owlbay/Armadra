@@ -113,6 +113,11 @@ export const terminalAgentSchema = z.object({
   model: z.string().max(120).optional(),
   /** Session id reported by the CLI (via hooks) or pre-minted by us. */
   sessionId: z.string().max(200).optional(),
+  /**
+   * The CLI session the core resumes when it launches this node
+   * (`open-agent --resume`, contract §15.5). Only the core's launch reads it.
+   */
+  resume: z.string().max(200).optional(),
   /** Launch line written into the shell once it is ready. */
   initialCommand: z.string().max(4_000).optional(),
   pendingLaunch: pendingLaunchSchema.optional(),

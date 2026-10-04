@@ -369,6 +369,8 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 角色是 `viewer` ⊂ `editor` ⊂ `operator` ⊂ `driver`，编译表只在 `core/identity/roles.ts`。
 
+G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：设成功之后撤掉这个人的其它会话（安全审查 L2）——本人换口令时留下发请求的这个会话，owner 或 `identity:manage` 替人设时那个人的会话全部撤掉；这个人手里还没用的口令重置令牌（§25）一并作废，审计 `identity.credential.set` 的 `detail` 多 `revokedSessions`。`POST invitations` 的 `ttlMs` 缺省 7 天、最长 30 天（安全审查 L3），更长的夹到 30 天，不是正整数答 400 `INVALID_ARGUMENT`；答案的 `expiresAtMs` 是夹过之后的。替某人签发口令重置链接是 `POST principals/{id}/password-reset`，见 §25。
+
 **判定在哪里生效**（R8）：
 
 - **成员会话的授权快照只有 `identity:read`**，共享得来的授权每次判定时现编（`Authorizer.permits` = 快照 ∪ 现编）。所以撤销一条共享之后的**下一个请求**就是 403，不用等会话过期。`GET session` 报的 `scopes` 是现编之后的那份。
@@ -869,6 +871,8 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - `task-id`：幂等键，1–100 个字母、数字或 `.` `_` `:` `-`（runner 用 `<ama 会话 id>:<ama 任务 id>`）。同一个协调者再用同一个 `task-id` 起：节点还在就答回那个节点（`result.reused: true`，不建、不投、不起）；节点已删就新建，任务行换绑过去。被别的协调者用过回 `409 task_conflict`。带它时 core 记一行 `workflow_task_runs`（`runner_id` = `agent`），并把节点交给依赖编排的启动路径起终端、敲启动行（与工作流角色节点同一条，页面开不开都一样）；`result` 多 `taskRunId` 与 `reused`。
 - `name`：节点标题，与 `title` 同义（两者都给时取 `title`）。
 - 权限模式这个 CLI 没有：`400 permission_mode_unsupported`，附 `supported: [...]`（与 §15.3 同码；`team` 同此）。
+- `cwd`：成员终端开在哪个目录。工作区根下的相对路径或落在工作区里的绝对路径，按 core 所在机器的路径规则解析并解开符号链接后判断；在工作区外（含经 `..` 或符号链接出去）回 `400 cwd_outside_workspace`，目录不存在或不是目录回 `400 bad_request`，与 `worktree` 同给回 `400 bad_request`，远端执行主机上的工作区回 `400 cwd_unsupported`。成立时写进节点数据的 `cwd`（解开链接后的绝对路径），`result` 与演练结果多 `cwd`。
+- `resume`：接回这个 CLI 自己的一段会话（1–200 个字母、数字或 `.` `_` `:` `-`），core 起节点时敲的是 `agent/launch.ts` 的 resume 行（Claude `--resume <id>`、Codex `resume <id>` …）。值是这块画布上一个成员节点的 id 时（runner 的 `sessionRef.sessionId` 就是节点 id），取那个节点上报过的会话 id。这个 CLI 不能续接（或自定义条目关掉了 `resume`）、节点跑的不是同一家、或节点从没报过会话 id，回 `400 resume_unsupported`。成立时写进节点数据的 `agent.resume`，节点交给依赖编排的启动路径由 core 起（不带 `task-id` 也一样），`result` 多 `resume`（实际接回的会话 id）。ama 的 runner 把 `request.cwd` / `request.resume` 映射成这两个参数，遇到 `cwd_outside_workspace` / `cwd_unsupported` / `resume_unsupported` 时去掉那一个再起一次（成员开在工作区根、或新开会话）。
 
 **`wait`**
 
@@ -1039,20 +1043,22 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 }
 ```
 
-| 字段          | 规则                                                                                                                        |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `principalId` | core 一律改写成这条连接的 principal（本机壳的 owner 为 `""`），客户端填什么都不算                                           |
-| `deviceId`    | 必填，1–128 字符：页面的 `clientId`（同一个人的两个窗口各一个）                                                             |
-| `name`        | 必填，≤ 80 字符，只用于显示                                                                                                 |
-| `color`       | 必填，整数 `1..8`：成员色序号（设计系统 §2.5）。页面加入时取在场者没用的最小一个（从 2 起），各观看者看到的同一个人颜色相同 |
-| `cursor`      | 可选，画布坐标（有限数）；指针离开画布时省略                                                                                |
-| `selection`   | 可选，≤ 256 个 id（每个 1–128 字符）；白板对象带 `wb:` 前缀                                                                 |
-| `focusNodeId` | 可选，正在看的节点 id                                                                                                       |
+| 字段          | 规则                                                                                                                           |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `principalId` | core 一律改写成这条连接的 principal（本机壳的 owner 为 `""`），客户端填什么都不算                                              |
+| `deviceId`    | 必填，1–128 字符：页面的 `clientId`（同一个人的两个窗口各一个）                                                                |
+| `name`        | 必填，≤ 80 字符，只用于显示                                                                                                    |
+| `color`       | 必填，整数 `1..8`：成员色序号（设计系统 §2.5）。页面加入时取在场者没用的最小一个（从 2 起），各观看者看到的同一个人颜色相同    |
+| `cursor`      | 可选，画布坐标（有限数）；指针离开画布时省略                                                                                   |
+| `selection`   | 可选，≤ 256 个 id（每个 1–128 字符）；白板对象带 `wb:` 前缀                                                                    |
+| `focusNodeId` | 可选，正在看的节点 id                                                                                                          |
+| `viewport`    | 可选，`{ x, y, zoom }`：视口**中心**的画布坐标（有限数）与缩放（`0.01..100`）。页面节流约 100ms 写；跟随时对上它，没有就跟光标 |
 
 - core 只留上表里的键；形状不对或序列化后超过 16 KiB 的状态**整条丢弃**（不转发、不断流），`null`（离开）照常转发。
 - 一条连接只能写自己登记过的 clientID：别的连接已经登记的 clientID 在它发来的帧里被丢掉。
 - 页面按共享层 `awarenessStateSchema` 再校验一次，认不出的不进在线表、不画光标。
 - 共享层 `AWARENESS_LIMITS` 与 core `realtime/awareness.ts` 的上限逐条一致（`awareness.test.ts` 守）。
+- 实时板的视口不进文档、也不 PUT：页面按 `boardId` 记在本机 `localStorage`（`armadra.realtimeViewport.<boardId>`），开板时恢复；`viewport` 只用于跟随，core 不读。
 
 ## 17. Gateway：`/api/gateway*`
 
@@ -1231,6 +1237,8 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 
 计数器按库的判定写回 `sign_count`；回退（克隆的认证器）由库拒绝。审计：`identity.passkey.add`、`identity.passkey.remove`、`identity.login`（`detail.method: "passkey"`）。
 
+G5-02 追加：`PATCH passkey/{credentialId}` `{ label }`（写）给自己的 passkey 改名，答 `{ credentialId, label }`。`label` 1–64 个字符（按字符不按字节）、首尾无空白、无控制字符，否则 400 `INVALID_ARGUMENT`。只有本人：别人的（调用方有 `identity:manage` 也一样）、撤销了的、不存在的同样答 404。审计 `identity.passkey.rename`。
+
 ### 18.3 MFA：TOTP、恢复码与两步登录
 
 TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时间步；记最后用过的时间步，**同一个码第二次一律拒**。密钥在 SecretStore（条目名 `armadra-totp-<principalId>`），库里只有条目名。恢复码 10 个（`xxxxx-xxxxx`，大小写、空格与连字符不计），只存 scrypt 哈希，用掉即作废。
@@ -1277,6 +1285,8 @@ TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时
 | `POST sessions/revoke-others`（写） | 已登录                            | `{ revoked }`：撤掉我除当前之外的全部会话（「其它设备全部登出」）                                                                                    |
 
 `remoteIp` 是建会话那一刻的 socket 对端，`userAgent` 截到 256 字符；`lastSeenAtMs` 是最近一次认证成功，一分钟内不重写。撤销在下一个请求上生效（认证每次读库）。审计：`identity.session.revoke`、`identity.session.revoke-others`。
+
+G5-02 追加：`GET devices`（我的设备，`{ devices, nextId, hasMore }`）的每一行多两个可选字段。`platform` 由这台设备最近那个会话的 UA 归出来，取 `macos / windows / linux / ios / android / web / unknown` 之一：认得出浏览器、说不出系统的是 `web`，空 UA 与认不出的是 `unknown`。UA 原文不在这个答案里。`lastSeenAtMs` 是这台设备所有会话（含已撤销、已过期的）里最大的 `lastSeenAtMs`。设备上没有任何会话时两项都不带；`lastSeenAtMs` 为 0（迁移 0032 之前的会话）时也不带。共享层 `DEVICE_PLATFORMS`。
 
 ### 18.5 OAuth / OIDC
 
@@ -1735,7 +1745,19 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 25. 口令重置链接：`/api/identity/…/password-reset`
 
-预留，由 G5-02 填写。
+设计见 [G5 剩余事项计划](../design/g5-remaining-plan.md) §0。邮箱是可选的，所以没有「输入邮箱自助重置」。做法是 owner（或组 admin 对本组成员）替某人签发一枚一次性、24 小时有效的令牌，链接 `<来源>/#reset=<令牌>` 由签发人亲手交给对方。代码在 `core/identity/password-reset.ts`（令牌原语），判定与事务在 `accounts.ts`，路由在 `accounts-http.ts`，表 `identity_password_resets`（迁移 `0036_password_resets.sql`），共享层 `identity-security.ts` 的 §25 小节。与 §10 / §18 同一个前缀、同一套认证；整段 `/api/identity/` 不经路由门，判定在身份域里。
+
+| 方法与路径                                       | 谁能调                                                                                                       | 答案                                                                                                                       |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `POST principals/{id}/password-reset` `{}`（写） | owner 与 `identity:manage` 对任何成员；组 `admin` 只对自己所管的组里角色是 `member` 的人；owner 只有自己能签 | 201 `{ token, expiresAtMs }`：明文只在这一次出现；同一个人手里还没用的旧令牌随之作废                                       |
+| `GET password-reset/{token}`                     | 匿名                                                                                                         | `{ displayName, expiresAtMs }`                                                                                             |
+| `POST password-reset/{token}` `{ password }`     | 匿名                                                                                                         | `{ principalId, revokedSessions }`（泄露检查 `warn` 命中时多 `passwordBreached: true`）；之后拿 `principalId` 与新口令登录 |
+
+- **令牌**与邀请同形（`<32 位十六进制>.<43 位 base64url>`）。库里只存 `sha256("armadra/identity/v1/reset\0<令牌>")`，用途 `reset` 与会话、配对票的哈希分开。
+- **签发**：目标不存在 404；停用了的人与服务账号 400 `INVALID_ARGUMENT`；没有权限 403 `PERMISSION_DENIED`；没登录 401。审计 `identity.password.reset.issue`（`target` 是那个人，`detail.expiresAtMs`）。
+- **打开与使用**：认不出的令牌（不存在、用过、作废、过期、那个人停用了）一律 404 `password_reset_invalid`，不分是哪一种。两条都走配对与刷新那只「失败才扣」的 IP 桶（§18.1）：桶空了 429 `rate_limited` 带 `Retry-After`，认不出的令牌扣一次，好令牌不扣。
+- **设新口令**先过口令策略与泄露检查（§18.1，`names` 是那个人的显示名与 principalId）。不合格答规则名（400），令牌不作废。过了之后同一笔事务里令牌作废、换口令凭据、撤掉这个人的**全部**会话（`revokedSessions` 是撤掉的数目），并清掉这个人的登录锁定。审计 `identity.password.reset.use`，`target` 是那个人，`detail` 是 `{ credentialId, issuedBy, revokedSessions }`。
+- 令牌明文与哈希都不进审计、日志与其它答案。MFA 不受影响：设了 TOTP 的人用新口令登录仍要第二因素（丢了手机走 §18.3 的 `mfa/reset`）。
 
 ## 26. ACP 补充：elicitation、模型、凭据、SSH
 
@@ -1775,7 +1797,47 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 28. 邮件通道：`/api/mail/*`
 
-预留，由 G5-13 填写。
+可选的 SMTP 通知通道：把邀请（§10）与口令重置（§25）链接发到一个邮箱。邀请与重置仍然设计成「管理员亲手把链接交给人」，邮件只是多一个出口。实现在 `core/mail/`。
+
+### 28.1 配置
+
+只有服务器壳配：`serve --smtp-url` / `ARMADRA_SMTP_URL`（`smtp(s)://用户:口令@主机:端口`）与 `--smtp-from` / `ARMADRA_SMTP_FROM`（缺省是用户名，不是邮箱地址时必须给）。口令位置可写 `secret://armadra-<名字>`，发信时从服务器壳的密钥后端现取（`armadra-server secrets set armadra-smtp` 经标准输入写入）。`smtp://` 走 STARTTLS，主机不是回环时强制升级（`?requireTLS=false` 放开）；`smtps://` 缺省端口 465、`smtp://` 缺省 587。地址写错，服务器壳拒绝启动。桌面壳没有设置键，永远是未配置。出站登记在 `core/net/outbound.ts` 的 `smtp`。
+
+### 28.2 `GET /api/mail/status`
+
+已登录即可（匿名 401 `unauthenticated`）：
+
+```json
+{ "configured": true, "from": "noreply@example.com" }
+```
+
+未配置时 `{ "configured": false, "from": null }`。不认识这条路由的旧 core 答 404，页面同样按未配置处理。
+
+### 28.3 `POST /api/mail/invitation`、`POST /api/mail/password-reset`
+
+```json
+{ "invitationId": "<32 位十六进制>", "token": "<签发时拿到的令牌>", "to": "someone@example.com", "locale": "zh" }
+{ "principalId": "<32 位十六进制>", "token": "<签发时拿到的令牌>", "to": "someone@example.com", "locale": "en" }
+```
+
+- **令牌由调用方交回**：库里只有哈希，链接只能由刚签出它的那个页面连同 id 一起交过来。core 核对令牌属于这张邀请 / 这个人、没用过、没过期，再按链接自己的规则判调用方：邀请与签发、作废同一套（工作空间邀请要 `workspace:share`，组邀请要能管那个组，两者都无要 `identity:manage`）；重置与签发同一套（§25）。
+- 正文只有链接与过期时间（UTC），链接是 Gateway 对外来源加 `#invite=<令牌>` / `#reset=<令牌>`；纯文本，没有签发人、角色或工作空间名。主题与正文按 `locale`（`zh` / `en`）选，没给时按 `Accept-Language`，都认不出用英文。
+- 每个来源地址每分钟至多 5 封（socket 对端，不读 `X-Forwarded-For`），核对通过之后才计数，发送失败也计。
+- 审计 `mail.invitation.send` / `mail.password-reset.send`：`target` 是邀请 id / 被重置的人，`detail` 只有 `{ toHash, delivered }`；`toHash` 是 `sha256("armadra/mail/v1\0" + 小写地址)` 的前 32 位十六进制。地址与令牌不进审计与日志。
+- 成功答 `200 { "sent": true }`（SMTP 服务器已收下）。
+
+| 状态 | `code`                | 何时                                                                        |
+| ---- | --------------------- | --------------------------------------------------------------------------- |
+| 400  | `bad_request`         | 请求体不对：id 或令牌形状不对、邀请令牌的前缀不是这个 id、`to` 不是邮箱地址 |
+| 401  | `unauthenticated`     | 匿名                                                                        |
+| 403  | `forbidden`           | 不能签发这条链接的人                                                        |
+| 404  | `not_found`           | 没有这张邀请 / 这个人；或这台 core 还没有口令重置（§25）                    |
+| 409  | `mail_not_configured` | 没配 SMTP                                                                   |
+| 409  | `link_invalid`        | 令牌不对、已用过（含作废）或已过期                                          |
+| 429  | `rate_limited`        | 这个来源这一分钟已发 5 封；带 `Retry-After`（秒）                           |
+| 502  | `mail_send_failed`    | SMTP 没收下（连不上、认证失败、拒收），不带服务器原话                       |
+
+写方法照常经 Gateway 准入：Cookie 会话要 `X-Armadra-CSRF`。
 
 ## 29. 托管平台（forge）：`/api/forge/*`
 

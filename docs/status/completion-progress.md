@@ -971,7 +971,32 @@
 
 ## G5-02 身份 core：重置链接、passkey 改名、设备两列（R-02 核心、R-03、R-05、R-08、R-09）
 
-待填（第 1 组）。
+**做了什么**
+
+- 迁移 `0036_password_resets.sql`：表 `identity_password_resets(token_hash, principal_id, issued_by, created_at_ms, expires_at_ms, used_at_ms)`，另加按人的索引。比计划多一列 `created_at_ms`，用来写 `expires_at_ms > created_at_ms` 的约束。`migrations.lock` 已同步。
+- 口令重置链接（契约 §25，R-05）。令牌原语在 `core/identity/password-reset.ts`：与邀请同形，库里只存 `digest("reset", …)`，`tokens.ts` 多了用途 `reset`。判定与事务在 `accounts.ts`：`issuePasswordReset` / `inspectPasswordReset` / `completePasswordReset`。路由在 `accounts-http.ts`：
+  - `POST principals/{id}/password-reset` 答 `{ token, expiresAtMs }`，有效期 24 小时。owner 与 `identity:manage` 对任何成员都能签；组 admin 只能对自己所管组里角色是 `member` 的人签。owner 只有 owner 自己能签。停用了的人与服务账号答 400。签新令牌会作废同一个人的旧令牌。
+  - `GET password-reset/{token}` 答 `{ displayName, expiresAtMs }`。
+  - `POST password-reset/{token} { password }` 答 `{ principalId, revokedSessions }`。
+  - 匿名的两条都走「失败才扣」的 IP 桶。认不出的令牌一律答 404 `password_reset_invalid`。设新口令先过口令策略与泄露检查；过了之后在同一笔事务里作废令牌、换口令、撤掉这个人的全部会话，并清掉他的登录锁定。
+  - 审计 `identity.password.reset.issue` / `.use`，令牌明文与哈希都不进审计。
+- L2（R-08）：`setPassword` 成功后撤掉这个人的其它会话，本人换口令时留下当前会话。答复与审计都多一个 `revokedSessions`，这个人手里没用的重置令牌一并作废。
+- L3（R-09）：邀请 `ttlMs` 最长夹到 30 天，不是正整数时答 400（`invitationTtl`）。
+- passkey 改名（R-03 core）：`PATCH passkey/{id} { label }`，只有本人能改，1–64 个字符，审计 `identity.passkey.rename`。
+- 设备两列（R-02 core）：`GET devices` 每行可选带 `platform` 与 `lastSeenAtMs`（`service.ts::devicePlatform`、`store.ts::deviceActivity`）。`platform` 由最近那个会话的 UA 归类得出，UA 原文不出 core；`lastSeenAtMs` 取该设备所有会话里的最大值。
+- 共享层 `identity-security.ts` 加了 §25 的 zod、`passkeyRename*`、`DEVICE_PLATFORMS`、`passwordSetSchema`。页面客户端（只改 `api/`，不改页面）加了：`api/security.ts` 的 `renamePasskey`、`issuePasswordReset`、`openPasswordReset`、`completePasswordReset`、`passwordResetLink`、`hasPasswordResetFragment`、`takePasswordResetToken`；`api/identity.ts` 的设备 schema 两列与 `PATCH` 方法；`api/accounts.ts::setPassword` 改为答 `revokedSessions`。
+- 契约 §25 正文；§10、§18.2、§18.4 各追加一段，没有改动既有文字。
+
+**实测**（macOS arm64）
+
+- 新增 `password-reset.test`（8 条）：覆盖签发权限矩阵、一次性、签新作废旧、过期、停用、口令策略、清锁定、审计不含令牌、IP 桶 429，以及与共享层常量对齐。`security-http.test` 加了 passkey 改名与 L2 / L3（+4 条）。`accounts.integration.test` 在真 core 上验设备两列与重置全流程（+1 条）。`service.test` 加了 UA 归类表，`route-access.test` 加了四条路径。页面 `api/security.test` 加了 4 条。
+- `pnpm libs:build && pnpm -r --if-present test` 的结果：desktop 4251 过 / 46 跳过，live 4 过，脚本 65 过；web 3243 过；shared 320 过；server 79 过 / 2 跳过；mobile 9 过；push-relay 9 过。全量那一轮里 `cli/armadra-hook/wire.test.ts` 的「waits for an answer file」失败 1 次，这个用例与本包无关，单独重跑 14 条全过。
+- `pnpm --filter @armadra/web typecheck`、`pnpm check`（含 `repo:check` 的迁移锁校验）通过。
+
+**没做**
+
+- 页面（重置页、签发按钮、设备表两列、passkey 改名入口、`#reset=` 片段接入 `App.tsx`）归 G5-03。「发邮件」按钮归 G5-13。
+- `docs/status/security-review-2026-10.md` 里 L2 / L3 的状态没有改，那是审查记录。
 
 ## G5-03 身份页面：整页登录、忘记口令、重置页、passkey 改名、MFA 重置、L7（R-02 页面、R-03 页面、R-04、R-05 页面、R-06、R-13）
 
@@ -1015,7 +1040,27 @@
 
 ## G5-07 协调者 runners：`--cwd` / `--resume` 与 `blocked` 覆盖（R-33、R-34）
 
-待填（第 1 组）。
+**做了什么**
+
+- `open-agent --cwd <目录>`（`collab/control/nodes.ts`）：可以写工作区根下的相对路径，也可以写落在工作区里的绝对路径。按 core 所在机器的路径规则解析，并解开符号链接后再判断。出了工作区（经 `..`、符号链接，或字面上就在外面的不存在路径）回 `400 cwd_outside_workspace`。目录不存在、指向文件、与 `--worktree` 同给，都回 `400 bad_request`；远端执行主机上的工作区回 `400 cwd_unsupported`。成立时把解开后的绝对路径写进节点数据的 `cwd`。
+- `open-agent --resume <会话 id>`：id 是 1–200 个字母、数字或 `. _ : -`。写进节点数据的 `agent.resume`，节点交给依赖编排的启动路径由 core 起（不带 `--task-id` 也一样，因为页面自己敲的是新开的启动行）。`dependencies/launch.ts::launchLine` 把它交给 `canvasLaunchLine`，走 `agent/launch.ts` 已有的 resume 行。这个 CLI 不能续接（含关掉 `resume` 能力的自定义条目）回 `400 resume_unsupported`。值是同一块画布上成员节点的 id 时（runner 的 `sessionRef.sessionId` 就是节点 id），取那个节点上报过的会话 id；跑的不是同一家或从没报过会话 id，同样回 `resume_unsupported`。共享层 `terminalAgentSchema` 加了可选的 `resume`，页面存盘时不会把它剥掉。
+- ama runner（`agent-host/ama/runners.ts`）：把 `request.cwd` / `request.resume` 映射成 `--cwd` / `--resume`，不再忽略 `resume`。core 用 `cwd_outside_workspace` / `cwd_unsupported` / `resume_unsupported` / `permission_mode_unsupported` 拒绝时，去掉对应的那一项再起一次，并记一行日志（`plan` 模式仍不退回）；别的拒绝照旧抛出。
+- 成员技能补了一句 `--cwd` / `--resume` 的用法，`SKILLS_REVISION` 从 17 升到 18；`armadra-hook` 的用法文本同步。
+- 场景 11 新增第 6 步：派一个带「需要审批」的任务，假 CLI 经 `armadra-hook claude` 报 `PermissionRequest` 后挂着等答复。以协调者身份直接调 `/control/wait`，断言答 `blocked`、`approvalId` 就是成员挂着的那条审批，且任务行仍是 running。然后经 `POST /api/approvals/{id}/answer` 答「允许」（页面节点头走的也是这条），假 CLI 拿到 allow 后按键回报，任务行变成 done，便签里是审批之后的结果。第 4 步另加一条断言：runner 带过去的 cwd 就是成员终端的 cwd。
+- 契约 §15.5 的 `open-agent` 参数下追加 `cwd`、`resume` 两句。
+
+**实测**（macOS arm64，脚本化模型，无真密钥）
+
+- `wait.test` 新增 6 例：`--cwd` 的相对 / 绝对 / 根 / 演练、越界与符号链接、不存在 / 文件 / 与 worktree 冲突，`--resume` 的启动行（Claude `--resume <id>`、Codex `resume <id>`）、节点 id 换会话 id、不能续接与格式错误，以及「长轮询中停到审批上 → blocked 带 id → 答复后跑完 → done」。`runners.test` 新增 3 例：透传、按码逐项退回、别的拒绝不退回。
+- `node tools/probes/agent-e2e.mjs <out> --only 11`：全部通过，包括第 6 步的 6 条断言和 cwd 断言。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 4255 过 / 39 跳过，脚本 4 过；web 3239 过；shared 320 过；server 79 过 / 2 跳过；mobile 9 过；push-relay 9 过。`pnpm --filter @armadra/web typecheck`、`pnpm check` 通过。
+
+**没做 / 限制**
+
+- `workflow/dispatch.ts` 没改：启动行由依赖编排从节点数据拼，`launchRoleNode` 不需要额外透传参数；工作流角色也不需要 `cwd` / `resume`。
+- 以 ACP 驱动的节点不读 `agent.resume`（ACP 的续接走它自己的 `session/load`）。
+- `--cwd` 只支持本机工作区；`team` 没有加这两个参数。
+- `agent.resume` 只在 core 第一次起这个节点时用。之后页面重开终端敲的是新开的行；休眠后的接回仍按 `agent_status` 的会话 id。
 
 ## G5-08 工作流编辑器与模板升级（R-36、R-37）
 
@@ -1051,7 +1096,20 @@
 
 ## G5-11 实时协同补充（R-44、R-45、R-46）
 
-待填（第 1 组）。
+**做了什么**
+
+- awareness 加 `viewport { x, y, zoom }`：视口**中心**的画布坐标与缩放（用中心而不是 React Flow 的平移量，窗口大小不同也对得上同一块地方）。共享层 `awarenessStateSchema` 与 core `realtime/awareness.ts` 同步校验（有限数，`zoom` 在 `AWARENESS_LIMITS.minZoom..maxZoom` = `0.01..100`），两边上限由 `awareness.test` 守。契约 §16.4 表格加一行、末尾加一句。
+- 页面 `realtime/awareness.ts`：光标与视口共用一个节流器，视口 100ms；`realtime/viewport.ts`：本机存取（`armadra.realtimeViewport.<boardId>`，坏数据当没存过）、中心换算、跟随目标（有视口跟视口，没有退回光标）。
+- `realtime/session.ts`：开实时时换成本机记着的视口，之后 store 里的视口每变一次写回本机；第一次同步后先报一次当前视口。`CursorLayer` 随相机变化报视口；跟随时 `setCenter(对方中心, { zoom: 对方缩放, duration: 120 })`，对方没报视口时退回跟光标且不改缩放；跟随中在 React Flow 根元素上描一圈 2px 对方成员色（`FollowFrame`，经 portal，屏幕坐标）。
+- 他人选区：`wb:` 项按白板 item 的包围盒画虚线外框（在 Frame 里的加上 Frame 的绝对位置），与节点共用一圈套一圈的规则。
+- 展示页 `collab` 分区加 `follow-viewport` 样本（在线条处于跟随 + 描边）。没有新文案。
+
+**实测**（macOS arm64）
+
+- 单测：web `realtime/` 10 个文件 72 例（新增 `viewport.test`：本机存取、中心换算、跟随目标、开板恢复与「刷新」后视口不变；`CursorLayer.test`：`wb:` 外框与 Frame 偏移、跟随视口 / 退回光标 / 人走停止、描边出现与消失；`awareness.test`：视口节流与夹缩放、经 awareness 送达）；core `awareness.test` 与共享层 `api-realtime.test` 加视口的正反例。
+- `realtime-e2e` 本地通过，新增两步：「B 跟随 A 的视口」（A ⌘/Ctrl+滚轮缩放并平移，B 的中心与缩放对上，画布描边）与「刷新后视口不变」（本机记着、刷新后回到原位且 1.5 秒后仍不变、core 里的视口还是 `{0,0,1}`）。
+
+**没做**：手动平移不会自动取消跟随（仍由在线条头像切换）；视口不跨设备同步（按设计只在本机）。
 
 ## G5-12 评论补充（R-47、R-48、R-49）
 
@@ -1075,7 +1133,27 @@
 
 ## G5-13 邮件通道 W-MAIL 与 `secrets rotate`（R-82、R-24）
 
-待填（第 2 组）。
+**做了什么**
+
+- core `mail/`：`smtp.ts` 解析 `smtp(s)://用户:口令@主机:端口`（口令位可写 `secret://armadra-…`，发信时从密钥后端现取；`smtp://` 对非回环主机强制 STARTTLS，`?requireTLS=false` 放开），经 nodemailer 发信，nodemailer 在第一封信时才加载；`service.ts` 管核对、正文、限流与审计；`routes.ts` 挂 `GET /api/mail/status`、`POST /api/mail/invitation`、`POST /api/mail/password-reset`（路由表加三行，`SELF_GUARDED` 由 G5-00 加好）。壳经 `mailDomainOf(server).configure(config, origin)` 交配置，桌面壳不配。
+- 核对放在身份域：`AccountsService.invitationForDelivery`，与签发、作废同一套判定；令牌不对、用过或过期一律答 `conflict`。正文只有链接（Gateway 来源加 `#invite=` / `#reset=`）与 UTC 过期时间，中英按 `locale` 或 `Accept-Language` 选。审计 `mail.invitation.send` / `mail.password-reset.send` 只记 `{ toHash, delivered }`。限流按来源地址，每分钟 5 封，核对通过后才计数。
+- 出站表 `core/net/outbound.ts` 加 `smtp`（地址由用户配置，`switch: null`），表测试放宽为 `https://` 或 `smtp://`。
+- 服务器壳：`serve --smtp-url` / `--smtp-from`（等同 `ARMADRA_SMTP_URL` / `ARMADRA_SMTP_FROM`），配置写错拒绝启动；`secrets rotate` 调 `rotateMasterKey`，中断后再跑一次能续上，输出里有 `resumed` 字段；另加 `secrets set NAME`，值从标准输入读，不上命令行——没有它，`secret://armadra-smtp` 在服务器上没处写入。命令行解析器只给 `secrets` 开了位置参数。
+- 依赖：`nodemailer` 10.0.13（MIT-0，自带类型），已更新 `THIRD_PARTY_NOTICES.md`。
+- 文档：契约 §28；部署指南加第 10 节（邮件）与第 11 节（换 master key），排错改为第 12 节；开发指南环境变量表、服务器壳 README、架构文档 `core/mail/` 一行都已更新。
+
+**实测**（macOS arm64）
+
+- `mail.test`：配置解析、正文、地址指纹；权限覆盖 owner、组 admin、路人和组 admin 对工作空间邀请；还有 400 / 401 / 404 / 409 / 429（`Retry-After`）/ 502、审计里不出现地址与令牌、nodemailer stream transport 组出的 MIME，以及进程内假 SMTP（AUTH 用的是密钥引用取出的口令、条目缺失时不连服务器、AUTH 被拒时错误里没有口令）。
+- `apps/server` 的 `mail.integration.test`：真起 `serve --smtp-url smtp://…:secret://armadra-smtp@…`，配对后签邀请，经 Gateway 用 Cookie + CSRF 调 `/api/mail/invitation`，假 SMTP 收到的信里链接是本机来源；没带 CSRF 答 403、不发信；配置写错时启动失败。`cli.test`：`secrets` 解析、`set` 后 `rotate` 条目仍可读、模拟中断后续做、拒绝的用法。
+- dev-stack `mailpit`：`ARMADRA_DEV_STACK=1` 跑 `mail.devstack.integration.test`（core 直发）和服务器壳 `mail.integration.test` 的 Mailpit 一条，两边都经 REST 读回收件，主题与正文逐字一致。
+- 全量验证结果见 PR。
+
+**没做 / 限制**
+
+- `POST /api/mail/password-reset` 的核对要用身份域的重置链接（G5-02，契约 §25）；身份域没有这一面时这条路由答 404。
+- 页面上的「发送邮件」按钮归 G5-03（按 `GET /api/mail/status.configured` 决定显示与否）。请求体比计划多一个 `token`：库里只有哈希，链接只能由刚签出它的页面连同 id 一起交回来。
+- 真实 SMTP 账号由用户提供；这里只对 Mailpit 和进程内的假 SMTP 验过。
 
 ## G5-14 托管平台 forge 一：抽象与 Gitea / Forgejo（R-83 前半）
 

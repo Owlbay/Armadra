@@ -428,6 +428,80 @@ describe("账号这一面", () => {
     });
   });
 
+  it("设备行带平台与最近访问（UA 原文不出去）；重置链接在装配好的 core 上走得通", async () => {
+    const { core, base } = await start();
+    const session = await pair(core, base);
+    const created = await call(session, "POST", "/api/identity/principals", {
+      displayName: "同事",
+    });
+    const { principalId } = (await created.json()) as { principalId: string };
+    await call(session, "POST", "/api/identity/credentials", {
+      principalId,
+      kind: "password",
+      password: "correct horse battery",
+    });
+    const userAgent =
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15";
+    const signIn = (password: string) =>
+      fetch(`${base}/api/identity/login`, {
+        method: "POST",
+        headers: {
+          origin: base,
+          "content-type": "application/json",
+          "user-agent": userAgent,
+        },
+        body: JSON.stringify({ principalId, password, deviceName: "手机" }),
+      });
+    const login = await signIn("correct horse battery");
+    expect(login.status).toBe(200);
+    const issued = (await login.json()) as {
+      csrfToken: string;
+      native?: { accessToken: string };
+    };
+    const mine: Session = {
+      base,
+      accessToken: issued.native?.accessToken ?? "",
+      csrfToken: issued.csrfToken,
+      principalId,
+    };
+    const listed = await call(mine, "GET", "/api/identity/devices");
+    expect(listed.status).toBe(200);
+    const text = await listed.text();
+    expect(text).not.toContain("AppleWebKit");
+    const { devices } = JSON.parse(text) as {
+      devices: { platform?: string; lastSeenAtMs?: number }[];
+    };
+    expect(devices).toHaveLength(1);
+    expect(devices[0]?.platform).toBe("ios");
+    expect(devices[0]?.lastSeenAtMs).toBeGreaterThan(0);
+
+    // 重置链接：owner 签发、匿名设新口令、旧会话随之失效。
+    const reset = await call(
+      session,
+      "POST",
+      `/api/identity/principals/${principalId}/password-reset`,
+      {},
+    );
+    expect(reset.status).toBe(201);
+    const { token } = (await reset.json()) as { token: string };
+    const anonymous = (method: string, body?: unknown) =>
+      fetch(`${base}/api/identity/password-reset/${token}`, {
+        method,
+        headers: { origin: base, "content-type": "application/json" },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    expect(await (await anonymous("GET")).json()).toMatchObject({
+      displayName: "同事",
+    });
+    const done = await anonymous("POST", {
+      password: "a brand new passphrase",
+    });
+    expect(done.status).toBe(200);
+    expect(await done.json()).toEqual({ principalId, revokedSessions: 1 });
+    expect((await call(mine, "GET", "/api/identity/devices")).status).toBe(401);
+    expect((await signIn("a brand new passphrase")).status).toBe(200);
+  });
+
   it("不存在的账号接口仍然是 404，不是 501", async () => {
     const { core, base } = await start();
     const session = await pair(core, base);

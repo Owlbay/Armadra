@@ -217,7 +217,7 @@ ama 的 `task(agent=<id>)` 在有宿主时只认宿主注入的 runner（第五�
 
 ### §6.2 文档结构
 
-每块板一个 `Y.Doc`：`nodes: Y.Map<nodeId, Y.Map>`（`type / title / position / size / parentId / data`；便签正文 `data.content` 用 `Y.Text`，其余字段 JSON）、`edges: Y.Map<edgeId, JSON>`、`whiteboard: Y.Map<itemId, string>`（每个白板 item 一条不透明 JSON 串，按 item 粒度 LWW，core 仍不解析内容；整块白板放一个值会让并发白板编辑互相覆盖）、`meta: Y.Map`（视口不进）。awareness 状态：`{ principalId, deviceId, name, color, cursor?: {x, y}, selection?: string[], focusNodeId? }`。
+每块板一个 `Y.Doc`：`nodes: Y.Map<nodeId, Y.Map>`（`type / title / position / size / parentId / data`；便签正文 `data.content` 用 `Y.Text`，其余字段 JSON）、`edges: Y.Map<edgeId, JSON>`、`whiteboard: Y.Map<itemId, string>`（每个白板 item 一条不透明 JSON 串，按 item 粒度 LWW，core 仍不解析内容；整块白板放一个值会让并发白板编辑互相覆盖）、`meta: Y.Map`（视口不进）。awareness 状态：`{ principalId, deviceId, name, color, cursor?: {x, y}, selection?: string[], focusNodeId?, viewport?: {x, y, zoom} }`（`viewport` 是视口中心的画布坐标，跟随用；实时板的视口记在本机 `localStorage`，不进文档）。
 
 ### §6.3 真相、物化与两种写者
 

@@ -39,6 +39,8 @@ describe("awareness 形状（契约 §16.4）", () => {
     expect(shared).toContain(`colors: ${AWARENESS_LIMITS.colors},`);
     expect(shared).toContain(`selection: ${AWARENESS_LIMITS.selection},`);
     expect(shared).toContain("stateBytes: 16 * 1024,");
+    expect(shared).toContain(`minZoom: ${AWARENESS_LIMITS.minZoom},`);
+    expect(shared).toContain(`maxZoom: ${AWARENESS_LIMITS.maxZoom},`);
   });
 
   it("只留认识的键，principalId 换成连接的", () => {
@@ -52,6 +54,7 @@ describe("awareness 形状（契约 §16.4）", () => {
           cursor: { x: 1, y: 2, z: 3 },
           selection: ["a"],
           focusNodeId: "a",
+          viewport: { x: -5, y: 7.5, zoom: 1.25, width: 900 },
           avatar: "http://example.invalid",
         },
         "p1",
@@ -64,6 +67,7 @@ describe("awareness 形状（契约 §16.4）", () => {
       cursor: { x: 1, y: 2 },
       selection: ["a"],
       focusNodeId: "a",
+      viewport: { x: -5, y: 7.5, zoom: 1.25 },
     });
   });
 
@@ -81,6 +85,11 @@ describe("awareness 形状（契约 §16.4）", () => {
       { ...base, selection: [""] },
       { ...base, selection: "a" },
       { ...base, focusNodeId: 3 },
+      { ...base, viewport: { x: 0, y: 0 } },
+      { ...base, viewport: { x: 0, y: Number.NaN, zoom: 1 } },
+      { ...base, viewport: { x: 0, y: 0, zoom: 0 } },
+      { ...base, viewport: { x: 0, y: 0, zoom: AWARENESS_LIMITS.maxZoom * 2 } },
+      { ...base, viewport: "0,0,1" },
     ]) {
       expect(normalizeAwarenessState(bad, "")).toBeUndefined();
     }
