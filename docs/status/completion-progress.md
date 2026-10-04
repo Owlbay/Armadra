@@ -1169,7 +1169,25 @@
 
 ## G5-17 启动兼容退役与更新页接线（R-59、R-60、R-61）
 
-待填（第 3 组）。
+**做了什么**
+
+- R-59（G4-2 并进 G5）：删 `LegacyLaunchWord`、`shellEnvWord`、环境形的 `renderLaunchWord` / `verbatimWord` / `batchSafeWord` 分支（`packages/shared/src/shell.ts` 与 `core/terminal/shell.ts` 逐字节同步，`LaunchWord` 退化为 `string`）；共享层删 `launchWordSchema` 与 `/api/agents` 行上的 `launchWords` / `launchArgs`（`z.object` 剥掉旧 core 多答的字段）；`assembleLaunchCommand` 删 `shellWords` / `extraArgs`；`web/agent/launch.ts` 删旧 core 退路，没有 `launcher` 就是裸行。`/integration` 的 `launchArgs` 不变。契约 §13.1 追加一句，CHANGELOG 0.2.0 的「已知限制」那句改进「兼容性」。
+- R-60：更新页「检查」调壳 `updates:check`（不带答复 = 壳自己问发布索引），壳的答复即发布侧（`HostSide` 新增 `{kind:"shell"}`，`state.ts::hostAfterShell`）；`noReleaseSource` 只在壳答 `notConfigured` 缺 endpoints、或人按了检查而壳原样答 `idle`（没有可问的索引）时出现；浏览器里不问。页面定时器改为 `refresh()` 只读回壳的状态——检查由壳自己的计划（`startSchedule`，同样认 `updates.autoCheck`）跑，页面不再绕过壳的间隔。
+- R-61：`environment.ts::signatureState` 在 macOS 跑 `codesign --verify --deep --strict`（每进程一次缓存），通过且不是 ad-hoc 才是 `signed`，「not signed at all」是 `unsigned`，ad-hoc / 校验失败 / 起不来是 `unknown`；`update-e2e.mjs::expectedSignature` 同一判法。
+
+**实测**
+
+- `use-update-state.test`（新）、`state.test`、`UpdatesPage.test`（定时器只调 `refresh`）、`environment.test`（macOS 分支用替身；本机真 `codesign` 对临时 bundle：未签 → `unsigned`，`-s -` ad-hoc → `unknown`）、`launch.test` / `shell.test` / `agents.test` / `api-agents.test` 改断言（理由：字段按计划删除）；`list.test`、`integration.test` 不用改（行上本来就不答，`/integration` 的 `launchArgs` 保留）；`release:test` 通过。
+- `node tools/probes/update-e2e.mjs <out> --build` 对 0.2.0 的 macOS arm64 产物：check → download → verify → staged，安装答 `notSigned`（未签名包）。dev-stack 那一腿本机没起 `release` 服务，未跑（CI 的 linux 作业带 `--require-dev-stack`）。
+
+**接口**
+
+- `useUpdateState` 多 `refresh()`；`shellCheck(verdict?)` 可不带答复；`state.ts` 导出 `NO_RELEASE_SOURCE`、`hostAfterShell(shell, checked)`。
+- `signatureState(platform, executable, packaged, codesign?)`，`macSignatureState(bundle, run?)`。
+
+**没做 / 需用户提供**
+
+- 真 Developer ID 证书下的 `signed` 分支只用替身验证；证书由维护者提供。
 
 ## G5-18 发布流水线收尾（R-62、R-63、R-64、R-65 作业、R-66、R-67）
 
@@ -1177,15 +1195,80 @@
 
 ## G5-19 页面错误上报（R-69、R-12）
 
-待填（第 2 组）。
+**做了什么**
+
+- 页面 `diagnostics/report.ts`：挂 `window` 的 `error` / `unhandledrejection`，默认关。只有 `GET /api/diagnostics/client-error` 答 `enabled: true` 才收（答案缓存一分钟，问不到当作关）。每分钟最多 5 条；没有 `error` 对象的（跨源 `Script error.`、资源加载）不报；被 reject 的非 `Error` 值只发类型，不发内容；上报自己出的错一律吞掉，不会再触发上报。`crash-scrub.ts` 是 core 剥离规则的页面版，栈帧里的地址与路径只留文件名。入口在 `main.tsx`，挂一次。
+- 通用页诊断区：DSN 保存后多一行「包含页面错误」开关（`diagnostics.reportPageErrors`），切换后丢掉页面的 `enabled` 缓存。i18n `diagnostics` 模块中英同步。
+- core `diagnostics/`：`client-report.ts`（请求体只认 `{ kind, name, message, stack }`，超长 400；服务端按本机家目录与环境变量再剥离；限流每台设备每分钟 5 条、整台 core 60 条，形状不对不扣桶）、`routes.ts`（`GET` 答 `{ enabled }`，`POST` 答 202 / 200 `accepted:false` / 400 / 401 / 429 + `Retry-After`）、`index.ts` 装配。`enabled` = 设置打开且壳在发：新增可选的 `CorePlatform.crashReportingActive()`，服务器壳按 `diagnostics.active()` 回答（DSN 可来自环境变量），桌面壳的 core 不给，按设置里的 DSN 判断。路由表加一行。来源 `page` 的错误只进上报，`logError` 不把正文写进本机日志。
+- L6（R-12）：`crash.ts` 认 Armadra 会话密钥 `<32 位十六进制>.<43 位 base64url>`，并去掉地址片段（`#pair=` 配对票）；`ERROR_SOURCES` 加 `page`；新增 `pageErrorsFromSettings`。
+- 桌面壳：IPC `diagnostics:report`（`window` 档），preload 暴露 `window.armadra.diagnostics.report`。主进程 `main/diagnostics.ts::reportPage` 读同一份设置再判一次，用同一个 `ClientReports` 限流并再剥离，然后交 `@sentry/electron`，标签 `process: renderer`、`source: page`；`ipcMode` 仍为 0。
+- 服务器壳：`serve.ts` 给 core 提供 `crashReportingActive`；`diagnostics.ts` 只改了注释。
+- 契约 §30 已填写；外部服务 §11.2 加了「页面错误」一段；架构文档 `core/diagnostics/` 一行已更新。
+
+**实测**（macOS arm64）
+
+- 新增与改动的用例：`crash.test`（会话密钥形状、地址片段、`page` 来源、`pageErrorsFromSettings`）；`client-report.test`（栈只留文件名、请求体、再剥离、页面版与 core 版剥离逐条一致、关着不收不计数、每台设备与全局限流、路由的 401 / 400 / 202 / 429、`pageErrorsEnabled`、`page` 来源不进日志）；`main/diagnostics.test`（关着不发、没 DSN 不加载 SDK、再剥离与标签、每分钟 5 条、关掉即停）；`ipc.test`；web 的 `report.test`、`crash-scrub.test`、`GeneralPage.test`。
+- dev-stack GlitchTip：`ARMADRA_DEV_STACK=1` 跑 `apps/server/src/diagnostics.devstack.test.ts`（即 `crash-report-e2e`），新增一条：真 core 路由 `POST /api/diagnostics/client-error`，页面侧故意不剥离，事件到达 GlitchTip，带标签 `source: page`、`shell: server`；事件里没有环境变量值、会话密钥、家目录、路径与地址里的用户名、查询串、地址主机，栈里只剩 `index-probe.js`、`canvas.ts` 这样的文件名。三条用例全过。
+- 全量验证结果见 PR。
+
+**没做 / 限制**
+
+- 页面在一个真窗口里抛错、一路走 IPC 发到 GlitchTip 这条链路没有自动化。主进程一侧由单测覆盖（假 SDK），服务器一侧由上面的 dev-stack 用例覆盖。
+- 真实收件端（用户自己的 GlitchTip DSN）需要用户提供（计划 §4 B 档）。
 
 ## G5-20 安全杂项（R-07、R-10、R-14、R-16、R-17）
 
-待填（第 2 组）。
+**做了什么**
+
+- L1 长连接到期复核（R-07）：`RequestIdentity` 加 `accessExpiresAtMs` 与 `renew()`；`CoreServer.upgrade` 在访问令牌到期那一刻按会话复核一次。刷新过就续到新的到期时刻；没刷新以 **4401**（`CLOSE_ACCESS_EXPIRED`）关，页面照常重连；刷新过但路由门不放行，以 4403 关。`IdentityService.sessionAccess` 按会话认，不按某一把访问令牌。Gateway 的 `revalidate` 也改用它，所以刷新过访问令牌的流不会再被一次无关的授权变化以 4403 关掉——原来事件流会因此误报「共享被收回」。原生 App 换 WS 票遇 401 时，先轮转访问令牌再换票（`mobile/entry.ts::ticketWithRefresh`）。
+- L4 OAuth 挂起表分桶（R-10）：`oauth/flow.ts` 按来源地址分桶，IPv6 按 /64、IPv4 映射地址按 IPv4。每个地址最多 50 条，满了挤掉它自己最老的一条；总数最多 1000 条，满了挤掉挂得最多的那个地址最老的一条。
+- L8（R-14）：`github/http.ts` 与 `schedule/api.ts` 的写请求改用 `csrfRequired`，只在 Cookie 会话上核 CSRF，Bearer 写不再 403。
+- L10（R-16）：ama 的 `/credential/ama` 读节点 `agent.model`（`<供应商>/<模型>` 或带 `provider` 的对象），只答这一家。不收密钥的供应商答空。没设模型时答全部，并写审计 `ama.credential.unscoped`（安全页文案中英文同步）。
+- R-17：OAuth 登录时，若 `identity.mfa.requireFor` 覆盖此人而他还没登记 TOTP，跳回片段带 `mfaEnrollmentRequired=true`。回调本来就落在安全页，那一页的登记提示照常显示。
+- 契约 §3.2、§12.4、§17.4、§18.5 已追加相应说明；安全审查 §3 的 L1、L4、L8、L10 四行标为「已修（G5-20）」，并写明对应测试。
+
+**实测**（macOS arm64）
+
+- 每条修复都做了反证：把实现换回原样，新用例按预期失败；用上新实现后通过。
+  - `server-revoke.test`：到期复核 3 例。
+  - `gateway.integration.test`：刷新后流仍保持，登出后以 4403 关。
+  - `oauth.test`：分桶 3 例、R-17 两例。
+  - `github/http.test`、`schedule/api.test`：Bearer 写不核 CSRF，Cookie 写仍要。
+  - `ama-credentials.test`、`ama-keys.test`：按供应商只答一家，没设模型时答全部并写审计。
+  - 另有 `service.test` 测 `sessionAccess`，`entry.test` 测换票时的刷新。
+- 全量验证见 PR。
+
+**接口**
+
+- 新关闭码 4401：表示访问令牌到期、没有刷新。页面不要把它当成「授权被收回」，照常重连即可。
+- `IdentityService.sessionAccess({ sessionId, hostId, origin })`：只给 core 内部用。
+- `AmaCredentials.variables(only?)`、`amaKeyScope(model)`、`persistedAmaModel(db, nodeId)`：G5-04 的 ACP 驱动可以复用这一套按供应商兑换。
+
+**没做 / 限制**
+
+- 浏览器（Cookie 模式）页面的 HTTP 请求在访问令牌过期后不会自动刷新，这是原有的限制，本包没改。因此 Cookie 会话的流到期关掉后，要等页面做下一次 `resumeIdentity` / 刷新才连得回来。
+- ama 运行中换到另一家的模型时拿不到那家的密钥，要在节点上改模型后重启。
 
 ## G5-21 Windows 会话宿主退出（R-68）
 
-待填（第 2 组）。
+做了什么：
+
+- 会话宿主（`session-host/server.ts`）：没有活会话**且**没有通过握手的连接（core 的控制连接）时 10 秒后退出（`DEFAULT_ORPHAN_EXIT_MS`）；core 连上或建会话即取消，有活会话时永不因此退出；会话都结束但 core 连着时仍按原来的 30 分钟空闲。退出原因记进宿主日志（`session host leaving: <原因>`）。
+- 新请求 `shutdownIfIdle`（宿主协议，进程内部）：没有活会话答 `ok {leaving: true}`，应答写出后退出，之后的 `create` 答 `draining`；有会话答 `leaving: false`，会话不动。客户端 `core/terminal/session-host/shutdown.ts::requestShutdownIfIdle`：只读密钥不新建、全程有界不抛，结论 `absent / busy / left / leaving / failed`。
+- 壳：Windows 上壳自己起的 core 停下后（关闭 / 托盘退出）发一次（3 秒上限，失败不挡退出）；`lifecycle.ts::runQuitSequence` 多一个可选 `afterStop`。
+- 安装包：`apps/desktop/build/installer.nsh` 定义 `customCheckAppRunning`，先以 `ELECTRON_RUN_AS_NODE=1` 跑 `resources\session-host\shutdown-if-idle.cjs <数据目录>`（`ARMADRA_DATA_DIR`，否则 `%LOCALAPPDATA%\Armadra`；等宿主进程最多 5 秒），再走 electron-builder 原来的检查与结束进程；安装目录里没有这个文件（旧版）就跳过。`shutdown-if-idle.cjs` 是 electron-vite 的单独产物，after-pack 放进 `resources/session-host/`。
+- 探针 `windows-acceptance`：新增 `sessionHost.leaves`（应用退出后宿主自己退出，断言）；`uninstall.silent` 卸载前自己起一个空闲宿主（`ARMADRA_SESSION_HOST_ORPHAN_EXIT_MS=600000`），断言日志里是 `shutdownIfIdle` 让它走的、卸载后没有残留 `Armadra.exe`；收尾时不再先结束宿主。
+
+实测：
+
+- 本分支手动触发的 `nightly` 运行 37190639392 的 `windows-acceptance`（windows runner，未签名本地包）：`status: passed`；`sessionHost.leaves` 宿主 pid 1020 在应用退出后 10 秒自己退出；`uninstall.silent` 卸载前起的宿主日志为 `client greeted …: armadra-installer` → `shutdownIfIdle … leaving` → `session host leaving: shutdownIfIdle`，卸载后 `Armadra.exe`、注册表卸载项、快捷方式与残留进程都没有；`install.layout` 见到 `shutdown-if-idle.cjs`。
+- PR CI 的 Windows 作业：`session-host/server.test.ts`（真命名管道，43 例）、`windows.integration.test.ts`（真 ConPTY + 进程入口 `run()`，9 例）、`main.test.ts`、`lifecycle.test.ts` 都跑了。
+- 本机：`pnpm libs:build && pnpm -r --if-present test` 全绿；`pnpm check`、`pnpm release:test` 通过。
+
+没做：
+
+- 有活会话时宿主不走，安装程序照旧按 electron-builder 流程结束进程（会话随之结束）——有意如此；真机上「带活会话升级」的体验要用户的 Windows 机器。
+- 只在安装程序环境里没有 `ARMADRA_DATA_DIR`、而用户的 core 用了别的数据目录时，助手找不到那个宿主，退回结束进程。
 
 ## G5-22 手机原生补充（R-54、R-55、R-56）
 

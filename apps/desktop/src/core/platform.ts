@@ -57,6 +57,12 @@ export interface CorePlatform {
    * {@link reportError}。core 自己不 import 任何 SDK。
    */
   reportError?(error: unknown, context: ErrorContext): void;
+  /**
+   * 壳的崩溃上报此刻是不是真的在发（DSN 合格、SDK 已加载）。服务器壳的 DSN 可能
+   * 来自它自己的环境变量，core 读不到，所以由壳回答；没给就按设置文档里的
+   * `diagnostics.crashReportDsn` 判。页面错误上报（契约 §30）用它决定收不收。
+   */
+  crashReportingActive?(): boolean;
 }
 
 /** 报错时带的上下文：只有来源，别的一概不带（路径、请求体都可能含用户数据）。 */
@@ -89,6 +95,12 @@ export function logError(
   error: unknown,
   context: ErrorContext,
 ): void {
+  // 页面交来的错误（契约 §30）只进上报，不进本机日志：正文是别人的页面报的，
+  // 日志里留一行「来过」就够了。
+  if (context.source === "page") {
+    log.debug("page error reported", { source: context.source });
+    return;
+  }
   const scrub = scrubContext();
   const name = error instanceof Error ? error.name : "Error";
   const message = error instanceof Error ? error.message : String(error);

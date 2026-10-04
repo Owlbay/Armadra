@@ -37,6 +37,8 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
+  closeSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -61,6 +63,10 @@ import {
   cdp,
   findFile,
   freePort,
+  IDLE_HOST_ENV,
+  idleHostVerdict,
+  isSessionHost,
+  readText,
   httpsProbe,
   logFindings,
   newestUninstaller,
@@ -282,6 +288,32 @@ function sessionPipes() {
   }
 }
 
+/** 起一个空闲的会话宿主，跟 core 起它的方式一样，日志写进文件（lib 的 IDLE_HOST_ENV）。 */
+function startIdleHost(exe, dataDir, logFile) {
+  const bundle = join(
+    dirname(exe ?? "."),
+    "resources",
+    "session-host",
+    "host.cjs",
+  );
+  const log = () => readText(logFile);
+  if (!isWindows || !exe || !dataDir || !existsSync(bundle))
+    return { started: false, pid: undefined, log };
+  const fd = openSync(logFile, "a");
+  try {
+    const child = spawn(exe, [bundle, dataDir], {
+      detached: true,
+      stdio: ["ignore", fd, fd],
+      windowsHide: true,
+      env: { ...process.env, ...IDLE_HOST_ENV },
+    });
+    child.unref();
+    return { started: true, pid: child.pid, log };
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /**
  * 页面里的工具，没装（页面刚换过一次地址）就先装：每次调用都从页面自己的桥现读
  * 地址。
@@ -402,6 +434,7 @@ async function runFull(options, result, record, out) {
 
   let hostPid;
   let dataDir;
+  let probeHomePath;
   let installed = false;
   // 中途放弃时收尾的几项照样做：已经装上的要卸掉，用户配置照样比对。
   const abort = (reason) => record.skipRest(reason, TEARDOWN_CHECKS);
@@ -498,6 +531,12 @@ async function runFull(options, result, record, out) {
         hookBundle: join(resources, "cli", "armadra-hook.js"),
         launchExe,
         sessionHost: join(resources, "session-host", "host.cjs"),
+        // build/installer.nsh 卸载 / 升级前请宿主退出用的那一个。
+        sessionHostShutdown: join(
+          resources,
+          "session-host",
+          "shutdown-if-idle.cjs",
+        ),
       };
       const present = Object.fromEntries(
         Object.entries(files).map(([name, path]) => [name, existsSync(path)]),
@@ -549,6 +588,7 @@ async function runFull(options, result, record, out) {
     const isolated = probeHome("armadra-acceptance-home-");
     cleanup.push(() => isolated.remove());
     const home = isolated.path;
+    probeHomePath = home;
     if (options.withCodex) {
       const auth = join(realHome, ".codex", "auth.json");
       if (existsSync(auth)) {
@@ -612,8 +652,7 @@ async function runFull(options, result, record, out) {
     try {
       const host = appProcesses(exe).find(
         (row) =>
-          /session-host[\\/]host\.cjs/i.test(row.commandLine) &&
-          row.commandLine.includes(dataDir),
+          isSessionHost(row.commandLine) && row.commandLine.includes(dataDir),
       );
       if (host !== undefined) consoleBaseline = consolesOf(host.pid).length;
     } catch {
@@ -688,8 +727,7 @@ async function runFull(options, result, record, out) {
       const processes = appProcesses(exe);
       const host = processes.find(
         (row) =>
-          /session-host[\\/]host\.cjs/i.test(row.commandLine) &&
-          row.commandLine.includes(dataDir),
+          isSessionHost(row.commandLine) && row.commandLine.includes(dataDir),
       );
       hostPid = host?.pid;
       const pipes = sessionPipes();
@@ -1151,13 +1189,12 @@ async function runFull(options, result, record, out) {
       await app.kill();
       app = undefined;
     }
-    // 先等 core 等随主进程退出（core 还活着时结束宿主，它会再起一个），再结束
-    // 会话宿主：会话都终止了，但宿主空闲三十分钟才退，卸载要删它的映像。
-    // 到点还在的进程记进卸载项的 detail。
+    // 先等 core 等随主进程退出，再看会话宿主：会话都终止了、core 也不在，它应在
+    // 十秒左右自己退出（R-68）——这是断言，不是收尾手段。到点还在的进程才结束，
+    // 并记进卸载项的 detail。
     let lingering = [];
+    const isHost = (row) => isSessionHost(row.commandLine);
     if (exe !== undefined && dataDir !== undefined && isWindows) {
-      const isHost = (row) =>
-        /session-host[\\/]host\.cjs/i.test(row.commandLine);
       try {
         await waitFor(
           "core 与渲染进程退出",
@@ -1166,6 +1203,36 @@ async function runFull(options, result, record, out) {
         );
       } catch {
         // 下面一并结束。
+      }
+      if (record.entry("app.start").status !== "pass") {
+        record.skip("sessionHost.leaves", "应用没起来");
+      } else {
+        await record.check("sessionHost.leaves", async () => {
+          const hosts = appProcesses(exe)
+            .filter(isHost)
+            .map((row) => row.pid);
+          const started = Date.now();
+          let gone = true;
+          if (hosts.length > 0) {
+            try {
+              await waitFor(
+                "会话宿主自己退出",
+                () => hosts.every((pid) => !alive(pid)),
+                { timeout: 45_000, interval: 1_000 },
+              );
+            } catch {
+              gone = false;
+            }
+          }
+          return {
+            ok: gone,
+            detail: {
+              hostsAtAppExit: hosts,
+              seconds: Math.round((Date.now() - started) / 1000),
+              stillThere: hosts.filter(alive),
+            },
+          };
+        });
       }
       try {
         lingering = appProcesses(exe).map(({ pid, commandLine }) => ({
@@ -1205,7 +1272,32 @@ async function runFull(options, result, record, out) {
         const uninstaller = newestUninstaller(installDir);
         if (uninstaller === undefined)
           return { ok: false, detail: { reason: "安装目录里没有卸载程序" } };
-        spawnSync(uninstaller, ["/S"], { stdio: "ignore", timeout: 300_000 });
+        // 卸载前起一个空闲的会话宿主（没有会话、没人连着；把「没人连着就十秒后
+        // 走」放宽到十分钟，免得它在卸载程序开口之前自己先走了）：卸载程序要先经
+        // shutdown-if-idle.cjs 请它退出，日志里留下这一行，而不是按进程名结束它。
+        const fresh = startIdleHost(exe, dataDir, join(work, "idle-host.log"));
+        if (fresh.started) {
+          try {
+            await waitFor(
+              "空闲会话宿主开始监听",
+              () => idleHostVerdict({ log: fresh.log() }).listening,
+              { timeout: 30_000, interval: 500 },
+            );
+          } catch {
+            // 结论在下面。
+          }
+        }
+        spawnSync(uninstaller, ["/S"], {
+          stdio: "ignore",
+          timeout: 300_000,
+          // 卸载程序的 shutdown-if-idle 按 ARMADRA_DATA_DIR 找这次的数据目录。
+          env:
+            dataDir === undefined
+              ? process.env
+              : probeHomePath === undefined
+                ? { ...process.env, ARMADRA_DATA_DIR: dataDir }
+                : isolatedEnv(probeHomePath, { ARMADRA_DATA_DIR: dataDir }),
+        });
         // NSIS 卸载程序把自己拷到临时目录再跑，先返回：按结果轮询。
         // 删文件在前、删注册表项与快捷方式在后：两样都等到。
         try {
@@ -1231,16 +1323,42 @@ async function runFull(options, result, record, out) {
           join(os.homedir(), "Desktop", "Armadra.lnk"),
         ].filter(existsSync);
         const left = existsSync(installDir) ? readdirSync(installDir) : [];
+        const idleHost = idleHostVerdict({
+          started: fresh.started,
+          pid: fresh.pid,
+          log: fresh.log(),
+          alive: fresh.pid !== undefined && alive(fresh.pid),
+        });
+        let remaining = [];
+        try {
+          remaining = appProcesses(exe).map(({ pid, commandLine }) => ({
+            pid,
+            commandLine: commandLine.slice(0, 160),
+          }));
+        } catch {
+          remaining = [];
+        }
+        for (const { pid } of remaining) {
+          try {
+            process.kill(pid);
+          } catch {
+            // 已经退了。
+          }
+        }
         return {
           ok:
             !existsSync(exe) &&
             registered.length === 0 &&
-            shortcuts.length === 0,
+            shortcuts.length === 0 &&
+            idleHost.ok &&
+            remaining.length === 0,
           warn:
             left.length > 0 ||
             lingering.some((row) => row.role !== "sessionHost"),
           detail: {
             endedBeforeUninstall: lingering,
+            idleHost,
+            remainingAfterUninstall: remaining,
             exeGone: !existsSync(exe),
             leftInInstallDir: left,
             registered,

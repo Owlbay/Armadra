@@ -62,21 +62,21 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 
 补全阶段（[补全架构](../design/completion-architecture.md)）在 core 里新增或做实的域：
 
-| 目录                                    | 职责                                                                                         | 契约     |
-| --------------------------------------- | -------------------------------------------------------------------------------------------- | -------- |
-| `core/acp/`                             | ACP 传输、适配器表、会话、镜像、驱动切换、`armadra-hook mcp` 注入、输出到画板的文本导出      | §14、§26 |
-| `core/workflow/`                        | 草案、模板、运行、关卡、runner 任务；自动化目标「运行工作流」                                | §15      |
-| `core/realtime/`                        | 每块板一个 `Y.Doc`、更新流与快照、物化、awareness 校验、评论                                 | §16      |
-| `core/gateway/`                         | 对外 TLS 面：本地 CA、指定文件、ACME、准入（Cookie / Bearer）、配对载荷                      | §17      |
-| `core/identity/`（加固与 `oauth/`）     | 口令策略、限流锁定、passkey、TOTP 与恢复码、OAuth / OIDC、审计筛选与导出、创建者记录         | §18、§23 |
-| `core/push/`                            | 设备登记、发送队列、触发规则、Web Push / APNs·FCM 直连 / 中继三条传输                        | §19      |
-| `core/agent/credentials/`               | 节点凭据：`kind → 变量名` 封闭表、条目、经 hook 面兑换                                       | §20      |
-| `core/remote/fleet.ts`、`core/handoff/` | Worker 舰队（版本、能力、健康记录、重新同步）与跨执行主机交接                                | §21      |
-| `core/secrets/`                         | 按平台的密钥后端（钥匙串、`safeStorage`、`file-encrypted`）                                  | —        |
-| `core/net/outbound.ts`                  | core 全部出站地址的登记表，扫描测试强制                                                      | —        |
-| `core/diagnostics/`                     | 崩溃上报的剥离规则；SDK 只在壳里、只在用户填了 DSN 时加载；页面错误上报（G5-19，现为空骨架） | §30      |
-| `core/mail/`                            | 可选 SMTP 通知通道：邀请与重置链接；只有服务器壳 `--smtp-url` 配，nodemailer 首封才加载      | §28      |
-| `core/forge/`                           | 托管平台抽象：GitHub、Gitea / Forgejo、GitLab（G5-14 / G5-15，现为空骨架）                   | §29      |
+| 目录                                    | 职责                                                                                                                    | 契约     |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------- |
+| `core/acp/`                             | ACP 传输、适配器表、会话、镜像、驱动切换、`armadra-hook mcp` 注入、输出到画板的文本导出                                 | §14、§26 |
+| `core/workflow/`                        | 草案、模板、运行、关卡、runner 任务；自动化目标「运行工作流」                                                           | §15      |
+| `core/realtime/`                        | 每块板一个 `Y.Doc`、更新流与快照、物化、awareness 校验、评论                                                            | §16      |
+| `core/gateway/`                         | 对外 TLS 面：本地 CA、指定文件、ACME、准入（Cookie / Bearer）、配对载荷                                                 | §17      |
+| `core/identity/`（加固与 `oauth/`）     | 口令策略、限流锁定、passkey、TOTP 与恢复码、OAuth / OIDC、审计筛选与导出、创建者记录                                    | §18、§23 |
+| `core/push/`                            | 设备登记、发送队列、触发规则、Web Push / APNs·FCM 直连 / 中继三条传输                                                   | §19      |
+| `core/agent/credentials/`               | 节点凭据：`kind → 变量名` 封闭表、条目、经 hook 面兑换                                                                  | §20      |
+| `core/remote/fleet.ts`、`core/handoff/` | Worker 舰队（版本、能力、健康记录、重新同步）与跨执行主机交接                                                           | §21      |
+| `core/secrets/`                         | 按平台的密钥后端（钥匙串、`safeStorage`、`file-encrypted`）                                                             | —        |
+| `core/net/outbound.ts`                  | core 全部出站地址的登记表，扫描测试强制                                                                                 | —        |
+| `core/diagnostics/`                     | 崩溃上报的剥离规则；SDK 只在壳里、只在用户填了 DSN 时加载；页面错误上报（`client-report.ts` 限流与再剥离，`routes.ts`） | §30      |
+| `core/mail/`                            | 可选 SMTP 通知通道：邀请与重置链接；只有服务器壳 `--smtp-url` 配，nodemailer 首封才加载                                 | §28      |
+| `core/forge/`                           | 托管平台抽象：GitHub、Gitea / Forgejo、GitLab（G5-14 / G5-15，现为空骨架）                                              | §29      |
 
 core 之外的同类新增：`src/hook-client/`（动词工具表，`armadra-hook` 与 ama 适配器共用）、
 `src/agent-host/ama/`（ama 宿主适配器与 runners）、`apps/mobile`（Capacitor 手机壳）、
@@ -553,8 +553,9 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
 - **签名发布**：签名、公证、GPG 与更新清单的流程都已写好（[CI 与发布](ci-release.md)），
   但没有真证书。未签名的发布包在 `ARMADRA_UPDATES_DEV=1` 下能检查、下载、校验、暂存，
   「安装」答 `notSigned`；本地 `dist` 是 `localBuild`；更新器从不报没发生过的 `upToDate`
-  （`shell-core/updates/availability.ts`）。设置页的「检查」按钮仍不调壳（`use-update-state.ts`
-  报 `noReleaseSource`，壳侧定时检查在跑）。
+  （`shell-core/updates/availability.ts`）。设置页的「检查」经 `updates:check`（不带答复）由壳
+  自己问发布索引，`noReleaseSource` 只在壳没有发布源时出现；macOS 的签名状态由
+  `codesign --verify --deep --strict` 判定，ad-hoc 签名按 `unknown` 不装。
 - **ACP 的未竟项**：`elicitation/create` 与按模型选择（`session/set_config_option`）core 已就绪
   （契约 §26），但要 `@armadra/agent` 的 `AcpClient` 自报 `features.elicitation` /
   `features.configOptions`，0.6.7 还没有，在那之前行为与之前相同；SSH 节点不能切到 ACP

@@ -1,5 +1,5 @@
 import { app } from "electron";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -46,12 +46,11 @@ export function packagedUpdateMode(): unknown {
  * Whether this package carries a platform signature that makes an update
  * trustworthy. See `SignatureState` for why `unknown` is refused.
  *
- * macOS is answered cheaply: a signed `.app` carries
- * `Contents/_CodeSignature/CodeResources`, and an unsigned one does not.
- * (This says the bundle was signed, not that Gatekeeper accepts it — the
- * release workflow asserts `codesign --verify --deep --strict` on every
- * bundle before it is uploaded, and Squirrel.Mac checks the update against
- * the running app's designated requirement at install time.)
+ * macOS asks `codesign` itself (`macSignatureState`): the bundle must pass
+ * `codesign --verify --deep --strict`, and an ad-hoc signature (what a build
+ * without a Developer ID gets) is `unknown` — it says the bytes are intact,
+ * not who made them. Squirrel.Mac still checks the update against the running
+ * app's designated requirement at install time.
  *
  * Windows asks Authenticode itself (`windowsSignatureState`): only `Valid` —
  * a signature that chains to a trusted root and covers these bytes — is
@@ -62,14 +61,15 @@ export function signatureState(
   platform: string = process.platform,
   executable: string = process.execPath,
   packaged: boolean = app.isPackaged,
+  codesign?: Codesign,
 ): SignatureState {
   if (!packaged) return "unsigned";
   if (platform === "darwin") {
-    // …/Armadra.app/Contents/MacOS/Armadra → …/Armadra.app/Contents
-    const contents = dirname(dirname(executable));
-    return existsSync(join(contents, "_CodeSignature", "CodeResources"))
-      ? "signed"
-      : "unsigned";
+    // …/Armadra.app/Contents/MacOS/Armadra → …/Armadra.app
+    const bundle = dirname(dirname(dirname(executable)));
+    return codesign
+      ? macSignatureState(bundle, codesign)
+      : cachedMacState(bundle);
   }
   // An AppImage, .deb or .rpm carries no code signature; what makes its bytes
   // trustworthy is the feed's own digest plus the sha256 the Host published,
@@ -77,6 +77,71 @@ export function signatureState(
   if (platform === "linux") return "notApplicable";
   if (platform === "win32") return cachedWindowsState(executable);
   return "unknown";
+}
+
+/** Runs `codesign` with these arguments; what it printed and how it exited. */
+export type Codesign = (args: readonly string[]) => {
+  /** `null` when it could not be started or was stopped. */
+  status: number | null;
+  stdout: string;
+  stderr: string;
+};
+
+const codesign: Codesign = (args) => {
+  const result = spawnSync("/usr/bin/codesign", [...args], {
+    encoding: "utf8",
+    timeout: 30_000,
+    stdio: "pipe",
+  });
+  return {
+    status: result.error ? null : result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
+};
+
+/**
+ * `codesign`'s verdict on one bundle, as a `SignatureState`.
+ *
+ * `--verify --deep --strict` passing and a signature that is not ad-hoc is
+ * `signed`; "not signed at all" is `unsigned`; an ad-hoc signature, a failed
+ * verification (a tampered or half-signed bundle) or a `codesign` that would
+ * not start is `unknown`, and `unknown` is refused (external services §2.2).
+ */
+export function macSignatureState(
+  bundle: string,
+  run: Codesign = codesign,
+): SignatureState {
+  const verify = run(["--verify", "--deep", "--strict", bundle]);
+  if (verify.status !== 0) {
+    return verify.status !== null &&
+      /not signed at all/.test(`${verify.stderr}${verify.stdout}`)
+      ? "unsigned"
+      : "unknown";
+  }
+  // `--display` writes its report to standard error.
+  const display = run(["--display", "--verbose=2", bundle]);
+  if (display.status !== 0) return "unknown";
+  return /^Signature=adhoc$/m.test(`${display.stderr}${display.stdout}`)
+    ? "unknown"
+    : "signed";
+}
+
+/**
+ * One `codesign` run per process, like the Windows branch: the bundle does not
+ * change while it runs (an update replaces it and restarts), and the updater
+ * asks on every check. `--deep` reads every nested framework, so it is not
+ * something to repeat.
+ */
+const macStates = new Map<string, SignatureState>();
+
+function cachedMacState(bundle: string): SignatureState {
+  let state = macStates.get(bundle);
+  if (state === undefined) {
+    state = macSignatureState(bundle);
+    macStates.set(bundle, state);
+  }
+  return state;
 }
 
 /** Runs one PowerShell command and returns what it printed. */

@@ -26,6 +26,7 @@ import {
   DesktopLifecycle,
   quitFailureDialog,
   runQuitSequence,
+  sessionHostRelease,
 } from "./lifecycle";
 import {
   RuntimeProcess,
@@ -133,6 +134,8 @@ function registerIpc(): void {
     [IPC.identityTicket.channel]: nativeTicket,
     [IPC.appLocale.channel]: () => app.getLocale(),
     [IPC.windowIsFocused.channel]: () => getMainWindow()?.isFocused() ?? false,
+    // 页面错误上报（契约 §30）：开关、限流与再剥离都在 `main/diagnostics.ts`。
+    [IPC.diagnosticsReport.channel]: (report) => diagnostics.reportPage(report),
     [IPC.gatewayRefresh.channel]: async () => {
       await refreshGateway();
       return { ok: true };
@@ -307,7 +310,11 @@ let quitRequested = false;
 async function requestQuit(): Promise<void> {
   if (!lifecycle.state.beginQuit()) return;
   quitRequested = true;
-  const outcome = await runQuitSequence(lifecycle, runtime);
+  const outcome = await runQuitSequence(
+    lifecycle,
+    runtime,
+    runtime.owns() ? sessionHostRelease(dataDir()) : undefined,
+  );
   if (!outcome.ok) {
     quitRequested = false;
     process.stderr.write(

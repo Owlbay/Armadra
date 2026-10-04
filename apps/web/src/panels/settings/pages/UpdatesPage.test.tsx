@@ -27,6 +27,7 @@ const updates = vi.hoisted(() => ({
   restart: null as Record<string, unknown> | null,
   start: vi.fn(() => () => undefined),
   check: vi.fn(async () => {}),
+  refresh: vi.fn(async () => {}),
   download: vi.fn(async () => {}),
   install: vi.fn(async () => {}),
   dismiss: vi.fn(async () => {}),
@@ -129,6 +130,7 @@ beforeEach(() => {
   store.setPanel.mockClear();
   save.mutate.mockClear();
   updates.check.mockClear();
+  updates.refresh.mockClear();
   updates.download.mockClear();
   updates.install.mockClear();
   updates.dismiss.mockClear();
@@ -157,6 +159,18 @@ describe("UpdatesPage", () => {
     draw({ state: "idle" });
     await waitFor(() => expect(status()).toBe("尚未检查更新"));
     expect(updates.check).not.toHaveBeenCalled();
+  });
+
+  it("only reads the shell's state back on its timer; the shell runs the check", async () => {
+    vi.useFakeTimers();
+    try {
+      draw({ state: "idle" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(updates.refresh).toHaveBeenCalledTimes(1);
+      expect(updates.check).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   /** One rendering assertion per state of design §4.1. */
