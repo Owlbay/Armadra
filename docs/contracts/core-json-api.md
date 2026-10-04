@@ -633,7 +633,7 @@ G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：�
 - **起会话**：`nodeId` 不必已经在画布文档里（新建向导先起会话、节点随后落盘）；同一个节点已经有活着的 ACP 会话时答那一行（两台设备同时挂载、重试都不起第二个）；有活着的**终端**会话时 `409 conflict`（先切换驱动）；节点最近那一行是结束了的 ACP 行时在同一行上起下一代并接回。`prompt` 在会话开好后作为第一条提示发出（人类驾驶者）。没有 ACP 入口的 Agent 答 `400 acp_unsupported`；起不来的原样答 §14.1 的错误码（`acp_not_installed` 400、`acp_mode_unsupported` 400、`acp_mode_unavailable` 409、`acp_auth_required` 409、其余 502）。`custom:` 条目借基础 CLI 的适配器；基础 CLI 自己就是 ACP 入口（`native`）时，条目的 `launchCmd` 与 `args` 顶替表里的程序。
 - **提示**：等同在终端里敲一行并回车——经 `writeSubmit`，人类驾驶者（抢占租约，永不被拒）。同一会话一次一个回合，后到的排队。会话行已经结束（休眠、core 重启、适配器自己退了）时先在**同一行**上起下一代并以 CLI 会话 id 接回，再发；这一行已被节点的另一行取代时 `409 conflict`。
 - **镜像**：`entries` 是镜像 `<数据目录>/acp/<nodeId>/<ACP 会话 id>.acp.jsonl` 从字节偏移 `after` 起的完整记录（`TranscriptEntry`：`{ role: "user" | "assistant", blocks[], endOffset, at? }`，相邻的助手文本已合并），`endOffset` 是下一次的 `after`。**core 先写镜像再发 `acp.update`**：页面先订阅再读，读回来之前到的分块已经在 `entries` 里。镜像只记对话：我方的提示、助手文本、工具调用（`tool_use`）与它的终态结果（`tool_result`，正文截到 8000 字符）；思考、计划、用量、模式变化只经事件。`modes` 与 `pending`（挂起的审批，形状 `{ pendingId, protocol: "acp", toolCall, options[] }`）描述活着的进程，没有进程时 `modes: null`、无 `pending`。
-- **驱动切换**（ACP 设计 §4.2）：节点在 `blocked` / `waiting` 时 `409 awaiting_approval`；SSH 节点切到 ACP 答 `400 acp_unsupported`。否则结束当前驱动（终端先敲 CLI 的退出命令等它自己退，再结束；ACP 回合里先 cancel 再收掉进程），行以 `termination_intent = 'switch'` 结束；再在**同一行**上以另一种驱动起下一代（代次 +1，行 id 不变）：ACP 侧以 `agent_status.session_id` 接回（适配器表 `resume: "none"` 的新开），终端侧起 shell 并敲 CLI 的恢复行（不能续接时敲普通启动行）。`resumed` 如实说接上了没有。已经是目标驱动且活着时什么都不动，答 `resumed: true`。切换期间节点算「睡着」，`send` 排队。节点数据里的 `agent.driver` 由页面写回（不进撤销栈）。
+- **驱动切换**（ACP 设计 §4.2）：节点在 `blocked` / `waiting` 时 `409 awaiting_approval`；SSH 节点两种驱动都起在执行主机上（§26.5）。否则结束当前驱动（终端先敲 CLI 的退出命令等它自己退，再结束；ACP 回合里先 cancel 再收掉进程），行以 `termination_intent = 'switch'` 结束；再在**同一行**上以另一种驱动起下一代（代次 +1，行 id 不变）：ACP 侧以 `agent_status.session_id` 接回（适配器表 `resume: "none"` 的新开），终端侧起 shell 并敲 CLI 的恢复行（不能续接时敲普通启动行）。`resumed` 如实说接上了没有。已经是目标驱动且活着时什么都不动，答 `resumed: true`。切换期间节点算「睡着」，`send` 排队。节点数据里的 `agent.driver` 由页面写回（不进撤销栈）。
 - **§26 追加**：`PUT /api/acp/sessions/{id}/model { modelId }` → `204`（§26.2）；`GET …/log` 多 `models`（形状同 `modes`，`{ currentModelId, availableModels: [{ modelId, name, description? }] } | null`）与 `elicitations`（挂起的 elicitation，§26.1），后者与 `pending` 一样只在有进程时出现。
 - **其余路由在 ACP 行上**：`GET /api/terminals/{id}/ws` 升级前答 `409`（没有 PTY 可附着）；`POST …/paste` 只收带回车的整段（`enter: false` 答 `409 acp_no_raw_write`）；`GET …/capture` 是镜像尾部渲染成的散文；`terminate` 的 `interrupt` 是 `session/cancel`。协作动词与调度经终端桥写入：`writeSubmit`（括号粘贴 + 回车）落为 `session/prompt`，单个 `ESC` 落为 `session/cancel`，其他字节答 `acp_no_raw_write`。
 
@@ -1768,7 +1768,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 26. ACP 补充：elicitation、模型、凭据、SSH
 
-补 §14 的四件事。代码在 `core/acp/{client,host,session,elicitation,models,adapters,index,routes}.ts` 与 `agent/approvals.ts`，共享层 `api/acp.ts`。
+补 §14 的五件事。代码在 `core/acp/{client,host,session,elicitation,models,adapters,index,routes}.ts` 与 `agent/approvals.ts`，共享层 `api/acp.ts`。
 
 **客户端能力**：协议栈仍是 `@armadra/agent/acp` 的 `AcpClient`。elicitation 与模型要它自报 `AcpClient.features.elicitation` / `features.configOptions`（构造参数 `onElicitation(params, signal)`、方法 `setConfigOption(sessionId, configId, value)`，并在 `initialize` 声明 `clientCapabilities.elicitation`）。core 按 `features` 判断：没有时线路与 §14 逐字节相同——不声明能力、Agent 发来的 `elicitation/create` 由客户端答 method not found，`models` 恒为 `null`。0.6.7 两样都没有。
 
@@ -1797,6 +1797,18 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 - ACP 适配器不经画布启动器，兑换由 core 在起适配器之前做：节点环境里有 `ARMADRA_CREDENTIAL_REF`（§20.3 的校验与 `credential:use` 已在这一步之前做过，成员答 `403 credential_forbidden`）时按 §20.4 同一个兑换（同一绑定、重新校验、更新 `lastUsedAt`、日志只记节点与条目名）取值；节点的基础 CLI 是 ama 时取 §12.4 的已设模型密钥（`AMA_API_KEY_<供应商>`）。
 - 值只设进适配器进程的环境：不进节点数据、镜像、日志、会话行或任何答复。兑换失败与启动器一样拒绝起会话，原样答 §20 的码（`credential_unset` 409、`credential_unavailable` 503、`credential_mismatch` / `credential_kind_disabled` 400 等），不悄悄用默认登录起；ama 密钥读不出时答 `503 secret_unavailable`。
 - 只开本机：SSH 节点上的 ACP（§26 的 SSH 小节）仍按 §20 拒绝凭据。
+
+### 26.5 SSH 节点
+
+节点数据带 `ssh.hostId` 时，ACP 适配器起在那台执行主机上。代码在 `core/acp/ssh.ts`，Worker 侧在 `core/remote/{operations,node-probe}.ts`。
+
+- **传输**：本机起一条不带 TTY 的 `ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 <askpass 与主机密钥选项> [-p] [-i] [extraArgs] -- <user@host> <远端命令>`。主机、密钥、askpass、主机密钥文件与 `ARMADRA_REMOTE_WORKER_LAUNCHER` 都和 Worker 用的是同一套。这条 `ssh` 的 stdin / stdout 就是 ACP 的 JSON-RPC。远端命令是 `env <K='v'…> /bin/sh -c 'cd "$0" || exit 1; exec "$@"' '<cwd>' '<程序>' '<参数>'…`。每个词都放在单引号里；值里有 `'`、`\`、`!` 或控制字符时，拒绝起会话（`502 acp_spawn_failed`），不去猜远端是哪种 shell。`cwd` 取节点数据的 `cwd`，没有就用工作空间根；远端进不去这个目录就退出（`acp_exited`），不会在家目录里悄悄起。本机的 `ssh` 子进程从数据目录起。
+- **装没装**：起会话前问那台主机的 Worker：`agents.probe { programs: string[] }` → `{ platform, programs: { <程序>: <路径> | null } }`。只读，可以重放，能力位复用 `remote.integration.v1`。程序是裸名时按 Worker 自己的 `PATH` 找，是绝对路径（`custom:` 条目）时看它能不能执行；别的写法一律答 `null`；一次最多问 32 个。找不到答 `400 acp_not_installed`。
+- **`acp_unsupported` 只剩这几种**（400）：主机没登记、主机没配 Worker、Worker 对 `agents.probe` 答 501（版本过旧）、执行主机不是 POSIX。Worker 连不上答 `502 acp_spawn_failed`。
+- **画布工具**：适配器表 `injection.mcp` 为真时，`session/new|load|resume` 的 `mcpServers` 带执行主机上的 Hook 客户端：命令 `<注入根>/bin/armadra-hook`，参数 `["mcp"]`，环境是节点身份、会话代次、执行主机上的 `ARMADRA_ENDPOINT_FILE` 与 `ARMADRA_HOOK_TIMEOUT_MS`。它和远端画布注入走同一条 Worker 中继 socket（契约 §21、远端画布注入设计），准备步骤也相同：同步产物、写节点令牌、开中继。准备失败就不带这条服务器，会话照常可用。终端启动器的注入 argv / env、ama 的 profile 在远端都不带。
+- **凭据**：远端不兑换（§20）。节点凭据与 ama 模型密钥都不设，条目名不随画布工具过去，远端命令行里也不带任何值。远端适配器只多 `custom:` 条目的 `env`。
+- **转录**：CLI 的转录在执行主机上，`transcriptPath` 一律指向本机镜像。
+- **驱动切换、休眠、接回**：和本机一样都在同一行上起下一代（§14.2）。切回终端时，下一代经 `ssh` 起在同一台主机上（`ReviveOptions.sshHostId`），敲的是只带程序名的启动行（POSIX 方言）；ACP 侧的接回、Eco 休眠的唤醒、依赖编排与定时冷启动，都按节点数据重新走一遍上面的传输。
 
 ## 27. 推送补充：设备偏好、UnifiedPush、调度与资源事件
 

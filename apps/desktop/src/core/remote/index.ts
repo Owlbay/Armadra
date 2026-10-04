@@ -99,6 +99,8 @@ export interface RemoteDomain {
   readonly integration: RemoteIntegration;
   /** The registry read fresh, so a settings edit is visible immediately. */
   readonly host: (hostId: string) => SshHost | undefined;
+  /** {@link LAUNCHER_OVERRIDE}, when set: argv[0] of every non-TTY `ssh`. */
+  readonly launcher?: string;
   stop(): Promise<void>;
 }
 
@@ -410,6 +412,7 @@ export function install(context: CoreContext): RemoteDomain {
     languageLinks,
     integration,
     host,
+    ...(launcher === undefined ? {} : { launcher }),
     stop: async () => {
       clearInterval(idleTimer);
       unlisten();
