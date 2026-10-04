@@ -245,7 +245,7 @@ compose 插件时，`pnpm dev-stack up` 打印原因并退出 0，依赖它的�
 ```sh
 pnpm dev-stack up                      # 起全部非 profile 服务，并从宿主机跑健康检查
 pnpm dev-stack up dex mailpit          # 只起其中几个
-pnpm dev-stack up --profile ntfy       # 加上可选 profile（headscale / ntfy）
+pnpm dev-stack up --profile ntfy       # 加上可选 profile（headscale / ntfy / s3）
 pnpm dev-stack health --json           # 只跑健康检查
 pnpm dev-stack logs keycloak -f
 pnpm dev-stack down                    # 加 --volumes 连卷一起删
@@ -275,6 +275,7 @@ pnpm dev-stack down gitea              # 只停并删这几个
 | `ntfy`           | 8093          | 可选 profile，UnifiedPush 分发                                 |
 | `pebble-va`      | 14100 / 15100 | 可选 profile，真回连挑战（`tls-alpn-01` 5001、`http-01` 5002） |
 | `caddy`          | 8444          | 可选 profile，部署指南 §3.3 的反向代理演练                     |
+| `s3`             | 8095          | 可选 profile，S3 兼容桶（versitygw），更新镜像作业的替身       |
 
 开发夹具与密钥：
 

@@ -105,6 +105,58 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # Linux arm64：发布同一种 runner（ubuntu-22.04-arm）上打包，只跑 deb-install——
+  # 干净 ubuntu:22.04 arm64 容器里装 deb、问版本，并在同一个容器里用
+  # APPIMAGE_EXTRACT_AND_RUN 起 arm64 AppImage（旧运行时要开发包里的 libz.so，
+  # 见 scripts/dist.mjs 的 ARM64_APPIMAGE_TOOLSET）。其余 B 档条目与架构无关，只在
+  # 上面的 x64 作业跑。
+  linux-arm64:
+    name: Linux arm64 打包与安装
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 90
+    outputs:
+      failed: ${{ steps.tier.outputs.failed }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 装打包依赖
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends file rpm
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: 打 Linux arm64 包
+        shell: bash
+        env:
+          ARMADRA_DIST_RELEASE: "1"
+        run: |
+          set -euo pipefail
+          pnpm libs:build
+          pnpm --filter @armadra/desktop dist
+          ls -l apps/desktop/release
+      - name: 校验 Linux 的 glibc 基线
+        shell: bash
+        run: bash tools/release/verify-linux-glibc-baseline.sh
+      - name: deb 与 AppImage 安装（arm64）
+        id: tier
+        shell: bash
+        run: node tools/ci/e2e.mjs --tier b --only deb-install --out target/e2e/b-linux-arm64
+      - name: 上传产物
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-tier-b-linux-arm64
+          path: target/e2e/b-linux-arm64
+          if-no-files-found: ignore
+          retention-days: 14
+
   # macOS：现有的打包冒烟（迁移全局安装、PDF 与视频、终端、控制台）。不签名不
   # 公证，直接执行 release 目录里的 .app。
   macos:
@@ -337,7 +389,13 @@ jobs:
   # 免得每晚一个。只在 main 上报（手动在分支上触发的失败看运行页即可）。
   report:
     name: 失败开 issue
-    needs: [linux, macos, mobile-ios, mobile-android, windows-acceptance]
+    needs:
+      - linux
+      - linux-arm64
+      - macos
+      - mobile-ios
+      - mobile-android
+      - windows-acceptance
     if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -352,6 +410,8 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           LINUX_RESULT: ${{ needs.linux.result }}
           LINUX_FAILED: ${{ needs.linux.outputs.failed }}
+          LINUX_ARM64_RESULT: ${{ needs.linux-arm64.result }}
+          LINUX_ARM64_FAILED: ${{ needs.linux-arm64.outputs.failed }}
           MACOS_RESULT: ${{ needs.macos.result }}
           MACOS_FAILED: ${{ needs.macos.outputs.failed }}
           MOBILE_IOS_RESULT: ${{ needs.mobile-ios.result }}
@@ -360,8 +420,8 @@ jobs:
         run: |
           set -euo pipefail
           title="夜间 B 档失败"
-          body="$(printf '运行：%s\n\n| 作业 | 结果 | 失败的条目 |\n| --- | --- | --- |\n| linux | %s | %s |\n| macos | %s | %s |\n| mobile-ios | %s | mobile-shell-e2e |\n| mobile-android | %s | mobile-shell-e2e |\n| windows-acceptance | %s | 见产物 windows-acceptance/result.json |\n\n条目为空而结果是 failure 时，失败在打包或 glibc 校验，看运行日志。\n' \
-            "$RUN_URL" "$LINUX_RESULT" "${LINUX_FAILED:--}" "$MACOS_RESULT" "${MACOS_FAILED:--}" "$MOBILE_IOS_RESULT" "$MOBILE_ANDROID_RESULT" "$WINDOWS_RESULT")"
+          body="$(printf '运行：%s\n\n| 作业 | 结果 | 失败的条目 |\n| --- | --- | --- |\n| linux | %s | %s |\n| linux-arm64 | %s | %s |\n| macos | %s | %s |\n| mobile-ios | %s | mobile-shell-e2e |\n| mobile-android | %s | mobile-shell-e2e |\n| windows-acceptance | %s | 见产物 windows-acceptance/result.json |\n\n条目为空而结果是 failure 时，失败在打包或 glibc 校验，看运行日志。\n' \
+            "$RUN_URL" "$LINUX_RESULT" "${LINUX_FAILED:--}" "$LINUX_ARM64_RESULT" "${LINUX_ARM64_FAILED:--}" "$MACOS_RESULT" "${MACOS_FAILED:--}" "$MOBILE_IOS_RESULT" "$MOBILE_ANDROID_RESULT" "$WINDOWS_RESULT")"
           existing="$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
             --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)"
           if [ -n "$existing" ]; then

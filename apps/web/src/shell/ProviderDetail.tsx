@@ -1,8 +1,10 @@
 import type { UsageProvider } from "@armadra/shared";
 import { useT } from "../app/preferences-store";
 import { formatRelativeTime } from "../lib/format";
+import { LocalEstimate } from "../panels/usage/LocalEstimate";
 import {
   UNAVAILABLE_REASONS,
+  usageLocalEstimate,
   usageIsStale,
   usagePercent,
   usageReasonKey,
@@ -22,6 +24,7 @@ export function ProviderDetail({
 }) {
   const t = useT();
   const fetchedAt = Date.parse(provider.fetchedAt ?? "");
+  const estimate = usageLocalEstimate(provider);
   return (
     <div className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-col gap-1">
@@ -52,9 +55,14 @@ export function ProviderDetail({
       </div>
       {provider.status === "unavailable" &&
       UNAVAILABLE_REASONS.has(provider.reason ?? "") ? (
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          {t(usageReasonKey(provider.reason))}
-        </p>
+        <>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {t(usageReasonKey(provider.reason))}
+          </p>
+          {estimate && (
+            <LocalEstimate provider={provider} windows={estimate} now={now} />
+          )}
+        </>
       ) : provider.status !== "ok" ? (
         <p className="text-xs leading-relaxed text-muted-foreground">
           {t(

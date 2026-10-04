@@ -24,7 +24,9 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
+  writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -314,6 +316,54 @@ export function placements(platformName) {
   ].map((resource) => ({ ...resource, executable: false }));
 }
 
+/**
+ * The directory electron-updater caches downloads in, under the OS cache
+ * directory, and where the NSIS installer leaves its copy for the next
+ * differential download.
+ *
+ * electron-builder derives it from the package name (`AppInfo`'s
+ * `updaterCacheDirName` getter); a scoped name gives `@armadradesktop-updater`.
+ * The configuration has no key for it — a `publish.updaterCacheDirName` is
+ * overwritten — and renaming the package would also rename the Linux
+ * packages. So this hook does two things: it pins the getter on this build's
+ * `AppInfo`, which every later reader goes through (the deb / rpm targets
+ * write `app-update.yml` again after this hook, NSIS defines its store path
+ * from it), and it rewrites the `app-update.yml` electron-builder's own
+ * afterPack handler already wrote (system handlers run before user hooks).
+ */
+export const UPDATER_CACHE_DIR_NAME = "armadra-updater";
+
+/** Pins `appInfo.updaterCacheDirName` for the rest of this build. */
+export function pinUpdaterCacheDir(appInfo, name = UPDATER_CACHE_DIR_NAME) {
+  if (!appInfo || appInfo.updaterCacheDirName === name) return false;
+  Object.defineProperty(appInfo, "updaterCacheDirName", {
+    value: name,
+    configurable: true,
+  });
+  if (appInfo.updaterCacheDirName !== name)
+    throw new Error("after-pack: could not pin updaterCacheDirName");
+  return true;
+}
+
+/** `app-update.yml` with `updaterCacheDirName` set to ours. */
+export function withUpdaterCacheDir(text, name = UPDATER_CACHE_DIR_NAME) {
+  const line = `updaterCacheDirName: ${name}`;
+  if (/^updaterCacheDirName:.*$/m.test(text))
+    return text.replace(/^updaterCacheDirName:.*$/m, line);
+  return `${text.replace(/\n*$/, "\n")}${line}\n`;
+}
+
+/**
+ * Rewrites `<resources>/app-update.yml` when the packager wrote one (every
+ * target that can update). Returns whether a file was there.
+ */
+export function placeUpdaterCacheDir(resourcesDir) {
+  const path = join(resourcesDir, "app-update.yml");
+  if (!existsSync(path)) return false;
+  writeFileSync(path, withUpdaterCacheDir(readFileSync(path, "utf8")));
+  return true;
+}
+
 export default async function afterPack(context) {
   const platformName = context.electronPlatformName;
   const archName = ARCH_NAMES[context.arch] ?? process.arch;
@@ -338,6 +388,11 @@ export default async function afterPack(context) {
     resourcesDir,
   }))
     console.log(`after-pack: placed ${placed}`);
+  pinUpdaterCacheDir(context.packager.appInfo);
+  if (placeUpdaterCacheDir(resourcesDir))
+    console.log(
+      `after-pack: app-update.yml caches in ${UPDATER_CACHE_DIR_NAME}`,
+    );
   placeHookLauncher(platformName, resourcesDir);
   placeLaunchExe(platformName, resourcesDir);
 }

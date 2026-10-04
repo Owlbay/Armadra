@@ -168,7 +168,27 @@ export const SERVICES = [
     // 上游没起时 Caddy 答 502；这里只确认代理本身在听。
     check: () => tcpOpen(HOST, 8444),
   },
+  {
+    name: "s3",
+    ports: [8095],
+    profile: "s3",
+    purpose: "S3 兼容桶，更新镜像作业的替身（§3.3）",
+    check: async () => {
+      // 不带签名的请求只该被拒；答的是 S3 的 AccessDenied 才说明网关与鉴权都在。
+      const { status, body } = await get("http://127.0.0.1:8095/");
+      expect(status === 403, `status ${status}`);
+      expect(body.includes("<Code>AccessDenied</Code>"), body.slice(0, 200));
+    },
+  },
 ];
+
+/** dev-stack `s3` 的访问键：只在回环上、只给本地桶用，与 docker-compose.yml 一致。 */
+export const S3_DEV = {
+  endpoint: "http://127.0.0.1:8095",
+  accessKeyId: "armadra-dev",
+  secretAccessKey: "armadra-dev-mirror",
+  region: "us-east-1",
+};
 
 /** Compose services that exist only to back another one. */
 export const SUPPORT_SERVICES = ["glitchtip-postgres", "glitchtip-redis"];

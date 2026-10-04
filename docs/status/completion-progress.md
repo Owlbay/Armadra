@@ -1333,7 +1333,34 @@
 
 ## G5-18 发布流水线收尾（R-62、R-63、R-64、R-65 作业、R-66、R-67）
 
-待填（第 3 组）。
+**做了什么**
+
+- R-63 发布说明：`tools/release/changelog.mjs` 取 `CHANGELOG.md` 里 `## X.Y.Z` 那一节（标题后可跟括注，到下一个二级标题为止）。`release.yml` 的 `verify` 先 `changelog.mjs check`，缺节在构建之前就失败；`assemble` 改用 `assemble.mjs --changelog CHANGELOG.md`，不再取 GitHub 的 `generate-notes`，兼容性围栏照旧由 `releaseNote()` 追加。真建 Release（`publish`）时带 `--released` / `--require-released`，标题仍标「未发布」也算失败。`release:dry-run` 用同一段正文。
+- R-62 更新器缓存目录：`after-pack.mjs` 把这次构建的 `AppInfo.updaterCacheDirName` 钉成 `armadra-updater`，并改写已经写好的 `app-update.yml`。deb / rpm 在 afterPack 之后还会重写一次，NSIS 也从它取安装包副本的存放路径，所以钉 getter，不只改文件。配置里没有可用的键（`publish.updaterCacheDirName` 会被覆盖）；改包名又会连 Linux 包名一起改。
+- R-64 arm64 AppImage：根因不是镜像里缺 zlib，而是 electron-builder 缺省工具集（AppImageKit 12）的 arm64 **运行时**动态链接无版本号的 `libz.so`，在解包之前就失败，所以计划里「把 `libz.so.1` 放进 `usr/lib`」不起作用。`scripts/dist.mjs` 对 arm64 合入 `toolsets.appimage: 1.0.3`（静态 type-2 运行时，无 `NEEDED`）；x64 的旧运行时链接 `libz.so.1`，不改。`deb-install` 探针在同一个干净容器里装 deb 之后，再用 `APPIMAGE_EXTRACT_AND_RUN` 起同架构的 AppImage。`nightly.yml` 加 `linux-arm64` 作业（`ubuntu-22.04-arm`，打包、glibc 基线、`--only deb-install`），`report` 也看它。
+- R-67 第三方声明：`tools/notices.mjs` 的 `BUNDLED_DEV_DEPENDENCIES` 列出被打进 `out/` 的构建期依赖（`tailwindcss`、`tw-animate-css`，页面 CSS），读许可证原文进同一张表；`--scan apps/desktop/out` 按产物里 rolldown 的 `//#region` 路径与 CSS 的 `/*! 包名 v版本` 核名单（`@armadra/*` 除外），`release.yml` 的 `linux-x86_64` 构建打包后跑。`THIRD_PARTY_NOTICES.md` 重新生成。
+- R-65 镜像作业（W-MIRROR）：`tools/release/mirror.mjs`（rclone，PATH 上没有就用钉住的 `rclone/rclone:1.71.1` 镜像；远端配置走 `RCLONE_CONFIG_MIRROR_*`）。`stage` 把发布传到桶里 `releases/download/v<版本>/`，先传包、后传清单，最后 `rclone check`；`promote` 把那一版的清单服务端复制到 `releases/latest/download/`；`verify` 像客户端那样读一遍。`release.yml` 的 `mirror` 作业在 `publish` 时 `stage`，`distribute.yml` 的 `mirror` 作业在转正后 `promote`（draft 不会经镜像先到客户端，预发布不提）。设置一个都没有就跳过，缺一部分就失败。配了变量 `ARMADRA_MIRROR_PUBLIC_URL` 时，`assemble.mjs --mirror-base` 另写一份链接指向镜像的 `latest.json`，用同一把钥匙、同一句可信注释签名，否则镜像只镜像了检查（发布的 `latest.json` 里地址都指向 GitHub）。dev-stack 加 `s3` profile（versitygw，`127.0.0.1:8095`，`S3_DEV`）。
+- R-66 electron-builder 27：2026-10-04 核对，npm 上 `latest` 仍是 26.15.3，27 只有 `next` 标签的 `27.0.0-alpha.9`，所以不升，记在 `ci-release.md` §2.7。
+- 文档：`ci-release.md` §2.4（arm64 运行时、缓存目录）、§2.7（说明来源、electron-builder 27）、§3 密钥表（R2 三项与 `ARMADRA_MIRROR_PUBLIC_URL`）、新增 §3.3 更新镜像、§3.1 声明名单；开发指南 dev-stack 表；外部服务 §3.3 现状；探针 README 的 deb-install。
+
+**实测**（macOS arm64 + Docker）
+
+- `pnpm release:test`、`pnpm ci:workflows`、`pnpm release:dry-run`（说明取 CHANGELOG 0.2.0 一节）、`pnpm check` 通过；新增用例：`changelog.test`（取节、整段版本比较、CRLF、缺节 / 空节 / 未发布、assemble 缺节在签名前失败、正文进说明且带围栏）、`mirror.test`（配置三态、rclone 环境、stage / promote 顺序、容器挂载与回环改写、本地 HTTP 读回、镜像版 latest.json 的签名与地址、指回 GitHub 时报错）、`notices.test`（`#region` 与 CSS 版权头扫描、名单覆盖、构建期包进声明）、`after-pack.test`（改写 yml、钉 AppInfo）、`dist.test`（只有 arm64 换工具集）。
+- dev-stack `s3`：`ARMADRA_DEV_STACK=1 node --test tools/release/mirror.test.mjs` 真跑 rclone：建桶、`stage`（44 个文件 check 0 差异）、`promote`（16 份清单），再用 `rclone serve http` 把桶当公开地址，`verifyMirror` 通过（latest.json 签名、6 个平台的 feed 与包、地址都在镜像下）。
+- `ubuntu:22.04` arm64 容器里 `ARMADRA_DIST_RELEASE=1 pnpm --filter @armadra/desktop dist`：旧工具集的 AppImage 在干净系统上报 `libz.so: cannot open shared object file`（`readelf` 看到运行时 `NEEDED libz.so`）；换工具集之后 `deb-install`（arm64 deb + AppImage）五项全过，两边都答 `Armadra 0.2.0`。同一次构建的 unpacked、deb 里的 `app-update.yml` 都是 `updaterCacheDirName: armadra-updater`。
+- `node tools/notices.mjs --scan apps/desktop/out`：327 个打进去的包都在声明里；把 tailwindcss 从名单拿掉即报缺。
+
+**没做 / 限制**
+
+- 计划写的 dev-stack `minio` profile 改成了 `s3`（versitygw）：MinIO 的官方镜像在 Docker Hub 与 quay.io 都已拉不到。
+- 计划写的「`libz.so.1` 放进 `usr/lib`」没有做，原因见上（起不来的是运行时本身）。`1.0.3` 在 electron-builder 里标为 beta 工具集，只用于 arm64。Windows 的 NSIS 安装包副本路径跟着 AppInfo 走，没有在 Windows 上装过一次核对实际目录。
+- 镜像的 `stage` / `promote` 只在本地 S3 替身上跑过；真 R2、域名与 `ARMADRA_MIRROR_PUBLIC_URL` 要用户提供。客户端多端点（`ARMADRA_UPDATER_ENDPOINTS`）没有改。
+- Ed25519 清单签名等 electron-builder 27 正式版。
+
+**需用户提供**
+
+- [ ] 域名 + Cloudflare R2：secrets `CLOUDFLARE_R2_ACCESS_KEY_ID` / `CLOUDFLARE_R2_SECRET_ACCESS_KEY`，变量 `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_R2_BUCKET` / `ARMADRA_MIRROR_PUBLIC_URL`；桶的公开自定义域名。验：发布一次后 `node tools/release/mirror.mjs verify --base <域名> --pubkey <公钥>`。
+- [ ] 发版前把 `CHANGELOG.md` 的「## 0.2.0（未发布）」改成发布日期，否则 `publish` 在 `verify` 就失败。
 
 ## G5-19 页面错误上报（R-69、R-12）
 
@@ -1449,7 +1476,7 @@
 
 没做：
 
-- G5-03 名下三处确认框还在用 `ui/alert-dialog`。
+- ~~G5-03 名下三处确认框还在用 `ui/alert-dialog`。~~ 后续 `fix/g5-23-identity-dialogs` 已接上（`AccountsSharingPage` 含成员菜单「重置两步验证」、`security/parts.tsx::ConfirmRemove`、`GatewayDevices`），并加扫描用例 `panels/no-raw-alert-dialog.test.ts`：除 `ResponsiveDialog.tsx` 外不得直接 import `ui/alert-dialog`。
 - 旧版 Worker 没有 `assets.exportText`：对它的远端导出要先「重新同步」执行主机，否则报 Worker 的未知操作错误。
 
 ## G5-24 桌面回环收紧（R-15）
@@ -1458,7 +1485,22 @@
 
 ## G5-25 Claude 本地额度窗口估算（R-70）
 
-待填（第 3 组）。
+做了什么：
+
+- `core/usage/local-window.ts`（新）：拿成本扫描器最近一趟的 Claude 日桶与小时桶（不再开文件）估两个窗口。5 小时窗口从上一个窗口之外第一条活动所在的本地整点起算、持续 5 小时，已结束则报从当前整点起、没有结束时刻的空窗口；7 天窗口是含今天的 7 个本地日。`used` = 输入 + 输出 + 缓存写（缓存读不计）。`limit` 只在调用方给了额度时才有。
+- `CostService.scannedBuckets()` 交出最近一趟的两组桶；`UsageService` 在读快照（`snapshot()` / `refresh()`）时，对 `reason: "policy_off"` 的 Claude 行现算 `estimate: { source: "local", windows: [{ key, label, windowStartMs, resetsAtMs?, used, limit? }] }`。设置 `usage.claudeLocalWindow` 关、成本扫描关或还没扫过时不挂。可选 `claudeWindowLimits` 供给额度，装配时没有接（仓库里没有订阅档额度的目录），所以现在只报 token。
+- 共享层 `usageEstimateSchema`；页面 `panels/usage/LocalEstimate.tsx`，用量卡、账号页明细（`shell/ProviderDetail.tsx`，`AccountPage` 本身没改）与用量环的无障碍名都标「本地估算 / Local estimate」；没有额度时只报 token 数、不画进度条，有额度才画百分比。契约 §12.1 追加一段。
+
+实测（macOS arm64，2026-10-04）：
+
+- `local-window.test`（夹具转录经 `ScanState` 扫临时目录：窗口起点、恰好 5 小时的边界、7 天首日边界、窗口已过期、无额度 / 有额度、缓存读不计）、`usage/routes.test`（夹具写在测试自己的 `CLAUDE_CONFIG_DIR`：`policy_off` 旁带估算，关掉设置后不带）、共享层 schema 用例、页面 `LocalEstimate.test`（卡片、账号页明细中英、用量环）。没有读过本机 `~/.claude`。
+
+没做 / 限制：
+
+- 没有订阅档额度来源：不读 Claude 凭据就不知道是哪一档，所以 `limit` 目前总是缺省，只报用量。
+- 契约里的形状是 `estimate.windows[]`（两个窗口各带 `windowStartMs`），不是计划里写的单个窗口。
+- 设置页没有 `usage.claudeLocalWindow` 的开关（计划要求 `AccountPage` 不改）；只能经设置接口改。
+- 估算依赖成本扫描节奏（后台 5 分钟一趟），不比扫描更新。
 
 ## G5-26 依赖审计
 

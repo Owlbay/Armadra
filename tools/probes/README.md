@@ -393,10 +393,10 @@ Linux 上 `dist` 出的 `.deb` 在干净的 `ubuntu:22.04` 容器里装一次（
 
 ```sh
 pnpm --filter @armadra/desktop dist
-node tools/probes/deb-install.mjs [输出目录] [--deb <Armadra_x.y.z_arch.deb>] [--image ubuntu:22.04]
+node tools/probes/deb-install.mjs [输出目录] [--deb <Armadra_x.y.z_arch.deb>] [--appimage <x.AppImage>] [--image ubuntu:22.04]
 ```
 
-断言：`apt-get install` 从官方源把依赖都解出来；`/usr/bin/armadra` 指向 `/opt/Armadra/armadra`；`ldd` 没有 `not found`；`armadra --version` 答出 `apps/desktop/package.json` 的版本（`main/version-flag.ts`：在任何窗口、数据目录与 core 之前答完退出，不要显示器）。容器 `--rm`、只读挂载 release 目录，不碰本机的 apt 与 `/opt`。产物默认在 `target/deb-install/`：`result.json`、`container.log`。没验证：桌面环境里从应用菜单启动、rpm 包。
+断言：`apt-get install` 从官方源把依赖都解出来；`/usr/bin/armadra` 指向 `/opt/Armadra/armadra`；`ldd` 没有 `not found`；`armadra --version` 答出 `apps/desktop/package.json` 的版本（`main/version-flag.ts`：在任何窗口、数据目录与 core 之前答完退出，不要显示器）；同目录有同架构的 AppImage（或 `--appimage` 指定）时，在同一个容器里用 `APPIMAGE_EXTRACT_AND_RUN=1` 起它也要答出版本——Electron 要的库已由 deb 拉齐，能缺的只剩 AppImage 运行时自己的依赖（arm64 旧运行时的 `libz.so`）。夜间 `linux` 作业验 amd64，`linux-arm64` 作业验 arm64。容器 `--rm`、只读挂载 release 目录，不碰本机的 apt 与 `/opt`。产物默认在 `target/deb-install/`：`result.json`、`container.log`。没验证：桌面环境里从应用菜单启动、rpm 包。
 
 ## 自动更新端到端
 

@@ -11,6 +11,7 @@ import { OUTBOUND } from "../net/outbound";
 import type { SettingsStore } from "../settings/store";
 import { BUILT_IN_PRICES, CostService, type PriceTable } from "./cost";
 import { CopilotLogin } from "./copilot-login";
+import { estimateLocalWindows, type LocalWindowLimits } from "./local-window";
 import {
   CLAUDE_ID,
   CODEX_ID,
@@ -100,6 +101,11 @@ export interface UsageServiceOptions {
    * ——下一趟就该用上新价格。不给就只有内置表，和以前一样。
    */
   readonly catalogPrices?: () => PriceTable;
+  /**
+   * Claude 订阅档的窗口额度（token），本地估算用来算百分比。不给或者某个窗口没有
+   * 数字，那个窗口就只报用量。
+   */
+  readonly claudeWindowLimits?: () => LocalWindowLimits | undefined;
 }
 
 export class UsageService {
@@ -199,17 +205,56 @@ export class UsageService {
 
   /** 缓存着的快照。从不在网络上阻塞。 */
   snapshot(): UsageSnapshot {
-    return this.enabled() ? this.snapshotValue : emptySnapshot();
+    return this.enabled()
+      ? this.withLocalEstimate(this.snapshotValue)
+      : emptySnapshot();
+  }
+
+  /** `usage.claudeLocalWindow`，缺省开。 */
+  private claudeLocalWindow(): boolean {
+    const value = this.options.settings?.get("usage.claudeLocalWindow");
+    return typeof value === "boolean" ? value : true;
+  }
+
+  /**
+   * Claude 因政策关着而 `policy_off` 时，挂上按本机转录估出来的窗口。每次读快照
+   * 时现算：桶跟着成本扫描走，不必等下一次额度刷新。没有扫描结果（成本扫描关着、
+   * 还没扫过）就不挂。
+   */
+  private withLocalEstimate(snapshot: UsageSnapshot): UsageSnapshot {
+    if (!this.claudeLocalWindow()) return snapshot;
+    const index = snapshot.providers.findIndex(
+      (provider) =>
+        provider.id === CLAUDE_ID &&
+        provider.status === "unavailable" &&
+        provider.reason === "policy_off",
+    );
+    if (index === -1) return snapshot;
+    const scanned = this.cost.scannedBuckets();
+    if (scanned === undefined) return snapshot;
+    const providers = [...snapshot.providers];
+    providers[index] = {
+      ...(providers[index] as ProviderUsage),
+      estimate: estimateLocalWindows(
+        scanned,
+        CLAUDE_ID,
+        this.now(),
+        this.options.claudeWindowLimits?.(),
+      ),
+    };
+    return { ...snapshot, providers };
   }
 
   /** 并发地取支持的供应商并替换缓存。 */
   async refresh(): Promise<UsageSnapshot> {
     // 在已有的那次刷新上排队，两个调用方共享同一次完成的取数。
-    if (this.refreshing !== undefined) return this.refreshing;
+    if (this.refreshing !== undefined) {
+      return this.refreshing.then((value) => this.withLocalEstimate(value));
+    }
     const running = this.refreshLocked();
     this.refreshing = running;
     try {
-      return await running;
+      return this.withLocalEstimate(await running);
     } finally {
       this.refreshing = undefined;
     }

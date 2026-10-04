@@ -44,6 +44,7 @@ import {
   type TokenTotals,
 } from "./cost-buckets";
 import { COST_SOURCES, costSource, type AbsorbContext } from "./cost-sources";
+import type { ScannedBuckets } from "./local-window";
 
 export {
   addTokens,
@@ -1333,6 +1334,7 @@ export function summarize(
 /** 缓存好的汇总加上增量扫描状态。 */
 export class CostService {
   private summaryValue: CostSummary = emptySummary("unavailable");
+  private scanned: ScannedBuckets | undefined;
   private readonly state: ScanState;
   private lastScanMs: number | undefined;
 
@@ -1353,6 +1355,14 @@ export class CostService {
   /** 缓存着的汇总。从不碰文件系统。 */
   summary(): CostSummary {
     return this.enabled() ? this.summaryValue : emptySummary("disabled");
+  }
+
+  /**
+   * 最近一趟扫描的日桶与小时桶，给本地额度窗口估算（`local-window.ts`）用。
+   * 扫描关着或者还没扫过是 `undefined`。
+   */
+  scannedBuckets(): ScannedBuckets | undefined {
+    return this.enabled() ? this.scanned : undefined;
   }
 
   /** 后台那一趟：最多五分钟一次扫描。 */
@@ -1393,6 +1403,10 @@ export class CostService {
       .scan()
       .then((result) => {
         this.lastScanMs = nowMs;
+        this.scanned = {
+          buckets: result.buckets,
+          hourBuckets: result.hourBuckets,
+        };
         this.summaryValue = {
           // 价格在这里才读：刚抓回来的目录这一趟就算得上，不必等重启。
           ...summarize(

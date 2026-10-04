@@ -3,7 +3,12 @@
  *
  *   node tools/release/assemble.mjs --dir <dir> --version X.Y.Z \
  *     --repo owner/name --tag vX.Y.Z [--unnotarized macOS,Windows] \
- *     [--note release-note.md]
+ *     [--changelog CHANGELOG.md [--require-released] | --notes-from <file>] \
+ *     [--note release-note.md] [--mirror-base <url> --mirror-out <dir>]
+ *
+ * The release note's body is this version's section of `CHANGELOG.md`
+ * (`--changelog`, see changelog.mjs); a missing section fails before anything
+ * is signed. `--notes-from` reads a whole file instead, for tests and one-offs.
  *
  * In order: check that every file is one the updater can place, sign every
  * artifact, write latest.json from the signatures that produced, write
@@ -27,7 +32,13 @@
  * admits it.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -42,8 +53,9 @@ import {
   verifyChecksums,
   writeChecksums,
 } from "./checksums.mjs";
+import { readReleaseNotes } from "./changelog.mjs";
 import { readCompatibility, releaseNote } from "./compatibility.mjs";
-import { keyFromSecret, publicKeyFile } from "./minisign.mjs";
+import { keyFromSecret, publicKeyFile, signDetached } from "./minisign.mjs";
 import { SECRET_ENV, signDirectory, verifyDirectory } from "./sign.mjs";
 import { writeManifest } from "./updater-manifest.mjs";
 import { PUBLIC_KEY_ASSET } from "./sign-gpg.mjs";
@@ -162,6 +174,58 @@ export function missingUpdaterPlatforms(manifest) {
   return TARGETS.filter((target) => !manifest.platforms[target]);
 }
 
+/**
+ * Where a mirror serves a release's files: the same path shape as GitHub's,
+ * `<base>/releases/download/<tag>/<name>`, under the mirror's public base.
+ */
+export function mirrorDownloadUrl(base, tag, name) {
+  return `${String(base).replace(/\/+$/, "")}/releases/download/${tag}/${encodeURIComponent(name)}`;
+}
+
+/**
+ * The mirror's own `latest.json` (W-MIRROR, external-services §3.3).
+ *
+ * The release's `latest.json` names GitHub for every bundle and feed, so a
+ * client that reached the mirror for the check would still download from
+ * GitHub. This one names the same bytes at the mirror's addresses and is signed
+ * by the same key with the same trusted comment, so it verifies as
+ * `latest.json` wherever it is served. It is written outside the release
+ * directory: it is not a release asset, and `SHA256SUMS` lists the release's
+ * own. `tools/release/mirror.mjs` lays it over the copy it uploads.
+ */
+export function writeMirrorManifest({
+  directory,
+  out,
+  base,
+  version,
+  tag,
+  notes,
+  key,
+  rollout,
+}) {
+  mkdirSync(out, { recursive: true });
+  const output = join(out, "latest.json");
+  const { manifest, skipped } = writeManifest({
+    directory,
+    version,
+    notes,
+    targets: TARGETS,
+    downloadUrl: (name) => mirrorDownloadUrl(base, tag, name),
+    rollout,
+    output,
+  });
+  if (key)
+    writeFileSync(
+      `${output}.sig`,
+      signDetached(
+        key,
+        readFileSync(output),
+        `file:latest.json${version ? ` version:${version}` : ""}`,
+      ),
+    );
+  return { manifest, skipped, path: output };
+}
+
 export async function assemble({
   directory,
   version,
@@ -171,6 +235,7 @@ export async function assemble({
   notes = "",
   secret = process.env[SECRET_ENV],
   rollout,
+  mirror,
 }) {
   const problems = checkNames(directory);
   const download = (name) =>
@@ -224,6 +289,24 @@ export async function assemble({
   problems.push(...(await verifyChecksums(directory)));
   problems.push(...verifyFeeds({ directory, version, manifest }));
 
+  if (mirror?.base && mirror?.out) {
+    const mirrored = writeMirrorManifest({
+      directory,
+      out: mirror.out,
+      base: mirror.base,
+      version,
+      tag,
+      notes,
+      key,
+      rollout,
+    });
+    if (
+      Object.keys(mirrored.manifest.platforms).length !==
+      Object.keys(manifest.platforms).length
+    )
+      problems.push("the mirror's latest.json offers other platforms");
+  }
+
   const compatibility = readCompatibility();
   const unsigned = secret ? [] : ["component packages (no signing key)"];
   if (updaterUnsigned) {
@@ -256,11 +339,30 @@ async function main(argv) {
   const tag = flag(argv, "tag") || `v${version}`;
   if (!directory || !version || !repo) {
     console.error(
-      "usage: node tools/release/assemble.mjs --dir <dir> --version X.Y.Z --repo owner/name [--tag vX.Y.Z] [--unnotarized a,b] [--note file] [--rollout <percent>]",
+      "usage: node tools/release/assemble.mjs --dir <dir> --version X.Y.Z --repo owner/name [--tag vX.Y.Z] [--unnotarized a,b] [--changelog CHANGELOG.md [--require-released] | --notes-from file] [--note file] [--rollout <percent>] [--mirror-base <url> [--mirror-out <dir>]]",
     );
     return 2;
   }
   const notesFile = flag(argv, "notes-from");
+  const changelog = flag(argv, "changelog");
+  if (notesFile && changelog) {
+    console.error("--notes-from and --changelog are two sources; give one");
+    return 2;
+  }
+  let notes = `Armadra ${version}.`;
+  if (notesFile) notes = readFileSync(notesFile, "utf8");
+  if (changelog) {
+    const read = readReleaseNotes({
+      file: resolve(changelog),
+      version,
+      requireReleased: argv.includes("--require-released"),
+    });
+    if (read.problem) {
+      console.error(`✗ ${read.problem}`);
+      return 1;
+    }
+    notes = read.notes;
+  }
   const result = await assemble({
     directory: resolve(directory),
     version,
@@ -270,7 +372,13 @@ async function main(argv) {
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean),
-    notes: notesFile ? readFileSync(notesFile, "utf8") : `Armadra ${version}.`,
+    notes,
+    mirror: flag(argv, "mirror-base")
+      ? {
+          base: flag(argv, "mirror-base"),
+          out: resolve(flag(argv, "mirror-out") || "mirror"),
+        }
+      : undefined,
     rollout: flag(argv, "rollout")
       ? { percent: Number(flag(argv, "rollout")) }
       : undefined,

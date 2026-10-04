@@ -214,6 +214,58 @@ describe("用量的九条路由", () => {
     expect(again.scannedAt).toBe(summary.scannedAt);
   });
 
+  it("Claude 额度关着时快照带本地估算窗口，关掉 claudeLocalWindow 就不带", async () => {
+    // 夹具转录写在测试自己的 CLAUDE_CONFIG_DIR 下，不碰开发机的记录。
+    const projects = join(state.dataDir, "claude/projects/demo");
+    mkdirSync(projects, { recursive: true });
+    writeFileSync(
+      join(projects, "session.jsonl"),
+      `${JSON.stringify({
+        type: "assistant",
+        requestId: "req-local",
+        timestamp: new Date(Date.now() - 10 * 60_000).toISOString(),
+        message: {
+          model: "claude-opus-5",
+          usage: {
+            input_tokens: 120,
+            output_tokens: 80,
+            cache_read_input_tokens: 5000,
+          },
+        },
+      })}\n`,
+    );
+    await json("/api/usage/cost/refresh", "POST");
+    await json("/api/usage/refresh", "POST");
+    const snapshot = await json("/api/usage");
+    const claude = (snapshot.providers as Record<string, unknown>[]).find(
+      (provider) => provider.id === "claude",
+    );
+    expect(claude).toMatchObject({
+      status: "unavailable",
+      reason: "policy_off",
+      windows: [],
+      estimate: {
+        source: "local",
+        windows: [
+          { key: "five_hour", label: "5h", used: 200 },
+          { key: "seven_day", label: "7d", used: 200 },
+        ],
+      },
+    });
+    // 没有目录额度：只报用量。
+    for (const window of (claude!.estimate as { windows: object[] }).windows) {
+      expect(window).not.toHaveProperty("limit");
+    }
+
+    settingsDomain()!.settings.patch({ usage: { claudeLocalWindow: false } });
+    const off = await json("/api/usage");
+    const plain = (off.providers as Record<string, unknown>[]).find(
+      (provider) => provider.id === "claude",
+    );
+    expect(plain?.reason).toBe("policy_off");
+    expect(plain).not.toHaveProperty("estimate");
+  });
+
   it("Copilot 的设备流能走完登录 → 轮询 → 登出", async () => {
     const before = await json("/api/usage/copilot");
     expect(before).toEqual({ signedIn: false, backend: "file" });

@@ -8,7 +8,10 @@ import {
   useT,
   type Translate,
 } from "../app/preferences-store";
+import { formatTokens } from "../lib/cost";
 import {
+  usageEstimatePercent,
+  usageLocalEstimate,
   usagePercent,
   usageReasonKey,
   usageWindowLabel as windowLabel,
@@ -48,10 +51,15 @@ const RING_COLOR: Record<Level, string> = {
   danger: "var(--danger)",
 };
 
-/** 只有 `ok` 与 `error` 上环；`unavailable` 当作这台机器上没有这个 CLI。 */
+/**
+ * 只有 `ok` 与 `error` 上环；`unavailable` 当作这台机器上没有这个 CLI——除非
+ * 它带着本地估算（额度端点按政策关着，契约 §12.1）。
+ */
 function visible(usage: Usage | undefined): UsageProvider[] {
   return (usage?.providers ?? []).filter(
-    (provider) => provider.status !== "unavailable",
+    (provider) =>
+      provider.status !== "unavailable" ||
+      usageLocalEstimate(provider) !== null,
   );
 }
 
@@ -61,6 +69,11 @@ function maxPercent(providers: UsageProvider[], now: number): number | null {
     .filter((provider) => provider.status === "ok")
     .flatMap((provider) =>
       provider.windows.map((w) => usagePercent(provider, w, now)),
+    )
+    .concat(
+      providers.flatMap((provider) =>
+        (usageLocalEstimate(provider) ?? []).map(usageEstimatePercent),
+      ),
     )
     .filter((value): value is number => value !== null);
   return values.length === 0 ? null : Math.max(...values);
@@ -75,6 +88,18 @@ function summary(
   return providers
     .map((provider) => {
       const name = t(`usage.provider.${provider.id}`);
+      const estimate = usageLocalEstimate(provider);
+      if (estimate !== null)
+        return `${name} ${t("usage.estimate.local")} ${estimate
+          .map((w) => {
+            const percent = usageEstimatePercent(w);
+            return `${windowLabel(t, w)} ${
+              percent === null
+                ? t("usage.cost.tokenCount", { value: formatTokens(w.used) })
+                : t("usage.percent", { value: Math.round(percent) })
+            }`;
+          })
+          .join(" ")}`;
       if (provider.status === "error")
         return `${name} ${t("usage.status.error")} · ${t(
           usageReasonKey(provider.reason),

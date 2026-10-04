@@ -12,6 +12,9 @@
 #     ARMADRA_SCOOP_BUCKET，缺省 Owlbay/scoop-bucket）；
 #   - publish-winget：WINGET_TOKEN，wingetcreate 向 microsoft/winget-pkgs 提 PR——
 #     包已在仓库里时 `update`，第一次用渲染好的三件套 `submit`（首次人工审核）。
+#   - mirror：更新镜像（W-MIRROR）。release.yml 的 mirror 作业已把这一版传到桶里
+#     releases/download/v<版本>/；这里把那一版的清单服务端复制到 releases/latest/download/，
+#     镜像的「最新」与 GitHub 的同时变（tools/release/mirror.mjs promote）。缺设置跳过。
 # 预发布与 draft 不进渠道。
 name: distribute
 
@@ -211,3 +214,24 @@ jobs:
             .\wingetcreate.exe submit --token $env:WINGET_TOKEN "rendered/winget/manifests/o/Owlbay/Armadra/$env:VERSION"
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  mirror:
+    needs: render
+    if: needs.render.outputs.stable == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.render.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: 把这一版提为镜像的最新
+        shell: bash
+        env:
+          ARMADRA_MIRROR_ENDPOINT: ${{ vars.CLOUDFLARE_ACCOUNT_ID && format('https://{0}.r2.cloudflarestorage.com', vars.CLOUDFLARE_ACCOUNT_ID) || '' }}
+          ARMADRA_MIRROR_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
+          ARMADRA_MIRROR_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          ARMADRA_MIRROR_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+        run: node tools/release/mirror.mjs promote --version "${{ needs.render.outputs.version }}"
