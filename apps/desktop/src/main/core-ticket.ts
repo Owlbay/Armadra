@@ -65,6 +65,7 @@ export async function issueCoreTicket(options: {
             payload,
           );
   } catch (error) {
+    if (error instanceof NativeTicketError) throw error;
     throw new NativeTicketError(
       (error as NodeJS.ErrnoException).code === "ETIMEDOUT"
         ? "timeout"
@@ -199,7 +200,8 @@ function requestOverIpc(payload: {
 }): Promise<{ status: number; body: string }> {
   const child = ticketChild;
   if (child === undefined || !child.connected || child.send === undefined) {
-    return Promise.reject(new Error("no IPC channel to the core"));
+    // 不是这个壳起的 core：说清楚，页面据此提示重开应用，而不是静默 401。
+    return Promise.reject(new NativeTicketError("channelUnavailable"));
   }
   const id = nextTicketId++;
   return new Promise((resolve, reject) => {
