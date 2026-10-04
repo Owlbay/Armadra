@@ -63,9 +63,9 @@ import { fromJson, toJson, type MessageDesc } from "../contract/message";
 
 import {
   bearerCredential,
+  anonymousLoopbackOwner,
   credential,
   csrfRequired,
-  nativeRequest,
 } from "../identity/http";
 import { IdentityError } from "../identity/errors";
 import type { IdentityService } from "../identity/service";
@@ -372,10 +372,10 @@ export class GithubHttp {
    *
    *   1. **工作空间跟着查询串走**。一次调用可以说它想操作哪个工作空间，不能说它
    *      有什么权限——那仍然只来自会话。
-   *   2. **明文回环上的无凭据调用按本机主人处理**（{@link IdentityService.localOwner}）。
-   *      页面经 `apps/web/src/api/request.ts` 打这一面，而桌面壳的会话是原生的，
-   *      密钥在壳里：既不发 Cookie，也到不了那个 `fetch`。TLS 的服务器壳上这条
-   *      路不存在，凭据仍然是必须的。
+   *   2. **明文回环上的无凭据调用只在 core 显式打开时按本机主人处理**
+   *      （{@link IdentityService.localOwner}，`ARMADRA_LOOPBACK_OWNER=1`，只给
+   *      探针与开发命令起的裸 core）。桌面壳的页面带着票据换来的 Bearer
+   *      （`apps/web/src/api/request.ts`）；两种壳都不开这条路（安全审查 L9）。
    */
   private caller(request: CoreRequest, method: GithubMethod): Caller {
     const origin = header(request, "origin");
@@ -391,7 +391,7 @@ export class GithubHttp {
     const rule = PERMISSIONS[method];
     const identity = this.options.identity;
     const token = credential(request, identity.hostId(), "access");
-    if (token === "" && nativeRequest(request)) {
+    if (anonymousLoopbackOwner(request, token)) {
       const owner = identity.localOwner();
       if (owner === undefined) throw new IdentityError("unauthenticated");
       return { ...owner, workspaceId };

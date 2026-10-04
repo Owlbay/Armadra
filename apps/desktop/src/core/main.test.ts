@@ -24,6 +24,7 @@ import { install as installGithub } from "./github";
 import { install as installMail } from "./mail";
 import { install as installDiagnostics } from "./diagnostics";
 import { read } from "./endpoints";
+import { loopbackAnonymousOwner } from "./identity/http";
 import { ROUTES } from "./http/routes";
 import { selfGuarded } from "./http/route-scopes";
 import { parseAnnouncement, VERSION } from "./instance";
@@ -190,6 +191,43 @@ describe("the core process", () => {
       version: "0.1.0",
     });
     expect(seen).toEqual({ instanceId: core.instanceId, version: "0.1.0" });
+  });
+
+  // 安全审查 L9：回环匿名不再按本机主人处理。缺省关；裸 core 用环境变量显式
+  // 打开；壳传的选项优先于环境（服务器壳传 false，环境里有也不开）。
+  it("回环匿名按主人缺省关，ARMADRA_LOOPBACK_OWNER=1 才开，选项优先", async () => {
+    const env = {
+      ARMADRA_CORE_MIGRATIONS_DIR: migrationsDir,
+      ARMADRA_LOG: "error",
+    };
+    const plain = await start(temporary());
+    expect(loopbackAnonymousOwner()).toBe(false);
+    const refused = await fetch(
+      `${base(plain.core)}/api/automations/plans?workspaceId=ws`,
+      { headers: { origin: "http://127.0.0.1:1420" } },
+    );
+    expect(refused.status).toBe(401);
+    await plain.core.stop();
+    running.splice(running.indexOf(plain.core), 1);
+
+    const opened = await run({
+      argv: ["--listen", "tcp:127.0.0.1:0", "--data-dir", temporary()],
+      env: { ...env, ARMADRA_LOOPBACK_OWNER: "1" },
+      stdout: () => {},
+    });
+    running.push(opened);
+    expect(loopbackAnonymousOwner()).toBe(true);
+    await opened.stop();
+    running.splice(running.indexOf(opened), 1);
+
+    const pinned = await run({
+      argv: ["--listen", "tcp:127.0.0.1:0", "--data-dir", temporary()],
+      env: { ...env, ARMADRA_LOOPBACK_OWNER: "1" },
+      stdout: () => {},
+      loopbackAnonymousOwner: false,
+    });
+    running.push(pinned);
+    expect(loopbackAnonymousOwner()).toBe(false);
   });
 
   it("prints usage for --help and starts nothing", async () => {

@@ -8,6 +8,7 @@ import { absorbHostDatabase } from "./db/absorb-host";
 import { DatabaseRefused, type OpenedDatabase, openDatabase } from "./db/open";
 import { resolveMigrationsDir } from "./db/migrations";
 import { installIdentity } from "./identity";
+import { setLoopbackAnonymousOwner } from "./identity/http";
 import { install as installHooks } from "./hook";
 import { hookService } from "./hook/service";
 import {
@@ -108,6 +109,12 @@ export interface RunOptions {
     isPackaged: boolean;
     log: ReturnType<typeof createLog>;
   }) => CorePlatform;
+  /**
+   * 明文回环上没带凭据的调用按本机主人处理（契约 §3.2，安全审查 L9）。缺省
+   * `false`；不给时读 `ARMADRA_LOOPBACK_OWNER=1`——只有探针与开发命令起的裸
+   * core 这么开。桌面壳不传、也不把这个变量带给 core，服务器壳显式传 `false`。
+   */
+  readonly loopbackAnonymousOwner?: boolean;
 }
 
 /**
@@ -298,6 +305,9 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
     platform,
     log,
   };
+  setLoopbackAnonymousOwner(
+    options.loopbackAnonymousOwner ?? env.ARMADRA_LOOPBACK_OWNER === "1",
+  );
   for (const install of options.domains ?? DOMAINS) install(context);
   // Captured here rather than read at shutdown: the accessor is a module-level
   // singleton, so a second core started in the same process would otherwise be

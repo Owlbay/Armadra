@@ -198,11 +198,11 @@ export class IdentityService {
   /**
    * 本机主人，带上它当前那台设备。
    *
-   * 给 `/api/` 那张 JSON 面用（R7a）。那一面由页面经普通 `fetch` 打，页面手上
-   * 没有会话密钥——桌面壳的会话是**原生**的，密钥在壳里，既不发 Cookie 也进不了
-   * `apps/web/src/api/request.ts`。所以在**明文 + 回环来源**（`nativeRequest`）
-   * 上，没带凭据的一次调用按「它就是本机的壳」处理，和 core 里其余 `/api/`
-   * 路由的判定入口（`core/identity/gate.ts`，对 owner 恒真）一致。
+   * 给 GitHub 与自动化两张 JSON 面用（契约 §3.2）：只在 core 显式打开
+   * `loopbackAnonymousOwner`（`ARMADRA_LOOPBACK_OWNER=1`，探针与开发命令起的
+   * 裸 core）时，明文回环上没带凭据的一次调用才按本机主人处理
+   * （`identity/http.ts::anonymousLoopbackOwner`）。桌面壳的页面带票据换来的
+   * Bearer，两种壳都不开这条路（安全审查 L9）。
    *
    * 三条边界：只在原生请求上用（TLS 的服务器壳仍然必须带凭据）；必须真有一台
    * 没被撤销的设备——自动化的授权记录要拿它的 epoch 复核，一个编出来的设备标识

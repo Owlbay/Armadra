@@ -94,6 +94,40 @@ export function csrfRequired(request: CoreRequest): boolean {
   return !nativeRequest(request);
 }
 
+/**
+ * 明文回环上没带凭据的一次调用，要不要按本机主人处理（契约 §3.2，安全审查 L9）。
+ *
+ * 缺省**不**：自 0.3.0 起桌面壳的页面经票据换来的 Bearer 打这两面（GitHub、
+ * 自动化），本机另一个回环端口上的网页再也冒充不了主人。只有探针与开发命令
+ * 起的裸 core（页面不在壳里、拿不到票）经 `ARMADRA_LOOPBACK_OWNER=1` 显式打开；
+ * 桌面壳与服务器壳都不开（`core/main.ts` 的 `loopbackAnonymousOwner`）。
+ */
+let loopbackOwner = false;
+
+export function setLoopbackAnonymousOwner(enabled: boolean): void {
+  loopbackOwner = enabled;
+}
+
+export function loopbackAnonymousOwner(): boolean {
+  return loopbackOwner;
+}
+
+/**
+ * 这次调用走不走「按本机主人」那条路：选项打开、明文回环来源、一个凭据都没带。
+ * Gateway 标过的 Bearer 模式请求永远不算——那是经网络来的原生 App。
+ */
+export function anonymousLoopbackOwner(
+  request: CoreRequest,
+  token: string,
+): boolean {
+  return (
+    loopbackOwner &&
+    token === "" &&
+    !bearerTransports.has(request.raw) &&
+    nativeRequest(request)
+  );
+}
+
 export function isSecure(request: CoreRequest): boolean {
   return (request.raw.socket as { encrypted?: boolean }).encrypted === true;
 }

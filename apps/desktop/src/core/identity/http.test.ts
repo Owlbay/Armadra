@@ -8,8 +8,12 @@ import {
   BROWSER_SESSION_CAPABILITY,
   IdentityHttp,
   NATIVE_SESSION_CAPABILITY,
+  anonymousLoopbackOwner,
   bearerCredential,
   cookieName,
+  loopbackAnonymousOwner,
+  markBearerTransport,
+  setLoopbackAnonymousOwner,
 } from "./http";
 import { MAX_FRAME_BYTES, PROTOCOL_MAJOR, PROTOCOL_MINOR } from "./protocol";
 import { allScopes } from "./scopes";
@@ -395,5 +399,58 @@ describe("reading a credential off a request", () => {
     expect(cookieName("abc", true, "refresh")).toBe(
       "__Host-armadra_abc_refresh",
     );
+  });
+});
+
+/**
+ * 安全审查 L9：明文回环上没带凭据的调用原来按本机主人处理（契约 §3.2），本机
+ * 另一个回环端口上的网页因此能冒充主人。缺省关掉，只有裸 core 显式打开。
+ */
+describe("回环匿名", () => {
+  afterEach(() => setLoopbackAnonymousOwner(false));
+
+  const request = (
+    origin: string | undefined,
+    options: { encrypted?: boolean } = {},
+  ): CoreRequest =>
+    ({
+      headers: origin === undefined ? {} : { origin },
+      raw: { socket: { encrypted: options.encrypted === true } },
+    }) as unknown as CoreRequest;
+
+  it("缺省不按本机主人：回环匿名一律落到认证，答 401", () => {
+    expect(loopbackAnonymousOwner()).toBe(false);
+    expect(anonymousLoopbackOwner(request("http://127.0.0.1:1420"), "")).toBe(
+      false,
+    );
+    expect(anonymousLoopbackOwner(request("http://localhost:5173"), "")).toBe(
+      false,
+    );
+  });
+
+  it("显式打开后只认明文回环来源上一个凭据都没带的调用", () => {
+    setLoopbackAnonymousOwner(true);
+    expect(anonymousLoopbackOwner(request("http://127.0.0.1:1420"), "")).toBe(
+      true,
+    );
+    // 带了凭据就照常认证，不管凭据对不对。
+    expect(
+      anonymousLoopbackOwner(request("http://127.0.0.1:1420"), "token"),
+    ).toBe(false);
+    // 没有 Origin、HTTPS 来源、TLS 连接：都不是「本机的页面」。
+    expect(anonymousLoopbackOwner(request(undefined), "")).toBe(false);
+    expect(anonymousLoopbackOwner(request("https://armadra.test"), "")).toBe(
+      false,
+    );
+    expect(
+      anonymousLoopbackOwner(
+        request("http://127.0.0.1:1420", { encrypted: true }),
+        "",
+      ),
+    ).toBe(false);
+    // Gateway 标过的 Bearer 模式请求是经网络来的原生 App。
+    const viaGateway = request("http://127.0.0.1:1420");
+    markBearerTransport(viaGateway.raw);
+    expect(anonymousLoopbackOwner(viaGateway, "")).toBe(false);
   });
 });
