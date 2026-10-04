@@ -11,7 +11,7 @@ import { startCherryPick } from "./cherrypick";
 import { ensureIntegrationIdle } from "./integration";
 import { resumeIntegration, startMerge } from "./merge";
 import { startInteractiveRebase, startRebase } from "./rebase";
-import { fastForwardPull, pushArguments, sync } from "./remotes";
+import { fastForwardPull, fetchPullHead, pushArguments, sync } from "./remotes";
 import {
   type Operation,
   RepositoryService,
@@ -304,11 +304,14 @@ export async function execute(
       const target = newWorktreePath(context, action.path);
       const args = ["worktree", "add"];
       if (action.createBranch) {
-        const oid = await service.resolve(
-          context.repository,
-          action.startPoint ?? "HEAD",
-          signal,
-        );
+        // A fork's pull request: fetched only now that the checkout runs.
+        const oid = action.pullHead
+          ? await fetchPullHead(service, context, action.pullHead, operation)
+          : await service.resolve(
+              context.repository,
+              action.startPoint ?? "HEAD",
+              signal,
+            );
         args.push("--no-track", "-b", action.branch, "--", target, oid);
       } else {
         if (action.startPoint !== null) {
