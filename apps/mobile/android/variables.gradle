@@ -17,5 +17,8 @@ ext {
     bouncyCastleVersion = '1.86'
     firebaseMessagingVersion = '25.1.3'
     playServicesCodeScannerVersion = '16.1.0'
+    // UnifiedPush（契约 §27.2）：没有 Google 服务的手机经用户自己的分发器收推送。
+    unifiedPushConnectorVersion = '3.3.5'
+    tinkAndroidVersion = '1.23.0'
     androidxTestRunnerVersion = '1.7.0'
 }

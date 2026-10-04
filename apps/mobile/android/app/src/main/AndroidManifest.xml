@@ -26,7 +26,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- 深链：armadra://pair?host=…&ticket=…&fp=… 与 armadra://w/<工作空间>/n/<节点> -->
+            <!-- 深链：armadra://pair?host=…&ticket=…&fp=…、armadra://w/<工作空间>/n/<节点> 与 armadra://oauth?state=…&code=… -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -41,6 +41,15 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- UnifiedPush：分发器（自托管 ntfy 等）交来的端点与消息（契约 §27.2）。 -->
+        <service
+            android:name=".ArmadraUnifiedPushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
             </intent-filter>
         </service>
 
