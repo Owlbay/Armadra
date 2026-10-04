@@ -572,9 +572,8 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   `features.configOptions`）生效；SSH 节点不能切到 ACP（`acp_unsupported`）。
   六家真适配器的端到端探针已备（`agent-e2e` 场景 12，C 档），还没有真跑。
 - **Gateway / 手机**：配对是两分钟票（二维码 / 链接），私网档位上另有 8 位配对码（契约 §24）；设备表没有
-  「平台」「最近访问」；推送中继写完不部署；UnifiedPush 已接（契约 §27.2），
-  Android App 侧接分发器的原生代码未做；真机、商店与
-  真 APNs / FCM 都要用户的账号。
+  「平台」「最近访问」；推送中继写完不部署；UnifiedPush 已接（契约 §27.2，Android App 装了分发器时
+  向它要端点）；真机、商店与真 APNs / FCM 都要用户的账号。
 - **安全审查的低危项**：页面上口令策略拒绝码与 `warn` 档的提示、GitHub / 自动化两面对 Bearer 写仍要 CSRF 等，见[安全审查](../status/security-review-2026-10.md) §3。
 - **外部服务里留到之后的三项**：W-MAIL（SMTP）、W-FORGE（GitLab / Gitea）、W-MIRROR（更新镜像），
   见[外部服务](../design/external-services.md) §15。

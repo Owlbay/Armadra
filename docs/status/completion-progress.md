@@ -1439,7 +1439,7 @@
 - 真提供方走完整个系统浏览器流程没有在模拟器里跑：模拟器里的浏览器不信本地 CA，回调页打不开。core 一侧由 `oauth.test` 对假 issuer 走完，App 一侧由深链 e2e 覆盖。真机需要用户的提供方与证书（§4 B 档）。
 - App 里没有会话时，OAuth 登录若走到第二因素（`mfa`），入口会回到连接页，第二步接不上。现在原生 App 都是先配对、带着会话再登录或绑定，暂不受影响。
 - 编辑器里文件的「下载」链接仍是 `<a href>`，不带 Bearer。
-- UnifiedPush 要等 G5-10（#93）合入后才能端到端用上：core 在那之前不认 `unifiedpush` 登记，App 登记会失败，提示「开启失败」。
+- UnifiedPush 的 App 一侧没有在模拟器里对真分发器跑过（模拟器上没有装 ntfy App）；core 一侧由 G5-10 的 `push-e2e` 对 push-sink 与真 ntfy 验过，App 交的登记形状与它一致。
 - iOS 不做 UnifiedPush。
 
 ## G5-23 零碎界面与 G2-2 遗留（R-43、R-71、R-72 其余）
