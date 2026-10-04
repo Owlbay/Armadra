@@ -989,7 +989,20 @@
 
 ## G5-11 实时协同补充（R-44、R-45、R-46）
 
-待填（第 1 组）。
+**做了什么**
+
+- awareness 加 `viewport { x, y, zoom }`：视口**中心**的画布坐标与缩放（用中心而不是 React Flow 的平移量，窗口大小不同也对得上同一块地方）。共享层 `awarenessStateSchema` 与 core `realtime/awareness.ts` 同步校验（有限数，`zoom` 在 `AWARENESS_LIMITS.minZoom..maxZoom` = `0.01..100`），两边上限由 `awareness.test` 守。契约 §16.4 表格加一行、末尾加一句。
+- 页面 `realtime/awareness.ts`：光标与视口共用一个节流器，视口 100ms；`realtime/viewport.ts`：本机存取（`armadra.realtimeViewport.<boardId>`，坏数据当没存过）、中心换算、跟随目标（有视口跟视口，没有退回光标）。
+- `realtime/session.ts`：开实时时换成本机记着的视口，之后 store 里的视口每变一次写回本机；第一次同步后先报一次当前视口。`CursorLayer` 随相机变化报视口；跟随时 `setCenter(对方中心, { zoom: 对方缩放, duration: 120 })`，对方没报视口时退回跟光标且不改缩放；跟随中在 React Flow 根元素上描一圈 2px 对方成员色（`FollowFrame`，经 portal，屏幕坐标）。
+- 他人选区：`wb:` 项按白板 item 的包围盒画虚线外框（在 Frame 里的加上 Frame 的绝对位置），与节点共用一圈套一圈的规则。
+- 展示页 `collab` 分区加 `follow-viewport` 样本（在线条处于跟随 + 描边）。没有新文案。
+
+**实测**（macOS arm64）
+
+- 单测：web `realtime/` 10 个文件 72 例（新增 `viewport.test`：本机存取、中心换算、跟随目标、开板恢复与「刷新」后视口不变；`CursorLayer.test`：`wb:` 外框与 Frame 偏移、跟随视口 / 退回光标 / 人走停止、描边出现与消失；`awareness.test`：视口节流与夹缩放、经 awareness 送达）；core `awareness.test` 与共享层 `api-realtime.test` 加视口的正反例。
+- `realtime-e2e` 本地通过，新增两步：「B 跟随 A 的视口」（A ⌘/Ctrl+滚轮缩放并平移，B 的中心与缩放对上，画布描边）与「刷新后视口不变」（本机记着、刷新后回到原位且 1.5 秒后仍不变、core 里的视口还是 `{0,0,1}`）。
+
+**没做**：手动平移不会自动取消跟随（仍由在线条头像切换）；视口不跨设备同步（按设计只在本机）。
 
 ## G5-12 评论补充（R-47、R-48、R-49）
 
