@@ -23,7 +23,8 @@ import {
  * 两处都没有就不加载 `@sentry/node`、什么都不发。
  *
  * 只报 JS 错误：core 经 `platform.reportError` 交来的（请求处理里没人接住的、
- * 进程级没人接住的）。不开性能追踪、不开 OpenTelemetry、不开会话、不带请求数据；
+ * 进程级没人接住的，以及页面经 `POST /api/diagnostics/client-error` 交来、
+ * core 已剥离过的那些——来源标签 `page`，契约 §30）。不开性能追踪、不开 OpenTelemetry、不开会话、不带请求数据；
  * 每条事件发出前过 `beforeSend` 剥离。进程级的异常在照旧退出之前等最多两秒把
  * 事件送走。
  */

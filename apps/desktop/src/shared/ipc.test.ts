@@ -67,6 +67,8 @@ describe("the IPC table", () => {
         "browser:clear-data",
         // G2-7: the tray's external-access item re-reads after the page.
         "app:gateway-refresh",
+        // G5-19: the page's own JS errors, opt-in (contract §30).
+        "diagnostics:report",
       ].sort(),
     );
   });
@@ -115,6 +117,8 @@ describe("the IPC table", () => {
     expect([...domains].sort()).toEqual([
       "app",
       "browser",
+      // G5-19 adds one domain beyond §2.2: the page's opt-in error report.
+      "diagnostics",
       "dialog",
       "identity",
       "shell",

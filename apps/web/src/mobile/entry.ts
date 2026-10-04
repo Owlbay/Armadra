@@ -1,4 +1,5 @@
 import {
+  IdentityRequestError,
   currentAccessToken,
   fetchWsTicket,
   hasPairingFragment,
@@ -74,6 +75,26 @@ function refreshOnce(): Promise<boolean> {
 }
 
 /**
+ * 换一张 WS 票；访问密钥过期（401）时轮转一次再换。长连接在访问密钥到期时被
+ * core 以 4401 关掉（契约 §17.4），重连要先换票——不刷新就一直换不到。
+ */
+export async function ticketWithRefresh(
+  fetchTicket: () => Promise<string>,
+  refresh: () => Promise<boolean>,
+): Promise<string> {
+  try {
+    return await fetchTicket();
+  } catch (error) {
+    if (
+      !(error instanceof IdentityRequestError && error.status === 401) ||
+      !(await refresh())
+    )
+      throw error;
+    return fetchTicket();
+  }
+}
+
+/**
  * 挂载之前决定入口（`main.tsx`）。桌面窗口与普通网页一个分支都不进，直接是
  * 画布——不发请求、不等任何东西。
  *
@@ -99,7 +120,7 @@ export async function prepareEntry(): Promise<Entry> {
     installNativeTransport({
       origin,
       authorization: currentAccessToken,
-      wsTicket: fetchWsTicket,
+      wsTicket: () => ticketWithRefresh(fetchWsTicket, refreshOnce),
       refresh: refreshOnce,
     });
     return (await restoreNativeCredentials())

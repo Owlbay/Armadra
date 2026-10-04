@@ -76,6 +76,9 @@ const TOKEN_PATTERNS: readonly RegExp[] = [
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\bAIza[0-9A-Za-z_-]{30,}/g,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+  // Armadra 自己的会话 / 刷新 / 配对票：`<32 位十六进制>.<43 位 base64url>`
+  // （`identity/tokens.ts::parseToken`）。安全审查 L6。
+  /\b[0-9a-f]{32}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g,
 ];
 /** 带标签的值：标签留下，值换掉。 */
 const LABELLED_PATTERNS: readonly RegExp[] = [
@@ -96,6 +99,8 @@ const USER_PATHS: readonly [RegExp, string][] = [
 /** 地址里的 `user:pass@` 与查询串。 */
 const URL_USERINFO = /\b([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi;
 const URL_QUERY = /\b([a-z][a-z0-9+.-]*:\/\/[^\s?#"'`]+)\?[^\s#"'`]*/gi;
+/** 地址的片段：页面把配对票放在 `#pair=` 里。 */
+const URL_FRAGMENT = /\b([a-z][a-z0-9+.-]*:\/\/[^\s#"'`]+)#[^\s"'`]+/gi;
 
 /** 一个字符串的剥离。 */
 export function scrubText(
@@ -116,6 +121,7 @@ export function scrubText(
   }
   out = out.replace(URL_USERINFO, "$1[redacted]@");
   out = out.replace(URL_QUERY, "$1?[redacted]");
+  out = out.replace(URL_FRAGMENT, "$1#[redacted]");
   for (const pattern of TOKEN_PATTERNS)
     out = out.replace(pattern, "[redacted]");
   for (const pattern of LABELLED_PATTERNS) {
@@ -319,6 +325,24 @@ export function dsnFromSettings(
   }
 }
 
+/**
+ * 设置文档里的 `diagnostics.reportPageErrors`（G5-19，契约 §30）：只有字面量
+ * `true` 算开，读不出、不是布尔都按关。
+ */
+export function pageErrorsFromSettings(
+  text: string | Uint8Array | null,
+): boolean {
+  if (text === null) return false;
+  try {
+    const document = JSON.parse(
+      typeof text === "string" ? text : Buffer.from(text).toString("utf8"),
+    ) as { diagnostics?: { reportPageErrors?: unknown } };
+    return document?.diagnostics?.reportPageErrors === true;
+  } catch {
+    return false;
+  }
+}
+
 /** DSN 的主机，日志里只写它，不写公钥。 */
 export function dsnHost(dsn: string): string {
   try {
@@ -336,7 +360,7 @@ export const CRASH_REPORT_MESSAGE = "armadra.crashReport";
 export const CRASH_REPORT_ENV = "ARMADRA_CRASH_REPORT_IPC";
 
 /** 错误从哪里来。只有这几个固定值进事件，别的上下文一概不带。 */
-export const ERROR_SOURCES = ["http", "uncaught", "domain"] as const;
+export const ERROR_SOURCES = ["http", "uncaught", "domain", "page"] as const;
 export type ErrorSource = (typeof ERROR_SOURCES)[number];
 
 export interface CrashReportMessage {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { useAccess } from "../../../app/use-access";
+import { refreshPageErrorReporting } from "../../../diagnostics/report";
 import {
   THEME_PREFERENCES,
   usePreferencesStore,
@@ -189,6 +190,7 @@ function DiagnosticsGroup() {
   const t = useT();
   const { settings, save } = useRuntimeSettings();
   const saved = settings.data?.diagnostics?.crashReportDsn ?? "";
+  const pageErrors = settings.data?.diagnostics?.reportPageErrors === true;
   const [opened, setOpened] = useState(false);
   const [draft, setDraft] = useState(saved);
   useEffect(() => setDraft(saved), [saved]);
@@ -240,6 +242,20 @@ function DiagnosticsGroup() {
             onKeyDown={(event) => {
               if (event.key === "Enter") commit();
             }}
+          />
+        </SettingsRow>
+      )}
+      {saved !== "" && (
+        <SettingsRow label={t("diagnostics.pageErrors")}>
+          <Switch
+            checked={pageErrors}
+            aria-label={t("diagnostics.pageErrors")}
+            onCheckedChange={(next) =>
+              save.mutate(
+                { diagnostics: { reportPageErrors: next } },
+                { onSuccess: refreshPageErrorReporting },
+              )
+            }
           />
         </SettingsRow>
       )}

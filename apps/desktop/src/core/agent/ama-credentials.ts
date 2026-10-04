@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import type { CoreServer } from "../http/server";
 import type { HandlerResult, RouteMatch, CoreRequest } from "../http/router";
 import {
@@ -137,17 +138,69 @@ export class AmaCredentials {
   /**
    * The set keys as the variables ama reads — for the hook surface's
    * `/credential/ama` and nothing else. A value with a line break cannot be
-   * one `NAME=value` line and is left out.
+   * one `NAME=value` line and is left out. `only` narrows the answer to the
+   * providers the node uses (security review L10); absent, every set key.
    */
-  async variables(): Promise<AmaKeyVariable[]> {
+  async variables(only?: readonly AmaKeyProvider[]): Promise<AmaKeyVariable[]> {
     await this.load();
     const out: AmaKeyVariable[] = [];
     for (const provider of AMA_KEY_PROVIDERS) {
+      if (only !== undefined && !only.includes(provider)) continue;
       const value = this.keys.get(provider);
       if (value === undefined || /[\r\n\0]/.test(value)) continue;
       out.push({ variable: amaKeyVariable(provider), value });
     }
     return out;
+  }
+}
+
+/**
+ * Which keys one ama node may redeem, read from its model on the canvas
+ * (`agent.model`, contract §12.4): ama names a model `<provider>/<model>`, so
+ * the node gets that provider's key and no other (security review L10). A
+ * provider that takes no key here (`ollama`, `chatgpt`, a custom one from
+ * ama's own config) gets none. A node without a model lets ama pick its
+ * default from whichever keys are set, so it still gets every key —
+ * `unscoped`, which the hook surface audits.
+ */
+export type AmaKeyScope =
+  | { readonly kind: "provider"; readonly providers: readonly AmaKeyProvider[] }
+  | { readonly kind: "unscoped" };
+
+export function amaKeyScope(model: unknown): AmaKeyScope {
+  let provider: unknown;
+  if (typeof model === "string") {
+    const slash = model.indexOf("/");
+    provider = slash > 0 ? model.slice(0, slash) : undefined;
+  } else if (typeof model === "object" && model !== null) {
+    provider = (model as { provider?: unknown }).provider;
+  }
+  if (typeof provider !== "string" || provider.trim() === "") {
+    return { kind: "unscoped" };
+  }
+  const id = provider.trim().toLowerCase();
+  return { kind: "provider", providers: isAmaKeyProvider(id) ? [id] : [] };
+}
+
+/** The node's `agent.model` as persisted (a string, or JSON for an object). */
+export function persistedAmaModel(
+  database: DatabaseSync,
+  nodeId: string,
+): unknown {
+  try {
+    const row = database
+      .prepare(
+        "SELECT json_extract(data_json, '$.agent.model') AS model, " +
+          "json_type(data_json, '$.agent.model') AS type FROM nodes WHERE id = ?",
+      )
+      .get(nodeId) as unknown as { model: unknown; type: unknown } | undefined;
+    if (row === undefined || row.model === null) return undefined;
+    if (row.type === "object" && typeof row.model === "string") {
+      return JSON.parse(row.model) as unknown;
+    }
+    return row.model;
+  } catch {
+    return undefined;
   }
 }
 

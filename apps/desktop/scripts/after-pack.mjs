@@ -160,10 +160,18 @@ export function bundleResources(platformName) {
     },
   ];
   if (platformName === "win32")
-    resources.push({
-      from: "out/session-host/host.cjs",
-      to: "session-host/host.cjs",
-    });
+    resources.push(
+      {
+        from: "out/session-host/host.cjs",
+        to: "session-host/host.cjs",
+      },
+      // What build/installer.nsh runs before it replaces or removes the
+      // executable a leftover host is running on.
+      {
+        from: "out/session-host/shutdown-if-idle.cjs",
+        to: "session-host/shutdown-if-idle.cjs",
+      },
+    );
   return resources;
 }
 

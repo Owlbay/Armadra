@@ -7,6 +7,7 @@ import {
   dsnFromSettings,
   errorFromMessage,
   isCrashReportMessage,
+  pageErrorsFromSettings,
   parseDsn,
   scrubBreadcrumb,
   scrubContext,
@@ -254,5 +255,52 @@ describe("core → 壳的消息", () => {
       }),
     ).toBe(false);
     expect(isCrashReportMessage({ type: "secrets" })).toBe(false);
+  });
+});
+
+describe("Armadra 自己的形状（安全审查 L6）", () => {
+  const empty = scrubContext({}, "");
+  const session = `${"0f".repeat(16)}.${"AbC_-x".repeat(7)}Z`;
+
+  it("会话 / 刷新 / 配对票 `<32 位十六进制>.<43 位 base64url>` 整段换掉", () => {
+    expect(session).toHaveLength(76);
+    expect(scrubText(`refresh ${session} expired`, empty)).toBe(
+      "refresh [redacted] expired",
+    );
+    expect(scrubText(`"${session}"`, empty)).toBe('"[redacted]"');
+    // 不是这个形状的不动：短一位、十六进制段不是小写十六进制。
+    const shorter = session.slice(0, -1);
+    expect(scrubText(shorter, empty)).toBe(shorter);
+    const upper = `${"0F".repeat(16)}.${"A".repeat(43)}`;
+    expect(scrubText(upper, empty)).toBe(upper);
+  });
+
+  it("地址片段（`#pair=` 配对票）换掉", () => {
+    expect(
+      scrubText("open https://gw.test:8443/#pair=abc&fp=def now", empty),
+    ).toBe("open https://gw.test:8443/#[redacted] now");
+  });
+
+  it("页面来源是一个合法的错误来源", () => {
+    const message = crashReportMessage(new Error("x"), "page", empty);
+    expect(isCrashReportMessage(message)).toBe(true);
+  });
+});
+
+describe("pageErrorsFromSettings", () => {
+  it("只有字面量 true 算开", () => {
+    expect(
+      pageErrorsFromSettings(
+        JSON.stringify({ diagnostics: { reportPageErrors: true } }),
+      ),
+    ).toBe(true);
+    expect(
+      pageErrorsFromSettings(
+        JSON.stringify({ diagnostics: { reportPageErrors: "true" } }),
+      ),
+    ).toBe(false);
+    expect(pageErrorsFromSettings("{}")).toBe(false);
+    expect(pageErrorsFromSettings("not json")).toBe(false);
+    expect(pageErrorsFromSettings(null)).toBe(false);
   });
 });

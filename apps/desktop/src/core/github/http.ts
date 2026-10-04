@@ -61,7 +61,12 @@ import {
 } from "./schema";
 import { fromJson, toJson, type MessageDesc } from "../contract/message";
 
-import { bearerCredential, credential, nativeRequest } from "../identity/http";
+import {
+  bearerCredential,
+  credential,
+  csrfRequired,
+  nativeRequest,
+} from "../identity/http";
 import { IdentityError } from "../identity/errors";
 import type { IdentityService } from "../identity/service";
 import { scope } from "../identity/scopes";
@@ -396,7 +401,8 @@ export class GithubHttp {
       hostId: identity.hostId(),
       origin,
       csrfToken: header(request, "x-armadra-csrf") ?? "",
-      requireCsrf: rule.mutating,
+      // 写只在 Cookie 会话上核 CSRF；Bearer 不是环境凭据（契约 §17.4，安全审查 L8）。
+      requireCsrf: rule.mutating && csrfRequired(request),
       requiredScopes: [scope(rule.permission, workspaceId, hostId)],
     });
     return {

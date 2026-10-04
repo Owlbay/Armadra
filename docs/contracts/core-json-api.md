@@ -57,7 +57,7 @@ R7a 之前 GitHub 与自动化两块面板走的是 `/rpc/armadra.v1.*`：二进
 `/api/github/*` 与 `/api/automations/*` 都要求：
 
 - 恰好一个 `Origin` 头；
-- 写操作要 `X-Armadra-CSRF`（至多一个）；
+- 写操作在 Cookie 会话上要 `X-Armadra-CSRF`（至多一个）；`Authorization: Bearer` 传输（桌面壳的原生传输、Gateway 上的原生 App）不核，与 §17.4、§18 同一条规则（`core/identity/http.ts::csrfRequired`，安全审查 L8）；
 - 一份会话凭据——原生传输（明文 + 回环来源）读 `Authorization: Bearer`，浏览器会话读 Cookie。
 
 **明文回环上没带凭据的一次调用按本机主人处理**（`core/identity/service.ts` 的 `localOwner`）。桌面壳的会话是原生的，密钥在壳里，既不发 Cookie 也到不了 `apps/web/src/api/request.ts` 的那个 `fetch`；而那台壳就在同一台机器上。TLS 的服务器壳上这条路不存在，凭据仍然是必须的。主人必须是一台**没被撤销的真设备**——自动化的授权记录要拿它的 epoch 复核，一个编出来的设备标识会让计划在第一次投递时被自己的复核拒掉。
@@ -492,6 +492,7 @@ G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：�
 - 答复**从不带值**，只有每家是否已设与后端（`keychain` / `dpapi` / `libsecret` / `file-encrypted` / `file`）。供应商列表由 core 给（ama 需要 key 的内置供应商），页面不自己列；不在列表里的 `provider` 答 `400 bad_request`，`apiKey` 不是非空单行也是 `400`；密钥后端打不开答 `503 secret_unavailable`。
 - 每家一条密钥条目 `armadra-ama-<provider>`，这是值唯一的落点。不写任何 key 文件，profile 没有 `authFile`（ama 自己用户级的 `auth.json` 与登录照常可用）。
 - 怎么到 ama：与节点凭据（§20.4）同一条兑换路。画布启动器 `run/ama` 在 `ARMADRA_NODE_ID` 门之后调 `armadra-hook credential --ama`，后者带节点 token 经本机 hook 通道 `POST /credential/ama`（体 `{ "nodeId": "…" }`）兑换；门与 `/credential` 相同（应用 bearer、节点 token 必须验过），外加节点在画布上是 ama（或以它为基础的自定义 Agent），否则 `403 forbidden`；密钥后端打不开 `503 secret_unavailable`。答复 `{ "variables": [{ "variable": "AMA_API_KEY_DEEPSEEK", "value": "…" }] }`，带 `cache-control: no-store`、不记日志。启动器只认 `AMA_API_KEY_<供应商>` 这十五个名字，设在自己的进程里再 `exec` ama：值不进节点 shell 的环境、启动行与 shell 历史，不落盘（启动器按换行切答复，不用 here-doc）。兑换失败或名字不认识时拒绝启动；一个都没设时照常启动。ama 起的子进程不继承 `AMA_*`（ama 自己剥掉）。
+- **只答节点用得到的那一家**（安全审查 L10）：core 读节点数据的 `agent.model`（ama 的 `<供应商>/<模型>`，或带 `provider` 字段的对象），只答这一家的变量；这一家不收密钥（`ollama`、`lmstudio`、`chatgpt`、ama 自己 config 里的自定义供应商）时 `variables` 为空。节点没设模型时 ama 从已设的里挑缺省，只能答全部已设的，并记一条审计 `ama.credential.unscoped`（`target` 是节点标识，`detail` 只有 `{ reason: "no_model" }`）。运行中在 ama 里换到别家的模型拿不到那家的密钥，要在节点上改模型后重启。
 - Windows：启动器 `run\ama.exe` 的 `.launch` 带 `ama-keys=<客户端>` 与 `ama-var=<名字>` 行，做同一段兑换（客户端子进程的标准输出按换行切，`\r\n` 也认）。
 - 限制：执行主机（SSH）那份不做这段兑换，那里的 ama 只用它自己的 `auth.json` 与环境变量。
 - 权限：`/api/agents` 一族，读 `settings:read`、写 `settings:write`。
@@ -1166,7 +1167,7 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 - 来源是 `capacitor://localhost` 或 `https://localhost`（且不在 `origins` 里）的请求走 **Bearer 模式**：会话绑定的来源是 App 连上的 Gateway 来源 `https://<Host>`（必须在 `origins` 里，否则 403）；凭据只认 `Authorization: Bearer <访问密钥>`，Cookie 不看、没有 CSRF；`POST /api/identity/pair`、`/session/refresh` 与登录把密钥放在响应体的 `native` 里、不发 Cookie（与桌面壳的原生传输同一形状，§3）；CORS 只回 App 自己的来源，预检放行 `authorization, content-type, x-armadra-csrf`。
 - **响应头**（`core/gateway/csp.ts`）：经 Gateway 的每个答案都带 `Strict-Transport-Security: max-age=31536000`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`；`/api/**` 与 `/health` 再带 `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; sandbox`、`X-Frame-Options: DENY`，以及缺省的 `Cache-Control: no-store`（答案自己写了缓存策略时以它为准，如资产）。静态产物用页面的 CSP（`serverContentSecurityPolicy`）。画布资产（`GET …/assets/{assetId}`）无论经不经 Gateway 都带 `default-src 'none'; …; sandbox`：直接导航到一张 SVG 时它是一份沙箱里的文档，脚本不跑。
 - **原生 App 包里页面的 CSP**（`nativeAppContentSecurityPolicy()`）：桌面那一份摘掉回环授权，`connect-src` 加 `https: wss:`、`img-src` / `media-src` 加 `https:`（Gateway 地址配对前未知，证书由原生层钉扎）；其余逐字继承。
-- **长连接复核**：经 Gateway 升级的流（事件、实时同步、终端、语言服务、浏览器画面）在授权变化（撤销设备或会话、登出、停用账号、收回共享）时按同一道路由门、用复核后的主体再判一次，不过即以 **4403** 关流（`core/http/server.ts`）。
+- **长连接复核**：经 Gateway 升级的流（事件、实时同步、终端、语言服务、浏览器画面）在授权变化（撤销设备或会话、登出、停用账号、收回共享）时按同一道路由门、用复核后的主体再判一次，不过即以 **4403** 关流（`core/http/server.ts`）。复核按**会话**认，不按升级时那一把访问密钥：页面刷新过访问密钥，流照旧。访问密钥到期（15 分钟）那一刻再按会话复核一次（安全审查 L1）：刷新过就续到新的到期时刻；没刷新以 **4401** 关（不是授权被收回，页面照常重连，升级前的门要新凭据——原生 App 换 WS 票遇 401 先轮转再换）；刷新过而门不再放行以 **4403** 关。没有请求身份的流（桌面壳）不设这个定时。
 - `POST /api/identity/ws-ticket`（只在 Gateway 的 Bearer 模式下）：要 Bearer 会话，回 `{ "ticket": string, "expiresAt": string }`，票 30 秒、一次性、只在内存里。浏览器 WebSocket 带不了头，App 升级时在 `Sec-WebSocket-Protocol` 里带 `armadra-ticket.<票>`，服务端回同一个子协议。Cookie 模式请求它答 400 `bearer_required`。
 
 ## 18. 身份扩展：口令策略、passkey、MFA、会话、OAuth、审计
@@ -1317,6 +1318,10 @@ G5-02 追加：`GET devices`（我的设备，`{ devices, nextId, hasMore }`）�
 | `signedUp` | 建了一个 `member`（无授予，owner 再共享）并登录                                                |
 | `mfa`      | 这个人登记过 TOTP：带 `challengeId`，页面接 §18.3 的 `POST mfa/verify`；不发会话               |
 | `error`    | 带 `code`（下表）；不发会话、不改绑定                                                          |
+
+`signedIn` / `signedUp` 时，`identity.mfa.requireFor` 覆盖这个人而他还没登记 TOTP，片段再带 `mfaEnrollmentRequired=true`：照常发会话，页面带去登记（与口令登录答案里的 `mfaEnrollmentRequired` 同一条，§18.3；R-17）。
+
+**挂起的 `state`** 按来源地址分桶（安全审查 L4）：每个地址（IPv6 按 /64，IPv4 映射地址按 IPv4）同时至多 50 条，满了挤它自己最老的；全部合计至多 1000 条，满了挤挂得最多的那个地址最老的一条。从多个地址撒 `start` 挤不掉别人半途的登录。
 
 决定：配了 `allowedDomains` 时三条路都要求 `email_verified = true` 且邮箱域名精确命中（大小写不计，子域不算）；`bind` 绑到发起者；`login` 已绑则登录（principal 停用了按「没绑」答），没绑且 `allowSignup` **并且** `allowedDomains` 非空才建号（这就是 SSO；不设域名的建号等于「有这家账号的任何人都能进来」），否则 `oauth_not_bound`。
 
@@ -1845,4 +1850,42 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 30. 页面错误上报：`/api/diagnostics/client-error`
 
-预留，由 G5-19 填写。
+可选崩溃上报（外部服务 §11.2）的页面一侧：页面自己的 JS 错误（`window` 的 `error` 与 `unhandledrejection`）经同一个 DSN 发出。实现在 `core/diagnostics/{client-report,routes}.ts`、`main/diagnostics.ts`、`apps/web/src/diagnostics/`。
+
+### 30.1 开关
+
+设置键 `diagnostics.reportPageErrors`（布尔，缺省 `false`）。**收**的条件是它为真、且壳的崩溃上报此刻在发：服务器壳按自己的 `active()` 答（DSN 可能来自 `ARMADRA_CRASH_REPORT_DSN`），桌面壳的 core 按设置里的 `diagnostics.crashReportDsn` 合不合格答。页面在通用页诊断区、DSN 已保存时多一个「包含页面错误」开关。
+
+### 30.2 `GET /api/diagnostics/client-error`
+
+```json
+{ "enabled": false }
+```
+
+页面据此决定收不收，答案缓存一分钟；设置页改了开关时丢掉缓存。关着的时候页面一条错误也不留。
+
+### 30.3 `POST /api/diagnostics/client-error`
+
+请求体只认四个键（不认识的键 400）：
+
+```json
+{
+  "kind": "error",
+  "name": "TypeError",
+  "message": "Cannot read properties of undefined (reading 'x')",
+  "stack": "TypeError: …\n    at render (index-abc123.js:12:34)"
+}
+```
+
+- `kind`：`error` | `rejection`。`name` ≤ 128、`message` ≤ 2000、`stack` ≤ 8000 字符，超了 400（不截）。被 reject 的不是 `Error` 的值只发 `{ name: "NonError", message: "non-error <类型>" }`，不发内容。
+- 回答：收下 `202 { "accepted": true }`；关着 `200 { "accepted": false }`（不看请求体）。
+
+| 状态 | `code`            | 何时                                                                          |
+| ---- | ----------------- | ----------------------------------------------------------------------------- |
+| 400  | `bad_request`     | 请求体不是 JSON、多了键、类型或长度不对                                       |
+| 401  | `unauthenticated` | 服务器壳的匿名主体（没有会话）                                                |
+| 429  | `rate_limited`    | 这台设备每分钟超过 5 条，或整台 core 每分钟超过 60 条；带 `Retry-After`（秒） |
+
+- **身份**：登录即可，路由门不判（`route-scopes.ts` 的 `SELF_GUARDED`）；桌面壳的本机请求算本机 owner。限流按设备（没有设备按 principal），形状不对的请求不扣桶。
+- **剥离**：两道。页面先剥（`crash-scrub.ts`：路径里的用户名、令牌形状、Armadra 会话密钥 `<32 位十六进制>.<43 位 base64url>`、地址里的账号 / 查询串 / 片段，栈帧里的地址与路径只留文件名，消息截到 300 字）；收件一侧（core 或桌面主进程）按本机的家目录与环境变量再剥一遍同一套规则，再交 `platform.reportError`（来源 `page`）。事件发出前壳的 `beforeSend` 还有第三道（§11.2 的整段删键）。终端输出、文件正文、凭据、请求数据不进事件；core 不记这条错误的正文。
+- **桌面壳**：页面不走这个路由，经 IPC `diagnostics:report`（`window` 档）交给主进程；主进程读同一份设置再判、同样每分钟 5 条、再剥离，交 `@sentry/electron`，标签 `process: renderer`、`source: page`。`ipcMode` 仍为 0：SDK 不给渲染进程开任何通道，浏览器节点的 guest 没有 preload，也就没有这条路。IPC 答 `{ accepted }`，从不拒绝。
