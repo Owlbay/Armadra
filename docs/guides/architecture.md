@@ -97,7 +97,8 @@ core 之外的同类新增：`src/hook-client/`（动词工具表，`armadra-hoo
 准入、CSP、页面托管、配对载荷）在 core 的 Gateway 域 `core/gateway/`：服务器壳的
 `serve` 只是「解析参数 → `openGateway`」，桌面壳按设置 `gateway.*` 开关同一个
 Gateway（契约 §17）。证书来源四种：本地 CA、指定文件、自签名，以及 ACME
-（`core/gateway/acme.ts`：`http-01`、证书在 `<数据目录>/tls/acme/`、寿命过三分之二续期并
+（`core/gateway/acme.ts`：`http-01` 或 `tls-alpn-01`（验证握手在 Gateway 的 TLS 监听上按
+ClientHello 的 ALPN 分流，`core/gateway/alpn.ts`）、证书在 `<数据目录>/tls/acme/`、寿命过三分之二续期并
 热换、失败保留旧证书）。容器镜像在 `apps/server/docker/`。用法见
 [开发指南](development.md#无窗口服务器壳)与[服务器部署指南](server-deployment.md)，进度见
 [TypeScript Core 实施进度](../status/typescript-core-status.md) §11。
@@ -555,15 +556,16 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
 - **签名发布**：签名、公证、GPG 与更新清单的流程都已写好（[CI 与发布](ci-release.md)），
   但没有真证书。未签名的发布包在 `ARMADRA_UPDATES_DEV=1` 下能检查、下载、校验、暂存，
   「安装」答 `notSigned`；本地 `dist` 是 `localBuild`；更新器从不报没发生过的 `upToDate`
-  （`shell-core/updates/availability.ts`）。设置页的「检查」按钮仍不调壳（`use-update-state.ts`
-  报 `noReleaseSource`，壳侧定时检查在跑）。
+  （`shell-core/updates/availability.ts`）。设置页的「检查」经 `updates:check`（不带答复）由壳
+  自己问发布索引，`noReleaseSource` 只在壳没有发布源时出现；macOS 的签名状态由
+  `codesign --verify --deep --strict` 判定，ad-hoc 签名按 `unknown` 不装。
 - **ACP 的未竟项**：`elicitation/create` 与按模型选择（`session/set_config_option`）core 已就绪
   （契约 §26），但要 `@armadra/agent` 的 `AcpClient` 自报 `features.elicitation` /
   `features.configOptions`，0.6.7 还没有，在那之前行为与之前相同；SSH 节点不能切到 ACP
   （`acp_unsupported`）。
   六家真适配器的端到端探针已备（`agent-e2e` 场景 12，C 档），还没有真跑。
 - **Gateway / 手机**：配对是两分钟票（二维码 / 链接），私网档位上另有 8 位配对码（契约 §24）；设备表没有
-  「平台」「最近访问」；`tls-alpn-01` 未做；推送中继写完不部署，UnifiedPush 未做；真机、商店与
+  「平台」「最近访问」；推送中继写完不部署，UnifiedPush 未做；真机、商店与
   真 APNs / FCM 都要用户的账号。
 - **安全审查的低危项**：页面上口令策略拒绝码与 `warn` 档的提示、GitHub / 自动化两面对 Bearer 写仍要 CSRF 等，见[安全审查](../status/security-review-2026-10.md) §3。
 - **外部服务里留到之后的三项**：W-MAIL（SMTP）、W-FORGE（GitLab / Gitea）、W-MIRROR（更新镜像），

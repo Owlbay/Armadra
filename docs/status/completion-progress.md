@@ -1190,11 +1190,49 @@
 
 ## G5-16 Gateway 与服务端收尾（R-18、R-19、R-73、R-74、R-75）
 
-待填（第 2 组）。
+**做了什么**
+
+- `tls-alpn-01`（R-18）：`ARMADRA_ACME_CHALLENGE=http-01|tls-alpn-01`，缺省 `http-01`。新模块 `gateway/alpn.ts` 在交给 TLS 之前读出第一条握手记录，从中取 SNI 与 ALPN；ALPN 为 `acme-tls/1`、且 SNI 是正在等的标识时，用 RFC 8737 的挑战证书完成握手后立即关闭。挑战证书由 `tls.ts::acmeChallengeCertificate` 生成：自签名，SAN 只有这一个标识，带关键扩展 `acmeIdentifier`。IP 标识按 RFC 8738 认反向解析名。`acme-tls/1` 配上不在等的名字时直接断开；没有挑战挂着时连接不经检查，直接进 TLS。没用计划里写的 `SNICallback`：实测在 TLS 1.2 下 OpenSSL 先选证书、后选 ALPN，选证书那一步还不知道这是一次验证握手。首签时 Gateway 还没监听，`AcmeManager` 在 Gateway 的监听地址上临时开一个只答验证的监听，签完就关；续期走 Gateway 自己的监听，`openGateway` 多了 `acme` 选项，经 `interceptAcmeTls` 换下 TLS 的握手入口。`tls-alpn-01` 模式下不开 80 端口。端口为 0 时报 `acme_misconfigured`，临时监听开不了时报 `acme_port_unavailable`。`tls.acme` 多了 `challenge` 字段（共享层 schema 为可选）。服务器壳与桌面域都把监听地址传给 `startAcme`。
+- 打包版页面产物（R-19）：候选表挪到 `web-root.ts::desktopWebRootCandidates`，顺序是环境变量 → `<resources>/renderer` → `app.asar.unpacked/out/renderer` → `app.asar/out/renderer` → core 入口旁的 `../renderer` → 检出里的 `apps/web/dist`。core 以 `ELECTRON_RUN_AS_NODE` 运行时，asar 的 `fs` 补丁仍然生效（实测 `realpath`、`lstat`、流读取都正常）。`packaged-smoke` 加了一步：在回环档开 Gateway，从 `/ca.crt` 取本地 CA、只信这一张，取首页。
+- `hibernator.ts::processesUnder` 改用异步 `readProcessTable`，接口返回 `Promise`（R-73）。
+- `linux-x64` 性能基线（R-74）：取自 main `7ec5992f` 那次 nightly 的 `server-perf` 产物，ubuntu-22.04 托管运行器。main 上只有这一次夜间结果，所以录入的是单次数值，不是三次中位数；基线文档补了 §3.1。
+- Caddy 与镜像里的浏览器（R-75）：dev-stack 新增可选 profile `caddy`（`tools/dev-stack/caddy/Caddyfile`，即指南 §3.3 那份配置，改为读环境变量）和 `pebble-va`（真正回连挑战地址的 Pebble）。`server-e2e --proxy=caddy`：服务器壳只听回环，前面放 Caddy 容器，上游 CA 取自 `/ca.crt`，整条多人主线都经代理。新增 B 档条目 `server-caddy-e2e`（linux，用 `--network host`）。镜像加构建参数 `WITH_CHROMIUM=1`：装 Debian 的 Chromium 和 CJK 字体，`/etc/chromium.d/armadra` 加 `--no-sandbox --disable-dev-shm-usage`，入口脚本缺省设置 `ARMADRA_BROWSER_PATH`。`server-e2e` 容器模式遇到带 Chromium 的镜像时照走浏览器节点一步（探针页放在容器自己的回环上）；新增 `--with-chromium` 构建参数。部署指南补了 §2.3。
+
+**实测**（macOS arm64，OrbStack）
+
+- 单测：`alpn.test`（真客户端的 ClientHello 解析、截断与非 TLS、反向解析名、挑战证书的 SAN 与关键扩展、在 HTTPS 服务上 TLS 1.2 / 1.3 都拿到挑战证书并协商出 `acme-tls/1`、挑战挂着时页面照常、不在等的名字被断开、没挂挑战时协商不出）；`acme.test`（配置、首签临时监听签完即关且不开 80、`http-01` 不答 ALPN、端口被占）；`listener.acme.test`（真 core 加 `openGateway`）；`web-root.test`（候选顺序）；`hibernator.test`（真进程树）；共享层 `api-gateway.test`。
+- 真 Pebble（`pebble-va`，`PEBBLE_VA_ALWAYS_VALID=0`，只绑 127.0.0.1）：`tls-alpn-01` 首签走临时监听，续期走 HTTPS 监听上的 `interceptAcmeTls`，Pebble 的三路验证都标 VALID；对照组在同一端口上放普通 TLS 监听，订单 INVALID，结果 `acme_failed`。`http-01` 也真验证了一次。
+- `node tools/probes/packaged-smoke.mjs --no-real-cli`（本机 `dist` 出的 mac-arm64）：全部 ok，其中 Gateway 首页 200，`text/html`，4576 字节。
+- `node tools/probes/server-e2e.mjs --proxy=caddy`：两次全过，包括浏览器节点。`--container=<WITH_CHROMIUM 镜像>`：全过，浏览器节点看到画面流。另外在容器里确认：不加 `--no-sandbox` 时 Chromium 报 No usable sandbox；加装 `chromium-sandbox`（SUID）也因缺 `CAP_SYS_ADMIN` 起不来。
+
+**没做 / 限制**
+
+- 走 Linux 宿主回环的两条路（`pebble-va`、`server-caddy-e2e` 的 `--network host`）本机没跑：`pebble-va` 在 Linux 上整组 skipped，`server-caddy-e2e` 要等 nightly 才有结果。
+- `linux-x64` 基线是单次数值；以后夜间结果多了，按三次中位数重录。
+- 带 Chromium 的镜像没有加 CI 条目（多构建一次约 10 分钟，夜间只构建缺省镜像），也不发布。
+- 桌面 Gateway 用 `tls-alpn-01` 时要先固定端口（设置里 `gateway.port` 不能是 0）。
 
 ## G5-17 启动兼容退役与更新页接线（R-59、R-60、R-61）
 
-待填（第 3 组）。
+**做了什么**
+
+- R-59（G4-2 并进 G5）：删 `LegacyLaunchWord`、`shellEnvWord`、环境形的 `renderLaunchWord` / `verbatimWord` / `batchSafeWord` 分支（`packages/shared/src/shell.ts` 与 `core/terminal/shell.ts` 逐字节同步，`LaunchWord` 退化为 `string`）；共享层删 `launchWordSchema` 与 `/api/agents` 行上的 `launchWords` / `launchArgs`（`z.object` 剥掉旧 core 多答的字段）；`assembleLaunchCommand` 删 `shellWords` / `extraArgs`；`web/agent/launch.ts` 删旧 core 退路，没有 `launcher` 就是裸行。`/integration` 的 `launchArgs` 不变。契约 §13.1 追加一句，CHANGELOG 0.2.0 的「已知限制」那句改进「兼容性」。
+- R-60：更新页「检查」调壳 `updates:check`（不带答复 = 壳自己问发布索引），壳的答复即发布侧（`HostSide` 新增 `{kind:"shell"}`，`state.ts::hostAfterShell`）；`noReleaseSource` 只在壳答 `notConfigured` 缺 endpoints、或人按了检查而壳原样答 `idle`（没有可问的索引）时出现；浏览器里不问。页面定时器改为 `refresh()` 只读回壳的状态——检查由壳自己的计划（`startSchedule`，同样认 `updates.autoCheck`）跑，页面不再绕过壳的间隔。
+- R-61：`environment.ts::signatureState` 在 macOS 跑 `codesign --verify --deep --strict`（每进程一次缓存），通过且不是 ad-hoc 才是 `signed`，「not signed at all」是 `unsigned`，ad-hoc / 校验失败 / 起不来是 `unknown`；`update-e2e.mjs::expectedSignature` 同一判法。
+
+**实测**
+
+- `use-update-state.test`（新）、`state.test`、`UpdatesPage.test`（定时器只调 `refresh`）、`environment.test`（macOS 分支用替身；本机真 `codesign` 对临时 bundle：未签 → `unsigned`，`-s -` ad-hoc → `unknown`）、`launch.test` / `shell.test` / `agents.test` / `api-agents.test` 改断言（理由：字段按计划删除）；`list.test`、`integration.test` 不用改（行上本来就不答，`/integration` 的 `launchArgs` 保留）；`release:test` 通过。
+- `node tools/probes/update-e2e.mjs <out> --build` 对 0.2.0 的 macOS arm64 产物：check → download → verify → staged，安装答 `notSigned`（未签名包）。dev-stack 那一腿本机没起 `release` 服务，未跑（CI 的 linux 作业带 `--require-dev-stack`）。
+
+**接口**
+
+- `useUpdateState` 多 `refresh()`；`shellCheck(verdict?)` 可不带答复；`state.ts` 导出 `NO_RELEASE_SOURCE`、`hostAfterShell(shell, checked)`。
+- `signatureState(platform, executable, packaged, codesign?)`，`macSignatureState(bundle, run?)`。
+
+**没做 / 需用户提供**
+
+- 真 Developer ID 证书下的 `signed` 分支只用替身验证；证书由维护者提供。
 
 ## G5-18 发布流水线收尾（R-62、R-63、R-64、R-65 作业、R-66、R-67）
 

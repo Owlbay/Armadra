@@ -26,6 +26,32 @@
         "rssSteadyMiB": 183.1,
         "cpuIdlePercent": 0.3
       }
+    },
+    "linux-x64": {
+      "recordedAt": "2026-10-03",
+      "machine": "GitHub Actions ubuntu-22.04 托管运行器（x64），Node 22，夜间 B 档 Linux 作业；取自 main 7ec5992f 的 nightly 37154286321 产物 e2e-tier-b-linux/server-perf（只有这一次，不是三次中位数）",
+      "options": {
+        "sessions": 30,
+        "subscribers": 6,
+        "objects": 2000,
+        "rounds": 40,
+        "burstKib": 1024
+      },
+      "metrics": {
+        "sessionCreateP95Ms": 35.9,
+        "fanoutP50Ms": 2.6,
+        "fanoutP95Ms": 4.8,
+        "terminalThroughputMiBs": 24.3,
+        "terminalBurstP95Ms": 1232.9,
+        "closeStallMaxMs": 163.8,
+        "realtimeBulkMs": 417.2,
+        "realtimeColdSyncMs": 145.4,
+        "realtimeMaterializeMs": 113.6,
+        "realtimeUpdateP95Ms": 1.7,
+        "rssPeakMiB": 176.1,
+        "rssSteadyMiB": 175.9,
+        "cpuIdlePercent": 2
+      }
     }
   }
 }

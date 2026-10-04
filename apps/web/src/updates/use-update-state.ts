@@ -7,20 +7,26 @@
  * reporting "up to date" for a check that did not happen lives in one tested
  * function rather than in a component's conditionals.
  *
- * **The release side has no source in this build.** Until R7c the page asked a
- * separate Go Host over its own binary protocol; a single core answers no such
- * question yet — `core/updates` (design R5) was never written — so the release
- * side reports `noReleaseSource` and the merge keeps its promise: nothing here
- * ever reads as "this is the newest release" on the strength of a check that
- * did not happen. Installing a staged package, cancelling a transfer and the
- * restart report all still work, because those are the shell's own state.
+ * **The desktop shell asks the release index itself.** "Check" is
+ * `updates:check` with nothing attached; the shell fetches the index, applies
+ * the channel and the staged rollout, cross-checks the manifest and answers
+ * with its machine's state, which is then the whole release answer
+ * (`hostAfterShell`). `noReleaseSource` appears only when the shell says it has
+ * no index to ask. A page with no desktop shell (a browser) asks nothing: the
+ * core has no release side of its own, and installing there is a manual act.
+ *
+ * The shell runs its own schedule (`startSchedule`, honouring
+ * `updates.autoCheck`), so the page's timer only reads the state back
+ * (`refresh`) instead of forcing a check past the shell's interval.
  */
 import { create } from "zustand";
 
 import {
+  hasShellUpdater,
   onShellProgress,
   onShellStaged,
   shellCancel,
+  shellCheck,
   shellDismiss,
   shellDownload,
   shellInstall,
@@ -30,7 +36,14 @@ import {
   type ShellRestartReport,
   type ShellUpdateState,
 } from "./shell-updater";
-import type { HostRelease, HostSide } from "./state";
+import {
+  hostAfterShell,
+  NO_RELEASE_SOURCE,
+  type HostRelease,
+  type HostSide,
+} from "./state";
+
+export { NO_RELEASE_SOURCE };
 
 /** Design §2.1: after 30s, then every six hours, then whenever asked. */
 export const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -56,12 +69,6 @@ export function detectTarget(
   return `${system}-${arch}`;
 }
 
-/** No release source: a statement about this build, not about any release. */
-export const NO_RELEASE_SOURCE: HostSide = {
-  kind: "blocked",
-  reason: "noReleaseSource",
-};
-
 export interface UpdatesStore {
   host: HostSide;
   shell: ShellUpdateState;
@@ -69,7 +76,10 @@ export interface UpdatesStore {
   restart: ShellRestartReport | null;
   /** Started once per page; safe to call again. */
   start: () => () => void;
+  /** A person pressing "check": the shell asks the release index now. */
   check: () => Promise<void>;
+  /** Reads the shell's state back; asks nothing off the network. */
+  refresh: () => Promise<void>;
   download: () => Promise<void>;
   install: () => Promise<void>;
   dismiss: () => Promise<void>;
@@ -82,7 +92,7 @@ export const useUpdateState = create<UpdatesStore>((set, get) => {
   let started = false;
 
   return {
-    host: NO_RELEASE_SOURCE,
+    host: { kind: "notAsked" },
     shell: UNSUPPORTED_HERE,
     release: null,
     restart: null,
@@ -91,7 +101,8 @@ export const useUpdateState = create<UpdatesStore>((set, get) => {
       if (started) return () => undefined;
       started = true;
       void (async () => {
-        set({ shell: await shellState() });
+        const shell = await shellState();
+        set({ shell, host: hostAfterShell(shell, false) });
         const report = await shellRestartReport();
         if (report) set({ restart: report });
       })();
@@ -106,7 +117,7 @@ export const useUpdateState = create<UpdatesStore>((set, get) => {
       // page that was not open when an `autoDownload` transfer finished reads
       // the state back rather than guessing it from the payload.
       const stopStaged = onShellStaged(() => {
-        void (async () => set({ shell: await shellState() }))();
+        void get().refresh();
       });
       return () => {
         started = false;
@@ -115,15 +126,40 @@ export const useUpdateState = create<UpdatesStore>((set, get) => {
       };
     },
 
-    /**
-     * Ask again. With no release source there is nothing to ask, so this
-     * records that fact rather than leaving the section on a stale answer.
-     */
     async check() {
+      if (!hasShellUpdater()) {
+        set({
+          host: { kind: "notAsked" },
+          release: null,
+          shell: UNSUPPORTED_HERE,
+        });
+        return;
+      }
+      set({ host: { kind: "checking" }, release: null });
+      const shell = await shellCheck();
+      // Cancelled while the shell was still asking: its answer is no longer
+      // the one this check stands for, so read the state back instead.
+      if (get().host.kind !== "checking") {
+        await get().refresh();
+        return;
+      }
+      set({ shell, host: hostAfterShell(shell, true) });
+    },
+
+    async refresh() {
+      const shell = await shellState();
+      // A check in flight keeps its spinner; the answer it brings decides.
+      if (get().host.kind === "checking") {
+        set({ shell });
+        return;
+      }
+      const host = get().host;
       set({
-        host: NO_RELEASE_SOURCE,
-        release: null,
-        shell: await shellState(),
+        shell,
+        host:
+          host.kind === "blocked" && shell.state === "idle"
+            ? host
+            : hostAfterShell(shell, false),
       });
     },
 
