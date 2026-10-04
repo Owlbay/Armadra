@@ -7,15 +7,15 @@ import { useT } from "../app/preferences-store";
 import { useAccess } from "../app/use-access";
 import { useCanvasStore } from "../store/canvas-store";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 
 /**
  * 画布控制的人工确认（§5.8）。
@@ -88,27 +88,31 @@ export function ControlConfirmDialog() {
   };
 
   return (
-    <AlertDialog
+    <ResponsiveAlertDialog
       open={Boolean(current)}
       // 关掉即拒绝：Runtime 那边正阻塞着，没有「什么都不做」这个选项。
       onOpenChange={(open) => {
         if (!open) answer(false);
       }}
     >
-      <AlertDialogContent className="z-[var(--z-dialog)]">
-        <AlertDialogHeader>
-          <AlertDialogTitle>{t("confirm.title")}</AlertDialogTitle>
-          <AlertDialogDescription>{current?.summary}</AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel onClick={() => answer(false)}>
+      <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+        <ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogTitle>
+            {t("confirm.title")}
+          </ResponsiveAlertDialogTitle>
+          <ResponsiveAlertDialogDescription>
+            {current?.summary}
+          </ResponsiveAlertDialogDescription>
+        </ResponsiveAlertDialogHeader>
+        <ResponsiveAlertDialogFooter>
+          <ResponsiveAlertDialogCancel onClick={() => answer(false)}>
             {t("confirm.deny")}
-          </AlertDialogCancel>
-          <AlertDialogAction onClick={() => answer(true)}>
+          </ResponsiveAlertDialogCancel>
+          <ResponsiveAlertDialogAction onClick={() => answer(true)}>
             {t("confirm.allow")}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+          </ResponsiveAlertDialogAction>
+        </ResponsiveAlertDialogFooter>
+      </ResponsiveAlertDialogContent>
+    </ResponsiveAlertDialog>
   );
 }

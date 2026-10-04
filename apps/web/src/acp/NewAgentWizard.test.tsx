@@ -44,6 +44,15 @@ const agents = vi.hoisted(() => ({ list: [] as AgentInfo[] }));
 vi.mock("@/app/use-agents", () => ({
   useAgentsQuery: () => ({ data: agents.list }),
 }));
+const platform = vi.hoisted(() => ({
+  desktop: false,
+  pickDirectory: vi.fn<() => Promise<string | null>>(),
+}));
+vi.mock("@/platform", async (original) => ({
+  ...(await original<object>()),
+  isDesktop: () => platform.desktop,
+  pickDirectory: platform.pickDirectory,
+}));
 vi.mock("@/platform/layout", async (original) => ({
   ...(await original<object>()),
   useCompactLayout: () => false,
@@ -102,6 +111,8 @@ function agent(id: string, label: string, acpInstalled: boolean): AgentInfo {
 
 beforeEach(() => {
   api.createSession.mockReset();
+  platform.desktop = false;
+  platform.pickDirectory.mockReset();
   agents.list = [
     agent("claude", "Claude Code", false),
     agent("codex", "Codex", true),
@@ -193,6 +204,59 @@ describe("NewAgentWizard", () => {
     expect(await screen.findByText("没有创建成功")).toBeTruthy();
     expect(useWizardOpen.getState().open).toBe(true);
     expect(useCanvasStore.getState().document?.nodes).toEqual([]);
+  });
+
+  it("第二步「选择文件夹…」：桌面壳选的目录成为会话 cwd 并写进节点", async () => {
+    platform.desktop = true;
+    platform.pickDirectory.mockResolvedValue("/elsewhere/project");
+    api.createSession.mockResolvedValue({ id: "sess-2" });
+    openNewAgentWizard();
+    renderWizard();
+    fireEvent.click(await screen.findByRole("button", { name: "继续" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择文件夹…" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("combobox", { name: "目录" }).textContent,
+      ).toContain("/elsewhere/project"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(useWizardOpen.getState().open).toBe(false));
+    expect(api.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/elsewhere/project" }),
+    );
+    const node = useCanvasStore.getState().document?.nodes[0];
+    expect(node?.data).toMatchObject({ cwd: "/elsewhere/project" });
+  });
+
+  it("取消选择器不改目录", async () => {
+    platform.desktop = true;
+    platform.pickDirectory.mockResolvedValue(null);
+    openNewAgentWizard();
+    renderWizard();
+    fireEvent.click(await screen.findByRole("button", { name: "继续" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择文件夹…" }));
+    await waitFor(() => expect(platform.pickDirectory).toHaveBeenCalled());
+    expect(
+      screen.getByRole("combobox", { name: "目录" }).textContent,
+    ).toContain("工作区根目录");
+  });
+
+  it("没有桌面壳、或远端工作空间时不给「选择文件夹…」", async () => {
+    openNewAgentWizard();
+    renderWizard();
+    fireEvent.click(await screen.findByRole("button", { name: "继续" }));
+    expect(screen.queryByRole("button", { name: "选择文件夹…" })).toBeNull();
+    cleanup();
+
+    platform.desktop = true;
+    useCanvasStore
+      .getState()
+      .setWorkspace({ ...workspace, executionHostId: "build-box" });
+    openNewAgentWizard();
+    renderWizard();
+    fireEvent.click(await screen.findByRole("button", { name: "继续" }));
+    expect(screen.queryByRole("button", { name: "选择文件夹…" })).toBeNull();
   });
 
   it("没有可用的 Agent 时第一步就是空态", async () => {

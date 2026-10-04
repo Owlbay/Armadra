@@ -20,7 +20,7 @@ const zh = {
   /* 不可用状态（§5：不出现伪按钮） */
   "automation.blocked.noWorkspace": "先打开一个工作空间",
   "automation.blocked.nativeSession":
-    "桌面壳未能建立本机会话，原因见「设置 → 连接 → 后台服务」",
+    "桌面壳未能建立本机会话，原因见「设置 → 连接 → 后台服务与对外服务」",
   "automation.blocked.disconnected": "连不上 Host",
   "automation.blocked.unsupported": "这个 Host 没有执行 Worker，无法运行计划",
   "automation.blocked.noSession": "这个 Host 不支持浏览器会话",
@@ -228,7 +228,7 @@ const en: Record<keyof typeof zh, string> = {
 
   "automation.blocked.noWorkspace": "Open a workspace first",
   "automation.blocked.nativeSession":
-    "The desktop shell could not open a local session; see Settings → Connection → Background service",
+    "The desktop shell could not open a local session; see Settings → Connections → Background and external services",
   "automation.blocked.disconnected": "Cannot reach the Host",
   "automation.blocked.unsupported":
     "This Host has no execution Worker, so it cannot run plans",
@@ -236,7 +236,7 @@ const en: Record<keyof typeof zh, string> = {
   "automation.blocked.signedOut": "This device is not paired with the Host",
   "automation.blocked.noPermission":
     "This device holds no automation permission for this workspace",
-  "automation.blocked.action": "Go to Settings → Connection",
+  "automation.blocked.action": "Go to Settings → Connections",
   "automation.readOnly": "Read-only: plans can be viewed but not changed",
 
   "automation.planState.unspecified": "Unknown",

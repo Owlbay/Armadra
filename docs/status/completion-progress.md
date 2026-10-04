@@ -1381,7 +1381,39 @@
 
 ## G5-23 零碎界面与 G2-2 遗留（R-43、R-71、R-72 其余）
 
-待填（第 3 组）。
+做了什么：
+
+- R-71：`panels/ResponsiveDialog.tsx` 加 `ResponsiveAlertDialog*`。根仍是 Radix AlertDialog（`role="alertdialog"`、点遮罩不关），≤767 贴底：拖柄、顶部圆角 14、限高、让出安全区，底栏按钮竖排全宽、主操作在上。22 个确认框改用它（`BoardRow`、`remove-workspace`、`ControlConfirmDialog`、`FileTree`、git / github / resources / automation / settings 各页、`PresenceBar`、`FlowWorkspace`、`SessionRow`、`TemplateLibrary`）；G5-03 名下的 `AccountsSharingPage`、`security/*`、`GatewayDevices` 没动，留给它合入后接。
+- R-43：
+  - 向导第二步「选择文件夹…」（`pickDirectory`）：只在桌面壳、本机工作空间出现；选中的目录进候选并成为会话 `cwd`、写进节点。
+  - 代码块导出写到来源 Agent 的工作目录：core 按该节点最近的终端会话取 `cwd`，在工作区内就落 `<cwd>/.armadra/exports/acp/…`，否则退回根；`relativePath` 仍相对工作区根。请求体不带路径。
+  - 远端工作空间不再 501：Worker 新操作 `assets.exportText`（正文超过帧内上限走分块传输）。
+  - 建出的节点亮一次未读光晕（`canvas/node-flash.ts`，2 秒，不进文档）。
+- R-72 其余：
+  - `Spinner` 调用处原本都已传本地化 `aria-label` 或 `aria-hidden`；加了扫描用例 `panels/spinner-label.test.ts` 守住。
+  - `armadra-hook canvas --help` / `-h` 离线打印动词表（`usage.ts::CANVAS_USAGE`，与 `USAGE` 里那一节同一份文本）。
+  - `i18n/{automation,github}.ts` 改为「设置 → 连接 → 后台服务与对外服务」；英文分组名对齐为 Connections。
+  - 展示页 `components` 补 `resizable`、`chart`、`sonner`、`context-menu` 样本，确认框样本换成响应式版本。
+  - 展示页 `integration` 补 CLI 分组：集成页真的行组件、状态预放进 query 缓存，含正常、版本过旧（页首一台 Worker 待升级）、启动器异常、ACP 未装四种。
+  - 为此集成行加两个徽标：`stale` 时显示「待重新生成」，有 ACP 入口而适配器没装时显示「ACP 未安装」。
+- 契约 §14.5：改写「远端 501」一句，追加落点规则。
+
+实测：
+
+- 单测：
+  - `ResponsiveDialog.test`：确认框两种形态，以及取消 / 确认行为。
+  - `NewAgentWizard.test`：选择器选中、取消、无壳与远端不显示。
+  - `exports.test`：cwd 落点、最新会话、工作区外 / 不存在 / 符号链接出界都退回、远端经 `assets.exportText` 写在执行主机且本机无文件。
+  - `export-to-board.test`：光晕亮起后熄掉。
+  - `hook.test`：`canvas --help`。
+  - `IntegrationPage.test`：两个新徽标。
+- 改前改后各跑一次 `design-showcase --only=components,integration`：对比度、Tab 可达 84/84、焦点环、强制颜色、控制台都通过，12 张图有变化（新样本）。
+- 无头 Chrome 390 / 1440 实拍：390 宽的确认框贴底、两个按钮各 343px 全宽；1440 宽仍居中。另外拍了右键菜单、toast、resizable、chart、集成分区（深浅两套），见 PR。
+
+没做：
+
+- G5-03 名下三处确认框还在用 `ui/alert-dialog`。
+- 旧版 Worker 没有 `assets.exportText`：对它的远端导出要先「重新同步」执行主机，否则报 Worker 的未知操作错误。
 
 ## G5-24 桌面回环收紧（R-15）
 

@@ -14,14 +14,14 @@ import { useSubpage } from "../subpage";
 import { useRuntimeSettings } from "../use-runtime-settings";
 import { HostKeyDialog } from "./ssh/HostKeyDialog";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Button } from "@/ui/button";
 import { Input } from "@/ui/input";
 
@@ -368,21 +368,26 @@ function HostForm({
         </div>
       </div>
 
-      <AlertDialog open={pendingDelete} onOpenChange={setPendingDelete}>
-        <AlertDialogContent className="z-[var(--z-dialog)]">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+      <ResponsiveAlertDialog
+        open={pendingDelete}
+        onOpenChange={setPendingDelete}
+      >
+        <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t("ssh.delete.title", { name: existing?.name ?? "" })}
-            </AlertDialogTitle>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("ssh.dialog.cancel")}</AlertDialogCancel>
-            <AlertDialogAction onClick={onDelete}>
+            </ResponsiveAlertDialogTitle>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("ssh.dialog.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction onClick={onDelete}>
               {t("ssh.delete")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </>
   );
 }

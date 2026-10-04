@@ -14,6 +14,14 @@ import type { WorkflowRunJson, WorkflowTemplateJson } from "@armadra/shared";
 import { usePreferencesStore, useT } from "@/app/preferences-store";
 import { scheduleWorkflow } from "@/panels/automation/open";
 import {
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
   ResponsiveDialog,
   ResponsiveDialogContent,
   ResponsiveDialogFooter,
@@ -21,16 +29,6 @@ import {
   ResponsiveDialogTitle,
 } from "@/panels/ResponsiveDialog";
 import { useCanvasStore } from "@/store/canvas-store";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
 import { Button } from "@/ui/button";
 import {
   Card,
@@ -224,24 +222,26 @@ export function TemplateLibrary({
           );
         })}
       </div>
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={deleting !== null}
         onOpenChange={(open) => {
           if (!open) setDeleting(null);
         }}
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+        <ResponsiveAlertDialogContent>
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t("workflow.delete.title", { name: deleting?.name ?? "" })}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
+            </ResponsiveAlertDialogTitle>
+            <ResponsiveAlertDialogDescription>
               {t("workflow.delete.body")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("workflow.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
+            </ResponsiveAlertDialogDescription>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("workflow.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               variant="destructive"
               onClick={() => {
                 if (deleting) remove.mutate(deleting.id);
@@ -249,10 +249,10 @@ export function TemplateLibrary({
               }}
             >
               {t("workflow.delete")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </>
   );
 }
