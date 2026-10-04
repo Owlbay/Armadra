@@ -752,6 +752,13 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 按模型选择（契约 §26.2）。
+  {
+    path: "/api/acp/sessions/{sessionId}/model",
+    methods: ["PUT"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/acp/sessions/{sessionId}/log",
     methods: ["GET"],

@@ -13,16 +13,32 @@
  *     答复经 `agent/approvals.ts` 的 `"acp"` 路由回来。
  *   * 路由 `/api/acp/*` 的权限在 `http/route-scopes.ts` 与
  *     `identity/route-access.ts`；契约 §14。
+ *   * 契约 §26：`elicitation/create` 进同一张审批表（答复经
+ *     `agent/approvals.ts` 的 elicitation 路由回来）；模型目录与
+ *     `PUT …/model`；`pi-acp` 的映射文件；节点凭据与 ama 模型密钥在起适配器
+ *     之前由 core 兑换、只设给适配器进程的环境。
  *
  * 装配次序：终端域先装（`terminal/install.ts` 用 {@link createAcpBackend} 把后端
  * 放进管理器，再用 {@link provideAcpTerminal} 交出管理器与休眠执行者），本域
  * 后装，只登记路由与审批的送回路。
  */
 
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { collab } from "../agent";
-import { setAcpApprovalAnswerer, cancelOpenApproval } from "../agent/approvals";
+import { amaCredentials } from "../agent/ama-credentials";
+import {
+  setAcpApprovalAnswerer,
+  setAcpElicitationAnswerer,
+  cancelOpenApproval,
+} from "../agent/approvals";
+import {
+  CREDENTIAL_REF_ENV,
+  CredentialError,
+  credentialsDomain,
+  persistedBinding,
+} from "../agent/credentials";
 import { expectedProcesses } from "../agent/launch";
 import { type AgentSettings, baseAgent, customAgent } from "../agent/registry";
 import { acpInjection } from "../agent/canvas-launch";
@@ -36,14 +52,20 @@ import { type IngestContext, apply } from "../hook/ingest";
 import { normalizeAs } from "../hook/normalize";
 import { newMemory, type Memory } from "../hook/reduce";
 import type { HookService } from "../hook/service";
+import { insertApproval } from "../hook/store";
 import type { CoreContext } from "../main";
 import { settingsDomain } from "../settings";
 import { parseCustomAgents } from "../settings/custom-agents";
-import type { TerminalSpec } from "../terminal/backend";
+import { TerminalError, type TerminalSpec } from "../terminal/backend";
 import type { EnvPairs } from "../terminal/environment";
 import type { Hibernator } from "../terminal/hibernator";
 import type { TerminalManager } from "../terminal/manager";
-import { type AcpAdapter, adapterFor } from "./adapters";
+import {
+  type AcpAdapter,
+  acpResumeId,
+  adapterFor,
+  mappedSession,
+} from "./adapters";
 import { AcpBackend } from "./bridge";
 import { AcpError } from "./client";
 import { startAdapter } from "./host";
@@ -55,17 +77,22 @@ export {
   ACP_ADAPTERS,
   type AcpAdapter,
   acpAdapter,
+  acpResumeId,
   adapterFor,
   acpLaunchPlan,
   acpPermissionModes,
+  cliResumeId,
+  mappedSession,
 } from "./adapters";
 export {
   AcpError,
   type AcpErrorCode,
   type AcpExit,
+  type AcpPendingElicitation,
   type AcpPendingPermission,
   type AcpPermissionSettlement,
   AcpProcess,
+  acpClientFeatures,
 } from "./client";
 export {
   type AcpSessionOpener,
@@ -159,6 +186,14 @@ class AcpRuntime {
     this.prepared.set(nodeId, plan);
   }
 
+  private secrets(
+    nodeId: string,
+    agentId: string,
+    env: readonly (readonly [string, string])[],
+  ): Promise<[string, string][]> {
+    return adapterSecrets(this.context, nodeId, agentId, env);
+  }
+
   /** 节点数据与状态行推出来的计划（休眠唤醒、重启后接回）。 */
   private derive(nodeId: string, agentId: string): AcpStartPlan {
     const node = loadNode(this.context.db.database, nodeId);
@@ -216,6 +251,33 @@ class AcpRuntime {
       signal: (signal, raw) => {
         const event = normalizeAs("acp", agentId, nodeId, signal);
         if (event === undefined) return;
+        if (signal.signal === "elicitation") {
+          // 契约 §26.1：elicitation 的状态是 `waiting`，reducer 只给 `blocked`
+          // 记审批行，所以这一条由这里记、这里发，形状与权限请求的审批相同。
+          try {
+            const record = insertApproval(
+              context.db.database,
+              signal.pendingId,
+              nodeId,
+              workspaceId,
+              raw ?? null,
+            );
+            context.bus.emit("workspace.event", {
+              workspaceId,
+              event: {
+                type: "agent.approval",
+                nodeId,
+                pendingId: signal.pendingId,
+                request: record,
+              },
+            });
+          } catch (error) {
+            context.log.warn("could not record the ACP elicitation", {
+              nodeId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
         try {
           apply(this.ingest(), workspaceId, agentId, event, raw ?? null);
         } catch (error) {
@@ -244,6 +306,15 @@ class AcpRuntime {
       // §4.3：ACP 会话 id 就是 CLI 自己的、本地历史又找得到这个会话时，认
       // CLI 的转录（与终端驱动字节相同）；否则认镜像。
       transcriptPath: (acpSessionId, mirror) => {
+        if (adapter.sessionId === "mapFile") {
+          // §26.3：适配器自己的映射文件把 ACP 会话 id 对回 CLI 的会话文件；
+          // 读不到就与 `opaque` 一样认镜像。
+          const session = mappedSession(adapter, acpSessionId);
+          if (session !== undefined && existsSync(session.sessionFile)) {
+            return session.sessionFile;
+          }
+          return mirror;
+        }
         if (adapter.sessionId === "same") {
           try {
             const located = historyAdapter(adapter.agentId)?.locate({
@@ -302,10 +373,15 @@ class AcpRuntime {
       processEnv[name] = value;
     }
     for (const [name, value] of injection.env) processEnv[name] = value;
+    // §26.4：适配器不经画布启动器，兑换由 core 在这里做。值只进这个进程的
+    // 环境：不进节点数据、镜像、日志，也不进任何答复。
+    for (const [name, value] of await this.secrets(nodeId, agentId, spec.env)) {
+      processEnv[name] = value;
+    }
 
     const resume =
       typeof plan.resume === "string" && plan.resume !== ""
-        ? plan.resume
+        ? acpResumeId(adapter, plan.resume)
         : undefined;
     const session = new AcpSession({
       rowId,
@@ -330,6 +406,7 @@ class AcpRuntime {
       cwd: spec.cwd,
       env: processEnv,
       ...(mode === undefined ? {} : { mode }),
+      ...(plan.model === undefined ? {} : { modelId: plan.model }),
       ...(injection.profilePath === undefined
         ? {}
         : { profilePath: injection.profilePath }),
@@ -365,6 +442,66 @@ class AcpRuntime {
       agentNames: expectedProcesses(baseAgent(settings, agentId)),
     };
   }
+}
+
+/**
+ * 起适配器前要设给它的密钥（契约 §26.4）：
+ *
+ *   * 节点凭据：节点环境里有条目名（`ownedEnvironment` 已按 §20.3 校验过、
+ *     成员没有 `credential:use` 时已经拒了），这里按 §20.4 同一个兑换取值；
+ *   * ama 的模型密钥：节点的基础 CLI 是 ama 时，与 `run/ama` 经 hook 面兑换的
+ *     同一份（§12.4）。
+ *
+ * 兑换失败与启动器一样拒绝起会话，不悄悄用默认登录起。
+ */
+async function adapterSecrets(
+  context: CoreContext,
+  nodeId: string,
+  agentId: string,
+  env: readonly (readonly [string, string])[],
+): Promise<[string, string][]> {
+  const out: [string, string][] = [];
+  const ref = env.find(([name]) => name === CREDENTIAL_REF_ENV)?.[1];
+  if (ref !== undefined && ref !== "") {
+    const credentials = credentialsDomain();
+    if (credentials === undefined) {
+      throw new TerminalError(
+        503,
+        "credential_unavailable",
+        "Node credentials are not assembled in this core",
+      );
+    }
+    try {
+      const redeemed = await credentials.redeem(
+        nodeId,
+        ref,
+        persistedBinding(context.db.database, nodeId),
+      );
+      out.push([redeemed.variable, redeemed.value]);
+    } catch (failure) {
+      if (failure instanceof CredentialError) {
+        throw new TerminalError(failure.status, failure.code, failure.message);
+      }
+      throw failure;
+    }
+  }
+  if (baseAgent(agentSettings(), agentId) === "ama") {
+    const keys = amaCredentials();
+    if (keys !== undefined) {
+      try {
+        for (const key of await keys.variables()) {
+          out.push([key.variable, key.value]);
+        }
+      } catch {
+        throw new TerminalError(
+          503,
+          "secret_unavailable",
+          "The secret store is unavailable",
+        );
+      }
+    }
+  }
+  return out;
 }
 
 let runtime: AcpRuntime | undefined;
@@ -423,6 +560,12 @@ export function install(context: CoreContext): void {
       ?.sessions()
       .find((candidate) => candidate.owns(approval.id));
     return session?.answer(approval.id, optionId) ?? false;
+  });
+  setAcpElicitationAnswerer((approval, result) => {
+    const session = backend
+      ?.sessions()
+      .find((candidate) => candidate.owns(approval.id));
+    return session?.answerElicitation(approval.id, result) ?? false;
   });
 
   if (!exitHooked) {

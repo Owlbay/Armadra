@@ -11,8 +11,19 @@ import type { BoardComment, CommentPerson } from "@armadra/shared";
 import { TestProviders, installDomPolyfills } from "@/app/test-harness";
 import { terminal } from "../realtime.fixture";
 import { CommentComposer, mentionQuery } from "./CommentComposer";
-import { anchorAt, anchorPosition, pinGroups } from "./CommentLayer";
-import { CommentThread } from "./CommentThread";
+import {
+  anchorAt,
+  anchorPosition,
+  clusterPins,
+  pinGroups,
+} from "./CommentLayer";
+import { CommentPin } from "./CommentPin";
+import {
+  CommentBody,
+  CommentThread,
+  commentUrl,
+  markdownSource,
+} from "./CommentThread";
 import { CommentsPanelView } from "./CommentsPanel";
 import { bodyParts, decodeMentions, encodeMentions, threadsOf } from "./store";
 
@@ -123,6 +134,119 @@ describe("线程与钉", () => {
       x: -500,
       y: -501,
     });
+  });
+});
+
+describe("钉按屏幕距离聚合", () => {
+  const groupAt = (key: string, x: number, y: number, count = 1) => ({
+    group: {
+      key,
+      anchor: { kind: "point" as const, x, y },
+      threads: [],
+      count,
+      open: true,
+      firstAuthor: ME,
+    },
+    at: { x, y },
+  });
+
+  it("屏幕距离 < 24px 聚成一枚，缩放变了重算", () => {
+    const pins = [
+      groupAt("a", 0, 0),
+      groupAt("b", 20, 0),
+      groupAt("c", 100, 0),
+    ];
+    // 缩放 1：a 与 b 相距 20px 聚在一起，c 单独。
+    expect(
+      clusterPins(pins, 1).map((cluster) =>
+        cluster.groups.map((group) => group.key),
+      ),
+    ).toEqual([["a", "b"], ["c"]]);
+    // 放大到 2：a 与 b 在屏幕上相距 40px，分开。
+    expect(clusterPins(pins, 2)).toHaveLength(3);
+    // 缩小到 0.2：100 画布单位只有 20px，全部聚成一枚，位置是第一枚的。
+    const [all] = clusterPins(pins, 0.2);
+    expect(all).toMatchObject({ key: "a", at: { x: 0, y: 0 } });
+    expect(all?.groups).toHaveLength(3);
+    // 恰好 24px 不算挨着。
+    expect(
+      clusterPins([groupAt("a", 0, 0), groupAt("b", 24, 0)], 1),
+    ).toHaveLength(2);
+  });
+
+  it("聚合的钉画「+N」，单枚画条数", () => {
+    render(
+      <TestProviders>
+        <CommentPin count={7} merged={3} open color={1} label="x" />
+        <CommentPin count={7} open color={1} label="y" />
+      </TestProviders>,
+    );
+    expect(screen.getByRole("button", { name: "x" }).textContent).toBe("+3");
+    expect(screen.getByRole("button", { name: "y" }).textContent).toBe("7");
+  });
+});
+
+describe("正文 Markdown", () => {
+  it("渲染 Markdown，裸 HTML 不执行也不出现", () => {
+    const { container } = render(
+      <TestProviders>
+        <CommentBody
+          body={
+            '**粗** 与 `code`\n\n- 一\n- 二\n\n<script>window.pwned = 1</script><img src=x onerror="window.pwned=1"><b>raw</b>'
+          }
+        />
+      </TestProviders>,
+    );
+    expect(container.querySelector("strong")?.textContent).toBe("粗");
+    expect(container.querySelector("code")?.textContent).toBe("code");
+    expect(container.querySelectorAll("li")).toHaveLength(2);
+    expect(container.querySelector("script")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("b")).toBeNull();
+    expect(container.innerHTML).not.toContain("onerror");
+    expect(container.textContent).not.toContain("pwned");
+    expect((window as unknown as { pwned?: number }).pwned).toBeUndefined();
+  });
+
+  it("链接只开 http(s)，别的协议与图片只剩文字", () => {
+    const { container } = render(
+      <TestProviders>
+        <CommentBody
+          body={
+            "[ok](https://example.com) [bad](javascript:alert(1)) [data](data:text/html,x) [rel](/etc/passwd) ![pic](https://example.com/a.png)"
+          }
+        />
+      </TestProviders>,
+    );
+    const links = [...container.querySelectorAll("a")];
+    expect(links.map((a) => a.getAttribute("href"))).toEqual([
+      "https://example.com",
+    ]);
+    expect(links[0]?.getAttribute("rel")).toBe("noreferrer noopener");
+    expect(links[0]?.getAttribute("target")).toBe("_blank");
+    expect(container.innerHTML).not.toContain("javascript:");
+    expect(container.innerHTML).not.toContain("data:text");
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toContain("bad");
+    expect(container.textContent).toContain("pic");
+    expect(commentUrl("JavaScript:x")).toBe("");
+    expect(commentUrl("HTTPS://a.b")).toBe("HTTPS://a.b");
+  });
+
+  it("提及先换掉，名字里的 Markdown 记号不生效", () => {
+    expect(markdownSource(`hi @[A*b*](principal:${VERA})`)).toBe(
+      `hi [@A\\*b\\*](principal:${VERA})`,
+    );
+    const { container } = render(
+      <TestProviders>
+        <CommentBody body={`**看** @[A*b*](principal:${VERA}) 这里`} />
+      </TestProviders>,
+    );
+    const mention = container.querySelector("[data-mention]");
+    expect(mention?.getAttribute("data-mention")).toBe(VERA);
+    expect(mention?.textContent).toBe("@A*b*");
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector("strong")?.textContent).toBe("看");
   });
 });
 

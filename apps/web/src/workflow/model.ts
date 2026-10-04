@@ -163,3 +163,161 @@ export function filledParams(
     Object.entries(values).filter(([, value]) => value.trim() !== ""),
   );
 }
+
+/* ------------------------------ 编辑器（R-36） ----------------------------- */
+
+type Step = WorkflowDraft["steps"][number];
+type Role = WorkflowDraft["roles"][number];
+
+/** 不和已有的重名的下一个标识：`step1`、`step2`……（`[A-Za-z][A-Za-z0-9_-]*`）。 */
+export function nextId(prefix: string, taken: readonly string[]): string {
+  for (let n = taken.length + 1; ; n += 1) {
+    const id = `${prefix}${n}`;
+    if (!taken.includes(id)) return id;
+  }
+}
+
+/**
+ * 在末尾加一步：依赖上一步（顺序执行），汇总步骤从上一步汇总；提示 / 汇总
+ * 用第一个角色。正文留空，由人填。
+ */
+export function addStep(
+  draft: WorkflowDraft,
+  kind: Step["kind"],
+): { draft: WorkflowDraft; id: string } {
+  const id = nextId(
+    "step",
+    draft.steps.map((step) => step.id),
+  );
+  const previous = draft.steps.at(-1)?.id;
+  const after = previous === undefined ? [] : [previous];
+  const role = draft.roles[0]?.id ?? "";
+  const step: Step =
+    kind === "gate"
+      ? { id, kind, label: "", after }
+      : kind === "collect"
+        ? { id, kind, role, prompt: "", from: after, after }
+        : { id, kind, role, prompt: "", after };
+  return { draft: { ...draft, steps: [...draft.steps, step] }, id };
+}
+
+/** 删一步：别的步骤对它的依赖与汇总来源一并去掉。 */
+export function removeStep(
+  draft: WorkflowDraft,
+  stepId: string,
+): WorkflowDraft {
+  return {
+    ...draft,
+    steps: draft.steps
+      .filter((step) => step.id !== stepId)
+      .map((step) => {
+        const after = step.after.filter((id) => id !== stepId);
+        return step.kind === "collect"
+          ? { ...step, after, from: step.from.filter((id) => id !== stepId) }
+          : { ...step, after };
+      }),
+  };
+}
+
+/** 拖排：把第 `from` 步挪到第 `to` 位。依赖不变，只是列表顺序。 */
+export function moveStep(
+  draft: WorkflowDraft,
+  from: number,
+  to: number,
+): WorkflowDraft {
+  if (from === to || from < 0 || to < 0) return draft;
+  if (from >= draft.steps.length || to >= draft.steps.length) return draft;
+  const steps = [...draft.steps];
+  const [moved] = steps.splice(from, 1);
+  steps.splice(to, 0, moved as Step);
+  return { ...draft, steps };
+}
+
+/** `stepId` 经依赖（直接或间接）等着 `target` 吗。勾上会成环的依赖不让勾。 */
+export function dependsOn(
+  draft: WorkflowDraft,
+  stepId: string,
+  target: string,
+): boolean {
+  const edges = new Map(draft.steps.map((step) => [step.id, step.after]));
+  const seen = new Set<string>();
+  const stack = [...(edges.get(stepId) ?? [])];
+  while (stack.length > 0) {
+    const id = stack.pop() as string;
+    if (id === target) return true;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    stack.push(...(edges.get(id) ?? []));
+  }
+  return false;
+}
+
+/** 加一个角色：沿用第一个角色的 CLI。 */
+export function addRole(draft: WorkflowDraft): {
+  draft: WorkflowDraft;
+  id: string;
+} {
+  const id = nextId(
+    "role",
+    draft.roles.map((role) => role.id),
+  );
+  const role: Role = { id, agentId: draft.roles[0]?.agentId ?? "claude" };
+  return { draft: { ...draft, roles: [...draft.roles, role] }, id };
+}
+
+/** 有步骤在用、或只剩一个角色时不能删。 */
+export function roleInUse(draft: WorkflowDraft, roleId: string): boolean {
+  return draft.steps.some(
+    (step) => step.kind !== "gate" && step.role === roleId,
+  );
+}
+
+/** 删一个角色：连着它的协作连线一并去掉。调用方先用 {@link roleInUse} 挡住。 */
+export function removeRole(
+  draft: WorkflowDraft,
+  roleId: string,
+): WorkflowDraft {
+  return {
+    ...draft,
+    roles: draft.roles.filter((role) => role.id !== roleId),
+    links: draft.links.filter(
+      (link) => link.from !== roleId && link.to !== roleId,
+    ),
+  };
+}
+
+export function updateRole(
+  draft: WorkflowDraft,
+  roleId: string,
+  patch: Partial<Role>,
+): WorkflowDraft {
+  return {
+    ...draft,
+    roles: draft.roles.map((role) =>
+      role.id === roleId ? { ...role, ...patch } : role,
+    ),
+  };
+}
+
+/**
+ * 保存前页面能看出来的问题（core 会再按契约 §15.1 校验一遍）：每一步的正文
+ * 不空、汇总至少有一个来源、步骤与角色都至少一个。答出有问题的步骤 id。
+ */
+export function incompleteSteps(draft: WorkflowDraft): string[] {
+  return draft.steps
+    .filter((step) =>
+      step.kind === "gate"
+        ? step.label.trim() === ""
+        : step.prompt.trim() === "" ||
+          (step.kind === "collect" && step.from.length === 0),
+    )
+    .map((step) => step.id);
+}
+
+export function canSaveDraft(draft: WorkflowDraft): boolean {
+  return (
+    draft.steps.length > 0 &&
+    draft.roles.length > 0 &&
+    incompleteSteps(draft).length === 0
+  );
+}

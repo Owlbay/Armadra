@@ -14,6 +14,10 @@
  *      ——说了只读却以可写模式起来比起不来更糟；
  *   5. 开会话（new / load / resume）带 `mcpServers`（画布工具，§5.8，`mcp.ts`）
  *      ——客户端不支持时照旧开，结果里 `mcpInjected: false`。
+ *   6. 模型目录（契约 §26.2）：开会话答的 `configOptions`（没有就看
+ *      `initialize` 答的）里的模型那一项；节点数据记着模型且目录里有时经
+ *      `session/set_config_option` 落上。落不上不拦启动——模型不是安全边界，
+ *      与只读模式不同。客户端没有 `configOptions` 能力时没有目录。
  *
  * 会话、桥、归一化与路由在 G2-1；这里不碰数据库。
  */
@@ -24,13 +28,21 @@ import { agentPath } from "../terminal/environment";
 import { type AcpAdapter, type AcpResume, acpLaunchPlan } from "./adapters";
 import { type CanvasMcpInput, acpMcpServers, sessionOpener } from "./mcp";
 import {
+  type AcpElicitationSettlement,
   AcpError,
   type AcpExit,
+  type AcpPendingElicitation,
   type AcpPendingPermission,
   type AcpPermissionSettlement,
   AcpProcess,
+  acpClientFeatures,
   messageOf,
 } from "./client";
+import {
+  type AcpModelCatalog,
+  configOptionsOf,
+  modelCatalogOf,
+} from "./models";
 import type {
   AcpInitializeResult,
   AcpMcpServer,
@@ -73,6 +85,8 @@ export interface AcpStartOptions {
   readonly modeId?: string;
   /** 找不到 {@link modeId} 时拒绝启动（只读模式）。 */
   readonly requireMode?: boolean;
+  /** 起会话后要落的模型（节点数据 `agent.model`）；目录里没有就不落。 */
+  readonly modelId?: string;
   /** 接回这个会话；`method` 是适配器表的偏好。 */
   readonly resume?: { readonly sessionId: string; readonly method: AcpResume };
   /** 开会话时交给 Agent 的 MCP 服务器（§5.8）；缺席或空 = 不带。 */
@@ -86,6 +100,11 @@ export interface AcpStartOptions {
   readonly onPermissionSettled?: (
     pending: AcpPendingPermission,
     settlement: AcpPermissionSettlement,
+  ) => void;
+  readonly onElicitation?: (pending: AcpPendingElicitation) => void;
+  readonly onElicitationSettled?: (
+    pending: AcpPendingElicitation,
+    settlement: AcpElicitationSettlement,
   ) => void;
   readonly onStderr?: (text: string) => void;
   readonly onExit?: (exit: AcpExit) => void;
@@ -103,6 +122,10 @@ export interface AcpHostSession {
   readonly modes: AcpSessionModeState | null;
   /** 要求了模式：落上了没有。没要求时缺席。 */
   readonly modeApplied?: boolean;
+  /** 模型目录（§26.2）；客户端或 Agent 不给时为 `null`。 */
+  readonly models: AcpModelCatalog | null;
+  /** 要求了模型：落上了没有。没要求时缺席。 */
+  readonly modelApplied?: boolean;
   /**
    * 要求带 MCP 服务器：真的随开会话发出去了没有（客户端旧版不支持时为
    * false，会话照样可用、只是没有画布工具）。没要求时缺席。
@@ -182,12 +205,18 @@ export async function startAcp(
     ...(options.onPermissionSettled === undefined
       ? {}
       : { onPermissionSettled: options.onPermissionSettled }),
+    ...(options.onElicitation === undefined
+      ? {}
+      : { onElicitation: options.onElicitation }),
+    ...(options.onElicitationSettled === undefined
+      ? {}
+      : { onElicitationSettled: options.onElicitationSettled }),
     ...(options.onStderr === undefined ? {} : { onStderr: options.onStderr }),
     ...(options.onExit === undefined ? {} : { onExit: options.onExit }),
   });
 
   try {
-    const capabilities = await negotiate(process_, options);
+    const { capabilities, initialized } = await negotiate(process_, options);
     if (options.agentId !== undefined && capabilities.agent !== undefined) {
       versions.set(options.agentId, capabilities.agent.version);
     }
@@ -196,6 +225,7 @@ export async function startAcp(
     let opened: AcpOpenMethod = "new";
     let sessionId: string | undefined;
     let modes: AcpSessionModeState | null = null;
+    let config: unknown;
     let resumeError: { code: string; message: string } | undefined;
 
     if (options.resume !== undefined) {
@@ -212,10 +242,12 @@ export async function startAcp(
             replaying = id;
             const result = await opener.loadSession(id, options.cwd);
             modes = result.modes ?? null;
+            config = configOptionsOf(result);
             opened = "load";
           } else {
             const result = await opener.resumeSession(id, options.cwd);
             modes = result.modes ?? null;
+            config = configOptionsOf(result);
             opened = "resume";
           }
           sessionId = id;
@@ -236,6 +268,7 @@ export async function startAcp(
         const result = await opener.newSession(options.cwd);
         sessionId = result.sessionId;
         modes = result.modes ?? null;
+        config = configOptionsOf(result);
       } catch (error) {
         if (await gone(process_, error)) throw exitedError(process_);
         if (rpcCode(error) === -32000) {
@@ -262,6 +295,21 @@ export async function startAcp(
       }
     }
 
+    let models: AcpModelCatalog | null = acpClientFeatures().configOptions
+      ? (modelCatalogOf(config) ?? modelCatalogOf(configOptionsOf(initialized)))
+      : null;
+    let modelApplied: boolean | undefined;
+    if (options.modelId !== undefined) {
+      const applied = await applyModel(
+        process_,
+        sessionId,
+        models,
+        options.modelId,
+      );
+      modelApplied = applied.applied;
+      models = applied.models;
+    }
+
     return {
       process: process_,
       sessionId,
@@ -271,6 +319,8 @@ export async function startAcp(
       capabilities,
       modes,
       ...(modeApplied === undefined ? {} : { modeApplied }),
+      models,
+      ...(modelApplied === undefined ? {} : { modelApplied }),
       ...((options.mcpServers?.length ?? 0) === 0
         ? {}
         : { mcpInjected: opener.mcpInjected }),
@@ -284,12 +334,16 @@ export async function startAcp(
 async function negotiate(
   process_: AcpProcess,
   options: Pick<AcpStartOptions, "initializeTimeoutMs">,
-): Promise<AcpCapabilities> {
+): Promise<{
+  capabilities: AcpCapabilities;
+  initialized: AcpInitializeResult;
+}> {
   const timeout = AbortSignal.timeout(
     options.initializeTimeoutMs ?? INITIALIZE_TIMEOUT_MS,
   );
   try {
-    return capabilitiesOf(await process_.client.initialize(timeout));
+    const initialized = await process_.client.initialize(timeout);
+    return { capabilities: capabilitiesOf(initialized), initialized };
   } catch (error) {
     if (await gone(process_, error)) throw exitedError(process_);
     if (timeout.aborted) {
@@ -322,6 +376,37 @@ async function applyMode(
   } catch (error) {
     if (await gone(process_, error)) throw exitedError(process_);
     return false;
+  }
+}
+
+/**
+ * 落模型。目录里没有、已经是它、或 Agent 拒了都不拦启动；答落上了没有与改后
+ * 的目录（Agent 答复里带了 `configOptions` 就以它为准）。
+ */
+async function applyModel(
+  process_: AcpProcess,
+  sessionId: string,
+  models: AcpModelCatalog | null,
+  modelId: string,
+): Promise<{ applied: boolean; models: AcpModelCatalog | null }> {
+  if (models === null) return { applied: false, models };
+  if (!models.availableModels.some((model) => model.modelId === modelId)) {
+    return { applied: false, models };
+  }
+  if (models.currentModelId === modelId) return { applied: true, models };
+  try {
+    const answer = await process_.setConfigOption(
+      sessionId,
+      models.configId,
+      modelId,
+    );
+    return {
+      applied: true,
+      models: modelCatalogOf(answer) ?? { ...models, currentModelId: modelId },
+    };
+  } catch (error) {
+    if (await gone(process_, error)) throw exitedError(process_);
+    return { applied: false, models };
   }
 }
 
@@ -465,7 +550,7 @@ export async function probeAcp(
     ...(options.env === undefined ? {} : { env: options.env }),
   });
   try {
-    const capabilities = await negotiate(process_, options);
+    const { capabilities } = await negotiate(process_, options);
     if (options.agentId !== undefined && capabilities.agent !== undefined) {
       versions.set(options.agentId, capabilities.agent.version);
     }

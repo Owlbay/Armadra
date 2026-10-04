@@ -1,3 +1,4 @@
+import type { WorkflowScheduleBridge } from "../schedule/workflow-target";
 import type { WorkflowEngine } from "./engine";
 import type { WorkflowService } from "./service";
 
@@ -21,4 +22,20 @@ export function setWorkflowDomain(domain: WorkflowDomain | undefined): void {
 
 export function workflowDomain(): WorkflowDomain | undefined {
   return current;
+}
+
+let schedules: WorkflowScheduleBridge | undefined;
+
+/**
+ * 调度域装配时登记的那座桥：改模板之后列出冻结的计划、把计划升到新版本
+ * （契约 §15.6）。没有调度域时是 `undefined`，模板照改，只是没有计划可列。
+ */
+export function setWorkflowScheduleBridge(
+  bridge: WorkflowScheduleBridge | undefined,
+): void {
+  schedules = bridge;
+}
+
+export function workflowScheduleBridge(): WorkflowScheduleBridge | undefined {
+  return schedules;
 }

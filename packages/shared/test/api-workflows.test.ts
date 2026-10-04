@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   workflowDraftSchema,
+  workflowFrozenScheduleSchema,
   workflowRunSchema,
+  workflowUpgradeResultSchema,
   workspaceEventSchema,
 } from "../src/index.js";
 
@@ -124,5 +126,43 @@ describe("run and event shapes", () => {
     ]) {
       expect(workspaceEventSchema.safeParse(event).success).toBe(true);
     }
+  });
+});
+
+describe("模板升级（契约 §15.6 追加）", () => {
+  it("冻结计划与升级答复的形状", () => {
+    expect(
+      workflowFrozenScheduleSchema.safeParse({
+        scheduleId: "p",
+        workspaceId: "ws",
+        templateVersion: 1,
+        reason: "missing_params",
+        missingParams: ["owner"],
+        unknownParams: [],
+      }).success,
+    ).toBe(true);
+    expect(
+      workflowFrozenScheduleSchema.safeParse({
+        scheduleId: "p",
+        workspaceId: "ws",
+        templateVersion: 1,
+        reason: "forbidden",
+        missingParams: [],
+        unknownParams: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      workflowUpgradeResultSchema.safeParse({
+        upgraded: [{ scheduleId: "a", revision: 3 }],
+        frozen: [
+          {
+            scheduleId: "b",
+            reason: "forbidden",
+            missingParams: [],
+            unknownParams: [],
+          },
+        ],
+      }).success,
+    ).toBe(true);
   });
 });

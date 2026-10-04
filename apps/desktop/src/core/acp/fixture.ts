@@ -13,6 +13,7 @@ import { install as installAgents, setTerminalBridge } from "../agent";
 import { setAcpApprovalAnswerer } from "../agent/approvals";
 import { install as installCanvas } from "../canvas/routes";
 import type { CoreContext } from "../main";
+import type { SecretBackend } from "../secrets/backend";
 import { install as installSettings } from "../settings";
 import { install as installTerminals } from "../terminal/install";
 import type { TerminalDomain } from "../terminal/install";
@@ -32,6 +33,8 @@ export interface AcpCore {
     driver?: "acp" | "terminal";
     agentId?: string;
     title?: string;
+    /** 节点绑定的凭据条目名（`agent.account.credentialRef`，契约 §20.3）。 */
+    credentialRef?: string;
   }): Promise<string>;
   /** 连一条边（`link`）。 */
   link(source: string, target: string): Promise<void>;
@@ -58,7 +61,15 @@ export async function until<T>(
 }
 
 export async function acpCore(
-  options: { minimal?: boolean } = {},
+  options: {
+    minimal?: boolean;
+    /** 换一个假 Agent 程序（契约 §26 的用例：`feature-fixture.ts`）。 */
+    agentPath?: string;
+    /** 自定义条目的基础 CLI；缺省 `opencode`。 */
+    baseAgent?: string;
+    /** 节点凭据用的密钥后端（缺省按数据目录解析）。 */
+    credentialSecrets?: SecretBackend;
+  } = {},
 ): Promise<AcpCore> {
   let terminal: TerminalDomain | undefined;
   const core = fixture([
@@ -67,7 +78,15 @@ export async function acpCore(
     installSettings,
     installAgents,
     (context: CoreContext) => {
-      terminal = installTerminals(context, { configured: "direct" });
+      terminal = installTerminals(context, {
+        configured: "direct",
+        ...(options.credentialSecrets === undefined
+          ? {}
+          : {
+              credentialSecrets: options.credentialSecrets,
+              platform: "darwin",
+            }),
+      });
     },
     installAcp,
   ]);
@@ -78,8 +97,11 @@ export async function acpCore(
           id: FAKE_AGENT,
           label: "Fake ACP",
           launchCmd: process.execPath,
-          args: [fakeAcpAgentPath(), ...(options.minimal ? ["--minimal"] : [])],
-          baseAgent: "opencode",
+          args: [
+            options.agentPath ?? fakeAcpAgentPath(),
+            ...(options.minimal ? ["--minimal"] : []),
+          ],
+          baseAgent: options.baseAgent ?? "opencode",
         },
       ],
     },
@@ -152,6 +174,14 @@ export async function acpCore(
             agent: {
               id: input.agentId ?? FAKE_AGENT,
               driver: input.driver ?? "acp",
+              ...(input.credentialRef === undefined
+                ? {}
+                : {
+                    account: {
+                      accountId: "default",
+                      credentialRef: input.credentialRef,
+                    },
+                  }),
             },
           },
           createdAt: stamp,
