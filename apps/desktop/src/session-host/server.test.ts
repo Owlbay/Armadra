@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { signHello } from "../core/terminal/session-host/auth";
+import { keyPath, signHello } from "../core/terminal/session-host/auth";
 import { type LinkEvent, Link } from "../core/terminal/session-host/link";
 import {
   PIPE_PREFIX,
@@ -11,6 +11,7 @@ import {
   createMessage,
   resizeMessage,
 } from "../core/terminal/session-host/protocol";
+import { requestShutdownIfIdle } from "../core/terminal/session-host/shutdown";
 import { type FakePty, fakeSpawner } from "./fake-pty";
 import { AlreadyServing, SessionHost } from "./server";
 
@@ -49,13 +50,18 @@ afterEach(async () => {
 
 interface Harness {
   readonly host: SessionHost;
+  readonly dataDir: string;
   readonly endpoint: string;
   readonly key: Buffer;
   readonly opened: FakePty[];
+  /** Every reason the host gave for leaving, in order. */
+  readonly left: string[];
   last(): FakePty;
 }
 
-async function serve(options: { idleExitMs?: number } = {}): Promise<Harness> {
+async function serve(
+  options: { idleExitMs?: number; orphanExitMs?: number } = {},
+): Promise<Harness> {
   const dataDir = mkdtempSync(join(tmpdir(), "armadra-host-"));
   // Short, because a Unix socket path has about a hundred bytes to live in.
   // Windows has no sockets in the filesystem at all: a pipe lives in its own
@@ -65,6 +71,8 @@ async function serve(options: { idleExitMs?: number } = {}): Promise<Harness> {
       ? `${PIPE_PREFIX}test-${randomBytes(8).toString("hex")}`
       : join(dataDir, "s");
   const key = randomBytes(32);
+  // Where `requestShutdownIfIdle` reads it, as a real host's key would be.
+  writeFileSync(keyPath(dataDir), key.toString("hex"));
   const spawner = fakeSpawner();
   const host = new SessionHost({
     dataDir,
@@ -76,13 +84,26 @@ async function serve(options: { idleExitMs?: number } = {}): Promise<Harness> {
     ...(options.idleExitMs === undefined
       ? {}
       : { idleExitMs: options.idleExitMs }),
+    ...(options.orphanExitMs === undefined
+      ? {}
+      : { orphanExitMs: options.orphanExitMs }),
   });
+  const left: string[] = [];
+  host.onLeaving((reason) => left.push(reason));
   await host.listen();
   scrap.push(() => {
     void host.close();
     rmSync(dataDir, { recursive: true, force: true });
   });
-  return { host, endpoint, key, opened: spawner.opened, last: spawner.last };
+  return {
+    host,
+    dataDir,
+    endpoint,
+    key,
+    opened: spawner.opened,
+    left,
+    last: spawner.last,
+  };
 }
 
 interface Client {
@@ -609,5 +630,204 @@ describe("ending a session", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(harness.host.sessionCount).toBe(1);
     expect(harness.last().killed).toBe(0);
+  });
+});
+
+/* --------------------------------- leaving -------------------------------- */
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * R-68: a host that holds nothing for nobody must not sit on `Armadra.exe`
+ * for half an hour — that is the process an uninstall or upgrade would then
+ * kill by name. "Nobody" is "no authenticated connection": the core keeps
+ * one control connection open for as long as it runs.
+ */
+describe("leaving when nothing is held", () => {
+  it("leaves soon after starting when no client ever connects", async () => {
+    const harness = await serve({ orphanExitMs: 50 });
+    await until(() => harness.left.length > 0, "the orphan exit");
+    expect(harness.left[0]).toMatch(/no live session and no client/);
+  });
+
+  it("stays while a core is connected, and leaves once it goes", async () => {
+    const harness = await serve({ orphanExitMs: 50 });
+    const client = await connect(harness);
+    await sleep(200);
+    expect(harness.left).toEqual([]);
+    client.link.close();
+    await until(() => harness.left.length > 0, "the orphan exit");
+  });
+
+  it("does not count a connection that never got past the handshake", async () => {
+    const harness = await serve({ orphanExitMs: 80 });
+    const link = await Link.connect(harness.endpoint, () => {});
+    scrap.push(() => link.close());
+    await until(() => harness.left.length > 0, "the orphan exit");
+  });
+
+  it("stays with a live session even when nobody is connected", async () => {
+    const harness = await serve({ orphanExitMs: 50 });
+    const client = await connect(harness);
+    await created(client);
+    client.link.close();
+    await sleep(250);
+    expect(harness.left).toEqual([]);
+    expect(harness.last().killed).toBe(0);
+  });
+
+  it("leaves once the last session ends with nobody connected", async () => {
+    const harness = await serve({ orphanExitMs: 50 });
+    const client = await connect(harness);
+    await created(client);
+    client.link.close();
+    await sleep(100);
+    expect(harness.left).toEqual([]);
+    harness.last().exit(0);
+    await until(() => harness.left.length > 0, "the orphan exit");
+  });
+
+  it("is cancelled by a core connecting inside the window", async () => {
+    const harness = await serve({ orphanExitMs: 150 });
+    await connect(harness);
+    await sleep(300);
+    expect(harness.left).toEqual([]);
+  });
+});
+
+describe("shutdownIfIdle", () => {
+  it("answers leaving and leaves when no session is live", async () => {
+    const harness = await serve();
+    const client = await connect(harness);
+    const id = client.next();
+    const answer = await client.link.request(id, {
+      type: "shutdownIfIdle",
+      id,
+    });
+    expect(answer).toMatchObject({ type: "ok", leaving: true });
+    await until(() => harness.left.length > 0, "the leaving");
+    expect(harness.left).toEqual(["shutdownIfIdle"]);
+  });
+
+  it("refuses a create that races the decision to leave", async () => {
+    const harness = await serve();
+    const client = await connect(harness);
+    const id = client.next();
+    await client.link.request(id, { type: "shutdownIfIdle", id });
+    const create = client.next();
+    const answer = await client.link.request(
+      create,
+      createMessage(create, SPEC),
+    );
+    expect(answer).toMatchObject({ type: "error", code: "draining" });
+    expect(harness.opened).toHaveLength(0);
+  });
+
+  it("answers not leaving and keeps a live session untouched", async () => {
+    const harness = await serve();
+    const client = await connect(harness);
+    await created(client);
+    const id = client.next();
+    const answer = await client.link.request(id, {
+      type: "shutdownIfIdle",
+      id,
+    });
+    expect(answer).toMatchObject({ type: "ok", leaving: false });
+    await sleep(50);
+    expect(harness.left).toEqual([]);
+    expect(harness.host.sessionCount).toBe(1);
+    expect(harness.last().killed).toBe(0);
+  });
+
+  it("counts an exited session as nothing held", async () => {
+    const harness = await serve();
+    const client = await connect(harness);
+    await created(client);
+    harness.last().exit(0);
+    await sleep(20);
+    const id = client.next();
+    const answer = await client.link.request(id, {
+      type: "shutdownIfIdle",
+      id,
+    });
+    expect(answer).toMatchObject({ type: "ok", leaving: true });
+  });
+});
+
+/** The client half the shell and the installer helper use. */
+describe("requestShutdownIfIdle", () => {
+  it("reports a host that agreed and whose process then ended", async () => {
+    const harness = await serve();
+    let polls = 0;
+    const outcome = await requestShutdownIfIdle({
+      dataDir: harness.dataDir,
+      endpoint: harness.endpoint,
+      client: "test",
+      waitMs: 5_000,
+      isAlive: () => (polls += 1) < 3,
+    });
+    expect(outcome).toEqual({ kind: "left", pid: process.pid });
+    expect(harness.left).toEqual(["shutdownIfIdle"]);
+  });
+
+  it("reports a host that agreed but outlived the wait", async () => {
+    const harness = await serve();
+    const outcome = await requestShutdownIfIdle({
+      dataDir: harness.dataDir,
+      endpoint: harness.endpoint,
+      client: "test",
+      waitMs: 150,
+      isAlive: () => true,
+    });
+    expect(outcome).toEqual({ kind: "leaving", pid: process.pid });
+  });
+
+  it("reports a host kept by a live session as busy", async () => {
+    const harness = await serve();
+    const client = await connect(harness);
+    await created(client);
+    const outcome = await requestShutdownIfIdle({
+      dataDir: harness.dataDir,
+      endpoint: harness.endpoint,
+      client: "test",
+    });
+    expect(outcome).toEqual({ kind: "busy", pid: process.pid });
+    expect(harness.host.sessionCount).toBe(1);
+  });
+
+  it("reports nothing to ask when no key file exists, without creating one", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "armadra-host-"));
+    scrap.push(() => rmSync(dataDir, { recursive: true, force: true }));
+    const outcome = await requestShutdownIfIdle({
+      dataDir,
+      endpoint: join(dataDir, "s"),
+      client: "test",
+    });
+    expect(outcome.kind).toBe("absent");
+  });
+
+  it("reports nothing to ask when nothing listens", async () => {
+    const harness = await serve();
+    await harness.host.close();
+    const outcome = await requestShutdownIfIdle({
+      dataDir: harness.dataDir,
+      endpoint: harness.endpoint,
+      client: "test",
+    });
+    expect(outcome.kind).toBe("absent");
+  });
+
+  it("fails rather than hangs on a host that refuses the proof", async () => {
+    const harness = await serve();
+    writeFileSync(keyPath(harness.dataDir), randomBytes(32).toString("hex"));
+    const outcome = await requestShutdownIfIdle({
+      dataDir: harness.dataDir,
+      endpoint: harness.endpoint,
+      client: "test",
+      timeoutMs: 2_000,
+    });
+    expect(outcome.kind).toBe("failed");
+    expect(harness.left).toEqual([]);
   });
 });
