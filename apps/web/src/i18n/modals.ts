@@ -49,6 +49,9 @@ export const modals: MessageModule = {
     "settings.codexCliFallbackHint": "OAuth 取不到时启动本机 codex 读取额度。",
     "settings.costEnabled": "本地成本统计",
     "settings.costEnabledHint": "扫描本机转录汇总 token；正文不出现在结果里。",
+    "settings.claudeLocalWindow": "Claude 本地额度估算",
+    "settings.claudeLocalWindowHint":
+      "额度读取关着时，按本机转录估算 5 小时与 7 天窗口。",
     "settings.priceSource": "价格来源",
     "settings.priceSourceHint":
       "上下文上限用同一份目录；{path} 里的价格仍然优先。",
@@ -347,6 +350,9 @@ export const modals: MessageModule = {
     "settings.costEnabled": "Local cost tracking",
     "settings.costEnabledHint":
       "Counts tokens in local transcripts; their text never leaves your machine.",
+    "settings.claudeLocalWindow": "Claude local window estimate",
+    "settings.claudeLocalWindowHint":
+      "With quota reads off, estimate the 5-hour and 7-day windows from local transcripts.",
     "settings.priceSource": "Price source",
     "settings.priceSourceHint":
       "Context limits come from the same catalog; prices in {path} still win.",

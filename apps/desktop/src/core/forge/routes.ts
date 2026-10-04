@@ -37,6 +37,9 @@ export const FORGE_ROUTES = {
   pullFiles: `${REPO}/pulls/{number}/files`,
   pullChecks: `${REPO}/pulls/{number}/checks`,
   pullMerge: `${REPO}/pulls/{number}/merge`,
+  mergeOptions: `${REPO}/merge-options`,
+  pullAutoMerge: `${REPO}/pulls/{number}/auto-merge`,
+  pullBranch: `${REPO}/pulls/{number}/branch`,
 } as const;
 
 const MERGE_METHODS: readonly ForgeMergeMethod[] = [
@@ -84,6 +87,13 @@ export function forgeFailure(error: unknown): HandlerResult {
     case "scopeMissing":
       return coreError(403, "forge_scope", "这个令牌缺少所需的范围");
     case "conflict":
+      if (error.reason === "REBASE_STARTED") {
+        return coreError(
+          409,
+          "rebase_started",
+          "已开始变基，没有合并；等新的 head 出来、核对后再合",
+        );
+      }
       return coreError(
         409,
         "conflict",
@@ -363,6 +373,73 @@ export function installRoutes(server: CoreServer, service: ForgeService): void {
       return {
         status: 200,
         body: await service.forgeFor(repo).checks(repo, number),
+      };
+    }),
+  );
+  // 流水线通过后合并（GitLab，§29.6）：没有这个能力的平台答 400。
+  router.handle(
+    "POST",
+    FORGE_ROUTES.pullAutoMerge,
+    guarded(async (match, request) => {
+      const repo = repoOf(match);
+      const number = numberOf(match);
+      const input = body(request);
+      const method = input.method ?? "merge";
+      if (!MERGE_METHODS.includes(method as ForgeMergeMethod)) {
+        bad("method 只能是 merge、squash 或 rebase");
+      }
+      const headSha = stringField(input, "headSha", {
+        required: true,
+        max: 64,
+      });
+      const forge = service.forgeFor(repo);
+      if (forge.autoMerge === undefined) bad("这个平台没有流水线通过后合并");
+      const result = await forge.autoMerge(repo, number, {
+        method: method as ForgeMergeMethod,
+        headSha,
+      });
+      return { status: 200, body: result };
+    }),
+  );
+  router.handle(
+    "DELETE",
+    FORGE_ROUTES.pullAutoMerge,
+    guarded(async (match) => {
+      const repo = repoOf(match);
+      const number = numberOf(match);
+      const forge = service.forgeFor(repo);
+      if (forge.cancelAutoMerge === undefined) {
+        bad("这个平台没有流水线通过后合并");
+      }
+      await forge.cancelAutoMerge(repo, number);
+      return { status: 200, body: { cancelled: true } };
+    }),
+  );
+  // 合并后删源分支（Gitea / GitLab；GitHub 走 §5 的 `delete-branch`）。
+  router.handle(
+    "DELETE",
+    FORGE_ROUTES.pullBranch,
+    guarded(async (match, request) => {
+      const repo = repoOf(match);
+      const number = numberOf(match);
+      const headSha = request.query.get("headSha") ?? "";
+      if (headSha === "") bad("headSha 不能为空");
+      const forge = service.forgeFor(repo);
+      if (forge.deleteBranch === undefined) bad("这个平台在这里不删分支");
+      return {
+        status: 200,
+        body: await forge.deleteBranch(repo, number, headSha),
+      };
+    }),
+  );
+  router.handle(
+    "GET",
+    FORGE_ROUTES.mergeOptions,
+    guarded(async (match) => {
+      const repo = repoOf(match);
+      return {
+        status: 200,
+        body: await service.forgeFor(repo).mergeOptions(repo),
       };
     }),
   );

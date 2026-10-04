@@ -20,6 +20,7 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { LOOPBACK_OWNER_ENV } from "../probe-home.mjs";
 
 import { stepTrustDialog } from "./trust-dialog.mjs";
 import {
@@ -331,6 +332,8 @@ export async function setup(clis) {
     PI_CODING_AGENT_DIR: join(scratch, "pi-agent"),
     SHELL: shell,
     ARMADRA_TEST_ECO_IDLE_SECONDS: String(ECO_IDLE_SECONDS),
+    // 裸 core 显式打开回环匿名按主人（契约 §3.2）：探针的页面不在壳里、拿不到票。
+    ...LOOPBACK_OWNER_ENV,
   };
   delete environment.TMUX;
   delete environment.TMUX_PANE;

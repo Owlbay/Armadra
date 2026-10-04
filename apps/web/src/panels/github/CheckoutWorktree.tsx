@@ -7,11 +7,32 @@ import { useGitTarget } from "@/git/target";
 import { Button } from "@/ui/button";
 import { Input } from "@/ui/input";
 import { useT } from "@/app/preferences-store";
-import { Field } from "../git/forms";
+import { Field, selectClass } from "../git/forms";
 import { invalidateGitQueries } from "../git/queries";
 import { createWorktreeAction, localBranch } from "../git/worktree";
 import { suggestedHeadRef } from "./model";
-import { GithubPullRequest } from "../../api/github";
+/**
+ * 检出要用的那几项：GitHub 的 PR 与 Gitea / GitLab 的 PR·MR（`api/forge.ts`）都
+ * 有。`headRepoFullName` 只有 GitHub 给，fork 提示里用来说分支在谁那儿。
+ * `forge` 只有 Gitea / GitLab 那一面传：有它、又是 fork、又知道屏上的 head 时，
+ * 起点改成平台发布的引用（GitLab `refs/merge-requests/<iid>/head`，Gitea
+ * `refs/pull/<n>/head`），点了检出才由 core 去 fetch。GitHub 照旧手填。
+ */
+export interface CheckoutPull {
+  readonly number: number | bigint;
+  readonly headRef: string;
+  readonly fromFork: boolean;
+  readonly headRepoFullName?: string;
+  readonly forge?: "gitea" | "gitlab";
+  readonly headSha?: string;
+}
+
+/** The ref a platform publishes a pull request's head under. */
+export function pullHeadRef(forge: "gitea" | "gitlab", number: number) {
+  return forge === "gitlab"
+    ? `refs/merge-requests/${number}/head`
+    : `refs/pull/${number}/head`;
+}
 
 /**
  * Checking a pull request out locally, through the same Runtime operation the
@@ -28,7 +49,7 @@ export function CheckoutWorktree({
   busy,
 }: {
   workspaceId: string;
-  pull: GithubPullRequest;
+  pull: CheckoutPull;
   busy: boolean;
 }) {
   const t = useT();
@@ -59,6 +80,20 @@ export function CheckoutWorktree({
 
   const existing = localBranch(snapshot.data?.branches ?? [], branch.trim());
 
+  // A fork's head on Gitea / GitLab: no remote of this clone has its branch,
+  // but the base repository publishes the head under a ref of its own.
+  const remotes = snapshot.data?.remotes ?? [];
+  const [pickedRemote, setRemote] = React.useState("");
+  const remote = remotes.includes(pickedRemote)
+    ? pickedRemote
+    : remotes.includes("origin")
+      ? "origin"
+      : (remotes[0] ?? "");
+  const headRef =
+    pull.fromFork && pull.forge && pull.headSha && remote
+      ? pullHeadRef(pull.forge, Number(pull.number))
+      : null;
+
   const create = useMutation({
     mutationFn: async () => {
       const head = snapshot.data?.head;
@@ -68,6 +103,15 @@ export function CheckoutWorktree({
         createBranch: !existing,
         startPoint,
         existing,
+        pullHead:
+          headRef && pull.forge && pull.headSha
+            ? {
+                remote,
+                forge: pull.forge,
+                number: Number(pull.number),
+                headOid: pull.headSha,
+              }
+            : null,
       });
       if (!action || !head) throw new Error(t("github.checkout.needsBranch"));
       return gitGateway.operate(
@@ -125,7 +169,32 @@ export function CheckoutWorktree({
           required
         />
       </Field>
-      {!existing && (
+      {!existing && headRef && remotes.length > 1 && (
+        <Field label={t("gitRepo.remote")}>
+          <select
+            className={selectClass}
+            value={remote}
+            onChange={(event) => setRemote(event.target.value)}
+          >
+            {remotes.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+      {!existing && headRef && (
+        <Field label={t("github.checkout.startRef")}>
+          <Input
+            value={headRef}
+            readOnly
+            data-slot="checkout-pull-ref"
+            className="h-9 min-w-0 font-mono"
+          />
+        </Field>
+      )}
+      {!existing && !headRef && (
         <Field label={t("gitRepo.startPoint")}>
           <Input
             value={startPoint}

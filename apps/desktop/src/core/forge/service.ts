@@ -99,6 +99,28 @@ export function validHost(host: string): boolean {
   return host.length <= 253 && (HOST_PATTERN.test(host) || loopbackHost(host));
 }
 
+/** GitLab 多级子组最深几层（GitLab 自己限 20 层）。 */
+export const MAX_NAMESPACE_DEPTH = 20;
+
+/**
+ * owner：一段名字，或 GitLab 多级子组的 `group/sub/…`（每段都是合格的名字，
+ * 不越级、没有空段）。多段只对 GitLab 有意义，由 {@link ForgeService.detect}
+ * 把别的平台挡在外面。
+ */
+export function validOwner(owner: string): boolean {
+  if (owner.length > 255) return false;
+  const segments = owner.split("/");
+  return (
+    segments.length <= MAX_NAMESPACE_DEPTH &&
+    segments.every((segment) => validName(segment))
+  );
+}
+
+/** owner 是不是多级子组。 */
+export function nestedOwner(owner: string): boolean {
+  return owner.includes("/");
+}
+
 /** 一个仓库引用，主机名小写、去掉末尾的点。不合格抛 `invalid`。 */
 export function forgeRepo(
   host: string,
@@ -106,10 +128,53 @@ export function forgeRepo(
   name: string,
 ): ForgeRepo {
   const normalized = host.toLowerCase().replace(/\.$/, "");
-  if (!validHost(normalized) || !validName(owner) || !validName(name)) {
+  if (!validHost(normalized) || !validOwner(owner) || !validName(name)) {
     throw forgeError("invalid", "REPOSITORY_INVALID");
   }
   return { host: normalized, owner, name };
+}
+
+/**
+ * 远端地址 → 主机与路径各段（`.git` 去掉）。写法与 `github/remote.ts` 的
+ * `parseRemote` 一致（https / http / ssh / git 与 scp），只是把整条路径交出来，
+ * 多级子组要用。`web` 表示地址是 http(s)：只有这种才可能带站点的路径前缀。
+ */
+export function remoteSegments(
+  remoteUrl: string,
+): { host: string; segments: string[]; web: boolean } | undefined {
+  const raw = remoteUrl.trim();
+  if (raw === "" || raw.length > 2048 || /\s/.test(raw)) return undefined;
+  let host: string;
+  let path: string;
+  let web = false;
+  if (raw.includes("://")) {
+    let parsed: URL;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      return undefined;
+    }
+    if (!["https:", "http:", "ssh:", "git:"].includes(parsed.protocol)) {
+      return undefined;
+    }
+    web = parsed.protocol === "https:" || parsed.protocol === "http:";
+    host = parsed.hostname;
+    path = parsed.pathname;
+  } else {
+    const at = raw.lastIndexOf("@");
+    const rest = at >= 0 ? raw.slice(at + 1) : raw;
+    const colon = rest.indexOf(":");
+    if (colon <= 0) return undefined;
+    host = rest.slice(0, colon);
+    path = rest.slice(colon + 1);
+  }
+  const segments = path.split("/").filter((segment) => segment !== "");
+  if (segments.length < 2) return undefined;
+  segments[segments.length - 1] = (
+    segments[segments.length - 1] as string
+  ).replace(/\.git$/, "");
+  if (!segments.every((segment) => validName(segment))) return undefined;
+  return { host: host.toLowerCase().replace(/\.$/, ""), segments, web };
 }
 
 /** 配置行的键：`<host>` 或 `<host>/<owner>/<name>`。不合格抛 `invalid`。 */
@@ -174,7 +239,11 @@ export class ForgeService {
   }
 
   detect(repo: ForgeRepo): ForgeDetection {
-    if (GITHUB_PUBLIC_HOSTS.includes(repo.host) || this.githubHost(repo.host)) {
+    const nested = nestedOwner(repo.owner);
+    if (
+      !nested &&
+      (GITHUB_PUBLIC_HOSTS.includes(repo.host) || this.githubHost(repo.host))
+    ) {
       const side = this.githubSide();
       const publicHost = GITHUB_PUBLIC_HOSTS.includes(repo.host);
       const apiBase = publicHost ? PUBLIC_API_BASE : side.base;
@@ -193,7 +262,12 @@ export class ForgeService {
       };
     }
     const config = this.configFor(repo);
-    if (config === undefined) {
+    // 多级子组只有 GitLab 有：GitHub 主机与 Gitea 配置都不认这种仓库。
+    const usable =
+      config !== undefined &&
+      (!nested || config.forge === "gitlab") &&
+      !(nested && this.githubHost(repo.host));
+    if (!usable || config === undefined) {
       return {
         repository: repo,
         forge: null,
@@ -220,7 +294,17 @@ export class ForgeService {
     };
   }
 
-  /** 一个 git 远端地址 → 识别结果。地址里的凭据不进答复。 */
+  /**
+   * 一个 git 远端地址 → 识别结果。地址里的凭据不进答复。
+   *
+   * 仓库通常是路径最后两段；GitLab 的多级子组（`group/sub/project`）按配置认：
+   *
+   *   1. 配置表里写到这个仓库的一行，从最长的 owner 往短里找（`<host>/a/b/c`
+   *      先于 `<host>/b/c`）；多段的只认 `gitlab` 行。
+   *   2. 主机那一行是 `gitlab`：去掉站点根的路径前缀（http(s) 远端、GitLab 装在
+   *      子路径下时），其余除最后一段都是 owner。
+   *   3. 其余仍按最后两段。
+   */
   resolve(remoteUrl: string): ForgeDetection {
     let parsed: { owner: string; name: string; webHost: string };
     try {
@@ -228,7 +312,43 @@ export class ForgeService {
     } catch {
       throw forgeError("invalid", "REMOTE_INVALID");
     }
-    return this.detect(forgeRepo(parsed.webHost, parsed.owner, parsed.name));
+    const flat = forgeRepo(parsed.webHost, parsed.owner, parsed.name);
+    const parts = remoteSegments(remoteUrl);
+    if (
+      parts === undefined ||
+      parts.segments.length <= 2 ||
+      this.githubHost(flat.host)
+    ) {
+      return this.detect(flat);
+    }
+    const name = parts.segments[parts.segments.length - 1] as string;
+    const store = this.options.store;
+    for (let start = 0; start < parts.segments.length - 2; start += 1) {
+      const owner = parts.segments.slice(start, -1).join("/");
+      if (!validOwner(owner)) continue;
+      const row = store.get(`${flat.host}/${owner}/${name}`);
+      if (row?.forge === "gitlab") {
+        return this.detect(forgeRepo(flat.host, owner, name));
+      }
+    }
+    if (store.get(`${flat.host}/${flat.owner}/${flat.name}`) !== undefined) {
+      return this.detect(flat);
+    }
+    const hostRow = store.get(flat.host);
+    if (hostRow?.forge !== "gitlab") return this.detect(flat);
+    let segments = parts.segments;
+    if (parts.web) {
+      const prefix = sitePrefix(hostRow.apiBase);
+      if (
+        prefix.length > 0 &&
+        prefix.every((segment, index) => segments[index] === segment)
+      ) {
+        segments = segments.slice(prefix.length);
+      }
+    }
+    const owner = segments.slice(0, -1).join("/");
+    if (segments.length < 2 || !validOwner(owner)) return this.detect(flat);
+    return this.detect(forgeRepo(flat.host, owner, name));
   }
 
   /**
@@ -297,6 +417,11 @@ export class ForgeService {
     } catch {
       throw githubError("invalid");
     }
+    // 多级子组只有 GitLab 有：owner 列存完整的命名空间路径（`group/sub`），
+    // name 是最后一段，现有两列装得下，不加迁移。别的平台不收多段 owner。
+    if (nestedOwner(repo.owner) && forge !== "gitlab") {
+      throw githubError("invalid");
+    }
     const detection = this.detect(repo);
     if (detection.forge !== forge || detection.apiBase === null) {
       throw githubError("invalid");
@@ -327,6 +452,10 @@ export class ForgeService {
     }
     const forge = input.forge as ConfigurableForge;
     const host = repoKey.split("/")[0] as string;
+    // 多级子组只有 GitLab 有（键 `<host>/<group>/<sub>/<name>`）。
+    if (forge !== "gitlab" && repoKey.split("/").length > 3) {
+      throw forgeError("invalid", "NAMESPACE_UNSUPPORTED");
+    }
     // GitHub 的主机由 §5 的凭据管；在这里给它另配一个平台只会让两处说法打架。
     if (this.githubHost(host)) throw forgeError("invalid", "GITHUB_HOST");
     const apiBase =
@@ -410,6 +539,17 @@ export class ForgeService {
     } catch {
       // 删不掉的条目没有行再指向它；下次同名不会被复用（id 是随机的）。
     }
+  }
+}
+
+/** 站点根的路径各段（GitLab 装在子路径下时非空）。 */
+function sitePrefix(apiBase: string): string[] {
+  try {
+    return new URL(gitlabWebRoot(apiBase)).pathname
+      .split("/")
+      .filter((segment) => segment !== "");
+  } catch {
+    return [];
   }
 }
 

@@ -661,6 +661,22 @@ export const gitRepositoryActionSchema = z.discriminatedUnion("kind", [
       branch: z.string().min(1),
       createBranch: z.boolean(),
       startPoint: z.string().nullable(),
+      /**
+       * A hosted pull request's head, fetched from the base repository only
+       * when the checkout runs (a fork's PR / MR on Gitea or GitLab). The core
+       * builds the ref from `forge` and `number`; a fetched head other than
+       * `headOid` is refused.
+       */
+      pullHead: z
+        .object({
+          remote: z.string().min(1).max(255),
+          forge: z.enum(["gitea", "gitlab"]),
+          number: z.number().int().min(1).max(2_147_483_647),
+          headOid: oid,
+        })
+        .strict()
+        .nullable()
+        .optional(),
     })
     .strict()
     .refine(
@@ -671,6 +687,14 @@ export const gitRepositoryActionSchema = z.discriminatedUnion("kind", [
       {
         path: ["expectedOid"],
         message: "Existing worktree branches require their observed object ID",
+      },
+    )
+    .refine(
+      (action) =>
+        !action.pullHead || (action.createBranch && action.startPoint === null),
+      {
+        path: ["pullHead"],
+        message: "A pull request checkout creates a new branch from its head",
       },
     ),
   z

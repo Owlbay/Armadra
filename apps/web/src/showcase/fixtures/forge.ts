@@ -56,6 +56,8 @@ const pull = (
   createdAtMs: AT,
   updatedAtMs: AT,
   mergedAtMs: null,
+  autoMerge: false,
+  fromFork: false,
   ...overrides,
 });
 

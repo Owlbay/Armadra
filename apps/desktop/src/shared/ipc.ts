@@ -403,6 +403,7 @@ export const NATIVE_TICKET_REASONS = [
   "cliFailed",
   "timeout",
   "malformed",
+  "channelUnavailable",
 ] as const;
 
 /**

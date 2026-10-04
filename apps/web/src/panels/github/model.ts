@@ -243,7 +243,11 @@ export function mergeReasonKey(code: string): string | null {
  * pull requests are therefore suggested under a `pr-<number>` name derived
  * from the pull request itself, and same-repository ones keep their own ref.
  */
-export function suggestedHeadRef(pull: GithubPullRequest): string {
+export function suggestedHeadRef(pull: {
+  number: number | bigint;
+  headRef: string;
+  fromFork: boolean;
+}): string {
   if (!pull.fromFork && pull.headRef) return pull.headRef;
   return `pr-${pull.number}`;
 }

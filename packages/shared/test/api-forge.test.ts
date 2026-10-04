@@ -5,6 +5,9 @@ import {
   forgeDetectionSchema,
   forgeFilesSchema,
   forgeIssuePageSchema,
+  forgeAutoMergeSchema,
+  forgeBranchDeletionSchema,
+  forgeMergeOptionsSchema,
   forgeMergedSchema,
   forgePullSchema,
   mergeForgePullSchema,
@@ -112,8 +115,8 @@ describe("forge API", () => {
         createdAtMs: 1,
         updatedAtMs: 2,
         mergedAtMs: 3,
-      }).state,
-    ).toBe("merged");
+      }),
+    ).toMatchObject({ state: "merged", autoMerge: false, fromFork: false });
     expect(
       forgeFilesSchema.parse({
         files: [
@@ -135,6 +138,28 @@ describe("forge API", () => {
     expect(forgeMergedSchema.parse({ merged: true, sha: null }).merged).toBe(
       true,
     );
+    expect(
+      forgeMergeOptionsSchema.parse({ methods: ["rebase", "squash"] }).methods,
+    ).toEqual(["rebase", "squash"]);
+    expect(
+      forgeMergeOptionsSchema.safeParse({ methods: ["fast-forward"] }).success,
+    ).toBe(false);
+    // 只有 methods 的旧答复：两个开关缺省关。
+    expect(forgeMergeOptionsSchema.parse({ methods: ["merge"] })).toEqual({
+      methods: ["merge"],
+      autoMerge: false,
+      mergeTrain: false,
+    });
+    expect(
+      forgeAutoMergeSchema.parse({ merged: false, sha: null, train: true })
+        .train,
+    ).toBe(true);
+    expect(
+      forgeBranchDeletionSchema.parse({
+        deleted: false,
+        reasonCode: "BRANCH_MOVED",
+      }).reasonCode,
+    ).toBe("BRANCH_MOVED");
     expect(mergeForgePullSchema.safeParse({ headSha: "abc" }).success).toBe(
       false,
     );

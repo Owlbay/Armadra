@@ -281,7 +281,7 @@ describe("GitHub 的 HTTP 面", () => {
   });
 
   // 安全审查 L9：明文回环上没带凭据原来按本机主人处理，本机任何一个回环端口上
-  // 的网页都能打这一面。自 0.3.0 起缺省 401，只有裸 core 显式打开。
+  // 的网页都能打这一面。自 0.2.0 起缺省 401，只有裸 core 显式打开。
   it("回环匿名缺省是 401，显式打开才按本机主人", async () => {
     const anonymous = { headers: { authorization: "", "x-armadra-csrf": "" } };
     const refused = await apiCall(harnessed, "get-credential", {}, anonymous);

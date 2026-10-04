@@ -1,4 +1,5 @@
 import * as React from "react";
+import { toast } from "sonner";
 import type { EditorView } from "codemirror";
 import {
   Columns2,
@@ -18,7 +19,7 @@ import { useT } from "@/app/preferences-store";
 import { cn } from "@/lib/cn";
 import { formatBytes } from "@/lib/format";
 import { unifiedLineDiff } from "@/lib/line-diff";
-import { isDesktop, openExternal } from "@/platform";
+import { downloadRuntimeFile } from "@/api/assets";
 import { useCanvasStore } from "@/store/canvas-store";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
@@ -670,21 +671,22 @@ export function EditorNode({ id, node, selected }: NodeBodyProps) {
                 {formatBytes(state.info.size)} · {state.info.mimeType}
               </p>
             </div>
-            <Button variant="secondary" size="sm" asChild>
-              <a
-                href={runtimeApi.fileDownloadUrl(workspaceId, path)}
-                download={state.info.name}
-                onClick={(event) => {
-                  if (!isDesktop()) return;
-                  event.preventDefault();
-                  void openExternal(
-                    runtimeApi.fileDownloadUrl(workspaceId, path),
-                  );
-                }}
-              >
-                <Download />
-                {t("editor.download")}
-              </a>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                // 经 `fetch` 取回再存：桌面壳与原生 App 的凭据只跟着 `fetch`
+                // 走（契约 §3.2），一个直接的链接在那两处是 401。
+                void downloadRuntimeFile(
+                  runtimeApi.fileDownloadUrl(workspaceId, path),
+                  state.info.name,
+                ).then((saved) => {
+                  if (!saved) toast.error(t("editor.downloadFailed"));
+                });
+              }}
+            >
+              <Download />
+              {t("editor.download")}
             </Button>
           </div>
         )}

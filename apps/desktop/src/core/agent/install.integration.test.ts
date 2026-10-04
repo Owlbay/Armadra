@@ -25,7 +25,9 @@ beforeAll(async () => {
   directory = mkdtempSync(join(tmpdir(), "armadra-core-agent-"));
   core = await run({
     argv: ["--listen", "tcp:127.0.0.1:0", "--data-dir", directory],
-    env: { ...process.env, ARMADRA_LOG: "error" },
+    // 这里验的是域本身，不是回环的门（那在 `main.test.ts`）：裸 core 显式
+    // 打开回环匿名（契约 §3.2）。
+    env: { ...process.env, ARMADRA_LOG: "error", ARMADRA_LOOPBACK_OWNER: "1" },
     stdout: () => {},
   });
   const spec = core.bound[0];

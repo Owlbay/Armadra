@@ -82,6 +82,10 @@ const forgeApi = vi.hoisted(() => ({
   forgePullChecks: vi.fn(),
   mergeForgePull: vi.fn(),
   createForgePull: vi.fn(),
+  forgeMergeOptions: vi.fn(),
+  autoMergeForgePull: vi.fn(),
+  cancelAutoMergeForgePull: vi.fn(),
+  deleteForgeBranch: vi.fn(),
 }));
 
 vi.mock("../../api/forge", async (original) => ({
@@ -1053,7 +1057,10 @@ describe("cleaning up after a merge", () => {
 
 describe("Gitea and GitLab remotes (§29)", () => {
   const MR_SHA = "d".repeat(40);
-  const forgePull = (number: number, title: string) => ({
+  const forgePull = (
+    number: number,
+    title: string,
+  ): import("../../api/forge").ForgePull => ({
     number,
     title,
     body: "",
@@ -1068,6 +1075,8 @@ describe("Gitea and GitLab remotes (§29)", () => {
     createdAtMs: 1_788_557_900_000,
     updatedAtMs: 1_788_557_900_000,
     mergedAtMs: null,
+    autoMerge: false,
+    fromFork: false,
   });
 
   async function resolveRemote(url: string) {
@@ -1151,6 +1160,35 @@ describe("Gitea and GitLab remotes (§29)", () => {
         { method: "squash", headSha: MR_SHA },
       ),
     );
+  });
+
+  it("GitLab subgroup: shows the full namespace and lists under it", async () => {
+    ready(client());
+    forgeApi.resolveForge.mockResolvedValue(
+      detection("gitlab", {
+        repository: {
+          host: "git.example.test",
+          owner: "platform/web",
+          name: "app",
+        },
+        webUrl: "https://git.example.test/platform/web/app",
+      }),
+    );
+    forgeApi.forgePulls.mockResolvedValue({
+      items: [forgePull(31, "Subgroup change")],
+      nextCursor: null,
+    });
+    renderDrawer();
+    await resolveRemote("git@git.example.test:platform/web/app.git");
+    expect(await screen.findByText("Subgroup change")).toBeTruthy();
+    expect(
+      document.querySelector("[data-slot=forge-repository]")?.textContent,
+    ).toContain("platform/web/app");
+    expect(firstCall<unknown>(forgeApi.forgePulls)).toEqual({
+      host: "git.example.test",
+      owner: "platform/web",
+      name: "app",
+    });
   });
 
   it("GitLab: a token missing a scope is named as such", async () => {

@@ -1,0 +1,184 @@
+{
+  "$comment": "合并方式与变基的回放夹具：项目的 merge_method / squash_option（GET /projects/:id）与 PUT …/rebase 的 202 答复，按 GitLab REST v4（17.x）文档的形状整理；主机名、编号与 SHA 是虚构值。不连任何真实账号。",
+  "apiBase": "https://gitlab.example.test/api/v4",
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/projects/acme%2Fapp"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": 42,
+          "name": "app",
+          "path": "app",
+          "path_with_namespace": "acme/app",
+          "default_branch": "main",
+          "web_url": "https://gitlab.example.test/acme/app",
+          "merge_method": "merge",
+          "squash_option": "default_off",
+          "only_allow_merge_if_pipeline_succeeds": false,
+          "remove_source_branch_after_merge": true,
+          "merge_requests_enabled": true
+        }
+      }
+    },
+    {
+      "name": "project-rebase-merge",
+      "request": {
+        "method": "GET",
+        "path": "/projects/acme%2Fapp"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": 42,
+          "name": "app",
+          "path": "app",
+          "path_with_namespace": "acme/app",
+          "default_branch": "main",
+          "web_url": "https://gitlab.example.test/acme/app",
+          "merge_method": "rebase_merge",
+          "squash_option": "default_off",
+          "only_allow_merge_if_pipeline_succeeds": false,
+          "remove_source_branch_after_merge": true,
+          "merge_requests_enabled": true
+        }
+      }
+    },
+    {
+      "name": "project-ff",
+      "request": {
+        "method": "GET",
+        "path": "/projects/acme%2Fapp"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": 42,
+          "name": "app",
+          "path": "app",
+          "path_with_namespace": "acme/app",
+          "default_branch": "main",
+          "web_url": "https://gitlab.example.test/acme/app",
+          "merge_method": "ff",
+          "squash_option": "never",
+          "only_allow_merge_if_pipeline_succeeds": false,
+          "remove_source_branch_after_merge": true,
+          "merge_requests_enabled": true
+        }
+      }
+    },
+    {
+      "name": "need-rebase",
+      "request": {
+        "method": "GET",
+        "path": "/projects/acme%2Fapp/merge_requests/12"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": 2012,
+          "iid": 12,
+          "project_id": 42,
+          "title": "登录改版",
+          "description": "把登录页拆成两步",
+          "state": "opened",
+          "created_at": "2026-09-28T10:00:00.000Z",
+          "updated_at": "2026-10-02T11:00:00.000Z",
+          "merged_by": null,
+          "merge_user": null,
+          "merged_at": null,
+          "closed_by": null,
+          "closed_at": null,
+          "target_branch": "main",
+          "source_branch": "feature/login",
+          "user_notes_count": 1,
+          "upvotes": 0,
+          "downvotes": 0,
+          "author": {
+            "id": 2,
+            "username": "alice",
+            "name": "Alice",
+            "state": "active",
+            "locked": false,
+            "avatar_url": "https://gitlab.example.test/uploads/-/system/user/avatar/2/avatar.png",
+            "web_url": "https://gitlab.example.test/alice"
+          },
+          "assignees": [],
+          "assignee": null,
+          "reviewers": [],
+          "source_project_id": 42,
+          "target_project_id": 42,
+          "labels": [],
+          "draft": false,
+          "imported": false,
+          "imported_from": "none",
+          "work_in_progress": false,
+          "milestone": null,
+          "merge_when_pipeline_succeeds": false,
+          "merge_status": "cannot_be_merged_recheck",
+          "detailed_merge_status": "need_rebase",
+          "merge_after": null,
+          "sha": "3f2a9c1d7e5b4a6f8c0d2e4f6a8b0c1d2e3f4a5b",
+          "merge_commit_sha": null,
+          "squash_commit_sha": null,
+          "discussion_locked": null,
+          "should_remove_source_branch": null,
+          "force_remove_source_branch": true,
+          "prepared_at": "2026-09-28T10:00:05.000Z",
+          "reference": "!12",
+          "references": {
+            "short": "!12",
+            "relative": "!12",
+            "full": "acme/app!12"
+          },
+          "web_url": "https://gitlab.example.test/acme/app/-/merge_requests/12",
+          "time_stats": {
+            "time_estimate": 0,
+            "total_time_spent": 0,
+            "human_time_estimate": null,
+            "human_total_time_spent": null
+          },
+          "squash": false,
+          "squash_on_merge": false,
+          "task_completion_status": {
+            "count": 0,
+            "completed_count": 0
+          },
+          "has_conflicts": false,
+          "blocking_discussions_resolved": true,
+          "approvals_before_merge": null
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "PUT",
+        "path": "/projects/acme%2Fapp/merge_requests/12/rebase"
+      },
+      "response": {
+        "status": 202,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "rebase_in_progress": true
+        }
+      }
+    }
+  ]
+}

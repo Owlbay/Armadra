@@ -11,7 +11,10 @@ import {
   forgeDetectionSchema,
   forgeFilesSchema,
   forgeIssuePageSchema,
+  forgeAutoMergeSchema,
+  forgeBranchDeletionSchema,
   forgeIssueSchema,
+  forgeMergeOptionsSchema,
   forgeMergedSchema,
   forgePullPageSchema,
   forgePullSchema,
@@ -57,6 +60,7 @@ export type ForgeFailure =
   | "conflict"
   | "rateLimited"
   | "unknownOutcome"
+  | "rebaseStarted"
   | "invalid"
   | "unavailable"
   | "unsupported"
@@ -84,6 +88,8 @@ export function forgeFailure(error: unknown): ForgeFailure {
       return "rateLimited";
     case "unknown_outcome":
       return "unknownOutcome";
+    case "rebase_started":
+      return "rebaseStarted";
     case "bad_request":
       return "invalid";
     case "forge_unavailable":
@@ -101,13 +107,24 @@ export function forgeFailureKey(error: unknown): string {
   return `forge.failure.${forgeFailure(error)}`;
 }
 
-function repoPath(repo: ForgeRepo): string {
+/** GitLab 多级子组的 owner（`group/sub`）整条编码成一段：路由按段匹配。 */
+export function repoPath(repo: ForgeRepo): string {
   return `/api/forge/repos/${query(repo.host)}/${query(repo.owner)}/${query(repo.name)}`;
 }
 
-/** 配置行的键：`<host>` 或 `<host>/<owner>/<name>` → 路径。 */
+/**
+ * 配置行的键：`<host>` 或 `<host>/<owner>/<name>` → 路径。owner 可以是多级子组
+ * （`<host>/group/sub/name`）：首段是主机、末段是名字，中间整条作 owner 编码成一段。
+ */
 export function configPath(repoKey: string): string {
-  return `/api/forge/configs/${repoKey.split("/").map(query).join("/")}`;
+  const parts = repoKey.split("/");
+  if (parts.length < 3) {
+    return `/api/forge/configs/${parts.map(query).join("/")}`;
+  }
+  const host = parts[0] ?? "";
+  const name = parts[parts.length - 1] ?? "";
+  const owner = parts.slice(1, -1).join("/");
+  return `/api/forge/configs/${query(host)}/${query(owner)}/${query(name)}`;
 }
 
 /** 一个 git 远端地址 → 识别结果。地址在请求体里：它可能带凭据。 */
@@ -232,6 +249,53 @@ export function mergeForgePull(
   });
 }
 
+export type ForgeMergeOptions = z.infer<typeof forgeMergeOptionsSchema>;
+
+/** 这个仓库现在能用的合并方式与自动合并（GitLab 按项目设置，§29.6）。 */
+export function forgeMergeOptions(repo: ForgeRepo): Promise<ForgeMergeOptions> {
+  return request(`${repoPath(repo)}/merge-options`, forgeMergeOptionsSchema);
+}
+
+/** 流水线通过后合并（GitLab）；项目开了合并列车时排进列车。 */
+export function autoMergeForgePull(
+  repo: ForgeRepo,
+  number: number,
+  input: { method: ForgeMergeMethod; headSha: string },
+) {
+  return request(
+    `${repoPath(repo)}/pulls/${number}/auto-merge`,
+    forgeAutoMergeSchema,
+    { method: "POST", ...json(input) },
+  );
+}
+
+export async function cancelAutoMergeForgePull(
+  repo: ForgeRepo,
+  number: number,
+): Promise<void> {
+  await request(
+    `${repoPath(repo)}/pulls/${number}/auto-merge`,
+    z.object({ cancelled: z.boolean() }),
+    { method: "DELETE" },
+  );
+}
+
+/**
+ * 合并后删源分支（Gitea / GitLab）：带页面上显示的 head；分支动过、受保护、
+ * 来自 fork 或还没合并时答 `{ deleted: false, reasonCode }` 而不是照删。
+ */
+export function deleteForgeBranch(
+  repo: ForgeRepo,
+  number: number,
+  headSha: string,
+) {
+  return request(
+    `${repoPath(repo)}/pulls/${number}/branch?${new URLSearchParams({ headSha })}`,
+    forgeBranchDeletionSchema,
+    { method: "DELETE" },
+  );
+}
+
 /** 平台显示名：品牌名不翻译。 */
 export const FORGE_NAMES: Record<string, string> = {
   github: "GitHub",
@@ -239,7 +303,7 @@ export const FORGE_NAMES: Record<string, string> = {
   gitlab: "GitLab",
 };
 
-/** 各平台能用的合并方式：GitLab 的 rebase 是另一个异步动作，不接。 */
+/** 问不到 `merge-options`（旧 core）时各平台的合并方式。 */
 export function mergeMethods(forge: string): ForgeMergeMethod[] {
   return forge === "gitlab"
     ? ["merge", "squash"]

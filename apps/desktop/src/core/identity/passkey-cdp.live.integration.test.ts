@@ -17,6 +17,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import {
+  CALL_TIMEOUT_MS,
   CdpConnection,
   STARTUP_TIMEOUT_MS,
 } from "../browser/headless/connection";
@@ -153,9 +154,11 @@ describe.skipIf(found.path === undefined)("passkey 对真 Chromium", () => {
     cleanup.push(() => cdp.close());
 
     // The first command waits for the browser to come up, not for a page.
+    // 先开空白页，挂上会话、打开生命周期事件，再自己导航：这样能拿到这次
+    // 导航的 loaderId，等的就是目标文档的 load，而不是 about:blank 的。
     const { targetId } = (await cdp.send(
       "Target.createTarget",
-      { url: `${origin}/` },
+      { url: "about:blank" },
       undefined,
       STARTUP_TIMEOUT_MS,
     )) as { targetId: string };
@@ -178,19 +181,57 @@ describe.skipIf(found.path === undefined)("passkey 对真 Chromium", () => {
       },
       sessionId,
     );
-    // 等页面落地：同源 fetch 要一个已经加载好的文档。
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      const ready = (await cdp.send(
-        "Runtime.evaluate",
-        {
-          expression: "location.origin + '|' + document.readyState",
-          returnByValue: true,
-        },
-        sessionId,
-      )) as { result: { value?: string } };
-      if (ready.result.value === `${origin}|complete`) break;
-      await new Promise((done) => setTimeout(done, 100));
-    }
+    // 等页面落地：同源 fetch 要一个已经加载到目标来源的文档。Windows 上曾在
+    // 页面还停在 about:blank 时就 evaluate，相对 URL 解析失败。
+    await cdp.send("Page.enable", {}, sessionId);
+    await cdp.send(
+      "Page.setLifecycleEventsEnabled",
+      { enabled: true },
+      sessionId,
+    );
+    const loads: { frameId: string; loaderId: string }[] = [];
+    let loaded: (() => void) | undefined;
+    cdp.on((method, params, from) => {
+      if (from !== sessionId || method !== "Page.lifecycleEvent") return;
+      const event = params as {
+        frameId: string;
+        loaderId: string;
+        name: string;
+      };
+      if (event.name !== "load") return;
+      loads.push(event);
+      loaded?.();
+    });
+    const navigated = (await cdp.send(
+      "Page.navigate",
+      { url: `${origin}/` },
+      sessionId,
+    )) as { frameId: string; loaderId?: string; errorText?: string };
+    expect(navigated.errorText).toBeUndefined();
+    const isTarget = (each: { frameId: string; loaderId: string }) =>
+      each.frameId === navigated.frameId &&
+      each.loaderId === navigated.loaderId;
+    await new Promise<void>((done, fail) => {
+      const timer = setTimeout(
+        () => fail(new Error(`页面没在时限内加载完 ${origin}/`)),
+        CALL_TIMEOUT_MS,
+      );
+      loaded = () => {
+        if (!loads.some(isTarget)) return;
+        clearTimeout(timer);
+        done();
+      };
+      loaded();
+    });
+    const landed = (await cdp.send(
+      "Runtime.evaluate",
+      {
+        expression: "location.origin + '|' + document.readyState",
+        returnByValue: true,
+      },
+      sessionId,
+    )) as { result: { value?: string } };
+    expect(landed.result.value).toBe(`${origin}|complete`);
     const evaluated = (await cdp.send(
       "Runtime.evaluate",
       {

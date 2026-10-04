@@ -323,19 +323,39 @@ export const WS_TICKET_PROTOCOL = "armadra-ticket.";
 export interface NativeTransport {
   /** 已保存的 Gateway 来源；只改写发往它的请求。 */
   readonly origin: string;
+  /**
+   * WebSocket 发往的来源，和 {@link origin} 不同时给（桌面壳的流基址由壳另报，
+   * `api/runtime-url.ts`）。缺省同 `origin`。
+   */
+  readonly socketOrigin?: string;
   /** 当前的访问密钥；没有是空串。 */
   authorization(): string;
+  /**
+   * 发一个（非身份面的）请求之前先备好凭据：桌面壳里还没有会话就先向壳要票
+   * 配对。身份面自己的请求不经它——配对本身就是身份面的请求。
+   */
+  prepare?(): Promise<void>;
   /** 换一张 30 秒的一次性 WebSocket 票。 */
   wsTicket(): Promise<string>;
-  /** 访问密钥过期时轮转一次；成功返回 `true`。 */
-  refresh(): Promise<boolean>;
+  /**
+   * 访问密钥过期时轮转一次；成功返回 `true`。`rejected` 是被拒的那一枚：几个
+   * 请求同时被拒时，别人已经换过就直接用新的。
+   */
+  refresh(rejected?: string): Promise<boolean>;
 }
 
-/** `target` 是不是发往 `origin`（`wss:` 当作 `https:`）。 */
+/**
+ * `target` 是不是发往 `origin`（`wss:` 当作 `https:`，`ws:` 当作 `http:`）。
+ */
 export function sameOrigin(target: string, origin: string): boolean {
   try {
     const url = new URL(target);
-    const scheme = url.protocol === "wss:" ? "https:" : url.protocol;
+    const scheme =
+      url.protocol === "wss:"
+        ? "https:"
+        : url.protocol === "ws:"
+          ? "http:"
+          : url.protocol;
     return `${scheme}//${url.host}` === origin;
   } catch {
     return false;
@@ -370,13 +390,19 @@ export function bearerFetch(
   return async (input, init) => {
     const target = requestUrl(input);
     if (!sameOrigin(target, transport.origin)) return base(input, init);
+    const identity = identityPath(target);
+    if (!identity && transport.prepare)
+      await transport.prepare().catch(() => undefined);
+    let used = "";
     const build = () => {
       const headers = new Headers(
         init?.headers ?? (input instanceof Request ? input.headers : undefined),
       );
       const token = transport.authorization();
-      if (!headers.has("authorization") && token)
+      if (!headers.has("authorization") && token) {
         headers.set("authorization", `Bearer ${token}`);
+        used = token;
+      }
       return { ...init, headers, credentials: "omit" as const };
     };
     const response = await base(input, build());
@@ -386,12 +412,12 @@ export function bearerFetch(
       typeof init.body === "string";
     if (
       response.status !== 401 ||
-      identityPath(target) ||
+      identity ||
       !replayable ||
       new Headers(init?.headers).has("authorization")
     )
       return response;
-    if (!(await transport.refresh().catch(() => false))) return response;
+    if (!(await transport.refresh(used).catch(() => false))) return response;
     return base(input, build());
   };
 }
@@ -408,7 +434,7 @@ type SocketCtor = typeof WebSocket;
  */
 export function ticketedWebSocket(
   Base: SocketCtor,
-  transport: Pick<NativeTransport, "origin" | "wsTicket">,
+  transport: Pick<NativeTransport, "origin" | "socketOrigin" | "wsTicket">,
 ): SocketCtor {
   class TicketedWebSocket extends EventTarget {
     static readonly CONNECTING = 0;
@@ -535,7 +561,10 @@ export function ticketedWebSocket(
 
   return new Proxy(Base, {
     construct(target, args: [string | URL, (string | string[])?]) {
-      return sameOrigin(String(args[0]), transport.origin)
+      return sameOrigin(
+        String(args[0]),
+        transport.socketOrigin ?? transport.origin,
+      )
         ? new TicketedWebSocket(...args)
         : new target(...args);
     },

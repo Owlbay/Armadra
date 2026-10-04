@@ -329,6 +329,7 @@ const zh = {
   "github.checkout.branch": "本地分支",
   "github.checkout.forkNote":
     "这个 PR 的 head 在 fork 里，本地分支另起名字，不覆盖同名分支",
+  "github.checkout.startRef": "起点（检出时从远端取）",
   "github.checkout.submit": "创建 worktree",
   "github.checkout.queued": "已提交 worktree 创建",
   "github.checkout.needsBranch": "填一个本地分支名",
@@ -711,6 +712,7 @@ const en: Record<keyof typeof zh, string> = {
   "github.checkout.branch": "Local branch",
   "github.checkout.forkNote":
     "This pull request's head lives in a fork; the local branch gets its own name and never overwrites yours",
+  "github.checkout.startRef": "Start point (fetched on checkout)",
   "github.checkout.submit": "Create worktree",
   "github.checkout.queued": "Worktree creation submitted",
   "github.checkout.needsBranch": "Enter a local branch name",

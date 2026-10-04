@@ -196,6 +196,28 @@ export async function validateAction(
       if (action.startPoint !== null) {
         await service.validateReference(repository, action.startPoint);
       }
+      if (action.pullHead !== undefined && action.pullHead !== null) {
+        const source = action.pullHead;
+        if (!action.createBranch || action.startPoint !== null) {
+          throw badRequest(
+            "A pull request checkout creates a new branch from the fetched head",
+          );
+        }
+        if (source.forge !== "gitea" && source.forge !== "gitlab") {
+          throw badRequest(
+            "Pull request heads are fetched for Gitea or GitLab",
+          );
+        }
+        if (
+          !Number.isSafeInteger(source.number) ||
+          source.number < 1 ||
+          source.number > 2 ** 31 - 1
+        ) {
+          throw badRequest("Pull request number is invalid");
+        }
+        await service.validateRemote(repository, source.remote);
+        requireOid(source.headOid);
+      }
       return;
     case "removeWorktree":
       resolveInRoot(context.workspaceRoot, action.path);

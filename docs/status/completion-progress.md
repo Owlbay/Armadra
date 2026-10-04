@@ -1634,3 +1634,115 @@
 
 - R-90 后台标签页的渲染进程为什么不回答，根因还没查明。修掉的是现场里紧挨在卡住前面的双重附加。下次再卡住时，`pages` 字段能区分是浏览器侧还是渲染侧不回答。
 - R-89 的修复是推断的，CI 上要看夜间作业以后还会不会出现「配对重试后完成」。
+
+## G5-28 回环全部收紧（L9 收尾）
+
+**做了什么**
+
+- core：回环监听上的门 `core/identity/loopback.ts`，经新的 `CoreServer.admission(gate)` 装上（`http/server.ts`，判在读请求体之前，升级在路由门之前）。回环匿名按主人关着时（两种壳都是）由身份域装：除 `/health`、`/api/health`、`/api/identity/*` 与配对短码换票外，每条 `/api/` 都要会话（回环明文读 Bearer，否则读 Cookie 并对写方法核 CSRF），每条流都要 `Sec-WebSocket-Protocol: armadra-ticket.<票>`。不报 Origin 的调用同样 401。认出的会话经 `runAs` 进请求身份，路由门、事件订阅、4401 / 4403 复核与 Gateway 一致。
+- 与 Gateway 共用一份：`WsTickets`、`protocolTicket`、`anonymousPath`、`sessionIdentity` 搬到 `core/identity/transport.ts`（`gateway/admission.ts` 原样转出）；Gateway 的交接 listener 标 `admitted`，不过回环的门。`POST /api/identity/ws-ticket` 在回环上由身份域答（只给回环明文来源的原生传输），形状同 §17.4。
+- Windows 取票：私有通道在 Windows 不开，壳经 fork 的 IPC 通道取票（`armadra:identity-ticket`，core `identity/control.ts::startTicketIpc` 与 `issueShellTicket`，壳 `main/core-ticket.ts`）。原来 Windows 的页面拿不到票，G5-24 之后 GitHub / 自动化两面在那里已是 401，这次一起修。
+- 页面：`api/shell-transport.ts` 在桌面壳里给全局 `fetch` / `WebSocket` 装请求层，复用原生 App 的 `bearerFetch` / `ticketedWebSocket`（加了 `prepare`、`socketOrigin`、`refresh(rejected)`、`ws:` 的同源判断）：还没会话先向壳要票配对，401 时复核 → 刷新 → 重新要票只重发一次，流先换票；访问密钥到期前两分钟主动轮转（`identity.ts`），流不必因 4401 重连。`api/request.ts` 去掉 G5-24 的两面特判。`<img>` 资源在壳里也经 `fetch` 取 `blob:`（`needsBearerFetch`）。
+- 编辑器「下载」（G5-22 遗留）：`api/assets.ts::downloadRuntimeFile` 经 `fetch` 取回再交给 `blob:` 链接，三种环境都带凭据（桌面与原生 App 的 Bearer、服务器壳同源 Cookie）；取不回提示「下载失败」。原来桌面里是用系统浏览器打开地址，会 401。
+- 托盘：`shell-core/core-session.ts`，同一张票换自己的会话（来源是 core 自己的回环基址），401 先刷新、再重新配对。
+- 探针：`tools/probes/probe-session.mjs`（经私有通道要票配对、陌生来源守门 `strangerRefused`）；`packaged-smoke` 改用它，并断言陌生回环来源打 `/api/settings` 与升级事件流都是 401。起裸 core 却没走 `isolatedEnv` 的 `acp-e2e`、`credentials-e2e`、`agent-e2e/lib`、`agent-e2e/isolated`、`scenario-9` 补上 `LOOPBACK_OWNER_ENV`。
+- 文档：契约 §3.2 「自 0.3.0 起」改为「自 0.2.0 起」并追加一段；安全审查 L9 标全部修复；开发指南、架构、CHANGELOG 0.2.0 各补一条。
+
+**调用方核对**
+
+| 调用方                                                                            | 打哪里、带什么                                                                                                                         | 结论                                                      |
+| --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `armadra-hook` 全部动词、`hook` 事件、`credential`（含 `--ama`）、`doctor`、`mcp` | hook 服务自己的监听，应用令牌 + 节点 token                                                                                             | 不经 core 主监听，不受影响                                |
+| `run/<cli>` 启动器、PATH 垫片、Windows 启动器                                     | 只调 `armadra-hook credential`                                                                                                         | 不受影响                                                  |
+| 桌面页面：全部 `/api/`、事件流、终端、realtime、语言服务、浏览器画面、图片、下载  | 全局请求层带 Bearer / 一次性票                                                                                                         | Electron 实测 200 / 升级成功                              |
+| 桌面页面：身份面                                                                  | `/api/identity/*`，自己认凭据                                                                                                          | 不变                                                      |
+| 托盘：`/api/usage`、`/api/usage/cost`、`/api/gateway`、`/api/settings`            | `CoreSession` 的 Bearer                                                                                                                | 实测库里有来源为 core 基址的会话                          |
+| 壳的 `/health`                                                                    | 不要会话                                                                                                                               | 不受影响                                                  |
+| 手机经 Gateway（网页 Cookie、原生 App Bearer + WS 票）                            | Gateway 的门，交接 listener 标 `admitted`                                                                                              | 不受影响，`gateway.integration`、`gateway-e2e` 通过       |
+| 服务器壳                                                                          | 页面经 Gateway；回环监听现在也要会话                                                                                                   | 仓库里没有调用方打它的回环；`server-e2e`、`push-e2e` 通过 |
+| 浏览器里经 Vite 开发                                                              | 连桌面壳起的 core 会 401                                                                                                               | 用 `armadra.sh run web`（带 `ARMADRA_LOOPBACK_OWNER=1`）  |
+| 探针：裸 core                                                                     | `isolatedEnv` / `LOOPBACK_OWNER_ENV`                                                                                                   | A 档 12 项通过                                            |
+| 探针：桌面壳起的 core                                                             | `packaged-smoke` 用 `probe-session.mjs`；`core-terminal-packaged`、`browser-agent-electron`、`windows-acceptance` 在页面里调，走请求层 | packaged-smoke 通过                                       |
+
+**实测**（macOS arm64，2026-10-05）
+
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：4587 通过 / 46 跳过，live 4 项、脚本测试通过；`pnpm --filter @armadra/web test` 3424 通过，`typecheck` 通过；`pnpm --filter @armadra/server test` 87 通过 / 4 跳过；`pnpm check` 通过。
+- 新增用例：`main.test`「回环上没带会话的请求」6 例；`control.test` 的 IPC 签票 3 例；`core-ticket.test` 的 Windows IPC 2 例；`core-session.test` 4 例；页面 `shell-transport.test` 8 例、`assets.test`（壳里经 fetch、下载）3 例、`EditorNode.test` 的下载。`realtime/socket.integration`、`events/socket.integration`、`gateway.integration` 改成带会话与票。
+- `node tools/ci/e2e.mjs --tier a`：12 项全过；`packaged-smoke`（打包版）通过，`回环匿名 {"settings":401,"upgrade":401}`，PDF、视频、终端回显都正常，控制台无错误。
+- 真 Electron 开发构建（`ARMADRA_DATA_DIR` 与 HOME 都是临时的，环境里故意带 `ARMADRA_LOOPBACK_OWNER=1`）：页面 `fetch /api/settings` 200；陌生回环来源 `/api/settings` 与事件流升级 401，不报 Origin 401；页面事件流升级成功；终端回显；realtime 同步流收到第一帧、画板切成实时；重载后画布加载、未断开；设置页正常；托盘会话在库里；页面没有 401 与 error。
+
+**接口**
+
+- `CoreServer.admission(gate)`、`createListener({ admitted })`；`AdmissionVerdict` / `RequestAdmission`（`http/server.ts`）。
+- `core/identity/loopback.ts`：`createLoopbackAdmission`、`loopbackSessionPath`；`core/identity/transport.ts`：`WsTickets`、`protocolTicket`、`anonymousPath`、`sessionIdentity`、`subjectOf`。
+- `IdentityHttpOptions.wsTickets`；`POST /api/identity/ws-ticket` → `{ ticket, expiresAt }`。
+- `core/identity/control.ts`：`issueShellTicket`、`startTicketIpc`、`TICKET_MESSAGE`；壳 `main/core-ticket.ts`：`attachTicketChannel`。
+- 页面：`installShellTransport()`、`shellWsTicket()`、`downloadRuntimeFile(url, name)`；`NativeTransport` 多 `socketOrigin`、`prepare`、`refresh(rejected)`。
+- 壳：`shell-core/core-session.ts::CoreSession`；`TrayOptions.request`。
+- 测试：`core/testing/loopback-session.ts::loopbackSession`；探针 `tools/probes/probe-session.mjs`。
+
+**没做 / 限制**
+
+- Windows 的 IPC 取票只有单元测试，没在真 Windows 上跑。
+
+**后续（fix/g5-28-local-device-reuse）**
+
+- 本机设备复用：`consumeBootstrap` 对回环明文来源的票复用主人名下同名、未撤销、会话全来自回环明文来源的那台设备（`service.ts::reusableLocalDevice`，`store.ts::deviceSessionOrigins`），页面与托盘反复配对设备列表不再增长；经 Gateway 配对的设备不受影响。用例 `service.test`「本机设备复用」3 例、`main.test`「反复配对设备列表不增长」。
+- Windows 接管 / 外接的 core：壳没有 IPC 通道时取票答 `channelUnavailable`（`shell-core/ticket.ts`、`shared/ipc.ts`），页面记下壳签不出票的原因（`identity.ts::shellSessionFailure`）并在顶部挂通知条，文案请人重开应用，「重连」再试一次；配上对即消失。用例 `core-ticket.test`、`Banners.session.test`。没有另开取票退路：hook 服务的应用令牌节点进程也拿得到，用它签主人票会把权限放大给 Agent。
+- 下载把整个文件读进内存再存；很大的文件会占内存。
+- 语言服务与浏览器画面两条流只经全局 `WebSocket` 覆盖，没有单独实测。
+
+## G5-29 G5 残项：本地额度开关、手机 MFA、GitLab 子组 / 变基 / 自动合并、Gitea 与 GitLab 补齐
+
+做了什么：
+
+- G5-25 残项：设置 → 账号与用量的「本地成本统计」下面加了「Claude 本地额度估算」开关（shadcn `Switch` + `SettingsRow`），写 `usage.claudeLocalWindow`，默认开。成本扫描关着时开关禁用，保存后重新取用量。中英文案已同步。
+- G5-22 残项：原生 App 没有会话、OAuth 登录走到第二因素时，入口（`mobile/entry.ts`）新增 `kind: "mfa"` 分支，不再退回连接页。整页 `mobile/NativeMfa.tsx` 复用登录组件 `SignIn` 的两步验证步骤和 `POST mfa/verify`，验证码对了就进画布；策略要求登记第二因素时打开「安全」页。页面上有「返回连接页」。中间票不写进地址栏。已有会话时仍写 `#oauth=` 片段交给「安全」页。契约 §18.5 追加了一句。
+- GitLab 多级子组：owner 可以是 `group/sub/…`，每段都要合格，最多 20 段。项目路径整条 URL 编码。`resolve` 的认法：先按仓库一行找，从最长的 owner 往短找；再看主机那一行是不是 `gitlab`。http(s) 远端会先去掉 GitLab 子路径部署时的站点前缀。GitHub 和 Gitea 不接受多段 owner，给 Gitea 配多段键会答 400。页面上的配置键和仓库路径把多段 owner 编成一段，Git 面板显示完整路径。外部连接不支持多段 owner。
+- GitLab 合并方式 rebase：新路由 `GET merge-options`，按项目的 `merge_method` / `squash_option` 给出可用方式；Gitea 和 GitHub 三种都给，不发请求。只有 `ff` / `rebase_merge` 项目接受 `rebase`。源分支落后（`need_rebase`）时先发 `PUT …/rebase`，并答 `409 rebase_started`：变基会换 head，要等新 head 出来、核对后再合。不落后就照常带 sha 合并。页面的合并方式取自 `merge-options`；变基已发出时给提示，不当失败处理。
+- GitLab 合并队列：新路由 `POST / DELETE pulls/{n}/auto-merge`，也就是「流水线通过后合并」。会先核对 head，`PUT merge` 同时带 `merge_when_pipeline_succeeds` 和 `auto_merge`。流水线已经过了就当场合并；排上了答 `merged: false`。项目开了合并列车（`merge_trains_enabled`）时改走 `POST merge_trains/merge_requests/{iid}`，答 `train: true`。撤销只对已排上的 MR 发 `cancel_merge_when_pipeline_succeeds`。pull 新增 `autoMerge` 字段。页面有「流水线通过后合并 / 加入合并列车」（带确认）和「取消自动合并」。
+- Gitea 与 GitLab 补上 GitHub 已有的三样：
+  - CI 状态映射：详情头部加 CI 汇总徽标；GitLab 的检查列表最前面加当前 head 的 `pipeline #id`，旧 head 的流水线不算。
+  - 检出：复用「检出到 worktree」。pull 新增 `fromFork`；fork 的 head 名不会沿用成本地分支名。
+  - 合并后删分支：新路由 `DELETE pulls/{n}/branch?headSha=`。只有已合并、不是 fork、分支仍指着评审时的 head、且没受保护时才删，否则答 `reasonCode`（`NOT_MERGED` / `FORK_BRANCH` / `BRANCH_MOVED` / `BRANCH_PROTECTED` / `ALREADY_DELETED`）。页面的合并后清理抽成 `MergeCleanupView`，与 GitHub 共用，移除本地检出那一半也跟着有了。
+- 路由表新增 3 行（`merge-options`、`auto-merge`、`branch`），共享层 zod 同步新增。契约 §29.1 / §29.4 / §29.5（`rebase_started`）/ §29.6 都是追加，没有改节号。回放夹具新增 `subgroups`、`merge-methods`、`auto-merge`、`cleanup`，按 GitLab REST v4 文档的形状整理，不是从真实实例录的。假 Gitea 加了 fork 与分支路由。`tools/probes/forge-panel.mjs` 多截几张图。
+
+实测（macOS arm64，2026-10-05）：
+
+- core 的 `forge/gitlab.test`、`gitlab.routes.test`、`forge.test` 新增：子组的寻址、识别和拒绝；合并方式表、变基已发出、不落后直接合、head 变了不发变基；自动合并的排上、当场合并、结果未知、合并列车、方式不符、撤销；fromFork、流水线检查、删分支的五种拒绝；Gitea 的删分支与 fork。其中有 3 条旧断言改了：`merge-options` 答复多了 `autoMerge` / `mergeTrain`，GitLab 的「rebase 不接」改成在 `merge_method: merge` 项目下不接。
+- web：`AccountPage.test` 2 条，`NativeMfa.test` 2 条，`entry.test` 补了 mfa 分支，`api/forge.test`（新）覆盖路径编码，`GithubDrawer.test` 新增子组 1 条，`ForgeHosted.test`（新，原文件逼近 1500 行上限）6 条：项目合并方式与变基提示、自动合并、合并列车 / 撤销、CI 徽标与检出、删分支、fork。GitHub 清理的既有用例没改断言，照样通过。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`（4595 过 / 46 跳过，脚本全过）、web test（3431 过；首轮 `IdentityGate.test` 的 `#reset=` 一条在高负载下超时，单跑三次都过，本包没碰它）、shared 316、server 87 / 4 跳过、mobile 9，`pnpm --filter @armadra/web typecheck` 与 `pnpm check` 通过。
+- 截图（真 core + 回放 GitLab + 无头 Chrome）：`forge-panel.mjs` 截了 `gitlab-detail`（CI 徽标、合并方式、流水线通过后合并、检出）、`gitlab-auto-merge`、`gitlab-merged`、`gitlab-subgroup`。设置页与手机 MFA 页用同一套临时入口截了中英两版。
+
+没做 / 限制：
+
+- 评审（review）不做：Gitea 和 GitLab 的评审模型与 GitHub 差得多（GitLab 是 approvals + discussions），不是低成本的部分。GitHub 那种「按标签 / Projects 字段分组 issue」的状态映射也不做，因为它要按工作空间存配置（新表）。这里做的「状态映射」是 CI 状态到徽标的映射。
+- 合并列车只按文档对夹具验过：API 是 Premium 功能，没有真实实例。撤销用的是 `cancel_merge_when_pipeline_succeeds`，已上车的 MR 能不能这样撤下来没有验证。
+- Gitea 的合并方式不读仓库的 `allow_*` 设置，三种都给；远端不收的方式由合并本身答 405 / 422。Gitea 的 `merge_when_checks_succeed` 没接。
+- 多级子组的仓库不能作外部连接（GitHub 域的连接表按两段存）。
+- fork 的 PR 检出不会自动取 `refs/merge-requests/<iid>/head` / `refs/pull/<n>/head`，起点要自己填。
+- 都没有连真实的 GitLab / Gitea 实例。
+
+## G5-30 G5 最后的小残项：验证码居中、fork 检出取平台引用、子组外部连接、passkey 用例导航
+
+做了什么：
+
+- 两步验证的六格验证码居中：竖排 `Field` 给每个子元素 `w-full`，`InputOTP` 的容器占满整行而格子组贴左。`SignIn` 的 MFA 步给容器加 `justify-center`，网页整页登录和手机原生 MFA 页（`NativeMfa` 复用 `SignIn`）都改过来了。设置 → 安全里登记 TOTP 的表单按设计系统左对齐，没动。
+- fork 的 PR / MR 检出（G5-29 残项）：仓库操作 `createWorktree` 新增可选的 `pullHead { remote, forge, number, headOid }`。core 在操作执行时才 fetch 平台发布的引用（GitLab `refs/merge-requests/<iid>/head`，Gitea `refs/pull/<n>/head`），引用由 core 按平台和编号拼，不收调用方给的 refspec。取到临时引用 `refs/armadra/checkout/<操作 id>`，用完即删；取到的提交和屏上 head 不符时操作 `failed`，不建分支、不留检出。页面上 Gitea / GitLab 的 fork 请求「起点」只读显示这条引用，有多个远端时可选远端（缺省 `origin`）。GitHub 和同仓库的请求照旧。共享层 zod 同步。
+- GitLab 多级子组的仓库能作外部连接（G5-29 残项）：`github_references` 的 `owner` 列原本就没有长度或格式的 CHECK，存完整命名空间路径（`group/sub`），`name` 是最后一段，不加迁移。连接标识的材料仍是 `owner/name`（`name` 不含 `/`，不会和两段仓库撞）。Gitea 和 GitHub 仍拒绝多段 owner。
+- 偶发（flakes-seen 最后一条）：`core/identity/passkey-cdp.live.integration.test.ts` 改成先开 `about:blank`，挂上会话、打开 `Page` 生命周期事件后自己 `Page.navigate`，按这次导航的 `frameId` / `loaderId` 等目标文档的 `load`，再断言 `location.origin` 与 `readyState` 才 evaluate。旧写法轮询 10 秒、到点不论成败都往下走，Windows 上页面还停在 `about:blank` 就跑了相对 URL 的 fetch。
+- 契约 §29.6 追加「外部连接的多级子组」与「fork 的 PR / MR 检出」两条；原来「外部连接不收多段 owner」一句改为注明 G5-30 起收。没有新迁移、没有改节号。
+
+实测（macOS arm64，2026-10-05）：
+
+- core `git/operations.test` 新增 4 条（本地裸仓库）：GitLab / Gitea 的引用只在检出时取、分支起点就是 fork 的提交、不留临时引用也不镜像平台引用；head 变了答 `failed` 且没有检出与分支；与 `startPoint` 混用、编号非法、未知远端在排队前就拒绝。`forge/gitlab.routes.test` 新增 2 条：子组连接入库与列出、与两段仓库区分、越级 / 空段拒绝；Gitea 两段能连、多段拒绝。共享层 `git-repository.test` 1 条。
+- web：`ForgeHosted.test` 新增 3 条（GitLab / Gitea 的 fork 起点、提交前不发操作、提交带 `pullHead`；同仓库请求不带）；`SignIn.test` 补居中断言。
+- passkey 真 Chromium 用例本机连跑 3 次通过；Windows 上的效果要看 CI。
+- 截图（临时入口 + 无头 Chrome，入口已删）：`target/g5-30-shots/{before,after}-{native,page}-{390,1440}-{zh-CN,en}.png`。改前格子组中心在 144 / 660（视口中心 195 / 720），改后 195 / 720，与标题对齐。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`（4613 过 / 53 跳过，live 4 过，脚本 68 过）、web test（3441 过）、shared 318 过，`pnpm --filter @armadra/web typecheck` 与 `pnpm check` 通过。
+
+没做 / 限制：
+
+- fork 检出的远端按名字选（缺省 `origin`），不按地址判断哪个远端是基仓库；选错了远端会因为取不到引用而失败，不会检出错的提交。
+- 子组连接的徽标点开仍只打开面板，不定位到具体 MR（同 G5-15）。
+- 都没有连真实的 GitLab / Gitea 实例。

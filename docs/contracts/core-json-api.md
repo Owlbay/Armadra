@@ -62,7 +62,19 @@ R7a 之前 GitHub 与自动化两块面板走的是 `/rpc/armadra.v1.*`：二进
 
 **明文回环上没带凭据的一次调用按本机主人处理**（`core/identity/service.ts` 的 `localOwner`）。桌面壳的会话是原生的，密钥在壳里，既不发 Cookie 也到不了 `apps/web/src/api/request.ts` 的那个 `fetch`；而那台壳就在同一台机器上。TLS 的服务器壳上这条路不存在，凭据仍然是必须的。主人必须是一台**没被撤销的真设备**——自动化的授权记录要拿它的 epoch 复核，一个编出来的设备标识会让计划在第一次投递时被自己的复核拒掉。
 
-**自 0.3.0 起桌面壳不再按主人处理回环匿名请求**（安全审查 L9）：上面那条路只在 core 的启动选项 `loopbackAnonymousOwner`（`core/main.ts`，缺省 `false`；不传时读 `ARMADRA_LOOPBACK_OWNER=1`）打开时存在，判定在 `core/identity/http.ts::anonymousLoopbackOwner`。桌面壳的页面在这两面上带票据换来的 `Authorization: Bearer`（`apps/web/src/api/request.ts`，401 时换一枚重发一次；回环 CORS 的 `access-control-allow-headers` 因此多了 `authorization`），壳不把这个变量带给 core；服务器壳显式传 `false`。只有探针（`tools/probes/probe-home.mjs`）与 `armadra.sh run web` 起的裸 core 打开它。关着时明文回环上没带凭据的调用照 401 回答（GitHub 面 `UNAUTHENTICATED`、自动化面 `unauthenticated`）。
+**自 0.2.0 起桌面壳不再按主人处理回环匿名请求**（安全审查 L9）：上面那条路只在 core 的启动选项 `loopbackAnonymousOwner`（`core/main.ts`，缺省 `false`；不传时读 `ARMADRA_LOOPBACK_OWNER=1`）打开时存在，判定在 `core/identity/http.ts::anonymousLoopbackOwner`。桌面壳的页面在这两面上带票据换来的 `Authorization: Bearer`（`apps/web/src/api/request.ts`，401 时换一枚重发一次；回环 CORS 的 `access-control-allow-headers` 因此多了 `authorization`），壳不把这个变量带给 core；服务器壳显式传 `false`。只有探针（`tools/probes/probe-home.mjs`）与 `armadra.sh run web` 起的裸 core 打开它。关着时明文回环上没带凭据的调用照 401 回答（GitHub 面 `UNAUTHENTICATED`、自动化面 `unauthenticated`）。
+
+**自 0.2.0 起 core 回环监听上的每一条 `/api/` 与每一条流都要会话**（安全审查 L9 收尾，G5-28）：上面两面之外，路由表里其余 `/api/` 路由与 WebSocket 原来没有请求身份、按本机主人放行，本机任何一个回环端口上的网页都能读设置、开终端、连事件流。现在 `loopbackAnonymousOwner` 关着时（两种壳都是），身份域在 core 自己的监听上装一道门（`core/identity/loopback.ts`，经 `CoreServer.admission`）：
+
+- **不要会话的**只有 `/health`、`/api/health`、`/api/identity/*`（hello、配对、刷新、登录等各自认自己的凭据）与 `/api/gateway/pairing-code/exchange`（§24），与 Gateway 的匿名面是同一张名单（`core/identity/transport.ts::anonymousPath`）。CORS 预检照旧不要凭据。
+- **HTTP**：恰好一个 `Origin`，加一份会话凭据——回环明文来源读 `Authorization: Bearer`，别的来源读 Cookie 且写方法要 `X-Armadra-CSRF`。不报 `Origin` 的调用（`curl`、本机别的进程）没有会话可言，同样 401。
+- **WebSocket**：浏览器的升级带不了头，凭据是 `Sec-WebSocket-Protocol: armadra-ticket.<票>`。票由 `POST /api/identity/ws-ticket`（带 Bearer，只发给回环明文来源的原生传输，否则 400 `bearer_required`）换来，答 `{ ticket, expiresAt }`，30 秒、一次性，绑着签票时的来源，升级的来源对不上不认——与 Gateway 上原生 App 的票（§17.4）同一个形状与做法。升级被拒时状态行是 `401 unauthenticated`。
+- 拒绝一律是 401 `{ "code": "unauthenticated", "message": "需要一个已配对设备的会话" }`；Cookie 会话 CSRF 不对是 403 `forbidden`。门判在读请求体之前，路由存不存在也不先回答（没带会话打一条不存在的路径同样 401）。
+- 认出来的会话进这次请求的身份（`runAs`），路由门、事件订阅与长连接的到期复核（4401 / 4403，§17.4）与 Gateway 进来的请求走同一条路。经 Gateway 交接进 core 的请求已在 TLS 一侧认过人，不再过这道门。
+
+调用方：桌面壳的页面在全局 `fetch` / `WebSocket` 上装了请求层（`apps/web/src/api/shell-transport.ts`，复用原生 App 的 `bearerFetch` / `ticketedWebSocket`）：每个发往 core 的请求带 Bearer、每条流先换票；还没有会话先向壳要票配对，401 时复核 → 刷新 → 重新要票，只重发一次；访问密钥到期前两分钟主动轮转，流不必因 4401 重连。`<img>` 与编辑器的「下载」带不了头，经 `fetch` 取回再交给 `blob:` 地址（`api/assets.ts`）。托盘经 `shell-core/core-session.ts` 用同一张票换自己的会话，来源是 core 自己的回环基址。Windows 上 core 的私有通道还不开，壳经 fork 的 IPC 通道取票（`armadra:identity-ticket`，`core/identity/control.ts::startTicketIpc`、`main/core-ticket.ts`）。接管了上一个 core 或外接 Runtime 时这个壳没有 IPC 通道，取票答 `channelUnavailable`，页面挂一条通知条请人重开应用，不静默 401。
+
+**本机设备复用**：回环明文来源的票兑换时，复用主人名下同名、没被撤销、且签过的会话全都来自回环明文来源的那台设备（`core/identity/service.ts` 的 `consumeBootstrap`），只多一条会话；页面每次加载、托盘每次启动不再各建一台「本机桌面」。经 Gateway（HTTPS 来源）配对的设备每次都是新的，也不会被本机配对认领。
 
 ### 3.3 稳定的 `code`
 
@@ -1372,7 +1384,7 @@ G5-02 追加：`GET devices`（我的设备，`{ devices, nextId, hasMore }`）�
 | `mfa`      | 这个人登记过 TOTP：带 `challengeId`，页面接 §18.3 的 `POST mfa/verify`；不发会话               |
 | `error`    | 带 `code`（下表）；不发会话、不改绑定                                                          |
 
-**原生 App**（R-56）：`start?native=1` 发起的记录不认浏览器绑定，认 `nativeState`。回调对这种记录**不取走**、不认 Cookie，只 302 到 `armadra://oauth?state=<state>&code=<授权码>`（提供方拒绝时是 `&error=<原样，至多 64 字符>`），由 App 带着 `nativeState` 调 `POST oauth/{id}/native` 收尾——那一次才取出即删；`nativeState` 不对、提供方或来源与发起时不同、浏览器发起的记录走 `native`，都答 `oauth_state_invalid`。授权码在深链里被别的 App 截走也换不到会话：收尾要 `nativeState`（只在发起它的 App 本机）与 PKCE verifier（只在 core）。提供方那边仍只登记 `<公网来源>/api/identity/oauth/{id}/callback`。
+**原生 App**（R-56）：`start?native=1` 发起的记录不认浏览器绑定，认 `nativeState`。回调对这种记录**不取走**、不认 Cookie，只 302 到 `armadra://oauth?state=<state>&code=<授权码>`（提供方拒绝时是 `&error=<原样，至多 64 字符>`），由 App 带着 `nativeState` 调 `POST oauth/{id}/native` 收尾——那一次才取出即删；`nativeState` 不对、提供方或来源与发起时不同、浏览器发起的记录走 `native`，都答 `oauth_state_invalid`。授权码在深链里被别的 App 截走也换不到会话：收尾要 `nativeState`（只在发起它的 App 本机）与 PKCE verifier（只在 core）。提供方那边仍只登记 `<公网来源>/api/identity/oauth/{id}/callback`。App 里没有会话时收尾答 `mfa`：App 不写 `#oauth=` 片段，在入口整页接着做第二步（同一个登录组件，`POST mfa/verify { challengeId, code }`，会话照原生传输的规矩进钥匙串），中间票不进地址栏；已有会话时仍写片段交给「安全」页。
 
 `signedIn` / `signedUp` 时，`identity.mfa.requireFor` 覆盖这个人而他还没登记 TOTP，片段再带 `mfaEnrollmentRequired=true`：照常发会话，页面带去登记（与口令登录答案里的 `mfaEnrollmentRequired` 同一条，§18.3；R-17）。
 
@@ -1952,7 +1964,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ### 29.1 识别
 
-仓库由 git 远端地址的主机名（小写、不含端口）与最后两段 `owner/name` 定。按序：
+仓库由 git 远端地址的主机名（小写、不含端口）与最后两段 `owner/name` 定（GitLab 多级子组的 owner 可以更长，见 §29.6）。按序：
 
 1. `github.com`、`www.github.com`、`ssh.github.com` → `github`；GitHub 凭据（§5）配的企业版根的主机 → `github`。这两条不查配置表，GitHub 主机不能在 §29.3 另配。
 2. 配置表里写到这个仓库的一行 `<host>/<owner>/<name>`。
@@ -2000,24 +2012,29 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ### 29.4 issue 与 PR：`/api/forge/repos/{host}/{owner}/{name}/…`
 
-| 方法与路径                  | 请求                                                               | 答复                                                  |
-| --------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------- |
-| `GET issues`                | 查询 `state=open\|closed\|all`（缺省 open）、`cursor`、`limit≤100` | `{ items: [issue…], nextCursor }`，列表里 `body` 为空 |
-| `GET issues/{number}`       |                                                                    | issue                                                 |
-| `PATCH issues/{number}`     | `{ state: "open" \| "closed" }`                                    | issue                                                 |
-| `GET pulls`                 | 同 issues（`closed` 含已合并）                                     | `{ items: [pull…], nextCursor }`                      |
-| `POST pulls`                | `{ title, body?, head, base, draft? }`                             | `201` pull                                            |
-| `GET pulls/{number}`        |                                                                    | pull                                                  |
-| `GET pulls/{number}/files`  |                                                                    | `{ files: [file…] }`（至多 300 个）                   |
-| `GET pulls/{number}/checks` |                                                                    | checks                                                |
-| `POST pulls/{number}/merge` | `{ method?: "merge"\|"squash"\|"rebase", headSha }`                | `{ merged: true, sha }`                               |
+| 方法与路径                         | 请求                                                               | 答复                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `GET issues`                       | 查询 `state=open\|closed\|all`（缺省 open）、`cursor`、`limit≤100` | `{ items: [issue…], nextCursor }`，列表里 `body` 为空                 |
+| `GET issues/{number}`              |                                                                    | issue                                                                 |
+| `PATCH issues/{number}`            | `{ state: "open" \| "closed" }`                                    | issue                                                                 |
+| `GET pulls`                        | 同 issues（`closed` 含已合并）                                     | `{ items: [pull…], nextCursor }`                                      |
+| `POST pulls`                       | `{ title, body?, head, base, draft? }`                             | `201` pull                                                            |
+| `GET pulls/{number}`               |                                                                    | pull                                                                  |
+| `GET pulls/{number}/files`         |                                                                    | `{ files: [file…] }`（至多 300 个）                                   |
+| `GET pulls/{number}/checks`        |                                                                    | checks                                                                |
+| `POST pulls/{number}/merge`        | `{ method?: "merge"\|"squash"\|"rebase", headSha }`                | `{ merged: true, sha }`                                               |
+| `GET merge-options`                |                                                                    | `{ methods: ("merge"\|"squash"\|"rebase")[], autoMerge, mergeTrain }` |
+| `POST pulls/{number}/auto-merge`   | `{ method?, headSha }`                                             | `{ merged, sha, train }`                                              |
+| `DELETE pulls/{number}/auto-merge` |                                                                    | `{ cancelled: true }`                                                 |
+| `DELETE pulls/{number}/branch`     | 查询 `headSha`（必填）                                             | `{ deleted, reasonCode }`                                             |
 
 - issue：`{ number, title, body, state: "open"|"closed", author, labels: string[], commentCount, url, createdAtMs, updatedAtMs, closedAtMs }`。同一编号空间里的 PR 不算 issue（读、改都答 404）。
-- pull：`{ number, title, body, state: "open"|"closed"|"merged", draft, author, baseRef, headRef, headSha, mergeable: "mergeable"|"conflicting"|"unknown", url, createdAtMs, updatedAtMs, mergedAtMs }`。
+- pull：`{ number, title, body, state: "open"|"closed"|"merged", draft, author, baseRef, headRef, headSha, mergeable: "mergeable"|"conflicting"|"unknown", url, createdAtMs, updatedAtMs, mergedAtMs, autoMerge }`。`autoMerge` 是「已排进流水线通过后合并」（§29.6），GitHub 与 Gitea 恒为 `false`。`fromFork`：head 分支在别的仓库里（GitHub 照 §5；Gitea 看 `head.repo_id` 与 `base.repo_id`；GitLab 看 `source_project_id` 与 `target_project_id`；缺字段按同仓库）。
 - file：`{ path, previousPath, status: "added"|"modified"|"removed"|"renamed"|"other", additions, deletions, patch }`；`patch` 从第一个 `@@` 起，二进制为 `null`。Gitea 的补丁从 `pulls/{n}.diff` 按文件切出来。
 - checks：`{ headSha, rollup: "pending"|"success"|"failure"|"neutral"|"none", checks: [{ name, state, url }] }`。Gitea 用 commit statuses（同一个 context 只留最新的；`error` 记 failure，`warning` 记 neutral），GitHub 用 check runs + commit status（§5 同源）。`url` 只收 http(s)。
 - `cursor` 是页码串（2–1000），从不是远端 URL。
 - 合并：`headSha` 必须是完整对象名；远端 head 不是它就 409，不会合进评审者没看到的东西。Gitea 草稿按标题前缀 `WIP:` 认，`draft: true` 建 PR 时加这个前缀。
+- 合并后删源分支（Gitea / GitLab；GitHub 仍走 §5 的 `delete-branch`，这里答 `400 bad_request`）：PR 已合并、不是 fork、分支还指着 `headSha`、没受保护（GitLab 的 `protected` / `default`，Gitea 的 `protected`；head 与 base 同名也不删）才发 `DELETE`；否则答 `200 { deleted: false, reasonCode }`，`reasonCode` 是 `NOT_MERGED` / `FORK_BRANCH` / `BRANCH_MOVED` / `BRANCH_PROTECTED` / `ALREADY_DELETED`（分支已不在，例如项目设了合并后删源分支）。分支名进路径：Gitea 逐段编码、斜杠留着，GitLab 整条编码。删了答 `{ deleted: true, reasonCode: "" }`。
 - 写永远不重试；读在远端 5xx / 断连时重试一次。重定向一律当错误。
 
 ### 29.5 错误
@@ -2034,6 +2051,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 | 502  | `forge_credential_rejected` | 远端不认令牌（远端 401；不答 401，免得页面以为自己的会话过期）                              |
 | 502  | `forge_unavailable`         | 连不上、远端 5xx、答复坏了                                                                  |
 | 504  | `unknown_outcome`           | 写已发出、结果没读到：重新读再决定，不要直接重试                                            |
+| 409  | `rebase_started`            | GitLab 的 `rebase` 先发出了变基（§29.6）：没有合并，head 会变，读到新 head 核对后再合       |
 
 出站登记在 `core/net/outbound.ts` 的 `forgeApi`（地址是用户配的，不配置即不联网）。
 
@@ -2042,15 +2060,20 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §29.3 按主机或仓库配置，路由与形状同 §29.4；与 Gitea 的差异：
 
 - **地址与认证**：`apiBase` 给站点根或 `…/api/v4` 都行，存成 `…/api/v4`。令牌放在 `PRIVATE-TOKEN` 头里；读要 `read_api`，写要 `api`。配置时用它调一次 `GET /user`，`accountLogin` 是答复的 `username`。
-- **寻址**：项目按 `owner%2Fname`（远端地址最后两段）寻址；多级子组的仓库不在这一版里。
+- **寻址**：项目按 URL 编码的完整路径寻址（`owner%2Fname`；多级子组是 `group%2Fsub%2Fname`）。
+- **多级子组**：`repository.owner` 可以是 `group/sub/…`（每段都是合格的名字，至多 20 段）；路由里整条 owner 编码成一段（`/api/forge/repos/{host}/group%2Fsub/{name}`），配置键是 `<host>/group/sub/<name>`（路径同样 `/api/forge/configs/{host}/group%2Fsub/{name}`）。`resolve` 认子组的顺序：配置表里写到这个仓库的 `gitlab` 行，从最长的 owner 往短里找；主机那一行是 `gitlab` 时，远端路径（http(s) 远端先去掉站点根的路径前缀，GitLab 装在子路径下的情形）除最后一段都是 owner；其余仍是最后两段。多段 owner 只认 GitLab：GitHub 主机与 Gitea 配置答 `forge: null`，给 Gitea 配多段的仓库键答 `400 bad_request`。外部连接（§5.2）起初不收多段 owner，G5-30 起收（见本节「外部连接」）。
 - **merge request ↔ pull request**：`number` 是 MR 的 `iid`；`opened` / `locked` → `open`，`closed` → `closed`，`merged` → `merged`；`source_branch` / `target_branch` → `headRef` / `baseRef`，`sha` → `headSha`；`draft` 看 `draft`（旧版本 `work_in_progress`），`draft: true` 建 MR 时加标题前缀 `Draft: `。`mergeable`：`has_conflicts`、`detailed_merge_status` 为 `conflict` / `broken_status`、或 `merge_status` 为 `cannot_be_merged` → `conflicting`；`detailed_merge_status` 为 `mergeable`（老版本只有 `merge_status: can_be_merged`）→ `mergeable`；其余（流水线、审批、检查中）→ `unknown`。
 - **issue**：编号是 issue 的 `iid`，与 MR 是两套编号；`description` → `body`，`user_notes_count` → `commentCount`；开关用 `state_event: close | reopen`。
 - **列表的 `closed`**：GitLab 的 MR `state=closed` 不含已合并，core 按 `all` 取再滤掉开着的，所以一页可能不满；`nextCursor` 仍是远端的下一页。
 - **文件**：来自 `merge_requests/{iid}/diffs`（GitLab 15.7 起），按页取到 300 个；`additions` / `deletions` 从补丁里数；没有 `@@` 的（二进制、过大被折叠、纯改名）`patch` 为 `null`。
-- **检查**：commit statuses（流水线作业也在这里），同名只留 id 最大的；`success` → success，`failed` → failure（`allow_failure` 的 → neutral），`canceled` → failure，`skipped` / `manual` → neutral，其余 → pending。
-- **合并**：`PUT …/merge` 带 `sha: headSha`（远端 head 变了答 409 → `conflict`），`method: "squash"` 对应 `squash: true`；`rebase` 在 GitLab 是另一个异步动作，这一面答 `bad_request`。远端 405 / 422（草稿、流水线未过、冲突）→ `conflict`。答复里的 MR 还没到 `merged`（排进了合并队列）时答 `unknown_outcome`：重新读再决定。
+- **检查**：MR 的 `head_pipeline` 跑在当前 head 上时，排在最前加一条 `pipeline #<id>`（整条流水线的结论与链接；旧 head 的流水线不算）；其余是 commit statuses（流水线作业也在这里），同名只留 id 最大的；`success` → success，`failed` → failure（`allow_failure` 的 → neutral），`canceled` → failure，`skipped` / `manual` → neutral，其余 → pending。
+- **合并**：`PUT …/merge` 带 `sha: headSha`（远端 head 变了答 409 → `conflict`），`method: "squash"` 对应 `squash: true`。
+- **合并方式**：`GET merge-options` 读项目的 `merge_method` / `squash_option`：`merge`（合并提交）→ `merge`；`rebase_merge`（半线性）→ `merge`、`rebase`；`ff`（只快进）→ `rebase`；再按 `squash_option` 加上 `squash`（`never` 不加，`always` 只剩 `squash`）。Gitea 与 GitHub 不细分，三种都给、不发请求。`method: "rebase"` 只在项目有这一种时收（否则 `bad_request`）：MR 的 `detailed_merge_status` 是 `need_rebase` 时先发 `PUT …/rebase`（异步）并答 `409 rebase_started`——变基会换 head，评审者读到新 head 核对后再合；不落后就照常 `PUT …/merge`（不带 `squash`），由项目设置快进或带合并提交。远端 405 / 422（草稿、流水线未过、冲突）→ `conflict`。答复里的 MR 还没到 `merged`（排进了合并队列）时答 `unknown_outcome`：重新读再决定。
+- **流水线通过后合并**：`merge-options` 的 `autoMerge` 恒为 `true`，`mergeTrain` 是项目的 `merge_trains_enabled`（Premium）。`POST pulls/{number}/auto-merge` 与合并一样先核 head、方式必须在 `methods` 里、不重试：没开合并列车时 `PUT …/merge` 带 `merge_when_pipeline_succeeds: true` 与 `auto_merge: true`（17.11 起的新名，老版本忽略它），答复的 MR 已 `merged` 就答 `{ merged: true, sha, train: false }`（流水线已过、当场合并），`merge_when_pipeline_succeeds` 为真答 `{ merged: false, sha: null, train: false }`，两样都不是答 `unknown_outcome`；开了合并列车时改为 `POST /merge_trains/merge_requests/{iid}`（`sha`、`squash`、`auto_merge: true`；201 已上车、202 等流水线过了再上），答 `{ merged: false, sha: null, train: true }`。`DELETE pulls/{number}/auto-merge` 只对 `autoMerge` 为真的 MR 发 `POST …/cancel_merge_when_pipeline_succeeds`，否则 `409 conflict`。Gitea 与 GitHub 的 `autoMerge` / `mergeTrain` 为 `false`，这两条路由答 `400 bad_request`。
 - **范围不足**：403 的答复里 `error` 是 `insufficient_scope`（经典令牌）或 `insufficient_granular_scope`（细粒度令牌）时答 `403 forge_scope`；别的 403 仍是 `forge_forbidden`。远端的说明文字不往外传。
 - **外部连接**：`GithubExternalReference.forge` 为 `gitea` / `gitlab` 时（§5.2），仓库必须正是这台机器对它识别出的那个平台，`apiBase` 取自配置（请求里给了别的根就拒绝）；GitHub 的 issue / PR 详情只列 `forge: github` 的连接。
+- **外部连接的多级子组**（G5-30 追加）：`forge: gitlab` 的连接收多段 owner；`repository.owner` 存完整的命名空间路径（`group/sub`），`name` 是最后一段，现有列照存，没有新迁移；连接标识的材料里仓库仍是 `owner/name`（`name` 不含 `/`，不会与两段的仓库撞）。`forge: gitea` 与 GitHub 的连接仍拒绝多段 owner（`invalid`）。
+- **fork 的 PR / MR 检出**（G5-30 追加）：仓库操作 `createWorktree`（`POST /api/workspaces/{id}/git/repository/operations`）可带 `pullHead: { remote, forge: "gitea" | "gitlab", number, headOid }`，只能与 `createBranch: true`、`startPoint: null` 同用。core 在操作执行时（不是排队时）从 `remote` fetch 平台发布的引用——GitLab `refs/merge-requests/<iid>/head`，Gitea / Forgejo `refs/pull/<n>/head`，引用由 core 按 `forge` 与 `number` 拼、不收调用方给的 refspec——到临时引用 `refs/armadra/checkout/<操作 id>`，用完即删；取到的提交与 `headOid` 不符时操作 `failed`（「head moved since it was reviewed」），不建分支也不留检出。GitHub 的检出不带这一项，行为不变。
 
 ## 30. 页面错误上报：`/api/diagnostics/client-error`
 

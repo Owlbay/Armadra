@@ -8,16 +8,24 @@
  *   * merge request ↔ pull request：编号用 `iid`（项目内编号），`opened` ↔ `open`，
  *     `source_branch` / `target_branch` ↔ head / base。issue 与 MR 是两套编号，
  *     不像 GitHub / Gitea 共用一个空间。
- *   * 项目用 `owner%2Fname` 寻址（URL 编码的完整路径）；只认远端地址最后两段，
- *     多级子组的仓库不在这一版里。
+ *   * 项目用 URL 编码的完整路径寻址（`owner%2Fname`，多级子组是
+ *     `group%2Fsub%2Fname`）；子组怎么从远端地址认出来见 `service.ts::resolve`。
  *   * 列表的 `closed` 含已合并：GitLab 的 `state=closed` 不含 merged，所以按
  *     `all` 取再滤掉开着的，一页可能不满。
  *   * 差异来自 `/merge_requests/{iid}/diffs`（15.7 起）；增删行数从补丁里数。
  *   * 检查用 commit statuses（流水线的作业也写在这里），同名只留 id 最大的那条；
  *     允许失败的作业失败记 `neutral`。
  *   * 合并：`PUT …/merge` 带 `sha`，远端 head 变了就 409；`squash` 对应
- *     `squash: true`；`rebase` 在 GitLab 是另一个异步动作，这里不接。
+ *     `squash: true`。能用哪几种看项目的 `merge_method` / `squash_option`
+ *     （{@link GitlabForge.mergeOptions}）。`rebase` 只在项目要线性历史
+ *     （`ff` / `rebase_merge`）时有：源分支落后目标时先发 `PUT …/rebase`
+ *     （异步），答 `REBASE_STARTED`——变基会换 head，评审者要先看新的 head
+ *     再合；不落后就照常 `PUT …/merge`，由项目设置决定快进或半线性。
  *   * 草稿：建草稿 MR 加标题前缀 `Draft: `，读时看 `draft`。
+ *   * 流水线通过后合并：`PUT …/merge` 带 `merge_when_pipeline_succeeds`
+ *     （17.11 起叫 `auto_merge`，两个都带）；项目开了合并列车时改为
+ *     `POST /merge_trains/merge_requests/{iid}` 排进列车。撤销用
+ *     `cancel_merge_when_pipeline_succeeds`。
  */
 
 import {
@@ -32,7 +40,11 @@ import {
   type ForgeFileStatus,
   type ForgeIssue,
   type ForgeIssueState,
+  type ForgeMergeMethod,
   type ForgeMergeable,
+  type ForgeAutoMerge,
+  type ForgeBranchDeletion,
+  type ForgeMergeOptions,
   type ForgeMerged,
   type ForgePage,
   type ForgePull,
@@ -143,6 +155,47 @@ interface WireMergeRequest {
   merged_at?: string | null;
   merge_commit_sha?: string | null;
   squash_commit_sha?: string | null;
+  merge_when_pipeline_succeeds?: boolean;
+  source_project_id?: number;
+  target_project_id?: number;
+  head_pipeline?: WirePipeline | null;
+}
+interface WirePipeline {
+  id?: number;
+  sha?: string;
+  status?: string;
+  web_url?: string;
+}
+/** `GET /projects/:id/repository/branches/:branch`。 */
+interface WireRepoBranch {
+  commit?: { id?: string } | null;
+  protected?: boolean;
+  default?: boolean;
+}
+
+/**
+ * 项目设置 → 能用的合并方式。`merge_method`：`merge`（合并提交）只有 merge；
+ * `rebase_merge`（半线性）有 merge 与「先变基再合」；`ff`（只快进）只有 rebase。
+ * `squash_option`：`never` 去掉 squash，`always` 只剩 squash，其余加上 squash。
+ */
+export function gitlabMergeMethods(project: {
+  merge_method?: string;
+  squash_option?: string;
+}): ForgeMergeMethod[] {
+  if (project.squash_option === "always") return ["squash"];
+  const methods: ForgeMergeMethod[] =
+    project.merge_method === "ff"
+      ? ["rebase"]
+      : project.merge_method === "rebase_merge"
+        ? ["merge", "rebase"]
+        : ["merge"];
+  if (project.squash_option !== "never") methods.push("squash");
+  return methods;
+}
+interface WireProject {
+  merge_method?: string;
+  squash_option?: string;
+  merge_trains_enabled?: boolean;
 }
 interface WireDiff {
   old_path?: string;
@@ -248,6 +301,11 @@ export function toPull(value: WireMergeRequest): ForgePull {
     createdAtMs: timeMs(value.created_at) ?? 0,
     updatedAtMs: timeMs(value.updated_at) ?? 0,
     mergedAtMs: state === "merged" ? timeMs(value.merged_at) : null,
+    autoMerge: state === "open" && value.merge_when_pipeline_succeeds === true,
+    fromFork:
+      typeof value.source_project_id === "number" &&
+      typeof value.target_project_id === "number" &&
+      value.source_project_id !== value.target_project_id,
   };
 }
 
@@ -298,7 +356,11 @@ function checkState(value: WireStatus): ForgeCheckState {
 }
 
 function projectPath(repo: ForgeRepo, suffix = ""): string {
-  if (!validName(repo.owner) || !validName(repo.name)) {
+  // owner 可以是多级子组 `group/sub`：整条路径一起 URL 编码成一段。
+  if (
+    !repo.owner.split("/").every((segment) => validName(segment)) ||
+    !validName(repo.name)
+  ) {
     throw forgeError("invalid", "REPOSITORY_INVALID");
   }
   return `/projects/${encodeURIComponent(`${repo.owner}/${repo.name}`)}${suffix}`;
@@ -413,10 +475,157 @@ export class GitlabForge implements Forge {
   }
 
   async getPull(repo: ForgeRepo, number: number): Promise<ForgePull> {
+    return toPull(await this.rawPull(repo, number));
+  }
+
+  private async rawPull(
+    repo: ForgeRepo,
+    number: number,
+  ): Promise<WireMergeRequest> {
     const response = await this.http.get(
       projectPath(repo, `/merge_requests/${numbered(number)}`),
     );
-    return toPull(decodeJson<WireMergeRequest>(response));
+    return decodeJson<WireMergeRequest>(response);
+  }
+
+  private async project(repo: ForgeRepo): Promise<WireProject> {
+    return decodeJson<WireProject>(await this.http.get(projectPath(repo)));
+  }
+
+  async mergeOptions(repo: ForgeRepo): Promise<ForgeMergeOptions> {
+    const project = await this.project(repo);
+    return {
+      methods: gitlabMergeMethods(project),
+      autoMerge: true,
+      mergeTrain: project.merge_trains_enabled === true,
+    };
+  }
+
+  /**
+   * 流水线通过后合并。与 {@link merge} 一样先核 head、不重试；方式必须是项目
+   * 现在收的那几种之一。流水线已经过了时 GitLab 当场合并，答 `merged: true`。
+   */
+  async autoMerge(
+    repo: ForgeRepo,
+    number: number,
+    input: MergeInput,
+  ): Promise<ForgeAutoMerge> {
+    if (!validSha(input.headSha)) throw forgeError("invalid", "SHA_INVALID");
+    const project = await this.project(repo);
+    if (!gitlabMergeMethods(project).includes(input.method)) {
+      throw forgeError("invalid", "MERGE_METHOD_UNSUPPORTED");
+    }
+    const before = await this.getPull(repo, number);
+    if (before.state === "merged")
+      throw forgeError("conflict", "ALREADY_MERGED");
+    if (before.state !== "open") throw forgeError("conflict", "NOT_OPEN");
+    if (before.headSha !== input.headSha) {
+      throw forgeError("conflict", "HEAD_CHANGED");
+    }
+    const squash = input.method === "squash";
+    const index = numbered(number);
+    if (project.merge_trains_enabled === true) {
+      // 201：已排进列车；202：等流水线过了再排。两者都是「排上了」。
+      await this.mergeWrite(() =>
+        this.http.write(
+          "POST",
+          projectPath(repo, `/merge_trains/merge_requests/${index}`),
+          { sha: input.headSha, squash, auto_merge: true },
+        ),
+      );
+      return { merged: false, sha: null, train: true };
+    }
+    const response = await this.mergeWrite(() =>
+      this.http.write(
+        "PUT",
+        projectPath(repo, `/merge_requests/${index}/merge`),
+        {
+          sha: input.headSha,
+          squash,
+          merge_when_pipeline_succeeds: true,
+          auto_merge: true,
+        },
+      ),
+    );
+    let after: WireMergeRequest;
+    try {
+      after = decodeJson<WireMergeRequest>(response);
+    } catch {
+      throw forgeError("unknownOutcome", "RESPONSE_MALFORMED");
+    }
+    if (after.state === "merged") {
+      const sha = after.merge_commit_sha ?? after.squash_commit_sha ?? "";
+      return { merged: true, sha: validSha(sha) ? sha : null, train: false };
+    }
+    if (after.merge_when_pipeline_succeeds === true) {
+      return { merged: false, sha: null, train: false };
+    }
+    // 既没合也没排上：说不清发生了什么，让调用方重新读。
+    throw forgeError("unknownOutcome", "AUTO_MERGE_NOT_SET");
+  }
+
+  async cancelAutoMerge(repo: ForgeRepo, number: number): Promise<void> {
+    const before = await this.getPull(repo, number);
+    if (!before.autoMerge) throw forgeError("conflict", "NOT_SCHEDULED");
+    await this.http.write(
+      "POST",
+      projectPath(
+        repo,
+        `/merge_requests/${numbered(number)}/cancel_merge_when_pipeline_succeeds`,
+      ),
+    );
+  }
+
+  async deleteBranch(
+    repo: ForgeRepo,
+    number: number,
+    headSha: string,
+  ): Promise<ForgeBranchDeletion> {
+    if (!validSha(headSha)) throw forgeError("invalid", "SHA_INVALID");
+    const pull = await this.getPull(repo, number);
+    if (pull.state !== "merged") return refused("NOT_MERGED");
+    if (pull.fromFork) return refused("FORK_BRANCH");
+    if (!validRefName(pull.headRef) || pull.headRef === pull.baseRef) {
+      return refused("BRANCH_PROTECTED");
+    }
+    const path = projectPath(
+      repo,
+      `/repository/branches/${encodeURIComponent(pull.headRef)}`,
+    );
+    let branch: WireRepoBranch;
+    try {
+      branch = decodeJson<WireRepoBranch>(await this.http.get(path));
+    } catch (error) {
+      // 项目设了「合并后删源分支」时它多半已经不在了。
+      if (error instanceof ForgeError && error.kind === "notFound") {
+        return refused("ALREADY_DELETED");
+      }
+      throw error;
+    }
+    if (branch.protected === true || branch.default === true) {
+      return refused("BRANCH_PROTECTED");
+    }
+    if (branch.commit?.id !== headSha) return refused("BRANCH_MOVED");
+    await this.http.write("DELETE", path);
+    return { deleted: true, reasonCode: "" };
+  }
+
+  /** 合并类写的拒绝翻译：409 是 head 变了，405 / 422 是现在合不了。 */
+  private async mergeWrite<T>(work: () => Promise<T>): Promise<T> {
+    try {
+      return await work();
+    } catch (error) {
+      if (error instanceof ForgeError && error.reason === "CONFLICT") {
+        throw forgeError("conflict", "HEAD_CHANGED");
+      }
+      if (
+        error instanceof ForgeError &&
+        (error.reason === "NOT_ALLOWED" || error.reason === "UNPROCESSABLE")
+      ) {
+        throw forgeError("conflict", "NOT_MERGEABLE");
+      }
+      throw error;
+    }
   }
 
   async createPull(
@@ -478,7 +687,8 @@ export class GitlabForge implements Forge {
   }
 
   async checks(repo: ForgeRepo, number: number): Promise<ForgeChecks> {
-    const pull = await this.getPull(repo, number);
+    const raw = await this.rawPull(repo, number);
+    const pull = toPull(raw);
     if (pull.headSha === "") {
       return { headSha: "", rollup: "none", checks: [] };
     }
@@ -500,6 +710,22 @@ export class GitlabForge implements Forge {
       const url = webUrl(status.target_url);
       return { name, state: checkState(status), url: url === "" ? null : url };
     });
+    // 流水线本身（作业都在 statuses 里，这一条给的是整条流水线的结论与链接）。
+    // 只认跑在这个 head 上的那条：旧 head 的流水线不该替新提交说话。
+    const pipeline = raw.head_pipeline;
+    if (
+      pipeline !== null &&
+      pipeline !== undefined &&
+      pipeline.sha === pull.headSha &&
+      count(pipeline.id) > 0
+    ) {
+      const url = webUrl(pipeline.web_url);
+      checks.unshift({
+        name: `pipeline #${count(pipeline.id)}`,
+        state: checkState({ status: pipeline.status }),
+        url: url === "" ? null : url,
+      });
+    }
     return { headSha: pull.headSha, rollup: rollupOf(checks), checks };
   }
 
@@ -510,14 +736,29 @@ export class GitlabForge implements Forge {
   ): Promise<ForgeMerged> {
     if (!validSha(input.headSha)) throw forgeError("invalid", "SHA_INVALID");
     if (input.method === "rebase") {
-      throw forgeError("invalid", "MERGE_METHOD_UNSUPPORTED");
+      const methods = gitlabMergeMethods(await this.project(repo));
+      if (!methods.includes("rebase")) {
+        throw forgeError("invalid", "MERGE_METHOD_UNSUPPORTED");
+      }
     }
-    const before = await this.getPull(repo, number);
+    const raw = await this.rawPull(repo, number);
+    const before = toPull(raw);
     if (before.state === "merged")
       throw forgeError("conflict", "ALREADY_MERGED");
     if (before.state !== "open") throw forgeError("conflict", "NOT_OPEN");
     if (before.headSha !== input.headSha) {
       throw forgeError("conflict", "HEAD_CHANGED");
+    }
+    if (
+      input.method === "rebase" &&
+      raw.detailed_merge_status === "need_rebase"
+    ) {
+      // 变基是异步的，而且会换 head：发出去就停，不在同一次请求里接着合。
+      await this.http.write(
+        "PUT",
+        projectPath(repo, `/merge_requests/${numbered(number)}/rebase`),
+      );
+      throw forgeError("conflict", "REBASE_STARTED");
     }
     let response;
     try {
@@ -552,4 +793,8 @@ export class GitlabForge implements Forge {
     const sha = after.merge_commit_sha ?? after.squash_commit_sha ?? "";
     return { merged: true, sha: validSha(sha) ? sha : null };
   }
+}
+
+function refused(reasonCode: string): ForgeBranchDeletion {
+  return { deleted: false, reasonCode };
 }

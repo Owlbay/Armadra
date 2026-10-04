@@ -388,7 +388,12 @@ export function GithubDrawer() {
             detection.data.credential && (
               <>
                 <div className="flex min-w-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2 text-[12px]">
-                  <span className="min-w-0 truncate font-medium select-text">
+                  <span
+                    data-slot="forge-repository"
+                    // GitLab 多级子组的路径可能很长：截断时悬停看全。
+                    title={`${detection.data.repository.owner}/${detection.data.repository.name}`}
+                    className="min-w-0 truncate font-medium select-text"
+                  >
                     {detection.data.repository.owner}/
                     {detection.data.repository.name}
                   </span>
@@ -402,11 +407,13 @@ export function GithubDrawer() {
                   )}
                 </div>
                 <ForgeHosted
-                  key={detection.data.configKey ?? resolveUrl}
+                  // 同一主机一行配置下的不同仓库（含多级子组）各自一份状态。
+                  key={`${detection.data.repository.host}/${detection.data.repository.owner}/${detection.data.repository.name}`}
                   detection={detection.data}
                   locale={locale}
                   canWrite={forgeCanWrite}
                   open={open}
+                  workspaceId={workspaceId}
                 />
               </>
             )}

@@ -17,9 +17,18 @@ import {
   oauthFragment,
 } from "./native-oauth";
 
-/** 入口画什么：画布本体，或者连接页。 */
+/** 入口画什么：画布本体、连接页，或者原生 OAuth 登录的第二步。 */
 export type Entry =
   | { readonly kind: "app" }
+  | {
+      /**
+       * App 里没有会话时经原生 OAuth 登录、走到了第二因素（契约 §18.5 的
+       * `mfa`）：整页第二步，带着中间票接 `mfa/verify`，传输已装好。
+       */
+      readonly kind: "mfa";
+      readonly origin: string;
+      readonly challengeId: string;
+    }
   | {
       readonly kind: "connect";
       readonly mode: "native";
@@ -114,7 +123,8 @@ function installTransport(origin: string): void {
 /**
  * 原生 OAuth 的深链回来了（R-56）：装好传输、读回钥匙串里的会话，再收尾。
  * 结果写成 `#oauth=…` 片段交给「安全」那一页（`use-link-fragments` 打开它）。
- * 收尾之后有会话（原来就有，或者这次登录拿到的）进画布，否则回连接页。
+ * 收尾之后有会话（原来就有，或者这次登录拿到的）进画布；没有会话而走到了
+ * 第二因素，就在这里接着做第二步（中间票不进地址栏）；其余回连接页。
  */
 async function finishNativeOAuth(
   origin: string | null,
@@ -124,6 +134,9 @@ async function finishNativeOAuth(
   installTransport(origin);
   const restored = await restoreNativeCredentials();
   const outcome = await completeNativeOAuth(link);
+  // 没有会话就没有画布、也没有「安全」页去接 `#oauth=mfa`：第二步在入口里做。
+  if (!restored && outcome.result === "mfa" && outcome.challengeId !== "")
+    return { kind: "mfa", origin, challengeId: outcome.challengeId };
   try {
     const location = globalThis.location;
     globalThis.history?.replaceState(

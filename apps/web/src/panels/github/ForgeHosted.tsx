@@ -26,7 +26,12 @@ import { Textarea } from "@/ui/textarea";
 import { useT } from "@/app/preferences-store";
 import { openExternal } from "@/platform";
 import { Check, Field, selectClass } from "../git/forms";
+import { CheckoutWorktree } from "./CheckoutWorktree";
+import { MergeCleanupView } from "./MergeCleanup";
 import {
+  autoMergeForgePull,
+  cancelAutoMergeForgePull,
+  deleteForgeBranch,
   type ForgeDetection,
   type ForgeIssue,
   type ForgeListState,
@@ -36,7 +41,9 @@ import {
   createForgePull,
   forgeFailureKey,
   forgeIssue,
+  forgeFailure,
   forgeIssues,
+  forgeMergeOptions,
   forgePull,
   forgePullChecks,
   forgePullFiles,
@@ -49,9 +56,10 @@ import {
 /**
  * Git 托管面板里 Gitea / GitLab 的那一面（契约 §29.4、§29.6）。
  *
- * GitHub 仓库仍是 {@link GithubDrawer} 原来那一面（状态映射、评审、检出…）；
- * 这里只有两个平台共有的那层：issue 列表与开关，PR / MR 列表、详情、文件、
- * 检查、合并与新建。合并带着页面上显示的 head，远端动过就被拒绝。
+ * GitHub 仓库仍是 {@link GithubDrawer} 原来那一面（状态映射、评审…）；这里是
+ * 两个平台共有的那层：issue 列表与开关，PR / MR 列表、详情、文件、检查（CI
+ * 汇总映射成一枚徽标）、合并与新建，以及与 GitHub 共用的检出到 worktree 和
+ * 合并后清理。合并带着页面上显示的 head，远端动过就被拒绝。
  */
 
 export type ForgeTab = "issues" | "pulls";
@@ -74,6 +82,8 @@ export const forgeKeys = {
     ["forge", "files", repoKey(repo), number] as const,
   checks: (repo: ForgeRepo, number: number) =>
     ["forge", "checks", repoKey(repo), number] as const,
+  mergeOptions: (repo: ForgeRepo) =>
+    ["forge", "merge-options", repoKey(repo)] as const,
 };
 
 function when(ms: number | null, locale: string): string {
@@ -120,6 +130,8 @@ export interface ForgeHostedProps {
   canWrite: boolean;
   /** 关着的面板不轮询也不发请求。 */
   open: boolean;
+  /** 检出与清理作用于这个工作空间的根仓库；没有工作空间时不给这两样。 */
+  workspaceId?: string | null;
 }
 
 export function ForgeHosted({
@@ -127,6 +139,7 @@ export function ForgeHosted({
   locale,
   canWrite,
   open,
+  workspaceId = null,
 }: ForgeHostedProps) {
   const t = useT();
   const forge = detection.forge ?? "gitea";
@@ -209,6 +222,7 @@ export function ForgeHosted({
             number={selected}
             locale={locale}
             canWrite={canWrite}
+            workspaceId={workspaceId}
             onBack={() => setSelected(null)}
           />
         ) : (
@@ -517,6 +531,7 @@ function PullDetail({
   number,
   locale,
   canWrite,
+  workspaceId,
   onBack,
 }: {
   forge: string;
@@ -524,6 +539,7 @@ function PullDetail({
   number: number;
   locale: string;
   canWrite: boolean;
+  workspaceId: string | null;
   onBack: () => void;
 }) {
   const t = useT();
@@ -543,6 +559,7 @@ function PullDetail({
           pull={pull.data}
           locale={locale}
           canWrite={canWrite}
+          workspaceId={workspaceId}
         />
       )}
     </div>
@@ -555,18 +572,37 @@ export function PullBody({
   pull,
   locale,
   canWrite,
+  workspaceId = null,
 }: {
   forge: string;
   repo: ForgeRepo;
   pull: ForgePull;
   locale: string;
   canWrite: boolean;
+  workspaceId?: string | null;
 }) {
   const t = useT();
   const client = useQueryClient();
-  const methods = mergeMethods(forge);
-  const [method, setMethod] = React.useState<ForgeMergeMethod>("merge");
-  const [confirm, setConfirm] = React.useState(false);
+  const options = useQuery({
+    queryKey: forgeKeys.mergeOptions(repo),
+    queryFn: () => forgeMergeOptions(repo),
+    enabled: canWrite && pull.state === "open",
+    retry: false,
+    staleTime: 60_000,
+  });
+  // GitLab 按项目设置给（只快进的项目只有 rebase）；问不到时退回平台缺省。
+  const methods =
+    options.data && options.data.methods.length > 0
+      ? options.data.methods
+      : mergeMethods(forge);
+  const [picked, setPicked] = React.useState<ForgeMergeMethod>("merge");
+  const method = methods.includes(picked) ? picked : (methods[0] ?? "merge");
+  const setMethod = setPicked;
+  /** 确认框问的是哪一种：直接合并，或流水线通过后合并。 */
+  const [confirm, setConfirm] = React.useState<"merge" | "auto" | null>(null);
+  const train = options.data?.mergeTrain === true;
+  const canAutoMerge =
+    options.data?.autoMerge === true && !pull.autoMerge && !pull.draft;
   const files = useQuery({
     queryKey: forgeKeys.files(repo, pull.number),
     queryFn: () => forgePullFiles(repo, pull.number),
@@ -577,6 +613,31 @@ export function PullBody({
     queryFn: () => forgePullChecks(repo, pull.number),
     retry: false,
   });
+  const autoMerge = useMutation({
+    mutationFn: () =>
+      autoMergeForgePull(repo, pull.number, { method, headSha: pull.headSha }),
+    onSuccess: (result) => {
+      toast.success(
+        t(
+          result.merged
+            ? "forge.merge.done"
+            : result.train
+              ? "forge.autoMerge.trainDone"
+              : "forge.autoMerge.done",
+        ),
+      );
+      void client.invalidateQueries({ queryKey: forgeKeys.all });
+    },
+    onError: (error) => toast.error(t(forgeFailureKey(error))),
+  });
+  const cancelAutoMerge = useMutation({
+    mutationFn: () => cancelAutoMergeForgePull(repo, pull.number),
+    onSuccess: () => {
+      toast.success(t("forge.autoMerge.cancelled"));
+      void client.invalidateQueries({ queryKey: forgeKeys.all });
+    },
+    onError: (error) => toast.error(t(forgeFailureKey(error))),
+  });
   const merge = useMutation({
     mutationFn: () =>
       mergeForgePull(repo, pull.number, { method, headSha: pull.headSha }),
@@ -584,7 +645,15 @@ export function PullBody({
       toast.success(t("forge.merge.done"));
       void client.invalidateQueries({ queryKey: forgeKeys.all });
     },
-    onError: (error) => toast.error(t(forgeFailureKey(error))),
+    onError: (error) => {
+      // 变基已发出：不是失败，等新的 head 出来、核对后再合。
+      if (forgeFailure(error) === "rebaseStarted") {
+        toast.message(t(forgeFailureKey(error)));
+        void client.invalidateQueries({ queryKey: forgeKeys.all });
+        return;
+      }
+      toast.error(t(forgeFailureKey(error)));
+    },
   });
 
   return (
@@ -598,6 +667,20 @@ export function PullBody({
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <Badge variant="secondary">{t(`forge.state.${pull.state}`)}</Badge>
         {pull.draft && <Badge variant="outline">{t("forge.draft")}</Badge>}
+        {pull.autoMerge && (
+          <Badge variant="outline">{t("forge.autoMerge.set")}</Badge>
+        )}
+        {checks.data && checks.data.rollup !== "none" && (
+          <Badge
+            data-slot="forge-rollup"
+            data-rollup={checks.data.rollup}
+            variant={
+              checks.data.rollup === "failure" ? "destructive" : "outline"
+            }
+          >
+            {t(`forge.rollup.${checks.data.rollup}`)}
+          </Badge>
+        )}
         {pull.state === "open" && (
           <Badge
             variant={
@@ -706,24 +789,84 @@ export function PullBody({
           <Button
             size="sm"
             className="min-h-10"
-            disabled={merge.isPending || !pull.headSha}
-            onClick={() => setConfirm(true)}
+            disabled={merge.isPending || autoMerge.isPending || !pull.headSha}
+            onClick={() => setConfirm("merge")}
           >
             {t("forge.merge")} · {shortSha(pull.headSha)}
           </Button>
+          {canAutoMerge && (
+            <Button
+              size="sm"
+              variant="secondary"
+              className="min-h-10"
+              disabled={merge.isPending || autoMerge.isPending || !pull.headSha}
+              onClick={() => setConfirm("auto")}
+            >
+              {t(train ? "forge.autoMerge.train" : "forge.autoMerge")}
+            </Button>
+          )}
+          {pull.autoMerge && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="min-h-10"
+              disabled={cancelAutoMerge.isPending}
+              onClick={() => cancelAutoMerge.mutate()}
+            >
+              {t("forge.autoMerge.cancel")}
+            </Button>
+          )}
         </section>
       )}
 
+      {workspaceId && (
+        <CheckoutWorktree
+          workspaceId={workspaceId}
+          pull={{
+            ...pull,
+            forge: forge === "gitlab" ? "gitlab" : "gitea",
+          }}
+          busy={merge.isPending}
+        />
+      )}
+
+      {workspaceId && (
+        <MergeCleanupView
+          workspaceId={workspaceId}
+          pull={{
+            headRef: pull.headRef,
+            headSha: pull.headSha,
+            fromFork: pull.fromFork,
+            merged: pull.state === "merged",
+          }}
+          canWrite={canWrite}
+          busy={false}
+          failureKey={forgeFailureKey}
+          deleteBranch={() =>
+            deleteForgeBranch(repo, pull.number, pull.headSha)
+          }
+          onBranchDeleted={() =>
+            void client.invalidateQueries({ queryKey: forgeKeys.all })
+          }
+        />
+      )}
+
       <ResponsiveAlertDialog
-        open={confirm}
+        open={confirm !== null}
         onOpenChange={(next) => {
-          if (!next) setConfirm(false);
+          if (!next) setConfirm(null);
         }}
       >
         <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
           <ResponsiveAlertDialogHeader>
             <ResponsiveAlertDialogTitle>
-              {t("forge.merge.confirm")}
+              {t(
+                confirm === "auto"
+                  ? train
+                    ? "forge.autoMerge.confirmTrain"
+                    : "forge.autoMerge.confirm"
+                  : "forge.merge.confirm",
+              )}
             </ResponsiveAlertDialogTitle>
           </ResponsiveAlertDialogHeader>
           <dl className="grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
@@ -742,13 +885,21 @@ export function PullBody({
             </ResponsiveAlertDialogCancel>
             <ResponsiveAlertDialogAction
               className="min-h-10"
-              disabled={merge.isPending}
+              disabled={merge.isPending || autoMerge.isPending}
               onClick={() => {
-                setConfirm(false);
-                merge.mutate();
+                const which = confirm;
+                setConfirm(null);
+                if (which === "auto") autoMerge.mutate();
+                else merge.mutate();
               }}
             >
-              {t("forge.merge")}
+              {t(
+                confirm === "auto"
+                  ? train
+                    ? "forge.autoMerge.train"
+                    : "forge.autoMerge"
+                  : "forge.merge",
+              )}
             </ResponsiveAlertDialogAction>
           </ResponsiveAlertDialogFooter>
         </ResponsiveAlertDialogContent>

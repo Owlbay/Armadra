@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { devicePlatformSchema } from "@armadra/shared";
 
-import { fetchNativeTicket, isNativeShell } from "../host/native-session";
+import {
+  HostNativeSessionError,
+  type NativeSessionFailure,
+  fetchNativeTicket,
+  isNativeShell,
+} from "../host/native-session";
 import { isNativeApp, nativeBridge } from "../mobile/native-bridge";
 import { RUNTIME_URL } from "./request";
 
@@ -131,6 +136,8 @@ const SECRET = /^[A-Za-z0-9_-]{43}$/;
 let csrf = "";
 let access = "";
 let refresh = "";
+/** 访问密钥的到期时刻（毫秒）；不知道是 0。 */
+let accessExpiresAt = 0;
 let renewing: Promise<string> | null = null;
 const listeners = new Set<() => void>();
 
@@ -243,7 +250,10 @@ export function resetIdentityCredentials(): void {
   csrf = "";
   access = "";
   refresh = "";
+  accessExpiresAt = 0;
   renewing = null;
+  shellFailure = null;
+  clearShellRefresh();
 }
 
 /**
@@ -279,6 +289,8 @@ function remember(
   if (session.native) {
     access = session.native.accessToken;
     refresh = session.native.refreshToken;
+    accessExpiresAt = session.expiresAtUnixMs;
+    scheduleShellRefresh();
     if (isNativeApp())
       void nativeBridge().saveSession({
         origin,
@@ -557,15 +569,59 @@ export function currentAccessToken(): string {
 let shellRenewal: Promise<string> | null = null;
 
 /**
- * 桌面壳里打 GitHub 与自动化两面要带的访问密钥（契约 §3.2）。
+ * 桌面壳最近一次取不到会话的原因（壳签不出票：core 还没起来、Windows 上 core
+ * 不是这个壳起的……）。有它时页面挂一条通知条说清楚，而不是让每个请求静默
+ * 401；配上对就清掉。
+ */
+let shellFailure: NativeSessionFailure | null = null;
+
+export function shellSessionFailure(): NativeSessionFailure | null {
+  return shellFailure;
+}
+
+function noteShellFailure(next: NativeSessionFailure | null): void {
+  if (next === shellFailure) return;
+  shellFailure = next;
+  announce();
+}
+
+/** `resumeIdentity` 那一串，记下壳签不出票的原因；失败答 `null`。 */
+function resumeShell(): Promise<IdentitySession | null> {
+  return resumeIdentity().then(
+    (session) => {
+      if (session) noteShellFailure(null);
+      return session;
+    },
+    (error: unknown) => {
+      if (error instanceof HostNativeSessionError)
+        noteShellFailure(error.reason);
+      return null;
+    },
+  );
+}
+
+/**
+ * 桌面壳里每个请求要带的访问密钥（契约 §3.2）。
  *
- * 自 0.3.0 起 core 不再把回环上没带凭据的调用当成本机主人（安全审查 L9），所以
- * 这两面在壳里必须带票据换来的 Bearer。还没有会话就先向壳要票配对；不在壳里
- * （浏览器、原生 App 各有自己的凭据）或配不上对都是空串，让 core 照常拒绝。
+ * 自 0.2.0 起 core 不再放行回环上没带凭据的请求（安全审查 L9），所以壳里的
+ * 页面所有 `/api/` 与流都带票据换来的 Bearer（`api/shell-transport.ts`）。还没
+ * 有会话就先向壳要票配对；快到期就先轮转。不在壳里（浏览器、原生 App 各有自己
+ * 的凭据）或配不上对都是空串，让 core 照常拒绝。
  */
 export async function shellBearer(): Promise<string> {
   if (!isNativeShell()) return "";
-  if (!access) await resumeIdentity().catch(() => null);
+  if (!access) {
+    await (shellRenewal ??= resumeShell()
+      .then(() => access)
+      .finally(() => {
+        shellRenewal = null;
+      }));
+  } else if (
+    accessExpiresAt > 0 &&
+    accessExpiresAt - Date.now() < SHELL_REFRESH_LEAD_MS / 4
+  ) {
+    await rotateShellBearer();
+  }
   return access;
 }
 
@@ -577,8 +633,7 @@ export async function shellBearer(): Promise<string> {
 export async function renewShellBearer(rejected: string): Promise<string> {
   if (!isNativeShell()) return "";
   if (access && access !== rejected) return access;
-  shellRenewal ??= resumeIdentity()
-    .catch(() => null)
+  shellRenewal ??= resumeShell()
     .then(() => access)
     .finally(() => {
       shellRenewal = null;
@@ -587,7 +642,65 @@ export async function renewShellBearer(rejected: string): Promise<string> {
   return renewed !== rejected ? renewed : "";
 }
 
-/** `POST /api/identity/ws-ticket`：原生 App 升级 WebSocket 前换的一次性票。 */
+/**
+ * 桌面壳里的访问密钥在到期前两分钟轮转一次（契约 §3.2）。
+ *
+ * 长连接按会话复核：访问期过了而没有刷新，core 以 4401 关掉页面的每一条流
+ * （终端、事件、实时同步），它们各自换票重连。页面开着就按时轮转，流一直活着。
+ */
+const SHELL_REFRESH_LEAD_MS = 2 * 60 * 1000;
+let shellRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearShellRefresh(): void {
+  if (shellRefreshTimer !== null) clearTimeout(shellRefreshTimer);
+  shellRefreshTimer = null;
+}
+
+function scheduleShellRefresh(): void {
+  clearShellRefresh();
+  if (!isNativeShell() || accessExpiresAt <= 0) return;
+  const delay = Math.max(
+    accessExpiresAt - Date.now() - SHELL_REFRESH_LEAD_MS,
+    5_000,
+  );
+  shellRefreshTimer = setTimeout(() => {
+    shellRefreshTimer = null;
+    void rotateShellBearer();
+  }, delay);
+}
+
+/**
+ * 主动轮转一次（快到期时）：先用刷新密钥换；刷新密钥也不认了就走
+ * `resumeIdentity` 那一串（复核、重新向壳要票）。几处同时要只换一次。
+ */
+function rotateShellBearer(): Promise<string> {
+  shellRenewal ??= refreshIdentity()
+    .then(() => access)
+    .catch(() => resumeShell().then(() => access))
+    .finally(() => {
+      shellRenewal = null;
+    });
+  return shellRenewal;
+}
+
+/**
+ * 桌面壳里的 WebSocket 票（契约 §3.2）：浏览器的升级带不了 `Authorization`，
+ * 先拿访问密钥换一张 30 秒的一次性票。还没有会话先配对；密钥被拒（401）换
+ * 一枚再换一次票。
+ */
+export async function shellWsTicket(): Promise<string> {
+  const used = await shellBearer();
+  try {
+    return await fetchWsTicket();
+  } catch (error) {
+    if (!(error instanceof IdentityRequestError && error.status === 401))
+      throw error;
+    if (!(await renewShellBearer(used))) throw error;
+    return fetchWsTicket();
+  }
+}
+
+/** `POST /api/identity/ws-ticket`：Bearer 传输升级 WebSocket 前换的一次性票。 */
 export async function fetchWsTicket(): Promise<string> {
   const answer = await call(
     "ws-ticket",

@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { NativeTicketError, checkCoreTicket } from "../shell-core/ticket";
-import { CORE_CONTROL_SOCKET, issueCoreTicket } from "./core-ticket";
+import { EventEmitter } from "node:events";
+import { TICKET_MESSAGE } from "../core/identity/control";
+import {
+  CORE_CONTROL_SOCKET,
+  attachTicketChannel,
+  issueCoreTicket,
+  resetTicketChannel,
+} from "./core-ticket";
 
 /**
  * 壳这一侧的取票路径。core 的那一半在
@@ -176,5 +183,70 @@ describe("checking what the core answered", () => {
       );
     }
     expect(() => checkCoreTicket(null, ORIGIN, now)).toThrow(NativeTicketError);
+  });
+});
+
+/**
+ * Windows：票经 fork 的 IPC 通道（契约 §3.2，安全审查 L9）。通道是注入的，所以
+ * 在哪个平台上都验得了。
+ */
+describe("Windows 上经 fork 的 IPC 取票", () => {
+  afterEach(() => resetTicketChannel());
+
+  function child(answer: (request: { id: number }) => unknown) {
+    const emitter = new EventEmitter();
+    const fake = Object.assign(emitter, {
+      connected: true,
+      send(message: unknown) {
+        const request = message as { type: string; id: number };
+        expect(request.type).toBe(TICKET_MESSAGE);
+        queueMicrotask(() => emitter.emit("message", answer(request)));
+        return true;
+      },
+    });
+    attachTicketChannel(fake as never);
+    return fake;
+  }
+
+  it("按 id 收回答案，照私有通道同一套规矩核对", async () => {
+    child((request) => ({
+      type: TICKET_MESSAGE,
+      id: request.id,
+      status: 200,
+      body: ticketBody(),
+    }));
+    const ticket = await issueCoreTicket({
+      dataDir: "/nowhere",
+      origin: ORIGIN,
+      deviceName: "本机桌面",
+      platform: "win32",
+    });
+    expect(ticket.origin).toBe(ORIGIN);
+  });
+
+  it("core 拒绝来源是 originUnsupported；没有通道（接管或外接的 core）是 channelUnavailable", async () => {
+    child((request) => ({
+      type: TICKET_MESSAGE,
+      id: request.id,
+      status: 400,
+      body: { code: "invalid", message: "x" },
+    }));
+    await expect(
+      issueCoreTicket({
+        dataDir: "/nowhere",
+        origin: ORIGIN,
+        deviceName: "本机桌面",
+        platform: "win32",
+      }),
+    ).rejects.toMatchObject({ reason: "originUnsupported" });
+    resetTicketChannel();
+    await expect(
+      issueCoreTicket({
+        dataDir: "/nowhere",
+        origin: ORIGIN,
+        deviceName: "本机桌面",
+        platform: "win32",
+      }),
+    ).rejects.toMatchObject({ reason: "channelUnavailable" });
   });
 });

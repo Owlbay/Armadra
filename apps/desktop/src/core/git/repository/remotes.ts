@@ -4,7 +4,12 @@ import {
   RepositoryService,
   type RepositoryContext,
 } from "./service";
-import type { ExpectedState, ForceWithLease } from "./types";
+import {
+  type ExpectedState,
+  type ForceWithLease,
+  type PullHeadSource,
+  pullHeadRef,
+} from "./types";
 
 /**
  * The network traffic: fetch, fast-forward pull, push and the Sync that is all
@@ -241,6 +246,66 @@ export async function fastForwardPull(
   }
   if (merged !== undefined) throw merged;
   if (cleanup !== undefined) throw cleanup;
+}
+
+/**
+ * Fetching a hosted pull request's head into a temporary ref and answering its
+ * object ID — the start of a fork's checkout. The ref the platform publishes
+ * is fetched from the base repository's remote; nothing else is fetched (no
+ * tags, no pruning), and the temporary ref is removed whatever happens. A head
+ * that moved since it was reviewed is refused, so the branch never starts from
+ * a commit nobody looked at.
+ */
+export async function fetchPullHead(
+  service: RepositoryService,
+  context: RepositoryContext,
+  source: PullHeadSource,
+  operation: Operation,
+): Promise<string> {
+  const signal = operation.controller.signal;
+  await service.validateRemote(context.repository, source.remote, signal);
+  const fetchedRef = `refs/armadra/checkout/${operation.snapshot.id}`;
+  const existing = await service.output(
+    context.repository,
+    ["show-ref", "--verify", "--quiet", fetchedRef],
+    15_000,
+    signal,
+  );
+  if (existing.status !== 1) {
+    throw conflict("Temporary checkout reference is already in use");
+  }
+  const mutatedBefore = operation.mutationStarted;
+  await service.mutate(
+    context,
+    [
+      "fetch",
+      "--progress",
+      "--no-prune",
+      "--no-prune-tags",
+      "--no-tags",
+      "--no-recurse-submodules",
+      "--",
+      source.remote,
+      `+${pullHeadRef(source)}:${fetchedRef}`,
+    ],
+    operation,
+  );
+  const oid = await service.resolve(context.repository, fetchedRef, signal);
+  await service.mutate(
+    context,
+    ["update-ref", "-d", fetchedRef, oid],
+    operation,
+  );
+  if (oid !== source.headOid) {
+    // The fetch only added objects and a ref that is gone again: nothing a
+    // person would see changed, so this is a plain refusal, not an unknown
+    // outcome.
+    operation.mutationStarted = mutatedBefore;
+    throw conflict(
+      "The pull request head moved since it was reviewed; reload before checking it out",
+    );
+  }
+  return oid;
 }
 
 export { malformed };

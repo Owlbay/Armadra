@@ -18,7 +18,17 @@ export interface WorktreeRequest {
   startPoint?: string | null;
   /** The branch as it was displayed, when checking an existing one out. */
   existing?: GitBranchRecord | null;
+  /**
+   * A hosted pull request's head to fetch and start from, when the checkout
+   * runs (a fork's PR / MR on Gitea or GitLab). Only for a new branch; it
+   * replaces the start point.
+   */
+  pullHead?: PullHead | null;
 }
+
+export type PullHead = NonNullable<
+  Extract<GitRepositoryAction, { kind: "createWorktree" }>["pullHead"]
+>;
 
 export function createWorktreeAction(
   request: WorktreeRequest,
@@ -33,9 +43,13 @@ export function createWorktreeAction(
     branch,
     createBranch: request.createBranch,
     expectedOid: request.createBranch ? null : request.existing!.oid,
-    startPoint: request.createBranch
-      ? (request.startPoint ?? "").trim() || null
-      : null,
+    startPoint:
+      request.createBranch && !request.pullHead
+        ? (request.startPoint ?? "").trim() || null
+        : null,
+    ...(request.createBranch && request.pullHead
+      ? { pullHead: request.pullHead }
+      : {}),
   };
 }
 

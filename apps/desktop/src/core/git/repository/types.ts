@@ -42,6 +42,26 @@ export interface OperationSnapshot {
   readonly message: string | null;
 }
 
+/**
+ * Where a hosted pull request's head can be fetched from. The ref is built
+ * here from the platform and the number, never taken from the caller:
+ * GitLab publishes `refs/merge-requests/<iid>/head`, Gitea and Forgejo
+ * `refs/pull/<n>/head`. `headOid` is the head that was on screen; a fetched
+ * head that differs is refused rather than checked out.
+ */
+export interface PullHeadSource {
+  readonly remote: string;
+  readonly forge: "gitea" | "gitlab";
+  readonly number: number;
+  readonly headOid: string;
+}
+
+export function pullHeadRef(source: Pick<PullHeadSource, "forge" | "number">) {
+  return source.forge === "gitlab"
+    ? `refs/merge-requests/${source.number}/head`
+    : `refs/pull/${source.number}/head`;
+}
+
 /** How far back a reset takes the repository. */
 export type ResetMode = "soft" | "mixed" | "hard";
 
@@ -260,6 +280,13 @@ export type RepositoryAction =
       readonly createBranch: boolean;
       readonly startPoint: string | null;
       readonly expectedOid: string | null;
+      /**
+       * Start a new branch from a hosted pull request's head, fetched from the
+       * base repository when the checkout runs — the way to check out a fork's
+       * pull request, whose branch no remote of this clone carries. Absent or
+       * `null` for every other checkout.
+       */
+      readonly pullHead?: PullHeadSource | null;
     }
   | {
       readonly kind: "removeWorktree";

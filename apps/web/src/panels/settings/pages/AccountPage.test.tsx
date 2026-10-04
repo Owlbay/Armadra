@@ -231,6 +231,51 @@ describe("AccountPage usage controls", () => {
     );
   });
 
+  it("Claude 本地额度估算缺省开，关掉只写 usage.claudeLocalWindow", async () => {
+    getSettings.mockResolvedValue({ usage: { enabled: true } });
+    updateSettings.mockResolvedValue({});
+    render(
+      <TestProviders>
+        <AccountPage />
+      </TestProviders>,
+    );
+    const toggle = await screen.findByRole("switch", {
+      name: "Claude 本地额度估算",
+    });
+    await waitFor(() =>
+      expect((toggle as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({
+        usage: { claudeLocalWindow: false },
+      }),
+    );
+  });
+
+  it("成本扫描关着时本地估算开关不可用，并照实显示存着的值", async () => {
+    getSettings.mockResolvedValue({
+      usage: {
+        enabled: true,
+        claudeLocalWindow: false,
+        cost: { enabled: false },
+      },
+    });
+    usePreferencesStore.setState({ locale: "en" });
+    render(
+      <TestProviders>
+        <AccountPage />
+      </TestProviders>,
+    );
+    const toggle = await screen.findByRole("switch", {
+      name: "Claude local window estimate",
+    });
+    await screen.findByRole("switch", { name: "Local cost tracking" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect((toggle as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("政策关着的那家在卡片上说怎么打开，而不是说凭据丢了", async () => {
     getSettings.mockResolvedValue({ usage: { enabled: true } });
     getUsage.mockResolvedValue({
