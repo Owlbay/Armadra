@@ -7,18 +7,16 @@ import { toast } from "sonner";
 import { useT } from "@/app/preferences-store";
 import { agentLabel } from "@/agent/launch";
 import { CREDENTIALS_QUERY_KEY, credentialsApi } from "@/api/credentials";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import {
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
   ResponsiveDialog,
   ResponsiveDialogContent,
   ResponsiveDialogFooter,
@@ -128,31 +126,33 @@ export function AgentCredentials() {
         }}
       />
 
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={removing !== null}
         onOpenChange={(open) => {
           if (!open) setRemoving(null);
         }}
       >
-        <AlertDialogContent className="z-[var(--z-dialog)]">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+        <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t("credentials.deleteConfirm", { label: removing?.label ?? "" })}
-            </AlertDialogTitle>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("credentials.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
+            </ResponsiveAlertDialogTitle>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("credentials.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               onClick={() => {
                 if (removing) remove.mutate(removing.ref);
                 setRemoving(null);
               }}
             >
               {t("credentials.delete")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </SettingsGroup>
   );
 }
