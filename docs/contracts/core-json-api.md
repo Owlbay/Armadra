@@ -1906,7 +1906,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 3. 配置表里只写主机的一行 `<host>`。
 4. 都没有：`forge: null`，页面不显示「托管」区。
 
-配置在迁移 `0037_forge.sql` 的 `forge_config(repo_key, forge, api_base, credential_ref, account_login, revision, …)`；同一迁移给 `github_references` 加了 `forge` 列（缺省 `github`）。
+配置在迁移 `0038_forge.sql` 的 `forge_config(repo_key, forge, api_base, credential_ref, account_login, revision, …)`；同一迁移给 `github_references` 加了 `forge` 列（缺省 `github`）。
 
 ### 29.2 `GET /api/forge/repos/{host}/{owner}/{name}`、`POST /api/forge/resolve`
 

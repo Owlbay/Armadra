@@ -1222,7 +1222,7 @@
 - core `forge/`：`types.ts` 的 `Forge` 接口（issue 列表 / 详情 / 开关，PR 列表 / 建 / 详情 / 文件差异 / 检查 / 合并）与统一记录；`github.ts` 把 `core/github/` 的 `GithubClient` + `endpoints.ts` 装进接口（同一份凭据与 API 根，401 / 403 照旧记到凭据状态上）；`gitea.ts`（Gitea / Forgejo，`Authorization: token`，检查用 commit statuses，补丁从 `pulls/{n}.diff` 按文件切，草稿按 `WIP:` 前缀）；`transport.ts` 是非 GitHub 平台的传输（只收 HTTPS 与回环明文 HTTP、重定向当错误、读重试一次、写不重试报 `unknown_outcome`、响应 8 MiB 上限、15 秒超时）。
 - 识别（`service.ts`）：`github.com` 与 GitHub 凭据里企业版根的主机 → GitHub；其余按配置表，仓库一行优先于主机一行。配置 `PUT /api/forge/configs/{host}[/{owner}/{name}]`：先用令牌调 `GET /user` 核验，再存进 SecretStore `armadra-forge-<id>`；换 API 根而不给新令牌时丢掉旧令牌；GitHub 主机不能在这里另配。
 - 路由（`routes.ts`，路由表加 12 行）：`GET /api/forge/configs`、配置的 `PUT` / `DELETE`、`POST /api/forge/resolve`（声明 `github:read`）、`GET /api/forge/repos/{host}/{owner}/{name}` 与其下 issues / pulls / files / checks / merge。错误码见契约 §29.5。
-- 迁移 `0037_forge.sql`：`forge_config`，`github_references` 加 `forge` 列（缺省 `github`）。出站表加 `forgeApi`（地址由用户配置，`switch: null`）。共享层 `api/forge.ts` 的 zod。
+- 迁移 `0038_forge.sql`：`forge_config`，`github_references` 加 `forge` 列（缺省 `github`）。出站表加 `forgeApi`（地址由用户配置，`switch: null`）。共享层 `api/forge.ts` 的 zod。
 - 文档：契约 §29、架构文档 `core/forge/` 一行与迁移表。
 
 **实测**（macOS arm64）

@@ -415,7 +415,7 @@ SQLite 的迁移只有一个目录——`apps/desktop/src/core/db/migrations/`�
 | `0034_workflow.sql`           | `workflow_drafts`、`workflow_templates`、`workflow_runs`、`workflow_run_steps`、`workflow_task_runs`（runner 任务）                                                                                      | `core/workflow/`，契约 §15            |
 | `0035_node_creators.sql`      | `node_creators`（节点的触发者）与触发器 `terminal_sessions_inherit_creator`（之后起的会话行继承创建者）                                                                                                  | `core/identity/creators.ts`，契约 §23 |
 | `0037_push_preferences.sql`   | `push_devices` 加 `kinds_json`（设备要收的推送种类，空串 = 全部）与 `unifiedpush_endpoint`（UnifiedPush 端点）                                                                                           | `core/push/`，契约 §27                |
-| `0037_forge.sql`              | `forge_config`（每仓库 / 每主机的托管平台、API 根与令牌条目名），`github_references` 加 `forge` 列                                                                                                       | `core/forge/`，契约 §29               |
+| `0038_forge.sql`              | `forge_config`（每仓库 / 每主机的托管平台、API 根与令牌条目名），`github_references` 加 `forge` 列                                                                                                       | `core/forge/`，契约 §29               |
 
 `core/db/open.ts` 在同一 `BEGIN IMMEDIATE` 事务内先检查迁移账本，再执行已知迁移与启动恢复。未知版本、校验和不符、脏记录、损坏账本、无账本的非空 schema 或迁移历史缺口均拒绝启动；失败回滚并关闭连接，不改名、删除或重建原库。账本表与校验和算法沿用最初那套（SHA-384），所以装过旧版本的库照常打得开。既有 SQL 迁移文件保持原字节。
 
