@@ -331,6 +331,52 @@ describe("三条路（§18.5）", () => {
   });
 });
 
+describe("策略要求第二因素而未登记（R-17）", () => {
+  it("requireFor 覆盖而没登记 TOTP：照常登录，跳回带 mfaEnrollmentRequired", async () => {
+    const { h } = await setup();
+    const admin = await owner(h);
+    await roundTrip(h, "corp", { mode: "bind" }, admin);
+
+    // 原来 OAuth 只对登记过 TOTP 的人走第二步，策略要求登记却不提示。
+    h.mfaRequireFor = "all";
+    const login = await roundTrip(h, "corp");
+    expect(outcome(login.response)).toEqual({
+      oauth: "signedIn",
+      mfaEnrollmentRequired: "true",
+    });
+    expect(sessionFrom(login.response)).not.toBe("");
+
+    // `members` 不覆盖 owner；`none` 谁都不覆盖。
+    h.mfaRequireFor = "members";
+    expect(outcome((await roundTrip(h, "corp")).response)).toEqual({
+      oauth: "signedIn",
+    });
+    h.mfaRequireFor = "none";
+    expect(outcome((await roundTrip(h, "corp")).response)).toEqual({
+      oauth: "signedIn",
+    });
+  });
+
+  it("建号进来的 member 在 requireFor=members 下也带上", async () => {
+    const { h, idp } = await setup({
+      allowSignup: true,
+      allowedDomains: ["armadra.test"],
+    });
+    idp.user = {
+      sub: "new-2",
+      email: "grace@armadra.test",
+      emailVerified: true,
+      name: "Grace",
+    };
+    h.mfaRequireFor = "members";
+    const first = await roundTrip(h, "corp");
+    expect(outcome(first.response)).toEqual({
+      oauth: "signedUp",
+      mfaEnrollmentRequired: "true",
+    });
+  });
+});
+
 describe("拒绝分支（§18.5）", () => {
   it("state 一次性：同一个回调重放答 oauth_state_invalid，不再换令牌", async () => {
     const { h, idp } = await setup();

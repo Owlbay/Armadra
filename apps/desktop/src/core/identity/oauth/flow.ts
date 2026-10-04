@@ -109,6 +109,11 @@ export type FlowOutcome =
       readonly kind: "session";
       readonly credentials: SessionCredentials;
       readonly signedUp: boolean;
+      /**
+       * `identity.mfa.requireFor` 覆盖这个人而还没登记 TOTP：放进来，页面带去
+       * 登记（与口令登录的 `mfaEnrollmentRequired` 同一条，契约 §18.3）。
+       */
+      readonly mfaEnrollmentRequired: boolean;
       readonly origin: string;
       readonly returnTo: string;
     }
@@ -129,6 +134,8 @@ export interface OAuthFlowOptions {
   readonly service: IdentityService;
   /** 有就接 MFA：登记过 TOTP 的人 OAuth 登录后还要过第二因素。 */
   readonly mfa?: Mfa;
+  /** `identity.mfa.requireFor` 是否覆盖这个角色；没有就当不覆盖。 */
+  readonly mfaRequired?: (role: "owner" | "member") => boolean;
   readonly fetcher?: FetchLike;
   readonly github?: GithubEndpoints;
   /** `armadra-oidc-<id>` 里的 client secret；公开客户端没有。 */
@@ -404,8 +411,9 @@ export class OAuthFlow {
         }
         return {
           principalId: principal.principalId,
+          role: principal.kind === "owner" ? "owner" : "member",
           signedUp: false,
-        };
+        } as const;
       }
       if (!provider.allowSignup || provider.allowedDomains.length === 0) {
         throw fail("oauth_not_bound", "这个第三方身份没有绑定账号", 401);
@@ -436,7 +444,7 @@ export class OAuthFlow {
         workspaceId: "",
         detailJson: JSON.stringify({ provider: provider.id }),
       });
-      return { principalId, signedUp: true };
+      return { principalId, role: "member", signedUp: true } as const;
     });
 
     const mfa = this.options.mfa;
@@ -469,6 +477,7 @@ export class OAuthFlow {
       kind: "session",
       credentials,
       signedUp: resolved.signedUp,
+      mfaEnrollmentRequired: this.options.mfaRequired?.(resolved.role) === true,
       origin: record.origin,
       returnTo: record.returnTo,
     };
