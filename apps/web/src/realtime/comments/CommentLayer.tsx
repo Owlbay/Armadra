@@ -332,7 +332,9 @@ function Comments({
               key={cluster.key}
               // 钉上的按下不该变成画布的框选或拖动。
               onPointerDown={(event) => event.stopPropagation()}
-              className="absolute top-0 left-0 origin-top-left"
+              // React Flow 的视口层是 `pointer-events: none`（会继承）：钉要
+              // 自己接回指针，否则点击穿过钉落到下面的节点或白板对象上。
+              className="pointer-events-auto absolute top-0 left-0 origin-top-left"
               style={{
                 transform: `translate(${cluster.at.x}px, ${cluster.at.y}px) scale(${scale}) translate(-50%, -50%)`,
               }}
