@@ -12,6 +12,7 @@ import {
   scope,
 } from "./scopes";
 import {
+  type DeviceActivity,
   type IdentityDevice,
   type IdentitySession,
   IdentityStore,
@@ -118,6 +119,39 @@ export interface PublicDevice {
   readonly epoch: number;
   readonly createdAtMs: number;
   readonly revokedAtMs: number;
+  /**
+   * 由这台设备最近那个会话的 UA 归出来的平台；UA 原文不出这个域。设备上没有
+   * 任何会话（迁移之前的行）时没有这一项。
+   */
+  readonly platform?: DevicePlatform;
+  /** 这台设备所有会话里最晚的一次活动；没记过时没有这一项。 */
+  readonly lastSeenAtMs?: number;
+}
+
+export const DEVICE_PLATFORMS = [
+  "macos",
+  "windows",
+  "linux",
+  "ios",
+  "android",
+  "web",
+  "unknown",
+] as const;
+export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
+
+/**
+ * UA → 平台。顺序有讲究：iPad 的 UA 也写 `Mac OS X`，Android 的也写 `Linux`，
+ * 所以移动端先判。认得出是浏览器、说不出系统的是 `web`；空串与其余是 `unknown`。
+ */
+export function devicePlatform(userAgent: string): DevicePlatform {
+  const ua = userAgent.slice(0, 256);
+  if (/\b(iPhone|iPad|iPod)\b|\biOS\b/.test(ua)) return "ios";
+  if (/\bAndroid\b/.test(ua)) return "android";
+  if (/\bWindows\b/.test(ua)) return "windows";
+  if (/\bMac ?OS ?X\b|\bMacintosh\b|\bDarwin\b/.test(ua)) return "macos";
+  if (/\bLinux\b|\bX11\b|\bCrOS\b/.test(ua)) return "linux";
+  if (/\bMozilla\/|\b(Chrome|Safari|Firefox|Edg)\//.test(ua)) return "web";
+  return "unknown";
 }
 
 /** 进 `identity.login` 审计的那一个字：这次是怎么证明身份的。 */
@@ -843,6 +877,7 @@ export class IdentityService {
       const hasMore = values.length > limit;
       const page = hasMore ? values.slice(0, limit) : values;
       const devices: PublicDevice[] = [];
+      const activity = tx.deviceActivity(page.map((value) => value.deviceId));
       let nextId = "";
       for (const value of page) {
         if (value.principalId !== principal.principalId) {
@@ -856,6 +891,7 @@ export class IdentityService {
           epoch: value.epoch,
           createdAtMs: value.createdAtMs,
           revokedAtMs: value.revokedAtMs,
+          ...deviceColumns(activity.get(value.deviceId)),
         });
         nextId = value.deviceId;
       }
@@ -975,5 +1011,18 @@ function principalOf(
     deviceEpoch: device.epoch,
     accessExpiresAtMs: session.accessExpiresAtMs,
     scopes,
+  };
+}
+
+/** 设备表的「平台」「最近访问」两列；没有会话的设备两项都不带。 */
+function deviceColumns(
+  activity: DeviceActivity | undefined,
+): Pick<PublicDevice, "platform" | "lastSeenAtMs"> {
+  if (activity === undefined) return {};
+  return {
+    platform: devicePlatform(activity.userAgent),
+    ...(activity.lastSeenAtMs > 0
+      ? { lastSeenAtMs: activity.lastSeenAtMs }
+      : {}),
   };
 }

@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
  *   * 标识是 16 字节随机的小写十六进制（32 字符）；
  *   * 密钥是 32 字节随机的 base64url，不带填充（43 字符）；
  *   * 哈希是 `sha256("armadra/identity/v1/<用途>\0<值>")`。**用途**（access /
- *     refresh / csrf / bootstrap）是域分隔：没有它，一张刷新票就能当访问令牌用。
+ *     refresh / csrf / bootstrap / reset）是域分隔：没有它，一张刷新票就能当访问令牌用。
  */
 
 export const ID_PATTERN = /^[0-9a-f]{32}$/;
@@ -23,7 +23,13 @@ export function newSecret(): string {
   return randomBytes(32).toString("base64url");
 }
 
-export type TokenKind = "bootstrap" | "access" | "refresh" | "csrf";
+export type TokenKind =
+  | "bootstrap"
+  | "access"
+  | "refresh"
+  | "csrf"
+  /** 口令重置链接（契约 §25，迁移 0036）。 */
+  | "reset";
 
 export function digest(kind: TokenKind, value: string): Buffer {
   return createHash("sha256")

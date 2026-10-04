@@ -7,6 +7,7 @@ import {
   ACCESS_TTL_MS,
   BOOTSTRAP_TTL_MS,
   IdentityService,
+  devicePlatform,
   SESSION_TTL_MS,
 } from "./service";
 import { allScopes, scope } from "./scopes";
@@ -620,5 +621,43 @@ describe("listing devices", () => {
         }),
       ),
     ).toBe("permission");
+  });
+});
+
+describe("devicePlatform", () => {
+  it("UA 归成平台：移动端先判，认得出浏览器而说不出系统的是 web", () => {
+    const cases: [string, string][] = [
+      [
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
+        "ios",
+      ],
+      [
+        "Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15",
+        "ios",
+      ],
+      [
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/126.0",
+        "android",
+      ],
+      [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0",
+        "windows",
+      ],
+      [
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 Electron/38.0",
+        "macos",
+      ],
+      [
+        "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+        "linux",
+      ],
+      ["Mozilla/5.0 (X11; CrOS x86_64 15359.58.0) Chrome/126.0", "linux"],
+      ["Mozilla/5.0 Chrome/126.0", "web"],
+      ["armadra-test/1.0", "unknown"],
+      ["", "unknown"],
+    ];
+    for (const [ua, platform] of cases) {
+      expect(devicePlatform(ua), ua).toBe(platform);
+    }
   });
 });
