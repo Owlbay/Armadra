@@ -102,6 +102,12 @@ describe("出站地址表", () => {
     expect(OUTBOUND.smtp.url.startsWith("smtp://")).toBe(true);
   });
 
+  it("托管平台：不配置即不联网，地址是用户给的（契约 §29）", () => {
+    expect(OUTBOUND.forgeApi.switch).toBeNull();
+    expect(OUTBOUND.forgeApi.defaultOn).toBe(false);
+    expect(OUTBOUND.forgeApi.url).toContain("<");
+  });
+
   it("未登记的地址不算登记，前缀只按路径边界匹配", () => {
     expect(isRegistered("https://models.dev/api.json")).toBe(true);
     expect(isRegistered("https://api.github.com/repos/o/r")).toBe(true);
