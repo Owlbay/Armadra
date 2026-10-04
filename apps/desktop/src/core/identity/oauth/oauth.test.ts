@@ -533,6 +533,197 @@ describe("拒绝分支（§18.5）", () => {
   });
 });
 
+describe("原生 App 的流程（R-56）", () => {
+  interface NativeStart {
+    authorizeUrl: string;
+    expiresAtMs: number;
+    nativeState: string;
+  }
+
+  /** start?native=1 → 假 issuer → 回调转成的 `armadra://oauth` 深链。 */
+  async function nativeLink(
+    h: OAuthHarness,
+    providerId: string,
+    body: Record<string, unknown> = {},
+    session?: Awaited<ReturnType<typeof owner>>,
+  ) {
+    const response = await call(
+      h,
+      "POST",
+      `oauth/${providerId}/start?native=1`,
+      body,
+      session,
+    );
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(response.headers.getSetCookie()).toEqual([]);
+    const begun = (await response.json()) as NativeStart;
+    expect(begun.nativeState).toMatch(/^[\w-]{43}$/);
+    const authorize = await fetch(begun.authorizeUrl, { redirect: "manual" });
+    const location = authorize.headers.get("location") ?? "";
+    // 系统浏览器里没有任何 Cookie。
+    const redirected = await callback(h, location, "");
+    expect(redirected.status).toBe(302);
+    expect(redirected.headers.getSetCookie()).toEqual([]);
+    const link = new URL(redirected.headers.get("location") ?? "");
+    return { begun, location, link };
+  }
+
+  function complete(
+    h: OAuthHarness,
+    providerId: string,
+    fields: Record<string, unknown>,
+  ) {
+    return call(h, "POST", `oauth/${providerId}/native`, fields);
+  }
+
+  it("绑定 → 登录：回调转成深链，App 带 nativeState 收尾，会话密钥在答案里", async () => {
+    const { h } = await setup();
+    const admin = await owner(h);
+    const bind = await nativeLink(h, "corp", { mode: "bind" }, admin);
+    expect(bind.link.protocol).toBe("armadra:");
+    expect(`${bind.link.protocol}//${bind.link.host}`).toBe("armadra://oauth");
+    const state = bind.link.searchParams.get("state");
+    const code = bind.link.searchParams.get("code");
+    expect(state).toBe(
+      new URL(bind.begun.authorizeUrl).searchParams.get("state"),
+    );
+    expect(code).not.toBeNull();
+    // 回调只看一眼、不取走：再打一次仍是同一条深链。
+    const again = await callback(h, bind.location, "");
+    expect(again.headers.get("location")).toBe(bind.link.href);
+
+    const bound = await complete(h, "corp", {
+      state,
+      code,
+      nativeState: bind.begun.nativeState,
+    });
+    expect(bound.status).toBe(200);
+    expect(await bound.json()).toEqual({ result: "bound" });
+    expect(audits(h, "identity.oauth.bind")).toHaveLength(1);
+
+    const login = await nativeLink(h, "corp");
+    const signed = await complete(h, "corp", {
+      state: login.link.searchParams.get("state"),
+      code: login.link.searchParams.get("code"),
+      nativeState: login.begun.nativeState,
+    });
+    expect(signed.status).toBe(200);
+    expect(signed.headers.getSetCookie()).toEqual([]);
+    const answer = (await signed.json()) as {
+      result: string;
+      session: {
+        device: { principalId: string };
+        native: { accessToken: string; refreshToken: string };
+      };
+    };
+    expect(answer.result).toBe("signedIn");
+    expect(answer.session.device.principalId).toBe(admin.principalId);
+    const session = await call(h, "GET", "session", undefined, {
+      accessToken: answer.session.native.accessToken,
+      csrfToken: "",
+      principalId: "",
+    });
+    expect(session.status).toBe(200);
+  });
+
+  it("nativeState 不对：oauth_state_invalid，而且记录已作废", async () => {
+    const { h, idp } = await setup();
+    const admin = await owner(h);
+    const flow = await nativeLink(h, "corp", { mode: "bind" }, admin);
+    const fields = {
+      state: flow.link.searchParams.get("state"),
+      code: flow.link.searchParams.get("code"),
+    };
+    const calls = idp.tokenCalls();
+    const forged = await complete(h, "corp", {
+      ...fields,
+      nativeState: "attacker",
+    });
+    expect(forged.status).toBe(400);
+    expect(((await forged.json()) as { code: string }).code).toBe(
+      "oauth_state_invalid",
+    );
+    const late = await complete(h, "corp", {
+      ...fields,
+      nativeState: flow.begun.nativeState,
+    });
+    expect(late.status).toBe(400);
+    expect(idp.tokenCalls()).toBe(calls);
+    // 深链也不再出：记录没了，回调答 JSON 400。
+    expect((await callback(h, flow.location, "")).status).toBe(400);
+  });
+
+  it("浏览器与原生走不了对方的收尾", async () => {
+    const { h } = await setup();
+    const admin = await owner(h);
+    // 浏览器发起的：native 收尾不认（即使拿 Cookie 的值当 nativeState）。
+    const browser = await start(h, "corp", { mode: "bind" }, admin);
+    const authorize = await fetch(browser.authorizeUrl, { redirect: "manual" });
+    const location = new URL(authorize.headers.get("location") ?? "");
+    const crossed = await complete(h, "corp", {
+      state: location.searchParams.get("state"),
+      code: location.searchParams.get("code"),
+      nativeState: browser.binding.split("=")[1],
+    });
+    expect(crossed.status).toBe(400);
+    // 原生发起的：浏览器回调带什么 Cookie 都只转深链，不发会话。
+    const native = await nativeLink(h, "corp");
+    const withCookie = await callback(h, native.location, browser.binding);
+    expect(withCookie.headers.get("location")).toMatch(/^armadra:\/\/oauth\?/);
+    expect(sessionFrom(withCookie)).toBe("");
+  });
+
+  it("提供方拒绝经深链带回：oauth_denied；提供方不一致：oauth_state_invalid", async () => {
+    const { h } = await setup();
+    const response = await call(h, "POST", "oauth/corp/start?native=1", {});
+    const begun = (await response.json()) as NativeStart;
+    const state = new URL(begun.authorizeUrl).searchParams.get("state") ?? "";
+    const denied = await callback(
+      h,
+      `${ORIGIN}/api/identity/oauth/corp/callback?state=${state}&error=access_denied`,
+      "",
+    );
+    const link = new URL(denied.headers.get("location") ?? "");
+    expect(link.searchParams.get("error")).toBe("access_denied");
+    expect(link.searchParams.get("code")).toBeNull();
+    const answer = await complete(h, "corp", {
+      state,
+      error: "access_denied",
+      nativeState: begun.nativeState,
+    });
+    expect(answer.status).toBe(403);
+    expect(((await answer.json()) as { code: string }).code).toBe(
+      "oauth_denied",
+    );
+
+    const other = await nativeLink(h, "corp");
+    const wrong = await complete(h, "github", {
+      state: other.link.searchParams.get("state"),
+      code: other.link.searchParams.get("code"),
+      nativeState: other.begun.nativeState,
+    });
+    expect(wrong.status).toBe(400);
+    expect(audits(h, "identity.oauth.failed").length).toBeGreaterThan(0);
+  });
+
+  it("native=1 只认原生传输上的请求；缺字段答 400", async () => {
+    const { h } = await setup();
+    h.publicOrigins = [ORIGIN, "https://example.test"];
+    const browser = await call(
+      h,
+      "POST",
+      "oauth/corp/start?native=1",
+      {},
+      undefined,
+      { origin: "https://example.test" },
+    );
+    expect(browser.status).toBe(400);
+    for (const fields of [{}, { state: "x" }, { nativeState: "y" }]) {
+      expect((await complete(h, "corp", fields)).status).toBe(400);
+    }
+  });
+});
+
 describe("挂起的 state 按来源地址分桶（安全审查 L4）", () => {
   const github = provider({ id: "github", kind: "github" });
   function flow(): OAuthFlow {

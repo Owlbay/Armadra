@@ -12,10 +12,15 @@ import {
   nativeRequest,
   remoteAddress,
   sessionCookies,
+  sessionJson,
 } from "../http";
 import { canonicalOrigin } from "../origin";
 import { scope } from "../scopes";
-import type { IdentityService, Principal } from "../service";
+import type {
+  IdentityService,
+  Principal,
+  SessionCredentials,
+} from "../service";
 import type { IdentityStore } from "../store";
 import type { Throttle } from "../throttle";
 import { validName } from "../tokens";
@@ -39,6 +44,9 @@ export const OAUTH_PREFIX = "/api/identity/oauth/";
 export function clientSecretRef(providerId: string): string {
   return `armadra-oidc-${providerId}`;
 }
+
+/** 原生流程的回调转成的深链（R-56）：App 认它，再带着 `nativeState` 收尾。 */
+export const NATIVE_OAUTH_LINK = "armadra://oauth";
 
 /** 回调地址：固定在公网来源下。 */
 export function callbackUrl(origin: string, providerId: string): string {
@@ -179,6 +187,9 @@ export class OAuthHttp {
     }
     if (segments.length === 2 && second === "start" && method === "POST") {
       return this.start(request, response, origin, head as string);
+    }
+    if (segments.length === 2 && second === "native" && method === "POST") {
+      return this.completeNative(request, origin, head as string);
     }
     if (segments.length === 2 && second === "logout" && method === "POST") {
       return this.logout(request, origin, head as string);
@@ -341,10 +352,15 @@ export class OAuthHttp {
     origin: string,
     providerId: string,
   ): Promise<Reply> {
-    // Gateway 的 Bearer 模式（原生 App）：授权页开在系统浏览器里，那里没有这次
-    // 发出的绑定 Cookie，回调必然失败——不如现在就说清楚。回环明文 HTTP 的来源
-    // 只在被配置成公网来源时走得到这里（开发与 dev-stack）。
-    if (nativeRequest(request) && isSecure(request)) {
+    // 原生 App 的流程（R-56）：`?native=1`，不发绑定 Cookie，改给一枚一次性的
+    // `nativeState`，App 收到 `armadra://oauth` 深链后带着它来 `native` 收尾。
+    // 只认原生传输上的请求：浏览器拿到它也没用（深链落不回浏览器）。
+    const native = request.query.get("native") === "1";
+    if (native && !nativeRequest(request)) throw new IdentityError("invalid");
+    // Gateway 的 Bearer 模式（原生 App）不带 `native=1`：授权页开在系统浏览器
+    // 里，那里没有这次发出的绑定 Cookie，回调必然失败——不如现在就说清楚。回环
+    // 明文 HTTP 的来源只在被配置成公网来源时走得到这里（开发与 dev-stack）。
+    if (!native && nativeRequest(request) && isSecure(request)) {
       throw new OAuthError(
         "oauth_browser_required",
         "OAuth 登录与绑定只在浏览器会话上进行",
@@ -381,7 +397,18 @@ export class OAuthHttp {
       deviceName,
       remoteIp,
       userAgent: (single(request, "user-agent") ?? "").slice(0, 256),
+      native,
     });
+    if (native) {
+      return {
+        status: 200,
+        body: {
+          authorizeUrl: begun.authorizeUrl,
+          expiresAtMs: begun.expiresAtMs,
+          nativeState: begun.binding,
+        },
+      };
+    }
     // 浏览器绑定：Lax 才能在从提供方跳回的顶层导航上带回来。`__Host-` 前缀要求
     // `Path=/`，所以不能收窄到回调路径；值本身没有用途，只用来比对。
     const secure = isSecure(request);
@@ -462,6 +489,10 @@ export class OAuthHttp {
     providerId: string,
   ): Promise<void> {
     const state = request.query.get("state") ?? "";
+    if (this.options.flow.nativeRecord(state) !== undefined) {
+      this.nativeRedirect(response, request, state);
+      return;
+    }
     const secure = isSecure(request);
     const binding = cookieValue(request, this.flowCookie(secure));
     const clearBinding = `${this.flowCookie(secure)}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
@@ -546,6 +577,102 @@ export class OAuthHttp {
             ? identityFailure(error).code
             : "oauth_provider_error";
       finish({ oauth: "error", code });
+    }
+  }
+
+  /**
+   * 原生流程的回调：不取走记录、不认 Cookie，只把 `state` 与授权码（或提供方的
+   * `error`）原样转成深链。授权码在深链里被别的 App 截走也没用：收尾要
+   * `nativeState`（只在发起它的 App 手里）与 PKCE 的 verifier（只在 core 里）。
+   */
+  private nativeRedirect(
+    response: ServerResponse,
+    request: CoreRequest,
+    state: string,
+  ): void {
+    const fields = new URLSearchParams({ state });
+    const providerError = request.query.get("error");
+    const code = request.query.get("code") ?? "";
+    if (providerError !== null) fields.set("error", providerError.slice(0, 64));
+    else if (code !== "" && code.length <= 2048) fields.set("code", code);
+    response.writeHead(302, {
+      location: `${NATIVE_OAUTH_LINK}?${fields.toString()}`,
+      "cache-control": "no-store",
+      "referrer-policy": "no-referrer",
+      "content-length": "0",
+    });
+    response.end();
+  }
+
+  /**
+   * `POST oauth/{id}/native { state, nativeState, code? | error? }`：原生 App 收到
+   * 深链后收尾（R-56）。与浏览器回调同一套决定，答 JSON：登录时会话密钥在
+   * `session.native` 里（与口令登录在原生传输上的答案同形），不发 Cookie。
+   */
+  private async completeNative(
+    request: CoreRequest,
+    origin: string,
+    providerId: string,
+  ): Promise<Reply> {
+    if (!nativeRequest(request)) throw new IdentityError("invalid");
+    const input = body(request);
+    const text = (value: unknown, limit: number) =>
+      typeof value === "string" && value !== "" && value.length <= limit
+        ? value
+        : undefined;
+    const state = text(input.state, 256);
+    const nativeState = text(input.nativeState, 256);
+    if (state === undefined || nativeState === undefined) {
+      throw new IdentityError("invalid");
+    }
+    const record = this.options.flow.take(state, nativeState, true);
+    try {
+      if (record.providerId !== providerId || record.origin !== origin) {
+        throw new OAuthError(
+          "oauth_state_invalid",
+          "收尾与发起的提供方或来源不一致",
+          400,
+        );
+      }
+      const providerError = text(input.error, 64);
+      if (providerError !== undefined) {
+        throw new OAuthError(
+          providerError === "access_denied"
+            ? "oauth_denied"
+            : "oauth_provider_error",
+          `提供方拒绝：${providerError}`,
+          providerError === "access_denied" ? 403 : 502,
+        );
+      }
+      const code = text(input.code, 2048);
+      if (code === undefined) {
+        throw new OAuthError("oauth_state_invalid", "回调没有授权码", 400);
+      }
+      const provider = await this.ready(providerId, record.origin);
+      const identity = await this.options.flow.identify(provider, record, code);
+      const outcome = this.options.flow.settle(provider, record, identity);
+      if (outcome.kind === "session") {
+        return {
+          status: 200,
+          body: {
+            result: outcome.signedUp ? "signedUp" : "signedIn",
+            session: nativeSession(outcome.credentials),
+            ...(outcome.mfaEnrollmentRequired
+              ? { mfaEnrollmentRequired: true }
+              : {}),
+          },
+        };
+      }
+      if (outcome.kind === "mfa") {
+        return {
+          status: 200,
+          body: { result: "mfa", challengeId: outcome.challengeId },
+        };
+      }
+      return { status: 200, body: { result: "bound" } };
+    } catch (error) {
+      this.failed(providerId, record.principalId, error);
+      throw error;
     }
   }
 
@@ -653,6 +780,22 @@ export class OAuthHttp {
     });
     response.end(bytes);
   }
+}
+
+/** 原生传输上的会话答案：与 `identity/http.ts` 登录类答案同形，密钥在 `native` 里。 */
+function nativeSession(
+  credentials: SessionCredentials,
+): Record<string, unknown> {
+  const session = sessionJson(
+    credentials.principal,
+    credentials.accessExpiresAtMs,
+  );
+  session.csrfToken = credentials.csrfToken;
+  session.native = {
+    accessToken: credentials.accessToken,
+    refreshToken: credentials.refreshToken,
+  };
+  return session;
 }
 
 function failure(error: unknown): Reply {

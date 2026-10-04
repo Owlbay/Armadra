@@ -1,19 +1,23 @@
 import Foundation
 
-/// 原生收到的两种深链（外部服务 §5.3、契约 §17.3 / §19.4），以及把它交给页面的那一行 JS。
+/// 原生收到的三种深链（外部服务 §5.3、契约 §17.3 / §19.4 / §18.5），以及把它交给页面的那一行 JS。
 ///
 ///  - `armadra://pair?host=…&ticket=…&fp=…`：配对。页面的入口在挂载前就定了，所以
 ///    写进 `#link=` 再重载，连接页拿它当输入框初值，人点「连接」才配。
 ///  - `armadra://w/<工作空间>[/n/<节点>]`：通知点开。写进 `#push=`，页面
 ///    `mobile/push-open.ts` 认 `hashchange`，不用重载。
+///  - `armadra://oauth?state=…&code=…`（或 `error=`）：原生 OAuth 的回调（R-56）。与配对一样
+///    写进 `#link=` 再重载，入口在挂载前收尾。
 ///
 /// 其余一律不认。链接按 JSON 字符串字面量嵌进脚本，不拼接原文。
 public enum DeepLink: Equatable {
     case pair(String)
     case node(String)
+    case oauth(String)
 
     private static let maxLength = 2048
     private static let pairPattern = "^armadra://pair\\?[A-Za-z0-9._~%&=:+-]+$"
+    private static let oauthPattern = "^armadra://oauth\\?[A-Za-z0-9._~%&=:+*-]+$"
     private static let nodePattern = "^armadra://w/[A-Za-z0-9._~%-]+(/n/[A-Za-z0-9._~%-]+)?/?$"
 
     public init?(_ link: String) {
@@ -22,6 +26,8 @@ public enum DeepLink: Equatable {
             self = .pair(link)
         } else if link.range(of: Self.nodePattern, options: .regularExpression) != nil {
             self = .node(link)
+        } else if link.range(of: Self.oauthPattern, options: .regularExpression) != nil {
+            self = .oauth(link)
         } else {
             return nil
         }
@@ -29,7 +35,7 @@ public enum DeepLink: Equatable {
 
     public var link: String {
         switch self {
-        case let .pair(link), let .node(link): return link
+        case let .pair(link), let .node(link), let .oauth(link): return link
         }
     }
 
@@ -37,7 +43,7 @@ public enum DeepLink: Equatable {
     public var script: String {
         let literal = Self.literal(link)
         switch self {
-        case .pair:
+        case .pair, .oauth:
             return "history.replaceState(null,'',location.pathname+'#link='+encodeURIComponent(\(literal)));location.reload();"
         case .node:
             return "location.hash='#push='+encodeURIComponent(\(literal));"

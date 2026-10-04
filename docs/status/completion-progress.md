@@ -1463,7 +1463,33 @@
 
 ## G5-22 手机原生补充（R-54、R-55、R-56）
 
-待填（第 3 组）。
+**做了什么**
+
+- 原生 OAuth（R-56）。core 的 `oauth/{id}/start?native=1` 只认原生传输：不发绑定 Cookie，答案多一个一次性的 `nativeState`。回调对原生记录不取走、不认 Cookie，只 302 到 `armadra://oauth?state=…&code=…`（或 `error=`）。新路由 `POST oauth/{id}/native { state, nativeState, code? | error? }` 收尾：与浏览器回调同一套决定，答 JSON，登录时会话密钥在 `session.native`。记录在这一步才取走；`nativeState`、提供方或来源对不上，浏览器发起的记录走这里，一律 `oauth_state_invalid`。提供方仍只登记原来那个 https 回调。
+- 页面（`mobile/native-oauth.ts`）：App 里 `startOAuth` 改走这一路，`state` 与 `nativeState` 记在本机，授权页交给插件的 `openExternal`（插件旧时答 `oauth_browser_required`）。深链经原生写进 `#link=` 再重载；入口在挂载前收尾，结果写成 `#oauth=` 片段，`use-link-fragments` 在 App 里也打开「安全」页。`state` 不是本机记着的那条时，不碰记录也不发请求。
+- 令牌轮换（R-54）：Android `onNewToken`、UnifiedPush 新端点，以及 iOS 启动时 APNs 给出与上次登记不同的令牌（`PushTokenLedger`），都会标「换过」并发 `pushTokenRotated`。页面（`mobile/push-rotation.ts`）对开过推送的设备在启动和收到事件时重新 `PUT /api/push/devices`，成功后 `ackPushRotation`。
+- 图片带 Bearer（R-55）：`api/assets.ts::useAssetUrl` 在 App 里把指向 Gateway 的图片地址经带 Bearer 的 `fetch` 换成 `blob:`，同一地址共用一份，最后一处卸载时回收。白板图片与 Markdown 预览的图都走它；浏览器与桌面照旧直接用地址。
+- G5-10 留下的 Android UnifiedPush 分发器接线：引入 `org.unifiedpush.android:connector` 3.3.5，Tink 换成 `tink-android`。装了分发器就向它要端点，登记成 `{ transport: "direct", publicKey, unifiedpush: { endpoint } }`，30 秒拿不到或分发器拒绝时退回 FCM。消息正文是 §19.5 的信封，与 FCM 共用 `PushDisplay` 解开后出通知。页面 `native-bridge.ts` 认这种登记：只限 Android，必须带公钥，端点须是 https 或回环 http，可以不带令牌。
+- 原生两侧：插件加 `openExternal`（只开 https 与回环 http）、`pushRotated`、`ackPushRotation`。`armadra://oauth?…` 与配对链接一样走 `#link=` 加重载。Android 冷启动带来的深链等页面加载完再交，同一个 intent 只交一次。判定放在不依赖 UI 的模块：`DeepLink` 的 OAUTH 类、`ExternalUrl`、`PushTokenLedger`。
+- `mobile-shell-e2e` 加两条：Android 断言资产直接 `<img>` 拿到 401、经带 Bearer 的 `fetch` 拿到 200 `image/png`；记一条挂起流程后用 `armadra://oauth` 深链冷启动，断言收尾请求已发出（记录被取走）、「安全」页打开。iOS 经深链打开后，断言「安全」页出现、仍在连接状态。
+
+**接口**：契约 §18.5 加两行与一段（`start?native=1`、`POST oauth/{id}/native`、原生回调的深链）；`oauth_browser_required` 只剩旧版 App 不带 `native=1` 的情况。共享层新增 `oauthNativeCompleteRequestSchema`、`oauthNativeOutcomeSchema`，`oauthStartSchema.nativeState?`。原生桥新增 `openExternal`、`pushRotated`、`ackPushRotation`、`onPushRotated`，`NativePushRegistration.token` 改为可选、加 `unifiedpush`（与 G5-10 的类型改动同形）。
+
+**实测**（macOS arm64）
+
+- core `oauth.test` 共 42 例（新增原生一路 5 例：绑定 → 登录、`nativeState` 不对后记录作废、浏览器与原生不能互走收尾、提供方拒绝与提供方不一致、`native=1` 只认原生传输）。web 新增 `native-oauth`、`push-rotation`、`assets` 三个测试文件，`native-bridge`、`entry`、`use-link-fragments`、`PushPermission` 加了用例。
+- ArmadraNativeKit `swift test` 18 例；armadra-native-core 用 javac + JUnit 本地跑 15 例（`DeepLinkTest`、`ExternalUrlTest` 新增）。本机 iOS 模拟器构建（不签名）通过。
+- 对构建出的 core 经 Gateway 的 Bearer 模式实测：资产不带 Bearer 答 401，带了答 200 `image/png`；`POST oauth/e2e/native` 答 400 `oauth_state_invalid`。
+- 夜间 `workflow_dispatch`（本分支，run 37200252911）：`mobile-ios` 与 `mobile-android` 都全过。Android 的三条插桩用例全过，logcat 里能看到冷启动深链交给了页面。中途修了两处：一是冷启动时 Capacitor 会漏掉 `onPageLoaded`，改为另按页面进度轮询；二是插桩框架按启动 intent 认活动，不能清掉 intent 的 data。有一次 b 用例报 `script timed out`，是模拟器偶发，重跑失败作业后通过。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 4418 过 / 43 跳过，live 4 过，脚本 65 过；web 3311 过；shared 321 过；server 86 过 / 4 跳过；mobile 9 过；push-relay 9 过；0 失败。`pnpm --filter @armadra/web typecheck` 与 `pnpm check` 通过。
+
+**没做 / 限制**
+
+- 真提供方走完整个系统浏览器流程没有在模拟器里跑：模拟器里的浏览器不信本地 CA，回调页打不开。core 一侧由 `oauth.test` 对假 issuer 走完，App 一侧由深链 e2e 覆盖。真机需要用户的提供方与证书（§4 B 档）。
+- App 里没有会话时，OAuth 登录若走到第二因素（`mfa`），入口会回到连接页，第二步接不上。现在原生 App 都是先配对、带着会话再登录或绑定，暂不受影响。
+- 编辑器里文件的「下载」链接仍是 `<a href>`，不带 Bearer。
+- UnifiedPush 的 App 一侧没有在模拟器里对真分发器跑过（模拟器上没有装 ntfy App）；core 一侧由 G5-10 的 `push-e2e` 对 push-sink 与真 ntfy 验过，App 交的登记形状与它一致。
+- iOS 不做 UnifiedPush。
 
 ## G5-23 零碎界面与 G2-2 遗留（R-43、R-71、R-72 其余）
 
@@ -1503,7 +1529,47 @@
 
 ## G5-24 桌面回环收紧（R-15）
 
-待填（第 4 组）。
+**做了什么**
+
+- core 启动选项 `loopbackAnonymousOwner`（`core/main.ts` 的 `RunOptions`，缺省 `false`；不传时读 `ARMADRA_LOOPBACK_OWNER=1`）。判定集中在 `core/identity/http.ts::anonymousLoopbackOwner`：选项开着、明文回环来源、一个凭据都没带，且不是 Gateway 标过的 Bearer 请求，才按 `IdentityService.localOwner` 处理。`github/http.ts` 与 `schedule/api.ts` 改用它，关着时回环匿名照常落到认证、答 401。
+- 桌面壳：`main/runtime-process.ts::coreEnvironment` 起 core 时去掉 `ARMADRA_LOOPBACK_OWNER`，从操作员 shell 或探针环境继承下来也开不了。服务器壳：`serve.ts` 显式传 `false`，环境变量不听。
+- 页面：`api/request.ts` 打 `/api/github/`、`/api/automations/` 时在桌面壳里带票据换来的 `Authorization: Bearer`（`identity.ts::shellBearer`，还没会话先向壳要票配对）；401 时 `renewShellBearer` 走 `resumeIdentity`（复核 → 刷新 → 重新要票）换一枚重发一次，几个请求同时被拒只换一次。其余路由不带。
+- 回环 CORS 的 `access-control-allow-headers` 加 `authorization`（`core/http/cors.ts`）。原来只放行 `content-type`：壳里的页面跨端口带 Bearer 的请求被预检拦下——实测旧构建里页面 `GET /api/identity/session` 带 Bearer 是 `Failed to fetch`，也就是说桌面壳里身份面第二次 `resumeIdentity`、设备列表、安全页这些 Bearer 调用原来就不通，这一条一并修好。
+- 探针与开发命令显式打开：`tools/probes/probe-home.mjs` 导出 `LOOPBACK_OWNER_ENV` 并在 `isolatedEnv` 里统一设；不经 `isolatedEnv` 起裸 core、又会无凭据打这两面或开页面的 `workflow-e2e.mjs` 与 `ui-features/harness.mjs` 各加一行；`armadra.sh run web` 起 core 时带上。
+- 文档：契约 §3.2 追加「自 0.3.0 起桌面壳不再按主人处理回环匿名请求」一段；安全审查 L9 标「已修（G5-24，§3.2 那条路）」并写明仍开着的部分；开发指南的「来源与凭据」与环境变量表各补一条。
+
+**调用方核对**
+
+| 调用方                                                                                                                           | 打哪里、带什么                                                                                              | 受不受影响                                                         |
+| -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `armadra-hook` 全部 canvas / context / browser 动词、`hook` 事件、`credential`、`credential --ama`、`doctor`（`/verify`）、`mcp` | hook 服务自己的监听（`core/hook/server.ts`），应用令牌 + 节点 token（`hook-client/session.ts::headersFor`） | 不经 core 主监听，不受影响                                         |
+| `run/<cli>` 启动器、PATH 垫片、Windows 启动器                                                                                    | 只调 `armadra-hook credential` / `credential --ama`，同上                                                   | 不受影响                                                           |
+| 桌面页面：GitHub 面板、Git 托管设置页、自动化抽屉、自动化节点、新建计划                                                          | 都经 `GithubApi` / `AutomationApi` → `api/request.ts`                                                       | 已补 Bearer；Electron 实测匿名 401、Bearer 200                     |
+| 桌面页面：身份面（会话、设备、安全页）                                                                                           | `api/identity.ts::call`，原本就带 Bearer                                                                    | 原来被 CORS 预检拦下，现已放行                                     |
+| 桌面页面：其余 `/api/` 与 WebSocket                                                                                              | 不带凭据                                                                                                    | 不走 §3.2 那条路，不受影响（见「没做」）                           |
+| 托盘（`main/tray.ts`：`/api/gateway`、`/api/usage`、`/api/usage/cost`、`/api/settings`）、`runtime-process` 的 `/health`         | 路由表路由，不带 Origin                                                                                     | 不受影响                                                           |
+| 服务器壳                                                                                                                         | 页面走 Cookie 会话；Caddy / Gateway 来的是 HTTPS 来源                                                       | 不受影响；回环监听上的匿名本机进程原来也能按主人打这两面，现在 401 |
+| 原生 App                                                                                                                         | Gateway 的 Bearer 模式                                                                                      | 不受影响，且明确排除在回环匿名之外                                 |
+| 探针                                                                                                                             | `isolatedEnv`、`workflow-e2e`、`ui-features/harness` 显式打开；经桌面壳起的 core 不开                       | A 档全过                                                           |
+
+**实测**（macOS arm64，2026-10-05）
+
+- 新增用例：`identity/http.test`「回环匿名」2 例、`route-access.test`「回环匿名：路由门不替两面认人，缺省 401」、`github/http.test`「回环匿名缺省是 401，显式打开才按本机主人」与预检放行 `authorization`、`schedule/api.test` 回环匿名 401 与显式打开 200、`main.test` 选项与环境变量的优先级加端到端 401、`cors.test`、`runtime-process.test`「不把回环匿名按主人的开关带给 core」、`serve.integration.test`（环境里有变量也不开）、页面 `request.bearer.test` 5 例（先配对再带 Bearer、只有两面带、401 换一枚重发、换不出不重发、不在壳里不带）。
+- Electron 开发构建，探针环境（带 `ARMADRA_LOOPBACK_OWNER=1`）起壳，在真渲染页里：匿名打自动化与 GitHub 面都是 401（壳去掉了变量）；向壳要票、配对后带 Bearer：`/api/identity/session` 200、自动化 200、GitHub 200。把 `cors.ts` 换回原样重建，同一脚本在带 Bearer 的 `session` 上 `Failed to fetch`。
+- 默认裸 core：任意回环来源无凭据打自动化面 401；`GET /api/settings` 仍 200（见「没做」）。
+- 全量验证与 A 档探针、packaged-smoke 结果见 PR。
+
+**接口**
+
+- `RunOptions.loopbackAnonymousOwner?: boolean`；环境变量 `ARMADRA_LOOPBACK_OWNER=1`（只给裸 core）。
+- `core/identity/http.ts`：`setLoopbackAnonymousOwner`、`loopbackAnonymousOwner`、`anonymousLoopbackOwner(request, token)`。
+- 页面 `api/identity.ts`：`shellBearer()`、`renewShellBearer(rejected)`。
+- 探针 `tools/probes/probe-home.mjs`：`LOOPBACK_OWNER_ENV`。新探针起裸 core、又要无凭据打 GitHub / 自动化时用 `isolatedEnv` 或叠上它。
+
+**没做 / 限制**
+
+- L9 只收紧了契约 §3.2 那条路。路由表里其余 `/api/` 路由与 WebSocket 在桌面壳上没有请求身份，路由门按本机 owner 放行（`identity/gate.ts`），本机回环端口上的网页仍能调它们。要收紧，得让页面全部请求带 Bearer、流换票、托盘跟进，范围比本包大，另立一包。
+- 「自 0.3.0 起」按计划原文写；仓库当前版本号仍是未发布的 0.2.0，若这一改动随 0.2.0 发布，契约那句要跟着改。
 
 ## G5-25 Claude 本地额度窗口估算（R-70）
 

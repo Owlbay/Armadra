@@ -8,10 +8,11 @@ import type { Entry } from "./entry";
 import { nativeBridge } from "./native-bridge";
 import { PushPermission } from "./PushPermission";
 import { usePushOpen } from "./push-open";
+import { usePushRotation } from "./push-rotation";
 
 /**
  * 入口分支（`main.tsx`）：连接页，或者画布本体加两样手机细节——推送权限提示
- * 与「点通知进焦点页」。桌面窗口里 `entry` 恒为 `app`，这两样也不出现
+ * 、「点通知进焦点页」与推送令牌轮换后的重新登记。桌面窗口里 `entry` 恒为 `app`，这两样也不出现
  * （提示只在手机布局与原生 App 里问；深链只有通知会带来）。
  */
 export function MobileRoot({ entry }: { entry: Entry }) {
@@ -63,6 +64,7 @@ export function MobileRoot({ entry }: { entry: Entry }) {
 
 function ConnectedApp() {
   usePushOpen();
+  usePushRotation();
   return (
     <>
       <App />

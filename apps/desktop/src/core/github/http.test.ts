@@ -23,7 +23,7 @@ import {
   IdentityStore,
   identityInstanceId,
 } from "../identity";
-import { cookieName } from "../identity/http";
+import { cookieName, setLoopbackAnonymousOwner } from "../identity/http";
 import { allScopes } from "../identity/scopes";
 import { createLog, nodePlatform } from "../platform";
 import { CredentialService } from "./credentials";
@@ -278,6 +278,60 @@ describe("GitHub 的 HTTP 面", () => {
       code: "UNAUTHENTICATED",
       message: "Device session is invalid or expired",
     });
+  });
+
+  // 安全审查 L9：明文回环上没带凭据原来按本机主人处理，本机任何一个回环端口上
+  // 的网页都能打这一面。自 0.3.0 起缺省 401，只有裸 core 显式打开。
+  it("回环匿名缺省是 401，显式打开才按本机主人", async () => {
+    const anonymous = { headers: { authorization: "", "x-armadra-csrf": "" } };
+    const refused = await apiCall(harnessed, "get-credential", {}, anonymous);
+    expect(refused.status).toBe(401);
+    expect(await refused.json()).toEqual({
+      code: "UNAUTHENTICATED",
+      message: "Device session is invalid or expired",
+    });
+    setLoopbackAnonymousOwner(true);
+    try {
+      const opened = await apiCall(harnessed, "get-credential", {}, anonymous);
+      expect(opened.status).toBe(200);
+    } finally {
+      setLoopbackAnonymousOwner(false);
+    }
+    // 打开了也只管回环明文：Cookie 来源上的匿名调用照旧 401。
+    setLoopbackAnonymousOwner(true);
+    try {
+      const cookieOrigin = await apiCall(
+        harnessed,
+        "get-credential",
+        {},
+        {
+          headers: { ...anonymous.headers, origin: COOKIE_ORIGIN },
+        },
+      );
+      expect(cookieOrigin.status).toBe(401);
+    } finally {
+      setLoopbackAnonymousOwner(false);
+    }
+  });
+
+  it("预检放行 Authorization：壳里的页面跨端口带 Bearer", async () => {
+    const preflight = await fetch(
+      `${harnessed.base}${API_PREFIX}get-credential?workspaceId=${harnessed.workspaceId}`,
+      {
+        method: "OPTIONS",
+        headers: {
+          origin: ORIGIN,
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "authorization,content-type",
+        },
+      },
+    );
+    expect(preflight.status).toBe(204);
+    expect(
+      (preflight.headers.get("access-control-allow-headers") ?? "")
+        .split(",")
+        .map((name) => name.trim()),
+    ).toContain("authorization");
   });
 
   it("GET 一条动词路径是 404，这一面只有 POST", async () => {

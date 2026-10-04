@@ -8,11 +8,16 @@ const mocks = vi.hoisted(() => ({
   restored: false,
   session: null as unknown,
   install: vi.fn(),
+  complete: vi.fn(),
 }));
 
 vi.mock("./native-bridge", () => ({
   isNativeApp: () => mocks.app,
   installNativeTransport: (transport: unknown) => mocks.install(transport),
+}));
+vi.mock("./native-oauth", async (original) => ({
+  ...(await original<typeof import("./native-oauth")>()),
+  completeNativeOAuth: (link: string) => mocks.complete(link),
 }));
 vi.mock("../platform/layout", () => ({
   isCompactLayout: () => mocks.compact,
@@ -49,6 +54,7 @@ beforeEach(() => {
     session: null,
   });
   mocks.install.mockReset();
+  mocks.complete.mockReset();
 });
 afterEach(() => {
   history.replaceState(null, "", "/");
@@ -135,6 +141,64 @@ describe("入口分支", () => {
       `/#link=${encodeURIComponent("https://evil.example/#pair=x")}`,
     );
     await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+  });
+});
+
+describe("原生 OAuth 的深链（R-56）", () => {
+  const link = "armadra://oauth?state=s&code=c";
+  const open = () =>
+    history.replaceState(null, "", `/#link=${encodeURIComponent(link)}`);
+
+  it("有会话：装传输、收尾，结果写成 #oauth= 片段，进画布", async () => {
+    mocks.app = true;
+    mocks.saved = "https://h:8443";
+    mocks.restored = true;
+    mocks.complete.mockResolvedValueOnce({
+      result: "bound",
+      code: "",
+      challengeId: "",
+    });
+    open();
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+    expect(mocks.install).toHaveBeenCalledWith(
+      expect.objectContaining({ origin: "https://h:8443" }),
+    );
+    expect(mocks.complete).toHaveBeenCalledWith(link);
+    expect(location.hash).toBe("#oauth=bound");
+  });
+
+  it("没会话：登录成功进画布，失败回连接页；没有来源不收尾", async () => {
+    mocks.app = true;
+    mocks.saved = "https://h:8443";
+    mocks.complete.mockResolvedValueOnce({
+      result: "signedIn",
+      code: "",
+      challengeId: "",
+    });
+    open();
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+
+    mocks.complete.mockResolvedValueOnce({
+      result: "error",
+      code: "oauth_not_bound",
+      challengeId: "",
+    });
+    open();
+    await expect(prepareEntry()).resolves.toEqual({
+      kind: "connect",
+      mode: "native",
+      origin: "https://h:8443",
+    });
+    expect(location.hash).toBe("#oauth=error&code=oauth_not_bound");
+
+    mocks.saved = null;
+    mocks.complete.mockClear();
+    open();
+    await expect(prepareEntry()).resolves.toEqual({
+      kind: "connect",
+      mode: "native",
+    });
+    expect(mocks.complete).not.toHaveBeenCalled();
   });
 });
 

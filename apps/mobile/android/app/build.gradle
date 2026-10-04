@@ -61,11 +61,20 @@ dependencies {
     implementation project(':armadra-native-core')
     implementation "com.google.firebase:firebase-messaging:$firebaseMessagingVersion"
     implementation "com.google.android.gms:play-services-code-scanner:$playServicesCodeScannerVersion"
+    implementation "org.unifiedpush.android:connector:$unifiedPushConnectorVersion"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test:runner:$androidxTestRunnerVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
+}
+
+// UnifiedPush 连接库依赖 JVM 版 Tink（带 protobuf-java 与桌面用的 conscrypt）；Android 上换成同版本的
+// tink-android（自带精简的 protobuf）。
+configurations.configureEach {
+    resolutionStrategy.dependencySubstitution {
+        substitute module('com.google.crypto.tink:tink') using module("com.google.crypto.tink:tink-android:$tinkAndroidVersion")
+    }
 }
 
 apply from: 'capacitor.build.gradle'

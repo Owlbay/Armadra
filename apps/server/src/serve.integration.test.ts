@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { serve } from "./serve";
 import { tempDir } from "../../desktop/src/core/testing/temp-dir";
+import { loopbackAnonymousOwner } from "../../desktop/src/core/identity/http";
 
 /**
  * 装配级用例：真起一次 `serve`。
@@ -107,6 +108,8 @@ beforeAll(async () => {
     env: {
       ARMADRA_CORE_MIGRATIONS_DIR: migrationsDir,
       ARMADRA_LOG: "error",
+      // 探针的环境里有它（`tools/probes/probe-home.mjs`）；服务器壳不听。
+      ARMADRA_LOOPBACK_OWNER: "1",
     },
     stdout: () => {},
     moduleDir: here,
@@ -189,6 +192,10 @@ describe("服务器壳的装配", () => {
     expect(JSON.parse(foreign.body).code).toBe("forbidden");
     // 回环专用面在公网这一侧不存在。
     expect((await call("/hook/anything", { origin: null })).status).toBe(404);
+  });
+
+  it("回环匿名不按本机主人：环境变量开不了，选项钉死为关（安全审查 L9）", () => {
+    expect(loopbackAnonymousOwner()).toBe(false);
   });
 
   it("配对之后带 Cookie 的请求是 200，撤销之后立刻回到 401", async () => {

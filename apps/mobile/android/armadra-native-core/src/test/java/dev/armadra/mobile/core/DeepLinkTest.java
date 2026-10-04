@@ -21,6 +21,18 @@ public class DeepLinkTest {
     }
 
     @Test
+    public void oauthCallbacksReloadLikePairing() {
+        DeepLink link = DeepLink.parse("armadra://oauth?state=s_T-1&code=a*b.c%2Fd");
+        assertEquals(DeepLink.Kind.OAUTH, link.kind);
+        assertEquals(DeepLink.Kind.OAUTH, DeepLink.parse("armadra://oauth?state=s&error=access_denied").kind);
+        assertTrue(link.script().startsWith("history.replaceState(null,'',location.pathname+'#link='+encodeURIComponent("));
+        assertTrue(link.script().endsWith("location.reload();"));
+        assertNull(DeepLink.parse("armadra://oauth"));
+        assertNull(DeepLink.parse("armadra://oauth?state=a'+alert(1)+'"));
+        assertNull(DeepLink.parse("armadra://oauthx?state=a"));
+    }
+
+    @Test
     public void scriptsMatchTheIosSpelling() {
         assertEquals("location.hash='#push='+encodeURIComponent(\"armadra:\\/\\/w\\/ws_1\\/n\\/node_1\");",
                 DeepLink.parse("armadra://w/ws_1/n/node_1").script());

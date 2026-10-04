@@ -545,6 +545,9 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   - 身份：口令 scrypt + 策略 + 泄露检查（HIBP k-匿名，`identity.breachCheck`）；passkey、TOTP、OAuth 的
     密钥在 SecretStore；登录、配对、刷新按来源地址限流，按 principal 锁定；登录失败与锁定、MFA 与
     passkey 变更、OAuth 绑定、Gateway 开关与配对票、节点凭据与 ama 密钥的增删全部进审计。
+    原生 App 的 OAuth 不用浏览器绑定 Cookie：发起时拿一次性 `nativeState`，回调只转成
+    `armadra://oauth` 深链，App 带着它收尾（契约 §18.5）。App 里指向 Gateway 的图片经带 Bearer 的
+    `fetch` 换成 `blob:`（`api/assets.ts`），不为 `<img>` 放宽准入。
     服务器壳 / Gateway 来源的页面没有会话时由 `apps/web/src/app/IdentityGate.tsx` 渲染整页登录（无侧栏），
     `#reset=<令牌>` 渲染整页「设置新口令」；带邀请、配对、OAuth 回调片段时照旧进壳由设置页接手。
   - 已知约束：operator 能开 shell，就是能以 core 的系统用户执行任意命令；服务器壳应跑在专用用户或
@@ -570,9 +573,8 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   `features.configOptions`）生效；SSH 节点不能切到 ACP（`acp_unsupported`）。
   六家真适配器的端到端探针已备（`agent-e2e` 场景 12，C 档），还没有真跑。
 - **Gateway / 手机**：配对是两分钟票（二维码 / 链接），私网档位上另有 8 位配对码（契约 §24）；设备表没有
-  「平台」「最近访问」；推送中继写完不部署；UnifiedPush 已接（契约 §27.2），
-  Android App 侧接分发器的原生代码未做；真机、商店与
-  真 APNs / FCM 都要用户的账号。
+  「平台」「最近访问」；推送中继写完不部署；UnifiedPush 已接（契约 §27.2，Android App 装了分发器时
+  向它要端点）；真机、商店与真 APNs / FCM 都要用户的账号。
 - **安全审查的低危项**：页面上口令策略拒绝码与 `warn` 档的提示、GitHub / 自动化两面对 Bearer 写仍要 CSRF 等，见[安全审查](../status/security-review-2026-10.md) §3。
 - **外部服务里留到之后的三项**：W-MAIL（SMTP）、W-FORGE（GitLab / Gitea）、W-MIRROR（更新镜像），
   见[外部服务](../design/external-services.md) §15。

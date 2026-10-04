@@ -62,6 +62,8 @@ R7a 之前 GitHub 与自动化两块面板走的是 `/rpc/armadra.v1.*`：二进
 
 **明文回环上没带凭据的一次调用按本机主人处理**（`core/identity/service.ts` 的 `localOwner`）。桌面壳的会话是原生的，密钥在壳里，既不发 Cookie 也到不了 `apps/web/src/api/request.ts` 的那个 `fetch`；而那台壳就在同一台机器上。TLS 的服务器壳上这条路不存在，凭据仍然是必须的。主人必须是一台**没被撤销的真设备**——自动化的授权记录要拿它的 epoch 复核，一个编出来的设备标识会让计划在第一次投递时被自己的复核拒掉。
 
+**自 0.3.0 起桌面壳不再按主人处理回环匿名请求**（安全审查 L9）：上面那条路只在 core 的启动选项 `loopbackAnonymousOwner`（`core/main.ts`，缺省 `false`；不传时读 `ARMADRA_LOOPBACK_OWNER=1`）打开时存在，判定在 `core/identity/http.ts::anonymousLoopbackOwner`。桌面壳的页面在这两面上带票据换来的 `Authorization: Bearer`（`apps/web/src/api/request.ts`，401 时换一枚重发一次；回环 CORS 的 `access-control-allow-headers` 因此多了 `authorization`），壳不把这个变量带给 core；服务器壳显式传 `false`。只有探针（`tools/probes/probe-home.mjs`）与 `armadra.sh run web` 起的裸 core 打开它。关着时明文回环上没带凭据的调用照 401 回答（GitHub 面 `UNAUTHENTICATED`、自动化面 `unauthenticated`）。
+
 ### 3.3 稳定的 `code`
 
 GitHub 那一面的 `code` 是 UPPER_SNAKE 拼法——这是延续自历史上 `/rpc/` 兼容面（R7 已删除）的拼法，不是新起的一套：
@@ -1356,6 +1358,8 @@ G5-02 追加：`GET devices`（我的设备，`{ devices, nextId, hasMore }`）�
 | `GET oauth/{id}/callback?state&code`（或 `error`）                             | 提供方跳回                        | 302 到 `<发起时的来源><returnTo>#oauth=<结果>`；`state` 不认识时答 JSON 400 `oauth_state_invalid`                                                                                                                                                                                  |
 | `GET oauth/bindings`                                                           | 已登录                            | `{ bindings: [{ credentialId, providerId, kind, createdAtMs }] }`：我的；设置里认不出的提供方 `providerId` 为空串                                                                                                                                                                  |
 | `DELETE oauth/bindings/{credentialId}`（写）                                   | 本人                              | `{ credentialId, revoked: true }`；别人的答 404（owner 撤别人的走 `DELETE credentials/{id}`）                                                                                                                                                                                      |
+| `POST oauth/{id}/start?native=1`（同上的请求体）                               | 同上，只认原生传输上的请求        | `{ authorizeUrl, expiresAtMs, nativeState }`，**不发** Cookie。`nativeState` 是一次性的收尾密钥，App 记在本机；浏览器上的请求带 `native=1` 答 400 `INVALID_ARGUMENT`（R-56）                                                                                                       |
+| `POST oauth/{id}/native` `{ state, nativeState, code? \| error? }`             | 原生 App 收到深链后（匿名）       | 与回调同一套决定，答 JSON：`{ result: "signedIn" \| "signedUp", session, mfaEnrollmentRequired? }`（`session` 与原生传输上登录类答案同形，密钥在 `session.native`）、`{ result: "mfa", challengeId }`、`{ result: "bound" }`；失败是下表的 `{ code, message }`                     |
 | `POST oauth/{id}/logout` `{ returnTo? }`                                       | 匿名                              | `{ endSessionUrl }`：OIDC 发现文档有 `end_session_endpoint` 时是 RP 发起登出的地址（`client_id` + `post_logout_redirect_uri`），否则 `null`；本机会话仍由 `POST session/logout` 结束                                                                                               |
 
 **回调**是从提供方跳回的顶层导航（没有 `Origin`、`Sec-Fetch-Site: cross-site`、`SameSite=Strict` 的会话 Cookie 带不上），所以它不认会话：`state` 内存里 10 分钟、**取出即删**（重放、过期、浏览器绑定 Cookie 不对都是 `oauth_state_invalid`），`bind` 的发起者在 `start` 时就记进状态。Gateway 的门只对 `GET /api/identity/oauth/{id}/callback` 放开 Origin 与 `Sec-Fetch-Site` 两道（`core/gateway/admission.ts` 的 `oauthCallbackPath`）。跳回片段的 `oauth=`：
@@ -1368,6 +1372,8 @@ G5-02 追加：`GET devices`（我的设备，`{ devices, nextId, hasMore }`）�
 | `mfa`      | 这个人登记过 TOTP：带 `challengeId`，页面接 §18.3 的 `POST mfa/verify`；不发会话               |
 | `error`    | 带 `code`（下表）；不发会话、不改绑定                                                          |
 
+**原生 App**（R-56）：`start?native=1` 发起的记录不认浏览器绑定，认 `nativeState`。回调对这种记录**不取走**、不认 Cookie，只 302 到 `armadra://oauth?state=<state>&code=<授权码>`（提供方拒绝时是 `&error=<原样，至多 64 字符>`），由 App 带着 `nativeState` 调 `POST oauth/{id}/native` 收尾——那一次才取出即删；`nativeState` 不对、提供方或来源与发起时不同、浏览器发起的记录走 `native`，都答 `oauth_state_invalid`。授权码在深链里被别的 App 截走也换不到会话：收尾要 `nativeState`（只在发起它的 App 本机）与 PKCE verifier（只在 core）。提供方那边仍只登记 `<公网来源>/api/identity/oauth/{id}/callback`。
+
 `signedIn` / `signedUp` 时，`identity.mfa.requireFor` 覆盖这个人而他还没登记 TOTP，片段再带 `mfaEnrollmentRequired=true`：照常发会话，页面带去登记（与口令登录答案里的 `mfaEnrollmentRequired` 同一条，§18.3；R-17）。
 
 **挂起的 `state`** 按来源地址分桶（安全审查 L4）：每个地址（IPv6 按 /64，IPv4 映射地址按 IPv4）同时至多 50 条，满了挤它自己最老的；全部合计至多 1000 条，满了挤挂得最多的那个地址最老的一条。从多个地址撒 `start` 挤不掉别人半途的登录。
@@ -1377,7 +1383,7 @@ G5-02 追加：`GET devices`（我的设备，`{ devices, nextId, hasMore }`）�
 | `code`                     | HTTP | 意思                                                                        |
 | -------------------------- | ---- | --------------------------------------------------------------------------- |
 | `oauth_not_configured`     | 404  | 没有公网来源、不是从公网来源发起、提供方不存在或停用、GitHub 没有 secret    |
-| `oauth_browser_required`   | 400  | Gateway 的 Bearer 模式（原生 App）发起；授权要在浏览器会话里走              |
+| `oauth_browser_required`   | 400  | Gateway 的 Bearer 模式（原生 App）发起而没带 `native=1`（旧版 App）         |
 | `oauth_state_invalid`      | 400  | `state` 不认识、过期、用过，或浏览器绑定 Cookie 不对                        |
 | `oauth_denied`             | 403  | 用户在提供方取消（`error=access_denied`）                                   |
 | `oauth_provider_error`     | 502  | 发现文档、JWKS、令牌交换或用户信息失败；发现文档 `issuer` 不符；不支持 S256 |

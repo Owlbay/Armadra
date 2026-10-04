@@ -13,6 +13,15 @@
 // CA），再用票配对拿 Bearer 会话，页面进画布（底部导航出现）——之后页面的 fetch 与
 // WebSocket 都经钉扎过的 TLS 走 Gateway。
 //
+// 配对之后再两条（G5-22）：
+//
+//   * 原生 OAuth 的深链 `armadra://oauth?state=…&code=…`（R-56）：App 把它写进 `#link=`
+//     重载，入口在挂载前向 core 收尾，结果写成 `#oauth=` 打开「安全」页。Android 用例
+//     先在页面里记一条假的挂起流程，再以深链冷启动 App，断言收尾请求发了（记录取走）、
+//     「安全」页打开；iOS 用例经深链打开、断言 App 仍在已连接的界面上。
+//   * 图片带 Bearer（R-55，只 Android）：探针经回环上传一张 PNG 资产，用例在页面里断言
+//     直接 `<img>` 取不到（401）、经带 Bearer 的 `fetch` 取得到（`useAssetUrl` 走的那条）。
+//
 // 前置（仓库根目录）：
 //   pnpm libs:build && pnpm --filter @armadra/desktop build && pnpm --filter @armadra/web build
 //   pnpm --filter @armadra/mobile sync
@@ -262,12 +271,12 @@ async function ios(mint) {
   ]);
   check(
     second === 0,
-    "XCUITest：深链 → 钉扎 → 配对 → 画布 → 重开仍在画布",
+    "XCUITest：深链 → 钉扎 → 配对 → 画布 → 重开仍在画布 → 原生 OAuth 深链",
     `exit ${second}`,
   );
 }
 
-async function android(mint, port) {
+async function android(mint, port, assetUrl) {
   const reversed = await run("adb-reverse", "adb", [
     "reverse",
     `tcp:${port}`,
@@ -291,6 +300,7 @@ async function android(mint, port) {
     [
       ":app:connectedDebugAndroidTest",
       `-Pandroid.testInstrumentationRunnerArguments.armadraPairLink=${link}`,
+      `-Pandroid.testInstrumentationRunnerArguments.armadraAssetUrl=${assetUrl}`,
       "--stacktrace",
     ],
     { cwd },
@@ -302,10 +312,14 @@ async function android(mint, port) {
     "-s",
     "ArmadraNative:*",
     "chromium:*",
+    // 进程崩了时插桩只说「Process crashed」：栈在 AndroidRuntime 里。
+    "AndroidRuntime:E",
+    // 页面里的 console（只有错误与提示，不含密钥）。
+    "Capacitor/Console:*",
   ]);
   check(
     code === 0,
-    "插桩用例：连接页 → 钉扎 → 配对 → 画布 → 重开仍在画布",
+    "插桩用例：连接页 → 钉扎 → 配对 → 画布 → 重开仍在画布；图片带 Bearer；原生 OAuth 深链收尾",
     `gradle exit ${code}`,
   );
 }
@@ -361,6 +375,30 @@ await h.run(async () => {
     return pairing.deepLink;
   };
 
+  // 一张 1×1 的 PNG：页面经 Gateway 取它时要带 Bearer（R-55）。
+  const created = JSON.parse(
+    (
+      await local(base, "POST", "/api/workspaces", {
+        name: "mobile-shell-e2e",
+        rootPath: temp("armadra-mobile-e2e-workspace-"),
+      })
+    ).body,
+  );
+  const uploaded = JSON.parse(
+    (
+      await local(base, "POST", `/api/workspaces/${created.id}/assets`, {
+        dataUrl:
+          "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+      })
+    ).body,
+  );
+  check(
+    typeof created.id === "string" && typeof uploaded.id === "string",
+    "工作空间与一张 PNG 资产（回环上传）",
+    uploaded.id,
+  );
+  const assetUrl = `${opened.origin}/api/workspaces/${created.id}/assets/${encodeURIComponent(uploaded.id ?? "")}`;
+
   if (platform === "ios") await ios(mint);
-  else await android(mint, origin.port);
+  else await android(mint, origin.port, assetUrl);
 });

@@ -285,8 +285,33 @@ export type OAuthStartRequest = z.input<typeof oauthStartRequestSchema>;
 export const oauthStartSchema = z.object({
   authorizeUrl: z.string(),
   expiresAtMs: z.number().int().positive(),
+  /** 只有 `start?native=1`（原生 App，R-56）：收尾时交回的一次性密钥。 */
+  nativeState: z.string().optional(),
 });
 export type OAuthStart = z.infer<typeof oauthStartSchema>;
+
+/** `POST oauth/{id}/native`：原生 App 收到 `armadra://oauth` 深链后收尾（R-56）。 */
+export const oauthNativeCompleteRequestSchema = z.object({
+  state: z.string().min(1).max(256),
+  nativeState: z.string().min(1).max(256),
+  code: z.string().min(1).max(2048).optional(),
+  error: z.string().min(1).max(64).optional(),
+});
+export type OAuthNativeCompleteRequest = z.infer<
+  typeof oauthNativeCompleteRequestSchema
+>;
+
+/**
+ * 收尾的答案：`signedIn` / `signedUp` 带会话（原生传输的形状，密钥在
+ * `session.native`），`mfa` 带中间票，`bound` 什么也不带；失败是 `{ code, message }`。
+ */
+export const oauthNativeOutcomeSchema = z.object({
+  result: z.enum(["signedIn", "signedUp", "bound", "mfa"]),
+  session: z.unknown().optional(),
+  challengeId: z.string().optional(),
+  mfaEnrollmentRequired: z.boolean().optional(),
+});
+export type OAuthNativeOutcome = z.infer<typeof oauthNativeOutcomeSchema>;
 
 /** `GET oauth/bindings` 的一行。 */
 export const oauthBindingSchema = z.object({

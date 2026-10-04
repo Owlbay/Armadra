@@ -41,6 +41,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { LOOPBACK_OWNER_ENV } from "./probe-home.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -159,6 +160,8 @@ const environment = {
   ARMADRA_SECRET_BACKEND: "file",
   PATH: `${bin}:${process.env.PATH ?? ""}`,
   SHELL: "/bin/sh",
+  // 自动化面在下面无凭据地打（契约 §3.2）：裸 core 显式按本机主人。
+  ...LOOPBACK_OWNER_ENV,
 };
 delete environment.TMUX;
 delete environment.TMUX_PANE;
@@ -454,7 +457,8 @@ try {
   api = async (path, init = {}) => {
     const answer = await fetch(new URL(path, origin), {
       ...init,
-      // 自动化面要一个本机来源（回环明文、无凭据 = 本机主人，契约 §4）。
+      // 自动化面要一个本机来源（回环明文、无凭据 = 本机主人，契约 §3.2；
+      // 只因为上面的 ARMADRA_LOOPBACK_OWNER=1）。
       headers: { "Content-Type": "application/json", Origin: origin },
     });
     const text = await answer.text();

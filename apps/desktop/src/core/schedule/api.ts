@@ -11,7 +11,11 @@ import {
 
 import type { CoreRequest } from "../http/router";
 import type { IdentityService } from "../identity/service";
-import { credential, csrfRequired, nativeRequest } from "../identity/http";
+import {
+  anonymousLoopbackOwner,
+  credential,
+  csrfRequired,
+} from "../identity/http";
 import {
   IdentityError,
   identityFailure,
@@ -267,9 +271,10 @@ export class AutomationApi {
   /**
    * 这次调用背后的主体。
    *
-   * 明文回环上没带凭据的一次调用按**本机主人**处理（`IdentityService.localOwner`）：
-   * 页面经 `apps/web/src/api/request.ts` 打这一面，而桌面壳的会话是原生的，密钥
-   * 在壳里，既不发 Cookie 也到不了那个 `fetch`。TLS 的服务器壳上这条路不存在。
+   * 明文回环上没带凭据的一次调用，只在 core 显式打开时（`ARMADRA_LOOPBACK_OWNER=1`，
+   * 探针与开发命令起的裸 core）按**本机主人**处理（`IdentityService.localOwner`）。
+   * 桌面壳的页面带着票据换来的 Bearer（`apps/web/src/api/request.ts`）；两种壳都
+   * 不开这条路（安全审查 L9）。
    *
    * 主人也必须是一台**真设备**：自动化的授权记录要拿它的 epoch 复核，一个编出来
    * 的设备标识会让计划在第一次投递时被自己的复核拒掉。
@@ -281,7 +286,7 @@ export class AutomationApi {
       throw new ScheduleError("authorization", "这次调用没有报来源");
     }
     const token = credential(request, hostId, "access");
-    if (token === "" && nativeRequest(request)) {
+    if (anonymousLoopbackOwner(request, token)) {
       const owner = this.options.identity.localOwner();
       // 还没配过对：这是「没有会话」，不是「权限不够」——页面据此去走配对，
       // 而不是去看一块它其实有权限打开的面板。

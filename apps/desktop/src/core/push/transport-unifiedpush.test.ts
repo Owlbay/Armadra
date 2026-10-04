@@ -6,7 +6,7 @@ import {
 } from "./crypto";
 import { parseRegistration } from "./devices";
 import { pushFixture } from "./fixture";
-import { type Sink, bodyOf, startSink } from "./sink";
+import { type Sink, bodyOf, inMemorySink, startSink } from "./sink";
 import { unifiedPushSender } from "./transport-unifiedpush";
 import type { PushDevice, PushPayload } from "./types";
 
@@ -176,7 +176,9 @@ describe("登记", () => {
 
 describe("经推送域", () => {
   it("有端点的设备走 UnifiedPush，不看 push.transport；注销后撤销", async () => {
-    const fixture = pushFixture();
+    // 同一份 push-sink 路由，不过 socket：这里验交给谁、怎么处置，不验线上一跳。
+    const sink = await inMemorySink();
+    const fixture = pushFixture({ fetch: sink.fetch });
     try {
       fixture.workspace("w1", "支付服务");
       const keys = generateDeviceKeyPair();
@@ -186,7 +188,7 @@ describe("经推送域", () => {
           transport: "direct",
           publicKey: keys.publicKey,
           locale: "en",
-          unifiedpush: { endpoint: `${sink.base}/up/${topic}?up=1` },
+          unifiedpush: { endpoint: `http://127.0.0.1:8091/up/${topic}?up=1` },
         });
         if (!parsed.ok) throw new Error(parsed.message);
         fixture.push.devices.register(
@@ -195,7 +197,6 @@ describe("经推送域", () => {
         );
       };
       register("upTopicB");
-      sink.records.length = 0;
       expect(
         fixture.push.handleEvent("w1", {
           type: "agent.approval",

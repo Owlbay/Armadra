@@ -27,6 +27,7 @@ import {
 } from "@/ui/item";
 import { Switch } from "@/ui/switch";
 import { nativeBridge, type NativeBridge } from "./native-bridge";
+import { markNativePushRegistered } from "./push-rotation";
 
 /** 挂在站点根下的 worker（`vite.config.ts` 的 `armadra-service-worker` 产出）。 */
 export const SERVICE_WORKER_URL = "/sw.js";
@@ -89,6 +90,9 @@ export async function enablePush(
         method: "PUT",
         ...json({ ...registration, locale }),
       });
+      // 之后令牌换了由 `push-rotation.ts` 自己重新登记（R-54）。
+      markNativePushRegistered();
+      await bridge.ackPushRotation?.().catch(() => undefined);
       return "ok";
     } catch {
       return "failed";
