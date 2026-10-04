@@ -64,9 +64,15 @@ export interface GithubStatusMappingRecord {
   readonly updatedAtMs: number;
 }
 
+/** 一条连接能指向的托管平台（与迁移 0038 的 CHECK 同一组）。 */
+export const REFERENCE_FORGES = ["github", "gitea", "gitlab"] as const;
+export type ReferenceForge = (typeof REFERENCE_FORGES)[number];
+
 export interface GithubReferenceRecord {
   readonly referenceId: string;
   readonly workspaceId: string;
+  /** 写入时缺省 `github`；读出来的总有值。 */
+  readonly forge?: ReferenceForge;
   readonly repository: GithubRepositoryKey;
   readonly kind: number;
   readonly number: number;
@@ -148,6 +154,11 @@ function validateConfig(config: GithubConfig): void {
 }
 
 function validateReference(record: GithubReferenceRecord): void {
+  if (
+    !(REFERENCE_FORGES as readonly string[]).includes(record.forge ?? "github")
+  ) {
+    throw githubError("invalid");
+  }
   if (
     !textValid(record.referenceId, 256, false) ||
     !textValid(record.workspaceId, 256, false)
@@ -402,11 +413,12 @@ export class GithubStore {
         if (expectedRevision !== 0) throw githubError("conflict");
         this.database
           .prepare(
-            "INSERT INTO github_references(reference_id, workspace_id, api_base, owner, name, web_host, kind, number, target_kind, target_id, title, revision, created_at_ms, updated_at_ms) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+            "INSERT INTO github_references(reference_id, workspace_id, forge, api_base, owner, name, web_host, kind, number, target_kind, target_id, title, revision, created_at_ms, updated_at_ms) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
           )
           .run(
             record.referenceId,
             record.workspaceId,
+            record.forge ?? "github",
             record.repository.apiBase,
             record.repository.owner,
             record.repository.name,
@@ -425,6 +437,7 @@ export class GithubStore {
       if (existing.revision !== expectedRevision) throw githubError("conflict");
       if (
         existing.workspaceId !== record.workspaceId ||
+        existing.forge !== (record.forge ?? "github") ||
         existing.repository.apiBase !== record.repository.apiBase ||
         existing.repository.owner !== record.repository.owner ||
         existing.repository.name !== record.repository.name ||
@@ -514,7 +527,7 @@ export class GithubStore {
 }
 
 const REFERENCE_COLUMNS =
-  "SELECT reference_id, workspace_id, api_base, owner, name, web_host, kind, number, target_kind, target_id, title, revision, created_at_ms, updated_at_ms FROM github_references";
+  "SELECT reference_id, workspace_id, forge, api_base, owner, name, web_host, kind, number, target_kind, target_id, title, revision, created_at_ms, updated_at_ms FROM github_references";
 
 function toReferenceRecord(row: Row): GithubReferenceRecord {
   const revision = integer(row, "revision");
@@ -522,6 +535,7 @@ function toReferenceRecord(row: Row): GithubReferenceRecord {
   const record: GithubReferenceRecord = {
     referenceId: text(row, "reference_id"),
     workspaceId: text(row, "workspace_id"),
+    forge: text(row, "forge") as ReferenceForge,
     repository: {
       apiBase: text(row, "api_base"),
       owner: text(row, "owner"),

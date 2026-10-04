@@ -45,7 +45,9 @@ import {
   GITHUB_TARGET_BRANCH,
   GITHUB_TARGET_SESSION,
   GITHUB_TARGET_WORKTREE,
+  REFERENCE_FORGES,
   type GithubReferenceRecord,
+  type ReferenceForge,
 } from "./store";
 
 function referenceKind(value: number): GithubReferenceKind {
@@ -87,6 +89,7 @@ export function referenceMessage(
   return create(GithubExternalReferenceSchema, {
     referenceId: record.referenceId,
     workspaceId: record.workspaceId,
+    forge: record.forge ?? "github",
     repository: create(GithubRepositoryRefSchema, {
       owner: record.repository.owner,
       name: record.repository.name,
@@ -119,6 +122,7 @@ export function referencesFor(
   const result: GithubExternalReference[] = [];
   for (const record of records) {
     if (
+      record.forge !== "github" ||
       BigInt(record.number) !== number ||
       referenceKind(record.kind) !== kind
     ) {
@@ -148,7 +152,19 @@ export function linkReference(
   service.authorize(caller, SCOPE_WRITE);
   const reference = request.reference;
   if (reference === undefined) throw githubError("invalid");
-  const ref = service.repository(reference.repository);
+  const forge = reference.forge === "" ? "github" : reference.forge;
+  if (!(REFERENCE_FORGES as readonly string[]).includes(forge)) {
+    throw githubError("invalid");
+  }
+  let ref: GithubRepositoryRef;
+  if (forge === "github") {
+    ref = service.repository(reference.repository);
+  } else {
+    // API 根与主机来自托管平台域的配置，不来自请求。
+    const check = service.externalRepository;
+    if (check === undefined) throw githubError("invalid");
+    ref = check(forge as "gitea" | "gitlab", reference.repository);
+  }
   const kind = referenceKindValue(reference.kind);
   const target = targetKindValue(reference.targetKind);
   const id = reference.targetId.trim();
@@ -170,8 +186,10 @@ export function linkReference(
         reference.number,
         reference.targetKind,
         id,
+        forge,
       ),
       workspaceId: caller.workspaceId,
+      forge: forge as ReferenceForge,
       repository: key(ref),
       kind,
       number: Number(reference.number),

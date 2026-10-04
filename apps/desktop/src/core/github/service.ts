@@ -65,11 +65,22 @@ export interface GithubServiceOptions {
   readonly now?: () => number;
 }
 
+/**
+ * 非 GitHub 平台仓库的核对：托管平台域（`core/forge/`）装配时接上。答规范化
+ * 后的引用（API 根与主机来自那一域的配置），对不上抛。没接上时这类连接一律拒绝。
+ */
+export type ExternalRepositoryCheck = (
+  forge: "gitea" | "gitlab",
+  ref: GithubRepositoryRef | undefined,
+) => GithubRepositoryRef;
+
 export class GithubService {
   readonly store: GithubStore;
   readonly credentials: CredentialService;
   readonly hostId: string;
   readonly now: () => number;
+  /** 见 {@link ExternalRepositoryCheck}。 */
+  externalRepository: ExternalRepositoryCheck | undefined;
 
   constructor(options: GithubServiceOptions) {
     if (options.hostId === "") throw githubError("invalid");
@@ -268,6 +279,7 @@ export function referenceId(
   number: bigint,
   targetKind: GithubReferenceTargetKind,
   target: string,
+  forge = "github",
 ): string {
   // 分隔符是 NUL 而不是别的可打印字符：目标标识可以合法地含空格或冒号，用那些
   // 分隔会让两组不同的字段拼出同一串材料，于是两条不同的连接得到同一个 id。
@@ -279,6 +291,8 @@ export function referenceId(
     String(number),
     String(targetKind),
     target,
+    // GitHub 的连接不带这一段：迁移 0038 之前存下的 id 照旧算得出来。
+    ...(forge === "github" ? [] : [forge]),
   ].join("\u0000");
   return createHash("sha256")
     .update(material, "utf8")
