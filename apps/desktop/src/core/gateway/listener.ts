@@ -25,6 +25,7 @@ import {
   admit,
   impliedOrigin,
 } from "./admission";
+import { type AcmeTlsResponder, interceptAcmeTls } from "./alpn";
 import {
   type ListenAddress,
   type ListenMode,
@@ -74,6 +75,12 @@ export interface GatewayOptions {
     readonly generated: "selfSigned" | "localCa" | "acme";
   };
   readonly webRoot?: WebRoot | undefined;
+  /**
+   * ACME 管理器（`tls.generated = "acme"` 时给）：用 `tls-alpn-01` 续期时，CA
+   * 的验证握手打到这个监听上，由它出示挑战证书（`./alpn.ts`）。`http-01` 时它
+   * 从不挂挑战，连接照常直接进 TLS。
+   */
+  readonly acme?: AcmeTlsResponder | undefined;
   /** 配对出来的设备的缺省名字。 */
   readonly deviceName: string;
   readonly now?: () => Date;
@@ -131,6 +138,8 @@ export async function openGateway(
   let tls = resolve(hosts);
   const delegate = core.server.createListener();
   const https = createHttpsServer({ cert: tls.cert, key: tls.key });
+  // 先于下面的连接筛选登记：它替换的是 TLS 自己的握手入口。
+  if (options.acme !== undefined) interceptAcmeTls(https, options.acme);
   const sockets = new Set<Socket>();
   const mode = options.mode ?? "all";
   https.on("connection", (socket: Socket) => {

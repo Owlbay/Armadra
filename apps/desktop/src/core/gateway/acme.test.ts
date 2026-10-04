@@ -1,11 +1,14 @@
 import { spawnSync } from "node:child_process";
 import {
   X509Certificate,
+  createHash,
   createPrivateKey,
   generateKeyPairSync,
 } from "node:crypto";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
+import { type AddressInfo, createServer as createNetServer } from "node:net";
+import { connect as tlsConnect } from "node:tls";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
@@ -17,6 +20,7 @@ import {
   type AcmeIssuer,
   AcmeManager,
   type AcmeConfig,
+  type IssueRequest,
   type Timers,
   acmeConfigFrom,
   certificateRequest,
@@ -123,6 +127,44 @@ describe("ACME 配置", () => {
     expect(parsed.names).toEqual(["armadra.example.com"]);
     expect(parsed.profile).toBeUndefined();
     expect(parsed.redirectOrigin).toBe("https://armadra.example.com");
+    expect(parsed.challenge).toBe("http-01");
+    expect(parsed.tlsListen).toBeUndefined();
+  });
+
+  it("ARMADRA_ACME_CHALLENGE=tls-alpn-01：要一个固定的 Gateway 端口", () => {
+    const listen = { host: "0.0.0.0", port: 8443 };
+    const parsed = acmeConfigFrom({
+      ...base,
+      env: { ARMADRA_ACME_CHALLENGE: "tls-alpn-01" },
+      tlsListen: listen,
+    });
+    expect(parsed.challenge).toBe("tls-alpn-01");
+    expect(parsed.tlsListen).toEqual(listen);
+    const code = (input: Parameters<typeof acmeConfigFrom>[0]) => {
+      try {
+        acmeConfigFrom(input);
+        return "ok";
+      } catch (error) {
+        return (error as AcmeError).code;
+      }
+    };
+    expect(
+      code({ ...base, env: { ARMADRA_ACME_CHALLENGE: "tls-alpn-01" } }),
+    ).toBe("acme_misconfigured");
+    expect(
+      code({
+        ...base,
+        env: { ARMADRA_ACME_CHALLENGE: "tls-alpn-01" },
+        tlsListen: { host: "0.0.0.0", port: 0 },
+      }),
+    ).toBe("acme_misconfigured");
+    expect(code({ ...base, env: { ARMADRA_ACME_CHALLENGE: "dns-01" } })).toBe(
+      "acme_misconfigured",
+    );
+    // http-01 时监听地址不进配置。
+    expect(acmeConfigFrom({ ...base, tlsListen: listen }).tlsListen).toBe(
+      undefined,
+    );
   });
 
   it("缺邮箱、缺来源、回环来源、错误取值都是 acme_misconfigured", () => {
@@ -402,6 +444,148 @@ describe("ACME 管理器", () => {
     await manager.close();
   });
 });
+
+describe("tls-alpn-01", () => {
+  it("首签在 Gateway 的地址上临时答验证握手，签完就关；不开 80", async () => {
+    const dataDir = tempDir("armadra-acme-alpn-");
+    const time = clock(new Date("2026-10-01T00:00:00Z"));
+    const issuer = fakeIssuer(dataDir, time.now);
+    const port = await freePort();
+    let seen:
+      | {
+          protocol: string | false | null;
+          san: string | undefined;
+          raw: Buffer;
+        }
+      | undefined;
+    let request: IssueRequest | undefined;
+    let manager: AcmeManager | undefined;
+    const wrapped: AcmeIssuer = async (issued) => {
+      request = issued;
+      // CA 回连时标识已经在表里：键是标识本身，不是令牌。
+      issued.challenges.set("armadra.test", "token-7.thumbprint");
+      expect(manager?.pending()).toBe(true);
+      seen = await handshake(port, "armadra.test");
+      await expect(handshake(port, "other.test")).rejects.toThrow();
+      issued.challenges.delete("armadra.test");
+      return issuer(issued);
+    };
+    manager = new AcmeManager(
+      dataDir,
+      config({
+        challenge: "tls-alpn-01",
+        tlsListen: { host: "127.0.0.1", port },
+      }),
+      { log: silent, issuer: wrapped, now: time.now, timers: time.timers },
+    );
+    await manager.start();
+    try {
+      expect(request?.challenge).toBe("tls-alpn-01");
+      expect(seen?.protocol).toBe("acme-tls/1");
+      expect(seen?.san).toBe("DNS:armadra.test");
+      const digest = createHash("sha256").update("token-7.thumbprint").digest();
+      expect(seen?.raw.includes(digest)).toBe(true);
+      expect(manager.httpPort()).toBeUndefined();
+      expect(manager.pending()).toBe(false);
+      expect(manager.context("armadra.test")).toBeUndefined();
+      expect(manager.status().challenge).toBe("tls-alpn-01");
+      // 临时监听已经关了：端口留给 Gateway。
+      await expect(handshake(port, "armadra.test")).rejects.toThrow(
+        /ECONNREFUSED/,
+      );
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("http-01 时不答 ALPN 挑战", async () => {
+    const dataDir = tempDir("armadra-acme-alpn-off-");
+    const time = clock(new Date("2026-10-01T00:00:00Z"));
+    const manager = new AcmeManager(dataDir, config(), {
+      log: silent,
+      issuer: fakeIssuer(dataDir, time.now),
+      now: time.now,
+      timers: time.timers,
+      listen: false,
+    });
+    await manager.start();
+    expect(manager.pending()).toBe(false);
+    expect(manager.context("armadra.test")).toBeUndefined();
+    expect(manager.status().challenge).toBe("http-01");
+    await manager.close();
+  });
+
+  it("验证端口被占：acme_port_unavailable", async () => {
+    const dataDir = tempDir("armadra-acme-alpn-busy-");
+    const time = clock(new Date("2026-10-01T00:00:00Z"));
+    const blocker = createNetServer();
+    await new Promise<void>((done) => blocker.listen(0, "127.0.0.1", done));
+    const port = (blocker.address() as AddressInfo).port;
+    const manager = new AcmeManager(
+      dataDir,
+      config({
+        challenge: "tls-alpn-01",
+        tlsListen: { host: "127.0.0.1", port },
+      }),
+      {
+        log: silent,
+        issuer: fakeIssuer(dataDir, time.now),
+        now: time.now,
+        timers: time.timers,
+      },
+    );
+    try {
+      await expect(manager.start()).rejects.toMatchObject({
+        code: "acme_port_unavailable",
+      });
+    } finally {
+      await new Promise<void>((done) => blocker.close(() => done()));
+    }
+  });
+});
+
+function freePort(): Promise<number> {
+  return new Promise((done, failed) => {
+    const probe = createNetServer();
+    probe.once("error", failed);
+    probe.listen(0, "127.0.0.1", () => {
+      const port = (probe.address() as AddressInfo).port;
+      probe.close(() => done(port));
+    });
+  });
+}
+
+/** CA 那一侧的验证握手：只报 `acme-tls/1`。 */
+function handshake(
+  port: number,
+  servername: string,
+): Promise<{
+  protocol: string | false | null;
+  san: string | undefined;
+  raw: Buffer;
+}> {
+  return new Promise((done, failed) => {
+    const socket = tlsConnect(
+      {
+        port,
+        host: "127.0.0.1",
+        servername,
+        ALPNProtocols: ["acme-tls/1"],
+        rejectUnauthorized: false,
+      },
+      () => {
+        const cert = socket.getPeerCertificate();
+        socket.destroy();
+        done({
+          protocol: socket.alpnProtocol,
+          san: cert.subjectaltname,
+          raw: cert.raw,
+        });
+      },
+    );
+    socket.on("error", failed);
+  });
+}
 
 function get(
   port: number,

@@ -69,7 +69,7 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 | `core/realtime/`                        | 每块板一个 `Y.Doc`、更新流与快照、物化、awareness 校验、评论                                                            | §16      |
 | `core/gateway/`                         | 对外 TLS 面：本地 CA、指定文件、ACME、准入（Cookie / Bearer）、配对载荷                                                 | §17      |
 | `core/identity/`（加固与 `oauth/`）     | 口令策略、限流锁定、passkey、TOTP 与恢复码、OAuth / OIDC、审计筛选与导出、创建者记录                                    | §18、§23 |
-| `core/push/`                            | 设备登记、发送队列、触发规则、Web Push / APNs·FCM 直连 / 中继三条传输                                                   | §19      |
+| `core/push/`                            | 设备登记与偏好、队列、触发规则、Web Push / 直连 / 中继 / UnifiedPush                                                    | §19、§27 |
 | `core/agent/credentials/`               | 节点凭据：`kind → 变量名` 封闭表、条目、经 hook 面兑换                                                                  | §20      |
 | `core/remote/fleet.ts`、`core/handoff/` | Worker 舰队（版本、能力、健康记录、重新同步）与跨执行主机交接                                                           | §21      |
 | `core/secrets/`                         | 按平台的密钥后端（钥匙串、`safeStorage`、`file-encrypted`）                                                             | —        |
@@ -97,7 +97,8 @@ core 之外的同类新增：`src/hook-client/`（动词工具表，`armadra-hoo
 准入、CSP、页面托管、配对载荷）在 core 的 Gateway 域 `core/gateway/`：服务器壳的
 `serve` 只是「解析参数 → `openGateway`」，桌面壳按设置 `gateway.*` 开关同一个
 Gateway（契约 §17）。证书来源四种：本地 CA、指定文件、自签名，以及 ACME
-（`core/gateway/acme.ts`：`http-01`、证书在 `<数据目录>/tls/acme/`、寿命过三分之二续期并
+（`core/gateway/acme.ts`：`http-01` 或 `tls-alpn-01`（验证握手在 Gateway 的 TLS 监听上按
+ClientHello 的 ALPN 分流，`core/gateway/alpn.ts`）、证书在 `<数据目录>/tls/acme/`、寿命过三分之二续期并
 热换、失败保留旧证书）。容器镜像在 `apps/server/docker/`。用法见
 [开发指南](development.md#无窗口服务器壳)与[服务器部署指南](server-deployment.md)，进度见
 [TypeScript Core 实施进度](../status/typescript-core-status.md) §11。
@@ -320,6 +321,9 @@ ACP 只是同一个 Agent 节点的另一种驱动方式（`core/acp/`，[ACP �
 模型目录来自开会话答的 `configOptions`；这两样按 `AcpClient.features` 判断有无。`pi-acp` 的
 ACP 会话 id 经它的映射文件对回 Pi 的会话文件（`adapters.ts`）。适配器不经画布启动器，节点凭据与
 ama 模型密钥由 core 在起适配器前按启动器同一个兑换取值、只设给适配器进程（契约 §26）。
+SSH 节点的适配器起在执行主机上（`ssh.ts`）：`host.ts` 的 transport 把它换成一条不带 TTY 的
+`ssh … -- <主机> <远端命令>`，stdio 就是 ACP 传输；装没装由 Worker 的 `agents.probe` 答；画布
+工具是执行主机上的 `armadra-hook mcp`，走 Worker 的 Hook 中继；凭据在远端不兑换（契约 §26.5）。
 
 浏览器节点的 Agent 工具是 `armadra-hook browser <动词>`，动词清单只有一份
 （`core/browser/verb-spec.ts`，`--help` 与技能都由它生成）；执行下沉在 core
@@ -410,6 +414,7 @@ SQLite 的迁移只有一个目录——`apps/desktop/src/core/db/migrations/`�
 | `0033_push.sql`               | `push_devices`（挂在身份设备上的推送登记）、`push_outbox`（发送队列，终态留 7 天）                                                                                                                       | `core/push/`，契约 §19                |
 | `0034_workflow.sql`           | `workflow_drafts`、`workflow_templates`、`workflow_runs`、`workflow_run_steps`、`workflow_task_runs`（runner 任务）                                                                                      | `core/workflow/`，契约 §15            |
 | `0035_node_creators.sql`      | `node_creators`（节点的触发者）与触发器 `terminal_sessions_inherit_creator`（之后起的会话行继承创建者）                                                                                                  | `core/identity/creators.ts`，契约 §23 |
+| `0037_push_preferences.sql`   | `push_devices` 加 `kinds_json`（设备要收的推送种类，空串 = 全部）与 `unifiedpush_endpoint`（UnifiedPush 端点）                                                                                           | `core/push/`，契约 §27                |
 | `0037_forge.sql`              | `forge_config`（每仓库 / 每主机的托管平台、API 根与令牌条目名），`github_references` 加 `forge` 列                                                                                                       | `core/forge/`，契约 §29               |
 
 `core/db/open.ts` 在同一 `BEGIN IMMEDIATE` 事务内先检查迁移账本，再执行已知迁移与启动恢复。未知版本、校验和不符、脏记录、损坏账本、无账本的非空 schema 或迁移历史缺口均拒绝启动；失败回滚并关闭连接，不改名、删除或重建原库。账本表与校验和算法沿用最初那套（SHA-384），所以装过旧版本的库照常打得开。既有 SQL 迁移文件保持原字节。
@@ -557,13 +562,13 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   （`shell-core/updates/availability.ts`）。设置页的「检查」经 `updates:check`（不带答复）由壳
   自己问发布索引，`noReleaseSource` 只在壳没有发布源时出现；macOS 的签名状态由
   `codesign --verify --deep --strict` 判定，ad-hoc 签名按 `unknown` 不装。
-- **ACP 的未竟项**：`elicitation/create` 与按模型选择（`session/set_config_option`）core 已就绪
-  （契约 §26），但要 `@armadra/agent` 的 `AcpClient` 自报 `features.elicitation` /
-  `features.configOptions`，0.6.7 还没有，在那之前行为与之前相同；SSH 节点不能切到 ACP
-  （`acp_unsupported`）。
+- **ACP 的未竟项**：`elicitation/create` 与按模型选择（`session/set_config_option`）
+  （契约 §26）随 `@armadra/agent` 0.6.8 的 `AcpClient`（`features.elicitation` /
+  `features.configOptions`）生效；SSH 节点不能切到 ACP（`acp_unsupported`）。
   六家真适配器的端到端探针已备（`agent-e2e` 场景 12，C 档），还没有真跑。
 - **Gateway / 手机**：配对是两分钟票（二维码 / 链接），私网档位上另有 8 位配对码（契约 §24）；设备表没有
-  「平台」「最近访问」；`tls-alpn-01` 未做；推送中继写完不部署，UnifiedPush 未做；真机、商店与
+  「平台」「最近访问」；推送中继写完不部署；UnifiedPush 已接（契约 §27.2），
+  Android App 侧接分发器的原生代码未做；真机、商店与
   真 APNs / FCM 都要用户的账号。
 - **安全审查的低危项**：页面上口令策略拒绝码与 `warn` 档的提示、GitHub / 自动化两面对 Bearer 写仍要 CSRF 等，见[安全审查](../status/security-review-2026-10.md) §3。
 - **外部服务里留到之后的三项**：W-MAIL（SMTP）、W-FORGE（GitLab / Gitea）、W-MIRROR（更新镜像），

@@ -2,9 +2,9 @@ import { coreError } from "../http/errors";
 import type { HandlerResult, RouteMatch, CoreRequest } from "../http/router";
 import type { CoreServer } from "../http/server";
 import { requestIdentity } from "../identity/gate";
-import { parseRegistration } from "./devices";
+import { parseKinds, parseRegistration } from "./devices";
 import type { PushService } from "./service";
-import type { PushDevice } from "./types";
+import { PREFERENCE_KINDS, type PushDevice } from "./types";
 
 /**
  * `/api/push/*`（契约 §19）。
@@ -37,6 +37,10 @@ export function deviceView(
     appVersion: device.appVersion,
     locale: device.locale,
     encrypted: device.transport === "webpush" || device.publicKey !== "",
+    // 契约 §27：要收的种类（没设过就是全部），以及是不是走 UnifiedPush——
+    // 端点本身和令牌一样不出接口。
+    kinds: device.kinds ?? PREFERENCE_KINDS,
+    unifiedpush: device.unifiedpushEndpoint !== "",
     createdAt: new Date(device.createdAtMs).toISOString(),
     current: device.deviceId === currentDeviceId,
   };
@@ -137,6 +141,45 @@ export function installRoutes(server: CoreServer, push: PushService): void {
       return {
         status: 200,
         body: { device: deviceView(device, who.deviceId) },
+      };
+    }),
+  );
+
+  router.handle(
+    "PATCH",
+    PUSH_ROUTES.device,
+    guarded((who, match, request) => {
+      const deviceId = match.params.deviceId ?? "";
+      const device = push.devices.get(deviceId);
+      // 偏好只有设备的主人能改；owner 也不替别人决定他的手机响不响。
+      if (
+        device === undefined ||
+        device.revokedAtMs !== 0 ||
+        device.principalId !== who.principalId
+      ) {
+        return coreError(404, "not_found", "没有这台推送设备");
+      }
+      const body = request.json() as { kinds?: unknown } | null;
+      const kinds =
+        typeof body === "object" && body !== null
+          ? parseKinds(body.kinds)
+          : undefined;
+      if (kinds === undefined) {
+        return coreError(
+          400,
+          "bad_request",
+          `kinds 应是由 ${PREFERENCE_KINDS.join("、")} 组成的数组`,
+        );
+      }
+      // 全选存成「全部」：以后新加的种类缺省也收。
+      push.devices.setKinds(
+        deviceId,
+        kinds.length === PREFERENCE_KINDS.length ? null : kinds,
+      );
+      const updated = push.devices.get(deviceId) as PushDevice;
+      return {
+        status: 200,
+        body: { device: deviceView(updated, who.deviceId) },
       };
     }),
   );

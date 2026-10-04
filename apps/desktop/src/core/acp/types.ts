@@ -31,11 +31,10 @@ export type {
   AcpToolKind,
 } from "@armadra/agent/acp";
 
-/* -------------------- 上游尚未带的两块（契约 §26） -------------------- */
+/* ---------------- elicitation 与会话配置项（契约 §26） ---------------- */
 //
-// `@armadra/agent` 0.6.7 的协议类型里还没有 `elicitation/create` 与会话配置项
-// （`configOptions`、`session/set_config_option`）。上游加上之前先在这里按 ACP
-// 规范写一份最小子集，只给特性检测之后的那条路用；上游带上后改为再导出。
+// 上游 0.6.8 起也导出这两块的类型（可变字段）；core 这里留只读的一份，按特性
+// 检测之后的那条路用，形状与上游一致（`features.test.ts` 对着上游真客户端跑）。
 
 /** `elicitation/create` 表单里的一个字段（扁平的原始类型，规范只允许这几种）。 */
 export type AcpElicitationField =

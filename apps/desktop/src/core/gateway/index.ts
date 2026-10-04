@@ -13,8 +13,6 @@
  *   * 装配在所有域之后：开始对外监听时，每条路由都必须已经登记。
  */
 
-import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
 import type { CoreServer } from "../http/server";
 import type { HandlerResult } from "../http/router";
 import type { ErrorResponse } from "../http/errors";
@@ -59,7 +57,11 @@ import {
   type GatewayFailure,
   statusJson,
 } from "./status";
-import { type WebRoot, openWebRoot } from "./web-root";
+import {
+  type WebRoot,
+  desktopWebRootCandidates,
+  firstWebRoot,
+} from "./web-root";
 
 export { openGateway, type Gateway } from "./listener";
 
@@ -93,6 +95,8 @@ export async function startAcme(
     readonly email: string;
     readonly publicOrigins: readonly string[];
     readonly env?: NodeJS.ProcessEnv;
+    /** Gateway 的监听地址：`tls-alpn-01` 的验证握手打它。 */
+    readonly tlsListen?: { readonly host: string; readonly port: number };
   },
   options: Omit<AcmeManagerOptions, "log"> = {},
 ): Promise<AcmeManager> {
@@ -101,6 +105,7 @@ export async function startAcme(
       email: input.email,
       publicOrigins: input.publicOrigins,
       env: input.env ?? process.env,
+      ...(input.tlsListen === undefined ? {} : { tlsListen: input.tlsListen }),
     });
     const manager = new AcmeManager(context.dataDir, config, {
       log: context.log,
@@ -371,7 +376,10 @@ export class GatewayDomain {
         privates: privateAddresses(),
         all: interfaceAddresses(),
       };
-    const webRoot = await (this.options.webRoot ?? defaultGatewayWebRoot)();
+    const webRoot = await (
+      this.options.webRoot ??
+      (() => defaultGatewayWebRoot(this.context.platform.resourcesPath))
+    )();
     const publicOrigins =
       config.publicOrigin === "" ? [] : [config.publicOrigin];
     // ACME 先签（或读出手里那张）再监听：签不出来就不开，原因进状态。
@@ -379,7 +387,11 @@ export class GatewayDomain {
       source === "acme"
         ? await startAcme(
             this.context,
-            { email: config.tls.acmeEmail, publicOrigins },
+            {
+              email: config.tls.acmeEmail,
+              publicOrigins,
+              tlsListen: { host: bindHost(mode), port: config.port },
+            },
             this.options.acme,
           )
         : undefined;
@@ -428,6 +440,7 @@ export class GatewayDomain {
               }
             : { generated: "localCa" },
       webRoot,
+      acme,
       deviceName: DEVICE_NAME,
     });
   }
@@ -473,40 +486,21 @@ function listenErrorCode(error: unknown): string {
 }
 
 /**
- * 桌面壳的页面产物：`ARMADRA_GATEWAY_WEB_ROOT`，或打包后 core 旁边的
- * `../renderer`（`out/core/main.js` 与 `out/renderer/` 同级），或开发检出里的
- * `apps/web/dist`。都没有就只服务 API——原生 App 的页面在包里，不需要它。
+ * 桌面壳的页面产物，候选顺序见 {@link desktopWebRootCandidates}（环境变量、
+ * 打包版的资源目录、core 入口旁边、开发检出）。都没有就只服务 API——原生 App
+ * 的页面在包里，不需要它。
  */
-export async function defaultGatewayWebRoot(): Promise<WebRoot | undefined> {
-  const candidates = [
-    process.env.ARMADRA_GATEWAY_WEB_ROOT,
-    process.argv[1] === undefined
-      ? undefined
-      : resolve(dirname(process.argv[1]), "../renderer"),
-    checkoutWebRoot(process.cwd()),
-  ];
-  for (const candidate of candidates) {
-    if (candidate === undefined || !existsSync(join(candidate, "index.html"))) {
-      continue;
-    }
-    try {
-      return await openWebRoot(candidate);
-    } catch {
-      /* 下一个。 */
-    }
-  }
-  return undefined;
-}
-
-function checkoutWebRoot(from: string): string | undefined {
-  let directory = resolve(from);
-  for (;;) {
-    const candidate = join(directory, "apps/web/dist");
-    if (existsSync(join(candidate, "index.html"))) return candidate;
-    const parent = dirname(directory);
-    if (parent === directory) return undefined;
-    directory = parent;
-  }
+export function defaultGatewayWebRoot(
+  resourcesPath: string | undefined = process.resourcesPath,
+): Promise<WebRoot | undefined> {
+  return firstWebRoot(
+    desktopWebRootCandidates({
+      env: process.env,
+      resourcesPath,
+      entry: process.argv[1],
+      cwd: process.cwd(),
+    }),
+  );
 }
 
 /**

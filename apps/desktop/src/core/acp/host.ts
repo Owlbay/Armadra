@@ -74,6 +74,24 @@ export interface AcpUpdateMeta {
   readonly replay: boolean;
 }
 
+/**
+ * 适配器进程实际怎么起（契约 §26 的 SSH 小节）：缺省在本机直接起
+ * `program args`；SSH 节点换成 `ssh … -- 目的主机 <远端命令>`，stdio 照旧是
+ * ACP 的传输。`cwd` 是会话的工作目录（`session/new` 用它），答复里的 `cwd`
+ * 只是本机子进程的起点。
+ */
+export type AcpTransport = (command: {
+  readonly program: string;
+  readonly args: readonly string[];
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv | undefined;
+}) => {
+  readonly program: string;
+  readonly args: readonly string[];
+  readonly cwd: string;
+  readonly env?: NodeJS.ProcessEnv;
+};
+
 export interface AcpStartOptions {
   /** 版本缓存的键（`GET /api/agents` 的 `acp.version`）；缺席不记。 */
   readonly agentId?: string;
@@ -92,6 +110,8 @@ export interface AcpStartOptions {
   /** 开会话时交给 Agent 的 MCP 服务器（§5.8）；缺席或空 = 不带。 */
   readonly mcpServers?: readonly AcpMcpServer[];
   readonly initializeTimeoutMs?: number;
+  /** 缺省在本机直接起；见 {@link AcpTransport}。 */
+  readonly transport?: AcpTransport;
   readonly onUpdate?: (
     notification: AcpSessionNotification,
     meta: AcpUpdateMeta,
@@ -189,11 +209,12 @@ export async function startAcp(
   options: AcpStartOptions,
 ): Promise<AcpHostSession> {
   let replaying: string | undefined;
+  const launch = launchOf(options);
   const process_ = AcpProcess.spawn({
-    program: options.program,
-    args: options.args,
-    cwd: options.cwd,
-    ...(options.env === undefined ? {} : { env: options.env }),
+    program: launch.program,
+    args: launch.args,
+    cwd: launch.cwd,
+    ...(launch.env === undefined ? {} : { env: launch.env }),
     clientInfo: { name: "armadra", title: "Armadra", version: "1" },
     onUpdate: (notification) =>
       options.onUpdate?.(notification, {
@@ -331,6 +352,28 @@ export async function startAcp(
   }
 }
 
+/** 实际起的子进程：缺省就是选项里的那一个，给了 transport 由它改写。 */
+function launchOf(
+  options: Pick<
+    AcpStartOptions,
+    "program" | "args" | "cwd" | "env" | "transport"
+  >,
+): {
+  program: string;
+  args: readonly string[];
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+} {
+  const direct = {
+    program: options.program,
+    args: options.args,
+    cwd: options.cwd,
+    ...(options.env === undefined ? {} : { env: options.env }),
+  };
+  if (options.transport === undefined) return direct;
+  return options.transport({ ...direct, env: options.env });
+}
+
 async function negotiate(
   process_: AcpProcess,
   options: Pick<AcpStartOptions, "initializeTimeoutMs">,
@@ -454,13 +497,7 @@ function rpcCode(error: unknown): number | undefined {
 export interface AcpAdapterStart
   extends Omit<
     AcpStartOptions,
-    | "program"
-    | "args"
-    | "modeId"
-    | "requireMode"
-    | "resume"
-    | "agentId"
-    | "mcpServers"
+    "program" | "args" | "modeId" | "requireMode" | "resume" | "agentId"
   > {
   readonly mode?: PermissionMode;
   readonly profilePath?: string;
@@ -483,7 +520,12 @@ export function startAdapter(
   options: AcpAdapterStart,
 ): Promise<AcpHostSession> {
   const ambient = options.env ?? process.env;
-  const resolved = resolveCommand(adapter.program, ambient);
+  // 经 transport 起的程序在别的机器上：本机不解析，由那边的 PATH 找（是否装了
+  // 由调用方先问过那台机器）。
+  const resolved =
+    options.transport === undefined
+      ? resolveCommand(adapter.program, ambient)
+      : adapter.program;
   if (resolved === undefined) {
     return Promise.reject(
       new AcpError(
@@ -504,11 +546,18 @@ export function startAdapter(
   if ("code" in plan) {
     return Promise.reject(new AcpError(plan.code, plan.message));
   }
-  const target = launchTargetOf(resolved, ambient);
-  const env: NodeJS.ProcessEnv = { ...ambient, PATH: agentPath(ambient) };
+  const target =
+    options.transport === undefined
+      ? launchTargetOf(resolved, ambient)
+      : undefined;
+  const env: NodeJS.ProcessEnv =
+    options.transport === undefined
+      ? { ...ambient, PATH: agentPath(ambient) }
+      : ambient;
   const mode = options.mode ?? "default";
-  const { canvasMcp, ...rest } = options;
-  const mcpServers = acpMcpServers(adapter, canvasMcp);
+  const { canvasMcp, mcpServers: given, ...rest } = options;
+  // 给了现成的服务器（SSH 节点：执行主机上的 Hook 客户端）就用它们。
+  const mcpServers = given ?? acpMcpServers(adapter, canvasMcp);
   return startAcp({
     ...rest,
     env,
@@ -540,14 +589,21 @@ export function startAdapter(
 export async function probeAcp(
   options: Pick<
     AcpStartOptions,
-    "agentId" | "program" | "args" | "cwd" | "env" | "initializeTimeoutMs"
+    | "agentId"
+    | "program"
+    | "args"
+    | "cwd"
+    | "env"
+    | "initializeTimeoutMs"
+    | "transport"
   >,
 ): Promise<AcpCapabilities> {
+  const launch = launchOf(options);
   const process_ = AcpProcess.spawn({
-    program: options.program,
-    args: options.args,
-    cwd: options.cwd,
-    ...(options.env === undefined ? {} : { env: options.env }),
+    program: launch.program,
+    args: launch.args,
+    cwd: launch.cwd,
+    ...(launch.env === undefined ? {} : { env: launch.env }),
   });
   try {
     const { capabilities } = await negotiate(process_, options);

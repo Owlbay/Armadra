@@ -7,7 +7,7 @@ Armadra is distributed under the MIT License (see `LICENSE`). It includes the th
 ## Shipped beside the application
 
 - **Electron and Chromium.** The notices Electron and Chromium require to accompany their binaries are shipped as `LICENSE.electron.txt` and `LICENSES.chromium.html` next to the executable (on macOS in `Armadra.app/Contents/Resources/`).
-- **ama (`@armadra/agent` 0.6.7).** Its own license and third-party notices are shipped in `resources/agent/` as `LICENSE` and `THIRD_PARTY_NOTICES.md`.
+- **ama (`@armadra/agent` 0.6.8).** Its own license and third-party notices are shipped in `resources/agent/` as `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 
 ## npm packages (499)
 

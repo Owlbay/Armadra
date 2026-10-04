@@ -13,17 +13,21 @@ import { Empty, EmptyHeader, EmptyTitle } from "@/ui/empty";
 import { ScrollArea } from "@/ui/scroll-area";
 import { Skeleton } from "@/ui/skeleton";
 import { acpApi } from "./api";
+import { ElicitationCard } from "./ElicitationCard";
 import { MessageList } from "./MessageList";
 import { PermissionCard } from "./PermissionCard";
 import { PromptBox } from "./PromptBox";
 import {
   EMPTY_SESSION,
+  acpElicitationOf,
   acpPermissionOf,
   useAcpStore,
+  type AcpElicitationView,
   type AcpPermissionView,
 } from "./store";
 
 const NO_PERMISSIONS: readonly AcpPermissionView[] = [];
+const NO_ELICITATIONS: readonly AcpElicitationView[] = [];
 
 type LoadState = "loading" | "ready" | "failed";
 
@@ -136,7 +140,12 @@ function useAcpLog(sessionId: string | null, nodeId: string) {
         return;
       }
       const permission = acpPermissionOf(event.pendingId, event.request);
-      if (permission) store().addPermission(nodeId, permission);
+      if (permission) {
+        store().addPermission(nodeId, permission);
+        return;
+      }
+      const elicitation = acpElicitationOf(event.pendingId, event.request);
+      if (elicitation) store().addElicitation(nodeId, elicitation);
     });
 
     acpApi
@@ -228,9 +237,17 @@ export function SessionView({
   const permissions = useAcpStore(
     (state) => state.permissions[nodeId] ?? NO_PERMISSIONS,
   );
+  const elicitations = useAcpStore(
+    (state) => state.elicitations[nodeId] ?? NO_ELICITATIONS,
+  );
   const rootRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
-  useStickToBottom(rootRef, [view.items, view.streaming, permissions]);
+  useStickToBottom(rootRef, [
+    view.items,
+    view.streaming,
+    permissions,
+    elicitations,
+  ]);
 
   const send = React.useCallback(
     async (text: string) => {
@@ -263,14 +280,49 @@ export function SessionView({
     [sessionId],
   );
 
-  const pinned = permissions.length === 1 ? permissions[0] : undefined;
+  const selectModel = React.useCallback(
+    (modelId: string) => {
+      if (!sessionId) return;
+      const store = useAcpStore.getState();
+      const previous = store.sessions[sessionId]?.models?.currentModelId;
+      store.setModel(sessionId, modelId);
+      acpApi
+        .setModel(sessionId, modelId)
+        .then(() => {
+          // 节点数据的 `agent.model` 由页面写回（契约 §26.2）：下次起会话
+          // 落上同一个模型。与会话 id 一样不是画布编辑，不进撤销栈。
+          const canvas = useCanvasStore.getState();
+          const node = canvas.document?.nodes.find((n) => n.id === nodeId);
+          if (node?.data.kind !== "terminal" || !node.data.agent) return;
+          canvas.updateNodeData(
+            nodeId,
+            { agent: { ...node.data.agent, model: modelId } },
+            { history: "ignore" },
+          );
+        })
+        .catch(() => {
+          if (previous) useAcpStore.getState().setModel(sessionId, previous);
+          toast.error(t("acp.prompt.modelFailed"));
+        });
+    },
+    [sessionId, nodeId, t],
+  );
+
+  // 审批与 elicitation 同一个位置：只有一张时钉在输入框上方，多张时随消息流。
+  const pendingCount = permissions.length + elicitations.length;
+  const pinned =
+    pendingCount === 1 && permissions.length === 1 ? permissions[0] : undefined;
+  const pinnedElicitation =
+    pendingCount === 1 && elicitations.length === 1
+      ? elicitations[0]
+      : undefined;
   const loading =
     session.starting || (sessionId !== null && log.state === "loading");
   const empty =
     !loading &&
     log.state !== "failed" &&
     view.items.length === 0 &&
-    permissions.length === 0;
+    pendingCount === 0;
 
   let body: React.ReactNode;
   if (session.failed) {
@@ -321,11 +373,20 @@ export function SessionView({
           streaming={view.streaming}
           source={sessionId ? { nodeId, sessionId } : undefined}
         />
-        {!pinned &&
+        {pendingCount > 1 &&
           permissions.map((permission) => (
             <PermissionCard
               key={permission.pendingId}
               permission={permission}
+              canAnswer={canAnswer}
+            />
+          ))}
+        {pendingCount > 1 &&
+          elicitations.map((elicitation) => (
+            <ElicitationCard
+              key={elicitation.pendingId}
+              nodeId={nodeId}
+              view={elicitation}
               canAnswer={canAnswer}
             />
           ))}
@@ -375,15 +436,26 @@ export function SessionView({
           className="mx-2 mb-1.5"
         />
       )}
+      {pinnedElicitation && (
+        <ElicitationCard
+          key={pinnedElicitation.pendingId}
+          nodeId={nodeId}
+          view={pinnedElicitation}
+          canAnswer={canAnswer}
+          className="mx-2 mb-1.5"
+        />
+      )}
       <PromptBox
         sessionId={sessionId}
         inputRef={inputRef}
         disabled={!connected || !sessionId || session.failed}
         streaming={view.streaming}
         modes={view.modes}
+        models={view.models}
         onSubmit={send}
         onCancel={cancel}
         onMode={selectMode}
+        onModel={selectModel}
       />
     </div>
   );

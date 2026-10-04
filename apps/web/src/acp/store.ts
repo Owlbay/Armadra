@@ -13,12 +13,17 @@
 import { create } from "zustand";
 import {
   acpContentBlockSchema,
+  acpElicitationRequestSchema,
   acpModeStateSchema,
+  acpModelStateSchema,
   acpPermissionRequestSchema,
   acpPlanEntrySchema,
   acpToolCallSchema,
+  type AcpElicitation,
   type AcpLogResponse,
   type AcpModeState,
+  type AcpModel,
+  type AcpModelState,
   type AcpPendingPermission,
   type AcpPermissionOption,
   type AcpPlanEntry,
@@ -68,6 +73,8 @@ export interface AcpSessionView {
   /** 发出 prompt 到 `acp.turn` 之间。 */
   readonly streaming: boolean;
   readonly modes: AcpModeState | null;
+  /** 契约 §26.2：Agent 给的模型目录；不给选时 `null`。 */
+  readonly models: AcpModelState | null;
   readonly plan: readonly AcpPlanEntry[];
   readonly usage: { readonly used: number; readonly size: number } | null;
   /** 上一回合没有正常结束；重试重发 `lastPrompt`。 */
@@ -82,11 +89,18 @@ export interface AcpPermissionView {
   readonly options: readonly AcpPermissionOption[];
 }
 
+/** 一条挂起的 `elicitation/create`（契约 §26.1）。 */
+export interface AcpElicitationView {
+  readonly pendingId: string;
+  readonly elicitation: AcpElicitation;
+}
+
 export const EMPTY_SESSION: AcpSessionView = {
   items: [],
   turn: 0,
   streaming: false,
   modes: null,
+  models: null,
   plan: [],
   usage: null,
   failed: false,
@@ -219,6 +233,12 @@ export function applyUpdate(
         modes: { ...view.modes, currentModeId: body.currentModeId },
       };
     }
+    case "config_option_update": {
+      // 与 core 同一条规矩：已经有目录时才跟（没有改模型的路就不画 Select）。
+      if (!view.models) return view;
+      const models = modelStateOf(body.configOptions);
+      return models ? { ...view, models } : view;
+    }
     case "usage_update": {
       const usage = usageSchema.safeParse(body);
       return usage.success
@@ -228,6 +248,66 @@ export function applyUpdate(
     default:
       return view;
   }
+}
+
+const configOptionSchema = z.looseObject({
+  id: z.string(),
+  category: z.string().nullish(),
+  currentValue: z.unknown().optional(),
+  options: z.array(z.unknown()),
+});
+
+const configValueSchema = z.looseObject({
+  value: z.string(),
+  name: z.string().optional(),
+  description: z.string().nullish(),
+});
+
+function flattenValues(options: readonly unknown[], out: AcpModel[]): void {
+  for (const option of options) {
+    const group = (option as { options?: unknown } | null)?.options;
+    if (Array.isArray(group)) {
+      flattenValues(group, out);
+      continue;
+    }
+    const value = configValueSchema.safeParse(option);
+    if (!value.success || out.some((m) => m.modelId === value.data.value))
+      continue;
+    out.push({
+      modelId: value.data.value,
+      name: value.data.name ?? value.data.value,
+      ...(value.data.description
+        ? { description: value.data.description }
+        : {}),
+    });
+  }
+}
+
+/**
+ * `config_option_update` 的配置项 → 模型目录（与 `core/acp/models.ts` 同一个
+ * 认法：`category: "model"`，没有分类时 id 为 `model`；分组摊平）。
+ */
+export function modelStateOf(configOptions: unknown): AcpModelState | null {
+  const list = z.array(z.unknown()).safeParse(configOptions);
+  if (!list.success) return null;
+  const options = list.data.flatMap((item) => {
+    const parsed = configOptionSchema.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  });
+  const option =
+    options.find((item) => item.category === "model") ??
+    options.find((item) => item.category == null && item.id === "model");
+  if (!option) return null;
+  const models: AcpModel[] = [];
+  flattenValues(option.options, models);
+  const first = models[0];
+  if (!first) return null;
+  const current =
+    typeof option.currentValue === "string" &&
+    models.some((m) => m.modelId === option.currentValue)
+      ? option.currentValue
+      : first.modelId;
+  return { currentModelId: current, availableModels: models };
 }
 
 /** 页面发出一条 prompt：先画上，回合开始。 */
@@ -328,11 +408,29 @@ export function acpPermissionOf(
   return null;
 }
 
+/** `agent.approval` 里的 elicitation（形状同上）；不是就回 `null`。 */
+export function acpElicitationOf(
+  pendingId: string,
+  request: unknown,
+): AcpElicitationView | null {
+  const record = request as { request?: unknown } | null;
+  for (const candidate of [record?.request, request]) {
+    const parsed = acpElicitationRequestSchema.safeParse(candidate);
+    if (parsed.success)
+      return { pendingId, elicitation: parsed.data.elicitation };
+  }
+  return null;
+}
+
 /* --------------------------------- store --------------------------------- */
 
 interface AcpStoreState {
   readonly sessions: Readonly<Record<string, AcpSessionView>>;
   readonly permissions: Readonly<Record<string, readonly AcpPermissionView[]>>;
+  /** 挂起的 elicitation，按 nodeId 存（与审批同理）。 */
+  readonly elicitations: Readonly<
+    Record<string, readonly AcpElicitationView[]>
+  >;
   hydrate: (sessionId: string, nodeId: string, log: AcpLogResponse) => void;
   update: (sessionId: string, update: AcpSessionUpdate) => void;
   begin: (sessionId: string, text: string) => void;
@@ -342,7 +440,10 @@ interface AcpStoreState {
     event: Pick<AcpTurnEvent, "stopReason" | "error">,
   ) => void;
   setMode: (sessionId: string, modeId: string) => void;
+  setModel: (sessionId: string, modelId: string) => void;
   addPermission: (nodeId: string, permission: AcpPermissionView) => void;
+  addElicitation: (nodeId: string, elicitation: AcpElicitationView) => void;
+  /** 审批与 elicitation 共用一个 pendingId 空间：两边一起收。 */
   resolvePermission: (pendingId: string) => void;
   reset: () => void;
 }
@@ -356,16 +457,36 @@ function patchSession(
   return { sessions: { ...state.sessions, [sessionId]: next(view) } };
 }
 
+function withoutPending<T extends { readonly pendingId: string }>(
+  map: Readonly<Record<string, readonly T[]>>,
+  pendingId: string,
+): Record<string, readonly T[]> {
+  const out: Record<string, readonly T[]> = {};
+  for (const [nodeId, list] of Object.entries(map)) {
+    const kept = list.filter((item) => item.pendingId !== pendingId);
+    if (kept.length > 0) out[nodeId] = kept;
+  }
+  return out;
+}
+
 export const useAcpStore = create<AcpStoreState>((set) => ({
   sessions: {},
   permissions: {},
+  elicitations: {},
   hydrate: (sessionId, nodeId, log) =>
     set((state) => {
       const previous = state.sessions[sessionId] ?? EMPTY_SESSION;
       const modes = acpModeStateSchema.safeParse(log.modes);
+      const models = acpModelStateSchema.safeParse(log.models);
       const view: AcpSessionView = {
         ...fromLog(log.entries, previous),
         modes: modes.success ? modes.data : previous.modes,
+        // `null` 是「不给选」，照样记下；字段不在（旧 core）时保留之前的。
+        models: models.success
+          ? models.data
+          : log.models === null
+            ? null
+            : previous.models,
         endOffset: log.endOffset,
       };
       const pending = (log.pending ?? []).map((item: AcpPendingPermission) => ({
@@ -373,12 +494,20 @@ export const useAcpStore = create<AcpStoreState>((set) => ({
         toolCall: item.toolCall,
         options: item.options,
       }));
+      const elicitations = (log.elicitations ?? []).map((item) => ({
+        pendingId: item.pendingId,
+        elicitation: item.elicitation,
+      }));
       return {
         sessions: { ...state.sessions, [sessionId]: view },
         permissions:
           log.pending === undefined
             ? state.permissions
             : { ...state.permissions, [nodeId]: pending },
+        elicitations:
+          log.elicitations === undefined
+            ? state.elicitations
+            : { ...state.elicitations, [nodeId]: elicitations },
       };
     }),
   update: (sessionId, update) =>
@@ -394,9 +523,12 @@ export const useAcpStore = create<AcpStoreState>((set) => ({
       // 回合结束时挂起的审批都已由 core 回了 `cancelled`（ACP 设计 §5.5）。
       const permissions = { ...state.permissions };
       delete permissions[nodeId];
+      const elicitations = { ...state.elicitations };
+      delete elicitations[nodeId];
       return {
         ...patchSession(state, sessionId, (view) => endTurn(view, event)),
         permissions,
+        elicitations,
       };
     }),
   setMode: (sessionId, modeId) =>
@@ -404,6 +536,14 @@ export const useAcpStore = create<AcpStoreState>((set) => ({
       patchSession(state, sessionId, (view) =>
         view.modes
           ? { ...view, modes: { ...view.modes, currentModeId: modeId } }
+          : view,
+      ),
+    ),
+  setModel: (sessionId, modelId) =>
+    set((state) =>
+      patchSession(state, sessionId, (view) =>
+        view.models
+          ? { ...view, models: { ...view.models, currentModelId: modelId } }
           : view,
       ),
     ),
@@ -416,14 +556,22 @@ export const useAcpStore = create<AcpStoreState>((set) => ({
         permissions: { ...state.permissions, [nodeId]: [...list, permission] },
       };
     }),
-  resolvePermission: (pendingId) =>
+  addElicitation: (nodeId, elicitation) =>
     set((state) => {
-      const permissions: Record<string, readonly AcpPermissionView[]> = {};
-      for (const [nodeId, list] of Object.entries(state.permissions)) {
-        const kept = list.filter((item) => item.pendingId !== pendingId);
-        if (kept.length > 0) permissions[nodeId] = kept;
-      }
-      return { permissions };
+      const list = (state.elicitations[nodeId] ?? []).filter(
+        (item) => item.pendingId !== elicitation.pendingId,
+      );
+      return {
+        elicitations: {
+          ...state.elicitations,
+          [nodeId]: [...list, elicitation],
+        },
+      };
     }),
-  reset: () => set({ sessions: {}, permissions: {} }),
+  resolvePermission: (pendingId) =>
+    set((state) => ({
+      permissions: withoutPending(state.permissions, pendingId),
+      elicitations: withoutPending(state.elicitations, pendingId),
+    })),
+  reset: () => set({ sessions: {}, permissions: {}, elicitations: {} }),
 }));

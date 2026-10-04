@@ -46,6 +46,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { request as httpsRequest } from "node:https";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -540,6 +541,7 @@ async function main() {
   report.health = await api("/api/health").catch((error) => error.message);
   const backend = await api("/api/terminals/backend");
   note("终端后端", backend);
+  await gatewayServesPage(api);
 
   // 视频夹具：仓库里的一段 H.264（`fixtures/clip-h264.mp4`，320×240、约 1.6
   // 秒，Chrome 的 MediaRecorder 录的 canvas 动画）。以前在打包版的窗口里现录：
@@ -990,6 +992,82 @@ async function main() {
     report.operator,
   );
   page.close();
+}
+
+/**
+ * 打包版里 Gateway 托管的页面（G5-16 / R-19）：在回环档开 Gateway，从
+ * `GET /ca.crt` 取本地 CA，只信它去取首页，要 200 且是 `apps/web` 的产物——
+ * 产物在 asar 里（或资源目录下），core 以 `ELECTRON_RUN_AS_NODE` 跑也要读得到。
+ * 取完关掉。
+ */
+async function gatewayServesPage(api) {
+  const opened = await api("/api/gateway", {
+    method: "PUT",
+    body: JSON.stringify({ enabled: true, listen: "loopback", port: 0 }),
+  }).catch((error) => ({ error: error.message }));
+  const status =
+    opened?.running === true
+      ? opened
+      : await waitSoft(
+          async () => {
+            const current = await api("/api/gateway");
+            return current.running === true ? current : undefined;
+          },
+          { timeout: 30_000 },
+        );
+  if (status?.origin == null) {
+    check("打包版开得起 Gateway（回环档）", false, opened);
+    return;
+  }
+  try {
+    const anchor = await httpsText(new URL("/ca.crt", status.origin), {
+      rejectUnauthorized: false,
+    });
+    const page = await httpsText(new URL("/", status.origin), {
+      ca: anchor.body,
+    });
+    report.gateway = {
+      origin: status.origin,
+      status: page.status,
+      contentType: page.headers["content-type"],
+      bytes: page.body.length,
+    };
+    check(
+      "打包版的 Gateway 经它取首页 200，是 apps/web 的产物（只信本地 CA）",
+      page.status === 200 && page.body.includes('<div id="root">'),
+      report.gateway,
+    );
+  } catch (error) {
+    check("打包版的 Gateway 经它取首页 200", false, error.message);
+  } finally {
+    await api("/api/gateway", {
+      method: "PUT",
+      body: JSON.stringify({ enabled: false }),
+    }).catch(() => undefined);
+  }
+}
+
+function httpsText(url, options) {
+  return new Promise((done, failed) => {
+    const request = httpsRequest(
+      url,
+      { ...options, agent: false, timeout: 15_000 },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () =>
+          done({
+            status: response.statusCode ?? 0,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+          }),
+        );
+      },
+    );
+    request.on("timeout", () => request.destroy(new Error("timeout")));
+    request.on("error", failed);
+    request.end();
+  });
 }
 
 try {

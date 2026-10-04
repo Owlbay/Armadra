@@ -1025,18 +1025,58 @@
 
 **没做 / 需要上游**
 
-- `@armadra/agent` 0.6.7 的 `AcpClient` 没有 `features.elicitation` / `features.configOptions`，这两样在真机上要等上游发版、升依赖之后才生效。上游要加：`onElicitation`、`clientCapabilities.elicitation`、`setConfigOption` 与 `configOptions` 的类型，假 Agent 也要会发 elicitation、会答 `configOptions`。升依赖之后删掉 `acp/feature-fixture.ts`，改用上游的假 Agent。
+- 上游已补：`@armadra/agent` 0.6.8 的 `AcpClient` 带 `features.elicitation` / `features.configOptions`（`onElicitation`、`clientCapabilities.elicitation`、`setConfigOption`、`configOptions` 类型），假 Agent 会发 elicitation（`[elicit]`）、`--config-options` 时答 `configOptions`。依赖已升到 0.6.8，`acp/feature-fixture.ts` 已删，`features.test` 与凭据用例改用上游的真客户端与假 Agent。
 - `~/.pi/acp/sessions.json` 的路径与形状没有和真 `pi-acp` 核对过（B 档真跑）。
 - ama 密钥与终端驱动一样，不要求 `credential:use`；L10（按节点只发用得到的那一家）没有做。
 - 页面（`ElicitationCard`、模型 Select）归 G5-05，SSH 归 G5-06。
 
 ## G5-05 ACP 页面补充（R-26 页面、R-27 页面、R-31）
 
-待填（第 2 组）。
+**做了什么**（按契约 §26.1 / §26.2 的页面一侧，接口形状未改）
+
+- `ElicitationCard`（`apps/web/src/acp/ElicitationCard.tsx`）：与审批卡同一位置、同一外观——只有一张挂起项时钉在输入框上方，多张时随消息流。按 `requestedSchema` 画 Field：字符串 `Input`（`format` 映射 email / url / date）、枚举 `Select`（`enumNames` 作标签）、`number` / `integer` 数字输入、布尔 `Switch`；必填与约束在页面先判一遍，不合规时「提交」置灰。提交、拒绝、取消各一键，答复走 `POST /api/approvals/{id}/answer { elicitation }`，不带 `decision`。URL 模式只给链接与「继续」（只放行 http(s)）；core 没存 `requestedSchema` 时只剩拒绝与取消。先收起再发请求（与审批卡相同），答不上把卡放回并提示。没有答复权限的人看到同一张卡，按钮换成「等待接管」。
+- store：每个会话多 `models`；挂起的 elicitation 按 nodeId 存，来源是 `GET …/log` 的 `elicitations` 与 `agent.approval`；`resolvePermission` 同时收两类；回合结束一起清。`config_option_update` 只在已有目录时跟（与 core 同一条规矩，`modelStateOf` 与 `core/acp/models.ts` 同一认法）。
+- `PromptBox`：`models` 非空时多一个模型 `Select`；≤ 767（含手机焦点页，焦点页挂的是同一个会话视图）模式与模型收进一个「⋯」`DropdownMenu`（两组单选）。换模型先改本地、`PUT /api/acp/sessions/{id}/model`，成功后把 `agent.model` 写回节点数据（`history: "ignore"`，与会话 id 同理不进撤销栈），失败回退并提示。
+- 展示页 `acp` 分区：模型 Select、窄屏「⋯」、elicitation 表单卡与链接卡。i18n `acp.prompt.{model,more,modelFailed}`、`acp.elicitation.*` 中英同步。
+- `acp-e2e`：第三个节点 C（假 Agent 带 `--config-options`）发 `[elicit]` → 卡片出现、选 `blue` 填 `2` 提交 → Agent 回 `elicit: accept {"color":"blue","count":2}`、审批行 `allow` 且不存内容；有模型目录时换到 Large → `[model]` 答 `model large`、节点数据 `agent.model = large`。上游没有能力时（旧假 Agent 回声或新假 Agent 答 `unsupported`、`models` 为 `null`）记进 `report.skipped`，不算失败。
+
+**实测**（macOS arm64）
+
+- 新用例：`ElicitationCard.test`（内容组装与校验、各控件、提交 / 拒绝 / 取消、答不上放回、URL 模式、无权限）、`PromptBox.test`（模型 Select、窄屏「⋯」、无可选时不画菜单）、`store.test`（目录认法与 `config_option_update`、elicitation 的解析、hydrate、收起与回合结束）、`SessionView.test`（事件流里的 elicitation 答复、重载恢复、换模型写回、失败回退）。
+- 真浏览器：`acp-e2e` 在上游 0.6.7 上 elicitation 与模型两步记为跳过，其余照常；另用一份只在本机的 core 拷贝（`AcpClient` 按 `acp/feature-fixture.ts` 的形状补出两个能力）加 fixture 的假 Agent 跑通整轮（截图 `10-elicitation-card`、`11-elicitation-answered`、`12-model-switched`）。`design-showcase --only=acp` 六张、两主题对比度通过、无控制台错误；390 宽下「⋯」菜单展开截图核对过两组单选。
+- `acp-e2e` 第 5 步「切到终端视图：PTY 起来并敲了 CLI 的恢复行」在本机 main 上同样失败（不是本包引入）。
+
+**偏离**
+
+- 计划写「`PromptBox` 加模型 Select」；模型只有一个时也画（让人看得见在用哪个），模式仍是多于一个才画。
+- `PromptBox` 多一个可选 `compact` 属性，只给展示页画窄屏那一版。
+
+**没做 / 需要上游**
+
+- 真机生效要等 `@armadra/agent` 发出带 `features.elicitation` / `features.configOptions` 的版本并升依赖；届时 `acp-e2e` 的那一轮自动从跳过变成真跑（上游假 Agent 的 `[elicit]`、`[model]`、`--config-options` 与本轮一致）。
 
 ## G5-06 SSH 节点的 ACP（R-30）
 
-待填（第 2 组）。
+**做了什么**
+
+- `core/acp/ssh.ts`（新）：节点数据带 `ssh.hostId` 时，ACP 适配器起在执行主机上。本机起的是不带 TTY 的 `ssh … -- <目的主机> <远端命令>`（`terminal/ssh/argv.ts::streamArgv`），askpass、主机密钥文件与 `ARMADRA_REMOTE_WORKER_LAUNCHER` 都和 Worker 共用一套；这条 `ssh` 的 stdio 就是 ACP 传输。远端命令把每个词放进单引号，值里有 `'`、`\`、`!` 或控制字符时拒绝。命令先 `cd` 进节点的 `cwd`（没有就用工作空间根），进不去就失败。
+- `host.ts` 只多了 `transport` 参数（`AcpTransport`），以及可以直接传入的 `mcpServers`。协商、开会话、接回、模式与模型都没改。
+- Worker 新增 `agents.probe { programs }` → `{ platform, programs }`（`remote/node-probe.ts::probeAgents`，登记在 `operations.ts`）。它只读，能力位复用 `remote.integration.v1`。程序没装答 `acp_not_installed`。`acp_unsupported` 只剩四种情况：主机没登记、没配 Worker、Worker 过旧（对这个动作答 501）、主机不是 POSIX。
+- 画布工具：新增 `RemoteIntegration.canvas`，和远端画布注入走同一套准备和同一条中继 socket，答执行主机上 Hook 客户端的路径，作为 `mcpServers` 里的 `armadra-hook mcp`。
+- 凭据在远端不兑换：节点凭据、ama 密钥都不设，条目名也不带过去。转录一律认本机镜像。
+- `acp/routes.ts` 去掉了「SSH 节点不能切 ACP」的拒绝。起会话、接回、切换都按节点决定 `ssh`，工作目录不按本机规则解析。切回终端时，下一代经 `ssh` 起在同一台主机上：`ReviveOptions` 多了 `sshHostId` 与 `cwd`，敲的是只带程序名的启动行。依赖编排与定时冷启动对 SSH 的 ACP 节点也起适配器（`terminal/install.ts`）。
+- 契约新增 §26.5，§14.2 里那一句改成指向它。
+
+**实测**
+
+- `acp/ssh.test.ts`：11 例，覆盖远端命令的引号与拒绝、`streamArgv`、`agents.probe`、各种错误码，以及用假 ssh 加真 fake ACP Agent 走完整条路由：一轮回复 → 切终端（行上 `sshHostId`）→ 切回 ACP 接回 → 再答一轮。
+- `vitest src/core/{acp,remote,terminal}`：50 个文件，566 例全过。
+- `remote-e2e` 新增 08b 步：远端工作空间里的 SSH 节点以 ACP 驱动，用真 Worker 和假 ssh，答一轮 → 切终端（tmux，第 2 代）→ 切回（`resumed: true`）→ 再答一轮。整个探针全绿。
+
+**没做**
+
+- 远端适配器不带终端启动器的注入 argv / env，也不带 ama 的 profile；ama 在执行主机上本来就不支持。
+- 没有用真 sshd 和真 CLI 实跑（与 remote-e2e 一样，只验证假 ssh 这条传输）。
 
 ## G5-07 协调者 runners：`--cwd` / `--resume` 与 `blocked` 覆盖（R-33、R-34）
 
@@ -1092,7 +1132,27 @@
 
 ## G5-10 推送补充（R-50、R-51、R-52）
 
-待填（第 1 组）。
+**做了什么**
+
+- 调度事件（R-50，契约 §27.3）：`core/schedule/engine.ts` 在提交之后经 `EngineOptions.publish` 发 `schedule.fired`（槽位物化成一次要投递的运行）、`schedule.failed`（执行方失败、目标离线 / 不支持 / 换代跳过、等到 TTL 过期；按策略跳过与取消不发，判定在 `schedule/events.ts`）、`schedule.attention`（「需要处理」标记抬起的那一下）。只带 `planId` / `runId` / `nodeId` / `reasonCode`。
+- 资源阈值（R-50，契约 §27.4）：判定从页面搬进 core（`core/resources/thresholds.ts`）。阈值是新设置 `resources.memoryWarnBytes`（缺省 2 GiB，夹在 128 MiB – 128 GiB），设置页「终端 → 内存阈值」同时写它与本机偏好。页面开着时随采样循环判（`ResourceService` 的 `onSample`）；没人看着而库里有有效推送设备时每 30 秒自己采一轮（`ThresholdWatch`）。按 `sessionId:generation` 去重，回落到九成以下才重新上膛。
+- 设备偏好（R-51，契约 §27.1）：迁移 `0037_push_preferences.sql` 给 `push_devices` 加 `kinds_json` 与 `unifiedpush_endpoint`。`PATCH /api/push/devices/{deviceId} { kinds }` 只改自己的设备；入队前按设备过滤，`test` 恒收；全选存成「全部」；重新登记保留偏好。设备视图多 `kinds`、`unifiedpush`。手机推送提示「开启」之后换成每个种类一个开关（`mobile/PushPermission.tsx`，文案在 `i18n/push.ts`）。
+- UnifiedPush（R-52，契约 §27.2）：Android 登记可带 `unifiedpush: { endpoint }`（此时可以不给 `token`，必须给 `publicKey`）。有端点的设备一律走 `push/transport-unifiedpush.ts`，不看 `push.transport`：POST 对设备公钥封好的信封，不跟随重定向，404 / 410 撤销设备，429 / 5xx 重试。出站表登记为 `unifiedPush`（用户给的地址）。
+- 推送规则：`schedule.*` 只认上面三种、按 `planId` 认，`tag` 统一为 `schedule:<planId>`，正文分「到点了 / 没有跑成 / 需要处理」；`resources.threshold` 的 `tag` 是 `resources:<metric>:<nodeId 或 sessionId>`，正文不写数字。
+- dev-stack：`push-sink` 加 `/up/<topic>`（UnifiedPush 替身：`gone` 前缀答 404、超 4096 字节答 413）。计划里写的「push-sink 已有假 UnifiedPush 端点」与源码不符，本包补上了。
+- 探针 `push-e2e` 加三段：UnifiedPush 走 push-sink；dev-stack 的 `ntfy` 在时对真 ntfy 走一遍（不在则记跳过）；设备偏好只留审批后同一轮只到审批，恢复全部后两条都到。
+
+**接口**：`PATCH /api/push/devices/{deviceId}`；设备视图的 `kinds`、`unifiedpush`；登记体的 `unifiedpush.endpoint`；共享层 `PUSH_PREFERENCE_KINDS`、`pushDevicePreferencesSchema`；设置 `resources.memoryWarnBytes`；`EngineOptions.publish`；`ResourceServiceOptions.onSample`、`ResourceService.watching()`。
+
+**实测**（macOS arm64）
+
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 4260 过 / 46 跳过、2 失败，脚本 64 过、1 失败；web 3241 过；shared 320 过；server 79 过 / 2 跳过；mobile 9 过；push-relay 9 过。3 条失败都是迁移连续性断言（`migrations.test`、`unified.test`、`after-pack.test`），以及 `pnpm repo:check` 的「迁移编号不连续」，原因是 0036 由 G5-02 占用、还没合入。G5-02 合入之后这些检查应当都过。
+- `pnpm typecheck`、`pnpm format:check`、`ci:workflows`、`release:check`、`notices:check` 通过。
+- `node tools/probes/push-e2e.mjs`：用进程内 push-sink 全过；对 `pnpm dev-stack up push-sink ntfy --profile ntfy` 起的 push-sink 与真 ntfy v2.28.0 也全过。ntfy 存下的是信封，设备私钥能解。这两个容器只为这次验证启动，验证后已停掉并删除。
+
+**没做**：Android App 侧接 UnifiedPush 分发器的原生代码（取端点、交给 `pushRegistration()`），归手机原生包；`native-bridge.ts` 只给类型加了可选的 `unifiedpush`。桌面上的系统通知与内存徽标的本机提醒照旧，没有改成读 `resources.threshold` 事件。
+
+**已知限制**：与 Web Push 一样，UnifiedPush 端点允许回环上的 http，供本机测试与 dev-stack 使用。设置页不能逐台改别的设备的偏好，只有手机提示里那组开关，而且只改当前这台。
 
 ## G5-11 实时协同补充（R-44、R-45、R-46）
 
@@ -1185,7 +1245,27 @@
 
 ## G5-16 Gateway 与服务端收尾（R-18、R-19、R-73、R-74、R-75）
 
-待填（第 2 组）。
+**做了什么**
+
+- `tls-alpn-01`（R-18）：`ARMADRA_ACME_CHALLENGE=http-01|tls-alpn-01`，缺省 `http-01`。新模块 `gateway/alpn.ts` 在交给 TLS 之前读出第一条握手记录，从中取 SNI 与 ALPN；ALPN 为 `acme-tls/1`、且 SNI 是正在等的标识时，用 RFC 8737 的挑战证书完成握手后立即关闭。挑战证书由 `tls.ts::acmeChallengeCertificate` 生成：自签名，SAN 只有这一个标识，带关键扩展 `acmeIdentifier`。IP 标识按 RFC 8738 认反向解析名。`acme-tls/1` 配上不在等的名字时直接断开；没有挑战挂着时连接不经检查，直接进 TLS。没用计划里写的 `SNICallback`：实测在 TLS 1.2 下 OpenSSL 先选证书、后选 ALPN，选证书那一步还不知道这是一次验证握手。首签时 Gateway 还没监听，`AcmeManager` 在 Gateway 的监听地址上临时开一个只答验证的监听，签完就关；续期走 Gateway 自己的监听，`openGateway` 多了 `acme` 选项，经 `interceptAcmeTls` 换下 TLS 的握手入口。`tls-alpn-01` 模式下不开 80 端口。端口为 0 时报 `acme_misconfigured`，临时监听开不了时报 `acme_port_unavailable`。`tls.acme` 多了 `challenge` 字段（共享层 schema 为可选）。服务器壳与桌面域都把监听地址传给 `startAcme`。
+- 打包版页面产物（R-19）：候选表挪到 `web-root.ts::desktopWebRootCandidates`，顺序是环境变量 → `<resources>/renderer` → `app.asar.unpacked/out/renderer` → `app.asar/out/renderer` → core 入口旁的 `../renderer` → 检出里的 `apps/web/dist`。core 以 `ELECTRON_RUN_AS_NODE` 运行时，asar 的 `fs` 补丁仍然生效（实测 `realpath`、`lstat`、流读取都正常）。`packaged-smoke` 加了一步：在回环档开 Gateway，从 `/ca.crt` 取本地 CA、只信这一张，取首页。
+- `hibernator.ts::processesUnder` 改用异步 `readProcessTable`，接口返回 `Promise`（R-73）。
+- `linux-x64` 性能基线（R-74）：取自 main `7ec5992f` 那次 nightly 的 `server-perf` 产物，ubuntu-22.04 托管运行器。main 上只有这一次夜间结果，所以录入的是单次数值，不是三次中位数；基线文档补了 §3.1。
+- Caddy 与镜像里的浏览器（R-75）：dev-stack 新增可选 profile `caddy`（`tools/dev-stack/caddy/Caddyfile`，即指南 §3.3 那份配置，改为读环境变量）和 `pebble-va`（真正回连挑战地址的 Pebble）。`server-e2e --proxy=caddy`：服务器壳只听回环，前面放 Caddy 容器，上游 CA 取自 `/ca.crt`，整条多人主线都经代理。新增 B 档条目 `server-caddy-e2e`（linux，用 `--network host`）。镜像加构建参数 `WITH_CHROMIUM=1`：装 Debian 的 Chromium 和 CJK 字体，`/etc/chromium.d/armadra` 加 `--no-sandbox --disable-dev-shm-usage`，入口脚本缺省设置 `ARMADRA_BROWSER_PATH`。`server-e2e` 容器模式遇到带 Chromium 的镜像时照走浏览器节点一步（探针页放在容器自己的回环上）；新增 `--with-chromium` 构建参数。部署指南补了 §2.3。
+
+**实测**（macOS arm64，OrbStack）
+
+- 单测：`alpn.test`（真客户端的 ClientHello 解析、截断与非 TLS、反向解析名、挑战证书的 SAN 与关键扩展、在 HTTPS 服务上 TLS 1.2 / 1.3 都拿到挑战证书并协商出 `acme-tls/1`、挑战挂着时页面照常、不在等的名字被断开、没挂挑战时协商不出）；`acme.test`（配置、首签临时监听签完即关且不开 80、`http-01` 不答 ALPN、端口被占）；`listener.acme.test`（真 core 加 `openGateway`）；`web-root.test`（候选顺序）；`hibernator.test`（真进程树）；共享层 `api-gateway.test`。
+- 真 Pebble（`pebble-va`，`PEBBLE_VA_ALWAYS_VALID=0`，只绑 127.0.0.1）：`tls-alpn-01` 首签走临时监听，续期走 HTTPS 监听上的 `interceptAcmeTls`，Pebble 的三路验证都标 VALID；对照组在同一端口上放普通 TLS 监听，订单 INVALID，结果 `acme_failed`。`http-01` 也真验证了一次。
+- `node tools/probes/packaged-smoke.mjs --no-real-cli`（本机 `dist` 出的 mac-arm64）：全部 ok，其中 Gateway 首页 200，`text/html`，4576 字节。
+- `node tools/probes/server-e2e.mjs --proxy=caddy`：两次全过，包括浏览器节点。`--container=<WITH_CHROMIUM 镜像>`：全过，浏览器节点看到画面流。另外在容器里确认：不加 `--no-sandbox` 时 Chromium 报 No usable sandbox；加装 `chromium-sandbox`（SUID）也因缺 `CAP_SYS_ADMIN` 起不来。
+
+**没做 / 限制**
+
+- 走 Linux 宿主回环的两条路（`pebble-va`、`server-caddy-e2e` 的 `--network host`）本机没跑：`pebble-va` 在 Linux 上整组 skipped，`server-caddy-e2e` 要等 nightly 才有结果。
+- `linux-x64` 基线是单次数值；以后夜间结果多了，按三次中位数重录。
+- 带 Chromium 的镜像没有加 CI 条目（多构建一次约 10 分钟，夜间只构建缺省镜像），也不发布。
+- 桌面 Gateway 用 `tls-alpn-01` 时要先固定端口（设置里 `gateway.port` 不能是 0）。
 
 ## G5-17 启动兼容退役与更新页接线（R-59、R-60、R-61）
 

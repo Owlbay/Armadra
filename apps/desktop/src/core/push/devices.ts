@@ -3,7 +3,9 @@ import { validP256PublicKey, validX25519PublicKey, fromB64url } from "./crypto";
 import {
   DEVICE_TRANSPORTS,
   type DeviceTransport,
+  PREFERENCE_KINDS,
   PUSH_PLATFORMS,
+  type PreferenceKind,
   type PushDevice,
   type PushPlatform,
 } from "./types";
@@ -27,6 +29,8 @@ export interface Registration {
   readonly authSecret: string;
   readonly appVersion: string;
   readonly locale: string;
+  /** UnifiedPush 端点（契约 §27.2）；空串 = 没有。 */
+  readonly unifiedpushEndpoint: string;
 }
 
 export type ParsedRegistration =
@@ -59,6 +63,45 @@ function validEndpoint(endpoint: string): boolean {
     );
   } catch {
     return false;
+  }
+}
+
+/**
+ * UnifiedPush 端点由用户自己的分发器给出（ntfy 等），和 Web Push 端点同一条
+ * 规矩：https，回环上的 http 只给本机测试。不带凭据、不带片段。
+ */
+function validUnifiedPushEndpoint(endpoint: string): boolean {
+  if (!validEndpoint(endpoint)) return false;
+  return new URL(endpoint).hash === "";
+}
+
+/** `PATCH …/devices/{id}` 的 `kinds` → 去重、按固定顺序；不认识的种类拒收。 */
+export function parseKinds(
+  value: unknown,
+): readonly PreferenceKind[] | undefined {
+  if (!Array.isArray(value) || value.length > PREFERENCE_KINDS.length * 2) {
+    return undefined;
+  }
+  const wanted = new Set<string>();
+  for (const item of value) {
+    if (
+      typeof item !== "string" ||
+      !(PREFERENCE_KINDS as readonly string[]).includes(item)
+    ) {
+      return undefined;
+    }
+    wanted.add(item);
+  }
+  return PREFERENCE_KINDS.filter((kind) => wanted.has(kind));
+}
+
+/** 库里的 `kinds_json` → 种类表；空串或坏值 = 全部（`null`）。 */
+function storedKinds(raw: string): readonly PreferenceKind[] | null {
+  if (raw === "") return null;
+  try {
+    return parseKinds(JSON.parse(raw)) ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -125,11 +168,36 @@ export function parseRegistration(body: unknown): ParsedRegistration {
         authSecret: auth,
         appVersion,
         locale,
+        unifiedpushEndpoint: "",
       },
     };
   }
 
-  const token = input.token;
+  // UnifiedPush（契约 §27.2）：Android App 从用户自己的分发器拿到的端点。给了
+  // 它，`token` 可以不给（没有 Google 服务的手机没有 FCM 令牌）。
+  let unifiedpushEndpoint = "";
+  if (input.unifiedpush !== undefined && input.unifiedpush !== null) {
+    const endpoint = (input.unifiedpush as { endpoint?: unknown }).endpoint;
+    if (platform !== "android") {
+      return fail("unifiedpush 只给 Android");
+    }
+    if (
+      typeof endpoint !== "string" ||
+      endpoint.length > 4096 ||
+      !validUnifiedPushEndpoint(endpoint)
+    ) {
+      return fail("unifiedpush.endpoint 应是 https 地址");
+    }
+    unifiedpushEndpoint = endpoint;
+  }
+
+  const token =
+    unifiedpushEndpoint !== "" &&
+    (input.token === undefined || input.token === null || input.token === "")
+      ? // 只有 UnifiedPush 的设备：行上的令牌列要非空，记端点本身——它不会被
+        // 当成平台令牌用，`senderFor` 先看端点。
+        unifiedpushEndpoint
+      : input.token;
   if (
     typeof token !== "string" ||
     token.length === 0 ||
@@ -148,6 +216,10 @@ export function parseRegistration(body: unknown): ParsedRegistration {
     // 经中继的载荷必须端到端加密：没有公钥就没有办法不让中继看到正文。
     return fail("经中继推送必须提供设备公钥");
   }
+  if (unifiedpushEndpoint !== "" && publicKey === "") {
+    // 分发器是用户自己的，但它仍是一台第三方服务器：一样只给它密文。
+    return fail("UnifiedPush 必须提供设备公钥");
+  }
   return {
     ok: true,
     registration: {
@@ -158,6 +230,7 @@ export function parseRegistration(body: unknown): ParsedRegistration {
       authSecret: "",
       appVersion,
       locale,
+      unifiedpushEndpoint,
     },
   };
 }
@@ -172,6 +245,8 @@ interface DeviceRow {
   readonly auth_secret: string;
   readonly app_version: string;
   readonly locale: string;
+  readonly kinds_json: string;
+  readonly unifiedpush_endpoint: string;
   readonly created_at_ms: number;
   readonly revoked_at_ms: number;
 }
@@ -179,7 +254,7 @@ interface DeviceRow {
 const SELECT = `
   SELECT pd.device_id, d.principal_id, pd.platform, pd.transport, pd.token,
          pd.public_key, pd.auth_secret, pd.app_version, pd.locale,
-         pd.created_at_ms, pd.revoked_at_ms
+         pd.kinds_json, pd.unifiedpush_endpoint, pd.created_at_ms, pd.revoked_at_ms
     FROM push_devices pd
     JOIN identity_devices d ON d.device_id = pd.device_id`;
 
@@ -194,6 +269,8 @@ function device(row: DeviceRow): PushDevice {
     authSecret: row.auth_secret,
     appVersion: row.app_version,
     locale: row.locale,
+    kinds: storedKinds(row.kinds_json),
+    unifiedpushEndpoint: row.unifiedpush_endpoint,
     createdAtMs: Number(row.created_at_ms),
     revokedAtMs: Number(row.revoked_at_ms),
   };
@@ -223,19 +300,25 @@ export class DeviceStore {
     return row?.ok === 1;
   }
 
-  /** 覆盖式登记：同一台设备重新订阅就是换掉这一行，撤销状态一并清掉。 */
+  /**
+   * 覆盖式登记：同一台设备重新订阅就是换掉这一行，撤销状态一并清掉。种类偏好
+   * **保留**——App 每次启动都会重新登记，那不是人改了主意。
+   */
   register(deviceId: string, registration: Registration): PushDevice {
     const now = this.clock();
     this.database
       .prepare(
         `INSERT INTO push_devices (device_id, platform, transport, token, public_key,
-           auth_secret, app_version, locale, created_at_ms, revoked_at_ms, revoked_reason)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '')
+           auth_secret, app_version, locale, unifiedpush_endpoint, created_at_ms,
+           revoked_at_ms, revoked_reason)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '')
          ON CONFLICT(device_id) DO UPDATE SET
            platform = excluded.platform, transport = excluded.transport,
            token = excluded.token, public_key = excluded.public_key,
            auth_secret = excluded.auth_secret, app_version = excluded.app_version,
-           locale = excluded.locale, created_at_ms = excluded.created_at_ms,
+           locale = excluded.locale,
+           unifiedpush_endpoint = excluded.unifiedpush_endpoint,
+           created_at_ms = excluded.created_at_ms,
            revoked_at_ms = 0, revoked_reason = ''`,
       )
       .run(
@@ -247,6 +330,7 @@ export class DeviceStore {
         registration.authSecret,
         registration.appVersion,
         registration.locale,
+        registration.unifiedpushEndpoint,
         now,
       );
     return this.get(deviceId) as PushDevice;
@@ -274,6 +358,17 @@ export class DeviceStore {
           )
           .all(principalId)) as unknown as DeviceRow[];
     return rows.map(device);
+  }
+
+  /** 换种类偏好（契约 §27.1）。`null` = 恢复全部。返回是否有这一行。 */
+  setKinds(deviceId: string, kinds: readonly PreferenceKind[] | null): boolean {
+    const result = this.database
+      .prepare(
+        `UPDATE push_devices SET kinds_json = ?
+          WHERE device_id = ? AND revoked_at_ms = 0`,
+      )
+      .run(kinds === null ? "" : JSON.stringify(kinds), deviceId);
+    return Number(result.changes) > 0;
   }
 
   /** 撤销；已经撤销的再撤一次什么也不改，返回是否真的改了。 */

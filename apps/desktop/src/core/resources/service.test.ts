@@ -44,6 +44,8 @@ interface Fixture {
   readonly events: { workspaceId: string; event: WorkspaceEvent }[];
   clock: number;
   watchers: number;
+  /** 交给 `onSample` 的样本属于哪个工作空间。 */
+  readonly samples: string[];
   service: ResourceService;
   close(): void;
 }
@@ -70,6 +72,7 @@ function fixture(): Fixture {
     events,
     clock: 1_000_000,
     watchers: 1,
+    samples: [] as string[],
     service: undefined as unknown as ResourceService,
     close() {
       state.service.stop();
@@ -84,6 +87,7 @@ function fixture(): Fixture {
     dataDir,
     now: () => state.clock,
     audience: () => state.watchers,
+    onSample: (snapshot) => state.samples.push(snapshot.workspaceId),
     sampler: new Sampler(
       () => state.clock,
       () => new Map([[process.pid, row(process.pid)]]),
@@ -192,6 +196,16 @@ describe("资源采样的订阅", () => {
     state.watchers = 0;
     await new Promise((done) => setTimeout(done, 2_100));
     expect(state.events.length).toBe(withAudience);
+  });
+
+  it("发出去的样本再交给阈值判定；watching 只在这一拍真会采时为真", async () => {
+    expect(state.service.watching(state.workspaceId)).toBe(false);
+    state.service.subscribe(state.workspaceId, { intervalMs: 2_000 });
+    expect(state.service.watching(state.workspaceId)).toBe(true);
+    await new Promise((done) => setTimeout(done, 2_100));
+    expect(state.samples).toContain(state.workspaceId);
+    state.watchers = 0;
+    expect(state.service.watching(state.workspaceId)).toBe(false);
   });
 
   it("快照带着这个工作空间的 id、主机那一段和电源策略", () => {

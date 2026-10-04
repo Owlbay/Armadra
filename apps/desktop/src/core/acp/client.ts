@@ -131,7 +131,7 @@ export function acpClientFeatures(
   };
 }
 
-/** 有 `elicitation` 能力的客户端多收的那个回调（上游加上之前的形状约定）。 */
+/** 有 `elicitation` 能力的客户端多收的那个回调（上游 0.6.8 起的形状）。 */
 interface ElicitationHandler {
   onElicitation?(
     params: AcpElicitationParams,

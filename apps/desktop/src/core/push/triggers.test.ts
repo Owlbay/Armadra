@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { EventBus, type WorkspaceEvent } from "../bus";
 import { generateDeviceKeyPair } from "./crypto";
 import { pushFixture } from "./fixture";
 import { type EventFrame, TriggerRules, deepLink, render } from "./triggers";
@@ -30,6 +31,7 @@ function setup() {
       authSecret: "",
       appVersion: "1.0.0",
       locale,
+      unifiedpushEndpoint: "",
     });
   register(fixture.ownerDeviceId);
   register(viewer.deviceId, "en");
@@ -95,12 +97,40 @@ const EVENTS: readonly [string, EventFrame, string][] = [
   ],
   [
     "调度到点",
-    { type: "schedule.fired", automationId: "a1", nodeId: "n4" },
+    { type: "schedule.fired", planId: "a1", runId: "r1", nodeId: "n4" },
+    "schedule",
+  ],
+  [
+    "调度失败",
+    {
+      type: "schedule.failed",
+      planId: "a1",
+      runId: "r1",
+      nodeId: "n4",
+      reasonCode: "TARGET_OFFLINE",
+    },
+    "schedule",
+  ],
+  [
+    "调度要人处理",
+    {
+      type: "schedule.attention",
+      planId: "a1",
+      nodeId: "n4",
+      reasonCode: "STALE_GENERATION",
+    },
     "schedule",
   ],
   [
     "资源阈值",
-    { type: "resources.threshold", metric: "memory", nodeId: "n5" },
+    {
+      type: "resources.threshold",
+      sessionId: "s1",
+      metric: "memory",
+      nodeId: "n5",
+      value: 9_000_000_000,
+      threshold: 8_000_000_000,
+    },
     "resources",
   ],
   [
@@ -132,6 +162,10 @@ describe("每种事件一条通知", () => {
       expect(wire).not.toContain("TERMINAL-OUTPUT-SECRET");
       expect(wire).not.toContain("secret-path");
       expect(wire).not.toContain("LOOP_DETECTED");
+      // 调度的稳定码与资源的数字也不进正文。
+      expect(wire).not.toContain("TARGET_OFFLINE");
+      expect(wire).not.toContain("STALE_GENERATION");
+      expect(wire).not.toContain("9000000000");
     });
   }
 
@@ -273,5 +307,114 @@ describe("工作流关卡", () => {
         }),
       ).toBe(0);
     }
+  });
+});
+
+describe("调度三时刻（契约 §27.3）", () => {
+  it("正文按时刻分，同一个计划共用一个 tag", () => {
+    const rules = new TriggerRules();
+    const names = { workspace: "w", agent: () => "Agent" };
+    const bodies = (
+      [
+        { type: "schedule.fired", planId: "p1", runId: "r1" },
+        {
+          type: "schedule.failed",
+          planId: "p1",
+          runId: "r1",
+          reasonCode: "X",
+        },
+        { type: "schedule.attention", planId: "p1", reasonCode: "Y" },
+      ] as EventFrame[]
+    ).map((event) => {
+      const draft = rules.draft("w1", event);
+      expect(draft?.tag).toBe("schedule:p1");
+      return draft === undefined ? "" : render(draft, "zh-CN", names).body;
+    });
+    expect(bodies).toEqual([
+      "定时任务到点了",
+      "定时任务没有跑成",
+      "定时任务需要处理",
+    ]);
+  });
+
+  it("没有 planId 的帧不推，其它 schedule.* 也不推", () => {
+    const rules = new TriggerRules();
+    expect(
+      rules.draft("w1", { type: "schedule.fired", runId: "r1" }),
+    ).toBeUndefined();
+    expect(
+      rules.draft("w1", { type: "schedule.due", planId: "p1" }),
+    ).toBeUndefined();
+  });
+});
+
+describe("按设备选种类（契约 §27.1）", () => {
+  it("关掉的种类不入队，测试恒收，全选回到「全部」", () => {
+    const { push, ownerDeviceId, viewer, inbox } = setup();
+    expect(push.devices.setKinds(viewer.deviceId, ["approval"])).toBe(true);
+    expect(push.devices.get(viewer.deviceId)?.kinds).toEqual(["approval"]);
+    // 完成：只有 owner 收。
+    expect(push.handleEvent("w1", EVENTS[1]?.[1] as EventFrame)).toBe(1);
+    // 审批：两台都收。
+    expect(push.handleEvent("w1", EVENTS[0]?.[1] as EventFrame)).toBe(2);
+    expect(inbox(viewer.deviceId).map((item) => item.kind)).toEqual([
+      "approval",
+    ]);
+    expect(inbox(ownerDeviceId)).toHaveLength(2);
+    // 关掉全部也照样收测试。
+    push.devices.setKinds(viewer.deviceId, []);
+    push.sendTest(push.devices.get(viewer.deviceId)!);
+    expect(inbox(viewer.deviceId).map((item) => item.kind)).toEqual([
+      "approval",
+      "test",
+    ]);
+    // 重新登记（App 每次启动）不丢偏好。
+    push.devices.register(viewer.deviceId, {
+      platform: "ios",
+      transport: "direct",
+      token: "token-again",
+      publicKey: generateDeviceKeyPair().publicKey,
+      authSecret: "",
+      appVersion: "1.0.1",
+      locale: "en",
+      unifiedpushEndpoint: "",
+    });
+    expect(push.devices.get(viewer.deviceId)?.kinds).toEqual([]);
+    push.devices.setKinds(viewer.deviceId, null);
+    expect(push.devices.get(viewer.deviceId)?.kinds).toBeNull();
+  });
+});
+
+describe("四族事件经总线真发到推送", () => {
+  it("schedule.fired / failed / attention 与 resources.threshold 都入队", () => {
+    const { push, ownerDeviceId, inbox } = setup();
+    const bus = new EventBus();
+    bus.on("workspace.event", ({ workspaceId, event }) => {
+      push.handleEvent(workspaceId, event as unknown as EventFrame);
+    });
+    const emit = (event: WorkspaceEvent) =>
+      bus.emit("workspace.event", { workspaceId: "w1", event });
+    emit({ type: "schedule.fired", planId: "p1", runId: "r1", nodeId: "n1" });
+    emit({
+      type: "schedule.failed",
+      planId: "p2",
+      runId: "r2",
+      reasonCode: "TARGET_OFFLINE",
+    });
+    emit({ type: "schedule.attention", planId: "p3", reasonCode: "X" });
+    emit({
+      type: "resources.threshold",
+      sessionId: "s1",
+      nodeId: "n2",
+      metric: "memory",
+      value: 2,
+      threshold: 1,
+    });
+    expect(inbox(ownerDeviceId).map((item) => item.tag)).toEqual([
+      "schedule:p1",
+      "schedule:p2",
+      "schedule:p3",
+      "resources:memory:n2",
+    ]);
   });
 });
