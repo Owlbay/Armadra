@@ -1,5 +1,6 @@
 /**
- * 补全计划（`docs/design/completion-plan.md` §2 G0-3）各工作包要读的设置键的
+ * 补全计划（`docs/design/completion-plan.md` §2 G0-3）与 G5 计划
+ * （`docs/design/g5-remaining-plan.md` §2.2 G5-00）各工作包要读的设置键的
  * 选项表与缺省值。
  *
  * **这个文件有两份，逐字节相同**：`packages/shared/src/completion-settings.ts`
@@ -83,7 +84,16 @@ export const COMPLETION_SETTINGS_DEFAULTS = {
     copilotUsage: false,
     /** 三家公开 status.json 的徽标；缺席时沿用旧键 `usage.statusPage`。 */
     statusBadges: true,
+    /**
+     * `claudeUsage` 关着时按本机 Claude 转录估算 5 小时 / 7 天窗口（G5-25）。
+     * 只读本机文件、不外呼，默认开。
+     */
+    claudeLocalWindow: true,
   },
   models: { catalog: { autoRefresh: true } },
-  diagnostics: { crashReportDsn: "" },
+  diagnostics: {
+    crashReportDsn: "",
+    /** 页面的 JS 错误也经同一个 DSN 上报（G5-19），默认关。 */
+    reportPageErrors: false,
+  },
 } as const;

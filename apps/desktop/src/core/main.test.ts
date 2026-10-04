@@ -18,6 +18,11 @@ import { install as installPush } from "./push";
 import { install as installRealtime } from "./realtime";
 import { install as installTerminals } from "./terminal/install";
 import { install as installWorkflow } from "./workflow";
+import { install as installForge } from "./forge";
+import { install as installGit } from "./git";
+import { install as installGithub } from "./github";
+import { install as installMail } from "./mail";
+import { install as installDiagnostics } from "./diagnostics";
 import { read } from "./endpoints";
 import { ROUTES } from "./http/routes";
 import { selfGuarded } from "./http/route-scopes";
@@ -451,6 +456,19 @@ describe("the assembly order", () => {
     // 每个答得了 hook 报告的域之后。
     expect(DOMAINS.at(-1)).toBe(installGateway);
     expect(DOMAINS.at(-2)).toBe(installHooks);
+  });
+
+  it("G5 的三个域：forge 在 GitHub 与 Git 之后，邮件与页面错误上报在推送之后、hook 服务之前", () => {
+    const at = (install: (typeof DOMAINS)[number]) => DOMAINS.indexOf(install);
+    for (const install of [installForge, installMail, installDiagnostics]) {
+      expect(at(install)).toBeGreaterThanOrEqual(0);
+    }
+    expect(at(installForge)).toBeGreaterThan(at(installGithub));
+    expect(at(installForge)).toBeGreaterThan(at(installGit));
+    expect(at(installMail)).toBeGreaterThan(at(installPush));
+    expect(at(installDiagnostics)).toBeGreaterThan(at(installPush));
+    expect(at(installMail)).toBeLessThan(at(installHooks));
+    expect(at(installDiagnostics)).toBeLessThan(at(installHooks));
   });
 });
 

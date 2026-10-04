@@ -10,7 +10,8 @@ import { afterAll, describe, expect, it } from "vitest";
  *
  * 三道检查：入口第一行是 DEV 守卫；`vite.config.ts` 的生产入口只列
  * `index.html`；真跑一次生产构建，产物里既没有 `showcase.html`，也没有
- * 任何来自 `src/showcase/` 的代码。
+ * 任何来自 `src/showcase/` 的代码，也没有 `i18n/showcase.ts` 的文案（它在
+ * `i18n/index.ts` 里只在 `import.meta.env.DEV` 下挂进来）。
  */
 
 const webRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -22,6 +23,10 @@ const MARKERS = [
   "__showcaseSections",
   "showcaseReady",
   "data-showcase-section",
+  // `i18n/showcase.ts` 的键：主包的消息表里出现任何一个，就说明展示页的文案
+  // 跟着生产页面一起发了。
+  "showcase.title",
+  "showcase.section.tokens",
 ];
 
 function files(directory: string): string[] {
@@ -39,6 +44,11 @@ afterAll(() => {
 });
 
 describe("设计展示页不进生产构建", () => {
+  it("展示页的消息模块只在 DEV 下挂进 MESSAGE_MODULES", () => {
+    const source = readFileSync(join(webRoot, "src/i18n/index.ts"), "utf8");
+    expect(source).toContain("...(import.meta.env.DEV ? { showcase } : {}),");
+  });
+
   it("入口第一行就是 DEV 守卫", () => {
     const source = readFileSync(join(webRoot, "src/showcase/main.tsx"), "utf8");
     expect(source.split("\n")[0]).toBe(
@@ -73,13 +83,22 @@ describe("设计展示页不进生产构建", () => {
       temporary.push(data, outDir);
       process.env.ARMADRA_DATA_DIR = data;
       const { build } = await import("vite");
-      await build({
-        root: webRoot,
-        configFile: join(webRoot, "vite.config.ts"),
-        mode: "production",
-        logLevel: "silent",
-        build: { outDir, emptyOutDir: true },
-      });
+      // Vitest 把 NODE_ENV 设成 `test`，Vite 据此把 `import.meta.env.DEV` 定成
+      // true——那样构建出来的不是生产包。真实的 `vite build` 跑在
+      // `production` 下，这里照它来，跑完还原。
+      const nodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = "production";
+      try {
+        await build({
+          root: webRoot,
+          configFile: join(webRoot, "vite.config.ts"),
+          mode: "production",
+          logLevel: "silent",
+          build: { outDir, emptyOutDir: true },
+        });
+      } finally {
+        process.env.NODE_ENV = nodeEnv;
+      }
 
       const output = files(outDir);
       expect(output.some((file) => file.endsWith("index.html"))).toBe(true);

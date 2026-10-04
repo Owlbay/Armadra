@@ -53,6 +53,9 @@ import { install as installWorkflow } from "./workflow";
 import { install as installRealtime, realtimeDomain } from "./realtime";
 import { install as installPush } from "./push";
 import { gatewayDomainOf, install as installGateway } from "./gateway";
+import { install as installForge } from "./forge";
+import { install as installMail } from "./mail";
+import { install as installDiagnostics } from "./diagnostics";
 
 /**
  * The core process.
@@ -183,6 +186,9 @@ export const DOMAINS: readonly ((context: CoreContext) => void)[] = [
   // Git last among the domains that own routes: it reads the workspace table
   // and subscribes to `file.changed`, both of which have to exist first.
   installGit,
+  // 托管平台（G5-00 先放空骨架）在 GitHub 与 Git 之后：它把 GitHub 的客户端装进
+  // 同一个接口，按仓库的远端地址认平台。
+  installForge,
   // 补全计划的四个域（G0-3 先放空骨架，顺序在这里定死）。ACP 在终端之后：
   // 它的会话行是 `terminal_sessions` 的一种，桥经终端域组合。工作流在 ACP
   // 之后：一次运行要开节点、投递，两种驱动都得已经在。实时协同在工作流之后：
@@ -192,6 +198,11 @@ export const DOMAINS: readonly ((context: CoreContext) => void)[] = [
   installWorkflow,
   installRealtime,
   installPush,
+  // G5 的两个域（G5-00 先放空骨架）。邮件在推送之后：它发的是身份域签出的
+  // 邀请与重置链接，与推送同是「把一件事告诉人」的出口。页面错误上报只认会话、
+  // 不依赖别的域，放在 hook 服务之前即可。
+  installMail,
+  installDiagnostics,
   // The hook service publishes an endpoint file, and nothing may be advertised
   // before the domains that answer a hook report exist.
   installHooks,

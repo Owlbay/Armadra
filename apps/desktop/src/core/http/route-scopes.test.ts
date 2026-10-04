@@ -208,6 +208,10 @@ describe("补全计划新面的 scope", () => {
       "/api/identity/oauth/bindings",
       "/api/identity/sessions",
       "/api/identity/audit",
+      "/api/identity/principals/p1/password-reset",
+      "/api/forge/repos/r1",
+      "/api/mail/status",
+      "/api/diagnostics/client-error",
     ];
     for (const path of paths) {
       for (const method of ["GET", "POST"]) {
@@ -218,5 +222,39 @@ describe("补全计划新面的 scope", () => {
         );
       }
     }
+  });
+
+  it("G5 预登记的新前缀：先于身份的两条不要求权限，其余各归一档", () => {
+    // 先于任何身份存在：令牌 / 短码本身就是凭据。
+    expect(
+      routeScope("GET", "/api/identity/password-reset/tok"),
+    ).toBeUndefined();
+    expect(
+      routeScope("POST", "/api/identity/password-reset/tok"),
+    ).toBeUndefined();
+    expect(
+      routeScope("POST", "/api/gateway/pairing-code/exchange"),
+    ).toBeUndefined();
+    expect(selfGuarded("/api/gateway/pairing-code/exchange")).toBe(true);
+    // 签发短码以外的 Gateway 面仍只有 owner。
+    expect(selfGuarded("/api/gateway/pairing-code")).toBe(false);
+    expect(permission("POST", "/api/gateway/pairing-code")).toBe(
+      "settings:write",
+    );
+    expect(
+      permission("POST", "/api/identity/principals/p1/password-reset"),
+    ).toBe("identity:manage");
+    // 托管平台与 GitHub 同一档，路由门要判。
+    expect(selfGuarded("/api/forge/repos/r1")).toBe(false);
+    expect(permission("GET", "/api/forge/repos/r1")).toBe("github:read");
+    expect(permission("POST", "/api/forge/repos/r1/pulls")).toBe(
+      "github:write",
+    );
+    // 邮件与页面错误上报自己认身份。
+    expect(selfGuarded("/api/mail/status")).toBe(true);
+    expect(selfGuarded("/api/mail/password-reset")).toBe(true);
+    expect(selfGuarded("/api/diagnostics/client-error")).toBe(true);
+    expect(selfGuarded("/api/diagnostics/client-error/x")).toBe(false);
+    expect(permission("POST", "/api/mail/invitation")).toBe("identity:manage");
   });
 });

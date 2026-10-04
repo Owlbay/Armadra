@@ -66,7 +66,13 @@ describe("消息模块", () => {
     }
   });
 
-  it("i18n 目录下的每个模块都挂进了 MESSAGE_MODULES", () => {
+  /**
+   * 开发态断言：展示页模块（`showcase`）只在 `import.meta.env.DEV` 下挂进来，
+   * 生产构建里没有它（`src/showcase/production.test.ts` 查产物）。测试跑在
+   * 开发态，所以这里仍是全集。
+   */
+  it("i18n 目录下的每个模块都挂进了 MESSAGE_MODULES（开发态）", () => {
+    expect(import.meta.env.DEV).toBe(true);
     const files = Object.keys(
       import.meta.glob("/src/i18n/*.ts", { eager: false }),
     )

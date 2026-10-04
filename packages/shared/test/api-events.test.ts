@@ -142,6 +142,46 @@ describe("runtime workspace events API", () => {
     );
   });
 
+  it("models the G5 schedule and resources events without commands or output", () => {
+    const events = [
+      { type: "schedule.fired", planId: "p-1", runId: "r-1", nodeId: uuid },
+      {
+        type: "schedule.failed",
+        planId: "p-1",
+        runId: "r-1",
+        reasonCode: "target_offline",
+      },
+      { type: "schedule.attention", planId: "p-1", reasonCode: "streak" },
+      {
+        type: "resources.threshold",
+        sessionId: uuid,
+        nodeId: otherUuid,
+        metric: "memory",
+        value: 2_147_483_648,
+        threshold: 1_073_741_824,
+      },
+    ];
+    for (const event of events) {
+      const parsed = workspaceEventSchema.safeParse(event);
+      expect(parsed.success, JSON.stringify(event.type)).toBe(true);
+    }
+    // 失败与要人处理必须带稳定码，越线必须带数值。
+    expect(
+      workspaceEventSchema.safeParse({
+        type: "schedule.failed",
+        planId: "p-1",
+        runId: "r-1",
+      }).success,
+    ).toBe(false);
+    expect(
+      workspaceEventSchema.safeParse({
+        type: "resources.threshold",
+        sessionId: uuid,
+        metric: "memory",
+      }).success,
+    ).toBe(false);
+  });
+
   it("decodes the browser tab / dialog / chooser events the runtime emits", () => {
     // 这三个事件 Runtime 一直在发，联合里却没有，`safeParse` 只会把它们丢掉
     // 并告警——标签条和对话框界面因此收不到任何东西（§2.2/§2.3/§2.4）。
