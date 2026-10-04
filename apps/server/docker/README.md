@@ -31,6 +31,7 @@ docker run --rm -p 127.0.0.1:8443:8443 \
 | `ARMADRA_ACME_PROFILE`                 | CA 缺省        | `shortlived` / `classic`；IP 来源自动 `shortlived` |
 | `ARMADRA_ACME_CA_BUNDLE`               | 无             | 信任 ACME 目录服务器的 PEM（私有 CA）              |
 | `ARMADRA_ACME_HTTP_PORT`               | `8080`         | http-01 挑战监听（镜像里非 root，绑不了 80）       |
+| `ARMADRA_ACME_CHALLENGE`               | `http-01`      | `tls-alpn-01` 时不开 80，验证握手走 HTTPS 端口     |
 | `ARMADRA_DATA_DIR`                     | `/data`        | 数据目录，卷挂在这里                               |
 
 第一个参数不是 `serve` 时原样交给 `armadra-server`：`docker compose exec armadra node /app/out/main.js status`

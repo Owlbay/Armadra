@@ -62,7 +62,10 @@ node apps/server/out/main.js install --service-dir /etc/systemd/system --run-as 
 ### 3.1 ACME 内建（直接对公网时推荐）
 
 `serve --acme <邮箱>` 或环境变量 `ARMADRA_ACME_EMAIL`。启动时向 Let's Encrypt 给 `--public-origin` 的每个主机名签一张证书，
-走 `http-01`：服务器壳自己在 80 端口（`ARMADRA_ACME_HTTP_PORT`，镜像里是 8080）答挑战，那个端口上别的请求一律 308 到 HTTPS。
+缺省走 `http-01`：服务器壳自己在 80 端口（`ARMADRA_ACME_HTTP_PORT`，镜像里是 8080）答挑战，那个端口上别的请求一律 308 到 HTTPS。
+不想开 80 时设 `ARMADRA_ACME_CHALLENGE=tls-alpn-01`：CA 的验证握手打对外 443（ALPN `acme-tls/1`），由服务器壳自己的 TLS
+监听出示挑战证书，不再开明文端口。首签时监听还没起，服务器壳在 `--listen` 的地址上临时答一次验证再正式监听；外部 443
+要转到 `--listen` 的端口，中间不能有终止 TLS 的代理（3.3 的反代场景用不了它）。
 
 - 证书、私钥、账户密钥与续期状态在 `<数据目录>/tls/acme/`（目录 0700，文件 0600）。
 - 寿命过去三分之二时自动续，续好当场热换，连接不断。失败按 1、2、4…小时退避（最多 12 小时），**一直用旧证书**直到它过期；
@@ -76,9 +79,13 @@ node apps/server/out/main.js install --service-dir /etc/systemd/system --run-as 
 | `ARMADRA_ACME_PROFILE`                              | `shortlived`（6 天）或 `classic`；对外来源是公网 IP 时自动取 `shortlived`（IP 证书只有它） |
 | `ARMADRA_ACME_CA_BUNDLE`                            | 私有 ACME CA（step-ca 等）的根证书 PEM 路径                                                |
 | `ARMADRA_ACME_HTTP_PORT` / `ARMADRA_ACME_HTTP_HOST` | 挑战监听的端口与地址                                                                       |
+| `ARMADRA_ACME_CHALLENGE`                            | `http-01`（缺省）或 `tls-alpn-01`                                                          |
 
 本地演练：`pnpm dev-stack up pebble`，`ARMADRA_ACME_DIRECTORY=https://127.0.0.1:14000/dir`，
-`ARMADRA_ACME_CA_BUNDLE` 指向 Pebble 镜像里的 `/test/certs/pebble.minica.pem`（`docker compose cp` 取出）。
+`ARMADRA_ACME_CA_BUNDLE` 指向 Pebble 镜像里的 `/test/certs/pebble.minica.pem`（`docker compose cp` 取出）。这一份 Pebble 不回连挑战；
+要真验证用 `pnpm dev-stack up pebble-va --profile pebble-va`（目录 `https://127.0.0.1:14100/dir`），它按
+`host.docker.internal` 回连 `tls-alpn-01` 的 5001 与 `http-01` 的 5002 端口——对外来源写 `https://host.docker.internal`，
+监听与挑战端口绑在本机回环上即可（macOS 的容器运行时转得到，Linux 上宿主回环对容器不通）。
 
 ### 3.2 运维给的证书
 
@@ -126,7 +133,8 @@ server {
 }
 ```
 
-Caddy（2.8+；`Host` 缺省就原样转发）：
+Caddy（2.8+；`Host` 缺省就原样转发；同一份配置换成环境变量后在 `tools/dev-stack/caddy/Caddyfile`，
+`node tools/probes/server-e2e.mjs --proxy=caddy` 经它走完配对、邀请、事件流与撤销，`pnpm dev-stack up caddy --profile caddy` 可手动演练）：
 
 ```caddyfile
 armadra.example.com {
