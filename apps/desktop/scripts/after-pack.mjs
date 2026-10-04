@@ -24,7 +24,9 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
+  writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -314,6 +316,39 @@ export function placements(platformName) {
   ].map((resource) => ({ ...resource, executable: false }));
 }
 
+/**
+ * The directory electron-updater caches downloads in, under the OS cache
+ * directory. `build/installer.nsh` stores the installed installer under the
+ * same name.
+ *
+ * electron-builder derives it from the package name and writes it into
+ * `app-update.yml` itself; a scoped name gives `@armadradesktop-updater`. The
+ * configuration has no key for it (a `publish.updaterCacheDirName` is
+ * overwritten), and renaming the package would also rename the Linux
+ * packages, so the file is rewritten here: electron-builder's own afterPack
+ * handler that writes it runs before any user hook.
+ */
+export const UPDATER_CACHE_DIR_NAME = "armadra-updater";
+
+/** `app-update.yml` with `updaterCacheDirName` set to ours. */
+export function withUpdaterCacheDir(text, name = UPDATER_CACHE_DIR_NAME) {
+  const line = `updaterCacheDirName: ${name}`;
+  if (/^updaterCacheDirName:.*$/m.test(text))
+    return text.replace(/^updaterCacheDirName:.*$/m, line);
+  return `${text.replace(/\n*$/, "\n")}${line}\n`;
+}
+
+/**
+ * Rewrites `<resources>/app-update.yml` when the packager wrote one (every
+ * target that can update). Returns whether a file was there.
+ */
+export function placeUpdaterCacheDir(resourcesDir) {
+  const path = join(resourcesDir, "app-update.yml");
+  if (!existsSync(path)) return false;
+  writeFileSync(path, withUpdaterCacheDir(readFileSync(path, "utf8")));
+  return true;
+}
+
 export default async function afterPack(context) {
   const platformName = context.electronPlatformName;
   const archName = ARCH_NAMES[context.arch] ?? process.arch;
@@ -338,6 +373,10 @@ export default async function afterPack(context) {
     resourcesDir,
   }))
     console.log(`after-pack: placed ${placed}`);
+  if (placeUpdaterCacheDir(resourcesDir))
+    console.log(
+      `after-pack: app-update.yml caches in ${UPDATER_CACHE_DIR_NAME}`,
+    );
   placeHookLauncher(platformName, resourcesDir);
   placeLaunchExe(platformName, resourcesDir);
 }

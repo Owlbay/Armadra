@@ -10,7 +10,10 @@ import {
   migrationResources,
   placeLaunchExe,
   placements,
+  placeUpdaterCacheDir,
   platformFor,
+  UPDATER_CACHE_DIR_NAME,
+  withUpdaterCacheDir,
 } from "./after-pack.mjs";
 import {
   copyFileSync,
@@ -260,4 +263,43 @@ test("Electron's notices go back into Contents/Resources on macOS and beside the
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("app-update.yml caches under armadra-updater, not the scoped package name", () => {
+  // The two-line document electron-builder writes for a generic provider.
+  const written =
+    "provider: generic\nurl: https://example.invalid/latest.json\nupdaterCacheDirName: '@armadradesktop-updater'\n";
+  assert.equal(
+    withUpdaterCacheDir(written),
+    "provider: generic\nurl: https://example.invalid/latest.json\nupdaterCacheDirName: armadra-updater\n",
+  );
+  assert.equal(
+    withUpdaterCacheDir("provider: generic\nurl: x"),
+    "provider: generic\nurl: x\nupdaterCacheDirName: armadra-updater\n",
+  );
+  const dir = mkdtempSync(join(tmpdir(), "armadra-after-pack-"));
+  try {
+    assert.equal(placeUpdaterCacheDir(dir), false);
+    writeFileSync(join(dir, "app-update.yml"), written);
+    assert.equal(placeUpdaterCacheDir(dir), true);
+    assert.match(
+      readFileSync(join(dir, "app-update.yml"), "utf8"),
+      /^updaterCacheDirName: armadra-updater$/m,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the NSIS installer stores its copy in the same cache directory", () => {
+  const nsh = readFileSync(
+    fileURLToPath(new URL("../build/installer.nsh", import.meta.url)),
+    "utf8",
+  );
+  assert.match(
+    nsh,
+    new RegExp(
+      `!define APP_INSTALLER_STORE_FILE "${UPDATER_CACHE_DIR_NAME}\\\\installer\\.exe"`,
+    ),
+  );
 });

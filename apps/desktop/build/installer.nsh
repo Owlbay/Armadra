@@ -46,3 +46,14 @@ Var pid
   !insertmacro IS_POWERSHELL_AVAILABLE
   !insertmacro _CHECK_APP_RUNNING
 !macroend
+
+; electron-updater keeps a copy of the installed installer in its cache
+; directory, the base of the next update's differential download. The
+; directory's name comes from the package name, which is scoped
+; (`@armadra/desktop` -> `@armadradesktop-updater`); `scripts/after-pack.mjs`
+; rewrites `app-update.yml` to `armadra-updater`, and the installer has to
+; store its copy under the same name or the updater never finds it.
+!ifdef APP_INSTALLER_STORE_FILE
+  !undef APP_INSTALLER_STORE_FILE
+  !define APP_INSTALLER_STORE_FILE "armadra-updater\installer.exe"
+!endif
