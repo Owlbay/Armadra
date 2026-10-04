@@ -726,15 +726,23 @@ export function validPendingId(value: string): boolean {
  *
  * A client that was killed mid-wait leaves both files behind, and they contain
  * the tool call the agent wanted to make. Returns how many files went away.
+ *
+ * `now` is the caller's clock, passed in rather than read here: a file's mtime
+ * comes from the file system's clock, not the process's, and on Windows the
+ * two can disagree by a few milliseconds in either direction. Callers in
+ * production pass `Date.now()`; tests pin both sides.
  */
-export function sweepOrphans(directory: string, olderThanMs: number): number {
+export function sweepOrphans(
+  directory: string,
+  olderThanMs: number,
+  now: number,
+): number {
   let entries;
   try {
     entries = readdirSync(directory, { withFileTypes: true });
   } catch {
     return 0;
   }
-  const now = Date.now();
   let removed = 0;
   for (const entry of entries) {
     if (!entry.isFile()) continue;

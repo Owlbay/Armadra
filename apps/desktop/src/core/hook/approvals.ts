@@ -99,9 +99,14 @@ export function writeAnswerFile(
 
 /**
  * Deletes pending request and answer files older than {@link ORPHAN_MINUTES}.
- * Returns how many files went away.
+ * Returns how many files went away. `now` is the caller's clock: the file
+ * system stamps mtimes with its own, so the sweep never reads one implicitly.
  */
-export function sweepOrphans(directory: string, olderThanMs: number): number {
+export function sweepOrphans(
+  directory: string,
+  olderThanMs: number,
+  now: number,
+): number {
   let entries: string[];
   try {
     entries = readdirSync(directory);
@@ -115,7 +120,7 @@ export function sweepOrphans(directory: string, olderThanMs: number): number {
     if (!["json", "answer", "tmp"].includes(extension)) continue;
     let stale = false;
     try {
-      stale = Date.now() - statSync(path).mtimeMs > olderThanMs;
+      stale = now - statSync(path).mtimeMs > olderThanMs;
     } catch {
       continue;
     }
@@ -141,7 +146,7 @@ export function startApprovalSweep(
   const directory = pendingDir(dataDir);
   const age = ORPHAN_MINUTES * 60_000;
   const run = (): void => {
-    const removed = sweepOrphans(directory, age);
+    const removed = sweepOrphans(directory, age, Date.now());
     if (removed > 0) onSwept(removed);
   };
   run();

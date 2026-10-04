@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { rfc3339 } from "../workspaces/support";
@@ -205,13 +205,27 @@ describe("the pending directory", () => {
   it("sweeps the files a killed client left behind", () => {
     const directory = pendingDir(fixture.collab);
     mkdirSync(directory, { recursive: true });
-    writeFileSync(join(directory, "old.json"), "{}");
-    writeFileSync(join(directory, "old.answer"), "allow");
-    writeFileSync(join(directory, "notes.txt"), "not ours");
-    // Nothing is old yet.
-    expect(sweepOrphans(directory, ORPHAN_MINUTES * 60_000)).toBe(0);
-    // Everything is old enough now, but only our own extensions go.
-    expect(sweepOrphans(directory, -1)).toBe(2);
+    // Both clocks are pinned: the mtimes the file system wrote and the "now"
+    // the sweep judges against. On Windows the two disagree by milliseconds
+    // either way, so reading either implicitly made this test flaky.
+    const written = Date.UTC(2026, 0, 1, 12, 0, 0);
+    for (const [name, body] of [
+      ["old.json", "{}"],
+      ["old.answer", "allow"],
+      ["notes.txt", "not ours"],
+    ] as const) {
+      const path = join(directory, name);
+      writeFileSync(path, body);
+      utimesSync(path, written / 1000, written / 1000);
+    }
+    const age = ORPHAN_MINUTES * 60_000;
+    // Nothing is old yet, not even exactly at the threshold.
+    expect(sweepOrphans(directory, age, written)).toBe(0);
+    expect(sweepOrphans(directory, age, written + age)).toBe(0);
+    // A clock behind the file's stamp never counts it as old.
+    expect(sweepOrphans(directory, 0, written - 5)).toBe(0);
+    // Past the threshold, only our own extensions go.
+    expect(sweepOrphans(directory, age, written + age + 1)).toBe(2);
     expect(readFileSync(join(directory, "notes.txt"), "utf8")).toBe("not ours");
   });
 });
