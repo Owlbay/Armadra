@@ -188,6 +188,10 @@ export function handleAccounts(
       return security === undefined
         ? undefined
         : lockouts(method, segments, security);
+    case "password-reset":
+      return security === undefined
+        ? undefined
+        : passwordReset(method, segments, request, context, security);
     case "invitations":
       return invitations(method, segments, request, context);
     case "groups":
@@ -228,6 +232,20 @@ function principals(
     accounts.disablePrincipal(subject(context), segments[1] as string);
     return { status: 200, body: { disabled: true } };
   }
+  if (
+    segments.length === 3 &&
+    segments[2] === "password-reset" &&
+    method === "POST"
+  ) {
+    // 契约 §25：明文令牌只在这一次答出去，链接由签发人亲手交给对方。
+    return {
+      status: 201,
+      body: accounts.issuePasswordReset(
+        subject(context),
+        segments[1] as string,
+      ),
+    };
+  }
   return undefined;
 }
 
@@ -255,10 +273,19 @@ function credentials(
     if (kind !== "password") return notImplemented(`${kind} 凭据`);
     const principalId = text(body.principalId);
     const password = text(body.password);
-    const set = () => ({
-      status: 201,
-      body: accounts.setPassword(subject(context), principalId, password),
-    });
+    // 换了口令撤掉这个人的其它会话（L2）；发请求的这个会话留着。
+    const set = () => {
+      const principal = context.authenticate();
+      return {
+        status: 201,
+        body: accounts.setPassword(
+          subjectOf(principal),
+          principalId,
+          password,
+          principal.sessionId,
+        ),
+      };
+    };
     const security = context.security;
     if (security === undefined) return set();
     // 先认调用方再判口令：一个没登录的人不该靠策略错误码探出账号名。
@@ -629,7 +656,10 @@ export function auditCsv(
 
 /** 调用方是谁。认证失败在这里抛，于是每条路由都不必自己写那个 401。 */
 function subject(context: AccountsHttpContext): AuthorizationSubject {
-  const principal = context.authenticate();
+  return subjectOf(context.authenticate());
+}
+
+function subjectOf(principal: Principal): AuthorizationSubject {
   return {
     principalId: principal.principalId,
     kind: principal.role === "member" ? "member" : "owner",
@@ -932,7 +962,57 @@ function passkey(
   if (segments.length === 2 && method === "DELETE") {
     return removePasskey(segments[1] as string, context);
   }
+  if (segments.length === 2 && method === "PATCH") {
+    return renamePasskey(segments[1] as string, request, context);
+  }
   return undefined;
+}
+
+/** passkey 名字的上限（字符数，契约 §18.2 的 `PATCH`）。 */
+export const PASSKEY_LABEL_MAX = 64;
+
+/** 1–64 个字符、首尾无空白、无控制字符。 */
+export function validPasskeyLabel(label: string): boolean {
+  const length = [...label].length;
+  return (
+    length >= 1 &&
+    length <= PASSKEY_LABEL_MAX &&
+    label.trim() === label &&
+    validName(label)
+  );
+}
+
+/**
+ * 改名：只有本人。别人的（哪怕调用方有 `identity:manage`）与不存在的同样答
+ * 404——名字是本人给自己的钥匙起的，owner 要处理别人的钥匙只有删除。
+ */
+function renamePasskey(
+  credentialId: string,
+  request: CoreRequest,
+  context: SecurityHttpContext,
+): Answer {
+  if (!ID_PATTERN.test(credentialId)) throw new IdentityError("invalid");
+  const principal = me(context, true);
+  const label = text(object(request).label);
+  if (!validPasskeyLabel(label)) throw new IdentityError("invalid");
+  context.security.store.transaction((tx) => {
+    const row = tx.passkey(credentialId);
+    if (
+      row === undefined ||
+      row.revokedAtMs !== 0 ||
+      row.principalId !== principal.principalId ||
+      !tx.renamePasskey(credentialId, label)
+    ) {
+      throw new IdentityError("notFound");
+    }
+  });
+  record(context.security.store, {
+    action: "identity.passkey.rename",
+    principalId: principal.principalId,
+    deviceId: principal.deviceId,
+    target: credentialId,
+  });
+  return { status: 200, body: { credentialId, label } };
 }
 
 function listPasskeys(context: SecurityHttpContext): Answer {
@@ -1306,6 +1386,61 @@ function sessions(
     return { status: 200, body: { sessionId, revoked: true } };
   }
   return undefined;
+}
+
+/* ------------------------------- 口令重置链接 ------------------------------- */
+
+/**
+ * `GET / POST password-reset/{token}`（契约 §25）：匿名，令牌本身就是凭据。
+ *
+ * 两条都走配对与刷新那只「失败才扣」的 IP 桶（M4）：桶空了答 429，认不出的
+ * 令牌扣一次。口令策略与泄露检查不扣——令牌对了，挡下来的是口令不是猜的人。
+ * 设成功之后清掉这个人的登录锁定：锁定挡的是猜旧口令，新口令是签发人放行的。
+ */
+function passwordReset(
+  method: string,
+  segments: readonly string[],
+  request: CoreRequest,
+  context: AccountsHttpContext,
+  security: SecurityHttpContext,
+): Answer | Promise<Answer> | undefined {
+  if (segments.length !== 2) return undefined;
+  if (method !== "GET" && method !== "POST") return undefined;
+  const token = segments[1] as string;
+  const { throttle } = security.security;
+  const charged = <T>(work: () => T): T => {
+    try {
+      return work();
+    } catch (error) {
+      if (error instanceof IdentityError) throttle.chargeIp(security.remoteIp);
+      throw error;
+    }
+  };
+  throttle.checkIp(security.remoteIp);
+  const target = charged(() => context.accounts.inspectPasswordReset(token));
+  if (method === "GET") {
+    return {
+      status: 200,
+      body: {
+        displayName: target.displayName,
+        expiresAtMs: target.expiresAtMs,
+      },
+    };
+  }
+  const password = text(object(request).password);
+  return checkedPassword(
+    security,
+    password,
+    [target.displayName, target.principalId],
+    () => {
+      const done = charged(() =>
+        context.accounts.completePasswordReset(token, password),
+      );
+      throttle.unlock(principalKey(done.principalId));
+      return { status: 200, body: done };
+    },
+    target.principalId,
+  );
 }
 
 /* ---------------------------------- 锁定 ---------------------------------- */

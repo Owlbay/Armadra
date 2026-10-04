@@ -167,14 +167,23 @@ export async function disablePrincipal(principalId: string): Promise<void> {
   });
 }
 
+/**
+ * 设口令。答撤掉了这个人几个其它会话（安全审查 L2：本人换口令留下当前会话，
+ * owner 替人设时那个人的会话全撤）；旧 core 不报时为 0。
+ */
 export async function setPassword(
   principalId: string,
   password: string,
-): Promise<void> {
-  await call("credentials", okSchema, {
-    method: "POST",
-    body: { kind: "password", principalId, password },
-  });
+): Promise<number> {
+  const answer = await call(
+    "credentials",
+    z.object({ revokedSessions: z.number().default(0) }).passthrough(),
+    {
+      method: "POST",
+      body: { kind: "password", principalId, password },
+    },
+  );
+  return answer.revokedSessions;
 }
 
 /* ---------------------------------- 组 ----------------------------------- */

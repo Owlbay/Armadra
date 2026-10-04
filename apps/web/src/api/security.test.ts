@@ -3,12 +3,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { IdentityRequestError, resetIdentityCredentials } from "./identity";
 import {
   browserDeviceName,
+  completePasswordReset,
   exportAudit,
+  hasPasswordResetFragment,
+  openPasswordReset,
   parseOAuthFragment,
   passkeyLabel,
+  passwordResetLink,
   readAudit,
+  renamePasskey,
   signInWithPassword,
   takeOAuthFragment,
+  takePasswordResetToken,
 } from "./security";
 
 const SESSION = {
@@ -154,5 +160,84 @@ describe("设备与通行密钥的名字", () => {
         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1",
       ),
     ).toBe("Safari · iOS");
+  });
+});
+
+describe("口令重置链接（契约 §25）", () => {
+  const TOKEN = `${"a".repeat(32)}.${"B".repeat(42)}w`;
+
+  it("打开与设新口令都是匿名请求，令牌只在路径里", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        reply(200, { displayName: "Margaret", expiresAtMs: 99 }),
+      )
+      .mockResolvedValueOnce(
+        reply(200, { principalId: "p1", revokedSessions: 2 }),
+      );
+    vi.stubGlobal("fetch", fetch);
+    expect(await openPasswordReset(TOKEN)).toEqual({
+      displayName: "Margaret",
+      expiresAtMs: 99,
+    });
+    expect(await completePasswordReset(TOKEN, "new passphrase!")).toEqual({
+      principalId: "p1",
+      revokedSessions: 2,
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const [url, init] = fetch.mock.calls[1] as [string, RequestInit];
+    expect(new URL(url, "http://x").pathname).toBe(
+      `/api/identity/password-reset/${TOKEN}`,
+    );
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      password: "new passphrase!",
+    });
+  });
+
+  it("认不出的令牌：稳定码 password_reset_invalid", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        reply(404, {
+          code: "password_reset_invalid",
+          message: "Password reset link is invalid or expired",
+        }),
+      ),
+    );
+    await expect(openPasswordReset(TOKEN)).rejects.toMatchObject({
+      status: 404,
+      code: "password_reset_invalid",
+    });
+  });
+
+  it("链接在片段里；取走即抹掉地址栏", () => {
+    expect(passwordResetLink(TOKEN, "https://armadra.example")).toBe(
+      `https://armadra.example/#reset=${TOKEN}`,
+    );
+    window.history.replaceState(null, "", `#reset=${TOKEN}`);
+    expect(hasPasswordResetFragment()).toBe(true);
+    expect(takePasswordResetToken()).toBe(TOKEN);
+    expect(window.location.hash).toBe("");
+    expect(takePasswordResetToken()).toBe("");
+    window.history.replaceState(null, "", "#invite=abc");
+    expect(hasPasswordResetFragment()).toBe(false);
+  });
+});
+
+describe("passkey 改名", () => {
+  it("PATCH 带新名字，答回改后的名字", async () => {
+    const fetch = vi.fn(async (input: string) =>
+      String(input).endsWith("/session/csrf")
+        ? reply(200, { csrfToken: "c".repeat(43) })
+        : reply(200, { credentialId: "k1", label: "工作用" }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    expect(await renamePasskey("k1", "工作用")).toBe("工作用");
+    const call = fetch.mock.calls.find(([url]) =>
+      String(url).endsWith("/api/identity/passkey/k1"),
+    ) as unknown as [string, RequestInit];
+    expect(call[1].method).toBe("PATCH");
+    expect(JSON.parse(String(call[1].body))).toEqual({ label: "工作用" });
   });
 });
