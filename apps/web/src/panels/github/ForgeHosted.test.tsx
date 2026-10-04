@@ -69,6 +69,7 @@ vi.mock("@/api/client", () => ({
   },
 }));
 
+import { runtimeApi } from "@/api/client";
 import { RuntimeRequestError } from "@/api/request";
 import type { ForgePull } from "../../api/forge";
 import { usePreferencesStore } from "../../app/preferences-store";
@@ -106,14 +107,18 @@ const DETECTION = {
   accountLogin: "bot",
 };
 
-function renderHosted() {
+type GiteaDetection = Omit<typeof DETECTION, "forge"> & { forge: "gitea" };
+
+function renderHosted(
+  detection: typeof DETECTION | GiteaDetection = DETECTION,
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
       <ForgeHosted
-        detection={DETECTION}
+        detection={detection}
         locale="zh-CN"
         canWrite
         open
@@ -319,5 +324,71 @@ describe("GitLab merge request detail (§29.6)", () => {
     expect((screen.getByLabelText("本地分支") as HTMLInputElement).value).toBe(
       "pr-15",
     );
+  });
+
+  for (const [forge, ref] of [
+    ["gitlab", "refs/merge-requests/16/head"],
+    ["gitea", "refs/pull/16/head"],
+  ] as const) {
+    it(`${forge}: a fork's checkout starts from ${ref}, fetched only on submit`, async () => {
+      const operate = vi.mocked(runtimeApi.gitRepositoryOperate);
+      operate.mockClear();
+      const pull = { ...forgePull(16, "Fork change"), fromFork: true };
+      forgeApi.forgePulls.mockResolvedValue({
+        items: [pull],
+        nextCursor: null,
+      });
+      forgeApi.forgePull.mockResolvedValue(pull);
+      forgeApi.forgePullFiles.mockResolvedValue([]);
+      forgeApi.forgePullChecks.mockResolvedValue({
+        headSha: MR_SHA,
+        rollup: "success",
+        checks: [],
+      });
+      forgeApi.forgeMergeOptions.mockResolvedValue({
+        methods: ["merge"],
+        autoMerge: false,
+        mergeTrain: false,
+      });
+      renderHosted(forge === "gitea" ? { ...DETECTION, forge } : DETECTION);
+      fireEvent.click(await screen.findByText(pull.title));
+      const start = (await screen.findByLabelText(
+        "起点（检出时从远端取）",
+      )) as HTMLInputElement;
+      expect(start.value).toBe(ref);
+      expect(start.readOnly).toBe(true);
+      expect(screen.queryByLabelText("起点（留空使用 HEAD）")).toBeNull();
+      expect(operate).not.toHaveBeenCalled();
+      fireEvent.change(screen.getByLabelText("worktree 目录（绝对路径）"), {
+        target: { value: "/tmp/review-16" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "创建 worktree" }));
+      await waitFor(() => expect(operate).toHaveBeenCalledTimes(1));
+      expect(operate.mock.calls[0]?.[1]).toEqual({
+        kind: "createWorktree",
+        path: "/tmp/review-16",
+        branch: "pr-16",
+        createBranch: true,
+        expectedOid: null,
+        startPoint: null,
+        pullHead: { remote: "origin", forge, number: 16, headOid: MR_SHA },
+      });
+    });
+  }
+
+  it("a same-repository request keeps the editable start point and sends no pull head", async () => {
+    const operate = vi.mocked(runtimeApi.gitRepositoryOperate);
+    operate.mockClear();
+    await openGitlabPull({ autoMerge: false, mergeTrain: false });
+    const start = (await screen.findByLabelText(
+      "起点（留空使用 HEAD）",
+    )) as HTMLInputElement;
+    await waitFor(() => expect(start.value).toBe("origin/feature/login"));
+    fireEvent.change(screen.getByLabelText("worktree 目录（绝对路径）"), {
+      target: { value: "/tmp/review-12" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建 worktree" }));
+    await waitFor(() => expect(operate).toHaveBeenCalledTimes(1));
+    expect(operate.mock.calls[0]?.[1]).not.toHaveProperty("pullHead");
   });
 });

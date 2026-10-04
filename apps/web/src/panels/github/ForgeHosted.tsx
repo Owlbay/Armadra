@@ -822,7 +822,10 @@ export function PullBody({
       {workspaceId && (
         <CheckoutWorktree
           workspaceId={workspaceId}
-          pull={pull}
+          pull={{
+            ...pull,
+            forge: forge === "gitlab" ? "gitlab" : "gitea",
+          }}
           busy={merge.isPending}
         />
       )}
