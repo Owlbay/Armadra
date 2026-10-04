@@ -5,8 +5,10 @@
 import {
   acpDriverRequestSchema,
   acpDriverResponseSchema,
+  acpElicitationAnswerRequestSchema,
   acpLogResponseSchema,
   acpModeRequestSchema,
+  acpModelRequestSchema,
   acpPromptRequestSchema,
   acpPromptResponseSchema,
   answerApprovalRequestSchema,
@@ -15,6 +17,7 @@ import {
   exportPngResponseSchema,
   exportTextRequestSchema,
   terminalSessionSchema,
+  type AcpElicitationAnswer,
   type AgentDriver,
   type CreateAcpSessionRequest,
 } from "@armadra/shared";
@@ -48,6 +51,12 @@ export const acpApi = {
       method: "POST",
       ...json(acpModeRequestSchema.parse({ modeId })),
     }),
+  /** 契约 §26.2：Agent 给了模型目录时才有这条路。 */
+  setModel: (sessionId: string, modelId: string) =>
+    request(`/api/acp/sessions/${query(sessionId)}/model`, noContentSchema, {
+      method: "PUT",
+      ...json(acpModelRequestSchema.parse({ modelId })),
+    }),
   switchDriver: (nodeId: string, driver: AgentDriver) =>
     request(`/api/acp/nodes/${query(nodeId)}/driver`, acpDriverResponseSchema, {
       method: "POST",
@@ -61,6 +70,16 @@ export const acpApi = {
       {
         method: "POST",
         ...json(answerApprovalRequestSchema.parse({ decision, optionId })),
+      },
+    ),
+  /** 答一条 elicitation（契约 §26.1）：`decision` 由 action 推出，不发。 */
+  answerElicitation: (pendingId: string, elicitation: AcpElicitationAnswer) =>
+    request(
+      `/api/approvals/${query(pendingId)}/answer`,
+      answerApprovalResponseSchema,
+      {
+        method: "POST",
+        ...json(acpElicitationAnswerRequestSchema.parse({ elicitation })),
       },
     ),
   /**

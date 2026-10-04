@@ -2,6 +2,7 @@ import * as React from "react";
 import Markdown from "react-markdown";
 
 import { useT } from "@/app/preferences-store";
+import { ElicitationCard } from "@/acp/ElicitationCard";
 import { ExportMenu } from "@/acp/ExportMenu";
 import { MessageList } from "@/acp/MessageList";
 import { PermissionCard } from "@/acp/PermissionCard";
@@ -9,7 +10,10 @@ import { PromptBox } from "@/acp/PromptBox";
 import { Alert, AlertAction, AlertTitle } from "@/ui/alert";
 import { Button } from "@/ui/button";
 import {
+  ACP_ELICITATION,
+  ACP_ELICITATION_URL,
   ACP_ITEMS,
+  ACP_MODELS,
   ACP_MODES,
   ACP_NODE_ID,
   ACP_PERMISSION,
@@ -20,7 +24,8 @@ import {
 /**
  * `acp` 分区（设计展示页 §2.1，设计系统 §5.1–§5.2）：会话视图的真组件喂
  * 假数据。消息流（用户 / 思考 / 三种状态的工具调用 / 差异 / 助手）、流式
- * 尾部、权限卡与错误行、PromptBox 三态、输出到画板菜单展开。
+ * 尾部、权限卡与错误行、PromptBox 三态（带模式与模型）、窄屏「⋯」、
+ * elicitation 表单与链接两种卡片、输出到画板菜单展开。
  */
 
 const SOURCE = { nodeId: ACP_NODE_ID, sessionId: ACP_SESSION_ID };
@@ -107,9 +112,39 @@ export default function AcpSection() {
             disabled={false}
             streaming={false}
             modes={ACP_MODES}
+            models={ACP_MODELS}
             onSubmit={sent}
             onCancel={noop}
             onMode={noop}
+            onModel={noop}
+          />
+        </Frame>
+
+        <Frame>
+          <div className="flex flex-col gap-2 p-2.5">
+            <ElicitationCard
+              nodeId={ACP_NODE_ID}
+              view={ACP_ELICITATION_URL}
+              canAnswer
+            />
+          </div>
+          <ElicitationCard
+            nodeId={ACP_NODE_ID}
+            view={ACP_ELICITATION}
+            canAnswer
+            className="mx-2 mb-1.5"
+          />
+          <PromptBox
+            sessionId={null}
+            disabled={false}
+            streaming={false}
+            modes={ACP_MODES}
+            models={ACP_MODELS}
+            onSubmit={sent}
+            onCancel={noop}
+            onMode={noop}
+            onModel={noop}
+            compact
           />
         </Frame>
 

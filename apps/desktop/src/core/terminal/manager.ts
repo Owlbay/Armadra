@@ -671,7 +671,7 @@ export class TerminalManager {
         sessionKey: key,
         workspaceId,
         generation: nextGeneration,
-        cwd: String(row.cwd),
+        cwd: options.cwd ?? String(row.cwd),
         shell: String(row.shell),
         ...(command === undefined ? {} : { command }),
         args: [],
@@ -681,6 +681,9 @@ export class TerminalManager {
           nextGeneration,
         ),
         size: { cols: DEFAULT_COLS, rows: DEFAULT_ROWS },
+        ...(options.sshHostId === undefined
+          ? {}
+          : { sshHostId: options.sshHostId }),
       };
       // 一个 ACP 行接回来仍是 ACP，终端行仍是终端；切换驱动时调用方点名。
       const kind: BackendKind =

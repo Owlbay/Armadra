@@ -35,6 +35,8 @@ export interface AcpCore {
     title?: string;
     /** 节点绑定的凭据条目名（`agent.account.credentialRef`，契约 §20.3）。 */
     credentialRef?: string;
+    /** SSH 节点：`data.ssh.hostId`（契约 §26 的 SSH 小节）。 */
+    sshHostId?: string;
   }): Promise<string>;
   /** 连一条边（`link`）。 */
   link(source: string, target: string): Promise<void>;
@@ -171,6 +173,9 @@ export async function acpCore(
           data: {
             kind: "terminal",
             cwd: core.directory,
+            ...(input.sshHostId === undefined
+              ? {}
+              : { ssh: { hostId: input.sshHostId } }),
             agent: {
               id: input.agentId ?? FAKE_AGENT,
               driver: input.driver ?? "acp",
