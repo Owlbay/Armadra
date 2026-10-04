@@ -38,3 +38,4 @@ export * from "./gateway.js";
 export * from "./identity-security.js";
 export * from "./push.js";
 export * from "./credentials.js";
+export * from "./forge.js";
