@@ -142,6 +142,7 @@
 
 **何时需要**：中国大陆直连 GitHub 不稳定，或要做灰度。**方案**：Cloudflare R2（10 GB 存储、Class B 操作 1000 万次 / 月免费，**出站永久免费**）挂在 `updates.armadra.dev` 自定义域名后，`assemble` 之后加一个 `mirror` 作业 `rclone copy` 到桶；`ARMADRA_UPDATER_ENDPOINTS` 已支持逗号分隔多个端点，桌面壳按顺序尝试。（[Cloudflare R2 定价 2026](https://mecanik.dev/en/posts/cloudflare-r2-pricing-explained-real-costs-vs-s3-and-backblaze/)）
 **用户需提供**：注册 `armadra.dev`（或任何域名）、Cloudflare 账户；secrets `CLOUDFLARE_R2_ACCESS_KEY_ID`、`CLOUDFLARE_R2_SECRET_ACCESS_KEY`、变量 `CLOUDFLARE_R2_BUCKET`、`CLOUDFLARE_ACCOUNT_ID`。
+**现状（G5-18）**：作业已写（`tools/release/mirror.mjs`，[CI 与发布](../guides/ci-release.md) §3.3）：`release.yml` 的 `mirror` 在建 draft 时传 `releases/download/v<版本>/`，`distribute.yml` 的 `mirror` 在转正后把清单提到 `releases/latest/download/`；配了新变量 `ARMADRA_MIRROR_PUBLIC_URL` 时 `assemble` 另签一份链接指向镜像的 `latest.json`。对 dev-stack `s3`（versitygw）验过上传、提升与像客户端那样读回；真 R2 与域名仍待用户提供。
 **未配置时**：`mirror` 作业跳过，端点只有 GitHub。
 
 ### 3.4 通道与灰度

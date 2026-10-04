@@ -245,7 +245,7 @@ compose 插件时，`pnpm dev-stack up` 打印原因并退出 0，依赖它的�
 ```sh
 pnpm dev-stack up                      # 起全部非 profile 服务，并从宿主机跑健康检查
 pnpm dev-stack up dex mailpit          # 只起其中几个
-pnpm dev-stack up --profile ntfy       # 加上可选 profile（headscale / ntfy）
+pnpm dev-stack up --profile ntfy       # 加上可选 profile（headscale / ntfy / s3）
 pnpm dev-stack health --json           # 只跑健康检查
 pnpm dev-stack logs keycloak -f
 pnpm dev-stack down                    # 加 --volumes 连卷一起删
@@ -269,6 +269,7 @@ pnpm dev-stack down                    # 加 --volumes 连卷一起删
 | `armadra-server` | 8443          | 容器化服务器壳（`apps/server/docker/Dockerfile`，自签名 TLS） |
 | `headscale`      | 8094          | 可选 profile，只做文档验证，不进 CI                           |
 | `ntfy`           | 8093          | 可选 profile，UnifiedPush 分发                                |
+| `s3`             | 8095          | 可选 profile，S3 兼容桶（versitygw），更新镜像作业的替身      |
 
 开发夹具与密钥：
 

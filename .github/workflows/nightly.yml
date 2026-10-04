@@ -390,14 +390,12 @@ jobs:
   report:
     name: 失败开 issue
     needs:
-      [
-        linux,
-        linux-arm64,
-        macos,
-        mobile-ios,
-        mobile-android,
-        windows-acceptance,
-      ]
+      - linux
+      - linux-arm64
+      - macos
+      - mobile-ios
+      - mobile-android
+      - windows-acceptance
     if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
