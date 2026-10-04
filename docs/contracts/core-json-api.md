@@ -856,6 +856,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - **闸门**按模板（`automation_gates.node_id = "workflow:<templateId>"`）：同一个模板同一时刻只有一个定时运行在跑，`FORBID` / `QUEUE_ONE` 照常生效。
 - **起跑即投递**：工作流运行的 id 由这次投递的 `operationId` 推出（SHA-256 → UUID 形），重试与超时之后的复核认得出「已经起过」，不会起第二次。起跑当场被拒（§15.3 那几种）记 `FAILED`，理由码是 `WORKFLOW_` + 拒绝码大写（如 `WORKFLOW_PERMISSION_MODE_UNSUPPORTED`）。
 - **收据跟着运行走**：运行在跑记 `RUNNING`（理由 `WORKFLOW_RUNNING` / 有关卡在等人时 `WORKFLOW_WAITING`），结束记 `SUCCEEDED` / `FAILED` / `CANCELLED`（理由 `WORKFLOW_SUCCEEDED` / `WORKFLOW_FAILED` / `WORKFLOW_CANCELLED`）；自动化运行因此从起跑占着闸门直到工作流运行结束。
+- **模板升级**（G5-08 追加）：`PUT /api/workflows/templates/{id}` 的答复多一列 `frozenSchedules: [{ scheduleId, workspaceId, templateVersion, reason, missingParams, unknownParams }]`，列出指向这个模板、仍冻结在旧版本上的计划（已删除的不列）；`reason` 是 `compatible`（存着的参数按新版本全部成立，可直接升级）、`missing_params`（新版本多了没有缺省值的参数，名字在 `missingParams`）或 `param_mismatch`（存着的参数新版本不认了，名字在 `unknownParams`，或代入后超长）。`POST /api/workflows/templates/{id}/upgrade-schedules?workspaceId=` `{ scheduleIds }`（1–200 个）把该工作空间里参数相容的计划改到模板当前版本 → `{ upgraded: [{ scheduleId, revision }], frozen: [{ scheduleId, reason, missingParams, unknownParams }] }`：只换 `templateVersion`，其余配置与载荷原样，原来启用的按新的一版重新启用（同 §4 的定义 + 激活，认人与 `/api/automations/*` 相同，只有计划的创建者能改）；不相容的原样不动，`frozen.reason` 另有 `not_found`（不是这个模板的计划）、`forbidden`、`conflict`、`failed`。已是当前版本的计划算进 `upgraded`。不相容的计划由人在编辑计划时按新版本补参数，保存即存成当前版本。路由权限与改模板相同（服务器壳上只有 owner）。
 
 ### 15.5 `wait` 动词、`open-agent --task-id` 与 `workflow_task_runs`
 

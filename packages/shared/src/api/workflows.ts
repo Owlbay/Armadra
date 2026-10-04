@@ -356,7 +356,8 @@ export const WORKFLOW_RUN_TARGET_KIND = "AUTOMATION_TARGET_KIND_WORKFLOW_RUN";
 /**
  * 自动化目标 `WORKFLOW_RUN` 的 `target.workflowRun`：起哪个模板的哪一版、在哪块
  * 画布上。`templateVersion` 给 0 表示「定义时的当前版」，core 存成具体的数；
- * 之后模板改过，计划到点按 `TARGET_UNSUPPORTED` 跳过，要人重新存。
+ * 之后模板改过，计划到点按 `TARGET_UNSUPPORTED` 跳过，要人重新存，或经
+ * `POST /api/workflows/templates/{id}/upgrade-schedules` 升到新版本。
  */
 export const workflowRunTargetSchema = z.object({
   templateId: z.string().min(1).max(128),
@@ -395,3 +396,52 @@ export const WORKFLOW_RUN_REASONS = [
   "WORKFLOW_FAILED",
   "WORKFLOW_CANCELLED",
 ] as const;
+
+/* ------------------------- §15.6 模板升级（G5-08） ------------------------- */
+
+/**
+ * 冻结在旧版本上的计划按新模板能不能直接升级：`compatible` 参数全部成立、
+ * `missing_params` 新模板多了没有缺省值的参数、`param_mismatch` 存着的参数新模板
+ * 不认了或代入后超长。`PUT /api/workflows/templates/{id}` 的 `frozenSchedules`。
+ */
+export const WORKFLOW_FROZEN_REASONS = [
+  "compatible",
+  "missing_params",
+  "param_mismatch",
+] as const;
+
+export const workflowFrozenScheduleSchema = z.object({
+  scheduleId: z.string(),
+  workspaceId: z.string(),
+  templateVersion: z.number().int(),
+  reason: z.enum(WORKFLOW_FROZEN_REASONS),
+  missingParams: z.array(z.string()),
+  unknownParams: z.array(z.string()),
+});
+
+export type WorkflowFrozenSchedule = z.infer<
+  typeof workflowFrozenScheduleSchema
+>;
+
+/** `POST /api/workflows/templates/{id}/upgrade-schedules` 的答复。 */
+export const workflowUpgradeResultSchema = z.object({
+  upgraded: z.array(
+    z.object({ scheduleId: z.string(), revision: z.number().int() }),
+  ),
+  frozen: z.array(
+    z.object({
+      scheduleId: z.string(),
+      reason: z.enum([
+        ...WORKFLOW_FROZEN_REASONS,
+        "not_found",
+        "forbidden",
+        "conflict",
+        "failed",
+      ]),
+      missingParams: z.array(z.string()),
+      unknownParams: z.array(z.string()),
+    }),
+  ),
+});
+
+export type WorkflowUpgradeResult = z.infer<typeof workflowUpgradeResultSchema>;

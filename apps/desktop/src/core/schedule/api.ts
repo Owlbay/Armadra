@@ -274,11 +274,7 @@ export class AutomationApi {
    * 主人也必须是一台**真设备**：自动化的授权记录要拿它的 epoch 复核，一个编出来
    * 的设备标识会让计划在第一次投递时被自己的复核拒掉。
    */
-  private caller(
-    request: CoreRequest,
-    workspaceId: string,
-    mutation: boolean,
-  ): Caller {
+  caller(request: CoreRequest, workspaceId: string, mutation: boolean): Caller {
     const hostId = this.options.identity.hostId();
     const origin = headerOf(request, "origin");
     if (origin === undefined) {
