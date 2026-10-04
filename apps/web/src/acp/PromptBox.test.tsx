@@ -15,6 +15,34 @@ import { PromptBox } from "./PromptBox";
 const onSubmit = vi.fn<(text: string) => Promise<boolean>>();
 const onCancel = vi.fn();
 const onMode = vi.fn();
+const onModel = vi.fn();
+
+const MODES = {
+  currentModeId: "default",
+  availableModes: [
+    { id: "default", name: "Default" },
+    { id: "plan", name: "Plan" },
+  ],
+};
+const MODELS = {
+  currentModelId: "small",
+  availableModels: [
+    { modelId: "small", name: "Small" },
+    { modelId: "large", name: "Large" },
+  ],
+};
+
+/** 让 `(max-width: 767px)` 命中（窄屏），测完还原。 */
+function narrowViewport() {
+  const original = window.matchMedia;
+  window.matchMedia = ((query: string) => ({
+    ...original(query),
+    matches: query.includes("767"),
+  })) as typeof window.matchMedia;
+  return () => {
+    window.matchMedia = original;
+  };
+}
 
 function renderBox(
   props: Partial<React.ComponentProps<typeof PromptBox>> = {},
@@ -38,6 +66,7 @@ beforeEach(() => {
   onSubmit.mockReset().mockResolvedValue(true);
   onCancel.mockReset();
   onMode.mockReset();
+  onModel.mockReset();
 });
 
 afterEach(cleanup);
@@ -140,5 +169,54 @@ describe("PromptBox", () => {
       />,
     );
     expect(screen.getByLabelText("模式")).toBeTruthy();
+  });
+
+  it("offers a model picker only when the agent gives a catalog", () => {
+    const { rerender } = renderBox({ models: null, onModel });
+    expect(screen.queryByLabelText("模型")).toBeNull();
+    rerender(
+      <PromptBox
+        sessionId="s1"
+        disabled={false}
+        streaming={false}
+        modes={null}
+        models={MODELS}
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+        onMode={onMode}
+        onModel={onModel}
+      />,
+    );
+    const trigger = screen.getByLabelText("模型");
+    expect(trigger.textContent).toContain("Small");
+  });
+
+  it("folds mode and model into one menu on a narrow screen", async () => {
+    const restore = narrowViewport();
+    try {
+      renderBox({ modes: MODES, models: MODELS, onModel });
+      expect(screen.queryByLabelText("模式")).toBeNull();
+      expect(screen.queryByLabelText("模型")).toBeNull();
+      const more = screen.getByRole("button", { name: "更多" });
+      fireEvent.pointerDown(more, { button: 0, pointerType: "mouse" });
+      const large = await screen.findByRole("menuitemradio", {
+        name: "Large",
+      });
+      expect(screen.getByRole("menuitemradio", { name: "Plan" })).toBeTruthy();
+      fireEvent.click(large);
+      expect(onModel).toHaveBeenCalledWith("large");
+    } finally {
+      restore();
+    }
+  });
+
+  it("shows no menu on a narrow screen when there is nothing to choose", () => {
+    const restore = narrowViewport();
+    try {
+      renderBox({ modes: null, models: null, onModel });
+      expect(screen.queryByRole("button", { name: "更多" })).toBeNull();
+    } finally {
+      restore();
+    }
   });
 });

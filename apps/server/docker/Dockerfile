@@ -12,6 +12,9 @@
 #   runtime  node 运行时 + tmux / git / bash，非 root 用户 armadra（uid 10001），
 #            数据只在 /data 卷里；入口脚本把 ARMADRA_* 环境拼成 serve 的参数，
 #            没有对外来源就拒绝启动。
+#
+# 可选：--build-arg WITH_CHROMIUM=1 在 runtime 里装 Debian 的 Chromium（服务器壳
+# 上的浏览器节点用它），入口脚本设 ARMADRA_BROWSER_PATH。缺省不装：解压后多约 770 MiB。
 
 ARG NODE_IMAGE=node:22.23.3-bookworm-slim
 
@@ -73,6 +76,19 @@ RUN apt-get update \
  && mkdir -p /data \
  && chown armadra:armadra /data \
  && chmod 0700 /data
+
+# 浏览器节点（可选）。Debian 的 /usr/bin/chromium 是个包装脚本，会读
+# /etc/chromium.d/ 下的片段：容器里没有可用的命名空间沙箱（缺省 seccomp 不放
+# CLONE_NEWUSER），所以关掉 Chromium 自己的沙箱，靠容器隔离（非 root、无额外
+# capability）；/dev/shm 缺省只有 64 MiB，共享内存改走 /tmp。
+ARG WITH_CHROMIUM=0
+RUN if [ "$WITH_CHROMIUM" = "1" ]; then \
+      apt-get update \
+   && apt-get install -y --no-install-recommends chromium fonts-noto-cjk \
+   && rm -rf /var/lib/apt/lists/* \
+   && printf '%s\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-dev-shm-usage"' \
+        > /etc/chromium.d/armadra; \
+    fi
 
 COPY --from=build /app /app
 

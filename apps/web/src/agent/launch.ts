@@ -244,7 +244,6 @@ function launchInput(agent: TerminalAgent, prompt?: string, remote = false) {
     : override || target?.program || row?.resolvedPath || undefined;
   const lead = target?.args ?? [];
   const custom = customAgentFor(agent.id);
-  const launcher = row?.launcher;
   // 有启动器时程序与前置词都是它的参数；程序缺省为条目自己的启动命令。
   const launch = row?.launcher
     ? {
@@ -255,10 +254,7 @@ function launchInput(agent: TerminalAgent, prompt?: string, remote = false) {
         ...(program ? { programOverride: program } : {}),
         ...(lead.length > 0 ? { programArgs: lead } : {}),
       };
-  // 旧 Runtime 没有启动器，注入以 `launchWords` / `launchArgs` 给出：照旧写在
-  // 行上（保留一个版本）。当前 Runtime 两个都不答，没有启动器时就是裸行。
-  const words = launcher ? [] : (row?.launchWords ?? []);
-  const injected = launcher || words.length > 0 ? [] : (row?.launchArgs ?? []);
+  // 没有启动器时就是裸行：注入只由启动器追加。
   return {
     agentId: agent.id,
     ...(custom ? { custom } : {}),
@@ -266,8 +262,6 @@ function launchInput(agent: TerminalAgent, prompt?: string, remote = false) {
     ...(agent.permissionMode ? { permissionMode: agent.permissionMode } : {}),
     ...(agent.model ? { model: agent.model } : {}),
     ...(agent.sessionId ? { sessionId: agent.sessionId } : {}),
-    ...(injected.length > 0 ? { extraArgs: injected } : {}),
-    ...(words.length > 0 ? { shellWords: words } : {}),
     ...(prompt ? { prompt } : {}),
   };
 }

@@ -45,7 +45,7 @@ import { acpInjection } from "../agent/canvas-launch";
 import { getAgentStatus } from "../agent/status";
 import { nodeRole } from "../canvas/context-links";
 import { handleForNode } from "../canvas/handles";
-import { loadNode } from "../collab/nodes";
+import { loadNode, workspaceRoot } from "../collab/nodes";
 import { historyAdapter } from "../history/registry";
 import { hookService } from "../hook";
 import { type IngestContext, apply } from "../hook/ingest";
@@ -72,6 +72,7 @@ import { startAdapter } from "./host";
 import { AcpMirror, mirrorPath } from "./mirror";
 import { installRoutes } from "./routes";
 import { AcpSession, type AcpSessionSink } from "./session";
+import { sshHostOf, startRemoteAdapter } from "./ssh";
 
 export {
   ACP_ADAPTERS,
@@ -115,6 +116,13 @@ export {
 } from "./host";
 export { AcpBackend } from "./bridge";
 export { AcpSession } from "./session";
+export {
+  type AcpSshDeps,
+  remoteAcpCommand,
+  setAcpSshDeps,
+  sshHostOf,
+  startRemoteAdapter,
+} from "./ssh";
 
 /* ------------------------------ 起会话的计划 ------------------------------ */
 
@@ -142,7 +150,7 @@ export interface AcpTerminalWiring {
   readonly environment: (
     nodeId: string,
     agentId: string,
-    options: { readonly acp: boolean },
+    options: { readonly acp: boolean; readonly ssh?: boolean },
   ) => EnvPairs;
   /** 在一个刚起的 shell 里敲启动行（切回终端驱动）。 */
   readonly typeLaunchLine: (
@@ -245,6 +253,7 @@ class AcpRuntime {
     agentId: string,
     adapter: AcpAdapter,
     cwd: string,
+    remote: boolean,
   ): AcpSessionSink {
     const context = this.context;
     return {
@@ -306,6 +315,8 @@ class AcpRuntime {
       // §4.3：ACP 会话 id 就是 CLI 自己的、本地历史又找得到这个会话时，认
       // CLI 的转录（与终端驱动字节相同）；否则认镜像。
       transcriptPath: (acpSessionId, mirror) => {
+        // SSH 节点：CLI 的转录在执行主机上，本机认镜像。
+        if (remote) return mirror;
         if (adapter.sessionId === "mapFile") {
           // §26.3：适配器自己的映射文件把 ACP 会话 id 对回 CLI 的会话文件；
           // 读不到就与 `opaque` 一样认镜像。
@@ -359,25 +370,12 @@ class AcpRuntime {
       );
     }
     const dataDir = this.context.dataDir;
-    const injection = acpInjection(
-      settings,
-      dataDir,
-      agentId,
-      adapter,
-      (message, fields) => this.context.log.warn(message, fields),
-    );
+    const database = this.context.db.database;
     const custom = customAgent(settings, agentId);
-    const processEnv: NodeJS.ProcessEnv = { ...process.env };
-    for (const [name, value] of spec.env) processEnv[name] = value;
-    for (const [name, value] of Object.entries(custom?.env ?? {})) {
-      processEnv[name] = value;
-    }
-    for (const [name, value] of injection.env) processEnv[name] = value;
-    // §26.4：适配器不经画布启动器，兑换由 core 在这里做。值只进这个进程的
-    // 环境：不进节点数据、镜像、日志，也不进任何答复。
-    for (const [name, value] of await this.secrets(nodeId, agentId, spec.env)) {
-      processEnv[name] = value;
-    }
+    // SSH 节点（契约 §26 的 SSH 小节）：适配器在执行主机上，经 `ssh` 起。
+    const nodeData = loadNode(database, nodeId)?.data;
+    const sshHostId = spec.sshHostId ?? sshHostOf(nodeData);
+    const remote = sshHostId !== undefined;
 
     const resume =
       typeof plan.resume === "string" && plan.resume !== ""
@@ -389,52 +387,107 @@ class AcpRuntime {
       nodeId,
       workspaceId: spec.workspaceId,
       agentId,
-      sink: this.sink(spec.workspaceId, nodeId, agentId, adapter, spec.cwd),
+      sink: this.sink(
+        spec.workspaceId,
+        nodeId,
+        agentId,
+        adapter,
+        spec.cwd,
+        remote,
+      ),
       mirrorFor: (acpSessionId) =>
         new AcpMirror(mirrorPath(dataDir, nodeId, acpSessionId)),
       resumeSessionId: resume,
       onExit,
     });
-    const database = this.context.db.database;
     const mode = plan.permissionMode as
       | "default"
       | "auto-edit"
       | "full-auto"
       | "plan"
       | undefined;
-    const host = await startAdapter(adapter, {
+    const common = {
       cwd: spec.cwd,
-      env: processEnv,
       ...(mode === undefined ? {} : { mode }),
       ...(plan.model === undefined ? {} : { modelId: plan.model }),
-      ...(injection.profilePath === undefined
-        ? {}
-        : { profilePath: injection.profilePath }),
-      ...(injection.args.length === 0 ? {} : { injectionArgs: injection.args }),
       ...(resume === undefined ? {} : { resumeSessionId: resume }),
-      canvasMcp: {
-        nodeId,
-        agentId,
-        dataDir,
-        ...(() => {
-          const name = handleForNode(database, nodeId);
-          return name === undefined ? {} : { nodeName: name };
-        })(),
-        ...(() => {
-          const role = nodeRole(database, nodeId);
-          return role === undefined ? {} : { nodeRole: role };
-        })(),
-        ...(rowId === ""
-          ? {}
-          : { session: { id: rowId, generation: spec.generation } }),
-      },
       ...session.callbacks(),
-      onStderr: (text) =>
+      onStderr: (text: string) =>
         this.context.log.debug("ACP agent stderr", {
           nodeId,
           bytes: text.length,
         }),
-    });
+    };
+
+    let host;
+    if (sshHostId !== undefined) {
+      // 凭据在远端不兑换（契约 §20）：条目名不带过去，值更不取。
+      // 会话的工作目录是执行主机上的：节点的 `cwd`，没有就是工作空间根。
+      // 行上的 `cwd` 可能是这一行当初以终端起时本机 `ssh` 的起点。
+      const remoteCwd =
+        (typeof nodeData?.cwd === "string" && nodeData.cwd !== ""
+          ? nodeData.cwd
+          : undefined) ??
+        workspaceRoot(database, spec.workspaceId) ??
+        spec.cwd;
+      host = await startRemoteAdapter(adapter, {
+        ...common,
+        cwd: remoteCwd,
+        hostId: sshHostId,
+        dataDir,
+        remoteEnv: Object.entries(custom?.env ?? {}),
+        nodeEnv: spec.env,
+      });
+    } else {
+      const injection = acpInjection(
+        settings,
+        dataDir,
+        agentId,
+        adapter,
+        (message, fields) => this.context.log.warn(message, fields),
+      );
+      const processEnv: NodeJS.ProcessEnv = { ...process.env };
+      for (const [name, value] of spec.env) processEnv[name] = value;
+      for (const [name, value] of Object.entries(custom?.env ?? {})) {
+        processEnv[name] = value;
+      }
+      for (const [name, value] of injection.env) processEnv[name] = value;
+      // §26.4：适配器不经画布启动器，兑换由 core 在这里做。值只进这个进程的
+      // 环境：不进节点数据、镜像、日志，也不进任何答复。
+      for (const [name, value] of await this.secrets(
+        nodeId,
+        agentId,
+        spec.env,
+      )) {
+        processEnv[name] = value;
+      }
+      host = await startAdapter(adapter, {
+        ...common,
+        env: processEnv,
+        ...(injection.profilePath === undefined
+          ? {}
+          : { profilePath: injection.profilePath }),
+        ...(injection.args.length === 0
+          ? {}
+          : { injectionArgs: injection.args }),
+        canvasMcp: {
+          nodeId,
+          agentId,
+          dataDir,
+          ...(() => {
+            const name = handleForNode(database, nodeId);
+            return name === undefined ? {} : { nodeName: name };
+          })(),
+          ...(() => {
+            const role = nodeRole(database, nodeId);
+            return role === undefined ? {} : { nodeRole: role };
+          })(),
+          ...(rowId === ""
+            ? {}
+            : { session: { id: rowId, generation: spec.generation } }),
+        },
+      });
+    }
     session.opened(host);
     return {
       session,

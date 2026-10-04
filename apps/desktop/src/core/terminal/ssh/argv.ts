@@ -81,6 +81,35 @@ function argvFor(
 }
 
 /**
+ * A non-TTY `ssh` whose stdio is a byte stream for a program on the far side:
+ * `ssh -o … [-p PORT] [-i FILE] [extra…] -- destination <remote command>`.
+ *
+ * The same options as the Worker line (askpass, host-key file, timeouts), so a
+ * host that can run a Worker can run this. The `--` ends option parsing before
+ * the destination, so nothing after it can be read as an `ssh` option. Used by
+ * an SSH node driven over ACP (`core/acp/ssh.ts`): the remote command is the
+ * adapter, and stdin / stdout are its JSON-RPC.
+ */
+export function streamArgv(
+  dataDir: string,
+  host: SshHost,
+  remoteCommand: string,
+): string[] {
+  const argv = [
+    "ssh",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=30",
+  ];
+  argv.push(...askpassOptions());
+  argv.push(...knownHostsOptions(dataDir));
+  argv.push(...addressing(host));
+  argv.push("--", destination(host), remoteCommand);
+  return argv;
+}
+
+/**
  * The remote words: the program, its mode, and the state directory.
  *
  * `ssh` joins these with spaces and the login shell on the far side splits

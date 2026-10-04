@@ -6,7 +6,6 @@ import {
   quoteShellWord,
   shellCommandLine,
   shellDialect,
-  shellEnvWord,
   type ShellDialect,
 } from "../src/shell";
 
@@ -167,28 +166,6 @@ describe("quoteShellWord", () => {
   });
 });
 
-describe("shellEnvWord", () => {
-  it.each([
-    ["posix", '"hooks.Stop=${ARMADRA_CODEX_HOOK}"'],
-    ["fish", '"hooks.Stop=$ARMADRA_CODEX_HOOK"'],
-    ["cmd", '"hooks.Stop=%ARMADRA_CODEX_HOOK%"'],
-    ["powershell", '"hooks.Stop=${env:ARMADRA_CODEX_HOOK}"'],
-    ["windows-powershell", '"hooks.Stop=${env:ARMADRA_CODEX_HOOK}"'],
-  ] as const)("%s", (dialect, expected) => {
-    expect(shellEnvWord("hooks.Stop=", "ARMADRA_CODEX_HOOK", dialect)).toBe(
-      expected,
-    );
-  });
-
-  it("escapes what the double quotes would still interpret in the prefix", () => {
-    expect(shellEnvWord('a$`"\\', "V", "posix")).toBe('"a\\$\\`\\"\\\\${V}"');
-    expect(shellEnvWord('a$"\\', "V", "fish")).toBe('"a\\$\\"\\\\$V"');
-    expect(shellEnvWord('a$`"', "V", "powershell")).toBe('"a`$```"${env:V}"');
-    expect(() => shellEnvWord("100%", "V", "cmd")).toThrow();
-    expect(() => shellEnvWord("x", "not a name", "posix")).toThrow();
-  });
-});
-
 describe("shellDialect", () => {
   it.each([
     ["/bin/zsh", "posix"],
@@ -315,11 +292,6 @@ describe("cmd.exe reads it back (modelled)", () => {
     const line = shellCommandLine("prog", values, "cmd");
     expect(readAsCmd(line, { PATH: "C:\\Windows" }).slice(1)).toEqual(values);
   });
-
-  it("expands a variable reference into one argument", () => {
-    const line = shellCommandLine("prog", [{ prefix: "k=", env: "V" }], "cmd");
-    expect(readAsCmd(line, { V: "a b & c" }).slice(1)).toEqual(["k=a b & c"]);
-  });
 });
 
 /**
@@ -436,19 +408,6 @@ describe("Windows PowerShell 5.1 reads it back (modelled)", () => {
     ]);
   });
 
-  it("expands a variable as %NAME% after --%", () => {
-    const line = shellCommandLine(
-      "prog",
-      ["-c", { prefix: "k=", env: "V" }],
-      "windows-powershell",
-    );
-    expect(line).toBe('prog -c --% "k=%V%"');
-    expect(readAsWindowsPowerShell(line, { V: 'a \\"b\\" | c' })).toEqual([
-      "-c",
-      'k=a "b" | c',
-    ]);
-  });
-
   it("refuses what --% cannot carry", () => {
     for (const value of ["100%", "a|b", "%PATH%"]) {
       expect(() =>
@@ -490,12 +449,7 @@ describe("batch programs", () => {
       "",
     ];
     expect(safe.every((value) => batchSafeWord(value))).toBe(true);
-    const line = shellCommandLine(
-      "C:\\npm\\claude.cmd",
-      [...safe, { prefix: "k=", env: "V" }],
-      "cmd",
-    );
-    expect(readAsCmd(line, { V: "v" }).slice(1)).toEqual([...safe, "k=v"]);
-    expect(batchSafeWord({ prefix: "k&", env: "V" })).toBe(false);
+    const line = shellCommandLine("C:\\npm\\claude.cmd", safe, "cmd");
+    expect(readAsCmd(line, {}).slice(1)).toEqual(safe);
   });
 });

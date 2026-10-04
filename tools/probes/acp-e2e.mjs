@@ -11,6 +11,10 @@
 //   3. A 要写文件 → 审批卡出现 → 在页面上点「拒绝」：审批行 `deny`、审计 `route = acp`，
 //      Agent 收到的是它自己的 `reject` 选项；
 //   4. A 以 `armadra-hook canvas send` 投给 B：B 收到一次 prompt（`delivered`）；
+//   4b. 第三个节点 C（假 Agent 带 `--config-options`）：发 `[elicit]`，elicitation 卡出现，
+//      在页面上选值提交，Agent 收到这份内容、审批行不存它；Agent 给了模型目录时在
+//      输入框旁的 Select 换模型，`[model]` 答新模型、节点数据记下 `agent.model`
+//      （契约 §26）。上游 `@armadra/agent` 还没有这两样能力时这一步记为跳过；
 //   5. A 切到终端视图再切回：同一行、代次 +2，接回同一个 CLI 会话，之前的对话还在；
 //   6. 打开 Eco（秒级阈值）让 A 休眠，再在页面上发一句把它唤醒：同一行、适配器
 //      pid 换了、CLI 会话 id 没变；
@@ -45,6 +49,7 @@ const { report, step } = h;
 report.failures = [];
 
 const FAKE_AGENT = "custom:fake-acp";
+const FEATURE_AGENT = "custom:fake-acp-features";
 const fakeAgent = join(
   root,
   "apps/desktop/node_modules/@armadra/agent/dist/drivers/acp/testing/fake-agent-main.js",
@@ -139,7 +144,7 @@ await h.run(async () => {
     }
   };
 
-  /* ---------------------------- 画布与两个节点 ---------------------------- */
+  /* ---------------------------- 画布与三个节点 ---------------------------- */
 
   const projectRoot = h.temp("armadra-acp-e2e-project-");
   writeFileSync(join(projectRoot, "README.md"), "# ACP\n");
@@ -153,6 +158,13 @@ await h.run(async () => {
             label: "Fake ACP",
             launchCmd: process.execPath,
             args: [fakeAgent],
+            baseAgent: "opencode",
+          },
+          {
+            id: FEATURE_AGENT,
+            label: "Fake ACP features",
+            launchCmd: process.execPath,
+            args: [fakeAgent, "--config-options"],
             baseAgent: "opencode",
           },
         ],
@@ -170,20 +182,26 @@ await h.run(async () => {
   const stamp = new Date().toISOString();
   const A = randomUUID();
   const B = randomUUID();
-  const agentNode = (id, title, x) => ({
+  const C = randomUUID();
+  const agentNode = (
+    id,
+    title,
+    x,
+    { agentId = FAKE_AGENT, y = 80, height = 520 } = {},
+  ) => ({
     id,
     boardId: board.id,
     type: "terminal",
     title,
     color: "#0a84ff",
-    position: { x, y: 80 },
-    size: { width: 560, height: 520 },
+    position: { x, y },
+    size: { width: 560, height },
     labels: [],
     note: "",
     data: {
       kind: "terminal",
       cwd: projectRoot,
-      agent: { id: FAKE_AGENT, driver: "acp" },
+      agent: { id: agentId, driver: "acp" },
     },
     createdAt: stamp,
     updatedAt: stamp,
@@ -192,7 +210,16 @@ await h.run(async () => {
     method: "PUT",
     body: {
       expectedUpdatedAt: current.board.updatedAt,
-      nodes: [agentNode(A, "Agent A", 40), agentNode(B, "Agent B", 680)],
+      nodes: [
+        agentNode(A, "Agent A", 40),
+        agentNode(B, "Agent B", 680),
+        // 放在 A 下方、窗口之内：页面上的点击要落在看得见的元素上。
+        agentNode(C, "Agent C", 40, {
+          agentId: FEATURE_AGENT,
+          y: 620,
+          height: 360,
+        }),
+      ],
       edges: [
         {
           id: randomUUID(),
@@ -368,6 +395,81 @@ await h.run(async () => {
   );
   await waitUntil("B 回合结束", () => status(B)?.state === "done", 30_000);
   await page.capture("05-send-delivered");
+
+  /* ------------------- 4b. elicitation 与模型（契约 §26）------------------- */
+
+  report.skipped = [];
+  const rowC = await waitUntil("C 的会话行", () => {
+    const row = sessionRow(C);
+    return row?.status === "running" ? row : undefined;
+  });
+  await page.waitFor(
+    `return !!document.querySelector(${JSON.stringify(`${node(C)} [data-slot="acp-session-view"] textarea`)});`,
+    { what: "C 的会话视图与输入框" },
+  );
+  const logC = await api(`/api/acp/sessions/${rowC.id}/log`);
+  report.featureModels = logC.models ?? null;
+  const card = `${node(C)} [data-slot="acp-elicitation"]`;
+  await say(C, "pick one [elicit]");
+  // 旧的假 Agent 不认 `[elicit]`（回声），新的假 Agent 遇上没声明能力的 core 答
+  // `unsupported`；两样都是「上游还没到」，不是失败。
+  const outcome = await page.waitFor(
+    `const text = document.querySelector(${JSON.stringify(node(C))})?.innerText ?? "";
+     if (document.querySelector(${JSON.stringify(card)})) return "card";
+     if (text.includes("elicit: unsupported") || text.includes("echo: pick one")) return "unsupported";
+     return false;`,
+    { what: "C 的 elicitation 卡或「不支持」", timeout: 30_000 },
+  );
+  if (outcome === "unsupported") {
+    report.skipped.push("elicitation：上游 @armadra/agent 尚无该能力");
+    step("elicitation 跳过：上游 @armadra/agent 尚无该能力");
+  } else {
+    check(status(C)?.state === "waiting", "elicitation/create → waiting");
+    await page.capture("10-elicitation-card");
+    await page.click(`${card} [role="combobox"]`);
+    await page.click('[role="option"]', "blue", { exact: true });
+    await page.fill(`${card} input[type="number"]`, "2");
+    await page.click(`${card} button`, "提交", { exact: true });
+    await page.waitFor(
+      `return document.querySelector(${JSON.stringify(node(C))})?.innerText.includes('elicit: accept {"color":"blue","count":2}');`,
+      { what: "Agent 收到页面填的内容" },
+    );
+    const answered = query(
+      "SELECT * FROM agent_approvals WHERE node_id = ? ORDER BY created_at DESC LIMIT 1",
+      C,
+    )[0];
+    check(
+      answered?.answer === "allow" &&
+        JSON.parse(answered.request_json).elicitation?.message ===
+          "Pick a color" &&
+        !JSON.stringify(answered).includes('"count":2'),
+      "页面答的 elicitation：allow、审批行不存答复内容",
+      JSON.stringify({ answer: answered?.answer }),
+    );
+    await waitUntil("C 回到 done", () => status(C)?.state === "done");
+    await page.capture("11-elicitation-answered");
+  }
+
+  if (!logC.models) {
+    report.skipped.push("模型 Select：上游 @armadra/agent 尚无 configOptions");
+    step("模型 Select 跳过：上游 @armadra/agent 尚无 configOptions");
+  } else {
+    await page.click(`${node(C)} [aria-label="模型"]`);
+    await page.click('[role="option"]', "Large", { exact: true });
+    await sleep(300);
+    await say(C, "[model]");
+    await page.waitFor(
+      `return document.querySelector(${JSON.stringify(node(C))})?.innerText.includes("model large");`,
+      { what: "换模型之后 Agent 用的是 large" },
+    );
+    const recorded = await waitUntil("节点数据记下 agent.model", async () => {
+      const doc = await api(documentPath);
+      const model = doc.nodes.find((n) => n.id === C)?.data?.agent?.model;
+      return model === "large" ? model : undefined;
+    });
+    check(recorded === "large", "换模型写回节点数据 agent.model");
+    await page.capture("12-model-switched");
+  }
 
   /* ------------------------- 5. 切换驱动 ------------------------- */
 

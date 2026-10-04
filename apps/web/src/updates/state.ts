@@ -65,6 +65,12 @@ export type HostVerdictKind =
 
 export type HostSide =
   | { kind: "notAsked" }
+  /**
+   * The desktop shell asked the release index itself (`updates:check` with no
+   * answer attached): its machine already holds the whole release answer, so
+   * there is no second side to agree with.
+   */
+  | { kind: "shell" }
   | { kind: "checking" }
   /** No session to ask with: signed out, no permission, wrong origin. */
   | { kind: "blocked"; reason: string }
@@ -237,6 +243,7 @@ export function mergeUpdatesState(
 
   // ---- both sides have something to say ----------------------------------
   const release = host.kind === "answered" ? host.release : null;
+  const shellAsked = host.kind === "shell";
   const hostVerdict = host.kind === "answered" ? host.verdict : "unknown";
   const hostReason = host.kind === "answered" ? host.reasonCode : "";
 
@@ -244,7 +251,7 @@ export function mergeUpdatesState(
     case "upToDate":
       // The rule: both sides, or neither. A shell that found nothing while the
       // Host said something else is reported as unconfirmed, not as reassuring.
-      if (hostVerdict === "upToDate") {
+      if (hostVerdict === "upToDate" || shellAsked) {
         return view({
           state: "upToDate",
           checkedAtMs: shell.checkedAtMs,
@@ -262,7 +269,7 @@ export function mergeUpdatesState(
       return view({
         state: "unavailable",
         detailKeys: [
-          reasonKey(hostReason),
+          shellAsked ? null : reasonKey(hostReason),
           shellReasonKey(shell.reason),
         ].filter((key): key is string => key !== null),
         retryAfterMs: shell.retryAfterMs,
@@ -323,6 +330,35 @@ export function mergeUpdatesState(
       // shell is "could not be confirmed", never "up to date".
       return view({ state: "unavailable", actions: ["check"] });
   }
+}
+
+/** No release source: a statement about this build, not about any release. */
+export const NO_RELEASE_SOURCE: HostSide = {
+  kind: "blocked",
+  reason: "noReleaseSource",
+};
+
+/**
+ * The release side once the desktop shell has answered (`updates:check` with
+ * nothing attached asks the release index itself).
+ *
+ * `noReleaseSource` is said only when the shell itself has none: it reports
+ * the endpoints missing, or a person's check left it `idle` — the shell
+ * returns its state untouched when it has no index to ask for this target.
+ * Anything else the shell answered is the release answer.
+ */
+export function hostAfterShell(
+  shell: ShellUpdateState,
+  checked: boolean,
+): HostSide {
+  if (shell.state === "notConfigured" && shell.missing.endpoints) {
+    return NO_RELEASE_SOURCE;
+  }
+  if (shell.state === "unsupported") return { kind: "notAsked" };
+  if (shell.state === "idle") {
+    return checked ? NO_RELEASE_SOURCE : { kind: "notAsked" };
+  }
+  return { kind: "shell" };
 }
 
 /** The Host's own sentence, when it has one worth adding. */

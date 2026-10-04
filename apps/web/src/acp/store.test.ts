@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   EMPTY_SESSION,
+  acpElicitationOf,
   acpPermissionOf,
   applyUpdate,
   beginTurn,
   endTurn,
   fromLog,
+  modelStateOf,
+  useAcpStore,
   type AcpItem,
   type AcpSessionView,
 } from "./store";
@@ -231,5 +234,87 @@ describe("acpPermissionOf", () => {
     expect(
       acpPermissionOf("p1", { id: "p1", request: { tool_name: "Bash" } }),
     ).toBeNull();
+  });
+});
+
+describe("models (contract §26.2)", () => {
+  const options = [
+    { id: "mode", category: "mode", currentValue: "x", options: [] },
+    {
+      id: "model",
+      category: "model",
+      currentValue: "large",
+      options: [
+        { value: "small", name: "Small" },
+        {
+          group: "big",
+          name: "Big",
+          options: [{ value: "large", name: "Large", description: "slow" }],
+        },
+      ],
+    },
+  ];
+
+  it("reads the model option and flattens groups like the core", () => {
+    expect(modelStateOf(options)).toEqual({
+      currentModelId: "large",
+      availableModels: [
+        { modelId: "small", name: "Small" },
+        { modelId: "large", name: "Large", description: "slow" },
+      ],
+    });
+    expect(modelStateOf([{ id: "model", options: [{ value: "a" }] }])).toEqual({
+      currentModelId: "a",
+      availableModels: [{ modelId: "a", name: "a" }],
+    });
+    expect(modelStateOf([])).toBeNull();
+    expect(modelStateOf("nope")).toBeNull();
+  });
+
+  it("follows config_option_update only once there is a catalog", () => {
+    const update = {
+      sessionUpdate: "config_option_update",
+      configOptions: options,
+    };
+    expect(run(EMPTY_SESSION, update).models).toBeNull();
+    const withCatalog = {
+      ...EMPTY_SESSION,
+      models: { currentModelId: "small", availableModels: [] },
+    };
+    expect(run(withCatalog, update).models?.currentModelId).toBe("large");
+  });
+});
+
+describe("elicitations (contract §26.1)", () => {
+  const elicitation = { message: "Name?", mode: "form" as const };
+
+  it("reads the approval record and the bare payload, not permissions", () => {
+    const payload = { protocol: "acp", elicitation };
+    expect(acpElicitationOf("e1", { request: payload })).toEqual({
+      pendingId: "e1",
+      elicitation,
+    });
+    expect(acpElicitationOf("e1", payload)?.pendingId).toBe("e1");
+    expect(
+      acpElicitationOf("p1", { protocol: "acp", toolCall: {}, options: [] }),
+    ).toBeNull();
+  });
+
+  it("hydrates, resolves by pendingId and clears at the end of a turn", () => {
+    const store = useAcpStore.getState;
+    store().reset();
+    store().hydrate("s1", "n1", {
+      entries: [],
+      endOffset: 0,
+      models: null,
+      elicitations: [{ pendingId: "e1", protocol: "acp", elicitation }],
+    });
+    expect(store().elicitations.n1).toEqual([{ pendingId: "e1", elicitation }]);
+    expect(store().sessions.s1?.models).toBeNull();
+    store().resolvePermission("e1");
+    expect(store().elicitations.n1).toBeUndefined();
+    store().addElicitation("n1", { pendingId: "e2", elicitation });
+    store().end("s1", "n1", { stopReason: "cancelled" });
+    expect(store().elicitations.n1).toBeUndefined();
   });
 });

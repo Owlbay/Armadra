@@ -9,7 +9,7 @@
 | 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                                                                           | 何时跑                              | 失败时       |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | ------------ |
 | A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e`、`agent-e2e-self-test`（场景 11 / 12 的 `--self-test`） | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                                            | `nightly.yml`                       | 开 issue     |
+| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`server-e2e --proxy=caddy`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                | `nightly.yml`                       | 开 issue     |
 | C   | `agent-e2e`（真 CLI 与额度，`ARMADRA_E2E_REAL=1`，见「C 档运行手册」）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                                                        | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑。
@@ -308,6 +308,8 @@ node tools/probes/server-e2e.mjs [输出目录]
 
 `apps/server/out/main.js serve` 用临时数据目录启动并托管 `apps/web/dist`（自签名 HTTPS，Chrome 带 `--ignore-certificate-errors`）。无头 Chrome 开两个互不共享 Cookie 的浏览器上下文：管理员打开启动日志里的配对链接完成配对，在「账号与共享」生成只读邀请；成员在另一个上下文打开 `#invite=` 链接注册。之后依次验证：成员打开共享画布与逐页打开设置都没有任何 403（逐条记在 `memberForbidden`、`memberSettings`），设置导航里没有本机管理的那几页（`memberSettingsNav`），界面没有报错横幅与控制台错误；只读时右上角写「只读」、便签拖不动、不发被拒的保存，直接写接口是 403；管理员改成「编辑」后下一拍心跳解除只读、拖动落盘；撤销共享后成员的事件流以 4403 关闭、下一个请求 403、页面离开那块工作空间，他手里的写租约当场释放（管理员打开画布时没有「正在编辑」）；同一浏览器上下文再开一个管理员窗口，它写「本机另一个窗口正在编辑」，点「接管」不弹确认、一次拿到租约，先开的窗口转只读，审计里有一条 `canvas.lease.takeover`（`takeoverAudit`）；最后管理员在服务器壳上新建浏览器节点，起始页是探针自己的回环页面，取画面流上的像素确认第一帧到了。
 
+`--proxy=caddy`：服务器壳只听回环，对外来源是 `https://localhost:<端口>`，前面放一个 Caddy 容器（`tools/dev-stack/caddy/Caddyfile`，上游 CA 取自 `/ca.crt`），以上全部经代理走；macOS 经 `host.docker.internal` 回宿主回环，Linux 用 `--network host`。`--container=<镜像>` 遇到带 Chromium 的镜像（构建参数 `WITH_CHROMIUM=1`，`--build --with-chromium` 让探针自己构建）时浏览器节点一步照走，探针页在容器自己的回环上。
+
 产物默认在 `target/server-e2e/`：`result.json` 与 `01-admin-paired.png` … `13-second-window-took-over.png`。端口随机，数据目录、项目目录与浏览器 profile 都是 `mktemp`，服务器壳先 SIGTERM（让它收掉自己起的 headless Chromium）再删目录、停 tmux。没有验证：`--public-origin` 与真证书、passkey / OAuth、多于一个成员、手机布局。
 
 ## 服务器壳性能基线
@@ -380,6 +382,8 @@ B 档（`nightly.yml` 的 `linux` 与 `macos` 作业）带 `--no-real-cli`：不
 2. **编辑器的 PDF 与视频**：视频夹具由打包版自己的 MediaRecorder 录出来；截图里 PDF 区域不是空白，`<video>` 读得出 320×240、没有解码错误，播一下之后画面不是一块纯色。
 3. **节能休眠与唤醒**：真 Codex（临时 HOME 里的 `~/.codex`，只复制 `auth.json`；mise 的 Node 目录用一个符号链接给过去）。`ARMADRA_TEST_ECO_IDLE_SECONDS=20`，页面离开画布后 Codex 进程退出、会话记成休眠；回到画布节点显示「休眠中」，点节点后同一会话 id 起下一代、进程带同一个 provider 会话 id，问「之前让你记的数加一」答 418。
 4. **控制台**：渲染进程没有 error 级别的输出与未捕获异常。
+
+另有一步 Gateway：在回环档开 Gateway，只信 `GET /ca.crt` 发的本地 CA 经它取首页，要 200 且是 `apps/web` 的产物（打包版里产物在 asar 中），取完关掉。
 
 产物默认在 `target/packaged-smoke/`：`result.json`、`app.log`、`packaged-media.png`、`packaged-before-hibernate.png`、`packaged-hibernated.png`、`packaged-resumed.png`。没验证：Claude（登录在钥匙串里，临时 HOME 认证不上）、签名与公证后的包、自动更新。
 

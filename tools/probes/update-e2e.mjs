@@ -41,7 +41,7 @@
  *     [--release-dir apps/desktop/release] [--build] [--require-dev-stack]
  *     [--install --next <release dir of the higher version>]
  */
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   cpSync,
@@ -164,10 +164,29 @@ export function executableOf(app) {
  */
 export function expectedSignature(app, platform = process.platform) {
   if (platform === "linux") return "notApplicable";
-  if (platform === "darwin")
-    return existsSync(join(app, "Contents", "_CodeSignature", "CodeResources"))
-      ? "signed"
-      : "unsigned";
+  if (platform === "darwin") {
+    // codesign --verify --deep --strict, and an ad-hoc signature is unknown.
+    const verify = spawnSync(
+      "/usr/bin/codesign",
+      ["--verify", "--deep", "--strict", app],
+      { encoding: "utf8" },
+    );
+    if (verify.error || verify.status !== 0) {
+      return !verify.error &&
+        /not signed at all/.test(`${verify.stderr}${verify.stdout}`)
+        ? "unsigned"
+        : "unknown";
+    }
+    const display = spawnSync(
+      "/usr/bin/codesign",
+      ["--display", "--verbose=2", app],
+      { encoding: "utf8" },
+    );
+    if (display.error || display.status !== 0) return "unknown";
+    return /^Signature=adhoc$/m.test(`${display.stderr}${display.stdout}`)
+      ? "unknown"
+      : "signed";
+  }
   if (platform === "win32") {
     try {
       const status = execFileSync(

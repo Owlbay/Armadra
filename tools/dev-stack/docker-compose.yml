@@ -257,6 +257,40 @@ services:
       - "127.0.0.1:8093:8093"
     restart: unless-stopped
 
+  # 真回连挑战地址的 Pebble：TLS-ALPN-01 / HTTP-01 打 host.docker.internal 的
+  # 5001 / 5002，即宿主回环上的挑战监听（OrbStack / Docker Desktop 转得到；
+  # Linux 上宿主回环对容器不通，只做本机演练）。
+  pebble-va:
+    image: ghcr.io/letsencrypt/pebble:2.10.1
+    profiles: ["pebble-va"]
+    environment:
+      PEBBLE_VA_ALWAYS_VALID: "0"
+      PEBBLE_VA_NOSLEEP: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:14100:14000"
+      - "127.0.0.1:15100:15000"
+    restart: unless-stopped
+
+  # 反向代理演练（部署指南 §3.3）：Caddyfile 与 server-e2e --proxy=caddy 是同一份。
+  # 上游的 CA 先取到 .data/caddy/upstream.crt（指南里的 curl -k …/ca.crt）。
+  caddy:
+    image: caddy:2.10.2-alpine
+    profiles: ["caddy"]
+    environment:
+      ARMADRA_CADDY_SITE: "localhost:8444"
+      ARMADRA_CADDY_UPSTREAM: "https://host.docker.internal:8445"
+      ARMADRA_CADDY_SERVER_NAME: "localhost"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./.data/caddy:/etc/caddy/upstream:ro
+    ports:
+      - "127.0.0.1:8444:8444"
+    restart: unless-stopped
+
   # S3 兼容桶（更新镜像 W-MIRROR 的替身，外部服务 §3.3）：versitygw 的 posix 后端，
   # 桶就是 /data 下的目录。只认 services.mjs 里那对回环用的固定访问键。
   s3:
