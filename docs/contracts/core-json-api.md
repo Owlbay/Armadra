@@ -1397,7 +1397,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 }
 ```
 
-- `web` 只能配 `webpush`，`ios` / `android` 只能配 `direct` / `relay`。`endpoint` 必须是 https（回环上的 http 只给测试）；`p256dh` 是 65 字节 P-256 点，`auth` 是 16 字节。
+- `web` 只能配 `webpush`，`ios` / `android` 只能配 `direct` / `relay`。Android 还可带 UnifiedPush 端点（§27.2）。`endpoint` 必须是 https（回环上的 http 只给测试）；`p256dh` 是 65 字节 P-256 点，`auth` 是 16 字节。
 - `relay` 必须带 `publicKey`：经中继的载荷一律端到端加密。`direct` 带了也加密，不带时 APNs 发明文提示、FCM 发明文数据。
 - `locale` 只认 `zh-CN` / `en`，其余当作没给（按中文渲染）。
 - 答 200 `{ "device": <§19.3 的设备> }`；身份设备已撤销答 403 `forbidden`；形状不对答 400 `bad_request`。
@@ -1436,8 +1436,8 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ### 19.6 触发、收件人与重试
 
-- 推送订阅工作空间事件：`agent.approval`（新请求；`request.resolved` 的答复不推）、`agent.status`（**进入** `done` 推 `agentDone`，进入出错推 `agentError`；`restored` 行不推）、`agent.delivery`（`outcome` 为 `refused` / `failed` / `expired` / `cancelled`（回执），深链指向发送方节点）、`schedule.*`、`resources.threshold`、`board.comment`（只推给 `mentions` 里的 principal，没有提及不推）、`workflow.gate`。后四种事件由各自的域发布，推送只按 `type` 与其中的 `nodeId` / `automationId` / `metric` / `comment.{id,anchorKind,anchorId,mentions}` / `runId` / `stepId` 认。
-- 收件人：登记有效、身份设备未撤销、principal 未停用，且该 principal 对事件所在工作空间有 `canvas:read`（owner 恒有）。
+- 推送订阅工作空间事件：`agent.approval`（新请求；`request.resolved` 的答复不推）、`agent.status`（**进入** `done` 推 `agentDone`，进入出错推 `agentError`；`restored` 行不推）、`agent.delivery`（`outcome` 为 `refused` / `failed` / `expired` / `cancelled`（回执），深链指向发送方节点）、`schedule.*`、`resources.threshold`、`board.comment`（只推给 `mentions` 里的 principal，没有提及不推）、`workflow.gate`。后四种事件由各自的域发布，推送只按 `type` 与其中的 `nodeId` / `automationId` / `metric` / `comment.{id,anchorKind,anchorId,mentions}` / `runId` / `stepId` 认。`schedule.*` 只认 §27.3 的三种、按 `planId` 认；`resources.threshold` 的形状见 §27.4。
+- 收件人：登记有效、身份设备未撤销、principal 未停用，且该 principal 对事件所在工作空间有 `canvas:read`（owner 恒有）。设备设了种类偏好的，只收它选的种类（§27.1）。
 - 先入队（`push_outbox`）再发；总共最多 3 次尝试（失败后 5 秒、30 秒各再试一次），只有网络错误、429 与 5xx 再试。平台说令牌作废（Web Push 404 / 410，APNs 410 / `BadDeviceToken` / `Unregistered`，FCM `UNREGISTERED`，中继 410 / `badToken`）立即停、设备登记撤销（`revoked_reason = 'gone'`）。终态行保留 7 天。App 按旧配置登记的（例如登记时是 `direct`，现在改成 `relay`）只记日志，等 App 按新配置重新登记。
 
 ## 20. 节点凭据：`/api/credentials*`
@@ -1700,7 +1700,40 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 27. 推送补充：设备偏好、UnifiedPush、调度与资源事件
 
-预留，由 G5-10 填写。事件形状 G5-00 已在 `core/bus.ts` 与 `packages/shared/src/api/events.ts` 定义：`schedule.fired { planId, runId, nodeId? }`、`schedule.failed { planId, runId, nodeId?, reasonCode }`、`schedule.attention { planId, nodeId?, reasonCode }`、`resources.threshold { sessionId, nodeId?, metric, value, threshold }`；不带命令、参数与输出。
+补 §19：每台设备收哪些种类、没有 Google 服务的 Android 走用户自己的 UnifiedPush 分发器，以及两族一直被推送监听、却没有人发的事件。表 `push_devices` 多两列（迁移 `0037_push_preferences.sql`）：`kinds_json`（空串 = 全部）与 `unifiedpush_endpoint`（空串 = 没有）。代码在 `core/push/`（`transport-unifiedpush.ts`）、`core/schedule/engine.ts`、`core/resources/thresholds.ts`，共享层 `api/push.ts`。
+
+### 27.1 设备偏好：`PATCH /api/push/devices/{deviceId}`
+
+```json
+{ "kinds": ["approval", "schedule"] }
+```
+
+- `kinds` 是这台设备**要收**的种类，取自 `approval`、`agentDone`、`agentError`、`deliveryFailed`、`schedule`、`resources`、`comment`、`workflowGate`（共享层 `PUSH_PREFERENCE_KINDS`）；去重、按这个顺序存。`test` 不在其中：测试通知恒收。空数组 = 只收测试。选满全部种类存成「全部」，以后新加的种类缺省也收。
+- 只改请求主体自己名下、还有效的登记；owner 也不替别人改（别人的、已撤销的、不存在的同样答 404 `not_found`）。不认识的种类、不是数组答 400 `bad_request`。
+- 答 200 `{ "device": <§19.3 的设备> }`。设备在接口上多两个键：`kinds`（要收的种类，没设过是全部）、`unifiedpush`（是否走 UnifiedPush；端点本身与令牌一样不出接口）。
+- `PUT /api/push/devices` 的覆盖式登记**保留**偏好（App 每次启动都重新登记，那不是人改了主意）。
+- 过滤在入队前：§19.6 的收件人里，设备不收这一种的不入队。
+
+### 27.2 UnifiedPush
+
+- Android 登记（§19.2）可多带 `"unifiedpush": { "endpoint": "<分发器给的端点>" }`，此时 `token` 可以不给（没有 FCM 令牌的手机）；必须带 `publicKey`。端点同 Web Push 的规矩：https，回环上的 http 只给测试，不带用户名口令与片段。`ios` / `web` 带它答 400。
+- 有端点的设备一律走它，**不看** `push.transport`，也没有服务端配置项：`POST <endpoint>`，`Content-Type: application/json`，`TTL: 3600`，`Urgency`（审批 `high`），`Topic` = tag 的摘要，正文是 §19.5 的信封（对设备公钥封好；分发器只见密文），不跟随重定向。2xx 算收下；404 / 410 是端点已注销，设备登记撤销（`revoked_reason = 'gone'`）；429 与 5xx 按 §19.6 重试；413 等其余 4xx 不重试。
+- 出站表把它登记为「用户配置的地址」（`core/net/outbound.ts` 的 `unifiedPush`）。dev-stack 的 `push-sink` 在 `/up/<topic>` 有替身（topic 以 `gone` 开头答 404、正文超 4096 字节答 413），`ntfy` profile 是真分发器（端点 `http://127.0.0.1:8093/<topic>?up=1`）。
+
+### 27.3 调度事件
+
+调度内核在**提交之后**发 `workspace.event`，只带标识与稳定码，不带命令、参数与输出：
+
+- `schedule.fired { planId, runId, nodeId? }`：一个槽位物化成一次要投递的运行（按策略跳过的槽位不发）。
+- `schedule.failed { planId, runId, nodeId?, reasonCode }`：一次运行没有跑成——执行方回报失败（`FAILED`），目标离线 / 不支持 / 换了代数而跳过（`TARGET_OFFLINE`、`TARGET_UNSUPPORTED`、`STALE_GENERATION`），或等到 TTL 都没等到目标（`WAITING_EXPIRED`）。并发上限、错过的槽位、暂停与改配置的取消是按设计不跑，不发。
+- `schedule.attention { planId, nodeId?, reasonCode }`：计划的「需要处理」标记抬起的那一下（连续两次不可修复的拒绝），一次。
+- `nodeId` 是目标节点（工作流目标没有）。推送把三者都算 `schedule` 种类，`tag` 都是 `schedule:<planId>`（新的替换旧的），正文分别是「定时任务到点了 / 没有跑成 / 需要处理」。
+
+### 27.4 资源阈值事件
+
+- `resources.threshold { sessionId, nodeId?, metric, value, threshold }`：一个会话的用量越过阈值的那一下发一次。`metric` 今天只有 `memory`（进程树 RSS 之和，字节），`threshold` 是设置 `resources.memoryWarnBytes`（缺省 2 GiB，夹在 128 MiB – 128 GiB；设置页「终端 → 内存阈值」同时写它与本机偏好）。
+- 去重按 `sessionId:generation`：同一次运行里在线上抖动不重发，回落到阈值九成以下再越线才再发，换代是新的一次；测不出来（`null`）不算越线。
+- 判定在 core：页面开着时随采样循环（`resource.sample`）判；没人看着、而库里有有效的推送设备时，core 每 30 秒自己采一轮。只是提醒，不终止、不休眠任何会话。推送 `tag` 是 `resources:<metric>:<nodeId 或 sessionId>`，正文不写数字。
 
 ## 28. 邮件通道：`/api/mail/*`
 

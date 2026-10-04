@@ -69,7 +69,7 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 | `core/realtime/`                        | 每块板一个 `Y.Doc`、更新流与快照、物化、awareness 校验、评论                                 | §16      |
 | `core/gateway/`                         | 对外 TLS 面：本地 CA、指定文件、ACME、准入（Cookie / Bearer）、配对载荷                      | §17      |
 | `core/identity/`（加固与 `oauth/`）     | 口令策略、限流锁定、passkey、TOTP 与恢复码、OAuth / OIDC、审计筛选与导出、创建者记录         | §18、§23 |
-| `core/push/`                            | 设备登记、发送队列、触发规则、Web Push / APNs·FCM 直连 / 中继三条传输                        | §19      |
+| `core/push/`                            | 设备登记与偏好、队列、触发规则、Web Push / 直连 / 中继 / UnifiedPush                         | §19、§27 |
 | `core/agent/credentials/`               | 节点凭据：`kind → 变量名` 封闭表、条目、经 hook 面兑换                                       | §20      |
 | `core/remote/fleet.ts`、`core/handoff/` | Worker 舰队（版本、能力、健康记录、重新同步）与跨执行主机交接                                | §21      |
 | `core/secrets/`                         | 按平台的密钥后端（钥匙串、`safeStorage`、`file-encrypted`）                                  | —        |
@@ -405,6 +405,7 @@ SQLite 的迁移只有一个目录——`apps/desktop/src/core/db/migrations/`�
 | `0033_push.sql`               | `push_devices`（挂在身份设备上的推送登记）、`push_outbox`（发送队列，终态留 7 天）                                                                                                                       | `core/push/`，契约 §19                |
 | `0034_workflow.sql`           | `workflow_drafts`、`workflow_templates`、`workflow_runs`、`workflow_run_steps`、`workflow_task_runs`（runner 任务）                                                                                      | `core/workflow/`，契约 §15            |
 | `0035_node_creators.sql`      | `node_creators`（节点的触发者）与触发器 `terminal_sessions_inherit_creator`（之后起的会话行继承创建者）                                                                                                  | `core/identity/creators.ts`，契约 §23 |
+| `0037_push_preferences.sql`   | `push_devices` 加 `kinds_json`（设备要收的推送种类，空串 = 全部）与 `unifiedpush_endpoint`（UnifiedPush 端点）                                                                                           | `core/push/`，契约 §27                |
 
 `core/db/open.ts` 在同一 `BEGIN IMMEDIATE` 事务内先检查迁移账本，再执行已知迁移与启动恢复。未知版本、校验和不符、脏记录、损坏账本、无账本的非空 schema 或迁移历史缺口均拒绝启动；失败回滚并关闭连接，不改名、删除或重建原库。账本表与校验和算法沿用最初那套（SHA-384），所以装过旧版本的库照常打得开。既有 SQL 迁移文件保持原字节。
 
@@ -554,7 +555,8 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   的映射文件；ACP 驱动下不做节点凭据与 ama 密钥兑换；SSH 节点不能切到 ACP（`acp_unsupported`）。
   六家真适配器的端到端探针已备（`agent-e2e` 场景 12，C 档），还没有真跑。
 - **Gateway / 手机**：配对只有两分钟票与二维码 / 链接，没有设计里的 8 位配对码；设备表没有
-  「平台」「最近访问」；`tls-alpn-01` 未做；推送中继写完不部署，UnifiedPush 未做；真机、商店与
+  「平台」「最近访问」；`tls-alpn-01` 未做；推送中继写完不部署；UnifiedPush 已接（契约 §27.2），
+  Android App 侧接分发器的原生代码未做；真机、商店与
   真 APNs / FCM 都要用户的账号。
 - **安全审查的低危项**：页面上口令策略拒绝码与 `warn` 档的提示、GitHub / 自动化两面对 Bearer 写仍要 CSRF 等，见[安全审查](../status/security-review-2026-10.md) §3。
 - **外部服务里留到之后的三项**：W-MAIL（SMTP）、W-FORGE（GitLab / Gitea）、W-MIRROR（更新镜像），
