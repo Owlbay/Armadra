@@ -67,6 +67,12 @@ export interface CdpTraceEntry {
   readonly id?: number;
   readonly method: string;
   readonly sessionId: string;
+  /**
+   * For `Target.attachedToTarget` / `detachedFromTarget` only: the child
+   * session and (on attach) its target type, so a stalled command on a child
+   * session can be traced to what it was. Never a URL.
+   */
+  readonly child?: string;
 }
 
 /** A command still waiting for its answer. */
@@ -240,6 +246,7 @@ export class CdpConnection {
         kind: "~",
         method: message.method,
         sessionId: message.sessionId ?? "",
+        ...childOf(message.method, message.params),
       });
     if (typeof message.method === "string" && !this.closed) {
       for (const handler of this.handlers) {
@@ -276,4 +283,23 @@ export class CdpConnection {
       // Already gone.
     }
   }
+}
+
+/** The child a target event names, for the trace: session id and type only. */
+function childOf(method: string, params: unknown): { child?: string } {
+  if (
+    method !== "Target.attachedToTarget" &&
+    method !== "Target.detachedFromTarget"
+  )
+    return {};
+  const event = params as {
+    sessionId?: unknown;
+    targetInfo?: { type?: unknown };
+  } | null;
+  const session = typeof event?.sessionId === "string" ? event.sessionId : "";
+  const type =
+    typeof event?.targetInfo?.type === "string"
+      ? `:${event.targetInfo.type}`
+      : "";
+  return { child: `${session}${type}` };
 }
