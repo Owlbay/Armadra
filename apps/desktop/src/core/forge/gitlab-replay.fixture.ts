@@ -44,6 +44,7 @@ export const CASSETTES = [
   "statuses",
   "merge",
   "refusals",
+  "subgroups",
 ] as const;
 export type CassetteName = (typeof CASSETTES)[number];
 

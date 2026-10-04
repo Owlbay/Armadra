@@ -8,8 +8,8 @@
  *   * merge request ↔ pull request：编号用 `iid`（项目内编号），`opened` ↔ `open`，
  *     `source_branch` / `target_branch` ↔ head / base。issue 与 MR 是两套编号，
  *     不像 GitHub / Gitea 共用一个空间。
- *   * 项目用 `owner%2Fname` 寻址（URL 编码的完整路径）；只认远端地址最后两段，
- *     多级子组的仓库不在这一版里。
+ *   * 项目用 URL 编码的完整路径寻址（`owner%2Fname`，多级子组是
+ *     `group%2Fsub%2Fname`）；子组怎么从远端地址认出来见 `service.ts::resolve`。
  *   * 列表的 `closed` 含已合并：GitLab 的 `state=closed` 不含 merged，所以按
  *     `all` 取再滤掉开着的，一页可能不满。
  *   * 差异来自 `/merge_requests/{iid}/diffs`（15.7 起）；增删行数从补丁里数。
@@ -298,7 +298,11 @@ function checkState(value: WireStatus): ForgeCheckState {
 }
 
 function projectPath(repo: ForgeRepo, suffix = ""): string {
-  if (!validName(repo.owner) || !validName(repo.name)) {
+  // owner 可以是多级子组 `group/sub`：整条路径一起 URL 编码成一段。
+  if (
+    !repo.owner.split("/").every((segment) => validName(segment)) ||
+    !validName(repo.name)
+  ) {
     throw forgeError("invalid", "REPOSITORY_INVALID");
   }
   return `/projects/${encodeURIComponent(`${repo.owner}/${repo.name}`)}${suffix}`;

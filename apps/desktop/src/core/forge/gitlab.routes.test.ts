@@ -82,6 +82,7 @@ async function harness(pick: string[] = []): Promise<Harness> {
       "statuses",
       "merge",
       "refusals",
+      "subgroups",
     ],
     pick,
   );
@@ -203,6 +204,120 @@ describe("配置与识别", () => {
     expect((await h.call("GET", "/api/forge/configs")).body.configs).toEqual(
       [],
     );
+  });
+});
+
+describe("多级子组", () => {
+  const NESTED = "git@gitlab.example.test:platform/web/app.git";
+
+  it("主机配成 GitLab：远端整条路径除最后一段都是 owner，项目整条编码，网页地址带子组", async () => {
+    const h = await harness();
+    await configure(h);
+    for (const remoteUrl of [
+      NESTED,
+      "https://gitlab.example.test/platform/web/app.git",
+      "ssh://git@gitlab.example.test:2222/platform/web/app",
+    ]) {
+      const resolved = await h.call("POST", "/api/forge/resolve", {
+        remoteUrl,
+      });
+      expect(resolved.body).toMatchObject({
+        repository: { host: HOST, owner: "platform/web", name: "app" },
+        forge: "gitlab",
+        webUrl: "https://gitlab.example.test/platform/web/app",
+        credential: true,
+      });
+    }
+    const base = `/api/forge/repos/${HOST}/${encodeURIComponent("platform/web")}/app`;
+    expect((await h.call("GET", base)).body.repository.owner).toBe(
+      "platform/web",
+    );
+    const pulls = await h.call("GET", `${base}/pulls`);
+    expect(pulls.status).toBe(200);
+    expect(pulls.body.items.map((pull: any) => pull.number)).toEqual([31]);
+    expect(h.tape.requests.at(-1)?.path).toBe(
+      "/projects/platform%2Fweb%2Fapp/merge_requests",
+    );
+    const pull = await h.call("GET", `${base}/pulls/31`);
+    expect(pull.body.url).toBe(
+      "https://gitlab.example.test/platform/web/app/-/merge_requests/31",
+    );
+  });
+
+  it("GitLab 装在子路径下：http(s) 远端先去掉站点前缀；仓库一行按最长的 owner 先认", async () => {
+    const h = await harness();
+    // 不给令牌就不核验：这里只看识别。
+    const saved = await h.call("PUT", `/api/forge/configs/${HOST}`, {
+      forge: "gitlab",
+      apiBase: "https://gitlab.example.test/code",
+    });
+    expect(saved.status).toBe(200);
+    const viaWeb = await h.call("POST", "/api/forge/resolve", {
+      remoteUrl: "https://gitlab.example.test/code/platform/web/app.git",
+    });
+    expect(viaWeb.body).toMatchObject({
+      repository: { owner: "platform/web", name: "app" },
+      webUrl: "https://gitlab.example.test/code/platform/web/app",
+    });
+    // ssh 远端没有站点前缀。
+    const viaSsh = await h.call("POST", "/api/forge/resolve", {
+      remoteUrl: NESTED,
+    });
+    expect(viaSsh.body.repository.owner).toBe("platform/web");
+
+    const repoKey = `${HOST}/${encodeURIComponent("platform/web")}/app`;
+    const row = await h.call("PUT", `/api/forge/configs/${repoKey}`, {
+      forge: "gitlab",
+      apiBase: "https://gitlab.example.test",
+    });
+    expect(row.body.repoKey).toBe(`${HOST}/platform/web/app`);
+    const deep = await h.call("POST", "/api/forge/resolve", {
+      remoteUrl: "git@gitlab.example.test:platform/web/app.git",
+    });
+    expect(deep.body).toMatchObject({
+      configKey: `${HOST}/platform/web/app`,
+      repository: { owner: "platform/web", name: "app" },
+      webUrl: "https://gitlab.example.test/platform/web/app",
+    });
+  });
+
+  it("Gitea 与 GitHub 不认多级 owner：配置拒绝、识别按最后两段、直接寻址认不出", async () => {
+    const h = await harness();
+    const refused = await h.call(
+      "PUT",
+      `/api/forge/configs/${HOST}/${encodeURIComponent("platform/web")}/app`,
+      { forge: "gitea", apiBase: "https://gitlab.example.test" },
+    );
+    expect(refused).toMatchObject({
+      status: 400,
+      body: { code: "bad_request" },
+    });
+    await h.call("PUT", `/api/forge/configs/${HOST}`, {
+      forge: "gitea",
+      apiBase: "https://gitlab.example.test",
+    });
+    const flat = await h.call("POST", "/api/forge/resolve", {
+      remoteUrl: NESTED,
+    });
+    expect(flat.body).toMatchObject({
+      repository: { owner: "web", name: "app" },
+      forge: "gitea",
+    });
+    const nested = await h.call(
+      "GET",
+      `/api/forge/repos/${HOST}/${encodeURIComponent("platform/web")}/app`,
+    );
+    expect(nested.body).toMatchObject({ forge: null, credential: false });
+    const github = await h.call(
+      "GET",
+      `/api/forge/repos/github.com/${encodeURIComponent("a/b")}/c`,
+    );
+    expect(github.body.forge).toBeNull();
+    const deep = await h.call(
+      "GET",
+      `/api/forge/repos/${HOST}/${encodeURIComponent("a/../b")}/c`,
+    );
+    expect(deep.status).toBe(400);
   });
 });
 

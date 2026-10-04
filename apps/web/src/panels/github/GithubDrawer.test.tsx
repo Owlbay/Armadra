@@ -1153,6 +1153,35 @@ describe("Gitea and GitLab remotes (§29)", () => {
     );
   });
 
+  it("GitLab subgroup: shows the full namespace and lists under it", async () => {
+    ready(client());
+    forgeApi.resolveForge.mockResolvedValue(
+      detection("gitlab", {
+        repository: {
+          host: "git.example.test",
+          owner: "platform/web",
+          name: "app",
+        },
+        webUrl: "https://git.example.test/platform/web/app",
+      }),
+    );
+    forgeApi.forgePulls.mockResolvedValue({
+      items: [forgePull(31, "Subgroup change")],
+      nextCursor: null,
+    });
+    renderDrawer();
+    await resolveRemote("git@git.example.test:platform/web/app.git");
+    expect(await screen.findByText("Subgroup change")).toBeTruthy();
+    expect(
+      document.querySelector("[data-slot=forge-repository]")?.textContent,
+    ).toContain("platform/web/app");
+    expect(firstCall<unknown>(forgeApi.forgePulls)).toEqual({
+      host: "git.example.test",
+      owner: "platform/web",
+      name: "app",
+    });
+  });
+
   it("GitLab: a token missing a scope is named as such", async () => {
     ready(client());
     forgeApi.resolveForge.mockResolvedValue(detection("gitlab"));

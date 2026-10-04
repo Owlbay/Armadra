@@ -1952,7 +1952,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ### 29.1 识别
 
-仓库由 git 远端地址的主机名（小写、不含端口）与最后两段 `owner/name` 定。按序：
+仓库由 git 远端地址的主机名（小写、不含端口）与最后两段 `owner/name` 定（GitLab 多级子组的 owner 可以更长，见 §29.6）。按序：
 
 1. `github.com`、`www.github.com`、`ssh.github.com` → `github`；GitHub 凭据（§5）配的企业版根的主机 → `github`。这两条不查配置表，GitHub 主机不能在 §29.3 另配。
 2. 配置表里写到这个仓库的一行 `<host>/<owner>/<name>`。
@@ -2042,7 +2042,8 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §29.3 按主机或仓库配置，路由与形状同 §29.4；与 Gitea 的差异：
 
 - **地址与认证**：`apiBase` 给站点根或 `…/api/v4` 都行，存成 `…/api/v4`。令牌放在 `PRIVATE-TOKEN` 头里；读要 `read_api`，写要 `api`。配置时用它调一次 `GET /user`，`accountLogin` 是答复的 `username`。
-- **寻址**：项目按 `owner%2Fname`（远端地址最后两段）寻址；多级子组的仓库不在这一版里。
+- **寻址**：项目按 URL 编码的完整路径寻址（`owner%2Fname`；多级子组是 `group%2Fsub%2Fname`）。
+- **多级子组**：`repository.owner` 可以是 `group/sub/…`（每段都是合格的名字，至多 20 段）；路由里整条 owner 编码成一段（`/api/forge/repos/{host}/group%2Fsub/{name}`），配置键是 `<host>/group/sub/<name>`（路径同样 `/api/forge/configs/{host}/group%2Fsub/{name}`）。`resolve` 认子组的顺序：配置表里写到这个仓库的 `gitlab` 行，从最长的 owner 往短里找；主机那一行是 `gitlab` 时，远端路径（http(s) 远端先去掉站点根的路径前缀，GitLab 装在子路径下的情形）除最后一段都是 owner；其余仍是最后两段。多段 owner 只认 GitLab：GitHub 主机与 Gitea 配置答 `forge: null`，给 Gitea 配多段的仓库键答 `400 bad_request`。外部连接（§5.2）不收多段 owner。
 - **merge request ↔ pull request**：`number` 是 MR 的 `iid`；`opened` / `locked` → `open`，`closed` → `closed`，`merged` → `merged`；`source_branch` / `target_branch` → `headRef` / `baseRef`，`sha` → `headSha`；`draft` 看 `draft`（旧版本 `work_in_progress`），`draft: true` 建 MR 时加标题前缀 `Draft: `。`mergeable`：`has_conflicts`、`detailed_merge_status` 为 `conflict` / `broken_status`、或 `merge_status` 为 `cannot_be_merged` → `conflicting`；`detailed_merge_status` 为 `mergeable`（老版本只有 `merge_status: can_be_merged`）→ `mergeable`；其余（流水线、审批、检查中）→ `unknown`。
 - **issue**：编号是 issue 的 `iid`，与 MR 是两套编号；`description` → `body`，`user_notes_count` → `commentCount`；开关用 `state_event: close | reopen`。
 - **列表的 `closed`**：GitLab 的 MR `state=closed` 不含已合并，core 按 `all` 取再滤掉开着的，所以一页可能不满；`nextCursor` 仍是远端的下一页。

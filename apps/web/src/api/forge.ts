@@ -101,13 +101,24 @@ export function forgeFailureKey(error: unknown): string {
   return `forge.failure.${forgeFailure(error)}`;
 }
 
-function repoPath(repo: ForgeRepo): string {
+/** GitLab 多级子组的 owner（`group/sub`）整条编码成一段：路由按段匹配。 */
+export function repoPath(repo: ForgeRepo): string {
   return `/api/forge/repos/${query(repo.host)}/${query(repo.owner)}/${query(repo.name)}`;
 }
 
-/** 配置行的键：`<host>` 或 `<host>/<owner>/<name>` → 路径。 */
+/**
+ * 配置行的键：`<host>` 或 `<host>/<owner>/<name>` → 路径。owner 可以是多级子组
+ * （`<host>/group/sub/name`）：首段是主机、末段是名字，中间整条作 owner 编码成一段。
+ */
 export function configPath(repoKey: string): string {
-  return `/api/forge/configs/${repoKey.split("/").map(query).join("/")}`;
+  const parts = repoKey.split("/");
+  if (parts.length < 3) {
+    return `/api/forge/configs/${parts.map(query).join("/")}`;
+  }
+  const host = parts[0] ?? "";
+  const name = parts[parts.length - 1] ?? "";
+  const owner = parts.slice(1, -1).join("/");
+  return `/api/forge/configs/${query(host)}/${query(owner)}/${query(name)}`;
 }
 
 /** 一个 git 远端地址 → 识别结果。地址在请求体里：它可能带凭据。 */

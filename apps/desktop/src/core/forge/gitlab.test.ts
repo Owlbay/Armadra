@@ -98,6 +98,22 @@ describe("认证与 issue", () => {
     });
   });
 
+  it("多级子组：owner 带斜杠，整条路径编码成一段；每段仍要合格", async () => {
+    const { forge, requests } = forgeOver(["subgroups"]);
+    const nested = { ...REPO, owner: "platform/web" };
+    const page = await forge.listPulls(nested, LIST);
+    expect(page.items.map((pull) => pull.number)).toEqual([31]);
+    expect(requests[0]?.path).toBe(
+      "/projects/platform%2Fweb%2Fapp/merge_requests",
+    );
+    for (const owner of ["platform//web", "../web", "platform/"]) {
+      expect(
+        (await rejection(forge.getPull({ ...REPO, owner }, 31))).reason,
+      ).toBe("REPOSITORY_INVALID");
+    }
+    expect(requests).toHaveLength(1);
+  });
+
   it("issue 的 iid 是编号，opened ↔ open，Link 头给下一页", async () => {
     const { forge, requests } = forgeOver(["issues"]);
     const first = await forge.listIssues(REPO, { ...LIST, limit: 2 });
