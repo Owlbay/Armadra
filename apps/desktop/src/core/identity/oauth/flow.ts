@@ -90,6 +90,12 @@ export interface FlowRecord {
   readonly remoteIp: string;
   readonly userAgent: string;
   readonly expiresAtMs: number;
+  /**
+   * 原生 App 发起的（`start?native=1`，R-56）：授权页开在系统浏览器里，回调只把
+   * `state` 与授权码转成 `armadra://oauth` 深链交回 App，由 App 带着
+   * `nativeState` 来收尾。`bindingHash` 这时是 `nativeState` 的哈希。
+   */
+  readonly native: boolean;
 }
 
 /** 流程失败：带着跳回的去处（知道的话），页面在那里显示原因。 */
@@ -191,6 +197,7 @@ export class OAuthFlow {
     readonly deviceName: string;
     readonly remoteIp: string;
     readonly userAgent: string;
+    readonly native?: boolean;
   }): Promise<{
     authorizeUrl: string;
     binding: string;
@@ -223,6 +230,7 @@ export class OAuthFlow {
       remoteIp: input.remoteIp,
       userAgent: input.userAgent,
       expiresAtMs,
+      native: input.native === true,
     });
     const url = new URL(authorizationEndpoint);
     const params: Record<string, string> = {
@@ -243,10 +251,11 @@ export class OAuthFlow {
   }
 
   /**
-   * 一次性取回 `state` 对应的记录并核对浏览器绑定。不存在、过期、已用过、
-   * 绑定不对，一律 `oauth_state_invalid`——取出即删，所以第二次一定不存在。
+   * 一次性取回 `state` 对应的记录并核对浏览器绑定（原生流程是 `nativeState`）。
+   * 不存在、过期、已用过、绑定不对、浏览器与原生走错了收尾的路，一律
+   * `oauth_state_invalid`——取出即删，所以第二次一定不存在。
    */
-  take(state: string, binding: string): FlowRecord {
+  take(state: string, binding: string, native = false): FlowRecord {
     const record = this.pending.get(state);
     this.pending.delete(state);
     const invalid = new OAuthError(
@@ -254,7 +263,11 @@ export class OAuthFlow {
       "登录流程已过期、已用过或不属于这个浏览器",
       400,
     );
-    if (record === undefined || record.expiresAtMs <= this.clock()) {
+    if (
+      record === undefined ||
+      record.expiresAtMs <= this.clock() ||
+      record.native !== native
+    ) {
       throw invalid;
     }
     const got = hashOf(binding);
@@ -265,6 +278,22 @@ export class OAuthFlow {
         record.returnTo,
         record.providerId,
       );
+    }
+    return record;
+  }
+
+  /**
+   * 原生流程的回调：只看一眼、不取走（收尾要 App 带着 `nativeState` 来）。
+   * 不存在、过期或不是原生发起的答 `undefined`。
+   */
+  nativeRecord(state: string): FlowRecord | undefined {
+    const record = this.pending.get(state);
+    if (
+      record === undefined ||
+      !record.native ||
+      record.expiresAtMs <= this.clock()
+    ) {
+      return undefined;
     }
     return record;
   }
