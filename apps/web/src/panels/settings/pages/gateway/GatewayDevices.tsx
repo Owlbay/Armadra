@@ -41,7 +41,8 @@ export interface GatewayDevicesProps {
 }
 
 /**
- * 已配对设备（设计系统 §5.12）：名称 · 添加时间 · 权限 · 撤销。
+ * 已配对设备（设计系统 §5.12）：名称 · 平台 · 添加时间 · 最近访问 · 权限 · 撤销。
+ * 平台与最近访问由 core 从会话里归出（契约 §18.4），没有会话的设备两格是「—」。
  *
  * 这一页唯一的一份设备表：对外服务配对的设备与「设备登录」配对的设备是同一
  * 张身份表，以前两处各画一份，现在只在这里画（G3-11）。当前这台带「当前」，
@@ -68,6 +69,14 @@ export function GatewayDevices({
     () => new Intl.DateTimeFormat(locale, { dateStyle: "medium" }),
     [locale],
   );
+  const dateTime = React.useMemo(
+    () =>
+      new Intl.DateTimeFormat(locale, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }),
+    [locale],
+  );
   const active = devices.filter((device) => device.revokedAtMs === 0);
   if (active.length === 0) return null;
 
@@ -79,7 +88,9 @@ export function GatewayDevices({
           <TableHeader>
             <TableRow>
               <TableHead>{t("gateway.devices.name")}</TableHead>
+              <TableHead>{t("gateway.devices.platform")}</TableHead>
               <TableHead>{t("gateway.devices.added")}</TableHead>
+              <TableHead>{t("gateway.devices.lastSeen")}</TableHead>
               <TableHead>{t("gateway.devices.role")}</TableHead>
               <TableHead className="w-0">
                 <span className="sr-only">{t("gateway.devices.revoke")}</span>
@@ -97,9 +108,19 @@ export function GatewayDevices({
                     </Badge>
                   )}
                 </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {device.platform
+                    ? t(`gateway.devices.platform.${device.platform}`)
+                    : "—"}
+                </TableCell>
                 <TableCell className="text-muted-foreground tabular-nums">
                   {device.createdAtMs > 0
                     ? date.format(device.createdAtMs)
+                    : "—"}
+                </TableCell>
+                <TableCell className="text-muted-foreground tabular-nums">
+                  {device.lastSeenAtMs !== undefined && device.lastSeenAtMs > 0
+                    ? dateTime.format(device.lastSeenAtMs)
                     : "—"}
                 </TableCell>
                 <TableCell>

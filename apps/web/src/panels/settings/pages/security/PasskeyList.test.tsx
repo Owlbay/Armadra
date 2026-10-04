@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { usePreferencesStore } from "../../../../app/preferences-store";
@@ -25,6 +31,78 @@ const LIST = {
 };
 
 describe("PasskeyList", () => {
+  it("改名在名称格里内联：Enter 保存，成功后收起；Esc 取消", async () => {
+    const onRename = vi.fn(async () => true);
+    render(
+      <PasskeyList
+        list={LIST}
+        supported
+        busy={null}
+        onAdd={vi.fn()}
+        onRemove={vi.fn()}
+        onRename={onRename}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "给 Chrome · macOS 改名" }),
+    );
+    const input = screen.getByLabelText("给 Chrome · macOS 改名");
+    expect((input as HTMLInputElement).value).toBe("Chrome · macOS");
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(onRename).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "给 Chrome · macOS 改名" }),
+    );
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "  工作笔记本  " },
+    });
+    fireEvent.submit(screen.getByRole("textbox").closest("form")!);
+    await waitFor(() =>
+      expect(onRename).toHaveBeenCalledWith(LIST.passkeys[0], "工作笔记本"),
+    );
+    await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+  });
+
+  it("改名失败时输入框留着；空名保存不了；没给 onRename 时没有入口", async () => {
+    const onRename = vi.fn(async () => false);
+    const { rerender } = render(
+      <PasskeyList
+        list={LIST}
+        supported
+        busy={null}
+        onAdd={vi.fn()}
+        onRemove={vi.fn()}
+        onRename={onRename}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "给 Chrome · macOS 改名" }),
+    );
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: " " } });
+    expect(
+      (screen.getByRole("button", { name: "保存" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "新" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(onRename).toHaveBeenCalled());
+    expect(screen.getByRole("textbox")).toBeTruthy();
+    rerender(
+      <PasskeyList
+        list={LIST}
+        supported
+        busy={null}
+        onAdd={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "给 Chrome · macOS 改名" }),
+    ).toBeNull();
+  });
+
   it("列出、添加，删除先确认", () => {
     const onAdd = vi.fn();
     const onRemove = vi.fn();
