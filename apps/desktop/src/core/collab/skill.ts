@@ -297,6 +297,7 @@ armadra-hook canvas cancel --id <待投 id>                            # 撤掉�
 
 - \`open-terminal\` / \`open-agent\` / \`open-browser\` / \`sticky\` / \`link\` 支持 \`--dry-run\`，只回报会发生什么，不改画布。
 - \`open-agent --task\` 是给新节点的第一件事：节点建好、从你这里连一条线过去，等它第一次空闲时把任务投进去（和一次 \`send\` 走同一条路）。有的 CLI 起来之后不报状态（Codex 就是），那种节点等的是终端安静下来，可能要多等一会儿。**不要**把任务写进启动行——启动行只负责把 CLI 起起来。还可以带 \`--permission-mode\` 与 \`--model\`。
+- \`open-agent --cwd <目录>\` 让成员终端开在工作区里的某个子目录（相对工作区根或绝对路径；出了工作区会被拒绝）；\`--resume <会话 id>\` 接回这个 CLI 自己的一段会话（也可以给画布上同一家成员的节点 id），这个 CLI 不能续接时答 \`resume_unsupported\`，去掉它新开即可。
 - 交给你的任务末尾写着 \`task:<id>:result\` 这样的键时（协调者经 runner 派的任务），做完后用它回报：\`armadra-hook canvas post --to <派任务的节点> --key task:<id>:result --body '结论；文件路径'\`。派任务的一方只等这一条；没有它就只能去读你的转录。
   When a task ends with a \`task:<id>:result\` key, report with \`canvas post --to <sender> --key task:<id>:result --body '…'\` when done; the sender waits for exactly that post.
 - 新节点会放在你右边。\`--after\` 让新 Agent 等依赖节点跑完再启动：由 core 等、由 core 启动，页面开不开都一样。\`--after-turn current\`（缺省）等对方手上这一轮，\`next\` 等它下一次成功结束；失败、中断、退出都不放行，缺省最多等一天（\`--ttl\` 改）。依赖只能是 Agent 节点。
