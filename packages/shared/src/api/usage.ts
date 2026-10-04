@@ -45,6 +45,24 @@ export const usageCredentialSourceSchema = z
 /** 预付余额（Codex credits）。只有数字，没有账户信息。 */
 export const usageCreditsSchema = z.object({ balance: z.number() });
 
+/**
+ * 本地估算的一个窗口（契约 §12.1）：额度端点按政策关着时，core 按本机转录累计的
+ * token。`limit` 只在知道这一档的额度时才有；没有就只报用量，不算百分比。
+ */
+export const usageEstimateWindowSchema = z.object({
+  key: usageWindowKeySchema,
+  label: z.string(),
+  windowStartMs: z.number(),
+  resetsAtMs: z.number().optional(),
+  used: z.number().min(0),
+  limit: z.number().positive().optional(),
+});
+
+export const usageEstimateSchema = z.object({
+  source: z.literal("local"),
+  windows: z.array(usageEstimateWindowSchema),
+});
+
 export const usageProviderSchema = z.object({
   id: usageProviderIdSchema,
   status: usageProviderStatusSchema,
@@ -62,6 +80,8 @@ export const usageProviderSchema = z.object({
   /** 数字来自本地 CLI 回退而不是 provider 自己的 OAuth 接口。 */
   viaCli: z.boolean().optional(),
   fetchedAt: z.string().nullable(),
+  /** 只跟着 `reason: "policy_off"` 出现；界面标「本地估算」。 */
+  estimate: usageEstimateSchema.optional(),
 });
 
 export const usageSchema = z.object({
@@ -205,6 +225,8 @@ export type UsageProviderId = z.infer<typeof usageProviderIdSchema>;
 export type UsageProviderStatus = z.infer<typeof usageProviderStatusSchema>;
 export type UsageWindow = z.infer<typeof usageWindowSchema>;
 export type UsageWindowKey = z.infer<typeof usageWindowKeySchema>;
+export type UsageEstimate = z.infer<typeof usageEstimateSchema>;
+export type UsageEstimateWindow = z.infer<typeof usageEstimateWindowSchema>;
 export type UsageCredentialSource = z.infer<typeof usageCredentialSourceSchema>;
 export type UsageCredits = z.infer<typeof usageCreditsSchema>;
 export type CostTokens = z.infer<typeof costTokensSchema>;
