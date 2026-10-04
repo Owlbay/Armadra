@@ -2014,13 +2014,15 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 | `GET merge-options`                |                                                                    | `{ methods: ("merge"\|"squash"\|"rebase")[], autoMerge, mergeTrain }` |
 | `POST pulls/{number}/auto-merge`   | `{ method?, headSha }`                                             | `{ merged, sha, train }`                                              |
 | `DELETE pulls/{number}/auto-merge` |                                                                    | `{ cancelled: true }`                                                 |
+| `DELETE pulls/{number}/branch`     | 查询 `headSha`（必填）                                             | `{ deleted, reasonCode }`                                             |
 
 - issue：`{ number, title, body, state: "open"|"closed", author, labels: string[], commentCount, url, createdAtMs, updatedAtMs, closedAtMs }`。同一编号空间里的 PR 不算 issue（读、改都答 404）。
-- pull：`{ number, title, body, state: "open"|"closed"|"merged", draft, author, baseRef, headRef, headSha, mergeable: "mergeable"|"conflicting"|"unknown", url, createdAtMs, updatedAtMs, mergedAtMs, autoMerge }`。`autoMerge` 是「已排进流水线通过后合并」（§29.6），GitHub 与 Gitea 恒为 `false`。
+- pull：`{ number, title, body, state: "open"|"closed"|"merged", draft, author, baseRef, headRef, headSha, mergeable: "mergeable"|"conflicting"|"unknown", url, createdAtMs, updatedAtMs, mergedAtMs, autoMerge }`。`autoMerge` 是「已排进流水线通过后合并」（§29.6），GitHub 与 Gitea 恒为 `false`。`fromFork`：head 分支在别的仓库里（GitHub 照 §5；Gitea 看 `head.repo_id` 与 `base.repo_id`；GitLab 看 `source_project_id` 与 `target_project_id`；缺字段按同仓库）。
 - file：`{ path, previousPath, status: "added"|"modified"|"removed"|"renamed"|"other", additions, deletions, patch }`；`patch` 从第一个 `@@` 起，二进制为 `null`。Gitea 的补丁从 `pulls/{n}.diff` 按文件切出来。
 - checks：`{ headSha, rollup: "pending"|"success"|"failure"|"neutral"|"none", checks: [{ name, state, url }] }`。Gitea 用 commit statuses（同一个 context 只留最新的；`error` 记 failure，`warning` 记 neutral），GitHub 用 check runs + commit status（§5 同源）。`url` 只收 http(s)。
 - `cursor` 是页码串（2–1000），从不是远端 URL。
 - 合并：`headSha` 必须是完整对象名；远端 head 不是它就 409，不会合进评审者没看到的东西。Gitea 草稿按标题前缀 `WIP:` 认，`draft: true` 建 PR 时加这个前缀。
+- 合并后删源分支（Gitea / GitLab；GitHub 仍走 §5 的 `delete-branch`，这里答 `400 bad_request`）：PR 已合并、不是 fork、分支还指着 `headSha`、没受保护（GitLab 的 `protected` / `default`，Gitea 的 `protected`；head 与 base 同名也不删）才发 `DELETE`；否则答 `200 { deleted: false, reasonCode }`，`reasonCode` 是 `NOT_MERGED` / `FORK_BRANCH` / `BRANCH_MOVED` / `BRANCH_PROTECTED` / `ALREADY_DELETED`（分支已不在，例如项目设了合并后删源分支）。分支名进路径：Gitea 逐段编码、斜杠留着，GitLab 整条编码。删了答 `{ deleted: true, reasonCode: "" }`。
 - 写永远不重试；读在远端 5xx / 断连时重试一次。重定向一律当错误。
 
 ### 29.5 错误
@@ -2052,7 +2054,7 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 - **issue**：编号是 issue 的 `iid`，与 MR 是两套编号；`description` → `body`，`user_notes_count` → `commentCount`；开关用 `state_event: close | reopen`。
 - **列表的 `closed`**：GitLab 的 MR `state=closed` 不含已合并，core 按 `all` 取再滤掉开着的，所以一页可能不满；`nextCursor` 仍是远端的下一页。
 - **文件**：来自 `merge_requests/{iid}/diffs`（GitLab 15.7 起），按页取到 300 个；`additions` / `deletions` 从补丁里数；没有 `@@` 的（二进制、过大被折叠、纯改名）`patch` 为 `null`。
-- **检查**：commit statuses（流水线作业也在这里），同名只留 id 最大的；`success` → success，`failed` → failure（`allow_failure` 的 → neutral），`canceled` → failure，`skipped` / `manual` → neutral，其余 → pending。
+- **检查**：MR 的 `head_pipeline` 跑在当前 head 上时，排在最前加一条 `pipeline #<id>`（整条流水线的结论与链接；旧 head 的流水线不算）；其余是 commit statuses（流水线作业也在这里），同名只留 id 最大的；`success` → success，`failed` → failure（`allow_failure` 的 → neutral），`canceled` → failure，`skipped` / `manual` → neutral，其余 → pending。
 - **合并**：`PUT …/merge` 带 `sha: headSha`（远端 head 变了答 409 → `conflict`），`method: "squash"` 对应 `squash: true`。
 - **合并方式**：`GET merge-options` 读项目的 `merge_method` / `squash_option`：`merge`（合并提交）→ `merge`；`rebase_merge`（半线性）→ `merge`、`rebase`；`ff`（只快进）→ `rebase`；再按 `squash_option` 加上 `squash`（`never` 不加，`always` 只剩 `squash`）。Gitea 与 GitHub 不细分，三种都给、不发请求。`method: "rebase"` 只在项目有这一种时收（否则 `bad_request`）：MR 的 `detailed_merge_status` 是 `need_rebase` 时先发 `PUT …/rebase`（异步）并答 `409 rebase_started`——变基会换 head，评审者读到新 head 核对后再合；不落后就照常 `PUT …/merge`（不带 `squash`），由项目设置快进或带合并提交。远端 405 / 422（草稿、流水线未过、冲突）→ `conflict`。答复里的 MR 还没到 `merged`（排进了合并队列）时答 `unknown_outcome`：重新读再决定。
 - **流水线通过后合并**：`merge-options` 的 `autoMerge` 恒为 `true`，`mergeTrain` 是项目的 `merge_trains_enabled`（Premium）。`POST pulls/{number}/auto-merge` 与合并一样先核 head、方式必须在 `methods` 里、不重试：没开合并列车时 `PUT …/merge` 带 `merge_when_pipeline_succeeds: true` 与 `auto_merge: true`（17.11 起的新名，老版本忽略它），答复的 MR 已 `merged` 就答 `{ merged: true, sha, train: false }`（流水线已过、当场合并），`merge_when_pipeline_succeeds` 为真答 `{ merged: false, sha: null, train: false }`，两样都不是答 `unknown_outcome`；开了合并列车时改为 `POST /merge_trains/merge_requests/{iid}`（`sha`、`squash`、`auto_merge: true`；201 已上车、202 等流水线过了再上），答 `{ merged: false, sha: null, train: true }`。`DELETE pulls/{number}/auto-merge` 只对 `autoMerge` 为真的 MR 发 `POST …/cancel_merge_when_pipeline_succeeds`，否则 `409 conflict`。Gitea 与 GitHub 的 `autoMerge` / `mergeTrain` 为 `false`，这两条路由答 `400 bad_request`。

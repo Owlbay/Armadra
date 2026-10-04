@@ -43,6 +43,7 @@ import {
   type ForgeMergeMethod,
   type ForgeMergeable,
   type ForgeAutoMerge,
+  type ForgeBranchDeletion,
   type ForgeMergeOptions,
   type ForgeMerged,
   type ForgePage,
@@ -155,6 +156,21 @@ interface WireMergeRequest {
   merge_commit_sha?: string | null;
   squash_commit_sha?: string | null;
   merge_when_pipeline_succeeds?: boolean;
+  source_project_id?: number;
+  target_project_id?: number;
+  head_pipeline?: WirePipeline | null;
+}
+interface WirePipeline {
+  id?: number;
+  sha?: string;
+  status?: string;
+  web_url?: string;
+}
+/** `GET /projects/:id/repository/branches/:branch`。 */
+interface WireRepoBranch {
+  commit?: { id?: string } | null;
+  protected?: boolean;
+  default?: boolean;
 }
 
 /**
@@ -286,6 +302,10 @@ export function toPull(value: WireMergeRequest): ForgePull {
     updatedAtMs: timeMs(value.updated_at) ?? 0,
     mergedAtMs: state === "merged" ? timeMs(value.merged_at) : null,
     autoMerge: state === "open" && value.merge_when_pipeline_succeeds === true,
+    fromFork:
+      typeof value.source_project_id === "number" &&
+      typeof value.target_project_id === "number" &&
+      value.source_project_id !== value.target_project_id,
   };
 }
 
@@ -556,6 +576,40 @@ export class GitlabForge implements Forge {
     );
   }
 
+  async deleteBranch(
+    repo: ForgeRepo,
+    number: number,
+    headSha: string,
+  ): Promise<ForgeBranchDeletion> {
+    if (!validSha(headSha)) throw forgeError("invalid", "SHA_INVALID");
+    const pull = await this.getPull(repo, number);
+    if (pull.state !== "merged") return refused("NOT_MERGED");
+    if (pull.fromFork) return refused("FORK_BRANCH");
+    if (!validRefName(pull.headRef) || pull.headRef === pull.baseRef) {
+      return refused("BRANCH_PROTECTED");
+    }
+    const path = projectPath(
+      repo,
+      `/repository/branches/${encodeURIComponent(pull.headRef)}`,
+    );
+    let branch: WireRepoBranch;
+    try {
+      branch = decodeJson<WireRepoBranch>(await this.http.get(path));
+    } catch (error) {
+      // 项目设了「合并后删源分支」时它多半已经不在了。
+      if (error instanceof ForgeError && error.kind === "notFound") {
+        return refused("ALREADY_DELETED");
+      }
+      throw error;
+    }
+    if (branch.protected === true || branch.default === true) {
+      return refused("BRANCH_PROTECTED");
+    }
+    if (branch.commit?.id !== headSha) return refused("BRANCH_MOVED");
+    await this.http.write("DELETE", path);
+    return { deleted: true, reasonCode: "" };
+  }
+
   /** 合并类写的拒绝翻译：409 是 head 变了，405 / 422 是现在合不了。 */
   private async mergeWrite<T>(work: () => Promise<T>): Promise<T> {
     try {
@@ -633,7 +687,8 @@ export class GitlabForge implements Forge {
   }
 
   async checks(repo: ForgeRepo, number: number): Promise<ForgeChecks> {
-    const pull = await this.getPull(repo, number);
+    const raw = await this.rawPull(repo, number);
+    const pull = toPull(raw);
     if (pull.headSha === "") {
       return { headSha: "", rollup: "none", checks: [] };
     }
@@ -655,6 +710,22 @@ export class GitlabForge implements Forge {
       const url = webUrl(status.target_url);
       return { name, state: checkState(status), url: url === "" ? null : url };
     });
+    // 流水线本身（作业都在 statuses 里，这一条给的是整条流水线的结论与链接）。
+    // 只认跑在这个 head 上的那条：旧 head 的流水线不该替新提交说话。
+    const pipeline = raw.head_pipeline;
+    if (
+      pipeline !== null &&
+      pipeline !== undefined &&
+      pipeline.sha === pull.headSha &&
+      count(pipeline.id) > 0
+    ) {
+      const url = webUrl(pipeline.web_url);
+      checks.unshift({
+        name: `pipeline #${count(pipeline.id)}`,
+        state: checkState({ status: pipeline.status }),
+        url: url === "" ? null : url,
+      });
+    }
     return { headSha: pull.headSha, rollup: rollupOf(checks), checks };
   }
 
@@ -722,4 +793,8 @@ export class GitlabForge implements Forge {
     const sha = after.merge_commit_sha ?? after.squash_commit_sha ?? "";
     return { merged: true, sha: validSha(sha) ? sha : null };
   }
+}
+
+function refused(reasonCode: string): ForgeBranchDeletion {
+  return { deleted: false, reasonCode };
 }

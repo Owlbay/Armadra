@@ -85,6 +85,7 @@ async function harness(pick: string[] = []): Promise<Harness> {
       "subgroups",
       "merge-methods",
       "auto-merge",
+      "cleanup",
     ],
     pick,
   );
@@ -435,6 +436,19 @@ describe("读写", () => {
     ).toEqual({ status: 200, body: { cancelled: true } });
     const idle = await h.call("DELETE", `${REPO_PATH}/pulls/12/auto-merge`);
     expect(idle).toMatchObject({ status: 409, body: { code: "conflict" } });
+  });
+
+  it("合并后删源分支：DELETE pulls/{n}/branch?headSha=", async () => {
+    const h = await harness(["merged-mr"]);
+    await configure(h);
+    expect(
+      await h.call("DELETE", `${REPO_PATH}/pulls/12/branch`, undefined, {
+        headSha: GITLAB_FIXTURE.sha,
+      }),
+    ).toEqual({ status: 200, body: { deleted: true, reasonCode: "" } });
+    expect(
+      (await h.call("DELETE", `${REPO_PATH}/pulls/12/branch`)).status,
+    ).toBe(400);
   });
 
   it("细粒度令牌缺范围：403 forge_scope，远端原话不外传", async () => {

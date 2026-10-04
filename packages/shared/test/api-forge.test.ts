@@ -6,6 +6,7 @@ import {
   forgeFilesSchema,
   forgeIssuePageSchema,
   forgeAutoMergeSchema,
+  forgeBranchDeletionSchema,
   forgeMergeOptionsSchema,
   forgeMergedSchema,
   forgePullSchema,
@@ -114,8 +115,8 @@ describe("forge API", () => {
         createdAtMs: 1,
         updatedAtMs: 2,
         mergedAtMs: 3,
-      }).state,
-    ).toBe("merged");
+      }),
+    ).toMatchObject({ state: "merged", autoMerge: false, fromFork: false });
     expect(
       forgeFilesSchema.parse({
         files: [
@@ -153,6 +154,12 @@ describe("forge API", () => {
       forgeAutoMergeSchema.parse({ merged: false, sha: null, train: true })
         .train,
     ).toBe(true);
+    expect(
+      forgeBranchDeletionSchema.parse({
+        deleted: false,
+        reasonCode: "BRANCH_MOVED",
+      }).reasonCode,
+    ).toBe("BRANCH_MOVED");
     expect(mergeForgePullSchema.safeParse({ headSha: "abc" }).success).toBe(
       false,
     );

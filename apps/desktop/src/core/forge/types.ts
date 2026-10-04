@@ -71,6 +71,8 @@ export interface ForgePull {
    * succeeds）。没有这个概念的平台恒为 `false`。
    */
   readonly autoMerge: boolean;
+  /** head 分支在别人的仓库里：本地检出不沿用它的名字，合并后也不删它。 */
+  readonly fromFork: boolean;
 }
 
 export interface ForgeFile {
@@ -125,6 +127,16 @@ export const ALL_MERGE_METHODS: readonly ForgeMergeMethod[] = [
   "squash",
   "rebase",
 ];
+
+/**
+ * 合并后删源分支的结果（与 GitHub 面 `delete-branch` 同形）。没删时
+ * `reasonCode` 说为什么：`NOT_MERGED`、`FORK_BRANCH`、`BRANCH_MOVED`（分支上有
+ * 这次合并没带走的提交）、`BRANCH_PROTECTED`、`ALREADY_DELETED`。
+ */
+export interface ForgeBranchDeletion {
+  readonly deleted: boolean;
+  readonly reasonCode: string;
+}
 
 export interface ForgePage<T> {
   readonly items: readonly T[];
@@ -190,6 +202,15 @@ export interface Forge {
   ): Promise<ForgeAutoMerge>;
   /** 撤掉还没发生的自动合并。 */
   cancelAutoMerge?(repo: ForgeRepo, number: number): Promise<void>;
+  /**
+   * 合并后删源分支：PR 必须已合并、不是 fork，分支还指着评审者看到的那个
+   * head，且没受保护。GitHub 走自己的 `delete-branch`（§5），这里不接。
+   */
+  deleteBranch?(
+    repo: ForgeRepo,
+    number: number,
+    headSha: string,
+  ): Promise<ForgeBranchDeletion>;
 }
 
 /**

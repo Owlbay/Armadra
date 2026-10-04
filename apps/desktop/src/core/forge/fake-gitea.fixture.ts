@@ -27,6 +27,8 @@ export interface FakePull {
   base: string;
   sha: string;
   mergeSha?: string;
+  /** head 在别人的仓库里（`head.repo_id` 与 `base.repo_id` 不同）。 */
+  fork?: boolean;
   files: {
     filename: string;
     status: string;
@@ -54,6 +56,8 @@ export interface FakeGitea {
     string,
     { context: string; status: string; target_url: string }[]
   >;
+  /** 仓库里的分支：名字 → head 与是否受保护。 */
+  readonly branches: Map<string, { sha: string; protected: boolean }>;
   /** 下一条匹配的请求答这个状态（一次性）。 */
   failNext(method: string, path: RegExp, status: number): void;
   close(): Promise<void>;
@@ -95,6 +99,7 @@ export async function startFakeGitea(): Promise<FakeGitea> {
     { context: string; status: string; target_url: string }[]
   >();
   const failures: { method: string; path: RegExp; status: number }[] = [];
+  const branches = new Map<string, { sha: string; protected: boolean }>();
   let root = "";
 
   const issueJson = (issue: FakeIssue) => ({
@@ -124,8 +129,13 @@ export async function startFakeGitea(): Promise<FakeGitea> {
     state: pull.state,
     draft: false,
     user: { login: "bob", id: 2 },
-    base: { ref: pull.base, sha: "0".repeat(40), label: pull.base },
-    head: { ref: pull.head, sha: pull.sha, label: pull.head },
+    base: { ref: pull.base, sha: "0".repeat(40), label: pull.base, repo_id: 1 },
+    head: {
+      ref: pull.head,
+      sha: pull.sha,
+      label: pull.head,
+      repo_id: pull.fork === true ? 2 : 1,
+    },
     mergeable: pull.mergeable,
     merged: pull.merged,
     merged_at: pull.merged ? iso(500) : null,
@@ -289,6 +299,24 @@ export async function startFakeGitea(): Promise<FakeGitea> {
         return send(200);
       }
     }
+    if ((match = rest.match(/^\/branches\/(.+)$/))) {
+      const name = match[1]!
+        .split("/")
+        .map((part) => decodeURIComponent(part))
+        .join("/");
+      const branch = branches.get(name);
+      if (branch === undefined) return send(404, { message: "not found" });
+      if (method === "DELETE") {
+        if (branch.protected) return send(403, { message: "protected" });
+        branches.delete(name);
+        return send(204);
+      }
+      return send(200, {
+        name,
+        commit: { id: branch.sha, message: "" },
+        protected: branch.protected,
+      });
+    }
     if ((match = rest.match(/^\/commits\/([0-9a-f]{40})\/status$/))) {
       const list = statuses.get(match[1]!) ?? [];
       return send(200, {
@@ -310,6 +338,7 @@ export async function startFakeGitea(): Promise<FakeGitea> {
     issues,
     pulls,
     statuses,
+    branches,
     failNext: (method, path, status) => failures.push({ method, path, status }),
     close: () =>
       new Promise<void>((resolve) => {

@@ -581,6 +581,68 @@ describe("流水线通过后合并与合并列车", () => {
   });
 });
 
+describe("fork、流水线与合并后清理", () => {
+  const ALL = ["merge-requests", "statuses", "cleanup"] as const;
+
+  it("source / target 项目不同记 fromFork", async () => {
+    expect((await forgeOver(ALL).forge.getPull(REPO, 12)).fromFork).toBe(false);
+    expect(
+      (await forgeOver(ALL, ["fork-mr"]).forge.getPull(REPO, 12)).fromFork,
+    ).toBe(true);
+  });
+
+  it("检查带上跑在这个 head 上的流水线；旧 head 的流水线不算", async () => {
+    const current = await forgeOver(ALL, ["pipeline-mr"]).forge.checks(
+      REPO,
+      12,
+    );
+    expect(current.checks[0]).toEqual({
+      name: "pipeline #5120",
+      state: "failure",
+      url: "https://gitlab.example.test/acme/app/-/pipelines/5120",
+    });
+    expect(current.rollup).toBe("failure");
+    const stale = await forgeOver(ALL, ["stale-pipeline-mr"]).forge.checks(
+      REPO,
+      12,
+    );
+    expect(
+      stale.checks.some((check) => check.name.startsWith("pipeline")),
+    ).toBe(false);
+  });
+
+  it("合并后删源分支：分支名整条编码，核对 head 再删", async () => {
+    const { forge, requests } = forgeOver(ALL, ["merged-mr"]);
+    expect(await forge.deleteBranch(REPO, 12, GITLAB_FIXTURE.sha)).toEqual({
+      deleted: true,
+      reasonCode: "",
+    });
+    expect(requests.map((r) => [r.method, r.path])).toEqual([
+      ["GET", "/projects/acme%2Fapp/merge_requests/12"],
+      ["GET", "/projects/acme%2Fapp/repository/branches/feature%2Flogin"],
+      ["DELETE", "/projects/acme%2Fapp/repository/branches/feature%2Flogin"],
+    ]);
+  });
+
+  it("分支动过、受保护、已不在、来自 fork、还没合并：都不删", async () => {
+    const cases: [string[], string][] = [
+      [["merged-mr", "branch-moved"], "BRANCH_MOVED"],
+      [["merged-mr", "branch-protected"], "BRANCH_PROTECTED"],
+      [["merged-mr", "branch-gone"], "ALREADY_DELETED"],
+      [["fork-mr"], "FORK_BRANCH"],
+      [[], "NOT_MERGED"],
+    ];
+    for (const [pick, reasonCode] of cases) {
+      const { forge, requests } = forgeOver(ALL, pick);
+      expect(await forge.deleteBranch(REPO, 12, GITLAB_FIXTURE.sha)).toEqual({
+        deleted: false,
+        reasonCode,
+      });
+      expect(requests.some((r) => r.method === "DELETE")).toBe(false);
+    }
+  });
+});
+
 describe("拒绝", () => {
   it("细粒度令牌的 insufficient_granular_scope → scopeMissing，远端原话不外传", async () => {
     const { forge } = forgeOver(["refusals"], ["granular"]);

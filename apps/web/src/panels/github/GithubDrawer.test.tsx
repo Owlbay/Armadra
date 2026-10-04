@@ -85,6 +85,7 @@ const forgeApi = vi.hoisted(() => ({
   forgeMergeOptions: vi.fn(),
   autoMergeForgePull: vi.fn(),
   cancelAutoMergeForgePull: vi.fn(),
+  deleteForgeBranch: vi.fn(),
 }));
 
 vi.mock("../../api/forge", async (original) => ({
@@ -1281,6 +1282,74 @@ describe("Gitea and GitLab remotes (§29)", () => {
         { host: "git.example.test", owner: "acme", name: "app" },
         13,
       ),
+    );
+  });
+
+  it("Gitea / GitLab: maps the CI rollup to a badge and offers a checkout", async () => {
+    await openGitlabPull({ autoMerge: false, mergeTrain: false });
+    const rollup = await screen.findByText("CI 进行中");
+    expect(rollup.getAttribute("data-rollup")).toBe("pending");
+    expect(await screen.findByText("检出到 worktree")).toBeTruthy();
+    const branch = screen.getByLabelText("本地分支") as HTMLInputElement;
+    expect(branch.value).toBe("feature/login");
+    // 还没合并：没有清理。
+    expect(document.querySelector('[data-slot="github-cleanup"]')).toBeNull();
+  });
+
+  it("Gitea / GitLab: deletes the merged branch under the head on screen, after a confirmation", async () => {
+    forgeApi.deleteForgeBranch.mockResolvedValueOnce({
+      deleted: false,
+      reasonCode: "BRANCH_MOVED",
+    });
+    forgeApi.deleteForgeBranch.mockResolvedValueOnce({
+      deleted: true,
+      reasonCode: "",
+    });
+    await openGitlabPull(
+      { autoMerge: true, mergeTrain: false },
+      {
+        ...forgePull(14, "Merged change"),
+        state: "merged" as const,
+        mergedAtMs: 1_788_557_900_000,
+      },
+    );
+    // 已合并：没有合并与自动合并的按钮。
+    expect(
+      screen.queryByRole("button", { name: "流水线通过后合并" }),
+    ).toBeNull();
+    fireEvent.click(await screen.findByText("删除远端分支 · feature/login"));
+    expect(await screen.findByText("删除远端分支？")).toBeTruthy();
+    expect(forgeApi.deleteForgeBranch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("确认"));
+    await waitFor(() =>
+      expect(forgeApi.deleteForgeBranch).toHaveBeenCalledWith(
+        { host: "git.example.test", owner: "acme", name: "app" },
+        14,
+        MR_SHA,
+      ),
+    );
+    expect(await screen.findByText(/BRANCH_MOVED/)).toBeTruthy();
+    fireEvent.click(screen.getByText("删除远端分支 · feature/login"));
+    fireEvent.click(await screen.findByText("确认"));
+    expect(await screen.findByText("远端分支已删除")).toBeTruthy();
+  });
+
+  it("Gitea / GitLab: a fork's branch is never offered for deletion", async () => {
+    await openGitlabPull(
+      { autoMerge: false, mergeTrain: false },
+      {
+        ...forgePull(15, "Fork change"),
+        state: "merged" as const,
+        fromFork: true,
+      },
+    );
+    expect(
+      await screen.findByText("head 分支在 fork 仓库里，这里不提供删除。"),
+    ).toBeTruthy();
+    expect(screen.queryByText(/^删除远端分支 · /)).toBeNull();
+    // fork 的 head 名不沿用为本地分支名。
+    expect((screen.getByLabelText("本地分支") as HTMLInputElement).value).toBe(
+      "pr-15",
     );
   });
 

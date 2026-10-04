@@ -11,7 +11,16 @@ import { Field } from "../git/forms";
 import { invalidateGitQueries } from "../git/queries";
 import { createWorktreeAction, localBranch } from "../git/worktree";
 import { suggestedHeadRef } from "./model";
-import { GithubPullRequest } from "../../api/github";
+/**
+ * 检出要用的那几项：GitHub 的 PR 与 Gitea / GitLab 的 PR·MR（`api/forge.ts`）都
+ * 有。`headRepoFullName` 只有 GitHub 给，fork 提示里用来说分支在谁那儿。
+ */
+export interface CheckoutPull {
+  readonly number: number | bigint;
+  readonly headRef: string;
+  readonly fromFork: boolean;
+  readonly headRepoFullName?: string;
+}
 
 /**
  * Checking a pull request out locally, through the same Runtime operation the
@@ -28,7 +37,7 @@ export function CheckoutWorktree({
   busy,
 }: {
   workspaceId: string;
-  pull: GithubPullRequest;
+  pull: CheckoutPull;
   busy: boolean;
 }) {
   const t = useT();

@@ -39,6 +39,7 @@ export const FORGE_ROUTES = {
   pullMerge: `${REPO}/pulls/{number}/merge`,
   mergeOptions: `${REPO}/merge-options`,
   pullAutoMerge: `${REPO}/pulls/{number}/auto-merge`,
+  pullBranch: `${REPO}/pulls/{number}/branch`,
 } as const;
 
 const MERGE_METHODS: readonly ForgeMergeMethod[] = [
@@ -412,6 +413,23 @@ export function installRoutes(server: CoreServer, service: ForgeService): void {
       }
       await forge.cancelAutoMerge(repo, number);
       return { status: 200, body: { cancelled: true } };
+    }),
+  );
+  // 合并后删源分支（Gitea / GitLab；GitHub 走 §5 的 `delete-branch`）。
+  router.handle(
+    "DELETE",
+    FORGE_ROUTES.pullBranch,
+    guarded(async (match, request) => {
+      const repo = repoOf(match);
+      const number = numberOf(match);
+      const headSha = request.query.get("headSha") ?? "";
+      if (headSha === "") bad("headSha 不能为空");
+      const forge = service.forgeFor(repo);
+      if (forge.deleteBranch === undefined) bad("这个平台在这里不删分支");
+      return {
+        status: 200,
+        body: await forge.deleteBranch(repo, number, headSha),
+      };
     }),
   );
   router.handle(

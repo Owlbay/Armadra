@@ -12,6 +12,7 @@ import {
   forgeFilesSchema,
   forgeIssuePageSchema,
   forgeAutoMergeSchema,
+  forgeBranchDeletionSchema,
   forgeIssueSchema,
   forgeMergeOptionsSchema,
   forgeMergedSchema,
@@ -275,6 +276,22 @@ export async function cancelAutoMergeForgePull(
   await request(
     `${repoPath(repo)}/pulls/${number}/auto-merge`,
     z.object({ cancelled: z.boolean() }),
+    { method: "DELETE" },
+  );
+}
+
+/**
+ * 合并后删源分支（Gitea / GitLab）：带页面上显示的 head；分支动过、受保护、
+ * 来自 fork 或还没合并时答 `{ deleted: false, reasonCode }` 而不是照删。
+ */
+export function deleteForgeBranch(
+  repo: ForgeRepo,
+  number: number,
+  headSha: string,
+) {
+  return request(
+    `${repoPath(repo)}/pulls/${number}/branch?${new URLSearchParams({ headSha })}`,
+    forgeBranchDeletionSchema,
     { method: "DELETE" },
   );
 }

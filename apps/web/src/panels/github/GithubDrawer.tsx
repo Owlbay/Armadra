@@ -413,6 +413,7 @@ export function GithubDrawer() {
                   locale={locale}
                   canWrite={forgeCanWrite}
                   open={open}
+                  workspaceId={workspaceId}
                 />
               </>
             )}

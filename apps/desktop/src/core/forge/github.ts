@@ -103,6 +103,7 @@ export function fromGithubPull(pull: GithubPullRequest): ForgePull {
     mergedAtMs: msOrNull(pull.mergedAtUnixMs),
     // GitHub 的自动合并只在 GraphQL 里；这一面不接。
     autoMerge: false,
+    fromFork: pull.fromFork,
   };
 }
 
