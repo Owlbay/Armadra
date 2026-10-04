@@ -312,6 +312,8 @@ async function android(mint, port, assetUrl) {
     "-s",
     "ArmadraNative:*",
     "chromium:*",
+    // 进程崩了时插桩只说「Process crashed」：栈在 AndroidRuntime 里。
+    "AndroidRuntime:E",
   ]);
   check(
     code === 0,
