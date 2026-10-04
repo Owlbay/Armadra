@@ -1,6 +1,7 @@
 import type { ServerResponse } from "node:http";
 import type { CoreRequest } from "../http/router";
 import { DomainError } from "../workspaces/support";
+import { workflowScheduleBridge } from "./registry";
 import {
   type WorkflowService,
   draftJson,
@@ -144,17 +145,57 @@ export function workflowRoutes(service: WorkflowService): readonly Route[] {
       pattern: new RegExp(`^/api/workflows/templates/${ID}$`),
       handle: (request, groups) => {
         const body = jsonObject(request);
-        return {
-          status: 200,
-          body: {
-            template: templateJson(
-              service.updateTemplate(groups.id as string, {
-                name: body.name,
-                template: body.template,
-              }),
-            ),
-          },
-        };
+        const id = groups.id as string;
+        const template = templateJson(
+          service.updateTemplate(id, {
+            name: body.name,
+            template: body.template,
+          }),
+        );
+        // 冻结在旧版本上的计划（契约 §15.6）：页面据此提示「更新到最新版本」。
+        const frozenSchedules = (
+          workflowScheduleBridge()?.frozen(id) ?? []
+        ).map((item) => ({
+          scheduleId: item.scheduleId,
+          workspaceId: item.workspaceId,
+          templateVersion: item.templateVersion,
+          reason: item.reason,
+          missingParams: item.missingParams,
+          unknownParams: item.unknownParams,
+        }));
+        return { status: 200, body: { template, frozenSchedules } };
+      },
+    },
+    {
+      method: "POST",
+      pattern: new RegExp(`^/api/workflows/templates/${ID}/upgrade-schedules$`),
+      handle: async (request, groups) => {
+        const body = jsonObject(request);
+        const ids = body.scheduleIds;
+        if (
+          !Array.isArray(ids) ||
+          ids.length === 0 ||
+          ids.length > 200 ||
+          !ids.every((item) => typeof item === "string" && item !== "")
+        ) {
+          throw new DomainError(
+            400,
+            "bad_request",
+            "scheduleIds 必须是 1–200 个计划标识。",
+          );
+        }
+        const bridge = workflowScheduleBridge();
+        if (bridge === undefined) {
+          throw new DomainError(409, "unsupported", "这台 core 没有自动化域。");
+        }
+        // 模板先得在：不在就 404，与其余模板路由一致。
+        service.template(groups.id as string);
+        const result = await bridge.upgrade(
+          request,
+          groups.id as string,
+          ids as string[],
+        );
+        return { status: 200, body: result };
       },
     },
     {

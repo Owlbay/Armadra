@@ -15,7 +15,9 @@ import { Button } from "@/ui/button";
 import { useQuery } from "@tanstack/react-query";
 import { useT } from "@/app/preferences-store";
 import { useAccess } from "@/app/use-access";
+import { useCanvasStore } from "@/store/canvas-store";
 import { workflowsApi } from "@/workflow/api";
+import { FrozenScheduleAlert } from "@/workflow/FrozenScheduleAlert";
 import { workflowKeys } from "@/workflow/store";
 import { digestLabel, instant, planStateKey, scheduleKind } from "./model";
 import {
@@ -74,9 +76,16 @@ export function PlanRow({
     enabled: Boolean(workflowRun) && !member,
     retry: false,
   });
-  const templateName = templates.data?.find(
+  const template = templates.data?.find(
     (item) => item.id === workflowRun?.templateId,
-  )?.name;
+  );
+  const templateName = template?.name;
+  const workspaceId = useCanvasStore((state) => state.workspace?.id ?? "");
+  // 模板改过而计划还冻结在旧版本上：到点会跳过（契约 §15.6）。
+  const frozen =
+    workflowRun !== undefined &&
+    template !== undefined &&
+    Number(workflowRun.templateVersion) < template.version;
   const [confirm, setConfirm] = React.useState<"activate" | "runNow" | null>(
     null,
   );
@@ -118,6 +127,15 @@ export function PlanRow({
           {t("automation.needsAttentionNote")}
           {plan.attentionReasonCode ? ` · ${plan.attentionReasonCode}` : ""}
         </p>
+      )}
+      {frozen && (
+        <FrozenScheduleAlert
+          templateId={template.id}
+          templateVersion={template.version}
+          workspaceId={workspaceId}
+          planId={plan.id}
+          canManage={canManage}
+        />
       )}
       <dl className="grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
         <dt className="text-muted-foreground">{t("automation.nextDue")}</dt>

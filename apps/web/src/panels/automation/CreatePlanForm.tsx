@@ -351,7 +351,19 @@ export function CreatePlanForm({
       const payload =
         frozenTarget.kind === "workflow" ? workflowPayload() : state.payload;
       if (payload === null) return;
-      const config = buildPlanConfig(state, frozenTarget);
+      // 工作流计划的参数按模板的当前版本填，存的也就是当前版本：冻结在旧版本
+      // 上的计划经一次编辑升级（契约 §15.6）。
+      const target =
+        frozenTarget.kind === "workflow" && template
+          ? {
+              ...frozenTarget,
+              workflowRun: {
+                ...frozenTarget.workflowRun,
+                templateVersion: template.version,
+              },
+            }
+          : frozenTarget;
+      const config = buildPlanConfig(state, target);
       if (!config.ok) {
         setError({ field: config.field, messageKey: config.messageKey });
         return;

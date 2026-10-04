@@ -189,6 +189,104 @@ export const acpPendingPermissionSchema = acpPermissionRequestSchema.extend({
   pendingId: z.string(),
 });
 
+/* -------------------- §26.1 elicitation, §26.2 models -------------------- */
+
+/** One field of an elicitation form: the flat primitive types the spec allows. */
+export const acpElicitationFieldSchema = z.union([
+  z.looseObject({
+    type: z.literal("string"),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    enum: z.array(z.string()).optional(),
+    enumNames: z.array(z.string()).optional(),
+    format: z.string().optional(),
+    minLength: z.number().optional(),
+    maxLength: z.number().optional(),
+    default: z.string().optional(),
+  }),
+  z.looseObject({
+    type: z.enum(["number", "integer"]),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    minimum: z.number().optional(),
+    maximum: z.number().optional(),
+    default: z.number().optional(),
+  }),
+  z.looseObject({
+    type: z.literal("boolean"),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    default: z.boolean().optional(),
+  }),
+]);
+
+export const acpElicitationFormSchema = z.looseObject({
+  type: z.literal("object"),
+  properties: z.record(z.string(), acpElicitationFieldSchema),
+  required: z.array(z.string()).optional(),
+});
+
+/**
+ * An `elicitation/create` as the core stores it. `requestedSchema` is absent
+ * when the agent sent a form the page cannot draw (only decline / cancel
+ * remain); `url` only in `url` mode.
+ */
+export const acpElicitationSchema = z.looseObject({
+  message: z.string(),
+  mode: z.enum(["form", "url"]).catch("form"),
+  requestedSchema: acpElicitationFormSchema.optional(),
+  url: z.string().optional(),
+});
+
+/**
+ * A pending `elicitation/create`, as stored in `agent_approvals.request_json`
+ * and as `agent.approval` carries it (contract §26.1).
+ */
+export const acpElicitationRequestSchema = z.looseObject({
+  protocol: z.literal("acp"),
+  elicitation: acpElicitationSchema,
+});
+
+/** A pending elicitation listed with the log (`elicitations`). */
+export const acpPendingElicitationSchema = acpElicitationRequestSchema.extend({
+  pendingId: z.string(),
+});
+
+export const ACP_ELICITATION_ACTIONS = ["accept", "decline", "cancel"] as const;
+export const acpElicitationActionSchema = z.enum(ACP_ELICITATION_ACTIONS);
+
+/** The answer the agent receives; `content` only with `accept`. */
+export const acpElicitationAnswerSchema = z.object({
+  action: acpElicitationActionSchema,
+  content: z
+    .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+    .optional(),
+});
+
+/**
+ * `POST /api/approvals/{pendingId}/answer` for an elicitation: `decision` may
+ * be left out (it follows from the action).
+ */
+export const acpElicitationAnswerRequestSchema = z.object({
+  decision: z.enum(["allow", "deny"]).optional(),
+  elicitation: acpElicitationAnswerSchema,
+});
+
+export const acpModelSchema = z.looseObject({
+  modelId: z.string(),
+  name: z.string(),
+  description: z.string().nullish(),
+});
+
+/** The model catalog (same shape as `modes`). */
+export const acpModelStateSchema = z.looseObject({
+  currentModelId: z.string(),
+  availableModels: z.array(acpModelSchema),
+});
+
+/** `PUT /api/acp/sessions/{id}/model`. */
+export const acpModelRequestSchema = z.object({ modelId: z.string().min(1) });
+
 /** One normalised transcript block (`core/history/types.ts::Block`). */
 export const acpTranscriptBlockSchema = z.union([
   z.looseObject({ type: z.literal("text"), text: z.string() }),
@@ -223,7 +321,11 @@ export const acpLogResponseSchema = z.looseObject({
   entries: z.array(acpTranscriptEntrySchema),
   endOffset: z.number().int().nonnegative(),
   modes: acpModeStateSchema.nullish(),
+  /** §26.2: `null` when the client or the agent offers no model choice. */
+  models: acpModelStateSchema.nullish(),
   pending: z.array(acpPendingPermissionSchema).optional(),
+  /** §26.1: pending `elicitation/create` requests. */
+  elicitations: z.array(acpPendingElicitationSchema).optional(),
 });
 
 /** `POST /api/acp/nodes/{nodeId}/driver` (design §4.2). */
@@ -294,3 +396,15 @@ export type AcpDriverResponse = z.infer<typeof acpDriverResponseSchema>;
 export type AcpUpdateEvent = z.infer<typeof acpUpdateEventSchema>;
 export type AcpTurnEvent = z.infer<typeof acpTurnEventSchema>;
 export type AcpDriverEvent = z.infer<typeof acpDriverEventSchema>;
+export type AcpElicitationField = z.infer<typeof acpElicitationFieldSchema>;
+export type AcpElicitationForm = z.infer<typeof acpElicitationFormSchema>;
+export type AcpElicitation = z.infer<typeof acpElicitationSchema>;
+export type AcpElicitationRequest = z.infer<typeof acpElicitationRequestSchema>;
+export type AcpPendingElicitation = z.infer<typeof acpPendingElicitationSchema>;
+export type AcpElicitationAction = (typeof ACP_ELICITATION_ACTIONS)[number];
+export type AcpElicitationAnswer = z.infer<typeof acpElicitationAnswerSchema>;
+export type AcpElicitationAnswerRequest = z.infer<
+  typeof acpElicitationAnswerRequestSchema
+>;
+export type AcpModel = z.infer<typeof acpModelSchema>;
+export type AcpModelState = z.infer<typeof acpModelStateSchema>;
