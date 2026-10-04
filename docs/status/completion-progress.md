@@ -1032,7 +1032,28 @@
 
 ## G5-05 ACP 页面补充（R-26 页面、R-27 页面、R-31）
 
-待填（第 2 组）。
+**做了什么**（按契约 §26.1 / §26.2 的页面一侧，接口形状未改）
+
+- `ElicitationCard`（`apps/web/src/acp/ElicitationCard.tsx`）：与审批卡同一位置、同一外观——只有一张挂起项时钉在输入框上方，多张时随消息流。按 `requestedSchema` 画 Field：字符串 `Input`（`format` 映射 email / url / date）、枚举 `Select`（`enumNames` 作标签）、`number` / `integer` 数字输入、布尔 `Switch`；必填与约束在页面先判一遍，不合规时「提交」置灰。提交、拒绝、取消各一键，答复走 `POST /api/approvals/{id}/answer { elicitation }`，不带 `decision`。URL 模式只给链接与「继续」（只放行 http(s)）；core 没存 `requestedSchema` 时只剩拒绝与取消。先收起再发请求（与审批卡相同），答不上把卡放回并提示。没有答复权限的人看到同一张卡，按钮换成「等待接管」。
+- store：每个会话多 `models`；挂起的 elicitation 按 nodeId 存，来源是 `GET …/log` 的 `elicitations` 与 `agent.approval`；`resolvePermission` 同时收两类；回合结束一起清。`config_option_update` 只在已有目录时跟（与 core 同一条规矩，`modelStateOf` 与 `core/acp/models.ts` 同一认法）。
+- `PromptBox`：`models` 非空时多一个模型 `Select`；≤ 767（含手机焦点页，焦点页挂的是同一个会话视图）模式与模型收进一个「⋯」`DropdownMenu`（两组单选）。换模型先改本地、`PUT /api/acp/sessions/{id}/model`，成功后把 `agent.model` 写回节点数据（`history: "ignore"`，与会话 id 同理不进撤销栈），失败回退并提示。
+- 展示页 `acp` 分区：模型 Select、窄屏「⋯」、elicitation 表单卡与链接卡。i18n `acp.prompt.{model,more,modelFailed}`、`acp.elicitation.*` 中英同步。
+- `acp-e2e`：第三个节点 C（假 Agent 带 `--config-options`）发 `[elicit]` → 卡片出现、选 `blue` 填 `2` 提交 → Agent 回 `elicit: accept {"color":"blue","count":2}`、审批行 `allow` 且不存内容；有模型目录时换到 Large → `[model]` 答 `model large`、节点数据 `agent.model = large`。上游没有能力时（旧假 Agent 回声或新假 Agent 答 `unsupported`、`models` 为 `null`）记进 `report.skipped`，不算失败。
+
+**实测**（macOS arm64）
+
+- 新用例：`ElicitationCard.test`（内容组装与校验、各控件、提交 / 拒绝 / 取消、答不上放回、URL 模式、无权限）、`PromptBox.test`（模型 Select、窄屏「⋯」、无可选时不画菜单）、`store.test`（目录认法与 `config_option_update`、elicitation 的解析、hydrate、收起与回合结束）、`SessionView.test`（事件流里的 elicitation 答复、重载恢复、换模型写回、失败回退）。
+- 真浏览器：`acp-e2e` 在上游 0.6.7 上 elicitation 与模型两步记为跳过，其余照常；另用一份只在本机的 core 拷贝（`AcpClient` 按 `acp/feature-fixture.ts` 的形状补出两个能力）加 fixture 的假 Agent 跑通整轮（截图 `10-elicitation-card`、`11-elicitation-answered`、`12-model-switched`）。`design-showcase --only=acp` 六张、两主题对比度通过、无控制台错误；390 宽下「⋯」菜单展开截图核对过两组单选。
+- `acp-e2e` 第 5 步「切到终端视图：PTY 起来并敲了 CLI 的恢复行」在本机 main 上同样失败（不是本包引入）。
+
+**偏离**
+
+- 计划写「`PromptBox` 加模型 Select」；模型只有一个时也画（让人看得见在用哪个），模式仍是多于一个才画。
+- `PromptBox` 多一个可选 `compact` 属性，只给展示页画窄屏那一版。
+
+**没做 / 需要上游**
+
+- 真机生效要等 `@armadra/agent` 发出带 `features.elicitation` / `features.configOptions` 的版本并升依赖；届时 `acp-e2e` 的那一轮自动从跳过变成真跑（上游假 Agent 的 `[elicit]`、`[model]`、`--config-options` 与本轮一致）。
 
 ## G5-06 SSH 节点的 ACP（R-30）
 
