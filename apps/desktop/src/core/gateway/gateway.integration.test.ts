@@ -343,6 +343,109 @@ describe("桌面 Gateway：设置驱动、本地 CA、配对", () => {
   });
 });
 
+describe("配对短码（契约 §24）", () => {
+  const exchange = (
+    code: string,
+    options: { origin?: string | null } = {},
+  ): Promise<Answer> =>
+    remote("/api/gateway/pairing-code/exchange", {
+      method: "POST",
+      body: { code },
+      trust: ca,
+      ...options,
+    });
+
+  it("短码换票 → 配对 → 短码与票都失效", async () => {
+    const payload = (await pairing()) as Awaited<ReturnType<typeof pairing>> & {
+      code: string;
+    };
+    expect(payload.code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+
+    const answer = await exchange(payload.code.toLowerCase());
+    expect(answer.status).toBe(200);
+    const exchanged = JSON.parse(answer.body) as Record<string, unknown>;
+    expect(exchanged.ticket).toBe(payload.ticket);
+    expect(exchanged.fingerprint).toBe(payload.fingerprint);
+    expect(exchanged.origin).toBe(origin);
+    expect(exchanged).not.toHaveProperty("code");
+
+    const paired = await remote("/api/identity/pair", {
+      method: "POST",
+      body: { ticket: exchanged.ticket },
+      trust: ca,
+    });
+    expect(paired.status).toBe(200);
+    const again = await exchange(payload.code);
+    expect(again.status).toBe(404);
+    expect(JSON.parse(again.body).code).toBe("pairing_code_invalid");
+    expect(
+      (
+        await remote("/api/identity/pair", {
+          method: "POST",
+          body: { ticket: exchanged.ticket },
+          trust: ca,
+        })
+      ).status,
+    ).toBe(401);
+  });
+
+  it("票先被扫码兑掉，短码跟着作废", async () => {
+    const payload = (await pairing()) as Awaited<ReturnType<typeof pairing>> & {
+      code: string;
+    };
+    expect(
+      (
+        await remote("/api/identity/pair", {
+          method: "POST",
+          body: { ticket: payload.ticket },
+          trust: ca,
+        })
+      ).status,
+    ).toBe(200);
+    expect((await exchange(payload.code)).status).toBe(404);
+  });
+
+  it("不是从票绑定的来源来的：409，短码留着", async () => {
+    const payload = (await pairing()) as Awaited<ReturnType<typeof pairing>> & {
+      code: string;
+    };
+    const wrong = await local("POST", "/api/gateway/pairing-code/exchange", {
+      code: payload.code,
+    });
+    expect(wrong.status).toBe(409);
+    expect(JSON.parse(wrong.body).code).toBe("origin_mismatch");
+    expect((await exchange(payload.code)).status).toBe(200);
+  });
+
+  it("原生 App 的 Bearer 模式也能兑：会话来源是 App 连上的 Gateway", async () => {
+    const payload = (await pairing()) as Awaited<ReturnType<typeof pairing>> & {
+      code: string;
+    };
+    const answer = await exchange(payload.code, { origin: APP });
+    expect(answer.status).toBe(200);
+    expect(answer.headers["access-control-allow-origin"]).toBe(APP);
+    expect(JSON.parse(answer.body).ticket).toBe(payload.ticket);
+  });
+
+  it("不认识的来源 403；请求体不对 400", async () => {
+    const payload = (await pairing()) as Awaited<ReturnType<typeof pairing>> & {
+      code: string;
+    };
+    expect(
+      (await exchange(payload.code, { origin: "https://evil.example" })).status,
+    ).toBe(403);
+    expect(
+      (
+        await remote("/api/gateway/pairing-code/exchange", {
+          method: "POST",
+          body: { code: 7 },
+          trust: ca,
+        })
+      ).status,
+    ).toBe(400);
+  });
+});
+
 describe("原生 App 的 Bearer 模式", () => {
   let accessToken: string;
 

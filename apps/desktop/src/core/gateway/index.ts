@@ -16,6 +16,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { CoreServer } from "../http/server";
+import type { HandlerResult } from "../http/router";
 import type { ErrorResponse } from "../http/errors";
 import { coreError } from "../http/errors";
 import type { CoreContext } from "../main";
@@ -36,12 +37,21 @@ import {
   privateAddresses,
 } from "./network";
 import { pairingJson } from "./pairing";
+import {
+  PairingCodes,
+  formatPairingCode,
+  pairingCodesOpen,
+} from "./pairing-code";
 import { audit } from "../identity/audit";
+import { IdentityStore } from "../identity/store";
+import { parseToken } from "../identity/tokens";
 import {
   GATEWAY_MANAGED,
   GATEWAY_NOT_RUNNING,
+  type PairingCodeExchange,
   getGateway,
   postPairing,
+  postPairingCodeExchange,
   putGateway,
 } from "./routes";
 import {
@@ -67,6 +77,8 @@ export interface GatewayDomainOptions {
   readonly pollMs?: number;
   /** 测试用：ACME 的签发器、时钟与计时器（`log` 由域自己给）。 */
   readonly acme?: Omit<AcmeManagerOptions, "log">;
+  /** 测试用：短码表（时钟与生成器）。 */
+  readonly pairingCodes?: PairingCodes;
 }
 
 /**
@@ -120,11 +132,15 @@ export class GatewayDomain {
   private stopped = false;
   /** 这一次打开时用的配置，变了才重开。 */
   private openedWith = "";
+  /** 配对短码（契约 §24）：随票签、只在内存里；换掉 Gateway 时全部作废。 */
+  private readonly codes: PairingCodes;
 
   constructor(
     private readonly context: CoreContext,
     private readonly options: GatewayDomainOptions = {},
-  ) {}
+  ) {
+    this.codes = options.pairingCodes ?? new PairingCodes();
+  }
 
   config(): GatewayConfigView {
     const document = settingsDomain()?.settings.snapshot() ?? {};
@@ -137,6 +153,7 @@ export class GatewayDomain {
 
   /** 服务器壳把它打开的那个交给这里；之后设置不再驱动 Gateway。 */
   adopt(gateway: Gateway, acme?: AcmeManager): void {
+    this.codes.clear();
     this.managed = true;
     this.current = gateway;
     this.acme = acme;
@@ -198,12 +215,20 @@ export class GatewayDomain {
     if (gateway === undefined) return GATEWAY_NOT_RUNNING;
     try {
       const issued = gateway.pair(input);
-      // 票本身不进审计：它两分钟内就能换出一台 owner 设备。
+      const code = this.codesOpen(gateway) ? this.codes.issue(issued) : null;
+      // 票与短码都不进审计：两分钟内它们都能换出一台 owner 设备。
       audit({
         action: "gateway.pairing.issue",
-        detail: { origin: issued.origin, expiresAtMs: issued.expiresAtMs },
+        detail: {
+          origin: issued.origin,
+          expiresAtMs: issued.expiresAtMs,
+          code: code !== null,
+        },
       });
-      return pairingJson(issued);
+      return {
+        ...pairingJson(issued),
+        code: code === null ? null : formatPairingCode(code),
+      };
     } catch (error) {
       if (error instanceof GatewayError) {
         return coreError(400, error.code, error.message);
@@ -212,10 +237,79 @@ export class GatewayDomain {
     }
   }
 
+  /**
+   * 短码换票（契约 §24）。手机还没有身份：短码就是凭据，所以错一次扣一个
+   * 令牌；票已被扫码兑掉时短码跟着作废；请求来源与票绑定的来源不同时短码
+   * 留着、答 409，让人换到卡片上那个地址。
+   */
+  exchangeCode(input: PairingCodeExchange): HandlerResult {
+    const gateway = this.current;
+    if (gateway === undefined) return GATEWAY_NOT_RUNNING;
+    if (!this.codesOpen(gateway)) {
+      return coreError(
+        403,
+        "pairing_code_disabled",
+        "公网档位上不能用配对码，请扫码或贴配对链接",
+      );
+    }
+    const store = new IdentityStore(this.context.db.database);
+    const result = this.codes.exchange(input.code, input.remoteIp, (ticket) => {
+      const ticketId = parseToken(ticket.ticket);
+      const row =
+        ticketId === undefined
+          ? undefined
+          : store.transaction((tx) => tx.ticket(ticketId));
+      if (row === undefined || row.consumedAtMs !== 0) return "dead";
+      return input.origin === ticket.origin ? "ok" : "origin_mismatch";
+    });
+    if (!result.ok) {
+      if (result.reason === "rate_limited") {
+        return {
+          ...coreError(429, "rate_limited", "配对码试错太多，请稍后再试"),
+          headers: {
+            "retry-after": String(
+              Math.max(1, Math.ceil((result.retryAfterMs ?? 0) / 1000)),
+            ),
+          },
+        };
+      }
+      if (result.reason === "origin_mismatch") {
+        return coreError(
+          409,
+          "origin_mismatch",
+          `请在 ${result.origin ?? ""} 上输入这个配对码`,
+        );
+      }
+      audit({
+        action: "gateway.pairing.code.reject",
+        detail: { remoteIp: input.remoteIp },
+      });
+      return coreError(
+        404,
+        "pairing_code_invalid",
+        "配对码不对、已用过或已过期",
+      );
+    }
+    audit({
+      action: "gateway.pairing.code.exchange",
+      detail: { origin: result.ticket.origin, remoteIp: input.remoteIp },
+    });
+    return { status: 200, body: pairingJson(result.ticket) };
+  }
+
+  private codesOpen(gateway: Gateway): boolean {
+    return pairingCodesOpen({
+      mode: gateway.mode,
+      host: gateway.address.host,
+      publicOrigins: gateway.publicOrigins,
+    });
+  }
+
   /** core 停下时调：关掉监听与地址轮询。幂等。 */
   async close(): Promise<void> {
     this.stopped = true;
     this.stopPolling();
+    this.codes.clear();
     await this.queue;
     const gateway = this.current;
     const acme = this.acme;
@@ -340,6 +434,7 @@ export class GatewayDomain {
 
   private async shut(): Promise<void> {
     this.stopPolling();
+    this.codes.clear();
     const gateway = this.current;
     const acme = this.acme;
     this.current = undefined;
@@ -436,6 +531,7 @@ export function install(
     configure: (patch: JsonObject) => domain.configure(patch),
     pair: (input: { origin?: string; deviceName?: string }) =>
       domain.pair(input),
+    exchangeCode: (input: PairingCodeExchange) => domain.exchangeCode(input),
   };
   router.handle("GET", "/api/gateway", () => getGateway(deps));
   router.handle("PUT", "/api/gateway", (_match, request) =>
@@ -443,6 +539,11 @@ export function install(
   );
   router.handle("POST", "/api/gateway/pairing", (_match, request) =>
     postPairing(deps, request),
+  );
+  router.handle(
+    "POST",
+    "/api/gateway/pairing-code/exchange",
+    (_match, request) => postPairingCodeExchange(deps, request),
   );
   // 装配是同步的，监听是异步的：起不来不该拖住 core，状态里报原因。服务器壳
   // 不走设置——它在 `run()` 之后自己 `adopt`，所以这里只在设置开着时开。
