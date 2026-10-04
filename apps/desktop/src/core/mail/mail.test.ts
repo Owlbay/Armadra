@@ -572,14 +572,74 @@ describe("POST /api/mail/invitation", () => {
 });
 
 describe("POST /api/mail/password-reset", () => {
-  it("身份域还没有重置链接这一面时答 404", async () => {
+  it("接到身份域：owner 发刚签的链接，正文是 #reset=，审计只有指纹", async () => {
     const h = harness();
+    const target = h.member("同事");
+    const issued = h.accounts.issuePasswordReset(h.owner, target.principalId);
     const answer = await h.call(h.owner, "POST", MAIL_ROUTES.passwordReset, {
-      principalId: h.owner.principalId,
-      token: `${h.owner.principalId}.${"A".repeat(43)}`,
-      to: "a@example.com",
+      principalId: target.principalId,
+      token: issued.token,
+      to: "colleague@example.com",
     });
-    expect(answer.status).toBe(404);
+    expect(answer).toMatchObject({ status: 200, body: { sent: true } });
+    expect(h.outbox).toHaveLength(1);
+    expect(h.outbox[0]?.subject).toBe("Armadra 口令重置");
+    expect(h.outbox[0]?.text).toContain(`${ORIGIN}/#reset=${issued.token}`);
+    const sent = h.events.filter(
+      (event) => event.action === "mail.password-reset.send",
+    );
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.target).toBe(target.principalId);
+    expect(JSON.stringify(h.events)).not.toContain(issued.token);
+    expect(JSON.stringify(h.events)).not.toContain("example.com");
+  });
+
+  it("令牌不是这个人的、已用过或认不出：409 link_invalid，不发信", async () => {
+    const h = harness();
+    const first = h.member("甲");
+    const second = h.member("乙");
+    const issued = h.accounts.issuePasswordReset(h.owner, first.principalId);
+    const send = (principalId: string, token: string) =>
+      h.call(h.owner, "POST", MAIL_ROUTES.passwordReset, {
+        principalId,
+        token,
+        to: "a@example.com",
+      });
+    const crossed = await send(second.principalId, issued.token);
+    expect(crossed.status).toBe(409);
+    expect(crossed.body.code).toBe("link_invalid");
+    const forged = await send(
+      first.principalId,
+      `${"0".repeat(32)}.${"A".repeat(43)}`,
+    );
+    expect(forged.status).toBe(409);
+    // 签新的作废旧的。
+    h.accounts.issuePasswordReset(h.owner, first.principalId);
+    const superseded = await send(first.principalId, issued.token);
+    expect(superseded.status).toBe(409);
+    expect(h.outbox).toHaveLength(0);
+  });
+
+  it("不能签这条链接的人 403；没有这个人 404", async () => {
+    const h = harness();
+    const target = h.member("丙");
+    const bystander = h.member("路人");
+    const issued = h.accounts.issuePasswordReset(h.owner, target.principalId);
+    const refused = await h.call(
+      bystander,
+      "POST",
+      MAIL_ROUTES.passwordReset,
+      { principalId: target.principalId, token: issued.token, to: "a@x.test" },
+    );
+    expect(refused.status).toBe(403);
+    expect(refused.body.code).toBe("forbidden");
+    const missing = await h.call(h.owner, "POST", MAIL_ROUTES.passwordReset, {
+      principalId: "f".repeat(32),
+      token: issued.token,
+      to: "a@x.test",
+    });
+    expect(missing.status).toBe(404);
+    expect(h.outbox).toHaveLength(0);
   });
 
   it("有核对时按它判：链接指向 #reset=，主题是口令重置", async () => {

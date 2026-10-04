@@ -338,6 +338,25 @@ export class AccountsService {
   }
 
   /**
+   * 调用方能不能替这个人签重置链接——与 {@link issuePasswordReset} 同一套判定，
+   * 不签、不写库。邮件通道（契约 §28）发信前用它认调用方。
+   */
+  requirePasswordResetRights(
+    actor: AuthorizationSubject,
+    principalId: string,
+  ): void {
+    if (!ID_PATTERN.test(principalId)) throw new IdentityError("invalid");
+    this.options.store.transaction((tx) => {
+      const target = tx.accounts.principal(principalId);
+      if (target === undefined) {
+        this.require(tx.accounts, actor, [scope("identity:read")]);
+        throw new IdentityError("notFound");
+      }
+      this.requireResetRights(tx.accounts, actor, target);
+    });
+  }
+
+  /**
    * 打开重置链接时看一眼：令牌对、没用过、没过期，答这是谁的。认不出一律
    * `invalid_reset_token`，不分「不存在」「用过」「过期」——令牌本身就是凭据，
    * 多说一句就是多给猜的人一条线索。

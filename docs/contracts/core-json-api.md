@@ -1820,7 +1820,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 { "principalId": "<32 位十六进制>", "token": "<签发时拿到的令牌>", "to": "someone@example.com", "locale": "en" }
 ```
 
-- **令牌由调用方交回**：库里只有哈希，链接只能由刚签出它的那个页面连同 id 一起交过来。core 核对令牌属于这张邀请 / 这个人、没用过、没过期，再按链接自己的规则判调用方：邀请与签发、作废同一套（工作空间邀请要 `workspace:share`，组邀请要能管那个组，两者都无要 `identity:manage`）；重置与签发同一套（§25）。
+- **令牌由调用方交回**：库里只有哈希，链接只能由刚签出它的那个页面连同 id 一起交过来。core 核对令牌属于这张邀请 / 这个人、没用过、没过期，再按链接自己的规则判调用方：邀请与签发、作废同一套（工作空间邀请要 `workspace:share`，组邀请要能管那个组，两者都无要 `identity:manage`）；重置与签发同一套（§25），先判调用方（403 / 404）再认令牌，令牌认不出、用过、作废、过期或不是这个人的，一律 409 `link_invalid`。
 - 正文只有链接与过期时间（UTC），链接是 Gateway 对外来源加 `#invite=<令牌>` / `#reset=<令牌>`；纯文本，没有签发人、角色或工作空间名。主题与正文按 `locale`（`zh` / `en`）选，没给时按 `Accept-Language`，都认不出用英文。
 - 每个来源地址每分钟至多 5 封（socket 对端，不读 `X-Forwarded-For`），核对通过之后才计数，发送失败也计。
 - 审计 `mail.invitation.send` / `mail.password-reset.send`：`target` 是邀请 id / 被重置的人，`detail` 只有 `{ toHash, delivered }`；`toHash` 是 `sha256("armadra/mail/v1\0" + 小写地址)` 的前 32 位十六进制。地址与令牌不进审计与日志。
@@ -1831,7 +1831,7 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 | 400  | `bad_request`         | 请求体不对：id 或令牌形状不对、邀请令牌的前缀不是这个 id、`to` 不是邮箱地址 |
 | 401  | `unauthenticated`     | 匿名                                                                        |
 | 403  | `forbidden`           | 不能签发这条链接的人                                                        |
-| 404  | `not_found`           | 没有这张邀请 / 这个人；或这台 core 还没有口令重置（§25）                    |
+| 404  | `not_found`           | 没有这张邀请 / 这个人                                                       |
 | 409  | `mail_not_configured` | 没配 SMTP                                                                   |
 | 409  | `link_invalid`        | 令牌不对、已用过（含作废）或已过期                                          |
 | 429  | `rate_limited`        | 这个来源这一分钟已发 5 封；带 `Retry-After`（秒）                           |

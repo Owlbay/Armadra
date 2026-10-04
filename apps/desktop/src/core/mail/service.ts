@@ -28,7 +28,7 @@ export interface LinkChecks {
     actor: AuthorizationSubject,
     input: { invitationId: string; token: string },
   ): { expiresAtMs: number };
-  /** 口令重置链接（契约 §25）；身份域没有这一面时缺省，路由答 404。 */
+  /** 口令重置链接（契约 §25）；核对方不给这一道时路由答 404（测试替身用）。 */
   passwordReset?(
     actor: AuthorizationSubject,
     input: { principalId: string; token: string },
