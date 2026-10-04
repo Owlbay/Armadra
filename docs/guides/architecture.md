@@ -370,7 +370,8 @@ ACP 只是同一个 Agent 节点的另一种驱动方式（`core/acp/`，[ACP �
   `realtime_active`。页面（`apps/web/src/realtime/`）把 `Y.Doc` 与 `canvas-store` 双向绑定，
   `Y.UndoManager` 接管撤销，在线条与光标来自 awareness（core 按连接改写身份、校验形状），
   断线时本地照常编辑、重连补齐；视口不进文档。评论存 `board_comments`，`@` 提及发
-  `board.comment` 事件，Agent 经连线读节点时附上未解决的评论线程。契约 §16。
+  `board.comment` 事件，Agent 经连线读节点或白板引用时附上未解决的评论线程；正文在页面按
+  Markdown 渲染（不渲染裸 HTML），钉按屏幕距离聚合。契约 §16。
 - 控制动词新建节点时，core 在 `board.changed` **之后**再广播一条
   `node.created{boardId, nodeId, nodeType, originNodeId}`。前者只说「板变新了」，
   后者说「新出现的是哪一个、谁要的」：正开着这块板的页面据此把新节点选中并把
