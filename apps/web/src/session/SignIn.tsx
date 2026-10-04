@@ -60,6 +60,8 @@ export function SignIn({
     error?: string;
     lockedUntilMs?: number;
     offline?: boolean;
+    /** 口令步上「忘记口令」已展开（展示页）。 */
+    forgot?: boolean;
   };
   /** 钉住时钟（展示页）。 */
   now?: number;
@@ -87,6 +89,7 @@ export function SignIn({
     initial?.challengeId ?? "",
   );
   const [error, setError] = React.useState(initial?.error ?? "");
+  const [forgot, setForgot] = React.useState(initial?.forgot ?? false);
   const [offline, setOffline] = React.useState(initial?.offline ?? false);
   const [lockedUntil, setLockedUntil] = React.useState(
     initial?.lockedUntilMs ?? 0,
@@ -346,10 +349,29 @@ export function SignIn({
               setStep("account");
               setPassword("");
               setError("");
+              setForgot(false);
             }}
           >
             {t("auth.back")}
           </Button>
+          {/* 邮箱是可选的，没有自助重置：重置链接由管理员签发（契约 §25）。 */}
+          {forgot ? (
+            <p
+              role="status"
+              className="text-center text-[13px] text-muted-foreground"
+            >
+              {t("auth.forgot.hint")}
+            </p>
+          ) : (
+            <Button
+              type="button"
+              variant="link"
+              className="self-center"
+              onClick={() => setForgot(true)}
+            >
+              {t("auth.forgot")}
+            </Button>
+          )}
         </form>
       )}
 
