@@ -152,13 +152,13 @@ export async function listPrincipals(): Promise<Principal[]> {
 export async function createMember(
   displayName: string,
   password: string,
-): Promise<Principal> {
+): Promise<{ principal: Principal; passwordBreached: boolean }> {
   const created = await call("principals", principalSchema, {
     method: "POST",
     body: { displayName },
   });
-  await setPassword(created.principalId, password);
-  return created;
+  const { passwordBreached } = await setPassword(created.principalId, password);
+  return { principal: created, passwordBreached };
 }
 
 export async function disablePrincipal(principalId: string): Promise<void> {
@@ -169,21 +169,30 @@ export async function disablePrincipal(principalId: string): Promise<void> {
 
 /**
  * 设口令。答撤掉了这个人几个其它会话（安全审查 L2：本人换口令留下当前会话，
- * owner 替人设时那个人的会话全撤）；旧 core 不报时为 0。
+ * owner 替人设时那个人的会话全撤；旧 core 不报时为 0），以及泄露检查 `warn`
+ * 档是否命中（契约 §18.1）。
  */
 export async function setPassword(
   principalId: string,
   password: string,
-): Promise<number> {
+): Promise<{ revokedSessions: number; passwordBreached: boolean }> {
   const answer = await call(
     "credentials",
-    z.object({ revokedSessions: z.number().default(0) }).passthrough(),
+    z
+      .object({
+        revokedSessions: z.number().default(0),
+        passwordBreached: z.boolean().default(false),
+      })
+      .passthrough(),
     {
       method: "POST",
       body: { kind: "password", principalId, password },
     },
   );
-  return answer.revokedSessions;
+  return {
+    revokedSessions: answer.revokedSessions,
+    passwordBreached: answer.passwordBreached,
+  };
 }
 
 /* ---------------------------------- 组 ----------------------------------- */
@@ -277,13 +286,18 @@ export function takeInvitationToken(): string {
   return found[1] as string;
 }
 
+/** 注册的答案：会话，泄露检查 `warn` 命中时多 `passwordBreached`。 */
+const registeredSchema = identitySessionSchema.extend({
+  passwordBreached: z.boolean().optional(),
+});
+
 /** 拿着邀请注册：建账号、兑换邀请、登录，一次请求。 */
 export async function redeemInvitation(input: {
   token: string;
   displayName: string;
   password: string;
-}): Promise<IdentitySession> {
-  const session = await call("register", identitySessionSchema, {
+}): Promise<IdentitySession & { passwordBreached?: boolean }> {
+  const session = await call("register", registeredSchema, {
     method: "POST",
     body: { ...input, deviceName: deviceName() },
   });

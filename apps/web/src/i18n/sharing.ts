@@ -60,6 +60,11 @@ export const sharing: MessageModule = {
     "sharing.redeem.join": "加入",
     "sharing.redeem.done": "已加入",
     "sharing.revoked": "「{name}」已不再共享给你",
+    "sharing.members.actions": "{name} 的操作",
+    "sharing.members.resetMfa": "重置两步验证",
+    "sharing.members.resetMfaConfirm": "重置「{name}」的两步验证？",
+    "sharing.members.mfaReset": "已重置两步验证",
+    "sharing.members.mfaNone": "这个人没有开两步验证",
   },
   en: {
     "sharing.nav": "Accounts & sharing",
@@ -115,5 +120,11 @@ export const sharing: MessageModule = {
     "sharing.redeem.join": "Join",
     "sharing.redeem.done": "Joined",
     "sharing.revoked": "“{name}” is no longer shared with you",
+    "sharing.members.actions": "Actions for {name}",
+    "sharing.members.resetMfa": "Reset two-step verification",
+    "sharing.members.resetMfaConfirm":
+      "Reset two-step verification for “{name}”?",
+    "sharing.members.mfaReset": "Two-step verification reset",
+    "sharing.members.mfaNone": "Two-step verification wasn't on",
   },
 };

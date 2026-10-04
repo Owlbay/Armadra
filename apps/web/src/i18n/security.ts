@@ -195,6 +195,8 @@ export const security: MessageModule = {
     "security.showcase.offline": "离线",
     "security.showcase.ipHost": "IP 访问",
     "security.showcase.enrolling": "登记",
+    "security.showcase.fullPage": "整页登录",
+    "security.showcase.breached": "泄露提示",
     "security.error.mfa_invalid_code": "验证码不对",
     "security.error.mfa_already_enrolled": "已经开启了两步验证",
     "security.error.mfa_secret_unavailable": "无法保存两步验证密钥",
@@ -204,6 +206,18 @@ export const security: MessageModule = {
       "用 IP 地址访问时无法使用通行密钥，请改用域名",
     "security.error.passkey_rp_id_mismatch":
       "当前地址不在配置的通行密钥域名之下",
+    "security.error.password_too_short": "口令太短",
+    "security.error.password_too_long": "口令太长",
+    "security.error.password_contains_name": "口令里不能有名字或账号",
+    "security.error.password_too_common": "这个口令太常见",
+    "security.error.password_breached": "这个口令出现在已知泄露里，换一个",
+    "security.password.breached": "这个口令出现在已知泄露里",
+    "security.passkeys.rename": "改名",
+    "security.passkeys.renameNamed": "给 {name} 改名",
+    "security.passkeys.renamed": "已改名",
+    "security.passkeys.save": "保存",
+    "auth.forgot": "忘记口令",
+    "auth.forgot.hint": "请联系管理员为你签发重置链接",
   },
   en: {
     "security.nav": "Security",
@@ -399,6 +413,8 @@ export const security: MessageModule = {
     "security.showcase.offline": "Offline",
     "security.showcase.ipHost": "IP address access",
     "security.showcase.enrolling": "Enrolling",
+    "security.showcase.fullPage": "Full-page sign-in",
+    "security.showcase.breached": "Breach warning",
     "security.error.mfa_invalid_code": "Incorrect code",
     "security.error.mfa_already_enrolled":
       "Two-step verification is already on",
@@ -411,5 +427,19 @@ export const security: MessageModule = {
       "Passkeys need a domain name, not an IP address",
     "security.error.passkey_rp_id_mismatch":
       "This address isn't under the configured passkey domain",
+    "security.error.password_too_short": "Password is too short",
+    "security.error.password_too_long": "Password is too long",
+    "security.error.password_contains_name":
+      "Password can't contain your name or account",
+    "security.error.password_too_common": "This password is too common",
+    "security.error.password_breached":
+      "This password appears in a known breach. Choose another",
+    "security.password.breached": "This password appears in a known breach",
+    "security.passkeys.rename": "Rename",
+    "security.passkeys.renameNamed": "Rename {name}",
+    "security.passkeys.renamed": "Renamed",
+    "security.passkeys.save": "Save",
+    "auth.forgot": "Forgot password",
+    "auth.forgot.hint": "Ask your administrator to issue you a reset link",
   },
 };

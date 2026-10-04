@@ -1,3 +1,4 @@
+import { PASSWORD_POLICY_CODES } from "@armadra/shared";
 import { IdentityRequestError, IdentityTransportError } from "../api/identity";
 import { localizedFailure } from "../api/request";
 
@@ -37,4 +38,18 @@ export function lockoutMinutes(error: unknown): number | null {
     return null;
   }
   return Math.max(1, Math.ceil((error.retryAfterSeconds || 60) / 60));
+}
+
+/**
+ * 口令策略与泄露检查拒绝时那一行字（契约 §18.1 的规则名）；不是这几种时
+ * `null`，由调用方按自己的方式报。
+ */
+export function passwordFailure(error: unknown, t: Translate): string | null {
+  if (
+    !(error instanceof IdentityRequestError) ||
+    !(PASSWORD_POLICY_CODES as readonly string[]).includes(error.code)
+  ) {
+    return null;
+  }
+  return known(t, `security.error.${error.code}`) ?? null;
 }

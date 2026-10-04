@@ -143,6 +143,42 @@ describe("SignIn", () => {
     expect(mocks.verify).toHaveBeenLastCalledWith("ch1", "abcde-fghij");
   });
 
+  it("口令步「忘记口令」只给一句：找管理员签发重置链接", async () => {
+    render(
+      wrap(<SignIn onSignedIn={vi.fn()} providers={[]} passkey={false} />),
+    );
+    // 账号步没有这个入口。
+    expect(screen.queryByRole("button", { name: "忘记口令" })).toBeNull();
+    fireEvent.change(screen.getByLabelText("账号标识"), {
+      target: { value: "acct" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    fireEvent.click(await screen.findByRole("button", { name: "忘记口令" }));
+    expect(screen.getByRole("status").textContent).toBe(
+      "请联系管理员为你签发重置链接",
+    );
+    expect(screen.queryByRole("button", { name: "忘记口令" })).toBeNull();
+    expect(mocks.password).not.toHaveBeenCalled();
+  });
+
+  it("从重置页过来：直接口令步，账号已填", async () => {
+    render(
+      wrap(
+        <SignIn
+          onSignedIn={vi.fn()}
+          providers={[]}
+          passkey={false}
+          initial={{ step: "password", account: "p".repeat(32) }}
+        />,
+      ),
+    );
+    expect(screen.getByLabelText("口令")).toBeTruthy();
+    expect(
+      (document.querySelector('input[name="username"]') as HTMLInputElement)
+        .value,
+    ).toBe("p".repeat(32));
+  });
+
   it("口令错：字段下一行，不区分账号不存在", async () => {
     mocks.password.mockRejectedValue(
       new IdentityRequestError(401, "UNAUTHENTICATED", "nope"),
