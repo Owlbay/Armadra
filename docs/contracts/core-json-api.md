@@ -62,6 +62,8 @@ R7a 之前 GitHub 与自动化两块面板走的是 `/rpc/armadra.v1.*`：二进
 
 **明文回环上没带凭据的一次调用按本机主人处理**（`core/identity/service.ts` 的 `localOwner`）。桌面壳的会话是原生的，密钥在壳里，既不发 Cookie 也到不了 `apps/web/src/api/request.ts` 的那个 `fetch`；而那台壳就在同一台机器上。TLS 的服务器壳上这条路不存在，凭据仍然是必须的。主人必须是一台**没被撤销的真设备**——自动化的授权记录要拿它的 epoch 复核，一个编出来的设备标识会让计划在第一次投递时被自己的复核拒掉。
 
+**自 0.3.0 起桌面壳不再按主人处理回环匿名请求**（安全审查 L9）：上面那条路只在 core 的启动选项 `loopbackAnonymousOwner`（`core/main.ts`，缺省 `false`；不传时读 `ARMADRA_LOOPBACK_OWNER=1`）打开时存在，判定在 `core/identity/http.ts::anonymousLoopbackOwner`。桌面壳的页面在这两面上带票据换来的 `Authorization: Bearer`（`apps/web/src/api/request.ts`，401 时换一枚重发一次；回环 CORS 的 `access-control-allow-headers` 因此多了 `authorization`），壳不把这个变量带给 core；服务器壳显式传 `false`。只有探针（`tools/probes/probe-home.mjs`）与 `armadra.sh run web` 起的裸 core 打开它。关着时明文回环上没带凭据的调用照 401 回答（GitHub 面 `UNAUTHENTICATED`、自动化面 `unauthenticated`）。
+
 ### 3.3 稳定的 `code`
 
 GitHub 那一面的 `code` 是 UPPER_SNAKE 拼法——这是延续自历史上 `/rpc/` 兼容面（R7 已删除）的拼法，不是新起的一套：
