@@ -250,6 +250,38 @@ export interface WorkspaceEventPayloads {
     readonly resumed: boolean;
   };
   /*
+   * 自动化计划（契约 §27，G5-00 只定义形状，G5-10 发）：到点起跑一次、一次
+   * 运行失败、计划连续失败到要人处理。只带标识与稳定码，不带命令、参数与
+   * 输出——推送正文按种类写死，深链指向 `nodeId`。
+   */
+  "schedule.fired": {
+    readonly planId: string;
+    readonly runId: string;
+    readonly nodeId?: string;
+  };
+  "schedule.failed": {
+    readonly planId: string;
+    readonly runId: string;
+    readonly nodeId?: string;
+    readonly reasonCode: string;
+  };
+  "schedule.attention": {
+    readonly planId: string;
+    readonly nodeId?: string;
+    readonly reasonCode: string;
+  };
+  /*
+   * 一个会话的资源用量越过设置里的阈值（契约 §27，G5-10 发）。越线那一下发
+   * 一次，回落之后再越线才再发；`metric` 今天只有 `memory`，单位是字节。
+   */
+  "resources.threshold": {
+    readonly sessionId: string;
+    readonly nodeId?: string;
+    readonly metric: string;
+    readonly value: number;
+    readonly threshold: number;
+  };
+  /*
    * 一条评论变了（契约 §16.3）。不带正文：页面据此重新拉列表，推送域按
    * `mentions`（被提及的 principal，不含作者）叫人。
    */
@@ -315,6 +347,10 @@ export const WORKSPACE_EVENT_TYPES = [
   "workflow.draft",
   "workflow.run",
   "workflow.gate",
+  "schedule.fired",
+  "schedule.failed",
+  "schedule.attention",
+  "resources.threshold",
 ] as const satisfies readonly WorkspaceEventType[];
 
 export interface CoreEvents {

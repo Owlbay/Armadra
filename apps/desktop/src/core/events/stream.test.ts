@@ -135,9 +135,9 @@ describe("WorkspaceEventStream", () => {
     expect(changed.mtime).toBeNull();
   });
 
-  it("carries the 21 contractual type strings, plus node.created, terminal.lease, canvas.presence, terminal.hibernation and the three workflow events, and no others", () => {
-    expect(WORKSPACE_EVENT_TYPES).toHaveLength(28);
-    expect(new Set(WORKSPACE_EVENT_TYPES).size).toBe(28);
+  it("carries the 21 contractual type strings, plus node.created, terminal.lease, canvas.presence, terminal.hibernation, the three workflow events and the four G5 schedule / resources events, and no others", () => {
+    expect(WORKSPACE_EVENT_TYPES).toHaveLength(32);
+    expect(new Set(WORKSPACE_EVENT_TYPES).size).toBe(32);
     // A rename here is a break in `packages/shared`'s discriminated union and
     // in every front-end reducer that switches on it (contract §5).
     expect([...WORKSPACE_EVENT_TYPES]).toEqual([
@@ -169,6 +169,10 @@ describe("WorkspaceEventStream", () => {
       "workflow.draft",
       "workflow.run",
       "workflow.gate",
+      "schedule.fired",
+      "schedule.failed",
+      "schedule.attention",
+      "resources.threshold",
     ]);
   });
 

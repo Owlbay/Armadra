@@ -6,9 +6,8 @@
 # (glibc 2.39) records GLIBC_2.38/2.39 references, and the dynamic linker on
 # Ubuntu 22.04 (glibc 2.35) refuses to start it — "version `GLIBC_2.38' not
 # found". Nothing in a successful build says this happened, so the only place it
-# surfaces is a user's terminal. LiveAgent shipped exactly that regression
-# (Stack-Cairn/LiveAgent#714) and fixed it by pinning the Linux release job to
-# the ubuntu-22.04 runner and asserting the result here.
+# surfaces is a user's terminal. So the Linux release job is pinned to the
+# ubuntu-22.04 runner and the result is asserted here.
 #
 # The assertion matters as much as the runner: a build dependency that starts
 # pulling in a newer glibc symbol would otherwise re-break it silently.

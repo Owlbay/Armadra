@@ -232,6 +232,10 @@ export const completionSettingsSchema = z.looseObject({
       claudeUsage: z.boolean().catch(false).default(false),
       copilotUsage: z.boolean().catch(false).default(false),
       statusBadges: z.boolean().catch(true).default(true),
+      claudeLocalWindow: z
+        .boolean()
+        .catch(D.usage.claudeLocalWindow)
+        .default(D.usage.claudeLocalWindow),
     })
     .catch({ ...D.usage })
     .default({ ...D.usage }),
@@ -247,7 +251,13 @@ export const completionSettingsSchema = z.looseObject({
     .catch({ catalog: { ...D.models.catalog } })
     .default({ catalog: { ...D.models.catalog } }),
   diagnostics: z
-    .looseObject({ crashReportDsn: shortSetting.default("") })
+    .looseObject({
+      crashReportDsn: shortSetting.default(""),
+      reportPageErrors: z
+        .boolean()
+        .catch(D.diagnostics.reportPageErrors)
+        .default(D.diagnostics.reportPageErrors),
+    })
     .catch({ ...D.diagnostics })
     .default({ ...D.diagnostics }),
 });

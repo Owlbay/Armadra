@@ -37,6 +37,8 @@ describe("补全计划的设置键", () => {
     expect(usage.claudeUsage).toBe(false);
     expect(usage.copilotUsage).toBe(false);
     expect(usage.statusBadges).toBe(true);
+    expect(usage.claudeLocalWindow).toBe(true);
+    expect((document.diagnostics as JsonObject).reportPageErrors).toBe(false);
     // 没有自定义 Agent 的文件不长出 `agents` 段；读的人照样拿到缺省。
     expect(document.agents).toBeUndefined();
     expect(completionSettings({})).toEqual({
@@ -77,6 +79,7 @@ describe("补全计划的设置键", () => {
       claudeUsage: true,
       copilotUsage: false,
       statusBadges: false,
+      claudeLocalWindow: true,
     });
     expect(settings.models.catalog.autoRefresh).toBe(false);
     expect(settings.diagnostics.crashReportDsn).toContain("glitchtip");
@@ -95,7 +98,8 @@ describe("补全计划的设置键", () => {
       },
       agents: { defaultDriver: "pty" },
       collab: { realtime: "on" },
-      diagnostics: { crashReportDsn: 42 },
+      diagnostics: { crashReportDsn: 42, reportPageErrors: "yes" },
+      usage: { claudeLocalWindow: "off" },
     });
     const settings = completionSettings(document);
     expect(settings.gateway).toEqual(COMPLETION_SETTINGS_DEFAULTS.gateway);
@@ -106,6 +110,19 @@ describe("补全计划的设置键", () => {
     expect(settings.agents.defaultDriver).toBe("acp");
     expect(settings.collab.realtime).toBe(true);
     expect(settings.diagnostics.crashReportDsn).toBe("");
+    expect(settings.diagnostics.reportPageErrors).toBe(false);
+    expect(settings.usage.claudeLocalWindow).toBe(true);
+  });
+
+  it("G5 的两个键：页面错误上报默认关，本机额度估算默认开，合法值原样留下", () => {
+    const settings = completionSettings(
+      normalize({
+        diagnostics: { reportPageErrors: true },
+        usage: { claudeLocalWindow: false },
+      }),
+    );
+    expect(settings.diagnostics.reportPageErrors).toBe(true);
+    expect(settings.usage.claudeLocalWindow).toBe(false);
   });
 
   it("状态徽标没写新键时沿用旧的 statusPage", () => {

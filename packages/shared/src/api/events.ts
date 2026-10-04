@@ -238,6 +238,38 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
   workflowDraftEventSchema,
   workflowRunEventSchema,
   workflowGateEventSchema,
+  /**
+   * 自动化计划的三种时刻（契约 §27）：到点起跑、一次运行失败、连续失败到要人
+   * 处理。只带标识与稳定码，不带命令与输出。
+   */
+  z.object({
+    type: z.literal("schedule.fired"),
+    planId: z.string(),
+    runId: z.string(),
+    nodeId: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("schedule.failed"),
+    planId: z.string(),
+    runId: z.string(),
+    nodeId: z.string().optional(),
+    reasonCode: z.string(),
+  }),
+  z.object({
+    type: z.literal("schedule.attention"),
+    planId: z.string(),
+    nodeId: z.string().optional(),
+    reasonCode: z.string(),
+  }),
+  /** 一个会话的资源用量越过阈值（契约 §27）；`metric` 今天只有 `memory`（字节）。 */
+  z.object({
+    type: z.literal("resources.threshold"),
+    sessionId: z.string(),
+    nodeId: z.string().optional(),
+    metric: z.string(),
+    value: z.number().nonnegative(),
+    threshold: z.number().nonnegative(),
+  }),
 ]);
 
 export type FileChangedEvent = Extract<
@@ -292,6 +324,14 @@ export type BrowserDialogEvent = Extract<
 export type BrowserFileChooserEvent = Extract<
   WorkspaceEvent,
   { type: "browser.fileChooser" }
+>;
+export type ScheduleEvent = Extract<
+  WorkspaceEvent,
+  { type: "schedule.fired" | "schedule.failed" | "schedule.attention" }
+>;
+export type ResourcesThresholdEvent = Extract<
+  WorkspaceEvent,
+  { type: "resources.threshold" }
 >;
 export type SshPromptEvent = Extract<WorkspaceEvent, { type: "ssh.prompt" }>;
 export type WorkspaceUpdatedEvent = Extract<

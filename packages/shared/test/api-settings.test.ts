@@ -27,6 +27,8 @@ describe("completion settings schema", () => {
       identity: { passwordMinLength: 8, mfa: { requireFor: "everyone" } },
       agents: { defaultDriver: "pty", custom: [] },
       collab: { realtime: "on" },
+      usage: { claudeLocalWindow: "off" },
+      diagnostics: { reportPageErrors: 1 },
       theme: "dark",
     });
     expect(parsed.gateway.enabled).toBe(false);
@@ -39,6 +41,8 @@ describe("completion settings schema", () => {
     expect(parsed.agents.defaultDriver).toBe("acp");
     expect((parsed.agents as Record<string, unknown>).custom).toEqual([]);
     expect(parsed.collab.realtime).toBe(true);
+    expect(parsed.usage.claudeLocalWindow).toBe(true);
+    expect(parsed.diagnostics.reportPageErrors).toBe(false);
     expect((parsed as Record<string, unknown>).theme).toBe("dark");
   });
 
