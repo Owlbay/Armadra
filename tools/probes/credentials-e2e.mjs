@@ -32,6 +32,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { LOOPBACK_OWNER_ENV } from "./probe-home.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -83,6 +84,8 @@ async function startCore() {
         TMPDIR: tmpdir(),
         ARMADRA_SECRET_BACKEND: "file-encrypted",
         ARMADRA_NO_GLOBAL_WRITES: "1",
+        // 裸 core 显式打开回环匿名按主人（契约 §3.2）：探针不在壳里、拿不到票。
+        ...LOOPBACK_OWNER_ENV,
       },
     },
   );
