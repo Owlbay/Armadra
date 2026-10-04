@@ -22,7 +22,8 @@ node apps/server/out/main.js serve --data-dir ~/.armadra-server
 node apps/server/out/main.js --help
 ```
 
-子命令：`serve`、`install`、`uninstall`、`status`、`logs`、`upgrade`。监听非回环地址必须同时给
+子命令：`serve`、`install`、`uninstall`、`status`、`logs`、`upgrade`、`secrets`（`rotate` 换 master key、
+`set NAME` 从标准输入写一个密钥条目）。可选邮件通道 `serve --smtp-url` / `--smtp-from`。监听非回环地址必须同时给
 `--public-origin`；不给证书时在 `<数据目录>/tls/` 生成自签名证书，`--acme <邮箱>` 则由 ACME（缺省
 Let's Encrypt）签发并自动续期。容器镜像在 [`docker/`](docker/README.md)，部署、证书、备份与升级见
 [服务器部署指南](../../docs/guides/server-deployment.md)。完整参数与约束见
