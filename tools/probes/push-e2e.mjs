@@ -15,6 +15,15 @@
 //   4. 改成浏览器 Web Push：VAPID 由 push-sink 自己验签，aes128gcm 订阅者能解。
 //   5. 起 `apps/push-relay`（上游也指 push-sink），设置改成 relay：App 向中继换
 //      中继令牌、以 relay 登记；苹果那一侧收到的仍是同一个信封，设备私钥能解。
+//   6. UnifiedPush（契约 §27.2）：Android 只带分发器端点（push-sink 的
+//      `/up/<topic>`）登记，不看 `push.transport`；分发器收到的是信封。dev-stack
+//      的 ntfy（`--profile ntfy`，127.0.0.1:8093）在的话再对真 ntfy 走一遍：
+//      core POST 到 ntfy 的 UP 端点，从 ntfy 的订阅接口取回消息，设备私钥能解。
+//   7. 设备偏好（契约 §27.1）：PATCH 只留「审批」，再报一次权限请求与一次 Stop，
+//      分发器只收到审批那一条。
+//
+// ntfy：`--ntfy <url>` 或 `ARMADRA_NTFY`；否则看 127.0.0.1:8093 在不在，不在就
+// 记一笔跳过（CI 没有 Docker）。
 //
 // push-sink 的来源：`--sink <url>` 或 `ARMADRA_PUSH_SINK`；否则先看 dev-stack 的
 // 127.0.0.1:8091 在不在（`pnpm dev-stack up`），不在就在本进程里起一份
@@ -52,6 +61,9 @@ const args = process.argv.slice(2);
 const sinkFlag = args.indexOf("--sink");
 const sinkArg =
   sinkFlag >= 0 ? args.splice(sinkFlag, 2)[1] : process.env.ARMADRA_PUSH_SINK;
+const ntfyFlag = args.indexOf("--ntfy");
+const ntfyArg =
+  ntfyFlag >= 0 ? args.splice(ntfyFlag, 2)[1] : process.env.ARMADRA_NTFY;
 const output = resolve(args[0] ?? join(root, "target/push-e2e"));
 mkdirSync(output, { recursive: true });
 const h = harness(output);
@@ -763,4 +775,217 @@ await h.run(async () => {
       JSON.stringify(payload),
     );
   }
+
+  /* ----------------------------- 7. UnifiedPush ----------------------------- */
+
+  const upTopic = `up${run}`;
+  const upRegistered = await must(
+    api.call("/api/push/devices", {
+      method: "PUT",
+      body: {
+        platform: "android",
+        transport: "direct",
+        publicKey: devicePublic,
+        locale: "en",
+        unifiedpush: { endpoint: `${sink.base}/up/${upTopic}?up=1` },
+      },
+    }),
+    "只带 UnifiedPush 端点登记",
+  );
+  check(
+    upRegistered.device.unifiedpush === true &&
+      !JSON.stringify(upRegistered).includes(upTopic),
+    "登记回执说走 UnifiedPush，端点本身不出接口",
+    JSON.stringify(upRegistered.device),
+  );
+  await must(api.call("/api/push/test", { method: "POST" }), "测试通知");
+  const openUp = (record) =>
+    openEnvelope(
+      JSON.parse(Buffer.from(record.body, "base64").toString("utf8")),
+      device.privateKey,
+    );
+  const [viaUp] = await waitRecords(
+    sink.base,
+    (record) => record.kind === "unifiedpush" && record.topic === upTopic,
+    1,
+    "UnifiedPush 请求",
+  );
+  {
+    const wire = Buffer.from(viaUp.body, "base64").toString("utf8");
+    const payload = openUp(viaUp);
+    check(
+      viaUp.status === 200 &&
+        viaUp.headers["content-type"] === "application/json" &&
+        typeof viaUp.headers.topic === "string" &&
+        !wire.includes("Armadra") &&
+        !wire.includes("armadra://") &&
+        payload.kind === "test" &&
+        payload.body === "Push notifications are working",
+      "core → UnifiedPush 分发器：设置停在 relay 也走设备自己的端点，分发器只见信封，设备私钥能解",
+      JSON.stringify({ headers: viaUp.headers, payload }),
+    );
+  }
+
+  // 真 ntfy（dev-stack 的 `ntfy` profile）：UnifiedPush 端点是
+  // `<ntfy>/<topic>?up=1`，消息从 `<ntfy>/<topic>/json?poll=1` 取回。
+  const ntfy =
+    ntfyArg?.replace(/\/+$/, "") ??
+    ((await fetch("http://127.0.0.1:8093/v1/health", {
+      signal: AbortSignal.timeout(1500),
+    })
+      .then((answer) => answer.ok)
+      .catch(() => false))
+      ? "http://127.0.0.1:8093"
+      : undefined);
+  report.ntfy = ntfy ?? null;
+  if (ntfy === undefined) {
+    step(
+      "真 ntfy 跳过",
+      "127.0.0.1:8093 不在（pnpm dev-stack up --profile ntfy）",
+    );
+  } else {
+    const ntfyTopic = `upArmadraE2e${run}`;
+    await must(
+      api.call("/api/push/devices", {
+        method: "PUT",
+        body: {
+          platform: "android",
+          transport: "direct",
+          publicKey: devicePublic,
+          locale: "zh-CN",
+          unifiedpush: { endpoint: `${ntfy}/${ntfyTopic}?up=1` },
+        },
+      }),
+      "以 ntfy 的 UnifiedPush 端点登记",
+    );
+    await must(api.call("/api/push/test", { method: "POST" }), "测试通知");
+    let message;
+    for (let attempt = 0; attempt < 50 && message === undefined; attempt += 1) {
+      const lines = await fetch(`${ntfy}/${ntfyTopic}/json?poll=1`)
+        .then((answer) => answer.text())
+        .catch(() => "");
+      message = lines
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .find((item) => item.event === "message");
+      if (message === undefined) await sleep(200);
+    }
+    const text =
+      message?.encoding === "base64"
+        ? Buffer.from(message.message, "base64").toString("utf8")
+        : (message?.message ?? "");
+    let payload;
+    try {
+      payload = openEnvelope(JSON.parse(text), device.privateKey);
+    } catch (error) {
+      payload = { error: String(error) };
+    }
+    check(
+      payload.kind === "test" &&
+        payload.body === "推送已连通" &&
+        !text.includes("Armadra"),
+      "core → 真 ntfy（UnifiedPush）→ 订阅取回：ntfy 存的是信封，设备私钥能解",
+      JSON.stringify({ ntfy, payload }),
+    );
+    // 换回 push-sink 的端点，下一步只看 sink。
+    await must(
+      api.call("/api/push/devices", {
+        method: "PUT",
+        body: {
+          platform: "android",
+          transport: "direct",
+          publicKey: devicePublic,
+          locale: "en",
+          unifiedpush: { endpoint: `${sink.base}/up/${upTopic}?up=1` },
+        },
+      }),
+      "换回 push-sink 的端点",
+    );
+  }
+
+  /* ------------------------------ 8. 设备偏好 ------------------------------ */
+
+  const listed = await must(api.call("/api/push/devices"), "列设备");
+  const current = listed.devices.find((item) => item.current);
+  const patched = await must(
+    api.call(`/api/push/devices/${current.deviceId}`, {
+      method: "PATCH",
+      body: { kinds: ["approval"] },
+    }),
+    "只留审批",
+  );
+  check(
+    patched.device.kinds.join(",") === "approval",
+    "PATCH 之后这台设备只收审批",
+    JSON.stringify(patched.device.kinds),
+  );
+  const before = (await sinkRecords(sink.base)).filter(
+    (record) => record.kind === "unifiedpush" && record.topic === upTopic,
+  ).length;
+  // 先离开 done（新的一轮），再要一次审批、再完成一次。
+  await hook({ hook_event_name: "UserPromptSubmit", prompt: SECRET });
+  await hook(
+    {
+      hook_event_name: "PermissionRequest",
+      tool_name: "Bash",
+      tool_input: { command: SECRET },
+    },
+    { pendingId: `pend-${randomUUID()}` },
+  );
+  await hook({ hook_event_name: "Stop", last_assistant_message: SECRET });
+  await waitRecords(
+    sink.base,
+    (record) => record.kind === "unifiedpush" && record.topic === upTopic,
+    before + 1,
+    "审批那一条",
+  );
+  // 完成那一条若要发，也早该到了。
+  await sleep(1500);
+  const delivered = (await sinkRecords(sink.base))
+    .filter(
+      (record) => record.kind === "unifiedpush" && record.topic === upTopic,
+    )
+    .slice(before)
+    .map((record) => openUp(record).kind);
+  check(
+    delivered.join(",") === "approval",
+    "关掉「Agent 完成」之后只收到审批",
+    delivered.join(","),
+  );
+  // 对照：恢复全部之后同样一轮两条都到——上面少的那条确实是偏好拦下的。
+  await must(
+    api.call(`/api/push/devices/${current.deviceId}`, {
+      method: "PATCH",
+      body: { kinds: listed.devices.find((item) => item.current).kinds },
+    }),
+    "恢复全部种类",
+  );
+  const restoredFrom = before + delivered.length;
+  await hook({ hook_event_name: "UserPromptSubmit", prompt: SECRET });
+  await hook(
+    {
+      hook_event_name: "PermissionRequest",
+      tool_name: "Bash",
+      tool_input: { command: SECRET },
+    },
+    { pendingId: `pend-${randomUUID()}` },
+  );
+  await hook({ hook_event_name: "Stop", last_assistant_message: SECRET });
+  const both = (
+    await waitRecords(
+      sink.base,
+      (record) => record.kind === "unifiedpush" && record.topic === upTopic,
+      restoredFrom + 2,
+      "恢复后的两条",
+    )
+  )
+    .slice(restoredFrom)
+    .map((record) => openUp(record).kind)
+    .sort();
+  check(
+    both.join(",") === "agentDone,approval",
+    "恢复全部种类后同一轮收到审批与完成",
+    both.join(","),
+  );
 });
