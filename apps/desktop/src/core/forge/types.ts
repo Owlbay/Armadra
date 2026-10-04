@@ -14,7 +14,7 @@ export const FORGE_KINDS = ["github", "gitea", "gitlab"] as const;
 export type ForgeKind = (typeof FORGE_KINDS)[number];
 
 /** 能经 `/api/forge/configs` 配置的平台（GitHub 走自己的凭据面 §5）。 */
-export const CONFIGURABLE_FORGES = ["gitea"] as const;
+export const CONFIGURABLE_FORGES = ["gitea", "gitlab"] as const;
 export type ConfigurableForge = (typeof CONFIGURABLE_FORGES)[number];
 
 /** 一个仓库：远端地址里的主机名（不含端口）与最后两段。 */
@@ -158,6 +158,8 @@ export interface Forge {
  *   * `notConfigured`：这个仓库没有识别出的平台，或识别出了但没有令牌。
  *   * `credentialRejected`：远端说令牌不对（401）。
  *   * `remoteForbidden`：远端说这个令牌没有这项权限（403）。
+ *   * `scopeMissing`：远端明说令牌缺范围（GitLab 的 `insufficient_scope` /
+ *     `insufficient_granular_scope`）——要去换令牌，而不是去改仓库权限。
  *   * `unknownOutcome`：写已发出、结果没读到——调用方重新读，永远不要重试。
  */
 export type ForgeErrorKind =
@@ -166,6 +168,7 @@ export type ForgeErrorKind =
   | "notConfigured"
   | "credentialRejected"
   | "remoteForbidden"
+  | "scopeMissing"
   | "conflict"
   | "rateLimited"
   | "unavailable"

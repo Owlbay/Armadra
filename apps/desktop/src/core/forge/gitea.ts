@@ -28,7 +28,6 @@ import {
   MAX_BODY,
   MAX_FILES,
   MAX_LIMIT,
-  MAX_NUMBER,
   MAX_TITLE,
   type MergeInput,
   forgeError,
@@ -44,6 +43,7 @@ import {
   normalizeBase,
 } from "./transport";
 import { validName } from "../github/remote";
+import { count, numbered, text, webUrl } from "./wire";
 
 const API_SUFFIX = "/api/v1";
 
@@ -119,26 +119,10 @@ interface WireStatus {
   target_url?: string;
 }
 
-function text(value: unknown, max: number): string {
-  return typeof value === "string" ? value.slice(0, max) : "";
-}
-
-function count(value: unknown): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-    ? value
-    : 0;
-}
-
 function login(user: WireUser | null | undefined): string | null {
   return typeof user?.login === "string" && user.login !== ""
     ? user.login
     : null;
-}
-
-/** 只认 http(s) 的网页地址；别的协议（`javascript:`…）丢掉。 */
-function webUrl(value: unknown): string {
-  if (typeof value !== "string") return "";
-  return /^https?:\/\//i.test(value) ? value.slice(0, 2048) : "";
 }
 
 function toIssue(value: WireIssue): ForgeIssue {
@@ -259,13 +243,6 @@ function repoPath(repo: ForgeRepo, suffix = ""): string {
     throw forgeError("invalid", "REPOSITORY_INVALID");
   }
   return `/repos/${repo.owner}/${repo.name}${suffix}`;
-}
-
-function numbered(number: number): number {
-  if (!Number.isSafeInteger(number) || number <= 0 || number > MAX_NUMBER) {
-    throw forgeError("invalid", "NUMBER_INVALID");
-  }
-  return number;
 }
 
 function listQuery(options: ListOptions, kind: "issues" | "pulls") {

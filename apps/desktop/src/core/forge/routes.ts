@@ -81,6 +81,8 @@ export function forgeFailure(error: unknown): HandlerResult {
       );
     case "remoteForbidden":
       return coreError(403, "forge_forbidden", "这个令牌没有这项权限");
+    case "scopeMissing":
+      return coreError(403, "forge_scope", "这个令牌缺少所需的范围");
     case "conflict":
       return coreError(
         409,

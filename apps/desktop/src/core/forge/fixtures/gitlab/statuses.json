@@ -1,0 +1,146 @@
+{
+  "$comment": "按 GitLab REST v4（17.x）的答复形状整理的回放夹具：字段拼法、分页头与拒绝体照官方文档的示例答复，主机名、编号与 SHA 换成了虚构值。不连任何真实账号。",
+  "apiBase": "https://gitlab.example.test/api/v4",
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/projects/acme%2Fapp/repository/commits/3f2a9c1d7e5b4a6f8c0d2e4f6a8b0c1d2e3f4a5b/statuses"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json",
+          "x-page": "1",
+          "x-per-page": "2",
+          "x-total": "5",
+          "x-total-pages": "2",
+          "x-next-page": "",
+          "x-prev-page": ""
+        },
+        "body": [
+          {
+            "id": 501,
+            "sha": "3f2a9c1d7e5b4a6f8c0d2e4f6a8b0c1d2e3f4a5b",
+            "ref": "feature/login",
+            "status": "failed",
+            "name": "build",
+            "target_url": "https://gitlab.example.test/acme/app/-/jobs/501",
+            "description": null,
+            "created_at": "2026-10-02T11:00:00.000Z",
+            "started_at": "2026-10-02T11:00:10.000Z",
+            "finished_at": "2026-10-02T11:05:00.000Z",
+            "allow_failure": false,
+            "coverage": null,
+            "pipeline_id": 900,
+            "author": {
+              "id": 2,
+              "username": "alice",
+              "name": "Alice",
+              "state": "active",
+              "locked": false,
+              "avatar_url": "https://gitlab.example.test/uploads/-/system/user/avatar/2/avatar.png",
+              "web_url": "https://gitlab.example.test/alice"
+            }
+          },
+          {
+            "id": 503,
+            "sha": "3f2a9c1d7e5b4a6f8c0d2e4f6a8b0c1d2e3f4a5b",
+            "ref": "feature/login",
+            "status": "success",
+            "name": "build",
+            "target_url": "https://gitlab.example.test/acme/app/-/jobs/503",
+            "description": null,
+            "created_at": "2026-10-02T11:00:00.000Z",
+            "started_at": "2026-10-02T11:00:10.000Z",
+            "finished_at": "2026-10-02T11:05:00.000Z",
+            "allow_failure": false,
+            "coverage": null,
+            "pipeline_id": 900,
+            "author": {
+              "id": 2,
+              "username": "alice",
+              "name": "Alice",
+              "state": "active",
+              "locked": false,
+              "avatar_url": "https://gitlab.example.test/uploads/-/system/user/avatar/2/avatar.png",
+              "web_url": "https://gitlab.example.test/alice"
+            }
+          },
+          {
+            "id": 502,
+            "sha": "3f2a9c1d7e5b4a6f8c0d2e4f6a8b0c1d2e3f4a5b",
+            "ref": "feature/login",
+            "status": "failed",
+            "name": "lint",
+            "target_url": "https://gitlab.example.test/acme/app/-/jobs/502",
+            "description": null,
+            "created_at": "2026-10-02T11:00:00.000Z",
+            "started_at": "2026-10-02T11:00:10.000Z",
+            "finished_at": "2026-10-02T11:05:00.000Z",
+            "allow_failure": true,
+            "coverage": null,
+            "pipeline_id": 900,
+            "author": {
+              "id": 2,
+              "username": "alice",
+              "name": "Alice",
+              "state": "active",
+              "locked": false,
+              "avatar_url": "https://gitlab.example.test/uploads/-/system/user/avatar/2/avatar.png",
+              "web_url": "https://gitlab.example.test/alice"
+            }
+          },
+          {
+            "id": 504,
+            "sha": "3f2a9c1d7e5b4a6f8c0d2e4f6a8b0c1d2e3f4a5b",
+            "ref": "feature/login",
+            "status": "running",
+            "name": "test",
+            "target_url": "https://gitlab.example.test/acme/app/-/jobs/504",
+            "description": null,
+            "created_at": "2026-10-02T11:00:00.000Z",
+            "started_at": "2026-10-02T11:00:10.000Z",
+            "finished_at": null,
+            "allow_failure": false,
+            "coverage": null,
+            "pipeline_id": 900,
+            "author": {
+              "id": 2,
+              "username": "alice",
+              "name": "Alice",
+              "state": "active",
+              "locked": false,
+              "avatar_url": "https://gitlab.example.test/uploads/-/system/user/avatar/2/avatar.png",
+              "web_url": "https://gitlab.example.test/alice"
+            }
+          },
+          {
+            "id": 505,
+            "sha": "3f2a9c1d7e5b4a6f8c0d2e4f6a8b0c1d2e3f4a5b",
+            "ref": "feature/login",
+            "status": "manual",
+            "name": "deploy",
+            "target_url": "javascript:alert(1)",
+            "description": null,
+            "created_at": "2026-10-02T11:00:00.000Z",
+            "started_at": "2026-10-02T11:00:10.000Z",
+            "finished_at": "2026-10-02T11:05:00.000Z",
+            "allow_failure": false,
+            "coverage": null,
+            "pipeline_id": 900,
+            "author": {
+              "id": 2,
+              "username": "alice",
+              "name": "Alice",
+              "state": "active",
+              "locked": false,
+              "avatar_url": "https://gitlab.example.test/uploads/-/system/user/avatar/2/avatar.png",
+              "web_url": "https://gitlab.example.test/alice"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

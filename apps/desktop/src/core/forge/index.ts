@@ -26,6 +26,13 @@ export {
 } from "./service";
 export { ForgeStore } from "./store";
 export { GiteaForge, giteaApiBase, giteaWebRoot, splitDiff } from "./gitea";
+export {
+  GITLAB_SCOPE_ERRORS,
+  GitlabForge,
+  gitlabApiBase,
+  gitlabRefusal,
+  gitlabWebRoot,
+} from "./gitlab";
 export { GithubForge } from "./github";
 export * from "./types";
 
@@ -41,6 +48,12 @@ export function install(context: CoreContext): ForgeService | undefined {
     github: () => githubDomain()?.service,
   });
   installRoutes(context.server, service);
+  // GitHub 域的外部连接经这里核对 Gitea / GitLab 仓库（`ExternalReference.forge`）。
+  const github = githubDomain()?.service;
+  if (github !== undefined) {
+    github.externalRepository = (forge, ref) =>
+      service.referenceRepository(forge, ref);
+  }
   context.log.info("托管平台域已装配");
   return service;
 }
