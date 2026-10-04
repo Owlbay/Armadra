@@ -37,6 +37,14 @@
 //   断言：`workflow_task_runs` 有一行 `runner_id = ama`、done 且带结果；成员节点
 //   是 ama、从协调者连线；便签里是第二个 ama 回报的正文。
 //
+// 成员停在审批上（契约 §15.5 `wait` 的 `blocked`）：
+//   6. 再 post 一条「派审批任务」→ 唤醒 → 模型调 `task(agent="custom:taskecho")`
+//      → 假 CLI 收到带「需要审批」的任务，先经 `armadra-hook claude` 报一条
+//      `PermissionRequest` 并挂着等答复 → 成员 `blocked`。
+//   断言：以协调者身份调 `wait` 答 `blocked`、`approvalId` 是那条审批；页面那条
+//   路（`POST /api/approvals/{id}/answer`）答「允许」→ 假 CLI 拿到允许、按键回报
+//   → 任务行 done、便签里是审批之后的结果。只在脚本化模型时跑。
+//
 // 真模型（`--real-model`，C 档，`ARMADRA_E2E_REAL=1`）：同一条闭环交给真模型走。
 // 供应商与 key 从环境变量读（`ARMADRA_E2E_AMA_PROVIDER`，缺省 deepseek；
 // `ARMADRA_E2E_AMA_MODEL`，缺省 deepseek-chat；`ARMADRA_E2E_AMA_KEY` 必填；可选
@@ -61,6 +69,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { request as httpRequest } from "node:http";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -90,11 +99,16 @@ const TASK_RESULT = "taskecho 回报：src/z 没有问题";
 const DISPATCH_AMA = "交给 ama：请另一个 ama 复核 src/w";
 const AMA_TASK_PROMPT = "复核 src/w，结论按任务末尾的键回报";
 const AMA_RESULT = "第二个 ama 回报：src/w 已复核";
+const DISPATCH_APPROVAL = "派审批任务：请 taskecho 检查 src/v";
+const APPROVAL_TASK_PROMPT = "需要审批：检查 src/v，结论按任务末尾的键回报";
+const APPROVAL_RESULT = "taskecho 回报：审批之后 src/v 也没有问题";
 
 /**
  * 派任务用的假 CLI（自定义 Agent `custom:taskecho`，借 Claude 的 hook 适配）：
  * 打印提示符、读一行，经 `armadra-hook claude` 报 `UserPromptSubmit` / `Stop`；
- * 行里有 `--to <节点> --key task:…:result` 就照着 `canvas post` 结果。
+ * 行里有 `--to <节点> --key task:…:result` 就照着 `canvas post` 结果。行里有
+ * 「需要审批」时先报一条 `PermissionRequest`，挂着等画布上的答复（与 Claude 的
+ * Hook 同一条路，`ARMADRA_PERM_WAIT_SECS` 由 core 注入），答复到了再回报。
  */
 const TASK_CLI = String.raw`#!/usr/bin/env node
 const { spawnSync } = require("node:child_process");
@@ -120,9 +134,24 @@ lines.on("line", (raw) => {
   if (line === "") return;
   trace("line " + JSON.stringify(line.slice(0, 400)));
   report("UserPromptSubmit", { prompt: line.slice(0, 200) });
+  const held = line.includes("需要审批");
+  if (held) {
+    const asked = spawnSync(hook, ["claude"], {
+      input: JSON.stringify({
+        hook_event_name: "PermissionRequest",
+        session_id: session,
+        cwd: process.cwd(),
+        tool_name: "Bash",
+        tool_input: { command: "echo approval-probe" },
+      }),
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 120000,
+    });
+    trace("permission exit=" + asked.status + " wait=" + (process.env.ARMADRA_PERM_WAIT_SECS || "") + " out=" + String(asked.stdout || "").trim().slice(0, 200));
+  }
   const target = /--to (\S+) --key (task:\S+:result\S*)/.exec(line);
   if (target) {
-    const posted = spawnSync(hook, ["canvas", "post", "--to", target[1], "--key", target[2], "--body", __RESULT__], {
+    const posted = spawnSync(hook, ["canvas", "post", "--to", target[1], "--key", target[2], "--body", held ? __APPROVAL_RESULT__ : __RESULT__], {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10000,
     });
@@ -300,6 +329,20 @@ function coordinatorScript(body) {
             },
           ],
         };
+      // 派审批任务的那条：同一个成员 CLI，任务里带「需要审批」。
+      if (inboxText(messages).includes("派审批任务"))
+        return {
+          toolCalls: [
+            {
+              name: "task",
+              arguments: {
+                agent: "custom:taskecho",
+                prompt: APPROVAL_TASK_PROMPT,
+                background: false,
+              },
+            },
+          ],
+        };
       // 派任务的那条：交给画布上的成员做，等它回来再 ack。
       if (inboxText(messages).includes("派任务"))
         return {
@@ -409,6 +452,59 @@ function paneEnvironment(data) {
 }
 
 /**
+ * 以 `nodeId` 的身份调一个控制动词（`/control/<verb>`），答 core 的 JSON。
+ * `armadra-hook canvas` 只打印正文；这里要看 `wait` 答的结构（`approvalId`），
+ * 所以照 hook 客户端的样子直接请求：hook 面的 bearer 与节点令牌都在数据目录里。
+ */
+function controlAs(data, nodeId, verb, args) {
+  const endpoint = Object.fromEntries(
+    readFileSync(join(data, "hook-endpoint.env"), "utf8")
+      .split("\n")
+      .map((line) => /^([A-Z_]+)='(.*)'$/.exec(line))
+      .filter(Boolean)
+      .map((match) => [match[1], match[2]]),
+  );
+  const token = readFileSync(
+    join(endpoint.ARMADRA_NODE_TOKEN_DIR, nodeId),
+    "utf8",
+  ).trim();
+  const body = Buffer.from(JSON.stringify({ nodeId, args }));
+  return new Promise((done, fail) => {
+    const call = httpRequest(
+      {
+        ...(endpoint.ARMADRA_HOOK_SOCK
+          ? { socketPath: endpoint.ARMADRA_HOOK_SOCK }
+          : { host: "127.0.0.1", port: Number(endpoint.ARMADRA_HOOK_PORT) }),
+        path: `/control/${verb}`,
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": body.length,
+          "x-armadra-hook-token": endpoint.ARMADRA_HOOK_TOKEN,
+          "x-armadra-node-token": token,
+        },
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          if (response.statusCode !== 200)
+            return fail(new Error(`${verb} → ${response.statusCode} ${text}`));
+          try {
+            done(JSON.parse(text));
+          } catch (error) {
+            fail(error);
+          }
+        });
+      },
+    );
+    call.on("error", fail);
+    call.end(body);
+  });
+}
+
+/**
  * 自己的一套 core：临时 HOME、文件密钥后端、不写全局；PATH 最前面是真 CLI 的
  * 替身目录，这套 core 起不了任何真 CLI（ama 是数据目录里随包的那份）。
  */
@@ -515,7 +611,8 @@ export default async function run() {
       taskCli,
       TASK_CLI.replace("__HOOK__", JSON.stringify(hookBin))
         .replace("__LOG__", JSON.stringify(taskLog))
-        .replace("__RESULT__", JSON.stringify(TASK_RESULT)),
+        .replace("__RESULT__", JSON.stringify(TASK_RESULT))
+        .replace("__APPROVAL_RESULT__", JSON.stringify(APPROVAL_RESULT)),
     );
     chmodSync(taskCli, 0o755);
     await api("/api/agents/claude/integration/install", { method: "POST" });
@@ -944,6 +1041,11 @@ export default async function run() {
         ),
       { title: taskNode?.title, agent: taskNode?.data?.agent },
     );
+    s.check(
+      "runner 把 ama 的 cwd 经 --cwd 带过去：成员终端开在协调者的目录",
+      taskNode?.data?.cwd === project,
+      { cwd: taskNode?.data?.cwd, project },
+    );
     if (!real) {
       const taskResults = mock.requests
         .flatMap((request) => request.messages ?? [])
@@ -1047,6 +1149,124 @@ export default async function run() {
           ),
         ),
       );
+
+    /* --- 6. 成员停在审批上：wait 答 blocked → 页面答复 → 继续到 done --- */
+
+    if (!real) {
+      const approvalDispatched = await canvasAsIn(
+        context,
+        dispatcher.id,
+        "post",
+        "--to",
+        lead.id,
+        "--key",
+        "dispatch-approval",
+        "--body",
+        DISPATCH_APPROVAL,
+      );
+      s.check(
+        "派审批任务的那条 post 成功",
+        approvalDispatched.code === 0,
+        approvalDispatched.stderr,
+      );
+      const all = (sql, ...params) => database.prepare(sql).all(...params);
+      const held = await waitFor(
+        "派出的成员停在审批上",
+        () => {
+          const run = one(
+            "SELECT task_id, node_id FROM workflow_task_runs WHERE runner_id = 'custom:taskecho' AND status = 'running'",
+          );
+          if (run === undefined) return undefined;
+          const status = one(
+            "SELECT state, pending_id FROM agent_status WHERE node_id = ?",
+            run.node_id,
+          );
+          return status?.state === "blocked" && status.pending_id
+            ? { ...run, pendingId: status.pending_id }
+            : undefined;
+        },
+        { timeout: 180_000, interval: 250 },
+      ).catch(async (error) => {
+        note("协调者终端画面", await capture());
+        note("审批诊断", {
+          runs: all("SELECT * FROM workflow_task_runs"),
+          status: all(
+            "SELECT node_id, agent_id, state, pending_id FROM agent_status",
+          ),
+          fake: existsSync(taskLog)
+            ? readFileSync(taskLog, "utf8").split("\n").slice(-20)
+            : [],
+        });
+        throw error;
+      });
+      const waited = await controlAs(data, lead.id, "wait", {
+        task: held.task_id,
+        node: held.node_id,
+        timeout: "0",
+      });
+      const answer = waited?.result ?? {};
+      s.check(
+        "wait 答 blocked，approvalId 是成员挂着的那条审批",
+        answer.status === "blocked" &&
+          answer.reason === "approval" &&
+          answer.approvalId === held.pendingId,
+        { status: answer.status, approvalId: answer.approvalId, held },
+      );
+      s.check(
+        "停在审批上不算结束：任务行仍在跑",
+        one(
+          "SELECT status FROM workflow_task_runs WHERE task_id = ?",
+          held.task_id,
+        )?.status === "running",
+      );
+      // 页面上节点头的「允许」走的就是这一条。
+      await api(`/api/approvals/${encodeURIComponent(held.pendingId)}/answer`, {
+        method: "POST",
+        body: { decision: "allow" },
+      });
+      const approvalSticky = await waitFor(
+        "协调者把审批之后的结果写进便签",
+        async () =>
+          (await document()).nodes.find(
+            (node) =>
+              node.type === "sticky" &&
+              JSON.stringify(node.data ?? {}).includes(APPROVAL_RESULT),
+          ),
+        { timeout: 180_000, interval: 1000 },
+      ).catch(async (error) => {
+        note("协调者终端画面", await capture());
+        note("审批之后诊断", {
+          runs: all("SELECT * FROM workflow_task_runs"),
+          fake: existsSync(taskLog)
+            ? readFileSync(taskLog, "utf8").split("\n").slice(-20)
+            : [],
+        });
+        throw error;
+      });
+      s.check(
+        "便签里是审批之后成员回报的结果",
+        approvalSticky !== undefined,
+        approvalSticky?.data,
+      );
+      const finished = one(
+        "SELECT status, result_json FROM workflow_task_runs WHERE task_id = ?",
+        held.task_id,
+      );
+      s.check(
+        "任务行 done、带审批之后的结果",
+        finished?.status === "done" &&
+          String(finished.result_json).includes(APPROVAL_RESULT),
+        finished,
+      );
+      const permissionLine = readFileSync(taskLog, "utf8")
+        .split("\n")
+        .find((line) => line.includes("permission exit="));
+      s.check(
+        "假 CLI 经 Hook 拿到的是「允许」（不是超时）",
+        permissionLine !== undefined && /allow/i.test(permissionLine),
+        permissionLine,
+      );
+    }
 
     const leaked = filesContaining(data, secret, [join(data, "secrets")]);
     s.check(
