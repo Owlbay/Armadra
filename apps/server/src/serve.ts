@@ -17,6 +17,11 @@ import {
   openWebRoot,
 } from "../../desktop/src/core/gateway/web-root";
 import { AccountsService } from "../../desktop/src/core/identity/accounts";
+import {
+  type SmtpConfig,
+  mailDomainOf,
+  parseSmtpUrl,
+} from "../../desktop/src/core/mail";
 import { IdentityStore } from "../../desktop/src/core/identity/store";
 import { allScopes } from "../../desktop/src/core/identity/scopes";
 import {
@@ -52,6 +57,14 @@ export interface ServeOptions {
    * `env` 读。与 `certFile` / `keyFile` 互斥。
    */
   readonly acmeEmail?: string | undefined;
+  /**
+   * 可选邮件通道（`--smtp-url` / `ARMADRA_SMTP_URL`，契约 §28）：给了就把 SMTP
+   * 配置交给 core 的邮件域，邀请与重置链接可以「发送邮件」。口令写成
+   * `secret://armadra-smtp` 时从这台服务器的密钥后端现取。
+   */
+  readonly smtpUrl?: string | undefined;
+  /** 发件人（`--smtp-from` / `ARMADRA_SMTP_FROM`），缺省是 SMTP 用户名。 */
+  readonly smtpFrom?: string | undefined;
   readonly deviceName: string;
   /** 启动时铸一张配对票并打印。`--no-pairing` 时为假。 */
   readonly pairing: boolean;
@@ -137,6 +150,17 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
     throw new Error(
       "--acme 需要 --public-origin https://域名：证书签给对外来源的主机名",
     );
+  }
+  // 邮件配置不对是启动时的错：等到第一次「发送邮件」才发现，管理员已经不在
+  // 命令行前了。
+  let smtp: SmtpConfig | undefined;
+  const smtpUrl = options.smtpUrl?.trim() ?? "";
+  if (smtpUrl !== "") {
+    const parsed = parseSmtpUrl(smtpUrl, options.smtpFrom ?? "");
+    if (!parsed.ok) throw new Error(`--smtp-url：${parsed.reason}`);
+    smtp = parsed.config;
+  } else if ((options.smtpFrom ?? "").trim() !== "") {
+    throw new Error("--smtp-from 要和 --smtp-url 一起给");
   }
   const webRoot = await openWebRoot(options.webRoot);
   const env: NodeJS.ProcessEnv = {
@@ -227,6 +251,10 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
   gatewayDomainOf(core.server)?.adopt(gateway, acme);
   const origin = gateway.origin();
   const hostId = gateway.hostId;
+  if (smtp !== undefined) {
+    // 链接的来源每封现取：ACME / 本地 CA 换了主机，信里的链接跟着走。
+    mailDomainOf(core.server)?.configure(smtp, () => gateway.origin());
+  }
 
   const pair = (): { ticket: string; url: string; expiresAtMs: number } => {
     const issued = gateway.pair();

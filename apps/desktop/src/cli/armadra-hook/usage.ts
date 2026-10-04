@@ -73,12 +73,15 @@ CANVAS:
   open-agent --agent ID [--task TEXT] [--title T] [--permission-mode M]
                                       [--model M] [--after ID]
                                       [--after-turn current|next] [--ttl MIN]
-                                      [--worktree NAME_OR_PATH]
+                                      [--worktree NAME_OR_PATH] [--cwd DIR]
+                                      [--resume SESSION_ID]
                                       open an agent
                                       node, link it, and give it a first task
                                       once it reports idle; --worktree puts it
                                       in that checkout's Frame (created if
-                                      missing)
+                                      missing); --cwd starts it in a directory
+                                      inside the workspace; --resume continues
+                                      that CLI's own session
   team --member "AGENT[@MODEL]|TITLE|TASK[|worktree=DIR]"... [--chain]
        [--gather "AGENT|TITLE|TASK"] [--after ID]
                                       open up to 6 agents at once; --chain

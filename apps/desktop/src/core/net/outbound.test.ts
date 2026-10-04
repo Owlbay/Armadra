@@ -73,7 +73,8 @@ describe("出站地址表", () => {
 
   it("每条都写了用途与频率，开关指向设置键", () => {
     for (const [id, entry] of Object.entries(OUTBOUND)) {
-      expect(entry.url.startsWith("https://"), id).toBe(true);
+      // 只有邮件通道不是 HTTPS：SMTP 是它自己的协议（契约 §28）。
+      expect(/^(https|smtp):\/\//.test(entry.url), id).toBe(true);
       expect(entry.purpose, id).not.toBe("");
       expect(entry.cadence, id).not.toBe("");
       if (entry.switch !== null) {
@@ -96,6 +97,12 @@ describe("出站地址表", () => {
     // UnifiedPush 的端点是用户给的：没有开关，设备没有端点就不连。
     expect(OUTBOUND.unifiedPush.switch).toBeNull();
     expect(OUTBOUND.unifiedPush.defaultOn).toBe(false);
+  });
+
+  it("邮件通道：不配置即不联网，地址是用户给的", () => {
+    expect(OUTBOUND.smtp.switch).toBeNull();
+    expect(OUTBOUND.smtp.defaultOn).toBe(false);
+    expect(OUTBOUND.smtp.url.startsWith("smtp://")).toBe(true);
   });
 
   it("未登记的地址不算登记，前缀只按路径边界匹配", () => {

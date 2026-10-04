@@ -9,7 +9,11 @@ import {
   oauthStartSchema,
   passkeyListSchema,
   passkeyOptionsSchema,
+  passkeyRenameSchema,
   passkeySchema,
+  passwordResetDoneSchema,
+  passwordResetInfoSchema,
+  passwordResetIssuedSchema,
   recoveryCodesSchema,
   identitySessionListSchema as sessionRowsSchema,
   totpEnrollmentSchema,
@@ -24,6 +28,9 @@ import {
   type OAuthResult,
   type Passkey,
   type PasskeyList,
+  type PasswordResetDone,
+  type PasswordResetInfo,
+  type PasswordResetIssued,
   type TotpEnrollment,
 } from "@armadra/shared";
 
@@ -166,6 +173,82 @@ export async function removePasskey(credentialId: string): Promise<void> {
   await identityRequest(`passkey/${encodeURIComponent(credentialId)}`, ok, {
     method: "DELETE",
   });
+}
+
+/** 改名（只有本人；1–64 个字符）。 */
+export async function renamePasskey(
+  credentialId: string,
+  label: string,
+): Promise<string> {
+  const renamed = await identityRequest(
+    `passkey/${encodeURIComponent(credentialId)}`,
+    passkeyRenameSchema,
+    { method: "PATCH", body: { label } },
+  );
+  return renamed.label;
+}
+
+/* ------------------------------ 口令重置链接 ------------------------------ */
+
+/** owner（或组 admin 对本组成员）签发；明文令牌只在这一次答出来（契约 §25）。 */
+export function issuePasswordReset(
+  principalId: string,
+): Promise<PasswordResetIssued> {
+  return identityRequest(
+    `principals/${encodeURIComponent(principalId)}/password-reset`,
+    passwordResetIssuedSchema,
+    { method: "POST", body: {} },
+  );
+}
+
+/** 打开链接：这是谁的、什么时候过期。认不出答 404 `password_reset_invalid`。 */
+export function openPasswordReset(token: string): Promise<PasswordResetInfo> {
+  return identityRequest(
+    `password-reset/${encodeURIComponent(token)}`,
+    passwordResetInfoSchema,
+    { anonymous: true },
+  );
+}
+
+/** 设新口令；成功后这个人的全部会话已撤，拿 `principalId` 与新口令登录。 */
+export function completePasswordReset(
+  token: string,
+  password: string,
+): Promise<PasswordResetDone> {
+  return identityRequest(
+    `password-reset/${encodeURIComponent(token)}`,
+    passwordResetDoneSchema,
+    { method: "POST", anonymous: true, body: { password } },
+  );
+}
+
+/** 重置链接：页面根上的 `#reset=<令牌>`。令牌只在片段里，不上请求行。 */
+export function passwordResetLink(token: string, origin = location.origin) {
+  return `${origin}/#reset=${token}`;
+}
+
+const RESET_FRAGMENT = /^#reset=([A-Za-z0-9._~-]+)$/;
+
+/** 地址栏里有没有一条待用的重置链接（不取走）。 */
+export function hasPasswordResetFragment(): boolean {
+  return RESET_FRAGMENT.test(globalThis.location?.hash ?? "");
+}
+
+/** 取走地址栏里的重置令牌并把片段抹掉，免得它留在历史与分享出去的链接里。 */
+export function takePasswordResetToken(): string {
+  const location = globalThis.location;
+  const found = RESET_FRAGMENT.exec(location?.hash ?? "");
+  if (!found) return "";
+  try {
+    globalThis.history?.replaceState(
+      null,
+      "",
+      `${location.pathname}${location.search}`,
+    );
+  } catch {
+    /* 抹不掉地址栏不该让重置失败。 */
+  }
+  return found[1] as string;
 }
 
 /* ---------------------------------- MFA ---------------------------------- */

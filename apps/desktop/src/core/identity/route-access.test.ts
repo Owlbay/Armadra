@@ -181,6 +181,20 @@ describe("路由门的矩阵", () => {
   it("身份域自己判，不经路由门", () => {
     const { decide } = harness();
     expect(row(decide, "GET", "/api/identity/groups")).toBe(PEOPLE.join(","));
+    // 口令重置（契约 §25）：打开链接与设新口令先于身份，签发由身份域判
+    // （owner、`identity:manage` 或组 admin 对本组成员）——路由门都不拦。
+    expect(row(decide, "GET", "/api/identity/password-reset/tok")).toBe(
+      PEOPLE.join(","),
+    );
+    expect(row(decide, "POST", "/api/identity/password-reset/tok")).toBe(
+      PEOPLE.join(","),
+    );
+    expect(
+      row(decide, "POST", "/api/identity/principals/p1/password-reset"),
+    ).toBe(PEOPLE.join(","));
+    expect(row(decide, "PATCH", "/api/identity/passkey/k1")).toBe(
+      PEOPLE.join(","),
+    );
     // 推送域同样自己认身份：登录即可，只碰请求主体自己的设备。
     expect(row(decide, "POST", "/api/push/devices")).toBe(PEOPLE.join(","));
   });

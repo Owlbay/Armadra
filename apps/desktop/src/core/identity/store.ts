@@ -101,6 +101,22 @@ export interface PasskeyRow {
   readonly revokedAtMs: number;
 }
 
+/** `identity_password_resets` 的一行（迁移 0036）。令牌明文不在库里。 */
+export interface PasswordResetRow {
+  readonly tokenHash: Buffer;
+  readonly principalId: string;
+  readonly issuedBy: string;
+  readonly createdAtMs: number;
+  readonly expiresAtMs: number;
+  readonly usedAtMs: number;
+}
+
+/** 一台设备在会话表里留下的痕迹：最近那个会话的 UA 与全部会话里最晚的活动。 */
+export interface DeviceActivity {
+  readonly userAgent: string;
+  readonly lastSeenAtMs: number;
+}
+
 /** 会话列表的一行：会话加它的设备。 */
 export interface SessionListing {
   readonly session: IdentitySession;
@@ -392,6 +408,93 @@ export class IdentityTx {
     }));
   }
 
+  /**
+   * 这几台设备的会话痕迹（设备表的「平台」「最近访问」两列）。撤销与过期的会话
+   * 也算：最近访问说的是这台设备最后一次被用，不是它现在还能不能用。
+   */
+  deviceActivity(deviceIds: readonly string[]): Map<string, DeviceActivity> {
+    const found = new Map<string, DeviceActivity>();
+    if (deviceIds.length === 0) return found;
+    const rows = this.database
+      .prepare(
+        "SELECT device_id, user_agent, last_seen_at_ms, created_at_ms FROM identity_sessions " +
+          `WHERE device_id IN (${deviceIds.map(() => "?").join(", ")}) ` +
+          "ORDER BY created_at_ms DESC, session_id DESC",
+      )
+      .all(...deviceIds) as Record<string, unknown>[];
+    for (const row of rows) {
+      const deviceId = String(row.device_id);
+      const lastSeen = Number(row.last_seen_at_ms ?? 0);
+      const previous = found.get(deviceId);
+      // 行按建会话的时间从新到旧：第一行就是最近那个会话，UA 取它的。
+      found.set(deviceId, {
+        userAgent: previous?.userAgent ?? String(row.user_agent ?? ""),
+        lastSeenAtMs: Math.max(previous?.lastSeenAtMs ?? 0, lastSeen),
+      });
+    }
+    return found;
+  }
+
+  /* ---------------------------- 口令重置 ---------------------------- */
+
+  createPasswordReset(row: PasswordResetRow): void {
+    this.database
+      .prepare(
+        "INSERT INTO identity_password_resets(token_hash, principal_id, issued_by, created_at_ms, " +
+          "expires_at_ms, used_at_ms) VALUES(?, ?, ?, ?, ?, 0)",
+      )
+      .run(
+        new Uint8Array(row.tokenHash),
+        row.principalId,
+        row.issuedBy,
+        row.createdAtMs,
+        row.expiresAtMs,
+      );
+  }
+
+  passwordReset(tokenHash: Buffer): PasswordResetRow | undefined {
+    const row = this.database
+      .prepare(
+        "SELECT token_hash, principal_id, issued_by, created_at_ms, expires_at_ms, used_at_ms " +
+          "FROM identity_password_resets WHERE token_hash = ?",
+      )
+      .get(new Uint8Array(tokenHash)) as Record<string, unknown> | undefined;
+    return row === undefined
+      ? undefined
+      : {
+          tokenHash: blob(row.token_hash),
+          principalId: String(row.principal_id),
+          issuedBy: String(row.issued_by),
+          createdAtMs: Number(row.created_at_ms),
+          expiresAtMs: Number(row.expires_at_ms),
+          usedAtMs: Number(row.used_at_ms),
+        };
+  }
+
+  /**
+   * 用掉一枚令牌。一次性就在条件里：用过的、过期的改不动行，答 false，两个并发
+   * 的兑换只有一个改得动。
+   */
+  usePasswordReset(tokenHash: Buffer, nowMs: number): boolean {
+    const changes = this.database
+      .prepare(
+        "UPDATE identity_password_resets SET used_at_ms = ? " +
+          "WHERE token_hash = ? AND used_at_ms = 0 AND expires_at_ms > ?",
+      )
+      .run(nowMs, new Uint8Array(tokenHash), nowMs).changes;
+    return Number(changes) === 1;
+  }
+
+  /** 作废这个人手里还没用的令牌（签新的之前、口令被别的路径换掉之后）。 */
+  supersedePasswordResets(principalId: string, nowMs: number): number {
+    const changes = this.database
+      .prepare(
+        "UPDATE identity_password_resets SET used_at_ms = ? WHERE principal_id = ? AND used_at_ms = 0",
+      )
+      .run(nowMs, principalId).changes;
+    return Number(changes);
+  }
+
   /* ------------------------------ 锁定 ------------------------------ */
 
   lockout(key: string): LockoutRow | undefined {
@@ -607,6 +710,16 @@ export class IdentityTx {
         row.label,
         row.createdAtMs,
       );
+  }
+
+  /** 改名。撤销了的改不动，答 false。 */
+  renamePasskey(credentialId: string, label: string): boolean {
+    const changes = this.database
+      .prepare(
+        "UPDATE identity_credentials SET label = ? WHERE credential_id = ? AND kind = 'passkey' AND revoked_at_ms = 0",
+      )
+      .run(label, credentialId).changes;
+    return Number(changes) === 1;
   }
 
   /** 按库的判定写回计数器（`@simplewebauthn/server` 的 `newCounter`）。 */

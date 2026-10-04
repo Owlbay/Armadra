@@ -247,7 +247,28 @@ node apps/server/out/main.js upgrade --rollback --confirm && systemctl restart a
 
 推送正文不含终端原文与文件内容。本地联调用 dev-stack 的 `push-sink`（假 APNs / FCM / 中继，`http://127.0.0.1:8091`）。
 
-## 10. 排错
+## 10. 邮件（可选）
+
+邀请与重置链接本来就由管理员亲手交给对方；配了 SMTP 之后，签发对话框多一个「发送邮件」。信里只有链接与过期时间，
+只有能签发那条链接的人能发，每个来源每分钟至多 5 封，审计里只记收件地址的指纹（契约 §28）。
+
+```sh
+# 口令放进这台服务器的密钥后端，不上命令行、不进服务定义
+printf '%s\n' "$SMTP_PASSWORD" | armadra-server secrets set armadra-smtp --data-dir /data
+armadra-server serve … --smtp-url 'smtps://noreply@example.com:secret://armadra-smtp@smtp.example.com:465'
+# 或环境变量 ARMADRA_SMTP_URL / ARMADRA_SMTP_FROM（发件人缺省是用户名）
+```
+
+`smtp://` 走 STARTTLS，主机不是回环时强制升级；内网没有 TLS 的中继要显式写 `?requireTLS=false`。地址写错是启动时的错误。
+本地联调用 dev-stack 的 `mailpit`（SMTP `127.0.0.1:1025`，收件页 `http://127.0.0.1:8025`）。
+
+## 11. 换 master key
+
+`armadra-server secrets rotate --data-dir /data` 换一把新的 `master.key` 并把 `secrets/` 里每个条目重封；服务不必停（core 每次现读钥匙）。
+中途被打断时旧钥匙留在 `master.key.previous`，再跑一次即可做完。换之前先按第 6 节备份 `secrets/`；`ARMADRA_SECRET_MASTER_KEY_FILE`
+指向只读位置（如 `LoadCredential=`）时这条命令写不进去，要在那份凭据的来源处换。
+
+## 12. 排错
 
 | 现象                            | 原因与处理                                                                                           |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------- |

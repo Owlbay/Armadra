@@ -23,6 +23,8 @@ export const AWARENESS_LIMITS = {
   colors: 8,
   selection: 256,
   stateBytes: 16 * 1024,
+  minZoom: 0.01,
+  maxZoom: 100,
 } as const;
 
 /** 一份 awareness 状态（契约 §16.4）。 */
@@ -34,6 +36,8 @@ export interface AwarenessState {
   cursor?: { x: number; y: number };
   selection?: string[];
   focusNodeId?: string;
+  /** 视口中心的画布坐标与缩放。 */
+  viewport?: { x: number; y: number; zoom: number };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -57,7 +61,8 @@ export function normalizeAwarenessState(
   principalId: string,
 ): AwarenessState | undefined {
   if (!isRecord(value)) return undefined;
-  const { deviceId, name, color, cursor, selection, focusNodeId } = value;
+  const { deviceId, name, color, cursor, selection, focusNodeId, viewport } =
+    value;
   if (!isId(deviceId)) return undefined;
   if (typeof name !== "string" || name.length > AWARENESS_LIMITS.nameLength) {
     return undefined;
@@ -96,6 +101,22 @@ export function normalizeAwarenessState(
   if (focusNodeId !== undefined) {
     if (!isId(focusNodeId)) return undefined;
     state.focusNodeId = focusNodeId;
+  }
+  if (viewport !== undefined) {
+    if (
+      !isRecord(viewport) ||
+      typeof viewport.x !== "number" ||
+      typeof viewport.y !== "number" ||
+      typeof viewport.zoom !== "number" ||
+      !Number.isFinite(viewport.x) ||
+      !Number.isFinite(viewport.y) ||
+      !Number.isFinite(viewport.zoom) ||
+      viewport.zoom < AWARENESS_LIMITS.minZoom ||
+      viewport.zoom > AWARENESS_LIMITS.maxZoom
+    ) {
+      return undefined;
+    }
+    state.viewport = { x: viewport.x, y: viewport.y, zoom: viewport.zoom };
   }
   return state;
 }

@@ -17,6 +17,10 @@
 //   7. 评论：A 在便签上放钉，B 经事件看到；
 //   8. 白板对象上的评论：A 在一个白板形状上放钉、正文写 Markdown，B 看到
 //      渲染后的加粗与 http(s) 链接，裸 HTML 不出现；评论锚在 item 上。
+//   9. 跟随视口：B 点 A 的头像跟随，A 缩放、平移，B 的视口中心与缩放对上 A，
+//      画布四周描一圈 A 的成员色；
+//  10. 刷新后视口不变：B 刷新页面，回到刷新前自己的视口（本机记着，不进
+//      文档、也不 PUT 回 core）。
 //
 // 断网用页面里的 WebSocket 包装实现（`Page.addScriptToEvaluateOnNewDocument`
 // 注入，只在这个探针里）：关掉 `…/sync` 的连接、拒绝新的连接；不改产品代码。
@@ -37,6 +41,7 @@ import {
   scenario,
   sleep,
   startStack,
+  until,
   writeResult,
 } from "./ui-features/harness.mjs";
 
@@ -116,6 +121,29 @@ function waitAt(page, id, x, y, what) {
     { timeout: 20_000 },
   );
 }
+
+/** 视口中心的画布坐标与缩放（从 React Flow 视口层的 transform 换算）。 */
+const viewportOf = (page) =>
+  page.evaluate(`
+    const flow = document.querySelector('.react-flow');
+    const layer = document.querySelector('.react-flow__viewport');
+    if (!flow || !layer) return null;
+    const m = /translate\\(([-\\d.e]+)px,\\s*([-\\d.e]+)px\\)\\s*scale\\(([-\\d.e]+)\\)/.exec(layer.style.transform);
+    if (!m) return null;
+    const r = flow.getBoundingClientRect();
+    const x = Number(m[1]), y = Number(m[2]), zoom = Number(m[3]);
+    return { x, y, zoom, cx: (r.width / 2 - x) / zoom, cy: (r.height / 2 - y) / zoom };
+  `);
+
+/** 两份视口中心与缩放是否对上。 */
+const sameView = (one, two) =>
+  Boolean(
+    one &&
+      two &&
+      Math.abs(one.cx - two.cx) < 3 &&
+      Math.abs(one.cy - two.cy) < 3 &&
+      Math.abs(one.zoom - two.zoom) < 0.01,
+  );
 
 const report = { status: "failed", output, scenarios: [] };
 let stack;
@@ -477,6 +505,113 @@ try {
     rendered,
   );
   await run.shot(b, "realtime-8-item-comment-b");
+
+  /* ------------------------ 9. 跟随视口（§16.4） ------------------------ */
+  // 收起上一步打开的评论弹层。
+  await b.key("Escape");
+  await a.key("Escape");
+  await b.clickOn(
+    `return document.querySelector('[data-slot="presence-bar"] [data-peer][aria-pressed="false"]')`,
+    "B 点 A 的头像跟随",
+  );
+  await b.until(
+    `return !!document.querySelector('[data-slot="follow-frame"]')`,
+    "B 的画布四周描上 A 的成员色",
+  );
+  const before = await viewportOf(a);
+  const wheelAt = await a.centerOf(
+    `return document.querySelector('.react-flow__pane')`,
+    "A 的画布",
+  );
+  const wheel = async (deltaY, modifiers) => {
+    await a.call("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      x: wheelAt.x - 260,
+      y: wheelAt.y - 160,
+      deltaX: 0,
+      deltaY,
+      modifiers,
+    });
+    await sleep(80);
+  };
+  // ⌘ / Ctrl + 滚轮按指针缩放（中心与缩放都变），再来一次普通滚轮。
+  for (let step = 0; step < 3; step += 1) await wheel(-120, 2);
+  await wheel(240, 0);
+  await until(async () => {
+    const now = await viewportOf(a);
+    return now && Math.abs(now.zoom - before.zoom) > 0.05;
+  }, "A 的视口变了");
+  await sleep(400);
+  const target = await viewportOf(a);
+  run.check(Math.abs(target.zoom - before.zoom) > 0.05, "A 缩放、平移了视口", {
+    before,
+    after: target,
+  });
+  await until(
+    async () => sameView(await viewportOf(b), await viewportOf(a)),
+    "B 的视口中心与缩放对上 A",
+    { timeout: 20_000 },
+  );
+  run.ok("B 跟随 A 的视口：中心与缩放对上，画布描一圈 A 的成员色", {
+    a: await viewportOf(a),
+    b: await viewportOf(b),
+  });
+  await run.shot(b, "realtime-9-follow-viewport-b");
+  await b.clickOn(
+    `return document.querySelector('[data-slot="presence-bar"] [data-peer][aria-pressed="true"]')`,
+    "B 取消跟随",
+  );
+  await b.until(
+    `return !document.querySelector('[data-slot="follow-frame"]')`,
+    "B 的跟随描边消失",
+  );
+
+  /* ------------------------ 10. 刷新后视口不变 ------------------------- */
+  // 视口落 store 节流 300ms，再写本机。
+  await sleep(1000);
+  const kept = await viewportOf(b);
+  const stored = await b.evaluate(
+    `return JSON.parse(localStorage.getItem(${JSON.stringify(
+      `armadra.realtimeViewport.${board.id}`,
+    )}) ?? "null");`,
+  );
+  run.check(
+    stored &&
+      Math.abs(stored.x - kept.x) < 1 &&
+      Math.abs(stored.y - kept.y) < 1 &&
+      Math.abs(stored.zoom - kept.zoom) < 0.001,
+    "B 的视口记在本机（按 boardId）",
+    { stored, kept },
+  );
+  await b.reload();
+  await b.settle();
+  await b.until(`return window.__probeNet.open() > 0`, "B 刷新后连上 …/sync", {
+    timeout: 20_000,
+  });
+  await until(
+    async () => sameView(await viewportOf(b), kept),
+    "B 刷新后回到刷新前的视口",
+    { timeout: 20_000 },
+  );
+  await sleep(1500);
+  const afterReload = await viewportOf(b);
+  run.check(
+    sameView(afterReload, kept),
+    "刷新后视口不变（一会儿之后也没被文档里的视口盖掉）",
+    { kept, afterReload },
+  );
+  const reread = await stack.api(documentPath);
+  const coreView = reread.board.viewport;
+  run.check(
+    !(
+      Math.abs(coreView.x - kept.x) < 1 &&
+      Math.abs(coreView.y - kept.y) < 1 &&
+      Math.abs(coreView.zoom - kept.zoom) < 0.001
+    ),
+    "实时板的视口没有 PUT 回 core",
+    { core: coreView, kept },
+  );
+  await run.shot(b, "realtime-10-reload-viewport-b");
 
   run.consoleClean(a, b);
   await a.close();

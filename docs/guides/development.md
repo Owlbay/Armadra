@@ -320,6 +320,7 @@ preload 注入页面，没有票据链；服务器壳的设备配对与可撤销
 | `ARMADRA_COPILOT_CLIENT_ID`                     | Copilot 设备流换成自己的 GitHub OAuth 应用（企业部署）；设备流本身在 `usage.copilotUsage` 后面，默认关                                                                               |
 | `ARMADRA_SECRET_BACKEND`                        | `=file` 强制密钥后端为 0600 明文文件（测试与无人值守；测试的 setup 默认设了它，不碰开发者的钥匙串）；`=file-encrypted` 用数据目录里的 master key 封存（探针用，节点凭据拒绝 `file`） |
 | `ARMADRA_SECRET_MASTER_KEY_FILE`                | 服务器壳的 master key 换个位置（如 systemd `LoadCredential=`）；不设时用 `<数据目录>/secrets/master.key`，首启生成                                                                   |
+| `ARMADRA_SMTP_URL` / `ARMADRA_SMTP_FROM`        | 服务器壳的可选邮件通道（同 `serve --smtp-url` / `--smtp-from`，契约 §28）：`smtp(s)://用户:口令@主机:端口`，口令可写 `secret://armadra-smtp`；不设则不发信、页面不显示「发送邮件」   |
 
 脚本发现 core 端口占用时直接报错。节点身份、Hook token、端点与权限等待变量由 core 注入 Agent 终端，无需手工配置。
 core 不监听 TCP 时 `hook-endpoint.env` 不写 `ARMADRA_HOOK_PORT`，Hook 客户端只走 `hook.sock`。

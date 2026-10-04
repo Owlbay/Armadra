@@ -3,12 +3,14 @@ import type { CoreContext } from "../main";
 import { identityInstanceId } from "../identity";
 import { IdentityService } from "../identity/service";
 import { IdentityStore } from "../identity/store";
-import { AutomationApi, API_PREFIX } from "./api";
+import { setWorkflowScheduleBridge } from "../workflow/registry";
+import { AutomationApi, API_PREFIX, apiFailure } from "./api";
 import { AUTOMATION_CAPABILITY, registerCapability } from "./capabilities";
 import { TerminalDispatcher, type DispatchContext } from "./dispatch";
 import { ScheduleEngine } from "./engine";
 import { ScheduleService } from "./service";
 import { ScheduleStore } from "./store";
+import { workflowScheduleBridge } from "./workflow-target";
 
 /**
  * 定时与自动化域的装配。
@@ -111,6 +113,17 @@ export function install(context: CoreContext): ScheduleDomain | undefined {
     api.handle(request, response, cors),
   );
 
+  // 工作流模板改版后的计划升级（契约 §15.6）：认人与自动化面同一套。
+  setWorkflowScheduleBridge(
+    workflowScheduleBridge({
+      store,
+      service,
+      caller: (request, workspaceId, mutation) =>
+        api.caller(request, workspaceId, mutation),
+      failure: apiFailure,
+    }),
+  );
+
   engine.start();
   const unregister = registerCapability(AUTOMATION_CAPABILITY);
   assembled = {
@@ -119,6 +132,7 @@ export function install(context: CoreContext): ScheduleDomain | undefined {
     stop: () => {
       engine.stop();
       unregister();
+      setWorkflowScheduleBridge(undefined);
       assembled = undefined;
     },
   };
