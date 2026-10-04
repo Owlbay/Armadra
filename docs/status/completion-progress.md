@@ -1449,7 +1449,7 @@
 
 没做：
 
-- G5-03 名下三处确认框还在用 `ui/alert-dialog`。
+- ~~G5-03 名下三处确认框还在用 `ui/alert-dialog`。~~ 后续 `fix/g5-23-identity-dialogs` 已接上（`AccountsSharingPage` 含成员菜单「重置两步验证」、`security/parts.tsx::ConfirmRemove`、`GatewayDevices`），并加扫描用例 `panels/no-raw-alert-dialog.test.ts`：除 `ResponsiveDialog.tsx` 外不得直接 import `ui/alert-dialog`。
 - 旧版 Worker 没有 `assets.exportText`：对它的远端导出要先「重新同步」执行主机，否则报 Worker 的未知操作错误。
 
 ## G5-24 桌面回环收紧（R-15）

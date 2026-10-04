@@ -3,15 +3,15 @@ import * as React from "react";
 import { usePreferencesStore, useT } from "../../../../app/preferences-store";
 import type { IdentityDevicePage } from "../../../../api/identity";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { Spinner } from "@/ui/spinner";
@@ -177,33 +177,35 @@ export function GatewayDevices({
           {t("gateway.devices.more")}
         </Button>
       )}
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={confirm !== null}
         onOpenChange={(open) => {
           if (!open) setConfirm(null);
         }}
       >
-        <AlertDialogContent
+        <ResponsiveAlertDialogContent
           className="z-[var(--z-dialog)]"
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             if (trigger.current?.isConnected) trigger.current.focus();
           }}
         >
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t("gateway.devices.confirmTitle")}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
+            </ResponsiveAlertDialogTitle>
+            <ResponsiveAlertDialogDescription>
               {t("gateway.devices.confirmNote")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
+            </ResponsiveAlertDialogDescription>
+          </ResponsiveAlertDialogHeader>
           <p className="break-words text-[13px] font-medium">
             {confirm?.name || confirm?.deviceId}
           </p>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("gateway.devices.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("gateway.devices.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               variant="destructive"
               onClick={() => {
                 const device = confirm;
@@ -212,10 +214,10 @@ export function GatewayDevices({
               }}
             >
               {t("gateway.devices.revoke")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </section>
   );
 }
