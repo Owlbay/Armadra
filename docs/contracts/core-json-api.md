@@ -369,6 +369,8 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 角色是 `viewer` ⊂ `editor` ⊂ `operator` ⊂ `driver`，编译表只在 `core/identity/roles.ts`。
 
+G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：设成功之后撤掉这个人的其它会话（安全审查 L2）——本人换口令时留下发请求的这个会话，owner 或 `identity:manage` 替人设时那个人的会话全部撤掉；这个人手里还没用的口令重置令牌（§25）一并作废，审计 `identity.credential.set` 的 `detail` 多 `revokedSessions`。`POST invitations` 的 `ttlMs` 缺省 7 天、最长 30 天（安全审查 L3），更长的夹到 30 天，不是正整数答 400 `INVALID_ARGUMENT`；答案的 `expiresAtMs` 是夹过之后的。替某人签发口令重置链接是 `POST principals/{id}/password-reset`，见 §25。
+
 **判定在哪里生效**（R8）：
 
 - **成员会话的授权快照只有 `identity:read`**，共享得来的授权每次判定时现编（`Authorizer.permits` = 快照 ∪ 现编）。所以撤销一条共享之后的**下一个请求**就是 403，不用等会话过期。`GET session` 报的 `scopes` 是现编之后的那份。
@@ -1227,6 +1229,8 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 
 计数器按库的判定写回 `sign_count`；回退（克隆的认证器）由库拒绝。审计：`identity.passkey.add`、`identity.passkey.remove`、`identity.login`（`detail.method: "passkey"`）。
 
+G5-02 追加：`PATCH passkey/{credentialId}` `{ label }`（写）给自己的 passkey 改名，答 `{ credentialId, label }`。`label` 1–64 个字符（按字符不按字节）、首尾无空白、无控制字符，否则 400 `INVALID_ARGUMENT`。只有本人：别人的（调用方有 `identity:manage` 也一样）、撤销了的、不存在的同样答 404。审计 `identity.passkey.rename`。
+
 ### 18.3 MFA：TOTP、恢复码与两步登录
 
 TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时间步；记最后用过的时间步，**同一个码第二次一律拒**。密钥在 SecretStore（条目名 `armadra-totp-<principalId>`），库里只有条目名。恢复码 10 个（`xxxxx-xxxxx`，大小写、空格与连字符不计），只存 scrypt 哈希，用掉即作废。
@@ -1273,6 +1277,8 @@ TOTP 是 RFC 6238（`otplib`）：SHA-1、6 位、30 秒，前后各容一个时
 | `POST sessions/revoke-others`（写） | 已登录                            | `{ revoked }`：撤掉我除当前之外的全部会话（「其它设备全部登出」）                                                                                    |
 
 `remoteIp` 是建会话那一刻的 socket 对端，`userAgent` 截到 256 字符；`lastSeenAtMs` 是最近一次认证成功，一分钟内不重写。撤销在下一个请求上生效（认证每次读库）。审计：`identity.session.revoke`、`identity.session.revoke-others`。
+
+G5-02 追加：`GET devices`（我的设备，`{ devices, nextId, hasMore }`）的每一行多两个可选字段。`platform` 由这台设备最近那个会话的 UA 归出来，取 `macos / windows / linux / ios / android / web / unknown` 之一：认得出浏览器、说不出系统的是 `web`，空 UA 与认不出的是 `unknown`。UA 原文不在这个答案里。`lastSeenAtMs` 是这台设备所有会话（含已撤销、已过期的）里最大的 `lastSeenAtMs`。设备上没有任何会话时两项都不带；`lastSeenAtMs` 为 0（迁移 0032 之前的会话）时也不带。共享层 `DEVICE_PLATFORMS`。
 
 ### 18.5 OAuth / OIDC
 
@@ -1692,7 +1698,19 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 25. 口令重置链接：`/api/identity/…/password-reset`
 
-预留，由 G5-02 填写。
+设计见 [G5 剩余事项计划](../design/g5-remaining-plan.md) §0。邮箱是可选的，所以没有「输入邮箱自助重置」。做法是 owner（或组 admin 对本组成员）替某人签发一枚一次性、24 小时有效的令牌，链接 `<来源>/#reset=<令牌>` 由签发人亲手交给对方。代码在 `core/identity/password-reset.ts`（令牌原语），判定与事务在 `accounts.ts`，路由在 `accounts-http.ts`，表 `identity_password_resets`（迁移 `0036_password_resets.sql`），共享层 `identity-security.ts` 的 §25 小节。与 §10 / §18 同一个前缀、同一套认证；整段 `/api/identity/` 不经路由门，判定在身份域里。
+
+| 方法与路径                                       | 谁能调                                                                                                       | 答案                                                                                                                       |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `POST principals/{id}/password-reset` `{}`（写） | owner 与 `identity:manage` 对任何成员；组 `admin` 只对自己所管的组里角色是 `member` 的人；owner 只有自己能签 | 201 `{ token, expiresAtMs }`：明文只在这一次出现；同一个人手里还没用的旧令牌随之作废                                       |
+| `GET password-reset/{token}`                     | 匿名                                                                                                         | `{ displayName, expiresAtMs }`                                                                                             |
+| `POST password-reset/{token}` `{ password }`     | 匿名                                                                                                         | `{ principalId, revokedSessions }`（泄露检查 `warn` 命中时多 `passwordBreached: true`）；之后拿 `principalId` 与新口令登录 |
+
+- **令牌**与邀请同形（`<32 位十六进制>.<43 位 base64url>`）。库里只存 `sha256("armadra/identity/v1/reset\0<令牌>")`，用途 `reset` 与会话、配对票的哈希分开。
+- **签发**：目标不存在 404；停用了的人与服务账号 400 `INVALID_ARGUMENT`；没有权限 403 `PERMISSION_DENIED`；没登录 401。审计 `identity.password.reset.issue`（`target` 是那个人，`detail.expiresAtMs`）。
+- **打开与使用**：认不出的令牌（不存在、用过、作废、过期、那个人停用了）一律 404 `password_reset_invalid`，不分是哪一种。两条都走配对与刷新那只「失败才扣」的 IP 桶（§18.1）：桶空了 429 `rate_limited` 带 `Retry-After`，认不出的令牌扣一次，好令牌不扣。
+- **设新口令**先过口令策略与泄露检查（§18.1，`names` 是那个人的显示名与 principalId）。不合格答规则名（400），令牌不作废。过了之后同一笔事务里令牌作废、换口令凭据、撤掉这个人的**全部**会话（`revokedSessions` 是撤掉的数目），并清掉这个人的登录锁定。审计 `identity.password.reset.use`，`target` 是那个人，`detail` 是 `{ credentialId, issuedBy, revokedSessions }`。
+- 令牌明文与哈希都不进审计、日志与其它答案。MFA 不受影响：设了 TOTP 的人用新口令登录仍要第二因素（丢了手机走 §18.3 的 `mfa/reset`）。
 
 ## 26. ACP 补充：elicitation、模型、凭据、SSH
 
