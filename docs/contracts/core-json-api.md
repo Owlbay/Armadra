@@ -866,6 +866,8 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - `task-id`：幂等键，1–100 个字母、数字或 `.` `_` `:` `-`（runner 用 `<ama 会话 id>:<ama 任务 id>`）。同一个协调者再用同一个 `task-id` 起：节点还在就答回那个节点（`result.reused: true`，不建、不投、不起）；节点已删就新建，任务行换绑过去。被别的协调者用过回 `409 task_conflict`。带它时 core 记一行 `workflow_task_runs`（`runner_id` = `agent`），并把节点交给依赖编排的启动路径起终端、敲启动行（与工作流角色节点同一条，页面开不开都一样）；`result` 多 `taskRunId` 与 `reused`。
 - `name`：节点标题，与 `title` 同义（两者都给时取 `title`）。
 - 权限模式这个 CLI 没有：`400 permission_mode_unsupported`，附 `supported: [...]`（与 §15.3 同码；`team` 同此）。
+- `cwd`：成员终端开在哪个目录。工作区根下的相对路径或落在工作区里的绝对路径，按 core 所在机器的路径规则解析并解开符号链接后判断；在工作区外（含经 `..` 或符号链接出去）回 `400 cwd_outside_workspace`，目录不存在或不是目录回 `400 bad_request`，与 `worktree` 同给回 `400 bad_request`，远端执行主机上的工作区回 `400 cwd_unsupported`。成立时写进节点数据的 `cwd`（解开链接后的绝对路径），`result` 与演练结果多 `cwd`。
+- `resume`：接回这个 CLI 自己的一段会话（1–200 个字母、数字或 `.` `_` `:` `-`），core 起节点时敲的是 `agent/launch.ts` 的 resume 行（Claude `--resume <id>`、Codex `resume <id>` …）。值是这块画布上一个成员节点的 id 时（runner 的 `sessionRef.sessionId` 就是节点 id），取那个节点上报过的会话 id。这个 CLI 不能续接（或自定义条目关掉了 `resume`）、节点跑的不是同一家、或节点从没报过会话 id，回 `400 resume_unsupported`。成立时写进节点数据的 `agent.resume`，节点交给依赖编排的启动路径由 core 起（不带 `task-id` 也一样），`result` 多 `resume`（实际接回的会话 id）。ama 的 runner 把 `request.cwd` / `request.resume` 映射成这两个参数，遇到 `cwd_outside_workspace` / `cwd_unsupported` / `resume_unsupported` 时去掉那一个再起一次（成员开在工作区根、或新开会话）。
 
 **`wait`**
 
