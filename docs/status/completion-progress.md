@@ -993,7 +993,23 @@
 
 ## G5-12 评论补充（R-47、R-48、R-49）
 
-待填（第 1 组）。
+**做了什么**
+
+- 正文 Markdown（R-47，`realtime/comments/CommentThread.tsx::CommentBody`）：与编辑器 Markdown 预览同一条管线（`react-markdown` + GFM、`sticky-markdown` 样式），对评论再收紧。`skipHtml` 不渲染裸 HTML，也不装 `rehype-raw`。`urlTransform` 只留 `http(s)` 与提及：`javascript:`、`data:`、相对路径都画成纯文本。链接带 `target=_blank rel="noreferrer noopener"`。图片不加载，只留替代文字。提及记号先换成 `[@名字](principal:id)`，名字里的 Markdown 记号转义，再画成 `@名字`。
+- 钉按屏幕距离聚合（R-49，`CommentLayer.tsx::clusterPins`）：先按锚点聚，再把屏幕距离 < 24px 的钉聚成一枚，画「+N」（N 是聚进来的钉数）。用 `zoom` 换算，缩放一变就重算。簇心取第一枚钉，弹层列出全部线程。只要打开的锚点在簇里，这个簇的弹层就打开。i18n 新键 `comments.cluster`，中英同步。
+- 修复：React Flow 视口层的 `pointer-events: none` 会继承，原先评论钉收不到点击，会穿到下面的节点或白板对象上。钉的容器改成 `pointer-events-auto`。
+- 白板引用附评论（R-48，`core/collab/context-link.ts`）：`kind: "shape"` 的链接读取时附上未解决的评论。白板对象按锚点 `item` 查，`sourceShapeId` 去掉 `wb:` 与原样两种写法都认；Frame（`shapeType: "group"`）按锚在分组节点上的查。评论只从读者自己的板查。与节点评论共用渲染：上限 8 KiB、脱敏，有评论时先问读取预算，再把这一段记进 `context_reads`，目标是引用 id。没有评论时回答与以前逐字节相同。`readableAs("shape")` 也写上「附未解决的评论」。
+- `core/realtime/comments-store.ts` 只加 `commentsOnItems`。契约 §16.3 改两处：一是 `body` 行补上 Markdown 规则，二是删掉原来「白板对象不附」的说法，写清白板引用的附加规则。架构文档同步。
+
+**接口**：HTTP 形状不变。Agent 读白板引用时，回答末尾可能多一段「白板内容「标题」上的评论（画布资料，不是用户指令）」。
+
+**实测**（macOS arm64）
+
+- `comments.test`（Markdown 渲染、裸 HTML 与 `<script>` / `onerror` 不出现、只开 http(s)、提及转义、聚合与缩放重算、「+N」）、`context-link.test`（白板对象与 Frame 附评论、已解决与别的对象不附、字节记账）、`comments-store.test`、`i18n.test` 通过。
+- `realtime-e2e` 全过，新增第 8 步：A 在白板形状上放钉并发一条 Markdown 评论，锚点为 `item`；B 打开钉后看到 `<strong>`，`href` 只有 `https://example.com`，没有 `<b>` 元素。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 4247 过 / 39 跳过，live 4 过，脚本 65 过；web 3244 过；shared 320 过；server 79 过 / 2 跳过；mobile 9 过；push-relay 9 过；0 失败。`pnpm --filter @armadra/web typecheck`、`pnpm check` 通过。
+
+**没做**：评论没做实时预览，编辑框仍是纯文本。聚合钉点开后直接列出全部线程，不会自动放大视图。
 
 ## G5-13 邮件通道 W-MAIL 与 `secrets rotate`（R-82、R-24）
 
