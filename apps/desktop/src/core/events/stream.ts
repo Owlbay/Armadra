@@ -129,8 +129,15 @@ export function cursorFrame(
  * slower one's backlog the faster one's latency — which is precisely the
  * property the acceptance asks about ("慢客户端不拖慢快客户端").
  */
+/**
+ * 控制面订阅（`workspaces.events`，契约 §35.4）收帧的回调：序列化好的那一帧和
+ * 它的 outbox 序号（不进 outbox 的是 0）。背压由 RPC 门面的有界队列管。
+ */
+export type EventListener = (frame: string, seq: number) => void;
+
 export class WorkspaceEventStream {
   private readonly subscriptions = new Map<string, Set<Subscription>>();
+  private readonly listeners = new Map<string, Set<EventListener>>();
   /** 有库就有 outbox；没有就退回 R1b 的纯内存扇出。 */
   private database: DatabaseSync | undefined;
   /** 每写多少帧裁剪一次，摊掉 `DELETE` 的成本。 */
@@ -181,10 +188,36 @@ export class WorkspaceEventStream {
     const seq = EPHEMERAL_EVENTS.has(event.type)
       ? 0
       : this.record(workspaceId, event, frame);
+    const listeners = this.listeners.get(workspaceId);
+    for (const listener of listeners ?? []) {
+      try {
+        listener(frame, seq);
+      } catch {
+        // 一个订阅出错不该让其余的漏帧。
+      }
+    }
     const watchers = this.subscriptions.get(workspaceId);
-    if (watchers === undefined || watchers.size === 0) return 0;
+    if (watchers === undefined || watchers.size === 0) {
+      return listeners?.size ?? 0;
+    }
     for (const subscription of watchers) this.enqueue(subscription, frame, seq);
-    return watchers.size;
+    return watchers.size + (listeners?.size ?? 0);
+  }
+
+  /**
+   * 控制面订阅收帧（契约 §35.4），返回退订函数。和 {@link subscribe} 一样算一个
+   * 「在看」的人：资源采样与 Agent 状态按它决定发不发。
+   */
+  listen(workspaceId: string, listener: EventListener): () => void {
+    const set = this.listeners.get(workspaceId) ?? new Set<EventListener>();
+    set.add(listener);
+    this.listeners.set(workspaceId, set);
+    return () => {
+      set.delete(listener);
+      if (set.size === 0 && this.listeners.get(workspaceId) === set) {
+        this.listeners.delete(workspaceId);
+      }
+    };
   }
 
   /**
@@ -258,12 +291,17 @@ export class WorkspaceEventStream {
 
   /** How many connections are watching one workspace. */
   subscriberCount(workspaceId: string): number {
-    return this.subscriptions.get(workspaceId)?.size ?? 0;
+    return (
+      (this.subscriptions.get(workspaceId)?.size ?? 0) +
+      (this.listeners.get(workspaceId)?.size ?? 0)
+    );
   }
 
   /** Every workspace with at least one watcher, for the sampling domains. */
   watchedWorkspaces(): string[] {
-    return [...this.subscriptions.keys()];
+    return [
+      ...new Set([...this.subscriptions.keys(), ...this.listeners.keys()]),
+    ];
   }
 
   private enqueue(subscription: Subscription, frame: string, seq = 0): void {
