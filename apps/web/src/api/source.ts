@@ -1,17 +1,17 @@
 import {
-  type NativeTransport,
+  type BearerTransport,
   bearerFetch,
   ticketedWebSocket,
-} from "../mobile/native-bridge";
+} from "../sources/transport";
 import { ensureCsrf, replaceRejectedCsrf } from "./identity";
-import { RUNTIME_URL, RUNTIME_VIA_SERVER_SHELL } from "./request";
-import { resolveSocketBase } from "./runtime-url";
+import { localRuntime } from "./local-runtime";
+import { sameOrigin } from "../sources/transport";
 
 /**
  * 一个源：一台 core 的地址，加上发往它时要带的凭据（工程规范化 §2.3.4）。
  *
- * 今天只有本机这一个（{@link localSource}）；多源挂载（A1-1）按同一个形状给
- * 每个源一份。凭据跟着源走，而不是装在全局的 `fetch` / `WebSocket` 上：同一个
+ * 本机源是 {@link localSource}；挂载的远程源（`sources/connection.ts`）按同一个
+ * 形状各有一份。凭据跟着源走，而不是装在全局的 `fetch` / `WebSocket` 上：同一个
  * 页面连两台 core 时，两套凭据不会互相改写。
  *
  * 类型与本机源从 `api/client.ts`（RPC 门面）再导出一次；这个文件不碰
@@ -49,15 +49,19 @@ export interface Source {
   readonly WebSocket: typeof WebSocket;
 }
 
-/** 桌面壳装进来的那套 Bearer 传输；没装（浏览器、原生 App）是 `null`。 */
-let transport: NativeTransport | null = null;
+/**
+ * 本机源的 Bearer 传输：桌面壳（`api/shell-transport.ts`）与原生 App
+ * （`mobile/entry.ts`）各装一次；没装（浏览器）是 `null`。它只属于本机源，
+ * 远程源的凭据在各自的连接里。
+ */
+let transport: BearerTransport | null = null;
 
 /** 每个原生 `WebSocket` 构造器包一次（测试会换掉全局的那个）。 */
 let ticketed = new WeakMap<typeof WebSocket, typeof WebSocket>();
 
 const base: typeof fetch = (input, init) => globalThis.fetch(input, init);
 
-const bearerCredentials = (current: NativeTransport): SourceCredentials => ({
+const bearerCredentials = (current: BearerTransport): SourceCredentials => ({
   mode: "bearer",
   async access() {
     await current.prepare?.();
@@ -84,23 +88,26 @@ const noCredentials: SourceCredentials = {
   renewCsrf: async () => null,
 };
 
+/** 本机源的标识（源表里不可删的那一行）。 */
+export const LOCAL_SOURCE_ID = "local";
+
 /**
- * 页面所在的这台 core。
+ * 页面所在的这台 core：桌面壳是壳报的回环端口，服务器壳托管的页面是同源，
+ * 原生 App 是连接页记下的 Gateway（`api/local-runtime.ts` 的 `localRuntime`）。
  *
- * 地址与模式是现取的：`RUNTIME_URL` 在 `request.ts` 里按页面地址算一次，而这个
- * 文件与它互相引用，所以这里不在模块求值时读它。
+ * 地址是第一次用到时才算的，不在模块求值时定。
  */
 export const localSource: Source = {
-  sourceId: "local",
+  sourceId: LOCAL_SOURCE_ID,
   get httpBase() {
-    return RUNTIME_URL;
+    return localRuntime().httpBase;
   },
   get wsBase() {
-    return resolveSocketBase(RUNTIME_URL);
+    return localRuntime().wsBase;
   },
   get credentials() {
     if (transport !== null) return bearerCredentials(transport);
-    return RUNTIME_VIA_SERVER_SHELL ? cookieCredentials : noCredentials;
+    return localRuntime().viaServerShell ? cookieCredentials : noCredentials;
   },
   fetch: (input, init) =>
     transport === null
@@ -120,10 +127,94 @@ export const localSource: Source = {
 };
 
 /**
- * 给本机源装上 Bearer 传输（桌面壳，`api/shell-transport.ts`）。全局的 `fetch`
- * 与 `WebSocket` 不再被改写：发往 core 的每个点都经 {@link localSource}。
+ * 给本机源装上 Bearer 传输（桌面壳 `api/shell-transport.ts`、原生 App
+ * `mobile/entry.ts`）。全局的 `fetch` 与 `WebSocket` 不被改写：发往 core 的
+ * 每个点都经一个源。
  */
-export function installLocalTransport(next: NativeTransport | null): void {
+export function installLocalTransport(next: BearerTransport | null): void {
   transport = next;
   ticketed = new WeakMap();
+}
+
+/* --------------------------------- 当前源 --------------------------------- */
+
+let resolveCurrent: () => Source = () => localSource;
+
+/**
+ * 当前源：省略了源的 `api/*` 调用发往它。源表（`sources/registry.ts`）装好
+ * 之前、或没有选中别的源时是本机。
+ */
+export function currentSource(): Source {
+  return resolveCurrent();
+}
+
+/** 源表把「当前源」接到自己身上；传 `null` 退回本机。 */
+export function setCurrentSourceResolver(next: (() => Source) | null): void {
+  resolveCurrent = next ?? (() => localSource);
+}
+
+/* -------------------------------- 已知的源 -------------------------------- */
+
+const mounted = new Set<Source>();
+
+/**
+ * 记下一个挂载的源（`sources/registry.ts` 在加入源表时调），返回撤销函数。
+ * 只有绕开 `request()` 的发送点按地址找源时用它：`<img>` 取图、下载。
+ */
+export function registerSource(source: Source): () => void {
+  mounted.add(source);
+  return () => {
+    mounted.delete(source);
+  };
+}
+
+/** 本机源在前，然后是挂载的源。 */
+export function knownSources(): readonly Source[] {
+  return [localSource, ...mounted];
+}
+
+/** 这个地址发往哪个源（按 HTTP 来源比）；都不是答 `null`。 */
+export function sourceForUrl(
+  url: string,
+  sources: readonly Source[] = knownSources(),
+): Source | null {
+  for (const source of sources) {
+    let origin: string;
+    try {
+      origin = new URL(source.httpBase).origin;
+    } catch {
+      continue;
+    }
+    if (sameOrigin(url, origin)) return source;
+  }
+  return null;
+}
+
+function targetUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
+/**
+ * 按地址发往它所属的源（带那个源的凭据）；不属于任何已知源的原样发。给手里
+ * 已经是一个完整地址的发送点用：`<img>` 取图、下载、媒体预览、栅格化取图。
+ */
+export const routedFetch: typeof fetch = (input, init) => {
+  const source = sourceForUrl(targetUrl(input));
+  return source === null
+    ? globalThis.fetch(input, init)
+    : source.fetch(input, init);
+};
+
+/**
+ * 按地址开一条流：发往哪个源就用哪个源的 `WebSocket`（Bearer 先换票）；
+ * 认不出的交给当前源（它对别处的地址原样放过）。
+ */
+export function openSourceSocket(
+  url: string,
+  protocols?: string | string[],
+): WebSocket {
+  const source = sourceForUrl(url) ?? currentSource();
+  return new source.WebSocket(url, protocols);
 }

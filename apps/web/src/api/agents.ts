@@ -28,7 +28,8 @@ import {
   uploadAssetResponseSchema,
   type ContextLink,
 } from "@armadra/shared";
-import { RUNTIME_URL, json, query, request } from "./request";
+import { json, query, request } from "./request";
+import { currentSource } from "./source";
 
 export const agentsApi = {
   /* --------------------------------- Agent 协作 -------------------------- */
@@ -231,7 +232,7 @@ export const agentsApi = {
    * 两种来源两种发法：`Blob` / `File` 直接以自身 MIME 原样 POST，已解码的
    * data URL 以 `{ dataUrl }` JSON POST。文件名是内容哈希，同一张图重复上传
    * 只落一份。返回的 `url` 是 Runtime 相对路径，用 `assetUrl` 或直接拼
-   * `RUNTIME_URL` 得到可加载的地址。
+   * 当前源的 `httpBase` 得到可加载的地址。
    */
   uploadAsset: (workspaceId: string, source: Blob | string) =>
     typeof source === "string"
@@ -274,7 +275,7 @@ export const agentsApi = {
 
   /** `TLAssetStore.resolve` 用的绝对地址；`assetId` 是 `uploadAsset` 返回的 `id`。 */
   assetUrl: (workspaceId: string, assetId: string) =>
-    `${RUNTIME_URL}/api/workspaces/${workspaceId}/assets/${query(assetId)}`,
+    `${currentSource().httpBase}/api/workspaces/${workspaceId}/assets/${query(assetId)}`,
 
   putContextLinks: (
     workspaceId: string,

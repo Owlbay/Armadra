@@ -6,7 +6,7 @@ import {
   type TerminateMode,
 } from "@armadra/shared";
 import type { TerminalInputLog } from "./input-log";
-import { localSource } from "../api/source";
+import { openSourceSocket } from "../api/source";
 
 /**
  * 终端 WebSocket 的状态机（计划书 §15.5 / §15.7）。
@@ -83,9 +83,9 @@ export type SocketFactory = (url: string) => SocketLike;
 
 const OPEN = 1;
 
-// 经本机源：桌面壳里先换一张一次性票再升级（`api/source.ts`）。
+// 经地址所属的源：Bearer 的源先换一张一次性票再升级（`api/source.ts`）。
 const defaultFactory: SocketFactory = (url) =>
-  new localSource.WebSocket(url) as unknown as SocketLike;
+  openSourceSocket(url) as unknown as SocketLike;
 
 export function createTerminalTransport(
   url: string,

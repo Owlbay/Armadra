@@ -3,7 +3,6 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import type { Workspace } from "@armadra/shared";
 
 vi.mock("../api/client", () => ({
-  RUNTIME_URL: "http://127.0.0.1:0",
   runtimeApi: {
     listWorkspaces: vi.fn().mockResolvedValue([]),
     listBoards: vi.fn().mockResolvedValue([]),

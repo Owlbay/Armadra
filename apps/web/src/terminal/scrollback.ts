@@ -9,8 +9,7 @@
  * 不同设备的 `deltaY` 差一个数量级，触控板还会连着发几十个小增量。
  */
 
-import { RUNTIME_URL } from "@/api/client";
-import { localSource } from "../api/source";
+import { currentSource } from "../api/source";
 
 /** 一个滚轮档位（传统 120 单位）滚多少行。 */
 export const LINES_PER_NOTCH = 3;
@@ -96,14 +95,12 @@ export async function postScroll(
 ): Promise<void> {
   if (lines === 0) return;
   try {
-    await localSource.fetch(
-      `${RUNTIME_URL}/api/terminals/${sessionId}/scroll`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ lines }),
-      },
-    );
+    const source = currentSource();
+    await source.fetch(`${source.httpBase}/api/terminals/${sessionId}/scroll`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lines }),
+    });
   } catch {
     // 滚不动就滚不动，不打断终端。
   }

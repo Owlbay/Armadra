@@ -22,7 +22,7 @@ import {
   FileDragError,
   type WorkspaceDragEntry,
 } from "../../files/workspace-drag";
-import { localSource } from "../../api/source";
+import { routedFetch } from "../../api/source";
 
 /**
  * 外部内容分流（React Flow 计划 F27）。
@@ -535,7 +535,7 @@ async function importImageShape(
 
 async function fetchImageSize(url: string): Promise<ImageBox | null> {
   try {
-    const response = await localSource.fetch(url);
+    const response = await routedFetch(url);
     if (!response.ok) return null;
     return await measureImage(await response.blob());
   } catch {

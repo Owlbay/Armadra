@@ -17,7 +17,6 @@ const importFiles = vi.fn();
 const error = vi.fn();
 
 vi.mock("../../api/client", () => ({
-  RUNTIME_URL: "http://127.0.0.1:43120",
   runtimeApi: {
     importAsset: (...args: unknown[]) => importAsset(...args),
     uploadAsset: (...args: unknown[]) => uploadAsset(...args),

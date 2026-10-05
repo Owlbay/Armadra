@@ -15,7 +15,7 @@ import {
   toPageCoordinates,
   viewportFor,
 } from "./stream";
-import { localSource } from "../../api/source";
+import { openSourceSocket } from "../../api/source";
 
 /**
  * 服务器壳上的浏览器节点（R6c）。
@@ -55,9 +55,7 @@ export function StreamSurface({ id, node, selected }: NodeBodyProps) {
 
     const open = () => {
       if (stopped) return;
-      const socket = new localSource.WebSocket(
-        browserStreamUrl(workspaceId, id),
-      );
+      const socket = openSourceSocket(browserStreamUrl(workspaceId, id));
       socket.binaryType = "arraybuffer";
       socketRef.current = socket;
       socket.onopen = () => {

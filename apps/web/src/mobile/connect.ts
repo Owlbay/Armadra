@@ -33,7 +33,7 @@ export interface NativeConnectDeps {
   readonly bridge: NativeBridge;
   readonly pair: typeof pairWithGateway;
   readonly save: (origin: string) => void;
-  /** 记下来源后重新加载：`RUNTIME_URL` 在模块求值时就定了。 */
+  /** 记下来源后重新加载：本机源的地址在一次加载里只算一次。 */
   readonly reload: () => void;
 }
 

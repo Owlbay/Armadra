@@ -22,7 +22,6 @@ const restoreTrash = vi.fn();
 const revealFileEntry = vi.fn();
 
 vi.mock("../api/client", () => ({
-  RUNTIME_URL: "http://runtime",
   runtimeApi: {
     listFiles: (...args: unknown[]) => listFiles(...args),
     gitStatus: (...args: unknown[]) => gitStatus(...args),
