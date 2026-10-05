@@ -1751,3 +1751,55 @@
 - fork 检出的远端按名字选（缺省 `origin`），不按地址判断哪个远端是基仓库；选错了远端会因为取不到引用而失败，不会检出错的提交。
 - 子组连接的徽标点开仍只打开面板，不定位到具体 MR（同 G5-15）。
 - 都没有连真实的 GitLab / Gitea 实例。
+
+## A3-0 五条流的发送队列、背压与心跳
+
+做了什么（平台规格 core 包 §3；契约 §3.4 新增）：
+
+- `core/http/stream-queue.ts`：`SendQueue`。拥塞按 `max(bufferedAmount, 已交给 send 而回调未回的字节)` 判，过 `highWaterBytes` 后排队，降到 `lowWaterBytes`（缺省一半）再写并解除；三种策略 `drop-oldest` / `coalesce` / `pause`。`push` 可以交一组帧（画面的头帧 + JPEG），`coalesce` 时同 key 只留最新一组。`pause` 拥塞时 `onPause`、排空后 `onResume`，队列满调 `onOverflow` 并拒收，不丢帧。`wsTarget(ws, { binary })` 把 `ws` 包成队列的对端。
+- 接入：事件流 drop-oldest / 256 / 1 MiB（原队列删掉，丢帧计数照旧）；终端 pause / 64 / 4 MiB，`Attachment` 多了可选的 `pause` / `resume`：tmux 暂停这条连接自己的客户端 pty，会话宿主暂停这条宿主连接（宿主按 `writableLength` 自己暂停 ConPTY），direct 后端按附着计数暂停会话的 PTY，detach 或关流即释放；实时协同 pause / 256 / 2 MiB，暂停期间不向该连接广播更新与 awareness，恢复时补 step1、整份状态的 step2 与当前 awareness；语言会话 pause / 256 / 2 MiB，`Hub.pauseSession` / `resumeSession` 按会话计数暂停语言服务器 stdout，`closeSession` 释放，远程执行主机上的会话只排队；浏览器画面 coalesce / 4 / 2 MiB，`ViewerSocket.sendFrame(header, jpeg)`。`pause` 的队列满以 `1013` 关流。
+- `core/http/server.ts`：ws 层心跳，一个定时器管全部连接，每 25 秒 ping，连续两次无 pong 就 `terminate()`（`CoreServerOptions.heartbeatMs`，`0` 关）。单帧上限按流声明（`stream(path, handler, guard, { maxPayload })`，按上限分 `WebSocketServer`）：缺省 1 MiB = `MAX_FRAME_BYTES`，终端 16 MiB，实时协同 16 MiB，语言会话 4 MiB。升级后统一给连接挂一个 `error` 监听。原来终端、语言、画面三条流没挂，超限帧或坏帧报的 `error` 会成为进程级未捕获异常。
+- 帧格式没改，页面不用动。
+
+实测（macOS arm64，Node 26.10.0，tmux 3.7c，2026-10-06，机器 load 8–10）：
+
+- 新增用例：`http/stream-queue.test`（10 例，三种策略、水位滞回、close、非 OPEN、重复回调）、`http/server-heartbeat.test`（3 例：不回 pong 两次后 1006、回 pong 的连接不断、缺省上限 1009 与按流放宽）、`http/stream-queue.integration.test`（真 socket 慢客户端：客户端停读 400 ms 时 pause 流的生产者停下，core 侧 `bufferedAmount + 队列` 峰值不超过高水位 + 两帧，恢复后 1024 帧一帧不少、顺序不变；事件流 4 万帧丢旧，最后一帧送到，送达 + 丢弃 = 发布数，连接不断）、`terminal/backpressure.test`（2 例：卡在 5 MiB 时 `pause`、降到 2 MiB 以上不恢复、清空后 `resume` 且帧不丢不乱；对端不读满 64 帧以 1013 关流并释放暂停）、`terminal/direct.test` 真 PTY 暂停 / detach 释放 1 例、`realtime/sync.test` 暂停与恢复 2 例、`language/mux.test` 真子进程暂停 stdout 2 例、`browser/headless/node.test` 成组交帧 1 例；`events/stream.test` 的卡住客户端改为对 SendQueue 的委托断言。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：4645 过 / 46 跳过，live 4 过，脚本 68 过；`pnpm --filter @armadra/server test` 87 过 / 4 跳过；`pnpm check` 通过。web 没改。
+- A 档探针：`core-terminal-smoke`、`core-terminal-lifecycle`、`realtime-e2e`、`server-e2e`（含服务器壳上的浏览器画面流、经 Gateway 的终端与事件流 4403）、`remote-e2e`（远程语言会话诊断）全过。
+- `tools/probes/server-perf.mjs`（30 终端 + 6 事件流 + 2000 对象实时板），main 与本分支同机交替各跑 3 次取中位数：
+
+| 指标               |              main |            本分支 |
+| ------------------ | ----------------: | ----------------: |
+| 事件扇出 p95       |            2.8 ms |            2.0 ms |
+| 终端吞吐           |        25.5 MiB/s |        25.5 MiB/s |
+| 单会话完成 p95     |         1175.1 ms |         1175.5 ms |
+| 建会话 p95         |           49.7 ms |           46.4 ms |
+| 实时板批量         |          168.8 ms |          175.4 ms |
+| 实时单字段更新 p95 |            0.7 ms |            0.7 ms |
+| RSS 稳态 / 峰值    | 238.8 / 256.3 MiB | 222.8 / 246.9 MiB |
+
+事件扇出 p95 单次在 1.7–5 ms 间跳，main 自己也有 5 ms 的一次。`rssSteadyMiB` 在这台机器上 main 与本分支都超出 `server-perf-baseline.json` 的 darwin-arm64 基线（录于 2026-10-03），不是这次引入的，基线没有重录。送到页面的终端字节数随 tmux 合并重绘在 4–8 MiB 间变，这次的打点里终端一次也没有触发暂停。
+
+偏离规格之处：
+
+- `maxPayload` 没有一律 1 MiB。实时协同的首个 step2 按契约 §16.1 可以到 16 MiB，终端 `input` 帧整段带着粘贴，一律 1 MiB 会把这两类合法帧以 1009 关掉，所以按流声明，缺省才是 1 MiB。
+- 实时协同恢复时除了规格写的 step1，还补一帧整份状态的 step2。只发 step1 的话，客户端回答的是 core 缺什么，它自己漏掉的更新补不回来。
+- `push` 多收一组帧（数组）。画面的头帧与 JPEG 是两条消息，合并时必须一起留或一起丢。
+- 心跳不在规格 §3 里（任务要求加），按工程规范化 §3.3 的数：25 秒、两次。
+
+没做 / 限制：
+
+- direct 后端一个会话一个 PTY，任一附着者跟不上就让整个会话的输出等它（与慢终端同语义）。语言服务器同理，同一服务器的其它会话一起等。
+- 远程执行主机上的语言会话无法暂停上游，只能排队，满了关流。
+- 浏览器画面没有把 Chromium 的帧确认推迟到发出之后，跟不上时由 coalesce 丢旧帧，Chromium 照常编码。
+- 心跳只是服务端 ping；客户端的 `system.ping` 与前后台感知属于 E2。
+
+接口：
+
+- `core/http/stream-queue.ts`：`SendQueue`、`SendQueueOptions`、`SendTarget`、`wsTarget`、`OPEN`、`DRAIN_POLL_MS`、`CLOSE_BACKPRESSURE`（1013）。
+- `core/http/server.ts`：`CoreServer.stream(path, handler, guard?, { maxPayload })`、`StreamOptions`、`CoreServerOptions.heartbeatMs`、`HEARTBEAT_MS`、`HEARTBEAT_MISSES`、`DEFAULT_MAX_PAYLOAD_BYTES`。
+- `terminal/backend.ts`：`Attachment.pause?()` / `resume?()`；`terminal/socket.ts`：`SEND_HIGH_WATER_BYTES`、`SEND_MAX_FRAMES`、`TERMINAL_MAX_PAYLOAD_BYTES`；`session-host/link.ts`：`Link.pause()` / `resume()`。
+- `realtime`：`SyncConnection.pause()` / `resume()` / `sendAwareness()`，`SYNC_MAX_FRAMES`、`SYNC_HIGH_WATER_BYTES`。
+- `language`：`Hub.pauseSession()` / `resumeSession()` / `outputPaused`，`ServerProcess.pause()` / `resume()`，`limits.ts` 的 `SESSION_MAX_FRAMES`、`SESSION_HIGH_WATER_BYTES`、`SESSION_MAX_PAYLOAD_BYTES`。
+- `browser`：`ViewerSocket.sendFrame?()`，`VIEWER_MAX_FRAMES`、`VIEWER_HIGH_WATER_BYTES`。
+- `events/stream.ts`：`EVENT_HIGH_WATER_BYTES`；`EventSink` 多了可选的 `bufferedAmount` / `readyState`。
