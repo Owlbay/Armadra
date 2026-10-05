@@ -34,6 +34,7 @@ import { useDependencyStore } from "../agent/dependency-store";
 import { useDriveStore } from "../agent/drive-store";
 import { useLanguageStatusStore } from "../editor/language/status-store";
 import { CLOSE_REVOKED } from "./ws";
+import { sourceRegistry } from "../sources/registry";
 
 type EventType = WorkspaceEvent["type"];
 type EventOf<T extends EventType> = Extract<WorkspaceEvent, { type: T }>;
@@ -116,11 +117,14 @@ export interface WorkspaceEventTransport {
   closedWith(): number | null;
 }
 
+/** 当前源的连接（源层，`sources/registry.ts`）：零配置时就是本机。 */
+const connection = () => sourceRegistry().current();
+
 const controlTransport: WorkspaceEventTransport = {
   subscribe: (workspaceId, signal) =>
-    controlClient().workspaces.events({ workspaceId }, { signal }),
-  onDrop: (listener) => onControlDrop(listener),
-  closedWith: () => controlClosedWith(),
+    controlClient(connection()).workspaces.events({ workspaceId }, { signal }),
+  onDrop: (listener) => onControlDrop(connection(), listener),
+  closedWith: () => controlClosedWith(connection()),
 };
 
 let transport: WorkspaceEventTransport = controlTransport;

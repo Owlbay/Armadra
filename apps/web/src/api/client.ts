@@ -33,7 +33,11 @@ import {
   csrfRefusal,
 } from "./request";
 import { type Source, currentSource, localSource } from "./source";
-import { type ControlChannel, controlChannel } from "./ws";
+import {
+  type ControlChannel,
+  type ControlSocketOpener,
+  controlChannel,
+} from "./ws";
 import { agentsApi } from "./agents";
 import { systemApi } from "./system";
 import { workspacesApiFor } from "./workspaces";
@@ -225,12 +229,14 @@ export function errorCode(error: unknown): string | undefined {
 const controlClients = new WeakMap<ControlChannel, ArmadraClient>();
 
 /**
- * 一个源的控制面客户端（契约 §35）：调用与订阅走同一条 `/api/ws`。订阅断线后
- * 由上游的重试插件重订并交回 `lastEventId`（续订由 core 从 outbox 补）；连接本身
- * 的重连、换票、前后台与心跳在 `api/ws.ts`，不用上游内建的那一套。
+ * 一个源的控制面客户端（契约 §35）：调用与订阅走同一条 `/api/ws`。`connection`
+ * 是源层的连接（`sourceRegistry().get(…)` / `.current()`），控制面的那条流由它
+ * 托管（换票、中继、退避，`sources/managed-socket.ts`）。订阅断线后由上游的
+ * 重试插件重订并交回 `lastEventId`（续订由 core 从 outbox 补）；不用上游内建的
+ * 重连。
  */
-export function controlClient(source: Source = localSource): ArmadraClient {
-  const channel = controlChannel(source);
+export function controlClient(connection: ControlSocketOpener): ArmadraClient {
+  const channel = controlChannel(connection);
   const known = controlClients.get(channel);
   if (known !== undefined) return known;
   const link = new PeerRPCLink({
@@ -262,16 +268,18 @@ export function controlClient(source: Source = localSource): ArmadraClient {
 }
 
 /** 这个源的控制面停下的原因（4403 / 4409 / 4429）；还在连的是 `null`。 */
-export function controlClosedWith(source: Source = localSource): number | null {
-  return controlChannel(source).closedWith;
+export function controlClosedWith(
+  connection: ControlSocketOpener,
+): number | null {
+  return controlChannel(connection).closedWith;
 }
 
 /** 控制面的「连接断了」：订阅据此把「已连上」的状态落下。 */
 export function onControlDrop(
+  connection: ControlSocketOpener,
   listener: () => void,
-  source: Source = localSource,
 ): () => void {
-  const channel = controlChannel(source);
+  const channel = controlChannel(connection);
   channel.addEventListener("close", listener);
   return () => channel.removeEventListener("close", listener);
 }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createLocalConnection } from "../sources/connection";
 import { controlClient, errorCode } from "./client";
 import type { Source } from "./source";
 import { resetControlChannel } from "./ws";
@@ -17,20 +18,18 @@ interface Request {
   readonly headers: Record<string, string>;
 }
 
-class PeerSocket {
+class PeerSocket extends EventTarget {
   static instances: PeerSocket[] = [];
   readyState = 0;
-  onopen: (() => void) | null = null;
-  onmessage: ((event: MessageEvent) => void) | null = null;
-  onclose: ((event: CloseEvent) => void) | null = null;
-  onerror: (() => void) | null = null;
+  binaryType: BinaryType = "blob";
   readonly requests: Request[] = [];
 
   constructor(readonly url: string) {
+    super();
     PeerSocket.instances.push(this);
     queueMicrotask(() => {
       this.readyState = 1;
-      this.onopen?.();
+      this.dispatchEvent(new Event("open"));
     });
   }
 
@@ -50,7 +49,7 @@ class PeerSocket {
   }
 
   reply(id: string, payload: object) {
-    this.onmessage?.(
+    this.dispatchEvent(
       new MessageEvent("message", {
         data: JSON.stringify({ i: id, ...payload }),
       }),
@@ -79,7 +78,7 @@ class PeerSocket {
 
   drop(code = 1006) {
     this.readyState = 3;
-    this.onclose?.(new CloseEvent("close", { code }));
+    this.dispatchEvent(new CloseEvent("close", { code }));
   }
 }
 
@@ -100,6 +99,9 @@ const source: Source = {
 
 const latest = () => PeerSocket.instances.at(-1) as PeerSocket;
 
+/** 本机源的连接：控制面的流经它托管（`sources/connection.ts`）。 */
+let connection = createLocalConnection({ source });
+
 async function until<T>(read: () => T | undefined): Promise<T> {
   for (let index = 0; index < 200; index += 1) {
     const value = read();
@@ -113,17 +115,18 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.spyOn(Math, "random").mockReturnValue(0);
   PeerSocket.instances = [];
+  connection = createLocalConnection({ source });
 });
 
 afterEach(() => {
-  resetControlChannel(source);
+  resetControlChannel(connection);
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
 describe("controlClient", () => {
   it("订阅断线后在新连接上重订，带 last-event-id", async () => {
-    const client = controlClient(source);
+    const client = controlClient(connection);
     const items: unknown[] = [];
     const controller = new AbortController();
     const reading = (async () => {
@@ -170,7 +173,7 @@ describe("controlClient", () => {
   });
 
   it("续不上（snapshot_required）不重订，错误交给调用方", async () => {
-    const client = controlClient(source);
+    const client = controlClient(connection);
     let failure: unknown;
     void (async () => {
       const iterator = await client.workspaces.events({ workspaceId: "w1" });

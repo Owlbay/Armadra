@@ -1,27 +1,23 @@
-import { backoffDelay } from "@/lib/backoff";
-
-import { runtimeSocketUrl } from "./runtime-url";
-import type { Source } from "./source";
+import type { ManagedSocket, SourceSocketOptions } from "../sources";
 
 /**
  * 控制面 WebSocket `/api/ws`（工程规范化 §3、契约 §35）：每个源一条，调用与订阅
  * 多路复用在上面，帧由 RPC 门面（`api/client.ts`）编解码。
  *
- * 这里是那条连接本身，一个**会自己重连**的 socket：上游的 peer 客户端只认一个
- * WebSocket 形状的对象（`readyState`、`send`、`open` / `message` / `close` 事件），
- * 而它不知道要换票、也不知道前后台。所以：
+ * 这里是那条连接本身：上游的 peer 客户端只认一个 WebSocket 形状的对象
+ * （`readyState`、`send`、`open` / `message` / `close` 事件），而它不知道要换票、
+ * 也不知道前后台。连接由源层的 `ManagedSocket` 托管（`sources/managed-socket.ts`，
+ * 经 `SourceConnection.socket`）：
  *
- *   * **换票**：每次（重）连都经源的 `WebSocket`（Bearer 模式先换一张一次性票，
- *     `api/source.ts`），子协议报 `armadra-rpc.v1`。
- *   * **重连**：`lib/backoff.ts` 的全抖动退避，前台封顶 10 秒、后台 30 秒，连上过
- *     就归零。内层 socket 断了先把自己置回「连接中」再发 `close`——peer 客户端据此
- *     结束在途的调用与订阅，订阅由重试插件带 `lastEventId` 重订，重订的那一帧
- *     等到下一次 `open` 才发出去。
- *   * **关闭码**（契约 §35.2）：4401 先续凭据再立刻重连一次；4403 / 4409 / 4429
- *     停下不再连，交给页面提示；其余按退避重连。
+ *   * **换票**：本机源的 `WebSocket` 自己换票（`api/local-runtime.ts` 定地址），
+ *     远程源每次（重）连前经它的 `CredentialProvider` 换票、经中继另带中继子协议；
+ *     子协议报 `armadra-rpc.v1`。
+ *   * **重连**：`lib/backoff.ts` 的全抖动退避，前台封顶 10 秒、后台 30 秒；`online`
+ *     与回到前台跳过退避；回到前台时开着的探一次，3 秒没回就重连。
+ *   * **关闭码**（契约 §35.2）：4401 续凭据立刻重连一次；4403 / 4409 / 4429 停下
+ *     不再连，交给页面提示；其余按退避重连。
  *   * **心跳**：服务端发协议层 ping（浏览器自己回 pong）；页面可见时每 30 秒调
  *     一次 `system.ping`，3 秒没回就当断线，立刻重连。
- *   * **前后台**：回到前台立刻探一次（没连着就跳过退避直接连）；`online` 同理。
  */
 
 export const CONTROL_PATH = "/api/ws";
@@ -56,75 +52,98 @@ export const FATAL_CLOSE_CODES: ReadonlySet<number> = new Set([
   CLOSE_LIMIT,
 ]);
 
-export const RECONNECT_BASE_MS = 500;
-export const FOREGROUND_CAP_MS = 10_000;
-export const BACKGROUND_CAP_MS = 30_000;
 export const PING_INTERVAL_MS = 30_000;
 export const PING_TIMEOUT_MS = 3_000;
-/** 两次 4401 隔得比这近，第二次就不再跳过退避（续了凭据也没用）。 */
-const EXPIRED_RETRY_WINDOW_MS = 5_000;
 
 const CONNECTING = 0;
 const OPEN = 1;
 const CLOSED = 3;
 
-/** 测试注入的环境；缺省取全局。 */
-export interface ChannelEnvironment {
-  readonly document?: Pick<
-    Document,
-    "visibilityState" | "addEventListener" | "removeEventListener"
-  >;
-  readonly window?: Pick<Window, "addEventListener" | "removeEventListener">;
-  readonly random?: () => number;
-  readonly now?: () => number;
+/**
+ * 控制面要的那一样：在一个源上开一条托管的流（`sources/connection.ts` 的
+ * `SourceConnection.socket`）。换票、中继子协议、4401 续凭据、退避、`online`
+ * 与回到前台的探活都在 `ManagedSocket` 里。
+ */
+export interface ControlSocketOpener {
+  socket(path: string, options?: SourceSocketOptions): ManagedSocket;
 }
 
+/** 测试注入的环境；缺省取全局。 */
+export interface ChannelEnvironment {
+  readonly visible?: () => boolean;
+}
+
+/**
+ * 上游 peer 客户端要的 WebSocket 形状，架在一条 `ManagedSocket` 上：
+ *
+ *   * 内层断了（或被换掉）先把自己置回「连接中」再发 `close`——peer 客户端据此
+ *     结束在途的调用与订阅，订阅由重试插件带 `lastEventId` 重订，那一帧等下一次
+ *     `open` 才发得出去；
+ *   * 4403 / 4409 / 4429（以及续不上凭据）停下：`closedWith` 记下原因，告诉页面；
+ *   * 可见时每 30 秒探一次（`system.ping`），3 秒没回就丢掉这条立刻重连。
+ */
 export class ControlChannel extends EventTarget {
   readonly CONNECTING = CONNECTING;
   readonly OPEN = OPEN;
   readonly CLOSED = CLOSED;
 
-  private state: number = CONNECTING;
-  private socket: WebSocket | null = null;
-  private attempt = 0;
-  private timer: ReturnType<typeof setTimeout> | null = null;
-  private heartbeat: ReturnType<typeof setInterval> | null = null;
-  private probing = false;
-  private lastExpired = -Infinity;
+  private readonly managed: ManagedSocket;
+  private connected = false;
+  private lastCode = 1006;
   private fatal: number | null = null;
   private ping: (() => Promise<unknown>) | null = null;
-  private readonly detach: () => void;
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
+  private probing = false;
 
   constructor(
-    private readonly source: Source,
+    opener: ControlSocketOpener,
     private readonly environment: ChannelEnvironment = {},
   ) {
     super();
-    const doc =
-      environment.document ??
-      (typeof document === "undefined" ? undefined : document);
-    const win =
-      environment.window ??
-      (typeof window === "undefined" ? undefined : window);
-    const onVisible = () => {
-      if (this.visible()) this.wake();
-    };
-    const onOnline = () => this.wake();
-    doc?.addEventListener("visibilitychange", onVisible);
-    win?.addEventListener("online", onOnline);
-    this.detach = () => {
-      doc?.removeEventListener("visibilitychange", onVisible);
-      win?.removeEventListener("online", onOnline);
-    };
-    this.connect();
+    this.managed = opener.socket(CONTROL_PATH, {
+      protocols: [CONTROL_PROTOCOL],
+      // 回到前台时 `ManagedSocket` 自己探一次，3 秒没回就重连。
+      ping: () => this.alive(),
+      onOpen: () => {
+        // 内层被 `ManagedSocket` 自己换掉时（探活失败）没有 close 回调。
+        this.dropped(1006);
+        this.connected = true;
+        this.startHeartbeat();
+        this.dispatchEvent(new Event("open"));
+      },
+      onMessage: (event) => {
+        this.dispatchEvent(new MessageEvent("message", { data: event.data }));
+      },
+      onClose: (event) => {
+        this.lastCode = event.code;
+        if (FATAL_CLOSE_CODES.has(event.code)) {
+          this.stop(event.code);
+          return;
+        }
+        this.dropped(event.code);
+      },
+      onStateChange: (state) => {
+        if (state === "open") return;
+        this.dropped(this.lastCode);
+        // 4403 由 `onClose` 停下；这里剩下的是 4401 续不上凭据。
+        if (state === "unauthorized" && this.fatal === null) {
+          this.stop(
+            this.lastCode === CLOSE_EXPIRED ? CLOSE_EXPIRED : CLOSE_REVOKED,
+          );
+        }
+      },
+    });
   }
 
   /** 上游 peer 客户端看的状态：连接中（含等待重连）、开着、停了。 */
   get readyState(): number {
-    return this.state;
+    if (this.fatal !== null) return CLOSED;
+    const state = this.managed.state;
+    if (state === "closed" || state === "unauthorized") return CLOSED;
+    return this.connected ? OPEN : CONNECTING;
   }
 
-  /** 停下的原因（4403 / 4409 / 4429）；还在连的是 `null`。 */
+  /** 停下的原因（4403 / 4409 / 4429，或续不上凭据的 4401）；还在连的是 `null`。 */
   get closedWith(): number | null {
     return this.fatal;
   }
@@ -135,40 +154,39 @@ export class ControlChannel extends EventTarget {
   }
 
   send(data: string): void {
-    if (this.state !== OPEN || this.socket === null) {
+    if (!this.connected || !this.managed.send(data)) {
       throw new DOMException("WebSocket is not open", "InvalidStateError");
     }
-    this.socket.send(data);
   }
 
   /** 不再用了（测试、换源）：断开且不再重连。 */
   close(): void {
-    this.stop(CLOSE_NORMAL, false);
+    this.stopHeartbeat();
+    this.dropped(CLOSE_NORMAL);
+    this.managed.close();
   }
 
-  /**
-   * 回到前台 / 网络恢复：没连着就跳过退避立刻连；连着就探一次，3 秒没回音
-   * 视为断线、立刻重连。
-   */
-  wake(): void {
-    if (this.fatal !== null) return;
-    if (this.state === OPEN) {
-      void this.probe();
-      return;
-    }
-    if (this.timer !== null) {
-      clearTimeout(this.timer);
-      this.timer = null;
-      this.connect();
-    }
-  }
-
-  /** 探一次：`system.ping` 在 {@link PING_TIMEOUT_MS} 内没回就重连。 */
+  /** 探一次：`system.ping` 在 {@link PING_TIMEOUT_MS} 内没回就丢掉这条立刻重连。 */
   async probe(): Promise<boolean> {
-    const ping = this.ping;
-    const socket = this.socket;
-    if (ping === null || socket === null || this.probing) return true;
+    if (!this.connected || this.probing) return true;
     this.probing = true;
+    try {
+      if (await this.alive()) return true;
+      if (this.connected) {
+        // 半开的连接（睡眠、断了的隧道）：等浏览器自己发现可能要几十秒。
+        this.dropped(1006);
+        this.managed.reconnect();
+      }
+      return false;
+    } finally {
+      this.probing = false;
+    }
+  }
+
+  /** `system.ping` 在 3 秒内回了。 */
+  private async alive(): Promise<boolean> {
+    const ping = this.ping;
+    if (ping === null) return true;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
@@ -182,140 +200,35 @@ export class ControlChannel extends EventTarget {
       ]);
       return true;
     } catch {
-      // 半开的连接（睡眠、断了的隧道）：等浏览器自己发现可能要几十秒。
-      if (this.socket === socket) this.drop(socket, 1006, true);
       return false;
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
-      this.probing = false;
     }
   }
 
   private visible(): boolean {
-    const doc =
-      this.environment.document ??
-      (typeof document === "undefined" ? undefined : document);
-    return doc === undefined || doc.visibilityState !== "hidden";
+    if (this.environment.visible) return this.environment.visible();
+    return (
+      typeof document === "undefined" || document.visibilityState !== "hidden"
+    );
   }
 
-  private connect(): void {
+  /** 内层没了：先置回「连接中」，再告诉 peer 客户端。只发一次。 */
+  private dropped(code: number): void {
+    if (!this.connected) return;
+    this.connected = false;
+    this.stopHeartbeat();
+    this.dispatchEvent(new CloseEvent("close", { code }));
+  }
+
+  private stop(code: number): void {
     if (this.fatal !== null) return;
-    this.state = CONNECTING;
-    const Socket = this.source.WebSocket;
-    let socket: WebSocket;
-    try {
-      socket = new Socket(
-        runtimeSocketUrl(this.source.wsBase, CONTROL_PATH),
-        CONTROL_PROTOCOL,
-      );
-    } catch {
-      this.schedule();
-      return;
-    }
-    this.socket = socket;
-    socket.onopen = () => {
-      if (this.socket !== socket) return;
-      this.state = OPEN;
-      this.attempt = 0;
-      this.startHeartbeat();
-      this.dispatchEvent(new Event("open"));
-    };
-    socket.onmessage = (event: MessageEvent) => {
-      if (this.socket !== socket) return;
-      this.dispatchEvent(new MessageEvent("message", { data: event.data }));
-    };
-    socket.onclose = (event: CloseEvent) => {
-      if (this.socket !== socket) return;
-      this.drop(socket, event.code, false);
-    };
-    // `onerror` 之后一定还有 `onclose`；重连只挂在 close 上。
-    socket.onerror = () => {};
-  }
-
-  /** 内层 socket 没了：决定停下、立刻重连还是退避。 */
-  private drop(socket: WebSocket, code: number, now: boolean): void {
-    socket.onopen = null;
-    socket.onmessage = null;
-    socket.onclose = null;
-    socket.onerror = null;
-    if (socket.readyState === CONNECTING || socket.readyState === OPEN) {
-      try {
-        socket.close();
-      } catch {
-        // 已经在关。
-      }
-    }
-    this.socket = null;
-    this.stopHeartbeat();
-    if (FATAL_CLOSE_CODES.has(code)) {
-      this.stop(code, true);
-      return;
-    }
-    // 先置回「连接中」再发 close：peer 客户端结束在途的调用，订阅的重订等下一
-    // 次 open 再发。
-    this.state = CONNECTING;
-    this.dispatchEvent(new CloseEvent("close", { code }));
-    const clock = this.environment.now ?? Date.now;
-    if (code === CLOSE_EXPIRED) {
-      const at = clock();
-      const fresh = at - this.lastExpired > EXPIRED_RETRY_WINDOW_MS;
-      this.lastExpired = at;
-      if (fresh) {
-        // 令牌到期：续了凭据立刻换票重连一次，不退避。
-        void this.source.credentials
-          .renew(null)
-          .catch(() => false)
-          .then(() => {
-            if (this.socket === null && this.timer === null) this.connect();
-          });
-        return;
-      }
-    }
-    if (now) {
-      this.connect();
-      return;
-    }
-    this.schedule();
-  }
-
-  private schedule(): void {
-    if (this.fatal !== null || this.timer !== null) return;
-    const delay = backoffDelay(this.attempt, {
-      baseMs: RECONNECT_BASE_MS,
-      capMs: this.visible() ? FOREGROUND_CAP_MS : BACKGROUND_CAP_MS,
-      random: this.environment.random,
-    });
-    this.attempt += 1;
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      this.connect();
-    }, delay);
-  }
-
-  private stop(code: number, announce: boolean): void {
     this.fatal = code;
-    this.state = CLOSED;
-    if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = null;
     this.stopHeartbeat();
-    const socket = this.socket;
-    this.socket = null;
-    if (socket !== null) {
-      socket.onopen = null;
-      socket.onmessage = null;
-      socket.onclose = null;
-      socket.onerror = null;
-      try {
-        socket.close();
-      } catch {
-        // 已经在关。
-      }
-    }
-    this.detach();
+    this.managed.close();
+    this.connected = false;
     this.dispatchEvent(new CloseEvent("close", { code }));
-    if (announce) {
-      for (const listener of [...fatalListeners]) listener(code, this.source);
-    }
+    for (const listener of [...fatalListeners]) listener(code);
   }
 
   private startHeartbeat(): void {
@@ -331,7 +244,7 @@ export class ControlChannel extends EventTarget {
   }
 }
 
-type FatalListener = (code: number, source: Source) => void;
+type FatalListener = (code: number) => void;
 const fatalListeners = new Set<FatalListener>();
 
 /** 控制面因 4403 / 4409 / 4429 停下（页面据此提示）。 */
@@ -347,20 +260,22 @@ export function closeMessageKey(code: number): string | undefined {
   return CLOSE_MESSAGE_KEYS[code];
 }
 
-const channels = new WeakMap<Source, ControlChannel>();
+const channels = new WeakMap<ControlSocketOpener, ControlChannel>();
 
 /** 这个源的控制面连接，第一次用时才连。停下（致命关闭）的不复用。 */
-export function controlChannel(source: Source): ControlChannel {
-  let channel = channels.get(source);
+export function controlChannel(
+  connection: ControlSocketOpener,
+): ControlChannel {
+  let channel = channels.get(connection);
   if (channel === undefined || channel.closedWith !== null) {
-    channel = new ControlChannel(source);
-    channels.set(source, channel);
+    channel = new ControlChannel(connection);
+    channels.set(connection, channel);
   }
   return channel;
 }
 
-/** 测试用：丢掉某个源的连接。 */
-export function resetControlChannel(source: Source): void {
-  channels.get(source)?.close();
-  channels.delete(source);
+/** 测试用：丢掉某个源的控制面连接。 */
+export function resetControlChannel(connection: ControlSocketOpener): void {
+  channels.get(connection)?.close();
+  channels.delete(connection);
 }
