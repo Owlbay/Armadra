@@ -71,6 +71,13 @@ export class SyncConnection {
   /** 这条连接在 awareness 里登记过的 clientID，断开时一起清掉。 */
   readonly awarenessIds = new Set<number>();
   private closed = false;
+  /**
+   * 背压（平台规格 core 包 §3.3）：这条连接的 socket 跟不上时，别人的更新与
+   * awareness 不再往它的队列里塞，只记下「漏了」；恢复时一次补齐。
+   */
+  private paused = false;
+  private missedUpdates = false;
+  private missedAwareness = false;
 
   constructor(
     private readonly room: SyncRoom,
@@ -180,12 +187,59 @@ export class SyncConnection {
     throw new Error(`unknown sync message ${subtype}`);
   }
 
-  /** 别人写的一条文档更新，转给这条连接。 */
+  /** 别人写的一条文档更新，转给这条连接。暂停时只记下漏了。 */
   sendUpdate(update: Uint8Array): void {
+    if (this.paused) {
+      this.missedUpdates = true;
+      return;
+    }
     const encoder = encoding.createEncoder();
     encoding.writeVarUint(encoder, MESSAGE_SYNC);
     syncProtocol.writeUpdate(encoder, update);
     this.send(encoding.toUint8Array(encoder));
+  }
+
+  /** 一帧广播的 awareness。暂停时丢掉：恢复时补发的是当前的全部状态。 */
+  sendAwareness(frame: Uint8Array): void {
+    if (this.paused) {
+      this.missedAwareness = true;
+      return;
+    }
+    this.send(frame);
+  }
+
+  /** socket 积压过了高水位：停止向它广播。 */
+  pause(): void {
+    this.paused = true;
+  }
+
+  /**
+   * socket 排空了：补上暂停期间漏掉的。文档发一次 step1（客户端照常回它有而
+   * core 缺的）加一份完整状态的 step2——core 不知道客户端的状态向量，整份状态
+   * 应用起来是幂等的，客户端已有的部分不会重复；awareness 发当前的全部。
+   */
+  resume(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    if (this.closed) return;
+    if (this.missedUpdates) {
+      this.missedUpdates = false;
+      const step1 = encoding.createEncoder();
+      encoding.writeVarUint(step1, MESSAGE_SYNC);
+      syncProtocol.writeSyncStep1(step1, this.room.doc);
+      this.send(encoding.toUint8Array(step1));
+      const step2 = encoding.createEncoder();
+      encoding.writeVarUint(step2, MESSAGE_SYNC);
+      syncProtocol.writeSyncStep2(step2, this.room.doc);
+      this.send(encoding.toUint8Array(step2));
+    }
+    if (this.missedAwareness) {
+      this.missedAwareness = false;
+      const states = this.room.awareness.getStates();
+      if (states.size > 0) {
+        this.send(awarenessFrame(this.room.awareness, [...states.keys()]));
+      }
+    }
   }
 
   send(frame: Uint8Array): void {

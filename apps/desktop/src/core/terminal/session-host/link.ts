@@ -110,6 +110,20 @@ export class Link {
   }
 
   /**
+   * Stops reading from the host until {@link resume}. The host measures its
+   * side of this socket (`writableLength`) and, once this connection falls
+   * behind, pauses the console it is reading from — so a viewer that is not
+   * keeping up slows the CLI the way a real terminal would.
+   */
+  pause(): void {
+    if (!this.closed) this.socket.pause();
+  }
+
+  resume(): void {
+    if (!this.closed) this.socket.resume();
+  }
+
+  /**
    * Closes this connection. For an attached connection that is a **detach**:
    * the host keeps the session, and only `destroy` ends one.
    */

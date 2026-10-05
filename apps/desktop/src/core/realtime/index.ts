@@ -36,7 +36,17 @@ import { RealtimeHub, type LiveBoard } from "./hub";
 import { installCommentRoutes } from "./comments-routes";
 import { realtimeHooks } from "./intercept";
 import { isRealtime, realtimeRow } from "./store";
-import { CLOSE_BAD_FRAME, CLOSE_FORBIDDEN, SyncConnection } from "./sync";
+import { CLOSE_BACKPRESSURE, SendQueue, wsTarget } from "../http/stream-queue";
+import {
+  CLOSE_BAD_FRAME,
+  CLOSE_FORBIDDEN,
+  MAX_FRAME_BYTES,
+  SyncConnection,
+} from "./sync";
+
+/** 平台规格 core 包 §3.3：实时协同 `pause`，256 帧、2 MiB。 */
+export const SYNC_MAX_FRAMES = 256;
+export const SYNC_HIGH_WATER_BYTES = 2 * 1024 * 1024;
 
 export { RealtimeHub } from "./hub";
 export { SyncConnection } from "./sync";
@@ -142,10 +152,15 @@ export function install(context: CoreContext): RealtimeHub {
         return;
       }
       let writable = permitted(identity, "canvas:write", workspace);
-      const conn = new SyncConnection(live, socketPeer(socket), {
-        principalId: identity?.subject.principalId ?? "",
-        canWrite: () => writable,
-      });
+      // 发送端在连接之前造，回调到时（greet 之后）连接早已在。
+      const conn: SyncConnection = new SyncConnection(
+        live,
+        socketPeer(socket, () => conn),
+        {
+          principalId: identity?.subject.principalId ?? "",
+          canWrite: () => writable,
+        },
+      );
       const room = live;
       hub.attach(room, conn);
       conn.greet();
@@ -198,6 +213,9 @@ export function install(context: CoreContext): RealtimeHub {
       }
       return undefined;
     },
+    // 首个 step2 可以有整块板那么大（契约 §16.1 的 16 MiB）；超过由 `ws` 以
+    // 1009 关流，与 `SyncConnection.receive` 自己的检查同一个码。
+    { maxPayload: MAX_FRAME_BYTES },
   );
 
   return hub;
@@ -211,10 +229,25 @@ function boardIdOf(match: {
   return id;
 }
 
-function socketPeer(socket: WebSocket) {
+/**
+ * 一条连接的发送端：背压按平台规格 core 包 §3.3 的 `pause`——积压过 2 MiB
+ * 就让这条连接停收广播（`SyncConnection.pause`），排空后一次补齐；排着的只有
+ * 回答它自己请求的帧，满 256 帧就以 1013 关流（客户端重连后按 step1 / step2
+ * 重新同步）。
+ */
+function socketPeer(socket: WebSocket, flow: () => SyncConnection) {
+  const queue = new SendQueue(wsTarget(socket, { binary: true }), {
+    policy: "pause",
+    maxFrames: SYNC_MAX_FRAMES,
+    highWaterBytes: SYNC_HIGH_WATER_BYTES,
+    onPause: () => flow().pause(),
+    onResume: () => flow().resume(),
+    onOverflow: () => socket.close(CLOSE_BACKPRESSURE, "backpressure"),
+  });
+  socket.on("close", () => queue.close());
   return {
     send(frame: Uint8Array) {
-      socket.send(frame, { binary: true });
+      queue.push(frame);
     },
     close(code: number, reason: string) {
       socket.close(code, reason);

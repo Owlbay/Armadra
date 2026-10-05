@@ -536,6 +536,9 @@ export class SessionHostBackend implements AdoptableBackend {
         for (const chunk of buffered.splice(0)) listener(chunk);
       },
       onExit: (listener) => exitListeners.push(listener),
+      // One host connection per attachment: not reading it is the pause.
+      pause: () => link.pause(),
+      resume: () => link.resume(),
     };
   }
 

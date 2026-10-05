@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { EventBus, WORKSPACE_EVENT_TYPES, type WorkspaceEvent } from "../bus";
 import {
+  EVENT_HIGH_WATER_BYTES,
   MAX_QUEUED_FRAMES,
   WorkspaceEventStream,
   type EventSink,
@@ -31,7 +32,12 @@ function immediate(): { sink: EventSink; frames: string[] } {
   };
 }
 
-/** A sink that never finishes a write until it is released — the stuck client. */
+/**
+ * A sink whose socket is stuck — its backlog sits above the high-water mark and
+ * no write finishes — until it is released. The bound lives in the shared
+ * `SendQueue` now; what these cases pin is that the event stream hands it the
+ * contract's numbers (256 frames, drop-oldest, 1 MiB).
+ */
 function stalled(): {
   sink: EventSink;
   frames: string[];
@@ -39,6 +45,7 @@ function stalled(): {
 } {
   const frames: string[] = [];
   const pending: (() => void)[] = [];
+  let backlog = EVENT_HIGH_WATER_BYTES;
   return {
     frames,
     sink: {
@@ -46,8 +53,12 @@ function stalled(): {
         frames.push(frame);
         pending.push(written);
       },
+      get bufferedAmount() {
+        return backlog;
+      },
     },
     flush: () => {
+      backlog = 0;
       // Drain in order; each release may enqueue the next frame.
       while (pending.length > 0) (pending.shift() as () => void)();
     },

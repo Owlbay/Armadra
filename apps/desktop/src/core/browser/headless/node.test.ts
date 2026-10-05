@@ -237,6 +237,37 @@ describe("the one viewer", () => {
     made.close();
   });
 
+  /**
+   * A viewer with a send queue gets the header and the JPEG as one unit, so
+   * its queue can keep or drop them together (`coalesce`, platform spec core
+   * packages §3.3).
+   */
+  it("hands a frame's header and bytes over together when the viewer can take a pair", async () => {
+    const made = backend();
+    const node = await made.ensure("node-a");
+    const pairs: { header: Record<string, unknown>; bytes: number }[] = [];
+    const singles: unknown[] = [];
+    node.attachViewer({
+      send: (data) => singles.push(data),
+      sendFrame: (header, jpeg) =>
+        pairs.push({
+          header: JSON.parse(header) as Record<string, unknown>,
+          bytes: jpeg.byteLength,
+        }),
+      close: () => {},
+    });
+    await settle();
+    const session = fake.sessionFor(node.listTabs()[0]?.id ?? "");
+    fake.frame(session, 21);
+    await settle();
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]?.header).toMatchObject({ type: "frame", seq: 1 });
+    expect(pairs[0]?.bytes).toBeGreaterThan(0);
+    // Only the hello went the single-message way.
+    expect(singles).toHaveLength(1);
+    made.close();
+  });
+
   it("acknowledges frames even with nobody left to send them to", async () => {
     const made = backend();
     const node = await made.ensure("node-a");

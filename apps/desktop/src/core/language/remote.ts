@@ -23,7 +23,8 @@ import { notFound } from "../workspaces/support";
 import type { Workspace } from "../workspaces/table";
 import type { ApplyResult, AppliedFile } from "./edits";
 import type { JsonValue } from "./jsonrpc";
-import { reason } from "./limits";
+import { SESSION_HIGH_WATER_BYTES, SESSION_MAX_FRAMES, reason } from "./limits";
+import { CLOSE_BACKPRESSURE, SendQueue, wsTarget } from "../http/stream-queue";
 import type { OpenedSession } from "./lifecycle";
 import {
   languages,
@@ -44,6 +45,12 @@ interface RemoteSession {
   readonly serverId: string;
   readonly generation: number;
   socket: WebSocket | undefined;
+  /**
+   * The socket's send queue. The Worker's pushes cannot be paused from here,
+   * so a socket that stops reading fills it and is closed with 1013 rather
+   * than given an unbounded backlog (platform spec, core packages §3.3).
+   */
+  sender: SendQueue | undefined;
   readonly queue: string[];
   timer: ReturnType<typeof setTimeout> | undefined;
   /** 发往 Worker 的消息按序串起来：一条没写出去，后面的不能先到。 */
@@ -112,7 +119,7 @@ export class RemoteLanguage {
         return;
       }
       if (session.hostId !== hostId) return;
-      if (session.socket !== undefined) session.socket.send(body);
+      if (session.sender !== undefined) session.sender.push(body);
       else session.queue.push(body);
       return;
     }
@@ -248,6 +255,7 @@ export class RemoteLanguage {
       serverId: opened.serverId,
       generation: opened.generation,
       socket: undefined,
+      sender: undefined,
       queue: this.early.get(opened.sessionId)?.frames ?? [],
       timer: undefined,
       sending: Promise.resolve(),
@@ -348,9 +356,17 @@ export class RemoteLanguage {
       return false;
     }
     session.socket = socket;
+    const sender = new SendQueue(wsTarget(socket), {
+      policy: "pause",
+      maxFrames: SESSION_MAX_FRAMES,
+      highWaterBytes: SESSION_HIGH_WATER_BYTES,
+      onOverflow: () => socket.close(CLOSE_BACKPRESSURE, "backpressure"),
+    });
+    session.sender = sender;
+    socket.on("close", () => sender.close());
     if (session.timer !== undefined) clearTimeout(session.timer);
     session.timer = undefined;
-    for (const body of session.queue.splice(0)) socket.send(body);
+    for (const body of session.queue.splice(0)) sender.push(body);
     socket.on("message", (data, isBinary) => {
       if (isBinary) return;
       const body = Buffer.from(data as Buffer).toString("utf8");

@@ -48,6 +48,12 @@ const DEFAULT_VIEWPORT = clampViewport(1_280, 800);
 
 export interface ViewerSocket {
   send(data: string | Buffer): void;
+  /**
+   * One screencast frame: the JSON header and the JPEG it describes, which
+   * must travel together. A socket with a send queue keeps only the newest
+   * pair when it falls behind; without this, the two `send`s are the frame.
+   */
+  sendFrame?(header: string, jpeg: Buffer): void;
   close(code?: number, reason?: string): void;
 }
 
@@ -642,11 +648,14 @@ export class HeadlessNode {
     if (viewer === undefined || typeof frame.data !== "string") return;
     const bytes = Buffer.from(frame.data, "base64");
     this.frames += 1;
-    viewer.send(
-      JSON.stringify(
-        frameHeader(this.frames, frame.metadata, this.viewport, bytes.length),
-      ),
+    const header = JSON.stringify(
+      frameHeader(this.frames, frame.metadata, this.viewport, bytes.length),
     );
+    if (viewer.sendFrame !== undefined) {
+      viewer.sendFrame(header, bytes);
+      return;
+    }
+    viewer.send(header);
     viewer.send(bytes);
   }
 

@@ -129,6 +129,67 @@ export const SERVICES = [
     },
   },
   {
+    name: "platform-postgres",
+    ports: [5441],
+    profile: "platform",
+    purpose: "云控制面的 PostgreSQL（平台设计 §13.4）",
+    check: () => tcpOpen(HOST, 5441),
+  },
+  {
+    name: "platform-redis",
+    ports: [6391],
+    profile: "platform",
+    purpose: "云控制面与中继共用的 Redis",
+    check: () => tcpOpen(HOST, 6391),
+  },
+  {
+    name: "cloud",
+    ports: [8100],
+    profile: "platform",
+    dependsOn: ["platform-postgres", "platform-redis"],
+    purpose: "armadra-cloud 控制面（云仓；SaaS 路由预留，答 501）",
+    check: async () => {
+      // /ready 逐项报 PostgreSQL 与 Redis；well-known 落地前答 501（预留）。
+      const ready = await get("http://127.0.0.1:8100/ready");
+      expect(ready.status === 200, `ready status ${ready.status}`);
+      await platformMode("http://127.0.0.1:8100", "saas");
+    },
+  },
+  {
+    name: "relay",
+    ports: [8101],
+    profile: "platform",
+    dependsOn: ["platform-redis"],
+    purpose: "多租户中继（saas 模式，本地走 HTTP，地址 *.src.localhost）",
+    check: async () => {
+      const { status } = await get("http://127.0.0.1:8101/health");
+      expect(status === 200, `status ${status}`);
+    },
+  },
+  {
+    name: "relay-personal",
+    ports: [8103],
+    profile: "personal",
+    purpose: "单人中转（personal 模式，不带数据库）",
+    // R2 落地前只有 --tls plain；落地后是自签 TLS。两种都认，只对回环。
+    check: async () => {
+      const base = await first(
+        ["https://127.0.0.1:8103", "http://127.0.0.1:8103"],
+        "/health",
+      );
+      expect(base.status === 200, `status ${base.status}`);
+      await platformMode(base.origin, "personal");
+    },
+  },
+  {
+    name: "armadra-server-nat",
+    ports: [],
+    profile: ["platform", "personal"],
+    purpose:
+      "模拟在 NAT 后、只能外连的 core：不发布端口，健康由容器内自己的 /health 给出",
+    check: () => containerHealthy("armadra-server-nat"),
+  },
+  {
     name: "headscale",
     ports: [8094],
     profile: "headscale",
@@ -190,8 +251,23 @@ export const S3_DEV = {
   region: "us-east-1",
 };
 
+/** 服务所属的 profile 列表（`profile` 可以是一个名字或一组）。 */
+export function profilesOf(service) {
+  if (!service.profile) return [];
+  return Array.isArray(service.profile) ? service.profile : [service.profile];
+}
+
+/**
+ * 这些 profile 是自成一体的环境：只选它们自己的服务，不连带默认那组。
+ * 其余 profile（headscale、ntfy…）只是在默认那组之上加料。
+ */
+export const SCOPED_PROFILES = ["platform", "personal"];
+
 /** Compose services that exist only to back another one. */
 export const SUPPORT_SERVICES = ["glitchtip-postgres", "glitchtip-redis"];
+
+/** dev-stack 的 compose 项目名（与 docker-compose.yml 的 `name:` 一致）。 */
+export const PROJECT = "armadra-dev";
 
 function expect(condition, message) {
   if (!condition) throw new Error(message);
@@ -238,6 +314,46 @@ export async function get(url, { timeoutMs = 5000 } = {}) {
     outgoing.on("error", reject);
     outgoing.end();
   });
+}
+
+/**
+ * 平台协议的 well-known：200 时 `mode` 必须对得上；501（SaaS 预留）与 404（personal 的 R2 之前）是落地前的回答，
+ * 视为通过；其余都算失败。
+ */
+async function platformMode(origin, mode) {
+  const { status, body } = await get(`${origin}/.well-known/armadra-platform`);
+  if (status === 501 || status === 404) return;
+  expect(status === 200, `well-known status ${status}`);
+  expect(JSON.parse(body).mode === mode, `mode ${JSON.parse(body).mode}`);
+}
+
+/** 依次试几个回环源，取第一个连得上的（自签 TLS 与 plain 并存的过渡期）。 */
+async function first(origins, path) {
+  let last;
+  for (const origin of origins) {
+    try {
+      return { origin, ...(await get(`${origin}${path}`)) };
+    } catch (error) {
+      last = error;
+    }
+  }
+  throw last;
+}
+
+/**
+ * 没有发布端口的服务：进容器里打它自己的回环 /health（宿主机够不到它，这正是「NAT 后」的
+ * 含义）。容器没在跑、或 /health 不答 200 都算失败。
+ */
+async function containerHealthy(service, port = 8443) {
+  const { spawnSync } = await import("node:child_process");
+  const docker = process.env.ARMADRA_DEV_STACK_DOCKER || "docker";
+  const script = `process.env.NODE_TLS_REJECT_UNAUTHORIZED="0";fetch("https://127.0.0.1:${port}/health").then((r)=>process.exit(r.ok?0:1),()=>process.exit(1))`;
+  const result = spawnSync(
+    docker,
+    ["exec", `${PROJECT}-${service}-1`, "node", "-e", script],
+    { encoding: "utf8", timeout: 10_000 },
+  );
+  expect(result.status === 0, `container ${service} /health failed`);
 }
 
 async function discovery(issuer) {
@@ -319,7 +435,13 @@ export function selectServices({ names = [], profiles = [] } = {}) {
       throw new Error(`unknown dev-stack service: ${unknown.join(", ")}`);
     return SERVICES.filter((service) => names.includes(service.name));
   }
+  if (profiles.some((profile) => SCOPED_PROFILES.includes(profile)))
+    return SERVICES.filter((service) =>
+      profilesOf(service).some((profile) => profiles.includes(profile)),
+    );
   return SERVICES.filter(
-    (service) => !service.profile || profiles.includes(service.profile),
+    (service) =>
+      profilesOf(service).length === 0 ||
+      profilesOf(service).some((profile) => profiles.includes(profile)),
   );
 }

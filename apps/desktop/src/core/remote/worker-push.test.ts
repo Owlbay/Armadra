@@ -579,8 +579,11 @@ describe("remote resources", () => {
 class FakeSocket extends EventEmitter {
   readonly sent: string[] = [];
   closed: number | undefined;
-  send(body: string): void {
+  readonly readyState = 1;
+  readonly bufferedAmount = 0;
+  send(body: string, written?: () => void): void {
     this.sent.push(body);
+    written?.();
   }
   close(code?: number): void {
     this.closed = code ?? 1000;

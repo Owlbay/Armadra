@@ -24,6 +24,7 @@ import {
   runAs,
 } from "../identity/gate";
 import type { AuthorizationSubject } from "../identity/authorize";
+import { MAX_FRAME_BYTES } from "../identity/protocol";
 import { type HookHealth, NO_HOOK_SERVICE, healthDocument } from "./health";
 import { type CoreRequest, type HandlerResult, Router } from "./router";
 
@@ -67,6 +68,22 @@ export const CLOSE_GRACE_MS = 2_000;
 /** What a body may weigh before the core stops reading it. */
 export const MAX_BODY_BYTES = 12 * 1024 * 1024;
 
+/**
+ * 一条流上客户端一帧的缺省上限：`GET /api/identity/hello` 报的 `maxFrameBytes`
+ * （`identity/protocol.ts`）。帧本来就大的流在 {@link CoreServer.stream} 里各自
+ * 声明（实时协同的首个 step2、终端的大段粘贴）。超过的帧由 `ws` 以 `1009` 关流。
+ */
+export const DEFAULT_MAX_PAYLOAD_BYTES = MAX_FRAME_BYTES;
+
+/**
+ * `ws` 层心跳的间隔（工程规范化 §3.3）：每隔这么久给每条流发一个 ping 控制帧，
+ * 浏览器自己回 pong。连续 {@link HEARTBEAT_MISSES} 次没有 pong 就 `terminate()`——
+ * 半开的连接（睡眠的笔记本、断了的隧道）不再占着终端的附着与队列。ping 同时给
+ * 中继与代理保活（很多代理 60 秒空闲就断）。
+ */
+export const HEARTBEAT_MS = 25_000;
+export const HEARTBEAT_MISSES = 2;
+
 export interface CoreServerOptions {
   readonly platform: CorePlatform;
   readonly bus: EventBus;
@@ -74,11 +91,17 @@ export interface CoreServerOptions {
   /** R3 replaces this; R0 reports a core with no hook service. */
   readonly hookHealth?: () => HookHealth;
   readonly maxBodyBytes?: number;
+  /** ws 层心跳间隔；`0` 关掉。缺省 {@link HEARTBEAT_MS}。 */
+  readonly heartbeatMs?: number;
 }
 
 export class CoreServer {
   readonly router = new Router();
-  private readonly websockets: WebSocketServer;
+  /** 按单帧上限分的 `ws` 服务器：`maxPayload` 是服务器级的选项。 */
+  private readonly websockets = new Map<number, WebSocketServer>();
+  /** 每条连接连续几次 ping 没等到 pong。 */
+  private readonly missedPongs = new WeakMap<WebSocket, number>();
+  private heartbeat: NodeJS.Timeout | undefined;
   private readonly servers: Server[] = [];
   private readonly streams = new Map<string, StreamRegistration>();
   private readonly rawRoutes: { prefix: string; handler: RawHandler }[] = [];
@@ -90,12 +113,6 @@ export class CoreServer {
 
   constructor(options: CoreServerOptions) {
     this.options = options;
-    this.websockets = new WebSocketServer({
-      noServer: true,
-      // Terminal frames are the reason: compression on a stream of escape
-      // sequences costs CPU per frame for a ratio the transport does not need.
-      perMessageDeflate: false,
-    });
     const health = () => ({
       status: 200,
       body: healthDocument({
@@ -446,7 +463,9 @@ export class CoreServer {
       // 设备或会话、登出、停用账号、收回共享）就按同一道路由门复核一次，不过就
       // 以 4403 关流——终端、语言服务、浏览器画面这些流自己不复核，靠的就是这里。
       const identity = requestIdentity();
-      this.websockets.handleUpgrade(request, socket, head, (connection) => {
+      const websockets = this.websocketsFor(registration.maxPayload);
+      websockets.handleUpgrade(request, socket, head, (connection) => {
+        this.track(connection);
         registration.open(connection, found.params, core);
         if (identity === undefined) return;
         const permitted = (subject: AuthorizationSubject) =>
@@ -511,8 +530,76 @@ export class CoreServer {
    * `guard` may refuse the upgrade with an HTTP status before any socket
    * exists — the only way to answer 404/401/409 the way an HTTP route would.
    */
-  stream(path: string, handler: StreamHandler, guard?: StreamGuard): void {
-    this.streams.set(path, { open: handler, guard });
+  stream(
+    path: string,
+    handler: StreamHandler,
+    guard?: StreamGuard,
+    options: StreamOptions = {},
+  ): void {
+    this.streams.set(path, {
+      open: handler,
+      guard,
+      maxPayload: options.maxPayload ?? DEFAULT_MAX_PAYLOAD_BYTES,
+    });
+  }
+
+  private websocketsFor(maxPayload: number): WebSocketServer {
+    let websockets = this.websockets.get(maxPayload);
+    if (websockets === undefined) {
+      websockets = new WebSocketServer({
+        noServer: true,
+        maxPayload,
+        // Terminal frames are the reason: compression on a stream of escape
+        // sequences costs CPU per frame for a ratio the transport does not need.
+        perMessageDeflate: false,
+      });
+      this.websockets.set(maxPayload, websockets);
+    }
+    return websockets;
+  }
+
+  /**
+   * 把一条刚升级的连接挂上心跳。一个定时器管全部连接：每一跳先看上一跳的
+   * ping 有没有回音，连续 {@link HEARTBEAT_MISSES} 跳没有就 `terminate()`（不走
+   * 关闭握手——对端已经不说话了），否则再 ping 一次。
+   */
+  private track(connection: WebSocket): void {
+    // 一帧超限、坏帧这类协议错误由 `ws` 以 `error` 事件报出，紧接着自己关流。
+    // 没有监听者的 `error` 是进程级的未捕获异常——一个客户端发一帧大的就能把
+    // core 打掉——所以在这里统一接住；各流照旧在 `close` 里收尾。
+    connection.on("error", () => {});
+    const interval = this.options.heartbeatMs ?? HEARTBEAT_MS;
+    if (interval <= 0) return;
+    this.missedPongs.set(connection, 0);
+    connection.on("pong", () => this.missedPongs.set(connection, 0));
+    if (this.heartbeat !== undefined) return;
+    this.heartbeat = setInterval(() => this.beat(), interval);
+    this.heartbeat.unref();
+  }
+
+  private beat(): void {
+    let open = 0;
+    for (const websockets of this.websockets.values()) {
+      for (const client of websockets.clients) {
+        if (client.readyState !== client.OPEN) continue;
+        const missed = this.missedPongs.get(client) ?? 0;
+        if (missed >= HEARTBEAT_MISSES) {
+          client.terminate();
+          continue;
+        }
+        open += 1;
+        this.missedPongs.set(client, missed + 1);
+        try {
+          client.ping();
+        } catch {
+          // 正在关的 socket；下一跳就不在 `clients` 里了。
+        }
+      }
+    }
+    if (open === 0 && this.heartbeat !== undefined) {
+      clearInterval(this.heartbeat);
+      this.heartbeat = undefined;
+    }
   }
 
   /** 这条路径有一个真的流在等升级。路由表的对账用例问的就是它。 */
@@ -533,8 +620,12 @@ export class CoreServer {
    * worth keeping the process alive for.
    */
   async close(): Promise<void> {
-    for (const client of this.websockets.clients) client.terminate();
-    this.websockets.close();
+    if (this.heartbeat !== undefined) clearInterval(this.heartbeat);
+    this.heartbeat = undefined;
+    for (const websockets of this.websockets.values()) {
+      for (const client of websockets.clients) client.terminate();
+      websockets.close();
+    }
     await Promise.all(
       this.servers.map(
         (server) =>
@@ -598,6 +689,15 @@ const EMPTY_BODY = Buffer.alloc(0);
 interface StreamRegistration {
   readonly open: StreamHandler;
   readonly guard?: StreamGuard;
+  readonly maxPayload: number;
+}
+
+export interface StreamOptions {
+  /**
+   * 客户端一帧的上限，缺省 {@link DEFAULT_MAX_PAYLOAD_BYTES}。超过的帧由 `ws`
+   * 以 `1009` 关流。
+   */
+  readonly maxPayload?: number;
 }
 
 /** Writes its own status, headers and body; `cors` are the headers to include. */

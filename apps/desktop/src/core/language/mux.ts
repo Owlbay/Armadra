@@ -175,6 +175,13 @@ export class Hub {
   features: Feature[] = [];
   readonly documents = new Documents();
   readonly sessions = new Map<string, Sink>();
+  /**
+   * Sessions whose socket is behind (backpressure, platform spec core
+   * packages §3.3). One server answers every session of the hub, so its
+   * stdout is paused while any of them is: the alternative is an unbounded
+   * backlog for the slow one.
+   */
+  private readonly pausedSessions = new Set<string>();
   readonly pending = new Map<string, Pending>();
   sequence = 0;
   stderrTail = "";
@@ -251,6 +258,7 @@ export class Hub {
       return reason.SERVER_PROBE_FAILED;
     }
     this.process = started;
+    this.applyFlow();
     this.generation = generation;
     this.state = "starting";
     this.reason = undefined;
@@ -424,6 +432,30 @@ export class Hub {
         ? { stderrTail: this.stderrTail }
         : {}),
     });
+  }
+
+  /** The session's socket is behind: stop reading the server. */
+  pauseSession(sessionId: string): void {
+    if (!this.sessions.has(sessionId) || this.pausedSessions.has(sessionId)) {
+      return;
+    }
+    this.pausedSessions.add(sessionId);
+    this.applyFlow();
+  }
+
+  /** The session's socket drained, or the session is gone. */
+  resumeSession(sessionId: string): void {
+    if (this.pausedSessions.delete(sessionId)) this.applyFlow();
+  }
+
+  /** Whether the server's output is being held back for a slow session. */
+  get outputPaused(): boolean {
+    return this.pausedSessions.size > 0;
+  }
+
+  private applyFlow(): void {
+    if (this.pausedSessions.size > 0) this.process?.pause();
+    else this.process?.resume();
   }
 
   /** Sends one already-rewritten message to one session. */

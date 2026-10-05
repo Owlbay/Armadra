@@ -68,6 +68,39 @@ describe("language/mux", () => {
     expect(test.hub.documents.size).toBe(1);
   });
 
+  /**
+   * Backpressure (platform spec, core packages §3.3): while a session's socket
+   * is behind, the server's stdout is not read — its answers wait in the pipe,
+   * not in this process — and they all arrive once it resumes.
+   */
+  it("holds the server's output while a session is paused, and delivers it on resume", async () => {
+    const test = start();
+    test.join("a", true);
+    test.join("b", true);
+    await test.hub.ensureStarted();
+    test.send("a", didOpen("armadra:///notes.md", "alpha beta\n"));
+    await test.expect("a", diagnosticsFor("armadra:///notes.md"));
+
+    test.hub.pauseSession("b");
+    test.hub.pauseSession("b");
+    expect(test.hub.outputPaused).toBe(true);
+    test.send("a", hoverOf(41));
+    const held = await test.expect("a", isResponse("41"), 500);
+    expect(held).toBeUndefined();
+
+    test.hub.resumeSession("b");
+    expect(test.hub.outputPaused).toBe(false);
+    expect(await test.expect("a", isResponse("41"))).toBeDefined();
+  });
+
+  it("does not pause for a session it does not know", async () => {
+    const test = start();
+    test.join("a", true);
+    await test.hub.ensureStarted();
+    test.hub.pauseSession("ghost");
+    expect(test.hub.outputPaused).toBe(false);
+  });
+
   it("two sessions using the same request id get their own answers", async () => {
     const test = start();
     test.join("a", true);

@@ -322,6 +322,37 @@ pnpm dev-stack down gitea              # 只停并删这几个
 `armadra-server` 第一次 `up` 要在容器里装依赖并构建页面与服务器壳，耗时几分钟；源码变了用
 `pnpm dev-stack up armadra-server --build` 重建。
 
+## 本地平台环境
+
+平台（云控制面、中继、单人中转）的本地替身也在 dev-stack 里，用两个自成一体的 profile：起 `platform` /
+`personal` 只会起各自的服务，不连带默认那组。云仓（`armadra-cloud`）的镜像缺省取 GHCR 的钉版本；
+设了 `ARMADRA_DEV_STACK_CLOUD_SRC=<armadra-cloud 克隆>`（或克隆就在本仓库旁边的 `../armadra-cloud`）时
+改为本地构建，并打印一行说明。
+
+```sh
+pnpm platform:personal   # 个人中转：relay-personal + armadra-server-nat，起来后逐个健康检查
+pnpm platform:up         # 平台：postgres + redis + cloud + relay + armadra-server-nat，并跑 cloud 迁移
+pnpm platform:health     # 只跑 platform 的健康检查
+pnpm platform:down       # 只停 platform 的服务（不影响默认那组与别的 worktree）
+pnpm platform:e2e        # 跨仓端到端，占位，随 V1 接入
+pnpm dev-stack down relay-personal armadra-server-nat   # 停个人中转那组：点名只停自己起的
+```
+
+`platform:down` 只停 `platform` profile；`pnpm dev-stack down` 不点名会停掉所有服务（含别的 worktree
+正在用的）。
+
+| 服务                 | 端口（127.0.0.1） | profile             | 用途                                                              |
+| -------------------- | ----------------- | ------------------- | ----------------------------------------------------------------- |
+| `platform-postgres`  | 5441              | platform            | 云控制面的 PostgreSQL（库 `armadra_cloud`）                       |
+| `platform-redis`     | 6391              | platform            | 控制面与中继共用的 Redis                                          |
+| `cloud`              | 8100              | platform            | 控制面，`/health`、`/ready`；SaaS 路由预留，答 501                |
+| `relay`              | 8101              | platform            | 多租户中继，本地走 HTTP，源地址形如 `<sourceId>.src.localhost`    |
+| `relay-personal`     | 8103              | personal            | 单人中转，不带数据库；自签 TLS 随 R2 落地，之前是 `--tls plain`   |
+| `armadra-server-nat` | 不发布            | platform / personal | 模拟在 NAT 后、只能外连的 core，健康由容器内自己的 `/health` 给出 |
+
+随机生成的 `PLATFORM_DB_PASSWORD`、`PERSONAL_RELAY_PASSWORD`、`PLATFORM_SEED_PASSWORD`、
+`ARMADRA_CLOUD_MASTER_KEY` 在首次 `up` 时补进 `tools/dev-stack/.data/dev.env`（旧文件会被补全，不会重写）。
+
 ## 来源与凭据
 
 core 的 CORS 只放行回环 HTTP 来源：桌面壳放行的是自己静态服务的那个来源（端口由内核分配，

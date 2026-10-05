@@ -114,6 +114,37 @@ describeUnix("the direct backend", () => {
     await waitFor(read, (directory as string).split("/").pop() as string);
   });
 
+  /**
+   * Backpressure (platform spec, core packages §3.3): one PTY feeds every
+   * attachment, so it stops while any of them is paused, and a detach releases
+   * that attachment's share.
+   */
+  it("pauses the PTY while an attachment is paused, and a detach releases it", async () => {
+    backend = new DirectBackend();
+    await backend.create(
+      spec("/bin/sh", ["-c", "while :; do echo tick; sleep 0.01; done"]),
+    );
+    const slow = await backend.attach(key(), 1, { cols: 80, rows: 24 });
+    const other = await backend.attach(key(), 1, { cols: 80, rows: 24 });
+    const read = collect(other);
+    await waitFor(read, "tick");
+    const sleep = (ms: number) =>
+      new Promise((resolve) => setTimeout(resolve, ms));
+
+    slow.pause?.();
+    slow.pause?.();
+    // Whatever was already read and batched lands; then nothing more.
+    await sleep(250);
+    const paused = read().length;
+    await sleep(300);
+    expect(read().length).toBe(paused);
+
+    await backend.detach(key(), slow.attachmentId);
+    const deadline = Date.now() + 5_000;
+    while (read().length === paused && Date.now() < deadline) await sleep(25);
+    expect(read().length).toBeGreaterThan(paused);
+  });
+
   it("refuses to attach with a stale generation", async () => {
     backend = new DirectBackend();
     await backend.create(spec("/bin/sh", ["-c", "sleep 5"]));
