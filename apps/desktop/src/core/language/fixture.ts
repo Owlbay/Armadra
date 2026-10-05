@@ -46,7 +46,10 @@ export class Harness {
   private readonly inboxes = new Map<string, JsonObject[]>();
   private readonly waiters = new Map<string, () => void>();
 
-  constructor(extra: readonly string[] = []) {
+  constructor(
+    extra: readonly string[] = [],
+    options: { shutdownGraceMs?: number } = {},
+  ) {
     this.root = realpathSync(mkdtempSync(join(tmpdir(), "armadra-language-")));
     const events: HubEvents = {
       session: (event) => this.sessionEvents.push(event),
@@ -67,7 +70,7 @@ export class Harness {
       version: "0.0.0-test",
       // The mock exits on `exit`; waiting the production grace period per case
       // would cost the suite a minute for nothing.
-      shutdownGraceMs: 50,
+      shutdownGraceMs: options.shutdownGraceMs ?? 50,
     });
   }
 
