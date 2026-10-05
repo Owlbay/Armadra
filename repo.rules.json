@@ -42,23 +42,11 @@
   "docs": {
     "root": "docs",
     "index": "docs/README.md",
-    "directoryOnly": [
-      "history",
-      "research"
-    ]
+    "directoryOnly": ["history", "research"]
   },
   "links": {
-    "include": [
-      "*.md",
-      "apps/",
-      "assets/",
-      "docs/",
-      "packages/",
-      "tools/"
-    ],
-    "exclude": [
-      ".claude/"
-    ]
+    "include": ["*.md", "apps/", "assets/", "docs/", "packages/", "tools/"],
+    "exclude": [".claude/"]
   },
   "naming": [
     {
@@ -74,21 +62,9 @@
   ],
   "fileSize": {
     "max": 1500,
-    "roots": [
-      "apps",
-      "packages",
-      "tools"
-    ],
-    "extensions": [
-      ".ts",
-      ".tsx",
-      ".mjs",
-      ".js"
-    ],
-    "excludeSegments": [
-      "/gen/",
-      "/node_modules/"
-    ],
+    "roots": ["apps", "packages", "tools"],
+    "extensions": [".ts", ".tsx", ".mjs", ".js"],
+    "excludeSegments": ["/gen/", "/node_modules/"],
     "exemptions": []
   },
   "migrations": {
@@ -100,5 +76,11 @@
         "kind": "directory"
       }
     ]
-  }
+  },
+  "pinnedVersions": [
+    {
+      "$comment": "工程规范化 §5 / F15：oRPC 精确锁版、各包同一版本、不跟 beta；E6 升 2.x 时改这里的说明，不改规则。",
+      "packages": "@orpc/*"
+    }
+  ]
 }
