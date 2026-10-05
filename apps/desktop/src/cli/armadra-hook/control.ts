@@ -158,6 +158,22 @@ export function browserTimeoutMs(): number {
     : totalTimeoutMs();
 }
 
+/**
+ * How long one canvas or context verb may take, per endpoint candidate.
+ *
+ * Also NOT the hook's 1.5 s. An agent calls these on purpose and waits for the
+ * answer; a verb that outlives the hook budget after the request left is
+ * reported as failed even though it may have run — on a loaded CI runner ama
+ * read a slow `inbox` as "no messages" and never dispatched the task it had
+ * just been sent. `ARMADRA_HOOK_TIMEOUT_MS` can only widen it: the remote
+ * shim sets it to 4 s for hook events, which is still too short for a verb.
+ */
+export const VERB_TIMEOUT_MS = 15_000;
+
+export function verbTimeoutMs(): number {
+  return Math.max(VERB_TIMEOUT_MS, totalTimeoutMs());
+}
+
 export async function runBrowser(args: string[]): Promise<number> {
   const verb = args[0];
   if (verb === undefined) {
@@ -288,7 +304,7 @@ export function controlBody(nodeId: string, args: Args): Buffer {
 async function request(
   path: string,
   args: Args,
-  total?: number,
+  total = verbTimeoutMs(),
 ): Promise<number> {
   const loaded = loadSession();
   if ("error" in loaded) return fail(loaded.error);

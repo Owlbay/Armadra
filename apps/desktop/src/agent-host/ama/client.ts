@@ -15,6 +15,7 @@ import {
   controlBody,
   render,
   renderError,
+  verbTimeoutMs,
 } from "../../cli/armadra-hook/control.js";
 import { type Endpoint, envVar } from "../../hook-client/endpoint.js";
 import { isSuccess, postJsonRequest } from "../../hook-client/http.js";
@@ -102,7 +103,7 @@ export async function callVerb(
     loaded.ok,
     (current, candidate) =>
       postJsonRequest(tool.path, headersFor(current, candidate), body),
-    tool.long === true ? browserTimeoutMs() : undefined,
+    tool.long === true ? browserTimeoutMs() : verbTimeoutMs(),
   );
   if ("error" in outcome) return { error: outcome.error };
   if (!isSuccess(outcome.ok)) return { error: renderError(outcome.ok) };
@@ -116,7 +117,7 @@ export async function callVerb(
 export async function callControl(
   verb: string,
   args: Record<string, JsonValue>,
-  totalMs?: number,
+  totalMs = verbTimeoutMs(),
 ): Promise<ControlAnswer> {
   const loaded = loadSession();
   if ("error" in loaded) return { kind: "unreachable", error: loaded.error };
@@ -157,12 +158,15 @@ export async function callContext(
   const loaded = loadSession();
   if ("error" in loaded) return undefined;
   const body = controlBody(loaded.ok.nodeId, args);
-  const outcome = await send(loaded.ok, (current, candidate) =>
-    postJsonRequest(
-      `/context-link/${encodeURIComponent(verb)}`,
-      headersFor(current, candidate),
-      body,
-    ),
+  const outcome = await send(
+    loaded.ok,
+    (current, candidate) =>
+      postJsonRequest(
+        `/context-link/${encodeURIComponent(verb)}`,
+        headersFor(current, candidate),
+        body,
+      ),
+    verbTimeoutMs(),
   );
   if ("error" in outcome || !isSuccess(outcome.ok)) return undefined;
   return render(outcome.ok);

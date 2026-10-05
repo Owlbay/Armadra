@@ -45,6 +45,7 @@ import {
 } from "../../hook-client/verbs.js";
 import {
   browserTimeoutMs,
+  verbTimeoutMs,
   controlBody,
   render,
   renderError,
@@ -161,7 +162,7 @@ export const callTool: ToolCaller = async (tool, input) => {
     loaded.ok,
     (current, candidate) =>
       postJsonRequest(tool.path, headersFor(current, candidate), body),
-    tool.long === true ? browserTimeoutMs() : undefined,
+    tool.long === true ? browserTimeoutMs() : verbTimeoutMs(),
   );
   if ("error" in outcome) return text(outcome.error, true);
   if (!isSuccess(outcome.ok)) return text(renderError(outcome.ok), true);

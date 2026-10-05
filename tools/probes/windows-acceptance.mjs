@@ -81,7 +81,9 @@ import {
   setEnvLine,
   snapshot,
   summarize,
+  printSummary,
   userConfigTargets,
+  waitForTerminalRoute,
   waitFor,
 } from "./windows-acceptance-lib.mjs";
 import { isolatedEnv, probeHome } from "./probe-home.mjs";
@@ -1096,6 +1098,10 @@ async function runFull(options, result, record, out) {
           .filter((row) => row.pid !== hostPid)
           .map((row) => row.pid);
         await app.start();
+        const { firstAnswer, readyAfterMs } = await waitForTerminalRoute(
+          (path) => app.api("GET", path),
+          sessions[0].id,
+        );
         const back = {};
         for (const session of sessions) {
           const row = await app.api("GET", `/api/terminals/${session.id}`);
@@ -1107,9 +1113,11 @@ async function runFull(options, result, record, out) {
             45_000,
           );
           back[session.dialect] = {
+            http: row.status,
             status: row.body?.status ?? null,
             samePid: row.body?.pid === session.pid,
             echoed: typed.ok,
+            ...(typed.ok ? {} : { reason: typed.reason }),
           };
         }
         return {
@@ -1124,6 +1132,8 @@ async function runFull(options, result, record, out) {
             hostAlive,
             shellsAlive,
             leftoversAfterKill: leftovers,
+            firstAnswer,
+            readyAfterMs,
             back,
           },
         };
@@ -1417,20 +1427,6 @@ async function runFull(options, result, record, out) {
 }
 
 /* ---------------------------------- main ----------------------------------- */
-
-function printSummary(result, file) {
-  console.log("\n结果：");
-  for (const check of result.checks) {
-    const mark = { pass: "✓", fail: "✗", warn: "!", skip: "-", pending: "?" }[
-      check.status
-    ];
-    console.log(`  ${mark} ${check.id.padEnd(22)} ${check.title}`);
-  }
-  console.log(`\n${result.status}；结果文件：${file}`);
-  console.log(
-    "把 result.json 整个贴回来即可（不含凭据、终端原始输出只有失败时的尾部）。",
-  );
-}
 
 export async function main(argv = process.argv.slice(2)) {
   let options;
