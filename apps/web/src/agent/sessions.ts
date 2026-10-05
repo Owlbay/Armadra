@@ -11,6 +11,7 @@ import type { AgentState, AgentStatus, SessionSummary } from "@armadra/shared";
 
 import { runtimeApi } from "../api/client";
 import { isAttention, useAgentStatusStore } from "./status-store";
+import { sk } from "../sources/scope";
 
 export interface SessionRow {
   nodeId: string;
@@ -156,7 +157,7 @@ export interface UseSessionsResult {
 
 export function useSessions(workspaceId: string | null): UseSessionsResult {
   const query = useQuery({
-    queryKey: ["sessions", workspaceId],
+    queryKey: sk("sessions", workspaceId),
     queryFn: () => runtimeApi.sessions(workspaceId!),
     enabled: Boolean(workspaceId),
     retry: false,

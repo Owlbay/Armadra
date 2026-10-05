@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { runtimeApi } from "../api/client";
+import { sk } from "../sources/scope";
 
 /**
  * 工作空间列表（`GET /api/workspaces`）。
@@ -18,7 +19,7 @@ const RECONNECT_POLL_MS = 3_000;
 
 export function useWorkspacesQuery() {
   return useQuery({
-    queryKey: ["workspaces"],
+    queryKey: sk("workspaces"),
     queryFn: runtimeApi.listWorkspaces,
     retry: false,
     refetchOnWindowFocus: true,

@@ -60,7 +60,7 @@ describe("workspace execution permission", () => {
         true,
       ),
     );
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["git-status", "w1"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["src", "local", "git-status", "w1"] });
   });
   it("does not replace the current workspace after a late response and keeps failed changes unselected", async () => {
     let resolve!: (value: unknown) => void;

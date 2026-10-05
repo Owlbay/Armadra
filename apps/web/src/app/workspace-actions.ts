@@ -11,6 +11,7 @@ import {
   rememberWorkspace,
   usePreferencesStore,
 } from "./preferences-store";
+import { sk } from "../sources/scope";
 import { workspaceRequest } from "./workspace-create";
 
 /**
@@ -30,7 +31,7 @@ export function useCreateWorkspace() {
       options: { createDirectory?: boolean } = {},
     ): Promise<Workspace> => {
       const existing =
-        queryClient.getQueryData<WorkspaceSummary[]>(["workspaces"]) ?? [];
+        queryClient.getQueryData<WorkspaceSummary[]>(sk("workspaces")) ?? [];
       const request = workspaceRequest(
         rootPath,
         existing,
@@ -47,7 +48,7 @@ export function useCreateWorkspace() {
           createDirectory: false,
         });
       }
-      void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+      void queryClient.invalidateQueries({ queryKey: sk("workspaces") });
       return workspace;
     },
     [queryClient],
@@ -125,7 +126,7 @@ export function useCloseWorkspace() {
         .getState()
         .openWorkspaceIds.filter((id) => id !== workspaceId);
       const summaries =
-        queryClient.getQueryData<Workspace[]>(["workspaces"]) ?? [];
+        queryClient.getQueryData<Workspace[]>(sk("workspaces")) ?? [];
       const next = remaining
         .map((id) => summaries.find((item) => item.id === id))
         .find((item): item is Workspace => Boolean(item));

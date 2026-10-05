@@ -10,13 +10,14 @@ import { toast } from "sonner";
 import type { Board, WorkspaceSummary } from "@armadra/shared";
 import { useCanvasStore } from "../store/canvas-store";
 import { runtimeApi } from "../api/client";
+import { sk } from "../sources/scope";
 
 export function useBoardMutations(workspaceId: string) {
   const queryClient = useQueryClient();
 
   const refresh = () => {
-    void queryClient.invalidateQueries({ queryKey: ["boards", workspaceId] });
-    void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+    void queryClient.invalidateQueries({ queryKey: sk("boards", workspaceId) });
+    void queryClient.invalidateQueries({ queryKey: sk("workspaces") });
   };
 
   const create = useMutation({
@@ -34,16 +35,16 @@ export function useBoardMutations(workspaceId: string) {
   const rename = useMutation({
     mutationFn: async ({ id, name }: { id: string; name: string }) => {
       await Promise.all([
-        queryClient.cancelQueries({ queryKey: ["boards", workspaceId] }),
-        queryClient.cancelQueries({ queryKey: ["workspaces"] }),
+        queryClient.cancelQueries({ queryKey: sk("boards", workspaceId) }),
+        queryClient.cancelQueries({ queryKey: sk("workspaces") }),
       ]);
       return runtimeApi.updateBoard(workspaceId, id, { name });
     },
     onSuccess: (board) => {
-      queryClient.setQueryData<Board[]>(["boards", workspaceId], (rows) =>
+      queryClient.setQueryData<Board[]>(sk("boards", workspaceId), (rows) =>
         rows?.map((row) => (row.id === board.id ? board : row)),
       );
-      queryClient.setQueryData<WorkspaceSummary[]>(["workspaces"], (rows) =>
+      queryClient.setQueryData<WorkspaceSummary[]>(sk("workspaces"), (rows) =>
         rows?.map((row) =>
           row.id === workspaceId
             ? {

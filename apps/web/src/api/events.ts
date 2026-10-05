@@ -28,6 +28,7 @@ import { useDriveStore } from "../agent/drive-store";
 import { useLanguageStatusStore } from "../editor/language/status-store";
 import { createBackoff, type Backoff } from "@/lib/backoff";
 import { localSource } from "./source";
+import { sk } from "../sources/scope";
 
 type EventType = WorkspaceEvent["type"];
 type EventOf<T extends EventType> = Extract<WorkspaceEvent, { type: T }>;
@@ -310,13 +311,13 @@ export function useWorkspaceEvents(workspaceId: string | null): void {
     const release = connectWorkspaceEvents(workspaceId);
     const invalidate = () => {
       void queryClient.invalidateQueries({
-        queryKey: ["sessions", workspaceId],
+        queryKey: sk("sessions", workspaceId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["git-status", workspaceId],
+        queryKey: sk("git-status", workspaceId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["git-diff", workspaceId],
+        queryKey: sk("git-diff", workspaceId),
       });
     };
     const offExit = onWorkspaceEvent("terminal.exit", invalidate);
@@ -325,12 +326,12 @@ export function useWorkspaceEvents(workspaceId: string | null): void {
     // 不带任何字段，就是要求整份重取，而不是往手里这份上打补丁。
     const offUpdated = onWorkspaceEvent("workspace.updated", (event) => {
       if (event.workspaceId !== workspaceId) return;
-      void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+      void queryClient.invalidateQueries({ queryKey: sk("workspaces") });
       invalidate();
     });
     const offLost = onWorkspaceAccessLost((lost) => {
       if (lost !== workspaceId) return;
-      void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+      void queryClient.invalidateQueries({ queryKey: sk("workspaces") });
     });
     return () => {
       offExit();

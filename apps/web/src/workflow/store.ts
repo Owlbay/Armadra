@@ -1,3 +1,4 @@
+import { srcPrefix } from "../sources/scope";
 import { useEffect } from "react";
 import { create } from "zustand";
 import { useQueryClient } from "@tanstack/react-query";
@@ -65,10 +66,14 @@ export const useWorkflowView = create<WorkflowView>((set) => ({
 }));
 
 export const workflowKeys = {
-  all: ["workflow"] as const,
-  drafts: (boardId: string) => ["workflow", "drafts", boardId] as const,
-  templates: () => ["workflow", "templates"] as const,
-  runs: (boardId: string) => ["workflow", "runs", boardId] as const,
+  get all() {
+    return [...srcPrefix(), "workflow"] as const;
+  },
+  drafts: (boardId: string) =>
+    [...srcPrefix(), "workflow", "drafts", boardId] as const,
+  templates: () => [...srcPrefix(), "workflow", "templates"] as const,
+  runs: (boardId: string) =>
+    [...srcPrefix(), "workflow", "runs", boardId] as const,
 };
 
 /** 开工作流页，落在给定的页签上。 */

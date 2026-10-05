@@ -17,6 +17,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { runtimeApi } from "../api/client";
 import { onWorkspaceConnection } from "../api/events";
 import { useAgentStatusStore } from "./status-store";
+import { sk } from "../sources/scope";
 
 /**
  * 在应用挂载处补齐镜像，并在事件流重连后重放。
@@ -27,7 +28,7 @@ import { useAgentStatusStore } from "./status-store";
 export function useAgentStatusHydration(workspaceId: string | null): void {
   const queryClient = useQueryClient();
   const query = useQuery({
-    queryKey: ["sessions", workspaceId],
+    queryKey: sk("sessions", workspaceId),
     queryFn: () => runtimeApi.sessions(workspaceId!),
     enabled: Boolean(workspaceId),
     retry: false,
@@ -45,7 +46,7 @@ export function useAgentStatusHydration(workspaceId: string | null): void {
       // 触发新工作空间的重取。
       if (eventWorkspaceId !== workspaceId || !connected) return;
       void queryClient.invalidateQueries({
-        queryKey: ["sessions", workspaceId],
+        queryKey: sk("sessions", workspaceId),
       });
     });
   }, [workspaceId, queryClient]);

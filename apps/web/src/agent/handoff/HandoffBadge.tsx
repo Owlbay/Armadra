@@ -1,3 +1,4 @@
+import { srcPrefix } from "../../sources/scope";
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Share2 } from "lucide-react";
@@ -27,7 +28,7 @@ export function HandoffBadge({ nodeId }: { nodeId: string }) {
   const client = useQueryClient();
   const workspaceId = useCanvasStore((state) => state.workspace?.id ?? null);
   const key = React.useMemo(
-    () => ["handoffs", workspaceId, nodeId],
+    () => [...srcPrefix(), "handoffs", workspaceId, nodeId],
     [workspaceId, nodeId],
   );
   const query = useQuery({
