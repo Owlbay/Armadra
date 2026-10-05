@@ -1,0 +1,52 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreWorkspaces": ["apps/mobile", "apps/push-relay"],
+  "ignoreBinaries": [
+    "file",
+    "openssl",
+    "ssh-keygen",
+    "icacls",
+    "infocmp",
+    "codex",
+    "pkill",
+    "sqlite3",
+    "where.exe",
+    "minisign",
+    "rpmbuild"
+  ],
+  "workspaces": {
+    ".": {
+      "entry": ["tools/**/*.{mjs,cjs}"],
+      "project": ["tools/**/*.{mjs,cjs}"]
+    },
+    "apps/web": {
+      "entry": ["src/showcase/main.tsx", "src/**/*.test.{ts,tsx}"],
+      "project": ["src/**/*.{ts,tsx,css}"]
+    },
+    "apps/desktop": {
+      "entry": [
+        "src/core/main.ts",
+        "src/cli/armadra-hook/main.ts",
+        "src/session-host/main.ts",
+        "src/session-host/shutdown-if-idle.ts",
+        "src/agent-host/ama/main.ts",
+        "src/**/*.test.ts",
+        "scripts/*.mjs"
+      ],
+      "project": ["src/**/*.{ts,css}", "scripts/*.mjs"],
+      "ignoreDependencies": [
+        "@tailwindcss/vite",
+        "@vitejs/plugin-react",
+        "tailwindcss"
+      ]
+    },
+    "apps/server": {
+      "entry": ["src/main.ts", "src/**/*.test.ts", "scripts/*.mjs"],
+      "project": ["src/**/*.ts", "scripts/*.mjs"]
+    },
+    "packages/shared": {
+      "entry": ["src/index.ts", "src/**/*.test.ts", "test/**/*.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts"]
+    }
+  }
+}
