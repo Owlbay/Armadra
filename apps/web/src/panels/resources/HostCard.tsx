@@ -77,7 +77,11 @@ export function HostCard({
         <PowerBadge host={host} />
       </header>
 
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[12px] sm:grid-cols-3">
+      {/*
+        两列而不是按视口切到三列：抽屉固定是窄的，`sm:` 看的是窗口宽度，桌面窗口
+        一定满足，结果每格只剩一百来像素，「99% 326 MB / …」这类值全被截掉。
+      */}
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-[12px]">
         <Metric
           label={t("resources.host.cpu")}
           value={formatPercent(host.cpuPercent)}
@@ -105,7 +109,9 @@ export function HostCard({
         <Metric
           label={t("resources.host.disk")}
           value={formatPercent(diskUsedPercent(host))}
-          hint={host.disk ? `${host.disk.mountPoint} · ${disk}` : undefined}
+          hint={host.disk ? disk : undefined}
+          // 挂载点可能是一长串临时目录，折行会把卡片撑高四五行；放进悬停提示。
+          title={host.disk?.mountPoint}
         />
         <Metric label={t("resources.host.uptime")} value={uptime} />
       </dl>
@@ -153,12 +159,13 @@ function Metric({
   return (
     <div className="min-w-0" data-slot={slot} title={title}>
       <dt className="truncate text-[11px] text-muted-foreground">{label}</dt>
-      <dd className="truncate tabular-nums">
-        {value}
-        {hint ? (
-          <span className="ml-1 text-[11px] text-muted-foreground">{hint}</span>
-        ) : null}
-      </dd>
+      <dd className="tabular-nums [overflow-wrap:anywhere]">{value}</dd>
+      {/* 补充说明另起一行、可以折行：和值挤在一行时被截掉的总是它。 */}
+      {hint ? (
+        <dd className="text-[11px] text-muted-foreground tabular-nums [overflow-wrap:anywhere]">
+          {hint}
+        </dd>
+      ) : null}
     </div>
   );
 }

@@ -189,17 +189,32 @@ export function SessionTable({
           const high = crossedThreshold(session.memoryBytes, threshold);
           const open = expanded.has(session.sessionId);
           const expandable = session.children.length > 0;
+          const detail = reasonKey
+            ? t(reasonKey)
+            : [
+                t("resources.session.children", {
+                  count: formatCount(session.childCount),
+                }),
+                session.state,
+                // 不让「pid」和号码被折到两行。
+                typeof session.pid === "number"
+                  ? `pid\u00a0${session.pid}`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ");
           return (
             <li
               key={session.sessionId}
               data-high={high ? "true" : undefined}
               className="group flex flex-col rounded-[var(--r-control)] px-1.5 py-1 hover:bg-accent data-[high=true]:bg-[var(--danger)]/8"
             >
-              <div className="flex w-full items-center gap-2">
-                {/*
-                没有子进程时留一个占位方块而不是一个禁用按钮：一个点不动的
-                「展开进程树」按钮在读屏器里仍然会被念出来。
+              {/*
+                两行：名字一行独占（只给操作按钮让位），说明与数字一行。原来四样挤
+                在一行，抽屉里留给名字和说明的只有一百来像素，「MacBookPr…」
+                「子进程 5 · sle…」全被截断。现在说明可以折行，名字放不下时悬停看全名。
               */}
+              <div className="flex w-full items-center gap-2">
                 {expandable ? (
                   <IconButton
                     label={
@@ -221,65 +236,30 @@ export function SessionTable({
                 ) : (
                   <span aria-hidden="true" className="size-[24px] shrink-0" />
                 )}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="truncate text-[12px]">
-                      {titleOf(session)}
-                    </span>
-                    {session.location === "remote" && (
-                      <Badge
-                        variant="outline"
-                        className="text-[length:var(--text-caption)]"
-                      >
-                        {t("resources.location.remote")}
-                      </Badge>
-                    )}
-                    {high && (
-                      <Badge
-                        variant="outline"
-                        className="border-[var(--danger)] text-[length:var(--text-caption)] text-[var(--danger-text)]"
-                      >
-                        {t("resources.session.high")}
-                      </Badge>
-                    )}
-                  </div>
-                  <div className="truncate text-[11px] text-muted-foreground">
-                    {reasonKey ? (
-                      t(reasonKey)
-                    ) : (
-                      <>
-                        {t("resources.session.children", {
-                          count: formatCount(session.childCount),
-                        })}
-                        {session.state ? ` · ${session.state}` : ""}
-                        {typeof session.pid === "number"
-                          ? ` · pid ${session.pid}`
-                          : ""}
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                <span className="w-14 shrink-0 text-right text-[12px] tabular-nums">
-                  {formatPercent(session.cpuPercent)}
-                </span>
-                <span
-                  className={`w-20 shrink-0 text-right text-[12px] tabular-nums ${
-                    high ? "text-[var(--danger-text)]" : ""
-                  }`}
-                  // 共享页会被重复计入，所以这是估计值而不是独占内存（设计 §8）。
-                  title={
-                    session.memoryEstimated
-                      ? t("resources.session.memoryEstimated")
-                      : undefined
-                  }
+                <div
+                  className="flex min-w-0 flex-1 items-center gap-1.5"
+                  title={titleOf(session)}
                 >
-                  {formatMetricBytes(session.memoryBytes)}
-                  {session.memoryEstimated && session.memoryBytes !== null ? (
-                    <span className="ml-0.5 text-muted-foreground">≈</span>
-                  ) : null}
-                </span>
-
+                  <span className="truncate text-[12px]">
+                    {titleOf(session)}
+                  </span>
+                  {session.location === "remote" && (
+                    <Badge
+                      variant="outline"
+                      className="text-[length:var(--text-caption)]"
+                    >
+                      {t("resources.location.remote")}
+                    </Badge>
+                  )}
+                  {high && (
+                    <Badge
+                      variant="outline"
+                      className="border-[var(--danger)] text-[length:var(--text-caption)] text-[var(--danger-text)]"
+                    >
+                      {t("resources.session.high")}
+                    </Badge>
+                  )}
+                </div>
                 <div className="flex shrink-0 items-center">
                   {session.nodeId && (
                     <IconButton
@@ -304,7 +284,33 @@ export function SessionTable({
                   )}
                 </div>
               </div>
-
+              <div className="flex w-full items-start gap-2 pl-8">
+                <div
+                  className="min-w-0 flex-1 text-[11px] text-muted-foreground [overflow-wrap:anywhere]"
+                  title={detail}
+                >
+                  {detail}
+                </div>
+                <span className="w-14 shrink-0 text-right text-[12px] tabular-nums">
+                  {formatPercent(session.cpuPercent)}
+                </span>
+                <span
+                  className={`w-20 shrink-0 text-right text-[12px] tabular-nums ${
+                    high ? "text-[var(--danger-text)]" : ""
+                  }`}
+                  // 共享页会被重复计入，所以这是估计值而不是独占内存（设计 §8）。
+                  title={
+                    session.memoryEstimated
+                      ? t("resources.session.memoryEstimated")
+                      : undefined
+                  }
+                >
+                  {formatMetricBytes(session.memoryBytes)}
+                  {session.memoryEstimated && session.memoryBytes !== null ? (
+                    <span className="ml-0.5 text-muted-foreground">≈</span>
+                  ) : null}
+                </span>
+              </div>
               {open && (
                 <ProcessTree
                   processes={session.children}
