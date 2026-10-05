@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { type ErrorResponse, coreError } from "../http/errors";
+import { CoreFailure } from "../http/errors";
 
 /**
  * The vocabulary the three canvas-side domains share: the failure type, the
@@ -18,19 +18,10 @@ import { type ErrorResponse, coreError } from "../http/errors";
  * zod schemas in `packages/shared` are written against the `{ code, message }`
  * pair. In particular a 500 is `internal_error`, not `internal`.
  */
-export class DomainError extends Error {
-  readonly status: number;
-  readonly code: string;
-
+export class DomainError extends CoreFailure {
   constructor(status: number, code: string, message: string) {
-    super(message);
+    super(status, code, message);
     this.name = "DomainError";
-    this.status = status;
-    this.code = code;
-  }
-
-  response(): ErrorResponse {
-    return coreError(this.status, this.code, this.message);
   }
 }
 

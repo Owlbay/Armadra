@@ -10,6 +10,7 @@ import {
   type IdentitySession,
 } from "./identity";
 import { RUNTIME_URL } from "./request";
+import { localSource } from "./source";
 
 /**
  * 账号、组、邀请与共享的客户端 —— core 的 `/api/identity/*` 管理面
@@ -106,7 +107,7 @@ async function call<T>(
     }
     if (csrf) headers["X-Armadra-CSRF"] = csrf;
     try {
-      return await fetch(`${RUNTIME_URL}${PREFIX}${action}`, {
+      return await localSource.fetch(`${RUNTIME_URL}${PREFIX}${action}`, {
         method,
         headers,
         body:

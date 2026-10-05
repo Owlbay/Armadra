@@ -72,7 +72,7 @@ R7a 之前 GitHub 与自动化两块面板走的是 `/rpc/armadra.v1.*`：二进
 - 拒绝一律是 401 `{ "code": "unauthenticated", "message": "需要一个已配对设备的会话" }`；Cookie 会话 CSRF 不对是 403 `forbidden`。门判在读请求体之前，路由存不存在也不先回答（没带会话打一条不存在的路径同样 401）。
 - 认出来的会话进这次请求的身份（`runAs`），路由门、事件订阅与长连接的到期复核（4401 / 4403，§17.4）与 Gateway 进来的请求走同一条路。经 Gateway 交接进 core 的请求已在 TLS 一侧认过人，不再过这道门。
 
-调用方：桌面壳的页面在全局 `fetch` / `WebSocket` 上装了请求层（`apps/web/src/api/shell-transport.ts`，复用原生 App 的 `bearerFetch` / `ticketedWebSocket`）：每个发往 core 的请求带 Bearer、每条流先换票；还没有会话先向壳要票配对，401 时复核 → 刷新 → 重新要票，只重发一次；访问密钥到期前两分钟主动轮转，流不必因 4401 重连。`<img>` 与编辑器的「下载」带不了头，经 `fetch` 取回再交给 `blob:` 地址（`api/assets.ts`）。托盘经 `shell-core/core-session.ts` 用同一张票换自己的会话，来源是 core 自己的回环基址。Windows 上 core 的私有通道还不开，壳经 fork 的 IPC 通道取票（`armadra:identity-ticket`，`core/identity/control.ts::startTicketIpc`、`main/core-ticket.ts`）。接管了上一个 core 或外接 Runtime 时这个壳没有 IPC 通道，取票答 `channelUnavailable`，页面挂一条通知条请人重开应用，不静默 401。
+调用方：桌面壳的页面把请求层装在本机源上（`apps/web/src/api/shell-transport.ts` → `api/source.ts` 的 `localSource`，复用原生 App 的 `bearerFetch` / `ticketedWebSocket`，自 E1 起不再改写全局 `fetch` / `WebSocket`）：每个发往 core 的请求带 Bearer、每条流先换票；还没有会话先向壳要票配对，401 时复核 → 刷新 → 重新要票，只重发一次；访问密钥到期前两分钟主动轮转，流不必因 4401 重连。`<img>` 与编辑器的「下载」带不了头，经本机源的 `fetch` 取回再交给 `blob:` 地址（`api/assets.ts`）。托盘经 `shell-core/core-session.ts` 用同一张票换自己的会话，来源是 core 自己的回环基址。Windows 上 core 的私有通道还不开，壳经 fork 的 IPC 通道取票（`armadra:identity-ticket`，`core/identity/control.ts::startTicketIpc`、`main/core-ticket.ts`）。接管了上一个 core 或外接 Runtime 时这个壳没有 IPC 通道，取票答 `channelUnavailable`，页面挂一条通知条请人重开应用，不静默 401。
 
 **本机设备复用**：回环明文来源的票兑换时，复用主人名下同名、没被撤销、且签过的会话全都来自回环明文来源的那台设备（`core/identity/service.ts` 的 `consumeBootstrap`），只多一条会话；页面每次加载、托盘每次启动不再各建一台「本机桌面」。经 Gateway（HTTPS 来源）配对的设备每次都是新的，也不会被本机配对认领。
 
@@ -2214,3 +2214,73 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 - 凭据只存 SecretStore（`armadra-source-<sourceId>`、`armadra-remote-<serviceId>`），响应里只有 `hasCredentials`；访问令牌与口令不落盘。
 - 以后新增的 procedure（例如按链接挂载 `mountByLink`）追加在本节末尾，不改已有条目。
 - 错误码 `source_unreachable`、`source_unauthorized` 等登记在协议包 `errors` 子路径。
+
+## 34. RPC 内核：`/api/rpc/{procedure}`
+
+> 状态：实施契约（E1，工程规范化 §2）。本节的形状表由 `tools/contract/generate.mjs` 从 `packages/shared/src/contract/` 生成，改形状改契约，不手改表；`pnpm check` 里的 `contract:check` 比对它们。机器可读的同一份在 [core-openapi.json](core-openapi.json)。
+
+### 34.1 传输与错误
+
+- **路径**：`POST /api/rpc/<域>/<动词>`（`workspaces.list` → `/api/rpc/workspaces/list`）。只收 `POST`：别的方法答 `405 method_not_allowed`——一个能被 `GET` 触发的写，在 Cookie 会话上就绕开了 CSRF。不在契约里的路径答 `404 not_found`；契约里有、这个构建没实现的答 `501 not_implemented`。
+- **体**：请求与成功响应都是上游 RPC 编码，`{ "json": <值>, "meta"?: […] }`；下面各表的 input / output 是 `json` 那一格的形状。编码规则仍是 §2：camelCase、`int64` 写十进制字符串，不用 RPC 编码对 `bigint` / `Date` 的原生扩展。
+- **失败**：一律 `{ "code", "message", "requestId", "details"? }`，状态按错误码注册表（`packages/shared/src/contract/errors.ts`）。入参校验失败是 `400 bad_request`，`details.issues` 是 `{ path: string[], message }[]`，不回显入参的值；实现里没人接住的异常与出参校验失败是 `500 internal`，原话不外泄（只进日志与崩溃上报）。
+- **鉴权**：准入（回环会话、Gateway、CSRF）与迁移前一样在 `core/http/server.ts` 里先判；`/api/rpc/` 在路由门里是自己判的那一档（`route-scopes.ts` 的 `SELF_GUARDED`），门面按每条的 `scope` 与 `workspaceKey` 走同一道路由门。带旧路径的 procedure 拿旧路径去问，服务器壳上成员看到的工作空间列表照旧只剩他有 `canvas:read` 的那几块。
+- **旧路径**：表里「原路径」那一列在迁移期照旧可用，由同一份实现经旧的方法与路径回答；失败是 `{ code, message }`（有细节时加 `details`），不带 `requestId`，与迁移前同形。不在契约里的路径与方法照旧由路由表回答。旧路径在下一个 minor 删除（E4）。
+- **出参校验**：`ARMADRA_RPC_VALIDATE_OUTPUT=1` / `0` 开关；缺省开发与测试开、打包的生产构建关。`ARMADRA_RPC_TRACE=1` 记每条调用的耗时。
+- **版本**：协议 `minor` 自 3 起有本节（`GET /api/identity/hello` 的 `protocol` 同步为 `1.3`）。`since` 是一条 procedure 首次出现的协议版本；页面按 `system.hello` 的 `procedures` 判断这台 core 有没有某条。
+
+### 34.2 `system.hello`
+
+这台 core 是谁、实现了哪些 procedure、控制面心跳间隔与这次会话的到期时刻。`GET /api/identity/hello` 照旧是配对之前的匿名面；这一条要会话。
+
+<!-- rpc:begin contract=§34.2 -->
+
+| procedure      | kind | input                 | output                                                                                                                                                                                                                                     | errors                         | scope           | 自  | 原路径 |
+| -------------- | ---- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------ | --------------- | --- | ------ |
+| `system.hello` | call | `{ trace?: boolean }` | `{ protocol: { major: integer, minor: integer }, procedures: string[], capabilities: string[], heartbeatMs: integer, maxFrameBytes: integer, sessionExpiresAtMs: integer \| null, instanceId: string, sourceId: string, version: string }` | `unauthenticated`、`forbidden` | `identity:read` | 1.3 | —      |
+
+<!-- rpc:end -->
+
+### 34.3 `system.ping`
+
+往返一次，答页面给的 `ts` 与 core 的时钟。
+
+<!-- rpc:begin contract=§34.3 -->
+
+| procedure     | kind | input            | output                             | errors                         | scope           | 自  | 原路径 |
+| ------------- | ---- | ---------------- | ---------------------------------- | ------------------------------ | --------------- | --- | ------ |
+| `system.ping` | call | `{ ts: number }` | `{ ts: number, serverTs: number }` | `unauthenticated`、`forbidden` | `identity:read` | 1.3 | —      |
+
+<!-- rpc:end -->
+
+### 34.4 `workspaces.*`
+
+工作空间的列出、新建、打开目录、打开远端、改名改色改授权、删除与打开。多部分上传的导入（`POST /api/workspaces/import`）与执行主机改绑（`PATCH /api/workspaces/{workspaceId}/execution-host`，409 带结构化拒绝）留在 REST。本地工作空间不带 `executionHostId`。
+
+<!-- rpc:begin contract=§34.4 -->
+
+| procedure                  | kind     | input                                                                                                                                                      | output                                                                                                                                                                                                                                                                                | errors                                              | scope             | 自  | 原路径                                    |
+| -------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- | ----------------- | --- | ----------------------------------------- |
+| `workspaces.list`          | query    | 可省 `{}`                                                                                                                                                  | `{ id: string, name: string, rootPath: string, color: string, permissions: { read: boolean, write: boolean, execute: boolean }, executionHostId?: string, lastOpenedAt: string, createdAt: string, updatedAt: string, boards: { id: string, name: string, nodeCount: integer }[] }[]` | `unauthenticated`、`forbidden`                      | `canvas:read`     | 1.3 | `GET /api/workspaces`                     |
+| `workspaces.create`        | mutation | `{ name: string, rootPath: string, color?: string, permissions?: { read: boolean, write: boolean, execute: boolean } \| null, createDirectory?: boolean }` | `{ id: string, name: string, rootPath: string, color: string, permissions: { read: boolean, write: boolean, execute: boolean }, executionHostId?: string, lastOpenedAt: string, createdAt: string, updatedAt: string }`                                                               | `bad_request`、`forbidden`、`not_found`、`conflict` | `canvas:write`    | 1.3 | `POST /api/workspaces`                    |
+| `workspaces.openDirectory` | mutation | `{ name: string, rootPath: string, color?: string, permissions?: { read: boolean, write: boolean, execute: boolean } \| null }`                            | `{ id: string, name: string, rootPath: string, color: string, permissions: { read: boolean, write: boolean, execute: boolean }, executionHostId?: string, lastOpenedAt: string, createdAt: string, updatedAt: string }`                                                               | `bad_request`、`forbidden`、`not_found`             | `workspace:share` | 1.3 | `POST /api/workspaces/open-directory`     |
+| `workspaces.openRemote`    | mutation | `{ name: string, executionHostId?: string, rootPath: string, permissions?: { read: boolean, write: boolean, execute: boolean } \| null }`                  | `{ id: string, name: string, rootPath: string, color: string, permissions: { read: boolean, write: boolean, execute: boolean }, executionHostId?: string, lastOpenedAt: string, createdAt: string, updatedAt: string }`                                                               | `bad_request`、`forbidden`、`not_found`、`conflict` | `workspace:share` | 1.3 | `POST /api/workspaces/remote`             |
+| `workspaces.update`        | mutation | `{ workspaceId: string, name?: string, color?: string, permissions?: { read: boolean, write: boolean, execute: boolean } \| null }`                        | `{ id: string, name: string, rootPath: string, color: string, permissions: { read: boolean, write: boolean, execute: boolean }, executionHostId?: string, lastOpenedAt: string, createdAt: string, updatedAt: string }`                                                               | `bad_request`、`forbidden`、`not_found`             | `workspace:share` | 1.3 | `PATCH /api/workspaces/{workspaceId}`     |
+| `workspaces.delete`        | mutation | `{ workspaceId: string }`                                                                                                                                  | 无                                                                                                                                                                                                                                                                                    | `forbidden`、`not_found`                            | `workspace:share` | 1.3 | `DELETE /api/workspaces/{workspaceId}`    |
+| `workspaces.open`          | mutation | `{ workspaceId: string }`                                                                                                                                  | `{ id: string, name: string, rootPath: string, color: string, permissions: { read: boolean, write: boolean, execute: boolean }, executionHostId?: string, lastOpenedAt: string, createdAt: string, updatedAt: string }`                                                               | `forbidden`、`not_found`                            | `canvas:read`     | 1.3 | `POST /api/workspaces/{workspaceId}/open` |
+
+<!-- rpc:end -->
+
+### 34.5 `settings.*`
+
+设置文档的读、按段合并与本机键清单。文档是「已知键归一 + 未知键透传」的任意 JSON；终端后端与日志保留天数两个封闭选项被拒时答 `bad_request`。
+
+<!-- rpc:begin contract=§34.5 -->
+
+| procedure         | kind     | input                  | output                              | errors                         | scope            | 自  | 原路径                    |
+| ----------------- | -------- | ---------------------- | ----------------------------------- | ------------------------------ | ---------------- | --- | ------------------------- |
+| `settings.get`    | query    | 可省 `{}`              | `Record<string, JSON>`              | `unauthenticated`、`forbidden` | `settings:read`  | 1.3 | `GET /api/settings`       |
+| `settings.update` | mutation | `Record<string, JSON>` | `Record<string, JSON>`              | `bad_request`、`forbidden`     | `settings:write` | 1.3 | `PATCH /api/settings`     |
+| `settings.local`  | query    | 可省 `{}`              | `{ paths: string[], file: string }` | `unauthenticated`、`forbidden` | `settings:read`  | 1.3 | `GET /api/settings/local` |
+
+<!-- rpc:end -->

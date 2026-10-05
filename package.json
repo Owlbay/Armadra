@@ -9,7 +9,9 @@
   },
   "scripts": {
     "repo:check": "node tools/repo-check.mjs",
-    "repo:test": "node --test tools/repo-check.test.mjs tools/lint-config.test.mjs",
+    "repo:test": "node --test tools/repo-check.test.mjs tools/lint-config.test.mjs tools/contract/generate.test.mjs",
+    "contract": "node tools/contract/generate.mjs",
+    "contract:check": "node tools/contract/generate.mjs --check",
     "ci:workflows": "node tools/ci/validate-workflows.mjs",
     "release:check": "node tools/release/version.mjs check",
     "notices": "node tools/notices.mjs",
@@ -23,7 +25,7 @@
     "platform:personal": "node tools/dev-stack/dev-stack.mjs up --profile personal",
     "platform:e2e": "node tools/dev-stack/platform-e2e.mjs",
     "libs:build": "pnpm --filter @armadra/shared build",
-    "check": "pnpm libs:build && pnpm format:check && pnpm lint && pnpm typecheck && pnpm repo:check && pnpm ci:workflows && pnpm release:check && pnpm notices:check",
+    "check": "pnpm libs:build && pnpm contract:check && pnpm format:check && pnpm lint && pnpm typecheck && pnpm repo:check && pnpm ci:workflows && pnpm release:check && pnpm notices:check",
     "build": "pnpm -r --if-present build",
     "dev": "pnpm --filter @armadra/web dev",
     "format": "prettier --write .",
@@ -36,6 +38,8 @@
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
+    "@orpc/openapi": "1.15.4",
+    "@orpc/zod": "1.15.4",
     "@vitest/coverage-v8": "4.1.11",
     "eslint": "9.39.5",
     "eslint-config-prettier": "10.1.8",

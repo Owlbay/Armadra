@@ -20,6 +20,7 @@ import {
   trustSshHostKeyRequestSchema,
   workspaceSchema,
   type CustomAgent,
+  type JsonValue,
   type ExecutionHostRefusal,
   type ImportExecutionHostsRequest,
   type PowerPolicy,
@@ -33,6 +34,7 @@ import {
   query,
   request,
 } from "./request";
+import type { ArmadraClient } from "./client";
 
 /* ------------------------------------ 设置 -------------------------------- */
 
@@ -288,16 +290,23 @@ export interface RuntimeSettingsPatch {
   keymap?: Record<string, unknown>;
 }
 
-export const settingsApi = {
+/**
+ * 设置与执行主机。`settings.*` 已迁到契约上（§34.5），经 RPC 客户端调；客户端由
+ * `api/client.ts` 交进来（这个模块被它 import）。SSH、主机密钥、执行主机这些
+ * 还在 REST，迁移时逐段换。
+ */
+export const settingsApiFor = (rpc: () => ArmadraClient) => ({
   /* ----------------------------------- 设置 ----------------------------- */
-  settings: () => request("/api/settings", runtimeSettingsSchema),
+  settings: async () =>
+    runtimeSettingsSchema.parse(await rpc().settings.get({})),
   /**
    * 哪些键存在本机（迁移 §1.4）。
    *
    * 永远问 Runtime，不问 Host：本地那一半不随所有权迁移，所以无论设置文档
    * 归谁写，这份清单都由跑在这台机器上的进程回答。
    */
-  localSettings: () => request("/api/settings/local", localSettingsSchema),
+  localSettings: async () =>
+    localSettingsSchema.parse(await rpc().settings.local({})),
   /**
    * 连通性探测（§21）：Runtime 跑一次
    * `ssh -o BatchMode=yes -o ConnectTimeout=5 <目标> true`，
@@ -314,11 +323,16 @@ export const settingsApi = {
       remoteWorkerProbeSchema,
       { method: "POST" },
     ),
-  updateSettings: (patch: RuntimeSettingsPatch) =>
-    request("/api/settings", runtimeSettingsSchema, {
-      method: "PATCH",
-      ...json(patch),
-    }),
+  /**
+   * 体按 JSON 的规矩走一遍：值为 `undefined` 的键不发（迁移前 `JSON.stringify`
+   * 就是这样丢掉它们的），否则 core 的入参校验会把它当成一个不是 JSON 的值。
+   */
+  updateSettings: async (patch: RuntimeSettingsPatch) =>
+    runtimeSettingsSchema.parse(
+      await rpc().settings.update(
+        JSON.parse(JSON.stringify(patch)) as Record<string, JsonValue>,
+      ),
+    ),
 
   /* --------------------------------- 主机密钥 --------------------------- */
 
@@ -433,7 +447,7 @@ export const settingsApi = {
         ...json(switchExecutionHostRequestSchema.parse(input)),
       },
     ),
-};
+});
 
 /**
  * 从一次失败的改绑里读出结构化拒绝；不是拒绝就返回 `null`。

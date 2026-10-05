@@ -4,14 +4,15 @@ import { isNativeShell } from "../host/native-session";
 import { isNativeApp, sameOrigin } from "../mobile/native-bridge";
 import { RUNTIME_URL } from "./request";
 import { savedRuntimeOrigin } from "./runtime-url";
+import { localSource } from "./source";
 
 /**
  * 页面里 `<img src>` 指向 core 的资源（白板图片、Markdown 预览里的图，R-55）。
  *
  * 服务器壳的浏览器里直接用地址：Cookie 会话跟着 `<img>` 走。原生 App 与桌面壳
- * 里凭据是 `Authorization: Bearer`（契约 §3.2），而 `<img>` 带不了头——请求层
- * （`installNativeTransport`、`installShellTransport`）只包了 `fetch` 与
- * `WebSocket`。所以那两处发往 core 的地址改成先经（已带 Bearer 的）`fetch` 取回，
+ * 里凭据是 `Authorization: Bearer`（契约 §3.2），而 `<img>` 带不了头——Bearer
+ * 只跟着本机源的 `fetch` 走（`api/source.ts`；原生 App 是装在全局 `fetch` 上的
+ * `installNativeTransport`）。所以那两处发往 core 的地址改成先经它取回，
  * 再交给 `<img>` 一个 `blob:` 地址。同一个地址的几处共用一份，最后一处卸载时
  * 回收。
  */
@@ -42,15 +43,15 @@ export function needsBearerFetch(
 /**
  * 把 core 上的一个文件存到本机（编辑器的「下载」）。
  *
- * 经 `fetch` 取回再交给一个 `blob:` 链接：三种环境的凭据都只跟着 `fetch` 走——
- * 桌面壳与原生 App 是请求层补上的 Bearer，服务器壳是同源的 Cookie。一个直接的
+ * 经本机源的 `fetch` 取回再交给一个 `blob:` 链接：三种环境的凭据都只跟着 `fetch`
+ * 走——桌面壳与原生 App 是补上的 Bearer，服务器壳是同源的 Cookie。一个直接的
  * `<a href>` 在前两处没有凭据，core 答 401。取不回（非 2xx、网络错误）答
  * `false`。
  */
 export async function downloadRuntimeFile(
   url: string,
   filename: string,
-  load: typeof fetch = (input, init) => globalThis.fetch(input, init),
+  load: typeof fetch = (input, init) => localSource.fetch(input, init),
 ): Promise<boolean> {
   let blob: Blob;
   try {
@@ -86,7 +87,7 @@ const entries = new Map<string, Entry>();
  */
 export function acquireAssetUrl(
   url: string,
-  load: typeof fetch = (input, init) => globalThis.fetch(input, init),
+  load: typeof fetch = (input, init) => localSource.fetch(input, init),
 ): { ready: Promise<string | null>; release(): void } {
   let entry = entries.get(url);
   if (entry === undefined) {

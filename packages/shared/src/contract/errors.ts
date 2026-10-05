@@ -1,16 +1,19 @@
 import type { z } from "zod";
 
 /**
- * 错误码注册表（工程规范化 §2.3.2 的雏形）。
+ * 错误码注册表（工程规范化 §2.3.2）。
  *
- * 线上形状仍是 `{ code, message }`（契约 §5.1）；这张表回答「一个码对应哪个
- * HTTP 状态」。码一律 snake_case，同一类失败只留一个拼法。
+ * 线上形状是 `{ code, message, requestId?, details? }`（契约 §5.1、§34.1）；这张表
+ * 回答「一个码对应哪个 HTTP 状态」。码一律 snake_case，同一类失败只留一个拼法。
  *
- * 现阶段只登记 core 里 `coreError(status, "<code>", …)` 字面量直接给出的码——
- * 状态码一条条对得上，`apps/web/src/api/error-codes.test.ts` 会扫 core
+ * 登记的是 core 里 `coreError(status, "<code>", …)` 与 `fail("<code>", …)` 字面量
+ * 给出的码——状态码一条条对得上，`apps/web/src/api/error-codes.test.ts` 会扫 core
  * 源码核对：写了没登记的码、或同一个码换了状态，测试都会红。身份域与 GitHub 面
  * 的大写码（`NOT_FOUND`…）、各域自己的对象形拒绝码在对应域迁移时再并进来，
  * 在那之前由测试里的存量名单只减不增地盯着。
+ *
+ * 契约（`contract/<域>.ts`）用 {@link errors.pick} 声明一条 procedure 会答哪些码；
+ * `contract.test.ts` 断言声明的码都在这里。
  */
 export interface ErrorSpec {
   /** 这个码对应的 HTTP 状态。 */
@@ -59,3 +62,37 @@ export type ErrorCode = keyof typeof ERROR_CODES;
 export function isRegisteredErrorCode(code: string): code is ErrorCode {
   return Object.hasOwn(ERROR_CODES, code);
 }
+
+/** 门面用的名字（工程规范化 §2.3.2）：这个码在注册表里。 */
+export const isDefinedCode = isRegisteredErrorCode;
+
+/** 这个码登记的 HTTP 状态；没登记的答 `undefined`。 */
+export function errorStatus(code: string): number | undefined {
+  return isRegisteredErrorCode(code) ? ERROR_CODES[code].status : undefined;
+}
+
+/** 一条 procedure 声明自己会答的码时用的那一项（上游 `ErrorMap` 的一格）。 */
+export interface DeclaredError {
+  readonly status: number;
+  readonly data?: z.ZodType;
+}
+
+export const errors = {
+  /**
+   * 从注册表挑出几个码，交给契约的 `.errors(...)`。状态从注册表来，契约里不再
+   * 写第二遍。
+   */
+  pick<const K extends ErrorCode>(
+    ...codes: readonly K[]
+  ): { readonly [P in K]: DeclaredError } {
+    const picked: Record<string, DeclaredError> = {};
+    for (const code of codes) {
+      const spec: ErrorSpec = ERROR_CODES[code];
+      picked[code] =
+        spec.data === undefined
+          ? { status: spec.status }
+          : { status: spec.status, data: spec.data };
+    }
+    return picked as { readonly [P in K]: DeclaredError };
+  },
+};

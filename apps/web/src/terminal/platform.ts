@@ -11,6 +11,7 @@
  */
 
 import { RUNTIME_URL } from "@/api/client";
+import { localSource } from "../api/source";
 
 export type RuntimePlatform = "unix" | "windows";
 
@@ -26,7 +27,9 @@ export async function loadRuntimePlatform(): Promise<RuntimePlatform> {
   if (cached) return cached;
   inflight ??= (async () => {
     try {
-      const response = await fetch(`${RUNTIME_URL}/api/terminals/backend`);
+      const response = await localSource.fetch(
+        `${RUNTIME_URL}/api/terminals/backend`,
+      );
       const payload: unknown = await response.json();
       const platform =
         typeof payload === "object" &&

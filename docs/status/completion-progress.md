@@ -1840,3 +1840,43 @@
 - `language`：`Hub.pauseSession()` / `resumeSession()` / `outputPaused`，`ServerProcess.pause()` / `resume()`，`limits.ts` 的 `SESSION_MAX_FRAMES`、`SESSION_HIGH_WATER_BYTES`、`SESSION_MAX_PAYLOAD_BYTES`。
 - `browser`：`ViewerSocket.sendFrame?()`，`VIEWER_MAX_FRAMES`、`VIEWER_HIGH_WATER_BYTES`。
 - `events/stream.ts`：`EVENT_HIGH_WATER_BYTES`；`EventSink` 多了可选的 `bufferedAmount` / `readyState`。
+
+## E1 工程规范化：契约内核（oRPC）
+
+设计：[工程规范化](../design/engineering-standardization.md) §2，规格：[工程规范化包](../design/platform/engineering-packages.md) §1；契约 §34。
+
+做了什么：
+
+- **依赖**：精确锁 `@orpc/*` 1.15.4——shared `@orpc/contract`，desktop `@orpc/server`、`@orpc/openapi`，web `@orpc/client`，根（生成器）`@orpc/openapi`、`@orpc/zod`。desktop 新增依赖 `@armadra/shared`（core 要 `implement` 契约；core 与服务器壳的 bundle 都把它打进去）。第三方声明已重新生成。
+- **契约**（`packages/shared/src/contract/`）：`meta.ts`（`oc` 带元数据类型、`meta({ scope, workspaceKey?, since, contract, legacy?, deprecated?, trace? })`、`SCOPES` 与 core 的 `PERMISSIONS` 同一份）、`errors.ts` 在 E0-B 的注册表上加 `errors.pick()`、`isDefinedCode()`、`errorStatus()`、`json.ts`（`jsonValueSchema`）、`system.ts`、`workspaces.ts`、`settings.ts`、`index.ts`（`contract`、`ContractClient`、`ProcedureInput` / `ProcedureResult`、`contractEntries()`）。`contract.test.ts` 9 条守卫。
+- **core 门面**（`core/http/rpc.ts`）：`registerProcedures(server, 域, handlers)` + `installContract(server, options)`（`main` 在所有域装好后调）。`/api/rpc/` 整段接管、只收 POST；带 `meta.legacy` 的 procedure 经 `OpenAPIHandler` 挂回旧路径（`CoreServer.contractRoutes`，方法与模式都对得上才接，其余照旧走路由表）；路由门中间件按 `meta.scope` / `workspaceKey` 走 `routeGuard()`，带旧路径的拿旧路径与旧体去问（成员的工作空间列表过滤照旧）；错误改写成 `{ code, message, requestId, details? }`（旧路径不带 `requestId`）；入参校验失败 `details.issues` 只给路径与消息；没人接住的异常与出参校验失败答 500 `internal`、原话只进日志与崩溃上报；`ARMADRA_RPC_VALIDATE_OUTPUT`（缺省按是否打包）、`ARMADRA_RPC_TRACE`。`core/http/errors.ts` 加 `CoreFailure` 与 `fail(code, message, details?)`（状态查注册表），`workspaces/support.ts` 的 `DomainError` 改继承它。路由表加 `/api/rpc/{procedure}`，`route-scopes.ts` 把 `/api/rpc/` 记进 `SELF_GUARDED` 并登记清单行。
+- **试点**：`workspaces`（list / create / openDirectory / openRemote / update / delete / open）与 `settings`（get / update / local）的旧 handler 与 procedure 改为调同一份实现（`workspaceOperations`、`applySettingsPatch`）；`system.hello` / `ping` 由身份域登记（hello 多出 `procedures`、`heartbeatMs` 25 s、`sessionExpiresAtMs`、`version`）。协议 minor 2 → 3。导入（多部分）与执行主机改绑（409 结构化拒绝）留 REST。
+- **页面门面**（`apps/web/src/api/client.ts`）：`createClient(source)`（`RPCLink`、异步头在 Cookie 模式带 CSRF、`fetch` 走源的 `fetch`；envelope 直接变 `RuntimeRequestError`，CSRF 被拒换一枚只重发一次）、`localClient()`、`isDefinedError(e, code?)`，再导出 `Source` / `localSource`。`api/workspaces.ts`、`api/settings.ts` 改成由 `client.ts` 注入客户端的工厂（`workspacesApiFor` / `settingsApiFor`），`runtimeApi` 的方法签名不变。
+- **本机源**（`apps/web/src/api/source.ts`）：`Source { sourceId, httpBase, wsBase, credentials, fetch, WebSocket }` 与 `localSource`；`shell-transport.ts` 改为 `installLocalTransport(...)` 给本机源装 Bearer 与换票，**不再改写全局 `fetch` / `WebSocket`**。绕开 `request()` 的点逐个改经本机源：`assets.ts`（`<img>` 的 `blob:` 取图与编辑器下载）、编辑器媒体预览、`identity.ts`、`accounts.ts`、`gateway.ts`、会话搜索与改标题、终端后端探测与滚动、Agent 已读、白板栅格化取图、拖入图片测尺寸；五条流（事件、终端、实时同步、语言服务、浏览器画面）用 `localSource.WebSocket`。原生 App 的全局补丁（`installNativeTransport`）不动，留给 A1-1。
+- **生成器**（`tools/contract/generate.mjs`）：`OpenAPIGenerator` + `ZodToJsonSchemaConverter` 出 `docs/contracts/core-openapi.json`（路径 `/api/rpc/…`、失败统一 `CoreError`、`x-armadra` 元数据、版本取契约最新 `since`），按 `meta.contract` 渲染 `core-json-api.md` 的 `rpc:begin` 块；`--check` 作为 `pnpm contract:check` 接进 `pnpm check`（`libs:build` 之后），用例 `generate.test.mjs` 进 `pnpm repo:test`。契约 §34.1–§34.5 写好。
+- 错误码扫描（`api/error-codes.test.ts`）认 `http/errors` 的 `fail("…")`。探针 `ui-features` 的两处窄屏设置点击改为等抽屉停稳（`harness.dialogSettled`；快捷键那一场在 main 上同样失败）。
+
+实测（macOS arm64，2026-10-06，已合 E0-A #128、A3-0 #132、A0-5 #134、#135）：
+
+- `pnpm check` 通过（lint 0 error、284 warn，与 E0-A 基线相同）；`pnpm repo:test` 28 过；`pnpm release:test` 171 过；`pnpm ci:workflows` 5 个工作流通过；`pnpm notices:check` 通过。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 4677 过 / 46 跳过，live 4 过，脚本 68 过；shared 340 过；`pnpm --filter @armadra/web test` 3492 过，`typecheck` 通过；server 87 过 / 4 跳过（`pnpm --filter @armadra/server build` 通过）。
+- 新用例：`contract.test.ts` 11、`core/http/rpc.test.ts` 20（含一台装配好的 core 上回环会话调 `system.hello` / `ping`、无会话 401）、`core/contract/parity.test.ts` 12（三种答法：路由表原 handler、旧路径经 HTTP、procedure，成功按 `canonicalJson` 相等，失败码 / 状态 / 原话相等；另验 `meta.scope` 与路由表对旧路径的要求一致、`SCOPES` 与 core 词表一致）、`client.rpc.test.ts` 8、`shell-transport.test.ts` 补 2、`generate.test.mjs` 5。
+- A 档 e2e：`node tools/ci/e2e.mjs --tier a` 12 项全过。修探针之前 `ui-features-e2e` 的两处窄屏点击失败（抽屉动画中按坐标点空）；合 main 后的一轮里 `agent-e2e-self-test` 的 11-coordinator 偶发失败（模型服务请求时序），单独重跑通过。
+- `@orpc/*` 只在 `packages/shared/src/contract/`、`core/http/rpc.ts`、`web/src/api/client.ts`、`tools/contract/`：grep 确认；在 web、core、shared 别处各放一个违规 import，ESLint 三处都报 error，门面放行。
+
+接口（供 E2 / A1-1 / A1-3）：
+
+- 契约：`import { contract, type ContractClient, type ProcedureInput, type ProcedureResult, contractEntries, errors, meta } from "@armadra/shared"`；新域加 `contract/<域>.ts`，`index.ts` 的 `contract` 里登记，`meta.contract` 用预分配的 §N。
+- core：`registerProcedures(context.server, "<域>", { verb: (input, call) => … })`，`call` 有 `requestId`、`identity`、`signal`、`request`、`procedures`；拒绝 `throw fail("conflict", "…", details?)`。
+- 页面：`createClient(source)` / `localClient()`；`Source.credentials` 为 `{ mode: "bearer" | "cookie" | "none", access(), renew(rejected), csrf(), renewCsrf(rejected) }`；`Source.fetch`、`Source.WebSocket` 是带凭据的发送点；`installLocalTransport(transport | null)` 给本机源装 Bearer 传输。
+
+没做 / 偏离规格：
+
+- shared 没装 `@orpc/zod`：契约用 zod 4 的 Standard Schema 直接给上游，`@orpc/zod` 只在生成器里用（它 peer 依赖 `@orpc/server`，放进 shared 会把服务端包拖进页面依赖树），装在根。
+- `installContract(server, options)` 不收 `impl` 参数：各域 `install()` 里 `registerProcedures` 登记，`main` 只调一次 `installContract`，`DOMAINS` 的签名不变。没登记的 procedure 答 501 `not_implemented`。
+- `Source.credentials.csrf()` 是异步的（Cookie 会话刷新后内存里没有令牌时要先取），另加 `renewCsrf()`；`Source` 多 `fetch` 与 `WebSocket` 两个成员。
+- 旧路径的失败不带 `requestId`（与迁移前逐字节同形，旧用例与外部脚本不受影响）；procedure 的失败带。
+- 契约的输出形状写线上原样：本地工作空间不带 `executionHostId`，标识与时刻只校字符串；`workspaces.delete` 的 procedure 答 200 空值，旧路径照旧 204。
+- 入参形状不对时，旧路径的原话由域的那句换成了 `Input validation failed` + `details.issues`（码与状态不变，对偶测试单列这一条）。
+- `system.*` 由身份域登记：没装身份域（未统一的库）时答 501。`scope` 是 `identity:read`，服务器壳上的共享成员没有这项全局授权，调不了——与规格一致，E2 用到时再定。
+- 全局补丁只在桌面壳拆了；原生 App 的 `installNativeTransport` 仍改写全局，留给 A1-1。

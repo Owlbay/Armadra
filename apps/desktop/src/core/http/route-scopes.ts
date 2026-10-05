@@ -54,6 +54,9 @@ export const SELF_GUARDED: readonly RegExp[] = [
   /^\/api\/mail\//,
   // 页面错误上报：登录即可，域自己认会话并限流（契约 §30）。
   /^\/api\/diagnostics\/client-error$/,
+  // 契约 procedure：一条路径前缀下是许多 procedure，各要各的权限。RPC 门面
+  // （`http/rpc.ts`）按每条契约的 `meta.scope` 走同一道路由门（契约 §34.1）。
+  /^\/api\/rpc\//,
 ];
 
 export function selfGuarded(path: string): boolean {
@@ -156,6 +159,9 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
     read: "canvas:read",
     write: "canvas:read",
   },
+  // 契约 procedure（契约 §34.1）：门面按每条的 `meta.scope` 判（{@link
+  // SELF_GUARDED}）；这一行是清单——最少也要能读身份，与 `system.hello` 同一档。
+  { pattern: /^\/api\/rpc\//, read: "identity:read", write: "identity:read" },
   // 推送设备：登录即可（{@link SELF_GUARDED}），推送域只碰请求主体自己的设备。
   // 声明的这一档只是清单：注册一台设备收的是「看得见的画布」上的通知。契约 §19。
   {

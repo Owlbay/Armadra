@@ -20,6 +20,9 @@
     "test": "vitest run && vitest run --config vitest.live.config.mts && node --test scripts/*.test.mjs"
   },
   "dependencies": {
+    "@armadra/shared": "workspace:*",
+    "@orpc/openapi": "1.15.4",
+    "@orpc/server": "1.15.4",
     "@sentry/electron": "7.20.0",
     "@simplewebauthn/server": "14.0.3",
     "acme-client": "5.4.0",

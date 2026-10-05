@@ -109,6 +109,7 @@ export class CoreServer {
   private readonly options: CoreServerOptions;
   private readonly capabilityProbes = new Map<string, () => boolean>();
   private admissionGate: RequestAdmission | undefined;
+  private contractLegacy: ContractLegacy | undefined;
 
   constructor(options: CoreServerOptions) {
     this.options = options;
@@ -251,11 +252,11 @@ export class CoreServer {
             await raw.handler(core, response, headers);
             return;
           }
-          answer = await this.router.dispatch(
-            request.method ?? "GET",
-            path,
-            core,
-          );
+          // 迁到契约上的旧路径先问 RPC 门面（`http/rpc.ts`），它不认的照旧
+          // 走路由表——迁移期两边并存，表里那条 handler 仍是回落。
+          answer =
+            (await this.contractLegacy?.(core)) ??
+            (await this.router.dispatch(request.method ?? "GET", path, core));
           if (
             verdict.filter !== undefined &&
             answer.status >= 200 &&
@@ -351,6 +352,15 @@ export class CoreServer {
   raw(prefix: string, handler: RawHandler): void {
     this.rawRoutes.push({ prefix, handler });
     this.rawRoutes.sort((a, b) => b.prefix.length - a.prefix.length);
+  }
+
+  /**
+   * 迁到契约上的旧 REST 路径（工程规范化 §2.4）：RPC 门面在这里接住方法与模式
+   * 都对得上的请求，答 `undefined` 的照旧交给路由表。来源、准入、体积上限与
+   * 路由门都在它之前判过了，成功答案照样过路由门的 `filter`。
+   */
+  contractRoutes(handler: ContractLegacy | undefined): void {
+    this.contractLegacy = handler;
   }
 
   /** 这条路径落在某个整段接管的前缀里（三张 JSON 面就是这么装的）。 */
@@ -663,6 +673,11 @@ export type AdmissionVerdict =
       };
     }
   | { readonly identity?: RequestIdentity };
+
+/** 旧路径交给契约实现；不认的答 `undefined`。 */
+export type ContractLegacy = (
+  request: CoreRequest,
+) => Promise<HandlerResult | undefined>;
 
 export type RequestAdmission = (
   request: CoreRequest,

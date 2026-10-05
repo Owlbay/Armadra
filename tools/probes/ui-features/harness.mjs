@@ -605,6 +605,21 @@ async function createPage(
       );
       await sleep(600);
     },
+    /**
+     * 等对话框（窄屏下是从底部滑上来的抽屉）停稳：连续三次量到同一个位置。
+     * 滑动中按坐标点进去，点到的是动画里那一帧的位置，不是按钮。
+     */
+    async dialogSettled(what = "对话框停稳") {
+      await page.evaluate(`window.__probeDialogTops = []; return true;`);
+      await page.until(
+        `const d = document.querySelector('[role="dialog"]');
+         if (!d) return null;
+         const tops = window.__probeDialogTops;
+         tops.push(Math.round(d.getBoundingClientRect().top));
+         return tops.length >= 3 && tops.slice(-3).every((t) => t === tops.at(-1)) ? true : null;`,
+        what,
+      );
+    },
     /** 这一页攒下的、不在白名单里的错误。 */
     unexpected() {
       return problems.filter(

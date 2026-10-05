@@ -26,7 +26,16 @@ import {
   resyncExecutionHost,
   type ExecutionHostDeps,
 } from "./execution-hosts";
-import { getLocalSettings, getSettings, patchSettings } from "./routes";
+import { CoreFailure } from "../http/errors";
+import { registerProcedures } from "../http/rpc";
+import type { JsonObject } from "./local";
+import { localPaths } from "./local";
+import {
+  applySettingsPatch,
+  getLocalSettings,
+  getSettings,
+  patchSettings,
+} from "./routes";
 import { SettingsStore } from "./store";
 import { workspaceCounts } from "./workspace-counts";
 
@@ -73,6 +82,22 @@ export function install(context: CoreContext): SettingsDomain {
   };
 
   const { router } = context.server;
+  // 契约 §34.5：与下面三条旧路径同一份实现。
+  registerProcedures(context.server, "settings", {
+    get: () => deps.settings.snapshot(),
+    update: (patch) => {
+      const answer = applySettingsPatch(deps, patch);
+      if (answer.status >= 400) {
+        const { code, message } = answer.body as {
+          code: string;
+          message: string;
+        };
+        throw new CoreFailure(answer.status, code, message);
+      }
+      return answer.body as JsonObject;
+    },
+    local: () => ({ paths: [...localPaths()], file: deps.workerSettingsFile }),
+  });
   router.handle("GET", "/api/settings", () => getSettings(deps));
   router.handle("PATCH", "/api/settings", (_match, request) =>
     patchSettings(deps, request),

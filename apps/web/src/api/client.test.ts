@@ -139,15 +139,16 @@ describe("画布文档", () => {
     );
   });
 
-  it("从列表移除工作空间打 DELETE /api/workspaces/{id}", async () => {
-    const fetchMock = stubJson(null);
+  it("从列表移除工作空间调 workspaces.delete（契约 §34.4）", async () => {
+    const fetchMock = stubJson({});
 
     await expect(
       runtimeApi.deleteWorkspace(workspaceId),
     ).resolves.toBeUndefined();
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url.endsWith(`/api/workspaces/${workspaceId}`)).toBe(true);
-    expect(init.method).toBe("DELETE");
+    expect(url).toBe("http://127.0.0.1:43120/api/rpc/workspaces/delete");
+    expect(init.method).toBe("POST");
+    expect(bodyOf(fetchMock)).toMatchObject({ json: { workspaceId } });
   });
 });
 
@@ -741,9 +742,9 @@ describe("集成安装", () => {
   });
 });
 
-describe("设置", () => {
+describe("设置（契约 §34.5，经 RPC）", () => {
   it("补齐缺失的终端段默认值", async () => {
-    stubJson({});
+    stubJson({ json: {} });
 
     await expect(runtimeApi.settings()).resolves.toMatchObject({
       terminal: { backend: "auto", detachedGraceMinutes: 1440 },
@@ -752,8 +753,10 @@ describe("设置", () => {
 
   it("透传 Runtime 写入的未知键", async () => {
     stubJson({
-      terminal: { backend: "tmux", detachedGraceMinutes: 60 },
-      future: { key: 1 },
+      json: {
+        terminal: { backend: "tmux", detachedGraceMinutes: 60 },
+        future: { key: 1 },
+      },
     });
 
     const settings = await runtimeApi.settings();
@@ -761,17 +764,21 @@ describe("设置", () => {
     expect(settings).toMatchObject({ future: { key: 1 } });
   });
 
-  it("PATCH 只发改动的段", async () => {
+  it("update 只发改动的段，值为 undefined 的键不发", async () => {
     const fetchMock = stubJson({
-      terminal: { backend: "direct", detachedGraceMinutes: 1440 },
+      json: { terminal: { backend: "direct", detachedGraceMinutes: 1440 } },
     });
 
-    await runtimeApi.updateSettings({ terminal: { backend: "direct" } });
+    await runtimeApi.updateSettings({
+      terminal: { backend: "direct", ecoMode: undefined },
+    });
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("http://127.0.0.1:43120/api/settings");
-    expect(init.method).toBe("PATCH");
-    expect(bodyOf(fetchMock)).toEqual({ terminal: { backend: "direct" } });
+    expect(url).toBe("http://127.0.0.1:43120/api/rpc/settings/update");
+    expect(init.method).toBe("POST");
+    expect((bodyOf(fetchMock) as { json: unknown }).json).toEqual({
+      terminal: { backend: "direct" },
+    });
   });
 });
 

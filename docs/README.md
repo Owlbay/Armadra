@@ -106,7 +106,8 @@
 ## contracts/ 实施契约
 
 - [v3 Agent 终端](contracts/v3-agent-terminal-plan.md)：章节 §N 被代码引用，保留编号。
-- [core 的 JSON 面](contracts/core-json-api.md)：`/api/github/*`、`/api/automations/*`、`GET /api/identity/hello` 与 `GET /api/nodes/{id}/context-reads` 的线上形状，自动化域存进库里的那份 JSON，以及补全阶段的 §14 ACP、§15 工作流与 runners、§16 实时协同与评论、§17 Gateway、§18 身份扩展、§19 推送、§20 节点凭据、§21 跨主机交接与舰队、§22 画面门、§23 权限补充，以及平台预留的 §31 云登录与登记、§32 隧道面、§33 客户端源表（cloud 仓接口见其 [cloud-api.md](https://github.com/Owlbay/armadra-cloud/blob/main/docs/contracts/cloud-api.md)）。章节 §N 被代码引用，保留编号。
+- [core 的 JSON 面](contracts/core-json-api.md)：`/api/github/*`、`/api/automations/*`、`GET /api/identity/hello` 与 `GET /api/nodes/{id}/context-reads` 的线上形状，自动化域存进库里的那份 JSON，以及补全阶段的 §14 ACP、§15 工作流与 runners、§16 实时协同与评论、§17 Gateway、§18 身份扩展、§19 推送、§20 节点凭据、§21 跨主机交接与舰队、§22 画面门、§23 权限补充，以及平台预留的 §31 云登录与登记、§32 隧道面、§33 客户端源表（cloud 仓接口见其 [cloud-api.md](https://github.com/Owlbay/armadra-cloud/blob/main/docs/contracts/cloud-api.md)），以及工程规范化的 §34 RPC 内核（`/api/rpc/{procedure}`、错误 envelope、`system`、`workspaces`、`settings`）。章节 §N 被代码引用，保留编号。§34 起各节的形状表由 `tools/contract/generate.mjs` 从 `packages/shared/src/contract/` 生成（`pnpm contract`），改形状改契约，不手改表。
+- [core 的 OpenAPI](contracts/core-openapi.json)：同一份契约的机器可读版本（生成文件），给外部工具用。
 - [tldraw 画布](history/tldraw-canvas-plan.md) 已被 [React Flow 画布](design/canvas-react-flow.md)取代并移入 `history/`。代码注释里的「旧画布契约 §N」指的就是它，只写编号不写路径；§6.1 / §6.3 已改指 React Flow 画布的 §3.1 / §2.5，§6.2（资产端点）与 §8（实施阶段）在新文档里没有对应章节，仍按编号回溯本文。
 
 ## history/ 与 research/

@@ -26,6 +26,7 @@ vi.mock("../host/native-session", async (original) => {
 const { request, RUNTIME_URL } = await import("./request");
 const { resetIdentityCredentials } = await import("./identity");
 const { installShellTransport } = await import("./shell-transport");
+const { installLocalTransport, localSource } = await import("./source");
 const { WS_TICKET_PROTOCOL } = await import("../mobile/native-bridge");
 
 type Call = { url: string; init: RequestInit | undefined };
@@ -100,6 +101,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   resetIdentityCredentials();
+  installLocalTransport(null);
 });
 
 const schema = z.object({ ok: z.boolean() });
@@ -107,9 +109,16 @@ const schema = z.object({ ok: z.boolean() });
 describe("桌面壳的请求层", () => {
   it("不在壳里什么也不装", () => {
     mocks.nativeShell = false;
-    const before = globalThis.fetch;
     expect(installShellTransport()).toBe(false);
-    expect(globalThis.fetch).toBe(before);
+    expect(localSource.credentials.mode).toBe("none");
+  });
+
+  it("凭据装在本机源上，全局的 fetch 与 WebSocket 不被改写", () => {
+    const fetchBefore = globalThis.fetch;
+    expect(installShellTransport()).toBe(true);
+    expect(globalThis.fetch).toBe(fetchBefore);
+    expect(globalThis.WebSocket).toBe(FakeSocket);
+    expect(localSource.credentials.mode).toBe("bearer");
   });
 
   it("还没有会话时先向壳要票配对，再给每一条 /api/ 带 Bearer", async () => {
@@ -129,15 +138,23 @@ describe("桌面壳的请求层", () => {
     expect(authorization(calls[2])).toBe("Bearer A");
   });
 
-  it("裸 fetch（不经 request）同样带上", async () => {
+  it("不经 request 的发送点经本机源同样带上；全局 fetch 不带", async () => {
     installShellTransport();
-    await fetch(`${RUNTIME_URL}/api/terminals/backend`);
+    await localSource.fetch(`${RUNTIME_URL}/api/terminals/backend`);
     expect(authorization(calls.at(-1))).toBe("Bearer A");
+    await fetch(`${RUNTIME_URL}/api/terminals/backend`);
+    expect(authorization(calls.at(-1))).toBe(null);
+  });
+
+  it("本机源的凭据：access 先配对再给密钥", async () => {
+    installShellTransport();
+    await expect(localSource.credentials.access()).resolves.toBe("A");
+    expect(mocks.ticket).toHaveBeenCalledTimes(1);
   });
 
   it("发往别处的请求原样放过，不配对", async () => {
     installShellTransport();
-    await fetch("https://example.invalid/x");
+    await localSource.fetch("https://example.invalid/x");
     expect(calls.map((call) => call.url)).toEqual([
       "https://example.invalid/x",
     ]);
@@ -192,7 +209,7 @@ describe("桌面壳的请求层", () => {
   it("流先换一张一次性票，经子协议升级", async () => {
     installShellTransport();
     const socketBase = RUNTIME_URL.replace(/^http/, "ws");
-    new WebSocket(`${socketBase}/api/workspaces/w/events`);
+    new localSource.WebSocket(`${socketBase}/api/workspaces/w/events`);
     await vi.waitFor(() => expect(FakeSocket.made).toHaveLength(1));
     const ticket = calls.find(
       (call) => path(call) === "/api/identity/ws-ticket",
@@ -203,7 +220,7 @@ describe("桌面壳的请求层", () => {
 
   it("发往别处的流不换票", () => {
     installShellTransport();
-    new WebSocket("ws://example.invalid/socket");
+    new localSource.WebSocket("ws://example.invalid/socket");
     expect(FakeSocket.made).toHaveLength(1);
     expect(FakeSocket.made[0]?.protocols).toBeUndefined();
     expect(calls).toHaveLength(0);

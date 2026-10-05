@@ -1,6 +1,7 @@
 import type { CoreContext } from "../main";
 import { confirmWorkspace } from "../collab/control/close";
-import { instanceId } from "../instance";
+import { VERSION, instanceId } from "../instance";
+import { registerProcedures } from "../http/rpc";
 import { coreCapabilities } from "../schedule/capabilities";
 import { secretsFor } from "../secrets";
 import { completionSettings, settingsDomain } from "../settings";
@@ -17,6 +18,7 @@ import {
 } from "./gate";
 import { API_PREFIX, IdentityHttp, loopbackAnonymousOwner } from "./http";
 import { createLoopbackAdmission } from "./loopback";
+import { HEARTBEAT_MS } from "./protocol";
 import { installOAuth } from "./oauth";
 import { resolveBreachMode } from "./policy";
 import { createRouteGuard } from "./route-access";
@@ -131,6 +133,25 @@ export function installIdentity(context: CoreContext): void {
     capabilities: coreCapabilities,
     security,
     ...(wsTickets === undefined ? {} : { wsTickets }),
+  });
+  // 契约 §34.2–§34.3：`system.hello` 说的与 `GET /api/identity/hello` 是同一台
+  // core，多出 procedure 表、心跳与这次会话的到期时刻。
+  registerProcedures(context.server, "system", {
+    hello: (_input, call) => {
+      const hello = http.helloJson();
+      return {
+        protocol: { ...hello.protocol },
+        procedures: [...call.procedures],
+        capabilities: [...hello.capabilities],
+        heartbeatMs: HEARTBEAT_MS,
+        maxFrameBytes: hello.maxFrameBytes,
+        sessionExpiresAtMs: call.identity?.accessExpiresAtMs ?? null,
+        instanceId: hello.hostInstanceId,
+        sourceId: hello.hostId,
+        version: VERSION,
+      };
+    },
+    ping: ({ ts }) => ({ ts, serverTs: Date.now() }),
   });
   context.server.admission(
     wsTickets === undefined

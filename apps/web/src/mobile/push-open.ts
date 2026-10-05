@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { workspacesApi } from "../api/workspaces";
+import { runtimeApi } from "../api/client";
 import { useOpenWorkspace } from "../app/workspace-actions";
 import { PUSH_OPEN_MESSAGE } from "../push/service-worker";
 import { useCanvasStore } from "../store/canvas-store";
@@ -91,7 +91,7 @@ export function usePushOpen(): void {
       cancelFocus();
       const current = useCanvasStore.getState().workspace;
       if (current?.id !== target.workspaceId) {
-        const list = await workspacesApi.listWorkspaces().catch(() => null);
+        const list = await runtimeApi.listWorkspaces().catch(() => null);
         const workspace = list?.find((item) => item.id === target.workspaceId);
         if (disposed || workspace === undefined) return;
         openRef.current(workspace);
