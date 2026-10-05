@@ -26,10 +26,12 @@
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "knip": "knip --no-progress --no-exit-code",
     "test": "pnpm -r --if-present test",
+    "test:coverage": "pnpm --filter @armadra/web --filter @armadra/desktop --filter @armadra/server exec vitest run --coverage",
     "typecheck": "pnpm -r --if-present typecheck"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
+    "@vitest/coverage-v8": "4.1.11",
     "eslint": "9.39.5",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-jsx-a11y": "6.10.2",
