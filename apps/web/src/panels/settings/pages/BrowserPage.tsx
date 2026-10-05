@@ -23,6 +23,7 @@ import {
 import { Button } from "@/ui/button";
 import { Input } from "@/ui/input";
 import { Switch } from "@/ui/switch";
+import { clampInt } from "@/lib/math";
 
 /**
  * 设置 → 浏览器（复查 §5.2「设置页的隐藏回收开关」）。
@@ -91,7 +92,10 @@ export function BrowserPage() {
             onChange={(event) =>
               set(
                 "discardMinutes",
-                clamp(event.target.value, BROWSER_DISCARD_MINUTES_RANGE),
+                clampInt(
+                  Number(event.target.value),
+                  ...BROWSER_DISCARD_MINUTES_RANGE,
+                ),
               )
             }
           />
@@ -112,7 +116,10 @@ export function BrowserPage() {
             onChange={(event) =>
               set(
                 "backgroundMax",
-                clamp(event.target.value, BROWSER_BACKGROUND_MAX_RANGE),
+                clampInt(
+                  Number(event.target.value),
+                  ...BROWSER_BACKGROUND_MAX_RANGE,
+                ),
               )
             }
           />
@@ -168,11 +175,4 @@ export function BrowserPage() {
       </ResponsiveAlertDialog>
     </>
   );
-}
-
-/** 数字框里能打出任何东西，所以越界与非数字都在这里收敛成一个可用的值。 */
-function clamp(raw: string, [min, max]: readonly [number, number]): number {
-  const value = Number(raw);
-  if (!Number.isFinite(value)) return min;
-  return Math.min(max, Math.max(min, Math.round(value)));
 }

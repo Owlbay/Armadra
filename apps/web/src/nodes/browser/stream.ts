@@ -1,3 +1,5 @@
+import { clampInt } from "@/lib/math";
+
 /**
  * 远程浏览器节点的画面流：几何与输入映射。
  *
@@ -22,14 +24,9 @@ export const MAX_VIEWPORT_HEIGHT = 1_600;
 
 export function viewportFor(box: Size): Size {
   return {
-    width: clamp(box.width, MIN_VIEWPORT, MAX_VIEWPORT_WIDTH),
-    height: clamp(box.height, MIN_VIEWPORT, MAX_VIEWPORT_HEIGHT),
+    width: clampInt(box.width, MIN_VIEWPORT, MAX_VIEWPORT_WIDTH),
+    height: clampInt(box.height, MIN_VIEWPORT, MAX_VIEWPORT_HEIGHT),
   };
-}
-
-function clamp(value: number, low: number, high: number): number {
-  if (!Number.isFinite(value)) return low;
-  return Math.round(Math.min(high, Math.max(low, value)));
 }
 
 /** 帧在框里的位置：等比缩放、居中，多出来的是留白。 */
@@ -92,8 +89,8 @@ export function toPageCoordinates(
   const x = (event.clientX - rect.left - fit.offsetX) / fit.scale;
   const y = (event.clientY - rect.top - fit.offsetY) / fit.scale;
   return {
-    x: clamp(x, 0, Math.max(frame.width - 1, 0)),
-    y: clamp(y, 0, Math.max(frame.height - 1, 0)),
+    x: clampInt(x, 0, Math.max(frame.width - 1, 0)),
+    y: clampInt(y, 0, Math.max(frame.height - 1, 0)),
   };
 }
 
