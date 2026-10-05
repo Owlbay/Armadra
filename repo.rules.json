@@ -16,6 +16,8 @@
     "armadra.sh",
     "assets",
     "docs",
+    "eslint.config.js",
+    "knip.json",
     "migrations.lock",
     "package.json",
     "packages",
@@ -74,5 +76,11 @@
         "kind": "directory"
       }
     ]
-  }
+  },
+  "pinnedVersions": [
+    {
+      "$comment": "工程规范化 §5 / F15：oRPC 精确锁版、各包同一版本、不跟 beta；E6 升 2.x 时改这里的说明，不改规则。",
+      "packages": "@orpc/*"
+    }
+  ]
 }
