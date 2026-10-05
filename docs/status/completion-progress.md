@@ -1856,12 +1856,12 @@
 - **生成器**（`tools/contract/generate.mjs`）：`OpenAPIGenerator` + `ZodToJsonSchemaConverter` 出 `docs/contracts/core-openapi.json`（路径 `/api/rpc/…`、失败统一 `CoreError`、`x-armadra` 元数据、版本取契约最新 `since`），按 `meta.contract` 渲染 `core-json-api.md` 的 `rpc:begin` 块；`--check` 作为 `pnpm contract:check` 接进 `pnpm check`（`libs:build` 之后），用例 `generate.test.mjs` 进 `pnpm repo:test`。契约 §34.1–§34.5 写好。
 - 错误码扫描（`api/error-codes.test.ts`）认 `http/errors` 的 `fail("…")`。探针 `ui-features` 的两处窄屏设置点击改为等抽屉停稳（`harness.dialogSettled`；快捷键那一场在 main 上同样失败）。
 
-实测（macOS arm64，2026-10-06，已合 E0-A #128）：
+实测（macOS arm64，2026-10-06，已合 E0-A #128、A3-0 #132、A0-5 #134、#135）：
 
 - `pnpm check` 通过（lint 0 error、284 warn，与 E0-A 基线相同）；`pnpm repo:test` 28 过；`pnpm release:test` 171 过；`pnpm ci:workflows` 5 个工作流通过；`pnpm notices:check` 通过。
-- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 4647 过 / 53 跳过，live 4 过，脚本 68 过；shared 340 过；`pnpm --filter @armadra/web test` 3492 过，`typecheck` 通过；server 87 过 / 4 跳过（`pnpm --filter @armadra/server build` 通过）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 4677 过 / 46 跳过，live 4 过，脚本 68 过；shared 340 过；`pnpm --filter @armadra/web test` 3492 过，`typecheck` 通过；server 87 过 / 4 跳过（`pnpm --filter @armadra/server build` 通过）。
 - 新用例：`contract.test.ts` 11、`core/http/rpc.test.ts` 20（含一台装配好的 core 上回环会话调 `system.hello` / `ping`、无会话 401）、`core/contract/parity.test.ts` 12（三种答法：路由表原 handler、旧路径经 HTTP、procedure，成功按 `canonicalJson` 相等，失败码 / 状态 / 原话相等；另验 `meta.scope` 与路由表对旧路径的要求一致、`SCOPES` 与 core 词表一致）、`client.rpc.test.ts` 8、`shell-transport.test.ts` 补 2、`generate.test.mjs` 5。
-- A 档 e2e：`node tools/ci/e2e.mjs --tier a` 12 项，11 项首轮通过；`ui-features-e2e` 的两处窄屏点击修了探针后单独重跑通过。
+- A 档 e2e：`node tools/ci/e2e.mjs --tier a` 12 项全过。修探针之前 `ui-features-e2e` 的两处窄屏点击失败（抽屉动画中按坐标点空）；合 main 后的一轮里 `agent-e2e-self-test` 的 11-coordinator 偶发失败（模型服务请求时序），单独重跑通过。
 - `@orpc/*` 只在 `packages/shared/src/contract/`、`core/http/rpc.ts`、`web/src/api/client.ts`、`tools/contract/`：grep 确认；在 web、core、shared 别处各放一个违规 import，ESLint 三处都报 error，门面放行。
 
 接口（供 E2 / A1-1 / A1-3）：
