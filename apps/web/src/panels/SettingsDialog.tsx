@@ -33,7 +33,11 @@ import {
   visibleSettingsSections,
   type SettingsSection,
 } from "./settings/nav";
-import { Dialog, DialogContent, DialogTitle } from "@/ui/dialog";
+import {
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { IconButton } from "@/ui/icon-button";
 import { cn } from "@/lib/cn";
 import { Button } from "@/ui/button";
@@ -76,7 +80,7 @@ export function SettingsDialog() {
   const closeSubpage = usePreferencesStore((state) => state.setSettingsSubpage);
 
   return (
-    <Dialog
+    <ResponsiveDialog
       open={open}
       onOpenChange={(next) => {
         // 关掉设置就丢掉子页：重开时该回到分区页，而不是停在一张表单上。
@@ -84,14 +88,16 @@ export function SettingsDialog() {
         setPanel("settings", next);
       }}
     >
-      <DialogContent
+      <ResponsiveDialogContent
         showCloseButton={false}
         className="z-[var(--z-dialog)] h-[680px] max-h-[calc(100dvh-48px)] w-[920px] max-w-[calc(100vw-48px)] gap-0 overflow-hidden rounded-[14px] p-0 sm:max-w-[calc(100vw-48px)]"
       >
-        <DialogTitle className="sr-only">{t("settings.title")}</DialogTitle>
+        <ResponsiveDialogTitle className="sr-only">
+          {t("settings.title")}
+        </ResponsiveDialogTitle>
         <SettingsBody onClose={() => setPanel("settings", false)} />
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 
