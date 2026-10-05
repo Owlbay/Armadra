@@ -292,3 +292,66 @@ describe("同步流", () => {
     );
   });
 });
+
+/**
+ * 背压（平台规格 core 包 §3.3）：socket 跟不上的连接停收广播，排空后一次补齐。
+ * 暂停期间别人的更新不在它的队列里攒，所以内存有界；补齐用整份状态的 step2，
+ * 所以一条都不丢。
+ */
+describe("暂停与恢复", () => {
+  let fx: BoardFixture;
+  beforeEach(() => {
+    fx = boardFixture();
+  });
+  afterEach(() => fx.close());
+
+  it("暂停时不收别人的更新与 awareness，恢复后补齐并收敛", () => {
+    const live = fx.hub.open(fx.workspaceId, fx.board.id, true);
+    if (live === undefined) throw new Error("not opened");
+    const writer = new MemoryClient("writer");
+    const slow = new MemoryClient("slow");
+    writer.connect(fx.hub, live);
+    slow.connect(fx.hub, live);
+    pumpAll([writer, slow]);
+
+    slow.conn?.pause();
+    const text = writer.doc.getMap("meta");
+    for (let index = 0; index < 50; index += 1) {
+      text.set(`k${index}`, `v${index}`);
+      writer.awareness.setLocalState({
+        principalId: "",
+        deviceId: "writer",
+        name: "W",
+        color: 2,
+        cursor: { x: index, y: 0 },
+      });
+      pumpAll([writer]);
+    }
+    expect(slow.inbox).toHaveLength(0);
+    expect(slow.doc.getMap("meta").size).toBe(0);
+
+    slow.conn?.resume();
+    // step1 + 一份整的 step2 + 当前 awareness：三帧，不是五十条更新。
+    expect(slow.inbox).toHaveLength(3);
+    pumpAll([writer, slow]);
+    expect(slow.doc.getMap("meta").toJSON()).toEqual(text.toJSON());
+    expect(
+      [...slow.awareness.getStates().values()].some(
+        (state) => (state as { cursor?: { x: number } }).cursor?.x === 49,
+      ),
+    ).toBe(true);
+  });
+
+  it("暂停期间自己的请求照常回答", () => {
+    const live = fx.hub.open(fx.workspaceId, fx.board.id, true);
+    if (live === undefined) throw new Error("not opened");
+    const client = new MemoryClient();
+    client.connect(fx.hub, live);
+    pumpAll([client]);
+    client.conn?.pause();
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, MESSAGE_QUERY_AWARENESS);
+    client.conn?.receive(encoding.toUint8Array(encoder));
+    expect(client.inbox).toHaveLength(1);
+  });
+});
