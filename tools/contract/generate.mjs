@@ -101,6 +101,10 @@ export async function buildDocument(contract, version) {
             ? { workspaceKey: entry.meta.workspaceKey }
             : {}),
           ...(entry.meta.legacy ? { legacy: entry.meta.legacy } : {}),
+          // 订阅只经控制面 `/api/ws`（契约 §35）。
+          ...(entry.meta.backpressure
+            ? { backpressure: entry.meta.backpressure, transport: "/api/ws" }
+            : {}),
           ...(entry.meta.deprecated
             ? { deprecated: entry.meta.deprecated }
             : {}),
@@ -193,6 +197,30 @@ function isJsonValue(union) {
 const isVoid = (procedure) =>
   procedure["~orpc"].outputSchema?._zod?.def?.type === "void";
 
+/** 并集展平成一张成员表（`anyOf` / `oneOf` 套 `anyOf`）。 */
+function members(schema) {
+  const union = schema?.anyOf ?? schema?.oneOf;
+  return Array.isArray(union) ? union.flatMap(members) : [schema];
+}
+
+/**
+ * 订阅的一项：事件迭代器里 `message` 那一格的 `data`。每个成员都带一个 `type`
+ * 常量时（工作空间事件那样几十种）只列 `type`，不然照常写类型。
+ */
+export function eventsOf(stream, document) {
+  const message = members(stream).find(
+    (part) => part?.properties?.event?.const === "message",
+  );
+  const data = message?.properties?.data;
+  if (data === undefined) return "—";
+  const items = members(data);
+  const types = items.map((part) => part?.properties?.type?.const);
+  if (types.length > 1 && types.every((type) => typeof type === "string")) {
+    return `迭代：${types.map((type) => `\`${type}\``).join("、")}`;
+  }
+  return `迭代 \`${escape(typeOf(data, document))}\``;
+}
+
 const wrap = (text) => (text.includes(" | ") ? `(${text})` : text);
 
 function operationOf(document, name) {
@@ -221,19 +249,24 @@ export function renderSection(entries, document, section) {
       )?.[1];
       const outputSchema = ok?.content?.["application/json"]?.schema;
       const legacy = entry.meta.legacy;
-      const kind =
-        legacy === undefined
+      const subscription = entry.meta.backpressure !== undefined;
+      const kind = subscription
+        ? "subscription"
+        : legacy === undefined
           ? "call"
           : legacy.method === "GET"
             ? "query"
             : "mutation";
+      const stream = ok?.content?.["text/event-stream"]?.schema;
       return [
         `\`${entry.name}\``,
         kind,
         input,
-        outputSchema === undefined || isVoid(entry.procedure)
-          ? "无"
-          : `\`${escape(typeOf(outputSchema, document))}\``,
+        subscription
+          ? eventsOf(stream, document)
+          : outputSchema === undefined || isVoid(entry.procedure)
+            ? "无"
+            : `\`${escape(typeOf(outputSchema, document))}\``,
         entry.errors.length === 0
           ? "—"
           : entry.errors.map((code) => `\`${code}\``).join("、"),

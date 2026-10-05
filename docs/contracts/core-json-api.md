@@ -2284,3 +2284,60 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 | `settings.local`  | query    | 可省 `{}`              | `{ paths: string[], file: string }` | `unauthenticated`、`forbidden` | `settings:read`  | 1.3 | `GET /api/settings/local` |
 
 <!-- rpc:end -->
+
+## 35. 控制面 WebSocket：`/api/ws`
+
+> 状态：实施契约（E2，工程规范化 §3）。一个源一条控制面连接，调用与订阅多路复用在上面；终端、实时协同、语言会话、浏览器画面仍是各自的数据面连接（§3.4、§16、§26 等）。订阅的形状表同 §34 由 `tools/contract/generate.mjs` 生成。
+
+### 35.1 升级层与子协议
+
+- **升级**：`GET /api/ws`，`Sec-WebSocket-Protocol` 报 `armadra-rpc.v1`；Bearer 来源（桌面壳页面、原生 App）同时报一次性票 `armadra-ticket.<票>`（§3.2，`POST /api/identity/ws-ticket` 换来，每次重连都换），Cookie 来源（服务器壳托管的页面）不报票。服务端回选 `armadra-rpc.v1`，票不被回选。准入（票、Cookie、来源）在升级前判，失败答 HTTP 状态（`401` / `403`），不建 socket；路由门要 `identity:read`（登录即可，成员也有）。没报 `armadra-rpc.v1` 的升级照样完成，随即以 `4409` 关。
+- **帧**：只有上游 RPC 的 peer 文本帧，每次调用一个 `i`，请求、响应、订阅的事件与结束都带它：请求 `{ i, p: { u: "/<域>/<动词>", b: { json: 入参 }, h? } }`；响应 `{ i, p: { s?, h?, b: { json } } }`；订阅的响应头 `content-type: text/event-stream`，之后每项 `{ i, t: 3, p: { e: "message" | "error" | "done", d: { json }, m?: { id } } }`；客户端取消 `{ i, t: 4 }`。本仓库不往这条连接上塞别的帧。帧上限是 `system.hello` 的 `maxFrameBytes`。
+- **身份**：升级时认好的那个人。每一帧调用前按会话复核一次（页面刷新过访问令牌照旧；会话没了以 `4403` 关）；每条 procedure 再按自己的 `scope` / `workspaceKey` 走路由门，拒绝是这次调用的 `forbidden`，连接不断。
+- **错误**：调用失败是上游的错误形状 `{ defined, code, status, message, data? }`（订阅中途失败是一项 `e: "error"`），`code` 与 `status` 按错误码注册表、与 §34.1 同一套码，`data` 即 §34.1 的 `details`；内部错误的原话不外泄。
+- **订阅只经控制面**：契约里写了背压策略的 procedure 是订阅；经 `POST /api/rpc/…` 调答 `405 method_not_allowed`。
+- **版本**：协议 `minor` 自 4 起有本节（`GET /api/identity/hello` 与 `system.hello` 的 `protocol` 为 `1.4`）。
+
+### 35.2 关闭码
+
+| 码     | 含义                                     | 客户端                                     |
+| ------ | ---------------------------------------- | ------------------------------------------ |
+| `1000` | 正常关闭                                 | —                                          |
+| `1001` | core 停机（中继重启同样表现为它）        | 按退避重连，订阅带 `lastEventId` 续订      |
+| `4400` | 坏帧（二进制帧、不是 peer 消息的文本帧） | 按退避重连                                 |
+| `4401` | 访问令牌到期                             | 续凭据后换票立即重连一次，不退避           |
+| `4403` | 授权收回（会话失效、撤销设备、停用账号） | 停，页面按授权收回处理                     |
+| `4409` | 子协议缺失或版本不兼容                   | 停，提示更新应用                           |
+| `4413` | 帧超过 `maxFrameBytes`                   | 按退避重连                                 |
+| `4429` | 一条连接上的订阅超过 256 个              | 停，提示；超出的那次调用答 `limit_reached` |
+
+页面文案在 `apps/web/src/i18n/connection.ts`（中英）。
+
+### 35.3 心跳与重连
+
+- 服务端每 `heartbeatMs`（25 秒，`system.hello` 报）发 `ws` 层 ping，连续两次没有 pong 就断开（§3.4 的五条流同一套）。
+- 客户端在页面可见时每 30 秒调一次 `system.ping`，3 秒没回音视为断线、立刻重连；回到前台立刻探一次，没连着就跳过退避直接连；`online` 同理。
+- 重连退避 `min(cap, 500 ms × 2^n)` 全抖动，前台封顶 10 秒、后台 30 秒，连上过就归零。重连由页面自己做（要换票），不用上游内建的重连；订阅的续订由上游客户端带 `lastEventId` 重订。
+
+### 35.4 `workspaces.events`
+
+工作空间事件流（§5.4）的控制面形式；旧路由 `WS /api/workspaces/{workspaceId}/events` 保留到 E4。
+
+- 每项是一个工作空间事件，事件 `id` 是 outbox 序号（单调；不进 outbox 的 `canvas.presence` 不带 `id`）。
+- 起点：重订时上游交回的 `lastEventId` 优先，其次入参 `cursor`（与旧 `?cursor=` 同义），都没有是 `now`（不补历史）。有位置时先补发这个位置之后、订阅那一刻水位之前的这块工作空间的事件，再接实时，中间不漏不重。
+- 每次（重新）订上、补发完之后先发一项位置帧 `{ type: "cursor", cursor, floor, watermark }`，`id` 是这时的位置：还没收到任何事件就断开的订阅也有可续的 `lastEventId`；页面把它当作「订上了」。它不是工作空间事件。
+- 拒绝在订阅开始之前：工作空间不存在 `not_found`；位置掉出保留下限 `snapshot_required`；位置比这台 core 的水位还新（换了库）`cursor_ahead`——后两者都要先整份重读，再从 `now` 订。授权收回时订阅以 `forbidden` 结束。
+
+<!-- rpc:begin contract=§35.4 -->
+
+| procedure           | kind         | input                                                | output                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | errors                                                                                     | scope         | 自  | 原路径 |
+| ------------------- | ------------ | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ------------- | --- | ------ |
+| `workspaces.events` | subscription | `{ workspaceId: string, cursor?: "now" \| integer }` | 迭代：`agent.context`、`agent.status`、`agent.subagent`、`agent.approval`、`agent.delivery`、`acp.update`、`acp.turn`、`acp.driver`、`terminal.exit`、`terminal.lease`、`terminal.hibernation`、`board.changed`、`canvas.presence`、`board.comment`、`node.created`、`ssh.prompt`、`workspace.updated`、`control.confirm`、`resource.sample`、`browser.session`、`browser.download`、`browser.lease`、`browser.tabs`、`browser.dialog`、`browser.fileChooser`、`browser.activity`、`language.session`、`language.server`、`file.changed`、`workflow.draft`、`workflow.run`、`workflow.gate`、`schedule.fired`、`schedule.failed`、`schedule.attention`、`resources.threshold`、`cursor` | `forbidden`、`not_found`、`snapshot_required`、`cursor_ahead`、`overflow`、`limit_reached` | `events:read` | 1.4 | —      |
+
+<!-- rpc:end -->
+
+### 35.5 背压
+
+- 每个订阅在 core 里有一个有界队列（1024 项），连接的发送缓冲超过 1 MiB 时排队，按契约里的 `backpressure`：`drop-oldest` 丢最旧；`coalesce` 同一个键只留最新；`resubscribe` 停止从实现里取（补发因此停在原处），实时的一段攒在实现自己的有界缓冲里，满了就把已攒的发完、以 `overflow` 结束订阅，客户端带 `lastEventId` 重订，缺口由 outbox 补发。
+- `workspaces.events` 是 `resubscribe`。
+- 数据面不在这条连接上：终端照旧 64 KiB 合帧，发送缓冲超过 4 MiB 时暂停读 PTY（§3.4）。

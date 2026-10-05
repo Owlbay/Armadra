@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "Armadra core",
-    "version": "1.3",
+    "version": "1.4",
     "description": "契约 procedure 的入参与出参（docs/contracts/core-json-api.md §34）。线上是 `POST /api/rpc/<域>/<动词>`，体按 `{ json }` 编码，下列 schema 是 `json` 那一格；失败一律是 `CoreError`。由 tools/contract/generate.mjs 生成，不要手改。"
   },
   "openapi": "3.1.1",
@@ -1146,6 +1146,3370 @@
             "method": "POST",
             "path": "/api/workspaces/{workspaceId}/open"
           }
+        }
+      }
+    },
+    "/api/rpc/workspaces/events": {
+      "post": {
+        "operationId": "workspaces.events",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "workspaceId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "cursor": {
+                    "anyOf": [
+                      {
+                        "const": "now"
+                      },
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    ]
+                  }
+                },
+                "required": ["workspaceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "event": {
+                          "const": "message"
+                        },
+                        "data": {
+                          "anyOf": [
+                            {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "agent.context"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "generation": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "nodeId",
+                                    "sessionId",
+                                    "generation"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "agent.status"
+                                    },
+                                    "status": {
+                                      "type": "object",
+                                      "properties": {
+                                        "nodeId": {
+                                          "type": "string",
+                                          "format": "uuid"
+                                        },
+                                        "workspaceId": {
+                                          "type": "string",
+                                          "format": "uuid"
+                                        },
+                                        "agentId": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "state": {
+                                          "enum": [
+                                            "working",
+                                            "waiting",
+                                            "blocked",
+                                            "done"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "stateSource": {
+                                          "enum": [
+                                            "hook",
+                                            "extension",
+                                            "observed",
+                                            "acp"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "unread": {
+                                          "type": "boolean",
+                                          "default": false
+                                        },
+                                        "sessionId": {
+                                          "type": "string",
+                                          "maxLength": 200
+                                        },
+                                        "pendingId": {
+                                          "type": "string",
+                                          "maxLength": 200
+                                        },
+                                        "verified": {
+                                          "type": "boolean",
+                                          "default": false
+                                        },
+                                        "restored": {
+                                          "type": "boolean",
+                                          "default": false
+                                        },
+                                        "transcriptPath": {
+                                          "type": "string",
+                                          "maxLength": 4000
+                                        },
+                                        "lastEventAt": {
+                                          "type": "string",
+                                          "format": "date-time"
+                                        },
+                                        "sessionPhase": {
+                                          "enum": ["start", "end"],
+                                          "type": "string"
+                                        },
+                                        "lastMessage": {
+                                          "type": "string",
+                                          "maxLength": 20000
+                                        },
+                                        "errored": {
+                                          "type": "boolean"
+                                        },
+                                        "interrupted": {
+                                          "type": "boolean"
+                                        },
+                                        "updatedAt": {
+                                          "type": "string",
+                                          "format": "date-time"
+                                        }
+                                      },
+                                      "required": [
+                                        "nodeId",
+                                        "workspaceId",
+                                        "agentId",
+                                        "updatedAt"
+                                      ]
+                                    }
+                                  },
+                                  "required": ["type", "status"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "agent.subagent"
+                                    },
+                                    "event": {
+                                      "type": "object",
+                                      "properties": {
+                                        "nodeId": {
+                                          "type": "string",
+                                          "format": "uuid"
+                                        },
+                                        "agentId": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "kind": {
+                                          "enum": [
+                                            "state",
+                                            "session",
+                                            "subagent-start",
+                                            "subagent-end"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "state": {
+                                          "enum": [
+                                            "working",
+                                            "waiting",
+                                            "blocked",
+                                            "done"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "stateSource": {
+                                          "enum": [
+                                            "hook",
+                                            "extension",
+                                            "observed",
+                                            "acp"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "newTurn": {
+                                          "type": "boolean"
+                                        },
+                                        "interrupted": {
+                                          "type": "boolean"
+                                        },
+                                        "errored": {
+                                          "type": "boolean"
+                                        },
+                                        "idle": {
+                                          "type": "boolean"
+                                        },
+                                        "awaitingInput": {
+                                          "type": "boolean"
+                                        },
+                                        "pendingId": {
+                                          "type": "string",
+                                          "maxLength": 200
+                                        },
+                                        "askKind": {
+                                          "type": "string",
+                                          "maxLength": 80
+                                        },
+                                        "sessionId": {
+                                          "type": "string",
+                                          "maxLength": 200
+                                        },
+                                        "sessionPhase": {
+                                          "enum": ["start", "end"],
+                                          "type": "string"
+                                        },
+                                        "lastMessage": {
+                                          "type": "string",
+                                          "maxLength": 20000
+                                        },
+                                        "toolUseId": {
+                                          "type": "string",
+                                          "maxLength": 200
+                                        },
+                                        "subagentType": {
+                                          "type": "string",
+                                          "maxLength": 120
+                                        },
+                                        "taskLabel": {
+                                          "type": "string",
+                                          "maxLength": 400
+                                        },
+                                        "durationMs": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "tokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "toolUses": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "result": {
+                                          "type": "string",
+                                          "maxLength": 20000
+                                        },
+                                        "verified": {
+                                          "type": "boolean"
+                                        },
+                                        "clientRevision": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": ["nodeId", "agentId", "kind"]
+                                    }
+                                  },
+                                  "required": ["type", "event"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "agent.approval"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    },
+                                    "pendingId": {
+                                      "type": "string"
+                                    },
+                                    "request": {}
+                                  },
+                                  "required": ["type", "nodeId", "pendingId"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "agent.delivery"
+                                    },
+                                    "traceId": {
+                                      "type": "string"
+                                    },
+                                    "sourceNodeId": {
+                                      "type": "string"
+                                    },
+                                    "targetNodeId": {
+                                      "type": "string"
+                                    },
+                                    "outcome": {
+                                      "type": "string"
+                                    },
+                                    "code": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "traceId",
+                                    "sourceNodeId",
+                                    "targetNodeId",
+                                    "outcome"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "acp.update"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    },
+                                    "update": {
+                                      "type": "object",
+                                      "properties": {
+                                        "sessionUpdate": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["sessionUpdate"],
+                                      "additionalProperties": {}
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "sessionId",
+                                    "nodeId",
+                                    "update"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "acp.turn"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    },
+                                    "turnId": {
+                                      "type": "string"
+                                    },
+                                    "stopReason": {
+                                      "enum": [
+                                        "end_turn",
+                                        "max_tokens",
+                                        "max_turn_requests",
+                                        "refusal",
+                                        "cancelled"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "error": {
+                                      "type": "object",
+                                      "properties": {
+                                        "code": {
+                                          "type": "string"
+                                        },
+                                        "message": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["code", "message"],
+                                      "additionalProperties": {}
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "sessionId",
+                                    "nodeId",
+                                    "turnId"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "acp.driver"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    },
+                                    "driver": {
+                                      "enum": ["terminal", "acp"],
+                                      "type": "string"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "resumed": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "nodeId",
+                                    "driver",
+                                    "sessionId",
+                                    "resumed"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "terminal.exit"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    },
+                                    "exitCode": {
+                                      "anyOf": [
+                                        {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": ["type", "sessionId"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "terminal.lease"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    },
+                                    "lease": {
+                                      "type": "object",
+                                      "properties": {
+                                        "state": {
+                                          "enum": [
+                                            "free",
+                                            "human",
+                                            "humanTakeover",
+                                            "agent"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "generation": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "expiresAt": {
+                                          "type": "string",
+                                          "default": ""
+                                        },
+                                        "holder": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "enum": ["human", "agent"],
+                                              "type": "string"
+                                            },
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "displayName": {
+                                              "type": "string",
+                                              "default": ""
+                                            }
+                                          },
+                                          "required": ["kind", "id"]
+                                        }
+                                      },
+                                      "required": ["state", "generation"]
+                                    }
+                                  },
+                                  "required": ["type", "sessionId", "lease"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "terminal.hibernation"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    },
+                                    "state": {
+                                      "enum": [
+                                        "hibernated",
+                                        "resuming",
+                                        "running",
+                                        "failed"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "reason": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "sessionId",
+                                    "nodeId",
+                                    "state"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "board.changed"
+                                    },
+                                    "boardId": {
+                                      "type": "string"
+                                    },
+                                    "updatedAt": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "boardId", "updatedAt"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "boardId": {
+                                      "type": "string"
+                                    },
+                                    "clients": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "clientId": {
+                                            "type": "string"
+                                          },
+                                          "deviceName": {
+                                            "type": "string"
+                                          },
+                                          "deviceKey": {
+                                            "type": "string",
+                                            "default": ""
+                                          },
+                                          "lastSeenAt": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "clientId",
+                                          "deviceName",
+                                          "lastSeenAt"
+                                        ]
+                                      }
+                                    },
+                                    "lease": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "clientId": {
+                                              "type": "string"
+                                            },
+                                            "deviceName": {
+                                              "type": "string"
+                                            },
+                                            "deviceKey": {
+                                              "type": "string",
+                                              "default": ""
+                                            },
+                                            "acquiredAt": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "clientId",
+                                            "deviceName",
+                                            "acquiredAt"
+                                          ]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "writable": {
+                                      "type": "boolean"
+                                    },
+                                    "deviceKey": {
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "const": "canvas.presence"
+                                    }
+                                  },
+                                  "required": [
+                                    "boardId",
+                                    "clients",
+                                    "lease",
+                                    "type"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "board.comment"
+                                    },
+                                    "boardId": {
+                                      "type": "string"
+                                    },
+                                    "action": {
+                                      "enum": [
+                                        "created",
+                                        "updated",
+                                        "resolved",
+                                        "reopened",
+                                        "deleted"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "comment": {
+                                      "type": "object",
+                                      "properties": {
+                                        "id": {
+                                          "type": "string"
+                                        },
+                                        "parentId": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "anchorKind": {
+                                          "enum": ["node", "item", "point"],
+                                          "type": "string"
+                                        },
+                                        "anchorId": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "parentId",
+                                        "anchorKind"
+                                      ]
+                                    },
+                                    "mentions": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "boardId",
+                                    "action",
+                                    "comment",
+                                    "mentions"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "node.created"
+                                    },
+                                    "boardId": {
+                                      "type": "string"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    },
+                                    "nodeType": {
+                                      "type": "string"
+                                    },
+                                    "originNodeId": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "boardId",
+                                    "nodeId",
+                                    "nodeType",
+                                    "originNodeId"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "ssh.prompt"
+                                    },
+                                    "prompt": {
+                                      "type": "object",
+                                      "properties": {
+                                        "promptId": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 64
+                                        },
+                                        "hostId": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 64
+                                        },
+                                        "kind": {
+                                          "enum": ["password", "passphrase"],
+                                          "type": "string"
+                                        },
+                                        "prompt": {
+                                          "type": "string",
+                                          "maxLength": 1024
+                                        }
+                                      },
+                                      "required": [
+                                        "promptId",
+                                        "hostId",
+                                        "kind",
+                                        "prompt"
+                                      ]
+                                    }
+                                  },
+                                  "required": ["type", "prompt"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "workspace.updated"
+                                    },
+                                    "workspaceId": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "workspaceId"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "control.confirm"
+                                    },
+                                    "requestId": {
+                                      "type": "string"
+                                    },
+                                    "verb": {
+                                      "type": "string"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    },
+                                    "summary": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "requestId",
+                                    "verb",
+                                    "nodeId",
+                                    "summary"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "resource.sample"
+                                    },
+                                    "snapshot": {
+                                      "type": "object",
+                                      "properties": {
+                                        "workspaceId": {
+                                          "type": "string"
+                                        },
+                                        "host": {
+                                          "type": "object",
+                                          "properties": {
+                                            "hostId": {
+                                              "type": "string"
+                                            },
+                                            "location": {
+                                              "enum": ["local", "remote"],
+                                              "type": "string"
+                                            },
+                                            "platform": {
+                                              "type": "string"
+                                            },
+                                            "cpuPercent": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "number",
+                                                  "minimum": 0
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "cpuCores": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "integer",
+                                                  "minimum": -9007199254740991,
+                                                  "maximum": 9007199254740991,
+                                                  "exclusiveMinimum": 0
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "memory": {
+                                              "type": "object",
+                                              "properties": {
+                                                "totalBytes": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "integer",
+                                                      "minimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "usedBytes": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "integer",
+                                                      "minimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "availableBytes": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "integer",
+                                                      "minimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "swapTotalBytes": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "integer",
+                                                      "minimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "swapUsedBytes": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "integer",
+                                                      "minimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "pressure": {
+                                                  "anyOf": [
+                                                    {
+                                                      "enum": [
+                                                        "normal",
+                                                        "warning",
+                                                        "critical"
+                                                      ],
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ],
+                                                  "default": null
+                                                }
+                                              },
+                                              "required": [
+                                                "totalBytes",
+                                                "usedBytes",
+                                                "availableBytes",
+                                                "swapTotalBytes",
+                                                "swapUsedBytes"
+                                              ]
+                                            },
+                                            "loadAverage": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "one": {
+                                                      "type": "number"
+                                                    },
+                                                    "five": {
+                                                      "type": "number"
+                                                    },
+                                                    "fifteen": {
+                                                      "type": "number"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "one",
+                                                    "five",
+                                                    "fifteen"
+                                                  ]
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "disk": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "mountPoint": {
+                                                      "type": "string"
+                                                    },
+                                                    "totalBytes": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "integer",
+                                                          "minimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "availableBytes": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "integer",
+                                                          "minimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "mountPoint",
+                                                    "totalBytes",
+                                                    "availableBytes"
+                                                  ]
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "power": {
+                                              "type": "object",
+                                              "properties": {
+                                                "source": {
+                                                  "anyOf": [
+                                                    {
+                                                      "enum": ["ac", "battery"],
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "batteryPercent": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "number",
+                                                      "minimum": 0,
+                                                      "maximum": 100
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "charging": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "boolean"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "source",
+                                                "batteryPercent",
+                                                "charging"
+                                              ]
+                                            },
+                                            "uptimeSeconds": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "sampledAt": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "hostId",
+                                            "location",
+                                            "platform",
+                                            "cpuPercent",
+                                            "cpuCores",
+                                            "memory",
+                                            "loadAverage",
+                                            "disk",
+                                            "power",
+                                            "uptimeSeconds",
+                                            "sampledAt"
+                                          ]
+                                        },
+                                        "executionHosts": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "hostId": {
+                                                "type": "string"
+                                              },
+                                              "location": {
+                                                "enum": ["local", "remote"],
+                                                "type": "string"
+                                              },
+                                              "platform": {
+                                                "type": "string"
+                                              },
+                                              "cpuPercent": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "number",
+                                                    "minimum": 0
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "cpuCores": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "integer",
+                                                    "minimum": -9007199254740991,
+                                                    "maximum": 9007199254740991,
+                                                    "exclusiveMinimum": 0
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "memory": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "totalBytes": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "integer",
+                                                        "minimum": 0,
+                                                        "maximum": 9007199254740991
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "usedBytes": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "integer",
+                                                        "minimum": 0,
+                                                        "maximum": 9007199254740991
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "availableBytes": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "integer",
+                                                        "minimum": 0,
+                                                        "maximum": 9007199254740991
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "swapTotalBytes": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "integer",
+                                                        "minimum": 0,
+                                                        "maximum": 9007199254740991
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "swapUsedBytes": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "integer",
+                                                        "minimum": 0,
+                                                        "maximum": 9007199254740991
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "pressure": {
+                                                    "anyOf": [
+                                                      {
+                                                        "enum": [
+                                                          "normal",
+                                                          "warning",
+                                                          "critical"
+                                                        ],
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ],
+                                                    "default": null
+                                                  }
+                                                },
+                                                "required": [
+                                                  "totalBytes",
+                                                  "usedBytes",
+                                                  "availableBytes",
+                                                  "swapTotalBytes",
+                                                  "swapUsedBytes"
+                                                ]
+                                              },
+                                              "loadAverage": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "one": {
+                                                        "type": "number"
+                                                      },
+                                                      "five": {
+                                                        "type": "number"
+                                                      },
+                                                      "fifteen": {
+                                                        "type": "number"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "one",
+                                                      "five",
+                                                      "fifteen"
+                                                    ]
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "disk": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "mountPoint": {
+                                                        "type": "string"
+                                                      },
+                                                      "totalBytes": {
+                                                        "anyOf": [
+                                                          {
+                                                            "type": "integer",
+                                                            "minimum": 0,
+                                                            "maximum": 9007199254740991
+                                                          },
+                                                          {
+                                                            "type": "null"
+                                                          }
+                                                        ]
+                                                      },
+                                                      "availableBytes": {
+                                                        "anyOf": [
+                                                          {
+                                                            "type": "integer",
+                                                            "minimum": 0,
+                                                            "maximum": 9007199254740991
+                                                          },
+                                                          {
+                                                            "type": "null"
+                                                          }
+                                                        ]
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "mountPoint",
+                                                      "totalBytes",
+                                                      "availableBytes"
+                                                    ]
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "power": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "source": {
+                                                    "anyOf": [
+                                                      {
+                                                        "enum": [
+                                                          "ac",
+                                                          "battery"
+                                                        ],
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "batteryPercent": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "number",
+                                                        "minimum": 0,
+                                                        "maximum": 100
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "charging": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "boolean"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  }
+                                                },
+                                                "required": [
+                                                  "source",
+                                                  "batteryPercent",
+                                                  "charging"
+                                                ]
+                                              },
+                                              "uptimeSeconds": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "integer",
+                                                    "minimum": 0,
+                                                    "maximum": 9007199254740991
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "sampledAt": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "hostId",
+                                              "location",
+                                              "platform",
+                                              "cpuPercent",
+                                              "cpuCores",
+                                              "memory",
+                                              "loadAverage",
+                                              "disk",
+                                              "power",
+                                              "uptimeSeconds",
+                                              "sampledAt"
+                                            ]
+                                          },
+                                          "default": []
+                                        },
+                                        "sessions": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "sessionId": {
+                                                "type": "string"
+                                              },
+                                              "sessionKey": {
+                                                "type": "string"
+                                              },
+                                              "workspaceId": {
+                                                "type": "string"
+                                              },
+                                              "nodeId": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "generation": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "backend": {
+                                                "enum": [
+                                                  "direct",
+                                                  "tmux",
+                                                  "sessionHost",
+                                                  "acp"
+                                                ],
+                                                "type": "string"
+                                              },
+                                              "location": {
+                                                "enum": ["local", "remote"],
+                                                "type": "string"
+                                              },
+                                              "executionHostId": {
+                                                "type": "string",
+                                                "default": "local"
+                                              },
+                                              "cwd": {
+                                                "type": "string"
+                                              },
+                                              "pid": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "integer",
+                                                    "minimum": -9007199254740991,
+                                                    "maximum": 9007199254740991
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "alive": {
+                                                "type": "boolean"
+                                              },
+                                              "cpuPercent": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "number",
+                                                    "minimum": 0
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "memoryBytes": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "integer",
+                                                    "minimum": 0,
+                                                    "maximum": 9007199254740991
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "memoryEstimated": {
+                                                "type": "boolean"
+                                              },
+                                              "childCount": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "integer",
+                                                    "minimum": 0,
+                                                    "maximum": 9007199254740991
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "state": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "startTimeUnixMs": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "integer",
+                                                    "minimum": -9007199254740991,
+                                                    "maximum": 9007199254740991
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "children": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "pid": {
+                                                      "type": "integer",
+                                                      "minimum": -9007199254740991,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "startTimeUnixMs": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "integer",
+                                                          "minimum": -9007199254740991,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "parentPid": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "integer",
+                                                          "minimum": -9007199254740991,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "memoryBytes": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "integer",
+                                                          "minimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "cpuPercent": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "number",
+                                                          "minimum": 0
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "pid",
+                                                    "startTimeUnixMs",
+                                                    "name",
+                                                    "parentPid",
+                                                    "memoryBytes",
+                                                    "cpuPercent"
+                                                  ]
+                                                }
+                                              },
+                                              "unknownReason": {
+                                                "anyOf": [
+                                                  {
+                                                    "enum": [
+                                                      "remote",
+                                                      "exited",
+                                                      "no-pid",
+                                                      "not-found",
+                                                      "warming-up",
+                                                      "hibernated"
+                                                    ],
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "sessionId",
+                                              "sessionKey",
+                                              "workspaceId",
+                                              "nodeId",
+                                              "generation",
+                                              "backend",
+                                              "location",
+                                              "cwd",
+                                              "pid",
+                                              "alive",
+                                              "cpuPercent",
+                                              "memoryBytes",
+                                              "memoryEstimated",
+                                              "childCount",
+                                              "state",
+                                              "startTimeUnixMs",
+                                              "children",
+                                              "unknownReason"
+                                            ]
+                                          }
+                                        },
+                                        "components": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "enum": [
+                                                  "runtime",
+                                                  "host",
+                                                  "commandWorker",
+                                                  "languageServer",
+                                                  "sessionHost",
+                                                  "browserWorker",
+                                                  "shellMain",
+                                                  "shellRenderer",
+                                                  "shellGpu",
+                                                  "shellUtility",
+                                                  "browserGuest"
+                                                ],
+                                                "type": "string"
+                                              },
+                                              "location": {
+                                                "enum": ["local", "remote"],
+                                                "type": "string",
+                                                "default": "local"
+                                              },
+                                              "executionHostId": {
+                                                "type": "string"
+                                              },
+                                              "process": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "pid": {
+                                                    "type": "integer",
+                                                    "minimum": -9007199254740991,
+                                                    "maximum": 9007199254740991
+                                                  },
+                                                  "startTimeUnixMs": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "integer",
+                                                        "minimum": -9007199254740991,
+                                                        "maximum": 9007199254740991
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "name": {
+                                                    "type": "string"
+                                                  },
+                                                  "parentPid": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "integer",
+                                                        "minimum": -9007199254740991,
+                                                        "maximum": 9007199254740991
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "memoryBytes": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "integer",
+                                                        "minimum": 0,
+                                                        "maximum": 9007199254740991
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "cpuPercent": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "number",
+                                                        "minimum": 0
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  }
+                                                },
+                                                "required": [
+                                                  "pid",
+                                                  "startTimeUnixMs",
+                                                  "name",
+                                                  "parentPid",
+                                                  "memoryBytes",
+                                                  "cpuPercent"
+                                                ]
+                                              },
+                                              "tree": {
+                                                "type": "boolean"
+                                              },
+                                              "childCount": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "integer",
+                                                    "minimum": 0,
+                                                    "maximum": 9007199254740991
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "children": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "pid": {
+                                                      "type": "integer",
+                                                      "minimum": -9007199254740991,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "startTimeUnixMs": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "integer",
+                                                          "minimum": -9007199254740991,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "parentPid": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "integer",
+                                                          "minimum": -9007199254740991,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "memoryBytes": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "integer",
+                                                          "minimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "cpuPercent": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "number",
+                                                          "minimum": 0
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "pid",
+                                                    "startTimeUnixMs",
+                                                    "name",
+                                                    "parentPid",
+                                                    "memoryBytes",
+                                                    "cpuPercent"
+                                                  ]
+                                                }
+                                              },
+                                              "unknownReason": {
+                                                "anyOf": [
+                                                  {
+                                                    "enum": [
+                                                      "remote",
+                                                      "exited",
+                                                      "no-pid",
+                                                      "not-found",
+                                                      "warming-up",
+                                                      "hibernated"
+                                                    ],
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "process",
+                                              "tree",
+                                              "childCount",
+                                              "children",
+                                              "unknownReason"
+                                            ]
+                                          }
+                                        },
+                                        "orphans": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "id": {
+                                                "type": "string"
+                                              },
+                                              "reason": {
+                                                "enum": ["no-node", "no-row"],
+                                                "type": "string"
+                                              },
+                                              "sessionId": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "backendRef": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "workspaceId": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "nodeId": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "sessionKey": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "cwd": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "agentId": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "createdAt": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "lastOutputAt": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "adoptable": {
+                                                "type": "boolean"
+                                              }
+                                            },
+                                            "required": [
+                                              "id",
+                                              "reason",
+                                              "sessionId",
+                                              "backendRef",
+                                              "workspaceId",
+                                              "nodeId",
+                                              "sessionKey",
+                                              "cwd",
+                                              "agentId",
+                                              "createdAt",
+                                              "lastOutputAt",
+                                              "adoptable"
+                                            ]
+                                          }
+                                        },
+                                        "power": {
+                                          "type": "object",
+                                          "properties": {
+                                            "policy": {
+                                              "enum": [
+                                                "never",
+                                                "agentSessions",
+                                                "automation",
+                                                "manual"
+                                              ],
+                                              "type": "string"
+                                            },
+                                            "holding": {
+                                              "type": "boolean"
+                                            },
+                                            "mechanism": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "inhibitor": {
+                                              "type": "object",
+                                              "properties": {
+                                                "platform": {
+                                                  "type": "string"
+                                                },
+                                                "kind": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "available": {
+                                                  "type": "boolean"
+                                                },
+                                                "detail": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "platform",
+                                                "kind",
+                                                "available",
+                                                "detail"
+                                              ]
+                                            },
+                                            "leases": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "id": {
+                                                    "type": "string"
+                                                  },
+                                                  "source": {
+                                                    "enum": [
+                                                      "session",
+                                                      "automation",
+                                                      "manual"
+                                                    ],
+                                                    "type": "string"
+                                                  },
+                                                  "reason": {
+                                                    "type": "string"
+                                                  },
+                                                  "sessionId": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "workspaceId": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "createdAt": {
+                                                    "type": "string"
+                                                  },
+                                                  "renewedAt": {
+                                                    "type": "string"
+                                                  },
+                                                  "expiresAt": {
+                                                    "type": "string"
+                                                  },
+                                                  "active": {
+                                                    "type": "boolean"
+                                                  },
+                                                  "blockedBy": {
+                                                    "anyOf": [
+                                                      {
+                                                        "enum": [
+                                                          "policy",
+                                                          "unavailable"
+                                                        ],
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  }
+                                                },
+                                                "required": [
+                                                  "id",
+                                                  "source",
+                                                  "reason",
+                                                  "sessionId",
+                                                  "workspaceId",
+                                                  "createdAt",
+                                                  "renewedAt",
+                                                  "expiresAt",
+                                                  "active",
+                                                  "blockedBy"
+                                                ]
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "policy",
+                                            "holding",
+                                            "mechanism",
+                                            "inhibitor",
+                                            "leases"
+                                          ]
+                                        },
+                                        "intervalMs": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991,
+                                          "exclusiveMinimum": 0
+                                        },
+                                        "sampledAt": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "workspaceId",
+                                        "host",
+                                        "sessions",
+                                        "components",
+                                        "orphans",
+                                        "power",
+                                        "intervalMs",
+                                        "sampledAt"
+                                      ]
+                                    }
+                                  },
+                                  "required": ["type", "snapshot"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "browser.session"
+                                    },
+                                    "session": {
+                                      "type": "object",
+                                      "properties": {
+                                        "sessionId": {
+                                          "type": "string"
+                                        },
+                                        "generation": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "workspaceId": {
+                                          "type": "string"
+                                        },
+                                        "nodeId": {
+                                          "type": "string"
+                                        },
+                                        "url": {
+                                          "type": "string"
+                                        },
+                                        "title": {
+                                          "type": "string"
+                                        },
+                                        "viewport": {
+                                          "type": "object",
+                                          "properties": {
+                                            "width": {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991,
+                                              "exclusiveMinimum": 0
+                                            },
+                                            "height": {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991,
+                                              "exclusiveMinimum": 0
+                                            },
+                                            "deviceScaleFactor": {
+                                              "type": "number",
+                                              "exclusiveMinimum": 0,
+                                              "default": 1
+                                            }
+                                          },
+                                          "required": ["width", "height"]
+                                        },
+                                        "state": {
+                                          "enum": [
+                                            "starting",
+                                            "ready",
+                                            "disconnected",
+                                            "terminated",
+                                            "unsupported"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "reasonCode": {
+                                          "type": "string"
+                                        },
+                                        "navigationEpoch": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "headful": {
+                                          "type": "boolean"
+                                        },
+                                        "keepAlive": {
+                                          "type": "boolean"
+                                        },
+                                        "canGoBack": {
+                                          "type": "boolean"
+                                        },
+                                        "canGoForward": {
+                                          "type": "boolean"
+                                        },
+                                        "createdAt": {
+                                          "type": "string"
+                                        },
+                                        "updatedAt": {
+                                          "type": "string"
+                                        },
+                                        "activeTabId": {
+                                          "type": "string",
+                                          "default": ""
+                                        },
+                                        "tabCount": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991,
+                                          "default": 0
+                                        },
+                                        "lease": {
+                                          "type": "object",
+                                          "properties": {
+                                            "state": {
+                                              "enum": [
+                                                "free",
+                                                "human",
+                                                "humanTakeover",
+                                                "agent"
+                                              ],
+                                              "type": "string"
+                                            },
+                                            "generation": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "expiresAt": {
+                                              "type": "string",
+                                              "default": ""
+                                            },
+                                            "holder": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "enum": ["human", "agent"],
+                                                  "type": "string"
+                                                },
+                                                "id": {
+                                                  "type": "string"
+                                                },
+                                                "displayName": {
+                                                  "type": "string",
+                                                  "default": ""
+                                                }
+                                              },
+                                              "required": ["kind", "id"]
+                                            }
+                                          },
+                                          "required": ["state", "generation"]
+                                        },
+                                        "pendingDialog": {
+                                          "type": "object",
+                                          "properties": {
+                                            "dialogId": {
+                                              "type": "string"
+                                            },
+                                            "tabId": {
+                                              "type": "string"
+                                            },
+                                            "kind": {
+                                              "enum": [
+                                                "alert",
+                                                "confirm",
+                                                "prompt",
+                                                "beforeunload"
+                                              ],
+                                              "type": "string"
+                                            },
+                                            "message": {
+                                              "type": "string"
+                                            },
+                                            "defaultPrompt": {
+                                              "type": "string",
+                                              "default": ""
+                                            },
+                                            "url": {
+                                              "type": "string",
+                                              "default": ""
+                                            },
+                                            "openedAt": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "dialogId",
+                                            "tabId",
+                                            "kind",
+                                            "message",
+                                            "openedAt"
+                                          ]
+                                        },
+                                        "pendingFileChooser": {
+                                          "type": "object",
+                                          "properties": {
+                                            "chooserId": {
+                                              "type": "string"
+                                            },
+                                            "tabId": {
+                                              "type": "string"
+                                            },
+                                            "frameId": {
+                                              "type": "string",
+                                              "default": ""
+                                            },
+                                            "multiple": {
+                                              "type": "boolean",
+                                              "default": false
+                                            },
+                                            "accept": {
+                                              "type": "string",
+                                              "default": ""
+                                            },
+                                            "openedAt": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "chooserId",
+                                            "tabId",
+                                            "openedAt"
+                                          ]
+                                        },
+                                        "leaseGeneration": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991,
+                                          "default": 0
+                                        }
+                                      },
+                                      "required": [
+                                        "sessionId",
+                                        "generation",
+                                        "workspaceId",
+                                        "nodeId",
+                                        "url",
+                                        "title",
+                                        "viewport",
+                                        "state",
+                                        "reasonCode",
+                                        "navigationEpoch",
+                                        "headful",
+                                        "keepAlive",
+                                        "canGoBack",
+                                        "canGoForward",
+                                        "createdAt",
+                                        "updatedAt"
+                                      ]
+                                    }
+                                  },
+                                  "required": ["type", "session"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "browser.download"
+                                    },
+                                    "download": {
+                                      "type": "object",
+                                      "properties": {
+                                        "downloadId": {
+                                          "type": "string"
+                                        },
+                                        "sessionId": {
+                                          "type": "string"
+                                        },
+                                        "url": {
+                                          "type": "string"
+                                        },
+                                        "suggestedFilename": {
+                                          "type": "string"
+                                        },
+                                        "state": {
+                                          "enum": [
+                                            "pending",
+                                            "inProgress",
+                                            "completed",
+                                            "cancelled",
+                                            "failed"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "path": {
+                                          "type": "string"
+                                        },
+                                        "totalBytes": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "receivedBytes": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "createdAt": {
+                                          "type": "string"
+                                        },
+                                        "reasonCode": {
+                                          "type": "string"
+                                        },
+                                        "tabId": {
+                                          "type": "string",
+                                          "default": ""
+                                        },
+                                        "sha256": {
+                                          "type": "string",
+                                          "default": ""
+                                        }
+                                      },
+                                      "required": [
+                                        "downloadId",
+                                        "sessionId",
+                                        "url",
+                                        "suggestedFilename",
+                                        "state",
+                                        "path",
+                                        "totalBytes",
+                                        "receivedBytes",
+                                        "createdAt",
+                                        "reasonCode"
+                                      ]
+                                    }
+                                  },
+                                  "required": ["type", "download"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "browser.lease"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "lease": {
+                                      "type": "object",
+                                      "properties": {
+                                        "state": {
+                                          "enum": [
+                                            "free",
+                                            "human",
+                                            "humanTakeover",
+                                            "agent"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "generation": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "expiresAt": {
+                                          "type": "string",
+                                          "default": ""
+                                        },
+                                        "holder": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "enum": ["human", "agent"],
+                                              "type": "string"
+                                            },
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "displayName": {
+                                              "type": "string",
+                                              "default": ""
+                                            }
+                                          },
+                                          "required": ["kind", "id"]
+                                        }
+                                      },
+                                      "required": ["state", "generation"]
+                                    }
+                                  },
+                                  "required": ["type", "sessionId", "lease"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "browser.tabs"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "tabs": {
+                                      "type": "object",
+                                      "properties": {
+                                        "tabs": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "tabId": {
+                                                "type": "string"
+                                              },
+                                              "url": {
+                                                "type": "string",
+                                                "default": ""
+                                              },
+                                              "title": {
+                                                "type": "string",
+                                                "default": ""
+                                              },
+                                              "active": {
+                                                "type": "boolean",
+                                                "default": false
+                                              },
+                                              "openerTabId": {
+                                                "type": "string",
+                                                "default": ""
+                                              },
+                                              "navigationEpoch": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991,
+                                                "default": 0
+                                              },
+                                              "loading": {
+                                                "type": "boolean",
+                                                "default": false
+                                              },
+                                              "pendingDialog": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "dialogId": {
+                                                    "type": "string"
+                                                  },
+                                                  "tabId": {
+                                                    "type": "string"
+                                                  },
+                                                  "kind": {
+                                                    "enum": [
+                                                      "alert",
+                                                      "confirm",
+                                                      "prompt",
+                                                      "beforeunload"
+                                                    ],
+                                                    "type": "string"
+                                                  },
+                                                  "message": {
+                                                    "type": "string"
+                                                  },
+                                                  "defaultPrompt": {
+                                                    "type": "string",
+                                                    "default": ""
+                                                  },
+                                                  "url": {
+                                                    "type": "string",
+                                                    "default": ""
+                                                  },
+                                                  "openedAt": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "dialogId",
+                                                  "tabId",
+                                                  "kind",
+                                                  "message",
+                                                  "openedAt"
+                                                ]
+                                              },
+                                              "favicon": {
+                                                "type": "string",
+                                                "default": ""
+                                              }
+                                            },
+                                            "required": ["tabId"]
+                                          },
+                                          "default": []
+                                        },
+                                        "activeTabId": {
+                                          "type": "string",
+                                          "default": ""
+                                        },
+                                        "limit": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991,
+                                          "exclusiveMinimum": 0,
+                                          "default": 16
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "required": ["type", "sessionId", "tabs"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "browser.dialog"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "dialog": {
+                                      "type": "object",
+                                      "properties": {
+                                        "dialogId": {
+                                          "type": "string"
+                                        },
+                                        "tabId": {
+                                          "type": "string"
+                                        },
+                                        "kind": {
+                                          "enum": [
+                                            "alert",
+                                            "confirm",
+                                            "prompt",
+                                            "beforeunload"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "message": {
+                                          "type": "string"
+                                        },
+                                        "defaultPrompt": {
+                                          "type": "string",
+                                          "default": ""
+                                        },
+                                        "url": {
+                                          "type": "string",
+                                          "default": ""
+                                        },
+                                        "openedAt": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "dialogId",
+                                        "tabId",
+                                        "kind",
+                                        "message",
+                                        "openedAt"
+                                      ]
+                                    }
+                                  },
+                                  "required": ["type", "sessionId"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "browser.fileChooser"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "chooser": {
+                                      "type": "object",
+                                      "properties": {
+                                        "chooserId": {
+                                          "type": "string"
+                                        },
+                                        "tabId": {
+                                          "type": "string"
+                                        },
+                                        "frameId": {
+                                          "type": "string",
+                                          "default": ""
+                                        },
+                                        "multiple": {
+                                          "type": "boolean",
+                                          "default": false
+                                        },
+                                        "accept": {
+                                          "type": "string",
+                                          "default": ""
+                                        },
+                                        "openedAt": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "chooserId",
+                                        "tabId",
+                                        "openedAt"
+                                      ]
+                                    }
+                                  },
+                                  "required": ["type", "sessionId"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "actor": {
+                                      "enum": ["human", "agent"],
+                                      "type": "string"
+                                    },
+                                    "actorId": {
+                                      "type": "string",
+                                      "default": ""
+                                    },
+                                    "verb": {
+                                      "type": "string"
+                                    },
+                                    "target": {
+                                      "type": "string",
+                                      "default": ""
+                                    },
+                                    "outcome": {
+                                      "enum": ["ok", "refused", "unknown"],
+                                      "type": "string"
+                                    },
+                                    "reasonCode": {
+                                      "type": "string",
+                                      "default": ""
+                                    },
+                                    "at": {
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "const": "browser.activity"
+                                    }
+                                  },
+                                  "required": [
+                                    "sessionId",
+                                    "actor",
+                                    "verb",
+                                    "outcome",
+                                    "at",
+                                    "type"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "workspaceId": {
+                                      "type": "string"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "serverId": {
+                                      "type": "string"
+                                    },
+                                    "generation": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "state": {
+                                      "enum": [
+                                        "available",
+                                        "unsupported",
+                                        "starting",
+                                        "running",
+                                        "idleStopped",
+                                        "crashed",
+                                        "stopped",
+                                        "disconnected"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "reason": {
+                                      "type": "string"
+                                    },
+                                    "restartCount": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "progress": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "percent": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 100
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "title": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": ["title"]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "type": {
+                                      "const": "language.session"
+                                    }
+                                  },
+                                  "required": [
+                                    "workspaceId",
+                                    "sessionId",
+                                    "serverId",
+                                    "generation",
+                                    "state",
+                                    "restartCount",
+                                    "type"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "workspaceId": {
+                                      "type": "string"
+                                    },
+                                    "executionHostId": {
+                                      "type": "string"
+                                    },
+                                    "server": {
+                                      "type": "object",
+                                      "properties": {
+                                        "serverId": {
+                                          "type": "string"
+                                        },
+                                        "languageId": {
+                                          "type": "string"
+                                        },
+                                        "fileExtensions": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "executable": {
+                                          "type": "string"
+                                        },
+                                        "version": {
+                                          "type": "string"
+                                        },
+                                        "state": {
+                                          "enum": [
+                                            "available",
+                                            "unsupported",
+                                            "starting",
+                                            "running",
+                                            "idleStopped",
+                                            "crashed",
+                                            "stopped",
+                                            "disconnected"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "reason": {
+                                          "type": "string"
+                                        },
+                                        "features": {
+                                          "type": "array",
+                                          "items": {
+                                            "enum": [
+                                              "completion",
+                                              "diagnostics",
+                                              "hover",
+                                              "definition",
+                                              "references",
+                                              "rename",
+                                              "formatting",
+                                              "documentSymbol",
+                                              "workspaceSymbol",
+                                              "codeAction",
+                                              "signatureHelp"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "restartCount": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "pid": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "startTimeUnixMs": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "openDocuments": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "probedAtUnixMs": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": [
+                                        "serverId",
+                                        "languageId",
+                                        "fileExtensions",
+                                        "executable",
+                                        "version",
+                                        "state",
+                                        "features",
+                                        "restartCount",
+                                        "openDocuments",
+                                        "probedAtUnixMs"
+                                      ]
+                                    },
+                                    "stderrTail": {
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "const": "language.server"
+                                    }
+                                  },
+                                  "required": [
+                                    "workspaceId",
+                                    "executionHostId",
+                                    "server",
+                                    "type"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "file.changed"
+                                    },
+                                    "workspaceId": {
+                                      "type": "string"
+                                    },
+                                    "path": {
+                                      "type": "string"
+                                    },
+                                    "kind": {
+                                      "enum": [
+                                        "modified",
+                                        "removed",
+                                        "replaced"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "sha256": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^[a-f0-9]{64}$"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "size": {
+                                      "anyOf": [
+                                        {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "mtime": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "workspaceId",
+                                    "path",
+                                    "kind"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "workflow.draft"
+                                    },
+                                    "draftId": {
+                                      "type": "string"
+                                    },
+                                    "boardId": {
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "enum": [
+                                        "pending",
+                                        "confirmed",
+                                        "discarded"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "draftId",
+                                    "boardId",
+                                    "status"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "workflow.run"
+                                    },
+                                    "runId": {
+                                      "type": "string"
+                                    },
+                                    "boardId": {
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "enum": [
+                                        "running",
+                                        "waiting",
+                                        "succeeded",
+                                        "failed",
+                                        "cancelled"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "stepId": {
+                                      "type": "string"
+                                    },
+                                    "stepStatus": {
+                                      "enum": [
+                                        "pending",
+                                        "running",
+                                        "waiting",
+                                        "done",
+                                        "failed",
+                                        "skipped",
+                                        "cancelled"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "runId",
+                                    "boardId",
+                                    "status"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "workflow.gate"
+                                    },
+                                    "runId": {
+                                      "type": "string"
+                                    },
+                                    "boardId": {
+                                      "type": "string"
+                                    },
+                                    "stepId": {
+                                      "type": "string"
+                                    },
+                                    "label": {
+                                      "type": "string"
+                                    },
+                                    "state": {
+                                      "enum": [
+                                        "waiting",
+                                        "approved",
+                                        "rejected",
+                                        "cancelled"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "runId",
+                                    "boardId",
+                                    "stepId",
+                                    "label",
+                                    "state"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "schedule.fired"
+                                    },
+                                    "planId": {
+                                      "type": "string"
+                                    },
+                                    "runId": {
+                                      "type": "string"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "planId", "runId"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "schedule.failed"
+                                    },
+                                    "planId": {
+                                      "type": "string"
+                                    },
+                                    "runId": {
+                                      "type": "string"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    },
+                                    "reasonCode": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "planId",
+                                    "runId",
+                                    "reasonCode"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "schedule.attention"
+                                    },
+                                    "planId": {
+                                      "type": "string"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    },
+                                    "reasonCode": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "planId", "reasonCode"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "resources.threshold"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    },
+                                    "metric": {
+                                      "type": "string"
+                                    },
+                                    "value": {
+                                      "type": "number",
+                                      "minimum": 0
+                                    },
+                                    "threshold": {
+                                      "type": "number",
+                                      "minimum": 0
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "sessionId",
+                                    "metric",
+                                    "value",
+                                    "threshold"
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "const": "cursor"
+                                },
+                                "cursor": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "floor": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "watermark": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "cursor",
+                                "floor",
+                                "watermark"
+                              ]
+                            }
+                          ]
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "retry": {
+                          "type": "number"
+                        }
+                      },
+                      "required": ["event", "data"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "event": {
+                          "const": "done"
+                        },
+                        "data": {},
+                        "id": {
+                          "type": "string"
+                        },
+                        "retry": {
+                          "type": "number"
+                        }
+                      },
+                      "required": ["event"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "event": {
+                          "const": "error"
+                        },
+                        "data": {},
+                        "id": {
+                          "type": "string"
+                        },
+                        "retry": {
+                          "type": "number"
+                        }
+                      },
+                      "required": ["event"]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "409",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "429",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "503",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§35.4",
+          "scope": "events:read",
+          "since": "1.4",
+          "workspaceKey": "workspaceId",
+          "backpressure": "resubscribe",
+          "transport": "/api/ws"
         }
       }
     },
