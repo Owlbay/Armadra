@@ -8,7 +8,14 @@ import type {
 } from "@armadra/shared";
 import { useT } from "../../app/preferences-store";
 import { Button } from "../../ui/button";
-import { Check, Field, ReadError, selectClass } from "./forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../ui/select";
+import { Check, Field, ReadError } from "./forms";
 import { Input } from "../../ui/input";
 import { writeClipboard } from "../../terminal/TerminalSurface";
 import {
@@ -244,20 +251,24 @@ function ReflogActions({
       >
         <fieldset disabled={busy} className="min-w-0 space-y-2">
           <Field label={t("gitRepo.resetMode")}>
-            <select
-              className={selectClass}
+            <Select
               value={resetMode}
-              onChange={(event) => {
-                setResetMode(event.target.value as "soft" | "mixed" | "hard");
+              onValueChange={(next) => {
+                setResetMode(next as "soft" | "mixed" | "hard");
                 setDiscardChanges(false);
               }}
             >
-              {(["soft", "mixed", "hard"] as const).map((mode) => (
-                <option key={mode} value={mode}>
-                  {t(`gitRepo.reset.${mode}`)}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="h-9 w-full min-w-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="z-[var(--z-dialog)]">
+                {(["soft", "mixed", "hard"] as const).map((mode) => (
+                  <SelectItem key={mode} value={mode}>
+                    {t(`gitRepo.reset.${mode}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Field>
           <p className="text-muted-foreground">
             {t(`gitRepo.resetSafety.${resetMode}`)}

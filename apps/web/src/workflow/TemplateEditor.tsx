@@ -35,6 +35,7 @@ import {
   ResponsiveDialogTitle,
 } from "@/panels/ResponsiveDialog";
 import { Badge } from "@/ui/badge";
+import { Card } from "@/ui/card";
 import { Button } from "@/ui/button";
 import { Checkbox } from "@/ui/checkbox";
 import {
@@ -662,15 +663,16 @@ export function TemplateEditor({
   if (inline) {
     // 展示页与无对话框的宿主：同一份表单，平铺在一块卡片里。
     return (
-      <section
+      <Card
         data-slot="workflow-editor"
+        role="region"
         aria-label={title}
-        className="flex min-w-0 flex-col gap-3 rounded-xl border border-border bg-card p-4 sm:h-[560px]"
+        className="min-w-0 gap-3 overflow-visible rounded-xl border border-border p-4 py-4 text-[length:inherit] ring-0 sm:h-[560px]"
       >
         <h3 className="text-[14px] font-semibold">{title}</h3>
         {content}
         <div className="flex justify-end gap-2">{actions}</div>
-      </section>
+      </Card>
     );
   }
 

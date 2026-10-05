@@ -6,6 +6,7 @@ import {
   type BuiltinAgentId,
 } from "@armadra/shared";
 import { useT } from "@/app/preferences-store";
+import { Checkbox } from "@/ui/checkbox";
 
 /**
  * 继承的能力（Agent 自动化设计 §1）。
@@ -54,12 +55,11 @@ export function CapabilityInheritance({
               key={capability}
               className="flex min-h-8 cursor-pointer items-center gap-2 text-xs"
             >
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={!disabledCapabilities.includes(capability)}
-                onChange={(event) =>
+                onCheckedChange={(next) =>
                   onChange(
-                    event.target.checked
+                    next === true
                       ? disabledCapabilities.filter(
                           (entry) => entry !== capability,
                         )

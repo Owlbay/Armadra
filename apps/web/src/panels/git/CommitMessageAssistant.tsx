@@ -11,7 +11,14 @@ import {
 import { usePreferencesStore, useT } from "../../app/preferences-store";
 import { Button } from "../../ui/button";
 import { Textarea } from "../../ui/textarea";
-import { Check, Field, selectClass } from "./forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../ui/select";
+import { Check, Field } from "./forms";
 
 export interface CommitMessageAssistantProps {
   workspaceId: string;
@@ -180,34 +187,40 @@ function AssistantSession({
       <h3 className="font-medium">{t("gitMessage.title")}</h3>
       <p className="text-muted-foreground">{t("gitMessage.note")}</p>
       <Field label={t("gitMessage.provider")}>
-        <select
-          className={selectClass}
+        <Select
           value={selected?.id ?? ""}
           disabled={busy !== null}
-          onChange={(event) => setChosen(event.target.value)}
+          onValueChange={setChosen}
         >
-          {choices.data?.map((provider) => (
-            <option key={provider.id} value={provider.id}>
-              {provider.label}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="h-9 w-full min-w-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="z-[var(--z-dialog)]">
+            {choices.data?.map((provider) => (
+              <SelectItem key={provider.id} value={provider.id}>
+                {provider.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </Field>
       <Field label={t("gitMessage.language")}>
-        <select
-          className={selectClass}
+        <Select
           value={language}
           disabled={busy !== null}
-          onChange={(event) =>
-            setLanguage(event.target.value as GitMessageLanguage)
-          }
+          onValueChange={(next) => setLanguage(next as GitMessageLanguage)}
         >
-          {GIT_MESSAGE_LANGUAGES.map((value) => (
-            <option key={value} value={value}>
-              {t(`gitMessage.language.${value}`)}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="h-9 w-full min-w-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="z-[var(--z-dialog)]">
+            {GIT_MESSAGE_LANGUAGES.map((value) => (
+              <SelectItem key={value} value={value}>
+                {t(`gitMessage.language.${value}`)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </Field>
       <Check
         label={t("gitMessage.conventional")}

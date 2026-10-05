@@ -7,7 +7,14 @@ import { useGitTarget } from "@/git/target";
 import { Button } from "@/ui/button";
 import { Input } from "@/ui/input";
 import { useT } from "@/app/preferences-store";
-import { Field, selectClass } from "../git/forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/select";
+import { Field } from "../git/forms";
 import { invalidateGitQueries } from "../git/queries";
 import { createWorktreeAction, localBranch } from "../git/worktree";
 import { suggestedHeadRef } from "./model";
@@ -171,17 +178,18 @@ export function CheckoutWorktree({
       </Field>
       {!existing && headRef && remotes.length > 1 && (
         <Field label={t("gitRepo.remote")}>
-          <select
-            className={selectClass}
-            value={remote}
-            onChange={(event) => setRemote(event.target.value)}
-          >
-            {remotes.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
+          <Select value={remote} onValueChange={setRemote}>
+            <SelectTrigger className="h-9 w-full min-w-0">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="z-[var(--z-dialog)]">
+              {remotes.map((name) => (
+                <SelectItem key={name} value={name}>
+                  {name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Field>
       )}
       {!existing && headRef && (

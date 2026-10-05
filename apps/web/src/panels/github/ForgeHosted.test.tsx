@@ -74,6 +74,7 @@ import { RuntimeRequestError } from "@/api/request";
 import type { ForgePull } from "../../api/forge";
 import { usePreferencesStore } from "../../app/preferences-store";
 import { ForgeHosted } from "./ForgeHosted";
+import { optionLabels } from "../../app/test-harness";
 
 const MR_SHA = "d".repeat(40);
 
@@ -158,14 +159,16 @@ describe("GitLab merge request detail (§29.6)", () => {
     );
     renderHosted();
     fireEvent.click(await screen.findByText("Login rework"));
-    await waitFor(() => {
-      const select = document.querySelector(
-        "[data-slot=forge-merge] select",
-      ) as HTMLSelectElement | null;
-      expect(
-        [...(select?.options ?? [])].map((option) => option.value),
-      ).toEqual(["rebase"]);
+    const method = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>(
+        "[data-slot=forge-merge] [role=combobox]",
+      );
+      expect(found).not.toBeNull();
+      return found!;
     });
+    await waitFor(async () =>
+      expect(await optionLabels(method)).toEqual(["变基合并"]),
+    );
     fireEvent.click(screen.getByText(/^合并 · /));
     fireEvent.click(await screen.findByRole("button", { name: "合并" }));
     await waitFor(() =>

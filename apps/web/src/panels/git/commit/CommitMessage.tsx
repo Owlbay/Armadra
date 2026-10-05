@@ -11,6 +11,7 @@ import { ChevronDown, History, Sparkles } from "lucide-react";
 import { runtimeApi } from "../../../api/client";
 import { useT } from "../../../app/preferences-store";
 import { Button } from "../../../ui/button";
+import { Checkbox } from "../../../ui/checkbox";
 import { Textarea } from "../../../ui/textarea";
 import {
   DropdownMenu,
@@ -140,12 +141,10 @@ export function CommitMessage({
       />
       <div className="space-y-1 text-xs">
         <label className="flex min-h-8 items-center gap-2">
-          <input
-            type="checkbox"
-            className="size-4 accent-[var(--brand)]"
+          <Checkbox
             checked={amend}
             disabled={!amendable}
-            onChange={(event) => onAmendChange(event.target.checked)}
+            onCheckedChange={(next) => onAmendChange(next === true)}
           />
           {t("gitCommit.amend")}
         </label>
@@ -167,12 +166,10 @@ export function CommitMessage({
             <p className="text-muted-foreground">{t("scm.amendSafety")}</p>
             {head.published && (
               <label className="flex min-h-8 items-center gap-2 rounded-md border border-destructive p-2">
-                <input
-                  type="checkbox"
-                  className="size-4 accent-[var(--brand)]"
+                <Checkbox
                   checked={acknowledgePublished}
-                  onChange={(event) =>
-                    onAcknowledgePublished(event.target.checked)
+                  onCheckedChange={(next) =>
+                    onAcknowledgePublished(next === true)
                   }
                 />
                 {t("scm.amendPublished")}

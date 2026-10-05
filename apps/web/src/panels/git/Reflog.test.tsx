@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { GitIntegrationSnapshot, GitReflogPage } from "@armadra/shared";
 import { Reflog, type ReflogProps } from "./Reflog";
+import { chooseOption } from "../../app/test-harness";
 
 // 只替 `useT`：这个组件的复制按钮拉进了终端表面，而它一路把画布 store 也带
 // 进来，那个 store 在模块顶层就读偏好设置。
@@ -144,9 +145,10 @@ it("blocks a hard reset that would discard uncommitted work until it is acknowle
     loadState: vi.fn(async () => ({ ...idle, dirty: true })),
   });
   fireEvent.click(await screen.findByText("HEAD@{1}"));
-  fireEvent.change(screen.getByLabelText("gitRepo.resetMode"), {
-    target: { value: "hard" },
-  });
+  await chooseOption(
+    screen.getByLabelText("gitRepo.resetMode"),
+    "gitRepo.reset.hard",
+  );
   const reset = screen.getByRole("button", { name: "gitRepo.reset" });
   expect((reset as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(reset);

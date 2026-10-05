@@ -48,6 +48,7 @@ import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { CONTROL_WIDTH } from "./GeneralPage";
 import { Alert, AlertTitle } from "@/ui/alert";
+import { Card } from "@/ui/card";
 import { Button } from "@/ui/button";
 import {
   DropdownMenu,
@@ -737,7 +738,7 @@ function GroupDialog({
         <ResponsiveDialogHeader>
           <ResponsiveDialogTitle>{group.name}</ResponsiveDialogTitle>
         </ResponsiveDialogHeader>
-        <div className="settings-group divide-y divide-border/60 rounded-lg border border-border/70 bg-card">
+        <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 settings-group divide-y divide-border/60">
           {group.members.length === 0 && (
             <SettingsRow label={t("sharing.groups.empty")} />
           )}
@@ -836,7 +837,7 @@ function GroupDialog({
               {t("sharing.groups.join")}
             </Button>
           </SettingsRow>
-        </div>
+        </Card>
         <ResponsiveDialogFooter>
           {!restricted && (
             <Button
@@ -979,7 +980,7 @@ function Invitations({ groupsOnly }: { groupsOnly?: Group[] }) {
               {t("sharing.invites.create")}
             </ResponsiveDialogTitle>
           </ResponsiveDialogHeader>
-          <div className="settings-group divide-y divide-border/60 rounded-lg border border-border/70 bg-card">
+          <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 settings-group divide-y divide-border/60">
             {groupsOnly ? (
               <SettingsRow label={t("sharing.groups")}>
                 <Select value={groupId} onValueChange={setGroupId}>
@@ -1016,7 +1017,7 @@ function Invitations({ groupsOnly }: { groupsOnly?: Group[] }) {
                 </SettingsRow>
               </>
             )}
-          </div>
+          </Card>
           {link && (
             <div className="flex items-center gap-2">
               <Input

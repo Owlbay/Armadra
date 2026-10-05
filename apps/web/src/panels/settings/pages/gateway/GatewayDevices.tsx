@@ -13,6 +13,7 @@ import {
   ResponsiveAlertDialogTitle,
 } from "@/panels/ResponsiveDialog";
 import { Badge } from "@/ui/badge";
+import { Card } from "@/ui/card";
 import { Button } from "@/ui/button";
 import { Spinner } from "@/ui/spinner";
 import {
@@ -83,7 +84,7 @@ export function GatewayDevices({
   return (
     <section className="flex min-w-0 flex-col gap-2">
       <h3 className="px-0.5 text-[13px] font-medium">{t("gateway.devices")}</h3>
-      <div className="rounded-lg border border-border/70 bg-card px-2">
+      <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 px-2">
         <Table className="text-[13px]">
           <TableHeader>
             <TableRow>
@@ -163,7 +164,7 @@ export function GatewayDevices({
             ))}
           </TableBody>
         </Table>
-      </div>
+      </Card>
       {hasMore && onMore && (
         <Button
           type="button"

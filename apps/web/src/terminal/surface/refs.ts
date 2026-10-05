@@ -9,6 +9,7 @@ import { createOffscreenBuffer, type OffscreenBuffer } from "../render-state";
 import { TerminalInputLog } from "../input-log";
 import type { TerminalTransport } from "../transport";
 import type { ConnectionStatus } from "./types";
+import { createBackoff, type Backoff } from "@/lib/backoff";
 
 export type LaunchPhase = "idle" | "armed" | "sent";
 export type Timer = ReturnType<typeof setTimeout> | null;
@@ -46,7 +47,7 @@ export interface SurfaceRefs {
   launchTimerRef: React.RefObject<Timer>;
   promptTimerRef: React.RefObject<Timer>;
   reconnectTimerRef: React.RefObject<Timer>;
-  reconnectDelayRef: React.RefObject<number>;
+  reconnectBackoffRef: React.RefObject<Backoff>;
   statusRef: React.RefObject<ConnectionStatus>;
 }
 
@@ -88,7 +89,9 @@ export function useSurfaceRefs(current: {
     launchTimerRef: { current: null },
     promptTimerRef: { current: null },
     reconnectTimerRef: { current: null },
-    reconnectDelayRef: { current: 1000 },
+    reconnectBackoffRef: {
+      current: createBackoff({ baseMs: 1_000, capMs: 10_000 }),
+    },
     statusRef: { current: current.status },
   };
   const bundle = refs.current;

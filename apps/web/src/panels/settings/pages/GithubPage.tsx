@@ -10,7 +10,14 @@ import { usePreferencesStore, useT } from "../../../app/preferences-store";
 import { useGithubSession } from "../../../host/github-session";
 import { useCanvasStore } from "../../../store/canvas-store";
 import { SettingsGroup } from "../SettingsGroup";
-import { Field, selectClass } from "../../git/forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/select";
+import { Field } from "../../git/forms";
 import {
   credentialSourceKey,
   failureKey,
@@ -124,24 +131,30 @@ export function GithubPage() {
               }}
             >
               <Field label={t("github.settings.source")}>
-                <select
-                  className={selectClass}
+                <Select
                   value={String(source)}
-                  onChange={(event) =>
+                  onValueChange={(next) =>
                     // 枚举在线上是名字，下拉框的值就是那个名字。
-                    setSource(event.target.value as GithubCredentialSource)
+                    setSource(next as GithubCredentialSource)
                   }
                 >
-                  <option value={String(GithubCredentialSource.NONE)}>
-                    {t("github.source.none")}
-                  </option>
-                  <option value={String(GithubCredentialSource.GH_CLI)}>
-                    {t("github.source.ghCli")}
-                  </option>
-                  <option value={String(GithubCredentialSource.TOKEN_REF)}>
-                    {t("github.source.token")}
-                  </option>
-                </select>
+                  <SelectTrigger className="h-9 w-full min-w-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="z-[var(--z-dialog)]">
+                    <SelectItem value={String(GithubCredentialSource.NONE)}>
+                      {t("github.source.none")}
+                    </SelectItem>
+                    <SelectItem value={String(GithubCredentialSource.GH_CLI)}>
+                      {t("github.source.ghCli")}
+                    </SelectItem>
+                    <SelectItem
+                      value={String(GithubCredentialSource.TOKEN_REF)}
+                    >
+                      {t("github.source.token")}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
               </Field>
               <Field label={t("github.settings.apiBase")}>
                 <Input

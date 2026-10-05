@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { cn } from "@/lib/cn";
+import { Card } from "@/ui/card";
 
 /**
  * 设置页里的一张分组卡片（§24.2「分组表单」）。
@@ -25,9 +26,9 @@ export function SettingsGroup({
           {title}
         </h3>
       )}
-      <div className="settings-group divide-y divide-border/60 rounded-lg border border-border/70 bg-card">
+      <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 settings-group divide-y divide-border/60">
         {children}
-      </div>
+      </Card>
     </section>
   );
 }

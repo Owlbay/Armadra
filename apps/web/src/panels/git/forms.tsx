@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useT } from "../../app/preferences-store";
 import { Button } from "../../ui/button";
+import { Checkbox } from "../../ui/checkbox";
 
 export function Field({
   label,
@@ -27,11 +28,9 @@ export function Check({
 }) {
   return (
     <label className="flex min-h-9 items-center gap-2 text-xs">
-      <input
-        type="checkbox"
-        className="size-4 accent-[var(--brand)]"
+      <Checkbox
         checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
+        onCheckedChange={(next) => onChange(next === true)}
       />
       {label}
     </label>
@@ -57,8 +56,3 @@ export function ReadError({
     </div>
   );
 }
-export const selectClass =
-  "h-9 min-w-0 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-ring";
-/** 同一套边框与焦点样式，给需要多行的字段（reword 的提交信息）。 */
-export const textareaClass =
-  "min-w-0 w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-ring";

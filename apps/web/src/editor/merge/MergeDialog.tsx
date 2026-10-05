@@ -11,13 +11,13 @@ import {
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { ScrollArea } from "@/ui/scroll-area";
 import { workspaceRelative } from "./conflict";
 import { useMergeStore } from "./merge-store";
@@ -83,21 +83,21 @@ export function MergeDialog() {
   };
 
   return (
-    <Dialog
+    <ResponsiveDialog
       open={state.open}
       onOpenChange={(next) => {
         if (!next) store.getState().close();
       }}
     >
-      <DialogContent className="flex max-h-[86vh] w-[min(96vw,72rem)] max-w-none flex-col gap-3">
-        <DialogHeader>
-          <DialogTitle>
+      <ResponsiveDialogContent className="flex max-h-[86vh] w-[min(96vw,72rem)] max-w-none flex-col gap-3">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
             {t(draft ? "merge.draft.title" : "merge.title")}
-          </DialogTitle>
-          <DialogDescription>
+          </ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
             {state.loading ? t("merge.loading") : (state.path ?? "")}
-          </DialogDescription>
-        </DialogHeader>
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
 
         {state.unavailable && (
           <p className="text-[12px] text-[var(--warn)]">
@@ -149,7 +149,7 @@ export function MergeDialog() {
           </ScrollArea>
         )}
 
-        <DialogFooter className="gap-2">
+        <ResponsiveDialogFooter className="gap-2">
           <span className="mr-auto text-[length:var(--text-caption)] text-muted-foreground">
             {t("merge.summary", {
               count: String(countConflicts(state.regions)),
@@ -178,9 +178,9 @@ export function MergeDialog() {
               </Button>
             </>
           )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 

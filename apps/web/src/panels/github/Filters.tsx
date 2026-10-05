@@ -1,7 +1,14 @@
 import { Button } from "@/ui/button";
 import { Input } from "@/ui/input";
 import { useT } from "@/app/preferences-store";
-import { Check, Field, selectClass } from "../git/forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/select";
+import { Check, Field } from "../git/forms";
 import type { GithubTab } from "./open";
 import {
   GithubIssueFilter,
@@ -119,17 +126,25 @@ export function FilterBar({
       }}
     >
       <Field label={t("github.filter.state")}>
-        <select
-          className={selectClass}
+        <Select
           value={value.state}
-          onChange={(event) =>
-            set("state", event.target.value as GithubFilterState["state"])
+          onValueChange={(next) =>
+            set("state", next as GithubFilterState["state"])
           }
         >
-          <option value="open">{t("github.filter.state.open")}</option>
-          <option value="closed">{t("github.filter.state.closed")}</option>
-          <option value="all">{t("github.filter.state.all")}</option>
-        </select>
+          <SelectTrigger className="h-9 w-full min-w-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="z-[var(--z-dialog)]">
+            <SelectItem value="open">
+              {t("github.filter.state.open")}
+            </SelectItem>
+            <SelectItem value="closed">
+              {t("github.filter.state.closed")}
+            </SelectItem>
+            <SelectItem value="all">{t("github.filter.state.all")}</SelectItem>
+          </SelectContent>
+        </Select>
       </Field>
       <Field label={t("github.filter.author")}>
         <Input
