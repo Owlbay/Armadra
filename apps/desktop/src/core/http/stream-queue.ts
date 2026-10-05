@@ -22,9 +22,23 @@ import type { WebSocket } from "ws";
  * 帧排队；降到 `lowWaterBytes`（缺省高水位的一半）以下才再往外写、解除拥塞。
  */
 
+/**
+ * 不是字节的一个单元：控制面的订阅（`http/rpc.ts`）排的是还没编码的值，由上游
+ * 自己编码。`bytes` 是它大约多大，只用来记账。
+ */
+export class QueuedValue {
+  constructor(
+    readonly value: unknown,
+    readonly bytes: number,
+  ) {}
+}
+
+/** 队列里的一帧。 */
+export type Frame = string | Uint8Array | QueuedValue;
+
 /** 队列认的对端：`ws` 的 `WebSocket` 经 {@link wsTarget} 包一层就是它。 */
 export interface SendTarget {
-  send(data: string | Uint8Array, written: (error?: Error) => void): void;
+  send(data: Frame, written: (error?: Error) => void): void;
   readonly bufferedAmount: number;
   readonly readyState: number;
 }
@@ -58,8 +72,6 @@ export const DRAIN_POLL_MS = 20;
 /** 拥塞关流用的关闭码：`pause` 队列溢出，客户端按退避重连即可。 */
 export const CLOSE_BACKPRESSURE = 1013;
 
-type Frame = string | Uint8Array;
-
 interface Unit {
   readonly frames: readonly Frame[];
   readonly bytes: number;
@@ -67,9 +79,8 @@ interface Unit {
 }
 
 function sizeOf(frame: Frame): number {
-  return typeof frame === "string"
-    ? Buffer.byteLength(frame)
-    : frame.byteLength;
+  if (typeof frame === "string") return Buffer.byteLength(frame);
+  return frame instanceof QueuedValue ? frame.bytes : frame.byteLength;
 }
 
 export class SendQueue {
@@ -99,7 +110,9 @@ export class SendQueue {
   push(frame: Frame | readonly Frame[], key?: string): boolean {
     if (this.closed || this.target.readyState !== OPEN) return false;
     const frames: readonly Frame[] =
-      typeof frame === "string" || frame instanceof Uint8Array
+      typeof frame === "string" ||
+      frame instanceof Uint8Array ||
+      frame instanceof QueuedValue
         ? [frame]
         : frame;
     if (frames.length === 0) return true;
@@ -277,7 +290,8 @@ export function wsTarget(
   const sendOptions =
     options.binary === undefined ? undefined : { binary: options.binary };
   return {
-    send(data, written) {
+    send(frame, written) {
+      const data = frame as string | Uint8Array;
       if (sendOptions === undefined) socket.send(data, written);
       else socket.send(data, sendOptions, written);
     },
