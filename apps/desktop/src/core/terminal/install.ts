@@ -64,7 +64,11 @@ import {
   selectBackend,
 } from "./select";
 import { SessionHostBackend } from "./session-host/backend";
-import { serveTerminalSocket, validWriter } from "./socket";
+import {
+  TERMINAL_MAX_PAYLOAD_BYTES,
+  serveTerminalSocket,
+  validWriter,
+} from "./socket";
 import { TmuxBackend } from "./tmux/backend";
 import { detect } from "./tmux/config";
 
@@ -765,6 +769,7 @@ export function install(
       }
       return undefined;
     },
+    { maxPayload: TERMINAL_MAX_PAYLOAD_BYTES },
   );
 
   // The seam the agent domain published before this one was assembled. Until

@@ -7,6 +7,7 @@ import {
 } from "./backend";
 import { DEFAULT_COLS, DEFAULT_ROWS, type TerminalManager } from "./manager";
 import { deviceOrLocal, humanActor } from "../drive/lease";
+import { CLOSE_BACKPRESSURE, SendQueue, wsTarget } from "../http/stream-queue";
 
 /**
  * `/api/terminals/{id}/ws` — contract §15.5.
@@ -50,6 +51,25 @@ import { deviceOrLocal, humanActor } from "../drive/lease";
 /** How long a batch may wait, and how large it may get before it is sent. */
 export const FLUSH_INTERVAL_MS = 16;
 export const FLUSH_BYTES = 64 * 1024;
+
+/**
+ * Backpressure (platform spec, core packages §3.3): past 4 MiB of unsent
+ * bytes on the socket the PTY is paused, and resumed once the socket has
+ * drained to half that. Frames already on their way when the pause lands —
+ * at most a few 64 KiB batches — queue behind it; 64 of them is far more than
+ * a pause can let through, so a full queue means a peer that stopped reading
+ * entirely, and the socket is closed with 1013 rather than a frame dropped.
+ * The page reconnects and is redrawn.
+ */
+export const SEND_HIGH_WATER_BYTES = 4 * 1024 * 1024;
+export const SEND_MAX_FRAMES = 64;
+
+/**
+ * The largest frame a client may send: an `input` frame carries a paste whole
+ * (the page does not split one), so the stream's ceiling is wider than the
+ * hello's `maxFrameBytes`. Over it, `ws` closes with 1009.
+ */
+export const TERMINAL_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 
 export interface HelloFrame {
   readonly type: "hello";
@@ -163,9 +183,19 @@ export async function serveTerminalSocket(
   const { manager, sessionId, writer } = options;
   const cols = options.cols ?? DEFAULT_COLS;
   const rows = options.rows ?? DEFAULT_ROWS;
+  // Set once the attachment exists; until then there is nothing to pause.
+  let flow: { pause?(): void; resume?(): void } | undefined;
+  const queue = new SendQueue(wsTarget(connection, { binary: false }), {
+    policy: "pause",
+    maxFrames: SEND_MAX_FRAMES,
+    highWaterBytes: SEND_HIGH_WATER_BYTES,
+    onPause: () => flow?.pause?.(),
+    onResume: () => flow?.resume?.(),
+    onOverflow: () => connection.close(CLOSE_BACKPRESSURE, "backpressure"),
+  });
   const send = (frame: ServerFrame): void => {
     try {
-      connection.send(encodeFrame(frame), { binary: false });
+      queue.push(encodeFrame(frame));
     } catch (error) {
       options.onError?.(error);
     }
@@ -209,6 +239,9 @@ export async function serveTerminalSocket(
   }
 
   const { attachment, record, snapshot } = attached;
+  flow = attachment;
+  // A socket that was already behind before the attachment existed.
+  if (queue.paused) attachment.pause?.();
   if (closedWhileAttaching) {
     try {
       await manager.detached(sessionId, attachment.attachmentId);
@@ -366,6 +399,11 @@ export async function serveTerminalSocket(
 
     connection.on("close", () => {
       closed = true;
+      queue.close();
+      // Released before the detach: a backend whose detach is slow (or keeps
+      // the reader, as the direct one does for the other viewers) must not
+      // stay paused on behalf of a socket that is gone.
+      if (queue.paused) attachment.resume?.();
       if (timer !== undefined) clearTimeout(timer);
       void manager
         .detached(sessionId, attachment.attachmentId)

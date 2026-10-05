@@ -69,12 +69,26 @@ interface DirectListener {
   subscribed: boolean;
 }
 
+/**
+ * The PTY is one per session and every attachment reads the same output, so
+ * it is paused while ANY attachment is paused: a slow viewer slows the
+ * program the way a slow terminal would, rather than one of the viewers
+ * being given an unbounded backlog. Detaching releases its share.
+ */
+function applyFlow(session: DirectSession): void {
+  if (session.pty === undefined) return;
+  if (session.paused.size > 0) session.pty.pause();
+  else session.pty.resume();
+}
+
 interface DirectSession {
   readonly key: SessionKey;
   readonly generation: number;
   pty: Pty | undefined;
   readonly pid: number | undefined;
   readonly listeners: Map<number, DirectListener>;
+  /** Attachments whose socket asked the PTY to stop. */
+  readonly paused: Set<number>;
   /** The last {@link REPLAY_CHUNKS} flushed batches, oldest first. */
   readonly replay: Buffer[];
   /** Accumulating batch, flushed on `cadence` or {@link OUTPUT_FLUSH_BYTES}. */
@@ -138,6 +152,7 @@ export class DirectBackend implements TerminalBackend {
       pty,
       pid: pty.pid,
       listeners: new Map(),
+      paused: new Set(),
       replay: [],
       pending: [],
       pendingBytes: 0,
@@ -276,11 +291,23 @@ export class DirectBackend implements TerminalBackend {
         // The process may have ended between `attach` and this subscription.
         if (session.exited) sink(session.exitCode);
       },
+      pause: () => {
+        if (!session.listeners.has(id) || session.paused.has(id)) return;
+        session.paused.add(id);
+        applyFlow(session);
+      },
+      resume: () => {
+        if (!session.paused.delete(id)) return;
+        applyFlow(session);
+      },
     };
   }
 
   async detach(key: SessionKey, attachmentId: number): Promise<void> {
-    this.sessions.get(key)?.listeners.delete(attachmentId);
+    const session = this.sessions.get(key);
+    if (session === undefined) return;
+    session.listeners.delete(attachmentId);
+    if (session.paused.delete(attachmentId)) applyFlow(session);
   }
 
   /* ---------------------------------- input ------------------------------- */
