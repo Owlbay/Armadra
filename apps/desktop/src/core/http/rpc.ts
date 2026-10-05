@@ -27,7 +27,7 @@ import {
   routeGuard,
 } from "../identity/gate";
 import { type CorePlatform, reportError } from "../platform";
-import { CoreFailure } from "./errors";
+import { CoreFailure, fail } from "./errors";
 import type { CoreRequest, HandlerResult } from "./router";
 import type { CoreServer } from "./server";
 import { QueuedValue, SendQueue } from "./stream-queue";
@@ -539,10 +539,7 @@ async function* boundedIterator(
         continue;
       }
       if (overflowed) {
-        throw new ORPCError("overflow", {
-          status: 503,
-          message: "订阅跟不上，带 lastEventId 重订",
-        });
+        throw toUpstream(fail("overflow", "订阅跟不上，带 lastEventId 重订"));
       }
       if (queue.queuedFrames === 0) {
         if (failure !== undefined) throw peerError(failure.error);
@@ -583,10 +580,9 @@ async function subscribe(
   if (connection.iterators >= MAX_ITERATORS) {
     // 先让这次的拒绝答出去，再以 4429 关（契约 §35.2）。
     setTimeout(() => connection.close(CLOSE_LIMIT, "limit reached"), 10);
-    throw new ORPCError("limit_reached", {
-      status: 429,
-      message: `一条连接最多 ${MAX_ITERATORS} 个订阅`,
-    });
+    throw toUpstream(
+      fail("limit_reached", `一条连接最多 ${MAX_ITERATORS} 个订阅`),
+    );
   }
   const local = new AbortController();
   let source: unknown;

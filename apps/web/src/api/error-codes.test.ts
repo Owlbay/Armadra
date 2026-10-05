@@ -50,7 +50,7 @@ function scanCoreErrors(source: string, file = "sample.ts"): Found[] {
  */
 function scanFails(source: string, file = "sample.ts"): Found[] {
   const imported =
-    /import\s*\{[^}]*\bfail\b[^}]*\}\s*from\s*"(?:\.\.\/)*(?:http\/)?errors"/.test(
+    /import\s*\{[^}]*\bfail\b[^}]*\}\s*from\s*"(?:\.\/|(?:\.\.\/)*)(?:http\/)?errors"/.test(
       source,
     ) &&
     (file.startsWith("http/") ||
