@@ -82,6 +82,7 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 | `core/diagnostics/`                                       | 崩溃上报的剥离规则；SDK 只在壳里、只在用户填了 DSN 时加载；页面错误上报（`client-report.ts` 限流与再剥离，`routes.ts`）                                                                                                                                                                                                                           | §30          |
 | `core/mail/`                                              | 可选 SMTP 通知通道：邀请与重置链接；只有服务器壳 `--smtp-url` 配，nodemailer 首封才加载                                                                                                                                                                                                                                                           | §28          |
 | `core/forge/`                                             | 托管平台抽象：`Forge` 接口，GitHub（经 `core/github/` 的客户端）、Gitea / Forgejo 与 GitLab（`PRIVATE-TOKEN`，多级子组、合并方式、流水线通过后合并与合并列车）；按主机 / 仓库的配置与令牌、fork 检出、合并后删分支                                                                                                                                | §29          |
+| `core/sources/`                                           | 客户端源表与远程服务：别的 core（直连配对、经中继挂载）与个人中转登录；刷新令牌只在 SecretStore，换票时按 D27 选路；对端按 CA 指纹钉扎；启动只写本机一行、不联网                                                                                                                                                                                  | §33          |
 
 core 之外的同类新增：`src/hook-client/`（动词工具表，`armadra-hook` 与 ama 适配器共用）、
 `src/agent-host/ama/`（ama 宿主适配器与 runners）、`apps/mobile`（Capacitor 手机壳）、
@@ -454,6 +455,7 @@ SQLite 的迁移只有一个目录——`apps/desktop/src/core/db/migrations/`�
 | `0036_password_resets.sql`    | `identity_password_resets`（一次性口令重置令牌，库里只存哈希，24 小时有效，签新即作废旧的）                                                                                                              | `core/identity/`，契约 §25            |
 | `0037_push_preferences.sql`   | `push_devices` 加 `kinds_json`（设备要收的推送种类，空串 = 全部）与 `unifiedpush_endpoint`（UnifiedPush 端点）                                                                                           | `core/push/`，契约 §27                |
 | `0038_forge.sql`              | `forge_config`（每仓库 / 每主机的托管平台、API 根与令牌条目名），`github_references` 加 `forge` 列                                                                                                       | `core/forge/`，契约 §29               |
+| `0039_client_sources.sql`     | `client_sources`（本机记住的源：本机、直连、经中继）与 `remote_services`（个人中转 / SaaS），两张表都不存凭据                                                                                            | `core/sources/`，契约 §33             |
 
 `core/db/open.ts` 在同一 `BEGIN IMMEDIATE` 事务内先检查迁移账本，再执行已知迁移与启动恢复。未知版本、校验和不符、脏记录、损坏账本、无账本的非空 schema 或迁移历史缺口均拒绝启动；失败回滚并关闭连接，不改名、删除或重建原库。账本表与校验和算法沿用最初那套（SHA-384），所以装过旧版本的库照常打得开。既有 SQL 迁移文件保持原字节。
 

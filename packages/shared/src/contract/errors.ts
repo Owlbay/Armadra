@@ -55,6 +55,17 @@ export const ERROR_CODES = {
   mail_not_configured: { status: 409 },
   origin_mismatch: { status: 409 },
   rebase_started: { status: 409 },
+  // 客户端源表与远程服务（契约 §33）：拼法与状态同协议包 `errors` 注册表。
+  credentials_invalid: { status: 401, i18n: "error.credentialsInvalid" },
+  source_unauthorized: { status: 401, i18n: "error.sourceUnauthorized" },
+  cloud_account_unlinked: {
+    status: 401,
+    i18n: "error.cloudAccountUnlinked",
+  },
+  fingerprint_mismatch: { status: 400, i18n: "error.fingerprintMismatch" },
+  account_locked: { status: 429, i18n: "error.accountLocked" },
+  source_unreachable: { status: 502, i18n: "error.sourceUnreachable" },
+  source_offline: { status: 503, i18n: "error.sourceOffline" },
 } as const satisfies Record<string, ErrorSpec>;
 
 export type ErrorCode = keyof typeof ERROR_CODES;

@@ -11,14 +11,17 @@
  *   node tools/release/version.mjs set X.Y.Z
  *   node tools/release/version.mjs print
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_PACKAGE,
   compareVersions,
   parseVersion,
+  PLATFORM_PACKAGE,
   readAgentPin,
   readCompatibility,
+  readPlatformPin,
 } from "./compatibility.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -157,6 +160,91 @@ export function checkAgentPin({ base = root, agent } = {}) {
   return problems;
 }
 
+/** Workspaces that depend on the protocol package (platform-protocol §1.3). */
+const PLATFORM_CONSUMERS = ["packages/shared", "apps/desktop", "apps/web"];
+
+/**
+ * The pinned `@armadra/platform-protocol` (compatibility.json's `platform`)
+ * against what is installed: each consumer manifest names the vendored
+ * tarball of that exact version, the tarball's sha256 is the recorded one, the
+ * lockfile resolved it from that file, and the installed copy reports the
+ * version. Returns problems.
+ */
+export function checkPlatformPin({ base = root, platform } = {}) {
+  const problems = [];
+  let pin;
+  try {
+    pin = platform ?? readPlatformPin();
+  } catch (error) {
+    return [String(error instanceof Error ? error.message : error)];
+  }
+  const tarball = `tools/vendor/${pin.tarball.file}`;
+  if (!pin.tarball.file.endsWith(`-${pin.version}.tgz`)) {
+    problems.push(
+      `platform.tarball.file ${pin.tarball.file} does not carry version ${pin.version}`,
+    );
+  }
+  if (!existsSync(base + tarball)) {
+    problems.push(`${tarball} is missing`);
+  } else {
+    const sha = createHash("sha256")
+      .update(readFileSync(base + tarball))
+      .digest("hex");
+    if (sha !== pin.tarball.sha256)
+      problems.push(
+        `${tarball} has sha256 ${sha}, compatibility.json records ${pin.tarball.sha256}`,
+      );
+  }
+  for (const dir of PLATFORM_CONSUMERS) {
+    const manifest = JSON.parse(
+      readFileSync(`${base}${dir}/package.json`, "utf8"),
+    );
+    const declared =
+      manifest.dependencies?.[PLATFORM_PACKAGE] ??
+      manifest.devDependencies?.[PLATFORM_PACKAGE];
+    const depth = "../".repeat(dir.split("/").length);
+    const expected = `file:${depth}${tarball}`;
+    if (declared !== expected) {
+      problems.push(
+        `${dir}/package.json depends on ${PLATFORM_PACKAGE} at ${declared ?? "nothing"}, expected ${expected}`,
+      );
+    }
+    const installed = `${base}${dir}/node_modules/${PLATFORM_PACKAGE}/package.json`;
+    if (existsSync(installed)) {
+      const version = JSON.parse(readFileSync(installed, "utf8")).version;
+      if (version !== pin.version)
+        problems.push(
+          `${dir} has ${PLATFORM_PACKAGE} ${version} installed, compatibility.json pins ${pin.version}`,
+        );
+    } else {
+      problems.push(
+        `${dir} has no installed ${PLATFORM_PACKAGE}; run pnpm install`,
+      );
+    }
+  }
+  const lock = readFileSync(base + "pnpm-lock.yaml", "utf8");
+  const key = `'${PLATFORM_PACKAGE}@file:${tarball}`;
+  const at = lock.indexOf(key);
+  if (at < 0) {
+    problems.push(
+      `pnpm-lock.yaml resolves no ${PLATFORM_PACKAGE} from ${tarball}`,
+    );
+  } else if (!/^\s+version: (\S+)/m.test(lock.slice(at, at + 600))) {
+    problems.push(
+      `pnpm-lock.yaml entry for ${PLATFORM_PACKAGE} has no version`,
+    );
+  } else {
+    const lockVersion = /^\s+version: (\S+)/m.exec(lock.slice(at, at + 600))[1];
+    if (lockVersion !== pin.version)
+      problems.push(
+        `pnpm-lock.yaml has ${PLATFORM_PACKAGE} ${lockVersion}, compatibility.json pins ${pin.version}`,
+      );
+    if (!/integrity: sha512-/.test(lock.slice(at, at + 600)))
+      problems.push(`pnpm-lock.yaml has no integrity for ${PLATFORM_PACKAGE}`);
+  }
+  return problems;
+}
+
 /** Write a new version into every site. */
 export function setVersion(next, base = root) {
   const version = parseVersion(next).text;
@@ -199,6 +287,7 @@ function main(argv) {
     tag: tag.startsWith("v") ? tag : "",
   });
   problems.push(...checkAgentPin());
+  problems.push(...checkPlatformPin());
   for (const problem of problems) console.error(`✗ ${problem}`);
   if (problems.length > 0) {
     console.error(
@@ -207,7 +296,7 @@ function main(argv) {
     return 1;
   }
   console.log(
-    `Version ${version} agrees across ${VERSION_SITES.length} files${tag ? ` and tag ${tag}` : ""}; ${AGENT_PACKAGE} pinned as installed.`,
+    `Version ${version} agrees across ${VERSION_SITES.length} files${tag ? ` and tag ${tag}` : ""}; ${AGENT_PACKAGE} and ${PLATFORM_PACKAGE} pinned as installed.`,
   );
   return 0;
 }

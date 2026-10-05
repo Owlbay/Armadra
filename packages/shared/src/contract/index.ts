@@ -7,6 +7,7 @@ import type {
 
 import type { ProcedureMeta } from "./meta.js";
 import { settings } from "./settings.js";
+import { sources } from "./sources.js";
 import { system } from "./system.js";
 import { workspaces } from "./workspaces.js";
 
@@ -17,7 +18,7 @@ import { workspaces } from "./workspaces.js";
  * 业务侧拿到的是这里导出的值与类型，不直接碰上游。新域按契约 §34 起的预分配
  * 逐个加进来（工程规范化包 §0）。
  */
-export const contract = { system, workspaces, settings };
+export const contract = { system, workspaces, settings, sources };
 
 export type Contract = typeof contract;
 export type ContractDomain = keyof Contract;
@@ -89,6 +90,20 @@ export { SCOPES, meta } from "./meta.js";
 export type { LegacyRoute, ProcedureMeta, Scope } from "./meta.js";
 export { systemHelloOutputSchema } from "./system.js";
 export type { SystemHello } from "./system.js";
+export {
+  clientSourceSchema,
+  remoteAddInputSchema,
+  remoteServiceSchema,
+  remoteSourceSummarySchema,
+  sourceSessionSchema,
+} from "./sources.js";
+export type {
+  ClientSource,
+  RemoteAddInput,
+  RemoteService,
+  RemoteSourceSummary,
+  SourceSession,
+} from "./sources.js";
 export {
   workspaceSummaryWireSchema,
   workspaceWireSchema,
