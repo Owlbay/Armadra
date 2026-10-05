@@ -4,12 +4,19 @@ import { toast } from "sonner";
 import {
   supportedPermissionModes,
   type AgentInfo,
+  type CanvasNode,
   type PermissionMode,
+  type Position,
 } from "@armadra/shared";
 
 import { usePreferencesStore, useT } from "@/app/preferences-store";
 import { useAgentsQuery } from "@/app/use-agents";
 import { revealCreatedNode } from "@/canvas/created-node";
+import {
+  enclosingBoundFrame,
+  frameBindingOf,
+  inheritedNodeData,
+} from "@/canvas/frame-binding";
 import { nodeDropPosition } from "@/canvas/placement";
 import {
   ResponsiveDialog,
@@ -47,9 +54,10 @@ import { closeNewAgentWizard, useWizardOpen } from "./wizard-open";
 /**
  * 新建 Agent 向导（ACP 设计 §8 第 1 条，设计系统 §5.3）。
  *
- * 三步：选 Agent（只有 CLI 与 ACP 入口都装了的能选，其余灰掉并给安装命令）
- * → 选目录（工作区根 / 画布上用过的目录）→ 选任务（模板 chip 预填，或自己
- * 写一句）。「创建」先经 `POST /api/acp/sessions` 起会话并把任务当第一条
+ * 两步：选 Agent（只有 CLI 与 ACP 入口都装了的能选，其余灰掉并给安装命令）
+ * → 选任务（模板 chip 预填，或自己写一句）。目录不单独占一步：画布已经知道
+ * 新节点该开在哪（落点所在的绑定分组的 worktree，否则工作区根，与菜单里直接
+ * 新建 Agent 同一口径，见 `canvasDefaultCwd`），第二步顶上预选好，要换再换。「创建」先经 `POST /api/acp/sessions` 起会话并把任务当第一条
  * prompt 带上，再建节点并写好 `sessionId`——会话视图挂上来时直接接这一行，
  * 不会再起第二个，第一条 prompt 也不依赖哪个窗口挂没挂上来。
  */
@@ -77,6 +85,27 @@ export function installCommand(agent: AgentInfo): string | null {
   return INSTALL_COMMANDS[agent.baseAgent ?? agent.id] ?? null;
 }
 
+/**
+ * 画布给新终端的缺省目录：落点在绑定了 worktree 的分组里就是那个 checkout，
+ * 否则工作区根。和 `addNode` 的继承同一个函数，会话 cwd 与节点 cwd 才不会分家。
+ */
+export function canvasDefaultCwd(
+  nodes: readonly CanvasNode[],
+  position: Position,
+  rootPath: string,
+): string {
+  const inherited = inheritedNodeData(
+    "terminal",
+    frameBindingOf(enclosingBoundFrame(nodes, position)),
+    { workspaceRoot: rootPath },
+  );
+  const cwd =
+    inherited && "cwd" in inherited
+      ? (inherited.cwd as string | undefined)
+      : undefined;
+  return cwd || rootPath;
+}
+
 /** 目录候选：工作区根 + 画布上终端用过的目录，最多 5 个，去重。 */
 export function folderChoices(
   rootPath: string,
@@ -93,7 +122,7 @@ export function folderChoices(
   return result;
 }
 
-export type WizardStep = 0 | 1 | 2;
+export type WizardStep = 0 | 1;
 
 export interface WizardState {
   step: WizardStep;
@@ -107,13 +136,13 @@ export interface WizardState {
 
 export function initialWizardState(
   agents: readonly AgentInfo[],
-  rootPath: string,
+  folder: string,
 ): WizardState {
   const first = wizardAgents(agents).find(agentReady);
   return {
     step: 0,
     agentId: first?.id ?? null,
-    folder: rootPath,
+    folder,
     templateId: null,
     task: "",
     busy: false,
@@ -121,16 +150,12 @@ export function initialWizardState(
   };
 }
 
-const STEP_TITLES = [
-  "wizard.step.agent",
-  "wizard.step.folder",
-  "wizard.step.task",
-] as const;
+const STEP_TITLES = ["wizard.step.agent", "wizard.step.task"] as const;
 
 function StepDots({ step }: { step: WizardStep }) {
   return (
     <span className="flex items-center gap-1.5" aria-hidden>
-      {[0, 1, 2].map((index) => (
+      {[0, 1].map((index) => (
         <span
           key={index}
           className="size-1.5 rounded-full"
@@ -144,7 +169,7 @@ function StepDots({ step }: { step: WizardStep }) {
 }
 
 /**
- * 向导的内容（三步之一 + 底栏）。不带 Dialog：展示页把三步并排画出来，
+ * 向导的内容（两步之一 + 底栏）。不带 Dialog：展示页把两步并排画出来，
  * 对话框与手机上的底部 Sheet 也各自包它一层。
  */
 export function WizardBody({
@@ -249,44 +274,43 @@ export function WizardBody({
         })}
       </RadioGroup>
     );
-  } else if (state.step === 1) {
-    body = (
-      <Field>
-        <FieldLabel>{t("wizard.folder.label")}</FieldLabel>
-        <Select
-          value={state.folder}
-          onValueChange={(value) => onChange({ folder: value })}
-        >
-          <SelectTrigger
-            aria-label={t("wizard.folder.label")}
-            className="w-full"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent className="z-[var(--z-dialog)]">
-            {folders.map((folder) => (
-              <SelectItem key={folder} value={folder}>
-                {folder === rootPath ? t("wizard.folder.root") : folder}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {onPickFolder && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="self-start"
-            onClick={onPickFolder}
-          >
-            <FolderOpen />
-            {t("wizard.folder.pick")}
-          </Button>
-        )}
-      </Field>
-    );
   } else {
     body = (
       <div className="flex flex-col gap-3">
+        <Field>
+          <FieldLabel>{t("wizard.folder.label")}</FieldLabel>
+          <div className="flex gap-2">
+            <Select
+              value={state.folder}
+              onValueChange={(value) => onChange({ folder: value })}
+            >
+              <SelectTrigger
+                aria-label={t("wizard.folder.label")}
+                className="min-w-0 flex-1"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="z-[var(--z-dialog)]">
+                {folders.map((folder) => (
+                  <SelectItem key={folder} value={folder}>
+                    {folder === rootPath ? t("wizard.folder.root") : folder}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {onPickFolder && (
+              <Button
+                variant="outline"
+                size="icon"
+                title={t("wizard.folder.pick")}
+                aria-label={t("wizard.folder.pick")}
+                onClick={onPickFolder}
+              >
+                <FolderOpen />
+              </Button>
+            )}
+          </div>
+        </Field>
         <ToggleGroup
           type="single"
           variant="outline"
@@ -329,7 +353,7 @@ export function WizardBody({
     );
   }
 
-  const last = state.step === 2;
+  const last = state.step === 1;
   return (
     <div
       className="flex flex-col gap-4"
@@ -389,13 +413,13 @@ function permissionFor(
 }
 
 /**
- * 「创建」：先起会话（带第一条 prompt），成功后再建节点。失败停在第三步。
+ * 「创建」：先起会话（带第一条 prompt），成功后再建节点。失败停在第二步。
  * 返回新节点 id；失败返回 null。
  */
 export async function createAgentFromWizard(
   state: WizardState,
   agent: AgentInfo,
-  at: { x: number; y: number } | null,
+  position: Position,
 ): Promise<string | null> {
   const store = useCanvasStore.getState();
   const workspace = store.workspace;
@@ -414,11 +438,15 @@ export async function createAgentFromWizard(
   const id = useCanvasStore.getState().addNode("terminal", {
     id: nodeId,
     title: agent.label,
-    position: nodeDropPosition("terminal", at ? { anchor: at } : {}),
+    position,
     data: {
       kind: "terminal",
       sessionId: session.id,
-      ...(state.folder !== workspace.rootPath ? { cwd: state.folder } : {}),
+      // 不写 cwd 时 addNode 按落点分组继承；与会话 cwd 不同就必须显式写上。
+      ...(state.folder !==
+      canvasDefaultCwd(store.document.nodes, position, workspace.rootPath)
+        ? { cwd: state.folder }
+        : {}),
       agent: {
         id: agent.id,
         driver: "acp",
@@ -444,24 +472,38 @@ export function NewAgentWizard() {
   const nodes = useCanvasStore((state) => state.document?.nodes);
   /** 这次打开里经系统选择器选过的目录：排在根之后，选中即用。 */
   const [picked, setPicked] = React.useState<string | null>(null);
+  /** 新节点的落点在打开时定下来：缺省目录看它，创建时也放在这里。 */
+  const [position, setPosition] = React.useState<Position | null>(null);
+  /** 画布给的缺省目录（落点分组的 worktree 或根）：换走了也留在候选里。 */
+  const [canvasCwd, setCanvasCwd] = React.useState(rootPath);
+  const [state, setState] = React.useState<WizardState>(() =>
+    initialWizardState(agents, rootPath),
+  );
+
   const folders = React.useMemo(
     () =>
       folderChoices(rootPath, [
+        canvasCwd,
         picked ?? undefined,
         ...(nodes ?? []).map((node) =>
           node.data.kind === "terminal" ? node.data.cwd : undefined,
         ),
       ]),
-    [nodes, picked, rootPath],
-  );
-  const [state, setState] = React.useState<WizardState>(() =>
-    initialWizardState(agents, rootPath),
+    [canvasCwd, nodes, picked, rootPath],
   );
 
   // 每次打开都从第一步开始；Agent 列表晚到时补上缺省选中。
   React.useEffect(() => {
     if (open) {
-      setState(initialWizardState(agents, rootPath));
+      const placed = nodeDropPosition("terminal", at ? { anchor: at } : {});
+      const cwd = canvasDefaultCwd(
+        useCanvasStore.getState().document?.nodes ?? [],
+        placed,
+        rootPath,
+      );
+      setPosition(placed);
+      setCanvasCwd(cwd);
+      setState(initialWizardState(agents, cwd));
       setPicked(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -481,7 +523,11 @@ export function NewAgentWizard() {
     if (!agent) return;
     change({ busy: true, failed: false });
     try {
-      const id = await createAgentFromWizard(state, agent, at);
+      const id = await createAgentFromWizard(
+        state,
+        agent,
+        position ?? nodeDropPosition("terminal", at ? { anchor: at } : {}),
+      );
       if (!id) throw new Error("not created");
       closeNewAgentWizard();
     } catch {

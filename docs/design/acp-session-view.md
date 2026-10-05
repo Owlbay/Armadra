@@ -343,7 +343,7 @@ export const contentSourceSchema = z.object({
 
 最小可行范围（D10）：
 
-1. **新建向导**（`apps/web/src/acp/NewAgentWizard.tsx`，Dialog 三步）：选 Agent（只列 `installed && acp.installed` 的，其余灰掉并给 `npm i -g …` 命令，复制按钮）→ 选目录（工作区根 / 最近用过的 cwd，Select）→ 选任务（模板 chips，Toggle group；或自己写一句，Textarea）。完成即 `addNode("terminal", { agent: { id, driver: "acp" } })` 并把任务作为第一条 prompt 经 `POST /api/acp/sessions` 带上。入口：新建菜单第一项「新建 Agent…」；原来的各 CLI 直建项保留在下面。
+1. **新建向导**（`apps/web/src/acp/NewAgentWizard.tsx`，Dialog 两步）：选 Agent（只列 `installed && acp.installed` 的，其余灰掉并给 `npm i -g …` 命令，复制按钮）→ 选任务；目录不单独占一步，作为第二步顶上的一行预选画布给的缺省（落点分组的 worktree，否则工作区根，与 `addNode` 的分组继承同一口径），可换成工作区根 / 最近用过的 cwd（模板 chips，Toggle group；或自己写一句，Textarea）。完成即 `addNode("terminal", { agent: { id, driver: "acp" } })` 并把任务作为第一条 prompt 经 `POST /api/acp/sessions` 带上。入口：新建菜单第一项「新建 Agent…」；原来的各 CLI 直建项保留在下面。
 2. **缺省驱动**：`settings.agents.defaultDriver: "acp" | "terminal"`，缺省 `acp`；某家没装适配器时该家退回 `terminal`。
 3. **简洁模式**：本机偏好 `ui.simpleMode`（缺省关）。开着时：节点菜单隐藏「回收 / 权限模式 / 终端视图」，头部徽标只留状态与审批，侧栏「会话」默认展开，新建菜单只剩「新建 Agent…」与便签 / 白板。不删任何功能，只是不显示。
 4. **任务模板**：`apps/web/src/acp/templates.ts`，内置五条（解释这个仓库 / 修一个 bug / 补测试 / 审查当前改动 / 写一份计划），文案在 i18n；模板只是 prompt 文本 + 建议权限模式。用户自定义模板第二期（存 `settings.json`）。

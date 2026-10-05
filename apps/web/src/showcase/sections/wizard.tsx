@@ -69,10 +69,10 @@ export default function WizardSection() {
   return (
     <div className="grid gap-4 xl:grid-cols-2">
       <Step initial={{ step: 0 }} />
-      <Step initial={{ step: 1, folder: WIZARD_FOLDERS[1] ?? WIZARD_ROOT }} />
       <Step
         initial={{
-          step: 2,
+          step: 1,
+          folder: WIZARD_FOLDERS[1] ?? WIZARD_ROOT,
           templateId: template?.id ?? null,
           task: template ? templatePrompt(template, t) : "",
         }}

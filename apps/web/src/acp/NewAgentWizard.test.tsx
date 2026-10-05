@@ -10,6 +10,7 @@ import type {
   AgentInfo,
   Board,
   BoardDocument,
+  CanvasNode,
   Workspace,
 } from "@armadra/shared";
 
@@ -126,6 +127,34 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+/** 盖住整片画布、绑定了 worktree 的分组：落点怎么摆都在它里面。 */
+function boundFrame(): CanvasNode {
+  return {
+    id: "019ff7d1-0000-7000-8000-00000000f001",
+    boardId: board.id,
+    type: "group",
+    title: "feature/login",
+    color: "#0a84ff",
+    position: { x: -5000, y: -5000 },
+    size: { width: 10000, height: 10000 },
+    labels: [],
+    note: "",
+    data: {
+      kind: "group",
+      binding: {
+        worktreePath: ".armadra/worktrees/feature",
+        branch: "feature/login",
+        repositoryId: "repo-1",
+        initScript: null,
+        initScriptState: "none",
+        initScriptNodeId: null,
+      },
+    },
+    createdAt: stamp,
+    updatedAt: stamp,
+  } as CanvasNode;
+}
+
 function renderWizard() {
   return render(
     <TestProviders>
@@ -159,12 +188,11 @@ describe("NewAgentWizard", () => {
     ).toBe("checked");
   });
 
-  it("走完三步：起会话带首条 prompt，建出带 sessionId 的 ACP 节点", async () => {
+  it("两步：选 Agent、写任务；目录不用选，缺省就是画布给的（工作区根）", async () => {
     api.createSession.mockResolvedValue({ id: "sess-1" });
     openNewAgentWizard({ x: 500, y: 300 });
     renderWizard();
     fireEvent.click(await screen.findByRole("button", { name: "继续" }));
-    fireEvent.click(screen.getByRole("button", { name: "继续" }));
     fireEvent.click(screen.getByRole("radio", { name: "补测试" }));
     const task = screen.getByLabelText("任务") as HTMLTextAreaElement;
     expect(task.value).toContain("测试");
@@ -191,12 +219,11 @@ describe("NewAgentWizard", () => {
     });
   });
 
-  it("创建失败停在第三步并给错误行，不建节点", async () => {
+  it("创建失败停在第二步并给错误行，不建节点", async () => {
     api.createSession.mockRejectedValue(new Error("acp_not_installed"));
     openNewAgentWizard();
     renderWizard();
     fireEvent.click(await screen.findByRole("button", { name: "继续" }));
-    fireEvent.click(screen.getByRole("button", { name: "继续" }));
     fireEvent.change(screen.getByLabelText("任务"), {
       target: { value: "hello" },
     });
@@ -206,7 +233,7 @@ describe("NewAgentWizard", () => {
     expect(useCanvasStore.getState().document?.nodes).toEqual([]);
   });
 
-  it("第二步「选择文件夹…」：桌面壳选的目录成为会话 cwd 并写进节点", async () => {
+  it("第二步可以换目录：桌面壳「选择文件夹…」选的目录成为会话 cwd 并写进节点", async () => {
     platform.desktop = true;
     platform.pickDirectory.mockResolvedValue("/elsewhere/project");
     api.createSession.mockResolvedValue({ id: "sess-2" });
@@ -219,7 +246,6 @@ describe("NewAgentWizard", () => {
         screen.getByRole("combobox", { name: "目录" }).textContent,
       ).toContain("/elsewhere/project"),
     );
-    fireEvent.click(screen.getByRole("button", { name: "继续" }));
     fireEvent.click(screen.getByRole("button", { name: "创建" }));
     await waitFor(() => expect(useWizardOpen.getState().open).toBe(false));
     expect(api.createSession).toHaveBeenCalledWith(
@@ -257,6 +283,57 @@ describe("NewAgentWizard", () => {
     renderWizard();
     fireEvent.click(await screen.findByRole("button", { name: "继续" }));
     expect(screen.queryByRole("button", { name: "选择文件夹…" })).toBeNull();
+  });
+
+  it("落点在绑定了 worktree 的分组里：缺省目录就是那个 checkout，会话与节点一致", async () => {
+    useCanvasStore.getState().setDocument({
+      board,
+      nodes: [boundFrame()],
+      edges: [],
+    });
+    api.createSession.mockResolvedValue({ id: "sess-3" });
+    openNewAgentWizard({ x: 500, y: 300 });
+    renderWizard();
+    fireEvent.click(await screen.findByRole("button", { name: "继续" }));
+    expect(
+      screen.getByRole("combobox", { name: "目录" }).textContent,
+    ).toContain("/repo/.armadra/worktrees/feature");
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(useWizardOpen.getState().open).toBe(false));
+    expect(api.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/repo/.armadra/worktrees/feature" }),
+    );
+    const node = useCanvasStore
+      .getState()
+      .document?.nodes.find((item) => item.type === "terminal");
+    expect(node?.data).toMatchObject({
+      cwd: "/repo/.armadra/worktrees/feature",
+    });
+  });
+
+  it("在绑定分组里改选工作区根：节点显式写根，不再被分组的 worktree 顶掉", async () => {
+    useCanvasStore.getState().setDocument({
+      board,
+      nodes: [boundFrame()],
+      edges: [],
+    });
+    api.createSession.mockResolvedValue({ id: "sess-4" });
+    openNewAgentWizard({ x: 500, y: 300 });
+    renderWizard();
+    fireEvent.click(await screen.findByRole("button", { name: "继续" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "目录" }));
+    fireEvent.click(
+      await screen.findByRole("option", { name: "工作区根目录" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(useWizardOpen.getState().open).toBe(false));
+    expect(api.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/repo" }),
+    );
+    const node = useCanvasStore
+      .getState()
+      .document?.nodes.find((item) => item.type === "terminal");
+    expect(node?.data).toMatchObject({ cwd: "/repo" });
   });
 
   it("没有可用的 Agent 时第一步就是空态", async () => {
