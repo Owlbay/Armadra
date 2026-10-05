@@ -262,6 +262,7 @@ export default async function keybindings({ stack, output, report, scenario }) {
     `return document.querySelector("nav[data-slot='mobile-bottom-nav'] button[aria-label='设置']");`,
     "手机底栏「设置」",
   );
+  await phone.dialogSettled("手机设置抽屉停稳");
   await phone.clickOn(
     `return [...document.querySelectorAll('[role="dialog"] button, [role="dialog"] a')].find((b) => b.textContent.trim() === "快捷键");`,
     "手机快捷键页",
