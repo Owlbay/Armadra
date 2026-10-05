@@ -119,7 +119,7 @@ export function MobileBottomNav() {
             className={cn(
               "h-auto min-h-[var(--mobile-nav-h)] min-w-0 flex-1 flex-col gap-1 rounded-none px-1",
               "text-[11px] leading-4 font-normal transition-colors disabled:opacity-40",
-              "hover:bg-transparent dark:hover:bg-transparent",
+              "hover:bg-transparent",
               current
                 ? "text-[var(--brand-text)] hover:text-[var(--brand-text)]"
                 : "text-muted-foreground hover:text-foreground",

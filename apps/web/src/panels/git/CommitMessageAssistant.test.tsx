@@ -14,6 +14,7 @@ import {
   CommitMessageAssistant,
   type CommitMessageAssistantProps,
 } from "./CommitMessageAssistant";
+import { chooseOption } from "../../app/test-harness";
 const source: GitMessageSource = {
   expectedHead: "a".repeat(40),
   indexDigest: "b".repeat(64),
@@ -96,9 +97,10 @@ describe("AI commit-message preview", () => {
   it("passes the chosen language and Conventional Commits switch through", async () => {
     const { props } = view();
     await screen.findByText(/Included files/, { selector: "summary" });
-    fireEvent.change(screen.getByLabelText("Draft language"), {
-      target: { value: "zh" },
-    });
+    await chooseOption(
+      screen.getByLabelText("Draft language"),
+      "Simplified Chinese",
+    );
     fireEvent.click(
       screen.getByLabelText("Use a Conventional Commits subject"),
     );

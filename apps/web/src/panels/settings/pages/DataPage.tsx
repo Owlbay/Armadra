@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/ui/select";
+import { formatBytes } from "@/lib/format";
 
 /** `logs.retentionDays` 的四个取值；`0` = 永久（Runtime 只接受这几个）。 */
 const RETENTION_CHOICES = [7, 30, 90, 0] as const;
@@ -163,17 +164,4 @@ export function DataPage() {
       </SettingsGroup>
     </>
   );
-}
-
-/** 1024 进制、最多一位小数；单位是符号，不进 i18n。 */
-export function formatBytes(bytes: number): string {
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  const rounded = unit === 0 ? String(value) : value.toFixed(1);
-  return `${rounded} ${units[unit]}`;
 }

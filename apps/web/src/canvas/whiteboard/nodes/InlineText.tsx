@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { useT } from "@/app/preferences-store";
 import { beginGesture, endGesture, updateItem } from "../store";
 
 /**
@@ -44,6 +45,7 @@ export function InlineText({
   autoEdit = false,
   onEditingChange,
 }: InlineTextProps) {
+  const t = useT();
   const [editing, setEditing] = React.useState(autoEdit);
   const [draft, setDraft] = React.useState(text);
   const textarea = React.useRef<HTMLTextAreaElement>(null);
@@ -101,8 +103,10 @@ export function InlineText({
   }
 
   return (
+    // ui-exempt: 画布行内编辑——字号、颜色跟随画布对象的样式，不用 ui/textarea 的表单外观
     <textarea
       ref={textarea}
+      aria-label={t("tool.text")}
       className="nodrag nowheel"
       value={draft}
       onChange={(event) => setDraft(event.target.value)}

@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/ui/select";
 import { Switch } from "@/ui/switch";
+import { clamp } from "@/lib/math";
 
 /**
  * `settings.terminal.backend`（§15.1 + T01）。
@@ -395,7 +396,7 @@ export function TerminalPage() {
             onChange={(event) =>
               set(
                 "fontSize",
-                clamp(event.target.value, TERMINAL_FONT_SIZE_RANGE),
+                clamp(Number(event.target.value), ...TERMINAL_FONT_SIZE_RANGE),
               )
             }
           />
@@ -413,7 +414,10 @@ export function TerminalPage() {
             onChange={(event) =>
               set(
                 "lineHeight",
-                clamp(event.target.value, TERMINAL_LINE_HEIGHT_RANGE),
+                clamp(
+                  Number(event.target.value),
+                  ...TERMINAL_LINE_HEIGHT_RANGE,
+                ),
               )
             }
           />
@@ -479,11 +483,4 @@ export function TerminalPage() {
       </SettingsGroup>
     </>
   );
-}
-
-/** 输入框里随手打的值可能越界或不是数字；越界就夹回范围。 */
-function clamp(raw: string, [min, max]: readonly [number, number]): number {
-  const value = Number(raw);
-  if (!Number.isFinite(value)) return min;
-  return Math.min(max, Math.max(min, value));
 }

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactFlowProvider } from "@xyflow/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { TooltipProvider } from "@/ui/tooltip";
 
 /**
@@ -48,4 +49,27 @@ export function TestProviders({ children }: { children: ReactNode }) {
       </ReactFlowProvider>
     </QueryClientProvider>
   );
+}
+
+/**
+ * Radix 的 Select：jsdom 里没有真实指针，要先用键盘打开触发器才会渲染选项，
+ * 再点选项。`name` 是选项的可见文字。
+ */
+export async function chooseOption(
+  trigger: HTMLElement,
+  name: string | RegExp,
+): Promise<void> {
+  installDomPolyfills();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name }));
+}
+
+/** 打开 Radix 的 Select 读出全部选项的可见文字，然后按 Esc 收起。 */
+export async function optionLabels(trigger: HTMLElement): Promise<string[]> {
+  installDomPolyfills();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  const options = await screen.findAllByRole("option");
+  const labels = options.map((option) => option.textContent ?? "");
+  fireEvent.keyDown(options[0]!, { key: "Escape" });
+  return labels;
 }

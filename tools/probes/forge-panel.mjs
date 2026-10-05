@@ -567,14 +567,10 @@ createRoot(document.getElementById("root")!).render(
   await capture("gitlab-auto-merge");
   await clickText('[role="alertdialog"] button', "取消");
   await clickText('button[aria-label="返回"]', "");
-  await evaluate(`
-    const select = document.querySelector("[data-slot=forge-hosted] select");
-    // 合成的 change 事件进不了 React 的受控 select：直接调它的 onChange。
-    const key = Object.keys(select).find((name) => name.startsWith("__reactProps$"));
-    // 「已关闭」对 MR 按 state=all 取（含已合并），夹具里有这条录像。
-    select[key].onChange({ target: { value: "closed" } });
-    return true;
-  `);
+  // 状态过滤是 Radix 的 Select：真点开触发器再点选项。
+  // 「已关闭」对 MR 按 state=all 取（含已合并），夹具里有这条录像。
+  await clickText("[data-slot=forge-hosted] [role=combobox]", "");
+  await clickText('[role="option"]', "已关闭");
   await waitText("Bump deps");
   await clickText("[data-slot=forge-pull] button", "Bump deps");
   await waitText("删除远端分支 · deps");

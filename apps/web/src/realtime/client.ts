@@ -4,6 +4,7 @@ import * as awarenessProtocol from "y-protocols/awareness";
 import * as syncProtocol from "y-protocols/sync";
 import type * as Y from "yjs";
 import { REALTIME_CLOSE, REALTIME_MESSAGE } from "@armadra/shared";
+import { backoffDelay } from "@/lib/backoff";
 
 /**
  * `WS …/boards/{boardId}/sync` 的页面一端（契约 §16.1）。
@@ -63,7 +64,7 @@ export interface RealtimeClientOptions {
 const OPEN = 1;
 
 export function defaultBackoff(attempt: number): number {
-  return Math.min(10_000, 500 * 2 ** Math.min(attempt, 5));
+  return backoffDelay(attempt, { baseMs: 500, capMs: 10_000 });
 }
 
 function browserSocket(url: string): SocketLike {

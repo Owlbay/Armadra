@@ -16,6 +16,7 @@ import {
 import { useT } from "../../../app/preferences-store";
 import { cn } from "../../../lib/cn";
 import { Badge } from "../../../ui/badge";
+import { Checkbox as CheckboxPrimitive } from "../../../ui/checkbox";
 import { FileTypeIcon } from "../../../nodes/files/file-icons";
 import {
   pendingKey,
@@ -63,18 +64,13 @@ function Checkbox({
   onChange: (next: boolean) => void;
 }) {
   return (
-    <input
-      type="checkbox"
+    <CheckboxPrimitive
       aria-label={label}
-      className="size-3.5 shrink-0 accent-[var(--brand)]"
-      checked={checked}
+      className="size-3.5 shrink-0"
+      checked={partial && !checked ? "indeterminate" : checked}
       disabled={disabled}
-      // indeterminate 只有属性没有 attribute，只能落到节点上。
-      ref={(node) => {
-        if (node) node.indeterminate = Boolean(partial) && !checked;
-      }}
       onClick={(event) => event.stopPropagation()}
-      onChange={(event) => onChange(event.target.checked)}
+      onCheckedChange={(next) => onChange(next === true)}
     />
   );
 }

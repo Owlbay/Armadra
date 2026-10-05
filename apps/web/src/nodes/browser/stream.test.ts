@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   MAX_VIEWPORT_WIDTH,
@@ -169,10 +169,14 @@ describe("服务端的消息", () => {
 });
 
 describe("重连", () => {
-  it("翻倍到十秒封顶", () => {
-    expect(reconnectDelay(0)).toBe(250);
-    expect(reconnectDelay(1)).toBe(500);
-    expect(reconnectDelay(5)).toBe(8_000);
-    expect(reconnectDelay(99)).toBe(10_000);
+  it("上限从 250 ms 翻倍到十秒封顶，实际等待在上限内抖动", () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.999999);
+    expect(reconnectDelay(0)).toBe(249);
+    expect(reconnectDelay(1)).toBe(499);
+    expect(reconnectDelay(5)).toBe(7_999);
+    expect(reconnectDelay(99)).toBe(9_999);
+    random.mockReturnValue(0);
+    expect(reconnectDelay(5)).toBe(0);
+    random.mockRestore();
   });
 });

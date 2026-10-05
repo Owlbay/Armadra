@@ -8,6 +8,7 @@ import { gitTarget } from "@/git/target";
 import { useT } from "@/app/preferences-store";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
+import { Card } from "@/ui/card";
 import { useCanvasStore } from "@/store/canvas-store";
 import {
   bindingRepairState,
@@ -115,8 +116,8 @@ export function WorktreeBindingBadge({ node }: { node: CanvasNode }) {
   });
 
   return (
-    <div
-      className="flex max-w-full flex-col gap-1 rounded-md border border-border bg-card/90 p-1.5 text-xs shadow-sm backdrop-blur-sm"
+    <Card
+      className="max-w-full gap-1 overflow-visible rounded-md border border-border bg-card/90 p-1.5 py-1.5 text-xs shadow-sm ring-0 backdrop-blur-sm"
       data-testid="worktree-binding-badge"
     >
       <div className="flex min-w-0 flex-wrap items-center gap-1">
@@ -138,7 +139,7 @@ export function WorktreeBindingBadge({ node }: { node: CanvasNode }) {
       {repair !== "ok" ? (
         <RepairPrompt node={node} binding={binding} reason={repair} />
       ) : null}
-    </div>
+    </Card>
   );
 }
 

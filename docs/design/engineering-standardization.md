@@ -1,6 +1,6 @@
 # 工程规范化：接口层、WebSocket、组件与检查工具
 
-> 状态：目标设计（2026-10-06；F1 / F2 的接口层选型已于同日定案，见 §2.2.1 与 §7）。本文回答四个问题：接口要不要改成 RPC、WebSocket 怎么规范、前端组件哪些没按设计系统走、测试与检查工具缺什么；最后给分阶段计划与待拍板清单。平台侧（SaaS 中转、PostgreSQL / Redis、各端登录、多源挂载、多人协同）由 [平台与 SaaS 架构](platform-saas-architecture.md) 负责，本文只标出两者的依赖点。
+> 状态：目标设计（2026-10-06；F1 / F2 的接口层选型已于同日定案，见 §2.2.1 与 §7；E0 已派出，E1–E6 的派发顺序与文件级规格见[落地总计划](platform-implementation-plan.md)与[工程规范化包](platform/engineering-packages.md)）。本文回答四个问题：接口要不要改成 RPC、WebSocket 怎么规范、前端组件哪些没按设计系统走、测试与检查工具缺什么；最后给分阶段计划与待拍板清单。平台侧（SaaS 中转、PostgreSQL / Redis、各端登录、多源挂载、多人协同）由 [平台与 SaaS 架构](platform-saas-architecture.md) 负责，本文只标出两者的依赖点。
 > 现状来源：`apps/desktop/src/core/http/*`、`apps/web/src/api/*`、`packages/shared/src/api/*`、`apps/web/src/ui/*`、`tools/`、`repo.rules.json`、`.github/workflows/*`、[架构](../guides/architecture.md)、[core 的 JSON 面](../contracts/core-json-api.md)、[设计系统](design-system.md)。所有数字都是在 `docs/platform-saas-design` 分支上实际跑命令得到的，命令列在附录 A。
 
 ## 0. 结论

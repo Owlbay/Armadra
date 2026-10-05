@@ -93,7 +93,7 @@ export function useTerminalTransport(
           }
           refs.backendRef.current = hello.backend;
           refs.sessionIdRef.current = hello.sessionId;
-          refs.reconnectDelayRef.current = 1000;
+          refs.reconnectBackoffRef.current.reset();
           patch({
             connection: hello.alive ? "live" : "exited",
             error: null,
@@ -180,8 +180,7 @@ export function useTerminalTransport(
           )
             return;
           patch({ connection: "detached", binding: null });
-          const delay = refs.reconnectDelayRef.current;
-          refs.reconnectDelayRef.current = Math.min(delay * 2, 10_000);
+          const delay = refs.reconnectBackoffRef.current.next();
           refs.reconnectTimerRef.current = setTimeout(() => {
             refs.reconnectTimerRef.current = null;
             if (!disposed) setAttempt((value) => value + 1);

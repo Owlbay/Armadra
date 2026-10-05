@@ -1,3 +1,6 @@
+import { clampInt } from "@/lib/math";
+import { backoffDelay } from "@/lib/backoff";
+
 /**
  * 远程浏览器节点的画面流：几何与输入映射。
  *
@@ -22,14 +25,9 @@ export const MAX_VIEWPORT_HEIGHT = 1_600;
 
 export function viewportFor(box: Size): Size {
   return {
-    width: clamp(box.width, MIN_VIEWPORT, MAX_VIEWPORT_WIDTH),
-    height: clamp(box.height, MIN_VIEWPORT, MAX_VIEWPORT_HEIGHT),
+    width: clampInt(box.width, MIN_VIEWPORT, MAX_VIEWPORT_WIDTH),
+    height: clampInt(box.height, MIN_VIEWPORT, MAX_VIEWPORT_HEIGHT),
   };
-}
-
-function clamp(value: number, low: number, high: number): number {
-  if (!Number.isFinite(value)) return low;
-  return Math.round(Math.min(high, Math.max(low, value)));
 }
 
 /** 帧在框里的位置：等比缩放、居中，多出来的是留白。 */
@@ -92,8 +90,8 @@ export function toPageCoordinates(
   const x = (event.clientX - rect.left - fit.offsetX) / fit.scale;
   const y = (event.clientY - rect.top - fit.offsetY) / fit.scale;
   return {
-    x: clamp(x, 0, Math.max(frame.width - 1, 0)),
-    y: clamp(y, 0, Math.max(frame.height - 1, 0)),
+    x: clampInt(x, 0, Math.max(frame.width - 1, 0)),
+    y: clampInt(y, 0, Math.max(frame.height - 1, 0)),
   };
 }
 
@@ -193,11 +191,11 @@ export function parseServerMessage(raw: string): ServerMessage | undefined {
 }
 
 /**
- * 重连的等待时间：250 ms 起步翻倍，封顶 10 秒，和 core 侧那条通道同一组数。
+ * 重连的等待时间：250 ms 起步翻倍，封顶 10 秒（全抖动，见 `lib/backoff.ts`），和 core 侧那条通道同一组数。
  *
  * 不做无限快速重连：服务端明确回「已经有人在看」的时候，一秒十次重试只是把
  * 那个人的画面挤掉的另一种写法。
  */
 export function reconnectDelay(attempt: number): number {
-  return Math.min(250 * 2 ** Math.max(0, attempt), 10_000);
+  return backoffDelay(attempt, { baseMs: 250, capMs: 10_000 });
 }

@@ -17,6 +17,7 @@ import {
 } from "@/lib/side-by-side";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
+import { Checkbox } from "@/ui/checkbox";
 import { IconButton } from "@/ui/icon-button";
 import { Input } from "@/ui/input";
 import { ScrollArea } from "@/ui/scroll-area";
@@ -109,11 +110,10 @@ export function DiffNode({ node, selected }: NodeBodyProps) {
           className="h-7 min-w-32 flex-1 text-[11px]"
         />
         <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          <input
-            type="checkbox"
-            className="size-3.5 accent-[var(--brand)]"
+          <Checkbox
+            className="size-3.5"
             checked={ignoreWhitespace}
-            onChange={(event) => setIgnoreWhitespace(event.target.checked)}
+            onCheckedChange={(next) => setIgnoreWhitespace(next === true)}
           />
           {t("diff.ignoreWhitespace")}
         </label>
