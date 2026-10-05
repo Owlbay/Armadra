@@ -940,6 +940,73 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 客户端源表与远程服务（契约 §33）：owner 专用，`settings:*`。
+  {
+    path: "/api/sources",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/direct",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/{sourceId}",
+    methods: ["PUT", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/{sourceId}/forget",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/{sourceId}/session",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}",
+    methods: ["DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}/poll",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}/sources",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}/mount",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}/session",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/execution-hosts",
     methods: ["GET"],

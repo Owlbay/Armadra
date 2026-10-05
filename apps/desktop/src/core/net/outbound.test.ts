@@ -111,6 +111,14 @@ describe("出站地址表", () => {
     expect(OUTBOUND.forgeApi.url).toContain("<");
   });
 
+  it("远程服务与客户端源：不配置即不联网，地址是用户给的（契约 §33）", () => {
+    for (const entry of [OUTBOUND.cloudApi, OUTBOUND.sourceGateway]) {
+      expect(entry.switch).toBeNull();
+      expect(entry.defaultOn).toBe(false);
+      expect(entry.url).toContain("<");
+    }
+  });
+
   it("未登记的地址不算登记，前缀只按路径边界匹配", () => {
     expect(isRegistered("https://models.dev/api.json")).toBe(true);
     expect(isRegistered("https://api.github.com/repos/o/r")).toBe(true);

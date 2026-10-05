@@ -58,6 +58,7 @@ import { gatewayDomainOf, install as installGateway } from "./gateway";
 import { install as installForge } from "./forge";
 import { install as installMail } from "./mail";
 import { install as installDiagnostics } from "./diagnostics";
+import { install as installSources } from "./sources";
 
 /**
  * The core process.
@@ -159,6 +160,11 @@ export const DOMAINS: readonly ((context: CoreContext) => void)[] = [
   // After settings: the data page reports the log retention that store holds.
   installData,
   installIdentity,
+  // 客户端源表（契约 §33）在身份之后：本机那一行的 `sourceId` 就是身份域的
+  // `hostId`。装配只 upsert 这一行，不联网。
+  (context) => {
+    installSources(context);
+  },
   // GitHub after identity: its two faces authenticate every call against the
   // identity store, and it reads `store_meta.host_id` at assembly time.
   installGithub,
