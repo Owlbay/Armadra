@@ -1696,8 +1696,7 @@
                         "type": "object",
                         "properties": {
                           "serviceId": {
-                            "type": "string",
-                            "pattern": "^[0-9a-f]{32}$"
+                            "type": "string"
                           },
                           "kind": {
                             "enum": ["personal", "saas"],
@@ -1795,25 +1794,19 @@
                 "type": "object",
                 "properties": {
                   "pairLink": {
-                    "type": "string",
-                    "maxLength": 4096
+                    "type": "string"
                   },
                   "origin": {
-                    "type": "string",
-                    "maxLength": 2048
+                    "type": "string"
                   },
                   "code": {
-                    "type": "string",
-                    "maxLength": 32
+                    "type": "string"
                   },
                   "fingerprint": {
-                    "type": "string",
-                    "pattern": "^[0-9a-fA-F:]{64,95}$"
+                    "type": "string"
                   },
                   "label": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 128
+                    "type": "string"
                   }
                 }
               }
@@ -1968,22 +1961,18 @@
                     "pattern": "^[0-9a-f]{32}$"
                   },
                   "label": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 128
+                    "type": "string"
                   },
                   "orderIndex": {
                     "type": "integer",
-                    "minimum": -1000000,
-                    "maximum": 1000000
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
                   },
                   "baseUrl": {
-                    "type": "string",
-                    "maxLength": 2048
+                    "type": "string"
                   },
                   "relayOrigin": {
-                    "type": "string",
-                    "maxLength": 2048
+                    "type": "string"
                   }
                 },
                 "required": ["sourceId"]
@@ -2428,28 +2417,19 @@
                         "const": "personal"
                       },
                       "issuer": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 2048
+                        "type": "string"
                       },
                       "account": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 256
+                        "type": "string"
                       },
                       "password": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 1024
+                        "type": "string"
                       },
                       "label": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 128
+                        "type": "string"
                       },
                       "fingerprint": {
-                        "type": "string",
-                        "pattern": "^[0-9a-fA-F:]{64,95}$"
+                        "type": "string"
                       }
                     },
                     "required": ["kind", "issuer", "account", "password"]
@@ -2461,14 +2441,10 @@
                         "const": "saas"
                       },
                       "issuer": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 2048
+                        "type": "string"
                       },
                       "label": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 128
+                        "type": "string"
                       }
                     },
                     "required": ["kind", "issuer"]
@@ -2490,8 +2466,7 @@
                       "type": "object",
                       "properties": {
                         "serviceId": {
-                          "type": "string",
-                          "pattern": "^[0-9a-f]{32}$"
+                          "type": "string"
                         },
                         "kind": {
                           "enum": ["personal", "saas"],
@@ -2662,8 +2637,7 @@
                 "type": "object",
                 "properties": {
                   "serviceId": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{32}$"
+                    "type": "string"
                   }
                 },
                 "required": ["serviceId"]
@@ -2752,8 +2726,7 @@
                 "type": "object",
                 "properties": {
                   "serviceId": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{32}$"
+                    "type": "string"
                   }
                 },
                 "required": ["serviceId"]
@@ -2825,8 +2798,7 @@
                 "type": "object",
                 "properties": {
                   "serviceId": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{32}$"
+                    "type": "string"
                   }
                 },
                 "required": ["serviceId"]
@@ -2983,17 +2955,14 @@
                 "type": "object",
                 "properties": {
                   "serviceId": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{32}$"
+                    "type": "string"
                   },
                   "sourceId": {
                     "type": "string",
                     "pattern": "^[0-9a-f]{32}$"
                   },
                   "label": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 128
+                    "type": "string"
                   }
                 },
                 "required": ["serviceId", "sourceId"]
@@ -3165,8 +3134,7 @@
                 "type": "object",
                 "properties": {
                   "serviceId": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{32}$"
+                    "type": "string"
                   }
                 },
                 "required": ["serviceId"]

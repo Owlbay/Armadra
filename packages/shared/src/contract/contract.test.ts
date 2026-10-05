@@ -180,3 +180,39 @@ describe("守卫自己真的抓得到", () => {
     });
   });
 });
+
+describe("§33 与协议包同一份", () => {
+  it("sources.* 的出入参就是协议包 core-api 的 schema 对象", async () => {
+    const protocol = await import("@armadra/platform-protocol/core-api");
+    const pairs: [string, "inputSchema" | "outputSchema", unknown][] = [
+      ["sources.list", "outputSchema", protocol.sourcesListOutputSchema],
+      [
+        "sources.addDirect",
+        "inputSchema",
+        protocol.sourcesAddDirectInputSchema,
+      ],
+      ["sources.addDirect", "outputSchema", protocol.clientSourceSchema],
+      ["sources.update", "inputSchema", protocol.sourcesUpdateInputSchema],
+      ["sources.session", "inputSchema", protocol.sourcesSessionInputSchema],
+      ["sources.session", "outputSchema", protocol.sourcesSessionOutputSchema],
+      ["sources.remoteAdd", "inputSchema", protocol.remoteAddInputSchema],
+      ["sources.remoteAdd", "outputSchema", protocol.remoteAddOutputSchema],
+      [
+        "sources.remoteSources",
+        "outputSchema",
+        protocol.remoteSourcesOutputSchema,
+      ],
+      ["sources.mount", "inputSchema", protocol.mountInputSchema],
+      [
+        "sources.remoteSession",
+        "outputSchema",
+        protocol.remoteSessionOutputSchema,
+      ],
+    ];
+    for (const [name, slot, schema] of pairs) {
+      const entry = entries.find((one) => one.name === name);
+      expect(entry, name).toBeDefined();
+      expect(def(entry!)[slot], `${name} ${slot}`).toBe(schema);
+    }
+  });
+});

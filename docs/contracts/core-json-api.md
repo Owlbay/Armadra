@@ -2171,7 +2171,7 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 
 ## 33. 客户端源表与远程服务：`/api/sources/*`
 
-> 状态：实施契约（A1-3，迁移 `0039_client_sources`，实现 `core/sources/`；规格见平台实现规格 core 包 §1（docs/design/platform/core-packages.md））。下面两张形状表由 `tools/contract/generate.mjs` 从 `packages/shared/src/contract/sources.ts` 生成。
+> 状态：实施契约（A1-3，迁移 `0039_client_sources`，实现 `core/sources/`；规格见平台实现规格 core 包 §1（docs/design/platform/core-packages.md））。下面两张形状表由 `tools/contract/generate.mjs` 从 `packages/shared/src/contract/sources.ts` 生成；出入参就是协议包 `@armadra/platform-protocol/core-api` 的 schema 对象，cloud 仓与这里同一份。
 
 范围：这台 core 作为「客户端宿主」记住的别的源（`client_sources`）以及它登记过或能登录的远程服务（`remote_services`），并代页面完成配对、登录、换票与选路。全部为 owner 专用：读取需要 `settings:read`，写入需要 `settings:write`（`route-scopes.ts` 的 `/api/sources` 一行；服务器壳上的成员没有这两项，一律 403，且不触发任何外呼）。手机不经本机 core，`/api/sources/*` 只在桌面与服务器壳的页面上使用。每条都有 procedure（`POST /api/rpc/sources/<动词>`，§34.1）与下表「原路径」两种调法，同一份实现。
 
