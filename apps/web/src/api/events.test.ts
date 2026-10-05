@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentStatusStore } from "../agent/status-store";
 import {
   connectWorkspaceEvents,
-  nextReconnectDelay,
   onWorkspaceEvent,
   onWorkspaceAccessLost,
   onWorkspaceConnection,
@@ -48,6 +47,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetWorkspaceEvents();
   vi.useRealTimers();
   globalThis.WebSocket = original;
@@ -139,17 +139,19 @@ describe("workspace events", () => {
     release();
   });
 
-  it("reconnects with an exponential backoff", () => {
+  it("reconnects with an exponential, fully jittered backoff", () => {
+    // 抖动取上限的一半：第 n 次等 500 ms × 2ⁿ。
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     const release = connectWorkspaceEvents(WORKSPACE);
 
     FakeSocket.instances[0]!.drop();
-    vi.advanceTimersByTime(999);
+    vi.advanceTimersByTime(499);
     expect(FakeSocket.instances).toHaveLength(1);
     vi.advanceTimersByTime(1);
     expect(FakeSocket.instances).toHaveLength(2);
 
     FakeSocket.instances[1]!.drop();
-    vi.advanceTimersByTime(1_999);
+    vi.advanceTimersByTime(999);
     expect(FakeSocket.instances).toHaveLength(2);
     vi.advanceTimersByTime(1);
     expect(FakeSocket.instances).toHaveLength(3);
@@ -157,9 +159,24 @@ describe("workspace events", () => {
     // 成功握手把退避清零。
     FakeSocket.instances[2]!.onopen?.();
     FakeSocket.instances[2]!.drop();
-    vi.advanceTimersByTime(1_000);
+    vi.advanceTimersByTime(500);
     expect(FakeSocket.instances).toHaveLength(4);
 
+    release();
+  });
+
+  it("caps the backoff at 10s", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.999999);
+    const release = connectWorkspaceEvents(WORKSPACE);
+    // 上限 1s、2s、4s、8s、10s、10s：抖动取顶，第五次起都是 9 999 ms。
+    for (const wait of [999, 1_999, 3_999, 7_999, 9_999, 9_999]) {
+      const before = FakeSocket.instances.length;
+      FakeSocket.instances[before - 1]!.drop();
+      vi.advanceTimersByTime(wait - 1);
+      expect(FakeSocket.instances).toHaveLength(before);
+      vi.advanceTimersByTime(1);
+      expect(FakeSocket.instances).toHaveLength(before + 1);
+    }
     release();
   });
 
@@ -169,13 +186,6 @@ describe("workspace events", () => {
     expect(FakeSocket.instances[0]!.closed).toBe(true);
     vi.advanceTimersByTime(30_000);
     expect(FakeSocket.instances).toHaveLength(1);
-  });
-
-  it("caps the backoff at 10s", () => {
-    expect(nextReconnectDelay(null)).toBe(1_000);
-    expect(nextReconnectDelay(1_000)).toBe(2_000);
-    expect(nextReconnectDelay(8_000)).toBe(10_000);
-    expect(nextReconnectDelay(10_000)).toBe(10_000);
   });
 });
 

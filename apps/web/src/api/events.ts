@@ -26,6 +26,7 @@ import { useDeliveryStore } from "../agent/delivery-store";
 import { useDependencyStore } from "../agent/dependency-store";
 import { useDriveStore } from "../agent/drive-store";
 import { useLanguageStatusStore } from "../editor/language/status-store";
+import { createBackoff, type Backoff } from "@/lib/backoff";
 
 type EventType = WorkspaceEvent["type"];
 type EventOf<T extends EventType> = Extract<WorkspaceEvent, { type: T }>;
@@ -96,19 +97,13 @@ export function dispatchWorkspaceEvent(event: WorkspaceEvent): void {
 export const RECONNECT_MIN_MS = 1_000;
 export const RECONNECT_MAX_MS = 10_000;
 
-/** 指数退避 1s → 2s → 4s → 8s → 10s（封顶）。 */
-export function nextReconnectDelay(previous: number | null): number {
-  if (previous === null || previous <= 0) return RECONNECT_MIN_MS;
-  return Math.min(previous * 2, RECONNECT_MAX_MS);
-}
-
 /* -------------------------------- 连接管理 ------------------------------- */
 
 interface Connection {
   workspaceId: string;
   socket: WebSocket | null;
   timer: ReturnType<typeof setTimeout> | null;
-  delay: number | null;
+  backoff: Backoff;
   refs: number;
   stopped: boolean;
   /** 最后一条控制帧报的位置；`null` 表示还没读到过任何位置。 */
@@ -188,7 +183,7 @@ function open(connection: Connection): void {
   socket.onopen = () => {
     if (connection.socket !== socket || connection.stopped) return;
     connection.opened = true;
-    connection.delay = null;
+    connection.backoff.reset();
     for (const handler of connectionHandlers)
       handler(connection.workspaceId, true);
   };
@@ -232,12 +227,10 @@ function open(connection: Connection): void {
 
 function schedule(connection: Connection): void {
   if (connection.stopped || connection.timer) return;
-  const delay = nextReconnectDelay(connection.delay);
-  connection.delay = delay;
   connection.timer = setTimeout(() => {
     connection.timer = null;
     open(connection);
-  }, delay);
+  }, connection.backoff.next());
 }
 
 function teardown(connection: Connection): void {
@@ -268,7 +261,10 @@ export function connectWorkspaceEvents(workspaceId: string): () => void {
     workspaceId,
     socket: null,
     timer: null,
-    delay: null,
+    backoff: createBackoff({
+      baseMs: RECONNECT_MIN_MS,
+      capMs: RECONNECT_MAX_MS,
+    }),
     refs: 0,
     stopped: false,
     cursor: null,

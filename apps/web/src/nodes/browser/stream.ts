@@ -1,4 +1,5 @@
 import { clampInt } from "@/lib/math";
+import { backoffDelay } from "@/lib/backoff";
 
 /**
  * 远程浏览器节点的画面流：几何与输入映射。
@@ -190,11 +191,11 @@ export function parseServerMessage(raw: string): ServerMessage | undefined {
 }
 
 /**
- * 重连的等待时间：250 ms 起步翻倍，封顶 10 秒，和 core 侧那条通道同一组数。
+ * 重连的等待时间：250 ms 起步翻倍，封顶 10 秒（全抖动，见 `lib/backoff.ts`），和 core 侧那条通道同一组数。
  *
  * 不做无限快速重连：服务端明确回「已经有人在看」的时候，一秒十次重试只是把
  * 那个人的画面挤掉的另一种写法。
  */
 export function reconnectDelay(attempt: number): number {
-  return Math.min(250 * 2 ** Math.max(0, attempt), 10_000);
+  return backoffDelay(attempt, { baseMs: 250, capMs: 10_000 });
 }
