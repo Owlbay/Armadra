@@ -91,9 +91,7 @@ export const identity = {
           "not_implemented",
         ),
       })
-      .meta(
-        section("settings:write", "POST", "/api/identity/cloud/register"),
-      ),
+      .meta(section("settings:write", "POST", "/api/identity/cloud/register")),
     /** 撤销登记：停隧道，行记撤销时刻；不删已映射的账号。 */
     revoke: oc
       .input(cloudRevokeInputSchema)
