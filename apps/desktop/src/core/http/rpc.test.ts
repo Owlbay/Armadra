@@ -283,6 +283,39 @@ describe("出参校验开关", () => {
     });
   });
 
+  it("域有意答的 5xx（对端不在）不记错误、不报给壳；没接住的异常照报", async () => {
+    const reported: string[] = [];
+    await listen(
+      {
+        platform: {
+          log: { error: () => undefined } as never,
+          reportError: (error: unknown) => {
+            reported.push(
+              error instanceof Error ? error.message : String(error),
+            );
+          },
+        },
+      },
+      (made) =>
+        registerProcedures(made.server, "system", {
+          ping: () => {
+            throw fail("source_unreachable", "对端不在");
+          },
+          hello: () => {
+            throw new Error("没人接住");
+          },
+        }),
+    );
+    const unreachable = await rpc("system.ping", { ts: 1 });
+    expect(unreachable.status).toBe(502);
+    expect(await unreachable.json()).toMatchObject({
+      code: "source_unreachable",
+    });
+    expect(reported).toEqual([]);
+    expect((await rpc("system.hello", {})).status).toBe(500);
+    expect(reported).toEqual(["没人接住"]);
+  });
+
   it("环境变量：缺省按是否打包，1 / 0 显式开关", () => {
     const platform = { isPackaged: false } as never;
     expect(rpcOptionsFromEnv({}, platform).validateOutput).toBe(true);
