@@ -21,7 +21,9 @@ import {
   probeLaunchConfig,
   snapshot,
   summarize,
+  userConfigTargets,
   validateResult,
+  waitForTerminalRoute,
 } from "./windows-acceptance-lib.mjs";
 
 const probe = join(
@@ -127,6 +129,30 @@ test("the snapshot sees a changed file and a new directory, not an untouched one
   }
 });
 
+test("the updater watch skips the installer's own copy and still sees downloads", () => {
+  const root = mkdtempSync(join(tmpdir(), "armadra-acceptance-updater-"));
+  try {
+    const targets = userConfigTargets({ home: root, localAppData: root });
+    const before = snapshot(targets);
+    // NSIS 静默安装把自己复制成 armadra-updater\installer.exe（nightly 37235828235）。
+    spawnSync(process.execPath, [
+      "-e",
+      `const fs = require("fs"); fs.mkdirSync(${JSON.stringify(join(root, "armadra-updater"))}); fs.writeFileSync(${JSON.stringify(join(root, "armadra-updater", "installer.exe"))}, "x")`,
+    ]);
+    assert.deepEqual(diffSnapshots(before, snapshot(targets)), []);
+    spawnSync(process.execPath, [
+      "-e",
+      `require("fs").mkdirSync(${JSON.stringify(join(root, "armadra-updater", "pending"))})`,
+    ]);
+    assert.deepEqual(
+      diffSnapshots(before, snapshot(targets)).map((row) => row.path),
+      [join(root, "armadra-updater", "pending")],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("launch lines quote for each shell and the marker never appears in its own source", () => {
   assert.equal(
     launchLine("cmd", "C:\\a b\\run.exe", ["x|y"]),
@@ -177,4 +203,22 @@ test("a session host is told apart by its bundle on the command line", () => {
     false,
   );
   assert.equal(isSessionHost(undefined), false);
+});
+
+test("after a restart the probe waits for the terminal route and keeps the first answer", async () => {
+  const answers = [401, 401, 200];
+  const asked = [];
+  const ready = await waitForTerminalRoute(async (path) => {
+    asked.push(path);
+    return { status: answers.shift() ?? 200 };
+  }, "s1");
+  assert.equal(ready.firstAnswer, 401);
+  assert.deepEqual(asked, Array(3).fill("/api/terminals/s1"));
+  // 等不到不抛：后面的核对自己判失败。
+  const never = await waitForTerminalRoute(
+    async () => ({ status: 401 }),
+    "s1",
+    600,
+  );
+  assert.equal(never.firstAnswer, 401);
 });

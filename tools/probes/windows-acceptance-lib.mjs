@@ -359,7 +359,11 @@ export function userConfigTargets({ home, appData, localAppData }) {
     targets.push(join(appData, "Armadra"));
     targets.push(join(appData, "npm", "armadra-hook.cmd"));
   }
-  if (localAppData) targets.push(join(localAppData, "armadra-updater"));
+  // 只看更新器的下载目录：NSIS 安装包按 electron-builder 的设计把自己复制成
+  // `armadra-updater\installer.exe`（差分更新的基准，卸载也不删），那是安装这一步
+  // 的产物，不是应用写进了操作员的目录。
+  if (localAppData)
+    targets.push(join(localAppData, "armadra-updater", "pending"));
   return targets;
 }
 
@@ -676,6 +680,27 @@ export async function freePort() {
   });
 }
 
+/**
+ * 重启后等终端路由经页面答 200（nightly 37235828235：第一个问的 cmd 拿不到行、
+ * 附着也失败，后两个正常）。`/api/health` 不验身份，答 200 不代表这一页已经向壳
+ * 要到票、终端路由认它（推断，现场没留答复码）。等不到不抛：后面的核对照样判失败；
+ * 首个答复码与等了多久记进结果。
+ */
+export async function waitForTerminalRoute(get, sessionId, timeout = 30_000) {
+  const started = Date.now();
+  let firstAnswer;
+  await waitFor(
+    "重启后终端路由经页面答 200",
+    async () => {
+      const row = await get(`/api/terminals/${sessionId}`);
+      firstAnswer ??= row.status;
+      return row.status === 200 ? true : undefined;
+    },
+    { timeout, interval: 500 },
+  ).catch(() => undefined);
+  return { firstAnswer, readyAfterMs: Date.now() - started };
+}
+
 export async function waitFor(
   what,
   test,
@@ -887,4 +912,19 @@ export function selfTests() {
     );
   });
   return tests;
+}
+
+/** 跑完在终端上打一份勾选表。 */
+export function printSummary(result, file) {
+  console.log("\n结果：");
+  for (const check of result.checks) {
+    const mark = { pass: "✓", fail: "✗", warn: "!", skip: "-", pending: "?" }[
+      check.status
+    ];
+    console.log(`  ${mark} ${check.id.padEnd(22)} ${check.title}`);
+  }
+  console.log(`\n${result.status}；结果文件：${file}`);
+  console.log(
+    "把 result.json 整个贴回来即可（不含凭据、终端原始输出只有失败时的尾部）。",
+  );
 }
