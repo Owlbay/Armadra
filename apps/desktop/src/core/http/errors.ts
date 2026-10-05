@@ -1,3 +1,5 @@
+import { ERROR_CODES, type ErrorCode } from "@armadra/shared";
+
 /**
  * Every failure the core reports, in one shape.
  *
@@ -49,4 +51,44 @@ export const internal = (message: string): ErrorResponse =>
  */
 export function notImplemented(path: string): ErrorResponse {
   return coreError(501, "not_implemented", `未实现：${path}`);
+}
+
+/**
+ * 抛出来的拒绝（工程规范化 §2.3.2）：码、状态与可选的细节。
+ *
+ * `coreError` 是「答一个值」，给按路径分派的 handler 用；契约 procedure 的实现
+ * 是普通函数，拒绝就抛这个，RPC 门面（`http/rpc.ts`）把它改写成
+ * `{ code, message, requestId?, details? }`。状态从注册表查，同一个码不会在两处
+ * 答出两个状态；还没登记的码（各域对象形拒绝的存量）由调用方给状态。
+ */
+export class CoreFailure extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly details: Readonly<Record<string, unknown>> | undefined;
+
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    details?: Readonly<Record<string, unknown>>,
+  ) {
+    super(message);
+    this.name = "CoreFailure";
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+
+  response(): ErrorResponse {
+    return coreError(this.status, this.code, this.message);
+  }
+}
+
+/** `throw fail("not_found", "…")`：状态按注册表。 */
+export function fail(
+  code: ErrorCode,
+  message: string,
+  details?: Readonly<Record<string, unknown>>,
+): CoreFailure {
+  return new CoreFailure(ERROR_CODES[code].status, code, message, details);
 }

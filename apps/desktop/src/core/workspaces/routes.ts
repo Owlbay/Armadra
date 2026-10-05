@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { CoreContext } from "../main";
 import type { CoreRequest, HandlerResult, RouteMatch } from "../http/router";
+import { registerProcedures } from "../http/rpc";
 import { createRootDirectory, directorySource } from "./directory";
 import {
   openRemoteWorkspace,
@@ -101,6 +102,113 @@ function permissionsOf(
   };
 }
 
+/** 一次新建 / 打开要的字段，旧路径的体与 procedure 的入参都归成这个样子。 */
+interface RootRequest {
+  readonly name: string | undefined;
+  readonly rootPath: string | undefined;
+  readonly color?: string | undefined;
+  readonly permissions?: WorkspacePermissions | undefined;
+}
+
+/**
+ * 工作空间这几个动作本身。旧 REST 路径与契约 procedure（契约 §34.4）调的是同一份：
+ * 两边只是把各自的入参归成同一个样子，拒绝在这里一次抛出。
+ */
+export function workspaceOperations(context: CoreContext) {
+  const database = context.db.database;
+  const nameOf = (request: RootRequest): string => {
+    if (request.name === undefined) {
+      throw badRequest("Workspace name is invalid");
+    }
+    return validWorkspaceName(request.name);
+  };
+  const rootOf = (request: RootRequest): string => {
+    if (request.rootPath === undefined || request.rootPath === "") {
+      throw badRequest("Workspace root is required");
+    }
+    return request.rootPath;
+  };
+  return {
+    list: () => listWorkspaces(database),
+    create(request: RootRequest & { readonly createDirectory?: boolean }) {
+      const name = nameOf(request);
+      const rootPath = rootOf(request);
+      // Before `createDirectory` touches the disk: a refused request must not
+      // leave a folder behind that nothing then references.
+      if (request.createDirectory === true) createRootDirectory(rootPath);
+      return createWorkspace(database, {
+        name,
+        rootPath: canonicalDirectory(rootPath),
+        color: request.color,
+        permissions: request.permissions,
+      });
+    },
+    openDirectory(request: RootRequest) {
+      const name = nameOf(request);
+      return createWorkspace(database, {
+        name,
+        rootPath: directorySource(rootOf(request)),
+        color: request.color,
+        permissions: request.permissions,
+      });
+    },
+    update(
+      id: string,
+      patch: {
+        readonly name?: string | undefined;
+        readonly color?: string | undefined;
+        readonly permissions?: WorkspacePermissions | undefined;
+      },
+    ) {
+      const updated = updateWorkspace(database, id, patch);
+      // 授权一变就说一声：语言服务器这类按旧授权起的进程得立刻停，而不是等
+      // 下一次空闲清扫。
+      if (patch.permissions !== undefined) {
+        context.bus.emit("workspace.grants", {
+          workspaceId: updated.id,
+          permissions: updated.permissions,
+        });
+      }
+      return updated;
+    },
+    delete(id: string): void {
+      // 404 before anything is torn down, so an unknown id is a no-op. The
+      // terminal teardown the Rust handler did first belongs to R2; when it
+      // lands it goes here, before the row and its cascades go.
+      getWorkspace(database, id);
+      deleteWorkspace(database, id);
+      context.bus.emit("workspace.grants", {
+        workspaceId: id,
+        permissions: null,
+      });
+    },
+    open: (id: string) => touchWorkspaceOpened(database, id),
+    // Both execution-host routes prove the root on the machine that will hold
+    // it — through that host's Worker, or this process for an empty id —
+    // before a row may name it. A host that cannot be reached fails the
+    // request; it never becomes a "remote" workspace reading this machine's
+    // files.
+    openRemote(request: RootRequest & { readonly executionHostId?: string }) {
+      return openRemoteWorkspace(context, {
+        name: nameOf(request),
+        executionHostId: request.executionHostId,
+        rootPath: rootOf(request),
+        permissions: request.permissions,
+      });
+    },
+  };
+}
+
+/** 旧路径的体 → {@link RootRequest}；形状不对的字段在这里就拒。 */
+function rootRequest(body: Record<string, unknown>): RootRequest {
+  return {
+    name: optionalString(body, "name"),
+    rootPath: optionalString(body, "rootPath"),
+    color: optionalString(body, "color"),
+    permissions: permissionsOf(body),
+  };
+}
+
 export function install(context: CoreContext): void {
   const database = context.db.database;
   const { server } = context;
@@ -123,10 +231,40 @@ export function install(context: CoreContext): void {
     });
   }
 
+  const operations = workspaceOperations(context);
+
+  // 契约 §34.4：同一份实现，`null` 的授权与缺席同义（旧路径一直这样读）。
+  registerProcedures(server, "workspaces", {
+    list: () =>
+      operations.list().map((row) => ({ ...row, boards: [...row.boards] })),
+    create: (input) =>
+      operations.create({
+        ...input,
+        permissions: input.permissions ?? undefined,
+      }),
+    openDirectory: (input) =>
+      operations.openDirectory({
+        ...input,
+        permissions: input.permissions ?? undefined,
+      }),
+    openRemote: (input) =>
+      operations.openRemote({
+        ...input,
+        permissions: input.permissions ?? undefined,
+      }),
+    update: ({ workspaceId: id, ...patch }) =>
+      operations.update(id, {
+        ...patch,
+        permissions: patch.permissions ?? undefined,
+      }),
+    delete: ({ workspaceId: id }) => operations.delete(id),
+    open: ({ workspaceId: id }) => operations.open(id),
+  });
+
   server.router.handle(
     "GET",
     "/api/workspaces",
-    answered(() => ({ status: 200, body: listWorkspaces(database) })),
+    answered(() => ({ status: 200, body: operations.list() })),
   );
 
   server.router.handle(
@@ -134,18 +272,11 @@ export function install(context: CoreContext): void {
     "/api/workspaces",
     answered((_match, request) => {
       const body = jsonObject(request.body);
-      const name = validWorkspaceName(requiredRootName(body));
-      const rootPath = requiredRootPath(body);
-      // Before `createDirectory` touches the disk: a refused request must not
-      // leave a folder behind that nothing then references.
-      if (body.createDirectory === true) createRootDirectory(rootPath);
       return {
         status: 200,
-        body: createWorkspace(database, {
-          name,
-          rootPath: canonicalDirectory(rootPath),
-          color: optionalString(body, "color"),
-          permissions: permissionsOf(body),
+        body: operations.create({
+          ...rootRequest(body),
+          createDirectory: body.createDirectory === true,
         }),
       };
     }),
@@ -154,14 +285,21 @@ export function install(context: CoreContext): void {
   server.router.handle(
     "POST",
     "/api/workspaces/open-directory",
-    answered((_match, request) => {
+    answered((_match, request) => ({
+      status: 200,
+      body: operations.openDirectory(rootRequest(jsonObject(request.body))),
+    })),
+  );
+
+  server.router.handle(
+    "PATCH",
+    "/api/workspaces/{workspaceId}",
+    answered((match, request) => {
       const body = jsonObject(request.body);
-      const name = validWorkspaceName(requiredRootName(body));
       return {
         status: 200,
-        body: createWorkspace(database, {
-          name,
-          rootPath: directorySource(requiredRootPath(body)),
+        body: operations.update(workspaceId(match), {
+          name: optionalString(body, "name"),
           color: optionalString(body, "color"),
           permissions: permissionsOf(body),
         }),
@@ -170,42 +308,10 @@ export function install(context: CoreContext): void {
   );
 
   server.router.handle(
-    "PATCH",
-    "/api/workspaces/{workspaceId}",
-    answered((match, request) => {
-      const body = jsonObject(request.body);
-      const permissions = permissionsOf(body);
-      const updated = updateWorkspace(database, workspaceId(match), {
-        name: optionalString(body, "name"),
-        color: optionalString(body, "color"),
-        permissions,
-      });
-      // 授权一变就说一声：语言服务器这类按旧授权起的进程得立刻停，而不是等
-      // 下一次空闲清扫。
-      if (permissions !== undefined) {
-        context.bus.emit("workspace.grants", {
-          workspaceId: updated.id,
-          permissions: updated.permissions,
-        });
-      }
-      return { status: 200, body: updated };
-    }),
-  );
-
-  server.router.handle(
     "DELETE",
     "/api/workspaces/{workspaceId}",
     answered((match) => {
-      const id = workspaceId(match);
-      // 404 before anything is torn down, so an unknown id is a no-op. The
-      // terminal teardown the Rust handler did first belongs to R2; when it
-      // lands it goes here, before the row and its cascades go.
-      getWorkspace(database, id);
-      deleteWorkspace(database, id);
-      context.bus.emit("workspace.grants", {
-        workspaceId: id,
-        permissions: null,
-      });
+      operations.delete(workspaceId(match));
       return { status: 204, body: undefined };
     }),
   );
@@ -215,14 +321,10 @@ export function install(context: CoreContext): void {
     "/api/workspaces/{workspaceId}/open",
     answered((match) => ({
       status: 200,
-      body: touchWorkspaceOpened(database, workspaceId(match)),
+      body: operations.open(workspaceId(match)),
     })),
   );
 
-  // Both execution-host routes prove the root on the machine that will hold
-  // it — through that host's Worker, or this process for an empty id — before
-  // a row may name it. A host that cannot be reached fails the request; it
-  // never becomes a "remote" workspace reading this machine's files.
   server.router.handle(
     "POST",
     "/api/workspaces/remote",
@@ -230,10 +332,10 @@ export function install(context: CoreContext): void {
       const body = jsonObject(request.body);
       return {
         status: 200,
-        body: await openRemoteWorkspace(context, {
-          name: validWorkspaceName(requiredRootName(body)),
+        body: await operations.openRemote({
+          name: optionalString(body, "name"),
           executionHostId: optionalString(body, "executionHostId"),
-          rootPath: requiredRootPath(body),
+          rootPath: optionalString(body, "rootPath"),
           permissions: permissionsOf(body),
         }),
       };
@@ -278,20 +380,6 @@ export function workspaceId(match: RouteMatch): string {
   const id = match.params.workspaceId;
   if (id === undefined) throw internalError("workspaceId is not in the path");
   return id;
-}
-
-function requiredRootName(body: Record<string, unknown>): string {
-  const name = optionalString(body, "name");
-  if (name === undefined) throw badRequest("Workspace name is invalid");
-  return name;
-}
-
-function requiredRootPath(body: Record<string, unknown>): string {
-  const root = optionalString(body, "rootPath");
-  if (root === undefined || root === "") {
-    throw badRequest("Workspace root is required");
-  }
-  return root;
 }
 
 /** Exposed for the sibling domains, which all start from a workspace row. */

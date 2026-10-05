@@ -85,7 +85,17 @@ export function patchSettings(
 ): HandlerResult | ErrorResponse {
   const parsed = readJsonBody(request);
   if (isParseFailure(parsed)) return parsed;
-  const patch = parsed.value;
+  return applySettingsPatch(deps, parsed.value);
+}
+
+/**
+ * 合并一份补丁：`PATCH /api/settings` 与 `settings.update`（契约 §34.5）共用。
+ * 拒绝是一个 `{ code, message }` 值，不是抛出来的。
+ */
+export function applySettingsPatch(
+  deps: SettingsRouteDeps,
+  patch: JsonValue | undefined,
+): HandlerResult | ErrorResponse {
   if (
     patch === undefined ||
     typeof patch !== "object" ||

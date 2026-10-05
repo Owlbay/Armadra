@@ -3,6 +3,7 @@ import { USAGE, parseArguments, parseWorkerArguments } from "./args";
 import { install as installAssets } from "./assets/routes";
 import { install as installCanvas } from "./canvas/routes";
 import { install as installWorkspaces } from "./workspaces/routes";
+import { installContract, rpcOptionsFromEnv } from "./http/rpc";
 import { EventBus } from "./bus";
 import { absorbHostDatabase } from "./db/absorb-host";
 import { DatabaseRefused, type OpenedDatabase, openDatabase } from "./db/open";
@@ -309,6 +310,9 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
     options.loopbackAnonymousOwner ?? env.ARMADRA_LOOPBACK_OWNER === "1",
   );
   for (const install of options.domains ?? DOMAINS) install(context);
+  // 每个域都交过自己那部分契约实现了：挂到 `/api/rpc/*` 与迁过来的旧路径上
+  // （契约 §34.1）。在任何监听开始之前。
+  installContract(server, rpcOptionsFromEnv(env, platform));
   // Captured here rather than read at shutdown: the accessor is a module-level
   // singleton, so a second core started in the same process would otherwise be
   // the one this core stops.

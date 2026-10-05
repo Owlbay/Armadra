@@ -216,6 +216,14 @@ export const ROUTES: readonly RouteEntry[] = [
     implemented: true,
   },
   { path: "/health", methods: ["GET"], surface: "runtime", implemented: true },
+  // 契约 procedure（契约 §34.1）：`/api/rpc/<域>/<动词>`，整段由 RPC 门面
+  // （`http/rpc.ts`）接管；`{procedure}` 在这里只占一格，真实路径是两段。
+  {
+    path: "/api/rpc/{procedure}",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/health",
     methods: ["GET"],
