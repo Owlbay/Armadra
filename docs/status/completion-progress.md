@@ -1918,6 +1918,45 @@
 - `mount` 与经中继的 `session` 只对假 core 验过：真 core 的 `cloud/login`（A2-3）与隧道（A3-2）还没合入，真联调留到那时。
 - SaaS：`remoteAdd { kind: "saas" }`、`remoteDevicePoll`，以及对 `saas` 行的 `remoteSources` / `mount` / `remoteSession` 一律 501 `not_implemented`。
 
+## A1-1 页面多源连接层
+
+设计：[平台设计](../design/platform-saas-architecture.md) §5.4、§17.6–§17.7、D27，规格：[客户端包](../design/platform/client-packages.md) §1。
+
+做了什么：
+
+- **传输层按源发**（`apps/web/src/api/`）：模块级 `RUNTIME_URL` 退役，本机源的地址改为第一次用到时算（`api/local-runtime.ts` 的 `localRuntime()`，`import.meta.env` 只在这里读）；`sockets.ts` 的 `socketBase` 与 `initRuntimeSockets` 退役，流地址按源的 `wsBase` 现算（`runtimeSocketUrl` 认 `wss:`）。`request(path, schema, init, source = currentSource())`，CSRF 走源的 `credentials`；五个流地址构造器、`fileDownloadUrl`、`assetUrl` 同样可传源。`api/source.ts` 加 `currentSource()`（源表接上之前是本机）、`registerSource` / `knownSources` / `sourceForUrl`、`routedFetch` 与 `openSourceSocket`（按地址找所属的源）；RPC 门面加 `clientFor(source)`、`currentClient()`，`runtimeApi` 的契约域经当前源。`RUNTIME_VIA_SERVER_SHELL` 保留（它是页面本身的事实，界面按它收起桌面才有的页）。
+- **绕开 `request()` 的点**：`<img>` 取图与下载按地址找 Bearer 源（`assets.ts` 的 `bearerSourceFor`，本机与挂载的源都认），编辑器媒体、白板栅格化、拖入图片测尺寸走 `routedFetch`；会话搜索与改标题、终端后端探测与滚动、Agent 已读（顺手修掉它绕过壳地址直读 `VITE_RUNTIME_URL` 的旧写法）、文件拖拽的作用域走当前源；终端、实时同步、语言服务、浏览器画面四条流走 `openSourceSocket`。
+- **原生 App 的全局补丁退役**：`installNativeTransport` 删除，`mobile/entry.ts` 改为 `installLocalTransport(...)` 给本机源装 Bearer 与换票，全局 `fetch` / `WebSocket` 在三种壳里都不再被改写。`bearerFetch`、`ticketedWebSocket`、`sameOrigin`、`WS_TICKET_PROTOCOL` 从 `mobile/native-bridge.ts` 搬到 `sources/transport.ts`，`BearerTransport` 加 `extraHeaders()`（中继令牌头 `armadra-relay-token`）与 `extraProtocols()`（`armadra-relay.<令牌>`，对调用方的 `protocol` 不可见）。
+- **凭据单例**：`identity.ts` 的 `access` / `refresh` / `accessExpiresAt` 收进一份 `SessionTokens`（`sources/session-tokens.ts`），明确是本机源的会话；远程源的访问只在各自的 `CredentialProvider` 里。
+- **`apps/web/src/sources/`**：`types.ts`（`SourceDescriptor`、`SourceStatus`、`SourceAccess`、`CredentialProvider`、`SourceError` 与 `source_mismatch / source_unreachable / source_unauthorized / source_offline`）；`routing.ts`（`probeDirect` 匿名问直连 `hello` 1.5 秒、`hostId` 须相符，`pickRoute` 与中继取访问并行，直连优先）；`managed-socket.ts`（换票、中继子协议、4401 / 4403 / 4404、`lib/backoff` 前台 10 秒后台 30 秒、`online` 跳过退避、回前台探活 3 秒）；`credentials.ts`（按源缓存的 `createCachedCredentialProvider`，桌面 `createDesktopCredentialProvider` 经本机 core `POST /api/sources/{id}/session`）；`connection.ts`（`createLocalConnection` 一创建即 `ready`、不发请求；`createRemoteConnection` 选路 → 访问 → `system.hello` → `sourceId` 核对，401 续期一次重放、经中继再重取一次，`socket()` 换票与中继子协议，4403 / 4404 反映到源状态、再连上时叫醒）；`registry.ts`（本机永远第一、其余按 `orderIndex`，`hydrate` 换整批、单个源或加载器失败不挡本机，页面那张源表 `sourceRegistry()` 接管当前源与按地址找源；`loadSourcesFromLocalCore` 读 `GET /api/sources`）；`context.tsx`（`SourcesProvider`、`useSources`、`useSource`、`useCurrentSource`、`useSourceStatus`，不包 Provider 也能用）；`local.ts`、`index.ts`。
+
+实测（macOS arm64，2026-10-06，基于 main dc0fec36）：
+
+- `pnpm check` 通过（lint 0 error、285 warn，与 main 相同）。
+- `pnpm --filter @armadra/web test` 3550 过（376 个文件），`typecheck` 通过；新用例：`sources/` 下 `transport` 8（从 native-bridge 搬来 6，新增中继头与子协议 2）、`routing` 10、`managed-socket` 13、`credentials` 6、`connection` 11、`registry` 10、`zero-config` 5。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 4670 过 / 53 跳过，live 4 过，脚本 68 过；`pnpm --filter @armadra/server test` 87 过 / 4 跳过；`apps/mobile` 类型检查通过。
+- A 档 e2e：`node tools/ci/e2e.mjs --tier a` 12 项全过。
+- 打包冒烟：本分支 `pnpm --filter @armadra/desktop dist` 后 `node tools/probes/packaged-smoke.mjs --no-real-cli` 全过（Gateway 首页、回环匿名 401、PDF 与视频、桌面 PATH 下的终端回显、渲染进程无控制台错误）。
+
+接口（供 A1-2 / A1-4 / A1-5 / A3-4）：
+
+- 发往某个源：`request(path, schema, init, source)`、`terminalWebSocketUrl(id, writer, source)` 等、`clientFor(source)`；省略是 `currentSource()`。`SourceConnection.source` 就是要传的那个 `Source`。
+- 源表：`sourceRegistry()`（页面那张，`global`）或 `createSourceRegistry({ provider, connect, remote })`；`add(descriptor)` / `remove(id)` / `hydrate(loader)` / `setCurrent(id)` / `subscribe`。桌面与服务器壳：`registry.hydrate(loadSourcesFromLocalCore)`（A1-4 在合适的时机调；A1-1 不在启动时调，零配置不多发请求）。
+- 凭据：实现 `CredentialProvider { getAccess(id, via), refresh(id, via), invalidate(id) }`，或给 `createCachedCredentialProvider(exchange)` 一个换票函数（A1-5 手机钥匙串、云页面）。
+- 状态：`connection.status`（`idle / connecting / ready / offline / unauthorized / waitingForSource`，`lastError.code` 为上面四个码或 core 的码）、`useSourceStatus(connection)`；4404 等待后 `connection.connect()` 成功即叫醒该源的流（A3-4 的 `sourceOnline` 接这里）。
+- 流：`connection.socket(path, { protocols, onMessage, … })` → `ManagedSocket`（`send`、`wake`、`close`、`state`）。
+
+没做 / 偏离规格：
+
+- `api/*` 的自由函数没有逐个加可选的 `source` 第一参数：源加在传输层（`request()`、流地址、`clientFor`），省略即当前源；按调用点补源随 A1-2。
+- 现有五条流的重连循环没有改用 `ManagedSocket`（事件流在 E2 改写中，其余四条换成按地址找源的 `WebSocket`，凭据与票照旧）；`ManagedSocket` 供控制面与新流用。
+- 流的换票走 REST `POST /api/identity/ws-ticket`：契约里还没有 `identity.wsTicket` procedure（E3-7 的范围）。
+- 本机源不问 `system.hello`（`hello` 为 `null`）：零配置不多发请求，且服务器壳上的共享成员没有 `identity:read`。远程源的 `hello` 同样要这项授权，成员身份挂载的源会落到 `unauthorized`，待 E2 / A1-3 定。
+- D27 的「重连、`online`、回前台时重新探直连」只在 `connect()` 时做；已经走中继的流重连时不重新选路，留给 A3-4。
+- 手机（钥匙串 + 远程服务）与云页面（`browser-cloud`）的 `CredentialProvider` 只有接口与缓存基座，实现随 A1-5 与 §7。
+- 远程直连的 `hello` 探测是跨来源请求，要对方 Gateway 的来源白名单与本机壳的 CSP `connect-src` 放行（A1-4 动态 CSP）；不放行时探测失败、退回中继。
+- 改到了 E2 的 `api/client.ts`（只去掉 `RUNTIME_URL` / `initRuntimeSockets` 的再导出，加 `clientFor` / `currentClient`，`runtimeApi` 经当前源）；`api/events.ts` 没动。
+
 ## A2-3 云登录与登记（`core/identity/cloud/`，迁移 0040，契约 §31）
 
 设计：[平台实现规格 core 包](../design/platform/core-packages.md) §2；契约 §31。只实现个人中转这一个签发方，SaaS 只留形状（总计划 §12）。

@@ -7,7 +7,7 @@ import {
 } from "@armadra/shared";
 
 import { IdentityRequestError, IdentityTransportError } from "./identity";
-import { RUNTIME_URL, json, request } from "./request";
+import { json, request } from "./request";
 import { localSource } from "./source";
 
 /**
@@ -39,7 +39,7 @@ export const gatewayApi = {
  */
 export async function exchangePairingCode(
   code: string,
-  base: string = RUNTIME_URL,
+  base: string = localSource.httpBase,
 ): Promise<GatewayPairingPayload> {
   let response: Response;
   try {

@@ -16,7 +16,8 @@ import {
   type FileEntryKind,
 } from "@armadra/shared";
 import { z } from "zod";
-import { RUNTIME_URL, json, noContentSchema, query, request } from "./request";
+import { json, noContentSchema, query, request } from "./request";
+import { currentSource } from "./source";
 
 export const filesApi = {
   /* ----------------------------------- 文件 ----------------------------- */
@@ -26,7 +27,7 @@ export const filesApi = {
       fileInfoSchema,
     ),
   fileDownloadUrl: (workspaceId: string, path: string) =>
-    `${RUNTIME_URL}/api/workspaces/${workspaceId}/file-download?path=${query(path)}`,
+    `${currentSource().httpBase}/api/workspaces/${workspaceId}/file-download?path=${query(path)}`,
   importFiles: (
     workspaceId: string,
     entries: { file: File; path: string }[],

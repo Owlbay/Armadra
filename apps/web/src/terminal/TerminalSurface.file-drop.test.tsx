@@ -42,8 +42,12 @@ vi.mock("@/store/canvas-store", () => ({
     }),
   },
 }));
+vi.mock("@/api/source", async (original) => {
+  const actual = await original<typeof import("@/api/source")>();
+  const runtime = { ...actual.localSource, httpBase: "http://runtime" };
+  return { ...actual, currentSource: () => runtime };
+});
 vi.mock("@/api/client", () => ({
-  RUNTIME_URL: "http://runtime",
   terminalWebSocketUrl: () => "ws://runtime/session",
   runtimeApi: {
     getTerminal: (...args: unknown[]) => fixture.getTerminal(...args),

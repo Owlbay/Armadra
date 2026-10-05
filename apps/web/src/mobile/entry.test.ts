@@ -13,7 +13,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./native-bridge", () => ({
   isNativeApp: () => mocks.app,
-  installNativeTransport: (transport: unknown) => mocks.install(transport),
+}));
+vi.mock("../api/source", async (original) => ({
+  ...(await original<typeof import("../api/source")>()),
+  installLocalTransport: (transport: unknown) => mocks.install(transport),
 }));
 vi.mock("./native-oauth", async (original) => ({
   ...(await original<typeof import("./native-oauth")>()),

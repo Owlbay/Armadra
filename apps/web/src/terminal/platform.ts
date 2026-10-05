@@ -10,8 +10,7 @@
  * 一次裸 fetch + 一个进程内缓存足够了。
  */
 
-import { RUNTIME_URL } from "@/api/client";
-import { localSource } from "../api/source";
+import { currentSource } from "../api/source";
 
 export type RuntimePlatform = "unix" | "windows";
 
@@ -27,8 +26,9 @@ export async function loadRuntimePlatform(): Promise<RuntimePlatform> {
   if (cached) return cached;
   inflight ??= (async () => {
     try {
-      const response = await localSource.fetch(
-        `${RUNTIME_URL}/api/terminals/backend`,
+      const source = currentSource();
+      const response = await source.fetch(
+        `${source.httpBase}/api/terminals/backend`,
       );
       const payload: unknown = await response.json();
       const platform =

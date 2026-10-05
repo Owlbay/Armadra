@@ -5,7 +5,6 @@ import { MotionConfig } from "motion/react";
 import "./styles/app.css";
 import "./styles/nodes.css";
 import { mountSplash } from "./splash/mount";
-import { initRuntimeSockets } from "./api/client";
 import { MobileRoot } from "./mobile/MobileRoot";
 import { prepareEntry, type Entry } from "./mobile/entry";
 import { installPageErrorReporting } from "./diagnostics/report";
@@ -18,8 +17,8 @@ import { installShellTransport } from "./api/shell-transport";
 mountSplash();
 
 /**
- * 桌面壳里每个发往 core 的请求与流都带票据换来的凭据（契约 §3.2）：装在全局
- * `fetch` / `WebSocket` 上，所以先于任何一次请求装好。不在壳里什么也不做。
+ * 桌面壳里每个发往 core 的请求与流都带票据换来的凭据（契约 §3.2）：装在本机源
+ * 上（`api/source.ts`），先于任何一次请求装好。不在壳里什么也不做。
  */
 installShellTransport();
 
@@ -27,18 +26,13 @@ installShellTransport();
 installPageErrorReporting();
 
 /**
- * 终端与事件流的 WebSocket 地址在桌面壳里不等于 HTTP 地址（roadmap §4.4），
- * 先问一次壳再挂载：这一步只有一次本地请求，失败也会回退到 HTTP 基址，
- * 所以不用挡住渲染之外的任何东西。
- *
  * 入口分支（架构 §10）：原生 App 还没连上 Gateway、或手机浏览器扫码带着配对
  * 票打开时先是连接页；其余（桌面窗口、普通网页）直接是画布，`prepareEntry`
  * 在那条路上不发请求。
  */
-const entry: Promise<Entry> = initRuntimeSockets()
-  .catch(() => undefined)
-  .then(() => prepareEntry())
-  .catch((): Entry => ({ kind: "app" }));
+const entry: Promise<Entry> = prepareEntry().catch(
+  (): Entry => ({ kind: "app" }),
+);
 
 void entry.then((entry) => {
   createRoot(document.getElementById("root")!).render(

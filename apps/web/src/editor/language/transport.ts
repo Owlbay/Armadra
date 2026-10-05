@@ -1,5 +1,5 @@
 import type { Transport } from "@codemirror/lsp-client";
-import { localSource } from "../../api/source";
+import { openSourceSocket } from "../../api/source";
 
 /**
  * 会话 WebSocket 上的 `Transport`（语言服务设计 §2.4、§2.9）。
@@ -41,7 +41,7 @@ type SocketFactory = (url: string) => WebSocket;
 export function createSessionTransport(
   url: string,
   hooks: TransportHooks = {},
-  factory: SocketFactory = (target) => new localSource.WebSocket(target),
+  factory: SocketFactory = (target) => openSourceSocket(target),
 ): SessionTransport {
   let handlers: ((value: string) => void)[] = [];
   let queued: string[] = [];

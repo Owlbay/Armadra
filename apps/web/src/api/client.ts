@@ -10,7 +10,7 @@
  *      `RuntimeRequestError` / `RuntimeConnectionError`，与 `request()` 同一套，
  *      所以 `isConflict` 这些判定两边通用。
  *   2. **`runtimeApi`**：把各领域模块拼起来，调用点的方法签名与从前一致。迁到
- *      契约上的域（`workspaces`、`settings`）由这里把本机客户端交给它们，域模块
+ *      契约上的域（`workspaces`、`settings`）由这里把当前源的客户端交给它们，域模块
  *      自己不 import 这个文件——它们被这里 import，反过来就是一个环。
  *
  * 传输层（zod 校验、连接失败与 Runtime 报错的分流）在 `request.ts`，WebSocket
@@ -26,7 +26,7 @@ import {
   RuntimeRequestError,
   csrfRefusal,
 } from "./request";
-import { type Source, localSource } from "./source";
+import { type Source, currentSource, localSource } from "./source";
 import { agentsApi } from "./agents";
 import { systemApi } from "./system";
 import { workspacesApiFor } from "./workspaces";
@@ -47,7 +47,6 @@ import { githubApi } from "./github";
 import { automationsApi } from "./automations";
 
 export {
-  RUNTIME_URL,
   RUNTIME_VIA_SERVER_SHELL,
   RuntimeConnectionError,
   RuntimeRequestError,
@@ -57,7 +56,6 @@ export {
 } from "./request";
 export {
   boardSyncUrl,
-  initRuntimeSockets,
   languageSessionUrl,
   terminalWebSocketUrl,
   workspaceEventsUrl,
@@ -77,7 +75,7 @@ export { dataBackupSchema, dataInfoSchema } from "./system";
 export type { DataInfo } from "./system";
 
 export type { Source, SourceCredentials } from "./source";
-export { localSource } from "./source";
+export { currentSource, localSource } from "./source";
 
 /** 按契约类型化的客户端：`client.<域>.<动词>(input)`。 */
 export type ArmadraClient = ContractClient;
@@ -161,12 +159,26 @@ export function createClient(source: Source): ArmadraClient {
   return createORPCClient<ArmadraClient>(link);
 }
 
-let local: ArmadraClient | null = null;
+const clients = new WeakMap<Source, ArmadraClient>();
 
-/** 本机源的客户端，第一次用时才造。 */
+/** 这个源的客户端，第一次用时才造，之后同一个源同一个。 */
+export function clientFor(source: Source): ArmadraClient {
+  let client = clients.get(source);
+  if (client === undefined) {
+    client = createClient(source);
+    clients.set(source, client);
+  }
+  return client;
+}
+
+/** 本机源的客户端。 */
 export function localClient(): ArmadraClient {
-  local ??= createClient(localSource);
-  return local;
+  return clientFor(localSource);
+}
+
+/** 当前源的客户端：`runtimeApi` 里迁到契约上的域经它发。 */
+export function currentClient(): ArmadraClient {
+  return clientFor(currentSource());
 }
 
 /**
@@ -184,7 +196,7 @@ export function isDefinedError(error: unknown, code?: string): boolean {
 export const runtimeApi = {
   ...agentsApi,
   ...systemApi,
-  ...workspacesApiFor(localClient),
+  ...workspacesApiFor(currentClient),
   ...boardsApi,
   ...filesApi,
   ...languageApi,
@@ -196,7 +208,7 @@ export const runtimeApi = {
   ...gitApi,
   ...gitRepositoryApi,
   ...usageApi,
-  ...settingsApiFor(localClient),
+  ...settingsApiFor(currentClient),
   ...githubApi,
   ...automationsApi,
 };

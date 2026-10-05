@@ -7,10 +7,11 @@ import {
   restoreNativeCredentials,
   resumeIdentity,
 } from "../api/identity";
-import { RUNTIME_URL, RUNTIME_VIA_SERVER_SHELL } from "../api/request";
+import { RUNTIME_VIA_SERVER_SHELL } from "../api/request";
 import { savedRuntimeOrigin } from "../api/runtime-url";
+import { installLocalTransport, localSource } from "../api/source";
 import { isCompactLayout } from "../platform/layout";
-import { installNativeTransport, isNativeApp } from "./native-bridge";
+import { isNativeApp } from "./native-bridge";
 import {
   completeNativeOAuth,
   isNativeOAuthLink,
@@ -111,8 +112,12 @@ export async function ticketWithRefresh(
   }
 }
 
+/**
+ * 原生 App 的本机源就是记下的那台 Gateway：凭据装在本机源上（`api/source.ts`），
+ * 不改写全局的 `fetch` / `WebSocket`——发往 core 的每个点都经一个源。
+ */
 function installTransport(origin: string): void {
-  installNativeTransport({
+  installLocalTransport({
     origin,
     authorization: currentAccessToken,
     wsTicket: () => ticketWithRefresh(fetchWsTicket, refreshOnce),
@@ -186,12 +191,22 @@ export async function prepareEntry(): Promise<Entry> {
   }
   if (!RUNTIME_VIA_SERVER_SHELL || !isCompactLayout()) return { kind: "app" };
   if (hasPairingFragment()) {
-    return { kind: "connect", mode: "web", origin: RUNTIME_URL, via: "ticket" };
+    return {
+      kind: "connect",
+      mode: "web",
+      origin: localSource.httpBase,
+      via: "ticket",
+    };
   }
   // 手输地址打开的：有会话照常进画布；没有就先给配对码，连接页上留一个
   // 「账号登录」给有账号的人。问不到（离线、core 旧）按有会话处理，不挡路。
   const session = await resumeIdentity().catch(() => undefined);
   return session === null
-    ? { kind: "connect", mode: "web", origin: RUNTIME_URL, via: "code" }
+    ? {
+        kind: "connect",
+        mode: "web",
+        origin: localSource.httpBase,
+        via: "code",
+      }
     : { kind: "app" };
 }
