@@ -1602,6 +1602,1675 @@
           }
         }
       }
+    },
+    "/api/rpc/sources/list": {
+      "post": {
+        "operationId": "sources.list",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sources": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sourceId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{32}$"
+                          },
+                          "kind": {
+                            "enum": ["local", "direct", "relayed", "hosted"],
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "baseUrl": {
+                            "type": "string"
+                          },
+                          "relayOrigin": {
+                            "type": "string"
+                          },
+                          "fingerprint": {
+                            "type": "string"
+                          },
+                          "cloudIssuer": {
+                            "type": "string"
+                          },
+                          "principalHint": {
+                            "type": "string"
+                          },
+                          "addedAtMs": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "lastOkAtMs": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "orderIndex": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "hasCredentials": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "sourceId",
+                          "kind",
+                          "label",
+                          "baseUrl",
+                          "relayOrigin",
+                          "fingerprint",
+                          "cloudIssuer",
+                          "principalHint",
+                          "addedAtMs",
+                          "lastOkAtMs",
+                          "orderIndex",
+                          "hasCredentials"
+                        ]
+                      }
+                    },
+                    "remotes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "serviceId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{32}$"
+                          },
+                          "kind": {
+                            "enum": ["personal", "saas"],
+                            "type": "string"
+                          },
+                          "issuer": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "accountHint": {
+                            "type": "string"
+                          },
+                          "fingerprint": {
+                            "type": "string"
+                          },
+                          "addedAtMs": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "lastOkAtMs": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "registered": {
+                            "type": "boolean"
+                          },
+                          "hasCredentials": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "serviceId",
+                          "kind",
+                          "issuer",
+                          "label",
+                          "accountHint",
+                          "fingerprint",
+                          "addedAtMs",
+                          "lastOkAtMs",
+                          "registered",
+                          "hasCredentials"
+                        ]
+                      }
+                    }
+                  },
+                  "required": ["sources", "remotes"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.1",
+          "scope": "settings:read",
+          "since": "1.3",
+          "legacy": {
+            "method": "GET",
+            "path": "/api/sources"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/addDirect": {
+      "post": {
+        "operationId": "sources.addDirect",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pairLink": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "origin": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "code": {
+                    "type": "string",
+                    "maxLength": 32
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F:]{64,95}$"
+                  },
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sourceId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{32}$"
+                    },
+                    "kind": {
+                      "enum": ["local", "direct", "relayed", "hosted"],
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "baseUrl": {
+                      "type": "string"
+                    },
+                    "relayOrigin": {
+                      "type": "string"
+                    },
+                    "fingerprint": {
+                      "type": "string"
+                    },
+                    "cloudIssuer": {
+                      "type": "string"
+                    },
+                    "principalHint": {
+                      "type": "string"
+                    },
+                    "addedAtMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "lastOkAtMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "orderIndex": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "hasCredentials": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "sourceId",
+                    "kind",
+                    "label",
+                    "baseUrl",
+                    "relayOrigin",
+                    "fingerprint",
+                    "cloudIssuer",
+                    "principalHint",
+                    "addedAtMs",
+                    "lastOkAtMs",
+                    "orderIndex",
+                    "hasCredentials"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "400",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "409",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "502",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.1",
+          "scope": "settings:write",
+          "since": "1.3",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/sources/direct"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/update": {
+      "post": {
+        "operationId": "sources.update",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sourceId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$"
+                  },
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "orderIndex": {
+                    "type": "integer",
+                    "minimum": -1000000,
+                    "maximum": 1000000
+                  },
+                  "baseUrl": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "relayOrigin": {
+                    "type": "string",
+                    "maxLength": 2048
+                  }
+                },
+                "required": ["sourceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sourceId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{32}$"
+                    },
+                    "kind": {
+                      "enum": ["local", "direct", "relayed", "hosted"],
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "baseUrl": {
+                      "type": "string"
+                    },
+                    "relayOrigin": {
+                      "type": "string"
+                    },
+                    "fingerprint": {
+                      "type": "string"
+                    },
+                    "cloudIssuer": {
+                      "type": "string"
+                    },
+                    "principalHint": {
+                      "type": "string"
+                    },
+                    "addedAtMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "lastOkAtMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "orderIndex": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "hasCredentials": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "sourceId",
+                    "kind",
+                    "label",
+                    "baseUrl",
+                    "relayOrigin",
+                    "fingerprint",
+                    "cloudIssuer",
+                    "principalHint",
+                    "addedAtMs",
+                    "lastOkAtMs",
+                    "orderIndex",
+                    "hasCredentials"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "400",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.1",
+          "scope": "settings:write",
+          "since": "1.3",
+          "legacy": {
+            "method": "PUT",
+            "path": "/api/sources/{sourceId}"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/remove": {
+      "post": {
+        "operationId": "sources.remove",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sourceId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$"
+                  }
+                },
+                "required": ["sourceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "409",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.1",
+          "scope": "settings:write",
+          "since": "1.3",
+          "legacy": {
+            "method": "DELETE",
+            "path": "/api/sources/{sourceId}"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/forget": {
+      "post": {
+        "operationId": "sources.forget",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sourceId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$"
+                  }
+                },
+                "required": ["sourceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "409",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.1",
+          "scope": "settings:write",
+          "since": "1.3",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/sources/{sourceId}/forget"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/session": {
+      "post": {
+        "operationId": "sources.session",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sourceId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$"
+                  },
+                  "via": {
+                    "enum": ["direct", "relayed"],
+                    "type": "string"
+                  }
+                },
+                "required": ["sourceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accessToken": {
+                      "type": "string"
+                    },
+                    "accessExpiresAtMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "httpBase": {
+                      "type": "string"
+                    },
+                    "wsBase": {
+                      "type": "string"
+                    },
+                    "via": {
+                      "enum": ["direct", "relayed"],
+                      "type": "string"
+                    },
+                    "relayToken": {
+                      "type": "string"
+                    },
+                    "relayTokenExpiresAtMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "accessToken",
+                    "accessExpiresAtMs",
+                    "httpBase",
+                    "wsBase",
+                    "via"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "409",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "502",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.1",
+          "scope": "settings:write",
+          "since": "1.3",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/sources/{sourceId}/session"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/remoteAdd": {
+      "post": {
+        "operationId": "sources.remoteAdd",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "personal"
+                      },
+                      "issuer": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      },
+                      "account": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "password": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "fingerprint": {
+                        "type": "string",
+                        "pattern": "^[0-9a-fA-F:]{64,95}$"
+                      }
+                    },
+                    "required": ["kind", "issuer", "account", "password"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "saas"
+                      },
+                      "issuer": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      },
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      }
+                    },
+                    "required": ["kind", "issuer"]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "remote": {
+                      "type": "object",
+                      "properties": {
+                        "serviceId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{32}$"
+                        },
+                        "kind": {
+                          "enum": ["personal", "saas"],
+                          "type": "string"
+                        },
+                        "issuer": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "accountHint": {
+                          "type": "string"
+                        },
+                        "fingerprint": {
+                          "type": "string"
+                        },
+                        "addedAtMs": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "lastOkAtMs": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "registered": {
+                          "type": "boolean"
+                        },
+                        "hasCredentials": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "serviceId",
+                        "kind",
+                        "issuer",
+                        "label",
+                        "accountHint",
+                        "fingerprint",
+                        "addedAtMs",
+                        "lastOkAtMs",
+                        "registered",
+                        "hasCredentials"
+                      ]
+                    },
+                    "next": {
+                      "anyOf": [
+                        {
+                          "const": "ready"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "deviceCode": {
+                              "type": "object",
+                              "properties": {
+                                "userCode": {
+                                  "type": "string"
+                                },
+                                "verificationUrl": {
+                                  "type": "string"
+                                },
+                                "expiresAtMs": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "userCode",
+                                "verificationUrl",
+                                "expiresAtMs"
+                              ]
+                            }
+                          },
+                          "required": ["deviceCode"]
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["remote", "next"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "400",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "429",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "501",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "502",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.2",
+          "scope": "settings:write",
+          "since": "1.3",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/sources/remotes"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/remoteDevicePoll": {
+      "post": {
+        "operationId": "sources.remoteDevicePoll",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "serviceId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$"
+                  }
+                },
+                "required": ["serviceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "enum": ["pending", "ready", "denied", "expired"],
+                      "type": "string"
+                    }
+                  },
+                  "required": ["status"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "501",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.2",
+          "scope": "settings:write",
+          "since": "1.3",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/sources/remotes/{serviceId}/poll"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/remoteRemove": {
+      "post": {
+        "operationId": "sources.remoteRemove",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "serviceId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$"
+                  }
+                },
+                "required": ["serviceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.2",
+          "scope": "settings:write",
+          "since": "1.3",
+          "legacy": {
+            "method": "DELETE",
+            "path": "/api/sources/remotes/{serviceId}"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/remoteSources": {
+      "post": {
+        "operationId": "sources.remoteSources",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "serviceId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$"
+                  }
+                },
+                "required": ["serviceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sources": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sourceId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{32}$"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": ["desktop", "server", "hosted"],
+                            "type": "string"
+                          },
+                          "online": {
+                            "type": "boolean"
+                          },
+                          "lastSeenAtMs": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "owner": {
+                            "type": "boolean"
+                          },
+                          "via": {
+                            "enum": ["owner", "link", "org"],
+                            "type": "string"
+                          },
+                          "relayOrigin": {
+                            "type": "string"
+                          },
+                          "coreVersion": {
+                            "type": "string"
+                          },
+                          "mounted": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "sourceId",
+                          "name",
+                          "kind",
+                          "online",
+                          "lastSeenAtMs",
+                          "owner",
+                          "via",
+                          "relayOrigin",
+                          "coreVersion",
+                          "mounted"
+                        ]
+                      }
+                    }
+                  },
+                  "required": ["sources"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "501",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "502",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.2",
+          "scope": "settings:read",
+          "since": "1.3",
+          "legacy": {
+            "method": "GET",
+            "path": "/api/sources/remotes/{serviceId}/sources"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/mount": {
+      "post": {
+        "operationId": "sources.mount",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "serviceId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$"
+                  },
+                  "sourceId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$"
+                  },
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": ["serviceId", "sourceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sourceId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{32}$"
+                    },
+                    "kind": {
+                      "enum": ["local", "direct", "relayed", "hosted"],
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "baseUrl": {
+                      "type": "string"
+                    },
+                    "relayOrigin": {
+                      "type": "string"
+                    },
+                    "fingerprint": {
+                      "type": "string"
+                    },
+                    "cloudIssuer": {
+                      "type": "string"
+                    },
+                    "principalHint": {
+                      "type": "string"
+                    },
+                    "addedAtMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "lastOkAtMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "orderIndex": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "hasCredentials": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "sourceId",
+                    "kind",
+                    "label",
+                    "baseUrl",
+                    "relayOrigin",
+                    "fingerprint",
+                    "cloudIssuer",
+                    "principalHint",
+                    "addedAtMs",
+                    "lastOkAtMs",
+                    "orderIndex",
+                    "hasCredentials"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "409",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "501",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "502",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "503",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.2",
+          "scope": "settings:write",
+          "since": "1.3",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/sources/remotes/{serviceId}/mount"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/remoteSession": {
+      "post": {
+        "operationId": "sources.remoteSession",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "serviceId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$"
+                  }
+                },
+                "required": ["serviceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accessToken": {
+                      "type": "string"
+                    },
+                    "accessExpiresAtMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "issuer": {
+                      "type": "string"
+                    },
+                    "capabilities": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "accessToken",
+                    "accessExpiresAtMs",
+                    "issuer",
+                    "capabilities"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "501",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "502",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.2",
+          "scope": "settings:write",
+          "since": "1.3",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/sources/remotes/{serviceId}/session"
+          }
+        }
+      }
     }
   },
   "components": {

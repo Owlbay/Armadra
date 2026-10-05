@@ -61,7 +61,12 @@ describe("契约树", () => {
     for (const entry of entries) {
       expect(entry.name).toBe(entry.path.join("."));
     }
-    expect(Object.keys(contract)).toEqual(["system", "workspaces", "settings"]);
+    expect(Object.keys(contract)).toEqual([
+      "system",
+      "workspaces",
+      "settings",
+      "sources",
+    ]);
   });
 
   it("procedure 名唯一，旧路径（方法 + 模式）也唯一", () => {
@@ -82,8 +87,9 @@ describe("契约树", () => {
         expect(SCOPES, entry.name).toContain(entry.meta.scope);
       }
       expect(entry.meta.since, entry.name).toMatch(/^\d+\.\d+$/);
+      // §31–§33 预分配给平台设计（云登录、隧道、源表），§34 起是工程规范化各域。
       expect(entry.meta.contract, entry.name).toMatch(
-        /^§(3[4-9]|[4-9]\d)\.\d+$/,
+        /^§(3[1-9]|[4-9]\d)\.\d+$/,
       );
     }
   });
