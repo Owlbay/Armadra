@@ -10,3 +10,4 @@ export * from "./git-integration.js";
 export * from "./agent-capabilities.js";
 export * from "./handoff.js";
 export * from "./contract/errors.js";
+export * from "./contract/index.js";
