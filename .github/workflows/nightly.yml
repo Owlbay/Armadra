@@ -385,6 +385,43 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # 依赖与死代码报告（工程规范化 §5 第 1 步）：knip 只出报告上传产物、不判失败；
+  # 生产依赖里出现 high 及以上的漏洞时本作业失败，由 report 开 issue，不阻断合并。
+  hygiene:
+    name: 依赖审计与 knip 报告
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: knip 报告
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/hygiene
+          pnpm exec knip --no-progress --no-exit-code --reporter markdown > target/hygiene/knip.md
+          pnpm exec knip --no-progress --no-exit-code --reporter compact
+
+      - name: 上传 knip 报告
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: knip-report
+          path: target/hygiene
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: 生产依赖漏洞（high 及以上）
+        run: pnpm audit --prod --audit-level=high
+
   # 任一作业失败就开一个 issue；已经有一个开着的同名 issue 时改成在下面追加评论，
   # 免得每晚一个。只在 main 上报（手动在分支上触发的失败看运行页即可）。
   report:
@@ -396,6 +433,7 @@ jobs:
       - mobile-ios
       - mobile-android
       - windows-acceptance
+      - hygiene
     if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -417,11 +455,12 @@ jobs:
           MOBILE_IOS_RESULT: ${{ needs.mobile-ios.result }}
           MOBILE_ANDROID_RESULT: ${{ needs.mobile-android.result }}
           WINDOWS_RESULT: ${{ needs.windows-acceptance.result }}
+          HYGIENE_RESULT: ${{ needs.hygiene.result }}
         run: |
           set -euo pipefail
           title="夜间 B 档失败"
-          body="$(printf '运行：%s\n\n| 作业 | 结果 | 失败的条目 |\n| --- | --- | --- |\n| linux | %s | %s |\n| linux-arm64 | %s | %s |\n| macos | %s | %s |\n| mobile-ios | %s | mobile-shell-e2e |\n| mobile-android | %s | mobile-shell-e2e |\n| windows-acceptance | %s | 见产物 windows-acceptance/result.json |\n\n条目为空而结果是 failure 时，失败在打包或 glibc 校验，看运行日志。\n' \
-            "$RUN_URL" "$LINUX_RESULT" "${LINUX_FAILED:--}" "$LINUX_ARM64_RESULT" "${LINUX_ARM64_FAILED:--}" "$MACOS_RESULT" "${MACOS_FAILED:--}" "$MOBILE_IOS_RESULT" "$MOBILE_ANDROID_RESULT" "$WINDOWS_RESULT")"
+          body="$(printf '运行：%s\n\n| 作业 | 结果 | 失败的条目 |\n| --- | --- | --- |\n| linux | %s | %s |\n| linux-arm64 | %s | %s |\n| macos | %s | %s |\n| mobile-ios | %s | mobile-shell-e2e |\n| mobile-android | %s | mobile-shell-e2e |\n| windows-acceptance | %s | 见产物 windows-acceptance/result.json |\n| hygiene | %s | pnpm audit --prod 有 high 及以上漏洞 |\n\n条目为空而结果是 failure 时，失败在打包或 glibc 校验，看运行日志。\n' \
+            "$RUN_URL" "$LINUX_RESULT" "${LINUX_FAILED:--}" "$LINUX_ARM64_RESULT" "${LINUX_ARM64_FAILED:--}" "$MACOS_RESULT" "${MACOS_FAILED:--}" "$MOBILE_IOS_RESULT" "$MOBILE_ANDROID_RESULT" "$WINDOWS_RESULT" "$HYGIENE_RESULT")"
           existing="$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
             --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)"
           if [ -n "$existing" ]; then

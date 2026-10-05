@@ -19,10 +19,12 @@
 三行跑同一串步骤（另有一个只在 ubuntu 上跑的 `e2e` 作业，见 §1.1）：
 
 1. `pnpm install --frozen-lockfile`
-2. `pnpm check`（libs:build、prettier、typecheck、`repo:check`、
-   `ci:workflows`、`release:check`）
-3. `pnpm repo:test`、`pnpm release:test`
-4. `pnpm -r --if-present test` / `typecheck`、`pnpm --filter @armadra/web build`
+2. `pnpm check`（libs:build、prettier、`lint`、typecheck、`repo:check`、
+   `ci:workflows`、`release:check`、`notices:check`）；ESLint 只有 error 让它失败
+3. `pnpm repo:test`（含 `tools/lint-config.test.mjs`）、`pnpm release:test`
+4. `pnpm -r --if-present test` / `typecheck`、`pnpm --filter @armadra/web build`；
+   Linux 那一行的 `test` 带 `ARMADRA_COVERAGE=1`，web、desktop、server 出 lcov 并作为
+   `coverage-lcov` 产物上传（只出报告，不设门槛）
 5. `pnpm --filter @armadra/desktop build`（不打包）
 
 几条不显然的决定：
@@ -104,6 +106,8 @@ node tools/ci/e2e.mjs --tier b --list     # 只列出清单
     `issues: write`）开一个「夜间 B 档失败」issue，已有开着的同名 issue 就追加评论；
     正文是运行链接与每条作业失败的条目（`e2e.mjs` 在 `GITHUB_OUTPUT` 里写
     `failed=<id,…>`）。夜间工作流不读任何 secret。
+  - `hygiene`（ubuntu-latest）：`knip` 报告作为 `knip-report` 产物上传、不判失败；
+    `pnpm audit --prod --audit-level=high` 有 high 及以上漏洞时作业失败，同样由 `report` 开 issue。
   - 要打好的包才能跑的新探针只需新增一个 B 档条目并写明
     `platforms`，在对应作业里打包之后执行，不必加作业。
 - `pnpm ci:workflows` 断言 `ci.yml` 有跑 `--tier a` 的 `e2e` 作业且在 ubuntu 上，

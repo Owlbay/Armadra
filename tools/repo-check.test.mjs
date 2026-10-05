@@ -2,7 +2,13 @@
 //
 // 每条规则各验证一次「通过」与一次「被拦下」；文件树写在临时目录里，
 // 跟踪列表直接传入，避免测试依赖 git 仓库状态。
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
@@ -50,6 +56,7 @@ test("导出的规则名与实现一一对应", () => {
     "links",
     "migrations",
     "naming",
+    "pinned-versions",
     "root-allowlist",
   ]);
   assert.throws(
@@ -286,4 +293,100 @@ test("trackedFiles：读得到本仓库自己的跟踪列表", () => {
   const files = trackedFiles(fileURLToPath(new URL("../", import.meta.url)));
   assert.ok(files.includes("package.json"));
   assert.ok(files.every((path) => !path.startsWith("/")));
+});
+
+test("pinned-versions：一个都没有时通过，精确且同版本时通过", () => {
+  const rules = { pinnedVersions: [{ packages: "@orpc/*" }] };
+  const empty = repo({
+    "package.json": JSON.stringify({ devDependencies: { vitest: "^4.1.0" } }),
+    "pnpm-lock.yaml":
+      "lockfileVersion: '9.0'\n\npackages:\n\n  vitest@4.1.11:\n    resolution: {}\n",
+  });
+  assert.deepEqual(
+    run(empty, rules, ["pinned-versions"], ["package.json", "pnpm-lock.yaml"]),
+    [],
+  );
+  const pinned = repo({
+    "packages/shared/package.json": JSON.stringify({
+      dependencies: { "@orpc/contract": "1.15.4", "@orpc/zod": "1.15.4" },
+    }),
+    "apps/web/package.json": JSON.stringify({
+      dependencies: { "@orpc/client": "1.15.4" },
+    }),
+    "pnpm-lock.yaml": [
+      "packages:",
+      "",
+      "  '@orpc/client@1.15.4':",
+      "    resolution: {}",
+      "",
+      "  '@orpc/shared@1.15.4':",
+      "    resolution: {}",
+      "",
+      "snapshots:",
+      "",
+      "  '@orpc/client@1.15.4':",
+      "",
+    ].join("\n"),
+  });
+  assert.deepEqual(
+    run(
+      pinned,
+      rules,
+      ["pinned-versions"],
+      [
+        "packages/shared/package.json",
+        "apps/web/package.json",
+        "pnpm-lock.yaml",
+      ],
+    ),
+    [],
+  );
+});
+
+test("pinned-versions：范围版本、beta 与版本不一致都被拦下", () => {
+  const rules = { pinnedVersions: [{ packages: "@orpc/*" }] };
+  const root = repo({
+    "apps/web/package.json": JSON.stringify({
+      dependencies: { "@orpc/client": "^1.15.4", "@orpc-like/x": "^1.0.0" },
+    }),
+    "apps/desktop/package.json": JSON.stringify({
+      dependencies: { "@orpc/server": "2.0.0-beta.42" },
+    }),
+    "packages/shared/package.json": JSON.stringify({
+      dependencies: { "@orpc/contract": "1.15.4" },
+    }),
+    "pnpm-lock.yaml":
+      "packages:\n\n  '@orpc/shared@1.15.3':\n    resolution: {}\n",
+  });
+  const problems = run(
+    root,
+    rules,
+    ["pinned-versions"],
+    [
+      "apps/web/package.json",
+      "apps/desktop/package.json",
+      "packages/shared/package.json",
+      "pnpm-lock.yaml",
+    ],
+  );
+  assert.deepEqual(problems.slice(0, 2), [
+    '@orpc/* 必须写精确版本：apps/web/package.json dependencies.@orpc/client = "^1.15.4"',
+    '@orpc/* 不得用预发布版本：apps/desktop/package.json dependencies.@orpc/server = "2.0.0-beta.42"',
+  ]);
+  assert.equal(problems.length, 3);
+  assert.match(
+    problems[2],
+    /^@orpc\/\* 版本不一致（1\.15\.3 \/ 1\.15\.4 \/ 2\.0\.0-beta\.42）/,
+  );
+  assert.match(problems[2], /pnpm-lock\.yaml @orpc\/shared@1\.15\.3/);
+});
+
+test("pinned-versions：本仓库的规则在现状上通过", () => {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const rules = JSON.parse(readFileSync(join(root, "repo.rules.json"), "utf8"));
+  assert.ok(rules.pinnedVersions.some((rule) => rule.packages === "@orpc/*"));
+  assert.deepEqual(
+    checkRepository({ root, rules, only: ["pinned-versions"] }),
+    [],
+  );
 });

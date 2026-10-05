@@ -1752,6 +1752,43 @@
 - 子组连接的徽标点开仍只打开面板，不定位到具体 MR（同 G5-15）。
 - 都没有连真实的 GitLab / Gitea 实例。
 
+## E0-A 工程规范化：工具链（ESLint、knip、覆盖率、依赖审计、上游锁版规则）
+
+设计：[工程规范化](../design/engineering-standardization.md) §4.3、§5、§6 的 E0-1 / E0-2 / E0-6，决策 F6–F9、F15。组件整改与扫描守卫（E0-3 / E0-4 / E0-5）是 E0-B，不在本节。
+
+做了什么：
+
+- **ESLint（E0-1）**：根目录 `eslint.config.js`（ESLint 9 flat config），覆盖 `apps/web`、`apps/desktop`、`apps/server`、`packages/shared`、`tools/`；手机壳与推送中继不在 E0 范围，显式忽略。`@eslint/js` 与 typescript-eslint 推荐规则、`react-hooks/exhaustive-deps`、`eslint-plugin-jsx-a11y` 推荐规则全部 warn；`eslint-config-prettier` 放最后，不和 Prettier 抢格式。error 只有四类：`react-hooks/rules-of-hooks`；core 与 session-host 不得 import `electron`、`../main/`、`../shell-core/`（shell-core 禁前两个）；`@orpc/*` 只能在 `packages/shared/src/contract/`、`apps/desktop/src/core/http/rpc.ts`、`apps/web/src/api/client.ts` 与 `tools/contract/` 出现（现在还没有 oRPC，规则先写好；`rpc.ts` 放开 `@orpc/*` 但仍守 core 边界）。§4.2 的禁止事项写成页面业务代码（`apps/web/src` 除 `ui/`、测试与 `showcase/fixtures/`）的 `no-restricted-syntax`，全部 warn：手写 `<button>` / `<input>`（`file`、`hidden` 除外）/ `<select>` / `<textarea>` / `<dialog>`、`role="dialog"`、直接 import `ui/dialog` / `ui/alert-dialog` / `ui/sheet`、`Loader2`、无 `aria-label` 的图标钮、`dark:`、`z-[N]`、字面色值。放行名单与 E0-B 的扫描守卫一致：`ui/dialog` / `ui/alert-dialog` 只许 `ResponsiveDialog`，`ui/sheet` 只许 `no-raw-dialog-sheet.test.ts` 登记的 15 个抽屉；字面色值放过 `palette.ts`、`appearance.ts`、`lib/contrast.ts`、`showcase/`、`canvas/test-support/` 与样例数据（同 `no-literal-color.test.ts`）。守卫里用 `ui-exempt:` 注释放行的位置 ESLint 读不到，仍报 warn、计入基线。类型感知规则 `no-floating-promises` / `no-misused-promises` 只开在 `core/http`、`web/src/api`、`shared/src`（warn）。
+- `pnpm lint` 接进 `pnpm check`（format:check 之后、typecheck 之前），warn 不让它失败。规则自检 `tools/lint-config.test.mjs`（10 条，进 `pnpm repo:test`）：每条边界与禁止事项各一段必须拦下、一段必须放过的样例。
+- 打开 rules-of-hooks 后扫出 2 处真问题并修了：`app/use-cost.ts`、`app/use-usage.ts` 把 `useAccess()` 写在 `wanted && …` 右侧，`wanted` 变化时 hook 顺序会变；改成先无条件取。
+- **knip（E0-2）**：`knip.json` 登记各 workspace 入口——壳的七个构建目标（`electron.vite.config.ts` 的 main / preload / core / armadra-hook / session-host 两个 / ama）、页面与展示页、服务器壳、测试、脚本与探针；系统二进制（`openssl`、`infocmp`、`where.exe` …）与经 `../web/vite.config` 间接用到的插件不再误报。`pnpm knip` 只出报告（`--no-exit-code`），不进 check；夜间 `hygiene` 作业把报告传成产物（§5 第 1 步）。
+- **覆盖率**：根装 `@vitest/coverage-v8`，web、desktop、server 三个 vitest 配置写好 `coverage`（v8、text-summary + lcov、只算 `src/`），平时关着，`ARMADRA_COVERAGE=1` 或 `pnpm test:coverage` 打开；不设门槛（F9 第 1 步）。CI 只在 Linux 那一行打开并上传 `coverage-lcov` 产物，三平台不重复。
+- **依赖漏洞**：`nightly.yml` 新增 `hygiene` 作业，`pnpm audit --prod --audit-level=high` 失败时作业失败，`report` 照 B 档的规矩开 issue / 追加评论；不阻断 PR。
+- **上游锁版（E0-6）**：`tools/repo-check.mjs` 新增规则 `pinned-versions`，`repo.rules.json` 的 `pinnedVersions` 登记 `@orpc/*`：各 `package.json` 里必须是精确版本、不得是预发布（beta / rc），清单与 `pnpm-lock.yaml` 的 `packages:` 段全树只允许一个版本；一个都没有时通过。`tools/repo-check.test.mjs` 新增 3 条：空集通过、精确同版本通过；`^` 范围、`2.0.0-beta.42`、锁文件里的 `1.15.3` 各被拦下；本仓库现状通过。规则说明补进 `docs/design/repository-structure.md` §3.6。
+- 新增的开发依赖（全部精确版本）：`eslint` / `@eslint/js` 9.39.5、`typescript-eslint` 8.71.0（8.71.1 发布不满一天，会触发 `minimumReleaseAge` 例外，退一版）、`eslint-plugin-react-hooks` 7.1.1、`eslint-plugin-jsx-a11y` 6.10.2（尚不支持 ESLint 10，所以停在 9）、`eslint-config-prettier` 10.1.8、`globals` 17.13.0、`knip` 6.39.0、`@vitest/coverage-v8` 4.1.11（与 vitest 同版本）。都是开发依赖、不打进产物，`pnpm notices:check` 不变。根 `package.json` 加了 `"type": "module"`（`eslint.config.js` 是 ESM；根下没有别的 `.js` 依赖 CommonJS）。
+
+基线（2026-10-06，本分支合入 E0-B #130 之后）：
+
+- ESLint：**0 error、284 warn**。按规则：`@typescript-eslint/no-unused-vars` 66、`no-empty` 43、`jsx-a11y/no-autofocus` 38、`react-hooks/exhaustive-deps` 32、`no-control-regex` 26、`no-restricted-syntax` 24（字面色值 21，正是 `no-literal-color` 登记的存量；`InlineText` 的 `<textarea>`、`MobileFocusPage` 的 `role="dialog"`、`use-workspace-file-drag.ts` 的 `z-[9999]` 各 1）、`@typescript-eslint/no-explicit-any` 18、`prefer-const` 10、其余 jsx-a11y 与零星规则 27。按目录：web 152、desktop 74、tools/probes 55、shared 2、tools/ci 1。类型感知的两条在开着的三个目录里为 0。合入 E0-B 前是 339（其中 `no-restricted-syntax` 79），差的 55 条是 E0-B 换掉的原生表单元素、dialog / sheet 直连与按名单放行的抽屉。
+- knip（符号级，`--reporter json`）：未用文件 1（`core/hook/install/index.ts`，无人引用的桶文件）、未用依赖 1（web 的 `@codemirror/autocomplete`）、未用开发依赖 1（desktop 的 `@types/js-yaml`）、未列出的依赖 10（`tools/probes` 借用各 app 的 `ws`、`yjs`、`electron`、`esbuild` 等 9 处，desktop 脚本的 `node-gyp` 1 处）、未用导出 1444（desktop 1020、web 408、server 16）、未用导出类型 434（desktop 299、web 133、server 2）、重复导出 8（web 7、desktop 1）。`--reporter compact` 按文件数是未用导出 559、类型 227，web 一侧与设计 §1.4 的一次性基线（198 / 82 / 7）一致。
+- 覆盖率（本机，只报告）：web 行 81.3%（语句 79.1%）、desktop 行 84.5%（语句 81.9%）、server 行 86.6%。
+- 依赖审计：现在 `pnpm audit --prod --audit-level=high` 有 1 条 high——mermaid 经 chevrotain 带进来的 `lodash-es` ≤ 4.17.23（GHSA-r5fr-rjxr-66jc），另有 1 条 moderate。改它要动生产依赖（`overrides` + 第三方声明），不在本包；第一次夜间运行会开 issue。
+
+实测（macOS arm64，2026-10-06）：
+
+- `pnpm check` 通过（含 lint：本机冷跑约 41 秒，整串 1 分 39 秒）；`pnpm repo:test` 23 条全过（repo-check 13、lint-config 10）；`pnpm release:test` 171 过；`pnpm ci:workflows` 5 个工作流通过。
+- `pnpm --filter @armadra/web test` 3480 过（合入 E0-B 后）；`pnpm libs:build && pnpm --filter @armadra/desktop test` 4615 过 / 53 跳过，live 4 过，脚本 68 过；server 87 过 / 4 跳过，shared 318，push-relay 9，mobile 9。
+- 带覆盖率：web 1 分 11 秒 → 1 分 21 秒；desktop 的 vitest 主套件约 1 分 38 秒。
+- CI（run 37362058662，对比 run 37344131164）：linux 10 m 37 s → 13 m 12 s（`pnpm check` 1 m 39 s → 2 m 35 s，带覆盖率的 `pnpm -r test` 7 m 54 s → 9 m 26 s），macOS 12 m 09 s → 13 m 33 s（check 3 m 01 s），Windows 16 m 12 s → 19 m 01 s（check 3 m 04 s），e2e 16 m 12 s → 15 m 54 s；墙钟约 18 → 19 分钟。`coverage-lcov` 产物 0.68 MB。
+
+没做 / 限制：
+
+- `--max-warnings` 没设：按要求 warn 不让 check 失败；§5 的「只减不增」上限与按目录转 error 是 E5。
+- knip 不进 check，`--max-issues` 阻断是 §5 第 2 步；覆盖率门槛（`core/http`、`shared/contract`、`api/` 80%）是 E5-2。
+- lint 跟着 `pnpm check` 在三个平台各跑一遍；设计 §5 设想只并入 Linux 作业，要省这一份时间得把 lint 从 check 里拆出来单列一步。
+- 手机壳、推送中继不在 lint 与 knip 的范围；`.claude/` 与 `docs/` 不 lint。
+- `exhaustive-deps` 只报不修（修复可能改行为，按设计留给各域迁移时顺手做）。
+
 ## A3-0 五条流的发送队列、背压与心跳
 
 做了什么（平台规格 core 包 §3；契约 §3.4 新增）：

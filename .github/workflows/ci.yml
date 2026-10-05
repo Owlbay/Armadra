@@ -61,8 +61,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # pnpm check = libs:build + prettier + typecheck + repo:check +
-      # ci:workflows + release:check。
+      # pnpm check = libs:build + prettier + eslint（只有 error 失败）+ typecheck +
+      # repo:check + ci:workflows + release:check + notices:check。
       # 三个平台都跑：换行与路径分隔符都是平台差异的常见出口。
       - run: pnpm check
 
@@ -79,7 +79,22 @@ jobs:
       # @armadra/desktop 的 `test`（vitest + `node --test scripts/*.test.mjs`），
       # 覆盖 core 的全部单测，以及 electron-builder.yml、entitlements、
       # signing-electron.mjs、after-pack.mjs 与产物矩阵一致性；不再重复一遍。
+      # 覆盖率（工程规范化 §5）只在 Linux 上开、只出报告不设门槛：web、desktop、
+      # server 三个 vitest 配置读 ARMADRA_COVERAGE，三平台不重复算。
       - run: pnpm -r --if-present test
+        env:
+          ARMADRA_COVERAGE: ${{ runner.os == 'Linux' && '1' || '' }}
+      - name: 上传覆盖率报告
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: |
+            apps/web/coverage/lcov.info
+            apps/desktop/coverage/lcov.info
+            apps/server/coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
       - run: pnpm -r --if-present typecheck
       - run: pnpm --filter @armadra/web build
 

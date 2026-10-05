@@ -19,5 +19,15 @@ export default defineConfig({
     // 一类补丁必须在 setupFiles 里打，测试文件内的 `installDomPolyfills()`
     // 太晚了。
     setupFiles: ["./src/app/test-setup.ts"],
+    // 工程规范化 §5：覆盖率只出报告、不设门槛。CI 只在 Linux 作业里开
+    // （ARMADRA_COVERAGE=1），本机用 `pnpm test:coverage` 或 `vitest run --coverage`。
+    coverage: {
+      enabled: process.env.ARMADRA_COVERAGE === "1",
+      provider: "v8",
+      reporter: ["text-summary", "lcov"],
+      reportsDirectory: "coverage",
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/**/*.test.{ts,tsx}", "src/app/test-setup.ts"],
+    },
   },
 });

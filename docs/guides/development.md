@@ -105,19 +105,22 @@ TOKEN / SECRET / PASSWORD / CREDENTIAL 字样一律拒绝。
 
 从仓库根执行，按改动涉及的模块选择：
 
-| 范围               | 命令                                                                                           |
-| ------------------ | ---------------------------------------------------------------------------------------------- |
-| 仓库规则           | `pnpm repo:check`（秒级）、`pnpm repo:test`                                                    |
-| 一次过静态检查     | `pnpm check`＝libs 构建 + format:check + typecheck + repo:check + ci:workflows + release:check |
-| 前端               | `pnpm --filter @armadra/web test`、`pnpm --filter @armadra/web typecheck`                      |
-| 共享模型           | `pnpm --filter @armadra/shared test`                                                           |
-| core 与桌面壳      | `pnpm --filter @armadra/desktop test`（vitest + `node --test scripts/*.test.mjs`）             |
-| 服务器壳           | `pnpm --filter @armadra/server test`、`pnpm --filter @armadra/server typecheck`                |
-| 全部包             | `pnpm test`                                                                                    |
-| 格式 / 类型        | `pnpm format:check`、`pnpm typecheck`                                                          |
-| 发布与 CI 脚本     | `pnpm release:test`、`pnpm ci:workflows`、`pnpm release:check`                                 |
-| 桌面构建（不打包） | `pnpm --filter @armadra/desktop build`                                                         |
-| 桌面打包           | `pnpm --filter @armadra/desktop dist`                                                          |
+| 范围               | 命令                                                                                                                  |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| 仓库规则           | `pnpm repo:check`（秒级）、`pnpm repo:test`                                                                           |
+| 一次过静态检查     | `pnpm check`＝libs 构建 + format:check + lint + typecheck + repo:check + ci:workflows + release:check + notices:check |
+| lint               | `pnpm lint`（ESLint，只有 error 失败）；`pnpm exec eslint <路径>` 只看一处                                            |
+| 未用代码与依赖     | `pnpm knip`（只出报告，退出码恒为 0；不在 check 里）                                                                  |
+| 覆盖率             | `pnpm test:coverage`（web、desktop、server，报告在各包 `coverage/`）                                                  |
+| 前端               | `pnpm --filter @armadra/web test`、`pnpm --filter @armadra/web typecheck`                                             |
+| 共享模型           | `pnpm --filter @armadra/shared test`                                                                                  |
+| core 与桌面壳      | `pnpm --filter @armadra/desktop test`（vitest + `node --test scripts/*.test.mjs`）                                    |
+| 服务器壳           | `pnpm --filter @armadra/server test`、`pnpm --filter @armadra/server typecheck`                                       |
+| 全部包             | `pnpm test`                                                                                                           |
+| 格式 / 类型        | `pnpm format:check`、`pnpm typecheck`                                                                                 |
+| 发布与 CI 脚本     | `pnpm release:test`、`pnpm ci:workflows`、`pnpm release:check`                                                        |
+| 桌面构建（不打包） | `pnpm --filter @armadra/desktop build`                                                                                |
+| 桌面打包           | `pnpm --filter @armadra/desktop dist`                                                                                 |
 
 身份域的端到端在 `apps/desktop/src/core/identity/accounts.integration.test.ts`：真起 core，走完取票、配对、重放被拒、撤销。
 `tools/probes/` 下的探针跑的也是真的 core（`apps/desktop/out/core/main.js`）：终端的冒烟、
@@ -132,9 +135,34 @@ Rust↔Go 的归档互通，以及需要受管二进制路径的 `agent:smoke` /
 `all` 执行 doctor → install → check → build → run。
 
 `pnpm repo:check` 读 `repo.rules.json` 校验仓库结构：文档登记与相对链接、黑名单文件、包名与目录名、
-根目录白名单、源码行数上限（超限文件登记在豁免表）、迁移编号与 `migrations.lock` 里的 sha256。
+根目录白名单、源码行数上限（超限文件登记在豁免表）、迁移编号与 `migrations.lock` 里的 sha256、
+`pinnedVersions` 登记的上游包（现为 `@orpc/*`）精确锁版、非预发布且全树同一版本。
 规则说明见[仓库结构与校验](../design/repository-structure.md)。
 仓库级脚本都在 `tools/`，各 app 自己的脚本仍在各自的 `scripts/`。
+
+### lint、knip 与覆盖率
+
+工程规范化第 1 步（[设计](../design/engineering-standardization.md) §4.3、§5）：工具都只报告，不阻断。
+
+- **ESLint**：根目录 `eslint.config.js`（flat config），覆盖 `apps/web`、`apps/desktop`、`apps/server`、
+  `packages/shared` 与 `tools/`（手机壳与推送中继不在内）。typescript-eslint、react-hooks、jsx-a11y 与
+  `@eslint/js` 的推荐规则一律 warn；格式归 Prettier（`eslint-config-prettier` 放最后）。只有这几条是 error：
+  `react-hooks/rules-of-hooks`；core 与 session-host 不得 import `electron`、`../main/`、`../shell-core/`
+  （shell-core 只禁前两个）；`@orpc/*` 只能出现在三处门面 `packages/shared/src/contract/`、
+  `apps/desktop/src/core/http/rpc.ts`、`apps/web/src/api/client.ts` 与 `tools/contract/`。页面业务代码的
+  禁止事项（手写 `<button>` / `<input>` / `<select>` / `<textarea>` / `<dialog>`、`role="dialog"`、直接 import
+  `ui/dialog` / `ui/alert-dialog` / `ui/sheet`、`Loader2`、无 `aria-label` 的图标钮、`dark:`、`z-[N]`、
+  调色板外的字面色值）是 `no-restricted-syntax` 的 warn。类型感知规则（`no-floating-promises`、
+  `no-misused-promises`）只开在 `core/http`、`web/src/api` 与 `shared/src`。确有理由的豁免写带理由的
+  `// eslint-disable-next-line <规则> -- 理由`。规则本身的自检是 `tools/lint-config.test.mjs`（在 `pnpm repo:test` 里）。
+  本机加了 `--cache`（缓存在 `node_modules/.cache/eslint/`）。
+- **knip**：`knip.json` 登记各 workspace 的入口（壳的构建目标、测试、脚本、探针）。`pnpm knip` 只出报告；
+  夜间 `hygiene` 作业把报告传成产物。要看机器可读的结果用 `pnpm exec knip --reporter json`，
+  只看一个包加 `--workspace apps/web`。
+- **覆盖率**：`@vitest/coverage-v8`，web、desktop、server 三个 vitest 配置里写好 `coverage`，平时关着；
+  `pnpm test:coverage` 或 `ARMADRA_COVERAGE=1 pnpm --filter <包> test` 打开，输出 text-summary 与
+  `coverage/lcov.info`（已在 `.gitignore`）。不设门槛；CI 只在 Linux 那一行打开。
+- **依赖漏洞**：`pnpm audit --prod --audit-level=high` 在夜间 `hygiene` 作业里跑，有就开 issue。
 
 打包只有一步：`pnpm --filter @armadra/desktop dist`（细节在[桌面说明](../../apps/desktop/README.md)）。
 它先定签名计划、再 `electron-vite build`、最后调用 electron-builder；包里要带的东西由
