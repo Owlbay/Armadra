@@ -93,6 +93,18 @@ describe("language/lifecycle", () => {
     expect(restartDelay(MAX_RESTARTS + 1)).toBeUndefined();
   });
 
+  it("a server that exits on `exit` is not waited on for the whole grace period", async () => {
+    // A grace long enough that sleeping through it would time the case out:
+    // the stop has to end on the server's own exit, not on the clock.
+    harness = new Harness([], { shutdownGraceMs: 60_000 });
+    harness.join("a", true);
+    await harness.hub.ensureStarted();
+    const started = Date.now();
+    await harness.hub.stopProcess("stopped", reason.USER);
+    expect(harness.hub.process).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
   it("an idle server stops and the next open brings it back", async () => {
     const test = start([]);
     test.join("a", true);

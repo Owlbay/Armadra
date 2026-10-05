@@ -244,6 +244,11 @@ export class ServerProcess {
     }
   }
 
+  /** Resolves once the OS has reaped the child, however it ended. */
+  exited(): Promise<void> {
+    return this.reaped;
+  }
+
   stderrTail(): string {
     return this.stderr.text();
   }
