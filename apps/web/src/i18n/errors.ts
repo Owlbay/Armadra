@@ -30,6 +30,13 @@ export const errors: MessageModule = {
     "error.permissionDenied": "账户没有这项权限",
     "error.rateLimited": "请求过于频繁，请稍后重试",
     "error.unknownOutcome": "结果未知：请重新加载后确认是否已生效",
+    "error.credentialsInvalid": "账号或口令不正确",
+    "error.accountLocked": "尝试次数过多，账号已暂时锁定",
+    "error.fingerprintMismatch": "证书指纹不一致，已拒绝连接",
+    "error.sourceUnreachable": "连不上这台机器",
+    "error.sourceUnauthorized": "这台机器的登录已失效，请重新登录",
+    "error.sourceOffline": "这台机器当前不在线",
+    "error.cloudAccountUnlinked": "这个账号还没有关联到这台机器",
 
     /* 投递的拒绝码（`agent-delivery.md` §3.5）。机器码本身不翻译，这里给的是
        「发生了什么」，因为看着画布的人不该去读 core 的中文句子。 */
@@ -66,6 +73,16 @@ export const errors: MessageModule = {
     "error.rateLimited": "Too many requests — try again shortly",
     "error.unknownOutcome":
       "Outcome unknown — reload to see whether it applied",
+    "error.credentialsInvalid": "Wrong account or password",
+    "error.accountLocked": "Too many attempts — the account is locked for now",
+    "error.fingerprintMismatch":
+      "The certificate fingerprint does not match — connection refused",
+    "error.sourceUnreachable": "Cannot reach that machine",
+    "error.sourceUnauthorized":
+      "Your sign-in to that machine expired — sign in again",
+    "error.sourceOffline": "That machine is offline",
+    "error.cloudAccountUnlinked":
+      "This account is not linked to that machine yet",
 
     "error.delivery.LOOP_DETECTED":
       "These two nodes are feeding each other — stopped",
