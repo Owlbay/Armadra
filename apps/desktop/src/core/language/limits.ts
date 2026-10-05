@@ -46,6 +46,24 @@ export const MAX_DOCUMENT_BYTES = 1024 * 1024;
 export const MAX_SESSIONS = 32;
 /** One JSON-RPC message. */
 export const MAX_MESSAGE_BYTES = 960 * 1024;
+/**
+ * Backpressure (platform spec, core packages §3.3): `pause`, 256 frames,
+ * 2 MiB. Past the mark the hub stops reading its server's stdout until the
+ * socket drains; a queue that still fills — a peer that stopped reading
+ * entirely — closes the socket with 1013 rather than dropping an answer.
+ */
+export const SESSION_MAX_FRAMES = 256;
+export const SESSION_HIGH_WATER_BYTES = 2 * 1024 * 1024;
+
+/**
+ * The largest frame the editor may send. A message over
+ * `MAX_MESSAGE_BYTES` is answered with a JSON-RPC error by the session, so
+ * the socket's own ceiling sits above it: a document at the 1 MiB preview
+ * limit, JSON-escaped, still arrives and is refused in words rather than by a
+ * 1009 close.
+ */
+export const SESSION_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
+
 /** In-flight requests per session; beyond this the session is told `-32803`. */
 export const MAX_IN_FLIGHT = 32;
 /** One request, in seconds. On expiry the server is sent `$/cancelRequest`. */

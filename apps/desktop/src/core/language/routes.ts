@@ -14,6 +14,7 @@
 import type { WebSocket } from "ws";
 
 import type { CoreRequest, RouteMatch } from "../http/router";
+import { CLOSE_BACKPRESSURE, SendQueue, wsTarget } from "../http/stream-queue";
 import type { HandlerResult } from "../http/router";
 import {
   DomainError,
@@ -36,7 +37,7 @@ import {
   type AppliedFile,
 } from "./edits";
 import type { JsonObject, JsonValue } from "./jsonrpc";
-import { reason } from "./limits";
+import { SESSION_HIGH_WATER_BYTES, SESSION_MAX_FRAMES, reason } from "./limits";
 import type { Manager, OpenedSession } from "./lifecycle";
 import { remoteLanguage } from "./remote";
 import { handleSessionMessage } from "./session";
@@ -221,6 +222,8 @@ interface Parked {
   readonly queue: Buffer[];
   /** Set once the socket attaches; the queue is flushed into it. */
   socket: WebSocket | undefined;
+  /** The socket's send queue, from the same moment. */
+  sender: SendQueue | undefined;
   timer: ReturnType<typeof setTimeout> | undefined;
 }
 
@@ -244,12 +247,13 @@ export class SessionSockets {
       workspaceId,
       queue: [],
       socket: undefined,
+      sender: undefined,
       timer: undefined,
     };
     return {
       outbox: (body) => {
-        if (entry.socket !== undefined) {
-          entry.socket.send(body.toString("utf8"));
+        if (entry.sender !== undefined) {
+          entry.sender.push(body.toString("utf8"));
           return;
         }
         entry.queue.push(body);
@@ -280,10 +284,24 @@ export class SessionSockets {
     const entry = this.parked.get(sessionId);
     if (entry === undefined || entry.socket !== undefined) return false;
     entry.socket = socket;
+    const hub = () => this.manager.hubOfSession(entry.workspaceId, sessionId);
+    const sender = new SendQueue(wsTarget(socket), {
+      policy: "pause",
+      maxFrames: SESSION_MAX_FRAMES,
+      highWaterBytes: SESSION_HIGH_WATER_BYTES,
+      onPause: () => hub()?.pauseSession(sessionId),
+      onResume: () => hub()?.resumeSession(sessionId),
+      onOverflow: () => socket.close(CLOSE_BACKPRESSURE, "backpressure"),
+    });
+    entry.sender = sender;
+    socket.on("close", () => {
+      sender.close();
+      if (sender.paused) hub()?.resumeSession(sessionId);
+    });
     if (entry.timer !== undefined) clearTimeout(entry.timer);
     entry.timer = undefined;
     for (const body of entry.queue.splice(0))
-      socket.send(body.toString("utf8"));
+      sender.push(body.toString("utf8"));
     return true;
   }
 
