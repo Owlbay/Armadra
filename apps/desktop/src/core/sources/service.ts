@@ -85,6 +85,16 @@ function clip(value: string, max: number): string {
   return value.length > max ? value.slice(0, max) : value;
 }
 
+/** 显示名：1–128 个字符（表的约束）；不给就是 `undefined`。 */
+function checkLabel(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length < 1 || trimmed.length > 128) {
+    throw fail("bad_request", "名称应为 1 到 128 个字符");
+  }
+  return trimmed;
+}
+
 /** `#pair=<票>&fp=<指纹>` 的网页链接，或 `armadra://pair?host=…&ticket=…&fp=…`。 */
 export function parsePairLink(link: string): {
   origin: string;
@@ -228,6 +238,7 @@ export class SourcesService {
     fingerprint?: string | undefined;
     label?: string | undefined;
   }): Promise<ClientSource> {
+    const label = checkLabel(input.label);
     let origin: string;
     let ticket: string;
     let fingerprint: string;
@@ -298,7 +309,7 @@ export class SourcesService {
     const row = this.store.upsert({
       sourceId,
       kind: existing?.kind === "relayed" ? "relayed" : "direct",
-      label: input.label ?? existing?.label ?? clip(new URL(origin).host, 128),
+      label: label ?? existing?.label ?? clip(new URL(origin).host, 128),
       baseUrl: origin,
       relayOrigin: existing?.relayOrigin ?? "",
       fingerprint,
@@ -320,6 +331,7 @@ export class SourcesService {
     relayOrigin?: string | undefined;
   }): Promise<ClientSource> {
     const row = this.row(input.sourceId);
+    const label = checkLabel(input.label);
     if (
       row.kind === "local" &&
       (input.baseUrl !== undefined || input.relayOrigin !== undefined)
@@ -340,7 +352,7 @@ export class SourcesService {
           : normalizeOrigin(input.relayOrigin);
     const updated = this.store.upsert({
       ...row,
-      label: input.label ?? row.label,
+      label: label ?? row.label,
       orderIndex: input.orderIndex ?? row.orderIndex,
       baseUrl,
       relayOrigin,
@@ -641,6 +653,7 @@ export class SourcesService {
     }
     const issuer = normalizeOrigin(input.issuer);
     const fingerprint = normalizeFingerprint(input.fingerprint);
+    const label = checkLabel(input.label);
     const endpoint: RemoteEndpoint = { issuer, fingerprint };
     const info = await this.remote.info(endpoint);
     if (info.mode !== "personal") {
@@ -662,7 +675,7 @@ export class SourcesService {
       serviceId,
       kind: "personal",
       issuer,
-      label: input.label ?? existing?.label ?? clip(new URL(issuer).host, 128),
+      label: label ?? existing?.label ?? clip(new URL(issuer).host, 128),
       accountHint: clip(input.account, 256),
       fingerprint,
       addedAtMs: existing?.addedAtMs ?? at,
@@ -722,6 +735,7 @@ export class SourcesService {
     label?: string | undefined;
   }): Promise<ClientSource> {
     const remote = this.remoteRow(input.serviceId);
+    const label = checkLabel(input.label);
     if (input.sourceId === this.options.hostId()) {
       throw fail("conflict", "这就是本机");
     }
@@ -748,7 +762,7 @@ export class SourcesService {
       deviceId: credentials.deviceId,
     });
     let name = "";
-    if (input.label === undefined && existing === undefined) {
+    if (label === undefined && existing === undefined) {
       // 显示名取远程服务目录里的那个；拿不到不拦挂载。
       const token = this.access.get(remote.serviceId);
       if (token !== undefined) {
@@ -766,9 +780,7 @@ export class SourcesService {
       sourceId: input.sourceId,
       kind: existing?.kind === "direct" ? "direct" : "relayed",
       label: clip(
-        input.label ??
-          existing?.label ??
-          (name.trim() || input.sourceId.slice(0, 8)),
+        label ?? existing?.label ?? (name.trim() || input.sourceId.slice(0, 8)),
         128,
       ),
       baseUrl: existing?.baseUrl ?? "",
