@@ -45,11 +45,19 @@ function importsUi(source: string, name: "dialog" | "sheet"): boolean {
   );
 }
 
+const cache = new Map<string, string[]>();
+
+/** 扫整个 src/ 要读几百个文件，每种只扫一次。 */
 function importers(name: "dialog" | "sheet"): string[] {
-  return featureSources(SRC)
-    .filter((file) => importsUi(readSource(file), name))
-    .map((file) => posix(SRC, file))
-    .sort();
+  let found = cache.get(name);
+  if (found === undefined) {
+    found = featureSources(SRC)
+      .filter((file) => importsUi(readSource(file), name))
+      .map((file) => posix(SRC, file))
+      .sort();
+    cache.set(name, found);
+  }
+  return found;
 }
 
 describe("对话框与抽屉的统一入口", () => {

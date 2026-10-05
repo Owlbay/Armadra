@@ -74,13 +74,17 @@ function isData(file: string): boolean {
   );
 }
 
+let cache: Map<string, ColorHits> | undefined;
+
+/** 扫整个 src/ 要读几百个文件，只扫一次。 */
 function scanned(): Map<string, ColorHits> {
-  return new Map(
+  cache ??= new Map(
     featureSources(SRC).map((file) => [
       posix(SRC, file),
       colorHits(readSource(file)),
     ]),
   );
+  return cache;
 }
 
 describe("字面色值与 dark: 守卫", () => {
