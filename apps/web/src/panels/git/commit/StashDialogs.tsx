@@ -20,7 +20,14 @@ import {
   ResponsiveDialogHeader,
   ResponsiveDialogTitle,
 } from "../../ResponsiveDialog";
-import { Check, Field, ReadError, selectClass } from "../forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../../ui/select";
+import { Check, Field, ReadError } from "../forms";
 import type { RepositoryRequest } from "../actions/integration";
 import {
   canCreateStash,
@@ -59,21 +66,24 @@ function RepositoryPicker({
   if (repositories.length <= 1) return null;
   return (
     <Field label={t("gitRepo.repository")}>
-      <select
-        className={selectClass}
-        aria-label={t("gitRepo.repository")}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {repositories.map((repository) => (
-          <option
-            key={repository.repositoryPath}
-            value={repository.repositoryPath}
-          >
-            {repository.name}
-          </option>
-        ))}
-      </select>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger
+          className="h-9 w-full min-w-0"
+          aria-label={t("gitRepo.repository")}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent className="z-[var(--z-dialog)]">
+          {repositories.map((repository) => (
+            <SelectItem
+              key={repository.repositoryPath}
+              value={repository.repositoryPath}
+            >
+              {repository.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </Field>
   );
 }

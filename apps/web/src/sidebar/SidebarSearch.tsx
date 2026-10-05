@@ -37,12 +37,12 @@ import {
   CommandShortcut,
 } from "@/ui/command";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { gotoNode } from "./goto-node";
 import { searchBoards, type SearchBoard, type SearchHit } from "./search-index";
 import { displayName } from "./display-name";
@@ -136,15 +136,17 @@ export function SidebarSearch({ open, onOpenChange }: SidebarSearchProps) {
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent
         showCloseButton={false}
         className="top-1/4 z-[var(--z-dialog)] max-w-[600px]! translate-y-0 overflow-hidden rounded-[var(--r-dialog)]! p-0 sm:max-w-[600px]"
       >
-        <DialogHeader className="sr-only">
-          <DialogTitle>{t("search.title")}</DialogTitle>
-          <DialogDescription>{t("search.placeholder")}</DialogDescription>
-        </DialogHeader>
+        <ResponsiveDialogHeader className="sr-only">
+          <ResponsiveDialogTitle>{t("search.title")}</ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
+            {t("search.placeholder")}
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
         <Command className="p-0" shouldFilter={false}>
           <CommandInput
             className={COMMAND_INPUT_FOCUS}
@@ -216,7 +218,7 @@ export function SidebarSearch({ open, onOpenChange }: SidebarSearchProps) {
             )}
           </CommandList>
         </Command>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

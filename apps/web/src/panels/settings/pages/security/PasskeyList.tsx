@@ -13,6 +13,7 @@ import {
   useDateTime,
 } from "./parts";
 import { Alert, AlertTitle } from "@/ui/alert";
+import { Card } from "@/ui/card";
 import { Button } from "@/ui/button";
 import { Field, FieldLabel } from "@/ui/field";
 import { IconButton } from "@/ui/icon-button";
@@ -119,7 +120,7 @@ export function PasskeyList({
         </Alert>
       )}
       {list.passkeys.length > 0 && (
-        <div className="rounded-lg border border-border/70 bg-card px-2">
+        <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 px-2">
           <Table className="text-[13px]">
             <TableHeader>
               <TableRow>
@@ -240,7 +241,7 @@ export function PasskeyList({
               ))}
             </TableBody>
           </Table>
-        </div>
+        </Card>
       )}
       <ConfirmRemove
         open={confirm !== null}

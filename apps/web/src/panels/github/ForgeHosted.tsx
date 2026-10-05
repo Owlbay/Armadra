@@ -25,7 +25,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui/tabs";
 import { Textarea } from "@/ui/textarea";
 import { useT } from "@/app/preferences-store";
 import { openExternal } from "@/platform";
-import { Check, Field, selectClass } from "../git/forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/select";
+import { Check, Field } from "../git/forms";
 import { CheckoutWorktree } from "./CheckoutWorktree";
 import { MergeCleanupView } from "./MergeCleanup";
 import {
@@ -173,19 +180,21 @@ export function ForgeHosted({
       {selected === null && (
         <div className="flex min-w-0 items-end gap-2 border-b border-border p-3">
           <Field label={t("forge.filter.state")}>
-            <select
-              className={selectClass}
+            <Select
               value={state}
-              onChange={(event) =>
-                setState(event.target.value as ForgeListState)
-              }
+              onValueChange={(next) => setState(next as ForgeListState)}
             >
-              {(["open", "closed", "all"] as const).map((value) => (
-                <option key={value} value={value}>
-                  {t(`forge.state.${value}`)}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="h-9 w-full min-w-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="z-[var(--z-dialog)]">
+                {(["open", "closed", "all"] as const).map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {t(`forge.state.${value}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Field>
         </div>
       )}
@@ -772,19 +781,21 @@ export function PullBody({
           data-slot="forge-merge"
         >
           <Field label={t("forge.merge.method")}>
-            <select
-              className={selectClass}
+            <Select
               value={method}
-              onChange={(event) =>
-                setMethod(event.target.value as ForgeMergeMethod)
-              }
+              onValueChange={(next) => setMethod(next as ForgeMergeMethod)}
             >
-              {methods.map((value) => (
-                <option key={value} value={value}>
-                  {t(`forge.merge.method.${value}`)}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="h-9 w-full min-w-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="z-[var(--z-dialog)]">
+                {methods.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {t(`forge.merge.method.${value}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Field>
           <Button
             size="sm"

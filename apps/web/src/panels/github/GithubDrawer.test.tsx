@@ -112,6 +112,7 @@ import { runtimeApi } from "@/api/client";
 import { RuntimeRequestError } from "@/api/request";
 import { GithubDrawer } from "./GithubDrawer";
 import { useGithubFocus } from "./open";
+import { chooseOption, optionLabels } from "../../app/test-harness";
 
 const repository = {
   owner: "armadra",
@@ -496,9 +497,7 @@ describe("configuring the status mapping", () => {
     const api = client();
     await openEditor(api);
     // 枚举在线上是名字，下拉框的 value 就是那个名字。
-    fireEvent.change(screen.getByLabelText("主来源"), {
-      target: { value: GithubStatusSource.LABEL },
-    });
+    await chooseOption(screen.getByLabelText("主来源"), "按标签");
     const labels = await screen.findAllByLabelText("精确标签名");
     expect(labels.length).toBe(2);
     for (const field of labels)
@@ -514,9 +513,7 @@ describe("configuring the status mapping", () => {
     const api = client();
     await openEditor(api);
     // 枚举在线上是名字，下拉框的 value 就是那个名字。
-    fireEvent.change(screen.getByLabelText("主来源"), {
-      target: { value: GithubStatusSource.LABEL },
-    });
+    await chooseOption(screen.getByLabelText("主来源"), "按标签");
     const labels = await screen.findAllByLabelText("精确标签名");
     fireEvent.change(labels[0]!, { target: { value: "todo" } });
     fireEvent.change(labels[1]!, { target: { value: "done" } });
@@ -542,9 +539,7 @@ describe("configuring the status mapping", () => {
     });
     await openEditor(api);
     // 枚举在线上是名字，下拉框的 value 就是那个名字。
-    fireEvent.change(screen.getByLabelText("主来源"), {
-      target: { value: GithubStatusSource.LABEL },
-    });
+    await chooseOption(screen.getByLabelText("主来源"), "按标签");
     const labels = await screen.findAllByLabelText("精确标签名");
     fireEvent.change(labels[0]!, { target: { value: "todo" } });
     fireEvent.change(labels[1]!, { target: { value: "done" } });
@@ -576,9 +571,7 @@ describe("linking an issue to a session", () => {
   it("links the issue to the session that was chosen", async () => {
     const api = client();
     await openIssue(api);
-    fireEvent.change(screen.getByLabelText("关联目标"), {
-      target: { value: "session:node-1" },
-    });
+    await chooseOption(screen.getByLabelText("关联目标"), "claude · api");
     fireEvent.click(screen.getByText("建立关联"));
     await waitFor(() => expect(api.linkReference).toHaveBeenCalled());
     const sent = firstCall<{
@@ -609,9 +602,7 @@ describe("linking an issue to a session", () => {
       }),
     });
     await openIssue(api);
-    fireEvent.change(screen.getByLabelText("关联目标"), {
-      target: { value: "session:node-1" },
-    });
+    await chooseOption(screen.getByLabelText("关联目标"), "claude · api");
     fireEvent.click(screen.getByText("建立关联"));
     await waitFor(() =>
       expect(toasts.success).toHaveBeenCalledWith("这个目标已经关联过了"),
@@ -1144,13 +1135,10 @@ describe("Gitea and GitLab remotes (§29)", () => {
     expect(await screen.findByText("src/login.ts")).toBeTruthy();
     expect(await screen.findByText("build")).toBeTruthy();
     const method = document.querySelector(
-      "[data-slot=forge-merge] select",
-    ) as HTMLSelectElement;
-    expect([...method.options].map((option) => option.value)).toEqual([
-      "merge",
-      "squash",
-    ]);
-    fireEvent.change(method, { target: { value: "squash" } });
+      "[data-slot=forge-merge] [role=combobox]",
+    ) as HTMLElement;
+    expect(await optionLabels(method)).toEqual(["合并提交", "压缩合并"]);
+    await chooseOption(method, "压缩合并");
     fireEvent.click(screen.getByText(/^合并 · /));
     fireEvent.click(await screen.findByRole("button", { name: "合并" }));
     await waitFor(() =>

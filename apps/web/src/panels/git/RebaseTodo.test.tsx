@@ -5,6 +5,7 @@ import type {
   GitIntegrationSnapshot,
   GitRebaseTodoPreview,
 } from "@armadra/shared";
+import { chooseOption } from "../../app/test-harness";
 import { RebaseTodo, type RebaseTodoProps } from "./RebaseTodo";
 
 vi.mock("../../app/preferences-store", () => ({
@@ -94,7 +95,7 @@ it("sends the reviewed order and commands, covering every replayed commit", asyn
     screen.getAllByRole("button", { name: "gitRepo.rebaseTodoUp" })[1]!,
   );
   const commands = screen.getAllByLabelText("gitRepo.rebaseTodoCommand");
-  fireEvent.change(commands[1]!, { target: { value: "drop" } });
+  await chooseOption(commands[1]!, "gitRepo.rebaseTodo.drop");
   fireEvent.click(
     screen.getByRole("button", { name: "gitRepo.startInteractiveRebase" }),
   );
@@ -118,15 +119,15 @@ it("refuses a squash with nothing kept before it and a todo that drops everythin
   const props = setup();
   await screen.findByText("First change");
   const commands = screen.getAllByLabelText("gitRepo.rebaseTodoCommand");
-  fireEvent.change(commands[0]!, { target: { value: "squash" } });
+  await chooseOption(commands[0]!, "gitRepo.rebaseTodo.squash");
   const run = screen.getByRole("button", {
     name: "gitRepo.startInteractiveRebase",
   });
   expect(screen.getByText("gitRepo.rebaseTodoSquashNeedsKept")).toBeTruthy();
   expect((run as HTMLButtonElement).disabled).toBe(true);
 
-  fireEvent.change(commands[0]!, { target: { value: "drop" } });
-  fireEvent.change(commands[1]!, { target: { value: "drop" } });
+  await chooseOption(commands[0]!, "gitRepo.rebaseTodo.drop");
+  await chooseOption(commands[1]!, "gitRepo.rebaseTodo.drop");
   expect((run as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(run);
   expect(props.request).not.toHaveBeenCalled();
@@ -136,7 +137,7 @@ it("carries a reword's message and refuses to run without one", async () => {
   const props = setup();
   await screen.findByText("First change");
   const commands = screen.getAllByLabelText("gitRepo.rebaseTodoCommand");
-  fireEvent.change(commands[0]!, { target: { value: "reword" } });
+  await chooseOption(commands[0]!, "gitRepo.rebaseTodo.reword");
   // 默认填上原来的标题：改写信息的起点是它现在说的话。
   const message = screen.getByLabelText(
     "gitRepo.rebaseTodoMessage",
@@ -170,13 +171,13 @@ it("drops a message when the verb stops being a reword", async () => {
   const props = setup();
   await screen.findByText("First change");
   const commands = screen.getAllByLabelText("gitRepo.rebaseTodoCommand");
-  fireEvent.change(commands[0]!, { target: { value: "reword" } });
+  await chooseOption(commands[0]!, "gitRepo.rebaseTodo.reword");
   fireEvent.change(screen.getByLabelText("gitRepo.rebaseTodoMessage"), {
     target: { value: "never used" },
   });
   // 换成 fixup：那条信息永远不会被用上，留着它只会让服务端拒绝整份 todo。
-  fireEvent.change(commands[0]!, { target: { value: "pick" } });
-  fireEvent.change(commands[1]!, { target: { value: "fixup" } });
+  await chooseOption(commands[0]!, "gitRepo.rebaseTodo.pick");
+  await chooseOption(commands[1]!, "gitRepo.rebaseTodo.fixup");
   fireEvent.click(
     screen.getByRole("button", { name: "gitRepo.startInteractiveRebase" }),
   );
@@ -198,7 +199,7 @@ it("refuses a fixup with nothing kept before it, exactly as a squash", async () 
   const props = setup();
   await screen.findByText("First change");
   const commands = screen.getAllByLabelText("gitRepo.rebaseTodoCommand");
-  fireEvent.change(commands[0]!, { target: { value: "fixup" } });
+  await chooseOption(commands[0]!, "gitRepo.rebaseTodo.fixup");
   const run = screen.getByRole("button", {
     name: "gitRepo.startInteractiveRebase",
   });
@@ -212,7 +213,7 @@ it("says that an edit stops the replay rather than finishing it", async () => {
   setup();
   await screen.findByText("First change");
   const commands = screen.getAllByLabelText("gitRepo.rebaseTodoCommand");
-  fireEvent.change(commands[0]!, { target: { value: "edit" } });
+  await chooseOption(commands[0]!, "gitRepo.rebaseTodo.edit");
   expect(screen.getByText("gitRepo.rebaseTodoEditStops")).toBeTruthy();
   expect(
     (

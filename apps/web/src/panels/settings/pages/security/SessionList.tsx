@@ -10,6 +10,7 @@ import {
   useDateTime,
 } from "./parts";
 import { Badge } from "@/ui/badge";
+import { Card } from "@/ui/card";
 import { Button } from "@/ui/button";
 import { Spinner } from "@/ui/spinner";
 import { Switch } from "@/ui/switch";
@@ -81,7 +82,7 @@ export function SessionList({
         ) : undefined
       }
     >
-      <div className="rounded-lg border border-border/70 bg-card px-2">
+      <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 px-2">
         <Table className="text-[13px]">
           <TableHeader>
             <TableRow>
@@ -162,7 +163,7 @@ export function SessionList({
             })}
           </TableBody>
         </Table>
-      </div>
+      </Card>
       {others && (
         <div>
           <Button
@@ -234,7 +235,7 @@ export function LockoutList({
   if (!lockouts || lockouts.length === 0) return null;
   return (
     <SecuritySection title={t("security.lockouts")}>
-      <div className="rounded-lg border border-border/70 bg-card px-2">
+      <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 px-2">
         <Table className="text-[13px]">
           <TableHeader>
             <TableRow>
@@ -280,7 +281,7 @@ export function LockoutList({
             ))}
           </TableBody>
         </Table>
-      </div>
+      </Card>
     </SecuritySection>
   );
 }

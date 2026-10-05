@@ -7,7 +7,14 @@ import { Button } from "@/ui/button";
 import { Input } from "@/ui/input";
 import { useT } from "../../../app/preferences-store";
 import { SettingsGroup } from "../SettingsGroup";
-import { Field, selectClass } from "../../git/forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/select";
+import { Field } from "../../git/forms";
 import {
   type ConfigurableForge,
   type ForgeConfig,
@@ -189,22 +196,26 @@ export function ForgeConfigs() {
             />
           </Field>
           <Field label={t("forge.settings.platform")}>
-            <select
-              className={selectClass}
+            <Select
               value={draft.forge}
-              onChange={(event) =>
+              onValueChange={(next) =>
                 setDraft({
                   ...draft,
-                  forge: event.target.value as ConfigurableForge,
+                  forge: next as ConfigurableForge,
                 })
               }
             >
-              {PLATFORMS.map((value) => (
-                <option key={value} value={value}>
-                  {FORGE_NAMES[value]}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="h-9 w-full min-w-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="z-[var(--z-dialog)]">
+                {PLATFORMS.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {FORGE_NAMES[value]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Field>
           <Field label={t("forge.settings.apiBase")}>
             <Input

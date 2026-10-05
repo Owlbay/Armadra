@@ -16,7 +16,14 @@ import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { Textarea } from "@/ui/textarea";
 import { useT } from "@/app/preferences-store";
-import { Field, selectClass } from "../git/forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/select";
+import { Field } from "../git/forms";
 import { CheckoutWorktree } from "./CheckoutWorktree";
 import { ChecksSection } from "./ChecksSection";
 import { DiffReview } from "./DiffReview";
@@ -381,20 +388,24 @@ export function PullDetail({
               ) : (
                 <>
                   <Field label={t("github.merge.method")}>
-                    <select
-                      className={selectClass}
+                    <Select
                       value={String(chosen ?? "")}
-                      onChange={(event) =>
+                      onValueChange={(next) =>
                         // 枚举在线上是名字，所以下拉框的值就是那个名字。
-                        setMethod(event.target.value as GithubMergeMethod)
+                        setMethod(next as GithubMergeMethod)
                       }
                     >
-                      {methods.map((value) => (
-                        <option key={value} value={String(value)}>
-                          {t(mergeMethodKey(value))}
-                        </option>
-                      ))}
-                    </select>
+                      <SelectTrigger className="h-9 w-full min-w-0">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="z-[var(--z-dialog)]">
+                        {methods.map((value) => (
+                          <SelectItem key={value} value={String(value)}>
+                            {t(mergeMethodKey(value))}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </Field>
                   <Button
                     size="sm"

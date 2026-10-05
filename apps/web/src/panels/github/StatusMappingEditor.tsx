@@ -16,7 +16,17 @@ import {
 import { IconButton } from "@/ui/icon-button";
 import { Input } from "@/ui/input";
 import { useT } from "@/app/preferences-store";
-import { Field, selectClass } from "../git/forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/select";
+import { Field } from "../git/forms";
+
+/** Radix 的选项值不能是空串，「无」用这个占位值换算回空串。 */
+const NONE = "__none__";
 import { failureKey } from "./model";
 import {
   MAPPING_REASONS,
@@ -156,27 +166,31 @@ export function StatusMappingEditor({
           }}
         >
           <Field label={t("github.mapping.source")}>
-            <select
-              className={selectClass}
+            <Select
               value={String(draft.source)}
               disabled={!canWrite}
-              onChange={(event) =>
+              onValueChange={(next) =>
                 setDraft((current) => ({
                   ...current,
-                  source: event.target.value as GithubStatusSource,
+                  source: next as GithubStatusSource,
                 }))
               }
             >
-              {[
-                GithubStatusSource.NONE,
-                GithubStatusSource.LABEL,
-                GithubStatusSource.PROJECT_FIELD,
-              ].map((value) => (
-                <option key={value} value={String(value)}>
-                  {t(statusSourceKey(value))}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="h-9 w-full min-w-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="z-[var(--z-dialog)]">
+                {[
+                  GithubStatusSource.NONE,
+                  GithubStatusSource.LABEL,
+                  GithubStatusSource.PROJECT_FIELD,
+                ].map((value) => (
+                  <SelectItem key={value} value={String(value)}>
+                    {t(statusSourceKey(value))}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Field>
 
           {project && (
@@ -306,26 +320,32 @@ export function StatusMappingEditor({
                     </Field>
                   )}
                   <Field label={t("github.mapping.couplesState")}>
-                    <select
-                      className={selectClass}
+                    <Select
                       value={String(group.couplesState)}
                       disabled={!canWrite}
-                      onChange={(event) =>
+                      onValueChange={(next) =>
                         patchGroup(index, {
-                          couplesState: event.target.value as GithubIssueState,
+                          couplesState: next as GithubIssueState,
                         })
                       }
                     >
-                      <option value={String(GithubIssueState.UNSPECIFIED)}>
-                        {t("github.mapping.stateNone")}
-                      </option>
-                      <option value={String(GithubIssueState.OPEN)}>
-                        {t("github.issueState.open")}
-                      </option>
-                      <option value={String(GithubIssueState.CLOSED)}>
-                        {t("github.issueState.closed")}
-                      </option>
-                    </select>
+                      <SelectTrigger className="h-9 w-full min-w-0">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="z-[var(--z-dialog)]">
+                        <SelectItem
+                          value={String(GithubIssueState.UNSPECIFIED)}
+                        >
+                          {t("github.mapping.stateNone")}
+                        </SelectItem>
+                        <SelectItem value={String(GithubIssueState.OPEN)}>
+                          {t("github.issueState.open")}
+                        </SelectItem>
+                        <SelectItem value={String(GithubIssueState.CLOSED)}>
+                          {t("github.issueState.closed")}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
                   </Field>
                 </fieldset>
               ))}
@@ -372,24 +392,30 @@ export function StatusMappingEditor({
                 ] as const
               ).map(([key, field]) => (
                 <Field key={field} label={t(key)}>
-                  <select
-                    className={selectClass}
-                    value={draft[field]}
+                  <Select
+                    value={draft[field] === "" ? NONE : draft[field]}
                     disabled={!canWrite}
-                    onChange={(event) =>
+                    onValueChange={(next) =>
                       setDraft((current) => ({
                         ...current,
-                        [field]: event.target.value,
+                        [field]: next === NONE ? "" : next,
                       }))
                     }
                   >
-                    <option value="">{t("github.mapping.groupNone")}</option>
-                    {draft.groups.map((group) => (
-                      <option key={group.id} value={group.id}>
-                        {group.title || group.id}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger className="h-9 w-full min-w-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="z-[var(--z-dialog)]">
+                      <SelectItem value={NONE}>
+                        {t("github.mapping.groupNone")}
+                      </SelectItem>
+                      {draft.groups.map((group) => (
+                        <SelectItem key={group.id} value={group.id}>
+                          {group.title || group.id}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </Field>
               ))}
             </section>
