@@ -7,7 +7,7 @@ import {
 } from "react";
 import type { FileEntry } from "@armadra/shared";
 import { toast } from "sonner";
-import { RUNTIME_URL } from "../api/client";
+import { currentSource } from "../api/source";
 import { t } from "../app/preferences-store";
 import { isDesktop } from "../platform";
 import { useCanvasStore } from "../store/canvas-store";
@@ -51,9 +51,12 @@ export function useWorkspaceFileDrag(
         return;
       }
       try {
-        writeWorkspaceFileDrag(event.dataTransfer, RUNTIME_URL, workspaceId, [
-          entry,
-        ]);
+        writeWorkspaceFileDrag(
+          event.dataTransfer,
+          currentSource().httpBase,
+          workspaceId,
+          [entry],
+        );
       } catch (error) {
         event.preventDefault();
         toast.error(t(fileDragMessage(error)));
@@ -71,7 +74,9 @@ export function useWorkspaceFileDrag(
       cleanup.current?.();
       let drag;
       try {
-        drag = createWorkspaceFileDrag(RUNTIME_URL, workspaceId, [entry]);
+        drag = createWorkspaceFileDrag(currentSource().httpBase, workspaceId, [
+          entry,
+        ]);
       } catch (error) {
         toast.error(t(fileDragMessage(error)));
         return;

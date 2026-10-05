@@ -32,7 +32,9 @@ import {
   sessionCapability,
   NATIVE_SESSION_CAPABILITY,
 } from "./identity";
-import { RUNTIME_URL } from "./request";
+import { localSource } from "./source";
+
+const LOCAL_BASE = localSource.httpBase;
 
 const ACCESS = "a".repeat(43);
 const REFRESH = "r".repeat(43);
@@ -92,7 +94,7 @@ describe("原生 App 的身份传输", () => {
 
   it("重开 App：从钥匙串读回会话；来源换了就不用", async () => {
     mocks.stored = {
-      origin: RUNTIME_URL,
+      origin: LOCAL_BASE,
       accessToken: ACCESS,
       refreshToken: REFRESH,
     };
@@ -117,7 +119,7 @@ describe("原生 App 的身份传输", () => {
 
   it("刷新密钥也被拒：钥匙串作废，回连接页", async () => {
     mocks.stored = {
-      origin: RUNTIME_URL,
+      origin: LOCAL_BASE,
       accessToken: ACCESS,
       refreshToken: REFRESH,
     };
@@ -141,7 +143,7 @@ describe("原生 App 的身份传输", () => {
         return answer(200, { closed: true });
       }),
     );
-    await pairWithGateway(RUNTIME_URL, "t");
+    await pairWithGateway(LOCAL_BASE, "t");
     await expect(fetchWsTicket()).resolves.toBe("T");
     const ticketCall = calls.find((call) => call.url.endsWith("/ws-ticket"))!;
     expect(ticketCall.init.method).toBe("POST");

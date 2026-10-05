@@ -1,8 +1,7 @@
 import { z } from "zod";
-import { isServerShellServed, resolveRuntimeUrl } from "./runtime-url";
-import { ensureCsrf, replaceRejectedCsrf } from "./identity";
+import { localRuntime } from "./local-runtime";
 import { t } from "../app/preferences-store";
-import { localSource } from "./source";
+import { type Source, currentSource } from "./source";
 
 /**
  * Runtime HTTP 客户端 —— docs/contracts/v3-agent-terminal-plan.md §7 / §15。
@@ -15,19 +14,12 @@ import { localSource } from "./source";
  *  3. 这里不做任何缓存 / 重试 / 状态；调用方自己决定。
  */
 
-const PAGE_URL =
-  typeof window === "undefined" ? "http://localhost/" : window.location.href;
-
-export const RUNTIME_URL = resolveRuntimeUrl(
-  import.meta.env.VITE_RUNTIME_URL,
-  PAGE_URL,
-);
-
-/** 这份页面是不是由服务器壳托管：那条路上写请求要带会话 CSRF 头。 */
-export const RUNTIME_VIA_SERVER_SHELL = isServerShellServed(
-  import.meta.env.VITE_RUNTIME_URL,
-  PAGE_URL,
-);
+/**
+ * 这份页面是不是由服务器壳托管：那条路上写请求要带会话 CSRF 头，界面也按它
+ * 收起桌面才有的几页。这是页面本身的事实，不随当前源变；发往哪台 core 由源
+ * 决定（`api/source.ts`、`sources/`）。
+ */
+export const RUNTIME_VIA_SERVER_SHELL = localRuntime().viaServerShell;
 
 /** 204 / 空响应体在进 schema 之前先变成 `undefined`。 */
 export const noContentSchema = z.unknown().transform(() => undefined);
@@ -163,13 +155,17 @@ function unsafeMethod(method: string | undefined): boolean {
 }
 
 /**
- * Bearer 不在这里加：桌面壳里由本机源补上（`api/source.ts` 的 `localSource`，
- * 壳在 `api/shell-transport.ts` 里装凭据，契约 §3.2），原生 App 由装在全局
- * `fetch` 上的请求层补上（`mobile/native-bridge.ts`）；服务器壳是 Cookie，这里
- * 只补双提交的 CSRF。
+ * Bearer 不在这里加：由源自己的 `fetch` 补上（本机源在桌面壳与原生 App 里由
+ * `installLocalTransport` 装凭据，契约 §3.2；远程源见 `sources/connection.ts`）；
+ * Cookie 会话的源这里只补双提交的 CSRF。
  */
-async function send(path: string, init: RequestInit | undefined, csrf: string) {
-  return localSource.fetch(`${RUNTIME_URL}${path}`, {
+async function send(
+  source: Source,
+  path: string,
+  init: RequestInit | undefined,
+  csrf: string,
+) {
+  return source.fetch(`${source.httpBase}${path}`, {
     ...init,
     headers: {
       ...(init?.body instanceof FormData
@@ -196,16 +192,22 @@ export async function csrfRefusal(response: Response): Promise<boolean> {
   return code === undefined || code === "forbidden";
 }
 
+/**
+ * 发一次 REST 请求。`source` 省略是当前源（`api/source.ts` 的
+ * {@link currentSource}，没挂远程源时就是本机）。
+ */
 export async function request<T>(
   path: string,
   schema: z.ZodType<T>,
   init?: RequestInit,
+  source: Source = currentSource(),
 ): Promise<T> {
-  const guarded = RUNTIME_VIA_SERVER_SHELL && unsafeMethod(init?.method);
+  const credentials = source.credentials;
+  const guarded = credentials.mode === "cookie" && unsafeMethod(init?.method);
   let response: Response;
   try {
-    const used = guarded ? await ensureCsrf() : "";
-    response = await send(path, init, used);
+    const used = guarded ? ((await credentials.csrf()) ?? "") : "";
+    response = await send(source, path, init, used);
     // A rotated token is the one failure worth retrying: the request never
     // reached a handler, so nothing was executed twice. Any other 403 is the
     // core refusing this device, and repeating it would not change that.
@@ -217,11 +219,11 @@ export async function request<T>(
       !(init?.body instanceof FormData) &&
       (await csrfRefusal(response))
     ) {
-      const renewed = await replaceRejectedCsrf(used);
-      if (renewed) response = await send(path, init, renewed);
+      const renewed = await credentials.renewCsrf(used);
+      if (renewed) response = await send(source, path, init, renewed);
     }
   } catch (cause) {
-    throw new RuntimeConnectionError(RUNTIME_URL, cause);
+    throw new RuntimeConnectionError(source.httpBase, cause);
   }
   const payload = (await response.json().catch(() => null)) as unknown;
   if (!response.ok) {

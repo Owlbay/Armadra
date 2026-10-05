@@ -11,7 +11,7 @@ import {
 } from "./external-content";
 import { pastePoint } from "../interaction/pointer";
 import { localClipboardText, paste } from "../whiteboard/tools/use-clipboard";
-import { RUNTIME_URL } from "../../api/client";
+import { currentSource } from "../../api/source";
 import { isCanvasLocked } from "../canvas-lock";
 import {
   assertDragScope,
@@ -154,7 +154,7 @@ function importWorkspaceDrop(
     const drag = readWorkspaceFileDrag(transfer);
     const target = captureImportTarget();
     if (!target) return;
-    assertDragScope(drag, RUNTIME_URL, target.workspaceId);
+    assertDragScope(drag, currentSource().httpBase, target.workspaceId);
     if (isCanvasLocked()) {
       toast.error(t("fileDrag.canvasLocked"));
       return;

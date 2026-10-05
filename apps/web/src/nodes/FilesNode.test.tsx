@@ -35,7 +35,6 @@ vi.mock("@/store/canvas-store", () => {
 });
 
 vi.mock("@/api/client", () => ({
-  RUNTIME_URL: "http://runtime",
   runtimeApi: api,
   terminalWebSocketUrl: (id: string) => `ws://x/${id}`,
 }));

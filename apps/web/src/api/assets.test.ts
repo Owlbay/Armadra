@@ -1,32 +1,50 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ app: false, saved: null as string | null }));
-vi.mock("../mobile/native-bridge", async (original) => ({
-  ...(await original<typeof import("../mobile/native-bridge")>()),
-  isNativeApp: () => mocks.app,
-}));
-vi.mock("./runtime-url", async (original) => ({
-  ...(await original<typeof import("./runtime-url")>()),
-  savedRuntimeOrigin: () => mocks.saved,
-}));
-
 import {
   acquireAssetUrl,
+  bearerSourceFor,
   downloadRuntimeFile,
   needsBearerFetch,
   useAssetUrl,
 } from "./assets";
+import {
+  type Source,
+  type SourceCredentials,
+  localSource,
+  registerSource,
+} from "./source";
 
 const GATEWAY = "https://192.168.1.8:8443";
 const ASSET = `${GATEWAY}/api/workspaces/w1/assets/0011223344556677.png`;
 
+function source(
+  httpBase: string,
+  mode: SourceCredentials["mode"],
+  sourceId = httpBase,
+): Source {
+  return {
+    sourceId,
+    httpBase,
+    wsBase: httpBase.replace(/^http/, "ws"),
+    credentials: {
+      mode,
+      access: async () => null,
+      renew: async () => false,
+      csrf: async () => null,
+      renewCsrf: async () => null,
+    },
+    fetch: (input, init) => globalThis.fetch(input, init),
+    WebSocket: globalThis.WebSocket,
+  };
+}
+
+let unregister: (() => void) | null = null;
 let created = 0;
 const revoked: string[] = [];
 beforeEach(() => {
   created = 0;
   revoked.length = 0;
-  Object.assign(mocks, { app: false, saved: null });
   vi.stubGlobal(
     "URL",
     Object.assign(globalThis.URL, {
@@ -37,34 +55,48 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  unregister?.();
+  unregister = null;
 });
 
 describe("needsBearerFetch（R-55）", () => {
-  it("只在原生 App 里、只对 Gateway 来源", () => {
-    expect(needsBearerFetch(ASSET, true, GATEWAY)).toBe(true);
-    expect(needsBearerFetch(ASSET, false, GATEWAY)).toBe(false);
-    expect(needsBearerFetch(ASSET, true, null)).toBe(false);
-    expect(needsBearerFetch("https://cdn.example/a.png", true, GATEWAY)).toBe(
+  it("只对 Bearer 模式的源、只按来源比", () => {
+    const gateway = source(GATEWAY, "bearer");
+    expect(needsBearerFetch(ASSET, [gateway])).toBe(true);
+    expect(bearerSourceFor(ASSET, [gateway])).toBe(gateway);
+    expect(needsBearerFetch(ASSET, [source(GATEWAY, "cookie")])).toBe(false);
+    expect(needsBearerFetch(ASSET, [])).toBe(false);
+    expect(needsBearerFetch("https://cdn.example/a.png", [gateway])).toBe(
       false,
     );
-    expect(needsBearerFetch("data:image/png;base64,AA", true, GATEWAY)).toBe(
+    expect(needsBearerFetch("data:image/png;base64,AA", [gateway])).toBe(false);
+  });
+
+  it("几个源并存：按地址找到那一个", () => {
+    const CORE = "http://127.0.0.1:5123";
+    const local = source(CORE, "bearer", "local");
+    const remote = source(GATEWAY, "bearer", "remote");
+    expect(
+      bearerSourceFor(`${CORE}/api/workspaces/w1/assets/a.png`, [
+        local,
+        remote,
+      ]),
+    ).toBe(local);
+    expect(bearerSourceFor(ASSET, [local, remote])).toBe(remote);
+    expect(needsBearerFetch("http://127.0.0.1:9/a.png", [local, remote])).toBe(
       false,
     );
   });
-});
 
-describe("needsBearerFetch：桌面壳（契约 §3.2）", () => {
-  const CORE = "http://127.0.0.1:5123";
-  it("壳里对 core 的回环来源经 fetch 取，别处的原样用", () => {
-    const asset = `${CORE}/api/workspaces/w1/assets/a.png`;
-    expect(needsBearerFetch(asset, false, null, true, CORE)).toBe(true);
-    expect(needsBearerFetch(asset, false, null, false, CORE)).toBe(false);
-    expect(
-      needsBearerFetch("http://127.0.0.1:9/a.png", false, null, true, CORE),
-    ).toBe(false);
-    expect(
-      needsBearerFetch("data:image/png;base64,AA", false, null, true, CORE),
-    ).toBe(false);
+  it("缺省看本机源与挂载的源：没装凭据的本机源不经 fetch", () => {
+    expect(localSource.credentials.mode).not.toBe("bearer");
+    expect(needsBearerFetch(`${localSource.httpBase}/a.png`)).toBe(false);
+    expect(needsBearerFetch(ASSET)).toBe(false);
+    unregister = registerSource(source(GATEWAY, "bearer"));
+    expect(needsBearerFetch(ASSET)).toBe(true);
+    unregister();
+    unregister = null;
+    expect(needsBearerFetch(ASSET)).toBe(false);
   });
 });
 
@@ -157,13 +189,12 @@ describe("acquireAssetUrl", () => {
 });
 
 describe("useAssetUrl", () => {
-  it("浏览器与桌面里原样返回；原生 App 里先 undefined，取回后是 blob:，经 fetch 带 Bearer", async () => {
+  it("不属于 Bearer 源的原样返回；属于的先 undefined，取回后是 blob:，经那个源的 fetch", async () => {
     const plain = renderHook(() => useAssetUrl(ASSET));
     expect(plain.result.current).toBe(ASSET);
     expect(renderHook(() => useAssetUrl(null)).result.current).toBeNull();
 
-    mocks.app = true;
-    mocks.saved = GATEWAY;
+    unregister = registerSource(source(GATEWAY, "bearer"));
     const fetcher = vi.fn(async () => new Response("png"));
     vi.stubGlobal("fetch", fetcher);
     const hook = renderHook(() => useAssetUrl(ASSET));
@@ -175,9 +206,8 @@ describe("useAssetUrl", () => {
     expect(revoked).toContain(src);
   });
 
-  it("原生 App 里取不回是 null（调用方画「图坏了」）", async () => {
-    mocks.app = true;
-    mocks.saved = GATEWAY;
+  it("取不回是 null（调用方画「图坏了」）", async () => {
+    unregister = registerSource(source(GATEWAY, "bearer"));
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response("", { status: 404 })),

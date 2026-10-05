@@ -49,7 +49,6 @@ vi.mock("@/store/canvas-store", () => ({
   },
 }));
 vi.mock("@/api/client", () => ({
-  RUNTIME_URL: "http://runtime",
   terminalWebSocketUrl: (sessionId: string) => `ws://runtime/${sessionId}`,
   runtimeApi: {
     getTerminal: (...args: unknown[]) => fixture.getTerminal(...args),

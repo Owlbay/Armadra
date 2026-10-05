@@ -25,7 +25,7 @@ import type { StatusTone } from "../ui/status-pill";
 import { runtimeApi } from "../api/client";
 import { useCanvasStore } from "../store/canvas-store";
 import { agentGateway } from "./gateway";
-import { localSource } from "../api/source";
+import { currentSource } from "../api/source";
 
 /** 迟到的 `working` 在这个窗口内不能覆盖 `done`。 */
 export const DONE_HOLDOFF_MS = 3_000;
@@ -85,10 +85,6 @@ function millis(timestamp: string): number {
 
 /* ------------------------------- 已读回执 -------------------------------- */
 
-const RUNTIME_BASE: string =
-  (import.meta.env.VITE_RUNTIME_URL as string | undefined) ??
-  "http://127.0.0.1:43120";
-
 interface OptionalRuntimeApi {
   markAgentRead?: (nodeId: string) => Promise<unknown>;
 }
@@ -114,8 +110,9 @@ export async function postAgentRead(
     return;
   }
   if (typeof fetch !== "function") return;
-  await localSource.fetch(
-    `${RUNTIME_BASE}/api/agent-status/${encodeURIComponent(nodeId)}/read`,
+  const source = currentSource();
+  await source.fetch(
+    `${source.httpBase}/api/agent-status/${encodeURIComponent(nodeId)}/read`,
     { method: "POST" },
   );
 }

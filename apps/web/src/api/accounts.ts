@@ -9,7 +9,6 @@ import {
   replaceRejectedCsrf,
   type IdentitySession,
 } from "./identity";
-import { RUNTIME_URL } from "./request";
 import { localSource } from "./source";
 
 /**
@@ -107,15 +106,20 @@ async function call<T>(
     }
     if (csrf) headers["X-Armadra-CSRF"] = csrf;
     try {
-      return await localSource.fetch(`${RUNTIME_URL}${PREFIX}${action}`, {
-        method,
-        headers,
-        body:
-          options.body === undefined ? undefined : JSON.stringify(options.body),
-        credentials: "include",
-        redirect: "error",
-        cache: "no-store",
-      });
+      return await localSource.fetch(
+        `${localSource.httpBase}${PREFIX}${action}`,
+        {
+          method,
+          headers,
+          body:
+            options.body === undefined
+              ? undefined
+              : JSON.stringify(options.body),
+          credentials: "include",
+          redirect: "error",
+          cache: "no-store",
+        },
+      );
     } catch (cause) {
       throw new IdentityTransportError(cause);
     }

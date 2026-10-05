@@ -577,7 +577,10 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
     浏览器画面——经它带 Bearer 与一次性 WS 票，全局 `fetch` / `WebSocket` 不再被改写，`api/shell-transport.ts`；托盘用自己的会话，`shell-core/core-session.ts`；Windows
     经 fork 的 IPC 取票）；Gateway / 服务器壳是 TLS + `__Host-` 会话
     Cookie（`HttpOnly; SameSite=Strict; Secure`）+ Origin 白名单 + 写操作的 CSRF 双提交；原生 App 走
-    Bearer（只认 `capacitor://localhost` / `https://localhost`，WS 用 30 秒一次性票）。CSRF 只在
+    Bearer（只认 `capacitor://localhost` / `https://localhost`，WS 用 30 秒一次性票；凭据同样装在本机源上，
+    不改写全局）。挂载的远程源（自托管直连、经中继）各是一个 `SourceConnection`（`apps/web/src/sources/`）：
+    自己的地址、Bearer 与票，选路直连优先（D27），凭据经 `CredentialProvider` 按源取、只在内存；`api/*`
+    省略源时发往当前源（缺省本机），`<img>` 取图与下载按地址找所属的源。CSRF 只在
     Cookie 会话上核对，Bearer 不是环境凭据（`identity/http.ts::csrfRequired`）。Gateway 的每个答案带
     HSTS 与 `nosniff`，接口答案再带沙箱 CSP 与缺省 `no-store`（`gateway/csp.ts`）。
   - 长连接：事件流、实时同步、终端、语言服务、浏览器画面在授权变化（撤销设备或会话、登出、停用账号、

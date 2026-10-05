@@ -10,7 +10,7 @@ import {
  *
  * 以前这里有一个可填的服务地址：Runtime 与 Go Host 是两个进程，页面要能被
  * 指向另一台机器上的 Host。单一 core 之后没有第二个地址可填——桌面壳里 core
- * 的端口由壳给（`api/runtime-url.ts`），服务器壳里它就是这张页面的来源。所以
+ * 的端口由壳给（`api/local-runtime.ts` 的 `localRuntime`），服务器壳里它就是这张页面的来源。所以
  * 这一问退回它本来的样子：问一次 `hello`，把答案原样说出来。
  */
 

@@ -8,8 +8,11 @@ import {
   isNativeShell,
 } from "../host/native-session";
 import { isNativeApp, nativeBridge } from "../mobile/native-bridge";
-import { RUNTIME_URL } from "./request";
 import { localSource } from "./source";
+import {
+  type SessionTokens,
+  createSessionTokens,
+} from "../sources/session-tokens";
 
 /**
  * 身份面的客户端 —— core 的 `/api/identity/*`（typescript-core D9）。
@@ -134,11 +137,13 @@ export class IdentityTransportError extends Error {
 /** `core/identity/http.ts` 用同一个形状校验：32 字节 base64url。 */
 const SECRET = /^[A-Za-z0-9_-]{43}$/;
 
+/**
+ * 本机源的会话（桌面壳与原生 App 是 Bearer；服务器壳托管的页面只有 CSRF，
+ * 令牌在 Cookie 里）。远程源的凭据不在这里，在 `sources/credentials.ts`。
+ */
+const tokens: SessionTokens = createSessionTokens();
 let csrf = "";
-let access = "";
-let refresh = "";
 /** 访问密钥的到期时刻（毫秒）；不知道是 0。 */
-let accessExpiresAt = 0;
 let renewing: Promise<string> | null = null;
 const listeners = new Set<() => void>();
 
@@ -249,9 +254,7 @@ export function currentCsrf(): string {
 /** 测试与登出后重置：丢掉全部内存凭据。 */
 export function resetIdentityCredentials(): void {
   csrf = "";
-  access = "";
-  refresh = "";
-  accessExpiresAt = 0;
+  tokens.clear();
   renewing = null;
   shellFailure = null;
   clearShellRefresh();
@@ -285,18 +288,18 @@ function bearerTransport(): boolean {
 
 function remember(
   session: IdentitySession,
-  origin: string = RUNTIME_URL,
+  origin: string = localSource.httpBase,
 ): IdentitySession {
   if (session.native) {
-    access = session.native.accessToken;
-    refresh = session.native.refreshToken;
-    accessExpiresAt = session.expiresAtUnixMs;
+    tokens.access = session.native.accessToken;
+    tokens.refresh = session.native.refreshToken;
+    tokens.accessExpiresAt = session.expiresAtUnixMs;
     scheduleShellRefresh();
     if (isNativeApp())
       void nativeBridge().saveSession({
         origin,
-        accessToken: access,
-        refreshToken: refresh,
+        accessToken: tokens.access,
+        refreshToken: tokens.refresh,
       });
   }
   rememberCsrf(session.csrfToken ?? "");
@@ -318,7 +321,7 @@ interface CallOptions {
   readonly anonymous?: boolean;
   /** 答案是文本而不是 JSON（只用于成功时）。 */
   readonly text?: boolean;
-  /** 原生 App 的连接页在记下来源之前就要配对，那时 `RUNTIME_URL` 还不是它。 */
+  /** 原生 App 的连接页在记下来源之前就要配对，那时本机源的地址还不是它。 */
   readonly base?: string;
 }
 
@@ -329,7 +332,7 @@ async function call<T>(
 ): Promise<T> {
   const method = options.method ?? "GET";
   const native = bearerTransport();
-  const bearer = options.refreshBearer ? refresh : access;
+  const bearer = options.refreshBearer ? tokens.refresh : tokens.access;
   const headers: Record<string, string> = { Accept: "application/json" };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
   if (native && !options.anonymous && bearer)
@@ -339,7 +342,7 @@ async function call<T>(
   let response: Response;
   try {
     response = await localSource.fetch(
-      `${options.base ?? RUNTIME_URL}${PREFIX}${action}`,
+      `${options.base ?? localSource.httpBase}${PREFIX}${action}`,
       {
         method,
         headers,
@@ -462,9 +465,9 @@ export async function pairIdentity(ticket: string): Promise<IdentitySession> {
  * 让用户手动贴票是把一个进程内的事实推给人做。没有会话返回 `null`。
  */
 export async function resumeIdentity(): Promise<IdentitySession | null> {
-  if (isNativeShell() && !access)
+  if (isNativeShell() && !tokens.access)
     return pairIdentity(await fetchNativeTicket());
-  if (isNativeApp() && !access && !(await restoreNativeCredentials()))
+  if (isNativeApp() && !tokens.access && !(await restoreNativeCredentials()))
     return null;
   try {
     return await call("session", identitySessionSchema);
@@ -538,9 +541,9 @@ export async function logoutIdentity(): Promise<void> {
  */
 export async function restoreNativeCredentials(): Promise<boolean> {
   const stored = await nativeBridge().loadSession();
-  if (stored === null || stored.origin !== RUNTIME_URL) return false;
-  access = stored.accessToken;
-  refresh = stored.refreshToken;
+  if (stored === null || stored.origin !== localSource.httpBase) return false;
+  tokens.access = stored.accessToken;
+  tokens.refresh = stored.refreshToken;
   return true;
 }
 
@@ -565,7 +568,7 @@ export async function pairWithGateway(
 
 /** 当前的访问密钥（原生 App 的 `fetch` 包装用）；没有是空串。 */
 export function currentAccessToken(): string {
-  return access;
+  return tokens.access;
 }
 
 /* ------------------------------ 桌面壳的 Bearer ------------------------------ */
@@ -614,19 +617,19 @@ function resumeShell(): Promise<IdentitySession | null> {
  */
 export async function shellBearer(): Promise<string> {
   if (!isNativeShell()) return "";
-  if (!access) {
+  if (!tokens.access) {
     await (shellRenewal ??= resumeShell()
-      .then(() => access)
+      .then(() => tokens.access)
       .finally(() => {
         shellRenewal = null;
       }));
   } else if (
-    accessExpiresAt > 0 &&
-    accessExpiresAt - Date.now() < SHELL_REFRESH_LEAD_MS / 4
+    tokens.accessExpiresAt > 0 &&
+    tokens.accessExpiresAt - Date.now() < SHELL_REFRESH_LEAD_MS / 4
   ) {
     await rotateShellBearer();
   }
-  return access;
+  return tokens.access;
 }
 
 /**
@@ -636,9 +639,9 @@ export async function shellBearer(): Promise<string> {
  */
 export async function renewShellBearer(rejected: string): Promise<string> {
   if (!isNativeShell()) return "";
-  if (access && access !== rejected) return access;
+  if (tokens.access && tokens.access !== rejected) return tokens.access;
   shellRenewal ??= resumeShell()
-    .then(() => access)
+    .then(() => tokens.access)
     .finally(() => {
       shellRenewal = null;
     });
@@ -662,9 +665,9 @@ function clearShellRefresh(): void {
 
 function scheduleShellRefresh(): void {
   clearShellRefresh();
-  if (!isNativeShell() || accessExpiresAt <= 0) return;
+  if (!isNativeShell() || tokens.accessExpiresAt <= 0) return;
   const delay = Math.max(
-    accessExpiresAt - Date.now() - SHELL_REFRESH_LEAD_MS,
+    tokens.accessExpiresAt - Date.now() - SHELL_REFRESH_LEAD_MS,
     5_000,
   );
   shellRefreshTimer = setTimeout(() => {
@@ -679,8 +682,8 @@ function scheduleShellRefresh(): void {
  */
 function rotateShellBearer(): Promise<string> {
   shellRenewal ??= refreshIdentity()
-    .then(() => access)
-    .catch(() => resumeShell().then(() => access))
+    .then(() => tokens.access)
+    .catch(() => resumeShell().then(() => tokens.access))
     .finally(() => {
       shellRenewal = null;
     });
