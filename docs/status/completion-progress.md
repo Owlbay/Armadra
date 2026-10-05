@@ -1880,3 +1880,40 @@
 - 入参形状不对时，旧路径的原话由域的那句换成了 `Input validation failed` + `details.issues`（码与状态不变，对偶测试单列这一条）。
 - `system.*` 由身份域登记：没装身份域（未统一的库）时答 501。`scope` 是 `identity:read`，服务器壳上的共享成员没有这项全局授权，调不了——与规格一致，E2 用到时再定。
 - 全局补丁只在桌面壳拆了；原生 App 的 `installNativeTransport` 仍改写全局，留给 A1-1。
+
+## A1-3 客户端源表与远程服务（`core/sources/`，迁移 0039，契约 §33）
+
+设计：[平台实现规格 core 包](../design/platform/core-packages.md) §1；契约 §33。
+
+做了什么：
+
+- **迁移** `0039_client_sources.sql`：`client_sources`、`remote_services`，按规格原样；`migrations.lock` 已登记。两张表不存任何令牌。
+- **契约**（`packages/shared/src/contract/sources.ts`）：`sources.*` 十二条（§33.1 源表 6 条、§33.2 远程服务 6 条），读 `settings:read`、写 `settings:write`，旧路径 `/api/sources/*` 挂回同一份实现；形状与协议包 `core-api/sources.ts` 同形。错误码注册表加 `source_unreachable`（502）、`source_unauthorized`（401）、`source_offline`（503）、`fingerprint_mismatch`（400）、`credentials_invalid`（401）、`account_locked`（429）、`cloud_account_unlinked`（401），与协议包同拼法同状态；页面 `api/request.ts` 与 `i18n/errors.ts` 有中英文案。`contract.test.ts` 的节号规则放宽到 §31 起（§31–§33 预分配给平台设计）。
+- **core**（`core/sources/`）：`store.ts`（SQL）、`secrets.ts`（`armadra-source-<id>` 的 `byOrigin`、`armadra-remote-<id>`，经 core 的 SecretStore 后端）、`http-client.ts`（出站 JSON，超时；按信任锚指纹钉扎：先在对端链里或 `/ca.crt` 找指纹相符的那张，再以它为唯一 CA 照常验链与主机名）、`remote-client.ts`（个人中转 `/.well-known/armadra-platform`、`auth.login / refresh / logout`、`me.sources`、`sources.assertion`）、`source-client.ts`（对别的 core：hello、配对码换票、`identity/pair`、`session/refresh`、经中继的 `cloud/login`，以原生 App 身份 `Origin: https://localhost` 走 Bearer 模式）、`service.ts`（业务、D27 选路、同一把刷新令牌串行旋转）、`index.ts`（装配：只 upsert 本机行；登记 procedure 与路由表回落 handler）。`DOMAINS` 里排在身份域之后。
+- 路由表加 `/api/sources/*` 十一条路径，`route-scopes.ts` 加 `/api/sources` 一行；`net/outbound.ts` 登记 `cloudApi`、`sourceGateway`。
+- RPC 门面（`http/rpc.ts`）：域经 `fail()` 有意答的 5xx（`source_unreachable`、`source_offline` 这类「对端不在」）不再记 `rpc call failed`、不报崩溃上报；没接住的异常照旧。
+- 契约 §33 由占位补成正式内容（节号不变：§33.1 / §33.2 生成表、§33.3 形状、§33.4 凭据、§33.5 行为）；`architecture.md` 的域表与迁移表各加一行。
+
+实测（macOS arm64，2026-10-06，基于 main dc0fec36）：
+
+- `pnpm check` 通过（lint 0 error、285 warn，本包文件 0 warn）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 4718 过 / 58 跳过，live 4 过，脚本 68 过；`pnpm --filter @armadra/shared test` 340 过；`pnpm --filter @armadra/server test` 87 过 / 4 跳过，`pnpm --filter @armadra/server build` 通过；web `error-codes.test.ts` 与 i18n 用例通过。
+- 新用例：`store.test.ts` 5（迁移约束、CRUD、`local` 不可删、顺序）、`service.test.ts` 19（对假个人中转与假 core：配对链接两种写法、配对码、指纹不符、`remoteAdd` 各错误码、SaaS 501、挂载全流程、刷新 401 回退断言、远程会话失效、并发换票不自撤、扫描全部答案与日志无 `refreshToken` / `password` / 令牌值）、`session-broker.test.ts` 5（直连通 / hostId 不符 / 1.5 秒超时 / 都不通 / 指定 via）、`http-client.test.ts` 8（真 TLS：链里或 `/ca.crt` 取锚、错指纹、公开 CA 配别人的叶证书、系统信任）、`routes.test.ts` 9（procedure 与旧路径同答、凭据只在数据目录 SecretStore、成员 403 且零外呼、远程不可达时本机与设置照常、启动零外呼）、`rpc.test.ts` 补 1。
+- **对真个人中转联调**：armadra-cloud main（be36b78）`pnpm relay:personal`（https://127.0.0.1:8102，自签，首次自动建账号 `dev`），`ARMADRA_PERSONAL_RELAY=1 … vitest run src/core/sources/personal-relay.devstack.integration.test.ts` 5 过：错指纹 400 `fingerprint_mismatch` 且不留行、错口令 401 `credentials_invalid`、`remoteAdd` 成功（响应无口令与令牌，刷新令牌只在数据目录 `secrets/armadra-remote-<id>.token`）、`remoteSession` / `remoteSources` 旋转刷新令牌、`remoteRemove` 登出并清凭据。中继日志除启动两行外无请求记录。联调后已停掉中继。
+
+接口（供 A1-4 / A2-3 / A3-2）：
+
+- 页面：`createClient(source).sources.<动词>(…)` 或旧路径 `/api/sources/*`（契约 §33）。`sources.session` 答 `{ accessToken, accessExpiresAtMs, httpBase, wsBase, via, relayToken?, relayTokenExpiresAtMs? }`，页面据此组 `Source`；经中继时 HTTP 带 `Armadra-Relay-Token`、WS 用子协议 `armadra-relay.<relayToken>`。错误码按 `code` 取文案（`error.sourceUnreachable` 等已在 i18n）。
+- core：`sourcesDomain()` 取 `SourcesService`（`list()`、`session(id, via?)` 等）；`SourcesStore.remoteByIssuer(issuer)` 认远程服务行。A2-3 要做的：`RemoteService.registered` 现在恒 `false`，登记表落地后在 `service.ts::remoteJson` 接上；`remoteRemove` 在删行前调 `identity.cloud.revoke`；core 一侧的 `POST /api/identity/cloud/login` 收 `{ assertion }`、答 `{ session: { …, native: { accessToken, refreshToken } }, principal: { displayName } }`——`source-client.ts::cloudLogin` 按这个形状读。
+- A3-2：经中继的请求以 `Origin: https://localhost` + `Authorization: Bearer` + `Armadra-Relay-Token` 进隧道，准入按 Bearer 模式（§32）。
+- 出站：`networkTransport`（`core/sources/http-client.ts`）可复用于别处的指纹钉扎请求；`normalizeFingerprint` / `normalizeOrigin` 是规范拼法。
+
+没做 / 偏离规格：
+
+- 协议包尚未发布，`contract/sources.ts` 按协议包 `core-api/sources.ts` 同形手写；发布后改为 import 同一组 schema（A0-4）。
+- 远程服务客户端没用上游 `OpenAPILink`：core 里 `@orpc/*` 只许在 `http/rpc.ts` 一处，`remote-client.ts` 用自己的钉扎 HTTP 发普通 JSON（线上编码相同）。
+- 规格的 `session-broker.ts` 没单独成文件：选路在 `service.ts::session`，对 core 的调用在 `source-client.ts`；用例文件仍叫 `session-broker.test.ts`。另多 `http-client.ts`、`secrets.ts` 两个文件。
+- `since` 写 `1.3`，协议 minor 不升：新增的是 procedure，页面按 `system.hello` 的 `procedures` 判断有没有。
+- `remoteAdd` 存的 `issuer` 是用户填的地址的规范拼法（不改写成中继自报的 `issuer`）；`accountHint` 是账号名。`local` 行 `hasCredentials` 恒 `true`。
+- `mount` 与经中继的 `session` 只对假 core 验过：真 core 的 `cloud/login`（A2-3）与隧道（A3-2）还没合入，真联调留到那时。
+- SaaS：`remoteAdd { kind: "saas" }`、`remoteDevicePoll`，以及对 `saas` 行的 `remoteSources` / `mount` / `remoteSession` 一律 501 `not_implemented`。
