@@ -8,6 +8,7 @@ import { useT } from "../../../../app/preferences-store";
 import { securityFailure } from "../../../../session/sign-in-errors";
 import { SecuritySection, downloadText, useDateTime } from "./parts";
 import { Badge } from "@/ui/badge";
+import { Card } from "@/ui/card";
 import { Button } from "@/ui/button";
 import { Empty, EmptyHeader, EmptyTitle } from "@/ui/empty";
 import { IconButton } from "@/ui/icon-button";
@@ -310,7 +311,7 @@ export function AuditLog({
           </EmptyHeader>
         </Empty>
       ) : (
-        <div className="rounded-lg border border-border/70 bg-card px-2">
+        <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 px-2">
           <Table className="text-[13px]">
             <TableHeader>
               <TableRow>
@@ -408,7 +409,7 @@ export function AuditLog({
               })}
             </TableBody>
           </Table>
-        </div>
+        </Card>
       )}
       {next > 0 && entries !== null && loading !== "page" && (
         <div>

@@ -6,6 +6,7 @@ import { useT } from "../../../../app/preferences-store";
 import { QrImage } from "../gateway/PairingCard";
 import { SecuritySection, downloadText } from "./parts";
 import { Alert, AlertAction, AlertTitle } from "@/ui/alert";
+import { Card } from "@/ui/card";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { Field, FieldError, FieldLabel } from "@/ui/field";
@@ -96,7 +97,7 @@ export function MfaSetup({
       )}
 
       {stage.kind === "idle" && enabled && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-card px-3 py-2 text-[13px]">
+        <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-[13px]">
           <span className="text-muted-foreground tabular-nums">
             {t("security.mfa.remaining", {
               count: status.recoveryCodesRemaining,
@@ -123,11 +124,11 @@ export function MfaSetup({
               {t("security.mfa.disable")}
             </Button>
           </div>
-        </div>
+        </Card>
       )}
 
       {stage.kind === "enrolling" && (
-        <div className="flex flex-col gap-4 rounded-lg border border-border/70 bg-card p-4 sm:flex-row">
+        <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 flex flex-col gap-4 p-4 sm:flex-row">
           <QrImage
             text={stage.enrollment.otpauthUri}
             label={t("security.mfa.qr")}
@@ -151,11 +152,11 @@ export function MfaSetup({
               onCancel={onCancel}
             />
           </div>
-        </div>
+        </Card>
       )}
 
       {stage.kind === "verify" && (
-        <div className="rounded-lg border border-border/70 bg-card p-4">
+        <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 p-4">
           <CodeForm
             label={t("auth.mfa.code")}
             submit={t(
@@ -169,11 +170,11 @@ export function MfaSetup({
             onSubmit={(code) => onVerify(stage.purpose, code)}
             onCancel={onCancel}
           />
-        </div>
+        </Card>
       )}
 
       {stage.kind === "codes" && (
-        <div className="flex flex-col gap-3 rounded-lg border border-border/70 bg-card p-4">
+        <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 flex flex-col gap-3 p-4">
           <h4 className="text-[13px] font-medium">
             {t("security.mfa.codesTitle")}
           </h4>
@@ -209,7 +210,7 @@ export function MfaSetup({
               {t("security.mfa.done")}
             </Button>
           </div>
-        </div>
+        </Card>
       )}
     </SecuritySection>
   );

@@ -11,6 +11,7 @@ import {
   ResponsiveDialogTitle,
 } from "../../../ResponsiveDialog";
 import { Badge } from "@/ui/badge";
+import { Card } from "@/ui/card";
 import { Button } from "@/ui/button";
 import { Input } from "@/ui/input";
 import { Spinner } from "@/ui/spinner";
@@ -62,7 +63,7 @@ export function OAuthBindings({
   return (
     <SecuritySection title={t("security.oauth")}>
       {bindings.length > 0 && (
-        <div className="rounded-lg border border-border/70 bg-card px-2">
+        <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 px-2">
           <Table className="text-[13px]">
             <TableHeader>
               <TableRow>
@@ -106,7 +107,7 @@ export function OAuthBindings({
               ))}
             </TableBody>
           </Table>
-        </div>
+        </Card>
       )}
       {open.length > 0 && (
         <div className="flex flex-wrap gap-2">
@@ -194,7 +195,7 @@ export function OAuthProviders({
 
   return (
     <SecuritySection title={t("security.providers")}>
-      <div className="rounded-lg border border-border/70 bg-card px-2">
+      <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 px-2">
         <Table className="text-[13px]">
           <TableHeader>
             <TableRow>
@@ -268,7 +269,7 @@ export function OAuthProviders({
             ))}
           </TableBody>
         </Table>
-      </div>
+      </Card>
       <ResponsiveDialog
         open={editing !== null}
         onOpenChange={(open) => {
