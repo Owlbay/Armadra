@@ -186,7 +186,7 @@ export const SERVICES = [
     ports: [],
     profile: ["platform", "personal"],
     purpose:
-      "模拟在 NAT 后、只能外连的 core：不发布端口，健康取自容器自带的 healthcheck",
+      "模拟在 NAT 后、只能外连的 core：不发布端口，健康由容器内自己的 /health 给出",
     check: () => containerHealthy("armadra-server-nat"),
   },
   {
@@ -317,12 +317,12 @@ export async function get(url, { timeoutMs = 5000 } = {}) {
 }
 
 /**
- * 平台协议的 well-known：200 时 `mode` 必须对得上；501 是 SaaS 路由预留阶段的回答，
+ * 平台协议的 well-known：200 时 `mode` 必须对得上；501（SaaS 预留）与 404（personal 的 R2 之前）是落地前的回答，
  * 视为通过；其余都算失败。
  */
 async function platformMode(origin, mode) {
   const { status, body } = await get(`${origin}/.well-known/armadra-platform`);
-  if (status === 501) return;
+  if (status === 501 || status === 404) return;
   expect(status === 200, `well-known status ${status}`);
   expect(JSON.parse(body).mode === mode, `mode ${JSON.parse(body).mode}`);
 }
@@ -340,24 +340,20 @@ async function first(origins, path) {
   throw last;
 }
 
-/** 没有发布端口的服务：看 compose 容器的 healthcheck 状态（没有 healthcheck 就看在不在跑）。 */
-async function containerHealthy(service) {
+/**
+ * 没有发布端口的服务：进容器里打它自己的回环 /health（宿主机够不到它，这正是「NAT 后」的
+ * 含义）。容器没在跑、或 /health 不答 200 都算失败。
+ */
+async function containerHealthy(service, port = 8443) {
   const { spawnSync } = await import("node:child_process");
   const docker = process.env.ARMADRA_DEV_STACK_DOCKER || "docker";
+  const script = `process.env.NODE_TLS_REJECT_UNAUTHORIZED="0";fetch("https://127.0.0.1:${port}/health").then((r)=>process.exit(r.ok?0:1),()=>process.exit(1))`;
   const result = spawnSync(
     docker,
-    [
-      "inspect",
-      "--format",
-      "{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{end}}",
-      `${PROJECT}-${service}-1`,
-    ],
-    { encoding: "utf8" },
+    ["exec", `${PROJECT}-${service}-1`, "node", "-e", script],
+    { encoding: "utf8", timeout: 10_000 },
   );
-  expect(result.status === 0, `container ${service} not found`);
-  const [running, health] = result.stdout.trim().split(" ");
-  expect(running === "true", `container ${service} not running`);
-  expect(!health || health === "healthy", `container ${service} ${health}`);
+  expect(result.status === 0, `container ${service} /health failed`);
 }
 
 async function discovery(issuer) {
