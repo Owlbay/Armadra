@@ -1776,8 +1776,8 @@
 
 实测（macOS arm64，2026-10-06）：
 
-- `pnpm check` 通过（含 lint：本机冷跑约 41 秒，整串 1 分 39 秒）；`pnpm repo:test` 22 + 9 条全过；`pnpm release:test` 171 过；`pnpm ci:workflows` 5 个工作流通过。
-- `pnpm --filter @armadra/web test` 3444 过；`pnpm libs:build && pnpm --filter @armadra/desktop test` 4615 过 / 53 跳过，live 4 过，脚本 68 过；server 87 过 / 4 跳过，shared 318，push-relay 9，mobile 9。
+- `pnpm check` 通过（含 lint：本机冷跑约 41 秒，整串 1 分 39 秒）；`pnpm repo:test` 23 条全过（repo-check 13、lint-config 10）；`pnpm release:test` 171 过；`pnpm ci:workflows` 5 个工作流通过。
+- `pnpm --filter @armadra/web test` 3480 过（合入 E0-B 后）；`pnpm libs:build && pnpm --filter @armadra/desktop test` 4615 过 / 53 跳过，live 4 过，脚本 68 过；server 87 过 / 4 跳过，shared 318，push-relay 9，mobile 9。
 - 带覆盖率：web 1 分 11 秒 → 1 分 21 秒；desktop 的 vitest 主套件约 1 分 38 秒。
 - CI（run 37362058662，对比 run 37344131164）：linux 10 m 37 s → 13 m 12 s（`pnpm check` 1 m 39 s → 2 m 35 s，带覆盖率的 `pnpm -r test` 7 m 54 s → 9 m 26 s），macOS 12 m 09 s → 13 m 33 s（check 3 m 01 s），Windows 16 m 12 s → 19 m 01 s（check 3 m 04 s），e2e 16 m 12 s → 15 m 54 s；墙钟约 18 → 19 分钟。`coverage-lcov` 产物 0.68 MB。
 
