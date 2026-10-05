@@ -16,6 +16,7 @@
     "armadra.sh",
     "assets",
     "docs",
+    "eslint.config.js",
     "migrations.lock",
     "package.json",
     "packages",

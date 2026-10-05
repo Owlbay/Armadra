@@ -61,8 +61,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # pnpm check = libs:build + prettier + typecheck + repo:check +
-      # ci:workflows + release:check。
+      # pnpm check = libs:build + prettier + eslint（只有 error 失败）+ typecheck +
+      # repo:check + ci:workflows + release:check + notices:check。
       # 三个平台都跑：换行与路径分隔符都是平台差异的常见出口。
       - run: pnpm check
 

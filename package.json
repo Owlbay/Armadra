@@ -2,13 +2,14 @@
   "name": "armadra",
   "version": "0.2.0",
   "private": true,
+  "type": "module",
   "packageManager": "pnpm@11.18.0",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "repo:check": "node tools/repo-check.mjs",
-    "repo:test": "node --test tools/repo-check.test.mjs",
+    "repo:test": "node --test tools/repo-check.test.mjs tools/lint-config.test.mjs",
     "ci:workflows": "node tools/ci/validate-workflows.mjs",
     "release:check": "node tools/release/version.mjs check",
     "notices": "node tools/notices.mjs",
@@ -17,18 +18,25 @@
     "release:test": "node --test tools/release/*.test.mjs tools/notices.test.mjs tools/ci/*.test.mjs tools/dev-stack/*.test.mjs tools/probes/server-perf.test.mjs tools/probes/windows-acceptance.test.mjs tools/probes/agent-e2e/*.test.mjs",
     "dev-stack": "node tools/dev-stack/dev-stack.mjs",
     "libs:build": "pnpm --filter @armadra/shared build",
-    "check": "pnpm libs:build && pnpm format:check && pnpm typecheck && pnpm repo:check && pnpm ci:workflows && pnpm release:check && pnpm notices:check",
+    "check": "pnpm libs:build && pnpm format:check && pnpm lint && pnpm typecheck && pnpm repo:check && pnpm ci:workflows && pnpm release:check && pnpm notices:check",
     "build": "pnpm -r --if-present build",
     "dev": "pnpm --filter @armadra/web dev",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "pnpm -r --if-present lint",
+    "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck"
   },
   "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "eslint": "9.39.5",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-jsx-a11y": "6.10.2",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.13.0",
     "prettier": "3.6.2",
     "typescript": "5.9.2",
+    "typescript-eslint": "8.71.0",
     "vitest": "4.1.11"
   }
 }
