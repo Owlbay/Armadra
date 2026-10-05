@@ -12,7 +12,9 @@ import { useAccess } from "./use-access";
 /** Both usage surfaces read the same cache; only an explicit refresh hits providers. */
 export function useUsage(wanted = true) {
   // 用量与成本是 owner 自己的账户：服务器壳上的成员一律 403，别去问。
-  const enabled = wanted && !useAccess().member;
+  // 先无条件取，再参与短路：hook 不能放在 `&&` 右侧被条件调用。
+  const { member } = useAccess();
+  const enabled = wanted && !member;
   const queryClient = useQueryClient();
   const refreshing = useIsMutating({ mutationKey: ["usage-refresh"] }) > 0;
   const refreshStates = useMutationState({
