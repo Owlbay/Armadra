@@ -1,14 +1,30 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseYaml } from "../ci/workflow-yaml.mjs";
-import { COMPOSE_FILE, HERE, dockerStatus, parseArgs } from "./dev-stack.mjs";
+import {
+  CLOUD_SRC_FILE,
+  COMPOSE_FILE,
+  HERE,
+  dockerStatus,
+  parseArgs,
+  resolveCloudSrc,
+} from "./dev-stack.mjs";
 import {
   SERVICES,
+  SCOPED_PROFILES,
   SUPPORT_SERVICES,
   get,
+  profilesOf,
   selectServices,
 } from "./services.mjs";
 
@@ -79,10 +95,142 @@ test("端口只绑回环、互不冲突，且与 services.mjs 的端口表一致
       listed.ports,
       name,
     );
-    assert.equal(service.profiles?.[0], listed.profile, `${name} profile`);
+    assert.deepEqual(
+      service.profiles ?? [],
+      profilesOf(listed),
+      `${name} profile`,
+    );
   }
   for (const service of SERVICES)
     assert.ok(compose.services[service.name], `${service.name} is in compose`);
+});
+
+test("platform / personal 自成一体，只选各自的服务", () => {
+  const names = (profiles) =>
+    selectServices({ profiles })
+      .map((s) => s.name)
+      .sort();
+  assert.deepEqual(names(["personal"]), [
+    "armadra-server-nat",
+    "relay-personal",
+  ]);
+  assert.deepEqual(names(["platform"]), [
+    "armadra-server-nat",
+    "cloud",
+    "platform-postgres",
+    "platform-redis",
+    "relay",
+  ]);
+  assert.ok(!names(["platform", "personal"]).includes("release"));
+  // 默认那组不含平台服务；平台服务要点名才能单选。
+  const defaults = selectServices().map((s) => s.name);
+  for (const name of ["cloud", "relay", "relay-personal", "armadra-server-nat"])
+    assert.ok(!defaults.includes(name), name);
+  assert.deepEqual(SCOPED_PROFILES, ["platform", "personal"]);
+  // 没有发布端口的服务只能走容器 healthcheck 这条检查。
+  assert.deepEqual(
+    SERVICES.find((s) => s.name === "armadra-server-nat").ports,
+    [],
+  );
+});
+
+test("平台服务的 compose 依赖与服务表一致，密钥只来自 dev.env", () => {
+  const text = readFileSync(COMPOSE_FILE, "utf8");
+  for (const variable of ["PLATFORM_DB_PASSWORD", "ARMADRA_CLOUD_MASTER_KEY"])
+    assert.match(text, new RegExp(`\\$\\{${variable}:\\?`), variable);
+  assert.equal(
+    compose.secrets.personal_relay_password.environment,
+    "PERSONAL_RELAY_PASSWORD",
+  );
+  for (const service of SERVICES) {
+    for (const dependency of service.dependsOn ?? []) {
+      assert.ok(
+        compose.services[dependency],
+        `${service.name} -> ${dependency}`,
+      );
+    }
+  }
+  // cloud / relay 连的是平台自己的 postgres / redis，不是别处的。
+  const cloudEnv = compose.services.cloud.environment;
+  assert.match(
+    cloudEnv.ARMADRA_CLOUD_DATABASE_URL,
+    /@platform-postgres:5432\//,
+  );
+  assert.equal(cloudEnv.ARMADRA_CLOUD_REDIS_URL, "redis://platform-redis:6379");
+  assert.equal(
+    compose.services.relay.environment.RELAY_REDIS_URL,
+    "redis://platform-redis:6379",
+  );
+  assert.deepEqual(compose.services["armadra-server-nat"].ports ?? [], []);
+});
+
+test("ARMADRA_DEV_STACK_CLOUD_SRC：本地构建叠加文件与目录解析", () => {
+  const overlay = parseYaml(readFileSync(CLOUD_SRC_FILE, "utf8"));
+  for (const name of ["cloud", "relay", "relay-personal"]) {
+    assert.ok(compose.services[name], `${name} is in compose`);
+    assert.match(
+      overlay.services[name].build.context,
+      /ARMADRA_DEV_STACK_CLOUD_SRC/,
+    );
+    assert.match(
+      overlay.services[name].build.dockerfile,
+      /^apps\/(cloud|relay)\/Dockerfile$/,
+    );
+  }
+  const fake = mkdtempSync(join(tmpdir(), "cloud-src-"));
+  try {
+    mkdirSync(join(fake, "apps", "cloud"), { recursive: true });
+    writeFileSync(join(fake, "apps", "cloud", "Dockerfile"), "FROM scratch\n");
+    assert.equal(resolveCloudSrc({ ARMADRA_DEV_STACK_CLOUD_SRC: fake }), fake);
+    assert.throws(
+      () => resolveCloudSrc({ ARMADRA_DEV_STACK_CLOUD_SRC: join(fake, "no") }),
+      /不是 armadra-cloud 的克隆/,
+    );
+    // 变量没设时看仓库旁边的 armadra-cloud。
+    const parent = mkdtempSync(join(tmpdir(), "cloud-sibling-"));
+    try {
+      const repo = join(parent, "armadra");
+      mkdirSync(repo);
+      assert.equal(resolveCloudSrc({}, { repoRoot: repo }), null);
+      mkdirSync(join(parent, "armadra-cloud", "apps", "cloud"), {
+        recursive: true,
+      });
+      writeFileSync(
+        join(parent, "armadra-cloud", "apps", "cloud", "Dockerfile"),
+        "FROM scratch\n",
+      );
+      const notes = [];
+      assert.equal(
+        resolveCloudSrc({}, { repoRoot: repo, note: (l) => notes.push(l) }),
+        join(parent, "armadra-cloud"),
+      );
+      assert.equal(notes.length, 1);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(fake, { recursive: true, force: true });
+  }
+});
+
+test("根 package.json 的 platform:* 脚本指向 dev-stack 的对应 profile", () => {
+  const scripts = JSON.parse(
+    readFileSync(join(HERE, "../../package.json"), "utf8"),
+  ).scripts;
+  assert.match(scripts["platform:up"], /dev-stack\.mjs up --profile platform$/);
+  assert.match(
+    scripts["platform:down"],
+    /dev-stack\.mjs down --profile platform$/,
+  );
+  assert.match(
+    scripts["platform:health"],
+    /dev-stack\.mjs health --profile platform$/,
+  );
+  assert.match(
+    scripts["platform:personal"],
+    /dev-stack\.mjs up --profile personal$/,
+  );
+  assert.ok(scripts["platform:e2e"]);
 });
 
 test("密钥只从 .data/dev.env 来，compose 里没有写死的口令", () => {
@@ -165,6 +313,10 @@ test(
         "headscale",
         "--profile",
         "ntfy",
+        "--profile",
+        "platform",
+        "--profile",
+        "personal",
         "config",
         "--quiet",
       ],
@@ -175,6 +327,9 @@ test(
           KEYCLOAK_ADMIN_PASSWORD: "x",
           GLITCHTIP_DB_PASSWORD: "x",
           GLITCHTIP_SECRET_KEY: "x",
+          PLATFORM_DB_PASSWORD: "x",
+          PERSONAL_RELAY_PASSWORD: "x",
+          ARMADRA_CLOUD_MASTER_KEY: "x",
         },
       },
     );

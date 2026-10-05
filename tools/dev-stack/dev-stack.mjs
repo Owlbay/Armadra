@@ -4,8 +4,11 @@
  *
  *   up [服务…] [--profile 名] [--build] [--timeout 秒]
  *       生成 .data/dev.env（首次）、`docker compose up -d`，然后从宿主机逐个
- *       跑健康检查直到全过或超时。不给服务名就起全部非 profile 服务。
- *   down [--volumes]     停掉全部（含 profile 服务）；--volumes 连卷一起删。
+ *       跑健康检查直到全过或超时。不给服务名就起全部非 profile 服务；
+ *       `--profile platform|personal` 自成一体，只起这个 profile 的服务（见下文）。
+ *   down [服务…] [--profile 名] [--volumes]
+ *       不点名停掉全部（含 profile 服务，别的 worktree 的也会被停）；点名只停那几个；
+ *       `--profile platform|personal` 只停该 profile 的服务。--volumes 连卷一起删。
  *   logs [服务…] [-f]    透传 `docker compose logs`。
  *   ps                   透传 `docker compose ps`。
  *   health [服务…] [--profile 名] [--json]   只跑健康检查。
@@ -13,23 +16,64 @@
  * 没有 Docker（没装、没启动、没有 compose 插件）时说明原因并退出 0：dev-stack
  * 是可选的，依赖它的用例应当 skipped，而不是因为这台机器没装 Docker 就失败。
  *
+ * platform / personal profile：`pnpm platform:up` / `platform:personal` 等，见
+ * docs/guides/development.md「本地平台环境」。
+ *
  * 密钥：Keycloak 管理员口令、GlitchTip 的 SECRET_KEY 与数据库口令、Gitea 管理员
  * 口令在首次 `up` 时随机生成到 `.data/dev.env`（已 gitignore），只在本机。
  */
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SERVICES, checkService, selectServices } from "./services.mjs";
+import {
+  SCOPED_PROFILES,
+  SERVICES,
+  checkService,
+  profilesOf,
+  selectServices,
+} from "./services.mjs";
 
 export const HERE = dirname(fileURLToPath(import.meta.url));
 export const COMPOSE_FILE = join(HERE, "docker-compose.yml");
+export const CLOUD_SRC_FILE = join(HERE, "docker-compose.cloud-src.yml");
 export const DATA_DIR = join(HERE, ".data");
 export const ENV_FILE = join(DATA_DIR, "dev.env");
-const ALL_PROFILES = [
-  ...new Set(SERVICES.filter((s) => s.profile).map((s) => s.profile)),
-];
+const ALL_PROFILES = [...new Set(SERVICES.flatMap(profilesOf))];
+
+/**
+ * 云仓本地克隆的位置：`ARMADRA_DEV_STACK_CLOUD_SRC`，没设就看本仓库旁边有没有
+ * `../armadra-cloud`（GHCR 镜像发布前这是缺省）。返回绝对路径或 null；`note` 收一行说明。
+ */
+export function resolveCloudSrc(
+  env = process.env,
+  { repoRoot = join(HERE, "..", ".."), note = () => {} } = {},
+) {
+  const explicit = env.ARMADRA_DEV_STACK_CLOUD_SRC;
+  if (explicit) {
+    const dir = resolve(explicit);
+    if (!existsSync(join(dir, "apps", "cloud", "Dockerfile")))
+      throw new Error(
+        `ARMADRA_DEV_STACK_CLOUD_SRC=${explicit} 不是 armadra-cloud 的克隆（缺 apps/cloud/Dockerfile）`,
+      );
+    return dir;
+  }
+  const sibling = resolve(repoRoot, "..", "armadra-cloud");
+  if (existsSync(join(sibling, "apps", "cloud", "Dockerfile"))) {
+    note(
+      `云仓镜像从本地克隆构建：${sibling}（设 ARMADRA_DEV_STACK_CLOUD_SRC 可改）`,
+    );
+    return sibling;
+  }
+  return null;
+}
 
 /** The docker binary; overridable so tests can simulate a machine without it. */
 function dockerBin(env = process.env) {
@@ -62,6 +106,14 @@ export function dockerStatus(env = process.env) {
   return { ok: true, server: info.stdout.trim() };
 }
 
+/** platform / personal profile 用的开发密钥（名字，字节数）；PLATFORM_DB_PASSWORD 等只在本机。 */
+const PLATFORM_SECRETS = [
+  ["PLATFORM_DB_PASSWORD", 16],
+  ["PERSONAL_RELAY_PASSWORD", 16],
+  ["PLATFORM_SEED_PASSWORD", 16],
+  ["ARMADRA_CLOUD_MASTER_KEY", 32],
+];
+
 /** Read `.data/dev.env`, creating it with fresh random values the first time. */
 export function ensureDevEnv() {
   mkdirSync(join(DATA_DIR, "release"), { recursive: true });
@@ -78,6 +130,12 @@ export function ensureDevEnv() {
     ];
     writeFileSync(ENV_FILE, lines.join("\n"), { mode: 0o600 });
   }
+  // 后来加的密钥补进已有的文件：旧的 .data/dev.env 不会被重写。
+  const present = readDevEnv();
+  const added = PLATFORM_SECRETS.filter(([name]) => !(name in present)).map(
+    ([name, bytes]) => `${name}=${randomBytes(bytes).toString("hex")}`,
+  );
+  if (added.length > 0) appendFileSync(ENV_FILE, `${added.join("\n")}\n`);
   return readDevEnv();
 }
 
@@ -90,21 +148,43 @@ export function readDevEnv() {
   return values;
 }
 
-function composeArgs(profiles) {
+function composeArgs(profiles, cloudSrc = null) {
   const args = ["compose", "--project-directory", HERE, "-f", COMPOSE_FILE];
+  if (cloudSrc) args.push("-f", CLOUD_SRC_FILE);
   if (existsSync(ENV_FILE)) args.push("--env-file", ENV_FILE);
   for (const profile of profiles) args.push("--profile", profile);
   return args;
 }
 
 function compose(args, { profiles = [], stdio = "inherit", env } = {}) {
-  const result = spawnSync(dockerBin(), [...composeArgs(profiles), ...args], {
-    stdio,
-    encoding: "utf8",
-    env: { ...process.env, ...env },
+  // 本地构建只在 up / build 时有意义，但 down / rm 也得用同一组文件才认得服务定义。
+  const cloudSrc = resolveCloudSrc(process.env, {
+    note: cloudSrcNoteOnce,
   });
+  const result = spawnSync(
+    dockerBin(),
+    [...composeArgs(profiles, cloudSrc), ...args],
+    {
+      stdio,
+      encoding: "utf8",
+      // 开发密钥同时放进环境：compose 的 secrets.environment 只认进程环境。
+      env: {
+        ...(existsSync(ENV_FILE) ? readDevEnv() : {}),
+        ...process.env,
+        ...(cloudSrc ? { ARMADRA_DEV_STACK_CLOUD_SRC: cloudSrc } : {}),
+        ...env,
+      },
+    },
+  );
   if (result.error) throw result.error;
   return result;
+}
+
+let cloudSrcNoted = false;
+function cloudSrcNoteOnce(line) {
+  if (cloudSrcNoted) return;
+  cloudSrcNoted = true;
+  console.log(line);
 }
 
 /** Poll the host-side checks until every one passes or the deadline hits. */
@@ -136,12 +216,28 @@ export async function waitHealthy(
 function printResults(results) {
   for (const result of results) {
     const service = SERVICES.find((s) => s.name === result.service);
-    const ports = service.ports.join("/");
+    const ports = service.ports.length > 0 ? service.ports.join("/") : "-";
     const mark = result.ok ? "ok  " : "FAIL";
     console.log(
       `${mark} ${result.service.padEnd(15)} 127.0.0.1:${ports.padEnd(12)} ${result.ok ? `${result.ms}ms` : result.error}`,
     );
   }
+}
+
+/**
+ * cloud 起来后跑一次迁移（命令幂等）。签名密钥与 seed 账号等云仓的 `keys generate` /
+ * `seed` 命令落地后（C2-1）再接进来。
+ */
+function migrateCloud() {
+  const result = compose(
+    ["exec", "-T", "cloud", "node", "/app/out/main.js", "migrate"],
+    {
+      profiles: ["platform"],
+    },
+  );
+  if (result.status !== 0)
+    console.warn("cloud 迁移没有成功；`pnpm dev-stack logs cloud` 查看原因。");
+  return result.status ?? 1;
 }
 
 /** Create the Gitea admin the forge tests log in as; idempotent. */
@@ -227,13 +323,18 @@ export async function main(argv) {
   if (command === "down") {
     // 点了名就只停这几个：dev-stack 在各 worktree 之间共用一个 compose 项目，
     // 不点名的 down 会把别人正在用的服务一起停掉。
-    if (options.names.length > 0) {
+    // `--profile platform|personal` 等于点名该 profile 的全部服务（platform:down 用它）。
+    const scoped = options.profiles.some((p) => SCOPED_PROFILES.includes(p));
+    const names = scoped
+      ? selectServices({ profiles: options.profiles }).map((s) => s.name)
+      : options.names;
+    if (names.length > 0) {
       const args = [
         "rm",
         "-s",
         "-f",
         ...(options.volumes ? ["-v"] : []),
-        ...options.names,
+        ...names,
       ];
       return compose(args, { profiles: ALL_PROFILES }).status ?? 1;
     }
@@ -260,17 +361,20 @@ export async function main(argv) {
   // up
   const env = readDevEnv();
   const profiles = [
-    ...new Set([
-      ...options.profiles,
-      ...services.filter((s) => s.profile).map((s) => s.profile),
-    ]),
+    ...new Set([...options.profiles, ...services.flatMap(profilesOf)]),
   ];
+  const scoped = options.profiles.some((p) => SCOPED_PROFILES.includes(p));
   // 不带 --remove-orphans：别的 worktree 起的、不在这次 profile 里的服务不算孤儿。
   const upArgs = ["up", "-d"];
   if (options.build) upArgs.push("--build");
-  upArgs.push(...options.names);
+  // platform / personal 自成一体：点名起它们的服务，免得 compose 把无 profile 的默认那组也带起来。
+  upArgs.push(...(scoped ? services.map((s) => s.name) : options.names));
   const up = compose(upArgs, { profiles });
   if (up.status !== 0) return up.status ?? 1;
+  if (services.some((s) => s.name === "cloud")) {
+    const migrated = migrateCloud();
+    if (migrated !== 0) return migrated;
+  }
   console.log(`等待健康检查（最多 ${options.timeout}s）…`);
   const results = await waitHealthy(services, {
     timeoutMs: options.timeout * 1000,
