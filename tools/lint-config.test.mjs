@@ -207,6 +207,37 @@ test("页面业务代码：合规写法与豁免位置不报", async () => {
   assert.deepEqual(hits(palette, "no-restricted-syntax"), []);
 });
 
+test("dialog / sheet 白名单与 no-raw-dialog-sheet 一致；样例数据放开字面色值", async () => {
+  const sheet = `import { Sheet } from "@/ui/sheet";\nexport { Sheet };\n`;
+  const dialog = `import { Dialog } from "@/ui/dialog";\nexport { Dialog };\n`;
+  const drawer = "apps/web/src/panels/ExplorerDrawer.tsx";
+  assert.deepEqual(hits(await lint(drawer, sheet), "no-restricted-syntax"), []);
+  assert.equal(
+    hits(await lint(drawer, dialog), "no-restricted-syntax").length,
+    1,
+  );
+  const responsive = "apps/web/src/panels/ResponsiveDialog.tsx";
+  for (const code of [sheet, dialog]) {
+    assert.deepEqual(
+      hits(await lint(responsive, code), "no-restricted-syntax"),
+      [],
+    );
+  }
+  // 抽屉名单里的文件其余禁止事项照报。
+  assert.equal(
+    hits(
+      await lint(drawer, `export const P = () => <select />;\n`),
+      "no-restricted-syntax",
+    ).length,
+    1,
+  );
+  const fixture = await lint(
+    "apps/web/src/canvas/whiteboard/mermaid/fixtures.ts",
+    `export const RED = "#ff0000";\n`,
+  );
+  assert.deepEqual(hits(fixture, "no-restricted-syntax"), []);
+});
+
 test("hooks：条件调用是 error，依赖缺失是 warn", async () => {
   const messages = await lint(
     "apps/web/src/app/use-probe.ts",

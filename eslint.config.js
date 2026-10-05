@@ -71,86 +71,142 @@ const SHELL_CORE = ["apps/desktop/src/shell-core/**/*.ts"];
 
 /**
  * §4.2「禁止事项」里能用语法选择器表达的部分（§4.3 的 no-restricted-syntax 落点）。
- * 第 1 步全部 warn；豁免（如画布行内编辑的 textarea）用带理由的 eslint-disable 注释。
+ * 第 1 步全部 warn。名单与 apps/web/src 里的扫描守卫保持一致：
+ * `panels/no-raw-dialog-sheet.test.ts`（dialog / sheet 白名单）、
+ * `styles/no-literal-color.test.ts`（颜色数据位置）、`panels/no-raw-form-element.test.ts`。
+ * 守卫里用 `ui-exempt:` 注释放行的个别位置，在这里仍报 warn（计入基线）。
  */
-const WEB_FORBIDDEN_SYNTAX = [
-  {
+const FORBIDDEN = {
+  button: {
     selector: "JSXOpeningElement[name.name='button']",
     message: "用 ui/button 的 Button 或 IconButton，不要手写 <button>。",
   },
-  {
+  input: {
     selector:
       "JSXOpeningElement[name.name='input']:not(:has(JSXAttribute[name.name='type'][value.value=/^(file|hidden)$/]))",
     message:
       "用 ui/input、ui/checkbox 等原语，不要手写 <input>（type=file / hidden 除外）。",
   },
-  {
+  select: {
     selector: "JSXOpeningElement[name.name='select']",
     message: "用 ui/select，不要手写 <select>。",
   },
-  {
+  textarea: {
     selector: "JSXOpeningElement[name.name='textarea']",
     message: "用 ui/textarea，不要手写 <textarea>。",
   },
-  {
+  dialog: {
     selector: "JSXOpeningElement[name.name='dialog']",
     message: "用 ResponsiveDialog，不要手写 <dialog>。",
   },
-  {
+  roleDialog: {
     selector: "JSXAttribute[name.name='role'][value.value='dialog']",
     message: '用 ResponsiveDialog，不要手写 role="dialog"。',
   },
-  {
+  dialogImport: {
     selector:
-      "ImportDeclaration[source.value=/(^|\\/)ui\\/(dialog|alert-dialog|sheet)$/]",
+      "ImportDeclaration[source.value=/(^|\\/)ui\\/(dialog|alert-dialog)$/]",
     message:
-      "对话框与底部面板经 panels/ResponsiveDialog，不要直接 import ui/dialog、ui/alert-dialog、ui/sheet。",
+      "对话框经 panels/ResponsiveDialog，不要直接 import ui/dialog、ui/alert-dialog。",
   },
-  {
+  sheetImport: {
+    selector: "ImportDeclaration[source.value=/(^|\\/)ui\\/sheet$/]",
+    message:
+      "底部面板经 panels/ResponsiveDialog；右侧抽屉先登记进 no-raw-dialog-sheet 的名单，再 import ui/sheet。",
+  },
+  loader: {
     selector:
       "ImportDeclaration[source.value='lucide-react'] ImportSpecifier[imported.name=/^Loader2(Icon)?$/]",
     message: "加载态用 ui/spinner 的 Spinner，不要用 Loader2。",
   },
-  {
+  iconButton: {
     selector:
       "JSXOpeningElement[name.name='Button']:has(JSXAttribute[name.name='size'][value.value=/^icon/]):not(:has(JSXAttribute[name.name='aria-label']))",
     message: "图标按钮要有 aria-label，或改用 IconButton（label 必填）。",
   },
-  {
+  dark: {
     selector: "Literal[value=/(^|\\s)dark:/]",
     message: "不写 dark: 分支，颜色从 tokens.css 取（设计系统 §1）。",
   },
-  {
+  darkTemplate: {
     selector: "TemplateElement[value.raw=/(^|\\s)dark:/]",
     message: "不写 dark: 分支，颜色从 tokens.css 取（设计系统 §1）。",
   },
-  {
+  zIndex: {
     selector: "Literal[value=/(^|[\\s:])z-\\[\\d/]",
     message: "z 轴用 tokens.css 的 --z-*，不要写 z-[N]。",
   },
-  {
+  literalColor: {
     selector:
       "Literal[value=/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/]",
     message:
       "功能代码不写字面色值；用户可选的颜色数据集中到 palette.ts / appearance.ts。",
   },
+};
+
+/** `no-restricted-syntax` 的选项：全部禁止事项，去掉 `omit` 里放行的几条。 */
+function forbidden(...omit) {
+  return [
+    "warn",
+    ...Object.entries(FORBIDDEN)
+      .filter(([name]) => !omit.includes(name))
+      .map(([, entry]) => entry),
+  ];
+}
+
+const WEB = "apps/web/src/";
+/** 业务代码：apps/web/src 下除 ui 原语、测试与展示页夹具外的源码。 */
+const WEB_BUSINESS = [`${WEB}**/*.{ts,tsx}`];
+const WEB_BUSINESS_EXCLUDED = [
+  `${WEB}ui/**`,
+  `${WEB}**/*.test.{ts,tsx}`,
+  `${WEB}app/test-setup.ts`,
+  `${WEB}showcase/fixtures/**`,
+];
+/** 字面色值的放行位置：用户可选的颜色数据、计算用途与样例数据（同 no-literal-color）。 */
+const LITERAL_COLOR_ALLOWED = [
+  `${WEB}canvas/whiteboard/palette.ts`,
+  `${WEB}terminal/surface/appearance.ts`,
+  `${WEB}lib/contrast.ts`,
+  `${WEB}showcase/**`,
+  `${WEB}canvas/test-support/**`,
+  `${WEB}**/*.fixture.{ts,tsx}`,
+  `${WEB}**/*fixtures.ts`,
+];
+/** 只有 ResponsiveDialog 可以 import ui/dialog 与 ui/alert-dialog。 */
+const DIALOG_ALLOWED = ["panels/ResponsiveDialog.tsx"];
+/** 可以 import ui/sheet 的抽屉（同 no-raw-dialog-sheet 的 SHEET_ALLOWED，只减不增）。 */
+const SHEET_ALLOWED = [
+  "coordinator/DispatchDrawer.tsx",
+  "panels/ExplorerDrawer.tsx",
+  "panels/ResourceDrawer.tsx",
+  "panels/ResponsiveDialog.tsx",
+  "panels/UsageDashboard.tsx",
+  "panels/WorkPanelSheet.tsx",
+  "panels/automation/AutomationDrawer.tsx",
+  "panels/github/GithubDrawer.tsx",
+  "panels/handoff/HandoffHistoryDrawer.tsx",
+  "panels/problems/ProblemsPanel.tsx",
+  "panels/references/ReferencesPanel.tsx",
+  "realtime/comments/CommentLayer.tsx",
+  "shell/LeftSidebar.tsx",
+  "showcase/sections/components.tsx",
+  "workflow/WorkflowPanel.tsx",
 ];
 
-/** 业务代码：apps/web/src 下除 ui 原语、测试与展示页夹具外的源码。 */
-const WEB_BUSINESS = ["apps/web/src/**/*.{ts,tsx}"];
-const WEB_BUSINESS_EXCLUDED = [
-  "apps/web/src/ui/**",
-  "apps/web/src/**/*.test.{ts,tsx}",
-  "apps/web/src/app/test-setup.ts",
-  "apps/web/src/showcase/fixtures/**",
-];
-/** 字面色值的白名单：用户可选的颜色数据与对比度计算（§4.1、§4.3）。 */
-const LITERAL_COLOR_ALLOWED = [
-  "apps/web/src/**/palette.ts",
-  "apps/web/src/**/appearance.ts",
-  "apps/web/src/lib/contrast.ts",
-  "apps/web/src/showcase/**",
-];
+/** 按文件放行 import 的覆盖配置；放在通用配置之后，同一规则以后者为准。 */
+const WEB_IMPORT_OVERRIDES = [
+  ...new Set([...DIALOG_ALLOWED, ...SHEET_ALLOWED]),
+].map((file) => {
+  const omit = [];
+  if (DIALOG_ALLOWED.includes(file)) omit.push("dialogImport");
+  if (SHEET_ALLOWED.includes(file)) omit.push("sheetImport");
+  if (file.startsWith("showcase/")) omit.push("literalColor");
+  return {
+    files: [`${WEB}${file}`],
+    rules: { "no-restricted-syntax": forbidden(...omit) },
+  };
+});
 
 // ---------------------------------------------------------------- config
 
@@ -230,22 +286,15 @@ export default tseslint.config(
   ]),
   {
     files: WEB_BUSINESS,
-    ignores: [...WEB_BUSINESS_EXCLUDED, ...LITERAL_COLOR_ALLOWED],
-    rules: { "no-restricted-syntax": ["warn", ...WEB_FORBIDDEN_SYNTAX] },
+    ignores: WEB_BUSINESS_EXCLUDED,
+    rules: { "no-restricted-syntax": forbidden() },
   },
   {
-    // 白名单文件：同样的禁止事项，只放开字面色值。
     files: LITERAL_COLOR_ALLOWED,
     ignores: WEB_BUSINESS_EXCLUDED,
-    rules: {
-      "no-restricted-syntax": [
-        "warn",
-        ...WEB_FORBIDDEN_SYNTAX.filter(
-          (entry) => !entry.selector.startsWith("Literal[value=/^#"),
-        ),
-      ],
-    },
+    rules: { "no-restricted-syntax": forbidden("literalColor") },
   },
+  ...WEB_IMPORT_OVERRIDES,
 
   // core / session-host / shell-core 的 import 边界（error：现状为 0，守住不回退）。
   {
