@@ -1,6 +1,6 @@
 # G5 剩余事项计划：全部实现
 
-> 状态：目标设计（2026-10-04 定）。G0–G4 之后仍没做的事逐条按源码核过，分成三档：**A** 现在就能实现（本文 §3 分成 28 个工作包）、**B** 要用户提供账号 / 证书 / 设备 / 域名（§4 清单，附已有的 mock）、**C** 按设计决定不做（§5，引用决定出处）。来源：[补全进度](../status/completion-progress.md)各包的「没做 / 已知限制 / 偏离」、[安全审查 2026-10](../status/security-review-2026-10.md) §3 的 L1–L10、[功能预期总表](../status/feature-roadmap.md)仍为 🔶 / ⬜ 的行、[后续规划](product-roadmap.md)未勾的条、[架构](../guides/architecture.md) §8、各「部分实施」设计文档首行、[补全执行计划](completion-plan.md) G4-2、Dependabot 的 PR 与警报、CI 已知的不稳定用例。
+> 状态：已实施（2026-10-04 定，2026-10-05 G5-00…G5-30 全部合入）。各包的实施记录见[补全进度](../status/completion-progress.md) G5 各节，B 档汇总进[用户待办清单](../status/user-action-checklist.md)，合入后仍留在代码侧的残项见[功能预期总表](../status/feature-roadmap.md) §6。以下为定稿时的原文：G0–G4 之后仍没做的事逐条按源码核过，分成三档：**A** 现在就能实现（本文 §3 分成 28 个工作包）、**B** 要用户提供账号 / 证书 / 设备 / 域名（§4 清单，附已有的 mock）、**C** 按设计决定不做（§5，引用决定出处）。来源：[补全进度](../status/completion-progress.md)各包的「没做 / 已知限制 / 偏离」、[安全审查 2026-10](../status/security-review-2026-10.md) §3 的 L1–L10、[功能预期总表](../status/feature-roadmap.md)仍为 🔶 / ⬜ 的行、[后续规划](product-roadmap.md)未勾的条、[架构](../guides/architecture.md) §8、各「部分实施」设计文档首行、[补全执行计划](completion-plan.md) G4-2、Dependabot 的 PR 与警报、CI 已知的不稳定用例。
 > 规则沿用[补全执行计划](completion-plan.md)：一个工作包一个实施代理，1–3k LOC；同一组里并行的包**不改同一个文件**（§3.0 热点文件表）；迁移号与契约节号在本文预分配，合入时以 main 当时最大号 +1 为准；每个包合入时在[补全进度](../status/completion-progress.md)新增自己一节（G5 的节由 G5-00 预建）。
 > 现状以源码为准；本文只写缺口的目标形态与怎么分。
 
