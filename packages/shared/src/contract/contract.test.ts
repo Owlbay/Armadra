@@ -1,3 +1,4 @@
+import { getEventIteratorSchemaDetails } from "@orpc/contract";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
@@ -153,10 +154,33 @@ describe("契约树", () => {
     for (const entry of entries) {
       const output = def(entry).outputSchema;
       expect(output, entry.name).toBeDefined();
-      expect(loose(output as z.ZodType), entry.name).toEqual([]);
+      const yields = getEventIteratorSchemaDetails(output as never)?.yields;
+      const found = loose((yields ?? output) as z.ZodType);
+      // 事件流的每一项就是页面那份 `workspaceEventSchema`，它有三处透传的
+      // `unknown`（`agent.approval` 的 `request`、ACP 帧的 `update` 与 `error`
+      // 的附加字段）。只许减少，不许增加；收紧在 E3 对应域迁移时做。
+      const allowed = LOOSE_ALLOWANCE[entry.name] ?? 0;
+      expect(found.length, entry.name).toBeLessThanOrEqual(allowed);
+    }
+  });
+
+  it("订阅（出参是事件迭代器）写了背压策略，普通调用不写", () => {
+    for (const entry of entries) {
+      const subscription =
+        getEventIteratorSchemaDetails(def(entry).outputSchema as never) !==
+        undefined;
+      expect(entry.meta.backpressure !== undefined, entry.name).toBe(
+        subscription,
+      );
+      // 订阅只经控制面，没有 REST 旧路径可挂。
+      if (subscription) expect(entry.meta.legacy, entry.name).toBeUndefined();
     }
   });
 });
+
+const LOOSE_ALLOWANCE: Readonly<Record<string, number>> = {
+  "workspaces.events": 3,
+};
 
 describe("守卫自己真的抓得到", () => {
   it("unknown 藏在对象、数组、可选里也找得到", () => {

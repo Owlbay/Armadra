@@ -33,12 +33,16 @@ export const ERROR_CODES = {
   conflict: { status: 409, i18n: "error.conflict" },
   payload_too_large: { status: 413, i18n: "error.payloadTooLarge" },
   rate_limited: { status: 429, i18n: "error.rateLimited" },
+  /** 一条控制面连接上同时活着的订阅到了上限（契约 §35.2，随后以 4429 关）。 */
+  limit_reached: { status: 429 },
   internal: { status: 500, i18n: "error.internal" },
   /** 与 `internal` 是同一类失败的第二个拼法，迁移时并入 `internal`。 */
   internal_error: { status: 500 },
   not_implemented: { status: 501, i18n: "error.notImplemented" },
   unsupported: { status: 501, i18n: "error.unsupported" },
   settings_unavailable: { status: 503 },
+  /** 订阅跟不上、队列满了（`resubscribe` 策略）：带 `lastEventId` 重订（契约 §35.5）。 */
+  overflow: { status: 503 },
   unknown_outcome: { status: 504, i18n: "error.unknownOutcome" },
   forge_credential_rejected: { status: 502 },
   forge_unavailable: { status: 502 },
@@ -52,6 +56,10 @@ export const ERROR_CODES = {
   gateway_managed_by_shell: { status: 409 },
   gateway_not_running: { status: 409 },
   link_invalid: { status: 409 },
+  /** 续订的位置已掉出 outbox 的保留下限：先整份重读，再从现在订（契约 §35.4）。 */
+  snapshot_required: { status: 409 },
+  /** 续订的位置这台 core 从没发过（换了库）：同上（契约 §35.4）。 */
+  cursor_ahead: { status: 409 },
   mail_not_configured: { status: 409 },
   origin_mismatch: { status: 409 },
   rebase_started: { status: 409 },
