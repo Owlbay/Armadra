@@ -37,6 +37,13 @@ export const errors: MessageModule = {
     "error.sourceUnauthorized": "这台机器的登录已失效，请重新登录",
     "error.sourceOffline": "这台机器当前不在线",
     "error.cloudAccountUnlinked": "这个账号还没有关联到这台机器",
+    "error.cloudNotRegistered": "这台机器没有登记到这个远程服务",
+    "error.cloudAssertionInvalid": "登录凭证无效或已过期，请重新打开",
+    "error.cloudAlreadyRegistered": "已经登记到这个远程服务",
+    "error.cloudIssuerMismatch": "远程服务的地址与它自报的不一致",
+    "error.invitationInvalid": "邀请无效或已用完",
+    "error.registrationTokenInvalid": "登记令牌无效或已过期",
+    "error.protocolUnsupported": "远程服务的协议版本不兼容",
 
     /* 投递的拒绝码（`agent-delivery.md` §3.5）。机器码本身不翻译，这里给的是
        「发生了什么」，因为看着画布的人不该去读 core 的中文句子。 */
@@ -83,6 +90,19 @@ export const errors: MessageModule = {
     "error.sourceOffline": "That machine is offline",
     "error.cloudAccountUnlinked":
       "This account is not linked to that machine yet",
+    "error.cloudNotRegistered":
+      "This machine is not registered with that remote service",
+    "error.cloudAssertionInvalid":
+      "The sign-in credential is invalid or expired — open it again",
+    "error.cloudAlreadyRegistered":
+      "Already registered with that remote service",
+    "error.cloudIssuerMismatch":
+      "The remote service's address does not match what it reports",
+    "error.invitationInvalid": "The invitation is invalid or used up",
+    "error.registrationTokenInvalid":
+      "The registration token is invalid or expired",
+    "error.protocolUnsupported":
+      "The remote service speaks an incompatible protocol version",
 
     "error.delivery.LOOP_DETECTED":
       "These two nodes are feeding each other — stopped",

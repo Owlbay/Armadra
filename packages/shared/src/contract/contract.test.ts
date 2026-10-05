@@ -66,6 +66,7 @@ describe("契约树", () => {
       "workspaces",
       "settings",
       "sources",
+      "identity",
     ]);
   });
 
@@ -213,6 +214,66 @@ describe("§33 与协议包同一份", () => {
       const entry = entries.find((one) => one.name === name);
       expect(entry, name).toBeDefined();
       expect(def(entry!)[slot], `${name} ${slot}`).toBe(schema);
+    }
+  });
+});
+
+describe("§31 与协议包同一份", () => {
+  it("identity.cloud.* 的出入参就是协议包 core-api 的 schema 对象", async () => {
+    const protocol = await import("@armadra/platform-protocol/core-api");
+    const pairs: [string, "inputSchema" | "outputSchema", unknown][] = [
+      ["identity.cloud.login", "inputSchema", protocol.cloudLoginInputSchema],
+      ["identity.cloud.login", "outputSchema", protocol.cloudLoginOutputSchema],
+      [
+        "identity.cloud.register",
+        "inputSchema",
+        protocol.cloudRegisterInputSchema,
+      ],
+      [
+        "identity.cloud.register",
+        "outputSchema",
+        protocol.cloudRegisterOutputSchema,
+      ],
+      ["identity.cloud.revoke", "inputSchema", protocol.cloudRevokeInputSchema],
+      [
+        "identity.cloud.status",
+        "outputSchema",
+        protocol.cloudStatusOutputSchema,
+      ],
+      ["identity.cloud.bind", "inputSchema", protocol.cloudBindInputSchema],
+      [
+        "identity.cloud.trustedOrigins",
+        "inputSchema",
+        protocol.cloudTrustedOriginsInputSchema,
+      ],
+    ];
+    for (const [name, slot, schema] of pairs) {
+      const entry = entries.find((one) => one.name === name);
+      expect(entry, name).toBeDefined();
+      expect(def(entry!)[slot], `${name} ${slot}`).toBe(schema);
+    }
+  });
+
+  it("login 是唯一的匿名 procedure，且只经旧路径", () => {
+    const anonymous = entries.filter((entry) => entry.meta.scope === null);
+    expect(anonymous.map((entry) => entry.name)).toEqual([
+      "identity.cloud.login",
+    ]);
+    expect(anonymous[0]?.meta.legacy?.path).toBe("/api/identity/cloud/login");
+  });
+
+  it("§31 的错误码与协议包注册表同拼法、同状态", async () => {
+    const { ERRORS } = (await import(
+      "@armadra/platform-protocol/errors"
+    )) as unknown as { ERRORS: Record<string, { status: number }> };
+    for (const entry of entries.filter((one) =>
+      one.name.startsWith("identity.cloud."),
+    )) {
+      for (const [code, item] of Object.entries(def(entry).errorMap)) {
+        expect(ERRORS[code]?.status, `${entry.name}: ${code}`).toBe(
+          item.status,
+        );
+      }
     }
   });
 });

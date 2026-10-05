@@ -1192,6 +1192,38 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 云登录与登记（契约 §31）：整段 `/api/identity/cloud` 由身份域的原样路由
+  // 接（`identity/cloud/http.ts`），这几行让契约的旧路径有表可查。
+  {
+    path: "/api/identity/cloud",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/identity/cloud/login",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/identity/cloud/register",
+    methods: ["POST", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/identity/cloud/bind",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/identity/cloud/{issuer}/trusted-origins",
+    methods: ["PUT"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     // 契约 §20.2：节点凭据条目。只有 owner（`route-scopes.ts`）。
     path: "/api/credentials",
