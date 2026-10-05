@@ -30,7 +30,10 @@ export function ProcessTree({
           key={`${process.pid}:${process.startTimeUnixMs ?? "?"}`}
           className="flex items-center gap-2 text-[11px] text-muted-foreground"
         >
-          <span className="min-w-0 flex-1 truncate">
+          <span
+            className="min-w-0 flex-1 truncate"
+            title={`${process.name} · pid ${process.pid}`}
+          >
             {process.name}
             <span className="ml-1 opacity-70">pid {process.pid}</span>
           </span>

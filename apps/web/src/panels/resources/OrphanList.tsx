@@ -107,7 +107,9 @@ export function OrphanList({
           >
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
-                <span className="truncate text-[12px]">{label(orphan)}</span>
+                <span className="truncate text-[12px]" title={label(orphan)}>
+                  {label(orphan)}
+                </span>
                 <Badge
                   variant="outline"
                   className="text-[length:var(--text-caption)]"
@@ -116,7 +118,8 @@ export function OrphanList({
                 </Badge>
               </div>
               {orphan.cwd && (
-                <div className="truncate font-mono text-[11px] text-muted-foreground">
+                // 路径折行而不截断：截掉的总是最有用的尾巴。
+                <div className="font-mono text-[11px] text-muted-foreground [overflow-wrap:anywhere]">
                   {orphan.cwd}
                 </div>
               )}
