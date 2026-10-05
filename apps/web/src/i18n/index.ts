@@ -8,6 +8,7 @@ import { automation } from "./automation";
 import { browser } from "./browser";
 import { canvas } from "./canvas";
 import { collab } from "./collab";
+import { connection } from "./connection";
 import { commands } from "./commands";
 import { executionHosts } from "./execution-hosts";
 import { errors } from "./errors";
@@ -121,6 +122,7 @@ export const MESSAGE_MODULES = {
   commands,
   format,
   collab,
+  connection,
   meta,
   updates,
   usage,

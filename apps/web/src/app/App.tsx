@@ -32,6 +32,7 @@ import { syncDocumentPreferences } from "./preferences-store";
 import { useAppKeybindings } from "./use-app-keybindings";
 import { useBoardSync } from "./use-board-sync";
 import { useWorkspaceAccessLost } from "./use-access-lost";
+import { useControlNotices } from "./use-control-notices";
 import { useUsagePolicyNotice } from "./use-usage-policy-notice";
 import { useCanvasPreferences } from "./use-canvas-preferences";
 
@@ -92,6 +93,7 @@ function AppShell() {
   useCanvasPreferences();
   useWorkspaceEvents(workspace?.id ?? null);
   useWorkspaceAccessLost();
+  useControlNotices();
   useUsagePolicyNotice();
   // 节点徽标属于画布，不属于侧栏：镜像在这里补齐，与面板开合无关。
   useAgentStatusHydration(workspace?.id ?? null);
