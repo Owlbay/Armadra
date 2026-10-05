@@ -203,6 +203,27 @@ export const OUTBOUND = {
     defaultOn: false,
     documented: true,
   },
+  cloudApi: {
+    // 地址是用户在「远程服务」里加的 issuer（个人中转或 SaaS，契约 §33），这里
+    // 只是占位主机。个人中转多是自签证书，按加入时给的 CA 指纹钉扎。只有加过
+    // 远程服务、且页面要用它时才连；core 启动与回环 API 从不等它。
+    url: "https://<远程服务 issuer>",
+    purpose: "远程服务：登录、刷新、源目录与访问断言（/v1/*）",
+    cadence: "用户动作：加入、挂载、换票时",
+    switch: null,
+    defaultOn: false,
+    documented: true,
+  },
+  sourceGateway: {
+    // 地址是用户配对的另一台 core 的 Gateway 来源（或经中继的 relayBaseUrl），
+    // 契约 §33；这里只是占位主机。按配对链接里的指纹钉扎。
+    url: "https://<已配对源的 Gateway 来源>",
+    purpose: "客户端源：配对、换票、选路时的 hello",
+    cadence: "用户动作：添加源、打开源时",
+    switch: null,
+    defaultOn: false,
+    documented: true,
+  },
 } as const satisfies Record<string, OutboundEndpoint>;
 
 export type OutboundId = keyof typeof OUTBOUND;

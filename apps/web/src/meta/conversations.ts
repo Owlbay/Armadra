@@ -8,8 +8,8 @@ import {
 } from "@armadra/shared";
 
 import { buildResumeLaunch } from "../agent/launch";
-import { RUNTIME_URL, runtimeApi } from "../api/client";
-import { localSource } from "../api/source";
+import { runtimeApi } from "../api/client";
+import { currentSource } from "../api/source";
 
 /**
  * 历史对话索引（计划书 §17「对话索引与 resume」）。
@@ -44,8 +44,9 @@ export async function fetchConversations(
     return unwrap(await optional.conversations(query, limit));
   }
   if (typeof fetch !== "function") return [];
-  const url = `${RUNTIME_URL}/api/conversations?q=${encodeURIComponent(query)}&limit=${limit}`;
-  const response = await localSource.fetch(url);
+  const source = currentSource();
+  const url = `${source.httpBase}/api/conversations?q=${encodeURIComponent(query)}&limit=${limit}`;
+  const response = await source.fetch(url);
   if (!response.ok) return [];
   return unwrap(await response.json());
 }
@@ -57,8 +58,9 @@ export async function suggestTitle(nodeId: string): Promise<string> {
     return suggestTitleResponseSchema.parse(await optional.suggestTitle(nodeId))
       .title;
   }
-  const response = await localSource.fetch(
-    `${RUNTIME_URL}/api/agent-status/${encodeURIComponent(nodeId)}/suggest-title`,
+  const source = currentSource();
+  const response = await source.fetch(
+    `${source.httpBase}/api/agent-status/${encodeURIComponent(nodeId)}/suggest-title`,
     { method: "POST" },
   );
   if (!response.ok) throw new Error(String(response.status));

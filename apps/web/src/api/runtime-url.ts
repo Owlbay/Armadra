@@ -5,9 +5,9 @@ const LOCAL_RUNTIME = "http://127.0.0.1:43120";
  * `fetch` / `WebSocket` 直连 Runtime。Runtime 的端口由内核分配，只有壳知道，
  * 所以基址从 preload 桥一次性取来。
  *
- * 同步读取是必须的：`request.ts` 在模块求值时就要定下 `RUNTIME_URL`，那时还
- * 没有 `await` 可用。壳在窗口加载页面之前就把答案准备好了，所以这里是读一个
- * 已决定的值，不是等一次调用。
+ * 同步读取是必须的：本机源的地址（`api/local-runtime.ts`）是同步的 getter，第一次
+ * 用到时才算，那时没有 `await` 可用。壳在窗口加载页面之前就把答案准备好了，
+ * 所以这里是读一个已决定的值，不是等一次调用。
  */
 export interface ShellEndpoints {
   readonly httpBase: string;
@@ -233,7 +233,8 @@ export function runtimeSocketUrl(base: string, path: string): string {
   const url = new URL(
     `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`,
   );
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.protocol =
+    url.protocol === "https:" || url.protocol === "wss:" ? "wss:" : "ws:";
   return url.href;
 }
 

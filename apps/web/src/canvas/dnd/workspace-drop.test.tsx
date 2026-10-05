@@ -28,7 +28,12 @@ const mocks = vi.hoisted(() => ({
     | null
     | ((paths: string[], point: { x: number; y: number }) => void),
 }));
-vi.mock("../../api/client", () => ({ RUNTIME_URL: "http://runtime" }));
+vi.mock("../../api/source", async (original) => {
+  const actual = await original<typeof import("../../api/source")>();
+  const runtime = { ...actual.localSource, httpBase: "http://runtime" };
+  return { ...actual, currentSource: () => runtime };
+});
+vi.mock("../../api/client", () => ({}));
 vi.mock("../../platform", () => ({
   onFileDrop: (callback: typeof mocks.nativeDrop) => {
     mocks.nativeDrop = callback;

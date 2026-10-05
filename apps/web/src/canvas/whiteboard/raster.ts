@@ -11,7 +11,7 @@ import {
   type ColorScheme,
 } from "./palette";
 import type { Item } from "./model";
-import { localSource } from "../../api/source";
+import { routedFetch } from "../../api/source";
 
 /**
  * 白板对象 → PNG（React Flow 计划 §2.4 / F29，归属 whiteboard）。
@@ -295,8 +295,8 @@ async function drawImage(
   const url = resolve?.(item.assetPath);
   if (!url || typeof createImageBitmap !== "function") return;
   try {
-    // 白板里的图在 core 上：经本机源，桌面壳里带凭据（别处的地址原样放过）。
-    const response = await localSource.fetch(url);
+    // 白板里的图在 core 上：经它所属的源，Bearer 的源带凭据（别处的地址原样放过）。
+    const response = await routedFetch(url);
     if (!response.ok) return;
     const bitmap = await createImageBitmap(await response.blob());
     context.drawImage(bitmap, item.x, item.y, item.w, item.h);

@@ -83,6 +83,7 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 | `core/diagnostics/`                                       | 崩溃上报的剥离规则；SDK 只在壳里、只在用户填了 DSN 时加载；页面错误上报（`client-report.ts` 限流与再剥离，`routes.ts`）                                                                                                                                                                                                                              | §30          |
 | `core/mail/`                                              | 可选 SMTP 通知通道：邀请与重置链接；只有服务器壳 `--smtp-url` 配，nodemailer 首封才加载                                                                                                                                                                                                                                                              | §28          |
 | `core/forge/`                                             | 托管平台抽象：`Forge` 接口，GitHub（经 `core/github/` 的客户端）、Gitea / Forgejo 与 GitLab（`PRIVATE-TOKEN`，多级子组、合并方式、流水线通过后合并与合并列车）；按主机 / 仓库的配置与令牌、fork 检出、合并后删分支                                                                                                                                   | §29          |
+| `core/sources/`                                           | 客户端源表与远程服务：别的 core（直连配对、经中继挂载）与个人中转登录；刷新令牌只在 SecretStore，换票时按 D27 选路；对端按 CA 指纹钉扎；启动只写本机一行、不联网                                                                                                                                                                                     | §33          |
 
 core 之外的同类新增：`src/hook-client/`（动词工具表，`armadra-hook` 与 ama 适配器共用）、
 `src/agent-host/ama/`（ama 宿主适配器与 runners）、`apps/mobile`（Capacitor 手机壳）、
@@ -455,6 +456,7 @@ SQLite 的迁移只有一个目录——`apps/desktop/src/core/db/migrations/`�
 | `0036_password_resets.sql`    | `identity_password_resets`（一次性口令重置令牌，库里只存哈希，24 小时有效，签新即作废旧的）                                                                                                              | `core/identity/`，契约 §25            |
 | `0037_push_preferences.sql`   | `push_devices` 加 `kinds_json`（设备要收的推送种类，空串 = 全部）与 `unifiedpush_endpoint`（UnifiedPush 端点）                                                                                           | `core/push/`，契约 §27                |
 | `0038_forge.sql`              | `forge_config`（每仓库 / 每主机的托管平台、API 根与令牌条目名），`github_references` 加 `forge` 列                                                                                                       | `core/forge/`，契约 §29               |
+| `0039_client_sources.sql`     | `client_sources`（本机记住的源：本机、直连、经中继）与 `remote_services`（个人中转 / SaaS），两张表都不存凭据                                                                                            | `core/sources/`，契约 §33             |
 
 `core/db/open.ts` 在同一 `BEGIN IMMEDIATE` 事务内先检查迁移账本，再执行已知迁移与启动恢复。未知版本、校验和不符、脏记录、损坏账本、无账本的非空 schema 或迁移历史缺口均拒绝启动；失败回滚并关闭连接，不改名、删除或重建原库。账本表与校验和算法沿用最初那套（SHA-384），所以装过旧版本的库照常打得开。既有 SQL 迁移文件保持原字节。
 
@@ -576,7 +578,10 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
     浏览器画面——经它带 Bearer 与一次性 WS 票，全局 `fetch` / `WebSocket` 不再被改写，`api/shell-transport.ts`；托盘用自己的会话，`shell-core/core-session.ts`；Windows
     经 fork 的 IPC 取票）；Gateway / 服务器壳是 TLS + `__Host-` 会话
     Cookie（`HttpOnly; SameSite=Strict; Secure`）+ Origin 白名单 + 写操作的 CSRF 双提交；原生 App 走
-    Bearer（只认 `capacitor://localhost` / `https://localhost`，WS 用 30 秒一次性票）。CSRF 只在
+    Bearer（只认 `capacitor://localhost` / `https://localhost`，WS 用 30 秒一次性票；凭据同样装在本机源上，
+    不改写全局）。挂载的远程源（自托管直连、经中继）各是一个 `SourceConnection`（`apps/web/src/sources/`）：
+    自己的地址、Bearer 与票，选路直连优先（D27），凭据经 `CredentialProvider` 按源取、只在内存；`api/*`
+    省略源时发往当前源（缺省本机），`<img>` 取图与下载按地址找所属的源。CSRF 只在
     Cookie 会话上核对，Bearer 不是环境凭据（`identity/http.ts::csrfRequired`）。Gateway 的每个答案带
     HSTS 与 `nosniff`，接口答案再带沙箱 CSP 与缺省 `no-store`（`gateway/csp.ts`）。
   - 控制面：一个源一条 `/api/ws`（契约 §35），页面的工作空间事件流经它订阅（`lastEventId` 续订由 outbox

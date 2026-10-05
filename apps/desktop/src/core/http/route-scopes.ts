@@ -381,6 +381,12 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
     read: "credential:use",
     write: "credential:use",
   },
+  // 客户端源表与远程服务（契约 §33）：只有 owner 有 `settings:*`。
+  {
+    pattern: /^\/api\/sources(\/|$)/,
+    read: "settings:read",
+    write: "settings:write",
+  },
   {
     pattern: /^\/api\/(ssh|execution-hosts|settings|data)/,
     read: "settings:read",

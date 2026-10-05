@@ -62,7 +62,12 @@ describe("契约树", () => {
     for (const entry of entries) {
       expect(entry.name).toBe(entry.path.join("."));
     }
-    expect(Object.keys(contract)).toEqual(["system", "workspaces", "settings"]);
+    expect(Object.keys(contract)).toEqual([
+      "system",
+      "workspaces",
+      "settings",
+      "sources",
+    ]);
   });
 
   it("procedure 名唯一，旧路径（方法 + 模式）也唯一", () => {
@@ -83,8 +88,9 @@ describe("契约树", () => {
         expect(SCOPES, entry.name).toContain(entry.meta.scope);
       }
       expect(entry.meta.since, entry.name).toMatch(/^\d+\.\d+$/);
+      // §31–§33 预分配给平台设计（云登录、隧道、源表），§34 起是工程规范化各域。
       expect(entry.meta.contract, entry.name).toMatch(
-        /^§(3[4-9]|[4-9]\d)\.\d+$/,
+        /^§(3[1-9]|[4-9]\d)\.\d+$/,
       );
     }
   });
@@ -196,5 +202,41 @@ describe("守卫自己真的抓得到", () => {
       conflict: { status: 409 },
       not_found: { status: 404 },
     });
+  });
+});
+
+describe("§33 与协议包同一份", () => {
+  it("sources.* 的出入参就是协议包 core-api 的 schema 对象", async () => {
+    const protocol = await import("@armadra/platform-protocol/core-api");
+    const pairs: [string, "inputSchema" | "outputSchema", unknown][] = [
+      ["sources.list", "outputSchema", protocol.sourcesListOutputSchema],
+      [
+        "sources.addDirect",
+        "inputSchema",
+        protocol.sourcesAddDirectInputSchema,
+      ],
+      ["sources.addDirect", "outputSchema", protocol.clientSourceSchema],
+      ["sources.update", "inputSchema", protocol.sourcesUpdateInputSchema],
+      ["sources.session", "inputSchema", protocol.sourcesSessionInputSchema],
+      ["sources.session", "outputSchema", protocol.sourcesSessionOutputSchema],
+      ["sources.remoteAdd", "inputSchema", protocol.remoteAddInputSchema],
+      ["sources.remoteAdd", "outputSchema", protocol.remoteAddOutputSchema],
+      [
+        "sources.remoteSources",
+        "outputSchema",
+        protocol.remoteSourcesOutputSchema,
+      ],
+      ["sources.mount", "inputSchema", protocol.mountInputSchema],
+      [
+        "sources.remoteSession",
+        "outputSchema",
+        protocol.remoteSessionOutputSchema,
+      ],
+    ];
+    for (const [name, slot, schema] of pairs) {
+      const entry = entries.find((one) => one.name === name);
+      expect(entry, name).toBeDefined();
+      expect(def(entry!)[slot], `${name} ${slot}`).toBe(schema);
+    }
   });
 });

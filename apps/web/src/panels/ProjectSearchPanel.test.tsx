@@ -15,7 +15,6 @@ const searchFiles = vi.fn();
 const openFileInEditor = vi.fn();
 
 vi.mock("@/api/client", () => ({
-  RUNTIME_URL: "http://runtime",
   runtimeApi: { searchFiles: (...args: unknown[]) => searchFiles(...args) },
 }));
 vi.mock("@/files/open-editor", () => ({

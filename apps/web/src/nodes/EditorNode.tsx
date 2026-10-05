@@ -62,7 +62,7 @@ import { languageIdFor } from "@/editor/language/language-ids";
 import { hasConflictMarkers, openMergeView } from "@/editor/merge/conflict";
 import { Alert, AlertAction, AlertTitle } from "@/ui/alert";
 import { Skeleton } from "@/ui/skeleton";
-import { localSource } from "../api/source";
+import { routedFetch } from "../api/source";
 
 /**
  * 文件编辑器节点（编辑器设计 §2–§4）。
@@ -147,7 +147,7 @@ export function EditorNode({ id, node, selected }: NodeBodyProps) {
         info.preview === "audio" ||
         info.preview === "pdf"
       ) {
-        const response = await localSource.fetch(
+        const response = await routedFetch(
           runtimeApi.fileDownloadUrl(workspaceId, path),
           { signal: controller.signal },
         );

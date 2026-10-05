@@ -17,7 +17,6 @@ import { CommandPalette } from "./CommandPalette";
 const conversations = vi.fn();
 
 vi.mock("../api/client", () => ({
-  RUNTIME_URL: "http://127.0.0.1:43120",
   runtimeApi: {
     agents: vi.fn().mockResolvedValue([]),
     settings: vi.fn().mockResolvedValue({ ssh: { hosts: [] } }),

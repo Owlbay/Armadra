@@ -25,7 +25,6 @@ const documentSymbols = vi.fn();
 const workspaceSymbols = vi.fn();
 
 vi.mock("@/api/client", () => ({
-  RUNTIME_URL: "http://runtime",
   runtimeApi: { fileIndex: (...args: unknown[]) => fileIndex(...args) },
 }));
 vi.mock("@/files/open-editor", () => ({

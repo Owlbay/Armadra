@@ -5,7 +5,7 @@ import * as syncProtocol from "y-protocols/sync";
 import type * as Y from "yjs";
 import { REALTIME_CLOSE, REALTIME_MESSAGE } from "@armadra/shared";
 import { backoffDelay } from "@/lib/backoff";
-import { localSource } from "../api/source";
+import { openSourceSocket } from "../api/source";
 
 /**
  * `WS …/boards/{boardId}/sync` 的页面一端（契约 §16.1）。
@@ -69,7 +69,7 @@ export function defaultBackoff(attempt: number): number {
 }
 
 function browserSocket(url: string): SocketLike {
-  return new localSource.WebSocket(url) as unknown as SocketLike;
+  return openSourceSocket(url) as unknown as SocketLike;
 }
 
 export class RealtimeClient {

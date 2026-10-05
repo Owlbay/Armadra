@@ -23,11 +23,12 @@ vi.mock("../host/native-session", async (original) => {
   };
 });
 
-const { request, RUNTIME_URL } = await import("./request");
+const { request } = await import("./request");
 const { resetIdentityCredentials } = await import("./identity");
 const { installShellTransport } = await import("./shell-transport");
 const { installLocalTransport, localSource } = await import("./source");
-const { WS_TICKET_PROTOCOL } = await import("../mobile/native-bridge");
+const { WS_TICKET_PROTOCOL } = await import("../sources/transport");
+const LOCAL_BASE = localSource.httpBase;
 
 type Call = { url: string; init: RequestInit | undefined };
 let calls: Call[];
@@ -140,9 +141,9 @@ describe("桌面壳的请求层", () => {
 
   it("不经 request 的发送点经本机源同样带上；全局 fetch 不带", async () => {
     installShellTransport();
-    await localSource.fetch(`${RUNTIME_URL}/api/terminals/backend`);
+    await localSource.fetch(`${LOCAL_BASE}/api/terminals/backend`);
     expect(authorization(calls.at(-1))).toBe("Bearer A");
-    await fetch(`${RUNTIME_URL}/api/terminals/backend`);
+    await fetch(`${LOCAL_BASE}/api/terminals/backend`);
     expect(authorization(calls.at(-1))).toBe(null);
   });
 
@@ -208,7 +209,7 @@ describe("桌面壳的请求层", () => {
 
   it("流先换一张一次性票，经子协议升级", async () => {
     installShellTransport();
-    const socketBase = RUNTIME_URL.replace(/^http/, "ws");
+    const socketBase = LOCAL_BASE.replace(/^http/, "ws");
     new localSource.WebSocket(`${socketBase}/api/workspaces/w/events`);
     await vi.waitFor(() => expect(FakeSocket.made).toHaveLength(1));
     const ticket = calls.find(

@@ -258,15 +258,25 @@ function errorDetails(
   return data as Record<string, unknown>;
 }
 
+/**
+ * 域经 `fail(code, …)` 有意答的 5xx（`source_unreachable` 502、`source_offline`
+ * 503 这类「对端不在」）：是答案，不是崩溃，不记错误、不报给壳。
+ */
+const deliberate = new WeakSet<object>();
+
 /** 实现抛出来的 → 上游的错误；不是拒绝的原样往上抛，最后答 500。 */
 function toUpstream(error: unknown): unknown {
   if (error instanceof ORPCError) return error;
   if (error instanceof CoreFailure) {
-    return new ORPCError(error.code, {
+    const upstream = new ORPCError(error.code, {
       status: error.status,
       message: error.message,
       data: error.details,
     });
+    if (error.code !== "internal" && error.code !== "internal_error") {
+      deliberate.add(upstream);
+    }
+    return upstream;
   }
   if (error instanceof SyntaxError) {
     return new ORPCError("bad_request", {
@@ -752,7 +762,9 @@ export function installContract(
         const upstream = error instanceof ORPCError;
         if (
           !upstream ||
-          (error.status >= 500 && error.code !== "not_implemented")
+          (error.status >= 500 &&
+            error.code !== "not_implemented" &&
+            !deliberate.has(error))
         ) {
           // 没人接住的错误，或出参没过校验：记一行（只有名字与消息，不带入参
           // 与出参），按 §11.2 报给壳。

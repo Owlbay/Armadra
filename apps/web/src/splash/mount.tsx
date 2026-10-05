@@ -12,7 +12,7 @@ export const SPLASH_HARD_LIMIT_MS = SPLASH_DURATION_MS + 2260;
  *
  * 为什么不是 index.html 里的一段无依赖脚本：桌面壳的 CSP 是
  * `default-src 'self'`，内联脚本会被挡掉（见 index.html 的注释），单独再拆一个
- * 入口脚本又要多一次请求。所以做成组件，但**不等 `initRuntimeSockets()`**——
+ * 入口脚本又要多一次请求。所以做成组件，但**不等入口分支（`prepareEntry()`）**——
  * `main.tsx` 一执行就调这里，覆盖层和 App 的挂载是并行的，Runtime 该连连、
  * 该拉数据拉数据，动画只是浮在上面。
  *
