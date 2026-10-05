@@ -2116,3 +2116,83 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 - **身份**：登录即可，路由门不判（`route-scopes.ts` 的 `SELF_GUARDED`）；桌面壳的本机请求算本机 owner。限流按设备（没有设备按 principal），形状不对的请求不扣桶。
 - **剥离**：两道。页面先剥（`crash-scrub.ts`：路径里的用户名、令牌形状、Armadra 会话密钥 `<32 位十六进制>.<43 位 base64url>`、地址里的账号 / 查询串 / 片段，栈帧里的地址与路径只留文件名，消息截到 300 字）；收件一侧（core 或桌面主进程）按本机的家目录与环境变量再剥一遍同一套规则，再交 `platform.reportError`（来源 `page`）。事件发出前壳的 `beforeSend` 还有第三道（§11.2 的整段删键）。终端输出、文件正文、凭据、请求数据不进事件；core 不记这条错误的正文。
 - **桌面壳**：页面不走这个路由，经 IPC `diagnostics:report`（`window` 档）交给主进程；主进程读同一份设置再判、同样每分钟 5 条、再剥离，交 `@sentry/electron`，标签 `process: renderer`、`source: page`。`ipcMode` 仍为 0：SDK 不给渲染进程开任何通道，浏览器节点的 guest 没有 preload，也就没有这条路。IPC 答 `{ accepted }`，从不拒绝。
+
+## 31. 云登录与登记：`/api/identity/cloud/*`
+
+> 状态：预留，形状见规格（平台实现规格 core 包 §2.3（docs/design/platform/core-packages.md），落地包 A2-3，迁移 0040）。本节先占位，实现合入时补全散文、算法与示例。
+
+范围：本机 core 登记到远程服务（personal 或 saas 控制面）、用远程服务签发的源访问断言换本机会话。请求与响应的 zod schema 引自协议包 `@armadra/platform-protocol/core-api`（`cloudLoginInputSchema`、`cloudLoginOutputSchema`、`cloudRegisterInputSchema`、`cloudRegisterOutputSchema`、`tunnelStatusSchema`），Armadra 的 `packages/shared/src/contract/cloud.ts` 从那里 import 同一份对象。cloud 仓一侧的接口见 [cloud-api.md](https://github.com/Owlbay/armadra-cloud/blob/main/docs/contracts/cloud-api.md)，Armadra 这边不另抄。
+
+| 方法与路径                                         | 访问                   | 请求                            | 响应                                                                                                                                              | 错误码                                                                                                                                        |
+| -------------------------------------------------- | ---------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/identity/cloud/login`                   | 匿名                   | `cloudLoginInputSchema`         | `cloudLoginOutputSchema`（`{ session, principal, created }`）                                                                                     | `cloud_not_registered`、`cloud_assertion_invalid`、`cloud_assertion_replayed`、`cloud_account_unlinked`、`invitation_invalid`、`rate_limited` |
+| `POST /api/identity/cloud/register`                | owner                  | `cloudRegisterInputSchema`      | `cloudRegisterOutputSchema`                                                                                                                       | `cloud_already_registered`、`cloud_issuer_mismatch`、`registration_token_invalid`、`source_unreachable`、`protocol_unsupported`               |
+| `DELETE /api/identity/cloud/register`              | owner                  | `{ issuer }`                    | `{}`                                                                                                                                              | `not_found`                                                                                                                                   |
+| `GET /api/identity/cloud`                          | 登录即可（读设置）     | 无                              | `{ registrations: { issuer, mode, label?, jwksFetchedAtMs, trustedOrigins, relayOrigins, registeredAtMs, tunnel }[], sourcePublicKey, sourceId }` |                                                                                                                                               |
+| `POST /api/identity/cloud/bind`                    | 任何已登录主体（本人） | `{ assertion }`                 | `{ bound: true }`                                                                                                                                 | 同 login                                                                                                                                      |
+| `PUT /api/identity/cloud/{issuer}/trusted-origins` | owner                  | `{ issuer, origins: string[] }` | `{ origins }`                                                                                                                                     |                                                                                                                                               |
+
+- 审计动作：`cloud.login`、`cloud.register`、`cloud.revoke`、`invitation.accept.link`。`LoginMethod` 增加 `"cloud"`。
+- `cloud/login` 是匿名面，只经这条 REST 路径暴露；限流按远端地址桶加按 `sub` 每分钟 5 次。
+- 凭据（刷新令牌、源私钥、断言原文）不出现在任何响应、日志与审计详情里。
+- 错误码沿用 `{ code, message }`，全部登记在协议包 `errors` 子路径，线上拼写 snake_case。
+
+## 32. 隧道面：core 作为出站隧道客户端
+
+> 状态：预留，形状见规格（平台实现规格 core 包 §4（docs/design/platform/core-packages.md），落地包 A3-2）。本节先占位，实现合入时补全握手、帧表与准入的完整描述。
+
+范围：core 经中继节点建立出站隧道，让登记过的远程服务的客户端经中继访问本机 core。隧道本身没有 HTTP 路径可调用，这一节记的是它的行为边界与可观察面。
+
+- 握手与帧表：以协议包 `@armadra/platform-protocol/tunnel`（隧道协议版本 `t/v1`）为准，本文不复制帧格式；`wss://` 为必须，`ws://` 只在 `ARMADRA_RELAY_ALLOW_INSECURE=1`（探针）时放行。
+- 准入规则：隧道来的请求按 Bearer 模式准入，与 Gateway 等价。路径落在 `loopbackOnlyPath`（`/hook/`、`/control/`、`/context-link/`、`/browser/`、`/verify`）一律 `403 forbidden`；请求来源须在登记的可信来源与内置来源之内；匿名路径与 `/health` 之外要 `Authorization: Bearer`，WebSocket 升级要 `armadra-ticket.<ticket>` 子协议；拒绝一律 `401 unauthenticated`。
+- 关闭码：长连接沿用 4401 / 4403 复核，隧道侧新增 4404。
+- 旁路保证：隧道的建立、失败与重连不阻塞也不影响 core 的启动与回环 API。
+- 状态面：`GET /api/identity/cloud` 的 `registrations[].tunnel` 为协议包 `tunnelStatusSchema`；事件流事件 `cloud.tunnel`（`{ issuer, state }`）。
+- 设置键：`cloud.relay.enabled`（缺省 `true`，关闭即全部停止）、`cloud.relay.preferredNode`。
+- 外呼登记（`net/outbound.ts`）：`relayTunnel`、`cloudJwks`、`cloudApi`。
+
+## 33. 客户端源表与远程服务：`/api/sources/*`
+
+> 状态：预留，形状见规格（平台实现规格 core 包 §1.3（docs/design/platform/core-packages.md），落地包 A1-3，迁移 0039）。本节先占位，实现合入时补全算法、SecretStore 布局与示例。
+
+范围：这台 core 作为「客户端宿主」记住的别的源（`client_sources`）以及它登记过或能登录的远程服务（`remote_services`），并代页面完成换票与选路。全部为 owner 专用；读取需要 `settings:read`，写入需要 `settings:write`。手机不经本机 core，`/api/sources/*` 只在桌面与服务器壳的页面上使用。
+
+| 方法与路径                                      | 请求                                                                                                          | 响应                                                                                                     | 错误码                                                                                |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `GET /api/sources`                              | 无                                                                                                            | `{ sources: ClientSource[], remotes: RemoteService[] }`                                                  |                                                                                       |
+| `POST /api/sources/direct`                      | `{ pairLink?, origin?, code?, fingerprint?, label? }`                                                         | `ClientSource`                                                                                           | `source_unreachable`、`source_unauthorized`、`fingerprint_mismatch`                   |
+| `PUT /api/sources/{sourceId}`                   | `{ label?, orderIndex?, baseUrl?, relayOrigin? }`                                                             | `ClientSource`                                                                                           | `not_found`                                                                           |
+| `DELETE /api/sources/{sourceId}`                | 无                                                                                                            | `{}`（`local` 行答 `conflict`）                                                                          |                                                                                       |
+| `POST /api/sources/{sourceId}/forget`           | 无                                                                                                            | `{}`（只删凭据，保留行）                                                                                 |                                                                                       |
+| `POST /api/sources/{sourceId}/session`          | `{ via?: "direct" \| "relayed" }`                                                                             | `{ accessToken, accessExpiresAtMs, httpBase, wsBase, via, relayToken?, relayTokenExpiresAtMs? }`         | `source_unauthorized`、`source_unreachable`                                           |
+| `POST /api/sources/remotes`                     | `{ kind: "personal", issuer, account, password, label?, fingerprint? }` 或 `{ kind: "saas", issuer, label? }` | `{ remote: RemoteService, next: "ready" \| { deviceCode: { userCode, verificationUrl, expiresAtMs } } }` | `credentials_invalid`、`account_locked`、`fingerprint_mismatch`、`source_unreachable` |
+| `POST /api/sources/remotes/{serviceId}/poll`    | 无                                                                                                            | `{ status: "pending" \| "ready" \| "denied" \| "expired" }`                                              |                                                                                       |
+| `DELETE /api/sources/remotes/{serviceId}`       | 无                                                                                                            | `{}`（本机已登记到它时先撤销登记）                                                                       |                                                                                       |
+| `GET /api/sources/remotes/{serviceId}/sources`  | 无                                                                                                            | `{ sources: RemoteSourceSummary[] }`（带 `mounted`）                                                     | `source_unauthorized`                                                                 |
+| `POST /api/sources/remotes/{serviceId}/mount`   | `{ sourceId, label? }`                                                                                        | `ClientSource`                                                                                           | `source_offline`、`cloud_account_unlinked`                                            |
+| `POST /api/sources/remotes/{serviceId}/session` | 无                                                                                                            | `{ accessToken, accessExpiresAtMs, issuer, capabilities }`                                               | `source_unauthorized`                                                                 |
+
+形状：
+
+```json
+{
+  "sourceId": "…32 位十六进制…",
+  "kind": "direct",
+  "label": "",
+  "baseUrl": "",
+  "relayOrigin": "",
+  "fingerprint": "",
+  "cloudIssuer": "",
+  "principalHint": "",
+  "addedAtMs": 0,
+  "lastOkAtMs": 0,
+  "orderIndex": 0,
+  "hasCredentials": true
+}
+```
+
+`kind` 取 `local` / `direct` / `relayed` / `hosted`。`RemoteService` 为 `{ serviceId, kind: "personal" | "saas", issuer, label, accountHint, fingerprint, addedAtMs, lastOkAtMs, registered, hasCredentials }`。
+
+- 凭据只存 SecretStore（`armadra-source-<sourceId>`、`armadra-remote-<serviceId>`），响应里只有 `hasCredentials`；访问令牌与口令不落盘。
+- 以后新增的 procedure（例如按链接挂载 `mountByLink`）追加在本节末尾，不改已有条目。
+- 错误码 `source_unreachable`、`source_unauthorized` 等登记在协议包 `errors` 子路径。
