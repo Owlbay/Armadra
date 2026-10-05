@@ -1,24 +1,25 @@
 # 正规化平台：中转、SaaS 控制面与多源挂载
 
-> 状态：目标设计（2026-10-06；同日补 §16 独立仓库评估：控制面与中继拆到 `Owlbay/armadra-cloud`，协议走 npm 包 `@armadra/platform-protocol`）。尚未实施；本文只定边界、数据、协议形状与分阶段计划。现状以源码为准，核对结果写在 §1.3。建仓与发包是对外操作，等用户确认后才做。
+> 状态：目标设计（2026-10-06；同日补 §16 独立仓库评估：控制面与中继拆到 `Owlbay/armadra-cloud`，协议走 npm 包 `@armadra/platform-protocol`；同日再补 §17 个人中转模式与桌面端零配置，决策 D20–D27）。尚未实施；本文只定边界、数据、协议形状与分阶段计划，落地顺序、工作包拆分与逐包细节以[落地总计划](platform-implementation-plan.md)为准（§13 的阶段表保留为依据，波次以总计划为准）。现状以源码为准，核对结果写在 §1.3。建仓与发包是对外操作，等用户确认后才做。
 > 前置：[架构](../guides/architecture.md)、[服务器账号、中转与共享](server-accounts-and-sharing.md)、[补全架构](completion-architecture.md) §7–§8、[TypeScript Core](typescript-core.md)、[外部服务与依赖](external-services.md)、[远端画布注入](remote-canvas-injection.md)、[core 的 JSON 面](../contracts/core-json-api.md) §3.2 / §10 / §16–§19 / §23–§24、[用户待办清单](../status/user-action-checklist.md)。
 > 并行文档：「工程规范化」（API 是否改 RPC、通用组件审计、测试与检查工具）。本文在接口处只写「传输层见工程规范化文档」，并在 §12 列出本设计对传输层的硬性要求。
 > 不出现任何第三方参考项目的名字；通用技术名词（OIDC、JWT、ACME、Yjs、PostgreSQL、Redis）照用。
 
 ## §0 结论
 
-| #   | 决定                                                                                                                                                                                                                                                                                                          | 理由                                                                                                                                                                                                                                                             |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1  | **「中转」= SaaS 运营的中继（reverse tunnel），不是 SaaS 托管 core**。core 仍是唯一的状态持有者与执行者，跑在用户电脑、公司服务器或（后期）SaaS 自己的容器里；SaaS 提供账号、组织、源目录、链接加入与中继数据面                                                                                               | 现有架构 S1「服务器就是中转站」只有一个状态源（core）；Agent 的 CLI 登录、本地仓库、tmux 都在用户机器上，搬上云成本高且触碰各 CLI 的使用条款；中继不解析业务协议就能让 NAT 后的 core 被各端访问，一次解决「域名 / 证书 / 公网 IP」这组用户待办                   |
-| P2  | **一个 core 实例 = 一个「源」（source）**，`sourceId` 就是 core 的 `hostId`（`store_meta.host_id`）。客户端可同时挂载多个源；每块画布、每个会话都带 `sourceId`                                                                                                                                                | 多源挂载的最小单位是 core；`hostId` 已经稳定、已在 hello 与票据里；不与执行主机的 `executionHostId` 混用                                                                                                                                                         |
-| P3  | **core 本地仍是 SQLite，不加 PostgreSQL 存储后端**。PostgreSQL 与 Redis 只在 SaaS 控制面与中继层                                                                                                                                                                                                              | 83 个非测试文件直接持 `node:sqlite` 句柄、487 处 `prepare`、触发器 / JSON1 / `AUTOINCREMENT` / `VACUUM INTO`，没有数据访问层可以换底；服务器壳的多 principal 已在一库里实测（30 终端、6 事件流、2000 对象实时板）；多租户隔离靠「每团队一个 core」而不是一库多租 |
-| P4  | **认证联合、授权不联合**：SaaS 账号只负责「你是谁」与「你能连到哪个源」，签发面向单个源的短寿命断言；core 验签后换成自己的会话，`scope` 仍是唯一判定点，邀请 / 组 / 授予仍在 core                                                                                                                             | AGENTS.md 要求协作上下文按连线授权、不跨工作空间读取；授权真相若搬到云上，core 离线或自托管时就失去自治；现有 `identity_credentials(kind='oauth')` 正好能承载「云账号 ↔ 本地 principal」的映射                                                                  |
-| P5  | **链接加入复用 core 的 `identity_invitations`**：云端链接只是「路由封装 + 需要登录」，邀请令牌留在 URL 片段里不经云端存储；邀请表加 `max_uses / uses` 支持多次链接                                                                                                                                            | 邀请签发、角色、过期、一次性消费都已实现并有审计；云端只需知道「这条链接通向哪个源的哪条邀请」                                                                                                                                                                   |
-| P6  | **WebSocket 原样保留**：中继对客户端呈现的就是一个 Gateway（HTTPS + WSS，五条流路径不变）；core 主动外连中继、一条隧道多路复用，隧道里的每条流是一个虚拟 socket 交给 `CoreServer.createListener({admitted:true})`                                                                                             | Gateway 已经把「准入 → `runAs` → 交给未绑定的 `http.Server`」写成一条可复用的交接；隧道只是换了底层 socket；页面的 `api/*` 层按源换基址即可，不改五条流的帧格式                                                                                                  |
-| P7  | **多人协同的基础设施 = 组织（云）→ 源（core owner）→ 工作空间（grants）→ 连线（上下文）四层**；节点级 ACL 仍不做，跨源连线不支持                                                                                                                                                                              | S4 / S5 不变；云端只加「组织」这一层做目录与批量加入，画布内的权限矩阵不变                                                                                                                                                                                       |
-| P8  | **「拆离出来的一部分」= 服务器壳产物随桌面包一起发**：桌面包内含 `resources/server/`（服务器壳入口 + 页面），桌面二进制加 `serve` 透传子命令；三种发布物（桌面包、服务器 tar、容器镜像）装的是同一份 core 与页面                                                                                              | 两种壳、一份 core 的边界不变；用户在任意一台装了桌面版的机器上就能把它变成一个源                                                                                                                                                                                 |
-| P9  | **中继首版终止 TLS、零持久化、零正文日志；端到端加密作为后期可选（仅原生 App 与桌面壳，TLS 直通）**                                                                                                                                                                                                           | 浏览器里做不了内层 TLS；先把「中继看不看得见」写成明确的运营承诺与自托管选项，再用直通补齐 App 侧                                                                                                                                                                |
-| P10 | **控制面与中继是独立仓库 `Owlbay/armadra-cloud`**（内含 `apps/cloud`、`apps/relay` 与发布到 npm 的协议包 `@armadra/platform-protocol`），Armadra 钉协议包的精确版本；Armadra 侧只新增 `core/relay/`（隧道客户端）、`core/identity/cloud/`（断言登录）、`core/sources/`（客户端源表）与页面的多源连接层（§16） | 与 `@armadra/agent` 同一先例；两边没有源码级依赖，只有协议与算法参数；控制面有库、要事务，数据面无状态、要横向扩，部署节奏与桌面发布不同                                                                                                                         |
+| #   | 决定                                                                                                                                                                                                                                                                                                                                                            | 理由                                                                                                                                                                                                                                                             |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1  | **「中转」= SaaS 运营的中继（reverse tunnel），不是 SaaS 托管 core**。core 仍是唯一的状态持有者与执行者，跑在用户电脑、公司服务器或（后期）SaaS 自己的容器里；SaaS 提供账号、组织、源目录、链接加入与中继数据面                                                                                                                                                 | 现有架构 S1「服务器就是中转站」只有一个状态源（core）；Agent 的 CLI 登录、本地仓库、tmux 都在用户机器上，搬上云成本高且触碰各 CLI 的使用条款；中继不解析业务协议就能让 NAT 后的 core 被各端访问，一次解决「域名 / 证书 / 公网 IP」这组用户待办                   |
+| P2  | **一个 core 实例 = 一个「源」（source）**，`sourceId` 就是 core 的 `hostId`（`store_meta.host_id`）。客户端可同时挂载多个源；每块画布、每个会话都带 `sourceId`                                                                                                                                                                                                  | 多源挂载的最小单位是 core；`hostId` 已经稳定、已在 hello 与票据里；不与执行主机的 `executionHostId` 混用                                                                                                                                                         |
+| P3  | **core 本地仍是 SQLite，不加 PostgreSQL 存储后端**。PostgreSQL 与 Redis 只在 SaaS 控制面与中继层                                                                                                                                                                                                                                                                | 83 个非测试文件直接持 `node:sqlite` 句柄、487 处 `prepare`、触发器 / JSON1 / `AUTOINCREMENT` / `VACUUM INTO`，没有数据访问层可以换底；服务器壳的多 principal 已在一库里实测（30 终端、6 事件流、2000 对象实时板）；多租户隔离靠「每团队一个 core」而不是一库多租 |
+| P4  | **认证联合、授权不联合**：SaaS 账号只负责「你是谁」与「你能连到哪个源」，签发面向单个源的短寿命断言；core 验签后换成自己的会话，`scope` 仍是唯一判定点，邀请 / 组 / 授予仍在 core                                                                                                                                                                               | AGENTS.md 要求协作上下文按连线授权、不跨工作空间读取；授权真相若搬到云上，core 离线或自托管时就失去自治；现有 `identity_credentials(kind='oauth')` 正好能承载「云账号 ↔ 本地 principal」的映射                                                                  |
+| P5  | **链接加入复用 core 的 `identity_invitations`**：云端链接只是「路由封装 + 需要登录」，邀请令牌留在 URL 片段里不经云端存储；邀请表加 `max_uses / uses` 支持多次链接                                                                                                                                                                                              | 邀请签发、角色、过期、一次性消费都已实现并有审计；云端只需知道「这条链接通向哪个源的哪条邀请」                                                                                                                                                                   |
+| P6  | **WebSocket 原样保留**：中继对客户端呈现的就是一个 Gateway（HTTPS + WSS，五条流路径不变）；core 主动外连中继、一条隧道多路复用，隧道里的每条流是一个虚拟 socket 交给 `CoreServer.createListener({admitted:true})`                                                                                                                                               | Gateway 已经把「准入 → `runAs` → 交给未绑定的 `http.Server`」写成一条可复用的交接；隧道只是换了底层 socket；页面的 `api/*` 层按源换基址即可，不改五条流的帧格式                                                                                                  |
+| P7  | **多人协同的基础设施 = 组织（云）→ 源（core owner）→ 工作空间（grants）→ 连线（上下文）四层**；节点级 ACL 仍不做，跨源连线不支持                                                                                                                                                                                                                                | S4 / S5 不变；云端只加「组织」这一层做目录与批量加入，画布内的权限矩阵不变                                                                                                                                                                                       |
+| P8  | **「拆离出来的一部分」= 服务器壳产物随桌面包一起发**：桌面包内含 `resources/server/`（服务器壳入口 + 页面），桌面二进制加 `serve` 透传子命令；三种发布物（桌面包、服务器 tar、容器镜像）装的是同一份 core 与页面                                                                                                                                                | 两种壳、一份 core 的边界不变；用户在任意一台装了桌面版的机器上就能把它变成一个源                                                                                                                                                                                 |
+| P9  | **中继首版终止 TLS、零持久化、零正文日志；端到端加密作为后期可选（仅原生 App 与桌面壳，TLS 直通）**                                                                                                                                                                                                                                                             | 浏览器里做不了内层 TLS；先把「中继看不看得见」写成明确的运营承诺与自托管选项，再用直通补齐 App 侧                                                                                                                                                                |
+| P10 | **控制面与中继是独立仓库 `Owlbay/armadra-cloud`**（内含 `apps/cloud`、`apps/relay` 与发布到 npm 的协议包 `@armadra/platform-protocol`），Armadra 钉协议包的精确版本；Armadra 侧只新增 `core/relay/`（隧道客户端）、`core/identity/cloud/`（断言登录）、`core/sources/`（客户端源表）与页面的多源连接层（§16）                                                   | 与 `@armadra/agent` 同一先例；两边没有源码级依赖，只有协议与算法参数；控制面有库、要事务，数据面无状态、要横向扩，部署节奏与桌面发布不同                                                                                                                         |
+| P11 | **中继有两种运行模式，共用一份代码与同一隧道协议**：`saas`（多租户，PostgreSQL + Redis + 云账号，即本文主体）与 `personal`（单人中转：不依赖任何数据库，路由、在线与限流全在内存，只有一个账号 + 口令，自己签断言与中继令牌，零日志只做桥接，§17）。core 与客户端对两种模式**没有差别**：都是「一个 issuer + JWKS + 断言 + 隧道」；个人中转先于 SaaS 控制面交付 | 个人中转只依赖隧道协议与协议包，是第一个可交付的跨网能力；桌面端不配置任何远程服务时行为与现状完全一致，远程登记是旁路、不进本地关键路径                                                                                                                         |
 
 ## §1 范围、术语与现状核对
 
@@ -200,10 +201,12 @@
 
 下一个编号是 **0039**（0001–0038 已锁）。预分配：
 
-| 迁移                      | 内容                                                                                                                                                                                                                                                                                                                                                      | 域                     |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
-| `0039_cloud_identity.sql` | `identity_invitations` 加 `max_uses INTEGER`（NULL = 一次性，沿用 `consumed_by`）与 `uses INTEGER NOT NULL DEFAULT 0`；新表 `cloud_registrations(issuer TEXT PK, source_key_ref TEXT, jwks_json TEXT, jwks_fetched_at_ms, registered_by TEXT, registered_at_ms, revoked_at_ms)`；新表 `identity_invitation_uses(invitation_id, principal_id, used_at_ms)` | `core/identity/cloud/` |
-| `0040_client_sources.sql` | `client_sources(source_id TEXT PK, kind TEXT CHECK(local/direct/relayed/hosted), label TEXT, base_url TEXT, relay_origin TEXT, fingerprint TEXT, cloud_issuer TEXT, principal_hint TEXT, added_at_ms, last_ok_at_ms, order_index INTEGER)`；凭据不在表里（`armadra-source-<sourceId>` 在 SecretStore）                                                    | `core/sources/`        |
+| 迁移                      | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | 域                     |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| `0039_client_sources.sql` | `client_sources(source_id TEXT PK, kind TEXT CHECK(local/direct/relayed/hosted), label TEXT, base_url TEXT, relay_origin TEXT, fingerprint TEXT, cloud_issuer TEXT, principal_hint TEXT, added_at_ms, last_ok_at_ms, order_index INTEGER)` 与 `remote_services(service_id TEXT PK, kind TEXT CHECK(personal/saas), issuer TEXT UNIQUE, label TEXT, account_hint TEXT, fingerprint TEXT, added_at_ms, last_ok_at_ms)`；凭据不在表里（`armadra-source-<sourceId>`、`armadra-remote-<serviceId>` 在 SecretStore）。先合入（第 1 波），所以拿 0039 | `core/sources/`        |
+| `0040_cloud_identity.sql` | `identity_invitations` 加 `max_uses INTEGER`（NULL = 一次性，沿用 `consumed_by`）与 `uses INTEGER NOT NULL DEFAULT 0`；新表 `cloud_registrations(issuer TEXT PK, source_key_ref TEXT, jwks_json TEXT, jwks_fetched_at_ms, trusted_origins_json TEXT, relay_origins_json TEXT, registered_by TEXT, registered_at_ms, revoked_at_ms)`；新表 `identity_invitation_uses(invitation_id, principal_id, used_at_ms)`。第 2 波合入，所以拿 0040                                                                                                        | `core/identity/cloud/` |
+
+> 编号按合入顺序：总计划把客户端源表排在云登录之前，两者对调了本节最初的编号；合入前仍按 AGENTS.md 取 main 最大号 +1 复核。
 
 规则照 AGENTS.md：编号连续、字节记进 `migrations.lock`、每个迁移同 PR 带域测试；0015 之前的库与损坏库照旧拒绝启动，无自动清库。多次邀请的消费逻辑：`max_uses IS NULL` 时走现有的条件 UPDATE（一次性）；否则 `UPDATE … SET uses = uses + 1 WHERE uses < max_uses AND expires_at_ms > ? AND consumed_by IS NULL`，并写一行 `identity_invitation_uses`，同一 principal 重复接受视为幂等成功（不增计数）。
 
@@ -606,27 +609,35 @@ cloud 自己的契约文档在新仓库 `armadra-cloud/docs/contracts/cloud-api.
 > 2026-10-06 用户已定：D1（形态 3，以中继为底、托管后置）、D3（首版终止 TLS + 零日志）、D13（允许第二个迁移目录，同一把 lock）。其余按推荐执行，用户另有意见时再改。
 > 同日新增 D16–D19（独立仓库，§16）；D13 的已定内容在拆仓后由「新仓库内执行同一纪律」替代，Armadra 的 AGENTS.md 与 `repo.rules.json` 不改。
 
-| #   | 决策                        | 选项                                                                              | 推荐                                                                                                                                                                 | 影响                     |
-| --- | --------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| D1  | 中转形态                    | 形态 1 / 2 / 3（§2.2）                                                            | **已定**：形态 3，以形态 1 为底；托管源后置到阶段 6                                                                                                                  | 全文                     |
-| D2  | core 是否加 PostgreSQL 后端 | 加 / 不加                                                                         | **不加**（§4.4）；托管源每租户一卷                                                                                                                                   | 阶段 6                   |
-| D3  | 中继是否可见明文            | 首版终止 TLS 零日志 / 首版就做直通                                                | **已定**：首版终止 + 零日志 + 可自托管；阶段 6 给 App 做直通                                                                                                         | 阶段 3、6                |
-| D4  | 云账号                      | 自建（移植 core 的口令 / passkey / TOTP）/ 只接外部 IdP                           | **自建**，OIDC 作为绑定与 SSO（与 core 一致）                                                                                                                        | 阶段 2                   |
-| D5  | 授权真相                    | 在 core（云只认证 + 目录）/ 云端管成员并下发                                      | **在 core**（P4）；`cloud.orgDefaultRole` 作为 owner 可选的便利开关                                                                                                  | §5、§9                   |
-| D6  | 链接是否必须登录云账号      | 必须 / 允许匿名                                                                   | **必须**；`direct` 源的 `#invite=` 现状保留                                                                                                                          | §6                       |
-| D7  | 中继对外地址形式            | `<sourceId>.src.<域>`（通配证书）/ `<域>/s/<sourceId>`（路径前缀）                | **子域**；运营方办通配证书                                                                                                                                           | 阶段 3、页面 origin 处理 |
-| D8  | 新 app 的目录               | `apps/cloud` + `apps/relay` / 一个 `apps/cloud` 两入口                            | **两个 app**，都在新仓库 `armadra-cloud` 里（D16）                                                                                                                   | 阶段 0                   |
-| D9  | 计费预留范围                | 只建表与计数 / 接支付                                                             | **只建表与计数**                                                                                                                                                     | 阶段 6                   |
-| D10 | 桌面包内含服务器壳入口      | 含（`serve` 透传）/ 不含（另发 tar）                                              | **含**                                                                                                                                                               | 阶段 5                   |
-| D11 | 多中继节点扩展              | 按主机名一致性哈希 + 节点间转发兜底 / 只单节点                                    | **哈希 + 兜底**；首版可只部署一个节点，代码按多节点写                                                                                                                | 阶段 3                   |
-| D12 | 托管源里的 CLI 登录         | 用户自带（终端里登录或节点凭据）/ 运营方代持                                      | **用户自带**；条款风险写进使用说明                                                                                                                                   | 阶段 6                   |
-| D13 | PG 迁移纪律落在哪           | 允许 Armadra 第二个迁移目录（同一把 lock）/ 新仓库自管                            | **已定并被 D16 改形**：同一纪律（编号连续、不改已发布、损坏库拒绝启动）**在新仓库内执行**，各自一把 `migrations.lock`；Armadra 的 `repo.rules.json` / AGENTS.md 不改 | 阶段 0                   |
-| D14 | 跨源画布连线                | 不支持 / 支持                                                                     | **不支持**（P7）                                                                                                                                                     | §9.4                     |
-| D15 | 浏览器多源时源凭据只在内存  | 内存 / 持久化到 localStorage                                                      | **内存**（关标签即失效，用云会话重取）                                                                                                                               | §5.5                     |
-| D16 | 控制面与中继是否拆独立仓库  | 独立仓库 `Owlbay/armadra-cloud`（单仓双 app）/ 留在 Armadra / 两个仓库            | **拆，单仓双 app**（§16.1–§16.2）；建仓由用户在 GitHub 上操作                                                                                                        | §16、阶段 0              |
-| D17 | 协议包的真相源与发布        | 在 `armadra-cloud` 仓发 `@armadra/platform-protocol` / 在 Armadra 发 / 第三个仓库 | **在 `armadra-cloud` 仓**，npm trusted publishing；Armadra 钉精确版本并入 `compatibility.json`（§16.3）                                                              | 阶段 0                   |
-| D18 | 新仓库开源与许可证          | 公开 MIT / 公开 copyleft / 私有                                                   | **公开 + MIT**（与 Armadra、agent 一致，兑现「可自托管中继」）；支付接入与托管编排器若含商业内容另起私有 overlay 仓（§16.5）                                         | §16.5                    |
-| D19 | 兼容窗口与发布节奏          | 双 major 12 个月 / 只支持最新                                                     | **cloud 支持当前与上一个协议 major 12 个月**；cloud 持续部署，Armadra 按自己节奏，只有 major 变化需协调（§16.3）                                                     | §16.3                    |
+| #   | 决策                        | 选项                                                                              | 推荐                                                                                                                                                                  | 影响                     |
+| --- | --------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| D1  | 中转形态                    | 形态 1 / 2 / 3（§2.2）                                                            | **已定**：形态 3，以形态 1 为底；托管源后置到阶段 6                                                                                                                   | 全文                     |
+| D2  | core 是否加 PostgreSQL 后端 | 加 / 不加                                                                         | **不加**（§4.4）；托管源每租户一卷                                                                                                                                    | 阶段 6                   |
+| D3  | 中继是否可见明文            | 首版终止 TLS 零日志 / 首版就做直通                                                | **已定**：首版终止 + 零日志 + 可自托管；阶段 6 给 App 做直通                                                                                                          | 阶段 3、6                |
+| D4  | 云账号                      | 自建（移植 core 的口令 / passkey / TOTP）/ 只接外部 IdP                           | **自建**，OIDC 作为绑定与 SSO（与 core 一致）                                                                                                                         | 阶段 2                   |
+| D5  | 授权真相                    | 在 core（云只认证 + 目录）/ 云端管成员并下发                                      | **在 core**（P4）；`cloud.orgDefaultRole` 作为 owner 可选的便利开关                                                                                                   | §5、§9                   |
+| D6  | 链接是否必须登录云账号      | 必须 / 允许匿名                                                                   | **必须**；`direct` 源的 `#invite=` 现状保留                                                                                                                           | §6                       |
+| D7  | 中继对外地址形式            | `<sourceId>.src.<域>`（通配证书）/ `<域>/s/<sourceId>`（路径前缀）                | **子域**；运营方办通配证书                                                                                                                                            | 阶段 3、页面 origin 处理 |
+| D8  | 新 app 的目录               | `apps/cloud` + `apps/relay` / 一个 `apps/cloud` 两入口                            | **两个 app**，都在新仓库 `armadra-cloud` 里（D16）                                                                                                                    | 阶段 0                   |
+| D9  | 计费预留范围                | 只建表与计数 / 接支付                                                             | **只建表与计数**                                                                                                                                                      | 阶段 6                   |
+| D10 | 桌面包内含服务器壳入口      | 含（`serve` 透传）/ 不含（另发 tar）                                              | **含**                                                                                                                                                                | 阶段 5                   |
+| D11 | 多中继节点扩展              | 按主机名一致性哈希 + 节点间转发兜底 / 只单节点                                    | **哈希 + 兜底**；首版可只部署一个节点，代码按多节点写                                                                                                                 | 阶段 3                   |
+| D12 | 托管源里的 CLI 登录         | 用户自带（终端里登录或节点凭据）/ 运营方代持                                      | **用户自带**；条款风险写进使用说明                                                                                                                                    | 阶段 6                   |
+| D13 | PG 迁移纪律落在哪           | 允许 Armadra 第二个迁移目录（同一把 lock）/ 新仓库自管                            | **已定并被 D16 改形**：同一纪律（编号连续、不改已发布、损坏库拒绝启动）**在新仓库内执行**，各自一把 `migrations.lock`；Armadra 的 `repo.rules.json` / AGENTS.md 不改  | 阶段 0                   |
+| D14 | 跨源画布连线                | 不支持 / 支持                                                                     | **不支持**（P7）                                                                                                                                                      | §9.4                     |
+| D15 | 浏览器多源时源凭据只在内存  | 内存 / 持久化到 localStorage                                                      | **内存**（关标签即失效，用云会话重取）                                                                                                                                | §5.5                     |
+| D16 | 控制面与中继是否拆独立仓库  | 独立仓库 `Owlbay/armadra-cloud`（单仓双 app）/ 留在 Armadra / 两个仓库            | **拆，单仓双 app**（§16.1–§16.2）；建仓由用户在 GitHub 上操作                                                                                                         | §16、阶段 0              |
+| D17 | 协议包的真相源与发布        | 在 `armadra-cloud` 仓发 `@armadra/platform-protocol` / 在 Armadra 发 / 第三个仓库 | **在 `armadra-cloud` 仓**，npm trusted publishing；Armadra 钉精确版本并入 `compatibility.json`（§16.3）                                                               | 阶段 0                   |
+| D18 | 新仓库开源与许可证          | 公开 MIT / 公开 copyleft / 私有                                                   | **公开 + MIT**（与 Armadra、agent 一致，兑现「可自托管中继」）；支付接入与托管编排器若含商业内容另起私有 overlay 仓（§16.5）                                          | §16.5                    |
+| D19 | 兼容窗口与发布节奏          | 双 major 12 个月 / 只支持最新                                                     | **cloud 支持当前与上一个协议 major 12 个月**；cloud 持续部署，Armadra 按自己节奏，只有 major 变化需协调（§16.3）                                                      | §16.3                    |
+| D20 | 个人中转的代码落点          | `apps/relay` 的一种运行模式 / 独立 app / 独立仓库                                 | **`apps/relay` 的运行模式 `personal`**：隧道终端、边缘、流控、令牌校验一份代码；只换「控制面适配器」（内存 + 状态文件 vs Redis + cloud JWKS）（§17.2）                | §17、阶段 3              |
+| D21 | 个人中转的鉴权              | 账号 + 口令 → 短期令牌 / 只有静态令牌 / 接 OIDC                                   | **一个账号 + 口令（scrypt，参数同 identity-vectors）→ 15 分钟访问令牌 + 30 天刷新令牌**；之后与 SaaS 同一条断言 → `cloud/login` 路径；锁定与限流同 core 的 `throttle` | §17.3                    |
+| D22 | 个人中转的 TLS              | 自签 CA + 指纹钉扎 / ACME / 运维给证书                                            | **默认自签 CA + 指纹钉扎**（`/ca.crt` 与 `fp=` 的做法与 Gateway 一致）；有域名时 `--tls acme`；也接受 `--tls-cert/--tls-key`（§17.4）                                 | §17.4                    |
+| D23 | 中继地址形式按模式          | 子域 / 路径前缀                                                                   | **`saas` 子域（D7）、`personal` 路径前缀 `/s/<sourceId>/`**；客户端从断言响应里拿 `relayBaseUrl`，不自己拼                                                            | §8.1、§17.5              |
+| D24 | 个人中转的持久化            | 单个 JSON 状态文件 / SQLite / 无                                                  | **单个状态文件 `state.json`（0600）**：账号与口令哈希、签名密钥、已登记源、分享链接、设备刷新令牌哈希；无任何消息、终端或会话内容                                     | §17.6                    |
+| D25 | 个人中转怎么发              | 同一镜像 + npm 包 / 另出极简镜像                                                  | **同一镜像 `ghcr.io/owlbay/armadra-relay`（`personal` 子命令）+ npm 包 `@armadra/relay`（`npx @armadra/relay personal`）**；不另出镜像                                | §17.8                    |
+| D26 | 交付顺序                    | 个人中转先 / SaaS 先                                                              | **个人中转先**：只依赖协议包与 core 的隧道客户端 / 断言登录，不等 PostgreSQL、Redis 与云账号                                                                          | 总计划                   |
+| D27 | 客户端选路                  | 直连优先 / 中继优先 / 手动                                                        | **直连优先**：连接时并行探 `direct` 的 hello（1.5 秒）与中继，`hostId` 相同即同源；直连通就用直连，否则中继；重连与 `online` 事件时再探（§17.7）                      | §7.3、§8.4、§17.7        |
 
 ## §15 不做的事与风险
 
@@ -732,3 +743,124 @@ Owlbay/armadra-cloud                       pnpm workspace，Node 22，TypeScript
 2. npm：为 `@armadra/platform-protocol` 配 trusted publishing（与 `@armadra/agent` 同一做法）。
 3. GHCR：允许新仓的工作流推 `armadra-cloud` / `armadra-relay` 镜像。
 4. 阶段 2 起：签名密钥文件 / KMS、托管 PG 与 Redis、中继域名与通配证书（D7）。
+
+## §17 个人中转模式与桌面端零配置
+
+> 用户要求（2026-10-06）：服务提供两种模式——SaaS（多租户，PostgreSQL + Redis，即 §3–§16）与最基础的「单人中转」（只给一个人用，平台不存任何信息，只做桥接；本地、手机都直接连；连接方式是 IP + 账号 + 口令）。桌面端不做任何配置也要能正常工作；配置时在设置里加「远程服务」，再分享。本节定个人中转的形态、与 Gateway 的关系、鉴权、TLS、状态、选路、打包，以及桌面与手机的接入面。决策见 §14 的 D20–D27。
+
+### 17.1 定义与边界
+
+个人中转（`armadra-relay personal`）是一台**不带控制面数据库的中继**：
+
+- 做：隧道终端（core 出站连它）、客户端边缘（浏览器 / 手机 / 第二台桌面连它）、一个账号的登录、源访问断言与中继令牌的签发、分享链接的路由封装、自签证书或 ACME。
+- 不做：组织、计费、设备目录、多账号、链接的云端审计、托管源。
+- 不存：任何画布、终端、对话、文件、推送正文；没有请求日志（只有启动 / 关闭 / 认证失败计数的进程日志）。
+
+core 与客户端看到的仍是 §5–§8 的那套东西：一个 issuer（`https://<relay 地址>`）、它的 JWKS、它签的断言与中继令牌、同一个 `t/v1` 隧道、同一条 `POST /api/identity/cloud/login`。**core 的 `core/identity/cloud/` 与 `core/relay/`、页面的 `SourceConnection` 对两种模式零分支**；模式差异全部在中继进程内部的「控制面适配器」。
+
+### 17.2 与 SaaS 模式共用什么、换什么
+
+| 层                           | `saas`                                    | `personal`                                                          |
+| ---------------------------- | ----------------------------------------- | ------------------------------------------------------------------- |
+| 隧道终端 `t/v1`              | 同一份 `apps/relay/src/tunnel/`           | 同                                                                  |
+| 客户端边缘                   | 同一份 `apps/relay/src/edge/`             | 同                                                                  |
+| 流控、心跳、关闭码           | 同                                        | 同                                                                  |
+| 路由与在线                   | Redis `route:src:*`                       | 进程内 `Map`                                                        |
+| 限流与锁定                   | Redis `rl:*`                              | 进程内桶（算法同 core `identity/throttle.ts`）                      |
+| 令牌校验用的 JWKS            | cloud 的 `/.well-known/jwks.json`（缓存） | 自己的签名密钥                                                      |
+| 断言、中继令牌、隧道令牌签发 | cloud                                     | 中继自己（内置「迷你控制面」`apps/relay/src/personal/`）            |
+| 账号                         | cloud `accounts`                          | `state.json` 里的一个账号（口令 scrypt 哈希）                       |
+| 源目录                       | cloud `sources`                           | `state.json` 的 `sources[]`（`sourceId`、公钥、名字、最近在线）     |
+| 分享                         | cloud `links` + core 邀请                 | `state.json` 的 `links[]` + core 邀请（真相仍在 core）              |
+| 节点间转发                   | 有                                        | 无（单节点）                                                        |
+| 地址形式                     | `<sourceId>.src.<域>`                     | `/s/<sourceId>/`（D23）                                             |
+| TLS                          | 运营方的通配证书                          | 自签 CA + 指纹 / ACME / 运维证书（D22）                             |
+| 对外 HTTP 面                 | 无（cloud 提供 `/v1/*`）                  | `/v1/*` 的子集（§17.3 表）+ `/.well-known/*` + `/j/<linkId>` 落地页 |
+
+两种模式的公共接口是 `ControlPlane`（`apps/relay/src/control/types.ts`）：`verifyTunnelToken`、`verifyRelayToken`、`routes.get/set/touch/delete`、`presence.publish`、`limits.hit`、`tokens.isRevoked`。`saas` 的实现是 `control/redis.ts`，`personal` 的实现是 `control/memory.ts`；隧道与边缘只依赖这个接口。
+
+### 17.3 鉴权：IP + 账号 + 口令
+
+- **账号**只有一个，初始化时建：`armadra-relay personal init --data-dir <目录> --account <名>`（交互读口令，或 `--password-file`）。口令策略与哈希参数来自 `@armadra/platform-protocol/identity-vectors`（最短 12 字、常见口令拒绝、scrypt N=2^15 r=8 p=1 len=32、哈希前缀 `armadra/identity/v1/<kind>`），与 core 一致；`state.json` 只存哈希与盐。
+- **登录**：`POST /v1/auth/login { account, password }` → `{ session: { accessToken, refreshToken, expiresAtMs } }`。访问令牌是 EdDSA JWT（15 分钟，`aud: "cloud"`，与 SaaS 同形），刷新令牌是 `state.json` 的 `devices[]` 一行（哈希、30 天、旋转防重放）。
+- **暴力破解防护**：按 IP 的令牌桶（20 次 / 分钟）+ 按账号的失败计数（5 次起锁 1 分钟，每次翻倍到 15 分钟上限，1 小时无失败清零），常量同 core `identity/throttle.ts`，由 identity-vectors 导出；锁定期间答 `429 account_locked`，带 `retryAfterMs`。
+- **之后的一切与 SaaS 相同**：`POST /v1/sources/{sourceId}/assertion` 换断言 + 中继令牌 → 经中继 `POST /api/identity/cloud/login` → core 的 15 分钟 / 30 天会话。core 不另起一套。
+- **分享（访客）**：owner 在 core 的「账号与共享」页建邀请（`maxUses`、角色、过期），页面用 owner 的中继会话 `POST /v1/links { sourceId, invitationId, label, role, expiresAt, maxUses }` → 中继存一行（`secretHash`）→ 链接 `https://<relay>/j/<linkId>#<relaySecret>.<core 邀请令牌>`。访客打开落地页 → `POST /v1/links/{linkId}/accept { secret }`（匿名，限流）→ 中继签一张 `sub: "guest:<linkId>:<随机>"`、带 `link` 声明的断言与中继令牌，并给访客一个设备刷新令牌（`devices[]`，标 `guest`）→ 访客 `cloud/login { assertion, invitationToken }` → core 用邀请建 member 并写映射凭据（`provider=cloud:<sha256(iss) 前 16 位>`、`subject=guest:…`）。撤销：core 删邀请（即刻）或中继 `DELETE /v1/links/{id}`（访客的设备令牌随之作废）。访客不需要知道账号口令。`allowGuests` 缺省开，可在 `state.json` 关。
+
+个人中继实现的 `/v1/*` 子集（形状与 cloud-api 契约完全相同，差别只是没有的那些答 `404 not_found`）：
+
+| 路径                                                                                          | 说明                                                      |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `GET /.well-known/armadra-platform`                                                           | `{ mode: "personal", protocol, capabilities[], issuer }`  |
+| `GET /.well-known/jwks.json`                                                                  | 中继自己的公钥                                            |
+| `POST /v1/auth/login`、`/v1/auth/refresh`、`/v1/auth/logout`                                  | 账号会话                                                  |
+| `GET /v1/me`                                                                                  | `{ accountId, displayName }`                              |
+| `POST /v1/sources/registration-tokens`                                                        | owner 会话；一次性，10 分钟                               |
+| `POST /v1/sources/register`                                                                   | 匿名 + 注册令牌；core 调                                  |
+| `GET /v1/sources/me/relay`                                                                    | 源认证（§17.5 的源 JWS）；答隧道令牌与节点列表（一个）    |
+| `GET /v1/me/sources`、`GET /v1/sources/{id}`、`DELETE /v1/sources/{id}`                       | 源目录                                                    |
+| `POST /v1/sources/{id}/assertion`                                                             | 断言 + 中继令牌 + `relayBaseUrl`                          |
+| `POST /v1/links`、`GET /v1/links/{id}`、`POST /v1/links/{id}/accept`、`DELETE /v1/links/{id}` | 分享                                                      |
+| `GET /v1/me/stream`                                                                           | 源上下线事件（进程内事件总线）                            |
+| `GET /j/<linkId>`、`GET /app/*`                                                               | 落地页与页面（Armadra `apps/web` 的构建产物，中继只托管） |
+
+### 17.4 TLS
+
+| 方式                   | 何时                           | 做法                                                                                                                                                                                                                       | 客户端                                                                                                                                                      |
+| ---------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 自签 CA + 指纹（默认） | 只有 IP、或没有可用的 80 / 443 | 首次启动在 `--data-dir` 生成 CA 与叶证书（SAN = `--host` 的 IP / 域名，`@peculiar/x509`），叶证书每 90 天自动换、CA 10 年；`GET /ca.crt` 可下载；启动日志与 `armadra-relay personal status` 打印 CA 指纹（DER 的 SHA-256） | 桌面「远程服务」页与手机添加连接时显示指纹让用户确认，之后钉住（`remote_services.fingerprint`）；浏览器要一次性信任 CA（与 Gateway 本地 CA 的做法完全一样） |
+| ACME                   | 有域名、能开 80 或 443         | `--tls acme --acme-email …`（`acme-client`，http-01 缺省、tls-alpn-01 可选；目录可换成 dev-stack 的 pebble）；续期与失败重试规则同 core 的 Gateway                                                                         | 系统信任，不钉扎                                                                                                                                            |
+| 运维给证书             | 已有反向代理 / 自有 CA         | `--tls-cert/--tls-key`；或 `--plain`（只允许绑回环，给反向代理用）                                                                                                                                                         | 视证书而定                                                                                                                                                  |
+
+不复用 core 源码（两仓无源码依赖），但用同一批库与同一套规则（本地 CA 的参数、ACME 的续期节奏、指纹定义），写进 `docs/contracts/cloud-api.md` 的「TLS 约定」节并在两仓各有测试。
+
+### 17.5 与 Gateway 的关系、取舍与选路
+
+| 场景                       | 走哪条                                                                                 |
+| -------------------------- | -------------------------------------------------------------------------------------- |
+| 同一局域网                 | **直连 Gateway**（现状）：配对链接 / 扫码 / 短码，本地 CA 钉扎；零额外进程、零外部依赖 |
+| 跨网、不想开端口、没有域名 | **个人中转**：core 出站连中继，中继只要一个公网 IP（或域名）                           |
+| 跨网 + 多人 + 组织         | SaaS                                                                                   |
+
+个人中转解决的是「跨网访问、免开端口」，不替代 Gateway：core 的 Gateway 照常可以开着（局域网里的手机继续直连），中继只是多了一条出站。客户端对同一个源同时记住两种到达方式（`client_sources.base_url` 与 `relay_origin`），**直连优先**（D27）：
+
+1. 连接时并行发 `GET <base_url>/api/identity/hello`（超时 1.5 秒）与向中继取断言；
+2. 直连答复且 `hostId` 与源表相同 → 用 `direct`（会话按 origin 各存一份，SecretStore `armadra-source-<sourceId>` 里是 `{ byOrigin: { <origin>: { refreshToken } } }`）；否则用 `relayed`；
+3. 在 `relayed` 上时不中途切换；每次重连、`online` 事件、页面从后台回前台都重新走第 1 步；
+4. 两条都不通 → 源离线（侧栏灰显，已打开的板只读）。
+
+core 侧对中继的认证：core 向中继取隧道令牌时用**源 JWS**（`Authorization: Source <jws>`，头 `{ alg: "EdDSA", kid: <sourceId> }`，声明 `{ iss: sourceId, aud: <issuer>, iat, exp: +60s, jti }`，源私钥签），中继用登记时存的公钥验；SaaS 模式同一做法（cloud 验）。隧道握手里 core 再用同一把源私钥答 challenge（§8.2），中继从隧道令牌的 `cnf.jwk` 取公钥验签——所以 relay 节点在两种模式下都**不需要查库**就能验隧道。
+
+### 17.6 桌面端：零配置与「远程服务」
+
+- **零配置**：不添加任何远程服务时，桌面壳的启动路径与现状逐字相同——本地 core、本地页面、回环票；`core/relay/` 与 `core/identity/cloud/` 在没有 `cloud_registrations` 行时不起任何定时器、不发任何请求（`net/outbound.ts` 的 `relayTunnel` / `cloudApi` / `cloudJwks` 三项的开关是「有登记行」而不是设置键，缺省不联网）。
+- **设置 →「远程服务」**（`panels/settings/pages/RemoteServicesPage.tsx`，`id: "remote"`，桌面与服务器壳都有；替代 §5.4 的「源」页与 P2-4 的「源与云」页）。两段：
+  - **远程服务**（`remote_services`，迁移 0039）：可添加多个——「个人中转」（地址 + 账号 + 口令 → 登录 → 显示并确认 CA 指纹 → 存刷新令牌到 SecretStore `armadra-remote-<serviceId>`，口令不存）、「SaaS」（设备码流登录云账号）。每条可「分享本机」与「移除」。
+  - **已挂载的源**（`client_sources`）：本机（不可删）、自托管直连（配对链接 / 扫码 / 短码）、经远程服务挂载的源（登录远程服务后列出「我能访问的源」勾选）。每条可「断开」与「移除」；状态徽标来自各源自己的事件流。
+- **分享本机** = 把本机 core 登记到选定的远程服务（页面向远程服务要注册令牌 → `POST /api/identity/cloud/register { issuer, registrationToken }` → core 拉 JWKS、写 `cloud_registrations`、起隧道）；登记后此页显示隧道状态，并能「生成邀请链接 / 二维码」（§17.3 的分享流程；SaaS 模式是 §6.2）与「停用」（`DELETE /api/identity/cloud/register`，断隧道、撤信、保留 `remote_services` 行）。
+- **旁路保证**：core 启动不等隧道，隧道断开只影响经中继来的客户端流，本地终端 / Agent / 画布不受影响；远程服务不可达时「远程服务」页显示状态，其余页面不弹错。测试守住：`core/relay/tunnel.test.ts`「中继不可达时 core 启动与回环 API 正常、启动耗时不含任何对中继的等待」、`main.test.ts`「`startRelay` 在 `listen` 之后且不被 `await`」、`apps/web/src/sources/registry.test.ts`「远程源失败不阻塞本机源的 hydrate」。
+- **凭据位置**：只在 core 数据目录的 SecretStore（桌面钥匙串 / safeStorage，服务器壳 file-encrypted）；不写用户的其它配置文件、不写 localStorage。
+
+### 17.7 手机端
+
+「添加连接」三选一，加完都是 `client_sources` 的一行（手机本地存 `armadra.sources`，凭据按 `sourceId` 进钥匙串，§5.5）：
+
+| 选项              | 流程                                                                                                                      | 来源种类                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| 扫配对码 / 局域网 | 现状（`armadra://pair`、`fp=` 钉扎）                                                                                      | `direct`                    |
+| 个人中转          | 输入地址、账号、口令 → 登录 → 确认 CA 指纹并钉住 → 列出该中继上的源 → 勾选挂载（每个源：取断言 → `cloud/login` → 存会话） | `relayed`（`cloud_issuer`） |
+| SaaS              | 设备码流（系统浏览器）→ 云会话 → 列出我能访问的源 → 勾选挂载                                                              | `relayed`                   |
+
+同一个源既扫过码又经中继挂过 → 合并为一行、两种到达方式，选路同 §17.5。多源并存、按源分组，§7 不变。
+
+### 17.8 仓库、打包与一键脚本
+
+- 代码在 `armadra-cloud/apps/relay`，入口 `armadra-relay <saas|personal> …`（D20）；`personal` 子命令：`init`、`serve`、`status`、`links list/revoke`、`passwd`。
+- 发布：同一镜像 `ghcr.io/owlbay/armadra-relay`（`CMD ["personal", "serve"]` 时就是个人中转）+ npm 包 `@armadra/relay`（`bin: armadra-relay`，esbuild 单文件 + `@peculiar/x509`、`acme-client`、`ws` 作为依赖），`npx @armadra/relay personal serve --data-dir ~/.armadra-relay --host 203.0.113.5` 一条命令起来（D25）。
+- 一键：cloud 仓 `pnpm relay:personal`（源码起一个开发实例，数据目录 `.data/personal/`，账号 `dev` 口令随机写进 `.data/personal/dev.env`）；`deploy/personal/compose.yml`（单服务，卷 `relay-data:/data`，端口 `443:8443`）；Armadra 仓 `pnpm platform:up --profile personal` 在 dev-stack 里起一个个人中继给探针用。
+
+### 17.9 不做的事
+
+- 个人中转不做多账号、组织、计费、节点间转发、托管源；要这些就是 SaaS 模式。
+- 不做端到端加密的差别对待：个人中转同样首版终止 TLS（它就在用户自己的机器上，D3 的「可自托管」在这里就是事实）。
+- 不做 UDP / 打洞 / P2P：全部经中继，简单可预期。
