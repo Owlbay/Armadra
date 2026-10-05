@@ -312,7 +312,9 @@ try {
           await page.capture(join(output, `failure-${index}.png`)),
         );
         entry.problems.push(...page.unexpected());
-      } catch {}
+      } catch {
+        // 页面已经没了：失败本身已经记下，截不到图不再追究。
+      }
     }
   } else {
     report.error = message;
