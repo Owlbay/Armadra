@@ -40,7 +40,17 @@ final class ConnectFlowUITests: XCTestCase {
         // WKWebView 里的元素常报「不可点」（无障碍树的可点判定跟不上页面布局），按坐标点。
         connect.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let canvas = button(app, ["画布", "Canvas"])
-        if !canvas.waitForExistence(timeout: 60) {
+        // 深链预填之后页面还会再渲染一次，紧跟着的一次点按偶尔落空：连接页原样、按钮可点、没有
+        // 错误（nightly 37235828235、37190639392 的截图）。按钮仍可点就再点，最多两次；票只用一次，
+        // 真开始配对之后按钮是禁用的，不会重复兑换。
+        var retries = 0
+        while !canvas.waitForExistence(timeout: 20), retries < 2, connect.exists, connect.isEnabled {
+            retries += 1
+            XCTContext.runActivity(named: "connect tap retry \(retries)") { _ in
+                connect.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            }
+        }
+        if !canvas.waitForExistence(timeout: 20) {
             let shot = XCTAttachment(screenshot: app.screenshot())
             shot.lifetime = .keepAlways
             add(shot)
