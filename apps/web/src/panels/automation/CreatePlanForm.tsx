@@ -9,6 +9,7 @@ import {
 
 import { Alert, AlertDescription, AlertTitle } from "@/ui/alert";
 import { Button } from "@/ui/button";
+import { Checkbox } from "@/ui/checkbox";
 import { Input } from "@/ui/input";
 import {
   Select,
@@ -649,11 +650,10 @@ export function CreatePlanForm({
               problem("session"),
             )}
             <label className="flex min-w-0 items-start gap-2 text-[12px]">
-              <input
-                type="checkbox"
+              <Checkbox
                 className="mt-0.5"
                 checked={coldStart}
-                onChange={(event) => setColdStart(event.target.checked)}
+                onCheckedChange={(next) => setColdStart(next === true)}
               />
               <span className="min-w-0">
                 <span className="block font-medium">

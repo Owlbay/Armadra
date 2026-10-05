@@ -307,7 +307,7 @@ export function SignIn({
           }}
         >
           {/* 账号留在表单里，口令管理器认得出这一对。 */}
-          <input
+          <Input
             type="text"
             name="username"
             autoComplete="username"

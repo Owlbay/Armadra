@@ -1,5 +1,6 @@
 import type { GitExpectedState, GitRepositoryAction } from "@armadra/shared";
 import { useT } from "../../app/preferences-store";
+import { Checkbox } from "../../ui/checkbox";
 import {
   ResponsiveAlertDialog,
   ResponsiveAlertDialogAction,
@@ -160,13 +161,9 @@ export function RepositoryConfirmDialog({
                 <dd>{t("gitRepo.leaseSafety")}</dd>
                 <dd>
                   <label className="flex min-h-9 items-center gap-2">
-                    <input
-                      type="checkbox"
-                      className="size-4 accent-[var(--brand)]"
+                    <Checkbox
                       checked={acknowledged}
-                      onChange={(event) =>
-                        setAcknowledged(event.target.checked)
-                      }
+                      onCheckedChange={(next) => setAcknowledged(next === true)}
                     />
                     {t("gitRepo.leaseAcknowledge")}
                   </label>
