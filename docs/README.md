@@ -74,6 +74,20 @@
 | [画板导入 Mermaid 图](design/mermaid-import.md)                                 | flowchart → 原生白板对象，其余图种 → 图片回退                                                                                                                                                                                                                           |
 | [浏览器节点的 Agent 工具](design/browser-agent-tools.md)                        | 无障碍快照与引用、动词清单、开发者能力与白名单                                                                                                                                                                                                                          |
 | [工程规范化](design/engineering-standardization.md)                             | 接口改 typed procedure（HTTP + 一条多路复用 WebSocket）的利弊与迁移、WebSocket 生命周期规范、组件审计与守卫、ESLint / knip / 覆盖率等工具评估、分阶段计划与待拍板清单                                                                                                   |
+| [正规化平台落地总计划](design/platform-implementation-plan.md)                  | E0–E6 与平台阶段 0–6（含个人中转）合成的七个波次：依赖图、逐包的仓库 / 目录 / 编号 / 交付 / 验收命令 / 模型 / 规模、第 1 波派发清单、测试与验收体系、风险与回滚、待拍板点                                                                                               |
+
+落地总计划的逐包规格（`design/platform/`）：
+
+| 文档                                                                       | 内容                                                                                                                                        |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| [协议包 `@armadra/platform-protocol`](design/platform/protocol-package.md) | 隧道帧与握手、四种令牌声明、`/v1` oRPC 契约、错误码注册表、identity-vectors、黄金 fixtures                                                  |
+| [`armadra-cloud` 仓库骨架](design/platform/cloud-repo-skeleton.md)         | 目录、版本选择、根脚本、AGENTS.md、repo-check、CI 三条工作流、Dockerfile 与三份 compose、一键脚本                                           |
+| [中继 `apps/relay`](design/platform/relay.md)                              | 隧道终端、边缘、流控、`ControlPlane` 接口；personal 模式的状态文件、账号、TLS、分享；saas 的 Redis 适配与节点间转发；测试与本地运行         |
+| [控制面 `apps/cloud`](design/platform/cloud-control-plane.md)              | 技术选择、PostgreSQL 迁移 0001–0004 的 DDL、Redis 键、会话 / 设备码 / 源 / 链接的状态机、安全、配置、测试                                   |
+| [Armadra core 侧工作包](design/platform/core-packages.md)                  | `core/sources/`（0039、§33）、`core/identity/cloud/`（0040、§31）、流发送队列、`core/relay/`（§32）、邀请多次、服务器壳 CLI、桌面包 `serve` |
+| [页面与手机侧工作包](design/platform/client-packages.md)                   | 多源连接层、查询键与 store、「远程服务」页与分享、手机多连接、`relayed` 源与选路、分享链接落地与组织页                                      |
+| [工程规范化包 E1–E6](design/platform/engineering-packages.md)              | 契约 §34–§43 预分配、E1 内核与 E2 控制面 WS 的文件级规格、E3 按域表、E4–E6                                                                  |
+| [dev-stack 与验收](design/platform/dev-stack-and-verification.md)          | Armadra dev-stack 的 `platform` / `personal` profile 与 `pnpm platform:*`、cloud 仓一键脚本与 e2e、探针清单、跨仓契约测试、每波验收         |
 
 ## status/ 已验证进度
 
