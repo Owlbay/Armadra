@@ -9,6 +9,7 @@ import {
 } from "../host/native-session";
 import { isNativeApp, nativeBridge } from "../mobile/native-bridge";
 import { RUNTIME_URL } from "./request";
+import { localSource } from "./source";
 
 /**
  * 身份面的客户端 —— core 的 `/api/identity/*`（typescript-core D9）。
@@ -337,17 +338,20 @@ async function call<T>(
 
   let response: Response;
   try {
-    response = await fetch(`${options.base ?? RUNTIME_URL}${PREFIX}${action}`, {
-      method,
-      headers,
-      body:
-        options.body === undefined ? undefined : JSON.stringify(options.body),
-      // 原生传输上没有 Cookie，带凭据只会让 CORS 更严而毫无所得。
-      credentials: native ? "omit" : "include",
-      redirect: "error",
-      cache: "no-store",
-      ...(options.signal ? { signal: options.signal } : {}),
-    });
+    response = await localSource.fetch(
+      `${options.base ?? RUNTIME_URL}${PREFIX}${action}`,
+      {
+        method,
+        headers,
+        body:
+          options.body === undefined ? undefined : JSON.stringify(options.body),
+        // 原生传输上没有 Cookie，带凭据只会让 CORS 更严而毫无所得。
+        credentials: native ? "omit" : "include",
+        redirect: "error",
+        cache: "no-store",
+        ...(options.signal ? { signal: options.signal } : {}),
+      },
+    );
   } catch (cause) {
     throw new IdentityTransportError(cause);
   }

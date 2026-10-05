@@ -2,6 +2,7 @@ import { z } from "zod";
 import { isServerShellServed, resolveRuntimeUrl } from "./runtime-url";
 import { ensureCsrf, replaceRejectedCsrf } from "./identity";
 import { t } from "../app/preferences-store";
+import { localSource } from "./source";
 
 /**
  * Runtime HTTP 客户端 —— docs/contracts/v3-agent-terminal-plan.md §7 / §15。
@@ -154,12 +155,13 @@ function unsafeMethod(method: string | undefined): boolean {
 }
 
 /**
- * 凭据不在这里加：桌面壳里 `Authorization: Bearer` 由装在全局 `fetch` 上的请求层
- * 补上（`api/shell-transport.ts`，契约 §3.2），原生 App 同理
- * （`mobile/native-bridge.ts`）；服务器壳是 Cookie，这里只补双提交的 CSRF。
+ * Bearer 不在这里加：桌面壳里由本机源补上（`api/source.ts` 的 `localSource`，
+ * 壳在 `api/shell-transport.ts` 里装凭据，契约 §3.2），原生 App 由装在全局
+ * `fetch` 上的请求层补上（`mobile/native-bridge.ts`）；服务器壳是 Cookie，这里
+ * 只补双提交的 CSRF。
  */
 async function send(path: string, init: RequestInit | undefined, csrf: string) {
-  return fetch(`${RUNTIME_URL}${path}`, {
+  return localSource.fetch(`${RUNTIME_URL}${path}`, {
     ...init,
     headers: {
       ...(init?.body instanceof FormData
@@ -176,7 +178,7 @@ async function send(path: string, init: RequestInit | undefined, csrf: string) {
  * 带别的码的 403 已经到过处理器——例如托管平台的 `forge_scope`：远端拒了这次
  * 写，换一枚令牌再发一遍就是把写重试了一次。
  */
-async function csrfRefusal(response: Response): Promise<boolean> {
+export async function csrfRefusal(response: Response): Promise<boolean> {
   if (typeof response.clone !== "function") return true;
   const body = (await response
     .clone()

@@ -9,6 +9,7 @@ import {
 
 import { buildResumeLaunch } from "../agent/launch";
 import { RUNTIME_URL, runtimeApi } from "../api/client";
+import { localSource } from "../api/source";
 
 /**
  * 历史对话索引（计划书 §17「对话索引与 resume」）。
@@ -44,7 +45,7 @@ export async function fetchConversations(
   }
   if (typeof fetch !== "function") return [];
   const url = `${RUNTIME_URL}/api/conversations?q=${encodeURIComponent(query)}&limit=${limit}`;
-  const response = await fetch(url);
+  const response = await localSource.fetch(url);
   if (!response.ok) return [];
   return unwrap(await response.json());
 }
@@ -56,7 +57,7 @@ export async function suggestTitle(nodeId: string): Promise<string> {
     return suggestTitleResponseSchema.parse(await optional.suggestTitle(nodeId))
       .title;
   }
-  const response = await fetch(
+  const response = await localSource.fetch(
     `${RUNTIME_URL}/api/agent-status/${encodeURIComponent(nodeId)}/suggest-title`,
     { method: "POST" },
   );

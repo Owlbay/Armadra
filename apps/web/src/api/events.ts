@@ -27,6 +27,7 @@ import { useDependencyStore } from "../agent/dependency-store";
 import { useDriveStore } from "../agent/drive-store";
 import { useLanguageStatusStore } from "../editor/language/status-store";
 import { createBackoff, type Backoff } from "@/lib/backoff";
+import { localSource } from "./source";
 
 type EventType = WorkspaceEvent["type"];
 type EventOf<T extends EventType> = Extract<WorkspaceEvent, { type: T }>;
@@ -163,7 +164,8 @@ function parseFrame(
 function open(connection: Connection): void {
   if (connection.stopped) return;
   connection.opened = false;
-  const Socket = globalThis.WebSocket;
+  // 经本机源：桌面壳里先换票再升级（`api/source.ts`）。
+  const Socket = globalThis.WebSocket ? localSource.WebSocket : undefined;
   if (!Socket) return;
 
   let socket: WebSocket;

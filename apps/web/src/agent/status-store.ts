@@ -25,6 +25,7 @@ import type { StatusTone } from "../ui/status-pill";
 import { runtimeApi } from "../api/client";
 import { useCanvasStore } from "../store/canvas-store";
 import { agentGateway } from "./gateway";
+import { localSource } from "../api/source";
 
 /** 迟到的 `working` 在这个窗口内不能覆盖 `done`。 */
 export const DONE_HOLDOFF_MS = 3_000;
@@ -113,7 +114,7 @@ export async function postAgentRead(
     return;
   }
   if (typeof fetch !== "function") return;
-  await fetch(
+  await localSource.fetch(
     `${RUNTIME_BASE}/api/agent-status/${encodeURIComponent(nodeId)}/read`,
     { method: "POST" },
   );

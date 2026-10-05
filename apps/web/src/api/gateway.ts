@@ -8,6 +8,7 @@ import {
 
 import { IdentityRequestError, IdentityTransportError } from "./identity";
 import { RUNTIME_URL, json, request } from "./request";
+import { localSource } from "./source";
 
 /**
  * 对外服务（Gateway，契约 §17）。三条路由只有 owner 进得来，成员 403——设置页
@@ -42,17 +43,20 @@ export async function exchangePairingCode(
 ): Promise<GatewayPairingPayload> {
   let response: Response;
   try {
-    response = await fetch(`${base}/api/gateway/pairing-code/exchange`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
+    response = await localSource.fetch(
+      `${base}/api/gateway/pairing-code/exchange`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ code }),
+        credentials: "omit",
+        redirect: "error",
+        cache: "no-store",
       },
-      body: JSON.stringify({ code }),
-      credentials: "omit",
-      redirect: "error",
-      cache: "no-store",
-    });
+    );
   } catch (cause) {
     throw new IdentityTransportError(cause);
   }
