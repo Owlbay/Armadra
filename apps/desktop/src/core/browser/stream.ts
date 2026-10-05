@@ -4,6 +4,7 @@ import type { WebSocket } from "ws";
 import { loadNode } from "../collab/nodes";
 import { workspaceExists } from "../events/workspaces";
 import type { StreamRefusal } from "../http/server";
+import { SendQueue, wsTarget } from "../http/stream-queue";
 import { DRIVE_CODES } from "./cdp/codes";
 import type { HeadlessBackend } from "./headless";
 
@@ -26,6 +27,10 @@ import type { HeadlessBackend } from "./headless";
  * one page with one lease cannot tell whose keystroke did what, and a fan-out
  * multiplies the encoder, which is the expensive part.
  */
+
+/** 画面流的发送队列（平台规格 core 包 §3.3）：`coalesce`，4 组、2 MiB。 */
+export const VIEWER_MAX_FRAMES = 4;
+export const VIEWER_HIGH_WATER_BYTES = 2 * 1024 * 1024;
 
 export const BROWSER_STREAM_PATH =
   "/api/workspaces/{workspaceId}/browser/{nodeId}/stream";
@@ -116,8 +121,21 @@ export function attachStream(
         );
         return;
       }
+      // 画面 `coalesce`（平台规格 core 包 §3.3）：跟不上时只留最新一帧（头帧
+      // 与 JPEG 一组），过时的画面没人要；hello 与错误不带 key，不被合并掉。
+      const queue = new SendQueue(wsTarget(socket), {
+        policy: "coalesce",
+        maxFrames: VIEWER_MAX_FRAMES,
+        highWaterBytes: VIEWER_HIGH_WATER_BYTES,
+      });
+      socket.on("close", () => queue.close());
       const viewer = {
-        send: (data: string | Buffer) => socket.send(data),
+        send: (data: string | Buffer) => {
+          queue.push(data);
+        },
+        sendFrame: (header: string, jpeg: Buffer) => {
+          queue.push([header, jpeg], nodeId);
+        },
         close: (code?: number, reason?: string) => socket.close(code, reason),
       };
       running.attachViewer(viewer);

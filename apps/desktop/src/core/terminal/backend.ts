@@ -157,6 +157,15 @@ export interface Attachment {
   onData(listener: (chunk: Buffer) => void): void;
   /** The session ended by itself. Not called for a detach. */
   onExit(listener: (exitCode: number | undefined) => void): void;
+  /**
+   * Stop reading output for this attachment until {@link resume}: the socket
+   * behind it is not keeping up (platform spec, core packages §3). The bytes
+   * stay where they are — in the PTY, the tmux client or the session host —
+   * and the program writing them blocks the way it would on a slow terminal.
+   * Idempotent; a detach releases it.
+   */
+  pause?(): void;
+  resume?(): void;
 }
 
 /** One live backend session as the backend itself sees it. */

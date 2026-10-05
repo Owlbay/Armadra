@@ -224,7 +224,7 @@ export class RealtimeHub {
         }
         if (ids.length === 0) return;
         const frame = awarenessFrame(live.awareness, ids);
-        for (const conn of live.connections) conn.send(frame);
+        for (const conn of live.connections) conn.sendAwareness(frame);
       },
     );
   }

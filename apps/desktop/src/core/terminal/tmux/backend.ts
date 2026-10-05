@@ -290,6 +290,11 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
         for (const chunk of buffered.splice(0)) listener(chunk);
       },
       onExit: (listener) => exitListeners.push(listener),
+      // One tmux client per socket, so pausing its pty slows only this
+      // viewer: tmux stops writing to a client that does not read, and the
+      // pane itself carries on.
+      pause: () => client.pty?.pause(),
+      resume: () => client.pty?.resume(),
     };
   }
 
