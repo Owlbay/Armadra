@@ -1888,13 +1888,13 @@
 做了什么：
 
 - **迁移** `0039_client_sources.sql`：`client_sources`、`remote_services`，按规格原样；`migrations.lock` 已登记。两张表不存任何令牌。
-- **契约**（`packages/shared/src/contract/sources.ts`）：`sources.*` 十二条（§33.1 源表 6 条、§33.2 远程服务 6 条），读 `settings:read`、写 `settings:write`，旧路径 `/api/sources/*` 挂回同一份实现；形状与协议包 `core-api/sources.ts` 同形。错误码注册表加 `source_unreachable`（502）、`source_unauthorized`（401）、`source_offline`（503）、`fingerprint_mismatch`（400）、`credentials_invalid`（401）、`account_locked`（429）、`cloud_account_unlinked`（401），与协议包同拼法同状态；页面 `api/request.ts` 与 `i18n/errors.ts` 有中英文案。`contract.test.ts` 的节号规则放宽到 §31 起（§31–§33 预分配给平台设计）。
+- **契约**（`packages/shared/src/contract/sources.ts`）：`sources.*` 十二条（§33.1 源表 6 条、§33.2 远程服务 6 条），读 `settings:read`、写 `settings:write`，旧路径 `/api/sources/*` 挂回同一份实现；出入参就是协议包 `@armadra/platform-protocol/core-api` 的 schema 对象。错误码注册表加 `source_unreachable`（502）、`source_unauthorized`（401）、`source_offline`（503）、`fingerprint_mismatch`（400）、`credentials_invalid`（401）、`account_locked`（429）、`cloud_account_unlinked`（401），与协议包同拼法同状态；页面 `api/request.ts` 与 `i18n/errors.ts` 有中英文案。`contract.test.ts` 的节号规则放宽到 §31 起（§31–§33 预分配给平台设计）。
 - **core**（`core/sources/`）：`store.ts`（SQL）、`secrets.ts`（`armadra-source-<id>` 的 `byOrigin`、`armadra-remote-<id>`，经 core 的 SecretStore 后端）、`http-client.ts`（出站 JSON，超时；按信任锚指纹钉扎：先在对端链里或 `/ca.crt` 找指纹相符的那张，再以它为唯一 CA 照常验链与主机名）、`remote-client.ts`（个人中转 `/.well-known/armadra-platform`、`auth.login / refresh / logout`、`me.sources`、`sources.assertion`）、`source-client.ts`（对别的 core：hello、配对码换票、`identity/pair`、`session/refresh`、经中继的 `cloud/login`，以原生 App 身份 `Origin: https://localhost` 走 Bearer 模式）、`service.ts`（业务、D27 选路、同一把刷新令牌串行旋转）、`index.ts`（装配：只 upsert 本机行；登记 procedure 与路由表回落 handler）。`DOMAINS` 里排在身份域之后。
 - 路由表加 `/api/sources/*` 十一条路径，`route-scopes.ts` 加 `/api/sources` 一行；`net/outbound.ts` 登记 `cloudApi`、`sourceGateway`。
 - RPC 门面（`http/rpc.ts`）：域经 `fail()` 有意答的 5xx（`source_unreachable`、`source_offline` 这类「对端不在」）不再记 `rpc call failed`、不报崩溃上报；没接住的异常照旧。
 - 契约 §33 由占位补成正式内容（节号不变：§33.1 / §33.2 生成表、§33.3 形状、§33.4 凭据、§33.5 行为）；`architecture.md` 的域表与迁移表各加一行。
 
-实测（macOS arm64，2026-10-06，基于 main dc0fec36）：
+实测（macOS arm64，2026-10-06，已合 main 80f633bc（含 #137 协议包钉版））：
 
 - `pnpm check` 通过（lint 0 error、285 warn，本包文件 0 warn）。
 - `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 4718 过 / 58 跳过，live 4 过，脚本 68 过；`pnpm --filter @armadra/shared test` 340 过；`pnpm --filter @armadra/server test` 87 过 / 4 跳过，`pnpm --filter @armadra/server build` 通过；web `error-codes.test.ts` 与 i18n 用例通过。
@@ -1910,7 +1910,7 @@
 
 没做 / 偏离规格：
 
-- 协议包尚未发布，`contract/sources.ts` 按协议包 `core-api/sources.ts` 同形手写；发布后改为 import 同一组 schema（A0-4）。
+- 契约的出入参直接取协议包（#137 钉的 vendored `@armadra/platform-protocol` 0.1.0）`core-api` 的 schema 对象，`contract.test.ts` 守着「是同一个对象」；协议包的入参只校类型，名称长度、地址、指纹格式这些检查在 `service.ts`（`bad_request`）。
 - 远程服务客户端没用上游 `OpenAPILink`：core 里 `@orpc/*` 只许在 `http/rpc.ts` 一处，`remote-client.ts` 用自己的钉扎 HTTP 发普通 JSON（线上编码相同）。
 - 规格的 `session-broker.ts` 没单独成文件：选路在 `service.ts::session`，对 core 的调用在 `source-client.ts`；用例文件仍叫 `session-broker.test.ts`。另多 `http-client.ts`、`secrets.ts` 两个文件。
 - `since` 写 `1.3`，协议 minor 不升：新增的是 procedure，页面按 `system.hello` 的 `procedures` 判断有没有。
