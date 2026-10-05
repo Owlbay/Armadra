@@ -44,6 +44,23 @@ function scanCoreErrors(source: string, file = "sample.ts"): Found[] {
   ].map((m) => ({ code: m[2]!, status: Number(m[1]), file }));
 }
 
+/**
+ * `fail("not_found", …)`：状态由注册表给，码必须登记（类型上已经守着）。只认
+ * 从 `http/errors` 拿来的那个 `fail`——身份域的 OAuth 有自己同名的局部函数。
+ */
+function scanFails(source: string, file = "sample.ts"): Found[] {
+  const imported =
+    /import\s*\{[^}]*\bfail\b[^}]*\}\s*from\s*"(?:\.\.\/)*(?:http\/)?errors"/.test(
+      source,
+    ) &&
+    (file.startsWith("http/") ||
+      /from\s*"(?:\.\.\/)+http\/errors"/.test(source));
+  if (!imported) return [];
+  return [
+    ...stripComments(source).matchAll(/\bfail\(\s*"([A-Za-z0-9_]+)"/g),
+  ].map((m) => ({ code: m[1]!, file }));
+}
+
 /** `code: "NOT_FOUND"`：大写拼法的存量（身份域、GitHub 面）。 */
 function scanUpperCodes(source: string, file = "sample.ts"): Found[] {
   return [
@@ -99,8 +116,19 @@ describe("错误码注册表", () => {
     expect(problems).toEqual([]);
   });
 
+  it("core 里 fail() 的每个字面量码都登记了", () => {
+    const problems = scanCore(scanFails).flatMap(({ code, file }) =>
+      isRegisteredErrorCode(code) ? [] : [`${file}: 未登记的码 ${code}`],
+    );
+    expect(problems).toEqual([]);
+  });
+
   it("注册表里的码都还在被用（删掉最后一处用法时一并删登记）", () => {
-    const used = new Set(scanCore(scanCoreErrors).map((entry) => entry.code));
+    const used = new Set(
+      [...scanCore(scanCoreErrors), ...scanCore(scanFails)].map(
+        (entry) => entry.code,
+      ),
+    );
     expect(Object.keys(ERROR_CODES).filter((code) => !used.has(code))).toEqual(
       [],
     );
@@ -134,6 +162,16 @@ describe("扫描器真的扫得到", () => {
     ]);
     expect(isRegisteredErrorCode("no_such_thing")).toBe(false);
     expect(ERROR_CODES.not_found.status).not.toBe(409);
+  });
+
+  it("抓得到 fail() 的码", () => {
+    expect(
+      scanFails(
+        'import { fail } from "../http/errors";\nthrow fail("not_found", "x"); unfail("y")',
+      ).map((entry) => entry.code),
+    ).toEqual(["not_found"]);
+    // 别处同名的局部函数不算。
+    expect(scanFails('function fail(c) {}\nfail("oauth_x")')).toEqual([]);
   });
 
   it("注释里的例子不算", () => {
