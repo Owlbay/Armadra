@@ -65,7 +65,7 @@ export function compareVersions(left, right) {
  * release was verified against, not which installs may move to it, so they
  * never enter the release note's fence — which stays strict.
  */
-const SIDE_KEYS = ["acp", "agent"];
+const SIDE_KEYS = ["acp", "agent", "platform"];
 
 function readDocument(path) {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -95,6 +95,7 @@ export function readAcpCompatibility(path = COMPATIBILITY_FILE) {
 function normalizeSide(key, value) {
   if (key === "acp") return normalizeAcp(value);
   if (key === "agent") return normalizeAgentPin(value);
+  if (key === "platform") return normalizePlatformPin(value);
   throw new Error(`unknown compatibility key: ${key}`);
 }
 
@@ -157,6 +158,66 @@ export function normalizeAgentPin(agent) {
   if (!Number.isSafeInteger(agent.hostApi) || agent.hostApi < 1)
     throw new Error("agent.hostApi must be a positive integer");
   return { package: AGENT_PACKAGE, version, hostApi: agent.hostApi };
+}
+
+/** The package the `platform` key may name. */
+export const PLATFORM_PACKAGE = "@armadra/platform-protocol";
+
+/**
+ * The `platform` key (docs/design/platform/dev-stack-and-verification.md
+ * §1.3): the protocol package's exact version and wire protocol, the vendored
+ * tarball it is installed from with that file's sha256, and the two image
+ * tags, which must equal the version. Like `agent` it never enters the fence:
+ * installed clients parse the fence strictly.
+ */
+export function readPlatformPin(path = COMPATIBILITY_FILE) {
+  return normalizePlatformPin(readDocument(path).platform);
+}
+
+export function normalizePlatformPin(platform) {
+  const fail = (message) => {
+    throw new Error(message);
+  };
+  if (
+    platform === null ||
+    typeof platform !== "object" ||
+    Array.isArray(platform)
+  )
+    fail("compatibility.json has no platform pin");
+  for (const key of Object.keys(platform)) {
+    if (!["package", "version", "protocol", "tarball", "images"].includes(key))
+      fail(`unknown platform pin key: ${key}`);
+  }
+  if (platform.package !== PLATFORM_PACKAGE)
+    fail(`platform.package must be ${PLATFORM_PACKAGE}`);
+  const version = parseVersion(platform.version).text;
+  if (version !== platform.version)
+    fail(`platform.version must be an exact version: ${platform.version}`);
+  const { major, minor } = platform.protocol ?? {};
+  for (const n of [major, minor]) {
+    if (!Number.isSafeInteger(n) || n < 0)
+      fail("platform.protocol needs integer major and minor");
+  }
+  const { file, sha256 } = platform.tarball ?? {};
+  if (typeof file !== "string" || !/^[\w.-]+\.tgz$/.test(file))
+    fail("platform.tarball.file must be a file name under tools/vendor");
+  if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256))
+    fail("platform.tarball.sha256 must be 64 lowercase hex digits");
+  const images = platform.images ?? {};
+  for (const [name, repo] of [
+    ["cloud", "ghcr.io/owlbay/armadra-cloud"],
+    ["relay", "ghcr.io/owlbay/armadra-relay"],
+  ]) {
+    if (images[name] !== `${repo}:${version}`)
+      fail(`platform.images.${name} must be ${repo}:${version}`);
+  }
+  return {
+    package: PLATFORM_PACKAGE,
+    version,
+    protocol: { major, minor },
+    tarball: { file, sha256 },
+    images: { cloud: images.cloud, relay: images.relay },
+  };
 }
 
 /**

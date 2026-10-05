@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import {
   VERSION_SITES,
   checkAgentPin,
+  checkPlatformPin,
   checkVersions,
   readVersions,
   setVersion,
@@ -25,9 +26,11 @@ import {
   normalize,
   normalizeAcp,
   normalizeAgentPin,
+  normalizePlatformPin,
   readAcpCompatibility,
   readAgentPin,
   readCompatibility,
+  readPlatformPin,
   releaseNote,
   renderFence,
 } from "./compatibility.mjs";
@@ -284,6 +287,51 @@ test("an agent pin that moved alone fails the check", () => {
     assert.throws(() => normalizeAgentPin({ ...moved, extra: 1 }));
     // A fence is parsed strictly: the agent key is refused there.
     assert.throws(() => normalize({ minimumInstalled: "0.1.0", agent: moved }));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("the platform pin agrees with the manifests, tarball, lockfile and install", () => {
+  assert.deepEqual(checkPlatformPin(), []);
+  const pin = readPlatformPin();
+  assert.equal(pin.package, "@armadra/platform-protocol");
+  // Never in the fence: installed clients parse it strictly.
+  assert.ok(!renderFence(readCompatibility()).includes("platform"));
+});
+
+test("a platform pin that moved alone, or a changed tarball, fails the check", () => {
+  const base = mkdtempSync(join(tmpdir(), "armadra-platform-pin-")) + "/";
+  try {
+    const pin = readPlatformPin();
+    const tarball = "tools/vendor/" + pin.tarball.file;
+    mkdirSync(base + "tools/vendor", { recursive: true });
+    cpSync(root + tarball, base + tarball);
+    cpSync(root + "pnpm-lock.yaml", base + "pnpm-lock.yaml");
+    for (const dir of ["packages/shared", "apps/desktop", "apps/web"]) {
+      mkdirSync(base + dir, { recursive: true });
+      cpSync(root + dir + "/package.json", base + dir + "/package.json");
+    }
+    // No node_modules in the copy: only the install check complains.
+    const only = (problems) =>
+      problems.filter((problem) => !/no installed/.test(problem));
+    assert.deepEqual(only(checkPlatformPin({ base })), []);
+    writeFileSync(base + tarball, "tampered");
+    assert.match(only(checkPlatformPin({ base }))[0], /sha256/);
+    cpSync(root + tarball, base + tarball);
+    const moved = { ...pin, version: "9.9.9" };
+    assert.ok(only(checkPlatformPin({ base, platform: moved })).length > 0);
+    assert.throws(() =>
+      normalizePlatformPin({ ...pin, images: { ...pin.images, relay: "x" } }),
+    );
+    assert.throws(() => normalizePlatformPin({ ...pin, version: "^0.1.0" }));
+    assert.throws(() => normalizePlatformPin({ ...pin, extra: 1 }));
+    assert.throws(() =>
+      normalizePlatformPin({
+        ...pin,
+        tarball: { ...pin.tarball, sha256: "a" },
+      }),
+    );
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
