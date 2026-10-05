@@ -68,6 +68,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@armadra/platform-protocol':
+        specifier: file:../../tools/vendor/armadra-platform-protocol-0.1.0.tgz
+        version: file:tools/vendor/armadra-platform-protocol-0.1.0.tgz(@opentelemetry/api@1.9.1)(zod@4.4.3)
       '@armadra/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -224,6 +227,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@armadra/platform-protocol':
+        specifier: file:../../tools/vendor/armadra-platform-protocol-0.1.0.tgz
+        version: file:tools/vendor/armadra-platform-protocol-0.1.0.tgz(@opentelemetry/api@1.9.1)(zod@4.4.3)
       '@armadra/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -432,6 +438,9 @@ importers:
 
   packages/shared:
     dependencies:
+      '@armadra/platform-protocol':
+        specifier: file:../../tools/vendor/armadra-platform-protocol-0.1.0.tgz
+        version: file:tools/vendor/armadra-platform-protocol-0.1.0.tgz(@opentelemetry/api@1.9.1)(zod@4.4.3)
       '@orpc/contract':
         specifier: 1.15.4
         version: 1.15.4(@opentelemetry/api@1.9.1)
@@ -455,6 +464,12 @@ packages:
     resolution: {integrity: sha512-ZOhNmtErrGAHx3PBz8gOBfdeJ64M4dHVJAC6Boy66uA8hgF8iR1Ff8rbXEmizd6ELgS8NL2pSsHVoRNkujsLzA==}
     engines: {node: '>=22'}
     hasBin: true
+
+  '@armadra/platform-protocol@file:tools/vendor/armadra-platform-protocol-0.1.0.tgz':
+    resolution: {integrity: sha512-6aDGVLu4kMNP87mWeuGD7yFT13vLWWqpvJGS/Auurim4fVLBKyGhFF5pt9RzeEBiUXYrlhDgaPyvEcWnrm8vpA==, tarball: file:tools/vendor/armadra-platform-protocol-0.1.0.tgz}
+    version: 0.1.0
+    peerDependencies:
+      zod: '>=4.0.0 <5'
 
   '@asamuzakjp/css-color@6.0.7':
     resolution: {integrity: sha512-vC/bk1Lz7Tn/EfU9/apOTBk80/8dyGyWMowPoV1tJ52muDGsDqt2HPT2klrFUiY60MQmQv9q8yIht15JnBgDGw==}
@@ -7058,6 +7073,13 @@ snapshots:
       tinyexec: 1.3.1
 
   '@armadra/agent@0.6.8': {}
+
+  '@armadra/platform-protocol@file:tools/vendor/armadra-platform-protocol-0.1.0.tgz(@opentelemetry/api@1.9.1)(zod@4.4.3)':
+    dependencies:
+      '@orpc/contract': 1.15.4(@opentelemetry/api@1.9.1)
+      zod: 4.4.3
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
 
   '@asamuzakjp/css-color@6.0.7':
     dependencies:

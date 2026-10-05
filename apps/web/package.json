@@ -12,6 +12,7 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@armadra/platform-protocol": "file:../../tools/vendor/armadra-platform-protocol-0.1.0.tgz",
     "@armadra/shared": "workspace:*",
     "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/lang-css": "^6.3.1",

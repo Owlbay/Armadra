@@ -353,6 +353,25 @@ pnpm dev-stack down relay-personal armadra-server-nat   # 停个人中转那组�
 随机生成的 `PLATFORM_DB_PASSWORD`、`PERSONAL_RELAY_PASSWORD`、`PLATFORM_SEED_PASSWORD`、
 `ARMADRA_CLOUD_MASTER_KEY` 在首次 `up` 时补进 `tools/dev-stack/.data/dev.env`（旧文件会被补全，不会重写）。
 
+## 平台协议包
+
+`@armadra/platform-protocol`（隧道帧、断言声明、`/v1` 契约、错误码）由 `armadra-cloud` 发布，npm 发布前
+以 vendored tarball 引用：`tools/vendor/armadra-platform-protocol-<版本>.tgz`，`packages/shared`、
+`apps/desktop`、`apps/web` 用 `file:` 依赖指向它。版本、tarball 文件名与 sha256、协议主次号、两个镜像 tag
+记在 `tools/release/compatibility.json` 的 `platform`（不进发布说明的围栏）；`pnpm release:check` 校验三份
+manifest、tgz 的 sha256、锁文件（版本与 integrity）与已安装的版本一致。
+
+更新 tgz：
+
+1. 在 `armadra-cloud` 的 main 上 `pnpm install`，再 `pnpm protocol:pack`，得到 `.data/pack/armadra-platform-protocol-<版本>.tgz`。
+2. 删旧 tgz，把新文件放进 `tools/vendor/`；用 `shasum -a 256` 取摘要。
+3. 改三处 manifest 的 `file:` 路径，改 `compatibility.json` 的 `platform`（`version`、`tarball.file`、`tarball.sha256`、两个镜像 tag）。
+4. `pnpm install`、`pnpm release:check`、`pnpm notices:check`，提交 tgz、manifest、锁文件与 `compatibility.json`。
+
+协议包发布到 npm 后切换：三处 manifest 的依赖改成精确版本号（不带 `^`），删除 `tools/vendor/`（`repo.rules.json` 无需改），
+`compatibility.json` 去掉 `tarball`，并去掉 `normalizePlatformPin` / `checkPlatformPin` 里
+对 tarball 与 `file:` 路径的校验；其余（版本、锁文件、已安装版本）照旧。
+
 ## 来源与凭据
 
 core 的 CORS 只放行回环 HTTP 来源：桌面壳放行的是自己静态服务的那个来源（端口由内核分配，
