@@ -235,6 +235,122 @@ services:
       - "127.0.0.1:8443:8443"
     restart: unless-stopped
 
+  # ---- 平台（docs/design/platform/dev-stack-and-verification.md §1）----
+  # `platform` / `personal` 是独立 profile：`pnpm platform:up` / `platform:personal` 只起各自
+  # 的服务，不连带起上面那组非 profile 服务。云仓镜像缺省取 GHCR 的钉版本；设了
+  # ARMADRA_DEV_STACK_CLOUD_SRC（或旁边有 ../armadra-cloud）时叠加
+  # docker-compose.cloud-src.yml 改为本地构建。
+
+  platform-postgres:
+    image: postgres:17.11-alpine
+    profiles: ["platform"]
+    environment:
+      POSTGRES_USER: armadra
+      POSTGRES_PASSWORD: "${PLATFORM_DB_PASSWORD:?run pnpm dev-stack up}"
+      POSTGRES_DB: armadra_cloud
+    volumes:
+      - platform-postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5441:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "armadra", "-d", "armadra_cloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  platform-redis:
+    image: redis:8.8.3-alpine
+    profiles: ["platform"]
+    ports:
+      - "127.0.0.1:6391:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  cloud:
+    image: ghcr.io/owlbay/armadra-cloud:0.1.0
+    profiles: ["platform"]
+    environment:
+      ARMADRA_CLOUD_ISSUER: "http://127.0.0.1:8100"
+      ARMADRA_CLOUD_APP_ORIGIN: "http://127.0.0.1:8100"
+      ARMADRA_CLOUD_LISTEN: "0.0.0.0:8100"
+      ARMADRA_CLOUD_DATABASE_URL: "postgres://armadra:${PLATFORM_DB_PASSWORD:?run pnpm dev-stack up}@platform-postgres:5432/armadra_cloud"
+      ARMADRA_CLOUD_REDIS_URL: "redis://platform-redis:6379"
+      ARMADRA_CLOUD_MASTER_KEY: "${ARMADRA_CLOUD_MASTER_KEY:?run pnpm dev-stack up}"
+      ARMADRA_CLOUD_RELAY_DOMAIN: src.localhost
+    ports:
+      - "127.0.0.1:8100:8100"
+    depends_on:
+      platform-postgres:
+        condition: service_healthy
+      platform-redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  relay:
+    image: ghcr.io/owlbay/armadra-relay:0.1.0
+    profiles: ["platform"]
+    command: ["saas", "serve"]
+    environment:
+      RELAY_LISTEN: "0.0.0.0:8443"
+      RELAY_NODE_ID: dev-stack
+      RELAY_DOMAIN: src.localhost
+      RELAY_CLOUD_ISSUER: "http://cloud:8100"
+      RELAY_REDIS_URL: "redis://platform-redis:6379"
+      # 本地走 HTTP：地址用 *.src.localhost，浏览器与 Node 都把 *.localhost 解析到回环。
+      RELAY_ALLOW_INSECURE_TUNNEL: "1"
+    ports:
+      - "127.0.0.1:8101:8443"
+    depends_on:
+      platform-redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 单人中转：不带数据库。R2 落地前只支持 --tls plain；落地后把 RELAY_TLS 默认改成
+  # self-signed，探针信任 /ca.crt（services.mjs 的检查两种都认）。
+  relay-personal:
+    image: ghcr.io/owlbay/armadra-relay:0.1.0
+    profiles: ["personal"]
+    command:
+      - personal
+      - serve
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8443"
+      - --listen
+      - "0.0.0.0:8443"
+      - --tls
+      - "${ARMADRA_DEV_STACK_RELAY_TLS:-plain}"
+    environment:
+      RELAY_DATA_DIR: /data
+      RELAY_PERSONAL_ACCOUNT: dev
+      RELAY_PERSONAL_PASSWORD_FILE: /run/secrets/personal_relay_password
+    secrets:
+      - personal_relay_password
+    volumes:
+      - relay-personal:/data
+    ports:
+      - "127.0.0.1:8103:8443"
+    restart: unless-stopped
+
+  # 模拟在 NAT 后、只能外连的 core：不发布端口，只有同一 compose 网络里的中继 / 探针够得到它。
+  armadra-server-nat:
+    build:
+      context: ../..
+      dockerfile: apps/server/docker/Dockerfile
+    image: armadra-dev-server:local
+    profiles: ["platform", "personal"]
+    environment:
+      ARMADRA_PUBLIC_ORIGIN: "https://armadra-server-nat:8443"
+    volumes:
+      - armadra-server-nat:/data
+    restart: unless-stopped
+
   headscale:
     image: headscale/headscale:0.29.4
     profiles: ["headscale"]
@@ -318,3 +434,10 @@ volumes:
   armadra-server:
   headscale:
   s3:
+  platform-postgres:
+  relay-personal:
+  armadra-server-nat:
+
+secrets:
+  personal_relay_password:
+    environment: PERSONAL_RELAY_PASSWORD
