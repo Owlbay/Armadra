@@ -1,6 +1,6 @@
 # Armadra 画布工作平台设计总纲
 
-> 状态：待实施的目标设计；文档完成不代表功能已经交付。
+> 状态：大部分已实施（2026-10-06 回改）。M0–M8 描述的能力已由后续的专项设计、TypeScript core 与补全计划交付，逐项现状以[功能预期总表](../status/feature-roadmap.md)为准；本文保留为需求与阶段划分的出处。文中的 Runtime / Host 分进程表述早于 [TypeScript Core](typescript-core.md)，读作 core 内的对应模块。
 > 范围：画布、Agent、后台自动化、Git/GitHub、编辑器、浏览器、远程服务、终端与桌面能力。
 > 本文及配套专项文档是本轮新增需求的实施依据；当前实现仍以源码和 `architecture.md` 为准。
 > 2026-09-19：桌面壳已换成 Electron，本文提到 Tauri 的部分是换壳之前写下的，只作为当时的方案记录；壳的现状见 [Electron 迁移](./electron-migration.md) 与 [架构](../guides/architecture.md)。

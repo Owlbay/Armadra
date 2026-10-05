@@ -1,6 +1,6 @@
 # Armadra 功能预期总表
 
-> 状态：2026-09-26 逐行按源码核实的现状（基线 `a3a8266e`，含进度 §47–§61）；2026-10-02 补后续规划第一部分（CLI 协作）涉及的行（进度 §62）；2026-10-04 按[补全进度](./completion-progress.md)（下文写「补全 G*-*」）逐行更新 G0–G3 全部合入的包；2026-10-05 按补全进度 G5-00…G5-30（下文写「G5-nn」，计划见 [G5 剩余事项计划](../design/g5-remaining-plan.md)）更新，G5 全部合入；只在探针与 mock 上验证、等用户条件的项记 🔶 并列进 §4，逐条待办见[用户待办清单](./user-action-checklist.md)。
+> 状态：2026-09-26 逐行按源码核实的现状（基线 `a3a8266e`，含进度 §47–§61）；2026-10-02 补后续规划第一部分（CLI 协作）涉及的行（进度 §62）；2026-10-04 按[补全进度](./completion-progress.md)（下文写「补全 G*-*」）逐行更新 G0–G3 全部合入的包；2026-10-05 按补全进度 G5-00…G5-30（下文写「G5-nn」，计划见 [G5 剩余事项计划](../design/g5-remaining-plan.md)）更新，G5 全部合入；2026-10-06 把各包「没做 / 限制」里不依赖外部条件的残项汇总进 §6；只在探针与 mock 上验证、等用户条件的项记 🔶 并列进 §4，逐条待办见[用户待办清单](./user-action-checklist.md)。
 > 本文回答「产品最终要有什么、现在做到哪」；实现细节与验证命令以 [TypeScript Core 实施进度](./typescript-core-status.md)（下文简称「进度」）为准，架构以 [架构](../guides/architecture.md) 为准。2026-09-19 之前的里程碑记录在[平台实施记录](./platform-implementation-status.md)。
 > 标注：✅ 已交付 · 🔶 部分交付 · ⬜ 未开始。依据一栏写进度文档的节号（§N）、补全工作包号，或源码位置。需要真机、账号或签名等外部条件才能收尾的项集中在 §4。
 
@@ -253,3 +253,15 @@ Armadra 是 local-first 的 AI Coding 画布：把真实 CLI Agent（Claude Code
 - 凭据、终端原始输出、文件正文不进入画布持久化、日志或 API 响应。
 - 每个异步动作有 operationId 与可查询状态；前端按钮没有后端支撑不算交付。
 - 中英文本地化同步；接口改动同步 [core JSON 契约](../contracts/core-json-api.md)，结构改动跑 `pnpm check`。
+
+## 6. 代码侧残项
+
+G5 合入后，各包「没做 / 限制」里还有一些不依赖账号、证书或真机的条目，没有进[用户待办清单](./user-action-checklist.md)。按域列在这里，括号里是记下它的工作包（[补全进度](./completion-progress.md)）。这些都是已知限制，不是挂着的工作包；要做时另开计划。
+
+- **协调者与工作流**：分派抽屉靠 5 秒轮询、没有专门事件；重试后协调者若不再 `wait`，那一行停在「运行中」（G5-09）。冻结的工作流计划没有批量升级入口（G5-08）。runners 的 `--cwd` 只认本机工作区，`team` 不带 `--cwd` / `--resume`（G5-07）。远端 ACP 适配器不带启动器的注入与 ama 的 profile（G5-06）。
+- **身份与传输**：浏览器（Cookie 会话）页面的 HTTP 请求在访问令牌过期后不自动刷新（G5-20）。下载会把整个文件读进内存；语言服务与浏览器画面两条流在回环收紧后只经全局 `WebSocket` 覆盖，没有单独实测（G5-28）。原生 App 首次连接（还没钉过信任锚）不能用 8 位配对码（G5-01）。
+- **推送、协同与评论**：桌面系统通知与内存徽标没有改成读 `resources.threshold` 事件；设置页不能逐台改别的设备的推送偏好（G5-10）。手动平移不取消跟随（G5-11）。评论编辑框没有 Markdown 实时预览，点开聚合钉不自动放大（G5-12）。
+- **托管平台**：Gitea / GitLab 没有评审与 issue 分组；配置整台机器一份、不按工作空间；Gitea 的合并方式不读仓库的 `allow_*`，`merge_when_checks_succeed` 没接；fork 检出按远端名字选远端；子组连接的徽标不定位到具体 MR（G5-15、G5-29、G5-30）。
+- **用量与发布**：`UsageService` 的 `claudeWindowLimits` 没有接进装配，缺订阅档额度的来源（G5-25）。客户端更新地址 `ARMADRA_UPDATER_ENDPOINTS` 只写 GitHub，镜像域名定了再加（G5-18）。
+- **Windows**：安装程序环境里的数据目录与用户的 core 不同时，找不到要请走的会话宿主，退回结束进程（G5-21）。
+- **测试与 CI**：R-90（headless 后台标签页 `DOM.getDocument` 不答）根因没查明；R-89 的修复是推断的（G5-27）。展示页缺 `resizable`、`chart`、`sonner`、`context-menu` 的样本（[设计展示页](../design/design-showcase.md)）。2026-10-05 的 main CI 与夜间作业有三处偶发失败（场景 11 的 `inbox` 超时、Windows 验收的 `restart.survives` 与 `userConfig.untouched`、iOS 配对点按落空），修复见 PR #125。

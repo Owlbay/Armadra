@@ -1,6 +1,6 @@
 # 架构
 
-> 下一阶段目标见 [画布工作平台设计总纲](../design/canvas-platform-design.md)及其专项文档。本文件描述当前实现，不把目标能力提前计入现状。
+> 本文件描述当前实现，不把目标能力提前计入现状。后续规划见[后续规划](../design/product-roadmap.md)，逐项现状见[功能预期总表](../status/feature-roadmap.md)。
 
 > 当前实现的架构。画布层细节见 [画布换成 React Flow](../design/canvas-react-flow.md)，
 > Agent 运行时与接口契约见 [v3-agent-terminal-plan.md](../contracts/v3-agent-terminal-plan.md)。
@@ -597,8 +597,9 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
 
 ## 8. 未实现
 
-G5 全部合入后，代码侧没有挂着的工作包；剩下的都要用户提供账号、证书、设备或域名，逐条见
-[用户待办清单](../status/user-action-checklist.md)，逐包的「没做」见[补全进度](../status/completion-progress.md)。
+G5 全部合入后，代码侧没有挂着的工作包；要用户提供账号、证书、设备或域名的事项逐条见
+[用户待办清单](../status/user-action-checklist.md)，不依赖外部条件的已知限制汇总在
+[功能预期总表](../status/feature-roadmap.md) §6，逐包的「没做」见[补全进度](../status/completion-progress.md)。
 这里只列影响架构判断的几条：
 
 - **Windows 真机**：打包版的验收包（`tools/probes/windows-acceptance.mjs`）在 Windows Server
