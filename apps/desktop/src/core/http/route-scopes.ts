@@ -162,6 +162,9 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
   // 契约 procedure（契约 §34.1）：门面按每条的 `meta.scope` 判（{@link
   // SELF_GUARDED}）；这一行是清单——最少也要能读身份，与 `system.hello` 同一档。
   { pattern: /^\/api\/rpc\//, read: "identity:read", write: "identity:read" },
+  // 控制面 WebSocket（契约 §35.1）：升级要能读身份（登录即可，成员也有），每条
+  // 调用与订阅再按自己的 `meta.scope` 判；授权一变，连接按这一档复核（4403）。
+  { pattern: /^\/api\/ws$/, read: "identity:read" },
   // 推送设备：登录即可（{@link SELF_GUARDED}），推送域只碰请求主体自己的设备。
   // 声明的这一档只是清单：注册一台设备收的是「看得见的画布」上的通知。契约 §19。
   {

@@ -8,7 +8,10 @@ import {
   implement,
 } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
+import { RPCHandler as PeerRPCHandler } from "@orpc/server/ws";
+import { withEventMeta } from "@orpc/server";
 import {
+  type Backpressure,
   type Contract,
   type ContractDomain,
   type ProcedureInput,
@@ -27,6 +30,15 @@ import { type CorePlatform, reportError } from "../platform";
 import { CoreFailure } from "./errors";
 import type { CoreRequest, HandlerResult } from "./router";
 import type { CoreServer } from "./server";
+import { QueuedValue, SendQueue } from "./stream-queue";
+import {
+  CLOSE_LIMIT,
+  type ControlConnection,
+  ITERATOR_HIGH_WATER_BYTES,
+  ITERATOR_MAX_FRAMES,
+  MAX_ITERATORS,
+  installControlPlane,
+} from "./ws-control";
 
 /**
  * core 的 RPC 门面（工程规范化 §2.2.2、工程规范化包 §1.3）。
@@ -60,6 +72,19 @@ export interface RpcCall {
   readonly request: CoreRequest;
   /** 这台 core 实现了的 procedure（`system.hello` 报的那张表）。 */
   readonly procedures: readonly string[];
+  /**
+   * 订阅断线重订时客户端交回的最后一个事件 `id`（契约 §35.4）。订阅自己按它
+   * 补发；普通调用里总是 `undefined`。
+   */
+  readonly lastEventId?: string;
+}
+
+/**
+ * 订阅的一项带上事件 `id`（续订的位置）。订阅实现（`async function*`）这样
+ * yield：`yield withEventId(event, String(seq))`。
+ */
+export function withEventId<T extends object>(value: T, id: string): T {
+  return withEventMeta(value, { id });
 }
 
 type ProcedureHandler<P> = (
@@ -135,6 +160,8 @@ interface RpcContext {
   readonly requestId: string;
   /** 经旧路径进来的：`server.ts` 已经按真实路径过了路由门。 */
   readonly legacy: boolean;
+  /** 经控制面 `/api/ws` 进来的：订阅只在这里有。 */
+  readonly connection?: ControlConnection;
 }
 
 /** 上游自带的大写码 → 注册表里的码。 */
@@ -358,6 +385,235 @@ function writeEnvelope(
   response.end(payload);
 }
 
+/** 实现抛出来的 → 控制面上的上游错误：码与状态按注册表，内部错误不外泄原话。 */
+function peerError(error: unknown): ORPCError<string, unknown> {
+  const upstream = toUpstream(error);
+  if (!(upstream instanceof ORPCError)) {
+    return new ORPCError("internal", {
+      status: 500,
+      message: INTERNAL_MESSAGE,
+      cause: upstream,
+    });
+  }
+  const { status, body } = errorEnvelope(upstream);
+  if (
+    body.code === upstream.code &&
+    body.message === upstream.message &&
+    status === upstream.status
+  ) {
+    return upstream;
+  }
+  return new ORPCError(body.code, {
+    status,
+    message: body.message,
+    data: body.details,
+    cause: upstream,
+  });
+}
+
+function isAsyncIterator(value: unknown): value is AsyncIterator<unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { next?: unknown }).next === "function" &&
+    Symbol.asyncIterator in value
+  );
+}
+
+/** 一项大约多大：只用于背压记账。 */
+function measure(value: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(value) ?? "");
+  } catch {
+    return 0;
+  }
+}
+
+/** `coalesce` 的键：一项自己报的 `key`（资源采样按工作空间 / 节点）。 */
+function coalesceKey(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const key = (value as { key?: unknown }).key;
+  return typeof key === "string" ? key : undefined;
+}
+
+/**
+ * 订阅的有界队列（工程规范化 §3.3、契约 §35.5）：上游的 peer 处理器把每一项
+ * 立刻交给 `ws.send`，`ws` 的缓冲可以无限涨。这里把实现的迭代器包一层：一边
+ * 从实现里取，一边经 `SendQueue`（A3-0）按连接的 `bufferedAmount` 往外交；
+ * 拥塞时排队，满了按策略——`drop-oldest` 丢最旧、`coalesce` 同键留新、
+ * `resubscribe` 抛 `overflow` 结束订阅（客户端带 `lastEventId` 重订）。
+ * `resubscribe` 拥塞时不再从实现里取（队列是 `pause` 策略），实现自己把实时
+ * 那一段攒在有界缓冲里，满了同样抛 `overflow`。
+ */
+async function* boundedIterator(
+  source: AsyncIterator<unknown>,
+  connection: ControlConnection,
+  policy: Backpressure,
+  release: () => void,
+): AsyncGenerator<unknown, unknown, void> {
+  const ready: { value: unknown; written: () => void }[] = [];
+  let wake: (() => void) | undefined;
+  const signal = () => {
+    const resolve = wake;
+    wake = undefined;
+    resolve?.();
+  };
+  let overflowed = false;
+  let ended = false;
+  let result: unknown;
+  let failure: { error: unknown } | undefined;
+  const queue = new SendQueue(
+    {
+      send(frame, written) {
+        ready.push({ value: (frame as QueuedValue).value, written });
+        signal();
+      },
+      get bufferedAmount() {
+        return connection.bufferedAmount;
+      },
+      get readyState() {
+        return connection.readyState;
+      },
+    },
+    {
+      policy: policy === "resubscribe" ? "pause" : policy,
+      maxFrames: ITERATOR_MAX_FRAMES,
+      highWaterBytes: ITERATOR_HIGH_WATER_BYTES,
+      onOverflow: () => {
+        overflowed = true;
+        signal();
+      },
+      // `resubscribe`：拥塞时停下不再从实现里取——补发是懒读的，停下就不读；
+      // 实时那一段由实现自己的有界缓冲兜底（满了同样抛 `overflow`）。
+      onPause: () => {
+        paused = new Promise<void>((resolve) => {
+          resume = resolve;
+        });
+      },
+      onResume: () => {
+        paused = undefined;
+        resume?.();
+        resume = undefined;
+      },
+    },
+  );
+  let paused: Promise<void> | undefined;
+  let resume: (() => void) | undefined;
+  let pumping = true;
+  void (async () => {
+    try {
+      while (pumping) {
+        if (paused !== undefined) {
+          await paused;
+          continue;
+        }
+        const step = await source.next();
+        if (step.done === true) {
+          ended = true;
+          result = step.value;
+          break;
+        }
+        const value = step.value;
+        queue.push(
+          new QueuedValue(value, measure(value)),
+          policy === "coalesce" ? coalesceKey(value) : undefined,
+        );
+        if (overflowed) break;
+      }
+    } catch (error) {
+      failure = { error };
+    } finally {
+      signal();
+    }
+  })();
+  let previous: (() => void) | undefined;
+  try {
+    while (true) {
+      // 上一项已经交给 `ws.send` 了（上游等这一次 `next()` 之前发完）：结账。
+      previous?.();
+      previous = undefined;
+      const item = ready.shift();
+      if (item !== undefined) {
+        previous = item.written;
+        yield item.value;
+        continue;
+      }
+      if (overflowed) {
+        throw new ORPCError("overflow", {
+          status: 503,
+          message: "订阅跟不上，带 lastEventId 重订",
+        });
+      }
+      if (queue.queuedFrames === 0) {
+        if (failure !== undefined) throw peerError(failure.error);
+        if (ended) return result;
+      }
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+    }
+  } finally {
+    previous?.();
+    pumping = false;
+    resume?.();
+    queue.close();
+    release();
+    // 不等：实现可能正停在等下一项上，它看 `signal` 自己收尾。
+    void Promise.resolve(source.return?.()).catch(() => undefined);
+  }
+}
+
+/** 订阅：只经控制面，数一条连接上的订阅数，包上有界队列。 */
+async function subscribe(
+  name: string,
+  policy: Backpressure,
+  handler: AnyHandler,
+  input: unknown,
+  call: Omit<RpcCall, "signal">,
+  context: RpcContext,
+  signal: AbortSignal | undefined,
+): Promise<AsyncIterator<unknown>> {
+  const connection = context.connection;
+  if (connection === undefined) {
+    throw new ORPCError("method_not_allowed", {
+      status: 405,
+      message: `${name} 是订阅，只经 /api/ws`,
+    });
+  }
+  if (connection.iterators >= MAX_ITERATORS) {
+    // 先让这次的拒绝答出去，再以 4429 关（契约 §35.2）。
+    setTimeout(() => connection.close(CLOSE_LIMIT, "limit reached"), 10);
+    throw new ORPCError("limit_reached", {
+      status: 429,
+      message: `一条连接最多 ${MAX_ITERATORS} 个订阅`,
+    });
+  }
+  const local = new AbortController();
+  let source: unknown;
+  try {
+    source = await handler(input, {
+      ...call,
+      signal:
+        signal === undefined
+          ? local.signal
+          : AbortSignal.any([signal, local.signal]),
+    });
+  } catch (error) {
+    throw toUpstream(error);
+  }
+  if (!isAsyncIterator(source)) {
+    throw new Error(`${name} 是订阅，实现却没有交出迭代器`);
+  }
+  connection.iterators += 1;
+  let released = false;
+  return boundedIterator(source, connection, policy, () => {
+    if (released) return;
+    released = true;
+    connection.iterators -= 1;
+    local.abort();
+  });
+}
+
 type Implementer = Record<
   string,
   Record<string, { handler(fn: (options: never) => unknown): AnyProcedure }>
@@ -414,14 +670,17 @@ export function installContract(
   for (const entry of entries) {
     const [domain, verb] = entry.path as [string, string];
     const handler = registry.get(entry.name);
+    const policy = entry.meta.backpressure;
     const built = (base[domain] as Implementer[string])[verb]!.handler((async ({
       input,
       context,
       signal,
+      lastEventId,
     }: {
       input: unknown;
       context: RpcContext;
       signal?: AbortSignal;
+      lastEventId?: string;
     }) => {
       if (handler === undefined) {
         throw new ORPCError("not_implemented", {
@@ -429,14 +688,26 @@ export function installContract(
           message: `未实现：${entry.name}`,
         });
       }
-      try {
-        return await handler(input, {
-          requestId: context.requestId,
-          identity: requestIdentity(),
+      const call = {
+        requestId: context.requestId,
+        identity: requestIdentity(),
+        request: context.request,
+        procedures: implemented,
+        lastEventId,
+      };
+      if (policy !== undefined) {
+        return subscribe(
+          entry.name,
+          policy,
+          handler,
+          input,
+          call,
+          context,
           signal,
-          request: context.request,
-          procedures: implemented,
-        });
+        );
+      }
+      try {
+        return await handler(input, { ...call, signal });
       } catch (error) {
         throw toUpstream(error);
       }
@@ -553,6 +824,34 @@ export function installContract(
   const openapi = new OpenAPIHandler(legacyTree as never, {
     interceptors: [envelope(false) as never],
     clientInterceptors: [...clientInterceptors] as never,
+  });
+
+  // 控制面（契约 §35）：同一棵树经 peer 帧答。错误不走 HTTP 的 envelope（那是
+  // 写在响应体上的），而是改成注册表里的码交给上游编码：页面的门面再把它变成
+  // 与 HTTP 同一种 `RuntimeRequestError`。
+  const peerInterceptor = async ({
+    next,
+  }: {
+    next: () => Promise<unknown>;
+  }) => {
+    try {
+      return await next();
+    } catch (error) {
+      throw peerError(error);
+    }
+  };
+  const peer = new PeerRPCHandler(rpcTree as never, {
+    clientInterceptors: [peerInterceptor, ...clientInterceptors] as never,
+  });
+  installControlPlane(server, (socket, connection) => {
+    void peer.upgrade(socket as never, {
+      context: {
+        request: connection.request,
+        requestId: connection.id,
+        legacy: false,
+        connection,
+      },
+    });
   });
 
   server.raw("/api/rpc/", async (core, response, cors) => {
