@@ -2086,7 +2086,8 @@
 
 - 链接：`<issuer>/j/<linkId>#<secret>.<core 邀请令牌>`（`api/remote-services.ts::shareLinkUrl`；邀请令牌本身是 `<invitationId>.<secret>`，所以片段按第一个 `.` 切：前面是链接 secret，后面整段是邀请令牌）。二维码就是这条链接（`QrImage`）。
 - 页面：`addDirectSource` / `addPersonalRelay` 答 `{ kind: "confirm", fingerprint }` 或 `{ kind: "done" }`；`presentedFingerprint(error)`；`remoteFetch(access, path, schema)` 直接调远程服务；`notifyShellSourcesChanged()` 与 `sources/bootstrap.ts` 的 `applySourceTable` / `reloadIntoSettings`——挂载类入口（如 `mountByLink`）成功后照这三步收尾。
-- 侧栏：`sidebar/SourceGroups.tsx` 每个挂载源一组（`data-source-group`），组里的工作空间由 A1-2 接。
+- 侧栏：`sidebar/SourceGroups.tsx`——当前源在「项目」里，其余每个源一组（`data-source-group`，本机也是），就绪的源列出工作空间，点一行 `registry.setCurrent(sourceId)` 后 `openWorkspace(workspace, sourceId)`。
+- A1-2 留下的三项已接上：换当前源清掉不带源前缀的查询（`app/use-sources-bootstrap.ts::useSourceSwitchCacheReset`）；依赖、协调器、实时复核发往读数所属的源（`api/source.ts::sourceById`、`sources/scope.ts::activeSource`）；侧栏按源分组。
 
 没做 / 偏离规格：
 
@@ -2096,4 +2097,5 @@
 - 本机邀请经 `/api/identity/invitations`（Bearer），没有 procedure；邀请必须指向一个工作空间，所以分享对话框要选工作空间。`maxUses` 未传（A4-1 未合）。从「生效中的链接」停用时只撤远程服务那条链接，本机那张邀请等过期（列表不带 `invitationId`）。
 - 隧道状态靠 5 秒轮询 `identity.cloud.status`，没订阅 `cloud.tunnel` 事件（A3-2 未合，实测一直是「未连接」）。
 - 已挂载源不支持拖动排序（`sources.update.orderIndex` 未接界面）；SaaS 设备码流程不出现入口。
+- 没有复用手机的 `#connections` 连接页组件：手机直接调远程服务、凭据在钥匙串，桌面经本机 core 代管凭据（`sources.*`），流程与状态不同；共用的只有指纹分组显示（`groupFingerprint`）与二维码（`QrImage`）。
 - 窄屏与宽屏切换时设置对话框换外壳、内容重新挂载，刚生成的链接会从界面上消失（链接仍在，可在「生效中的链接」停用）。
