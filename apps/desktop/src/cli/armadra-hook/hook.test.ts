@@ -177,6 +177,19 @@ describe("permission files", () => {
       expect(fs.statSync(file).mode & 0o777).toBe(0o600);
       expect(fs.statSync(pending).mode & 0o777).toBe(0o700);
     }
+    // 写在旁边再改名：目录里只剩完整的 `<id>.json`，没有半截的临时文件。
+    expect(fs.readdirSync(pending)).toEqual(["n1-1-2.json"]);
+  });
+
+  it("leaves no temporary file behind when the request cannot be placed", () => {
+    const pending = path.join(tempdir(), "pending");
+    const file = path.join(pending, "n1-1-2.json");
+    // 目标名被一个非空目录占着，改名一定失败。
+    fs.mkdirSync(path.join(file, "occupied"), { recursive: true });
+    expect(writeRequestFile(pending, file, parseJson('{"a":1}'))).toMatch(
+      /^cannot create /,
+    );
+    expect(fs.readdirSync(pending)).toEqual(["n1-1-2.json"]);
   });
 });
 

@@ -407,16 +407,26 @@ export function writeRequestFile(
     return `cannot create ${directory}: ${message(error)}`;
   }
   restrictDir(directory);
+  // Written beside the target and renamed into place, the same way the
+  // runtime writes the answer: whoever sees `<id>.json` sees all of it. A plain
+  // open-then-write left an empty file visible in between, which a reader on a
+  // slow file system (Windows CI) did catch.
+  const temporary = path.join(
+    path.dirname(file),
+    `.${path.basename(file)}.${process.pid}.tmp`,
+  );
   try {
     // On Windows the ACL inherited from the per-user data directory is the
     // best we can do without extra dependencies.
-    const handle = fs.openSync(file, "w", 0o600);
+    const handle = fs.openSync(temporary, "w", 0o600);
     try {
       fs.writeFileSync(handle, canonicalJsonBytes(payload));
     } finally {
       fs.closeSync(handle);
     }
+    fs.renameSync(temporary, file);
   } catch (error) {
+    removeQuietly(temporary);
     return `cannot create ${file}: ${message(error)}`;
   }
   return undefined;
