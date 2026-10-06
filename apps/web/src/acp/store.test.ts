@@ -10,6 +10,7 @@ import {
   endTurn,
   fromLog,
   modelStateOf,
+  reconcileTurn,
   useAcpStore,
   type AcpItem,
   type AcpSessionView,
@@ -319,5 +320,109 @@ describe("elicitations (contract §26.1)", () => {
     store().addElicitation("n1", { pendingId: "e2", elicitation });
     store().end("s1", "n1", { stopReason: "cancelled" });
     expect(store().elicitations[scoped("n1")]).toBeUndefined();
+  });
+});
+
+describe("turn reconciliation (§39.9)", () => {
+  const confirming = (): AcpSessionView => ({
+    ...beginTurn(EMPTY_SESSION, "go", "c1"),
+    confirming: true,
+  });
+  const userTexts = (view: AcpSessionView) =>
+    view.items.flatMap((item) =>
+      item.kind === "message" && item.role === "user" ? [item.text] : [],
+    );
+
+  it("takes the real outcome of a turn core already ended", () => {
+    const view = reconcileTurn(confirming(), [
+      {
+        turnId: "1-1",
+        clientTurnId: "c1",
+        state: "ended",
+        stopReason: "end_turn",
+      },
+    ]);
+    expect(view).toMatchObject({
+      streaming: false,
+      failed: false,
+      confirming: false,
+      undelivered: false,
+    });
+    const refused = reconcileTurn(confirming(), [
+      {
+        turnId: "1-1",
+        clientTurnId: "c1",
+        state: "ended",
+        stopReason: "refusal",
+      },
+    ]);
+    expect(refused).toMatchObject({ failed: true, undelivered: false });
+  });
+
+  it("keeps a queued or running turn streaming and its prompt drawn once", () => {
+    // 镜像读回来整份重建，本页的提问被冲掉了：补画一次。
+    const hydrated = { ...confirming(), items: [] };
+    const view = reconcileTurn(hydrated, [
+      { turnId: "1-1", clientTurnId: "c1", state: "queued" },
+    ]);
+    expect(view).toMatchObject({ streaming: true, confirming: false });
+    expect(userTexts(view)).toEqual(["go"]);
+    const running = reconcileTurn(confirming(), [
+      { turnId: "1-1", clientTurnId: "c1", state: "running" },
+    ]);
+    expect(userTexts(running)).toEqual(["go"]);
+  });
+
+  it("marks a turn core never got as undelivered, and a retry keeps one prompt", () => {
+    const view = reconcileTurn(confirming(), [
+      { turnId: "1-1", clientTurnId: "other", state: "ended" },
+    ]);
+    expect(view).toMatchObject({
+      streaming: false,
+      failed: true,
+      confirming: false,
+      undelivered: true,
+      clientTurnId: "c1",
+    });
+    expect(reconcileTurn(confirming(), undefined).undelivered).toBe(true);
+    const retried = beginTurn(view, "go", "c1");
+    expect(retried).toMatchObject({ streaming: true, undelivered: false });
+    expect(userTexts(retried)).toEqual(["go"]);
+    // 换了 id 是新的一轮。
+    expect(userTexts(beginTurn(view, "go", "c2"))).toEqual(["go", "go"]);
+  });
+
+  it("leaves a settled view alone and ignores another turn's end while confirming", () => {
+    const idle = endTurn(beginTurn(EMPTY_SESSION, "go", "c1"), {
+      stopReason: "end_turn",
+    });
+    expect(reconcileTurn(idle, [])).toBe(idle);
+    const view = confirming();
+    expect(
+      endTurn(view, { stopReason: "end_turn", clientTurnId: "other" }),
+    ).toBe(view);
+    expect(
+      endTurn(view, { stopReason: "end_turn", clientTurnId: "c1" }),
+    ).toMatchObject({ confirming: false, streaming: false });
+  });
+
+  it("keeps pending cards when the store ignores another turn's end", () => {
+    const store = useAcpStore.getState;
+    store().reset();
+    store().begin("s1", "go", "c1");
+    store().confirm("s1");
+    store().addElicitation("n1", {
+      pendingId: "e1",
+      elicitation: {
+        mode: "form",
+        message: "?",
+        requestedSchema: { type: "object", properties: {} },
+      },
+    } as never);
+    store().end("s1", "n1", { stopReason: "end_turn", clientTurnId: "x" });
+    expect(store().sessions[scoped("s1")]?.confirming).toBe(true);
+    expect(store().elicitations[scoped("n1")]).toHaveLength(1);
+    store().reconcile("s1", []);
+    expect(store().sessions[scoped("s1")]?.undelivered).toBe(true);
   });
 });

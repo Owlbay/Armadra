@@ -43,11 +43,14 @@ export const acpApi = {
     acpLogResponseSchema.parse(
       await currentClient().acp.log({ sessionId, after }),
     ),
-  prompt: async (sessionId: string, text: string) =>
+  /** `clientTurnId`（契约 §39.9）：同一个 id 重发，core 只投递一次。 */
+  prompt: async (sessionId: string, text: string, clientTurnId?: string) =>
     acpPromptResponseSchema.parse(
       await currentClient().acp.prompt({
         sessionId,
-        ...acpPromptRequestSchema.parse({ text }),
+        ...acpPromptRequestSchema.parse(
+          clientTurnId === undefined ? { text } : { text, clientTurnId },
+        ),
       }),
     ),
   cancel: async (sessionId: string) => {

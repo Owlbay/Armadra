@@ -48,6 +48,8 @@ const logWireSchema = loose({
   models: jsonObjectSchema.nullable().optional(),
   pending: z.array(jsonObjectSchema).optional(),
   elicitations: z.array(jsonObjectSchema).optional(),
+  /** §39.9：活会话最近的回合（排队、在跑、已结束），对账用。 */
+  turns: z.array(jsonObjectSchema).optional(),
 });
 
 export const acp = {
@@ -77,9 +79,17 @@ export const acp = {
         legacy: { method: "POST", path: "/api/acp/sessions" },
       }),
     ),
-  /** 发一条提示：与终端里敲键同一个人类驾驶者；答这一回合的标识。 */
+  /**
+   * 发一条提示：与终端里敲键同一个人类驾驶者；答这一回合的标识。带
+   * `clientTurnId`（§39.9）时同一会话同一 id 只投递一次，重发答同一个回合。
+   */
   prompt: oc
-    .input(sessionRef.extend({ text: z.string().optional() }))
+    .input(
+      sessionRef.extend({
+        text: z.string().optional(),
+        clientTurnId: z.string().optional(),
+      }),
+    )
     .output(loose({ turnId: z.string() }))
     .errors(errors.pick("bad_request", "forbidden", "not_found", "conflict"))
     .meta(
