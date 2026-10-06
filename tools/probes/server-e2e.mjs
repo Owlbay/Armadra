@@ -973,9 +973,6 @@ await h.run(async () => {
     );
     return;
   }
-  report.adminBeforeAddMenu = await admin.evaluate(
-    `return { visibility: document.visibilityState, focused: document.hasFocus() };`,
-  );
   // 现场：菜单开过没有、谁拿走了焦点、指针落在哪。
   await admin.evaluate(`
     const t0 = performance.now();
@@ -998,7 +995,26 @@ await h.run(async () => {
     }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-state"] });
     return true;
   `);
-  await admin.click('[data-slot="dock"] button', "新建");
+  // 像人一样按住一会儿再松开（CI 上 CDP 两次往返之间本来就隔着一两百毫秒）：
+  // 菜单要是展开时盖住了 `+`，松开的那一下会选中底下那一项。
+  {
+    const plus = await admin.locate('[data-slot="dock"] button', "新建");
+    const mouse = (type, extra = {}) =>
+      admin.call("Input.dispatchMouseEvent", {
+        type,
+        x: plus.x,
+        y: plus.y,
+        button: "left",
+        clickCount: 1,
+        pointerType: "mouse",
+        ...extra,
+      });
+    await mouse("mouseMoved", { button: "none", buttons: 0 });
+    await mouse("mousePressed", { buttons: 1 });
+    await sleep(200);
+    await mouse("mouseReleased", { buttons: 0 });
+    await sleep(250);
+  }
   await admin.click('[role="menuitem"]', "新建浏览器").catch(async (error) => {
     // 现场：菜单开没开、开了列的是什么、页面在不在前台、health 问到没有。
     await admin.capture("11-admin-add-menu-failed");
@@ -1020,7 +1036,6 @@ await h.run(async () => {
     };
     throw error;
   });
-  report.addMenuLog = await admin.evaluate(`return window.__probeMenuLog;`);
   await admin.waitFor(
     `return [...document.querySelectorAll(".react-flow__node")].some((node) => node.querySelector("canvas"));`,
     { what: "浏览器节点出现在画布上" },
