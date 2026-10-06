@@ -15,7 +15,14 @@ const accounts = vi.hoisted(() => ({
   revokeInvitation: vi.fn(),
 }));
 vi.mock("./client", () => ({ localClient: () => rpc }));
-vi.mock("./accounts", () => ({ ...accounts, SHARE_ROLES: ["viewer"] }));
+// 本机邀请经源的 `request()`：按路径交给两个替身。
+vi.mock("./request", async (original) => ({
+  ...(await original<typeof import("./request")>()),
+  request: (path: string, _schema: unknown, init: RequestInit) =>
+    init.method === "DELETE"
+      ? accounts.revokeInvitation(path.split("/").pop())
+      : accounts.issueInvitation(JSON.parse(init.body as string)),
+}));
 
 import { RuntimeRequestError } from "./request";
 import {

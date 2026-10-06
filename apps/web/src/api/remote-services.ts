@@ -1,8 +1,9 @@
 import { z } from "zod";
 
-import { type ShareRole, issueInvitation, revokeInvitation } from "./accounts";
+import type { ShareRole } from "./accounts";
 import { localClient } from "./client";
-import { RuntimeRequestError } from "./request";
+import { RuntimeRequestError, json, request } from "./request";
+import { localSource } from "./source";
 
 /**
  * 设置 → 远程服务（客户端包 §3）的调用面。
@@ -220,6 +221,44 @@ const linkSummarySchema = z.object({
 });
 
 export type ShareLinkSummary = z.infer<typeof linkSummarySchema>;
+
+/* ------------------------------ 本机邀请 ------------------------------- */
+
+const issuedSchema = z.object({
+  invitationId: z.string().min(1),
+  token: z.string().min(1),
+  expiresAtMs: z.number(),
+});
+
+/**
+ * 本机邀请（`/api/identity/invitations`）。走源的 `request()`（Bearer、不带
+ * Cookie）而不是 `api/accounts.ts`：那一面是服务器壳的 Cookie 会话，桌面壳页面
+ * 跨端口带 Cookie 的请求过不了 CORS。
+ */
+export function issueInvitation(input: {
+  role: ShareRole;
+  targetWorkspaceId: string;
+  ttlMs: number;
+}) {
+  return request(
+    "/api/identity/invitations",
+    issuedSchema,
+    {
+      method: "POST",
+      ...json(input),
+    },
+    localSource,
+  );
+}
+
+export async function revokeInvitation(invitationId: string): Promise<void> {
+  await request(
+    `/api/identity/invitations/${encodeURIComponent(invitationId)}`,
+    z.unknown(),
+    { method: "DELETE" },
+    localSource,
+  );
+}
 
 /* ------------------------------ 分享本机 ------------------------------- */
 

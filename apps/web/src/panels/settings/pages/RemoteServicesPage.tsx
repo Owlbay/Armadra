@@ -431,9 +431,21 @@ function FingerprintCheck({ fingerprint }: { fingerprint: string }) {
       </span>
       <p
         data-slot="fingerprint"
-        className="font-mono text-[12px] leading-5 break-all select-text"
+        className="font-mono text-[12px] leading-5 select-text"
       >
-        {groupFingerprint(fingerprint)}
+        {/* 只在冒号后折行：一组两位不被拆开，好逐组对照。 */}
+        {groupFingerprint(fingerprint)
+          .split(":")
+          .map((pair, index) => (
+            <React.Fragment key={index}>
+              {index > 0 && (
+                <>
+                  :<wbr />
+                </>
+              )}
+              {pair}
+            </React.Fragment>
+          ))}
       </p>
     </div>
   );

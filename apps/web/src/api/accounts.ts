@@ -250,8 +250,6 @@ export function issueInvitation(input: {
   role: ShareRole;
   targetWorkspaceId?: string;
   targetGroupId?: string;
-  /** 有效期；缺省 7 天，最长 30 天（core 夹到 30 天）。 */
-  ttlMs?: number;
 }): Promise<IssuedInvitation> {
   return call("invitations", issuedInvitationSchema, {
     method: "POST",
