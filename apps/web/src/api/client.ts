@@ -10,7 +10,7 @@
  *      `RuntimeRequestError` / `RuntimeConnectionError`，与 `request()` 同一套，
  *      所以 `isConflict` 这些判定两边通用。
  *   2. **`runtimeApi`**：把各领域模块拼起来，调用点的方法签名与从前一致。迁到
- *      契约上的域（`workspaces`、`settings`）由这里把当前源的客户端交给它们，域模块
+ *      契约上的域（`workspaces`、`settings`、`agents` 等）由这里把当前源的客户端交给它们，域模块
  *      自己不 import 这个文件——它们被这里 import，反过来就是一个环。
  *
  * 传输层（zod 校验、连接失败与 Runtime 报错的分流）在 `request.ts`，WebSocket
@@ -38,7 +38,7 @@ import {
   type ControlSocketOpener,
   controlChannel,
 } from "./ws";
-import { agentsApi } from "./agents";
+import { agentsApiFor } from "./agents";
 import { systemApi } from "./system";
 import { workspacesApiFor } from "./workspaces";
 import { boardsApiFor } from "./boards";
@@ -297,15 +297,15 @@ export function isDefinedError(error: unknown, code?: string): boolean {
 }
 
 /** 迁到契约上的域交 `source` 的客户端；缺省是当前源。 */
-function boardsClient(source?: Source): ArmadraClient {
+function sourceClient(source?: Source): ArmadraClient {
   return source === undefined ? currentClient() : clientFor(source);
 }
 
 export const runtimeApi = {
-  ...agentsApi,
+  ...agentsApiFor(sourceClient),
   ...systemApi,
   ...workspacesApiFor(currentClient),
-  ...boardsApiFor(boardsClient),
+  ...boardsApiFor(sourceClient),
   ...filesApiFor(currentClient),
   ...languageApi,
   ...searchApiFor(currentClient),
