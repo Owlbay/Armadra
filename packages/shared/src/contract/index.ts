@@ -6,6 +6,7 @@ import type {
 } from "@orpc/contract";
 
 import { identity } from "./cloud.js";
+import { files } from "./files.js";
 import type { ProcedureMeta } from "./meta.js";
 import { settings } from "./settings.js";
 import { sources } from "./sources.js";
@@ -19,7 +20,14 @@ import { workspaces } from "./workspaces.js";
  * 业务侧拿到的是这里导出的值与类型，不直接碰上游。新域按契约 §34 起的预分配
  * 逐个加进来（工程规范化包 §0）。
  */
-export const contract = { system, workspaces, settings, sources, identity };
+export const contract = {
+  system,
+  workspaces,
+  settings,
+  sources,
+  identity,
+  files,
+};
 
 export type Contract = typeof contract;
 export type ContractDomain = keyof Contract;
