@@ -2173,7 +2173,7 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 
 - **验断言**（`login` 与 `bind` 同一套）：compact JWS，`alg` 只认 `EdDSA`，头 `typ` 必须是 `armadra-assertion`；按载荷的 `iss` 找有效登记，没有答 `401 cloud_not_registered`；按头的 `kid` 在缓存的 JWKS 里找钥——找不到才取一次 `jwks_url`（同一个 issuer 最多每 10 分钟一次，取到的写回缓存），远程服务离线时缓存里的钥照样验（离线验签）。验签、声明 schema（协议包 `assertionClaimsSchema`）、`aud` 等于本机 `hostId`、`iss` 等于登记的 issuer、时间（5 分钟偏差）、寿命不超过重放窗口（10 分钟），任何一条不过都答 `401 cloud_assertion_invalid`；全部通过后才按 `(iss, jti)` 记重放表，同一张第二次答 `401 cloud_assertion_replayed`。
 - **映射**：外部身份 → principal 走 OAuth 那一种凭据（`identity_credentials`，`kind = 'oauth'`，`provider = "cloud:" + sha256(iss) 的前 16 位十六进制`，`subject = sub`），一个远程服务账号只对应一个 principal。
-- **`login`**：入参 `{ assertion, invitationToken? }`。有映射 → 那个人（停用了答 `403 forbidden`）；没有映射且带邀请令牌 → 一笔事务里建成员、写映射、兑换邀请（`created: true`），邀请不对答 `401 invitation_invalid`；断言带 `link` 声明时邀请令牌必须就是 `link.invitationId` 那一张；没有映射也没有邀请答 `401 cloud_account_unlinked`。新建的人断言带 `org` 声明、且设置了组织默认角色（`cloud.orgDefaultRole`，A3-2 落地，缺省不授予）时，对每块画布逐条授予那个角色。随后建设备（名字取断言的 `device.name`）与会话，`identity.login` 的 `method` 是 `cloud`。答 `{ session, principal: { principalId, kind, displayName }, created }`：原生传输（回环明文 + 壳的来源、Gateway 或隧道标过的 Bearer 模式）在 `session.native` 里给 `{ accessToken, refreshToken }`，不发 Cookie；浏览器来源发 `HttpOnly` 会话 Cookie，体里只有 `csrfToken`。
+- **`login`**：入参 `{ assertion, invitationToken? }`。有映射 → 那个人（停用了答 `403 forbidden`）；没有映射且带邀请令牌 → 一笔事务里建成员、写映射、兑换邀请（`created: true`），邀请不对答 `401 invitation_invalid`；断言带 `link` 声明时邀请令牌必须就是 `link.invitationId` 那一张；没有映射也没有邀请答 `401 cloud_account_unlinked`。新建的人断言带 `org` 声明、且设置了组织默认角色（`cloud.orgDefaultRole`，§32.5，缺省不授予）时，对每块画布逐条授予那个角色。随后建设备（名字取断言的 `device.name`）与会话，`identity.login` 的 `method` 是 `cloud`。答 `{ session, principal: { principalId, kind, displayName }, created }`：原生传输（回环明文 + 壳的来源、Gateway 或隧道标过的 Bearer 模式）在 `session.native` 里给 `{ accessToken, refreshToken }`，不发 Cookie；浏览器来源发 `HttpOnly` 会话 Cookie，体里只有 `csrfToken`。
 - **`bind`**：已登录的人把断言的 `sub` 映射到自己（`{ bound: true }`）；已经映射给自己是幂等的，映射给了别人答 `409 conflict`。
 - **限流**：`login` 按来源地址的令牌桶（与配对同一档，只有失败扣，`429 rate_limited` 带 `Retry-After`），另按 `(iss, sub)` 每分钟 5 次（`login` 与 `bind` 共用）。
 - **审计**：`cloud.login { iss, sub, principalId, created, link? }`、`cloud.bind { iss, sub }`、`cloud.register { issuer, mode }`、`cloud.revoke { issuer }`、经链接建号另记 `invitation.accept.link { iss, linkId }`。凭据（刷新令牌、源私钥、注册令牌、断言原文）不出现在任何响应、日志与审计详情里——`login` 答的原生会话是这一条的用途本身。
@@ -2182,17 +2182,50 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 
 ## 32. 隧道面：core 作为出站隧道客户端
 
-> 状态：预留，形状见规格（平台实现规格 core 包 §4（docs/design/platform/core-packages.md），落地包 A3-2）。本节先占位，实现合入时补全握手、帧表与准入的完整描述。
+> 状态：实施契约（A3-2，实现 `core/relay/`；规格见平台实现规格 core 包 §4（docs/design/platform/core-packages.md））。中继一侧的线上行为见 [cloud-api.md](https://github.com/Owlbay/armadra-cloud/blob/main/docs/contracts/cloud-api.md) §7、§8，这里不另抄。
 
-范围：core 经中继节点建立出站隧道，让登记过的远程服务的客户端经中继访问本机 core。隧道本身没有 HTTP 路径可调用，这一节记的是它的行为边界与可观察面。
+范围：core 经中继节点建立出站隧道，让登记过的远程服务（§31）的客户端经中继访问本机 core。隧道本身没有 HTTP 路径可调用，这一节记的是它的行为边界与可观察面。
 
-- 握手与帧表：以协议包 `@armadra/platform-protocol/tunnel`（隧道协议版本 `t/v1`）为准，本文不复制帧格式；`wss://` 为必须，`ws://` 只在 `ARMADRA_RELAY_ALLOW_INSECURE=1`（探针）时放行。
-- 准入规则：隧道来的请求按 Bearer 模式准入，与 Gateway 等价。路径落在 `loopbackOnlyPath`（`/hook/`、`/control/`、`/context-link/`、`/browser/`、`/verify`）一律 `403 forbidden`；请求来源须在登记的可信来源与内置来源之内；匿名路径与 `/health` 之外要 `Authorization: Bearer`，WebSocket 升级要 `armadra-ticket.<ticket>` 子协议；拒绝一律 `401 unauthenticated`。
-- 关闭码：长连接沿用 4401 / 4403 复核，隧道侧新增 4404。
-- 旁路保证：隧道的建立、失败与重连不阻塞也不影响 core 的启动与回环 API。
-- 状态面：`GET /api/identity/cloud` 的 `registrations[].tunnel` 为协议包 `tunnelStatusSchema`；事件流事件 `cloud.tunnel`（`{ issuer, state }`）。
-- 设置键：`cloud.relay.enabled`（缺省 `true`，关闭即全部停止）、`cloud.relay.preferredNode`。
-- 外呼登记（`net/outbound.ts`）：`relayTunnel`、`cloudJwks`、`cloudApi`。
+### 32.1 连接与握手
+
+- 每个有效登记（§31.2）一条隧道。节点与隧道令牌：`GET <issuer>/v1/sources/me/relay`，`Authorization: Source <jws>`（源私钥签，`aud` = issuer），答 `{ tunnelToken, expiresAtMs, nodes, limits }`；令牌缓存 50 分钟，被中继以 `tunnel_token_*` 拒绝就丢掉重取。节点按设置 `cloud.relay.preferredNode`（节点地址或区域名）排最前，其余按权重；一个节点连不上换下一个。对远程服务与节点的连接都按「远程服务」表（§33）里同一 issuer 的 CA 指纹钉扎，没有那一行用系统信任。
+- 节点地址必须是 `wss://`；`ws://` 只在 `ARMADRA_RELAY_ALLOW_INSECURE=1`（探针）时放行。WebSocket `maxPayload = maxFrameBytes + 16`，不压缩，握手 10 秒。
+- 握手与帧表以协议包 `@armadra/platform-protocol/tunnel`（隧道协议 `t/v1`）为准，本文不复制格式：`hello`（`sourceId` 即本机 `hostId`，带隧道令牌与 16 字节 nonce）→ `challenge` → `auth`（源私钥对 `sourceId\nnonce\nnonce2\nrelayNode` 的 Ed25519 签名）→ `ready` / `reject`。`ready.limits` 是两级窗口的初始信用，`ready.heartbeatMs` 是心跳间隔。
+- 拒绝码：`protocol_unsupported` 停下、不再重连（直到 core 重启、重新登记或把开关关了再开）；`source_revoked`（握手拒绝，或取令牌答 `410`）→ 本机撤销这条登记（§31.2 的撤销，审计 `cloud.revoke`）；其余（`tunnel_token_*`、`signature_invalid`、`rate_limited`）退避重来。
+
+### 32.2 流、窗口与心跳
+
+- 只有中继发 `OPEN`；每条流在 core 里是一个 `Duplex`，交给一个只给隧道用的监听，由 Node 自己解析里面的 HTTP/1.1 与 WebSocket 升级。HTTP 流一流一个请求（中继给 `connection: close`）。流数超过 `limits.maxStreams` 答 `RST refused`。
+- 流控：`DATA` 按 64 KiB 切块，同时扣流信用与隧道信用，任一不足就等 `WINDOW`；交给上层的字节累计到窗口一半时补回。对端超发 → `RST 5` 并以 `4400` 关隧道。没发出去的字节留在流的写缓冲里，WebSocket 的 `bufferedAmount` 含这一段，五条长连接的发送队列（§3.4）照常据此判拥塞、暂停生产者。
+- 心跳：收到 `PING` 立即回 `PONG`；core 自己每 `heartbeatMs` 发一次 `PING`，连续两次没有 `PONG` 断开重连。长连接上 core 自己的 ws 心跳（§3.4）照旧经隧道走。
+- `GOAWAY`：不退避，立即换节点再连一条；旧隧道不再接新流，流自然结束（或 `graceMs` 到了）后关闭。
+- 退避：`min(60 s, 1 s × 2^n) × (0.5 + 随机)`，就绪过一次 `n` 归零。
+- 隧道断开时这条隧道上的流以 `RST sourceGone` 结束，经它进来的 HTTP 与 WebSocket 随之结束；终端、Agent、画布不依赖连接存活。
+
+### 32.3 准入
+
+隧道来的请求按 Bearer 模式准入，与 Gateway 的原生 App 那一条等价，不享受回环的匿名，也不认 Cookie：
+
+1. 路径落在 `loopbackOnlyPath`（`/hook/`、`/control/`、`/context-link/`、`/browser/`、`/verify`）一律 `403 forbidden`。
+2. 来源以 `OPEN.clientOrigin` 为准；请求头的 `Origin` 与它不一致 `403`。来源必须在这条登记的可信来源（§31.2 `trustedOrigins`）或原生 App 的两个来源（`capacitor://localhost`、`https://localhost`）之内，否则 `403`。没有来源（非浏览器）的请求只放行 `/health` 与 `/api/identity/*` 的匿名面，其余 `403`，升级一律 `403`。
+3. 匿名面（`/health`、身份域自己的登录面，含 `POST /api/identity/cloud/login`）放行，以一个没有任何授权的成员身份跑；预检只答 CORS。
+4. `POST /api/identity/ws-ticket` 由隧道自己签票（30 秒、一次性，绑在会话来源上）；WebSocket 升级只认 `Sec-WebSocket-Protocol` 里的 `armadra-ticket.<票>`，票不对、用过或来源不符 `401`。
+5. 其余要 `Authorization: Bearer <访问密钥>`；没有或认不出 `401 unauthenticated`（JSON 形状同 §3）。
+
+会话绑在这个远程服务的中继来源上（`relayOrigins[0]`，缺省就是 issuer）：放行前请求头的 `Origin` 换成它、请求标成 Bearer 传输，于是 `cloud/login`（§31.3）经隧道答 `session.native`、不发 Cookie，换来的会话只在隧道上有效；回环与 Gateway 签的会话也进不了隧道。CORS 只回客户端自己的来源。认出来的人进这次请求的身份，路由门、事件订阅与长连接的 `4401` / `4403` 复核与回环、Gateway 走同一条路。
+
+### 32.4 关闭码
+
+- 隧道上的（core ↔ 中继）：`4400`（帧格式或流控违规）、`4409`（协议不兼容）、`4429`（握手限流）、`4490`（隧道认证失败）、`4491`（被同源新隧道替换）、`4492`（中继关闭或撤销）；core 主动停（撤销、关开关、退出）以 `1000` 关。
+- 经中继的客户端长连接：沿用 `4401` / `4403` 复核；源离线（隧道断开、撤销）时中继以 `4404` 结束。
+
+### 32.5 状态、设置与外呼
+
+- 状态面：`GET /api/identity/cloud` 的 `registrations[].tunnel` 是协议包 `tunnelStatusSchema`：`{ state: disabled | connecting | authenticating | ready | draining | backoff, node, since, streams, lastError: { code, message } | null }`。`lastError.code` 是 `relay_unreachable`、`fingerprint_mismatch`、`insecure_node`、`handshake_timeout`、`heartbeat_timeout`、`tunnel_protocol_error`、`relay_closed`、`source_unauthenticated`、`source_key_unavailable` 或中继的拒绝码。
+- 事件：工作空间事件流（§5）上的 `cloud.tunnel { issuer, state }`，状态变了发给每块正被人看着的画布（`events:read`），不进 outbox。
+- 设置键：`cloud.relay.enabled`（缺省 `true`，关掉即全部停止、打开即按登记全部起，当场生效）、`cloud.relay.preferredNode`（缺省空串），两者存在本机那一半；`cloud.orgDefaultRole`（`viewer` / `editor` / `operator` / `driver` / `null`，缺省 `null` = 不授予，§31.3 读它）。
+- 旁路保证：装配不联网；隧道在回环监听开始之后才起，而且不等；隧道的建立、失败与重连只进它自己的状态，不阻塞也不影响 core 的启动与回环 API。
+- 外呼登记（`net/outbound.ts`）：`relayTunnel`（开关 `cloud.relay.enabled`）、`cloudApi`（隧道令牌）、`cloudJwks`。
 
 ## 33. 客户端源表与远程服务：`/api/sources/*`
 

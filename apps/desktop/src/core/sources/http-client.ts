@@ -253,6 +253,23 @@ export async function presentedAnchor(
   return sha256(last);
 }
 
+/**
+ * 按指纹找到的信任锚 PEM（同 {@link networkTransport} 的钉扎），给不经这里发
+ * HTTP 的连接用——中继隧道的 `wss://` 以它作唯一的 `ca`。空指纹答 `undefined`
+ * （系统信任）。对不上答 `fingerprint_mismatch`。
+ */
+export async function pinnedAnchor(
+  url: string,
+  fingerprint: string,
+  timeoutMs: number,
+): Promise<string | undefined> {
+  if (fingerprint === "") return undefined;
+  const parsed = new URL(url);
+  // 同一主机同一端口上的 TLS：`wss:` 与 `https:` 握的是同一张证书。
+  const https = new URL(`https://${parsed.host}`);
+  return anchorFor(https, fingerprint, timeoutMs);
+}
+
 /** 测试用：清掉信任锚缓存。 */
 export function forgetAnchors(): void {
   anchors.clear();

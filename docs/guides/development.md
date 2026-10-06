@@ -416,6 +416,7 @@ Node 直接打桌面壳起的 core 时用 `tools/probes/probe-session.mjs`（经
 | `ARMADRA_STATUS_PAGE_BASE`                      | 用量页的 Provider 状态页改读 `<地址>/<anthropic\|openai\|github>/api/v2/status.json`（探针用本机 fixture，不碰真网络）                                                                                 |
 | `ARMADRA_COPILOT_CLIENT_ID`                     | Copilot 设备流换成自己的 GitHub OAuth 应用（企业部署）；设备流本身在 `usage.copilotUsage` 后面，默认关                                                                                                 |
 | `ARMADRA_SECRET_BACKEND`                        | `=file` 强制密钥后端为 0600 明文文件（测试与无人值守；测试的 setup 默认设了它，不碰开发者的钥匙串）；`=file-encrypted` 用数据目录里的 master key 封存（探针用，节点凭据拒绝 `file`）                   |
+| `ARMADRA_RELAY_ALLOW_INSECURE`                  | `=1` 让出站中继隧道接受 `ws://` 节点（探针与本机明文中继用）；缺省只连 `wss://`（契约 §32）                                                                                                            |
 | `ARMADRA_SECRET_MASTER_KEY_FILE`                | 服务器壳的 master key 换个位置（如 systemd `LoadCredential=`）；不设时用 `<数据目录>/secrets/master.key`，首启生成                                                                                     |
 | `ARMADRA_SMTP_URL` / `ARMADRA_SMTP_FROM`        | 服务器壳的可选邮件通道（同 `serve --smtp-url` / `--smtp-from`，契约 §28）：`smtp(s)://用户:口令@主机:端口`，口令可写 `secret://armadra-smtp`；不设则不发信、页面不显示「发送邮件」                     |
 

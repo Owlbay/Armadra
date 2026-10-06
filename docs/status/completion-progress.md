@@ -2066,6 +2066,44 @@
 - `WorkspaceTree` 仍只列当前源的行（偏好里已按源存）；按源分组是 A1-4。
 - 实时协同的「这块板走不走实时」复核仍走当前源的 `runtimeApi`。
 
+## A3-2 出站中继隧道（`core/relay/`，契约 §32）
+
+设计：[平台实现规格 core 包](../design/platform/core-packages.md) §4；契约 §32。中继一侧的线上行为按 armadra-cloud 的 cloud-api §7、§8、§10、§11。
+
+做了什么：
+
+- **隧道客户端**（`core/relay/`）：`streams.ts` 的 `TunnelDuplex`（两级窗口记账，按 64 KiB 切块，`END` / `RST`，`remoteAddress` 取 `OPEN.remoteIp`、`encrypted = true`、`armadraOrigin` 取 `OPEN.clientOrigin`）；`nodes.ts`（`GET /v1/sources/me/relay` 带源 JWS，令牌缓存 50 分钟、被拒即丢，偏好节点 → 权重排序，失败换下一个，答 `410` 即 `source_revoked`）；`client.ts` 的 `TunnelClient`（`hello` → `challenge` → `auth`（源私钥签 `challengeSigningInput`）→ `ready`；`protocol_unsupported` 停下不重连、`source_revoked` 本机撤销登记、`tunnel_token_*` 丢令牌、其余退避；收 `PING` 回 `PONG`，自己每 `heartbeatMs` 发 `PING`、两次无 `PONG` 重连；`GOAWAY` 不退避立即换隧道、旧的排空或 `graceMs` 后关；退避 `min(60 s, 1 s × 2^n) × (0.5 + 随机)`；流数超 `maxStreams` 答 `RST refused`；`wss://` 按远程服务的 CA 指纹钉扎，`ws://` 只在 `ARMADRA_RELAY_ALLOW_INSECURE=1`）。
+- **准入**（`admission.ts`，挂在 `createListener({ admitted: true, gate })`）：与 Gateway 的 Bearer 模式等价——回环专用路径 403；来源以 `OPEN.clientOrigin` 为准、请求头不一致 403、须在可信来源或原生 App 两个来源之内；没有来源只放行 `/health` 与身份匿名面；匿名面以无授权成员身份跑；`POST /api/identity/ws-ticket` 由隧道自己签票；其余要 Bearer，升级要 `armadra-ticket.*`，拒绝 401。会话绑在中继来源（`relayOrigins[0]`）上，放行前改写 `Origin` 并 `markBearerTransport`，`cloud/login` 经隧道答 `session.native`、不发 Cookie。
+- **`http/server.ts`**：`createListener` 加 `gate`（交接点自己的门：来源、凭据、CORS 由它定，可自答 WS 票；升级同样先过它）。
+- **装配**（`index.ts`）：每个有效登记一条隧道，`RelayService` 挂到 `cloudDomain().attachRelay`（登记起、撤销停、状态读它）；`main.ts` 在回环监听之后 `startAll()` 且不等，退出时先关隧道；状态变了在工作空间事件流上发 `cloud.tunnel { issuer, state }`（发给正被看着的画布，不进 outbox）。
+- **设置**：`cloud.relay.enabled`（缺省 `true`，翻转经新的 `SettingsStore.onChange` 当场停 / 起）、`cloud.relay.preferredNode`，存在本机那一半（`LOCAL_PATHS` 加 `cloud.relay`）；`cloud.orgDefaultRole`（`viewer` / `editor` / `operator` / `driver` / `null`，缺省 `null`），在 `identity/index.ts` 接给云登录。两份 `completion-settings.ts` 与共享层 zod schema 同步。
+- 其它：`sources/http-client.ts` 导出 `pinnedAnchor`；`CloudService.fingerprint(issuer)`；契约 §32 由占位补成实施契约（§32.1–§32.5），架构域表加 `core/relay/`，开发指南登记 `ARMADRA_RELAY_ALLOW_INSECURE`。
+
+实测（macOS arm64，Node 26，2026-10-06，基于 main 86271782（含 #140）；合入 main 8f20daf7（#141、#142，只动页面与手机）后重跑 `pnpm check` 与 web 用例）：
+
+- `pnpm check` 通过（lint 0 error，本包文件 0 warn）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 4820 过 / 72 跳过，live 4 过，脚本 68 过；`pnpm --filter @armadra/server test` 87 过 / 4 跳过，`pnpm --filter @armadra/server build` 通过；`pnpm --filter @armadra/shared test` 348 过；`pnpm --filter @armadra/web test` 3550 过（合入 #141、#142 后 3603 过），`typecheck` 通过。
+- 新用例：`relay/streams.test` 8（经假中继 GET / 带体 POST / chunked / WS 回显、窗口耗尽只发一个流窗口后停、`WINDOW` 后续发且一字节不少、`bufferedAmount` 含隧道里积压的字节、隧道断开流随之结束并退避重连、`maxStreams` 答 `RST refused`）、`relay/client.test` 14（握手与签名被验、`protocol_unsupported` 停且不重连、`source_revoked` 与取令牌 `410` 都撤销本机登记、`tunnel_token_expired` 重取令牌、心跳超时重连、回 `PONG`、`GOAWAY` 在一分钟退避下仍立即换隧道且旧隧道 1000 关、退避公式、中继不可达时登记立即返回且回环 `/health` 与 `/api/workspaces` 200、开关停起、撤销即断、节点排序、签名输入与黄金向量逐字相同）、`relay/admission.test` 14（可信来源 + Bearer 放行且 CORS 只回客户端来源、无 Bearer 401、回环会话进不来、来源不可信 403、头与 `OPEN.clientOrigin` 不一致 403、回环专用路径 403、无来源只放行匿名面、原生 App 来源、预检、隧道签票换事件流与票只能用一次、无票 401 / 无来源 403、票要 Bearer、`cloud/login` 经隧道答原生会话且令牌可用、`cloud.tunnel` 事件）、`relay/frames.test` 12（协议包隧道黄金字节解码再编码逐字节相同）、设置与 `onChange` 用例 2。
+- **对真个人中转联调**：armadra-cloud main（be36b78）的 `personal serve`（https://127.0.0.1:8102，自签，账号见 `.data/personal/dev.env`），`ARMADRA_PERSONAL_RELAY=1 ARMADRA_PERSONAL_RELAY_HOME=<armadra-cloud> vitest run src/core/relay/personal-relay.devstack.integration.test.ts` 9 过（修掉用例里漏收首帧的问题后连跑 4 次都过）：真 core（`run()`）经源表加远程服务（钉指纹）→ A2-3 的 `register` → 隧道 ready；中继断言绑定后经中继 `cloud/login` 换原生会话、经中继刷新、`GET /api/workspaces`、回环专用路径 403、无 Bearer 401；经中继的事件流收到本机发布的事件；经中继开终端（tmux）收发 `echo`；经中继的实时板与回环那一端双向互通；中继令牌失效 4401 后换令牌与票重连、用过的票 401；中继 SIGTERM 重启后隧道 7–9 秒内自己重连、期间回环照常；本机撤销后经中继的流随即被关（约 0.3 秒）、HTTP 503 `source_offline`；中继侧撤销后隧道被关，重连时令牌被拒、取令牌 `410`，本机登记跟着撤销。联调后中继已停，测试 core 在中继目录里全部撤销。
+
+接口：
+
+- **给 A3-4（页面 relayed 源）**：经中继访问用 `sources.assertion` 答的 `relayBaseUrl` + `Armadra-Relay-Token`（WS 子协议 `armadra-relay.<jwt>`），`Origin` 须是可信来源（issuer 自己、`identity.cloud.trustedOrigins` 加的）或原生 App 来源；`POST /api/identity/cloud/login { assertion }` → `session.native`（还有 `csrfToken`）；之后 `Authorization: Bearer`；刷新 `POST /api/identity/session/refresh`（Bearer = 刷新令牌 + `x-armadra-csrf`）；WS 先经中继 `POST /api/identity/ws-ticket` 换票，子协议 `armadra-relay.*` + `armadra-ticket.*`；长连接 4401 续期换票重连、4403 失权、4404 源离线。设置页：`identity.cloud.status` 的 `registrations[].tunnel`、事件 `cloud.tunnel`（共享层 `workspaceEventSchema`）、设置键（共享层 `cloudSettingsSchema`、`CLOUD_ORG_ROLE_CHOICES`）、`lastError.code` 取值见契约 §32.5（文案按码进 i18n）。
+- **给 A4-4（服务器壳登记）**：服务器壳的 `run()` 用同一份 `DOMAINS`，隧道已在里面；`cloudDomain()?.register / revoke / status` 登记即起隧道、撤销即停；`relayDomain()`（`core/relay`）：`start / stop / status / statusAll / startAll / stopAll / close`；源私钥在 SecretStore（服务器壳的 `file-encrypted`）；探针连明文中继用 `ARMADRA_RELAY_ALLOW_INSECURE=1`。
+
+没做 / 偏离规格：
+
+- 节点选择没有延迟探测：偏好节点 → 权重 → 原顺序（个人中转只有一个节点）。
+- 会话绑定的来源规格没写，取 `relayOrigins[0]`（缺省 issuer）：经隧道签的会话只在隧道上有效，回环与 Gateway 的会话也进不了隧道。隧道用自己的一份 WS 票表，不与回环共用。
+- 来源被拒（不可信、与 `OPEN` 不一致、没有来源却碰受保护的路径）答 403，凭据被拒答 401；规格「拒绝一律 401」指后者。
+- `cloud.relay.*` 存在本机那一半（`worker-settings.json`），`cloud.orgDefaultRole` 跟着账号走。
+- `installRelay` 放在 hook 服务之前（Gateway 仍是最后一个），隧道真正连中继在 `run()` 第 5 步之后。
+- `cloud.tunnel` 是工作空间事件（发给正被看着的画布、不进 outbox），没有加进 `WORKSPACE_EVENT_TYPES` 那张契约 §5 的清单（同 `board.comment`）。
+- `hello.capabilities` 报空数组（中继不读）。
+- 夹具位置与命名按仓库习惯：假中继在 `relay/fake-relay.fixture.ts`；联调用例是 `relay/personal-relay.devstack.integration.test.ts`（`ARMADRA_PERSONAL_RELAY=1` 才跑，不探测 dev-stack）。`sequence-http-roundtrip.bin` 按帧做解码再编码的逐字节比对，没有把 core 的回答与夹具逐帧比（回答带 `Date` 头，不确定）。
+- core 自己的 4401（访问令牌 15 分钟到期）没在联调里等，联调验的是中继令牌 4401 后的换令牌与换票；core 到期复核与回环、Gateway 同一条路（`http/server.ts`），已有用例覆盖。语言会话与浏览器画面两条流没有经真中继跑，机制与终端、事件流、实时板相同（发送队列按 `bufferedAmount` 判拥塞，见 `streams.test`）。
+- 中继侧撤销后，重连时中继先以 `tunnel_token_invalid` 拒（令牌的 `jti` 随源撤销），core 丢令牌、退避一次后取令牌得 `410` 再撤销，约 1–3 秒。
+
 ## A1-4 「远程服务」设置页、分享本机与侧栏按源分组
 
 设计：[客户端包](../design/platform/client-packages.md) §3；总计划 §12（只开放个人中转与自托管直连，SaaS 不出现入口）。
