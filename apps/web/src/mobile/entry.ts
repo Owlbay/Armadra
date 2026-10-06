@@ -18,6 +18,7 @@ import {
   startHostedRelay,
   underRelayAppPath,
 } from "../sources/hosted";
+import { mountSiblingSources } from "../sources/mounts";
 import { enterRoute, ticketWithRefresh } from "../sources/route-entry";
 import type { SourceDescriptor } from "../sources/types";
 import type { ConnectFailure } from "./ConnectScreen";
@@ -202,8 +203,9 @@ function routeFailure(error: unknown): ConnectFailure {
 /**
  * 进一个连接：选路（直连优先，D27）→ 取访问（钥匙串里这个源的会话，必要时
  * 轮换或经远程服务重取断言）→ 把这一路的地址与凭据装给本机源
- * （`sources/route-entry.ts`，与中继托管的页面同一份）。本机源就是「当前连接」：
- * 切换连接 = 记下选中的再重载。
+ * （`sources/route-entry.ts`，与中继托管的页面同一份）。本机源就是选中的那个
+ * 连接；表里其余的连接作为远程源同时挂进页面源表（`sources/mounts.ts`），侧栏
+ * 按源分组，点一行即切当前源。
  */
 async function enterConnection(descriptor: SourceDescriptor): Promise<Entry> {
   const connections = loadConnections();
@@ -230,7 +232,18 @@ async function enterConnection(descriptor: SourceDescriptor): Promise<Entry> {
       ...(descriptor.baseUrl === "" ? {} : { origin: descriptor.baseUrl }),
     };
   }
-  if (await restoreNativeCredentials()) return { kind: "app" };
+  if (await restoreNativeCredentials()) {
+    // 其余的连接一起挂上（各自在后台连，连不上只是侧栏里那一组灰着）；只有
+    // 这一个连接时什么也不做，与单源时一样。
+    const provider = mobileCredentialProvider();
+    mountSiblingSources({
+      primary: descriptor,
+      siblings: connections,
+      provider,
+      cloudAuth: provider.cloudAuth,
+    });
+    return { kind: "app" };
+  }
   return {
     kind: "connect",
     mode: "native",

@@ -3,6 +3,7 @@ import {
   createCachedCredentialProvider,
 } from "../sources/credentials";
 import {
+  type CloudAuth,
   type CredentialProvider,
   SOURCE_ERROR,
   type SourceAccess,
@@ -71,9 +72,14 @@ function unauthorized(code: string = SOURCE_ERROR.unauthorized): SourceError {
   return new SourceError(code);
 }
 
+/** 手机的凭据来源，外加远程服务会话（挂上的经中继的源开 `me.stream` 用）。 */
+export interface MobileCredentialProvider extends CredentialProvider {
+  readonly cloudAuth: CloudAuth;
+}
+
 export function createMobileCredentialProvider(
   deps: MobileCredentialDeps,
-): CredentialProvider {
+): MobileCredentialProvider {
   const now = deps.now ?? Date.now;
   const fresh = (session: StoredSession) =>
     session.expiresAtMs === 0 ||
@@ -198,13 +204,14 @@ export function createMobileCredentialProvider(
       return cached.refresh(sourceId, via);
     },
     invalidate: (sourceId) => cached.invalidate(sourceId),
+    cloudAuth: relay.cloudSessions,
   };
 }
 
-let shared: CredentialProvider | null = null;
+let shared: MobileCredentialProvider | null = null;
 
 /** 页面的那一个：钥匙串经原生桥，源描述取自连接表。 */
-export function mobileCredentialProvider(): CredentialProvider {
+export function mobileCredentialProvider(): MobileCredentialProvider {
   shared ??= createMobileCredentialProvider({
     bridge: nativeBridge(),
     describe: (sourceId) =>
