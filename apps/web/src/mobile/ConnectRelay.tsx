@@ -195,6 +195,8 @@ export function RelayForm({
           autoCapitalize="off"
           autoCorrect="off"
           autoComplete="url"
+          // 刚点进「个人中转」：光标直接在地址上（展示页钉住了初值时不抢）。
+          autoFocus={!initial?.issuer}
           spellCheck={false}
           placeholder="relay.example.com"
           disabled={busy}
@@ -248,12 +250,12 @@ export function RelayForm({
   );
 }
 
-/** 64 位十六进制按 8 位一组，两行四组，便于逐段比对。 */
+/** 64 位十六进制按 8 位一组，一行两组、共四行，窄屏不折行、便于逐段比对。 */
 export function groupFingerprint(fingerprint: string): string[] {
   const groups = fingerprint.match(/.{1,8}/g) ?? [];
   const rows: string[] = [];
-  for (let index = 0; index < groups.length; index += 4)
-    rows.push(groups.slice(index, index + 4).join(" "));
+  for (let index = 0; index < groups.length; index += 2)
+    rows.push(groups.slice(index, index + 2).join(" "));
   return rows;
 }
 
@@ -285,14 +287,15 @@ export function FingerprintStep({
           {host}
         </p>
         <Item variant="muted" className="flex-col items-start">
-          <p
+          <div
+            role="group"
             className="flex flex-col gap-1 font-mono text-[13px] leading-5 tabular-nums"
             aria-label={t("mobileConnect.fingerprint.label")}
           >
             {groupFingerprint(fingerprint).map((row, index) => (
               <span key={index}>{row}</span>
             ))}
-          </p>
+          </div>
         </Item>
         {message && <FieldError id={errorId}>{message}</FieldError>}
       </div>

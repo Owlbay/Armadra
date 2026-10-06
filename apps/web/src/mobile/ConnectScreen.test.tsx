@@ -245,9 +245,7 @@ describe("连接页 · 多连接（添加连接）", () => {
     });
     // 主机与指纹分组显示，便于逐段比对。
     expect(screen.getByText("relay.example.com")).toBeTruthy();
-    expect(
-      screen.getByText("9b3e7c1a 04d85f62 e1a7b90c 3d4f5e6a"),
-    ).toBeTruthy();
+    expect(screen.getByText("9b3e7c1a 04d85f62")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "信任并继续" }));
     await waitFor(() => expect(screen.getByText("选择主机")).toBeTruthy());
     // 在线的默认选中，离线的不能选。

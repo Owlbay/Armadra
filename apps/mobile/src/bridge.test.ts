@@ -157,11 +157,10 @@ describe("plugin bridge", () => {
     });
     await bridge.removeSession("h2", "https://relay.example");
     await bridge.removeRemote("personal:relay.example");
-    expect(calls).toHaveBeenCalledWith(
-      "ArmadraNative",
-      "removeSession",
-      { sourceId: "h2", origin: "https://relay.example" },
-    );
+    expect(calls).toHaveBeenCalledWith("ArmadraNative", "removeSession", {
+      sourceId: "h2",
+      origin: "https://relay.example",
+    });
     await expect(bridge.getRemotes()).resolves.toHaveLength(1);
     await expect(bridge.peek("https://relay.example")).resolves.toEqual({
       fingerprint: "f".repeat(64),
