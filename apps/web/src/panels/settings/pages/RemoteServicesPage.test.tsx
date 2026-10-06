@@ -30,12 +30,18 @@ const api = vi.hoisted(() => ({
   createShareLink: vi.fn(),
   listShareLinks: vi.fn(),
   revokeShareLink: vi.fn(),
+  relayPending: vi.fn(),
+  retryRelayCleanup: vi.fn(),
 }));
 const boot = vi.hoisted(() => ({
   applySourceTable: vi.fn(async () => undefined),
   reloadIntoSettings: vi.fn(),
 }));
-const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+const toasts = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  warning: vi.fn(),
+}));
 vi.mock("../../../api/remote-services", async (original) => ({
   ...(await original<typeof import("../../../api/remote-services")>()),
   ...api,
@@ -82,6 +88,7 @@ beforeEach(() => {
   installDomPolyfills();
   usePreferencesStore.setState({ locale: "en" });
   api.notifyShellSourcesChanged.mockResolvedValue(false);
+  api.relayPending.mockResolvedValue([]);
 });
 afterEach(() => {
   cleanup();
@@ -373,5 +380,73 @@ describe("通过链接加入（A4-3p）", () => {
     expect(
       screen.queryByRole("button", { name: "Share this machine" }),
     ).toBeNull();
+  });
+});
+
+describe("中继侧待清理（契约 §31.4）", () => {
+  function openMenu(name: string) {
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: `Actions for ${name}` }),
+      { button: 0, ctrlKey: false },
+    );
+  }
+
+  it("停用分享时中继侧没删掉：提示待清理与按码的原因", async () => {
+    api.listSources.mockResolvedValue({
+      sources: [local],
+      remotes: [{ ...relay, registered: true }],
+    });
+    api.stopSharing.mockResolvedValue("source_unreachable");
+    mount();
+    await screen.findByText("Sharing");
+    openMenu(relay.label);
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Stop sharing" }),
+    );
+    await waitFor(() =>
+      expect(toasts.warning).toHaveBeenCalledWith("Sharing stopped", {
+        description: "Relay cleanup pending · Cannot reach this remote service",
+      }),
+    );
+    expect(toasts.success).not.toHaveBeenCalled();
+  });
+
+  it("远程服务行上标出待清理，菜单里重试；清掉了提示", async () => {
+    api.listSources.mockResolvedValue({ sources: [local], remotes: [relay] });
+    api.relayPending.mockResolvedValue([
+      { issuer: ISSUER, revokedAtMs: 1, code: "source_unauthorized" },
+    ]);
+    api.retryRelayCleanup.mockResolvedValue(null);
+    mount();
+    expect(await screen.findByText("Relay cleanup pending")).toBeTruthy();
+    openMenu(relay.label);
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Retry cleanup" }),
+    );
+    await waitFor(() =>
+      expect(api.retryRelayCleanup).toHaveBeenCalledWith(ISSUER),
+    );
+    await waitFor(() =>
+      expect(toasts.success).toHaveBeenCalledWith("Relay cleaned up"),
+    );
+  });
+
+  it("远程服务已删、中继侧还欠着：单独一行，重试失败按码说明", async () => {
+    api.listSources.mockResolvedValue({ sources: [local], remotes: [] });
+    api.relayPending.mockResolvedValue([
+      { issuer: ISSUER, revokedAtMs: 1, code: "source_unauthorized" },
+    ]);
+    api.retryRelayCleanup.mockResolvedValue("source_unauthorized");
+    mount();
+    expect(await screen.findByText("relay.test:8102")).toBeTruthy();
+    expect(
+      screen.getByText("Sign in to this remote service, then retry"),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry cleanup" }));
+    await waitFor(() =>
+      expect(toasts.error).toHaveBeenCalledWith(
+        "Sign in to this remote service, then retry",
+      ),
+    );
   });
 });
