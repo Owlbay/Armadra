@@ -245,6 +245,40 @@ export function checkPlatformPin({ base = root, platform } = {}) {
   return problems;
 }
 
+/**
+ * The desktop package carries the server shell (`Armadra serve`, platform plan
+ * A5-1): the manifest's `main` is the gate `main/entry.ts` builds, the build
+ * config emits it, and `after-pack.mjs` places the shell's `main.js` and page
+ * under `resources/server/`. Returns problems.
+ */
+export function checkDesktopServe({ base = root } = {}) {
+  const problems = [];
+  const read = (path) => {
+    try {
+      return readFileSync(base + path, "utf8");
+    } catch {
+      problems.push(`${path} is missing`);
+      return "";
+    }
+  };
+  const main = JSON.parse(read("apps/desktop/package.json") || "{}").main;
+  if (main !== "./out/main/entry.js")
+    problems.push(
+      `apps/desktop/package.json main is ${main}, expected ./out/main/entry.js (the Armadra serve gate)`,
+    );
+  if (
+    !/entry:\s*resolve\(here,\s*"src\/main\/entry\.ts"\)/.test(
+      read("apps/desktop/electron.vite.config.ts"),
+    )
+  )
+    problems.push("electron.vite.config.ts does not build src/main/entry.ts");
+  const afterPack = read("apps/desktop/scripts/after-pack.mjs");
+  for (const place of ['SERVER_TO = "server/main.js"', 'WEB_TO = "server/web"'])
+    if (!afterPack.includes(place))
+      problems.push(`after-pack.mjs no longer places ${place}`);
+  return problems;
+}
+
 /** Write a new version into every site. */
 export function setVersion(next, base = root) {
   const version = parseVersion(next).text;
@@ -288,6 +322,7 @@ function main(argv) {
   });
   problems.push(...checkAgentPin());
   problems.push(...checkPlatformPin());
+  problems.push(...checkDesktopServe());
   for (const problem of problems) console.error(`✗ ${problem}`);
   if (problems.length > 0) {
     console.error(

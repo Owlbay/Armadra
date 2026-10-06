@@ -74,6 +74,28 @@ docker build --build-arg WITH_CHROMIUM=1 -f apps/server/docker/Dockerfile -t arm
 - 验证：`node tools/probes/server-e2e.mjs --container=armadra-server:chromium [--build --with-chromium]` 会照走浏览器节点一步
   （探针页在容器自己的回环上），缺省镜像则记 skipped。
 
+### 2.4 用桌面安装包直接起服务器
+
+桌面安装包里同时带着服务器壳（`resources/server/main.js` 与它托管的页面 `resources/server/web/`），同一个二进制
+收到 `serve` 子命令就不开窗口、不进桌面的单实例锁，直接以服务器壳运行，参数原样透传给 `serve`
+（表见[开发指南](development.md#无窗口服务器壳)）：
+
+```sh
+# macOS
+/Applications/Armadra.app/Contents/MacOS/Armadra serve --data-dir ~/.armadra-server --listen 127.0.0.1:8443 \
+  --public-origin https://armadra.example.com
+# Linux（deb / rpm 安装后；AppImage 同理，前面加 APPIMAGE_EXTRACT_AND_RUN=1）
+armadra serve --data-dir /var/lib/armadra --listen 0.0.0.0:8443 --public-origin https://armadra.example.com
+# Windows
+& "$env:LOCALAPPDATA\Programs\Armadra\Armadra.exe" serve --data-dir D:\armadra-data
+```
+
+- 不给 `--web-root` 就用包内的页面，迁移目录与 node-pty 也取包内那份（与桌面同一个 Electron ABI），不需要 Node 与源码。
+- 不给 `--data-dir`（也没设 `ARMADRA_DATA_DIR`）时数据放在 `~/.armadra-server`，**不会**落到桌面应用自己的数据目录：桌面可能正开着那份库，两个壳的迁移版本也未必一致。要共用桌面那份数据请自己显式指过去。
+- 前台运行，`Ctrl-C` / `SIGTERM` 转给服务器壳，退出码就是它的退出码；启动日志里打印 `armadra-server pairing …`。
+- 安装包比容器镜像大，且 Agent 与终端用的是这台机器上的 CLI；长期常开、对公网的部署仍推荐 §2.1 / §2.2。
+- 只在打包后的安装包里有；开发检出里用 `node apps/server/out/main.js serve`（§2.2）。
+
 ## 3. 域名与证书
 
 服务器壳只说 HTTPS（`__Host-` Cookie 要求安全上下文），证书有四个来源，`status` 与 `GET /api/gateway` 的 `tls.source` 会说明是哪一个。

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 打包版冒烟：`pnpm --filter @armadra/desktop dist` 产出的 Armadra.app（macOS）或
 // AppImage / linux-unpacked（Linux），按桌面启动的方式起（launchd 或桌面会话的
-// PATH），数据目录 ARMADRA_DATA_DIR、HOME、Chromium profile 全是临时的。验四件只
+// PATH），数据目录 ARMADRA_DATA_DIR、HOME、Chromium profile 全是临时的。验五件只
 // 有打包版才验得出的事：
 //
 //   1. 升级后自动迁移全局安装：临时 HOME 里预先造出旧版装进各 CLI 全局目录的东
@@ -18,6 +18,9 @@
 //      成休眠，回到画布点节点，同一个会话 id 起下一代、`codex resume <同一个
 //      id>`，还记得之前让它记的数。
 //   4. 控制台：渲染进程没有 error 级别的输出与未捕获异常。
+//   5. `Armadra serve`（平台计划 A5-1）：同一个二进制带着 `serve` 不开窗口，以
+//      包内服务器壳起来——打印配对链接、`/health` 200 且 version 就是壳版本、
+//      首页 200 是 apps/web 的产物；停掉后退出。数据目录是临时的，不碰桌面那份。
 //
 // --no-real-cli（夜间 B 档用）：不要真 Codex 与它的登录，第 3 步换成一个普通终
 // 端节点——打包版在桌面 PATH 下找得到 tmux、起得来 shell、页面敲的命令有回显。
@@ -989,6 +992,7 @@ async function main() {
     report.consoleErrors.length === 0,
     report.consoleErrors,
   );
+  await serveFromPackage(binary, launch.env, home, scratch);
   report.operator = {
     before: operatorBefore,
     after: {
@@ -1002,6 +1006,111 @@ async function main() {
     report.operator,
   );
   page.close();
+}
+
+/**
+ * `Armadra serve --listen 127.0.0.1:<空闲端口> --public-origin https://localhost`（A5-1；
+ * 给了 --public-origin 日志里就不再有真实端口，所以端口自己选）：
+ * 只给命令行，不给 `--web-root`——包内的 `server/web` 与迁移目录由入口补上。
+ * 等启动日志里的配对链接，取 `/health`（200，version = 工作区版本）与首页（200，
+ * `apps/web` 的产物），再发 SIGTERM，要在限期内退出。
+ */
+async function serveFromPackage(binary, launchEnv, home, scratch) {
+  const version = JSON.parse(
+    readFileSync(join(root, "package.json"), "utf8"),
+  ).version;
+  const serveData = join(scratch, "serve-data");
+  const listenPort = await freePort();
+  mkdirSync(serveData, { recursive: true });
+  const server = spawn(
+    binary,
+    [
+      "serve",
+      "--data-dir",
+      serveData,
+      "--listen",
+      `127.0.0.1:${listenPort}`,
+      "--public-origin",
+      "https://localhost",
+    ],
+    {
+      env: {
+        PATH: DESKTOP_PATH,
+        HOME: home,
+        USER: process.env.USER,
+        LOGNAME: process.env.USER,
+        SHELL: LOGIN_SHELL,
+        TMPDIR: process.env.TMPDIR ?? tmpdir(),
+        // 保险：入口没拦住时，桌面壳也只会落进这份临时目录，不会开用户的真库。
+        ARMADRA_DATA_DIR: serveData,
+        ...(linux
+          ? Object.fromEntries(
+              SESSION_VARIABLES.filter((name) => process.env[name]).map(
+                (name) => [name, process.env[name]],
+              ),
+            )
+          : {}),
+        ...launchEnv,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  let log = "";
+  let exited;
+  const exit = new Promise((done) => server.on("exit", (code) => done(code)));
+  exit.then((code) => (exited = code));
+  server.stdout.on("data", (chunk) => (log += chunk));
+  server.stderr.on("data", (chunk) => (log += chunk));
+  cleanups.push(() => server.kill("SIGKILL"));
+  try {
+    const pairing = await waitSoft(
+      () =>
+        exited !== undefined ? null : /armadra-server pairing (\S+)/.exec(log),
+      { timeout: 60_000 },
+    );
+    check(
+      "Armadra serve 起来并打印配对链接",
+      Array.isArray(pairing),
+      pairing ? undefined : log.slice(-400),
+    );
+    if (!Array.isArray(pairing)) return;
+    // 配对链接带的是 --public-origin（没有端口）；自己选的端口才是真正监听处。
+    const origin = `https://127.0.0.1:${listenPort}`;
+    const health = await httpsText(new URL("/health", origin), {
+      rejectUnauthorized: false,
+    });
+    let body = {};
+    try {
+      body = JSON.parse(health.body);
+    } catch {
+      /* the check below reports it */
+    }
+    check(
+      "serve 的 /health 200，version 是壳版本",
+      health.status === 200 && body.version === version,
+      { status: health.status, version: body.version, expected: version },
+    );
+    const page = await httpsText(new URL("/", origin), {
+      rejectUnauthorized: false,
+    });
+    check(
+      "serve 的首页 200，是 apps/web 的产物",
+      page.status === 200 && page.body.includes('<div id="root">'),
+      { status: page.status, bytes: page.body.length },
+    );
+    check(
+      "serve 模式没有装配桌面壳（日志里没有桌面壳转出的 core: 行）",
+      !log.includes("core: "),
+    );
+    server.kill("SIGTERM");
+    const code = await Promise.race([
+      exit,
+      sleep(30_000).then(() => "timeout"),
+    ]);
+    check("serve 收到 SIGTERM 后退出", code !== "timeout", { code });
+  } finally {
+    report.serve = { exitCode: exited ?? null, log: log.slice(-600) };
+  }
 }
 
 /**
