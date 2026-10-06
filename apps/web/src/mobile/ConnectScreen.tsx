@@ -1,5 +1,13 @@
 import * as React from "react";
-import { KeyRound, Link2, LogIn, ScanLine } from "lucide-react";
+import {
+  ChevronLeft,
+  KeyRound,
+  Link2,
+  LogIn,
+  Plus,
+  ScanLine,
+  Waypoints,
+} from "lucide-react";
 
 import { useT } from "../app/preferences-store";
 import { Alert, AlertTitle } from "@/ui/alert";
@@ -14,6 +22,19 @@ import {
   InputOTPSlot,
 } from "@/ui/input-otp";
 import { Spinner } from "@/ui/spinner";
+import type {
+  RelayEnrollment,
+  RelayOutcome,
+  RelaySourceChoice,
+} from "./connect";
+import {
+  type ConnectionRow,
+  ConnectionList,
+  FingerprintStep,
+  RelayForm,
+  SourcesStep,
+} from "./ConnectRelay";
+import { isJoinLink, issuerOrigin, parseJoinLink } from "./join-link";
 
 /** 连接失败的原因；文案键是 `mobileConnect.error.<原因>`。 */
 export type ConnectFailure =
@@ -26,7 +47,23 @@ export type ConnectFailure =
   | "codeInvalid"
   | "codeDisabled"
   | "codeOrigin"
-  | "rateLimited";
+  | "rateLimited"
+  | "credentials"
+  | "locked"
+  | "link"
+  | "offline"
+  | "noSources"
+  | "address";
+
+/** 原生 App 里「添加连接」的几个视图（多连接）。 */
+export type ConnectView =
+  | "list"
+  | "add"
+  | "link"
+  | "code"
+  | "relay"
+  | "fingerprint"
+  | "sources";
 
 export interface ConnectScreenProps {
   /**
@@ -59,6 +96,37 @@ export interface ConnectScreenProps {
   readonly failure?: ConnectFailure | null;
   /** 展示页用：钉住配对码输入框里的字。 */
   readonly initialCode?: string;
+  /**
+   * 个人中转的添加流程（`createRelayEnrollment`）。给了才是多连接形态：
+   * 已有的连接列表 + 「添加连接」（扫码 / 配对链接 / 个人中转）。
+   */
+  readonly relay?: RelayEnrollment;
+  readonly connections?: readonly ConnectionRow[];
+  readonly activeId?: string | undefined;
+  readonly onOpen?: (sourceId: string) => void;
+  readonly onRemove?: (sourceId: string) => void;
+  /** 收到的是分享深链：一打开就直接挂载（`initialLink`）。 */
+  readonly autoJoin?: boolean;
+  /** 展示页用：钉住视图与那一步的内容。 */
+  readonly initialView?: ConnectView;
+  readonly initialFingerprint?: string;
+  readonly initialSources?: readonly RelaySourceChoice[];
+  readonly initialRelay?: {
+    readonly issuer?: string;
+    readonly account?: string;
+    readonly password?: string;
+  };
+}
+
+/** 输入或链接里的主机（带端口），认不出是 `null`。 */
+function hostOf(text: string): string | null {
+  const origin = parseJoinLink(text)?.issuer ?? issuerOrigin(text);
+  if (origin === null) return null;
+  try {
+    return new URL(origin).host;
+  } catch {
+    return null;
+  }
 }
 
 /** 配对码的 8 位分两组（`XXXX-XXXX`）。 */
@@ -91,11 +159,32 @@ export function ConnectScreen({
   codeFirst = false,
   onSignIn,
   initialCode = "",
+  relay,
+  connections = [],
+  activeId,
+  onOpen,
+  onRemove,
+  autoJoin = false,
+  initialView,
+  initialFingerprint = "",
+  initialSources = [],
+  initialRelay,
 }: ConnectScreenProps) {
   const t = useT();
+  const multi = mode === "native" && relay !== undefined;
   const [link, setLink] = React.useState(initialLink);
-  const [view, setView] = React.useState<"link" | "code">(
-    codeFirst && onCode ? "code" : "link",
+  const [view, setView] = React.useState<ConnectView>(() => {
+    if (initialView) return initialView;
+    if (codeFirst && onCode) return "code";
+    if (!multi) return "link";
+    if (initialLink !== "") return autoJoin ? "add" : "link";
+    return connections.length > 0 ? "list" : "add";
+  });
+  const [fingerprint, setFingerprint] = React.useState(initialFingerprint);
+  const [sources, setSources] =
+    React.useState<readonly RelaySourceChoice[]>(initialSources);
+  const [relayHost, setRelayHost] = React.useState(
+    () => hostOf(initialRelay?.issuer ?? "") ?? "",
   );
   const [code, setCode] = React.useState(codeOf(initialCode));
   const [busy, setBusy] = React.useState(false);
@@ -141,11 +230,68 @@ export function ConnectScreen({
     setFailure(null);
   };
 
+  const apply = (outcome: RelayOutcome) => {
+    switch (outcome.kind) {
+      case "fingerprint":
+        setFingerprint(outcome.fingerprint);
+        setView("fingerprint");
+        break;
+      case "sources":
+        setSources(outcome.sources);
+        setView("sources");
+        break;
+      case "failure":
+        setFailure(outcome.failure);
+        break;
+      case "done":
+        break;
+    }
+  };
+
+  /** 个人中转的一步：忙、清错、套用结果；任何意外都落成「失败」。 */
+  const step = async (run: () => Promise<RelayOutcome>) => {
+    if (shownBusy) return;
+    setBusy(true);
+    setFailure(null);
+    try {
+      apply(await run());
+    } catch {
+      setFailure("failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** 链接 / 二维码：个人中转的分享链接直接挂载，其余按配对链接处理。 */
+  const submitLink = async (value: string) => {
+    if (relay && isJoinLink(value)) {
+      setRelayHost(hostOf(value) ?? "");
+      await step(() => relay.join(value));
+    } else {
+      await connect(value);
+    }
+  };
+
   const scan = async () => {
     const text = await onScan?.();
     if (!text) return;
     setLink(text);
-    await connect(text);
+    await submitLink(text);
+  };
+
+  const joinedOnce = React.useRef(false);
+  React.useEffect(() => {
+    if (!autoJoin || !relay || joinedOnce.current || initialLink === "") return;
+    joinedOnce.current = true;
+    void submitLink(initialLink);
+    // 只在首次挂载时按收到的分享深链挂载一次。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const back = () => {
+    relay?.reset();
+    setFailure(null);
+    setView(connections.length > 0 ? "list" : "add");
   };
 
   const message =
@@ -155,31 +301,212 @@ export function ConnectScreen({
           origin: origin ? new URL(origin).host : "",
         });
   const host = origin ? new URL(origin).host : null;
+  const titleKey =
+    view === "relay"
+      ? "mobileConnect.method.relay"
+      : view === "fingerprint"
+        ? "mobileConnect.fingerprint.title"
+        : view === "sources"
+          ? "mobileConnect.sources.title"
+          : multi && view === "add" && connections.length > 0
+            ? "mobileConnect.add"
+            : "mobileConnect.title";
+  const panel = multi && view !== "link" && view !== "code";
+
+  const header = (
+    <div className="flex flex-col items-center gap-3 text-center">
+      <BrandMark className="size-12 rounded-[var(--r-panel)]" />
+      <h1 className="text-[length:var(--text-display)] leading-tight font-semibold">
+        {t(titleKey)}
+      </h1>
+      {mode === "web" && host && (
+        <p className="font-mono text-[13px] text-muted-foreground tabular-nums">
+          {host}
+        </p>
+      )}
+    </div>
+  );
+
+  const rootClass =
+    "flex min-h-[100dvh] w-full flex-col items-center overflow-y-auto bg-background px-6 pt-[max(env(safe-area-inset-top),15vh)] pb-[max(env(safe-area-inset-bottom),24px)]";
+
+  if (panel && relay) {
+    const rows = connections;
+    return (
+      <main data-slot="mobile-connect" className={rootClass}>
+        <div className="flex w-full max-w-sm flex-col gap-6">
+          {header}
+          {view === "list" && (
+            <>
+              {message && (
+                <Alert variant="destructive">
+                  <AlertTitle>{message}</AlertTitle>
+                </Alert>
+              )}
+              <ConnectionList
+                rows={rows}
+                activeId={activeId}
+                disabled={shownBusy}
+                onOpen={(sourceId) => onOpen?.(sourceId)}
+                onRemove={(sourceId) => onRemove?.(sourceId)}
+              />
+              <Button
+                type="button"
+                size="lg"
+                variant="outline"
+                className="h-11 w-full"
+                disabled={shownBusy}
+                onClick={() => {
+                  setFailure(null);
+                  setView("add");
+                }}
+              >
+                <Plus data-icon="inline-start" />
+                {t("mobileConnect.add")}
+              </Button>
+            </>
+          )}
+          {view === "add" && (
+            <div className="flex flex-col gap-2">
+              {message && (
+                <Alert variant="destructive">
+                  <AlertTitle>{message}</AlertTitle>
+                </Alert>
+              )}
+              {canScan && (
+                <Button
+                  type="button"
+                  size="lg"
+                  variant="outline"
+                  className="h-11 w-full"
+                  disabled={shownBusy}
+                  onClick={() => void scan()}
+                >
+                  <ScanLine data-icon="inline-start" />
+                  {t("mobileConnect.scan")}
+                </Button>
+              )}
+              <Button
+                type="button"
+                size="lg"
+                variant="outline"
+                className="h-11 w-full"
+                disabled={shownBusy}
+                onClick={() => {
+                  setFailure(null);
+                  setView("link");
+                }}
+              >
+                <Link2 data-icon="inline-start" />
+                {t("mobileConnect.link")}
+              </Button>
+              {onCode && (
+                <Button
+                  type="button"
+                  size="lg"
+                  variant="outline"
+                  className="h-11 w-full"
+                  disabled={shownBusy}
+                  onClick={() => switchTo("code")}
+                >
+                  <KeyRound data-icon="inline-start" />
+                  {t("mobileConnect.enterCode")}
+                </Button>
+              )}
+              <Button
+                type="button"
+                size="lg"
+                variant="outline"
+                className="h-11 w-full"
+                disabled={shownBusy}
+                onClick={() => {
+                  setFailure(null);
+                  setView("relay");
+                }}
+              >
+                <Waypoints data-icon="inline-start" />
+                {t("mobileConnect.method.relay")}
+              </Button>
+              {connections.length > 0 && (
+                <Button
+                  type="button"
+                  size="lg"
+                  variant="ghost"
+                  className="h-11 w-full"
+                  disabled={shownBusy}
+                  onClick={back}
+                >
+                  <ChevronLeft data-icon="inline-start" />
+                  {t("mobileConnect.back")}
+                </Button>
+              )}
+            </div>
+          )}
+          {view === "relay" && (
+            <>
+              <RelayForm
+                busy={shownBusy}
+                message={message}
+                errorId={errorId}
+                {...(initialRelay ? { initial: initialRelay } : {})}
+                onEdit={() => setFailure(null)}
+                onSubmit={(input) => {
+                  setRelayHost(hostOf(input.issuer) ?? "");
+                  void step(() => relay.begin(input));
+                }}
+              />
+              <Button
+                type="button"
+                size="lg"
+                variant="ghost"
+                className="h-11 w-full"
+                disabled={shownBusy}
+                onClick={() => {
+                  setFailure(null);
+                  setView("add");
+                }}
+              >
+                <ChevronLeft data-icon="inline-start" />
+                {t("mobileConnect.back")}
+              </Button>
+            </>
+          )}
+          {view === "fingerprint" && (
+            <FingerprintStep
+              host={relayHost}
+              fingerprint={fingerprint}
+              busy={shownBusy}
+              message={message}
+              errorId={errorId}
+              onTrust={() => void step(() => relay.trust())}
+              onCancel={back}
+            />
+          )}
+          {view === "sources" && (
+            <SourcesStep
+              sources={sources}
+              busy={shownBusy}
+              message={message}
+              errorId={errorId}
+              onMount={(ids) => void step(() => relay.mount(ids))}
+            />
+          )}
+        </div>
+      </main>
+    );
+  }
 
   return (
-    <main
-      data-slot="mobile-connect"
-      className="flex min-h-[100dvh] w-full flex-col items-center overflow-y-auto bg-background px-6 pt-[max(env(safe-area-inset-top),15vh)] pb-[max(env(safe-area-inset-bottom),24px)]"
-    >
+    <main data-slot="mobile-connect" className={rootClass}>
       <form
         className="flex w-full max-w-sm flex-col gap-6"
         onSubmit={(event) => {
           event.preventDefault();
           if (view === "code") void submitCode(code);
-          else void connect(mode === "native" ? link : "");
+          else void submitLink(mode === "native" ? link : "");
         }}
       >
-        <div className="flex flex-col items-center gap-3 text-center">
-          <BrandMark className="size-12 rounded-[var(--r-panel)]" />
-          <h1 className="text-[length:var(--text-display)] leading-tight font-semibold">
-            {t("mobileConnect.title")}
-          </h1>
-          {mode === "web" && host && (
-            <p className="font-mono text-[13px] text-muted-foreground tabular-nums">
-              {host}
-            </p>
-          )}
-        </div>
+        {header}
 
         {view === "code" ? (
           <Field data-invalid={shownFailure !== null || undefined}>
@@ -304,6 +631,22 @@ export function ConnectScreen({
                 >
                   <KeyRound data-icon="inline-start" />
                   {t("mobileConnect.enterCode")}
+                </Button>
+              )}
+              {multi && (
+                <Button
+                  type="button"
+                  size="lg"
+                  variant="ghost"
+                  className="h-11 w-full"
+                  disabled={shownBusy}
+                  onClick={() => {
+                    setFailure(null);
+                    setView("add");
+                  }}
+                >
+                  <ChevronLeft data-icon="inline-start" />
+                  {t("mobileConnect.back")}
                 </Button>
               )}
             </div>

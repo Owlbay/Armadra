@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   session: null as unknown,
   install: vi.fn(),
   complete: vi.fn(),
+  route: vi.fn(),
+  refresh: vi.fn(),
 }));
 
 vi.mock("./native-bridge", () => ({
@@ -17,6 +19,18 @@ vi.mock("./native-bridge", () => ({
 vi.mock("../api/source", async (original) => ({
   ...(await original<typeof import("../api/source")>()),
   installLocalTransport: (transport: unknown) => mocks.install(transport),
+}));
+vi.mock("../sources/routing", async (original) => ({
+  ...(await original<typeof import("../sources/routing")>()),
+  pickRoute: (...args: unknown[]) => mocks.route(...args),
+}));
+vi.mock("./credentials", async (original) => ({
+  ...(await original<typeof import("./credentials")>()),
+  mobileCredentialProvider: () => ({
+    getAccess: vi.fn(),
+    refresh: (...args: unknown[]) => mocks.refresh(...args),
+    invalidate: vi.fn(),
+  }),
 }));
 vi.mock("./native-oauth", async (original) => ({
   ...(await original<typeof import("./native-oauth")>()),
@@ -45,7 +59,12 @@ vi.mock("../api/identity", async (original) => ({
 }));
 
 import { IdentityRequestError } from "../api/identity";
+import { resetLocalRuntime } from "../api/local-runtime";
+import { resolveRuntimeUrl, setNativeRuntimeBase } from "../api/runtime-url";
+import { SourceError } from "../sources/types";
+import { setActiveConnection, upsertConnection } from "./connections";
 import { prepareEntry, ticketWithRefresh } from "./entry";
+import { memoryStorage } from "./testing";
 
 beforeEach(() => {
   Object.assign(mocks, {
@@ -58,9 +77,15 @@ beforeEach(() => {
   });
   mocks.install.mockReset();
   mocks.complete.mockReset();
+  mocks.route.mockReset();
+  mocks.refresh.mockReset();
+  vi.stubGlobal("localStorage", memoryStorage());
 });
 afterEach(() => {
   history.replaceState(null, "", "/");
+  setNativeRuntimeBase(null);
+  resetLocalRuntime();
+  vi.unstubAllGlobals();
 });
 
 describe("入口分支", () => {
@@ -257,5 +282,157 @@ describe("ticketWithRefresh", () => {
       ticketWithRefresh(() => Promise.reject(other), untouched),
     ).rejects.toBe(other);
     expect(untouched).not.toHaveBeenCalled();
+  });
+});
+
+describe("原生 App：多连接", () => {
+  const GATEWAY = "https://192.168.1.8:8443";
+  const ISSUER = "https://relay.example.com";
+  const HOST = "a".repeat(32);
+  const RELAY_BASE = `${ISSUER}/s/${HOST}`;
+
+  /** 原生 App 里页面打在包里：本机源的地址按这次选定的连接算。 */
+  const runtimeBase = () => {
+    vi.stubGlobal("Capacitor", { isNativePlatform: () => true });
+    return resolveRuntimeUrl(undefined, "capacitor://localhost/");
+  };
+
+  const addDirect = () =>
+    upsertConnection({
+      sourceId: HOST,
+      label: "",
+      baseUrl: GATEWAY,
+      relayOrigin: "",
+      cloudIssuer: "",
+      fingerprint: "ab".repeat(32),
+    });
+  const addRelayed = () =>
+    upsertConnection({
+      sourceId: HOST,
+      label: "MacBook",
+      baseUrl: "",
+      relayOrigin: ISSUER,
+      cloudIssuer: ISSUER,
+      fingerprint: "",
+    });
+
+  it("当前连接走直连：选路 → 本机源指向 Gateway，传输不带中继头", async () => {
+    mocks.app = true;
+    mocks.restored = true;
+    addDirect();
+    mocks.route.mockResolvedValue({
+      via: "direct",
+      access: {
+        accessToken: "t",
+        expiresAtMs: 0,
+        httpBase: GATEWAY,
+        wsBase: "wss://192.168.1.8:8443",
+      },
+    });
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+    const transport = mocks.install.mock.calls[0]![0] as {
+      origin: string;
+      extraHeaders?: () => Record<string, string>;
+    };
+    expect(transport.origin).toBe(GATEWAY);
+    expect(transport.extraHeaders).toBeUndefined();
+    expect(runtimeBase()).toBe(GATEWAY);
+  });
+
+  it("当前连接经中继：本机源指向 relayBaseUrl，每个请求与流都带中继令牌", async () => {
+    mocks.app = true;
+    mocks.restored = true;
+    addRelayed();
+    mocks.route.mockResolvedValue({
+      via: "relayed",
+      access: {
+        accessToken: "t",
+        expiresAtMs: 0,
+        httpBase: RELAY_BASE,
+        wsBase: RELAY_BASE.replace("https", "wss"),
+        relayToken: "relay.jwt",
+      },
+    });
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+    const transport = mocks.install.mock.calls[0]![0] as {
+      origin: string;
+      extraHeaders: () => Record<string, string>;
+      extraProtocols: () => string[];
+    };
+    expect(transport.origin).toBe(ISSUER);
+    expect(transport.extraHeaders()).toEqual({
+      "armadra-relay-token": "relay.jwt",
+    });
+    expect(transport.extraProtocols()).toEqual(["armadra-relay.relay.jwt"]);
+    expect(runtimeBase()).toBe(RELAY_BASE);
+  });
+
+  it("选中的连接连不上：回连接页，带着连接表与原因，其余连接可选", async () => {
+    mocks.app = true;
+    addDirect();
+    mocks.route.mockRejectedValue(new SourceError("source_offline"));
+    await expect(prepareEntry()).resolves.toMatchObject({
+      kind: "connect",
+      mode: "native",
+      failure: "offline",
+      activeId: HOST,
+      connections: [expect.objectContaining({ sourceId: HOST })],
+    });
+    mocks.route.mockRejectedValue(new SourceError("source_unauthorized"));
+    await expect(prepareEntry()).resolves.toMatchObject({ failure: "expired" });
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
+  it("续期经凭据来源，换来的中继令牌立刻生效", async () => {
+    mocks.app = true;
+    mocks.restored = true;
+    addRelayed();
+    mocks.route.mockResolvedValue({
+      via: "relayed",
+      access: {
+        accessToken: "t",
+        expiresAtMs: 0,
+        httpBase: RELAY_BASE,
+        wsBase: RELAY_BASE.replace("https", "wss"),
+        relayToken: "relay.old",
+      },
+    });
+    await prepareEntry();
+    const transport = mocks.install.mock.calls[0]![0] as {
+      refresh: () => Promise<boolean>;
+      extraHeaders: () => Record<string, string>;
+    };
+    mocks.refresh.mockResolvedValue({
+      accessToken: "t2",
+      expiresAtMs: 0,
+      httpBase: RELAY_BASE,
+      wsBase: RELAY_BASE.replace("https", "wss"),
+      relayToken: "relay.new",
+    });
+    await expect(transport.refresh()).resolves.toBe(true);
+    expect(mocks.refresh).toHaveBeenCalledWith(HOST, "relayed");
+    expect(transport.extraHeaders()["armadra-relay-token"]).toBe("relay.new");
+  });
+
+  it("分享深链：连接页直接挂载；#connections：管理页；两者都不选路", async () => {
+    mocks.app = true;
+    addDirect();
+    setActiveConnection(HOST);
+    const join = `armadra://join?link=${"0".repeat(32)}&issuer=${encodeURIComponent(ISSUER)}&s=x`;
+    history.replaceState(null, "", `/#link=${encodeURIComponent(join)}`);
+    await expect(prepareEntry()).resolves.toMatchObject({
+      kind: "connect",
+      link: join,
+      join: true,
+      connections: [expect.objectContaining({ sourceId: HOST })],
+    });
+    history.replaceState(null, "", "/#connections");
+    await expect(prepareEntry()).resolves.toMatchObject({
+      kind: "connect",
+      manage: true,
+      activeId: HOST,
+    });
+    expect(location.hash).toBe("");
+    expect(mocks.route).not.toHaveBeenCalled();
   });
 });
