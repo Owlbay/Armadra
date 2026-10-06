@@ -17,7 +17,7 @@
 import type { WebSocket } from "ws";
 
 import { setRealtimeHooks } from "../canvas/documents";
-import { canvasPresence } from "../canvas/routes";
+import { canvasPresence, setRealtimeStateReader } from "../canvas/routes";
 import { getBoard } from "../canvas/boards";
 import {
   type RequestIdentity,
@@ -109,22 +109,25 @@ export function install(context: CoreContext): RealtimeHub {
   );
   registerCapability(REALTIME_CAPABILITY);
 
-  // 一块板的实时状态：页面据此选同步路径（契约 §16.2）。
+  // 一块板的实时状态：页面据此选同步路径（契约 §16.2、§36.3）。旧路径与
+  // `boards.realtime` 读同一份。
+  const readState = (workspace: string, boardId: string) => {
+    const board = getBoard(database, workspace, boardId);
+    const row = realtimeRow(database, board.id);
+    return {
+      realtime: row?.realtime ?? false,
+      materializedSeq: row?.materializedSeq ?? 0,
+      enabled: hub.enabled,
+    };
+  };
+  setRealtimeStateReader(readState);
   context.server.router.handle(
     "GET",
     REALTIME_STATE_PATH,
-    answered((match) => {
-      const board = getBoard(database, workspaceId(match), boardIdOf(match));
-      const row = realtimeRow(database, board.id);
-      return {
-        status: 200,
-        body: {
-          realtime: row?.realtime ?? false,
-          materializedSeq: row?.materializedSeq ?? 0,
-          enabled: hub.enabled,
-        },
-      };
-    }),
+    answered((match) => ({
+      status: 200,
+      body: readState(workspaceId(match), boardIdOf(match)),
+    })),
   );
 
   // 评论（契约 §16.3）：不进文档，读写都在 `board_comments`。

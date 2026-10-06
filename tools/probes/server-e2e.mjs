@@ -92,6 +92,11 @@ report.failures = [];
 report.memberForbidden = [];
 
 /** 一项检查没过：记下来，跑完整条线再判失败——一处坏不该挡住后面的观察。 */
+/** 页面保存画布文档发出的那次请求：旧路径 `PUT …/document`，或契约 §36.2 的 `boards.save`。 */
+function isBoardSave(url) {
+  return url.endsWith("/document") || url.endsWith("/api/rpc/boards/save");
+}
+
 function check(ok, name, detail = "") {
   if (ok) step(name, detail);
   else {
@@ -703,9 +708,7 @@ await h.run(async () => {
   check(Math.abs(afterDrag.left - before.left) < 2, "只读：便签拖不动");
   const readOnlyWrites = member.drain();
   check(
-    !readOnlyWrites.responses.some((answer) =>
-      answer.url.endsWith("/document"),
-    ),
+    !readOnlyWrites.responses.some((answer) => isBoardSave(answer.url)),
     "只读：拖动之后没有发出被拒的保存",
   );
   const refused = await memberFetch(
@@ -775,7 +778,7 @@ await h.run(async () => {
   await member.capture("08-member-editor");
   const editorView = member.drain();
   check(
-    !editorView.responses.some((answer) => answer.url.endsWith("/document")),
+    !editorView.responses.some((answer) => isBoardSave(answer.url)),
     "可写：保存没有被拒",
   );
 

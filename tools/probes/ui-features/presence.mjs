@@ -156,9 +156,12 @@ export default async function presence({ stack, output, report, scenario }) {
   await run.shot(second, "presence-2-readonly");
 
   /* --------------- 第一台留一笔没落盘的改动，第二台接管 ----------------- */
-  // 拦下第一台对画布文档的 PUT，让这次拖动停在「本地未保存」。
+  // 拦下第一台对画布文档的保存（契约 §36.2：`POST /api/rpc/boards/save`），
+  // 让这次拖动停在「本地未保存」。
   await first.call("Fetch.enable", {
-    patterns: [{ urlPattern: "*/document*", requestStage: "Request" }],
+    patterns: [
+      { urlPattern: "*/api/rpc/boards/save*", requestStage: "Request" },
+    ],
   });
   const offFetch = stack.browser.on((message) => {
     if (
@@ -167,7 +170,7 @@ export default async function presence({ stack, output, report, scenario }) {
     )
       return;
     const { requestId, request } = message.params;
-    if (request.method === "PUT")
+    if (request.method === "POST")
       void first
         .call("Fetch.failRequest", { requestId, errorReason: "Failed" })
         .catch(() => {});

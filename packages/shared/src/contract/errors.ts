@@ -44,6 +44,8 @@ export const ERROR_CODES = {
   /** 订阅跟不上、队列满了（`resubscribe` 策略）：带 `lastEventId` 重订（契约 §35.5）。 */
   overflow: { status: 503 },
   unknown_outcome: { status: 504, i18n: "error.unknownOutcome" },
+  /** 别人持有这块画布的编辑租约（契约 §9.3、§36）。 */
+  canvas_lease_held: { status: 423 },
   forge_credential_rejected: { status: 502 },
   forge_unavailable: { status: 502 },
   mail_send_failed: { status: 502 },
@@ -60,6 +62,8 @@ export const ERROR_CODES = {
    * 状态沿用邮件域的 409（协议包注册表里是 404，页面只按码取文案）。
    */
   link_invalid: { status: 409, i18n: "error.linkInvalid" },
+  /** 这块板已切到实时协同，表不能直接写（契约 §16.2、§36.2）。 */
+  realtime_active: { status: 409 },
   /** 续订的位置已掉出 outbox 的保留下限：先整份重读，再从现在订（契约 §35.4）。 */
   snapshot_required: { status: 409 },
   /** 续订的位置这台 core 从没发过（换了库）：同上（契约 §35.4）。 */

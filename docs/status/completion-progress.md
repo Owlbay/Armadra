@@ -2355,3 +2355,22 @@
 
 - 形状错（缺字段、`action` 不是两个动词之一）经旧路径与 procedure 由入参校验先答 `bad_request`（带 `details.issues`），与迁移前那句原话不同；码与状态不变。
 - `acp-e2e` 在本机起 Vite 超时（手动起 Vite 正常，疑为多个包并行时的机器负载），未得到结果。
+
+## E3-1 工程规范化：boards 域迁到契约（契约 §36）
+
+规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-1）；契约 §36。
+
+做了什么：
+
+- **契约**（`packages/shared/src/contract/boards.ts`）：`boards.list / create / update / delete`（§36.1）、`load / save`（§36.2）、`realtime`（§36.3）、`heartbeat / leave / acquireLease` 与订阅 `presence`（§36.4）。出参是线上形状（节点 `data` 是原样 JSON），页面的 schema 再解析一遍；`save` 的入参是「已知字段 + 透传」，语义检查与已退役 `kanban` 的拒绝仍在域里。注册表加 `canvas_lease_held`（423）与 `realtime_active`（409）。协议 minor 升到 7，`since` 为 1.7。
+- **core**（`core/canvas/routes.ts`）：域动作收成 `operations`，旧 REST 处理器与 `registerProcedures("boards", …)` 调同一份，拒绝的码与原话一致；旧路径经 `meta.legacy` 继续可用。`boards.realtime` 由实时域登记读取函数（`setRealtimeStateReader`），canvas 域不 import 实时域。
+- **`boards.presence` 订阅**（控制面）：订上就是第一次心跳，连着时 core 每 10 秒替页面续期（不带 `active`），取消或断线即离开（同一 `clientId` 多条订阅时最后一条走了才离开）；每项是该客户端看到的在线表（带 `writable` 与 `deviceKey`），只有 `lastSeenAt` 变的续期不发；授权被收回以 `forbidden` 结束。背压 `drop-oldest`。Yjs 同步连接未动。
+- **一处顺手修的缺陷**：实时板上每拍心跳都为一个视图里恒为空的租约白发一帧 `canvas.presence`；订阅若在事件上再心跳，两个订阅会互相触发到占满事件循环（实测 realtime-e2e 刷新后 core 卡死）。现在事件只读一眼不心跳，实时板也不再分租约。
+- **页面**：`api/boards.ts` 改 `boardsApiFor(rpc)`，经 `client.boards.*`，`boardRealtime(…, source)` 保留 A1-2 的源语义；`api/board-presence.ts` 订阅；`use-board-sync` 订阅连着时定时心跳只在有操作要报时发，订阅结束回到整拍兜底；关页面靠连接断开离开，不再发 `keepalive` 请求。
+- **探针**：`ui-features/presence.mjs` 拦保存改认 `POST /api/rpc/boards/save`，`server-e2e` 核对保存请求认 `boards.save`。
+
+留在 REST / 数据面：`…/sync`（Yjs）、评论、`context-links`、导出与资源上传。
+
+偏离：入参形状不对时契约的 schema 先于域拒绝（码与状态一致，原话是字段路径）；`since` 取 1.7（main 已是 6）；评论与 `context-links` 未迁。
+
+实测（macOS arm64，Node 26.10.0，合入 main 27b71efe 之后）：新增 `contract/parity-boards.test` 11（旧路径、procedure、原 handler 三者逐字节一致，含 404、409、423、400 envelope）、`canvas/presence-subscription.test` 7、web `api/board-presence.test` 2、`client.test` 与 `use-board-sync.test` 改写补充。`pnpm check` 通过；A 档：design-showcase、gateway、realtime、server、ui-features（多设备画布）、workflow、ws-mux、core-terminal-\*、push 通过；acp、agent-e2e-self-test、remote 三项在探针的临时 HOME 下 `pnpm exec vite` 无输出、「Vite 没有就绪」，与本包无关（环境问题）。

@@ -124,6 +124,26 @@ vi.mock("../api/client", () => ({
   },
 }));
 
+/** 在线订阅（`boards.presence`）：测试自己推每一项、自己结束。 */
+interface FakeWatch {
+  clientId: string;
+  workspaceId: string;
+  boardId: string;
+  onPresence(presence: unknown): void;
+  onEnd(error: unknown): void;
+  stopped: boolean;
+}
+const watches: FakeWatch[] = [];
+vi.mock("../api/board-presence", () => ({
+  watchBoardPresence: (watch: Omit<FakeWatch, "stopped">) => {
+    const made: FakeWatch = { ...watch, stopped: false };
+    watches.push(made);
+    return () => {
+      made.stopped = true;
+    };
+  },
+}));
+
 vi.mock("./workspaces-query", () => ({
   useWorkspacesQuery: () => ({ data: [workspace] }),
 }));
@@ -137,7 +157,10 @@ const { dispatchWorkspaceEvent, resetWorkspaceEvents } = await import(
   "../api/events"
 );
 const { useCanvasStore } = await import("../store/canvas-store");
-const { useBoardSync } = await import("./use-board-sync");
+const { PRESENCE_HEARTBEAT_MS, useBoardSync } = await import(
+  "./use-board-sync"
+);
+const { markPresenceActivity } = await import("../store/canvas/presence");
 const { isReadOnly, presenceClientId } = await import(
   "../store/canvas/presence"
 );
@@ -157,6 +180,7 @@ beforeEach(() => {
   loadBoard.mockClear();
   presenceHeartbeat.mockClear();
   leavePresence.mockClear();
+  watches.length = 0;
   window.history.replaceState(null, "", "/");
 });
 
@@ -325,10 +349,98 @@ describe("useBoardSync", () => {
     await waitFor(() => expect(positionOf()).toBe(0));
   });
 
-  it("卸载时离开这块画布", async () => {
+  it("订阅 boards.presence：每一项在线表放进 store，不必等心跳", async () => {
+    renderHook(() => useBoardSync(), { wrapper });
+    await waitFor(() => expect(positionOf()).toBe(0));
+    await waitFor(() => expect(watches.length).toBe(1));
+    expect(watches[0]).toMatchObject({
+      workspaceId: workspace.id,
+      boardId: board.id,
+      clientId: presenceClientId(),
+    });
+    const reads = loadBoard.mock.calls.length;
+    remote = document(31, later);
+    act(() => {
+      watches[0]!.onPresence({
+        boardId: board.id,
+        clients: [
+          {
+            clientId: presenceClientId(),
+            deviceName: "",
+            deviceKey: "",
+            lastSeenAt: stamp,
+          },
+          {
+            clientId: "other-client-01",
+            deviceName: "iPad",
+            deviceKey: "",
+            lastSeenAt: stamp,
+          },
+        ],
+        lease: {
+          clientId: "other-client-01",
+          deviceName: "iPad",
+          deviceKey: "",
+          acquiredAt: later,
+        },
+        writable: true,
+        deviceKey: "",
+      });
+    });
+    expect(isReadOnly(useCanvasStore.getState())).toBe(true);
+    await waitFor(() => expect(positionOf()).toBe(31));
+    expect(loadBoard.mock.calls.length).toBeGreaterThan(reads);
+  });
+
+  it("订阅连着时定时心跳只在有操作要报时发；订阅结束就回到整拍兜底", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      renderHook(() => useBoardSync(), { wrapper });
+      await vi.waitFor(() => expect(watches.length).toBe(1));
+      await vi.waitFor(() => expect(presenceHeartbeat).toHaveBeenCalled());
+      act(() => {
+        watches[0]!.onPresence({
+          boardId: board.id,
+          clients: [],
+          lease: null,
+          writable: true,
+        });
+      });
+      const base = presenceHeartbeat.mock.calls.length;
+      // 订阅连着、没有操作：core 在续期，页面不发。
+      act(() => {
+        vi.advanceTimersByTime(PRESENCE_HEARTBEAT_MS);
+      });
+      expect(presenceHeartbeat.mock.calls.length).toBe(base);
+      // 有操作要报：发一次，带 `active`。
+      markPresenceActivity();
+      act(() => {
+        vi.advanceTimersByTime(PRESENCE_HEARTBEAT_MS);
+      });
+      expect(presenceHeartbeat.mock.calls.length).toBe(base + 1);
+      expect(presenceHeartbeat.mock.calls.at(-1)?.[2]).toMatchObject({
+        active: true,
+      });
+      // 订阅结束了（被拒、控制面停下）：立刻补一拍，之后每一拍都是兜底心跳。
+      act(() => {
+        watches[0]!.onEnd(new Error("closed"));
+      });
+      expect(presenceHeartbeat.mock.calls.length).toBe(base + 2);
+      act(() => {
+        vi.advanceTimersByTime(PRESENCE_HEARTBEAT_MS);
+      });
+      expect(presenceHeartbeat.mock.calls.length).toBe(base + 3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("卸载时取消订阅并离开这块画布", async () => {
     const { unmount } = renderHook(() => useBoardSync(), { wrapper });
     await waitFor(() => expect(presenceHeartbeat).toHaveBeenCalled());
+    await waitFor(() => expect(watches.length).toBe(1));
     unmount();
+    expect(watches[0]?.stopped).toBe(true);
     expect(leavePresence).toHaveBeenCalledWith(
       workspace.id,
       board.id,

@@ -61,6 +61,18 @@ function scanFails(source: string, file = "sample.ts"): Found[] {
   ].map((m) => ({ code: m[1]!, file }));
 }
 
+/**
+ * `new DomainError(423, "canvas_lease_held", …)`：域里抛的拒绝（状态与码是字面量
+ * 的）。只用来数「这个码还在被用」，不核对状态——各域的存量码还没都登记。
+ */
+function scanDomainErrors(source: string, file = "sample.ts"): Found[] {
+  return [
+    ...stripComments(source).matchAll(
+      /new DomainError\(\s*(\d{3})\s*,\s*"([A-Za-z0-9_]+)"/g,
+    ),
+  ].map((m) => ({ code: m[2]!, status: Number(m[1]), file }));
+}
+
 /** `code: "NOT_FOUND"`：大写拼法的存量（身份域、GitHub 面）。 */
 function scanUpperCodes(source: string, file = "sample.ts"): Found[] {
   return [
@@ -125,9 +137,11 @@ describe("错误码注册表", () => {
 
   it("注册表里的码都还在被用（删掉最后一处用法时一并删登记）", () => {
     const used = new Set(
-      [...scanCore(scanCoreErrors), ...scanCore(scanFails)].map(
-        (entry) => entry.code,
-      ),
+      [
+        ...scanCore(scanCoreErrors),
+        ...scanCore(scanFails),
+        ...scanCore(scanDomainErrors),
+      ].map((entry) => entry.code),
     );
     expect(Object.keys(ERROR_CODES).filter((code) => !used.has(code))).toEqual(
       [],

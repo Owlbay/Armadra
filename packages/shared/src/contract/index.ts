@@ -5,6 +5,7 @@ import type {
   InferSchemaOutput,
 } from "@orpc/contract";
 
+import { boards } from "./boards.js";
 import { identity } from "./cloud.js";
 import { files } from "./files.js";
 import type { ProcedureMeta } from "./meta.js";
@@ -29,6 +30,7 @@ export const contract = {
   identity,
   files,
   terminals,
+  boards,
 };
 
 export type Contract = typeof contract;
@@ -104,6 +106,15 @@ export type {
   ProcedureMeta,
   Scope,
 } from "./meta.js";
+export {
+  boardDocumentWireSchema,
+  boardEdgeWireSchema,
+  boardNodeWireSchema,
+  boardPresenceWireSchema,
+  boardRealtimeStateWireSchema,
+  boardWireSchema,
+} from "./boards.js";
+export type { BoardPresenceItem, BoardRealtimeStateWire } from "./boards.js";
 export {
   terminalBackendWireSchema,
   terminalSessionWireSchema,

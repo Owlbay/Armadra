@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { BoardDocument } from "@armadra/shared";
 import { runtimeApi } from "../api/client";
+import { watchBoardPresence } from "../api/board-presence";
 import { onWorkspaceEvent } from "../api/events";
 import { useDraftsActive } from "../canvas/flow/drafts";
 import { LEASE_LOST_EVENT, flushBoardSaves } from "../save/autosave";
@@ -12,6 +13,7 @@ import {
   applyPresence,
   markPresenceActivity,
   presenceClientId,
+  peekPresenceActivity,
   presenceDeviceName,
   takePresenceActivity,
 } from "../store/canvas/presence";
@@ -331,9 +333,15 @@ export const PRESENCE_HEARTBEAT_MS = 10_000;
 /**
  * 在线设备与编辑租约（core JSON §9）。
  *
- * 打开一块画布就开始心跳，切走或关页面时离开。单设备、单窗口时第一次心跳
- * 就拿到租约，之后什么都不会发生；有别的设备在看时，谁持有租约由 core 说了
- * 算，这里只把回答放进 store（`store/canvas/presence.ts`），画布据此只读。
+ * 打开一块画布就订阅 `boards.presence`（控制面，契约 §36.4）：订上就是登记，
+ * 连着就是续期（core 替页面续），切走或关页面时取消订阅即离开。单设备、单窗口
+ * 时第一次登记就拿到租约，之后什么都不会发生；有别的设备在看时，谁持有租约由
+ * core 说了算，这里只把每一项放进 store（`store/canvas/presence.ts`），画布据此
+ * 只读。
+ *
+ * 订阅管不到的两件事仍走一次普通调用：「刚被操作过」（`active`，core 据此判断
+ * 持有者是否空闲）与被 423 拒了之后立刻问一次谁拿着租约。订阅没连上（控制面
+ * 停着、被拒）时，定时的心跳照旧兜底。
  *
  * 租约换手的那一刻按远端重载：丢了租约，本地那份作废；拿到租约，手里那份
  * 可能停在只读期间的某一版。
@@ -350,6 +358,8 @@ function useBoardPresence(
     const deviceName = presenceDeviceName();
     let stopped = false;
     let left = false;
+    /** 订阅正连着：core 在替我们续期。 */
+    let live = false;
 
     const apply = (snapshot: Parameters<typeof applyPresence>[0]) => {
       if (stopped) return;
@@ -377,8 +387,26 @@ function useBoardPresence(
         .catch(() => undefined);
     };
 
+    const stopWatching = watchBoardPresence({
+      workspaceId,
+      boardId,
+      clientId,
+      deviceName,
+      onPresence: (presence) => {
+        live = true;
+        apply(presence);
+      },
+      onEnd: () => {
+        live = false;
+        beat();
+      },
+    });
+    // 订阅连上之前的第一拍：别等订阅握手，租约与在线表尽快有一份。
     beat();
-    const timer = window.setInterval(beat, PRESENCE_HEARTBEAT_MS);
+    // 订阅连着时只在有操作要报的时候才发；没连着就是整拍的兜底心跳。
+    const timer = window.setInterval(() => {
+      if (!live || peekPresenceActivity()) beat();
+    }, PRESENCE_HEARTBEAT_MS);
     const offEvent = onWorkspaceEvent("canvas.presence", (event) => {
       if (event.boardId === boardId) apply(event);
     });
@@ -393,17 +421,17 @@ function useBoardPresence(
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("pointerdown", onActivity, { capture: true });
     window.addEventListener("keydown", onActivity, { capture: true });
-    window.addEventListener("pagehide", leave);
+    // 关页面时控制面连接随之断开，core 据此离开；不再依赖一个 `keepalive` 的请求。
 
     return () => {
       stopped = true;
       window.clearInterval(timer);
       offEvent();
+      stopWatching();
       window.removeEventListener(LEASE_LOST_EVENT, onLost);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("pointerdown", onActivity, { capture: true });
       window.removeEventListener("keydown", onActivity, { capture: true });
-      window.removeEventListener("pagehide", leave);
       leave();
     };
   }, [boardId, discard, reload, workspaceId]);
