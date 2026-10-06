@@ -2332,3 +2332,26 @@
   2. 桌面页面来源不被分享方信任。
      另有一处隧道准入问题（中继同源页面的 GET 不带 `Origin`），本包与 A3-4 修法相同，合并时以 main 为准。
 - 用 `armadra-server invite --cloud-link` 生成的链接没有单独跑；它产出的链接拼法与 A1-4 的相同，`mountByLink` 和落地页都认。
+
+## E3-3 工程规范化：terminals 域迁到契约（契约 §38）
+
+设计：[工程规范化](../design/engineering-standardization.md) §2，规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-3）；契约 §38。
+
+做了什么：
+
+- **契约**（`packages/shared/src/contract/terminals.ts`）：`terminals.*` 共 11 条——`create`、`backend`、`get`、`capture`、`sessions`、`paste`、`scroll`、`terminate`、`recycle`、`wake`、`drive`；权限与旧路由表一致（开 `terminal:create`、读 `terminal:read`、其余 `terminal:write`），`create` 与 `sessions` 绑 `workspaceId`。出参复用页面 schema，并补上 core 一直在答的 `kind`、`ownerNodeId`、`platform`；会话行的 id 与时刻放宽成字符串（探针与旧库的工作空间 id 不是 RFC 变体的 UUID，严格校验会把成功的创建拒成 500，对偶测试里有回归用例）。入参只校形状，粘贴大小、滚动距离、节点 id 等判断仍在域里。`since` 为 1.6，协议 minor 5 → 6。
+- **core**：`terminal/install.ts` 把十一条路由的实现收成一份 `operations`，旧 handler 先解析查询串或体、再调它；`registerProcedures(server, "terminals", …)` 登记同一份，每次回答同样等启动对账 `ready`。`TerminalError` 改为 `CoreFailure` 子类（构造参数不变），procedure 抛出的码与原话与旧路径一样（含 `not_hibernated`、`wake_failed` 这类注册表里没有的终端专属码）。
+- **页面**：`api/terminals.ts` 改为 `terminalsApiFor(rpc)`，经 `currentClient`（换源后请求跟着换），函数签名不变，答案仍过页面自己的 schema；终端 WebSocket（`api/sockets.ts`）不动。直接 import `terminalsApi` 的四处（`use-access`、`acp/api`、`DriveBadge`、`delivery-commands`）改用 `runtimeApi`，对应两处测试的 mock 改指 `@/api/client`。
+- **契约 §38**：§38.1 生成块与说明，§38.2 登记不在契约里的 WS 与 `node-token/refresh`（E3-8）。
+
+实测：
+
+- `pnpm check`：契约、格式、lint、typecheck、repo:check、workflow、release:check 通过；最后一步 `notices:check` 在本机失败（`pnpm licenses list` 缺包索引，本 worktree 用离线仓库装依赖、无法联网），本包没动依赖。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：新增 `core/contract/parity-terminals.test.ts` 17 条（旧路径、procedure、原 handler 逐字节相等，覆盖不存在的会话、过大的粘贴与滚动、不属于节点的唤醒、域里的创建拒绝、形状错只比码与状态、scope 与路由表一致）。
+- `pnpm --filter @armadra/web test` / `typecheck` 通过；新增 `api/client.terminals.test.ts`。
+- A 档：`core-terminal-smoke`、`core-terminal-lifecycle`、`server-e2e`、`ui-features-e2e`、`ws-mux-e2e`、`realtime-e2e` 通过。
+
+没做 / 偏离：
+
+- 形状错（缺字段、`action` 不是两个动词之一）经旧路径与 procedure 由入参校验先答 `bad_request`（带 `details.issues`），与迁移前那句原话不同；码与状态不变。
+- `acp-e2e` 在本机起 Vite 超时（手动起 Vite 正常，疑为多个包并行时的机器负载），未得到结果。
