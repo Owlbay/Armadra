@@ -351,7 +351,11 @@ function queryAsBody(core: CoreRequest): CoreRequest {
   const fields: Record<string, string> = {};
   for (const [key, value] of core.query) fields[key] = value;
   const body = Buffer.from(JSON.stringify(fields), "utf8");
-  return { ...core, body, json: <T>() => JSON.parse(body.toString("utf8")) as T };
+  return {
+    ...core,
+    body,
+    json: <T>() => JSON.parse(body.toString("utf8")) as T,
+  };
 }
 
 /** 路由门要看的那次请求：带旧路径的拿旧路径与旧的体去问，否则是一个不落在任何表规则上的名字。 */
@@ -966,10 +970,9 @@ export function installContract(
     ) {
       return undefined;
     }
-    const result = await openapi.handle(
-      toFetchRequest(queryAsBody(core)),
-      { context: { request: core, requestId: randomUUID(), legacy: true } },
-    );
+    const result = await openapi.handle(toFetchRequest(queryAsBody(core)), {
+      context: { request: core, requestId: randomUUID(), legacy: true },
+    });
     if (!result.matched) return undefined;
     const text = await result.response.text();
     return {
