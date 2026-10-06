@@ -100,6 +100,60 @@ describe("the ACP session routes", () => {
     expect(update).toMatchObject({ sessionId: row.id, nodeId });
   });
 
+  it("delivers a prompt with the same clientTurnId once and lists it in the log (§39.9)", async () => {
+    open = await acpCore();
+    const seen = events(open);
+    const nodeId = await open.node();
+    const row = await session(open, nodeId);
+    const path = `/api/acp/sessions/${row.id}/prompt`;
+    const body = { text: "only once", clientTurnId: "c-1" };
+    // 两次同时到（页面没等到第一次的答复就重发）与之后再到，答同一个回合。
+    const [first, second] = await Promise.all([
+      open.core.call("POST", path, body),
+      open.core.call("POST", path, body),
+    ]);
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    const turnId = (first.body as { turnId: string }).turnId;
+    expect(turnId).not.toBe("");
+    expect(second.body).toEqual({ turnId });
+    const turn = await until(
+      () => seen.find((event) => event.type === "acp.turn"),
+      (event) => event !== undefined,
+    );
+    expect(turn).toMatchObject({
+      turnId,
+      clientTurnId: "c-1",
+      stopReason: "end_turn",
+    });
+    const third = await open.core.call("POST", path, body);
+    expect(third.body).toEqual({ turnId });
+
+    const log = await open.core.call("GET", `/api/acp/sessions/${row.id}/log`);
+    const read = log.body as {
+      entries: { role: string }[];
+      turns: { turnId: string; clientTurnId?: string; state: string }[];
+    };
+    expect(read.entries.filter((entry) => entry.role === "user")).toHaveLength(
+      1,
+    );
+    expect(read.turns).toEqual([
+      { turnId, clientTurnId: "c-1", state: "ended", stopReason: "end_turn" },
+    ]);
+    expect(seen.filter((event) => event.type === "acp.turn")).toHaveLength(1);
+
+    // 另一个 id 是另一轮；不合法的 id 当场拒绝。
+    const other = await open.core.call("POST", path, {
+      text: "again",
+      clientTurnId: "c-2",
+    });
+    expect((other.body as { turnId: string }).turnId).not.toBe(turnId);
+    const bad = await open.core.call("POST", path, {
+      text: "x",
+      clientTurnId: "y".repeat(129),
+    });
+    expect(bad.status).toBe(400);
+  });
+
   it("asks for permission through agent_approvals and answers with the chosen option", async () => {
     open = await acpCore();
     const seen = events(open);

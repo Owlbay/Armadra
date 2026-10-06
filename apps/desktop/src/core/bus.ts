@@ -240,6 +240,8 @@ export interface WorkspaceEventPayloads {
     readonly sessionId: string;
     readonly nodeId: string;
     readonly turnId: string;
+    /** 契约 §39.9：prompt 带了页面的回合 id 时原样带回。 */
+    readonly clientTurnId?: string;
     readonly stopReason?: string;
     readonly error?: { readonly code: string; readonly message: string };
   };

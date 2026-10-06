@@ -252,9 +252,29 @@ export const createAcpSessionRequestSchema = z.object({
   prompt: z.string().optional(),
 });
 
-/** `POST /api/acp/sessions/{id}/prompt`. */
-export const acpPromptRequestSchema = z.object({ text: z.string().min(1) });
+/**
+ * `POST /api/acp/sessions/{id}/prompt`. `clientTurnId` (§39.9) is the page's
+ * own id for this turn: the same id on the same session is delivered once and
+ * answers the same `turnId`, so a retry after a lost answer cannot send twice.
+ */
+export const acpPromptRequestSchema = z.object({
+  text: z.string().min(1),
+  clientTurnId: z.string().min(1).max(128).optional(),
+});
 export const acpPromptResponseSchema = z.looseObject({ turnId: z.string() });
+
+/**
+ * §39.9: one recent turn of a live session, as `…/log` lists it. `queued` has
+ * not reached the agent yet, `running` is in flight, `ended` carries the same
+ * outcome its `acp.turn` frame did.
+ */
+export const acpTurnRecordSchema = z.looseObject({
+  turnId: z.string(),
+  clientTurnId: z.string().optional(),
+  state: z.enum(["queued", "running", "ended"]),
+  stopReason: z.string().optional(),
+  error: z.looseObject({ code: z.string(), message: z.string() }).optional(),
+});
 
 /** `POST /api/acp/sessions/{id}/mode`. */
 export const acpModeRequestSchema = z.object({ modeId: z.string().min(1) });
@@ -411,6 +431,8 @@ export const acpLogResponseSchema = z.looseObject({
   pending: z.array(acpPendingPermissionSchema).optional(),
   /** §26.1: pending `elicitation/create` requests. */
   elicitations: z.array(acpPendingElicitationSchema).optional(),
+  /** §39.9: the live session's recent turns; absent when none is running. */
+  turns: z.array(acpTurnRecordSchema).optional(),
 });
 
 /** `POST /api/acp/nodes/{nodeId}/driver` (design §4.2). */
@@ -438,6 +460,8 @@ export const acpTurnEventSchema = z.object({
   sessionId: z.string(),
   nodeId: z.string(),
   turnId: z.string(),
+  /** §39.9: the page's id for this turn, when the prompt carried one. */
+  clientTurnId: z.string().optional(),
   stopReason: acpStopReasonSchema.optional().catch(undefined),
   error: z.looseObject({ code: z.string(), message: z.string() }).optional(),
 });
@@ -480,6 +504,8 @@ export type AcpLogResponse = z.infer<typeof acpLogResponseSchema>;
 export type AcpDriverResponse = z.infer<typeof acpDriverResponseSchema>;
 export type AcpUpdateEvent = z.infer<typeof acpUpdateEventSchema>;
 export type AcpTurnEvent = z.infer<typeof acpTurnEventSchema>;
+export type AcpTurnRecord = z.infer<typeof acpTurnRecordSchema>;
+export type AcpPromptRequest = z.infer<typeof acpPromptRequestSchema>;
 export type AcpDriverEvent = z.infer<typeof acpDriverEventSchema>;
 export type AcpElicitationField = z.infer<typeof acpElicitationFieldSchema>;
 export type AcpElicitationForm = z.infer<typeof acpElicitationFormSchema>;
