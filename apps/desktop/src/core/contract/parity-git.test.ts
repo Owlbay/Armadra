@@ -60,6 +60,11 @@ beforeAll(async () => {
     platform: core.platform,
   });
   const listener = core.server.createListener();
+  // 不按空闲超时关连接。git 夹具是 spawnSync，和这台服务器、和 fetch 的连接池
+  // 共用一个事件循环：夹具一口气占住超过缺省的 5 秒，fetch 先挑中池里那条空闲
+  // 连接把请求写出去，服务器的空闲计时器随后才轮到、把它关掉，请求没人读，
+  // 对端收到 RST——Windows CI 上 git 慢，就是这样报 ECONNRESET 的。
+  listener.keepAliveTimeout = 0;
   await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
   base = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
 });

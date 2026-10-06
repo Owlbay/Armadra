@@ -386,20 +386,32 @@ describe("ACP 与工作流按对象落到画布（契约 §23.3）", () => {
     expect(await start(operatorA)).toBe(true);
 
     const runId = randomUUID();
+    // 快照要是真模板的形状：`{}` 没有 title，查运行时出参校验会失败（只打日志，
+    // 用例只看 403 与否，所以以前一直是绿的）。
+    const snapshot = JSON.stringify({
+      version: 1,
+      title: "关卡",
+      params: [],
+      roles: [],
+      links: [],
+      steps: [],
+    });
     database()
       .prepare(
         "INSERT INTO workflow_runs (id, template_id, template_version, template_json, workspace_id, board_id, status, started_at) " +
-          "VALUES (?, 'missing', 1, '{}', ?, ?, 'waiting', ?)",
+          "VALUES (?, 'missing', 1, ?, ?, ?, 'waiting', ?)",
       )
-      .run(runId, w1, board, Date.now());
+      .run(runId, snapshot, w1, board, Date.now());
     const gate = `/api/workflows/runs/${runId}/gates/s1`;
     const decision = { decision: "approve" };
     expect(await passes(viewer, gate, "POST", decision)).toBe(false);
     expect(await passes(editor, gate, "POST", decision)).toBe(false);
     expect(await passes(outsider, gate, "POST", decision)).toBe(false);
     expect(await passes(operatorB, gate, "POST", decision)).toBe(true);
-    expect(await passes(viewer, `/api/workflows/runs/${runId}`, "GET")).toBe(
-      true,
-    );
+    const read = await call(`/api/workflows/runs/${runId}`, {
+      method: "GET",
+      person: viewer,
+    });
+    expect(read.status).toBe(200);
   });
 });
