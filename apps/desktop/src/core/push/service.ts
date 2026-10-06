@@ -53,7 +53,7 @@ export interface PushConfigView {
   readonly native: {
     readonly transport: PushConfig["native"];
     readonly status: "ready" | "notConfigured";
-    readonly platforms: readonly ("ios" | "android")[];
+    readonly platforms: ("ios" | "android")[];
   };
 }
 

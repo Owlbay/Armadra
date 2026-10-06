@@ -238,6 +238,20 @@ export function errorEnvelope(
   };
 }
 
+/**
+ * 限流的拒绝带 `details.retryAfterSeconds` 时，HTTP 上同时给 `Retry-After` 头
+ * （邮件、配对码、页面错误上报这几条旧路径一直是这样答的）。
+ */
+function retryAfter(
+  status: number,
+  body: RpcErrorBody,
+): Record<string, string> {
+  const seconds = body.details?.retryAfterSeconds;
+  return status === 429 && typeof seconds === "number" && seconds > 0
+    ? { "retry-after": String(Math.ceil(seconds)) }
+    : {};
+}
+
 /** 入参校验失败给字段路径与那句话（不给值）；其余给实现交出的细节。 */
 function errorDetails(
   error: ORPCError<string, unknown>,
@@ -888,7 +902,7 @@ export function installContract(
         );
         return {
           matched: true,
-          response: { status, headers: {}, body },
+          response: { status, headers: retryAfter(status, body), body },
         };
       }
     };
@@ -969,9 +983,10 @@ export function installContract(
   });
 
   // 旧路径：只有方法与模式都对得上的才交给上游路由，其余照旧走路由表。
+  // 没登记实现的 procedure（匿名面只经旧路径，如配对短码换票）不接管旧路径。
   const legacyRoutes = new Set(
     entries.flatMap((entry) =>
-      entry.meta.legacy === undefined
+      entry.meta.legacy === undefined || !registry.has(entry.name)
         ? []
         : [`${entry.meta.legacy.method} ${entry.meta.legacy.path}`],
     ),
@@ -989,9 +1004,11 @@ export function installContract(
     });
     if (!result.matched) return undefined;
     const text = await result.response.text();
+    const wait = result.response.headers.get("retry-after");
     return {
       status: result.response.status,
       body: text === "" ? undefined : (JSON.parse(text) as unknown),
+      ...(wait === null ? {} : { headers: { "retry-after": wait } }),
     };
   });
 
