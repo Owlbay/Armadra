@@ -144,6 +144,10 @@ export interface RelayFormProps {
   readonly busy: boolean;
   readonly message: string | null;
   readonly errorId: string;
+  /**
+   * 地址已定（中继托管的页面就是中转自己）：不显示地址栏，提交时用它。
+   */
+  readonly issuer?: string;
   /** 展示页钉住的初值。 */
   readonly initial?: {
     readonly issuer?: string;
@@ -163,13 +167,15 @@ export function RelayForm({
   busy,
   message,
   errorId,
+  issuer: fixedIssuer,
   initial,
   onSubmit,
   onEdit,
 }: RelayFormProps) {
   const t = useT();
   const id = React.useId();
-  const [issuer, setIssuer] = React.useState(initial?.issuer ?? "");
+  const [typedIssuer, setIssuer] = React.useState(initial?.issuer ?? "");
+  const issuer = fixedIssuer ?? typedIssuer;
   const [account, setAccount] = React.useState(initial?.account ?? "");
   const [password, setPassword] = React.useState(initial?.password ?? "");
   const ready =
@@ -187,24 +193,26 @@ export function RelayForm({
         if (ready && !busy) onSubmit({ issuer, account, password });
       }}
     >
-      <Field data-invalid={invalid}>
-        <FieldLabel htmlFor={`${id}-issuer`}>
-          {t("mobileConnect.relay.address")}
-        </FieldLabel>
-        <Input
-          id={`${id}-issuer`}
-          value={issuer}
-          inputMode="url"
-          autoCapitalize="off"
-          autoCorrect="off"
-          autoComplete="url"
-          spellCheck={false}
-          placeholder="relay.example.com"
-          disabled={busy}
-          className={TOUCH_INPUT}
-          onChange={(event) => edit(setIssuer)(event.target.value)}
-        />
-      </Field>
+      {fixedIssuer === undefined && (
+        <Field data-invalid={invalid}>
+          <FieldLabel htmlFor={`${id}-issuer`}>
+            {t("mobileConnect.relay.address")}
+          </FieldLabel>
+          <Input
+            id={`${id}-issuer`}
+            value={issuer}
+            inputMode="url"
+            autoCapitalize="off"
+            autoCorrect="off"
+            autoComplete="url"
+            spellCheck={false}
+            placeholder="relay.example.com"
+            disabled={busy}
+            className={TOUCH_INPUT}
+            onChange={(event) => edit(setIssuer)(event.target.value)}
+          />
+        </Field>
+      )}
       <Field data-invalid={invalid}>
         <FieldLabel htmlFor={`${id}-account`}>
           {t("mobileConnect.relay.account")}

@@ -21,7 +21,7 @@ import {
   cloudSources,
   coreCloudLogin,
   thisDevice,
-} from "./cloud-client";
+} from "../sources/cloud-client";
 import {
   loadConnections,
   removeConnection,

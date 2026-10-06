@@ -10,8 +10,10 @@ import {
   ManagedSocket,
   type ManagedSocketOptions,
   type ManagedSocketState,
+  type SocketEnvironment,
+  browserEnvironment,
 } from "./managed-socket";
-import { type ProbeOptions, pickRoute } from "./routing";
+import { type ProbeOptions, pickRoute, probeDirect } from "./routing";
 import {
   type BearerTransport,
   RELAY_PROTOCOL,
@@ -56,6 +58,12 @@ export interface SourceConnection {
   disconnect(): void;
   /** 凭据被拒之后续一次；续不上状态变 `unauthorized` 并抛。 */
   renew(): Promise<void>;
+  /**
+   * 远程服务说这个源不能再用了（`me.stream` 的 `sourceRevoked` /
+   * `accessRevoked`）：关掉流、丢掉访问，状态 `unauthorized` 带上原因。之后
+   * 只有人重新挂载（或显式 `connect()`）才再连。
+   */
+  revoke(failure: SourceFailure): void;
 }
 
 /** `socket()` 的选项：`ManagedSocket` 的回调与协商协议，地址与凭据由连接给。 */
@@ -176,7 +184,10 @@ export function createLocalConnection(
       sockets.add(socket);
       return socket;
     },
-    connect: async () => undefined,
+    // 不发请求；只叫醒在等、在退避的流（中继托管的页面：主机重新上线）。
+    connect: async () => {
+      for (const socket of sockets) socket.wake();
+    },
     disconnect() {
       for (const socket of [...sockets]) socket.close();
       sockets.clear();
@@ -185,6 +196,8 @@ export function createLocalConnection(
       if (!(await renewCredentials(source.credentials)))
         throw new SourceError(SOURCE_ERROR.unauthorized);
     },
+    // 本机源不经远程服务，没有可撤销的。
+    revoke: () => undefined,
   };
 }
 
@@ -209,7 +222,15 @@ export interface RemoteConnectionOptions {
   /** 问 hello；缺省经这个源的 RPC 客户端 `system.hello`。 */
   readonly hello?: (client: ArmadraClient) => Promise<HelloInfo>;
   readonly now?: () => number;
+  /**
+   * `online` 与可见性（重新探直连用）；缺省浏览器的 `window` / `document`，
+   * `null` = 不听。
+   */
+  readonly environment?: SocketEnvironment | null;
 }
+
+/** 经中继时两次重新探直连之间至少隔这么久（流在退避里会反复触发）。 */
+export const REPROBE_INTERVAL_MS = 5_000;
 
 function originOf(base: string): string {
   try {
@@ -247,7 +268,11 @@ function unauthorizedFailure(error: unknown): boolean {
  *   `refresh`，经中继的再忘掉缓存重取一次（远程服务重取断言）；再失败
  *   `unauthorized`。
  * - 流：`socket()` 每次（重）连前换票，经中继时带中继子协议；4403 →
- *   `unauthorized`，4404 → `waitingForSource`，再次 `connect()` 成功时叫醒。
+ *   `unauthorized`，4404 → `waitingForSource`，再次 `connect()` 成功时叫醒
+ *   （远程服务 `me.stream` 推 `sourceOnline` 时由 `remote-stream.ts` 调）。
+ *   取访问时中继答源不在线（`source_offline`）同样是 `waitingForSource`。
+ * - D27：已经走中继的连接，在流重连、`online`、页面回到前台时重新探一次直连；
+ *   通了就换到直连，开着的流按新地址重连。
  */
 export function createRemoteConnection(
   descriptor: SourceDescriptor,
@@ -269,6 +294,13 @@ export function createRemoteConnection(
   let connecting: Promise<void> | null = null;
   let renewing: Promise<boolean> | null = null;
   let epoch = 0;
+  let probing: Promise<void> | null = null;
+  let lastProbeAt = Number.NEGATIVE_INFINITY;
+  const environment =
+    options.environment === undefined
+      ? browserEnvironment()
+      : options.environment;
+  let listening = false;
 
   const baseFetch: typeof fetch = (input, init) =>
     (options.fetch ?? globalThis.fetch)(input, init);
@@ -449,6 +481,8 @@ export function createRemoteConnection(
               code: SOURCE_ERROR.offline,
               message: "",
             });
+          // 流断了在退避：经中继的趁这时再看一眼直连通没通（D27）。
+          if (state === "backoff") void reprobe();
           socketOptions.onStateChange?.(state);
         },
       });
@@ -456,55 +490,13 @@ export function createRemoteConnection(
       return socket;
     },
     connect() {
+      listen();
       if (status.current.state === "ready") return Promise.resolve();
-      connecting ??= (async () => {
-        const mine = ++epoch;
-        setStatus("connecting", status.current.lastError);
-        // 重新走一遍选路（D27：重连与回到前台时再探直连）。
-        access = null;
-        via = null;
-        try {
-          await ensureAccess();
-        } catch (error) {
-          if (mine !== epoch) return;
-          setStatus("offline", failureOf(error, SOURCE_ERROR.unreachable));
-          return;
-        }
-        let answer: HelloInfo;
-        try {
-          answer = await askHello(client);
-        } catch (error) {
-          if (mine !== epoch) return;
-          setStatus(
-            unauthorizedFailure(error) ||
-              (error as { code?: unknown })?.code === SOURCE_ERROR.unauthorized
-              ? "unauthorized"
-              : "offline",
-            failureOf(error, SOURCE_ERROR.unreachable),
-          );
-          return;
-        }
-        if (mine !== epoch) return;
-        if (answer.sourceId !== id) {
-          // 连上的不是这台：不信它，丢掉这份访问。
-          access = null;
-          provider.invalidate(id);
-          setStatus("offline", {
-            code: SOURCE_ERROR.mismatch,
-            message: answer.sourceId,
-          });
-          return;
-        }
-        hello = answer;
-        setStatus("ready");
-        for (const socket of sockets) socket.wake();
-      })().finally(() => {
-        connecting = null;
-      });
-      return connecting;
+      return establish();
     },
     disconnect() {
       epoch += 1;
+      unlisten();
       for (const socket of [...sockets]) socket.close();
       sockets.clear();
       access = null;
@@ -518,6 +510,151 @@ export function createRemoteConnection(
       if (!(await renewAccess()))
         throw new SourceError(SOURCE_ERROR.unauthorized);
     },
+    revoke(failure) {
+      epoch += 1;
+      unlisten();
+      for (const socket of [...sockets]) socket.close();
+      sockets.clear();
+      access = null;
+      hello = null;
+      ticketed = new WeakMap();
+      provider.invalidate(id);
+      setStatus("unauthorized", failure);
+    },
   };
+
+  /**
+   * 选路 → 取访问 → hello → 核对。`connect()` 与换路共用；结束后叫醒（换了路
+   * 就重连）这个源的流。
+   */
+  function establish(): Promise<void> {
+    connecting ??= (async () => {
+      const mine = ++epoch;
+      const before = via;
+      setStatus("connecting", status.current.lastError);
+      // 重新走一遍选路（D27：重连与回到前台时再探直连）。
+      access = null;
+      via = null;
+      try {
+        await ensureAccess();
+      } catch (error) {
+        if (mine !== epoch) return;
+        const failure = failureOf(error, SOURCE_ERROR.unreachable);
+        // 中继说源不在线：等它上线（`me.stream` 的 `sourceOnline` 叫醒）。
+        setStatus(
+          failure.code === SOURCE_ERROR.offline
+            ? "waitingForSource"
+            : failure.code === SOURCE_ERROR.unauthorized ||
+                failure.code === SOURCE_ERROR.revoked ||
+                failure.code === SOURCE_ERROR.accessRevoked
+              ? "unauthorized"
+              : "offline",
+          failure,
+        );
+        return;
+      }
+      let answer: HelloInfo;
+      try {
+        answer = await askHello(client);
+      } catch (error) {
+        if (mine !== epoch) return;
+        const failure = failureOf(error, SOURCE_ERROR.unreachable);
+        setStatus(
+          unauthorizedFailure(error) ||
+            failure.code === SOURCE_ERROR.unauthorized
+            ? "unauthorized"
+            : failure.code === SOURCE_ERROR.offline ||
+                (error instanceof RuntimeRequestError && error.status === 503)
+              ? "waitingForSource"
+              : "offline",
+          failure,
+        );
+        return;
+      }
+      if (mine !== epoch) return;
+      if (answer.sourceId !== id) {
+        // 连上的不是这台：不信它，丢掉这份访问。
+        access = null;
+        provider.invalidate(id);
+        setStatus("offline", {
+          code: SOURCE_ERROR.mismatch,
+          message: answer.sourceId,
+        });
+        return;
+      }
+      hello = answer;
+      setStatus("ready");
+      const moved = before !== null && before !== via;
+      for (const socket of sockets) {
+        if (moved) socket.reroute();
+        else socket.wake();
+      }
+    })().finally(() => {
+      connecting = null;
+    });
+    return connecting;
+  }
+
+  /**
+   * 经中继的连接再探一次直连（D27）：通了就换到直连（先拿到直连的访问再换，
+   * 换的那一刻之前的请求照旧走中继），开着的流按新地址重连。离线、等源上线的
+   * 连接顺手再连一次（`online` 之后网络可能回来了）。两次之间至少隔
+   * {@link REPROBE_INTERVAL_MS}。
+   */
+  function reprobe(): Promise<void> {
+    if (probing !== null || now() - lastProbeAt < REPROBE_INTERVAL_MS)
+      return Promise.resolve();
+    const state = status.current.state;
+    if (state === "offline" || state === "waitingForSource") {
+      lastProbeAt = now();
+      if (connecting === null) void establish();
+      return Promise.resolve();
+    }
+    if (state !== "ready" || via !== "relayed" || descriptor.baseUrl === "")
+      return Promise.resolve();
+    lastProbeAt = now();
+    const mine = epoch;
+    probing = (async () => {
+      if (!(await probeDirect(descriptor.baseUrl, id, options.probe))) return;
+      if (mine !== epoch || via !== "relayed") return;
+      let next: SourceAccess;
+      try {
+        next = await provider.getAccess(id, "direct");
+      } catch {
+        return;
+      }
+      if (mine !== epoch || via !== "relayed") return;
+      access = next;
+      via = "direct";
+      setStatus("ready");
+      for (const socket of sockets) socket.reroute();
+    })().finally(() => {
+      probing = null;
+    });
+    return probing;
+  }
+
+  function onOnline(): void {
+    void reprobe();
+  }
+
+  function onVisible(): void {
+    if (environment?.visible() ?? true) void reprobe();
+  }
+
+  function listen(): void {
+    if (listening || environment === null) return;
+    listening = true;
+    environment.addEventListener("online", onOnline);
+    environment.addEventListener("visibilitychange", onVisible);
+  }
+
+  function unlisten(): void {
+    if (!listening || environment === null) return;
+    listening = false;
+    environment.removeEventListener("online", onOnline);
+    environment.removeEventListener("visibilitychange", onVisible);
+  }
+
   return connection;
 }
