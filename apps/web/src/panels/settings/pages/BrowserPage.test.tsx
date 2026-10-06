@@ -22,7 +22,7 @@ function render(element: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  client.setQueryData(["workspaces"], [{ id: "ws-1" }]);
+  client.setQueryData(["src", "local", "workspaces"], [{ id: "ws-1" }]);
   return renderPlain(
     <QueryClientProvider client={client}>{element}</QueryClientProvider>,
   );

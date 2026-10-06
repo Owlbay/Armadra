@@ -83,7 +83,7 @@ export function AutomationDrawer() {
 
   const client = state.status === "ready" ? state.client : null;
   const canManage = state.status === "ready" && state.canManage;
-  const hostId = state.status === "ready" ? state.hello.hostId : "";
+  const hostId = state.status === "ready" ? state.hello.sourceId : "";
 
   const plans = useQuery({
     queryKey: automationKeys.plans(workspaceId ?? ""),

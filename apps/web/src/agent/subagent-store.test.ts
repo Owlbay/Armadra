@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { AgentEvent, AgentStatus, WorkspaceEvent } from "@armadra/shared";
 
@@ -56,8 +57,8 @@ describe("subagent cards", () => {
       }),
       BASE,
     );
-    expect(store().cards[PARENT]).toHaveLength(1);
-    const opened = store().cards[PARENT]![0]!;
+    expect(store().cards[scoped(PARENT)]).toHaveLength(1);
+    const opened = store().cards[scoped(PARENT)]![0]!;
     expect(opened).toMatchObject({
       id: "tool-1",
       parentId: PARENT,
@@ -78,7 +79,7 @@ describe("subagent cards", () => {
       }),
       BASE + 5_000,
     );
-    expect(store().cards[PARENT]![0]).toMatchObject({
+    expect(store().cards[scoped(PARENT)]![0]).toMatchObject({
       id: "tool-1",
       state: "done",
       durationMs: 4_200,
@@ -120,7 +121,7 @@ describe("subagent cards", () => {
       event({ kind: "subagent-start", toolUseId: "tool-1" }),
       BASE + 10,
     );
-    expect(store().cards[PARENT]).toHaveLength(1);
+    expect(store().cards[scoped(PARENT)]).toHaveLength(1);
   });
 
   it("still shows the totals when only the end event arrives", () => {
@@ -128,7 +129,7 @@ describe("subagent cards", () => {
       event({ kind: "subagent-end", toolUseId: "tool-9", tokens: 10 }),
       BASE,
     );
-    expect(store().cards[PARENT]![0]).toMatchObject({
+    expect(store().cards[scoped(PARENT)]![0]).toMatchObject({
       id: "tool-9",
       state: "done",
       tokens: 10,
@@ -142,7 +143,7 @@ describe("subagent cards", () => {
         BASE + index,
       );
     }
-    const cards = store().cards[PARENT]!;
+    const cards = store().cards[scoped(PARENT)]!;
     expect(cards).toHaveLength(MAX_CARDS_PER_PARENT);
     expect(cards[0]!.id).toBe("tool-3");
     expect(cards.at(-1)!.id).toBe("tool-10");
@@ -162,11 +163,13 @@ describe("subagent cards", () => {
       BASE + 2,
     );
     store().handleEvent(statusFrame("done"));
-    expect(store().cards[PARENT]).toHaveLength(2);
+    expect(store().cards[scoped(PARENT)]).toHaveLength(2);
 
     // 非 working → working 就是新回合的边。
     store().handleEvent(statusFrame("working"));
-    expect(store().cards[PARENT]!.map((card) => card.id)).toEqual(["live-1"]);
+    expect(store().cards[scoped(PARENT)]!.map((card) => card.id)).toEqual([
+      "live-1",
+    ]);
 
     // 同一状态再来一次不该清掉任何东西。
     store().handleEvent(
@@ -174,7 +177,7 @@ describe("subagent cards", () => {
       BASE + 3,
     );
     store().handleEvent(statusFrame("working"));
-    expect(store().cards[PARENT]).toHaveLength(1);
+    expect(store().cards[scoped(PARENT)]).toHaveLength(1);
   });
 
   it("drops every card when the terminal exits", () => {
@@ -187,11 +190,11 @@ describe("subagent cards", () => {
       sessionId: "s-1",
       nodeId: PARENT,
     });
-    expect(store().cards[PARENT]).toBeUndefined();
+    expect(store().cards[scoped(PARENT)]).toBeUndefined();
   });
 
   it("ignores non-subagent kinds", () => {
     store().handleEvent(event({ kind: "state", state: "working" }), BASE);
-    expect(store().cards[PARENT]).toBeUndefined();
+    expect(store().cards[scoped(PARENT)]).toBeUndefined();
   });
 });

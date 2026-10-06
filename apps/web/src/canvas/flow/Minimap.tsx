@@ -1,3 +1,4 @@
+import { scoped } from "../../sources/scope";
 import * as React from "react";
 import { MiniMap, Panel, useReactFlow } from "@xyflow/react";
 import type { MiniMapNodeProps } from "@xyflow/react";
@@ -167,7 +168,7 @@ export function Minimap() {
   const statuses = useAgentStatusStore((state) => state.statuses);
 
   const glowOf = React.useCallback(
-    (nodeId: string) => agentHeaderState(statuses[nodeId]).glow,
+    (nodeId: string) => agentHeaderState(statuses[scoped(nodeId)]).glow,
     [statuses],
   );
 

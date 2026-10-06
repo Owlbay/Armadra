@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import * as React from "react";
 import { toast } from "sonner";
 import type { AcpSessionUpdate, TerminalNodeData } from "@armadra/shared";
@@ -232,13 +233,15 @@ export function SessionView({
   const log = useAcpLog(sessionId, nodeId);
   const connected = useConnected(workspaceId);
   const view = useAcpStore((state) =>
-    sessionId ? (state.sessions[sessionId] ?? EMPTY_SESSION) : EMPTY_SESSION,
+    sessionId
+      ? (state.sessions[scoped(sessionId)] ?? EMPTY_SESSION)
+      : EMPTY_SESSION,
   );
   const permissions = useAcpStore(
-    (state) => state.permissions[nodeId] ?? NO_PERMISSIONS,
+    (state) => state.permissions[scoped(nodeId)] ?? NO_PERMISSIONS,
   );
   const elicitations = useAcpStore(
-    (state) => state.elicitations[nodeId] ?? NO_ELICITATIONS,
+    (state) => state.elicitations[scoped(nodeId)] ?? NO_ELICITATIONS,
   );
   const rootRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
@@ -284,7 +287,8 @@ export function SessionView({
     (modelId: string) => {
       if (!sessionId) return;
       const store = useAcpStore.getState();
-      const previous = store.sessions[sessionId]?.models?.currentModelId;
+      const previous =
+        store.sessions[scoped(sessionId)]?.models?.currentModelId;
       store.setModel(sessionId, modelId);
       acpApi
         .setModel(sessionId, modelId)

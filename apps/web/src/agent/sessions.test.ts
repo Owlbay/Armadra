@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { describe, expect, it } from "vitest";
 import type { AgentStatus, SessionSummary } from "@armadra/shared";
 
@@ -46,7 +47,7 @@ function row(partial: Partial<SessionRow> & { nodeId: string }): SessionRow {
 describe("mergeSessions", () => {
   it("prefers the status mirror when it is fresher and sorts by recency", () => {
     const statuses: Record<string, AgentStatus> = {
-      a: {
+      [scoped("a")]: {
         nodeId: "a",
         workspaceId: "w",
         agentId: "claude",

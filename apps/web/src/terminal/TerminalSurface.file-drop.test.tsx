@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -293,7 +294,7 @@ describe("TerminalSurface file input guards", () => {
   it("does not settle DAG retries when validation fails, but settles confirmed retries just before paste", async () => {
     fixture.data.agent = { id: "claude" };
     fixture.entries.node = { phase: "sent", attempts: 1 };
-    fixture.statuses.node = {};
+    fixture.statuses[scoped("node")] = {};
     const target = await mounted();
     fixture.fileInfo.mockRejectedValueOnce(new Error("missing"));
     drop(target);

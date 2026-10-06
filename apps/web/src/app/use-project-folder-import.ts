@@ -5,6 +5,7 @@ import {
   useState,
   type DragEvent,
 } from "react";
+import { sk } from "../sources/scope";
 import { useQueryClient } from "@tanstack/react-query";
 import type { WorkspaceSummary } from "@armadra/shared";
 import { toast } from "sonner";
@@ -67,7 +68,7 @@ export function useProjectFolderImport() {
           try {
             const copied = typeof source !== "string";
             const existing =
-              queryClient.getQueryData<WorkspaceSummary[]>(["workspaces"]) ??
+              queryClient.getQueryData<WorkspaceSummary[]>(sk("workspaces")) ??
               [];
             const workspace =
               typeof source === "string"
@@ -76,7 +77,7 @@ export function useProjectFolderImport() {
                   )
                 : await runtimeApi.importWorkspace(await source.read());
             openWorkspace(workspace);
-            void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+            void queryClient.invalidateQueries({ queryKey: sk("workspaces") });
             if (copied)
               toast.success(t("folderImport.copied", { name: workspace.name }));
           } catch (error) {

@@ -6,6 +6,7 @@ import type {
   GitReflogPage,
   GitRepositoryAction,
 } from "@armadra/shared";
+import { sk } from "../../sources/scope";
 import { useT } from "../../app/preferences-store";
 import { Button } from "../../ui/button";
 import {
@@ -62,7 +63,7 @@ export function Reflog({
 }: ReflogProps) {
   const t = useT();
   const integration = useQuery({
-    queryKey: ["git-repository-integration", workspaceId, repositoryKey],
+    queryKey: sk("git-repository-integration", workspaceId, repositoryKey),
     queryFn: ({ signal }) => loadState(signal),
     retry: false,
   });
@@ -71,7 +72,12 @@ export function Reflog({
   const [reference, setReference] = useState("HEAD");
   const [selected, setSelected] = useState<string | null>(null);
   const log = useInfiniteQuery({
-    queryKey: ["git-repository-reflog", workspaceId, repositoryKey, reference],
+    queryKey: sk(
+      "git-repository-reflog",
+      workspaceId,
+      repositoryKey,
+      reference,
+    ),
     queryFn: ({ pageParam, signal }) => loadPage(reference, pageParam, signal),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,

@@ -1,4 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
+import { sk } from "../../sources/scope";
 
 /** Every Git write can change both the repository view and AI draft input. */
 export function invalidateGitQueries(
@@ -37,5 +38,5 @@ export function invalidateGitQueries(
     "git-log",
     "git-refs",
   ])
-    void client.invalidateQueries({ queryKey: [name, workspaceId] });
+    void client.invalidateQueries({ queryKey: sk(name, workspaceId) });
 }

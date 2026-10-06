@@ -42,8 +42,8 @@ export function useGitGutter(
       if (
         event.type === "updated" &&
         event.action.type === "invalidate" &&
-        event.query.queryKey[0] === "git-status" &&
-        event.query.queryKey[1] === workspaceId
+        event.query.queryKey[2] === "git-status" &&
+        event.query.queryKey[3] === workspaceId
       )
         refresh();
     });

@@ -10,6 +10,7 @@
  *
  * 归约都是纯函数，组件与测试走同一条路。
  */
+import { scoped } from "../sources/scope";
 import { create } from "zustand";
 import {
   acpContentBlockSchema,
@@ -424,6 +425,7 @@ export function acpElicitationOf(
 
 /* --------------------------------- store --------------------------------- */
 
+/** 三张表的键都是 `${sourceId}:${id}`（`sources/scope.ts`）。 */
 interface AcpStoreState {
   readonly sessions: Readonly<Record<string, AcpSessionView>>;
   readonly permissions: Readonly<Record<string, readonly AcpPermissionView[]>>;
@@ -453,8 +455,9 @@ function patchSession(
   sessionId: string,
   next: (view: AcpSessionView) => AcpSessionView,
 ): Pick<AcpStoreState, "sessions"> {
-  const view = state.sessions[sessionId] ?? EMPTY_SESSION;
-  return { sessions: { ...state.sessions, [sessionId]: next(view) } };
+  const key = scoped(sessionId);
+  const view = state.sessions[key] ?? EMPTY_SESSION;
+  return { sessions: { ...state.sessions, [key]: next(view) } };
 }
 
 function withoutPending<T extends { readonly pendingId: string }>(
@@ -475,7 +478,9 @@ export const useAcpStore = create<AcpStoreState>((set) => ({
   elicitations: {},
   hydrate: (sessionId, nodeId, log) =>
     set((state) => {
-      const previous = state.sessions[sessionId] ?? EMPTY_SESSION;
+      const key = scoped(sessionId);
+      const nodeKey = scoped(nodeId);
+      const previous = state.sessions[key] ?? EMPTY_SESSION;
       const modes = acpModeStateSchema.safeParse(log.modes);
       const models = acpModelStateSchema.safeParse(log.models);
       const view: AcpSessionView = {
@@ -499,15 +504,15 @@ export const useAcpStore = create<AcpStoreState>((set) => ({
         elicitation: item.elicitation,
       }));
       return {
-        sessions: { ...state.sessions, [sessionId]: view },
+        sessions: { ...state.sessions, [key]: view },
         permissions:
           log.pending === undefined
             ? state.permissions
-            : { ...state.permissions, [nodeId]: pending },
+            : { ...state.permissions, [nodeKey]: pending },
         elicitations:
           log.elicitations === undefined
             ? state.elicitations
-            : { ...state.elicitations, [nodeId]: elicitations },
+            : { ...state.elicitations, [nodeKey]: elicitations },
       };
     }),
   update: (sessionId, update) =>
@@ -522,9 +527,9 @@ export const useAcpStore = create<AcpStoreState>((set) => ({
     set((state) => {
       // 回合结束时挂起的审批都已由 core 回了 `cancelled`（ACP 设计 §5.5）。
       const permissions = { ...state.permissions };
-      delete permissions[nodeId];
+      delete permissions[scoped(nodeId)];
       const elicitations = { ...state.elicitations };
-      delete elicitations[nodeId];
+      delete elicitations[scoped(nodeId)];
       return {
         ...patchSession(state, sessionId, (view) => endTurn(view, event)),
         permissions,
@@ -549,22 +554,24 @@ export const useAcpStore = create<AcpStoreState>((set) => ({
     ),
   addPermission: (nodeId, permission) =>
     set((state) => {
-      const list = (state.permissions[nodeId] ?? []).filter(
+      const key = scoped(nodeId);
+      const list = (state.permissions[key] ?? []).filter(
         (item) => item.pendingId !== permission.pendingId,
       );
       return {
-        permissions: { ...state.permissions, [nodeId]: [...list, permission] },
+        permissions: { ...state.permissions, [key]: [...list, permission] },
       };
     }),
   addElicitation: (nodeId, elicitation) =>
     set((state) => {
-      const list = (state.elicitations[nodeId] ?? []).filter(
+      const key = scoped(nodeId);
+      const list = (state.elicitations[key] ?? []).filter(
         (item) => item.pendingId !== elicitation.pendingId,
       );
       return {
         elicitations: {
           ...state.elicitations,
-          [nodeId]: [...list, elicitation],
+          [key]: [...list, elicitation],
         },
       };
     }),

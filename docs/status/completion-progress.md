@@ -2035,3 +2035,33 @@
 - `me.sources` 的名字只是标签，离线的主机不能勾；断言的 `online: false` 在挂载时再校一次。
 - 访客（分享链接）的云会话刷新令牌同样存进钥匙串的远程服务那一份；若同一个中转下已经有账号登录，会被覆盖成访客的（一个签发方一份）。
 - 钉扎的时间窗：`peek` 与 `pin` 是两次取证书，中间被换证书时 `pin` 的指纹核对会失败（不自动信任）。
+
+## A1-2 查询键与 store 加源
+
+设计：[客户端包](../design/platform/client-packages.md) §2。
+
+做了什么（`apps/web/src/`）：
+
+- **键的约定**（`sources/scope.ts`）：查询键 `["src", sourceId, ...]`（`sk(...)` 取当前源、`srcKey(id, ...)` 指定源、`srcPrefix()` 给手写数组展开）；store 键 `${sourceId}:${id}`（`scoped` / `unscoped`）。`activeSourceId()` = 事件派发期间是产生事件的那条连接所属的源（`withSource`），其余时候是当前源；零配置只有本机源，键只多一个 `local` 前缀，行为不变。
+- **查询键**：带 `workspaceId` / `boardId` 的全部查询（工作空间、画板、会话、Git、文件、自动化、GitHub、工作流、协调器、投递、交接……）与它们的失效、`setQueryData`；`use-git-gutter` 的下标顺延。`useWorkspaces()`（`app/workspaces-query.ts`）对每个就绪源各发一次，合并成 `{ sourceId, workspace }[]`；`useWorkspacesQuery()` 仍是当前源那一份，两者同缓存。
+- **canvas-store**：加 `sourceId`，`setWorkspace(workspace, sourceId?)` 按 `(sourceId, workspaceId)` 判同一个工作空间。
+- **事件流**（`api/events.ts`）：`Map<"${sourceId}:${workspaceId}", Connection>`，同一个源里同时只订一个工作空间（与原来一致），不同源各一条；连接发往 `Source.WebSocket`。订阅回调多收 `sourceId`；`onWorkspaceEvent` 默认只收当前源的帧，按源记账的订阅者传 `{ allSources: true }`；连接 / 失权回调带 `sourceId`。`dispatchWorkspaceEvent(event, sourceId)`。
+- **store**：`agent/status-store`（`hydrate(sessions, workspaceId, sourceId)`）、`drive-store`、`delivery-store`（`edgeKey` 带源）、`dependency-store`（读数记 `sourceId`）、`subagent-store`、`acp/store` 的键都带源前缀；读它们的点（节点头、徽标、小地图、通知、终端、命令面板）同步改。
+- **实时协同**：`realtime/session.ts` 的板按 `(sourceId, boardId)` 认，`startRealtime({ source })`、`realtimeActive(boardId, sourceId?)`、`stopRealtime(boardId, sourceId?)`。
+- **偏好**（`app/preferences/sources.ts`）：已打开 / 收起 / 置顶的工作空间、置顶的画布落盘为 `{ sourceId, workspaceId | boardId }[]`，上次的工作空间与画布为 `{ sourceId, … }`；内存里是 `openWorkspaceKeys` 等带源前缀的键，`idsInSource` 取某个源里的 id。旧的裸 id 在 store 创建前一次性迁到 `local`（`migrateSourceScopedPreferences`，幂等）。
+- **`hello.hostId` → `sourceId`**：`identityHelloSchema` 把线上的 `hostId`（core JSON 不动）解析成 `sourceId`；`permits` 的选项改叫 `executionHostId`，调用方传 `hello.sourceId`。
+
+实测（macOS arm64，2026-10-06，基于 main 含 A1-1）：
+
+- `pnpm check` 通过（lint 0 error、285 warn，与 main 相同）。
+- `pnpm --filter @armadra/web test` 3564 过，`typecheck` 通过。
+- A 档 e2e：`node tools/ci/e2e.mjs --tier a` 12 项全过（第一轮缺 `spawn-helper` 执行位与 server / push-relay 产物，补上后对失败的 6 项重跑通过）。
+
+新增用例：`sources/scope.test`（键约定、`withSource`、同名节点在两个源里的 store 键不碰撞）、`api/events.test`（两个源各开一个工作空间事件连接各一条、换工作空间只拆同源的）、`app/workspaces-query.test`（两源合并、零配置只发一个请求且同缓存）、`app/preferences/sources.test`（旧键迁移、幂等、损坏值）、`realtime/session.test`（同名板在两个源里不混）。
+
+没做 / 偏离规格：
+
+- 与「当前源」无关的查询（设置、用量、账号、Agent 列表等）没有加源前缀：它们不带工作空间 id，A1-4 切换当前源时需清掉非 `["src", …]` 的缓存（本包没有 UI 能切源，现在不会出问题）。
+- `coordinator`、`dependency-store` 的读数仍经 `runtimeApi`（当前源）：对非当前源的工作空间发请求要改成 `clientFor(source)`，随 A1-4 接上多源界面时补。
+- `WorkspaceTree` 仍只列当前源的行（偏好里已按源存）；按源分组是 A1-4。
+- 实时协同的「这块板走不走实时」复核仍走当前源的 `runtimeApi`。

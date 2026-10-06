@@ -1,3 +1,4 @@
+import { srcPrefix } from "../sources/scope";
 import { z } from "zod";
 
 import { json, request } from "@/api/request";
@@ -28,7 +29,8 @@ const taskSchema = z.object({ task: dispatchTaskSchema });
 
 export const coordinatorKeys = {
   /** 挂在 `workflow` 之下：`workflow.*` 帧整组重读时它跟着重读。 */
-  tasks: (boardId: string) => ["workflow", "tasks", boardId] as const,
+  tasks: (boardId: string) =>
+    [...srcPrefix(), "workflow", "tasks", boardId] as const,
 };
 
 export const coordinatorApi = {

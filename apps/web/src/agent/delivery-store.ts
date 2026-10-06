@@ -19,6 +19,8 @@ import * as React from "react";
 import { create } from "zustand";
 import type { WorkspaceEvent } from "@armadra/shared";
 
+import { scoped } from "../sources/scope";
+
 /** 边上那一下闪动持续多久。够看见，不够烦人。 */
 export const DELIVERY_FLASH_MS = 2_000;
 
@@ -64,8 +66,12 @@ export interface DeliveryNotice {
 }
 
 /** 边的键。方向有意义：A 投给 B 与 B 投给 A 是两条不同的事。 */
-export function edgeKey(sourceNodeId: string, targetNodeId: string): string {
-  return `${sourceNodeId}->${targetNodeId}`;
+export function edgeKey(
+  sourceNodeId: string,
+  targetNodeId: string,
+  sourceId?: string,
+): string {
+  return scoped(`${sourceNodeId}->${targetNodeId}`, sourceId);
 }
 
 interface DeliveryState {
@@ -131,7 +137,8 @@ export function reduce(
   if (event.outcome !== "refused") {
     next.queueVersion = {
       ...state.queueVersion,
-      [event.targetNodeId]: (state.queueVersion[event.targetNodeId] ?? 0) + 1,
+      [scoped(event.targetNodeId)]:
+        (state.queueVersion[scoped(event.targetNodeId)] ?? 0) + 1,
     };
   }
   // 排队项的终态（过期 / 取消）也是发起者那一侧的事：它浮层里「我发出的」
@@ -139,7 +146,8 @@ export function reduce(
   if (isSettled(event.outcome) && event.sourceNodeId !== event.targetNodeId) {
     next.queueVersion = {
       ...(next.queueVersion ?? state.queueVersion),
-      [event.sourceNodeId]: (state.queueVersion[event.sourceNodeId] ?? 0) + 1,
+      [scoped(event.sourceNodeId)]:
+        (state.queueVersion[scoped(event.sourceNodeId)] ?? 0) + 1,
     };
   }
 

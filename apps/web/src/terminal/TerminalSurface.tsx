@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import * as React from "react";
 import { toast } from "sonner";
 // xterm 的样式跟着它的 JS 走，不放应用入口。
@@ -376,7 +377,7 @@ function TerminalSurfaceImpl({
             if (hibernated) hibernation.wake();
             setFocused(true);
             const store = useAgentStatusStore.getState();
-            if (store.statuses[nodeId]?.unread) store.markRead(nodeId);
+            if (store.statuses[scoped(nodeId)]?.unread) store.markRead(nodeId);
           }}
           // 焦点在终端内部挪动（textarea ↔ helper 元素）不算失焦，
           // 否则每次输入法起落都会把渲染优先级抖一遍。

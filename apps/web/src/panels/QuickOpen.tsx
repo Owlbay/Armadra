@@ -32,6 +32,7 @@ import {
   SquareFunction,
   Variable,
 } from "lucide-react";
+import { sk } from "../sources/scope";
 
 import { runtimeApi } from "@/api/client";
 import { useT } from "@/app/preferences-store";
@@ -139,7 +140,7 @@ export function QuickOpen() {
         : debounced;
 
   const index = useQuery({
-    queryKey: ["file-index", workspaceId, term],
+    queryKey: sk("file-index", workspaceId, term),
     queryFn: () => runtimeApi.fileIndex(workspaceId!, term),
     enabled: open && mode === "files" && !lineMode && Boolean(workspaceId),
     retry: false,
@@ -161,7 +162,7 @@ export function QuickOpen() {
   };
 
   const symbols = useQuery({
-    queryKey: ["language-symbols", workspaceId, mode, currentPath, term],
+    queryKey: sk("language-symbols", workspaceId, mode, currentPath, term),
     queryFn: () =>
       mode === "document"
         ? documentSymbols(workspaceId!, currentPath!)

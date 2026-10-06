@@ -1,3 +1,4 @@
+import { scoped } from "../../sources/scope";
 import * as React from "react";
 import { toast } from "sonner";
 
@@ -69,7 +70,8 @@ export function useFileDropPaste(
           creating: refs.creatingRef.current,
           pendingPhase: usePendingLaunchStore.getState().entries[nodeId]?.phase,
           acknowledged: Boolean(
-            agent?.sessionId || useAgentStatusStore.getState().statuses[nodeId],
+            agent?.sessionId ||
+              useAgentStatusStore.getState().statuses[scoped(nodeId)],
           ),
         };
       };

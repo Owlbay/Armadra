@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -10,7 +11,7 @@ import { useAgentStatusStore } from "./status-store";
 const mock = vi.hoisted(() => ({
   sessions: vi.fn(),
   connection: undefined as
-    | ((workspaceId: string, connected: boolean) => void)
+    | ((workspaceId: string, connected: boolean, sourceId: string) => void)
     | undefined,
 }));
 vi.mock("../api/client", () => ({ runtimeApi: { sessions: mock.sessions } }));
@@ -68,9 +69,11 @@ describe("useAgentStatusHydration", () => {
     mock.sessions.mockResolvedValue([summary("2026-09-07T00:00:00Z")]);
     view("workspace-1");
     await waitFor(() => {
-      expect(useAgentStatusStore.getState().statuses["node-1"]).toBeDefined();
+      expect(
+        useAgentStatusStore.getState().statuses[scoped("node-1")],
+      ).toBeDefined();
     });
-    const status = useAgentStatusStore.getState().statuses["node-1"];
+    const status = useAgentStatusStore.getState().statuses[scoped("node-1")];
     expect(status?.state).toBe("working");
     expect(status?.workspaceId).toBe("workspace-1");
   });
@@ -82,13 +85,13 @@ describe("useAgentStatusHydration", () => {
     // 断开期间发生的回合没有事件可补，所以上升沿必须重取整份列表。
     mock.sessions.mockResolvedValue([summary("2026-09-07T00:01:00Z")]);
     await act(async () => {
-      mock.connection?.("workspace-1", true);
+      mock.connection?.("workspace-1", true, "local");
     });
     await waitFor(() => expect(mock.sessions).toHaveBeenCalledTimes(2));
     await waitFor(() => {
-      expect(useAgentStatusStore.getState().statuses["node-1"]?.updatedAt).toBe(
-        "2026-09-07T00:01:00Z",
-      );
+      expect(
+        useAgentStatusStore.getState().statuses[scoped("node-1")]?.updatedAt,
+      ).toBe("2026-09-07T00:01:00Z");
     });
   });
 
@@ -97,8 +100,8 @@ describe("useAgentStatusHydration", () => {
     view("workspace-1");
     await waitFor(() => expect(mock.sessions).toHaveBeenCalledTimes(1));
     await act(async () => {
-      mock.connection?.("workspace-2", true);
-      mock.connection?.("workspace-1", false);
+      mock.connection?.("workspace-2", true, "local");
+      mock.connection?.("workspace-1", false, "local");
     });
     expect(mock.sessions).toHaveBeenCalledTimes(1);
   });

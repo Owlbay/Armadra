@@ -130,7 +130,7 @@ export const useGithubSession = create<GithubSessionStore>((set, get) => {
         set({ state: { status: "blocked", reason: "signedOut" } });
         return;
       }
-      const scope = { workspaceId, hostId: hello.hostId };
+      const scope = { workspaceId, executionHostId: hello.sourceId };
       if (!permits(session, "github:read", scope)) {
         set({ state: { status: "blocked", reason: "noPermission" } });
         return;

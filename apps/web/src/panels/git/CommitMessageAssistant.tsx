@@ -8,6 +8,7 @@ import {
   type GitMessageDraft,
   type GitMessageLanguage,
 } from "@armadra/shared";
+import { sk } from "../../sources/scope";
 import { usePreferencesStore, useT } from "../../app/preferences-store";
 import { Button } from "../../ui/button";
 import { Textarea } from "../../ui/textarea";
@@ -57,12 +58,12 @@ function AssistantSession({
   const t = useT();
   const client = useQueryClient();
   const choices = useQuery({
-    queryKey: ["git-message-providers", workspaceId],
+    queryKey: sk("git-message-providers", workspaceId),
     queryFn: ({ signal }) => providers(workspaceId, signal),
     retry: false,
   });
   const baseline = useQuery({
-    queryKey: ["git-message-source", workspaceId],
+    queryKey: sk("git-message-source", workspaceId),
     queryFn: ({ signal }) => source(workspaceId, signal),
     retry: false,
   });
@@ -101,7 +102,7 @@ function AssistantSession({
   const updateSource = async () => {
     const value = await source(workspaceId);
     if (active.current)
-      client.setQueryData(["git-message-source", workspaceId], value);
+      client.setQueryData(sk("git-message-source", workspaceId), value);
     return value;
   };
   const makeDraft = async () => {

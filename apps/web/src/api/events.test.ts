@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAgentStatusStore } from "../agent/status-store";
+import { localSource, type Source } from "./source";
+import { scoped } from "../sources/scope";
 import {
   connectWorkspaceEvents,
+  openEventConnections,
   onWorkspaceEvent,
   onWorkspaceAccessLost,
   onWorkspaceConnection,
@@ -69,7 +72,44 @@ function statusFrame(state: "working" | "done") {
   });
 }
 
+function remoteSource(sourceId: string): Source {
+  return { ...localSource, sourceId, httpBase: "http://r", wsBase: "ws://r" };
+}
+
 describe("workspace events", () => {
+  it("两个源各开一个工作空间：事件连接各一条，状态镜像按源分开记", () => {
+    const remote = remoteSource("remote-1");
+    const releaseLocal = connectWorkspaceEvents(WORKSPACE);
+    const releaseRemote = connectWorkspaceEvents(WORKSPACE, remote);
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(openEventConnections()).toEqual([
+      { sourceId: "local", workspaceId: WORKSPACE },
+      { sourceId: "remote-1", workspaceId: WORKSPACE },
+    ]);
+    expect(FakeSocket.instances[1]!.url).toContain("//r/");
+    // 同一个节点 id 在两个源里各记一份，互不覆盖。
+    FakeSocket.instances[0]!.receive(statusFrame("working"));
+    FakeSocket.instances[1]!.receive(statusFrame("done"));
+    const { statuses } = useAgentStatusStore.getState();
+    expect(statuses[scoped(NODE, "local")]?.state).toBe("working");
+    expect(statuses[scoped(NODE, "remote-1")]?.state).toBe("done");
+    // 释放一个源不影响另一个。
+    releaseRemote();
+    expect(openEventConnections()).toEqual([
+      { sourceId: "local", workspaceId: WORKSPACE },
+    ]);
+    releaseLocal();
+  });
+  it("同一个源换工作空间会拆掉旧的，别的源的连接不动", () => {
+    const remote = remoteSource("remote-1");
+    connectWorkspaceEvents("w1");
+    connectWorkspaceEvents("w9", remote);
+    connectWorkspaceEvents("w2");
+    expect(openEventConnections()).toEqual([
+      { sourceId: "remote-1", workspaceId: "w9" },
+      { sourceId: "local", workspaceId: "w2" },
+    ]);
+  });
   it("reports connection generations without a late closed socket hiding the replacement", () => {
     const seen = vi.fn();
     const off = onWorkspaceConnection(seen);
@@ -81,9 +121,9 @@ describe("workspace events", () => {
     FakeSocket.instances[1]!.onopen?.();
     originalSocket.drop();
     expect(seen.mock.calls).toEqual([
-      [WORKSPACE, true],
-      [WORKSPACE, false],
-      [WORKSPACE, true],
+      [WORKSPACE, true, "local"],
+      [WORKSPACE, false, "local"],
+      [WORKSPACE, true, "local"],
     ]);
     off();
     release();
@@ -94,7 +134,7 @@ describe("workspace events", () => {
     const release = connectWorkspaceEvents(WORKSPACE);
     FakeSocket.instances[0]!.onopen?.();
     FakeSocket.instances[0]!.drop(4403);
-    expect(lost).toHaveBeenCalledWith(WORKSPACE);
+    expect(lost).toHaveBeenCalledWith(WORKSPACE, "local");
     // 升级只会再被 403 拒：重连没有意义，等页面换工作空间或重新打开。
     vi.advanceTimersByTime(30_000);
     expect(FakeSocket.instances).toHaveLength(1);
@@ -115,7 +155,7 @@ describe("workspace events", () => {
 
     FakeSocket.instances[0]!.receive(statusFrame("working"));
     expect(seen).toHaveBeenCalledTimes(1);
-    expect(useAgentStatusStore.getState().statuses[NODE]!.state).toBe(
+    expect(useAgentStatusStore.getState().statuses[scoped(NODE)]!.state).toBe(
       "working",
     );
 
