@@ -231,11 +231,12 @@ describe("只读：浏览、读、信息、版本、索引、回收站列表", (
   });
 
   it("index：有无查询、带上限、上限不合法", async () => {
-    for (const input of [
+    const inputs: Record<string, string>[] = [
       { query: "note" },
       { query: "" },
       { query: "e", limit: "1" },
-    ]) {
+    ];
+    for (const input of inputs) {
       const path = `${ws()}/file-index${query(input)}`;
       expectParity([
         await table("GET", path),
@@ -243,7 +244,7 @@ describe("只读：浏览、读、信息、版本、索引、回收站列表", (
         await procedure("files.index", {
           workspaceId: id,
           query: input.query,
-          ...("limit" in input ? { limit: Number(input.limit) } : {}),
+          ...(input.limit !== undefined ? { limit: Number(input.limit) } : {}),
         }),
       ]);
     }
