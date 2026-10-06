@@ -145,7 +145,7 @@ const COMMENTS = "/api/workspaces/{workspaceId}/boards/{boardId}/comments";
 const COMMENT = `${COMMENTS}/{commentId}`;
 const commentRef = boardRef.extend({ commentId: z.string().min(1) });
 const comments = {
-  since: "1.17",
+  since: "1.18",
   contract: "§36.5",
   workspaceKey: "workspaceId",
 } as const;

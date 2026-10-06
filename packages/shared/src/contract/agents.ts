@@ -316,7 +316,7 @@ const ANSWERS = { since, contract: "§39.3" } as const;
 const DELIVERY = { since, contract: "§39.4" } as const;
 const DEPENDENCIES = { since, contract: "§39.5" } as const;
 const ADAPTER_INSTALL = { since: "1.15", contract: "§39.7" } as const;
-const HANDOFF = { since: "1.17", contract: "§39.8" } as const;
+const HANDOFF = { since: "1.18", contract: "§39.8" } as const;
 const HANDOFFS = "/api/workspaces/{workspaceId}/handoffs";
 const handoffRef = workspaceRef.extend({ handoffId: z.string() });
 

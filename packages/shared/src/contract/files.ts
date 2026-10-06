@@ -311,7 +311,7 @@ export const files = {
     .errors(errors.pick("bad_request", "forbidden", "not_found"))
     .meta(
       meta({
-        since: "1.17",
+        since: "1.18",
         contract: "§37.3",
         workspaceKey: "workspaceId",
         scope: "assets:read",

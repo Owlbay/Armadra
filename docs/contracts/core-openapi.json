@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "Armadra core",
-    "version": "1.17",
+    "version": "1.18",
     "description": "契约 procedure 的入参与出参（docs/contracts/core-json-api.md §34）。线上是 `POST /api/rpc/<域>/<动词>`，体按 `{ json }` 编码，下列 schema 是 `json` 那一格；失败一律是 `CoreError`。由 tools/contract/generate.mjs 生成，不要手改。"
   },
   "openapi": "3.1.1",
@@ -11400,7 +11400,7 @@
         "x-armadra": {
           "contract": "§37.3",
           "scope": "assets:read",
-          "since": "1.17",
+          "since": "1.18",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "POST",
@@ -15528,7 +15528,7 @@
         "x-armadra": {
           "contract": "§36.5",
           "scope": "canvas:read",
-          "since": "1.17",
+          "since": "1.18",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "GET",
@@ -15788,7 +15788,7 @@
         "x-armadra": {
           "contract": "§36.5",
           "scope": "canvas:write",
-          "since": "1.17",
+          "since": "1.18",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "POST",
@@ -15964,7 +15964,7 @@
         "x-armadra": {
           "contract": "§36.5",
           "scope": "canvas:write",
-          "since": "1.17",
+          "since": "1.18",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "PATCH",
@@ -16043,7 +16043,7 @@
         "x-armadra": {
           "contract": "§36.5",
           "scope": "canvas:write",
-          "since": "1.17",
+          "since": "1.18",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "DELETE",
@@ -16219,7 +16219,7 @@
         "x-armadra": {
           "contract": "§36.5",
           "scope": "canvas:write",
-          "since": "1.17",
+          "since": "1.18",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "POST",
@@ -24615,7 +24615,7 @@
         "x-armadra": {
           "contract": "§39.8",
           "scope": "canvas:read",
-          "since": "1.17",
+          "since": "1.18",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "GET",
@@ -24949,7 +24949,7 @@
         "x-armadra": {
           "contract": "§39.8",
           "scope": "canvas:read",
-          "since": "1.17",
+          "since": "1.18",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "GET",
@@ -25405,7 +25405,7 @@
         "x-armadra": {
           "contract": "§39.8",
           "scope": "canvas:write",
-          "since": "1.17",
+          "since": "1.18",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "POST",
@@ -25752,7 +25752,7 @@
         "x-armadra": {
           "contract": "§39.8",
           "scope": "canvas:write",
-          "since": "1.17",
+          "since": "1.18",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "POST",
@@ -26099,7 +26099,7 @@
         "x-armadra": {
           "contract": "§39.8",
           "scope": "canvas:write",
-          "since": "1.17",
+          "since": "1.18",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "POST",

@@ -2858,7 +2858,7 @@ V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
 - 中继停了的提示只在托管页面上；手机经中继的连接没有这一条（仍是运行时断开与源状态）。
 - `runtimeApi` 其余域（handoff、git 等 REST 与 `currentClient` 的）仍发往当前源，键带源前缀的在切源前后由键区分。
 
-## P2 契约补迁与错误码注册表（契约 §36.5、§37.3、§39.8，协议 minor 17）
+## P2 契约补迁与错误码注册表（契约 §36.5、§37.3、§39.8，协议 minor 18）
 
 补 E3 各包留下的尾巴：评论、交接、输出到画板迁到契约，`cancelled` / `reveal_failed` 与 §18 的具名码进注册表，事件流里 `agent.approval` 的 `request` 收紧。
 
@@ -2871,13 +2871,13 @@ V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
 - **注册表**：加 `cancelled`（499）、`reveal_failed`（500），`files.search` / `files.reveal` 的 `errors` 声明它们；§18 的 `password_*`（5 个）、`password_reset_invalid`（404）、`passkey_*`（4）、`mfa_*`（4）、`oauth_*`（10）按 §18 的状态登记，`i18n` 指向已有的 `security.error.*` / `auth.error.*`。`security.passkeys.register*`、`security.mfa.*`、`accounts.credentials.setPassword` 声明对应的码。`api/error-codes.test.ts` 加两种扫描：身份域里的具名字面量（码常由变量或三元式给出）与 `IdentityRefusal` / `OAuthError` 的字面量状态；`DomainError` 与身份域拒绝用了登记过的码时状态必须一致。
 - **`agent.approval.request`**（`packages/shared/src/api/events.ts`）：从 `unknown` 收紧成 `agentApprovalRecordSchema`——审批行（`id`、`nodeId`、`workspaceId`、`createdAt`，答复字段 `nullish`，hook 面的行没有 `revision`），答复事件的 `resolved` / `decision` / `route` / `elicitation`，CLI 的原话 `request` 按 JSON 透传，其余键 JSON 透传。`workspaces.events` 的 `unknown` 放行从 3 降到 2（剩 ACP 工具调用的 `rawInput` / `rawOutput`，是适配器的原样载荷）。
 - **`GatewaySection`**：新增组件用例，会话变化时还在路上的设备请求被中止、重取的答案上屏；把「先取消」那一步去掉用例就红。
-- 协议 minor 16 → 17，新 procedure 的 `since` 为 1.17。
+- 协议 minor 17 → 18（17 给了 P4 #181），新 procedure 的 `since` 为 1.18。
 
-实测（macOS arm64，基于 main cdb7dea5）：
+实测（macOS arm64，基于 main 99998b4b）：
 
 - 新增 core 对偶测试 `contract/parity-comments.test.ts`（5）、`parity-handoffs.test.ts`（4）、`parity-export-text.test.ts`（3）：路由表原 handler、旧路径、procedure 三者逐字节相等（含 201 / 204 的状态差、400 / 403 / 404 / 409），scope 与路由表一致；形状错由契约先答 `bad_request`。`parity-agents` / `parity-files` 的条数随之更新。
 - 页面新增 `api/client.comments.test.ts`、`client.handoffs.test.ts`，`client.acp.test.ts` 加 `exportText` / `drive`，`GatewaySection.test.tsx`（2）。`@armadra/shared` 的事件用例覆盖新请求、答复与两种不收的形状。
-- `pnpm check` 通过（含 `contract:check`、lint 0 error、各处 typecheck、`repo:check`）。`pnpm libs:build && pnpm -r --if-present test`：desktop 437 文件 5217 过 / 74 跳（live 4 过），web 411 文件 3810 过，shared 372 过，server 98 过 / 4 跳，mobile 10、push-relay 9 过。
+- `pnpm check` 通过（含 `contract:check`、lint 0 error、各处 typecheck、`repo:check`）。`pnpm libs:build && pnpm -r --if-present test`：desktop 5234 过 / 74 跳（live 4 过），web 3838 过，shared 372 过，server 98 过 / 4 跳，mobile 10、push-relay 9 过。
 
 没做 / 偏离：
 
