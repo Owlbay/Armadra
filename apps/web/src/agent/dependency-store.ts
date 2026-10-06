@@ -23,6 +23,7 @@ import type {
 
 import { runtimeApi } from "@/api/client";
 import { useCanvasStore } from "@/store/canvas-store";
+import { sourceById } from "@/api/source";
 import { activeSourceId } from "@/sources/scope";
 
 /** 事件之后等这么久再重读：一轮结束常常是连着几帧。 */
@@ -64,8 +65,9 @@ export const useDependencyStore = create<DependencyState>((set, get) => ({
     if (!same()) {
       set({ sourceId, workspaceId, loaded: false, launches: {} });
     }
+    // 发往读数所属的源（事件派发中是事件的源），不是 `runtimeApi` 的当前源。
     const promise = runtimeApi
-      .dependencies(workspaceId)
+      .dependencies(workspaceId, undefined, sourceById(sourceId))
       .then((answer) => {
         if (!same()) return;
         const launches: Record<string, DependencyLaunch> = {};
@@ -181,7 +183,11 @@ export async function cancelNodeDependencies(
   );
   try {
     for (const edge of blocking) {
-      await runtimeApi.cancelDependency(workspaceId, edge.id);
+      await runtimeApi.cancelDependency(
+        workspaceId,
+        edge.id,
+        sourceById(activeSourceId()),
+      );
     }
   } finally {
     await useDependencyStore.getState().refresh(workspaceId);
@@ -202,6 +208,7 @@ export async function migrateLegacyLaunch(
       workspaceId,
       nodeId,
       pending.after,
+      sourceById(activeSourceId()),
     );
   } catch {
     return false;

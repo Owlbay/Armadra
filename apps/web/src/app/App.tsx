@@ -34,6 +34,7 @@ import { useAppKeybindings } from "./use-app-keybindings";
 import { useBoardSync } from "./use-board-sync";
 import { useWorkspaceAccessLost } from "./use-access-lost";
 import { useUsagePolicyNotice } from "./use-usage-policy-notice";
+import { useSourceSwitchCacheReset } from "./use-sources-bootstrap";
 import { useCanvasPreferences } from "./use-canvas-preferences";
 
 function createQueryClient() {
@@ -95,6 +96,7 @@ function AppShell() {
   useWorkspaceEvents(workspace?.id ?? null, workspaceSource);
   useWorkspaceAccessLost();
   useUsagePolicyNotice();
+  useSourceSwitchCacheReset();
   // 节点徽标属于画布，不属于侧栏：镜像在这里补齐，与面板开合无关。
   useAgentStatusHydration(workspace?.id ?? null);
   useAgentNotifications();
