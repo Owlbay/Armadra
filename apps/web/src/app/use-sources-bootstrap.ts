@@ -47,7 +47,12 @@ export function useSourcesBootstrap(): void {
  * 留着——切回来不必重取。
  */
 export function dropUnscopedQueries(client: QueryClient): void {
-  client.removeQueries({ predicate: (query) => query.queryKey[0] !== "src" });
+  const unscoped = (query: { queryKey: readonly unknown[] }) =>
+    query.queryKey[0] !== "src";
+  // 有人在看的：重置并向新的当前源重取，上一个源还在路上的答案随之作废（不会
+  // 晚到之后落进缓存）；没人看的直接丢。
+  void client.resetQueries({ predicate: unscoped, type: "active" });
+  client.removeQueries({ predicate: unscoped, type: "inactive" });
 }
 
 export function useSourceSwitchCacheReset(
