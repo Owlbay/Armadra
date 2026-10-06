@@ -135,6 +135,18 @@ export function setNativeRuntimeBase(base: string | null): void {
     base === null || base === "" ? null : base.replace(/\/+$/, "");
 }
 
+/**
+ * 中继托管的页面（`sources/hosted.ts`）挂上的源：本机源就是它的
+ * `relayBaseUrl`（`<中继>/s/<源>`）。只在内存里，优先于一切推断与构建配置——
+ * 这张页面背后没有本机 core。
+ */
+let hostedBaseOverride: string | null = null;
+
+export function setHostedRuntimeBase(base: string | null): void {
+  hostedBaseOverride =
+    base === null || base === "" ? null : base.replace(/\/+$/, "");
+}
+
 /** 连接页记下的 Gateway 来源；没有或认不出是 `null`。 */
 export function savedRuntimeOrigin(): string | null {
   try {
@@ -164,6 +176,7 @@ export function resolveRuntimeUrl(
   configured: string | undefined,
   pageUrl: string,
 ): string {
+  if (hostedBaseOverride !== null) return hostedBaseOverride;
   const shell = shellEndpoints();
   // 显式配置永远优先：桌面开发模式靠它连外部 Runtime。
   if (configured === undefined) {
