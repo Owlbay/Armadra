@@ -1,3 +1,5 @@
+import { idsInSource } from "./preferences/sources";
+import { activeSourceId } from "../sources/scope";
 import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Workspace, WorkspaceSummary } from "@armadra/shared";
@@ -122,9 +124,10 @@ export function useCloseWorkspace() {
       closeWorkspaceTab(workspaceId);
       const state = useCanvasStore.getState();
       if (state.workspace?.id !== workspaceId) return;
-      const remaining = usePreferencesStore
-        .getState()
-        .openWorkspaceIds.filter((id) => id !== workspaceId);
+      const remaining = idsInSource(
+        usePreferencesStore.getState().openWorkspaceKeys,
+        activeSourceId(),
+      ).filter((id) => id !== workspaceId);
       const summaries =
         queryClient.getQueryData<Workspace[]>(sk("workspaces")) ?? [];
       const next = remaining

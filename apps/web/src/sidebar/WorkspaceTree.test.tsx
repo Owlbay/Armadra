@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -108,9 +109,9 @@ beforeEach(() => {
   deleteWorkspace.mockReset();
   sessions.mockReset().mockResolvedValue([]);
   usePreferencesStore.setState({
-    openWorkspaceIds: [workspace.id],
-    collapsedWorkspaceIds: [],
-    pinnedBoardIds: [],
+    openWorkspaceKeys: [scoped(workspace.id)],
+    collapsedWorkspaceKeys: [],
+    pinnedBoardKeys: [],
   });
   setBoards(2);
 });
@@ -263,8 +264,8 @@ describe("WorkspaceTree", () => {
 
     fireEvent.click(await screen.findByText("repo"));
     expect(screen.queryByText("实验")).toBeNull();
-    expect(usePreferencesStore.getState().collapsedWorkspaceIds).toEqual([
-      workspace.id,
+    expect(usePreferencesStore.getState().collapsedWorkspaceKeys).toEqual([
+      scoped(workspace.id),
     ]);
   });
 
@@ -282,7 +283,9 @@ describe("WorkspaceTree", () => {
     openMenu(screen.getAllByLabelText("画布操作")[1]!);
     fireEvent.click(await screen.findByRole("menuitem", { name: "置顶" }));
 
-    expect(usePreferencesStore.getState().pinnedBoardIds).toEqual([SECOND]);
+    expect(usePreferencesStore.getState().pinnedBoardKeys).toEqual([
+      scoped(SECOND),
+    ]);
     // 置顶组出现，「实验」在树里出现两次（置顶一次、项目一次）
     expect(await screen.findByLabelText("置顶")).toBeTruthy();
     await waitFor(() => expect(screen.getAllByText("实验").length).toBe(2));
@@ -345,7 +348,7 @@ describe("WorkspaceTree", () => {
       expect(deleteWorkspace).toHaveBeenCalledWith(workspace.id),
     );
     await waitFor(() =>
-      expect(usePreferencesStore.getState().openWorkspaceIds).toEqual([]),
+      expect(usePreferencesStore.getState().openWorkspaceKeys).toEqual([]),
     );
   });
 

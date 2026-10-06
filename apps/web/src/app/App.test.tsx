@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import type { Workspace } from "@armadra/shared";
@@ -66,9 +67,9 @@ beforeEach(() => {
   useCanvasStore.setState({ workspace: null, boards: [], boardId: null });
   useCanvasStore.getState().setPanel("sidebar", "open");
   usePreferencesStore.setState({
-    openWorkspaceIds: [],
-    collapsedWorkspaceIds: [],
-    pinnedBoardIds: [],
+    openWorkspaceKeys: [],
+    collapsedWorkspaceKeys: [],
+    pinnedBoardKeys: [],
   });
 });
 
@@ -92,8 +93,8 @@ describe("App", () => {
 
     expect(await screen.findByTestId("canvas")).toBeTruthy();
     expect(useCanvasStore.getState().workspace?.id).toBe(workspace.id);
-    expect(usePreferencesStore.getState().openWorkspaceIds).toEqual([
-      workspace.id,
+    expect(usePreferencesStore.getState().openWorkspaceKeys).toEqual([
+      scoped(workspace.id),
     ]);
   });
 
