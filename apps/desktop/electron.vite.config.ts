@@ -302,7 +302,12 @@ export default defineConfig(({ command, mode }) => ({
     ],
     build: {
       rollupOptions: {
-        input: { index: resolve(here, "src/main/index.ts") },
+        // `entry` 是包的入口（`package.json` 的 `main`）：先判 `Armadra serve`，再
+        // `require("./index")`。两个入口各自一份文件，没有共享块。
+        input: {
+          entry: resolve(here, "src/main/entry.ts"),
+          index: resolve(here, "src/main/index.ts"),
+        },
         external: EXTERNAL,
         output: cjs,
       },

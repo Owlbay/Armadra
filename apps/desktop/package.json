@@ -8,7 +8,7 @@
   },
   "version": "0.2.0",
   "private": true,
-  "main": "./out/main/index.js",
+  "main": "./out/main/entry.js",
   "desktopName": "armadra.desktop",
   "scripts": {
     "dev": "electron-vite dev",
