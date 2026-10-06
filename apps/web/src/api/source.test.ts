@@ -60,3 +60,29 @@ describe("sourceForUrl", () => {
     );
   });
 });
+
+describe("localSource.relayed", () => {
+  it("只有传输带着中继令牌头时才算经中继", async () => {
+    const { installLocalTransport, localSource } = await import("./source");
+    const { RELAY_TOKEN_HEADER } = await import("../sources/transport");
+    const transport = {
+      origin: "https://relay.example",
+      authorization: () => "token",
+      wsTicket: async () => "ticket",
+      refresh: async () => false,
+    };
+    try {
+      installLocalTransport(null);
+      expect(localSource.relayed?.()).toBe(false);
+      installLocalTransport(transport);
+      expect(localSource.relayed?.()).toBe(false);
+      installLocalTransport({
+        ...transport,
+        extraHeaders: () => ({ [RELAY_TOKEN_HEADER]: "relay-jwt" }),
+      });
+      expect(localSource.relayed?.()).toBe(true);
+    } finally {
+      installLocalTransport(null);
+    }
+  });
+});

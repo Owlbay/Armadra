@@ -5,7 +5,7 @@ import {
 } from "../sources/transport";
 import { ensureCsrf, replaceRejectedCsrf } from "./identity";
 import { localRuntime } from "./local-runtime";
-import { sameOrigin } from "../sources/transport";
+import { RELAY_TOKEN_HEADER, sameOrigin } from "../sources/transport";
 
 /**
  * 一个源：一台 core 的地址，加上发往它时要带的凭据（工程规范化 §2.3.4）。
@@ -118,6 +118,9 @@ export const localSource: Source = {
     transport === null
       ? base(input, init)
       : bearerFetch(base, transport)(input, init),
+  // 中继托管的页面（`sources/route-entry.ts`）把经中继的那台源装成本机源，
+  // 传输上带着中继令牌头：媒体票还要再换一张中继的（§37.4）。
+  relayed: () => transport?.extraHeaders?.()[RELAY_TOKEN_HEADER] !== undefined,
   get WebSocket() {
     const native = globalThis.WebSocket;
     if (transport === null) return native;
