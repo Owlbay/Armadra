@@ -223,6 +223,8 @@ export async function startStack(options = {}) {
     executable,
     [
       "--headless=new",
+      "--use-mock-keychain",
+      "--password-store=basic",
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-background-networking",
