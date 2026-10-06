@@ -2702,3 +2702,29 @@ V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
 
 - A3-2 一节「刷新带 `x-armadra-csrf`」的接口说明以本节为准：Bearer 刷新不要它（带了也不看）。
 - `SourceClient` 没有为兼容旧版对端补发 CSRF（0.2.0 未发布，不做旧版兼容）。
+
+## ACP 适配器的安装与重装（契约 §39.7）
+
+用户发现 Codex 的 ACP 适配器没装，软件里只有新建向导能复制一条命令。
+
+做了什么：
+
+- **core**（`core/agent/adapter-install.ts`）：`agents.installAdapter({ agentId, reinstall? })` 与 `agents.adapterInstall({ agentId })`，只经 procedure。只认 `@armadra/shared` 的 `ACP_ADAPTER_PACKAGES`（claude、codex、pi）；命令固定为 `npm install --global <包>`，不收其他参数。npm 先用 CLI 所在 bin 目录里的那个，没有再用补齐过的 PATH 上的；子进程 PATH 以那个目录开头。任务在内存里，页面轮询；输出只留最后 40 行，去掉控制字符并脱敏（协作脱敏表 + npm 令牌、`_authToken`、URL 口令）。结束后忘掉记着的 ACP 版本并重新探测。只有 owner（scope `settings:write` / `settings:read`，域里再判主体）。开始、结束各写一条审计。不写 CLI 配置。协议 minor 升到 15。
+- **包名表**：从 `NewAgentWizard.tsx` 的 `INSTALL_COMMANDS` 挪到 `packages/shared/src/api/acp.ts`（`ACP_ADAPTER_PACKAGES`、`AGENT_CLI_PACKAGES`、`acpInstallCommand`），页面与 core 共用。
+- **页面**（`apps/web/src/acp/adapter-install.tsx`）：集成页每行 ACP 状态徽标旁是「安装 / 重新安装」；运行中徽标转圈、按钮停用；失败徽标可点开看原因（按码取文案）与输出尾部；结束时刷新 Agent 列表并提示。新建向导「需要安装」那一行加「安装」按钮，保留复制命令。读不到任务（成员）时不画按钮。
+
+实测（macOS arm64，2026-10-06，基于 main 88dd2748）：
+
+- `pnpm check` 通过；`pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 434 文件 5204 过 / 67 跳过，live 4 过，脚本 73 过 / 0 失败；`pnpm --filter @armadra/web test` 407 文件 3789 过。
+- 隔离 core（临时 `HOME` 与 `ARMADRA_DATA_DIR`、`ARMADRA_LOOPBACK_OWNER=1`）加假 `codex` 与假 `npm`（先成功、再改成 404 失败），无头 Chrome 截图：未安装、运行中、已安装、失败、失败输出，各 390 / 1440 宽、暗色。脱敏在输出里生效。
+
+没做 / 偏离：
+
+- scope 用 `settings:write`（高于 `agent:launch`、不在任何共享角色里）。
+- ACP 入口就是 CLI 本身的那几家（opencode、copilot、ama、omp）不代装，只给复制命令。
+- 任务不跨重启；关 core 时不结束正在跑的 npm（中途打断的全局包更糟）。
+- npm 的联网是用户程序的网络访问，未登记 `core/net/outbound.ts`。
+
+接口：
+
+- 契约 §39.7（节号只追加）；错误码 `adapter_not_installable`(400)、`adapter_already_installed`(409)、`npm_not_found`(409)；任务失败码 `adapter_install_failed | adapter_install_timeout | adapter_install_missing`。
