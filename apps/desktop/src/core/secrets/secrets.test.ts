@@ -97,9 +97,36 @@ function fakeSecurity(): SecurityTool & {
         ? { code: 44, stdout: "" }
         : { code: 0, stdout: `${entries.get(at)}\n` };
     }
-    if (verb === "add-generic-password") {
-      const [first, second] = (stdin ?? "").split("\n");
-      if (first === second) entries.set(key(args), first ?? "");
+    if (verb === "-i") {
+      // 和 `security -i` 一样读一整行命令：双引号成段，反斜杠转义下一个字符。
+      const line = (stdin ?? "").replace(/\n$/, "");
+      const words: string[] = [];
+      let word = "";
+      let quoted = false;
+      let started = false;
+      for (let i = 0; i < line.length; i += 1) {
+        const char = line[i]!;
+        if (char === "\\") {
+          word += line[i + 1] ?? "";
+          i += 1;
+          started = true;
+        } else if (char === '"') {
+          quoted = !quoted;
+          started = true;
+        } else if (char === " " && !quoted) {
+          if (started) words.push(word);
+          word = "";
+          started = false;
+        } else {
+          word += char;
+          started = true;
+        }
+      }
+      if (started) words.push(word);
+      const [inner, ...rest] = words;
+      if (inner !== "add-generic-password") return { code: 1, stdout: "" };
+      const valueAt = rest.indexOf("-w");
+      entries.set(key(rest.slice(0, valueAt)), rest[valueAt + 1] ?? "");
       return { code: 0, stdout: "" };
     }
     if (verb === "delete-generic-password") {
@@ -354,6 +381,23 @@ describe("钥匙串后端（假 security(1)）", () => {
     await backend.delete("armadra-copilot");
     await backend.delete("armadra-copilot");
     expect(await backend.get("armadra-copilot")).toBeUndefined();
+  });
+
+  it("长值与引号、反斜杠原样存回：不经 getpass，不被截成 128 个字符", async () => {
+    const tool = fakeSecurity();
+    const backend = keychainBackend(tool);
+    const long = `rt_${"x".repeat(600)}"q\\b`;
+    await backend.set("armadra-remote-long", long);
+    expect(await backend.get("armadra-remote-long")).toBe(long);
+    expect(tool.calls.flat()).not.toContain(long);
+    expect(tool.calls.some((call) => call[0] === "-i")).toBe(true);
+  });
+
+  it("超过 security -i 一行的上限明说，不截断", async () => {
+    const backend = keychainBackend(fakeSecurity());
+    await expect(
+      backend.set("armadra-remote-huge", "y".repeat(4000)),
+    ).rejects.toMatchObject({ reason: "keychain_value_too_long" });
   });
 
   it("工具别的失败报不可用，而不是「没有」", async () => {

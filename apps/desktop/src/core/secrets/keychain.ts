@@ -63,6 +63,17 @@ export const realSecurityTool: SecurityTool = (args, stdin) =>
     child.stdin?.end(stdin ?? "");
   });
 
+/**
+ * `security -i` 一行命令约 4 KiB 封顶；留出命令本身与转义的余量。超过就明说，
+ * 不截断。
+ */
+export const KEYCHAIN_MAX_VALUE = 3500;
+
+/** `security -i` 的参数：双引号包起来，反斜杠与双引号前加反斜杠。 */
+export function quoteForInteractive(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 /** 一个钥匙串条目的地址。`account` 缺省时只按 service 找。 */
 export interface KeychainAddress {
   readonly service: string;
@@ -121,10 +132,17 @@ export function keychainBackend(
     async set(name, value) {
       if (/[\r\n]/.test(value)) throw new Error("secret values are one line");
       const where = address(name);
-      // 经交互提示写而不是 `-w <值>`：参数会出现在进程命令行里。
+      if (value.length > KEYCHAIN_MAX_VALUE) {
+        throw new SecretUnavailable("keychain_value_too_long");
+      }
+      // 经 `security -i` 从标准输入读一整条命令写，而不是 `-w <值>`（参数会出现在
+      // 进程命令行里），也不是 `-w` 的交互提示——那条走 getpass，超过 128 个字符
+      // 的值会被悄悄截断，读回来对不上（远程服务的刷新令牌就比这长）。
       await tool(
-        ["add-generic-password", "-U", ...addressArgs(where), "-w"],
-        `${value}\n${value}\n`,
+        ["-i"],
+        `add-generic-password -U ${addressArgs(where)
+          .map(quoteForInteractive)
+          .join(" ")} -w ${quoteForInteractive(value)}\n`,
       );
       // 两次提示对不上时工具也退 0，所以写靠读回来确认。
       const stored = await readKeychain(tool, where).catch(() => undefined);
