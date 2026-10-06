@@ -38,6 +38,12 @@ import {
 } from "./runtime-process";
 import { type PageSource, startPageSource } from "./static-server";
 import { traceLifecycle } from "./trace";
+import {
+  type CoreFetch,
+  connectGrants,
+  installCertificatePinning,
+  refreshRemoteTrust,
+} from "./remote-trust";
 import { installDiagnostics } from "./diagnostics";
 import { installUpdates } from "./updates";
 import {
@@ -118,6 +124,8 @@ const diagnostics = installDiagnostics({
 setCrashChannel(diagnostics);
 /** Set by `start()` before any window exists; every origin decision reads it. */
 let page: PageSource | null = null;
+/** 主进程带会话打 core（`start()` 里装上）；源表变了时重读用。 */
+let coreFetch: CoreFetch | null = null;
 
 /* ------------------------------ the IPC table ----------------------------- */
 
@@ -141,6 +149,9 @@ function registerIpc(): void {
       await refreshGateway();
       return { ok: true };
     },
+    // 页面改了源表（远程服务、挂载的源）：壳自己重读，不信页面带来的数据。
+    [IPC.sourcesChanged.channel]: () =>
+      coreFetch === null ? { reload: false } : refreshRemoteTrust(coreFetch),
     // The page answering a claimed chord. `menu.ts` owns the arbitration,
     // because it is the module that claimed the chord in the first place.
     [IPC.windowKeyIntentResult.channel]: (result) => {
@@ -392,6 +403,7 @@ async function start(): Promise<void> {
         })
       ).ticket,
   });
+  coreFetch = (path, init) => coreSession.fetch(path, init);
   createTray({
     runtimeBase: async () => (await transportEndpoints()).httpBase,
     request: (path, init) => coreSession.fetch(path, init),
@@ -408,7 +420,9 @@ async function start(): Promise<void> {
   // Only the Vite dev server serves inline scripts (the refresh preamble).
   applyContentSecurityPolicy(page.origin, {
     devServer: Boolean(process.env.ELECTRON_RENDERER_URL),
+    connect: connectGrants,
   });
+  installCertificatePinning();
   traceLifecycle(`page origin ${page.origin}`);
 
   if (ownsRuntime(development, process.env.ARMADRA_DESKTOP_OWNS_RUNTIME)) {
@@ -427,6 +441,9 @@ async function start(): Promise<void> {
   }
 
   publishEndpoints(await transportEndpoints());
+  // 源表里记着的远程服务与源：CSP 与证书钉扎在页面载入前就位。零配置时表里
+  // 只有本机，什么也不放行；读不到不挡窗口。
+  await refreshRemoteTrust((path, init) => coreSession.fetch(path, init));
   void loadRenderer(createMainWindow());
 }
 
