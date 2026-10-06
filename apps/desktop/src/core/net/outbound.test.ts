@@ -4,7 +4,12 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { NOT_DIALLED, OUTBOUND, isRegistered } from "./outbound";
+import {
+  NOT_DIALLED,
+  OUTBOUND,
+  SPAWNED_OUTBOUND,
+  isRegistered,
+} from "./outbound";
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -137,5 +142,32 @@ describe("出站地址表", () => {
     for (const literal of Object.keys(NOT_DIALLED)) {
       expect(isRegistered(literal)).toBe(true);
     }
+  });
+
+  it("core 起的联网子进程也登记：ACP 适配器安装的 npm（契约 §39.7）", () => {
+    expect(OUTBOUND.npmRegistry.url).toBe("https://registry.npmjs.org");
+    // 只在用户点安装时连，没有常开的后台流量。
+    expect(OUTBOUND.npmRegistry.switch).toBeNull();
+    expect(OUTBOUND.npmRegistry.defaultOn).toBe(false);
+    for (const [id, spawned] of Object.entries(SPAWNED_OUTBOUND)) {
+      const text = readFileSync(join(coreRoot, spawned!.file), "utf8");
+      expect(text, id).toContain(`OUTBOUND.${id}`);
+      expect(text, id).toContain(`"${spawned!.program}"`);
+    }
+  });
+
+  it("起 npm install 的源文件都在子进程登记里", () => {
+    const registered = new Set(
+      Object.values(SPAWNED_OUTBOUND).map((entry) => entry!.file),
+    );
+    const spawning: string[] = [];
+    for (const file of sources(coreRoot)) {
+      const text = readFileSync(file, "utf8");
+      if (/"install",\s*"--global"/.test(text)) {
+        spawning.push(relative(coreRoot, file).split("\\").join("/"));
+      }
+    }
+    expect(spawning.length).toBeGreaterThan(0);
+    for (const file of spawning) expect(registered, file).toContain(file);
   });
 });

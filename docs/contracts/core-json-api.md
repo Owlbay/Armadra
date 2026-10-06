@@ -2218,6 +2218,21 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 - `sources.remoteRemove`（§33.2）删一个本机已登记到的远程服务时，先按本节撤销（用的正是这一行的会话），再登出、删凭据、删行。
 - 审计 `cloud.revoke` 的详情加 `relayCleanup: "done" | "pending"`。服务器壳 CLI `cloud revoke` 撤销后读 `relayPending`，没删掉时如实输出「中继侧待清理」与码（JSON 输出的 `relayPending`）。
 
+### 31.5 追加：放弃中继侧清理
+
+> 远程服务删掉之后，欠着的中继侧清理没有会话可以再试；给一个只收本机账的出口。协议 minor 17。
+
+<!-- rpc:begin contract=§31.5 -->
+
+| procedure                     | kind     | input                | output | errors                                      | scope            | 自   | 原路径                                   |
+| ----------------------------- | -------- | -------------------- | ------ | ------------------------------------------- | ---------------- | ---- | ---------------------------------------- |
+| `identity.cloud.relayDismiss` | mutation | `{ issuer: string }` | `{}`   | `unauthenticated`、`forbidden`、`not_found` | `settings:write` | 1.17 | `POST /api/identity/cloud/relay-dismiss` |
+
+<!-- rpc:end -->
+
+- `relayDismiss { issuer }`：清掉本机记着的那条待清理（列 `relay_cleanup` 置空），不再去删中继侧的源记录，答 `{}`；不欠的答 `404 not_found`。中继侧那条源记录留在远程服务上，由它的 owner 在远程服务那边处理（个人中转里它已经连不上本机：本机的隧道已停、源私钥不再使用）。
+- 审计 `cloud.relayDismiss { issuer }`。
+
 ## 32. 隧道面：core 作为出站隧道客户端
 
 > 状态：实施契约（A3-2，实现 `core/relay/`；规格见平台实现规格 core 包 §4（docs/design/platform/core-packages.md））。中继一侧的线上行为见 [cloud-api.md](https://github.com/Owlbay/armadra-cloud/blob/main/docs/contracts/cloud-api.md) §7、§8，这里不另抄。
@@ -2406,7 +2421,22 @@ core 校验远程服务地址与指纹的写法时用具名码（状态均 400�
 - **存下来再复制**：秘密与邀请令牌只在创建时出现，所以整条链接存进 SecretStore 的 `armadra-share-links-<serviceId>`（`{ links: { [linkId]: { url, invitationId, workspaceId } } }`），不进 SQLite、日志与列表。`shareLinkUrl` 再取一次整条链接；本机没存着（别处建的、已失效的）答 `not_found`。
 - **`shareLinks`**：远程服务 `links.list?sourceId=<本机>` 的全部 `source_invite`，含历史；`state` 按 撤销 > 过期（`expiresAtMs <= 现在`）> 用尽（`uses >= maxUses`）> 生效 判；`copyable` 是本机还存着整条链接；`workspaceId` 来自本机存着的那份，没有时为空串；按创建时间倒序。不再生效、或远程服务上已经没有的，顺手删掉存着的整条链接；远程服务那边撤销的，本机那张邀请一并作废。本机没登记到它时答空表并清掉存着的。
 - **`shareLinkRevoke`**：远程服务撤链接（连同它名下的访客设备与经中继的连接）；远程服务上已经没有它照样成功。随后作废本机那张邀请、删存着的整条链接。
-- **删远程服务**（`remoteRemove`）时连同 `armadra-share-links-<serviceId>` 一起删。远程服务不提供改备注，没有对应的 procedure。
+- **删远程服务**（`remoteRemove`）时连同 `armadra-share-links-<serviceId>` 一起删。改备注见 §33.10。
+
+### 33.10 追加：分享链接改备注
+
+> 分享区里改一条链接的备注。协议 minor 17；远程服务一侧是 armadra-cloud 协议包 0.2.0 的 `links.update`（cloud-api §5）。
+
+<!-- rpc:begin contract=§33.10 -->
+
+| procedure                 | kind     | input                                                  | output                                                                                                                                                                                                                                                                           | errors                                                                                                                     | scope            | 自   | 原路径                                                |
+| ------------------------- | -------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------- | ---- | ----------------------------------------------------- |
+| `sources.shareLinkUpdate` | mutation | `{ serviceId: string, linkId: string, label: string }` | `{ link: { linkId: string, label: string, role: string, workspaceId: string, createdAtMs: integer, expiresAtMs: integer, uses: integer, maxUses: integer \| null, revokedAtMs: integer \| null, state: "active" \| "expired" \| "exhausted" \| "revoked", copyable: boolean } }` | `unauthenticated`、`forbidden`、`bad_request`、`not_found`、`source_unauthorized`、`source_unreachable`、`not_implemented` | `settings:write` | 1.17 | `PUT /api/sources/remotes/{serviceId}/links/{linkId}` |
+
+<!-- rpc:end -->
+
+- **`shareLinkUpdate { serviceId, linkId, label }`**：经远程服务 `links.update`（`PATCH <issuer>/v1/links/{linkId}`，要 owner）只改备注；`label` 去首尾空白，最长 128，空串清掉。答 `{ link }`，形状同 §33.9 的一行（状态与 `copyable` 按当时算，已撤销、过期的也能改）。本机存着的整条链接与邀请不动。
+- 远程服务的 `platform.info` 不报能力 `links.update` 时，core 先重问一次（远程服务可能升过级），仍没有就答 `501 not_implemented`，不发请求。远程服务上没有这条链接答 `404 not_found`；登录失效 `source_unauthorized`，连不上 `source_unreachable`。
 
 ## 34. RPC 内核：`/api/rpc/{procedure}`
 

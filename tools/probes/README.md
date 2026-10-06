@@ -6,11 +6,11 @@
 
 按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.d/` 的清单跑（一条一个文件 `<id>.json`，新增探针就新增一个文件）（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
-| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                                                                                         | 何时跑                              | 失败时       |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
-| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`realtime-e2e`、`ws-mux-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e`、`agent-e2e-self-test`（场景 11 / 12 的 `--self-test`） | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`server-e2e --proxy=caddy`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                              | `nightly.yml`                       | 开 issue     |
-| C   | `agent-e2e`（真 CLI 与额度，`ARMADRA_E2E_REAL=1`，见「C 档运行手册」）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                                                                      | 手动；清单在执行计划 §5             | 记进状态文档 |
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                                                                                                              | 何时跑                              | 失败时       |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`overlay-safe-area`、`realtime-e2e`、`ws-mux-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e`、`agent-e2e-self-test`（场景 11 / 12 的 `--self-test`） | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`server-e2e --proxy=caddy`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                                                   | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度，`ARMADRA_E2E_REAL=1`，见「C 档运行手册」）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                                                                                           | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`forge-panel`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`、`language-load`）是单项核验，本地按需手动跑；`relay-web-e2e` 要 armadra-cloud 的检出，也是本地手动跑（见「中继托管页面端到端」）。平台探针 `personal-roundtrip`、`multi-source`、`link-join`（A 档）与 `nat-core-offline`（B 档）同样要 armadra-cloud 的检出（CI 上记 skipped）；后两者与 `multi-source` 的中继在容器里（要 Docker），`pnpm platform:e2e` 一次跑完，共用件在 `platform-lib.mjs`。
 
@@ -84,6 +84,17 @@ node tools/probes/design-showcase.mjs [输出目录] [--only=tokens,acp] [--them
 矩阵：`ShowcaseApp.tsx` 登记的 14 个分区 × 深浅两套主题 × 1440×900 / 1024×768 / 390×844 三种视口，每张是 `showcase.html?theme=…&only=1#<分区>` 的整页截图，文件名 `<分区>-<主题>-<宽>.png`。另做五项核验：深浅主题各执行一次 `window.__showcaseContrast()`，按浏览器算出的颜色核算设计系统 §2.1–§2.5 的每一对（文字 4.5、图形 3），低于阈值即失败；`components` 分区按 Tab 走一遍，每个可聚焦元素都要命中 `:focus-visible` 且看得见焦点环（Radix 漫游焦点组的根按一个落点算）；`prefers-reduced-motion: reduce` 下 `canvas` 分区没有在跑的动画、隔 700ms 的两张图逐字节相同（额外存 `canvas-<主题>-1440-reduced-motion.png`）；`forced-colors: active` 下焦点仍有轮廓（额外存 `components-<主题>-1440-forced-colors.png`）；控制台 error 与未捕获异常算失败。`apps/web/dist/` 存在时（CI 先构建）顺带确认产物里没有展示页的文件与代码。
 
 产物默认在 `target/design-showcase/`：全部 PNG 与 `result.json`（分区、主题、视口、每张耗时、对比度表、Tab 结果、两项媒体模拟、控制台）。`--diff` 逐像素比较同名 PNG，差异超过 0.5% 的列进 `changed`，给改样式前后对照用。功能分区在实现包落地前是骨架占位；画布分区的节点体是静态内容（真终端要连 core）。没有验证：真实触屏、系统高对比主题本身（只模拟了 `forced-colors`）、Windows 与 Linux 上的字体渲染差异（CI 只在 Linux 跑）。
+
+## 浮层安全区
+
+设计系统 §3.1 的浮层部分：Popover / DropdownMenu / Select / Tooltip 的 `collisionPadding`（`apps/web/src/ui/safe-area.ts`）与 Dialog / Sheet 的让位。只起随机端口的 Vite 与新 profile 的无头 Chrome，`ARMADRA_DATA_DIR` 指到空临时目录，不起 core。
+
+```sh
+pnpm libs:build
+node tools/probes/overlay-safe-area.mjs [输出目录]
+```
+
+桌面 Chromium 的 `env(safe-area-inset-*)` 恒为 0，探针在根元素上写模拟的 `--safe-*` 与 `--window-controls-top`（iPad 窗口化 1180×820、手机横屏 844×390 两组），经 `src/showcase/overlay-probe.tsx` 把触发器钉在可用区域的四个角，量浮层外框是否整个落在安全区内；Select 有安全区时改用 popper；高 2000px 的对话框被限在安全区内；组件分区的右侧抽屉内边距等于安全区、关闭钮让开。另挂一遍 `collisionPadding={0}` 的对照，必须量出越界。产物 `target/overlay-safe-area/`：`result.json` 与对话框、抽屉截图。没有验证：真机上 `env()` 的取值与窗口控件的实际大小（由手机壳原生层给）。
 
 ## 连线拖拽成功率
 

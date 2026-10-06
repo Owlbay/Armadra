@@ -9,6 +9,8 @@ const rpc = vi.hoisted(() => ({
     shareLinkCreate: vi.fn(),
     shareLinkUrl: vi.fn(),
     shareLinkRevoke: vi.fn(),
+    shareLinkUpdate: vi.fn(),
+    update: vi.fn(),
   },
   identity: {
     cloud: {
@@ -17,6 +19,7 @@ const rpc = vi.hoisted(() => ({
       revoke: vi.fn(),
       relayPending: vi.fn(),
       relayCleanup: vi.fn(),
+      relayDismiss: vi.fn(),
     },
   },
 }));
@@ -42,6 +45,11 @@ import { RuntimeRequestError } from "./request";
 import {
   addPersonalRelay,
   createShareLink,
+  dismissRelayCleanup,
+  renameShareLink,
+  reorderSources,
+  shareViaShell,
+  shellCanShare,
   isPairLink,
   listShareLinks,
   presentedFingerprint,
@@ -286,5 +294,58 @@ describe("停用分享与中继侧清理（契约 §31.4）", () => {
     expect(rpc.identity.cloud.relayCleanup).toHaveBeenCalledWith({
       issuer: ISSUER,
     });
+  });
+});
+
+describe("分享收尾（契约 §31.5、§33.10）", () => {
+  afterEach(() => {
+    delete (window as { armadra?: unknown }).armadra;
+  });
+
+  it("放弃清理与改备注都经本机 core；备注去首尾空白、截到 128", async () => {
+    rpc.identity.cloud.relayDismiss.mockResolvedValue({});
+    await dismissRelayCleanup(ISSUER);
+    expect(rpc.identity.cloud.relayDismiss).toHaveBeenCalledWith({
+      issuer: ISSUER,
+    });
+    const link = { linkId: "L", label: "评审" };
+    rpc.sources.shareLinkUpdate.mockResolvedValue({ link });
+    await expect(renameShareLink("svc", "L", "  评审 ")).resolves.toEqual(link);
+    await renameShareLink("svc", "L", "x".repeat(200));
+    expect(rpc.sources.shareLinkUpdate.mock.calls).toEqual([
+      [{ serviceId: "svc", linkId: "L", label: "评审" }],
+      [{ serviceId: "svc", linkId: "L", label: "x".repeat(128) }],
+    ]);
+  });
+
+  it("排序按位置编号 1、2、3 逐行写回", async () => {
+    rpc.sources.update.mockResolvedValue({});
+    await reorderSources(["b", "a", "c"]);
+    expect(rpc.sources.update.mock.calls).toEqual([
+      [{ sourceId: "b", orderIndex: 1 }],
+      [{ sourceId: "a", orderIndex: 2 }],
+      [{ sourceId: "c", orderIndex: 3 }],
+    ]);
+  });
+
+  it("系统分享：没有壳答 false；壳拒了或抛错也答 false", async () => {
+    expect(shellCanShare()).toBe(false);
+    expect(await shareViaShell("t", "https://a.test/j/L#s")).toBe(false);
+    const url = vi.fn(async () => ({ shared: true }));
+    (window as { armadra?: unknown }).armadra = {
+      share: { available: true, url },
+    };
+    expect(shellCanShare()).toBe(true);
+    expect(await shareViaShell("t", "https://a.test/j/L#s")).toBe(true);
+    expect(url).toHaveBeenCalledWith({
+      title: "t",
+      url: "https://a.test/j/L#s",
+    });
+    url.mockRejectedValueOnce(new Error("x"));
+    expect(await shareViaShell("t", "https://a.test/j/L#s")).toBe(false);
+    (window as { armadra?: unknown }).armadra = {
+      share: { available: false, url },
+    };
+    expect(shellCanShare()).toBe(false);
   });
 });

@@ -676,8 +676,9 @@ export function EditorNode({ id, node, selected }: NodeBodyProps) {
               variant="secondary"
               size="sm"
               onClick={() => {
-                // 经 `fetch` 取回再存：桌面壳与原生 App 的凭据只跟着 `fetch`
-                // 走（契约 §3.2），一个直接的链接在那两处是 401。
+                // 经 `fetch` 取：桌面壳与原生 App 的凭据只跟着 `fetch` 走
+                // （契约 §3.2），一个直接的链接在那两处是 401。能流就流，见
+                // `downloadRuntimeFile`。
                 void downloadRuntimeFile(
                   runtimeApi.fileDownloadUrl(workspaceId, path),
                   state.info.name,

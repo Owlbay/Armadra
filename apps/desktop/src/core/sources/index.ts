@@ -166,6 +166,8 @@ export function install(
     remote,
     access: (serviceId) => service.remoteEndpoint(serviceId),
     issuerOf: (serviceId) => service.remoteIssuer(serviceId),
+    capabilities: (serviceId, options) =>
+      service.remoteCapabilities(serviceId, options),
     registrations: () => {
       const cloud = cloudDomain();
       return cloud === undefined
@@ -202,6 +204,7 @@ export function install(
     shareLinks: (input) => shareLinks.list(input.serviceId),
     shareLinkCreate: (input) => shareLinks.create(input),
     shareLinkUrl: (input) => shareLinks.url(input.serviceId, input.linkId),
+    shareLinkUpdate: (input) => shareLinks.updateLabel(input),
     shareLinkRevoke: (input) =>
       shareLinks.revoke(input.serviceId, input.linkId),
   } satisfies DomainHandlers<"sources">;

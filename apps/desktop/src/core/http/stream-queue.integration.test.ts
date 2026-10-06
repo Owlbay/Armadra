@@ -135,6 +135,56 @@ describe("a slow client over a real socket", () => {
     expect(client.readyState).toBe(WebSocket.OPEN);
   });
 
+  it("coalesce with settled: an encoder that waits for its ack stalls with the client", async () => {
+    // The browser screencast: Chromium encodes the next frame only after the
+    // last one is acknowledged, and the ack waits for `settled`.
+    const FRAME = 256 * 1024;
+    let encoded = 0;
+    let stop = false;
+    const connect = await listen(
+      "/api/workspaces/{workspaceId}/browser/{nodeId}/stream",
+      (connection) => {
+        const queue = new SendQueue(wsTarget(connection), {
+          policy: "coalesce",
+          maxFrames: 4,
+          highWaterBytes: 2 * 1024 * 1024,
+        });
+        const encode = (): void => {
+          if (stop) return;
+          encoded += 1;
+          const header = JSON.stringify({ type: "frame", seq: encoded });
+          queue.push([header, Buffer.alloc(FRAME, 1)], "node", () =>
+            setImmediate(encode),
+          );
+        };
+        connection.on("close", () => {
+          stop = true;
+          queue.close();
+        });
+        setImmediate(encode);
+      },
+    );
+    const client = await connect("/api/workspaces/w/browser/n/stream");
+    let received = 0;
+    client.on("message", (_data: Buffer, isBinary: boolean) => {
+      if (isBinary) received += 1;
+    });
+    await sleep(100);
+    tcp(client).pause();
+    await sleep(100);
+    const stuckAt = encoded;
+    await sleep(400);
+    // Nobody is reading, so nothing more is encoded once the socket stalls.
+    expect(encoded - stuckAt).toBeLessThanOrEqual(1);
+    tcp(client).resume();
+    for (let tries = 0; tries < 200 && encoded <= stuckAt + 1; tries += 1) {
+      await sleep(25);
+    }
+    expect(encoded).toBeGreaterThan(stuckAt + 1);
+    expect(received).toBeGreaterThan(0);
+    stop = true;
+  });
+
   it("drop-oldest: the event stream keeps the newest frames and the connection", async () => {
     const stream = new WorkspaceEventStream();
     let release: (() => void) | undefined;

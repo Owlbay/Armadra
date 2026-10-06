@@ -52,8 +52,13 @@ export interface ViewerSocket {
    * One screencast frame: the JSON header and the JPEG it describes, which
    * must travel together. A socket with a send queue keeps only the newest
    * pair when it falls behind; without this, the two `send`s are the frame.
+   *
+   * `sent` is called once the pair has been written to the socket, or has
+   * been dropped for a newer one. The frame's ack to Chromium waits for it,
+   * so a viewer that cannot keep up slows the encoder down instead of making
+   * it encode frames that are thrown away (backpressure).
    */
-  sendFrame?(header: string, jpeg: Buffer): void;
+  sendFrame?(header: string, jpeg: Buffer, sent?: () => void): void;
   close(code?: number, reason?: string): void;
 }
 
@@ -637,24 +642,33 @@ export class HeadlessNode {
     };
     // The ack is not optional: Chromium sends the next frame only after the
     // previous one is acknowledged, so a missed ack is a stream that stops.
-    if (typeof frame.sessionId === "number") {
+    // It is also the only brake there is: a viewer with a send queue gets it
+    // back only once the frame is on the wire (or dropped for a newer one).
+    let acked = false;
+    const ack = (): void => {
+      if (acked || typeof frame.sessionId !== "number") return;
+      acked = true;
       void this.raw(
         "Page.screencastFrameAck",
         { sessionId: frame.sessionId },
         sessionId,
       ).catch(() => undefined);
-    }
+    };
     const viewer = this.viewer;
-    if (viewer === undefined || typeof frame.data !== "string") return;
+    if (viewer === undefined || typeof frame.data !== "string") {
+      ack();
+      return;
+    }
     const bytes = Buffer.from(frame.data, "base64");
     this.frames += 1;
     const header = JSON.stringify(
       frameHeader(this.frames, frame.metadata, this.viewport, bytes.length),
     );
     if (viewer.sendFrame !== undefined) {
-      viewer.sendFrame(header, bytes);
+      viewer.sendFrame(header, bytes, ack);
       return;
     }
+    ack();
     viewer.send(header);
     viewer.send(bytes);
   }

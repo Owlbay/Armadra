@@ -213,6 +213,13 @@ export const IPC = {
   sourcesTakeJoinLink: spec("app:take-join-link", "invoke", "window"),
 
   /**
+   * 分享链接交给系统分享菜单（macOS `ShareMenu`）：`{ title, url }`，答
+   * `{ shared }`。平台没有菜单或请求不像样答 `false`，页面退回复制
+   * （`main/share.ts`）。
+   */
+  appShare: spec("app:share", "invoke", "window"),
+
+  /**
    * 页面的一条 JS 错误（G5-19，契约 §30）：`{ kind, name, message, stack }`，
    * 页面已剥离过。主进程按 `diagnostics.reportPageErrors` 与 DSN 再判、限流、
    * 再剥离，才交给 `@sentry/electron`（`ipcMode` 仍是 0，SDK 不开渲染进程通道）。
@@ -261,6 +268,7 @@ export const IMPLEMENTED_CHANNELS: readonly string[] = [
   IPC.gatewayRefresh.channel,
   IPC.sourcesChanged.channel,
   IPC.sourcesTakeJoinLink.channel,
+  IPC.appShare.channel,
   IPC.diagnosticsReport.channel,
 ];
 
