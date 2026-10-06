@@ -313,7 +313,7 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 | `POST …/presence`              | 心跳：`{ "clientId", "deviceName"?, "active"? }`，登记或续期，回 §9.4 的快照 |
 | `DELETE …/presence/{clientId}` | 离开（切走画布、关页面）；没登记过的客户端离开也是 200                       |
 
-- 页面每 10 秒心跳一次；**30 秒**没有心跳算断开，从表里摘掉。
+- 页面的心跳由控制面上的订阅 `boards.presence` 承担（§36.4，core 每 10 秒替页面续期；取消订阅或断线即离开）；`active` 与「立刻问一次谁拿着租约」仍用 `POST …/presence`。**30 秒**没有心跳算断开，从表里摘掉。
 - `active` 是「自上次心跳以来有没有被人操作过」，core 据此判断持有者是否空闲。
 - 权限：心跳与离开只要 `canvas:read`（只读的客户端也要让别人看见自己）。
 - 心跳的回答在 §9.4 的快照之外多一个 `writable`：发这次心跳的人有没有这块工作空间的 `canvas:write`，每次现判。为假时这个客户端照样登记在线，但**不会**拿到租约（下面的自动规则只在能写的客户端之间分），手里已有的租约也在这一拍交出，页面据此把画布当只读。事件里没有这个字段。
@@ -2454,3 +2454,70 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 - 每个订阅在 core 里有一个有界队列（1024 项），连接的发送缓冲超过 1 MiB 时排队，按契约里的 `backpressure`：`drop-oldest` 丢最旧；`coalesce` 同一个键只留最新；`resubscribe` 停止从实现里取（补发因此停在原处），实时的一段攒在实现自己的有界缓冲里，满了就把已攒的发完、以 `overflow` 结束订阅，客户端带 `lastEventId` 重订，缺口由 outbox 补发。
 - `workspaces.events` 是 `resubscribe`。
 - 数据面不在这条连接上：终端照旧 64 KiB 合帧，发送缓冲超过 4 MiB 时暂停读 PTY（§3.4）。
+
+## 36. 画布：`boards.*`
+
+> 状态：实施契约（E3-1，工程规范化包 §3）。画布列表、文档的读与存、在线设备与编辑租约、实时状态迁到契约上；形状表由 `tools/contract/generate.mjs` 生成。旧路径（表里「原路径」列）与 `POST /api/rpc/boards/<动词>` 由同一份实现回答，失败的码与原话一致（旧路径 `{ code, message }`，procedure 多一个 `requestId`）；只有入参形状不对时，契约的 schema 先于域拒绝，码与状态相同，原话是字段路径。旧路径在下一个 minor 删除（E4）。
+
+留在 REST / 数据面的：实时协同的同步流 `WS …/boards/{boardId}/sync`（§16.1，Yjs 连接不动）、评论 `…/comments`（§16.3）、节点的上下文连线 `PUT …/context-links/{nodeId}`、整板导出与资源上传。
+
+### 36.1 列表与板记录
+
+`list`、`create`、`update`、`delete`。名字去空白后 1–120 个字符；`sortOrder` 为 `null` 与缺席同义；工作空间里最后一块板删不掉（`409 conflict`）。
+
+<!-- rpc:begin contract=§36.1 -->
+
+| procedure       | kind     | input                                                                                 | output                                                                                                                                                                                | errors                                      | scope          | 自  | 原路径                                                  |
+| --------------- | -------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | -------------- | --- | ------------------------------------------------------- |
+| `boards.list`   | query    | `{ workspaceId: string }`                                                             | `{ id: string, workspaceId: string, name: string, sortOrder: integer, viewport: { x: number, y: number, zoom: number }, whiteboard: string, createdAt: string, updatedAt: string }[]` | `unauthenticated`、`forbidden`、`not_found` | `canvas:read`  | 1.4 | `GET /api/workspaces/{workspaceId}/boards`              |
+| `boards.create` | mutation | `{ workspaceId: string, name: string }`                                               | `{ id: string, workspaceId: string, name: string, sortOrder: integer, viewport: { x: number, y: number, zoom: number }, whiteboard: string, createdAt: string, updatedAt: string }`   | `bad_request`、`forbidden`、`not_found`     | `canvas:write` | 1.4 | `POST /api/workspaces/{workspaceId}/boards`             |
+| `boards.update` | mutation | `{ workspaceId: string, boardId: string, name?: string, sortOrder?: number \| null }` | `{ id: string, workspaceId: string, name: string, sortOrder: integer, viewport: { x: number, y: number, zoom: number }, whiteboard: string, createdAt: string, updatedAt: string }`   | `bad_request`、`forbidden`、`not_found`     | `canvas:write` | 1.4 | `PATCH /api/workspaces/{workspaceId}/boards/{boardId}`  |
+| `boards.delete` | mutation | `{ workspaceId: string, boardId: string }`                                            | 无                                                                                                                                                                                    | `forbidden`、`not_found`、`conflict`        | `canvas:write` | 1.4 | `DELETE /api/workspaces/{workspaceId}/boards/{boardId}` |
+
+<!-- rpc:end -->
+
+### 36.2 文档的读与存
+
+形状见 §3.1 的文档与 §6.1 的白板快照。`save` 的入参是「已知字段 + 透传」：节点、连线、视口的语义检查（节点类型与数据种类一致、连线两端存在、白板快照大小）仍在域里，已退役的 `kanban` 字段走到域里被拒（`400 bad_request`）。顺序：租约（§9.3，别人持有答 `423 canvas_lease_held`）先于 CAS（`expectedUpdatedAt` 旧了答 `409 conflict`）；实时板上带 `clientId` 的保存答 `409 realtime_active`（§16.2）。
+
+<!-- rpc:begin contract=§36.2 -->
+
+| procedure     | kind     | input                                                                                                                                                                                                                       | output                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | errors                                                                                      | scope          | 自  | 原路径                                                        |
+| ------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | -------------- | --- | ------------------------------------------------------------- |
+| `boards.load` | query    | `{ workspaceId: string, boardId: string }`                                                                                                                                                                                  | `{ board: { id: string, workspaceId: string, name: string, sortOrder: integer, viewport: {…}, whiteboard: string, createdAt: string, updatedAt: string }, nodes: { id: string, boardId: string, type: string, title: string, color: string, position: {…}, size?: {…}, collapsed?: boolean, expandedHeight?: number, parentId?: string, labels: string[], note: string, data: JSON, createdAt: string, updatedAt: string }[], edges: { id: string, boardId: string, source: string, target: string, kind: string, role?: string, createdAt: string, updatedAt: string }[] }` | `forbidden`、`not_found`                                                                    | `canvas:read`  | 1.4 | `GET /api/workspaces/{workspaceId}/boards/{boardId}/document` |
+| `boards.save` | mutation | `{ workspaceId: string, boardId: string, expectedUpdatedAt: string, nodes: Record<string, JSON>[], edges: Record<string, JSON>[], viewport: Record<string, JSON>, whiteboard?: string \| null, clientId?: string \| null }` | `{ board: { id: string, workspaceId: string, name: string, sortOrder: integer, viewport: {…}, whiteboard: string, createdAt: string, updatedAt: string }, nodes: { id: string, boardId: string, type: string, title: string, color: string, position: {…}, size?: {…}, collapsed?: boolean, expandedHeight?: number, parentId?: string, labels: string[], note: string, data: JSON, createdAt: string, updatedAt: string }[], edges: { id: string, boardId: string, source: string, target: string, kind: string, role?: string, createdAt: string, updatedAt: string }[] }` | `bad_request`、`forbidden`、`not_found`、`conflict`、`canvas_lease_held`、`realtime_active` | `canvas:write` | 1.4 | `PUT /api/workspaces/{workspaceId}/boards/{boardId}/document` |
+
+<!-- rpc:end -->
+
+### 36.3 实时状态
+
+`realtime` 答这块板走不走实时协同（§16.2）；页面据此选 `…/sync` 还是租约 + CAS。这个域没装时答 `501 not_implemented`。
+
+<!-- rpc:begin contract=§36.3 -->
+
+| procedure         | kind  | input                                      | output                                                               | errors                                      | scope         | 自  | 原路径                                                        |
+| ----------------- | ----- | ------------------------------------------ | -------------------------------------------------------------------- | ------------------------------------------- | ------------- | --- | ------------------------------------------------------------- |
+| `boards.realtime` | query | `{ workspaceId: string, boardId: string }` | `{ realtime: boolean, materializedSeq: integer, enabled?: boolean }` | `forbidden`、`not_found`、`not_implemented` | `canvas:read` | 1.4 | `GET /api/workspaces/{workspaceId}/boards/{boardId}/realtime` |
+
+<!-- rpc:end -->
+
+### 36.4 在线设备、租约与 `boards.presence`
+
+在线表与租约的规则同 §9，只换了线：
+
+- `heartbeat`、`leave`、`acquireLease` 是 §9.1–§9.2 的 procedure 形式，回答的快照形状同 §9.4（`writable` 与 `deviceKey` 因人而异，只在回答里）。
+- **`boards.presence` 是订阅**，只经控制面 `/api/ws`（§35）：订上就是登记（同一次心跳），连接着的时候 core 每 10 秒替页面续期（续期不带 `active`，所以开着没人动的窗口不会一直占着租约；「刚被操作过」仍由页面经 `heartbeat` 报），订阅结束（取消、断线）就是离开，不必等 30 秒的心跳过期；同一个 `clientId` 开着多条订阅时，最后一条走了才算离开。
+- 每一项是**这个客户端看到的**在线表：先发订上时的那份，之后这块板的在线表或租约变了（有人来、有人走、租约换手、授权变化的复判）就发一项；只有 `lastSeenAt` 变了的续期不发。`writable` 与 `deviceKey` 因人而异，所以订阅的每一项都带（`canvas.presence` 事件里没有）。
+- 背压 `drop-oldest`：每一项是整份快照，丢旧的留新的。订阅断了由页面按退避重订，重订就是一次新的登记。
+- 订阅开始之前判先决条件（没有这块板 `not_found`、`clientId` 不合字符集 `bad_request`），拒绝是这次调用的错误。授权被收回（撤销共享、停用账号）时订阅以 `forbidden` 结束，也不会再替一个被收权的人续期。
+
+<!-- rpc:begin contract=§36.4 -->
+
+| procedure             | kind         | input                                                                                                 | output                                                                                                                                                                                                                                                         | errors                                                               | scope          | 自  | 原路径                                                                      |
+| --------------------- | ------------ | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------- | --- | --------------------------------------------------------------------------- |
+| `boards.heartbeat`    | mutation     | `{ workspaceId: string, boardId: string, clientId: string, deviceName?: string, active?: boolean }`   | `{ boardId: string, clients: { clientId: string, deviceName: string, deviceKey: string, lastSeenAt: string }[], lease: { clientId: string, deviceName: string, deviceKey: string, acquiredAt: string } \| null, writable?: boolean, deviceKey?: string }`      | `bad_request`、`forbidden`、`not_found`                              | `canvas:read`  | 1.4 | `POST /api/workspaces/{workspaceId}/boards/{boardId}/presence`              |
+| `boards.leave`        | mutation     | `{ workspaceId: string, boardId: string, clientId: string }`                                          | `{ boardId: string, clients: { clientId: string, deviceName: string, deviceKey: string, lastSeenAt: string }[], lease: { clientId: string, deviceName: string, deviceKey: string, acquiredAt: string } \| null, writable?: boolean, deviceKey?: string }`      | `bad_request`、`forbidden`、`not_found`                              | `canvas:read`  | 1.4 | `DELETE /api/workspaces/{workspaceId}/boards/{boardId}/presence/{clientId}` |
+| `boards.acquireLease` | mutation     | `{ workspaceId: string, boardId: string, clientId: string, deviceName?: string, takeover?: boolean }` | `{ boardId: string, clients: { clientId: string, deviceName: string, deviceKey: string, lastSeenAt: string }[], lease: { clientId: string, deviceName: string, deviceKey: string, acquiredAt: string } \| null, writable?: boolean, deviceKey?: string }`      | `bad_request`、`forbidden`、`not_found`、`canvas_lease_held`         | `canvas:write` | 1.4 | `POST /api/workspaces/{workspaceId}/boards/{boardId}/lease`                 |
+| `boards.presence`     | subscription | `{ workspaceId: string, boardId: string, clientId: string, deviceName?: string }`                     | 迭代 `{ boardId: string, clients: { clientId: string, deviceName: string, deviceKey: string, lastSeenAt: string }[], lease: { clientId: string, deviceName: string, deviceKey: string, acquiredAt: string } \| null, writable?: boolean, deviceKey?: string }` | `bad_request`、`forbidden`、`not_found`、`overflow`、`limit_reached` | `canvas:read`  | 1.4 | —                                                                           |
+
+<!-- rpc:end -->
