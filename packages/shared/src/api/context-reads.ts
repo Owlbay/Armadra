@@ -12,22 +12,27 @@ import { z } from "zod";
  * 正文再抄一份到这里等于把刚刚限流过的东西又发一次。
  */
 export const contextReadSchema = z.object({
-  /** 读的那个节点。它可能已经被删掉，所以名字是另一列。 */
+  id: z.string(),
+  /** 读的那个节点。它可能已经被删掉，所以名字是另外两列。 */
   readerNodeId: z.string(),
-  /** 读的时候它的名字（§2）；从来没起过名字就是 `null`。 */
-  readerName: z.string().nullable().default(null),
+  /** 读的时候它的句柄（§2）；没有就缺省。 */
+  readerHandle: z.string().optional(),
+  /** 读的时候它的标题；没有就缺省。 */
+  readerTitle: z.string().optional(),
   /** 用的哪个动词（`context summary`、`context read` …）。 */
   verb: z.string(),
   /** 这一次实际读走多少字节，受读取预算约束。 */
-  bytes: z.number().int().nonnegative().default(0),
+  bytes: z.number().nonnegative().default(0),
   /** Unix 毫秒。 */
-  atMs: z.number().int().nonnegative().default(0),
+  atMs: z.number().nonnegative().default(0),
 });
 
+/** 线上形状以契约为准（`docs/contracts/core-json-api.md` §7）：最近几条叫 `reads`。 */
 export const contextReadsResponseSchema = z.object({
-  /** 全部次数，不只是 `recent` 里那几条。 */
+  /** 全部次数，不只是 `reads` 里那几条。 */
   total: z.number().int().nonnegative().default(0),
-  recent: z.array(contextReadSchema).default([]),
+  bytes: z.number().nonnegative().default(0),
+  reads: z.array(contextReadSchema).default([]),
 });
 
 export type ContextRead = z.infer<typeof contextReadSchema>;
