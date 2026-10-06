@@ -145,9 +145,13 @@ describe("workspaces.events", () => {
       { "last-event-id": resumeFrom ?? "" },
     );
     publish(core, "6");
+    // 「6」可能在订阅之前就发了（进补发），也可能之后（走实时）：等齐五个事件
+    // 与那一帧位置帧。
     const replayed = await back.until(
       resumed.id,
-      (list) => nodes(list).length >= 5,
+      (list) =>
+        nodes(list).length >= 5 &&
+        list.some((item) => (item.data as { type?: string }).type === "cursor"),
     );
     expect(nodes(replayed)).toEqual(["2", "3", "4", "5", "6"]);
     const all = await steady.until(
