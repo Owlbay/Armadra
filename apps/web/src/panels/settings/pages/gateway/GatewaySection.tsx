@@ -19,11 +19,11 @@ import {
   gatewayApi,
   notifyShellGatewayChanged,
 } from "../../../../api/gateway";
+import { onIdentitySessionChange } from "../../../../api/identity";
 import {
   listIdentityDevices,
-  onIdentitySessionChange,
   revokeIdentityDevice,
-} from "../../../../api/identity";
+} from "../../../../api/security";
 import { GatewayDevices, type GatewayDevice } from "./GatewayDevices";
 import { GatewayPanel } from "./GatewayPanel";
 
