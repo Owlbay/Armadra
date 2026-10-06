@@ -5,6 +5,7 @@ import {
   AddMenuContent,
 } from "../canvas/menus/AddMenuContent";
 import { DockTools } from "./DockTools";
+import { useCanCreateBrowser } from "@/nodes/browser/availability";
 import { CommentModeButton } from "@/realtime/comments/CommentLayer";
 import { setCanvasLocked, useCanvasLocked } from "../canvas/canvas-lock";
 import { useMenuTooltip } from "./menu-tooltip";
@@ -66,6 +67,12 @@ export function Dock() {
   const canRedo = useCanRedo();
   const agents = useEnabledAgents();
   const addMenu = useMenuTooltip();
+  // 「新建浏览器」要看 core 带不带浏览器，答案是一次网络往返。在 Dock 挂上时就
+  // 问，菜单第一次展开时项已经齐了。等到展开才问的话，答案回来时菜单长高一行：
+  // 它向上展开、按展开那一刻的高度定位，要等下一次重新定位才挪开（后台标签页里
+  // 不会挪），这期间底边盖住 `+`，按住再松开就落在底部那一项上——Radix 的菜单
+  // 在松开处选中。
+  useCanCreateBrowser();
 
   if (!workspace) return null;
 

@@ -15,6 +15,12 @@
 // 订阅事件带 outbox 序号作 id。真相是 outbox 本身：只读打开 core 的库，读这块
 // 工作空间的全部序号。
 //
+// 只算页面当前那条连接上的帧。断网模拟期间 Chrome 不关已有的 WebSocket，只把
+// 帧扣着；心跳在断网中途判定旧连接死了、页面另开一条之后，恢复网络时 Chrome
+// 会把扣着的帧补报在**已被页面丢掉**的旧连接上。页面（`sources/managed-socket.ts`
+// 按代数丢弃旧连接的消息）不处理它们，续订的新连接才是页面真正收的那份；把
+// 旧连接上的也算进来，就会把同一段事件数两遍。这些帧单独记在 `stale` 里。
+//
 // 用法（仓库根目录）：
 //   pnpm libs:build && pnpm --filter @armadra/desktop build
 //   node tools/probes/ws-mux-e2e.mjs [输出目录]
@@ -42,6 +48,8 @@ mkdirSync(output, { recursive: true });
 
 const OFFLINE_MS = Number(process.env.WS_MUX_OFFLINE_MS ?? 30_000);
 const FOREGROUND_BUDGET_MS = 3_000;
+/** 页面的心跳周期（`apps/web/src/api/ws.ts` 的 `PING_INTERVAL_MS`）。 */
+const HEARTBEAT_MS = 30_000;
 
 /** 页面里把 `document.visibilityState` 换成探针能拨的开关。 */
 const VISIBILITY_SWITCH = `
@@ -66,18 +74,31 @@ async function setHidden(page, hidden) {
 }
 
 /**
- * 一台设备收到的控制面事件：经 CDP 看这一页所有 `/api/ws` 连接上的帧。
+ * 一台设备收到的控制面事件：经 CDP 看这一页 `/api/ws` 连接上的帧。
  * 每个带 id 的订阅项记一次；位置帧单独记（它的 id 是订上那一刻的位置）。
+ * 页面任一时刻只听最新开的那条：更早那些连接上的帧记进 `stale`，不算收到。
  */
 function watchFrames(stack, page) {
   const sockets = new Map();
-  const seen = { events: [], cursors: [], opened: 0, closed: 0 };
+  let current = null;
+  const seen = {
+    events: [],
+    cursors: [],
+    stale: [],
+    opened: 0,
+    openedAt: 0,
+    closed: 0,
+  };
   stack.browser.on((message) => {
     if (message.sessionId !== page.sessionId) return;
     const params = message.params ?? {};
     if (message.method === "Network.webSocketCreated") {
       sockets.set(params.requestId, params.url);
-      if (String(params.url).includes("/api/ws")) seen.opened += 1;
+      if (String(params.url).includes("/api/ws")) {
+        seen.opened += 1;
+        seen.openedAt = Date.now();
+        current = params.requestId;
+      }
       return;
     }
     if (message.method === "Network.webSocketClosed") {
@@ -98,7 +119,8 @@ function watchFrames(stack, page) {
     if (id === undefined) return;
     const data = frame.p.d?.json;
     const entry = { id: Number(id), type: data?.type, at: Date.now() };
-    if (data?.type === "cursor") seen.cursors.push(entry);
+    if (params.requestId !== current) seen.stale.push(entry);
+    else if (data?.type === "cursor") seen.cursors.push(entry);
     else seen.events.push(entry);
   });
   return seen;
@@ -127,7 +149,13 @@ function coverage(seen, truth) {
   const have = new Set(got);
   const missing = expected.filter((seq) => !have.has(seq));
   const duplicates = got.length - have.size;
-  return { start, expected: expected.length, missing, duplicates };
+  return {
+    start,
+    expected: expected.length,
+    missing,
+    duplicates,
+    stale: seen.stale.length,
+  };
 }
 
 const report = { status: "failed", output, scenarios: [] };
@@ -224,6 +252,10 @@ try {
   run.ok("从杀掉到两台补齐", `${Date.now() - killedAt} ms（含 3 秒停机）`);
 
   /* ----------------------------- 3. 断网 30 秒 ---------------------------- */
+  // 页面可见时每 30 秒探一次活（`api/ws.ts`）。让 b 的连接先开够半个周期再断网，
+  // 心跳就一定落在断网中途：页面判定旧连接已死、另开连接，恢复后续订补齐——
+  // 这条路径每次都走到，不再看重启那一步碰巧在什么时刻重连上。
+  await sleep(Math.max(0, HEARTBEAT_MS / 2 - (Date.now() - b.seen.openedAt)));
   await b.page.call("Network.emulateNetworkConditions", {
     offline: true,
     latency: 0,
@@ -232,6 +264,7 @@ try {
   });
   const offlineAt = Date.now();
   const before = b.seen.events.length;
+  const openedBefore = b.seen.opened;
   for (let round = 0; round < 3; round += 1) {
     await sleep(OFFLINE_MS / 4);
     await publish(2);
@@ -250,6 +283,7 @@ try {
   run.ok("断网恢复到补齐", {
     ms: Date.now() - onlineAt,
     framesDuringOffline: duringOffline,
+    connectionsDuringOffline: b.seen.opened - openedBefore,
   });
   await allCaughtUp("a 照常收齐", [a], 5_000);
   for (const device of devices) {

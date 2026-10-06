@@ -564,6 +564,16 @@ await h.run(async () => {
   }
   report.memberForbidden = tally;
   report.memberErrors = opened.errors;
+  // 现场：被拒的正文（门拒的是 CSRF 还是权限）与这一段的接口顺序。
+  report.memberForbiddenBodies = await Promise.all(
+    opened.responses
+      .filter((answer) => answer.status === 403)
+      .map(async (answer) => ({
+        url: answer.url,
+        body: await member.bodyOf(answer.requestId),
+      })),
+  );
+  report.memberTrafficOnOpen = member.traffic.slice(-120);
   const bannerText = () =>
     member.evaluate(`
       return [...document.querySelectorAll("[data-sonner-toast], [role=alert]")]
@@ -963,8 +973,69 @@ await h.run(async () => {
     );
     return;
   }
-  await admin.click('[data-slot="dock"] button', "新建");
-  await admin.click('[role="menuitem"]', "新建浏览器");
+  // 现场：菜单开过没有、谁拿走了焦点、指针落在哪。
+  await admin.evaluate(`
+    const t0 = performance.now();
+    const log = (window.__probeMenuLog = []);
+    const name = (node) => node instanceof Element
+      ? node.tagName.toLowerCase() + (node.getAttribute("role") ? "[" + node.getAttribute("role") + "]" : "") + (node.getAttribute("aria-label") ? "「" + node.getAttribute("aria-label") + "」" : "") + (node.getAttribute("data-slot") ? "{" + node.getAttribute("data-slot") + "}" : "")
+      : String(node);
+    const at = () => Math.round(performance.now() - t0);
+    for (const type of ["pointerdown", "pointerup", "click", "focusin", "keydown"])
+      document.addEventListener(type, (event) => log.push([at(), type, name(event.target)]), true);
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes)
+          if (node instanceof Element && (node.matches('[role="menu"]') || node.querySelector('[role="menu"]'))) log.push([at(), "menu+"]);
+        for (const node of record.removedNodes)
+          if (node instanceof Element && (node.matches('[role="menu"]') || node.querySelector('[role="menu"]'))) log.push([at(), "menu-"]);
+        if (record.type === "attributes" && record.target.matches?.('[data-slot="dock"] button[aria-haspopup]'))
+          log.push([at(), "trigger", record.target.getAttribute("data-state")]);
+      }
+    }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-state"] });
+    return true;
+  `);
+  // 像人一样按住一会儿再松开（CI 上 CDP 两次往返之间本来就隔着一两百毫秒）：
+  // 菜单要是展开时盖住了 `+`，松开的那一下会选中底下那一项。
+  {
+    const plus = await admin.locate('[data-slot="dock"] button', "新建");
+    const mouse = (type, extra = {}) =>
+      admin.call("Input.dispatchMouseEvent", {
+        type,
+        x: plus.x,
+        y: plus.y,
+        button: "left",
+        clickCount: 1,
+        pointerType: "mouse",
+        ...extra,
+      });
+    await mouse("mouseMoved", { button: "none", buttons: 0 });
+    await mouse("mousePressed", { buttons: 1 });
+    await sleep(200);
+    await mouse("mouseReleased", { buttons: 0 });
+    await sleep(250);
+  }
+  await admin.click('[role="menuitem"]', "新建浏览器").catch(async (error) => {
+    // 现场：菜单开没开、开了列的是什么、页面在不在前台、health 问到没有。
+    await admin.capture("11-admin-add-menu-failed");
+    report.addMenuFailure = {
+      page: await admin
+        .evaluate(
+          `return {
+            visibility: document.visibilityState,
+            focused: document.hasFocus(),
+            menus: document.querySelectorAll('[role="menu"]').length,
+            items: [...document.querySelectorAll('[role="menuitem"]')].map((node) => node.innerText.trim()),
+            presence: document.querySelector('[data-slot="presence-bar"]')?.innerText ?? "",
+            active: document.activeElement?.outerHTML.slice(0, 200) ?? "",
+            log: window.__probeMenuLog ?? [],
+          };`,
+        )
+        .catch((cause) => String(cause)),
+      traffic: admin.traffic.slice(-60),
+    };
+    throw error;
+  });
   await admin.waitFor(
     `return [...document.querySelectorAll(".react-flow__node")].some((node) => node.querySelector("canvas"));`,
     { what: "浏览器节点出现在画布上" },

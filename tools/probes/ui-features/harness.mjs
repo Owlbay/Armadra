@@ -659,6 +659,8 @@ async function createPage(
     },
   };
   await page.viewport(width, height);
+  // 场景失败时入口给它开过的每一页补一张截图，不只是截过图的那几页。
+  runningEntry?.pages.add(page);
   return page;
 }
 
@@ -698,6 +700,9 @@ export function newRepository(directory) {
  * 场景记录器：每个场景一份 `{ name, status, checks, shots, problems }`。
  * `check` 失败就抛，场景整体记为失败；截图路径进 `shots`。
  */
+/** 正在跑的场景：它开的页面记在它名下。 */
+let runningEntry = null;
+
 export function scenario(report, name, output) {
   const entry = {
     name,
@@ -712,6 +717,7 @@ export function scenario(report, name, output) {
     enumerable: false,
   });
   report.scenarios.push(entry);
+  runningEntry = entry;
   console.log(`\n== ${name}`);
   return {
     entry,
