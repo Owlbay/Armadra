@@ -32,7 +32,9 @@
  * ARMADRA_DEV_STACK_CLOUD_SRC.
  *
  * Tier A needs tmux and a Chrome / Chromium (CHROME_PATH, or the usual install
- * locations). Entries marked `devStack` only run when ARMADRA_DEV_STACK=1 and
+ * locations). An entry that `requires` "webkit" needs Playwright's WebKit
+ * (`pnpm exec playwright-core install webkit`, `--with-deps` on Linux); without
+ * it the entry is skipped with that command as the reason. Entries marked `devStack` only run when ARMADRA_DEV_STACK=1 and
  * Docker answers; otherwise they are recorded as skipped, not failed.
  */
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -46,6 +48,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -56,7 +59,7 @@ export const MANIFEST_DIR = join(ROOT, "tools/ci/e2e.d");
 /** The single-file manifest this directory replaced; it must not come back. */
 export const LEGACY_MANIFEST = join(ROOT, "tools/ci/e2e.json");
 export const TIERS = ["a", "b"];
-export const REQUIREMENTS = ["tmux", "chrome", "docker", "cloud"];
+export const REQUIREMENTS = ["tmux", "chrome", "docker", "cloud", "webkit"];
 /** `process.platform` values an entry may restrict itself to. */
 export const PLATFORMS = ["darwin", "linux", "win32"];
 
@@ -190,6 +193,18 @@ function hasTmux() {
   return spawnSync("tmux", ["-V"], { stdio: "ignore" }).status === 0;
 }
 
+/** Playwright's WebKit is installed (the root devDependency `playwright-core`). */
+export function hasWebkit(root = ROOT) {
+  try {
+    const { webkit } = createRequire(join(root, "package.json"))(
+      "playwright-core",
+    );
+    return existsSync(webkit.executablePath());
+  } catch {
+    return false;
+  }
+}
+
 function hasDocker() {
   return (
     spawnSync("docker", ["info"], { stdio: "ignore", timeout: 30_000 })
@@ -275,6 +290,7 @@ export async function runTier({
     chrome: () => findChrome(env),
     docker: hasDocker,
     cloud: () => findCloudSource(env, root),
+    webkit: () => hasWebkit(root),
   },
   devStack = {
     up: () => pnpm(root, ["dev-stack", "up"]),
@@ -307,6 +323,7 @@ export async function runTier({
   const tmux = needs("tmux") ? probe.tmux() : false;
   const docker = needs("docker") ? probe.docker() : false;
   const cloud = needs("cloud") ? (probe.cloud?.() ?? null) : null;
+  const webkit = needs("webkit") ? (probe.webkit?.() ?? false) : false;
   const childEnv = {
     ...env,
     ...(chrome ? { CHROME_PATH: chrome } : {}),
@@ -363,6 +380,13 @@ export async function runTier({
           id: entry.id,
           status: stack.state === "failed" ? "failed" : "skipped",
           reason: `dev-stack: ${stack.reason}`,
+        };
+      } else if (entry.requires?.includes("webkit") && !webkit) {
+        record = {
+          id: entry.id,
+          status: "skipped",
+          reason:
+            "needs Playwright's WebKit (pnpm exec playwright-core install webkit; --with-deps on Linux)",
         };
       } else if (entry.requires?.includes("cloud") && !cloud) {
         record = {
