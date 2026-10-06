@@ -14,7 +14,9 @@ import { hostname } from "node:os";
 
 import { contract } from "@armadra/shared";
 
+import { AccountsService } from "../identity/accounts";
 import { cloudDomain } from "../identity/cloud";
+import { currentSubject } from "../identity/gate";
 import { IdentityStore } from "../identity/store";
 import { CoreFailure, fail } from "../http/errors";
 import { type DomainHandlers, registerProcedures } from "../http/rpc";
@@ -29,6 +31,7 @@ import {
 import { RemoteClient } from "./remote-client";
 import { SourceSecrets } from "./secrets";
 import { SourcesService } from "./service";
+import { ShareLinks } from "./share-links";
 import { SourceClient } from "./source-client";
 import { SourcesStore } from "./store";
 
@@ -130,10 +133,12 @@ export function install(
     platform: context.platform.shell === "server" ? "server" : "desktop",
     name: (hostname().trim() || "Armadra").slice(0, 128),
   } as const;
+  const secrets = new SourceSecrets(() => secretsFor(context).backend);
+  const remote = new RemoteClient(transport, device);
   const service = new SourcesService({
     store: new SourcesStore(context.db.database),
-    secrets: new SourceSecrets(() => secretsFor(context).backend),
-    remote: new RemoteClient(transport, device),
+    secrets,
+    remote,
     peer: new SourceClient(transport),
     hostId: () => identity.hostId(),
     hostLabel: () => hostname(),
@@ -153,6 +158,32 @@ export function install(
     service.removeRelaySource(issuer, sourceId),
   );
 
+  // 分享链接（契约 §33.9）：本机邀请以当前请求的主体签发、作废（与
+  // `accounts.invitations.*` 同一套权限）。
+  const accounts = new AccountsService({ store: identity });
+  const shareLinks = new ShareLinks({
+    secrets,
+    remote,
+    access: (serviceId) => service.remoteEndpoint(serviceId),
+    issuerOf: (serviceId) => service.remoteIssuer(serviceId),
+    registrations: () => {
+      const cloud = cloudDomain();
+      return cloud === undefined
+        ? undefined
+        : {
+            registered: (issuer) => cloud.registered(issuer),
+            sourceId: async () => (await cloud.status()).sourceId,
+          };
+    },
+    invitations: () => ({
+      issue: (input) => accounts.issueInvitation(currentSubject(), input),
+      revoke: (invitationId) =>
+        accounts.revokeInvitation(currentSubject(), invitationId),
+    }),
+    log: context.log,
+    ...(options.now === undefined ? {} : { now: options.now }),
+  });
+
   const handlers = {
     list: () => service.list(),
     addDirect: (input) => service.addDirect(input),
@@ -168,6 +199,11 @@ export function install(
     remoteSession: (input) => service.remoteSession(input.serviceId),
     remoteLogout: (input) => service.remoteLogout(input.serviceId),
     mountByLink: (input) => service.mountByLink(input),
+    shareLinks: (input) => shareLinks.list(input.serviceId),
+    shareLinkCreate: (input) => shareLinks.create(input),
+    shareLinkUrl: (input) => shareLinks.url(input.serviceId, input.linkId),
+    shareLinkRevoke: (input) =>
+      shareLinks.revoke(input.serviceId, input.linkId),
   } satisfies DomainHandlers<"sources">;
   registerProcedures(context.server, "sources", handlers);
 
