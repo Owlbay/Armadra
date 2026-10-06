@@ -272,6 +272,8 @@ export function install(context: CoreContext): void {
         deviceName,
         identity: call.identity,
         signal: call.signal,
+        view: (boardId, extra) =>
+          presenceView(presence.snapshot(boardId), extra),
         beat,
       });
     },
@@ -493,6 +495,11 @@ interface OpenPresenceOptions {
   readonly deviceName: string;
   readonly identity: RequestIdentity | undefined;
   readonly signal: AbortSignal | undefined;
+  /** 读一眼现在的在线表（不算心跳，不发事件）。 */
+  readonly view: (
+    boardId: string,
+    extra: { writable: boolean; deviceKey: string },
+  ) => BoardPresenceItem;
   readonly beat: (
     workspaceId: string,
     boardId: string,
@@ -536,13 +543,25 @@ async function* openPresence(
     if (subject === undefined) return false;
     return accessGate().permits(subject, [scope("canvas:read", workspaceId)]);
   };
-  const current = (): BoardPresenceItem =>
+  const writable = (): boolean =>
+    within(() => allows([scope("canvas:write", workspaceId)]));
+  /** 续期：一次心跳，答这个客户端看到的在线表。 */
+  const renew = (): BoardPresenceItem =>
     options.beat(workspaceId, boardId, {
       clientId,
       deviceName: options.deviceName,
       active: false,
       source,
-      writable: within(() => allows([scope("canvas:write", workspaceId)])),
+      writable: writable(),
+    });
+  /**
+   * 只读一眼，不心跳：在线表变了（别人的事件）时用它。若这里也心跳，两个订阅
+   * 会你一拍我一拍地互相触发下去（心跳自己也会发事件）。
+   */
+  const look = (): BoardPresenceItem =>
+    options.view(boardId, {
+      writable: writable(),
+      deviceKey: deviceKey(source.deviceId),
     });
 
   const key = `${boardId}:${clientId}`;
@@ -563,8 +582,9 @@ async function* openPresence(
       poke();
     }
   });
+  let due = false;
   const timer = setInterval(() => {
-    dirty = true;
+    due = true;
     poke();
   }, HEARTBEAT_INTERVAL_MS);
   timer.unref?.();
@@ -580,20 +600,23 @@ async function* openPresence(
   let last = "";
   try {
     if (!canRead()) throw fail("forbidden", "没有这块画布的读授权了");
-    let item = current();
+    let item = renew();
     last = fingerprint(item);
     yield item;
     while (!aborted()) {
-      if (!dirty) {
+      if (!dirty && !due) {
         await new Promise<void>((resolve) => {
           wake = resolve;
         });
         continue;
       }
+      const renewing = due;
       dirty = false;
+      due = false;
       if (aborted()) break;
       if (!canRead()) throw fail("forbidden", "没有这块画布的读授权了");
-      item = current();
+      item = renewing ? renew() : look();
+      // 续期自己发的事件也算：下一轮读到同样的内容，指纹相同，不重复发。
       const text = fingerprint(item);
       if (text === last) continue;
       last = text;

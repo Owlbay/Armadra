@@ -204,6 +204,41 @@ describe("boards.presence", () => {
     expect(canvasPresence()!.snapshot(boardId).clients).toHaveLength(0);
   });
 
+  it("实时板上两个订阅不会互相触发：事件数有界，主线程不被占满", async () => {
+    const { core, base, workspaceId, boardId } = await start();
+    // 实时板没有租约可分，`view` 里恒为空——从前每一拍心跳都为此白发一帧事件。
+    canvasPresence()!.setRealtimeProbe(() => true);
+    let frames = 0;
+    core.bus.on("workspace.event", (frame) => {
+      if (frame.event.type === "canvas.presence") frames += 1;
+    });
+    const first = await peer(base);
+    const second = await peer(base);
+    const one = first.call("boards.presence", {
+      workspaceId,
+      boardId,
+      clientId: A,
+    });
+    const two = second.call("boards.presence", {
+      workspaceId,
+      boardId,
+      clientId: B,
+    });
+    await first.until(one.id, (list) => list.length >= 1);
+    await second.until(two.id, (list) => list.length >= 1);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // 两个客户端登记、各看见对方：几帧而已。互相触发的话这里是成千上万。
+    expect(frames).toBeLessThan(10);
+    expect(items(first.events.get(one.id) ?? []).length).toBeLessThan(6);
+    // 事件循环还转得动：一次普通调用在时限内答出来。
+    const answer = await first.call("boards.heartbeat", {
+      workspaceId,
+      boardId,
+      clientId: A,
+    }).response;
+    expect(answer.status).toBe(200);
+  });
+
   it("订阅只经控制面：经 HTTP 调答 405", async () => {
     const { base, workspaceId, boardId } = await start();
     const response = await fetch(`${base}/api/rpc/boards/presence`, {

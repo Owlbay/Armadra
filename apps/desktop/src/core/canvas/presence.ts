@@ -227,7 +227,8 @@ export class CanvasPresence {
     }
     // 先放空闲的，再分：一个动了手的人不该等下一次心跳才接到别人放下的租约。
     if (this.releaseIdle(entry)) changed = true;
-    if (entry.lease === null && writer) {
+    if (entry.lease === null && writer && !this.isRealtime(boardId)) {
+      // 实时板没有租约可分（`view` 里恒为空）：不分，免得每一拍心跳都白白发一帧事件。
       // 只有它一个在看，或者它刚被人操作过：拿走空着的租约。两个都在看、
       // 谁都没动的时候不分——否则后到的那个会凭一次心跳把「正在编辑」的
       // 标签从先到的那个人头上摘走。
