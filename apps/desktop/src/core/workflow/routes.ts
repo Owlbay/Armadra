@@ -131,7 +131,7 @@ export function workflowOperations(service: WorkflowService) {
       }
       const bridge = workflowScheduleBridge();
       if (bridge === undefined) {
-        throw new DomainError(409, "unsupported", "这台 core 没有自动化域。");
+        throw new DomainError(501, "unsupported", "这台 core 没有自动化域。");
       }
       // 模板先得在：不在就 404，与其余模板路由一致。
       service.template(templateId);
