@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ request: vi.fn() }));
-vi.mock("../api/request", async (original) => ({
-  ...(await original<typeof import("../api/request")>()),
-  request: mocks.request,
+const mocks = vi.hoisted(() => ({ register: vi.fn() }));
+vi.mock("../api/push", () => ({
+  pushApi: { register: (...args: unknown[]) => mocks.register(...args) },
 }));
 
 import type { NativeBridge } from "./native-bridge";
@@ -25,19 +24,16 @@ function bridge(rotated: boolean): NativeBridge {
 
 beforeEach(() => {
   localStorage.clear();
-  mocks.request.mockReset();
+  mocks.register.mockReset();
 });
 
 describe("推送令牌轮换后重新登记（R-54）", () => {
-  it("开过推送、令牌换过：PUT 新登记，成功后清标记", async () => {
+  it("开过推送、令牌换过：登记新令牌，成功后清标记", async () => {
     markNativePushRegistered();
-    mocks.request.mockResolvedValue({ device: {} });
+    mocks.register.mockResolvedValue({ device: {} });
     const native = bridge(true);
     await expect(reregisterIfRotated("en", native)).resolves.toBe(true);
-    const [path, , init] = mocks.request.mock.calls[0]!;
-    expect(path).toBe("/api/push/devices");
-    expect(init.method).toBe("PUT");
-    expect(JSON.parse(init.body)).toMatchObject({
+    expect(mocks.register.mock.calls[0]![0]).toMatchObject({
       token: "new-token",
       locale: "en",
     });
@@ -50,21 +46,21 @@ describe("推送令牌轮换后重新登记（R-54）", () => {
     expect(native.pushRotated).not.toHaveBeenCalled();
     markNativePushRegistered();
     await expect(reregisterIfRotated("en", bridge(false))).resolves.toBe(false);
-    expect(mocks.request).not.toHaveBeenCalled();
+    expect(mocks.register).not.toHaveBeenCalled();
   });
 
   it("登记失败不清标记；并发的几次合成一次", async () => {
     markNativePushRegistered();
     const native = bridge(true);
-    mocks.request.mockRejectedValueOnce(new Error("offline"));
+    mocks.register.mockRejectedValueOnce(new Error("offline"));
     await expect(reregisterIfRotated("en", native)).resolves.toBe(false);
     expect(native.ackPushRotation).not.toHaveBeenCalled();
-    mocks.request.mockResolvedValue({ device: {} });
+    mocks.register.mockResolvedValue({ device: {} });
     const both = await Promise.all([
       reregisterIfRotated("en", native),
       reregisterIfRotated("en", native),
     ]);
     expect(both).toEqual([true, true]);
-    expect(mocks.request).toHaveBeenCalledTimes(2);
+    expect(mocks.register).toHaveBeenCalledTimes(2);
   });
 });

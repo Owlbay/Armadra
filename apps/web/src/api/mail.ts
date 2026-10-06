@@ -1,14 +1,10 @@
 import { z } from "zod";
 
-import {
-  RUNTIME_VIA_SERVER_SHELL,
-  RuntimeRequestError,
-  json,
-  request,
-} from "./request";
+import { currentClient } from "./client";
+import { RUNTIME_VIA_SERVER_SHELL, RuntimeRequestError } from "./request";
 
 /**
- * 邮件通道（契约 §28）：把刚签出的邀请 / 重置链接发到一个邮箱。只有服务器壳
+ * 邮件通道（契约 §43.5，形状见 §28），经 `mail.*` procedure：把刚签出的邀请 / 重置链接发到一个邮箱。只有服务器壳
  * 能配 SMTP；桌面壳与不认识这条路由的旧 core 都按「没配」处理，页面就不摆
  * 「发送邮件」。
  */
@@ -27,7 +23,7 @@ export async function mailConfigured(
 ): Promise<boolean> {
   if (!server) return false;
   try {
-    return (await request("/api/mail/status", statusSchema)).configured;
+    return statusSchema.parse(await currentClient().mail.status()).configured;
   } catch (error) {
     if (error instanceof RuntimeRequestError && error.status === 404) {
       return false;
@@ -43,10 +39,7 @@ export async function mailPasswordReset(input: {
   to: string;
   locale?: MailLocale;
 }): Promise<void> {
-  await request("/api/mail/password-reset", sentSchema, {
-    method: "POST",
-    ...json(input),
-  });
+  sentSchema.parse(await currentClient().mail.sendPasswordReset(input));
 }
 
 /** 把邀请链接发出去。 */
@@ -56,10 +49,7 @@ export async function mailInvitation(input: {
   to: string;
   locale?: MailLocale;
 }): Promise<void> {
-  await request("/api/mail/invitation", sentSchema, {
-    method: "POST",
-    ...json(input),
-  });
+  sentSchema.parse(await currentClient().mail.sendInvitation(input));
 }
 
 /** 页面语言 → 邮件语言。 */
