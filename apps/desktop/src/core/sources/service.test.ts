@@ -238,7 +238,7 @@ describe("直连源", () => {
       await code(
         service.update({ sourceId: PEER_ID, baseUrl: "http://192.168.1.2" }),
       ),
-    ).toBe("bad_request");
+    ).toBe("address_plaintext_loopback_only");
   });
 });
 

@@ -93,6 +93,18 @@ export const ERROR_CODES = {
     i18n: "error.cloudAccountUnlinked",
   },
   fingerprint_mismatch: { status: 400, i18n: "error.fingerprintMismatch" },
+  // 远程服务地址与指纹的写法（契约 §33.8）：core 校验时答，页面按码取文案。
+  address_invalid: { status: 400, i18n: "error.addressInvalid" },
+  address_https_only: { status: 400, i18n: "error.addressHttpsOnly" },
+  address_plaintext_loopback_only: {
+    status: 400,
+    i18n: "error.addressPlaintextLoopbackOnly",
+  },
+  address_has_credentials: {
+    status: 400,
+    i18n: "error.addressHasCredentials",
+  },
+  fingerprint_invalid: { status: 400, i18n: "error.fingerprintInvalid" },
   account_locked: { status: 429, i18n: "error.accountLocked" },
   source_unreachable: { status: 502, i18n: "error.sourceUnreachable" },
   source_offline: { status: 503, i18n: "error.sourceOffline" },

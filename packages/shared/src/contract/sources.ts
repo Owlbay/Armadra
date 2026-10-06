@@ -89,6 +89,11 @@ export const sources = {
       ...denied,
       ...errors.pick(
         "bad_request",
+        "address_invalid",
+        "address_https_only",
+        "address_plaintext_loopback_only",
+        "address_has_credentials",
+        "fingerprint_invalid",
         "conflict",
         "source_unreachable",
         "source_unauthorized",
@@ -99,7 +104,17 @@ export const sources = {
   update: oc
     .input(sourcesUpdateInputSchema)
     .output(clientSourceSchema)
-    .errors({ ...denied, ...errors.pick("bad_request", "not_found") })
+    .errors({
+      ...denied,
+      ...errors.pick(
+        "bad_request",
+        "address_invalid",
+        "address_https_only",
+        "address_plaintext_loopback_only",
+        "address_has_credentials",
+        "not_found",
+      ),
+    })
     .meta(write("§33.1", "PUT", "/api/sources/{sourceId}")),
   /** 删行 + 删 SecretStore；`local` 行答 `conflict`。 */
   remove: oc
@@ -134,6 +149,11 @@ export const sources = {
       ...denied,
       ...errors.pick(
         "bad_request",
+        "address_invalid",
+        "address_https_only",
+        "address_plaintext_loopback_only",
+        "address_has_credentials",
+        "fingerprint_invalid",
         "credentials_invalid",
         "account_locked",
         "rate_limited",
@@ -225,6 +245,11 @@ export const sources = {
       ...denied,
       ...errors.pick(
         "bad_request",
+        "address_invalid",
+        "address_https_only",
+        "address_plaintext_loopback_only",
+        "address_has_credentials",
+        "fingerprint_invalid",
         "conflict",
         "fingerprint_mismatch",
         "link_invalid",

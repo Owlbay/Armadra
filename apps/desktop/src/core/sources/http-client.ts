@@ -50,7 +50,7 @@ export function normalizeFingerprint(value: string | undefined): string {
   const compact = value.replace(/:/g, "").trim().toLowerCase();
   if (compact === "") return "";
   if (!/^[0-9a-f]{64}$/.test(compact)) {
-    throw fail("bad_request", "指纹应为 64 位十六进制");
+    throw fail("fingerprint_invalid", "指纹应为 64 位十六进制");
   }
   return compact;
 }
@@ -72,16 +72,16 @@ export function normalizeOrigin(value: string): string {
   try {
     url = new URL(value.trim());
   } catch {
-    throw fail("bad_request", "地址不是一个合法的 URL");
+    throw fail("address_invalid", "地址不是一个合法的 URL");
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw fail("bad_request", "地址只收 https");
+    throw fail("address_https_only", "地址只收 https");
   }
   if (url.protocol === "http:" && !loopbackHost(url.hostname)) {
-    throw fail("bad_request", "明文 http 只许回环地址");
+    throw fail("address_plaintext_loopback_only", "明文 http 只许回环地址");
   }
   if (url.username !== "" || url.password !== "") {
-    throw fail("bad_request", "地址里不能带账号");
+    throw fail("address_has_credentials", "地址里不能带账号");
   }
   return url.origin;
 }
@@ -382,7 +382,7 @@ function send(
 export const networkTransport: Transport = async (request) => {
   const url = new URL(request.url);
   if (url.protocol === "http:" && !loopbackHost(url.hostname)) {
-    throw fail("bad_request", "明文 http 只许回环地址");
+    throw fail("address_plaintext_loopback_only", "明文 http 只许回环地址");
   }
   if (url.protocol === "https:" && request.fingerprint !== "") {
     const ca = await anchorFor(url, request.fingerprint, request.timeoutMs);
