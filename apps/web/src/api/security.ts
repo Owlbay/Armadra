@@ -335,17 +335,21 @@ export async function revokeOtherSessions(): Promise<number> {
 
 /* --------------------------------- 设备 ---------------------------------- */
 
-/** 这个 principal 配过的设备，按 id 分页（`identity.devices.list`）。 */
+/**
+ * 这个 principal 配过的设备，按 id 分页（`identity.devices.list`）。给了 `signal`
+ * 就能被中途取消：配对成功时查询要作废重取，而这一次可能还停在换 CSRF 上。
+ */
 export async function listIdentityDevices(
   afterId = "",
   limit = 50,
+  signal?: AbortSignal,
 ): Promise<IdentityDevicePage> {
   return identityDevicesSchema.parse(
     await identityRpc((client) =>
-      client.identity.devices.list({
-        limit,
-        ...(afterId ? { afterId } : {}),
-      }),
+      client.identity.devices.list(
+        { limit, ...(afterId ? { afterId } : {}) },
+        signal === undefined ? undefined : { signal },
+      ),
     ),
   );
 }

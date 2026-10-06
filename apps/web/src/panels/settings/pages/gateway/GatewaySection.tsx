@@ -69,7 +69,10 @@ export function GatewaySection({
   });
   const devices = useInfiniteQuery({
     queryKey: DEVICES_QUERY_KEY,
-    queryFn: ({ pageParam }) => listIdentityDevices(pageParam),
+    // 带着 `signal`：配对成功时作废重取要能打断还没答的那一次（它可能在会话
+    // Cookie 落下之前发出，答 401）。
+    queryFn: ({ pageParam, signal }) =>
+      listIdentityDevices(pageParam, 50, signal),
     initialPageParam: "",
     getNextPageParam: (page) => (page.hasMore ? page.nextId : undefined),
     retry: false,
@@ -77,7 +80,13 @@ export function GatewaySection({
   React.useEffect(
     () =>
       onIdentitySessionChange(() => {
-        void client.invalidateQueries({ queryKey: DEVICES_QUERY_KEY });
+        // 会话变了（配对成功的那一刻）：还在路上的那一次带的是旧凭据，先取消
+        // 再重取——只作废的话，还没有数据的查询会沿用那一次的答案（401）。
+        void client
+          .cancelQueries({ queryKey: DEVICES_QUERY_KEY })
+          .then(() =>
+            client.invalidateQueries({ queryKey: DEVICES_QUERY_KEY }),
+          );
       }),
     [client],
   );
