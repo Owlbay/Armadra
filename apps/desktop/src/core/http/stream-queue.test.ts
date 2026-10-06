@@ -137,6 +137,56 @@ describe("SendQueue", () => {
     });
   });
 
+  describe("settled", () => {
+    it("reports a unit as sent only after every frame's write callback", () => {
+      const fake = fakeSocket({ hold: true });
+      const sendQueue = queue(fake.socket, { policy: "coalesce" });
+      const outcomes: string[] = [];
+      sendQueue.push(["header", Buffer.from("jpeg")], "node", (outcome) =>
+        outcomes.push(outcome),
+      );
+      expect(fake.sent).toHaveLength(2);
+      // Handed to the socket is not the same as written.
+      expect(outcomes).toEqual([]);
+      fake.release();
+      expect(outcomes).toEqual(["sent"]);
+    });
+
+    it("reports a frame replaced by a newer one as dropped, and the newer one as sent", () => {
+      const fake = fakeSocket();
+      const sendQueue = queue(fake.socket, { policy: "coalesce" });
+      fake.socket.bufferedAmount = 128 * KIB;
+      const outcomes: string[] = [];
+      sendQueue.push("hello");
+      sendQueue.push(["h1", Buffer.from("j1")], "node", (o) =>
+        outcomes.push(`1:${o}`),
+      );
+      sendQueue.push(["h2", Buffer.from("j2")], "node", (o) =>
+        outcomes.push(`2:${o}`),
+      );
+      // Still congested: the newest frame waits, unsettled.
+      expect(outcomes).toEqual(["1:dropped"]);
+      fake.socket.bufferedAmount = 0;
+      vi.advanceTimersByTime(DRAIN_POLL_MS);
+      expect(outcomes).toEqual(["1:dropped", "2:sent"]);
+    });
+
+    it("settles everything still queued when it closes, and a refused push at once", () => {
+      const fake = fakeSocket();
+      const sendQueue = queue(fake.socket, { policy: "pause", maxFrames: 1 });
+      fake.socket.bufferedAmount = 128 * KIB;
+      const outcomes: string[] = [];
+      sendQueue.push("a", undefined, (o) => outcomes.push(`a:${o}`));
+      sendQueue.push("b", undefined, (o) => outcomes.push(`b:${o}`));
+      sendQueue.push("c", undefined, (o) => outcomes.push(`c:${o}`));
+      expect(outcomes).toEqual(["a:sent", "c:dropped"]);
+      sendQueue.close();
+      expect(outcomes).toEqual(["a:sent", "c:dropped", "b:dropped"]);
+      sendQueue.push("d", undefined, (o) => outcomes.push(`d:${o}`));
+      expect(outcomes.at(-1)).toBe("d:dropped");
+    });
+  });
+
   describe("pause", () => {
     it("pauses the producer at the high-water mark and resumes below the low one", () => {
       const fake = fakeSocket();

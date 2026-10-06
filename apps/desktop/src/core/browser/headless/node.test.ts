@@ -268,6 +268,41 @@ describe("the one viewer", () => {
     made.close();
   });
 
+  /**
+   * Backpressure: a viewer behind a send queue hands the ack back only once
+   * the frame is on the wire, so Chromium does not encode the next one for a
+   * client that has not taken the last.
+   */
+  it("holds a frame's ack until the viewer says the frame went out", async () => {
+    const made = backend();
+    const node = await made.ensure("node-a");
+    const sent: (() => void)[] = [];
+    node.attachViewer({
+      send: () => undefined,
+      sendFrame: (_header, _jpeg, done) => {
+        if (done !== undefined) sent.push(done);
+      },
+      close: () => {},
+    });
+    await settle();
+    const session = fake.sessionFor(node.listTabs()[0]?.id ?? "");
+    const acks = () =>
+      fake
+        .called("Page.screencastFrameAck")
+        .map((call) => call.params.sessionId);
+    fake.frame(session, 41);
+    await settle();
+    expect(sent).toHaveLength(1);
+    expect(acks()).toEqual([]);
+
+    sent[0]?.();
+    sent[0]?.();
+    await settle();
+    // Once, however often the queue says so.
+    expect(acks()).toEqual([41]);
+    made.close();
+  });
+
   it("acknowledges frames even with nobody left to send them to", async () => {
     const made = backend();
     const node = await made.ensure("node-a");
