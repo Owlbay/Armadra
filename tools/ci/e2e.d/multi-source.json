@@ -1,0 +1,9 @@
+{
+  "id": "multi-source",
+  "tier": "a",
+  "script": "tools/probes/multi-source.mjs",
+  "args": ["{out}"],
+  "requires": ["tmux", "chrome", "docker", "cloud"],
+  "platforms": ["darwin", "linux"],
+  "timeoutMinutes": 15
+}
