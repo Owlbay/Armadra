@@ -103,6 +103,11 @@ export interface GatewayPanelProps {
   /** 展示页用：钉住时钟、展开「更多选项」。 */
   now?: number;
   defaultMoreOpen?: boolean;
+  /**
+   * 页面正经这个对外服务直连到主机：开关与监听配置一改就是自断，只读。
+   * 配对与设备表照常。
+   */
+  inUse?: boolean;
 }
 
 /**
@@ -125,10 +130,11 @@ export function GatewayPanel({
   deviceOptions,
   now,
   defaultMoreOpen = false,
+  inUse = false,
 }: GatewayPanelProps) {
   const t = useT();
   const locale = usePreferencesStore((state) => state.locale);
-  const locked = status.managedBy === "shell" || saving;
+  const locked = status.managedBy === "shell" || saving || inUse;
   const tlsSource =
     status.tls.source === "selfSigned" ? "localCa" : status.tls.source;
   const starting = status.enabled && !status.running && !status.error;
@@ -141,7 +147,10 @@ export function GatewayPanel({
   return (
     <div className="flex min-w-0 flex-col gap-3">
       <SettingsGroup>
-        <SettingsRow label={t("gateway.title")}>
+        <SettingsRow
+          label={t("gateway.title")}
+          {...(inUse ? { footnote: t("remote.inUse") } : {})}
+        >
           <div className="flex items-center gap-2">
             {saving && <Spinner aria-label={t("gateway.title")} />}
             <Switch

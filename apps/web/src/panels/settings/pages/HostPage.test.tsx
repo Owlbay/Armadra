@@ -20,6 +20,17 @@ let member = false;
 vi.mock("../../../app/use-access", () => ({
   useAccess: () => ({ member, can: () => !member, session: undefined }),
 }));
+// 页面到达本机源的那条路（缺省就在本机）。
+const access = vi.hoisted(() => ({ via: null as "direct" | "relayed" | null }));
+vi.mock("../remote-access", async (original) => ({
+  ...(await original<typeof import("../remote-access")>()),
+  useRemoteAccess: () => ({
+    remote: access.via !== null,
+    via: access.via,
+    relayIssuer: null,
+    currentSourceId: "local",
+  }),
+}));
 // 「设备登录」只报一条会话上来：设备表只有一份，在对外服务那一块（G3-11）。
 let identitySession: IdentitySession | null = null;
 vi.mock("./HostIdentityPanel", async () => {
@@ -487,6 +498,22 @@ describe("HostPage · 对外服务", () => {
       (screen.getByRole("switch", { name: "对外服务" }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
+  });
+
+  it("opened through this gateway: its settings are read-only and say why, pairing still works", async () => {
+    access.via = "direct";
+    try {
+      fakeCore({ status: runningStatus() });
+      render(<HostPage />);
+      await screen.findByRole("img", { name: "配对二维码" });
+      expect(
+        (screen.getByRole("switch", { name: "对外服务" }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true);
+      expect(screen.getByText("本页经此连接")).toBeTruthy();
+    } finally {
+      access.via = null;
+    }
   });
 
   it("lists paired devices once, marks this device and revokes the displayed revision", async () => {

@@ -25,6 +25,7 @@ import {
   revokeIdentityDevice,
 } from "../../../../api/security";
 import { GatewayDevices, type GatewayDevice } from "./GatewayDevices";
+import { useRemoteAccess } from "../../remote-access";
 import { GatewayPanel } from "./GatewayPanel";
 
 const DEVICES_QUERY_KEY = [...GATEWAY_QUERY_KEY, "devices"] as const;
@@ -60,6 +61,8 @@ export function GatewaySection({
   // 服务器壳上的成员连问都不问：必然 403 的请求不该发（会话没取回来时也按
   // 成员算，晚一拍出现）。
   const owner = !useAccess().member;
+  // 页面就是经这个对外服务直连进来的：配置改了就断（`remote-access.ts`）。
+  const inUse = useRemoteAccess().via === "direct";
   const status = useQuery({
     queryKey: GATEWAY_QUERY_KEY,
     queryFn: ({ signal }) => gatewayApi.status(signal),
@@ -164,6 +167,7 @@ export function GatewaySection({
       revoking={revoking}
       onRevoke={(device) => void revoke(device)}
       deviceOptions={deviceOptions}
+      inUse={inUse}
     />
   );
 }
