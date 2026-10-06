@@ -976,6 +976,28 @@ await h.run(async () => {
   report.adminBeforeAddMenu = await admin.evaluate(
     `return { visibility: document.visibilityState, focused: document.hasFocus() };`,
   );
+  // 现场：菜单开过没有、谁拿走了焦点、指针落在哪。
+  await admin.evaluate(`
+    const t0 = performance.now();
+    const log = (window.__probeMenuLog = []);
+    const name = (node) => node instanceof Element
+      ? node.tagName.toLowerCase() + (node.getAttribute("role") ? "[" + node.getAttribute("role") + "]" : "") + (node.getAttribute("aria-label") ? "「" + node.getAttribute("aria-label") + "」" : "") + (node.getAttribute("data-slot") ? "{" + node.getAttribute("data-slot") + "}" : "")
+      : String(node);
+    const at = () => Math.round(performance.now() - t0);
+    for (const type of ["pointerdown", "pointerup", "click", "focusin", "keydown"])
+      document.addEventListener(type, (event) => log.push([at(), type, name(event.target)]), true);
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes)
+          if (node instanceof Element && (node.matches('[role="menu"]') || node.querySelector('[role="menu"]'))) log.push([at(), "menu+"]);
+        for (const node of record.removedNodes)
+          if (node instanceof Element && (node.matches('[role="menu"]') || node.querySelector('[role="menu"]'))) log.push([at(), "menu-"]);
+        if (record.type === "attributes" && record.target.matches?.('[data-slot="dock"] button[aria-haspopup]'))
+          log.push([at(), "trigger", record.target.getAttribute("data-state")]);
+      }
+    }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-state"] });
+    return true;
+  `);
   await admin.click('[data-slot="dock"] button', "新建");
   await admin.click('[role="menuitem"]', "新建浏览器").catch(async (error) => {
     // 现场：菜单开没开、开了列的是什么、页面在不在前台、health 问到没有。
@@ -989,6 +1011,8 @@ await h.run(async () => {
             menus: document.querySelectorAll('[role="menu"]').length,
             items: [...document.querySelectorAll('[role="menuitem"]')].map((node) => node.innerText.trim()),
             presence: document.querySelector('[data-slot="presence-bar"]')?.innerText ?? "",
+            active: document.activeElement?.outerHTML.slice(0, 200) ?? "",
+            log: window.__probeMenuLog ?? [],
           };`,
         )
         .catch((cause) => String(cause)),
@@ -996,6 +1020,7 @@ await h.run(async () => {
     };
     throw error;
   });
+  report.addMenuLog = await admin.evaluate(`return window.__probeMenuLog;`);
   await admin.waitFor(
     `return [...document.querySelectorAll(".react-flow__node")].some((node) => node.querySelector("canvas"));`,
     { what: "浏览器节点出现在画布上" },
