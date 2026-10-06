@@ -335,25 +335,105 @@ describe.skipIf(!enabled)("个人中转联调（契约 §31）", () => {
     await relay("DELETE", `/v1/links/${link.body.linkId as string}`);
   });
 
-  it("revoke 生效：之后中继签的断言 cloud_not_registered，registered 回到 false", async () => {
-    const revoked = await rpc("identity.cloud.revoke", { issuer });
-    expect(revoked.status, revoked.text).toBe(200);
-    const login = await call("POST", "/api/identity/cloud/login", {
-      assertion: await freshAssertion(),
+  /** 中继的源目录（owner 视角）里有没有这台 core。 */
+  async function listedOnRelay(): Promise<boolean> {
+    const sources = await relay("GET", "/v1/me/sources");
+    expect(sources.status, JSON.stringify(sources.body)).toBe(200);
+    return (sources.body.sources as { sourceId: string }[]).some(
+      (one) => one.sourceId === store.hostId(),
+    );
+  }
+
+  async function registerAgain(): Promise<void> {
+    const token = await relay("POST", "/v1/sources/registration-tokens", {});
+    expect(token.status, JSON.stringify(token.body)).toBe(200);
+    const registered = await rpc("identity.cloud.register", {
+      issuer,
+      registrationToken: token.body.registrationToken,
+      label: "devstack",
     });
-    expect(login.status).toBe(401);
-    expect(login.body.code).toBe("cloud_not_registered");
-    expect(cloud.registered(issuer)).toBe(false);
+    expect(registered.status, registered.text).toBe(200);
+    expect(await listedOnRelay()).toBe(true);
+  }
+
+  async function remoteRow(): Promise<{
+    registered: boolean;
+    serviceId: string;
+  }> {
     const listed = await rpc("sources.list");
-    const remote = (
+    return (
       listed.body.json as {
         remotes: { registered: boolean; serviceId: string }[];
       }
-    ).remotes[0];
-    expect(remote?.registered).toBe(false);
-    const removed = await rpc("sources.remoteRemove", {
-      serviceId: remote?.serviceId,
+    ).remotes[0] as { registered: boolean; serviceId: string };
+  }
+
+  it("revoke：本机撤销，并用远程服务会话删掉中继侧的源记录（§31.4）", async () => {
+    expect(await listedOnRelay()).toBe(true);
+    const revoked = await rpc("identity.cloud.revoke", { issuer });
+    expect(revoked.status, revoked.text).toBe(200);
+    expect(cloud.registered(issuer)).toBe(false);
+    expect((await remoteRow()).registered).toBe(false);
+    // 中继目录里已经没有这台 core，也不再为它签断言。
+    expect(await listedOnRelay()).toBe(false);
+    const assertion = await relay(
+      "POST",
+      `/v1/sources/${store.hostId()}/assertion`,
+      {
+        sourceId: store.hostId(),
+        device: { platform: "desktop", name: "devstack" },
+      },
+    );
+    expect(assertion.body.code).toBe("source_revoked");
+    const pending = await rpc("identity.cloud.relayPending");
+    expect(pending.body.json).toEqual({ pending: [] });
+  });
+
+  it("没有会话时撤销：本机照样完成、记中继侧待清理；登录回来重试即清掉", async () => {
+    await registerAgain();
+    const { serviceId } = await remoteRow();
+    expect((await rpc("sources.remoteLogout", { serviceId })).status).toBe(200);
+    const revoked = await rpc("identity.cloud.revoke", { issuer });
+    expect(revoked.status, revoked.text).toBe(200);
+    expect(cloud.registered(issuer)).toBe(false);
+    expect(await listedOnRelay()).toBe(true);
+    const pending = await rpc("identity.cloud.relayPending");
+    expect(pending.body.json).toEqual({
+      pending: [
+        {
+          issuer,
+          revokedAtMs: expect.any(Number),
+          code: "source_unauthorized",
+        },
+      ],
     });
-    expect(removed.status).toBe(200);
+    const again = await rpc("sources.remoteAdd", {
+      kind: "personal",
+      issuer,
+      account,
+      password,
+      fingerprint,
+    });
+    expect(again.status, again.text).toBe(200);
+    const retried = await rpc("identity.cloud.relayCleanup", { issuer });
+    expect(retried.body.json).toEqual({ pending: false, code: null });
+    expect(await listedOnRelay()).toBe(false);
+    expect((await rpc("identity.cloud.relayPending")).body.json).toEqual({
+      pending: [],
+    });
+  });
+
+  it("remoteRemove：先撤销（连同中继侧），再删行", async () => {
+    await registerAgain();
+    const { serviceId } = await remoteRow();
+    const removed = await rpc("sources.remoteRemove", { serviceId });
+    expect(removed.status, removed.text).toBe(200);
+    expect(cloud.registered(issuer)).toBe(false);
+    expect(await listedOnRelay()).toBe(false);
+    expect((await rpc("identity.cloud.relayPending")).body.json).toEqual({
+      pending: [],
+    });
+    const listed = await rpc("sources.list");
+    expect((listed.body.json as { remotes: unknown[] }).remotes).toEqual([]);
   });
 });
