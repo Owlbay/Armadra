@@ -16,6 +16,13 @@ import {
   wantsJson,
 } from "./cli";
 import { serve } from "./serve";
+import {
+  CloudCliError,
+  type CloudDeps,
+  defaultDeps,
+  runCloud,
+  runInvite,
+} from "./cloud";
 import { masterKeyFile, serverSecrets } from "./secrets";
 import {
   checkSecretName,
@@ -74,6 +81,10 @@ export interface MainIo {
   readonly moduleDir: string;
   /** 标准输入读到尽头（`secrets set` 的值从这里来，不上命令行）。 */
   readonly stdin?: () => Promise<string>;
+  /** 终端里不回显地读一行（`cloud login` 的口令）；没有终端不给。 */
+  readonly prompt?: (label: string) => Promise<string>;
+  /** 用例换掉取本机会话与发往个人中转的那两个口子。 */
+  readonly cloud?: Partial<CloudDeps>;
   /** `serve` 装配完成后的回调，用例靠它拿到句柄并停掉。 */
   readonly serving?: (
     running: Awaited<ReturnType<typeof serve>>,
@@ -124,8 +135,30 @@ export async function main(
         return await runUpgrade(values, io, json);
       case "secrets":
         return await runSecrets(positionals, dataDir, io, json);
+      case "cloud":
+        await runCloud(
+          positionals,
+          values,
+          dataDir,
+          defaultDeps(io, io.cloud),
+          (document, text) => emit(io, json, document, text),
+        );
+        return 0;
+      case "invite":
+        await runInvite(
+          values,
+          dataDir,
+          defaultDeps(io, io.cloud),
+          (document, text) => emit(io, json, document, text),
+        );
+        return 0;
     }
   } catch (error) {
+    if (error instanceof CloudCliError) {
+      io.stderr(`${error.message}\n`);
+      // 69：运行中的服务器壳还没起来，容器入口按它重试。
+      return error.usage ? 2 : error.code === "host_unavailable" ? 69 : 1;
+    }
     io.stderr(`${describe(error)}\n`);
     return 1;
   }
@@ -619,6 +652,44 @@ async function runUpgrade(
 
 /* --------------------------------- 进程入口 -------------------------------- */
 
+/** 终端里不回显地读一行：原始模式逐字符收，回车结束，Ctrl-C 放弃。 */
+function promptHidden(label: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const input = process.stdin;
+    process.stderr.write(label);
+    input.setRawMode(true);
+    input.resume();
+    input.setEncoding("utf8");
+    let typed = "";
+    const finish = (): void => {
+      input.setRawMode(false);
+      input.pause();
+      input.removeListener("data", onData);
+      process.stderr.write("\n");
+    };
+    const onData = (chunk: string): void => {
+      for (const character of chunk) {
+        if (character === "\r" || character === "\n") {
+          finish();
+          resolve(typed);
+          return;
+        }
+        if (character === "\u0003") {
+          finish();
+          reject(new Error("已取消"));
+          return;
+        }
+        if (character === "\u007f" || character === "\b") {
+          typed = typed.slice(0, -1);
+        } else {
+          typed += character;
+        }
+      }
+    };
+    input.on("data", onData);
+  });
+}
+
 const isEntryPoint =
   typeof require !== "undefined" &&
   typeof module !== "undefined" &&
@@ -635,6 +706,7 @@ if (isEntryPoint) {
       for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
       return Buffer.concat(chunks).toString("utf8");
     },
+    ...(process.stdin.isTTY ? { prompt: promptHidden } : {}),
   }).then((code) => {
     if (code !== 0) process.exitCode = code;
   });
