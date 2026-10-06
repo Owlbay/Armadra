@@ -4345,6 +4345,29 @@
                                   "type": "object",
                                   "properties": {
                                     "type": {
+                                      "const": "cloud.tunnel"
+                                    },
+                                    "issuer": {
+                                      "type": "string"
+                                    },
+                                    "state": {
+                                      "enum": [
+                                        "disabled",
+                                        "connecting",
+                                        "authenticating",
+                                        "ready",
+                                        "draining",
+                                        "backoff"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "issuer", "state"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
                                       "const": "resources.threshold"
                                     },
                                     "sessionId": {
