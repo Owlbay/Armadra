@@ -133,6 +133,16 @@ export const ERROR_CODES = {
   link_expired: { status: 410, i18n: "error.linkExpired" },
   link_exhausted: { status: 410, i18n: "error.linkExhausted" },
   link_secret_invalid: { status: 403, i18n: "error.linkSecretInvalid" },
+  // ACP 适配器的安装（契约 §39.7）。
+  adapter_not_installable: {
+    status: 400,
+    i18n: "error.adapterNotInstallable",
+  },
+  adapter_already_installed: {
+    status: 409,
+    i18n: "error.adapterAlreadyInstalled",
+  },
+  npm_not_found: { status: 409, i18n: "error.npmNotFound" },
 } as const satisfies Record<string, ErrorSpec>;
 
 export type ErrorCode = keyof typeof ERROR_CODES;

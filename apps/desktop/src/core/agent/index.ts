@@ -28,6 +28,10 @@ import { installRoutes } from "./routes";
 import { AmaCredentials, setAmaCredentials } from "./ama-credentials";
 import { secretsFor } from "../secrets";
 import { installHookBridge } from "./hook-bridge";
+import {
+  AdapterInstaller,
+  installAdapterInstallRoutes,
+} from "./adapter-install";
 
 /**
  * The agent domain's assembly point — agent status, approvals, collaboration,
@@ -154,6 +158,8 @@ export function install(context: CoreContext): CollabContext {
     collab: withHandoff,
     amaCredentials: amaKeys,
   });
+  // ACP 适配器的安装（契约 §39.7）：任务在内存里，页面轮询。
+  installAdapterInstallRoutes(context.server, new AdapterInstaller());
   amaKeys.load().catch((error: unknown) => {
     context.log.warn("could not read ama's model keys", {
       error: error instanceof Error ? error.message : String(error),

@@ -108,6 +108,10 @@ const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   link_expired: "error.linkExpired",
   link_exhausted: "error.linkExhausted",
   link_secret_invalid: "error.linkSecretInvalid",
+  // ACP 适配器的安装（契约 §39.7）。
+  adapter_not_installable: "error.adapterNotInstallable",
+  adapter_already_installed: "error.adapterAlreadyInstalled",
+  npm_not_found: "error.npmNotFound",
   UNAUTHENTICATED: "error.unauthenticated",
   PERMISSION_DENIED: "error.forbidden",
   NOT_FOUND: "error.notFound",
