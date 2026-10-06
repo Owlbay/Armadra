@@ -15,7 +15,9 @@ import {
 import type { RequestIdentity } from "../identity/gate";
 import { createLog, nodePlatform } from "../platform";
 import { tempDir } from "../testing/temp-dir";
+import { OUTBOUND } from "../net/outbound";
 import {
+  ADAPTER_INSTALL_OUTBOUND,
   AdapterInstaller,
   type InstallCommand,
   type InstallRunner,
@@ -313,6 +315,13 @@ describe("输出", () => {
     expect(done.output.at(-1)).toBe("partial");
     expect(done.output.at(-2)?.length).toBeLessThan(400);
     expect(cleanLine("a\x07b")).toBe("ab");
+  });
+});
+
+describe("出站登记", () => {
+  it("npm 子进程的联网登记在出站表的 npmRegistry", () => {
+    expect(ADAPTER_INSTALL_OUTBOUND).toBe(OUTBOUND.npmRegistry);
+    expect(ADAPTER_INSTALL_OUTBOUND.purpose).toContain("ACP");
   });
 });
 

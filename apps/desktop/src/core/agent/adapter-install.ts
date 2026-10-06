@@ -19,6 +19,7 @@ import { type DomainHandlers, registerProcedures } from "../http/rpc";
 import { audit } from "../identity/audit";
 import { isOwner } from "../identity/authorize";
 import { currentSubject } from "../identity/gate";
+import { OUTBOUND } from "../net/outbound";
 import { agentPath } from "../terminal/environment";
 import { definition, resolveCommand } from "./registry";
 
@@ -37,6 +38,12 @@ import { definition, resolveCommand } from "./registry";
  * 输出只留最后 {@link TAIL_LINES} 行，去掉控制字符并脱敏，不进日志、不落盘。
  * 结束后忘掉这家记着的 ACP 版本，再在 PATH 上重新探一次适配器程序。
  */
+
+/**
+ * npm 子进程的联网登记在出站表（`net/outbound.ts` 的 `npmRegistry`）：core 自己不
+ * 连，但这是 core 替用户起的联网，不算用户自己的程序。
+ */
+export const ADAPTER_INSTALL_OUTBOUND = OUTBOUND.npmRegistry;
 
 /** 输出尾部留几行。 */
 export const TAIL_LINES = 40;
