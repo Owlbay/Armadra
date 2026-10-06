@@ -26,6 +26,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
@@ -200,6 +201,71 @@ export function migrationResources(from = join(app, MIGRATIONS_FROM)) {
 }
 
 /**
+ * The server shell the installer carries, so `Armadra serve` can run the same
+ * core and page on its own (`main/serve-launch.ts`; platform plan A5-1):
+ * `apps/server/out/main.js` (esbuild, one CJS file) and the page under
+ * `resources/server/web/`. The page is the desktop's own `out/renderer` —
+ * electron-vite builds it from `apps/web`'s config unchanged, so it is the
+ * artifact `pnpm --filter @armadra/web build` produces and the window and the
+ * served page cannot drift apart. The migrations, the hook client and the bundled ama are
+ * not copied again: the shell finds `resources/migrations` through
+ * `ARMADRA_CORE_MIGRATIONS_DIR` and the rest one directory up from itself.
+ * `node-pty` is the one native module and stays where the desktop has it
+ * (`app.asar.unpacked`), reached through `NODE_PATH`, so both shells run the
+ * same binary under the same Electron ABI.
+ */
+export const SERVER_FROM = "../server/out/main.js";
+export const SERVER_TO = "server/main.js";
+export const WEB_FROM = "out/renderer";
+export const WEB_TO = "server/web";
+
+/** Every file under `directory`, relative and `/`-separated, sorted. */
+function filesUnder(directory, prefix = "") {
+  return readdirSync(directory)
+    .sort()
+    .flatMap((name) => {
+      const full = join(directory, name);
+      const relative = prefix === "" ? name : `${prefix}/${name}`;
+      return statSync(full).isDirectory()
+        ? filesUnder(full, relative)
+        : [relative];
+    });
+}
+
+/**
+ * The server shell and the page it serves, as `{from, to}` pairs. Copied file
+ * by file for the same reason as the migrations: one retry path for everything
+ * this hook places. A checkout that has not built the page yet lists none of
+ * its files (so the pure listing still works in tests); the hook itself
+ * refuses to pack without it ({@link requireServerBuild}).
+ */
+export function serverResources(webFrom = join(app, WEB_FROM)) {
+  return [
+    { from: SERVER_FROM, to: SERVER_TO },
+    ...(existsSync(webFrom) ? filesUnder(webFrom) : []).map((name) => ({
+      from: `${WEB_FROM}/${name}`,
+      to: `${WEB_TO}/${name}`,
+    })),
+  ];
+}
+
+/** Both server-shell products must exist before anything is packed. */
+export function requireServerBuild(
+  webFrom = join(app, WEB_FROM),
+  serverFrom = join(app, SERVER_FROM),
+  exists = existsSync,
+) {
+  if (!exists(serverFrom))
+    throw new Error(
+      `after-pack: ${serverFrom} is missing; run pnpm --filter @armadra/server build before packaging`,
+    );
+  if (!exists(join(webFrom, "index.html")))
+    throw new Error(
+      `after-pack: ${join(webFrom, "index.html")} is missing; run electron-vite build before packaging`,
+    );
+}
+
+/**
  * The third-party notices that ship inside every bundle (external-services
  * §11.3), as `{from, to}` pairs under the resources directory:
  *
@@ -302,7 +368,8 @@ export function placeElectronNotices(
 
 /**
  * Everything this hook places for a platform: the `out/` bundles, the
- * third-party notices, then the migrations the core reads at start-up.
+ * third-party notices, the migrations the core reads at start-up, then the
+ * server shell and its page.
  *
  * There are no sidecar binaries any more. The core is one of those `out/`
  * bundles and runs on the Electron the app already ships, so nothing here is
@@ -313,6 +380,7 @@ export function placements(platformName) {
     ...bundleResources(platformName),
     ...noticeResources(),
     ...migrationResources(),
+    ...serverResources(),
   ].map((resource) => ({ ...resource, executable: false }));
 }
 
@@ -369,6 +437,7 @@ export default async function afterPack(context) {
   const archName = ARCH_NAMES[context.arch] ?? process.arch;
   platformFor(platformName, archName);
   const resourcesDir = context.packager.getResourcesDir(context.appOutDir);
+  requireServerBuild();
   for (const placement of placements(platformName)) {
     const source = join(app, placement.from);
     if (!existsSync(source)) {

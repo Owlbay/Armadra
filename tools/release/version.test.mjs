@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import {
   VERSION_SITES,
   checkAgentPin,
+  checkDesktopServe,
   checkPlatformPin,
   checkVersions,
   readVersions,
@@ -331,6 +332,43 @@ test("a platform pin that moved alone, or a changed tarball, fails the check", (
         ...pin,
         tarball: { ...pin.tarball, sha256: "a" },
       }),
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("the desktop package carries the server shell behind the serve gate", () => {
+  assert.deepEqual(checkDesktopServe(), []);
+  const base = mkdtempSync(join(tmpdir(), "desktop-serve-"));
+  try {
+    for (const file of [
+      "apps/desktop/package.json",
+      "apps/desktop/electron.vite.config.ts",
+      "apps/desktop/scripts/after-pack.mjs",
+    ]) {
+      mkdirSync(dirname(join(base, file)), { recursive: true });
+      cpSync(join(root, file), join(base, file));
+    }
+    const base2 = base + "/";
+    assert.deepEqual(checkDesktopServe({ base: base2 }), []);
+    // A manifest that points `main` back at index.js skips the gate.
+    const manifest = join(base, "apps/desktop/package.json");
+    writeFileSync(
+      manifest,
+      readFileSync(manifest, "utf8").replace("entry.js", "index.js"),
+    );
+    assert.match(checkDesktopServe({ base: base2 })[0], /entry\.js/);
+    // An after-pack that stops placing the shell fails too.
+    const hook = join(base, "apps/desktop/scripts/after-pack.mjs");
+    writeFileSync(
+      hook,
+      readFileSync(hook, "utf8").replace('"server/main.js"', '"x/main.js"'),
+    );
+    assert.ok(
+      checkDesktopServe({ base: base2 }).some((p) =>
+        /server\/main\.js/.test(p),
+      ),
     );
   } finally {
     rmSync(base, { recursive: true, force: true });

@@ -10,6 +10,8 @@ import {
   migrationResources,
   placeLaunchExe,
   placements,
+  requireServerBuild,
+  serverResources,
   pinUpdaterCacheDir,
   placeUpdaterCacheDir,
   platformFor,
@@ -109,6 +111,7 @@ test("a platform's placements are its out/ bundles, the notices and every migrat
         ...bundleResources(platform),
         ...noticeResources(),
         ...migrationResources(),
+        ...serverResources(),
       ].map((r) => `${r.from} -> ${r.to}`),
     );
   }
@@ -142,6 +145,51 @@ test("a platform's placements are its out/ bundles, the notices and every migrat
       (r) => r.from === "out/agent/ama.cjs" && r.to === "agent/ama.cjs",
     ),
   );
+});
+
+test("the server shell and its page go under resources/server, the page being the desktop's own", () => {
+  const root = mkdtempSync(join(tmpdir(), "after-pack-server-"));
+  try {
+    mkdirSync(join(root, "assets"), { recursive: true });
+    writeFileSync(join(root, "index.html"), "<html></html>");
+    writeFileSync(join(root, "assets", "app-abc12345.js"), "");
+    const placed = serverResources(root);
+    assert.deepEqual(
+      placed.map((r) => r.to),
+      [
+        "server/main.js",
+        "server/web/assets/app-abc12345.js",
+        "server/web/index.html",
+      ],
+    );
+    assert.equal(placed[0].from, "../server/out/main.js");
+    // Without the page's files only the shell is listed (a checkout that has
+    // not built yet); the hook itself refuses to pack in that state.
+    assert.deepEqual(
+      serverResources(join(root, "nope")).map((r) => r.to),
+      ["server/main.js"],
+    );
+    assert.doesNotThrow(() => requireServerBuild(root, "main.js", () => true));
+    assert.throws(
+      () => requireServerBuild(root, "main.js", (p) => p !== "main.js"),
+      /server build/,
+    );
+    assert.throws(
+      () => requireServerBuild(join(root, "nope"), "main.js", () => false),
+      /main\.js is missing/,
+    );
+    assert.throws(
+      () =>
+        requireServerBuild(
+          join(root, "nope"),
+          "main.js",
+          (p) => p === "main.js",
+        ),
+      /index\.html is missing/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("the migrations go where a packaged core looks for them", () => {

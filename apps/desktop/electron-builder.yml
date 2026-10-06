@@ -83,6 +83,11 @@ asarUnpack:
 # carries an `extraResources` list. Electron's `process.resourcesPath` is exactly
 # that directory on every platform.
 #
+# The installer also carries the server shell for `Armadra serve`
+# (`main/serve-launch.ts`): `resources/server/main.js` plus the desktop's own
+# page as `resources/server/web/`, placed by the same hook (`serverResources()`).
+# Its node-pty is the one unpacked above, reached through NODE_PATH.
+#
 # Only Windows ships the session host (T01: ConPTY sessions have to outlive the
 # core there; tmux already does that job on macOS/Linux); the per-platform list
 # is `bundleResources()` in after-pack.mjs, so nothing here can drift from what

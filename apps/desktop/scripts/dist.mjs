@@ -211,6 +211,13 @@ export async function dist({
     delete process.env[name];
   }
 
+  // The installer carries the server shell too (`Armadra serve`); its
+  // `out/main.js` is placed by after-pack.mjs, so it is built first.
+  execFileSync(
+    process.execPath,
+    [join(app, "..", "server", "scripts", "build.mjs")],
+    { cwd: join(app, "..", "server"), stdio: "inherit" },
+  );
   execFileSync(process.execPath, [electronViteEntry(), "build"], {
     cwd: app,
     stdio: "inherit",
