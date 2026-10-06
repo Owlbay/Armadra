@@ -68,6 +68,7 @@ describe("契约树", () => {
       "settings",
       "sources",
       "identity",
+      "boards",
     ]);
   });
 
