@@ -223,7 +223,7 @@ export function install(context: CoreContext): void {
    * 契约 §36：同一份实现。`null` 的排序与缺席同义（旧路径一直这样读）；订阅
    * `presence` 见 {@link openPresence}。
    */
-  registerProcedures(server, "boards", {
+  const handlers = {
     list: ({ workspaceId: id }) =>
       listBoards(database, id).map((row) => ({ ...row })),
     create: ({ workspaceId: id, name }) => createBoard(database, id, name),
@@ -277,7 +277,20 @@ export function install(context: CoreContext): void {
         beat,
       });
     },
-  });
+  } satisfies Omit<
+    DomainHandlers<"boards">,
+    // 评论（§36.5）由实时域的 `installCommentRoutes` 登记。
+    | "comments"
+    | "createComment"
+    | "updateComment"
+    | "deleteComment"
+    | "resolveComment"
+  >;
+  registerProcedures(
+    server,
+    "boards",
+    handlers as unknown as DomainHandlers<"boards">,
+  );
 
   server.router.handle(
     "GET",

@@ -137,12 +137,14 @@ export type {
   Scope,
 } from "./meta.js";
 export {
+  boardCommentWireSchema,
   boardDocumentWireSchema,
   boardEdgeWireSchema,
   boardNodeWireSchema,
   boardPresenceWireSchema,
   boardRealtimeStateWireSchema,
   boardWireSchema,
+  commentListWireSchema,
 } from "./boards.js";
 export type { BoardPresenceItem, BoardRealtimeStateWire } from "./boards.js";
 export {

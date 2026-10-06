@@ -48,7 +48,7 @@ describe("评论路由（契约 §16.3）", () => {
     events = [];
     fx = fixture([
       (context) =>
-        installCommentRoutes(context.server.router, {
+        installCommentRoutes(context.server, {
           database: context.db.database,
           publish: (workspaceId, event) => events.push({ workspaceId, event }),
           now: () => 1_000,

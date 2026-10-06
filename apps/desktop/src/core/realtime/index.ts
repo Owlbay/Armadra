@@ -131,7 +131,7 @@ export function install(context: CoreContext): RealtimeHub {
   );
 
   // 评论（契约 §16.3）：不进文档，读写都在 `board_comments`。
-  installCommentRoutes(context.server.router, {
+  installCommentRoutes(context.server, {
     database,
     publish: (workspace, event) => {
       context.bus.emit("workspace.event", { workspaceId: workspace, event });
