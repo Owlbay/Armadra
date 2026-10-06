@@ -34,28 +34,38 @@ import java.util.function.Supplier;
  * 别的钩子：那条链由系统校验，指纹不再参与。
  */
 final class PinningWebViewClient extends BridgeWebViewClient {
-    private final Supplier<Pin> pins;
+    private final Supplier<List<Pin>> pins;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
 
-    PinningWebViewClient(Bridge bridge, Supplier<Pin> pins) {
+    PinningWebViewClient(Bridge bridge, Supplier<List<Pin>> pins) {
         super(bridge);
         this.pins = pins;
     }
 
     @Override
     public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
-        Pin pin = pins.get();
         Uri url = Uri.parse(error.getUrl());
         String host = url.getHost();
         X509Certificate leaf = leafOf(error.getCertificate());
-        if (pin == null || host == null || leaf == null || !pin.covers(host, url.getPort())) {
+        // 每个来源各钉各的：按主机与端口找发往的那一份。
+        Pin pin = null;
+        if (host != null) {
+            for (Pin candidate : pins.get()) {
+                if (candidate.covers(host, url.getPort())) {
+                    pin = candidate;
+                    break;
+                }
+            }
+        }
+        if (pin == null || host == null || leaf == null) {
             Log.w(ArmadraNativePlugin.TAG, "tls: not a pinned origin, refused (" + error.getPrimaryError() + ")");
             handler.cancel();
             return;
         }
+        final Pin covering = pin;
         worker.execute(() -> {
-            boolean trusted = PinPolicy.evaluate(List.of(leaf), pin, host, new Date());
+            boolean trusted = PinPolicy.evaluate(List.of(leaf), covering, host, new Date());
             Log.i(ArmadraNativePlugin.TAG, "tls: pinned origin " + (trusted ? "trusted" : "refused"));
             main.post(() -> {
                 if (trusted) handler.proceed();

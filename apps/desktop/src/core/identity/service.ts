@@ -160,7 +160,9 @@ export type LoginMethod =
   | "passkey"
   | "totp"
   | "recovery"
-  | "oauth";
+  | "oauth"
+  // 远程服务签的源访问断言（契约 §31）。
+  | "cloud";
 
 /** 会话列表的一行（契约 §18.4）。密钥与哈希不出这个域。 */
 export interface SessionView {

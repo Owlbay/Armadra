@@ -66,6 +66,27 @@ export const ERROR_CODES = {
   account_locked: { status: 429, i18n: "error.accountLocked" },
   source_unreachable: { status: 502, i18n: "error.sourceUnreachable" },
   source_offline: { status: 503, i18n: "error.sourceOffline" },
+  // 云登录与登记（契约 §31）：拼法与状态同协议包 `errors` 注册表。
+  cloud_not_registered: { status: 401, i18n: "error.cloudNotRegistered" },
+  cloud_assertion_invalid: {
+    status: 401,
+    i18n: "error.cloudAssertionInvalid",
+  },
+  cloud_assertion_replayed: {
+    status: 401,
+    i18n: "error.cloudAssertionInvalid",
+  },
+  cloud_already_registered: {
+    status: 409,
+    i18n: "error.cloudAlreadyRegistered",
+  },
+  cloud_issuer_mismatch: { status: 400, i18n: "error.cloudIssuerMismatch" },
+  invitation_invalid: { status: 401, i18n: "error.invitationInvalid" },
+  registration_token_invalid: {
+    status: 401,
+    i18n: "error.registrationTokenInvalid",
+  },
+  protocol_unsupported: { status: 426, i18n: "error.protocolUnsupported" },
 } as const satisfies Record<string, ErrorSpec>;
 
 export type ErrorCode = keyof typeof ERROR_CODES;

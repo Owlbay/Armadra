@@ -47,6 +47,15 @@ export interface SourcesLog {
   warn(message: string, fields?: Record<string, unknown>): void;
 }
 
+/**
+ * 本机到远程服务的登记（契约 §31，`identity/cloud`）在源表这一侧要的两件事。
+ * 没装（未统一的库、测试）时当作「没登记」。
+ */
+export interface CloudRegistrations {
+  registered(issuer: string): boolean;
+  revoke(input: { issuer: string }): unknown;
+}
+
 export interface SourcesServiceOptions {
   readonly store: SourcesStore;
   readonly secrets: SourceSecrets;
@@ -57,6 +66,8 @@ export interface SourcesServiceOptions {
   /** 本机行的显示名。 */
   readonly hostLabel: () => string;
   readonly log: SourcesLog;
+  /** 云登录域（A2-3）；装好之后 `registered` 与删远程服务前的撤销经它。 */
+  readonly cloud?: () => CloudRegistrations | undefined;
   readonly now?: () => number;
   readonly newId?: () => string;
 }
@@ -201,8 +212,8 @@ export class SourcesService {
   private async remoteJson(row: RemoteRow): Promise<RemoteService> {
     return {
       ...row,
-      // 本机是否登记到它：登记表随 A2-3（迁移 0040）落地，在那之前恒为 false。
-      registered: false,
+      // 本机是否登记到它（契约 §31 的登记表，迁移 0040）。
+      registered: this.options.cloud?.()?.registered(row.issuer) ?? false,
       hasCredentials: (await this.secrets.remote(row.serviceId)) !== undefined,
     };
   }
@@ -695,6 +706,12 @@ export class SourcesService {
 
   async remoteRemove(serviceId: string): Promise<Record<string, never>> {
     const row = this.remoteRow(serviceId);
+    // 本机登记到它的，先撤销登记（停隧道、不再认它签的断言）：删掉远程服务却
+    // 留着对它的信任，等于留一扇没人看着的门。
+    const cloud = this.options.cloud?.();
+    if (cloud?.registered(row.issuer) === true) {
+      cloud.revoke({ issuer: row.issuer });
+    }
     // 尽力登出：远程服务不可达不拦删除（旁路保证）。
     const cached = this.access.get(serviceId);
     if (cached !== undefined && cached.accessExpiresAtMs > this.now()) {

@@ -7,6 +7,8 @@ import java.util.regex.Pattern;
  *
  * <ul>
  *   <li>{@code armadra://pair?…}：写进 {@code #link=} 再重载，连接页拿它当初值，人点「连接」才配；
+ *   <li>{@code armadra://join?link=<id>&issuer=<签发方>&s=<片段>}：个人中转的分享链接（cloud 契约 §10），与配对一样
+ *       写进 {@code #link=} 再重载，连接页收到就直接挂载；
  *   <li>{@code armadra://w/<工作空间>[/n/<节点>]}：写进 {@code #push=}，页面认 {@code hashchange}；
  *   <li>{@code armadra://oauth?state=…&code=…}（或 {@code error=}）：原生 OAuth 的回调（R-56），与配对一样
  *       写进 {@code #link=} 再重载，入口在挂载前收尾。
@@ -15,10 +17,11 @@ import java.util.regex.Pattern;
  * 其余一律不认；链接按 JSON 字符串字面量嵌进脚本。
  */
 public final class DeepLink {
-    public enum Kind { PAIR, NODE, OAUTH }
+    public enum Kind { PAIR, JOIN, NODE, OAUTH }
 
     private static final int MAX_LENGTH = 2048;
     private static final Pattern PAIR = Pattern.compile("^armadra://pair\\?[A-Za-z0-9._~%&=:+-]+$");
+    private static final Pattern JOIN = Pattern.compile("^armadra://join\\?[A-Za-z0-9._~%&=:+-]+$");
     private static final Pattern OAUTH = Pattern.compile("^armadra://oauth\\?[A-Za-z0-9._~%&=:+*-]+$");
     private static final Pattern NODE =
             Pattern.compile("^armadra://w/[A-Za-z0-9._~%-]+(/n/[A-Za-z0-9._~%-]+)?/?$");
@@ -35,6 +38,7 @@ public final class DeepLink {
     public static DeepLink parse(String link) {
         if (link == null || link.length() > MAX_LENGTH) return null;
         if (PAIR.matcher(link).matches()) return new DeepLink(Kind.PAIR, link);
+        if (JOIN.matcher(link).matches()) return new DeepLink(Kind.JOIN, link);
         if (NODE.matcher(link).matches()) return new DeepLink(Kind.NODE, link);
         if (OAUTH.matcher(link).matches()) return new DeepLink(Kind.OAUTH, link);
         return null;
@@ -42,7 +46,7 @@ public final class DeepLink {
 
     public String script() {
         String literal = literal(link);
-        if (kind == Kind.PAIR || kind == Kind.OAUTH) {
+        if (kind == Kind.PAIR || kind == Kind.JOIN || kind == Kind.OAUTH) {
             return "history.replaceState(null,'',location.pathname+'#link='+encodeURIComponent("
                     + literal + "));location.reload();";
         }

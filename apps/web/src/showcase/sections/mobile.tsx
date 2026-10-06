@@ -5,6 +5,7 @@ import { useT } from "@/app/preferences-store";
 import { MessageList } from "@/acp/MessageList";
 import { PermissionCard } from "@/acp/PermissionCard";
 import { PromptBox } from "@/acp/PromptBox";
+import type { RelayEnrollment, RelayOutcome } from "@/mobile/connect";
 import { ConnectScreen } from "@/mobile/ConnectScreen";
 import {
   PushPermissionDock,
@@ -24,14 +25,27 @@ import {
 import {
   MOBILE_CA_HREF,
   MOBILE_CODE,
+  MOBILE_CONNECTIONS,
   MOBILE_LINK,
   MOBILE_ORIGIN,
+  MOBILE_RELAY_FINGERPRINT,
+  MOBILE_RELAY_HOST,
   MOBILE_SAMPLES,
+  MOBILE_SOURCES,
   type MobileSampleId,
 } from "../fixtures/mobile";
 
 const never = () => new Promise<null>(() => undefined);
 const noop = () => undefined;
+/** 展示页的个人中转：每一步都悬着，钉住的视图由 `initialView` 给。 */
+const pendingOutcome = () => new Promise<RelayOutcome>(() => undefined);
+const relayStub: RelayEnrollment = {
+  begin: pendingOutcome,
+  join: pendingOutcome,
+  trust: pendingOutcome,
+  mount: pendingOutcome,
+  reset: noop,
+};
 const sent = async () => true;
 
 /**
@@ -105,6 +119,67 @@ function Screen({
             canScan
             initialLink={MOBILE_LINK}
             failure="expired"
+            onConnect={never}
+            onScan={never}
+          />
+        );
+      case "list":
+        return (
+          <ConnectScreen
+            mode="native"
+            canScan
+            relay={relayStub}
+            connections={MOBILE_CONNECTIONS}
+            activeId={MOBILE_CONNECTIONS[0].sourceId}
+            initialView="list"
+            onConnect={never}
+            onScan={never}
+          />
+        );
+      case "add":
+        return (
+          <ConnectScreen
+            mode="native"
+            canScan
+            relay={relayStub}
+            initialView="add"
+            onConnect={never}
+            onScan={never}
+          />
+        );
+      case "relay":
+        return (
+          <ConnectScreen
+            mode="native"
+            canScan
+            relay={relayStub}
+            initialView="relay"
+            initialRelay={{ issuer: MOBILE_RELAY_HOST, account: "owner" }}
+            onConnect={never}
+            onScan={never}
+          />
+        );
+      case "fingerprint":
+        return (
+          <ConnectScreen
+            mode="native"
+            canScan
+            relay={relayStub}
+            initialView="fingerprint"
+            initialRelay={{ issuer: MOBILE_RELAY_HOST }}
+            initialFingerprint={MOBILE_RELAY_FINGERPRINT}
+            onConnect={never}
+            onScan={never}
+          />
+        );
+      case "sources":
+        return (
+          <ConnectScreen
+            mode="native"
+            canScan
+            relay={relayStub}
+            initialView="sources"
+            initialSources={MOBILE_SOURCES}
             onConnect={never}
             onScan={never}
           />

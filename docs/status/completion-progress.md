@@ -1957,6 +1957,85 @@
 - 远程直连的 `hello` 探测是跨来源请求，要对方 Gateway 的来源白名单与本机壳的 CSP `connect-src` 放行（A1-4 动态 CSP）；不放行时探测失败、退回中继。
 - 改到了 E2 的 `api/client.ts`（只去掉 `RUNTIME_URL` / `initRuntimeSockets` 的再导出，加 `clientFor` / `currentClient`，`runtimeApi` 经当前源）；`api/events.ts` 没动。
 
+## A2-3 云登录与登记（`core/identity/cloud/`，迁移 0040，契约 §31）
+
+设计：[平台实现规格 core 包](../design/platform/core-packages.md) §2；契约 §31。只实现个人中转这一个签发方，SaaS 只留形状（总计划 §12）。
+
+做了什么：
+
+- **迁移** `0040_cloud_identity.sql`：`cloud_registrations`（按规格，多一列 `label`）、`identity_invitations` 加 `max_uses` / `uses`、`identity_invitation_uses`（A4-1 用，消费逻辑未动）；`migrations.lock` 已登记。表里没有凭据。
+- **契约**（`packages/shared/src/contract/cloud.ts`，§31.1）：`identity.cloud.{login, register, revoke, status, bind, trustedOrigins}`，出入参取协议包 `core-api` 的同一份 schema；`login` 是唯一的匿名 procedure，只经旧路径。错误码注册表加 `cloud_not_registered`、`cloud_assertion_invalid`、`cloud_assertion_replayed`、`cloud_already_registered`、`cloud_issuer_mismatch`、`invitation_invalid`、`registration_token_invalid`、`protocol_unsupported`（与协议包同拼法同状态），页面 `api/request.ts` 与 `i18n/errors.ts` 中英文案；审计动作文案进 `i18n/security.ts`。
+- **RPC 门面**（`http/rpc.ts`）：`registerProcedures` 收嵌套的实现树，契约可以有子域（`identity.cloud.<动词>`）。
+- **core**（`core/identity/cloud/`）：`store.ts`（SQL）、`source-key.ts`（Ed25519，私钥 PKCS8 只在 SecretStore `armadra-cloud-source-key`，所有 issuer 共用，`kid = sourceId = hostId`；源 JWS 与 `signBytes` 给隧道）、`jwks.ts`（缓存在行里，`kid` 未知时同一 issuer 每 10 分钟最多取一次，取不到照样用缓存）、`assertion.ts`（`alg` / `typ`、按 `iss` 找登记、验签、`aud = hostId`、5 分钟偏差、寿命 ≤ 重放窗口，最后才记 `jti`）、`login.ts`（映射走 oauth 凭据 `provider = cloud:<sha256(iss) 前 16 位>`；带邀请建成员一笔事务；`link.invitationId` 必须是那张邀请；组织默认角色逐条授予；按 `(iss, sub)` 每分钟 5 次；`bind`）、`register.ts`（登记 / 撤销 / 状态 / 可信来源，`CloudRelay` 接口与空实现）、`cloud-client.ts`（`platform.info`、`sources.register`、JWKS，复用 `sources/http-client.ts` 的钉扎发送点）、`http.ts`（`/api/identity/cloud*` 原样路由，自己认会话并按契约 scope 判）、`service.ts` + `index.ts`（`installCloud`、`cloudDomain()`）。身份域装配时装它（与会话、账号、加固同一份）。`AccountsService.registerExternalWithInvitation`；`LoginMethod` 加 `cloud`；审计 `cloud.login`、`cloud.bind`、`cloud.register`、`cloud.revoke`、`invitation.accept.link`。
+- **源表**（A1-3 留的接口）：`RemoteService.registered` 读登记表；`remoteRemove` 删行前先撤销本机对它的登记。
+- `net/outbound.ts`：加 `cloudJwks`、`relayTunnel`（A3-2 用），`cloudApi` 用途补上登记。路由表与 `route-scopes.ts` 登记 `/api/identity/cloud*`。契约 §31 由占位补成实施契约（§31.1 生成表、§31.2 登记、§31.3 断言换会话），§33 两处「随 §31 落地」改为已接上；`architecture.md` 域表与迁移表各加一行。
+
+实测（macOS arm64，2026-10-06，基于 main 7025d0bd（含 #136、#137、#138）；合入 main c4e3a97f（#139，只动页面）后重跑 `pnpm check` 与 web 用例）：
+
+- `pnpm check` 通过（lint 0 error、285 warn，与 A1-3 基线相同，本包文件 0 warn）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 4770 过 / 63 跳过，live 4 过，脚本 68 过；`pnpm --filter @armadra/shared test` 348 过；`pnpm --filter @armadra/server test` 87 过 / 4 跳过，`pnpm --filter @armadra/server build` 通过（bundle 只带用到的常量，不带测试向量）；`pnpm --filter @armadra/web test` 3492 过（合入 #139 后 3550 过）。
+- 新用例：`cloud/store.test.ts` 5、`assertion.test.ts` 14（协议包 valid / guest / with-link 通过，expired / wrong-aud / wrong-alg 与另四种令牌拒，重放、篡改、未登记 / 已撤销、时间边界、离线验签、`kid` 未知刷新一次与 10 分钟节流、同 `kid` 别的钥）、`source-key.test.ts` 5（源 JWS 与 `source-jws.jwt` 逐字相等、持久化、并发只生成一把、写失败可重来）、`identity/identity-vectors.test.ts` 5（口令策略、scrypt、锁定、会话常量与协议包相等；scrypt 与令牌哈希向量逐字节相等）、`cloud.test.ts` 19（假个人中转：登记成功 / 426 / 400 / 501 / 401 透传 / 公钥集指到别处 / 502、成员 403 且零外呼、撤销后断言 `cloud_not_registered`、可信来源、未映射 401、绑定后换 owner 原生会话且能用、重放 / 篡改 / 受众 / 过期、带邀请建号与 `invitation.accept.link`、链接邀请不符、组织默认角色、停用 403、按 sub 限流 429、Cookie 来源、login 不经 RPC）、`errors.scan.test.ts` 1（本域 `fail("…")` 的码都在协议包注册表、状态一致）、`sources/service.test.ts` 补 2、`contract.test.ts` 补 3、`outbound.test.ts` 补 1。
+- **对真个人中转联调**：armadra-cloud main（be36b78）`pnpm relay:personal`（https://127.0.0.1:8102，自签，账号见 `.data/personal/dev.env`），`ARMADRA_PERSONAL_RELAY=1 ARMADRA_PERSONAL_RELAY_FP=… vitest run src/core/identity/cloud/personal-relay.devstack.integration.test.ts` 5 过：错注册令牌 401 `registration_token_invalid`；`/v1/sources/registration-tokens` 取的令牌 → `register` 200、状态与 `sources.list` 的 `registered: true` 正确、中继目录里有这台 core；中继签的断言 → `bind` → `cloud/login` 换到 owner 会话且能用，同一张再用 401 `cloud_assertion_replayed`；改了 `sub` 的断言 401 `cloud_assertion_invalid`；`links.create` → 匿名 `links.accept` 的访客断言 + core 邀请令牌 → 建成员、记 `invitation.accept.link`；`revoke` 后新断言 401 `cloud_not_registered`、`registered` 回到 `false`。A1-3 的联调 5 条同轮也过。中继日志除启动一行外无请求记录；联调后已停掉中继，并从中继目录撤掉了临时 core。
+
+接口（供 A3-2 / A1-4 / A4-4）：
+
+- 页面：`createClient(source).identity.cloud.<动词>(…)` 或旧路径 `/api/identity/cloud*`（契约 §31）。错误码按 `code` 取文案（`error.cloudNotRegistered` 等）。
+- A1-4「分享本机」：`sources.remoteSession { serviceId }` 取远程服务访问令牌 → 页面直接 `POST <issuer>/v1/sources/registration-tokens` → `identity.cloud.register { issuer: remote.issuer, registrationToken, label }`（`issuer` 用远程服务行里那一份，这样 `registered` 亮、登记按它的指纹钉扎）→ `identity.cloud.status`（`sourceId`、`tunnel`）；分享链接：core 签邀请（`/api/identity/invitations`）→ `POST <issuer>/v1/links { kind: "source_invite", sourceId, invitationId, … }` → `<url>#<secret>.<邀请令牌>`；停用 `identity.cloud.revoke { issuer }`。owner 自己经中继进来之前先 `identity.cloud.bind { assertion }` 把远程服务账号映射到自己。
+- A3-2：`cloudDomain()` → `CloudService`：`attachRelay({ start, stop, status })`（装好之后登记 / 撤销 / 状态经它）、`registrations()` / `registration(issuer)`（`trustedOrigins`、`relayOrigins`、`mode`）、`signSourceJws(issuer)`、`signBytes(data)`（握手 `auth`）、`revoke({ issuer })`（`source_revoked` 时调）。`installCloud` 的 `orgDefaultRole` 现在缺省 `null`，设置 `cloud.orgDefaultRole` 落地时在 `identity/index.ts` 接上。隧道来的请求要 `markBearerTransport(raw)`，`cloud/login` 才按原生会话答。
+- A4-4：`cloudDomain()?.register / revoke / status` 与 HTTP 同一份实现。
+
+没做 / 偏离规格：
+
+- `cloud_registrations` 多一列 `label`（状态要答 `label?`，规格的表里没有）。
+- 旧路径不经 RPC 门面的 OpenAPI 回挂：`/api/identity/` 是身份域的原样路由，先于契约旧路径；这里登记更长的原样前缀 `/api/identity/cloud`，自己认会话、按契约 scope 判，调的是与 procedure 同一份实现。`login` 不在 RPC 上登记（答 501），`system.hello` 的 `procedures` 里也就没有它。
+- 契约用了子域（`identity.cloud.*`）：RPC 门面原来只认 `域.动词` 两段，改成按路径放。
+- 登记的入参没有指纹：对远程服务的请求按「远程服务」表里同一 issuer 的指纹钉扎，没有那一行就用系统信任。`saas` 模式登记答 501。登记要有 owner（桌面壳没有请求主体时取 owner；还没配过对答 403）。
+- 撤销只在本机：中继侧 `DELETE /v1/sources/{id}` 要远程服务的 owner 会话，留给页面或 A4-4 在需要时调；撤销后中继仍会签断言，但本机一律 `cloud_not_registered`。
+- `bind` 多一个审计动作 `cloud.bind`、已映射给别人答 `409 conflict`；按 `sub` 的限流 `login` 与 `bind` 共用一个桶。`login` 的来源地址桶用「只有失败扣」那一档（与配对、刷新相同），不是每次扣。
+- 云登录不要求本机 TOTP：身份由远程服务证明（与口令登录不同）；断言寿命额外封顶 10 分钟（重放窗口）。
+- 组织默认角色的设置键与 `cloud.tunnel` 事件属于 A3-2；邀请多次使用的消费逻辑属于 A4-1（本包只建列）。
+- `relayTunnel` 的地址按 `https://` 记（外呼表的扫描只收 `https` / `smtp`），连接时升级为 `wss`。
+- `since` 写 `1.3`，协议 minor 不升（同 A1-3）。
+
+## A1-5 手机多连接（`apps/web/src/mobile/` + `apps/mobile`）
+
+设计：[客户端包](../design/platform/client-packages.md) §4，[总计划](../design/platform-implementation-plan.md) §12（个人中转优先；SaaS 只预留）。
+
+做了什么：
+
+- **原生桥多会话**（`mobile/native-bridge.ts`、`apps/mobile/src/bridge.ts`）：`getSessions / setSession / removeSession(sourceId, origin?)`、`getRemotes / setRemote / removeRemote`、`peek(origin)`（不带凭据取一次信任锚指纹，什么也不存）；`pin` 改为每个来源各存一份。会话一个连接一份（键 `sourceId` + `via`），远程服务的刷新令牌一份（键 `serviceId`），都只在钥匙串 / Keystore，连接表（无凭据）在页面本地存储 `armadra.sources`。旧的单会话方法（`getSession / clearSession`）删除，不留兼容。
+- **iOS**：`SecretStore` 加 `list(prefix:)`，新 `ConnectionVault`（会话 / 远程服务 / 钉扎的校验与读写，写入前校验形状，键与内容对不上的读回时丢掉）；插件 `peek`（`AnchorFetch` 分开给握手链、`/ca.crt` 与「系统是否本来就信」）、`pin` 多来源、`armadra://join` 深链。**Android**：`SecureStore.names(prefix)`、纯 JVM 的 `ConnectionRules`（同一套校验）、`PinningWebViewClient` 按来源找钉扎、`peek`、`join` 深链。
+- **手机的 `CredentialProvider`**（`mobile/credentials.ts`）：直连用钥匙串里的刷新令牌向 Gateway 轮换；经中继先用远程服务的刷新令牌取云会话（每次旋转都写回），要断言与中继令牌，再用存着的刷新令牌经中继轮换源会话，被拒才用断言 `cloud/login` 重登；源不在线答 `source_offline`，云会话失效答 `source_unauthorized`。钥匙串是刷新令牌唯一的真相（身份面轮换后也写回它）。
+- **连接表与添加流程**：`mobile/connections.ts`（同一个源两种到达合并一行，两条路都在，选路直连优先）；`mobile/connect.ts` 的 `createRelayEnrollment`（个人中转：地址 → 取指纹、自签的要人确认才钉 → `auth.login` → `me.sources` 勾选 → 每台 `assertion` → `cloud/login` → 钥匙串；分享链接 / 二维码：`links.accept` → `cloud/login` 带邀请令牌，直接挂载）、`forgetConnection`、`openConnection`；`mobile/cloud-client.ts`（远程服务的一小块客户端，错误归成 `{code, message}`）；`mobile/join-link.ts`（`<issuer>/j/<id>#<秘密>.<邀请令牌>` 与 `armadra://join`）。
+- **入口**（`mobile/entry.ts`）：按连接选路 → 把这一路的地址与凭据装给本机源（`setNativeRuntimeBase`、`installLocalTransport`；经中继时每个请求带 `armadra-relay-token`、每条流带 `armadra-relay.<令牌>`），令牌到期前与回前台时提前续；切换连接 = 记下选中的再重载。选中的连不上回连接页并带原因。`identity.ts` 的钥匙串读写按「当前连接」键（`setNativeConnection`）。
+- **界面**（`ConnectScreen.tsx` + 新 `ConnectRelay.tsx`）：连接列表（点一行进入、行尾移除要确认）+ 「添加连接」三种方式（扫码、配对链接、个人中转），SaaS 没有入口；个人中转三步：表单、核对指纹、选择主机。只用 `Button / Item / Checkbox / Field / Input / Badge` 与 `ResponsiveAlertDialog`，文案进 `i18n/mobile-connect.ts` 中英同步，展示页 `mobile` 分区加了五个样本。
+
+实测（macOS arm64，2026-10-06，基于 main 86271782，含 #139、#138、#140）：
+
+- `pnpm check` 通过（lint 0 error；本包文件 0 新 warn）；`pnpm --filter @armadra/web test` 3589 过（379 个文件），`typecheck` 通过；`pnpm --filter @armadra/mobile test` 10 过、`typecheck` 通过。新用例：`credentials` 7、`connections` 4、`join-link` 5、`connect` 多连接 11（三种添加、同一个源两种到达合并一行、移除、钉扎失败不登录）、`entry` 5、`ConnectScreen` 8、`native-bridge` / `bridge` 各补多会话。
+- iOS：`swift test`（`ArmadraNativeKit`）26 过；`xcodebuild build -sdk iphonesimulator`（`CODE_SIGNING_ALLOWED=NO`）BUILD SUCCEEDED。本机 CoreSimulator 版本低于 Xcode，模拟器起不来，没有在模拟器里跑 App。
+- Android：`armadra-native-core` 用 `javac` + JUnit 直接跑 20 个用例全过（含新 `ConnectionRulesTest`、`DeepLinkTest` join）。本机只有 JDK 25（Gradle 8.14 不认）且没有 Android SDK，`:app` 没有编译，插件 Java 只经人工核对。
+- 对本机个人中转联调（armadra-cloud main be36b78，同一份代码、自选数据目录与端口 8112、自签 TLS，用完已停）：`/ca.crt` 的 DER SHA-256 与启动日志指纹一致；`auth.login` 口令错答 `credentials_invalid`、对了拿到 `refreshToken`；`auth.refresh` 旋转、旧令牌再用被撤销；`me.sources` 空；`links.accept` 假链接答 `link_invalid`；整条添加流程（指纹确认 → 钉扎 → 登录 → 目录）走到「没有可连接的主机」。没有注册任何 core，断言 → `cloud/login` 这一段只在 mock 的 fetch 里验过（核对了请求头 `Armadra-Relay-Token`、请求体与写回钥匙串）。
+- 真浏览器（Chrome 无头，设计展示页 `mobile` 分区）390 宽、明暗两主题、中英各一套：`target/a1-5-screenshots/`（`1-connection-list`、`2-add-connection`、`3-personal-relay`、`4-verify-fingerprint`、`5-choose-hosts`，另有 `0-legacy-link` 现有链接页对照）；`node tools/probes/design-showcase.mjs --only=mobile --width=390`：对比度 dark 最低 3.25、light 最低 3.07，控制台无 error。
+
+接口（供 A1-4 / A4-3p / A3-4）：
+
+- `createMobileCredentialProvider({ bridge, describe })` / `mobileCredentialProvider()`；`serviceIdOf(issuer)`（`personal:<host>`）。
+- 连接表：`loadConnections / upsertConnection / removeConnection / activeConnection / setActiveConnection`（`mobile/connections.ts`）。
+- 管理页入口：把页面地址改成 `#connections`（A1-4 的设置页可直接跳）；`armadra://join?link=&issuer=&s=` 进连接页直接挂载。
+- 新增失败原因（`mobileConnect.error.*`）：`credentials`、`locked`、`link`、`offline`、`noSources`、`address`。
+
+没做 / 偏离规格：
+
+- 规格里的 `bridge.ts` 沿用现有的 `native-bridge.ts`；连接表放页面本地存储而不是 Capacitor Preferences（页面不依赖 `@capacitor/core`，与原来记 Gateway 来源的做法一致）。
+- 登录与指纹的先后：规格写「`auth.login` → 指纹确认」，实现是先 `peek` 指纹、人确认并 `pin`，再登录——自签的中继在钉扎之前连 TLS 都过不了，登录请求发不出去。系统本来就信任的证书与已钉过同一枚的跳过确认。
+- 页面其余部分仍只认「当前连接」（本机源指向选中的那一路，切换要重载），没有把手机接进 A1-1 的 `SourceRegistry` 同时挂多个源；那要等 A1-2 的查询键按源区分与 A1-4。
+- 画布里没有加「连接」入口（设置页归 A1-4）；现在从 `#connections` 或深链进。
+- SaaS：没有入口；设备码流与 `armadra://cloud` 没做（类型与 `saas` 分支保留）。
+- `me.sources` 的名字只是标签，离线的主机不能勾；断言的 `online: false` 在挂载时再校一次。
+- 访客（分享链接）的云会话刷新令牌同样存进钥匙串的远程服务那一份；若同一个中转下已经有账号登录，会被覆盖成访客的（一个签发方一份）。
+- 钉扎的时间窗：`peek` 与 `pin` 是两次取证书，中间被换证书时 `pin` 的指纹核对会失败（不自动信任）。
+
 ## A1-2 查询键与 store 加源
 
 设计：[客户端包](../design/platform/client-packages.md) §2。

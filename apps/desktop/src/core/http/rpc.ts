@@ -67,10 +67,15 @@ type ProcedureHandler<P> = (
   call: RpcCall,
 ) => ProcedureResult<P> | Promise<ProcedureResult<P>>;
 
-/** 一个域的实现：契约里这个域的每条 procedure 一个函数。 */
-export type DomainHandlers<D extends ContractDomain> = {
-  readonly [K in keyof Contract[D]]: ProcedureHandler<Contract[D][K]>;
+/** 契约子树的实现：每条 procedure 一个函数，子树（`identity.cloud`）照样嵌套。 */
+export type HandlerTree<T> = {
+  readonly [K in keyof T]: T[K] extends { "~orpc": unknown }
+    ? ProcedureHandler<T[K]>
+    : HandlerTree<T[K]>;
 };
+
+/** 一个域的实现：契约里这个域的每条 procedure 一个函数。 */
+export type DomainHandlers<D extends ContractDomain> = HandlerTree<Contract[D]>;
 
 type AnyHandler = (input: unknown, call: RpcCall) => unknown;
 
@@ -87,11 +92,18 @@ export function registerProcedures<D extends ContractDomain>(
     registry = new Map();
     registries.set(server, registry);
   }
-  for (const [verb, handler] of Object.entries(handlers)) {
-    const name = `${domain}.${verb}`;
-    if (registry.has(name)) throw new Error(`${name} 登记了两次`);
-    registry.set(name, handler as AnyHandler);
-  }
+  const walk = (prefix: string, tree: object): void => {
+    for (const [key, value] of Object.entries(tree)) {
+      const name = `${prefix}.${key}`;
+      if (typeof value === "function") {
+        if (registry.has(name)) throw new Error(`${name} 登记了两次`);
+        registry.set(name, value as AnyHandler);
+      } else if (typeof value === "object" && value !== null) {
+        walk(name, value);
+      }
+    }
+  };
+  walk(domain, handlers);
 }
 
 export interface RpcInstallOptions {
@@ -368,10 +380,27 @@ function writeEnvelope(
   response.end(payload);
 }
 
-type Implementer = Record<
-  string,
-  Record<string, { handler(fn: (options: never) => unknown): AnyProcedure }>
->;
+/** 上游 `implement(contract)` 的树：叶子是能 `.handler()` 的那一格。 */
+interface ImplementerNode {
+  readonly [key: string]: ImplementerNode & {
+    handler(fn: (options: never) => unknown): AnyProcedure;
+  };
+}
+
+type ProcedureTree = { [key: string]: AnyProcedure | ProcedureTree };
+
+/** 按路径往树里放一条（中间的子树按需建）。 */
+function place(
+  tree: ProcedureTree,
+  path: readonly string[],
+  leaf: AnyProcedure,
+) {
+  let node = tree;
+  for (const key of path.slice(0, -1)) {
+    node = (node[key] ??= {}) as ProcedureTree;
+  }
+  node[path[path.length - 1] as string] = leaf;
+}
 
 /**
  * 把登记过的实现挂起来。在所有域 `install` 之后、任何监听开始之前调。
@@ -417,14 +446,15 @@ export function installContract(
       return verdict.filter === undefined
         ? result
         : { ...result, output: verdict.filter(result.output) };
-    }) as unknown as Implementer;
+    }) as unknown as ImplementerNode;
 
-  const rpcTree: Record<string, Record<string, AnyProcedure>> = {};
-  const legacyTree: typeof rpcTree = {};
+  const rpcTree: ProcedureTree = {};
+  const legacyTree: ProcedureTree = {};
   for (const entry of entries) {
-    const [domain, verb] = entry.path as [string, string];
     const handler = registry.get(entry.name);
-    const built = (base[domain] as Implementer[string])[verb]!.handler((async ({
+    let node = base;
+    for (const key of entry.path) node = node[key] as ImplementerNode[string];
+    const built = (node as ImplementerNode[string]).handler((async ({
       input,
       context,
       signal,
@@ -455,19 +485,23 @@ export function installContract(
     const procedure = options.validateOutput
       ? built
       : new Procedure({ ...def, outputSchema: undefined });
-    (rpcTree[domain] ??= {})[verb] = procedure;
+    place(rpcTree, entry.path, procedure);
     const legacy = entry.meta.legacy;
     if (legacy !== undefined) {
-      (legacyTree[domain] ??= {})[verb] = new Procedure({
-        ...procedure["~orpc"],
-        route: {
-          method: legacy.method,
-          path: legacy.path as `/${string}`,
-          successStatus: legacy.successStatus ?? 200,
-          inputStructure: "compact",
-          outputStructure: "compact",
-        },
-      });
+      place(
+        legacyTree,
+        entry.path,
+        new Procedure({
+          ...procedure["~orpc"],
+          route: {
+            method: legacy.method,
+            path: legacy.path as `/${string}`,
+            successStatus: legacy.successStatus ?? 200,
+            inputStructure: "compact",
+            outputStructure: "compact",
+          },
+        }),
+      );
     }
   }
 

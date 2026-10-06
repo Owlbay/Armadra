@@ -189,6 +189,11 @@ export const security: MessageModule = {
     "security.audit.action.ama.credential.clear": "清除 ama 模型密钥",
     "security.audit.action.ama.credential.unscoped":
       "ama 节点未设模型，兑换了全部模型密钥",
+    "security.audit.action.cloud.login": "经远程服务登录",
+    "security.audit.action.cloud.bind": "关联远程服务账号",
+    "security.audit.action.cloud.register": "登记到远程服务",
+    "security.audit.action.cloud.revoke": "撤销远程服务登记",
+    "security.audit.action.invitation.accept.link": "经分享链接接受邀请",
 
     "security.showcase.passwordError": "口令错误",
     "security.showcase.locked": "锁定",
@@ -407,6 +412,12 @@ export const security: MessageModule = {
     "security.audit.action.ama.credential.clear": "ama model key cleared",
     "security.audit.action.ama.credential.unscoped":
       "ama node without a model redeemed every model key",
+    "security.audit.action.cloud.login": "Signed in through a remote service",
+    "security.audit.action.cloud.bind": "Remote service account linked",
+    "security.audit.action.cloud.register": "Registered with a remote service",
+    "security.audit.action.cloud.revoke": "Remote service registration revoked",
+    "security.audit.action.invitation.accept.link":
+      "Invitation accepted through a share link",
 
     "security.showcase.passwordError": "Wrong password",
     "security.showcase.locked": "Locked",

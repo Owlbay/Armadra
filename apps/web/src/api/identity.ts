@@ -7,7 +7,11 @@ import {
   fetchNativeTicket,
   isNativeShell,
 } from "../host/native-session";
-import { isNativeApp, nativeBridge } from "../mobile/native-bridge";
+import {
+  type StoredVia,
+  isNativeApp,
+  nativeBridge,
+} from "../mobile/native-bridge";
 import { localSource } from "./source";
 import {
   type SessionTokens,
@@ -290,6 +294,37 @@ function bearerTransport(): boolean {
   return isNativeShell() || isNativeApp();
 }
 
+/**
+ * 原生 App 正在用的连接（钥匙串里会话的键）：连接页配对时还不知道是哪个源，
+ * 以会话答案里的 `hostId` 为准；重开 App 与切换连接时由入口按源表指定
+ * （`mobile/entry.ts`）。`via` 是这份会话发往的路：直连 Gateway 或经中继。
+ */
+let nativeConnection: { sourceId: string | null; via: StoredVia } = {
+  sourceId: null,
+  via: "direct",
+};
+let lastHostId: string | null = null;
+
+export function setNativeConnection(
+  sourceId: string | null,
+  via: StoredVia,
+): void {
+  nativeConnection = { sourceId, via };
+  lastHostId = null;
+}
+
+function originOf(base: string): string {
+  try {
+    return new URL(base).origin;
+  } catch {
+    return base;
+  }
+}
+
+function nativeSourceId(): string | null {
+  return nativeConnection.sourceId ?? lastHostId;
+}
+
 function remember(
   session: IdentitySession,
   origin: string = localSource.httpBase,
@@ -299,11 +334,16 @@ function remember(
     tokens.refresh = session.native.refreshToken;
     tokens.accessExpiresAt = session.expiresAtUnixMs;
     scheduleShellRefresh();
-    if (isNativeApp())
-      void nativeBridge().saveSession({
-        origin,
+    if (session.hostId !== "") lastHostId = session.hostId;
+    const sourceId = nativeConnection.sourceId ?? session.hostId;
+    if (isNativeApp() && sourceId !== "")
+      void nativeBridge().setSession({
+        sourceId,
+        origin: originOf(origin),
+        via: nativeConnection.via,
         accessToken: tokens.access,
         refreshToken: tokens.refresh,
+        expiresAtMs: tokens.accessExpiresAt,
       });
   }
   rememberCsrf(session.csrfToken ?? "");
@@ -486,7 +526,7 @@ export async function resumeIdentity(): Promise<IdentitySession | null> {
       if (isNativeApp()) {
         // 刷新密钥也不认了（设备被撤销或过期）：钥匙串里那份作废，回连接页。
         resetIdentityCredentials();
-        await nativeBridge().clearSession();
+        await clearNativeSession();
         return null;
       }
       if (isNativeShell()) {
@@ -532,22 +572,42 @@ export async function logoutIdentity(): Promise<void> {
     });
   } finally {
     resetIdentityCredentials();
-    if (isNativeApp()) await nativeBridge().clearSession();
+    if (isNativeApp()) await clearNativeSession();
     announce();
   }
 }
 
 /* ------------------------------- 原生 App -------------------------------- */
 
+/** 钥匙串里这个连接的那一份作废（会话被拒、登出）；别的连接不动。 */
+async function clearNativeSession(): Promise<void> {
+  const sourceId = nativeSourceId();
+  if (sourceId !== null)
+    await nativeBridge().removeSession(
+      sourceId,
+      originOf(localSource.httpBase),
+    );
+}
+
 /**
- * 从钥匙串把上次的会话读回内存。来源对不上（换过 Gateway）的那份不用。
- * 读到返回 `true`。
+ * 从钥匙串把这个连接上次的会话读回内存：键是源与路（`setNativeConnection`），
+ * 没指定源时按来源认直连的那份。读到返回 `true`。
  */
 export async function restoreNativeCredentials(): Promise<boolean> {
-  const stored = await nativeBridge().loadSession();
-  if (stored === null || stored.origin !== localSource.httpBase) return false;
+  const sessions = await nativeBridge().getSessions();
+  const { sourceId, via } = nativeConnection;
+  const origin = originOf(localSource.httpBase);
+  const stored = sessions.find(
+    (candidate) =>
+      candidate.via === via &&
+      (sourceId === null
+        ? candidate.origin === origin
+        : candidate.sourceId === sourceId),
+  );
+  if (stored === undefined) return false;
   tokens.access = stored.accessToken;
   tokens.refresh = stored.refreshToken;
+  tokens.accessExpiresAt = stored.expiresAtMs;
   return true;
 }
 

@@ -11,8 +11,10 @@ import os
 ///
 /// | 方法                          | 这里做什么                                                  |
 /// | ----------------------------- | ----------------------------------------------------------- |
-/// | `getSession` / `setSession` / `clearSession` | 钥匙串里的一份会话（来源 + 两把密钥）        |
-/// | `pin({ origin, fingerprint })` | 取 `/ca.crt` 按指纹核对后存为信任锚；之后对该来源的 TLS 只认它 |
+/// | `getSessions` / `setSession` / `removeSession` | 钥匙串里的会话，一个连接一份（`sourceId` + `via` 为键） |
+/// | `getRemotes` / `setRemote` / `removeRemote` | 远程服务（个人中转）的刷新令牌，`serviceId` 为键 |
+/// | `peek({ origin })`            | 不带凭据取一次信任锚指纹（`/ca.crt` 或握手链），什么也不存    |
+/// | `pin({ origin, fingerprint })` | 取 `/ca.crt` 按指纹核对后存为信任锚；之后对该来源的 TLS 只认它，多个来源各存一份 |
 /// | `scan()`                      | 相机扫二维码，取消时没有 `text`                             |
 /// | `pushRegistration()`          | APNs 令牌 + 设备 X25519 公钥；配了中继时先换中继令牌         |
 /// | `pushRotated()` / `ackPushRotation()` | 启动时 APNs 给了与上次登记不同的令牌（R-54，`PushTokenLedger`） |
@@ -26,9 +28,13 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
     public let identifier = "ArmadraNativePlugin"
     public let jsName = "ArmadraNative"
     public let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "getSession", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getSessions", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setSession", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "clearSession", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "removeSession", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getRemotes", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setRemote", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "removeRemote", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "peek", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "pin", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "scan", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "pushRegistration", returnType: CAPPluginReturnPromise),
@@ -37,22 +43,16 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
         CAPPluginMethod(name: "openExternal", returnType: CAPPluginReturnPromise),
     ]
 
-    private enum Account {
-        static let session = "gateway.session"
-        static let pin = "gateway.pin"
-    }
-
     private static let installedFlag = "dev.armadra.mobile.installed"
     /// 只记结果（钉扎成没成、为什么），不记来源以外的任何参数，更不记密钥。
     private static let log = Logger(subsystem: "dev.armadra.mobile", category: "native")
-    /// 会话密钥：`<32 位十六进制标识>.<43 位 base64url>`（core `identity/tokens.ts`）。
-    private static let secret = "^[0-9a-f]{32}\\.[A-Za-z0-9_-]{43}$"
-
     private let store: SecretStore = KeychainStore()
+    private lazy var vault = ConnectionVault(store: store)
     private let ledger = PushTokenLedger()
     /// 这一次 `pushRegistration` 拿到的 APNs 令牌（登记成功时记进 `ledger`）。
     private var pendingToken: String?
-    private var currentPin: Pin?
+    /// 每个来源一份钉扎（Gateway 与个人中转各钉各的）；握手时按主机与端口找。
+    private var pins: [Pin] = []
     private var pendingScript: String?
     private var loadingObservation: NSKeyValueObservation?
     private var pushCall: CAPPluginCall?
@@ -63,12 +63,11 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
         // 钥匙串在卸载重装后还在：第一次启动时清掉上一次安装留下的会话与钉扎。
         let defaults = UserDefaults.standard
         if !defaults.bool(forKey: Self.installedFlag) {
-            store.delete(Account.session)
-            store.delete(Account.pin)
+            vault.clearAll()
             store.delete(DeviceKey.account)
             defaults.set(true, forKey: Self.installedFlag)
         }
-        currentPin = store.read(Account.pin).flatMap { try? JSONDecoder().decode(Pin.self, from: $0) }
+        pins = vault.pins()
 
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: .capacitorOpenURL, object: nil, queue: .main) { [weak self] note in
@@ -99,40 +98,89 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
         observers.forEach(NotificationCenter.default.removeObserver)
     }
 
-    // MARK: - 会话
+    // MARK: - 会话（多连接）
 
-    @objc func getSession(_ call: CAPPluginCall) {
-        guard let data = store.read(Account.session),
-              let session = try? JSONSerialization.jsonObject(with: data) as? [String: String]
-        else {
-            call.resolve([:])
-            return
+    @objc func getSessions(_ call: CAPPluginCall) {
+        let sessions = vault.sessions().map { record -> [String: Any] in
+            [
+                "sourceId": record.sourceId, "origin": record.origin, "via": record.via,
+                "accessToken": record.accessToken, "refreshToken": record.refreshToken,
+                "expiresAtMs": record.expiresAtMs,
+            ]
         }
-        call.resolve(["session": session])
+        call.resolve(["sessions": sessions])
     }
 
     @objc func setSession(_ call: CAPPluginCall) {
         guard let session = call.getObject("session"),
-              let origin = session["origin"] as? String, PinPolicy.isOrigin(origin),
-              let access = session["accessToken"] as? String, Self.isSecret(access),
-              let refresh = session["refreshToken"] as? String, Self.isSecret(refresh),
-              let data = try? JSONSerialization.data(withJSONObject: [
-                  "origin": origin, "accessToken": access, "refreshToken": refresh,
-              ])
+              let sourceId = session["sourceId"] as? String,
+              let origin = session["origin"] as? String,
+              let via = session["via"] as? String,
+              let access = session["accessToken"] as? String,
+              let refresh = session["refreshToken"] as? String
         else {
             call.reject("invalid session")
             return
         }
-        store.write(Account.session, data) ? call.resolve() : call.reject("keychain unavailable")
+        let expires = (session["expiresAtMs"] as? NSNumber)?.doubleValue ?? 0
+        let record = SessionRecord(
+            sourceId: sourceId, origin: origin, via: via,
+            accessToken: access, refreshToken: refresh, expiresAtMs: expires
+        )
+        guard ConnectionVault.valid(record) else {
+            call.reject("invalid session")
+            return
+        }
+        vault.setSession(record) ? call.resolve() : call.reject("keychain unavailable")
     }
 
-    @objc func clearSession(_ call: CAPPluginCall) {
-        store.delete(Account.session)
+    @objc func removeSession(_ call: CAPPluginCall) {
+        guard let sourceId = call.getString("sourceId") else {
+            call.reject("invalid session")
+            return
+        }
+        vault.removeSession(sourceId: sourceId, origin: call.getString("origin"))
         call.resolve()
     }
 
-    private static func isSecret(_ text: String) -> Bool {
-        text.range(of: secret, options: .regularExpression) != nil
+    // MARK: - 远程服务
+
+    @objc func getRemotes(_ call: CAPPluginCall) {
+        let remotes = vault.remotes().map { record -> [String: Any] in
+            [
+                "serviceId": record.serviceId, "issuer": record.issuer, "kind": record.kind,
+                "refreshToken": record.refreshToken, "fingerprint": record.fingerprint,
+            ]
+        }
+        call.resolve(["remotes": remotes])
+    }
+
+    @objc func setRemote(_ call: CAPPluginCall) {
+        guard let remote = call.getObject("remote"),
+              let serviceId = remote["serviceId"] as? String,
+              let issuer = remote["issuer"] as? String,
+              let kind = remote["kind"] as? String,
+              let refresh = remote["refreshToken"] as? String,
+              let fingerprint = remote["fingerprint"] as? String
+        else {
+            call.reject("invalid remote")
+            return
+        }
+        let record = RemoteRecord(serviceId: serviceId, issuer: issuer, kind: kind, refreshToken: refresh, fingerprint: fingerprint)
+        guard ConnectionVault.valid(record) else {
+            call.reject("invalid remote")
+            return
+        }
+        vault.setRemote(record) ? call.resolve() : call.reject("keychain unavailable")
+    }
+
+    @objc func removeRemote(_ call: CAPPluginCall) {
+        guard let serviceId = call.getString("serviceId") else {
+            call.reject("invalid remote")
+            return
+        }
+        vault.removeRemote(serviceId: serviceId)
+        call.resolve()
     }
 
     // MARK: - 证书钉扎
@@ -151,23 +199,54 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
         AnchorFetch.run(origin: url) { [weak self] fetched in
             guard let self else { return }
             var pin = Pin(origin: origin, fingerprint: fingerprint)
-            Self.log.info("pin: fetched \(fetched?.count ?? -1, privacy: .public) certificate(s)")
+            Self.log.info("pin: fetched \(fetched?.all.count ?? -1, privacy: .public) certificate(s)")
             if let fetched {
-                guard let anchor = PinPolicy.anchor(presented: fetched, pin: pin) else {
+                guard let anchor = PinPolicy.anchor(presented: fetched.all, pin: pin) else {
                     Self.log.error("pin: no fetched certificate matches the pinned fingerprint")
                     call.reject("fingerprint mismatch")
                     return
                 }
                 pin.anchor = anchor
             }
-            guard let data = try? JSONEncoder().encode(pin), self.store.write(Account.pin, data) else {
+            guard self.vault.setPin(pin) else {
                 Self.log.error("pin: keychain write failed")
                 call.reject("keychain unavailable")
                 return
             }
             DispatchQueue.main.async {
-                self.currentPin = pin
+                // 同一个来源重钉是替换，别的来源的钉扎不动。
+                self.pins.removeAll { PinPolicy.originKey($0.origin) == PinPolicy.originKey(pin.origin) }
+                self.pins.append(pin)
                 call.resolve()
+            }
+        }
+    }
+
+    /// 不带凭据取一次信任锚指纹，让页面把它给人核对（个人中转自签 CA 的首次信任）。
+    /// 什么也不存：真正的钉扎要等人确认之后页面再调 `pin`。
+    ///
+    /// 指纹取服务端发的 `/ca.crt`（与中转启动日志打印的同一个），没有就取握手链最后一张。
+    /// `trusted` 是系统本来就信这条链（ACME 等），`pinned` 是已经钉过、而且服务端仍发着那一张。
+    @objc func peek(_ call: CAPPluginCall) {
+        guard let origin = call.getString("origin"), PinPolicy.isOrigin(origin), let url = URL(string: origin) else {
+            call.reject("bad origin")
+            return
+        }
+        AnchorFetch.run(origin: url) { [weak self] fetched in
+            guard let self else { return }
+            guard let fetched, let anchor = fetched.body.last ?? fetched.presented.last else {
+                call.resolve([:])
+                return
+            }
+            let fingerprint = PinPolicy.fingerprint(anchor)
+            DispatchQueue.main.async {
+                let existing = self.pins.first { PinPolicy.originKey($0.origin) == PinPolicy.originKey(origin) }
+                let pinned = existing.map { PinPolicy.anchor(presented: fetched.all, pin: $0) != nil } ?? false
+                call.resolve([
+                    "fingerprint": pinned ? existing!.fingerprint : fingerprint,
+                    "trusted": fetched.systemTrusted,
+                    "pinned": pinned,
+                ])
             }
         }
     }
@@ -180,7 +259,7 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
         guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = space.serverTrust
         else { return false }
-        guard let pin = currentPin, pin.covers(host: space.host, port: space.port) else {
+        guard let pin = pins.first(where: { $0.covers(host: space.host, port: space.port) }) else {
             completionHandler(.performDefaultHandling, nil)
             return true
         }
@@ -352,9 +431,18 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
 /// 配对时取一次信任锚：握手链（每张证书）加 `GET /ca.crt` 的正文。这一次请求接受
 /// 任何服务端证书——取回来的东西只有指纹对得上才会被存下，不发送任何凭据。
 private final class AnchorFetch: NSObject, URLSessionDelegate {
-    private var presented: [Data] = []
+    /// 取到的东西：握手链、`/ca.crt` 的正文、以及系统是否本来就信这条链。
+    struct Fetched {
+        let presented: [Data]
+        let body: [Data]
+        let systemTrusted: Bool
+        var all: [Data] { presented + body }
+    }
 
-    static func run(origin: URL, completion: @escaping ([Data]?) -> Void) {
+    private var presented: [Data] = []
+    private var systemTrusted = false
+
+    static func run(origin: URL, completion: @escaping (Fetched?) -> Void) {
         let delegate = AnchorFetch()
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 10
@@ -367,7 +455,7 @@ private final class AnchorFetch: NSObject, URLSessionDelegate {
             if delegate.presented.isEmpty && body.isEmpty {
                 completion(nil)
             } else {
-                completion(delegate.presented + body)
+                completion(Fetched(presented: delegate.presented, body: body, systemTrusted: delegate.systemTrusted))
             }
         }
         task.resume()
@@ -385,6 +473,9 @@ private final class AnchorFetch: NSObject, URLSessionDelegate {
             return
         }
         presented = PinPolicy.presented(trust)
+        // 先看系统信不信，再放行这一次取证书的请求。
+        var error: CFError?
+        systemTrusted = SecTrustEvaluateWithError(trust, &error)
         completionHandler(.useCredential, URLCredential(trust: trust))
     }
 }
