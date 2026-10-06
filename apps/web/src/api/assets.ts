@@ -31,19 +31,132 @@ export function needsBearerFetch(
   return bearerSourceFor(url, sources) !== null;
 }
 
+/** File System Access 的保存对话框（`showSaveFilePicker`）里用到的那一点。 */
+export interface SaveFileHandle {
+  createWritable(): Promise<WritableStream<Uint8Array>>;
+  /** Chromium 有、标准里还没有：写失败时删掉对话框已经建出来的空文件。 */
+  remove?(): Promise<void>;
+}
+
+export type SaveFilePicker = (options: {
+  suggestedName: string;
+}) => Promise<SaveFileHandle>;
+
+/** 这个页面能不能把下载流直接写进用户选的文件；不能答 `null`。 */
+export function saveFilePicker(): SaveFilePicker | null {
+  const picker = (globalThis as { showSaveFilePicker?: SaveFilePicker })
+    .showSaveFilePicker;
+  return typeof picker === "function" ? picker.bind(globalThis) : null;
+}
+
+export interface DownloadOptions {
+  /** 缺省取 {@link saveFilePicker}；给 `null` 即不用保存对话框。 */
+  readonly picker?: SaveFilePicker | null;
+  readonly sources?: readonly Source[];
+  /** 页面自己的来源；缺省 `location.origin`。 */
+  readonly origin?: string;
+}
+
 /**
- * 把 core 上的一个文件存到本机（编辑器的「下载」）。
+ * 把 core 上的一个文件存到本机（编辑器的「下载」）。不把整个文件读进内存，
+ * 能流就流，三条路按顺序试：
  *
- * 经地址所属那个源的 `fetch` 取回再交给一个 `blob:` 链接：凭据都只跟着 `fetch`
- * 走——Bearer 的源是补上的令牌，服务器壳是同源的 Cookie。一个直接的
- * `<a href>` 在前者没有凭据，core 答 401。取不回（非 2xx、网络错误）答
- * `false`。
+ * 1. 有 File System Access（Chromium、桌面壳）：先弹保存对话框——要趁点击的
+ *    用户激活还在——再经地址所属那个源的 `fetch` 取，响应体直接
+ *    `pipeTo` 进选中的文件。用户取消答 `true`（不是失败）。
+ * 2. 同源、不是 Bearer 的源（服务器壳托管的页面，凭据是 Cookie）：先取一次只看
+ *    状态，拿到响应头就中止，再交给浏览器自己的下载（core 答
+ *    `content-disposition: attachment`），由浏览器边收边写盘。
+ * 3. 其余（Bearer 的源，且没有保存对话框，比如 iPad 上的原生 App）：凭据只跟着
+ *    `fetch` 走，一个直接的 `<a href>` 会是 401，只能取回成 `Blob` 再交给一个
+ *    `blob:` 链接——这一条仍占内存。
+ *
+ * 取不回（非 2xx、网络错误、写盘失败）答 `false`。
  */
 export async function downloadRuntimeFile(
   url: string,
   filename: string,
   load: typeof fetch = routedFetch,
+  options: DownloadOptions = {},
 ): Promise<boolean> {
+  const picker =
+    options.picker === undefined ? saveFilePicker() : options.picker;
+  if (picker !== null) {
+    let handle: SaveFileHandle;
+    try {
+      handle = await picker({ suggestedName: filename });
+    } catch (error) {
+      if (isAbort(error)) return true;
+      // 没有用户激活、被策略拦下等：退到下面两条。
+      return downloadWithoutPicker(url, filename, load, options);
+    }
+    return streamInto(handle, url, load);
+  }
+  return downloadWithoutPicker(url, filename, load, options);
+}
+
+function isAbort(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "AbortError"
+  );
+}
+
+async function streamInto(
+  handle: SaveFileHandle,
+  url: string,
+  load: typeof fetch,
+): Promise<boolean> {
+  try {
+    const response = await load(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const writable = await handle.createWritable();
+    if (response.body === null) {
+      // 没有流（某些包装过的 fetch）：一次写完，至少不在页面里再复制一份。
+      const writer = writable.getWriter();
+      await writer.write(new Uint8Array(await response.arrayBuffer()));
+      await writer.close();
+    } else {
+      // 出错时 `pipeTo` 中止可写流，半截的临时文件不会替换目标。
+      await response.body.pipeTo(writable);
+    }
+    return true;
+  } catch {
+    await handle.remove?.().catch(() => undefined);
+    return false;
+  }
+}
+
+async function downloadWithoutPicker(
+  url: string,
+  filename: string,
+  load: typeof fetch,
+  options: DownloadOptions,
+): Promise<boolean> {
+  const origin = options.origin ?? globalThis.location?.origin;
+  const sources = options.sources ?? knownSources();
+  if (
+    origin !== undefined &&
+    sameOriginAs(url, origin) &&
+    bearerSourceFor(url, sources) === null
+  ) {
+    const controller = new AbortController();
+    try {
+      const response = await load(url, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!response.ok) return false;
+    } catch {
+      return false;
+    } finally {
+      // 只要状态；正文交给浏览器的下载。
+      controller.abort();
+    }
+    clickLink(url, filename);
+    return true;
+  }
   let blob: Blob;
   try {
     const response = await load(url, { cache: "no-store" });
@@ -53,15 +166,27 @@ export async function downloadRuntimeFile(
     return false;
   }
   const objectUrl = URL.createObjectURL(blob);
+  clickLink(objectUrl, filename);
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  return true;
+}
+
+function sameOriginAs(url: string, origin: string): boolean {
+  try {
+    return new URL(url, origin).origin === origin;
+  } catch {
+    return false;
+  }
+}
+
+function clickLink(href: string, filename: string): void {
   const link = document.createElement("a");
-  link.href = objectUrl;
+  link.href = href;
   link.download = filename;
   link.rel = "noopener";
   document.body.append(link);
   link.click();
   link.remove();
-  setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
-  return true;
 }
 
 interface Entry {

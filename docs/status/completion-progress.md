@@ -1694,7 +1694,7 @@
 
 - 本机设备复用：`consumeBootstrap` 对回环明文来源的票复用主人名下同名、未撤销、会话全来自回环明文来源的那台设备（`service.ts::reusableLocalDevice`，`store.ts::deviceSessionOrigins`），页面与托盘反复配对设备列表不再增长；经 Gateway 配对的设备不受影响。用例 `service.test`「本机设备复用」3 例、`main.test`「反复配对设备列表不增长」。
 - Windows 接管 / 外接的 core：壳没有 IPC 通道时取票答 `channelUnavailable`（`shell-core/ticket.ts`、`shared/ipc.ts`），页面记下壳签不出票的原因（`identity.ts::shellSessionFailure`）并在顶部挂通知条，文案请人重开应用，「重连」再试一次；配上对即消失。用例 `core-ticket.test`、`Banners.session.test`。没有另开取票退路：hook 服务的应用令牌节点进程也拿得到，用它签主人票会把权限放大给 Agent。
-- 下载把整个文件读进内存再存；很大的文件会占内存。
+- 下载把整个文件读进内存再存；很大的文件会占内存。（已由「核心流与浮层安全区」一节改成流式，只剩 Bearer 源且没有保存对话框时仍经 Blob。）
 - 语言服务与浏览器画面两条流只经全局 `WebSocket` 覆盖，没有单独实测。
 
 ## G5-29 G5 残项：本地额度开关、手机 MFA、GitLab 子组 / 变基 / 自动合并、Gitea 与 GitLab 补齐
@@ -1828,7 +1828,7 @@
 
 - direct 后端一个会话一个 PTY，任一附着者跟不上就让整个会话的输出等它（与慢终端同语义）。语言服务器同理，同一服务器的其它会话一起等。
 - 远程执行主机上的语言会话无法暂停上游，只能排队，满了关流。
-- 浏览器画面没有把 Chromium 的帧确认推迟到发出之后，跟不上时由 coalesce 丢旧帧，Chromium 照常编码。
+- 浏览器画面没有把 Chromium 的帧确认推迟到发出之后，跟不上时由 coalesce 丢旧帧，Chromium 照常编码。（已由「核心流与浮层安全区」一节补上。）
 - 心跳只是服务端 ping；客户端的 `system.ping` 与前后台感知属于 E2。
 
 接口：
@@ -2723,7 +2723,7 @@ V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
 - scope 用 `settings:write`（高于 `agent:launch`、不在任何共享角色里）。
 - ACP 入口就是 CLI 本身的那几家（opencode、copilot、ama、omp）不代装，只给复制命令。
 - 任务不跨重启；关 core 时不结束正在跑的 npm（中途打断的全局包更糟）。
-- npm 的联网是用户程序的网络访问，未登记 `core/net/outbound.ts`。
+- npm 的联网是用户程序的网络访问，未登记 `core/net/outbound.ts`。（已由「核心流与浮层安全区」一节登记为 `npmRegistry`。）
 
 接口：
 
@@ -2749,3 +2749,31 @@ V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
 - 改备注：中继没有更新链接的接口，未做。
 - 系统分享：桌面壳没有原生分享桥，只在页面有 `navigator.share` 时出现（Electron 桌面上通常不出现）。
 - 本包之前建的链接本机没有存档，列表里只能撤销、不能再复制。
+
+## 核心流与浮层安全区：流式下载、画面背压、npm 出站登记、iPad 浮层
+
+做了什么：
+
+- **下载流式**（`apps/web/src/api/assets.ts::downloadRuntimeFile`）：有 File System Access（Chromium、桌面壳）时先弹保存对话框（趁点击的用户激活），再经源的 `fetch` 取，响应体 `pipeTo` 进选中的文件；取消答 `true`，取不回答 `false` 并删掉对话框建出的空文件；对话框打不开（没有激活、被策略拦）退到下面两条。同源且不是 Bearer 的源（服务器壳，Cookie）只取一次看状态、拿到响应头即中止，再交给浏览器自己的下载（core 答 `content-disposition: attachment`）。只有 Bearer 源且没有保存对话框（iPad 原生 App 等）才取回成 Blob。
+- **画面背压**：`SendQueue.push(frame, key?, settled?)` 多一个回调，单元全部写完（`ws` 写完回调）答 `sent`，被合并、挤掉、没被接受或队列关闭答 `dropped`，恰好一次。`HeadlessNode` 把 `Page.screencastFrameAck` 交给 `ViewerSocket.sendFrame(header, jpeg, sent)`，跟不上的客户端让 Chromium 停下等，而不是照常编码再丢；没有 `sendFrame` 的观看者与没人看时照旧立即确认。
+- **npm 出站登记**：`OUTBOUND.npmRegistry`（`https://registry.npmjs.org`，用户 `.npmrc` 可换镜像），`switch: null`、只在点安装时连；`SPAWNED_OUTBOUND` 标出由 core 起的子进程（`npm` ← `agent/adapter-install.ts`）；`adapter-install.ts` 导出 `ADAPTER_INSTALL_OUTBOUND`。外部服务 §12.3 表加一行。
+- **浮层安全区**（只改 `apps/web/src/ui/` 与 `tokens.css`）：新增 `--overlay-inset-top = max(--safe-top, --window-controls-top)`；`ui/safe-area.ts` 用探针元素把变量量成像素（窗口尺寸、横竖屏、根元素样式变动时重算），作为 Popover / DropdownMenu(+Sub) / Select / Tooltip / HoverCard / ContextMenu(+Sub) 的 `collisionPadding`（有安全区的边 + 4px，没有的边 0，桌面不变；调用方给了就用调用方的）。Select 有安全区时改用 popper（对齐选中项的定位不认碰撞边距）。Popover 加 `max-h-(--radix-popover-content-available-height) overflow-y-auto`。Dialog / AlertDialog 中心挪到可用区域中心、最大宽高减去安全区（`SAFE_CENTERED`，变量为 0 时与原来一致）；Sheet 按贴着的边加安全区内边距，关闭钮跟着挪，调用方给了 `p-0` / `pt-…` 就用调用方的。设计系统 §3.1 补一句。
+
+实测（macOS arm64，2026-10-07，基于 main cdb7dea5）：
+
+- core：`stream-queue.test` 新增 settled 3 例；`stream-queue.integration.test` 新增真 socket 慢客户端：编码器等确认，客户端停读后不再编码、恢复后继续；`headless/node.test` 新增「确认等观看者说帧已发出」；`outbound.test` 新增 2 例（npm 登记、起 `npm install` 的文件都在子进程登记里）；`adapter-install.test` 1 例。
+- web：`assets.test` 新增 6 例（逐块写入不取 Blob、取消、失败删文件、无激活退回、同源 Cookie 中止后交给浏览器、同源 Bearer 仍经 Blob）；`ui/safe-area.test` 11 例（量法、窗口控件、碰撞边距、根样式变动重算、Select 切 popper、Dialog / AlertDialog / Sheet 类名与调用方覆盖）。`ResponsiveDialog.test` 两条断言从 `top-1/2` 改成 `top-[calc(50%+`：居中类名换了，语义（桌面居中、手机贴底）没变。
+- 新探针 `tools/probes/overlay-safe-area.mjs`（登记 `tools/ci/e2e.d/overlay-safe-area.json`，tier a）：无头 Chrome + Vite，iPad 窗口化 1180×820（上 24、下 20、窗口控件 40）与手机横屏 844×390（左右 47、下 21）两组，四种弹出层 × 四个角都落在安全区内，`collisionPadding={0}` 对照各量出 10 / 11 处越界；高 2000px 的对话框被限在安全区内；右侧抽屉内边距等于安全区、关闭钮让开；控制台无 error。
+- 完整验证见 PR 正文。
+
+没做 / 限制：
+
+- iPad 原生 App 等没有保存对话框的 Bearer 源仍经 Blob（`<a href>` 带不了 Bearer，没有引入 Service Worker 流式下载）。Electron 的 `showSaveFilePicker` 未在打包产物里实测，只有单元测试与 Chromium 行为。
+- 保存对话框出现后到取回之间如果取不回，删空文件靠 Chromium 的非标准 `FileSystemFileHandle.remove()`，没有它的浏览器会留下一个空文件。
+- 窗口控件只占左上角，`collisionPadding` 只能给整条顶边，所以顶边按窗口控件高度整条让开。
+- 真机上 `env()` 的取值与窗口控件尺寸只能在 iPad 上验证，这里只用 Chromium 模拟变量。
+
+接口：
+
+- web：`downloadRuntimeFile(url, filename, load?, { picker?, sources?, origin? })`、`saveFilePicker()`、`SaveFileHandle`、`SaveFilePicker`；`ui/safe-area.ts`：`measureSafeInsets`、`useSafeInsets`、`useOverlayCollisionPadding`、`hasSafeInsets`、`OVERLAY_SAFE_GAP`、`SAFE_CENTERED`；CSS `--overlay-inset-top`。
+- core：`SendQueue.push(frame, key?, settled?)`、`SettleOutcome`；`ViewerSocket.sendFrame(header, jpeg, sent?)`；`OUTBOUND.npmRegistry`、`SPAWNED_OUTBOUND`；`ADAPTER_INSTALL_OUTBOUND`。
