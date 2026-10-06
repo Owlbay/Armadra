@@ -65,6 +65,12 @@ export interface RequestIdentity {
    * 判「是不是同一个人的另一个窗口」，设备名也优先用它的。
    */
   readonly device?: { readonly deviceId: string; readonly deviceName: string };
+  /**
+   * 门认出来的那条会话与它绑着的来源（契约 §42）。身份域的 procedure 拿它按会话
+   * 再认一次（`AccessRequest.verifiedSessionId`）：控制面上的调用没有令牌，而
+   * 页面刷新过访问令牌之后连接仍是同一个会话。只在 core 里流转，不出进程。
+   */
+  readonly session?: { readonly sessionId: string; readonly origin: string };
 }
 
 export interface SessionRenewal {

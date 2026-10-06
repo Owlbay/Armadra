@@ -105,9 +105,11 @@ export function createOAuthHttp(
   });
 }
 
-export function installOAuth(context: CoreContext, deps: OAuthDeps): void {
+/** 挂上 `/api/identity/oauth/`；答那份实现，`security.oauth.*` 也调它（契约 §42.2）。 */
+export function installOAuth(context: CoreContext, deps: OAuthDeps): OAuthHttp {
   const http = createOAuthHttp(context, deps);
   context.server.raw(OAUTH_PREFIX, (request, response, cors) =>
     http.handle(request, response, cors),
   );
+  return http;
 }

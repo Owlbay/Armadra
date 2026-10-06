@@ -92,7 +92,7 @@ export class Peer {
       JSON.stringify({
         i: id,
         p: {
-          u: `/${procedure.replace(".", "/")}`,
+          u: `/${procedure.split(".").join("/")}`,
           b: { json: input },
           ...(headers === undefined ? {} : { h: headers }),
         },
@@ -139,7 +139,7 @@ export class Peer {
 export function connectPeer(
   base: string,
   protocols: readonly string[] = [CONTROL_PROTOCOL],
-  options: { readonly autoPong?: boolean } = {},
+  options: { readonly autoPong?: boolean; readonly origin?: string } = {},
 ): Promise<Peer> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(

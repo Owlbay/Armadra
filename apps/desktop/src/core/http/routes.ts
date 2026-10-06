@@ -12,6 +12,8 @@
  *
  * 路径参数按 core 自己的 camelCase 拼。
  */
+import { IDENTITY_ROUTES } from "./routes-identity";
+
 export type RouteSurface = "runtime" | "hook";
 
 export interface RouteEntry {
@@ -1279,6 +1281,7 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  ...IDENTITY_ROUTES,
   {
     // 契约 §20.2：节点凭据条目。只有 owner（`route-scopes.ts`）。
     path: "/api/credentials",

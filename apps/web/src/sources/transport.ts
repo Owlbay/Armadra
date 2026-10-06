@@ -82,6 +82,26 @@ function identityPath(target: string): boolean {
 }
 
 /**
+ * 这次 401 是不是「会话不认了」：只有它值得换一枚访问密钥再发一次。别的 401
+ * 是具名的拒绝——两步验证的码不对（`mfa_invalid_code`）、断言无效之类——重发
+ * 只会再记一次失败（契约 §42.2）。认不出体的按会话失效处理（与迁移前相同）。
+ */
+async function sessionRefusal(response: Response): Promise<boolean> {
+  if (typeof response.clone !== "function") return true;
+  const body = (await response
+    .clone()
+    .json()
+    .catch(() => null)) as { code?: unknown } | null;
+  const code =
+    body !== null && typeof body === "object" ? body.code : undefined;
+  return (
+    code === undefined ||
+    code === "unauthenticated" ||
+    code === "UNAUTHENTICATED"
+  );
+}
+
+/**
  * 包一层 `fetch`：发往这个源的请求补上 `Authorization: Bearer`，401 时轮转
  * 一次再发（请求体是字符串或没有时才重发，流式的体发不了第二次）。
  *
@@ -123,7 +143,8 @@ export function bearerFetch(
       response.status !== 401 ||
       identity ||
       !replayable ||
-      new Headers(init?.headers).has("authorization")
+      new Headers(init?.headers).has("authorization") ||
+      !(await sessionRefusal(response))
     )
       return response;
     if (!(await transport.refresh(used).catch(() => false))) return response;

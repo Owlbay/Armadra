@@ -169,7 +169,10 @@ export class OAuthHttp {
   ): Promise<Reply | undefined> {
     const [head, second, third] = segments;
     if (head === "providers" && segments.length === 1 && method === "GET") {
-      return this.providers(request, origin);
+      return {
+        status: 200,
+        body: await this.providers(this.optionalManager(request, origin)),
+      };
     }
     if (
       head === "providers" &&
@@ -177,13 +180,37 @@ export class OAuthHttp {
       third === "secret" &&
       (method === "PUT" || method === "DELETE")
     ) {
-      return this.secret(method, request, origin, second as string);
+      const providerId = second as string;
+      const caller = () => this.authenticate(request, origin, true, true);
+      return {
+        status: 200,
+        body:
+          method === "PUT"
+            ? await this.setSecret(
+                caller,
+                providerId,
+                () => body(request).clientSecret,
+              )
+            : await this.clearSecret(caller, providerId),
+      };
     }
     if (head === "bindings" && segments.length === 1 && method === "GET") {
-      return this.bindings(request, origin);
+      return {
+        status: 200,
+        body: this.bindings(() =>
+          this.authenticate(request, origin, false, false),
+        ),
+      };
     }
     if (head === "bindings" && segments.length === 2 && method === "DELETE") {
-      return this.unbind(request, origin, second as string);
+      const credentialId = second as string;
+      return {
+        status: 200,
+        body: this.unbind(
+          () => this.authenticate(request, origin, true, false),
+          credentialId,
+        ),
+      };
     }
     if (segments.length === 2 && second === "start" && method === "POST") {
       return this.start(request, response, origin, head as string);
@@ -199,9 +226,18 @@ export class OAuthHttp {
 
   /* ------------------------------- 提供方表 ------------------------------- */
 
-  private async providers(request: CoreRequest, origin: string) {
+  /*
+   * 下面四条是 `security.oauth.*`（契约 §42.2）的实现，旧路径与 procedure 同调：
+   * `caller` 认人（旧路径按请求里的凭据，procedure 按门认过的会话），`read` 在
+   * 认完人之后取入参。
+   */
+
+  /**
+   * 提供方表。`manager` 是有 `identity:manage` 的调用方：没有时（匿名，或登录了
+   * 但不管这台服务器）只列能用的那几个的 `id` 与 `kind`。
+   */
+  async providers(manager: Principal | undefined) {
     const origins = this.options.publicOrigins();
-    const manager = this.optionalManager(request, origin);
     const rows = [];
     for (const provider of this.options.providers()) {
       const hasClientSecret =
@@ -224,10 +260,7 @@ export class OAuthHttp {
         callbackUrls: origins.map((value) => callbackUrl(value, provider.id)),
       });
     }
-    return {
-      status: 200,
-      body: { configured: origins.length > 0, providers: rows },
-    };
+    return { configured: origins.length > 0, providers: rows };
   }
 
   private usable(
@@ -240,51 +273,62 @@ export class OAuthHttp {
     return provider.kind === "oidc" || hasClientSecret;
   }
 
-  private async secret(
-    method: string,
-    request: CoreRequest,
-    origin: string,
+  /**
+   * 设 client secret（`identity:manage`）。值只进不出，答「有没有」。顺序：认人
+   * → 有没有这个提供方 → 再读值（迁移前的顺序）。
+   */
+  async setSecret(
+    caller: () => Principal,
     providerId: string,
-  ): Promise<Reply> {
-    const actor = this.authenticate(request, origin, true, true);
+    secret: () => unknown,
+  ) {
+    const actor = caller();
+    this.provider(providerId);
+    const clientSecret = secret();
+    if (
+      typeof clientSecret !== "string" ||
+      clientSecret.length === 0 ||
+      clientSecret.length > 4096
+    ) {
+      throw new IdentityError("invalid");
+    }
+    await this.options.secrets.write(providerId, clientSecret);
+    this.secretAudit("identity.oauth.secret.set", actor, providerId);
+    return { id: providerId, hasClientSecret: true };
+  }
+
+  async clearSecret(caller: () => Principal, providerId: string) {
+    const actor = caller();
+    this.provider(providerId);
+    await this.options.secrets.clear(providerId);
+    this.secretAudit("identity.oauth.secret.clear", actor, providerId);
+    return { id: providerId, hasClientSecret: false };
+  }
+
+  private provider(providerId: string): OAuthProvider {
     const provider = this.options
       .providers()
       .find((entry) => entry.id === providerId);
     if (provider === undefined) {
       throw new OAuthError("oauth_not_configured", "没有这个提供方", 404);
     }
-    if (method === "PUT") {
-      const value = body(request).clientSecret;
-      if (
-        typeof value !== "string" ||
-        value.length === 0 ||
-        value.length > 4096
-      ) {
-        throw new IdentityError("invalid");
-      }
-      await this.options.secrets.write(providerId, value);
-    } else {
-      await this.options.secrets.clear(providerId);
-    }
+    return provider;
+  }
+
+  private secretAudit(action: string, actor: Principal, providerId: string) {
     audit({
-      action:
-        method === "PUT"
-          ? "identity.oauth.secret.set"
-          : "identity.oauth.secret.clear",
+      action,
       principalId: actor.principalId,
       deviceId: actor.deviceId,
       target: providerId,
     });
-    return {
-      status: 200,
-      body: { id: providerId, hasClientSecret: method === "PUT" },
-    };
   }
 
   /* --------------------------------- 绑定 --------------------------------- */
 
-  private bindings(request: CoreRequest, origin: string): Reply {
-    const actor = this.authenticate(request, origin, false, false);
+  /** 我绑定的外部账号。 */
+  bindings(caller: () => Principal) {
+    const actor = caller();
     const byKey = new Map(
       this.options
         .providers()
@@ -296,28 +340,22 @@ export class OAuthHttp {
         .filter((row) => row.kind === "oauth" && row.revokedAtMs === 0),
     );
     return {
-      status: 200,
-      body: {
-        bindings: rows.map((row) => {
-          const provider = byKey.get(row.provider);
-          return {
-            credentialId: row.credentialId,
-            // 提供方从设置里删了（或换了 issuer）时为空串：绑定还在，只是认不出。
-            providerId: provider?.id ?? "",
-            kind: row.provider === "github" ? "github" : "oidc",
-            createdAtMs: row.createdAtMs,
-          };
-        }),
-      },
+      bindings: rows.map((row) => {
+        const provider = byKey.get(row.provider);
+        return {
+          credentialId: row.credentialId,
+          // 提供方从设置里删了（或换了 issuer）时为空串：绑定还在，只是认不出。
+          providerId: provider?.id ?? "",
+          kind:
+            row.provider === "github" ? ("github" as const) : ("oidc" as const),
+          createdAtMs: row.createdAtMs,
+        };
+      }),
     };
   }
 
-  private unbind(
-    request: CoreRequest,
-    origin: string,
-    credentialId: string,
-  ): Reply {
-    const actor = this.authenticate(request, origin, true, false);
+  unbind(caller: () => Principal, credentialId: string) {
+    const actor = caller();
     this.options.store.transaction((tx) => {
       const row = tx.accounts.credential(credentialId);
       if (
@@ -341,7 +379,7 @@ export class OAuthHttp {
         detailJson: "",
       });
     });
-    return { status: 200, body: { credentialId, revoked: true } };
+    return { credentialId, revoked: true as const };
   }
 
   /* --------------------------------- 流程 --------------------------------- */
@@ -786,7 +824,7 @@ export class OAuthHttp {
 function nativeSession(
   credentials: SessionCredentials,
 ): Record<string, unknown> {
-  const session = sessionJson(
+  const session: Record<string, unknown> = sessionJson(
     credentials.principal,
     credentials.accessExpiresAtMs,
   );

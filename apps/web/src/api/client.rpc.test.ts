@@ -95,6 +95,40 @@ describe("createClient", () => {
     expect(renewCsrf).toHaveBeenCalledWith("stale");
   });
 
+  it("Cookie 模式：发出时还没有令牌、途中会话建好了（配对那一刻）——带上新令牌重发一次", async () => {
+    let token: string | null = null;
+    const source: Source = {
+      ...localSource,
+      sourceId: "s1",
+      httpBase: "https://box.example",
+      wsBase: "wss://box.example",
+      credentials: {
+        mode: "cookie",
+        access: async () => null,
+        renew: async () => false,
+        csrf: async () => token,
+        renewCsrf: async () => null,
+      },
+      fetch: (input, init) => globalThis.fetch(input, init),
+    };
+    stubFetch((call) => {
+      if (header(call, "x-armadra-csrf") === null) {
+        // 门拒了这一次；与此同时配对完成，页面手里有了令牌。
+        token = "fresh";
+        return json(403, { code: "forbidden", message: "CSRF 校验未通过" });
+      }
+      return json(200, { json: { paths: [], file: "" } });
+    });
+    await expect(createClient(source).settings.local({})).resolves.toEqual({
+      paths: [],
+      file: "",
+    });
+    expect(calls.map((call) => header(call, "x-armadra-csrf"))).toEqual([
+      null,
+      "fresh",
+    ]);
+  });
+
   it("带别的码的 403 已经到过处理器，不重发", async () => {
     const source: Source = {
       ...localSource,

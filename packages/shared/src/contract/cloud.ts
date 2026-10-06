@@ -75,101 +75,97 @@ export const cloudRelayCleanupOutputSchema = z.object({
 });
 export type RelayPending = z.infer<typeof relayPendingSchema>;
 
-export const identity = {
-  cloud: {
-    /** 匿名：断言（+ 邀请令牌）换本机会话。Bearer 来源答 `session.native`。 */
-    login: oc
-      .input(cloudLoginInputSchema)
-      .output(cloudLoginOutputSchema)
-      .errors({
-        ...assertionRefused,
-        ...errors.pick(
-          "bad_request",
-          "forbidden",
-          "cloud_account_unlinked",
-          "invitation_invalid",
-          "rate_limited",
-        ),
-      })
-      .meta(section(null, "POST", "/api/identity/cloud/login")),
-    /** 登记到一个远程服务：源密钥对、`sources.register`、取 JWKS、起隧道。 */
-    register: oc
-      .input(cloudRegisterInputSchema)
-      .output(cloudRegisterOutputSchema)
-      .errors({
-        ...denied,
-        ...errors.pick(
-          "bad_request",
-          "cloud_already_registered",
-          "cloud_issuer_mismatch",
-          "registration_token_invalid",
-          "source_unreachable",
-          "fingerprint_mismatch",
-          "protocol_unsupported",
-          "rate_limited",
-          "not_implemented",
-        ),
-      })
-      .meta(section("settings:write", "POST", "/api/identity/cloud/register")),
-    /** 撤销登记：停隧道，行记撤销时刻；不删已映射的账号。 */
-    revoke: oc
-      .input(cloudRevokeInputSchema)
-      .output(cloudRevokeOutputSchema)
-      .errors({ ...denied, ...errors.pick("not_found") })
-      .meta(
-        section("settings:write", "DELETE", "/api/identity/cloud/register"),
+export const cloud = {
+  /** 匿名：断言（+ 邀请令牌）换本机会话。Bearer 来源答 `session.native`。 */
+  login: oc
+    .input(cloudLoginInputSchema)
+    .output(cloudLoginOutputSchema)
+    .errors({
+      ...assertionRefused,
+      ...errors.pick(
+        "bad_request",
+        "forbidden",
+        "cloud_account_unlinked",
+        "invitation_invalid",
+        "rate_limited",
       ),
-    status: oc
-      .input(z.object({}).optional())
-      .output(cloudStatusOutputSchema)
-      .errors(denied)
-      .meta(section("settings:read", "GET", "/api/identity/cloud")),
-    /** 把断言的 `sub` 映射到当前登录的人（本人）。 */
-    bind: oc
-      .input(cloudBindInputSchema)
-      .output(cloudBindOutputSchema)
-      .errors({
-        ...denied,
-        ...assertionRefused,
-        ...errors.pick("bad_request", "conflict", "rate_limited"),
-      })
-      .meta(section("identity:read", "POST", "/api/identity/cloud/bind")),
-    trustedOrigins: oc
-      .input(cloudTrustedOriginsInputSchema)
-      .output(cloudTrustedOriginsOutputSchema)
-      .errors({ ...denied, ...errors.pick("bad_request", "not_found") })
-      .meta(
-        section(
-          "settings:write",
-          "PUT",
-          "/api/identity/cloud/{issuer}/trusted-origins",
-        ),
+    })
+    .meta(section(null, "POST", "/api/identity/cloud/login")),
+  /** 登记到一个远程服务：源密钥对、`sources.register`、取 JWKS、起隧道。 */
+  register: oc
+    .input(cloudRegisterInputSchema)
+    .output(cloudRegisterOutputSchema)
+    .errors({
+      ...denied,
+      ...errors.pick(
+        "bad_request",
+        "cloud_already_registered",
+        "cloud_issuer_mismatch",
+        "registration_token_invalid",
+        "source_unreachable",
+        "fingerprint_mismatch",
+        "protocol_unsupported",
+        "rate_limited",
+        "not_implemented",
       ),
-    /** 已撤销、中继侧还欠着清理的登记。 */
-    relayPending: oc
-      .input(z.object({}).optional())
-      .output(cloudRelayPendingOutputSchema)
-      .errors(denied)
-      .meta(
-        section(
-          "settings:read",
-          "GET",
-          "/api/identity/cloud/relay-pending",
-          "§31.4",
-        ),
+    })
+    .meta(section("settings:write", "POST", "/api/identity/cloud/register")),
+  /** 撤销登记：停隧道，行记撤销时刻；不删已映射的账号。 */
+  revoke: oc
+    .input(cloudRevokeInputSchema)
+    .output(cloudRevokeOutputSchema)
+    .errors({ ...denied, ...errors.pick("not_found") })
+    .meta(section("settings:write", "DELETE", "/api/identity/cloud/register")),
+  status: oc
+    .input(z.object({}).optional())
+    .output(cloudStatusOutputSchema)
+    .errors(denied)
+    .meta(section("settings:read", "GET", "/api/identity/cloud")),
+  /** 把断言的 `sub` 映射到当前登录的人（本人）。 */
+  bind: oc
+    .input(cloudBindInputSchema)
+    .output(cloudBindOutputSchema)
+    .errors({
+      ...denied,
+      ...assertionRefused,
+      ...errors.pick("bad_request", "conflict", "rate_limited"),
+    })
+    .meta(section("identity:read", "POST", "/api/identity/cloud/bind")),
+  trustedOrigins: oc
+    .input(cloudTrustedOriginsInputSchema)
+    .output(cloudTrustedOriginsOutputSchema)
+    .errors({ ...denied, ...errors.pick("bad_request", "not_found") })
+    .meta(
+      section(
+        "settings:write",
+        "PUT",
+        "/api/identity/cloud/{issuer}/trusted-origins",
       ),
-    /** 重试删一条待清理的中继侧源记录。 */
-    relayCleanup: oc
-      .input(cloudRevokeInputSchema)
-      .output(cloudRelayCleanupOutputSchema)
-      .errors({ ...denied, ...errors.pick("not_found") })
-      .meta(
-        section(
-          "settings:write",
-          "POST",
-          "/api/identity/cloud/relay-cleanup",
-          "§31.4",
-        ),
+    ),
+  /** 已撤销、中继侧还欠着清理的登记。 */
+  relayPending: oc
+    .input(z.object({}).optional())
+    .output(cloudRelayPendingOutputSchema)
+    .errors(denied)
+    .meta(
+      section(
+        "settings:read",
+        "GET",
+        "/api/identity/cloud/relay-pending",
+        "§31.4",
       ),
-  },
+    ),
+  /** 重试删一条待清理的中继侧源记录。 */
+  relayCleanup: oc
+    .input(cloudRevokeInputSchema)
+    .output(cloudRelayCleanupOutputSchema)
+    .errors({ ...denied, ...errors.pick("not_found") })
+    .meta(
+      section(
+        "settings:write",
+        "POST",
+        "/api/identity/cloud/relay-cleanup",
+        "§31.4",
+      ),
+    ),
 };

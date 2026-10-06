@@ -3,8 +3,7 @@ import { z } from "zod";
 
 import type { ShareRole } from "./accounts";
 import { localClient } from "./client";
-import { RuntimeRequestError, json, request } from "./request";
-import { localSource } from "./source";
+import { RuntimeRequestError } from "./request";
 
 /**
  * 设置 → 远程服务（客户端包 §3）的调用面。
@@ -12,7 +11,7 @@ import { localSource } from "./source";
  * 两类对端：
  *
  * - **本机 core**：源表与远程服务（契约 §33，`sources.*`）、本机登记到远程服务
- *   （§31，`identity.cloud.*`）、本机邀请（`/api/identity/invitations`）。
+ *   （§31，`identity.cloud.*`）、本机邀请（§42.3，`accounts.invitations.*`）。
  * - **远程服务本身**（个人中转 `/v1/*`，cloud-api §4–§5）：取注册令牌、为本机
  *   签断言、建 / 列 / 撤分享链接。访问令牌由本机 core 代管（`sources.remoteSession`），
  *   页面只在这一次调用里拿着它，不存。桌面壳按源表放行这个来源并按指纹钉扎
@@ -249,33 +248,21 @@ const issuedSchema = z.object({
 });
 
 /**
- * 本机邀请（`/api/identity/invitations`）。走源的 `request()`（Bearer、不带
- * Cookie）而不是 `api/accounts.ts`：那一面是服务器壳的 Cookie 会话，桌面壳页面
- * 跨端口带 Cookie 的请求过不了 CORS。
+ * 本机邀请（契约 §42.3 `accounts.invitations.*`）：经本机源的契约客户端发，
+ * 桌面壳是 Bearer、不带 Cookie，跨端口过得了 CORS。
  */
-export function issueInvitation(input: {
+export async function issueInvitation(input: {
   role: ShareRole;
   targetWorkspaceId: string;
   ttlMs: number;
 }) {
-  return request(
-    "/api/identity/invitations",
-    issuedSchema,
-    {
-      method: "POST",
-      ...json(input),
-    },
-    localSource,
+  return issuedSchema.parse(
+    await localClient().accounts.invitations.issue(input),
   );
 }
 
 export async function revokeInvitation(invitationId: string): Promise<void> {
-  await request(
-    `/api/identity/invitations/${encodeURIComponent(invitationId)}`,
-    z.unknown(),
-    { method: "DELETE" },
-    localSource,
-  );
+  await localClient().accounts.invitations.revoke({ invitationId });
 }
 
 /* ------------------------------ 分享本机 ------------------------------- */

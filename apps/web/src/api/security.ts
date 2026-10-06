@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  type JsonValue,
   auditPageSchema,
   lockoutListSchema,
   mfaChallengeSchema,
@@ -36,20 +37,26 @@ import {
 
 import {
   adoptIdentitySession,
+  identityDevicesSchema,
   identityRequest,
   identitySessionSchema,
   identityText,
+  type IdentityDevicePage,
   type IdentitySession,
 } from "./identity";
+import { identityRpc } from "./identity-rpc";
 import { isNativeApp } from "../mobile/native-bridge";
 import { startNativeOAuth } from "../mobile/native-oauth";
 
 /**
- * 安全页与登录的客户端：契约 §18.1–§18.6（`/api/identity/` 下的口令登录两步、
- * passkey、MFA、会话、锁定、OAuth 与审计）。传输与凭据在 `identity.ts`。
+ * 安全页与登录的客户端：契约 §18.1–§18.6（口令登录两步、passkey、MFA、会话、
+ * 锁定、OAuth 与审计）。
+ *
+ * 会话内的动作是 `security.*` / `identity.devices.*` procedure（契约 §42），经本机
+ * 源的契约客户端发（`identity-rpc.ts`）；凭据换会话的那几条（登录两步、passkey
+ * 断言、OAuth 发起、重置链接、登录页的匿名提供方表）与审计导出（CSV）留在
+ * REST，传输与凭据在 `identity.ts`。
  */
-
-const ok = z.object({}).passthrough();
 
 /** 登录答案：要么是会话，要么是要第二因素的中间票。 */
 export type SignInAnswer =
@@ -149,32 +156,41 @@ export async function passkeyLoginVerify(
 
 /* -------------------------------- passkey -------------------------------- */
 
-export function listPasskeys(): Promise<PasskeyList> {
-  return identityRequest("passkey", passkeyListSchema);
+export async function listPasskeys(): Promise<PasskeyList> {
+  return passkeyListSchema.parse(
+    await identityRpc((client) => client.security.passkeys.list()),
+  );
 }
 
-export function passkeyRegisterOptions(label: string) {
-  return identityRequest("passkey/register/options", passkeyOptionsSchema, {
-    method: "POST",
-    body: { label },
-  });
+export async function passkeyRegisterOptions(label: string) {
+  return passkeyOptionsSchema.parse(
+    await identityRpc((client) =>
+      client.security.passkeys.registerOptions({ label }),
+    ),
+  );
 }
 
-export function passkeyRegisterVerify(
+export async function passkeyRegisterVerify(
   challengeId: string,
   response: Record<string, unknown>,
   label: string,
 ): Promise<Passkey> {
-  return identityRequest("passkey/register/verify", passkeySchema, {
-    method: "POST",
-    body: { challengeId, response, label },
-  });
+  return passkeySchema.parse(
+    await identityRpc((client) =>
+      client.security.passkeys.registerVerify({
+        challengeId,
+        // `PublicKeyCredential.toJSON()`：一份纯 JSON。
+        response: response as Record<string, JsonValue>,
+        label,
+      }),
+    ),
+  );
 }
 
 export async function removePasskey(credentialId: string): Promise<void> {
-  await identityRequest(`passkey/${encodeURIComponent(credentialId)}`, ok, {
-    method: "DELETE",
-  });
+  await identityRpc((client) =>
+    client.security.passkeys.remove({ credentialId }),
+  );
 }
 
 /** 改名（只有本人；1–64 个字符）。 */
@@ -182,10 +198,10 @@ export async function renamePasskey(
   credentialId: string,
   label: string,
 ): Promise<string> {
-  const renamed = await identityRequest(
-    `passkey/${encodeURIComponent(credentialId)}`,
-    passkeyRenameSchema,
-    { method: "PATCH", body: { label } },
+  const renamed = passkeyRenameSchema.parse(
+    await identityRpc((client) =>
+      client.security.passkeys.rename({ credentialId, label }),
+    ),
   );
   return renamed.label;
 }
@@ -193,13 +209,13 @@ export async function renamePasskey(
 /* ------------------------------ 口令重置链接 ------------------------------ */
 
 /** owner（或组 admin 对本组成员）签发；明文令牌只在这一次答出来（契约 §25）。 */
-export function issuePasswordReset(
+export async function issuePasswordReset(
   principalId: string,
 ): Promise<PasswordResetIssued> {
-  return identityRequest(
-    `principals/${encodeURIComponent(principalId)}/password-reset`,
-    passwordResetIssuedSchema,
-    { method: "POST", body: {} },
+  return passwordResetIssuedSchema.parse(
+    await identityRpc((client) =>
+      client.accounts.principals.issuePasswordReset({ principalId }),
+    ),
   );
 }
 
@@ -255,36 +271,34 @@ export function takePasswordResetToken(): string {
 
 /* ---------------------------------- MFA ---------------------------------- */
 
-export function mfaStatus(): Promise<MfaStatus> {
-  return identityRequest("mfa", mfaStatusSchema);
+export async function mfaStatus(): Promise<MfaStatus> {
+  return mfaStatusSchema.parse(
+    await identityRpc((client) => client.security.mfa.status()),
+  );
 }
 
-export function enrollTotp(): Promise<TotpEnrollment> {
-  return identityRequest("mfa/totp/enroll", totpEnrollmentSchema, {
-    method: "POST",
-  });
+export async function enrollTotp(): Promise<TotpEnrollment> {
+  return totpEnrollmentSchema.parse(
+    await identityRpc((client) => client.security.mfa.enroll()),
+  );
 }
 
 export async function confirmTotp(code: string): Promise<string[]> {
-  return (
-    await identityRequest("mfa/totp/confirm", recoveryCodesSchema, {
-      method: "POST",
-      body: { code },
-    })
+  return recoveryCodesSchema.parse(
+    await identityRpc((client) => client.security.mfa.confirm({ code })),
   ).recoveryCodes;
 }
 
 export async function regenerateRecoveryCodes(code: string): Promise<string[]> {
-  return (
-    await identityRequest("mfa/recovery-codes", recoveryCodesSchema, {
-      method: "POST",
-      body: { code },
-    })
+  return recoveryCodesSchema.parse(
+    await identityRpc((client) =>
+      client.security.mfa.regenerateRecoveryCodes({ code }),
+    ),
   ).recoveryCodes;
 }
 
 export async function disableMfa(code: string): Promise<void> {
-  await identityRequest("mfa/disable", ok, { method: "POST", body: { code } });
+  await identityRpc((client) => client.security.mfa.disable({ code }));
 }
 
 /**
@@ -292,52 +306,81 @@ export async function disableMfa(code: string): Promise<void> {
  * 原来有没有开两步验证。
  */
 export async function resetMfa(principalId: string): Promise<boolean> {
-  return (
-    await identityRequest(
-      "mfa/reset",
-      z.object({ reset: z.boolean().default(false) }).passthrough(),
-      { method: "POST", body: { principalId } },
-    )
-  ).reset;
+  return z
+    .object({ reset: z.boolean().default(false) })
+    .parse(
+      await identityRpc((client) => client.security.mfa.reset({ principalId })),
+    ).reset;
 }
 
 /* --------------------------------- 会话 ---------------------------------- */
 
 export async function listSessions(all = false): Promise<IdentitySessionRow[]> {
-  return (
-    await identityRequest(
-      all ? "sessions?all=1" : "sessions",
-      sessionRowsSchema,
-    )
+  return sessionRowsSchema.parse(
+    await identityRpc((client) =>
+      client.security.sessions.list(all ? { all } : {}),
+    ),
   ).sessions;
 }
 
 export async function revokeSession(sessionId: string): Promise<void> {
-  await identityRequest(`sessions/${encodeURIComponent(sessionId)}`, ok, {
-    method: "DELETE",
-  });
+  await identityRpc((client) => client.security.sessions.revoke({ sessionId }));
 }
 
 export async function revokeOtherSessions(): Promise<number> {
   return (
-    await identityRequest(
-      "sessions/revoke-others",
-      z.object({ revoked: z.number() }),
-      { method: "POST" },
-    )
+    await identityRpc((client) => client.security.sessions.revokeOthers())
   ).revoked;
+}
+
+/* --------------------------------- 设备 ---------------------------------- */
+
+/**
+ * 这个 principal 配过的设备，按 id 分页（`identity.devices.list`）。给了 `signal`
+ * 就能被中途取消：配对成功时查询要作废重取，而这一次可能还停在换 CSRF 上。
+ */
+export async function listIdentityDevices(
+  afterId = "",
+  limit = 50,
+  signal?: AbortSignal,
+): Promise<IdentityDevicePage> {
+  return identityDevicesSchema.parse(
+    await identityRpc((client) =>
+      client.identity.devices.list(
+        { limit, ...(afterId ? { afterId } : {}) },
+        signal === undefined ? undefined : { signal },
+      ),
+    ),
+  );
+}
+
+/**
+ * 撤销一台设备。
+ *
+ * `expectedRevision` 是读到那一行时的 epoch：两台设备同时撤销同一台是两个
+ * 决定，输的那个要知道自己输了，而不是把一次已经发生的撤销再执行一遍。
+ */
+export async function revokeIdentityDevice(
+  deviceId: string,
+  expectedRevision: number,
+): Promise<void> {
+  await identityRpc((client) =>
+    client.identity.devices.revoke({ deviceId, expectedRevision }),
+  );
 }
 
 /* --------------------------------- 锁定 ---------------------------------- */
 
 export async function listLockouts(): Promise<Lockout[]> {
-  return (await identityRequest("lockouts", lockoutListSchema)).lockouts;
+  return lockoutListSchema.parse(
+    await identityRpc((client) => client.security.lockouts.list()),
+  ).lockouts;
 }
 
 export async function clearLockout(principalId: string): Promise<void> {
-  await identityRequest(`lockouts/${encodeURIComponent(principalId)}`, ok, {
-    method: "DELETE",
-  });
+  await identityRpc((client) =>
+    client.security.lockouts.clear({ principalId }),
+  );
 }
 
 /* --------------------------------- OAuth --------------------------------- */
@@ -346,42 +389,43 @@ export async function clearLockout(principalId: string): Promise<void> {
  * 提供方。匿名时只有 `id` 与 `kind`；带着有 `identity:manage` 的会话再多出
  * 回调地址、有没有密钥等（契约 §18.5）。
  */
-export function oauthProviders(anonymous = true): Promise<OAuthProviderList> {
-  return identityRequest("oauth/providers", oauthProviderListSchema, {
-    anonymous,
-  });
+export async function oauthProviders(
+  anonymous = true,
+): Promise<OAuthProviderList> {
+  // 登录页还没有会话：匿名读留在 REST；会话内（设置页）走 procedure。
+  if (anonymous) {
+    return identityRequest("oauth/providers", oauthProviderListSchema, {
+      anonymous,
+    });
+  }
+  return oauthProviderListSchema.parse(
+    await identityRpc((client) => client.security.oauth.providers()),
+  );
 }
 
 export async function setOAuthSecret(
   providerId: string,
   clientSecret: string,
 ): Promise<void> {
-  await identityRequest(
-    `oauth/providers/${encodeURIComponent(providerId)}/secret`,
-    ok,
-    { method: "PUT", body: { clientSecret } },
+  await identityRpc((client) =>
+    client.security.oauth.setSecret({ providerId, clientSecret }),
   );
 }
 
 export async function clearOAuthSecret(providerId: string): Promise<void> {
-  await identityRequest(
-    `oauth/providers/${encodeURIComponent(providerId)}/secret`,
-    ok,
-    { method: "DELETE" },
+  await identityRpc((client) =>
+    client.security.oauth.clearSecret({ providerId }),
   );
 }
 
 export async function oauthBindings(): Promise<OAuthBinding[]> {
-  return (await identityRequest("oauth/bindings", oauthBindingListSchema))
-    .bindings;
+  return oauthBindingListSchema.parse(
+    await identityRpc((client) => client.security.oauth.bindings()),
+  ).bindings;
 }
 
 export async function removeOAuthBinding(credentialId: string): Promise<void> {
-  await identityRequest(
-    `oauth/bindings/${encodeURIComponent(credentialId)}`,
-    ok,
-    { method: "DELETE" },
-  );
+  await identityRpc((client) => client.security.oauth.unbind({ credentialId }));
 }
 
 /**
@@ -480,8 +524,10 @@ function auditSearch(query: AuditQuery): string {
   return text ? `?${text}` : "";
 }
 
-export function readAudit(query: AuditQuery): Promise<AuditPage> {
-  return identityRequest(`audit${auditSearch(query)}`, auditPageSchema);
+export async function readAudit(query: AuditQuery): Promise<AuditPage> {
+  return auditPageSchema.parse(
+    await identityRpc((client) => client.security.audit.list(query)),
+  );
 }
 
 /** 同样的筛选导出 CSV（不分页，最多一万行）。 */
@@ -506,7 +552,9 @@ const memberListSchema = z.object({
 export async function listMembers(): Promise<
   { principalId: string; displayName: string }[]
 > {
-  return (await identityRequest("principals", memberListSchema)).principals;
+  return memberListSchema.parse(
+    await identityRpc((client) => client.accounts.principals.list()),
+  ).principals;
 }
 
 /** 新登记的 passkey 叫什么：浏览器 · 系统，可以之后在系统里认出来。 */
