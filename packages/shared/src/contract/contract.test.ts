@@ -69,6 +69,7 @@ describe("契约树", () => {
       "sources",
       "identity",
       "files",
+      "terminals",
     ]);
   });
 

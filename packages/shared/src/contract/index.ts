@@ -11,6 +11,7 @@ import type { ProcedureMeta } from "./meta.js";
 import { settings } from "./settings.js";
 import { sources } from "./sources.js";
 import { system } from "./system.js";
+import { terminals } from "./terminals.js";
 import { workspaces } from "./workspaces.js";
 
 /**
@@ -27,6 +28,7 @@ export const contract = {
   sources,
   identity,
   files,
+  terminals,
 };
 
 export type Contract = typeof contract;
@@ -102,6 +104,10 @@ export type {
   ProcedureMeta,
   Scope,
 } from "./meta.js";
+export {
+  terminalBackendWireSchema,
+  terminalSessionWireSchema,
+} from "./terminals.js";
 export { systemHelloOutputSchema } from "./system.js";
 export type { SystemHello } from "./system.js";
 export {

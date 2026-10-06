@@ -51,6 +51,8 @@
  * about processes and bytes; the manager knows about rows.
  */
 
+import { CoreFailure } from "../http/errors";
+
 /* --------------------------------- identity ------------------------------- */
 
 /**
@@ -222,17 +224,14 @@ export type BackendNotice = {
 /* --------------------------------- errors --------------------------------- */
 
 /**
- * Backend failures carry the HTTP status the API face owes them, because the
- * distinction matters: a stale generation is a 409 the client recovers from by
+ * Backend failures carry the HTTP status the API face owes them (they are
+ * {@link CoreFailure}s, so a contract procedure throws them as they are),
+ * because the distinction matters: a stale generation is a 409 the client recovers from by
  * reconnecting, and an exited session is a 404, and neither is a 500.
  */
-export class TerminalError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
+export class TerminalError extends CoreFailure {
+  constructor(status: number, code: string, message: string) {
+    super(status, code, message);
     this.name = "TerminalError";
   }
 }

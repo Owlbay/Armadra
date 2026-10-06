@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { resumeIdentity, type IdentitySession } from "../api/identity";
 import { RUNTIME_VIA_SERVER_SHELL } from "../api/request";
-import { terminalsApi } from "../api/terminals";
+import { runtimeApi } from "../api/client";
 
 /**
  * 这个页面背后的人能做什么（服务器账号 R8，权限表见设计
@@ -118,8 +118,8 @@ function useServerCanAnswer(
   const creator = useQuery({
     queryKey: ["terminal", "creator", sessionId],
     queryFn: async () =>
-      (await terminalsApi.getTerminal(sessionId as string))
-        .creatorPrincipalId ?? "",
+      (await runtimeApi.getTerminal(sessionId as string)).creatorPrincipalId ??
+      "",
     enabled: maybeOwn,
     // 创建者在一行的一生里不变；换了会话就是另一个键。
     staleTime: Infinity,

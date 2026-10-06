@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { type DomainHandlers, registerProcedures } from "../http/rpc";
 import { allows } from "../identity/gate";
 import { scope } from "../identity/scopes";
 import { VERSION } from "../instance";
@@ -516,115 +517,88 @@ export function install(
     });
   };
 
-  route("POST", "/api/terminals", async (_params, request) => {
-    const body = json<CreateTerminalRequest>(request);
-    const invalid = validateCreate(body);
-    if (invalid !== undefined) {
-      throw new TerminalError(400, "bad_request", invalid);
-    }
-    const owned = body.agent !== undefined && body.nodeId !== undefined;
-    const env = owned
-      ? ownedEnvironment(
-          body.nodeId as string,
-          (body.agent as { id: string }).id,
-          body.ssh !== undefined,
-          { requested: body.agent?.credentialRef },
-        )
-      : [];
-    const session = await manager.spawn({
-      workspaceId: body.workspaceId as string,
-      // Resolved, so a relative `cwd` cannot mean two directories. The
-      // root-confinement check needs the workspace row, which is R1's; until
-      // then a cwd outside the workspace is refused by the filesystem.
-      cwd: resolve(body.cwd as string),
-      ...(body.shell === undefined ? {} : { shell: body.shell }),
-      ...(body.command === undefined ? {} : { command: body.command }),
-      args: body.args ?? [],
-      kind: "terminal",
-      ...(body.nodeId === undefined ? {} : { ownerNodeId: body.nodeId }),
-      ...(body.agent === undefined ? {} : { agentId: body.agent.id }),
-      ...(body.ssh === undefined ? {} : { sshHostId: body.ssh.hostId }),
-      env,
-    });
-    return { status: 200, body: session };
-  });
+  /*
+   * 每个操作一份实现：路由表里的旧 handler（先把查询串与体解析成这里的入参）
+   * 与契约 §38 的 procedure 都调它，拒绝的码与原话由这里决定，两条路一样。
+   * 终端的输出只在 `capture` 的返回值里过，这里不记日志、不落盘。
+   */
+  const operations = {
+    create: async (body: CreateTerminalRequest) => {
+      const invalid = validateCreate(body);
+      if (invalid !== undefined) {
+        throw new TerminalError(400, "bad_request", invalid);
+      }
+      const owned = body.agent !== undefined && body.nodeId !== undefined;
+      const env = owned
+        ? ownedEnvironment(
+            body.nodeId as string,
+            (body.agent as { id: string }).id,
+            body.ssh !== undefined,
+            { requested: body.agent?.credentialRef },
+          )
+        : [];
+      return manager.spawn({
+        workspaceId: body.workspaceId as string,
+        // Resolved, so a relative `cwd` cannot mean two directories. The
+        // root-confinement check needs the workspace row, which is R1's; until
+        // then a cwd outside the workspace is refused by the filesystem.
+        cwd: resolve(body.cwd as string),
+        ...(body.shell === undefined ? {} : { shell: body.shell }),
+        ...(body.command === undefined ? {} : { command: body.command }),
+        args: body.args ?? [],
+        kind: "terminal",
+        ...(body.nodeId === undefined ? {} : { ownerNodeId: body.nodeId }),
+        ...(body.agent === undefined ? {} : { agentId: body.agent.id }),
+        ...(body.ssh === undefined ? {} : { sshHostId: body.ssh.hostId }),
+        env,
+      });
+    },
 
-  /* ---------------------------------- reads -------------------------------- */
-
-  route("GET", "/api/terminals/backend", () => {
-    const info: BackendInfo = {
+    backend: (): BackendInfo & { platform: "unix" | "windows" } => ({
       effective,
       configured,
       tmuxVersion: detection.version ?? null,
       tmuxSocket: tmux?.socket ?? null,
       reason: selection.reason ?? null,
       platform: process.platform === "win32" ? "windows" : "unix",
-    };
-    return { status: 200, body: info };
-  });
+    }),
 
-  route("GET", "/api/terminals/{sessionId}", (params) => ({
-    status: 200,
-    body: manager.session(params.sessionId as string),
-  }));
+    get: (sessionId: string) => manager.session(sessionId),
 
-  route(
-    "GET",
-    "/api/terminals/{sessionId}/capture",
-    async (params, request) => {
-      const sessionId = params.sessionId as string;
+    capture: async (
+      sessionId: string,
+      requested: number | undefined,
+      escapes: boolean,
+    ) => {
       // The row is read first so an unknown session is a 404 rather than
       // "nothing is running", which is what a session that ended looks like.
       manager.session(sessionId);
       const lines = Math.min(
-        positive(request.query.get("lines")) ?? DEFAULT_CAPTURE_LINES,
+        requested ?? DEFAULT_CAPTURE_LINES,
         MAX_CAPTURE_LINES,
       );
-      const escapes = request.query.get("escapes") === "true";
-      return {
-        status: 200,
-        body: await manager.capture(sessionId, lines, escapes),
-      };
+      return manager.capture(sessionId, lines, escapes);
     },
-  );
 
-  route("GET", "/api/workspaces/{workspaceId}/sessions", (params) => ({
-    status: 200,
-    body: listSessions(
-      context.db.database,
-      params.workspaceId as string,
-      (id) => manager.isAlive(id),
-    ),
-  }));
+    sessions: (workspaceId: string) =>
+      listSessions(context.db.database, workspaceId, (id) =>
+        manager.isAlive(id),
+      ),
 
-  /* ---------------------------------- writes ------------------------------- */
+    paste: async (sessionId: string, text: unknown, enter: boolean) => {
+      if (typeof text !== "string") {
+        throw new TerminalError(400, "bad_request", "缺少 text");
+      }
+      if ([...text].length > MAX_PASTE_CHARACTERS) {
+        throw new TerminalError(400, "bad_request", "Pasted text is too large");
+      }
+      // 页面上的「粘贴」是人在驱动，与键盘上来的字节同一条语义。
+      await manager.paste(sessionId, text, enter, humanActor("local", ""));
+      return manager.session(sessionId);
+    },
 
-  route("POST", "/api/terminals/{sessionId}/paste", async (params, request) => {
-    const sessionId = params.sessionId as string;
-    const body = json<{ text?: unknown; enter?: unknown }>(request);
-    if (typeof body?.text !== "string") {
-      throw new TerminalError(400, "bad_request", "缺少 text");
-    }
-    if ([...body.text].length > MAX_PASTE_CHARACTERS) {
-      throw new TerminalError(400, "bad_request", "Pasted text is too large");
-    }
-    // 页面上的「粘贴」是人在驱动，与键盘上来的字节同一条语义。
-    await manager.paste(
-      sessionId,
-      body.text,
-      body.enter === true,
-      humanActor("local", ""),
-    );
-    return { status: 200, body: manager.session(sessionId) };
-  });
-
-  route(
-    "POST",
-    "/api/terminals/{sessionId}/scroll",
-    async (params, request) => {
-      const body = json<{ lines?: unknown }>(request);
-      const lines =
-        typeof body?.lines === "number" ? Math.trunc(body.lines) : NaN;
+    scroll: async (sessionId: string, value: unknown): Promise<void> => {
+      const lines = typeof value === "number" ? Math.trunc(value) : NaN;
       if (!Number.isFinite(lines)) {
         throw new TerminalError(400, "bad_request", "缺少 lines");
       }
@@ -635,23 +609,12 @@ export function install(
           "Scroll distance is too large",
         );
       }
-      await manager.scroll(params.sessionId as string, lines);
-      return { status: 204 };
+      await manager.scroll(sessionId, lines);
     },
-  );
 
-  route(
-    "POST",
-    "/api/terminals/{sessionId}/terminate",
-    async (params, request) => {
-      const sessionId = params.sessionId as string;
+    terminate: async (sessionId: string, mode: TerminateMode) => {
       if (!manager.exists(sessionId)) {
         throw new TerminalError(404, "not_found", "没有这个终端会话");
-      }
-      let mode: TerminateMode = "process";
-      if (request.body.byteLength > 0) {
-        const parsed = json<{ mode?: TerminateMode }>(request);
-        if (parsed?.mode !== undefined) mode = parsed.mode;
       }
       try {
         await manager.terminate(sessionId, mode);
@@ -663,75 +626,234 @@ export function install(
           manager.session(sessionId).status !== "running";
         if (!alreadyOver) throw failure;
       }
-      return { status: 200, body: manager.session(sessionId) };
+      return manager.session(sessionId);
+    },
+
+    recycle: async (sessionId: string) => {
+      // The row, not the record: recycling a session this core never attached to
+      // is a 404 about the session, not about the process behind it.
+      manager.session(sessionId);
+      return manager.recycle(sessionId);
+    },
+
+    /**
+     * 页面上点了（或聚焦了）一个休眠中的节点：用 CLI 自己的 resume 在同一个会话
+     * id 上接回来（终端宿主设计 §7.2）。已经醒着就答它现在的样子——两台设备同时
+     * 点、或者投递先一步叫醒了它，都不会起第二个 CLI。
+     */
+    wake: async (sessionId: string) => {
+      const row = manager.session(sessionId);
+      if (row.ownerNodeId === null) {
+        throw new TerminalError(
+          409,
+          "not_hibernated",
+          "This terminal does not belong to a node",
+        );
+      }
+      const woken = await hibernator.wake(row.ownerNodeId, "focus");
+      return manager.session(woken.sessionId);
+    },
+
+    /**
+     * 人按节点头的「接管」/「交还」（设计 `agent-delivery.md` §6.1、§10）。
+     *
+     * 接管与抢占不是一回事，所以它需要一条自己的门而不是一次空写入：抢占是人
+     * 敲键的副作用、十秒后自然过期；接管是一句明确的「现在归我」，Agent 一律
+     * 收 `LEASE_REVOKED` 直到有人按「交还」。租约的变化由 `TerminalDriveBook`
+     * 的 `onChange` 广播成一帧 `terminal.lease`，所以按下之后每台看着这块画布
+     * 的设备都会同时翻徽标——不靠各自按「我刚点过」推断。
+     */
+    drive: (sessionId: string, action: unknown) => {
+      manager.session(sessionId);
+      if (action !== "takeover" && action !== "release") {
+        throw new TerminalError(
+          400,
+          "bad_request",
+          "action 只能是 takeover 或 release",
+        );
+      }
+      // 「谁在交还」不是「谁按了按钮」。人的抢占是**敲键那一侧**记下的，持有者
+      // 于是是那条 socket 的设备 id，而按钮来自同一个人的另一条路（HTTP）。按
+      // `local` 去交还会被状态机当成「放别人的租约」而拒绝，于是按钮一按什么都
+      // 不发生——真机上就是这么撞出来的。所以这里认的是**当前持有者**：这台壳
+      // 前面只有一个人，他敲键与他按钮是同一个人。Agent 的租约不在此列，它仍然
+      // 只能由 Agent 自己放掉，或者由人「接管」撤销。
+      const held = manager.driveLease(sessionId).holder;
+      const actor =
+        held?.kind === "human"
+          ? humanActor(held.id, held.displayName)
+          : humanActor("local", "");
+      return action === "takeover"
+        ? manager.takeoverDrive(sessionId, actor)
+        : manager.releaseDrive(sessionId, actor);
+    },
+  };
+
+  // 契约 §38：与下面的旧路径同一份实现；同样等启动对账完成再答。
+  const gated =
+    <A extends unknown[], R>(operation: (...args: A) => R | Promise<R>) =>
+    async (...args: A): Promise<R> => {
+      await ready;
+      return operation(...args);
+    };
+  const handlers = {
+    create: gated((input: CreateTerminalRequest) => operations.create(input)),
+    backend: gated(() => operations.backend()),
+    get: gated(({ sessionId }: { sessionId: string }) =>
+      operations.get(sessionId),
+    ),
+    capture: gated(
+      ({
+        sessionId,
+        lines,
+        escapes,
+      }: {
+        sessionId: string;
+        lines?: number | undefined;
+        escapes?: boolean | "true" | "false" | undefined;
+      }) =>
+        operations.capture(
+          sessionId,
+          countOrUndefined(lines),
+          escapes === true || escapes === "true",
+        ),
+    ),
+    sessions: gated(({ workspaceId }: { workspaceId: string }) =>
+      operations.sessions(workspaceId),
+    ),
+    paste: gated(
+      ({
+        sessionId,
+        text,
+        enter,
+      }: {
+        sessionId: string;
+        text: string;
+        enter?: boolean | undefined;
+      }) => operations.paste(sessionId, text, enter === true),
+    ),
+    scroll: gated(
+      ({ sessionId, lines }: { sessionId: string; lines: number }) =>
+        operations.scroll(sessionId, lines),
+    ),
+    terminate: gated(
+      ({
+        sessionId,
+        mode,
+      }: {
+        sessionId: string;
+        mode?: TerminateMode | undefined;
+      }) => operations.terminate(sessionId, mode ?? "process"),
+    ),
+    recycle: gated(({ sessionId }: { sessionId: string }) =>
+      operations.recycle(sessionId),
+    ),
+    wake: gated(({ sessionId }: { sessionId: string }) =>
+      operations.wake(sessionId),
+    ),
+    drive: gated(
+      ({ sessionId, action }: { sessionId: string; action: string }) =>
+        operations.drive(sessionId, action),
+    ),
+  };
+  registerProcedures(
+    context.server,
+    "terminals",
+    handlers as unknown as DomainHandlers<"terminals">,
+  );
+
+  route("POST", "/api/terminals", async (_params, request) => ({
+    status: 200,
+    body: await operations.create(json<CreateTerminalRequest>(request)),
+  }));
+
+  /* ---------------------------------- reads -------------------------------- */
+
+  route("GET", "/api/terminals/backend", () => ({
+    status: 200,
+    body: operations.backend(),
+  }));
+
+  route("GET", "/api/terminals/{sessionId}", (params) => ({
+    status: 200,
+    body: operations.get(params.sessionId as string),
+  }));
+
+  route(
+    "GET",
+    "/api/terminals/{sessionId}/capture",
+    async (params, request) => ({
+      status: 200,
+      body: await operations.capture(
+        params.sessionId as string,
+        positive(request.query.get("lines")),
+        request.query.get("escapes") === "true",
+      ),
+    }),
+  );
+
+  route("GET", "/api/workspaces/{workspaceId}/sessions", (params) => ({
+    status: 200,
+    body: operations.sessions(params.workspaceId as string),
+  }));
+
+  /* ---------------------------------- writes ------------------------------- */
+
+  route("POST", "/api/terminals/{sessionId}/paste", async (params, request) => {
+    const body = json<{ text?: unknown; enter?: unknown }>(request);
+    return {
+      status: 200,
+      body: await operations.paste(
+        params.sessionId as string,
+        body?.text,
+        body?.enter === true,
+      ),
+    };
+  });
+
+  route(
+    "POST",
+    "/api/terminals/{sessionId}/scroll",
+    async (params, request) => {
+      const body = json<{ lines?: unknown }>(request);
+      await operations.scroll(params.sessionId as string, body?.lines);
+      return { status: 204 };
     },
   );
 
-  route("POST", "/api/terminals/{sessionId}/recycle", async (params) => {
-    const sessionId = params.sessionId as string;
-    // The row, not the record: recycling a session this core never attached to
-    // is a 404 about the session, not about the process behind it.
-    manager.session(sessionId);
-    return { status: 200, body: await manager.recycle(sessionId) };
-  });
+  route(
+    "POST",
+    "/api/terminals/{sessionId}/terminate",
+    async (params, request) => {
+      let mode: TerminateMode = "process";
+      if (request.body.byteLength > 0) {
+        const parsed = json<{ mode?: TerminateMode }>(request);
+        if (parsed?.mode !== undefined) mode = parsed.mode;
+      }
+      return {
+        status: 200,
+        body: await operations.terminate(params.sessionId as string, mode),
+      };
+    },
+  );
 
-  /**
-   * 页面上点了（或聚焦了）一个休眠中的节点：用 CLI 自己的 resume 在同一个会话
-   * id 上接回来（终端宿主设计 §7.2）。已经醒着就答它现在的样子——两台设备同时
-   * 点、或者投递先一步叫醒了它，都不会起第二个 CLI。
-   */
-  route("POST", "/api/terminals/{sessionId}/wake", async (params) => {
-    const sessionId = params.sessionId as string;
-    const row = manager.session(sessionId);
-    if (row.ownerNodeId === null) {
-      throw new TerminalError(
-        409,
-        "not_hibernated",
-        "This terminal does not belong to a node",
-      );
-    }
-    const woken = await hibernator.wake(row.ownerNodeId, "focus");
-    return { status: 200, body: manager.session(woken.sessionId) };
-  });
+  route("POST", "/api/terminals/{sessionId}/recycle", async (params) => ({
+    status: 200,
+    body: await operations.recycle(params.sessionId as string),
+  }));
 
-  /**
-   * 人按节点头的「接管」/「交还」（设计 `agent-delivery.md` §6.1、§10）。
-   *
-   * 接管与抢占不是一回事，所以它需要一条自己的门而不是一次空写入：抢占是人
-   * 敲键的副作用、十秒后自然过期；接管是一句明确的「现在归我」，Agent 一律
-   * 收 `LEASE_REVOKED` 直到有人按「交还」。租约的变化由 `TerminalDriveBook`
-   * 的 `onChange` 广播成一帧 `terminal.lease`，所以按下之后每台看着这块画布
-   * 的设备都会同时翻徽标——不靠各自按「我刚点过」推断。
-   */
-  route("POST", "/api/terminals/{sessionId}/drive", (params, request) => {
-    const sessionId = params.sessionId as string;
-    manager.session(sessionId);
-    const body = json<{ action?: unknown }>(request);
-    const action = body?.action;
-    if (action !== "takeover" && action !== "release") {
-      throw new TerminalError(
-        400,
-        "bad_request",
-        "action 只能是 takeover 或 release",
-      );
-    }
-    // 「谁在交还」不是「谁按了按钮」。人的抢占是**敲键那一侧**记下的，持有者
-    // 于是是那条 socket 的设备 id，而按钮来自同一个人的另一条路（HTTP）。按
-    // `local` 去交还会被状态机当成「放别人的租约」而拒绝，于是按钮一按什么都
-    // 不发生——真机上就是这么撞出来的。所以这里认的是**当前持有者**：这台壳
-    // 前面只有一个人，他敲键与他按钮是同一个人。Agent 的租约不在此列，它仍然
-    // 只能由 Agent 自己放掉，或者由人「接管」撤销。
-    const held = manager.driveLease(sessionId).holder;
-    const actor =
-      held?.kind === "human"
-        ? humanActor(held.id, held.displayName)
-        : humanActor("local", "");
-    const lease =
-      action === "takeover"
-        ? manager.takeoverDrive(sessionId, actor)
-        : manager.releaseDrive(sessionId, actor);
-    return { status: 200, body: lease };
-  });
+  route("POST", "/api/terminals/{sessionId}/wake", async (params) => ({
+    status: 200,
+    body: await operations.wake(params.sessionId as string),
+  }));
+
+  route("POST", "/api/terminals/{sessionId}/drive", (params, request) => ({
+    status: 200,
+    body: operations.drive(
+      params.sessionId as string,
+      json<{ action?: unknown }>(request)?.action,
+    ),
+  }));
 
   /* ---------------------------------- socket ------------------------------- */
 
@@ -1145,6 +1267,13 @@ function json<T>(request: import("../http/router").CoreRequest): T {
   } catch {
     throw new TerminalError(400, "bad_request", "请求体不是 JSON");
   }
+}
+
+/** 非负整数才算数；其余按没给。procedure 的数字与旧路径的查询串同一个判据。 */
+function countOrUndefined(value: number | undefined): number | undefined {
+  return value !== undefined && Number.isInteger(value) && value >= 0
+    ? value
+    : undefined;
 }
 
 function positive(value: string | null): number | undefined {
