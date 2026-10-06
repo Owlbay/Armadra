@@ -29,7 +29,7 @@
     },
     "linux-x64": {
       "recordedAt": "2026-10-03",
-      "machine": "GitHub Actions ubuntu-22.04 托管运行器（x64），Node 22，夜间 B 档 Linux 作业；取自 main 7ec5992f 的 nightly 37154286321 产物 e2e-tier-b-linux/server-perf（只有这一次，不是三次中位数）",
+      "machine": "GitHub Actions ubuntu-22.04 托管运行器（x64），Node 22，夜间 B 档 Linux 作业；取自 main 7ec5992f 的 nightly 37154286321 产物 e2e-tier-b-linux/server-perf（只有这一次，不是三次中位数）；rssPeakMiB / rssSteadyMiB 于 2026-10-07 按 nightly 37391774494、37541900633、37545888094 三次的中位数重录（契约内核与 E3 各域的 zod schema 在启动时全量构建，见 docs/status/server-performance-baseline.md §3.2）",
       "options": {
         "sessions": 30,
         "subscribers": 6,
@@ -48,8 +48,8 @@
         "realtimeColdSyncMs": 145.4,
         "realtimeMaterializeMs": 113.6,
         "realtimeUpdateP95Ms": 1.7,
-        "rssPeakMiB": 176.1,
-        "rssSteadyMiB": 175.9,
+        "rssPeakMiB": 237.5,
+        "rssSteadyMiB": 235.9,
         "cpuIdlePercent": 2
       }
     }
