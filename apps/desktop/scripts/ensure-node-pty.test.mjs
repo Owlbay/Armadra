@@ -20,22 +20,43 @@ const script = join(
   "ensure-node-pty.mjs",
 );
 
-test("spawn-helper 缺执行位时补上，再跑一次什么也不改", () => {
+// Windows 的 stat 没有执行位（chmod 只切只读），这条只在 POSIX 上有意义；
+// Windows 上的行为由下一条用例单独钉住。
+test(
+  "spawn-helper 缺执行位时补上，再跑一次什么也不改",
+  { skip: process.platform === "win32" && "Windows 没有执行位" },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "armadra-node-pty-"));
+    try {
+      const helpers = ["darwin-arm64", "darwin-x64"].map((platform) => {
+        mkdirSync(join(root, "prebuilds", platform), { recursive: true });
+        const helper = join(root, "prebuilds", platform, "spawn-helper");
+        writeFileSync(helper, "");
+        chmodSync(helper, 0o644);
+        return helper;
+      });
+      // 没有 spawn-helper 的平台目录不算。
+      mkdirSync(join(root, "prebuilds", "win32-x64"), { recursive: true });
+      assert.deepEqual(ensurePrebuiltExecutable(root).sort(), helpers.sort());
+      for (const helper of helpers)
+        assert.equal(statSync(helper).mode & 0o111, 0o111);
+      assert.deepEqual(ensurePrebuiltExecutable(root), []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test("Windows 上什么也不改：没有执行位可补，node-pty 走 ConPTY", () => {
   const root = mkdtempSync(join(tmpdir(), "armadra-node-pty-"));
   try {
-    const helpers = ["darwin-arm64", "darwin-x64"].map((platform) => {
-      mkdirSync(join(root, "prebuilds", platform), { recursive: true });
-      const helper = join(root, "prebuilds", platform, "spawn-helper");
-      writeFileSync(helper, "");
-      chmodSync(helper, 0o644);
-      return helper;
-    });
-    // 没有 spawn-helper 的平台目录不算。
-    mkdirSync(join(root, "prebuilds", "win32-x64"), { recursive: true });
-    assert.deepEqual(ensurePrebuiltExecutable(root).sort(), helpers.sort());
-    for (const helper of helpers)
-      assert.equal(statSync(helper).mode & 0o111, 0o111);
-    assert.deepEqual(ensurePrebuiltExecutable(root), []);
+    mkdirSync(join(root, "prebuilds", "darwin-arm64"), { recursive: true });
+    const helper = join(root, "prebuilds", "darwin-arm64", "spawn-helper");
+    writeFileSync(helper, "");
+    chmodSync(helper, 0o644);
+    const before = statSync(helper).mode;
+    assert.deepEqual(ensurePrebuiltExecutable(root, "win32"), []);
+    assert.equal(statSync(helper).mode, before);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

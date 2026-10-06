@@ -32,8 +32,18 @@ export function nodePtyDir() {
   return dirname(require.resolve("node-pty/package.json", { paths: [app] }));
 }
 
-/** Restores the executable bit on every shipped `spawn-helper`. */
-export function ensurePrebuiltExecutable(root = nodePtyDir()) {
+/**
+ * Restores the executable bit on every shipped `spawn-helper`.
+ *
+ * Not on Windows: there is no executable bit (`stat` never reports `0o111`,
+ * `chmod` only toggles read-only), and node-pty spawns through ConPTY there,
+ * never through `spawn-helper`.
+ */
+export function ensurePrebuiltExecutable(
+  root = nodePtyDir(),
+  platform = process.platform,
+) {
+  if (platform === "win32") return [];
   const prebuilds = join(root, "prebuilds");
   if (!existsSync(prebuilds)) return [];
   const fixed = [];
