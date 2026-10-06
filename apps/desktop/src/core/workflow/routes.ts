@@ -1,5 +1,11 @@
-import type { ServerResponse } from "node:http";
-import type { CoreRequest } from "../http/router";
+import { CoreFailure } from "../http/errors";
+import type { CoreRequest, HandlerResult, RouteMatch } from "../http/router";
+import {
+  type DomainHandlers,
+  type RpcCall,
+  registerProcedures,
+} from "../http/rpc";
+import type { CoreServer } from "../http/server";
 import { DomainError } from "../workspaces/support";
 import { workflowScheduleBridge } from "./registry";
 import { taskRowJson } from "./task-runs";
@@ -11,15 +17,18 @@ import {
 } from "./service";
 
 /**
- * `/api/workflows/*`（契约 §15.2–§15.3）。
+ * `/api/workflows/*`（契约 §15.2–§15.3、§15.7）与 `workflows.*` / `coordinator.*`
+ * procedure（契约 §43.2、§43.3）。
  *
- * 整段挂在 `server.raw` 上（与自动化、OAuth 同一种装法）：这一面的路径不进
- * `http/routes.ts` 那张表，权限按前缀在 `http/route-scopes.ts` 声明——读是
- * `canvas:read`，写是 `agent:launch`，关卡答复单列一行（{@link GATE_SCOPE}）。
- * 路由门在进这里之前已经判过：服务器壳上按草案 / 运行 / 画板查出画布
- * （`identity/route-access.ts`），列表必须带 `boardId`。
+ * 一份操作（{@link workflowOperations}），两个入口：路由表里的旧路径 handler 先把
+ * 路径参数、查询串与体读出来，`registerProcedures` 登记的 procedure 拿到的是门面按
+ * 契约解析过的入参；两条路调同一份，拒绝的码与原话一样。拒绝一律抛
+ * `DomainError`（`CoreFailure`）。
  *
- * 所有失败都是 `{ code, message }`，`code` 是 snake_case。
+ * 这一面的路径在 `http/routes.ts` 的表里，权限按前缀在 `http/route-scopes.ts`
+ * 声明——读是 `canvas:read`，写是 `agent:launch`，关卡答复单列一行
+ * （{@link GATE_SCOPE}）。路由门在进这里之前已经判过：服务器壳上按草案 / 运行 /
+ * 画板查出画布（`identity/route-access.ts`），列表必须带 `boardId`。
  */
 
 export const API_PREFIX = "/api/workflows/";
@@ -31,347 +40,167 @@ export const API_PREFIX = "/api/workflows/";
  */
 export const GATE_SCOPE = "agent:launch";
 
-interface Answer {
-  readonly status: number;
-  readonly body?: unknown;
+/** 旧路径查询串与 procedure 入参里的可选字符串：空串当没给。 */
+function optional(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
 }
 
-type Groups = Readonly<Record<string, string>>;
-
-interface Route {
-  readonly method: string;
-  readonly pattern: RegExp;
-  readonly handle: (
-    request: CoreRequest,
-    groups: Groups,
-  ) => Answer | Promise<Answer>;
-}
-
-const ID = "(?<id>[^/]+)";
-
-export function workflowRoutes(service: WorkflowService): readonly Route[] {
+export function workflowOperations(service: WorkflowService) {
   const runBody = (id: string) => {
     const run = service.run(id);
     return { run: runJson(run, service.steps(id)) };
   };
-  return [
+  return {
     /* --------------------------------- 草案 -------------------------------- */
-    {
-      method: "GET",
-      pattern: /^\/api\/workflows\/drafts$/,
-      handle: (request) => ({
-        status: 200,
-        body: {
-          drafts: service
-            .drafts({
-              boardId: query(request, "boardId"),
-              status: query(request, "status"),
-            })
-            .map(draftJson),
-        },
-      }),
+    drafts: (filter: { boardId?: unknown; status?: unknown }) => ({
+      drafts: service
+        .drafts({
+          boardId: optional(filter.boardId),
+          status: optional(filter.status),
+        })
+        .map(draftJson),
+    }),
+    draft: (draftId: string) => ({ draft: draftJson(service.draft(draftId)) }),
+    confirmDraft: (
+      draftId: string,
+      body: { name?: unknown; draft?: unknown },
+    ) => {
+      const confirmed = service.confirm(draftId, {
+        name: body.name,
+        draft: body.draft,
+      });
+      return {
+        draft: draftJson(confirmed.draft),
+        template: templateJson(confirmed.template),
+      };
     },
-    {
-      method: "GET",
-      pattern: new RegExp(`^/api/workflows/drafts/${ID}$`),
-      handle: (_request, groups) => ({
-        status: 200,
-        body: { draft: draftJson(service.draft(groups.id as string)) },
-      }),
-    },
-    {
-      method: "POST",
-      pattern: new RegExp(`^/api/workflows/drafts/${ID}/confirm$`),
-      handle: (request, groups) => {
-        const body = jsonObject(request, true);
-        const confirmed = service.confirm(groups.id as string, {
-          name: body.name,
-          draft: body.draft,
-        });
-        return {
-          status: 200,
-          body: {
-            draft: draftJson(confirmed.draft),
-            template: templateJson(confirmed.template),
-          },
-        };
-      },
-    },
-    {
-      method: "POST",
-      pattern: new RegExp(`^/api/workflows/drafts/${ID}/discard$`),
-      handle: (_request, groups) => ({
-        status: 200,
-        body: { draft: draftJson(service.discard(groups.id as string)) },
-      }),
-    },
+    discardDraft: (draftId: string) => ({
+      draft: draftJson(service.discard(draftId)),
+    }),
 
     /* --------------------------------- 模板 -------------------------------- */
-    {
-      method: "GET",
-      pattern: /^\/api\/workflows\/templates$/,
-      handle: () => ({
-        status: 200,
-        body: { templates: service.templates().map(templateJson) },
-      }),
+    templates: () => ({ templates: service.templates().map(templateJson) }),
+    createTemplate: (body: { name?: unknown; template?: unknown }) => ({
+      template: templateJson(
+        service.createTemplate({ name: body.name, template: body.template }),
+      ),
+    }),
+    template: (templateId: string) => ({
+      template: templateJson(service.template(templateId)),
+    }),
+    updateTemplate: (
+      templateId: string,
+      body: { name?: unknown; template?: unknown },
+    ) => {
+      const template = templateJson(
+        service.updateTemplate(templateId, {
+          name: body.name,
+          template: body.template,
+        }),
+      );
+      // 冻结在旧版本上的计划（契约 §15.6）：页面据此提示「更新到最新版本」。
+      const frozenSchedules = (
+        workflowScheduleBridge()?.frozen(templateId) ?? []
+      ).map((item) => ({
+        scheduleId: item.scheduleId,
+        workspaceId: item.workspaceId,
+        templateVersion: item.templateVersion,
+        reason: item.reason,
+        missingParams: item.missingParams,
+        unknownParams: item.unknownParams,
+      }));
+      return { template, frozenSchedules };
     },
-    {
-      method: "POST",
-      pattern: /^\/api\/workflows\/templates$/,
-      handle: (request) => {
-        const body = jsonObject(request);
-        return {
-          status: 201,
-          body: {
-            template: templateJson(
-              service.createTemplate({
-                name: body.name,
-                template: body.template,
-              }),
-            ),
-          },
-        };
-      },
-    },
-    {
-      method: "GET",
-      pattern: new RegExp(`^/api/workflows/templates/${ID}$`),
-      handle: (_request, groups) => ({
-        status: 200,
-        body: { template: templateJson(service.template(groups.id as string)) },
-      }),
-    },
-    {
-      method: "PUT",
-      pattern: new RegExp(`^/api/workflows/templates/${ID}$`),
-      handle: (request, groups) => {
-        const body = jsonObject(request);
-        const id = groups.id as string;
-        const template = templateJson(
-          service.updateTemplate(id, {
-            name: body.name,
-            template: body.template,
-          }),
+    upgradeSchedules: async (
+      request: CoreRequest,
+      templateId: string,
+      workspaceId: string,
+      ids: unknown,
+    ) => {
+      if (
+        !Array.isArray(ids) ||
+        ids.length === 0 ||
+        ids.length > 200 ||
+        !ids.every((item) => typeof item === "string" && item !== "")
+      ) {
+        throw new DomainError(
+          400,
+          "bad_request",
+          "scheduleIds 必须是 1–200 个计划标识。",
         );
-        // 冻结在旧版本上的计划（契约 §15.6）：页面据此提示「更新到最新版本」。
-        const frozenSchedules = (
-          workflowScheduleBridge()?.frozen(id) ?? []
-        ).map((item) => ({
-          scheduleId: item.scheduleId,
-          workspaceId: item.workspaceId,
-          templateVersion: item.templateVersion,
-          reason: item.reason,
-          missingParams: item.missingParams,
-          unknownParams: item.unknownParams,
-        }));
-        return { status: 200, body: { template, frozenSchedules } };
-      },
+      }
+      const bridge = workflowScheduleBridge();
+      if (bridge === undefined) {
+        throw new DomainError(409, "unsupported", "这台 core 没有自动化域。");
+      }
+      // 模板先得在：不在就 404，与其余模板路由一致。
+      service.template(templateId);
+      return bridge.upgrade(request, workspaceId, templateId, ids as string[]);
     },
-    {
-      method: "POST",
-      pattern: new RegExp(`^/api/workflows/templates/${ID}/upgrade-schedules$`),
-      handle: async (request, groups) => {
-        const body = jsonObject(request);
-        const ids = body.scheduleIds;
-        if (
-          !Array.isArray(ids) ||
-          ids.length === 0 ||
-          ids.length > 200 ||
-          !ids.every((item) => typeof item === "string" && item !== "")
-        ) {
-          throw new DomainError(
-            400,
-            "bad_request",
-            "scheduleIds 必须是 1–200 个计划标识。",
-          );
-        }
-        const bridge = workflowScheduleBridge();
-        if (bridge === undefined) {
-          throw new DomainError(409, "unsupported", "这台 core 没有自动化域。");
-        }
-        // 模板先得在：不在就 404，与其余模板路由一致。
-        service.template(groups.id as string);
-        const result = await bridge.upgrade(
-          request,
-          groups.id as string,
-          ids as string[],
-        );
-        return { status: 200, body: result };
-      },
-    },
-    {
-      method: "DELETE",
-      pattern: new RegExp(`^/api/workflows/templates/${ID}$`),
-      handle: (_request, groups) => {
-        service.deleteTemplate(groups.id as string);
-        return { status: 204 };
-      },
+    deleteTemplate: (templateId: string) => {
+      service.deleteTemplate(templateId);
     },
 
     /* --------------------------------- 运行 -------------------------------- */
-    {
-      method: "GET",
-      pattern: /^\/api\/workflows\/runs$/,
-      handle: (request) => {
-        const limit = query(request, "limit");
-        return {
-          status: 200,
-          body: {
-            runs: service
-              .runs({
-                templateId: query(request, "templateId"),
-                boardId: query(request, "boardId"),
-                limit: limit === undefined ? undefined : Number(limit) || 50,
-              })
-              .map((run) => runJson(run, service.steps(run.id))),
-          },
-        };
-      },
+    runs: (filter: {
+      templateId?: unknown;
+      boardId?: unknown;
+      limit?: unknown;
+    }) => {
+      const limit = optional(
+        typeof filter.limit === "number" ? String(filter.limit) : filter.limit,
+      );
+      return {
+        runs: service
+          .runs({
+            templateId: optional(filter.templateId),
+            boardId: optional(filter.boardId),
+            limit: limit === undefined ? undefined : Number(limit) || 50,
+          })
+          .map((run) => runJson(run, service.steps(run.id))),
+      };
     },
-    {
-      method: "POST",
-      pattern: /^\/api\/workflows\/runs$/,
-      handle: async (request) => {
-        const body = jsonObject(request);
-        const run = await service.startRun({
-          templateId: body.templateId,
-          params: body.params,
-          boardId: body.boardId,
-        });
-        return { status: 201, body: runBody(run.id) };
-      },
+    startRun: async (body: {
+      templateId?: unknown;
+      params?: unknown;
+      boardId?: unknown;
+    }) => {
+      const run = await service.startRun({
+        templateId: body.templateId,
+        params: body.params,
+        boardId: body.boardId,
+      });
+      return runBody(run.id);
     },
-    {
-      method: "GET",
-      pattern: new RegExp(`^/api/workflows/runs/${ID}$`),
-      handle: (_request, groups) => ({
-        status: 200,
-        body: runBody(groups.id as string),
-      }),
+    run: (runId: string) => runBody(runId),
+    cancelRun: async (runId: string) => {
+      await service.cancel(runId);
+      return runBody(runId);
     },
-    {
-      method: "POST",
-      pattern: new RegExp(`^/api/workflows/runs/${ID}/cancel$`),
-      handle: async (_request, groups) => {
-        await service.cancel(groups.id as string);
-        return { status: 200, body: runBody(groups.id as string) };
-      },
-    },
-    {
-      method: "POST",
-      pattern: new RegExp(`^/api/workflows/runs/${ID}/gates/(?<stepId>[^/]+)$`),
-      handle: async (request, groups) => {
-        const body = jsonObject(request);
-        await service.answerGate(groups.id as string, groups.stepId as string, {
-          decision: body.decision,
-          note: body.note,
-        });
-        return { status: 200, body: runBody(groups.id as string) };
-      },
+    answerGate: async (
+      runId: string,
+      stepId: string,
+      body: { decision?: unknown; note?: unknown },
+    ) => {
+      await service.answerGate(runId, stepId, {
+        decision: body.decision,
+        note: body.note,
+      });
+      return runBody(runId);
     },
 
     /* ------------------------------ 协调者任务 ------------------------------ */
-    {
-      method: "GET",
-      pattern: /^\/api\/workflows\/tasks$/,
-      handle: (request) => ({
-        status: 200,
-        body: {
-          tasks: service.tasks(query(request, "boardId")).map(taskRowJson),
-        },
-      }),
-    },
-    {
-      method: "POST",
-      pattern: new RegExp(`^/api/workflows/tasks/${ID}/retry$`),
-      handle: (_request, groups) => ({
-        status: 200,
-        body: { task: taskRowJson(service.retryTask(groups.id as string)) },
-      }),
-    },
-  ];
-}
-
-/** 一次请求 → `{ status, body }`。用例直接调它，不经 socket。 */
-export async function answerWorkflowRequest(
-  routes: readonly Route[],
-  request: CoreRequest,
-): Promise<Answer> {
-  const candidates = routes.filter((route) => route.pattern.test(request.path));
-  if (candidates.length === 0) {
-    return {
-      status: 404,
-      body: { code: "not_found", message: "没有这个工作流路由" },
-    };
-  }
-  const found = candidates.find((route) => route.method === request.method);
-  if (found === undefined) {
-    return {
-      status: 405,
-      body: { code: "method_not_allowed", message: "这个路由不收这个方法" },
-    };
-  }
-  const groups = (found.pattern.exec(request.path)?.groups ?? {}) as Groups;
-  const decoded: Record<string, string> = {};
-  for (const [key, value] of Object.entries(groups)) {
-    decoded[key] = decodeURIComponent(value);
-  }
-  try {
-    return await found.handle(request, decoded);
-  } catch (error) {
-    if (error instanceof DomainError) {
-      return {
-        status: error.status,
-        body: { code: error.code, message: error.message },
-      };
-    }
-    throw error;
-  }
-}
-
-/** 挂在 `server.raw` 上的那个处理函数。 */
-export function workflowRawHandler(service: WorkflowService) {
-  const routes = workflowRoutes(service);
-  return async (
-    request: CoreRequest,
-    response: ServerResponse,
-    cors: Record<string, string>,
-  ): Promise<void> => {
-    if (request.method === "OPTIONS") {
-      response.writeHead(204, cors);
-      response.end();
-      return;
-    }
-    let answer: Answer;
-    try {
-      answer = await answerWorkflowRequest(routes, request);
-    } catch {
-      answer = {
-        status: 500,
-        body: { code: "internal_error", message: "工作流请求处理失败" },
-      };
-    }
-    if (answer.status === 204) {
-      response.writeHead(204, cors);
-      response.end();
-      return;
-    }
-    const payload = Buffer.from(JSON.stringify(answer.body ?? null), "utf8");
-    response.writeHead(answer.status, {
-      ...cors,
-      "content-type": "application/json",
-      "content-length": String(payload.byteLength),
-    });
-    response.end(payload);
+    tasks: (boardId: unknown) => ({
+      tasks: service.tasks(optional(boardId)).map(taskRowJson),
+    }),
+    retryTask: (taskId: string) => ({
+      task: taskRowJson(service.retryTask(taskId)),
+    }),
   };
 }
 
-function query(request: CoreRequest, name: string): string | undefined {
-  const value = request.query.get(name);
-  return value === null || value === "" ? undefined : value;
-}
-
-function jsonObject(
+/** 旧路径的体：缺体当空对象（确认草案可以不带体），其余必须是 JSON 对象。 */
+function jsonBody(
   request: CoreRequest,
   allowEmpty = false,
 ): Record<string, unknown> {
@@ -386,4 +215,197 @@ function jsonObject(
     throw new DomainError(400, "bad_request", "请求体必须是一个 JSON 对象。");
   }
   return parsed as Record<string, unknown>;
+}
+
+function query(request: CoreRequest, name: string): string | undefined {
+  return optional(request.query.get(name) ?? undefined);
+}
+
+/** 装配：路由表里的旧路径与契约 procedure 调同一份操作。 */
+export function installWorkflowRoutes(
+  server: CoreServer,
+  service: WorkflowService,
+): void {
+  const ops = workflowOperations(service);
+
+  const route = (
+    method: string,
+    path: string,
+    handler: (
+      match: RouteMatch,
+      request: CoreRequest,
+    ) => HandlerResult | Promise<HandlerResult>,
+  ): void => {
+    server.router.handle(method, path, async (match, request) => {
+      try {
+        return await handler(match, request);
+      } catch (error) {
+        if (error instanceof CoreFailure) {
+          const { status, body } = error.response();
+          return { status, body };
+        }
+        throw error;
+      }
+    });
+  };
+  const ok = (body: unknown, status = 200): HandlerResult => ({
+    status,
+    body,
+  });
+  const param = (match: RouteMatch, name: string) =>
+    match.params[name] as string;
+
+  registerProcedures(server, "workflows", {
+    drafts: (input: { boardId?: string; status?: string }) => ops.drafts(input),
+    draft: ({ draftId }: { draftId: string }) => ops.draft(draftId),
+    confirmDraft: ({
+      draftId,
+      ...body
+    }: {
+      draftId: string;
+      name?: string;
+      draft?: unknown;
+    }) => ops.confirmDraft(draftId, body),
+    discardDraft: ({ draftId }: { draftId: string }) =>
+      ops.discardDraft(draftId),
+    templates: () => ops.templates(),
+    createTemplate: (input: { name?: string; template?: unknown }) =>
+      ops.createTemplate(input),
+    template: ({ templateId }: { templateId: string }) =>
+      ops.template(templateId),
+    updateTemplate: ({
+      templateId,
+      ...body
+    }: {
+      templateId: string;
+      name?: string;
+      template?: unknown;
+    }) => ops.updateTemplate(templateId, body),
+    upgradeSchedules: (
+      {
+        templateId,
+        workspaceId,
+        scheduleIds,
+      }: {
+        templateId: string;
+        workspaceId?: string;
+        scheduleIds?: string[];
+      },
+      call: RpcCall,
+    ) =>
+      ops.upgradeSchedules(
+        call.request,
+        templateId,
+        // 旧路径把工作空间放在查询串里，门面只把体交给入参。
+        workspaceId ?? call.request.query.get("workspaceId") ?? "",
+        scheduleIds,
+      ),
+    deleteTemplate: ({ templateId }: { templateId: string }) =>
+      ops.deleteTemplate(templateId),
+    runs: (input: { templateId?: string; boardId?: string; limit?: unknown }) =>
+      ops.runs(input),
+    startRun: (input: {
+      templateId?: string;
+      params?: unknown;
+      boardId?: string;
+    }) => ops.startRun(input),
+    run: ({ runId }: { runId: string }) => ops.run(runId),
+    cancelRun: ({ runId }: { runId: string }) => ops.cancelRun(runId),
+    answerGate: ({
+      runId,
+      stepId,
+      ...body
+    }: {
+      runId: string;
+      stepId: string;
+      decision?: string;
+      note?: string;
+    }) => ops.answerGate(runId, stepId, body),
+  } as unknown as DomainHandlers<"workflows">);
+  registerProcedures(server, "coordinator", {
+    tasks: ({ boardId }: { boardId?: string }) => ops.tasks(boardId),
+    retry: ({ taskId }: { taskId: string }) => ops.retryTask(taskId),
+  } as unknown as DomainHandlers<"coordinator">);
+
+  const BASE = "/api/workflows";
+  route("GET", `${BASE}/drafts`, (_match, request) =>
+    ok(
+      ops.drafts({
+        boardId: query(request, "boardId"),
+        status: query(request, "status"),
+      }),
+    ),
+  );
+  route("GET", `${BASE}/drafts/{draftId}`, (match) =>
+    ok(ops.draft(param(match, "draftId"))),
+  );
+  route("POST", `${BASE}/drafts/{draftId}/confirm`, (match, request) =>
+    ok(ops.confirmDraft(param(match, "draftId"), jsonBody(request, true))),
+  );
+  route("POST", `${BASE}/drafts/{draftId}/discard`, (match) =>
+    ok(ops.discardDraft(param(match, "draftId"))),
+  );
+
+  route("GET", `${BASE}/templates`, () => ok(ops.templates()));
+  route("POST", `${BASE}/templates`, (_match, request) =>
+    ok(ops.createTemplate(jsonBody(request)), 201),
+  );
+  route("GET", `${BASE}/templates/{templateId}`, (match) =>
+    ok(ops.template(param(match, "templateId"))),
+  );
+  route("PUT", `${BASE}/templates/{templateId}`, (match, request) =>
+    ok(ops.updateTemplate(param(match, "templateId"), jsonBody(request))),
+  );
+  route(
+    "POST",
+    `${BASE}/templates/{templateId}/upgrade-schedules`,
+    async (match, request) =>
+      ok(
+        await ops.upgradeSchedules(
+          request,
+          param(match, "templateId"),
+          request.query.get("workspaceId") ?? "",
+          jsonBody(request).scheduleIds,
+        ),
+      ),
+  );
+  route("DELETE", `${BASE}/templates/{templateId}`, (match) => {
+    ops.deleteTemplate(param(match, "templateId"));
+    return { status: 204 };
+  });
+
+  route("GET", `${BASE}/runs`, (_match, request) =>
+    ok(
+      ops.runs({
+        templateId: query(request, "templateId"),
+        boardId: query(request, "boardId"),
+        limit: query(request, "limit"),
+      }),
+    ),
+  );
+  route("POST", `${BASE}/runs`, async (_match, request) =>
+    ok(await ops.startRun(jsonBody(request)), 201),
+  );
+  route("GET", `${BASE}/runs/{runId}`, (match) =>
+    ok(ops.run(param(match, "runId"))),
+  );
+  route("POST", `${BASE}/runs/{runId}/cancel`, async (match) =>
+    ok(await ops.cancelRun(param(match, "runId"))),
+  );
+  route("POST", `${BASE}/runs/{runId}/gates/{stepId}`, async (match, request) =>
+    ok(
+      await ops.answerGate(
+        param(match, "runId"),
+        param(match, "stepId"),
+        jsonBody(request),
+      ),
+    ),
+  );
+
+  route("GET", `${BASE}/tasks`, (_match, request) =>
+    ok(ops.tasks(query(request, "boardId"))),
+  );
+  route("POST", `${BASE}/tasks/{taskId}/retry`, (match) =>
+    ok(ops.retryTask(param(match, "taskId"))),
+  );
 }

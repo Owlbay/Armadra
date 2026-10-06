@@ -782,6 +782,86 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 工作流与协调者任务（契约 §15、§43.2–§43.3）：路由在 `core/workflow/routes.ts`，
+  // 与 `workflows.*` / `coordinator.*` procedure 同一份操作。
+  {
+    path: "/api/workflows/drafts",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workflows/drafts/{draftId}",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workflows/drafts/{draftId}/confirm",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workflows/drafts/{draftId}/discard",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workflows/templates",
+    methods: ["GET", "POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workflows/templates/{templateId}",
+    methods: ["GET", "PUT", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workflows/templates/{templateId}/upgrade-schedules",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workflows/runs",
+    methods: ["GET", "POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workflows/runs/{runId}",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workflows/runs/{runId}/cancel",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workflows/runs/{runId}/gates/{stepId}",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workflows/tasks",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workflows/tasks/{taskId}/retry",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/terminals/{sessionId}/ws",
     methods: ["GET"],

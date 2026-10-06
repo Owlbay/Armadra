@@ -17,7 +17,7 @@
 import { collab } from "../agent";
 import type { CoreContext } from "../main";
 import { WorkflowEngine } from "./engine";
-import { API_PREFIX, workflowRawHandler } from "./routes";
+import { installWorkflowRoutes } from "./routes";
 import { type WorkflowDomain, setWorkflowDomain } from "./registry";
 import { WorkflowService } from "./service";
 
@@ -53,7 +53,7 @@ export function install(context: CoreContext): WorkflowDomain | undefined {
     engine,
     collab: () => collab(),
   });
-  context.server.raw(API_PREFIX, workflowRawHandler(service));
+  installWorkflowRoutes(context.server, service);
   engine.start();
   const domain: WorkflowDomain = {
     engine,

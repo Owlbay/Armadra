@@ -302,6 +302,7 @@ export interface WorkflowScheduleBridge {
   frozen(templateId: string): FrozenSchedule[];
   upgrade(
     request: CoreRequest,
+    workspaceId: string,
     templateId: string,
     scheduleIds: readonly string[],
   ): Promise<UpgradeResult>;
@@ -378,12 +379,11 @@ export function workflowScheduleBridge(
       return found;
     },
 
-    async upgrade(request, templateId, scheduleIds) {
+    async upgrade(request, workspaceId, templateId, scheduleIds) {
       const template = currentTemplate(templateId);
       if (template === undefined) {
         throw new DomainError(404, "not_found", "没有这个模板。");
       }
-      const workspaceId = request.query.get("workspaceId") ?? "";
       let caller: Caller;
       try {
         caller = deps.caller(request, workspaceId, true);
