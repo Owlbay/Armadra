@@ -61,6 +61,7 @@ vi.mock("../api/identity", async (original) => ({
 import { IdentityRequestError } from "../api/identity";
 import { resetLocalRuntime } from "../api/local-runtime";
 import { resolveRuntimeUrl, setNativeRuntimeBase } from "../api/runtime-url";
+import { hostedRelay, resetHostedRelay } from "../sources/hosted";
 import { SourceError } from "../sources/types";
 import { setActiveConnection, upsertConnection } from "./connections";
 import { prepareEntry, ticketWithRefresh } from "./entry";
@@ -89,6 +90,33 @@ afterEach(() => {
 });
 
 describe("入口分支", () => {
+  it("个人中转托管（/app/ 下、同源平台信息是 personal）→ 中继登录；别处不问", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(
+      async () =>
+        new Response(
+          JSON.stringify({
+            mode: "personal",
+            issuer: location.origin,
+            capabilities: [],
+            webApp: `${location.origin}/app/`,
+          }),
+        ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+    expect(fetch).not.toHaveBeenCalled();
+    history.replaceState(null, "", "/app/");
+    await expect(prepareEntry()).resolves.toEqual({
+      kind: "relay",
+      issuer: location.origin,
+    });
+    expect(String(fetch.mock.calls[0]?.[0])).toBe(
+      `${location.origin}/.well-known/armadra-platform`,
+    );
+    expect(hostedRelay()?.issuer).toBe(location.origin);
+    resetHostedRelay();
+  });
+
   it("桌面与普通网页直接是画布，不装任何传输", async () => {
     await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
     history.replaceState(null, "", "/#pair=abc");

@@ -270,6 +270,22 @@ function schedule(connection: Connection): void {
   }, connection.backoff.next());
 }
 
+/**
+ * 源回来了（中继托管的页面收到 `me.stream` 的 `sourceOnline`）：在退避里等着的
+ * 事件流不再等，立刻重连一次。给了源只叫醒那个源的。
+ */
+export function wakeWorkspaceEvents(sourceId?: string): void {
+  for (const connection of connections.values()) {
+    if (connection.stopped || connection.timer === null) continue;
+    if (sourceId !== undefined && connection.source.sourceId !== sourceId)
+      continue;
+    clearTimeout(connection.timer);
+    connection.timer = null;
+    connection.backoff.reset();
+    open(connection);
+  }
+}
+
 function teardown(connection: Connection): void {
   for (const handler of connectionHandlers)
     handler(connection.workspaceId, false, connection.source.sourceId);
