@@ -54,6 +54,9 @@ export interface InvitationRow {
   readonly expiresAtMs: number;
   readonly consumedBy: string;
   readonly consumedAtMs: number;
+  /** 空 = 一次性（旧行为）；有值 = 最多这么多个不同的人可以兑换。 */
+  readonly maxUses: number | null;
+  readonly uses: number;
 }
 
 export interface GroupRow {
@@ -291,8 +294,8 @@ export class AccountsTx {
     this.database
       .prepare(
         "INSERT INTO identity_invitations(invitation_id, issued_by, target_group_id, target_workspace_id, " +
-          "role, token_hash, created_at_ms, expires_at_ms, consumed_by, consumed_at_ms) " +
-          "VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', 0)",
+          "role, token_hash, created_at_ms, expires_at_ms, consumed_by, consumed_at_ms, max_uses) " +
+          "VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', 0, ?)",
       )
       .run(
         row.invitationId,
@@ -303,7 +306,51 @@ export class AccountsTx {
         new Uint8Array(row.tokenHash),
         row.createdAtMs,
         row.expiresAtMs,
+        row.maxUses,
       );
+  }
+
+  /** 这个人是不是已经兑换过这张多次邀请。 */
+  invitationUsedBy(invitationId: string, principalId: string): boolean {
+    return (
+      this.database
+        .prepare(
+          "SELECT 1 FROM identity_invitation_uses WHERE invitation_id = ? AND principal_id = ?",
+        )
+        .get(invitationId, principalId) !== undefined
+    );
+  }
+
+  /**
+   * 多次邀请的一次兑换：计数加一并记下是谁，次数用满时同时收口（`consumed_*`），
+   * 此后 {@link consumeInvitation} 的闸与一次性邀请一致。条件 UPDATE 在同一笔
+   * 事务里判 `uses < max_uses`，所以并发的第 N+1 个什么也改不动、整笔回滚。
+   * 同一个人再来是幂等的：不加计数，也不报错。
+   */
+  useInvitation(
+    invitationId: string,
+    principalId: string,
+    nowMs: number,
+  ): void {
+    if (this.invitationUsedBy(invitationId, principalId)) return;
+    const changes = this.database
+      .prepare(
+        "UPDATE identity_invitations SET uses = uses + 1 " +
+          "WHERE invitation_id = ? AND consumed_at_ms = 0 AND max_uses IS NOT NULL AND uses < max_uses",
+      )
+      .run(invitationId).changes;
+    if (Number(changes) !== 1) throw new IdentityError("conflict");
+    this.database
+      .prepare(
+        "INSERT OR IGNORE INTO identity_invitation_uses(invitation_id, principal_id, used_at_ms) VALUES(?, ?, ?)",
+      )
+      .run(invitationId, principalId, nowMs);
+    this.database
+      .prepare(
+        "UPDATE identity_invitations SET consumed_by = ?, consumed_at_ms = ? " +
+          "WHERE invitation_id = ? AND uses >= max_uses AND consumed_at_ms = 0",
+      )
+      .run(principalId, nowMs, invitationId);
   }
 
   /**
@@ -574,7 +621,7 @@ const CREDENTIAL_COLUMNS =
   "kdf_parallel, kdf_length, created_at_ms, revoked_at_ms FROM identity_credentials";
 const INVITATION_COLUMNS =
   "invitation_id, issued_by, target_group_id, target_workspace_id, role, token_hash, created_at_ms, " +
-  "expires_at_ms, consumed_by, consumed_at_ms FROM identity_invitations";
+  "expires_at_ms, consumed_by, consumed_at_ms, max_uses, uses FROM identity_invitations";
 const GRANT_COLUMNS =
   "grant_id, subject_kind, subject_id, workspace_id, role, granted_by, created_at_ms, revoked_at_ms " +
   "FROM identity_grants";
@@ -620,6 +667,8 @@ function toInvitation(row: Record<string, unknown>): InvitationRow {
     expiresAtMs: Number(row.expires_at_ms),
     consumedBy: String(row.consumed_by),
     consumedAtMs: Number(row.consumed_at_ms),
+    maxUses: row.max_uses === null ? null : Number(row.max_uses),
+    uses: Number(row.uses),
   };
 }
 

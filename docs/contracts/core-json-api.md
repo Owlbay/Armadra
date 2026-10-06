@@ -403,7 +403,9 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 角色是 `viewer` ⊂ `editor` ⊂ `operator` ⊂ `driver`，编译表只在 `core/identity/roles.ts`。
 
-G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：设成功之后撤掉这个人的其它会话（安全审查 L2）——本人换口令时留下发请求的这个会话，owner 或 `identity:manage` 替人设时那个人的会话全部撤掉；这个人手里还没用的口令重置令牌（§25）一并作废，审计 `identity.credential.set` 的 `detail` 多 `revokedSessions`。`POST invitations` 的 `ttlMs` 缺省 7 天、最长 30 天（安全审查 L3），更长的夹到 30 天，不是正整数答 400 `INVALID_ARGUMENT`；答案的 `expiresAtMs` 是夹过之后的。替某人签发口令重置链接是 `POST principals/{id}/password-reset`，见 §25。
+G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：设成功之后撤掉这个人的其它会话（安全审查 L2）——本人换口令时留下发请求的这个会话，owner 或 `identity:manage` 替人设时那个人的会话全部撤掉；这个人手里还没用的口令重置令牌（§25）一并作废，审计 `identity.credential.set` 的 `detail` 多 `revokedSessions`。`POST invitations` 的 `ttlMs` 缺省 7 天、最长 30 天（安全审查 L3），更长的夹到 30 天，不是正整数答 400 `INVALID_ARGUMENT`；答案的 `expiresAtMs` 是夹过之后的。
+
+**多次使用（A4-1，表 `identity_invitation_uses` 在迁移 `0040`）。** `POST invitations` 可带 `maxUses`（1–1000 的整数，其它值答 400 `INVALID_ARGUMENT`；省略 = 一次性，沿用旧行为）；答案与 `GET invitations` 的每一项多 `maxUses`（一次性为 `null`）与 `uses`（已兑换的不同的人数）。兑换（`accept`、口令注册、云登录）在同一笔事务里以 `uses < max_uses` 的条件 UPDATE 计数并记下是谁，并发的第 N+1 个什么也改不动、答 401；同一个人再次兑换是幂等成功，不加计数、用满之后也仍成功（过期、作废之后不行）。用满时 `consumedBy` / `consumedAtMs` 记最后一位与时刻，作废沿用空主体。替某人签发口令重置链接是 `POST principals/{id}/password-reset`，见 §25。
 
 **判定在哪里生效**（R8）：
 
