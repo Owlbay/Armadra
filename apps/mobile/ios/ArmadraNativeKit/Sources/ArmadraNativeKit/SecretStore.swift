@@ -4,6 +4,8 @@ import Security
 
 /// 存几段小秘密的地方。App 用钥匙串，单测用内存——单测绝不碰真钥匙串。
 public protocol SecretStore {
+    /// 以 `prefix` 开头的全部条目名（多会话：一个连接一条）。
+    func list(prefix: String) -> [String]
     func read(_ account: String) -> Data?
     @discardableResult func write(_ account: String, _ value: Data) -> Bool
     @discardableResult func delete(_ account: String) -> Bool
@@ -33,6 +35,24 @@ public struct KeychainStore: SecretStore {
         ]
         if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
         return query
+    }
+
+    public func list(prefix: String) -> [String] {
+        var request: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        if let accessGroup { request[kSecAttrAccessGroup as String] = accessGroup }
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(request as CFDictionary, &result) == errSecSuccess,
+              let items = result as? [[String: Any]]
+        else { return [] }
+        return items
+            .compactMap { $0[kSecAttrAccount as String] as? String }
+            .filter { $0.hasPrefix(prefix) }
+            .sorted()
     }
 
     public func read(_ account: String) -> Data? {
@@ -69,6 +89,7 @@ public struct KeychainStore: SecretStore {
 public final class MemoryStore: SecretStore {
     private var values: [String: Data] = [:]
     public init() {}
+    public func list(prefix: String) -> [String] { values.keys.filter { $0.hasPrefix(prefix) }.sorted() }
     public func read(_ account: String) -> Data? { values[account] }
     @discardableResult public func write(_ account: String, _ value: Data) -> Bool {
         values[account] = value

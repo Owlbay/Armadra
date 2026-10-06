@@ -24,6 +24,17 @@ public final class Pin {
         return new Pin(origin, fingerprint, value);
     }
 
+    /** 钉扎记录的键：{@code host:port}（端口缺省 443），大小写不敏感；认不出是 {@code null}。 */
+    public static String originKey(String origin) {
+        try {
+            URI uri = new URI(origin);
+            if (uri.getHost() == null || uri.getHost().isEmpty()) return null;
+            return uri.getHost().toLowerCase(Locale.ROOT) + ":" + (uri.getPort() < 0 ? 443 : uri.getPort());
+        } catch (Exception error) {
+            return null;
+        }
+    }
+
     /** 这次握手是不是发往被钉的来源（主机与端口都要对上，端口缺省 443）。 */
     public boolean covers(String host, int port) {
         try {

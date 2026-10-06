@@ -1996,3 +1996,42 @@
 - 组织默认角色的设置键与 `cloud.tunnel` 事件属于 A3-2；邀请多次使用的消费逻辑属于 A4-1（本包只建列）。
 - `relayTunnel` 的地址按 `https://` 记（外呼表的扫描只收 `https` / `smtp`），连接时升级为 `wss`。
 - `since` 写 `1.3`，协议 minor 不升（同 A1-3）。
+
+## A1-5 手机多连接（`apps/web/src/mobile/` + `apps/mobile`）
+
+设计：[客户端包](../design/platform/client-packages.md) §4，[总计划](../design/platform-implementation-plan.md) §12（个人中转优先；SaaS 只预留）。
+
+做了什么：
+
+- **原生桥多会话**（`mobile/native-bridge.ts`、`apps/mobile/src/bridge.ts`）：`getSessions / setSession / removeSession(sourceId, origin?)`、`getRemotes / setRemote / removeRemote`、`peek(origin)`（不带凭据取一次信任锚指纹，什么也不存）；`pin` 改为每个来源各存一份。会话一个连接一份（键 `sourceId` + `via`），远程服务的刷新令牌一份（键 `serviceId`），都只在钥匙串 / Keystore，连接表（无凭据）在页面本地存储 `armadra.sources`。旧的单会话方法（`getSession / clearSession`）删除，不留兼容。
+- **iOS**：`SecretStore` 加 `list(prefix:)`，新 `ConnectionVault`（会话 / 远程服务 / 钉扎的校验与读写，写入前校验形状，键与内容对不上的读回时丢掉）；插件 `peek`（`AnchorFetch` 分开给握手链、`/ca.crt` 与「系统是否本来就信」）、`pin` 多来源、`armadra://join` 深链。**Android**：`SecureStore.names(prefix)`、纯 JVM 的 `ConnectionRules`（同一套校验）、`PinningWebViewClient` 按来源找钉扎、`peek`、`join` 深链。
+- **手机的 `CredentialProvider`**（`mobile/credentials.ts`）：直连用钥匙串里的刷新令牌向 Gateway 轮换；经中继先用远程服务的刷新令牌取云会话（每次旋转都写回），要断言与中继令牌，再用存着的刷新令牌经中继轮换源会话，被拒才用断言 `cloud/login` 重登；源不在线答 `source_offline`，云会话失效答 `source_unauthorized`。钥匙串是刷新令牌唯一的真相（身份面轮换后也写回它）。
+- **连接表与添加流程**：`mobile/connections.ts`（同一个源两种到达合并一行，两条路都在，选路直连优先）；`mobile/connect.ts` 的 `createRelayEnrollment`（个人中转：地址 → 取指纹、自签的要人确认才钉 → `auth.login` → `me.sources` 勾选 → 每台 `assertion` → `cloud/login` → 钥匙串；分享链接 / 二维码：`links.accept` → `cloud/login` 带邀请令牌，直接挂载）、`forgetConnection`、`openConnection`；`mobile/cloud-client.ts`（远程服务的一小块客户端，错误归成 `{code, message}`）；`mobile/join-link.ts`（`<issuer>/j/<id>#<秘密>.<邀请令牌>` 与 `armadra://join`）。
+- **入口**（`mobile/entry.ts`）：按连接选路 → 把这一路的地址与凭据装给本机源（`setNativeRuntimeBase`、`installLocalTransport`；经中继时每个请求带 `armadra-relay-token`、每条流带 `armadra-relay.<令牌>`），令牌到期前与回前台时提前续；切换连接 = 记下选中的再重载。选中的连不上回连接页并带原因。`identity.ts` 的钥匙串读写按「当前连接」键（`setNativeConnection`）。
+- **界面**（`ConnectScreen.tsx` + 新 `ConnectRelay.tsx`）：连接列表（点一行进入、行尾移除要确认）+ 「添加连接」三种方式（扫码、配对链接、个人中转），SaaS 没有入口；个人中转三步：表单、核对指纹、选择主机。只用 `Button / Item / Checkbox / Field / Input / Badge` 与 `ResponsiveAlertDialog`，文案进 `i18n/mobile-connect.ts` 中英同步，展示页 `mobile` 分区加了五个样本。
+
+实测（macOS arm64，2026-10-06，基于 main 86271782，含 #139、#138、#140）：
+
+- `pnpm check` 通过（lint 0 error；本包文件 0 新 warn）；`pnpm --filter @armadra/web test` 3589 过（379 个文件），`typecheck` 通过；`pnpm --filter @armadra/mobile test` 10 过、`typecheck` 通过。新用例：`credentials` 7、`connections` 4、`join-link` 5、`connect` 多连接 11（三种添加、同一个源两种到达合并一行、移除、钉扎失败不登录）、`entry` 5、`ConnectScreen` 8、`native-bridge` / `bridge` 各补多会话。
+- iOS：`swift test`（`ArmadraNativeKit`）26 过；`xcodebuild build -sdk iphonesimulator`（`CODE_SIGNING_ALLOWED=NO`）BUILD SUCCEEDED。本机 CoreSimulator 版本低于 Xcode，模拟器起不来，没有在模拟器里跑 App。
+- Android：`armadra-native-core` 用 `javac` + JUnit 直接跑 20 个用例全过（含新 `ConnectionRulesTest`、`DeepLinkTest` join）。本机只有 JDK 25（Gradle 8.14 不认）且没有 Android SDK，`:app` 没有编译，插件 Java 只经人工核对。
+- 对本机个人中转联调（armadra-cloud main be36b78，同一份代码、自选数据目录与端口 8112、自签 TLS，用完已停）：`/ca.crt` 的 DER SHA-256 与启动日志指纹一致；`auth.login` 口令错答 `credentials_invalid`、对了拿到 `refreshToken`；`auth.refresh` 旋转、旧令牌再用被撤销；`me.sources` 空；`links.accept` 假链接答 `link_invalid`；整条添加流程（指纹确认 → 钉扎 → 登录 → 目录）走到「没有可连接的主机」。没有注册任何 core，断言 → `cloud/login` 这一段只在 mock 的 fetch 里验过（核对了请求头 `Armadra-Relay-Token`、请求体与写回钥匙串）。
+- 真浏览器（Chrome 无头，设计展示页 `mobile` 分区）390 宽、明暗两主题、中英各一套：`target/a1-5-screenshots/`（`1-connection-list`、`2-add-connection`、`3-personal-relay`、`4-verify-fingerprint`、`5-choose-hosts`，另有 `0-legacy-link` 现有链接页对照）；`node tools/probes/design-showcase.mjs --only=mobile --width=390`：对比度 dark 最低 3.25、light 最低 3.07，控制台无 error。
+
+接口（供 A1-4 / A4-3p / A3-4）：
+
+- `createMobileCredentialProvider({ bridge, describe })` / `mobileCredentialProvider()`；`serviceIdOf(issuer)`（`personal:<host>`）。
+- 连接表：`loadConnections / upsertConnection / removeConnection / activeConnection / setActiveConnection`（`mobile/connections.ts`）。
+- 管理页入口：把页面地址改成 `#connections`（A1-4 的设置页可直接跳）；`armadra://join?link=&issuer=&s=` 进连接页直接挂载。
+- 新增失败原因（`mobileConnect.error.*`）：`credentials`、`locked`、`link`、`offline`、`noSources`、`address`。
+
+没做 / 偏离规格：
+
+- 规格里的 `bridge.ts` 沿用现有的 `native-bridge.ts`；连接表放页面本地存储而不是 Capacitor Preferences（页面不依赖 `@capacitor/core`，与原来记 Gateway 来源的做法一致）。
+- 登录与指纹的先后：规格写「`auth.login` → 指纹确认」，实现是先 `peek` 指纹、人确认并 `pin`，再登录——自签的中继在钉扎之前连 TLS 都过不了，登录请求发不出去。系统本来就信任的证书与已钉过同一枚的跳过确认。
+- 页面其余部分仍只认「当前连接」（本机源指向选中的那一路，切换要重载），没有把手机接进 A1-1 的 `SourceRegistry` 同时挂多个源；那要等 A1-2 的查询键按源区分与 A1-4。
+- 画布里没有加「连接」入口（设置页归 A1-4）；现在从 `#connections` 或深链进。
+- SaaS：没有入口；设备码流与 `armadra://cloud` 没做（类型与 `saas` 分支保留）。
+- `me.sources` 的名字只是标签，离线的主机不能勾；断言的 `online: false` 在挂载时再校一次。
+- 访客（分享链接）的云会话刷新令牌同样存进钥匙串的远程服务那一份；若同一个中转下已经有账号登录，会被覆盖成访客的（一个签发方一份）。
+- 钉扎的时间窗：`peek` 与 `pin` 是两次取证书，中间被换证书时 `pin` 的指纹核对会失败（不自动信任）。

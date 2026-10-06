@@ -14,15 +14,34 @@ import { registerPlugin } from "@capacitor/core";
  * `ios/App/App/ArmadraNativePlugin.swift` 与 `android/app/src/main/java/dev/armadra/mobile/ArmadraNativePlugin.java`。
  */
 export interface StoredSession {
+  readonly sourceId: string;
   readonly origin: string;
+  readonly via: "direct" | "relayed";
   readonly accessToken: string;
   readonly refreshToken: string;
+  readonly expiresAtMs: number;
+}
+
+export interface StoredRemote {
+  readonly serviceId: string;
+  readonly issuer: string;
+  readonly kind: "personal" | "saas";
+  readonly refreshToken: string;
+  readonly fingerprint: string;
 }
 
 export interface ArmadraNativePlugin {
-  getSession(): Promise<{ session?: StoredSession }>;
+  getSessions(): Promise<{ sessions?: StoredSession[] }>;
   setSession(options: { session: StoredSession }): Promise<void>;
-  clearSession(): Promise<void>;
+  removeSession(options: { sourceId: string; origin?: string }): Promise<void>;
+  getRemotes(): Promise<{ remotes?: StoredRemote[] }>;
+  setRemote(options: { remote: StoredRemote }): Promise<void>;
+  removeRemote(options: { serviceId: string }): Promise<void>;
+  peek(options: { origin: string }): Promise<{
+    fingerprint?: string;
+    trusted?: boolean;
+    pinned?: boolean;
+  }>;
   pin(options: { origin: string; fingerprint: string }): Promise<void>;
   scan(): Promise<{ text?: string }>;
   pushRegistration(): Promise<{
