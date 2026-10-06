@@ -91,7 +91,7 @@ armadra serve --data-dir /var/lib/armadra --listen 0.0.0.0:8443 --public-origin 
 ```
 
 - 不给 `--web-root` 就用包内的页面，迁移目录与 node-pty 也取包内那份（与桌面同一个 Electron ABI），不需要 Node 与源码。
-- **数据目录要另给**（`--data-dir`）：缺省会落在桌面应用自己的数据目录，和正在开着的桌面抢同一份库。
+- 不给 `--data-dir`（也没设 `ARMADRA_DATA_DIR`）时数据放在 `~/.armadra-server`，**不会**落到桌面应用自己的数据目录：桌面可能正开着那份库，两个壳的迁移版本也未必一致。要共用桌面那份数据请自己显式指过去。
 - 前台运行，`Ctrl-C` / `SIGTERM` 转给服务器壳，退出码就是它的退出码；启动日志里打印 `armadra-server pairing …`。
 - 安装包比容器镜像大，且 Agent 与终端用的是这台机器上的 CLI；长期常开、对公网的部署仍推荐 §2.1 / §2.2。
 - 只在打包后的安装包里有；开发检出里用 `node apps/server/out/main.js serve`（§2.2）。

@@ -90,7 +90,7 @@ TLS、准入、CSP 与页面托管不在 `apps/server` 里，而在 core 的 Gat
 
 桌面安装包也带着服务器壳：`Armadra serve [参数]`（`main/entry.ts` 在装配桌面之前识别 `serve`，
 `main/serve-launch.ts` 以 `ELECTRON_RUN_AS_NODE=1` 把自己当 Node 起 `resources/server/main.js serve …`，
-参数透传，不开窗口、不进单实例锁）。`after-pack.mjs` 把 `apps/server/out/main.js` 与桌面自己的
+参数透传，不开窗口、不进单实例锁；数据目录缺省 `~/.armadra-server`，不碰桌面的默认库）。`after-pack.mjs` 把 `apps/server/out/main.js` 与桌面自己的
 `out/renderer`（与 `apps/web` 构建同一份产物）放到 `resources/server/{main.js,web/}`，
 `pnpm --filter @armadra/desktop dist` 会先构建服务器壳。`packaged-smoke` 的第五步起
 `Armadra serve` 验配对链接、`/health`、首页与 SIGTERM 退出。用法见[服务器部署指南](server-deployment.md#24-用桌面安装包直接起服务器)。

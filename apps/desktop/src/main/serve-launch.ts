@@ -11,6 +11,7 @@
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 
 /** 服务器壳在安装包里的位置：`<resources>/server/{main.js,web/}`。 */
@@ -42,9 +43,20 @@ function givesWebRoot(args: readonly string[]): boolean {
   return args.some((a) => a === "--web-root" || a.startsWith("--web-root="));
 }
 
+/** 参数里有没有给 `--data-dir`（两种写法）。 */
+function givesDataDir(args: readonly string[]): boolean {
+  return args.some((a) => a === "--data-dir" || a.startsWith("--data-dir="));
+}
+
+/** serve 缺省的数据目录名，在用户主目录下；与桌面的数据目录互不相干。 */
+export const SERVE_DATA_DIR = ".armadra-server";
+
 /**
  * 子进程怎么起。
  *
+ *   * 数据目录：`--data-dir` 与环境变量 `ARMADRA_DATA_DIR` 都没给时，用
+ *     `~/.armadra-server`，**绝不落到桌面的默认数据目录**——桌面可能正开着同一份
+ *     库，而服务器壳的迁移版本可能比那份库新（事故：2026-10-06）。
  *   * 页面产物：用户没给 `--web-root` 就指向包内 `server/web`。
  *   * 迁移：`ARMADRA_CORE_MIGRATIONS_DIR` 指向包内 `migrations/`（用户已设则不动）。
  *   * node-pty：它在 `app.asar.unpacked/node_modules` 里，服务器壳的 `main.js`
@@ -59,12 +71,15 @@ export function serveLaunch(
     execPath: string;
     resourcesPath: string;
     env: NodeJS.ProcessEnv;
+    home?: string;
   },
 ): ServeLaunch {
   const { execPath, resourcesPath, env } = options;
   const serverDir = join(resourcesPath, SERVER_DIR);
   const entry = join(serverDir, "main.js");
   const args = [entry, "serve", ...rest];
+  if (!givesDataDir(rest) && !env.ARMADRA_DATA_DIR)
+    args.push("--data-dir", join(options.home ?? homedir(), SERVE_DATA_DIR));
   if (!givesWebRoot(rest)) args.push("--web-root", join(serverDir, "web"));
   const unpacked = join(resourcesPath, "app.asar.unpacked", "node_modules");
   const nodePath = [unpacked, env.NODE_PATH]
@@ -94,6 +109,7 @@ export function runServeShell(
     execPath?: string;
     resourcesPath?: string;
     env?: NodeJS.ProcessEnv;
+    home?: string;
     exists?: (path: string) => boolean;
     start?: typeof spawn;
     exit?: (code: number) => void;
@@ -106,6 +122,7 @@ export function runServeShell(
     execPath: deps.execPath ?? process.execPath,
     resourcesPath: deps.resourcesPath ?? process.resourcesPath,
     env: deps.env ?? process.env,
+    ...(deps.home === undefined ? {} : { home: deps.home }),
   });
   if (!(deps.exists ?? existsSync)(launch.entry)) {
     stderr(

@@ -30,7 +30,7 @@ describe("serveArguments", () => {
 
 describe("serveLaunch", () => {
   const resourcesPath = join("/", "Applications", "Armadra.app", "Resources");
-  const base = { execPath: "/app/Armadra", resourcesPath };
+  const base = { execPath: "/app/Armadra", resourcesPath, home: "/home/u" };
 
   it("runs the packaged server shell as Node with the packaged page and migrations", () => {
     const launch = serveLaunch(["--listen", "127.0.0.1:0"], {
@@ -45,6 +45,8 @@ describe("serveLaunch", () => {
       "serve",
       "--listen",
       "127.0.0.1:0",
+      "--data-dir",
+      join("/home/u", ".armadra-server"),
       "--web-root",
       join(server, "web"),
     ]);
@@ -56,6 +58,25 @@ describe("serveLaunch", () => {
     expect(launch.env.NODE_PATH).toBe(
       join(resourcesPath, "app.asar.unpacked", "node_modules"),
     );
+  });
+
+  it("never falls back to the desktop's data directory", () => {
+    const dataDirs = (rest: string[], env: NodeJS.ProcessEnv = {}) => {
+      const args = serveLaunch(rest, { ...base, env }).args;
+      return args.flatMap((a, i) =>
+        a === "--data-dir"
+          ? [args[i + 1]]
+          : a.startsWith("--data-dir=")
+            ? [a]
+            : [],
+      );
+    };
+    // Nothing given: the server shell's own directory under the home.
+    expect(dataDirs([])).toEqual([join("/home/u", ".armadra-server")]);
+    // Given on the line (either spelling) or by the environment: untouched.
+    expect(dataDirs(["--data-dir", "/d"])).toEqual(["/d"]);
+    expect(dataDirs(["--data-dir=/d"])).toEqual(["--data-dir=/d"]);
+    expect(dataDirs([], { ARMADRA_DATA_DIR: "/e" })).toEqual([]);
   });
 
   it("keeps a web root, migrations directory and NODE_PATH the caller chose", () => {
