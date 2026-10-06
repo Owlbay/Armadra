@@ -3,7 +3,7 @@
  * cloud-api §2、§4、§10）。外呼登记 `net/outbound.ts` 的 `cloudApi`。
  *
  * 只实现个人中转用到的那几条：`platform.info`、`auth.login`、`auth.refresh`、
- * `auth.logout`、`me.sources`、`sources.assertion`、`links.accept`。SaaS 的设备码登录等能力就绪
+ * `auth.logout`、`me.sources`、`sources.assertion`、`sources.revoke`、`links.accept`。SaaS 的设备码登录等能力就绪
  * 后再加；在那之前 `service.ts` 对 `saas` 答 `not_implemented`。
  *
  * 线上编码是普通 JSON（上游 OpenAPI 编码），错误是 `{ code, message, … }`。这里把
@@ -138,7 +138,9 @@ function rejected(status: number, body: unknown, during: string): never {
     case "source_offline":
       throw fail("source_offline", "这台机器当前不在线");
     case "not_found":
-      if (during === "取断言") throw fail("not_found", "远程服务上没有这个源");
+      if (during === "取断言" || during === "删除源") {
+        throw fail("not_found", "远程服务上没有这个源");
+      }
       break;
     case "not_implemented":
       throw fail("not_implemented", "远程服务没有这项能力");
@@ -168,7 +170,7 @@ export class RemoteClient {
 
   private async call(
     endpoint: RemoteEndpoint,
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "DELETE",
     path: string,
     during: string,
     body?: unknown,
@@ -313,6 +315,25 @@ export class RemoteClient {
       relayBaseUrl: relayBaseUrl.replace(/\/+$/, ""),
       online: body.online !== false,
     };
+  }
+
+  /**
+   * `DELETE /v1/sources/{sourceId}`（cloud-api §4 `sources.revoke`，要 owner 的会话）：
+   * 删中继侧的源记录，隧道随之断开。中继上已经没有这个源答 `not_found`。
+   */
+  async revokeSource(
+    endpoint: RemoteEndpoint,
+    accessToken: string,
+    sourceId: string,
+  ): Promise<void> {
+    await this.call(
+      endpoint,
+      "DELETE",
+      `/v1/sources/${encodeURIComponent(sourceId)}`,
+      "删除源",
+      undefined,
+      accessToken,
+    );
   }
 
   /**
