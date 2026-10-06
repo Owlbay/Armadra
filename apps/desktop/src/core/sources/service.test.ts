@@ -528,3 +528,115 @@ describe("凭据不出现在任何答案里", () => {
     expect(logs.join("\n")).not.toMatch(/refresh-|secret|horse/);
   });
 });
+
+describe("契约 §33.6：登出与首次指纹", () => {
+  function withProbe(probe: (origin: string) => Promise<string | null>) {
+    const probed: string[] = [];
+    const next = new SourcesService({
+      store: new SourcesStore(opened.database),
+      secrets: new SourceSecrets(() => backend),
+      remote: new RemoteClient(world.transport, {
+        platform: "desktop",
+        name: "test",
+      }),
+      peer: new SourceClient(world.transport),
+      hostId: () => HOST_ID,
+      hostLabel: () => "this-mac",
+      log: { info: () => undefined, warn: () => undefined },
+      anchorProbe: (origin) => {
+        probed.push(origin);
+        return probe(origin);
+      },
+    });
+    return { service: next, probed };
+  }
+
+  it("没给指纹、系统不信任：答 fingerprint_mismatch 并带对端的指纹", async () => {
+    const { service: probing, probed } = withProbe(async () => RELAY_FP);
+    world.down.add(ISSUER);
+    const refused = await probing
+      .remoteAdd({
+        kind: "personal",
+        issuer: ISSUER,
+        account: ACCOUNT,
+        password: PASSWORD,
+      })
+      .catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(CoreFailure);
+    expect((refused as CoreFailure).code).toBe("fingerprint_mismatch");
+    expect((refused as CoreFailure).details).toEqual({ fingerprint: RELAY_FP });
+    expect(probed).toEqual([ISSUER]);
+    // 口令没有因为这次探测多发一次。
+    expect(
+      world.requests.filter((one) => one.url.endsWith("/v1/auth/login")),
+    ).toHaveLength(0);
+    expect((await probing.list()).remotes).toEqual([]);
+  });
+
+  it("给了指纹、或系统信任（探不出锚）：原样透传，不改写", async () => {
+    const { service: probing, probed } = withProbe(async () => null);
+    world.down.add(ISSUER);
+    expect(
+      await code(
+        probing.remoteAdd({
+          kind: "personal",
+          issuer: ISSUER,
+          account: ACCOUNT,
+          password: PASSWORD,
+        }),
+      ),
+    ).toBe("source_unreachable");
+    expect(
+      await code(
+        probing.remoteAdd({
+          kind: "personal",
+          issuer: ISSUER,
+          account: ACCOUNT,
+          password: PASSWORD,
+          fingerprint: RELAY_FP,
+        }),
+      ),
+    ).toBe("source_unreachable");
+    expect(probed).toEqual([ISSUER]);
+  });
+
+  it("地址加配对码同样先问指纹", async () => {
+    const { service: probing } = withProbe(async () => GATEWAY_FP);
+    world.down.add(GATEWAY);
+    const refused = await probing
+      .addDirect({ origin: GATEWAY, code: "ABCD-2345" })
+      .catch((error: unknown) => error);
+    expect((refused as CoreFailure).code).toBe("fingerprint_mismatch");
+    expect((refused as CoreFailure).details).toEqual({
+      fingerprint: GATEWAY_FP,
+    });
+  });
+
+  it("remoteLogout：登出、删凭据、留行；再输口令即重新登录", async () => {
+    const { remote } = await addRemote();
+    await service.remoteSession(remote.serviceId);
+    await service.remoteLogout(remote.serviceId);
+    expect(
+      world.requests.some((one) => one.url.endsWith("/v1/auth/logout")),
+    ).toBe(true);
+    const listed = (await service.list()).remotes;
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({
+      serviceId: remote.serviceId,
+      fingerprint: RELAY_FP,
+      hasCredentials: false,
+    });
+    expect(backend.values.has(`armadra-remote-${remote.serviceId}`)).toBe(
+      false,
+    );
+    expect(await code(service.remoteSession(remote.serviceId))).toBe(
+      "source_unauthorized",
+    );
+    const again = await addRemote();
+    expect(again.remote).toMatchObject({
+      serviceId: remote.serviceId,
+      hasCredentials: true,
+    });
+    expect(await code(service.remoteLogout("9".repeat(32)))).toBe("not_found");
+  });
+});

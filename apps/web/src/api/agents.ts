@@ -29,7 +29,7 @@ import {
   type ContextLink,
 } from "@armadra/shared";
 import { json, query, request } from "./request";
-import { currentSource } from "./source";
+import { type Source, currentSource } from "./source";
 
 export const agentsApi = {
   /* --------------------------------- Agent 协作 -------------------------- */
@@ -75,24 +75,31 @@ export const agentsApi = {
    * 还没了结的依赖等待，按下游分组（Agent 自动化设计 §6）。等待关系由 core
    * 持有，节点头的「等待 X」与 rope 边都从这里读。
    */
-  dependencies: (workspaceId: string, signal?: AbortSignal) =>
+  dependencies: (workspaceId: string, signal?: AbortSignal, source?: Source) =>
     request(
       `/api/workspaces/${query(workspaceId)}/dependencies`,
       dependenciesResponseSchema,
       { signal },
+      source,
     ),
   /** 不等这条边了；其余的边都已满足时，core 当场启动下游。 */
-  cancelDependency: (workspaceId: string, dependencyId: string) =>
+  cancelDependency: (
+    workspaceId: string,
+    dependencyId: string,
+    source?: Source,
+  ) =>
     request(
       `/api/workspaces/${query(workspaceId)}/dependencies/${query(dependencyId)}`,
       dependencyCancelResponseSchema,
       { method: "DELETE" },
+      source,
     ),
   /** 旧节点数据里带依赖的 `pendingLaunch` 迁进依赖表。重复调用不重复建。 */
   importLegacyDependencies: (
     workspaceId: string,
     nodeId: string,
     after: readonly string[],
+    source?: Source,
   ) =>
     request(
       `/api/workspaces/${query(workspaceId)}/dependencies`,
@@ -101,6 +108,7 @@ export const agentsApi = {
         method: "POST",
         ...json(legacyDependencyRequestSchema.parse({ nodeId, after })),
       },
+      source,
     ),
   /** 关闭确认的人工答复（§5.8）。`accepted:false` = 那边已经等超时了。 */
   confirmControl: (requestId: string, approve: boolean) =>

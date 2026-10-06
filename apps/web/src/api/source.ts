@@ -173,6 +173,18 @@ export function knownSources(): readonly Source[] {
   return [localSource, ...mounted];
 }
 
+/**
+ * 按标识找源（本机与挂载的源）；不认识的标识落到当前源——调用方给的是此刻
+ * 上下文里的源（`sources/scope.ts` 的 `activeSourceId()`），找不到说明它已经
+ * 被移除，发往当前源与加源之前的行为相同。
+ */
+export function sourceById(sourceId: string): Source {
+  return (
+    knownSources().find((source) => source.sourceId === sourceId) ??
+    currentSource()
+  );
+}
+
 /** 这个地址发往哪个源（按 HTTP 来源比）；都不是答 `null`。 */
 export function sourceForUrl(
   url: string,

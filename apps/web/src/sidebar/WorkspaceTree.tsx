@@ -30,6 +30,7 @@ import type { WorkspaceSummary } from "@armadra/shared";
 import { isAttention } from "../agent/status-store";
 import { useSessions } from "../agent/sessions";
 import { useT, usePreferencesStore } from "../app/preferences-store";
+import { SourceGroups } from "./SourceGroups";
 import { useOpenWorkspace } from "../app/workspace-actions";
 import { useProjectFolderImport } from "../app/use-project-folder-import";
 import { isDesktop } from "../platform";
@@ -278,6 +279,7 @@ export function WorkspaceTree() {
               ))}
             </ul>
           </section>
+          <SourceGroups />
         </div>
       </ScrollArea>
     </div>

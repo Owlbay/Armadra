@@ -19,6 +19,7 @@ import {
   query,
   request,
 } from "./request";
+import type { Source } from "./source";
 
 export const boardsApi = {
   /* ----------------------------------- 画布 ----------------------------- */
@@ -49,10 +50,12 @@ export const boardsApi = {
    * 这块板走不走实时协同（契约 §16.2）：`realtime || enabled` 时连 `…/sync`，
    * 否则留在租约 + CAS。
    */
-  boardRealtime: (workspaceId: string, boardId: string) =>
+  boardRealtime: (workspaceId: string, boardId: string, source?: Source) =>
     request(
       `/api/workspaces/${workspaceId}/boards/${boardId}/realtime`,
       boardRealtimeStateSchema,
+      undefined,
+      source,
     ),
 
   /* --------------------------------- 画布文档 --------------------------- */

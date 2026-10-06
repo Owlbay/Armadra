@@ -198,6 +198,13 @@ export const IPC = {
   gatewayRefresh: spec("app:gateway-refresh", "invoke", "window"),
 
   /**
+   * 页面改了源表（设置 → 远程服务：加 / 删远程服务、挂载 / 移除源）。不带数据：
+   * 壳自己经 core 重读 `GET /api/sources`，更新 CSP 的 `connect-src` 与证书钉扎；
+   * 答 `{ reload }`——新来源要重载页面文档 CSP 才放行（`main/remote-trust.ts`）。
+   */
+  sourcesChanged: spec("app:sources-changed", "invoke", "window"),
+
+  /**
    * 页面的一条 JS 错误（G5-19，契约 §30）：`{ kind, name, message, stack }`，
    * 页面已剥离过。主进程按 `diagnostics.reportPageErrors` 与 DSN 再判、限流、
    * 再剥离，才交给 `@sentry/electron`（`ipcMode` 仍是 0，SDK 不开渲染进程通道）。
@@ -244,6 +251,7 @@ export const IMPLEMENTED_CHANNELS: readonly string[] = [
   IPC.browserControl.channel,
   IPC.browserClearData.channel,
   IPC.gatewayRefresh.channel,
+  IPC.sourcesChanged.channel,
   IPC.diagnosticsReport.channel,
 ];
 
