@@ -43,9 +43,9 @@ import { systemApi } from "./system";
 import { workspacesApiFor } from "./workspaces";
 import { boardsApi } from "./boards";
 export { isLeaseHeld } from "./boards";
-import { filesApi } from "./files";
+import { filesApiFor } from "./files";
 import { languageApi } from "./language";
-import { searchApi } from "./search";
+import { searchApiFor } from "./search";
 import { terminalsApi } from "./terminals";
 import { resourcesApi } from "./resources";
 import { conversationsApi } from "./conversations";
@@ -301,9 +301,9 @@ export const runtimeApi = {
   ...systemApi,
   ...workspacesApiFor(currentClient),
   ...boardsApi,
-  ...filesApi,
+  ...filesApiFor(currentClient),
   ...languageApi,
-  ...searchApi,
+  ...searchApiFor(currentClient),
   ...terminalsApi,
   ...resourcesApi,
   ...conversationsApi,
