@@ -17,6 +17,7 @@ import {
   launchLine,
   markerLine,
   newResult,
+  PAGE_HELPERS,
   parseArgs,
   probeLaunchConfig,
   snapshot,
@@ -221,4 +222,83 @@ test("after a restart the probe waits for the terminal route and keeps the first
     600,
   );
   assert.equal(never.firstAnswer, 401);
+});
+
+test("page helpers pair through the shell bridge and carry the session", async () => {
+  // 回环上的 /api/ 要会话（core/identity/loopback.ts）：nightly 37541900633 的
+  // terminal.backend 答 401，就是因为这里的 fetch 什么都不带。
+  const calls = [];
+  const sockets = [];
+  let paired = 0;
+  let rejectFirst = true;
+  const fakeFetch = async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    calls.push({ path, auth: init.headers?.authorization ?? null });
+    const reply = (status, body) => ({
+      ok: status < 400,
+      status,
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    });
+    if (path === "/api/identity/pair") {
+      assert.deepEqual(JSON.parse(init.body), { ticket: "id.secret" });
+      paired += 1;
+      return reply(200, {
+        native: { accessToken: `access-${paired}`, refreshToken: "r" },
+      });
+    }
+    if (path === "/api/terminals/backend" && rejectFirst) {
+      rejectFirst = false;
+      return reply(401, { code: "unauthenticated", message: "x" });
+    }
+    if (path === "/api/identity/ws-ticket")
+      return reply(200, { ticket: "ws1" });
+    return reply(200, { effective: "sessionHost" });
+  };
+  class FakeSocket {
+    constructor(url, protocols) {
+      sockets.push({ url, protocols });
+      this.url = url;
+    }
+    close() {}
+    send() {}
+  }
+  const window = {
+    armadra: {
+      transport: {
+        endpointsSync: () => ({
+          httpBase: "http://127.0.0.1:9",
+          wsBase: "ws://127.0.0.1:9",
+        }),
+      },
+      identity: {
+        ticket: async () => ({ ok: true, ticket: { ticket: "id.secret" } }),
+      },
+    },
+  };
+  const helpers = new Function(
+    "globalThis",
+    "fetch",
+    "WebSocket",
+    "setTimeout",
+    "clearTimeout",
+    `return ${PAGE_HELPERS}, globalThis.__acceptance;`,
+  )(
+    { window },
+    fakeFetch,
+    FakeSocket,
+    () => 0,
+    () => {},
+  );
+  const backend = await helpers.api("GET", "/api/terminals/backend");
+  assert.equal(backend.status, 200);
+  assert.equal(paired, 2, "401 换一次会话再试");
+  assert.equal(calls.at(-1).auth, "Bearer access-2");
+  void helpers.terminal("s1", "acceptance", [], null, 1000);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(sockets[0], {
+    url: "ws://127.0.0.1:9/api/terminals/s1/ws?writer=acceptance",
+    protocols: ["armadra-ticket.ws1"],
+  });
 });
