@@ -198,8 +198,6 @@ export function RelayForm({
           autoCapitalize="off"
           autoCorrect="off"
           autoComplete="url"
-          // 刚点进「个人中转」：光标直接在地址上（展示页钉住了初值时不抢）。
-          autoFocus={!initial?.issuer}
           spellCheck={false}
           placeholder="relay.example.com"
           disabled={busy}
