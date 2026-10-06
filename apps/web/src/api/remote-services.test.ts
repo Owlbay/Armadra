@@ -5,6 +5,10 @@ const rpc = vi.hoisted(() => ({
     remoteAdd: vi.fn(),
     remoteSession: vi.fn(),
     addDirect: vi.fn(),
+    shareLinks: vi.fn(),
+    shareLinkCreate: vi.fn(),
+    shareLinkUrl: vi.fn(),
+    shareLinkRevoke: vi.fn(),
   },
   identity: {
     cloud: {
@@ -39,6 +43,7 @@ import {
   addPersonalRelay,
   createShareLink,
   isPairLink,
+  listShareLinks,
   presentedFingerprint,
   remoteFetch,
   revokeShareLink,
@@ -221,91 +226,39 @@ describe("分享本机", () => {
   });
 });
 
-describe("分享链接", () => {
-  it("<url>#<secret>.<邀请令牌>；saas 没有 secret 只带邀请令牌", () => {
-    expect(shareLinkUrl(`${ISSUER}/j/L`, "S", "inv.tok")).toBe(
-      `${ISSUER}/j/L#S.inv.tok`,
-    );
-    expect(shareLinkUrl(`${ISSUER}/j/L`, "", "inv.tok")).toBe(
-      `${ISSUER}/j/L#inv.tok`,
-    );
-  });
+describe("分享链接（契约 §33.9，经本机 core）", () => {
+  it("列表、新建（备注空就不带）、再取整条链接、撤销都交给 core，不直连远程服务", async () => {
+    rpc.sources.shareLinks.mockResolvedValue({ links: [{ linkId: "L" }] });
+    await expect(listShareLinks("svc")).resolves.toEqual([{ linkId: "L" }]);
+    expect(rpc.sources.shareLinks).toHaveBeenCalledWith({ serviceId: "svc" });
 
-  it("本机签邀请 → 远程服务建链接；链接没建成就撤掉邀请", async () => {
-    accounts.issueInvitation.mockResolvedValue({
-      invitationId: "inv",
-      token: "inv.secret",
-      expiresAtMs: 2_000,
-      role: "viewer",
-    });
-    fetch.mockResolvedValueOnce(
-      json(200, {
-        linkId: "L",
-        url: `${ISSUER}/j/L`,
-        secret: "S",
-        expiresAtMs: 3_000,
-      }),
-    );
-    const link = await createShareLink({
+    rpc.sources.shareLinkCreate.mockResolvedValue({ url: "u", link: {} });
+    await createShareLink({
       serviceId: "svc",
-      sourceId: "src",
       workspaceId: "w1",
       role: "viewer",
       ttlMs: 86_400_000,
-      label: "Project",
+      maxUses: 1000,
+      label: "  ",
     });
-    expect(accounts.issueInvitation).toHaveBeenCalledWith({
+    expect(rpc.sources.shareLinkCreate).toHaveBeenCalledWith({
+      serviceId: "svc",
+      workspaceId: "w1",
       role: "viewer",
-      targetWorkspaceId: "w1",
       ttlMs: 86_400_000,
-    });
-    const body = JSON.parse(
-      (fetch.mock.calls[0]![1] as RequestInit).body as string,
-    ) as Record<string, unknown>;
-    expect(body).toEqual({
-      kind: "source_invite",
-      sourceId: "src",
-      invitationId: "inv",
-      label: "Project",
-      role: "viewer",
-      expiresAtMs: 2_000,
-    });
-    expect(link).toEqual({
-      linkId: "L",
-      invitationId: "inv",
-      url: `${ISSUER}/j/L#S.inv.secret`,
-      expiresAtMs: 2_000,
+      maxUses: 1000,
     });
 
-    accounts.revokeInvitation.mockResolvedValue(undefined);
-    fetch.mockResolvedValueOnce(
-      json(400, { code: "bad_request", message: "x" }),
-    );
-    await expect(
-      createShareLink({
-        serviceId: "svc",
-        sourceId: "src",
-        workspaceId: "w1",
-        role: "viewer",
-        ttlMs: 1,
-        label: "",
-      }),
-    ).rejects.toBeInstanceOf(RuntimeRequestError);
-    expect(accounts.revokeInvitation).toHaveBeenCalledWith("inv");
-  });
+    rpc.sources.shareLinkUrl.mockResolvedValue({ url: `${ISSUER}/j/L#S.t` });
+    await expect(shareLinkUrl("svc", "L")).resolves.toBe(`${ISSUER}/j/L#S.t`);
 
-  it("停用：远程服务撤链接，本机邀请一并作废", async () => {
-    fetch.mockResolvedValueOnce(json(200, {}));
-    accounts.revokeInvitation.mockResolvedValue(undefined);
-    await revokeShareLink({
+    rpc.sources.shareLinkRevoke.mockResolvedValue({});
+    await revokeShareLink("svc", "L");
+    expect(rpc.sources.shareLinkRevoke).toHaveBeenCalledWith({
       serviceId: "svc",
       linkId: "L",
-      invitationId: "inv",
     });
-    const [url, init] = fetch.mock.calls[0]! as [string, RequestInit];
-    expect(url).toBe(`${ISSUER}/v1/links/L`);
-    expect(init.method).toBe("DELETE");
-    expect(accounts.revokeInvitation).toHaveBeenCalledWith("inv");
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 

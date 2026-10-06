@@ -131,7 +131,9 @@ export function announceStopped(t: Translate, pending: string | null): void {
 
 /** 桌面壳或浏览器有系统分享就用（Web Share），没有就不出这个按钮。 */
 function canShareNatively(): boolean {
-  return typeof navigator !== "undefined" && typeof navigator.share === "function";
+  return (
+    typeof navigator !== "undefined" && typeof navigator.share === "function"
+  );
 }
 
 async function copyText(t: Translate, text: string): Promise<void> {
@@ -179,7 +181,9 @@ export function RemoteShareSection({
   const refresh = () => {
     void client.invalidateQueries({ queryKey: SHARE_STATUS_KEY });
     void client.invalidateQueries({ queryKey: ["sources"] });
-    void client.invalidateQueries({ queryKey: shareLinksKey(remote.serviceId) });
+    void client.invalidateQueries({
+      queryKey: shareLinksKey(remote.serviceId),
+    });
   };
   const start = useMutation({
     mutationFn: () =>
@@ -310,7 +314,10 @@ function ShareLinks({ remote }: { remote: RemoteService }) {
   });
   const send = useMutation({
     mutationFn: async (input: { linkId: string; name: string }) =>
-      shareNatively(input.name, await shareLinkUrl(remote.serviceId, input.linkId)),
+      shareNatively(
+        input.name,
+        await shareLinkUrl(remote.serviceId, input.linkId),
+      ),
     onError: (error: Error) => toast.error(error.message),
   });
 
@@ -685,7 +692,9 @@ function CreateLinkDialog({
             form="share-link-form"
             disabled={create.isPending || !chosen}
           >
-            {create.isPending && <Spinner data-icon="inline-start" aria-hidden />}
+            {create.isPending && (
+              <Spinner data-icon="inline-start" aria-hidden />
+            )}
             {t("remote.link.create")}
           </Button>
         </ResponsiveDialogFooter>

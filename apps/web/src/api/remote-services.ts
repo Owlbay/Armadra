@@ -1,4 +1,4 @@
-import type { RelayPending } from "@armadra/shared";
+import type { RelayPending, ShareLink } from "@armadra/shared";
 import { z } from "zod";
 
 import type { ShareRole } from "./accounts";
@@ -12,8 +12,8 @@ import { RuntimeRequestError } from "./request";
  *
  * - **本机 core**：源表与远程服务（契约 §33，`sources.*`）、本机登记到远程服务
  *   （§31，`identity.cloud.*`）、本机邀请（§42.3，`accounts.invitations.*`）。
- * - **远程服务本身**（个人中转 `/v1/*`，cloud-api §4–§5）：取注册令牌、为本机
- *   签断言、建 / 列 / 撤分享链接。访问令牌由本机 core 代管（`sources.remoteSession`），
+ * - **远程服务本身**（个人中转 `/v1/*`，cloud-api §4）：取注册令牌、为本机签断言。
+ *   分享链接的建 / 列 / 撤由本机 core 代办（§33.9）。访问令牌由本机 core 代管（`sources.remoteSession`），
  *   页面只在这一次调用里拿着它，不存。桌面壳按源表放行这个来源并按指纹钉扎
  *   （`apps/desktop/src/main/remote-trust.ts`）。
  *
@@ -216,29 +216,6 @@ const registrationTokenSchema = z.object({
 
 const assertionSchema = z.object({ assertion: z.string().min(1) });
 
-const createdLinkSchema = z.object({
-  linkId: z.string().min(1),
-  url: z.string().min(1),
-  secret: z.string().optional(),
-  expiresAtMs: z.number(),
-});
-
-const linkSummarySchema = z.object({
-  linkId: z.string(),
-  kind: z.string(),
-  label: z.string().default(""),
-  role: z.string().optional(),
-  sourceId: z.string().optional(),
-  url: z.string().default(""),
-  uses: z.number().default(0),
-  maxUses: z.number().nullable().default(null),
-  expiresAtMs: z.number(),
-  createdAtMs: z.number().default(0),
-  revokedAtMs: z.number().nullable().default(null),
-});
-
-export type ShareLinkSummary = z.infer<typeof linkSummarySchema>;
-
 /* ------------------------------ 本机邀请 ------------------------------- */
 
 const issuedSchema = z.object({
@@ -343,90 +320,56 @@ export function pendingCode(
   return pending.find((one) => one.issuer === issuer)?.code ?? null;
 }
 
+/* ------------------------------ 分享链接 ------------------------------- */
+
+export type { ShareLink, ShareLinkState } from "@armadra/shared";
+export { SHARE_LINK_MAX_USES } from "@armadra/shared";
+
 /**
- * 分享链接（cloud-api §10）：先在本机签一张邀请，再请远程服务建一条指向它的链接。
- * 分享出去的是 `<url>#<secret>.<邀请令牌>`——两样秘密都只在 `#` 片段里。
+ * 本机经这个远程服务发出的分享链接（契约 §33.9），含历史；core 顺带删掉失效链接
+ * 存着的整条链接。本机没分享到它时是空表。
  */
-export async function createShareLink(input: {
+export async function listShareLinks(serviceId: string): Promise<ShareLink[]> {
+  return (await localClient().sources.shareLinks({ serviceId })).links;
+}
+
+/**
+ * 新建分享链接：core 签一张多次可用的本机邀请、请远程服务建链接，整条链接
+ * （`<url>#<秘密>.<邀请令牌>`）存进本机 SecretStore，之后随时可再取。
+ */
+export function createShareLink(input: {
   serviceId: string;
-  sourceId: string;
   workspaceId: string;
   role: ShareRole;
   ttlMs: number;
+  maxUses: number;
   label: string;
 }) {
-  const invitation = await issueInvitation({
+  const label = input.label.trim().slice(0, 128);
+  return localClient().sources.shareLinkCreate({
+    serviceId: input.serviceId,
+    workspaceId: input.workspaceId,
     role: input.role,
-    targetWorkspaceId: input.workspaceId,
     ttlMs: input.ttlMs,
+    maxUses: input.maxUses,
+    ...(label === "" ? {} : { label }),
   });
-  try {
-    const access = await remoteAccess(input.serviceId);
-    const link = await remoteFetch(access, "/v1/links", createdLinkSchema, {
-      method: "POST",
-      body: {
-        kind: "source_invite",
-        sourceId: input.sourceId,
-        invitationId: invitation.invitationId,
-        label: input.label.slice(0, 128),
-        role: input.role,
-        expiresAtMs: invitation.expiresAtMs,
-      },
-    });
-    return {
-      linkId: link.linkId,
-      invitationId: invitation.invitationId,
-      url: shareLinkUrl(link.url, link.secret ?? "", invitation.token),
-      expiresAtMs: Math.min(link.expiresAtMs, invitation.expiresAtMs),
-    };
-  } catch (error) {
-    // 链接没建成，邀请也不留：一张没有链接指向的邀请只是一枚多余的令牌。
-    await revokeInvitation(invitation.invitationId).catch(() => undefined);
-    throw error;
-  }
 }
 
-/** `<url>#<secret>.<邀请令牌>`（personal 带 secret；saas 只有邀请令牌）。 */
-export function shareLinkUrl(url: string, secret: string, token: string) {
-  return `${url}#${secret === "" ? token : `${secret}.${token}`}`;
-}
-
-/** 这台机器还生效的分享链接（未撤销、未过期）。 */
-export async function listShareLinks(
+/** 再取一次整条链接（复制、二维码、系统分享都用它）。 */
+export async function shareLinkUrl(
   serviceId: string,
-  sourceId: string,
-  now: number = Date.now(),
-): Promise<ShareLinkSummary[]> {
-  const access = await remoteAccess(serviceId);
-  const answer = await remoteFetch(
-    access,
-    `/v1/links?sourceId=${encodeURIComponent(sourceId)}`,
-    z.object({ links: z.array(linkSummarySchema) }),
-  );
-  return answer.links.filter(
-    (link) =>
-      link.kind === "source_invite" &&
-      link.revokedAtMs === null &&
-      link.expiresAtMs > now,
-  );
+  linkId: string,
+): Promise<string> {
+  return (await localClient().sources.shareLinkUrl({ serviceId, linkId })).url;
 }
 
-/** 停用一条分享链接：远程服务撤链接；本机那张邀请一并作废（知道 id 时）。 */
-export async function revokeShareLink(input: {
-  serviceId: string;
-  linkId: string;
-  invitationId?: string;
-}) {
-  const access = await remoteAccess(input.serviceId);
-  await remoteFetch(
-    access,
-    `/v1/links/${encodeURIComponent(input.linkId)}`,
-    z.unknown(),
-    { method: "DELETE" },
-  );
-  if (input.invitationId) {
-    await revokeInvitation(input.invitationId).catch(() => undefined);
-  }
+/** 撤销：远程服务撤链接与它名下的访客，本机作废邀请、删存着的整条链接。 */
+export async function revokeShareLink(
+  serviceId: string,
+  linkId: string,
+): Promise<void> {
+  await localClient().sources.shareLinkRevoke({ serviceId, linkId });
 }
 
 /* ------------------------------ 桌面壳 ------------------------------- */

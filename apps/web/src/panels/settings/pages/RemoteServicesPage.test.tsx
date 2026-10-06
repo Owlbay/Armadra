@@ -30,6 +30,7 @@ const api = vi.hoisted(() => ({
   createShareLink: vi.fn(),
   listShareLinks: vi.fn(),
   revokeShareLink: vi.fn(),
+  shareLinkUrl: vi.fn(),
   relayPending: vi.fn(),
   retryRelayCleanup: vi.fn(),
 }));
@@ -222,43 +223,57 @@ describe("远程服务页", () => {
     );
   });
 
-  it("分享本机：开始分享 → 生成链接与二维码 → 停用", async () => {
+  it("分享区直接展开：开关分享本机 → 新建可多次使用的链接 → 二维码 → 列表里再复制、撤销要确认", async () => {
     api.listSources.mockResolvedValue({ sources: [local], remotes: [relay] });
+    const registered = {
+      sourceId: local.sourceId,
+      registrations: [
+        {
+          issuer: ISSUER,
+          mode: "personal",
+          tunnel: {
+            state: "connecting",
+            node: null,
+            since: null,
+            streams: 0,
+            lastError: null,
+          },
+        },
+      ],
+    };
     api.shareStatus
       .mockResolvedValueOnce({ sourceId: local.sourceId, registrations: [] })
-      .mockResolvedValue({
-        sourceId: local.sourceId,
-        registrations: [
-          {
-            issuer: ISSUER,
-            mode: "personal",
-            tunnel: {
-              state: "connecting",
-              node: null,
-              since: null,
-              streams: 0,
-              lastError: null,
-            },
-          },
-        ],
-      });
+      .mockResolvedValue(registered);
     api.shareThisMachine.mockResolvedValue({ sourceId: local.sourceId });
-    api.listShareLinks.mockResolvedValue([]);
     const url = `${ISSUER}/j/L#S.inv.tok`;
-    api.createShareLink.mockResolvedValue({
+    const link = {
       linkId: "L",
-      invitationId: "inv",
-      url,
+      label: "Project",
+      role: "viewer",
+      workspaceId: "w1",
+      createdAtMs: Date.parse("2026-10-06T00:00:00Z"),
       expiresAtMs: Date.parse("2026-10-13T00:00:00Z"),
-    });
+      uses: 2,
+      maxUses: 1000,
+      revokedAtMs: null,
+      state: "active",
+      copyable: true,
+    };
+    api.listShareLinks.mockResolvedValue([]);
+    api.createShareLink.mockResolvedValue({ link: { ...link, uses: 0 }, url });
+    api.shareLinkUrl.mockResolvedValue(url);
     api.revokeShareLink.mockResolvedValue(undefined);
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
     mount();
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Share this machine" }),
-    );
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Start sharing" }),
-    );
+    const toggle = await screen.findByRole("switch", {
+      name: "Share this machine",
+    });
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(toggle);
     await waitFor(() =>
       expect(api.shareThisMachine).toHaveBeenCalledWith({
         serviceId: "svc",
@@ -267,35 +282,75 @@ describe("远程服务页", () => {
       }),
     );
     expect(await screen.findByText("Connecting")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Create link" }));
+    expect(await screen.findByText("No active links")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "New link" }));
+    const form = await screen.findByRole("dialog");
+    fireEvent.click(within(form).getByRole("button", { name: "Create" }));
     await waitFor(() =>
       expect(api.createShareLink).toHaveBeenCalledWith({
         serviceId: "svc",
-        sourceId: local.sourceId,
         workspaceId: "w1",
         role: "viewer",
         ttlMs: 7 * 24 * 60 * 60 * 1000,
+        maxUses: 1000,
         label: "Project",
       }),
     );
     const qr = await screen.findByRole("img", { name: "Share link QR code" });
     expect(qr.getAttribute("data-qr-text")).toBe(url);
-    expect(
-      (screen.getByRole("textbox", { name: "Share link" }) as HTMLInputElement)
-        .value,
-    ).toBe(url);
-    fireEvent.click(screen.getByRole("button", { name: "Disable link" }));
-    await waitFor(() =>
-      expect(api.revokeShareLink).toHaveBeenCalledWith({
-        serviceId: "svc",
-        linkId: "L",
-        invitationId: "inv",
-      }),
-    );
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
     await waitFor(() =>
       expect(
         screen.queryByRole("img", { name: "Share link QR code" }),
       ).toBeNull(),
+    );
+
+    // 列表：生效的一条可再复制、再看二维码；失效的折进历史。
+    api.listShareLinks.mockResolvedValue([
+      link,
+      {
+        ...link,
+        linkId: "OLD",
+        label: "old",
+        state: "revoked",
+        copyable: false,
+        revokedAtMs: link.createdAtMs,
+      },
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(
+      await screen.findByText("Used 2/1000", { exact: false }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "History · 1" })).toBeTruthy();
+    expect(screen.queryByText("old")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(url));
+    expect(api.shareLinkUrl).toHaveBeenCalledWith("svc", "L");
+    fireEvent.click(screen.getByRole("button", { name: "QR code" }));
+    expect(
+      (
+        await screen.findByRole("img", { name: "Share link QR code" })
+      ).getAttribute("data-qr-text"),
+    ).toBe(url);
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("img", { name: "Share link QR code" }),
+      ).toBeNull(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
+    const confirm = await screen.findByRole("alertdialog");
+    expect(within(confirm).getByText("Revoke “Project”?")).toBeTruthy();
+    expect(api.revokeShareLink).not.toHaveBeenCalled();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Revoke" }));
+    await waitFor(() =>
+      expect(api.revokeShareLink).toHaveBeenCalledWith("svc", "L"),
     );
   });
 });
@@ -486,7 +541,7 @@ describe("通过链接加入（A4-3p）", () => {
     mount();
     await screen.findByText(relay.label);
     expect(
-      screen.queryByRole("button", { name: "Share this machine" }),
+      screen.queryByRole("switch", { name: "Share this machine" }),
     ).toBeNull();
   });
 });
@@ -505,11 +560,36 @@ describe("中继侧待清理（契约 §31.4）", () => {
       remotes: [{ ...relay, registered: true }],
     });
     api.stopSharing.mockResolvedValue("source_unreachable");
+    api.shareStatus.mockResolvedValue({
+      sourceId: local.sourceId,
+      registrations: [
+        {
+          issuer: ISSUER,
+          mode: "personal",
+          tunnel: {
+            state: "ready",
+            node: null,
+            since: null,
+            streams: 0,
+            lastError: null,
+          },
+        },
+      ],
+    });
+    api.listShareLinks.mockResolvedValue([]);
     mount();
     await screen.findByText("Sharing");
-    openMenu(relay.label);
+    const toggle = await screen.findByRole("switch", {
+      name: "Share this machine",
+    });
+    await waitFor(() =>
+      expect(toggle.getAttribute("aria-checked")).toBe("true"),
+    );
+    fireEvent.click(toggle);
+    const confirm = await screen.findByRole("alertdialog");
+    expect(api.stopSharing).not.toHaveBeenCalled();
     fireEvent.click(
-      await screen.findByRole("menuitem", { name: "Stop sharing" }),
+      within(confirm).getByRole("button", { name: "Stop sharing" }),
     );
     await waitFor(() =>
       expect(toasts.warning).toHaveBeenCalledWith("Sharing stopped", {
