@@ -83,6 +83,38 @@ describe("the Git routes", () => {
     expect(head.body).toMatchObject({ subject: "seed", published: false });
   });
 
+  it("narrows status to the given paths, count and rows alike", async () => {
+    const repo = repository("routes-status-paths");
+    repo.write("a.txt", "a\n");
+    repo.write("b.txt", "b\n");
+    repo.write("c.txt", "c\n");
+    const id = workspace(repo.path);
+
+    const all = await core.call("GET", `/api/workspaces/${id}/git/status`);
+    expect(all.body).toMatchObject({ changedCount: 3 });
+
+    const some = await core.call(
+      "GET",
+      `/api/workspaces/${id}/git/status?path=.&paths=a.txt,c.txt`,
+    );
+    expect(some.status).toBe(200);
+    const body = some.body as {
+      changedCount: number;
+      files: { path: string }[];
+    };
+    expect(body.changedCount).toBe(2);
+    expect(body.files.map((file) => file.path).sort()).toEqual([
+      "a.txt",
+      "c.txt",
+    ]);
+
+    const outside = await core.call(
+      "GET",
+      `/api/workspaces/${id}/git/status?paths=${encodeURIComponent("../x")}`,
+    );
+    expect(outside.status).toBe(400);
+  });
+
   it("stages, commits and reports the new head", async () => {
     const repo = repository("routes-commit");
     repo.write("code.txt", "one\n");

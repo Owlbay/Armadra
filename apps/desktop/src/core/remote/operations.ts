@@ -48,7 +48,7 @@ import {
   stagePaths,
   unstagePaths,
 } from "../git/stage";
-import { readStatusAt, readStatusBatch } from "../git/status";
+import { readStatusBatch, readStatusFiltered } from "../git/status";
 import { ImportBatch, fileInfo } from "../imports/batch";
 import {
   createEntry,
@@ -484,7 +484,8 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
 
   /* ------------------------------- git ------------------------------- */
   "git.status": read(
-    async (_c, root, args) => await readStatusAt(root, path(args)),
+    async (_c, root, args) =>
+      await readStatusFiltered(root, path(args), texts(args, "paths")),
   ),
   "git.statusBatch": read(
     async (_c, root, args) =>
