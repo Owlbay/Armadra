@@ -67,6 +67,8 @@ export async function startKit(
         ...emptyRequest(method, url.pathname),
         query: url.searchParams,
         body: encoded,
+        // 路由表那一路没有套接字：给一个固定的来源（与回环上的 HTTP 两路不同）。
+        raw: { socket: { remoteAddress: "198.51.100.9" } } as never,
         json: <T>() => JSON.parse(encoded.toString("utf8")) as T,
       };
       const run = () => server.router.dispatch(method, url.pathname, request);
@@ -74,7 +76,8 @@ export async function startKit(
       const answer = await (identity === undefined
         ? run()
         : runAs(identity, run));
-      const wait = answer.headers?.["retry-after"];
+      const wait =
+        "headers" in answer ? answer.headers?.["retry-after"] : undefined;
       return {
         status: answer.status,
         body: answer.body,
