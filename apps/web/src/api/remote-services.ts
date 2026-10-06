@@ -137,6 +137,18 @@ export function addDirectSource(input: {
   );
 }
 
+/**
+ * 挂载的源排成这个顺序（`sources.update.orderIndex`）：按位置编号 1、2、3…，
+ * 一行一行地写。页面手里的编号可能是旧的（排过一次还没重读源表），所以每行都写。
+ */
+export async function reorderSources(
+  sourceIds: readonly string[],
+): Promise<void> {
+  for (const [index, sourceId] of sourceIds.entries()) {
+    await localClient().sources.update({ sourceId, orderIndex: index + 1 });
+  }
+}
+
 export function forgetSource(sourceId: string) {
   return localClient().sources.forget({ sourceId });
 }
@@ -312,6 +324,14 @@ export async function retryRelayCleanup(
   return answer.pending ? answer.code : null;
 }
 
+/**
+ * 放弃一条中继侧清理（§31.5）：只清本机的登记，中继侧那条源记录留给远程服务。
+ * 远程服务已经删了、没有会话可以重试时用。
+ */
+export async function dismissRelayCleanup(issuer: string): Promise<void> {
+  await localClient().identity.cloud.relayDismiss({ issuer });
+}
+
 /** 列表里这个 issuer 欠着的码。 */
 export function pendingCode(
   pending: readonly RelayPending[],
@@ -364,6 +384,21 @@ export async function shareLinkUrl(
   return (await localClient().sources.shareLinkUrl({ serviceId, linkId })).url;
 }
 
+/** 改一条链接的备注（§33.10）：答改过的链接。 */
+export async function renameShareLink(
+  serviceId: string,
+  linkId: string,
+  label: string,
+): Promise<ShareLink> {
+  return (
+    await localClient().sources.shareLinkUpdate({
+      serviceId,
+      linkId,
+      label: label.trim().slice(0, 128),
+    })
+  ).link;
+}
+
 /** 撤销：远程服务撤链接与它名下的访客，本机作废邀请、删存着的整条链接。 */
 export async function revokeShareLink(
   serviceId: string,
@@ -382,6 +417,29 @@ export async function notifyShellSourcesChanged(): Promise<boolean> {
   const bridge = typeof window === "undefined" ? undefined : window.armadra;
   try {
     return (await bridge?.sources?.changed())?.reload === true;
+  } catch {
+    return false;
+  }
+}
+
+/** 桌面壳有系统分享菜单（`app:share`，目前只在 macOS）。 */
+export function shellCanShare(): boolean {
+  const bridge = typeof window === "undefined" ? undefined : window.armadra;
+  return bridge?.share?.available === true;
+}
+
+/**
+ * 交给桌面壳的系统分享菜单；答 `false`（没有壳、平台没有菜单、壳拒了）时由
+ * 调用方退回复制。
+ */
+export async function shareViaShell(
+  title: string,
+  url: string,
+): Promise<boolean> {
+  const bridge = typeof window === "undefined" ? undefined : window.armadra;
+  if (bridge?.share?.available !== true) return false;
+  try {
+    return (await bridge.share.url({ title, url })).shared === true;
   } catch {
     return false;
   }
