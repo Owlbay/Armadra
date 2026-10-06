@@ -322,7 +322,6 @@ async function main() {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "./styles/app.css";
 import { runtimeApi } from "./api/client";
-import { GithubApi } from "./api/github";
 import { TooltipProvider } from "./ui/tooltip";
 import { Toaster } from "./ui/sonner";
 import { useCanvasStore } from "./store/canvas-store";
@@ -337,7 +336,7 @@ useCanvasStore.setState((state) => ({
   workspace,
   panels: { ...state.panels, github: view === "panel" ? "drawer" : "closed" },
 }));
-const client = new GithubApi({ workspaceId: workspace.id });
+const client = runtimeApi.openGithub(workspace.id);
 useGithubSession.setState({
   client,
   connect: async () => {},
