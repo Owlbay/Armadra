@@ -2891,3 +2891,31 @@ V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
 - 契约 §36.5、§37.3、§39.8（节号只追加）；`boardCommentWireSchema`、`commentListWireSchema` 从 `@armadra/shared` 导出；`agentApprovalRecordSchema` / `AgentApprovalRecord`。
 - core：`commentOperations(options)`、`installCommentRoutes(server, options)`、`handoffOperations(collab)`。
 - 页面：`handoffApiFor(rpc)`；`commentsApi` 与 `acpApi.exportText` / `drive` 签名不变。
+
+## R1 中继与 core 的 HTTP 层：keep-alive 与边缘额度
+
+iPad（WebKit）经个人中转给 ACP Agent 发 prompt 偶发「这一轮没有完成」：服务端监听没设 `keepAliveTimeout`，Node 缺省 5 秒就关空闲连接；WebKit 复用一条刚被关掉的连接发 POST 时不重试，直接加载失败（Chromium 会重试，所以桌面与浏览器探针看不出来）。
+
+做了什么：
+
+- **core**：`core/http/timeouts.ts` 的 `HTTP_TIMEOUTS`（空闲 keep-alive 75 秒、请求头 76 秒、整条请求 300 秒）与 `applyHttpTimeouts(server)`；`CoreServer.createListener` 建的每台监听（回环、服务器壳、Gateway 交接点、中继隧道交接点）和 Gateway 的 HTTPS 监听都套上。服务器壳没有自己的监听，走同一个 `createListener`。隧道流是 `TunnelDuplex`，`setTimeout` 不落到 TCP，空闲上限实际由中继那一侧决定。
+- **armadra-cloud**（Owlbay/armadra-cloud，分支 `fix/relay-keepalive-limits`）：`cloud-shared` 的 `listen()` 同样套 75 / 76 / 300 秒（中继与 cloud 共用，HTTP 与 HTTPS）；边缘缺省额度放宽——预检每 IP 1200/分（原 300）、有效令牌 1200/分（原 600）、账号 3600/分（原 1800）、账号并发 WebSocket 256（原 64，与隧道单源流数上限对齐）；中继预检与控制面的 `Access-Control-Max-Age` 600 → 7200（WebKit 自己封顶 600，Chromium 2 小时）。cloud 契约 §7、部署说明、CLI 帮助、CHANGELOG Unreleased 同步。
+- **探针**：`personal-roundtrip` 第 2 步加一项——照 iOS App 的路子（`Origin: capacitor://localhost`）在同一条 keep-alive 连接上经中继 `POST /api/identity/cloud/login` 换会话，空闲 6.5 秒后再 `POST system.hello`；连接不许被服务端先关、不许换连接、两次都 200。共用件 `platform-lib.mjs` 的 `idleKeepAlivePost`。
+
+实测（macOS arm64，基于 main 9f33e3df；中继用 cloud 分支 `fix/relay-keepalive-limits`）：
+
+- 新增 `core/http/timeouts.test.ts`（2）：监听取值；同一条连接空闲 6 秒后 POST 仍 200、没换连接。把 `applyHttpTimeouts` 注掉两条都红。
+- cloud：`cloud-shared/src/http/index.test.ts` 加取值与空闲 6 秒后 POST 两条（注掉修复两条都红），`tls.test.ts` 断言 HTTPS 监听取值，`serve.test.ts` 断言新缺省额度，`cors.test.ts` 断言 `max-age` 7200；`pnpm check`、`pnpm test` 全过。
+- `personal-roundtrip` 全程通过（keep-alive 一项 `statuses [200,200]`、`reused true`、`closedByServer false`，日志秘密扫描 0 泄漏）；同一探针对注掉修复的中继跑，这一项红（`closedByServer true`、`reused false`）。
+
+没做 / 偏离：
+
+- 没在真 iPad 上复现与回归；WebKit 的不重试行为由探针以「服务端没先关连接」间接验证。CI 没有 armadra-cloud 检出，这条探针在 CI 上照旧 skipped。
+- core 回环 CORS 没有 `Max-Age`（Gateway 与中继隧道准入仍为 600，已等于 WebKit 上限），没改。
+- 并发 WebSocket 上限仍不可配（只有四种速率额度可配）；ACME `http-01` 挑战监听只做跳转，没套超时。
+
+接口：
+
+- core：`HTTP_TIMEOUTS`、`applyHttpTimeouts(server)`（`core/http/timeouts.ts`）。契约形状不变。
+- cloud：`@armadra/cloud-shared/http` 导出 `HTTP_TIMEOUTS`、`applyHttpTimeouts`；`DEFAULT_LIMIT_RULES` 新缺省；`PREFLIGHT_MAX_AGE_S = "7200"`。
+- 合并顺序：先合 armadra-cloud 的 PR，再合本 PR（探针的 keep-alive 一项对旧中继会红）。
