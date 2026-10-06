@@ -2404,10 +2404,11 @@
 - **一次性邀请计数**（V1 探针发现）：兑换时 `uses` 同步加一，并记进 `identity_invitation_uses`，与 `maxUses` 同一口径；撤销只收口，不算使用。
 - **node-pty `spawn-helper` 执行位**（V1 探针发现）：原来只有桌面 `pretest` 跑 `ensure-node-pty.mjs`。pnpm 不跑 node-pty 自己的安装脚本（`allowBuilds: false`），解包时又丢了执行位，所以新 worktree 里不经 `pretest` 直接起终端会报 `posix_spawnp failed`。新增 `--executable-only`：只 chmod，可重复执行，没装 node-pty 也不失败，只处理从 `apps/desktop` 解析到的那份。根 `postinstall` 与 `libs:build` 都会调它。服务器镜像用的 `--prebuilt` 语义不变，Linux 上仍编 Node-ABI。
 
-实测（macOS arm64，2026-10-06，基于 main 13f20c09）：
+实测（macOS arm64，2026-10-06，基于 main 13f20c09，合入 5d4d74da 后重跑）：
 
 - `pnpm check` 通过；`pnpm libs:build && pnpm --filter @armadra/desktop test`（vitest 4956 过 / 67 跳，live 4 过，脚本 71 过 0 败）；`pnpm --filter @armadra/web test` 3700 过、`typecheck` 过；`pnpm --filter @armadra/server test` 98 过。
 - 新用例：`shell-core/single-instance.test.ts` 5；`cloud/store.test.ts` 补 2（0041 列、待清理只记在已撤销行、再登记清空、长度约束）；`cloud/cloud.test.ts` 补 4（没挂删源 → 待清理 `source_unauthorized`、失败记码 → 重试 → 清掉 → 不欠的 404、`relaySide: "revoked"` 不删、未登录 401）；`sources/service.test.ts` 补 2（owner 会话删源且带 Bearer、中继上已没有算删掉；没有远程服务 / 登出 / 连不上各答对应码），删远程服务那条改为撤销时会话仍在；`accounts.test.ts` 补 1；`scripts/ensure-node-pty.test.mjs` 3；服务器壳 `cloud.test.ts` 补待清理输出；页面 `remote-services.test.ts` 补 2、`RemoteServicesPage.test.tsx` 补 3。
+- V1 探针 `personal-roundtrip` 跟着改：第 7 步检查 core 撤销登记时是否已经删掉中继侧的源记录（经中继答 401 `relay_token_invalid`、`relay-pending` 为空、中继目录里没有这台源、断言答 410 `source_revoked`），不再由探针自己去删。一次性邀请兑换后要求 `uses` 为 1。合入 main 5d4d74da 后，`node tools/ci/e2e.mjs --tier a --only personal-roundtrip` 通过，耗时 118 s。
 - **单实例真跑**（开发构建 `apps/desktop/out`，真 Electron，临时 HOME 与数据目录）：A 以数据目录 A 开着；B 用同一数据目录、带 `armadra://join?…` 启动，173 ms 后退出码 0；A 打开「设置 → 远程服务 →通过链接加入」，链接已预填，没有自动挂载；C 用另一个数据目录启动后照常运行。两个数据目录下都生成了 `electron/` profile。
 - **撤销联调**（armadra-cloud main 5e9c0ac 的 `personal serve`，自选端口 8131、临时数据目录、自签 TLS，用完已停并删掉）：cloud 的 devstack 7 条全过。登记后中继目录里有这台 core；`revoke` 后目录里已经没有它，再取断言答 `source_revoked`，`relayPending` 为空。登出后撤销：本机完成、中继目录里还有它，`relayPending` 记 `source_unauthorized`；重新登录后 `relayCleanup` 答 `{ pending: false }`，目录里没有了。`remoteRemove` 连同中继侧一起撤。隧道与源表的 devstack 同轮 13 过 1 跳（重启那条要自己起中继）。隧道那条「本机撤销」经中继现在答 401（中继令牌随源一起作废），不再是 503。联调结束后用 owner 会话查中继目录，结果为空。
 
