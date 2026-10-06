@@ -183,14 +183,17 @@ export class ControlChannel extends EventTarget {
     }
   }
 
-  /** `system.ping` 在 3 秒内回了。 */
+  /**
+   * `system.ping` 在 3 秒内有回音。答了一个错误（没有这项权限、这台 core 没实现）
+   * 也是回音：连接是活的。
+   */
   private async alive(): Promise<boolean> {
     const ping = this.ping;
     if (ping === null) return true;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        ping(),
+        ping().catch(() => undefined),
         new Promise((_resolve, reject) => {
           timeout = setTimeout(
             () => reject(new Error("ping timeout")),

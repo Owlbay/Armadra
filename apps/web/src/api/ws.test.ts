@@ -195,6 +195,17 @@ describe("ControlChannel", () => {
     expect(FakeSocket.instances).toHaveLength(2);
   });
 
+  it("探活答了一个错误也算活着：不重连", async () => {
+    const control = await open();
+    latest().open();
+    control.setPing(async () => {
+      throw Object.assign(new Error("forbidden"), { code: "forbidden" });
+    });
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS + PING_TIMEOUT_MS);
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(control.readyState).toBe(1);
+  });
+
   it("隐藏时不探", async () => {
     const control = await open();
     latest().open();
