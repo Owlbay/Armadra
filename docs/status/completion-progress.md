@@ -2494,8 +2494,8 @@
 实测（macOS arm64，基于 main 80a65133）：
 
 - `pnpm check` 通过（lint 0 error；本包未动依赖，`notices:check` 通过）。
-- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 421 个文件通过、11 跳过（5010 过 / 74 跳过），脚本 71 过 / 2 跳过。新增 `core/contract/parity-git-repository.test.ts` 16 条：旧路径、procedure、原 handler 逐字节相等，覆盖仓库发现（两种拼法、负数被拒）、合并日志（翻页、搜索与路径、换条件的旧游标 409 `invalid_cursor`、不认识的引用种类）、引用树与六种检出读（远端 URL 不含凭据）、储藏与提交详情、历史（数字串 limit、逗号路径与数组、下一页、不属于它的游标、坏 limit）、reflog、cherry-pick 与 rebase 预览、多检出状态与 worktree 绑定、整合状态、读 / 写 / 执行授权与不存在的工作空间；操作队列三条路各起一个操作、轮询到结束、读同一个操作逐字节相等、别的工作空间 404、取消；rebase 三次从同一分支起、过程与结果一样；拒绝（不许写、不认识的操作、字段不合法、不是本工作空间的会话）；形状错只比码与状态；scope 与路由表一致；Git 面迁完（每条 Git 路由恰好属于 `git` 或 `gitRepository`）。E3-5a 的切分边界用例改为核对其余路径恰好是 gitRepository 那 23 条。
-- `pnpm --filter @armadra/web test` 与 `typecheck` 通过；`api/client.git-repository.test.ts` 按 procedure 线上形状改写（11 条）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 423 个文件通过、10 跳过（5026 过 / 67 跳过），脚本 72 过 / 0 失败。新增 `core/contract/parity-git-repository.test.ts` 16 条：旧路径、procedure、原 handler 逐字节相等，覆盖仓库发现（两种拼法、负数被拒）、合并日志（翻页、搜索与路径、换条件的旧游标 409 `invalid_cursor`、不认识的引用种类）、引用树与六种检出读（远端 URL 不含凭据）、储藏与提交详情、历史（数字串 limit、逗号路径与数组、下一页、不属于它的游标、坏 limit）、reflog、cherry-pick 与 rebase 预览、多检出状态与 worktree 绑定、整合状态、读 / 写 / 执行授权与不存在的工作空间；操作队列三条路各起一个操作、轮询到结束、读同一个操作逐字节相等、别的工作空间 404、取消；rebase 三次从同一分支起、过程与结果一样；拒绝（不许写、不认识的操作、字段不合法、不是本工作空间的会话）；形状错只比码与状态；scope 与路由表一致；Git 面迁完（每条 Git 路由恰好属于 `git` 或 `gitRepository`）。E3-5a 的切分边界用例改为核对其余路径恰好是 gitRepository 那 23 条。
+- `pnpm --filter @armadra/web test`：400 个文件、3716 条通过；`typecheck` 通过。`api/client.git-repository.test.ts` 按 procedure 线上形状改写（11 条）。
 - 探针（断网时加 `npm_config_verify_deps_before_run=false npm_config_minimum_release_age=0 npm_config_manage_package_manager_versions=false`）：`git-tool-window` 通过（日志、提交两页与手机四级导航截图，日志与分支树经 `gitRepository.log` / `refs`）；A 档 `ui-features-e2e` 通过；`remote-e2e` 全部通过，Git 段（远端状态、暂存、提交、fetch 进行中与取消）都过；`server-e2e` 全部通过。
 - E3-5a 记下的两处失败（`remote-e2e` 的 `08b-remote-acp`、`server-e2e` 的「新建浏览器」）：在 origin/main 80a65133 的临时检出上各跑一次，两处都通过；本分支上也都通过。两者在当前 main 上不复现。推测与 #154 补的 node-pty `spawn-helper` 执行位有关（ACP 适配器与无头浏览器都经 pty 起），未逐个回溯确认。
 
