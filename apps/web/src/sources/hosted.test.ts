@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   currentAccessToken,
+  logoutIdentity,
   resetIdentityCredentials,
   setHostedSession,
 } from "../api/identity";
 import { setHostedRuntimeBase } from "../api/runtime-url";
 import { routedFetch } from "../mobile/testing";
 import {
+  HOSTED_RESUME_KEY,
   RELAY_DOWN_AFTER_MS,
   createHostedRelay,
   detectRelayHost,
@@ -41,6 +43,7 @@ const platform = (over: Record<string, unknown> = {}) => ({
 });
 
 afterEach(() => {
+  globalThis.sessionStorage?.clear();
   setHostedSession(null);
   setHostedRuntimeBase(null);
   resetIdentityCredentials();
@@ -526,5 +529,239 @@ describe("按分享链接以访客加入（A4-3p）", () => {
     const error = await relay.join(LINK).catch((e: unknown) => e);
     expect((error as { code?: string }).code).toBe("link_expired");
     expect(relay.status.state).toBe("idle");
+  });
+});
+
+describe("刷新页面不丢登录", () => {
+  /** 一个标签页的 sessionStorage。 */
+  function tabStorage(): Storage {
+    const items = new Map<string, string>();
+    return {
+      get length() {
+        return items.size;
+      },
+      clear: () => items.clear(),
+      getItem: (key) => items.get(key) ?? null,
+      key: (index) => [...items.keys()][index] ?? null,
+      removeItem: (key) => void items.delete(key),
+      setItem: (key, value) => void items.set(key, String(value)),
+    };
+  }
+
+  /** 中继与主机：刷新令牌每用一次就旋转，旧的作废。 */
+  function rotatingNet() {
+    let cloud = 0;
+    let core = 0;
+    const live = { cloud: "cloud-r", core: "core-r" };
+    let cloudRejected = false;
+    const net = routedFetch({
+      "POST /v1/auth/login": (init) => {
+        return {
+          body: {
+            session: {
+              accessToken: "cloud-a",
+              refreshToken: live.cloud,
+              accessExpiresAtMs: NOW + 900_000,
+              expiresAtMs: NOW + 9_000_000,
+            },
+          },
+          ...(JSON.parse(String(init.body)).password === "pw"
+            ? {}
+            : { status: 401 }),
+        };
+      },
+      "POST /v1/auth/refresh": (init) => {
+        const { refreshToken } = JSON.parse(String(init.body)) as {
+          refreshToken: string;
+        };
+        if (cloudRejected || refreshToken !== live.cloud)
+          return {
+            status: 401,
+            body: { code: "session_expired", message: "" },
+          };
+        cloud += 1;
+        live.cloud = `cloud-r${cloud}`;
+        return {
+          body: {
+            session: {
+              accessToken: `cloud-a${cloud}`,
+              refreshToken: live.cloud,
+              accessExpiresAtMs: NOW + 900_000,
+              expiresAtMs: NOW + 9_000_000,
+            },
+          },
+        };
+      },
+      "GET /v1/me/sources": () => ({
+        body: {
+          sources: [{ sourceId: SOURCE, name: "laptop", online: true }],
+        },
+      }),
+      [`POST /v1/sources/${SOURCE}/assertion`]: () => ({
+        body: {
+          assertion: "jws",
+          relayToken: "relay.jwt",
+          relayTokenExpiresAtMs: NOW + 3_600_000,
+          relayOrigin: ISSUER,
+          relayBaseUrl: `${ISSUER}/s/${SOURCE}`,
+          online: true,
+        },
+      }),
+      [`POST /s/${SOURCE}/api/identity/cloud/login`]: () => ({
+        body: {
+          session: {
+            hostId: SOURCE,
+            expiresAtUnixMs: NOW + 900_000,
+            native: { accessToken: "core-a", refreshToken: live.core },
+          },
+        },
+      }),
+      [`POST /s/${SOURCE}/api/identity/session/refresh`]: (init) => {
+        const bearer = new Headers(init.headers).get("authorization");
+        if (bearer !== `Bearer ${live.core}`)
+          return { status: 401, body: { code: "unauthorized", message: "" } };
+        core += 1;
+        live.core = `core-r${core}`;
+        return {
+          body: {
+            hostId: SOURCE,
+            expiresAtUnixMs: NOW + 900_000,
+            native: { accessToken: `core-a${core}`, refreshToken: live.core },
+          },
+        };
+      },
+    });
+    return {
+      net,
+      reject: () => {
+        cloudRejected = true;
+      },
+    };
+  }
+
+  function tab(storage: Storage, net: ReturnType<typeof routedFetch>) {
+    return createHostedRelay({
+      issuer: ISSUER,
+      cloud: { fetch: net.fetch },
+      enter: fakeEnter,
+      wake: vi.fn(),
+      storage,
+      createStream: () => ({
+        issuer: ISSUER,
+        state: "open",
+        close: () => undefined,
+      }),
+    });
+  }
+
+  it("只记两把刷新令牌与上次进的主机，访问令牌不落盘", async () => {
+    const storage = tabStorage();
+    const { net } = rotatingNet();
+    const relay = tab(storage, net);
+    await relay.enter((await relay.signIn("dev", "pw"))[0]!);
+    const raw = storage.getItem(HOSTED_RESUME_KEY)!;
+    expect(JSON.parse(raw)).toEqual({
+      issuer: ISSUER,
+      cloudRefreshToken: "cloud-r",
+      sources: { [SOURCE]: "core-r" },
+      entered: { sourceId: SOURCE, name: "laptop" },
+    });
+    expect(raw).not.toContain("cloud-a");
+    expect(raw).not.toContain("core-a");
+    relay.dispose();
+  });
+
+  it("刷新之后静默续上：两把刷新令牌各轮换一次，回到上次那台主机，不重新登录", async () => {
+    const storage = tabStorage();
+    const { net } = rotatingNet();
+    const first = tab(storage, net);
+    await first.enter((await first.signIn("dev", "pw"))[0]!);
+    // 刷新：内存全丢，新页面只剩这个标签页的 sessionStorage。
+    resetIdentityCredentials();
+    setHostedSession(null);
+    const before = net.calls.length;
+
+    const reloaded = tab(storage, net);
+    await expect(reloaded.resume()).resolves.toEqual({ kind: "entered" });
+    expect(reloaded.status.state).toBe("ready");
+    expect(currentAccessToken()).toBe("core-a1");
+    const after = net.calls.slice(before).map((call) => call.key);
+    expect(after).toContain("POST /v1/auth/refresh");
+    expect(after).toContain(`POST /s/${SOURCE}/api/identity/session/refresh`);
+    // 没有口令登录，也没有在主机上多开一份会话。
+    expect(after).not.toContain("POST /v1/auth/login");
+    expect(after).not.toContain(`POST /s/${SOURCE}/api/identity/cloud/login`);
+    // 旋转后的新令牌写回。
+    expect(JSON.parse(storage.getItem(HOSTED_RESUME_KEY)!)).toMatchObject({
+      cloudRefreshToken: "cloud-r1",
+      sources: { [SOURCE]: "core-r1" },
+    });
+    reloaded.dispose();
+  });
+
+  it("没记下什么：要登录，一个请求也不发", async () => {
+    const { net } = rotatingNet();
+    const relay = tab(tabStorage(), net);
+    await expect(relay.resume()).resolves.toBeNull();
+    expect(net.calls).toHaveLength(0);
+  });
+
+  it("刷新令牌被拒（过期、在别处登出）：要登录，记下的全清掉", async () => {
+    const storage = tabStorage();
+    const { net, reject } = rotatingNet();
+    const first = tab(storage, net);
+    await first.enter((await first.signIn("dev", "pw"))[0]!);
+    reject();
+    const reloaded = tab(storage, net);
+    await expect(reloaded.resume()).resolves.toBeNull();
+    expect(storage.getItem(HOSTED_RESUME_KEY)).toBeNull();
+  });
+
+  it("登出远程服务、在设置里登出主机：都清掉，刷新后不会静默登回去", async () => {
+    const storage = tabStorage();
+    const { net } = rotatingNet();
+    const relay = tab(storage, net);
+    await relay.enter((await relay.signIn("dev", "pw"))[0]!);
+    await relay.signOut();
+    expect(storage.getItem(HOSTED_RESUME_KEY)).toBeNull();
+
+    const again = tab(storage, net);
+    await again.enter((await again.signIn("dev", "pw"))[0]!);
+    expect(storage.getItem(HOSTED_RESUME_KEY)).not.toBeNull();
+    // 身份面登出：请求本身失败也照样清（`logoutIdentity` 的 finally）。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("offline");
+      }),
+    );
+    try {
+      await logoutIdentity().catch(() => undefined);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(storage.getItem(HOSTED_RESUME_KEY)).toBeNull();
+    await expect(tab(storage, net).resume()).resolves.toBeNull();
+    again.dispose();
+  });
+
+  it("上次那台不在目录里了：登录还在，给目录与原因", async () => {
+    const storage = tabStorage();
+    const { net } = rotatingNet();
+    const first = tab(storage, net);
+    await first.enter((await first.signIn("dev", "pw"))[0]!);
+    storage.setItem(
+      HOSTED_RESUME_KEY,
+      JSON.stringify({
+        ...JSON.parse(storage.getItem(HOSTED_RESUME_KEY)!),
+        entered: { sourceId: "b".repeat(32), name: "gone" },
+      }),
+    );
+    const reloaded = tab(storage, net);
+    await expect(reloaded.resume()).resolves.toMatchObject({
+      kind: "signedIn",
+      failure: "revoked",
+      hosts: [{ sourceId: SOURCE }],
+    });
   });
 });

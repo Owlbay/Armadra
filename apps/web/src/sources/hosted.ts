@@ -48,8 +48,10 @@ import {
  * 这份 `apps/web`。页面背后没有本机 core：用中继账号口令登录远程服务，挑一台
  * 主机，把它经中继装成页面的本机源（`route-entry.ts`，与手机同一份）。
  *
- * - 凭据只在内存（{@link createMemoryRelayVault}）：远程服务的刷新令牌、源 core
- *   的会话都在这一个标签页里，关标签即丢，重开再登录。不写任何存储。
+ * - 访问令牌只在内存。两把刷新令牌（远程服务的、源 core 的）与上次进的主机
+ *   另记一份在 `sessionStorage`（{@link createSessionRelayVault}）：只这个标签页、
+ *   只中继这个来源能读，关标签即丢；刷新页面时用它们静默续上（{@link
+ *   HostedRelay.resume}），登出、被拒时清掉。
  * - 所有请求同源（中继的 `/v1/*`、`/s/<源>/…`）：中继给页面的 CSP 是
  *   `connect-src 'self'`，core 认中继来源为可信来源（契约 §32）。
  * - `me.stream`：主机下线 → 等它上线（`waitingForSource`），上线 → 叫醒事件流；
@@ -122,6 +124,169 @@ export function createMemoryRelayVault(): MemoryRelayVault {
   };
 }
 
+/* ------------------------------ 刷新后续上 ------------------------------- */
+
+/**
+ * 刷新页面要续上的那点东西：两把刷新令牌与上次进的主机。访问令牌不落盘——
+ * 续的时候用刷新令牌换新的（都会旋转，旧的随即作废）。
+ *
+ * 放 `sessionStorage` 而不是 `localStorage` / IndexedDB：只活在这个标签页里，
+ * 关掉即丢，和以前「凭据只在这个标签页」的边界一致；中继给页面的 CSP 只许
+ * `script-src 'self'`、`connect-src 'self'`，读得到它的脚本本来就能用内存里的
+ * 令牌发请求，多记两把刷新令牌不扩大 XSS 能做的事，只延长到刷新之后。
+ */
+export const HOSTED_RESUME_KEY = "armadra.hosted.resume";
+
+interface ResumeRecord {
+  readonly issuer: string;
+  readonly cloudRefreshToken: string | null;
+  /** 源 core 的刷新令牌，按源。 */
+  readonly sources: Readonly<Record<string, string>>;
+  /** 上次进的主机；还没进过是 `null`。 */
+  readonly entered: { readonly sourceId: string; readonly name: string } | null;
+}
+
+function browserSessionStorage(): Storage | null {
+  try {
+    return globalThis.sessionStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function readResume(storage: Storage | null, issuer: string): ResumeRecord {
+  const empty: ResumeRecord = {
+    issuer,
+    cloudRefreshToken: null,
+    sources: {},
+    entered: null,
+  };
+  try {
+    const raw = storage?.getItem(HOSTED_RESUME_KEY);
+    if (!raw) return empty;
+    const value = JSON.parse(raw) as Partial<ResumeRecord>;
+    // 别的签发方留下的（同一来源不会有，但别信它）：不用。
+    if (value.issuer !== issuer) return empty;
+    const sources: Record<string, string> = {};
+    for (const [id, token] of Object.entries(value.sources ?? {}))
+      if (typeof token === "string" && token !== "") sources[id] = token;
+    const entered = value.entered;
+    return {
+      issuer,
+      cloudRefreshToken:
+        typeof value.cloudRefreshToken === "string" &&
+        value.cloudRefreshToken !== ""
+          ? value.cloudRefreshToken
+          : null,
+      sources,
+      entered:
+        entered &&
+        typeof entered.sourceId === "string" &&
+        entered.sourceId !== ""
+          ? {
+              sourceId: entered.sourceId,
+              name: typeof entered.name === "string" ? entered.name : "",
+            }
+          : null,
+    };
+  } catch {
+    return empty;
+  }
+}
+
+function writeResume(storage: Storage | null, record: ResumeRecord): void {
+  try {
+    if (record.cloudRefreshToken === null) {
+      storage?.removeItem(HOSTED_RESUME_KEY);
+      return;
+    }
+    storage?.setItem(HOSTED_RESUME_KEY, JSON.stringify(record));
+  } catch {
+    /* 存不下只是刷新后要重新登录。 */
+  }
+}
+
+export interface SessionRelayVault extends MemoryRelayVault {
+  /** 记下（或忘掉）上次进的主机。 */
+  rememberEntered(source: { sourceId: string; name: string } | null): void;
+  /** 上次进的主机；没有可续的就是 `null`。 */
+  entered(): { sourceId: string; name: string } | null;
+}
+
+/**
+ * 内存保管处加一层 `sessionStorage`：刷新令牌写穿，访问令牌只在内存。启动时
+ * 从存储读回刷新令牌；源 core 的会话读回时访问令牌为空、已过期，用它的人
+ * （`relay-access.ts`）会先轮换。
+ */
+export function createSessionRelayVault(
+  issuer: string,
+  storage: Storage | null = browserSessionStorage(),
+): SessionRelayVault {
+  const memory = createMemoryRelayVault();
+  let record = readResume(storage, issuer);
+  const save = (next: ResumeRecord) => {
+    record = next;
+    writeResume(storage, record);
+  };
+  const clear = () => {
+    memory.clear();
+    record = { issuer, cloudRefreshToken: null, sources: {}, entered: null };
+    try {
+      storage?.removeItem(HOSTED_RESUME_KEY);
+    } catch {
+      /* 没存下过。 */
+    }
+  };
+  return {
+    async cloudRefreshToken(of) {
+      return (
+        (await memory.cloudRefreshToken(of)) ??
+        (of === issuer ? record.cloudRefreshToken : null)
+      );
+    },
+    async saveCloudRefreshToken(of, refreshToken) {
+      await memory.saveCloudRefreshToken(of, refreshToken);
+      if (of === issuer) save({ ...record, cloudRefreshToken: refreshToken });
+    },
+    async forgetCloud(of) {
+      await memory.forgetCloud?.(of);
+      if (of === issuer) clear();
+    },
+    async session(sourceId) {
+      const live = await memory.session(sourceId);
+      if (live !== undefined) return live;
+      const refreshToken = record.sources[sourceId];
+      // 过期的空访问令牌：取用前一定先轮换。
+      return refreshToken === undefined
+        ? undefined
+        : { accessToken: "", refreshToken, expiresAtMs: 1 };
+    },
+    async saveSession(sourceId, of, session) {
+      await memory.saveSession(sourceId, of, session);
+      if (record.sources[sourceId] !== session.refreshToken)
+        save({
+          ...record,
+          sources: { ...record.sources, [sourceId]: session.refreshToken },
+        });
+    },
+    rememberEntered(source) {
+      save({ ...record, entered: source });
+    },
+    entered: () => (record.cloudRefreshToken === null ? null : record.entered),
+    clear,
+  };
+}
+
+/** 刷新之后续的结果：进了主机、登录还在但进不去（给目录与原因）、或要重新登录。 */
+export type HostedResume =
+  | { readonly kind: "entered" }
+  | {
+      readonly kind: "signedIn";
+      readonly hosts: CloudSource[];
+      readonly failure: HostedFailure;
+    }
+  | null;
+
 /* --------------------------------- 状态 ---------------------------------- */
 
 export interface HostedStatus {
@@ -185,6 +350,8 @@ export interface HostedRelayOptions {
   readonly clearTimeout?: (handle: unknown) => void;
   /** 测试注入：把目录里其余的主机挂进页面源表（缺省 `mounts.ts`）。 */
   readonly mount?: typeof mountSiblingSources;
+  /** 刷新后续上用的存储（缺省 `sessionStorage`；`null` = 只在内存）。 */
+  readonly storage?: Storage | null;
 }
 
 /** 目录里的一台主机 → 经这个中继到达的源描述。 */
@@ -224,16 +391,24 @@ export interface HostedRelay {
     readonly secret: string;
     readonly invitationToken: string;
   }): Promise<string>;
+  /**
+   * 刷新页面之后：用记下的刷新令牌静默续上远程服务，再进上次那台主机。没有
+   * 记下的、刷新令牌被拒：`null`（重新登录）。
+   */
+  resume(): Promise<HostedResume>;
   readonly status: HostedStatus;
   subscribe(listener: () => void): () => void;
-  /** 登出远程服务并丢掉内存里的全部凭据。 */
+  /** 登出远程服务并丢掉全部凭据（内存与 `sessionStorage`）。 */
   signOut(): Promise<void>;
   dispose(): void;
 }
 
 export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
   const { issuer } = options;
-  const vault = createMemoryRelayVault();
+  const vault = createSessionRelayVault(
+    issuer,
+    options.storage === undefined ? browserSessionStorage() : options.storage,
+  );
   const cloudSessions = createCloudSessions({
     vault,
     ...(options.cloud === undefined ? {} : { cloud: options.cloud }),
@@ -480,7 +655,11 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
         load: () => vault.session(source.sourceId),
         save: (session) =>
           void vault.saveSession(source.sourceId, issuer, session),
-        clear: () => provider.invalidate(source.sourceId),
+        // 只在身份面登出时调：刷新之后不该再静默登回去。
+        clear: () => {
+          provider.invalidate(source.sourceId);
+          vault.clear();
+        },
         recover: async () => {
           try {
             await provider.refresh(source.sourceId, "relayed");
@@ -529,6 +708,10 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
         throw new SourceError(SOURCE_ERROR.unauthorized);
       }
       current = source.sourceId;
+      vault.rememberEntered({
+        sourceId: source.sourceId,
+        name: source.name,
+      });
       setStatus("ready", null);
       siblings?.dispose();
       siblings = (options.mount ?? mountSiblingSources)({
@@ -537,6 +720,37 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
         provider,
       });
       startStream();
+    },
+    async resume() {
+      const last = vault.entered();
+      if (last === null) return null;
+      let listed: CloudSource[];
+      try {
+        listed = await cloudSources(
+          issuer,
+          await cloudSessions.access(issuer),
+          options.cloud,
+        );
+      } catch (error) {
+        const failure = hostedFailureOf(error);
+        // 刷新令牌被拒（已从保管处忘掉）：重新登录。连不上：也只能先登录页。
+        if (failure !== "unreachable") vault.clear();
+        return null;
+      }
+      directory = listed;
+      const row = listed.find((item) => item.sourceId === last.sourceId);
+      if (row === undefined)
+        return { kind: "signedIn", hosts: listed, failure: "revoked" };
+      try {
+        await hosted.enter(row);
+        return { kind: "entered" };
+      } catch (error) {
+        return {
+          kind: "signedIn",
+          hosts: listed,
+          failure: hostedFailureOf(error),
+        };
+      }
     },
     get status() {
       return status;

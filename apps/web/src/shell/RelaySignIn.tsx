@@ -16,7 +16,8 @@ import { Item, ItemContent, ItemGroup, ItemTitle } from "@/ui/item";
 import { Spinner } from "@/ui/spinner";
 
 export interface RelaySignInProps {
-  readonly relay: Pick<HostedRelay, "issuer" | "signIn" | "enter">;
+  readonly relay: Pick<HostedRelay, "issuer" | "signIn" | "enter"> &
+    Partial<Pick<HostedRelay, "resume">>;
   /** 装好了本机源：进画布。 */
   readonly onEntered: () => void;
   /** 展示页用：钉住视图与内容。 */
@@ -26,7 +27,8 @@ export interface RelaySignInProps {
 
 /**
  * 中继托管页面的入口（客户端包 §5）：中继账号口令登录 → 只有一台在线的主机就
- * 直接进，几台就挑一台。凭据只在这个标签页的内存里。
+ * 直接进，几台就挑一台。刷新页面时先用这个标签页记下的刷新令牌静默续上
+ * （`HostedRelay.resume`），续不上才出登录。
  */
 export function RelaySignIn({
   relay,
@@ -46,6 +48,32 @@ export function RelaySignIn({
   const [failure, setFailure] = React.useState<HostedFailure | null>(
     initialFailure ?? null,
   );
+  // 刷新之后先静默续上；续的时候不出表单，免得人刚开始填就被换走。
+  const resume = relay.resume;
+  const [resuming, setResuming] = React.useState(
+    resume !== undefined && initialHosts === undefined,
+  );
+  const enteredRef = React.useRef(onEntered);
+  enteredRef.current = onEntered;
+  // 只续一次（严格模式下效果会跑两遍；刷新令牌每用一次就旋转）。
+  const started = React.useRef(false);
+  React.useEffect(() => {
+    if (!resuming || resume === undefined || started.current) return;
+    started.current = true;
+    void resume()
+      .catch(() => null)
+      .then((outcome) => {
+        if (outcome?.kind === "entered") {
+          enteredRef.current();
+          return;
+        }
+        if (outcome?.kind === "signedIn") {
+          setHosts(outcome.hosts);
+          setFailure(outcome.failure);
+        }
+        setResuming(false);
+      });
+  }, [resuming, resume]);
   const message = failure === null ? null : t(`remote.error.${failure}`);
   const host = React.useMemo(() => {
     try {
@@ -109,7 +137,11 @@ export function RelaySignIn({
             {host}
           </p>
         </div>
-        {hosts === null ? (
+        {resuming ? (
+          <div className="flex justify-center py-6">
+            <Spinner aria-label={t("remote.status.connecting")} />
+          </div>
+        ) : hosts === null ? (
           <RelayForm
             issuer={relay.issuer}
             busy={busy}

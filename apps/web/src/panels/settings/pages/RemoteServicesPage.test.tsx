@@ -54,6 +54,17 @@ vi.mock("../../../app/workspaces-query", () => ({
   useWorkspacesQuery: () => ({ data: [{ id: "w1", name: "Project" }] }),
 }));
 vi.mock("sonner", () => ({ toast: toasts }));
+/** 设置作用的 core 在不在眼前（缺省本机）。 */
+const access = vi.hoisted(() => ({
+  remote: false,
+  via: null as "direct" | "relayed" | null,
+  relayIssuer: null as string | null,
+  currentSourceId: "local",
+}));
+vi.mock("../remote-access", async (original) => ({
+  ...(await original<typeof import("../remote-access")>()),
+  useRemoteAccess: () => access,
+}));
 
 import { RemoteServicesPage } from "./RemoteServicesPage";
 import { offerJoinLink } from "../../../sources/join-intent";
@@ -97,6 +108,12 @@ beforeEach(() => {
   api.relayPending.mockResolvedValue([]);
 });
 afterEach(() => {
+  Object.assign(access, {
+    remote: false,
+    via: null,
+    relayIssuer: null,
+    currentSourceId: "local",
+  });
   cleanup();
   for (const spy of [...Object.values(api), ...Object.values(toasts)])
     spy.mockReset();
@@ -805,5 +822,123 @@ describe("分享收尾（P4）", () => {
     await waitFor(() =>
       expect(toasts.success).toHaveBeenCalledWith("Cleanup dismissed"),
     );
+  });
+});
+
+describe("经远端访问时不自断", () => {
+  function openMenu(name: string) {
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: `Actions for ${name}` }),
+      { button: 0, ctrlKey: false },
+    );
+  }
+
+  it("页面正经这个中继到达主机：标出来，登出、移除与停用分享都不给", async () => {
+    Object.assign(access, {
+      remote: true,
+      via: "relayed",
+      relayIssuer: "https://relay.test:8102/",
+    });
+    api.listSources.mockResolvedValue({
+      sources: [local],
+      remotes: [{ ...relay, registered: true }],
+    });
+    api.shareStatus.mockResolvedValue({
+      sourceId: local.sourceId,
+      registrations: [
+        {
+          issuer: ISSUER,
+          mode: "personal",
+          tunnel: {
+            state: "ready",
+            node: null,
+            since: null,
+            streams: 1,
+            lastError: null,
+          },
+        },
+      ],
+    });
+    api.listShareLinks.mockResolvedValue([]);
+    mount();
+    expect(
+      await screen.findByText(/This page connects through it/),
+    ).toBeTruthy();
+    const toggle = await screen.findByRole("switch", {
+      name: "Share this machine",
+    });
+    await waitFor(() =>
+      expect(toggle.getAttribute("aria-checked")).toBe("true"),
+    );
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+    openMenu(relay.label);
+    const signOut = await screen.findByRole("menuitem", { name: "Sign out" });
+    const remove = screen.getByRole("menuitem", { name: "Remove" });
+    expect(signOut.getAttribute("aria-disabled")).toBe("true");
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(remove);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(api.logoutRemote).not.toHaveBeenCalled();
+  });
+
+  it("别的中继照常；当前源是挂载的远程源：那一行不给忘掉凭据与移除", async () => {
+    const mounted = {
+      ...local,
+      sourceId: "r".repeat(32),
+      kind: "direct",
+      label: "studio",
+      baseUrl: "https://studio.test:8443",
+    };
+    Object.assign(access, {
+      remote: true,
+      via: null,
+      relayIssuer: null,
+      currentSourceId: mounted.sourceId,
+    });
+    api.listSources.mockResolvedValue({
+      sources: [local, mounted],
+      remotes: [relay],
+    });
+    api.shareStatus.mockResolvedValue({
+      sourceId: local.sourceId,
+      registrations: [],
+    });
+    mount();
+    expect(await screen.findByText(/In use/)).toBeTruthy();
+    openMenu("studio");
+    expect(
+      (await screen.findByRole("menuitem", { name: "Remove" })).getAttribute(
+        "aria-disabled",
+      ),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Disconnect" })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    openMenu(relay.label);
+    expect(
+      (await screen.findByRole("menuitem", { name: "Sign out" })).getAttribute(
+        "aria-disabled",
+      ),
+    ).toBeNull();
+  });
+
+  it("中继托管的页面：不拿主机的源表覆盖页面源表", async () => {
+    const { resetHostedRelay } = await import("../../../sources/hosted");
+    resetHostedRelay({ issuer: ISSUER } as never);
+    boot.applySourceTable.mockClear();
+    try {
+      api.listSources.mockResolvedValue({ sources: [local], remotes: [] });
+      mount();
+      await screen.findByText("this-mac");
+      await waitFor(() => expect(api.listSources).toHaveBeenCalled());
+      expect(boot.applySourceTable).not.toHaveBeenCalled();
+    } finally {
+      resetHostedRelay(null);
+    }
   });
 });

@@ -2983,6 +2983,37 @@ iPad（WebKit）经个人中转给 ACP Agent 发 prompt 偶发「这一轮没有
 - 访客与主人在同一中继下时，`me.stream` 只开主人那一条：访客加入的那台若不在主人的目录里，它的上下线事件收不到（回前台与重连时照常补齐）。
 - 旧单槽里若已被旧版写成访客的令牌，无法分辨，照旧给那些旧连接用；重新添加即写入新槽。
 
+## R3 经中继 / 远程访问时的设置页与托管页会话
+
+做了什么（`apps/web/src/`）：
+
+- **远程访问的判定**：`panels/settings/remote-access.ts` 的 `useRemoteAccess()` / `remoteAccessOf(facts)`，不新造概念，从已有的源描述推：中继托管页面（`hostedRelay()`）、原生 App（本机源地址在 `/s/<源>` 下即经中继，否则直连 Gateway）、经 Gateway / 服务器壳同源打开的网页（直连），以及当前源是挂载的远程源（`descriptor.kind !== "local"`，`api/*` 发往它）。答 `{ remote, via, relayIssuer, currentSourceId }`；桌面窗口与开发服务器的本机源永远在本机。
+- **设置导航**：`nav.ts` 新 `localOnly` 标记与 `visibleSettingsSections(server, member, remote)` / `isSettingsSectionId(value, member, remote)` 的第三个参数，远端时不列只对眼前设备有意义的分区（现在是「浏览器」：桌面窗口里当前源切到远程源时也不列，免得把 `<webview>` 配置写到远端 core）。其余分区作用在那台 core 上，照常列，按页处理：
+  - 数据：远端时不出「在访达中打开」（路径照常显示，备份、重建照常）。
+  - 更新：远端时只读一行「主机版本」（`health.version`），不跑检查、不出频道与开关。
+  - 远程服务：页面正走的那个中继（`sameOrigin(remote.issuer, relayIssuer)`）那一行脚注「本页经此连接」，登出、移除置灰，分享本机开着时开关置灰（不给停）；当前源那一行脚注「正在使用」，断开、移除置灰。中继托管页面不再把主机的源表 `applySourceTable` 到页面源表（会盖掉中继目录挂上的主机）。
+- **托管页刷新不丢登录**（`sources/hosted.ts`）：`createSessionRelayVault(issuer, storage)` 在内存保管处上加一层 `sessionStorage`（键 `armadra.hosted.resume`）：只写两把刷新令牌（远程服务的、源 core 的）与上次进的主机，访问令牌不落盘；读回的源会话访问令牌为空、已过期，`relay-access.ts` 取用前先轮换。`HostedRelay.resume()`：用刷新令牌静默续上远程服务 → 目录 → 进上次那台（答 `{ kind: "entered" }`）；那台不在 / 进不去答 `{ kind: "signedIn", hosts, failure }`；没记下或令牌被拒答 `null` 并清空。`shell/RelaySignIn.tsx` 挂上时先续（只续一次，严格模式安全），续的时候只显示 Spinner。登出远程服务（`signOut` / `dispose`）、在设置里登出主机（`logoutIdentity` → 保管处 `clear`）、刷新令牌被拒都清掉。
+  - 为什么是 `sessionStorage`：只这个标签页、只中继这个来源能读，关标签即丢，与原先「凭据只在这个标签页」的边界一致；中继给页面的 CSP 是 `script-src 'self'`、`connect-src 'self'`，读得到它的脚本本来就能拿内存里的令牌发请求，多记两把刷新令牌不扩大 XSS 能做的事，只延长到刷新之后。两把刷新令牌每用一次都旋转。
+- 文案：`remote.inUse`、`remote.inUse.current`、`updates.hostVersion`，中英同步。
+
+实测（macOS arm64，2026-10-07，基于 main 9f33e3df）：
+
+- 新用例：`panels/settings/remote-access.test`（6）、`nav.test`（3）、`pages/DataPage.test`（2）、`pages/UpdatesPage.test` 补 1、`pages/RemoteServicesPage.test` 补 3（正走的中继不给登出 / 移除 / 停分享，当前源不给断开 / 移除，托管页不覆盖源表）、`sources/hosted.test` 补 6（只记刷新令牌、刷新后两把各轮换一次回到那台且不重登不新开主机会话、没记下不发请求、被拒即清、登出远程服务与登出主机都清、那台不在给目录与原因）、`shell/RelaySignIn.test` 补 3。
+- 端到端：`ARMADRA_PERSONAL_RELAY_HOME=<armadra-cloud> node tools/probes/relay-web-e2e.mjs`（armadra-cloud main c5e5410，临时目录与 HOME，用完即停）全过，新增：登录后 `sessionStorage` 只有刷新令牌 → `Page.reload` 后不出登录表单、直接回画布、终端 `42reload`；中继重启恢复之后打开设置：远程服务页正走的中继标「本页经此连接」、分享本机开着且开关禁用，更新页只有「主机版本」、没有开关与下拉，数据页没有「在访达中打开」；控制台无错误。截图 `06-settings-remote-{1440,390}-{light,dark}`、`07-settings-updates-1440-dark`。
+
+接口：
+
+- `useRemoteAccess()` / `remoteAccessOf(facts)` / `pageAccessFacts()` / `sameOrigin(a, b)`、`RemoteAccess`、`AccessFacts`；`SettingsSection.localOnly`；`visibleSettingsSections(server, member, remote)`、`isSettingsSectionId(value, member, remote)`；`RemoteShareSection` 的 `inUse`。
+- `HostedRelay.resume(): Promise<HostedResume>`、`HostedResume`、`HostedRelayOptions.storage`、`createSessionRelayVault`、`SessionRelayVault`、`HOSTED_RESUME_KEY`；`RelaySignInProps.relay` 可带 `resume`。
+
+没做 / 偏离：
+
+- 动了 `panels/SettingsDialog.tsx`（把 `remote` 传给导航）、`shell/RelaySignIn.tsx`（挂上时续）与 `api/identity.ts` 一处注释；`shell/Banners.tsx` 未动——中继停了那条仍不给刷新钮，现在刷新其实能续上，留给后续。
+- 同一标签页「复制标签页」会把 `sessionStorage` 一起复制，两页共用同一把刷新令牌，先轮换的一页让另一页续不上（回登录页）；不做跨标签协调。
+- 中继托管页面上 `RUNTIME_VIA_SERVER_SHELL` 在模块加载时按 HTTPS 页面来源算成 `true`，导航因此列「账号与共享」；本包没改这个判定。
+- 经 Gateway 直连打开时关掉对外服务同样会自断，但 `gateway-e2e` 明确要求页面上能经 Gateway 自己关掉它（「在页面上点开关关掉对外服务」），本包不改这条既有行为；`useRemoteAccess().via === "direct"` 已可用于以后加确认。
+- 原生 App 的设置页按同一判定生效，但只在单测里验过（`mobile/` 不在本包范围）。
+
 ## R5 经中继的数据流与覆盖：媒体票、语言会话恢复、两台经中继的源、WebKit（协议 minor 21）
 
 做了什么：

@@ -6,6 +6,7 @@ import { useT } from "../../../app/preferences-store";
 import { revealPath } from "../../../platform";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
+import { useRemoteAccess } from "../remote-access";
 import { useRuntimeSettings } from "../use-runtime-settings";
 import { CONTROL_WIDTH } from "./GeneralPage";
 import { Button } from "@/ui/button";
@@ -31,6 +32,9 @@ export function DataPage() {
   const t = useT();
   const queryClient = useQueryClient();
   const { settings, save } = useRuntimeSettings();
+  // 数据目录在设置作用的那台 core 上：远端时「在访达中打开」打开的是眼前这台
+  // 机器上一个不存在的路径，不列。
+  const { remote } = useRemoteAccess();
 
   const info = useQuery({
     queryKey: ["data-info"],
@@ -69,27 +73,29 @@ export function DataPage() {
           <span className="max-w-[280px] truncate text-[11px] text-muted-foreground">
             {info.data?.dataDir ?? "—"}
           </span>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={!info.data}
-            onClick={() => {
-              const dir = info.data?.dataDir;
-              if (!dir) return;
-              void revealPath(dir).then((outcome) => {
-                // 三种结局都说一声：这个按钮以前失败时完全没有反馈，
-                // 点下去什么也不发生就只能读成「应用坏了」。
-                if (outcome === "copied")
-                  toast.success(t("settings.reveal.copied"));
-                else if (outcome === "failed")
-                  toast.error(t("settings.reveal.failed"), {
-                    description: dir,
-                  });
-              });
-            }}
-          >
-            {t("settings.reveal")}
-          </Button>
+          {!remote && (
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!info.data}
+              onClick={() => {
+                const dir = info.data?.dataDir;
+                if (!dir) return;
+                void revealPath(dir).then((outcome) => {
+                  // 三种结局都说一声：这个按钮以前失败时完全没有反馈，
+                  // 点下去什么也不发生就只能读成「应用坏了」。
+                  if (outcome === "copied")
+                    toast.success(t("settings.reveal.copied"));
+                  else if (outcome === "failed")
+                    toast.error(t("settings.reveal.failed"), {
+                      description: dir,
+                    });
+                });
+              }}
+            >
+              {t("settings.reveal")}
+            </Button>
+          )}
         </SettingsRow>
 
         <SettingsRow label={t("settings.dbSize")}>
