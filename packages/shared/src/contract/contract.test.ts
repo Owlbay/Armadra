@@ -79,6 +79,11 @@ describe("契约树", () => {
       "acp",
       "workflows",
       "coordinator",
+      "push",
+      "mail",
+      "credentials",
+      "gateway",
+      "diagnostics",
     ]);
   });
 
@@ -119,12 +124,12 @@ describe("契约树", () => {
     }
   });
 
-  it("匿名的只能经旧路径，且只在身份面或健康检查下", () => {
+  it("匿名的只能经旧路径，且只在身份面、健康检查或配对短码换票下", () => {
     for (const entry of entries) {
       if (entry.meta.scope !== null) continue;
       expect(entry.meta.legacy, entry.name).toBeDefined();
       expect(entry.meta.legacy?.path, entry.name).toMatch(
-        /^\/api\/identity\/|^\/(api\/)?health$/,
+        /^\/api\/identity\/|^\/(api\/)?health$|^\/api\/gateway\/pairing-code\/exchange$/,
       );
     }
   });
@@ -289,12 +294,16 @@ describe("§31 与协议包同一份", () => {
     }
   });
 
-  it("login 是唯一的匿名 procedure，且只经旧路径", () => {
+  it("匿名 procedure 只有 login 与配对短码换票，且都只经旧路径", () => {
     const anonymous = entries.filter((entry) => entry.meta.scope === null);
     expect(anonymous.map((entry) => entry.name)).toEqual([
       "identity.cloud.login",
+      "gateway.exchangePairingCode",
     ]);
-    expect(anonymous[0]?.meta.legacy?.path).toBe("/api/identity/cloud/login");
+    expect(anonymous.map((entry) => entry.meta.legacy?.path)).toEqual([
+      "/api/identity/cloud/login",
+      "/api/gateway/pairing-code/exchange",
+    ]);
   });
 
   it("§31 的错误码与协议包注册表同拼法、同状态", async () => {

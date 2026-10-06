@@ -9,13 +9,18 @@ import { acp } from "./acp.js";
 import { agents } from "./agents.js";
 import { boards } from "./boards.js";
 import { coordinator } from "./coordinator.js";
+import { credentials } from "./credentials.js";
+import { diagnostics } from "./diagnostics.js";
 import { identity } from "./cloud.js";
 import { files } from "./files.js";
 import { forge } from "./forge.js";
+import { gateway } from "./gateway.js";
 import { git } from "./git.js";
 import { github } from "./github.js";
 import { gitRepository } from "./git-repository.js";
+import { mail } from "./mail.js";
 import type { ProcedureMeta } from "./meta.js";
+import { push } from "./push.js";
 import { settings } from "./settings.js";
 import { sources } from "./sources.js";
 import { system } from "./system.js";
@@ -47,6 +52,11 @@ export const contract = {
   acp,
   workflows,
   coordinator,
+  push,
+  mail,
+  credentials,
+  gateway,
+  diagnostics,
 };
 
 export type Contract = typeof contract;
