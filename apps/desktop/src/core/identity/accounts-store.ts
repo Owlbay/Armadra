@@ -356,19 +356,30 @@ export class AccountsTx {
   /**
    * 标记一张邀请被用掉。一次性就在这个 `consumed_at_ms = 0` 条件里：第二次接受
    * 改不动任何行，整笔事务回滚，于是第二个人什么也拿不到。
+   *
+   * 有人兑换（`principalId` 非空）时计数与多次邀请同一口径：`uses` 加一、记下
+   * 是谁；撤销（`principalId` 为空串）只收口，不算一次使用。
    */
   consumeInvitation(
     invitationId: string,
     principalId: string,
     nowMs: number,
   ): void {
+    const used = principalId === "" ? 0 : 1;
     const changes = this.database
       .prepare(
-        "UPDATE identity_invitations SET consumed_by = ?, consumed_at_ms = ? " +
+        "UPDATE identity_invitations SET consumed_by = ?, consumed_at_ms = ?, uses = uses + ? " +
           "WHERE invitation_id = ? AND consumed_at_ms = 0",
       )
-      .run(principalId, nowMs, invitationId).changes;
+      .run(principalId, nowMs, used, invitationId).changes;
     if (Number(changes) !== 1) throw new IdentityError("conflict");
+    if (used === 1) {
+      this.database
+        .prepare(
+          "INSERT OR IGNORE INTO identity_invitation_uses(invitation_id, principal_id, used_at_ms) VALUES(?, ?, ?)",
+        )
+        .run(invitationId, principalId, nowMs);
+    }
   }
 
   /* --------------------------------- groups ------------------------------- */

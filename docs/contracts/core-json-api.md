@@ -2170,7 +2170,7 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 - **撤销**（`revoke`，`{ issuer }`，也收查询串 `?issuer=`）：停隧道、行记 `revoked_at_ms`，之后这个 issuer 签的断言一律 `cloud_not_registered`；没有有效登记答 `404 not_found`。已映射的账号与授予不动（owner 在账号页逐个撤）。撤销过的 issuer 可以再登记。审计 `cloud.revoke`。
 - **状态**（`status`）：`{ registrations: [{ issuer, mode, label?, jwksFetchedAtMs, trustedOrigins, relayOrigins, registeredAtMs, tunnel }], sourcePublicKey, sourceId }`；`tunnel` 是 `tunnelStatusSchema`，没装隧道时恒为 `{ state: "disabled", node: null, since: null, streams: 0, lastError: null }`。源公钥第一次读状态时也会生成私钥。
 - **可信来源**（`trustedOrigins`，`PUT /api/identity/cloud/{issuer}/trusted-origins`，路径里的 issuer 按 URL 编码）：整份替换；每条取规范来源拼法（只收 `https:`，回环另收 `http:`），去重，最多 32 条；不合法 400，没有有效登记 404。隧道的准入（§32）按它判来源。
-- §33 的 `RemoteService.registered` 读这张表；`sources.remoteRemove` 删一个本机已登记到的远程服务之前先撤销登记。
+- §33 的 `RemoteService.registered` 读这张表；`sources.remoteRemove` 删一个本机已登记到的远程服务之前先撤销登记（连同中继侧的源记录，§31.4）。
 
 ### 31.3 断言换会话
 
@@ -2182,6 +2182,24 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 - **审计**：`cloud.login { iss, sub, principalId, created, link? }`、`cloud.bind { iss, sub }`、`cloud.register { issuer, mode }`、`cloud.revoke { issuer }`、经链接建号另记 `invitation.accept.link { iss, linkId }`。凭据（刷新令牌、源私钥、注册令牌、断言原文）不出现在任何响应、日志与审计详情里——`login` 答的原生会话是这一条的用途本身。
 - 错误码沿用 `{ code, message }`（RPC 路径另带 `requestId`），与协议包 `errors` 注册表同拼法、同状态，登记在 `packages/shared/src/contract/errors.ts`：`cloud_not_registered` 401、`cloud_assertion_invalid` 401、`cloud_assertion_replayed` 401、`cloud_already_registered` 409、`cloud_issuer_mismatch` 400、`cloud_account_unlinked` 401、`invitation_invalid` 401、`registration_token_invalid` 401、`protocol_unsupported` 426。
 - 外呼登记（`net/outbound.ts`）：`cloudApi`（登记）、`cloudJwks`（公钥集）。装配不联网、不读 SecretStore；没有登记行时这一域不发任何请求。
+
+### 31.4 追加：撤销时删中继侧的源记录
+
+<!-- rpc:begin contract=§31.4 -->
+
+| procedure                     | kind     | input                | output                                                                  | errors                                      | scope            | 自  | 原路径                                   |
+| ----------------------------- | -------- | -------------------- | ----------------------------------------------------------------------- | ------------------------------------------- | ---------------- | --- | ---------------------------------------- |
+| `identity.cloud.relayPending` | query    | 可省 `{}`            | `{ pending: { issuer: string, revokedAtMs: integer, code: string }[] }` | `unauthenticated`、`forbidden`              | `settings:read`  | 1.3 | `GET /api/identity/cloud/relay-pending`  |
+| `identity.cloud.relayCleanup` | mutation | `{ issuer: string }` | `{ pending: boolean, code: string \| null }`                            | `unauthenticated`、`forbidden`、`not_found` | `settings:write` | 1.3 | `POST /api/identity/cloud/relay-cleanup` |
+
+<!-- rpc:end -->
+
+- **撤销**（§31.2）在本机完成之后（停隧道、记 `revoked_at_ms`），再尽力删中继侧的源记录：本机有这个 issuer 的远程服务行（§33.2）且有保存的登录时，用它的会话调远程服务的 `sources.revoke`（`DELETE <issuer>/v1/sources/{sourceId}`，cloud-api §4，要 owner；`sourceId` 是本机 `hostId`）。删掉了、或中继上本来就没有（`not_found`），算清理完成。
+- 没删成时本机撤销照样算数（`revoke` 仍答 `{}`），行上记下当时的错误码，即「中继侧待清理」（迁移 `0041_cloud_relay_cleanup`，列 `relay_cleanup`）：没有远程服务行、没有保存的登录、会话失效或不是 owner `source_unauthorized`；连不上 `source_unreachable`；其余照远程服务的码收拢（§33）。页面按码取文案。
+- `relayPending`：`{ pending: [{ issuer, revokedAtMs, code }] }`，按撤销先后。`relayCleanup { issuer }`：重试一条，答 `{ pending: false, code: null }` 或 `{ pending: true, code }`；不欠的答 `404 not_found`。同一个 issuer 再登记时清掉。
+- 隧道收到中继的 `source_revoked`（§32）而撤销本机登记时，中继侧已经撤了，不再去删、不记待清理。
+- `sources.remoteRemove`（§33.2）删一个本机已登记到的远程服务时，先按本节撤销（用的正是这一行的会话），再登出、删凭据、删行。
+- 审计 `cloud.revoke` 的详情加 `relayCleanup: "done" | "pending"`。服务器壳 CLI `cloud revoke` 撤销后读 `relayPending`，没删掉时如实输出「中继侧待清理」与码（JSON 输出的 `relayPending`）。
 
 ## 32. 隧道面：core 作为出站隧道客户端
 

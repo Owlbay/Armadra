@@ -106,3 +106,35 @@ describe("CloudStore", () => {
     expect(store.remoteFingerprint("https://relay.test")).toBe("d".repeat(64));
   });
 });
+
+describe("迁移 0041：中继侧待清理", () => {
+  it("只记在已撤销的行上，列出欠着的，再登记清空", () => {
+    store.put(row());
+    store.setRelayCleanup("https://relay.test", "source_unauthorized");
+    // 还有效的登记不记。
+    expect(store.relayPending()).toEqual([]);
+    expect(store.revoke("https://relay.test", 2_000)).toBe(true);
+    store.setRelayCleanup("https://relay.test", "source_unauthorized");
+    expect(store.relayPending()).toEqual([
+      {
+        issuer: "https://relay.test",
+        revokedAtMs: 2_000,
+        code: "source_unauthorized",
+      },
+    ]);
+    store.setRelayCleanup("https://relay.test", "");
+    expect(store.relayPending()).toEqual([]);
+    store.setRelayCleanup("https://relay.test", "source_unreachable");
+    store.put(row({ registeredAtMs: 3_000 }));
+    expect(store.relayPending()).toEqual([]);
+  });
+
+  it("列有长度约束", () => {
+    store.put(row({ revokedAtMs: 2_000 }));
+    expect(() =>
+      opened.database
+        .prepare("UPDATE cloud_registrations SET relay_cleanup = ?")
+        .run("x".repeat(65)),
+    ).toThrow();
+  });
+});

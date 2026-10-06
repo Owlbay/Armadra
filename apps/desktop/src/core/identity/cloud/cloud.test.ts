@@ -405,6 +405,108 @@ describe("撤销", () => {
     // 撤销之后可以再登记。
     expect((await register()).status).toBe(200);
   });
+
+  it("没挂删源那一步（没有远程服务会话）：本机照样撤销，记为中继侧待清理", async () => {
+    await register();
+    const revoked = await rpc("identity.cloud.revoke", { issuer: ISSUER });
+    expect(revoked.status, revoked.text).toBe(200);
+    expect(cloud.registered(ISSUER)).toBe(false);
+    const pending = await call(
+      "GET",
+      "/api/identity/cloud/relay-pending",
+      undefined,
+      asOwner(),
+    );
+    expect(pending.status, pending.text).toBe(200);
+    expect(pending.body).toEqual({
+      pending: [
+        {
+          issuer: ISSUER,
+          revokedAtMs: expect.any(Number),
+          code: "source_unauthorized",
+        },
+      ],
+    });
+    expect(
+      audits.find((event) => event.action === "cloud.revoke")?.detail,
+    ).toEqual({ issuer: ISSUER, relayCleanup: "pending" });
+  });
+
+  it("删源成功：中继侧不欠；失败记码，重试成功后清掉；不欠的重试 404", async () => {
+    await register();
+    const calls: [string, string][] = [];
+    let failWith: string | null = "source_unreachable";
+    cloud.attachRelayCleaner(async (issuer, sourceId) => {
+      calls.push([issuer, sourceId]);
+      if (failWith !== null) {
+        const { fail } = await import("../../http/errors");
+        throw fail(failWith as "source_unreachable", "x");
+      }
+    });
+    expect(
+      (await rpc("identity.cloud.revoke", { issuer: ISSUER })).status,
+    ).toBe(200);
+    expect(calls).toEqual([[ISSUER, store.hostId()]]);
+    expect((await rpc("identity.cloud.relayPending")).body.json).toEqual({
+      pending: [
+        {
+          issuer: ISSUER,
+          revokedAtMs: expect.any(Number),
+          code: "source_unreachable",
+        },
+      ],
+    });
+    failWith = "source_unauthorized";
+    const retry = await call(
+      "POST",
+      "/api/identity/cloud/relay-cleanup",
+      { issuer: ISSUER },
+      asOwner(),
+    );
+    expect(retry.body).toEqual({ pending: true, code: "source_unauthorized" });
+    failWith = null;
+    expect(
+      (await rpc("identity.cloud.relayCleanup", { issuer: ISSUER })).body.json,
+    ).toEqual({ pending: false, code: null });
+    expect((await rpc("identity.cloud.relayPending")).body.json).toEqual({
+      pending: [],
+    });
+    expect(
+      (await rpc("identity.cloud.relayCleanup", { issuer: ISSUER })).status,
+    ).toBe(404);
+    // 再登记、再撤销：这次一次删掉，不欠。
+    expect((await register()).status).toBe(200);
+    expect(
+      (await rpc("identity.cloud.revoke", { issuer: ISSUER })).status,
+    ).toBe(200);
+    expect((await rpc("identity.cloud.relayPending")).body.json).toEqual({
+      pending: [],
+    });
+  });
+
+  it("中继自己撤的（隧道收到 source_revoked）：不去删，也不欠", async () => {
+    await register();
+    const calls: string[] = [];
+    cloud.attachRelayCleaner(async (issuer) => {
+      calls.push(issuer);
+    });
+    await cloud.revoke({ issuer: ISSUER }, undefined, { relaySide: "revoked" });
+    expect(calls).toEqual([]);
+    expect(cloud.relayPending()).toEqual({ pending: [] });
+  });
+
+  it("待清理要 settings:read / settings:write：没有会话 401", async () => {
+    expect(
+      (await call("GET", "/api/identity/cloud/relay-pending")).status,
+    ).toBe(401);
+    expect(
+      (
+        await call("POST", "/api/identity/cloud/relay-cleanup", {
+          issuer: ISSUER,
+        })
+      ).status,
+    ).toBe(401);
+  });
 });
 
 describe("可信来源", () => {

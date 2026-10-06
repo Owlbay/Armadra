@@ -14,6 +14,11 @@ import {
 } from "../shared/ipc";
 import { dataDir } from "../shell-core/paths";
 import { PendingJoinLink, joinLinkFromArgv } from "../shell-core/join-link";
+import {
+  type SecondInstanceData,
+  instanceProfileDir,
+  joinLinkOfData,
+} from "../shell-core/single-instance";
 import { DEFAULT_DEV_RENDERER_URL } from "../shell-core/window-rules";
 import {
   APP_NAME,
@@ -104,6 +109,22 @@ import { versionLine } from "./version-flag";
   }
 }
 
+// 单实例锁，按数据目录分（`shell-core/single-instance.ts`）：profile 目录先定，
+// 锁跟着它。已经有一个壳开着同一份数据目录时，把深链交给它（`second-instance`）
+// 就走——Windows 与 Linux 上点 `armadra://join` 不再起第二个窗口。在任何服务、
+// 窗口与 Runtime 装配之前判，第二个实例什么都不碰。
+{
+  const profile = instanceProfileDir(process.argv, process.env);
+  if (profile !== null) app.setPath("userData", profile);
+  const handoff: SecondInstanceData = {
+    joinLink: joinLinkFromArgv(process.argv),
+  };
+  if (!app.requestSingleInstanceLock(handoff)) {
+    // 交接在上面那次调用里已同步送达；同步退出，后面的装配不运行。
+    process.exit(0);
+  }
+}
+
 /**
  * The application's assembly. Everything with a rule worth stating lives in
  * `shell-core/` (pure) or in a named module beside this one; this file is the
@@ -150,10 +171,12 @@ app.on("open-url", (event, url) => {
   event.preventDefault();
   receiveJoinLink(url);
 });
-// 只有拿了单实例锁才会触发；壳现在没拿（几份数据目录各起一个是常态），留着它
-// 让以后加锁时深链不必另接。
-app.on("second-instance", (_event, argv) => {
-  receiveJoinLink(joinLinkFromArgv(argv));
+// 同一份数据目录的第二个实例（Windows 与 Linux 上点深链）：深链优先取它交来的
+// 附加数据，没有再从它的 argv 找；只预填、不挂载。有没有深链都把窗口拿到前面。
+app.on("second-instance", (_event, argv, _cwd, data) => {
+  receiveJoinLink(joinLinkOfData(data) ?? joinLinkFromArgv(argv));
+  // 窗口还没建（启动途中）就不抢着建：页面载入后自己来取深链。
+  if (getMainWindow() !== null) revealWindow();
 });
 
 /* ------------------------------ the IPC table ----------------------------- */

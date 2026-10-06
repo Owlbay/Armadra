@@ -141,11 +141,12 @@ export function installRelay(
       onRevoked: () => {
         // 中继说登记已撤销：本机也撤（停隧道、记撤销时刻），之后它签的断言不再认。
         queueMicrotask(() => {
-          try {
-            cloud.revoke({ issuer });
-          } catch {
-            // 已经撤过了。
-          }
+          // 中继侧已经撤了，不必再去删它的源记录。
+          cloud
+            .revoke({ issuer }, undefined, { relaySide: "revoked" })
+            .catch(() => {
+              // 已经撤过了。
+            });
           context.log.warn("远程服务撤销了这台机器的登记，本机登记已同步撤销", {
             issuer,
           });

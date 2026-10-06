@@ -364,11 +364,16 @@ describe("本机登记到远程服务（契约 §31）", () => {
   it("registered 跟着登记表；删远程服务之前先撤销登记", async () => {
     const registered = new Set<string>();
     const revoked: string[] = [];
+    const removed: unknown[] = [];
     const cloud = {
       registered: (issuer: string) => registered.has(issuer),
-      revoke: ({ issuer }: { issuer: string }) => {
+      // 真的云登录域在撤销里用这份会话删中继侧的源记录（§31.4）：删远程服务时
+      // 它必须还在。
+      revoke: async ({ issuer }: { issuer: string }) => {
         revoked.push(issuer);
         registered.delete(issuer);
+        await service.removeRelaySource(issuer, RELAYED_ID);
+        removed.push(world.cloud.sources.map((one) => one.sourceId));
         return {};
       },
     };
@@ -391,7 +396,41 @@ describe("本机登记到远程服务（契约 §31）", () => {
     expect((await service.list()).remotes[0]?.registered).toBe(true);
     await service.remoteRemove(remote.serviceId);
     expect(revoked).toEqual([ISSUER]);
+    expect(removed).toEqual([[PEER_ID]]);
     expect((await service.list()).remotes).toEqual([]);
+  });
+
+  it("removeRelaySource：owner 会话删中继侧的源；中继上已经没有也算删掉", async () => {
+    await addRemote();
+    await service.removeRelaySource(ISSUER, RELAYED_ID);
+    expect(world.cloud.sources.map((one) => one.sourceId)).toEqual([PEER_ID]);
+    const deletes = world.requests.filter((one) => one.method === "DELETE");
+    expect(deletes.map((one) => one.url)).toEqual([
+      `${ISSUER}/v1/sources/${RELAYED_ID}`,
+    ]);
+    expect(deletes[0]?.headers?.authorization).toMatch(/^Bearer /);
+    await expect(
+      service.removeRelaySource(ISSUER, RELAYED_ID),
+    ).resolves.toBeUndefined();
+  });
+
+  it("removeRelaySource：没有远程服务、没有登录、连不上各答对应的码", async () => {
+    await expect(
+      service.removeRelaySource(ISSUER, RELAYED_ID),
+    ).rejects.toMatchObject({ code: "source_unauthorized" });
+    const { remote } = await addRemote();
+    await service.remoteLogout(remote.serviceId);
+    await expect(
+      service.removeRelaySource(ISSUER, RELAYED_ID),
+    ).rejects.toMatchObject({ code: "source_unauthorized" });
+    await service.remoteRemove(remote.serviceId);
+    await addRemote();
+    // 访问令牌缓存着，连不上发生在删除这一步。
+    world.down.add(ISSUER);
+    await expect(
+      service.removeRelaySource(ISSUER, RELAYED_ID),
+    ).rejects.toMatchObject({ code: "source_unreachable" });
+    expect(world.cloud.sources).toHaveLength(2);
   });
 
   it("没登记的远程服务：删的时候不碰登记", async () => {

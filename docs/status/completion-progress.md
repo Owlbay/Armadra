@@ -2421,3 +2421,33 @@
 - `status` 的 `paths` 收下但 core 从来不按它过滤（迁移前就如此），没有顺手改。
 - 探针在临时 HOME 下 `pnpm exec vite` 会先联网核对锁文件，本机断网时卡住；本地跑探针时加 `npm_config_verify_deps_before_run=false npm_config_minimum_release_age=0 npm_config_manage_package_manager_versions=false` 即可，探针本身未改。
 - `remote-e2e` 的 `08b-remote-acp`（ACP Agent 启动即退出）与 `server-e2e` 的「新建浏览器」菜单项等待超时失败，两处都不经过 git 面，与本包无关，未深究。
+
+## M1 收尾：单实例锁、撤销时删中继侧源记录、一次性邀请计数、spawn-helper 执行位
+
+做了什么：
+
+- **桌面壳单实例锁**（`shell-core/single-instance.ts`、`main/index.ts`）：锁按数据目录分。没指 `ARMADRA_DATA_DIR`（或指的就是默认那一份）时用 Electron 默认的 profile，已有用户的页面存储与浏览器分区不动；指了别的数据目录时 profile 放进 `<数据目录>/electron/`，锁跟着它走；命令行给了 `--user-data-dir`（探针都这样起）时不改。锁在任何装配之前取：同一份数据目录的第二个实例把深链经 `requestSingleInstanceLock` 的附加数据交给已开着的壳，然后同步退出。已开着的壳走 A4-3p 的 `onJoinLink`，只预填、不挂载，并把窗口拿到前面（启动途中窗口还没建时不抢着建，页面载入后自己来取）。
+- **撤销时删中继侧的源记录**（契约 §31.4 追加，迁移 `0041_cloud_relay_cleanup`）：`identity.cloud.revoke` 先在本机完成（停隧道、记撤销时刻），再经源表域挂上的删源步骤（`CloudService.attachRelayCleaner` ← `SourcesService.removeRelaySource`）用这个 issuer 远程服务的会话调 `DELETE <issuer>/v1/sources/{sourceId}`。中继上本来就没有算删掉了。没有远程服务行、没有保存的登录、会话失效或不是 owner 记 `source_unauthorized`，连不上记 `source_unreachable`，即「中继侧待清理」。新增 `identity.cloud.relayPending` / `relayCleanup`（旧路径 `GET /api/identity/cloud/relay-pending`、`POST …/relay-cleanup`）用来列出和重试；同一个 issuer 再登记时清空。隧道收到中继的 `source_revoked` 而撤销时不再去删。`sources.remoteRemove` 先 await 撤销（用的正是这一行的会话），再登出、删凭据、删行。审计 `cloud.revoke` 的详情加 `relayCleanup`。服务器壳 `cloud revoke` 没删掉时如实输出「中继侧待清理」与码。
+- **页面**：停用分享、移除远程服务之后，中继侧没删掉的按码提示原因；远程服务行上显示「中继侧待清理」徽标，菜单里可以「重试清理」；远程服务已删、中继侧还欠着的单独列一行。文案在 `i18n/remote.ts`，中英同步。
+- **一次性邀请计数**（V1 探针发现）：兑换时 `uses` 同步加一，并记进 `identity_invitation_uses`，与 `maxUses` 同一口径；撤销只收口，不算使用。
+- **node-pty `spawn-helper` 执行位**（V1 探针发现）：原来只有桌面 `pretest` 跑 `ensure-node-pty.mjs`。pnpm 不跑 node-pty 自己的安装脚本（`allowBuilds: false`），解包时又丢了执行位，所以新 worktree 里不经 `pretest` 直接起终端会报 `posix_spawnp failed`。新增 `--executable-only`：只 chmod，可重复执行，没装 node-pty 也不失败，只处理从 `apps/desktop` 解析到的那份。根 `postinstall` 与 `libs:build` 都会调它。服务器镜像用的 `--prebuilt` 语义不变，Linux 上仍编 Node-ABI。
+
+实测（macOS arm64，2026-10-06，基于 main 13f20c09，合入 5d4d74da 后重跑）：
+
+- `pnpm check` 通过；`pnpm libs:build && pnpm --filter @armadra/desktop test`（vitest 4956 过 / 67 跳，live 4 过，脚本 71 过 0 败）；`pnpm --filter @armadra/web test` 3700 过、`typecheck` 过；`pnpm --filter @armadra/server test` 98 过。
+- 新用例：`shell-core/single-instance.test.ts` 5；`cloud/store.test.ts` 补 2（0041 列、待清理只记在已撤销行、再登记清空、长度约束）；`cloud/cloud.test.ts` 补 4（没挂删源 → 待清理 `source_unauthorized`、失败记码 → 重试 → 清掉 → 不欠的 404、`relaySide: "revoked"` 不删、未登录 401）；`sources/service.test.ts` 补 2（owner 会话删源且带 Bearer、中继上已没有算删掉；没有远程服务 / 登出 / 连不上各答对应码），删远程服务那条改为撤销时会话仍在；`accounts.test.ts` 补 1；`scripts/ensure-node-pty.test.mjs` 3；服务器壳 `cloud.test.ts` 补待清理输出；页面 `remote-services.test.ts` 补 2、`RemoteServicesPage.test.tsx` 补 3。
+- V1 探针 `personal-roundtrip` 跟着改：第 7 步检查 core 撤销登记时是否已经删掉中继侧的源记录（经中继答 401 `relay_token_invalid`、`relay-pending` 为空、中继目录里没有这台源、断言答 410 `source_revoked`），不再由探针自己去删。一次性邀请兑换后要求 `uses` 为 1。合入 main 5d4d74da 后，`node tools/ci/e2e.mjs --tier a --only personal-roundtrip` 通过，耗时 118 s。
+- **单实例真跑**（开发构建 `apps/desktop/out`，真 Electron，临时 HOME 与数据目录）：A 以数据目录 A 开着；B 用同一数据目录、带 `armadra://join?…` 启动，173 ms 后退出码 0；A 打开「设置 → 远程服务 →通过链接加入」，链接已预填，没有自动挂载；C 用另一个数据目录启动后照常运行。两个数据目录下都生成了 `electron/` profile。
+- **撤销联调**（armadra-cloud main 5e9c0ac 的 `personal serve`，自选端口 8131、临时数据目录、自签 TLS，用完已停并删掉）：cloud 的 devstack 7 条全过。登记后中继目录里有这台 core；`revoke` 后目录里已经没有它，再取断言答 `source_revoked`，`relayPending` 为空。登出后撤销：本机完成、中继目录里还有它，`relayPending` 记 `source_unauthorized`；重新登录后 `relayCleanup` 答 `{ pending: false }`，目录里没有了。`remoteRemove` 连同中继侧一起撤。隧道与源表的 devstack 同轮 13 过 1 跳（重启那条要自己起中继）。隧道那条「本机撤销」经中继现在答 401（中继令牌随源一起作废），不再是 503。联调结束后用 owner 会话查中继目录，结果为空。
+
+接口：
+
+- core：`CloudService.attachRelayCleaner(fn)` / `relayPending()` / `relayCleanup({ issuer })`，`revoke(input, principalId?, { relaySide?: "revoked" })` 现在是异步的；`SourcesService.removeRelaySource(issuer, sourceId)`；`RemoteClient.revokeSource`。
+- 页面：`stopSharing(issuer)` 返回待清理的码，`null` 表示不欠；`relayPending()`、`retryRelayCleanup(issuer)`；`ShareDialog` 导出 `RELAY_PENDING_KEY`、`relayPendingReason`、`announceStopped`。
+
+偏离与没做：
+
+- `revoke` 的出参仍是协议包的 `{}`，`status` 也不改：契约测试要求它们与协议包是同一个 schema 对象。所以「待清理」用两条 Armadra 自己的 procedure 表达，没有塞进 `status`。
+- 迁移号取 0041（main 当时最大 0040）；合入前如果 main 有了 0041，需要改号并更新 `migrations.lock`。
+- 单实例只在开发构建上真跑；打包产物与 Windows / Linux 的深链启动没有实机验证（同一套 Electron API，CI 三平台跑单测）。
+- 远程服务删了之后还欠着的那条，要重新添加并登录这个远程服务才能重试；没有「放弃清理」的入口。

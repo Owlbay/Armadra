@@ -4,12 +4,18 @@
  */
 
 import type { CloudLoginResult, CloudLogin } from "./login";
-import { type CloudRelay, type CloudRegistry, IDLE_RELAY } from "./register";
+import {
+  type CloudRelay,
+  type CloudRegistry,
+  IDLE_RELAY,
+  type RelayCleaner,
+} from "./register";
 import type { SourceKey } from "./source-key";
 import type { CloudStore, RegistrationRow } from "./store";
 
 export class CloudService {
   private relay: CloudRelay = IDLE_RELAY;
+  private cleaner: RelayCleaner | undefined;
 
   constructor(
     private readonly store: CloudStore,
@@ -21,6 +27,19 @@ export class CloudService {
   /** 隧道（A3-2）装好之后挂上来；登记、撤销、状态从此经它。 */
   attachRelay(relay: CloudRelay): void {
     this.relay = relay;
+  }
+
+  /**
+   * 源表域（`sources/`）装好之后挂上：撤销时用远程服务 owner 的会话删中继侧的
+   * 源记录（契约 §31.4）。没挂时撤销照样完成，记为待清理。
+   */
+  attachRelayCleaner(cleaner: RelayCleaner): void {
+    this.cleaner = cleaner;
+  }
+
+  /** 当前挂着的删源那一步（没挂时 `undefined`）。 */
+  currentCleaner(): RelayCleaner | undefined {
+    return this.cleaner;
   }
 
   /** 当前挂着的隧道（没装时是空实现）。 */
@@ -50,8 +69,20 @@ export class CloudService {
     return this.registry.register(input, principalId, pinnedFingerprint);
   }
 
-  revoke(input: { issuer: string }, principalId?: string) {
-    return this.registry.revoke(input, principalId);
+  revoke(
+    input: { issuer: string },
+    principalId?: string,
+    options?: { relaySide?: "revoked" },
+  ) {
+    return this.registry.revoke(input, principalId, options);
+  }
+
+  relayPending() {
+    return this.registry.relayPending();
+  }
+
+  relayCleanup(input: { issuer: string }) {
+    return this.registry.relayCleanup(input);
   }
 
   status() {
