@@ -36,6 +36,7 @@ import {
   writeResult,
 } from "./ui-features/harness.mjs";
 import { probeSession } from "./probe-session.mjs";
+import { runDesktop } from "./relay-desktop.mjs";
 
 const cloudHome = process.env.ARMADRA_PERSONAL_RELAY_HOME?.trim() ?? "";
 const output = resolve(
@@ -579,6 +580,21 @@ try {
     recoveredMs,
   });
   await run.shot(page, "05-recovered-1440");
+
+  /* ---------------------- 4. 桌面壳经中继（--desktop） ---------------------- */
+  if (process.argv.includes("--desktop")) {
+    await page.close();
+    await local.close();
+    await runDesktop({
+      run,
+      issuer,
+      password,
+      fingerprint,
+      sourceId,
+      stack,
+      output,
+    });
+  }
 
   const problems = page.unexpected();
   report.consoleProblems = problems;
