@@ -753,8 +753,8 @@ try {
     );
     run.check(row, "core 的邀请列表里有这条邀请");
     run.check(
-      Number(row.uses) >= 1 || row.consumedAtMs > 0,
-      "访客兑换后邀请被计一次",
+      Number(row.uses) === 1 && row.consumedAtMs > 0,
+      "访客兑换后一次性邀请计一次（uses 加一、记消费时间）",
       { uses: row.uses, consumedAtMs: row.consumedAtMs },
     );
   });
