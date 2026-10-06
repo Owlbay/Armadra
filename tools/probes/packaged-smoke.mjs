@@ -1009,7 +1009,8 @@ async function main() {
 }
 
 /**
- * `Armadra serve --listen 127.0.0.1:0 --public-origin https://localhost`（A5-1）：
+ * `Armadra serve --listen 127.0.0.1:<空闲端口> --public-origin https://localhost`（A5-1；
+ * 给了 --public-origin 日志里就不再有真实端口，所以端口自己选）：
  * 只给命令行，不给 `--web-root`——包内的 `server/web` 与迁移目录由入口补上。
  * 等启动日志里的配对链接，取 `/health`（200，version = 工作区版本）与首页（200，
  * `apps/web` 的产物），再发 SIGTERM，要在限期内退出。
@@ -1019,6 +1020,7 @@ async function serveFromPackage(binary, launchEnv, home, scratch) {
     readFileSync(join(root, "package.json"), "utf8"),
   ).version;
   const serveData = join(scratch, "serve-data");
+  const listenPort = await freePort();
   mkdirSync(serveData, { recursive: true });
   const server = spawn(
     binary,
@@ -1027,7 +1029,7 @@ async function serveFromPackage(binary, launchEnv, home, scratch) {
       "--data-dir",
       serveData,
       "--listen",
-      "127.0.0.1:0",
+      `127.0.0.1:${listenPort}`,
       "--public-origin",
       "https://localhost",
     ],
@@ -1072,7 +1074,8 @@ async function serveFromPackage(binary, launchEnv, home, scratch) {
       pairing ? undefined : log.slice(-400),
     );
     if (!Array.isArray(pairing)) return;
-    const origin = new URL(pairing[1]).origin;
+    // 配对链接带的是 --public-origin（没有端口）；自己选的端口才是真正监听处。
+    const origin = `https://127.0.0.1:${listenPort}`;
     const health = await httpsText(new URL("/health", origin), {
       rejectUnauthorized: false,
     });
