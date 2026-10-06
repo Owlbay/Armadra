@@ -238,10 +238,12 @@ function viaRelay(
   path: string,
   body?: unknown,
   token: string | undefined = tunnelAccess,
+  extra: Record<string, string> = {},
 ): Promise<Answer> {
   return relayCall(method, `${relayBaseUrl}${path}`, {
     ...(body === undefined ? {} : { body }),
     headers: {
+      ...extra,
       origin: issuer,
       "armadra-relay-token": relayToken,
       ...(token === undefined || token === ""
@@ -439,10 +441,24 @@ describe.skipIf(!enabled)("个人中转联调：隧道（契约 §32）", () => 
     expect(login.status, login.text).toBe(200);
     expect(login.headers["set-cookie"]).toBeUndefined();
     const session = login.body.session as {
-      native?: { accessToken: string };
+      csrfToken: string;
+      native?: { accessToken: string; refreshToken: string };
     };
-    tunnelAccess = session.native?.accessToken ?? "";
+    expect(session.native?.accessToken).toBeTruthy();
+    // 刷新同样经中继（Bearer 带刷新令牌 + 会话的 CSRF 密钥），换来的新访问令牌照样能用。
+    const refreshed = await viaRelay(
+      "POST",
+      "/api/identity/session/refresh",
+      undefined,
+      session.native?.refreshToken ?? "",
+      { "x-armadra-csrf": session.csrfToken },
+    );
+    expect(refreshed.status, refreshed.text).toBe(200);
+    tunnelAccess =
+      (refreshed.body.native as { accessToken?: string } | undefined)
+        ?.accessToken ?? "";
     expect(tunnelAccess).not.toBe("");
+    expect(tunnelAccess).not.toBe(session.native?.accessToken);
     const workspaces = await viaRelay("GET", "/api/workspaces");
     expect(workspaces.status, workspaces.text).toBe(200);
     expect(JSON.stringify(workspaces.body)).toContain(workspaceId);
