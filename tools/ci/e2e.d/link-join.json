@@ -1,0 +1,9 @@
+{
+  "id": "link-join",
+  "tier": "a",
+  "script": "tools/probes/link-join.mjs",
+  "args": ["{out}"],
+  "requires": ["tmux", "chrome", "docker", "cloud"],
+  "platforms": ["darwin", "linux"],
+  "timeoutMinutes": 15
+}

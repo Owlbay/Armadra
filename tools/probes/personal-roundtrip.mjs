@@ -27,8 +27,7 @@
 //   node tools/probes/personal-roundtrip.mjs [输出目录]
 //
 // 产物默认在 target/personal-roundtrip/：result.json、每一步的截图与失败时的现场。
-import { spawn } from "node:child_process";
-import { X509Certificate, createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -36,14 +35,26 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { request as httpsRequest } from "node:https";
-import { createRequire } from "node:module";
 import { extname, join, resolve } from "node:path";
 
 import { CLOUD_ENTRY, findCloudSource } from "./cloud-source.mjs";
-import { isolatedEnv, probeHome } from "./probe-home.mjs";
+import {
+  buttonByText,
+  buttonExists,
+  caFingerprint,
+  clickText,
+  hasText,
+  launchElectron,
+  nodeAt,
+  ownerClient,
+  registerSource,
+  relayClient,
+  secretLedger,
+  spawnRelay as spawnRelayIn,
+  terminalInPage,
+  terminalRoundTrip,
+} from "./platform-lib.mjs";
 import { probeSession } from "./probe-session.mjs";
-import { attachRenderer } from "./relay-desktop.mjs";
 import {
   freePort,
   makeNode,
@@ -78,7 +89,7 @@ if (process.platform === "win32") {
   console.error("探针要私有通道（core-control.sock），Windows 上不跑");
   process.exit(2);
 }
-// 探针自己对中继的调用都带钉住的 CA（见 `relayRaw`）；不放宽进程的 TLS 校验，也不让
+// 探针自己对中继的调用都带钉住的 CA（见 `platform-lib.mjs` 的 `relayRaw`）；不放宽进程的 TLS 校验，也不让
 // 它漏进子进程。
 delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
 
@@ -89,21 +100,9 @@ let relay;
 let electron;
 const opened = [];
 
-/** 探针自己打印的行：最后和各进程日志一起扫秘密。 */
-const printed = [];
-for (const name of ["log", "error"]) {
-  const original = console[name].bind(console);
-  console[name] = (...args) => {
-    printed.push(args.map(String).join(" "));
-    original(...args);
-  };
-}
-/** 不许出现在任何日志里的东西。 */
-const secrets = new Map();
-const secret = (label, value) => {
-  if (typeof value === "string" && value.length >= 8) secrets.set(value, label);
-  return value;
-};
+/** 探针自己打印的行与登记过的秘密：最后和各进程日志一起扫。 */
+const ledger = secretLedger();
+const { secret } = ledger;
 
 /** 中继边缘按 IP 限流的窗口（`edge.connect.ip`：200 次 / 60 秒），留一点余量。 */
 const RATE_WINDOW_MS = 62_000;
@@ -117,85 +116,9 @@ const timed = async (name, work) => {
   }
 };
 
-/* ------------------------------ 对中继的调用 ------------------------------ */
-
-/** 钉着中继 CA 的 HTTPS 调用；答 `{ status, headers, body }`，不因状态码抛错。 */
-function relayRaw(issuer, ca, method, path, { body, token, headers } = {}) {
-  const url = new URL(path, issuer);
-  const payload = body === undefined ? undefined : JSON.stringify(body);
-  return new Promise((done, fail) => {
-    const request = httpsRequest(
-      {
-        host: url.hostname,
-        port: url.port,
-        path: url.pathname + url.search,
-        method,
-        ca,
-        headers: {
-          accept: "application/json",
-          ...(payload === undefined
-            ? {}
-            : {
-                "content-type": "application/json",
-                "content-length": Buffer.byteLength(payload),
-              }),
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
-          ...(headers ?? {}),
-        },
-        timeout: 15_000,
-      },
-      (response) => {
-        const chunks = [];
-        response.on("data", (chunk) => chunks.push(chunk));
-        response.on("end", () => {
-          const text = Buffer.concat(chunks).toString("utf8");
-          let parsed = text;
-          try {
-            parsed = text ? JSON.parse(text) : null;
-          } catch {
-            /* 不是 JSON：原文。 */
-          }
-          done({
-            status: response.statusCode ?? 0,
-            headers: response.headers,
-            body: parsed,
-          });
-        });
-        response.on("error", fail);
-      },
-    );
-    request.on("timeout", () => request.destroy(new Error("中继调用超时")));
-    request.on("error", fail);
-    request.end(payload);
-  });
-}
-
-const cliEnv = () => {
-  const env = { ...process.env };
-  delete env.NODE_TLS_REJECT_UNAUTHORIZED;
-  return env;
-};
-
-function spawnRelay(args, env = {}) {
-  const child = spawn(
-    process.execPath,
-    ["apps/relay/src/cli.ts", "personal", ...args],
-    {
-      cwd: cloudHome,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...cliEnv(), ...env },
-    },
-  );
-  let log = "";
-  const take = (chunk) => (log += chunk);
-  child.stdout.on("data", take);
-  child.stderr.on("data", take);
-  return { child, log: () => log };
-}
+const spawnRelay = (args, env) => spawnRelayIn(cloudHome, args, env);
 
 /* ------------------------------ 页面小工具 ------------------------------ */
-
-const nodeAt = (id) => `.react-flow__node[data-id="${id}"]`;
 
 const positionOf = (page, id) =>
   page.evaluate(`
@@ -224,74 +147,6 @@ const waitAt = (page, id, at, what) =>
      return m && Math.abs(Number(m[1]) - ${at.x}) < 2 && Math.abs(Number(m[2]) - ${at.y}) < 2;`,
     what,
     { timeout: 30_000 },
-  );
-
-async function terminalRoundTrip(page, id, tag) {
-  await page.until(
-    `return !!document.querySelector('${nodeAt(id)} .xterm')`,
-    "终端挂上 xterm",
-    { timeout: 60_000 },
-  );
-  await page.clickOn(
-    `return document.querySelector('${nodeAt(id)} .xterm-screen')`,
-    "终端画面",
-  );
-  await sleep(400);
-  await page.type(`echo $((40+2))${tag}`);
-  await page.key("Enter");
-  await page.until(
-    `return (document.querySelector('${nodeAt(id)} .xterm-rows')?.innerText ?? "").includes("42${tag}")`,
-    `终端回显 42${tag}`,
-    { timeout: 30_000 },
-  );
-}
-
-/** 点可见文字等于 `texts` 之一的按钮（取最后一个：对话框在 body 末尾）。 */
-const buttonByText = (texts, selector = "button") => `
-  const texts = ${JSON.stringify([texts].flat())};
-  return [...document.querySelectorAll(${JSON.stringify(selector)})]
-    .filter((n) => n.getClientRects().length > 0 && !n.disabled)
-    .filter((n) => texts.some((t) => (n.innerText ?? "").trim() === t || n.getAttribute("aria-label") === t))
-    .at(-1) ?? null;`;
-
-/** Electron 渲染页（`attachRenderer` 给的最小页面工具）里开终端并收发。 */
-async function terminalInPage(win, id, tag) {
-  await win.until(
-    `return !!document.querySelector('${nodeAt(id)} .xterm')`,
-    "打开链接的工作空间，终端挂上 xterm",
-    { timeout: 90_000 },
-  );
-  // 窗口在后台时 xterm 的输入框拿不到焦点：模拟焦点，再把输入框聚上。
-  await win.call("Emulation.setFocusEmulationEnabled", { enabled: true });
-  await win.clickOn(
-    `return document.querySelector('${nodeAt(id)} .xterm-screen')`,
-    "终端画面",
-  );
-  await win.until(
-    `const area = document.querySelector('${nodeAt(id)} .xterm-helper-textarea');
-     if (!area) return null;
-     area.focus();
-     return document.activeElement === area ? true : null;`,
-    "终端输入框获得焦点",
-    { timeout: 30_000 },
-  );
-  await win.type(`echo $((40+2))${tag}`);
-  await win.enter();
-  await win.until(
-    `return (document.querySelector('${nodeAt(id)} .xterm-rows')?.innerText ?? "").includes("42${tag}")`,
-    `终端回显 42${tag}`,
-    { timeout: 30_000 },
-  );
-}
-
-const buttonExists = (texts) =>
-  `return !!(() => { ${buttonByText(texts)} })();`;
-
-const hasText = (page, text, what, timeout = 30_000) =>
-  page.until(
-    `return document.body.innerText.includes(${JSON.stringify(text)}) ? true : null;`,
-    what,
-    { timeout },
   );
 
 /* --------------------------------- 主线 --------------------------------- */
@@ -370,23 +225,12 @@ try {
   );
 
   const caPem = readFileSync(join(relayData, "tls", "ca.crt"), "utf8");
-  const fingerprint = createHash("sha256")
-    .update(new X509Certificate(caPem).raw)
-    .digest("hex");
+  const fingerprint = caFingerprint(caPem);
   run.check(
     fingerprint === initFingerprint,
     "磁盘上的 CA 指纹与 init 打印的一致",
   );
-  const call = (method, path, options) =>
-    relayRaw(issuer, caPem, method, path, options);
-  const must = async (method, path, options) => {
-    const answer = await call(method, path, options);
-    if (answer.status >= 400)
-      throw new Error(
-        `${method} ${path} → ${answer.status} ${JSON.stringify(answer.body).slice(0, 200)}`,
-      );
-    return answer.body;
-  };
+  const { call, must } = relayClient(issuer, caPem);
 
   const startServe = () => {
     const serve = spawnRelay([
@@ -450,82 +294,28 @@ try {
     base: stack.origin,
   });
   secret("core 本机主人会话", session.headers.authorization.slice(7));
-  const owner = async (path, init = {}) => {
-    const answer = await session.fetch(path, {
-      ...init,
-      headers: { "content-type": "application/json", ...(init.headers ?? {}) },
-    });
-    const text = await answer.text();
-    if (!answer.ok)
-      throw new Error(
-        `${init.method ?? "GET"} ${path} → ${answer.status} ${text.slice(0, 300)}`,
-      );
-    return text ? JSON.parse(text) : null;
-  };
-  const rpc = async (procedure, input = {}) => {
-    const answer = await owner(`/api/rpc/${procedure.replaceAll(".", "/")}`, {
-      method: "POST",
-      body: JSON.stringify({ json: input }),
-    });
-    return answer.json ?? answer;
-  };
+  const { owner, rpc } = ownerClient(session);
 
-  const device = { platform: "desktop", name: "personal-roundtrip" };
-  const loginOwner = async () => {
-    const answer = await must("POST", "/v1/auth/login", {
-      body: { account: "dev", password, device },
-    });
-    return secret("中继访问令牌", answer.session.accessToken);
-  };
-  const remoteAdded = await rpc("sources.remoteAdd", {
-    kind: "personal",
-    issuer,
-    account: "dev",
-    password,
-    fingerprint,
-  });
-  run.check(
-    remoteAdded.remote?.serviceId,
-    "core 把个人中转登记为远程服务（钉 CA 指纹）",
-    remoteAdded.remote?.serviceId,
-  );
-  const cloudToken = await loginOwner();
-  const { registrationToken } = await must(
-    "POST",
-    "/v1/sources/registration-tokens",
-    { body: {}, token: cloudToken },
-  );
-  secret("注册令牌", registrationToken);
-  await owner("/api/identity/cloud/register", {
-    method: "POST",
-    body: JSON.stringify({
-      issuer,
-      registrationToken,
-      label: "roundtrip-host",
-    }),
-  });
-  const tunnel = async () => {
-    const status = await owner("/api/identity/cloud");
-    return {
-      sourceId: status.sourceId,
-      state: status.registrations?.[0]?.tunnel?.state ?? "none",
-      count: status.registrations?.length ?? 0,
-    };
-  };
   const registered = await timed("2-tunnel", () =>
-    until(
-      async () => {
-        const now = await tunnel();
-        return now.state === "ready" ? now : null;
-      },
-      "隧道连上",
-      { timeout: 30_000 },
-    ),
+    registerSource({
+      relay: { issuer, fingerprint, account: "dev", password, must },
+      core: { owner, rpc },
+      label: "roundtrip-host",
+      device: { platform: "desktop", name: "personal-roundtrip" },
+      onSecret: secret,
+    }),
   );
-  const sourceId = registered.sourceId;
+  const { device, serviceId, sourceId, cloudToken } = registered;
+  const tunnel = registered.tunnel;
+  const loginOwner = async () =>
+    secret("中继访问令牌", await registered.loginOwner());
+  run.check(
+    serviceId,
+    "core 把个人中转登记为远程服务（钉 CA 指纹）",
+    serviceId,
+  );
   run.ok("core 登记、隧道 ready", sourceId);
-  const listed = await must("GET", "/v1/me/sources", { token: cloudToken });
-  const sourceRow = (listed.sources ?? listed).find(
+  const sourceRow = (registered.listed.sources ?? registered.listed).find(
     (row) => row.sourceId === sourceId,
   );
   run.check(
@@ -533,14 +323,6 @@ try {
     "中继目录里有这台源且在线",
     sourceRow && { name: sourceRow.name, online: sourceRow.online },
   );
-  const bound = await must("POST", `/v1/sources/${sourceId}/assertion`, {
-    body: { device },
-    token: cloudToken,
-  });
-  await owner("/api/identity/cloud/bind", {
-    method: "POST",
-    body: JSON.stringify({ assertion: bound.assertion }),
-  });
   run.ok("中继账号绑定为这台 core 的主人");
 
   // 主人的画布：一张便签、一个终端。
@@ -762,55 +544,13 @@ try {
   /* --------------------------- 5. 桌面 Electron --------------------------- */
   const desktopShare = await newShare("guest-desktop");
   await timed("5-desktop", async () => {
-    const require = createRequire(join(root, "apps/desktop/package.json"));
-    const electronBinary = require("electron");
-    if (!existsSync(join(root, "apps/desktop/out/main/index.js")))
-      throw new Error("桌面壳未构建：apps/desktop/out/main/index.js");
-    const data = join(stack.scratch, "electron-data");
-    mkdirSync(data, { recursive: true });
-    const isolated = probeHome("armadra-roundtrip-desktop-");
-    const port = await freePort();
-    const app = spawn(
-      electronBinary,
-      [
-        join(root, "apps/desktop"),
-        `--remote-debugging-port=${port}`,
-        "--remote-allow-origins=*",
-        `--user-data-dir=${join(data, "electron")}`,
-        "--use-mock-keychain",
-      ],
-      {
-        env: isolatedEnv(isolated, {
-          ARMADRA_DATA_DIR: data,
-          ARMADRA_DESKTOP_OWNS_RUNTIME: "1",
-          ARMADRA_RUNTIME_PORT: String(await freePort()),
-          ARMADRA_SECRET_BACKEND: "file",
-          ARMADRA_NO_GLOBAL_WRITES: "1",
-          ARMADRA_LOG: "info",
-        }),
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    let log = "";
-    app.stdout.on("data", (chunk) => (log += chunk));
-    app.stderr.on("data", (chunk) => (log += chunk));
-    electron = {
-      log: () => log,
-      async stop() {
-        app.kill("SIGTERM");
-        for (let i = 0; i < 50 && app.exitCode === null; i += 1)
-          await sleep(100);
-        if (app.exitCode === null) app.kill("SIGKILL");
-        isolated.remove();
-      },
-    };
-    const win = await attachRenderer(port, () => log);
-    electron.page = win;
+    electron = await launchElectron({
+      scratch: stack.scratch,
+      tag: "roundtrip",
+    });
+    const win = electron.page;
     const click = (texts, what, selector) =>
-      win.clickOn(
-        buttonByText(texts, selector),
-        what ?? `点「${[texts].flat()[0]}」`,
-      );
+      clickText(win, texts, what, selector);
     const fill = (selector, value) =>
       win.until(
         `const el = document.querySelector(${JSON.stringify(selector)});
@@ -821,16 +561,6 @@ try {
          return true;`,
         `填 ${selector}`,
       );
-    await win.until(
-      `return !document.getElementById("splash-root") && document.readyState === "complete"`,
-      "桌面页面就绪",
-      { timeout: 60_000 },
-    );
-    await win.until(
-      `return window.armadra?.transport?.endpointsSync?.()?.httpBase ?? null;`,
-      "桌面壳报出 core 地址",
-      { timeout: 60_000 },
-    );
     // 粘贴链接：设置 → 远程服务 → 通过链接加入。
     await click(["设置", "Settings"], "设置");
     await click(
@@ -860,13 +590,7 @@ try {
     await terminalInPage(win, desktopShare.terminal.id, "desktop");
     run.ok("桌面粘贴链接挂载、打开工作空间、开终端并收发（42desktop）");
     await win.capture(join(output, "05-desktop-terminal.png"));
-    const desktopSession = await probeSession({
-      dataDir: data,
-      base: await win.evaluate(
-        `return window.armadra.transport.endpointsSync().httpBase;`,
-      ),
-    });
-    const sourcesAnswer = await desktopSession.fetch("/api/sources");
+    const sourcesAnswer = await electron.session.fetch("/api/sources");
     const sources = await sourcesAnswer.json();
     const mounted = (sources.sources ?? []).find(
       (row) => row.sourceId === sourceId,
@@ -881,9 +605,7 @@ try {
       "桌面页面无异常",
       win.problems.slice(0, 5),
     );
-    win.close();
     await electron.stop();
-    electron.stopped = true;
   });
 
   /* ------------------------- 6. 手机：390 宽、扫码 ------------------------- */
@@ -1148,15 +870,9 @@ try {
     relay: relay.log(),
     core: stack.coreLog(),
     electron: electron?.log() ?? "",
-    probe: printed.join("\n"),
+    probe: ledger.printed(),
   };
-  const leaks = [];
-  for (const [name, text] of Object.entries(logs))
-    for (const [value, label] of secrets)
-      if (text.includes(value)) leaks.push(`${name} 含 ${label}`);
-  // 链接片段（`<秘密>.<邀请令牌>`）的拼法本身也不该出现。
-  for (const [name, text] of Object.entries(logs))
-    if (/\/j\/[A-Za-z0-9_-]+#/.test(text)) leaks.push(`${name} 含带片段的链接`);
+  const leaks = ledger.scan(logs);
   run.check(
     leaks.length === 0,
     "中继、core、Electron 与探针的日志里没有口令、令牌与链接秘密",
@@ -1164,7 +880,7 @@ try {
       scanned: Object.fromEntries(
         Object.entries(logs).map(([k, v]) => [k, v.length]),
       ),
-      secrets: secrets.size,
+      secrets: ledger.secrets.size,
       leaks,
     },
   );

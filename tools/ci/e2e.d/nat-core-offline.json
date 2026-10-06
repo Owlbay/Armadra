@@ -1,0 +1,9 @@
+{
+  "id": "nat-core-offline",
+  "tier": "b",
+  "script": "tools/probes/nat-core-offline.mjs",
+  "args": ["{out}"],
+  "requires": ["tmux", "chrome", "docker", "cloud"],
+  "platforms": ["darwin", "linux"],
+  "timeoutMinutes": 20
+}
