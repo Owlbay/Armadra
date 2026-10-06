@@ -29,7 +29,6 @@ import type {
 const ISSUER = "https://relay.example";
 const SOURCE = "b".repeat(32);
 const OTHER = "c".repeat(32);
-const RELAY_BASE = `${ISSUER}/s/${SOURCE}`;
 
 class FakeSocket extends EventTarget {
   static made: FakeSocket[] = [];

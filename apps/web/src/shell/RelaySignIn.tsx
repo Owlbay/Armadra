@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { useT } from "../app/preferences-store";
+import { syncDocumentPreferences, useT } from "../app/preferences-store";
 import { RelayForm } from "../mobile/ConnectRelay";
 import type { CloudSource } from "../sources/cloud-client";
 import {
@@ -36,6 +36,8 @@ export function RelaySignIn({
 }: RelaySignInProps) {
   const t = useT();
   const errorId = React.useId();
+  // 画布（App）还没挂：主题、语言跟随系统与偏好由这一页先接上。
+  React.useEffect(() => syncDocumentPreferences(), []);
   const [hosts, setHosts] = React.useState<readonly CloudSource[] | null>(
     initialHosts ?? null,
   );
