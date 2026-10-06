@@ -54,7 +54,7 @@ export function ContextReadsBadge({
 
   const total = reads.data?.total ?? 0;
   if (reads.isError || total === 0) return null;
-  const recent = (reads.data?.recent ?? []).slice(0, RECENT_SHOWN);
+  const recent = (reads.data?.reads ?? []).slice(0, RECENT_SHOWN);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -93,12 +93,12 @@ export function ContextReadsBadge({
         ) : (
           <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
             {recent.map((entry) => (
-              <li
-                key={`${entry.readerNodeId}-${entry.atMs}`}
-                className="min-w-0 truncate"
-              >
+              <li key={entry.id} className="min-w-0 truncate">
                 {t("contextReads.entry", {
-                  name: entry.readerName ?? entry.readerNodeId,
+                  name:
+                    entry.readerTitle ??
+                    entry.readerHandle ??
+                    entry.readerNodeId,
                   verb: entry.verb,
                   bytes: formatBytes(entry.bytes),
                 })}
