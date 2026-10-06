@@ -46,6 +46,7 @@ import { appendEvent, catchUp, outboxReady, prune, watermark } from "./outbox";
  */
 export const EPHEMERAL_EVENTS: ReadonlySet<string> = new Set([
   "canvas.presence",
+  "cloud.tunnel",
 ]);
 
 /**

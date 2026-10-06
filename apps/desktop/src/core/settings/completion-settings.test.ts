@@ -125,6 +125,35 @@ describe("补全计划的设置键", () => {
     expect(settings.usage.claudeLocalWindow).toBe(false);
   });
 
+  it("cloud：隧道缺省开、不偏好节点，组织默认角色缺省不授予；坏值退回缺省", () => {
+    expect(normalize({}).cloud).toEqual({
+      relay: { enabled: true, preferredNode: "" },
+      orgDefaultRole: null,
+    });
+    expect(
+      completionSettings({
+        cloud: {
+          relay: { enabled: false, preferredNode: "eu" },
+          orgDefaultRole: "editor",
+        },
+      }).cloud,
+    ).toEqual({
+      relay: { enabled: false, preferredNode: "eu" },
+      orgDefaultRole: "editor",
+    });
+    expect(
+      normalize({
+        cloud: {
+          relay: { enabled: "yes", preferredNode: 3 },
+          orgDefaultRole: "owner",
+        },
+      }).cloud,
+    ).toEqual({
+      relay: { enabled: true, preferredNode: "" },
+      orgDefaultRole: null,
+    });
+  });
+
   it("状态徽标没写新键时沿用旧的 statusPage", () => {
     expect(
       completionSettings({ usage: { statusPage: false } }).usage.statusBadges,

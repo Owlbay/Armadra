@@ -59,6 +59,7 @@ import { install as installForge } from "./forge";
 import { install as installMail } from "./mail";
 import { install as installDiagnostics } from "./diagnostics";
 import { install as installSources } from "./sources";
+import { install as installRelay, relayDomain } from "./relay";
 
 /**
  * The core process.
@@ -217,6 +218,10 @@ export const DOMAINS: readonly ((context: CoreContext) => void)[] = [
   // 不依赖别的域，放在 hook 服务之前即可。
   installMail,
   installDiagnostics,
+  // 出站中继隧道（契约 §32）：隧道来的请求与 Gateway 交接进来的同样经全部路由，
+  // 所以在每个域之后。装配不联网，真正连中继在回环监听开始之后（`run` 的第 5 步
+  // 之后），而且不等。
+  installRelay,
   // The hook service publishes an endpoint file, and nothing may be advertised
   // before the domains that answer a hook report exist.
   installHooks,
@@ -324,6 +329,7 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
   // the one this core stops.
   const language = languageDomain();
   const realtime = realtimeDomain();
+  const relay = relayDomain();
 
   // Step 3.
   const listeners: { server: Server; spec: ListenSpec }[] = [];
@@ -365,6 +371,12 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
       await gatewayDomainOf(server)?.close();
     } catch (error) {
       log.warn("could not stop the gateway", { error: describe(error) });
+    }
+    // 出站隧道同理：断掉它，经它进来的流随之结束。
+    try {
+      relay?.close();
+    } catch (error) {
+      log.warn("could not stop the relay tunnels", { error: describe(error) });
     }
     await server.close();
     // 实时板：活动文档物化、写快照。更新早已逐条落库，这一步只是让表与快照
@@ -416,6 +428,13 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
   for (const spec of bound)
     log.info("Armadra core is listening", { spec: formatListenSpec(spec) });
   bus.emit("runtime.hello", { instanceId: instanceId(), version: VERSION });
+  // 出站隧道在回环监听之后起，不等：中继不可达、隧道失败都只进隧道自己的状态，
+  // 不拖住启动，也不影响回环 API（契约 §32 的旁路保证）。
+  try {
+    relay?.startAll();
+  } catch (error) {
+    log.warn("could not start the relay tunnels", { error: describe(error) });
+  }
 
   return {
     ...context,

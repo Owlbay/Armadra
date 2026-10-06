@@ -214,6 +214,10 @@ export function installIdentity(context: CoreContext): void {
     security,
     capabilities: () => http.capabilities(),
     coreVersion: VERSION,
+    // 设置 `cloud.orgDefaultRole`（A3-2）：每次现读，缺省 `null` = 不授予。
+    orgDefaultRole: () =>
+      completionSettings(settingsDomain()?.settings.snapshot() ?? {}).cloud
+        .orgDefaultRole,
   });
 
   context.server.raw(API_PREFIX, (request, response, cors) =>
