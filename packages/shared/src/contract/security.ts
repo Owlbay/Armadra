@@ -29,6 +29,13 @@ import { meta, oc } from "./meta.js";
 
 const denied = errors.pick("unauthenticated", "forbidden");
 const throttled = errors.pick("rate_limited", "account_locked");
+/** passkey 在这个来源上用不了（契约 §18.2）。 */
+const rpRefused = errors.pick(
+  "passkey_unavailable_on_ip_host",
+  "passkey_rp_id_mismatch",
+);
+/** 第二因素的码不对、密钥读不出（契约 §18.3）。 */
+const codeRefused = errors.pick("mfa_invalid_code", "mfa_secret_unavailable");
 
 const section = (
   scope: "identity:read" | "identity:manage",
@@ -96,7 +103,7 @@ export const security = {
     registerOptions: oc
       .input(z.object({ label: z.string().optional() }).optional())
       .output(passkeyOptionsWireSchema)
-      .errors({ ...denied, ...errors.pick("bad_request") })
+      .errors({ ...denied, ...rpRefused, ...errors.pick("bad_request") })
       .meta(
         section(
           "identity:manage",
@@ -113,7 +120,16 @@ export const security = {
         }),
       )
       .output(passkeySchema)
-      .errors({ ...denied, ...errors.pick("bad_request", "conflict") })
+      .errors({
+        ...denied,
+        ...rpRefused,
+        ...errors.pick(
+          "bad_request",
+          "conflict",
+          "passkey_challenge_expired",
+          "passkey_verification_failed",
+        ),
+      })
       .meta(
         section(
           "identity:manage",
@@ -157,7 +173,14 @@ export const security = {
     enroll: oc
       .input(none)
       .output(totpEnrollmentSchema)
-      .errors({ ...denied, ...errors.pick("conflict") })
+      .errors({
+        ...denied,
+        ...errors.pick(
+          "conflict",
+          "mfa_already_enrolled",
+          "mfa_secret_unavailable",
+        ),
+      })
       .meta(
         section("identity:manage", "POST", "/api/identity/mfa/totp/enroll"),
       ),
@@ -165,7 +188,11 @@ export const security = {
     confirm: oc
       .input(codeInput)
       .output(recoveryCodes)
-      .errors({ ...denied, ...errors.pick("bad_request", "conflict") })
+      .errors({
+        ...denied,
+        ...codeRefused,
+        ...errors.pick("bad_request", "conflict", "mfa_already_enrolled"),
+      })
       .meta(
         section("identity:manage", "POST", "/api/identity/mfa/totp/confirm"),
       ),
@@ -173,12 +200,22 @@ export const security = {
     disable: oc
       .input(codeInput)
       .output(z.object({ disabled: z.literal(true) }))
-      .errors({ ...denied, ...throttled, ...errors.pick("bad_request") })
+      .errors({
+        ...denied,
+        ...throttled,
+        ...codeRefused,
+        ...errors.pick("bad_request"),
+      })
       .meta(section("identity:manage", "POST", "/api/identity/mfa/disable")),
     regenerateRecoveryCodes: oc
       .input(codeInput)
       .output(recoveryCodes)
-      .errors({ ...denied, ...throttled, ...errors.pick("bad_request") })
+      .errors({
+        ...denied,
+        ...throttled,
+        ...codeRefused,
+        ...errors.pick("bad_request"),
+      })
       .meta(
         section("identity:manage", "POST", "/api/identity/mfa/recovery-codes"),
       ),

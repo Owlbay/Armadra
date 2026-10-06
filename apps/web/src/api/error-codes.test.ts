@@ -85,6 +85,41 @@ function scanGatewayErrors(source: string, file = "sample.ts"): Found[] {
   ].map((m) => ({ code: m[1]!, file }));
 }
 
+/**
+ * 身份扩展的具名拒绝（契约 §18：`password_*`、`passkey_*`、`mfa_*`、`oauth_*`）：
+ * 码常由变量或三元式给出（口令策略的第一条不过的规则、OAuth 的回调），所以只在
+ * `identity/` 下按字符串字面量数「这个码还在被用」。状态由
+ * {@link scanIdentityRefusals} 在写成字面量的那几处核对。
+ */
+function scanNamedIdentityCodes(source: string, file = "sample.ts"): Found[] {
+  if (!file.startsWith("identity/")) return [];
+  return [
+    ...stripComments(source).matchAll(
+      /"((?:password|passkey|mfa|oauth)_[a-z0-9]+(?:_[a-z0-9]+)*)"/g,
+    ),
+  ].map((m) => ({ code: m[1]!, file }));
+}
+
+/**
+ * `new IdentityRefusal("invalid", 400, "passkey_rp_id_mismatch", …)` 与
+ * `new OAuthError("oauth_denied", "…", 403)`：状态与码都是字面量的身份域拒绝。
+ */
+function scanIdentityRefusals(source: string, file = "sample.ts"): Found[] {
+  const text = stripComments(source);
+  return [
+    ...[
+      ...text.matchAll(
+        /new IdentityRefusal\(\s*"[a-zA-Z]+"\s*,\s*(\d{3})\s*,\s*"([a-z0-9_]+)"/g,
+      ),
+    ].map((m) => ({ code: m[2]!, status: Number(m[1]), file })),
+    ...[
+      ...text.matchAll(
+        /new OAuthError\(\s*"([a-z0-9_]+)"\s*,\s*(?:"[^"\n]*"|`[^`\n]*`)\s*,\s*(\d{3})\s*,?\s*\)/g,
+      ),
+    ].map((m) => ({ code: m[1]!, status: Number(m[2]), file })),
+  ];
+}
+
 /** `code: "NOT_FOUND"`：大写拼法的存量（身份域、GitHub 面）。 */
 function scanUpperCodes(source: string, file = "sample.ts"): Found[] {
   return [
@@ -151,11 +186,37 @@ describe("错误码注册表", () => {
         ...scanCore(scanFails),
         ...scanCore(scanDomainErrors),
         ...scanCore(scanGatewayErrors),
+        ...scanCore(scanNamedIdentityCodes),
       ].map((entry) => entry.code),
     );
     expect(Object.keys(ERROR_CODES).filter((code) => !used.has(code))).toEqual(
       [],
     );
+  });
+
+  it("域里抛的拒绝（DomainError、身份域）用了登记过的码时，状态与注册表一致", () => {
+    const found = [
+      ...scanCore(scanDomainErrors),
+      ...scanCore(scanIdentityRefusals),
+    ];
+    expect(found.length).toBeGreaterThan(10);
+    const problems = found.flatMap(({ code, status, file }) => {
+      if (!isRegisteredErrorCode(code)) return [];
+      const registered = ERROR_CODES[code].status;
+      return registered === status
+        ? []
+        : [`${file}: ${code} 登记为 ${registered}，这里是 ${status}`];
+    });
+    expect(problems).toEqual([]);
+  });
+
+  it("§18 的具名拒绝都登记了", () => {
+    const found = scanCore(scanNamedIdentityCodes);
+    expect(found.length).toBeGreaterThan(20);
+    const problems = found.flatMap(({ code, file }) =>
+      isRegisteredErrorCode(code) ? [] : [`${file}: 未登记的码 ${code}`],
+    );
+    expect(problems).toEqual([]);
   });
 
   it("大写拼法只许是存量名单里的，且名单里的都还在用", () => {
@@ -196,6 +257,32 @@ describe("扫描器真的扫得到", () => {
     ).toEqual(["not_found"]);
     // 别处同名的局部函数不算。
     expect(scanFails('function fail(c) {}\nfail("oauth_x")')).toEqual([]);
+  });
+
+  it("抓得到身份域的具名码与它的状态", () => {
+    expect(
+      scanNamedIdentityCodes(
+        'return "password_too_short"; const x = "not_a_code";',
+        "identity/policy.ts",
+      ).map((entry) => entry.code),
+    ).toEqual(["password_too_short"]);
+    // 只扫身份域。
+    expect(scanNamedIdentityCodes('"mfa_x"', "files/routes.ts")).toEqual([]);
+    expect(
+      scanIdentityRefusals(
+        `new IdentityRefusal("invalid", 400, "passkey_x", "m");
+         throw new OAuthError("oauth_y", \`t \${a}\`, 502);
+         throw new OAuthError(
+           "oauth_z",
+           "m",
+           404,
+         );`,
+      ).map((entry) => [entry.code, entry.status]),
+    ).toEqual([
+      ["passkey_x", 400],
+      ["oauth_y", 502],
+      ["oauth_z", 404],
+    ]);
   });
 
   it("注释里的例子不算", () => {
