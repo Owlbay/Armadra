@@ -12,7 +12,7 @@
 | B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`server-e2e --proxy=caddy`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                              | `nightly.yml`                       | 开 issue     |
 | C   | `agent-e2e`（真 CLI 与额度，`ARMADRA_E2E_REAL=1`，见「C 档运行手册」）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                                                                      | 手动；清单在执行计划 §5             | 记进状态文档 |
 
-其余脚本（`browser-cdp`、`git-tool-window`、`forge-panel`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`）是单项核验，本地按需手动跑；`relay-web-e2e` 要 armadra-cloud 的检出，也是本地手动跑（见「中继托管页面端到端」）。
+其余脚本（`browser-cdp`、`git-tool-window`、`forge-panel`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`、`language-load`）是单项核验，本地按需手动跑；`relay-web-e2e` 要 armadra-cloud 的检出，也是本地手动跑（见「中继托管页面端到端」）。
 
 探针起的 core、服务器壳、桌面壳一律用临时 HOME（`probe-home.mjs`：HOME、XDG、各 CLI 配置目录与 git 全局配置都指进 mktemp 目录，并去掉指向真实账号的凭据变量），不读写操作员自己的 HOME。新写的探针也照此办；Vite / pnpm 这类工具链进程不在此列。
 
@@ -367,6 +367,17 @@ node tools/probes/server-perf.mjs [输出目录] [--cpu-prof 目录] [--no-basel
 ```
 
 产物 `result.json` 与 `table.md`。与 `server-perf-baseline.json` 里这台平台的基线比，差 20% 以上且超过该项绝对容差即失败；没有这台平台的基线时只报告。`--cpu-prof` 让服务器壳退出时写 `.cpuprofile`，找热点用。数字与解读见 [服务端性能基线](../../docs/status/server-performance-baseline.md)。
+
+## 语言会话负载基线
+
+`language-load.mjs`（工程规范化 E3-9，契约 §35.6）：临时数据目录与临时 HOME 的裸 core，语言服务器是 `mock-lsp.mjs` 按 TypeScript 服务器体积塑形（补全 1200 项、成员补全 80 项、悬停 2 KiB、每次诊断 25 条），装了 clangd 时再跑一遍真服务器。客户端按页面 CodeMirror 语言客户端的节奏打字：`editor` 档 1 个编辑器 8 字 / 秒、词首与 `.` 后请求补全；`stress` 档 3 个编辑器各 15 字 / 秒、每个字符都发 `didChange` 与补全。
+
+```sh
+pnpm libs:build && pnpm --filter @armadra/desktop build
+node tools/probes/language-load.mjs [--seconds=15] [--phases=ABCD] [--no-clangd] [--relay] [--check] [--link-kib=1024] [--link-delay=20] [输出目录]
+```
+
+四段：A 语言流本身（每秒帧数、单帧 p50 / p95 / max、100 ms 与 1 s 突发峰值、补全往返）；B 回环上与控制面事件流混跑；C 本机塑形代理模拟共享瓶颈（缺省 1 MiB/s、单程 20 ms），`fair` 是独立连接、`fifo` 是并进一条连接，比 `board.changed` 的延迟；D（`--relay`，要 armadra-cloud 的检出）经真个人中转，再加一段中继 + 瓶颈。`--check` 把 mock 档的下行单帧体积与 `language-load-baseline.json` 比，偏离 20% 以上失败；延迟随机器变，只记在基线的 `reference` 里。纯函数在 `language-load-lib.mjs`，测试 `language-load.test.mjs` 在 `pnpm release:test` 里。产物默认在 `target/language-load/result.json`。
 
 ## 远端执行主机端到端（假 ssh）
 
