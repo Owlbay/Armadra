@@ -2286,3 +2286,49 @@
 - 中继自己停掉时页面没有专门的提示（`me.stream` 也断了，收不到下线），通知条是实时板的「离线编辑」与运行时断开；中继回来后由流重开时的那次叫醒恢复。
 - 规格只写了 `connection.ts` / `remote-stream.ts`；为了手机与网页共用，另抽了 `relay-access.ts`、`route-entry.ts`、`hosted.ts`，并动了 core 的隧道准入（同源 GET 无 `Origin` 原来进不来，见上）。
 - 手机的钥匙串会话形状没有 CSRF 字段：经中继的轮换照旧被拒、退回断言重登（与 A1-5 行为相同）。
+
+## A4-3p 个人中转的链接加入与扫码挂载
+
+设计：[客户端包](../design/platform/client-packages.md) §6（只做个人中转，组织页不做）、总计划 §12；契约 §33.7。
+
+做了什么：
+
+- **共享层**：分享链接的解析从 `mobile/join-link.ts` 搬到 `@armadra/shared` 的 `join-link`（网页链接 `<issuer>/j/<linkId>#<秘密>.<邀请令牌>` 与 `armadra://join`，片段按第一个点切；`joinDeepLink` 写回深链），页面、手机与 core 认同一种拼法。
+- **core（契约 §33.7 追加 `sources.mountByLink`）**：解析链接 → 签发方没登记过、系统又不信任它的证书时，与 §33.6 同样答 `fingerprint_mismatch` + `details.fingerprint` → 匿名 `links.accept` → 经 `relayBaseUrl` 调 `cloud/login`（断言 + 邀请令牌）→ 存源的刷新令牌，建或合并 `relayed` 行；签发方没有登录着的一行时，建（或补）一行访客远程服务（`accountHint` 为空，凭据是访客的刷新令牌）。已经用账号登录着的不动，访客会话尽力登出。远程服务的拒绝 `link_invalid / link_expired / link_exhausted / link_secret_invalid / rate_limited` 与源的拒绝 `invitation_invalid / cloud_not_registered / source_offline` 按码透传；注册表加 `link_expired`、`link_exhausted`（410）、`link_secret_invalid`（403）。旧路径是 `POST /api/sources/join`。
+- **桌面壳**：接住 `armadra://join`——macOS 走 `open-url`，Windows 与 Linux 从启动参数里取，`shell-core/join-link.ts` 只认形状。新增 IPC：`app:join-link` 只是提醒，页面经 `app:take-join-link` 取走（只取一次）。`electron-builder.yml` 加 `protocols`，在安装时登记 URL 协议；运行时不调用 `setAsDefaultProtocolClient`。
+- **页面（桌面与服务器壳）**：设置 → 远程服务 →「通过链接加入」对话框，复用指纹核对。深链与 `#join=<链接>` 会打开这一页并预填，人点「加入」才挂载。挂载成功后先记下要打开的源（`sources/join-intent.ts`，存在 sessionStorage，因为壳可能为放行新来源而重载页面），再按 A1-4 的三步收尾；`app/joined-source.tsx` 等那个源列出工作空间后切过去、打开、关掉设置。访客那一行远程服务不给「分享本机」。
+- **页面（远程服务托管的 `/j/<linkId>`）**：`shell/JoinPage.tsx`。片段读进内存后立即从地址栏抹掉；`links.get` 显示源、权限与有效期；「加入」走 A3-4 托管中继新加的 `HostedRelay.join`：访客会话进内存保管处 → 带邀请令牌 `cloud/login` → 同 `enter` 装成本机源 → 地址换成 `/app/`，就地进画布并打开工作空间。「在 Armadra 中打开」给出同一条链接的深链。入口 `prepareEntry` 在普通浏览器里认 `/j/<linkId>`。
+- **手机**：A1-5 的扫码 / 深链加入在失败时按码分开说明（过期、已停用、用尽、不完整、邀请被拒、钉扎时指纹不符），文案与桌面同一套 `error.*`；加入后重载进画布，并打开链接指向的工作空间。连接页与落地页在画布挂上之前就把明暗主题与语言写到文档上（原来总是深色）。
+- 文案：新增 `i18n/links.ts`，`errors.ts` 加 `error.link*`，中英同步。
+
+实测（macOS arm64，2026-10-06，合入 main cde88088（含 #145 A4-1、#146 E2、#147 E3-2、#148 A3-4）后重跑）：
+
+- `pnpm check` 通过（lint 0 error、285 warn，与 main 相同）；`pnpm --filter @armadra/web test` 3685 过（396 个文件），`typecheck` 通过；`pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 4905 过 / 65 跳过；另有 2 条在整套负载下超时（`git/message.test` 的 provider 探测、`hibernator.pty.test` 的退出等待），与本包无关，单独重跑 22 条全过。live 4 过，脚本 68 过 / 2 跳过。`pnpm --filter @armadra/server test` 98 过 / 4 跳过；`pnpm --filter @armadra/shared test` 362 过。
+- 新增用例：core `service.test.ts` 补 5 条（accept → cloud/login 带邀请令牌 → 访客远程服务与 relayed 行、秘密与邀请令牌不进 SecretStore / 日志 / 答案、深链、已登录账号时沿用、过期 / 用尽 / 撤销 / 秘密不对、指纹不符 / 邀请被拒 / 不是链接 / 链到本机）；壳 `shell-core/join-link.test.ts` 3 条；`shared/ipc.test.ts` 同步；shared `join-link.test.ts`（搬来并加 `joinDeepLink`）；页面 `JoinPage.test.tsx` 4 条、`sources/hosted.test.ts` 补 2 条（访客加入、过期）、`RemoteServicesPage.test.tsx` 补 4 条、`use-link-fragments.test.tsx` 补 3 条、`joined-source.test.tsx` 2 条、`entry.test.ts` 补 1 条、`connect.test.ts` 补失败码。
+- **端到端**（真个人中转：armadra-cloud main 5e9c0ac，自选端口、临时数据目录、自签 TLS，托管本分支的 `apps/web` 构建；裸 core A 分享本机并为每个访客建一个带终端节点的工作空间与分享链接；全部用完即停）：
+  - 浏览器（无头 Chrome）：打开 `/j/<id>#…`，片段被抹掉，落地页显示源、权限与有效期 →「加入」→ 进到 `/app/`，链接指向的工作空间自动打开，终端经中继收发 `echo`；控制台无错误。过期的链接提示「链接已过期」；撤销的链接一打开落地页就提示「链接已停用或不存在」。
+  - 桌面（真 Electron，另一份数据目录与临时 HOME）：以 `armadra://join?…` 作启动参数 → 远程服务页「通过链接加入」已预填、没有自动挂载 → 加入 → 核对的指纹与中继 CA 一致 → 挂载 → 壳放行新来源后重载 → 自动打开工作空间，终端经中继收发 `echo`。粘贴过期与撤销的链接分别提示对应文案；渲染页无控制台错误。
+  - 手机（模拟器起不来）：在 Chrome 里用 390 宽模拟，页面来源用 CDP 拦截成原生 App 的 `https://localhost` 并从构建产物应答，原生桥用假的 `Capacitor.Plugins.ArmadraNative` 替身（钥匙串存在页面存储里，扫码结果注入）。流程：连接页「扫码」→ 核对指纹 → 信任 → 挂载（会话进替身钥匙串）→ 重载进画布、打开工作空间，终端经中继收发 `echo`；扫到过期的分享码提示「链接已过期」。
+  - 截图：390 / 1440 宽、明暗两主题的落地页，以及画布、过期、撤销、桌面预填、指纹核对、手机连接页等，见 PR 正文与本地 `target/a4-3p-e2e/out/`（不提交）。
+
+接口：
+
+- core：`sources.mountByLink { url, fingerprint?, label? }` → `ClientSource`（§33.7），页面侧是 `api/remote-services.ts::mountSourceByLink`，答 `{ kind: "confirm", fingerprint }` 或 `{ kind: "done", value }`。
+- 页面：`sources/join-intent.ts` 的 `offerJoinLink(url)`（打开到远程服务页并预填）和 `openAfterJoin(sourceId)`（挂载后打开这个源的工作空间，能跨一次重载；手机与托管页面传 `"local"`）。
+- 托管中继：`HostedRelay.join({ linkId, secret, invitationToken })` 返回 `sourceId`。
+- 桌面壳：`window.armadra.sources.takeJoinLink()` / `onJoinLink(listener)`。
+- 共享层：`parseJoinLink` / `isJoinLink` / `issuerOrigin` / `joinDeepLink`。
+
+没做 / 偏离规格：
+
+- 组织页（`OrganizationsPage`）与 saas 的登录后加入不做（总计划 §12）。`mountByLink` 遇到 saas 签发方答 501。
+- 落地页没有按规格另走 `SourceRegistry.add(relayed)`：托管页面背后没有本机 core，所以与 A3-4 一样把那台主机装成本机源，凭据只在内存，刷新页面后要从链接重新加入。
+- 桌面收到深链时只预填、不自动挂载：系统级深链任何网页都能触发，要人点一下。手机沿用 A1-5 的做法，扫码即挂。
+- 桌面壳没有拿单实例锁（多份数据目录各起一个实例是常态），所以 Windows 与 Linux 上应用已开着时，再来的深链会起第二个实例；`second-instance` 的处理已接好，加锁后即生效。
+- `link_invalid` 沿用注册表里邮件域原有的 409（协议包是 404）；页面只按码取文案，不受影响。
+- 一个签发方只有一行远程服务：已经用账号登录着时沿用账号会话，访客会话随即登出。若那一行没有登录，访客的凭据会写进它，`accountHint` 也会被清空。
+- 联调中发现两处问题，都已由 A3-4 与 cloud#6 修好；本包最后一轮端到端对真中继跑，没有任何模拟：
+  1. 中继对 `/s/` 的预检也要求中继令牌；
+  2. 桌面页面来源不被分享方信任。
+     另有一处隧道准入问题（中继同源页面的 GET 不带 `Origin`），本包与 A3-4 修法相同，合并时以 main 为准。
+- 用 `armadra-server invite --cloud-link` 生成的链接没有单独跑；它产出的链接拼法与 A1-4 的相同，`mountByLink` 和落地页都认。
