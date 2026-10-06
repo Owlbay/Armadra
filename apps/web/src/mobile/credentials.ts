@@ -18,7 +18,7 @@ import {
   thisDevice,
 } from "../sources/cloud-client";
 import { type RelayVault, createRelayedAccess } from "../sources/relay-access";
-import { loadConnections } from "./connections";
+import { loadConnections, remoteSlotOf } from "./connections";
 import {
   type NativeBridge,
   type StoredSession,
@@ -43,19 +43,45 @@ export interface MobileCredentialDeps {
   readonly bridge: NativeBridge;
   /** 源表里的描述（直连地址、签发方）。 */
   readonly describe: (sourceId: string) => SourceDescriptor | undefined;
+  /**
+   * 这个源用钥匙串里哪一份远程服务登录（{@link serviceIdOf}）；`null` = 早先
+   * 没记过，落回签发方的单槽。缺省读连接表旁的记录（`connections.ts`）。
+   */
+  readonly slotOf?: (sourceId: string) => string | null;
+  /** 连接表（给 `me.stream` 选用哪一份登录）。缺省读本地存储。 */
+  readonly connections?: () => readonly SourceDescriptor[];
   readonly cloud?: CloudOptions;
   readonly now?: () => number;
 }
 
-/** 远程服务在钥匙串里的键：同一个签发方一份。 */
-export function serviceIdOf(issuer: string): string {
+/** 访客主体：按它经分享链接加入的那台源区分（一条链接一个访客会话）。 */
+export function guestPrincipal(sourceId: string): string {
+  return `guest.${sourceId}`;
+}
+
+/**
+ * 远程服务在钥匙串里的键。同一个签发方下按主体分槽：主人按账号
+ * （`personal:<host>:<账号>`），访客按 {@link guestPrincipal}——访客链接加入时
+ * 不再覆盖主人的登录（A1-5 留下的问题）。不给主体是早先的单槽
+ * `personal:<host>`：旧连接没有槽的记录，照旧读它，数据不搬不丢。
+ *
+ * 键只用钥匙串认的字符（`[A-Za-z0-9._:-]`，≤ 128），主体里别的字符换成 `_`。
+ */
+export function serviceIdOf(issuer: string, principal?: string): string {
   let host = issuer;
   try {
     host = new URL(issuer).host;
   } catch {
     /* 不是地址就原样当键。 */
   }
-  return `personal:${host}`;
+  const base = `personal:${host}`;
+  if (principal === undefined || principal === "") return base;
+  return `${base}:${principal.replace(/[^A-Za-z0-9._-]/g, "_")}`.slice(0, 128);
+}
+
+/** 这一槽是不是访客的。 */
+export function isGuestSlot(serviceId: string): boolean {
+  return /:guest\.[^:]*$/.test(serviceId);
 }
 
 export function originOf(base: string): string {
@@ -84,20 +110,27 @@ export function createMobileCredentialProvider(
   const fresh = (session: StoredSession) =>
     session.expiresAtMs === 0 ||
     session.expiresAtMs - now() > ACCESS_RENEW_LEAD_MS;
+  const slotOf = deps.slotOf ?? remoteSlotOf;
+  const connections = deps.connections ?? loadConnections;
 
   /* ------------------------------ 经中继（共用） ------------------------------ */
 
-  const remoteOf = async (issuer: string) =>
-    (await deps.bridge.getRemotes()).find(
-      (item) => item.serviceId === serviceIdOf(issuer),
-    );
+  /** 这个源用的那一槽：记过的，或签发方早先的单槽。 */
+  const slotFor = (sourceId: string, issuer: string) =>
+    slotOf(sourceId) ?? serviceIdOf(issuer);
 
-  /** 钥匙串当保管处：远程服务一份（键 `serviceId`），源会话一份（键源 + `relayed`）。 */
-  const vault: RelayVault = {
-    cloudRefreshToken: async (issuer) =>
-      (await remoteOf(issuer))?.refreshToken ?? null,
-    async saveCloudRefreshToken(issuer, refreshToken) {
-      const remote = await remoteOf(issuer);
+  const remoteIn = async (slot: string) =>
+    (await deps.bridge.getRemotes()).find((item) => item.serviceId === slot);
+
+  /**
+   * 钥匙串当保管处，一槽一个：远程服务的刷新令牌在这一槽（键 `serviceId`），
+   * 源会话一份（键源 + `relayed`）。一槽各有自己的云会话缓存，主人与访客在
+   * 同一个签发方下互不顶替。
+   */
+  const vaultFor = (slot: string): RelayVault => ({
+    cloudRefreshToken: async () => (await remoteIn(slot))?.refreshToken ?? null,
+    async saveCloudRefreshToken(_issuer, refreshToken) {
+      const remote = await remoteIn(slot);
       if (remote !== undefined)
         await deps.bridge.setRemote({ ...remote, refreshToken });
     },
@@ -123,13 +156,44 @@ export function createMobileCredentialProvider(
         refreshToken: session.refreshToken,
         expiresAtMs: session.expiresAtMs,
       }),
-  };
-  const relay = createRelayedAccess({
-    vault,
-    device: () => thisDevice(),
-    ...(deps.cloud === undefined ? {} : { cloud: deps.cloud }),
-    now,
   });
+  const relays = new Map<string, ReturnType<typeof createRelayedAccess>>();
+  const relayFor = (slot: string) => {
+    let relay = relays.get(slot);
+    if (relay === undefined) {
+      relay = createRelayedAccess({
+        vault: vaultFor(slot),
+        device: () => thisDevice(),
+        ...(deps.cloud === undefined ? {} : { cloud: deps.cloud }),
+        now,
+      });
+      relays.set(slot, relay);
+    }
+    return relay;
+  };
+
+  /**
+   * `me.stream` 一个签发方一条：用主人的那一槽（访客的会话只看得到它加入的那
+   * 一台），没有主人才用访客的。
+   */
+  const streamSlot = (issuer: string) => {
+    const slots = connections()
+      .filter((row) => row.cloudIssuer === issuer)
+      .map((row) => slotFor(row.sourceId, issuer));
+    return (
+      slots.find((slot) => !isGuestSlot(slot)) ??
+      slots[0] ??
+      serviceIdOf(issuer)
+    );
+  };
+  const cloudAuth: CloudAuth = {
+    access: (issuer) =>
+      relayFor(streamSlot(issuer)).cloudSessions.access(issuer),
+    invalidate(issuer) {
+      for (const relay of relays.values())
+        relay.cloudSessions.invalidate(issuer);
+    },
+  };
 
   /* ---------------------------------- 取访问 ---------------------------------- */
 
@@ -183,9 +247,10 @@ export function createMobileCredentialProvider(
     force: boolean,
   ): Promise<SourceAccess> => {
     const issuer = descriptor?.cloudIssuer ?? "";
-    if (issuer === "" || (await remoteOf(issuer)) === undefined)
-      throw unauthorized();
-    return relay.access(issuer, sourceId, force);
+    if (issuer === "") throw unauthorized();
+    const slot = slotFor(sourceId, issuer);
+    if ((await remoteIn(slot)) === undefined) throw unauthorized();
+    return relayFor(slot).access(issuer, sourceId, force);
   };
 
   const forced = new Set<string>();
@@ -204,7 +269,7 @@ export function createMobileCredentialProvider(
       return cached.refresh(sourceId, via);
     },
     invalidate: (sourceId) => cached.invalidate(sourceId),
-    cloudAuth: relay.cloudSessions,
+    cloudAuth,
   };
 }
 

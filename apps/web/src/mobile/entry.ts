@@ -23,6 +23,7 @@ import { enterRoute, ticketWithRefresh } from "../sources/route-entry";
 import type { SourceDescriptor } from "../sources/types";
 import type { ConnectFailure } from "./ConnectScreen";
 import { activeConnection, loadConnections } from "./connections";
+import { setMobileRelayRoute } from "./relay-status";
 import { mobileCredentialProvider } from "./credentials";
 import { isNativeApp } from "./native-bridge";
 import {
@@ -217,6 +218,12 @@ async function enterConnection(descriptor: SourceDescriptor): Promise<Entry> {
         setNativeConnection(
           descriptor.sourceId,
           route.via === "relayed" ? "relayed" : "direct",
+        );
+        // 走中继时记下中继：运行时断开时通知条据此分辨是不是中继停了。
+        setMobileRelayRoute(
+          route.via === "relayed"
+            ? descriptor.relayOrigin || descriptor.cloudIssuer
+            : null,
         );
         setNativeRuntimeBase(route.access.httpBase);
       },

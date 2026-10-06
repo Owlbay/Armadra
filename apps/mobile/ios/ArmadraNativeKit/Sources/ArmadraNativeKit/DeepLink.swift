@@ -6,8 +6,8 @@ import Foundation
 ///    写进 `#link=` 再重载，连接页拿它当输入框初值，人点「连接」才配。
 ///  - `armadra://join?link=<id>&issuer=<签发方>&s=<片段>`：个人中转的分享链接（cloud 契约 §10）。
 ///    与配对一样写进 `#link=` 再重载，连接页收到就直接挂载。
-///  - `armadra://w/<工作空间>[/n/<节点>]`：通知点开。写进 `#push=`，页面
-///    `mobile/push-open.ts` 认 `hashchange`，不用重载。
+///  - `armadra://w/<工作空间>[/n/<节点>][?s=<源>]`：通知点开（`s` 是签发它的主机，契约 §19.4）。
+///    写进 `#push=`，页面 `mobile/push-open.ts` 认 `hashchange`，不用重载；连着别的主机时页面自己切。
 ///  - `armadra://oauth?state=…&code=…`（或 `error=`）：原生 OAuth 的回调（R-56）。与配对一样
 ///    写进 `#link=` 再重载，入口在挂载前收尾。
 ///
@@ -22,7 +22,7 @@ public enum DeepLink: Equatable {
     private static let pairPattern = "^armadra://pair\\?[A-Za-z0-9._~%&=:+-]+$"
     private static let joinPattern = "^armadra://join\\?[A-Za-z0-9._~%&=:+-]+$"
     private static let oauthPattern = "^armadra://oauth\\?[A-Za-z0-9._~%&=:+*-]+$"
-    private static let nodePattern = "^armadra://w/[A-Za-z0-9._~%-]+(/n/[A-Za-z0-9._~%-]+)?/?$"
+    private static let nodePattern = "^armadra://w/[A-Za-z0-9._~%-]+(/n/[A-Za-z0-9._~%-]+)?/?(\\?s=[A-Za-z0-9._~%-]+)?$"
 
     public init?(_ link: String) {
         guard link.count <= Self.maxLength else { return nil }

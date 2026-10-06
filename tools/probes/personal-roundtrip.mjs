@@ -6,8 +6,10 @@
 //
 //   1. 中继 init：状态目录、CA 指纹、口令不进输出；serve 起来，`/.well-known` 答 personal；
 //   2. core 登记：注册令牌 → `identity.cloud.register` → 隧道 ready，中继目录里有这台源，
-//      中继账号绑定为主人；错口令被拒；
-//   3. 浏览器开中继托管的 `/app/`：账号口令登录 → 进画布 → 终端收发 → 实时板与本机页面双向同步；
+//      中继账号绑定为主人；错口令被拒；同一条 keep-alive 连接空闲 6 秒以上再经中继 POST
+//      到源，连接还在、不失败（iOS WebKit 不重试被服务端空闲关掉的连接）；
+//   3. 浏览器开中继托管的 `/app/`：账号口令登录 → 进画布 → 终端收发 → ACP 会话（假 Agent）经中继
+//      发一轮、回复流回、core 只投递一次（契约 §39.9 的 clientTurnId）→ 实时板与本机页面双向同步；
 //   4. 分享链接：`/j/<id>#…` 落地、片段被抹掉、访客加入、打开链接指向的工作空间、开终端；
 //   5. 桌面 Electron 粘贴链接挂载（核对指纹）、打开工作空间、开终端；
 //   6. 手机：390 宽模拟（页面来源是拦截出来的 `https://localhost`，扫码结果注入）扫码挂载、开终端；
@@ -44,6 +46,7 @@ import {
   caFingerprint,
   clickText,
   hasText,
+  idleKeepAlivePost,
   launchElectron,
   nodeAt,
   ownerClient,
@@ -325,6 +328,61 @@ try {
   );
   run.ok("中继账号绑定为这台 core 的主人");
 
+  // 空闲 keep-alive：Node 缺省 5 秒就关空闲连接，iOS WebKit 复用它发 POST 时不重试，
+  // 直接「加载失败」——Agent 的这一轮就没完成。照 iOS App 的路子（来源
+  // `capacitor://localhost`）：经中继用断言换 core 会话，空闲 6.5 秒后在同一条连接上
+  // 再 POST `system.hello`，连接不许被服务端先关掉，两次都要 200。
+  const idle = await timed("2-keepalive", async () => {
+    const assertion = await must("POST", `/v1/sources/${sourceId}/assertion`, {
+      body: { device },
+      token: cloudToken,
+    });
+    secret("中继令牌", assertion.relayToken);
+    secret("源访问断言", assertion.assertion);
+    const headers = {
+      origin: "capacitor://localhost",
+      "armadra-relay-token": assertion.relayToken,
+    };
+    const answer = await idleKeepAlivePost(
+      issuer,
+      caPem,
+      {
+        path: `/s/${sourceId}/api/identity/cloud/login`,
+        body: { assertion: assertion.assertion },
+        headers,
+      },
+      (login) => {
+        const session = login.body?.session;
+        if (session?.native?.accessToken)
+          secret("core 访问令牌", session.native.accessToken);
+        if (session?.native?.refreshToken)
+          secret("core 刷新令牌", session.native.refreshToken);
+        return {
+          path: `/s/${sourceId}/api/rpc/system/hello`,
+          body: { json: {} },
+          headers: {
+            ...headers,
+            authorization: `Bearer ${session?.native?.accessToken ?? ""}`,
+          },
+        };
+      },
+    );
+    return {
+      statuses: answer.answers.map((one) => one.status),
+      codes: answer.answers.map((one) => one.body?.code ?? null),
+      reused: answer.reused,
+      closedByServer: answer.closedByServer,
+      idleMs: answer.idleMs,
+    };
+  });
+  run.check(
+    idle.statuses.every((status) => status === 200) &&
+      idle.reused &&
+      !idle.closedByServer,
+    "iOS 来源经中继换会话后空闲 6.5 秒，同一条 keep-alive 连接再 POST：连接还在、两次都 200",
+    idle,
+  );
+
   // 主人的画布：一张便签、一个终端。
   const ownerProject = join(stack.scratch, "owner-project");
   mkdirSync(ownerProject, { recursive: true });
@@ -346,7 +404,41 @@ try {
     { width: 520, height: 300 },
     { kind: "terminal", cwd: ownerProject },
   );
-  await stack.seedBoard(workspace.id, board.id, [sticky, terminal]);
+  // ACP 驱动的节点：假 ACP Agent（`@armadra/agent` 的测试 Agent，真子进程），注册成
+  // 一个基础 CLI 为 OpenCode 的 `custom:` 条目，与 acp-e2e 同一个做法。
+  const fakeAgent = join(
+    root,
+    "apps/desktop/node_modules/@armadra/agent/dist/drivers/acp/testing/fake-agent-main.js",
+  );
+  await owner("/api/settings", {
+    method: "PATCH",
+    body: JSON.stringify({
+      agents: {
+        custom: [
+          {
+            id: "custom:fake-acp",
+            label: "Fake ACP",
+            launchCmd: process.execPath,
+            args: [fakeAgent],
+            baseAgent: "opencode",
+          },
+        ],
+      },
+    }),
+  });
+  const acpNode = makeNode(
+    board.id,
+    "terminal",
+    "ACP",
+    { x: 120, y: 460 },
+    { width: 520, height: 320 },
+    {
+      kind: "terminal",
+      cwd: ownerProject,
+      agent: { id: "custom:fake-acp", driver: "acp" },
+    },
+  );
+  await stack.seedBoard(workspace.id, board.id, [sticky, terminal, acpNode]);
   const query = `?workspace=${workspace.id}&board=${board.id}`;
 
   await stack.browser.call("Security.setIgnoreCertificateErrors", {
@@ -408,6 +500,61 @@ try {
     );
     await terminalRoundTrip(page, terminal.id, "relay");
     run.ok("经中继开终端并收发（42relay）");
+
+    // ACP 回合经中继：页面带着 clientTurnId 发一轮，回复流回；core 侧只有一轮、
+    // 回合记录认得页面的 id（契约 §39.9）。
+    const acpInput = `${nodeAt(acpNode.id)} [data-slot="acp-session-view"] textarea`;
+    await page.until(
+      `return !!document.querySelector(${JSON.stringify(acpInput)})`,
+      "经中继起 ACP 会话、会话视图出现",
+      { timeout: 45_000 },
+    );
+    await page.clickOn(
+      `return document.querySelector(${JSON.stringify(acpInput)})`,
+      "ACP 输入框",
+    );
+    await page.type("hello via relay");
+    await page.key("Enter");
+    await page.until(
+      `return (document.querySelector(${JSON.stringify(nodeAt(acpNode.id))})?.innerText ?? "").includes("echo: hello via relay")`,
+      "ACP 回复经中继流回会话视图",
+      { timeout: 45_000 },
+    );
+    const acpRow = await until(
+      async () =>
+        (await owner(`/api/workspaces/${workspace.id}/sessions`)).find(
+          (row) => row.nodeId === acpNode.id,
+        ),
+      "ACP 节点的会话行",
+      { timeout: 15_000 },
+    );
+    const acpLog = await until(
+      async () => {
+        const log = await owner(`/api/acp/sessions/${acpRow.sessionId}/log`);
+        return (log.turns ?? []).some((turn) => turn.state === "ended") && log;
+      },
+      "ACP 回合结束",
+      { timeout: 30_000 },
+    );
+    const sent = acpLog.entries.filter(
+      (entry) =>
+        entry.role === "user" &&
+        entry.blocks.some((block) => block.text === "hello via relay"),
+    );
+    run.check(
+      sent.length === 1 &&
+        acpLog.turns.length === 1 &&
+        typeof acpLog.turns[0].clientTurnId === "string" &&
+        acpLog.turns[0].stopReason === "end_turn",
+      "经中继的 ACP 一轮只投递一次，回合记录带页面的 clientTurnId",
+      { sent: sent.length, turns: acpLog.turns },
+    );
+    run.check(
+      !(await page.evaluate(
+        `return (document.querySelector(${JSON.stringify(nodeAt(acpNode.id))})?.innerText ?? "").includes("这一轮")`,
+      )),
+      "会话视图没有误报「这一轮没有完成 / 没有送达」",
+    );
 
     const local = await stack.browser.page(await stack.browser.context());
     opened.push(["local", local]);

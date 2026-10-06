@@ -122,6 +122,21 @@ export interface AcpPendingElicitationView {
   readonly elicitation: StoredElicitation;
 }
 
+/**
+ * 一个最近的回合（契约 §39.9，`…/log` 的 `turns`）。页面发 prompt 的那次 POST
+ * 没拿到答复时，凭 `clientTurnId` 在这里认出 core 到底收没收到、结局是什么。
+ */
+export interface AcpTurnRecord {
+  readonly turnId: string;
+  readonly clientTurnId?: string;
+  readonly state: "queued" | "running" | "ended";
+  readonly stopReason?: string;
+  readonly error?: { readonly code: string; readonly message: string };
+}
+
+/** 记多少个最近的回合：够页面对账断线那一会儿，不随会话变长。 */
+const RECENT_TURNS = 32;
+
 let permissionSeq = 0;
 
 /** `<nodeId>-<epochMs>-acp-<n>`：过 `validPendingId`，全局唯一。 */
@@ -158,6 +173,7 @@ export class AcpSession implements AcpSessionIdentity {
     }
   >();
   private turns = 0;
+  private readonly recent: AcpTurnRecord[] = [];
   private queue: Promise<void> = Promise.resolve();
   private running: string | undefined;
   private queued = 0;
@@ -253,6 +269,21 @@ export class AcpSession implements AcpSessionIdentity {
     return this.mirror?.capture(lines) ?? "";
   }
 
+  /** 最近的回合，旧的在前（`…/log` 的 `turns`，契约 §39.9）。 */
+  recentTurns(): AcpTurnRecord[] {
+    return [...this.recent];
+  }
+
+  private record(turnId: string, next: Partial<AcpTurnRecord>): void {
+    const index = this.recent.findIndex((turn) => turn.turnId === turnId);
+    if (index < 0) return;
+    this.recent[index] = { ...(this.recent[index] as AcpTurnRecord), ...next };
+  }
+
+  private clientTurnOf(turnId: string): string | undefined {
+    return this.recent.find((turn) => turn.turnId === turnId)?.clientTurnId;
+  }
+
   /** 挂起的审批（`…/log` 的 `pending`）。 */
   pending(): AcpPendingView[] {
     return [...this.permissions.entries()].map(([pendingId, pending]) => ({
@@ -276,14 +307,21 @@ export class AcpSession implements AcpSessionIdentity {
 
   /**
    * 一条 prompt。排进队列，答回合 id；回合的结局经 `acp.turn` 说。适配器已经
-   * 不在了就当场拒绝。
+   * 不在了就当场拒绝。`clientTurnId` 是页面给这一轮起的 id（§39.9），随回合
+   * 记下、随 `acp.turn` 带回；去重在路由那一层。
    */
-  prompt(text: string): string {
+  prompt(text: string, clientTurnId?: string): string {
     if (!this.alive) {
       throw new AcpError("acp_exited", "the ACP agent is not running");
     }
     this.turns += 1;
     const turnId = `${this.generation}-${this.turns}`;
+    this.recent.push({
+      turnId,
+      ...(clientTurnId === undefined ? {} : { clientTurnId }),
+      state: "queued",
+    });
+    if (this.recent.length > RECENT_TURNS) this.recent.shift();
     this.queued += 1;
     this.queue = this.queue.then(async () => {
       this.queued -= 1;
@@ -301,6 +339,7 @@ export class AcpSession implements AcpSessionIdentity {
       return;
     }
     this.running = turnId;
+    this.record(turnId, { state: "running" });
     // 我方这条也是对话的一部分：先进镜像，再让别的设备看见。
     this.mirror?.prompt(text);
     this.sink.publish({
@@ -337,6 +376,12 @@ export class AcpSession implements AcpSessionIdentity {
       readonly error?: { readonly code: string; readonly message: string };
     },
   ): void {
+    this.record(turnId, {
+      state: "ended",
+      ...(end.stopReason === undefined ? {} : { stopReason: end.stopReason }),
+      ...(end.error === undefined ? {} : { error: end.error }),
+    });
+    const clientTurnId = this.clientTurnOf(turnId);
     if (end.error === undefined) {
       this.sink.signal({ signal: "turn", stopReason: end.stopReason });
     } else if (end.error.code !== "acp_exited") {
@@ -349,6 +394,7 @@ export class AcpSession implements AcpSessionIdentity {
       sessionId: this.rowId,
       nodeId: this.nodeId,
       turnId,
+      ...(clientTurnId === undefined ? {} : { clientTurnId }),
       ...(end.stopReason === undefined ? {} : { stopReason: end.stopReason }),
       ...(end.error === undefined ? {} : { error: end.error }),
     });
