@@ -6,11 +6,14 @@
 //
 //   1. 打开中继的 `/app/`：页面认出自己由中继托管，中继账号口令登录，只有一台
 //      在线主机就直接进画布；
-//   2. 经中继操作：画布出来、终端收发（`echo $((40+2))relay` → `42relay`）、
+//   2. 经中继操作：画布出来、终端收发（`echo $((40+2))relay` → `42relay`）；
+//      刷新页面后不登录、静默续上（标签页只记刷新令牌）、终端照常；
 //      实时板（本机页面拖一下，中继页面看到；中继页面拖一下，本机看到）；
 //   3. 杀掉中继再起：页面自己恢复（`me.stream` 重开 → 主机在线 → 叫醒），之后
 //      终端与实时板照常；
-//   4. 截图：390 / 1440 宽，明暗两主题（登录页与画布）。
+//   4. 设置页经中继：远程服务页标出正走的中继、不给停用分享；更新页只读报主机
+//      版本；数据页没有「在访达中打开」；
+//   5. 截图：390 / 1440 宽，明暗两主题（登录页、画布与设置页）。
 //
 // 一切都是临时的、回环的：随机端口、mktemp 出来的数据目录、HOME 与浏览器
 // profile，跑完全部删除；core 用 file 后端的 SecretStore，不碰钥匙串。
@@ -445,6 +448,38 @@ try {
   await terminalRoundTrip(page, terminal.id, "relay");
   run.ok("经中继开终端、收发数据");
 
+  /* --------------------------- 刷新后仍在线 --------------------------- */
+  // 这个标签页只记两把刷新令牌与上次进的主机（sessionStorage），访问令牌不落盘；
+  // 刷新之后静默续上，不出登录页、直接回到画布。
+  const remembered = await page.evaluate(
+    `return sessionStorage.getItem("armadra.hosted.resume") ?? "";`,
+  );
+  run.check(
+    remembered.includes('"cloudRefreshToken"') &&
+      !remembered.includes("accessToken"),
+    "标签页只记刷新令牌，不记访问令牌",
+  );
+  await page.call("Page.reload", {});
+  await page.settle();
+  await page.until(
+    `return !!document.querySelector('${nodeAt(sticky.id)}')`,
+    "刷新后不登录、直接回到画布",
+    { timeout: 45_000 },
+  );
+  run.check(
+    !(await page.evaluate(
+      `return !!document.querySelector('[data-slot="relay-sign-in"] input[type="password"]')`,
+    )),
+    "刷新后没有出登录表单",
+  );
+  await page.until(
+    `return !!document.querySelector('${nodeAt(terminal.id)} .xterm')`,
+    "刷新后终端挂上 xterm",
+    { timeout: 30_000 },
+  );
+  await terminalRoundTrip(page, terminal.id, "reload");
+  run.ok("刷新后仍在线：静默续上，终端照常收发");
+
   const local = await stack.browser.page(await stack.browser.context());
   opened.push(["local", local]);
   await local.goto(stack.boardUrl(workspace.id, board.id));
@@ -582,6 +617,93 @@ try {
     recoveredMs,
   });
   await run.shot(page, "05-recovered-1440");
+
+  /* ------------------------ 经中继打开的设置页 ------------------------ */
+  // 远程服务页上页面正走的那个中继：标出来、不给停用分享；更新页只读报主机
+  // 版本；数据页没有「在访达中打开」。
+  const settingsNav = (label) =>
+    page.clickOn(
+      `return [...document.querySelectorAll('[role="dialog"] nav button')].find((b) => b.getAttribute("aria-label") === ${JSON.stringify(label)})`,
+      `设置导航「${label}」`,
+    );
+  const dialogText = () =>
+    page.evaluate(
+      `return document.querySelector('[role="dialog"]')?.innerText ?? "";`,
+    );
+  const openRemoteSettings = async () => {
+    // 窄屏来回之后侧栏可能收着：先展开，设置在侧栏底部。
+    if (
+      await page.evaluate(
+        `return !!document.querySelector('button[aria-label="展开侧栏"]')`,
+      )
+    ) {
+      await page.clickOn(
+        `return document.querySelector('button[aria-label="展开侧栏"]')`,
+        "展开侧栏",
+      );
+      await sleep(500);
+    }
+    await page.clickOn(
+      `return [...document.querySelectorAll("button")].find((b) => b.innerText.trim() === "设置" || b.getAttribute("aria-label") === "设置")`,
+      "设置按钮",
+    );
+    await page.until(
+      `return !!document.querySelector('[role="dialog"] nav')`,
+      "设置框",
+    );
+    await settingsNav("远程服务");
+    await page.until(
+      `return document.querySelector('[role="dialog"]')?.innerText.includes("本页经此连接")`,
+      "远程服务页标出页面正走的中继",
+      { timeout: 30_000 },
+    );
+  };
+  await openRemoteSettings();
+  const shareSwitch = await page.evaluate(
+    `const s = document.querySelector('[role="dialog"] [role="switch"][aria-label="分享本机"]');
+     return s ? { on: s.getAttribute("aria-checked"), disabled: s.disabled } : null;`,
+  );
+  run.check(
+    shareSwitch?.on === "true" && shareSwitch.disabled === true,
+    "远程服务页：正走的中继标「本页经此连接」，分享本机开着且不给停",
+    shareSwitch,
+  );
+  await run.shot(page, "06-settings-remote-1440-light");
+  await setTheme(page, "dark");
+  await run.shot(page, "06-settings-remote-1440-dark");
+  await settingsNav("更新");
+  await page.until(
+    `return document.querySelector('[role="dialog"]')?.innerText.includes("主机版本")`,
+    "更新页只读报主机版本",
+  );
+  run.check(
+    !(await page.evaluate(
+      `return !!document.querySelector('[data-testid="settings-page"] [role="switch"], [data-testid="settings-page"] [role="combobox"]')`,
+    )),
+    "更新页经中继只读：没有频道与开关",
+  );
+  await run.shot(page, "07-settings-updates-1440-dark");
+  await settingsNav("数据");
+  await sleep(800);
+  run.check(
+    !(await dialogText()).includes("在访达中打开"),
+    "数据页经中继不给「在访达中打开」",
+  );
+  // 窄屏：设置开着时换宽度（框按断点换成底部抽屉），看同一页。
+  await settingsNav("远程服务");
+  await page.viewport(390, 844, true);
+  await sleep(1_000);
+  await page.until(
+    `return document.querySelector('[role="dialog"]')?.innerText.includes("本页经此连接")`,
+    "窄屏远程服务页",
+    { timeout: 15_000 },
+  );
+  await run.shot(page, "06-settings-remote-390-dark");
+  await setTheme(page, "light");
+  await run.shot(page, "06-settings-remote-390-light");
+  await page.key("Escape");
+  await page.viewport(1440, 900);
+  await sleep(500);
 
   /* ---------------------- 4. 桌面壳经中继（--desktop） ---------------------- */
   if (process.argv.includes("--desktop")) {
