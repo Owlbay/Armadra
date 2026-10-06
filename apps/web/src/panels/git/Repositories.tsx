@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { gitGateway } from "../../git/gateway";
 import { useGitTarget } from "../../git/target";
+import { sk } from "../../sources/scope";
 
 /**
  * 工作空间下的仓库发现（roadmap §4.1）。
@@ -20,7 +21,7 @@ export function useRepositories(workspaceId: string | null) {
   // 发现是一次工作空间范围的扫描，不指向任何一个检出：根就是它自己的目标。
   const lookup = useGitTarget(workspaceId ?? "", ".");
   return useQuery({
-    queryKey: ["git-repositories", workspaceId],
+    queryKey: sk("git-repositories", workspaceId),
     queryFn: ({ signal }) => gitGateway.repositories(lookup, {}, signal),
     enabled: Boolean(workspaceId),
     retry: false,

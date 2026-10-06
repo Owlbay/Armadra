@@ -15,6 +15,7 @@ import {
   presenceDeviceName,
   takePresenceActivity,
 } from "../store/canvas/presence";
+import { sk } from "../sources/scope";
 import {
   lastBoardId,
   lastWorkspaceId,
@@ -87,13 +88,13 @@ export function useBoardSync() {
   const workspaces = useWorkspacesQuery();
 
   const boards = useQuery({
-    queryKey: ["boards", workspace?.id],
+    queryKey: sk("boards", workspace?.id),
     queryFn: () => runtimeApi.listBoards(workspace!.id),
     enabled: Boolean(workspace),
   });
 
   const board = useQuery({
-    queryKey: ["board", workspace?.id, boardId],
+    queryKey: sk("board", workspace?.id, boardId),
     queryFn: () => runtimeApi.loadBoard(workspace!.id, boardId!),
     enabled: Boolean(workspace && boardId),
   });
@@ -106,8 +107,8 @@ export function useBoardSync() {
   const workspaceId = workspace?.id ?? null;
   const onCanvasChanged = useCallback(() => {
     if (!workspaceId) return;
-    void queryClient.invalidateQueries({ queryKey: ["board", workspaceId] });
-    void queryClient.invalidateQueries({ queryKey: ["boards", workspaceId] });
+    void queryClient.invalidateQueries({ queryKey: sk("board", workspaceId) });
+    void queryClient.invalidateQueries({ queryKey: sk("boards", workspaceId) });
   }, [queryClient, workspaceId]);
 
   /**
@@ -129,7 +130,7 @@ export function useBoardSync() {
       if (realtimeActive(event.boardId)) {
         if (workspaceId) {
           void queryClient.invalidateQueries({
-            queryKey: ["boards", workspaceId],
+            queryKey: sk("boards", workspaceId),
           });
         }
         return;
@@ -149,13 +150,13 @@ export function useBoardSync() {
     if (!workspaceId || !boardId) return;
     void queryClient
       .fetchQuery({
-        queryKey: ["board", workspaceId, boardId],
+        queryKey: sk("board", workspaceId, boardId),
         queryFn: () => runtimeApi.loadBoard(workspaceId, boardId),
         staleTime: 0,
       })
       .then((remote) => useCanvasStore.getState().mergeRemoteDocument(remote))
       .catch(() => undefined);
-    void queryClient.invalidateQueries({ queryKey: ["boards", workspaceId] });
+    void queryClient.invalidateQueries({ queryKey: sk("boards", workspaceId) });
   }, [boardId, queryClient, workspaceId]);
 
   useBoardPresence(workspaceId, boardId, onCanvasChanged, onLeaseLost);

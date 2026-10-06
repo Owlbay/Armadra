@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/ui/select";
+import { sk } from "../../sources/scope";
 import { Field } from "../git/forms";
 import { invalidateGitQueries } from "../git/queries";
 import { createWorktreeAction, localBranch } from "../git/worktree";
@@ -69,7 +70,7 @@ export function CheckoutWorktree({
   const target = useGitTarget(workspaceId, ".");
 
   const snapshot = useQuery({
-    queryKey: ["git-repository-branches", workspaceId],
+    queryKey: sk("git-repository-branches", workspaceId),
     queryFn: ({ signal }) => gitGateway.branches(target, signal),
     retry: false,
   });

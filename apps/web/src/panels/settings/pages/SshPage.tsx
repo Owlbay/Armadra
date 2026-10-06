@@ -22,6 +22,7 @@ import {
   ResponsiveAlertDialogHeader,
   ResponsiveAlertDialogTitle,
 } from "@/panels/ResponsiveDialog";
+import { sk } from "../../../sources/scope";
 import { Button } from "@/ui/button";
 import { Input } from "@/ui/input";
 
@@ -179,7 +180,7 @@ function OpenRemoteProject({ host }: { host: SshHost }) {
       setPath("");
       // 根已在那台机器上证明过，直接切过去，而不是让人再去列表里找一遍。
       openWorkspace(workspace);
-      void client.invalidateQueries({ queryKey: ["workspaces"] });
+      void client.invalidateQueries({ queryKey: sk("workspaces") });
       toast.success(t("ssh.remote.opened", { name: workspace.name }));
     },
     onError: (cause: Error) =>

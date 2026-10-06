@@ -76,7 +76,7 @@ const hostId = "1".repeat(32),
   otherId = "4".repeat(32);
 
 const hello: IdentityHello = {
-  hostId,
+  sourceId: hostId,
   hostInstanceId,
   protocol: { major: 1, minor: 1 },
   capabilities: ["identity.browser-session.v1"],

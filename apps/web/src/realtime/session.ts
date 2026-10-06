@@ -3,6 +3,7 @@ import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
 
 import { boardSyncUrl, runtimeApi } from "../api/client";
+import { currentSource, type Source } from "../api/source";
 import { containerSize, getFlow } from "../canvas/flow/flow-context";
 import { useCanvasStore } from "../store/canvas-store";
 import { presenceClientId, presenceDeviceName } from "../store/canvas/presence";
@@ -45,6 +46,8 @@ export type RealtimeStatus = ClientStatus | "off";
 export interface RealtimeView {
   /** 正在实时协同的板；`null` = 当前板走租约 + CAS。 */
   boardId: string | null;
+  /** `boardId` 所在的源；实时按 `(sourceId, boardId)` 认一块板。 */
+  sourceId: string | null;
   status: RealtimeStatus;
   readOnly: boolean;
   /** 别人（已校验），按 clientID 排。 */
@@ -61,6 +64,7 @@ export interface RealtimeView {
 
 const IDLE = {
   boardId: null,
+  sourceId: null as string | null,
   status: "off" as RealtimeStatus,
   readOnly: false,
   peers: [] as Peer[],
@@ -74,9 +78,13 @@ export const useRealtimeStore = create<RealtimeView>((set) => ({
 }));
 
 /** 当前板在走实时协同吗（非 React 的调用方用）。 */
-export function realtimeActive(boardId?: string | null): boolean {
+export function realtimeActive(
+  boardId?: string | null,
+  sourceId?: string,
+): boolean {
   const view = useRealtimeStore.getState();
   if (view.boardId === null) return false;
+  if (sourceId !== undefined && sourceId !== view.sourceId) return false;
   return boardId === undefined || boardId === view.boardId;
 }
 
@@ -86,6 +94,7 @@ export function useRealtimeOffline(): boolean {
 }
 
 interface Live {
+  sourceId: string;
   doc: Y.Doc;
   awareness: Awareness;
   client: RealtimeClient;
@@ -108,6 +117,8 @@ export function broadcastViewport(viewport: PresenceViewport | null): void {
 }
 
 export interface StartOptions {
+  /** 这块板所在的源；省略 = 当前源。 */
+  source?: Source;
   workspaceId: string;
   boardId: string;
   readOnly?: boolean;
@@ -127,6 +138,8 @@ const REFUSALS_BEFORE_RECHECK = 2;
 export function startRealtime(options: StartOptions): () => void {
   stopLive();
   const { workspaceId, boardId } = options;
+  const source = options.source ?? currentSource();
+  const sourceId = source.sourceId;
   const readOnly = options.readOnly ?? false;
   const doc = new Y.Doc();
   const awareness = new Awareness(doc);
@@ -140,6 +153,7 @@ export function startRealtime(options: StartOptions): () => void {
   useRealtimeStore.setState({
     ...IDLE,
     boardId,
+    sourceId,
     status: "connecting",
     readOnly,
   });
@@ -168,14 +182,15 @@ export function startRealtime(options: StartOptions): () => void {
     void check()
       .then((state) => {
         if (stopped || live?.client !== client) return;
-        if (!state.realtime && state.enabled === false) stopRealtime(boardId);
+        if (!state.realtime && state.enabled === false)
+          stopRealtime(boardId, sourceId);
       })
       .catch(() => undefined);
   };
 
   const current = { synced: false };
   const client = new RealtimeClient({
-    url: boardSyncUrl(workspaceId, boardId),
+    url: boardSyncUrl(workspaceId, boardId, source),
     doc,
     awareness,
     readOnly,
@@ -222,6 +237,7 @@ export function startRealtime(options: StartOptions): () => void {
   });
 
   live = {
+    sourceId,
     doc,
     awareness,
     client,
@@ -257,7 +273,7 @@ export function startRealtime(options: StartOptions): () => void {
 
   return () => {
     stopped = true;
-    stopRealtime(boardId);
+    stopRealtime(boardId, sourceId);
   };
 }
 
@@ -275,8 +291,10 @@ function stopLive(): void {
 }
 
 /** 停掉这块板的实时协同（换板、关页面、退回租约模式）。 */
-export function stopRealtime(boardId: string): void {
-  if (useRealtimeStore.getState().boardId !== boardId) return;
+export function stopRealtime(boardId: string, sourceId?: string): void {
+  const view = useRealtimeStore.getState();
+  if (view.boardId !== boardId) return;
+  if (sourceId !== undefined && view.sourceId !== sourceId) return;
   stopLive();
   useRealtimeStore.setState({ ...IDLE });
   const store = useCanvasStore.getState();

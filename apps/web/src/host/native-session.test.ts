@@ -19,7 +19,7 @@ const hostId = "1".repeat(32),
   hostInstanceId = "2".repeat(32);
 function hello(...capabilities: string[]): IdentityHello {
   return {
-    hostId,
+    sourceId: hostId,
     hostInstanceId,
     protocol: { major: 1, minor: 2 },
     capabilities,

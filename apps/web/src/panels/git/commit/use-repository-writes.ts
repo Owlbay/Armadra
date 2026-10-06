@@ -18,6 +18,7 @@ import { useCanvasStore } from "../../../store/canvas-store";
 import { running } from "../operations";
 import { invalidateGitQueries } from "../queries";
 import type { RepositoryRequest } from "../actions/integration";
+import { sk } from "../../../sources/scope";
 
 /** 一条等着被确认的写：动作、被比对的 HEAD，以及它作用于哪个检出。 */
 export interface QueuedRequest extends RepositoryRequest {
@@ -80,12 +81,12 @@ export function useRepositoryWrites(workspaceId: string): RepositoryWrites {
       toast.error(error instanceof Error ? error.message : t("gitRepo.failed")),
   });
   const poll = useQuery({
-    queryKey: [
+    queryKey: sk(
       "git-repository-operation",
       workspaceId,
       tracked?.repositoryPath,
       tracked?.operation.id,
-    ],
+    ),
     queryFn: ({ signal }) =>
       gitGateway.operation(
         gitTarget(workspaceId, workspaceRoot, tracked!.repositoryPath),

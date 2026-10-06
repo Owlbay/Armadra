@@ -11,6 +11,7 @@ import { WorkPanelSheet } from "../WorkPanelSheet";
 import { runtimeApi } from "@/api/client";
 import { usePreferencesStore, useT } from "@/app/preferences-store";
 import { useCanvasStore } from "@/store/canvas-store";
+import { sk } from "../../sources/scope";
 
 /**
  * 工作空间的交接历史（自动化设计 §7）。
@@ -32,7 +33,7 @@ export function HandoffHistoryDrawer() {
   const workspaceId = workspace?.id ?? null;
 
   const history = useQuery({
-    queryKey: ["handoffs", "workspace", workspaceId ?? ""],
+    queryKey: sk("handoffs", "workspace", workspaceId ?? ""),
     queryFn: ({ signal }) => runtimeApi.workspaceHandoffs(workspaceId!, signal),
     enabled: open && Boolean(workspaceId),
     retry: false,

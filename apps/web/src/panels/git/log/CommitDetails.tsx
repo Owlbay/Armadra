@@ -11,6 +11,7 @@ import { Button } from "../../../ui/button";
 import { ReadError } from "../forms";
 import { refBadges } from "../CommitGraph";
 import { buildFileRows } from "./file-tree";
+import { sk } from "../../../sources/scope";
 
 /**
  * 详情栏（Git 工具窗口设计 §2.2「详情」）。
@@ -56,20 +57,26 @@ export function CommitDetails({
   const repositoryKey = `${target.repositoryPath}:${commit.repositoryPath}`;
 
   const detail = useQuery({
-    queryKey: ["git-log-commit", workspaceId, repositoryKey, commit.oid, base],
+    queryKey: sk(
+      "git-log-commit",
+      workspaceId,
+      repositoryKey,
+      commit.oid,
+      base,
+    ),
     queryFn: ({ signal }) =>
       gitGateway.commitDetail(target, commit.oid, base, signal),
     retry: false,
   });
   const patch = useQuery({
-    queryKey: [
+    queryKey: sk(
       "git-log-commit-file",
       workspaceId,
       repositoryKey,
       commit.oid,
       base,
       file,
-    ],
+    ),
     queryFn: ({ signal }) =>
       gitGateway.commitFile(target, commit.oid, base, file!, signal),
     enabled: file !== null,

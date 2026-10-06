@@ -145,7 +145,15 @@ describe("individual changes hunks", () => {
     const changed = { ...diff(), diffDigest: "d".repeat(64) };
     act(() =>
       client.setQueryData(
-        ["git-hunks", "workspace", ".", "file with spaces.txt", "worktree"],
+        [
+          "src",
+          "local",
+          "git-hunks",
+          "workspace",
+          ".",
+          "file with spaces.txt",
+          "worktree",
+        ],
         changed,
       ),
     );

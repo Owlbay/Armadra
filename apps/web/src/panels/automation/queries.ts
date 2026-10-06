@@ -1,3 +1,4 @@
+import { srcPrefix } from "../../sources/scope";
 import {
   AutomationApi,
   AutomationCommandSession,
@@ -23,14 +24,15 @@ const PAGE = 100;
 export const RUNS_PAGE = 25;
 
 export const automationKeys = {
-  plans: (workspaceId: string) => ["automation", "plans", workspaceId] as const,
+  plans: (workspaceId: string) =>
+    [...srcPrefix(), "automation", "plans", workspaceId] as const,
   runs: (workspaceId: string, planId: string) =>
-    ["automation", "runs", workspaceId, planId] as const,
+    [...srcPrefix(), "automation", "runs", workspaceId, planId] as const,
   sessions: (workspaceId: string) =>
-    ["automation", "sessions", workspaceId] as const,
+    [...srcPrefix(), "automation", "sessions", workspaceId] as const,
   /** The stored stdin / prompt, read back only when a plan is being edited. */
   payload: (workspaceId: string, planId: string) =>
-    ["automation", "payload", workspaceId, planId] as const,
+    [...srcPrefix(), "automation", "payload", workspaceId, planId] as const,
 };
 
 export async function allPlans(

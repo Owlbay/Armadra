@@ -20,6 +20,7 @@ import {
   ResponsiveDialogHeader,
   ResponsiveDialogTitle,
 } from "../../ResponsiveDialog";
+import { sk } from "../../../sources/scope";
 import {
   Select,
   SelectContent,
@@ -95,7 +96,7 @@ function useStashes(
 ) {
   const target = useGitTarget(workspaceId, repositoryPath);
   return useQuery({
-    queryKey: ["git-repository-stashes", workspaceId, repositoryPath],
+    queryKey: sk("git-repository-stashes", workspaceId, repositoryPath),
     queryFn: ({ signal }) => gitGateway.stashes(target, signal),
     enabled,
     retry: false,
@@ -206,12 +207,12 @@ export function UnstashDialog({
     state?.stashes.find((entry) => entry.oid === selectedOid) ?? null;
   const target = useGitTarget(workspaceId, repositoryPath);
   const detail = useQuery({
-    queryKey: [
+    queryKey: sk(
       "git-repository-stash-detail",
       workspaceId,
       repositoryPath,
       selected?.oid,
-    ],
+    ),
     queryFn: async ({ signal }) => {
       const result = await gitGateway.stashDetail(
         target,

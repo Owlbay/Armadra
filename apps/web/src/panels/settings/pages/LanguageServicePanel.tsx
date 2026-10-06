@@ -16,6 +16,7 @@ import { LocalSourceBadge } from "../local-source";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { useRuntimeSettings } from "../use-runtime-settings";
+import { sk } from "../../../sources/scope";
 
 /**
  * 设置 → 工作区里的语言服务表（语言服务设计 §4.2、§6.1）。
@@ -34,7 +35,7 @@ export function LanguageServicePanel({ workspaceId }: { workspaceId: string }) {
   const stderr = useLanguageStatusStore((state) => state.stderr);
 
   const probe = useQuery({
-    queryKey: ["language-service", workspaceId],
+    queryKey: sk("language-service", workspaceId),
     queryFn: () => runtimeApi.languageService(workspaceId),
     enabled: Boolean(workspaceId),
     retry: false,

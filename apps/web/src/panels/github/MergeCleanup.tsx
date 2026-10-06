@@ -12,6 +12,7 @@ import {
   ResponsiveAlertDialogHeader,
   ResponsiveAlertDialogTitle,
 } from "@/panels/ResponsiveDialog";
+import { sk } from "../../sources/scope";
 import { Button } from "@/ui/button";
 import { runtimeApi } from "@/api/client";
 import { useT } from "@/app/preferences-store";
@@ -141,7 +142,7 @@ export function MergeCleanupView({
   // the panel walk the repository for a section nobody is going to see.
   const merged = canWrite && pull.merged;
   const worktrees = useQuery({
-    queryKey: ["git-repository-worktrees", workspaceId, "."],
+    queryKey: sk("git-repository-worktrees", workspaceId, "."),
     queryFn: ({ signal }) =>
       runtimeApi.gitRepositoryWorktrees(workspaceId, signal),
     enabled: merged,

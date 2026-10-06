@@ -1,3 +1,4 @@
+import { srcPrefix } from "../../sources/scope";
 import type { QueryClient } from "@tanstack/react-query";
 import {
   GithubApi,
@@ -30,17 +31,26 @@ export function repositoryKey(
 }
 
 export const githubKeys = {
-  all: ["github"] as const,
+  get all() {
+    return [...srcPrefix(), "github"] as const;
+  },
   repository: (workspaceId: string, remoteUrl: string) =>
-    ["github", "repository", workspaceId, remoteUrl] as const,
+    [...srcPrefix(), "github", "repository", workspaceId, remoteUrl] as const,
   mapping: (workspaceId: string, repository: GithubRepositoryRef | undefined) =>
-    ["github", "mapping", workspaceId, repositoryKey(repository)] as const,
+    [
+      ...srcPrefix(),
+      "github",
+      "mapping",
+      workspaceId,
+      repositoryKey(repository),
+    ] as const,
   issues: (
     workspaceId: string,
     repository: GithubRepositoryRef | undefined,
     filter: string,
   ) =>
     [
+      ...srcPrefix(),
       "github",
       "issues",
       workspaceId,
@@ -53,6 +63,7 @@ export const githubKeys = {
     number: bigint,
   ) =>
     [
+      ...srcPrefix(),
       "github",
       "issue",
       workspaceId,
@@ -65,6 +76,7 @@ export const githubKeys = {
     filter: string,
   ) =>
     [
+      ...srcPrefix(),
       "github",
       "pulls",
       workspaceId,
@@ -77,6 +89,7 @@ export const githubKeys = {
     number: bigint,
   ) =>
     [
+      ...srcPrefix(),
       "github",
       "pull",
       workspaceId,
@@ -84,9 +97,9 @@ export const githubKeys = {
       String(number),
     ] as const,
   references: (workspaceId: string, targetId: string) =>
-    ["github", "references", workspaceId, targetId] as const,
+    [...srcPrefix(), "github", "references", workspaceId, targetId] as const,
   credential: (workspaceId: string) =>
-    ["github", "credential", workspaceId] as const,
+    [...srcPrefix(), "github", "credential", workspaceId] as const,
 };
 
 export function invalidateGithubQueries(client: QueryClient): void {

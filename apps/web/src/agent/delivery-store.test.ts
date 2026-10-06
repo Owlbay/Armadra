@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { WorkspaceEvent } from "@armadra/shared";
 
@@ -55,7 +56,7 @@ describe("reduce", () => {
 
   it("排队与出队让那个目标的队伍重读；被拦下的那条从来没进过队", () => {
     const queued = reduce(empty, frame("queued"), 1);
-    expect(queued.queueVersion).toEqual({ "node-b": 1 });
+    expect(queued.queueVersion).toEqual({ [scoped("node-b")]: 1 });
     const refused = reduce(empty, frame("refused", "LOOP_DETECTED"), 1);
     expect(refused.queueVersion).toBeUndefined();
   });
