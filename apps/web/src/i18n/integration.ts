@@ -27,6 +27,17 @@ export const integration: MessageModule = {
     "integration.launcherWarning": "注入受限",
     "integration.stale": "待重新生成",
     "integration.acp.missing": "ACP 未安装", // i18n-exempt
+    "integration.acp.installed": "ACP 已安装", // i18n-exempt
+    "integration.acp.installing": "安装中…",
+    "integration.acp.failed": "ACP 安装失败", // i18n-exempt
+    "integration.acp.install": "安装",
+    "integration.acp.reinstall": "重新安装",
+    "integration.acp.done": "{name} 的 ACP 适配器已安装", // i18n-exempt
+    "integration.acp.output": "输出",
+    "integration.acp.failure.failed": "npm 安装失败（退出码 {code}）", // i18n-exempt
+    "integration.acp.failure.timeout": "安装超时，已停止",
+    "integration.acp.failure.missing":
+      "安装完成，但找不到适配器程序，请检查 npm 全局目录是否在 PATH 中", // i18n-exempt
     "integration.migrated": "已清理全局安装",
     "integration.regenerate": "重新生成",
     "integration.regenerated": "注入产物已重新生成",
@@ -64,6 +75,17 @@ export const integration: MessageModule = {
     "integration.launcherWarning": "Injection limited",
     "integration.stale": "Out of date",
     "integration.acp.missing": "ACP not installed",
+    "integration.acp.installed": "ACP installed",
+    "integration.acp.installing": "Installing…",
+    "integration.acp.failed": "ACP install failed",
+    "integration.acp.install": "Install",
+    "integration.acp.reinstall": "Reinstall",
+    "integration.acp.done": "ACP adapter for {name} installed",
+    "integration.acp.output": "Output",
+    "integration.acp.failure.failed": "npm install failed (exit code {code})",
+    "integration.acp.failure.timeout": "The install timed out and was stopped",
+    "integration.acp.failure.missing":
+      "Installed, but the adapter can't be found. Check that npm's global folder is on PATH.",
     "integration.migrated": "Global install removed",
     "integration.regenerate": "Regenerate",
     "integration.regenerated": "Injection regenerated",

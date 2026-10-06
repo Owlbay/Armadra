@@ -2790,6 +2790,25 @@ core 校验远程服务地址与指纹的写法时用具名码（状态均 400�
 - `/api/workspaces/{workspaceId}/handoffs*`（对话交接，`api/handoff.ts`）：不在本节，随后续包。
 - hook 面（`/hook/*`、`/control/*`、`/context-link/*`）：有自己的凭据与监听，不走契约。
 
+### 39.7 ACP 适配器的安装
+
+自协议 1.15 起。实现在 `core/agent/adapter-install.ts`，只经 procedure，没有旧路径。
+
+- 只装 `ACP_ADAPTER_PACKAGES`（`@armadra/shared`）里的三家：`claude` → `@agentclientprotocol/claude-agent-acp`、`codex` → `@agentclientprotocol/codex-acp`、`pi` → `pi-acp`。命令固定是 `npm install --global <包>`，入参只有 `agentId` 与 `reinstall`；表外的 id（含 `custom:` 条目与 ACP 入口就是 CLI 本身的那几家）答 400 `adapter_not_installable`，不起进程。页面给 `custom:` 条目时传它的 `baseAgent`。
+- 只有 owner：scope 是 `settings:write` / `settings:read`（不在任何共享角色里，高于 `agent:launch`），域里再按主体判一次，成员答 403。
+- npm 先用这家 CLI 所在 bin 目录里的那个（同一个 Node 安装），没有再用补齐过的 PATH 上的；子进程 PATH 以那个目录开头。都找不到答 409 `npm_not_found`。没带 `reinstall` 而适配器已在 PATH 上答 409 `adapter_already_installed`。同一家已在装时答那一个任务，不起第二个。
+- 任务只在内存里（每家最近一个），`adapterInstall` 读进度：`state` 是 `idle | running | succeeded | failed`，带 `startedAt`、`endedAt`、`exitCode`、`output`（最后 40 行，去掉控制字符并脱敏，每行至多 300 字符）、`installed`（结束后重新探测）与 `failure: { code, message }`。失败码：`adapter_install_failed`（非零退出或起不来）、`adapter_install_timeout`（10 分钟）、`adapter_install_missing`（npm 成功但 PATH 上仍找不到适配器程序）。页面按 `code` 取文案。
+- 结束后忘掉这家记着的 ACP 版本（`acp.version`），`GET /api/agents` 的 `acp.installed` 下次读即是新值。不写 CLI 的配置；npm 读用户自己的 `.npmrc`。开始与结束各写一条审计（`agent.adapter.install`、`agent.adapter.install.finish`），只有包名、状态与退出码，不含输出。
+
+<!-- rpc:begin contract=§39.7 -->
+
+| procedure               | kind | input                                      | output                                                                                                                                                                                                                                                                  | errors                                                                                              | scope            | 自   | 原路径 |
+| ----------------------- | ---- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------- | ---- | ------ |
+| `agents.installAdapter` | call | `{ agentId: string, reinstall?: boolean }` | `{ agentId: string, state: "idle" \| "running" \| "succeeded" \| "failed", package: string, reinstall?: boolean, startedAt?: string, endedAt?: string, exitCode?: number \| null, output: string[], installed?: boolean, failure?: { code: string, message: string } }` | `bad_request`、`forbidden`、`adapter_not_installable`、`adapter_already_installed`、`npm_not_found` | `settings:write` | 1.15 | —      |
+| `agents.adapterInstall` | call | `{ agentId: string }`                      | `{ agentId: string, state: "idle" \| "running" \| "succeeded" \| "failed", package: string, reinstall?: boolean, startedAt?: string, endedAt?: string, exitCode?: number \| null, output: string[], installed?: boolean, failure?: { code: string, message: string } }` | `bad_request`、`forbidden`、`adapter_not_installable`                                               | `settings:read`  | 1.15 | —      |
+
+<!-- rpc:end -->
+
 ## 40. `git` 与 `gitRepository`：Git 面
 
 规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-5）。分两次迁：§40.1 是一个检出的工作区与索引（`git.*`，第一部分），§40.2 是仓库级的读与操作队列（`gitRepository.*`，第二部分）。两部分合起来覆盖路由表里全部 Git 路径（`/api/workspaces/{workspaceId}/git/…` 与 `/api/git/clone`）。

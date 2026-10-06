@@ -2,6 +2,7 @@ import * as React from "react";
 import { Copy } from "lucide-react";
 import { toast } from "sonner";
 import {
+  acpInstallCommand,
   supportedPermissionModes,
   type AgentInfo,
   type CanvasNode,
@@ -32,6 +33,7 @@ import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from "@/ui/empty";
 import { FieldError } from "@/ui/field";
 import { Label } from "@/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/ui/radio-group";
+import { WizardInstallButton } from "./adapter-install";
 import { acpApi } from "./api";
 import { closeNewAgentWizard, useWizardOpen } from "./wizard-open";
 
@@ -46,16 +48,6 @@ import { closeNewAgentWizard, useWizardOpen } from "./wizard-open";
  * 会话视图挂上来时直接接这一行，不会再起第二个。
  */
 
-/** 适配器 / CLI 的安装命令。没有公开的 npm 包时不给（不猜）。 */
-export const INSTALL_COMMANDS: Readonly<Record<string, string>> = {
-  claude: "npm i -g @agentclientprotocol/claude-agent-acp",
-  codex: "npm i -g @agentclientprotocol/codex-acp",
-  pi: "npm i -g pi-acp",
-  opencode: "npm i -g opencode-ai",
-  copilot: "npm i -g @github/copilot",
-  ama: "npm i -g @armadra/agent",
-};
-
 /** 向导列出的 Agent：有 ACP 入口的那些（自定义 Agent 跟它的基础 CLI 走）。 */
 export function wizardAgents(agents: readonly AgentInfo[]): AgentInfo[] {
   return agents.filter((agent) => agent.acp);
@@ -65,8 +57,13 @@ export function agentReady(agent: AgentInfo): boolean {
   return Boolean(agent.installed && agent.acp?.installed);
 }
 
+/**
+ * 适配器 / CLI 的安装命令（包名表在 `@armadra/shared` 的
+ * `ACP_ADAPTER_PACKAGES` / `AGENT_CLI_PACKAGES`，core 的代装用同一份）。没有
+ * 公开的 npm 包时不给（不猜）。
+ */
 export function installCommand(agent: AgentInfo): string | null {
-  return INSTALL_COMMANDS[agent.baseAgent ?? agent.id] ?? null;
+  return acpInstallCommand(agent.baseAgent ?? agent.id);
 }
 
 /**
@@ -181,6 +178,7 @@ export function WizardBody({
                   <span className="shrink-0 text-[11px] text-muted-foreground">
                     {t("wizard.install.needed")}
                   </span>
+                  <WizardInstallButton agent={agent} />
                   {command && (
                     <Button
                       variant="outline"

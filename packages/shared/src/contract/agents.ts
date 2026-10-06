@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { ADAPTER_INSTALL_STATES } from "../api/acp.js";
 import { errors } from "./errors.js";
 import { jsonObjectSchema, jsonValueSchema } from "./json.js";
 import { meta, oc } from "./meta.js";
@@ -274,6 +275,20 @@ const dependencyLaunchWireSchema = z.object({
   dependencies: z.array(dependencyWireSchema),
 });
 
+/** ACP 适配器的安装任务：开始、输出尾部、结束与退出码、重新探测的结果。 */
+const adapterInstallJobWireSchema = loose({
+  agentId: z.string(),
+  state: z.enum(ADAPTER_INSTALL_STATES),
+  package: z.string(),
+  reinstall: z.boolean().optional(),
+  startedAt: z.string().optional(),
+  endedAt: z.string().optional(),
+  exitCode: z.number().nullable().optional(),
+  output: z.array(z.string()),
+  installed: z.boolean().optional(),
+  failure: loose({ code: z.string(), message: z.string() }).optional(),
+});
+
 /* ------------------------------- procedure ------------------------------- */
 
 const since = "1.9";
@@ -282,6 +297,7 @@ const STATUS = { since, contract: "§39.2" } as const;
 const ANSWERS = { since, contract: "§39.3" } as const;
 const DELIVERY = { since, contract: "§39.4" } as const;
 const DEPENDENCIES = { since, contract: "§39.5" } as const;
+const ADAPTER_INSTALL = { since: "1.15", contract: "§39.7" } as const;
 
 const INTEGRATION = "/api/agents/{agentId}/integration";
 const AMA_KEY = "/api/agents/ama/credentials/{provider}";
@@ -604,4 +620,31 @@ export const agents = {
         legacy: { method: "DELETE", path: `${DEPENDENCY_LIST}/{dependencyId}` },
       }),
     ),
+
+  /* --------------------------- §39.7 ACP 适配器的安装 --------------------------- */
+
+  /**
+   * 起一次适配器安装（只认 `ACP_ADAPTER_PACKAGES` 里的那几家，跑固定的
+   * `npm install --global <包>`），立刻答任务；进度用 {@link adapterInstall} 读。
+   * 同一家已经在装时答那一个任务。只有 owner。
+   */
+  installAdapter: oc
+    .input(z.object({ agentId: z.string(), reinstall: z.boolean().optional() }))
+    .output(adapterInstallJobWireSchema)
+    .errors(
+      errors.pick(
+        "bad_request",
+        "forbidden",
+        "adapter_not_installable",
+        "adapter_already_installed",
+        "npm_not_found",
+      ),
+    )
+    .meta(meta({ ...ADAPTER_INSTALL, scope: "settings:write" })),
+  /** 这家最近一次安装任务；没装过答 `state: "idle"`。只有 owner。 */
+  adapterInstall: oc
+    .input(agentRef)
+    .output(adapterInstallJobWireSchema)
+    .errors(errors.pick("bad_request", "forbidden", "adapter_not_installable"))
+    .meta(meta({ ...ADAPTER_INSTALL, scope: "settings:read" })),
 };

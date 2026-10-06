@@ -11,6 +11,7 @@ import type {
 import { runtimeApi } from "../../../api/client";
 import { useAgentsQuery } from "../../../app/use-agents";
 import { useT, type Translate } from "../../../app/preferences-store";
+import { AdapterInstallStatus } from "@/acp/adapter-install";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { Badge } from "@/ui/badge";
@@ -221,10 +222,9 @@ export function AgentIntegrationRow({ agent }: { agent: AgentInfo }) {
         {integration.stale && ready && (
           <Badge variant="outline">{t("integration.stale")}</Badge>
         )}
-        {/* 有 ACP 入口而适配器没装：向导里这家是灰的，原因在这里。 */}
-        {agent.acp && !agent.acp.installed && (
-          <Badge variant="outline">{t("integration.acp.missing")}</Badge>
-        )}
+        {/* ACP 适配器：状态与「安装 / 重新安装」（契约 §39.7）。没装时向导里
+            这家是灰的，原因与入口都在这里。 */}
+        <AdapterInstallStatus agent={agent} />
         {integration.launcherWarning && (
           <Badge variant="destructive" title={integration.launcherWarning}>
             {t("integration.launcherWarning")}

@@ -162,6 +162,11 @@ export function rememberedAcpVersion(agentId: string): string | undefined {
   return versions.get(agentId);
 }
 
+/** 这家的适配器换过了（重装）：旧版本号不再作数，下次起会话时重新记。 */
+export function forgetAcpVersion(agentId: string): void {
+  versions.delete(agentId);
+}
+
 /** 测试用。 */
 export function forgetAcpVersions(): void {
   versions.clear();
