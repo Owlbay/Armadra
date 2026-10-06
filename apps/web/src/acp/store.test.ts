@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -309,12 +310,14 @@ describe("elicitations (contract §26.1)", () => {
       models: null,
       elicitations: [{ pendingId: "e1", protocol: "acp", elicitation }],
     });
-    expect(store().elicitations.n1).toEqual([{ pendingId: "e1", elicitation }]);
-    expect(store().sessions.s1?.models).toBeNull();
+    expect(store().elicitations[scoped("n1")]).toEqual([
+      { pendingId: "e1", elicitation },
+    ]);
+    expect(store().sessions[scoped("s1")]?.models).toBeNull();
     store().resolvePermission("e1");
-    expect(store().elicitations.n1).toBeUndefined();
+    expect(store().elicitations[scoped("n1")]).toBeUndefined();
     store().addElicitation("n1", { pendingId: "e2", elicitation });
     store().end("s1", "n1", { stopReason: "cancelled" });
-    expect(store().elicitations.n1).toBeUndefined();
+    expect(store().elicitations[scoped("n1")]).toBeUndefined();
   });
 });

@@ -14,6 +14,7 @@ import {
   presenceClientId,
   presenceDeviceName,
 } from "@/store/canvas/presence";
+import { sk } from "../sources/scope";
 import type { Peer } from "@/realtime/awareness";
 import { useRealtimeStore } from "@/realtime/session";
 import {
@@ -253,7 +254,7 @@ function LeasePresence() {
         // 拿到租约的这一刻按远端重载：只读期间手里那份可能落后。
         if (applyPresence(snapshot).gained) {
           void queryClient.invalidateQueries({
-            queryKey: ["board", workspaceId],
+            queryKey: sk("board", workspaceId),
           });
         }
       })

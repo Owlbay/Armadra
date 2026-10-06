@@ -8,19 +8,20 @@ import android.util.Base64;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 
 /**
- * 几段小秘密（会话、钉扎、推送设备私钥）：值用 Android Keystore 里一把不可导出的
+ * 几段小秘密（每个连接的会话、远程服务登录、每个来源的钉扎、推送设备私钥）：值用 Android Keystore 里一把不可导出的
  * AES-256-GCM 钥加密后放进私有偏好。钥只在这台设备的 Keystore，备份与换机都带
  * 不走（清单里 {@code allowBackup=false}）。
  */
 final class SecureStore {
-    static final String SESSION = "gateway.session";
-    static final String PIN = "gateway.pin";
     static final String DEVICE_KEY = "push.deviceKey";
 
     private static final String KEY_ALIAS = "dev.armadra.mobile.store";
@@ -72,6 +73,16 @@ final class SecureStore {
         } catch (Exception error) {
             return false;
         }
+    }
+
+    /** 以 {@code prefix} 开头的全部条目名（多会话：一个连接一条）。 */
+    synchronized List<String> names(String prefix) {
+        List<String> out = new ArrayList<>();
+        for (String name : preferences.getAll().keySet()) {
+            if (name.startsWith(prefix)) out.add(name);
+        }
+        Collections.sort(out);
+        return out;
     }
 
     synchronized void delete(String name) {

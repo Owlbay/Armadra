@@ -1,3 +1,4 @@
+import { activeSourceId, unscoped } from "@/sources/scope";
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RotateCw, X } from "lucide-react";
@@ -288,8 +289,8 @@ function useWorkspaceOnline(workspaceId: string | null): boolean {
   React.useEffect(() => {
     if (!workspaceId) return;
     setOnline(true);
-    return onWorkspaceConnection((id, next) => {
-      if (id === workspaceId) setOnline(next);
+    return onWorkspaceConnection((id, next, from) => {
+      if (id === workspaceId && from === activeSourceId()) setOnline(next);
     });
   }, [workspaceId]);
   return online;
@@ -327,8 +328,11 @@ export function DispatchDrawer() {
   const now = tasks.dataUpdatedAt || Date.now();
   const model = React.useMemo(() => {
     const states: Record<string, (typeof statuses)[string]["state"]> = {};
-    for (const [id, status] of Object.entries(statuses)) {
-      states[id] = status.state;
+    // 只取当前源的那些，键还原成节点 id。
+    const here = activeSourceId();
+    for (const [key, status] of Object.entries(statuses)) {
+      const { sourceId, id } = unscoped(key);
+      if (sourceId === here) states[id] = status.state;
     }
     return buildDispatch({
       coordinatorId,

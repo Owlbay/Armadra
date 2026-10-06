@@ -5,12 +5,14 @@
  * `agent.status` 事件给出「它们现在怎么样」，两者在这里合流成 `SessionRow`。
  * 分桶与排序都是纯函数，侧栏只负责渲染。
  */
+import { scoped } from "../sources/scope";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { AgentState, AgentStatus, SessionSummary } from "@armadra/shared";
 
 import { runtimeApi } from "../api/client";
 import { isAttention, useAgentStatusStore } from "./status-store";
+import { sk } from "../sources/scope";
 
 export interface SessionRow {
   nodeId: string;
@@ -68,7 +70,7 @@ export function mergeSessions(
 ): SessionRow[] {
   return summaries
     .map((summary) => {
-      const status = statuses[summary.nodeId];
+      const status = statuses[scoped(summary.nodeId)];
       const fresher =
         status !== undefined &&
         millis(status.updatedAt) >= millis(summary.updatedAt);
@@ -156,7 +158,7 @@ export interface UseSessionsResult {
 
 export function useSessions(workspaceId: string | null): UseSessionsResult {
   const query = useQuery({
-    queryKey: ["sessions", workspaceId],
+    queryKey: sk("sessions", workspaceId),
     queryFn: () => runtimeApi.sessions(workspaceId!),
     enabled: Boolean(workspaceId),
     retry: false,

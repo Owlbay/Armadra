@@ -4,9 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   app: true,
   stored: null as null | {
+    sourceId: string;
     origin: string;
+    via: "direct" | "relayed";
     accessToken: string;
     refreshToken: string;
+    expiresAtMs: number;
   },
   saveSession: vi.fn(),
   clearSession: vi.fn(),
@@ -16,9 +19,9 @@ vi.mock("../mobile/native-bridge", () => ({
   isNativeApp: () => mocks.app,
   nativeBridge: () => ({
     available: mocks.app,
-    loadSession: async () => mocks.stored,
-    saveSession: async (session: unknown) => mocks.saveSession(session),
-    clearSession: async () => mocks.clearSession(),
+    getSessions: async () => (mocks.stored ? [mocks.stored] : []),
+    setSession: async (session: unknown) => mocks.saveSession(session),
+    removeSession: async (...args: unknown[]) => mocks.clearSession(...args),
   }),
 }));
 
@@ -85,7 +88,10 @@ describe("原生 App 的身份传输", () => {
     });
     expect(currentAccessToken()).toBe(ACCESS);
     expect(mocks.saveSession).toHaveBeenCalledWith({
+      sourceId: "h1",
       origin: GATEWAY,
+      via: "direct",
+      expiresAtMs: 0,
       accessToken: ACCESS,
       refreshToken: REFRESH,
     });
@@ -94,9 +100,12 @@ describe("原生 App 的身份传输", () => {
 
   it("重开 App：从钥匙串读回会话；来源换了就不用", async () => {
     mocks.stored = {
+      sourceId: "h1",
       origin: LOCAL_BASE,
+      via: "direct",
       accessToken: ACCESS,
       refreshToken: REFRESH,
+      expiresAtMs: 0,
     };
     vi.stubGlobal(
       "fetch",
@@ -119,16 +128,19 @@ describe("原生 App 的身份传输", () => {
 
   it("刷新密钥也被拒：钥匙串作废，回连接页", async () => {
     mocks.stored = {
+      sourceId: "h1",
       origin: LOCAL_BASE,
+      via: "direct",
       accessToken: ACCESS,
       refreshToken: REFRESH,
+      expiresAtMs: 0,
     };
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => answer(401, { code: "unauthenticated" })),
     );
     await expect(resumeIdentity()).resolves.toBeNull();
-    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(mocks.clearSession).toHaveBeenCalledWith("h1", LOCAL_BASE);
     expect(currentAccessToken()).toBe("");
   });
 

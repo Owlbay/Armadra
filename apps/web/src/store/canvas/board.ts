@@ -1,3 +1,5 @@
+import { LOCAL_SOURCE_ID } from "../../api/source";
+import { activeSourceId } from "../../sources/scope";
 import { usePreferencesStore } from "../../app/preferences-store";
 import { mergeRemoteBoard } from "../../canvas/sync/merge";
 import { toItemId } from "../../canvas/whiteboard/model";
@@ -80,22 +82,34 @@ export function createBoardSlice(
   | "setSaveError"
   | "setSaveState"
   | "setWorkspace"
+  | "sourceId"
   | "whiteboard"
   | "workspace"
 > {
   return {
     workspace: null,
+    sourceId: LOCAL_SOURCE_ID,
     boards: [],
     boardId: null,
     panels: initialPanels,
     ...emptyBoardState,
 
-    setWorkspace: (workspace) =>
+    setWorkspace: (workspace, sourceId) =>
       set((state) => {
-        if (state.workspace?.id === workspace?.id) return { workspace };
+        const same = state.workspace?.id === workspace?.id;
+        const nextSource =
+          sourceId ??
+          (same && state.workspace ? state.sourceId : activeSourceId());
+        if (same && nextSource === state.sourceId) return { workspace };
         resetHistory();
         clearLocalEdits();
-        return { workspace, boards: [], boardId: null, ...emptyBoardState };
+        return {
+          workspace,
+          sourceId: nextSource,
+          boards: [],
+          boardId: null,
+          ...emptyBoardState,
+        };
       }),
 
     setBoards: (boards) =>

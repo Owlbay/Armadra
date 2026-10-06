@@ -45,6 +45,22 @@ public enum PinPolicy {
         return true
     }
 
+    /// 远程服务的签发方：HTTPS 来源；回环上的 HTTP 只给本机开发联调。
+    public static func isIssuer(_ text: String) -> Bool {
+        if isOrigin(text) { return true }
+        guard let url = URL(string: text), url.scheme == "http", let host = url.host,
+              host == "127.0.0.1" || host == "localhost" || host == "[::1]" || host == "::1",
+              url.path.isEmpty || url.path == "/", url.query == nil, url.fragment == nil, url.user == nil
+        else { return false }
+        return true
+    }
+
+    /// 钉扎记录的键：`scheme://host:port`（端口缺省 443），大小写不敏感。
+    public static func originKey(_ text: String) -> String? {
+        guard let url = URL(string: text), let host = url.host?.lowercased(), !host.isEmpty else { return nil }
+        return "\(host):\(url.port ?? 443)"
+    }
+
     /// PEM（可多张）或单张 DER → 每张证书的 DER。
     public static func certificates(in data: Data) -> [Data] {
         if let text = String(data: data, encoding: .utf8), text.contains("-----BEGIN CERTIFICATE-----") {

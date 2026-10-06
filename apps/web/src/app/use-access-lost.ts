@@ -16,9 +16,9 @@ import { t } from "./preferences-store";
 export function useWorkspaceAccessLost(): void {
   useEffect(
     () =>
-      onWorkspaceAccessLost((lost) => {
+      onWorkspaceAccessLost((lost, from) => {
         const state = useCanvasStore.getState();
-        if (state.workspace?.id !== lost) return;
+        if (state.workspace?.id !== lost || state.sourceId !== from) return;
         const name = state.workspace.name;
         state.setWorkspace(null);
         toast.info(t("sharing.revoked", { name }));

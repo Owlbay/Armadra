@@ -27,7 +27,9 @@ describe("不在原生 App 里时是空实现", () => {
     expect(bridge.available).toBe(false);
     expect(bridge.canScan).toBe(false);
     expect(isNativeApp()).toBe(false);
-    await expect(bridge.loadSession()).resolves.toBeNull();
+    await expect(bridge.getSessions()).resolves.toEqual([]);
+    await expect(bridge.getRemotes()).resolves.toEqual([]);
+    await expect(bridge.peek(ORIGIN)).resolves.toBeNull();
     await expect(bridge.scan()).resolves.toBeNull();
     await expect(bridge.pushRegistration()).resolves.toBeNull();
     await expect(bridge.pin(ORIGIN, FP)).resolves.toBeUndefined();
@@ -41,44 +43,43 @@ describe("不在原生 App 里时是空实现", () => {
 });
 
 describe("原生插件", () => {
-  it("钥匙串里的会话要形状对才用", async () => {
+  it("钥匙串里的会话要形状对才用，坏的一份只丢那一份", async () => {
+    const good = {
+      sourceId: "h1",
+      origin: ORIGIN,
+      via: "direct" as const,
+      accessToken: SECRET,
+      refreshToken: OTHER,
+      expiresAtMs: 5,
+    };
     const plugin = {
-      getSession: vi.fn(async () => ({
-        session: { origin: ORIGIN, accessToken: SECRET, refreshToken: OTHER },
+      getSessions: vi.fn(async () => ({
+        sessions: [
+          good,
+          { ...good, sourceId: "h2", accessToken: "short" },
+          // 只有密钥半段、没有标识的不算会话密钥。
+          { ...good, sourceId: "h3", accessToken: "a".repeat(43) },
+          { ...good, sourceId: "h4", via: "satellite" },
+          { ...good, sourceId: "bad id" },
+        ],
       })),
       setSession: vi.fn(async () => undefined),
-      clearSession: vi.fn(async () => undefined),
+      removeSession: vi.fn(async () => undefined),
     };
     inApp(plugin);
     const bridge = nativeBridge();
     expect(bridge.available).toBe(true);
-    await expect(bridge.loadSession()).resolves.toEqual({
+    await expect(bridge.getSessions()).resolves.toEqual([good]);
+    plugin.getSessions.mockRejectedValueOnce(new Error("locked"));
+    await expect(bridge.getSessions()).resolves.toEqual([]);
+    await bridge.setSession(good);
+    expect(plugin.setSession).toHaveBeenCalledWith({ session: good });
+    await bridge.removeSession("h1");
+    expect(plugin.removeSession).toHaveBeenCalledWith({ sourceId: "h1" });
+    await bridge.removeSession("h1", ORIGIN);
+    expect(plugin.removeSession).toHaveBeenLastCalledWith({
+      sourceId: "h1",
       origin: ORIGIN,
-      accessToken: SECRET,
-      refreshToken: OTHER,
-    });
-    plugin.getSession.mockResolvedValueOnce({
-      session: { origin: ORIGIN, accessToken: "short", refreshToken: OTHER },
-    });
-    await expect(bridge.loadSession()).resolves.toBeNull();
-    // 只有密钥半段、没有标识的不算会话密钥。
-    plugin.getSession.mockResolvedValueOnce({
-      session: {
-        origin: ORIGIN,
-        accessToken: "a".repeat(43),
-        refreshToken: OTHER,
-      },
-    });
-    await expect(bridge.loadSession()).resolves.toBeNull();
-    plugin.getSession.mockRejectedValueOnce(new Error("locked"));
-    await expect(bridge.loadSession()).resolves.toBeNull();
-    await bridge.saveSession({
-      origin: ORIGIN,
-      accessToken: SECRET,
-      refreshToken: OTHER,
-    });
-    expect(plugin.setSession).toHaveBeenCalledWith({
-      session: { origin: ORIGIN, accessToken: SECRET, refreshToken: OTHER },
     });
   });
 

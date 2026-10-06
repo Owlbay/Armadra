@@ -23,6 +23,7 @@ import type {
 
 import { runtimeApi } from "@/api/client";
 import { useCanvasStore } from "@/store/canvas-store";
+import { activeSourceId } from "@/sources/scope";
 
 /** 事件之后等这么久再重读：一轮结束常常是连着几帧。 */
 export const DEPENDENCY_REFRESH_DEBOUNCE_MS = 300;
@@ -30,6 +31,8 @@ export const DEPENDENCY_REFRESH_DEBOUNCE_MS = 300;
 export const DEPENDENCY_POLL_MS = 30_000;
 
 interface DependencyState {
+  /** `workspaceId` 所在的源；两个源里同名的工作空间不会共用一份读数。 */
+  readonly sourceId: string | null;
   readonly workspaceId: string | null;
   readonly loaded: boolean;
   /** 下游节点 id → 它那一次还没了结的启动。 */
@@ -39,23 +42,32 @@ interface DependencyState {
   reset: () => void;
 }
 
-let inFlight: { workspaceId: string; promise: Promise<void> } | null = null;
+let inFlight: {
+  sourceId: string;
+  workspaceId: string;
+  promise: Promise<void>;
+} | null = null;
 let debounce: ReturnType<typeof setTimeout> | null = null;
 let poll: ReturnType<typeof setInterval> | null = null;
 
 export const useDependencyStore = create<DependencyState>((set, get) => ({
+  sourceId: null,
   workspaceId: null,
   loaded: false,
   launches: {},
   refresh: (workspaceId) => {
-    if (inFlight?.workspaceId === workspaceId) return inFlight.promise;
-    if (get().workspaceId !== workspaceId) {
-      set({ workspaceId, loaded: false, launches: {} });
+    const sourceId = activeSourceId();
+    const same = () =>
+      get().workspaceId === workspaceId && get().sourceId === sourceId;
+    if (inFlight?.workspaceId === workspaceId && inFlight.sourceId === sourceId)
+      return inFlight.promise;
+    if (!same()) {
+      set({ sourceId, workspaceId, loaded: false, launches: {} });
     }
     const promise = runtimeApi
       .dependencies(workspaceId)
       .then((answer) => {
-        if (get().workspaceId !== workspaceId) return;
+        if (!same()) return;
         const launches: Record<string, DependencyLaunch> = {};
         for (const launch of answer.launches) launches[launch.nodeId] = launch;
         set({ loaded: true, launches });
@@ -63,13 +75,13 @@ export const useDependencyStore = create<DependencyState>((set, get) => ({
       .catch(() => {
         // 读不到（旧 core、网络抖动）就当没有等待：放行比把节点永远卡在
         // 「还不知道」上好，core 启动前自己会看前台。
-        if (get().workspaceId !== workspaceId) return;
+        if (!same()) return;
         set({ loaded: true });
       })
       .finally(() => {
         if (inFlight?.promise === promise) inFlight = null;
       });
-    inFlight = { workspaceId, promise };
+    inFlight = { sourceId, workspaceId, promise };
     if (poll === null) {
       poll = setInterval(() => {
         const current = get().workspaceId;
@@ -88,6 +100,8 @@ export const useDependencyStore = create<DependencyState>((set, get) => ({
     }
     const workspaceId = get().workspaceId;
     if (workspaceId === null) return;
+    // 别的源推来的帧与这份读数无关。
+    if (get().sourceId !== activeSourceId()) return;
     if (debounce !== null) clearTimeout(debounce);
     debounce = setTimeout(() => {
       debounce = null;
@@ -100,7 +114,7 @@ export const useDependencyStore = create<DependencyState>((set, get) => ({
     debounce = null;
     poll = null;
     inFlight = null;
-    set({ workspaceId: null, loaded: false, launches: {} });
+    set({ sourceId: null, workspaceId: null, loaded: false, launches: {} });
   },
 }));
 
@@ -110,7 +124,11 @@ export function launchHold(
   nodeId: string,
 ): "held" | "free" | "unknown" {
   const state = useDependencyStore.getState();
-  if (workspaceId === undefined || state.workspaceId !== workspaceId) {
+  if (
+    workspaceId === undefined ||
+    state.workspaceId !== workspaceId ||
+    state.sourceId !== activeSourceId()
+  ) {
     return "unknown";
   }
   if (!state.loaded) return "unknown";
@@ -123,7 +141,12 @@ export async function whenDependenciesKnown(
 ): Promise<void> {
   if (workspaceId === undefined) return;
   const state = useDependencyStore.getState();
-  if (state.workspaceId === workspaceId && state.loaded) return;
+  if (
+    state.workspaceId === workspaceId &&
+    state.sourceId === activeSourceId() &&
+    state.loaded
+  )
+    return;
   await state.refresh(workspaceId);
 }
 
@@ -135,10 +158,16 @@ export function useNodeDependencies(
   useEffect(() => {
     if (workspaceId === null) return;
     const state = useDependencyStore.getState();
-    if (state.workspaceId !== workspaceId) void state.refresh(workspaceId);
+    if (
+      state.workspaceId !== workspaceId ||
+      state.sourceId !== activeSourceId()
+    )
+      void state.refresh(workspaceId);
   }, [workspaceId]);
   return useDependencyStore((state) =>
-    state.workspaceId === workspaceId ? state.launches[nodeId] : undefined,
+    state.workspaceId === workspaceId && state.sourceId === activeSourceId()
+      ? state.launches[nodeId]
+      : undefined,
   );
 }
 

@@ -6,6 +6,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { sk } from "../../../sources/scope";
 import { ChevronLeft, PanelLeft, PanelRight, X } from "lucide-react";
 import { toast } from "sonner";
 import type {
@@ -115,7 +116,7 @@ export function LogPage({ workspaceId }: LogPageProps) {
   );
 
   const refs = useQuery({
-    queryKey: ["git-refs", workspaceId],
+    queryKey: sk("git-refs", workspaceId),
     queryFn: ({ signal }) => gitGateway.refs(at("."), signal),
     retry: false,
   });
@@ -147,7 +148,7 @@ export function LogPage({ workspaceId }: LogPageProps) {
 
   const key = filterKey(git);
   const log = useInfiniteQuery({
-    queryKey: ["git-log", workspaceId, key],
+    queryKey: sk("git-log", workspaceId, key),
     queryFn: ({ pageParam, signal }) =>
       gitGateway.log(
         at("."),
@@ -178,11 +179,11 @@ export function LogPage({ workspaceId }: LogPageProps) {
   /** 每个仓库的进行中状态：写动作的 state token、期望 HEAD 与空闲判定。 */
   const integrations = useQueries({
     queries: repositories.map((repository) => ({
-      queryKey: [
+      queryKey: sk(
         "git-repository-integration",
         workspaceId,
         repository.repositoryPath,
-      ],
+      ),
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         gitGateway.integration(at(repository.repositoryPath), signal),
       retry: false,
@@ -213,7 +214,7 @@ export function LogPage({ workspaceId }: LogPageProps) {
    * 猜一个——猜错的高亮比没有高亮更难发现。
    */
   const identity = useQuery({
-    queryKey: ["git-log-identity", workspaceId],
+    queryKey: sk("git-log-identity", workspaceId),
     queryFn: ({ signal }) => gitGateway.identity(at("."), signal),
     retry: false,
   });
@@ -221,8 +222,8 @@ export function LogPage({ workspaceId }: LogPageProps) {
 
   const invalidate = () => {
     invalidateGitQueries(client, workspaceId);
-    void client.invalidateQueries({ queryKey: ["git-log", workspaceId] });
-    void client.invalidateQueries({ queryKey: ["git-refs", workspaceId] });
+    void client.invalidateQueries({ queryKey: sk("git-log", workspaceId) });
+    void client.invalidateQueries({ queryKey: sk("git-refs", workspaceId) });
   };
 
   const submit = useMutation({

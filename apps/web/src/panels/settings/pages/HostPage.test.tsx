@@ -172,7 +172,7 @@ function fakeCore(options: {
 }
 
 const hello: IdentityHello = {
-  hostId: "host-confirmed",
+  sourceId: "host-confirmed",
   hostInstanceId: "process-confirmed",
   maxFrameBytes: 1_048_576,
   capabilities: ["identity.native-session.v1"],

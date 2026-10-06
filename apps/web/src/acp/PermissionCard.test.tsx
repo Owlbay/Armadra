@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
@@ -59,7 +60,7 @@ describe("PermissionCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "拒绝" }));
     expect(api.answer).toHaveBeenCalledTimes(1);
     expect(api.answer).toHaveBeenCalledWith("n1-1-acp-t1", "deny", "no");
-    expect(useAcpStore.getState().permissions.n1).toBeUndefined();
+    expect(useAcpStore.getState().permissions[scoped("n1")]).toBeUndefined();
     expect(resolveApproval).toHaveBeenCalledWith("n1-1-acp-t1");
   });
 

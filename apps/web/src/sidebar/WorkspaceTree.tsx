@@ -63,6 +63,8 @@ import {
   type BoardEntry,
   type BoardSignal,
 } from "./board-tree";
+import { idsInSource } from "../app/preferences/sources";
+import { activeSourceId } from "../sources/scope";
 import { useBoardMutations } from "./use-board-mutations";
 import { displayName } from "./display-name";
 
@@ -73,20 +75,36 @@ export function WorkspaceTree() {
   const boards = useCanvasStore((state) => state.boards);
   const boardId = useCanvasStore((state) => state.boardId);
   const selectBoard = useCanvasStore((state) => state.selectBoard);
-  const openWorkspaceIds = usePreferencesStore(
-    (state) => state.openWorkspaceIds,
+  // 偏好里的键带源前缀；这棵树只列当前源的行，取出各自的 id。
+  const sourceId = activeSourceId();
+  const openKeys = usePreferencesStore((state) => state.openWorkspaceKeys);
+  const collapsedKeys = usePreferencesStore(
+    (state) => state.collapsedWorkspaceKeys,
   );
-  const collapsedIds = usePreferencesStore(
-    (state) => state.collapsedWorkspaceIds,
+  const pinnedBoardKeys = usePreferencesStore((state) => state.pinnedBoardKeys);
+  const pinnedWorkspaceKeys = usePreferencesStore(
+    (state) => state.pinnedWorkspaceKeys,
+  );
+  const openWorkspaceIds = useMemo(
+    () => idsInSource(openKeys, sourceId),
+    [openKeys, sourceId],
+  );
+  const collapsedIds = useMemo(
+    () => idsInSource(collapsedKeys, sourceId),
+    [collapsedKeys, sourceId],
+  );
+  const pinnedBoardIds = useMemo(
+    () => idsInSource(pinnedBoardKeys, sourceId),
+    [pinnedBoardKeys, sourceId],
+  );
+  const pinnedWorkspaceIds = useMemo(
+    () => idsInSource(pinnedWorkspaceKeys, sourceId),
+    [pinnedWorkspaceKeys, sourceId],
   );
   const setCollapsed = usePreferencesStore(
     (state) => state.setWorkspaceCollapsed,
   );
-  const pinnedBoardIds = usePreferencesStore((state) => state.pinnedBoardIds);
   const setBoardPinned = usePreferencesStore((state) => state.setBoardPinned);
-  const pinnedWorkspaceIds = usePreferencesStore(
-    (state) => state.pinnedWorkspaceIds,
-  );
   const setWorkspacePinned = usePreferencesStore(
     (state) => state.setWorkspacePinned,
   );

@@ -38,6 +38,49 @@ final class AnchorFetch {
         return out;
     }
 
+    /** 取到的东西：握手链（叶在前）与 {@code /ca.crt} 里的证书。 */
+    static final class Fetched {
+        final List<X509Certificate> presented;
+        final List<X509Certificate> body;
+
+        Fetched(List<X509Certificate> presented, List<X509Certificate> body) {
+            this.presented = presented;
+            this.body = body;
+        }
+
+        List<X509Certificate> all() {
+            List<X509Certificate> out = new ArrayList<>(presented);
+            out.addAll(body);
+            return out;
+        }
+    }
+
+    /** 同 {@link #run}，但链与 {@code /ca.crt} 分开给（取指纹给人核对用）；连不上是 {@code null}。 */
+    static Fetched fetch(String origin) {
+        List<X509Certificate> presented = handshake(origin);
+        if (presented == null || presented.isEmpty()) return null;
+        return new Fetched(presented, caCertificate(origin, presented.get(0)));
+    }
+
+    /** 系统信任库本来就信这个来源的证书（ACME、反向代理的真证书）：用默认信任管理器连一次。 */
+    static boolean systemTrusts(String origin) {
+        try {
+            HttpsURLConnection connection = (HttpsURLConnection) new URL(origin + "/ca.crt").openConnection();
+            connection.setConnectTimeout(TIMEOUT_MS);
+            connection.setReadTimeout(TIMEOUT_MS);
+            connection.setUseCaches(false);
+            connection.setInstanceFollowRedirects(false);
+            try {
+                connection.getResponseCode();
+                return true;
+            } finally {
+                connection.disconnect();
+            }
+        } catch (Exception error) {
+            return false;
+        }
+    }
+
     /** 判定：结果里有没有指纹对得上的锚，叶证书能不能验到它（不看有效期之外的系统信任）。 */
     static X509Certificate anchorFor(List<X509Certificate> fetched, Pin pin, String host) {
         X509Certificate anchor = PinPolicy.anchor(fetched, pin);

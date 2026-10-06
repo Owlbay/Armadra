@@ -8,6 +8,7 @@ import type {
   GitRebaseTodoPreview,
   GitRepositoryAction,
 } from "@armadra/shared";
+import { sk } from "../../sources/scope";
 import { useT } from "../../app/preferences-store";
 import { Button } from "../../ui/button";
 import { Textarea } from "../../ui/textarea";
@@ -51,7 +52,12 @@ export function RebaseTodo({
   const t = useT();
   const [entries, setEntries] = useState<GitRebaseTodoEntry[]>([]);
   const preview = useQuery({
-    queryKey: ["git-repository-rebase-todo", workspaceId, repositoryKey, onto],
+    queryKey: sk(
+      "git-repository-rebase-todo",
+      workspaceId,
+      repositoryKey,
+      onto,
+    ),
     queryFn: ({ signal }) => loadPreview(onto, signal),
     enabled: Boolean(onto),
     retry: false,

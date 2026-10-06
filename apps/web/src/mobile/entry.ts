@@ -6,11 +6,19 @@ import {
   refreshIdentity,
   restoreNativeCredentials,
   resumeIdentity,
+  setNativeConnection,
 } from "../api/identity";
+import { resetLocalRuntime } from "../api/local-runtime";
 import { RUNTIME_VIA_SERVER_SHELL } from "../api/request";
-import { savedRuntimeOrigin } from "../api/runtime-url";
+import { savedRuntimeOrigin, setNativeRuntimeBase } from "../api/runtime-url";
 import { installLocalTransport, localSource } from "../api/source";
 import { isCompactLayout } from "../platform/layout";
+import { pickRoute } from "../sources/routing";
+import { RELAY_PROTOCOL, RELAY_TOKEN_HEADER } from "../sources/transport";
+import type { SourceAccess, SourceDescriptor } from "../sources/types";
+import type { ConnectFailure } from "./ConnectScreen";
+import { activeConnection, loadConnections } from "./connections";
+import { mobileCredentialProvider, originOf } from "./credentials";
 import { isNativeApp } from "./native-bridge";
 import {
   completeNativeOAuth,
@@ -35,8 +43,18 @@ export type Entry =
       readonly mode: "native";
       /** 上次记下的来源（会话失效时回到这里）。 */
       readonly origin?: string;
-      /** 原生收到的 `armadra://pair` 深链：连接页输入框的初值，人点「连接」才配。 */
+      /**
+       * 原生收到的 `armadra://pair` 深链：连接页输入框的初值，人点「连接」才配；
+       * `armadra://join` 分享深链：`join` 为真，连接页收到就直接挂载。
+       */
       readonly link?: string;
+      readonly join?: boolean;
+      /** 连接表里的连接（没有凭据）；选中的那个连不上时带着失败原因回到这里。 */
+      readonly connections?: readonly SourceDescriptor[];
+      readonly activeId?: string;
+      readonly failure?: ConnectFailure;
+      /** 从画布里点「连接」进来管理连接，不是启动时没得选。 */
+      readonly manage?: boolean;
     }
   | {
       readonly kind: "connect";
@@ -71,7 +89,9 @@ export function takeLinkFragment(): string | null {
   }
   try {
     const link = decodeURIComponent(found[1]!);
-    return link.startsWith("armadra://pair?") || isNativeOAuthLink(link)
+    return link.startsWith("armadra://pair?") ||
+      link.startsWith("armadra://join?") ||
+      isNativeOAuthLink(link)
       ? link
       : null;
   } catch {
@@ -159,6 +179,116 @@ async function finishNativeOAuth(
     : { kind: "connect", mode: "native", origin };
 }
 
+/** 选路或取访问失败 → 连接页的原因。 */
+function routeFailure(error: unknown): ConnectFailure {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === "source_offline") return "offline";
+  if (code === "source_unauthorized") return "expired";
+  return "unreachable";
+}
+
+/** 访问令牌（与中继令牌）离到期不到这么久就先换，免得请求在路上过期。 */
+const RENEW_LEAD_MS = 60_000;
+const RENEW_RETRY_MS = 30_000;
+
+/**
+ * 进一个连接：选路（直连优先，D27）→ 取访问（钥匙串里这个源的会话，必要时
+ * 轮换或经远程服务重取断言）→ 把这一路的地址与凭据装给本机源。本机源就是
+ * 「当前连接」：页面其余部分不知道自己在直连还是经中继。切换连接 = 记下选中
+ * 的再重载。
+ */
+async function enterConnection(descriptor: SourceDescriptor): Promise<Entry> {
+  const provider = mobileCredentialProvider();
+  const connections = loadConnections();
+  let route: Awaited<ReturnType<typeof pickRoute>>;
+  try {
+    route = await pickRoute(descriptor, provider);
+  } catch (error) {
+    return {
+      kind: "connect",
+      mode: "native",
+      connections,
+      activeId: descriptor.sourceId,
+      failure: routeFailure(error),
+      ...(descriptor.baseUrl === "" ? {} : { origin: descriptor.baseUrl }),
+    };
+  }
+  const relayed = route.via === "relayed";
+  const via = relayed ? "relayed" : "direct";
+  setNativeConnection(descriptor.sourceId, via);
+  setNativeRuntimeBase(route.access.httpBase);
+  resetLocalRuntime();
+
+  let access: SourceAccess = route.access;
+  let renewal: ReturnType<typeof setTimeout> | undefined;
+  const scheduleRenewal = () => {
+    clearTimeout(renewal);
+    if (access.expiresAtMs <= 0) return;
+    renewal = setTimeout(
+      () => void renewActive(),
+      Math.max(access.expiresAtMs - Date.now() - RENEW_LEAD_MS, RENEW_RETRY_MS),
+    );
+  };
+  let renewing: Promise<boolean> | null = null;
+  /** 几条并发的 401 只续一次：刷新密钥是一次性的。 */
+  const renewActive = (): Promise<boolean> => {
+    renewing ??= provider
+      .refresh(descriptor.sourceId, via)
+      .then(async (next) => {
+        access = next;
+        scheduleRenewal();
+        return restoreNativeCredentials();
+      })
+      .catch(() => {
+        scheduleRenewal();
+        return false;
+      })
+      .finally(() => {
+        renewing = null;
+      });
+    return renewing;
+  };
+  const stale = () =>
+    access.expiresAtMs > 0 &&
+    access.expiresAtMs - Date.now() < RENEW_LEAD_MS / 2;
+  installLocalTransport({
+    origin: originOf(access.httpBase),
+    authorization: currentAccessToken,
+    prepare: async () => {
+      if (stale()) await renewActive();
+    },
+    wsTicket: () => ticketWithRefresh(fetchWsTicket, renewActive),
+    refresh: renewActive,
+    ...(relayed
+      ? {
+          extraHeaders: (): Record<string, string> =>
+            access.relayToken === undefined
+              ? {}
+              : { [RELAY_TOKEN_HEADER]: access.relayToken },
+          extraProtocols: () =>
+            access.relayToken === undefined
+              ? []
+              : [`${RELAY_PROTOCOL}${access.relayToken}`],
+        }
+      : {}),
+  });
+  scheduleRenewal();
+  // 回到前台：后台里定时器可能被挂起，令牌已经过期了。
+  globalThis.document?.addEventListener?.("visibilitychange", () => {
+    if (globalThis.document.visibilityState === "visible" && stale())
+      void renewActive();
+  });
+  if (await restoreNativeCredentials()) return { kind: "app" };
+  return {
+    kind: "connect",
+    mode: "native",
+    connections,
+    activeId: descriptor.sourceId,
+    failure: "expired",
+    ...(descriptor.baseUrl === "" ? {} : { origin: descriptor.baseUrl }),
+  };
+}
+
 /**
  * 挂载之前决定入口（`main.tsx`）。桌面窗口与普通网页一个分支都不进，直接是
  * 画布——不发请求、不等任何东西。
@@ -176,13 +306,27 @@ export async function prepareEntry(): Promise<Entry> {
     const link = takeLinkFragment();
     if (link !== null && isNativeOAuthLink(link))
       return finishNativeOAuth(origin, link);
+    const connections = loadConnections();
+    const active = activeConnection();
+    const known = {
+      ...(connections.length === 0 ? {} : { connections }),
+      ...(active === null ? {} : { activeId: active.sourceId }),
+    };
     if (link !== null)
       return {
         kind: "connect",
         mode: "native",
         ...(origin === null ? {} : { origin }),
+        ...known,
         link,
+        ...(link.startsWith("armadra://join?") ? { join: true } : {}),
       };
+    // 从画布里点「连接」进来：回连接页管理（切换、添加、移除）。
+    if (globalThis.location?.hash === "#connections") {
+      history.replaceState(null, "", location.pathname + location.search);
+      return { kind: "connect", mode: "native", manage: true, ...known };
+    }
+    if (active !== null) return enterConnection(active);
     if (origin === null) return { kind: "connect", mode: "native" };
     installTransport(origin);
     return (await restoreNativeCredentials())

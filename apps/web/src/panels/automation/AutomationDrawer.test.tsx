@@ -140,7 +140,7 @@ function ready(api: ReturnType<typeof client>, canManage = true) {
     client: api,
     canManage,
     session: { scopes: [] },
-    hello: { hostId: "a".repeat(32) },
+    hello: { sourceId: "a".repeat(32) },
   };
 }
 

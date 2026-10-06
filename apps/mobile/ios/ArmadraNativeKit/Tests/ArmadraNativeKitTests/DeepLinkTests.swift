@@ -13,6 +13,19 @@ final class DeepLinkTests: XCTestCase {
         XCTAssertNil(DeepLink("armadra://w/" + String(repeating: "a", count: 3000)))
     }
 
+    func testJoinLinksReloadLikePairing() {
+        let link = "armadra://join?link=" + String(repeating: "0", count: 32)
+            + "&issuer=https%3A%2F%2Frelay.example.com&s=" + String(repeating: "S", count: 43) + "." + String(repeating: "c", count: 32) + "." + String(repeating: "D", count: 43)
+        XCTAssertEqual(DeepLink(link), .join(link))
+        XCTAssertEqual(DeepLink(link)?.link, link)
+        let script = DeepLink(link)!.script
+        XCTAssertTrue(script.hasPrefix("history.replaceState(null,'',location.pathname+'#link='+encodeURIComponent("))
+        XCTAssertTrue(script.hasSuffix("location.reload();"))
+        XCTAssertNil(DeepLink("armadra://join"))
+        XCTAssertNil(DeepLink("armadra://join?link=a'+alert(1)+'"))
+        XCTAssertNil(DeepLink("armadra://joinx?link=a"))
+    }
+
     func testScriptsQuoteTheLinkAsAStringLiteral() {
         XCTAssertEqual(
             DeepLink("armadra://w/ws_1/n/node_1")?.script,

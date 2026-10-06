@@ -268,7 +268,7 @@ function ready(api: ReturnType<typeof client>, canWrite = true) {
     client: api,
     canWrite,
     session: { scopes: [] },
-    hello: { hostId: "a".repeat(32) },
+    hello: { sourceId: "a".repeat(32) },
     credential: { available: true },
   };
   session.client = api;

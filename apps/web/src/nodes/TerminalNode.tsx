@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import * as React from "react";
 import {
   ArrowUpDown,
@@ -74,7 +75,7 @@ const SessionView = React.lazy(() => import("@/acp/SessionView"));
 /** 清未读（本地 + 回执）。已读时是空操作，可以随手调。 */
 function markNodeRead(nodeId: string): void {
   const store = useAgentStatusStore.getState();
-  if (store.statuses[nodeId]?.unread) store.markRead(nodeId);
+  if (store.statuses[scoped(nodeId)]?.unread) store.markRead(nodeId);
 }
 
 /**

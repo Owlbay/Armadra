@@ -22,6 +22,7 @@ import { runtimeApi } from "@/api/client";
 import { t } from "@/app/preferences-store";
 
 import { followRename } from "./file-operations";
+import { sk } from "../sources/scope";
 
 /** `a/b/c.ts` → `a/b`；顶层文件是 `.`。 */
 export function parentOf(path: string): string {
@@ -63,9 +64,9 @@ export function useFileActions(workspaceId: string | undefined): FileActions {
   const queryClient = useQueryClient();
 
   const refresh = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["files", workspaceId] });
+    void queryClient.invalidateQueries({ queryKey: sk("files", workspaceId) });
     void queryClient.invalidateQueries({
-      queryKey: ["file-index", workspaceId],
+      queryKey: sk("file-index", workspaceId),
     });
   }, [queryClient, workspaceId]);
 

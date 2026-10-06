@@ -19,6 +19,7 @@ import {
   ResponsiveAlertDialogHeader,
   ResponsiveAlertDialogTitle,
 } from "@/panels/ResponsiveDialog";
+import { sk } from "../sources/scope";
 import { useT } from "./preferences-store";
 import { useCloseWorkspace } from "./workspace-actions";
 
@@ -35,7 +36,7 @@ export function useRemoveWorkspace() {
       runtimeApi.deleteWorkspace(workspaceId),
     onSuccess: (_result, workspaceId) => {
       closeWorkspace(workspaceId);
-      void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+      void queryClient.invalidateQueries({ queryKey: sk("workspaces") });
     },
     onError: (cause: Error) => toast.error(cause.message),
   });
