@@ -512,7 +512,7 @@ export function SessionView({
           ))}
         {view.confirming && (
           <Alert data-slot="acp-confirming">
-            <Spinner />
+            <Spinner aria-hidden />
             <AlertTitle>{t("acp.turn.confirming")}</AlertTitle>
           </Alert>
         )}
