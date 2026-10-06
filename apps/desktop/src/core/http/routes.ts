@@ -1014,6 +1014,12 @@ export const ROUTES: readonly RouteEntry[] = [
     implemented: true,
   },
   {
+    path: "/api/sources/join",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
     path: "/api/execution-hosts",
     methods: ["GET"],
     surface: "runtime",

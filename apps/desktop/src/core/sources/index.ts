@@ -1,7 +1,7 @@
 /**
  * 客户端源表与远程服务域（契约 §33，迁移 0039，平台规格 core 包 §1）。
  *
- * `sources.*` 的十二条 procedure 都在这里登记；它们的旧路径（`/api/sources/*`）
+ * `sources.*` 的 procedure 都在这里登记；它们的旧路径（`/api/sources/*`）
  * 由 RPC 门面挂回同一份实现，路由表里那几条 handler 是门面没装时的回落，调的
  * 也是同一份。全部 owner 专用：读 `settings:read`，写 `settings:write`
  * （`http/route-scopes.ts`）。
@@ -162,6 +162,7 @@ export function install(
     mount: (input) => service.mount(input),
     remoteSession: (input) => service.remoteSession(input.serviceId),
     remoteLogout: (input) => service.remoteLogout(input.serviceId),
+    mountByLink: (input) => service.mountByLink(input),
   } satisfies DomainHandlers<"sources">;
   registerProcedures(context.server, "sources", handlers);
 

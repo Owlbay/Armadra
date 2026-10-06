@@ -72,6 +72,16 @@ export interface FakeCore {
   readonly requireRelayToken: boolean;
   cloudLogins: number;
   refuseCloudLogin?: string;
+  /** 最近一次 `cloud/login` 带的邀请令牌。 */
+  lastInvitation?: string;
+}
+
+/** 假中继上的一条分享链接（cloud-api §5）。 */
+export interface FakeLink {
+  readonly secret: string;
+  readonly sourceId: string;
+  state: "ok" | "expired" | "exhausted" | "revoked";
+  uses: number;
 }
 
 export interface FakeWorld {
@@ -88,6 +98,7 @@ export interface FakeWorld {
     online: boolean;
     assertions: number;
     sources: { sourceId: string; name: string }[];
+    links: Map<string, FakeLink>;
   };
   readonly cores: Map<string, FakeCore>;
   /** 直连 hello 不回答（等超时）。 */
@@ -139,6 +150,7 @@ export function fakeWorld(): FakeWorld {
         { sourceId: RELAYED_ID, name: "studio" },
         { sourceId: PEER_ID, name: "laptop" },
       ],
+      links: new Map(),
     },
     cores,
     slow: new Set(),
@@ -244,6 +256,36 @@ async function cloud(
     }
     return json(200, sessionBody(world, rotated.next, rotated.device));
   }
+  const accept = /^\/v1\/links\/([0-9a-f]+)\/accept$/.exec(path);
+  if (accept !== null) {
+    const link = world.cloud.links.get(accept[1] as string);
+    if (link === undefined || link.state === "revoked") {
+      return json(404, { code: "link_invalid", message: "no" });
+    }
+    if (input.secret !== link.secret) {
+      return json(403, { code: "link_secret_invalid", message: "no" });
+    }
+    if (link.state === "expired") {
+      return json(410, { code: "link_expired", message: "no" });
+    }
+    if (link.state === "exhausted") {
+      return json(410, { code: "link_exhausted", message: "no" });
+    }
+    link.uses += 1;
+    const device = `guest-${Math.random().toString(36).slice(2, 8)}`;
+    return json(200, {
+      sourceId: link.sourceId,
+      relayOrigin: ISSUER,
+      relayBaseUrl: `${ISSUER}/s/${link.sourceId}`,
+      assertion: token(`assertion-${link.sourceId}`),
+      relayToken: token("relay"),
+      guestSession: sessionBody(
+        world,
+        world.cloud.sessions.issue(device),
+        device,
+      ).session,
+    });
+  }
   const access = bearer(request);
   if (!world.cloud.accessTokens.has(access)) {
     return json(401, { code: "unauthenticated", message: "no" });
@@ -345,6 +387,9 @@ async function peer(
     core.cloudLogins += 1;
     if (core.refuseCloudLogin !== undefined) {
       return json(401, { code: core.refuseCloudLogin, message: "refused" });
+    }
+    if (typeof input.invitationToken === "string") {
+      core.lastInvitation = input.invitationToken;
     }
     if (!String(input.assertion).startsWith(`assertion-${core.hostId}`)) {
       return json(401, { code: "cloud_assertion_invalid", message: "bad" });
