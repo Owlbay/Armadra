@@ -2749,3 +2749,32 @@ V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
 - 改备注：中继没有更新链接的接口，未做。
 - 系统分享：桌面壳没有原生分享桥，只在页面有 `navigator.share` 时出现（Electron 桌面上通常不出现）。
 - 本包之前建的链接本机没有存档，列表里只能撤销、不能再复制。
+
+## 远程服务设置页与分享收尾（P4）
+
+做了什么：
+
+- **隧道状态不再轮询**：设置页去掉 `refetchInterval: 5_000`，改订阅本机的 `cloud.tunnel` 事件（`useTunnelEvents`，别的源推来的同名事件不管），事件到了或本机事件流重新连上就重读 `identity.cloud.status`。`cloud.tunnel` 登记进 `WORKSPACE_EVENT_TYPES`（33 种）。
+- **已挂载的源拖动排序**：侧栏 `SourceGroups` 的组头是拖动把手（指针与键盘，`@dnd-kit`），只在桌面壳与服务器壳的页面（源表在本机 core）出现。松手后按位置 1、2、3… 逐行写回 `sources.update.orderIndex`；侧栏先按新顺序画，不为此重连各源，失败退回原顺序并提示。当前源不在分组里，保持它在源表里的位置。
+- **刚建的链接不再随重挂载消失**：正在看的那条链接（含刚建时的整条链接）放进组件外的内存 store（`useShowingStore`，按远程服务记，不落盘），窄屏 / 宽屏切换导致设置框整个重挂载后二维码框照样在；关掉即清。
+- **放弃中继侧清理**（契约 §31.5，协议 minor 17）：`identity.cloud.relayDismiss { issuer }`（旧路径 `POST /api/identity/cloud/relay-dismiss`）只清本机记着的待清理，不再去删中继侧；审计 `cloud.relayDismiss`。页面上「远程服务已删、中继侧还欠着」那一行的菜单里加「放弃清理」，要确认。
+- **分享链接改备注**（契约 §33.10）：`sources.shareLinkUpdate { serviceId, linkId, label }`（旧路径 `PUT /api/sources/remotes/{serviceId}/links/{linkId}`）经远程服务 `links.update` 只改备注，答 `{ link }`；远程服务记着的能力里没有 `links.update` 先重问 `platform.info`，仍没有答 `not_implemented`。页面每条生效链接加「编辑备注」。armadra-cloud 协议包升 0.2.0（`links.update`、能力 `links.update`），个人中转实现它；本仓 vendored tgz、sha256、镜像 tag 与锁文件同步到 0.2.0。
+- **桌面壳原生分享桥**：新 IPC `app:share`（`main/share.ts`，请求经 `shell-core/share-request.ts` 收窄成 http/https、不带账号口令、≤4096），macOS 弹系统分享菜单（`ShareMenu`），其余平台与坏请求答 `{ shared: false }`；preload 暴露 `window.armadra.share { available, url }`。页面有壳的分享菜单就交给它、壳不接退回复制；没有壳时用 Web Share；都没有就只留复制。
+
+实测（macOS arm64，2026-10-07，基于 main cdb7dea5）：
+
+- armadra-cloud（feat/share-link-note）：`pnpm check` 通过；`pnpm -r test` 全过（协议包 146、cloud 65、relay 212）。新用例：relay `sources.test.ts`「改链接备注」1 条（去空白、其余字段不动、撤销后可改、访客 forbidden、不存在 not_found），`personal-e2e` 加 PATCH 一步（真 HTTPS 起中继：owner 改、落地信息跟着变、访客 forbidden、不存在 404、超长 400）；SaaS 预留路由多一条（51 → 52）。
+- Armadra：`pnpm libs:build && pnpm -r --if-present test`——desktop vitest 5213 过 / 74 跳，`parity-push` 一条在满载时超时、单跑通过；live 4 过、脚本 73 过；web 3807 过；server 98 过；shared 372 过。新用例：core `share-links.test.ts` 3 条（改备注、不存在、能力缺失重问后 501 与升级后可改）、`cloud.test.ts` 2 条（放弃清理与 401）、`events/stream.test.ts` 改 33 种；desktop `share-request.test.ts` 3、`main/share.test.ts` 2、`ipc.test.ts` 加 `app:share`；web `SourceGroups.test.tsx` 3（含键盘拖动写回）、`RemoteServicesPage.test.tsx` 5（事件驱动重读、重挂载保留链接、改备注、壳分享与退回复制、放弃清理）、`remote-services.test.ts` 3。
+
+接口：
+
+- core：`ShareLinks.updateLabel`、`SourcesService.remoteCapabilities(serviceId, { refresh })`、`RemoteClient.updateLink`、`CloudRegistry.relayDismiss`；IPC `app:share`。
+- 页面：`dismissRelayCleanup(issuer)`、`renameShareLink(serviceId, linkId, label)`、`reorderSources(sourceIds)`、`shellCanShare()` / `shareViaShell(title, url)`；`RemoteShare.tsx` 导出 `useTunnelEvents`、`useShowingStore`、`shareNatively`；`SourceGroups.tsx` 导出 `applyOrder`。
+
+没做 / 偏离：
+
+- 合并顺序：先合 armadra-cloud 的协议包 0.2.0，再合本仓（vendored tgz 是那个分支打的包）。ghcr 镜像 tag 已随版本钉到 0.2.0，但镜像本身还没发布。
+- 协议 minor 取 17；与别的包同时合入时后合的一方改号。
+- 拖动排序只在侧栏；写回之后页面源表里的编号要到下次读源表（启动、设置页）才更新，届时编号变了的源会按原有逻辑重连一次（`sources/` 连接层不在本包范围）。
+- 系统分享菜单只有 macOS（Electron `ShareMenu`）；Windows / Linux 退回复制。没有在打包产物上实机点过分享菜单。
+- 设置页现在靠事件更新隧道状态；没有任何画布打开（没有工作空间事件流）时不会自己刷新，重开设置或刷新时重读。
