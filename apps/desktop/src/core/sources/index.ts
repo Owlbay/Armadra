@@ -21,7 +21,11 @@ import { type DomainHandlers, registerProcedures } from "../http/rpc";
 import type { CoreRequest, HandlerResult, RouteMatch } from "../http/router";
 import type { CoreContext } from "../main";
 import { secretsFor } from "../secrets";
-import { networkTransport, type Transport } from "./http-client";
+import {
+  networkTransport,
+  presentedAnchor,
+  type Transport,
+} from "./http-client";
 import { RemoteClient } from "./remote-client";
 import { SourceSecrets } from "./secrets";
 import { SourcesService } from "./service";
@@ -135,6 +139,10 @@ export function install(
     hostLabel: () => hostname(),
     log: context.log,
     cloud: () => cloudDomain(),
+    // 只有真网络才探信任锚；测试的假对端不探。
+    ...(transport === networkTransport
+      ? { anchorProbe: (origin: string) => presentedAnchor(origin) }
+      : {}),
     ...(options.now === undefined ? {} : { now: options.now }),
   });
   service.ensureLocal();
@@ -153,6 +161,7 @@ export function install(
     remoteSources: (input) => service.remoteSources(input.serviceId),
     mount: (input) => service.mount(input),
     remoteSession: (input) => service.remoteSession(input.serviceId),
+    remoteLogout: (input) => service.remoteLogout(input.serviceId),
   } satisfies DomainHandlers<"sources">;
   registerProcedures(context.server, "sources", handlers);
 

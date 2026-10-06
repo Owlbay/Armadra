@@ -3240,6 +3240,78 @@
         }
       }
     },
+    "/api/rpc/sources/remoteLogout": {
+      "post": {
+        "operationId": "sources.remoteLogout",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "serviceId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["serviceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.6",
+          "scope": "settings:write",
+          "since": "1.3",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/sources/remotes/{serviceId}/logout"
+          }
+        }
+      }
+    },
     "/api/rpc/identity/cloud/login": {
       "post": {
         "operationId": "identity.cloud.login",

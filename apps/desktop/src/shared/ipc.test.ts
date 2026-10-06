@@ -67,6 +67,8 @@ describe("the IPC table", () => {
         "browser:clear-data",
         // G2-7: the tray's external-access item re-reads after the page.
         "app:gateway-refresh",
+        // A1-4: the page changed the source table; the shell re-reads CSP and pins.
+        "app:sources-changed",
         // G5-19: the page's own JS errors, opt-in (contract §30).
         "diagnostics:report",
       ].sort(),

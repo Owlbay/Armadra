@@ -1,0 +1,878 @@
+import * as React from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Ellipsis } from "lucide-react";
+import { toast } from "sonner";
+
+import {
+  type ClientSource,
+  type RemoteService,
+  type RemoteSourceSummary,
+  addDirectSource,
+  addPersonalRelay,
+  forgetSource,
+  isPairLink,
+  listSources,
+  logoutRemote,
+  mountRemoteSource,
+  notifyShellSourcesChanged,
+  remoteSources,
+  removeRemote,
+  removeSource,
+  stopSharing,
+} from "../../../api/remote-services";
+import { useT } from "../../../app/preferences-store";
+import {
+  applySourceTable,
+  reloadIntoSettings,
+} from "../../../sources/bootstrap";
+import { useSource, useSourceStatus } from "../../../sources";
+import { SettingsGroup } from "../SettingsGroup";
+import { SettingsRow } from "../SettingsRow";
+import { SHARE_STATUS_KEY, ShareDialog } from "../ShareDialog";
+import { groupFingerprint } from "./gateway/PairingCard";
+import {
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
+import { Badge } from "@/ui/badge";
+import { Button } from "@/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/ui/dropdown-menu";
+import { Field, FieldError, FieldGroup, FieldLabel } from "@/ui/field";
+import { IconButton } from "@/ui/icon-button";
+import { Input } from "@/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/select";
+import { Spinner } from "@/ui/spinner";
+import { StatusPill } from "@/ui/status-pill";
+import { sourcePill } from "../source-status";
+
+export const SOURCES_QUERY_KEY = ["sources", "list"] as const;
+
+/** 设置导航里的分区 id（`nav.ts`）。 */
+export const REMOTE_SECTION = "remote";
+
+/** 指纹短码：前 8 位，按两位一组。 */
+export function shortFingerprint(fingerprint: string): string {
+  return fingerprint === "" ? "" : groupFingerprint(fingerprint.slice(0, 8));
+}
+
+/**
+ * 源表变了之后的收尾：重读、交给页面源表、告诉桌面壳；壳说新来源要重载页面
+ * 才放行（CSP），就回到这一页重载。
+ */
+function useSourceTableChanged() {
+  const client = useQueryClient();
+  return React.useCallback(async () => {
+    await client.invalidateQueries({ queryKey: SOURCES_QUERY_KEY });
+    void client.invalidateQueries({ queryKey: SHARE_STATUS_KEY });
+    if (await notifyShellSourcesChanged()) reloadIntoSettings(REMOTE_SECTION);
+  }, [client]);
+}
+
+/**
+ * 设置 → 远程服务（客户端包 §3.1）。两段：
+ *
+ * - **远程服务**：个人中转（地址、账号、口令，首次核对证书指纹）；每行登录 /
+ *   登出、分享本机（→ `ShareDialog`）、移除。SaaS 服务端就绪前不出现入口
+ *   （总计划 §12）。
+ * - **已挂载的源**：本机一行不可删；自托管直连（配对链接或地址 + 配对码，同样
+ *   核对指纹）与从远程服务挂载；每行状态、断开、移除。
+ *
+ * 远程服务出错只落在那一行或那一次操作上（旁路保证）；错误按 `code` 取文案。
+ */
+export function RemoteServicesPage() {
+  const t = useT();
+  const changed = useSourceTableChanged();
+  const table = useQuery({
+    queryKey: SOURCES_QUERY_KEY,
+    queryFn: listSources,
+    retry: false,
+  });
+  const [adding, setAdding] = React.useState<RelayDraft | null>(null);
+  const [addingDirect, setAddingDirect] = React.useState(false);
+  const [mounting, setMounting] = React.useState(false);
+  const [sharing, setSharing] = React.useState<RemoteService | null>(null);
+  const [removing, setRemoving] = React.useState<Removal | null>(null);
+
+  const sources = table.data?.sources;
+  React.useEffect(() => {
+    if (sources) void applySourceTable(sources);
+  }, [sources]);
+
+  const remotes = table.data?.remotes ?? [];
+  const local = sources?.find((source) => source.kind === "local");
+  const mounted = (sources ?? []).filter((source) => source.kind !== "local");
+  const signedIn = remotes.filter((remote) => remote.hasCredentials);
+
+  const logout = useMutation({
+    mutationFn: (serviceId: string) => logoutRemote(serviceId),
+    onSuccess: () => {
+      void changed();
+      toast.success(t("remote.signedOut"));
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const unshare = useMutation({
+    mutationFn: (issuer: string) => stopSharing(issuer),
+    onSuccess: () => {
+      void changed();
+      toast.success(t("remote.share.stopped"));
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const forget = useMutation({
+    mutationFn: (sourceId: string) => forgetSource(sourceId),
+    onSuccess: () => void changed(),
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const remove = useMutation({
+    mutationFn: (target: Removal) =>
+      target.kind === "remote"
+        ? removeRemote(target.id)
+        : removeSource(target.id),
+    onSuccess: () => void changed(),
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  return (
+    <>
+      <SettingsGroup title={t("remote.services")}>
+        {remotes.map((remote) => (
+          <SettingsRow
+            key={remote.serviceId}
+            label={remote.label}
+            footnote={[
+              t("remote.kind.personal"),
+              remote.accountHint,
+              shortFingerprint(remote.fingerprint),
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          >
+            {remote.registered && (
+              <Badge variant="secondary" className="font-normal">
+                {t("remote.sharing")}
+              </Badge>
+            )}
+            {remote.hasCredentials ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setSharing(remote)}
+              >
+                {t("remote.share")}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() =>
+                  setAdding({
+                    issuer: remote.issuer,
+                    account: remote.accountHint,
+                    fingerprint: remote.fingerprint,
+                  })
+                }
+              >
+                {t("remote.signIn")}
+              </Button>
+            )}
+            <RowMenu name={remote.label}>
+              {remote.hasCredentials && (
+                <DropdownMenuItem
+                  onSelect={() => logout.mutate(remote.serviceId)}
+                >
+                  {t("remote.signOut")}
+                </DropdownMenuItem>
+              )}
+              {remote.registered && (
+                <DropdownMenuItem
+                  onSelect={() => unshare.mutate(remote.issuer)}
+                >
+                  {t("remote.share.stop")}
+                </DropdownMenuItem>
+              )}
+              {(remote.hasCredentials || remote.registered) && (
+                <DropdownMenuSeparator />
+              )}
+              <DropdownMenuItem
+                variant="destructive"
+                onSelect={() =>
+                  setRemoving({
+                    kind: "remote",
+                    id: remote.serviceId,
+                    name: remote.label,
+                  })
+                }
+              >
+                {t("remote.remove")}
+              </DropdownMenuItem>
+            </RowMenu>
+          </SettingsRow>
+        ))}
+        <SettingsRow label={null}>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() =>
+              setAdding({ issuer: "", account: "", fingerprint: "" })
+            }
+          >
+            {t("remote.add")}
+          </Button>
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup title={t("remote.sources")}>
+        {local && (
+          <SettingsRow label={local.label}>
+            <Badge variant="secondary" className="font-normal">
+              {t("remote.kind.local")}
+            </Badge>
+          </SettingsRow>
+        )}
+        {mounted.map((source) => (
+          <MountedRow
+            key={source.sourceId}
+            source={source}
+            onForget={() => forget.mutate(source.sourceId)}
+            onRemove={() =>
+              setRemoving({
+                kind: "source",
+                id: source.sourceId,
+                name: source.label,
+              })
+            }
+          />
+        ))}
+        <SettingsRow label={null}>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setAddingDirect(true)}
+          >
+            {t("remote.direct.add")}
+          </Button>
+          {signedIn.length > 0 && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setMounting(true)}
+            >
+              {t("remote.mount")}
+            </Button>
+          )}
+        </SettingsRow>
+      </SettingsGroup>
+
+      <AddRelayDialog
+        draft={adding}
+        onClose={() => setAdding(null)}
+        onDone={() => {
+          setAdding(null);
+          toast.success(t("remote.added"));
+          void changed();
+        }}
+      />
+      <AddDirectDialog
+        open={addingDirect}
+        onClose={() => setAddingDirect(false)}
+        onDone={() => {
+          setAddingDirect(false);
+          toast.success(t("remote.added"));
+          void changed();
+        }}
+      />
+      <MountDialog
+        open={mounting}
+        remotes={signedIn}
+        onClose={() => setMounting(false)}
+        onMounted={() => void changed()}
+      />
+      <ShareDialog
+        remote={sharing}
+        localLabel={local?.label ?? ""}
+        onClose={() => setSharing(null)}
+      />
+      <ResponsiveAlertDialog
+        open={removing !== null}
+        onOpenChange={(open) => {
+          if (!open) setRemoving(null);
+        }}
+      >
+        <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
+              {t("remote.removeConfirm", { name: removing?.name ?? "" })}
+            </ResponsiveAlertDialogTitle>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("remote.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (removing) remove.mutate(removing);
+                setRemoving(null);
+              }}
+            >
+              {t("remote.remove")}
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
+    </>
+  );
+}
+
+interface Removal {
+  readonly kind: "remote" | "source";
+  readonly id: string;
+  readonly name: string;
+}
+
+function RowMenu({
+  name,
+  children,
+}: {
+  name: string;
+  children: React.ReactNode;
+}) {
+  const t = useT();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <IconButton label={t("remote.actions", { name })}>
+          <Ellipsis />
+        </IconButton>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="z-[var(--z-dialog)]">
+        {children}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function MountedRow({
+  source,
+  onForget,
+  onRemove,
+}: {
+  source: ClientSource;
+  onForget(): void;
+  onRemove(): void;
+}) {
+  const t = useT();
+  const connection = useSource(source.sourceId);
+  const status = useSourceStatus(connection);
+  const pill = sourcePill(
+    source.hasCredentials ? status.state : "unauthorized",
+  );
+  const where = source.kind === "relayed" ? source.relayOrigin : source.baseUrl;
+  return (
+    <SettingsRow
+      label={source.label}
+      footnote={[
+        t(
+          source.kind === "relayed"
+            ? "remote.kind.relayed"
+            : "remote.kind.direct",
+        ),
+        where.replace(/^https?:\/\//, ""),
+      ]
+        .filter(Boolean)
+        .join(" · ")}
+    >
+      <StatusPill tone={pill.tone} label={t(pill.key)} />
+      <RowMenu name={source.label}>
+        {source.hasCredentials && (
+          <DropdownMenuItem onSelect={onForget}>
+            {t("remote.forget")}
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem variant="destructive" onSelect={onRemove}>
+          {t("remote.remove")}
+        </DropdownMenuItem>
+      </RowMenu>
+    </SettingsRow>
+  );
+}
+
+/* ------------------------------ 指纹核对 ------------------------------- */
+
+function FingerprintCheck({ fingerprint }: { fingerprint: string }) {
+  const t = useT();
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="text-[12px] text-muted-foreground">
+        {t("remote.fingerprint")}
+      </span>
+      <p
+        data-slot="fingerprint"
+        className="font-mono text-[12px] leading-5 select-text"
+      >
+        {/* 只在冒号后折行：一组两位不被拆开，好逐组对照。 */}
+        {groupFingerprint(fingerprint)
+          .split(":")
+          .map((pair, index) => (
+            <React.Fragment key={index}>
+              {index > 0 && (
+                <>
+                  :<wbr />
+                </>
+              )}
+              {pair}
+            </React.Fragment>
+          ))}
+      </p>
+    </div>
+  );
+}
+
+/* ------------------------------ 个人中转 ------------------------------- */
+
+interface RelayDraft {
+  readonly issuer: string;
+  readonly account: string;
+  /** 已知的指纹（重新登录）；新加的是空串。 */
+  readonly fingerprint: string;
+}
+
+/**
+ * 添加个人中转，或对已有的一行重新登录（地址与指纹不再改）。首次没有指纹时
+ * core 答出对端的指纹，换成核对这一步；人确认后带着指纹再登录一次。
+ */
+function AddRelayDialog({
+  draft,
+  onClose,
+  onDone,
+}: {
+  draft: RelayDraft | null;
+  onClose(): void;
+  onDone(): void;
+}) {
+  const t = useT();
+  const relogin = draft !== null && draft.issuer !== "";
+  const [issuer, setIssuer] = React.useState("");
+  const [account, setAccount] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [confirming, setConfirming] = React.useState("");
+  const [error, setError] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+
+  React.useEffect(() => {
+    if (draft === null) return;
+    setIssuer(draft.issuer);
+    setAccount(draft.account);
+    setPassword("");
+    setConfirming("");
+    setError("");
+  }, [draft]);
+
+  async function submit(fingerprint: string) {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const answer = await addPersonalRelay({
+        issuer,
+        account,
+        password,
+        ...(fingerprint ? { fingerprint } : {}),
+      });
+      if (answer.kind === "confirm") {
+        setConfirming(answer.fingerprint);
+        return;
+      }
+      setPassword("");
+      onDone();
+    } catch (failure) {
+      setConfirming("");
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const ready =
+    issuer.trim() !== "" && account.trim() !== "" && password !== "";
+
+  return (
+    <ResponsiveDialog
+      open={draft !== null}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[420px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {confirming
+              ? t("remote.fingerprint.confirm")
+              : relogin
+                ? t("remote.signIn")
+                : t("remote.add")}
+          </ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (confirming) void submit(confirming);
+            else if (ready) void submit(draft?.fingerprint ?? "");
+          }}
+        >
+          {confirming ? (
+            <>
+              <p className="text-[13px] break-all">{issuer.trim()}</p>
+              <FingerprintCheck fingerprint={confirming} />
+            </>
+          ) : (
+            <FieldGroup className="gap-3">
+              <Field className="gap-1.5">
+                <FieldLabel htmlFor="remote-issuer">
+                  {t("remote.field.issuer")}
+                </FieldLabel>
+                <Input
+                  id="remote-issuer"
+                  type="url"
+                  inputMode="url"
+                  autoComplete="url"
+                  spellCheck={false}
+                  placeholder="https://relay.example.com"
+                  readOnly={relogin}
+                  value={issuer}
+                  onChange={(event) => setIssuer(event.target.value)}
+                />
+              </Field>
+              <Field className="gap-1.5">
+                <FieldLabel htmlFor="remote-account">
+                  {t("remote.field.account")}
+                </FieldLabel>
+                <Input
+                  id="remote-account"
+                  autoComplete="username"
+                  spellCheck={false}
+                  value={account}
+                  onChange={(event) => setAccount(event.target.value)}
+                />
+              </Field>
+              <Field className="gap-1.5" data-invalid={error !== ""}>
+                <FieldLabel htmlFor="remote-password">
+                  {t("remote.field.password")}
+                </FieldLabel>
+                <Input
+                  id="remote-password"
+                  type="password"
+                  autoComplete="current-password"
+                  aria-invalid={error !== ""}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+              </Field>
+            </FieldGroup>
+          )}
+          {error && <FieldError>{error}</FieldError>}
+          <ResponsiveDialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => (confirming ? setConfirming("") : onClose())}
+            >
+              {t("remote.cancel")}
+            </Button>
+            <Button type="submit" disabled={busy || (!confirming && !ready)}>
+              {busy && <Spinner data-icon="inline-start" aria-hidden />}
+              {confirming ? t("remote.fingerprint.trust") : t("remote.signIn")}
+            </Button>
+          </ResponsiveDialogFooter>
+        </form>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
+  );
+}
+
+/* ------------------------------ 自托管直连 ----------------------------- */
+
+function AddDirectDialog({
+  open,
+  onClose,
+  onDone,
+}: {
+  open: boolean;
+  onClose(): void;
+  onDone(): void;
+}) {
+  const t = useT();
+  const [address, setAddress] = React.useState("");
+  const [code, setCode] = React.useState("");
+  const [confirming, setConfirming] = React.useState("");
+  const [error, setError] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const link = isPairLink(address);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setAddress("");
+    setCode("");
+    setConfirming("");
+    setError("");
+  }, [open]);
+
+  async function submit(fingerprint: string) {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const answer = await addDirectSource(
+        link
+          ? { pairLink: address, ...(fingerprint ? { fingerprint } : {}) }
+          : {
+              origin: address,
+              code,
+              ...(fingerprint ? { fingerprint } : {}),
+            },
+      );
+      if (answer.kind === "confirm") {
+        setConfirming(answer.fingerprint);
+        return;
+      }
+      onDone();
+    } catch (failure) {
+      setConfirming("");
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const ready = address.trim() !== "" && (link || code.trim() !== "");
+
+  return (
+    <ResponsiveDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[420px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {confirming
+              ? t("remote.fingerprint.confirm")
+              : t("remote.direct.add")}
+          </ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (confirming) void submit(confirming);
+            else if (ready) void submit("");
+          }}
+        >
+          {confirming ? (
+            <>
+              <p className="text-[13px] break-all">{address.trim()}</p>
+              <FingerprintCheck fingerprint={confirming} />
+            </>
+          ) : (
+            <FieldGroup className="gap-3">
+              <Field className="gap-1.5">
+                <FieldLabel htmlFor="direct-address">
+                  {t("remote.direct.address")}
+                </FieldLabel>
+                <Input
+                  id="direct-address"
+                  inputMode="url"
+                  spellCheck={false}
+                  placeholder="https://192.168.1.20:8443"
+                  value={address}
+                  onChange={(event) => setAddress(event.target.value)}
+                />
+              </Field>
+              {!link && (
+                <Field className="gap-1.5" data-invalid={error !== ""}>
+                  <FieldLabel htmlFor="direct-code">
+                    {t("remote.direct.code")}
+                  </FieldLabel>
+                  <Input
+                    id="direct-code"
+                    autoComplete="one-time-code"
+                    spellCheck={false}
+                    className="font-mono tracking-[0.08em]"
+                    value={code}
+                    onChange={(event) => setCode(event.target.value)}
+                  />
+                </Field>
+              )}
+            </FieldGroup>
+          )}
+          {error && <FieldError>{error}</FieldError>}
+          <ResponsiveDialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => (confirming ? setConfirming("") : onClose())}
+            >
+              {t("remote.cancel")}
+            </Button>
+            <Button type="submit" disabled={busy || (!confirming && !ready)}>
+              {busy && <Spinner data-icon="inline-start" aria-hidden />}
+              {confirming
+                ? t("remote.fingerprint.trust")
+                : t("remote.direct.connect")}
+            </Button>
+          </ResponsiveDialogFooter>
+        </form>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
+  );
+}
+
+/* --------------------------- 从远程服务挂载 ---------------------------- */
+
+function MountDialog({
+  open,
+  remotes,
+  onClose,
+  onMounted,
+}: {
+  open: boolean;
+  remotes: readonly RemoteService[];
+  onClose(): void;
+  onMounted(): void;
+}) {
+  const t = useT();
+  const client = useQueryClient();
+  const [serviceId, setServiceId] = React.useState("");
+  const chosen =
+    remotes.find((remote) => remote.serviceId === serviceId) ?? remotes[0];
+  const listing = useQuery({
+    queryKey: ["sources", "remote", chosen?.serviceId ?? ""],
+    queryFn: () => remoteSources(chosen?.serviceId ?? ""),
+    enabled: open && chosen !== undefined,
+    retry: false,
+  });
+  const mount = useMutation({
+    mutationFn: (source: RemoteSourceSummary) =>
+      mountRemoteSource(chosen?.serviceId ?? "", source.sourceId),
+    onSuccess: () => {
+      void client.invalidateQueries({
+        queryKey: ["sources", "remote", chosen?.serviceId ?? ""],
+      });
+      toast.success(t("remote.added"));
+      onMounted();
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const rows = listing.data?.sources ?? [];
+
+  return (
+    <ResponsiveDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[440px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{t("remote.mount")}</ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
+        <div className="flex min-w-0 flex-col gap-3">
+          {remotes.length > 1 && (
+            <Select
+              value={chosen?.serviceId ?? ""}
+              onValueChange={setServiceId}
+            >
+              <SelectTrigger
+                size="sm"
+                aria-label={t("remote.services")}
+                className="w-full"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="z-[var(--z-dialog)]">
+                {remotes.map((remote) => (
+                  <SelectItem key={remote.serviceId} value={remote.serviceId}>
+                    {remote.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          {listing.isPending ? (
+            <div className="flex justify-center py-4">
+              <Spinner aria-label={t("remote.mount")} />
+            </div>
+          ) : listing.isError ? (
+            <p role="alert" className="text-[13px] text-destructive">
+              {listing.error.message}
+            </p>
+          ) : rows.length === 0 ? (
+            <p className="text-[13px] text-muted-foreground">
+              {t("remote.mount.empty")}
+            </p>
+          ) : (
+            <ul className="flex flex-col divide-y divide-border/60">
+              {rows.map((source) => (
+                <li
+                  key={source.sourceId}
+                  className="flex min-w-0 items-center justify-between gap-3 py-2"
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-[13px]">{source.name}</span>
+                    <StatusPill
+                      tone={source.online ? "done" : "idle"}
+                      label={t(
+                        source.online
+                          ? "remote.status.ready"
+                          : "remote.status.offline",
+                      )}
+                    />
+                  </span>
+                  {source.mounted ? (
+                    <Badge variant="secondary" className="font-normal">
+                      {t("remote.mounted")}
+                    </Badge>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={mount.isPending || !source.online}
+                      onClick={() => mount.mutate(source)}
+                    >
+                      {t("remote.mount.action")}
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
+  );
+}
