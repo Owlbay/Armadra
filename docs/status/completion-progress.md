@@ -2749,3 +2749,31 @@ V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
 - 改备注：中继没有更新链接的接口，未做。
 - 系统分享：桌面壳没有原生分享桥，只在页面有 `navigator.share` 时出现（Electron 桌面上通常不出现）。
 - 本包之前建的链接本机没有存档，列表里只能撤销、不能再复制。
+
+## P3 多源页面收尾（A1-2 / A1-5 / A3-4 留下的几项）
+
+做了什么（`apps/web/src/`）：
+
+- **按源发的读数不再经 `runtimeApi`**：新 `sources/source-api.ts` 的 `sourceApi(source)`（agents、boards、terminals 三个域，经 `clientFor(source)`，同一个源同一份）。`agent/dependency-store` 的读数、取消、旧依赖迁入，`realtime/session` 的「这块板走不走实时」复核，会话列表（`agent/sessions.ts` 的 `sessionsQuery`，侧栏与镜像补齐共用）都发往读数所属的源；会话查询的键与请求绑在渲染时的同一个源上，不随之后的当前源漂走。
+- **切源时数据不串**：`dropUnscopedQueries` 原来只 `removeQueries`，有人在看的查询留着上一个源的答案直到下次重渲染；现在有人在看的 `resetQueries`（向新源重取，上一个源在路上的答案作废），没人看的照旧丢。`["src", …]` 各归各的源。
+- **一个标签页同时挂多个源**：`sources/mounts.ts` 的 `mountSiblingSources({ primary, siblings, provider, cloudAuth? })`——选中的那台照旧装成本机源（带它的名字），其余连接作为远程源挂进页面源表（`registry.ts` 新 `installPageSourceRegistry(options)`，带自己的凭据来源），侧栏按源分组、点一行即切当前源。只有一台时什么也不做，与单源逐字相同。
+  - 手机（`mobile/entry.ts`）：进入选中的连接后挂上连接表里其余的连接；`createMobileCredentialProvider` 多交出 `cloudAuth`，经中继的源各签发方一条 `me.stream`。
+  - 中继托管页面（`sources/hosted.ts`）：登录时目录里的其余主机在进入后挂上（访客只挂链接那一台）；托管页自己那条 `me.stream` 把其余主机的上线、撤销与重开补叫落到各自的连接上。
+  - `createLocalConnection({ label })`；侧栏 `SourceGroups` 本机组有名字时用名字（只改这一行，桌面与服务器壳名字为空、不变）。
+- **中继自己停了**：`HostedStatus.relayDown`——托管页的 `me.stream` 开过之后 `RELAY_DOWN_AFTER_MS`（4 秒）回不到 `open` 即算中继停了（主机下线时这条流照常开着，由此分开），流重开即落回。通知条（`shell/Banners.tsx`）专门一条「中转服务不可用，正在重连」，盖过主机等待与「本地服务已断开」，不给刷新钮（凭据只在内存）。文案 `remote.hosted.relayDown`，中英同步。
+
+实测（macOS arm64，2026-10-07，基于 main cdb7dea5）：
+
+- 新用例：`sources/source-api.test`（依赖读数在别的源的事件里发往那个源、两源同名工作空间不串、会话键与请求绑源、实时复核按源）、`sources/switch-isolation.test`（换源后看着的查询向新源重取、上一个源晚到的答案不落缓存、带源前缀的留着；前两条在旧实现上失败）、`sources/mounts.test`、`mobile/entry.test` 补 2（多连接同时挂、单连接不动）、`sources/hosted.test` 补 6（多主机挂载与事件分发、单台不换源表、中继停了的判定与恢复、短断与自关不算、主机下线不算）、`shell/Banners.relay.test` 2。
+- 端到端：`ARMADRA_PERSONAL_RELAY_HOME=<armadra-cloud> node tools/probes/relay-web-e2e.mjs`（armadra-cloud main 342dd23，临时目录与 HOME，用完即停）全过；探针改为断言中继 SIGTERM 后出现「中转服务不可用，正在重连」且没有「等待上线 / 本地服务已断开」，中继回来后通知条收起、终端与实时板恢复（隧道 17.5 秒、页面 25 秒）。
+
+接口：
+
+- `sourceApi(source?)`、`sessionsQuery(workspaceId)`；`mountSiblingSources(...)` / `SiblingMount`、`installPageSourceRegistry(options)`；`createLocalConnection({ label })`；`MobileCredentialProvider.cloudAuth`；`HostedStatus.relayDown`、`RELAY_DOWN_AFTER_MS`、`HostedRelayOptions.mount / setTimeout / clearTimeout`。
+
+没做 / 偏离：
+
+- 只动了 `sidebar/SourceGroups.tsx` 一行（本机组的名字）与 `shell/Banners.tsx`（中继停了那一条），其余在约定的目录内。
+- 多主机同时挂载没有对真中继跑端到端（探针只登记一台 core）；由单测覆盖挂载、事件分发与单台兼容。手机多连接同样只在单测里验过。
+- 中继停了的提示只在托管页面上；手机经中继的连接没有这一条（仍是运行时断开与源状态）。
+- `runtimeApi` 其余域（handoff、git 等 REST 与 `currentClient` 的）仍发往当前源，键带源前缀的在切源前后由键区分。
