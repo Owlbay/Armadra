@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { usePreferencesStore } from "../app/preferences-store";
 import { routedFetch } from "../mobile/testing";
+import { CloudError } from "../sources/cloud-client";
 import { JoinPage } from "./JoinPage";
 
 /**
@@ -45,55 +46,15 @@ afterEach(() => {
 });
 
 describe("JoinPage", () => {
-  it("访客加入：accept → cloud/login 带邀请令牌 → 本机源指到中继，打开链接的工作空间", async () => {
-    const net = routedFetch({
-      [`GET /v1/links/${LINK_ID}`]: info,
-      [`POST /v1/links/${LINK_ID}/accept`]: (init) => {
-        expect(JSON.parse(String(init.body))).toMatchObject({
-          secret: SECRET,
-          device: { platform: "browser" },
-        });
-        return {
-          body: {
-            sourceId: HOST,
-            relayOrigin: ISSUER,
-            relayBaseUrl: `${ISSUER}/s/${HOST}`,
-            assertion: "jws.guest",
-            relayToken: "relay.guest",
-            guestSession: {
-              accessToken: "guest-access",
-              refreshToken: "guest-refresh",
-              accessExpiresAtMs: Date.now() + 900_000,
-            },
-          },
-        };
-      },
-      [`POST /s/${HOST}/api/identity/cloud/login`]: (init) => {
-        expect(JSON.parse(String(init.body))).toEqual({
-          assertion: "jws.guest",
-          invitationToken: INVITE,
-        });
-        expect(
-          (init.headers as Record<string, string>)["Armadra-Relay-Token"],
-        ).toBe("relay.guest");
-        return {
-          body: {
-            session: {
-              hostId: HOST,
-              expiresAtUnixMs: Date.now() + 900_000,
-              native: { accessToken: "core-access", refreshToken: "core-r" },
-            },
-          },
-        };
-      },
-    });
-    const enter = vi.fn();
+  it("显示源、权限与有效期；「加入」按链接以访客加入，地址换成 /app/，记下打开工作空间", async () => {
+    const net = routedFetch({ [`GET /v1/links/${LINK_ID}`]: info });
+    const join = vi.fn(async () => HOST);
     const onJoined = vi.fn();
     render(
       <JoinPage
         href={HREF}
         cloud={{ fetch: net.fetch }}
-        enter={enter}
+        join={join}
         onJoined={onJoined}
       />,
     );
@@ -101,13 +62,12 @@ describe("JoinPage", () => {
     expect(screen.getByText(/执行/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "加入" }));
     await waitFor(() => expect(onJoined).toHaveBeenCalledOnce());
-    expect(enter).toHaveBeenCalledWith(
-      expect.objectContaining({
-        issuer: ISSUER,
-        accepted: expect.objectContaining({ sourceId: HOST }),
-        core: expect.objectContaining({ hostId: HOST }),
-      }),
-    );
+    expect(join).toHaveBeenCalledWith({
+      issuer: ISSUER,
+      linkId: LINK_ID,
+      secret: SECRET,
+      invitationToken: INVITE,
+    });
     expect(sessionStorage.getItem("armadra.sources.openAfterJoin")).toBe(
       "local",
     );
@@ -120,24 +80,21 @@ describe("JoinPage", () => {
     ).toMatch(/^armadra:\/\/join\?link=0123456789abcdef&issuer=/);
   });
 
-  it("过期、撤销：按码说明，不进画布", async () => {
-    for (const [status, codeName, text] of [
+  it("过期、撤销、邀请被拒：按码说明，不展示对端原话，不进画布", async () => {
+    for (const [status, code, text] of [
       [410, "link_expired", "链接已过期"],
       [404, "link_invalid", "链接已停用或不存在"],
+      [401, "invitation_invalid", "邀请无效或已用完"],
     ] as const) {
-      const net = routedFetch({
-        [`GET /v1/links/${LINK_ID}`]: info,
-        [`POST /v1/links/${LINK_ID}/accept`]: () => ({
-          status,
-          body: { code: codeName, message: "server words" },
-        }),
-      });
+      const net = routedFetch({ [`GET /v1/links/${LINK_ID}`]: info });
       const onJoined = vi.fn();
       const { unmount } = render(
         <JoinPage
           href={HREF}
           cloud={{ fetch: net.fetch }}
-          enter={vi.fn()}
+          join={async () => {
+            throw new CloudError(status, code, "server words");
+          }}
           onJoined={onJoined}
         />,
       );
@@ -150,34 +107,22 @@ describe("JoinPage", () => {
     }
   });
 
-  it("邀请被拒（经中继 cloud/login）同样按码说明", async () => {
+  it("撤销的链接：一打开 links.get 就说明", async () => {
     const net = routedFetch({
-      [`GET /v1/links/${LINK_ID}`]: info,
-      [`POST /v1/links/${LINK_ID}/accept`]: () => ({
-        body: {
-          sourceId: HOST,
-          relayBaseUrl: `${ISSUER}/s/${HOST}`,
-          assertion: "jws.guest",
-          relayToken: "relay.guest",
-          guestSession: { accessToken: "g", accessExpiresAtMs: 1 },
-        },
-      }),
-      [`POST /s/${HOST}/api/identity/cloud/login`]: () => ({
-        status: 401,
-        body: { code: "invitation_invalid", message: "" },
+      [`GET /v1/links/${LINK_ID}`]: () => ({
+        status: 404,
+        body: { code: "link_invalid", message: "" },
       }),
     });
     render(
       <JoinPage
         href={HREF}
         cloud={{ fetch: net.fetch }}
-        enter={vi.fn()}
+        join={vi.fn()}
         onJoined={vi.fn()}
       />,
     );
-    await screen.findByText("studio");
-    fireEvent.click(screen.getByRole("button", { name: "加入" }));
-    expect(await screen.findByText("邀请无效或已用完")).toBeTruthy();
+    expect(await screen.findByText("链接已停用或不存在")).toBeTruthy();
   });
 
   it("没有片段的链接：说明链接不完整，不发请求", () => {
@@ -186,7 +131,7 @@ describe("JoinPage", () => {
       <JoinPage
         href={`${ISSUER}/j/${LINK_ID}`}
         cloud={{ fetch: net.fetch }}
-        enter={vi.fn()}
+        join={vi.fn()}
         onJoined={vi.fn()}
       />,
     );

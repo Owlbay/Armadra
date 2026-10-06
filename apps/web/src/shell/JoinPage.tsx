@@ -8,13 +8,10 @@ import { usePreferencesStore, useT } from "../app/preferences-store";
 import {
   type CloudLinkInfo,
   type CloudOptions,
-  CloudError,
-  browserDevice,
-  cloudAcceptLink,
+  CloudTransportError,
   cloudLinkInfo,
-  coreCloudLogin,
-} from "../mobile/cloud-client";
-import { type RelayPageJoin, enterRelayPage } from "../mobile/relay-page";
+} from "../sources/cloud-client";
+import { startHostedRelay } from "../sources/hosted";
 import { openAfterJoin } from "../sources/join-intent";
 import { Alert, AlertTitle } from "@/ui/alert";
 import { BrandMark } from "@/ui/brand-mark";
@@ -29,9 +26,9 @@ const ROLES = new Set(["viewer", "editor", "operator", "driver"]);
 export interface JoinPageProps {
   /** 加入成功、本机源已指到那台 core：换成画布。 */
   onJoined(): void;
-  /** 测试换掉网络与装配。 */
+  /** 测试换掉网络与加入（缺省经 `sources/hosted.ts` 的托管中继以访客加入）。 */
   readonly cloud?: CloudOptions;
-  readonly enter?: (join: RelayPageJoin) => void;
+  readonly join?: (link: JoinLink) => Promise<unknown>;
   readonly href?: string;
 }
 
@@ -40,9 +37,10 @@ export interface JoinPageProps {
  * 「连不上这台机器」。不展示对端的原话。
  */
 function failureText(error: unknown, fallback: string): string {
-  if (error instanceof CloudError)
-    return localizedFailure(error.code, fallback);
-  return localizedFailure("source_unreachable", fallback);
+  if (error instanceof CloudTransportError || error instanceof TypeError)
+    return localizedFailure("source_unreachable", fallback);
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? localizedFailure(code, fallback) : fallback;
 }
 
 /**
@@ -51,15 +49,16 @@ function failureText(error: unknown, fallback: string): string {
  *
  * 1. 片段一读进内存就从地址栏抹掉（秘密不留在历史里）；`links.get` 显示指向
  *    哪台机器、什么权限、何时过期。
- * 2. 「加入」：`links.accept`（匿名，访客）→ 经 `relayBaseUrl` `cloud/login`
- *    （断言 + 邀请令牌）→ 本机源指到那台 core（会话只在内存）→ 地址换成
- *    `/app/`、就地进画布，打开链接指向的工作空间。
+ * 2. 「加入」：托管中继（`sources/hosted.ts`）以访客加入——`links.accept`（匿名）
+ *    → 经 `relayBaseUrl` `cloud/login`（断言 + 邀请令牌）→ 本机源指到那台 core
+ *    （凭据只在内存）→ 地址换成 `/app/`、就地进画布，打开链接指向的工作空间。
  * 3. 「在 Armadra 中打开」：同一条链接的 `armadra://join` 深链（桌面与手机）。
  */
 export function JoinPage({
   onJoined,
   cloud,
-  enter = enterRelayPage,
+  join: joinLink = (link) =>
+    startHostedRelay({ issuer: link.issuer }).join(link),
   href,
 }: JoinPageProps) {
   const t = useT();
@@ -103,21 +102,7 @@ export function JoinPage({
     setBusy(true);
     setFailure("");
     try {
-      const accepted = await cloudAcceptLink(
-        link.issuer,
-        link.linkId,
-        link.secret,
-        browserDevice(),
-        cloud,
-      );
-      const core = await coreCloudLogin(
-        accepted.relayBaseUrl,
-        accepted.relayToken,
-        accepted.assertion,
-        link.invitationToken,
-        cloud,
-      );
-      enter({ issuer: link.issuer, accepted, core });
+      await joinLink(link);
       openAfterJoin(LOCAL_SOURCE_ID);
       try {
         globalThis.history?.replaceState(null, "", APP_PATH);

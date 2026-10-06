@@ -648,7 +648,7 @@ describe("管理连接", () => {
 describe("分享链接的失败按码说明（A4-3p）", () => {
   it("过期、撤销、用尽、秘密不对、邀请被拒各有各的原因", async () => {
     const { cloudFailureOf } = await import("./connect");
-    const { CloudError } = await import("./cloud-client");
+    const { CloudError } = await import("../sources/cloud-client");
     expect(cloudFailureOf(new CloudError(410, "link_expired"))).toBe(
       "linkExpired",
     );

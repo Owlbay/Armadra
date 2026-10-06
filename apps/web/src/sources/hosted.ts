@@ -10,8 +10,10 @@ import {
   CloudError,
   browserDevice,
   cloudLogin,
+  cloudAcceptLink,
   cloudLogout,
   cloudPlatformInfo,
+  coreCloudLogin,
   cloudSources,
 } from "./cloud-client";
 import { createCachedCredentialProvider } from "./credentials";
@@ -176,6 +178,16 @@ export interface HostedRelay {
   signIn(account: string, password: string): Promise<CloudSource[]>;
   /** 把这台主机装成页面的本机源；失败抛（按 {@link hostedFailureOf} 显示）。 */
   enter(source: Pick<CloudSource, "sourceId" | "name">): Promise<void>;
+  /**
+   * 按分享链接以访客加入（客户端包 §6.1，A4-3p）：匿名 `links.accept` → 访客的
+   * 远程服务会话进保管处 → 经中继 `cloud/login` 带邀请令牌换源会话 → 同
+   * {@link enter} 装成本机源。答加入的源。失败抛（远程服务的拒绝是 `CloudError`）。
+   */
+  join(link: {
+    readonly linkId: string;
+    readonly secret: string;
+    readonly invitationToken: string;
+  }): Promise<string>;
   readonly status: HostedStatus;
   subscribe(listener: () => void): () => void;
   /** 登出远程服务并丢掉内存里的全部凭据。 */
@@ -295,9 +307,47 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
     });
   };
 
-  return {
+  const hosted: HostedRelay = {
     issuer,
     provider,
+    async join(link) {
+      const accepted = await cloudAcceptLink(
+        issuer,
+        link.linkId,
+        link.secret,
+        browserDevice(),
+        options.cloud,
+      );
+      const guest = accepted.guestSession;
+      if (guest.refreshToken === undefined)
+        throw new CloudError(502, "bad_response");
+      await vault.saveCloudRefreshToken(issuer, guest.refreshToken);
+      cloudSessions.adopt(issuer, guest.accessToken, guest.accessExpiresAtMs);
+      const login = await coreCloudLogin(
+        accepted.relayBaseUrl,
+        accepted.relayToken,
+        accepted.assertion,
+        link.invitationToken,
+        options.cloud,
+      );
+      await vault.saveSession(accepted.sourceId, issuer, {
+        accessToken: login.native.accessToken,
+        refreshToken: login.native.refreshToken,
+        expiresAtMs: login.expiresAtUnixMs,
+        ...(login.csrfToken === undefined
+          ? {}
+          : { csrfToken: login.csrfToken }),
+      });
+      // 名字是锦上添花：访客的目录里只有这一台，取不到就空着。
+      const name = await cloudSources(issuer, guest.accessToken, options.cloud)
+        .then(
+          (rows) =>
+            rows.find((row) => row.sourceId === accepted.sourceId)?.name ?? "",
+        )
+        .catch(() => "");
+      await hosted.enter({ sourceId: accepted.sourceId, name });
+      return accepted.sourceId;
+    },
     async signIn(account, password) {
       const session = await cloudLogin(
         issuer,
@@ -409,6 +459,7 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
       setStatus("idle", null);
     },
   };
+  return hosted;
 }
 
 /* ------------------------------- 页面那一个 ------------------------------- */
