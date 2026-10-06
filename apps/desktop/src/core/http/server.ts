@@ -28,6 +28,7 @@ import { MAX_FRAME_BYTES } from "../identity/protocol";
 import { type HookHealth, NO_HOOK_SERVICE, healthDocument } from "./health";
 import { type CoreRequest, type HandlerResult, Router } from "./router";
 import { CONTROL_PROTOCOL, goingAway } from "./ws-control";
+import { applyHttpTimeouts } from "./timeouts";
 
 /**
  * The core's HTTP and WebSocket face.
@@ -185,6 +186,7 @@ export class CoreServer {
       }
       void this.serve(request, response, admitted);
     });
+    applyHttpTimeouts(server);
     server.on("upgrade", (request, socket, head) => {
       if (gate !== undefined) {
         this.upgradeGated(request, socket, head, gate);

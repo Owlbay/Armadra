@@ -7,6 +7,7 @@ import type {
 } from "node:http";
 import type { Duplex } from "node:stream";
 import { allowOrigins } from "../http/cors";
+import { applyHttpTimeouts } from "../http/timeouts";
 import type { CoreContext } from "../main";
 import { identityInstanceId } from "../identity";
 import { type RequestIdentity, runAs } from "../identity/gate";
@@ -139,7 +140,10 @@ export async function openGateway(
   // 交接点上的请求已经在这里认过人、放进了请求身份（`runAs`）：core 回环监听
   // 上的那道门（`identity/loopback.ts`）不再对它们判一遍。
   const delegate = core.server.createListener({ admitted: true });
-  const https = createHttpsServer({ cert: tls.cert, key: tls.key });
+  // 局域网里的 iPad 直连这里：空闲 keep-alive 要比 WebKit 的连接池长。
+  const https = applyHttpTimeouts(
+    createHttpsServer({ cert: tls.cert, key: tls.key }),
+  );
   // 先于下面的连接筛选登记：它替换的是 TLS 自己的握手入口。
   if (options.acme !== undefined) interceptAcmeTls(https, options.acme);
   const sockets = new Set<Socket>();
