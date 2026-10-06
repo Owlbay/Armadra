@@ -1,4 +1,8 @@
-import { session, type Certificate } from "electron";
+import {
+  session,
+  type Certificate,
+  type OnHeadersReceivedListenerDetails,
+} from "electron";
 
 import {
   EMPTY_TRUST,
@@ -8,6 +12,10 @@ import {
   trustFromSourceTable,
 } from "../shell-core/remote-trust";
 import { sourceConnectGrants } from "../shell-core/csp";
+import {
+  rewriteRelayRequest,
+  rewriteRelayResponse,
+} from "../shell-core/relay-origin";
 
 /**
  * 壳对远程服务与挂载的源的信任（`shell-core/remote-trust.ts`）：从 core 的源表
@@ -80,4 +88,49 @@ export function installCertificatePinning(): void {
     );
     callback(trusted ? 0 : -3);
   });
+}
+
+/**
+ * 经中继访问挂载的源（`shell-core/relay-origin.ts`）：发往源表里中继主机的请求
+ * （含预检与 WebSocket 升级）`Origin` 换成桌面的原生来源，记下页面来源；名单
+ * 每次现读，源表变了（`refreshRemoteTrust`）就跟着变。浏览器节点用自己的
+ * partition，不受影响。
+ */
+const pageOrigins = new Map<number, string>();
+
+export function installRelayOriginRewrite(): void {
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ["https://*/*", "wss://*/*"] },
+    (details, callback) => {
+      const rewritten = rewriteRelayRequest(
+        details.url,
+        details.requestHeaders,
+        trust.relayOrigins,
+      );
+      if (rewritten === null) {
+        callback({});
+        return;
+      }
+      pageOrigins.set(details.id, rewritten.pageOrigin);
+      callback({ requestHeaders: rewritten.headers });
+    },
+  );
+}
+
+/**
+ * 改写过 `Origin` 的那些请求的响应：CORS 的允许来源回显页面的真实来源。别的
+ * 响应答 `undefined`（交给 `window.ts` 照旧处理）。
+ */
+export function relayResponseHeaders(
+  details: Pick<OnHeadersReceivedListenerDetails, "id" | "responseHeaders">,
+): Record<string, string[]> | undefined {
+  const pageOrigin = pageOrigins.get(details.id);
+  if (pageOrigin === undefined) return undefined;
+  pageOrigins.delete(details.id);
+  const next = rewriteRelayResponse(details.responseHeaders ?? {}, pageOrigin);
+  return next === null
+    ? undefined
+    : (Object.fromEntries(
+        Object.entries(next).map(([name, value]) => [name, [value].flat()]),
+      ) as Record<string, string[]>);
 }
