@@ -43,6 +43,8 @@ import {
   type CoreFetch,
   connectGrants,
   installCertificatePinning,
+  installRelayOriginRewrite,
+  relayResponseHeaders,
   refreshRemoteTrust,
 } from "./remote-trust";
 import { installDiagnostics } from "./diagnostics";
@@ -449,8 +451,10 @@ async function start(): Promise<void> {
   applyContentSecurityPolicy(page.origin, {
     devServer: Boolean(process.env.ELECTRON_RENDERER_URL),
     connect: connectGrants,
+    otherResponse: relayResponseHeaders,
   });
   installCertificatePinning();
+  installRelayOriginRewrite();
   traceLifecycle(`page origin ${page.origin}`);
 
   if (ownsRuntime(development, process.env.ARMADRA_DESKTOP_OWNS_RUNTIME)) {

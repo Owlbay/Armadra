@@ -37,6 +37,8 @@ import {
  * 密钥另存一份在设备钥匙串里（`mobile/native-bridge.ts`），App 重开不用重新配对。
  * 服务器壳上同一浏览器里的几个窗口共用一条 Cookie 会话，也就共用一枚 CSRF：
  * 谁换了新的，经同源的 `BroadcastChannel` 告诉其它窗口（见下面的「多窗口」）。
+ * 中继托管的页面（`sources/hosted.ts`）同样走 Bearer：经中继 `cloud/login` 换来
+ * 的会话只在内存里的保管处（{@link setHostedSession}），关标签即丢。
  */
 
 const PREFIX = "/api/identity/";
@@ -286,33 +288,56 @@ export async function ensureCsrf(): Promise<string> {
   return renewing;
 }
 
-/** 这一页是远程服务托管、经中继连着一台 core（分享链接加入，客户端包 §6.1）。 */
-let relayPage = false;
-
 /**
- * 走 Bearer 传输的三种环境：桌面壳（票换会话）、原生 App（钥匙串里的会话），
- * 以及远程服务托管的页面按分享链接加入之后（会话只在内存，见
- * {@link adoptRelayPageSession}）。都不用 Cookie、不用 CSRF。
+ * 走 Bearer 传输的三种环境：桌面壳（票换会话）、原生 App（钥匙串里的会话）与
+ * 中继托管的页面（断言换来的会话）。都不用 Cookie；写请求不带 CSRF 头，只有
+ * 刷新与登出带上会话的 CSRF 密钥（core 在 Bearer 模式下也校验它，契约 §17.4）。
  */
 function bearerTransport(): boolean {
-  return isNativeShell() || isNativeApp() || relayPage;
+  return isNativeShell() || isNativeApp() || hosted !== null;
 }
 
-/**
- * 托管页面加入成功：`cloud/login` 换来的原生会话装进内存（刷新令牌也只在内存，
- * 关掉标签即丢，D15），之后的身份面请求走 Bearer。
- */
-export function adoptRelayPageSession(session: {
-  readonly accessToken: string;
-  readonly refreshToken: string;
-  readonly expiresAtMs: number;
-}): void {
-  relayPage = true;
-  tokens.access = session.accessToken;
-  tokens.refresh = session.refreshToken;
-  tokens.accessExpiresAt = session.expiresAtMs;
-  csrf = "";
-  announce();
+/* ----------------------------- 中继托管的页面 ----------------------------- */
+
+/** 中继托管页面上这一个源的会话保管处（`sources/hosted.ts`，只在内存）。 */
+export interface HostedSessionStore {
+  load(): Promise<
+    | {
+        readonly accessToken: string;
+        readonly refreshToken: string;
+        readonly expiresAtMs: number;
+        readonly csrfToken?: string;
+      }
+    | undefined
+  >;
+  save(session: {
+    accessToken: string;
+    refreshToken: string;
+    expiresAtMs: number;
+    csrfToken?: string;
+  }): void;
+  clear(): void;
+  /** 刷新令牌也被拒：经远程服务重取断言、重新 `cloud/login`；成功答 `true`。 */
+  recover?(): Promise<boolean>;
+}
+
+let hosted: HostedSessionStore | null = null;
+
+/** 中继托管的页面挂上一个源时装上；`null` 卸掉。 */
+export function setHostedSession(store: HostedSessionStore | null): void {
+  hosted = store;
+}
+
+/** 把保管处里的会话读回内存；读到返回 `true`。 */
+export async function restoreHostedCredentials(): Promise<boolean> {
+  const stored = await hosted?.load();
+  if (stored === undefined) return false;
+  tokens.access = stored.accessToken;
+  tokens.refresh = stored.refreshToken;
+  tokens.accessExpiresAt = stored.expiresAtMs;
+  if (stored.csrfToken !== undefined && SECRET.test(stored.csrfToken))
+    csrf = stored.csrfToken;
+  return true;
 }
 
 /**
@@ -357,6 +382,14 @@ function remember(
     scheduleShellRefresh();
     if (session.hostId !== "") lastHostId = session.hostId;
     const sourceId = nativeConnection.sourceId ?? session.hostId;
+    hosted?.save({
+      accessToken: tokens.access,
+      refreshToken: tokens.refresh,
+      expiresAtMs: tokens.accessExpiresAt,
+      ...(session.csrfToken === undefined
+        ? {}
+        : { csrfToken: session.csrfToken }),
+    });
     if (isNativeApp() && sourceId !== "")
       void nativeBridge().setSession({
         sourceId,
@@ -403,6 +436,8 @@ async function call<T>(
   if (native && !options.anonymous && bearer)
     headers.Authorization = `Bearer ${bearer}`;
   if (!native && method !== "GET" && csrf) headers["X-Armadra-CSRF"] = csrf;
+  // Bearer 模式的刷新与登出：core 同样核对会话的 CSRF 密钥（契约 §17.4）。
+  if (native && options.refreshBearer && csrf) headers["X-Armadra-CSRF"] = csrf;
 
   let response: Response;
   try {
@@ -534,6 +569,8 @@ export async function resumeIdentity(): Promise<IdentitySession | null> {
     return pairIdentity(await fetchNativeTicket());
   if (isNativeApp() && !tokens.access && !(await restoreNativeCredentials()))
     return null;
+  if (hosted !== null && !tokens.access && !(await restoreHostedCredentials()))
+    return null;
   try {
     return await call("session", identitySessionSchema);
   } catch (error) {
@@ -544,6 +581,18 @@ export async function resumeIdentity(): Promise<IdentitySession | null> {
       // 会话过期时刷新密钥可能还在：换一份再说「没登录」。
       const refreshed = await refreshIdentity().catch(() => null);
       if (refreshed) return refreshed;
+      if (hosted !== null) {
+        // 中继托管的页面：经远程服务重取断言再登一次；还不行就是没有会话。
+        const store = hosted;
+        if (
+          (await store.recover?.().catch(() => false)) &&
+          (await restoreHostedCredentials())
+        )
+          return call("session", identitySessionSchema).catch(() => null);
+        resetIdentityCredentials();
+        store.clear();
+        return null;
+      }
       if (isNativeApp()) {
         // 刷新密钥也不认了（设备被撤销或过期）：钥匙串里那份作废，回连接页。
         resetIdentityCredentials();
@@ -594,6 +643,7 @@ export async function logoutIdentity(): Promise<void> {
   } finally {
     resetIdentityCredentials();
     if (isNativeApp()) await clearNativeSession();
+    hosted?.clear();
     announce();
   }
 }

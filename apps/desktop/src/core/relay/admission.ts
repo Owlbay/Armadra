@@ -7,7 +7,10 @@
  *      `/browser/`、`/verify`）→ `403 forbidden`。
  *   2. 来源以 `OPEN.clientOrigin` 为准（中继给的元数据），请求头里的 `Origin` 与它
  *      不一致 → 403。来源必须在这条登记的可信来源 ∪ 原生 App 的两个来源之内；
- *      没有来源（非浏览器）只放行 `/health` 与身份域自己的匿名面。
+ *      没有来源（非浏览器）只放行 `/health` 与身份域自己的匿名面。例外：中继
+ *      托管的页面（来源就是中继自己）发的同源 GET 浏览器不带 `Origin`，这时认
+ *      `Sec-Fetch-Site: same-origin`（脚本改不了的头），来源取会话来源；升级
+ *      浏览器总带 `Origin`，不走这条。
  *   3. 匿名面放行（以一个没有任何授权的成员身份跑）；`POST /api/identity/ws-ticket`
  *      由这里签票；其余要 `Authorization: Bearer`，升级要 `armadra-ticket.<票>`。
  *      拒绝一律 `401 unauthenticated`。
@@ -112,23 +115,12 @@ function sameDeclaredOrigin(
 }
 
 /**
- * 来源：以 `OPEN.clientOrigin` 为准。浏览器同源的 `GET` / `HEAD` 不带 `Origin`
- * 头（规范如此），而远程服务托管的页面（个人中转的 `/app/`、`/j/`，A4-3p）就和
- * 中继同源：这时中继给不出来源，但浏览器自己打的 `Sec-Fetch-Site: same-origin`
- * 说明请求出自中继来源上的页面，按会话来源（`relayOrigins[0]`）算。别的站点的页面
- * 造不出这个头；非浏览器的客户端能造，但它照样要 Bearer，来源校验本来只防浏览器
- * 里的跨站请求。
+ * 浏览器在页面自己的来源上发的请求（同源 GET / HEAD 不带 `Origin`）。
+ * `Sec-Fetch-*` 是禁改头：页面脚本伪造不了；非浏览器客户端伪造它也只是把自己
+ * 绑到会话来源上，照样要那个来源签的 Bearer。
  */
-function effectiveClientOrigin(
-  headers: IncomingHttpHeaders,
-  clientOrigin: string | null,
-  registration: TunnelRegistration,
-): string | null {
-  if (clientOrigin !== null || headers.origin !== undefined)
-    return clientOrigin;
-  return headers["sec-fetch-site"] === "same-origin"
-    ? sessionOriginOf(registration)
-    : null;
+function sameOriginBrowserRequest(headers: IncomingHttpHeaders): boolean {
+  return headers["sec-fetch-site"] === "same-origin";
 }
 
 /** 没有来源的客户端（非浏览器）只能碰这几条。 */
@@ -152,12 +144,7 @@ export function createTunnelGate(options: TunnelGateOptions): ListenerGate {
     if (tunnel === undefined || registration === undefined) {
       return { refusal: { status: 403, body: FORBIDDEN_BODY } };
     }
-    const declared = tunnel.open.clientOrigin;
-    const clientOrigin = effectiveClientOrigin(
-      request.headers,
-      declared,
-      registration,
-    );
+    const clientOrigin = tunnel.open.clientOrigin;
     const cors = corsFor(clientOrigin);
     const refuse = (status: number, body: typeof FORBIDDEN_BODY) => ({
       refusal: { status, body, cors },
@@ -166,13 +153,18 @@ export function createTunnelGate(options: TunnelGateOptions): ListenerGate {
     if (loopbackOnlyPath(path)) {
       return refuse(403, { code: "forbidden", message: "这条路径只在本机" });
     }
-    if (!sameDeclaredOrigin(request.headers, declared)) {
+    if (!sameDeclaredOrigin(request.headers, clientOrigin)) {
       return refuse(403, FORBIDDEN_BODY);
     }
     if (clientOrigin !== null && !originAllowed(clientOrigin, registration)) {
       return { refusal: { status: 403, body: FORBIDDEN_BODY } };
     }
-    if (clientOrigin === null && (upgrade || !anonymousWithoutOrigin(path))) {
+    if (
+      clientOrigin === null &&
+      (upgrade ||
+        (!anonymousWithoutOrigin(path) &&
+          !sameOriginBrowserRequest(request.headers)))
+    ) {
       return refuse(403, FORBIDDEN_BODY);
     }
 

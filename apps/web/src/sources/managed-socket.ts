@@ -75,7 +75,7 @@ export interface ManagedSocketOptions {
   clearTimeout?: (handle: unknown) => void;
 }
 
-function browserEnvironment(): SocketEnvironment | null {
+export function browserEnvironment(): SocketEnvironment | null {
   if (typeof window === "undefined" || typeof document === "undefined")
     return null;
   return {
@@ -153,6 +153,17 @@ export class ManagedSocket {
    */
   reconnect(): void {
     if (this.current !== "open") return;
+    this.reconnectNow();
+  }
+
+  /**
+   * 换路了（直连恢复、凭据换了地址）：不论开着、在退避还是在等，都按新的地址与
+   * 凭据立刻重连。已关闭的不动。
+   */
+  reroute(): void {
+    if (this.current === "closed") return;
+    this.renewedOnce = false;
+    this.backoff.reset();
     this.reconnectNow();
   }
 

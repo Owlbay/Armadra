@@ -2224,3 +2224,65 @@
 - 契约：订阅 = 出参 `eventIterator(...)` + `meta.backpressure`，契约节号按域分配；实现交出一个 `async function*`，每项 `yield withEventId(value, String(seq))`（`core/http/rpc.ts`），`call.lastEventId` 是重订时客户端最后收到的 id，`call.signal` 在客户端取消、连接断开或门面溢出时 abort；先决条件不满足就在交出迭代器之前 `throw fail(...)`。
 - core：`core/http/ws-control.ts` 的 `CONTROL_PATH`、`CONTROL_PROTOCOL`、`CLOSE_*`、`MAX_ITERATORS`、`ITERATOR_MAX_FRAMES`、`ITERATOR_HIGH_WATER_BYTES`、`ControlConnection`；`core/http/stream-queue.ts` 的 `QueuedValue`；`WorkspaceEventStream.listen(workspaceId, (frame, seq) => …)`；测试用 `core/http/peer.fixture.ts`（直接说 peer 帧的客户端）。
 - 页面：`api/events.ts` 的 `WorkspaceEventTransport` 按源订（`subscribe(source, workspaceId, signal)`、`onDrop(source, …)`、`closedWith(source)`），`setWorkspaceEventTransport()` 测试换来源；`controlClient(connection)`（`connection` 是 `sourceRegistry().get(id)` / `.current()` 或任何有 `socket(path, options)` 的对象）、`controlClosedWith(connection)`、`onControlDrop(connection, listener)`、`errorCode(error)`；`api/ws.ts` 的 `ControlChannel`、`controlChannel(connection)`、`onControlClosed(listener)`、`closeMessageKey(code)`、`CLOSE_*`；`ManagedSocket.reconnect()`。
+
+## E3-2 工程规范化：files 域迁到契约（契约 §37）
+
+设计：[工程规范化](../design/engineering-standardization.md) §2，规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-2）；契约 §37。
+
+做了什么：
+
+- **契约**（`packages/shared/src/contract/files.ts`）：`files.*` 共 16 条——`list`、`info`、`read`、`write`、`create`、`rename`、`trash`、`trashList`、`restore`、`index`、`search`、`watch`、`unwatch`、`version`、`reveal`、`importLocal`；全部绑 `workspaceId`，出参复用页面已有的 `api/files.ts` / `search.ts` schema，入参只校形状（路径、版本、权限的判断仍在域里，所以旧路径与 procedure 拒绝的码与原话一样）。`since` 为 1.5，协议 minor 4 → 5。
+- **core**：`files/routes.ts` 把十二个 `file*` 路由的实现收成一份 `operations`，旧 handler 先解析查询串或体、再调它；`registerProcedures(server, "files", …)` 登记同一份。`reveal`（`files/reveal.ts`）与 `importLocal`（`imports/routes.ts`）各自带装配参数，由各自模块登记同一棵 `files` 子树。旧路径的校验顺序（先查工作空间与权限、再解析体）不变；搜索的取消沿用连接断开，procedure 另接调用信号。
+- **页面**：`api/files.ts` 改为 `filesApiFor(rpc)`、`api/search.ts` 改为 `searchApiFor(rpc)`，经 `clientFor(currentSource())`，调用点的签名不变，答案仍过页面自己的 schema；`fileDownloadUrl` 与多部分上传 `importFiles` 留在 REST（按当前源拼地址）。
+- **契约 §37**：§37.1 生成块（`pnpm contract`），§37.2 登记留在 REST 的字节流（多部分上传、下载、`Range`、`<img src>`、整库导入）与 `unwatch` 的旧路径说明。
+
+实测：
+
+- `pnpm check` 通过（含 `contract:check`、lint、三处 typecheck、repo:check、notices）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：412 个文件通过、11 个跳过（4882 条通过、72 条跳过）。新增 `core/contract/parity-files.test.ts` 26 条：旧路径、procedure、原 handler 三者逐字节相等，覆盖只读各操作、越界 / 不存在 / 不是目录的拒绝、写的版本冲突与「只带 expectedSize」、只读工作空间 403、条目新建改名回收站恢复的完整序列（含 409 / 400 / 404）、搜索（含过长 glob 的 400）、监听登记与注销（含读权限被关的 403）、reveal、按路径导入、scope 与路由表一致。
+- `pnpm --filter @armadra/web test`：390 个文件、3644 条通过；`typecheck` 通过。新增 `api/client.files.test.ts`（procedure 路径与体、`signal` 交给请求、REST 例外、换源后请求跟着去）。
+- A 档（`node tools/ci/e2e.mjs --tier a --only ui-features-e2e,server-e2e,remote-e2e`）：三项通过；`ui-features-e2e` 里的编辑器（§37）、文件树右键菜单（§38）、项目搜索取消（§38）都在其中。
+
+没做：
+
+- 控制面（`/api/ws`）上不需要订阅，files 没有事件流；`file.changed` 仍走工作空间事件（§35.4）。
+- `unwatch` 没有旧路径条目：契约层的 `DELETE` 只读体，旧的 `DELETE …/file-watch?path=&nodeId=` 继续由路由表答；E4 删旧路径时一并处理。
+- `cancelled`（499）、`reveal_failed`（500）没登记进错误码注册表：注册表只收被 `coreError` / `fail` 字面量使用的码，这两个由 `DomainError` 抛出。
+
+接口（给 E3 其它包）：同 E1；`files` 子树由三个模块分别 `registerProcedures` 登记，做法是 `handlers as unknown as DomainHandlers<"files">`（与 `identity.cloud` 同一做法）。
+
+## A3-4 页面的 `relayed` 源与中继托管页面（Web 端操作）
+
+设计：[客户端包](../design/platform/client-packages.md) §5；平台设计 §17.3、§17.6、D27；契约 §32（准入一条补充）；armadra-cloud 契约 §6、§7、§10、§11。
+
+做了什么（`apps/web/src/`）：
+
+- **远程服务客户端共用**：`mobile/cloud-client.ts` 搬到 `sources/cloud-client.ts`，加平台信息、登出、`me.stream` 的票与浏览器设备（`platform: "browser"`）；经中继向源 core 的刷新带会话的 CSRF 密钥（core 在 Bearer 模式下也核对）。
+- **经中继取访问**（`sources/relay-access.ts`，手机与网页共用）：远程服务会话（刷新令牌每次旋转写回）→ 断言与中继令牌 → 源 core 的会话（先用刷新令牌 + CSRF 经中继轮换，被拒才用断言 `cloud/login` 重登）；保管处可换（`RelayVault`：手机是钥匙串，网页只在内存）；拒绝码映射 `source_offline` / `source_revoked` / `source_access_denied`，`cloud_account_unlinked` 原样带出。手机凭据来源改用它。
+- **连接**（`sources/connection.ts`）：取访问时中继答源不在线落到 `waitingForSource`；`revoke(failure)` 关流、丢访问、`unauthorized` 带原因；经中继的连接在流退避、`online`、回到前台时重新探直连（D27，两次至少隔 5 秒），通了先拿直连访问再换路，开着的流按新地址重连（`ManagedSocket.reroute()`）；本机源的 `connect()` 叫醒在等、在退避的流（不发请求）。
+- **`me.stream`**（`sources/remote-stream.ts`）：每个远程服务一条，票经 `me.streamTicket`，客户端 30 秒 `ping`，4401 丢掉远程服务会话换票重连；`sourceOnline` → 那个源 `connect()`，`sourceRevoked` / `accessRevoked` → `revoke()`；流重开时补连离线与在等的源。`attachRemoteStreams(registry, { auth })` 跟着源表增减；桌面的远程服务会话经本机 core `sources.remoteSession`（`createDesktopCloudAuth`）。
+- **把远程源装成本机源**（`sources/route-entry.ts`，从手机入口抽出，两边共用）：选路 → 访问 → 本机源的地址与 Bearer、中继令牌头与 `armadra-relay.*` 子协议，到期前与回前台续。
+- **中继托管的页面**（`sources/hosted.ts`、`shell/RelaySignIn.tsx`）：只在 `/app/` 路径下问一次同源 `/.well-known/armadra-platform`，`personal` 且签发方就是页面来源才算；入口给 `{ kind: "relay" }`，登录页复用 `RelayForm`（地址固定、不显示），中继账号口令登录，只有一台在线主机就直接进，几台挑一台；凭据只在这个标签页的内存（关标签即丢，刷新要重新登录）。身份面加 `setHostedSession`（Bearer 传输、会话保管处、刷新也被拒时经远程服务重登一次），`setHostedRuntimeBase` 让本机源指向 `relayBaseUrl`；所有请求同源（中继给页面的 CSP 是 `connect-src 'self'`）。`me.stream` 驱动：下线 → 通知条「等待上线」，上线或流重开时主机在线 → 叫醒控制面；撤销 → 通知条带「重新登录」。
+- **i18n**：`i18n/remote.ts` 加 `remote.error.*`（经中继的失败原因）与 `remote.hosted.*`（托管页面登录），中英同步；状态沿用 A1-4 的 `remote.status.*`；错误码表加 `source_mismatch`、`account_disabled`。
+- **core 一处**（`core/relay/admission.ts`）：浏览器同源 `GET` / `HEAD` 不带 `Origin`，中继托管页面的这类请求原来一律 403；现在带 `Sec-Fetch-Site: same-origin` 时按会话来源（`relayOrigins[0]`）认，照样要绑在它上面的 Bearer，跨站与没写的照旧 403。契约 §32 准入一条同步。
+- **桌面壳经中继**（`shell-core/relay-origin.ts`、`main/remote-trust.ts`）：桌面页面来源是回环，分享方 core 的隧道准入不认。壳对源表里中继主机的请求（含 CORS 预检与 WebSocket 升级，`webRequest.onBeforeSendHeaders`）把 `Origin` 改成原生来源 `https://localhost`，响应的允许来源回显页面真实来源并带 `Vary: Origin`（并进 `window.ts` 唯一那个 `onHeadersReceived`）；名单随源表刷新，别的请求不动。复用 `https://localhost` 而不另造来源：core 早把它当只走 Bearer 的原生客户端（`NATIVE_APP_ORIGINS`，core 对别的 core 也自称它），中继边缘的预检名单（cloud #6）也认它，两仓都不用改名单；代价是审计里分不出桌面与手机。桌面与服务器壳的页面在 `useSourcesBootstrap` 里接上 `attachRemoteStreams`（远程服务会话经本机 core 换），中继托管页面不接。
+- 探针 `tools/probes/relay-web-e2e.mjs`（`--desktop` 加跑真 Electron 一段，`relay-desktop.mjs`；要 armadra-cloud 检出，本地手动跑，README 有一节）。
+
+实测（macOS arm64，2026-10-06，已合入 main 963901f3（含 #144 A1-4、#145 A4、#146 E2）；中继用 armadra-cloud main 5e9c0ac（含 #6 预检修复））：
+
+- `pnpm check` 通过（lint 0 error，本包文件 0 warn）；`pnpm --filter @armadra/web test` 全过、`typecheck` 通过；`pnpm libs:build && pnpm --filter @armadra/desktop test` 通过（一次全量跑里 A3-2 的 `relay/streams.test` 「隧道断了…进退避」在高负载下偶发超时，单跑连过 3 次，本包没动它）；`pnpm --filter @armadra/server test`、`pnpm --filter @armadra/mobile test` / `typecheck` 通过（数字见 PR）。
+- 新用例：`sources/connection` 补 5（源离线等待再连、`revoke`、`online` / 回前台探直连换路并重连流、流退避时探直连、本机源 `connect()` 叫醒在等的流）、`remote-stream` 7（帧解析、地址、票与 30 秒 ping 与 4401、**假中继 4404 → 等待，推 `sourceOnline` → 1 秒内重连**、撤销、按签发方增减、重开补连）、`relay-access` 4、`hosted` 6、`api/identity.hosted` 2、`shell/RelaySignIn` 4、`mobile/entry` 补 1、`core/relay/admission` 补 2（同源 GET、桌面原生来源放行且任意回环来源 403）、`shell-core/relay-origin` 8（只命中源表中继主机、HTTP 与 WS、名单随源表、回 CORS 头与 Vary、对端没放行不替它放行）。
+- **端到端（真浏览器）**：armadra-cloud main be36b78 的 `personal serve`（自签 TLS，`--web-root` 指本分支 `pnpm --filter @armadra/web build` 的产物）、`apps/desktop/out/core/main.js`（file 后端 SecretStore，`remoteAdd` 钉指纹 → 注册令牌 → `identity.cloud.register` → 隧道 ready → 断言 `bind` 为主人）、无头 Chrome：`ARMADRA_PERSONAL_RELAY_HOME=… node tools/probes/relay-web-e2e.mjs` 全过——打开 `/app/` 是中继登录页 → 账号口令登录直接进画布（请求全部同源 `/v1`、`/s/<源>`）→ 经中继终端 `echo $((40+2))relay` 回 `42relay` → 实时板与本机页面双向同步 → 主机关隧道（`cloud.relay.enabled=false`）时通知条「等待上线」，再开约 1–3 秒由 `me.stream` 叫醒，终端、实时板与控制面（`/api/ws` 收到 `board.changed`）照常 → SIGTERM 杀掉中继再起，隧道 4–13 秒回来，页面不刷新 10–20 秒内恢复（实时板、终端、控制面事件）→ 中继页面控制台无错误。`--desktop`：真 Electron（开发构建，mock 钥匙串、file 后端、临时数据目录）自己的 core 加个人中转（钉指纹）并经中继挂载分享方 → 页面重载后侧栏分组「就绪」→ 点工作空间、终端回 `42desktop`；预检对着真中继（cloud 5e9c0ac），没有模拟。截图在 `target/relay-web-e2e/`（`01-sign-in-{1440,390}-{dark,light}`、`02-canvas-{1440,390}-{dark,light}`、`03-waiting-for-host-1440`、`04-relay-down-1440`、`05-recovered-1440`、`06-desktop-mounted`、`07-desktop-terminal`）。用完已停掉自己起的中继、core 与 Chrome，数据目录全部删除。
+
+接口：
+
+- **给 V1 探针**：`tools/probes/relay-web-e2e.mjs` 的流程可直接搬：起中继（`personal serve --web-root apps/web/dist`）→ core `remoteAdd` / `register` / `bind` → 页面 `/app/` → `[data-slot="relay-sign-in"]` 里 `input[autocomplete=username]`、`input[type=password]`、回车 → 画布；通知条 `[data-slot="banner"]` 文案「等待上线」。core 侧的主人会话用 `tools/probes/probe-session.mjs`。
+- **给 A4-3p（分享链接落地页）**：`sources/hosted.ts` 的 `detectRelayHost()`、`createMemoryRelayVault()`、`createHostedRelay({ issuer })`（`signIn` / `enter(source)` / `status` / `subscribe` / `signOut`）；访客路径只差一段：`links.accept` 拿到 `{ sourceId, relayBaseUrl, assertion, relayToken, guestSession }` 之后把 `guestSession.refreshToken` 存进保管处（`saveCloudRefreshToken(issuer, …)`），`cloudLogin` 那一步换成 `coreCloudLogin(…, invitationToken)`，再 `enter`。入口按路径分支在 `mobile/entry.ts::prepareEntry`（`/app/` 已占，`/j/` 留给 A4-3p）。
+- 源层：`attachRemoteStreams(sourceRegistry(), { auth: createDesktopCloudAuth() })` 给桌面与服务器壳的页面（A1-4 挂远程源时调）；`SourceConnection.revoke(failure)`；`createRelayedAccess({ vault, device })`；`SOURCE_ERROR.revoked / accessRevoked`。
+
+没做 / 偏离规格：
+
+- 中继托管的页面仍是「一个标签页一台主机」：挑中的主机装成本机源（与手机同一做法），换主机要重新进；没有把几台同时挂进源表。页面刷新会丢掉内存里的凭据，要重新登录（刷新令牌不落任何存储）。
+- 中继自己停掉时页面没有专门的提示（`me.stream` 也断了，收不到下线），通知条是实时板的「离线编辑」与运行时断开；中继回来后由流重开时的那次叫醒恢复。
+- 规格只写了 `connection.ts` / `remote-stream.ts`；为了手机与网页共用，另抽了 `relay-access.ts`、`route-entry.ts`、`hosted.ts`，并动了 core 的隧道准入（同源 GET 无 `Origin` 原来进不来，见上）。
+- 手机的钥匙串会话形状没有 CSRF 字段：经中继的轮换照旧被拒、退回断言重登（与 A1-5 行为相同）。

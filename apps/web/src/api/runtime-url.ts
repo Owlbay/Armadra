@@ -135,6 +135,18 @@ export function setNativeRuntimeBase(base: string | null): void {
     base === null || base === "" ? null : base.replace(/\/+$/, "");
 }
 
+/**
+ * 中继托管的页面（`sources/hosted.ts`）挂上的源：本机源就是它的
+ * `relayBaseUrl`（`<中继>/s/<源>`）。只在内存里，优先于一切推断与构建配置——
+ * 这张页面背后没有本机 core。
+ */
+let hostedBaseOverride: string | null = null;
+
+export function setHostedRuntimeBase(base: string | null): void {
+  hostedBaseOverride =
+    base === null || base === "" ? null : base.replace(/\/+$/, "");
+}
+
 /** 连接页记下的 Gateway 来源；没有或认不出是 `null`。 */
 export function savedRuntimeOrigin(): string | null {
   try {
@@ -159,24 +171,12 @@ export function forgetRuntimeOrigin(): void {
   }
 }
 
-/**
- * 远程服务托管的页面按分享链接加入之后（`mobile/relay-page.ts`）：本机源就是经
- * 中继的那台 core，地址是 `relayBaseUrl`（带 `/s/<源>` 前缀）。只在内存里，设了
- * 就压过一切推断——这一页的来源是中继，不是 core。
- */
-let relayPageBase: string | null = null;
-
-export function setRelayPageBase(base: string | null): void {
-  relayPageBase =
-    base === null || base === "" ? null : base.replace(/\/+$/, "");
-}
-
 /** An explicit relative/empty URL opts a web deployment into its own origin. */
 export function resolveRuntimeUrl(
   configured: string | undefined,
   pageUrl: string,
 ): string {
-  if (relayPageBase !== null) return relayPageBase;
+  if (hostedBaseOverride !== null) return hostedBaseOverride;
   const shell = shellEndpoints();
   // 显式配置永远优先：桌面开发模式靠它连外部 Runtime。
   if (configured === undefined) {

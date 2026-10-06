@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { type DomainHandlers, registerProcedures } from "../http/rpc";
 import type { CoreContext } from "../main";
 import { executeOn, isRemote } from "../remote/execute";
 import {
@@ -129,41 +130,53 @@ export function install(context: CoreContext): void {
     }),
   );
 
+  // 旧路径与契约 §37 的 `files.importLocal` 同一份实现。
+  const importLocal = async (id: string, paths: readonly string[]) => {
+    const workspace = writable(database, id);
+    if (paths.length === 0 || paths.length > MAX_FILES) {
+      throw badRequest("Import requires 1–256 files");
+    }
+    if (isRemote(workspace)) {
+      // The dropped files are on this machine and the root is on another:
+      // read them here, publish them there.
+      return writeRemote(workspace, { copies: localCopies([...paths]) });
+    }
+    const batch = ImportBatch.into(workspace.rootPath);
+    try {
+      for (const path of paths) {
+        batch.copy(workspace.rootPath, path);
+      }
+      return batch.commit(workspace.rootPath);
+    } catch (error) {
+      batch.discard();
+      throw error;
+    }
+  };
+
+  registerProcedures(server, "files", {
+    importLocal: ({
+      workspaceId: id,
+      paths,
+    }: {
+      workspaceId: string;
+      paths: string[];
+    }) => importLocal(id, paths),
+  } as unknown as DomainHandlers<"files">);
+
   server.router.handle(
     "POST",
     "/api/workspaces/{workspaceId}/imports/local",
     answered(async (match, request) => {
-      const workspace = writable(database, workspaceId(match));
-      const body = jsonObject(request.body);
-      const paths = body.paths;
+      const id = workspaceId(match);
+      writable(database, id);
+      const paths = jsonObject(request.body).paths;
       if (
         !Array.isArray(paths) ||
-        paths.some((one) => typeof one !== "string") ||
-        paths.length === 0 ||
-        paths.length > MAX_FILES
+        paths.some((one) => typeof one !== "string")
       ) {
         throw badRequest("Import requires 1–256 files");
       }
-      if (isRemote(workspace)) {
-        // The dropped files are on this machine and the root is on another:
-        // read them here, publish them there.
-        return {
-          status: 200,
-          body: await writeRemote(workspace, {
-            copies: localCopies(paths as string[]),
-          }),
-        };
-      }
-      const batch = ImportBatch.into(workspace.rootPath);
-      try {
-        for (const path of paths as string[]) {
-          batch.copy(workspace.rootPath, path);
-        }
-        return { status: 200, body: batch.commit(workspace.rootPath) };
-      } catch (error) {
-        batch.discard();
-        throw error;
-      }
+      return { status: 200, body: await importLocal(id, paths as string[]) };
     }),
   );
 }
