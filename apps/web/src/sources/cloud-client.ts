@@ -97,7 +97,7 @@ const coreSessionSchema = z.object({
   session: z.object({
     hostId: z.string(),
     expiresAtUnixMs: z.number().default(0),
-    /** 刷新时要带的 CSRF 密钥（Bearer 模式也校验它，契约 §17.4）。 */
+    /** 会话的 CSRF 密钥。Bearer 模式的刷新不核它（契约 §17.4），只为兼容旧版 core 带上。 */
     csrfToken: z.string().optional(),
     native: z.object({
       accessToken: z.string().min(1),
@@ -397,8 +397,8 @@ export async function coreCloudLogin(
 
 /**
  * `POST <基址>/api/identity/session/refresh`（刷新令牌当 Bearer，轮换）：直连与
- * 经中继同一条；经中继时带 `relayToken`。core 在 Bearer 模式下同样校验会话的
- * CSRF 密钥（契约 §17.4），有就带上；没有时对端会拒，调用方退回重新登录。
+ * 经中继同一条；经中继时带 `relayToken`。Bearer 模式不核 CSRF（契约 §17.4）；
+ * 有就带上，兼容还核它的旧版 core——那时对端会拒，调用方退回重新登录。
  */
 export function coreRefresh(
   base: string,

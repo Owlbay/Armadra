@@ -732,6 +732,49 @@ describe("安全收尾（G3-8）", () => {
     expect(created.status).toBe(201);
   });
 
+  it("刷新：Cookie 会话要 CSRF；Bearer 模式不要（契约 §17.4，桌面作为客户端源）", async () => {
+    // Cookie 会话：刷新票是环境凭据，没有 CSRF 不换。
+    const browser = person(
+      await remote("/api/identity/pair", {
+        method: "POST",
+        body: { ticket: (await pairing()).ticket },
+      }),
+    );
+    const refused = await remote("/api/identity/session/refresh", {
+      method: "POST",
+      headers: { cookie: browser.cookie },
+    });
+    expect(refused.status).toBe(401);
+    const renewed = await remote("/api/identity/session/refresh", {
+      method: "POST",
+      person: browser,
+    });
+    expect(renewed.status).toBe(200);
+    // Bearer 模式：只带刷新票（另一台 core 的 SourceClient 就是这样刷新的）。
+    const paired = await remote("/api/identity/pair", {
+      method: "POST",
+      origin: APP,
+      body: { ticket: (await pairing()).ticket },
+    });
+    const first = JSON.parse(paired.body) as {
+      native: { refreshToken: string };
+    };
+    const rotated = await remote("/api/identity/session/refresh", {
+      method: "POST",
+      origin: APP,
+      bearer: first.native.refreshToken,
+    });
+    expect(rotated.status).toBe(200);
+    expect(rotated.headers["set-cookie"]).toBeUndefined();
+    // 轮转过的旧票照旧被拒。
+    const replay = await remote("/api/identity/session/refresh", {
+      method: "POST",
+      origin: APP,
+      bearer: first.native.refreshToken,
+    });
+    expect(replay.status).toBe(401);
+  });
+
   it("每个答案都带 HSTS 与 nosniff；接口是沙箱 CSP、缺省不缓存", async () => {
     const api = await remote("/api/identity/session", { person: owner });
     expect(api.status).toBe(200);

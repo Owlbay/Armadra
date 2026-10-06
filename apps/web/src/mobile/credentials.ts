@@ -105,7 +105,8 @@ export function createMobileCredentialProvider(
             expiresAtMs: stored.expiresAtMs,
           };
     },
-    // 钥匙串的会话形状（原生侧校验）没有 CSRF 密钥：经中继的轮换会被拒，
+    // 钥匙串的会话形状（原生侧校验）没有 CSRF 密钥：Bearer 模式的轮换不要它
+    // （契约 §17.4）；对端是还核它的旧版 core 时轮换被拒，
     // 随后用断言重新登录。
     saveSession: (sourceId, issuer, session) =>
       deps.bridge.setSession({

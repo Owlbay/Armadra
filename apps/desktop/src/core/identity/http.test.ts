@@ -224,6 +224,32 @@ describe("身份域的 JSON 面", () => {
     expect((await rotate()).status).toBe(401);
   });
 
+  it("Bearer 传输的刷新与登出不要 CSRF（契约 §17.4）", async () => {
+    const fixture = await harness();
+    const { session } = await pair(fixture);
+    const rotated = await call(
+      fixture,
+      "POST",
+      "session/refresh",
+      {},
+      { authorization: `Bearer ${session.native.refreshToken}` },
+    );
+    expect(rotated.status).toBe(200);
+    const next = (await rotated.json()) as Session;
+    const logout = await call(
+      fixture,
+      "POST",
+      "session/logout",
+      {},
+      { authorization: `Bearer ${next.native.refreshToken}` },
+    );
+    expect(logout.status).toBe(200);
+    const current = await call(fixture, "GET", "session", undefined, {
+      authorization: `Bearer ${next.native.accessToken}`,
+    });
+    expect(current.status).toBe(401);
+  });
+
   it("丢了的 CSRF 可以从刷新密钥上补一张", async () => {
     const fixture = await harness();
     const { session } = await pair(fixture);
