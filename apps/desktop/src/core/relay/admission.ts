@@ -111,6 +111,26 @@ function sameDeclaredOrigin(
   return declared === clientOrigin;
 }
 
+/**
+ * 来源：以 `OPEN.clientOrigin` 为准。浏览器同源的 `GET` / `HEAD` 不带 `Origin`
+ * 头（规范如此），而远程服务托管的页面（个人中转的 `/app/`、`/j/`，A4-3p）就和
+ * 中继同源：这时中继给不出来源，但浏览器自己打的 `Sec-Fetch-Site: same-origin`
+ * 说明请求出自中继来源上的页面，按会话来源（`relayOrigins[0]`）算。别的站点的页面
+ * 造不出这个头；非浏览器的客户端能造，但它照样要 Bearer，来源校验本来只防浏览器
+ * 里的跨站请求。
+ */
+function effectiveClientOrigin(
+  headers: IncomingHttpHeaders,
+  clientOrigin: string | null,
+  registration: TunnelRegistration,
+): string | null {
+  if (clientOrigin !== null || headers.origin !== undefined)
+    return clientOrigin;
+  return headers["sec-fetch-site"] === "same-origin"
+    ? sessionOriginOf(registration)
+    : null;
+}
+
 /** 没有来源的客户端（非浏览器）只能碰这几条。 */
 function anonymousWithoutOrigin(path: string): boolean {
   return (
@@ -132,7 +152,12 @@ export function createTunnelGate(options: TunnelGateOptions): ListenerGate {
     if (tunnel === undefined || registration === undefined) {
       return { refusal: { status: 403, body: FORBIDDEN_BODY } };
     }
-    const clientOrigin = tunnel.open.clientOrigin;
+    const declared = tunnel.open.clientOrigin;
+    const clientOrigin = effectiveClientOrigin(
+      request.headers,
+      declared,
+      registration,
+    );
     const cors = corsFor(clientOrigin);
     const refuse = (status: number, body: typeof FORBIDDEN_BODY) => ({
       refusal: { status, body, cors },
@@ -141,7 +166,7 @@ export function createTunnelGate(options: TunnelGateOptions): ListenerGate {
     if (loopbackOnlyPath(path)) {
       return refuse(403, { code: "forbidden", message: "这条路径只在本机" });
     }
-    if (!sameDeclaredOrigin(request.headers, clientOrigin)) {
+    if (!sameDeclaredOrigin(request.headers, declared)) {
       return refuse(403, FORBIDDEN_BODY);
     }
     if (clientOrigin !== null && !originAllowed(clientOrigin, registration)) {

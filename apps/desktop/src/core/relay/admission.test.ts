@@ -133,6 +133,28 @@ describe("HTTP 准入", () => {
     expect(answer.status).toBe(403);
   });
 
+  it("中继同源的页面（托管页面）发的 GET 不带 Origin：凭 Sec-Fetch-Site: same-origin 按中继来源放行", async () => {
+    const token = world.session(ISSUER);
+    const same = await get("/api/workspaces", {
+      authorization: `Bearer ${token}`,
+      "sec-fetch-site": "same-origin",
+    });
+    expect(same.status).toBe(200);
+    for (const site of ["cross-site", "same-site", "none"]) {
+      const answer = await get("/api/workspaces", {
+        authorization: `Bearer ${token}`,
+        "sec-fetch-site": site,
+      });
+      expect(answer.status, site).toBe(403);
+    }
+    // 回环的会话照样进不来：同源只决定来源，不替代凭据。
+    const loopback = await get("/api/workspaces", {
+      authorization: `Bearer ${world.session(LOOPBACK_ORIGIN)}`,
+      "sec-fetch-site": "same-origin",
+    });
+    expect(loopback.status).toBe(401);
+  });
+
   it("原生 App 的来源放行，CORS 回 App 自己的来源", async () => {
     const token = world.session(ISSUER);
     const answer = await get("/api/workspaces", {
