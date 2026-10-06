@@ -50,6 +50,8 @@ export const ERROR_CODES = {
   forge_unavailable: { status: 502 },
   mail_send_failed: { status: 502 },
   forge_forbidden: { status: 403 },
+  /** 工作空间没给执行授权，而这次 Git 读写要跑仓库的过滤器、钩子或传输助手（契约 §40）。 */
+  git_execution_required: { status: 403 },
   forge_scope: { status: 403 },
   pairing_code_disabled: { status: 403 },
   pairing_code_invalid: { status: 404 },
