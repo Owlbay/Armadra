@@ -9,6 +9,8 @@
 //   访客（浏览器）：    打开链接（一次导航）→ 落地页点「加入」→ 进画布、看见节点；
 //                      点击数不超过 3，导航到画布可见的耗时进报告。第二个访客用同一条
 //                      链接再加入一次（链接可复用）；owner 撤销（要确认）后第三个访客被拒。
+//   手机（App 页面）：  钥匙串（假）里已有主人对这个中转的登录（旧版的单槽），扫同一条
+//                      链接以访客加入：访客的登录另存一槽，主人那一槽原样还在、还能用。
 //
 // 与 V1 `personal-roundtrip` 重叠的部分（中继、桌面壳、页面小工具、日志扫秘密）都来自
 // `platform-lib.mjs`；这里只有 owner 的界面流程和访客的计步。中继在容器里，来自
@@ -21,8 +23,8 @@
 //   node tools/ci/e2e.mjs --only link-join
 //   node tools/probes/link-join.mjs [输出目录]
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { extname, join, resolve } from "node:path";
 
 import { CLOUD_ENTRY, findCloudSource } from "./cloud-source.mjs";
 import {
@@ -49,6 +51,8 @@ import {
 
 /** 访客点击数的上限（规格：不超过 3 次）。 */
 const MAX_GUEST_CLICKS = 3;
+/** 中继边缘按来源 IP 每分钟限次（回环上所有客户端共用）：手机页面启动前等窗口过去。 */
+const RATE_WINDOW_MS = 62_000;
 
 const output = resolve(
   process.argv.slice(2).find((arg) => !arg.startsWith("--")) ??
@@ -102,6 +106,9 @@ try {
   stack = await startStack({
     log: "info",
     env: { ARMADRA_SECRET_BACKEND: "file" },
+    // 手机那一段的页面来源是原生 App 的 https://localhost，向回环上的中继发请求：
+    // 真机里没有浏览器的本地网络访问检查，这里关掉（同 personal-roundtrip）。
+    chromeArgs: ["--disable-features=LocalNetworkAccessChecks"],
   });
   report.chrome = stack.chrome;
   const run = scenario(
@@ -321,6 +328,185 @@ try {
   );
   run.ok("同一条链接两个访客先后加入，列表显示已用 2/1000");
   await win.capture(join(output, "04-owner-used.png"));
+
+  /* ------------- 手机：访客令牌不覆盖主人（同一个中转，钥匙串分槽） ------------- */
+  // 主人早先在这台手机上登录过这个中转：旧版只有一槽 `personal:<host>`。
+  const ownerLogin = await relay.must("POST", "/v1/auth/login", {
+    body: {
+      account: relay.account,
+      password,
+      device: { platform: "ios", name: "Armadra iOS" },
+    },
+  });
+  const ownerRefresh = secret(
+    "主人的云刷新令牌",
+    ownerLogin.session.refreshToken,
+  );
+  secret("主人的云访问令牌", ownerLogin.session.accessToken);
+  const legacySlot = `personal:${new URL(relay.issuer).host}`;
+  await sleep(RATE_WINDOW_MS);
+  guest = await stack.browser.page(await stack.browser.context());
+  guest.allowed.push(/WebSocket connection to .* failed/);
+  const seed = {
+    remotes: [
+      {
+        serviceId: legacySlot,
+        issuer: relay.issuer,
+        kind: "personal",
+        refreshToken: ownerRefresh,
+        fingerprint: relay.fingerprint,
+      },
+    ],
+    pins: [relay.issuer],
+  };
+  await guest.call("Page.addScriptToEvaluateOnNewDocument", {
+    source: `
+      (function(){
+        const read = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
+        const write = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+        if (localStorage.getItem("fake.seeded") === null) {
+          write("fake.remotes", ${JSON.stringify(seed.remotes)});
+          write("fake.pins", ${JSON.stringify(seed.pins)});
+          localStorage.setItem("fake.seeded", "1");
+        }
+        try { localStorage.setItem("armadra.locale", "zh-CN"); } catch {}
+        window.Capacitor = {
+          isNativePlatform: () => true,
+          Plugins: { ArmadraNative: {
+            getSessions: async () => ({ sessions: read("fake.sessions", []) }),
+            setSession: async ({ session }) => { const all = read("fake.sessions", []).filter((s) => !(s.sourceId === session.sourceId && s.via === session.via)); all.push(session); write("fake.sessions", all); },
+            removeSession: async ({ sourceId }) => write("fake.sessions", read("fake.sessions", []).filter((s) => s.sourceId !== sourceId)),
+            getRemotes: async () => ({ remotes: read("fake.remotes", []) }),
+            setRemote: async ({ remote }) => { const all = read("fake.remotes", []).filter((r) => r.serviceId !== remote.serviceId); all.push(remote); write("fake.remotes", all); },
+            removeRemote: async ({ serviceId }) => write("fake.remotes", read("fake.remotes", []).filter((r) => r.serviceId !== serviceId)),
+            peek: async ({ origin }) => ({ fingerprint: ${JSON.stringify(relay.fingerprint)}, trusted: false, pinned: read("fake.pins", []).includes(origin) }),
+            pin: async ({ origin, fingerprint }) => { if (fingerprint !== ${JSON.stringify(relay.fingerprint)}) throw new Error("mismatch"); write("fake.pins", [...read("fake.pins", []), origin]); },
+            scan: async () => ({ text: ${JSON.stringify(link)} }),
+          } },
+        };
+      })();`,
+  });
+  // 页面来源是原生 App 的 https://localhost：从构建产物应答，其余请求照常发出。
+  const webRoot = join(root, "apps/web/dist");
+  const types = {
+    ".html": "text/html",
+    ".js": "text/javascript",
+    ".css": "text/css",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".json": "application/json",
+    ".woff2": "font/woff2",
+    ".wasm": "application/wasm",
+  };
+  await guest.call("Fetch.enable", {
+    patterns: [{ urlPattern: "https://localhost/*" }],
+  });
+  const appPage = guest;
+  stack.browser.on(async (message) => {
+    if (
+      message.sessionId !== appPage.sessionId ||
+      message.method !== "Fetch.requestPaused"
+    )
+      return;
+    const url = new URL(message.params.request.url);
+    let file = join(webRoot, decodeURIComponent(url.pathname));
+    if (!file.startsWith(webRoot) || !existsSync(file) || url.pathname === "/")
+      file = join(webRoot, "index.html");
+    await stack.browser
+      .call(
+        "Fetch.fulfillRequest",
+        {
+          requestId: message.params.requestId,
+          responseCode: 200,
+          responseHeaders: [
+            {
+              name: "content-type",
+              value: types[extname(file)] ?? "application/octet-stream",
+            },
+          ],
+          body: readFileSync(file).toString("base64"),
+        },
+        appPage.sessionId,
+      )
+      .catch(() => undefined);
+  });
+  // 发往中继与源的请求记进报告（失败时看是哪一步、CORS 还是证书）。
+  await guest.call("Network.enable");
+  const netUrls = new Map();
+  report.mobileNet = [];
+  stack.browser.on((message) => {
+    if (message.sessionId !== appPage.sessionId) return;
+    const { method, params } = message;
+    if (
+      method === "Network.requestWillBeSent" &&
+      !params.request.url.startsWith("https://localhost")
+    )
+      netUrls.set(
+        params.requestId,
+        `${params.request.method} ${new URL(params.request.url).pathname}`.slice(
+          0,
+          80,
+        ),
+      );
+    else if (
+      method === "Network.loadingFailed" &&
+      netUrls.has(params.requestId)
+    )
+      report.mobileNet.push({
+        failed: netUrls.get(params.requestId),
+        error: params.errorText,
+        cors: params.corsErrorStatus,
+      });
+    else if (
+      method === "Network.responseReceived" &&
+      netUrls.has(params.requestId)
+    )
+      report.mobileNet.push({
+        status: params.response.status,
+        url: netUrls.get(params.requestId),
+      });
+  });
+  await guest.goto("https://localhost/");
+  await guest.until(buttonExists(["扫码", "Scan"]), "手机连接页的「扫码」", {
+    timeout: 30_000,
+  });
+  // 页面挂好处理器之前点会落空：点到按钮真的忙起来（或已离开连接页）为止。
+  await guest.until(
+    `const b = (() => { ${buttonByText(["扫码", "Scan"])} })(); if (!b) return null; b.click(); return true;`,
+    "点「扫码」",
+  );
+  await guest.until(
+    `return !!document.querySelector('${nodeAt(stickyId)}')`,
+    "手机以访客加入后画布上出现 owner 的便签",
+    { timeout: 90_000 },
+  );
+  await run.shot(guest, "04-mobile-guest-canvas");
+  const remotes = await guest.evaluate(
+    `return JSON.parse(localStorage.getItem("fake.remotes") ?? "[]");`,
+  );
+  const ownerSlot = remotes.find((row) => row.serviceId === legacySlot);
+  const guestSlots = remotes.filter((row) => row.serviceId !== legacySlot);
+  run.check(
+    ownerSlot?.refreshToken === ownerRefresh &&
+      guestSlots.length === 1 &&
+      /:guest\./.test(guestSlots[0].serviceId) &&
+      guestSlots[0].refreshToken !== ownerRefresh,
+    "访客令牌不覆盖主人：主人那一槽原样还在，访客另存一槽",
+    remotes.map((row) => row.serviceId),
+  );
+  const refreshed = await relay.call("POST", "/v1/auth/refresh", {
+    body: { refreshToken: ownerRefresh },
+  });
+  run.check(
+    refreshed.status === 200,
+    "主人留在钥匙串里的那把刷新令牌在中转上仍然有效",
+    { status: refreshed.status },
+  );
+  if (refreshed.body?.session?.refreshToken)
+    secret("主人旋转后的云刷新令牌", refreshed.body.session.refreshToken);
+  if (refreshed.body?.session?.accessToken)
+    secret("主人旋转后的云访问令牌", refreshed.body.session.accessToken);
+  run.consoleClean(guest);
   await clickText(win, ["撤销", "Revoke"], "列表里的撤销");
   await win.until(
     `return document.querySelector('[role="alertdialog"]') ? true : null;`,
@@ -398,6 +584,7 @@ try {
     report[`${name}Text`] = await page
       .evaluate("return document.body.innerText.slice(0, 1500)")
       .catch(() => undefined);
+    report[`${name}Console`] = page.unexpected?.().slice(0, 20);
   }
   if (relay) report.relayLog = relay.logs().slice(-3000);
   if (electron) report.electronLog = electron.log().slice(-3000);

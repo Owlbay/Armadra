@@ -11,6 +11,8 @@ import type { SourceDescriptor } from "../sources/types";
  */
 const TABLE_KEY = "armadra.sources";
 const ACTIVE_KEY = "armadra.sources.active";
+/** 经中继的连接用钥匙串里哪一份远程服务登录（`serviceId`），见 {@link remoteSlotOf}。 */
+const SLOTS_KEY = "armadra.sources.remoteSlots";
 
 function storage(): Storage | undefined {
   try {
@@ -100,6 +102,47 @@ export function upsertConnection(
 export function removeConnection(sourceId: string): void {
   save(loadConnections().filter((row) => row.sourceId !== sourceId));
   if (activeConnectionId() === sourceId) storage()?.removeItem(ACTIVE_KEY);
+  const slots = loadSlots();
+  if (sourceId in slots) {
+    delete slots[sourceId];
+    saveSlots(slots);
+  }
+}
+
+/* ------------------------------ 远程服务的槽 ------------------------------ */
+
+function loadSlots(): Record<string, string> {
+  try {
+    const raw = storage()?.getItem(SLOTS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, string] =>
+          typeof entry[1] === "string" && entry[1] !== "",
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function saveSlots(slots: Record<string, string>): void {
+  storage()?.setItem(SLOTS_KEY, JSON.stringify(slots));
+}
+
+/**
+ * 这个连接用钥匙串里哪一份远程服务登录。同一个中继下主人与访客各是一份
+ * （`credentials.ts::serviceIdOf(issuer, principal)`）；早先的连接没有记录，
+ * 答 `null`，由调用方落回那个签发方原来的单槽——旧数据原样可用，不搬不丢。
+ */
+export function remoteSlotOf(sourceId: string): string | null {
+  return loadSlots()[sourceId] ?? null;
+}
+
+export function setRemoteSlot(sourceId: string, serviceId: string): void {
+  saveSlots({ ...loadSlots(), [sourceId]: serviceId });
 }
 
 export function activeConnectionId(): string | null {
