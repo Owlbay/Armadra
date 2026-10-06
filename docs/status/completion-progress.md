@@ -2394,6 +2394,34 @@
 - 手机没有真机或模拟器：原生桥是页面里的替身（钥匙串存页面存储，扫码结果注入）。
 - 访客兑换一次性邀请后列表里 `uses` 为 0、`consumedAtMs` 有值：一次性邀请不计 `uses`，只记消费时间。
 
+## E3-5a 工程规范化：git 域迁到契约（契约 §40.1，E3-5 第一部分）
+
+规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-5）；契约 §40。
+
+切分边界：E3-5 表里的「40 / 35」是整个 git 面的调用数 / 路径数（页面 `api/git.ts` 17 个调用 + `api/git-repository.ts` 23 个调用）。本包收 `api/git.ts` 那 17 个——`status`、`diff`、`head-commit`、`init`、`stage`、`unstage`、`resolve`、`revert`、`commit`、`hunks`（读与写）、`message/providers|source|generate`、`/api/git/clone`（起、读、取消）；`repositories`、`log`、`refs`、`identity` 与 `repository/*`（含操作队列与 rebase）留给第二部分（`gitRepository.*`，§40.2）。对偶测试里有一条用例核对这条边界：路由表里其余的 Git 路径都是仓库级的。
+
+做了什么：
+
+- **契约**（`packages/shared/src/contract/git.ts`）：`git.*` 17 条，`message.*` 与 `clone.*` 各成一棵子树。出参复用页面已有的 schema；入参只校形状，`scope` / `source` / `action` / `language` 是字符串，取值由域判断（拒绝的原话因此与旧路径一样）；旧路径查询串里的 `paths`（逗号拼）与 `ignoreWhitespace`（`"true"`）两种拼法都收。注册表登记 `git_execution_required`（403）。`since` 为 1.8，协议 minor 7 → 8。
+- **core**（`core/git/routes.ts`）：这 17 个路由的实现收成一份 `operations`，旧 handler 与 `registerProcedures(server, "git", …)` 调同一份；入参是取值函数，旧 handler 照旧在权限门之后才解析体。克隆保留任务模型：`clone.start` 只起任务答 `jobId`，进度靠 `clone.status` 轮询，完成时登记工作空间。仓库级路由未动。
+- **页面**：`api/git.ts` 改为 `gitApiFor(rpc)`，经 `currentClient`（换源跟着换），函数签名不变；入参照旧先过页面 schema，空路径、空提交信息、不认识的 `scope` 在发请求前同步抛出。
+- **契约 §40**：§40.1 生成块与说明，§40.2 占位写明第二部分的范围。
+
+实测（macOS arm64，基于 main 13f20c09）：
+
+- `pnpm check` 通过（lint 0 error；`notices:check` 要指向实际装依赖的离线仓库：`npm_config_store_dir=<仓库> pnpm notices:check` 通过，本包未动依赖）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 418 个文件通过、11 跳过（4952 过 / 72 跳过），脚本 68 过 / 2 跳过。新增 `core/contract/parity-git.test.ts` 17 条：旧路径、procedure、原 handler 逐字节相等，覆盖状态、差异（两种拼法）、HEAD 提交、暂存 / 取消暂存、带冲突标记的解决被拒、还原与不认识的来源、提交与 amend 的 HEAD 不符、按块读写与不认识的动作、AI 提交信息（替身 `claude`，不跑真 CLI）、初始化、读 / 写 / 执行授权与不存在的工作空间、克隆的拒绝与任务读取取消、形状错只比码与状态、scope 与路由表一致、切分边界。
+- `pnpm --filter @armadra/web test`：399 个文件、3699 条通过；`typecheck` 通过。新增 `api/client.git.test.ts` 15 条，`client.test.ts` 里旧的 git / 克隆用例搬过去按 procedure 线上形状改写。
+- 探针：`git-tool-window` 通过（日志、提交两页与手机四级导航的截图）；A 档 `ui-features-e2e` 通过；`remote-e2e` 的 Git 段（远端状态、暂存、提交、fetch 与取消）全部通过。
+
+没做 / 偏离：
+
+- 形状错（缺字段、类型不对）经旧路径与 procedure 由入参校验先答 `bad_request`（带 `details.issues`），与迁移前那句原话不同；码与状态不变。
+- 旧路径答 500 `internal_error`（如 Git 输出无法解析）时，门面按 §34.1 不外泄原话，与迁移前不同。
+- `status` 的 `paths` 收下但 core 从来不按它过滤（迁移前就如此），没有顺手改。
+- 探针在临时 HOME 下 `pnpm exec vite` 会先联网核对锁文件，本机断网时卡住；本地跑探针时加 `npm_config_verify_deps_before_run=false npm_config_minimum_release_age=0 npm_config_manage_package_manager_versions=false` 即可，探针本身未改。
+- `remote-e2e` 的 `08b-remote-acp`（ACP Agent 启动即退出）与 `server-e2e` 的「新建浏览器」菜单项等待超时失败，两处都不经过 git 面，与本包无关，未深究。
+
 ## M1 收尾：单实例锁、撤销时删中继侧源记录、一次性邀请计数、spawn-helper 执行位
 
 做了什么：

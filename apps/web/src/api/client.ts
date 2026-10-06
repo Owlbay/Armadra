@@ -10,7 +10,7 @@
  *      `RuntimeRequestError` / `RuntimeConnectionError`，与 `request()` 同一套，
  *      所以 `isConflict` 这些判定两边通用。
  *   2. **`runtimeApi`**：把各领域模块拼起来，调用点的方法签名与从前一致。迁到
- *      契约上的域（`workspaces`、`settings`）由这里把当前源的客户端交给它们，域模块
+ *      契约上的域（`workspaces`、`settings` 等）由这里把当前源的客户端交给它们，域模块
  *      自己不 import 这个文件——它们被这里 import，反过来就是一个环。
  *
  * 传输层（zod 校验、连接失败与 Runtime 报错的分流）在 `request.ts`，WebSocket
@@ -50,7 +50,7 @@ import { terminalsApiFor } from "./terminals";
 import { resourcesApi } from "./resources";
 import { conversationsApi } from "./conversations";
 import { handoffApi } from "./handoff";
-import { gitApi } from "./git";
+import { gitApiFor } from "./git";
 import { gitRepositoryApi } from "./git-repository";
 import { usageApi } from "./usage";
 import { settingsApiFor } from "./settings";
@@ -313,7 +313,7 @@ export const runtimeApi = {
   ...resourcesApi,
   ...conversationsApi,
   ...handoffApi,
-  ...gitApi,
+  ...gitApiFor(currentClient),
   ...gitRepositoryApi,
   ...usageApi,
   ...settingsApiFor(currentClient),
