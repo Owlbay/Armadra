@@ -16,6 +16,8 @@ import type { ArmadraClient } from "./client";
 import { RuntimeRequestError } from "./request";
 import type { Source } from "./source";
 
+type WireObjects = Parameters<ArmadraClient["boards"]["save"]>[0]["nodes"];
+
 /**
  * 画布（契约 §36，第三批迁到契约上的域）。
  *
@@ -84,27 +86,31 @@ export const boardsApiFor = (rpc: (source?: Source) => ArmadraClient) => ({
     boardId: string,
     document: BoardDocument,
     clientId?: string,
-  ) =>
-    boardDocumentSchema.parse(
+  ) => {
+    const save = saveBoardRequestSchema.parse({
+      expectedUpdatedAt: document.board.updatedAt,
+      nodes: document.nodes,
+      edges: document.edges,
+      viewport: document.board.viewport,
+      // 白板快照（旧画布契约 §6.1）：同一次调用带走，Runtime 原样存。
+      whiteboard: document.board.whiteboard,
+      clientId,
+    });
+    return boardDocumentSchema.parse(
       await rpc().boards.save({
         workspaceId,
         boardId,
+        expectedUpdatedAt: save.expectedUpdatedAt,
         // 页面这一侧的节点是按类型写的联合；线上的入参是「原样 JSON 对象」，
         // 语义检查在 core（`validation.ts`）。
-        ...(saveBoardRequestSchema.parse({
-          expectedUpdatedAt: document.board.updatedAt,
-          nodes: document.nodes,
-          edges: document.edges,
-          viewport: document.board.viewport,
-          // 白板快照（旧画布契约 §6.1）：同一次调用带走，Runtime 原样存。
-          whiteboard: document.board.whiteboard,
-          clientId,
-        }) as unknown as Omit<
-          Parameters<ArmadraClient["boards"]["save"]>[0],
-          "workspaceId" | "boardId"
-        >),
+        nodes: save.nodes as unknown as WireObjects,
+        edges: save.edges as unknown as WireObjects,
+        viewport: save.viewport,
+        whiteboard: save.whiteboard,
+        clientId: save.clientId,
       }),
-    ),
+    );
+  },
 
   /* ----------------------------- 在线设备与租约 ------------------------- */
   /**
