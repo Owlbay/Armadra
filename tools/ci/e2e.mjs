@@ -25,6 +25,12 @@
  * nightly.yml, and a packaged-app probe for one system has nothing to test on
  * another.
  *
+ * An entry that `requires` "cloud" needs a local checkout of the private
+ * armadra-cloud repository (ARMADRA_DEV_STACK_CLOUD_SRC, or ../armadra-cloud).
+ * CI cannot clone it, so without one the entry is recorded as skipped with the
+ * reason, not failed; with one the path is handed to the probe in
+ * ARMADRA_DEV_STACK_CLOUD_SRC.
+ *
  * Tier A needs tmux and a Chrome / Chromium (CHROME_PATH, or the usual install
  * locations). Entries marked `devStack` only run when ARMADRA_DEV_STACK=1 and
  * Docker answers; otherwise they are recorded as skipped, not failed.
@@ -43,12 +49,14 @@ import {
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { findCloudSource } from "../probes/cloud-source.mjs";
+
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 export const MANIFEST_DIR = join(ROOT, "tools/ci/e2e.d");
 /** The single-file manifest this directory replaced; it must not come back. */
 export const LEGACY_MANIFEST = join(ROOT, "tools/ci/e2e.json");
 export const TIERS = ["a", "b"];
-export const REQUIREMENTS = ["tmux", "chrome", "docker"];
+export const REQUIREMENTS = ["tmux", "chrome", "docker", "cloud"];
 /** `process.platform` values an entry may restrict itself to. */
 export const PLATFORMS = ["darwin", "linux", "win32"];
 
@@ -262,7 +270,12 @@ export async function runTier({
   only,
   env = process.env,
   platform = process.platform,
-  probe = { tmux: hasTmux, chrome: () => findChrome(env), docker: hasDocker },
+  probe = {
+    tmux: hasTmux,
+    chrome: () => findChrome(env),
+    docker: hasDocker,
+    cloud: () => findCloudSource(env, root),
+  },
   devStack = {
     up: () => pnpm(root, ["dev-stack", "up"]),
     down: () => pnpm(root, ["dev-stack", "down"]),
@@ -293,7 +306,12 @@ export async function runTier({
   const chrome = needs("chrome") ? probe.chrome() : null;
   const tmux = needs("tmux") ? probe.tmux() : false;
   const docker = needs("docker") ? probe.docker() : false;
-  const childEnv = { ...env, ...(chrome ? { CHROME_PATH: chrome } : {}) };
+  const cloud = needs("cloud") ? (probe.cloud?.() ?? null) : null;
+  const childEnv = {
+    ...env,
+    ...(chrome ? { CHROME_PATH: chrome } : {}),
+    ...(cloud ? { ARMADRA_DEV_STACK_CLOUD_SRC: cloud } : {}),
+  };
 
   // The dev-stack is brought up once for the whole tier, and only when asked.
   let stack = { state: "off", reason: "ARMADRA_DEV_STACK is not 1" };
@@ -345,6 +363,13 @@ export async function runTier({
           id: entry.id,
           status: stack.state === "failed" ? "failed" : "skipped",
           reason: `dev-stack: ${stack.reason}`,
+        };
+      } else if (entry.requires?.includes("cloud") && !cloud) {
+        record = {
+          id: entry.id,
+          status: "skipped",
+          reason:
+            "needs a local armadra-cloud checkout (private repo; set ARMADRA_DEV_STACK_CLOUD_SRC)",
         };
       } else if (missing.length > 0) {
         record = {

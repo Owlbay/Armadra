@@ -2375,6 +2375,25 @@
 
 实测（macOS arm64，Node 26.10.0，合入 main 27b71efe 之后）：新增 `contract/parity-boards.test` 11（旧路径、procedure、原 handler 三者逐字节一致，含 404、409、423、400 envelope）、`canvas/presence-subscription.test` 7、web `api/board-presence.test` 2、`client.test` 与 `use-board-sync.test` 改写补充。`pnpm check` 通过；A 档：design-showcase、gateway、realtime、server、ui-features（多设备画布）、workflow、ws-mux、core-terminal-\*、push 通过；acp、agent-e2e-self-test、remote 三项在探针的临时 HOME 下 `pnpm exec vite` 无输出、「Vite 没有就绪」，与本包无关（环境问题）。
 
+## V1 个人中转全流程探针（里程碑 M1 验收）
+
+规格：[开发栈与验证](../design/platform/dev-stack-and-verification.md) §4；总计划 §12.3。
+
+做了什么：
+
+- `tools/probes/personal-roundtrip.mjs`（A 档）：真个人中转（armadra-cloud `personal init` + `serve`，自签 TLS，托管 `apps/web/dist`）、真 core、真 Electron、无头 Chrome。七步：中继 init；core 登记、隧道 ready、绑定主人；`/app/` 账号口令登录、终端、实时板；`/j/` 访客加入、开终端；桌面粘贴链接挂载（核对指纹）、开终端；手机 390 宽模拟扫码挂载、开终端；撤销链接与撤销登记。最后扫中继、core、Electron 与探针输出，口令、令牌、链接秘密一个都不许出现。
+- e2e 清单新增依赖项 `cloud`（`tools/ci/e2e.mjs`、`tools/probes/cloud-source.mjs`）：找不到 armadra-cloud 检出（私有仓，CI 拉不到）时记 `skipped` 并写明原因，找到则经 `ARMADRA_DEV_STACK_CLOUD_SRC` 交给探针。清单 `personal-roundtrip.json` 列为 tier a，`platforms` 为 darwin、linux。
+- `startStack` 可追加 Chrome 参数；`relay-desktop.mjs` 导出 `attachRenderer`。
+
+实测（macOS arm64，2026-10-06，基于 main 13f20c09，armadra-cloud main 4cc09cc）：`node tools/ci/e2e.mjs --tier a --only personal-roundtrip` 连跑 3 次全过，100 s / 101 s / 116 s（其中 `/app/` 一段约 14.5 s、桌面一段约 8 s，第三次桌面一段 23 s；手机一步前固定等 62 s 的限流窗口）。
+
+发现与限制：
+
+- 中继边缘对每个来源 IP 每分钟 200 次（`edge.connect.ip`，写死在 cloud 的 `control/types.ts`，预检、请求、升级共用）。一台主机上的多个客户端（几个浏览器标签、桌面、手机模拟）共用回环 IP，手机页面启动一口气几十个请求，前面几步用掉额度后预检答 429，页面落在「连不上」。探针因此在手机一步前等一个窗口。真实部署里多人在同一出口 IP 后面（办公室、家庭）也会撞到。
+- 手机模拟需要 Chrome 的 `--disable-features=LocalNetworkAccessChecks`：页面来源是拦截出来的 `https://localhost`，Chrome 当它是公网页面而拦下对回环中继的访问；原生 WebView 没有这一层。
+- 手机没有真机或模拟器：原生桥是页面里的替身（钥匙串存页面存储，扫码结果注入）。
+- 访客兑换一次性邀请后列表里 `uses` 为 0、`consumedAtMs` 有值：一次性邀请不计 `uses`，只记消费时间。
+
 ## M1 收尾：单实例锁、撤销时删中继侧源记录、一次性邀请计数、spawn-helper 执行位
 
 做了什么：
