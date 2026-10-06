@@ -45,7 +45,7 @@ const workspaceRef = z.object({ workspaceId: z.string().min(1) });
 const pathQuery = workspaceRef.extend({ path: z.string().optional() });
 
 const base = {
-  since: "1.3",
+  since: "1.5",
   contract: "§37.1",
   workspaceKey: "workspaceId",
 } as const;
