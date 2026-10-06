@@ -18,7 +18,7 @@ import { sk } from "../../sources/scope";
 import { Field } from "../git/forms";
 import { invalidateGitQueries } from "../git/queries";
 import { createWorktreeAction, localBranch } from "../git/worktree";
-import { suggestedHeadRef } from "./model";
+import { remoteForRepository, suggestedHeadRef } from "./model";
 /**
  * 检出要用的那几项：GitHub 的 PR 与 Gitea / GitLab 的 PR·MR（`api/forge.ts`）都
  * 有。`headRepoFullName` 只有 GitHub 给，fork 提示里用来说分支在谁那儿。
@@ -33,6 +33,12 @@ export interface CheckoutPull {
   readonly headRepoFullName?: string;
   readonly forge?: "gitea" | "gitlab";
   readonly headSha?: string;
+  /** 基仓库（PR 所在的那个）：按远端地址认出本地哪个远端是它。 */
+  readonly baseRepository?: {
+    readonly host: string;
+    readonly owner: string;
+    readonly name: string;
+  };
 }
 
 /** The ref a platform publishes a pull request's head under. */
@@ -89,16 +95,30 @@ export function CheckoutWorktree({
   const existing = localBranch(snapshot.data?.branches ?? [], branch.trim());
 
   // A fork's head on Gitea / GitLab: no remote of this clone has its branch,
-  // but the base repository publishes the head under a ref of its own.
+  // but the base repository publishes the head under a ref of its own. Which
+  // remote is the base repository is read from the remotes' addresses, not
+  // guessed from their names.
   const remotes = snapshot.data?.remotes ?? [];
+  const forkHead = Boolean(pull.fromFork && pull.forge && pull.headSha);
+  const base = pull.baseRepository;
+  const addresses = useQuery({
+    queryKey: sk("git-repository-remotes", workspaceId),
+    queryFn: ({ signal }) => gitGateway.remotes(target, signal),
+    enabled: forkHead && Boolean(base),
+    retry: false,
+  });
+  const baseRemote =
+    base && addresses.data ? remoteForRepository(addresses.data, base) : null;
   const [pickedRemote, setRemote] = React.useState("");
   const remote = remotes.includes(pickedRemote)
     ? pickedRemote
-    : remotes.includes("origin")
-      ? "origin"
-      : (remotes[0] ?? "");
+    : baseRemote && remotes.includes(baseRemote)
+      ? baseRemote
+      : remotes.includes("origin")
+        ? "origin"
+        : (remotes[0] ?? "");
   const headRef =
-    pull.fromFork && pull.forge && pull.headSha && remote
+    forkHead && pull.forge && remote
       ? pullHeadRef(pull.forge, Number(pull.number))
       : null;
 

@@ -232,6 +232,18 @@ describe("git 域：旧路径、procedure 与原 handler 答得一样", () => {
         path: ".",
       }),
     );
+    // 逗号拼的路径与数组：两种拼法都只答 a.txt 那一行。
+    const narrowed = await three(
+      "GET",
+      `${at(id)}/status?path=.&paths=a.txt`,
+      "git.status",
+      { workspaceId: id, path: ".", paths: ["a.txt"] },
+    );
+    expectParity(narrowed);
+    expect(narrowed[2].body).toMatchObject({
+      changedCount: 1,
+      files: [{ path: "a.txt" }],
+    });
     const plain = temporaryDirectory("parity-git-plain");
     const plainId = workspaceAt(plain);
     expectParity(

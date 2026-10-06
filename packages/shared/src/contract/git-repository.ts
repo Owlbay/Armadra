@@ -51,8 +51,9 @@ import { meta, oc } from "./meta.js";
  * 空间可见。
  *
  * 权限与路由表（`core/http/route-scopes.ts`）给旧路径的一致：`GET` 是 `git:read`，
- * 其余方法是 `git:write`——`log`、`statusBatch`、`worktreeBinding` 虽然只读，旧
- * 路径是 `POST`（筛选条件或路径表是体），同样是 `git:write`。工作空间自己的
+ * 其余方法是 `git:write`。例外是只读的 `log` 与 `worktreeBinding`：旧路径虽是
+ * `POST`（筛选条件是体），路由表单列它们为 `git:read`。`statusBatch` 维持
+ * `git:write`。工作空间自己的
  * 读 / 写 / 执行授权是域里的判断（`git_execution_required`）。
  */
 
@@ -178,7 +179,7 @@ export const gitRepository = {
     .meta(
       meta({
         ...inWorkspace,
-        scope: "git:write",
+        scope: "git:read",
         legacy: postAt(`${WORKSPACE}/log`),
       }),
     ),
@@ -389,7 +390,7 @@ export const gitRepository = {
     .meta(
       meta({
         ...inWorkspace,
-        scope: "git:write",
+        scope: "git:read",
         legacy: postAt(`${REPOSITORY}/worktree-binding`),
       }),
     ),

@@ -36,6 +36,8 @@ import { useGithubFocus, type GithubTab } from "./open";
 import { ForgeHosted } from "./ForgeHosted";
 import {
   FORGE_NAMES,
+  type ForgeRepo,
+  detectForge,
   forgeFailure,
   forgeFailureKey,
   resolveForge,
@@ -72,6 +74,7 @@ export function GithubDrawer() {
   const focusNumber = useGithubFocus((store) => store.number);
   const reveal = useGithubFocus((store) => store.reveal);
   const focus = useGithubFocus((store) => store.focus);
+  const focusTarget = useGithubFocus((store) => store.target);
   const queryClient = useQueryClient();
 
   const open = mode === "drawer";
@@ -79,6 +82,12 @@ export function GithubDrawer() {
   const [tab, setTab] = React.useState<GithubTab>("issues");
   const [remoteUrl, setRemoteUrl] = React.useState("");
   const [resolveUrl, setResolveUrl] = React.useState("");
+  // 连接徽标点进来的 Gitea / GitLab 条目：按它记着的仓库认，不靠手填的地址。
+  const [resolveRepo, setResolveRepo] = React.useState<ForgeRepo | null>(null);
+  const resolveRemote = (value: string) => {
+    setResolveRepo(null);
+    setResolveUrl(value);
+  };
   const [draft, setDraft] = React.useState<GithubFilterState>(EMPTY_FILTER);
   const [applied, setApplied] = React.useState<GithubFilterState>(EMPTY_FILTER);
 
@@ -88,6 +97,14 @@ export function GithubDrawer() {
   React.useEffect(() => {
     if (open && reveal > 0) setTab(focusTab);
   }, [focusTab, open, reveal]);
+  React.useEffect(() => {
+    if (!open || reveal === 0 || focusTarget === null) return;
+    setResolveRepo({
+      host: focusTarget.host,
+      owner: focusTarget.owner,
+      name: focusTarget.name,
+    });
+  }, [focusTarget, open, reveal]);
 
   const client = state.status === "ready" ? state.client : null;
   const canWrite = state.status === "ready" && state.canWrite;
@@ -99,9 +116,22 @@ export function GithubDrawer() {
     canWrite || (state.status === "blocked" && state.canWrite === true);
 
   const detection = useQuery({
-    queryKey: sk("forge", "detect", workspaceId ?? "", resolveUrl),
-    queryFn: () => resolveForge(resolveUrl),
-    enabled: open && Boolean(sessionClient) && resolveUrl.length > 0,
+    queryKey: resolveRepo
+      ? sk(
+          "forge",
+          "detect-repo",
+          workspaceId ?? "",
+          resolveRepo.host,
+          resolveRepo.owner,
+          resolveRepo.name,
+        )
+      : sk("forge", "detect", workspaceId ?? "", resolveUrl),
+    queryFn: () =>
+      resolveRepo ? detectForge(resolveRepo) : resolveForge(resolveUrl),
+    enabled:
+      open &&
+      Boolean(sessionClient) &&
+      (resolveRepo !== null || resolveUrl.length > 0),
     retry: false,
   });
   const forgeUnsupported =
@@ -269,6 +299,17 @@ export function GithubDrawer() {
   const openIssue = (issue: GithubIssue) => focus("issues", issue.number);
   const openPull = (pull: GithubPullRequest) => focus("pulls", pull.number);
 
+  /** 徽标点进来的那一条，仓库对得上才交给 Gitea / GitLab 那一面。 */
+  const forgeFocus = (repository: ForgeRepo) =>
+    focusTarget !== null &&
+    focusNumber !== null &&
+    reveal > 0 &&
+    focusTarget.host.toLowerCase() === repository.host.toLowerCase() &&
+    focusTarget.owner.toLowerCase() === repository.owner.toLowerCase() &&
+    focusTarget.name.toLowerCase() === repository.name.toLowerCase()
+      ? { tab: focusTab, number: Number(focusNumber), reveal }
+      : null;
+
   return (
     <WorkPanelSheet
       panel="github"
@@ -349,7 +390,7 @@ export function GithubDrawer() {
           <RepositoryPicker
             remoteUrl={remoteUrl}
             onRemoteUrl={setRemoteUrl}
-            onResolve={() => setResolveUrl(remoteUrl.trim())}
+            onResolve={() => resolveRemote(remoteUrl.trim())}
             busy={detection.isFetching}
             resolved={undefined}
           />
@@ -415,6 +456,7 @@ export function GithubDrawer() {
                   canWrite={forgeCanWrite}
                   open={open}
                   workspaceId={workspaceId}
+                  focus={forgeFocus(detection.data.repository)}
                 />
               </>
             )}
@@ -451,7 +493,7 @@ export function GithubDrawer() {
             <RepositoryPicker
               remoteUrl={remoteUrl}
               onRemoteUrl={setRemoteUrl}
-              onResolve={() => setResolveUrl(remoteUrl.trim())}
+              onResolve={() => resolveRemote(remoteUrl.trim())}
               busy={detection.isFetching || resolved.isFetching}
               resolved={resolved.data}
             />

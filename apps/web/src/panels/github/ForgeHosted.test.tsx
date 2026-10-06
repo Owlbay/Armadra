@@ -66,6 +66,7 @@ vi.mock("@/api/client", () => ({
     })),
     gitRepositoryOperate: vi.fn(async () => ({ id: "operation-1" })),
     gitRepositoryWorktrees: vi.fn(async () => []),
+    gitRepositoryRemotes: vi.fn(async () => []),
   },
 }));
 
@@ -189,6 +190,7 @@ describe("GitLab merge request detail (§29.6)", () => {
   async function openGitlabPull(
     options: { autoMerge: boolean; mergeTrain: boolean },
     pull = forgePull(12, "Login rework"),
+    detection: typeof DETECTION | GiteaDetection = DETECTION,
   ) {
     forgeApi.forgePulls.mockResolvedValue({ items: [pull], nextCursor: null });
     forgeApi.forgePull.mockResolvedValue(pull);
@@ -202,9 +204,76 @@ describe("GitLab merge request detail (§29.6)", () => {
       methods: ["merge", "squash"],
       ...options,
     });
-    renderHosted();
+    renderHosted(detection);
     fireEvent.click(await screen.findByText(pull.title));
   }
+
+  it("Gitea: merge when checks succeed, named for checks rather than a pipeline", async () => {
+    forgeApi.autoMergeForgePull.mockResolvedValue({
+      merged: false,
+      sha: null,
+      train: false,
+    });
+    await openGitlabPull(
+      { autoMerge: true, mergeTrain: false },
+      forgePull(21, "Gitea change"),
+      { ...DETECTION, forge: "gitea" },
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "检查通过后合并" }),
+    );
+    expect(await screen.findByText("检查通过后合并这个请求？")).toBeTruthy();
+    expect(screen.queryByText("流水线通过后合并")).toBeNull();
+    const dialog = screen.getByRole("alertdialog");
+    fireEvent.click(
+      [...dialog.querySelectorAll("button")].find(
+        (button) => button.textContent === "检查通过后合并",
+      )!,
+    );
+    await waitFor(() =>
+      expect(forgeApi.autoMergeForgePull).toHaveBeenCalledWith(
+        { host: "git.example.test", owner: "acme", name: "app" },
+        21,
+        { method: "merge", headSha: MR_SHA },
+      ),
+    );
+    await waitFor(() =>
+      expect(toasts.success).toHaveBeenCalledWith("已设为检查通过后合并"),
+    );
+  });
+
+  it("opens the item a canvas badge points at, straight to its detail", async () => {
+    const pull = forgePull(22, "Badge target");
+    forgeApi.forgePull.mockResolvedValue(pull);
+    forgeApi.forgePullFiles.mockResolvedValue([]);
+    forgeApi.forgePullChecks.mockResolvedValue({
+      headSha: MR_SHA,
+      rollup: "none",
+      checks: [],
+    });
+    forgeApi.forgeMergeOptions.mockResolvedValue({
+      methods: ["merge"],
+      autoMerge: false,
+      mergeTrain: false,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ForgeHosted
+          detection={DETECTION}
+          locale="zh-CN"
+          canWrite
+          open
+          focus={{ tab: "pulls", number: 22, reveal: 1 }}
+        />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("Badge target")).toBeTruthy();
+    expect(forgeApi.forgePull).toHaveBeenCalledWith(DETECTION.repository, 22);
+    expect(forgeApi.forgePulls).not.toHaveBeenCalled();
+  });
 
   it("GitLab: merge when the pipeline succeeds, against the head on screen", async () => {
     forgeApi.autoMergeForgePull.mockResolvedValue({
@@ -378,6 +447,57 @@ describe("GitLab merge request detail (§29.6)", () => {
       });
     });
   }
+
+  it("a fork's checkout fetches from the remote whose address is the base repository", async () => {
+    const operate = vi.mocked(runtimeApi.gitRepositoryOperate);
+    operate.mockClear();
+    vi.mocked(runtimeApi.gitRepositoryBranches).mockResolvedValueOnce({
+      repositoryId: "repo",
+      repositoryPath: ".",
+      head: { headOid: "a".repeat(40), branch: "main" },
+      branches: [],
+      remotes: ["origin", "team"],
+      observedAt: "2026-09-06T00:00:00Z",
+    } as never);
+    vi.mocked(runtimeApi.gitRepositoryRemotes).mockResolvedValueOnce([
+      {
+        name: "origin",
+        fetchUrl: "git@git.example.test:me/app.git",
+        pushUrl: "git@git.example.test:me/app.git",
+        redacted: false,
+      },
+      {
+        name: "team",
+        fetchUrl: "https://git.example.test/acme/app.git",
+        pushUrl: "https://git.example.test/acme/app.git",
+        redacted: false,
+      },
+    ]);
+    await openGitlabPull(
+      { autoMerge: false, mergeTrain: false },
+      { ...forgePull(17, "Fork change"), fromFork: true },
+    );
+    await screen.findByLabelText("起点（检出时从远端取）");
+    await waitFor(() =>
+      expect(vi.mocked(runtimeApi.gitRepositoryRemotes)).toHaveBeenCalled(),
+    );
+    fireEvent.change(screen.getByLabelText("worktree 目录（绝对路径）"), {
+      target: { value: "/tmp/review-17" },
+    });
+    // 远端选择的缺省是按地址认出的那一个，不是 origin。
+    await waitFor(() =>
+      expect(
+        [...document.querySelectorAll("[data-slot=select-value]")].map(
+          (node) => node.textContent,
+        ),
+      ).toContain("team"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "创建 worktree" }));
+    await waitFor(() => expect(operate).toHaveBeenCalledTimes(1));
+    expect(operate.mock.calls[0]?.[1]).toMatchObject({
+      pullHead: { remote: "team", forge: "gitlab", number: 17 },
+    });
+  });
 
   it("a same-repository request keeps the editable start point and sends no pull head", async () => {
     const operate = vi.mocked(runtimeApi.gitRepositoryOperate);

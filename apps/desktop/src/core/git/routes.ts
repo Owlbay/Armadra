@@ -102,8 +102,11 @@ export function installRoutes(deps: GitRouteDeps): void {
     status: async (workspaceId: string, input: () => Args) => {
       const workspace = workspaceById(deps, workspaceId);
       requireExecution(workspace.permissions.execute, "Git worktree status");
+      const args = input();
+      // `paths` 是交给 Git 的 pathspec：计数与逐文件两遍都按它收窄。
       return await on(deps, workspace, "git.status", {
-        path: pathField(input()),
+        path: pathField(args),
+        paths: pathListOf(args.paths),
       });
     },
 
@@ -401,7 +404,7 @@ export function installRoutes(deps: GitRouteDeps): void {
     "GET",
     "/api/workspaces/{workspaceId}/git/status",
     async (match, request) =>
-      ok(await operations.status(at(match), query(request, "path"))),
+      ok(await operations.status(at(match), query(request, "path", "paths"))),
   );
 
   handle(
