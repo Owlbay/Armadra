@@ -3,16 +3,13 @@ import { Bell } from "lucide-react";
 import { toast } from "sonner";
 import {
   PUSH_PREFERENCE_KINDS,
-  pushConfigSchema,
-  pushDeviceListSchema,
-  pushDeviceResponseSchema,
   type PushConfig,
   type PushDevice,
   type PushPreferenceKind,
 } from "@armadra/shared";
 
 import { usePreferencesStore, useT } from "../app/preferences-store";
-import { json, request } from "../api/request";
+import { pushApi } from "../api/push";
 import { useCompactLayout } from "../platform/layout";
 import { useCanvasStore } from "../store/canvas-store";
 import { subscribeToPush } from "../push/service-worker";
@@ -86,10 +83,7 @@ export async function enablePush(
     const registration = await bridge.pushRegistration();
     if (registration === null) return "failed";
     try {
-      await request("/api/push/devices", pushDeviceResponseSchema, {
-        method: "PUT",
-        ...json({ ...registration, locale }),
-      });
+      await pushApi.register({ ...registration, locale });
       // 之后令牌换了由 `push-rotation.ts` 自己重新登记（R-54）。
       markNativePushRegistered();
       await bridge.ackPushRotation?.().catch(() => undefined);
@@ -106,10 +100,7 @@ export async function enablePush(
 /** 刚开启推送的这台设备（`current: true`）；找不到就是 `null`。 */
 export async function currentPushDevice(): Promise<PushDevice | null> {
   try {
-    const { devices } = await request(
-      "/api/push/devices",
-      pushDeviceListSchema,
-    );
+    const { devices } = await pushApi.devices();
     return devices.find((device) => device.current) ?? null;
   } catch {
     return null;
@@ -121,11 +112,7 @@ export async function savePushKinds(
   deviceId: string,
   kinds: readonly PushPreferenceKind[],
 ): Promise<readonly PushPreferenceKind[]> {
-  const { device } = await request(
-    `/api/push/devices/${encodeURIComponent(deviceId)}`,
-    pushDeviceResponseSchema,
-    { method: "PATCH", ...json({ kinds }) },
-  );
+  const { device } = await pushApi.setKinds(deviceId, kinds);
   return device.kinds ?? PUSH_PREFERENCE_KINDS;
 }
 
@@ -246,7 +233,8 @@ export function PushPermission() {
   React.useEffect(() => {
     if (!eligible) return;
     let live = true;
-    request("/api/push/config", pushConfigSchema)
+    pushApi
+      .config()
       .then((config) => {
         if (live && shouldAsk(config, bridge, webPushAskable()))
           setVisible(true);

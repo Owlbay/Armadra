@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { json, request } from "../api/request";
+import { currentClient } from "../api/client";
 import { type PageErrorReport, scrubReport } from "./crash-scrub";
 
 /**
@@ -9,18 +9,16 @@ import { type PageErrorReport, scrubReport } from "./crash-scrub";
  * （`diagnostics.reportPageErrors` 打开、壳的崩溃上报在发）时才收；这个答案缓存
  * 一分钟，关着的时候一条错误也不留。收下的先在页面剥离（`crash-scrub.ts`），
  * 每分钟最多 5 条；桌面壳经 IPC `diagnostics:report` 交给主进程，浏览器
- * （服务器壳 / Gateway）`POST` 同一个路由。上报自己出的错一律吞掉，不会再触发
+ * （服务器壳 / Gateway）经 `diagnostics.*` procedure（契约 §43.8）。上报自己出的错一律吞掉，不会再触发
  * 一次上报。
  */
 
-export const CLIENT_ERROR_PATH = "/api/diagnostics/client-error";
 /** 每分钟最多几条。 */
 export const PAGE_ERRORS_PER_MINUTE = 5;
 /** `enabled` 的答案留多久。 */
 export const ENABLED_TTL_MS = 60_000;
 
 const statusSchema = z.object({ enabled: z.boolean() });
-const acceptedSchema = z.object({ accepted: z.boolean() });
 
 export interface PageErrorTransport {
   enabled(): Promise<boolean>;
@@ -31,7 +29,8 @@ export interface PageErrorTransport {
 export function defaultTransport(): PageErrorTransport {
   return {
     enabled: async () =>
-      (await request(CLIENT_ERROR_PATH, statusSchema)).enabled,
+      statusSchema.parse(await currentClient().diagnostics.clientErrorStatus())
+        .enabled,
     send: async (report) => {
       const bridge =
         typeof window === "undefined" ? undefined : window.armadra?.diagnostics;
@@ -39,10 +38,7 @@ export function defaultTransport(): PageErrorTransport {
         await bridge.report(report);
         return;
       }
-      await request(CLIENT_ERROR_PATH, acceptedSchema, {
-        method: "POST",
-        ...json(report),
-      });
+      await currentClient().diagnostics.reportClientError({ ...report });
     },
   };
 }

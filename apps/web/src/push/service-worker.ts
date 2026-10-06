@@ -180,17 +180,11 @@ export function browserPushEnvironment(): PushPageEnvironment {
         ? Promise.resolve("denied" as const)
         : Notification.requestPermission(),
     api: {
-      config: async () => {
-        const { request } = await import("../api/request");
-        return request("/api/push/config", pushConfigSchema);
-      },
-      register: async (body) => {
-        const { json, request } = await import("../api/request");
-        return request("/api/push/devices", pushDeviceResponseSchema, {
-          method: "PUT",
-          ...json(body),
-        });
-      },
+      config: async () => (await import("../api/push")).pushApi.config(),
+      register: async (body) =>
+        (await import("../api/push")).pushApi.register(
+          body as Record<string, unknown>,
+        ),
     },
   };
 }

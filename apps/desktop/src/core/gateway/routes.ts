@@ -1,4 +1,10 @@
-import { type ErrorResponse, badRequest, coreError } from "../http/errors";
+import {
+  CoreFailure,
+  type ErrorResponse,
+  badRequest,
+  coreError,
+  failureResult,
+} from "../http/errors";
 import type { CoreRequest, HandlerResult } from "../http/router";
 import type { JsonObject } from "../settings/local";
 import {
@@ -19,6 +25,12 @@ import { remoteAddress } from "../identity/http";
  *     档位上连同一枚 8 位短码。
  *   * `POST /api/gateway/pairing-code/exchange`：短码换票（契约 §24）。匿名——
  *     手机还没有身份，短码就是凭据；档位与限流在 Gateway 域里判。
+ *
+ * 前三条收成一份操作（{@link gatewayOperations}），旧路径的 handler 与
+ * `registerProcedures(server, "gateway", …)`（契约 §43.7）调同一份，拒绝都是
+ * {@link CoreFailure}：码、状态与原话一样。**短码换票不经 RPC**：它是匿名面，
+ * 契约里登记了它的形状（`scope: null`），实现只在旧路径上（Gateway 的准入里放行、
+ * 限流与档位在域里判）。
  */
 
 export interface PairingCodeExchange {
@@ -39,6 +51,41 @@ export interface GatewayRouteDeps {
   exchangeCode(input: PairingCodeExchange): HandlerResult;
 }
 
+/** 一个 `ErrorResponse` → 抛出的拒绝。 */
+function refusal(answer: ErrorResponse): CoreFailure {
+  return new CoreFailure(answer.status, answer.body.code, answer.body.message);
+}
+
+/** 状态、改配置、铸票：旧路径与 procedure 共用；拒绝抛 {@link CoreFailure}。 */
+export function gatewayOperations(deps: GatewayRouteDeps) {
+  return {
+    status: () => deps.status(),
+    configure: async (body: unknown): Promise<Record<string, unknown>> => {
+      const parsed = parseConfigBody(body);
+      if ("status" in parsed) throw refusal(parsed);
+      const refused = await deps.configure(parsed.patch);
+      if (refused !== undefined) throw refusal(refused);
+      return deps.status();
+    },
+    pair: (body: unknown): Record<string, unknown> => {
+      const input = parsePairingBody(body);
+      if ("status" in input) throw refusal(input);
+      const answer = deps.pair(input);
+      if ("status" in answer && "body" in answer) {
+        throw refusal(answer as ErrorResponse);
+      }
+      return answer;
+    },
+  };
+}
+
+/** 旧路径：操作抛的拒绝换成响应，坏 JSON 答 400。 */
+function failed(error: unknown): HandlerResult {
+  if (error instanceof CoreFailure) return failureResult(error);
+  if (error instanceof SyntaxError) return badRequest("请求体不是 JSON");
+  throw error;
+}
+
 export function getGateway(deps: GatewayRouteDeps): HandlerResult {
   return { status: 200, body: deps.status() };
 }
@@ -47,23 +94,35 @@ export async function putGateway(
   deps: GatewayRouteDeps,
   request: CoreRequest,
 ): Promise<HandlerResult> {
-  const parsed = parseConfig(request);
-  if ("status" in parsed) return parsed;
-  const refused = await deps.configure(parsed.patch);
-  if (refused !== undefined) return refused;
-  return { status: 200, body: deps.status() };
+  try {
+    return {
+      status: 200,
+      body: await gatewayOperations(deps).configure(request.json()),
+    };
+  } catch (error) {
+    return failed(error);
+  }
 }
 
 export function postPairing(
   deps: GatewayRouteDeps,
   request: CoreRequest,
 ): HandlerResult {
-  let body: unknown;
   try {
-    body = request.body.length === 0 ? {} : request.json();
-  } catch {
-    return badRequest("请求体不是 JSON");
+    return {
+      status: 200,
+      body: gatewayOperations(deps).pair(
+        request.body.length === 0 ? {} : request.json(),
+      ),
+    };
+  } catch (error) {
+    return failed(error);
   }
+}
+
+function parsePairingBody(
+  body: unknown,
+): { origin?: string; deviceName?: string } | ErrorResponse {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     return badRequest("请求体必须是对象");
   }
@@ -84,9 +143,7 @@ export function postPairing(
     }
     out.deviceName = input.deviceName.trim();
   }
-  const answer = deps.pair(out);
-  if ("status" in answer && "body" in answer) return answer as ErrorResponse;
-  return { status: 200, body: answer };
+  return out;
 }
 
 export function postPairingCodeExchange(
@@ -132,6 +189,12 @@ export function parseConfig(
   } catch {
     return badRequest("请求体不是 JSON");
   }
+  return parseConfigBody(body);
+}
+
+export function parseConfigBody(
+  body: unknown,
+): { patch: JsonObject } | ErrorResponse {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     return badRequest("请求体必须是对象");
   }

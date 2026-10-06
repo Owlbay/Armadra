@@ -10,7 +10,10 @@ import {
 
 const mocks = vi.hoisted(() => ({
   compact: true,
-  request: vi.fn(),
+  config: vi.fn(),
+  devices: vi.fn(),
+  register: vi.fn(),
+  setKinds: vi.fn(),
   subscribe: vi.fn(),
 }));
 
@@ -18,9 +21,13 @@ vi.mock("../platform/layout", () => ({
   useCompactLayout: () => mocks.compact,
   isCompactLayout: () => mocks.compact,
 }));
-vi.mock("../api/request", async (original) => ({
-  ...(await original<typeof import("../api/request")>()),
-  request: (...args: unknown[]) => mocks.request(...args),
+vi.mock("../api/push", () => ({
+  pushApi: {
+    config: (...args: unknown[]) => mocks.config(...args),
+    devices: (...args: unknown[]) => mocks.devices(...args),
+    register: (...args: unknown[]) => mocks.register(...args),
+    setKinds: (...args: unknown[]) => mocks.setKinds(...args),
+  },
 }));
 vi.mock("../push/service-worker", async (original) => ({
   ...(await original<typeof import("../push/service-worker")>()),
@@ -46,7 +53,10 @@ const WEB = { available: false } as NativeBridge;
 
 beforeEach(() => {
   mocks.compact = true;
-  mocks.request.mockReset();
+  mocks.config.mockReset();
+  mocks.devices.mockReset();
+  mocks.register.mockReset();
+  mocks.setKinds.mockReset();
   mocks.subscribe.mockReset();
   localStorage.clear();
   useCanvasStore.setState({ focusNodeId: null });
@@ -105,12 +115,10 @@ describe("开启", () => {
       })),
       ackPushRotation: vi.fn(async () => undefined),
     } as unknown as NativeBridge;
-    mocks.request.mockResolvedValue({ device: {} });
+    mocks.register.mockResolvedValue({ device: {} });
     await expect(enablePush("zh-CN", bridge)).resolves.toBe("ok");
-    const [path, , init] = mocks.request.mock.calls[0]!;
-    expect(path).toBe("/api/push/devices");
-    expect(init.method).toBe("PUT");
-    expect(JSON.parse(init.body)).toEqual({
+    expect(mocks.register).toHaveBeenCalledTimes(1);
+    expect(mocks.register.mock.calls[0]![0]).toEqual({
       platform: "android",
       transport: "relay",
       token: "relay-token",
@@ -129,7 +137,7 @@ describe("开启", () => {
 
 describe("提示条", () => {
   it("手机布局登录后出现，「以后」之后不再问", async () => {
-    mocks.request.mockResolvedValue(CONFIG);
+    mocks.config.mockResolvedValue(CONFIG);
     const { unmount } = render(<PushPermission />);
     await waitFor(() =>
       expect(screen.getByText("接收审批与完成通知")).toBeTruthy(),
@@ -137,16 +145,16 @@ describe("提示条", () => {
     fireEvent.click(screen.getByRole("button", { name: "以后" }));
     expect(screen.queryByText("接收审批与完成通知")).toBeNull();
     unmount();
-    mocks.request.mockClear();
+    mocks.config.mockClear();
     render(<PushPermission />);
-    expect(mocks.request).not.toHaveBeenCalled();
+    expect(mocks.config).not.toHaveBeenCalled();
   });
 
   it("焦点页打开时让开，退回画布再出来", async () => {
-    mocks.request.mockResolvedValue(CONFIG);
+    mocks.config.mockResolvedValue(CONFIG);
     useCanvasStore.setState({ focusNodeId: "n1" });
     render(<PushPermission />);
-    await waitFor(() => expect(mocks.request).toHaveBeenCalled());
+    await waitFor(() => expect(mocks.config).toHaveBeenCalled());
     await new Promise((done) => setTimeout(done, 0));
     expect(screen.queryByText("接收审批与完成通知")).toBeNull();
     act(() => useCanvasStore.setState({ focusNodeId: null }));
@@ -154,7 +162,7 @@ describe("提示条", () => {
   });
 
   it("「开启」订阅后收起", async () => {
-    mocks.request.mockResolvedValue(CONFIG);
+    mocks.config.mockResolvedValue(CONFIG);
     mocks.subscribe.mockResolvedValue({ ok: true, deviceId: "d" });
     render(<PushPermission />);
     fireEvent.click(await screen.findByRole("button", { name: "开启" }));
@@ -175,23 +183,17 @@ describe("提示条", () => {
       "comment",
       "workflowGate",
     ];
-    mocks.request.mockImplementation(
-      async (path: string, _schema: unknown, init?: { body?: string }) => {
-        if (path === "/api/push/config") return CONFIG;
-        if (path === "/api/push/devices")
-          return {
-            devices: [
-              { deviceId: "other", current: false, kinds: ALL },
-              { deviceId: "d1", current: true, kinds: ALL },
-            ],
-          };
-        return {
-          device: {
-            deviceId: "d1",
-            kinds: JSON.parse(init?.body ?? "{}").kinds,
-          },
-        };
-      },
+    mocks.config.mockResolvedValue(CONFIG);
+    mocks.devices.mockResolvedValue({
+      devices: [
+        { deviceId: "other", current: false, kinds: ALL },
+        { deviceId: "d1", current: true, kinds: ALL },
+      ],
+    });
+    mocks.setKinds.mockImplementation(
+      async (deviceId: string, kinds: string[]) => ({
+        device: { deviceId, kinds },
+      }),
     );
     mocks.subscribe.mockResolvedValue({ ok: true, deviceId: "d1" });
     render(<PushPermission />);
@@ -199,20 +201,11 @@ describe("提示条", () => {
     const agentDone = await screen.findByRole("switch", { name: "Agent 完成" });
     expect(agentDone.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(agentDone);
-    await waitFor(() =>
-      expect(
-        mocks.request.mock.calls.some(
-          ([path]) => path === "/api/push/devices/d1",
-        ),
-      ).toBe(true),
-    );
-    const patch = mocks.request.mock.calls.find(
-      ([path]) => path === "/api/push/devices/d1",
-    )!;
-    expect(patch[2].method).toBe("PATCH");
-    expect(JSON.parse(patch[2].body).kinds).toEqual(
+    await waitFor(() => expect(mocks.setKinds).toHaveBeenCalled());
+    expect(mocks.setKinds.mock.calls[0]).toEqual([
+      "d1",
       ALL.filter((kind) => kind !== "agentDone"),
-    );
+    ]);
     await waitFor(() =>
       expect(
         screen
@@ -227,12 +220,11 @@ describe("提示条", () => {
   });
 
   it("保存失败退回原样并提示", async () => {
-    mocks.request.mockImplementation(async (path: string) => {
-      if (path === "/api/push/config") return CONFIG;
-      if (path === "/api/push/devices")
-        return { devices: [{ deviceId: "d1", current: true }] };
-      throw new Error("500");
+    mocks.config.mockResolvedValue(CONFIG);
+    mocks.devices.mockResolvedValue({
+      devices: [{ deviceId: "d1", current: true }],
     });
+    mocks.setKinds.mockRejectedValue(new Error("500"));
     mocks.subscribe.mockResolvedValue({ ok: true, deviceId: "d1" });
     render(<PushPermission />);
     fireEvent.click(await screen.findByRole("button", { name: "开启" }));
@@ -250,18 +242,18 @@ describe("提示条", () => {
   it("宽屏、没登录（配置取不到）或权限已定时都不出", async () => {
     mocks.compact = false;
     render(<PushPermission />);
-    expect(mocks.request).not.toHaveBeenCalled();
+    expect(mocks.config).not.toHaveBeenCalled();
     cleanup();
     mocks.compact = true;
-    mocks.request.mockRejectedValue(new Error("401"));
+    mocks.config.mockRejectedValue(new Error("401"));
     render(<PushPermission />);
-    await waitFor(() => expect(mocks.request).toHaveBeenCalled());
+    await waitFor(() => expect(mocks.config).toHaveBeenCalled());
     expect(screen.queryByText("接收审批与完成通知")).toBeNull();
     cleanup();
     vi.stubGlobal("Notification", { permission: "granted" });
-    mocks.request.mockResolvedValue(CONFIG);
+    mocks.config.mockResolvedValue(CONFIG);
     render(<PushPermission />);
-    await waitFor(() => expect(mocks.request).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mocks.config).toHaveBeenCalledTimes(2));
     await new Promise((done) => setTimeout(done, 0));
     expect(screen.queryByText("接收审批与完成通知")).toBeNull();
   });
