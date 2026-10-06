@@ -263,8 +263,7 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
       }
       // 在线：不论之前看到的是什么都叫醒一次——中继重启时它把经它的流以 4404
       // 收尾，而这条事件流断着，没收到过下线也就收不到上线。
-      if (row.online && status.state !== "unauthorized")
-        await target.connect();
+      if (row.online && status.state !== "unauthorized") await target.connect();
       else if (!row.online && status.state === "ready")
         setStatus("waitingForSource", {
           code: SOURCE_ERROR.offline,
