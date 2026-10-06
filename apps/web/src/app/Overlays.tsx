@@ -28,6 +28,7 @@ import { AgentSettingsDialog } from "@/nodes/AgentSettingsDialog";
 import { NodeNameDialog } from "@/nodes/NodeNameDialog";
 import { useMountedOnce, useOverlayRequested } from "./overlay-gates";
 import { useLinkFragments } from "./use-link-fragments";
+import { useSourcesBootstrap } from "./use-sources-bootstrap";
 
 /**
  * 所有浮层的挂载点。
@@ -59,6 +60,7 @@ export function Overlays() {
   const editPreview = useOverlayRequested("editPreview");
   const merge = useOverlayRequested("merge");
   useLinkFragments();
+  useSourcesBootstrap();
 
   return (
     <Suspense fallback={null}>
