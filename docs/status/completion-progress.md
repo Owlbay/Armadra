@@ -2183,11 +2183,11 @@
 - **终端**：`bufferedAmount` 过 4 MiB 暂停读 PTY 已由 A3-0 做完（`terminal/socket.ts` 的 `pause` 队列），本包没有再动。
 - **契约 §35**：35.1 升级层与子协议（含 peer 帧的线上样子）、35.2 关闭码表、35.3 心跳与重连、35.4 `workspaces.events`（生成块）、35.5 背压。生成器认订阅：kind 记 `subscription`，出参列事件的 `type`，`x-armadra` 带 `backpressure` 与 `transport: "/api/ws"`。
 
-实测（macOS arm64，Node 26.10.0，tmux 3.7c，2026-10-06，已合 main 8f20daf7：E1 #136、A0-4 #137、A1-3 #138、A1-1 #139、A2-3 #140、A1-5 #141、A1-2 #142）：
+实测（macOS arm64，Node 26.10.0，tmux 3.7c，2026-10-06，已合 main 60e404f8：E1 #136、A0-4 #137、A1-3 #138、A1-1 #139、A2-3 #140、A1-5 #141、A1-2 #142、A3-2 #143、A1-4 #144、A4 #145）：
 
 - 新用例：`http/ws-control.test` 13（回选子协议、缺子协议 4409、准入拒绝 401、坏帧 4400、超限 4413、订阅走 HTTP 405、停机 1001、第 257 个订阅 `limit_reached` + 4429、取消不占名额、会话没了 4403、授权收回 4403、scope 不放行只拒这一次、心跳两次无 pong 断开）；`events/procedure.test` 5（位置帧与序号 id、断开期间的事件带 `lastEventId` 由 outbox 补齐且与没断的一致、`snapshot_required` / `cursor_ahead` / 404、慢客户端 3000 × 8 KiB 停读后 `overflow`、重订之后一帧不少、取消后监听释放）；`route-access.test` 补 1；web `api/ws.test` 9、`api/client.control.test` 2（断线后在新连接上重订并带 `last-event-id`、`snapshot_required` 不重订）、`api/events.test` 改写 13（含两个源各一条订阅、一个源断线只落下那个源）、`use-access-lost.test` 改写 2、`managed-socket.test` 补 1；`contract.test` 补 1、`generate.test.mjs` 补 1；错误码扫描认同目录导入的 `fail`。
-- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 4796 过 / 56 跳过，live 4 过，脚本 68 过；`pnpm --filter @armadra/web test` 3615 过，`typecheck` 通过；`pnpm --filter @armadra/server test` 87 过 / 4 跳过；`pnpm repo:test` 29 过；`pnpm check` 通过（lint 0 error、285 warn，与 main 相同）。
-- `node tools/ci/e2e.mjs --tier a`：13 项全过（acp、agent-e2e-self-test、core-terminal-lifecycle、core-terminal-smoke、design-showcase、gateway、push、realtime、remote、server、ui-features、workflow、ws-mux）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 4858 过 / 65 跳过，live 4 过，脚本 68 过；`pnpm --filter @armadra/web test` 3637 过，`typecheck` 通过；`pnpm --filter @armadra/server test` 98 过 / 4 跳过；`pnpm repo:test` 29 过；`pnpm check` 通过（lint 0 error、285 warn，与 main 相同）。
+- `node tools/ci/e2e.mjs --tier a`（合 #143 / #144 之后）：13 项全过（acp、agent-e2e-self-test、core-terminal-lifecycle、core-terminal-smoke、design-showcase、gateway、push、realtime、remote、server、ui-features、workflow、ws-mux）；其中 `agent-e2e-self-test` 的 11-coordinator 一次偶发失败（模型服务请求时序，E1 记过同一处），单独重跑通过。合 #145（身份与服务器壳 CLI，不碰控制面）之后重跑了 `pnpm check`、服务器壳全部与 core 的 http / events / identity 用例。
 - 新探针 `ws-mux-e2e`：两台都订上；杀 core（SIGKILL）3 秒同端口重启、前后都有事件，两台对着 outbox 一帧不少一帧不重（各重连 5–6 次；从杀到补齐 3.5–10.6 秒，含 3 秒停机，余下是前台退避的抖动）；第二台断网 30 秒期间收到 0 帧，恢复后 162 ms 补齐；第一台切到后台、core 停 8 秒再起、产生 3 帧，回到前台 152–154 ms 收齐（预算 3 秒）；全程 23 帧不少不重，控制台无错误。
 - `tools/probes/server-perf.mjs`（30 终端 + 6 事件流 + 2000 对象实时板），main 80f633bc 与本分支同机交替各跑 3 次取中位数：
 
