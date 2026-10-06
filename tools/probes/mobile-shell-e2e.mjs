@@ -20,7 +20,8 @@
 //     先在页面里记一条假的挂起流程，再以深链冷启动 App，断言收尾请求发了（记录取走）、
 //     「安全」页打开；iOS 用例经深链打开、断言 App 仍在已连接的界面上。
 //   * 图片带 Bearer（R-55，只 Android）：探针经回环上传一张 PNG 资产，用例在页面里断言
-//     直接 `<img>` 取不到（401）、经带 Bearer 的 `fetch` 取得到（`useAssetUrl` 走的那条）。
+//     直接 `<img>` 取不到（401）、带上 Keystore 里这台 Gateway 的访问密钥再 `fetch` 取得到
+//     （`useAssetUrl` 经本机源的 fetch 走的那条；页面不再改写全局 fetch）。
 //
 // 前置（仓库根目录）：
 //   pnpm libs:build && pnpm --filter @armadra/desktop build && pnpm --filter @armadra/web build

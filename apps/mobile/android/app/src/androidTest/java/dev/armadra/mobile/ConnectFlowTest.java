@@ -27,7 +27,8 @@ import org.junit.runners.MethodSorters;
  * {@code armadra://pair?host=…&ticket=…&fp=…} 作为插桩参数 {@code armadraPairLink} 传进来。
  *
  * <p>页面在 WebView 里，按页面自己的标记判断（{@code data-slot}），不依赖文案语言。按名字顺序跑：
- * 配对之后 App 记住了 Gateway，「没有 Gateway」那条必须在前；第三条（G5-22）要已配对的 App 与探针
+ * 还没有连接时连接页先列出添加方式（扫码、配对链接、个人中转），输入框要点「配对链接」才出来
+ * （{@code data-connect-method="link"}）。配对之后 App 记住了 Gateway，「没有 Gateway」那条必须在前；第三条（G5-22）要已配对的 App 与探针
  * 上传的那张资产（插桩参数 {@code armadraAssetUrl}）。
  */
 @RunWith(AndroidJUnit4.class)
@@ -79,7 +80,14 @@ public class ConnectFlowTest {
         String link = InstrumentationRegistry.getArguments().getString("armadraPairLink");
         assumeTrue("armadraPairLink not given (run through tools/probes/mobile-shell-e2e.mjs)", link != null);
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
-            waitFor(scenario, "document.querySelector('[data-slot=\"mobile-connect\"] input')", "connect screen");
+            // 多连接的连接页（还没有连接时）先列出添加方式，输入框在「配对链接」后面：点它再等输入框。
+            waitFor(scenario, "document.querySelector('[data-slot=\"mobile-connect\"] input')"
+                    + " || document.querySelector('[data-slot=\"mobile-connect\"] [data-connect-method=\"link\"]')",
+                    "connect screen");
+            eval(scenario, "(function(){if(document.querySelector('[data-slot=\"mobile-connect\"] input'))return true;"
+                    + "document.querySelector('[data-slot=\"mobile-connect\"] [data-connect-method=\"link\"]').click();"
+                    + "return true;})()");
+            waitFor(scenario, "document.querySelector('[data-slot=\"mobile-connect\"] input')", "pairing link input");
             // React 受控输入框：用原型上的 setter 写值再发 input 事件，然后提交表单。
             eval(scenario, "(function(){var input=document.querySelector('[data-slot=\"mobile-connect\"] input');"
                     + "Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,"
@@ -106,12 +114,18 @@ public class ConnectFlowTest {
                 + " && !document.querySelector('[data-slot=\"mobile-connect\"]')";
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             waitFor(scenario, canvas, "canvas");
-            // R-55：直接 <img> 带不了 Bearer（401）；经页面装好的 fetch 取得到——useAssetUrl 走的那条。
-            eval(scenario, "(function(){window.__e2e={};var i=new Image();"
+            // R-55：直接 <img> 带不了 Bearer（401）；带上这台 Gateway 的访问密钥再取就取得到——useAssetUrl
+            // 经本机源的 fetch 走的那条。页面自 2026-10-06 起不再改写全局 fetch（凭据装在源上，
+            // api/source.ts），所以用例从 Keystore 读回同一份会话、自己带 Authorization。
+            eval(scenario, "(function(){window.__e2e={};var url=" + JSONObject.quote(asset) + ";var i=new Image();"
                     + "i.onload=function(){__e2e.img='load'};i.onerror=function(){__e2e.img='error'};"
-                    + "i.src=" + JSONObject.quote(asset) + ";"
-                    + "fetch(" + JSONObject.quote(asset) + ").then(function(r){return r.blob().then(function(b){"
-                    + "__e2e.fetch=r.status+' '+b.type})},function(e){__e2e.fetch='failed '+e});return true;})()");
+                    + "i.src=url;var origin=new URL(url).origin;"
+                    + "Capacitor.Plugins.ArmadraNative.getSessions().then(function(r){"
+                    + "var s=(r.sessions||[]).filter(function(x){return x.origin===origin})[0];"
+                    + "if(!s){__e2e.fetch='no session';return;}"
+                    + "return fetch(url,{headers:{Authorization:'Bearer '+s.accessToken}}).then(function(res){"
+                    + "return res.blob().then(function(b){__e2e.fetch=res.status+' '+b.type})});"
+                    + "}).catch(function(e){__e2e.fetch='failed '+e});return true;})()");
             waitFor(scenario, "window.__e2e && __e2e.img && __e2e.fetch", "asset requests");
             assertEquals("\"error|200 image/png\"", eval(scenario, "__e2e.img+'|'+__e2e.fetch"));
             // R-56：记一条挂起的原生 OAuth（与页面 startNativeOAuth 记的同形）。
