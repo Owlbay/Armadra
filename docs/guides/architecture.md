@@ -583,7 +583,10 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
     Bearer（只认 `capacitor://localhost` / `https://localhost`，WS 用 30 秒一次性票；凭据同样装在本机源上，
     不改写全局）。挂载的远程源（自托管直连、经中继）各是一个 `SourceConnection`（`apps/web/src/sources/`）：
     自己的地址、Bearer 与票，选路直连优先（D27），凭据经 `CredentialProvider` 按源取、只在内存；`api/*`
-    省略源时发往当前源（缺省本机），`<img>` 取图与下载按地址找所属的源。CSRF 只在
+    省略源时发往当前源（缺省本机），`<img>` 取图与下载按地址找所属的源。经中继的源由远程服务的
+    `me.stream`（`sources/remote-stream.ts`）叫醒：主机上线即重连，撤销即失权。个人中转 `/app/` 托管的
+    同一份页面（`sources/hosted.ts`）用中继账号登录、挑一台主机，经 `sources/route-entry.ts`（与手机共用）
+    把它装成本机源：请求全部同源，凭据只在这个标签页的内存里。CSRF 只在
     Cookie 会话上核对，Bearer 不是环境凭据（`identity/http.ts::csrfRequired`）。Gateway 的每个答案带
     HSTS 与 `nosniff`，接口答案再带沙箱 CSP 与缺省 `no-store`（`gateway/csp.ts`）。
   - 长连接：事件流、实时同步、终端、语言服务、浏览器画面在授权变化（撤销设备或会话、登出、停用账号、
