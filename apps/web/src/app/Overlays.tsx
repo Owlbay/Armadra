@@ -26,6 +26,7 @@ import {
 import { DraftLayer } from "@/workflow/DraftCard";
 import { AgentSettingsDialog } from "@/nodes/AgentSettingsDialog";
 import { NodeNameDialog } from "@/nodes/NodeNameDialog";
+import { JoinedSourceOpener } from "./joined-source";
 import { useMountedOnce, useOverlayRequested } from "./overlay-gates";
 import { useLinkFragments } from "./use-link-fragments";
 import { useSourcesBootstrap } from "./use-sources-bootstrap";
@@ -64,6 +65,7 @@ export function Overlays() {
 
   return (
     <Suspense fallback={null}>
+      <JoinedSourceOpener />
       <Gate open={panels.explorer !== "closed"}>
         <ExplorerDrawer />
       </Gate>

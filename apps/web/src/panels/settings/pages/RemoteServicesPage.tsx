@@ -14,6 +14,7 @@ import {
   listSources,
   logoutRemote,
   mountRemoteSource,
+  mountSourceByLink,
   notifyShellSourcesChanged,
   remoteSources,
   removeRemote,
@@ -26,6 +27,11 @@ import {
   reloadIntoSettings,
 } from "../../../sources/bootstrap";
 import { useSource, useSourceStatus } from "../../../sources";
+import {
+  onJoinIntent,
+  openAfterJoin,
+  takeJoinLink,
+} from "../../../sources/join-intent";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { SHARE_STATUS_KEY, ShareDialog } from "../ShareDialog";
@@ -112,6 +118,16 @@ export function RemoteServicesPage() {
   const [adding, setAdding] = React.useState<RelayDraft | null>(null);
   const [addingDirect, setAddingDirect] = React.useState(false);
   const [mounting, setMounting] = React.useState(false);
+  // 待填的分享链接（深链、`#join=`）：打开「通过链接加入」并预填，人点了才挂载。
+  const [joining, setJoining] = React.useState<string | null>(takeJoinLink);
+  React.useEffect(
+    () =>
+      onJoinIntent(() => {
+        const offered = takeJoinLink();
+        if (offered !== null) setJoining(offered);
+      }),
+    [],
+  );
   const [sharing, setSharing] = React.useState<RemoteService | null>(null);
   const [removing, setRemoving] = React.useState<Removal | null>(null);
 
@@ -176,13 +192,16 @@ export function RemoteServicesPage() {
               </Badge>
             )}
             {remote.hasCredentials ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => setSharing(remote)}
-              >
-                {t("remote.share")}
-              </Button>
+              // 访客（分享链接来的，没有账号）不能分享本机。
+              remote.accountHint !== "" && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setSharing(remote)}
+                >
+                  {t("remote.share")}
+                </Button>
+              )
             ) : (
               <Button
                 size="sm"
@@ -267,6 +286,9 @@ export function RemoteServicesPage() {
           />
         ))}
         <SettingsRow label={null}>
+          <Button size="sm" variant="secondary" onClick={() => setJoining("")}>
+            {t("links.join")}
+          </Button>
           <Button
             size="sm"
             variant="secondary"
@@ -301,6 +323,17 @@ export function RemoteServicesPage() {
         onDone={() => {
           setAddingDirect(false);
           toast.success(t("remote.added"));
+          void changed();
+        }}
+      />
+      <JoinLinkDialog
+        initial={joining}
+        onClose={() => setJoining(null)}
+        onJoined={(sourceId) => {
+          setJoining(null);
+          toast.success(t("links.joined"));
+          // 先记下要打开的源：收尾时壳可能为放行新来源重载页面。
+          openAfterJoin(sourceId);
           void changed();
         }}
       />
@@ -744,6 +777,129 @@ function AddDirectDialog({
               {confirming
                 ? t("remote.fingerprint.trust")
                 : t("remote.direct.connect")}
+            </Button>
+          </ResponsiveDialogFooter>
+        </form>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
+  );
+}
+
+/* ----------------------------- 通过链接加入 ----------------------------- */
+
+/**
+ * 粘贴分享链接（网页链接或 `armadra://join`）挂载：本机 core 接受链接、经中继
+ * 登录、存凭据（契约 §33.7）。签发方第一次见时先核对证书指纹。`initial` 为
+ * `null` 是关着；空串是空白打开；别的是深链预填的链接。
+ */
+function JoinLinkDialog({
+  initial,
+  onClose,
+  onJoined,
+}: {
+  initial: string | null;
+  onClose(): void;
+  onJoined(sourceId: string): void;
+}) {
+  const t = useT();
+  const [url, setUrl] = React.useState("");
+  const [confirming, setConfirming] = React.useState("");
+  const [error, setError] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+
+  React.useEffect(() => {
+    if (initial === null) return;
+    setUrl(initial);
+    setConfirming("");
+    setError("");
+  }, [initial]);
+
+  async function submit(fingerprint: string) {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const answer = await mountSourceByLink({
+        url,
+        ...(fingerprint ? { fingerprint } : {}),
+      });
+      if (answer.kind === "confirm") {
+        setConfirming(answer.fingerprint);
+        return;
+      }
+      setUrl("");
+      onJoined(answer.value.sourceId);
+    } catch (failure) {
+      setConfirming("");
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const ready = url.trim() !== "";
+  let host = "";
+  try {
+    host = new URL(url.trim()).host;
+  } catch {
+    host = "";
+  }
+
+  return (
+    <ResponsiveDialog
+      open={initial !== null}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[420px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {confirming ? t("remote.fingerprint.confirm") : t("links.join")}
+          </ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (confirming) void submit(confirming);
+            else if (ready) void submit("");
+          }}
+        >
+          {confirming ? (
+            <>
+              {host && <p className="text-[13px] break-all">{host}</p>}
+              <FingerprintCheck fingerprint={confirming} />
+            </>
+          ) : (
+            <FieldGroup className="gap-3">
+              <Field className="gap-1.5" data-invalid={error !== ""}>
+                <FieldLabel htmlFor="join-link">{t("links.field")}</FieldLabel>
+                <Input
+                  id="join-link"
+                  inputMode="url"
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-invalid={error !== ""}
+                  placeholder="https://relay.example.com/j/…"
+                  value={url}
+                  onChange={(event) => setUrl(event.target.value)}
+                />
+              </Field>
+            </FieldGroup>
+          )}
+          {error && <FieldError>{error}</FieldError>}
+          <ResponsiveDialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => (confirming ? setConfirming("") : onClose())}
+            >
+              {t("remote.cancel")}
+            </Button>
+            <Button type="submit" disabled={busy || (!confirming && !ready)}>
+              {busy && <Spinner data-icon="inline-start" aria-hidden />}
+              {confirming ? t("remote.fingerprint.trust") : t("links.action")}
             </Button>
           </ResponsiveDialogFooter>
         </form>
