@@ -348,6 +348,7 @@ export class IdentityHttp {
             this.service.refresh({
               refreshToken: credential(request, hostId, "refresh"),
               csrfToken,
+              requireCsrf: csrf,
               hostId,
               origin,
             }),
@@ -377,6 +378,7 @@ export class IdentityHttp {
             this.service.logoutRefresh({
               refreshToken: credential(request, hostId, "refresh"),
               csrfToken,
+              requireCsrf: csrf,
               hostId,
               origin,
             }),

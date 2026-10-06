@@ -112,6 +112,24 @@ export interface RefreshRequest {
   readonly csrfToken: string;
   readonly hostId: string;
   readonly origin: string;
+  /**
+   * 要不要核对会话绑定的 CSRF 密钥（契约 §3、§17.4）：Cookie 会话要——刷新票是
+   * 环境凭据；`Authorization: Bearer` 传输（桌面壳、原生 App、隧道、作为客户端
+   * 的另一台 core）不要。缺省 `true`：只有 HTTP 层按 `csrfRequired` 判过才放宽。
+   */
+  readonly requireCsrf?: boolean;
+}
+
+/** 刷新与登出共用的 CSRF 判定：要核时格式与哈希都得对。 */
+function refreshCsrfValid(
+  request: RefreshRequest,
+  csrfHash: Uint8Array,
+): boolean {
+  if (request.requireCsrf === false) return true;
+  return (
+    validSecret(request.csrfToken) &&
+    matches("csrf", request.csrfToken, csrfHash)
+  );
 }
 
 export interface DevicePage {
@@ -719,7 +737,7 @@ export class IdentityService {
     if (
       sessionId === undefined ||
       !this.audience(request.hostId, request.origin) ||
-      !validSecret(request.csrfToken)
+      (request.requireCsrf !== false && !validSecret(request.csrfToken))
     ) {
       throw new IdentityError("unauthenticated");
     }
@@ -729,7 +747,7 @@ export class IdentityService {
       const live = this.liveSession(tx, sessionId, request.origin, now);
       if (
         !matches("refresh", request.refreshToken, live.session.refreshHash) ||
-        !matches("csrf", request.csrfToken, live.session.csrfHash)
+        !refreshCsrfValid(request, live.session.csrfHash)
       ) {
         throw new IdentityError("unauthenticated");
       }
@@ -802,7 +820,7 @@ export class IdentityService {
     if (
       sessionId === undefined ||
       !this.audience(request.hostId, request.origin) ||
-      !validSecret(request.csrfToken)
+      (request.requireCsrf !== false && !validSecret(request.csrfToken))
     ) {
       throw new IdentityError("unauthenticated");
     }
@@ -811,7 +829,7 @@ export class IdentityService {
       const live = this.liveSession(tx, sessionId, request.origin, now);
       if (
         !matches("refresh", request.refreshToken, live.session.refreshHash) ||
-        !matches("csrf", request.csrfToken, live.session.csrfHash)
+        !refreshCsrfValid(request, live.session.csrfHash)
       ) {
         throw new IdentityError("unauthenticated");
       }

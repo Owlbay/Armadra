@@ -9,6 +9,7 @@
 //     （`terminals.get` 的 `lastOutputAt` 一直在走），本地终端能输入、能回显；
 //   * 断线之后：滴答在 tmux 里的整段输出序号连续、相邻两行的间隔不超过 3 秒
 //     （PTY 输出没有缺口）；
+//   * 断线期间：隧道在 50 秒内离开 ready（静默超时两个心跳周期，契约 §32.2）；
 //   * 恢复之后：隧道 ≤ 10 秒回到 ready，中继的目录里这台源重新在线，经中继访问它的
 //     /health 通——各自的耗时进报告。
 //
@@ -54,6 +55,11 @@ import {
 
 /** 恢复后各项要在这么久之内回来（规格：客户端 ≤ 10 秒）。 */
 const RECOVER_LIMIT_MS = 10_000;
+/**
+ * 冻住中继后 core 要在这么久之内发现隧道断开：静默超时是两个心跳周期（中继缺省
+ * 20 秒 → 40 秒，契约 §32.2），加采样间隔 5 秒与 5 秒余量。
+ */
+const DETECT_LIMIT_MS = 50_000;
 /** 滴答行之间允许的最大间隔（脚本每 0.5 秒一行）。 */
 const MAX_TICK_GAP_S = 3;
 
@@ -356,13 +362,20 @@ try {
     "断线期间终端在 core 里一直是 running、PTY 输出每个采样点都在增长",
     samples,
   );
-  // 隧道什么时候察觉断线取决于心跳间隔：只记录，不作为通过条件（察觉不到说明冻结时间
-  // 比心跳窗口短，恢复就是连接自己续上）。
-  run.ok(
-    tunnelLeftReadyMs === null
-      ? "断线期间 core 没有察觉隧道断开（冻结时间短于心跳窗口）"
-      : `断线期间 core 在 ${tunnelLeftReadyMs} ms 后发现隧道断开`,
-  );
+  // 冻结时间够长时，隧道必须在静默超时内察觉断开；比检测窗口还短的冻结只记录。
+  if (outageSeconds * 1000 > DETECT_LIMIT_MS) {
+    run.check(
+      tunnelLeftReadyMs !== null && tunnelLeftReadyMs <= DETECT_LIMIT_MS,
+      `断线期间 core 在 ${DETECT_LIMIT_MS / 1000} 秒内发现隧道断开（${tunnelLeftReadyMs} ms）`,
+      { tunnelLeftReadyMs, samples },
+    );
+  } else {
+    run.ok(
+      tunnelLeftReadyMs === null
+        ? "断线期间 core 没有察觉隧道断开（冻结时间短于检测窗口）"
+        : `断线期间 core 在 ${tunnelLeftReadyMs} ms 后发现隧道断开`,
+    );
+  }
   run.ok(`断线期间本地输入 ${localWords} 次都有回显`);
 
   /* ------------------------------ 恢复 ------------------------------ */

@@ -91,7 +91,7 @@ export function installCertificatePinning(): void {
 }
 
 /**
- * 经中继访问挂载的源（`shell-core/relay-origin.ts`）：发往源表里中继主机的请求
+ * 访问挂载的源（`shell-core/relay-origin.ts`）：发往源表里中继主机与直连源主机的请求
  * （含预检与 WebSocket 升级）`Origin` 换成桌面的原生来源，记下页面来源；名单
  * 每次现读，源表变了（`refreshRemoteTrust`）就跟着变。浏览器节点用自己的
  * partition，不受影响。
@@ -105,7 +105,7 @@ export function installRelayOriginRewrite(): void {
       const rewritten = rewriteRelayRequest(
         details.url,
         details.requestHeaders,
-        trust.relayOrigins,
+        trust.rewriteOrigins,
       );
       if (rewritten === null) {
         callback({});

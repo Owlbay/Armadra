@@ -403,6 +403,70 @@ describe("rotating a session", () => {
     });
     expect(rotated.principal.deviceId).toBe(credentials.principal.deviceId);
   });
+
+  it("checks the bound CSRF by default and only skips it when told the transport is Bearer", () => {
+    const fix = fixture();
+    const { credentials } = pair(fix);
+    // Cookie 会话（缺省）：缺 CSRF、或 CSRF 不是这把会话的，都拒。
+    for (const csrfToken of ["", "A".repeat(43)]) {
+      expect(
+        kind(() =>
+          fix.service.refresh({
+            refreshToken: credentials.refreshToken,
+            csrfToken,
+            hostId: fix.hostId,
+            origin: ORIGIN,
+          }),
+        ),
+      ).toBe("unauthenticated");
+    }
+    // Bearer 传输（契约 §17.4）：不核 CSRF，刷新票本身照核。
+    const rotated = fix.service.refresh({
+      refreshToken: credentials.refreshToken,
+      csrfToken: "",
+      hostId: fix.hostId,
+      origin: ORIGIN,
+      requireCsrf: false,
+    });
+    expect(rotated.principal.deviceId).toBe(credentials.principal.deviceId);
+    expect(
+      kind(() =>
+        fix.service.refresh({
+          refreshToken: credentials.refreshToken,
+          csrfToken: "",
+          hostId: fix.hostId,
+          origin: ORIGIN,
+          requireCsrf: false,
+        }),
+      ),
+    ).toBe("unauthenticated");
+    expect(
+      kind(() =>
+        fix.service.logoutRefresh({
+          refreshToken: rotated.refreshToken,
+          csrfToken: "",
+          hostId: fix.hostId,
+          origin: ORIGIN,
+        }),
+      ),
+    ).toBe("unauthenticated");
+    fix.service.logoutRefresh({
+      refreshToken: rotated.refreshToken,
+      csrfToken: "",
+      hostId: fix.hostId,
+      origin: ORIGIN,
+      requireCsrf: false,
+    });
+    expect(
+      kind(() =>
+        fix.service.authenticate({
+          accessToken: rotated.accessToken,
+          hostId: fix.hostId,
+          origin: ORIGIN,
+        }),
+      ),
+    ).toBe("unauthenticated");
+  });
 });
 
 describe("re-checking a long-lived stream's session (security review L1)", () => {

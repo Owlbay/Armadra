@@ -27,16 +27,17 @@ export interface RemoteTrust {
   readonly origins: readonly string[];
   readonly pins: readonly PinnedHost[];
   /**
-   * 经中继挂载的源的中继来源（按字典序去重）：页面发往它们的请求由壳改写
-   * `Origin`（`relay-origin.ts`）。
+   * 页面要以原生客户端身份去连的来源（按字典序去重）：经中继挂载的源的中继来源，
+   * 与直连挂载的源的 Gateway 来源。页面发往它们的请求由壳改写 `Origin`
+   * （`relay-origin.ts`）——两处都只认原生来源上的 Bearer，回环来源一律 403。
    */
-  readonly relayOrigins: readonly string[];
+  readonly rewriteOrigins: readonly string[];
 }
 
 export const EMPTY_TRUST: RemoteTrust = {
   origins: [],
   pins: [],
-  relayOrigins: [],
+  rewriteOrigins: [],
 };
 
 const FINGERPRINT = /^[0-9a-f]{64}$/;
@@ -88,7 +89,7 @@ export function trustFromSourceTable(answer: unknown): RemoteTrust {
     pin(url, text(row.fingerprint));
     issuerPins.set(url.origin, text(row.fingerprint));
   }
-  const relayOrigins = new Set<string>();
+  const rewriteOrigins = new Set<string>();
   const sources = Array.isArray(body.sources) ? body.sources : [];
   for (const item of sources) {
     const row = record(item);
@@ -96,12 +97,15 @@ export function trustFromSourceTable(answer: unknown): RemoteTrust {
     const base = httpsOrigin(text(row.baseUrl));
     if (base !== null) {
       origins.add(base.origin);
+      // 直连的源：core 以原生来源配对（`core/sources/source-client.ts`），换给页面
+      // 的访问令牌绑在 Gateway 的 Bearer 模式上，页面也得以原生来源去连。
+      rewriteOrigins.add(base.origin);
       pin(base, text(row.fingerprint));
     }
     const relay = httpsOrigin(text(row.relayOrigin));
     if (relay !== null) {
       origins.add(relay.origin);
-      relayOrigins.add(relay.origin);
+      rewriteOrigins.add(relay.origin);
       // 中继就是远程服务本身（个人中转）才沿用它的指纹（契约 §33.5）。
       const inherited = issuerPins.get(relay.origin);
       if (inherited !== undefined) pin(relay, inherited);
@@ -112,7 +116,7 @@ export function trustFromSourceTable(answer: unknown): RemoteTrust {
     pins: [...pins.values()].sort((a, b) =>
       `${a.host} ${a.fingerprint}`.localeCompare(`${b.host} ${b.fingerprint}`),
     ),
-    relayOrigins: [...relayOrigins].sort(),
+    rewriteOrigins: [...rewriteOrigins].sort(),
   };
 }
 

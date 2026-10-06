@@ -1256,7 +1256,7 @@ Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补�
 ### 17.4 Gateway 上的匿名面与原生 App
 
 - `GET /ca.crt`：匿名，`application/x-x509-ca-cert`，PEM。本地 CA 时是 CA；服务器壳的自签名证书是它自己；指定文件时是链文件里的最后一张，只有一张时 404 `ca_unavailable`。只在 Gateway 上，core 的回环监听没有它。
-- 来源是 `capacitor://localhost` 或 `https://localhost`（且不在 `origins` 里）的请求走 **Bearer 模式**：会话绑定的来源是 App 连上的 Gateway 来源 `https://<Host>`（必须在 `origins` 里，否则 403）；凭据只认 `Authorization: Bearer <访问密钥>`，Cookie 不看、没有 CSRF；`POST /api/identity/pair`、`/session/refresh` 与登录把密钥放在响应体的 `native` 里、不发 Cookie（与桌面壳的原生传输同一形状，§3）；CORS 只回 App 自己的来源，预检放行 `authorization, content-type, x-armadra-csrf`。
+- 来源是 `capacitor://localhost` 或 `https://localhost`（且不在 `origins` 里）的请求走 **Bearer 模式**：会话绑定的来源是 App 连上的 Gateway 来源 `https://<Host>`（必须在 `origins` 里，否则 403）；凭据只认 `Authorization: Bearer <访问密钥>`，Cookie 不看、没有 CSRF；`POST /api/identity/pair`、`/session/refresh` 与登录把密钥放在响应体的 `native` 里、不发 Cookie（与桌面壳的原生传输同一形状，§3）；`/session/refresh` 与 `/session/logout` 只认 Bearer 里的刷新票、不核 CSRF（带了也不看）；CORS 只回 App 自己的来源，预检放行 `authorization, content-type, x-armadra-csrf`。
 - **响应头**（`core/gateway/csp.ts`）：经 Gateway 的每个答案都带 `Strict-Transport-Security: max-age=31536000`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`；`/api/**` 与 `/health` 再带 `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; sandbox`、`X-Frame-Options: DENY`，以及缺省的 `Cache-Control: no-store`（答案自己写了缓存策略时以它为准，如资产）。静态产物用页面的 CSP（`serverContentSecurityPolicy`）。画布资产（`GET …/assets/{assetId}`）无论经不经 Gateway 都带 `default-src 'none'; …; sandbox`：直接导航到一张 SVG 时它是一份沙箱里的文档，脚本不跑。
 - **原生 App 包里页面的 CSP**（`nativeAppContentSecurityPolicy()`）：桌面那一份摘掉回环授权，`connect-src` 加 `https: wss:`、`img-src` / `media-src` 加 `https:`（Gateway 地址配对前未知，证书由原生层钉扎）；其余逐字继承。
 - **长连接复核**：经 Gateway 升级的流（事件、实时同步、终端、语言服务、浏览器画面）在授权变化（撤销设备或会话、登出、停用账号、收回共享）时按同一道路由门、用复核后的主体再判一次，不过即以 **4403** 关流（`core/http/server.ts`）。复核按**会话**认，不按升级时那一把访问密钥：页面刷新过访问密钥，流照旧。访问密钥到期（15 分钟）那一刻再按会话复核一次（安全审查 L1）：刷新过就续到新的到期时刻；没刷新以 **4401** 关（不是授权被收回，页面照常重连，升级前的门要新凭据——原生 App 换 WS 票遇 401 先轮转再换）；刷新过而门不再放行以 **4403** 关。没有请求身份的流（桌面壳）不设这个定时。
@@ -2235,7 +2235,7 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 
 - 只有中继发 `OPEN`；每条流在 core 里是一个 `Duplex`，交给一个只给隧道用的监听，由 Node 自己解析里面的 HTTP/1.1 与 WebSocket 升级。HTTP 流一流一个请求（中继给 `connection: close`）。流数超过 `limits.maxStreams` 答 `RST refused`。
 - 流控：`DATA` 按 64 KiB 切块，同时扣流信用与隧道信用，任一不足就等 `WINDOW`；交给上层的字节累计到窗口一半时补回。对端超发 → `RST 5` 并以 `4400` 关隧道。没发出去的字节留在流的写缓冲里，WebSocket 的 `bufferedAmount` 含这一段，五条长连接的发送队列（§3.4）照常据此判拥塞、暂停生产者。
-- 心跳：收到 `PING` 立即回 `PONG`；core 自己每 `heartbeatMs` 发一次 `PING`，连续两次没有 `PONG` 断开重连。长连接上 core 自己的 ws 心跳（§3.4）照旧经隧道走。
+- 心跳：收到 `PING` 立即回 `PONG`；core 自己每 `heartbeatMs` 发一次 `PING`，连续两次没有 `PONG` 断开重连。另有静默超时：就绪后连续 `heartbeatMisses × heartbeatMs`（缺省 40 秒）没收到中继的任何帧，同样以 `heartbeat_timeout` 断开、退避重连——中继被冻住或 NAT 表项悄悄失效时 TCP 不报错，只等 `PONG` 要到第三拍才发现。长连接上 core 自己的 ws 心跳（§3.4）照旧经隧道走。
 - `GOAWAY`：不退避，立即换节点再连一条；旧隧道不再接新流，流自然结束（或 `graceMs` 到了）后关闭。
 - 退避：`min(60 s, 1 s × 2^n) × (0.5 + 随机)`，就绪过一次 `n` 归零。
 - 隧道断开时这条隧道上的流以 `RST sourceGone` 结束，经它进来的 HTTP 与 WebSocket 随之结束；终端、Agent、画布不依赖连接存活。

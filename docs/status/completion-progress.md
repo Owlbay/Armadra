@@ -2681,3 +2681,24 @@
 
 - 契约 §35.6（新增，节号只追加）。
 - `mock-lsp.mjs` 的四个塑形参数；`language-load-lib.mjs` 的 `SharedLink`（`fair` / `fifo` 共享瓶颈，可换时钟）、`summarizeFrames`、`burstPeak`、`keystrokeActions`。
+
+## V2 修复：直连源刷新 CSRF、桌面直连 Origin、隧道静默超时
+
+V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
+
+做了什么：
+
+- **Bearer 刷新不核 CSRF**（`core/identity/service.ts`、`http.ts`）：`refresh` / `logoutRefresh` 原先不分传输一律核会话绑定的 CSRF，契约 §17.4 规定 Bearer 模式没有 CSRF，`SourceClient.refresh` 按契约只带刷新票，于是直连源一刷新就 401、凭据被清。改为 HTTP 层按 `csrfRequired` 传 `requireCsrf`；服务层缺省仍要。Cookie 会话照旧要（刷新票在 Cookie 里是环境凭据）；Bearer 的刷新票在 `Authorization` 头里，跨站页面带不上，也过不了只回原生来源的 CORS，没有安全回退。页面与手机照旧带 CSRF（兼容还核它的旧版 core），注释改正。
+- **桌面直连源的 Origin 改写**（`shell-core/remote-trust.ts`、`relay-origin.ts`）：修好刷新后直连组停在「离线」——core 以 `https://localhost` 与 Gateway 配对，访问令牌绑在 Bearer 模式上，页面却带回环来源去连，Gateway 403。改写名单 `relayOrigins` 更名 `rewriteOrigins`，加入直连源的 Gateway 来源。
+- **隧道静默看门狗**（`core/relay/client.ts`）：只有「连续两次没有 PONG」时，最后一个 PONG 之后要到第三拍（60 秒）才断，`docker pause` 中继 60 秒整段停在 ready。就绪后超过 `heartbeatMisses × heartbeatMs`（缺省 40 秒，即两个心跳周期，与规格「两次」一致）没收到任何帧即以 `heartbeat_timeout` 断开，走原退避重连，`cloud.tunnel` 随状态变化。两条规则的 `lastError.message` 分开。
+- 探针：multi-source 去掉「直连停在需要登录记已知问题」的旁路，直连必过；`startDirectServer` 补 `NODE_PATH`（否则直连源上的终端因找不到 node-pty 一连就断）；nat-core-offline 断言冻结 60 秒时 50 秒内发现断开（40 秒 + 采样 5 秒 + 余量 5 秒）。
+
+实测（macOS arm64，2026-10-06，基于 main 4dae5463）：
+
+- `pnpm check` 通过；`pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 432 文件 5178 过 / 74 跳过，live 4 过，脚本 73 过 / 0 失败。
+- `ARMADRA_PROBE_STRICT=1 node tools/ci/e2e.mjs --tier a --only multi-source` 连过 3 次；`--only link-join` 连过 3 次；`--tier b --only nat-core-offline` 连过 3 次，发现断开 40.4–40.5 秒（采样粒度 5 秒），恢复后隧道 0.4–0.5 秒 ready。
+
+没做 / 偏离：
+
+- A3-2 一节「刷新带 `x-armadra-csrf`」的接口说明以本节为准：Bearer 刷新不要它（带了也不看）。
+- `SourceClient` 没有为兼容旧版对端补发 CSRF（0.2.0 未发布，不做旧版兼容）。

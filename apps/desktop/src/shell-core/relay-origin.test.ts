@@ -10,33 +10,36 @@ import {
 import { trustFromSourceTable } from "./remote-trust";
 
 /**
- * 桌面页面经中继访问源：只改源表里中继主机的请求的 `Origin`，响应的 CORS 头
- * 回显页面来源。
+ * 桌面页面访问挂载的源：只改源表里中继主机与直连源主机的请求的 `Origin`，
+ * 响应的 CORS 头回显页面来源。
  */
 
 const PAGE = "http://127.0.0.1:53111";
 const RELAY = "https://relay.test:8102";
+const DIRECT = "https://10.0.0.2:8443";
 const relays = trustFromSourceTable({
   sources: [
     { sourceId: "local", kind: "local" },
     { sourceId: "far", kind: "relayed", relayOrigin: RELAY },
-    { sourceId: "peer", kind: "direct", baseUrl: "https://10.0.0.2:8443" },
+    { sourceId: "peer", kind: "direct", baseUrl: DIRECT },
   ],
-}).relayOrigins;
+}).rewriteOrigins;
 
 describe("改写 Origin", () => {
-  it("源表里只有中继来源进改写名单", () => {
-    expect(relays).toEqual([RELAY]);
+  it("源表里的中继来源与直连源的 Gateway 来源进改写名单，本机不进", () => {
+    expect(relays).toEqual([DIRECT, RELAY]);
   });
 
   it("桌面的原生来源就是 core 已认的原生 App 来源之一", () => {
     expect(NATIVE_APP_ORIGINS).toContain(DESKTOP_RELAY_ORIGIN);
   });
 
-  it("发往中继主机（HTTP 与 WebSocket）的请求换成原生来源，记下页面来源", () => {
+  it("发往中继主机与直连源主机（HTTP 与 WebSocket）的请求换成原生来源，记下页面来源", () => {
     for (const url of [
       `${RELAY}/s/abc/api/workspaces`,
       "wss://relay.test:8102/s/abc/api/ws",
+      `${DIRECT}/api/identity/hello`,
+      "wss://10.0.0.2:8443/api/ws",
     ]) {
       const rewritten = rewriteRelayRequest(
         url,
@@ -50,11 +53,11 @@ describe("改写 Origin", () => {
     }
   });
 
-  it("别处一律不动：别的主机、别的端口、直连的源、没带 Origin 的", () => {
+  it("别处一律不动：别的主机、别的端口、没带 Origin 的", () => {
     for (const url of [
       "https://relay.test/s/abc/api/workspaces",
       "https://relay.test:9999/s/abc",
-      "https://10.0.0.2:8443/api/workspaces",
+      "https://10.0.0.2:9443/api/workspaces",
       "http://127.0.0.1:43120/api/workspaces",
       "https://example.com/",
     ])
@@ -68,7 +71,7 @@ describe("改写 Origin", () => {
   });
 
   it("源表变了：名单跟着换", () => {
-    const next = trustFromSourceTable({ sources: [] }).relayOrigins;
+    const next = trustFromSourceTable({ sources: [] }).rewriteOrigins;
     expect(
       rewriteRelayRequest(`${RELAY}/s/abc`, { Origin: PAGE }, next),
     ).toBeNull();

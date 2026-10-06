@@ -555,6 +555,10 @@ export async function startDirectServer({ scratch, tag = "direct" }) {
         ARMADRA_SECRET_BACKEND: "file",
         ARMADRA_NO_GLOBAL_WRITES: "1",
         ARMADRA_LOG: "info",
+        // out/main.js 把 node-pty 留作外部模块，从桌面包的依赖里找（与
+        // server-perf、tools/dev-stack/Dockerfile.dev 同一个做法）；不设时直连源上
+        // 开的终端一连就断。
+        NODE_PATH: join(root, "apps/desktop/node_modules"),
       }),
     },
   );

@@ -436,7 +436,7 @@ async function call<T>(
   if (native && !options.anonymous && bearer)
     headers.Authorization = `Bearer ${bearer}`;
   if (!native && method !== "GET" && csrf) headers["X-Armadra-CSRF"] = csrf;
-  // Bearer 模式的刷新与登出：core 同样核对会话的 CSRF 密钥（契约 §17.4）。
+  // Bearer 模式的刷新与登出：契约 §17.4 不核 CSRF；有就带上，旧版 core 还核它。
   if (native && options.refreshBearer && csrf) headers["X-Armadra-CSRF"] = csrf;
 
   let response: Response;
