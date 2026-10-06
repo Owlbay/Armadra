@@ -632,8 +632,14 @@ export function PullBody({
   const [confirm, setConfirm] = React.useState<"merge" | "auto" | null>(null);
   const train = options.data?.mergeTrain === true;
   // GitLab 等流水线，Gitea 等提交状态检查：同一个动作，叫法不同。
-  const autoKey =
-    forge === "gitea" ? "forge.autoMergeChecks" : "forge.autoMerge";
+  const checksNamed = forge === "gitea";
+  const autoKey = checksNamed ? "forge.autoMergeChecks" : "forge.autoMerge";
+  const autoDoneKey = checksNamed
+    ? "forge.autoMergeChecks.done"
+    : "forge.autoMerge.done";
+  const autoConfirmKey = checksNamed
+    ? "forge.autoMergeChecks.confirm"
+    : "forge.autoMerge.confirm";
   const canAutoMerge =
     options.data?.autoMerge === true && !pull.autoMerge && !pull.draft;
   const files = useQuery({
@@ -656,7 +662,7 @@ export function PullBody({
             ? "forge.merge.done"
             : result.train
               ? "forge.autoMerge.trainDone"
-              : `${autoKey}.done`,
+              : autoDoneKey,
         ),
       );
       void client.invalidateQueries({ queryKey: forgeKeys.all });
@@ -900,7 +906,7 @@ export function PullBody({
                 confirm === "auto"
                   ? train
                     ? "forge.autoMerge.confirmTrain"
-                    : `${autoKey}.confirm`
+                    : autoConfirmKey
                   : "forge.merge.confirm",
               )}
             </ResponsiveAlertDialogTitle>
