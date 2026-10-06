@@ -2333,13 +2333,36 @@
      另有一处隧道准入问题（中继同源页面的 GET 不带 `Origin`），本包与 A3-4 修法相同，合并时以 main 为准。
 - 用 `armadra-server invite --cloud-link` 生成的链接没有单独跑；它产出的链接拼法与 A1-4 的相同，`mountByLink` 和落地页都认。
 
+## E3-3 工程规范化：terminals 域迁到契约（契约 §38）
+
+设计：[工程规范化](../design/engineering-standardization.md) §2，规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-3）；契约 §38。
+
+做了什么：
+
+- **契约**（`packages/shared/src/contract/terminals.ts`）：`terminals.*` 共 11 条——`create`、`backend`、`get`、`capture`、`sessions`、`paste`、`scroll`、`terminate`、`recycle`、`wake`、`drive`；权限与旧路由表一致（开 `terminal:create`、读 `terminal:read`、其余 `terminal:write`），`create` 与 `sessions` 绑 `workspaceId`。出参复用页面 schema，并补上 core 一直在答的 `kind`、`ownerNodeId`、`platform`；会话行的 id 与时刻放宽成字符串（探针与旧库的工作空间 id 不是 RFC 变体的 UUID，严格校验会把成功的创建拒成 500，对偶测试里有回归用例）。入参只校形状，粘贴大小、滚动距离、节点 id 等判断仍在域里。`since` 为 1.6，协议 minor 5 → 6。
+- **core**：`terminal/install.ts` 把十一条路由的实现收成一份 `operations`，旧 handler 先解析查询串或体、再调它；`registerProcedures(server, "terminals", …)` 登记同一份，每次回答同样等启动对账 `ready`。`TerminalError` 改为 `CoreFailure` 子类（构造参数不变），procedure 抛出的码与原话与旧路径一样（含 `not_hibernated`、`wake_failed` 这类注册表里没有的终端专属码）。
+- **页面**：`api/terminals.ts` 改为 `terminalsApiFor(rpc)`，经 `currentClient`（换源后请求跟着换），函数签名不变，答案仍过页面自己的 schema；终端 WebSocket（`api/sockets.ts`）不动。直接 import `terminalsApi` 的四处（`use-access`、`acp/api`、`DriveBadge`、`delivery-commands`）改用 `runtimeApi`，对应两处测试的 mock 改指 `@/api/client`。
+- **契约 §38**：§38.1 生成块与说明，§38.2 登记不在契约里的 WS 与 `node-token/refresh`（E3-8）。
+
+实测：
+
+- `pnpm check`：契约、格式、lint、typecheck、repo:check、workflow、release:check 通过；最后一步 `notices:check` 在本机失败（`pnpm licenses list` 缺包索引，本 worktree 用离线仓库装依赖、无法联网），本包没动依赖。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：新增 `core/contract/parity-terminals.test.ts` 17 条（旧路径、procedure、原 handler 逐字节相等，覆盖不存在的会话、过大的粘贴与滚动、不属于节点的唤醒、域里的创建拒绝、形状错只比码与状态、scope 与路由表一致）。
+- `pnpm --filter @armadra/web test` / `typecheck` 通过；新增 `api/client.terminals.test.ts`。
+- A 档：`core-terminal-smoke`、`core-terminal-lifecycle`、`server-e2e`、`ui-features-e2e`、`ws-mux-e2e`、`realtime-e2e` 通过。
+
+没做 / 偏离：
+
+- 形状错（缺字段、`action` 不是两个动词之一）经旧路径与 procedure 由入参校验先答 `bad_request`（带 `details.issues`），与迁移前那句原话不同；码与状态不变。
+- `acp-e2e` 在本机起 Vite 超时（手动起 Vite 正常，疑为多个包并行时的机器负载），未得到结果。
+
 ## E3-1 工程规范化：boards 域迁到契约（契约 §36）
 
 规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-1）；契约 §36。
 
 做了什么：
 
-- **契约**（`packages/shared/src/contract/boards.ts`）：`boards.list / create / update / delete`（§36.1）、`load / save`（§36.2）、`realtime`（§36.3）、`heartbeat / leave / acquireLease` 与订阅 `presence`（§36.4）。出参是线上形状（节点 `data` 是原样 JSON），页面的 schema 再解析一遍；`save` 的入参是「已知字段 + 透传」，语义检查与已退役 `kanban` 的拒绝仍在域里。注册表加 `canvas_lease_held`（423）与 `realtime_active`（409）。协议 minor 升到 6，`since` 为 1.6。
+- **契约**（`packages/shared/src/contract/boards.ts`）：`boards.list / create / update / delete`（§36.1）、`load / save`（§36.2）、`realtime`（§36.3）、`heartbeat / leave / acquireLease` 与订阅 `presence`（§36.4）。出参是线上形状（节点 `data` 是原样 JSON），页面的 schema 再解析一遍；`save` 的入参是「已知字段 + 透传」，语义检查与已退役 `kanban` 的拒绝仍在域里。注册表加 `canvas_lease_held`（423）与 `realtime_active`（409）。协议 minor 升到 7，`since` 为 1.7。
 - **core**（`core/canvas/routes.ts`）：域动作收成 `operations`，旧 REST 处理器与 `registerProcedures("boards", …)` 调同一份，拒绝的码与原话一致；旧路径经 `meta.legacy` 继续可用。`boards.realtime` 由实时域登记读取函数（`setRealtimeStateReader`），canvas 域不 import 实时域。
 - **`boards.presence` 订阅**（控制面）：订上就是第一次心跳，连着时 core 每 10 秒替页面续期（不带 `active`），取消或断线即离开（同一 `clientId` 多条订阅时最后一条走了才离开）；每项是该客户端看到的在线表（带 `writable` 与 `deviceKey`），只有 `lastSeenAt` 变的续期不发；授权被收回以 `forbidden` 结束。背压 `drop-oldest`。Yjs 同步连接未动。
 - **一处顺手修的缺陷**：实时板上每拍心跳都为一个视图里恒为空的租约白发一帧 `canvas.presence`；订阅若在事件上再心跳，两个订阅会互相触发到占满事件循环（实测 realtime-e2e 刷新后 core 卡死）。现在事件只读一眼不心跳，实时板也不再分租约。
@@ -2348,6 +2371,6 @@
 
 留在 REST / 数据面：`…/sync`（Yjs）、评论、`context-links`、导出与资源上传。
 
-偏离：入参形状不对时契约的 schema 先于域拒绝（码与状态一致，原话是字段路径）；`since` 取 1.6（main 已是 5）；评论与 `context-links` 未迁。
+偏离：入参形状不对时契约的 schema 先于域拒绝（码与状态一致，原话是字段路径）；`since` 取 1.7（main 已是 6）；评论与 `context-links` 未迁。
 
 实测（macOS arm64，Node 26.10.0，合入 main 27b71efe 之后）：新增 `contract/parity-boards.test` 11（旧路径、procedure、原 handler 三者逐字节一致，含 404、409、423、400 envelope）、`canvas/presence-subscription.test` 7、web `api/board-presence.test` 2、`client.test` 与 `use-board-sync.test` 改写补充。`pnpm check` 通过；A 档：design-showcase、gateway、realtime、server、ui-features（多设备画布）、workflow、ws-mux、core-terminal-\*、push 通过；acp、agent-e2e-self-test、remote 三项在探针的临时 HOME 下 `pnpm exec vite` 无输出、「Vite 没有就绪」，与本包无关（环境问题）。

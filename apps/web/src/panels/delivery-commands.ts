@@ -13,7 +13,7 @@ import type { CanvasNode } from "@armadra/shared";
 
 import { requestDeliveryQueue } from "@/agent/delivery-store";
 import { useDriveStore, type NodeDrive } from "@/agent/drive-store";
-import { terminalsApi } from "@/api/terminals";
+import { runtimeApi } from "@/api/client";
 import { requestCenterOnNode } from "@/canvas/flow/flow-context";
 import { useCanvasStore } from "@/store/canvas-store";
 
@@ -65,13 +65,13 @@ export function terminalNodeCommands(
     commands.push({
       id: "delivery.release",
       label: t("delivery.palette.release", { title }),
-      run: () => void terminalsApi.driveTerminal(sessionId, "release"),
+      run: () => void runtimeApi.driveTerminal(sessionId, "release"),
     });
   } else {
     commands.push({
       id: "delivery.takeover",
       label: t("delivery.palette.takeover", { title }),
-      run: () => void terminalsApi.driveTerminal(sessionId, "takeover"),
+      run: () => void runtimeApi.driveTerminal(sessionId, "takeover"),
     });
   }
   return commands;

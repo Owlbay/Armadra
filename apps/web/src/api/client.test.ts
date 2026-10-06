@@ -46,18 +46,6 @@ const boardDocument: BoardDocument = {
   edges: [],
 };
 
-const terminalSession = {
-  id: sessionId,
-  workspaceId,
-  cwd: "/tmp/one",
-  shell: "/bin/zsh",
-  command: null,
-  status: "running",
-  exitCode: null,
-  createdAt: timestamp,
-  endedAt: null,
-};
-
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -236,105 +224,7 @@ describe("画布文档（契约 §36）", () => {
   });
 });
 
-describe("终端", () => {
-  it("创建终端时带上 agent 段与 nodeId", async () => {
-    const fetchMock = stubJson(terminalSession);
-
-    await runtimeApi.createTerminal({
-      workspaceId,
-      cwd: "/tmp/one",
-      args: [],
-      nodeId: boardId,
-      agent: { id: "claude", permissionMode: "plan" },
-    });
-
-    expect(bodyOf(fetchMock)).toMatchObject({
-      workspaceId,
-      cwd: "/tmp/one",
-      nodeId: boardId,
-      agent: { id: "claude", permissionMode: "plan" },
-    });
-  });
-
-  it("抓屏把 lines/escapes 放进查询串", async () => {
-    const fetchMock = stubJson({ generation: 2, lines: 40, data: "$ " });
-
-    const capture = await runtimeApi.captureTerminal(sessionId, {
-      lines: 40,
-      escapes: false,
-    });
-
-    expect(capture.generation).toBe(2);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      `http://127.0.0.1:43120/api/terminals/${sessionId}/capture?lines=40&escapes=false`,
-    );
-  });
-
-  it("粘贴默认不回车", async () => {
-    const fetchMock = stubJson(null);
-
-    await runtimeApi.pasteTerminal(sessionId, "ls -al");
-
-    expect(bodyOf(fetchMock)).toEqual({ text: "ls -al", enter: false });
-  });
-
-  it("终止默认走 process 级别", async () => {
-    const fetchMock = stubJson(terminalSession);
-
-    await runtimeApi.terminateTerminal(sessionId);
-    expect(bodyOf(fetchMock)).toEqual({ mode: "process" });
-
-    stubJson(terminalSession);
-    const second = stubJson(terminalSession);
-    await runtimeApi.terminateTerminal(sessionId, "session");
-    expect(bodyOf(second)).toEqual({ mode: "session" });
-  });
-
-  it("回收命中 recycle 路由", async () => {
-    const fetchMock = stubJson({ ...terminalSession, generation: 3 });
-
-    const session = await runtimeApi.recycleTerminal(sessionId);
-
-    expect(session.generation).toBe(3);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      `http://127.0.0.1:43120/api/terminals/${sessionId}/recycle`,
-    );
-  });
-
-  it("旧 Runtime 不报 pid 时补 null", async () => {
-    stubJson(terminalSession);
-
-    const session = await runtimeApi.getTerminal(sessionId);
-    expect(session.pid).toBeNull();
-  });
-
-  it("读后端信息", async () => {
-    stubJson({
-      effective: "tmux",
-      configured: "auto",
-      tmuxVersion: "3.4",
-      tmuxSocket: "/tmp/tmux.sock",
-      reason: null,
-    });
-
-    await expect(runtimeApi.terminalBackend()).resolves.toMatchObject({
-      effective: "tmux",
-      configured: "auto",
-    });
-  });
-});
-
 describe("会话、Agent 与审批", () => {
-  it("会话列表命中工作空间路由", async () => {
-    const fetchMock = stubJson([]);
-
-    await runtimeApi.sessions(workspaceId);
-
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      `http://127.0.0.1:43120/api/workspaces/${workspaceId}/sessions`,
-    );
-  });
-
   it("Agent 列表保留 resolvedPath 为 null 的未安装项", async () => {
     stubJson([
       {

@@ -46,7 +46,7 @@ export { isLeaseHeld } from "./boards";
 import { filesApiFor } from "./files";
 import { languageApi } from "./language";
 import { searchApiFor } from "./search";
-import { terminalsApi } from "./terminals";
+import { terminalsApiFor } from "./terminals";
 import { resourcesApi } from "./resources";
 import { conversationsApi } from "./conversations";
 import { handoffApi } from "./handoff";
@@ -309,7 +309,7 @@ export const runtimeApi = {
   ...filesApiFor(currentClient),
   ...languageApi,
   ...searchApiFor(currentClient),
-  ...terminalsApi,
+  ...terminalsApiFor(currentClient),
   ...resourcesApi,
   ...conversationsApi,
   ...handoffApi,

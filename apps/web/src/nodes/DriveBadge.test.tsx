@@ -15,8 +15,9 @@ import { DriveBadge, driveAction, driveLabel } from "./DriveBadge";
 /** 接管 / 交还真的发出去的那些调用。 */
 const driveCalls: [string, string][] = [];
 
-vi.mock("@/api/terminals", () => ({
-  terminalsApi: {
+vi.mock("@/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/client")>()),
+  runtimeApi: {
     driveTerminal: (sessionId: string, action: string) => {
       driveCalls.push([sessionId, action]);
       return Promise.resolve({ state: "free", generation: 1, expiresAt: "" });

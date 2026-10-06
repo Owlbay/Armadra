@@ -23,7 +23,7 @@ import {
 } from "@armadra/shared";
 
 import { json, noContentSchema, query, request } from "@/api/request";
-import { terminalsApi } from "@/api/terminals";
+import { runtimeApi } from "@/api/client";
 
 export const acpApi = {
   createSession: (input: CreateAcpSessionRequest) =>
@@ -102,5 +102,5 @@ export const acpApi = {
     ),
   /** 输入框聚焦拿人类租约，失焦或提交交还（ACP 设计 §5.6）。 */
   drive: (sessionId: string, action: "takeover" | "release") =>
-    terminalsApi.driveTerminal(sessionId, action),
+    runtimeApi.driveTerminal(sessionId, action),
 };

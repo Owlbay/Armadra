@@ -130,7 +130,7 @@ export const boards = {
       meta({
         scope: "canvas:read",
         workspaceKey: "workspaceId",
-        since: "1.6",
+        since: "1.7",
         contract: "§36.1",
         legacy: { method: "GET", path: "/api/workspaces/{workspaceId}/boards" },
       }),
@@ -143,7 +143,7 @@ export const boards = {
       meta({
         scope: "canvas:write",
         workspaceKey: "workspaceId",
-        since: "1.6",
+        since: "1.7",
         contract: "§36.1",
         legacy: {
           method: "POST",
@@ -164,7 +164,7 @@ export const boards = {
       meta({
         scope: "canvas:write",
         workspaceKey: "workspaceId",
-        since: "1.6",
+        since: "1.7",
         contract: "§36.1",
         legacy: {
           method: "PATCH",
@@ -180,7 +180,7 @@ export const boards = {
       meta({
         scope: "canvas:write",
         workspaceKey: "workspaceId",
-        since: "1.6",
+        since: "1.7",
         contract: "§36.1",
         legacy: {
           method: "DELETE",
@@ -198,7 +198,7 @@ export const boards = {
       meta({
         scope: "canvas:read",
         workspaceKey: "workspaceId",
-        since: "1.6",
+        since: "1.7",
         contract: "§36.2",
         legacy: {
           method: "GET",
@@ -239,7 +239,7 @@ export const boards = {
       meta({
         scope: "canvas:write",
         workspaceKey: "workspaceId",
-        since: "1.6",
+        since: "1.7",
         contract: "§36.2",
         legacy: {
           method: "PUT",
@@ -256,7 +256,7 @@ export const boards = {
       meta({
         scope: "canvas:read",
         workspaceKey: "workspaceId",
-        since: "1.6",
+        since: "1.7",
         contract: "§36.3",
         legacy: {
           method: "GET",
@@ -277,7 +277,7 @@ export const boards = {
       meta({
         scope: "canvas:read",
         workspaceKey: "workspaceId",
-        since: "1.6",
+        since: "1.7",
         contract: "§36.4",
         legacy: {
           method: "POST",
@@ -294,7 +294,7 @@ export const boards = {
       meta({
         scope: "canvas:read",
         workspaceKey: "workspaceId",
-        since: "1.6",
+        since: "1.7",
         contract: "§36.4",
         legacy: {
           method: "DELETE",
@@ -315,7 +315,7 @@ export const boards = {
       meta({
         scope: "canvas:write",
         workspaceKey: "workspaceId",
-        since: "1.6",
+        since: "1.7",
         contract: "§36.4",
         legacy: {
           method: "POST",
@@ -344,7 +344,7 @@ export const boards = {
       meta({
         scope: "canvas:read",
         workspaceKey: "workspaceId",
-        since: "1.6",
+        since: "1.7",
         contract: "§36.4",
         backpressure: "drop-oldest",
       }),
