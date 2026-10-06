@@ -95,6 +95,11 @@ const C_TYPING_TEXT =
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 const cleanups = [];
+/** 起的子进程：进程意外退出（未捕获的异常）时也要同步杀掉，不留孤儿 core。 */
+const children = new Set();
+process.on("exit", () => {
+  for (const child of children) child.kill("SIGKILL");
+});
 const report = {
   status: "failed",
   startedAt: new Date().toISOString(),
@@ -143,6 +148,7 @@ async function startCore() {
   };
   child.stdout.on("data", take);
   child.stderr.on("data", take);
+  children.add(child);
   cleanups.push(() => child.kill("SIGKILL"));
   let origin = "";
   for (let attempt = 0; attempt < 300 && !origin; attempt += 1) {
@@ -804,12 +810,15 @@ async function startRelay(core, cloudHome) {
   const issuer = `https://127.0.0.1:${port}`;
   const env = { ...process.env };
   delete env.NODE_TLS_REJECT_UNAUTHORIZED;
-  const relayCli = (rest) =>
-    spawn(process.execPath, ["apps/relay/src/cli.ts", "personal", ...rest], {
-      cwd: cloudHome,
-      stdio: ["ignore", "pipe", "pipe"],
-      env,
-    });
+  const relayCli = (rest) => {
+    const child = spawn(
+      process.execPath,
+      ["apps/relay/src/cli.ts", "personal", ...rest],
+      { cwd: cloudHome, stdio: ["ignore", "pipe", "pipe"], env },
+    );
+    children.add(child);
+    return child;
+  };
   const common = [
     "--data-dir",
     relayData,
