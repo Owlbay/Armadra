@@ -22,6 +22,7 @@ const api = vi.hoisted(() => ({
   forgetSource: vi.fn(),
   remoteSources: vi.fn(),
   mountRemoteSource: vi.fn(),
+  mountSourceByLink: vi.fn(),
   stopSharing: vi.fn(),
   notifyShellSourcesChanged: vi.fn(),
   shareStatus: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock("../../../app/workspaces-query", () => ({
 vi.mock("sonner", () => ({ toast: toasts }));
 
 import { RemoteServicesPage } from "./RemoteServicesPage";
+import { offerJoinLink } from "../../../sources/join-intent";
 
 const FP = "ab".repeat(32);
 const ISSUER = "https://relay.test:8102";
@@ -288,5 +290,88 @@ describe("远程服务页", () => {
         screen.queryByRole("img", { name: "Share link QR code" }),
       ).toBeNull(),
     );
+  });
+});
+
+describe("通过链接加入（A4-3p）", () => {
+  const SHARE = `${ISSUER}/j/0123456789abcdef#${"S".repeat(43)}.${"c".repeat(32)}.${"D".repeat(43)}`;
+  const joined = { ...local, sourceId: "s".repeat(32), kind: "relayed" };
+
+  beforeEach(() => sessionStorage.clear());
+
+  it("粘贴链接：首次核对签发方指纹 → 带指纹重调 → 记下要打开的源、收尾", async () => {
+    api.listSources.mockResolvedValue({ sources: [local], remotes: [] });
+    api.mountSourceByLink
+      .mockResolvedValueOnce({ kind: "confirm", fingerprint: FP })
+      .mockResolvedValueOnce({ kind: "done", value: joined });
+    api.notifyShellSourcesChanged.mockResolvedValue(true);
+    mount();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Join with link" }),
+    );
+    fireEvent.change(screen.getByLabelText("Share link"), {
+      target: { value: SHARE },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Join" }));
+    await screen.findByText("Verify certificate fingerprint");
+    expect(screen.getByText("relay.test:8102")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Fingerprint matches, continue" }),
+    );
+    await waitFor(() =>
+      expect(api.mountSourceByLink).toHaveBeenLastCalledWith({
+        url: SHARE,
+        fingerprint: FP,
+      }),
+    );
+    await waitFor(() =>
+      expect(boot.reloadIntoSettings).toHaveBeenCalledWith("remote"),
+    );
+    expect(sessionStorage.getItem("armadra.sources.openAfterJoin")).toBe(
+      joined.sourceId,
+    );
+    expect(toasts.success).toHaveBeenCalledWith("Joined");
+  });
+
+  it("失败按码说明：过期的链接", async () => {
+    const { RuntimeRequestError } = await import("../../../api/request");
+    api.listSources.mockResolvedValue({ sources: [local], remotes: [] });
+    api.mountSourceByLink.mockRejectedValue(
+      new RuntimeRequestError(410, "已过期", "link_expired"),
+    );
+    mount();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Join with link" }),
+    );
+    fireEvent.change(screen.getByLabelText("Share link"), {
+      target: { value: SHARE },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Join" }));
+    expect(await screen.findByText("This link has expired")).toBeTruthy();
+    expect(sessionStorage.getItem("armadra.sources.openAfterJoin")).toBeNull();
+  });
+
+  it("深链交来的链接：打开对话框并预填，人点了才挂载", async () => {
+    api.listSources.mockResolvedValue({ sources: [local], remotes: [] });
+    mount();
+    await screen.findByText("this-mac");
+    offerJoinLink(SHARE);
+    const field = (await screen.findByLabelText(
+      "Share link",
+    )) as HTMLInputElement;
+    expect(field.value).toBe(SHARE);
+    expect(api.mountSourceByLink).not.toHaveBeenCalled();
+  });
+
+  it("访客的远程服务行（没有账号）不给「分享本机」", async () => {
+    api.listSources.mockResolvedValue({
+      sources: [local],
+      remotes: [{ ...relay, accountHint: "" }],
+    });
+    mount();
+    await screen.findByText(relay.label);
+    expect(
+      screen.queryByRole("button", { name: "Share this machine" }),
+    ).toBeNull();
   });
 });

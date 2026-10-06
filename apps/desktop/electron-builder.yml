@@ -22,6 +22,14 @@ executableName: armadra
 # would have been.
 afterPack: ./scripts/after-pack.mjs
 
+# 分享深链 `armadra://join?…`（客户端包 §6.2）：安装时登记 URL 协议（macOS
+# Info.plist 的 CFBundleURLTypes、Windows 安装器的注册表项、Linux 桌面文件的
+# x-scheme-handler）。壳运行时不调用 setAsDefaultProtocolClient，不改系统设置。
+protocols:
+  - name: Armadra
+    schemes:
+      - armadra
+
 directories:
   # Named to match the blacklist entry `apps/desktop/release/` already
   # reserved for this in repo.rules.json and .gitignore (both predate this

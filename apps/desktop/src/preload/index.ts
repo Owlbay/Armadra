@@ -55,6 +55,7 @@ const onKeyIntent = subscribe<[string, string]>(IPC.windowKeyIntent.channel);
 const onNotificationClick = subscribe<[{ nodeId: string }]>(
   IPC.windowNotificationClick.channel,
 );
+const onJoinLinkPending = subscribe<[]>(IPC.sourcesJoinLink.channel);
 
 export interface ArmadraDesktopApi {
   readonly transport: {
@@ -151,6 +152,10 @@ export interface ArmadraDesktopApi {
   /** 源表变了：壳重读 CSP 与证书钉扎，答页面要不要重载（`app:sources-changed`）。 */
   readonly sources: {
     changed(): Promise<{ reload: boolean }>;
+    /** 壳收到的 `armadra://join` 深链（取一次即清）；没有是 `null`。 */
+    takeJoinLink(): Promise<string | null>;
+    /** 壳又收到一条深链：自己取走后交给监听者。 */
+    onJoinLink(listener: (url: string) => void): () => void;
   };
   /**
    * 页面的一条 JS 错误（契约 §30），页面已剥离过；主进程再判开关、限流、剥离。
@@ -232,6 +237,15 @@ const api: ArmadraDesktopApi = {
   },
   sources: {
     changed: () => ipcRenderer.invoke(IPC.sourcesChanged.channel),
+    takeJoinLink: () => ipcRenderer.invoke(IPC.sourcesTakeJoinLink.channel),
+    onJoinLink: (listener) =>
+      onJoinLinkPending(() => {
+        void ipcRenderer
+          .invoke(IPC.sourcesTakeJoinLink.channel)
+          .then((url: unknown) => {
+            if (typeof url === "string") listener(url);
+          });
+      }),
   },
   diagnostics: {
     report: (report) =>

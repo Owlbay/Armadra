@@ -55,7 +55,11 @@ export const ERROR_CODES = {
   forge_not_configured: { status: 409 },
   gateway_managed_by_shell: { status: 409 },
   gateway_not_running: { status: 409 },
-  link_invalid: { status: 409 },
+  /**
+   * 邮件的一次性链接与分享链接（§33.7，远程服务答的「链接不存在或已撤销」）共用；
+   * 状态沿用邮件域的 409（协议包注册表里是 404，页面只按码取文案）。
+   */
+  link_invalid: { status: 409, i18n: "error.linkInvalid" },
   /** 续订的位置已掉出 outbox 的保留下限：先整份重读，再从现在订（契约 §35.4）。 */
   snapshot_required: { status: 409 },
   /** 续订的位置这台 core 从没发过（换了库）：同上（契约 §35.4）。 */
@@ -95,6 +99,10 @@ export const ERROR_CODES = {
     i18n: "error.registrationTokenInvalid",
   },
   protocol_unsupported: { status: 426, i18n: "error.protocolUnsupported" },
+  // 按分享链接挂载（契约 §33.7）：远程服务 `links.accept` 的拒绝，拼法与状态同协议包。
+  link_expired: { status: 410, i18n: "error.linkExpired" },
+  link_exhausted: { status: 410, i18n: "error.linkExhausted" },
+  link_secret_invalid: { status: 403, i18n: "error.linkSecretInvalid" },
 } as const satisfies Record<string, ErrorSpec>;
 
 export type ErrorCode = keyof typeof ERROR_CODES;

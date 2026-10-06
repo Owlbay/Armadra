@@ -133,6 +133,50 @@ describe("HTTP 准入", () => {
     expect(answer.status).toBe(403);
   });
 
+  it("中继托管页面的同源 GET（不带 Origin、Sec-Fetch-Site: same-origin）按会话来源认", async () => {
+    const token = world.session(ISSUER);
+    const answer = await get("/api/workspaces", {
+      "sec-fetch-site": "same-origin",
+      authorization: `Bearer ${token}`,
+    });
+    expect(answer.status).toBe(200);
+    expect(answer.headers["access-control-allow-origin"]).toBeUndefined();
+    // 别处的会话照样进不来：会话来源不对。
+    const elsewhere = await get("/api/workspaces", {
+      "sec-fetch-site": "same-origin",
+      authorization: "Bearer not-a-session",
+    });
+    expect(elsewhere.status).toBe(401);
+    // 跨站与没写的照旧 403。
+    for (const site of ["cross-site", "same-site"]) {
+      const refused = await get("/api/workspaces", {
+        "sec-fetch-site": site,
+        authorization: `Bearer ${token}`,
+      });
+      expect(refused.status).toBe(403);
+    }
+  });
+
+  it("桌面壳改写成的原生来源放行；页面原本的回环来源一律 403", async () => {
+    const token = world.session(ISSUER);
+    const desktop = await get("/api/workspaces", {
+      origin: "https://localhost",
+      authorization: `Bearer ${token}`,
+    });
+    expect(desktop.status).toBe(200);
+    for (const loopback of [
+      "http://127.0.0.1:53111",
+      "http://localhost:5173",
+      "http://[::1]:43120",
+    ]) {
+      const refused = await get("/api/workspaces", {
+        origin: loopback,
+        authorization: `Bearer ${token}`,
+      });
+      expect(refused.status).toBe(403);
+    }
+  });
+
   it("原生 App 的来源放行，CORS 回 App 自己的来源", async () => {
     const token = world.session(ISSUER);
     const answer = await get("/api/workspaces", {

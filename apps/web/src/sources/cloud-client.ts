@@ -1,9 +1,11 @@
 import { z } from "zod";
 
 /**
- * 手机直接调远程服务（个人中转 `<issuer>/v1/*`，cloud 契约 §2、§4、§5、§10）的
- * 一小块客户端：登录、续期、源目录、断言、接受链接，加上经中继向源 core 的
- * `POST /api/identity/cloud/login`（core 契约 §31）。
+ * 页面直接调远程服务（个人中转 `<issuer>/v1/*`，cloud 契约 §2、§4、§5、§6、§10）的
+ * 一小块客户端：平台信息、登录、续期、登出、源目录、断言、接受链接、`me.stream`
+ * 的票，加上经中继向源 core 的 `POST /api/identity/cloud/login` 与刷新（core
+ * 契约 §31、§17.4）。手机（`mobile/`）与中继托管的页面（`sources/hosted.ts`）
+ * 共用这一份。
  *
  * 只认这几条要用的形状（宽松解析：未知字段忽略，协议包允许更高的 minor）；
  * 错误一律归成 `{ code, message }`，界面按 `code` 取文案，不展示后端的 message。
@@ -75,15 +77,28 @@ const acceptSchema = z.object({
   relayBaseUrl: z.string().min(1),
   assertion: z.string().min(1),
   relayToken: z.string().min(1),
+  relayTokenExpiresAtMs: z.number().default(0),
   guestSession: sessionSchema,
 });
 export type CloudAccept = z.infer<typeof acceptSchema>;
+
+/** `links.get`（匿名）：落地页显示的那几项（cloud-api §5）。 */
+const linkInfoSchema = z.object({
+  label: z.string().default(""),
+  role: z.string().default(""),
+  sourceName: z.string().default(""),
+  expiresAtMs: z.number().default(0),
+  exhausted: z.boolean().default(false),
+});
+export type CloudLinkInfo = z.infer<typeof linkInfoSchema>;
 
 /** core 的 `cloud/login` 答案里页面要用的部分（与 `identitySessionSchema` 同形）。 */
 const coreSessionSchema = z.object({
   session: z.object({
     hostId: z.string(),
     expiresAtUnixMs: z.number().default(0),
+    /** 刷新时要带的 CSRF 密钥（Bearer 模式也校验它，契约 §17.4）。 */
+    csrfToken: z.string().optional(),
     native: z.object({
       accessToken: z.string().min(1),
       refreshToken: z.string().min(1),
@@ -95,6 +110,7 @@ export type CoreCloudSession = z.infer<typeof coreSessionSchema>["session"];
 const coreRefreshSchema = z.object({
   hostId: z.string().default(""),
   expiresAtUnixMs: z.number().default(0),
+  csrfToken: z.string().optional(),
   native: z.object({
     accessToken: z.string().min(1),
     refreshToken: z.string().min(1),
@@ -102,17 +118,36 @@ const coreRefreshSchema = z.object({
 });
 
 export interface CloudDevice {
-  readonly platform: "ios" | "android";
+  readonly platform: "ios" | "android" | "browser";
   readonly name: string;
 }
 
-/** 这台设备在远程服务里的登记（平台只有 iOS 与 Android 两种手机）。 */
+/** 这台手机在远程服务里的登记（原生 App 只有 iOS 与 Android 两种）。 */
 export function thisDevice(
   userAgent: string = globalThis.navigator?.userAgent ?? "",
 ): CloudDevice {
   return /android/i.test(userAgent)
     ? { platform: "android", name: "Armadra Android" }
     : { platform: "ios", name: "Armadra iOS" };
+}
+
+/** 浏览器里打开的页面（中继托管）在远程服务里的登记。 */
+export function browserDevice(
+  userAgent: string = globalThis.navigator?.userAgent ?? "",
+): CloudDevice {
+  const browser = /Edg\//.test(userAgent)
+    ? "Edge"
+    : /Firefox\//.test(userAgent)
+      ? "Firefox"
+      : /Chrome\//.test(userAgent)
+        ? "Chrome"
+        : /Safari\//.test(userAgent)
+          ? "Safari"
+          : "";
+  return {
+    platform: "browser",
+    name: browser === "" ? "Armadra Web" : `Armadra Web (${browser})`,
+  };
 }
 
 export interface CloudOptions {
@@ -218,6 +253,56 @@ export async function cloudRefresh(
   return answer.session;
 }
 
+/** `POST /v1/auth/logout`：尽力而为，失败不抛。 */
+export async function cloudLogout(
+  issuer: string,
+  accessToken: string,
+  options: CloudOptions = {},
+): Promise<void> {
+  await send(
+    `${trimmed(issuer)}/v1/auth/logout`,
+    z.unknown(),
+    { method: "POST", headers: bearer(accessToken), body: {} },
+    options,
+  ).catch(() => undefined);
+}
+
+const platformInfoSchema = z.object({
+  mode: z.string(),
+  issuer: z.string().min(1),
+  capabilities: z.array(z.string()).default([]),
+  webApp: z.string().nullable().default(null),
+});
+export type CloudPlatformInfo = z.infer<typeof platformInfoSchema>;
+
+/** `GET /.well-known/armadra-platform`（匿名）。 */
+export function cloudPlatformInfo(
+  origin: string,
+  options: CloudOptions = {},
+): Promise<CloudPlatformInfo> {
+  return send(
+    `${trimmed(origin)}/.well-known/armadra-platform`,
+    platformInfoSchema,
+    {},
+    options,
+  );
+}
+
+/** `POST /v1/me/stream/ticket`：30 秒一次性，升级 `GET /v1/me/stream` 时用。 */
+export async function cloudStreamTicket(
+  issuer: string,
+  accessToken: string,
+  options: CloudOptions = {},
+): Promise<string> {
+  const answer = await send(
+    `${trimmed(issuer)}/v1/me/stream/ticket`,
+    z.object({ ticket: z.string().min(1) }),
+    { method: "POST", headers: bearer(accessToken), body: {} },
+    options,
+  );
+  return answer.ticket;
+}
+
 /** `GET /v1/me/sources`。 */
 export async function cloudSources(
   issuer: string,
@@ -245,6 +330,20 @@ export function cloudAssertion(
     `${trimmed(issuer)}/v1/sources/${encodeURIComponent(sourceId)}/assertion`,
     assertionSchema,
     { headers: bearer(accessToken), body: { device } },
+    options,
+  );
+}
+
+/** `GET /v1/links/{id}`（匿名）：链接指向谁、什么权限、何时过期。 */
+export function cloudLinkInfo(
+  issuer: string,
+  linkId: string,
+  options: CloudOptions = {},
+): Promise<CloudLinkInfo> {
+  return send(
+    `${trimmed(issuer)}/v1/links/${encodeURIComponent(linkId)}`,
+    linkInfoSchema,
+    {},
     options,
   );
 }
@@ -298,13 +397,15 @@ export async function coreCloudLogin(
 
 /**
  * `POST <基址>/api/identity/session/refresh`（刷新令牌当 Bearer，轮换）：直连与
- * 经中继同一条；经中继时带 `relayToken`。
+ * 经中继同一条；经中继时带 `relayToken`。core 在 Bearer 模式下同样校验会话的
+ * CSRF 密钥（契约 §17.4），有就带上；没有时对端会拒，调用方退回重新登录。
  */
 export function coreRefresh(
   base: string,
   refreshToken: string,
   relayToken: string | undefined,
   options: CloudOptions = {},
+  csrfToken?: string,
 ): Promise<z.infer<typeof coreRefreshSchema>> {
   return send(
     `${trimmed(base)}/api/identity/session/refresh`,
@@ -314,6 +415,9 @@ export function coreRefresh(
       headers: {
         ...bearer(refreshToken),
         ...(relayToken === undefined ? {} : relayHeaders(relayToken)),
+        ...(csrfToken === undefined || csrfToken === ""
+          ? {}
+          : { "X-Armadra-CSRF": csrfToken }),
       },
     },
     options,

@@ -1,5 +1,4 @@
 import {
-  IdentityRequestError,
   currentAccessToken,
   fetchWsTicket,
   hasPairingFragment,
@@ -8,17 +7,22 @@ import {
   resumeIdentity,
   setNativeConnection,
 } from "../api/identity";
-import { resetLocalRuntime } from "../api/local-runtime";
 import { RUNTIME_VIA_SERVER_SHELL } from "../api/request";
 import { savedRuntimeOrigin, setNativeRuntimeBase } from "../api/runtime-url";
 import { installLocalTransport, localSource } from "../api/source";
+import { isDesktop } from "../platform";
 import { isCompactLayout } from "../platform/layout";
-import { pickRoute } from "../sources/routing";
-import { RELAY_PROTOCOL, RELAY_TOKEN_HEADER } from "../sources/transport";
-import type { SourceAccess, SourceDescriptor } from "../sources/types";
+import { isNativeShell } from "../host/native-session";
+import {
+  detectRelayHost,
+  startHostedRelay,
+  underRelayAppPath,
+} from "../sources/hosted";
+import { enterRoute, ticketWithRefresh } from "../sources/route-entry";
+import type { SourceDescriptor } from "../sources/types";
 import type { ConnectFailure } from "./ConnectScreen";
 import { activeConnection, loadConnections } from "./connections";
-import { mobileCredentialProvider, originOf } from "./credentials";
+import { mobileCredentialProvider } from "./credentials";
 import { isNativeApp } from "./native-bridge";
 import {
   completeNativeOAuth,
@@ -26,9 +30,22 @@ import {
   oauthFragment,
 } from "./native-oauth";
 
-/** 入口画什么：画布本体、连接页，或者原生 OAuth 登录的第二步。 */
+/** 入口画什么：画布本体、连接页、中继托管页面的登录、分享链接的落地页，或者原生 OAuth 登录的第二步。 */
 export type Entry =
   | { readonly kind: "app" }
+  | {
+      /** 个人中转托管的这张页面（`/app/`）：中继账号登录、挑主机（`sources/hosted.ts`）。 */
+      readonly kind: "relay";
+      readonly issuer: string;
+    }
+  | {
+      /**
+       * 远程服务托管的页面打开在 `/j/<linkId>`（分享链接，客户端包 §6.1）：落地页，
+       * 加入后就地进画布（会话只在内存，不能重载）。
+       */
+      readonly kind: "join";
+      readonly linkId: string;
+    }
   | {
       /**
        * App 里没有会话时经原生 OAuth 登录、走到了第二因素（契约 §18.5 的
@@ -99,6 +116,19 @@ export function takeLinkFragment(): string | null {
   }
 }
 
+const JOIN_PATH = /^\/j\/([A-Za-z0-9_-]{8,128})\/?$/;
+
+/**
+ * 这一页是不是远程服务托管的分享链接落地页（`<issuer>/j/<linkId>`）：只在普通
+ * 浏览器里（桌面窗口与原生 App 的页面路径不会是它）。答链接标识或 `null`。
+ */
+export function joinPageLinkId(
+  location: Pick<Location, "pathname"> | undefined = globalThis.location,
+): string | null {
+  if (isNativeApp() || isDesktop()) return null;
+  return JOIN_PATH.exec(location?.pathname ?? "")?.[1] ?? null;
+}
+
 let refreshing: Promise<boolean> | null = null;
 
 /** 几条并发的 401 只轮转一次：刷新密钥是一次性的，第二次轮转一定失败。 */
@@ -112,25 +142,7 @@ function refreshOnce(): Promise<boolean> {
   return refreshing;
 }
 
-/**
- * 换一张 WS 票；访问密钥过期（401）时轮转一次再换。长连接在访问密钥到期时被
- * core 以 4401 关掉（契约 §17.4），重连要先换票——不刷新就一直换不到。
- */
-export async function ticketWithRefresh(
-  fetchTicket: () => Promise<string>,
-  refresh: () => Promise<boolean>,
-): Promise<string> {
-  try {
-    return await fetchTicket();
-  } catch (error) {
-    if (
-      !(error instanceof IdentityRequestError && error.status === 401) ||
-      !(await refresh())
-    )
-      throw error;
-    return fetchTicket();
-  }
-}
+export { ticketWithRefresh };
 
 /**
  * 原生 App 的本机源就是记下的那台 Gateway：凭据装在本机源上（`api/source.ts`），
@@ -187,22 +199,27 @@ function routeFailure(error: unknown): ConnectFailure {
   return "unreachable";
 }
 
-/** 访问令牌（与中继令牌）离到期不到这么久就先换，免得请求在路上过期。 */
-const RENEW_LEAD_MS = 60_000;
-const RENEW_RETRY_MS = 30_000;
-
 /**
  * 进一个连接：选路（直连优先，D27）→ 取访问（钥匙串里这个源的会话，必要时
- * 轮换或经远程服务重取断言）→ 把这一路的地址与凭据装给本机源。本机源就是
- * 「当前连接」：页面其余部分不知道自己在直连还是经中继。切换连接 = 记下选中
- * 的再重载。
+ * 轮换或经远程服务重取断言）→ 把这一路的地址与凭据装给本机源
+ * （`sources/route-entry.ts`，与中继托管的页面同一份）。本机源就是「当前连接」：
+ * 切换连接 = 记下选中的再重载。
  */
 async function enterConnection(descriptor: SourceDescriptor): Promise<Entry> {
-  const provider = mobileCredentialProvider();
   const connections = loadConnections();
-  let route: Awaited<ReturnType<typeof pickRoute>>;
   try {
-    route = await pickRoute(descriptor, provider);
+    await enterRoute({
+      descriptor,
+      provider: mobileCredentialProvider(),
+      useRoute(route) {
+        setNativeConnection(
+          descriptor.sourceId,
+          route.via === "relayed" ? "relayed" : "direct",
+        );
+        setNativeRuntimeBase(route.access.httpBase);
+      },
+      restore: restoreNativeCredentials,
+    });
   } catch (error) {
     return {
       kind: "connect",
@@ -213,71 +230,6 @@ async function enterConnection(descriptor: SourceDescriptor): Promise<Entry> {
       ...(descriptor.baseUrl === "" ? {} : { origin: descriptor.baseUrl }),
     };
   }
-  const relayed = route.via === "relayed";
-  const via = relayed ? "relayed" : "direct";
-  setNativeConnection(descriptor.sourceId, via);
-  setNativeRuntimeBase(route.access.httpBase);
-  resetLocalRuntime();
-
-  let access: SourceAccess = route.access;
-  let renewal: ReturnType<typeof setTimeout> | undefined;
-  const scheduleRenewal = () => {
-    clearTimeout(renewal);
-    if (access.expiresAtMs <= 0) return;
-    renewal = setTimeout(
-      () => void renewActive(),
-      Math.max(access.expiresAtMs - Date.now() - RENEW_LEAD_MS, RENEW_RETRY_MS),
-    );
-  };
-  let renewing: Promise<boolean> | null = null;
-  /** 几条并发的 401 只续一次：刷新密钥是一次性的。 */
-  const renewActive = (): Promise<boolean> => {
-    renewing ??= provider
-      .refresh(descriptor.sourceId, via)
-      .then(async (next) => {
-        access = next;
-        scheduleRenewal();
-        return restoreNativeCredentials();
-      })
-      .catch(() => {
-        scheduleRenewal();
-        return false;
-      })
-      .finally(() => {
-        renewing = null;
-      });
-    return renewing;
-  };
-  const stale = () =>
-    access.expiresAtMs > 0 &&
-    access.expiresAtMs - Date.now() < RENEW_LEAD_MS / 2;
-  installLocalTransport({
-    origin: originOf(access.httpBase),
-    authorization: currentAccessToken,
-    prepare: async () => {
-      if (stale()) await renewActive();
-    },
-    wsTicket: () => ticketWithRefresh(fetchWsTicket, renewActive),
-    refresh: renewActive,
-    ...(relayed
-      ? {
-          extraHeaders: (): Record<string, string> =>
-            access.relayToken === undefined
-              ? {}
-              : { [RELAY_TOKEN_HEADER]: access.relayToken },
-          extraProtocols: () =>
-            access.relayToken === undefined
-              ? []
-              : [`${RELAY_PROTOCOL}${access.relayToken}`],
-        }
-      : {}),
-  });
-  scheduleRenewal();
-  // 回到前台：后台里定时器可能被挂起，令牌已经过期了。
-  globalThis.document?.addEventListener?.("visibilitychange", () => {
-    if (globalThis.document.visibilityState === "visible" && stale())
-      void renewActive();
-  });
   if (await restoreNativeCredentials()) return { kind: "app" };
   return {
     kind: "connect",
@@ -293,6 +245,8 @@ async function enterConnection(descriptor: SourceDescriptor): Promise<Entry> {
  * 挂载之前决定入口（`main.tsx`）。桌面窗口与普通网页一个分支都不进，直接是
  * 画布——不发请求、不等任何东西。
  *
+ *  - **分享链接落地页**：远程服务托管的页面打开在 `/j/<linkId>` → 落地页。
+ *
  *  - **原生 App**：带着配对深链（`#link=`）→ 连接页，链接预填；否则先装 Bearer
  *    传输，没有记下的 Gateway、或钥匙串里没有它的会话 → 连接页。
  *  - **手机浏览器**：经 Gateway 打开、窄屏、地址栏带着 `#pair=` → 连接页。票
@@ -301,6 +255,8 @@ async function enterConnection(descriptor: SourceDescriptor): Promise<Entry> {
  *    由设置页「后台服务」那一页配对。
  */
 export async function prepareEntry(): Promise<Entry> {
+  const joinLinkId = joinPageLinkId();
+  if (joinLinkId !== null) return { kind: "join", linkId: joinLinkId };
   if (isNativeApp()) {
     const origin = savedRuntimeOrigin();
     const link = takeLinkFragment();
@@ -332,6 +288,18 @@ export async function prepareEntry(): Promise<Entry> {
     return (await restoreNativeCredentials())
       ? { kind: "app" }
       : { kind: "connect", mode: "native", origin };
+  }
+  // 个人中转托管的页面：背后没有本机 core，先登录中继、挑一台主机。只在
+  // `/app/` 路径下才问一次同源的平台信息，别的页面一个请求也不多发。
+  if (
+    !isNativeShell() &&
+    underRelayAppPath(globalThis.location?.pathname ?? "")
+  ) {
+    const host = await detectRelayHost();
+    if (host !== null) {
+      startHostedRelay(host);
+      return { kind: "relay", issuer: host.issuer };
+    }
   }
   if (!RUNTIME_VIA_SERVER_SHELL || !isCompactLayout()) return { kind: "app" };
   if (hasPairingFragment()) {

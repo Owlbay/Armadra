@@ -3,7 +3,7 @@
  * cloud-api §2、§4、§10）。外呼登记 `net/outbound.ts` 的 `cloudApi`。
  *
  * 只实现个人中转用到的那几条：`platform.info`、`auth.login`、`auth.refresh`、
- * `auth.logout`、`me.sources`、`sources.assertion`。SaaS 的设备码登录等能力就绪
+ * `auth.logout`、`me.sources`、`sources.assertion`、`links.accept`。SaaS 的设备码登录等能力就绪
  * 后再加；在那之前 `service.ts` 对 `saas` 答 `not_implemented`。
  *
  * 线上编码是普通 JSON（上游 OpenAPI 编码），错误是 `{ code, message, … }`。这里把
@@ -54,6 +54,16 @@ export interface SourceAssertion {
   readonly relayOrigin: string;
   readonly relayBaseUrl: string;
   readonly online: boolean;
+}
+
+/** `links.accept` 的答案：访客会话，加上指向那个源的断言与中继令牌。 */
+export interface AcceptedLink {
+  readonly sourceId: string;
+  readonly relayOrigin: string;
+  readonly relayBaseUrl: string;
+  readonly assertion: string;
+  readonly relayToken: string;
+  readonly guest: CloudSession;
 }
 
 /** 远程服务的一个地址：issuer 来源加它的 CA 指纹（空 = 系统信任）。 */
@@ -132,6 +142,15 @@ function rejected(status: number, body: unknown, during: string): never {
       break;
     case "not_implemented":
       throw fail("not_implemented", "远程服务没有这项能力");
+    // 分享链接（cloud-api §5）：码原样透传，页面按码取文案。
+    case "link_invalid":
+      throw fail("link_invalid", "分享链接不存在或已停用");
+    case "link_expired":
+      throw fail("link_expired", "分享链接已过期");
+    case "link_exhausted":
+      throw fail("link_exhausted", "分享链接的使用次数已用完");
+    case "link_secret_invalid":
+      throw fail("link_secret_invalid", "分享链接不完整");
     default:
       break;
   }
@@ -293,6 +312,44 @@ export class RemoteClient {
       relayOrigin: str(body.relayOrigin),
       relayBaseUrl: relayBaseUrl.replace(/\/+$/, ""),
       online: body.online !== false,
+    };
+  }
+
+  /**
+   * `POST /v1/links/{linkId}/accept`（匿名）：分享链接的秘密换访客会话、断言与
+   * 中继令牌（cloud-api §5、§10）。秘密只在请求体里，不进日志。
+   */
+  async acceptLink(
+    endpoint: RemoteEndpoint,
+    linkId: string,
+    secret: string,
+  ): Promise<AcceptedLink> {
+    const body = record(
+      await this.call(
+        endpoint,
+        "POST",
+        `/v1/links/${encodeURIComponent(linkId)}/accept`,
+        "接受分享链接",
+        { secret, device: this.device },
+      ),
+    );
+    const sourceId = str(body.sourceId);
+    const relayBaseUrl = str(body.relayBaseUrl);
+    if (
+      !/^[0-9a-f]{32}$/.test(sourceId) ||
+      relayBaseUrl === "" ||
+      str(body.assertion) === "" ||
+      str(body.relayToken) === ""
+    ) {
+      throw fail("source_unreachable", "远程服务接受链接的答案不完整");
+    }
+    return {
+      sourceId,
+      relayOrigin: str(body.relayOrigin),
+      relayBaseUrl: relayBaseUrl.replace(/\/+$/, ""),
+      assertion: str(body.assertion),
+      relayToken: str(body.relayToken),
+      guest: sessionOf({ session: body.guestSession }),
     };
   }
 }
