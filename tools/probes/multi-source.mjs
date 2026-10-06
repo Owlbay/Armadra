@@ -269,35 +269,18 @@ try {
 
   /* ------------------------- 2. 侧栏：本机在树里，其余各一组 ------------------------- */
   await waitGroupReady(relayedId, natSeed.workspace.id, "经中继组就绪");
-  // 直连源：桌面 core 对 armadra-server 配对后换票要刷新令牌，而 `SourceClient.refresh`
-  // 不带会话的 CSRF 密钥、对端（`identity/service.ts::refresh` 在 Bearer 模式下同样验 CSRF，
-  // 契约 §17.4）答 401，源落到「需要登录」。这是 A1-1 的缺陷，不在本探针里修：
-  // 记成已知问题并继续其余检查；修好之后这一段自动按完整路径走。
-  const directReady = await waitGroupReady(
+  // 直连源：桌面 core 对 armadra-server 配对后换票要刷新令牌（Bearer 模式，契约
+  // §17.4 不核 CSRF）。刷新被拒时源落到「需要登录」，直接算失败。
+  await waitGroupReady(
     directId,
     directSeed.workspace.id,
     "直连组就绪",
-    20_000,
-  ).then(
-    () => true,
-    () => false,
-  );
-  if (!directReady) {
-    const state = await groupState(directId);
-    if (state?.state !== "unauthorized" || process.env.ARMADRA_PROBE_STRICT)
-      throw new Error(`直连组没有就绪：${JSON.stringify(state)}`);
-    report.knownIssues = [
-      {
-        id: "direct-refresh-csrf",
-        where: "apps/desktop/src/core/sources/source-client.ts refresh",
-        what: "直连源换票时刷新令牌没带 X-Armadra-CSRF，对端答 401，源状态 unauthorized、凭据被清",
-      },
-    ];
-    console.log(
-      `  KNOWN 直连源停在「需要登录」：${report.knownIssues[0].what}`,
+    30_000,
+  ).catch(async (error) => {
+    throw new Error(
+      `直连组没有就绪：${JSON.stringify(await groupState(directId))}（${error.message}）`,
     );
-    await win.capture(join(output, "02-direct-unauthorized.png"));
-  }
+  });
   const present = (await groupsNow()).sort();
   run.check(
     JSON.stringify(present) === JSON.stringify([directId, relayedId].sort()),
@@ -308,12 +291,10 @@ try {
   await noteGroups();
 
   /* -------------------- 3. 每个源各开一个终端并回显 -------------------- */
-  if (directReady) {
-    await openFromGroup(directId, directSeed.workspace.id, "直连组的工作空间");
-    await terminalInPage(win, directSeed.nodes[0].id, "direct");
-    run.ok("直连源：开终端并回显（42direct）");
-    await win.capture(join(output, "03-direct-terminal.png"));
-  }
+  await openFromGroup(directId, directSeed.workspace.id, "直连组的工作空间");
+  await terminalInPage(win, directSeed.nodes[0].id, "direct");
+  run.ok("直连源：开终端并回显（42direct）");
+  await win.capture(join(output, "03-direct-terminal.png"));
 
   await openFromGroup(relayedId, natSeed.workspace.id, "经中继组的工作空间");
   await terminalInPage(win, natSeed.nodes[0].id, "relayed");
@@ -357,14 +338,12 @@ try {
   report.timings["4-offline-detect"] = Date.now() - offlineAt;
   run.ok("经中继的源下线：那一组灰显", gone);
   await win.capture(join(output, "04-relayed-offline.png"));
-  if (directReady) {
-    const directDuring = await groupState(directId);
-    run.check(
-      directDuring?.state === "ready" && !directDuring.dimmed,
-      "直连组不受影响，仍是就绪",
-      directDuring,
-    );
-  }
+  const directDuring = await groupState(directId);
+  run.check(
+    directDuring?.state === "ready" && !directDuring.dimmed,
+    "直连组不受影响，仍是就绪",
+    directDuring,
+  );
   await terminalInPage(win, localSeed.nodes[0].id, "local2");
   run.ok("本机终端仍可输入并回显（42local2）");
 
