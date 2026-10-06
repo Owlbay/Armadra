@@ -685,7 +685,7 @@ export function TemplateEditor({
     >
       <ResponsiveDialogContent
         data-slot="workflow-editor"
-        className="flex h-[min(680px,calc(100dvh-48px))] flex-col gap-3 sm:max-w-[920px]"
+        className="flex h-[min(680px,calc(100dvh-48px-var(--safe-top)-var(--safe-bottom)))] flex-col gap-3 sm:max-w-[920px]"
       >
         <ResponsiveDialogHeader>
           <ResponsiveDialogTitle>{title}</ResponsiveDialogTitle>

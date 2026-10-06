@@ -240,6 +240,24 @@
   --dock-h: 44px;
   /* 手机底部导航（`shell/MobileBottomNav`）的高度，不含安全区。 */
   --mobile-nav-h: 56px;
+  /*
+   * 安全区（设计系统 §3.1）：状态栏、刘海 / 灵动岛、主页横条、iPad 窗口化时的
+   * 窗口控件与缩放手柄占掉的那几条边。页面经 `viewport-fit=cover` 铺到屏幕边缘
+   * （手机壳 `contentInset: "never"`），贴边的浮层一律用这四个变量让开；桌面壳与
+   * 普通浏览器里 `env()` 是 0，布局与之前逐像素一致。横竖屏、分屏、台前调度改了
+   * 窗口形状时 `env()` 跟着变，不用页面自己算。
+   */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  /*
+   * iPadOS 窗口化时左上角的窗口控件（● ● ●）：不在安全区里，由手机壳原生层量好写到
+   * 根元素的内联样式上（`ArmadraBridgeViewController`）。标题栏左边的钮按它往右让，
+   * 与桌面壳给 macOS 红绿灯留的占位同一个用法。别处一律是 0。
+   */
+  --window-controls-left: 0px;
+  --window-controls-top: 0px;
   --drawer-w: 360px;
   --scm-w: 460px;
   /* Git 工具窗口停在底部（Git 工具窗口设计 §2.1）；拖过之后走偏好里的 px。 */

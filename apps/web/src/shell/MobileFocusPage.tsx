@@ -69,13 +69,16 @@ export function MobileFocusPage() {
       data-slot="mobile-focus"
       className={cn(
         "fixed inset-0 z-[var(--z-focus-page)] flex flex-col bg-background",
+        // 整页盖住状态栏一带：顶栏与节点体让开状态栏和左右刘海（`--safe-*`）。
+        "pt-[var(--safe-top)] pr-[var(--safe-right)] pl-[var(--safe-left)]",
         // 软键盘弹起时可视高度会缩，dvh 跟着变，工具条不会被顶出屏幕。
         "h-[100dvh]",
       )}
       // iOS 的软键盘不缩视口：键盘弹起时按可视视口摆，输入框坐在键盘上沿。
       style={visible ? { height: visible.height, top: visible.top } : undefined}
     >
-      <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-2">
+      {/* 「返回」在左上角：iPadOS 窗口化时让开窗口控件。 */}
+      <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border pr-2 pl-[calc(0.5rem+var(--window-controls-left))]">
         <Button
           type="button"
           size="sm"
@@ -123,7 +126,7 @@ export function MobileFocusPage() {
           "[&_.node-frame]:rounded-none [&_.node-frame]:border-0",
           // 会话视图的输入框在手机上 16px，否则 iOS 聚焦时放大整页（设计系统 §2.3）。
           "[&_[data-slot=acp-session-view]_textarea]:text-[length:var(--text-input-touch)]",
-          "[&_[data-slot=acp-session-view]]:pb-[env(safe-area-inset-bottom)]",
+          "[&_[data-slot=acp-session-view]]:pb-[var(--safe-bottom)]",
         )}
         data-node-type={node.type}
         data-min-width={meta.minSize.width}
@@ -157,7 +160,7 @@ export function TerminalKeyBar({ nodeId }: { nodeId: string }) {
       aria-label={t("mobile.keys.label")}
       role="toolbar"
       data-slot="mobile-key-bar"
-      className="shrink-0 border-t border-border bg-[var(--panel)] pb-[env(safe-area-inset-bottom)]"
+      className="shrink-0 border-t border-border bg-[var(--panel)] pb-[var(--safe-bottom)]"
     >
       {controls && (
         <div className="flex gap-1 overflow-x-auto px-2 pt-2">
