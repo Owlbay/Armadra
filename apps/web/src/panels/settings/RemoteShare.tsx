@@ -4,11 +4,13 @@ import {
   ChevronDown,
   Copy,
   Link2Off,
+  Pencil,
   QrCode,
   RefreshCw,
   Share,
 } from "lucide-react";
 import { toast } from "sonner";
+import { create } from "zustand";
 
 import { SHARE_ROLES, type ShareRole } from "../../api/accounts";
 import {
@@ -17,12 +19,17 @@ import {
   type ShareLink,
   createShareLink,
   listShareLinks,
+  renameShareLink,
   revokeShareLink,
   shareLinkUrl,
   shareStatus,
   shareThisMachine,
+  shareViaShell,
+  shellCanShare,
   stopSharing,
 } from "../../api/remote-services";
+import { onWorkspaceConnection, onWorkspaceEvent } from "../../api/events";
+import { localSource } from "../../api/source";
 import { localizedFailure } from "../../api/request";
 import {
   type Translate,
@@ -129,10 +136,14 @@ export function announceStopped(t: Translate, pending: string | null): void {
   });
 }
 
-/** 桌面壳或浏览器有系统分享就用（Web Share），没有就不出这个按钮。 */
+/**
+ * 有系统分享就出这个按钮：桌面壳的分享菜单（`app:share`），或浏览器的 Web
+ * Share；都没有就只留复制。
+ */
 function canShareNatively(): boolean {
   return (
-    typeof navigator !== "undefined" && typeof navigator.share === "function"
+    shellCanShare() ||
+    (typeof navigator !== "undefined" && typeof navigator.share === "function")
   );
 }
 
@@ -145,12 +156,58 @@ async function copyText(t: Translate, text: string): Promise<void> {
   }
 }
 
-async function shareNatively(title: string, url: string): Promise<void> {
-  try {
-    await navigator.share({ title, url });
-  } catch {
-    // 取消或系统拒绝：不打扰。
+/** 先交给桌面壳的分享菜单，壳不接就退回复制；浏览器用 Web Share。 */
+export async function shareNatively(
+  t: Translate,
+  title: string,
+  url: string,
+): Promise<void> {
+  if (shellCanShare()) {
+    if (!(await shareViaShell(title, url))) await copyText(t, url);
+    return;
   }
+  if (
+    typeof navigator !== "undefined" &&
+    typeof navigator.share === "function"
+  ) {
+    try {
+      await navigator.share({ title, url });
+    } catch {
+      // 取消或系统拒绝：不打扰。
+    }
+    return;
+  }
+  await copyText(t, url);
+}
+
+/**
+ * 隧道状态跟着 core 的 `cloud.tunnel` 事件走（契约 §32），不轮询：本机的事件
+ * 一到就重读 `identity.cloud.status`；事件流（重新）连上时也重读一次，补上断开
+ * 期间错过的变化（这个事件不进 outbox）。
+ */
+export function useTunnelEvents(): void {
+  const client = useQueryClient();
+  React.useEffect(() => {
+    const local = localSource.sourceId;
+    const refresh = () =>
+      void client.invalidateQueries({ queryKey: SHARE_STATUS_KEY });
+    const offEvent = onWorkspaceEvent(
+      "cloud.tunnel",
+      (_event, sourceId) => {
+        if (sourceId === local) refresh();
+      },
+      { allSources: true },
+    );
+    const offConnection = onWorkspaceConnection(
+      (_workspaceId, connected, sourceId) => {
+        if (connected && sourceId === local) refresh();
+      },
+    );
+    return () => {
+      offEvent();
+      offConnection();
+    };
+  }, [client]);
 }
 
 /**
@@ -171,9 +228,8 @@ export function RemoteShareSection({
     queryKey: SHARE_STATUS_KEY,
     queryFn: shareStatus,
     retry: false,
-    // 隧道状态跟着 core 变；展开着时跟上它。
-    refetchInterval: 5_000,
   });
+  useTunnelEvents();
   const registration = status.data?.registrations.find(
     (one) => one.issuer === remote.issuer,
   );
@@ -275,6 +331,26 @@ interface Showing {
   readonly url?: string;
 }
 
+/**
+ * 正在看的那条链接（二维码框），按远程服务记在组件外：窄屏 / 宽屏切换时设置框
+ * 整个重新挂载，刚建好的链接不能跟着组件状态一起丢。只在内存里，关了就清。
+ */
+interface ShowingState {
+  readonly byService: Readonly<Record<string, Showing>>;
+  show(serviceId: string, showing: Showing | null): void;
+}
+
+export const useShowingStore = create<ShowingState>()((set) => ({
+  byService: {},
+  show: (serviceId, showing) =>
+    set((state) => {
+      const byService = { ...state.byService };
+      if (showing === null) delete byService[serviceId];
+      else byService[serviceId] = showing;
+      return { byService };
+    }),
+}));
+
 function ShareLinks({ remote }: { remote: RemoteService }) {
   const t = useT();
   const client = useQueryClient();
@@ -286,10 +362,19 @@ function ShareLinks({ remote }: { remote: RemoteService }) {
     retry: false,
   });
   const [creating, setCreating] = React.useState(false);
-  const [showing, setShowing] = React.useState<Showing | null>(null);
+  const showing = useShowingStore(
+    (state) => state.byService[remote.serviceId] ?? null,
+  );
+  const show = useShowingStore((state) => state.show);
+  const setShowing = (next: Showing | null) => show(remote.serviceId, next);
   const [revoking, setRevoking] = React.useState<{
     linkId: string;
     name: string;
+  } | null>(null);
+  const [renaming, setRenaming] = React.useState<{
+    linkId: string;
+    label: string;
+    placeholder: string;
   } | null>(null);
 
   const names = new Map(
@@ -315,9 +400,20 @@ function ShareLinks({ remote }: { remote: RemoteService }) {
   const send = useMutation({
     mutationFn: async (input: { linkId: string; name: string }) =>
       shareNatively(
+        t,
         input.name,
         await shareLinkUrl(remote.serviceId, input.linkId),
       ),
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const rename = useMutation({
+    mutationFn: (input: { linkId: string; label: string }) =>
+      renameShareLink(remote.serviceId, input.linkId, input.label),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: key });
+      setRenaming(null);
+      toast.success(t("remote.link.renamed"));
+    },
     onError: (error: Error) => toast.error(error.message),
   });
 
@@ -399,6 +495,19 @@ function ShareLinks({ remote }: { remote: RemoteService }) {
                 )}
                 <IconButton
                   size="cluster"
+                  label={t("remote.link.rename")}
+                  onClick={() =>
+                    setRenaming({
+                      linkId: link.linkId,
+                      label: link.label,
+                      placeholder: names.get(link.workspaceId) ?? "",
+                    })
+                  }
+                >
+                  <Pencil />
+                </IconButton>
+                <IconButton
+                  size="cluster"
                   label={t("remote.link.revoke")}
                   disabled={revoke.isPending}
                   onClick={() => setRevoking({ linkId: link.linkId, name })}
@@ -426,6 +535,14 @@ function ShareLinks({ remote }: { remote: RemoteService }) {
         serviceId={remote.serviceId}
         showing={showing}
         onClose={() => setShowing(null)}
+      />
+      <RenameLinkDialog
+        renaming={renaming}
+        pending={rename.isPending}
+        onClose={() => setRenaming(null)}
+        onSave={(label) => {
+          if (renaming) rename.mutate({ linkId: renaming.linkId, label });
+        }}
       />
       <ResponsiveAlertDialog
         open={revoking !== null}
@@ -801,7 +918,9 @@ function LinkQrDialog({
                 <IconButton
                   size="cluster"
                   label={t("remote.link.share")}
-                  onClick={() => void shareNatively(showing?.name ?? "", url)}
+                  onClick={() =>
+                    void shareNatively(t, showing?.name ?? "", url)
+                  }
                 >
                   <Share />
                 </IconButton>
@@ -809,6 +928,76 @@ function LinkQrDialog({
             </div>
           </div>
         )}
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
+  );
+}
+
+/** 改一条链接的备注：空着就清掉（列表回落到工作空间名）。 */
+function RenameLinkDialog({
+  renaming,
+  pending,
+  onClose,
+  onSave,
+}: {
+  renaming: { linkId: string; label: string; placeholder: string } | null;
+  pending: boolean;
+  onClose(): void;
+  onSave(label: string): void;
+}) {
+  const t = useT();
+  const [label, setLabel] = React.useState("");
+  const linkId = renaming?.linkId;
+  const initial = renaming?.label ?? "";
+  React.useEffect(() => {
+    if (linkId !== undefined) setLabel(initial);
+  }, [linkId, initial]);
+  return (
+    <ResponsiveDialog
+      open={renaming !== null}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[420px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {t("remote.link.rename")}
+          </ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
+        <form
+          id="share-link-rename-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!pending) onSave(label);
+          }}
+        >
+          <Field className="gap-1.5">
+            <FieldLabel htmlFor="share-link-rename">
+              {t("remote.link.note")}
+            </FieldLabel>
+            <Input
+              id="share-link-rename"
+              value={label}
+              maxLength={128}
+              placeholder={renaming?.placeholder ?? ""}
+              onChange={(event) => setLabel(event.target.value)}
+            />
+          </Field>
+        </form>
+        <ResponsiveDialogFooter>
+          <Button type="button" variant="outline" onClick={onClose}>
+            {t("remote.cancel")}
+          </Button>
+          <Button
+            type="submit"
+            form="share-link-rename-form"
+            disabled={pending || label.trim() === initial.trim()}
+          >
+            {pending && <Spinner data-icon="inline-start" aria-hidden />}
+            {t("remote.link.save")}
+          </Button>
+        </ResponsiveDialogFooter>
       </ResponsiveDialogContent>
     </ResponsiveDialog>
   );

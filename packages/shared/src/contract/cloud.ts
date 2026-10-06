@@ -48,11 +48,12 @@ const section = (
   scope: "settings:read" | "settings:write" | "identity:read" | null,
   method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
-  contract: "§31.1" | "§31.4" = "§31.1",
+  contract: "§31.1" | "§31.4" | "§31.5" = "§31.1",
+  since = "1.3",
 ) =>
   meta({
     scope,
-    since: "1.3",
+    since,
     contract,
     legacy: { method, path },
   });
@@ -171,6 +172,23 @@ export const cloud = {
         "POST",
         "/api/identity/cloud/relay-cleanup",
         "§31.4",
+      ),
+    ),
+  /**
+   * 放弃一条待清理（§31.5 追加）：只删本机的登记，中继侧那条源记录留给远程服务
+   * 自己处理。不欠的答 `not_found`。
+   */
+  relayDismiss: oc
+    .input(cloudRevokeInputSchema)
+    .output(z.object({}))
+    .errors({ ...denied, ...errors.pick("not_found") })
+    .meta(
+      section(
+        "settings:write",
+        "POST",
+        "/api/identity/cloud/relay-dismiss",
+        "§31.5",
+        "1.17",
       ),
     ),
 };

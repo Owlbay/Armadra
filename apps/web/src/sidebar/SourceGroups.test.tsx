@@ -16,6 +16,13 @@ vi.mock("../app/workspace-actions", () => ({ useOpenWorkspace: () => open }));
 vi.mock("../app/workspaces-query", () => ({
   useWorkspaces: () => ({ data: listed.data }),
 }));
+const desktop = vi.hoisted(() => ({ on: false }));
+vi.mock("../platform", async (original) => ({
+  ...(await original<typeof import("../platform")>()),
+  isDesktop: () => desktop.on,
+}));
+const reorder = vi.hoisted(() => vi.fn(async (_ids: readonly string[]) => {}));
+vi.mock("../api/remote-services", () => ({ reorderSources: reorder }));
 
 import { usePreferencesStore } from "../app/preferences-store";
 import {
@@ -26,7 +33,7 @@ import type { SourceConnection } from "../sources/connection";
 import { SourcesProvider } from "../sources/context";
 import { createSourceRegistry, type SourceRegistry } from "../sources/registry";
 import type { SourceDescriptor, SourceStatus } from "../sources/types";
-import { SourceGroups } from "./SourceGroups";
+import { SourceGroups, applyOrder } from "./SourceGroups";
 
 /**
  * 侧栏按源分组：只有本机什么也不画；别的源各一组（状态点、离线灰显），就绪
@@ -99,13 +106,22 @@ afterEach(() => {
   cleanup();
   registry.dispose();
   open.mockReset();
+  reorder.mockClear();
+  desktop.on = false;
 });
 
 function mount(children: ReactNode) {
   return render(
-    <SourcesProvider registry={registry}>{children}</SourcesProvider>,
+    <QueryClientProvider client={new QueryClient()}>
+      <SourcesProvider registry={registry}>{children}</SourcesProvider>
+    </QueryClientProvider>,
   );
 }
+
+const order = () =>
+  [...document.querySelectorAll("[data-source-group]")].map((one) =>
+    one.getAttribute("data-source-group"),
+  );
 
 describe("侧栏按源分组", () => {
   it("只有本机：什么也不画", () => {
@@ -155,6 +171,83 @@ describe("侧栏按源分组", () => {
     // 切过去之后，本机成为一组。
     expect(await screen.findByText("Local")).toBeTruthy();
     expect(screen.getByRole("region", { name: "This machine" })).toBeTruthy();
+  });
+});
+
+describe("拖动排序", () => {
+  it("applyOrder：认得的按拖出的顺序，其余按原顺序跟在后面", async () => {
+    await act(async () => {
+      await registry.hydrate(async () => [
+        descriptor("a", 1),
+        descriptor("b", 2),
+        descriptor("c", 3),
+      ]);
+    });
+    const remotes = registry
+      .list()
+      .filter((one) => one.descriptor.kind !== "local");
+    const ids = (list: readonly SourceConnection[]) =>
+      list.map((one) => one.descriptor.sourceId);
+    expect(ids(applyOrder(remotes, null))).toEqual(["a", "b", "c"]);
+    expect(ids(applyOrder(remotes, ["c", "a"]))).toEqual(["c", "a", "b"]);
+    expect(ids(applyOrder(remotes, ["gone", "b"]))).toEqual(["b", "a", "c"]);
+  });
+
+  it("浏览器页面（源表不在本机 core）：组头不可拖", async () => {
+    await act(async () => {
+      await registry.hydrate(async () => [
+        descriptor("a", 1),
+        descriptor("b", 2),
+      ]);
+    });
+    mount(<SourceGroups />);
+    expect(
+      screen.queryByRole("button", { name: /Drag to reorder/ }),
+    ).toBeNull();
+  });
+
+  it("桌面壳：组头用键盘拖到下一位，侧栏先按新顺序画，按位置写回 orderIndex", async () => {
+    desktop.on = true;
+    await act(async () => {
+      await registry.hydrate(async () => [
+        descriptor("a", 1),
+        descriptor("b", 2),
+      ]);
+    });
+    mount(<SourceGroups />);
+    expect(order()).toEqual(["a", "b"]);
+    const handle = screen.getByRole("button", {
+      name: "Drag to reorder a-label",
+    });
+    // jsdom 没有布局：给两组各一个不重叠的位置，键盘传感器才找得到下一位。
+    for (const [index, group] of document
+      .querySelectorAll<HTMLElement>("[data-source-group]")
+      .entries()) {
+      group.getBoundingClientRect = () =>
+        ({
+          x: 0,
+          y: index * 40,
+          top: index * 40,
+          left: 0,
+          bottom: index * 40 + 28,
+          right: 200,
+          width: 200,
+          height: 28,
+          toJSON: () => ({}),
+        }) as DOMRect;
+    }
+    handle.focus();
+    await act(async () => {
+      fireEvent.keyDown(handle, { key: " ", code: "Space" });
+    });
+    await act(async () => {
+      fireEvent.keyDown(handle, { key: "ArrowDown", code: "ArrowDown" });
+    });
+    await act(async () => {
+      fireEvent.keyDown(handle, { key: " ", code: "Space" });
+    });
+    expect(order()).toEqual(["b", "a"]);
+    expect(reorder).toHaveBeenCalledWith(["b", "a"]);
   });
 });
 

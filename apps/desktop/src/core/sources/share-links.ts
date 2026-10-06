@@ -1,5 +1,5 @@
 /**
- * 分享链接的管理（契约 §33.9）：本机经一个个人中转发出的 `source_invite` 链接。
+ * 分享链接的管理（契约 §33.9，改备注 §33.10）：本机经一个个人中转发出的 `source_invite` 链接。
  *
  * 一条链接是两样东西拼起来的：远程服务那一侧的链接记录（`links.create`，答一次
  * 性的 `secret`），和本机这一侧的一张多次可用的邀请（`accounts.invitations`）。
@@ -54,6 +54,11 @@ export interface ShareLinksOptions {
   }>;
   /** 这一行远程服务在不在（不联网）。 */
   readonly issuerOf: (serviceId: string) => string;
+  /** 远程服务报的能力；`refresh` 时重问 `platform.info`。缺省当作都有。 */
+  readonly capabilities?: (
+    serviceId: string,
+    options?: { refresh?: boolean },
+  ) => Promise<readonly string[]>;
   readonly registrations: () => ShareRegistrations | undefined;
   readonly invitations: () => ShareInvitations | undefined;
   readonly log: {
@@ -173,25 +178,46 @@ export class ShareLinks {
       });
     }
     const links = rows
-      .map((row): ShareLink => {
-        const state = states.get(row.linkId) ?? "active";
-        const entry = state === "active" ? saved[row.linkId] : undefined;
-        return {
-          linkId: row.linkId,
-          label: row.label,
-          role: row.role,
-          workspaceId: saved[row.linkId]?.workspaceId ?? "",
-          createdAtMs: row.createdAtMs,
-          expiresAtMs: row.expiresAtMs,
-          uses: row.uses,
-          maxUses: row.maxUses,
-          revokedAtMs: row.revokedAtMs,
-          state,
-          copyable: entry !== undefined,
-        };
-      })
+      .map((row) => shareLinkOf(row, states.get(row.linkId) ?? "active", saved))
       .sort((a, b) => b.createdAtMs - a.createdAtMs);
     return { links };
+  }
+
+  /**
+   * 改备注（契约 §33.10）：远程服务 `links.update`。它记着的能力里没有
+   * `links.update` 时先重问一次（可能升过级），还没有答 `not_implemented`。
+   */
+  async updateLabel(input: {
+    serviceId: string;
+    linkId: string;
+    label: string;
+  }): Promise<{ link: ShareLink }> {
+    this.options.issuerOf(input.serviceId);
+    const capable = this.options.capabilities;
+    if (capable !== undefined) {
+      const has = async (refresh: boolean) =>
+        (await capable(input.serviceId, { refresh })).includes("links.update");
+      if (!(await has(false)) && !(await has(true))) {
+        throw fail("not_implemented", "远程服务不支持改链接备注");
+      }
+    }
+    const { endpoint, accessToken } = await this.options.access(
+      input.serviceId,
+    );
+    const row = await this.options.remote.updateLink(
+      endpoint,
+      accessToken,
+      input.linkId,
+      input.label.trim().slice(0, 128),
+    );
+    const saved = await this.options.secrets.shareLinks(input.serviceId);
+    this.options.log.info("renamed a share link", {
+      serviceId: input.serviceId,
+      linkId: input.linkId,
+    });
+    return {
+      link: shareLinkOf(row, shareLinkState(row, this.now()), saved),
+    };
   }
 
   async create(input: {
@@ -320,6 +346,28 @@ export class ShareLinks {
     this.options.log.info("revoked a share link", { serviceId, linkId });
     return {};
   }
+}
+
+/** 远程服务的一行 + 本机存着的那份 → 契约的链接摘要。 */
+function shareLinkOf(
+  row: LinkSummary,
+  state: ShareLinkState,
+  saved: Readonly<Record<string, SavedShareLink>>,
+): ShareLink {
+  const entry = state === "active" ? saved[row.linkId] : undefined;
+  return {
+    linkId: row.linkId,
+    label: row.label,
+    role: row.role,
+    workspaceId: saved[row.linkId]?.workspaceId ?? "",
+    createdAtMs: row.createdAtMs,
+    expiresAtMs: row.expiresAtMs,
+    uses: row.uses,
+    maxUses: row.maxUses,
+    revokedAtMs: row.revokedAtMs,
+    state,
+    copyable: entry !== undefined,
+  };
 }
 
 function sameOrigin(url: string, issuer: string): boolean {

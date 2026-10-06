@@ -71,6 +71,8 @@ describe("the IPC table", () => {
         "app:sources-changed",
         // A4-3p: the page takes the share deep link the shell received.
         "app:take-join-link",
+        // P4: the page hands a share link to the system share menu.
+        "app:share",
         // G5-19: the page's own JS errors, opt-in (contract §30).
         "diagnostics:report",
       ].sort(),

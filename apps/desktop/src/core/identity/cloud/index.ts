@@ -148,6 +148,7 @@ export function installCloud(
       trustedOrigins: (input) => ready.trustedOrigins(input),
       relayPending: () => ready.relayPending(),
       relayCleanup: (input) => ready.relayCleanup(input),
+      relayDismiss: (input) => ready.relayDismiss(input, principalId()),
     },
   } satisfies {
     cloud: Omit<DomainHandlers<"identity">["cloud"], "login">;

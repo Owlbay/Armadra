@@ -88,6 +88,7 @@ import {
 import { secretChannel } from "./secrets";
 import { pickDirectory } from "./dialogs";
 import { openExternal, showItemInFolder } from "./external";
+import { shareUrl } from "./share";
 import {
   installApplicationMenu,
   installKeydownIntercept,
@@ -205,6 +206,8 @@ function registerIpc(): void {
     [IPC.sourcesChanged.channel]: () =>
       coreFetch === null ? { reload: false } : refreshRemoteTrust(coreFetch),
     [IPC.sourcesTakeJoinLink.channel]: () => joinLinks.take(),
+    // 分享链接交给系统分享菜单；没有菜单的平台答 false，页面退回复制。
+    [IPC.appShare.channel]: (request) => shareUrl(request, getMainWindow()),
     // The page answering a claimed chord. `menu.ts` owns the arbitration,
     // because it is the module that claimed the chord in the first place.
     [IPC.windowKeyIntentResult.channel]: (result) => {

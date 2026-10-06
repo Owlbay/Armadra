@@ -33,6 +33,8 @@ const api = vi.hoisted(() => ({
   shareLinkUrl: vi.fn(),
   relayPending: vi.fn(),
   retryRelayCleanup: vi.fn(),
+  dismissRelayCleanup: vi.fn(),
+  renameShareLink: vi.fn(),
 }));
 const boot = vi.hoisted(() => ({
   applySourceTable: vi.fn(async () => undefined),
@@ -55,6 +57,9 @@ vi.mock("sonner", () => ({ toast: toasts }));
 
 import { RemoteServicesPage } from "./RemoteServicesPage";
 import { offerJoinLink } from "../../../sources/join-intent";
+import { useShowingStore } from "../RemoteShare";
+import { dispatchWorkspaceEvent } from "../../../api/events";
+import { localSource } from "../../../api/source";
 
 const FP = "ab".repeat(32);
 const ISSUER = "https://relay.test:8102";
@@ -96,6 +101,8 @@ afterEach(() => {
   for (const spy of [...Object.values(api), ...Object.values(toasts)])
     spy.mockReset();
   boot.reloadIntoSettings.mockReset();
+  useShowingStore.setState({ byService: {} });
+  delete (window as { armadra?: unknown }).armadra;
 });
 
 function mount() {
@@ -635,6 +642,168 @@ describe("中继侧待清理（契约 §31.4）", () => {
       expect(toasts.error).toHaveBeenCalledWith(
         "Sign in to this remote service, then retry",
       ),
+    );
+  });
+});
+
+describe("分享收尾（P4）", () => {
+  const tunnel = (state: string) => ({
+    sourceId: local.sourceId,
+    registrations: [
+      {
+        issuer: ISSUER,
+        mode: "personal",
+        tunnel: { state, node: null, since: null, streams: 0, lastError: null },
+      },
+    ],
+  });
+  const link = {
+    linkId: "L",
+    label: "",
+    role: "viewer",
+    workspaceId: "w1",
+    createdAtMs: Date.parse("2026-10-06T00:00:00Z"),
+    expiresAtMs: Date.parse("2026-10-13T00:00:00Z"),
+    uses: 0,
+    maxUses: 1000,
+    revokedAtMs: null,
+    state: "active",
+    copyable: true,
+  };
+  const url = `${ISSUER}/j/L#S.inv.tok`;
+
+  function sharing() {
+    api.listSources.mockResolvedValue({
+      sources: [local],
+      remotes: [{ ...relay, registered: true }],
+    });
+  }
+
+  it("隧道状态跟着本机的 cloud.tunnel 事件重读，不轮询；别的源的事件不管", async () => {
+    sharing();
+    api.shareStatus.mockResolvedValue(tunnel("connecting"));
+    api.listShareLinks.mockResolvedValue([]);
+    mount();
+    expect(await screen.findByText("Connecting")).toBeTruthy();
+    const reads = api.shareStatus.mock.calls.length;
+    api.shareStatus.mockResolvedValue(tunnel("ready"));
+    dispatchWorkspaceEvent(
+      { type: "cloud.tunnel", issuer: ISSUER, state: "ready" },
+      "someone-else",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(api.shareStatus.mock.calls.length).toBe(reads);
+    dispatchWorkspaceEvent(
+      { type: "cloud.tunnel", issuer: ISSUER, state: "ready" },
+      localSource.sourceId,
+    );
+    expect(await screen.findByText("Online")).toBeTruthy();
+    expect(api.shareStatus.mock.calls.length).toBe(reads + 1);
+  });
+
+  it("刚建好的链接：设置框重新挂载（窄屏 / 宽屏切换）后二维码与整条链接还在", async () => {
+    sharing();
+    api.shareStatus.mockResolvedValue(tunnel("ready"));
+    api.listShareLinks.mockResolvedValue([]);
+    api.createShareLink.mockResolvedValue({ link, url });
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "New link" }));
+    const form = await screen.findByRole("dialog");
+    fireEvent.click(within(form).getByRole("button", { name: "Create" }));
+    await screen.findByRole("img", { name: "Share link QR code" });
+    cleanup();
+    mount();
+    const qr = await screen.findByRole("img", { name: "Share link QR code" });
+    expect(qr.getAttribute("data-qr-text")).toBe(url);
+    expect(api.shareLinkUrl).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    await waitFor(() =>
+      expect(useShowingStore.getState().byService).toEqual({}),
+    );
+  });
+
+  it("改备注：预填当前备注，保存后经 core 改、提示并重读列表", async () => {
+    sharing();
+    api.shareStatus.mockResolvedValue(tunnel("ready"));
+    api.listShareLinks.mockResolvedValue([{ ...link, label: "Old" }]);
+    api.renameShareLink.mockResolvedValue({ ...link, label: "Design review" });
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit note" }));
+    const dialog = await screen.findByRole("dialog");
+    const input = within(dialog).getByLabelText("Note");
+    expect((input as HTMLInputElement).value).toBe("Old");
+    const save = within(dialog).getByRole("button", { name: "Save" });
+    expect(save.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(input, { target: { value: "Design review" } });
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(api.renameShareLink).toHaveBeenCalledWith(
+        "svc",
+        "L",
+        "Design review",
+      ),
+    );
+    await waitFor(() =>
+      expect(toasts.success).toHaveBeenCalledWith("Note updated"),
+    );
+    await waitFor(() => expect(api.listShareLinks).toHaveBeenCalledTimes(2));
+  });
+
+  it("桌面壳有系统分享菜单：交给它；壳不接就退回复制", async () => {
+    sharing();
+    api.shareStatus.mockResolvedValue(tunnel("ready"));
+    api.listShareLinks.mockResolvedValue([{ ...link, label: "Review" }]);
+    api.shareLinkUrl.mockResolvedValue(url);
+    const share = vi.fn(async () => ({ shared: true }));
+    (window as { armadra?: unknown }).armadra = {
+      share: { available: true, url: share },
+    };
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Share…" }));
+    await waitFor(() =>
+      expect(share).toHaveBeenCalledWith({ title: "Review", url }),
+    );
+    expect(writeText).not.toHaveBeenCalled();
+    share.mockResolvedValue({ shared: false });
+    fireEvent.click(screen.getByRole("button", { name: "Share…" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(url));
+  });
+
+  it("远程服务已删、中继侧还欠着：菜单里放弃清理，确认后只清本机的登记", async () => {
+    api.listSources.mockResolvedValue({ sources: [local], remotes: [] });
+    api.relayPending.mockResolvedValue([
+      { issuer: ISSUER, revokedAtMs: 1, code: "source_unauthorized" },
+    ]);
+    api.dismissRelayCleanup.mockResolvedValue(undefined);
+    mount();
+    await screen.findByText("relay.test:8102");
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Actions for relay.test:8102" }),
+      { button: 0, ctrlKey: false },
+    );
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Dismiss cleanup" }),
+    );
+    const confirm = await screen.findByRole("alertdialog");
+    expect(
+      within(confirm).getByText("Dismiss cleanup for “relay.test:8102”?"),
+    ).toBeTruthy();
+    expect(api.dismissRelayCleanup).not.toHaveBeenCalled();
+    fireEvent.click(
+      within(confirm).getByRole("button", { name: "Dismiss cleanup" }),
+    );
+    await waitFor(() =>
+      expect(api.dismissRelayCleanup).toHaveBeenCalledWith(ISSUER),
+    );
+    await waitFor(() =>
+      expect(toasts.success).toHaveBeenCalledWith("Cleanup dismissed"),
     );
   });
 });

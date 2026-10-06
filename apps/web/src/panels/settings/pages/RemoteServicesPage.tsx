@@ -9,6 +9,7 @@ import {
   type RemoteSourceSummary,
   addDirectSource,
   addPersonalRelay,
+  dismissRelayCleanup,
   forgetSource,
   isPairLink,
   listSources,
@@ -159,6 +160,7 @@ export function RemoteServicesPage() {
     retry: false,
   });
   const [removing, setRemoving] = React.useState<Removal | null>(null);
+  const [dismissing, setDismissing] = React.useState<string | null>(null);
 
   const sources = table.data?.sources;
   React.useEffect(() => {
@@ -171,7 +173,7 @@ export function RemoteServicesPage() {
   const signedIn = remotes.filter((remote) => remote.hasCredentials);
   const pendingList = pending.data ?? [];
   const pendingOf = (issuer: string) => pendingCode(pendingList, issuer);
-  // 远程服务行已经删了、中继侧还欠着的：单独列出，登录回来再重试。
+  // 远程服务行已经删了、中继侧还欠着的：单独列出，登录回来再重试，或放弃清理。
   const orphans = pendingList.filter(
     (one) => !remotes.some((remote) => remote.issuer === one.issuer),
   );
@@ -195,6 +197,14 @@ export function RemoteServicesPage() {
       void changed();
       if (code === null) toast.success(t("remote.relayPending.cleaned"));
       else toast.error(relayPendingReason(t, code) || t("remote.relayPending"));
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const dismiss = useMutation({
+    mutationFn: (issuer: string) => dismissRelayCleanup(issuer),
+    onSuccess: () => {
+      void changed();
+      toast.success(t("remote.relayPending.dismissed"));
     },
     onError: (error: Error) => toast.error(error.message),
   });
@@ -266,6 +276,15 @@ export function RemoteServicesPage() {
             >
               {t("remote.relayPending.retry")}
             </Button>
+            <RowMenu name={hostOf(one.issuer)}>
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={dismiss.isPending}
+                onSelect={() => setDismissing(one.issuer)}
+              >
+                {t("remote.relayPending.dismiss")}
+              </DropdownMenuItem>
+            </RowMenu>
           </SettingsRow>
         ))}
         <SettingsRow label={null}>
@@ -361,6 +380,36 @@ export function RemoteServicesPage() {
         onClose={() => setMounting(false)}
         onMounted={() => void changed()}
       />
+      <ResponsiveAlertDialog
+        open={dismissing !== null}
+        onOpenChange={(open) => {
+          if (!open) setDismissing(null);
+        }}
+      >
+        <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
+              {t("remote.relayPending.dismissConfirm", {
+                name: dismissing === null ? "" : hostOf(dismissing),
+              })}
+            </ResponsiveAlertDialogTitle>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("remote.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (dismissing !== null) dismiss.mutate(dismissing);
+                setDismissing(null);
+              }}
+            >
+              {t("remote.relayPending.dismiss")}
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
       <ResponsiveAlertDialog
         open={removing !== null}
         onOpenChange={(open) => {

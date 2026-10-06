@@ -158,6 +158,14 @@ export interface ArmadraDesktopApi {
     onJoinLink(listener: (url: string) => void): () => void;
   };
   /**
+   * 系统分享菜单（`app:share`）：`available` 是这个平台有没有；`url` 答
+   * `{ shared }`，`false` 时页面退回复制。
+   */
+  readonly share: {
+    readonly available: boolean;
+    url(request: { title: string; url: string }): Promise<{ shared: boolean }>;
+  };
+  /**
    * 页面的一条 JS 错误（契约 §30），页面已剥离过；主进程再判开关、限流、剥离。
    */
   readonly diagnostics: {
@@ -246,6 +254,11 @@ const api: ArmadraDesktopApi = {
             if (typeof url === "string") listener(url);
           });
       }),
+  },
+  share: {
+    // 与 `shell-core/share-request.ts` 的 `nativeShareAvailable` 同一条：只有 macOS。
+    available: process.platform === "darwin",
+    url: (request) => ipcRenderer.invoke(IPC.appShare.channel, request),
   },
   diagnostics: {
     report: (report) =>

@@ -1059,7 +1059,7 @@ export const ROUTES: readonly RouteEntry[] = [
   },
   {
     path: "/api/sources/remotes/{serviceId}/links/{linkId}",
-    methods: ["DELETE"],
+    methods: ["PUT", "DELETE"],
     surface: "runtime",
     implemented: true,
   },
@@ -1289,6 +1289,13 @@ export const ROUTES: readonly RouteEntry[] = [
   },
   {
     path: "/api/identity/cloud/relay-cleanup",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    // §31.5：放弃一条待清理。
+    path: "/api/identity/cloud/relay-dismiss",
     methods: ["POST"],
     surface: "runtime",
     implemented: true,
