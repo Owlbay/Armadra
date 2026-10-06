@@ -796,6 +796,8 @@ export class SourcesService {
     this.access.delete(serviceId);
     this.capabilities.delete(serviceId);
     await this.secrets.clearRemote(serviceId);
+    // 经它发出的分享链接随登记一起失效（中继侧的源已删），存着的整条链接也删。
+    await this.secrets.clearShareLinks(serviceId).catch(() => undefined);
     this.store.deleteRemote(serviceId);
     this.options.log.info("removed a remote service", { serviceId });
     return {};
@@ -1056,6 +1058,31 @@ export class SourcesService {
       serviceId,
     });
     return this.sourceJson(row);
+  }
+
+  /**
+   * 远程服务的地址与一把新鲜的访问令牌，给同一域里另调 `/v1/*` 的模块（分享链接，
+   * 契约 §33.9）。令牌只在内存里，不出 core。
+   */
+  async remoteEndpoint(serviceId: string): Promise<{
+    endpoint: RemoteEndpoint;
+    accessToken: string;
+    issuer: string;
+  }> {
+    const row = this.remoteRow(serviceId);
+    if (row.kind === "saas")
+      throw fail("not_implemented", "SaaS 远程服务尚未开放");
+    const token = await this.remoteAccess(row);
+    return {
+      endpoint: this.endpoint(row),
+      accessToken: token.accessToken,
+      issuer: row.issuer,
+    };
+  }
+
+  /** 这一行远程服务在不在（不联网）；不在答 `not_found`。 */
+  remoteIssuer(serviceId: string): string {
+    return this.remoteRow(serviceId).issuer;
   }
 
   async remoteSession(serviceId: string): Promise<{

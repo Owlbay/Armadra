@@ -1052,6 +1052,24 @@ export const ROUTES: readonly RouteEntry[] = [
     implemented: true,
   },
   {
+    path: "/api/sources/remotes/{serviceId}/links",
+    methods: ["GET", "POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}/links/{linkId}",
+    methods: ["DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}/links/{linkId}/url",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
     path: "/api/execution-hosts",
     methods: ["GET"],
     surface: "runtime",

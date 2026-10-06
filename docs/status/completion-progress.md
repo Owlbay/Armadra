@@ -2728,3 +2728,24 @@ V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
 接口：
 
 - 契约 §39.7（节号只追加）；错误码 `adapter_not_installable`(400)、`adapter_already_installed`(409)、`npm_not_found`(409)；任务失败码 `adapter_install_failed | adapter_install_timeout | adapter_install_missing`。
+
+## 远程服务的分享链接：可复用、就地可见、可管理
+
+做了什么：
+
+- **契约 §33.9（协议 minor 16）**：`sources.shareLinks` / `shareLinkCreate` / `shareLinkUrl` / `shareLinkRevoke`，旧路径 `/api/sources/remotes/{serviceId}/links[/{linkId}[/url]]`。
+- **core**（`sources/share-links.ts`）：建链接改由 core 代办——以当前主体签一张多次可用的邀请（`maxUses` 1–1000），用远程服务会话 `links.create`（同样的 `maxUses` 与到期），整条链接 `<url>#<秘密>.<邀请令牌>` 存进 SecretStore `armadra-share-links-<serviceId>`，之后 `shareLinkUrl` 随时再取。列表按 撤销 > 过期 > 用尽 > 生效 判状态，失效或远程服务上已没有的顺手删存档；远程服务那边撤销的作废本机邀请；没登记时答空表并清存档。撤销：中继撤链接与访客、作废邀请、删存档。删远程服务时连存档一起删。`RemoteClient` 加 `createLink / listLinks / revokeLink`。
+- **页面**：`ShareDialog` 换成 `RemoteShare.tsx`，挂在远程服务行下（`Collapsible`，缺省展开）：分享本机开关 + 隧道状态（停用要确认）；链接列表（名称或备注、权限、工作空间、创建时间、有效期、已用 / 上限）；复制、二维码（随时重开）、系统分享（有 Web Share 才出现）、撤销（`ResponsiveAlertDialog` 确认）；失效链接折进「历史」；刷新。新建对话框：备注、工作空间、权限、有效期、可用次数（1 / 10 / 100 / 1000，缺省 1000）。文案 `i18n/remote.ts` 中英同步。
+- **探针** `tools/probes/link-join.mjs` 跟上新界面：再复制、重开二维码、两个访客先后加入、撤销后第三个访客被拒、390 / 1440 明暗截图。
+
+实测（macOS arm64，2026-10-06，合入 main 后）：
+
+- `pnpm check` 通过；`pnpm --filter @armadra/web test` 3796 过、`typecheck` 过；`pnpm libs:build && pnpm --filter @armadra/desktop test` 5212 过 / 67 跳，脚本 73 过；`@armadra/server` 98 过。`@armadra/shared` 的「§31 错误码与协议包注册表」一条在 main 上就失败（`address_invalid` 不在协议包注册表），与本包无关。
+- 新用例：core `share-links.test.ts` 8 条（建、列、再取、状态与清存档、撤销幂等、未登记、失败作废邀请、30 天上限、删远程服务清存档；日志不含秘密）；页面 `RemoteServicesPage.test.tsx` 改写分享流程与停用确认、`remote-services.test.ts` 改为经 core。
+- 端到端：`node tools/probes/link-join.mjs`（Docker 里的个人中转，随机端口与临时目录；真 Electron，临时 HOME 与数据目录）全部通过：开关分享 → 新建 → 列表再复制得同一条整链接 → 重开二维码 → 访客 1、访客 2 先后加入并看到画布 → 列表显示「已用 2/1000」→ 撤销（确认）→ 折进历史 → 访客 3 被拒「链接已停用或不存在」；中继、桌面与探针日志里没有口令、令牌与链接秘密。截图在本地 `target/link-join/`。
+
+没做 / 偏离：
+
+- 改备注：中继没有更新链接的接口，未做。
+- 系统分享：桌面壳没有原生分享桥，只在页面有 `navigator.share` 时出现（Electron 桌面上通常不出现）。
+- 本包之前建的链接本机没有存档，列表里只能撤销、不能再复制。

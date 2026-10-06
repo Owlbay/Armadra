@@ -82,6 +82,13 @@ export interface FakeLink {
   readonly sourceId: string;
   state: "ok" | "expired" | "exhausted" | "revoked";
   uses: number;
+  /** `links.create` 建的才有这些（契约 §33.9 的列表用）。 */
+  label?: string;
+  role?: string;
+  invitationId?: string;
+  maxUses?: number | null;
+  expiresAtMs?: number;
+  createdAtMs?: number;
 }
 
 export interface FakeWorld {
@@ -268,7 +275,10 @@ async function cloud(
     if (link.state === "expired") {
       return json(410, { code: "link_expired", message: "no" });
     }
-    if (link.state === "exhausted") {
+    if (
+      link.state === "exhausted" ||
+      (link.maxUses != null && link.uses >= link.maxUses)
+    ) {
       return json(410, { code: "link_exhausted", message: "no" });
     }
     link.uses += 1;
@@ -304,6 +314,65 @@ async function cloud(
         coreVersion: "0.0.0",
       })),
     });
+  }
+  if (path === "/v1/links" && request.method === "POST") {
+    // `links.create`（cloud-api §5、§10）：只有 source_invite，答一次性的 secret。
+    if (input.kind !== "source_invite" || typeof input.sourceId !== "string") {
+      return json(400, { code: "bad_request", message: "kind" });
+    }
+    const linkId = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+    const secret = token("link");
+    world.cloud.links.set(linkId, {
+      secret,
+      sourceId: input.sourceId,
+      state: "ok",
+      uses: 0,
+      label: String(input.label ?? ""),
+      role: String(input.role ?? ""),
+      invitationId: String(input.invitationId ?? ""),
+      maxUses: typeof input.maxUses === "number" ? input.maxUses : null,
+      expiresAtMs: Number(input.expiresAtMs),
+      createdAtMs: Date.now(),
+    });
+    return json(200, {
+      linkId,
+      url: `${ISSUER}/j/${linkId}`,
+      secret,
+      expiresAtMs: Number(input.expiresAtMs),
+    });
+  }
+  if (path === "/v1/links" && request.method === "GET") {
+    const sourceId = new URL(request.url).searchParams.get("sourceId");
+    return json(200, {
+      links: [...world.cloud.links]
+        .filter(([, link]) => sourceId === null || link.sourceId === sourceId)
+        .map(([linkId, link]) => ({
+          linkId,
+          kind: "source_invite",
+          label: link.label ?? "",
+          role: link.role ?? "viewer",
+          sourceId: link.sourceId,
+          url: `${ISSUER}/j/${linkId}`,
+          uses: link.uses,
+          maxUses:
+            link.state === "exhausted" ? link.uses : (link.maxUses ?? null),
+          expiresAtMs:
+            link.state === "expired"
+              ? Date.now() - 1
+              : (link.expiresAtMs ?? Date.now() + 86_400_000),
+          createdAtMs: link.createdAtMs ?? 0,
+          revokedAtMs: link.state === "revoked" ? Date.now() : null,
+        })),
+    });
+  }
+  const linkPath = /^\/v1\/links\/([0-9a-f]+)$/.exec(path);
+  if (linkPath !== null && request.method === "DELETE") {
+    const link = world.cloud.links.get(linkPath[1] as string);
+    if (link === undefined || link.state === "revoked") {
+      return json(404, { code: "not_found", message: "no" });
+    }
+    link.state = "revoked";
+    return json(200, {});
   }
   const owned = /^\/v1\/sources\/([0-9a-f]{32})$/.exec(path);
   if (owned !== null && request.method === "DELETE") {

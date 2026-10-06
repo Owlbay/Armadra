@@ -156,6 +156,8 @@ export {
   remoteAddInputSchema,
   remoteServiceSchema,
   remoteSourceSummarySchema,
+  SHARE_LINK_MAX_USES,
+  shareLinkSchema,
   sourceSessionSchema,
 } from "./sources.js";
 export type {
@@ -163,6 +165,9 @@ export type {
   RemoteAddInput,
   RemoteService,
   RemoteSourceSummary,
+  ShareLink,
+  ShareLinkCreateInput,
+  ShareLinkState,
   SourceSession,
 } from "./sources.js";
 export {

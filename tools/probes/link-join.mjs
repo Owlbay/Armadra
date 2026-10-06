@@ -3,10 +3,12 @@
 // owner 在桌面页面（真 Electron）里生成链接，第二个浏览器上下文（另一台「设备」：独立
 // profile、Cookie 不共享）打开 `/j/<id>#…`，加入后看见画布。量步数与耗时。
 //
-//   owner（桌面页面）：设置 → 远程服务 → 分享本机 → 开始分享 → 选工作空间 → 生成链接，
-//                      从链接输入框读出地址；每一次点击都计数；
+//   owner（桌面页面）：设置 → 远程服务 → 行下的分享区：打开「分享本机」→ 新建链接 → 选
+//                      工作空间 → 新建，从二维码对话框读出地址；每一次点击都计数；
+//                      之后在列表里再复制、再开二维码（契约 §33.9：整条链接存在本机）；
 //   访客（浏览器）：    打开链接（一次导航）→ 落地页点「加入」→ 进画布、看见节点；
-//                      点击数不超过 3，导航到画布可见的耗时进报告。
+//                      点击数不超过 3，导航到画布可见的耗时进报告。第二个访客用同一条
+//                      链接再加入一次（链接可复用）；owner 撤销（要确认）后第三个访客被拒。
 //
 // 与 V1 `personal-roundtrip` 重叠的部分（中继、桌面壳、页面小工具、日志扫秘密）都来自
 // `platform-lib.mjs`；这里只有 owner 的界面流程和访客的计步。中继在容器里，来自
@@ -163,16 +165,19 @@ try {
     "远程服务",
     "button, a, [role=tab], [role=link]",
   );
-  await ownerClick(["分享本机", "Share this machine"], "分享本机");
-  // 对话框弹入的动画里按坐标点，点到的是动画中的那一帧：等它停稳。
-  await sleep(1_000);
-  await ownerClick(["开始分享", "Start sharing"], "开始分享");
-  // 选工作空间：下拉里取刚建的那个（缺省是列表第一个）。
+  // 分享区在远程服务行下直接展开：开关「分享本机」。
+  await ownerClick(
+    ["分享本机", "Share this machine"],
+    "分享本机开关",
+    'button[role="switch"]',
+  );
   await win.until(
-    `return !!(() => { ${buttonByText(["工作空间", "Workspace"], 'button[role="combobox"]')} })();`,
-    "登记后出现生成链接的表单",
+    `return document.querySelector('button[role="switch"][aria-checked="true"]') ? true : null;`,
+    "本机已分享到中继",
     { timeout: 60_000 },
   );
+  await ownerClick(["新建链接", "New link"], "新建链接");
+  await sleep(800);
   await ownerClick(
     ["工作空间", "Workspace"],
     "工作空间下拉",
@@ -183,11 +188,10 @@ try {
     "选 shared-workspace",
     '[role="option"]',
   );
-  // 隧道 ready 之前「生成链接」是禁用的：clickOn 只认可点的按钮，会等到它能点。
-  await ownerClick(["生成链接", "Create link"], "生成链接");
+  await ownerClick(["新建", "Create"], "新建");
   const link = await win.until(
     `return document.querySelector('[data-slot="share-link"] input')?.value || null;`,
-    "对话框里出现分享链接",
+    "二维码对话框里出现分享链接",
     { timeout: 30_000 },
   );
   report.timings["owner-generate"] = Date.now() - ownerStart;
@@ -207,58 +211,167 @@ try {
     ms: report.timings["owner-generate"],
   });
 
-  /* ------------------ 访客：另一台设备打开链接 ------------------ */
+  const escape = async (page) => {
+    for (const type of ["keyDown", "keyUp"])
+      await page.call("Input.dispatchKeyEvent", {
+        type,
+        key: "Escape",
+        code: "Escape",
+        windowsVirtualKeyCode: 27,
+      });
+    await sleep(500);
+  };
+  const qrGone = () =>
+    win.until(
+      `return document.querySelector('[data-slot="share-link"]') ? null : true;`,
+      "二维码对话框关上",
+    );
+  await escape(win);
+  await qrGone();
+  // 列表里的这一条：再复制（拦下写进剪贴板的字）、再开二维码，都是同一条整链接。
+  await win.evaluate(`
+    window.__copied = null;
+    const original = navigator.clipboard.writeText.bind(navigator.clipboard);
+    navigator.clipboard.writeText = async (text) => {
+      window.__copied = text;
+      return original(text).catch(() => undefined);
+    };
+    return true;`);
+  await clickText(win, ["复制链接", "Copy link"], "列表里的复制");
+  const copied = await win.until(`return window.__copied;`, "复制进剪贴板");
+  run.check(copied === link, "列表里再复制，得到同一条整链接");
+  await clickText(win, ["二维码", "QR code"], "列表里的二维码");
+  const again = await win.until(
+    `return document.querySelector('[data-slot="share-link"] input')?.value || null;`,
+    "重开二维码",
+  );
+  const qrText = await win.evaluate(
+    `return document.querySelector('[data-slot="share-link"] svg[data-qr-text]')?.getAttribute("data-qr-text") ?? null;`,
+  );
+  run.check(
+    again === link && qrText === link,
+    "关掉后在列表里重开二维码，还是这条链接",
+  );
+  await escape(win);
+  await qrGone();
+
+  /* ------------------ 访客：两台设备先后用同一条链接 ------------------ */
   await stack.browser.call("Security.setIgnoreCertificateErrors", {
     ignore: true,
   });
-  guest = await stack.browser.page(await stack.browser.context());
-  guest.allowed.push(/WebSocket connection to .* failed/);
-  let guestClicks = 0;
-  const guestClick = async (texts, what) => {
-    guestClicks += 1;
-    await guest.clickOn(buttonByText(texts), what);
+  const joinAsGuest = async (index) => {
+    guest = await stack.browser.page(await stack.browser.context());
+    guest.allowed.push(/WebSocket connection to .* failed/);
+    let guestClicks = 0;
+    const guestClick = async (texts, what) => {
+      guestClicks += 1;
+      await guest.clickOn(buttonByText(texts), what);
+    };
+    const guestStart = Date.now();
+    await guest.goto(link);
+    await guest.settle();
+    await guest.until(buttonExists(["加入", "Join"]), "落地页的「加入」按钮");
+    report.timings[`guest${index}-landing`] = Date.now() - guestStart;
+    await run.shot(guest, `02-guest${index}-landing`);
+    const hash = await guest.evaluate(`return location.hash;`);
+    run.check(
+      !hash.includes(linkSecret) && !hash.includes("."),
+      `访客 ${index}：落地页把片段（秘密与邀请令牌）从地址栏抹掉`,
+      hash,
+    );
+    await guestClick(["加入", "Join"], "加入");
+    await guest.until(
+      `return location.pathname === "/app/" ? true : null;`,
+      "加入后地址换成 /app/",
+      { timeout: 45_000 },
+    );
+    await guest.until(
+      `return !!document.querySelector('${nodeAt(stickyId)}')`,
+      "访客的画布上出现 owner 的便签",
+      { timeout: 60_000 },
+    );
+    report.timings[`guest${index}-total`] = Date.now() - guestStart;
+    report.steps[`guest${index}Clicks`] = guestClicks;
+    const text = await guest.until(
+      `const node = document.querySelector('${nodeAt(stickyId)}');
+       const text = (node?.innerText ?? "") + [...(node?.querySelectorAll("textarea, input") ?? [])].map((el) => el.value).join(" ");
+       return text.includes("link-join-canvas") ? text : null;`,
+      "便签的内容同步到了访客的画布",
+      { timeout: 30_000 },
+    );
+    run.ok(`访客 ${index} 的画布上有 owner 的便签`, text.slice(0, 60));
+    await run.shot(guest, `03-guest${index}-canvas`);
+    run.check(
+      guestClicks <= MAX_GUEST_CLICKS,
+      `访客 ${index} 从链接到画布 ${guestClicks} 次点击（上限 ${MAX_GUEST_CLICKS}）、1 次导航、${report.timings[`guest${index}-total`]} ms`,
+      { clicks: guestClicks, ms: report.timings[`guest${index}-total`] },
+    );
+    run.consoleClean(guest);
   };
-  const guestStart = Date.now();
-  await guest.goto(link);
-  await guest.settle();
-  await guest.until(buttonExists(["加入", "Join"]), "落地页的「加入」按钮");
-  report.timings["guest-landing"] = Date.now() - guestStart;
-  await run.shot(guest, "02-guest-landing");
-  const hash = await guest.evaluate(`return location.hash;`);
-  run.check(
-    !hash.includes(linkSecret) && !hash.includes("."),
-    "落地页把片段（秘密与邀请令牌）从地址栏抹掉",
-    hash,
-  );
-  await guestClick(["加入", "Join"], "加入");
-  await guest.until(
-    `return location.pathname === "/app/" ? true : null;`,
-    "加入后地址换成 /app/",
-    { timeout: 45_000 },
-  );
-  await guest.until(
-    `return !!document.querySelector('${nodeAt(stickyId)}')`,
-    "访客的画布上出现 owner 的便签",
-    { timeout: 60_000 },
-  );
-  report.timings["guest-total"] = Date.now() - guestStart;
-  report.steps.guestClicks = guestClicks;
-  report.steps.guestNavigations = 1;
-  const text = await guest.until(
-    `const node = document.querySelector('${nodeAt(stickyId)}');
-     const text = (node?.innerText ?? "") + [...(node?.querySelectorAll("textarea, input") ?? [])].map((el) => el.value).join(" ");
-     return text.includes("link-join-canvas") ? text : null;`,
-    "便签的内容同步到了访客的画布",
+  await joinAsGuest(1);
+  await joinAsGuest(2);
+
+  /* ------------------ owner：列表里看到 2 次使用，撤销要确认 ------------------ */
+  await clickText(win, ["刷新", "Refresh"], "刷新链接列表");
+  await win.until(
+    `const text = document.body.innerText;
+     return text.includes("已用 2/1000") || text.includes("Used 2/1000") ? true : null;`,
+    "列表里这条链接已用 2 次",
     { timeout: 30_000 },
   );
-  run.ok("便签的内容同步到了访客的画布", text.slice(0, 60));
-  await run.shot(guest, "03-guest-canvas");
-  run.check(
-    guestClicks <= MAX_GUEST_CLICKS,
-    `访客从链接到画布 ${guestClicks} 次点击（上限 ${MAX_GUEST_CLICKS}）、1 次导航、${report.timings["guest-total"]} ms`,
-    { clicks: guestClicks, ms: report.timings["guest-total"] },
+  run.ok("同一条链接两个访客先后加入，列表显示已用 2/1000");
+  await win.capture(join(output, "04-owner-used.png"));
+  await clickText(win, ["撤销", "Revoke"], "列表里的撤销");
+  await win.until(
+    `return document.querySelector('[role="alertdialog"]') ? true : null;`,
+    "撤销前要确认",
   );
-  run.consoleClean(guest);
+  await clickText(
+    win,
+    ["撤销", "Revoke"],
+    "确认撤销",
+    '[role="alertdialog"] button',
+  );
+  await win.until(
+    `return /(历史|History) · 1/.test(document.body.innerText) ? true : null;`,
+    "撤销后这条链接进了历史",
+    { timeout: 30_000 },
+  );
+  run.ok("owner 撤销链接（二次确认），它折进历史");
+
+  // 第三台设备再用这条链接：落地页按码说明，不给加入。
+  guest = await stack.browser.page(await stack.browser.context());
+  guest.allowed.push(/Failed to load resource/);
+  await guest.goto(link);
+  await guest.settle();
+  await guest.until(
+    `return /链接已停用或不存在|This link is disabled or doesn't exist/.test(document.body.innerText) ? true : null;`,
+    "撤销后的链接被拒",
+    { timeout: 30_000 },
+  );
+  await run.shot(guest, "05-guest3-revoked");
+  run.ok("撤销后第三个访客打开同一条链接被拒");
+
+  /* ------------------ 截图：390 / 1440，明暗两主题 ------------------ */
+  for (const theme of ["dark", "light"]) {
+    for (const width of [1440, 390]) {
+      await win.call("Emulation.setDeviceMetricsOverride", {
+        width,
+        height: width < 768 ? 844 : 900,
+        deviceScaleFactor: 1,
+        mobile: width < 768,
+      });
+      await win.call("Emulation.setEmulatedMedia", {
+        features: [{ name: "prefers-color-scheme", value: theme }],
+      });
+      await win.evaluate(
+        `document.documentElement.dataset.theme = ${JSON.stringify(theme)}; document.documentElement.style.colorScheme = ${JSON.stringify(theme)}; return true;`,
+      );
+      await sleep(800);
+      await win.capture(join(output, `06-settings-${width}-${theme}.png`));
+    }
+  }
+  await win.call("Emulation.clearDeviceMetricsOverride", {});
 
   const leaks = ledger.scan({
     relay: relay.logs(),

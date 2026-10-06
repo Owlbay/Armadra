@@ -4,6 +4,9 @@
  * - `armadra-source-<sourceId>`：`{ byOrigin: { [origin]: { refreshToken, deviceId } } }`
  *   ——直连与中继各一份，键是 Gateway 来源或中继的 `relayBaseUrl`。
  * - `armadra-remote-<serviceId>`：`{ refreshToken, deviceId }`。
+ * - `armadra-share-links-<serviceId>`：本机经这个远程服务发出的分享链接（契约
+ *   §33.9）`{ links: { [linkId]: { url, invitationId, workspaceId } } }`——`url`
+ *   是带 `#<秘密>.<邀请令牌>` 的整条链接，只在创建时拿得到，存下来才能再复制。
  *
  * 访问令牌与口令从不落盘；刷新令牌每次换票都旋转并写回。值只经
  * {@link SecretBackend}（钥匙串 / safeStorage / 数据目录里的加密文件），不进
@@ -27,6 +30,28 @@ export function sourceSecretName(sourceId: string): string {
 
 export function remoteSecretName(serviceId: string): string {
   return checkSecretName(`armadra-remote-${serviceId}`);
+}
+
+export function shareLinksSecretName(serviceId: string): string {
+  return checkSecretName(`armadra-share-links-${serviceId}`);
+}
+
+/** 一条存下来的分享链接：整条链接（含片段）与它背后的那张邀请。 */
+export interface SavedShareLink {
+  readonly url: string;
+  readonly invitationId: string;
+  readonly workspaceId: string;
+}
+
+function savedLinkOf(value: unknown): SavedShareLink | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { url, invitationId, workspaceId } = value as Record<string, unknown>;
+  if (typeof url !== "string" || url === "") return undefined;
+  return {
+    url,
+    invitationId: typeof invitationId === "string" ? invitationId : "",
+    workspaceId: typeof workspaceId === "string" ? workspaceId : "",
+  };
 }
 
 function credentialOf(value: unknown): StoredCredential | undefined {
@@ -120,5 +145,44 @@ export class SourceSecrets {
 
   async clearRemote(serviceId: string): Promise<void> {
     await this.backend().delete(remoteSecretName(serviceId));
+  }
+
+  /** 经这个远程服务发出、还存着整条链接的分享链接（键是 `linkId`）。 */
+  async shareLinks(
+    serviceId: string,
+  ): Promise<Readonly<Record<string, SavedShareLink>>> {
+    const value = await readJson(
+      this.backend(),
+      shareLinksSecretName(serviceId),
+    );
+    const raw =
+      typeof value === "object" && value !== null
+        ? (value as { links?: unknown }).links
+        : undefined;
+    const links: Record<string, SavedShareLink> = {};
+    if (typeof raw === "object" && raw !== null) {
+      for (const [linkId, entry] of Object.entries(raw)) {
+        const saved = savedLinkOf(entry);
+        if (saved !== undefined) links[linkId] = saved;
+      }
+    }
+    return links;
+  }
+
+  /** 整份写回；空了就删掉这个条目。 */
+  async putShareLinks(
+    serviceId: string,
+    links: Readonly<Record<string, SavedShareLink>>,
+  ): Promise<void> {
+    const name = shareLinksSecretName(serviceId);
+    if (Object.keys(links).length === 0) {
+      await this.backend().delete(name);
+      return;
+    }
+    await this.backend().set(name, JSON.stringify({ links }));
+  }
+
+  async clearShareLinks(serviceId: string): Promise<void> {
+    await this.backend().delete(shareLinksSecretName(serviceId));
   }
 }
