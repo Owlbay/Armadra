@@ -275,7 +275,7 @@ describe(`${CLIENT_ERROR_ROUTE}`, () => {
     const limited = await call(member, "POST", body);
     expect(limited.status).toBe(429);
     expect(limited.body.code).toBe("rate_limited");
-    expect(Number(limited.headers?.["Retry-After"])).toBeGreaterThan(0);
+    expect(Number(limited.headers?.["retry-after"])).toBeGreaterThan(0);
     // 本机 owner（桌面壳，没有请求身份）是另一只桶。
     expect((await call(undefined, "POST", body)).status).toBe(202);
     expect(sent).toHaveLength(PER_CALLER_PER_MINUTE + 1);
