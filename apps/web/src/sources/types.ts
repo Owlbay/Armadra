@@ -77,6 +77,16 @@ export interface CredentialProvider {
   invalidate(sourceId: string): void;
 }
 
+/**
+ * 远程服务的会话（`me.stream` 用）：按签发方取访问令牌。桌面经本机 core
+ * （`sources.remoteSession`），手机与中继托管的页面在各自的保管处。
+ */
+export interface CloudAuth {
+  access(issuer: string): Promise<string>;
+  /** 手里那枚被拒了：丢掉缓存。 */
+  invalidate(issuer: string): void;
+}
+
 /** 源层自己的失败码（界面按码取文案）。 */
 export const SOURCE_ERROR = {
   /** 连上的不是源表里那台（`hello.sourceId` 不符）。 */
@@ -87,6 +97,10 @@ export const SOURCE_ERROR = {
   unauthorized: "source_unauthorized",
   /** 中继答源不在线（4404 / 503 `source_offline`）。 */
   offline: "source_offline",
+  /** 源被主人从远程服务撤销（`me.stream` 的 `sourceRevoked`、断言答 `source_revoked`）。 */
+  revoked: "source_revoked",
+  /** 这个账号对这个源的访问被收回（`accessRevoked`、断言答 `source_access_denied`）。 */
+  accessRevoked: "source_access_denied",
 } as const;
 
 export class SourceError extends Error {
