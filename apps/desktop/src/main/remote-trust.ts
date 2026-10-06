@@ -4,7 +4,7 @@ import {
   EMPTY_TRUST,
   type RemoteTrust,
   pinnedChainTrusted,
-  sameOrigins,
+  addsOrigins,
   trustFromSourceTable,
 } from "../shell-core/remote-trust";
 import { sourceConnectGrants } from "../shell-core/csp";
@@ -47,7 +47,7 @@ export async function refreshRemoteTrust(
   } catch {
     return { reload: false };
   }
-  return { reload: !sameOrigins(trust, loaded) };
+  return { reload: addsOrigins(trust, loaded) };
 }
 
 function pemChain(certificate: Certificate): string[] {

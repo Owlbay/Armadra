@@ -6,7 +6,7 @@ import { contentSecurityPolicy, sourceConnectGrants } from "./csp";
 import {
   EMPTY_TRUST,
   pinnedChainTrusted,
-  sameOrigins,
+  addsOrigins,
   trustFromSourceTable,
 } from "./remote-trust";
 
@@ -65,9 +65,13 @@ describe("源表 → 放行与钉扎", () => {
       EMPTY_TRUST,
     );
     expect(trustFromSourceTable(null)).toEqual(EMPTY_TRUST);
-    expect(sameOrigins(EMPTY_TRUST, trustFromSourceTable(undefined))).toBe(
-      true,
+    expect(addsOrigins(trustFromSourceTable(undefined), EMPTY_TRUST)).toBe(
+      false,
     );
+    // 多了来源才要重载；少了不必。
+    const full = trustFromSourceTable(table);
+    expect(addsOrigins(full, EMPTY_TRUST)).toBe(true);
+    expect(addsOrigins(EMPTY_TRUST, full)).toBe(false);
   });
 
   it("connect-src 追加 https 与 wss；不是来源形状的值丢掉", () => {

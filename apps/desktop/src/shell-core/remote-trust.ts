@@ -157,7 +157,10 @@ export function pinnedChainTrusted(
   return true;
 }
 
-/** 两份信任是否相同（决定 CSP 要不要重载页面）。 */
-export function sameOrigins(a: RemoteTrust, b: RemoteTrust): boolean {
-  return a.origins.join(" ") === b.origins.join(" ");
+/**
+ * `next` 是否放行了 `loaded` 没放行的来源——只有这时页面才必须重载（CSP 只在
+ * 文档载入时生效）。少了来源不必重载：多放行一个已删掉的来源，页面也不会再去连。
+ */
+export function addsOrigins(next: RemoteTrust, loaded: RemoteTrust): boolean {
+  return next.origins.some((origin) => !loaded.origins.includes(origin));
 }
