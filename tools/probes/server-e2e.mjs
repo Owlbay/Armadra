@@ -564,6 +564,16 @@ await h.run(async () => {
   }
   report.memberForbidden = tally;
   report.memberErrors = opened.errors;
+  // 现场：被拒的正文（门拒的是 CSRF 还是权限）与这一段的接口顺序。
+  report.memberForbiddenBodies = await Promise.all(
+    opened.responses
+      .filter((answer) => answer.status === 403)
+      .map(async (answer) => ({
+        url: answer.url,
+        body: await member.bodyOf(answer.requestId),
+      })),
+  );
+  report.memberTrafficOnOpen = member.traffic.slice(-120);
   const bannerText = () =>
     member.evaluate(`
       return [...document.querySelectorAll("[data-sonner-toast], [role=alert]")]
@@ -963,8 +973,29 @@ await h.run(async () => {
     );
     return;
   }
+  report.adminBeforeAddMenu = await admin.evaluate(
+    `return { visibility: document.visibilityState, focused: document.hasFocus() };`,
+  );
   await admin.click('[data-slot="dock"] button', "新建");
-  await admin.click('[role="menuitem"]', "新建浏览器");
+  await admin.click('[role="menuitem"]', "新建浏览器").catch(async (error) => {
+    // 现场：菜单开没开、开了列的是什么、页面在不在前台、health 问到没有。
+    await admin.capture("11-admin-add-menu-failed");
+    report.addMenuFailure = {
+      page: await admin
+        .evaluate(
+          `return {
+            visibility: document.visibilityState,
+            focused: document.hasFocus(),
+            menus: document.querySelectorAll('[role="menu"]').length,
+            items: [...document.querySelectorAll('[role="menuitem"]')].map((node) => node.innerText.trim()),
+            presence: document.querySelector('[data-slot="presence-bar"]')?.innerText ?? "",
+          };`,
+        )
+        .catch((cause) => String(cause)),
+      traffic: admin.traffic.slice(-60),
+    };
+    throw error;
+  });
   await admin.waitFor(
     `return [...document.querySelectorAll(".react-flow__node")].some((node) => node.querySelector("canvas"));`,
     { what: "浏览器节点出现在画布上" },

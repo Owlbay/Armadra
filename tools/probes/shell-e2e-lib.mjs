@@ -286,6 +286,7 @@ async function page(h, call, listeners, sessionId, { width, height, name }) {
           url: new URL(url).pathname,
           status,
           method: params.type,
+          requestId: params.requestId,
         });
     } else if (
       method === "Network.webSocketClosed" ||
@@ -460,6 +461,15 @@ async function page(h, call, listeners, sessionId, { width, height, name }) {
     await sleep(80);
   };
   const text = () => evaluate(`return document.body.innerText;`);
+  /** 一条失败应答的正文（排查用）；页面换了文档、取不到时答 `null`。 */
+  const bodyOf = async (requestId) => {
+    try {
+      const { body } = await call("Network.getResponseBody", { requestId });
+      return String(body).slice(0, 400);
+    } catch {
+      return null;
+    }
+  };
   /** 取走并清空这一段收集到的错误与失败应答。 */
   const drain = () => ({
     errors: errors.splice(0),
@@ -483,6 +493,7 @@ async function page(h, call, listeners, sessionId, { width, height, name }) {
     key,
     text,
     drain,
+    bodyOf,
     errors,
     responses,
     events,
