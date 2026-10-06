@@ -1996,3 +1996,35 @@
 - 组织默认角色的设置键与 `cloud.tunnel` 事件属于 A3-2；邀请多次使用的消费逻辑属于 A4-1（本包只建列）。
 - `relayTunnel` 的地址按 `https://` 记（外呼表的扫描只收 `https` / `smtp`），连接时升级为 `wss`。
 - `since` 写 `1.3`，协议 minor 不升（同 A1-3）。
+
+## A1-4 「远程服务」设置页、分享本机与侧栏按源分组
+
+设计：[客户端包](../design/platform/client-packages.md) §3；总计划 §12（只开放个人中转与自托管直连，SaaS 不出现入口）。
+
+做了什么：
+
+- **core（契约 §33.6 追加）**：`sources.remoteLogout`（尽力 `auth.logout`、删凭据、留行，重新登录只要再输口令）；`remoteAdd` 与「地址 + 配对码」的 `addDirect` 没给指纹、系统又不信任对端证书时答 `400 fingerprint_mismatch`，`details.fingerprint` 是对端信任锚指纹（`http-client.ts::presentedAnchor`：链里最末那张，只发叶证书时取 `/ca.crt` 里签了它的那张），页面请人核对后带着它重调。
+- **桌面壳**：CSP `connect-src` 按 core 源表动态放行（远程服务 issuer、源的 `baseUrl` / `relayOrigin`，各给 `https` 与 `wss`，形状不对的值丢掉）；主会话 `setCertificateVerifyProc` 对系统不信任、但链里有登记指纹、逐级验签、主机名与有效期都对的放行（与 core 钉扎同一定义）。壳经 core 读 `GET /api/sources`：起窗口前一次、页面发 IPC `app:sources-changed`（不带数据）后一次；答 `{ reload }`，多出新来源时页面回到设置这一页重载（CSP 只在文档载入时生效）。
+- **页面**：`panels/settings/pages/RemoteServicesPage.tsx`（nav `remote`，在「本机」之后，ownerOnly）——远程服务：个人中转添加（地址、账号、口令，首次核对指纹）、登录 / 登出 / 移除、「分享中」徽标、停用分享；已挂载的源：本机行、自托管直连（配对链接或地址 + 配对码，同样核对指纹）、从远程服务挂载、连接状态、断开 / 移除。`panels/settings/ShareDialog.tsx`：开始 / 停用分享、隧道状态（5 秒轮询）、按工作空间 / 权限 / 有效期（1、7、30 天）生成分享链接、二维码（复用 `QrImage` / lean-qr）、复制、停用、生效中的链接。`api/remote-services.ts` 是调用面；`sidebar/SourceGroups.tsx` 侧栏按源分组；`sources/bootstrap.ts` + `app/use-sources-bootstrap.ts` 启动时只在「挂过源」时读源表（零配置不多发请求）。`i18n/remote.ts` 中英同步；`MESSAGE_BY_CODE` 加远程服务答的 `rate_limited`、`unauthenticated`、`session_expired` / `session_revoked`、`source_access_denied`、`source_revoked`、`limit_reached`。
+
+实测（macOS arm64，2026-10-06，基于 main 86271782）：
+
+- `pnpm check` 通过；`pnpm --filter @armadra/web test` 与 `typecheck`、i18n 守卫通过；`pnpm libs:build && pnpm --filter @armadra/desktop test` 通过（数字见 PR）。
+- 新用例：core `service.test.ts` 补 4（首次指纹、给了指纹或系统信任不改写、配对码路径、`remoteLogout`）、`http-client.test.ts` 补 3（真 TLS 下 `presentedAnchor`）；壳 `shell-core/remote-trust.test.ts` 5（源表 → 放行与钉扎、CSP 注入防护、真 CA 链钉扎的正反例）；页面 `api/remote-services.test.ts` 9、`RemoteServicesPage.test.tsx` 5、`sources/bootstrap.test.tsx` 6（零配置不请求、侧栏分组与离线灰显）。
+- **真 Electron 端到端**（开发构建 + 独立个人中转 `https://127.0.0.1:8112` 自签，临时 HOME / 数据目录、文件密钥后端）：添加个人中转 → 页面显示的指纹与中继启动日志一致 → 确认后壳重载页面回到远程服务页 → 登出（行留着）→ 重新登录（不再问指纹）→ 分享本机（页面经 CSP 放行与指纹钉扎直接调中继取注册令牌，本机登记成功，中继目录里有这台机器，`registered: true`）→ 生成链接（`https://127.0.0.1:8112/j/<id>#<secret>.<邀请令牌>`，中继上有、匿名 `links.get` 认得、本机有对应邀请）→ 停用链接（中继撤销、本机邀请作废；窄屏再来一次）→ 停用分享（登记撤销）→ 移除；全程无控制台错误、无被 CSP / 证书拦下的请求。联调后停掉了中继。
+
+接口（供 A4-3p / A3-4 / A1-2）：
+
+- 链接：`<issuer>/j/<linkId>#<secret>.<core 邀请令牌>`（`api/remote-services.ts::shareLinkUrl`；邀请令牌本身是 `<invitationId>.<secret>`，所以片段按第一个 `.` 切：前面是链接 secret，后面整段是邀请令牌）。二维码就是这条链接（`QrImage`）。
+- 页面：`addDirectSource` / `addPersonalRelay` 答 `{ kind: "confirm", fingerprint }` 或 `{ kind: "done" }`；`presentedFingerprint(error)`；`remoteFetch(access, path, schema)` 直接调远程服务；`notifyShellSourcesChanged()` 与 `sources/bootstrap.ts` 的 `applySourceTable` / `reloadIntoSettings`——挂载类入口（如 `mountByLink`）成功后照这三步收尾。
+- 侧栏：`sidebar/SourceGroups.tsx` 每个挂载源一组（`data-source-group`），组里的工作空间由 A1-2 接。
+
+没做 / 偏离规格：
+
+- core 追加 `sources.remoteLogout`（规格没有，页面「登出」要它）与首次指纹的 `details.fingerprint`（规格写「响应里带指纹」，core 原来没有）。
+- 桌面壳加了按源表指纹的证书钉扎：自签的个人中转与 Gateway 本地 CA 否则过不了 Chromium；服务器壳托管的页面在用户自己的浏览器里，自签远程服务仍要用户信任 CA（或用 ACME），其 CSP 也未动态化。
+- CSP 只在文档载入时生效：新加来源后页面重载一次，回到设置的远程服务页。
+- 本机邀请经 `/api/identity/invitations`（Bearer），没有 procedure；邀请必须指向一个工作空间，所以分享对话框要选工作空间。`maxUses` 未传（A4-1 未合）。从「生效中的链接」停用时只撤远程服务那条链接，本机那张邀请等过期（列表不带 `invitationId`）。
+- 隧道状态靠 5 秒轮询 `identity.cloud.status`，没订阅 `cloud.tunnel` 事件（A3-2 未合，实测一直是「未连接」）。
+- 已挂载源不支持拖动排序（`sources.update.orderIndex` 未接界面）；SaaS 设备码流程不出现入口。
+- 窄屏与宽屏切换时设置对话框换外壳、内容重新挂载，刚生成的链接会从界面上消失（链接仍在，可在「生效中的链接」停用）。

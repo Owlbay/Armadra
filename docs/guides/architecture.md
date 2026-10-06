@@ -543,7 +543,11 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   按 scheme 白名单限 `http` / `https`，对话框返回路径而不是字节。渲染进程
   `contextIsolation: true`、`nodeIntegration: false`，唯一桥是 preload。
 - CSP 见 `apps/desktop/src/shell-core/csp.ts`：`connect-src` 只留本机 core 的
-  http/ws，`<webview>` 供浏览器节点使用。
+  http/ws，再加 core 源表（契约 §33）里远程服务与挂载源的 `https` / `wss` 来源——壳经
+  core 读 `GET /api/sources`（起窗口前与页面发 `app:sources-changed` 后），不信页面带来的
+  数据；新来源要重载页面才生效。同一张表给主会话的证书校验：系统不信任、但链里有登记
+  指纹且逐级验签与主机名有效期都对的放行（`shell-core/remote-trust.ts`、
+  `main/remote-trust.ts`）。`<webview>` 供浏览器节点使用。
 - core 自己拥有的密钥（Copilot 令牌、GitHub PAT 等）只经 `core/secrets` 的
   `SecretBackend { kind, get, set, delete }` 存取，名字一律 `armadra-*`：macOS 桌面壳
   走 `security(1)` 钥匙串（`keychain`）；Windows / Linux 桌面壳的 core 是 fork 出的
