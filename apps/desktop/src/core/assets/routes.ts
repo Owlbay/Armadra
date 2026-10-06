@@ -15,6 +15,7 @@ import {
   optionalString,
 } from "../workspaces/support";
 import { getWorkspace } from "../workspaces/table";
+import { type DomainHandlers, registerProcedures } from "../http/rpc";
 import { writePngExport, writeTextExport } from "./exports";
 import {
   assetExtension,
@@ -91,59 +92,72 @@ export function install(context: CoreContext): void {
     }),
   );
 
-  // 输出到画板的代码块（契约 §14.5）：落在来源 Agent 节点的工作目录里（在
-  // 工作区内时），远端工作空间经 Worker 的 `assets.exportText` 落在那台机器上。
+  // 输出到画板的代码块（契约 §14.5、§37.3）：落在来源 Agent 节点的工作目录里
+  // （在工作区内时），远端工作空间经 Worker 的 `assets.exportText` 落在那台机器
+  // 上。旧路径与 `files.exportText` 调同一份；旧路径在判过工作空间之后才读体。
+  const exportText = async (
+    id: string,
+    exportId: string,
+    read: () => Record<string, unknown>,
+  ): Promise<unknown> => {
+    const workspace = getWorkspace(database, id);
+    if (!workspace.permissions.write) {
+      throw new DomainError(
+        403,
+        "forbidden",
+        "This workspace is opened read-only",
+      );
+    }
+    const body = read();
+    const name = optionalString(body, "name");
+    const content = optionalString(body, "content");
+    if (name === undefined || content === undefined) {
+      throw badRequest("Export body needs a name and a content");
+    }
+    const cwd = agentCwd(database, workspace.id, exportId);
+    if (isRemote(workspace)) {
+      const bytes = Buffer.from(content, "utf8");
+      return withStaged(workspace, bytes, INLINE_FILE_BYTES, (carried) =>
+        executeOn(workspace, "assets.exportText", {
+          exportId,
+          name,
+          ...(cwd === undefined ? {} : { cwd }),
+          ...(carried.transfer === undefined
+            ? { content }
+            : { transfer: carried.transfer }),
+        }),
+      );
+    }
+    return writeTextExport(
+      canonicalDirectory(workspace.rootPath),
+      exportId,
+      name,
+      content,
+      cwd,
+    );
+  };
+  registerProcedures(server, "files", {
+    exportText: ({
+      workspaceId: id,
+      exportId,
+      ...body
+    }: {
+      workspaceId: string;
+      exportId: string;
+    } & Record<string, unknown>) => exportText(id, exportId, () => body),
+  } as unknown as DomainHandlers<"files">);
+
   server.router.handle(
     "POST",
     "/api/workspaces/{workspaceId}/exports/{exportId}/text",
-    answered(async (match, request) => {
-      const workspace = getWorkspace(database, workspaceId(match));
-      if (!workspace.permissions.write) {
-        throw new DomainError(
-          403,
-          "forbidden",
-          "This workspace is opened read-only",
-        );
-      }
-      const body = jsonObject(request.body);
-      const name = optionalString(body, "name");
-      const content = optionalString(body, "content");
-      if (name === undefined || content === undefined) {
-        throw badRequest("Export body needs a name and a content");
-      }
-      const exportId = match.params.exportId ?? "";
-      const cwd = agentCwd(database, workspace.id, exportId);
-      if (isRemote(workspace)) {
-        const bytes = Buffer.from(content, "utf8");
-        return {
-          status: 200,
-          body: await withStaged(
-            workspace,
-            bytes,
-            INLINE_FILE_BYTES,
-            (carried) =>
-              executeOn(workspace, "assets.exportText", {
-                exportId,
-                name,
-                ...(cwd === undefined ? {} : { cwd }),
-                ...(carried.transfer === undefined
-                  ? { content }
-                  : { transfer: carried.transfer }),
-              }),
-          ),
-        };
-      }
-      return {
-        status: 200,
-        body: writeTextExport(
-          canonicalDirectory(workspace.rootPath),
-          exportId,
-          name,
-          content,
-          cwd,
-        ),
-      };
-    }),
+    answered(async (match, request) => ({
+      status: 200,
+      body: await exportText(
+        workspaceId(match),
+        match.params.exportId ?? "",
+        () => jsonObject(request.body),
+      ),
+    })),
   );
 
   server.router.handle(

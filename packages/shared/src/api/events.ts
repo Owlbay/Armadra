@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { jsonValueSchema } from "../contract/json.js";
 import { agentEventSchema, agentStatusSchema } from "../domain/index.js";
 
 import {
@@ -32,6 +33,35 @@ import {
   workflowRunEventSchema,
 } from "./workflows.js";
 
+/**
+ * `agent.approval` 的 `request`：core 的审批行（`core/agent/approvals.ts` 的
+ * `AgentApproval`，hook 面记的那份在 `core/hook/store.ts`，没答的字段缺席而不是
+ * `null`）。新请求时没有 `answer`；答复与撤回复用同一个事件，带
+ * `resolved: true`、`decision`、`route`（ACP 的 elicitation 再带 `elicitation`）。
+ * 里面的 `request` 才是 CLI 或 ACP 适配器的原话（hook 载荷、权限请求），按原样
+ * 的 JSON 透传（库里那一行解析不了时是 `null` 或原样的字符串）。
+ */
+export const agentApprovalRecordSchema = z
+  .object({
+    id: z.string(),
+    nodeId: z.string(),
+    workspaceId: z.string(),
+    request: jsonValueSchema,
+    answer: z.string().nullish(),
+    answeredBy: z.string().nullish(),
+    createdAt: z.string(),
+    answeredAt: z.string().nullish(),
+    /** 答复的 CAS 修订号；hook 面记的审批行（`core/hook/store.ts`）没有它。 */
+    revision: z.number().optional(),
+    resolved: z.literal(true).optional(),
+    decision: z.string().optional(),
+    route: z.string().optional(),
+    elicitation: z.object({ action: z.string() }).optional(),
+  })
+  .catchall(jsonValueSchema);
+
+export type AgentApprovalRecord = z.infer<typeof agentApprovalRecordSchema>;
+
 /** `WS /api/workspaces/{id}/events` — plan §5.4 / §7. */
 export const workspaceEventSchema = z.discriminatedUnion("type", [
   z.object({
@@ -46,7 +76,7 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
     type: z.literal("agent.approval"),
     nodeId: z.string(),
     pendingId: z.string(),
-    request: z.unknown(),
+    request: agentApprovalRecordSchema,
   }),
   z.object({
     type: z.literal("agent.delivery"),

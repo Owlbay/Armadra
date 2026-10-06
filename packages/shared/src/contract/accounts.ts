@@ -183,7 +183,18 @@ export const accounts = {
           passwordBreached: z.literal(true).optional(),
         }),
       )
-      .errors({ ...denied, ...missing, ...errors.pick("not_implemented") })
+      .errors({
+        ...denied,
+        ...missing,
+        ...errors.pick(
+          "not_implemented",
+          "password_too_short",
+          "password_too_long",
+          "password_contains_name",
+          "password_too_common",
+          "password_breached",
+        ),
+      })
       .meta(
         section("identity:manage", "POST", "/api/identity/credentials", 201),
       ),

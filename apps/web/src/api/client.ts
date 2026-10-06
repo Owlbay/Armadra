@@ -49,7 +49,7 @@ import { searchApiFor } from "./search";
 import { terminalsApiFor } from "./terminals";
 import { resourcesApi } from "./resources";
 import { conversationsApi } from "./conversations";
-import { handoffApi } from "./handoff";
+import { handoffApiFor } from "./handoff";
 import { gitApiFor } from "./git";
 import { gitRepositoryApiFor } from "./git-repository";
 import { usageApi } from "./usage";
@@ -318,7 +318,7 @@ export const runtimeApi = {
   ...terminalsApiFor(currentClient),
   ...resourcesApi,
   ...conversationsApi,
-  ...handoffApi,
+  ...handoffApiFor(currentClient),
   ...gitApiFor(currentClient),
   ...gitRepositoryApiFor(currentClient),
   ...usageApi,

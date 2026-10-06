@@ -54,7 +54,33 @@ describe("runtime workspace events API", () => {
         type: "agent.approval",
         nodeId: uuid,
         pendingId: "p-1",
-        request: { tool: "Bash" },
+        request: {
+          id: "p-1",
+          nodeId: uuid,
+          workspaceId: uuid,
+          request: { tool: "Bash" },
+          createdAt: timestamp,
+        },
+      },
+      {
+        // 答复复用同一个事件：core 的审批行加上怎么交到 CLI 手里的。
+        type: "agent.approval",
+        nodeId: uuid,
+        pendingId: "p-1",
+        request: {
+          id: "p-1",
+          nodeId: uuid,
+          workspaceId: uuid,
+          request: null,
+          answer: "allow",
+          answeredBy: "user",
+          createdAt: timestamp,
+          answeredAt: timestamp,
+          revision: 1,
+          resolved: true,
+          decision: "allow",
+          route: "file",
+        },
       },
       {
         type: "agent.delivery",
@@ -140,6 +166,26 @@ describe("runtime workspace events API", () => {
     expect(workspaceEventSchema.safeParse({ type: "acp.update" }).success).toBe(
       false,
     );
+    // 审批行不再是任意值：缺了行的标识或原话不是 JSON 的都不收。
+    for (const request of [
+      { tool: "Bash" },
+      {
+        id: "p-1",
+        nodeId: uuid,
+        workspaceId: uuid,
+        request: () => undefined,
+        createdAt: timestamp,
+      },
+    ]) {
+      expect(
+        workspaceEventSchema.safeParse({
+          type: "agent.approval",
+          nodeId: uuid,
+          pendingId: "p-1",
+          request,
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it("models the G5 schedule and resources events without commands or output", () => {

@@ -140,6 +140,45 @@ export function installRoutes(deps: AgentRouteDeps): void {
     }) => operations.contextReads(nodeId, limit),
   } as unknown as DomainHandlers<"agents">);
 
+  /*
+   * 对话交接（契约 §39.8）：五条路由同一个做法——旧 handler 读出路径参数、查询串
+   * 与体再调 `handoffOperations`，procedure 调同一份。
+   */
+  const handoff = handoffOperations(collab);
+  registerProcedures(server, "agents", {
+    handoffs: ({
+      workspaceId,
+      sourceNodeId,
+    }: {
+      workspaceId: string;
+      sourceNodeId?: string;
+    }) => handoff.list(workspaceId, sourceNodeId),
+    handoff: ({
+      workspaceId,
+      handoffId,
+    }: {
+      workspaceId: string;
+      handoffId: string;
+    }) => handoff.get(workspaceId, handoffId),
+    prepareHandoff: ({
+      workspaceId,
+      ...body
+    }: { workspaceId: string } & Record<string, unknown>) =>
+      handoff.prepare(workspaceId, body),
+    acceptHandoff: ({
+      workspaceId,
+      handoffId,
+      ...body
+    }: { workspaceId: string; handoffId: string } & Record<string, unknown>) =>
+      handoff.accept(workspaceId, handoffId, body),
+    cancelHandoff: ({
+      workspaceId,
+      handoffId,
+      ...body
+    }: { workspaceId: string; handoffId: string } & Record<string, unknown>) =>
+      handoff.cancel(workspaceId, handoffId, body),
+  } as unknown as DomainHandlers<"agents">);
+
   /* --------------------------------- agents ------------------------------- */
 
   // The new-node menu, the command palette, the settings pages and the node
@@ -251,10 +290,9 @@ export function installRoutes(deps: AgentRouteDeps): void {
     "/api/workspaces/{workspaceId}/handoffs",
     answeredAsync(async (match, request) => ({
       status: 200,
-      body: await prepare(
-        collab,
+      body: await handoff.prepare(
         param(match, "workspaceId"),
-        parsePrepare(jsonObject(request.body)),
+        jsonObject(request.body),
       ),
     })),
   );
@@ -262,17 +300,13 @@ export function installRoutes(deps: AgentRouteDeps): void {
   server.router.handle(
     "GET",
     "/api/workspaces/{workspaceId}/handoffs",
-    answered((match, request) => {
-      const workspaceId = param(match, "workspaceId");
-      const sourceNodeId = request.query.get("sourceNodeId");
-      return {
-        status: 200,
-        body:
-          sourceNodeId === null || sourceNodeId === ""
-            ? listWorkspace(collab, workspaceId)
-            : listHandoffs(collab, workspaceId, sourceNodeId),
-      };
-    }),
+    answered((match, request) => ({
+      status: 200,
+      body: handoff.list(
+        param(match, "workspaceId"),
+        request.query.get("sourceNodeId") ?? undefined,
+      ),
+    })),
   );
 
   server.router.handle(
@@ -280,11 +314,7 @@ export function installRoutes(deps: AgentRouteDeps): void {
     "/api/workspaces/{workspaceId}/handoffs/{handoffId}",
     answered((match) => ({
       status: 200,
-      body: getHandoff(
-        collab,
-        param(match, "workspaceId"),
-        param(match, "handoffId"),
-      ),
+      body: handoff.get(param(match, "workspaceId"), param(match, "handoffId")),
     })),
   );
 
@@ -293,11 +323,10 @@ export function installRoutes(deps: AgentRouteDeps): void {
     "/api/workspaces/{workspaceId}/handoffs/{handoffId}/accept",
     answered((match, request) => ({
       status: 200,
-      body: accept(
-        collab,
+      body: handoff.accept(
         param(match, "workspaceId"),
         param(match, "handoffId"),
-        parseConfirm(jsonObject(request.body)),
+        jsonObject(request.body),
       ),
     })),
   );
@@ -307,11 +336,10 @@ export function installRoutes(deps: AgentRouteDeps): void {
     "/api/workspaces/{workspaceId}/handoffs/{handoffId}/cancel",
     answered((match, request) => ({
       status: 200,
-      body: cancel(
-        collab,
+      body: handoff.cancel(
         param(match, "workspaceId"),
         param(match, "handoffId"),
-        parseConfirm(jsonObject(request.body)),
+        jsonObject(request.body),
       ),
     })),
   );
@@ -654,6 +682,41 @@ function cutBytes(text: string, limit: number): string {
   // replacement character in the agent's own transcript.
   while (end > 0 && ((buffer[end] as number) & 0xc0) === 0x80) end -= 1;
   return buffer.subarray(0, end).toString("utf8");
+}
+
+/**
+ * 交接的动作（契约 §39.8）。旧路径与 procedure 都把入参归成「体」的样子交进来，
+ * 解析与拒绝在这里，码与原话因此一样。
+ */
+export function handoffOperations(collab: CollabContext) {
+  return {
+    /** `sourceNodeId` 缺席或为空串答整个工作空间的历史。 */
+    list(workspaceId: string, sourceNodeId: string | undefined) {
+      return sourceNodeId === undefined || sourceNodeId === ""
+        ? listWorkspace(collab, workspaceId)
+        : listHandoffs(collab, workspaceId, sourceNodeId);
+    },
+    get(workspaceId: string, handoffId: string) {
+      return getHandoff(collab, workspaceId, handoffId);
+    },
+    prepare(workspaceId: string, body: Record<string, unknown>) {
+      return prepare(collab, workspaceId, parsePrepare(body));
+    },
+    accept(
+      workspaceId: string,
+      handoffId: string,
+      body: Record<string, unknown>,
+    ) {
+      return accept(collab, workspaceId, handoffId, parseConfirm(body));
+    },
+    cancel(
+      workspaceId: string,
+      handoffId: string,
+      body: Record<string, unknown>,
+    ) {
+      return cancel(collab, workspaceId, handoffId, parseConfirm(body));
+    },
+  };
 }
 
 function parsePrepare(body: Record<string, unknown>): PrepareRequest {

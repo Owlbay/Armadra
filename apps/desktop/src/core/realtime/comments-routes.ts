@@ -1,5 +1,5 @@
 /**
- * 评论路由（契约 §16.3，补全架构 §6.3 评论段）。
+ * 评论路由（契约 §16.3、§36.5，补全架构 §6.3 评论段）。
  *
  *   * `GET  …/boards/{boardId}/comments`：一块板的评论与可提及的人。
  *   * `POST …/boards/{boardId}/comments`：新建（顶层或一层回复）。
@@ -25,7 +25,8 @@ import { Authorizer, isOwner } from "../identity/authorize";
 import { allows, currentSubject } from "../identity/gate";
 import { scope } from "../identity/scopes";
 import { IdentityStore } from "../identity/store";
-import type { Router } from "../http/router";
+import { type DomainHandlers, registerProcedures } from "../http/rpc";
+import type { CoreServer } from "../http/server";
 import { answered, workspaceId } from "../workspaces/routes";
 import {
   badRequest,
@@ -128,10 +129,21 @@ function viewOf(
   };
 }
 
-export function installCommentRoutes(
-  router: Router,
-  options: CommentRoutesOptions,
-): void {
+/**
+ * 新建评论时域收的那几样（旧路径的体、procedure 的入参归成同一个样子）。动作收的
+ * 是取它的函数：旧路径在板与权限都判过之后才读体，体不是 JSON 的拒绝排在后面。
+ */
+interface CreateInput {
+  readonly anchor: unknown;
+  readonly body: unknown;
+  readonly parentId: unknown;
+}
+
+/**
+ * 评论的动作。旧 REST 路径与契约 procedure（契约 §36.5，`boards.*Comment*`）调
+ * 的是同一份：两边只把各自的入参归成同一个样子，拒绝在这里抛，码与原话因此一样。
+ */
+export function commentOperations(options: CommentRoutesOptions) {
   const { database, publish } = options;
   const now = options.now ?? Date.now;
 
@@ -169,33 +181,37 @@ export function installCommentRoutes(
     });
   };
 
-  router.handle(
-    "GET",
-    COMMENTS_PATH,
-    answered((match, request) => {
-      const ws = workspaceId(match);
-      const board = getBoard(database, ws, paramOf(match, "boardId"));
+  return {
+    /**
+     * `anchorKind` / `anchorId` 缺席是 `undefined`（旧路径的查询串没给）；`openOnly`
+     * 是 `resolved=false`。
+     */
+    list(
+      ws: string,
+      rawBoard: string,
+      anchorKind: string | undefined,
+      anchorId: string | undefined,
+      openOnly: boolean,
+    ) {
+      const board = getBoard(database, ws, rawBoard);
       need("canvas:read", ws);
-      const anchorKind = request.query.get("anchorKind");
-      const anchorId = request.query.get("anchorId");
       let anchor: { kind: "node" | "item"; id: string } | undefined;
-      if (anchorKind !== null || anchorId !== null) {
+      if (anchorKind !== undefined || anchorId !== undefined) {
         if (
           (anchorKind !== "node" && anchorKind !== "item") ||
-          anchorId === null ||
+          anchorId === undefined ||
           anchorId === ""
         ) {
           throw badRequest("anchorKind must be node or item, with anchorId");
         }
         anchor = { kind: anchorKind, id: anchorId };
       }
-      const resolved = request.query.get("resolved");
       const people = mentionablePeople(database, ws);
       const ids = new Set(people.map((person) => person.principalId));
       let rows = listComments(database, board.id, {
         ...(anchor === undefined ? {} : { anchor }),
       });
-      if (resolved === "false") {
+      if (openOnly) {
         // 回复自己没有解决状态，随父评论：父评论解决了，回复一起收起。
         const closed = new Set(
           rows.filter((row) => row.resolvedAtMs !== null).map((row) => row.id),
@@ -207,19 +223,14 @@ export function installCommentRoutes(
         );
       }
       const comments = rows.map((comment) => viewOf(comment, ids));
-      return { status: 200, body: { comments, people } };
-    }),
-  );
+      return { comments, people };
+    },
 
-  router.handle(
-    "POST",
-    COMMENTS_PATH,
-    answered((match, request) => {
-      const ws = workspaceId(match);
-      const board = getBoard(database, ws, paramOf(match, "boardId"));
+    create(ws: string, rawBoard: string, read: () => CreateInput): CommentView {
+      const board = getBoard(database, ws, rawBoard);
       need("canvas:write", ws);
-      const body = jsonObject(request.body);
-      const parentId = body.parentId;
+      const input = read();
+      const parentId = input.parentId;
       if (
         parentId !== undefined &&
         parentId !== null &&
@@ -232,11 +243,11 @@ export function installCommentRoutes(
         {
           boardId: board.id,
           // 回复的锚点随父评论；没给锚点的回复照样能建。
-          anchor: (body.anchor ??
+          anchor: (input.anchor ??
             (typeof parentId === "string"
               ? { kind: "point", x: 0, y: 0 }
               : undefined)) as CommentAnchor,
-          body: body.body as string,
+          body: input.body as string,
           authorPrincipalId: currentSubject().principalId,
           parentId: typeof parentId === "string" ? parentId : null,
         },
@@ -244,29 +255,22 @@ export function installCommentRoutes(
       );
       const view = viewOf(created, peopleIds(ws));
       emit(ws, "created", created, view.mentions);
-      return { status: 201, body: view };
-    }),
-  );
+      return view;
+    },
 
-  router.handle(
-    "PATCH",
-    COMMENT_PATH,
-    answered((match, request) => {
-      const ws = workspaceId(match);
-      const board = getBoard(database, ws, paramOf(match, "boardId"));
+    edit(ws: string, rawBoard: string, id: string, read: () => unknown) {
+      const board = getBoard(database, ws, rawBoard);
       need("canvas:write", ws);
-      const id = paramOf(match, "commentId");
       const before = getComment(database, board.id, id);
       // 改别人的话等于替别人说话：owner 也不行，owner 能做的是删。
       if (before.authorPrincipalId !== currentSubject().principalId) {
         throw forbidden("Only the author can edit a comment");
       }
-      const body = jsonObject(request.body);
       const updated = updateCommentBody(
         database,
         board.id,
         id,
-        body.body as string,
+        read() as string,
         now(),
       );
       const ids = peopleIds(ws);
@@ -278,18 +282,12 @@ export function installCommentRoutes(
         updated,
         view.mentions.filter((principal) => !earlier.has(principal)),
       );
-      return { status: 200, body: view };
-    }),
-  );
+      return view;
+    },
 
-  router.handle(
-    "DELETE",
-    COMMENT_PATH,
-    answered((match) => {
-      const ws = workspaceId(match);
-      const board = getBoard(database, ws, paramOf(match, "boardId"));
+    remove(ws: string, rawBoard: string, id: string): void {
+      const board = getBoard(database, ws, rawBoard);
       need("canvas:write", ws);
-      const id = paramOf(match, "commentId");
       const comment = getComment(database, board.id, id);
       const subject = currentSubject();
       if (
@@ -310,6 +308,165 @@ export function installCommentRoutes(
         },
       });
       emit(ws, "deleted", comment, []);
+    },
+
+    resolve(ws: string, rawBoard: string, id: string, read: () => unknown) {
+      const board = getBoard(database, ws, rawBoard);
+      need("canvas:write", ws);
+      const raw = read();
+      if (raw !== undefined && typeof raw !== "boolean") {
+        throw badRequest("resolved must be a boolean");
+      }
+      const resolved = raw !== false;
+      const comment = setCommentResolved(
+        database,
+        board.id,
+        id,
+        resolved,
+        now(),
+      );
+      emit(ws, resolved ? "resolved" : "reopened", comment, []);
+      return viewOf(comment, peopleIds(ws));
+    },
+  };
+}
+
+/**
+ * 装上评论的旧路径，并把同一份动作登记成 `boards.*Comment*` procedure（契约
+ * §36.5）。
+ */
+export function installCommentRoutes(
+  server: CoreServer,
+  options: CommentRoutesOptions,
+): void {
+  const { router } = server;
+  const operations = commentOperations(options);
+
+  registerProcedures(server, "boards", {
+    comments: ({
+      workspaceId: ws,
+      boardId,
+      anchorKind,
+      anchorId,
+      resolved,
+    }: {
+      workspaceId: string;
+      boardId: string;
+      anchorKind?: string;
+      anchorId?: string;
+      resolved?: boolean | string;
+    }) =>
+      operations.list(
+        ws,
+        boardId,
+        anchorKind,
+        anchorId,
+        resolved === false || resolved === "false",
+      ),
+    createComment: ({
+      workspaceId: ws,
+      boardId,
+      anchor,
+      body,
+      parentId,
+    }: {
+      workspaceId: string;
+      boardId: string;
+      anchor?: unknown;
+      body?: string;
+      parentId?: string | null;
+    }) => operations.create(ws, boardId, () => ({ anchor, body, parentId })),
+    updateComment: ({
+      workspaceId: ws,
+      boardId,
+      commentId,
+      body,
+    }: {
+      workspaceId: string;
+      boardId: string;
+      commentId: string;
+      body?: string;
+    }) => operations.edit(ws, boardId, commentId, () => body),
+    deleteComment: ({
+      workspaceId: ws,
+      boardId,
+      commentId,
+    }: {
+      workspaceId: string;
+      boardId: string;
+      commentId: string;
+    }) => operations.remove(ws, boardId, commentId),
+    resolveComment: ({
+      workspaceId: ws,
+      boardId,
+      commentId,
+      resolved,
+    }: {
+      workspaceId: string;
+      boardId: string;
+      commentId: string;
+      resolved?: boolean;
+    }) => operations.resolve(ws, boardId, commentId, () => resolved),
+  } as unknown as DomainHandlers<"boards">);
+
+  router.handle(
+    "GET",
+    COMMENTS_PATH,
+    answered((match, request) => ({
+      status: 200,
+      body: operations.list(
+        workspaceId(match),
+        paramOf(match, "boardId"),
+        request.query.get("anchorKind") ?? undefined,
+        request.query.get("anchorId") ?? undefined,
+        request.query.get("resolved") === "false",
+      ),
+    })),
+  );
+
+  router.handle(
+    "POST",
+    COMMENTS_PATH,
+    answered((match, request) => ({
+      status: 201,
+      body: operations.create(
+        workspaceId(match),
+        paramOf(match, "boardId"),
+        () => {
+          const body = jsonObject(request.body);
+          return {
+            anchor: body.anchor,
+            body: body.body,
+            parentId: body.parentId,
+          };
+        },
+      ),
+    })),
+  );
+
+  router.handle(
+    "PATCH",
+    COMMENT_PATH,
+    answered((match, request) => ({
+      status: 200,
+      body: operations.edit(
+        workspaceId(match),
+        paramOf(match, "boardId"),
+        paramOf(match, "commentId"),
+        () => jsonObject(request.body).body,
+      ),
+    })),
+  );
+
+  router.handle(
+    "DELETE",
+    COMMENT_PATH,
+    answered((match) => {
+      operations.remove(
+        workspaceId(match),
+        paramOf(match, "boardId"),
+        paramOf(match, "commentId"),
+      );
       return { status: 204, body: undefined };
     }),
   );
@@ -317,25 +474,15 @@ export function installCommentRoutes(
   router.handle(
     "POST",
     COMMENT_RESOLVE_PATH,
-    answered((match, request) => {
-      const ws = workspaceId(match);
-      const board = getBoard(database, ws, paramOf(match, "boardId"));
-      need("canvas:write", ws);
-      const body = jsonObject(request.body);
-      if (body.resolved !== undefined && typeof body.resolved !== "boolean") {
-        throw badRequest("resolved must be a boolean");
-      }
-      const resolved = body.resolved !== false;
-      const comment = setCommentResolved(
-        database,
-        board.id,
+    answered((match, request) => ({
+      status: 200,
+      body: operations.resolve(
+        workspaceId(match),
+        paramOf(match, "boardId"),
         paramOf(match, "commentId"),
-        resolved,
-        now(),
-      );
-      emit(ws, resolved ? "resolved" : "reopened", comment, []);
-      return { status: 200, body: viewOf(comment, peopleIds(ws)) };
-    }),
+        () => jsonObject(request.body).resolved,
+      ),
+    })),
   );
 }
 

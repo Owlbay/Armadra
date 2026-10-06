@@ -188,7 +188,7 @@ export const files = {
     ),
   /**
    * 项目搜索：core 侧逐文件找，按文件分页（`offset` / `nextOffset`）。调用方断开
-   * 连接，扫描随之停下（答 499 `cancelled`，没人读得到，注册表不登记）。
+   * 连接，扫描随之停下（答 499 `cancelled`，没人读得到）。
    */
   search: oc
     .input(
@@ -205,7 +205,7 @@ export const files = {
       }),
     )
     .output(fileSearchResultSchema)
-    .errors(errors.pick("bad_request", "forbidden", "not_found"))
+    .errors(errors.pick("bad_request", "forbidden", "not_found", "cancelled"))
     .meta(
       meta({
         ...base,
@@ -259,7 +259,15 @@ export const files = {
   reveal: oc
     .input(workspaceRef.extend({ path: z.string() }))
     .output(z.object({ ok: z.boolean() }))
-    .errors(errors.pick("bad_request", "forbidden", "not_found", "unsupported"))
+    .errors(
+      errors.pick(
+        "bad_request",
+        "forbidden",
+        "not_found",
+        "unsupported",
+        "reveal_failed",
+      ),
+    )
     .meta(
       meta({
         ...base,
@@ -277,6 +285,40 @@ export const files = {
         ...base,
         scope: "files:write",
         legacy: { method: "POST", path: `${WORKSPACE}/imports/local` },
+      }),
+    ),
+  /**
+   * 输出到画板的代码块（契约 §14.5、§37.3）：写成
+   * `.armadra/exports/acp/<exportId>/<name>`（来源 Agent 节点的工作目录在工作区内时
+   * 落在那里），答绝对路径、工作区相对路径与字节数。`exportId` 是来源节点的 id；
+   * 文件名与大小（至多 1 MiB）的检查在域里。远端工作空间写在执行主机上。
+   */
+  exportText: oc
+    .input(
+      workspaceRef.extend({
+        exportId: z.string(),
+        name: z.string().optional(),
+        content: z.string().optional(),
+      }),
+    )
+    .output(
+      z.object({
+        path: z.string(),
+        relativePath: z.string(),
+        bytes: z.number(),
+      }),
+    )
+    .errors(errors.pick("bad_request", "forbidden", "not_found"))
+    .meta(
+      meta({
+        since: "1.18",
+        contract: "§37.3",
+        workspaceKey: "workspaceId",
+        scope: "assets:read",
+        legacy: {
+          method: "POST",
+          path: `${WORKSPACE}/exports/{exportId}/text`,
+        },
       }),
     ),
 };

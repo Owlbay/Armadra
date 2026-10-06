@@ -206,3 +206,39 @@ describe("acp：会话经 procedure", () => {
     expect((failure as RuntimeRequestError).status).toBe(409);
   });
 });
+
+describe("acp：输出到画板与输入框的租约", () => {
+  it("代码块发 files.exportText，来源节点是 exportId；文件名在页面这一层先校", async () => {
+    ok({ path: "/w/.armadra/x.ts", relativePath: ".armadra/x.ts", bytes: 3 });
+    await expect(
+      acpApi.exportText(workspaceId, nodeId, "x.ts", "abc"),
+    ).resolves.toEqual({
+      path: "/w/.armadra/x.ts",
+      relativePath: ".armadra/x.ts",
+      bytes: 3,
+    });
+    expect(procedure()).toBe("files/exportText");
+    expect(sent()).toEqual({
+      json: { workspaceId, exportId: nodeId, name: "x.ts", content: "abc" },
+    });
+    await expect(
+      acpApi.exportText(workspaceId, nodeId, "../x", "abc"),
+    ).rejects.toThrow();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("输入框的租约发 terminals.drive，答的是新的租约", async () => {
+    ok({
+      state: "humanTakeover",
+      generation: 3,
+      expiresAt: "",
+      holder: { kind: "human", id: "device-1", displayName: "Mac" },
+    });
+    await expect(acpApi.drive(sessionId, "takeover")).resolves.toMatchObject({
+      state: "humanTakeover",
+      generation: 3,
+    });
+    expect(procedure()).toBe("terminals/drive");
+    expect(sent()).toEqual({ json: { sessionId, action: "takeover" } });
+  });
+});

@@ -143,6 +143,79 @@ export const ERROR_CODES = {
     i18n: "error.adapterAlreadyInstalled",
   },
   npm_not_found: { status: 409, i18n: "error.npmNotFound" },
+  // 工作空间文件（契约 §37）。
+  /** 调用方断开了连接，还在跑的项目搜索停下（`files.search`）。没人读得到这个答案。 */
+  cancelled: { status: 499 },
+  /** 拉不起系统的文件管理器（`files.reveal`）。原话是打开器给的理由。 */
+  reveal_failed: { status: 500 },
+  // 身份扩展的具名拒绝（契约 §18）：状态同 §18 的表，页面按码取文案。
+  password_too_short: {
+    status: 400,
+    i18n: "security.error.password_too_short",
+  },
+  password_too_long: { status: 400, i18n: "security.error.password_too_long" },
+  password_contains_name: {
+    status: 400,
+    i18n: "security.error.password_contains_name",
+  },
+  password_too_common: {
+    status: 400,
+    i18n: "security.error.password_too_common",
+  },
+  password_breached: { status: 400, i18n: "security.error.password_breached" },
+  /** 口令重置链接认不出（契约 §25）。 */
+  password_reset_invalid: { status: 404 },
+  passkey_unavailable_on_ip_host: {
+    status: 400,
+    i18n: "security.error.passkey_unavailable_on_ip_host",
+  },
+  passkey_rp_id_mismatch: {
+    status: 400,
+    i18n: "security.error.passkey_rp_id_mismatch",
+  },
+  passkey_challenge_expired: {
+    status: 400,
+    i18n: "security.error.passkey_challenge_expired",
+  },
+  passkey_verification_failed: {
+    status: 400,
+    i18n: "security.error.passkey_verification_failed",
+  },
+  mfa_invalid_code: { status: 401, i18n: "security.error.mfa_invalid_code" },
+  mfa_challenge_expired: { status: 401 },
+  mfa_already_enrolled: {
+    status: 409,
+    i18n: "security.error.mfa_already_enrolled",
+  },
+  mfa_secret_unavailable: {
+    status: 503,
+    i18n: "security.error.mfa_secret_unavailable",
+  },
+  oauth_not_configured: {
+    status: 404,
+    i18n: "auth.error.oauth_not_configured",
+  },
+  oauth_browser_required: {
+    status: 400,
+    i18n: "auth.error.oauth_browser_required",
+  },
+  oauth_state_invalid: { status: 400, i18n: "auth.error.oauth_state_invalid" },
+  oauth_denied: { status: 403, i18n: "auth.error.oauth_denied" },
+  oauth_provider_error: {
+    status: 502,
+    i18n: "auth.error.oauth_provider_error",
+  },
+  oauth_token_invalid: { status: 401, i18n: "auth.error.oauth_token_invalid" },
+  oauth_email_unverified: {
+    status: 403,
+    i18n: "auth.error.oauth_email_unverified",
+  },
+  oauth_domain_not_allowed: {
+    status: 403,
+    i18n: "auth.error.oauth_domain_not_allowed",
+  },
+  oauth_not_bound: { status: 401, i18n: "auth.error.oauth_not_bound" },
+  oauth_already_bound: { status: 409, i18n: "auth.error.oauth_already_bound" },
 } as const satisfies Record<string, ErrorSpec>;
 
 export type ErrorCode = keyof typeof ERROR_CODES;

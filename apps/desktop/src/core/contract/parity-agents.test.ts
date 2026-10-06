@@ -1188,19 +1188,23 @@ describe("契约与 core 的两张表（agents）", () => {
   /** 只经 procedure 的（§39.7 适配器的安装）：没有旧路径。 */
   const RPC_ONLY = new Set(["agents.adapterInstall", "agents.installAdapter"]);
 
-  it("23 条都在契约里，除 §39.7 外每条都有旧路径", () => {
+  it("28 条都在契约里，除 §39.7 外每条都有旧路径", () => {
     expect(entries.map((entry) => entry.name).sort()).toEqual(
       [
+        "acceptHandoff",
         "adapterInstall",
         "amaCredentials",
         "answerApproval",
         "cancelDelivery",
         "cancelDependency",
+        "cancelHandoff",
         "clearAmaCredential",
         "confirmControl",
         "contextReads",
         "deliveries",
         "dependencies",
+        "handoff",
+        "handoffs",
         "importLegacyDependencies",
         "installAdapter",
         "installIntegration",
@@ -1208,6 +1212,7 @@ describe("契约与 core 的两张表（agents）", () => {
         "list",
         "markRead",
         "models",
+        "prepareHandoff",
         "putContextLinks",
         "repairIntegration",
         "setAmaCredential",

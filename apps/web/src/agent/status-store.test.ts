@@ -1,6 +1,10 @@
 import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentStatus, SessionSummary } from "@armadra/shared";
+import type {
+  AgentApprovalRecord,
+  AgentStatus,
+  SessionSummary,
+} from "@armadra/shared";
 
 import {
   APPROVAL_TTL_MS,
@@ -14,6 +18,21 @@ import {
 
 const NODE = "019ff7d1-0d12-7421-833d-2c5e8d64ed21";
 const WORKSPACE = "019ff7d1-0d12-7421-833d-2c5e8d64ed22";
+
+/** `agent.approval` 带的审批行（core 的 `AgentApproval`）；`patch` 写答复。 */
+function approvalRecord(
+  id: string,
+  patch: Partial<AgentApprovalRecord> = {},
+): AgentApprovalRecord {
+  return {
+    id,
+    nodeId: NODE,
+    workspaceId: WORKSPACE,
+    request: null,
+    createdAt: "2026-10-06T00:00:00Z",
+    ...patch,
+  };
+}
 const BASE = Date.parse("2026-09-04T10:00:00.000Z");
 
 function status(
@@ -145,7 +164,7 @@ describe("agent status mirror", () => {
       type: "agent.approval",
       nodeId: NODE,
       pendingId: "pending-1",
-      request: {},
+      request: approvalRecord("pending-1"),
     });
     expect(store().statuses[scoped(NODE)]!.pendingId).toBe("pending-1");
   });
@@ -320,7 +339,7 @@ describe("agent status mirror", () => {
       type: "agent.approval",
       nodeId: NODE,
       pendingId: "p1",
-      request: { id: "p1", answer: "allow", answeredAt: at(1) },
+      request: approvalRecord("p1", { answer: "allow", answeredAt: at(1) }),
     });
     expect(store().statuses[scoped(NODE)]!.pendingId).toBeUndefined();
     // 状态本身不动：下一条 `agent.status` 才有权改它。
@@ -344,7 +363,7 @@ describe("agent status mirror", () => {
         type: "agent.approval",
         nodeId: NODE,
         pendingId: "p1",
-        request: {},
+        request: approvalRecord("p1"),
       },
       { now: BASE },
     );

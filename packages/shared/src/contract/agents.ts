@@ -7,7 +7,7 @@ import { meta, oc } from "./meta.js";
 
 /**
  * `agents.*`（契约 §39）：Agent 目录与集成、ama 的模型密钥、节点状态、人的答复
- * （审批与关闭确认）、投递与上下文、依赖等待。
+ * （审批与关闭确认）、投递与上下文、依赖等待、对话交接（§39.8）。
  *
  * 形状写线上的样子：标识与时刻只校是字符串，格式由页面自己的 schema 再解析一遍；
  * 页面 schema 是「已知字段 + 透传」的（目录行、集成状态、审批答复、节点状态），
@@ -289,6 +289,24 @@ const adapterInstallJobWireSchema = loose({
   failure: loose({ code: z.string(), message: z.string() }).optional(),
 });
 
+/**
+ * 一次对话交接（契约 §39.8，设计 §7）：冻结的材料包、它的摘要、状态与投递记号。
+ * 材料包写成原样透传的 JSON 对象，页面的 `handoffViewSchema` 再按自己的口径解析。
+ */
+const handoffViewWireSchema = loose({
+  bundle: loose({}),
+  digest: z.string(),
+  state: z.string(),
+  mailboxId: z.string().nullable(),
+  traceId: z.string().nullable(),
+  errorCode: z.string().nullable(),
+  acceptedAt: z.string().nullable(),
+  updatedAt: z.string(),
+  sourceHasNewActivity: z.boolean(),
+  /** 投递试过几次；这个构建写的只有 0 或 1。 */
+  attempts: z.number(),
+});
+
 /* ------------------------------- procedure ------------------------------- */
 
 const since = "1.9";
@@ -298,6 +316,9 @@ const ANSWERS = { since, contract: "§39.3" } as const;
 const DELIVERY = { since, contract: "§39.4" } as const;
 const DEPENDENCIES = { since, contract: "§39.5" } as const;
 const ADAPTER_INSTALL = { since: "1.15", contract: "§39.7" } as const;
+const HANDOFF = { since: "1.18", contract: "§39.8" } as const;
+const HANDOFFS = "/api/workspaces/{workspaceId}/handoffs";
+const handoffRef = workspaceRef.extend({ handoffId: z.string() });
 
 const INTEGRATION = "/api/agents/{agentId}/integration";
 const AMA_KEY = "/api/agents/ama/credentials/{provider}";
@@ -618,6 +639,96 @@ export const agents = {
         scope: "canvas:write",
         workspaceKey: "workspaceId",
         legacy: { method: "DELETE", path: `${DEPENDENCY_LIST}/{dependencyId}` },
+      }),
+    ),
+
+  /* ------------------------------ §39.8 对话交接 ------------------------------ */
+
+  /**
+   * 一块工作空间的交接历史（新的在前）；带 `sourceNodeId` 时只答那个节点作为来源
+   * 或目标的。行里的来源与目标是冻结在包里的身份。
+   */
+  handoffs: oc
+    .input(workspaceRef.extend({ sourceNodeId: z.string().optional() }))
+    .output(z.array(handoffViewWireSchema))
+    .errors(errors.pick("forbidden", "not_found"))
+    .meta(
+      meta({
+        ...HANDOFF,
+        scope: "canvas:read",
+        workspaceKey: "workspaceId",
+        legacy: { method: "GET", path: HANDOFFS },
+      }),
+    ),
+  handoff: oc
+    .input(handoffRef)
+    .output(handoffViewWireSchema)
+    .errors(errors.pick("forbidden", "not_found", "conflict"))
+    .meta(
+      meta({
+        ...HANDOFF,
+        scope: "canvas:read",
+        workspaceKey: "workspaceId",
+        legacy: { method: "GET", path: `${HANDOFFS}/{handoffId}` },
+      }),
+    ),
+  /**
+   * 冻结材料并生成预览，不通知任何人。来源与目标的身份、代数、模板、字节预算的
+   * 检查都在域里；来源 Agent 所在的执行主机采集不了转录时答 501
+   * `handoff_host_offline`（域里的码，注册表不登记）。
+   */
+  prepareHandoff: oc
+    .input(
+      workspaceRef.extend({
+        sourceNodeId: z.string().optional(),
+        sourceSessionId: z.string().optional(),
+        sourceGeneration: z.number().optional(),
+        targetNodeId: z.string().optional(),
+        targetSessionId: z.string().optional(),
+        targetGeneration: z.number().optional(),
+        sections: jsonObjectSchema.optional(),
+        filePaths: z.array(z.string()).optional(),
+        byteBudget: z.number().optional(),
+        includeTranscript: z.boolean().optional(),
+      }),
+    )
+    .output(handoffViewWireSchema)
+    .errors(errors.pick("bad_request", "forbidden", "not_found", "conflict"))
+    .meta(
+      meta({
+        ...HANDOFF,
+        scope: "canvas:write",
+        workspaceKey: "workspaceId",
+        legacy: { method: "POST", path: HANDOFFS },
+      }),
+    ),
+  /**
+   * 用户的批准——交接里唯一的授权：`expectedDigest` 必须是预览里那一份，否则
+   * `conflict`。材料进目标的收件箱，不往对方终端里写。
+   */
+  acceptHandoff: oc
+    .input(handoffRef.extend({ expectedDigest: z.string().optional() }))
+    .output(handoffViewWireSchema)
+    .errors(errors.pick("bad_request", "forbidden", "not_found", "conflict"))
+    .meta(
+      meta({
+        ...HANDOFF,
+        scope: "canvas:write",
+        workspaceKey: "workspaceId",
+        legacy: { method: "POST", path: `${HANDOFFS}/{handoffId}/accept` },
+      }),
+    ),
+  /** 撤回还没被确认的交接；收件箱里那条一并删掉。 */
+  cancelHandoff: oc
+    .input(handoffRef.extend({ expectedDigest: z.string().optional() }))
+    .output(handoffViewWireSchema)
+    .errors(errors.pick("bad_request", "forbidden", "not_found", "conflict"))
+    .meta(
+      meta({
+        ...HANDOFF,
+        scope: "canvas:write",
+        workspaceKey: "workspaceId",
+        legacy: { method: "POST", path: `${HANDOFFS}/{handoffId}/cancel` },
       }),
     ),
 

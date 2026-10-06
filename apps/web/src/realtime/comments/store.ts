@@ -9,7 +9,7 @@ import {
 } from "@armadra/shared";
 
 import { onWorkspaceEvent } from "@/api/events";
-import { json, noContentSchema, request } from "@/api/request";
+import { currentClient } from "@/api/client";
 
 /**
  * 评论（契约 §16.3，设计系统 §5.7）的页面状态：当前板的评论与可提及的人、
@@ -19,43 +19,66 @@ import { json, noContentSchema, request } from "@/api/request";
  * （一块板的评论是几十条的量，增量合并换不来什么）。
  */
 
-const base = (workspaceId: string, boardId: string) =>
-  `/api/workspaces/${encodeURIComponent(workspaceId)}/boards/${encodeURIComponent(boardId)}/comments`;
-
+/**
+ * 评论的调用面（契约 §36.5，`client.boards.*Comment*`），发往当前源。答案仍过
+ * 页面自己的 schema。
+ */
 export const commentsApi = {
-  list: (workspaceId: string, boardId: string) =>
-    request(base(workspaceId, boardId), commentListSchema),
-  create: (
+  list: async (workspaceId: string, boardId: string) =>
+    commentListSchema.parse(
+      await currentClient().boards.comments({ workspaceId, boardId }),
+    ),
+  create: async (
     workspaceId: string,
     boardId: string,
     input: { anchor?: CommentAnchor; body: string; parentId?: string },
   ) =>
-    request(base(workspaceId, boardId), boardCommentSchema, {
-      method: "POST",
-      ...json(input),
-    }),
-  edit: (workspaceId: string, boardId: string, id: string, body: string) =>
-    request(
-      `${base(workspaceId, boardId)}/${encodeURIComponent(id)}`,
-      boardCommentSchema,
-      { method: "PATCH", ...json({ body }) },
+    boardCommentSchema.parse(
+      await currentClient().boards.createComment({
+        workspaceId,
+        boardId,
+        ...input,
+      }),
     ),
-  remove: (workspaceId: string, boardId: string, id: string) =>
-    request(
-      `${base(workspaceId, boardId)}/${encodeURIComponent(id)}`,
-      noContentSchema,
-      { method: "DELETE" },
+  edit: async (
+    workspaceId: string,
+    boardId: string,
+    id: string,
+    body: string,
+  ) =>
+    boardCommentSchema.parse(
+      await currentClient().boards.updateComment({
+        workspaceId,
+        boardId,
+        commentId: id,
+        body,
+      }),
     ),
-  resolve: (
+  remove: async (
+    workspaceId: string,
+    boardId: string,
+    id: string,
+  ): Promise<undefined> => {
+    await currentClient().boards.deleteComment({
+      workspaceId,
+      boardId,
+      commentId: id,
+    });
+    return undefined;
+  },
+  resolve: async (
     workspaceId: string,
     boardId: string,
     id: string,
     resolved: boolean,
   ) =>
-    request(
-      `${base(workspaceId, boardId)}/${encodeURIComponent(id)}/resolve`,
-      boardCommentSchema,
-      { method: "POST", ...json({ resolved }) },
+    boardCommentSchema.parse(
+      await currentClient().boards.resolveComment({
+        workspaceId,
+        boardId,
+        commentId: id,
+        resolved,
+      }),
     ),
 };
 

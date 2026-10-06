@@ -2857,3 +2857,37 @@ V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
 - 多主机同时挂载没有对真中继跑端到端（探针只登记一台 core）；由单测覆盖挂载、事件分发与单台兼容。手机多连接同样只在单测里验过。
 - 中继停了的提示只在托管页面上；手机经中继的连接没有这一条（仍是运行时断开与源状态）。
 - `runtimeApi` 其余域（handoff、git 等 REST 与 `currentClient` 的）仍发往当前源，键带源前缀的在切源前后由键区分。
+
+## P2 契约补迁与错误码注册表（契约 §36.5、§37.3、§39.8，协议 minor 18）
+
+补 E3 各包留下的尾巴：评论、交接、输出到画板迁到契约，`cancelled` / `reveal_failed` 与 §18 的具名码进注册表，事件流里 `agent.approval` 的 `request` 收紧。
+
+做了什么：
+
+- **评论**（§36.5）：`boards.comments` / `createComment` / `updateComment` / `deleteComment` / `resolveComment`，旧路径 `…/boards/{boardId}/comments[/{commentId}[/resolve]]`。`core/realtime/comments-routes.ts` 收成 `commentOperations`，旧 handler 与 procedure 同调；旧路径仍在判过板与权限之后才读体，拒绝的先后不变。`installCommentRoutes` 改收 `CoreServer`。页面 `realtime/comments/store.ts` 的 `commentsApi` 经 `currentClient().boards.*`，签名不变。
+- **连线**：`agents.putContextLinks`（§39.4）在 E3-4 已迁，页面早已走 procedure；本包只更正 §36 的「留在 REST」一句。
+- **对话交接**（§39.8）：`agents.handoffs` / `handoff` / `prepareHandoff` / `acceptHandoff` / `cancelHandoff`。`core/agent/routes.ts` 加 `handoffOperations`；页面 `api/handoff.ts` 改 `handoffApiFor(rpc)`，经 `runtimeApi` 的签名不变。
+- **输出到画板**（§37.3）：`files.exportText`，旧路径 `POST …/exports/{exportId}/text`，scope 同路由表 `assets:read`；`core/assets/routes.ts` 登记进 `files` 子树。`drive`（输入框租约）其实已是 §38 的 `terminals.drive`；`acp/api.ts` 改为直接 `currentClient().terminals.drive`，两条都发往当前源。
+- **注册表**：加 `cancelled`（499）、`reveal_failed`（500），`files.search` / `files.reveal` 的 `errors` 声明它们；§18 的 `password_*`（5 个）、`password_reset_invalid`（404）、`passkey_*`（4）、`mfa_*`（4）、`oauth_*`（10）按 §18 的状态登记，`i18n` 指向已有的 `security.error.*` / `auth.error.*`。`security.passkeys.register*`、`security.mfa.*`、`accounts.credentials.setPassword` 声明对应的码。`api/error-codes.test.ts` 加两种扫描：身份域里的具名字面量（码常由变量或三元式给出）与 `IdentityRefusal` / `OAuthError` 的字面量状态；`DomainError` 与身份域拒绝用了登记过的码时状态必须一致。
+- **`agent.approval.request`**（`packages/shared/src/api/events.ts`）：从 `unknown` 收紧成 `agentApprovalRecordSchema`——审批行（`id`、`nodeId`、`workspaceId`、`createdAt`，答复字段 `nullish`，hook 面的行没有 `revision`），答复事件的 `resolved` / `decision` / `route` / `elicitation`，CLI 的原话 `request` 按 JSON 透传，其余键 JSON 透传。`workspaces.events` 的 `unknown` 放行从 3 降到 2（剩 ACP 工具调用的 `rawInput` / `rawOutput`，是适配器的原样载荷）。
+- **`GatewaySection`**：新增组件用例，会话变化时还在路上的设备请求被中止、重取的答案上屏；把「先取消」那一步去掉用例就红。
+- 协议 minor 17 → 18（17 给了 P4 #181），新 procedure 的 `since` 为 1.18。
+- **探针**：`ui-features/keybindings.mjs` 在设置对话框停稳（`dialogSettled`）之后再点侧栏最底下的「快捷键」——CI 上两次在对话框放大动画里按坐标点空。
+
+实测（macOS arm64，基于 main c04224cf）：
+
+- 新增 core 对偶测试 `contract/parity-comments.test.ts`（5）、`parity-handoffs.test.ts`（4）、`parity-export-text.test.ts`（3）：路由表原 handler、旧路径、procedure 三者逐字节相等（含 201 / 204 的状态差、400 / 403 / 404 / 409），scope 与路由表一致；形状错由契约先答 `bad_request`。`parity-agents` / `parity-files` 的条数随之更新。
+- 页面新增 `api/client.comments.test.ts`、`client.handoffs.test.ts`，`client.acp.test.ts` 加 `exportText` / `drive`，`GatewaySection.test.tsx`（2）。`@armadra/shared` 的事件用例覆盖新请求、答复与两种不收的形状。
+- `pnpm check` 通过（含 `contract:check`、lint 0 error、各处 typecheck、`repo:check`）。`pnpm libs:build && pnpm -r --if-present test`：desktop 5246 过 / 67 跳（live 4 过），web 3864 过，shared 372 过，server 98 过 / 4 跳，mobile 10、push-relay 9 过。
+
+没做 / 偏离：
+
+- `handoff_host_offline`（501）没登记：它由常量给出、只在交接域答，注册表的「还在被用」扫描认字面量；页面按码取文案不受影响。
+- 入参形状错（`resolved` 不是布尔、交接的代数不是数字等）经旧路径与 procedure 由契约先答 `bad_request`（带 `details.issues`），原话与迁移前不同，码与状态不变（与 E3 各包同）。
+- 白板 PNG 导出与资源上传仍留在 REST（字节流与大体积 data URL）。
+
+接口：
+
+- 契约 §36.5、§37.3、§39.8（节号只追加）；`boardCommentWireSchema`、`commentListWireSchema` 从 `@armadra/shared` 导出；`agentApprovalRecordSchema` / `AgentApprovalRecord`。
+- core：`commentOperations(options)`、`installCommentRoutes(server, options)`、`handoffOperations(collab)`。
+- 页面：`handoffApiFor(rpc)`；`commentsApi` 与 `acpApi.exportText` / `drive` 签名不变。

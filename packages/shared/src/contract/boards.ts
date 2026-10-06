@@ -7,7 +7,7 @@ import { meta, oc } from "./meta.js";
 
 /**
  * `boards.*`（契约 §36）：画布列表、文档的读与存、在线设备与编辑租约、实时
- * 状态，以及控制面上的在线订阅 `boards.presence`。
+ * 状态、控制面上的在线订阅 `boards.presence`，以及评论（§36.5）。
  *
  * 形状写线上的样子而不是页面解析后的样子：core 把每个字段都写全（节点的
  * `labels` / `note`、连线的 `kind`），所以出参没有缺省值，校验校的是 core 真发
@@ -114,6 +114,41 @@ export type BoardPresenceItem = z.input<typeof boardPresenceWireSchema>;
 export type BoardRealtimeStateWire = z.input<
   typeof boardRealtimeStateWireSchema
 >;
+
+/** 评论的锚点（契约 §16.3）：节点、白板 item 或画布坐标。 */
+const commentAnchorWireSchema = z.union([
+  z.object({ kind: z.enum(["node", "item"]), id: z.string() }),
+  z.object({ kind: z.literal("point"), x: z.number(), y: z.number() }),
+]);
+
+/** 一条评论（契约 §16.3）：存取层的字段加上 core 认出来的提及。 */
+export const boardCommentWireSchema = z.object({
+  id: z.string(),
+  boardId: z.string(),
+  anchor: commentAnchorWireSchema,
+  /** 正文。提及写成 `@[显示名](principal:<id>)`。 */
+  body: z.string(),
+  authorPrincipalId: z.string(),
+  parentId: z.string().nullable(),
+  createdAtMs: z.number(),
+  updatedAtMs: z.number(),
+  resolvedAtMs: z.number().nullable(),
+  mentions: z.array(z.string()),
+});
+
+export const commentListWireSchema = z.object({
+  comments: z.array(boardCommentWireSchema),
+  people: z.array(z.object({ principalId: z.string(), name: z.string() })),
+});
+
+const COMMENTS = "/api/workspaces/{workspaceId}/boards/{boardId}/comments";
+const COMMENT = `${COMMENTS}/{commentId}`;
+const commentRef = boardRef.extend({ commentId: z.string().min(1) });
+const comments = {
+  since: "1.18",
+  contract: "§36.5",
+  workspaceKey: "workspaceId",
+} as const;
 
 const clientFields = {
   /** 页面自己生成的随机串，一个标签页一个；字符集由域校验。 */
@@ -321,6 +356,84 @@ export const boards = {
           method: "POST",
           path: "/api/workspaces/{workspaceId}/boards/{boardId}/lease",
         },
+      }),
+    ),
+  /**
+   * 一块板的评论与可提及的人（契约 §16.3）。`anchorKind` + `anchorId` 只要一个锚点
+   * 上的；`resolved: false`（旧路径是查询串 `"false"`）去掉已解决的线程。
+   */
+  comments: oc
+    .input(
+      boardRef.extend({
+        anchorKind: z.string().optional(),
+        anchorId: z.string().optional(),
+        resolved: z.union([z.boolean(), z.string()]).optional(),
+      }),
+    )
+    .output(commentListWireSchema)
+    .errors(errors.pick("bad_request", "forbidden", "not_found"))
+    .meta(
+      meta({
+        ...comments,
+        scope: "canvas:read",
+        legacy: { method: "GET", path: COMMENTS },
+      }),
+    ),
+  /**
+   * 新建：顶层评论带锚点，回复带 `parentId`（只有一层，锚点随父评论）。锚点与
+   * 正文的检查在域里（正文 1–10000 个字符）。
+   */
+  createComment: oc
+    .input(
+      boardRef.extend({
+        anchor: jsonValueSchema.optional(),
+        body: z.string().optional(),
+        parentId: z.string().nullable().optional(),
+      }),
+    )
+    .output(boardCommentWireSchema)
+    .errors(errors.pick("bad_request", "forbidden", "not_found"))
+    .meta(
+      meta({
+        ...comments,
+        scope: "canvas:write",
+        legacy: { method: "POST", path: COMMENTS, successStatus: 201 },
+      }),
+    ),
+  /** 改正文：只有作者（owner 也不行，owner 能做的是删）。 */
+  updateComment: oc
+    .input(commentRef.extend({ body: z.string().optional() }))
+    .output(boardCommentWireSchema)
+    .errors(errors.pick("bad_request", "forbidden", "not_found"))
+    .meta(
+      meta({
+        ...comments,
+        scope: "canvas:write",
+        legacy: { method: "PATCH", path: COMMENT },
+      }),
+    ),
+  /** 删除：作者或 owner。 */
+  deleteComment: oc
+    .input(commentRef)
+    .output(z.void())
+    .errors(errors.pick("forbidden", "not_found"))
+    .meta(
+      meta({
+        ...comments,
+        scope: "canvas:write",
+        legacy: { method: "DELETE", path: COMMENT, successStatus: 204 },
+      }),
+    ),
+  /** 解决（缺省）或重新打开（`resolved: false`）一条顶层评论。 */
+  resolveComment: oc
+    .input(commentRef.extend({ resolved: z.boolean().optional() }))
+    .output(boardCommentWireSchema)
+    .errors(errors.pick("bad_request", "forbidden", "not_found"))
+    .meta(
+      meta({
+        ...comments,
+        scope: "canvas:write",
+        legacy: { method: "POST", path: `${COMMENT}/resolve` },
       }),
     ),
   /**

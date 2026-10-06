@@ -252,7 +252,11 @@ export function install(context: CoreContext): void {
     unwatch: ({ workspaceId: id, path, nodeId }) =>
       operations.unwatch(id, path ?? "", nodeId ?? ""),
     version: ({ workspaceId: id, path }) => operations.version(id, path),
-  } satisfies Omit<DomainHandlers<"files">, "reveal" | "importLocal">;
+  } satisfies Omit<
+    DomainHandlers<"files">,
+    // 各自的模块登记：`files/reveal.ts`、`imports/routes.ts`、`assets/routes.ts`。
+    "reveal" | "importLocal" | "exportText"
+  >;
   registerProcedures(
     server,
     "files",

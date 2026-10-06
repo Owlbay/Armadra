@@ -4,8 +4,9 @@
  *
  * 起会话、发提示、打断、切模式与模型、读镜像、切换驱动经 `acp.*` procedure；审批与
  * elicitation 的答复经 `agents.answerApproval`（§39.3，人替 Agent 回答，Agent 没有
- * 这条路）；输出到画板的代码块与输入框的租约不在这个域，仍走各自的旧调用。答案
- * 照旧过页面自己的 schema，调用点的签名不变。
+ * 这条路）；输出到画板的代码块经 `files.exportText`（§37.3），输入框的租约经
+ * `terminals.drive`（§38）。都发往当前源。答案照旧过页面自己的 schema，调用点的
+ * 签名不变。
  */
 import {
   acpDriverRequestSchema,
@@ -19,16 +20,17 @@ import {
   answerApprovalRequestSchema,
   answerApprovalResponseSchema,
   createAcpSessionRequestSchema,
+  driveLeaseSchema,
   exportPngResponseSchema,
   exportTextRequestSchema,
+  terminalDriveRequestSchema,
   terminalSessionSchema,
   type AcpElicitationAnswer,
   type AgentDriver,
   type CreateAcpSessionRequest,
 } from "@armadra/shared";
 
-import { json, query, request } from "@/api/request";
-import { currentClient, runtimeApi } from "@/api/client";
+import { currentClient } from "@/api/client";
 
 export const acpApi = {
   createSession: async (input: CreateAcpSessionRequest) =>
@@ -98,21 +100,25 @@ export const acpApi = {
    * 输出到画板的代码块（契约 §14.5）：写到
    * `.armadra/exports/acp/<nodeId>/<name>`，答回工作区相对路径。
    */
-  exportText: (
+  exportText: async (
     workspaceId: string,
     nodeId: string,
     name: string,
     content: string,
   ) =>
-    request(
-      `/api/workspaces/${query(workspaceId)}/exports/${query(nodeId)}/text`,
-      exportPngResponseSchema,
-      {
-        method: "POST",
-        ...json(exportTextRequestSchema.parse({ name, content })),
-      },
+    exportPngResponseSchema.parse(
+      await currentClient().files.exportText({
+        workspaceId,
+        exportId: nodeId,
+        ...exportTextRequestSchema.parse({ name, content }),
+      }),
     ),
   /** 输入框聚焦拿人类租约，失焦或提交交还（ACP 设计 §5.6）。 */
-  drive: (sessionId: string, action: "takeover" | "release") =>
-    runtimeApi.driveTerminal(sessionId, action),
+  drive: async (sessionId: string, action: "takeover" | "release") =>
+    driveLeaseSchema.parse(
+      await currentClient().terminals.drive({
+        sessionId,
+        ...terminalDriveRequestSchema.parse({ action }),
+      }),
+    ),
 };
