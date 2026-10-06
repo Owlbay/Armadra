@@ -111,6 +111,11 @@ const shareLinkRefSchema = z.object({
   linkId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
 });
 
+/** 改一条链接的备注（§33.10）：只改远程服务上的 `label`，空串清掉。 */
+export const shareLinkUpdateInputSchema = shareLinkRefSchema.extend({
+  label: z.string().max(128),
+});
+
 export const shareLinkCreateInputSchema = z.object({
   serviceId: z.string(),
   workspaceId: z.string().min(1).max(256),
@@ -381,6 +386,34 @@ export const sources = {
         },
       }),
     ),
+  /**
+   * 改备注（§33.10）：远程服务 `links.update`；它不报 `links.update` 能力时答
+   * `not_implemented`。答改过之后的这条链接。
+   */
+  shareLinkUpdate: oc
+    .input(shareLinkUpdateInputSchema)
+    .output(z.object({ link: shareLinkSchema }))
+    .errors({
+      ...denied,
+      ...errors.pick(
+        "bad_request",
+        "not_found",
+        "source_unauthorized",
+        "source_unreachable",
+        "not_implemented",
+      ),
+    })
+    .meta(
+      meta({
+        scope: "settings:write",
+        since: "1.17",
+        contract: "§33.10",
+        legacy: {
+          method: "PUT",
+          path: "/api/sources/remotes/{serviceId}/links/{linkId}",
+        },
+      }),
+    ),
   /** 远程服务撤链接（连同它名下的访客），本机作废那张邀请、删存着的整条链接。 */
   shareLinkRevoke: oc
     .input(shareLinkRefSchema)
@@ -416,3 +449,4 @@ export type MountByLinkInput = z.infer<typeof mountByLinkInputSchema>;
 export type ShareLink = z.infer<typeof shareLinkSchema>;
 export type ShareLinkState = z.infer<typeof shareLinkStateSchema>;
 export type ShareLinkCreateInput = z.infer<typeof shareLinkCreateInputSchema>;
+export type ShareLinkUpdateInput = z.infer<typeof shareLinkUpdateInputSchema>;
