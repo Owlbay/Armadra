@@ -2421,3 +2421,31 @@
 - `status` 的 `paths` 收下但 core 从来不按它过滤（迁移前就如此），没有顺手改。
 - 探针在临时 HOME 下 `pnpm exec vite` 会先联网核对锁文件，本机断网时卡住；本地跑探针时加 `npm_config_verify_deps_before_run=false npm_config_minimum_release_age=0 npm_config_manage_package_manager_versions=false` 即可，探针本身未改。
 - `remote-e2e` 的 `08b-remote-acp`（ACP Agent 启动即退出）与 `server-e2e` 的「新建浏览器」菜单项等待超时失败，两处都不经过 git 面，与本包无关，未深究。
+
+## E3-4 工程规范化：agents 域迁到契约（契约 §39）
+
+规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-4）；契约 §39。
+
+做了什么：
+
+- **契约**（`packages/shared/src/contract/agents.ts`）：`agents.*` 共 21 条，覆盖页面 `api/agents.ts` 的 26 次调用里的 22 次（投递记录与排队是同一条旧路径的两个切片，合成 `deliveries`）——目录与集成（`list`、`models`、`integration`、`install/uninstall/repairIntegration`、`amaCredentials`、`set/clearAmaCredential`，§39.1）、节点状态（`markRead`、`suggestTitle`、`transcript`，§39.2）、人的答复（`answerApproval`、`confirmControl`，§39.3）、投递与上下文（`deliveries`、`cancelDelivery`、`contextReads`、`putContextLinks`，§39.4）、依赖等待（`dependencies`、`importLegacyDependencies`、`cancelDependency`，§39.5）。出参写线上形状：页面 schema 是 `looseObject` 的那几份写成已知字段 + 原样透传，出参校验不剥掉 core 多答的字段；没有缺省值。入参只校形状。`since` 为 1.9，协议 minor 8 → 9（E3-5a 先合入取了 8）。
+- **scope 进 meta**：每条的 `meta.scope` 等于 `route-scopes.ts` 给旧路径的要求（对偶测试逐条断言）；绑在路径里工作空间上的都带 `workspaceKey`。路由表本身不变，服务器壳上 procedure 经门面按 `meta.legacy` 还原成旧路径，过同一道 `identity/route-access.ts`。
+- **core**：每个拥有对象的域各收成一份操作实现，旧 handler 与 `registerProcedures(server, "agents", …)` 调同一份——`agent/routes.ts`（目录、状态、审批、关闭确认、投递、「谁读过我」）、`agent/ama-credentials.ts`、`hook/routes.ts`（集成，`InstallError` 换成 `CoreFailure`）、`models/index.ts`、`canvas/routes.ts`（连线）、`dependencies/index.ts`（新增 `registerDependencyProcedures`）。投递门语义不变：审批与关闭确认仍要 `approval:answer`，节点与审批按所在画布判，投递、连线、依赖绑在路径里的工作空间上。
+- **页面**：`api/agents.ts` 改为 `agentsApiFor(rpc)`，经 `currentClient` / `clientFor(source)`（依赖等待保留按源发），函数签名不变，答案仍过页面自己的 schema；白板导出、资源上传与按路径导入留在 REST（§39.6）。`client.ts` 的 `boardsClient` 改名 `sourceClient`，boards 与 agents 共用。
+- **契约 §39**：§39.1–§39.5 生成块与说明，§39.6 登记留在 REST 的字节流、交接与 hook 面。
+
+实测（macOS arm64，合入 main 76580264 之后）：
+
+- `pnpm check` 通过（含 `contract:check`、lint、三处 typecheck、repo:check、notices）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：420 个文件通过、10 个跳过（4987 条通过）；脚本 68 条通过。新增 `core/contract/parity-agents.test.ts` 28 条：路由表原 handler、旧路径、procedure 三者逐字节相等（含 404、409、400、501 与 ama 密钥不回显）；**投递门**一节用真的 `createRouteGuard`、真库查询与成员身份：viewer / editor / 别的画布上的 driver 答不了审批（审批行仍未答）、成员一律答不了关闭确认、别的画布上的成员读不到节点状态、「谁读过我」、投递、依赖也写不了连线，两条路答同一个 403；同画布的 driver 答得了、viewer 读得到；成员改不了 ama 密钥与集成。
+- `pnpm --filter @armadra/web test`：400 个文件、3703 条通过；`typecheck` 通过。新增 `api/client.agents.test.ts`（procedure 路径与体、中止信号、按源发、403 仍是 `RuntimeRequestError`）。
+- `@armadra/server`、`@armadra/shared` 测试通过。
+- A 档（`node tools/ci/e2e.mjs --tier a --only agent-e2e-self-test,acp-e2e,ui-features-e2e,server-e2e,workflow-e2e`）：五项通过（含集成页旧残留、多设备画布、11-coordinator、12-acp）。未合并前第一轮 `agent-e2e-self-test` 的 11-coordinator 有一次首个模型请求没带 key，单跑与合并后整跑都通过，记为偶发。
+
+没做 / 偏离：
+
+- 形状错（缺字段、类型不对）经旧路径与 procedure 由入参校验先答 `bad_request`（带 `details.issues`），与迁移前那句原话不同；码与状态不变（与 E3-1/2/3 同）。
+- 集成的意外失败（非 `InstallError`）经旧路径现在答门面统一的 500 原话，不再带异常消息。
+- 对话交接（`api/handoff.ts`）不在本包；白板导出与资源上传留在 REST。
+- 没有新增探针，现有探针也没有 `cli-collab` 一项；agent / 协作相关的 A 档条目就是上面五项。
+- 发现一处既有不一致：core 的「谁读过我」答 `{ total, bytes, reads }`，页面 `contextReadsResponseSchema` 读的是 `recent`（缺省空表），节点头的最近读取清单因此一直是空的。契约按 core 的真形状写；页面没改，另开任务处理。
