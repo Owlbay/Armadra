@@ -38,11 +38,3 @@ export const WIZARD_AGENTS: AgentInfo[] = [
 export const WIZARD_NO_AGENTS: AgentInfo[] = [
   agent("claude", "Claude Code", false, "claude-agent-acp"),
 ];
-
-export const WIZARD_ROOT = "/Users/me/projects/armadra";
-
-export const WIZARD_FOLDERS = [
-  WIZARD_ROOT,
-  "/Users/me/projects/armadra/apps/web",
-  "/Users/me/projects/armadra-wt/fix-login",
-];

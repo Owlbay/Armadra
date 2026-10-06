@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Copy, FolderOpen } from "lucide-react";
+import { Copy } from "lucide-react";
 import { toast } from "sonner";
 import {
   supportedPermissionModes,
@@ -24,42 +24,26 @@ import {
   ResponsiveDialogHeader,
   ResponsiveDialogTitle,
 } from "@/panels/ResponsiveDialog";
-import { isDesktop, pickDirectory } from "@/platform";
 import { useCompactLayout } from "@/platform/layout";
 import { useCanvasStore } from "@/store/canvas-store";
 import { AgentAvatar } from "@/ui/agent-avatar";
 import { Button } from "@/ui/button";
 import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from "@/ui/empty";
-import { Field, FieldError, FieldLabel } from "@/ui/field";
+import { FieldError } from "@/ui/field";
 import { Label } from "@/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/ui/radio-group";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/ui/select";
-import { Textarea } from "@/ui/textarea";
-import { ToggleGroup, ToggleGroupItem } from "@/ui/toggle-group";
 import { acpApi } from "./api";
-import {
-  TASK_TEMPLATES,
-  templateById,
-  templateLabel,
-  templatePrompt,
-} from "./templates";
 import { closeNewAgentWizard, useWizardOpen } from "./wizard-open";
 
 /**
  * 新建 Agent 向导（ACP 设计 §8 第 1 条，设计系统 §5.3）。
  *
- * 两步：选 Agent（只有 CLI 与 ACP 入口都装了的能选，其余灰掉并给安装命令）
- * → 选任务（模板 chip 预填，或自己写一句）。目录不单独占一步：画布已经知道
- * 新节点该开在哪（落点所在的绑定分组的 worktree，否则工作区根，与菜单里直接
- * 新建 Agent 同一口径，见 `canvasDefaultCwd`），第二步顶上预选好，要换再换。「创建」先经 `POST /api/acp/sessions` 起会话并把任务当第一条
- * prompt 带上，再建节点并写好 `sessionId`——会话视图挂上来时直接接这一行，
- * 不会再起第二个，第一条 prompt 也不依赖哪个窗口挂没挂上来。
+ * 只有一步：选 Agent（只有 CLI 与 ACP 入口都装了的能选，其余灰掉并给安装命令），
+ * 点「创建」就起会话。目录不问：画布已经知道新节点该开在哪（落点所在的绑定分组
+ * 的 worktree，否则工作区根，与菜单里直接新建 Agent 同一口径，见
+ * `canvasDefaultCwd`）。任务也不问：会话起来后用户直接在会话里说要做什么。
+ * 「创建」先经 `POST /api/acp/sessions` 起会话，再建节点并写好 `sessionId`——
+ * 会话视图挂上来时直接接这一行，不会再起第二个。
  */
 
 /** 适配器 / CLI 的安装命令。没有公开的 npm 包时不给（不猜）。 */
@@ -106,100 +90,42 @@ export function canvasDefaultCwd(
   return cwd || rootPath;
 }
 
-/** 目录候选：工作区根 + 画布上终端用过的目录，最多 5 个，去重。 */
-export function folderChoices(
-  rootPath: string,
-  cwds: readonly (string | undefined)[],
-): string[] {
-  const seen = new Set<string>([rootPath]);
-  const result = [rootPath];
-  for (const cwd of cwds) {
-    if (!cwd || seen.has(cwd)) continue;
-    seen.add(cwd);
-    result.push(cwd);
-    if (result.length >= 6) break;
-  }
-  return result;
-}
-
-export type WizardStep = 0 | 1;
-
 export interface WizardState {
-  step: WizardStep;
   agentId: string | null;
-  folder: string;
-  templateId: string | null;
-  task: string;
   busy: boolean;
   failed: boolean;
 }
 
-export function initialWizardState(
-  agents: readonly AgentInfo[],
-  folder: string,
-): WizardState {
+export function initialWizardState(agents: readonly AgentInfo[]): WizardState {
   const first = wizardAgents(agents).find(agentReady);
-  return {
-    step: 0,
-    agentId: first?.id ?? null,
-    folder,
-    templateId: null,
-    task: "",
-    busy: false,
-    failed: false,
-  };
-}
-
-const STEP_TITLES = ["wizard.step.agent", "wizard.step.task"] as const;
-
-function StepDots({ step }: { step: WizardStep }) {
-  return (
-    <span className="flex items-center gap-1.5" aria-hidden>
-      {[0, 1].map((index) => (
-        <span
-          key={index}
-          className="size-1.5 rounded-full"
-          style={{
-            background: index === step ? "var(--brand)" : "var(--faint)",
-          }}
-        />
-      ))}
-    </span>
-  );
+  return { agentId: first?.id ?? null, busy: false, failed: false };
 }
 
 /**
- * 向导的内容（两步之一 + 底栏）。不带 Dialog：展示页把两步并排画出来，
- * 对话框与手机上的底部 Sheet 也各自包它一层。
+ * 向导的内容（Agent 列表 + 底栏）。不带 Dialog：展示页直接画它，对话框与
+ * 手机上的底部 Sheet 也各自包它一层。
  */
 export function WizardBody({
   state,
   onChange,
   agents,
-  folders,
-  rootPath,
   onCancel,
   onCreate,
   onOpenSettings,
-  onPickFolder,
 }: {
   state: WizardState;
   onChange: (patch: Partial<WizardState>) => void;
   agents: readonly AgentInfo[];
-  folders: readonly string[];
-  rootPath: string;
   onCancel: () => void;
   onCreate: () => void;
   onOpenSettings: () => void;
-  /** 「选择文件夹…」：只有桌面壳、本机工作空间才给（系统选择器选的是本机路径）。 */
-  onPickFolder?: () => void;
 }) {
   const t = useT();
   const listed = wizardAgents(agents);
   const ready = listed.filter(agentReady);
   const selected = ready.find((agent) => agent.id === state.agentId) ?? null;
 
-  if (state.step === 0 && ready.length === 0) {
+  if (ready.length === 0) {
     return (
       <Empty className="border-0 p-6" data-slot="wizard-empty">
         <EmptyHeader>
@@ -223,13 +149,12 @@ export function WizardBody({
     );
   };
 
-  let body: React.ReactNode;
-  if (state.step === 0) {
-    body = (
+  return (
+    <div className="flex flex-col gap-4" data-slot="wizard-body">
       <RadioGroup
         value={state.agentId ?? ""}
-        onValueChange={(value) => onChange({ agentId: value })}
-        aria-label={t("wizard.step.agent")}
+        onValueChange={(value) => onChange({ agentId: value, failed: false })}
+        aria-label={t("wizard.title")}
         className="gap-1.5"
       >
         {listed.map((agent) => {
@@ -273,151 +198,31 @@ export function WizardBody({
           );
         })}
       </RadioGroup>
-    );
-  } else {
-    body = (
-      <div className="flex flex-col gap-3">
-        <Field>
-          <FieldLabel>{t("wizard.folder.label")}</FieldLabel>
-          <div className="flex gap-2">
-            <Select
-              value={state.folder}
-              onValueChange={(value) => onChange({ folder: value })}
-            >
-              <SelectTrigger
-                aria-label={t("wizard.folder.label")}
-                className="min-w-0 flex-1"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="z-[var(--z-dialog)]">
-                {folders.map((folder) => (
-                  <SelectItem key={folder} value={folder}>
-                    {folder === rootPath ? t("wizard.folder.root") : folder}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {onPickFolder && (
-              <Button
-                variant="outline"
-                size="icon"
-                title={t("wizard.folder.pick")}
-                aria-label={t("wizard.folder.pick")}
-                onClick={onPickFolder}
-              >
-                <FolderOpen />
-              </Button>
-            )}
-          </div>
-        </Field>
-        <ToggleGroup
-          type="single"
-          variant="outline"
-          size="sm"
-          spacing={1}
-          className="flex-wrap"
-          aria-label={t("wizard.templates")}
-          value={state.templateId ?? ""}
-          onValueChange={(value) => {
-            const template = templateById(value);
-            onChange({
-              templateId: template ? template.id : null,
-              ...(template ? { task: templatePrompt(template, t) } : {}),
-            });
-          }}
-        >
-          {TASK_TEMPLATES.map((template) => (
-            <ToggleGroupItem key={template.id} value={template.id}>
-              {templateLabel(template, t)}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-        <Field data-invalid={state.failed || undefined}>
-          <FieldLabel htmlFor="wizard-task">
-            {t("wizard.task.label")}
-          </FieldLabel>
-          <Textarea
-            id="wizard-task"
-            rows={4}
-            placeholder={t("wizard.task.placeholder")}
-            value={state.task}
-            aria-invalid={state.failed || undefined}
-            onChange={(event) =>
-              onChange({ task: event.target.value, failed: false })
-            }
-          />
-          {state.failed && <FieldError>{t("wizard.failed")}</FieldError>}
-        </Field>
-      </div>
-    );
-  }
-
-  const last = state.step === 1;
-  return (
-    <div
-      className="flex flex-col gap-4"
-      data-slot="wizard-body"
-      data-step={state.step}
-    >
-      <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
-        <StepDots step={state.step} />
-        <span>{t(STEP_TITLES[state.step])}</span>
-      </div>
-      {body}
-      <WizardFooter>
-        <Button
-          variant="outline"
-          onClick={() =>
-            state.step === 0
-              ? onCancel()
-              : onChange({ step: (state.step - 1) as WizardStep })
-          }
-        >
-          {t(state.step === 0 ? "wizard.cancel" : "wizard.back")}
+      {state.failed && <FieldError>{t("wizard.failed")}</FieldError>}
+      <div className="flex justify-end gap-2">
+        <Button variant="outline" onClick={onCancel}>
+          {t("wizard.cancel")}
         </Button>
-        <Button
-          disabled={!selected || state.busy}
-          onClick={() =>
-            last
-              ? onCreate()
-              : onChange({ step: (state.step + 1) as WizardStep })
-          }
-        >
-          {t(last ? "wizard.create" : "wizard.next")}
+        <Button disabled={!selected || state.busy} onClick={onCreate}>
+          {t("wizard.create")}
         </Button>
-      </WizardFooter>
+      </div>
     </div>
   );
 }
 
-function WizardFooter({ children }: { children: React.ReactNode }) {
-  return <div className="flex justify-end gap-2">{children}</div>;
-}
-
-/** 模板建议的权限模式；这家不支持就退回用户的缺省，再不行就不写。 */
-function permissionFor(
-  agent: AgentInfo,
-  templateId: string | null,
-): PermissionMode | undefined {
+/** 用户的缺省权限模式；这家不支持就不写（由 Agent 自己的缺省决定）。 */
+function permissionFor(agent: AgentInfo): PermissionMode | undefined {
   const supported = supportedPermissionModes(agent.baseAgent ?? agent.id);
-  const suggested = templateId
-    ? templateById(templateId)?.permissionMode
-    : undefined;
-  const fallback = usePreferencesStore.getState().defaultPermissionMode;
-  const mode = [suggested, fallback].find(
-    (candidate): candidate is PermissionMode =>
-      Boolean(candidate) && supported.includes(candidate as PermissionMode),
-  );
-  return mode && mode !== "default" ? mode : undefined;
+  const mode = usePreferencesStore.getState().defaultPermissionMode;
+  return supported.includes(mode) && mode !== "default" ? mode : undefined;
 }
 
 /**
- * 「创建」：先起会话（带第一条 prompt），成功后再建节点。失败停在第二步。
- * 返回新节点 id；失败返回 null。
+ * 「创建」：在画布给的目录里起会话（不带 prompt），成功后再建节点。失败留在
+ * 对话框里并给错误行。返回新节点 id；失败返回 null。
  */
 export async function createAgentFromWizard(
-  state: WizardState,
   agent: AgentInfo,
   position: Position,
 ): Promise<string | null> {
@@ -425,16 +230,20 @@ export async function createAgentFromWizard(
   const workspace = store.workspace;
   if (!workspace || !store.document) return null;
   const nodeId = crypto.randomUUID();
-  const permissionMode = permissionFor(agent, state.templateId);
-  const prompt = state.task.trim();
+  const permissionMode = permissionFor(agent);
+  const cwd = canvasDefaultCwd(
+    store.document.nodes,
+    position,
+    workspace.rootPath,
+  );
   const session = await acpApi.createSession({
     workspaceId: workspace.id,
     nodeId,
-    cwd: state.folder,
+    cwd,
     agentId: agent.id,
     ...(permissionMode ? { permissionMode } : {}),
-    ...(prompt ? { prompt } : {}),
   });
+  // 不写 cwd：addNode 按同一落点继承出同一个目录，会话与节点不会分家。
   const id = useCanvasStore.getState().addNode("terminal", {
     id: nodeId,
     title: agent.label,
@@ -442,11 +251,6 @@ export async function createAgentFromWizard(
     data: {
       kind: "terminal",
       sessionId: session.id,
-      // 不写 cwd 时 addNode 按落点分组继承；与会话 cwd 不同就必须显式写上。
-      ...(state.folder !==
-      canvasDefaultCwd(store.document.nodes, position, workspace.rootPath)
-        ? { cwd: state.folder }
-        : {}),
       agent: {
         id: agent.id,
         driver: "acp",
@@ -465,46 +269,17 @@ export function NewAgentWizard() {
   const { open, at } = useWizardOpen();
   const compact = useCompactLayout();
   const agents = useAgentsQuery().data ?? [];
-  const rootPath = useCanvasStore((state) => state.workspace?.rootPath ?? "");
-  const local = useCanvasStore(
-    (state) => (state.workspace?.executionHostId ?? "") === "",
-  );
-  const nodes = useCanvasStore((state) => state.document?.nodes);
-  /** 这次打开里经系统选择器选过的目录：排在根之后，选中即用。 */
-  const [picked, setPicked] = React.useState<string | null>(null);
-  /** 新节点的落点在打开时定下来：缺省目录看它，创建时也放在这里。 */
+  /** 新节点的落点在打开时定下来：会话目录看它，节点也放在这里。 */
   const [position, setPosition] = React.useState<Position | null>(null);
-  /** 画布给的缺省目录（落点分组的 worktree 或根）：换走了也留在候选里。 */
-  const [canvasCwd, setCanvasCwd] = React.useState(rootPath);
   const [state, setState] = React.useState<WizardState>(() =>
-    initialWizardState(agents, rootPath),
+    initialWizardState(agents),
   );
 
-  const folders = React.useMemo(
-    () =>
-      folderChoices(rootPath, [
-        canvasCwd,
-        picked ?? undefined,
-        ...(nodes ?? []).map((node) =>
-          node.data.kind === "terminal" ? node.data.cwd : undefined,
-        ),
-      ]),
-    [canvasCwd, nodes, picked, rootPath],
-  );
-
-  // 每次打开都从第一步开始；Agent 列表晚到时补上缺省选中。
+  // 每次打开都重来；Agent 列表晚到时补上缺省选中。
   React.useEffect(() => {
     if (open) {
-      const placed = nodeDropPosition("terminal", at ? { anchor: at } : {});
-      const cwd = canvasDefaultCwd(
-        useCanvasStore.getState().document?.nodes ?? [],
-        placed,
-        rootPath,
-      );
-      setPosition(placed);
-      setCanvasCwd(cwd);
-      setState(initialWizardState(agents, cwd));
-      setPicked(null);
+      setPosition(nodeDropPosition("terminal", at ? { anchor: at } : {}));
+      setState(initialWizardState(agents));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -524,7 +299,6 @@ export function NewAgentWizard() {
     change({ busy: true, failed: false });
     try {
       const id = await createAgentFromWizard(
-        state,
         agent,
         position ?? nodeDropPosition("terminal", at ? { anchor: at } : {}),
       );
@@ -535,34 +309,11 @@ export function NewAgentWizard() {
     }
   };
 
-  const pickFolder = async () => {
-    const path = await pickDirectory();
-    if (!path) return;
-    setPicked(path);
-    change({ folder: path });
-  };
-
   const openSettings = () => {
     closeNewAgentWizard();
     usePreferencesStore.getState().setLastSettingsSection("integration");
     useCanvasStore.getState().setPanel("settings", true);
   };
-
-  const body = (
-    <WizardBody
-      state={state}
-      onChange={change}
-      agents={agents}
-      folders={folders}
-      rootPath={rootPath}
-      onCancel={closeNewAgentWizard}
-      onCreate={() => void create()}
-      onOpenSettings={openSettings}
-      {...(isDesktop() && local
-        ? { onPickFolder: () => void pickFolder() }
-        : {})}
-    />
-  );
 
   const onOpenChange = (next: boolean) => {
     if (!next) closeNewAgentWizard();
@@ -578,7 +329,14 @@ export function NewAgentWizard() {
         <ResponsiveDialogHeader>
           <ResponsiveDialogTitle>{t("wizard.title")}</ResponsiveDialogTitle>
         </ResponsiveDialogHeader>
-        {body}
+        <WizardBody
+          state={state}
+          onChange={change}
+          agents={agents}
+          onCancel={closeNewAgentWizard}
+          onCreate={() => void create()}
+          onOpenSettings={openSettings}
+        />
       </ResponsiveDialogContent>
     </ResponsiveDialog>
   );

@@ -16,7 +16,8 @@ import type {
 
 /**
  * 新建 Agent 向导（ACP 设计 §8 第 1 条）：未装适配器的灰掉并给命令；
- * 走完三步即起会话（任务作为第一条 prompt）并建出带 `sessionId` 的 ACP 节点。
+ * 选 Agent 点「创建」即在画布给的目录里起会话（不带 prompt），并建出带
+ * `sessionId` 的 ACP 节点。不问目录、不问任务。
  */
 vi.mock("@/nodes/registry", () => {
   const meta = {
@@ -45,15 +46,6 @@ const agents = vi.hoisted(() => ({ list: [] as AgentInfo[] }));
 vi.mock("@/app/use-agents", () => ({
   useAgentsQuery: () => ({ data: agents.list }),
 }));
-const platform = vi.hoisted(() => ({
-  desktop: false,
-  pickDirectory: vi.fn<() => Promise<string | null>>(),
-}));
-vi.mock("@/platform", async (original) => ({
-  ...(await original<object>()),
-  isDesktop: () => platform.desktop,
-  pickDirectory: platform.pickDirectory,
-}));
 vi.mock("@/platform/layout", async (original) => ({
   ...(await original<object>()),
   useCompactLayout: () => false,
@@ -63,9 +55,7 @@ const { installDomPolyfills, TestProviders } = await import(
   "@/app/test-harness"
 );
 const { useCanvasStore, resetHistory } = await import("@/store/canvas-store");
-const { NewAgentWizard, folderChoices, wizardAgents } = await import(
-  "./NewAgentWizard"
-);
+const { NewAgentWizard, wizardAgents } = await import("./NewAgentWizard");
 const { openNewAgentWizard, useWizardOpen } = await import("./wizard-open");
 
 installDomPolyfills();
@@ -112,8 +102,6 @@ function agent(id: string, label: string, acpInstalled: boolean): AgentInfo {
 
 beforeEach(() => {
   api.createSession.mockReset();
-  platform.desktop = false;
-  platform.pickDirectory.mockReset();
   agents.list = [
     agent("claude", "Claude Code", false),
     agent("codex", "Codex", true),
@@ -188,29 +176,23 @@ describe("NewAgentWizard", () => {
     ).toBe("checked");
   });
 
-  it("两步：选 Agent、写任务；目录不用选，缺省就是画布给的（工作区根）", async () => {
+  it("一步：选 Agent 点「创建」，在工作区根起会话、不带 prompt，建出 ACP 节点", async () => {
     api.createSession.mockResolvedValue({ id: "sess-1" });
     openNewAgentWizard({ x: 500, y: 300 });
     renderWizard();
-    fireEvent.click(await screen.findByRole("button", { name: "继续" }));
-    fireEvent.click(screen.getByRole("radio", { name: "补测试" }));
-    const task = screen.getByLabelText("任务") as HTMLTextAreaElement;
-    expect(task.value).toContain("测试");
-    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建" }));
 
     await waitFor(() => expect(useWizardOpen.getState().open).toBe(false));
-    expect(api.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceId: workspace.id,
-        cwd: "/repo",
-        agentId: "codex",
-        prompt: task.value.trim(),
-      }),
-    );
-    const nodeId = api.createSession.mock.calls[0]![0].nodeId as string;
+    const call = api.createSession.mock.calls[0]![0];
+    expect(call).toMatchObject({
+      workspaceId: workspace.id,
+      cwd: "/repo",
+      agentId: "codex",
+    });
+    expect(call).not.toHaveProperty("prompt");
     const node = useCanvasStore
       .getState()
-      .document?.nodes.find((item) => item.id === nodeId);
+      .document?.nodes.find((item) => item.id === call.nodeId);
     expect(node?.type).toBe("terminal");
     expect(node?.data).toMatchObject({
       kind: "terminal",
@@ -219,73 +201,27 @@ describe("NewAgentWizard", () => {
     });
   });
 
-  it("创建失败停在第二步并给错误行，不建节点", async () => {
+  it("不问目录、不问任务：对话框里没有这两项，也没有「继续 / 上一步」", async () => {
+    openNewAgentWizard();
+    renderWizard();
+    await screen.findByRole("button", { name: "创建" });
+    expect(screen.queryByLabelText("目录")).toBeNull();
+    expect(screen.queryByLabelText("任务")).toBeNull();
+    expect(screen.queryByRole("button", { name: "继续" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "上一步" })).toBeNull();
+  });
+
+  it("创建失败留在对话框并给错误行，不建节点", async () => {
     api.createSession.mockRejectedValue(new Error("acp_not_installed"));
     openNewAgentWizard();
     renderWizard();
-    fireEvent.click(await screen.findByRole("button", { name: "继续" }));
-    fireEvent.change(screen.getByLabelText("任务"), {
-      target: { value: "hello" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建" }));
     expect(await screen.findByText("没有创建成功")).toBeTruthy();
     expect(useWizardOpen.getState().open).toBe(true);
     expect(useCanvasStore.getState().document?.nodes).toEqual([]);
   });
 
-  it("第二步可以换目录：桌面壳「选择文件夹…」选的目录成为会话 cwd 并写进节点", async () => {
-    platform.desktop = true;
-    platform.pickDirectory.mockResolvedValue("/elsewhere/project");
-    api.createSession.mockResolvedValue({ id: "sess-2" });
-    openNewAgentWizard();
-    renderWizard();
-    fireEvent.click(await screen.findByRole("button", { name: "继续" }));
-    fireEvent.click(screen.getByRole("button", { name: "选择文件夹…" }));
-    await waitFor(() =>
-      expect(
-        screen.getByRole("combobox", { name: "目录" }).textContent,
-      ).toContain("/elsewhere/project"),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "创建" }));
-    await waitFor(() => expect(useWizardOpen.getState().open).toBe(false));
-    expect(api.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: "/elsewhere/project" }),
-    );
-    const node = useCanvasStore.getState().document?.nodes[0];
-    expect(node?.data).toMatchObject({ cwd: "/elsewhere/project" });
-  });
-
-  it("取消选择器不改目录", async () => {
-    platform.desktop = true;
-    platform.pickDirectory.mockResolvedValue(null);
-    openNewAgentWizard();
-    renderWizard();
-    fireEvent.click(await screen.findByRole("button", { name: "继续" }));
-    fireEvent.click(screen.getByRole("button", { name: "选择文件夹…" }));
-    await waitFor(() => expect(platform.pickDirectory).toHaveBeenCalled());
-    expect(
-      screen.getByRole("combobox", { name: "目录" }).textContent,
-    ).toContain("工作区根目录");
-  });
-
-  it("没有桌面壳、或远端工作空间时不给「选择文件夹…」", async () => {
-    openNewAgentWizard();
-    renderWizard();
-    fireEvent.click(await screen.findByRole("button", { name: "继续" }));
-    expect(screen.queryByRole("button", { name: "选择文件夹…" })).toBeNull();
-    cleanup();
-
-    platform.desktop = true;
-    useCanvasStore
-      .getState()
-      .setWorkspace({ ...workspace, executionHostId: "build-box" });
-    openNewAgentWizard();
-    renderWizard();
-    fireEvent.click(await screen.findByRole("button", { name: "继续" }));
-    expect(screen.queryByRole("button", { name: "选择文件夹…" })).toBeNull();
-  });
-
-  it("落点在绑定了 worktree 的分组里：缺省目录就是那个 checkout，会话与节点一致", async () => {
+  it("落点在绑定了 worktree 的分组里：会话开在那个 checkout，节点继承同一目录", async () => {
     useCanvasStore.getState().setDocument({
       board,
       nodes: [boundFrame()],
@@ -294,11 +230,7 @@ describe("NewAgentWizard", () => {
     api.createSession.mockResolvedValue({ id: "sess-3" });
     openNewAgentWizard({ x: 500, y: 300 });
     renderWizard();
-    fireEvent.click(await screen.findByRole("button", { name: "继续" }));
-    expect(
-      screen.getByRole("combobox", { name: "目录" }).textContent,
-    ).toContain("/repo/.armadra/worktrees/feature");
-    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建" }));
     await waitFor(() => expect(useWizardOpen.getState().open).toBe(false));
     expect(api.createSession).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: "/repo/.armadra/worktrees/feature" }),
@@ -311,32 +243,7 @@ describe("NewAgentWizard", () => {
     });
   });
 
-  it("在绑定分组里改选工作区根：节点显式写根，不再被分组的 worktree 顶掉", async () => {
-    useCanvasStore.getState().setDocument({
-      board,
-      nodes: [boundFrame()],
-      edges: [],
-    });
-    api.createSession.mockResolvedValue({ id: "sess-4" });
-    openNewAgentWizard({ x: 500, y: 300 });
-    renderWizard();
-    fireEvent.click(await screen.findByRole("button", { name: "继续" }));
-    fireEvent.click(screen.getByRole("combobox", { name: "目录" }));
-    fireEvent.click(
-      await screen.findByRole("option", { name: "工作区根目录" }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "创建" }));
-    await waitFor(() => expect(useWizardOpen.getState().open).toBe(false));
-    expect(api.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: "/repo" }),
-    );
-    const node = useCanvasStore
-      .getState()
-      .document?.nodes.find((item) => item.type === "terminal");
-    expect(node?.data).toMatchObject({ cwd: "/repo" });
-  });
-
-  it("没有可用的 Agent 时第一步就是空态", async () => {
+  it("没有可用的 Agent 时是空态", async () => {
     agents.list = [agent("claude", "Claude Code", false)];
     openNewAgentWizard();
     renderWizard();
@@ -346,22 +253,6 @@ describe("NewAgentWizard", () => {
 });
 
 describe("纯函数", () => {
-  it("目录候选：根在最前、去重、最多六个", () => {
-    expect(
-      folderChoices("/r", [
-        "/r",
-        "/a",
-        undefined,
-        "/a",
-        "/b",
-        "/c",
-        "/d",
-        "/e",
-        "/f",
-      ]),
-    ).toEqual(["/r", "/a", "/b", "/c", "/d", "/e"]);
-  });
-
   it("只列有 acp 字段的", () => {
     expect(wizardAgents(agents.list).map((item) => item.id)).toEqual([
       "claude",
