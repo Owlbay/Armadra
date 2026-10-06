@@ -89,6 +89,20 @@ afterEach(() => {
 });
 
 describe("入口分支", () => {
+  it("远程服务托管的页面打开在 /j/<linkId>：分享链接落地页；原生 App 不认", async () => {
+    history.replaceState(null, "", "/j/0123456789abcdef#secret.token");
+    await expect(prepareEntry()).resolves.toEqual({
+      kind: "join",
+      linkId: "0123456789abcdef",
+    });
+    expect(mocks.install).not.toHaveBeenCalled();
+    history.replaceState(null, "", "/j/short");
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+    mocks.app = true;
+    history.replaceState(null, "", "/j/0123456789abcdef");
+    await expect(prepareEntry()).resolves.not.toMatchObject({ kind: "join" });
+  });
+
   it("桌面与普通网页直接是画布，不装任何传输", async () => {
     await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
     history.replaceState(null, "", "/#pair=abc");

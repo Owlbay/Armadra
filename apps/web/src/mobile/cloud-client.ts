@@ -75,9 +75,20 @@ const acceptSchema = z.object({
   relayBaseUrl: z.string().min(1),
   assertion: z.string().min(1),
   relayToken: z.string().min(1),
+  relayTokenExpiresAtMs: z.number().default(0),
   guestSession: sessionSchema,
 });
 export type CloudAccept = z.infer<typeof acceptSchema>;
+
+/** `links.get`（匿名）：落地页显示的那几项（cloud-api §5）。 */
+const linkInfoSchema = z.object({
+  label: z.string().default(""),
+  role: z.string().default(""),
+  sourceName: z.string().default(""),
+  expiresAtMs: z.number().default(0),
+  exhausted: z.boolean().default(false),
+});
+export type CloudLinkInfo = z.infer<typeof linkInfoSchema>;
 
 /** core 的 `cloud/login` 答案里页面要用的部分（与 `identitySessionSchema` 同形）。 */
 const coreSessionSchema = z.object({
@@ -102,8 +113,13 @@ const coreRefreshSchema = z.object({
 });
 
 export interface CloudDevice {
-  readonly platform: "ios" | "android";
+  readonly platform: "ios" | "android" | "browser";
   readonly name: string;
+}
+
+/** 远程服务托管的页面在浏览器里加入时的设备登记。 */
+export function browserDevice(): CloudDevice {
+  return { platform: "browser", name: "Armadra Web" };
 }
 
 /** 这台设备在远程服务里的登记（平台只有 iOS 与 Android 两种手机）。 */
@@ -245,6 +261,20 @@ export function cloudAssertion(
     `${trimmed(issuer)}/v1/sources/${encodeURIComponent(sourceId)}/assertion`,
     assertionSchema,
     { headers: bearer(accessToken), body: { device } },
+    options,
+  );
+}
+
+/** `GET /v1/links/{id}`（匿名）：链接指向谁、什么权限、何时过期。 */
+export function cloudLinkInfo(
+  issuer: string,
+  linkId: string,
+  options: CloudOptions = {},
+): Promise<CloudLinkInfo> {
+  return send(
+    `${trimmed(issuer)}/v1/links/${encodeURIComponent(linkId)}`,
+    linkInfoSchema,
+    {},
     options,
   );
 }

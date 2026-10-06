@@ -159,11 +159,24 @@ export function forgetRuntimeOrigin(): void {
   }
 }
 
+/**
+ * 远程服务托管的页面按分享链接加入之后（`mobile/relay-page.ts`）：本机源就是经
+ * 中继的那台 core，地址是 `relayBaseUrl`（带 `/s/<源>` 前缀）。只在内存里，设了
+ * 就压过一切推断——这一页的来源是中继，不是 core。
+ */
+let relayPageBase: string | null = null;
+
+export function setRelayPageBase(base: string | null): void {
+  relayPageBase =
+    base === null || base === "" ? null : base.replace(/\/+$/, "");
+}
+
 /** An explicit relative/empty URL opts a web deployment into its own origin. */
 export function resolveRuntimeUrl(
   configured: string | undefined,
   pageUrl: string,
 ): string {
+  if (relayPageBase !== null) return relayPageBase;
   const shell = shellEndpoints();
   // 显式配置永远优先：桌面开发模式靠它连外部 Runtime。
   if (configured === undefined) {

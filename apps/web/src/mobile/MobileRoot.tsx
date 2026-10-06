@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { App } from "../app/App";
+import { JoinPage } from "../shell/JoinPage";
 import { PageCaGuide } from "../panels/settings/pages/gateway/CaInstallGuide";
 import { ConnectScreen, type ConnectFailure } from "./ConnectScreen";
 import {
@@ -29,6 +30,8 @@ export function MobileRoot({ entry: initial }: { entry: Entry }) {
   const relay = React.useMemo(() => createRelayEnrollment(), []);
   const [connected, setConnected] = React.useState(entry.kind === "app");
   if (connected) return <ConnectedApp />;
+  if (entry.kind === "join")
+    return <JoinPage onJoined={() => setConnected(true)} />;
   if (entry.kind === "mfa") {
     return (
       <NativeMfa

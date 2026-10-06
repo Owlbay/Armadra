@@ -286,12 +286,33 @@ export async function ensureCsrf(): Promise<string> {
   return renewing;
 }
 
+/** 这一页是远程服务托管、经中继连着一台 core（分享链接加入，客户端包 §6.1）。 */
+let relayPage = false;
+
 /**
- * 走 Bearer 传输的两种环境：桌面壳（票换会话）与原生 App（钥匙串里的会话）。
- * 两者都不用 Cookie、不用 CSRF。
+ * 走 Bearer 传输的三种环境：桌面壳（票换会话）、原生 App（钥匙串里的会话），
+ * 以及远程服务托管的页面按分享链接加入之后（会话只在内存，见
+ * {@link adoptRelayPageSession}）。都不用 Cookie、不用 CSRF。
  */
 function bearerTransport(): boolean {
-  return isNativeShell() || isNativeApp();
+  return isNativeShell() || isNativeApp() || relayPage;
+}
+
+/**
+ * 托管页面加入成功：`cloud/login` 换来的原生会话装进内存（刷新令牌也只在内存，
+ * 关掉标签即丢，D15），之后的身份面请求走 Bearer。
+ */
+export function adoptRelayPageSession(session: {
+  readonly accessToken: string;
+  readonly refreshToken: string;
+  readonly expiresAtMs: number;
+}): void {
+  relayPage = true;
+  tokens.access = session.accessToken;
+  tokens.refresh = session.refreshToken;
+  tokens.accessExpiresAt = session.expiresAtMs;
+  csrf = "";
+  announce();
 }
 
 /**
