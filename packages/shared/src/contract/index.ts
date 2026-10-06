@@ -5,6 +5,7 @@ import type {
   InferSchemaOutput,
 } from "@orpc/contract";
 
+import { agents } from "./agents.js";
 import { boards } from "./boards.js";
 import { identity } from "./cloud.js";
 import { files } from "./files.js";
@@ -31,6 +32,7 @@ export const contract = {
   files,
   terminals,
   boards,
+  agents,
 };
 
 export type Contract = typeof contract;
