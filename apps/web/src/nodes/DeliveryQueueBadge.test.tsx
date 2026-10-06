@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -204,7 +205,7 @@ describe("DeliveryQueueBadge", () => {
       } as WorkspaceEvent);
     });
     const versions = useDeliveryStore.getState().queueVersion;
-    expect(versions["node-b"]).toBe(1);
-    expect(versions["node-c"]).toBe(1);
+    expect(versions[scoped("node-b")]).toBe(1);
+    expect(versions[scoped("node-c")]).toBe(1);
   });
 });

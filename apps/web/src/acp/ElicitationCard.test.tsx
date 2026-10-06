@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -121,7 +122,7 @@ describe("ElicitationCard", () => {
       }),
     );
     expect(api.answerElicitation).toHaveBeenCalledTimes(1);
-    expect(useAcpStore.getState().elicitations.n1).toBeUndefined();
+    expect(useAcpStore.getState().elicitations[scoped("n1")]).toBeUndefined();
     expect(resolveApproval).toHaveBeenCalledWith("n1-1-acp-e1");
   });
 
@@ -148,7 +149,7 @@ describe("ElicitationCard", () => {
     render(<ElicitationCard nodeId="n1" view={view} canAnswer />);
     fireEvent.click(screen.getByRole("button", { name: "拒绝" }));
     await waitFor(() =>
-      expect(useAcpStore.getState().elicitations.n1).toEqual([view]),
+      expect(useAcpStore.getState().elicitations[scoped("n1")]).toEqual([view]),
     );
   });
 

@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { AgentStatus, CanvasNode } from "@armadra/shared";
@@ -59,7 +60,7 @@ describe("dependency gate", () => {
   it("accepts a clean `done`", () => {
     expect(
       dependencySatisfied(DEP, ids(DEP), {
-        [DEP]: status(DEP, { state: "done" }),
+        [scoped(DEP)]: status(DEP, { state: "done" }),
       }),
     ).toBe(true);
   });
@@ -90,7 +91,7 @@ describe("dependency gate", () => {
 
   it("requires every dependency", () => {
     const nodes = [terminal(DEP), terminal(OTHER)];
-    const statuses = { [DEP]: status(DEP, { state: "done" }) };
+    const statuses = { [scoped(DEP)]: status(DEP, { state: "done" }) };
     expect(dependenciesSatisfied([DEP], nodes, statuses)).toBe(true);
     expect(dependenciesSatisfied([DEP, OTHER], nodes, statuses)).toBe(false);
     expect(dependenciesSatisfied([], nodes, statuses)).toBe(true);

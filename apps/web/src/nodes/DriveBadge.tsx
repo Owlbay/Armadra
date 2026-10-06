@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import type { DriveLease } from "@armadra/shared";
 
 import { useDriveStore } from "@/agent/drive-store";
@@ -30,7 +31,7 @@ export function DriveBadge({
   const t = useT();
   // 状态只从 `terminal.lease` 来，而那份镜像是全局的一份（`agent/drive-store`）：
   // 节点头与命令面板读同一个答案，不各自订阅、各自记一份。
-  const lease = useDriveStore((state) => state.drives[nodeId]?.lease);
+  const lease = useDriveStore((state) => state.drives[scoped(nodeId)]?.lease);
 
   const label = driveLabel(lease);
   if (label === undefined) return null;

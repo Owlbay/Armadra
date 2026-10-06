@@ -1,4 +1,4 @@
-import { srcPrefix } from "../sources/scope";
+import { scoped, srcPrefix } from "../sources/scope";
 /**
  * 「排队 N」——排在这个终端前面的那些（设计 `agent-delivery.md` §4.6、§10）。
  *
@@ -41,7 +41,9 @@ export function DeliveryQueueBadge({
 }) {
   const t = useT();
   const client = useQueryClient();
-  const version = useDeliveryStore((state) => state.queueVersion[nodeId] ?? 0);
+  const version = useDeliveryStore(
+    (state) => state.queueVersion[scoped(nodeId)] ?? 0,
+  );
   const key = React.useMemo(
     () => [...srcPrefix(), "delivery-queue", workspaceId, nodeId],
     [workspaceId, nodeId],
