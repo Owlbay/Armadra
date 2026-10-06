@@ -8,7 +8,8 @@
 //   2. core 登记：注册令牌 → `identity.cloud.register` → 隧道 ready，中继目录里有这台源，
 //      中继账号绑定为主人；错口令被拒；同一条 keep-alive 连接空闲 6 秒以上再经中继 POST
 //      到源，连接还在、不失败（iOS WebKit 不重试被服务端空闲关掉的连接）；
-//   3. 浏览器开中继托管的 `/app/`：账号口令登录 → 进画布 → 终端收发 → 实时板与本机页面双向同步；
+//   3. 浏览器开中继托管的 `/app/`：账号口令登录 → 进画布 → 终端收发 → ACP 会话（假 Agent）经中继
+//      发一轮、回复流回、core 只投递一次（契约 §39.9 的 clientTurnId）→ 实时板与本机页面双向同步；
 //   4. 分享链接：`/j/<id>#…` 落地、片段被抹掉、访客加入、打开链接指向的工作空间、开终端；
 //   5. 桌面 Electron 粘贴链接挂载（核对指纹）、打开工作空间、开终端；
 //   6. 手机：390 宽模拟（页面来源是拦截出来的 `https://localhost`，扫码结果注入）扫码挂载、开终端；
@@ -403,7 +404,41 @@ try {
     { width: 520, height: 300 },
     { kind: "terminal", cwd: ownerProject },
   );
-  await stack.seedBoard(workspace.id, board.id, [sticky, terminal]);
+  // ACP 驱动的节点：假 ACP Agent（`@armadra/agent` 的测试 Agent，真子进程），注册成
+  // 一个基础 CLI 为 OpenCode 的 `custom:` 条目，与 acp-e2e 同一个做法。
+  const fakeAgent = join(
+    root,
+    "apps/desktop/node_modules/@armadra/agent/dist/drivers/acp/testing/fake-agent-main.js",
+  );
+  await owner("/api/settings", {
+    method: "PATCH",
+    body: JSON.stringify({
+      agents: {
+        custom: [
+          {
+            id: "custom:fake-acp",
+            label: "Fake ACP",
+            launchCmd: process.execPath,
+            args: [fakeAgent],
+            baseAgent: "opencode",
+          },
+        ],
+      },
+    }),
+  });
+  const acpNode = makeNode(
+    board.id,
+    "terminal",
+    "ACP",
+    { x: 120, y: 460 },
+    { width: 520, height: 320 },
+    {
+      kind: "terminal",
+      cwd: ownerProject,
+      agent: { id: "custom:fake-acp", driver: "acp" },
+    },
+  );
+  await stack.seedBoard(workspace.id, board.id, [sticky, terminal, acpNode]);
   const query = `?workspace=${workspace.id}&board=${board.id}`;
 
   await stack.browser.call("Security.setIgnoreCertificateErrors", {
@@ -465,6 +500,61 @@ try {
     );
     await terminalRoundTrip(page, terminal.id, "relay");
     run.ok("经中继开终端并收发（42relay）");
+
+    // ACP 回合经中继：页面带着 clientTurnId 发一轮，回复流回；core 侧只有一轮、
+    // 回合记录认得页面的 id（契约 §39.9）。
+    const acpInput = `${nodeAt(acpNode.id)} [data-slot="acp-session-view"] textarea`;
+    await page.until(
+      `return !!document.querySelector(${JSON.stringify(acpInput)})`,
+      "经中继起 ACP 会话、会话视图出现",
+      { timeout: 45_000 },
+    );
+    await page.clickOn(
+      `return document.querySelector(${JSON.stringify(acpInput)})`,
+      "ACP 输入框",
+    );
+    await page.type("hello via relay");
+    await page.key("Enter");
+    await page.until(
+      `return (document.querySelector(${JSON.stringify(nodeAt(acpNode.id))})?.innerText ?? "").includes("echo: hello via relay")`,
+      "ACP 回复经中继流回会话视图",
+      { timeout: 45_000 },
+    );
+    const acpRow = await until(
+      async () =>
+        (await owner(`/api/workspaces/${workspace.id}/sessions`)).find(
+          (row) => row.nodeId === acpNode.id,
+        ),
+      "ACP 节点的会话行",
+      { timeout: 15_000 },
+    );
+    const acpLog = await until(
+      async () => {
+        const log = await owner(`/api/acp/sessions/${acpRow.sessionId}/log`);
+        return (log.turns ?? []).some((turn) => turn.state === "ended") && log;
+      },
+      "ACP 回合结束",
+      { timeout: 30_000 },
+    );
+    const sent = acpLog.entries.filter(
+      (entry) =>
+        entry.role === "user" &&
+        entry.blocks.some((block) => block.text === "hello via relay"),
+    );
+    run.check(
+      sent.length === 1 &&
+        acpLog.turns.length === 1 &&
+        typeof acpLog.turns[0].clientTurnId === "string" &&
+        acpLog.turns[0].stopReason === "end_turn",
+      "经中继的 ACP 一轮只投递一次，回合记录带页面的 clientTurnId",
+      { sent: sent.length, turns: acpLog.turns },
+    );
+    run.check(
+      !(await page.evaluate(
+        `return (document.querySelector(${JSON.stringify(nodeAt(acpNode.id))})?.innerText ?? "").includes("这一轮")`,
+      )),
+      "会话视图没有误报「这一轮没有完成 / 没有送达」",
+    );
 
     const local = await stack.browser.page(await stack.browser.context());
     opened.push(["local", local]);

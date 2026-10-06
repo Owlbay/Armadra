@@ -41,6 +41,24 @@ vi.mock("@/store/canvas-store", () => {
   return { useCanvasStore };
 });
 
+/** 控制面的连上 / 断开：测试自己报。 */
+const connection = vi.hoisted(() => ({
+  handlers: new Set<(id: string, connected: boolean, source: string) => void>(),
+}));
+vi.mock("@/api/events", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/events")>();
+  return {
+    ...actual,
+    onWorkspaceConnection: (
+      handler: (id: string, connected: boolean, source: string) => void,
+    ) => {
+      connection.handlers.add(handler);
+      return () => connection.handlers.delete(handler);
+    },
+  };
+});
+
+import { RuntimeRequestError } from "@/api/client";
 import { dispatchWorkspaceEvent } from "@/api/events";
 import { SessionView } from "./SessionView";
 import { useAcpStore } from "./store";
@@ -110,6 +128,171 @@ async function pickModel(name: string) {
 
 afterEach(cleanup);
 
+function setConnected(connected: boolean) {
+  act(() => {
+    for (const handler of [...connection.handlers])
+      handler("w1", connected, "local");
+  });
+}
+
+async function sendPrompt(value: string) {
+  const input = await screen.findByLabelText("消息");
+  fireEvent.change(input, { target: { value } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(api.prompt).toHaveBeenCalled());
+  return api.prompt.mock.calls.at(-1)?.[2] as string;
+}
+
+/** 镜像里有了这一轮：提问与答复，`turns` 里记着它。 */
+function loggedTurn(clientTurnId: string, state: string): AcpLogResponse {
+  return {
+    entries: [
+      { role: "user", blocks: [{ type: "text", text: "go" }], endOffset: 3 },
+      {
+        role: "assistant",
+        blocks: [{ type: "text", text: "done it" }],
+        endOffset: 7,
+      },
+    ],
+    endOffset: 7,
+    turns: [
+      {
+        turnId: "1-1",
+        clientTurnId,
+        state: state as "ended",
+        ...(state === "ended" ? { stopReason: "end_turn" } : {}),
+      },
+    ],
+  };
+}
+
+describe("SessionView turn reconciliation (§39.9)", () => {
+  it("confirms a turn whose request was lost on the way and draws its real outcome", async () => {
+    render(<SessionView nodeId="n1" data={data} />);
+    await screen.findByText("向它说第一句话");
+    let answer: (log: AcpLogResponse) => void = () => undefined;
+    api.log.mockImplementation(
+      () => new Promise<AcpLogResponse>((resolve) => (answer = resolve)),
+    );
+    api.prompt.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const clientTurnId = await sendPrompt("go");
+    expect(clientTurnId).toMatch(/.+/);
+    expect(await screen.findByText("正在确认这一轮")).toBeTruthy();
+    expect(screen.queryByText("这一轮没有完成")).toBeNull();
+    await waitFor(() => expect(api.log).toHaveBeenCalledTimes(2));
+    act(() => answer(loggedTurn(clientTurnId, "ended")));
+    expect(await screen.findByText("done it")).toBeTruthy();
+    expect(screen.queryByText("正在确认这一轮")).toBeNull();
+    expect(screen.queryByText("这一轮没有送达")).toBeNull();
+    expect(screen.queryByLabelText("正在输出")).toBeNull();
+    expect(api.prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps streaming when the lost turn is still running", async () => {
+    render(<SessionView nodeId="n1" data={data} />);
+    await screen.findByText("向它说第一句话");
+    api.prompt.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    api.log.mockImplementation(async () =>
+      loggedTurn(api.prompt.mock.calls[0]?.[2] as string, "running"),
+    );
+    const clientTurnId = await sendPrompt("go");
+    expect(await screen.findByText("done it")).toBeTruthy();
+    expect(screen.getByLabelText("正在输出")).toBeTruthy();
+    // 结束帧带着它的 clientTurnId 来：照常收尾。
+    emit({
+      type: "acp.turn",
+      sessionId: SESSION,
+      nodeId: "n1",
+      turnId: "1-1",
+      clientTurnId,
+      stopReason: "end_turn",
+    });
+    expect(screen.queryByLabelText("正在输出")).toBeNull();
+  });
+
+  it("says not delivered when core has no such turn, and retries with the same id", async () => {
+    render(<SessionView nodeId="n1" data={data} />);
+    await screen.findByText("向它说第一句话");
+    api.prompt.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    api.log.mockResolvedValue({ entries: [], endOffset: 0, turns: [] });
+    const clientTurnId = await sendPrompt("go");
+    expect(await screen.findByText("这一轮没有送达")).toBeTruthy();
+    // 提问留在时间线上，等重试。
+    expect(screen.getByText("go")).toBeTruthy();
+    // 另一轮的结束帧不是它的结局。
+    emit({
+      type: "acp.turn",
+      sessionId: SESSION,
+      nodeId: "n1",
+      turnId: "9-9",
+      clientTurnId: "someone-else",
+      stopReason: "end_turn",
+    });
+    expect(screen.getByText("这一轮没有送达")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(api.prompt).toHaveBeenCalledTimes(2));
+    expect(api.prompt).toHaveBeenLastCalledWith(SESSION, "go", clientTurnId);
+    expect(screen.queryByText("这一轮没有送达")).toBeNull();
+    expect(screen.getAllByText("go")).toHaveLength(1);
+  });
+
+  it("gives up confirming when the log stays unreachable, still retrying with the same id", async () => {
+    render(<SessionView nodeId="n1" data={data} />);
+    await screen.findByText("向它说第一句话");
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      api.prompt.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      api.log.mockRejectedValue(new TypeError("Failed to fetch"));
+      const clientTurnId = await sendPrompt("go");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(screen.getByText("这一轮没有送达")).toBeTruthy();
+      expect(api.log).toHaveBeenCalledTimes(4);
+      api.prompt.mockResolvedValueOnce({ turnId: "1-1" });
+      fireEvent.click(screen.getByRole("button", { name: "重试" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10);
+      });
+      expect(api.prompt).toHaveBeenLastCalledWith(SESSION, "go", clientTurnId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails at once when core refuses the prompt with a code", async () => {
+    render(<SessionView nodeId="n1" data={data} />);
+    await screen.findByText("向它说第一句话");
+    api.prompt.mockRejectedValueOnce(
+      new RuntimeRequestError(409, "gone", "acp_exited"),
+    );
+    await sendPrompt("go");
+    expect(await screen.findByText("这一轮没有完成")).toBeTruthy();
+    expect(screen.queryByText("正在确认这一轮")).toBeNull();
+    expect(api.log).toHaveBeenCalledTimes(1);
+  });
+
+  it("rereads the log after the control channel reconnects and ends a turn it missed", async () => {
+    render(<SessionView nodeId="n1" data={data} />);
+    await screen.findByText("向它说第一句话");
+    const clientTurnId = await sendPrompt("go");
+    expect(screen.getByLabelText("正在输出")).toBeTruthy();
+    setConnected(false);
+    api.log.mockResolvedValue(loggedTurn(clientTurnId, "ended"));
+    setConnected(true);
+    expect(await screen.findByText("done it")).toBeTruthy();
+    expect(api.log).toHaveBeenCalledTimes(2);
+    expect(screen.queryByLabelText("正在输出")).toBeNull();
+  });
+
+  it("does not reread on the first connected report", async () => {
+    render(<SessionView nodeId="n1" data={data} />);
+    await screen.findByText("向它说第一句话");
+    setConnected(true);
+    expect(api.log).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("SessionView", () => {
   it("同一个节点挂两份会话视图（手机焦点页 + 画布）时分块只拼一遍", async () => {
     render(
@@ -146,7 +329,11 @@ describe("SessionView", () => {
     fireEvent.change(input, { target: { value: "跑一下测试" } });
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() =>
-      expect(api.prompt).toHaveBeenCalledWith(SESSION, "跑一下测试"),
+      expect(api.prompt).toHaveBeenCalledWith(
+        SESSION,
+        "跑一下测试",
+        expect.any(String),
+      ),
     );
     expect(screen.getByText("跑一下测试")).toBeTruthy();
     // 回合进行中：尾部 Spinner，发送钮换成停止。
@@ -310,7 +497,16 @@ describe("SessionView", () => {
     expect(screen.getByText("这一轮没有完成")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await waitFor(() => expect(api.prompt).toHaveBeenCalledTimes(2));
-    expect(api.prompt).toHaveBeenLastCalledWith(SESSION, "go");
+    // 第三个参数是 §39.9 的 clientTurnId：拒答是 core 跑完的一轮，重发是新的
+    // 一轮，换一个 id（沿用旧的会被 core 当成同一轮去重掉）。
+    expect(api.prompt).toHaveBeenLastCalledWith(
+      SESSION,
+      "go",
+      expect.any(String),
+    );
+    expect(api.prompt.mock.calls[1]?.[2]).not.toBe(
+      api.prompt.mock.calls[0]?.[2],
+    );
   });
 
   it("starts a session when the node has none and records its id", async () => {
