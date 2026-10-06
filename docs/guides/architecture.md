@@ -85,6 +85,7 @@ opencode 等 CLI Agent 作为终端节点放在一块无限画布上，节点之
 | `core/forge/`                                             | 托管平台抽象：`Forge` 接口，GitHub（经 `core/github/` 的客户端）、Gitea / Forgejo 与 GitLab（`PRIVATE-TOKEN`，多级子组、合并方式、流水线通过后合并与合并列车）；按主机 / 仓库的配置与令牌、fork 检出、合并后删分支                                                                                                                                   | §29          |
 | `core/sources/`                                           | 客户端源表与远程服务：别的 core（直连配对、经中继挂载）与个人中转登录；刷新令牌只在 SecretStore，换票时按 D27 选路；对端按 CA 指纹钉扎；启动只写本机一行、不联网                                                                                                                                                                                     | §33          |
 | `core/identity/cloud/`                                    | 云登录与登记：登记到远程服务（个人中转）、源密钥（Ed25519，私钥只在 SecretStore）、JWKS 缓存与离线验签、断言换本机会话（映射走 oauth 凭据）、绑定、可信来源；装配不联网                                                                                                                                                                              | §31          |
+| `core/relay/`                                             | 出站中继隧道：每个有效登记一条（`wss://` 按远程服务的 CA 指纹钉扎），握手、两级窗口、心跳、GOAWAY、退避重连；隧道流交给只给隧道用的监听，准入按 Gateway 的 Bearer 模式；启动不等它，失败只进它自己的状态                                                                                                                                             | §32          |
 
 core 之外的同类新增：`src/hook-client/`（动词工具表，`armadra-hook` 与 ama 适配器共用）、
 `src/agent-host/ama/`（ama 宿主适配器与 runners）、`apps/mobile`（Capacitor 手机壳）、
@@ -544,7 +545,11 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
   按 scheme 白名单限 `http` / `https`，对话框返回路径而不是字节。渲染进程
   `contextIsolation: true`、`nodeIntegration: false`，唯一桥是 preload。
 - CSP 见 `apps/desktop/src/shell-core/csp.ts`：`connect-src` 只留本机 core 的
-  http/ws，`<webview>` 供浏览器节点使用。
+  http/ws，再加 core 源表（契约 §33）里远程服务与挂载源的 `https` / `wss` 来源——壳经
+  core 读 `GET /api/sources`（起窗口前与页面发 `app:sources-changed` 后），不信页面带来的
+  数据；新来源要重载页面才生效。同一张表给主会话的证书校验：系统不信任、但链里有登记
+  指纹且逐级验签与主机名有效期都对的放行（`shell-core/remote-trust.ts`、
+  `main/remote-trust.ts`）。`<webview>` 供浏览器节点使用。
 - core 自己拥有的密钥（Copilot 令牌、GitHub PAT 等）只经 `core/secrets` 的
   `SecretBackend { kind, get, set, delete }` 存取，名字一律 `armadra-*`：macOS 桌面壳
   走 `security(1)` 钥匙串（`keychain`）；Windows / Linux 桌面壳的 core 是 fork 出的

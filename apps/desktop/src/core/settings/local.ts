@@ -52,6 +52,7 @@ export type JsonObject = { [key: string]: JsonValue };
  * | `gateway`                | Which interfaces and port *this* machine listens on, and its certificate files |
  * | `push.apns.keyFile`      | Path of the APNs `.p8` on this filesystem (contents never leave the file)      |
  * | `push.fcm.serviceAccountFile` | Path of the FCM service-account JSON, same reason                         |
+ * | `cloud.relay`            | Whether *this* machine opens its outbound relay tunnel, and to which node      |
  *
  * `agents.custom[]` is deliberately **not** here: a custom agent definition is
  * what the user configured, and it is meant to follow them. Only the probe
@@ -68,6 +69,7 @@ export const LOCAL_PATHS: readonly (readonly string[])[] = [
   ["gateway"],
   ["push", "apns", "keyFile"],
   ["push", "fcm", "serviceAccountFile"],
+  ["cloud", "relay"],
 ];
 
 /** The same paths as dotted strings, for the settings page and for tests. */

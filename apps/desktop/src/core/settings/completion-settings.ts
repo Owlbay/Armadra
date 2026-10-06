@@ -36,6 +36,17 @@ export const AGENT_DRIVER_CHOICES = ["acp", "terminal"] as const;
 /** `updates.channel`（已有键，这里补一份共享的选项表）。 */
 export const UPDATE_CHANNEL_CHOICES = ["stable", "beta"] as const;
 
+/**
+ * `cloud.orgDefaultRole`：经远程服务新建的成员带组织声明时，逐块画布授予的角色；
+ * `null` = 不授予（缺省）。与 core `identity/roles.ts` 的 `SHARE_ROLES` 同一组。
+ */
+export const CLOUD_ORG_ROLE_CHOICES = [
+  "viewer",
+  "editor",
+  "operator",
+  "driver",
+] as const;
+
 export const PASSWORD_MIN_LENGTH_RANGE = { min: 10, max: 64 } as const;
 export const MAX_OAUTH_PROVIDERS = 16;
 
@@ -91,6 +102,16 @@ export const COMPLETION_SETTINGS_DEFAULTS = {
     claudeLocalWindow: true,
   },
   models: { catalog: { autoRefresh: true } },
+  cloud: {
+    relay: {
+      /** 关 = 不开任何出站隧道（契约 §32）。 */
+      enabled: true,
+      /** 节点地址或区域名；空串 = 按远程服务给的权重。 */
+      preferredNode: "",
+    },
+    /** 见 {@link CLOUD_ORG_ROLE_CHOICES}；缺省不授予。 */
+    orgDefaultRole: null,
+  },
   diagnostics: {
     crashReportDsn: "",
     /** 页面的 JS 错误也经同一个 DSN 上报（G5-19），默认关。 */

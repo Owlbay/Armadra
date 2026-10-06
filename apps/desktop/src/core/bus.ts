@@ -285,6 +285,21 @@ export interface WorkspaceEventPayloads {
    * 一条评论变了（契约 §16.3）。不带正文：页面据此重新拉列表，推送域按
    * `mentions`（被提及的 principal，不含作者）叫人。
    */
+  /**
+   * 出站中继隧道换了状态（契约 §32）：设置页据此实时显示。发给每块正被人看着的
+   * 画布（`events:read`），不进 outbox——续订的页面重新读一次
+   * `identity.cloud.status` 就是当前那一份。
+   */
+  "cloud.tunnel": {
+    readonly issuer: string;
+    readonly state:
+      | "disabled"
+      | "connecting"
+      | "authenticating"
+      | "ready"
+      | "draining"
+      | "backoff";
+  };
   "board.comment": {
     readonly boardId: string;
     readonly action:

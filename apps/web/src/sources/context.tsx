@@ -23,6 +23,11 @@ export function SourcesProvider({
   );
 }
 
+/** 此处生效的源表（`<SourcesProvider>` 给的，否则页面那张）。 */
+export function useSourceRegistry(): SourceRegistry {
+  return useRegistry();
+}
+
 function useRegistry(): SourceRegistry {
   return React.useContext(SourcesContext) ?? sourceRegistry();
 }

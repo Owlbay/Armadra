@@ -148,6 +148,10 @@ export interface ArmadraDesktopApi {
   readonly gateway: {
     refresh(): Promise<{ ok: boolean }>;
   };
+  /** 源表变了：壳重读 CSP 与证书钉扎，答页面要不要重载（`app:sources-changed`）。 */
+  readonly sources: {
+    changed(): Promise<{ reload: boolean }>;
+  };
   /**
    * 页面的一条 JS 错误（契约 §30），页面已剥离过；主进程再判开关、限流、剥离。
    */
@@ -225,6 +229,9 @@ const api: ArmadraDesktopApi = {
   },
   gateway: {
     refresh: () => ipcRenderer.invoke(IPC.gatewayRefresh.channel),
+  },
+  sources: {
+    changed: () => ipcRenderer.invoke(IPC.sourcesChanged.channel),
   },
   diagnostics: {
     report: (report) =>

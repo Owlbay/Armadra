@@ -43,6 +43,7 @@ export {
   SourcesProvider,
   useCurrentSource,
   useSource,
+  useSourceRegistry,
   useSourceStatus,
   useSources,
 } from "./context";

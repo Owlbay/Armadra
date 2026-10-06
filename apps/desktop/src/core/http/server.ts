@@ -165,16 +165,109 @@ export class CoreServer {
    * A server per listener. One address per `http.Server` is a Node fact, so
    * the router and the upgrade handler are shared and the servers are not.
    */
-  createListener(options: { readonly admitted?: boolean } = {}): Server {
+  createListener(
+    options: {
+      readonly admitted?: boolean;
+      /**
+       * 只与 `admitted` 一起用：交接点自己的门（中继隧道，契约 §32）。给了它，
+       * 回环那一套来源与 CORS 判定就不再适用——来源、凭据、CORS 头都由它定，
+       * 它放行时带出的身份就是这次请求的身份。
+       */
+      readonly gate?: ListenerGate;
+    } = {},
+  ): Server {
     const admitted = options.admitted === true;
+    const gate = admitted ? options.gate : undefined;
     const server = createServer((request, response) => {
+      if (gate !== undefined) {
+        void this.serveGated(request, response, gate);
+        return;
+      }
       void this.serve(request, response, admitted);
     });
     server.on("upgrade", (request, socket, head) => {
+      if (gate !== undefined) {
+        this.upgradeGated(request, socket, head, gate);
+        return;
+      }
       this.upgrade(request, socket, head, admitted);
     });
     this.servers.push(server);
     return server;
+  }
+
+  /** 交接点自己的门判过之后再进来（{@link createListener} 的 `gate`）。 */
+  private async serveGated(
+    request: IncomingMessage,
+    response: ServerResponse,
+    gate: ListenerGate,
+  ): Promise<void> {
+    const url = new URL(request.url ?? "/", "http://core");
+    const verdict = gate(coreRequest(request, url, EMPTY_BODY), false);
+    if ("refusal" in verdict) {
+      return this.send(
+        response,
+        verdict.refusal.status,
+        verdict.refusal.body,
+        verdict.refusal.cors,
+      );
+    }
+    if ("reply" in verdict) {
+      return this.send(
+        response,
+        verdict.reply.status,
+        verdict.reply.body,
+        verdict.reply.cors,
+      );
+    }
+    if (request.method === "OPTIONS") {
+      response.writeHead(204, verdict.cors);
+      response.end();
+      return;
+    }
+    if (verdict.identity === undefined) {
+      return this.serveAdmitted(request, response, verdict.cors, url);
+    }
+    return runAs(verdict.identity, () =>
+      this.serveAdmitted(request, response, verdict.cors, url),
+    );
+  }
+
+  private upgradeGated(
+    request: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+    gate: ListenerGate,
+  ): void {
+    const url = new URL(request.url ?? "/", "http://core");
+    const found = this.router.match(url.pathname);
+    const registration =
+      found === undefined ? undefined : this.streams.get(found.entry.path);
+    const verdict = gate(coreRequest(request, url, EMPTY_BODY), true);
+    if ("refusal" in verdict || "reply" in verdict) {
+      const answer = "refusal" in verdict ? verdict.refusal : verdict.reply;
+      const code =
+        typeof answer.body === "object" &&
+        answer.body !== null &&
+        "code" in answer.body
+          ? String((answer.body as { code: unknown }).code)
+          : "";
+      socket.write(
+        `HTTP/1.1 ${answer.status} ${code}\r\nConnection: close\r\n\r\n`,
+      );
+      socket.destroy();
+      return;
+    }
+    if (found === undefined || registration === undefined) {
+      socket.write("HTTP/1.1 501 Not Implemented\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    const core = coreRequest(request, url, EMPTY_BODY);
+    const proceed = () =>
+      this.upgradeAdmitted(request, socket, head, core, found, registration);
+    if (verdict.identity === undefined) proceed();
+    else runAs(verdict.identity, proceed);
   }
 
   private async serve(
@@ -683,6 +776,36 @@ export type AdmissionVerdict =
       };
     }
   | { readonly identity?: RequestIdentity };
+
+/**
+ * 交接点自己的门（{@link CoreServer.createListener} 的 `gate`）的裁决：拒绝、
+ * 由门自己答（WebSocket 票这类只属于这个交接点的面），或者放行——放行时 CORS
+ * 头由门给，身份可选（不给就是不要会话的路径，门自己决定以谁的身份跑）。
+ */
+export type ListenerVerdict =
+  | {
+      readonly refusal: {
+        readonly status: number;
+        readonly body: { readonly code: string; readonly message: string };
+        readonly cors?: Record<string, string>;
+      };
+    }
+  | {
+      readonly reply: {
+        readonly status: number;
+        readonly body: unknown;
+        readonly cors?: Record<string, string>;
+      };
+    }
+  | {
+      readonly identity?: RequestIdentity;
+      readonly cors: Record<string, string>;
+    };
+
+export type ListenerGate = (
+  request: CoreRequest,
+  upgrade: boolean,
+) => ListenerVerdict;
 
 /** 旧路径交给契约实现；不认的答 `undefined`。 */
 export type ContractLegacy = (

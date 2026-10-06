@@ -178,6 +178,98 @@ async function anchorFor(
   return pem;
 }
 
+/**
+ * 首次添加时的「这台对端用的是哪个信任锚」：握一次不验证的手，系统信任它就答
+ * `null`（不需要钉扎）；不信任就答链里最末那张的指纹——服务端只发了叶证书时，
+ * 取 `GET /ca.crt` 里签了这张叶证书的那张。答出来的指纹只给人核对，真请求仍按
+ * {@link networkTransport} 的两步钉扎走。连不上抛 `source_unreachable`。
+ */
+export async function presentedAnchor(
+  origin: string,
+  timeoutMs = 10_000,
+): Promise<string | null> {
+  const url = new URL(origin);
+  if (url.protocol !== "https:") return null;
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const { authorized, chain } = await new Promise<{
+    authorized: boolean;
+    chain: Buffer[];
+  }>((resolve, reject) => {
+    const socket = tls.connect({
+      host,
+      port: Number(url.port || 443),
+      ...(isIP(host) === 0 ? { servername: host } : {}),
+      rejectUnauthorized: false,
+      ALPNProtocols: ["http/1.1"],
+    });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(fail("source_unreachable", "连接超时"));
+    }, timeoutMs);
+    socket.once("secureConnect", () => {
+      clearTimeout(timer);
+      const raws: Buffer[] = [];
+      const seen = new Set<string>();
+      let certificate: tls.DetailedPeerCertificate | undefined =
+        socket.getPeerCertificate(true);
+      while (certificate?.raw !== undefined) {
+        const key = sha256(certificate.raw);
+        if (seen.has(key)) break;
+        seen.add(key);
+        raws.push(certificate.raw);
+        certificate = certificate.issuerCertificate;
+      }
+      const ok =
+        socket.authorized &&
+        tls.checkServerIdentity(host, socket.getPeerCertificate()) ===
+          undefined;
+      socket.end();
+      resolve({ authorized: ok, chain: raws });
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      reject(fail("source_unreachable", "连不上这个地址"));
+    });
+  });
+  if (authorized) return null;
+  const last = chain[chain.length - 1];
+  if (last === undefined) return null;
+  const tail = new X509Certificate(last);
+  if (chain.length > 1 || tail.verify(tail.publicKey)) return sha256(last);
+  // 只发了叶证书：信任锚在 `/ca.crt`。
+  const answer = await send(
+    { method: "GET", url: `${url.origin}/ca.crt`, fingerprint: "", timeoutMs },
+    { insecure: true, raw: true },
+  ).catch(() => undefined);
+  const text = typeof answer?.body === "string" ? answer.body : "";
+  for (const block of text.match(PEM_BLOCK) ?? []) {
+    try {
+      const anchor = new X509Certificate(block);
+      if (tail.verify(anchor.publicKey)) return sha256(anchor.raw);
+    } catch {
+      // 不是一张证书：跳过。
+    }
+  }
+  return sha256(last);
+}
+
+/**
+ * 按指纹找到的信任锚 PEM（同 {@link networkTransport} 的钉扎），给不经这里发
+ * HTTP 的连接用——中继隧道的 `wss://` 以它作唯一的 `ca`。空指纹答 `undefined`
+ * （系统信任）。对不上答 `fingerprint_mismatch`。
+ */
+export async function pinnedAnchor(
+  url: string,
+  fingerprint: string,
+  timeoutMs: number,
+): Promise<string | undefined> {
+  if (fingerprint === "") return undefined;
+  const parsed = new URL(url);
+  // 同一主机同一端口上的 TLS：`wss:` 与 `https:` 握的是同一张证书。
+  const https = new URL(`https://${parsed.host}`);
+  return anchorFor(https, fingerprint, timeoutMs);
+}
+
 /** 测试用：清掉信任锚缓存。 */
 export function forgetAnchors(): void {
   anchors.clear();

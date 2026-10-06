@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   AGENT_DRIVER_CHOICES,
   BREACH_CHECK_CHOICES,
+  CLOUD_ORG_ROLE_CHOICES,
   COMPLETION_SETTINGS_DEFAULTS,
   GATEWAY_LISTEN_CHOICES,
   GATEWAY_TLS_SOURCES,
@@ -193,6 +194,25 @@ export const identitySettingsSchema = z.looseObject({
     .default({ providers: [] }),
 });
 
+/** `cloud`（契约 §32）：出站隧道与组织默认角色。 */
+export const cloudSettingsSchema = z.looseObject({
+  relay: z
+    .looseObject({
+      enabled: z
+        .boolean()
+        .catch(D.cloud.relay.enabled)
+        .default(D.cloud.relay.enabled),
+      preferredNode: shortSetting.default(D.cloud.relay.preferredNode),
+    })
+    .catch({ ...D.cloud.relay })
+    .default({ ...D.cloud.relay }),
+  orgDefaultRole: z
+    .enum(CLOUD_ORG_ROLE_CHOICES)
+    .nullable()
+    .catch(D.cloud.orgDefaultRole)
+    .default(D.cloud.orgDefaultRole),
+});
+
 /**
  * 这几段的形状。只描述 G0-3 加的键：同一段里已有的键（`usage.enabled`、
  * `updates.autoCheck`、`agents.custom` 等）照旧由 `looseObject` 透传。
@@ -250,6 +270,7 @@ export const completionSettingsSchema = z.looseObject({
     })
     .catch({ catalog: { ...D.models.catalog } })
     .default({ catalog: { ...D.models.catalog } }),
+  cloud: cloudSettingsSchema.catch(() => cloudSettingsSchema.parse({})),
   diagnostics: z
     .looseObject({
       crashReportDsn: shortSetting.default(""),
@@ -266,3 +287,4 @@ export type CompletionSettings = z.infer<typeof completionSettingsSchema>;
 export type GatewaySettings = z.infer<typeof gatewaySettingsSchema>;
 export type PushSettings = z.infer<typeof pushSettingsSchema>;
 export type IdentitySettings = z.infer<typeof identitySettingsSchema>;
+export type CloudSettings = z.infer<typeof cloudSettingsSchema>;

@@ -14,6 +14,7 @@
 import {
   AGENT_DRIVER_CHOICES,
   BREACH_CHECK_CHOICES,
+  CLOUD_ORG_ROLE_CHOICES,
   COMPLETION_SETTINGS_DEFAULTS,
   GATEWAY_LISTEN_CHOICES,
   GATEWAY_TLS_SOURCES,
@@ -234,6 +235,7 @@ function normalizeCompletion(document: JsonObject): void {
   normalizeGateway(document);
   normalizePush(document);
   normalizeIdentity(document);
+  normalizeCloud(document);
   const collab = section(document, "collab");
   collab.realtime =
     asBool(collab.realtime) ?? COMPLETION_SETTINGS_DEFAULTS.collab.realtime;
@@ -351,6 +353,26 @@ function normalizeIdentity(document: JsonObject): void {
   document.identity = identity;
 }
 
+/**
+ * `cloud`（契约 §32，A3-2）：出站隧道的开关与偏好节点、经远程服务新建成员的组织
+ * 默认角色。角色不在选项表里（含手写的空串）就退回 `null`——不授予。
+ */
+function normalizeCloud(document: JsonObject): void {
+  const defaults = COMPLETION_SETTINGS_DEFAULTS.cloud;
+  const cloud = section(document, "cloud");
+  const relay = section(cloud, "relay");
+  relay.enabled = asBool(relay.enabled) ?? defaults.relay.enabled;
+  relay.preferredNode = shortText(relay.preferredNode);
+  cloud.relay = relay;
+  const role = asString(cloud.orgDefaultRole);
+  cloud.orgDefaultRole =
+    role !== undefined &&
+    (CLOUD_ORG_ROLE_CHOICES as readonly string[]).includes(role)
+      ? role
+      : defaults.orgDefaultRole;
+  document.cloud = cloud;
+}
+
 const OAUTH_PROVIDER_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const OAUTH_ISSUER = /^https?:\/\/\S+$/;
 
@@ -461,6 +483,7 @@ export function completionSettings(document: JsonValue): CompletionSettings {
       claudeLocalWindow: usage.claudeLocalWindow as boolean,
     },
     models: normalized.models as unknown as CompletionSettings["models"],
+    cloud: normalized.cloud as unknown as CompletionSettings["cloud"],
     diagnostics:
       normalized.diagnostics as unknown as CompletionSettings["diagnostics"],
   };
@@ -517,6 +540,13 @@ export interface CompletionSettings {
     readonly claudeLocalWindow: boolean;
   };
   readonly models: { readonly catalog: { readonly autoRefresh: boolean } };
+  readonly cloud: {
+    readonly relay: {
+      readonly enabled: boolean;
+      readonly preferredNode: string;
+    };
+    readonly orgDefaultRole: Choice<typeof CLOUD_ORG_ROLE_CHOICES> | null;
+  };
   readonly diagnostics: {
     readonly crashReportDsn: string;
     readonly reportPageErrors: boolean;

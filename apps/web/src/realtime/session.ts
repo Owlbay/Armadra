@@ -161,7 +161,8 @@ export function startRealtime(options: StartOptions): () => void {
   let stopped = false;
   const check =
     options.checkState ??
-    (() => runtimeApi.boardRealtime(workspaceId, boardId));
+    // 复核发往这块板所在的源，不是此刻的当前源（两者在切源的那一瞬会不同）。
+    (() => runtimeApi.boardRealtime(workspaceId, boardId, source));
 
   const onStatus = (status: ClientStatus) => {
     if (stopped || live?.client !== client) return;

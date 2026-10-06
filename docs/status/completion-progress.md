@@ -2066,6 +2066,78 @@
 - `WorkspaceTree` 仍只列当前源的行（偏好里已按源存）；按源分组是 A1-4。
 - 实时协同的「这块板走不走实时」复核仍走当前源的 `runtimeApi`。
 
+## A3-2 出站中继隧道（`core/relay/`，契约 §32）
+
+设计：[平台实现规格 core 包](../design/platform/core-packages.md) §4；契约 §32。中继一侧的线上行为按 armadra-cloud 的 cloud-api §7、§8、§10、§11。
+
+做了什么：
+
+- **隧道客户端**（`core/relay/`）：`streams.ts` 的 `TunnelDuplex`（两级窗口记账，按 64 KiB 切块，`END` / `RST`，`remoteAddress` 取 `OPEN.remoteIp`、`encrypted = true`、`armadraOrigin` 取 `OPEN.clientOrigin`）；`nodes.ts`（`GET /v1/sources/me/relay` 带源 JWS，令牌缓存 50 分钟、被拒即丢，偏好节点 → 权重排序，失败换下一个，答 `410` 即 `source_revoked`）；`client.ts` 的 `TunnelClient`（`hello` → `challenge` → `auth`（源私钥签 `challengeSigningInput`）→ `ready`；`protocol_unsupported` 停下不重连、`source_revoked` 本机撤销登记、`tunnel_token_*` 丢令牌、其余退避；收 `PING` 回 `PONG`，自己每 `heartbeatMs` 发 `PING`、两次无 `PONG` 重连；`GOAWAY` 不退避立即换隧道、旧的排空或 `graceMs` 后关；退避 `min(60 s, 1 s × 2^n) × (0.5 + 随机)`；流数超 `maxStreams` 答 `RST refused`；`wss://` 按远程服务的 CA 指纹钉扎，`ws://` 只在 `ARMADRA_RELAY_ALLOW_INSECURE=1`）。
+- **准入**（`admission.ts`，挂在 `createListener({ admitted: true, gate })`）：与 Gateway 的 Bearer 模式等价——回环专用路径 403；来源以 `OPEN.clientOrigin` 为准、请求头不一致 403、须在可信来源或原生 App 两个来源之内；没有来源只放行 `/health` 与身份匿名面；匿名面以无授权成员身份跑；`POST /api/identity/ws-ticket` 由隧道自己签票；其余要 Bearer，升级要 `armadra-ticket.*`，拒绝 401。会话绑在中继来源（`relayOrigins[0]`）上，放行前改写 `Origin` 并 `markBearerTransport`，`cloud/login` 经隧道答 `session.native`、不发 Cookie。
+- **`http/server.ts`**：`createListener` 加 `gate`（交接点自己的门：来源、凭据、CORS 由它定，可自答 WS 票；升级同样先过它）。
+- **装配**（`index.ts`）：每个有效登记一条隧道，`RelayService` 挂到 `cloudDomain().attachRelay`（登记起、撤销停、状态读它）；`main.ts` 在回环监听之后 `startAll()` 且不等，退出时先关隧道；状态变了在工作空间事件流上发 `cloud.tunnel { issuer, state }`（发给正被看着的画布，不进 outbox）。
+- **设置**：`cloud.relay.enabled`（缺省 `true`，翻转经新的 `SettingsStore.onChange` 当场停 / 起）、`cloud.relay.preferredNode`，存在本机那一半（`LOCAL_PATHS` 加 `cloud.relay`）；`cloud.orgDefaultRole`（`viewer` / `editor` / `operator` / `driver` / `null`，缺省 `null`），在 `identity/index.ts` 接给云登录。两份 `completion-settings.ts` 与共享层 zod schema 同步。
+- 其它：`sources/http-client.ts` 导出 `pinnedAnchor`；`CloudService.fingerprint(issuer)`；契约 §32 由占位补成实施契约（§32.1–§32.5），架构域表加 `core/relay/`，开发指南登记 `ARMADRA_RELAY_ALLOW_INSECURE`。
+
+实测（macOS arm64，Node 26，2026-10-06，基于 main 86271782（含 #140）；合入 main 8f20daf7（#141、#142，只动页面与手机）后重跑 `pnpm check` 与 web 用例）：
+
+- `pnpm check` 通过（lint 0 error，本包文件 0 warn）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 4820 过 / 72 跳过，live 4 过，脚本 68 过；`pnpm --filter @armadra/server test` 87 过 / 4 跳过，`pnpm --filter @armadra/server build` 通过；`pnpm --filter @armadra/shared test` 348 过；`pnpm --filter @armadra/web test` 3550 过（合入 #141、#142 后 3603 过），`typecheck` 通过。
+- 新用例：`relay/streams.test` 8（经假中继 GET / 带体 POST / chunked / WS 回显、窗口耗尽只发一个流窗口后停、`WINDOW` 后续发且一字节不少、`bufferedAmount` 含隧道里积压的字节、隧道断开流随之结束并退避重连、`maxStreams` 答 `RST refused`）、`relay/client.test` 14（握手与签名被验、`protocol_unsupported` 停且不重连、`source_revoked` 与取令牌 `410` 都撤销本机登记、`tunnel_token_expired` 重取令牌、心跳超时重连、回 `PONG`、`GOAWAY` 在一分钟退避下仍立即换隧道且旧隧道 1000 关、退避公式、中继不可达时登记立即返回且回环 `/health` 与 `/api/workspaces` 200、开关停起、撤销即断、节点排序、签名输入与黄金向量逐字相同）、`relay/admission.test` 14（可信来源 + Bearer 放行且 CORS 只回客户端来源、无 Bearer 401、回环会话进不来、来源不可信 403、头与 `OPEN.clientOrigin` 不一致 403、回环专用路径 403、无来源只放行匿名面、原生 App 来源、预检、隧道签票换事件流与票只能用一次、无票 401 / 无来源 403、票要 Bearer、`cloud/login` 经隧道答原生会话且令牌可用、`cloud.tunnel` 事件）、`relay/frames.test` 12（协议包隧道黄金字节解码再编码逐字节相同）、设置与 `onChange` 用例 2。
+- **对真个人中转联调**：armadra-cloud main（be36b78）的 `personal serve`（https://127.0.0.1:8102，自签，账号见 `.data/personal/dev.env`），`ARMADRA_PERSONAL_RELAY=1 ARMADRA_PERSONAL_RELAY_HOME=<armadra-cloud> vitest run src/core/relay/personal-relay.devstack.integration.test.ts` 9 过（修掉用例里漏收首帧的问题后连跑 4 次都过）：真 core（`run()`）经源表加远程服务（钉指纹）→ A2-3 的 `register` → 隧道 ready；中继断言绑定后经中继 `cloud/login` 换原生会话、经中继刷新、`GET /api/workspaces`、回环专用路径 403、无 Bearer 401；经中继的事件流收到本机发布的事件；经中继开终端（tmux）收发 `echo`；经中继的实时板与回环那一端双向互通；中继令牌失效 4401 后换令牌与票重连、用过的票 401；中继 SIGTERM 重启后隧道 7–9 秒内自己重连、期间回环照常；本机撤销后经中继的流随即被关（约 0.3 秒）、HTTP 503 `source_offline`；中继侧撤销后隧道被关，重连时令牌被拒、取令牌 `410`，本机登记跟着撤销。联调后中继已停，测试 core 在中继目录里全部撤销。
+
+接口：
+
+- **给 A3-4（页面 relayed 源）**：经中继访问用 `sources.assertion` 答的 `relayBaseUrl` + `Armadra-Relay-Token`（WS 子协议 `armadra-relay.<jwt>`），`Origin` 须是可信来源（issuer 自己、`identity.cloud.trustedOrigins` 加的）或原生 App 来源；`POST /api/identity/cloud/login { assertion }` → `session.native`（还有 `csrfToken`）；之后 `Authorization: Bearer`；刷新 `POST /api/identity/session/refresh`（Bearer = 刷新令牌 + `x-armadra-csrf`）；WS 先经中继 `POST /api/identity/ws-ticket` 换票，子协议 `armadra-relay.*` + `armadra-ticket.*`；长连接 4401 续期换票重连、4403 失权、4404 源离线。设置页：`identity.cloud.status` 的 `registrations[].tunnel`、事件 `cloud.tunnel`（共享层 `workspaceEventSchema`）、设置键（共享层 `cloudSettingsSchema`、`CLOUD_ORG_ROLE_CHOICES`）、`lastError.code` 取值见契约 §32.5（文案按码进 i18n）。
+- **给 A4-4（服务器壳登记）**：服务器壳的 `run()` 用同一份 `DOMAINS`，隧道已在里面；`cloudDomain()?.register / revoke / status` 登记即起隧道、撤销即停；`relayDomain()`（`core/relay`）：`start / stop / status / statusAll / startAll / stopAll / close`；源私钥在 SecretStore（服务器壳的 `file-encrypted`）；探针连明文中继用 `ARMADRA_RELAY_ALLOW_INSECURE=1`。
+
+没做 / 偏离规格：
+
+- 节点选择没有延迟探测：偏好节点 → 权重 → 原顺序（个人中转只有一个节点）。
+- 会话绑定的来源规格没写，取 `relayOrigins[0]`（缺省 issuer）：经隧道签的会话只在隧道上有效，回环与 Gateway 的会话也进不了隧道。隧道用自己的一份 WS 票表，不与回环共用。
+- 来源被拒（不可信、与 `OPEN` 不一致、没有来源却碰受保护的路径）答 403，凭据被拒答 401；规格「拒绝一律 401」指后者。
+- `cloud.relay.*` 存在本机那一半（`worker-settings.json`），`cloud.orgDefaultRole` 跟着账号走。
+- `installRelay` 放在 hook 服务之前（Gateway 仍是最后一个），隧道真正连中继在 `run()` 第 5 步之后。
+- `cloud.tunnel` 是工作空间事件（发给正被看着的画布、不进 outbox），没有加进 `WORKSPACE_EVENT_TYPES` 那张契约 §5 的清单（同 `board.comment`）。
+- `hello.capabilities` 报空数组（中继不读）。
+- 夹具位置与命名按仓库习惯：假中继在 `relay/fake-relay.fixture.ts`；联调用例是 `relay/personal-relay.devstack.integration.test.ts`（`ARMADRA_PERSONAL_RELAY=1` 才跑，不探测 dev-stack）。`sequence-http-roundtrip.bin` 按帧做解码再编码的逐字节比对，没有把 core 的回答与夹具逐帧比（回答带 `Date` 头，不确定）。
+- core 自己的 4401（访问令牌 15 分钟到期）没在联调里等，联调验的是中继令牌 4401 后的换令牌与换票；core 到期复核与回环、Gateway 同一条路（`http/server.ts`），已有用例覆盖。语言会话与浏览器画面两条流没有经真中继跑，机制与终端、事件流、实时板相同（发送队列按 `bufferedAmount` 判拥塞，见 `streams.test`）。
+- 中继侧撤销后，重连时中继先以 `tunnel_token_invalid` 拒（令牌的 `jti` 随源撤销），core 丢令牌、退避一次后取令牌得 `410` 再撤销，约 1–3 秒。
+
+## A1-4 「远程服务」设置页、分享本机与侧栏按源分组
+
+设计：[客户端包](../design/platform/client-packages.md) §3；总计划 §12（只开放个人中转与自托管直连，SaaS 不出现入口）。
+
+做了什么：
+
+- **core（契约 §33.6 追加）**：`sources.remoteLogout`（尽力 `auth.logout`、删凭据、留行，重新登录只要再输口令）；`remoteAdd` 与「地址 + 配对码」的 `addDirect` 没给指纹、系统又不信任对端证书时答 `400 fingerprint_mismatch`，`details.fingerprint` 是对端信任锚指纹（`http-client.ts::presentedAnchor`：链里最末那张，只发叶证书时取 `/ca.crt` 里签了它的那张），页面请人核对后带着它重调。
+- **桌面壳**：CSP `connect-src` 按 core 源表动态放行（远程服务 issuer、源的 `baseUrl` / `relayOrigin`，各给 `https` 与 `wss`，形状不对的值丢掉）；主会话 `setCertificateVerifyProc` 对系统不信任、但链里有登记指纹、逐级验签、主机名与有效期都对的放行（与 core 钉扎同一定义）。壳经 core 读 `GET /api/sources`：起窗口前一次、页面发 IPC `app:sources-changed`（不带数据）后一次；答 `{ reload }`，多出新来源时页面回到设置这一页重载（CSP 只在文档载入时生效）。
+- **页面**：`panels/settings/pages/RemoteServicesPage.tsx`（nav `remote`，在「本机」之后，ownerOnly）——远程服务：个人中转添加（地址、账号、口令，首次核对指纹）、登录 / 登出 / 移除、「分享中」徽标、停用分享；已挂载的源：本机行、自托管直连（配对链接或地址 + 配对码，同样核对指纹）、从远程服务挂载、连接状态、断开 / 移除。`panels/settings/ShareDialog.tsx`：开始 / 停用分享、隧道状态（5 秒轮询）、按工作空间 / 权限 / 有效期（1、7、30 天）生成分享链接、二维码（复用 `QrImage` / lean-qr）、复制、停用、生效中的链接。`api/remote-services.ts` 是调用面；`sidebar/SourceGroups.tsx` 侧栏按源分组；`sources/bootstrap.ts` + `app/use-sources-bootstrap.ts` 启动时只在「挂过源」时读源表（零配置不多发请求）。`i18n/remote.ts` 中英同步；`MESSAGE_BY_CODE` 加远程服务答的 `rate_limited`、`unauthenticated`、`session_expired` / `session_revoked`、`source_access_denied`、`source_revoked`、`limit_reached`。
+
+实测（macOS arm64，2026-10-06，基于 main 86271782）：
+
+- `pnpm check` 通过；`pnpm --filter @armadra/web test` 与 `typecheck`、i18n 守卫通过；`pnpm libs:build && pnpm --filter @armadra/desktop test` 通过（数字见 PR）。
+- 新用例：core `service.test.ts` 补 4（首次指纹、给了指纹或系统信任不改写、配对码路径、`remoteLogout`）、`http-client.test.ts` 补 3（真 TLS 下 `presentedAnchor`）；壳 `shell-core/remote-trust.test.ts` 5（源表 → 放行与钉扎、CSP 注入防护、真 CA 链钉扎的正反例）；页面 `api/remote-services.test.ts` 9、`RemoteServicesPage.test.tsx` 5、`sources/bootstrap.test.tsx` 6（零配置不请求、侧栏分组与离线灰显）。
+- **真 Electron 端到端**（开发构建 + 独立个人中转 `https://127.0.0.1:8112` 自签，临时 HOME / 数据目录、文件密钥后端）：添加个人中转 → 页面显示的指纹与中继启动日志一致 → 确认后壳重载页面回到远程服务页 → 登出（行留着）→ 重新登录（不再问指纹）→ 分享本机（页面经 CSP 放行与指纹钉扎直接调中继取注册令牌，本机登记成功，中继目录里有这台机器，`registered: true`）→ 生成链接（`https://127.0.0.1:8112/j/<id>#<secret>.<邀请令牌>`，中继上有、匿名 `links.get` 认得、本机有对应邀请）→ 停用链接（中继撤销、本机邀请作废；窄屏再来一次）→ 停用分享（登记撤销）→ 移除；全程无控制台错误、无被 CSP / 证书拦下的请求。联调后停掉了中继。
+
+接口（供 A4-3p / A3-4 / A1-2）：
+
+- 链接：`<issuer>/j/<linkId>#<secret>.<core 邀请令牌>`（`api/remote-services.ts::shareLinkUrl`；邀请令牌本身是 `<invitationId>.<secret>`，所以片段按第一个 `.` 切：前面是链接 secret，后面整段是邀请令牌）。二维码就是这条链接（`QrImage`）。
+- 页面：`addDirectSource` / `addPersonalRelay` 答 `{ kind: "confirm", fingerprint }` 或 `{ kind: "done" }`；`presentedFingerprint(error)`；`remoteFetch(access, path, schema)` 直接调远程服务；`notifyShellSourcesChanged()` 与 `sources/bootstrap.ts` 的 `applySourceTable` / `reloadIntoSettings`——挂载类入口（如 `mountByLink`）成功后照这三步收尾。
+- 侧栏：`sidebar/SourceGroups.tsx`——当前源在「项目」里，其余每个源一组（`data-source-group`，本机也是），就绪的源列出工作空间，点一行 `registry.setCurrent(sourceId)` 后 `openWorkspace(workspace, sourceId)`。
+- A1-2 留下的三项已接上：换当前源清掉不带源前缀的查询（`app/use-sources-bootstrap.ts::useSourceSwitchCacheReset`）；依赖、协调器、实时复核发往读数所属的源（`api/source.ts::sourceById`、`sources/scope.ts::activeSource`）；侧栏按源分组。
+
+没做 / 偏离规格：
+
+- core 追加 `sources.remoteLogout`（规格没有，页面「登出」要它）与首次指纹的 `details.fingerprint`（规格写「响应里带指纹」，core 原来没有）。
+- 桌面壳加了按源表指纹的证书钉扎：自签的个人中转与 Gateway 本地 CA 否则过不了 Chromium；服务器壳托管的页面在用户自己的浏览器里，自签远程服务仍要用户信任 CA（或用 ACME），其 CSP 也未动态化。
+- CSP 只在文档载入时生效：新加来源后页面重载一次，回到设置的远程服务页。
+- 本机邀请经 `/api/identity/invitations`（Bearer），没有 procedure；邀请必须指向一个工作空间，所以分享对话框要选工作空间。`maxUses` 未传（A4-1 未合）。从「生效中的链接」停用时只撤远程服务那条链接，本机那张邀请等过期（列表不带 `invitationId`）。
+- 隧道状态靠 5 秒轮询 `identity.cloud.status`，没订阅 `cloud.tunnel` 事件（A3-2 未合，实测一直是「未连接」）。
+- 已挂载源不支持拖动排序（`sources.update.orderIndex` 未接界面）；SaaS 设备码流程不出现入口。
+- 没有复用手机的 `#connections` 连接页组件：手机直接调远程服务、凭据在钥匙串，桌面经本机 core 代管凭据（`sources.*`），流程与状态不同；共用的只有指纹分组显示（`groupFingerprint`）与二维码（`QrImage`）。
+- 窄屏与宽屏切换时设置对话框换外壳、内容重新挂载，刚生成的链接会从界面上消失（链接仍在，可在「生效中的链接」停用）。
+
 ## E2 工程规范化：控制面 WebSocket `/api/ws`
 
 设计：[工程规范化](../design/engineering-standardization.md) §3，规格：[工程规范化包](../design/platform/engineering-packages.md) §2；契约 §35。

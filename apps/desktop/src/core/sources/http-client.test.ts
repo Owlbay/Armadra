@@ -9,6 +9,7 @@ import {
   forgetAnchors,
   networkTransport,
   normalizeFingerprint,
+  presentedAnchor,
   normalizeOrigin,
 } from "./http-client";
 
@@ -116,6 +117,31 @@ describe("指纹钉扎", () => {
 
   it("没人监听 → source_unreachable", async () => {
     expect(await code(get("https://127.0.0.1:1", "a".repeat(64)))).toBe(
+      "source_unreachable",
+    );
+  });
+});
+
+describe("首次添加：问出对端的信任锚给人核对", () => {
+  it("只发叶证书：答 /ca.crt 里签了它的那张的指纹", async () => {
+    const tls = material();
+    const origin = await serve(tls.cert, tls.key, tls.anchor ?? "");
+    expect(await presentedAnchor(origin, 5_000)).toBe(tls.fingerprint);
+  });
+
+  it("链里带着 CA：答链里最末那张", async () => {
+    const tls = material();
+    const origin = await serve(
+      `${tls.cert}${tls.anchor ?? ""}`,
+      tls.key,
+      tls.anchor ?? "",
+    );
+    expect(await presentedAnchor(origin, 5_000)).toBe(tls.fingerprint);
+  });
+
+  it("http 回环不需要指纹；没人监听 → source_unreachable", async () => {
+    expect(await presentedAnchor("http://127.0.0.1:1", 1_000)).toBeNull();
+    expect(await code(presentedAnchor("https://127.0.0.1:1", 1_000))).toBe(
       "source_unreachable",
     );
   });

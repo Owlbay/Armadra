@@ -124,7 +124,10 @@ describe("the local split", () => {
     expect(isLocal("push.fcm.serviceAccountFile")).toBe(true);
     expect(isLocal("push.apns.keyId")).toBe(false);
     expect(isLocal("push.relayUrl")).toBe(false);
-    expect(localPaths()).toHaveLength(10);
+    // 出站隧道开不开、连哪个节点只对这台机器成立；组织默认角色跟着账号走。
+    expect(isLocal("cloud.relay.enabled")).toBe(true);
+    expect(isLocal("cloud.orgDefaultRole")).toBe(false);
+    expect(localPaths()).toHaveLength(11);
   });
 
   it("recognises a document written before the split", () => {
@@ -185,6 +188,7 @@ describe("SettingsStore", () => {
     // 推送的两个密钥路径同理：缺省是空串，只有这两项、没有别的推送设置。
     expect(Object.keys(local).sort()).toEqual([
       "browser",
+      "cloud",
       "gateway",
       "power",
       "push",
@@ -193,6 +197,9 @@ describe("SettingsStore", () => {
     expect(local.push).toEqual({
       apns: { keyFile: "" },
       fcm: { serviceAccountFile: "" },
+    });
+    expect(local.cloud).toEqual({
+      relay: { enabled: true, preferredNode: "" },
     });
     expect("usage" in local).toBe(false);
     expect("detachedGraceMinutes" in (local.terminal as JsonObject)).toBe(
@@ -289,6 +296,21 @@ describe("SettingsStore", () => {
     });
     document = store.patch({ ssh: { hosts: [] } });
     expect(document.ssh).toEqual({ hosts: [] });
+  });
+
+  it("tells its listeners after every patch, with the document it wrote", () => {
+    const store = SettingsStore.inMemory({});
+    const seen: unknown[] = [];
+    const stop = store.onChange((document) =>
+      seen.push((document.cloud as JsonObject).relay),
+    );
+    store.onChange(() => {
+      throw new Error("一个订阅者失败不影响别的");
+    });
+    store.patch({ cloud: { relay: { enabled: false } } });
+    stop();
+    store.patch({ cloud: { relay: { enabled: true } } });
+    expect(seen).toEqual([{ enabled: false, preferredNode: "" }]);
   });
 
   it("deletes a key a patch sets to null", () => {
