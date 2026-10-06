@@ -15,6 +15,7 @@
 
 import type { CoreServer } from "../http/server";
 import type { HandlerResult } from "../http/router";
+import { type DomainHandlers, registerProcedures } from "../http/rpc";
 import type { ErrorResponse } from "../http/errors";
 import { coreError } from "../http/errors";
 import type { CoreContext } from "../main";
@@ -47,6 +48,7 @@ import {
   GATEWAY_MANAGED,
   GATEWAY_NOT_RUNNING,
   type PairingCodeExchange,
+  gatewayOperations,
   getGateway,
   postPairing,
   postPairingCodeExchange,
@@ -527,6 +529,20 @@ export function install(
       domain.pair(input),
     exchangeCode: (input: PairingCodeExchange) => domain.exchangeCode(input),
   };
+  // procedure（契约 §43.7）：与下面三条旧路径同一份操作。短码换票是匿名面，
+  // 只经旧路径，RPC 上不登记（答 501）。
+  const run = gatewayOperations(deps);
+  // 状态与配对票是域里拼出来的 JSON：形状由契约的出参 schema 在对偶测试里逐项校验。
+  const procedures = {
+    status: () => run.status() as never,
+    configure: async (body) => (await run.configure(body)) as never,
+    pair: (body) => run.pair(body) as never,
+  } satisfies Omit<DomainHandlers<"gateway">, "exchangePairingCode">;
+  registerProcedures(
+    context.server,
+    "gateway",
+    procedures as unknown as DomainHandlers<"gateway">,
+  );
   router.handle("GET", "/api/gateway", () => getGateway(deps));
   router.handle("PUT", "/api/gateway", (_match, request) =>
     putGateway(deps, request),
