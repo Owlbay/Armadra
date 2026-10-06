@@ -2652,6 +2652,111 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 - `POST /api/terminals/{sessionId}/node-token/refresh`：凭据域，随 E3-8。
 - `DELETE /api/terminals/{sessionId}`：路由表里没有，关终端节点是 `terminate` 加 `mode: "session"`。
 
+## 39. `agents`：Agent 目录、人的答复、投递与上下文
+
+规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-4）。实现分在拥有这些对象的几个域里，各自用 `registerProcedures(server, "agents", …)` 登记自己那几条：`core/agent/routes.ts`（目录、节点状态、审批、关闭确认、投递、「谁读过我」）、`core/agent/ama-credentials.ts`（ama 密钥）、`core/hook/routes.ts`（集成）、`core/models/index.ts`（模型菜单）、`core/canvas/routes.ts`（连线）、`core/dependencies/index.ts`（依赖等待）。每处都是一份操作实现，路由表里的旧 handler 与 procedure 都调它，拒绝的码与原话一样。`since` 为 1.9，协议 minor 8 → 9。
+
+通则：
+
+- 权限与旧路由表（`core/http/route-scopes.ts`）给旧路径的一致：目录、模型、集成与 ama 密钥是本机管理（`settings:read` / `settings:write`；目录与模型菜单对至少被共享了一块画布的成员是无害的全局读）；标已读与转录是 `canvas:read`，改名建议是 `canvas:write`；投递、连线、依赖读是 `canvas:read`、写是 `canvas:write`，并带 `workspaceKey: "workspaceId"`。
+- 服务器壳上，procedure 与旧路径过同一道路由门（`identity/route-access.ts`）：门面按 `meta.legacy` 把入参还原成旧路径去问，节点、审批、关闭确认按对象所在的画布判。
+- 出参写线上形状：标识与时刻只校是字符串；页面 schema 是「已知字段 + 透传」的（目录行、集成状态、审批答复、节点状态），契约同样是已知字段加原样透传，出参校验不会剥掉 core 多答的字段。出参没有缺省值。
+- 入参只校形状。决定的取值、elicitation、`expectedRevision`、密钥的格式、连线的条数与长度、依赖的节点归属都在域里判。**形状**错（缺字段、类型不对）由契约先答 `bad_request`（带 `details.issues`），旧路径上同样如此，与迁移前那句原话不同；码与状态不变。
+- 旧路径是查询串的数字与布尔（`limit`、`maxBytes`、`all`）以字符串到达，入参两种都收，按旧的 `parseInt` / `=== "true"` 规则读。
+
+### 39.1 目录、模型菜单、集成与 ama 密钥
+
+- `models` 对不认识的 Agent 答 404；`integration*` 的拒绝是集成域自己的 `InstallError`（码与状态它带），其余失败是 500。
+- 集成只写数据目录（画布内注入）；`repairIntegration` 动 CLI 自己的配置目录里旧产品名留下的条目，先备份再改。
+- ama 的密钥只进不出：三条都答「哪家设了、存在哪个后端」。密钥后端不可用时答 503，码是后端自己的（`secret_unavailable`），原话不带后端给的理由。
+
+<!-- rpc:begin contract=§39.1 -->
+
+| procedure                     | kind     | input                                  | output                                                                                                                                                                                                                                                                                                                                                                                                                                 | errors                                  | scope            | 自  | 原路径                                             |
+| ----------------------------- | -------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ---------------- | --- | -------------------------------------------------- |
+| `agents.list`                 | query    | 可省 `{}`                              | `({ id: string, label: string, color: string, launchCmd: string, promptMode: string, capabilities?: string[], args?: string[], baseAgent?: string, resolvedPath?: string \| null, installed: boolean, launchTarget?: Record<string, JSON>, clientRevision?: number \| null, skillsRevision?: number \| null, probe?: Record<string, JSON> \| null, launcher?: string, history?: Record<string, JSON>, acp?: Record<string, JSON> })[]` | `forbidden`                             | `settings:read`  | 1.9 | `GET /api/agents`                                  |
+| `agents.models`               | query    | `{ agentId: string }`                  | `{ id: string, label: string, source: string, releaseDate?: string }[]`                                                                                                                                                                                                                                                                                                                                                                | `forbidden`、`not_found`                | `settings:read`  | 1.9 | `GET /api/agents/{agentId}/models`                 |
+| `agents.integration`          | query    | `{ agentId: string }`                  | `{ agentId: string, mode: string, hook: { installed: boolean, path?: string, revision?: number }, skill: { installed: boolean, path?: string, revision?: number }, legacy: { found?: {…}[] }, revision: number, installedRevision?: number, stale?: boolean, launchArgs?: string[], launchEnv?: string[], globalWrites?: string[] }`                                                                                                   | `bad_request`、`forbidden`、`not_found` | `settings:read`  | 1.9 | `GET /api/agents/{agentId}/integration`            |
+| `agents.installIntegration`   | mutation | `{ agentId: string }`                  | `{ agentId: string, mode: string, hook: { installed: boolean, path?: string, revision?: number }, skill: { installed: boolean, path?: string, revision?: number }, legacy: { found?: {…}[] }, revision: number, installedRevision?: number, stale?: boolean, launchArgs?: string[], launchEnv?: string[], globalWrites?: string[] }`                                                                                                   | `bad_request`、`forbidden`、`not_found` | `settings:write` | 1.9 | `POST /api/agents/{agentId}/integration/install`   |
+| `agents.uninstallIntegration` | mutation | `{ agentId: string }`                  | `{ agentId: string, mode: string, hook: { installed: boolean, path?: string, revision?: number }, skill: { installed: boolean, path?: string, revision?: number }, legacy: { found?: {…}[] }, revision: number, installedRevision?: number, stale?: boolean, launchArgs?: string[], launchEnv?: string[], globalWrites?: string[] }`                                                                                                   | `bad_request`、`forbidden`、`not_found` | `settings:write` | 1.9 | `POST /api/agents/{agentId}/integration/uninstall` |
+| `agents.repairIntegration`    | mutation | `{ agentId: string }`                  | `{ agentId: string, found: { kind: string, path: string, detail: string }[], removed: string[], kept: string[], backup?: string, backups: string[] }`                                                                                                                                                                                                                                                                                  | `bad_request`、`forbidden`、`not_found` | `settings:write` | 1.9 | `POST /api/agents/{agentId}/integration/repair`    |
+| `agents.amaCredentials`       | query    | 可省 `{}`                              | `{ backend: string, providers: { id: string, isSet: boolean }[] }`                                                                                                                                                                                                                                                                                                                                                                     | `forbidden`                             | `settings:read`  | 1.9 | `GET /api/agents/ama/credentials`                  |
+| `agents.setAmaCredential`     | mutation | `{ provider: string, apiKey: string }` | `{ backend: string, providers: { id: string, isSet: boolean }[] }`                                                                                                                                                                                                                                                                                                                                                                     | `bad_request`、`forbidden`              | `settings:write` | 1.9 | `PUT /api/agents/ama/credentials/{provider}`       |
+| `agents.clearAmaCredential`   | mutation | `{ provider: string }`                 | `{ backend: string, providers: { id: string, isSet: boolean }[] }`                                                                                                                                                                                                                                                                                                                                                                     | `bad_request`、`forbidden`              | `settings:write` | 1.9 | `DELETE /api/agents/ama/credentials/{provider}`    |
+
+<!-- rpc:end -->
+
+### 39.2 节点状态
+
+- `markRead` 真的清掉了未读才广播 `agent.status`；从没报过的节点 404。
+- `transcript` 没有可读转录的 CLI 答 501 `unsupported`，不答空正文；`maxBytes` 夹在 1 到上限之间，不是数按缺省。
+- `suggestTitle` 不调模型：转录首条用户消息 → 终端最后一条命令 → Agent 名称。
+
+<!-- rpc:begin contract=§39.2 -->
+
+| procedure             | kind     | input                                             | output                                                                                          | errors                                  | scope          | 自  | 原路径                                          |
+| --------------------- | -------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------- | -------------- | --- | ----------------------------------------------- |
+| `agents.markRead`     | mutation | `{ nodeId: string }`                              | `{ nodeId: string, workspaceId: string, agentId: string, unread?: boolean, updatedAt: string }` | `forbidden`、`not_found`                | `canvas:read`  | 1.9 | `POST /api/agent-status/{nodeId}/read`          |
+| `agents.suggestTitle` | mutation | `{ nodeId: string }`                              | `{ title: string, source: "transcript" \| "terminal" \| "agent" }`                              | `forbidden`、`not_found`                | `canvas:write` | 1.9 | `POST /api/agent-status/{nodeId}/suggest-title` |
+| `agents.transcript`   | query    | `{ nodeId: string, maxBytes?: number \| string }` | `{ nodeId: string, text: string, truncated: boolean }`                                          | `forbidden`、`not_found`、`unsupported` | `canvas:read`  | 1.9 | `GET /api/agent-status/{nodeId}/transcript`     |
+
+<!-- rpc:end -->
+
+### 39.3 人的答复：审批与关闭确认
+
+- 两条都是人替 Agent 回答权限提示与对话框，要 `approval:answer`：审批按那条请求所在的画布判，自己终端上的 operator 就够、别人的要 driver（§23）；关闭确认只在内存里、查不到画布，成员一律 403，只有 owner 答得了。这一面只给人用，Agent 在 hook 面上没有对应的动词。
+- `answerApproval` 答过的再答是 409，不认识的决定是 400；每次答复（含被拒的）都进审批审计，elicitation 的内容只交给 Agent，不进审计与日志。
+- `confirmControl` 那边已经等超时了答 `accepted: false`，不是错误。
+
+<!-- rpc:begin contract=§39.3 -->
+
+| procedure               | kind     | input                                                                                                                                                     | output                                                                                                                                                                 | errors                                              | scope             | 自  | 原路径                                   |
+| ----------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- | ----------------- | --- | ---------------------------------------- |
+| `agents.answerApproval` | mutation | `{ pendingId: string, decision?: string, optionId?: string, answeredBy?: string, expectedRevision?: number \| null, elicitation?: Record<string, JSON> }` | `{ id: string, nodeId: string, answer: string, answeredAt: string, revision: number, route: "file" \| "keys" \| "none" \| "acp", elicitation?: Record<string, JSON> }` | `bad_request`、`forbidden`、`not_found`、`conflict` | `approval:answer` | 1.9 | `POST /api/approvals/{pendingId}/answer` |
+| `agents.confirmControl` | mutation | `{ requestId: string, approve: boolean }`                                                                                                                 | `{ requestId: string, approve: boolean, accepted: boolean }`                                                                                                           | `bad_request`、`forbidden`                          | `approval:answer` | 1.9 | `POST /api/control/confirm/{requestId}`  |
+
+<!-- rpc:end -->
+
+### 39.4 投递、「谁读过我」与连线
+
+- `deliveries` 是同一条旧路径的两个切片：不带 `node` 答投递记录（`limit` 缺省 200），带上它答那个目标还排着的队。两种都只有元数据（长度），不带正文；工作空间不存在答 404。
+- `cancelDelivery` 已经在投的那条收不回来，答 `cancelled: false`；别的工作空间的 id 删不掉（404）。
+- `contextReads` 答 `{ total, bytes, reads }`（`limit` 缺省 20、上限 200），只有元数据。
+- `putContextLinks` 写一个节点的连线文档——协作上下文按连线读取的那份授权。至多 64 条；工作空间不存在 404，节点 id 不合法 400。
+
+<!-- rpc:begin contract=§39.4 -->
+
+| procedure                | kind     | input                                                                                                                                            | output                                                                                                                                                                                                                                                                                                                                          | errors                                  | scope          | 自  | 原路径                                                         |
+| ------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | -------------- | --- | -------------------------------------------------------------- |
+| `agents.deliveries`      | query    | `{ workspaceId: string, limit?: number \| string, node?: string }`                                                                               | `({ traceId: string, workspaceId: string, sourceNodeId: string, targetNodeId: string, outcome: string, targetState?: string, receipt?: string \| null, bodyChars?: number, createdAt: string })[] \| { id: string, workspaceId: string, sourceNodeId: string, targetNodeId: string, position?: number, bodyChars?: number, reason?: string }[]` | `forbidden`、`not_found`                | `canvas:read`  | 1.9 | `GET /api/workspaces/{workspaceId}/deliveries`                 |
+| `agents.cancelDelivery`  | mutation | `{ workspaceId: string, deliveryId: string }`                                                                                                    | `{ cancelled: boolean }`                                                                                                                                                                                                                                                                                                                        | `forbidden`、`not_found`                | `canvas:write` | 1.9 | `DELETE /api/workspaces/{workspaceId}/deliveries/{deliveryId}` |
+| `agents.contextReads`    | query    | `{ nodeId: string, limit?: number \| string }`                                                                                                   | `{ total: number, bytes: number, reads: { id: string, readerNodeId: string, readerHandle?: string, readerTitle?: string, verb: string, bytes: number, atMs: number }[] }`                                                                                                                                                                       | `forbidden`                             | `canvas:read`  | 1.9 | `GET /api/nodes/{nodeId}/context-reads`                        |
+| `agents.putContextLinks` | mutation | `{ workspaceId: string, nodeId: string, links?: ({ id: string, title: string, kind: string, role?: string, content?: {…} \| null })[] \| null }` | `{ nodeId: string, links: { id: string, title: string, kind: string, role?: string, content?: Record<string, JSON> }[], updatedAt: string }`                                                                                                                                                                                                    | `bad_request`、`forbidden`、`not_found` | `canvas:write` | 1.9 | `PUT /api/workspaces/{workspaceId}/context-links/{nodeId}`     |
+
+<!-- rpc:end -->
+
+### 39.5 依赖等待
+
+- `dependencies` 答还没了结的等待，按下游分组；`all` 连已了结的一起答。
+- `importLegacyDependencies` 只收旧节点数据里的 `pendingLaunch`，条件固定是 `current`；重复调用答已有的那一份。节点不在这个工作空间 404，不是 Agent 节点 400。
+- `cancelDependency` 没有这条依赖 404；其余的边都已满足时，下游在这一次取消里启动。
+
+<!-- rpc:begin contract=§39.5 -->
+
+| procedure                         | kind     | input                                                                          | output                                                                                                                                                                                                                                                                                                                       | errors                                  | scope          | 自  | 原路径                                                             |
+| --------------------------------- | -------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | -------------- | --- | ------------------------------------------------------------------ |
+| `agents.dependencies`             | query    | `{ workspaceId: string, nodeId?: string, all?: boolean \| "true" \| "false" }` | `{ launches: ({ nodeId: string, workspaceId: string, boardId: string, state: string, reason: string \| null, attempts: number, hasTask: boolean, sessionId: string \| null, createdAt: string \| null, launchedAt: string \| null, dependencies: {…}[] })[] }`                                                               | `forbidden`                             | `canvas:read`  | 1.9 | `GET /api/workspaces/{workspaceId}/dependencies`                   |
+| `agents.importLegacyDependencies` | mutation | `{ workspaceId: string, nodeId: string, after: string[] }`                     | `{ launch: { nodeId: string, workspaceId: string, boardId: string, state: string, reason: string \| null, attempts: number, hasTask: boolean, sessionId: string \| null, createdAt: string \| null, launchedAt: string \| null, dependencies: {…}[] } }`                                                                     | `bad_request`、`forbidden`、`not_found` | `canvas:write` | 1.9 | `POST /api/workspaces/{workspaceId}/dependencies`                  |
+| `agents.cancelDependency`         | mutation | `{ workspaceId: string, dependencyId: string }`                                | `{ dependency: { id: string, workspaceId: string, downstreamNodeId: string, upstreamNodeId: string, upstreamTitle: string \| null, condition: string, state: string, reason: string \| null, baseline: {…}, createdAt: string \| null, updatedAt: string \| null, expiresAt: string \| null, resolvedAt: string \| null } }` | `forbidden`、`not_found`                | `canvas:write` | 1.9 | `DELETE /api/workspaces/{workspaceId}/dependencies/{dependencyId}` |
+
+<!-- rpc:end -->
+
+### 39.6 不在契约里的
+
+- `POST /api/workspaces/{workspaceId}/exports/{exportId}/png`（白板导出）、`POST /api/workspaces/{workspaceId}/assets`（资源上传，原始字节或 data URL）、`POST /api/workspaces/{workspaceId}/assets/import`（按路径导入）与资源的 `GET`：字节流与大体积 data URL，走各自的体积上限，留在 REST，页面仍从 `api/agents.ts` 调。
+- `/api/workspaces/{workspaceId}/handoffs*`（对话交接，`api/handoff.ts`）：不在本节，随后续包。
+- hook 面（`/hook/*`、`/control/*`、`/context-link/*`）：有自己的凭据与监听，不走契约。
+
 ## 40. `git` 与 `gitRepository`：Git 面
 
 规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-5）。分两次迁：§40.1 是一个检出的工作区与索引（`git.*`，第一部分），§40.2 留给仓库级的读与操作（`gitRepository.*`，第二部分）。在第二部分合入之前，仓库级的路径照旧由路由表答。

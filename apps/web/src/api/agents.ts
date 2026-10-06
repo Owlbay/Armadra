@@ -28,16 +28,28 @@ import {
   uploadAssetResponseSchema,
   type ContextLink,
 } from "@armadra/shared";
+import type { ArmadraClient } from "./client";
 import { json, query, request } from "./request";
 import { type Source, currentSource } from "./source";
 
-export const agentsApi = {
+/** 交给请求的中止信号：没有就不带第二个参数。 */
+const options = (signal?: AbortSignal) => (signal ? { signal } : undefined);
+
+/**
+ * Agent 与协作的调用面（契约 §39，`agents.*`）：经客户端发 procedure，答案过页面
+ * 自己的 schema，调用点的签名与迁移前一样。
+ *
+ * 客户端由 `api/client.ts` 交进来（这个模块被它 import，反过来就是一个环）；
+ * `rpc()` 缺省是当前源的客户端，带 `source` 的几处（依赖等待按源分组）发往那个源。
+ *
+ * 白板导出、资源上传与按路径导入留在 REST（字节流与大体积 data URL，§39.6）。
+ */
+export const agentsApiFor = (rpc: (source?: Source) => ArmadraClient) => ({
   /* --------------------------------- Agent 协作 -------------------------- */
   /** 投递记录（§5.7 第 10 条）。只有元数据，正文从来不落盘。 */
-  deliveries: (workspaceId: string, limit = 200) =>
-    request(
-      `/api/workspaces/${workspaceId}/deliveries?limit=${limit}`,
-      deliveriesResponseSchema,
+  deliveries: async (workspaceId: string, limit = 200) =>
+    deliveriesResponseSchema.parse(
+      await rpc().agents.deliveries({ workspaceId, limit }),
     ),
   /**
    * 排在一个终端节点前面的那些（设计 `agent-delivery.md` §4.6、§10）。
@@ -46,11 +58,16 @@ export const agentsApi = {
    * 什么」。节点头的「排队 N」数的就是它，所以计数不由页面自己按事件加减——
    * core 才是那张表的唯一来源。
    */
-  deliveryQueue: (workspaceId: string, nodeId: string, signal?: AbortSignal) =>
-    request(
-      `/api/workspaces/${query(workspaceId)}/deliveries?node=${query(nodeId)}`,
-      deliveryQueueResponseSchema,
-      { signal },
+  deliveryQueue: async (
+    workspaceId: string,
+    nodeId: string,
+    signal?: AbortSignal,
+  ) =>
+    deliveryQueueResponseSchema.parse(
+      await rpc().agents.deliveries(
+        { workspaceId, node: nodeId },
+        options(signal),
+      ),
     ),
   /**
    * 谁读过这个节点的转录（设计 §10）。
@@ -58,144 +75,117 @@ export const agentsApi = {
    * 读是一件发生过的事，读的人知道，被读的人今天不知道；节点头的「被读取 N
    * 次」数的就是它。只有元数据：谁、什么动词、多少字节、什么时候。
    */
-  contextReads: (nodeId: string, signal?: AbortSignal) =>
-    request(
-      `/api/nodes/${query(nodeId)}/context-reads`,
-      contextReadsResponseSchema,
-      { signal },
+  contextReads: async (nodeId: string, signal?: AbortSignal) =>
+    contextReadsResponseSchema.parse(
+      await rpc().agents.contextReads({ nodeId }, options(signal)),
     ),
   /** 人拒收一条还排着的。已经在投的那条收不回来，答 `cancelled:false`。 */
-  cancelDelivery: (workspaceId: string, deliveryId: string) =>
-    request(
-      `/api/workspaces/${query(workspaceId)}/deliveries/${query(deliveryId)}`,
-      deliveryCancelResponseSchema,
-      { method: "DELETE" },
+  cancelDelivery: async (workspaceId: string, deliveryId: string) =>
+    deliveryCancelResponseSchema.parse(
+      await rpc().agents.cancelDelivery({ workspaceId, deliveryId }),
     ),
   /**
    * 还没了结的依赖等待，按下游分组（Agent 自动化设计 §6）。等待关系由 core
    * 持有，节点头的「等待 X」与 rope 边都从这里读。
    */
-  dependencies: (workspaceId: string, signal?: AbortSignal, source?: Source) =>
-    request(
-      `/api/workspaces/${query(workspaceId)}/dependencies`,
-      dependenciesResponseSchema,
-      { signal },
-      source,
+  dependencies: async (
+    workspaceId: string,
+    signal?: AbortSignal,
+    source?: Source,
+  ) =>
+    dependenciesResponseSchema.parse(
+      await rpc(source).agents.dependencies({ workspaceId }, options(signal)),
     ),
   /** 不等这条边了；其余的边都已满足时，core 当场启动下游。 */
-  cancelDependency: (
+  cancelDependency: async (
     workspaceId: string,
     dependencyId: string,
     source?: Source,
   ) =>
-    request(
-      `/api/workspaces/${query(workspaceId)}/dependencies/${query(dependencyId)}`,
-      dependencyCancelResponseSchema,
-      { method: "DELETE" },
-      source,
+    dependencyCancelResponseSchema.parse(
+      await rpc(source).agents.cancelDependency({ workspaceId, dependencyId }),
     ),
   /** 旧节点数据里带依赖的 `pendingLaunch` 迁进依赖表。重复调用不重复建。 */
-  importLegacyDependencies: (
+  importLegacyDependencies: async (
     workspaceId: string,
     nodeId: string,
     after: readonly string[],
     source?: Source,
   ) =>
-    request(
-      `/api/workspaces/${query(workspaceId)}/dependencies`,
-      legacyDependencyResponseSchema,
-      {
-        method: "POST",
-        ...json(legacyDependencyRequestSchema.parse({ nodeId, after })),
-      },
-      source,
+    legacyDependencyResponseSchema.parse(
+      await rpc(source).agents.importLegacyDependencies({
+        workspaceId,
+        ...legacyDependencyRequestSchema.parse({ nodeId, after }),
+      }),
     ),
   /** 关闭确认的人工答复（§5.8）。`accepted:false` = 那边已经等超时了。 */
-  confirmControl: (requestId: string, approve: boolean) =>
-    request(
-      `/api/control/confirm/${query(requestId)}`,
-      controlConfirmResponseSchema,
-      {
-        method: "POST",
-        ...json(controlConfirmRequestSchema.parse({ approve })),
-      },
+  confirmControl: async (requestId: string, approve: boolean) =>
+    controlConfirmResponseSchema.parse(
+      await rpc().agents.confirmControl({
+        requestId,
+        ...controlConfirmRequestSchema.parse({ approve }),
+      }),
     ),
 
   /* ----------------------------------- Agent ---------------------------- */
-  agents: () => request("/api/agents", agentListSchema),
+  agents: async () => agentListSchema.parse(await rpc().agents.list()),
   /**
    * 节点头部「模型」菜单的候选（F7）。按发布日期倒序，每条注明来自 CLI 自己、
    * models.dev 目录，还是离线兜底表。Runtime 侧缓存 10 分钟，所以开菜单时
    * 反复请求不会反复起进程。
    */
-  agentModels: (agentId: string) =>
-    request(`/api/agents/${query(agentId)}/models`, agentModelListSchema),
+  agentModels: async (agentId: string) =>
+    agentModelListSchema.parse(await rpc().agents.models({ agentId })),
   /**
    * 集成状态（设计 agent-integration §5）：Hook 与技能是**一个**安装单元，
    * 一次读出注入方式、两半各自的路径与修订、以及旧产品名留下的残留。
    */
-  agentIntegration: (agentId: string, signal?: AbortSignal) =>
-    request(
-      `/api/agents/${query(agentId)}/integration`,
-      integrationStateSchema,
-      signal ? { signal } : {},
+  agentIntegration: async (agentId: string, signal?: AbortSignal) =>
+    integrationStateSchema.parse(
+      await rpc().agents.integration({ agentId }, options(signal)),
     ),
   /** 一次装好 Hook 与技能。幂等：内容没变的技能文件连 mtime 都不动。 */
-  installAgentIntegration: (agentId: string) =>
-    request(
-      `/api/agents/${query(agentId)}/integration/install`,
-      integrationStateSchema,
-      { method: "POST" },
+  installAgentIntegration: async (agentId: string) =>
+    integrationStateSchema.parse(
+      await rpc().agents.installIntegration({ agentId }),
     ),
-  uninstallAgentIntegration: (agentId: string) =>
-    request(
-      `/api/agents/${query(agentId)}/integration/uninstall`,
-      integrationStateSchema,
-      { method: "POST" },
+  uninstallAgentIntegration: async (agentId: string) =>
+    integrationStateSchema.parse(
+      await rpc().agents.uninstallIntegration({ agentId }),
     ),
   /**
    * 清掉旧产品名留下的条目（设计 §4）。只动认得出是我们写的那些，
    * 重写前先备份成 `<file>.armadra-backup-<时间戳>`，其余原样写回。
    */
-  repairAgentIntegration: (agentId: string) =>
-    request(
-      `/api/agents/${query(agentId)}/integration/repair`,
-      integrationRepairReportSchema,
-      { method: "POST" },
+  repairAgentIntegration: async (agentId: string) =>
+    integrationRepairReportSchema.parse(
+      await rpc().agents.repairIntegration({ agentId }),
     ),
   /** Armadra Agent 的模型密钥（契约 §12.4）：只答是否已设与后端，从不答值。 */
-  amaCredentials: () =>
-    request("/api/agents/ama/credentials", amaCredentialStatusSchema),
-  setAmaCredential: (provider: string, apiKey: string) =>
-    request(
-      `/api/agents/ama/credentials/${query(provider)}`,
-      amaCredentialStatusSchema,
-      {
-        method: "PUT",
-        ...json(amaCredentialRequestSchema.parse({ apiKey })),
-      },
+  amaCredentials: async () =>
+    amaCredentialStatusSchema.parse(await rpc().agents.amaCredentials()),
+  setAmaCredential: async (provider: string, apiKey: string) =>
+    amaCredentialStatusSchema.parse(
+      await rpc().agents.setAmaCredential({
+        provider,
+        ...amaCredentialRequestSchema.parse({ apiKey }),
+      }),
     ),
-  clearAmaCredential: (provider: string) =>
-    request(
-      `/api/agents/ama/credentials/${query(provider)}`,
-      amaCredentialStatusSchema,
-      { method: "DELETE" },
+  clearAmaCredential: async (provider: string) =>
+    amaCredentialStatusSchema.parse(
+      await rpc().agents.clearAmaCredential({ provider }),
     ),
   /** 清掉某个节点的未读标记；其它窗口通过 workspace 事件流同步。 */
-  markAgentRead: (nodeId: string) =>
-    request(`/api/agent-status/${query(nodeId)}/read`, agentStatusSchema, {
-      method: "POST",
-    }),
+  markAgentRead: async (nodeId: string) =>
+    agentStatusSchema.parse(await rpc().agents.markRead({ nodeId })),
   /**
    * 节点头部的 ✦ AI 命名（§17）。Runtime 依次尝试：转录首条用户消息 →
    * 终端最后一条命令 → Agent 名称，截到 40 字。不调模型，所以是毫秒级；
    * `source` 说明这句话是从哪儿来的，调用方据此决定要不要提示用户。
    */
-  suggestTitle: (nodeId: string) =>
-    request(
-      `/api/agent-status/${query(nodeId)}/suggest-title`,
-      suggestTitleResponseSchema,
-      { method: "POST" },
+  suggestTitle: async (nodeId: string) =>
+    suggestTitleResponseSchema.parse(
+      await rpc().agents.suggestTitle({ nodeId }),
     ),
   /**
    * 一个节点自己的对话尾部（每条消息一行散文）。
@@ -204,19 +194,33 @@ export const agentsApi = {
    * `ReadTranscript` 读的是同一份。没有可读转录的 CLI 回 501 并说明原因，
    * 不回空正文——空正文和「这一轮还没说话」分不开。
    */
-  agentTranscript: (nodeId: string, maxBytes?: number) =>
-    request(
-      `/api/agent-status/${query(nodeId)}/transcript${
-        maxBytes ? `?maxBytes=${maxBytes}` : ""
-      }`,
-      agentTranscriptSchema,
+  agentTranscript: async (nodeId: string, maxBytes?: number) =>
+    agentTranscriptSchema.parse(
+      await rpc().agents.transcript({
+        nodeId,
+        ...(maxBytes ? { maxBytes } : {}),
+      }),
     ),
-  answerApproval: (pendingId: string, decision: "allow" | "deny") =>
-    request(
-      `/api/approvals/${pendingId}/answer`,
-      answerApprovalResponseSchema,
-      { method: "POST", ...json({ decision }) },
+  /** 人回答一条待答的审批（权限提示）。只有人会调它：Agent 没有这条路。 */
+  answerApproval: async (pendingId: string, decision: "allow" | "deny") =>
+    answerApprovalResponseSchema.parse(
+      await rpc().agents.answerApproval({ pendingId, decision }),
     ),
+
+  putContextLinks: async (
+    workspaceId: string,
+    nodeId: string,
+    links: ContextLink[],
+  ) =>
+    contextLinksResponseSchema.parse(
+      await rpc().agents.putContextLinks({
+        workspaceId,
+        nodeId,
+        ...contextLinksRequestSchema.parse({ links }),
+      }),
+    ),
+
+  /* --------------------------- 留在 REST 的字节流 ------------------------- */
 
   /**
    * 白板导出（旧画布契约 §6.3）。导出的可以是任意 白板对象——墨迹、几何
@@ -284,18 +288,4 @@ export const agentsApi = {
   /** `TLAssetStore.resolve` 用的绝对地址；`assetId` 是 `uploadAsset` 返回的 `id`。 */
   assetUrl: (workspaceId: string, assetId: string) =>
     `${currentSource().httpBase}/api/workspaces/${workspaceId}/assets/${query(assetId)}`,
-
-  putContextLinks: (
-    workspaceId: string,
-    nodeId: string,
-    links: ContextLink[],
-  ) =>
-    request(
-      `/api/workspaces/${workspaceId}/context-links/${nodeId}`,
-      contextLinksResponseSchema,
-      {
-        method: "PUT",
-        ...json(contextLinksRequestSchema.parse({ links })),
-      },
-    ),
-};
+});

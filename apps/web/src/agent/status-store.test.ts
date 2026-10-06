@@ -87,11 +87,10 @@ describe("agent status mirror", () => {
     });
     expect(store().statuses[scoped(NODE)]!.unread).toBe(false);
     // 只有客户端知道用户在看，所以回执必须由客户端补，否则刷新后徽标回来。
-    await Promise.resolve();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]![0]).toContain(
-      `/api/agent-status/${NODE}/read`,
-    );
+    // 回执经契约客户端发（契约 §39.2 `agents.markRead`），多几拍微任务。
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0]![0]).toContain("/api/rpc/agents/markRead");
+    expect(String(fetchMock.mock.calls[0]![1]?.body)).toContain(NODE);
   });
 
   it("keeps the badge when the window is blurred even if the node is selected", () => {
@@ -289,10 +288,10 @@ describe("agent status mirror", () => {
       remote: false,
     });
     store().markRead(NODE);
-    await Promise.resolve();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain(`/api/agent-status/${NODE}/read`);
+    expect(url).toContain("/api/rpc/agents/markRead");
+    expect(String(init.body)).toContain(NODE);
     expect(init.method).toBe("POST");
 
     // 已经读过了就不再发第二次回执。

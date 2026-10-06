@@ -7,7 +7,9 @@ import {
   SecretStore,
   SecretUnavailable,
 } from "../secrets";
-import { DomainError, badRequest, jsonObject } from "../workspaces/support";
+import { CoreFailure } from "../http/errors";
+import { type DomainHandlers, registerProcedures } from "../http/rpc";
+import { badRequest, jsonObject } from "../workspaces/support";
 import { audit } from "../identity/audit";
 
 /**
@@ -220,16 +222,14 @@ export function amaCredentials(): AmaCredentials | undefined {
 /** A key is one line of printable text; anything else is a paste gone wrong. */
 const MAX_KEY_LENGTH = 4_096;
 
-function providerOf(match: RouteMatch): AmaKeyProvider {
-  const provider = match.params.provider ?? "";
-  if (!isAmaKeyProvider(provider)) {
-    throw badRequest(`ama takes no API key for \`${provider}\``);
+function providerOf(value: string): AmaKeyProvider {
+  if (!isAmaKeyProvider(value)) {
+    throw badRequest(`ama takes no API key for \`${value}\``);
   }
-  return provider;
+  return value;
 }
 
-function apiKeyOf(request: CoreRequest): string {
-  const value = jsonObject(request.body).apiKey;
+function apiKeyOf(value: unknown): string {
   if (typeof value !== "string") throw badRequest("apiKey must be a string");
   const key = value.trim();
   if (
@@ -242,6 +242,13 @@ function apiKeyOf(request: CoreRequest): string {
   return key;
 }
 
+/** 钥匙串用不了：503，码是后端自己的，原话不带后端给的理由。 */
+function secretFailure(error: unknown): unknown {
+  return error instanceof SecretUnavailable
+    ? new CoreFailure(503, error.code, "The secret store is unavailable")
+    : error;
+}
+
 function answered(
   handle: (match: RouteMatch, request: CoreRequest) => Promise<HandlerResult>,
 ): (match: RouteMatch, request: CoreRequest) => Promise<HandlerResult> {
@@ -249,17 +256,11 @@ function answered(
     try {
       return await handle(match, request);
     } catch (error) {
-      if (error instanceof DomainError) {
-        const { status, body } = error.response();
-        return { status, body };
-      }
-      if (error instanceof SecretUnavailable) {
+      const failure = secretFailure(error);
+      if (failure instanceof CoreFailure) {
         return {
-          status: 503,
-          body: {
-            code: error.code,
-            message: "The secret store is unavailable",
-          },
+          status: failure.status,
+          body: { code: failure.code, message: failure.message },
         };
       }
       if (error instanceof SyntaxError) {
@@ -278,37 +279,74 @@ function answered(
 
 /**
  * `GET /api/agents/ama/credentials`, `PUT` / `DELETE
- * /api/agents/ama/credentials/{provider}` (contract §12.4). Every answer is
- * the status: which providers have a key and which backend holds them —
- * never a key.
+ * /api/agents/ama/credentials/{provider}` (contract §12.4, §39.1). Every
+ * answer is the status: which providers have a key and which backend holds
+ * them — never a key. The legacy routes and the `agents.*Credential`
+ * procedures share one implementation.
  */
 export function installAmaCredentialRoutes(
   server: CoreServer,
   credentials: AmaCredentials,
 ): void {
+  const operations = {
+    status: () => credentials.status(),
+    set: async (provider: string, apiKey: unknown) => {
+      const checked = providerOf(provider);
+      await credentials.set(checked, apiKeyOf(apiKey));
+      audit({ action: "ama.credential.set", target: checked });
+      return credentials.status();
+    },
+    clear: async (provider: string) => {
+      const checked = providerOf(provider);
+      await credentials.clear(checked);
+      audit({ action: "ama.credential.clear", target: checked });
+      return credentials.status();
+    },
+  };
+  /** procedure 抛出的与旧路径答的同一个码与原话。 */
+  const mapped =
+    <A extends unknown[], R>(run: (...args: A) => Promise<R>) =>
+    async (...args: A): Promise<R> => {
+      try {
+        return await run(...args);
+      } catch (error) {
+        throw secretFailure(error);
+      }
+    };
+  registerProcedures(server, "agents", {
+    amaCredentials: mapped(() => operations.status()),
+    setAmaCredential: mapped(
+      ({ provider, apiKey }: { provider: string; apiKey: string }) =>
+        operations.set(provider, apiKey),
+    ),
+    clearAmaCredential: mapped(({ provider }: { provider: string }) =>
+      operations.clear(provider),
+    ),
+  } as unknown as DomainHandlers<"agents">);
+
   server.router.handle(
     "GET",
     "/api/agents/ama/credentials",
-    answered(async () => ({ status: 200, body: await credentials.status() })),
+    answered(async () => ({ status: 200, body: await operations.status() })),
   );
   server.router.handle(
     "PUT",
     "/api/agents/ama/credentials/{provider}",
     answered(async (match, request) => {
-      const provider = providerOf(match);
-      await credentials.set(provider, apiKeyOf(request));
-      audit({ action: "ama.credential.set", target: provider });
-      return { status: 200, body: await credentials.status() };
+      // 供应商先于体：不认识的供应商答的是它，不是体的毛病。
+      const provider = providerOf(match.params.provider ?? "");
+      return {
+        status: 200,
+        body: await operations.set(provider, jsonObject(request.body).apiKey),
+      };
     }),
   );
   server.router.handle(
     "DELETE",
     "/api/agents/ama/credentials/{provider}",
-    answered(async (match) => {
-      const provider = providerOf(match);
-      await credentials.clear(provider);
-      audit({ action: "ama.credential.clear", target: provider });
-      return { status: 200, body: await credentials.status() };
-    }),
+    answered(async (match) => ({
+      status: 200,
+      body: await operations.clear(match.params.provider ?? ""),
+    })),
   );
 }
