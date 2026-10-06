@@ -6,7 +6,7 @@ import type {
   contract,
 } from "@armadra/shared";
 import { fail } from "../http/errors";
-import { registerProcedures } from "../http/rpc";
+import { type DomainHandlers, registerProcedures } from "../http/rpc";
 import type { RouteMatch } from "../http/router";
 import type { CoreContext } from "../main";
 import { audit } from "../identity/audit";
@@ -406,21 +406,40 @@ export function install(context: CoreContext): void {
     }),
   );
 
+  // 连线文档（上下文按连线读取的那份授权，契约 §39.4 `agents.putContextLinks`）：
+  // 旧路径与 procedure 同一份实现。
+  const putLinks = (
+    id: string,
+    nodeId: string | undefined,
+    body: Record<string, unknown>,
+  ) => {
+    // The workspace read is the 404, and it happens before the node id is
+    // even looked at: a document for a workspace nobody registered is not a
+    // malformed request.
+    getWorkspace(database, id);
+    if (!isUuid(nodeId)) throw badRequest("Node id is invalid");
+    return putContextLinks(database, id, nodeId, parseContextLinks(body));
+  };
+  registerProcedures(server, "agents", {
+    putContextLinks: ({
+      workspaceId: id,
+      nodeId,
+      links,
+    }: {
+      workspaceId: string;
+      nodeId: string;
+      links?: unknown;
+    }) => putLinks(id, nodeId, links === undefined ? {} : { links }),
+  } as unknown as DomainHandlers<"agents">);
+
   server.router.handle(
     "PUT",
     "/api/workspaces/{workspaceId}/context-links/{nodeId}",
     answered((match, request) => {
       const body = jsonObject(request.body);
-      const id = workspaceId(match);
-      // The workspace read is the 404, and it happens before the node id is
-      // even looked at: a document for a workspace nobody registered is not a
-      // malformed request.
-      getWorkspace(database, id);
-      const nodeId = match.params.nodeId;
-      if (!isUuid(nodeId)) throw badRequest("Node id is invalid");
       return {
         status: 200,
-        body: putContextLinks(database, id, nodeId, parseContextLinks(body)),
+        body: putLinks(workspaceId(match), match.params.nodeId, body),
       };
     }),
   );

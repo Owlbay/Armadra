@@ -44,6 +44,7 @@ import { AmaCredentials, installAmaCredentialRoutes } from "./ama-credentials";
 import { resolveSecretBackend } from "../secrets";
 import { audit } from "../identity/audit";
 import type { CoreRequest, HandlerResult, RouteMatch } from "../http/router";
+import { type DomainHandlers, registerProcedures } from "../http/rpc";
 
 /**
  * The runtime-surface routes the agent, collaboration, handoff and
@@ -84,6 +85,61 @@ export function installRoutes(deps: AgentRouteDeps): void {
       ),
   );
 
+  /*
+   * 契约 §39（`agents.*`）：下面这些路由的实现收成一份，旧路径的 handler 先把
+   * 路径参数、查询串与体读出来再调它，`registerProcedures` 登记同一份——旧路径
+   * 与 procedure 拒绝的码与原话一样。读体、读查询串的那一层只在 handler 里。
+   */
+  const operations = agentOperations(collab);
+  registerProcedures(server, "agents", {
+    list: () => operations.list(),
+    markRead: ({ nodeId }: { nodeId: string }) => operations.markRead(nodeId),
+    transcript: ({
+      nodeId,
+      maxBytes,
+    }: {
+      nodeId: string;
+      maxBytes?: number | string;
+    }) => operations.transcript(nodeId, maxBytes),
+    suggestTitle: ({ nodeId }: { nodeId: string }) =>
+      operations.suggestTitle(nodeId),
+    answerApproval: ({
+      pendingId,
+      ...body
+    }: { pendingId: string } & Record<string, unknown>) =>
+      operations.answerApproval(pendingId, body),
+    confirmControl: ({
+      requestId,
+      approve,
+    }: {
+      requestId: string;
+      approve: boolean;
+    }) => operations.confirmControl(requestId, approve),
+    deliveries: ({
+      workspaceId,
+      node,
+      limit,
+    }: {
+      workspaceId: string;
+      node?: string;
+      limit?: number | string;
+    }) => operations.deliveries(workspaceId, node ?? "", limit),
+    cancelDelivery: ({
+      workspaceId,
+      deliveryId,
+    }: {
+      workspaceId: string;
+      deliveryId: string;
+    }) => operations.cancelDelivery(workspaceId, deliveryId),
+    contextReads: ({
+      nodeId,
+      limit,
+    }: {
+      nodeId: string;
+      limit?: number | string;
+    }) => operations.contextReads(nodeId, limit),
+  } as unknown as DomainHandlers<"agents">);
+
   /* --------------------------------- agents ------------------------------- */
 
   // The new-node menu, the command palette, the settings pages and the node
@@ -93,13 +149,7 @@ export function installRoutes(deps: AgentRouteDeps): void {
   server.router.handle(
     "GET",
     "/api/agents",
-    answered(() => ({
-      status: 200,
-      body: listAgents({
-        dataDir: collab.dataDir,
-        settings: collab.settings,
-      }),
-    })),
+    answered(() => ({ status: 200, body: operations.list() })),
   );
 
   /* ------------------------------ agent status ---------------------------- */
@@ -107,119 +157,31 @@ export function installRoutes(deps: AgentRouteDeps): void {
   server.router.handle(
     "POST",
     "/api/agent-status/{nodeId}/read",
-    answered((match) => {
-      const nodeId = param(match, "nodeId");
-      const receipt = markAgentStatusRead(database, nodeId);
-      if (receipt === undefined) {
-        throw notFound("This node has never reported");
-      }
-      // A read that changed nothing is answered but not broadcast:
-      // re-announcing an unchanged row would put one pointless frame on every
-      // workspace socket per finished turn.
-      if (receipt.cleared) {
-        collab.publish(receipt.status.workspaceId, {
-          type: "agent.status",
-          status: receipt.status as unknown as Record<string, unknown>,
-        });
-      }
-      return { status: 200, body: receipt.status };
-    }),
+    answered((match) => ({
+      status: 200,
+      body: operations.markRead(param(match, "nodeId")),
+    })),
   );
 
   server.router.handle(
     "GET",
     "/api/agent-status/{nodeId}/transcript",
-    answered((match, request) => {
-      const nodeId = param(match, "nodeId");
-      const status = getAgentStatus(database, nodeId);
-      if (status === undefined) throw notFound("This node has never reported");
-      const provider = baseAgent(collab.settings, status.agentId);
-      const located = locateHistory(
-        historyHint(database, nodeId, provider, status),
-      );
-      // A provider that keeps nothing readable is **501, not an empty body**.
-      // An empty excerpt would be indistinguishable from a session that has
-      // said nothing yet, and the panel would draw the blank as the truth.
-      if (located === undefined) {
-        throw unsupported(
-          `${provider} keeps no transcript this machine can read`,
-        );
-      }
-      const wanted = Number.parseInt(request.query.get("maxBytes") ?? "", 10);
-      const budget = Number.isFinite(wanted)
-        ? Math.min(MAX_TAIL_BYTES, Math.max(1, wanted))
-        : MAX_TAIL_BYTES;
-      let entries;
-      try {
-        entries = readHistoryEntries(provider, located, 0, budget).entries;
-      } catch {
-        throw notFound("The transcript could not be read");
-      }
-      const lines = renderEntries(entries).map((record) => record.line);
-      if (lines.length === 0) {
-        throw unsupported(
-          `The file ${provider} reports is not a conversation this reader renders`,
-        );
-      }
-      const rendered = lines.join("\n");
-      const truncated =
-        Buffer.byteLength(rendered, "utf8") > MAX_RENDERED_BYTES;
-      return {
-        status: 200,
-        body: {
-          nodeId,
-          text: truncated ? cutBytes(rendered, MAX_RENDERED_BYTES) : rendered,
-          truncated,
-        },
-      };
-    }),
+    answered((match, request) => ({
+      status: 200,
+      body: operations.transcript(
+        param(match, "nodeId"),
+        request.query.get("maxBytes") ?? undefined,
+      ),
+    })),
   );
 
   server.router.handle(
     "POST",
     "/api/agent-status/{nodeId}/suggest-title",
-    answeredAsync(async (match) => {
-      const nodeId = param(match, "nodeId");
-      const status = getAgentStatus(database, nodeId);
-      if (status === undefined) throw notFound("This node has never reported");
-
-      // Three sources, best first: what the session is *about*, then what was
-      // last typed in the pane, then the agent's own label — which is always
-      // available and never wrong. No model is called: this is a rename
-      // button, and a local read answers it in milliseconds.
-      // 经本地历史适配器定位：CLI 报来的路径先认，没有的按会话 id、cwd 加启动
-      // 时间找；OpenCode 这种没有文件的来源取库里的会话标题。
-      const provider = baseAgent(collab.settings, status.agentId);
-      const located = locateHistory(
-        historyHint(database, nodeId, provider, status),
-      );
-      const title =
-        located === undefined ? undefined : historyTitle(provider, located);
-      if (title !== undefined) {
-        return { status: 200, body: { title, source: "transcript" } };
-      }
-      // The node's terminal keeps its logical key across recycles, so the
-      // lookup is by node id rather than by the session id the status row
-      // happens to remember.
-      const session = loadSession(database, nodeId);
-      if (session !== undefined && collab.terminals !== undefined) {
-        const capture = await collab.terminals
-          .capture(session.sessionId, 40, false)
-          .catch(() => undefined);
-        const title =
-          capture === undefined ? undefined : commandFromCapture(capture.data);
-        if (title !== undefined) {
-          return { status: 200, body: { title, source: "terminal" } };
-        }
-      }
-      return {
-        status: 200,
-        body: {
-          title: definition(status.agentId)?.label ?? status.agentId,
-          source: "agent",
-        },
-      };
-    }),
+    answeredAsync(async (match) => ({
+      status: 200,
+      body: await operations.suggestTitle(param(match, "nodeId")),
+    })),
   );
 
   /* -------------------------------- approvals ----------------------------- */
@@ -227,74 +189,13 @@ export function installRoutes(deps: AgentRouteDeps): void {
   server.router.handle(
     "POST",
     "/api/approvals/{pendingId}/answer",
-    answeredAsync(async (match, request) => {
-      const body = jsonObject(request.body);
-      const decision = optionalString(body, "decision");
-      // ACP elicitation 的答复（契约 §26.1）：`{ action, content? }`，此时
-      // `decision` 可省，由 action 推出。内容只交给 Agent，不进审计与日志。
-      const elicitation = body.elicitation;
-      if (
-        elicitation !== undefined &&
-        (typeof elicitation !== "object" ||
-          elicitation === null ||
-          Array.isArray(elicitation))
-      ) {
-        throw badRequest("elicitation must be an object");
-      }
-      if (decision === undefined && elicitation === undefined) {
-        throw badRequest("decision is required");
-      }
-      const expected = body.expectedRevision;
-      if (
-        expected !== undefined &&
-        expected !== null &&
-        typeof expected !== "number"
-      ) {
-        throw badRequest("expectedRevision must be a number");
-      }
-      const answer = await answerApproval(collab, param(match, "pendingId"), {
-        ...(decision === undefined ? {} : { decision }),
-        ...(elicitation === undefined
-          ? {}
-          : {
-              elicitation: elicitation as {
-                action: unknown;
-                content?: unknown;
-              },
-            }),
-        ...(optionalString(body, "answeredBy") === undefined
-          ? {}
-          : { answeredBy: optionalString(body, "answeredBy") as string }),
-        ...(typeof expected === "number" ? { expectedRevision: expected } : {}),
-        // ACP 审批的选项（契约 §14.4）；别的审批带了它答 400。
-        ...(optionalString(body, "optionId") === undefined
-          ? {}
-          : { optionId: optionalString(body, "optionId") as string }),
-      });
-      // 审批答复是设计 §4.5 的五个审计写入点之一：一次「允许」可能让 Agent 动
-      // 到磁盘，事后必须查得到是谁在什么时候答的。
-      const { approval, route } = answer;
-      audit({
-        action: "approval.answer",
-        target: param(match, "pendingId"),
-        detail: {
-          decision: approval.answer,
-          ...(answer.elicitation === undefined
-            ? {}
-            : { elicitation: answer.elicitation.action }),
-        },
-      });
-      return {
-        status: 200,
-        body: {
-          ...approval,
-          route,
-          ...(answer.elicitation === undefined
-            ? {}
-            : { elicitation: answer.elicitation }),
-        },
-      };
-    }),
+    answeredAsync(async (match, request) => ({
+      status: 200,
+      body: await operations.answerApproval(
+        param(match, "pendingId"),
+        jsonObject(request.body),
+      ),
+    })),
   );
 
   /* ------------------------------- deliveries ----------------------------- */
@@ -305,25 +206,14 @@ export function installRoutes(deps: AgentRouteDeps): void {
   server.router.handle(
     "GET",
     "/api/workspaces/{workspaceId}/deliveries",
-    answered((match, request) => {
-      const workspaceId = param(match, "workspaceId");
-      const node = request.query.get("node") ?? "";
-      if (node !== "") {
-        return {
-          status: 200,
-          body: listQueued(collab, workspaceId, node, nowSeconds(collab)),
-        };
-      }
-      const limit = Number.parseInt(request.query.get("limit") ?? "", 10);
-      return {
-        status: 200,
-        body: listDeliveries(
-          collab,
-          workspaceId,
-          Number.isFinite(limit) ? limit : 200,
-        ),
-      };
-    }),
+    answered((match, request) => ({
+      status: 200,
+      body: operations.deliveries(
+        param(match, "workspaceId"),
+        request.query.get("node") ?? "",
+        request.query.get("limit") ?? undefined,
+      ),
+    })),
   );
 
   // 目标那一侧的人拒收一条还排着的投递（设计 §4.6 的取消一行）。发起者那一侧
@@ -333,13 +223,10 @@ export function installRoutes(deps: AgentRouteDeps): void {
     "/api/workspaces/{workspaceId}/deliveries/{deliveryId}",
     answered((match) => ({
       status: 200,
-      body: {
-        cancelled: cancelQueued(
-          collab,
-          param(match, "workspaceId"),
-          param(match, "deliveryId"),
-        ),
-      },
+      body: operations.cancelDelivery(
+        param(match, "workspaceId"),
+        param(match, "deliveryId"),
+      ),
     })),
   );
 
@@ -348,24 +235,13 @@ export function installRoutes(deps: AgentRouteDeps): void {
   server.router.handle(
     "POST",
     "/api/control/confirm/{requestId}",
-    answered((match, request) => {
-      const body = jsonObject(request.body);
-      const approve = body.approve;
-      if (typeof approve !== "boolean") {
-        throw badRequest("approve must be a boolean");
-      }
-      const requestId = param(match, "requestId");
-      // `accepted: false` means the verb already gave up; the dialog closes
-      // either way, which is why this is not an error.
-      return {
-        status: 200,
-        body: {
-          requestId,
-          approve,
-          accepted: answerConfirm(requestId, approve),
-        },
-      };
-    }),
+    answered((match, request) => ({
+      status: 200,
+      body: operations.confirmControl(
+        param(match, "requestId"),
+        jsonObject(request.body).approve,
+      ),
+    })),
   );
 
   /* --------------------------------- handoff ------------------------------ */
@@ -478,20 +354,244 @@ export function installRoutes(deps: AgentRouteDeps): void {
   server.router.handle(
     "GET",
     "/api/nodes/{nodeId}/context-reads",
-    answered((match, request) => {
-      const limit = Number.parseInt(request.query.get("limit") ?? "", 10);
-      return {
-        status: 200,
-        body: listContextReads(
-          database,
-          param(match, "nodeId"),
-          Number.isFinite(limit) && limit > 0
-            ? Math.min(limit, MAX_CONTEXT_READS)
-            : DEFAULT_CONTEXT_READS,
-        ),
-      };
-    }),
+    answered((match, request) => ({
+      status: 200,
+      body: operations.contextReads(
+        param(match, "nodeId"),
+        request.query.get("limit") ?? undefined,
+      ),
+    })),
   );
+}
+
+/* -------------------------------- operations ------------------------------- */
+
+/** 查询串上来的数（或 procedure 给的数）：读法与旧路径的 `parseInt` 一样。 */
+function integer(value: number | string | null | undefined): number {
+  return Number.parseInt(String(value ?? ""), 10);
+}
+
+/**
+ * agent 域在主面上的动作（契约 §39）。旧路径的 handler 与 procedure 调的都是
+ * 这一份：入参是已经从路径、查询串或体里读出来的值，拒绝就抛 `DomainError`。
+ *
+ * 只有元数据出去：投递记录与排队带长度不带正文，「谁读过我」带字节数不带内容；
+ * 审批答复里 elicitation 的内容只交给 Agent，不进审计与日志。
+ */
+function agentOperations(collab: CollabContext) {
+  const database = collab.database;
+  return {
+    list: () =>
+      listAgents({ dataDir: collab.dataDir, settings: collab.settings }),
+
+    markRead: (nodeId: string) => {
+      const receipt = markAgentStatusRead(database, nodeId);
+      if (receipt === undefined) {
+        throw notFound("This node has never reported");
+      }
+      // A read that changed nothing is answered but not broadcast:
+      // re-announcing an unchanged row would put one pointless frame on every
+      // workspace socket per finished turn.
+      if (receipt.cleared) {
+        collab.publish(receipt.status.workspaceId, {
+          type: "agent.status",
+          status: receipt.status as unknown as Record<string, unknown>,
+        });
+      }
+      return receipt.status;
+    },
+
+    transcript: (nodeId: string, maxBytes: number | string | undefined) => {
+      const status = getAgentStatus(database, nodeId);
+      if (status === undefined) throw notFound("This node has never reported");
+      const provider = baseAgent(collab.settings, status.agentId);
+      const located = locateHistory(
+        historyHint(database, nodeId, provider, status),
+      );
+      // A provider that keeps nothing readable is **501, not an empty body**.
+      // An empty excerpt would be indistinguishable from a session that has
+      // said nothing yet, and the panel would draw the blank as the truth.
+      if (located === undefined) {
+        throw unsupported(
+          `${provider} keeps no transcript this machine can read`,
+        );
+      }
+      const wanted = integer(maxBytes);
+      const budget = Number.isFinite(wanted)
+        ? Math.min(MAX_TAIL_BYTES, Math.max(1, wanted))
+        : MAX_TAIL_BYTES;
+      let entries;
+      try {
+        entries = readHistoryEntries(provider, located, 0, budget).entries;
+      } catch {
+        throw notFound("The transcript could not be read");
+      }
+      const lines = renderEntries(entries).map((record) => record.line);
+      if (lines.length === 0) {
+        throw unsupported(
+          `The file ${provider} reports is not a conversation this reader renders`,
+        );
+      }
+      const rendered = lines.join("\n");
+      const truncated =
+        Buffer.byteLength(rendered, "utf8") > MAX_RENDERED_BYTES;
+      return {
+        nodeId,
+        text: truncated ? cutBytes(rendered, MAX_RENDERED_BYTES) : rendered,
+        truncated,
+      };
+    },
+
+    suggestTitle: async (
+      nodeId: string,
+    ): Promise<{
+      title: string;
+      source: "transcript" | "terminal" | "agent";
+    }> => {
+      const status = getAgentStatus(database, nodeId);
+      if (status === undefined) throw notFound("This node has never reported");
+
+      // Three sources, best first: what the session is *about*, then what was
+      // last typed in the pane, then the agent's own label — which is always
+      // available and never wrong. No model is called: this is a rename
+      // button, and a local read answers it in milliseconds.
+      // 经本地历史适配器定位：CLI 报来的路径先认，没有的按会话 id、cwd 加启动
+      // 时间找；OpenCode 这种没有文件的来源取库里的会话标题。
+      const provider = baseAgent(collab.settings, status.agentId);
+      const located = locateHistory(
+        historyHint(database, nodeId, provider, status),
+      );
+      const title =
+        located === undefined ? undefined : historyTitle(provider, located);
+      if (title !== undefined) return { title, source: "transcript" };
+      // The node's terminal keeps its logical key across recycles, so the
+      // lookup is by node id rather than by the session id the status row
+      // happens to remember.
+      const session = loadSession(database, nodeId);
+      if (session !== undefined && collab.terminals !== undefined) {
+        const capture = await collab.terminals
+          .capture(session.sessionId, 40, false)
+          .catch(() => undefined);
+        const title =
+          capture === undefined ? undefined : commandFromCapture(capture.data);
+        if (title !== undefined) return { title, source: "terminal" };
+      }
+      return {
+        title: definition(status.agentId)?.label ?? status.agentId,
+        source: "agent",
+      };
+    },
+
+    answerApproval: async (
+      pendingId: string,
+      body: Record<string, unknown>,
+    ) => {
+      const decision = optionalString(body, "decision");
+      // ACP elicitation 的答复（契约 §26.1）：`{ action, content? }`，此时
+      // `decision` 可省，由 action 推出。内容只交给 Agent，不进审计与日志。
+      const elicitation = body.elicitation;
+      if (
+        elicitation !== undefined &&
+        (typeof elicitation !== "object" ||
+          elicitation === null ||
+          Array.isArray(elicitation))
+      ) {
+        throw badRequest("elicitation must be an object");
+      }
+      if (decision === undefined && elicitation === undefined) {
+        throw badRequest("decision is required");
+      }
+      const expected = body.expectedRevision;
+      if (
+        expected !== undefined &&
+        expected !== null &&
+        typeof expected !== "number"
+      ) {
+        throw badRequest("expectedRevision must be a number");
+      }
+      const answeredBy = optionalString(body, "answeredBy");
+      const optionId = optionalString(body, "optionId");
+      const answer = await answerApproval(collab, pendingId, {
+        ...(decision === undefined ? {} : { decision }),
+        ...(elicitation === undefined
+          ? {}
+          : {
+              elicitation: elicitation as {
+                action: unknown;
+                content?: unknown;
+              },
+            }),
+        ...(answeredBy === undefined ? {} : { answeredBy }),
+        ...(typeof expected === "number" ? { expectedRevision: expected } : {}),
+        // ACP 审批的选项（契约 §14.4）；别的审批带了它答 400。
+        ...(optionId === undefined ? {} : { optionId }),
+      });
+      // 审批答复是设计 §4.5 的五个审计写入点之一：一次「允许」可能让 Agent 动
+      // 到磁盘，事后必须查得到是谁在什么时候答的。
+      const { approval, route } = answer;
+      audit({
+        action: "approval.answer",
+        target: pendingId,
+        detail: {
+          decision: approval.answer,
+          ...(answer.elicitation === undefined
+            ? {}
+            : { elicitation: answer.elicitation.action }),
+        },
+      });
+      return {
+        ...approval,
+        route,
+        ...(answer.elicitation === undefined
+          ? {}
+          : { elicitation: answer.elicitation }),
+      };
+    },
+
+    deliveries: (
+      workspaceId: string,
+      node: string,
+      limit: number | string | undefined,
+    ) => {
+      if (node !== "") {
+        return listQueued(collab, workspaceId, node, nowSeconds(collab));
+      }
+      const count = integer(limit);
+      return listDeliveries(
+        collab,
+        workspaceId,
+        Number.isFinite(count) ? count : 200,
+      );
+    },
+
+    cancelDelivery: (workspaceId: string, deliveryId: string) => ({
+      cancelled: cancelQueued(collab, workspaceId, deliveryId),
+    }),
+
+    confirmControl: (requestId: string, approve: unknown) => {
+      if (typeof approve !== "boolean") {
+        throw badRequest("approve must be a boolean");
+      }
+      // `accepted: false` means the verb already gave up; the dialog closes
+      // either way, which is why this is not an error.
+      return {
+        requestId,
+        approve,
+        accepted: answerConfirm(requestId, approve),
+      };
+    },
+
+    contextReads: (nodeId: string, limit: number | string | undefined) => {
+      const count = integer(limit);
+      return listContextReads(
+        database,
+        nodeId,
+        Number.isFinite(count) && count > 0
+          ? Math.min(count, MAX_CONTEXT_READS)
+          : DEFAULT_CONTEXT_READS,
+      );
+    },
+  };
 }
 
 /* --------------------------------- plumbing -------------------------------- */
