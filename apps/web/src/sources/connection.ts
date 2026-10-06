@@ -447,6 +447,7 @@ export function createRemoteConnection(
     },
     credentials,
     fetch: sourceFetch,
+    relayed: () => via === "relayed",
     get WebSocket() {
       const native = options.WebSocket ?? globalThis.WebSocket;
       let wrapped = ticketed.get(native);

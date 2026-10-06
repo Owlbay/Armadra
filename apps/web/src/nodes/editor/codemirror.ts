@@ -6,6 +6,10 @@ import { gutterMarks, type GutterKind } from "./git-gutter";
 
 /** 超过这个大小不进编辑器，只挂一个徽标（§3.4：内容区不放解释段落）。 */
 export const MAX_EDITABLE_BYTES = 1024 * 1024;
+/** 图片预览的上限：解码要整张进内存，再大只给下载。 */
+export const MAX_IMAGE_PREVIEW_BYTES = 32 * 1024 * 1024;
+/** 取回成 `blob:` 的预览（老 core、PDF）上限，与 core 整份下载的上限一致。 */
+export const MAX_BLOB_PREVIEW_BYTES = 16 * 1024 * 1024;
 
 export function extensionOf(path: string): string {
   const name = path.split(/[\\/]/).pop() ?? "";

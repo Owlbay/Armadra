@@ -47,6 +47,11 @@ export interface Source {
   readonly fetch: typeof fetch;
   /** 发往这个源的流：Bearer 模式先换一张一次性票，经子协议升级。 */
   readonly WebSocket: typeof WebSocket;
+  /**
+   * 眼下经中继到达（`httpBase` 是中继上的源地址）。浏览器直接取的地址（媒体票，
+   * 契约 §37.4）还要再换一张中继的票。缺省不是。
+   */
+  readonly relayed?: () => boolean;
 }
 
 /**

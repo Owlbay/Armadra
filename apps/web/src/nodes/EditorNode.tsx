@@ -19,7 +19,7 @@ import { useT } from "@/app/preferences-store";
 import { cn } from "@/lib/cn";
 import { formatBytes } from "@/lib/format";
 import { unifiedLineDiff } from "@/lib/line-diff";
-import { downloadRuntimeFile } from "@/api/assets";
+import { directFileUrl, downloadRuntimeFile } from "@/api/assets";
 import { useCanvasStore } from "@/store/canvas-store";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
@@ -36,7 +36,9 @@ import { MarkdownPreview } from "./editor/MarkdownPreview";
 import { MediaPreview } from "./editor/MediaPreview";
 import { StatusBar } from "./editor/StatusBar";
 import {
+  MAX_BLOB_PREVIEW_BYTES,
   MAX_EDITABLE_BYTES,
+  MAX_IMAGE_PREVIEW_BYTES,
   extensionOf,
   loadEditorCore,
   loadLanguage,
@@ -147,6 +149,32 @@ export function EditorNode({ id, node, selected }: NodeBodyProps) {
         info.preview === "audio" ||
         info.preview === "pdf"
       ) {
+        const media = info.preview;
+        // 图片解码要整张进内存：超过上限只给下载。
+        if (media === "image" && info.size > MAX_IMAGE_PREVIEW_BYTES) {
+          setState({ kind: "attachment", info });
+          return;
+        }
+        // 能直接取就直接取（契约 §37.4）：音视频按 `Range` 边收边放，不把整份
+        // 文件读进页面。PDF 不走这条：查看器要可执行的框架，core 不内联它。
+        if (media !== "pdf") {
+          const direct = await directFileUrl(
+            workspaceId,
+            path,
+            "inline",
+            runtimeApi.mediaTicket,
+          );
+          if (cancelled) return;
+          if (direct !== null) {
+            setState({ kind: "media", media, src: direct, info });
+            return;
+          }
+        }
+        // 退回整份取回成 `blob:`（老 core、换票失败、PDF）：要设上限。
+        if (info.size > MAX_BLOB_PREVIEW_BYTES) {
+          setState({ kind: "attachment", info });
+          return;
+        }
         const response = await routedFetch(
           runtimeApi.fileDownloadUrl(workspaceId, path),
           { signal: controller.signal },
@@ -159,10 +187,11 @@ export function EditorNode({ id, node, selected }: NodeBodyProps) {
         mediaUrl = URL.createObjectURL(
           new Blob([blob], { type: info.mimeType }),
         );
-        setState({ kind: "media", media: info.preview, src: mediaUrl, info });
+        setState({ kind: "media", media, src: mediaUrl, info });
         return;
       }
-      if (info.preview !== "text") {
+      // 超过可编辑上限的文本不读正文，直接给下载。
+      if (info.preview !== "text" || info.size > MAX_EDITABLE_BYTES) {
         setState({ kind: "attachment", info });
         return;
       }
@@ -682,6 +711,16 @@ export function EditorNode({ id, node, selected }: NodeBodyProps) {
                 void downloadRuntimeFile(
                   runtimeApi.fileDownloadUrl(workspaceId, path),
                   state.info.name,
+                  undefined,
+                  {
+                    direct: () =>
+                      directFileUrl(
+                        workspaceId,
+                        path,
+                        "attachment",
+                        runtimeApi.mediaTicket,
+                      ),
+                  },
                 ).then((saved) => {
                   if (!saved) toast.error(t("editor.downloadFailed"));
                 });
@@ -698,7 +737,7 @@ export function EditorNode({ id, node, selected }: NodeBodyProps) {
             src={state.src}
             title={node.title}
             onError={() => {
-              URL.revokeObjectURL(state.src);
+              if (state.src.startsWith("blob:")) URL.revokeObjectURL(state.src);
               setState((current) =>
                 current.kind === "media" && current.src === state.src
                   ? { kind: "attachment", info: current.info }

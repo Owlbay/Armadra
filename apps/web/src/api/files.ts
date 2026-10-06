@@ -16,6 +16,13 @@ import {
   type FileEntryKind,
 } from "@armadra/shared";
 import { z } from "zod";
+
+const mediaTicketSchema = z.object({
+  url: z.string(),
+  expiresAt: z.string(),
+  size: z.number(),
+  mimeType: z.string(),
+});
 import type { ArmadraClient } from "./client";
 import { query, request } from "./request";
 import { currentSource } from "./source";
@@ -35,6 +42,18 @@ export const filesApiFor = (rpc: () => ArmadraClient) => ({
     fileInfoSchema.parse(await rpc().files.info({ workspaceId, path })),
   fileDownloadUrl: (workspaceId: string, path: string) =>
     `${currentSource().httpBase}/api/workspaces/${workspaceId}/file-download?path=${query(path)}`,
+  /**
+   * 媒体票（契约 §37.4）：答相对当前源的 `/api/media/<票>`，`<video src>` 与
+   * `<a href>` 拿它直接按 `Range` 取，不带头。老 core 没有这条 procedure 会抛。
+   */
+  mediaTicket: async (
+    workspaceId: string,
+    path: string,
+    disposition: "inline" | "attachment" = "inline",
+  ) =>
+    mediaTicketSchema.parse(
+      await rpc().files.mediaTicket({ workspaceId, path, disposition }),
+    ),
   importFiles: (
     workspaceId: string,
     entries: { file: File; path: string }[],

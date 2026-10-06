@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireAssetUrl,
   bearerSourceFor,
+  directFileUrl,
   downloadRuntimeFile,
   needsBearerFetch,
   useAssetUrl,
@@ -378,5 +379,84 @@ describe("useAssetUrl", () => {
     );
     const hook = renderHook(() => useAssetUrl(`${ASSET}?missing`));
     await waitFor(() => expect(hook.result.current).toBeNull());
+  });
+});
+
+describe("directFileUrl（媒体票，契约 §37.4）", () => {
+  const RELAY = "https://relay.example/s/0123456789abcdef0123456789abcdef";
+
+  it("直连的源：core 的票地址拼在源地址后面", async () => {
+    const issue = vi.fn().mockResolvedValue({ url: "/api/media/CORE" });
+    const url = await directFileUrl(
+      "w1",
+      "a.mp4",
+      "inline",
+      issue,
+      source(GATEWAY, "bearer"),
+    );
+    expect(url).toBe(`${GATEWAY}/api/media/CORE`);
+    expect(issue).toHaveBeenCalledWith("w1", "a.mp4", "inline");
+  });
+
+  it("经中继的源：再用源的 fetch（带中继令牌）换中继的票", async () => {
+    const issue = vi.fn().mockResolvedValue({ url: "/api/media/CORE" });
+    const relayFetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        expect(String(input)).toBe(`${RELAY}/_relay/media-tickets`);
+        expect(init?.method).toBe("POST");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          path: "/api/media/CORE",
+        });
+        return new Response(
+          JSON.stringify({ ticket: "R", path: "/_relay/m/RELAYTICKET" }),
+          { status: 200 },
+        );
+      },
+    );
+    const relayed: Source = {
+      ...source(RELAY, "bearer"),
+      fetch: relayFetch as typeof fetch,
+      relayed: () => true,
+    };
+    expect(await directFileUrl("w1", "a.mp4", "inline", issue, relayed)).toBe(
+      `${RELAY}/_relay/m/RELAYTICKET`,
+    );
+    expect(relayFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("换票失败、形状不对、老中继答错都给 null（调用方退回 blob）", async () => {
+    const bearer = source(GATEWAY, "bearer");
+    expect(
+      await directFileUrl(
+        "w1",
+        "a",
+        "inline",
+        vi.fn().mockRejectedValue(new Error("no procedure")),
+        bearer,
+      ),
+    ).toBeNull();
+    expect(
+      await directFileUrl(
+        "w1",
+        "a",
+        "inline",
+        vi.fn().mockResolvedValue({ url: "https://evil.example/x" }),
+        bearer,
+      ),
+    ).toBeNull();
+    const oldRelay: Source = {
+      ...source(RELAY, "bearer"),
+      fetch: (async () => new Response("{}", { status: 404 })) as typeof fetch,
+      relayed: () => true,
+    };
+    expect(
+      await directFileUrl(
+        "w1",
+        "a",
+        "inline",
+        vi.fn().mockResolvedValue({ url: "/api/media/CORE" }),
+        oldRelay,
+      ),
+    ).toBeNull();
   });
 });
