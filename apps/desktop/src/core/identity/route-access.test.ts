@@ -224,6 +224,24 @@ describe("路由门的矩阵", () => {
     expect(row(decide, "POST", "/api/push/devices")).toBe(PEOPLE.join(","));
   });
 
+  it("能读身份是每个主体的底线：控制面的升级与 system.* 成员也过得去（契约 §35.1）", () => {
+    const { decide, guard } = harness();
+    expect(row(decide, "GET", "/api/ws")).toBe(PEOPLE.join(","));
+    const ping = () =>
+      guard(emptyRequest("POST", "rpc:system.ping"), {
+        permission: "identity:read",
+        workspaceId: "",
+      }).allowed;
+    expect(runAs({ subject: subject("outsider") }, ping)).toBe(true);
+    // 快照里连 `identity:read` 都没有的主体照样不放。
+    const bare: AuthorizationSubject = {
+      principalId: "bare",
+      kind: "member",
+      scopes: [],
+    };
+    expect(runAs({ subject: bare }, ping)).toBe(false);
+  });
+
   it("补全计划的新面：Gateway、凭据只有 owner；ACP、工作流查不到画布时只有 owner", () => {
     const { decide } = harness();
     expect(row(decide, "GET", "/api/gateway")).toBe("owner");

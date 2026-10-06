@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { CoreContext } from "../main";
 import type { CoreRequest, HandlerResult, RouteMatch } from "../http/router";
+import { eventStream } from "../events";
+import { openWorkspaceEvents } from "../events/procedure";
+import { fail } from "../http/errors";
 import { registerProcedures } from "../http/rpc";
 import { createRootDirectory, directorySource } from "./directory";
 import {
@@ -259,6 +262,14 @@ export function install(context: CoreContext): void {
       }),
     delete: ({ workspaceId: id }) => operations.delete(id),
     open: ({ workspaceId: id }) => operations.open(id),
+    // 契约 §35.4：事件流的扇出与 outbox 是事件域的（`events/procedure.ts`）。
+    events: (input, call) => {
+      const stream = eventStream();
+      if (stream === undefined) {
+        throw fail("not_implemented", "这台 core 没有装事件域");
+      }
+      return openWorkspaceEvents(stream, database, input, call);
+    },
   });
 
   server.router.handle(

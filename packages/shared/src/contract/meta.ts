@@ -69,7 +69,19 @@ export interface ProcedureMeta {
   readonly deprecated?: string;
   /** 记这条的耗时日志（`ARMADRA_RPC_TRACE=1` 时全开）。 */
   readonly trace?: boolean;
+  /**
+   * 订阅（出参是事件迭代器）跟不上时怎么办（契约 §35.5）。只有订阅写它，订阅
+   * 必须写它；订阅只经控制面 `/api/ws`。
+   *
+   *   * `drop-oldest`：丢最旧的；
+   *   * `coalesce`：同一个键只留最新的（资源采样这类）；
+   *   * `resubscribe`：抛 `overflow` 结束订阅，客户端带 `lastEventId` 重订，缺口由
+   *     服务端补（事件流）。
+   */
+  readonly backpressure?: Backpressure;
 }
+
+export type Backpressure = "drop-oldest" | "coalesce" | "resubscribe";
 
 /** 契约文件用的构造器：带好了元数据的类型。 */
 export const oc = upstream.$meta<Partial<ProcedureMeta>>({});

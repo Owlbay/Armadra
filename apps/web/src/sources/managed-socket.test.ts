@@ -274,4 +274,19 @@ describe("ManagedSocket", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(FakeSocket.made).toHaveLength(1);
   });
+
+  it("reconnect()：调用方认定开着的这条死了，换一张票立刻再连；没开着时不动", async () => {
+    const { socket } = make();
+    await flush();
+    socket.reconnect();
+    await flush();
+    expect(FakeSocket.made).toHaveLength(1);
+    last().open();
+    const dead = last();
+    socket.reconnect();
+    await flush();
+    expect(FakeSocket.made).toHaveLength(2);
+    expect(dead.readyState).toBe(3);
+    expect(last().protocols).toEqual([`${WS_TICKET_PROTOCOL}T2`]);
+  });
 });

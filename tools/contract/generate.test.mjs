@@ -10,6 +10,7 @@ import {
   applyBlocks,
   contractVersion,
   entriesOf,
+  eventsOf,
   generate,
   main,
   typeOf,
@@ -124,4 +125,31 @@ test("生成的 OpenAPI：RPC 路径、CoreError、x-armadra 元数据", () => {
     "#/components/schemas/CoreError",
   );
   assert.ok(readFileSync(MARKDOWN_FILE, "utf8").includes("contract=§34.4"));
+});
+
+test("订阅（契约 §35）：kind 是 subscription，出参列事件的 type，x-armadra 记背压与控制面", () => {
+  const document = JSON.parse(readFileSync(OPENAPI_FILE, "utf8"));
+  const events = document.paths["/api/rpc/workspaces/events"].post;
+  assert.equal(events["x-armadra"].backpressure, "resubscribe");
+  assert.equal(events["x-armadra"].transport, "/api/ws");
+  const markdown = readFileSync(MARKDOWN_FILE, "utf8");
+  const row = markdown
+    .split("\n")
+    .find((line) => line.startsWith("| `workspaces.events`"));
+  assert.ok(row?.includes("| subscription |"));
+  assert.ok(row?.includes("`workspace.updated`"));
+  assert.ok(row?.includes("`cursor`"));
+  // 成员不全带 `type` 常量时照常写类型。
+  const stream = {
+    oneOf: [
+      {
+        type: "object",
+        properties: {
+          event: { const: "message" },
+          data: { type: "object", properties: { n: { type: "integer" } } },
+        },
+      },
+    ],
+  };
+  assert.equal(eventsOf(stream, document), "迭代 `{ n?: integer }`");
 });

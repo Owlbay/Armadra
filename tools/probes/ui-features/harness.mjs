@@ -116,31 +116,40 @@ export async function startStack(options = {}) {
     ...LOOPBACK_OWNER_ENV,
     ...options.env,
   };
-  const runtime = spawn(
-    process.execPath,
-    [binary, "--listen", "tcp:127.0.0.1:0", "--data-dir", data],
-    { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: environment },
-  );
+  // 起一个 core；`listen` 缺省让内核分配端口。重启（`killCore` + `startCore`）在同一个
+  // 端口、同一个数据目录上再起一次——Vite 的代理目标在它启动时就定了。
+  let runtime;
   let coreLog = "";
-  const onLog = (chunk) => {
-    coreLog += chunk;
-    if (coreLog.length > 4_000_000) coreLog = coreLog.slice(-2_000_000);
-  };
-  runtime.stdout.on("data", onLog);
-  runtime.stderr.on("data", onLog);
-  cleanups.push(() => runtime.kill("SIGKILL"));
-  let origin = "";
-  for (let attempt = 0; attempt < 300 && !origin; attempt += 1) {
-    if (runtime.exitCode !== null)
-      throw new Error(`core 退出：${coreLog.slice(-2000)}`);
-    try {
-      origin = JSON.parse(readFileSync(join(data, "endpoints.json"), "utf8"))
-        .runtime.http;
-    } catch {
-      await sleep(100);
+  const launchCore = async (listen = "tcp:127.0.0.1:0") => {
+    rmSync(join(data, "endpoints.json"), { force: true });
+    const child = spawn(
+      process.execPath,
+      [binary, "--listen", listen, "--data-dir", data],
+      { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: environment },
+    );
+    const onLog = (chunk) => {
+      coreLog += chunk;
+      if (coreLog.length > 4_000_000) coreLog = coreLog.slice(-2_000_000);
+    };
+    child.stdout.on("data", onLog);
+    child.stderr.on("data", onLog);
+    runtime = child;
+    let found = "";
+    for (let attempt = 0; attempt < 300 && !found; attempt += 1) {
+      if (child.exitCode !== null)
+        throw new Error(`core 退出：${coreLog.slice(-2000)}`);
+      try {
+        found = JSON.parse(readFileSync(join(data, "endpoints.json"), "utf8"))
+          .runtime.http;
+      } catch {
+        await sleep(100);
+      }
     }
-  }
-  if (!origin) throw new Error("core 没有写出 endpoints.json");
+    if (!found) throw new Error("core 没有写出 endpoints.json");
+    return found;
+  };
+  cleanups.push(() => runtime?.kill("SIGKILL"));
+  const origin = await launchCore();
 
   const api = async (path, init = {}) => {
     const answer = await fetch(new URL(path, origin), {
@@ -255,6 +264,18 @@ export async function startStack(options = {}) {
     chrome: version.Browser,
     coreLog: () => coreLog,
     cleanups,
+    /** 杀掉 core（SIGKILL，不给它关流的机会）。 */
+    async killCore() {
+      const child = runtime;
+      if (child === undefined || child.exitCode !== null) return;
+      child.kill("SIGKILL");
+      await once(child, "exit");
+    },
+    /** 在同一个端口、同一个数据目录上再起 core。 */
+    async startCore() {
+      const again = await launchCore(`tcp:${new URL(origin).host}`);
+      if (again !== origin) throw new Error(`core 换了地址：${again}`);
+    },
     /** 建一个工作空间与它的第一块画布。 */
     async workspace(
       name,

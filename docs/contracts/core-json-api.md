@@ -403,7 +403,9 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 角色是 `viewer` ⊂ `editor` ⊂ `operator` ⊂ `driver`，编译表只在 `core/identity/roles.ts`。
 
-G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：设成功之后撤掉这个人的其它会话（安全审查 L2）——本人换口令时留下发请求的这个会话，owner 或 `identity:manage` 替人设时那个人的会话全部撤掉；这个人手里还没用的口令重置令牌（§25）一并作废，审计 `identity.credential.set` 的 `detail` 多 `revokedSessions`。`POST invitations` 的 `ttlMs` 缺省 7 天、最长 30 天（安全审查 L3），更长的夹到 30 天，不是正整数答 400 `INVALID_ARGUMENT`；答案的 `expiresAtMs` 是夹过之后的。替某人签发口令重置链接是 `POST principals/{id}/password-reset`，见 §25。
+G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：设成功之后撤掉这个人的其它会话（安全审查 L2）——本人换口令时留下发请求的这个会话，owner 或 `identity:manage` 替人设时那个人的会话全部撤掉；这个人手里还没用的口令重置令牌（§25）一并作废，审计 `identity.credential.set` 的 `detail` 多 `revokedSessions`。`POST invitations` 的 `ttlMs` 缺省 7 天、最长 30 天（安全审查 L3），更长的夹到 30 天，不是正整数答 400 `INVALID_ARGUMENT`；答案的 `expiresAtMs` 是夹过之后的。
+
+**多次使用（A4-1，表 `identity_invitation_uses` 在迁移 `0040`）。** `POST invitations` 可带 `maxUses`（1–1000 的整数，其它值答 400 `INVALID_ARGUMENT`；省略 = 一次性，沿用旧行为）；答案与 `GET invitations` 的每一项多 `maxUses`（一次性为 `null`）与 `uses`（已兑换的不同的人数）。兑换（`accept`、口令注册、云登录）在同一笔事务里以 `uses < max_uses` 的条件 UPDATE 计数并记下是谁，并发的第 N+1 个什么也改不动、答 401；同一个人再次兑换是幂等成功，不加计数、用满之后也仍成功（过期、作废之后不行）。用满时 `consumedBy` / `consumedAtMs` 记最后一位与时刻，作废沿用空主体。替某人签发口令重置链接是 `POST principals/{id}/password-reset`，见 §25。
 
 **判定在哪里生效**（R8）：
 
@@ -2164,6 +2166,7 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
   3. `POST <issuer>/v1/sources/register { registrationToken, sourceId, publicKey, name, kind, coreVersion, capabilities, protocol }`（`name` 缺省为主机名，`kind` 按壳是 `desktop` / `server`）。远程服务的拒绝换成本节的码：`registration_token_invalid` 401、`protocol_unsupported` 426、`source_taken` → `409 cloud_already_registered`、`rate_limited` 429；连不上或答案不完整 `502 source_unreachable`；证书与钉的指纹对不上 `400 fingerprint_mismatch`。登记答案里的 `issuer` 与 `jwksUrl` 的来源都必须是这个 issuer，否则 `400 cloud_issuer_mismatch`。
   4. `GET <jwksUrl>` 取公钥集，与可信来源、中继来源、远程服务账号一起写进 `cloud_registrations`；之后起隧道（§32，不等），审计 `cloud.register`，答 `{ issuer, sourceId, relayOrigins, trustedOrigins, tunnel }`。任何一步失败都不留行。
 - 对远程服务的请求按「远程服务」表（§33.2）里同一个 issuer 的 CA 指纹钉扎；表里没有就用系统信任。
+  - 只有旧路径 `POST /api/identity/cloud/register` 另收可选的 `fingerprint`（64 位十六进制，也收带冒号或大写的写法；procedure 的入参不含它）：用注册令牌登记自签证书的个人中转没有口令可走 `sources.remoteAdd`，服务器壳 CLI（`cloud register --fingerprint`）靠它先把信任锚钉进「远程服务」表（只带指纹、无凭据的一行），登记与隧道都按它验证；同一 issuer 已有行且指纹不同答 `400 fingerprint_mismatch`，登记失败时新建的那一行一并撤掉。
 - **撤销**（`revoke`，`{ issuer }`，也收查询串 `?issuer=`）：停隧道、行记 `revoked_at_ms`，之后这个 issuer 签的断言一律 `cloud_not_registered`；没有有效登记答 `404 not_found`。已映射的账号与授予不动（owner 在账号页逐个撤）。撤销过的 issuer 可以再登记。审计 `cloud.revoke`。
 - **状态**（`status`）：`{ registrations: [{ issuer, mode, label?, jwksFetchedAtMs, trustedOrigins, relayOrigins, registeredAtMs, tunnel }], sourcePublicKey, sourceId }`；`tunnel` 是 `tunnelStatusSchema`，没装隧道时恒为 `{ state: "disabled", node: null, since: null, streams: 0, lastError: null }`。源公钥第一次读状态时也会生成私钥。
 - **可信来源**（`trustedOrigins`，`PUT /api/identity/cloud/{issuer}/trusted-origins`，路径里的 issuer 按 URL 编码）：整份替换；每条取规范来源拼法（只收 `https:`，回环另收 `http:`），去重，最多 32 条；不合法 400，没有有效登记 404。隧道的准入（§32）按它判来源。
@@ -2413,3 +2416,60 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 | `settings.local`  | query    | 可省 `{}`              | `{ paths: string[], file: string }` | `unauthenticated`、`forbidden` | `settings:read`  | 1.3 | `GET /api/settings/local` |
 
 <!-- rpc:end -->
+
+## 35. 控制面 WebSocket：`/api/ws`
+
+> 状态：实施契约（E2，工程规范化 §3）。一个源一条控制面连接，调用与订阅多路复用在上面；终端、实时协同、语言会话、浏览器画面仍是各自的数据面连接（§3.4、§16、§26 等）。订阅的形状表同 §34 由 `tools/contract/generate.mjs` 生成。
+
+### 35.1 升级层与子协议
+
+- **升级**：`GET /api/ws`，`Sec-WebSocket-Protocol` 报 `armadra-rpc.v1`；Bearer 来源（桌面壳页面、原生 App）同时报一次性票 `armadra-ticket.<票>`（§3.2，`POST /api/identity/ws-ticket` 换来，每次重连都换），Cookie 来源（服务器壳托管的页面）不报票。服务端回选 `armadra-rpc.v1`，票不被回选。准入（票、Cookie、来源）在升级前判，失败答 HTTP 状态（`401` / `403`），不建 socket；路由门要 `identity:read`（登录即可，成员也有）。没报 `armadra-rpc.v1` 的升级照样完成，随即以 `4409` 关。
+- **帧**：只有上游 RPC 的 peer 文本帧，每次调用一个 `i`，请求、响应、订阅的事件与结束都带它：请求 `{ i, p: { u: "/<域>/<动词>", b: { json: 入参 }, h? } }`；响应 `{ i, p: { s?, h?, b: { json } } }`；订阅的响应头 `content-type: text/event-stream`，之后每项 `{ i, t: 3, p: { e: "message" | "error" | "done", d: { json }, m?: { id } } }`；客户端取消 `{ i, t: 4 }`。本仓库不往这条连接上塞别的帧。帧上限是 `system.hello` 的 `maxFrameBytes`。
+- **身份**：升级时认好的那个人。每一帧调用前按会话复核一次（页面刷新过访问令牌照旧；会话没了以 `4403` 关）；每条 procedure 再按自己的 `scope` / `workspaceKey` 走路由门，拒绝是这次调用的 `forbidden`，连接不断。
+- **错误**：调用失败是上游的错误形状 `{ defined, code, status, message, data? }`（订阅中途失败是一项 `e: "error"`），`code` 与 `status` 按错误码注册表、与 §34.1 同一套码，`data` 即 §34.1 的 `details`；内部错误的原话不外泄。
+- **订阅只经控制面**：契约里写了背压策略的 procedure 是订阅；经 `POST /api/rpc/…` 调答 `405 method_not_allowed`。
+- **版本**：协议 `minor` 自 4 起有本节（`GET /api/identity/hello` 与 `system.hello` 的 `protocol` 为 `1.4`）。
+
+### 35.2 关闭码
+
+| 码     | 含义                                     | 客户端                                     |
+| ------ | ---------------------------------------- | ------------------------------------------ |
+| `1000` | 正常关闭                                 | —                                          |
+| `1001` | core 停机（中继重启同样表现为它）        | 按退避重连，订阅带 `lastEventId` 续订      |
+| `4400` | 坏帧（二进制帧、不是 peer 消息的文本帧） | 按退避重连                                 |
+| `4401` | 访问令牌到期                             | 续凭据后换票立即重连一次，不退避           |
+| `4403` | 授权收回（会话失效、撤销设备、停用账号） | 停，页面按授权收回处理                     |
+| `4409` | 子协议缺失或版本不兼容                   | 停，提示更新应用                           |
+| `4413` | 帧超过 `maxFrameBytes`                   | 按退避重连                                 |
+| `4429` | 一条连接上的订阅超过 256 个              | 停，提示；超出的那次调用答 `limit_reached` |
+
+页面文案在 `apps/web/src/i18n/connection.ts`（中英）。
+
+### 35.3 心跳与重连
+
+- 服务端每 `heartbeatMs`（25 秒，`system.hello` 报）发 `ws` 层 ping，连续两次没有 pong 就断开（§3.4 的五条流同一套）。
+- 客户端在页面可见时每 30 秒调一次 `system.ping`，3 秒没回音视为断线、立刻重连；回到前台立刻探一次，没连着就跳过退避直接连；`online` 同理。
+- 重连退避 `min(cap, 500 ms × 2^n)` 全抖动，前台封顶 10 秒、后台 30 秒，连上过就归零。重连由页面自己做（要换票），不用上游内建的重连；订阅的续订由上游客户端带 `lastEventId` 重订。
+
+### 35.4 `workspaces.events`
+
+工作空间事件流（§5.4）的控制面形式；旧路由 `WS /api/workspaces/{workspaceId}/events` 保留到 E4。
+
+- 每项是一个工作空间事件，事件 `id` 是 outbox 序号（单调；不进 outbox 的 `canvas.presence` 不带 `id`）。
+- 起点：重订时上游交回的 `lastEventId` 优先，其次入参 `cursor`（与旧 `?cursor=` 同义），都没有是 `now`（不补历史）。有位置时先补发这个位置之后、订阅那一刻水位之前的这块工作空间的事件，再接实时，中间不漏不重。
+- 每次（重新）订上、补发完之后先发一项位置帧 `{ type: "cursor", cursor, floor, watermark }`，`id` 是这时的位置：还没收到任何事件就断开的订阅也有可续的 `lastEventId`；页面把它当作「订上了」。它不是工作空间事件。
+- 拒绝在订阅开始之前：工作空间不存在 `not_found`；位置掉出保留下限 `snapshot_required`；位置比这台 core 的水位还新（换了库）`cursor_ahead`——后两者都要先整份重读，再从 `now` 订。授权收回时订阅以 `forbidden` 结束。
+
+<!-- rpc:begin contract=§35.4 -->
+
+| procedure           | kind         | input                                                | output                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | errors                                                                                     | scope         | 自  | 原路径 |
+| ------------------- | ------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ------------- | --- | ------ |
+| `workspaces.events` | subscription | `{ workspaceId: string, cursor?: "now" \| integer }` | 迭代：`agent.context`、`agent.status`、`agent.subagent`、`agent.approval`、`agent.delivery`、`acp.update`、`acp.turn`、`acp.driver`、`terminal.exit`、`terminal.lease`、`terminal.hibernation`、`board.changed`、`canvas.presence`、`board.comment`、`node.created`、`ssh.prompt`、`workspace.updated`、`control.confirm`、`resource.sample`、`browser.session`、`browser.download`、`browser.lease`、`browser.tabs`、`browser.dialog`、`browser.fileChooser`、`browser.activity`、`language.session`、`language.server`、`file.changed`、`workflow.draft`、`workflow.run`、`workflow.gate`、`schedule.fired`、`schedule.failed`、`schedule.attention`、`cloud.tunnel`、`resources.threshold`、`cursor` | `forbidden`、`not_found`、`snapshot_required`、`cursor_ahead`、`overflow`、`limit_reached` | `events:read` | 1.4 | —      |
+
+<!-- rpc:end -->
+
+### 35.5 背压
+
+- 每个订阅在 core 里有一个有界队列（1024 项），连接的发送缓冲超过 1 MiB 时排队，按契约里的 `backpressure`：`drop-oldest` 丢最旧；`coalesce` 同一个键只留最新；`resubscribe` 停止从实现里取（补发因此停在原处），实时的一段攒在实现自己的有界缓冲里，满了就把已攒的发完、以 `overflow` 结束订阅，客户端带 `lastEventId` 重订，缺口由 outbox 补发。
+- `workspaces.events` 是 `resubscribe`。
+- 数据面不在这条连接上：终端照旧 64 KiB 合帧，发送缓冲超过 4 MiB 时暂停读 PTY（§3.4）。

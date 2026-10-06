@@ -88,7 +88,12 @@ export type { DeclaredError } from "./errors.js";
 export { jsonObjectSchema, jsonValueSchema } from "./json.js";
 export type { JsonValue } from "./json.js";
 export { SCOPES, meta } from "./meta.js";
-export type { LegacyRoute, ProcedureMeta, Scope } from "./meta.js";
+export type {
+  Backpressure,
+  LegacyRoute,
+  ProcedureMeta,
+  Scope,
+} from "./meta.js";
 export { systemHelloOutputSchema } from "./system.js";
 export type { SystemHello } from "./system.js";
 export {
@@ -112,6 +117,12 @@ export {
   tunnelStatusSchema,
 } from "./cloud.js";
 export {
+  workspaceEventsCursorSchema,
+  workspaceEventsItemSchema,
   workspaceSummaryWireSchema,
   workspaceWireSchema,
+} from "./workspaces.js";
+export type {
+  WorkspaceEventsCursor,
+  WorkspaceEventsItem,
 } from "./workspaces.js";

@@ -19,7 +19,13 @@
 
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
-import { type ContractClient, isDefinedCode } from "@armadra/shared";
+import { ClientRetryPlugin } from "@orpc/client/plugins";
+import { RPCLink as PeerRPCLink } from "@orpc/client/websocket";
+import {
+  type ContractClient,
+  contractEntries,
+  isDefinedCode,
+} from "@armadra/shared";
 import { t } from "../app/preferences-store";
 import {
   RuntimeConnectionError,
@@ -27,6 +33,11 @@ import {
   csrfRefusal,
 } from "./request";
 import { type Source, currentSource, localSource } from "./source";
+import {
+  type ControlChannel,
+  type ControlSocketOpener,
+  controlChannel,
+} from "./ws";
 import { agentsApi } from "./agents";
 import { systemApi } from "./system";
 import { workspacesApiFor } from "./workspaces";
@@ -179,6 +190,98 @@ export function localClient(): ArmadraClient {
 /** 当前源的客户端：`runtimeApi` 里迁到契约上的域经它发。 */
 export function currentClient(): ArmadraClient {
   return clientFor(currentSource());
+}
+
+/* -------------------------------- 控制面 --------------------------------- */
+
+/** 订阅（契约里写了背压策略的那些）：断线后由重试插件带 `lastEventId` 重订。 */
+const SUBSCRIPTIONS: ReadonlySet<string> = new Set(
+  contractEntries()
+    .filter((entry) => entry.meta.backpressure !== undefined)
+    .map((entry) => entry.name),
+);
+
+/**
+ * 重订也没用的拒绝：要调用方自己决定（整份重读、离开工作空间、提示）。`overflow`
+ * 不在这里——它就是「带 `lastEventId` 再订一次」的意思。
+ */
+const FINAL_CODES: ReadonlySet<string> = new Set([
+  "bad_request",
+  "unauthenticated",
+  "forbidden",
+  "not_found",
+  "not_implemented",
+  "snapshot_required",
+  "cursor_ahead",
+  "limit_reached",
+]);
+
+/**
+ * 一个错误的码：HTTP 上是 `RuntimeRequestError.code`，控制面上是上游错误的
+ * `code`（core 已经换成注册表里的码，契约 §35.1）。连接断了之类答 `undefined`。
+ */
+export function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+const controlClients = new WeakMap<ControlChannel, ArmadraClient>();
+
+/**
+ * 一个源的控制面客户端（契约 §35）：调用与订阅走同一条 `/api/ws`。`connection`
+ * 是源层的连接（`sourceRegistry().get(…)` / `.current()`），控制面的那条流由它
+ * 托管（换票、中继、退避，`sources/managed-socket.ts`）。订阅断线后由上游的
+ * 重试插件重订并交回 `lastEventId`（续订由 core 从 outbox 补）；不用上游内建的
+ * 重连。
+ */
+export function controlClient(connection: ControlSocketOpener): ArmadraClient {
+  const channel = controlChannel(connection);
+  const known = controlClients.get(channel);
+  if (known !== undefined) return known;
+  const link = new PeerRPCLink({
+    websocket: channel,
+    plugins: [
+      new ClientRetryPlugin({
+        default: {
+          retry: ({ path }) =>
+            SUBSCRIPTIONS.has(path.join(".")) ? Number.POSITIVE_INFINITY : 0,
+          // 断线时立刻重订：那一帧要等连接重新打开才发得出去，等多久由
+          // `api/ws.ts` 的退避定。连着却被拒（`overflow` 之外）才缓一秒。
+          retryDelay: ({ error }) =>
+            channel.readyState !== channel.OPEN ||
+            errorCode(error) === "overflow"
+              ? 0
+              : 1_000,
+          shouldRetry: ({ error, signal }) =>
+            signal?.aborted !== true &&
+            channel.closedWith === null &&
+            !FINAL_CODES.has(errorCode(error) ?? ""),
+        },
+      }),
+    ],
+  });
+  const client = createORPCClient<ArmadraClient>(link);
+  channel.setPing(() => client.system.ping({ ts: Date.now() }));
+  controlClients.set(channel, client);
+  return client;
+}
+
+/** 这个源的控制面停下的原因（4403 / 4409 / 4429）；还在连的是 `null`。 */
+export function controlClosedWith(
+  connection: ControlSocketOpener,
+): number | null {
+  return controlChannel(connection).closedWith;
+}
+
+/** 控制面的「连接断了」：订阅据此把「已连上」的状态落下。 */
+export function onControlDrop(
+  connection: ControlSocketOpener,
+  listener: () => void,
+): () => void {
+  const channel = controlChannel(connection);
+  channel.addEventListener("close", listener);
+  return () => channel.removeEventListener("close", listener);
 }
 
 /**

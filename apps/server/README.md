@@ -23,7 +23,8 @@ node apps/server/out/main.js --help
 ```
 
 子命令：`serve`、`install`、`uninstall`、`status`、`logs`、`upgrade`、`secrets`（`rotate` 换 master key、
-`set NAME` 从标准输入写一个密钥条目）。可选邮件通道 `serve --smtp-url` / `--smtp-from`。监听非回环地址必须同时给
+`set NAME` 从标准输入写一个密钥条目）、`cloud`（`register` / `revoke` / `status` / `login`，登记到个人中转）、
+`invite --cloud-link`（经个人中转生成分享链接）。可选邮件通道 `serve --smtp-url` / `--smtp-from`。监听非回环地址必须同时给
 `--public-origin`；不给证书时在 `<数据目录>/tls/` 生成自签名证书，`--acme <邮箱>` 则由 ACME（缺省
 Let's Encrypt）签发并自动续期。容器镜像在 [`docker/`](docker/README.md)，部署、证书、备份与升级见
 [服务器部署指南](../../docs/guides/server-deployment.md)。完整参数与约束见
@@ -34,6 +35,7 @@ Let's Encrypt）签发并自动续期。容器镜像在 [`docker/`](docker/READM
 | -------------- | ----------------------------------------- |
 | `src/cli.ts`   | 子命令与参数解析                          |
 | `src/serve.ts` | 装配 core，再调 core 的 `openGateway`     |
+| `src/cloud.ts` | `cloud` 与 `invite --cloud-link` 的实现   |
 | `src/service/` | 服务定义生成、日志读取与升级              |
 | `docker/`      | 镜像、入口、健康检查、备份与 compose 示例 |
 
