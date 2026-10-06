@@ -640,3 +640,121 @@ describe("契约 §33.6：登出与首次指纹", () => {
     expect(await code(service.remoteLogout("9".repeat(32)))).toBe("not_found");
   });
 });
+
+describe("契约 §33.7：按分享链接挂载", () => {
+  const LINK_ID = "0123456789abcdef";
+  const SECRET = "S".repeat(43);
+  const INVITE = `${"c".repeat(32)}.${"I".repeat(43)}`;
+  const url = `${ISSUER}/j/${LINK_ID}#${SECRET}.${INVITE}`;
+
+  function share(state: "ok" | "expired" | "exhausted" | "revoked" = "ok") {
+    world.cloud.links.set(LINK_ID, {
+      secret: SECRET,
+      sourceId: RELAYED_ID,
+      state,
+      uses: 0,
+    });
+  }
+
+  it("accept → cloud/login 带邀请令牌 → 建访客远程服务与 relayed 行；凭据只在 SecretStore", async () => {
+    share();
+    const mounted = await service.mountByLink({ url, fingerprint: RELAY_FP });
+    expect(mounted).toMatchObject({
+      sourceId: RELAYED_ID,
+      kind: "relayed",
+      label: "studio",
+      relayOrigin: ISSUER,
+      cloudIssuer: ISSUER,
+      hasCredentials: true,
+    });
+    const core = world.cores.get(`${ISSUER}/s/${RELAYED_ID}`)!;
+    expect(core.lastInvitation).toBe(INVITE);
+    const { remotes } = await service.list();
+    expect(remotes).toHaveLength(1);
+    expect(remotes[0]).toMatchObject({
+      issuer: ISSUER,
+      accountHint: "",
+      fingerprint: RELAY_FP,
+      hasCredentials: true,
+    });
+    // 之后换票走访客会话取断言，再经中继换源会话。
+    const session = await service.session(RELAYED_ID, "relayed");
+    expect(session.httpBase).toBe(`${ISSUER}/s/${RELAYED_ID}`);
+    // 秘密与邀请令牌不进 SecretStore、不进日志、不进答案。
+    const stored = [...backend.values.values()].join("\n");
+    for (const secret of [SECRET, INVITE]) {
+      expect(stored).not.toContain(secret);
+      expect(logs.join("\n")).not.toContain(secret);
+      expect(JSON.stringify(mounted)).not.toContain(secret);
+    }
+  });
+
+  it("深链 armadra://join 同样认", async () => {
+    share();
+    const deep = `armadra://join?link=${LINK_ID}&issuer=${encodeURIComponent(ISSUER)}&s=${encodeURIComponent(`${SECRET}.${INVITE}`)}`;
+    expect(
+      (await service.mountByLink({ url: deep, fingerprint: RELAY_FP }))
+        .sourceId,
+    ).toBe(RELAYED_ID);
+  });
+
+  it("已用账号登录的远程服务：沿用它的指纹与凭据，访客会话登出", async () => {
+    const { remote } = await addRemote();
+    share();
+    await service.mountByLink({ url });
+    const { remotes } = await service.list();
+    expect(remotes).toHaveLength(1);
+    expect(remotes[0]).toMatchObject({
+      serviceId: remote.serviceId,
+      accountHint: ACCOUNT,
+    });
+    expect(
+      world.requests.filter((one) => one.url.endsWith("/v1/auth/logout")),
+    ).toHaveLength(1);
+  });
+
+  it("过期、用尽、撤销、秘密不对：各自的码，什么也不留", async () => {
+    for (const [state, expected] of [
+      ["expired", "link_expired"],
+      ["exhausted", "link_exhausted"],
+      ["revoked", "link_invalid"],
+    ] as const) {
+      share(state);
+      expect(
+        await code(service.mountByLink({ url, fingerprint: RELAY_FP })),
+      ).toBe(expected);
+    }
+    share();
+    const wrong = `${ISSUER}/j/${LINK_ID}#${"x".repeat(43)}.${INVITE}`;
+    expect(
+      await code(service.mountByLink({ url: wrong, fingerprint: RELAY_FP })),
+    ).toBe("link_secret_invalid");
+    const listed = await service.list();
+    expect(listed.remotes).toEqual([]);
+    expect(listed.sources.map((one) => one.kind)).toEqual(["local"]);
+  });
+
+  it("指纹不符、邀请被拒、不是链接、链到本机", async () => {
+    share();
+    expect(
+      await code(service.mountByLink({ url, fingerprint: "d".repeat(64) })),
+    ).toBe("fingerprint_mismatch");
+    world.cores.get(`${ISSUER}/s/${RELAYED_ID}`)!.refuseCloudLogin =
+      "invitation_invalid";
+    expect(
+      await code(service.mountByLink({ url, fingerprint: RELAY_FP })),
+    ).toBe("invitation_invalid");
+    expect(
+      await code(service.mountByLink({ url: "https://relay.test/app/" })),
+    ).toBe("bad_request");
+    world.cloud.links.set(LINK_ID, {
+      secret: SECRET,
+      sourceId: HOST_ID,
+      state: "ok",
+      uses: 0,
+    });
+    expect(
+      await code(service.mountByLink({ url, fingerprint: RELAY_FP })),
+    ).toBe("conflict");
+  });
+});

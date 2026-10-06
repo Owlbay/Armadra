@@ -90,6 +90,20 @@ afterEach(() => {
 });
 
 describe("入口分支", () => {
+  it("远程服务托管的页面打开在 /j/<linkId>：分享链接落地页；原生 App 不认", async () => {
+    history.replaceState(null, "", "/j/0123456789abcdef#secret.token");
+    await expect(prepareEntry()).resolves.toEqual({
+      kind: "join",
+      linkId: "0123456789abcdef",
+    });
+    expect(mocks.install).not.toHaveBeenCalled();
+    history.replaceState(null, "", "/j/short");
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+    mocks.app = true;
+    history.replaceState(null, "", "/j/0123456789abcdef");
+    await expect(prepareEntry()).resolves.not.toMatchObject({ kind: "join" });
+  });
+
   it("个人中转托管（/app/ 下、同源平台信息是 personal）→ 中继登录；别处不问", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(
       async () =>

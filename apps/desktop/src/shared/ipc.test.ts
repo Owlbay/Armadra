@@ -69,6 +69,8 @@ describe("the IPC table", () => {
         "app:gateway-refresh",
         // A1-4: the page changed the source table; the shell re-reads CSP and pins.
         "app:sources-changed",
+        // A4-3p: the page takes the share deep link the shell received.
+        "app:take-join-link",
         // G5-19: the page's own JS errors, opt-in (contract §30).
         "diagnostics:report",
       ].sort(),

@@ -80,6 +80,11 @@ function rejected(status: number, body: unknown): never {
       throw fail("cloud_account_unlinked", "这个账号还没有关联到这台机器");
     case "source_offline":
       throw fail("source_offline", "这台机器当前不在线");
+    // 按链接加入时邀请被拒（已用完、已撤销、与链接不符），或这台机器已不认这个远程服务。
+    case "invitation_invalid":
+      throw fail("invitation_invalid", "邀请无效或已用完");
+    case "cloud_not_registered":
+      throw fail("cloud_not_registered", "这台机器没有登记到这个远程服务");
     case "rate_limited":
     case "RESOURCE_EXHAUSTED":
       throw fail("rate_limited", "对端限流，请稍后重试");
@@ -190,14 +195,19 @@ export class SourceClient {
     );
   }
 
-  /** `POST /api/identity/cloud/login`（§31）：断言换原生会话。 */
+  /**
+   * `POST /api/identity/cloud/login`（§31）：断言换原生会话。按分享链接加入时
+   * 多带邀请令牌（§31.3：没映射过的远程服务账号凭它建成员）。
+   */
   async cloudLogin(
     address: SourceAddress,
     assertion: string,
+    invitationToken?: string,
   ): Promise<NativeCredentials> {
     const body = record(
       await this.call(address, "POST", "/api/identity/cloud/login", 10_000, {
         assertion,
+        ...(invitationToken === undefined ? {} : { invitationToken }),
       }),
     );
     return credentialsOf(body, str(record(body.principal).displayName));

@@ -16,11 +16,12 @@
 import { randomBytes } from "node:crypto";
 
 import { CoreFailure, fail } from "../http/errors";
-import type {
-  ClientSource,
-  RemoteService,
-  RemoteSourceSummary,
-  SourceSession,
+import {
+  type ClientSource,
+  type RemoteService,
+  type RemoteSourceSummary,
+  type SourceSession,
+  parseJoinLink,
 } from "@armadra/shared";
 import { normalizeFingerprint, normalizeOrigin } from "./http-client";
 import type {
@@ -83,7 +84,10 @@ interface CachedAccess {
 }
 
 /** 经中继时，中继就是远程服务本身（个人中转）才沿用它的 CA 指纹。 */
-function relayFingerprint(relayBaseUrl: string, remote: RemoteRow): string {
+function relayFingerprint(
+  relayBaseUrl: string,
+  remote: Pick<RemoteRow, "issuer" | "fingerprint">,
+): string {
   try {
     return new URL(relayBaseUrl).origin === remote.issuer
       ? remote.fingerprint
@@ -870,6 +874,154 @@ export class SourcesService {
     this.options.log.info("mounted a relayed source", {
       sourceId: input.sourceId,
       serviceId: remote.serviceId,
+    });
+    return this.sourceJson(row);
+  }
+
+  /**
+   * 按分享链接挂载（契约 §33.7，客户端包 §6.2）：
+   *
+   * 1. 解析链接（网页链接或 `armadra://join`），签发方没登记过、系统又不信任它的
+   *    证书时答 `fingerprint_mismatch` + `details.fingerprint`，页面请人核对后重调；
+   * 2. `links.accept { secret }`（匿名）→ 访客会话、断言、中继令牌；
+   * 3. 经 `relayBaseUrl` `cloud/login { assertion, invitationToken }` → 原生会话；
+   * 4. 远程服务没有这一行就建一行（访客，`accountHint` 空），存访客的刷新令牌——
+   *    之后换票要它取断言；已有一行且登录着的不动它的凭据，访客会话尽力登出；
+   * 5. 存源的刷新令牌，建或合并 `relayed` 行。
+   *
+   * 链接的秘密与邀请令牌只在这一次调用里，不存、不记日志。
+   */
+  async mountByLink(input: {
+    url: string;
+    fingerprint?: string | undefined;
+    label?: string | undefined;
+  }): Promise<ClientSource> {
+    const link = parseJoinLink(input.url);
+    if (link === null) throw fail("bad_request", "这不是一条分享链接");
+    const label = checkLabel(input.label);
+    const issuer = normalizeOrigin(link.issuer);
+    const known = this.store.remoteByIssuer(issuer);
+    if (known?.kind === "saas") {
+      throw fail("not_implemented", "SaaS 远程服务尚未开放");
+    }
+    const given = normalizeFingerprint(input.fingerprint);
+    if (
+      known !== undefined &&
+      known.fingerprint !== "" &&
+      given !== "" &&
+      given !== known.fingerprint
+    ) {
+      throw fail("fingerprint_mismatch", "给定的指纹与已登记的远程服务不一致");
+    }
+    const fingerprint = known?.fingerprint || given;
+    const endpoint: RemoteEndpoint = { issuer, fingerprint };
+    const info = await this.withAnchor(issuer, fingerprint, () =>
+      this.remote.info(endpoint),
+    );
+    if (info.mode !== "personal") {
+      throw fail("not_implemented", "只支持个人中转的分享链接");
+    }
+    const accepted = await this.remote.acceptLink(
+      endpoint,
+      link.linkId,
+      link.secret,
+    );
+    if (accepted.sourceId === this.options.hostId()) {
+      await this.remote
+        .logout(endpoint, accepted.guest.accessToken)
+        .catch(() => undefined);
+      throw fail("conflict", "这就是本机");
+    }
+    const address: SourceAddress = {
+      base: accepted.relayBaseUrl,
+      fingerprint: relayFingerprint(accepted.relayBaseUrl, endpoint),
+      relayToken: accepted.relayToken,
+    };
+    const credentials = await this.peer.cloudLogin(
+      address,
+      accepted.assertion,
+      link.invitationToken,
+    );
+    if (credentials.hostId !== "" && credentials.hostId !== accepted.sourceId) {
+      throw fail("source_unauthorized", "中继另一端不是这个源");
+    }
+
+    const at = this.now();
+    const signedIn =
+      known !== undefined &&
+      (await this.secrets.remote(known.serviceId)) !== undefined;
+    let serviceId: string;
+    if (known !== undefined && signedIn) {
+      // 已经用账号登录着：账号的会话能取这个源的断言，访客那一份用不上。
+      serviceId = known.serviceId;
+      await this.remote
+        .logout(endpoint, accepted.guest.accessToken)
+        .catch(() => undefined);
+    } else {
+      serviceId = known?.serviceId ?? this.newId();
+      await this.secrets.putRemote(serviceId, {
+        refreshToken: accepted.guest.refreshToken,
+        deviceId: accepted.guest.deviceId,
+      });
+      this.store.upsertRemote({
+        serviceId,
+        kind: "personal",
+        issuer,
+        label: known?.label ?? clip(new URL(issuer).host, 128),
+        // 空的账号提示 = 访客（分享链接来的）：页面据此不给「分享本机」。
+        accountHint: "",
+        fingerprint,
+        addedAtMs: known?.addedAtMs ?? at,
+        lastOkAtMs: at,
+      });
+      this.remember(serviceId, accepted.guest);
+      this.capabilities.set(serviceId, info.capabilities);
+    }
+
+    const existing = this.store.get(accepted.sourceId);
+    const relayOrigin =
+      accepted.relayOrigin || new URL(accepted.relayBaseUrl).origin;
+    const key = existing?.relayOrigin || relayOrigin;
+    await this.secrets.putSource(accepted.sourceId, key, {
+      refreshToken: credentials.refreshToken,
+      deviceId: credentials.deviceId,
+    });
+    let name = "";
+    if (label === undefined && existing === undefined) {
+      // 显示名取远程服务目录里的那个（访客只看得到这一个源）；拿不到不拦挂载。
+      const token = this.access.get(serviceId);
+      if (token !== undefined) {
+        name = await this.remote
+          .sources(endpoint, token.accessToken)
+          .then(
+            (rows) =>
+              rows.find((one) => one.sourceId === accepted.sourceId)?.name ??
+              "",
+          )
+          .catch(() => "");
+      }
+    }
+    const row = this.store.upsert({
+      sourceId: accepted.sourceId,
+      kind: existing?.kind === "direct" ? "direct" : "relayed",
+      label: clip(
+        label ??
+          existing?.label ??
+          (name.trim() || accepted.sourceId.slice(0, 8)),
+        128,
+      ),
+      baseUrl: existing?.baseUrl ?? "",
+      relayOrigin: key,
+      fingerprint: existing?.fingerprint ?? "",
+      cloudIssuer: issuer,
+      principalHint: credentials.principalHint,
+      addedAtMs: existing?.addedAtMs ?? at,
+      lastOkAtMs: at,
+      orderIndex: existing?.orderIndex ?? this.store.nextOrder(),
+    });
+    this.options.log.info("mounted a source by share link", {
+      sourceId: accepted.sourceId,
+      serviceId,
     });
     return this.sourceJson(row);
   }

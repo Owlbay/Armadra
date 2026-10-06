@@ -10,6 +10,7 @@ import {
 import { RUNTIME_VIA_SERVER_SHELL } from "../api/request";
 import { savedRuntimeOrigin, setNativeRuntimeBase } from "../api/runtime-url";
 import { installLocalTransport, localSource } from "../api/source";
+import { isDesktop } from "../platform";
 import { isCompactLayout } from "../platform/layout";
 import { isNativeShell } from "../host/native-session";
 import {
@@ -29,13 +30,21 @@ import {
   oauthFragment,
 } from "./native-oauth";
 
-/** 入口画什么：画布本体、连接页、中继托管页面的登录，或者原生 OAuth 登录的第二步。 */
+/** 入口画什么：画布本体、连接页、中继托管页面的登录、分享链接的落地页，或者原生 OAuth 登录的第二步。 */
 export type Entry =
   | { readonly kind: "app" }
   | {
       /** 个人中转托管的这张页面（`/app/`）：中继账号登录、挑主机（`sources/hosted.ts`）。 */
       readonly kind: "relay";
       readonly issuer: string;
+    }
+  | {
+      /**
+       * 远程服务托管的页面打开在 `/j/<linkId>`（分享链接，客户端包 §6.1）：落地页，
+       * 加入后就地进画布（会话只在内存，不能重载）。
+       */
+      readonly kind: "join";
+      readonly linkId: string;
     }
   | {
       /**
@@ -105,6 +114,19 @@ export function takeLinkFragment(): string | null {
   } catch {
     return null;
   }
+}
+
+const JOIN_PATH = /^\/j\/([A-Za-z0-9_-]{8,128})\/?$/;
+
+/**
+ * 这一页是不是远程服务托管的分享链接落地页（`<issuer>/j/<linkId>`）：只在普通
+ * 浏览器里（桌面窗口与原生 App 的页面路径不会是它）。答链接标识或 `null`。
+ */
+export function joinPageLinkId(
+  location: Pick<Location, "pathname"> | undefined = globalThis.location,
+): string | null {
+  if (isNativeApp() || isDesktop()) return null;
+  return JOIN_PATH.exec(location?.pathname ?? "")?.[1] ?? null;
 }
 
 let refreshing: Promise<boolean> | null = null;
@@ -223,6 +245,8 @@ async function enterConnection(descriptor: SourceDescriptor): Promise<Entry> {
  * 挂载之前决定入口（`main.tsx`）。桌面窗口与普通网页一个分支都不进，直接是
  * 画布——不发请求、不等任何东西。
  *
+ *  - **分享链接落地页**：远程服务托管的页面打开在 `/j/<linkId>` → 落地页。
+ *
  *  - **原生 App**：带着配对深链（`#link=`）→ 连接页，链接预填；否则先装 Bearer
  *    传输，没有记下的 Gateway、或钥匙串里没有它的会话 → 连接页。
  *  - **手机浏览器**：经 Gateway 打开、窄屏、地址栏带着 `#pair=` → 连接页。票
@@ -231,6 +255,8 @@ async function enterConnection(descriptor: SourceDescriptor): Promise<Entry> {
  *    由设置页「后台服务」那一页配对。
  */
 export async function prepareEntry(): Promise<Entry> {
+  const joinLinkId = joinPageLinkId();
+  if (joinLinkId !== null) return { kind: "join", linkId: joinLinkId };
   if (isNativeApp()) {
     const origin = savedRuntimeOrigin();
     const link = takeLinkFragment();

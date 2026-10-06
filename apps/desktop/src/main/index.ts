@@ -13,6 +13,7 @@ import {
   ipcRejection,
 } from "../shared/ipc";
 import { dataDir } from "../shell-core/paths";
+import { PendingJoinLink, joinLinkFromArgv } from "../shell-core/join-link";
 import { DEFAULT_DEV_RENDERER_URL } from "../shell-core/window-rules";
 import {
   APP_NAME,
@@ -129,6 +130,32 @@ let page: PageSource | null = null;
 /** 主进程带会话打 core（`start()` 里装上）；源表变了时重读用。 */
 let coreFetch: CoreFetch | null = null;
 
+/**
+ * 分享深链（`armadra://join`，客户端包 §6.2）：Windows 与 Linux 把它放进启动
+ * 参数，macOS 走 `open-url`。记下来、提醒页面，页面取走后在「远程服务」里预填，
+ * 人点「加入」才挂载。协议只由打包配置（`electron-builder.yml` 的 `protocols`）
+ * 在安装时登记，壳运行时不改系统设置。
+ */
+const joinLinks = new PendingJoinLink(joinLinkFromArgv(process.argv));
+
+function receiveJoinLink(url: unknown): void {
+  if (!joinLinks.offer(url)) return;
+  const window = getMainWindow();
+  if (window === null) return;
+  window.webContents.send(IPC.sourcesJoinLink.channel);
+  revealWindow();
+}
+
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  receiveJoinLink(url);
+});
+// 只有拿了单实例锁才会触发；壳现在没拿（几份数据目录各起一个是常态），留着它
+// 让以后加锁时深链不必另接。
+app.on("second-instance", (_event, argv) => {
+  receiveJoinLink(joinLinkFromArgv(argv));
+});
+
 /* ------------------------------ the IPC table ----------------------------- */
 
 /**
@@ -154,6 +181,7 @@ function registerIpc(): void {
     // 页面改了源表（远程服务、挂载的源）：壳自己重读，不信页面带来的数据。
     [IPC.sourcesChanged.channel]: () =>
       coreFetch === null ? { reload: false } : refreshRemoteTrust(coreFetch),
+    [IPC.sourcesTakeJoinLink.channel]: () => joinLinks.take(),
     // The page answering a claimed chord. `menu.ts` owns the arbitration,
     // because it is the module that claimed the chord in the first place.
     [IPC.windowKeyIntentResult.channel]: (result) => {

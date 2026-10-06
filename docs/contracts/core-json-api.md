@@ -2311,7 +2311,7 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 - **旁路保证**：core 启动只 upsert 本机那一行（纯 SQLite），不联网、不读凭据；每次外呼都由一次调用触发、带超时（直连探测 1.5 秒，其余 10 秒），失败只落在那一次调用上——列表、本机行与其余域照常。域有意答的 5xx（`source_unreachable` 502、`source_offline` 503）是答案，不记错误、不进崩溃上报。
 - 外呼登记（`net/outbound.ts`）：`cloudApi`（远程服务 `/v1/*`）、`sourceGateway`（别的 core 的 Gateway 或中继面）。
 - 错误码 `source_unreachable`（502）、`source_unauthorized`（401）、`source_offline`（503）、`fingerprint_mismatch`（400）、`credentials_invalid`（401）、`account_locked`（429，`details.retryAfterMs`）、`cloud_account_unlinked`（401）与协议包 `errors` 注册表同拼法、同状态，登记在 `packages/shared/src/contract/errors.ts`。
-- 以后新增的 procedure（例如按链接挂载 `mountByLink`）追加在本节末尾，不改已有条目。
+- 以后新增的 procedure 追加在本节末尾，不改已有条目（按链接挂载 `mountByLink` 见 §33.7）。
 
 ### 33.6 追加：登出与首次指纹
 
@@ -2327,6 +2327,25 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 
 - **`remoteLogout`**：尽力 `auth.logout`（远程服务不可达不拦），删 `armadra-remote-<serviceId>` 与内存里的访问令牌，**保留行**（`hasCredentials` 变 `false`）；重新登录就是同一个 `issuer` 再 `remoteAdd` 一次。本机对它的登记（§31.2）不动。
 - **首次指纹**：`remoteAdd` 与 `addDirect`（地址 + 配对码那一种）没给 `fingerprint`、系统又不信任对端证书时，答 `400 fingerprint_mismatch`，`details.fingerprint` 是对端信任锚（链里最末那张；只发叶证书时取 `/ca.crt` 里签了它的那张）的指纹。页面请人核对后带着它重调；系统信任的对端（ACME / 公网证书）不要指纹，照常成功。
+
+### 33.7 追加：按分享链接挂载
+
+> A4-3p（个人中转的链接加入）追加。
+
+<!-- rpc:begin contract=§33.7 -->
+
+| procedure             | kind     | input                                                   | output                                                                                                                                                                                                                                                                                  | errors                                                                                                                                                                                                                                                                                                     | scope            | 自  | 原路径                   |
+| --------------------- | -------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | --- | ------------------------ |
+| `sources.mountByLink` | mutation | `{ url: string, fingerprint?: string, label?: string }` | `{ sourceId: string, kind: "local" \| "direct" \| "relayed" \| "hosted", label: string, baseUrl: string, relayOrigin: string, fingerprint: string, cloudIssuer: string, principalHint: string, addedAtMs: integer, lastOkAtMs: integer, orderIndex: integer, hasCredentials: boolean }` | `unauthenticated`、`forbidden`、`bad_request`、`conflict`、`fingerprint_mismatch`、`link_invalid`、`link_expired`、`link_exhausted`、`link_secret_invalid`、`invitation_invalid`、`rate_limited`、`source_offline`、`source_unauthorized`、`source_unreachable`、`cloud_not_registered`、`not_implemented` | `settings:write` | 1.3 | `POST /api/sources/join` |
+
+<!-- rpc:end -->
+
+- **`mountByLink`**：`url` 收分享链接的两种写法——网页链接 `<issuer>/j/<linkId>#<秘密>.<core 邀请令牌>` 与深链 `armadra://join?link=<linkId>&issuer=<issuer>&s=<秘密>.<core 邀请令牌>`（片段按第一个 `.` 切）。认不出答 `bad_request`；只收个人中转（`/.well-known/armadra-platform` 的 `mode` 不是 `personal` 答 `501 not_implemented`）。
+- **指纹**：签发方在「远程服务」表里已有一行就沿用它的指纹（给的 `fingerprint` 与之不同答 `fingerprint_mismatch`）；没有这一行又没给指纹、系统不信任对端证书时，与 §33.6 的首次指纹同一种答法（`details.fingerprint`），页面请人核对后带着它重调。
+- **流程**：`POST <issuer>/v1/links/{linkId}/accept { secret, device }`（匿名，armadra-cloud cloud-api §5）→ 访客会话、断言、中继令牌 → 经 `relayBaseUrl` `POST /api/identity/cloud/login { assertion, invitationToken }`（§31.3）→ 原生会话，存刷新令牌，建或合并 `relayed` 行（`cloudIssuer` = 签发方，`label` 缺省取远程服务目录里的名字）。`sourceId` 是本机答 `conflict`。
+- **远程服务行**：签发方还没有一行（或那一行没有登录）时建 / 补一行访客的：`accountHint` 为空串，凭据是访客的刷新令牌（之后换票用它取断言）。已经用账号登录着的不动它的凭据，访客会话尽力登出。
+- **错误**：远程服务的拒绝原样透传 `link_invalid`（不存在或已撤销）、`link_expired`、`link_exhausted`、`link_secret_invalid`、`rate_limited`；源的拒绝透传 `invitation_invalid`、`cloud_not_registered`、`source_offline`。`link_expired` / `link_exhausted`（410）、`link_secret_invalid`（403）与协议包同拼法同状态；`link_invalid` 沿用注册表里已有的 409（协议包为 404），页面只按码取文案。
+- 链接的秘密与邀请令牌只在这一次调用里，不存、不进日志与答案。
 
 ## 34. RPC 内核：`/api/rpc/{procedure}`
 

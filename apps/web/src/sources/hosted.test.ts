@@ -243,3 +243,97 @@ describe("中继托管页面的源", () => {
     await vi.waitFor(() => expect(wake).toHaveBeenCalledTimes(2));
   });
 });
+
+describe("按分享链接以访客加入（A4-3p）", () => {
+  const LINK = {
+    linkId: "0123456789abcdef",
+    secret: "S".repeat(43),
+    invitationToken: `${"c".repeat(32)}.${"D".repeat(43)}`,
+  };
+
+  function joining(accept: () => { status?: number; body: unknown }) {
+    const net = routedFetch({
+      [`POST /v1/links/${LINK.linkId}/accept`]: accept,
+      "GET /v1/me/sources": () => ({
+        body: { sources: [{ sourceId: SOURCE, name: "studio", online: true }] },
+      }),
+      [`POST /v1/sources/${SOURCE}/assertion`]: () => ({
+        body: {
+          assertion: "jws",
+          relayToken: "relay.jwt",
+          relayTokenExpiresAtMs: NOW + 3_600_000,
+          relayOrigin: ISSUER,
+          relayBaseUrl: `${ISSUER}/s/${SOURCE}`,
+          online: true,
+        },
+      }),
+      [`POST /s/${SOURCE}/api/identity/cloud/login`]: (init) => {
+        expect(JSON.parse(String(init.body))).toEqual({
+          assertion: "jws.guest",
+          invitationToken: LINK.invitationToken,
+        });
+        return {
+          body: {
+            session: {
+              hostId: SOURCE,
+              expiresAtUnixMs: NOW + 900_000,
+              native: { accessToken: "core-guest", refreshToken: "core-gr" },
+            },
+          },
+        };
+      },
+    });
+    const relay = createHostedRelay({
+      issuer: ISSUER,
+      cloud: { fetch: net.fetch },
+      enter: fakeEnter,
+      wake: vi.fn(),
+      createStream: () => ({
+        issuer: ISSUER,
+        state: "open",
+        close: () => undefined,
+      }),
+    });
+    return { relay, net };
+  }
+
+  it("accept → 访客会话进保管处 → cloud/login 带邀请令牌 → 装成本机源，不再重登", async () => {
+    const { relay, net } = joining(() => ({
+      body: {
+        sourceId: SOURCE,
+        relayOrigin: ISSUER,
+        relayBaseUrl: `${ISSUER}/s/${SOURCE}`,
+        assertion: "jws.guest",
+        relayToken: "relay.guest",
+        guestSession: {
+          accessToken: "guest-a",
+          refreshToken: "guest-r",
+          accessExpiresAtMs: NOW + 900_000,
+        },
+      },
+    }));
+    await expect(relay.join(LINK)).resolves.toBe(SOURCE);
+    expect(relay.status.state).toBe("ready");
+    expect(currentAccessToken()).toBe("core-guest");
+    const accept = net.calls.find((call) => call.key.endsWith("/accept"))!;
+    expect(JSON.parse(String(accept.init.body))).toMatchObject({
+      secret: LINK.secret,
+      device: { platform: "browser" },
+    });
+    // 进主机时用的是刚换来的源会话：只登录一次。
+    expect(
+      net.calls.filter((call) => call.key.endsWith("/cloud/login")),
+    ).toHaveLength(1);
+    relay.dispose();
+  });
+
+  it("链接过期：远程服务的码原样抛出，不装源", async () => {
+    const { relay } = joining(() => ({
+      status: 410,
+      body: { code: "link_expired", message: "" },
+    }));
+    const error = await relay.join(LINK).catch((e: unknown) => e);
+    expect((error as { code?: string }).code).toBe("link_expired");
+    expect(relay.status.state).toBe("idle");
+  });
+});
