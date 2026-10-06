@@ -327,6 +327,7 @@ try {
   const page = await stack.browser.page(await stack.browser.context());
   opened.push(["relay", page]);
   const sockets = [];
+  const frames = [];
   report.relaySockets = sockets;
   stack.browser.on((message) => {
     if (message.sessionId !== page.sessionId) return;
@@ -362,6 +363,12 @@ try {
     else if (method === "Network.webSocketHandshakeResponseReceived") {
       const entry = sockets.find((item) => item.id === params.requestId);
       if (entry) entry.status = params.response.status;
+    } else if (method === "Network.webSocketFrameReceived") {
+      frames.push({
+        id: params.requestId,
+        data: String(params.response.payloadData ?? "").slice(0, 400),
+      });
+      if (frames.length > 2000) frames.shift();
     } else if (method === "Network.webSocketClosed") {
       const entry = sockets.find((item) => item.id === params.requestId);
       if (entry) entry.closed = true;
@@ -474,6 +481,28 @@ try {
   await page.viewport(1440, 900);
   await sleep(500);
 
+  /**
+   * 控制面的事件订阅续上：最新那条 `/api/ws` 上收到本机拖动物化出的
+   * `board.changed`（订阅重订、按 lastEventId 续上）。
+   */
+  const controlResumed = (when) => {
+    const latest = sockets
+      .filter((item) => item.url?.endsWith("/api/ws"))
+      .at(-1)?.id;
+    return until(
+      () =>
+        latest !== undefined &&
+        frames.some(
+          (frame) =>
+            frame.id === latest && frame.data.includes("board.changed"),
+        )
+          ? true
+          : null,
+      `${when}控制面收到 board.changed（事件订阅续上）`,
+      { timeout: 30_000 },
+    );
+  };
+
   /* ------------------------ 3. 主机下线再上线 ------------------------ */
   // 主机这一侧停掉隧道：中继答源离线（4404 / 503），me.stream 推 sourceOffline；
   // 再开：sourceOnline 叫醒页面。
@@ -498,9 +527,21 @@ try {
     { timeout: 60_000 },
   );
   await terminalRoundTrip(page, terminal.id, "online");
-  run.ok("主机下线 → 等待上线；上线 → me.stream 叫醒、终端照常", {
-    backMs: Date.now() - offlineAt,
-  });
+  await dragNode(local, sticky.id, 60, 0);
+  const afterOnline = await positionOf(local, sticky.id);
+  await waitAt(
+    page,
+    sticky.id,
+    afterOnline,
+    "主机上线后中继页面又看到本机的拖动",
+  );
+  await controlResumed("主机上线后");
+  run.ok(
+    "主机下线 → 等待上线；上线 → me.stream 叫醒，终端、实时板、控制面事件照常",
+    {
+      backMs: Date.now() - offlineAt,
+    },
+  );
 
   /* ---------------------------- 3. 中继重启 ---------------------------- */
   relay.child.kill("SIGTERM");
@@ -532,7 +573,8 @@ try {
     "通知条收起",
     { timeout: 30_000 },
   );
-  run.ok("杀掉中继再起：页面不刷新自己恢复（实时板、终端）", {
+  await controlResumed("中继重启后");
+  run.ok("杀掉中继再起：页面不刷新自己恢复（实时板、终端、控制面事件）", {
     tunnelBackMs,
     recoveredMs,
   });
