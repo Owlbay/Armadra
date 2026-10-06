@@ -2166,3 +2166,61 @@
 - `cloud login` 的注册令牌由 CLI 向中继取（core 没有这条外呼），所以没有新增 core 外呼登记。
 - 在还没有管理员的服务器上，CLI 取票换会话会成为第一个 owner（与首张配对票同一规则）；正常流程是先由管理员配对。
 - 没有真 Docker 起容器跑 entrypoint（只做了 `sh -n` 语法检查与 CLI 侧的重试语义）；容器自动登记留待 server-container-e2e 覆盖。
+
+## E2 工程规范化：控制面 WebSocket `/api/ws`
+
+设计：[工程规范化](../design/engineering-standardization.md) §3，规格：[工程规范化包](../design/platform/engineering-packages.md) §2；契约 §35。
+
+做了什么：
+
+- **契约**（`packages/shared/src/contract/`）：`workspaces.events`（出参是事件迭代器：工作空间事件或位置帧 `{ type: "cursor", cursor, floor, watermark }`）；`meta.backpressure`（`drop-oldest` / `coalesce` / `resubscribe`，订阅必须写、普通调用不写，`contract.test` 守）；注册表加 `snapshot_required`、`cursor_ahead`（409）、`overflow`（503）、`limit_reached`（429）。协议 minor 4。
+- **core 升级层**（`core/http/ws-control.ts`）：路由表加 `/api/ws`（`identity:read`，成员也有）。子协议报了 `armadra-rpc.v1` 就回选它（票不回选，`server.ts` 的 `handleProtocols`），没报的以 4409 关；二进制帧、不是 peer 消息的文本帧 4400；超过 `maxFrameBytes` 4413（`ws` 硬上限放宽一倍，免得被 1009 抢先）；每一帧在升级时的身份下跑并先复核会话，会话没了 4403；core 停机先以 1001 关（`CoreServer.close()`）。票、Cookie、4401 到期与 4403 授权变化的复核、`ws` 层 25 秒心跳都是 `server.ts` 给每条流的那一套（A3-0），没有另写。
+- **RPC 门面**（`core/http/rpc.ts`）：同一棵契约树经 `@orpc/server/ws` 的 `RPCHandler.upgrade(socket, { context })` 挂到控制面，身份由升级层认好放进 context；控制面上的错误改成注册表里的码交给上游编码（不是 HTTP 的 envelope）。订阅（写了背压策略的 procedure）只经控制面，HTTP 上调答 405；每连接 256 个，超了答 `limit_reached` 并以 4429 关；每个订阅包一层 `SendQueue`（A3-0，新增 `QueuedValue` 让它排还没编码的值）有界队列：1024 项、连接缓冲过 1 MiB 排队，`resubscribe` 拥塞时停止从实现里取、满了 `overflow`。`RpcCall.lastEventId` 交给实现，`withEventId()` 给每项带事件 id。
+- **事件流迁入**（`core/events/procedure.ts`）：`workspaces.events` 的事件 id 是 outbox 序号；起点 `lastEventId` > `cursor` > `now`；监听与读水位在同一拍挂上，补发只发到那时的水位、按页懒读，之后接实时，不漏不重；每次（重新）订上先发位置帧；`snapshot_required` / `cursor_ahead` / `not_found` 在订阅开始前拒绝；授权收回以 `forbidden` 结束这一条；实时缓冲满了以 `overflow` 结束。扇出加 `listen()`，控制面订阅照样算「在看」（资源采样、Agent 状态按它发）。旧路由 `WS /api/workspaces/{id}/events` 保留到 E4。
+- **页面**：`api/ws.ts` 的 `ControlChannel` 是上游 peer 客户端要的 WebSocket 形状，架在源层的 `ManagedSocket` 上（经 `SourceConnection.socket("/api/ws")`：换票走源的凭据、本机源经 `local-runtime`、经中继带中继子协议、`lib/backoff` 退避前台 10 秒后台 30 秒、`online` 与回前台跳过退避、回前台探活 3 秒）；它补的是：内层断了先置回「连接中」再发 `close`（订阅据此由重试插件重订），4403 / 4409 / 4429 与续不上凭据停下并告诉页面，可见时每 30 秒 `system.ping`、3 秒没回就 `reconnect()`（`ManagedSocket` 新加的一个公开方法）。`api/client.ts` 加 `controlClient(connection)`（`@orpc/client/websocket` + 重试插件：订阅断线立刻重订并交回 `lastEventId`，续不上的码交给调用方；不用上游内建重连）、`errorCode()`。`api/events.ts` 改为订 `client.workspaces.events`，保留 A1-2 的源维度：每个源里一个工作空间一条订阅（键 `${sourceId}:${workspaceId}`），每个源一条控制面连接（源表里的 `SourceConnection`，没登记的源按本机的做法包一个），事件带上所属的源（`onWorkspaceEvent` 缺省只收当前源，`{ allSources: true }` 收所有源）；位置帧当作「订上了」的上升沿，`forbidden` 或那个源的控制面 4403 视为授权收回，`snapshot_required` / `cursor_ahead` 落下连接状态后从现在重订；对外 API 不变。关闭码文案 `i18n/connection.ts`（中英），4409 / 4429 停下时 toast 提示怎么办（`app/use-control-notices.ts`）。
+- **路由门**（`identity/route-access.ts`）：全局的 `identity:read` 要求按主体快照判（每个登录主体都有，成员也有），成员因此能升级 `/api/ws`、调 `system.hello` / `ping`；其余全局要求照旧只有 owner。E1 留下的「成员调不了 `system.*`」随之解决。
+- **探针**：`server-e2e` 的撤销共享一步改看控制面上成员的事件订阅以 `forbidden` 结束（原来看旧路由那条 socket 以 4403 关）——事件流已迁到 `/api/ws`，连接本身不因一块画布的授权收回而关，这是规格要的行为。
+- **终端**：`bufferedAmount` 过 4 MiB 暂停读 PTY 已由 A3-0 做完（`terminal/socket.ts` 的 `pause` 队列），本包没有再动。
+- **契约 §35**：35.1 升级层与子协议（含 peer 帧的线上样子）、35.2 关闭码表、35.3 心跳与重连、35.4 `workspaces.events`（生成块）、35.5 背压。生成器认订阅：kind 记 `subscription`，出参列事件的 `type`，`x-armadra` 带 `backpressure` 与 `transport: "/api/ws"`。
+
+实测（macOS arm64，Node 26.10.0，tmux 3.7c，2026-10-06，已合 main 60e404f8：E1 #136、A0-4 #137、A1-3 #138、A1-1 #139、A2-3 #140、A1-5 #141、A1-2 #142、A3-2 #143、A1-4 #144、A4 #145）：
+
+- 新用例：`http/ws-control.test` 13（回选子协议、缺子协议 4409、准入拒绝 401、坏帧 4400、超限 4413、订阅走 HTTP 405、停机 1001、第 257 个订阅 `limit_reached` + 4429、取消不占名额、会话没了 4403、授权收回 4403、scope 不放行只拒这一次、心跳两次无 pong 断开）；`events/procedure.test` 5（位置帧与序号 id、断开期间的事件带 `lastEventId` 由 outbox 补齐且与没断的一致、`snapshot_required` / `cursor_ahead` / 404、慢客户端 3000 × 8 KiB 停读后 `overflow`、重订之后一帧不少、取消后监听释放）；`route-access.test` 补 1；web `api/ws.test` 9、`api/client.control.test` 2（断线后在新连接上重订并带 `last-event-id`、`snapshot_required` 不重订）、`api/events.test` 改写 13（含两个源各一条订阅、一个源断线只落下那个源）、`use-access-lost.test` 改写 2、`managed-socket.test` 补 1；`contract.test` 补 1、`generate.test.mjs` 补 1；错误码扫描认同目录导入的 `fail`。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 4858 过 / 65 跳过，live 4 过，脚本 68 过；`pnpm --filter @armadra/web test` 3637 过，`typecheck` 通过；`pnpm --filter @armadra/server test` 98 过 / 4 跳过；`pnpm repo:test` 29 过；`pnpm check` 通过（lint 0 error、285 warn，与 main 相同）。
+- `node tools/ci/e2e.mjs --tier a`（合 #143 / #144 之后）：13 项全过（acp、agent-e2e-self-test、core-terminal-lifecycle、core-terminal-smoke、design-showcase、gateway、push、realtime、remote、server、ui-features、workflow、ws-mux）；其中 `agent-e2e-self-test` 的 11-coordinator 一次偶发失败（模型服务请求时序，E1 记过同一处），单独重跑通过。合 #145（身份与服务器壳 CLI，不碰控制面）之后重跑了 `pnpm check`、服务器壳全部与 core 的 http / events / identity 用例。
+- 新探针 `ws-mux-e2e`：两台都订上；杀 core（SIGKILL）3 秒同端口重启、前后都有事件，两台对着 outbox 一帧不少一帧不重（各重连 5–6 次；从杀到补齐 3.5–10.6 秒，含 3 秒停机，余下是前台退避的抖动）；第二台断网 30 秒期间收到 0 帧，恢复后 162 ms 补齐；第一台切到后台、core 停 8 秒再起、产生 3 帧，回到前台 152–154 ms 收齐（预算 3 秒）；全程 23 帧不少不重，控制台无错误。
+- `tools/probes/server-perf.mjs`（30 终端 + 6 事件流 + 2000 对象实时板），main 80f633bc 与本分支同机交替各跑 3 次取中位数：
+
+| 指标               |              main |            本分支 |
+| ------------------ | ----------------: | ----------------: |
+| 事件扇出 p95       |            2.2 ms |            3.2 ms |
+| 终端吞吐           |        25.0 MiB/s |        25.1 MiB/s |
+| 单会话完成 p95     |         1192.8 ms |         1190.2 ms |
+| 建会话 p95         |           50.2 ms |           56.6 ms |
+| 实时板批量         |          162.6 ms |          159.0 ms |
+| 实时单字段更新 p95 |            0.8 ms |            0.8 ms |
+| RSS 稳态 / 峰值    | 254.1 / 269.2 MiB | 258.5 / 272.8 MiB |
+
+事件扇出 p95 单次在 main 上 1.7–3.2 ms、本分支 2.3–3.6 ms 之间跳（容差 10 ms），扇出走的是旧路由，本包在这条路上只多了一次空的监听表查找；建会话 p95 两边都在 50–74 ms 间跳。RSS 两边都超出 `server-perf-baseline.json` 的 darwin-arm64 基线（与 A3-0 记的一样），基线没有重录。
+
+偏离规格之处：
+
+- `workspaces.events` 的出参多一种位置帧：没有它，订上之后还没收到任何事件就断开的订阅没有 `lastEventId`，重订只能从 `now` 起，中间那段就丢了；页面也拿它当「订上了」的上升沿（会话列表、Agent 镜像据此重读）。
+- 订阅中途与调用的错误是上游的错误形状 `{ defined, code, status, message, data }`（码与状态按注册表、内部错误不外泄），不是 HTTP 的 `{ code, message, requestId, details }`：envelope 是写在 HTTP 响应体上的，peer 帧里换成它上游客户端就解不开。
+- `resubscribe` 不是单纯的「队列满了抛 `overflow`」：拥塞时门面停止从实现里取（补发懒读，所以停在原处），实时一段由实现自己的 1024 项缓冲兜底；否则慢客户端的每一次重订都会在补发阶段再溢出一次。
+- 订阅数按连接数（规格写法），不是工程规范化 §3.3 的「按身份」。
+- `Source.ws` 没有加成 `Source` 的成员：A1-1 合入后控制面的流按 `SourceConnection.socket()` 取（`ManagedSocket` 已经做了换票、中继与退避），`controlClient(connection)` / `controlChannel(connection)` 按连接缓存。
+- 契约 `workspaceEventSchema` 有三处透传的 `unknown`（`agent.approval.request`、ACP 帧的附加字段），`contract.test` 对这一条放行 3 处、只许减少，收紧留给对应域的 E3 迁移。
+- 老 core（没有 `/api/ws`）不回落到旧事件流路由：本机源与本仓库同版本；远程源的版本协商归 A1-1 的 `system.hello`。
+
+没做 / 限制：
+
+- 只有事件流迁入控制面；资源采样（`coalesce`）等订阅留给各域的 E3。
+- 控制面 4403 时页面按「当前工作空间的授权收回」处理（离开并提示），不区分是整条会话失效还是这块画布的共享被收回。
+- 浏览器发不了协议层 ping，前台的半开连接最长要等到下一次 30 秒的 `system.ping` 才发现；回到前台时立刻探一次。
+
+接口（给 A1-1 / A3-4）：
+
+- 契约：订阅 = 出参 `eventIterator(...)` + `meta.backpressure`，契约节号按域分配；实现交出一个 `async function*`，每项 `yield withEventId(value, String(seq))`（`core/http/rpc.ts`），`call.lastEventId` 是重订时客户端最后收到的 id，`call.signal` 在客户端取消、连接断开或门面溢出时 abort；先决条件不满足就在交出迭代器之前 `throw fail(...)`。
+- core：`core/http/ws-control.ts` 的 `CONTROL_PATH`、`CONTROL_PROTOCOL`、`CLOSE_*`、`MAX_ITERATORS`、`ITERATOR_MAX_FRAMES`、`ITERATOR_HIGH_WATER_BYTES`、`ControlConnection`；`core/http/stream-queue.ts` 的 `QueuedValue`；`WorkspaceEventStream.listen(workspaceId, (frame, seq) => …)`；测试用 `core/http/peer.fixture.ts`（直接说 peer 帧的客户端）。
+- 页面：`api/events.ts` 的 `WorkspaceEventTransport` 按源订（`subscribe(source, workspaceId, signal)`、`onDrop(source, …)`、`closedWith(source)`），`setWorkspaceEventTransport()` 测试换来源；`controlClient(connection)`（`connection` 是 `sourceRegistry().get(id)` / `.current()` 或任何有 `socket(path, options)` 的对象）、`controlClosedWith(connection)`、`onControlDrop(connection, listener)`、`errorCode(error)`；`api/ws.ts` 的 `ControlChannel`、`controlChannel(connection)`、`onControlClosed(listener)`、`closeMessageKey(code)`、`CLOSE_*`；`ManagedSocket.reconnect()`。

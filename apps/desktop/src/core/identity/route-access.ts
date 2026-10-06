@@ -446,6 +446,15 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
       );
     }
 
+    // 「能读身份」是每个登录主体的底线（会话快照里都有，`service.ts` 的
+    // `openSession`）：控制面的升级与 `system.hello` / `ping` 要的就是它（契约
+    // §34.2、§35.1），成员也得过得去。其余全局要求照旧只有 owner。
+    if (
+      requirement.workspaceId === "" &&
+      requirement.permission === "identity:read"
+    ) {
+      return options.permits(subject, [scope("identity:read")]) ? ALLOW : DENY;
+    }
     return requirement.workspaceId === ""
       ? DENY
       : onWorkspace(subject, requirement.permission, requirement.workspaceId);

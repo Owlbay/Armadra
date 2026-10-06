@@ -147,6 +147,15 @@ export class ManagedSocket {
     this.reconnectNow();
   }
 
+  /**
+   * 调用方认定开着的这条已经死了（心跳没回音）：丢掉它，立刻再连，不等退避。
+   * 不在开着的状态时什么也不做。
+   */
+  reconnect(): void {
+    if (this.current !== "open") return;
+    this.reconnectNow();
+  }
+
   /** 调用方不要它了：关掉，不再连。 */
   close(code = 1000, reason = ""): void {
     if (this.current === "closed") return;

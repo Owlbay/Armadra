@@ -27,6 +27,7 @@ import type { AuthorizationSubject } from "../identity/authorize";
 import { MAX_FRAME_BYTES } from "../identity/protocol";
 import { type HookHealth, NO_HOOK_SERVICE, healthDocument } from "./health";
 import { type CoreRequest, type HandlerResult, Router } from "./router";
+import { CONTROL_PROTOCOL, goingAway } from "./ws-control";
 
 /**
  * The core's HTTP and WebSocket face.
@@ -645,6 +646,12 @@ export class CoreServer {
         // Terminal frames are the reason: compression on a stream of escape
         // sequences costs CPU per frame for a ratio the transport does not need.
         perMessageDeflate: false,
+        // 子协议：报了控制面的（`armadra-rpc.v1`，契约 §35.1）回选它，其余照旧
+        // 回选第一个（那张一次性票）。
+        handleProtocols: (protocols) =>
+          protocols.has(CONTROL_PROTOCOL)
+            ? CONTROL_PROTOCOL
+            : (protocols.values().next().value ?? false),
       });
       this.websockets.set(maxPayload, websockets);
     }
@@ -715,6 +722,9 @@ export class CoreServer {
   async close(): Promise<void> {
     if (this.heartbeat !== undefined) clearInterval(this.heartbeat);
     this.heartbeat = undefined;
+    // 控制面先以 1001 说「这是停机」（契约 §35.2），让关闭帧先写出去一拍，再断。
+    goingAway(this);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     for (const websockets of this.websockets.values()) {
       for (const client of websockets.clients) client.terminate();
       websockets.close();
