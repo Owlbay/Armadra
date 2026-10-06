@@ -2874,11 +2874,11 @@ V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
 - 协议 minor 17 → 18（17 给了 P4 #181），新 procedure 的 `since` 为 1.18。
 - **探针**：`ui-features/keybindings.mjs` 在设置对话框停稳（`dialogSettled`）之后再点侧栏最底下的「快捷键」——CI 上两次在对话框放大动画里按坐标点空。
 
-实测（macOS arm64，基于 main 99998b4b）：
+实测（macOS arm64，基于 main c04224cf）：
 
 - 新增 core 对偶测试 `contract/parity-comments.test.ts`（5）、`parity-handoffs.test.ts`（4）、`parity-export-text.test.ts`（3）：路由表原 handler、旧路径、procedure 三者逐字节相等（含 201 / 204 的状态差、400 / 403 / 404 / 409），scope 与路由表一致；形状错由契约先答 `bad_request`。`parity-agents` / `parity-files` 的条数随之更新。
 - 页面新增 `api/client.comments.test.ts`、`client.handoffs.test.ts`，`client.acp.test.ts` 加 `exportText` / `drive`，`GatewaySection.test.tsx`（2）。`@armadra/shared` 的事件用例覆盖新请求、答复与两种不收的形状。
-- `pnpm check` 通过（含 `contract:check`、lint 0 error、各处 typecheck、`repo:check`）。`pnpm libs:build && pnpm -r --if-present test`：desktop 5234 过 / 74 跳（live 4 过），web 3838 过，shared 372 过，server 98 过 / 4 跳，mobile 10、push-relay 9 过。
+- `pnpm check` 通过（含 `contract:check`、lint 0 error、各处 typecheck、`repo:check`）。`pnpm libs:build && pnpm -r --if-present test`：desktop 5246 过 / 67 跳（live 4 过），web 3864 过，shared 372 过，server 98 过 / 4 跳，mobile 10、push-relay 9 过。
 
 没做 / 偏离：
 
