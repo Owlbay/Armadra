@@ -7,7 +7,11 @@
  * 失败都不留行。只实现个人中转这一个签发方：`saas` 答 `not_implemented`，形状与
  * 流程不变，SaaS 服务端就绪后放开这一处即可（总计划 §12.2）。
  *
- * 撤销只停隧道、记撤销时刻；已经映射过的账号与授予是 owner 的事，在账号页逐个撤。
+ * 撤销先在本机完成（停隧道、记撤销时刻），再尽力删中继侧的源记录
+ * （`DELETE <issuer>/v1/sources/{sourceId}`，要远程服务 owner 的会话，经源表域挂上的
+ * {@link RelayCleaner}）；没有会话或调用失败时本机撤销照样算数，行上记下错误码
+ * （「中继侧待清理」，契约 §31.4），可以重试。已经映射过的账号与授予是 owner 的事，
+ * 在账号页逐个撤。
  */
 
 import { randomBytes } from "node:crypto";
@@ -21,7 +25,7 @@ import type {
 } from "@armadra/platform-protocol/core-api";
 import { PROTOCOL_VERSION } from "@armadra/platform-protocol";
 
-import { fail } from "../../http/errors";
+import { CoreFailure, fail } from "../../http/errors";
 import {
   normalizeFingerprint,
   normalizeOrigin,
@@ -58,6 +62,20 @@ export const IDLE_RELAY: CloudRelay = {
   status: () => ({ ...IDLE_TUNNEL }),
 };
 
+/**
+ * 删中继侧的源记录（契约 §31.4）：源表域（`sources/`）用这个 issuer 的远程服务
+ * owner 会话调 `sources.revoke`。删掉了、或中继上本来就没有，正常返回；没删成抛
+ * `CoreFailure`，码记进「中继侧待清理」。
+ */
+export type RelayCleaner = (issuer: string, sourceId: string) => Promise<void>;
+
+/** 中继侧一条待清理的登记。 */
+export interface RelayPending {
+  readonly issuer: string;
+  readonly revokedAtMs: number;
+  readonly code: string;
+}
+
 /** 一份可信来源最多这么多条。 */
 const MAX_ORIGINS = 32;
 
@@ -72,6 +90,8 @@ export interface CloudRegistryOptions {
   /** 本机 hello 报的能力名，登记时交给远程服务。 */
   readonly capabilities: () => readonly string[];
   readonly relay: () => CloudRelay;
+  /** 删中继侧源记录的那一步；源表域没装时没有，撤销后记为待清理。 */
+  readonly cleaner?: () => RelayCleaner | undefined;
   readonly now?: () => number;
   readonly log?: {
     warn(message: string, fields?: Record<string, unknown>): void;
@@ -282,11 +302,16 @@ export class CloudRegistry {
     }
   }
 
-  /** 撤销：停隧道，记撤销时刻；没有有效登记答 `not_found`。 */
-  revoke(
+  /**
+   * 撤销：停隧道，记撤销时刻；没有有效登记答 `not_found`。随后尽力删中继侧的源
+   * 记录——成不成都不影响本机撤销，没成的记为待清理（{@link relayPending}）。
+   * `relaySide: "revoked"`：中继自己已经撤了（隧道收到 `source_revoked`），不再去删。
+   */
+  async revoke(
     input: { issuer: string },
     principalId?: string,
-  ): Record<string, never> {
+    options: { relaySide?: "revoked" } = {},
+  ): Promise<Record<string, never>> {
     let issuer = input.issuer;
     try {
       issuer = issuerOf(input.issuer);
@@ -301,13 +326,65 @@ export class CloudRegistry {
     } catch {
       // 停不掉的隧道在下一次握手时会被中继拒绝；登记已经撤了。
     }
+    const relayCleanup =
+      options.relaySide === "revoked" ? "done" : await this.cleanRelay(issuer);
     audit({
       action: "cloud.revoke",
       target: issuer,
       ...(principalId === undefined ? {} : { principalId }),
-      detail: { issuer },
+      detail: {
+        issuer,
+        relayCleanup: relayCleanup === "done" ? "done" : "pending",
+      },
     });
     return {};
+  }
+
+  /** 已撤销、中继侧还欠着清理的登记（契约 §31.4）。 */
+  relayPending(): { pending: RelayPending[] } {
+    return { pending: this.options.cloud.relayPending() };
+  }
+
+  /** 重试一条待清理（契约 §31.4）；不欠的答 `not_found`。 */
+  async relayCleanup(input: {
+    issuer: string;
+  }): Promise<{ pending: boolean; code: string | null }> {
+    let issuer = input.issuer;
+    try {
+      issuer = issuerOf(input.issuer);
+    } catch {
+      // 同 revoke：按原样找。
+    }
+    if (
+      !this.options.cloud.relayPending().some((one) => one.issuer === issuer)
+    ) {
+      throw fail("not_found", "这个远程服务没有待清理的源记录");
+    }
+    const state = await this.cleanRelay(issuer);
+    if (state === "done") return { pending: false, code: null };
+    return { pending: true, code: state.code };
+  }
+
+  /** 删中继侧的源记录；答 `done`，或记下并答没删成的码。 */
+  private async cleanRelay(
+    issuer: string,
+  ): Promise<"done" | { readonly code: string }> {
+    const cleaner = this.options.cleaner?.();
+    let code: string;
+    if (cleaner === undefined) {
+      code = "source_unauthorized";
+    } else {
+      try {
+        await cleaner(issuer, this.options.hostId());
+        this.options.cloud.setRelayCleanup(issuer, "");
+        return "done";
+      } catch (error) {
+        code = error instanceof CoreFailure ? error.code : "source_unreachable";
+      }
+    }
+    this.options.cloud.setRelayCleanup(issuer, code);
+    this.options.log?.warn("cloud relay source not removed", { issuer, code });
+    return { code };
   }
 
   async status(): Promise<CloudStatusOutput> {
