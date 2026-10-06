@@ -70,6 +70,8 @@ export const ERROR_CODES = {
   snapshot_required: { status: 409 },
   /** 续订的位置这台 core 从没发过（换了库）：同上（契约 §35.4）。 */
   cursor_ahead: { status: 409 },
+  /** Git 历史、reflog 或日志的游标不属于这个引用或这组筛选条件：丢掉游标重读第一页（契约 §40.2）。 */
+  invalid_cursor: { status: 409 },
   mail_not_configured: { status: 409 },
   origin_mismatch: { status: 409 },
   rebase_started: { status: 409 },

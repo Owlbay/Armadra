@@ -51,7 +51,7 @@ import { resourcesApi } from "./resources";
 import { conversationsApi } from "./conversations";
 import { handoffApi } from "./handoff";
 import { gitApiFor } from "./git";
-import { gitRepositoryApi } from "./git-repository";
+import { gitRepositoryApiFor } from "./git-repository";
 import { usageApi } from "./usage";
 import { settingsApiFor } from "./settings";
 import { githubApi } from "./github";
@@ -314,7 +314,7 @@ export const runtimeApi = {
   ...conversationsApi,
   ...handoffApi,
   ...gitApiFor(currentClient),
-  ...gitRepositoryApi,
+  ...gitRepositoryApiFor(currentClient),
   ...usageApi,
   ...settingsApiFor(currentClient),
   ...githubApi,

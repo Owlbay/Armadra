@@ -6,7 +6,7 @@ import { setCurrentSourceResolver, type Source, localSource } from "./source";
 /**
  * git 域的页面一侧（契约 §40.1）：都发 `POST /api/rpc/git/<动词>`，体是
  * `{ json: { … } }`，答案过页面自己的 schema，发往当前源。仓库级的读与操作
- * （`api/git-repository.ts`）还走旧路径，不在这里。
+ * （`api/git-repository.ts`，§40.2）在 `client.git-repository.test.ts`。
  */
 
 const timestamp = "2026-08-13T00:00:00.000Z";

@@ -10,6 +10,7 @@ import { boards } from "./boards.js";
 import { identity } from "./cloud.js";
 import { files } from "./files.js";
 import { git } from "./git.js";
+import { gitRepository } from "./git-repository.js";
 import type { ProcedureMeta } from "./meta.js";
 import { settings } from "./settings.js";
 import { sources } from "./sources.js";
@@ -35,6 +36,7 @@ export const contract = {
   boards,
   git,
   agents,
+  gitRepository,
 };
 
 export type Contract = typeof contract;
