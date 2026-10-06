@@ -7,7 +7,7 @@
 //   1. 管理员打开启动日志里的配对链接，页面自己完成配对；
 //   2. 管理员在「账号与共享」生成邀请，成员在另一个上下文打开 `#invite=` 链接注册；
 //   3. 只读共享：成员看得见、写被拒（403 与界面反应）；改成可写后能写；撤销
-//      之后成员已开的事件流以 4403 关闭，下一次请求 403；
+//      之后成员已开的事件订阅（控制面 `/api/ws`）以 forbidden 结束，下一次请求 403；
 //   4. 成员打开页面不撞任何全局 403（§56 的权限表：无害的全局读放行，本机管理
 //      的入口对成员不摆出来），设置导航里没有本机管理的那几页；
 //   5. 撤销共享的那一刻，被撤销者手里的写租约当场释放（§56），不等心跳过期；
@@ -514,8 +514,9 @@ await h.run(async () => {
 
   /* ---------------- 4. 成员打开页面：全局路由的 403 逐条记下 ---------------- */
 
-  // 页面自己的每一条 WebSocket 都记下关闭码：撤销共享时要看见应用自己的事件流
-  // 以 4403 关掉，而不是探针另开的一条。
+  // 页面自己的每一条 WebSocket 都记下关闭码与控制面上订阅结束的错误码：撤销
+  // 共享时要看见应用自己的事件订阅被结束（控制面 `/api/ws` 上的
+  // `workspaces.events` 以 `forbidden` 结束，契约 §35.4），而不是探针另开的一条。
   await member.call("Page.addScriptToEvaluateOnNewDocument", {
     source: `
       window.__probeSockets = [];
@@ -523,9 +524,17 @@ await h.run(async () => {
       window.WebSocket = class extends Native {
         constructor(...args) {
           super(...args);
-          const entry = { url: String(args[0]), code: null };
+          const entry = { url: String(args[0]), code: null, errors: [] };
           window.__probeSockets.push(entry);
           this.addEventListener("close", (event) => { entry.code = event.code; });
+          this.addEventListener("message", (event) => {
+            if (typeof event.data !== "string") return;
+            try {
+              const frame = JSON.parse(event.data);
+              const code = frame?.t === 3 && frame.p?.e === "error" ? frame.p.d?.json?.code : undefined;
+              if (typeof code === "string") entry.errors.push(code);
+            } catch {}
+          });
         }
       };
     `,
@@ -770,21 +779,22 @@ await h.run(async () => {
     "可写：保存没有被拒",
   );
 
-  // 撤销共享：成员已开的事件流以 4403 关掉，下一次请求 403。
+  // 撤销共享：成员已开的事件订阅以 forbidden 结束，下一次请求 403。
   await admin.clickAt(
     await rowControl(admin, "成员甲", 'button[aria-label="取消共享"]'),
   );
   await sleep(1500);
   await admin.capture("09-admin-revoked");
-  const closes = await member.waitFor(
-    `const closed = (window.__probeSockets ?? []).filter((entry) => entry.url.includes("/events") && entry.code !== null);
-     return closed.length ? closed.map((entry) => entry.code) : null;`,
-    { what: "成员的事件流被关掉", timeout: 15_000 },
+  const ended = await member.waitFor(
+    `const ended = (window.__probeSockets ?? []).flatMap((entry) =>
+       entry.url.includes("/api/ws") ? entry.errors : entry.url.includes("/events") && entry.code !== null ? [String(entry.code)] : []);
+     return ended.length ? ended : null;`,
+    { what: "成员的事件订阅被结束", timeout: 15_000 },
   );
   check(
-    closes.includes(4403),
-    "撤销后成员已开的事件流以 4403 关闭",
-    closes.join(","),
+    ended.includes("forbidden") || ended.includes("4403"),
+    "撤销后成员已开的事件订阅以 forbidden 结束（控制面，契约 §35.4）",
+    ended.join(","),
   );
   const afterRevoke = await memberFetch(`/api/workspaces/${shared.id}/boards`);
   check(
