@@ -81,6 +81,7 @@ import {
 import { Spinner } from "@/ui/spinner";
 import { StatusPill } from "@/ui/status-pill";
 import { sourcePill } from "../source-status";
+import { checkAddress } from "./remote-address";
 
 export const SOURCES_QUERY_KEY = ["sources", "list"] as const;
 
@@ -614,11 +615,16 @@ function AddRelayDialog({
 
   async function submit(fingerprint: string) {
     if (busy) return;
+    const checked = checkAddress(issuer);
+    if (!checked.ok) {
+      setError(t(checked.error));
+      return;
+    }
     setBusy(true);
     setError("");
     try {
       const answer = await addPersonalRelay({
-        issuer,
+        issuer: checked.address,
         account,
         password,
         ...(fingerprint ? { fingerprint } : {}),
@@ -678,7 +684,6 @@ function AddRelayDialog({
                 </FieldLabel>
                 <Input
                   id="remote-issuer"
-                  type="url"
                   inputMode="url"
                   autoComplete="url"
                   spellCheck={false}
@@ -764,6 +769,11 @@ function AddDirectDialog({
 
   async function submit(fingerprint: string) {
     if (busy) return;
+    const checked = link ? null : checkAddress(address);
+    if (checked !== null && !checked.ok) {
+      setError(t(checked.error));
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -771,7 +781,7 @@ function AddDirectDialog({
         link
           ? { pairLink: address, ...(fingerprint ? { fingerprint } : {}) }
           : {
-              origin: address,
+              origin: checked?.ok ? checked.address : address,
               code,
               ...(fingerprint ? { fingerprint } : {}),
             },

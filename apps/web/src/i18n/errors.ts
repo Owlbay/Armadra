@@ -32,7 +32,12 @@ export const errors: MessageModule = {
     "error.credentialsInvalid": "账号或口令不正确",
     "error.accountLocked": "尝试次数过多，账号已暂时锁定",
     "error.fingerprintMismatch": "证书指纹不一致，已拒绝连接",
-    "error.sourceUnreachable": "连不上这台机器",
+    "error.addressInvalid": "地址格式不对",
+    "error.addressHttpsOnly": "地址需要以 https:// 开头",
+    "error.addressPlaintextLoopbackOnly": "需要 https://，http:// 只能用于本机",
+    "error.addressHasCredentials": "地址里不能带账号和口令",
+    "error.fingerprintInvalid": "证书指纹应为 64 位十六进制",
+    "error.sourceUnreachable": "连不上，检查地址、服务是否已开启和防火墙",
     "error.sourceUnauthorized": "这台机器的登录已失效，请重新登录",
     "error.sourceOffline": "这台机器当前不在线",
     "error.cloudAccountUnlinked": "这个账号还没有关联到这台机器",
@@ -90,7 +95,15 @@ export const errors: MessageModule = {
     "error.accountLocked": "Too many attempts — the account is locked for now",
     "error.fingerprintMismatch":
       "The certificate fingerprint does not match — connection refused",
-    "error.sourceUnreachable": "Cannot reach that machine",
+    "error.addressInvalid": "That address isn't valid",
+    "error.addressHttpsOnly": "The address must start with https://",
+    "error.addressPlaintextLoopbackOnly":
+      "Use https:// — http:// only works on this machine",
+    "error.addressHasCredentials": "The address can't contain a login",
+    "error.fingerprintInvalid":
+      "The certificate fingerprint must be 64 hex characters",
+    "error.sourceUnreachable":
+      "Cannot connect — check the address, that the service is running, and the firewall",
     "error.sourceUnauthorized":
       "Your sign-in to that machine expired — sign in again",
     "error.sourceOffline": "That machine is offline",

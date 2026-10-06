@@ -300,6 +300,114 @@ describe("远程服务页", () => {
   });
 });
 
+describe("添加时的地址提示", () => {
+  async function openPersonal(address: string) {
+    api.listSources.mockResolvedValue({ sources: [local], remotes: [] });
+    mount();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add remote service" }),
+    );
+    fireEvent.change(screen.getByLabelText("Address"), {
+      target: { value: address },
+    });
+    fireEvent.change(screen.getByLabelText("Account"), {
+      target: { value: "dev" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "pw" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  }
+
+  it("没写协议：按 https:// 提交", async () => {
+    api.addPersonalRelay.mockResolvedValue({ kind: "done" });
+    await openPersonal("192.168.0.107:8443");
+    await waitFor(() =>
+      expect(api.addPersonalRelay).toHaveBeenCalledWith(
+        expect.objectContaining({ issuer: "https://192.168.0.107:8443" }),
+      ),
+    );
+  });
+
+  it("http:// 且不是回环：提交前提示，不调 core", async () => {
+    await openPersonal("http://192.168.0.107:8443");
+    expect(
+      await screen.findByText(
+        "Use https:// — http:// only works on this machine",
+      ),
+    ).toBeTruthy();
+    expect(api.addPersonalRelay).not.toHaveBeenCalled();
+  });
+
+  it("http:// 回环地址放行", async () => {
+    api.addPersonalRelay.mockResolvedValue({ kind: "done" });
+    await openPersonal("http://127.0.0.1:8443");
+    await waitFor(() =>
+      expect(api.addPersonalRelay).toHaveBeenCalledWith(
+        expect.objectContaining({ issuer: "http://127.0.0.1:8443" }),
+      ),
+    );
+  });
+
+  it("自托管：没写协议同样补 https://，http:// 非回环被拦", async () => {
+    api.listSources.mockResolvedValue({ sources: [local], remotes: [] });
+    api.addDirectSource.mockResolvedValue({ kind: "done" });
+    mount();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add self-hosted" }),
+    );
+    const address = screen.getByLabelText("Address or pairing link");
+    fireEvent.change(screen.getByLabelText("Pairing code"), {
+      target: { value: "123456" },
+    });
+    fireEvent.change(address, { target: { value: "http://10.0.0.5:8443" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect(
+      await screen.findByText(
+        "Use https:// — http:// only works on this machine",
+      ),
+    ).toBeTruthy();
+    expect(api.addDirectSource).not.toHaveBeenCalled();
+    fireEvent.change(address, { target: { value: "10.0.0.5:8443" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await waitFor(() =>
+      expect(api.addDirectSource).toHaveBeenCalledWith(
+        expect.objectContaining({ origin: "https://10.0.0.5:8443" }),
+      ),
+    );
+  });
+
+  it.each([
+    ["address_invalid", "That address isn't valid"],
+    ["address_https_only", "The address must start with https://"],
+    [
+      "address_plaintext_loopback_only",
+      "Use https:// — http:// only works on this machine",
+    ],
+    ["address_has_credentials", "The address can't contain a login"],
+    [
+      "fingerprint_invalid",
+      "The certificate fingerprint must be 64 hex characters",
+    ],
+    [
+      "source_unreachable",
+      "Cannot connect — check the address, that the service is running, and the firewall",
+    ],
+    [
+      "fingerprint_mismatch",
+      "The certificate fingerprint does not match — connection refused",
+    ],
+    ["credentials_invalid", "Wrong account or password"],
+  ])("core 答 %s：按码显示文案", async (code, text) => {
+    const { RuntimeRequestError } = await import("../../../api/request");
+    api.addPersonalRelay.mockRejectedValue(
+      new RuntimeRequestError(400, "中文原话", code),
+    );
+    await openPersonal("https://relay.example.com");
+    expect(await screen.findByText(text)).toBeTruthy();
+  });
+});
+
 describe("通过链接加入（A4-3p）", () => {
   const SHARE = `${ISSUER}/j/0123456789abcdef#${"S".repeat(43)}.${"c".repeat(32)}.${"D".repeat(43)}`;
   const joined = { ...local, sourceId: "s".repeat(32), kind: "relayed" };
