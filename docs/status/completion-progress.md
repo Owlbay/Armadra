@@ -2892,6 +2892,67 @@ V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
 - core：`commentOperations(options)`、`installCommentRoutes(server, options)`、`handoffOperations(collab)`。
 - 页面：`handoffApiFor(rpc)`；`commentsApi` 与 `acpApi.exportText` / `drive` 签名不变。
 
+## R2 ACP 回合对账（契约 §39.9，协议 minor 19）
+
+经中继发 ACP 提示时，POST 偶发在页面侧失败（连接被复用后关闭），而 core 其实已经收下、回合照常跑完；会话视图却当场判「这一轮没有完成」，重试还可能重复投递。会话视图也只在挂载时读一次日志，控制面重连后漏掉的 `acp.turn` 补不回来。
+
+做了什么：
+
+- **core 去重**（`core/acp/routes.ts`）：`acp.prompt` 收可选的 `clientTurnId`（1–128 字符）；同一会话行同一 id 只投递一次，同时到的与之后再到的答同一个 `{ turnId }`，投递失败的不记。同一会话行的提示经一把锁串行（记 id → `writeSubmit` → 读回合 id），顺带消掉了 `lastTurn` 在并发提示下的竞态。只记最近 512 个 id，core 重启从空开始。
+- **回合记录**（`core/acp/session.ts`、`bridge.ts`）：会话记最近 32 个回合 `{ turnId, clientTurnId?, state: queued | running | ended, stopReason?, error? }`，`acp.log` 出参多 `turns`（只在有活进程时）；`acp.turn` 带回 `clientTurnId`。页面回合 id 经桥的 `expectClientTurn` 交给下一条 prompt，不改终端管理器。
+- **页面对账**（`apps/web/src/acp/`）：每轮生成 `clientTurnId`（非安全上下文退回 `getRandomValues`）。请求 4xx 带 `code` 照旧当场失败；其余（网络错误、无响应、5xx、答复解析失败）进「确认中」，立刻、1 秒、3 秒各重读一次镜像，按 `turns` 认自己的那一轮：已结束画真实结局，排队 / 在跑继续流式，活会话的 `turns` 里没有才显示「这一轮没有送达」，重试沿用同一 id（提问不重复画）；几次都读不到也判没送达。对账期间别的回合的 `acp.turn` 不覆盖它。控制面断开再连上后会话视图重读一次镜像（同一套先缓存、读回后丢分块的次序），并按 `turns` 收掉断线期间漏掉的回合结束。
+- 文案：`acp.turn.confirming`「正在确认这一轮」、`acp.error.undelivered`「这一轮没有送达」，中英同步；只用现有的 `Alert`、`Spinner`、`Button`。
+- 协议 minor 18 → 19。
+
+实测（macOS arm64，基于 main 9f33e3df）：
+
+- core：`acp/routes.test.ts` 新增一例（真管理器 + 假 ACP Agent 子进程）：同一 id 并发两次加之后再一次只投递一轮、同一 `turnId`，`acp.turn` 与 `log.turns` 带 `clientTurnId`，换 id 是新一轮，超长 id 答 400。
+- 页面：`store.test.ts` 加 5 例（已结束 / 拒答 / 排队 / 在跑 / 没收到 / `turns` 缺席 / 重试不重画 / 别的回合结束帧不覆盖）；`SessionView.test.tsx` 加 7 例（网络失败 → 对账成功、仍在跑、确认没收到 → 同 id 重试、日志一直读不到 → 判没送达且重试同 id、4xx 当场失败、重连后重读并收掉漏掉的回合、首次「已连上」不重读）。两条旧断言因 `prompt` 多了第三个参数改为 `expect.any(String)`，拒答后的重试断言换了新 id（沿用旧 id 会被 core 当成同一轮）。
+- 探针 `personal-roundtrip`（真个人中转 + 真 core + 无头 Chrome）第 3 步加一段：中继托管的页面里给假 ACP Agent 发一轮，回复流回，core 侧 `log` 里这句只有一条、`turns` 一项带页面的 `clientTurnId`、`end_turn`，会话视图没有误报。本机全程通过。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 5240 过 / 74 跳，web 3876 过，shared 372 过，server 98 过 / 4 跳，mobile 10、push-relay 9 过。`pnpm --filter @armadra/web typecheck`、`pnpm check` 通过。
+
+没做 / 偏离：
+
+- 没有在探针里制造真实的「POST 半路断开」：中继的连接复用问题由 R1 处理，这里只验证经中继的一轮带 id、不重复；断开后的对账由页面单测覆盖。
+- 会话不在跑（适配器已退、`turns` 缺席）或旧 core（没有 `turns`、不去重）时无从确认，显示「没有送达」；旧 core 上重试仍可能重复，与之前一样。
+- 去重表在内存里，core 重启后同一 id 会再投一次（重启本身已结束了旧回合）。
+- 重读镜像与活事件之间的分块次序沿用挂载时的做法（读回之前到的分块按「已在镜像里」丢掉）。
+
+接口：
+
+- 契约 §39.9（新增）；§14.2 提示行的请求、§14.3 `acp.turn` 指向它。
+- `@armadra/shared`：`acpPromptRequestSchema` 多 `clientTurnId?`，`acpTurnRecordSchema` / `AcpTurnRecord`、`AcpPromptRequest`，`acpLogResponseSchema.turns?`，`acpTurnEventSchema.clientTurnId?`；契约 `acp.prompt` 入参与 `acp.log` 出参同步。
+- core：`AcpSession.prompt(text, clientTurnId?)`、`recentTurns()`；`AcpBackend.expectClientTurn(key, id)`；`bus` 的 `acp.turn.clientTurnId?`。
+- 页面：`acpApi.prompt(sessionId, text, clientTurnId?)`；store 的 `begin(sessionId, text, clientTurnId?)`、`confirm`、`reconcile`，纯函数 `reconcileTurn`；视图字段 `clientTurnId`、`confirming`、`undelivered`。
+
+## R1 中继与 core 的 HTTP 层：keep-alive 与边缘额度
+
+iPad（WebKit）经个人中转给 ACP Agent 发 prompt 偶发「这一轮没有完成」：服务端监听没设 `keepAliveTimeout`，Node 缺省 5 秒就关空闲连接；WebKit 复用一条刚被关掉的连接发 POST 时不重试，直接加载失败（Chromium 会重试，所以桌面与浏览器探针看不出来）。
+
+做了什么：
+
+- **core**：`core/http/timeouts.ts` 的 `HTTP_TIMEOUTS`（空闲 keep-alive 75 秒、请求头 76 秒、整条请求 300 秒）与 `applyHttpTimeouts(server)`；`CoreServer.createListener` 建的每台监听（回环、服务器壳、Gateway 交接点、中继隧道交接点）和 Gateway 的 HTTPS 监听都套上。服务器壳没有自己的监听，走同一个 `createListener`。隧道流是 `TunnelDuplex`，`setTimeout` 不落到 TCP，空闲上限实际由中继那一侧决定。
+- **armadra-cloud**（Owlbay/armadra-cloud，分支 `fix/relay-keepalive-limits`）：`cloud-shared` 的 `listen()` 同样套 75 / 76 / 300 秒（中继与 cloud 共用，HTTP 与 HTTPS）；边缘缺省额度放宽——预检每 IP 1200/分（原 300）、有效令牌 1200/分（原 600）、账号 3600/分（原 1800）、账号并发 WebSocket 256（原 64，与隧道单源流数上限对齐）；中继预检与控制面的 `Access-Control-Max-Age` 600 → 7200（WebKit 自己封顶 600，Chromium 2 小时）。cloud 契约 §7、部署说明、CLI 帮助、CHANGELOG Unreleased 同步。
+- **探针**：`personal-roundtrip` 第 2 步加一项——照 iOS App 的路子（`Origin: capacitor://localhost`）在同一条 keep-alive 连接上经中继 `POST /api/identity/cloud/login` 换会话，空闲 6.5 秒后再 `POST system.hello`；连接不许被服务端先关、不许换连接、两次都 200。共用件 `platform-lib.mjs` 的 `idleKeepAlivePost`。
+
+实测（macOS arm64，基于 main 9f33e3df；中继用 cloud 分支 `fix/relay-keepalive-limits`）：
+
+- 新增 `core/http/timeouts.test.ts`（2）：监听取值；同一条连接空闲 6 秒后 POST 仍 200、没换连接。把 `applyHttpTimeouts` 注掉两条都红。
+- cloud：`cloud-shared/src/http/index.test.ts` 加取值与空闲 6 秒后 POST 两条（注掉修复两条都红），`tls.test.ts` 断言 HTTPS 监听取值，`serve.test.ts` 断言新缺省额度，`cors.test.ts` 断言 `max-age` 7200；`pnpm check`、`pnpm test` 全过。
+- `personal-roundtrip` 全程通过（keep-alive 一项 `statuses [200,200]`、`reused true`、`closedByServer false`，日志秘密扫描 0 泄漏）；同一探针对注掉修复的中继跑，这一项红（`closedByServer true`、`reused false`）。
+
+没做 / 偏离：
+
+- 没在真 iPad 上复现与回归；WebKit 的不重试行为由探针以「服务端没先关连接」间接验证。CI 没有 armadra-cloud 检出，这条探针在 CI 上照旧 skipped。
+- core 回环 CORS 没有 `Max-Age`（Gateway 与中继隧道准入仍为 600，已等于 WebKit 上限），没改。
+- 并发 WebSocket 上限仍不可配（只有四种速率额度可配）；ACME `http-01` 挑战监听只做跳转，没套超时。
+
+接口：
+
+- core：`HTTP_TIMEOUTS`、`applyHttpTimeouts(server)`（`core/http/timeouts.ts`）。契约形状不变。
+- cloud：`@armadra/cloud-shared/http` 导出 `HTTP_TIMEOUTS`、`applyHttpTimeouts`；`DEFAULT_LIMIT_RULES` 新缺省；`PREFLIGHT_MAX_AGE_S = "7200"`。
+- 合并顺序：先合 armadra-cloud 的 PR，再合本 PR（探针的 keep-alive 一项对旧中继会红）。
+
 ## R5 经中继的数据流与覆盖：媒体票、语言会话恢复、两台经中继的源、WebKit（协议 minor 21）
 
 做了什么：

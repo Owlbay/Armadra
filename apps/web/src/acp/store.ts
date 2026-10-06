@@ -35,6 +35,7 @@ import {
   type AcpToolKind,
   type AcpTranscriptEntry,
   type AcpTurnEvent,
+  type AcpTurnRecord,
 } from "@armadra/shared";
 import { z } from "zod";
 
@@ -82,6 +83,12 @@ export interface AcpSessionView {
   readonly failed: boolean;
   readonly lastPrompt: string | null;
   readonly endOffset: number;
+  /** 本页最近发出的那一轮的 `clientTurnId`（契约 §39.9）。 */
+  readonly clientTurnId: string | null;
+  /** 发 prompt 的那次请求断在路上：core 收没收到还不知道，正在对账。 */
+  readonly confirming: boolean;
+  /** 对账确认 core 没收到（或无从确认）：重试沿用同一个 `clientTurnId`。 */
+  readonly undelivered: boolean;
 }
 
 export interface AcpPermissionView {
@@ -107,6 +114,9 @@ export const EMPTY_SESSION: AcpSessionView = {
   failed: false,
   lastPrompt: null,
   endOffset: 0,
+  clientTurnId: null,
+  confirming: false,
+  undelivered: false,
 };
 
 /* --------------------------------- 归约 ---------------------------------- */
@@ -312,7 +322,19 @@ export function modelStateOf(configOptions: unknown): AcpModelState | null {
 }
 
 /** 页面发出一条 prompt：先画上，回合开始。 */
-export function beginTurn(view: AcpSessionView, text: string): AcpSessionView {
+export function beginTurn(
+  view: AcpSessionView,
+  text: string,
+  clientTurnId: string | null = null,
+): AcpSessionView {
+  if (
+    view.undelivered &&
+    clientTurnId !== null &&
+    clientTurnId === view.clientTurnId
+  ) {
+    // 重试没送达的那一轮：提问已经画着，不再画第二遍。
+    return { ...view, streaming: true, failed: false, undelivered: false };
+  }
   const turn = view.turn + 1;
   return {
     ...view,
@@ -320,6 +342,9 @@ export function beginTurn(view: AcpSessionView, text: string): AcpSessionView {
     streaming: true,
     failed: false,
     lastPrompt: text,
+    clientTurnId,
+    confirming: false,
+    undelivered: false,
     items: [
       ...view.items,
       {
@@ -334,18 +359,100 @@ export function beginTurn(view: AcpSessionView, text: string): AcpSessionView {
   };
 }
 
-/** `acp.turn`：回合结束。拒答与协议错误算失败，取消不算。 */
+/**
+ * `acp.turn`：回合结束。拒答与协议错误算失败，取消不算。本页那一轮还在对账
+ * （或已判没送达）时，带着别的 `clientTurnId` 的结束帧不是它的结局，不动。
+ */
 export function endTurn(
   view: AcpSessionView,
-  event: Pick<AcpTurnEvent, "stopReason" | "error">,
+  event: Pick<AcpTurnEvent, "stopReason" | "error" | "clientTurnId">,
 ): AcpSessionView {
+  if (
+    (view.confirming || view.undelivered) &&
+    event.clientTurnId !== undefined &&
+    event.clientTurnId !== view.clientTurnId
+  ) {
+    return view;
+  }
   const failed = Boolean(event.error) || event.stopReason === "refusal";
   return {
     ...view,
     streaming: false,
     failed,
+    confirming: false,
+    undelivered: false,
     // 回合边界之后的第一段输出必须是新的一条，哪怕上一条也是助手说的。
     turn: view.turn + 1,
+  };
+}
+
+/** 本页那一轮的提问不在时间线上（镜像里还没有）时补画上。 */
+function withLocalPrompt(view: AcpSessionView): AcpSessionView {
+  const text = view.lastPrompt;
+  if (!text) return view;
+  const last = [...view.items]
+    .reverse()
+    .find((item) => item.kind === "message" && item.role === "user");
+  if (last?.kind === "message" && last.text === text) return view;
+  const turn = view.turn + 1;
+  return {
+    ...view,
+    turn,
+    items: [
+      ...view.items,
+      {
+        kind: "message",
+        id: `m${view.items.length}`,
+        role: "user",
+        text,
+        turn,
+        local: true,
+      },
+    ],
+  };
+}
+
+/**
+ * 对账（契约 §39.9）：拿镜像读回来的 `turns` 认本页那一轮。core 有这一轮就照
+ * 它的真实状态画（排队、在跑、已结束）；正在确认而 core 没有，判没送达，重试
+ * 沿用同一个 id。`turns` 缺席（旧 core、会话不在跑）同样无从确认。
+ */
+export function reconcileTurn(
+  view: AcpSessionView,
+  turns: readonly AcpTurnRecord[] | undefined,
+): AcpSessionView {
+  const id = view.clientTurnId;
+  if (!id || !(view.confirming || view.undelivered || view.streaming)) {
+    return view;
+  }
+  const record = turns?.find((turn) => turn.clientTurnId === id);
+  if (record?.state === "ended") {
+    return endTurn(
+      { ...view, confirming: false, undelivered: false },
+      {
+        ...(record.stopReason === undefined
+          ? {}
+          : { stopReason: record.stopReason as AcpTurnEvent["stopReason"] }),
+        ...(record.error === undefined ? {} : { error: record.error }),
+      },
+    );
+  }
+  if (record) {
+    return {
+      ...withLocalPrompt(view),
+      streaming: true,
+      failed: false,
+      confirming: false,
+      undelivered: false,
+    };
+  }
+  if (!view.confirming) return view;
+  return {
+    ...withLocalPrompt(view),
+    streaming: false,
+    failed: true,
+    confirming: false,
+    undelivered: true,
   };
 }
 
@@ -435,11 +542,18 @@ interface AcpStoreState {
   >;
   hydrate: (sessionId: string, nodeId: string, log: AcpLogResponse) => void;
   update: (sessionId: string, update: AcpSessionUpdate) => void;
-  begin: (sessionId: string, text: string) => void;
+  begin: (sessionId: string, text: string, clientTurnId?: string) => void;
   end: (
     sessionId: string,
     nodeId: string,
-    event: Pick<AcpTurnEvent, "stopReason" | "error">,
+    event: Pick<AcpTurnEvent, "stopReason" | "error" | "clientTurnId">,
+  ) => void;
+  /** 发 prompt 的请求断在路上：进入「确认中」。 */
+  confirm: (sessionId: string) => void;
+  /** 拿镜像读回来的 `turns` 对账（`reconcileTurn`）。 */
+  reconcile: (
+    sessionId: string,
+    turns: readonly AcpTurnRecord[] | undefined,
   ) => void;
   setMode: (sessionId: string, modeId: string) => void;
   setModel: (sessionId: string, modelId: string) => void;
@@ -519,19 +633,32 @@ export const useAcpStore = create<AcpStoreState>((set) => ({
     set((state) =>
       patchSession(state, sessionId, (view) => applyUpdate(view, update)),
     ),
-  begin: (sessionId, text) =>
+  begin: (sessionId, text, clientTurnId) =>
     set((state) =>
-      patchSession(state, sessionId, (view) => beginTurn(view, text)),
+      patchSession(state, sessionId, (view) =>
+        beginTurn(view, text, clientTurnId ?? null),
+      ),
+    ),
+  confirm: (sessionId) =>
+    set((state) =>
+      patchSession(state, sessionId, (view) => ({ ...view, confirming: true })),
+    ),
+  reconcile: (sessionId, turns) =>
+    set((state) =>
+      patchSession(state, sessionId, (view) => reconcileTurn(view, turns)),
     ),
   end: (sessionId, nodeId, event) =>
     set((state) => {
+      const current = state.sessions[scoped(sessionId)] ?? EMPTY_SESSION;
+      const next = endTurn(current, event);
+      if (next === current) return {};
       // 回合结束时挂起的审批都已由 core 回了 `cancelled`（ACP 设计 §5.5）。
       const permissions = { ...state.permissions };
       delete permissions[scoped(nodeId)];
       const elicitations = { ...state.elicitations };
       delete elicitations[scoped(nodeId)];
       return {
-        ...patchSession(state, sessionId, (view) => endTurn(view, event)),
+        ...patchSession(state, sessionId, () => next),
         permissions,
         elicitations,
       };

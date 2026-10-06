@@ -61,6 +61,8 @@ interface Entry {
   readonly agentNames: readonly string[];
   readonly generation: number;
   lastTurn?: string;
+  /** 下一条经输入路径发出的 prompt 带的页面回合 id（§39.9），用一次就清。 */
+  clientTurnId?: string;
 }
 
 /** 括号粘贴加回车 → 正文；不是这个形状答 `undefined`。 */
@@ -119,6 +121,17 @@ export class AcpBackend implements TerminalBackend {
   /** 最近一次经输入路径发出的 prompt 的回合 id。 */
   lastTurn(key: string): string | undefined {
     return this.entries.get(key as SessionKey)?.lastTurn;
+  }
+
+  /**
+   * 契约 §39.9：给这个 key 上**下一条** prompt 记一个页面的回合 id。路由在同一
+   * 会话的提示锁里先记、再经 `writeSubmit` 投递，投递完了不管用没用上都清掉。
+   */
+  expectClientTurn(key: string, clientTurnId: string | undefined): void {
+    const entry = this.entries.get(key as SessionKey);
+    if (entry === undefined) return;
+    if (clientTurnId === undefined) delete entry.clientTurnId;
+    else entry.clientTurnId = clientTurnId;
   }
 
   async create(spec: TerminalSpec): Promise<TerminalHandle> {
@@ -283,8 +296,10 @@ export class AcpBackend implements TerminalBackend {
   }
 
   private promptOn(entry: Entry, text: string): string {
+    const clientTurnId = entry.clientTurnId;
+    delete entry.clientTurnId;
     try {
-      return entry.session.prompt(text);
+      return entry.session.prompt(text, clientTurnId);
     } catch (error) {
       if (error instanceof AcpError) {
         throw new TerminalError(409, error.code, error.message);

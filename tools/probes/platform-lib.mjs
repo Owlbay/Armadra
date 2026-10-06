@@ -20,7 +20,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { request as httpsRequest } from "node:https";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 
@@ -86,6 +86,88 @@ export function relayRaw(
     request.on("error", fail);
     request.end(payload);
   });
+}
+
+/**
+ * 在同一条 keep-alive 连接上：POST `first` → 空闲 `idleMs` → POST `then(第一次的答复)`。
+ *
+ * iOS 的 WebKit 复用一条刚被服务端空闲关掉的连接发 POST 时不重试，直接报加载失败
+ * （Chromium 会重试，所以浏览器探针看不出来）。这里不重试：服务端在空闲期间关了连接
+ * 就记 `closedByServer`，第二次 POST 换了连接就记 `reused: false`。
+ * 每一步是 `{ path, body, headers }`；答 `{ answers: [{status, body}…], reused,
+ * closedByServer, idleMs }`。
+ */
+export async function idleKeepAlivePost(
+  issuer,
+  ca,
+  first,
+  then,
+  idleMs = 6_500,
+) {
+  const agent = new HttpsAgent({ keepAlive: true, maxSockets: 1, ca });
+  const sockets = new Set();
+  let closedByServer = false;
+  const post = ({ path, body = {}, headers = {} }) =>
+    new Promise((done, fail) => {
+      const url = new URL(path, issuer);
+      const payload = JSON.stringify(body);
+      const request = httpsRequest(
+        {
+          host: url.hostname,
+          port: url.port,
+          path: `${url.pathname}${url.search}`,
+          method: "POST",
+          agent,
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(payload),
+            ...headers,
+          },
+          timeout: 15_000,
+        },
+        (response) => {
+          const chunks = [];
+          response.on("data", (chunk) => chunks.push(chunk));
+          response.on("end", () => {
+            const text = Buffer.concat(chunks).toString("utf8");
+            let parsed = text;
+            try {
+              parsed = text ? JSON.parse(text) : null;
+            } catch {
+              /* 不是 JSON：原文。 */
+            }
+            done({ status: response.statusCode ?? 0, body: parsed });
+          });
+          response.on("error", fail);
+        },
+      );
+      request.on("socket", (socket) => {
+        if (sockets.has(socket)) return;
+        sockets.add(socket);
+        socket.once("close", () => (closedByServer = true));
+      });
+      request.on("timeout", () => request.destroy(new Error("中继调用超时")));
+      request.on("error", fail);
+      request.end(payload);
+    });
+  try {
+    const one = await post(first);
+    await sleep(idleMs);
+    const closedDuringIdle = closedByServer;
+    const two = await post(then(one)).catch((error) => ({
+      status: 0,
+      body: `error: ${error.message}`,
+    }));
+    return {
+      answers: [one, two],
+      reused: sockets.size === 1,
+      closedByServer: closedDuringIdle,
+      idleMs,
+    };
+  } finally {
+    agent.destroy();
+  }
 }
 
 /** PEM 证书的 SHA-256 指纹（64 位小写十六进制）。 */

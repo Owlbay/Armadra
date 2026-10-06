@@ -69,6 +69,31 @@ function exclusive<T>(nodeId: string, job: () => Promise<T>): Promise<T> {
   return next;
 }
 
+/**
+ * 契约 §39.9：页面给一轮起的 `clientTurnId` → 那一次投递。同一会话同一 id 答同一
+ * 个结果、只投递一次；投递失败（拒绝、会话没了）的删掉，好让重发真的再投。只记
+ * 最近 {@link PROMPT_IDS} 个，core 重启后从空开始。
+ */
+const promptsById = new Map<string, Promise<{ turnId: string }>>();
+const PROMPT_IDS = 512;
+
+/** 同一会话行上的提示一次一个：记页面回合 id、投递、读回合 id 之间不插队。 */
+const promptLocks = new Map<string, Promise<unknown>>();
+
+function promptLocked<T>(rowId: string, job: () => Promise<T>): Promise<T> {
+  const previous = promptLocks.get(rowId) ?? Promise.resolve();
+  const next = previous.then(job, job);
+  const settled = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  promptLocks.set(rowId, settled);
+  void settled.then(() => {
+    if (promptLocks.get(rowId) === settled) promptLocks.delete(rowId);
+  });
+  return next;
+}
+
 function failure(error: unknown): HandlerResult {
   // `DomainError` 与 `TerminalError` 都是 `CoreFailure`。
   if (error instanceof CoreFailure) {
@@ -331,22 +356,64 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
 
   /* --------------------------------- 回合 --------------------------------- */
 
-  const sendPrompt = guarded(async (sessionId: string, text: unknown) => {
-    const wiring = await need();
-    const prompt = optionalString({ text }, "text");
-    if (prompt === undefined || prompt.trim() === "") {
-      throw badRequest("text is required");
-    }
-    const row = await live(wiring, sessionId);
-    await wiring.manager.writeSubmit(
-      row.id,
-      row.generation,
-      prompt,
-      humanOf(wiring, row.id),
-    );
-    const turnId = wiring.backend.lastTurn(row.sessionKey) ?? "";
-    return { turnId };
-  });
+  const deliverPrompt = (
+    sessionId: string,
+    prompt: string,
+    clientTurnId: string | undefined,
+  ) =>
+    promptLocked(sessionId, async () => {
+      const wiring = await need();
+      const row = await live(wiring, sessionId);
+      wiring.backend.expectClientTurn(row.sessionKey, clientTurnId);
+      try {
+        await wiring.manager.writeSubmit(
+          row.id,
+          row.generation,
+          prompt,
+          humanOf(wiring, row.id),
+        );
+      } finally {
+        wiring.backend.expectClientTurn(row.sessionKey, undefined);
+      }
+      const turnId = wiring.backend.lastTurn(row.sessionKey) ?? "";
+      return { turnId };
+    });
+
+  const sendPrompt = guarded(
+    async (sessionId: string, text: unknown, clientTurn?: unknown) => {
+      const prompt = optionalString({ text }, "text");
+      if (prompt === undefined || prompt.trim() === "") {
+        throw badRequest("text is required");
+      }
+      if (
+        clientTurn !== undefined &&
+        clientTurn !== null &&
+        (typeof clientTurn !== "string" ||
+          clientTurn === "" ||
+          clientTurn.length > 128)
+      ) {
+        throw badRequest("clientTurnId must be a string of 1 to 128 chars");
+      }
+      const clientTurnId =
+        typeof clientTurn === "string" ? clientTurn : undefined;
+      if (clientTurnId === undefined) {
+        return deliverPrompt(sessionId, prompt, undefined);
+      }
+      const key = `${sessionId}\n${clientTurnId}`;
+      const seen = promptsById.get(key);
+      if (seen !== undefined) return seen;
+      const delivery = deliverPrompt(sessionId, prompt, clientTurnId);
+      promptsById.set(key, delivery);
+      if (promptsById.size > PROMPT_IDS) {
+        const oldest = promptsById.keys().next().value;
+        if (oldest !== undefined) promptsById.delete(oldest);
+      }
+      delivery.catch(() => {
+        if (promptsById.get(key) === delivery) promptsById.delete(key);
+      });
+      return delivery;
+    },
+  );
 
   const cancel = guarded(async (rowId: string) => {
     const wiring = await need();
@@ -420,6 +487,7 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
         : {
             pending: session.pending(),
             elicitations: session.pendingElicitations(),
+            turns: session.recentTurns(),
           }),
     };
   });
@@ -450,8 +518,15 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
 
   const procedures = {
     createSession: (input: Record<string, unknown>) => createSession(input),
-    prompt: ({ sessionId, text }: { sessionId: string; text?: unknown }) =>
-      sendPrompt(sessionId, text),
+    prompt: ({
+      sessionId,
+      text,
+      clientTurnId,
+    }: {
+      sessionId: string;
+      text?: unknown;
+      clientTurnId?: unknown;
+    }) => sendPrompt(sessionId, text, clientTurnId),
     cancel: ({ sessionId }: { sessionId: string }) => cancel(sessionId),
     setMode: ({ sessionId, modeId }: { sessionId: string; modeId?: unknown }) =>
       setMode(sessionId, modeId),
@@ -485,6 +560,7 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
       body: await sendPrompt(
         param(match, "sessionId"),
         jsonObject(request.body).text,
+        jsonObject(request.body).clientTurnId,
       ),
     }),
   );
