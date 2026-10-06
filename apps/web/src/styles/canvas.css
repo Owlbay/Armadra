@@ -148,8 +148,10 @@
   /*
    * 四个角的浮层离边都是 14px：右上工具簇（上、右）、右下缩略图（右、下）、
    * 底部 Dock（下）。缩略图始终在右下角；画布不够宽时是 Dock 向左让。
+   * 顶、左、右三边的安全区由 App 根容器整体让开，底边在这里加：iPad 横屏的
+   * 主页横条与窗口缩放手柄（`--safe-bottom`，桌面与浏览器里是 0）。
    */
-  --navigation-bottom: 14px;
+  --navigation-bottom: calc(14px + var(--safe-bottom));
 }
 
 /*
@@ -159,7 +161,7 @@
  */
 .canvas-dock-row {
   position: absolute;
-  bottom: var(--dock-bottom, 14px);
+  bottom: var(--dock-bottom, calc(14px + var(--safe-bottom)));
   left: 14px;
   right: 14px;
   z-index: var(--z-dock);
@@ -227,16 +229,13 @@
  */
 @media (max-width: 767px) {
   .canvas-dock-row {
-    --dock-bottom: calc(
-      var(--mobile-nav-h) + env(safe-area-inset-bottom) + 10px
-    );
+    --dock-bottom: calc(var(--mobile-nav-h) + var(--safe-bottom) + 10px);
     /* 手机上 Dock 要用整个宽度，缩略图改到它上方（下面那条规则）。 */
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   }
   .canvas-stage .react-flow__minimap {
     --navigation-bottom: calc(
-      var(--mobile-nav-h) + env(safe-area-inset-bottom) + 10px + var(--dock-h) +
-        12px
+      var(--mobile-nav-h) + var(--safe-bottom) + 10px + var(--dock-h) + 12px
     );
   }
 }

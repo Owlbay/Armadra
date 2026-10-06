@@ -61,6 +61,7 @@ Armadra 使用同一套 React 页面。桌面端通过 Electron 壳提供本机�
 | 系统浏览器   | `openExternal`：`UIApplication.open`，只开 https 与回环 http                                                                                                                                                                                | `ACTION_VIEW`，同样只开 https 与回环 http                                                                                                                                |
 | 深链         | `armadra://pair?…`、`armadra://join?…` 与 `armadra://oauth?…` → 写进页面 `#link=` 并重载（配对：连接页预填，人点「连接」才配；分享链接：连接页收到就直接挂载；OAuth：入口收尾）；`armadra://w/<工作空间>/n/<节点>` → `#push=`，进节点焦点页 | 同左；冷启动带来的深链等页面加载完再交                                                                                                                                   |
 
+- 安全区与窗口控件：页面 `viewport-fit=cover` 铺满，贴边元素按 `--safe-*` 让开（设计系统 §5.13）；iPadOS 窗口化时 `ArmadraBridgeViewController` 把左上窗口控件的范围（`ArmadraNativeKit/WindowControls`）写成 `--window-controls-left/top`，布局变化与每次页面加载后都重写；状态栏文字颜色由页面经 `SystemBars` 按主题设定（`apps/web/src/mobile/status-bar.ts`）。
 - 商店版走发布方的推送中继：构建时设 `ARMADRA_MOBILE_RELAY_URL`（写进 `capacitor.config.ts` 的 `plugins.ArmadraNative.relayUrl`），App 先向中继 `/v1/register` 换中继令牌，再以 `transport: "relay"` 登记；不设时以 `direct` 登记，适合自己构建、自己持有 APNs / FCM 密钥的部署。
 - 推送令牌换了（R-54）：页面对开过推送的设备在启动时与收到 `pushTokenRotated` 时向插件要一份新登记、`PUT /api/push/devices`，成功后清标记（`apps/web/src/mobile/push-rotation.ts`）。
 - 图片（R-55）：`<img>` 带不了 Bearer。页面里指向 Gateway 的图片地址经 `useAssetUrl`（`apps/web/src/api/assets.ts`）用带 Bearer 的 `fetch` 换成 `blob:`，白板图片与 Markdown 预览都走它；浏览器与桌面里原样用地址。

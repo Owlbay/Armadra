@@ -92,7 +92,7 @@ export function SettingsDialog() {
     >
       <ResponsiveDialogContent
         showCloseButton={false}
-        className="z-[var(--z-dialog)] h-[680px] max-h-[calc(100dvh-48px)] w-[920px] max-w-[calc(100vw-48px)] gap-0 overflow-hidden rounded-[14px] p-0 sm:max-w-[calc(100vw-48px)]"
+        className="z-[var(--z-dialog)] h-[680px] max-h-[calc(100dvh-48px-var(--safe-top)-var(--safe-bottom))] w-[920px] max-w-[calc(100vw-48px-var(--safe-left)-var(--safe-right))] gap-0 overflow-hidden rounded-[14px] p-0 sm:max-w-[calc(100vw-48px-var(--safe-left)-var(--safe-right))]"
       >
         <ResponsiveDialogTitle className="sr-only">
           {t("settings.title")}

@@ -14,6 +14,7 @@ import {
   RENDER_BUDGET_RANGE,
   setRenderBudget as applyRenderBudget,
 } from "../terminal/render-budget";
+import { syncNativeStatusBar } from "../mobile/status-bar";
 import { activeSourceId, scoped } from "../sources/scope";
 import {
   COLLAPSED_WORKSPACES_KEY,
@@ -626,6 +627,7 @@ export function syncDocumentPreferences(): () => void {
     const root = document.documentElement;
     root.dataset.theme = resolved;
     root.style.colorScheme = resolved;
+    syncNativeStatusBar(resolved);
     root.lang = state.locale;
     applyRenderBudget(state.renderBudget);
   };

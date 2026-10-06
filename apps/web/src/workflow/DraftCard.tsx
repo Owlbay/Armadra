@@ -47,7 +47,7 @@ export function DraftLayer() {
   return (
     <div
       data-slot="workflow-drafts"
-      className="pointer-events-none fixed top-14 left-1/2 z-[var(--z-banners)] flex w-[min(360px,calc(100vw-24px))] -translate-x-1/2 flex-col gap-2"
+      className="pointer-events-none fixed top-[calc(3.5rem+var(--safe-top))] left-1/2 z-[var(--z-banners)] flex w-[min(360px,calc(100vw-24px))] -translate-x-1/2 flex-col gap-2"
     >
       {pending.slice(0, 3).map((row) => (
         <DraftCard key={row.id} row={row} />

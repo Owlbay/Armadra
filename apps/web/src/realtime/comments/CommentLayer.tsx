@@ -420,7 +420,9 @@ function Comments({
       >
         <SheetContent
           side="right"
-          className="w-[360px] gap-0 sm:max-w-[360px]"
+          // 内容让开状态栏与右侧安全区；生成组件的关闭钮按内边距盒绝对定位、不吃
+          // padding，单独跟着挪。
+          className="w-[360px] gap-0 pt-[var(--safe-top)] pr-[var(--safe-right)] pb-[var(--safe-bottom)] sm:max-w-[360px] [&>[data-slot=sheet-close]]:top-[calc(0.75rem+var(--safe-top))] [&>[data-slot=sheet-close]]:right-[calc(0.75rem+var(--safe-right))]"
           onOpenAutoFocus={(event) => event.preventDefault()}
           onInteractOutside={(event) => event.preventDefault()}
         >

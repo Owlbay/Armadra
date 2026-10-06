@@ -99,8 +99,8 @@ export function MobileBottomNav() {
       className={cn(
         "fixed inset-x-0 bottom-0 z-[var(--z-cluster)] flex items-stretch",
         "border-t border-border bg-[var(--panel)]/95 backdrop-blur-[12px]",
-        // 手机的主页横条压在底部，内容再往上抬一层。
-        "pb-[env(safe-area-inset-bottom)]",
+        // 手机的主页横条压在底部，内容再往上抬一层；横屏时左右让开刘海。
+        "pr-[var(--safe-right)] pb-[var(--safe-bottom)] pl-[var(--safe-left)]",
       )}
     >
       {DESTINATIONS.map((destination) => {
