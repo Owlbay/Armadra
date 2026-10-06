@@ -75,6 +75,7 @@ describe("契约树", () => {
       "agents",
       "forge",
       "github",
+      "gitRepository",
     ]);
   });
 

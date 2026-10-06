@@ -12,6 +12,7 @@ import { files } from "./files.js";
 import { forge } from "./forge.js";
 import { git } from "./git.js";
 import { github } from "./github.js";
+import { gitRepository } from "./git-repository.js";
 import type { ProcedureMeta } from "./meta.js";
 import { settings } from "./settings.js";
 import { sources } from "./sources.js";
@@ -39,6 +40,7 @@ export const contract = {
   agents,
   forge,
   github,
+  gitRepository,
 };
 
 export type Contract = typeof contract;

@@ -36,7 +36,8 @@ import { type JsonValue, canonicalJson } from "./message";
  * 上由契约的入参校验先答 `bad_request`（带 `details.issues`），路由表原 handler 答
  * 它自己的那句话。这一类只比码与状态，在最后一节单独写出来。
  *
- * 仓库级的读与操作（`gitRepository.*`）是 E3-5 的第二部分，不在这里。
+ * 仓库级的读与操作（`gitRepository.*`，§40.2）是 E3-5 的第二部分，对偶测试在
+ * `parity-git-repository.test.ts`。
  */
 
 let core: Fixture;
@@ -719,7 +720,7 @@ describe("git 域：契约与路由表", () => {
     }
   });
 
-  it("切分边界：路由表里其余的 Git 路径都是仓库级（gitRepository，第二部分）", () => {
+  it("切分边界：路由表里其余的 Git 路径都是仓库级，恰好是 gitRepository（§40.2）那 23 条", () => {
     const migrated = new Set(
       entries.map(
         (entry) => `${entry.meta.legacy!.method} ${entry.meta.legacy!.path}`,
@@ -731,12 +732,18 @@ describe("git 域：契约与路由表", () => {
           .map((method) => `${method} ${route.path}`)
           .filter((key) => !migrated.has(key)),
     );
-    expect(rest.length).toBeGreaterThan(0);
     for (const key of rest) {
       expect(key, key).toMatch(
         /\/git\/(repository\/|repositories$|log$|refs$|identity$)/,
       );
     }
+    const repository = contractEntries()
+      .filter((entry) => entry.path[0] === "gitRepository")
+      .map(
+        (entry) => `${entry.meta.legacy!.method} ${entry.meta.legacy!.path}`,
+      );
+    expect(repository).toHaveLength(23);
+    expect([...rest].sort()).toEqual([...repository].sort());
     expect(migrated.size + rest.length).toBe(
       ROUTES.filter((route) => route.path.includes("/git/")).reduce(
         (sum, route) => sum + route.methods.length,
