@@ -20,6 +20,7 @@ import {
   resolveCloudSrc,
 } from "./dev-stack.mjs";
 import {
+  RELAY_PERSONAL,
   SERVICES,
   SCOPED_PROFILES,
   SUPPORT_SERVICES,
@@ -111,7 +112,7 @@ test("platform / personal 自成一体，只选各自的服务", () => {
       .map((s) => s.name)
       .sort();
   assert.deepEqual(names(["personal"]), [
-    "armadra-server-nat",
+    "armadra-server-nat-personal",
     "relay-personal",
   ]);
   assert.deepEqual(names(["platform"]), [
@@ -124,7 +125,13 @@ test("platform / personal 自成一体，只选各自的服务", () => {
   assert.ok(!names(["platform", "personal"]).includes("release"));
   // 默认那组不含平台服务；平台服务要点名才能单选。
   const defaults = selectServices().map((s) => s.name);
-  for (const name of ["cloud", "relay", "relay-personal", "armadra-server-nat"])
+  for (const name of [
+    "cloud",
+    "relay",
+    "relay-personal",
+    "armadra-server-nat",
+    "armadra-server-nat-personal",
+  ])
     assert.ok(!defaults.includes(name), name);
   assert.deepEqual(SCOPED_PROFILES, ["platform", "personal"]);
   // 没有发布端口的服务只能走容器 healthcheck 这条检查。
@@ -132,6 +139,38 @@ test("platform / personal 自成一体，只选各自的服务", () => {
     SERVICES.find((s) => s.name === "armadra-server-nat").ports,
     [],
   );
+});
+
+test("relay-personal：issuer 取宿主机可达的映射端口，NAT 后的 core 共用其网络并自动登记", () => {
+  const relay = compose.services["relay-personal"];
+  const port = SERVICES.find((s) => s.name === "relay-personal").ports[0];
+  assert.equal(RELAY_PERSONAL.port, port);
+  assert.equal(RELAY_PERSONAL.issuer, `https://127.0.0.1:${port}`);
+  // --port（issuer 的端口）、监听端口与发布端口三者同一个，不是容器内端口。
+  const args = relay.command;
+  const after = (flag) => args[args.indexOf(flag) + 1];
+  assert.equal(after("--host"), "127.0.0.1");
+  assert.equal(after("--port"), String(port));
+  assert.equal(after("--listen"), `0.0.0.0:${port}`);
+  assert.deepEqual(relay.ports, [`127.0.0.1:${port}:${port}`]);
+  assert.match(after("--tls"), /self-signed/);
+
+  const nat = compose.services["armadra-server-nat-personal"];
+  assert.equal(nat.network_mode, "service:relay-personal");
+  assert.deepEqual(nat.ports ?? [], []);
+  assert.equal(nat.environment.ARMADRA_CLOUD_ISSUER, RELAY_PERSONAL.issuer);
+  for (const name of [
+    "ARMADRA_CLOUD_REGISTRATION_TOKEN",
+    "ARMADRA_CLOUD_FINGERPRINT",
+  ])
+    assert.ok(name in nat.environment, name);
+  // 令牌只来自调用方的进程环境，compose 文件里不写字面值。
+  assert.match(
+    nat.environment.ARMADRA_CLOUD_REGISTRATION_TOKEN,
+    /^\$\{ARMADRA_CLOUD_REGISTRATION_TOKEN:-\}$/,
+  );
+  assert.deepEqual(nat.profiles, ["personal"]);
+  assert.ok(compose.volumes["armadra-server-nat-personal"] !== undefined);
 });
 
 test("平台服务的 compose 依赖与服务表一致，密钥只来自 dev.env", () => {

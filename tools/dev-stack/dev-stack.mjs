@@ -23,7 +23,7 @@
  * 口令在首次 `up` 时随机生成到 `.data/dev.env`（已 gitignore），只在本机。
  */
 import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { X509Certificate, createHash, randomBytes } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -31,9 +31,12 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
+import { request as httpsRequest } from "node:https";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  HOST,
+  RELAY_PERSONAL,
   SCOPED_PROFILES,
   SERVICES,
   checkService,
@@ -240,6 +243,84 @@ function migrateCloud() {
   return result.status ?? 1;
 }
 
+/** 对 relay-personal 的 HTTPS 调用；`ca` 给了就按它校验（只信这一张），没给时只取 CA 本身。 */
+function relayRequest(method, path, { ca, body, token } = {}) {
+  const url = new URL(path, RELAY_PERSONAL.issuer);
+  if (url.hostname !== HOST) throw new Error(`dev-stack 只连 ${HOST}`);
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  return new Promise((done, fail) => {
+    const request = httpsRequest(
+      {
+        host: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method,
+        // 取 CA 那一次拿不到可校验的链（就是在取信任锚），只对回环、只读 /ca.crt。
+        ...(ca ? { ca } : { rejectUnauthorized: false }),
+        headers: {
+          accept: "application/json",
+          ...(payload === undefined
+            ? {}
+            : {
+                "content-type": "application/json",
+                "content-length": Buffer.byteLength(payload),
+              }),
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+        timeout: 15_000,
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () =>
+          done({
+            status: response.statusCode ?? 0,
+            text: Buffer.concat(chunks).toString("utf8"),
+          }),
+        );
+        response.on("error", fail);
+      },
+    );
+    request.on("timeout", () => request.destroy(new Error("中继调用超时")));
+    request.on("error", fail);
+    request.end(payload);
+  });
+}
+
+/**
+ * 给 armadra-server-nat-personal 备登记材料：取中继自签 CA 与指纹，用中继账号登录（钉着这张 CA，
+ * 顺带证明 issuer 对宿主机成立），换一枚注册令牌。令牌与指纹只经返回值进 compose 的进程环境，
+ * 不打印、不落盘。
+ */
+export async function mintRelayRegistration(password) {
+  const ca = await relayRequest("GET", "/ca.crt");
+  if (ca.status !== 200) throw new Error(`/ca.crt 答 ${ca.status}`);
+  const fingerprint = createHash("sha256")
+    .update(new X509Certificate(ca.text).raw)
+    .digest("hex");
+  const login = await relayRequest("POST", "/v1/auth/login", {
+    ca: ca.text,
+    body: {
+      account: RELAY_PERSONAL.account,
+      password,
+      device: { platform: "desktop", name: "dev-stack" },
+    },
+  });
+  if (login.status !== 200)
+    throw new Error(`中继账号登录答 ${login.status}（口令与卷里的不一致？）`);
+  const accessToken = JSON.parse(login.text).session?.accessToken;
+  const issued = await relayRequest("POST", "/v1/sources/registration-tokens", {
+    ca: ca.text,
+    token: accessToken,
+    body: {},
+  });
+  if (issued.status !== 200) throw new Error(`注册令牌答 ${issued.status}`);
+  return {
+    fingerprint,
+    registrationToken: JSON.parse(issued.text).registrationToken,
+  };
+}
+
 /** Create the Gitea admin the forge tests log in as; idempotent. */
 function ensureGiteaAdmin(env) {
   const result = compose(
@@ -369,8 +450,44 @@ export async function main(argv) {
   if (options.build) upArgs.push("--build");
   // platform / personal 自成一体：点名起它们的服务，免得 compose 把无 profile 的默认那组也带起来。
   upArgs.push(...(scoped ? services.map((s) => s.name) : options.names));
+  // NAT 后的 core 要等中继起来才有登记令牌：先起其余服务，中继健康后再起它。
+  const nat = scoped
+    ? services.find((s) => s.name === "armadra-server-nat-personal")
+    : undefined;
+  if (nat) upArgs.splice(upArgs.indexOf(nat.name), 1);
   const up = compose(upArgs, { profiles });
   if (up.status !== 0) return up.status ?? 1;
+  if (nat) {
+    const relay = services.find((s) => s.name === "relay-personal");
+    const [relayUp] = await waitHealthy([relay], {
+      timeoutMs: options.timeout * 1000,
+      log: (line) => console.log(line),
+    });
+    if (!relayUp.ok) {
+      console.log(`relay-personal 没起来：${relayUp.error}`);
+      return 1;
+    }
+    let registration;
+    try {
+      registration = await mintRelayRegistration(env.PERSONAL_RELAY_PASSWORD);
+    } catch (error) {
+      console.log(
+        `没能向 relay-personal 取登记令牌：${error instanceof Error ? error.message : error}`,
+      );
+      return 1;
+    }
+    const natUp = compose(
+      ["up", "-d", ...(options.build ? ["--build"] : []), nat.name],
+      {
+        profiles,
+        env: {
+          ARMADRA_CLOUD_REGISTRATION_TOKEN: registration.registrationToken,
+          ARMADRA_CLOUD_FINGERPRINT: registration.fingerprint,
+        },
+      },
+    );
+    if (natUp.status !== 0) return natUp.status ?? 1;
+  }
   if (services.some((s) => s.name === "cloud")) {
     const migrated = migrateCloud();
     if (migrated !== 0) return migrated;
