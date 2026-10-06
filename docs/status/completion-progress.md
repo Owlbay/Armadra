@@ -2225,6 +2225,32 @@
 - core：`core/http/ws-control.ts` 的 `CONTROL_PATH`、`CONTROL_PROTOCOL`、`CLOSE_*`、`MAX_ITERATORS`、`ITERATOR_MAX_FRAMES`、`ITERATOR_HIGH_WATER_BYTES`、`ControlConnection`；`core/http/stream-queue.ts` 的 `QueuedValue`；`WorkspaceEventStream.listen(workspaceId, (frame, seq) => …)`；测试用 `core/http/peer.fixture.ts`（直接说 peer 帧的客户端）。
 - 页面：`api/events.ts` 的 `WorkspaceEventTransport` 按源订（`subscribe(source, workspaceId, signal)`、`onDrop(source, …)`、`closedWith(source)`），`setWorkspaceEventTransport()` 测试换来源；`controlClient(connection)`（`connection` 是 `sourceRegistry().get(id)` / `.current()` 或任何有 `socket(path, options)` 的对象）、`controlClosedWith(connection)`、`onControlDrop(connection, listener)`、`errorCode(error)`；`api/ws.ts` 的 `ControlChannel`、`controlChannel(connection)`、`onControlClosed(listener)`、`closeMessageKey(code)`、`CLOSE_*`；`ManagedSocket.reconnect()`。
 
+## E3-2 工程规范化：files 域迁到契约（契约 §37）
+
+设计：[工程规范化](../design/engineering-standardization.md) §2，规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-2）；契约 §37。
+
+做了什么：
+
+- **契约**（`packages/shared/src/contract/files.ts`）：`files.*` 共 16 条——`list`、`info`、`read`、`write`、`create`、`rename`、`trash`、`trashList`、`restore`、`index`、`search`、`watch`、`unwatch`、`version`、`reveal`、`importLocal`；全部绑 `workspaceId`，出参复用页面已有的 `api/files.ts` / `search.ts` schema，入参只校形状（路径、版本、权限的判断仍在域里，所以旧路径与 procedure 拒绝的码与原话一样）。`since` 为 1.5，协议 minor 4 → 5。
+- **core**：`files/routes.ts` 把十二个 `file*` 路由的实现收成一份 `operations`，旧 handler 先解析查询串或体、再调它；`registerProcedures(server, "files", …)` 登记同一份。`reveal`（`files/reveal.ts`）与 `importLocal`（`imports/routes.ts`）各自带装配参数，由各自模块登记同一棵 `files` 子树。旧路径的校验顺序（先查工作空间与权限、再解析体）不变；搜索的取消沿用连接断开，procedure 另接调用信号。
+- **页面**：`api/files.ts` 改为 `filesApiFor(rpc)`、`api/search.ts` 改为 `searchApiFor(rpc)`，经 `clientFor(currentSource())`，调用点的签名不变，答案仍过页面自己的 schema；`fileDownloadUrl` 与多部分上传 `importFiles` 留在 REST（按当前源拼地址）。
+- **契约 §37**：§37.1 生成块（`pnpm contract`），§37.2 登记留在 REST 的字节流（多部分上传、下载、`Range`、`<img src>`、整库导入）与 `unwatch` 的旧路径说明。
+
+实测：
+
+- `pnpm check` 通过（含 `contract:check`、lint、三处 typecheck、repo:check、notices）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：412 个文件通过、11 个跳过（4882 条通过、72 条跳过）。新增 `core/contract/parity-files.test.ts` 26 条：旧路径、procedure、原 handler 三者逐字节相等，覆盖只读各操作、越界 / 不存在 / 不是目录的拒绝、写的版本冲突与「只带 expectedSize」、只读工作空间 403、条目新建改名回收站恢复的完整序列（含 409 / 400 / 404）、搜索（含过长 glob 的 400）、监听登记与注销（含读权限被关的 403）、reveal、按路径导入、scope 与路由表一致。
+- `pnpm --filter @armadra/web test`：390 个文件、3644 条通过；`typecheck` 通过。新增 `api/client.files.test.ts`（procedure 路径与体、`signal` 交给请求、REST 例外、换源后请求跟着去）。
+- A 档（`node tools/ci/e2e.mjs --tier a --only ui-features-e2e,server-e2e,remote-e2e`）：三项通过；`ui-features-e2e` 里的编辑器（§37）、文件树右键菜单（§38）、项目搜索取消（§38）都在其中。
+
+没做：
+
+- 控制面（`/api/ws`）上不需要订阅，files 没有事件流；`file.changed` 仍走工作空间事件（§35.4）。
+- `unwatch` 没有旧路径条目：契约层的 `DELETE` 只读体，旧的 `DELETE …/file-watch?path=&nodeId=` 继续由路由表答；E4 删旧路径时一并处理。
+- `cancelled`（499）、`reveal_failed`（500）没登记进错误码注册表：注册表只收被 `coreError` / `fail` 字面量使用的码，这两个由 `DomainError` 抛出。
+
+接口（给 E3 其它包）：同 E1；`files` 子树由三个模块分别 `registerProcedures` 登记，做法是 `handlers as unknown as DomainHandlers<"files">`（与 `identity.cloud` 同一做法）。
+
 ## A3-4 页面的 `relayed` 源与中继托管页面（Web 端操作）
 
 设计：[客户端包](../design/platform/client-packages.md) §5；平台设计 §17.3、§17.6、D27；契约 §32（准入一条补充）；armadra-cloud 契约 §6、§7、§10、§11。
