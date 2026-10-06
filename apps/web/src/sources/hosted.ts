@@ -17,6 +17,7 @@ import {
   cloudSources,
 } from "./cloud-client";
 import { createCachedCredentialProvider } from "./credentials";
+import { type SiblingMount, mountSiblingSources } from "./mounts";
 import { sourceRegistry } from "./registry";
 import {
   type RelaySession,
@@ -29,6 +30,7 @@ import {
   type StreamTarget,
   applyMeStreamEvent,
   createRemoteStream,
+  resyncTargets,
 } from "./remote-stream";
 import { type EnteredRoute, enterRoute } from "./route-entry";
 import {
@@ -169,6 +171,25 @@ export interface HostedRelayOptions {
   readonly enter?: typeof enterRoute;
   /** 测试注入：叫醒页面的流（缺省本机源上托管的流，即控制面）。 */
   readonly wake?: () => void;
+  /** 测试注入：把目录里其余的主机挂进页面源表（缺省 `mounts.ts`）。 */
+  readonly mount?: typeof mountSiblingSources;
+}
+
+/** 目录里的一台主机 → 经这个中继到达的源描述。 */
+function relayedDescriptor(
+  issuer: string,
+  source: Pick<CloudSource, "sourceId" | "name">,
+): SourceDescriptor {
+  return {
+    sourceId: source.sourceId,
+    kind: "relayed",
+    label: source.name,
+    baseUrl: "",
+    relayOrigin: issuer,
+    cloudIssuer: issuer,
+    fingerprint: "",
+    orderIndex: 0,
+  };
 }
 
 export interface HostedRelay {
@@ -176,7 +197,10 @@ export interface HostedRelay {
   readonly provider: CredentialProvider;
   /** 口令登录远程服务，答它目录里的主机。 */
   signIn(account: string, password: string): Promise<CloudSource[]>;
-  /** 把这台主机装成页面的本机源；失败抛（按 {@link hostedFailureOf} 显示）。 */
+  /**
+   * 把这台主机装成页面的本机源；失败抛（按 {@link hostedFailureOf} 显示）。
+   * 登录时目录里的其余主机随后作为远程源挂进页面源表（同一个标签页同时挂多台）。
+   */
   enter(source: Pick<CloudSource, "sourceId" | "name">): Promise<void>;
   /**
    * 按分享链接以访客加入（客户端包 §6.1，A4-3p）：匿名 `links.accept` → 访客的
@@ -240,6 +264,16 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
   let entered: EnteredRoute | null = null;
   let stream: RemoteStream | null = null;
   let current: string | null = null;
+  /** 登录时远程服务答的目录（访客加入时只有那一台）。 */
+  let directory: readonly CloudSource[] = [];
+  let siblings: SiblingMount | null = null;
+  /** 一起挂上的其余主机（源表里的远程源）。 */
+  const siblingTargets = () =>
+    siblings === null
+      ? []
+      : siblings.registry
+          .list()
+          .filter((connection) => connection.descriptor.kind !== "local");
   // 本机源（就是这台主机）上托管的流——控制面——在 4404 之后等着：叫醒它。
   const wake = options.wake ?? (() => void sourceRegistry().local().connect());
 
@@ -293,7 +327,11 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
       auth: cloudSessions,
       ...(options.cloud === undefined ? {} : { cloud: options.cloud }),
       onEvent(event) {
-        if (!("sourceId" in event) || event.sourceId !== current) return;
+        if (!("sourceId" in event)) return;
+        if (event.sourceId !== current) {
+          applyMeStreamEvent(event, siblings?.registry.get(event.sourceId));
+          return;
+        }
         if (event.type === "sourceOffline") {
           setStatus("waitingForSource", {
             code: SOURCE_ERROR.offline,
@@ -303,7 +341,10 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
         }
         applyMeStreamEvent(event, target);
       },
-      onOpen: () => void resync(),
+      onOpen: () => {
+        void resync();
+        resyncTargets(siblingTargets());
+      },
     });
   };
 
@@ -339,12 +380,15 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
           : { csrfToken: login.csrfToken }),
       });
       // 名字是锦上添花：访客的目录里只有这一台，取不到就空着。
-      const name = await cloudSources(issuer, guest.accessToken, options.cloud)
-        .then(
-          (rows) =>
-            rows.find((row) => row.sourceId === accepted.sourceId)?.name ?? "",
-        )
-        .catch(() => "");
+      const rows = await cloudSources(
+        issuer,
+        guest.accessToken,
+        options.cloud,
+      ).catch(() => [] as CloudSource[]);
+      const name =
+        rows.find((row) => row.sourceId === accepted.sourceId)?.name ?? "";
+      // 访客只挂链接指向的这一台。
+      directory = [];
       await hosted.enter({ sourceId: accepted.sourceId, name });
       return accepted.sourceId;
     },
@@ -364,19 +408,15 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
         session.accessToken,
         session.accessExpiresAtMs,
       );
-      return cloudSources(issuer, session.accessToken, options.cloud);
+      directory = await cloudSources(
+        issuer,
+        session.accessToken,
+        options.cloud,
+      );
+      return [...directory];
     },
     async enter(source) {
-      const descriptor: SourceDescriptor = {
-        sourceId: source.sourceId,
-        kind: "relayed",
-        label: source.name,
-        baseUrl: "",
-        relayOrigin: issuer,
-        cloudIssuer: issuer,
-        fingerprint: "",
-        orderIndex: 0,
-      };
+      const descriptor = relayedDescriptor(issuer, source);
       setStatus("connecting", null);
       const store: HostedSessionStore = {
         load: () => vault.session(source.sourceId),
@@ -432,6 +472,12 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
       }
       current = source.sourceId;
       setStatus("ready", null);
+      siblings?.dispose();
+      siblings = (options.mount ?? mountSiblingSources)({
+        primary: descriptor,
+        siblings: directory.map((row) => relayedDescriptor(issuer, row)),
+        provider,
+      });
       startStream();
     },
     get status() {
@@ -451,6 +497,9 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
     dispose() {
       stream?.close();
       stream = null;
+      siblings?.dispose();
+      siblings = null;
+      directory = [];
       entered?.dispose();
       entered = null;
       vault.clear();
