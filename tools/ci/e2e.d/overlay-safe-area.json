@@ -1,0 +1,8 @@
+{
+  "id": "overlay-safe-area",
+  "tier": "a",
+  "script": "tools/probes/overlay-safe-area.mjs",
+  "args": ["{out}"],
+  "requires": ["chrome"],
+  "timeoutMinutes": 10
+}
