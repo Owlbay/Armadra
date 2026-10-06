@@ -184,7 +184,10 @@ export function createLocalConnection(
       sockets.add(socket);
       return socket;
     },
-    connect: async () => undefined,
+    // 不发请求；只叫醒在等、在退避的流（中继托管的页面：主机重新上线）。
+    connect: async () => {
+      for (const socket of sockets) socket.wake();
+    },
     disconnect() {
       for (const socket of [...sockets]) socket.close();
       sockets.clear();

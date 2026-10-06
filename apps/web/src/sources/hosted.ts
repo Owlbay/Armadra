@@ -4,7 +4,6 @@ import {
   setHostedSession,
 } from "../api/identity";
 import { setHostedRuntimeBase } from "../api/runtime-url";
-import { wakeWorkspaceEvents } from "../api/events";
 import {
   type CloudOptions,
   type CloudSource,
@@ -16,6 +15,7 @@ import {
   cloudSources,
 } from "./cloud-client";
 import { createCachedCredentialProvider } from "./credentials";
+import { sourceRegistry } from "./registry";
 import {
   type RelaySession,
   type RelayVault,
@@ -165,7 +165,7 @@ export interface HostedRelayOptions {
   readonly createStream?: typeof createRemoteStream;
   /** 测试注入：装成本机源（缺省 `route-entry.ts`）。 */
   readonly enter?: typeof enterRoute;
-  /** 测试注入：叫醒页面的流（缺省事件流）。 */
+  /** 测试注入：叫醒页面的流（缺省本机源上托管的流，即控制面）。 */
   readonly wake?: () => void;
 }
 
@@ -228,7 +228,8 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
   let entered: EnteredRoute | null = null;
   let stream: RemoteStream | null = null;
   let current: string | null = null;
-  const wake = options.wake ?? (() => wakeWorkspaceEvents());
+  // 本机源（就是这台主机）上托管的流——控制面——在 4404 之后等着：叫醒它。
+  const wake = options.wake ?? (() => void sourceRegistry().local().connect());
 
   /** `me.stream` 的事件落到当前这台主机上。 */
   const target: StreamTarget = {
@@ -260,7 +261,9 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
         target.revoke({ code: SOURCE_ERROR.accessRevoked, message: "" });
         return;
       }
-      if (row.online && status.state === "waitingForSource")
+      // 在线：不论之前看到的是什么都叫醒一次——中继重启时它把经它的流以 4404
+      // 收尾，而这条事件流断着，没收到过下线也就收不到上线。
+      if (row.online && status.state !== "unauthorized")
         await target.connect();
       else if (!row.online && status.state === "ready")
         setStatus("waitingForSource", {

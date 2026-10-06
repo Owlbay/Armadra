@@ -238,5 +238,8 @@ describe("中继托管页面的源", () => {
     stream().onOpen?.();
     await vi.waitFor(() => expect(relay.status.state).toBe("ready"));
     expect(wake).toHaveBeenCalledTimes(1);
+    // 中继重启：页面一直以为就绪，流重开时主机在线也叫醒一次（经中继的流以 4404 收了尾）。
+    stream().onOpen?.();
+    await vi.waitFor(() => expect(wake).toHaveBeenCalledTimes(2));
   });
 });

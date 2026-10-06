@@ -415,6 +415,28 @@ describe("本机源的连接", () => {
     expect(local.hello).toBeNull();
   });
 
+  it("connect 不发请求，只叫醒在等的流（中继托管的页面：主机重新上线）", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const local = createLocalConnection({
+      source: {
+        ...localSource,
+        WebSocket: FakeSocket as unknown as typeof WebSocket,
+      },
+    });
+    const socket = local.socket("/api/ws", { environment: null });
+    await flush();
+    FakeSocket.made.at(-1)!.open();
+    FakeSocket.made.at(-1)!.drop(CLOSE_SOURCE_OFFLINE);
+    await flush();
+    expect(socket.state).toBe("waiting");
+    await local.connect();
+    await flush();
+    expect(FakeSocket.made).toHaveLength(2);
+    expect(fetch).not.toHaveBeenCalled();
+    socket.close();
+  });
+
   it("request 发往本机源的地址", async () => {
     const fetch = vi.fn(async () => new Response("{}"));
     vi.stubGlobal("fetch", fetch);
