@@ -3,14 +3,14 @@ import { Trash2 } from "lucide-react";
 
 import { useT } from "../app/preferences-store";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { Checkbox } from "@/ui/checkbox";
@@ -69,10 +69,11 @@ export function ConnectionList({
             className="flex-nowrap p-0"
             aria-current={row.sourceId === activeId || undefined}
           >
-            <button
+            <Button
               type="button"
+              variant="ghost"
               disabled={disabled}
-              className="flex min-h-12 min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-2 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+              className="h-auto min-h-12 min-w-0 flex-1 justify-start gap-2.5 rounded-lg px-3 py-2 text-left font-normal whitespace-normal"
               onClick={() => onOpen(row.sourceId)}
             >
               <ItemContent className="min-w-0">
@@ -86,7 +87,7 @@ export function ConnectionList({
               {row.sourceId === activeId && (
                 <Badge variant="secondary">{t("mobileConnect.current")}</Badge>
               )}
-            </button>
+            </Button>
             <ItemActions className="pr-1">
               <Button
                 type="button"
@@ -105,23 +106,25 @@ export function ConnectionList({
           </Item>
         ))}
       </ItemGroup>
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={removing !== null}
         onOpenChange={(open) => {
           if (!open) setRemoving(null);
         }}
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+        <ResponsiveAlertDialogContent>
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t("mobileConnect.removeTitle", {
                 name: removing ? removing.label || removing.host : "",
               })}
-            </AlertDialogTitle>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("mobileConnect.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
+            </ResponsiveAlertDialogTitle>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("mobileConnect.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               variant="destructive"
               onClick={() => {
                 if (removing) onRemove(removing.sourceId);
@@ -129,10 +132,10 @@ export function ConnectionList({
               }}
             >
               {t("mobileConnect.removeConfirm")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </>
   );
 }

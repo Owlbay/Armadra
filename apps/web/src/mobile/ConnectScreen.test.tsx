@@ -361,12 +361,12 @@ describe("连接页 · 多连接（添加连接）", () => {
     expect(screen.getByRole("button", { name: "个人中转" })).toBeTruthy();
   });
 
-  it("选中的连接连不上：原因显示在列表上方", () => {
+  it("选中的连接连不上：原因显示在列表上方，一动手就清掉", () => {
     render(
       <ConnectScreen
         {...base}
         relay={outcomes()}
-        failure="offline"
+        initialFailure="offline"
         connections={[
           {
             sourceId: "s1",
@@ -380,5 +380,7 @@ describe("连接页 · 多连接（添加连接）", () => {
       />,
     );
     expect(screen.getByText("这台主机不在线")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "添加连接" }));
+    expect(screen.queryByText("这台主机不在线")).toBeNull();
   });
 });

@@ -107,6 +107,8 @@ export interface ConnectScreenProps {
   readonly onRemove?: (sourceId: string) => void;
   /** 收到的是分享深链：一打开就直接挂载（`initialLink`）。 */
   readonly autoJoin?: boolean;
+  /** 进来时就带着的失败（选中的连接连不上）；人一动手就清掉，不像 `failure` 那样钉住。 */
+  readonly initialFailure?: ConnectFailure;
   /** 展示页用：钉住视图与那一步的内容。 */
   readonly initialView?: ConnectView;
   readonly initialFingerprint?: string;
@@ -165,6 +167,7 @@ export function ConnectScreen({
   onOpen,
   onRemove,
   autoJoin = false,
+  initialFailure,
   initialView,
   initialFingerprint = "",
   initialSources = [],
@@ -188,7 +191,9 @@ export function ConnectScreen({
   );
   const [code, setCode] = React.useState(codeOf(initialCode));
   const [busy, setBusy] = React.useState(false);
-  const [failure, setFailure] = React.useState<ConnectFailure | null>(null);
+  const [failure, setFailure] = React.useState<ConnectFailure | null>(
+    initialFailure ?? null,
+  );
   const shownBusy = pinnedBusy ?? busy;
   const shownFailure = pinnedFailure ?? failure;
   const fieldId = React.useId();

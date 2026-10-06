@@ -78,7 +78,7 @@ export function MobileRoot({ entry: initial }: { entry: Entry }) {
       {...(origin ? { origin } : {})}
       {...(entry.link ? { initialLink: entry.link } : {})}
       {...(entry.join ? { autoJoin: true } : {})}
-      {...(entry.failure ? { failure: entry.failure } : {})}
+      {...(entry.failure ? { initialFailure: entry.failure } : {})}
       relay={relay}
       connections={rows}
       activeId={entry.activeId}
