@@ -6,7 +6,8 @@
 //
 //   1. 中继 init：状态目录、CA 指纹、口令不进输出；serve 起来，`/.well-known` 答 personal；
 //   2. core 登记：注册令牌 → `identity.cloud.register` → 隧道 ready，中继目录里有这台源，
-//      中继账号绑定为主人；错口令被拒；
+//      中继账号绑定为主人；错口令被拒；同一条 keep-alive 连接空闲 6 秒以上再经中继 POST
+//      到源，连接还在、不失败（iOS WebKit 不重试被服务端空闲关掉的连接）；
 //   3. 浏览器开中继托管的 `/app/`：账号口令登录 → 进画布 → 终端收发 → ACP 会话（假 Agent）经中继
 //      发一轮、回复流回、core 只投递一次（契约 §39.9 的 clientTurnId）→ 实时板与本机页面双向同步；
 //   4. 分享链接：`/j/<id>#…` 落地、片段被抹掉、访客加入、打开链接指向的工作空间、开终端；
@@ -45,6 +46,7 @@ import {
   caFingerprint,
   clickText,
   hasText,
+  idleKeepAlivePost,
   launchElectron,
   nodeAt,
   ownerClient,
@@ -325,6 +327,61 @@ try {
     sourceRow && { name: sourceRow.name, online: sourceRow.online },
   );
   run.ok("中继账号绑定为这台 core 的主人");
+
+  // 空闲 keep-alive：Node 缺省 5 秒就关空闲连接，iOS WebKit 复用它发 POST 时不重试，
+  // 直接「加载失败」——Agent 的这一轮就没完成。照 iOS App 的路子（来源
+  // `capacitor://localhost`）：经中继用断言换 core 会话，空闲 6.5 秒后在同一条连接上
+  // 再 POST `system.hello`，连接不许被服务端先关掉，两次都要 200。
+  const idle = await timed("2-keepalive", async () => {
+    const assertion = await must("POST", `/v1/sources/${sourceId}/assertion`, {
+      body: { device },
+      token: cloudToken,
+    });
+    secret("中继令牌", assertion.relayToken);
+    secret("源访问断言", assertion.assertion);
+    const headers = {
+      origin: "capacitor://localhost",
+      "armadra-relay-token": assertion.relayToken,
+    };
+    const answer = await idleKeepAlivePost(
+      issuer,
+      caPem,
+      {
+        path: `/s/${sourceId}/api/identity/cloud/login`,
+        body: { assertion: assertion.assertion },
+        headers,
+      },
+      (login) => {
+        const session = login.body?.session;
+        if (session?.native?.accessToken)
+          secret("core 访问令牌", session.native.accessToken);
+        if (session?.native?.refreshToken)
+          secret("core 刷新令牌", session.native.refreshToken);
+        return {
+          path: `/s/${sourceId}/api/rpc/system/hello`,
+          body: { json: {} },
+          headers: {
+            ...headers,
+            authorization: `Bearer ${session?.native?.accessToken ?? ""}`,
+          },
+        };
+      },
+    );
+    return {
+      statuses: answer.answers.map((one) => one.status),
+      codes: answer.answers.map((one) => one.body?.code ?? null),
+      reused: answer.reused,
+      closedByServer: answer.closedByServer,
+      idleMs: answer.idleMs,
+    };
+  });
+  run.check(
+    idle.statuses.every((status) => status === 200) &&
+      idle.reused &&
+      !idle.closedByServer,
+    "iOS 来源经中继换会话后空闲 6.5 秒，同一条 keep-alive 连接再 POST：连接还在、两次都 200",
+    idle,
+  );
 
   // 主人的画布：一张便签、一个终端。
   const ownerProject = join(stack.scratch, "owner-project");
