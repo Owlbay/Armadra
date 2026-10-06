@@ -47454,7 +47454,7 @@
         },
         "x-armadra": {
           "contract": "§40.2",
-          "scope": "git:write",
+          "scope": "git:read",
           "since": "1.10",
           "workspaceKey": "workspaceId",
           "legacy": {
@@ -50188,7 +50188,7 @@
         },
         "x-armadra": {
           "contract": "§40.2",
-          "scope": "git:write",
+          "scope": "git:read",
           "since": "1.10",
           "workspaceKey": "workspaceId",
           "legacy": {
