@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -518,6 +518,54 @@ describe("what the core answers", () => {
       expect(await upgrade(core, events, TEST_ORIGIN, protocol)).toMatch(
         /^HTTP\/1\.1 401/,
       );
+    });
+
+    it("媒体票（§37.4）：不带头直接取得到，签票的会话登出之后作废", async () => {
+      const { core } = await start(temporary());
+      const session = await loopbackSession(core, base(core));
+      const project = temporary();
+      writeFileSync(join(project, "clip.mp4"), Buffer.alloc(4096, 7));
+      const created = (await (
+        await session.fetch("/api/workspaces", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "media", rootPath: project }),
+        })
+      ).json()) as { id: string };
+      const issued = await session.fetch("/api/rpc/files/mediaTicket", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          json: { workspaceId: created.id, path: "clip.mp4" },
+        }),
+      });
+      expect(issued.status).toBe(200);
+      const { url } = ((await issued.json()) as { json: { url: string } }).json;
+      // 浏览器的 `<video src>`：没有 Origin、没有 Authorization。
+      const part = await fetch(`${base(core)}${url}`, {
+        headers: { range: "bytes=0-1023" },
+      });
+      expect(part.status).toBe(206);
+      expect((await part.arrayBuffer()).byteLength).toBe(1024);
+      // 同一个文件不带票照旧 401。
+      const bare = await fetch(
+        `${base(core)}/api/workspaces/${created.id}/file-download?path=clip.mp4`,
+        { headers: { origin: TEST_ORIGIN } },
+      );
+      expect(bare.status).toBe(401);
+      const loggedOut = await fetch(
+        `${base(core)}/api/identity/session/logout`,
+        {
+          method: "POST",
+          headers: {
+            origin: session.origin,
+            authorization: `Bearer ${session.refreshToken}`,
+          },
+        },
+      );
+      expect(loggedOut.status).toBeLessThan(300);
+      const after = await fetch(`${base(core)}${url}`);
+      expect(after.status).toBe(401);
     });
 
     it("配对之后带 Bearer 是 200；会话绑在来源上，换个来源不认", async () => {

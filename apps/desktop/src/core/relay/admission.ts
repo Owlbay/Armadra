@@ -36,6 +36,7 @@ import {
   WS_TICKET_PATH,
   type WsTickets,
   anonymousPath,
+  mediaPath,
   protocolTicket,
   sessionIdentity,
 } from "../identity/transport";
@@ -128,6 +129,8 @@ function anonymousWithoutOrigin(path: string): boolean {
   return (
     path === "/health" ||
     path === "/api/health" ||
+    // 媒体票（契约 §37.4）：`<video src>` 不带 `Origin`，票就是凭据。
+    mediaPath(path) ||
     (path.startsWith("/api/identity/") &&
       anonymousPath(path) &&
       path !== WS_TICKET_PATH)

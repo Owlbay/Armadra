@@ -7,6 +7,7 @@ import {
   WS_TICKET_PATH,
   type WsTickets,
   anonymousPath,
+  mediaPath,
   protocolTicket,
 } from "../identity/transport";
 
@@ -253,6 +254,9 @@ function screen(input: GateInput, context: GateContext): Refusal | undefined {
   if (input.upgrade !== true && oauthCallbackPath(input.method, input.path)) {
     return undefined;
   }
+  // 媒体票（契约 §37.4）：`<video src>` 不带 `Origin`，原生 App 里还是跨站；
+  // 票就是凭据，文件域自己认。
+  if (input.upgrade !== true && mediaPath(input.path)) return undefined;
   const isApi = input.path === "/api" || input.path.startsWith("/api/");
   const origin = singleHeader(input.headers, "origin");
   if (origin !== undefined) {

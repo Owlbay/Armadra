@@ -288,6 +288,36 @@ export const files = {
       }),
     ),
   /**
+   * 媒体票（契约 §37.4）：`<video src>`、`<img src>`、`<a href download>` 带不了
+   * 头，Bearer 的源先用它换一个 `/api/media/<票>` 的地址，浏览器直接按 `Range`
+   * 取。票绑着这次会话、这个文件与用法，闲置 5 分钟或签出 30 分钟作废。`url`
+   * 是相对这个源的路径，凭据与文件路径都不在里面。
+   */
+  mediaTicket: oc
+    .input(
+      workspaceRef.extend({
+        path: z.string(),
+        disposition: z.enum(["inline", "attachment"]).optional(),
+      }),
+    )
+    .output(
+      z.object({
+        url: z.string(),
+        expiresAt: z.string(),
+        size: z.number(),
+        mimeType: z.string(),
+      }),
+    )
+    .errors(errors.pick("bad_request", "forbidden", "not_found"))
+    .meta(
+      meta({
+        since: "1.21",
+        contract: "§37.4",
+        workspaceKey: "workspaceId",
+        scope: "files:read",
+      }),
+    ),
+  /**
    * 输出到画板的代码块（契约 §14.5、§37.3）：写成
    * `.armadra/exports/acp/<exportId>/<name>`（来源 Agent 节点的工作目录在工作区内时
    * 落在那里），答绝对路径、工作区相对路径与字节数。`exportId` 是来源节点的 id；

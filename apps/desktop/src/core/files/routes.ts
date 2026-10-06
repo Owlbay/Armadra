@@ -29,13 +29,24 @@ import {
   requiredString,
 } from "../workspaces/support";
 import { type Workspace, getWorkspace } from "../workspaces/table";
-import { baseName } from "./paths";
 import {
   type SearchProgress,
   type SearchRequest,
   searchContent,
 } from "./search";
 import { register, releaseWorkspace, unregister } from "./watch";
+import { requestIdentity, routeGuard, runAs } from "../identity/gate";
+import {
+  MediaTickets,
+  type MediaDisposition,
+  byteHeaders,
+  localFile,
+  mediaTicketOf,
+  parseRange,
+  readLocalRange,
+  writeBytes,
+} from "./media";
+import { MEDIA_PATH_PREFIX } from "../identity/transport";
 
 /**
  * The twelve `file*` routes: browsing, reading, writing, creating, renaming,
@@ -89,6 +100,8 @@ export function install(context: CoreContext): void {
     }
     return workspace;
   };
+
+  const mediaTickets = new MediaTickets();
 
   const operations = {
     list: (id: string, path: string | null | undefined) =>
@@ -223,6 +236,32 @@ export function install(context: CoreContext): void {
         path: pathOrRoot(path),
       });
     },
+    /**
+     * 契约 §37.4：给浏览器直接取一份文件的票。和下载一样不问 `read` 权限
+     * （见 {@link downloadBytes} 上面那段），但文件得在、得是文件。
+     */
+    mediaTicket: async (
+      id: string,
+      path: string,
+      disposition: MediaDisposition,
+    ) => {
+      const workspace = workspaceOf(database, id);
+      const info = await ran<ImportedFileInfo>(workspace, "files.info", {
+        path,
+      });
+      const issued = mediaTickets.issue({
+        workspaceId: id,
+        path: info.path,
+        disposition,
+        identity: requestIdentity(),
+      });
+      return {
+        url: `${MEDIA_PATH_PREFIX}${issued.ticket}`,
+        expiresAt: new Date(issued.expiresAtMs).toISOString(),
+        size: info.size,
+        mimeType: info.mimeType,
+      };
+    },
   };
 
   // 契约 §37：与下面的旧路径同一份实现。`reveal` 与 `importLocal` 由各自的
@@ -252,6 +291,8 @@ export function install(context: CoreContext): void {
     unwatch: ({ workspaceId: id, path, nodeId }) =>
       operations.unwatch(id, path ?? "", nodeId ?? ""),
     version: ({ workspaceId: id, path }) => operations.version(id, path),
+    mediaTicket: ({ workspaceId: id, path, disposition }) =>
+      operations.mediaTicket(id, path, disposition ?? "inline"),
   } satisfies Omit<
     DomainHandlers<"files">,
     // 各自的模块登记：`files/reveal.ts`、`imports/routes.ts`、`assets/routes.ts`。
@@ -291,26 +332,133 @@ export function install(context: CoreContext): void {
     "/api/workspaces/{workspaceId}/file-download",
     async (match, request) => {
       const workspace = workspaceOf(database, workspaceId(match));
-      const { path, bytes } = await downloadBytes(
-        workspace,
-        requestedPath(request),
-      );
+      const requested = requestedPath(request);
+      const rangeHeader = singleRange(request);
+      // 本机工作空间带 `Range` 时只读那一段（契约 §37.2）：不把整份文件读进
+      // 内存，也不受整份下载的 16 MiB 上限。远端照旧整份取回再切。
+      if (!isRemote(workspace) && rangeHeader !== undefined) {
+        const file = localFile(workspace.rootPath, requested);
+        const range = parseRange(rangeHeader, file.size);
+        if (range !== undefined) {
+          return rangedAnswer(
+            file.relative,
+            file.size,
+            range,
+            range === "unsatisfiable"
+              ? Buffer.alloc(0)
+              : readLocalRange(file, range),
+          );
+        }
+      }
+      const { path, bytes } = await downloadBytes(workspace, requested);
+      const range = parseRange(rangeHeader, bytes.byteLength);
+      if (range !== undefined) {
+        return rangedAnswer(
+          path,
+          bytes.byteLength,
+          range,
+          range === "unsatisfiable"
+            ? Buffer.alloc(0)
+            : bytes.subarray(range.start, range.end + 1),
+        );
+      }
       // Always an attachment, and never sniffed: an uploaded HTML or SVG file
       // must not be able to execute in the core's origin on the way out.
-      const encoded = [...Buffer.from(baseName(path), "utf8")]
-        .map((byte) => `%${byte.toString(16).toUpperCase().padStart(2, "0")}`)
-        .join("");
       return {
         status: 200,
         raw: bytes,
-        headers: {
-          "content-type": "application/octet-stream",
-          "content-disposition": `attachment; filename*=UTF-8''${encoded}`,
-          "x-content-type-options": "nosniff",
-        },
+        headers: downloadHeaders(path),
       };
     },
   );
+
+  // 契约 §37.4：`/api/media/<票>`。整段自己写响应：本机文件流式读盘、按
+  // `Range` 回 206；任何失败都在这里答完，不让路径（里面有票）进日志。
+  server.raw(MEDIA_PATH_PREFIX, async (request, response, cors) => {
+    const fail = (status: number, code: string, message: string): void => {
+      if (response.headersSent) {
+        response.destroy();
+        return;
+      }
+      response.writeHead(status, {
+        ...cors,
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      response.end(JSON.stringify({ code, message }));
+    };
+    const method = request.method.toUpperCase();
+    if (method !== "GET" && method !== "HEAD") {
+      fail(405, "method_not_allowed", "只接受 GET 与 HEAD");
+      return;
+    }
+    const ticket = mediaTicketOf(request.path);
+    const grant = ticket === "" ? undefined : mediaTickets.use(ticket);
+    if (grant === undefined) {
+      fail(404, "not_found", "媒体票不存在或已过期");
+      return;
+    }
+    let identity = grant.identity;
+    if (identity?.revalidate !== undefined) {
+      const subject = identity.revalidate();
+      if (subject === undefined) {
+        fail(401, "unauthenticated", "签票的会话已失效");
+        return;
+      }
+      identity = { ...identity, subject };
+    }
+    const serve = async (): Promise<void> => {
+      // 按签票的文件所在的下载路由判：媒体路径本身在 `SELF_GUARDED` 里，拿它
+      // 问路由门恒放行。
+      const download = `/api/workspaces/${encodeURIComponent(grant.workspaceId)}/file-download`;
+      const verdict = routeGuard()(
+        { ...request, method: "GET", path: download },
+        { permission: "files:read", workspaceId: grant.workspaceId },
+      );
+      if (!verdict.allowed) {
+        fail(403, "forbidden", "没有这项权限");
+        return;
+      }
+      const workspace = workspaceOf(database, grant.workspaceId);
+      const headers = {
+        ...cors,
+        ...byteHeaders(grant.path, grant.disposition),
+      };
+      const range = singleRange(request);
+      if (!isRemote(workspace)) {
+        const file = localFile(workspace.rootPath, grant.path);
+        writeBytes(response, {
+          method,
+          range,
+          headers,
+          size: file.size,
+          body: file,
+        });
+        return;
+      }
+      const { bytes } = await downloadBytes(workspace, grant.path);
+      writeBytes(response, {
+        method,
+        range,
+        headers,
+        size: bytes.byteLength,
+        body: bytes,
+      });
+    };
+    try {
+      await (identity === undefined ? serve() : runAs(identity, serve));
+    } catch (error) {
+      const failure = error as { status?: unknown; code?: unknown };
+      if (
+        typeof failure.status === "number" &&
+        typeof failure.code === "string"
+      ) {
+        fail(failure.status, failure.code, "取不到这个文件");
+      } else {
+        fail(500, "internal_error", "取不到这个文件");
+      }
+    }
+  });
 
   handle("GET", "/api/workspaces/{workspaceId}/file", async (match, request) =>
     ok(await operations.read(workspaceId(match), request.query.get("path"))),
@@ -650,6 +798,46 @@ export function connectionSignal(request: CoreRequest): {
     release: () => {
       socket.off("close", abort);
       raw.off("aborted", abort);
+    },
+  };
+}
+
+/** 只认一条 `Range` 头；两条同名头当没有。 */
+function singleRange(request: CoreRequest): string | undefined {
+  const value = request.headers.range;
+  return typeof value === "string" ? value : undefined;
+}
+
+function downloadHeaders(path: string): Record<string, string> {
+  const { "content-type": type, "content-disposition": disposition } =
+    byteHeaders(path, "attachment");
+  return {
+    "content-type": type as string,
+    "content-disposition": disposition as string,
+    "x-content-type-options": "nosniff",
+    "accept-ranges": "bytes",
+  };
+}
+
+function rangedAnswer(
+  path: string,
+  size: number,
+  range: { start: number; end: number } | "unsatisfiable",
+  bytes: Buffer,
+): HandlerResult {
+  if (range === "unsatisfiable") {
+    return {
+      status: 416,
+      raw: Buffer.alloc(0),
+      headers: { ...downloadHeaders(path), "content-range": `bytes */${size}` },
+    };
+  }
+  return {
+    status: 206,
+    raw: bytes,
+    headers: {
+      ...downloadHeaders(path),
+      "content-range": `bytes ${range.start}-${range.end}/${size}`,
     },
   };
 }

@@ -17,16 +17,28 @@ export const PAIRING_CODE_EXCHANGE_PATH = "/api/gateway/pairing-code/exchange";
 
 /**
  * 不需要会话的那几条：健康探针、身份域自己的登录面（配对、hello、刷新、登录
- * 都在这里，各自认自己的凭据），以及配对短码换票（契约 §24：手机还没有身份，
- * 短码就是凭据，限流与档位在 Gateway 域里判）。
+ * 都在这里，各自认自己的凭据），配对短码换票（契约 §24：手机还没有身份，
+ * 短码就是凭据，限流与档位在 Gateway 域里判），以及媒体票的地址（§37.4）。
  */
 export function anonymousPath(path: string): boolean {
   return (
     path === "/health" ||
     path === "/api/health" ||
     path.startsWith("/api/identity/") ||
-    path === PAIRING_CODE_EXCHANGE_PATH
+    path === PAIRING_CODE_EXCHANGE_PATH ||
+    mediaPath(path)
   );
+}
+
+/**
+ * 媒体票的地址（契约 §37.4）：`<video src>` 一类带不了头，票在路径里，由文件域
+ * 自己认（`core/files/media.ts`）。浏览器取媒体不带 `Origin`，原生 App 里是
+ * 跨站，所以几道门对它都不看来源，只认票。
+ */
+export const MEDIA_PATH_PREFIX = "/api/media/";
+
+export function mediaPath(path: string): boolean {
+  return path.startsWith(MEDIA_PATH_PREFIX) && !path.slice(11).includes("/");
 }
 
 /* ------------------------------ WebSocket 票 ------------------------------ */

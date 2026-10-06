@@ -2719,7 +2719,7 @@ core 校验远程服务地址与指纹的写法时用具名码（状态均 400�
 | `/api/workspaces/{workspaceId}/file-watch`    | DELETE | 见 §37.1 的 `unwatch`：旧路径带查询串，契约层的 `DELETE` 不读查询串；procedure 是 `files.unwatch`          |
 | `/api/workspaces/import`                      | POST   | 多部分上传整个工作空间，属于 `workspaces` 域（§34.4）                                                      |
 
-`Range`、`<img src>`、`<a href download>` 这类由浏览器直接取字节的用法只能走上面的 `GET` 路由：RPC 的 `POST` + JSON 编码既带不了 `Range`，也不是 `src` 能指的地址。下载的 URL 由页面按当前源拼出（`api/files.ts` 的 `fileDownloadUrl`），凭据照旧由 Cookie 或页面代取。
+`Range`、`<img src>`、`<a href download>` 这类由浏览器直接取字节的用法只能走上面的 `GET` 路由：RPC 的 `POST` + JSON 编码既带不了 `Range`，也不是 `src` 能指的地址。下载的 URL 由页面按当前源拼出（`api/files.ts` 的 `fileDownloadUrl`），凭据照旧由 Cookie 或页面代取。自协议 1.21 起这条路由认单个 `Range` 区间，Bearer 的源可改用媒体票的地址让浏览器直接取（§37.4）。
 
 ### 37.3 输出到画板的代码块
 
@@ -2734,6 +2734,25 @@ core 校验远程服务地址与指纹的写法时用具名码（状态均 400�
 | procedure          | kind     | input                                                                        | output                                                  | errors                                  | scope         | 自   | 原路径                                                       |
 | ------------------ | -------- | ---------------------------------------------------------------------------- | ------------------------------------------------------- | --------------------------------------- | ------------- | ---- | ------------------------------------------------------------ |
 | `files.exportText` | mutation | `{ workspaceId: string, exportId: string, name?: string, content?: string }` | `{ path: string, relativePath: string, bytes: number }` | `bad_request`、`forbidden`、`not_found` | `assets:read` | 1.18 | `POST /api/workspaces/{workspaceId}/exports/{exportId}/text` |
+
+<!-- rpc:end -->
+
+### 37.4 媒体票与按区间取字节
+
+自协议 1.21 起。`<video src>`、`<audio src>`、`<img src>` 与 `<a href download>` 带不了 `Authorization`；Bearer 的源（桌面壳的本机源、直连源、原生 App 经 Gateway、经中继的源）以前只能把整份文件取回成 `blob:`。实现在 `core/files/media.ts` 与 `core/files/routes.ts`。
+
+- **换票**：procedure `files.mediaTicket`（`files:read`，绑 `workspaceId`），入参 `{ workspaceId, path, disposition? }`，`disposition` 缺省 `inline`（预览），`attachment` 是下载。文件得在、得是文件，否则与 `files.info` 同样的拒绝。答 `{ url, expiresAt, size, mimeType }`，`url` 是相对这个源的 `/api/media/<票>`：路径里只有票，工作空间、文件路径与凭据都不在 URL 上。
+- **票**：只在内存里，32 字节随机、base64url；绑签票时的请求身份、一个文件与用法。可多次使用（播放器拖动是一串 `Range` 请求），闲置 5 分钟或签出 30 分钟作废；每次取都按签票的会话复核（登出、撤销设备之后立刻失效），并按签票文件所在工作空间的 `GET …/file-download` 过路由门。core 重启即全部作废。
+- **取**：`GET` / `HEAD /api/media/<票>`。几道准入门对这条路径都不看来源与会话（浏览器取媒体不带 `Origin`，原生 App 里是跨站），只认票；票不认识或过期 `404 not_found`，签票会话失效 `401 unauthenticated`，权限被收回 `403 forbidden`，其它方法 `405`。错误体照旧 `{ code, message }`，路径（含票）不进日志。
+- **响应**：`Accept-Ranges: bytes`；单个 `Range` 区间回 `206` 与 `Content-Range`，起点越过文件尾回 `416`（`Content-Range: bytes */<大小>`），多个区间按整份 `200`。`inline` 只给图片（SVG 除外）与引擎能放的音视频：真实 `Content-Type` 加 `Content-Disposition: inline`；其余（包括 PDF）一律 `application/octet-stream` 附件。都带 `X-Content-Type-Options: nosniff`、`Content-Security-Policy: default-src 'none'; sandbox`、`Referrer-Policy: no-referrer`、`Cache-Control: no-store`。本机工作空间流式读盘，没有整份下载的 16 MiB 上限；远端工作空间整份取回（16 MiB 上限）再切。
+- **`file-download` 的 `Range`**：§37.2 那条路由也认单个 `Range` 区间，答 `206` / `416` 与 `Accept-Ranges: bytes`；本机工作空间只读那一段。没有 `Range` 时与以前一样整份 `200`。
+- **经中继**：中继边缘对 `/s/<源>/` 只认 `Armadra-Relay-Token` 头，`<video src>` 带不了；页面另向中继换一张中继侧的媒体票（armadra-cloud 的 `POST /v1/media-tickets`，绑源与这一条 `/api/media/<票>` 路径），浏览器取 `<中继>/m/<中继票>`，中继按票转发到源上的这条路径。
+
+<!-- rpc:begin contract=§37.4 -->
+
+| procedure           | kind | input                                                                           | output                                                               | errors                                  | scope        | 自   | 原路径 |
+| ------------------- | ---- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------- | --------------------------------------- | ------------ | ---- | ------ |
+| `files.mediaTicket` | call | `{ workspaceId: string, path: string, disposition?: "inline" \| "attachment" }` | `{ url: string, expiresAt: string, size: number, mimeType: string }` | `bad_request`、`forbidden`、`not_found` | `files:read` | 1.21 | —      |
 
 <!-- rpc:end -->
 

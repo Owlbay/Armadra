@@ -310,7 +310,7 @@ describe("契约与 core 的两张表", () => {
     }
     expect((hello.body as { protocol: unknown }).protocol).toEqual({
       major: 1,
-      minor: 18,
+      minor: 21,
     });
   });
 
