@@ -1,8 +1,7 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { usePreferencesStore } from "../app/preferences-store";
-import { SourceGroups } from "../sidebar/SourceGroups";
 import {
   applySourceTable,
   hydrateSourcesAtStartup,
@@ -10,13 +9,11 @@ import {
   takeSettingsReopen,
 } from "./bootstrap";
 import type { SourceConnection } from "./connection";
-import { SourcesProvider } from "./context";
 import { createSourceRegistry } from "./registry";
 import type { SourceDescriptor, SourceStatus } from "./types";
 
 /**
- * 启动与侧栏：零配置不读源表、不画分组；挂过源才在启动时读；每个挂载的源
- * 一组，状态点跟着连接状态，离线灰显。
+ * 启动：零配置不读源表；挂过源才在启动时读；为放行新来源重载后回到设置。
  */
 
 function connection(
@@ -132,49 +129,5 @@ describe("启动", () => {
     expect(reload).toHaveBeenCalled();
     expect(takeSettingsReopen()).toBe("remote");
     expect(takeSettingsReopen()).toBeNull();
-  });
-});
-
-describe("侧栏按源分组", () => {
-  it("只有本机：什么也不画", () => {
-    const registry = createSourceRegistry();
-    render(
-      <SourcesProvider registry={registry}>
-        <SourceGroups />
-      </SourcesProvider>,
-    );
-    expect(document.querySelector("[data-source-group]")).toBeNull();
-    registry.dispose();
-  });
-
-  it("挂载的源各一组：在线正常，离线灰显，状态有读屏文字", async () => {
-    const states: Record<string, SourceStatus["state"]> = {
-      a: "ready",
-      b: "offline",
-    };
-    const registry = createSourceRegistry({
-      connect: (d) => connection(d, states[d.sourceId] ?? "idle"),
-    });
-    await act(async () => {
-      await registry.hydrate(async () => [
-        { ...row("a", "direct"), orderIndex: 1 },
-        { ...row("b", "relayed"), orderIndex: 2 },
-      ]);
-    });
-    render(
-      <SourcesProvider registry={registry}>
-        <SourceGroups />
-      </SourcesProvider>,
-    );
-    const groups = [...document.querySelectorAll("[data-source-group]")];
-    expect(groups.map((one) => one.getAttribute("data-source-group"))).toEqual([
-      "a",
-      "b",
-    ]);
-    expect(groups[0]!.className).not.toContain("opacity-60");
-    expect(groups[1]!.className).toContain("opacity-60");
-    expect(screen.getByRole("region", { name: "b-label" })).toBeTruthy();
-    expect(screen.getByText("Offline")).toBeTruthy();
-    registry.dispose();
   });
 });

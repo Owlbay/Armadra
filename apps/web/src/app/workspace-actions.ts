@@ -71,13 +71,16 @@ export function useOpenWorkspace() {
   );
 
   return useCallback(
-    (workspace: Workspace) => {
-      const current = useCanvasStore.getState().workspace;
-      if (current?.id === workspace.id) return;
+    // `sourceId` 省略 = 此刻的源。同一个 id 在两个源里是两个工作空间，所以
+    // 「已经开着」要源也相同（侧栏从别的源组里打开时先切当前源再调这里）。
+    (workspace: Workspace, sourceId: string = activeSourceId()) => {
+      const state = useCanvasStore.getState();
+      if (state.workspace?.id === workspace.id && state.sourceId === sourceId)
+        return;
       rememberWorkspace(workspace.id);
       rememberBoard(null);
       openWorkspaceTab(workspace.id);
-      setWorkspace(workspace);
+      setWorkspace(workspace, sourceId);
       selectBoard(null);
       void runtimeApi.openWorkspace(workspace.id).catch(() => undefined);
     },
