@@ -30,6 +30,7 @@ export const mobile: MessageModule = {
     "mobile.key.ctrlE": "^E",
     "mobile.key.ctrlU": "^U",
     "mobile.key.ctrlK": "^K",
+    "mobile.push.unknownSource": "这条通知来自未添加的主机",
   },
   en: {
     "mobile.nav.canvas": "Canvas",
@@ -60,5 +61,7 @@ export const mobile: MessageModule = {
     "mobile.key.ctrlE": "^E",
     "mobile.key.ctrlU": "^U",
     "mobile.key.ctrlK": "^K",
+    "mobile.push.unknownSource":
+      "This notification is from a host you haven't added",
   },
 };
