@@ -56,6 +56,9 @@ export const errors: MessageModule = {
     "error.linkExpired": "链接已过期",
     "error.linkExhausted": "链接的使用次数已用完",
     "error.linkSecretInvalid": "链接不完整，请复制完整的链接",
+    "error.adapterNotInstallable": "这个 Agent 没有可安装的适配器", // i18n-exempt
+    "error.adapterAlreadyInstalled": "适配器已安装",
+    "error.npmNotFound": "找不到 npm，请先安装 Node.js", // i18n-exempt
 
     /* 投递的拒绝码（`agent-delivery.md` §3.5）。机器码本身不翻译，这里给的是
        「发生了什么」，因为看着画布的人不该去读 core 的中文句子。 */
@@ -131,6 +134,9 @@ export const errors: MessageModule = {
     "error.linkExpired": "This link has expired",
     "error.linkExhausted": "This link has no uses left",
     "error.linkSecretInvalid": "This link is incomplete. Copy the whole link.",
+    "error.adapterNotInstallable": "This agent has no adapter to install",
+    "error.adapterAlreadyInstalled": "The adapter is already installed",
+    "error.npmNotFound": "npm not found. Install Node.js first.",
 
     "error.delivery.LOOP_DETECTED":
       "These two nodes are feeding each other — stopped",

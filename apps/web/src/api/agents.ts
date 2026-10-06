@@ -1,4 +1,5 @@
 import {
+  adapterInstallJobSchema,
   agentListSchema,
   amaCredentialRequestSchema,
   amaCredentialStatusSchema,
@@ -174,6 +175,18 @@ export const agentsApiFor = (rpc: (source?: Source) => ArmadraClient) => ({
   clearAmaCredential: async (provider: string) =>
     amaCredentialStatusSchema.parse(
       await rpc().agents.clearAmaCredential({ provider }),
+    ),
+  /**
+   * 装 / 重装一家的 ACP 适配器（契约 §39.7）：立刻答任务，进度用
+   * {@link acpAdapterInstall} 读。只认有独立适配器包的那几家，只有 owner。
+   */
+  installAcpAdapter: async (agentId: string, reinstall: boolean) =>
+    adapterInstallJobSchema.parse(
+      await rpc().agents.installAdapter({ agentId, reinstall }),
+    ),
+  acpAdapterInstall: async (agentId: string) =>
+    adapterInstallJobSchema.parse(
+      await rpc().agents.adapterInstall({ agentId }),
     ),
   /** 清掉某个节点的未读标记；其它窗口通过 workspace 事件流同步。 */
   markAgentRead: async (nodeId: string) =>
