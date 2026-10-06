@@ -14,8 +14,8 @@
 import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { runtimeApi } from "../api/client";
 import { onWorkspaceConnection } from "../api/events";
+import { sessionsQuery } from "./sessions";
 import { useAgentStatusStore } from "./status-store";
 import { activeSourceId, sk } from "../sources/scope";
 
@@ -27,12 +27,7 @@ import { activeSourceId, sk } from "../sources/scope";
  */
 export function useAgentStatusHydration(workspaceId: string | null): void {
   const queryClient = useQueryClient();
-  const query = useQuery({
-    queryKey: sk("sessions", workspaceId),
-    queryFn: () => runtimeApi.sessions(workspaceId!),
-    enabled: Boolean(workspaceId),
-    retry: false,
-  });
+  const query = useQuery(sessionsQuery(workspaceId));
   const hydrate = useAgentStatusStore((state) => state.hydrate);
 
   useEffect(() => {
