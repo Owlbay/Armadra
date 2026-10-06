@@ -145,7 +145,7 @@ export function HostPage() {
               <div className="min-w-0">
                 <dt className="text-muted-foreground">{t("host.identity")}</dt>
                 <dd className="mt-1 break-all select-text">
-                  {state.hello.hostId || t("host.legacy")}
+                  {state.hello.sourceId || t("host.legacy")}
                 </dd>
               </div>
               {state.hello.hostInstanceId && (

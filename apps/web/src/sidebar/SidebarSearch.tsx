@@ -26,6 +26,7 @@ import {
   useConversations,
   type Conversation,
 } from "../meta/conversations";
+import { sk } from "../sources/scope";
 import { useCanvasStore } from "../store/canvas-store";
 import {
   Command,
@@ -70,7 +71,7 @@ export function SidebarSearch({ open, onOpenChange }: SidebarSearchProps) {
    */
   const documents = useQueries({
     queries: boards.map((board) => ({
-      queryKey: ["board", workspace?.id, board.id],
+      queryKey: sk("board", workspace?.id, board.id),
       queryFn: () => runtimeApi.loadBoard(workspace!.id, board.id),
       enabled: open && Boolean(workspace),
       staleTime: 30_000,

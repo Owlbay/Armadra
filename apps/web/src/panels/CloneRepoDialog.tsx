@@ -15,6 +15,7 @@ import {
   ResponsiveDialogHeader,
   ResponsiveDialogTitle,
 } from "./ResponsiveDialog";
+import { sk } from "../sources/scope";
 import { Input } from "@/ui/input";
 import { Progress } from "@/ui/progress";
 
@@ -105,7 +106,7 @@ export function CloneRepoDialog({
   useEffect(() => {
     if (!finished) return;
     setJobId(null);
-    void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+    void queryClient.invalidateQueries({ queryKey: sk("workspaces") });
     onOpenChange(false);
     onCloned?.({ ...finished, boards: [] } as WorkspaceSummary);
   }, [finished, onCloned, onOpenChange, queryClient]);

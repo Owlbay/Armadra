@@ -107,6 +107,8 @@ export interface AddNodeOptions {
 
 export interface CanvasState {
   workspace: Workspace | null;
+  /** 这个工作空间所在的源（客户端包 §2）；没有工作空间时是当前源。 */
+  sourceId: string;
   boards: BoardBrief[];
   boardId: string | null;
   document: BoardDocument | null;
@@ -140,7 +142,8 @@ export interface CanvasState {
 }
 
 export interface CanvasActions {
-  setWorkspace: (workspace: Workspace | null) => void;
+  /** `sourceId` 省略 = 同一工作空间沿用原来的源，否则取当前源。 */
+  setWorkspace: (workspace: Workspace | null, sourceId?: string) => void;
   setBoards: (boards: BoardBrief[]) => void;
   selectBoard: (boardId: string | null) => void;
   setDocument: (document: BoardDocument) => void;

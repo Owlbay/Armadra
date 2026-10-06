@@ -17,6 +17,7 @@ import {
   ResponsiveDialogHeader,
   ResponsiveDialogTitle,
 } from "@/panels/ResponsiveDialog";
+import { sk } from "../../sources/scope";
 import { ScrollArea } from "@/ui/scroll-area";
 import {
   Select,
@@ -106,7 +107,7 @@ export function HandoffDialog() {
   // 事件可能因为断线漏掉，未定状态再补一个 3 秒的轮询兜底。
   const tracked = view?.bundle.handoffId ?? source?.handoffId ?? null;
   const status = useQuery({
-    queryKey: ["handoff", workspaceId, tracked],
+    queryKey: sk("handoff", workspaceId, tracked),
     enabled: Boolean(workspaceId && tracked),
     queryFn: ({ signal }) => runtimeApi.handoff(workspaceId!, tracked!, signal),
     refetchInterval: view && !isSettled(view.state) ? 3_000 : false,
@@ -121,7 +122,7 @@ export function HandoffDialog() {
         if (!tracked || !view) return;
         if (event.targetNodeId !== view.bundle.target.nodeId) return;
         void client.invalidateQueries({
-          queryKey: ["handoff", workspaceId, tracked],
+          queryKey: sk("handoff", workspaceId, tracked),
         });
       }),
     [client, tracked, view, workspaceId],

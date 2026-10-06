@@ -29,6 +29,7 @@ import {
   RotateCw,
   Trash2,
 } from "lucide-react";
+import { sk } from "../sources/scope";
 import type { FileEntry, GitFileStatus } from "@armadra/shared";
 
 type DiffFileStatus = GitFileStatus["status"];
@@ -119,7 +120,7 @@ export function FileTree() {
   );
 
   const status = useQuery({
-    queryKey: ["git-status", workspace?.id],
+    queryKey: sk("git-status", workspace?.id),
     queryFn: ({ signal }) => gitGateway.status(gitStatusTarget, {}, signal),
     enabled: Boolean(workspace),
     refetchInterval: GIT_REFETCH_MS,
@@ -276,7 +277,7 @@ function Directory({
 }: TreeProps) {
   const t = useT();
   const files = useQuery({
-    queryKey: ["files", workspaceId, path],
+    queryKey: sk("files", workspaceId, path),
     queryFn: () => runtimeApi.listFiles(workspaceId, path),
     retry: false,
   });

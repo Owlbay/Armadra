@@ -22,6 +22,7 @@ import { MobileBottomNav } from "../shell/MobileBottomNav";
 import { MobileFocusPage } from "../shell/MobileFocusPage";
 import { WindowDragLayer } from "../shell/WindowDragLayer";
 import { useCanvasStore } from "../store/canvas-store";
+import { useWorkspaceSource } from "../sources/workspace-source";
 import { onIdentitySessionChange } from "../api/identity";
 import { Toaster } from "@/ui/sonner";
 import { useCompactLayout } from "@/platform/layout";
@@ -91,7 +92,8 @@ function AppShell() {
 
   useEffect(syncDocumentPreferences, []);
   useCanvasPreferences();
-  useWorkspaceEvents(workspace?.id ?? null);
+  const workspaceSource = useWorkspaceSource();
+  useWorkspaceEvents(workspace?.id ?? null, workspaceSource);
   useWorkspaceAccessLost();
   useControlNotices();
   useUsagePolicyNotice();

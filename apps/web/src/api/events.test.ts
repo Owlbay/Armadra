@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAgentStatusStore } from "../agent/status-store";
+import { scoped } from "../sources/scope";
 import {
   RESUBSCRIBE_DELAY_MS,
   type WorkspaceEventTransport,
@@ -8,9 +9,11 @@ import {
   onWorkspaceAccessLost,
   onWorkspaceConnection,
   onWorkspaceEvent,
+  openEventConnections,
   resetWorkspaceEvents,
   setWorkspaceEventTransport,
 } from "./events";
+import { localSource, type Source } from "./source";
 
 const WORKSPACE = "019ff7d1-0d12-7421-833d-2c5e8d64ed22";
 const NODE = "019ff7d1-0d12-7421-833d-2c5e8d64ed21";
@@ -24,6 +27,7 @@ class Feed implements AsyncIterable<unknown> {
   aborted = false;
 
   constructor(
+    readonly sourceId: string,
     readonly workspaceId: string,
     signal: AbortSignal,
   ) {
@@ -72,27 +76,38 @@ class Feed implements AsyncIterable<unknown> {
 }
 
 const feeds: Feed[] = [];
-const drops = new Set<() => void>();
+/** 每个源的「连接断了」监听（一个源一条控制面连接）。 */
+const drops = new Map<string, Set<() => void>>();
 let closedWith: number | null = null;
 let refuse: unknown = null;
 
+const dropAll = (sourceId = "local") => {
+  for (const drop of drops.get(sourceId) ?? []) drop();
+};
+
 const fake: WorkspaceEventTransport = {
-  async subscribe(workspaceId, signal) {
+  async subscribe(source, workspaceId, signal) {
     if (refuse !== null) {
       const error = refuse;
       refuse = null;
       throw error;
     }
-    const feed = new Feed(workspaceId, signal);
+    const feed = new Feed(source.sourceId, workspaceId, signal);
     feeds.push(feed);
     return feed;
   },
-  onDrop(listener) {
-    drops.add(listener);
-    return () => drops.delete(listener);
+  onDrop(source, listener) {
+    const set = drops.get(source.sourceId) ?? new Set();
+    set.add(listener);
+    drops.set(source.sourceId, set);
+    return () => set.delete(listener);
   },
   closedWith: () => closedWith,
 };
+
+function remoteSource(sourceId: string): Source {
+  return { ...localSource, sourceId, httpBase: "http://r", wsBase: "ws://r" };
+}
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
 const cursor = (at: number) => ({
@@ -147,7 +162,7 @@ describe("workspace events", () => {
     feeds[0]!.push(status("working"));
     await settle();
     expect(seen).toHaveBeenCalledTimes(1);
-    expect(useAgentStatusStore.getState().statuses[NODE]!.state).toBe(
+    expect(useAgentStatusStore.getState().statuses[scoped(NODE)]!.state).toBe(
       "working",
     );
     off();
@@ -164,15 +179,15 @@ describe("workspace events", () => {
     await settle();
     feeds[0]!.push(cursor(3));
     await settle();
-    for (const drop of drops) drop();
+    dropAll();
     // 重试插件在同一个迭代器里重订：core 补发完先发一帧新的位置帧。
     feeds[0]!.push(cursor(9));
     await settle();
     expect(seen).not.toHaveBeenCalled();
     expect(connected.mock.calls).toEqual([
-      [WORKSPACE, true],
-      [WORKSPACE, false],
-      [WORKSPACE, true],
+      [WORKSPACE, true, "local"],
+      [WORKSPACE, false, "local"],
+      [WORKSPACE, true, "local"],
     ]);
     offEvent();
     offConnection();
@@ -200,7 +215,7 @@ describe("workspace events", () => {
     await settle();
     feeds[0]!.fail({ code: "forbidden" });
     await settle();
-    expect(lost).toHaveBeenCalledWith(WORKSPACE);
+    expect(lost).toHaveBeenCalledWith(WORKSPACE, "local");
     await vi.advanceTimersByTimeAsync(30_000);
     expect(feeds).toHaveLength(1);
     off();
@@ -215,7 +230,7 @@ describe("workspace events", () => {
     closedWith = 4403;
     feeds[0]!.fail(new Error("WebSocket is not open"));
     await settle();
-    expect(lost).toHaveBeenCalledWith(WORKSPACE);
+    expect(lost).toHaveBeenCalledWith(WORKSPACE, "local");
     off();
     release();
   });
@@ -249,9 +264,9 @@ describe("workspace events", () => {
     feeds[1]!.push(cursor(40));
     await settle();
     expect(connected.mock.calls).toEqual([
-      [WORKSPACE, true],
-      [WORKSPACE, false],
-      [WORKSPACE, true],
+      [WORKSPACE, true, "local"],
+      [WORKSPACE, false, "local"],
+      [WORKSPACE, true, "local"],
     ]);
     off();
     release();
@@ -287,5 +302,77 @@ describe("workspace events", () => {
     expect(feeds[1]!.workspaceId).toBe(other);
     first();
     second();
+  });
+
+  it("两个源各订一个工作空间：订阅各一条，事件带上所属的源", async () => {
+    const remote = remoteSource("remote-1");
+    const seen = vi.fn();
+    const off = onWorkspaceEvent("agent.status", (_event, from) => seen(from), {
+      allSources: true,
+    });
+    const current = vi.fn();
+    const offCurrent = onWorkspaceEvent("agent.status", (_event, from) =>
+      current(from),
+    );
+    const releaseLocal = connectWorkspaceEvents(WORKSPACE);
+    const releaseRemote = connectWorkspaceEvents(WORKSPACE, remote);
+    await settle();
+    expect(feeds.map((feed) => feed.sourceId)).toEqual(["local", "remote-1"]);
+    expect(openEventConnections()).toEqual([
+      { sourceId: "local", workspaceId: WORKSPACE },
+      { sourceId: "remote-1", workspaceId: WORKSPACE },
+    ]);
+    feeds[0]!.push(status("working"));
+    feeds[1]!.push(status("done"));
+    await settle();
+    // 同一个节点 id 在两个源里各记一份，互不覆盖；缺省只收当前源的。
+    const { statuses } = useAgentStatusStore.getState();
+    expect(statuses[scoped(NODE, "local")]?.state).toBe("working");
+    expect(statuses[scoped(NODE, "remote-1")]?.state).toBe("done");
+    expect(seen.mock.calls).toEqual([["local"], ["remote-1"]]);
+    expect(current.mock.calls).toEqual([["local"]]);
+    releaseRemote();
+    await settle();
+    expect(feeds[1]!.aborted).toBe(true);
+    expect(openEventConnections()).toEqual([
+      { sourceId: "local", workspaceId: WORKSPACE },
+    ]);
+    off();
+    offCurrent();
+    releaseLocal();
+  });
+
+  it("一个源的连接断了只落下那个源的订阅状态", async () => {
+    const remote = remoteSource("remote-1");
+    const connected = vi.fn();
+    const off = onWorkspaceConnection(connected);
+    const releaseLocal = connectWorkspaceEvents(WORKSPACE);
+    const releaseRemote = connectWorkspaceEvents(WORKSPACE, remote);
+    await settle();
+    feeds[0]!.push(cursor(1));
+    feeds[1]!.push(cursor(1));
+    await settle();
+    dropAll("remote-1");
+    expect(connected.mock.calls).toEqual([
+      [WORKSPACE, true, "local"],
+      [WORKSPACE, true, "remote-1"],
+      [WORKSPACE, false, "remote-1"],
+    ]);
+    off();
+    releaseLocal();
+    releaseRemote();
+  });
+
+  it("同一个源换工作空间会取消旧的，别的源的订阅不动", async () => {
+    const remote = remoteSource("remote-1");
+    connectWorkspaceEvents("w1");
+    connectWorkspaceEvents("w9", remote);
+    connectWorkspaceEvents("w2");
+    await settle();
+    expect(openEventConnections()).toEqual([
+      { sourceId: "remote-1", workspaceId: "w9" },
+      { sourceId: "local", workspaceId: "w2" },
+    ]);
+    expect(feeds.find((feed) => feed.workspaceId === "w1")?.aborted).toBe(true);
   });
 });

@@ -1,3 +1,4 @@
+import { activeSourceId, scoped, unscoped, withSource } from "../sources/scope";
 import { useEffect } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -126,7 +127,7 @@ export const useSubagentStore = create<SubagentState>((set, get) => ({
         ) {
           return;
         }
-        const parentId = incoming.nodeId;
+        const parentId = scoped(incoming.nodeId);
         const key = cardKey(incoming);
         set((current) => {
           const existing = current.cards[parentId] ?? [];
@@ -169,7 +170,7 @@ export const useSubagentStore = create<SubagentState>((set, get) => ({
       }
 
       case "agent.status": {
-        const nodeId = event.status.nodeId;
+        const nodeId = scoped(event.status.nodeId);
         const previous = get().parentState[nodeId];
         const incoming = event.status.state;
         set((current) => ({
@@ -183,7 +184,7 @@ export const useSubagentStore = create<SubagentState>((set, get) => ({
       }
 
       case "terminal.exit": {
-        if (event.nodeId) get().clearParent(event.nodeId);
+        if (event.nodeId) get().clearParent(scoped(event.nodeId));
         return;
       }
 
@@ -225,12 +226,23 @@ const EMPTY: readonly SubagentCardModel[] = [];
 export function useSubagentCards(
   parentId: string,
 ): readonly SubagentCardModel[] {
-  return useSubagentStore((state) => state.cards[parentId] ?? EMPTY);
+  return useSubagentStore((state) => state.cards[scoped(parentId)] ?? EMPTY);
 }
 
 /** 所有卡片，按父节点分组 —— 派生边与临时节点层用。 */
 export function useAllSubagentCards(): Record<string, SubagentCardModel[]> {
-  return useSubagentStore(useShallow((state) => state.cards));
+  // 只取当前源的父节点，键还原成节点 id。
+  return useSubagentStore(
+    useShallow((state) => {
+      const here = activeSourceId();
+      const mine: Record<string, SubagentCardModel[]> = {};
+      for (const [key, cards] of Object.entries(state.cards)) {
+        const { sourceId, id } = unscoped(key);
+        if (sourceId === here) mine[id] = cards;
+      }
+      return mine;
+    }),
+  );
 }
 
 /**
@@ -239,12 +251,15 @@ export function useAllSubagentCards(): Record<string, SubagentCardModel[]> {
  */
 export function useSubagentEvents(): void {
   useEffect(() => {
-    const handle = (event: WorkspaceEvent) =>
-      useSubagentStore.getState().handleEvent(event);
+    const handle = (event: WorkspaceEvent, sourceId: string) =>
+      withSource(sourceId, () =>
+        useSubagentStore.getState().handleEvent(event),
+      );
+    const all = { allSources: true };
     const off = [
-      onWorkspaceEvent("agent.subagent", handle),
-      onWorkspaceEvent("agent.status", handle),
-      onWorkspaceEvent("terminal.exit", handle),
+      onWorkspaceEvent("agent.subagent", handle, all),
+      onWorkspaceEvent("agent.status", handle, all),
+      onWorkspaceEvent("terminal.exit", handle, all),
     ];
     return () => {
       for (const release of off) release();

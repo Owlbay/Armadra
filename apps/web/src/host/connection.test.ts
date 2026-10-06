@@ -11,7 +11,7 @@ import { useHostConnection } from "./use-host-connection";
 
 function hello(hostId = "host-1"): IdentityHello {
   return {
-    hostId,
+    sourceId: hostId,
     hostInstanceId: "process-1",
     maxFrameBytes: 1_048_576,
     capabilities: ["identity.native-session.v1"],

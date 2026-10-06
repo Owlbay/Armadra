@@ -32,7 +32,7 @@ export interface HostIdentityPanelProps {
 
 /** 身份面用不上的原因；`null` 表示可以用。 */
 function availability(hello: IdentityHello | undefined): string | null {
-  if (!hello?.hostId || !hello.hostInstanceId)
+  if (!hello?.sourceId || !hello.hostInstanceId)
     return "hostIdentity.checkRequired";
   if (!hasSessionCapability(hello)) return "hostIdentity.unsupported";
   return null;

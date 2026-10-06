@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -148,9 +149,9 @@ beforeEach(() => {
   useCanvasStore.getState().setPanel("sidebar", "open");
   useCanvasStore.getState().setPanel("settings", false);
   usePreferencesStore.setState({
-    openWorkspaceIds: [workspace.id],
-    collapsedWorkspaceIds: [],
-    pinnedBoardIds: [],
+    openWorkspaceKeys: [scoped(workspace.id)],
+    collapsedWorkspaceKeys: [],
+    pinnedBoardKeys: [],
   });
 });
 

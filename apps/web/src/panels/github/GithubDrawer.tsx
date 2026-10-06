@@ -23,6 +23,7 @@ import {
   pullFilter,
   type GithubFilterState,
 } from "./Filters";
+import { sk } from "../../sources/scope";
 import { IssueDetail } from "./IssueDetail";
 import { IssueList, type MoveIssueRequest } from "./IssueList";
 import { PullDetail } from "./PullDetail";
@@ -98,7 +99,7 @@ export function GithubDrawer() {
     canWrite || (state.status === "blocked" && state.canWrite === true);
 
   const detection = useQuery({
-    queryKey: ["forge", "detect", workspaceId ?? "", resolveUrl],
+    queryKey: sk("forge", "detect", workspaceId ?? "", resolveUrl),
     queryFn: () => resolveForge(resolveUrl),
     enabled: open && Boolean(sessionClient) && resolveUrl.length > 0,
     retry: false,

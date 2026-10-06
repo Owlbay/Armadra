@@ -9,9 +9,13 @@ const TOKEN_A = `${"0".repeat(32)}.${"a".repeat(43)}`;
 const TOKEN_B = `${"1".repeat(32)}.${"b".repeat(43)}`;
 
 const METHODS = [
-  "getSession",
+  "getSessions",
   "setSession",
-  "clearSession",
+  "removeSession",
+  "getRemotes",
+  "setRemote",
+  "removeRemote",
+  "peek",
   "pin",
   "scan",
   "pushRegistration",
@@ -56,13 +60,18 @@ afterEach(() => {
 describe("plugin bridge", () => {
   it("registers ArmadraNative where the page looks for it", async () => {
     const calls = await boot((method) =>
-      method === "getSession"
+      method === "getSessions"
         ? {
-            session: {
-              origin: "https://192.168.1.20:8443",
-              accessToken: TOKEN_A,
-              refreshToken: TOKEN_B,
-            },
+            sessions: [
+              {
+                sourceId: "h1",
+                origin: "https://192.168.1.20:8443",
+                via: "direct",
+                accessToken: TOKEN_A,
+                refreshToken: TOKEN_B,
+                expiresAtMs: 1_000,
+              },
+            ],
           }
         : method === "scan"
           ? { text: "armadra://pair?host=h&ticket=t&fp=f" }
@@ -71,11 +80,16 @@ describe("plugin bridge", () => {
     const bridge = nativeBridge();
     expect(bridge.available).toBe(true);
     expect(bridge.canScan).toBe(true);
-    await expect(bridge.loadSession()).resolves.toEqual({
-      origin: "https://192.168.1.20:8443",
-      accessToken: TOKEN_A,
-      refreshToken: TOKEN_B,
-    });
+    await expect(bridge.getSessions()).resolves.toEqual([
+      {
+        sourceId: "h1",
+        origin: "https://192.168.1.20:8443",
+        via: "direct",
+        accessToken: TOKEN_A,
+        refreshToken: TOKEN_B,
+        expiresAtMs: 1_000,
+      },
+    ]);
     await expect(bridge.scan()).resolves.toBe(
       "armadra://pair?host=h&ticket=t&fp=f",
     );
@@ -110,6 +124,48 @@ describe("plugin bridge", () => {
       transport: "relay",
       token: "relay-token",
       publicKey: "Mb0wddPMedULBQlg6Q4uAX0WLJV1JM94c8COF_6jnWM",
+    });
+  });
+
+  it("keeps several sessions and remotes, one per connection", async () => {
+    const calls = await boot((method) => {
+      if (method === "getRemotes")
+        return {
+          remotes: [
+            {
+              serviceId: "personal:relay.example",
+              issuer: "https://relay.example",
+              kind: "personal",
+              refreshToken: "r".repeat(40),
+              fingerprint: "e".repeat(64),
+            },
+            { serviceId: "bad id", issuer: "x", kind: "personal" },
+          ],
+        };
+      if (method === "peek")
+        return { fingerprint: "f".repeat(64), trusted: false, pinned: false };
+      return {};
+    });
+    const bridge = nativeBridge();
+    await bridge.setSession({
+      sourceId: "h2",
+      origin: "https://relay.example",
+      via: "relayed",
+      accessToken: TOKEN_A,
+      refreshToken: TOKEN_B,
+      expiresAtMs: 0,
+    });
+    await bridge.removeSession("h2", "https://relay.example");
+    await bridge.removeRemote("personal:relay.example");
+    expect(calls).toHaveBeenCalledWith("ArmadraNative", "removeSession", {
+      sourceId: "h2",
+      origin: "https://relay.example",
+    });
+    await expect(bridge.getRemotes()).resolves.toHaveLength(1);
+    await expect(bridge.peek("https://relay.example")).resolves.toEqual({
+      fingerprint: "f".repeat(64),
+      trusted: false,
+      pinned: false,
     });
   });
 });

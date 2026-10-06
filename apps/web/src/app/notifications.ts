@@ -14,6 +14,7 @@
  * 这个模块还顺带挂了两件同源的副作用（都要一个 App 级的挂载点，且都是
  * 「未读」的生命周期）：选中节点即已读，以及过期权限请求的清扫。
  */
+import { scoped } from "../sources/scope";
 import { useEffect } from "react";
 import type { AgentStatus } from "@armadra/shared";
 
@@ -273,7 +274,7 @@ export function useAgentNotifications(): void {
       const statuses = useAgentStatusStore.getState().statuses;
       for (const nodeId of selection) {
         if (previous.selectedNodeIds.includes(nodeId)) continue;
-        if (statuses[nodeId]?.unread) {
+        if (statuses[scoped(nodeId)]?.unread) {
           useAgentStatusStore.getState().markRead(nodeId);
         }
       }

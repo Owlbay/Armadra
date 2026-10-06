@@ -13,6 +13,7 @@ import {
   ResponsiveDialogHeader,
   ResponsiveDialogTitle,
 } from "../../../ResponsiveDialog";
+import { sk } from "../../../../sources/scope";
 import {
   Select,
   SelectContent,
@@ -74,7 +75,7 @@ export function WorktreeCreateDialog({
   useEffect(() => setValue(EMPTY_WORKTREE_FORM), [repositoryPath]);
 
   const snapshot = useQuery({
-    queryKey: ["git-log-worktree-branches", workspaceId, repositoryPath],
+    queryKey: sk("git-log-worktree-branches", workspaceId, repositoryPath),
     queryFn: ({ signal }) => loadBranches(repositoryPath!, signal),
     enabled: repositoryPath !== null,
     retry: false,

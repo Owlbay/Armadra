@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import {
   afterEach,
   beforeAll,
@@ -222,7 +223,7 @@ describe("TerminalNode body", () => {
     access.canAnswer = false;
     useAgentStatusStore.setState({
       statuses: {
-        n1: {
+        [scoped("n1")]: {
           nodeId: "n1",
           workspaceId: "w",
           agentId: "codex",

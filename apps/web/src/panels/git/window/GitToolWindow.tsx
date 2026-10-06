@@ -1,3 +1,4 @@
+import { sk } from "../../../sources/scope";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Maximize2, Minimize2, RotateCw, X } from "lucide-react";
@@ -76,8 +77,8 @@ export function GitToolWindow() {
             // `[name, workspaceId]` 前缀失效，带仓库路径的键一样命中；日志与引
             // 用不按工作空间分键，只能单独点名。
             invalidateGitQueries(client, workspaceId);
-            void client.invalidateQueries({ queryKey: ["git-log"] });
-            void client.invalidateQueries({ queryKey: ["git-refs"] });
+            void client.invalidateQueries({ queryKey: sk("git-log") });
+            void client.invalidateQueries({ queryKey: sk("git-refs") });
             setRefreshToken((value) => value + 1);
           }}
         >

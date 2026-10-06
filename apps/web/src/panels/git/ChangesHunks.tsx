@@ -8,6 +8,7 @@ import type {
   GitHunkResult,
   GitHunkScope,
 } from "@armadra/shared";
+import { sk } from "../../sources/scope";
 import { useT } from "../../app/preferences-store";
 import { Button } from "../../ui/button";
 import { Badge } from "../../ui/badge";
@@ -98,7 +99,7 @@ function HunkSession({
   const query = useQuery({
     // 检出路径必须进键：两个仓库里的同名文件是两份差异，共用一个键会把别人的
     // hunk 当成自己的显示出来，连带那份 `diffDigest` 也是别人的。
-    queryKey: ["git-hunks", workspaceId, repositoryPath, file, scope],
+    queryKey: sk("git-hunks", workspaceId, repositoryPath, file, scope),
     queryFn: async ({ signal }) => {
       const value = await load(
         workspaceId,
@@ -141,7 +142,7 @@ function HunkSession({
           "git-repository-history",
           "git-repository-worktrees",
         ].map((key) =>
-          client.invalidateQueries({ queryKey: [key, workspaceId] }),
+          client.invalidateQueries({ queryKey: sk(key, workspaceId) }),
         ),
       );
       if (active.current) onChanged?.(workspaceId, file, scope);

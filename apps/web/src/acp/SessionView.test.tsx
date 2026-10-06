@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -454,7 +455,7 @@ describe("SessionView", () => {
       ),
     );
     expect(
-      useAcpStore.getState().sessions[SESSION]?.models?.currentModelId,
+      useAcpStore.getState().sessions[scoped(SESSION)]?.models?.currentModelId,
     ).toBe("large");
   });
 
@@ -464,7 +465,8 @@ describe("SessionView", () => {
     await pickModel("Large");
     await waitFor(() =>
       expect(
-        useAcpStore.getState().sessions[SESSION]?.models?.currentModelId,
+        useAcpStore.getState().sessions[scoped(SESSION)]?.models
+          ?.currentModelId,
       ).toBe("small"),
     );
     expect(store.updateNodeData).not.toHaveBeenCalled();

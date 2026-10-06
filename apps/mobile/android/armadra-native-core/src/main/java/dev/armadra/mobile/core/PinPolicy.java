@@ -66,6 +66,25 @@ public final class PinPolicy {
         }
     }
 
+    /** 远程服务的签发方：HTTPS 来源；回环上的 HTTP 只给本机开发联调。 */
+    public static boolean isIssuer(String text) {
+        if (isOrigin(text)) return true;
+        if (text == null) return false;
+        try {
+            URI uri = new URI(text);
+            String host = uri.getHost();
+            String path = uri.getRawPath();
+            return "http".equals(uri.getScheme())
+                    && host != null
+                    && (host.equals("127.0.0.1") || host.equals("localhost") || host.equals("[::1]"))
+                    && (path == null || path.isEmpty() || path.equals("/"))
+                    && uri.getRawQuery() == null && uri.getRawFragment() == null
+                    && uri.getRawUserInfo() == null;
+        } catch (Exception error) {
+            return false;
+        }
+    }
+
     /** PEM（可多张）或单张 DER → 证书。认不出的跳过。 */
     public static List<X509Certificate> certificates(byte[] data) {
         List<X509Certificate> out = new ArrayList<>();

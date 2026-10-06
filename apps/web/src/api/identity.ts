@@ -7,7 +7,11 @@ import {
   fetchNativeTicket,
   isNativeShell,
 } from "../host/native-session";
-import { isNativeApp, nativeBridge } from "../mobile/native-bridge";
+import {
+  type StoredVia,
+  isNativeApp,
+  nativeBridge,
+} from "../mobile/native-bridge";
 import { localSource } from "./source";
 import {
   type SessionTokens,
@@ -76,15 +80,19 @@ export type IdentityDevice = z.infer<typeof deviceSchema>;
  * `capabilities` 是各域装配时报上来的能力名，页面据此判断一个面在不在——
  * 旧版本的沉默不是承诺，所以缺名字一律当「没有」。
  */
-export const identityHelloSchema = z.object({
-  protocol: z
-    .object({ major: z.number(), minor: z.number() })
-    .default({ major: 0, minor: 0 }),
-  hostId: z.string().default(""),
-  hostInstanceId: z.string().default(""),
-  capabilities: z.array(z.string()).default([]),
-  maxFrameBytes: z.number().default(0),
-});
+export const identityHelloSchema = z
+  .object({
+    protocol: z
+      .object({ major: z.number(), minor: z.number() })
+      .default({ major: 0, minor: 0 }),
+    hostId: z.string().default(""),
+    hostInstanceId: z.string().default(""),
+    capabilities: z.array(z.string()).default([]),
+    maxFrameBytes: z.number().default(0),
+  })
+  // 线上叫 `hostId`（core 的 JSON，契约不动）；页面里它是这台 core 的源标识，
+  // 叫 `sourceId`，与执行主机的 `executionHostId` 分开。
+  .transform(({ hostId, ...rest }) => ({ ...rest, sourceId: hostId }));
 
 export type IdentityHello = z.infer<typeof identityHelloSchema>;
 
@@ -286,6 +294,37 @@ function bearerTransport(): boolean {
   return isNativeShell() || isNativeApp();
 }
 
+/**
+ * 原生 App 正在用的连接（钥匙串里会话的键）：连接页配对时还不知道是哪个源，
+ * 以会话答案里的 `hostId` 为准；重开 App 与切换连接时由入口按源表指定
+ * （`mobile/entry.ts`）。`via` 是这份会话发往的路：直连 Gateway 或经中继。
+ */
+let nativeConnection: { sourceId: string | null; via: StoredVia } = {
+  sourceId: null,
+  via: "direct",
+};
+let lastHostId: string | null = null;
+
+export function setNativeConnection(
+  sourceId: string | null,
+  via: StoredVia,
+): void {
+  nativeConnection = { sourceId, via };
+  lastHostId = null;
+}
+
+function originOf(base: string): string {
+  try {
+    return new URL(base).origin;
+  } catch {
+    return base;
+  }
+}
+
+function nativeSourceId(): string | null {
+  return nativeConnection.sourceId ?? lastHostId;
+}
+
 function remember(
   session: IdentitySession,
   origin: string = localSource.httpBase,
@@ -295,11 +334,16 @@ function remember(
     tokens.refresh = session.native.refreshToken;
     tokens.accessExpiresAt = session.expiresAtUnixMs;
     scheduleShellRefresh();
-    if (isNativeApp())
-      void nativeBridge().saveSession({
-        origin,
+    if (session.hostId !== "") lastHostId = session.hostId;
+    const sourceId = nativeConnection.sourceId ?? session.hostId;
+    if (isNativeApp() && sourceId !== "")
+      void nativeBridge().setSession({
+        sourceId,
+        origin: originOf(origin),
+        via: nativeConnection.via,
         accessToken: tokens.access,
         refreshToken: tokens.refresh,
+        expiresAtMs: tokens.accessExpiresAt,
       });
   }
   rememberCsrf(session.csrfToken ?? "");
@@ -482,7 +526,7 @@ export async function resumeIdentity(): Promise<IdentitySession | null> {
       if (isNativeApp()) {
         // 刷新密钥也不认了（设备被撤销或过期）：钥匙串里那份作废，回连接页。
         resetIdentityCredentials();
-        await nativeBridge().clearSession();
+        await clearNativeSession();
         return null;
       }
       if (isNativeShell()) {
@@ -528,22 +572,42 @@ export async function logoutIdentity(): Promise<void> {
     });
   } finally {
     resetIdentityCredentials();
-    if (isNativeApp()) await nativeBridge().clearSession();
+    if (isNativeApp()) await clearNativeSession();
     announce();
   }
 }
 
 /* ------------------------------- 原生 App -------------------------------- */
 
+/** 钥匙串里这个连接的那一份作废（会话被拒、登出）；别的连接不动。 */
+async function clearNativeSession(): Promise<void> {
+  const sourceId = nativeSourceId();
+  if (sourceId !== null)
+    await nativeBridge().removeSession(
+      sourceId,
+      originOf(localSource.httpBase),
+    );
+}
+
 /**
- * 从钥匙串把上次的会话读回内存。来源对不上（换过 Gateway）的那份不用。
- * 读到返回 `true`。
+ * 从钥匙串把这个连接上次的会话读回内存：键是源与路（`setNativeConnection`），
+ * 没指定源时按来源认直连的那份。读到返回 `true`。
  */
 export async function restoreNativeCredentials(): Promise<boolean> {
-  const stored = await nativeBridge().loadSession();
-  if (stored === null || stored.origin !== localSource.httpBase) return false;
+  const sessions = await nativeBridge().getSessions();
+  const { sourceId, via } = nativeConnection;
+  const origin = originOf(localSource.httpBase);
+  const stored = sessions.find(
+    (candidate) =>
+      candidate.via === via &&
+      (sourceId === null
+        ? candidate.origin === origin
+        : candidate.sourceId === sourceId),
+  );
+  if (stored === undefined) return false;
   tokens.access = stored.accessToken;
   tokens.refresh = stored.refreshToken;
+  tokens.accessExpiresAt = stored.expiresAtMs;
   return true;
 }
 
@@ -747,7 +811,7 @@ export async function revokeIdentityDevice(
 export function permits(
   session: IdentitySession,
   permission: string,
-  options: { workspaceId?: string; hostId?: string } = {},
+  options: { workspaceId?: string; executionHostId?: string } = {},
 ): boolean {
   return session.scopes.some(
     (scope) =>
@@ -756,8 +820,8 @@ export function permits(
         ? !scope.workspaceId
         : !scope.workspaceId || scope.workspaceId === options.workspaceId) &&
       (!scope.executionHostId ||
-        options.hostId === undefined ||
-        scope.executionHostId === options.hostId),
+        options.executionHostId === undefined ||
+        scope.executionHostId === options.executionHostId),
   );
 }
 
