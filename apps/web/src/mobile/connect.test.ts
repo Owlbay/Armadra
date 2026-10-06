@@ -445,7 +445,7 @@ describe("添加连接 · 个人中转", () => {
     await enroll.begin({ issuer: ISSUER, account: "a", password: "b" });
     await expect(enroll.trust()).resolves.toEqual({
       kind: "failure",
-      failure: "pin",
+      failure: "fingerprint",
     });
     expect(net.calls).toHaveLength(0);
   });
@@ -519,6 +519,10 @@ describe("添加连接 · 分享链接 / 二维码", () => {
     });
     // 邀请令牌与秘密不进连接表。
     expect(localStorage.getItem("armadra.sources")).not.toContain(SECRET);
+    // 重载进画布后打开链接指向的工作空间（本机源就是这条连接）。
+    expect(sessionStorage.getItem("armadra.sources.openAfterJoin")).toBe(
+      "local",
+    );
   });
 
   it("深链形式同样挂载；新的自签中转要先核对指纹；失效的链接说明原因", async () => {
@@ -543,7 +547,7 @@ describe("添加连接 · 分享链接 / 二维码", () => {
     });
     await expect(enroll.trust()).resolves.toEqual({
       kind: "failure",
-      failure: "link",
+      failure: "linkExpired",
     });
     await expect(enroll.join("https://relay.example.com/j/x")).resolves.toEqual(
       {
@@ -638,5 +642,27 @@ describe("管理连接", () => {
     openConnection(HOST_B, reload);
     expect(activeConnectionId()).toBe(HOST_B);
     expect(reload).toHaveBeenCalledOnce();
+  });
+});
+
+describe("分享链接的失败按码说明（A4-3p）", () => {
+  it("过期、撤销、用尽、秘密不对、邀请被拒各有各的原因", async () => {
+    const { cloudFailureOf } = await import("./connect");
+    const { CloudError } = await import("./cloud-client");
+    expect(cloudFailureOf(new CloudError(410, "link_expired"))).toBe(
+      "linkExpired",
+    );
+    expect(cloudFailureOf(new CloudError(404, "link_invalid"))).toBe(
+      "linkInvalid",
+    );
+    expect(cloudFailureOf(new CloudError(410, "link_exhausted"))).toBe(
+      "linkExhausted",
+    );
+    expect(cloudFailureOf(new CloudError(403, "link_secret_invalid"))).toBe(
+      "linkSecret",
+    );
+    expect(cloudFailureOf(new CloudError(401, "invitation_invalid"))).toBe(
+      "invitation",
+    );
   });
 });
