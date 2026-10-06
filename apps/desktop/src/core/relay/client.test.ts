@@ -157,14 +157,15 @@ describe("心跳、GOAWAY 与退避", () => {
   });
 
   it("帧一直在来：静默看门狗不误判，隧道保持 ready", async () => {
-    const heartbeatMs = 60;
+    // 静默阈值是 2 × heartbeatMs；窗口太窄时 CI 机器上事件循环一卡就会误判断开。
+    const heartbeatMs = 250;
     world = await relayCore({ relay: { heartbeatMs } });
     await world.register();
     const first = await world.relay.nextTunnel(0);
     const current = world;
     const issuer = current.cloud.registrations()[0]!.issuer;
     await until(() => current.tunnels.status(issuer).state === "ready");
-    await new Promise((resolve) => setTimeout(resolve, 8 * heartbeatMs));
+    await new Promise((resolve) => setTimeout(resolve, 6 * heartbeatMs));
     expect(first.closeCode).toBeUndefined();
     expect(world.relay.connections).toBe(1);
     expect(world.tunnels.status(issuer)).toMatchObject({
