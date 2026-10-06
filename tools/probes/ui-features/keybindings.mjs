@@ -28,6 +28,8 @@ async function openShortcuts(page) {
     `return [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "设置");`,
     "设置按钮",
   );
+  // 「快捷键」在侧栏最底下：对话框还在放大的动画里时按坐标点，最容易点到下边缘外。
+  await page.dialogSettled("设置对话框停稳");
   await page.clickOn(
     `return [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent.trim() === "快捷键");`,
     "快捷键页",

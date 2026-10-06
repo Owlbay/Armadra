@@ -2872,6 +2872,7 @@ V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
 - **`agent.approval.request`**（`packages/shared/src/api/events.ts`）：从 `unknown` 收紧成 `agentApprovalRecordSchema`——审批行（`id`、`nodeId`、`workspaceId`、`createdAt`，答复字段 `nullish`，hook 面的行没有 `revision`），答复事件的 `resolved` / `decision` / `route` / `elicitation`，CLI 的原话 `request` 按 JSON 透传，其余键 JSON 透传。`workspaces.events` 的 `unknown` 放行从 3 降到 2（剩 ACP 工具调用的 `rawInput` / `rawOutput`，是适配器的原样载荷）。
 - **`GatewaySection`**：新增组件用例，会话变化时还在路上的设备请求被中止、重取的答案上屏；把「先取消」那一步去掉用例就红。
 - 协议 minor 17 → 18（17 给了 P4 #181），新 procedure 的 `since` 为 1.18。
+- **探针**：`ui-features/keybindings.mjs` 在设置对话框停稳（`dialogSettled`）之后再点侧栏最底下的「快捷键」——CI 上两次在对话框放大动画里按坐标点空。
 
 实测（macOS arm64，基于 main 99998b4b）：
 
