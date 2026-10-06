@@ -382,6 +382,48 @@ test("an entry for another platform is skipped, and docker is a requirement", as
   }
 });
 
+test("a cloud requirement is skipped without a checkout and passes the path with one", async () => {
+  const { root, remove } = fixture();
+  const manifest = {
+    entries: [
+      {
+        id: "needs-cloud",
+        tier: "a",
+        script: "pass.mjs",
+        args: ["{out}"],
+        requires: ["cloud"],
+        timeoutMinutes: 1,
+      },
+    ],
+  };
+  try {
+    const without = await runTier({
+      tier: "a",
+      root,
+      out: join(root, "without"),
+      log: quiet,
+      env: { PATH: process.env.PATH },
+      probe: { ...present, cloud: () => null },
+      manifest,
+    });
+    assert.equal(without.status, "passed");
+    assert.equal(without.entries[0].status, "skipped");
+    assert.match(without.entries[0].reason, /armadra-cloud/);
+    const withIt = await runTier({
+      tier: "a",
+      root,
+      out: join(root, "with"),
+      log: quiet,
+      env: { PATH: process.env.PATH },
+      probe: { ...present, cloud: () => "/somewhere/armadra-cloud" },
+      manifest,
+    });
+    assert.equal(withIt.entries[0].status, "passed");
+  } finally {
+    remove();
+  }
+});
+
 test("an unknown tier or an id outside the tier is refused", async () => {
   await assert.rejects(runTier({ tier: "c", log: quiet }), /unknown tier/);
   await assert.rejects(
