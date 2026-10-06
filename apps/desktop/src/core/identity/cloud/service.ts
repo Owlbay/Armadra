@@ -85,6 +85,10 @@ export class CloudService {
     return this.registry.relayCleanup(input);
   }
 
+  relayDismiss(input: { issuer: string }, principalId?: string) {
+    return this.registry.relayDismiss(input, principalId);
+  }
+
   status() {
     return this.registry.status();
   }

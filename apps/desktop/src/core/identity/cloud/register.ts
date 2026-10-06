@@ -365,6 +365,35 @@ export class CloudRegistry {
     return { pending: true, code: state.code };
   }
 
+  /**
+   * 放弃一条待清理（契约 §31.5）：只删本机的登记，不再去删中继侧那条源记录。
+   * 不欠的答 `not_found`。
+   */
+  relayDismiss(
+    input: { issuer: string },
+    principalId?: string,
+  ): Record<string, never> {
+    let issuer = input.issuer;
+    try {
+      issuer = issuerOf(input.issuer);
+    } catch {
+      // 同 revoke：按原样找。
+    }
+    if (
+      !this.options.cloud.relayPending().some((one) => one.issuer === issuer)
+    ) {
+      throw fail("not_found", "这个远程服务没有待清理的源记录");
+    }
+    this.options.cloud.setRelayCleanup(issuer, "");
+    audit({
+      action: "cloud.relayDismiss",
+      target: issuer,
+      ...(principalId === undefined ? {} : { principalId }),
+      detail: { issuer },
+    });
+    return {};
+  }
+
   /** 删中继侧的源记录；答 `done`，或记下并答没删成的码。 */
   private async cleanRelay(
     issuer: string,

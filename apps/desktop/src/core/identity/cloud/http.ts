@@ -253,6 +253,7 @@ export class CloudHttp {
         : route === "POST /register" ||
             route === "DELETE /register" ||
             route === "POST /relay-cleanup" ||
+            route === "POST /relay-dismiss" ||
             trusted !== null
           ? scope("settings:write")
           : route === "POST /bind"
@@ -302,6 +303,12 @@ export class CloudHttp {
       if (route === "GET /relay-pending") return cloud.relayPending();
       if (route === "POST /relay-cleanup") {
         return cloud.relayCleanup(parse(cloudRevokeInputSchema, body(request)));
+      }
+      if (route === "POST /relay-dismiss") {
+        return cloud.relayDismiss(
+          parse(cloudRevokeInputSchema, body(request)),
+          principal.principalId,
+        );
       }
       if (route === "POST /bind") {
         return cloud.bind(

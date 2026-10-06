@@ -99,6 +99,7 @@ export const SECURITY_AUDIT_ACTIONS = [
   "cloud.bind",
   "cloud.register",
   "cloud.revoke",
+  "cloud.relayDismiss",
   "invitation.accept.link",
 ] as const;
 
