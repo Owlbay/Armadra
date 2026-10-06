@@ -26,6 +26,7 @@ import { useEnabledAgents } from "../app/use-agents";
 import { useCanvasStore, type PanelState } from "../store/canvas-store";
 import { useOfflineBanner } from "../realtime/OfflineBanner";
 import { hostedRelay, type HostedStatus } from "../sources/hosted";
+import { useMobileRelayDown } from "../mobile/relay-status";
 import { SOURCE_ERROR } from "../sources/types";
 import { cn } from "@/lib/cn";
 import { Button } from "@/ui/button";
@@ -129,9 +130,11 @@ export function Banners() {
 
   // 中继托管的页面：中继自己停了时只说这一件（主机、运行时都连不上是它的
   // 结果）；主机下线时等它回来，被撤销时只能重新登录（客户端包 §5）。凭据只在
-  // 内存，所以这里不给「刷新」——中继回来后页面自己恢复。
+  // 内存，所以这里不给「刷新」——中继回来后页面自己恢复。手机经中继的连接同一条
+  // （`mobile/relay-status.ts`：运行时断开时再问一次中继自己）。
   const hosted = useHostedStatus();
-  const relayDown = hosted?.relayDown === true;
+  const mobileRelayDown = useMobileRelayDown(health.isError);
+  const relayDown = hosted?.relayDown === true || mobileRelayDown;
   if (relayDown) {
     items.push(
       <Banner
