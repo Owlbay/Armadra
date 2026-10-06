@@ -18399,88 +18399,52 @@
                         "type": "array",
                         "items": {
                           "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "number"
-                              },
-                              {
-                                "type": "boolean"
-                              },
-                              {
-                                "type": "null"
-                              },
-                              {
-                                "type": "array",
-                                "items": {
-                                  "anyOf": [
-                                    {
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "title": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string"
+                            },
+                            "role": {
+                              "type": "string"
+                            },
+                            "content": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "status": {
                                       "type": "string"
                                     },
-                                    {
-                                      "type": "number"
+                                    "sourceShapeId": {
+                                      "type": "string"
                                     },
-                                    {
+                                    "shapeType": {
+                                      "type": "string"
+                                    },
+                                    "textTruncated": {
                                       "type": "boolean"
                                     },
-                                    {
-                                      "type": "null"
+                                    "text": {
+                                      "type": "string"
                                     },
-                                    {
-                                      "type": "array",
-                                      "items": {}
-                                    },
-                                    {
-                                      "type": "object",
-                                      "propertyNames": {
-                                        "type": "string"
-                                      },
-                                      "additionalProperties": {}
+                                    "pngPath": {
+                                      "type": "string"
                                     }
-                                  ]
-                                }
-                              },
-                              {
-                                "type": "object",
-                                "propertyNames": {
-                                  "type": "string"
+                                  },
+                                  "additionalProperties": {}
                                 },
-                                "additionalProperties": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "number"
-                                    },
-                                    {
-                                      "type": "boolean"
-                                    },
-                                    {
-                                      "type": "null"
-                                    },
-                                    {
-                                      "type": "array",
-                                      "items": {}
-                                    },
-                                    {
-                                      "type": "object",
-                                      "propertyNames": {
-                                        "type": "string"
-                                      },
-                                      "additionalProperties": {}
-                                    }
-                                  ]
+                                {
+                                  "type": "null"
                                 }
-                              }
-                            ]
-                          }
+                              ]
+                            }
+                          },
+                          "required": ["id", "title", "kind"]
                         }
                       },
                       {
