@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { SourceError, type SourceDescriptor } from "../sources/types";
-import { createMobileCredentialProvider, serviceIdOf } from "./credentials";
+import {
+  createMobileCredentialProvider,
+  guestPrincipal,
+  isGuestSlot,
+  serviceIdOf,
+} from "./credentials";
 import {
   SESSION_A,
   SESSION_B,
@@ -230,6 +235,169 @@ describe("手机的凭据来源 · 经中继", () => {
       code: "source_unauthorized",
     });
     expect(net.calls).toHaveLength(0);
+  });
+});
+
+describe("手机的凭据来源 · 同一个中继下按主体分槽", () => {
+  const GUEST_SOURCE = "c".repeat(32);
+  const OWNER_SLOT = serviceIdOf(ISSUER, "acct-1");
+  const GUEST_SLOT = serviceIdOf(ISSUER, guestPrincipal(GUEST_SOURCE));
+
+  async function twoPrincipals() {
+    const store = fakeBridge();
+    for (const [serviceId, refreshToken] of [
+      [OWNER_SLOT, "owner-refresh"],
+      [GUEST_SLOT, "guest-refresh"],
+    ] as const)
+      await store.bridge.setRemote({
+        serviceId,
+        issuer: ISSUER,
+        kind: "personal",
+        refreshToken,
+        fingerprint: "",
+      });
+    for (const sourceId of [SOURCE, GUEST_SOURCE])
+      await store.bridge.setSession({
+        sourceId,
+        origin: ISSUER,
+        via: "relayed",
+        accessToken: SESSION_A,
+        refreshToken: SESSION_B,
+        expiresAtMs: NOW + 600_000,
+      });
+    return store;
+  }
+
+  /** 云刷新按用的那把刷新令牌答不同的访问令牌，好看出走的是哪一槽。 */
+  const net = () =>
+    routedFetch({
+      "POST /v1/auth/refresh": (init) => {
+        const { refreshToken } = JSON.parse(String(init.body)) as {
+          refreshToken: string;
+        };
+        const who = refreshToken.split("-")[0];
+        return { body: cloudSession(`${who}-access`, `${who}-refresh-2`) };
+      },
+      [`POST /v1/sources/${SOURCE}/assertion`]: () => ({
+        body: assertionBody(),
+      }),
+      [`POST /v1/sources/${GUEST_SOURCE}/assertion`]: () => ({
+        body: assertionBody({
+          relayBaseUrl: `${ISSUER}/s/${GUEST_SOURCE}`,
+        }),
+      }),
+    });
+
+  it("槽名：主人按账号、访客按源，与旧单槽互不相同；只用钥匙串认的字符", () => {
+    expect(serviceIdOf(ISSUER)).toBe("personal:relay.example.com");
+    expect(OWNER_SLOT).toBe("personal:relay.example.com:acct-1");
+    expect(GUEST_SLOT).toBe(`personal:relay.example.com:guest.${GUEST_SOURCE}`);
+    expect(serviceIdOf(ISSUER, "a b/c")).toBe(
+      "personal:relay.example.com:a_b_c",
+    );
+    expect(serviceIdOf(ISSUER, "x".repeat(300))).toHaveLength(128);
+    expect(isGuestSlot(GUEST_SLOT)).toBe(true);
+    expect(isGuestSlot(OWNER_SLOT)).toBe(false);
+    expect(isGuestSlot(serviceIdOf(ISSUER))).toBe(false);
+  });
+
+  it("主人与访客各用各的远程服务登录，旋转后写回各自那一槽", async () => {
+    const { bridge, remotes } = await twoPrincipals();
+    const fetcher = net();
+    const slots: Record<string, string> = {
+      [SOURCE]: OWNER_SLOT,
+      [GUEST_SOURCE]: GUEST_SLOT,
+    };
+    const provider = createMobileCredentialProvider({
+      bridge,
+      describe: (sourceId) => descriptor({ sourceId }),
+      slotOf: (sourceId) => slots[sourceId] ?? null,
+      connections: () => [],
+      cloud: { fetch: fetcher.fetch },
+      now: () => NOW,
+    });
+    await provider.getAccess(GUEST_SOURCE, "relayed");
+    await provider.getAccess(SOURCE, "relayed");
+    const auth = (key: string) =>
+      (
+        fetcher.calls.find((call) => call.key === key)!.init.headers as Record<
+          string,
+          string
+        >
+      ).Authorization;
+    expect(auth(`POST /v1/sources/${GUEST_SOURCE}/assertion`)).toBe(
+      "Bearer guest-access",
+    );
+    expect(auth(`POST /v1/sources/${SOURCE}/assertion`)).toBe(
+      "Bearer owner-access",
+    );
+    expect(remotes.get(OWNER_SLOT)?.refreshToken).toBe("owner-refresh-2");
+    expect(remotes.get(GUEST_SLOT)?.refreshToken).toBe("guest-refresh-2");
+  });
+
+  it("旧连接没有槽的记录：照旧读签发方原来的单槽（迁移不丢）", async () => {
+    const { bridge, remotes } = await seeded();
+    const fetcher = net();
+    const provider = createMobileCredentialProvider({
+      bridge,
+      describe: () => descriptor({}),
+      slotOf: () => null,
+      connections: () => [],
+      cloud: { fetch: fetcher.fetch },
+      now: () => NOW,
+    });
+    await expect(provider.getAccess(SOURCE, "relayed")).resolves.toMatchObject({
+      accessToken: SESSION_A,
+    });
+    expect(remotes.get(serviceIdOf(ISSUER))?.refreshToken).toBe(
+      "cloud-refresh-2",
+    );
+  });
+
+  it("记的那一槽在钥匙串里没有：source_unauthorized，不借别的主体的登录", async () => {
+    const { bridge } = await twoPrincipals();
+    const fetcher = net();
+    const provider = createMobileCredentialProvider({
+      bridge,
+      describe: () => descriptor({}),
+      slotOf: () => serviceIdOf(ISSUER, "someone-else"),
+      connections: () => [],
+      cloud: { fetch: fetcher.fetch },
+      now: () => NOW,
+    });
+    await expect(provider.getAccess(SOURCE, "relayed")).rejects.toMatchObject({
+      code: "source_unauthorized",
+    });
+    expect(fetcher.calls).toHaveLength(0);
+  });
+
+  it("me.stream 用主人那一槽；只有访客时才用访客的", async () => {
+    const { bridge } = await twoPrincipals();
+    const fetcher = net();
+    const slots: Record<string, string> = {
+      [SOURCE]: OWNER_SLOT,
+      [GUEST_SOURCE]: GUEST_SLOT,
+    };
+    let rows = [
+      descriptor({ sourceId: GUEST_SOURCE, orderIndex: 0 }),
+      descriptor({ sourceId: SOURCE, orderIndex: 1 }),
+    ];
+    const provider = createMobileCredentialProvider({
+      bridge,
+      describe: (sourceId) => descriptor({ sourceId }),
+      slotOf: (sourceId) => slots[sourceId] ?? null,
+      connections: () => rows,
+      cloud: { fetch: fetcher.fetch },
+      now: () => NOW,
+    });
+    await expect(provider.cloudAuth.access(ISSUER)).resolves.toBe(
+      "owner-access",
+    );
+    rows = [descriptor({ sourceId: GUEST_SOURCE })];
+    provider.cloudAuth.invalidate(ISSUER);
+    await expect(provider.cloudAuth.access(ISSUER)).resolves.toBe(
+      "guest-access",
+    );
   });
 });
 

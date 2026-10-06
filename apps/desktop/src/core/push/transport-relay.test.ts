@@ -26,7 +26,7 @@ const PAYLOAD: PushPayload = {
   kind: "agentDone",
   title: "支付服务",
   body: "Codex 已完成",
-  url: "armadra://w/w1/n/n1",
+  url: "armadra://w/w1/n/n1?s=HOST-ID-1",
   tag: "status:n1",
 };
 
@@ -73,6 +73,7 @@ describe("中继传输", () => {
     expect(wire).not.toContain("支付服务");
     expect(wire).not.toContain("已完成");
     expect(wire).not.toContain("armadra://");
+    expect(wire).not.toContain("HOST-ID-1");
     const body = JSON.parse(wire) as {
       relayToken: string;
       envelope: PushEnvelope;

@@ -161,7 +161,10 @@ export const pushPayloadSchema = z
     kind: pushKindSchema,
     title: z.string().max(64),
     body: z.string().max(120),
-    /** `armadra://w/<workspaceId>/n/<nodeId>`, or `armadra://`. */
+    /**
+     * `armadra://w/<workspaceId>[/n/<nodeId>][?s=<sourceId>]`, or `armadra://`.
+     * `s` is the issuing core's `hostId` (§19.4); older cores omit it.
+     */
     url: z.string().startsWith("armadra://"),
     tag: z.string().max(128),
   })

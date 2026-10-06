@@ -8,6 +8,11 @@ final class DeepLinkTests: XCTestCase {
         XCTAssertEqual(DeepLink("armadra://w/ws_1/n/node_1"), .node("armadra://w/ws_1/n/node_1"))
         XCTAssertEqual(DeepLink("armadra://w/ws_1"), .node("armadra://w/ws_1"))
         XCTAssertNil(DeepLink("armadra://w/ws_1/x/y"))
+        // 签发它的主机（契约 §19.4）；别的查询串不认。
+        XCTAssertEqual(DeepLink("armadra://w/ws_1/n/node_1?s=host%3A1"), .node("armadra://w/ws_1/n/node_1?s=host%3A1"))
+        XCTAssertEqual(DeepLink("armadra://w/ws_1?s=h"), .node("armadra://w/ws_1?s=h"))
+        XCTAssertNil(DeepLink("armadra://w/ws_1?x=h"))
+        XCTAssertNil(DeepLink("armadra://w/ws_1?s=h&x=1"))
         XCTAssertNil(DeepLink("https://armadra.dev/pair"))
         XCTAssertNil(DeepLink("armadra://pair?host=a&x=<script>"))
         XCTAssertNil(DeepLink("armadra://w/" + String(repeating: "a", count: 3000)))

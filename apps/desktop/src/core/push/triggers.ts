@@ -231,13 +231,26 @@ const BODIES: Record<Locale, Record<BodyKey, string>> = {
   },
 };
 
-export function deepLink(workspaceId: string, nodeId?: string): string {
+/**
+ * 通知的深链（契约 §19.4）：`armadra://w/<工作空间>[/n/<节点>][?s=<源>]`。
+ *
+ * `s` 是签发这条通知的 core 的源标识（`hostId`，手机连接表与中继目录里同一个
+ * 键）：手机连着别的主机时点开，据此切到对应的连接。它只在载荷里——载荷经
+ * Web Push / 中继 / 直连都是端到端加密的——不进日志。
+ */
+export function deepLink(
+  workspaceId: string,
+  nodeId?: string,
+  sourceId?: string,
+): string {
   // 与画布无关的通知（测试）只打开 App。
   if (workspaceId === "") return "armadra://";
   const base = `armadra://w/${encodeURIComponent(workspaceId)}`;
-  return nodeId === undefined
-    ? base
-    : `${base}/n/${encodeURIComponent(nodeId)}`;
+  const path =
+    nodeId === undefined ? base : `${base}/n/${encodeURIComponent(nodeId)}`;
+  return sourceId === undefined || sourceId === ""
+    ? path
+    : `${path}?s=${encodeURIComponent(sourceId)}`;
 }
 
 function clip(text: string, max: number): string {
@@ -253,6 +266,8 @@ export function render(
     readonly workspace: string;
     /** Agent 的显示名：draft 带了 agentId 就用它，没带就按节点去查。 */
     readonly agent: (draft: Draft) => string;
+    /** 本机的源标识（`hostId`），进深链的 `s`；省略不带。 */
+    readonly source?: string;
   },
 ): PushPayload {
   const language: Locale = locale === "en" ? "en" : "zh-CN";
@@ -268,7 +283,7 @@ export function render(
     kind: draft.kind,
     title: clip(names.workspace || "Armadra", 64),
     body: clip(body, 120),
-    url: deepLink(draft.workspaceId, draft.nodeId),
+    url: deepLink(draft.workspaceId, draft.nodeId, names.source),
     tag: clip(draft.tag, 128),
   };
 }

@@ -76,6 +76,7 @@ import { resetSourceRegistry, sourceRegistry } from "../sources/registry";
 import { SourceError } from "../sources/types";
 import { setActiveConnection, upsertConnection } from "./connections";
 import { prepareEntry, ticketWithRefresh } from "./entry";
+import { mobileRelayRoute } from "./relay-status";
 import { memoryStorage } from "./testing";
 
 beforeEach(() => {
@@ -392,6 +393,7 @@ describe("原生 App：多连接", () => {
     expect(transport.origin).toBe(GATEWAY);
     expect(transport.extraHeaders).toBeUndefined();
     expect(runtimeBase()).toBe(GATEWAY);
+    expect(mobileRelayRoute()).toBeNull();
   });
 
   it("当前连接经中继：本机源指向 relayBaseUrl，每个请求与流都带中继令牌", async () => {
@@ -420,6 +422,8 @@ describe("原生 App：多连接", () => {
     });
     expect(transport.extraProtocols()).toEqual(["armadra-relay.relay.jwt"]);
     expect(runtimeBase()).toBe(RELAY_BASE);
+    // 通知条据此分辨中继停了（`relay-status.ts`）。
+    expect(mobileRelayRoute()).toBe(ISSUER);
   });
 
   it("表里不止一个连接：选中的装成本机源，其余同时挂进页面源表，经中继的开 me.stream", async () => {

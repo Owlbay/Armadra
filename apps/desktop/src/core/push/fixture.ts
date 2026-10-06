@@ -75,6 +75,7 @@ export function pushFixture(options: FixtureOptions = {}) {
     log: options.log ?? QUIET_LOG,
     env: options.env ?? {},
     settings: () => completionSettings(settings),
+    sourceId: () => store.hostId(),
     canRead: (principalId, principalKind, workspaceId) =>
       authorizer.permits(
         {
@@ -129,6 +130,8 @@ export function pushFixture(options: FixtureOptions = {}) {
   return {
     dataDir,
     database,
+    /** 本机的源标识（深链里的 `s`）。 */
+    hostId: store.hostId(),
     owner,
     ownerDeviceId,
     push,

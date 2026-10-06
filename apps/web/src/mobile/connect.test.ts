@@ -10,9 +10,10 @@ import {
 import {
   activeConnectionId,
   loadConnections,
+  remoteSlotOf,
   upsertConnection,
 } from "./connections";
-import { serviceIdOf } from "./credentials";
+import { guestPrincipal, serviceIdOf } from "./credentials";
 import {
   createRelayEnrollment,
   forgetConnection,
@@ -339,12 +340,14 @@ describe("添加连接 · 个人中转", () => {
       origin: ISSUER,
       accessToken: SESSION_A,
     });
-    expect(remotes.get(serviceIdOf(ISSUER))).toMatchObject({
+    // 主人这一槽：远程服务没答账号时是固定的 `owner`，不落在签发方的旧单槽上。
+    expect(remotes.get(serviceIdOf(ISSUER, "owner"))).toMatchObject({
       issuer: ISSUER,
       kind: "personal",
       refreshToken: "cloud-refresh",
       fingerprint: RELAY_FP,
     });
+    expect(remoteSlotOf(HOST)).toBe(serviceIdOf(ISSUER, "owner"));
     const rows = loadConnections();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
@@ -510,9 +513,9 @@ describe("添加连接 · 分享链接 / 二维码", () => {
     await expect(enroll.join(SHARE)).resolves.toEqual({ kind: "done" });
     expect(reload).toHaveBeenCalledOnce();
     expect(sessions.get(`${HOST}|relayed`)?.refreshToken).toBe(SESSION_B);
-    expect(remotes.get(serviceIdOf(ISSUER))?.refreshToken).toBe(
-      "guest-refresh",
-    );
+    const guestSlot = serviceIdOf(ISSUER, guestPrincipal(HOST));
+    expect(remotes.get(guestSlot)?.refreshToken).toBe("guest-refresh");
+    expect(remoteSlotOf(HOST)).toBe(guestSlot);
     expect(loadConnections()[0]).toMatchObject({
       sourceId: HOST,
       label: "MacBook",
@@ -635,6 +638,71 @@ describe("管理连接", () => {
     expect(sessions.size).toBe(0);
     expect(remotes.size).toBe(0);
     expect(loadConnections()).toEqual([]);
+  });
+
+  it("访客令牌不覆盖主人：同一个中继下主人与访客各存一槽，移除访客只删它那槽", async () => {
+    const { bridge, remotes } = fakeBridge({
+      peek: { fingerprint: RELAY_FP, trusted: false, pinned: true },
+    });
+    const LINK_ID = "0123456789abcdef0123456789abcdef";
+    const SECRET = "S".repeat(43);
+    const INVITE = `${"c".repeat(32)}.${"D".repeat(43)}`;
+    const net = routedFetch({
+      "POST /v1/auth/login": () => ({
+        body: {
+          session: {
+            ...login().body.session,
+            account: { accountId: "acct-owner", displayName: "Owner" },
+          },
+        },
+      }),
+      "GET /v1/me/sources": sourceList,
+      [`POST /v1/sources/${HOST}/assertion`]: assertion(HOST),
+      [`POST /s/${HOST}/api/identity/cloud/login`]: coreLogin,
+      [`POST /v1/links/${LINK_ID}/accept`]: () => ({
+        body: {
+          sourceId: HOST_B,
+          relayOrigin: ISSUER,
+          relayBaseUrl: `${ISSUER}/s/${HOST_B}`,
+          assertion: "jws.guest",
+          relayToken: "relay.guest",
+          guestSession: {
+            accessToken: "guest-access",
+            refreshToken: "guest-refresh",
+            accessExpiresAtMs: Date.now() + 900_000,
+            expiresAtMs: Date.now() + 9_000_000,
+          },
+        },
+      }),
+      [`POST /s/${HOST_B}/api/identity/cloud/login`]: coreLogin,
+    });
+    const owner = createRelayEnrollment({
+      bridge,
+      cloud: { fetch: net.fetch },
+      reload: vi.fn(),
+    });
+    await owner.begin({ issuer: ISSUER, account: "o", password: "p" });
+    await expect(owner.mount([HOST])).resolves.toEqual({ kind: "done" });
+    const guest = createRelayEnrollment({
+      bridge,
+      cloud: { fetch: net.fetch },
+      reload: vi.fn(),
+    });
+    await expect(
+      guest.join(`${ISSUER}/j/${LINK_ID}#${SECRET}.${INVITE}`),
+    ).resolves.toEqual({ kind: "done" });
+
+    const ownerSlot = serviceIdOf(ISSUER, "acct-owner");
+    const guestSlot = serviceIdOf(ISSUER, guestPrincipal(HOST_B));
+    expect(ownerSlot).not.toBe(guestSlot);
+    expect(remotes.get(ownerSlot)?.refreshToken).toBe("cloud-refresh");
+    expect(remotes.get(guestSlot)?.refreshToken).toBe("guest-refresh");
+    expect(remoteSlotOf(HOST)).toBe(ownerSlot);
+    expect(remoteSlotOf(HOST_B)).toBe(guestSlot);
+
+    await forgetConnection(HOST_B, bridge);
+    expect([...remotes.keys()]).toEqual([ownerSlot]);
+    expect(remoteSlotOf(HOST_B)).toBeNull();
   });
 
   it("点一个连接：记为当前再重载", async () => {

@@ -26,11 +26,13 @@ import {
 } from "../sources/cloud-client";
 import {
   loadConnections,
+  remoteSlotOf,
   removeConnection,
   setActiveConnection,
+  setRemoteSlot,
   upsertConnection,
 } from "./connections";
-import { serviceIdOf } from "./credentials";
+import { guestPrincipal, serviceIdOf } from "./credentials";
 import type { ConnectFailure } from "./ConnectScreen";
 import { issuerOrigin, parseJoinLink } from "./join-link";
 import { nativeBridge, type NativeBridge } from "./native-bridge";
@@ -367,10 +369,17 @@ export function createRelayEnrollment(
     };
   };
 
-  const remember = async (refreshToken: string | undefined) => {
+  /**
+   * 远程服务的登录进钥匙串的这一槽：主人按账号、访客按它加入的源各一份
+   * （`credentials.ts::serviceIdOf`），访客加入不顶替主人。
+   */
+  const remember = async (
+    refreshToken: string | undefined,
+    serviceId: string,
+  ) => {
     if (refreshToken === undefined) throw new CloudError(502, "bad_response");
     await deps.bridge.setRemote({
-      serviceId: serviceIdOf(issuer),
+      serviceId,
       issuer,
       kind: "personal",
       refreshToken,
@@ -378,7 +387,7 @@ export function createRelayEnrollment(
     });
   };
 
-  const connectionOf = (sourceId: string, label: string) => {
+  const connectionOf = (sourceId: string, label: string, slot: string) => {
     upsertConnection({
       sourceId,
       label,
@@ -387,6 +396,7 @@ export function createRelayEnrollment(
       cloudIssuer: issuer,
       fingerprint: "",
     });
+    setRemoteSlot(sourceId, slot);
   };
 
   return {
@@ -417,7 +427,8 @@ export function createRelayEnrollment(
             parsed.invitationToken,
             deps.cloud,
           );
-          await remember(accepted.guestSession.refreshToken);
+          const slot = serviceIdOf(issuer, guestPrincipal(accepted.sourceId));
+          await remember(accepted.guestSession.refreshToken, slot);
           await deps.bridge.setSession({
             sourceId: accepted.sourceId,
             origin: issuer,
@@ -438,7 +449,7 @@ export function createRelayEnrollment(
                   ?.name ?? "",
             )
             .catch(() => "");
-          connectionOf(accepted.sourceId, name);
+          connectionOf(accepted.sourceId, name, slot);
           setActiveConnection(accepted.sourceId);
           // 重载进画布后打开链接指向的工作空间（本机源此时就是这条连接）。
           openAfterJoin(LOCAL_SOURCE_ID);
@@ -467,6 +478,8 @@ export function createRelayEnrollment(
       const current = session;
       if (current === null) return failed("failed");
       const device = thisDevice();
+      // 主人这一槽按账号；远程服务没答账号时用固定的 `owner`（仍与访客分开）。
+      const slot = serviceIdOf(issuer, current.account?.accountId || "owner");
       let mounted: string | null = null;
       let failure: ConnectFailure = "offline";
       for (const sourceId of sourceIds) {
@@ -496,7 +509,7 @@ export function createRelayEnrollment(
             refreshToken: login.native.refreshToken,
             expiresAtMs: login.expiresAtUnixMs,
           });
-          connectionOf(sourceId, choice.name);
+          connectionOf(sourceId, choice.name, slot);
           mounted ??= sourceId;
         } catch (error) {
           failure = cloudFailureOf(error);
@@ -504,7 +517,7 @@ export function createRelayEnrollment(
       }
       if (mounted === null) return failed(failure);
       try {
-        await remember(current.refreshToken);
+        await remember(current.refreshToken, slot);
       } catch (error) {
         return failed(cloudFailureOf(error));
       }
@@ -526,19 +539,22 @@ export function openConnection(
 }
 
 /**
- * 移除一个连接：它的会话从钥匙串删掉；远程服务的登录没有别的连接在用了才一并
- * 删。其余连接与它们的凭据不动。
+ * 移除一个连接：它的会话从钥匙串删掉；它用的那一槽远程服务登录没有别的连接
+ * 在用了才一并删。其余连接与它们的凭据（同一中继下别的主体的槽）不动。
  */
 export async function forgetConnection(
   sourceId: string,
   bridge: NativeBridge = nativeBridge(),
 ): Promise<void> {
   const row = loadConnections().find((item) => item.sourceId === sourceId);
+  const slotOf = (item: { sourceId: string; cloudIssuer: string }) =>
+    remoteSlotOf(item.sourceId) ?? serviceIdOf(item.cloudIssuer);
+  const slot = row === undefined || row.cloudIssuer === "" ? null : slotOf(row);
   await bridge.removeSession(sourceId);
   removeConnection(sourceId);
-  if (row === undefined || row.cloudIssuer === "") return;
+  if (slot === null) return;
   const stillUsed = loadConnections().some(
-    (item) => item.cloudIssuer === row.cloudIssuer,
+    (item) => item.cloudIssuer !== "" && slotOf(item) === slot,
   );
-  if (!stillUsed) await bridge.removeRemote(serviceIdOf(row.cloudIssuer));
+  if (!stillUsed) await bridge.removeRemote(slot);
 }

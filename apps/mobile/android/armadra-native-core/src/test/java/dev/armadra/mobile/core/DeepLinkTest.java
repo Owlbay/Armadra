@@ -14,6 +14,11 @@ public class DeepLinkTest {
         assertEquals(DeepLink.Kind.NODE, DeepLink.parse("armadra://w/ws_1/n/node_1").kind);
         assertEquals(DeepLink.Kind.NODE, DeepLink.parse("armadra://w/ws_1").kind);
         assertNull(DeepLink.parse("armadra://w/ws_1/x/y"));
+        // 签发它的主机（契约 §19.4）；别的查询串不认。
+        assertEquals(DeepLink.Kind.NODE, DeepLink.parse("armadra://w/ws_1/n/node_1?s=host%3A1").kind);
+        assertEquals(DeepLink.Kind.NODE, DeepLink.parse("armadra://w/ws_1?s=h").kind);
+        assertNull(DeepLink.parse("armadra://w/ws_1?x=h"));
+        assertNull(DeepLink.parse("armadra://w/ws_1?s=h&x=1"));
         assertNull(DeepLink.parse("https://armadra.dev/pair"));
         assertNull(DeepLink.parse("armadra://pair?host=a&x=<script>"));
         assertNull(DeepLink.parse("armadra://w/a'+alert(1)+'"));
