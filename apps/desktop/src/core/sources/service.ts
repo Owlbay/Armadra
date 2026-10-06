@@ -68,6 +68,11 @@ export interface SourcesServiceOptions {
   readonly log: SourcesLog;
   /** 云登录域（A2-3）；装好之后 `registered` 与删远程服务前的撤销经它。 */
   readonly cloud?: () => CloudRegistrations | undefined;
+  /**
+   * 首次添加、没给指纹且系统不信任对端证书时，问出对端的信任锚指纹给人核对
+   * （`http-client.ts` 的 `presentedAnchor`）。不给就不探（测试的假对端）。
+   */
+  readonly anchorProbe?: (origin: string) => Promise<string | null>;
   readonly now?: () => number;
   readonly newId?: () => string;
 }
@@ -240,6 +245,37 @@ export class SourcesService {
     return row;
   }
 
+  /**
+   * 没给指纹时的第一次外呼：系统不信任对端证书（自签的个人中转、Gateway 的本地
+   * CA）就答 `fingerprint_mismatch`，`details.fingerprint` 是对端的信任锚指纹，
+   * 页面请人核对后带着它重调（契约 §33.6）。系统信任它、或给了指纹，原样透传。
+   */
+  private async withAnchor<T>(
+    origin: string,
+    fingerprint: string,
+    call: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await call();
+    } catch (error) {
+      const probe = this.options.anchorProbe;
+      if (
+        probe === undefined ||
+        fingerprint !== "" ||
+        !origin.startsWith("https:") ||
+        !(error instanceof CoreFailure) ||
+        error.code !== "source_unreachable"
+      ) {
+        throw error;
+      }
+      const anchor = await probe(origin).catch(() => null);
+      if (anchor === null) throw error;
+      throw fail("fingerprint_mismatch", "对端证书不受系统信任，请核对指纹", {
+        fingerprint: anchor,
+      });
+    }
+  }
+
   /* ---------------------------- 直连源 ----------------------------- */
 
   async addDirect(input: {
@@ -275,9 +311,9 @@ export class SourcesService {
     ) {
       origin = normalizeOrigin(input.origin);
       fingerprint = normalizeFingerprint(input.fingerprint);
-      const exchanged = await this.peer.exchangeCode(
-        { base: origin, fingerprint },
-        input.code,
+      const code = input.code;
+      const exchanged = await this.withAnchor(origin, fingerprint, () =>
+        this.peer.exchangeCode({ base: origin, fingerprint }, code),
       );
       if (exchanged.ticket === "") {
         throw fail("source_unauthorized", "配对码无效或已过期");
@@ -666,7 +702,9 @@ export class SourcesService {
     const fingerprint = normalizeFingerprint(input.fingerprint);
     const label = checkLabel(input.label);
     const endpoint: RemoteEndpoint = { issuer, fingerprint };
-    const info = await this.remote.info(endpoint);
+    const info = await this.withAnchor(issuer, fingerprint, () =>
+      this.remote.info(endpoint),
+    );
     if (info.mode !== "personal") {
       throw fail("bad_request", "这个地址不是个人中转");
     }
@@ -724,6 +762,26 @@ export class SourcesService {
     await this.secrets.clearRemote(serviceId);
     this.store.deleteRemote(serviceId);
     this.options.log.info("removed a remote service", { serviceId });
+    return {};
+  }
+
+  /**
+   * 登出远程服务（契约 §33.6）：尽力 `auth.logout`，删凭据，**留行**——行上的
+   * 指纹与账号留着，重新登录只要再输口令。本机对它的登记不动（隧道用的是源钥，
+   * 不是这份会话）。
+   */
+  async remoteLogout(serviceId: string): Promise<Record<string, never>> {
+    const row = this.remoteRow(serviceId);
+    const cached = this.access.get(serviceId);
+    if (cached !== undefined && cached.accessExpiresAtMs > this.now()) {
+      await this.remote
+        .logout(this.endpoint(row), cached.accessToken)
+        .catch(() => undefined);
+    }
+    this.access.delete(serviceId);
+    this.capabilities.delete(serviceId);
+    await this.secrets.clearRemote(serviceId);
+    this.options.log.info("signed out of a remote service", { serviceId });
     return {};
   }
 

@@ -224,6 +224,9 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 控制面 WebSocket（契约 §35）：调用与订阅多路复用在一条连接上，子协议
+  // `armadra-rpc.v1`，由 RPC 门面接管（`http/ws-control.ts`）。
+  { path: "/api/ws", methods: ["GET"], surface: "runtime", implemented: true },
   {
     path: "/api/health",
     methods: ["GET"],
@@ -1003,6 +1006,12 @@ export const ROUTES: readonly RouteEntry[] = [
   },
   {
     path: "/api/sources/remotes/{serviceId}/session",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}/logout",
     methods: ["POST"],
     surface: "runtime",
     implemented: true,

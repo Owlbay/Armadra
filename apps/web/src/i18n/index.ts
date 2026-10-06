@@ -8,6 +8,7 @@ import { automation } from "./automation";
 import { browser } from "./browser";
 import { canvas } from "./canvas";
 import { collab } from "./collab";
+import { connection } from "./connection";
 import { commands } from "./commands";
 import { executionHosts } from "./execution-hosts";
 import { errors } from "./errors";
@@ -61,6 +62,7 @@ import { forge } from "./forge";
 import { mail } from "./mail";
 import { diagnostics } from "./diagnostics";
 import { passwordReset } from "./password-reset";
+import { remote } from "./remote";
 import { showcase } from "./showcase";
 
 export type Locale = "zh-CN" | "en";
@@ -122,6 +124,7 @@ export const MESSAGE_MODULES = {
   commands,
   format,
   collab,
+  connection,
   meta,
   updates,
   usage,
@@ -141,6 +144,7 @@ export const MESSAGE_MODULES = {
   mail,
   diagnostics,
   "password-reset": passwordReset,
+  remote,
   // 设计展示页只在开发构建里存在：生产构建里 `import.meta.env.DEV` 是字面量
   // false，这一项连同 `./showcase` 的文案一起被摇掉，不进产物。
   ...(import.meta.env.DEV ? { showcase } : {}),

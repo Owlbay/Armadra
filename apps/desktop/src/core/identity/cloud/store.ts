@@ -176,6 +176,46 @@ export class CloudStore {
     return record?.fingerprint ?? "";
   }
 
+  /**
+   * 只带指纹的「远程服务」行：用注册令牌登记自签证书的个人中转时（没有账号口令
+   * 可走 `sources.remoteAdd`），先把信任锚钉在这里，登记与隧道都按它验证。
+   * 已有同一 issuer 的行时不覆盖：指纹相同答 `same`、不同答 `conflict`。
+   */
+  pinRemote(input: {
+    issuer: string;
+    fingerprint: string;
+    label: string;
+    serviceId: string;
+    atMs: number;
+  }): "created" | "same" | "conflict" {
+    const existing = this.database
+      .prepare("SELECT fingerprint FROM remote_services WHERE issuer = ?")
+      .get(input.issuer) as { fingerprint: string } | undefined;
+    if (existing !== undefined) {
+      return existing.fingerprint === input.fingerprint ? "same" : "conflict";
+    }
+    this.database
+      .prepare(
+        "INSERT INTO remote_services(service_id, kind, issuer, label, account_hint, fingerprint, added_at_ms, last_ok_at_ms) " +
+          "VALUES(?, 'personal', ?, ?, '', ?, ?, 0)",
+      )
+      .run(
+        input.serviceId,
+        input.issuer,
+        input.label,
+        input.fingerprint,
+        input.atMs,
+      );
+    return "created";
+  }
+
+  /** 撤掉 {@link pinRemote} 新建的那一行（登记没成功就不留）。 */
+  unpinRemote(issuer: string): void {
+    this.database
+      .prepare("DELETE FROM remote_services WHERE issuer = ?")
+      .run(issuer);
+  }
+
   /** 全部工作空间的标识（组织默认角色按它们逐条授予）。 */
   workspaceIds(): string[] {
     return (

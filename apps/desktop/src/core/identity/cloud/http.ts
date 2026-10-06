@@ -275,9 +275,16 @@ export class CloudHttp {
     return runAs(identity, async () => {
       if (route === "GET " || route === "GET /") return cloud.status();
       if (route === "POST /register") {
+        // `fingerprint` 只有旧路径收（自签证书的个人中转，令牌登记没有口令可走
+        // `sources.remoteAdd` 钉指纹）；协议包的 schema 不含它，先摘出来。
+        const { fingerprint, ...fields } = body(request);
+        if (fingerprint !== undefined && typeof fingerprint !== "string") {
+          throw fail("bad_request", "指纹应为字符串");
+        }
         return cloud.register(
-          parse(cloudRegisterInputSchema, body(request)),
+          parse(cloudRegisterInputSchema, fields),
           principal.principalId,
+          fingerprint,
         );
       }
       if (route === "DELETE /register") {

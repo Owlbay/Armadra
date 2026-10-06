@@ -9,13 +9,26 @@
  * 所属的源（{@link withSource}），其它时候是当前源。零配置只有本机源，
  * 此时一切行为与加源之前相同。
  */
-import { currentSource, LOCAL_SOURCE_ID } from "../api/source";
+import {
+  type Source,
+  currentSource,
+  LOCAL_SOURCE_ID,
+  sourceById,
+} from "../api/source";
 
 let ambient: string | null = null;
 
 /** 此刻默认的源：事件派发中是事件所属的源，否则是当前源。 */
 export function activeSourceId(): string {
   return ambient ?? currentSource().sourceId ?? LOCAL_SOURCE_ID;
+}
+
+/**
+ * 此刻默认的那个源本身：事件派发中是事件所属的源，否则是当前源。不经
+ * `runtimeApi` 的当前源、而要发往事件来源的读数（依赖、协调器、实时复核）用它。
+ */
+export function activeSource(): Source {
+  return sourceById(activeSourceId());
 }
 
 /** 在 `sourceId` 的上下文里同步执行 `run`（事件派发用）。 */

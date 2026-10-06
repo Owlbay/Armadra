@@ -1,4 +1,4 @@
-import { srcPrefix } from "../sources/scope";
+import { activeSource, srcPrefix } from "../sources/scope";
 import { z } from "zod";
 
 import { json, request } from "@/api/request";
@@ -34,15 +34,19 @@ export const coordinatorKeys = {
 };
 
 export const coordinatorApi = {
-  tasks: (boardId: string) =>
+  // 发往此刻的源（事件派发中是事件所属的源），与查询键的源前缀一致。
+  tasks: (boardId: string, source = activeSource()) =>
     request(
       `/api/workflows/tasks?boardId=${encodeURIComponent(boardId)}`,
       tasksSchema,
+      undefined,
+      source,
     ).then((body) => body.tasks),
-  retry: (taskId: string) =>
+  retry: (taskId: string, source = activeSource()) =>
     request(
       `/api/workflows/tasks/${encodeURIComponent(taskId)}/retry`,
       taskSchema,
       { method: "POST", ...json({}) },
+      source,
     ).then((body) => body.task),
 };

@@ -2103,3 +2103,124 @@
 - 夹具位置与命名按仓库习惯：假中继在 `relay/fake-relay.fixture.ts`；联调用例是 `relay/personal-relay.devstack.integration.test.ts`（`ARMADRA_PERSONAL_RELAY=1` 才跑，不探测 dev-stack）。`sequence-http-roundtrip.bin` 按帧做解码再编码的逐字节比对，没有把 core 的回答与夹具逐帧比（回答带 `Date` 头，不确定）。
 - core 自己的 4401（访问令牌 15 分钟到期）没在联调里等，联调验的是中继令牌 4401 后的换令牌与换票；core 到期复核与回环、Gateway 同一条路（`http/server.ts`），已有用例覆盖。语言会话与浏览器画面两条流没有经真中继跑，机制与终端、事件流、实时板相同（发送队列按 `bufferedAmount` 判拥塞，见 `streams.test`）。
 - 中继侧撤销后，重连时中继先以 `tunnel_token_invalid` 拒（令牌的 `jti` 随源撤销），core 丢令牌、退避一次后取令牌得 `410` 再撤销，约 1–3 秒。
+
+## A1-4 「远程服务」设置页、分享本机与侧栏按源分组
+
+设计：[客户端包](../design/platform/client-packages.md) §3；总计划 §12（只开放个人中转与自托管直连，SaaS 不出现入口）。
+
+做了什么：
+
+- **core（契约 §33.6 追加）**：`sources.remoteLogout`（尽力 `auth.logout`、删凭据、留行，重新登录只要再输口令）；`remoteAdd` 与「地址 + 配对码」的 `addDirect` 没给指纹、系统又不信任对端证书时答 `400 fingerprint_mismatch`，`details.fingerprint` 是对端信任锚指纹（`http-client.ts::presentedAnchor`：链里最末那张，只发叶证书时取 `/ca.crt` 里签了它的那张），页面请人核对后带着它重调。
+- **桌面壳**：CSP `connect-src` 按 core 源表动态放行（远程服务 issuer、源的 `baseUrl` / `relayOrigin`，各给 `https` 与 `wss`，形状不对的值丢掉）；主会话 `setCertificateVerifyProc` 对系统不信任、但链里有登记指纹、逐级验签、主机名与有效期都对的放行（与 core 钉扎同一定义）。壳经 core 读 `GET /api/sources`：起窗口前一次、页面发 IPC `app:sources-changed`（不带数据）后一次；答 `{ reload }`，多出新来源时页面回到设置这一页重载（CSP 只在文档载入时生效）。
+- **页面**：`panels/settings/pages/RemoteServicesPage.tsx`（nav `remote`，在「本机」之后，ownerOnly）——远程服务：个人中转添加（地址、账号、口令，首次核对指纹）、登录 / 登出 / 移除、「分享中」徽标、停用分享；已挂载的源：本机行、自托管直连（配对链接或地址 + 配对码，同样核对指纹）、从远程服务挂载、连接状态、断开 / 移除。`panels/settings/ShareDialog.tsx`：开始 / 停用分享、隧道状态（5 秒轮询）、按工作空间 / 权限 / 有效期（1、7、30 天）生成分享链接、二维码（复用 `QrImage` / lean-qr）、复制、停用、生效中的链接。`api/remote-services.ts` 是调用面；`sidebar/SourceGroups.tsx` 侧栏按源分组；`sources/bootstrap.ts` + `app/use-sources-bootstrap.ts` 启动时只在「挂过源」时读源表（零配置不多发请求）。`i18n/remote.ts` 中英同步；`MESSAGE_BY_CODE` 加远程服务答的 `rate_limited`、`unauthenticated`、`session_expired` / `session_revoked`、`source_access_denied`、`source_revoked`、`limit_reached`。
+
+实测（macOS arm64，2026-10-06，基于 main 86271782）：
+
+- `pnpm check` 通过；`pnpm --filter @armadra/web test` 与 `typecheck`、i18n 守卫通过；`pnpm libs:build && pnpm --filter @armadra/desktop test` 通过（数字见 PR）。
+- 新用例：core `service.test.ts` 补 4（首次指纹、给了指纹或系统信任不改写、配对码路径、`remoteLogout`）、`http-client.test.ts` 补 3（真 TLS 下 `presentedAnchor`）；壳 `shell-core/remote-trust.test.ts` 5（源表 → 放行与钉扎、CSP 注入防护、真 CA 链钉扎的正反例）；页面 `api/remote-services.test.ts` 9、`RemoteServicesPage.test.tsx` 5、`sources/bootstrap.test.tsx` 6（零配置不请求、侧栏分组与离线灰显）。
+- **真 Electron 端到端**（开发构建 + 独立个人中转 `https://127.0.0.1:8112` 自签，临时 HOME / 数据目录、文件密钥后端）：添加个人中转 → 页面显示的指纹与中继启动日志一致 → 确认后壳重载页面回到远程服务页 → 登出（行留着）→ 重新登录（不再问指纹）→ 分享本机（页面经 CSP 放行与指纹钉扎直接调中继取注册令牌，本机登记成功，中继目录里有这台机器，`registered: true`）→ 生成链接（`https://127.0.0.1:8112/j/<id>#<secret>.<邀请令牌>`，中继上有、匿名 `links.get` 认得、本机有对应邀请）→ 停用链接（中继撤销、本机邀请作废；窄屏再来一次）→ 停用分享（登记撤销）→ 移除；全程无控制台错误、无被 CSP / 证书拦下的请求。联调后停掉了中继。
+
+接口（供 A4-3p / A3-4 / A1-2）：
+
+- 链接：`<issuer>/j/<linkId>#<secret>.<core 邀请令牌>`（`api/remote-services.ts::shareLinkUrl`；邀请令牌本身是 `<invitationId>.<secret>`，所以片段按第一个 `.` 切：前面是链接 secret，后面整段是邀请令牌）。二维码就是这条链接（`QrImage`）。
+- 页面：`addDirectSource` / `addPersonalRelay` 答 `{ kind: "confirm", fingerprint }` 或 `{ kind: "done" }`；`presentedFingerprint(error)`；`remoteFetch(access, path, schema)` 直接调远程服务；`notifyShellSourcesChanged()` 与 `sources/bootstrap.ts` 的 `applySourceTable` / `reloadIntoSettings`——挂载类入口（如 `mountByLink`）成功后照这三步收尾。
+- 侧栏：`sidebar/SourceGroups.tsx`——当前源在「项目」里，其余每个源一组（`data-source-group`，本机也是），就绪的源列出工作空间，点一行 `registry.setCurrent(sourceId)` 后 `openWorkspace(workspace, sourceId)`。
+- A1-2 留下的三项已接上：换当前源清掉不带源前缀的查询（`app/use-sources-bootstrap.ts::useSourceSwitchCacheReset`）；依赖、协调器、实时复核发往读数所属的源（`api/source.ts::sourceById`、`sources/scope.ts::activeSource`）；侧栏按源分组。
+
+没做 / 偏离规格：
+
+- core 追加 `sources.remoteLogout`（规格没有，页面「登出」要它）与首次指纹的 `details.fingerprint`（规格写「响应里带指纹」，core 原来没有）。
+- 桌面壳加了按源表指纹的证书钉扎：自签的个人中转与 Gateway 本地 CA 否则过不了 Chromium；服务器壳托管的页面在用户自己的浏览器里，自签远程服务仍要用户信任 CA（或用 ACME），其 CSP 也未动态化。
+- CSP 只在文档载入时生效：新加来源后页面重载一次，回到设置的远程服务页。
+- 本机邀请经 `/api/identity/invitations`（Bearer），没有 procedure；邀请必须指向一个工作空间，所以分享对话框要选工作空间。`maxUses` 未传（A4-1 未合）。从「生效中的链接」停用时只撤远程服务那条链接，本机那张邀请等过期（列表不带 `invitationId`）。
+- 隧道状态靠 5 秒轮询 `identity.cloud.status`，没订阅 `cloud.tunnel` 事件（A3-2 未合，实测一直是「未连接」）。
+- 已挂载源不支持拖动排序（`sources.update.orderIndex` 未接界面）；SaaS 设备码流程不出现入口。
+- 没有复用手机的 `#connections` 连接页组件：手机直接调远程服务、凭据在钥匙串，桌面经本机 core 代管凭据（`sources.*`），流程与状态不同；共用的只有指纹分组显示（`groupFingerprint`）与二维码（`QrImage`）。
+- 窄屏与宽屏切换时设置对话框换外壳、内容重新挂载，刚生成的链接会从界面上消失（链接仍在，可在「生效中的链接」停用）。
+
+## A4-1 邀请多次使用 + A4-4 服务器壳 CLI（个人中转部分）
+
+规格：[核心包](../design/platform/core-packages.md) §5、§6；总计划 §12：A4-4 只做个人中转的登记与分享链接。
+
+做了什么：
+
+- **A4-1**（`core/identity/accounts*.ts`，契约 §10 追加一段，节号不变）：`0040` 里已有 `max_uses`、`uses` 与 `identity_invitation_uses`，**没有新迁移**。`POST invitations` 收 `maxUses`（1–1000，其它 400），答案与列表多 `maxUses`（一次性为 `null`）与 `uses`。兑换（`accept`、口令注册、云登录）在同一笔事务里 `UPDATE … SET uses = uses + 1 WHERE consumed_at_ms = 0 AND uses < max_uses` 加 `INSERT OR IGNORE identity_invitation_uses`，用满时收口 `consumed_*`；同一个人重复兑换幂等（不加计数，用满之后也成功，过期与作废不行）；一次性邀请的路径不变。
+- **A4-4**（`apps/server/src/cloud.ts`、`cli.ts`、`main.ts`）：`cloud register | revoke | status | login` 与 `invite --cloud-link`。CLI 是另一个进程，所以经数据目录里 0600 的私有通道（`core-control.sock`）取票、在 core 回环上换 Bearer（与桌面壳、探针同一条路），再调 `/api/identity/cloud*`、`/api/sources/*`；`cloud login` 与 `invite --cloud-link` 另用 core 持有的远程服务会话直接问个人中转（`networkTransport`，按指纹钉扎）要注册令牌、建链接。输出沿用服务器壳的中文单行与 `--output json`；退出码 0 / 1 / 2（用法），core 没起来是 69。
+- **容器入口**（`docker/entrypoint.sh`）：`ARMADRA_CLOUD_ISSUER` 与 `ARMADRA_CLOUD_REGISTRATION_TOKEN` 都给时，后台等 serve 就绪（退出 69 就重试，最多 2 分钟）再 `cloud register`，已登记跳过，失败只记一行；令牌只走环境变量，并从传给 serve 的环境里去掉。可选 `ARMADRA_CLOUD_FINGERPRINT`、`ARMADRA_CLOUD_LABEL`。
+
+接口：
+
+- 命令：`armadra-server cloud register --issuer URL (--token T | --token-stdin | $ARMADRA_CLOUD_REGISTRATION_TOKEN) [--fingerprint FP] [--label L]`；`cloud revoke --issuer URL`；`cloud status [--output json]`；`cloud login --issuer URL --account A [--fingerprint FP] [--label L] (--password-stdin | $ARMADRA_CLOUD_PASSWORD | 终端提示)`；`invite --cloud-link --issuer URL (--workspace ID | --group ID) [--role R] [--max-uses N] [--expires 7d] [--label L]`，打印 `https://<中继>/j/<id>#<密>.<邀请令牌>`。都对运行中的服务器壳（同一个 `--data-dir`）操作；Windows 没有私有通道，不可用。
+- core：旧路径 `POST /api/identity/cloud/register` 另收可选 `fingerprint`（契约 §31.2）——令牌登记自签个人中转没有口令可走 `sources.remoteAdd`，先把信任锚钉进「远程服务」表再登记，失败不留钉；procedure 的入参不变。
+
+实测（macOS arm64，2026-10-06，基于 main cabe898a）：
+
+- `pnpm check`、`pnpm libs:build && pnpm --filter @armadra/desktop test`（408 文件 / 4825 用例通过，11 文件 / 72 用例按设计跳过）、`pnpm --filter @armadra/server test`（98 通过，4 跳过）与 build 全绿。
+- 新增用例：`accounts.test.ts` 多次使用 4 条（20 个并发用 `maxUses = 5` 的邀请恰好 5 个成功、同人幂等、用满后用过的人仍成功、过期与作废、越界 400、一次性不变）；`cloud.test.ts` 钉扎登记 1 条；`apps/server/src/cloud.test.ts` 13 条（参数解析、每条命令对假 core 的调用、口令与令牌不出现在输出、退出码、中继拒绝时撤掉刚建的邀请）。
+- 真跑个人中转：armadra-cloud 主目录 `pnpm relay:personal`（自签 TLS，`127.0.0.1:8102`），服务器壳 `serve` 用临时数据目录。`cloud login`（口令经标准输入、指纹钉扎）→ 隧道 `ready` → `cloud status` → 再 `login` 幂等跳过 → `invite --cloud-link --max-uses 3 --expires 2d` 出链接、库里 `max_uses = 3` → `cloud revoke` → `status` 为空；另走令牌路径（清掉远程服务行，`--token` 来自环境变量 + `--fingerprint`）登记、`ready`、再登记跳过、撤销。服务器壳与中继日志里没有口令、令牌或链接密。实例已停、临时目录已删。
+
+没做 / 偏离规格：
+
+- 规格里的 `invite`（不带 `--cloud-link`）此前并不存在，这里只实现 `--cloud-link`，不带它是用法错误；`invite` 需要 `--workspace` 或 `--group`（core 的邀请必须指向一处）。
+- 规格的 `cloud register` 没有指纹参数；自签中继没有它就无法钉扎，所以加了 `--fingerprint` 与旧路径的 `fingerprint` 字段。
+- `cloud login` 的注册令牌由 CLI 向中继取（core 没有这条外呼），所以没有新增 core 外呼登记。
+- 在还没有管理员的服务器上，CLI 取票换会话会成为第一个 owner（与首张配对票同一规则）；正常流程是先由管理员配对。
+- 没有真 Docker 起容器跑 entrypoint（只做了 `sh -n` 语法检查与 CLI 侧的重试语义）；容器自动登记留待 server-container-e2e 覆盖。
+
+## E2 工程规范化：控制面 WebSocket `/api/ws`
+
+设计：[工程规范化](../design/engineering-standardization.md) §3，规格：[工程规范化包](../design/platform/engineering-packages.md) §2；契约 §35。
+
+做了什么：
+
+- **契约**（`packages/shared/src/contract/`）：`workspaces.events`（出参是事件迭代器：工作空间事件或位置帧 `{ type: "cursor", cursor, floor, watermark }`）；`meta.backpressure`（`drop-oldest` / `coalesce` / `resubscribe`，订阅必须写、普通调用不写，`contract.test` 守）；注册表加 `snapshot_required`、`cursor_ahead`（409）、`overflow`（503）、`limit_reached`（429）。协议 minor 4。
+- **core 升级层**（`core/http/ws-control.ts`）：路由表加 `/api/ws`（`identity:read`，成员也有）。子协议报了 `armadra-rpc.v1` 就回选它（票不回选，`server.ts` 的 `handleProtocols`），没报的以 4409 关；二进制帧、不是 peer 消息的文本帧 4400；超过 `maxFrameBytes` 4413（`ws` 硬上限放宽一倍，免得被 1009 抢先）；每一帧在升级时的身份下跑并先复核会话，会话没了 4403；core 停机先以 1001 关（`CoreServer.close()`）。票、Cookie、4401 到期与 4403 授权变化的复核、`ws` 层 25 秒心跳都是 `server.ts` 给每条流的那一套（A3-0），没有另写。
+- **RPC 门面**（`core/http/rpc.ts`）：同一棵契约树经 `@orpc/server/ws` 的 `RPCHandler.upgrade(socket, { context })` 挂到控制面，身份由升级层认好放进 context；控制面上的错误改成注册表里的码交给上游编码（不是 HTTP 的 envelope）。订阅（写了背压策略的 procedure）只经控制面，HTTP 上调答 405；每连接 256 个，超了答 `limit_reached` 并以 4429 关；每个订阅包一层 `SendQueue`（A3-0，新增 `QueuedValue` 让它排还没编码的值）有界队列：1024 项、连接缓冲过 1 MiB 排队，`resubscribe` 拥塞时停止从实现里取、满了 `overflow`。`RpcCall.lastEventId` 交给实现，`withEventId()` 给每项带事件 id。
+- **事件流迁入**（`core/events/procedure.ts`）：`workspaces.events` 的事件 id 是 outbox 序号；起点 `lastEventId` > `cursor` > `now`；监听与读水位在同一拍挂上，补发只发到那时的水位、按页懒读，之后接实时，不漏不重；每次（重新）订上先发位置帧；`snapshot_required` / `cursor_ahead` / `not_found` 在订阅开始前拒绝；授权收回以 `forbidden` 结束这一条；实时缓冲满了以 `overflow` 结束。扇出加 `listen()`，控制面订阅照样算「在看」（资源采样、Agent 状态按它发）。旧路由 `WS /api/workspaces/{id}/events` 保留到 E4。
+- **页面**：`api/ws.ts` 的 `ControlChannel` 是上游 peer 客户端要的 WebSocket 形状，架在源层的 `ManagedSocket` 上（经 `SourceConnection.socket("/api/ws")`：换票走源的凭据、本机源经 `local-runtime`、经中继带中继子协议、`lib/backoff` 退避前台 10 秒后台 30 秒、`online` 与回前台跳过退避、回前台探活 3 秒）；它补的是：内层断了先置回「连接中」再发 `close`（订阅据此由重试插件重订），4403 / 4409 / 4429 与续不上凭据停下并告诉页面，可见时每 30 秒 `system.ping`、3 秒没回就 `reconnect()`（`ManagedSocket` 新加的一个公开方法）。`api/client.ts` 加 `controlClient(connection)`（`@orpc/client/websocket` + 重试插件：订阅断线立刻重订并交回 `lastEventId`，续不上的码交给调用方；不用上游内建重连）、`errorCode()`。`api/events.ts` 改为订 `client.workspaces.events`，保留 A1-2 的源维度：每个源里一个工作空间一条订阅（键 `${sourceId}:${workspaceId}`），每个源一条控制面连接（源表里的 `SourceConnection`，没登记的源按本机的做法包一个），事件带上所属的源（`onWorkspaceEvent` 缺省只收当前源，`{ allSources: true }` 收所有源）；位置帧当作「订上了」的上升沿，`forbidden` 或那个源的控制面 4403 视为授权收回，`snapshot_required` / `cursor_ahead` 落下连接状态后从现在重订；对外 API 不变。关闭码文案 `i18n/connection.ts`（中英），4409 / 4429 停下时 toast 提示怎么办（`app/use-control-notices.ts`）。
+- **路由门**（`identity/route-access.ts`）：全局的 `identity:read` 要求按主体快照判（每个登录主体都有，成员也有），成员因此能升级 `/api/ws`、调 `system.hello` / `ping`；其余全局要求照旧只有 owner。E1 留下的「成员调不了 `system.*`」随之解决。
+- **探针**：`server-e2e` 的撤销共享一步改看控制面上成员的事件订阅以 `forbidden` 结束（原来看旧路由那条 socket 以 4403 关）——事件流已迁到 `/api/ws`，连接本身不因一块画布的授权收回而关，这是规格要的行为。
+- **终端**：`bufferedAmount` 过 4 MiB 暂停读 PTY 已由 A3-0 做完（`terminal/socket.ts` 的 `pause` 队列），本包没有再动。
+- **契约 §35**：35.1 升级层与子协议（含 peer 帧的线上样子）、35.2 关闭码表、35.3 心跳与重连、35.4 `workspaces.events`（生成块）、35.5 背压。生成器认订阅：kind 记 `subscription`，出参列事件的 `type`，`x-armadra` 带 `backpressure` 与 `transport: "/api/ws"`。
+
+实测（macOS arm64，Node 26.10.0，tmux 3.7c，2026-10-06，已合 main 60e404f8：E1 #136、A0-4 #137、A1-3 #138、A1-1 #139、A2-3 #140、A1-5 #141、A1-2 #142、A3-2 #143、A1-4 #144、A4 #145）：
+
+- 新用例：`http/ws-control.test` 13（回选子协议、缺子协议 4409、准入拒绝 401、坏帧 4400、超限 4413、订阅走 HTTP 405、停机 1001、第 257 个订阅 `limit_reached` + 4429、取消不占名额、会话没了 4403、授权收回 4403、scope 不放行只拒这一次、心跳两次无 pong 断开）；`events/procedure.test` 5（位置帧与序号 id、断开期间的事件带 `lastEventId` 由 outbox 补齐且与没断的一致、`snapshot_required` / `cursor_ahead` / 404、慢客户端 3000 × 8 KiB 停读后 `overflow`、重订之后一帧不少、取消后监听释放）；`route-access.test` 补 1；web `api/ws.test` 9、`api/client.control.test` 2（断线后在新连接上重订并带 `last-event-id`、`snapshot_required` 不重订）、`api/events.test` 改写 13（含两个源各一条订阅、一个源断线只落下那个源）、`use-access-lost.test` 改写 2、`managed-socket.test` 补 1；`contract.test` 补 1、`generate.test.mjs` 补 1；错误码扫描认同目录导入的 `fail`。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 4858 过 / 65 跳过，live 4 过，脚本 68 过；`pnpm --filter @armadra/web test` 3637 过，`typecheck` 通过；`pnpm --filter @armadra/server test` 98 过 / 4 跳过；`pnpm repo:test` 29 过；`pnpm check` 通过（lint 0 error、285 warn，与 main 相同）。
+- `node tools/ci/e2e.mjs --tier a`（合 #143 / #144 之后）：13 项全过（acp、agent-e2e-self-test、core-terminal-lifecycle、core-terminal-smoke、design-showcase、gateway、push、realtime、remote、server、ui-features、workflow、ws-mux）；其中 `agent-e2e-self-test` 的 11-coordinator 一次偶发失败（模型服务请求时序，E1 记过同一处），单独重跑通过。合 #145（身份与服务器壳 CLI，不碰控制面）之后重跑了 `pnpm check`、服务器壳全部与 core 的 http / events / identity 用例。
+- 新探针 `ws-mux-e2e`：两台都订上；杀 core（SIGKILL）3 秒同端口重启、前后都有事件，两台对着 outbox 一帧不少一帧不重（各重连 5–6 次；从杀到补齐 3.5–10.6 秒，含 3 秒停机，余下是前台退避的抖动）；第二台断网 30 秒期间收到 0 帧，恢复后 162 ms 补齐；第一台切到后台、core 停 8 秒再起、产生 3 帧，回到前台 152–154 ms 收齐（预算 3 秒）；全程 23 帧不少不重，控制台无错误。
+- `tools/probes/server-perf.mjs`（30 终端 + 6 事件流 + 2000 对象实时板），main 80f633bc 与本分支同机交替各跑 3 次取中位数：
+
+| 指标               |              main |            本分支 |
+| ------------------ | ----------------: | ----------------: |
+| 事件扇出 p95       |            2.2 ms |            3.2 ms |
+| 终端吞吐           |        25.0 MiB/s |        25.1 MiB/s |
+| 单会话完成 p95     |         1192.8 ms |         1190.2 ms |
+| 建会话 p95         |           50.2 ms |           56.6 ms |
+| 实时板批量         |          162.6 ms |          159.0 ms |
+| 实时单字段更新 p95 |            0.8 ms |            0.8 ms |
+| RSS 稳态 / 峰值    | 254.1 / 269.2 MiB | 258.5 / 272.8 MiB |
+
+事件扇出 p95 单次在 main 上 1.7–3.2 ms、本分支 2.3–3.6 ms 之间跳（容差 10 ms），扇出走的是旧路由，本包在这条路上只多了一次空的监听表查找；建会话 p95 两边都在 50–74 ms 间跳。RSS 两边都超出 `server-perf-baseline.json` 的 darwin-arm64 基线（与 A3-0 记的一样），基线没有重录。
+
+偏离规格之处：
+
+- `workspaces.events` 的出参多一种位置帧：没有它，订上之后还没收到任何事件就断开的订阅没有 `lastEventId`，重订只能从 `now` 起，中间那段就丢了；页面也拿它当「订上了」的上升沿（会话列表、Agent 镜像据此重读）。
+- 订阅中途与调用的错误是上游的错误形状 `{ defined, code, status, message, data }`（码与状态按注册表、内部错误不外泄），不是 HTTP 的 `{ code, message, requestId, details }`：envelope 是写在 HTTP 响应体上的，peer 帧里换成它上游客户端就解不开。
+- `resubscribe` 不是单纯的「队列满了抛 `overflow`」：拥塞时门面停止从实现里取（补发懒读，所以停在原处），实时一段由实现自己的 1024 项缓冲兜底；否则慢客户端的每一次重订都会在补发阶段再溢出一次。
+- 订阅数按连接数（规格写法），不是工程规范化 §3.3 的「按身份」。
+- `Source.ws` 没有加成 `Source` 的成员：A1-1 合入后控制面的流按 `SourceConnection.socket()` 取（`ManagedSocket` 已经做了换票、中继与退避），`controlClient(connection)` / `controlChannel(connection)` 按连接缓存。
+- 契约 `workspaceEventSchema` 有三处透传的 `unknown`（`agent.approval.request`、ACP 帧的附加字段），`contract.test` 对这一条放行 3 处、只许减少，收紧留给对应域的 E3 迁移。
+- 老 core（没有 `/api/ws`）不回落到旧事件流路由：本机源与本仓库同版本；远程源的版本协商归 A1-1 的 `system.hello`。
+
+没做 / 限制：
+
+- 只有事件流迁入控制面；资源采样（`coalesce`）等订阅留给各域的 E3。
+- 控制面 4403 时页面按「当前工作空间的授权收回」处理（离开并提示），不区分是整条会话失效还是这块画布的共享被收回。
+- 浏览器发不了协议层 ping，前台的半开连接最长要等到下一次 30 秒的 `system.ping` 才发现；回到前台时立刻探一次。
+
+接口（给 A1-1 / A3-4）：
+
+- 契约：订阅 = 出参 `eventIterator(...)` + `meta.backpressure`，契约节号按域分配；实现交出一个 `async function*`，每项 `yield withEventId(value, String(seq))`（`core/http/rpc.ts`），`call.lastEventId` 是重订时客户端最后收到的 id，`call.signal` 在客户端取消、连接断开或门面溢出时 abort；先决条件不满足就在交出迭代器之前 `throw fail(...)`。
+- core：`core/http/ws-control.ts` 的 `CONTROL_PATH`、`CONTROL_PROTOCOL`、`CLOSE_*`、`MAX_ITERATORS`、`ITERATOR_MAX_FRAMES`、`ITERATOR_HIGH_WATER_BYTES`、`ControlConnection`；`core/http/stream-queue.ts` 的 `QueuedValue`；`WorkspaceEventStream.listen(workspaceId, (frame, seq) => …)`；测试用 `core/http/peer.fixture.ts`（直接说 peer 帧的客户端）。
+- 页面：`api/events.ts` 的 `WorkspaceEventTransport` 按源订（`subscribe(source, workspaceId, signal)`、`onDrop(source, …)`、`closedWith(source)`），`setWorkspaceEventTransport()` 测试换来源；`controlClient(connection)`（`connection` 是 `sourceRegistry().get(id)` / `.current()` 或任何有 `socket(path, options)` 的对象）、`controlClosedWith(connection)`、`onControlDrop(connection, listener)`、`errorCode(error)`；`api/ws.ts` 的 `ControlChannel`、`controlChannel(connection)`、`onControlClosed(listener)`、`closeMessageKey(code)`、`CLOSE_*`；`ManagedSocket.reconnect()`。

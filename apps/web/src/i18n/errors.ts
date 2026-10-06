@@ -44,6 +44,10 @@ export const errors: MessageModule = {
     "error.invitationInvalid": "邀请无效或已用完",
     "error.registrationTokenInvalid": "登记令牌无效或已过期",
     "error.protocolUnsupported": "远程服务的协议版本不兼容",
+    "error.remoteSessionExpired": "远程服务的登录已失效，请重新登录",
+    "error.sourceAccessDenied": "这个账号没有这台机器的权限",
+    "error.sourceRevoked": "这台机器已从远程服务移除",
+    "error.limitReached": "已达到远程服务的上限",
 
     /* 投递的拒绝码（`agent-delivery.md` §3.5）。机器码本身不翻译，这里给的是
        「发生了什么」，因为看着画布的人不该去读 core 的中文句子。 */
@@ -103,6 +107,11 @@ export const errors: MessageModule = {
       "The registration token is invalid or expired",
     "error.protocolUnsupported":
       "The remote service speaks an incompatible protocol version",
+    "error.remoteSessionExpired":
+      "Your sign-in to the remote service expired. Sign in again.",
+    "error.sourceAccessDenied": "This account has no access to that machine",
+    "error.sourceRevoked": "That machine was removed from the remote service",
+    "error.limitReached": "The remote service limit is reached",
 
     "error.delivery.LOOP_DETECTED":
       "These two nodes are feeding each other — stopped",

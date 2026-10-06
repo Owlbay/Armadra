@@ -27,6 +27,10 @@ const CONNECT = [
   "ws://localhost:*",
 ];
 
+/** 追加的连接授权只收这一种形状：协议 + 主机 + 可选端口，无通配、无路径。 */
+const CONNECT_GRANT =
+  /^(https|wss):\/\/(\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(:\d{1,5})?$/i;
+
 /**
  * One policy, with a single development-only grant.
  *
@@ -40,12 +44,23 @@ const CONNECT = [
  * the static server never asks for the grant.
  */
 export function contentSecurityPolicy(
-  options: { devServer?: boolean } = {},
+  options: {
+    devServer?: boolean;
+    /**
+     * 桌面壳按源表追加的来源（`https://host[:port]` / `wss://host[:port]`，
+     * `shell-core/csp.ts` 的 `sourceConnectGrants`）。不是这个形状的一律丢掉：
+     * 一个带空格或分号的值就能往策略里塞一条新指令。
+     */
+    connect?: readonly string[];
+  } = {},
 ): string {
+  const extra = (options.connect ?? []).filter(
+    (grant) => CONNECT_GRANT.test(grant) && !CONNECT.includes(grant),
+  );
   return [
     "default-src 'self'",
     ...(options.devServer ? ["script-src 'self' 'unsafe-inline'"] : []),
-    `connect-src ${CONNECT.join(" ")}`,
+    `connect-src ${[...CONNECT, ...new Set(extra)].join(" ")}`,
     // Tailwind and the shadcn components set inline custom properties.
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: http://127.0.0.1:* http://localhost:*",

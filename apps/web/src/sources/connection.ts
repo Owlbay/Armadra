@@ -583,7 +583,7 @@ export function createRemoteConnection(
       setStatus("ready");
       const moved = before !== null && before !== via;
       for (const socket of sockets) {
-        if (moved) socket.reconnect();
+        if (moved) socket.reroute();
         else socket.wake();
       }
     })().finally(() => {
@@ -624,7 +624,7 @@ export function createRemoteConnection(
       access = next;
       via = "direct";
       setStatus("ready");
-      for (const socket of sockets) socket.reconnect();
+      for (const socket of sockets) socket.reroute();
     })().finally(() => {
       probing = null;
     });

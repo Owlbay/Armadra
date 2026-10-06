@@ -51,7 +51,7 @@ const read = (path: string, method: "GET" | "POST" = "GET") =>
   });
 
 const write = (
-  section: "§33.1" | "§33.2",
+  section: "§33.1" | "§33.2" | "§33.6",
   method: "POST" | "PUT" | "DELETE",
   path: string,
 ) =>
@@ -197,6 +197,12 @@ export const sources = {
       ),
     })
     .meta(write("§33.2", "POST", "/api/sources/remotes/{serviceId}/session")),
+  /** 登出远程服务：尽力 `auth.logout`，删凭据，留行（契约 §33.6）。 */
+  remoteLogout: oc
+    .input(serviceIdInputSchema)
+    .output(empty)
+    .errors({ ...denied, ...errors.pick("not_found") })
+    .meta(write("§33.6", "POST", "/api/sources/remotes/{serviceId}/logout")),
 };
 
 export type ClientSource = z.infer<typeof clientSourceSchema>;

@@ -482,8 +482,8 @@ try {
     body: JSON.stringify({ cloud: { relay: { enabled: false } } }),
   });
   await page.until(
-    `return [...document.querySelectorAll('[data-slot="banner"]')].some((b) => b.innerText.includes("等待主机上线"))`,
-    "主机下线：通知条「等待主机上线」",
+    `return [...document.querySelectorAll('[data-slot="banner"]')].some((b) => b.innerText.includes("等待上线"))`,
+    "主机下线：通知条「等待上线」",
     { timeout: 30_000 },
   );
   await run.shot(page, "03-waiting-for-host-1440");
@@ -493,12 +493,12 @@ try {
     body: JSON.stringify({ cloud: { relay: { enabled: true } } }),
   });
   await page.until(
-    `return ![...document.querySelectorAll('[data-slot="banner"]')].some((b) => b.innerText.includes("等待主机上线"))`,
+    `return ![...document.querySelectorAll('[data-slot="banner"]')].some((b) => b.innerText.includes("等待上线"))`,
     "主机上线：通知条收起",
     { timeout: 60_000 },
   );
   await terminalRoundTrip(page, terminal.id, "online");
-  run.ok("主机下线 → 等待主机上线；上线 → me.stream 叫醒、终端照常", {
+  run.ok("主机下线 → 等待上线；上线 → me.stream 叫醒、终端照常", {
     backMs: Date.now() - offlineAt,
   });
 
@@ -528,7 +528,7 @@ try {
   await terminalRoundTrip(page, terminal.id, "again");
   const recoveredMs = Date.now() - downAt;
   await page.until(
-    `return ![...document.querySelectorAll('[data-slot="banner"]')].some((b) => /等待主机上线|断开/.test(b.innerText))`,
+    `return ![...document.querySelectorAll('[data-slot="banner"]')].some((b) => /等待上线|断开/.test(b.innerText))`,
     "通知条收起",
     { timeout: 30_000 },
   );

@@ -148,10 +148,19 @@ export class ManagedSocket {
   }
 
   /**
-   * 换路了（直连恢复、凭据换了地址）：开着的也断开，按新的地址与凭据立刻重连。
-   * 已关闭的不动。
+   * 调用方认定开着的这条已经死了（心跳没回音）：丢掉它，立刻再连，不等退避。
+   * 不在开着的状态时什么也不做。
    */
   reconnect(): void {
+    if (this.current !== "open") return;
+    this.reconnectNow();
+  }
+
+  /**
+   * 换路了（直连恢复、凭据换了地址）：不论开着、在退避还是在等，都按新的地址与
+   * 凭据立刻重连。已关闭的不动。
+   */
+  reroute(): void {
     if (this.current === "closed") return;
     this.renewedOnce = false;
     this.backoff.reset();

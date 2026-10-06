@@ -1,5 +1,7 @@
+import { eventIterator } from "@orpc/contract";
 import { z } from "zod";
 
+import { workspaceEventSchema } from "../api/events.js";
 import { errors } from "./errors.js";
 import { meta, oc } from "./meta.js";
 
@@ -44,6 +46,30 @@ export const workspaceSummaryWireSchema = workspaceWireSchema.extend({
 });
 
 const workspaceRef = z.object({ workspaceId: z.string().min(1) });
+
+/**
+ * 订阅里的位置帧（契约 §35.4）：每次（重新）订上、补发完之后发一帧，`id` 是
+ * 这时的 outbox 位置。它不是第 22 个工作空间事件——页面拿它当「订上了」的上升
+ * 沿，并让还没收到任何事件的订阅也有一个可续的 `lastEventId`。
+ */
+export const workspaceEventsCursorSchema = z.object({
+  type: z.literal("cursor"),
+  /** 补到了哪里（含其它工作空间的序号）；下一次续订从它之后。 */
+  cursor: z.number().int().nonnegative(),
+  /** outbox 的保留下限：比它小的位置续不上了。 */
+  floor: z.number().int().nonnegative(),
+  /** 这台 core 发过的最大序号。 */
+  watermark: z.number().int().nonnegative(),
+});
+
+/** `workspaces.events` 的一项：工作空间事件或位置帧。 */
+export const workspaceEventsItemSchema = z.union([
+  workspaceEventSchema,
+  workspaceEventsCursorSchema,
+]);
+
+export type WorkspaceEventsItem = z.input<typeof workspaceEventsItemSchema>;
+export type WorkspaceEventsCursor = z.infer<typeof workspaceEventsCursorSchema>;
 
 export const workspaces = {
   list: oc
@@ -164,6 +190,40 @@ export const workspaces = {
         since: "1.3",
         contract: "§34.4",
         legacy: { method: "POST", path: "/api/workspaces/{workspaceId}/open" },
+      }),
+    ),
+  /**
+   * 工作空间事件流（契约 §35.4）：控制面 `/api/ws` 上的订阅，每项的事件 `id` 是
+   * outbox 序号。`cursor` 是旧 `?cursor=` 的同义（`now` 或一个位置）；断线重订
+   * 时客户端交回的 `lastEventId` 优先。位置掉出保留下限答 `snapshot_required`，
+   * 比水位还新答 `cursor_ahead`——两者都是先整份重读、再从现在订。
+   */
+  events: oc
+    .input(
+      workspaceRef.extend({
+        cursor: z
+          .union([z.literal("now"), z.number().int().nonnegative()])
+          .optional(),
+      }),
+    )
+    .output(eventIterator(workspaceEventsItemSchema))
+    .errors(
+      errors.pick(
+        "forbidden",
+        "not_found",
+        "snapshot_required",
+        "cursor_ahead",
+        "overflow",
+        "limit_reached",
+      ),
+    )
+    .meta(
+      meta({
+        scope: "events:read",
+        workspaceKey: "workspaceId",
+        since: "1.4",
+        contract: "§35.4",
+        backpressure: "resubscribe",
       }),
     ),
 };
