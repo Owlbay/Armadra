@@ -91,6 +91,15 @@ export interface BootstrapRequest {
 
 export interface AccessRequest {
   readonly accessToken: string;
+  /**
+   * 门已经认过的会话（`RequestIdentity.session`，契约 §42）：准入门在这次请求
+   * （或控制面连接的升级）上已经用访问令牌、Cookie 或一次性票认过它。有它时按
+   * 会话认——会话仍活着、访问期没过、设备与账号没被撤销或停用——不再比对令牌：
+   * 控制面上的调用没有令牌可比，而页面刷新过访问令牌之后，连接仍是同一个会话。
+   *
+   * **只由 core 从门交出的请求身份里取**，绝不从请求头、请求体或查询串里读。
+   */
+  readonly verifiedSessionId?: string;
   readonly hostId: string;
   readonly origin: string;
   readonly requiredScopes?: readonly Scope[];
@@ -940,9 +949,12 @@ export class IdentityService {
     request: AccessRequest,
     now: number,
   ): Principal {
-    const sessionId = parseToken(request.accessToken);
+    const verified = request.verifiedSessionId;
+    const sessionId =
+      verified === undefined ? parseToken(request.accessToken) : verified;
     if (
       sessionId === undefined ||
+      sessionId === "" ||
       !this.audience(request.hostId, request.origin)
     ) {
       throw new IdentityError("unauthenticated");
@@ -954,7 +966,8 @@ export class IdentityService {
     const live = this.liveSession(tx, sessionId, request.origin, now);
     if (
       now >= live.session.accessExpiresAtMs ||
-      !matches("access", request.accessToken, live.session.accessHash)
+      (verified === undefined &&
+        !matches("access", request.accessToken, live.session.accessHash))
     ) {
       throw new IdentityError("unauthenticated");
     }

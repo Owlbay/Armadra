@@ -1,3 +1,4 @@
+import type { ProcedureInput, Contract } from "@armadra/shared";
 import type {
   AuditFilter,
   GrantSubjectKind,
@@ -39,7 +40,22 @@ import { ID_PATTERN, newId, validName } from "./tokens";
  * 做不到的按设计要求**返回 501 且形状一致**：开放注册。OAuth / OIDC 在
  * `oauth/`（契约 §18.5），自己挂更长的原样前缀。passkey、MFA、会话列表、锁定（契约 §18.1–§18.4）在本文件下半部分，
  * 由 {@link IdentitySecurity} 驱动；没有它时那几条路径按 404 回答。
+ *
+ * **一份实现，两条路**（契约 §42）：每条会话内的动作是一个操作
+ * （{@link accountOperations}、{@link securityOperations}），旧路径的分发与
+ * `accounts.*` / `security.*` procedure（`procedures.ts`）都调它。操作的入参是
+ * 取值函数：旧路径在认人之后才解析体（迁移前的顺序，没登录的人拿不到字段级的
+ * 400），procedure 交的是契约已经解析好的值。凭据换会话的那几条（登录、持邀请
+ * 注册、重置链接）只在旧路径上。
  */
+
+/** 契约里一条 procedure 的入参。 */
+type In<P> = ProcedureInput<P>;
+type AccountsContract = Contract["accounts"];
+type SecurityContract = Contract["security"];
+
+/** 一条操作的入参：认完人才取（见文件头）。 */
+export type Read<T> = () => T;
 
 export interface Answer {
   readonly status: number;
@@ -140,6 +156,16 @@ export function notImplemented(feature: string): Answer {
   };
 }
 
+/** 同一句 501，给操作抛出来（旧路径答出来的 JSON 与 {@link notImplemented} 一样）。 */
+function notImplementedRefusal(feature: string): IdentityRefusal {
+  const { status, body } = notImplemented(feature);
+  const { code, message } = body as { code: string; message: string };
+  return new IdentityRefusal("invalid", status, code, message);
+}
+
+const ok = (body: unknown): Answer => ({ status: 200, body });
+const created = (body: unknown): Answer => ({ status: 201, body });
+
 /**
  * 分发一条 `/api/identity/…` 请求；不是这个面的路径返回 `undefined`，由调用方
  * 继续它自己的 404。
@@ -160,11 +186,12 @@ export function handleAccounts(
     ...given,
     authenticate: (force) => given.authenticate(force ?? write),
   };
+  const ops = accountOperations(context);
   switch (head) {
     case "principals":
-      return principals(method, segments, request, context);
+      return principals(method, segments, request, ops);
     case "credentials":
-      return credentials(method, segments, request, context);
+      return credentials(method, segments, request, ops);
     case "login":
       if (method !== "POST") return undefined;
       return security === undefined
@@ -193,58 +220,282 @@ export function handleAccounts(
         ? undefined
         : passwordReset(method, segments, request, context, security);
     case "invitations":
-      return invitations(method, segments, request, context);
+      return invitations(method, segments, request, ops);
     case "groups":
-      return groups(method, segments, request, context);
+      return groups(method, segments, request, ops);
     case "grants":
-      return grants(method, segments, request, context);
+      return grants(method, segments, request, ops);
     case "audit":
-      return audit(method, segments, request, context);
+      return audit(method, segments, request, ops, context);
     default:
       return undefined;
   }
 }
 
+/* ======================= 账号、凭据、邀请、组、共享 ======================= */
+
+/**
+ * `accounts.*` 与 `security.audit.list` 的操作（契约 §42.3、§42.2）。每条第一件
+ * 事是认人（{@link subject}），再取入参、交给 {@link AccountsService} 判定。
+ */
+export function accountOperations(context: AccountsHttpContext) {
+  const accounts = context.accounts;
+  return {
+    principals: {
+      list() {
+        return { principals: accounts.listPrincipals(subject(context)) };
+      },
+      create(read: Read<In<AccountsContract["principals"]["create"]>>) {
+        const actor = subject(context);
+        const input = read();
+        return accounts.createPrincipal(actor, {
+          displayName: input.displayName,
+          ...(input.kind === "service" ? { kind: "service" as const } : {}),
+        });
+      },
+      disable(read: Read<In<AccountsContract["principals"]["disable"]>>) {
+        const actor = subject(context);
+        accounts.disablePrincipal(actor, read().principalId);
+        return { disabled: true as const };
+      },
+      // 契约 §25：明文令牌只在这一次答出去，链接由签发人亲手交给对方。
+      issuePasswordReset(
+        read: Read<In<AccountsContract["principals"]["issuePasswordReset"]>>,
+      ) {
+        const actor = subject(context);
+        const issued = accounts.issuePasswordReset(actor, read().principalId);
+        return { token: issued.token, expiresAtMs: issued.expiresAtMs };
+      },
+    },
+    credentials: {
+      list(read: Read<In<AccountsContract["credentials"]["list"]>>) {
+        const actor = subject(context);
+        return {
+          credentials: accounts.listCredentials(actor, read().principalId),
+        };
+      },
+      /**
+       * 设口令。入参先取（迁移前的顺序：`kind` 不是口令的答 501 不认人）；有
+       * 加固时先认调用方再判口令——一个没登录的人不该靠策略错误码探出账号名。
+       * 换了口令撤掉这个人的其它会话（L2）；发请求的这个会话留着。
+       */
+      setPassword(
+        read: Read<In<AccountsContract["credentials"]["setPassword"]>>,
+      ) {
+        const input = read();
+        const kind = input.kind ?? "password";
+        if (kind !== "password") throw notImplementedRefusal(`${kind} 凭据`);
+        const { principalId, password } = input;
+        const set = () => {
+          const principal = context.authenticate();
+          return accounts.setPassword(
+            subjectOf(principal),
+            principalId,
+            password,
+            principal.sessionId,
+          );
+        };
+        const security = context.security;
+        if (security === undefined) return set();
+        subject(context);
+        const displayName = security.security.store.transaction(
+          (tx) => tx.accounts.principal(principalId)?.displayName ?? "",
+        );
+        return checkedPassword(
+          security,
+          password,
+          [displayName, principalId],
+          set,
+          principalId,
+        );
+      },
+      revoke(read: Read<In<AccountsContract["credentials"]["revoke"]>>) {
+        const actor = subject(context);
+        accounts.revokeCredential(actor, read().credentialId);
+        return { revoked: true as const };
+      },
+    },
+    invitations: {
+      list() {
+        return { invitations: accounts.listInvitations(subject(context)) };
+      },
+      issue(read: Read<In<AccountsContract["invitations"]["issue"]>>) {
+        const actor = subject(context);
+        const input = read();
+        return accounts.issueInvitation(actor, {
+          role: input.role,
+          targetGroupId: input.targetGroupId ?? undefined,
+          targetWorkspaceId: input.targetWorkspaceId ?? undefined,
+          ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),
+          ...(input.maxUses === undefined || input.maxUses === null
+            ? {}
+            : { maxUses: input.maxUses }),
+        });
+      },
+      revoke(read: Read<In<AccountsContract["invitations"]["revoke"]>>) {
+        const actor = subject(context);
+        accounts.revokeInvitation(actor, read().invitationId);
+        return { revoked: true as const };
+      },
+      accept(read: Read<In<AccountsContract["invitations"]["accept"]>>) {
+        const actor = subject(context);
+        const input = read();
+        return accounts.acceptInvitation(actor, {
+          invitationId: input.invitationId,
+          token: input.token,
+        });
+      },
+    },
+    groups: {
+      list() {
+        return { groups: accounts.listGroups(subject(context)) };
+      },
+      create(read: Read<In<AccountsContract["groups"]["create"]>>) {
+        const actor = subject(context);
+        return accounts.createGroup(actor, read().name);
+      },
+      rename(read: Read<In<AccountsContract["groups"]["rename"]>>) {
+        const actor = subject(context);
+        const { groupId, name } = read();
+        accounts.renameGroup(actor, groupId, name);
+        return { groupId, renamed: true as const };
+      },
+      remove(read: Read<In<AccountsContract["groups"]["remove"]>>) {
+        const actor = subject(context);
+        const { groupId } = read();
+        accounts.deleteGroup(actor, groupId);
+        return { groupId, deleted: true as const };
+      },
+      putMember(read: Read<In<AccountsContract["groups"]["putMember"]>>) {
+        const actor = subject(context);
+        const { groupId, principalId, role } = read();
+        accounts.putGroupMember(
+          actor,
+          groupId,
+          principalId,
+          (role ?? "member") as GroupRole,
+        );
+        return { groupId, principalId };
+      },
+      removeMember(read: Read<In<AccountsContract["groups"]["removeMember"]>>) {
+        const actor = subject(context);
+        const { groupId, principalId } = read();
+        accounts.removeGroupMember(actor, groupId, principalId);
+        return { groupId, principalId, removed: true as const };
+      },
+    },
+    grants: {
+      list(read: Read<In<AccountsContract["grants"]["list"]>>) {
+        const actor = subject(context);
+        const { workspaceId } = read();
+        return {
+          workspaceId,
+          grants: accounts.listGrants(actor, workspaceId).map(grantView),
+          // 角色 → 权限的编译表，界面拿它画共享对话框里的那四个单选项。
+          roles: [...SHARE_ROLES],
+        };
+      },
+      put(read: Read<In<AccountsContract["grants"]["put"]>>) {
+        const actor = subject(context);
+        const input = read();
+        return grantView(
+          accounts.putGrant(actor, {
+            workspaceId: input.workspaceId,
+            subjectKind: input.subjectKind as GrantSubjectKind,
+            subjectId: input.subjectId,
+            role: input.role,
+          }),
+        );
+      },
+      revoke(read: Read<In<AccountsContract["grants"]["revoke"]>>) {
+        const actor = subject(context);
+        const input = read();
+        accounts.revokeGrant(actor, {
+          workspaceId: input.workspaceId,
+          subjectKind: input.subjectKind as GrantSubjectKind,
+          subjectId: input.subjectId,
+        });
+        return { revoked: true as const };
+      },
+    },
+    audit: {
+      /**
+       * `GET audit`（契约 §18.6）。筛选先校（写错的数字一律 400，不悄悄当成
+       * 「不筛」），再认人；多取一行，知道还有没有更早的。
+       */
+      list(read: Read<In<SecurityContract["audit"]["list"]>>) {
+        const query = read() ?? {};
+        const filter = auditFilterOf(query);
+        const limit = pageLimit(query.limit);
+        const rows = accounts.readAudit(subject(context), {
+          ...filter,
+          limit: limit + 1,
+        });
+        const entries = rows.slice(0, limit).map(auditEntry);
+        return {
+          entries,
+          nextBeforeId:
+            rows.length > limit ? (entries[entries.length - 1]?.id ?? 0) : 0,
+        };
+      },
+    },
+  };
+}
+
+export type AccountOperations = ReturnType<typeof accountOperations>;
+
+/** 编译出来的权限是只读数组；线上就是一份普通的数组。 */
+function grantView<T extends { readonly permissions: readonly string[] }>(
+  view: T,
+): Omit<T, "permissions"> & { permissions: string[] } {
+  return { ...view, permissions: [...view.permissions] };
+}
+
+/** 审计一行的 `detail` 是写入时的 JSON；没有时 `null`。 */
+function auditEntry<T extends { detail: unknown }>(
+  row: T,
+): Omit<T, "detail"> & { detail: JsonValue } {
+  return { ...row, detail: (row.detail ?? null) as JsonValue };
+}
+
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+/* ----------------------------- 旧路径的分发 ------------------------------ */
+
 function principals(
   method: string,
   segments: readonly string[],
   request: CoreRequest,
-  context: AccountsHttpContext,
+  ops: AccountOperations,
 ): Answer | undefined {
-  const accounts = context.accounts;
   if (segments.length === 1 && method === "GET") {
-    return {
-      status: 200,
-      body: { principals: accounts.listPrincipals(subject(context)) },
-    };
+    return ok(ops.principals.list());
   }
   if (segments.length === 1 && method === "POST") {
     const body = object(request);
-    return {
-      status: 201,
-      body: accounts.createPrincipal(subject(context), {
+    return created(
+      ops.principals.create(() => ({
         displayName: text(body.displayName),
-        ...(body.kind === "service" ? { kind: "service" as const } : {}),
-      }),
-    };
+        ...(body.kind === "service" ? { kind: "service" } : {}),
+      })),
+    );
   }
+  const principalId = segments[1] as string;
   if (segments.length === 3 && segments[2] === "disable" && method === "POST") {
-    accounts.disablePrincipal(subject(context), segments[1] as string);
-    return { status: 200, body: { disabled: true } };
+    return ok(ops.principals.disable(() => ({ principalId })));
   }
   if (
     segments.length === 3 &&
     segments[2] === "password-reset" &&
     method === "POST"
   ) {
-    // 契约 §25：明文令牌只在这一次答出去，链接由签发人亲手交给对方。
-    return {
-      status: 201,
-      body: accounts.issuePasswordReset(
-        subject(context),
-        segments[1] as string,
-      ),
-    };
+    return created(ops.principals.issuePasswordReset(() => ({ principalId })));
   }
   return undefined;
 }
@@ -253,57 +504,29 @@ function credentials(
   method: string,
   segments: readonly string[],
   request: CoreRequest,
-  context: AccountsHttpContext,
+  ops: AccountOperations,
 ): Answer | Promise<Answer> | undefined {
-  const accounts = context.accounts;
   // passkey 与 OAuth 都有了自己的路由（`passkey/*` 契约 §18.2、`oauth/*`
   // 契约 §18.5），`credentials/{passkey,oauth}/*` 的旧占位路径不再存在。
   if (segments.length === 1 && method === "GET") {
     const principalId = request.query.get("principalId") ?? "";
-    return {
-      status: 200,
-      body: {
-        credentials: accounts.listCredentials(subject(context), principalId),
-      },
-    };
+    return ok(ops.credentials.list(() => ({ principalId })));
   }
   if (segments.length === 1 && method === "POST") {
     const body = object(request);
     const kind = text(body.kind === undefined ? "password" : body.kind);
     if (kind !== "password") return notImplemented(`${kind} 凭据`);
-    const principalId = text(body.principalId);
-    const password = text(body.password);
-    // 换了口令撤掉这个人的其它会话（L2）；发请求的这个会话留着。
-    const set = () => {
-      const principal = context.authenticate();
-      return {
-        status: 201,
-        body: accounts.setPassword(
-          subjectOf(principal),
-          principalId,
-          password,
-          principal.sessionId,
-        ),
-      };
+    const input = {
+      kind,
+      principalId: text(body.principalId),
+      password: text(body.password),
     };
-    const security = context.security;
-    if (security === undefined) return set();
-    // 先认调用方再判口令：一个没登录的人不该靠策略错误码探出账号名。
-    subject(context);
-    const displayName = security.security.store.transaction(
-      (tx) => tx.accounts.principal(principalId)?.displayName ?? "",
-    );
-    return checkedPassword(
-      security,
-      password,
-      [displayName, principalId],
-      set,
-      principalId,
-    );
+    const answer = ops.credentials.setPassword(() => input);
+    return answer instanceof Promise ? answer.then(created) : created(answer);
   }
   if (segments.length === 2 && method === "DELETE") {
-    accounts.revokeCredential(subject(context), segments[1] as string);
-    return { status: 200, body: { revoked: true } };
+    const credentialId = segments[1] as string;
+    return ok(ops.credentials.revoke(() => ({ credentialId })));
   }
   return undefined;
 }
@@ -344,12 +567,12 @@ function register(
   const displayName = text(body.displayName);
   const security = context.security;
   if (security === undefined) {
-    return registerChecked(body, token, password, context);
+    return created(registerChecked(body, token, password, context));
   }
   security.security.throttle.admitIp(security.remoteIp);
   return checkedPassword(security, password, [displayName], () =>
     registerChecked(body, token, password, context),
-  );
+  ).then(created);
 }
 
 function registerChecked(
@@ -357,7 +580,7 @@ function registerChecked(
   token: string,
   password: string,
   context: AccountsHttpContext,
-): Answer {
+): Record<string, unknown> {
   const registered = context.accounts.registerWithInvitation({
     invitationId: token.split(".")[0] ?? "",
     token,
@@ -371,14 +594,11 @@ function registerChecked(
       body.deviceName === undefined ? "Armadra" : text(body.deviceName),
   }) as Record<string, unknown>;
   return {
-    status: 201,
-    body: {
-      ...session,
-      invitation: {
-        role: registered.role,
-        groupId: registered.groupId,
-        workspaceId: registered.workspaceId,
-      },
+    ...session,
+    invitation: {
+      role: registered.role,
+      groupId: registered.groupId,
+      workspaceId: registered.workspaceId,
     },
   };
 }
@@ -387,43 +607,37 @@ function invitations(
   method: string,
   segments: readonly string[],
   request: CoreRequest,
-  context: AccountsHttpContext,
+  ops: AccountOperations,
 ): Answer | undefined {
-  const accounts = context.accounts;
   if (segments.length === 1 && method === "GET") {
-    return {
-      status: 200,
-      body: { invitations: accounts.listInvitations(subject(context)) },
-    };
+    return ok(ops.invitations.list());
   }
   if (segments.length === 1 && method === "POST") {
     const body = object(request);
-    return {
-      status: 201,
-      body: accounts.issueInvitation(subject(context), {
-        role: body.role,
+    return created(
+      ops.invitations.issue(() => ({
+        role: body.role as string,
         targetGroupId: optional(body.targetGroupId),
         targetWorkspaceId: optional(body.targetWorkspaceId),
         ...(typeof body.ttlMs === "number" ? { ttlMs: body.ttlMs } : {}),
         ...(body.maxUses !== undefined && body.maxUses !== null
           ? { maxUses: body.maxUses as number }
           : {}),
-      }),
-    };
+      })),
+    );
   }
+  const invitationId = segments[1] as string;
   if (segments.length === 2 && method === "DELETE") {
-    accounts.revokeInvitation(subject(context), segments[1] as string);
-    return { status: 200, body: { revoked: true } };
+    return ok(ops.invitations.revoke(() => ({ invitationId })));
   }
   if (segments.length === 3 && segments[2] === "accept" && method === "POST") {
     const body = object(request);
-    return {
-      status: 200,
-      body: accounts.acceptInvitation(subject(context), {
-        invitationId: segments[1] as string,
+    return ok(
+      ops.invitations.accept(() => ({
+        invitationId,
         token: text(body.token),
-      }),
-    };
+      })),
+    );
   }
   return undefined;
 }
@@ -432,45 +646,39 @@ function groups(
   method: string,
   segments: readonly string[],
   request: CoreRequest,
-  context: AccountsHttpContext,
+  ops: AccountOperations,
 ): Answer | undefined {
-  const accounts = context.accounts;
   if (segments.length === 1 && method === "GET") {
-    return {
-      status: 200,
-      body: { groups: accounts.listGroups(subject(context)) },
-    };
+    return ok(ops.groups.list());
   }
   if (segments.length === 1 && method === "POST") {
-    return {
-      status: 201,
-      body: accounts.createGroup(subject(context), text(object(request).name)),
-    };
+    return created(
+      ops.groups.create(() => ({ name: text(object(request).name) })),
+    );
   }
   const groupId = segments[1] ?? "";
   if (segments.length === 2 && method === "PATCH") {
-    accounts.renameGroup(subject(context), groupId, text(object(request).name));
-    return { status: 200, body: { groupId, renamed: true } };
+    return ok(
+      ops.groups.rename(() => ({ groupId, name: text(object(request).name) })),
+    );
   }
   if (segments.length === 2 && method === "DELETE") {
-    accounts.deleteGroup(subject(context), groupId);
-    return { status: 200, body: { groupId, deleted: true } };
+    return ok(ops.groups.remove(() => ({ groupId })));
   }
   if (segments.length === 4 && segments[2] === "members") {
     const principalId = segments[3] as string;
     if (method === "PUT") {
       const role = object(request).role;
-      accounts.putGroupMember(
-        subject(context),
-        groupId,
-        principalId,
-        (role === undefined ? "member" : text(role)) as GroupRole,
+      return ok(
+        ops.groups.putMember(() => ({
+          groupId,
+          principalId,
+          ...(role === undefined ? {} : { role: text(role) }),
+        })),
       );
-      return { status: 200, body: { groupId, principalId } };
     }
     if (method === "DELETE") {
-      accounts.removeGroupMember(subject(context), groupId, principalId);
-      return { status: 200, body: { groupId, principalId, removed: true } };
+      return ok(ops.groups.removeMember(() => ({ groupId, principalId })));
     }
   }
   return undefined;
@@ -480,42 +688,33 @@ function grants(
   method: string,
   segments: readonly string[],
   request: CoreRequest,
-  context: AccountsHttpContext,
+  ops: AccountOperations,
 ): Answer | undefined {
   if (segments.length !== 1) return undefined;
-  const accounts = context.accounts;
   if (method === "GET") {
     const workspaceId = request.query.get("workspaceId") ?? "";
-    return {
-      status: 200,
-      body: {
-        workspaceId,
-        grants: accounts.listGrants(subject(context), workspaceId),
-        // 角色 → 权限的编译表，界面拿它画共享对话框里的那四个单选项。
-        roles: SHARE_ROLES,
-      },
-    };
+    return ok(ops.grants.list(() => ({ workspaceId })));
   }
   if (method === "PUT") {
     const body = object(request);
-    return {
-      status: 200,
-      body: accounts.putGrant(subject(context), {
+    return ok(
+      ops.grants.put(() => ({
         workspaceId: text(body.workspaceId),
-        subjectKind: text(body.subjectKind) as GrantSubjectKind,
+        subjectKind: text(body.subjectKind),
         subjectId: text(body.subjectId),
-        role: body.role,
-      }),
-    };
+        role: body.role as string,
+      })),
+    );
   }
   if (method === "DELETE") {
     const body = object(request);
-    accounts.revokeGrant(subject(context), {
-      workspaceId: text(body.workspaceId),
-      subjectKind: text(body.subjectKind) as GrantSubjectKind,
-      subjectId: text(body.subjectId),
-    });
-    return { status: 200, body: { revoked: true } };
+    return ok(
+      ops.grants.revoke(() => ({
+        workspaceId: text(body.workspaceId),
+        subjectKind: text(body.subjectKind),
+        subjectId: text(body.subjectId),
+      })),
+    );
   }
   return undefined;
 }
@@ -524,47 +723,25 @@ function grants(
 
 /**
  * `GET audit` 与 `GET audit/export`（契约 §18.6）。筛选参数两条一样；导出不
- * 分页，按 id 从新到旧最多 {@link AUDIT_EXPORT_MAX} 行。
+ * 分页，按 id 从新到旧最多 {@link AUDIT_EXPORT_MAX} 行。导出是 CSV 字节流，只在
+ * 旧路径上（契约 §42.4）。
  */
 function audit(
   method: string,
   segments: readonly string[],
   request: CoreRequest,
+  ops: AccountOperations,
   context: AccountsHttpContext,
 ): Answer | undefined {
   if (method !== "GET") return undefined;
   if (segments.length === 1) {
-    const filter = auditFilter(request);
-    const limit = pageLimit(request.query.get("limit"));
-    // 多取一行，知道还有没有更早的。
-    const rows = context.accounts.readAudit(subject(context), {
-      ...filter,
-      limit: limit + 1,
-    });
-    const entries = rows.slice(0, limit);
-    return {
-      status: 200,
-      body: {
-        entries,
-        nextBeforeId:
-          rows.length > limit ? (entries[entries.length - 1]?.id ?? 0) : 0,
-      },
-    };
+    // 查询串在认人之前校（迁移前的顺序）。
+    const query = auditQueryOf(request);
+    auditFilterOf(query);
+    return ok(ops.audit.list(() => query));
   }
   if (segments.length === 2 && segments[1] === "export") {
-    const rows = context.accounts.readAudit(subject(context), {
-      ...auditFilter(request),
-      limit: AUDIT_EXPORT_MAX,
-    });
-    return {
-      status: 200,
-      body: null,
-      text: {
-        contentType: "text/csv; charset=utf-8",
-        filename: "armadra-audit.csv",
-        body: auditCsv(rows),
-      },
-    };
+    return auditExport(request, context);
   }
   return undefined;
 }
@@ -572,32 +749,24 @@ function audit(
 export const AUDIT_PAGE_MAX = 500;
 export const AUDIT_EXPORT_MAX = 10_000;
 
-function pageLimit(raw: string | null): number {
-  const limit = Number(raw ?? 100);
+/** 每页行数：缺省、不是整数或越界都取 100。 */
+function pageLimit(raw: number | undefined): number {
+  const limit = raw ?? 100;
   return Number.isInteger(limit) && limit > 0 && limit <= AUDIT_PAGE_MAX
     ? limit
     : 100;
 }
 
-/** 查询串 → 筛选。写错的数字一律 400，不悄悄当成「不筛」。 */
-function auditFilter(request: CoreRequest): AuditFilter {
+type AuditQuery = NonNullable<In<SecurityContract["audit"]["list"]>>;
+
+/** 查询串 → 与 procedure 同一个形状的筛选（数字原样转，校验在 {@link auditFilterOf}）。 */
+function auditQueryOf(request: CoreRequest): AuditQuery {
   const query = request.query;
-  const number = (name: string, min: number): number | undefined => {
+  const number = (name: string): number | undefined => {
     const raw = query.get(name);
-    if (raw === null || raw === "") return undefined;
-    const value = Number(raw);
-    if (!Number.isSafeInteger(value) || value < min) {
-      throw new IdentityError("invalid");
-    }
-    return value;
+    return raw === null || raw === "" ? undefined : Number(raw);
   };
-  const actions = query.getAll("action").filter((value) => value !== "");
-  if (actions.length > 20 || actions.some((value) => value.length > 128)) {
-    throw new IdentityError("invalid");
-  }
-  const sinceMs = number("sinceMs", 0);
-  const untilMs = number("untilMs", 0);
-  const beforeId = number("beforeId", 1);
+  const limit = query.get("limit");
   return {
     ...(query.get("principalId")
       ? { principalId: query.get("principalId") as string }
@@ -605,10 +774,63 @@ function auditFilter(request: CoreRequest): AuditFilter {
     ...(query.get("workspaceId")
       ? { workspaceId: query.get("workspaceId") as string }
       : {}),
+    action: query.getAll("action"),
+    ...(number("sinceMs") === undefined ? {} : { sinceMs: number("sinceMs") }),
+    ...(number("untilMs") === undefined ? {} : { untilMs: number("untilMs") }),
+    ...(number("beforeId") === undefined
+      ? {}
+      : { beforeId: number("beforeId") }),
+    ...(limit === null ? {} : { limit: Number(limit) }),
+  };
+}
+
+/** 筛选。写错的数字一律 400，不悄悄当成「不筛」。 */
+function auditFilterOf(query: AuditQuery): AuditFilter {
+  const number = (
+    value: number | undefined,
+    min: number,
+  ): number | undefined => {
+    if (value === undefined) return undefined;
+    if (!Number.isSafeInteger(value) || value < min) {
+      throw new IdentityError("invalid");
+    }
+    return value;
+  };
+  const actions = (query.action ?? []).filter((value) => value !== "");
+  if (actions.length > 20 || actions.some((value) => value.length > 128)) {
+    throw new IdentityError("invalid");
+  }
+  const sinceMs = number(query.sinceMs, 0);
+  const untilMs = number(query.untilMs, 0);
+  const beforeId = number(query.beforeId, 1);
+  return {
+    ...(query.principalId ? { principalId: query.principalId } : {}),
+    ...(query.workspaceId ? { workspaceId: query.workspaceId } : {}),
     ...(actions.length > 0 ? { actions } : {}),
     ...(sinceMs === undefined ? {} : { sinceMs }),
     ...(untilMs === undefined ? {} : { untilMs }),
     ...(beforeId === undefined ? {} : { beforeId }),
+  };
+}
+
+/** 审计导出（CSV）：与 `audit` 同一套筛选，校完筛选再认人，不分页。 */
+function auditExport(
+  request: CoreRequest,
+  context: AccountsHttpContext,
+): Answer {
+  const filter = auditFilterOf(auditQueryOf(request));
+  const rows = context.accounts.readAudit(subject(context), {
+    ...filter,
+    limit: AUDIT_EXPORT_MAX,
+  });
+  return {
+    status: 200,
+    body: null,
+    text: {
+      contentType: "text/csv; charset=utf-8",
+      filename: "armadra-audit.csv",
+      body: auditCsv(rows),
+    },
   };
 }
 
@@ -757,13 +979,13 @@ export function mfaRequiredFor(
  * 只记一条 `identity.password.breach_check_failed`，不阻止设口令。审计里只有
  * 档位与结果，口令与哈希都不进去。
  */
-async function checkedPassword(
+async function checkedPassword<T extends object>(
   context: SecurityHttpContext,
   password: string,
   names: readonly string[],
-  then: () => Answer,
+  then: () => T,
   target = "",
-): Promise<Answer> {
+): Promise<T & { passwordBreached?: true }> {
   const settings = context.security.settings();
   enforcePasswordPolicy(password, {
     minLength: settings.passwordMinLength,
@@ -798,13 +1020,7 @@ async function checkedPassword(
   }
   const answer = then();
   if (verdict !== "breached") return answer;
-  return {
-    ...answer,
-    body: {
-      ...(answer.body as Record<string, unknown>),
-      passwordBreached: true,
-    },
-  };
+  return { ...answer, passwordBreached: true };
 }
 
 function deviceNameOf(body: Record<string, unknown>): string {
@@ -928,6 +1144,104 @@ function issueSession(
   );
 }
 
+/* ------------------------- 会话内的加固操作（§42.2） ------------------------ */
+
+/**
+ * `security.*` 里本人与 owner 的那几条（passkey、两步验证、会话、锁定）。每条
+ * 第一件事是认人（{@link me}：写操作在 Cookie 会话上核对 CSRF，`manage` 要
+ * `identity:manage`），再取入参。
+ */
+export function securityOperations(context: SecurityHttpContext) {
+  return {
+    passkeys: {
+      list: () => listPasskeys(context),
+      registerOptions: (
+        read: Read<In<SecurityContract["passkeys"]["registerOptions"]>>,
+      ) => registerOptions(read, context),
+      registerVerify: (
+        read: Read<In<SecurityContract["passkeys"]["registerVerify"]>>,
+      ) => registerVerify(read, context),
+      rename: (read: Read<In<SecurityContract["passkeys"]["rename"]>>) =>
+        renamePasskey(read, context),
+      remove: (read: Read<In<SecurityContract["passkeys"]["remove"]>>) =>
+        removePasskey(read, context),
+    },
+    mfa: {
+      status() {
+        const principal = me(context, false);
+        const requireFor = context.security.settings().mfaRequireFor;
+        return {
+          ...context.security.mfa.status(principal.principalId),
+          requireFor,
+          required: mfaRequiredFor(principal.role, requireFor),
+        };
+      },
+      enroll: () => mfaEnroll(context),
+      confirm: (read: Read<In<SecurityContract["mfa"]["confirm"]>>) =>
+        mfaConfirm(read, context),
+      disable: (read: Read<In<SecurityContract["mfa"]["disable"]>>) =>
+        mfaWithCode(read, context, "disable"),
+      regenerateRecoveryCodes: (
+        read: Read<In<SecurityContract["mfa"]["regenerateRecoveryCodes"]>>,
+      ) => mfaWithCode(read, context, "regenerate"),
+      reset: (read: Read<In<SecurityContract["mfa"]["reset"]>>) =>
+        mfaReset(read, context),
+    },
+    sessions: {
+      list(read: Read<In<SecurityContract["sessions"]["list"]>>) {
+        const all = read()?.all === true;
+        return { sessions: context.service.listSessions(context.actor, all) };
+      },
+      revoke(read: Read<In<SecurityContract["sessions"]["revoke"]>>) {
+        const { sessionId } = read();
+        context.service.revokeSessionById(
+          { ...context.actor, requireCsrf: context.csrf !== false },
+          sessionId,
+        );
+        return { sessionId, revoked: true as const };
+      },
+      revokeOthers() {
+        const revoked = context.service.revokeOtherSessions({
+          ...context.actor,
+          requireCsrf: context.csrf !== false,
+        });
+        return { revoked };
+      },
+    },
+    lockouts: {
+      list() {
+        me(context, false, true);
+        return { lockouts: context.security.throttle.active() };
+      },
+      clear(read: Read<In<SecurityContract["lockouts"]["clear"]>>) {
+        const principal = me(context, true, true);
+        const { principalId: target } = read();
+        if (!ID_PATTERN.test(target)) throw new IdentityError("invalid");
+        const unlocked = context.security.throttle.unlock(principalKey(target));
+        record(context.security.store, {
+          action: "identity.lockout.clear",
+          principalId: principal.principalId,
+          deviceId: principal.deviceId,
+          target,
+        });
+        return { principalId: target, unlocked };
+      },
+    },
+  };
+}
+
+export type SecurityOperations = ReturnType<typeof securityOperations>;
+
+/** 同步或异步的操作结果 → 旧路径的答案。 */
+function answer<T>(
+  value: T | Promise<T>,
+  status = 200,
+): Answer | Promise<Answer> {
+  return value instanceof Promise
+    ? value.then((body) => ({ status, body }))
+    : { status, body: value };
+}
+
 /* --------------------------------- passkey -------------------------------- */
 
 function relyingParty(context: SecurityHttpContext): RelyingParty {
@@ -945,13 +1259,29 @@ function passkey(
   request: CoreRequest,
   context: SecurityHttpContext,
 ): Answer | Promise<Answer> | undefined {
+  const ops = securityOperations(context).passkeys;
   const step = segments.slice(1).join("/");
-  if (segments.length === 1 && method === "GET") return listPasskeys(context);
+  if (segments.length === 1 && method === "GET") return ok(ops.list());
   if (method === "POST" && step === "register/options") {
-    return registerOptions(request, context);
+    return answer(
+      ops.registerOptions(() => {
+        const body = object(request);
+        return body.label === undefined ? {} : { label: text(body.label) };
+      }),
+    );
   }
   if (method === "POST" && step === "register/verify") {
-    return registerVerify(request, context);
+    return answer(
+      ops.registerVerify(() => {
+        const body = object(request);
+        return {
+          challengeId: text(body.challengeId),
+          response: body.response as Record<string, never>,
+          ...(body.label === undefined ? {} : { label: text(body.label) }),
+        };
+      }),
+      201,
+    );
   }
   if (method === "POST" && step === "login/options") {
     context.security.throttle.admitIp(context.remoteIp);
@@ -962,11 +1292,20 @@ function passkey(
   if (method === "POST" && step === "login/verify") {
     return passkeyLogin(request, context);
   }
+  const credentialId = segments[1] as string;
   if (segments.length === 2 && method === "DELETE") {
-    return removePasskey(segments[1] as string, context);
+    // 标识先校，再认人（迁移前的顺序）。
+    if (!ID_PATTERN.test(credentialId)) throw new IdentityError("invalid");
+    return ok(ops.remove(() => ({ credentialId })));
   }
   if (segments.length === 2 && method === "PATCH") {
-    return renamePasskey(segments[1] as string, request, context);
+    if (!ID_PATTERN.test(credentialId)) throw new IdentityError("invalid");
+    return ok(
+      ops.rename(() => ({
+        credentialId,
+        label: text(object(request).label),
+      })),
+    );
   }
   return undefined;
 }
@@ -990,13 +1329,12 @@ export function validPasskeyLabel(label: string): boolean {
  * 404——名字是本人给自己的钥匙起的，owner 要处理别人的钥匙只有删除。
  */
 function renamePasskey(
-  credentialId: string,
-  request: CoreRequest,
+  read: Read<In<SecurityContract["passkeys"]["rename"]>>,
   context: SecurityHttpContext,
-): Answer {
-  if (!ID_PATTERN.test(credentialId)) throw new IdentityError("invalid");
+) {
   const principal = me(context, true);
-  const label = text(object(request).label);
+  const { credentialId, label } = read();
+  if (!ID_PATTERN.test(credentialId)) throw new IdentityError("invalid");
   if (!validPasskeyLabel(label)) throw new IdentityError("invalid");
   context.security.store.transaction((tx) => {
     const row = tx.passkey(credentialId);
@@ -1015,10 +1353,10 @@ function renamePasskey(
     deviceId: principal.deviceId,
     target: credentialId,
   });
-  return { status: 200, body: { credentialId, label } };
+  return { credentialId, label };
 }
 
-function listPasskeys(context: SecurityHttpContext): Answer {
+function listPasskeys(context: SecurityHttpContext) {
   const principal = me(context, false);
   let availability: { available: boolean; rpId: string; reason: string };
   try {
@@ -1034,19 +1372,18 @@ function listPasskeys(context: SecurityHttpContext): Answer {
       credentialId: row.credentialId,
       label: row.label,
       aaguid: row.aaguid,
-      transports: row.transports,
+      transports: [...row.transports],
       createdAtMs: row.createdAtMs,
     }));
-  return { status: 200, body: { ...availability, passkeys } };
+  return { ...availability, passkeys };
 }
 
 async function registerOptions(
-  request: CoreRequest,
+  read: Read<In<SecurityContract["passkeys"]["registerOptions"]>>,
   context: SecurityHttpContext,
-): Promise<Answer> {
+) {
   const principal = me(context, true);
-  const body = object(request);
-  const label = body.label === undefined ? "" : text(body.label);
+  const label = read()?.label ?? "";
   if (label.length > 128) throw new IdentityError("invalid");
   const rp = relyingParty(context);
   const { existing, userName } = context.security.store.transaction((tx) => ({
@@ -1062,17 +1399,24 @@ async function registerOptions(
     existing,
     label,
   });
-  return { status: 200, body: value };
+  // WebAuthn 的选项原样交给页面；过一遍 JSON，答出去的就是线上那一份。
+  return {
+    challengeId: value.challengeId,
+    options: JSON.parse(JSON.stringify(value.options)) as Record<
+      string,
+      JsonValue
+    >,
+  };
 }
 
 async function registerVerify(
-  request: CoreRequest,
+  read: Read<In<SecurityContract["passkeys"]["registerVerify"]>>,
   context: SecurityHttpContext,
-): Promise<Answer> {
+) {
   const principal = me(context, true);
-  const body = object(request);
-  const challengeId = text(body.challengeId);
-  const label = body.label === undefined ? undefined : text(body.label);
+  const input = read();
+  const challengeId = input.challengeId;
+  const label = input.label;
   if (label !== undefined && label.length > 128) {
     throw new IdentityError("invalid");
   }
@@ -1080,7 +1424,7 @@ async function registerVerify(
     challengeId,
     principalId: principal.principalId,
     origin: context.origin,
-    response: body.response,
+    response: input.response,
     ...(label === undefined ? {} : { label }),
   });
   const credentialId = newId();
@@ -1112,14 +1456,11 @@ async function registerVerify(
     detail: { aaguid: created.aaguid },
   });
   return {
-    status: 201,
-    body: {
-      credentialId,
-      label: created.label,
-      aaguid: created.aaguid,
-      transports: created.transports,
-      createdAtMs,
-    },
+    credentialId,
+    label: created.label,
+    aaguid: created.aaguid,
+    transports: [...created.transports],
+    createdAtMs,
   };
 }
 
@@ -1161,11 +1502,12 @@ async function passkeyLogin(
 }
 
 function removePasskey(
-  credentialId: string,
+  read: Read<In<SecurityContract["passkeys"]["remove"]>>,
   context: SecurityHttpContext,
-): Answer {
-  if (!ID_PATTERN.test(credentialId)) throw new IdentityError("invalid");
+) {
   const principal = me(context, true);
+  const { credentialId } = read();
+  if (!ID_PATTERN.test(credentialId)) throw new IdentityError("invalid");
   const manage = principal.scopes.some(
     (value) => value.Permission === "identity:manage",
   );
@@ -1189,7 +1531,7 @@ function removePasskey(
     target: credentialId,
     detail: { owner },
   });
-  return { status: 200, body: { credentialId, removed: true } };
+  return { credentialId, removed: true as const };
 }
 
 /* ----------------------------------- MFA ---------------------------------- */
@@ -1200,33 +1542,26 @@ function mfa(
   request: CoreRequest,
   context: SecurityHttpContext,
 ): Answer | Promise<Answer> | undefined {
+  const ops = securityOperations(context).mfa;
   const step = segments.slice(1).join("/");
-  if (segments.length === 1 && method === "GET") {
-    const principal = me(context, false);
-    const requireFor = context.security.settings().mfaRequireFor;
-    return {
-      status: 200,
-      body: {
-        ...context.security.mfa.status(principal.principalId),
-        requireFor,
-        required: mfaRequiredFor(principal.role, requireFor),
-      },
-    };
-  }
+  if (segments.length === 1 && method === "GET") return ok(ops.status());
   if (method !== "POST") return undefined;
+  const code = () => ({ code: text(object(request).code) });
   switch (step) {
     case "verify":
       return mfaVerify(request, context);
     case "totp/enroll":
-      return mfaEnroll(context);
+      return answer(ops.enroll());
     case "totp/confirm":
-      return mfaConfirm(request, context);
+      return answer(ops.confirm(code));
     case "disable":
-      return mfaWithCode(request, context, "disable");
+      return answer(ops.disable(code));
     case "recovery-codes":
-      return mfaWithCode(request, context, "regenerate");
+      return answer(ops.regenerateRecoveryCodes(code));
     case "reset":
-      return mfaReset(request, context);
+      return answer(
+        ops.reset(() => ({ principalId: text(object(request).principalId) })),
+      );
     default:
       return undefined;
   }
@@ -1268,7 +1603,7 @@ async function mfaVerify(
   };
 }
 
-async function mfaEnroll(context: SecurityHttpContext): Promise<Answer> {
+async function mfaEnroll(context: SecurityHttpContext) {
   const principal = me(context, true);
   const label = context.security.store.transaction(
     (tx) =>
@@ -1276,15 +1611,15 @@ async function mfaEnroll(context: SecurityHttpContext): Promise<Answer> {
       principal.principalId,
   );
   const value = await context.security.mfa.begin(principal.principalId, label);
-  return { status: 200, body: value };
+  return { secret: value.secret, otpauthUri: value.otpauthUri };
 }
 
 async function mfaConfirm(
-  request: CoreRequest,
+  read: Read<In<SecurityContract["mfa"]["confirm"]>>,
   context: SecurityHttpContext,
-): Promise<Answer> {
+) {
   const principal = me(context, true);
-  const code = text(object(request).code);
+  const { code } = read();
   const recoveryCodes = await context.security.mfa.confirm(
     principal.principalId,
     code,
@@ -1295,7 +1630,7 @@ async function mfaConfirm(
     deviceId: principal.deviceId,
     detail: { method: "totp" },
   });
-  return { status: 200, body: { recoveryCodes } };
+  return { recoveryCodes: [...recoveryCodes] };
 }
 
 /**
@@ -1303,12 +1638,22 @@ async function mfaConfirm(
  * 一个会话不等于能拆掉第二因素。码不对计入锁定。
  */
 async function mfaWithCode(
-  request: CoreRequest,
+  read: Read<{ code: string }>,
+  context: SecurityHttpContext,
+  action: "disable",
+): Promise<{ disabled: true }>;
+async function mfaWithCode(
+  read: Read<{ code: string }>,
+  context: SecurityHttpContext,
+  action: "regenerate",
+): Promise<{ recoveryCodes: string[] }>;
+async function mfaWithCode(
+  read: Read<{ code: string }>,
   context: SecurityHttpContext,
   action: "disable" | "regenerate",
-): Promise<Answer> {
+): Promise<{ disabled: true } | { recoveryCodes: string[] }> {
   const principal = me(context, true);
-  const code = text(object(request).code);
+  const { code } = read();
   const { throttle, mfa: factors, store } = context.security;
   const key = principalKey(principal.principalId);
   throttle.admitKey(key);
@@ -1328,7 +1673,7 @@ async function mfaWithCode(
       principalId: principal.principalId,
       deviceId: principal.deviceId,
     });
-    return { status: 200, body: { disabled: true } };
+    return { disabled: true };
   }
   const recoveryCodes = factors.regenerateRecoveryCodes(principal.principalId);
   record(store, {
@@ -1336,16 +1681,16 @@ async function mfaWithCode(
     principalId: principal.principalId,
     deviceId: principal.deviceId,
   });
-  return { status: 200, body: { recoveryCodes } };
+  return { recoveryCodes: [...recoveryCodes] };
 }
 
 /** owner 替丢了手机的人重置 MFA（`identity:manage`）。 */
 async function mfaReset(
-  request: CoreRequest,
+  read: Read<In<SecurityContract["mfa"]["reset"]>>,
   context: SecurityHttpContext,
-): Promise<Answer> {
+) {
   const principal = me(context, true, true);
-  const target = text(object(request).principalId);
+  const { principalId: target } = read();
   if (!ID_PATTERN.test(target)) throw new IdentityError("invalid");
   const existed = await context.security.mfa.disable(target);
   record(context.security.store, {
@@ -1354,7 +1699,7 @@ async function mfaReset(
     deviceId: principal.deviceId,
     target,
   });
-  return { status: 200, body: { principalId: target, reset: existed } };
+  return { principalId: target, reset: existed };
 }
 
 /* ---------------------------------- 会话 ---------------------------------- */
@@ -1365,28 +1710,18 @@ function sessions(
   request: CoreRequest,
   context: SecurityHttpContext,
 ): Answer | undefined {
+  const ops = securityOperations(context).sessions;
   if (segments.length === 1 && method === "GET") {
     const all = request.query.get("all") === "1";
-    return {
-      status: 200,
-      body: { sessions: context.service.listSessions(context.actor, all) },
-    };
+    return ok(ops.list(() => ({ all })));
   }
   if (segments.length === 2 && segments[1] === "revoke-others") {
     if (method !== "POST") return undefined;
-    const revoked = context.service.revokeOtherSessions({
-      ...context.actor,
-      requireCsrf: context.csrf !== false,
-    });
-    return { status: 200, body: { revoked } };
+    return ok(ops.revokeOthers());
   }
   if (segments.length === 2 && method === "DELETE") {
     const sessionId = segments[1] as string;
-    context.service.revokeSessionById(
-      { ...context.actor, requireCsrf: context.csrf !== false },
-      sessionId,
-    );
-    return { status: 200, body: { sessionId, revoked: true } };
+    return ok(ops.revoke(() => ({ sessionId })));
   }
   return undefined;
 }
@@ -1395,6 +1730,7 @@ function sessions(
 
 /**
  * `GET / POST password-reset/{token}`（契约 §25）：匿名，令牌本身就是凭据。
+ * 只在旧路径上（契约 §42.4）。
  *
  * 两条都走配对与刷新那只「失败才扣」的 IP 桶（M4）：桶空了答 429，认不出的
  * 令牌扣一次。口令策略与泄露检查不扣——令牌对了，挡下来的是口令不是猜的人。
@@ -1440,10 +1776,10 @@ function passwordReset(
         context.accounts.completePasswordReset(token, password),
       );
       throttle.unlock(principalKey(done.principalId));
-      return { status: 200, body: done };
+      return done;
     },
     target.principalId,
-  );
+  ).then(ok);
 }
 
 /* ---------------------------------- 锁定 ---------------------------------- */
@@ -1453,25 +1789,11 @@ function lockouts(
   segments: readonly string[],
   context: SecurityHttpContext,
 ): Answer | undefined {
-  if (segments.length === 1 && method === "GET") {
-    me(context, false, true);
-    return {
-      status: 200,
-      body: { lockouts: context.security.throttle.active() },
-    };
-  }
+  const ops = securityOperations(context).lockouts;
+  if (segments.length === 1 && method === "GET") return ok(ops.list());
   if (segments.length === 2 && method === "DELETE") {
-    const principal = me(context, true, true);
-    const target = segments[1] as string;
-    if (!ID_PATTERN.test(target)) throw new IdentityError("invalid");
-    const unlocked = context.security.throttle.unlock(principalKey(target));
-    record(context.security.store, {
-      action: "identity.lockout.clear",
-      principalId: principal.principalId,
-      deviceId: principal.deviceId,
-      target,
-    });
-    return { status: 200, body: { principalId: target, unlocked } };
+    const principalId = segments[1] as string;
+    return ok(ops.clear(() => ({ principalId })));
   }
   return undefined;
 }
