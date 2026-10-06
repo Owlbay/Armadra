@@ -436,3 +436,42 @@ test("an unknown tier or an id outside the tier is refused", async () => {
     /not in tier a: nope/,
   );
 });
+
+test("an entry that needs WebKit is skipped with the install command when it is missing", async () => {
+  const { root, remove } = fixture();
+  try {
+    const entries = [
+      {
+        id: "safari",
+        tier: "b",
+        script: "pass.mjs",
+        args: ["{out}"],
+        requires: ["webkit"],
+        timeoutMinutes: 1,
+      },
+    ];
+    const without = await runTier({
+      tier: "b",
+      root,
+      out: join(root, "out-without"),
+      log: quiet,
+      env: { PATH: process.env.PATH },
+      probe: { ...present, webkit: () => false },
+      manifest: { entries },
+    });
+    assert.equal(without.entries[0].status, "skipped");
+    assert.match(without.entries[0].reason, /playwright-core install webkit/);
+    const withIt = await runTier({
+      tier: "b",
+      root,
+      out: join(root, "out-with"),
+      log: quiet,
+      env: { PATH: process.env.PATH },
+      probe: { ...present, webkit: () => true },
+      manifest: { entries },
+    });
+    assert.equal(withIt.entries[0].status, "passed");
+  } finally {
+    remove();
+  }
+});

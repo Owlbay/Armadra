@@ -5,7 +5,7 @@ import {
 } from "../sources/transport";
 import { ensureCsrf, replaceRejectedCsrf } from "./identity";
 import { localRuntime } from "./local-runtime";
-import { sameOrigin } from "../sources/transport";
+import { RELAY_TOKEN_HEADER, sameOrigin } from "../sources/transport";
 
 /**
  * 一个源：一台 core 的地址，加上发往它时要带的凭据（工程规范化 §2.3.4）。
@@ -47,6 +47,11 @@ export interface Source {
   readonly fetch: typeof fetch;
   /** 发往这个源的流：Bearer 模式先换一张一次性票，经子协议升级。 */
   readonly WebSocket: typeof WebSocket;
+  /**
+   * 眼下经中继到达（`httpBase` 是中继上的源地址）。浏览器直接取的地址（媒体票，
+   * 契约 §37.4）还要再换一张中继的票。缺省不是。
+   */
+  readonly relayed?: () => boolean;
 }
 
 /**
@@ -113,6 +118,9 @@ export const localSource: Source = {
     transport === null
       ? base(input, init)
       : bearerFetch(base, transport)(input, init),
+  // 中继托管的页面（`sources/route-entry.ts`）把经中继的那台源装成本机源，
+  // 传输上带着中继令牌头：媒体票还要再换一张中继的（§37.4）。
+  relayed: () => transport?.extraHeaders?.()[RELAY_TOKEN_HEADER] !== undefined,
   get WebSocket() {
     const native = globalThis.WebSocket;
     if (transport === null) return native;
@@ -185,21 +193,42 @@ export function sourceById(sourceId: string): Source {
   );
 }
 
-/** 这个地址发往哪个源（按 HTTP 来源比）；都不是答 `null`。 */
+/**
+ * 这个地址发往哪个源；都不是答 `null`。
+ *
+ * 先比 HTTP 来源，再比源地址的路径前缀：同一个个人中转上的几个源来源相同
+ * （`https://<中继>/s/<源 A>`、`…/s/<源 B>`），只按来源比会把 B 的请求交给 A
+ * 的凭据（中继答 `relay_source_mismatch`）。几个都对得上时取前缀最长的那个。
+ */
 export function sourceForUrl(
   url: string,
   sources: readonly Source[] = knownSources(),
 ): Source | null {
+  let path: string;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    return null;
+  }
+  let best: Source | null = null;
+  let bestLength = -1;
   for (const source of sources) {
-    let origin: string;
+    let base: URL;
     try {
-      origin = new URL(source.httpBase).origin;
+      base = new URL(source.httpBase);
     } catch {
       continue;
     }
-    if (sameOrigin(url, origin)) return source;
+    if (!sameOrigin(url, base.origin)) continue;
+    const prefix = base.pathname.replace(/\/+$/, "");
+    if (prefix !== "" && path !== prefix && !path.startsWith(`${prefix}/`))
+      continue;
+    if (prefix.length > bestLength) {
+      best = source;
+      bestLength = prefix.length;
+    }
   }
-  return null;
+  return best;
 }
 
 function targetUrl(input: RequestInfo | URL): string {

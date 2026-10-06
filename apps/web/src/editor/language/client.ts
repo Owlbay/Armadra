@@ -43,6 +43,13 @@ export interface LanguageClientState {
 const RECONNECT_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000];
 
 /**
+ * 五次都没连上之后不就此放弃：语言流是独立连接（契约 §35.6），经中继时源下线、
+ * 隧道重连、手机切后台都会断一阵。之后每隔这么久再试一轮，网络恢复（`online`）
+ * 或页面回到前台时立刻试。
+ */
+const RECOVERY_INTERVAL_MS = 30_000;
+
+/**
  * 单条请求的客户端超时。执行主机侧是 30 s（§3.3），比它短会留下一个
  * 执行主机还在等、浏览器已经放弃的请求；比它长只是白等。
  */
@@ -56,6 +63,8 @@ export class LanguageClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   private started: Promise<void> | null = null;
+  /** 放弃之后的恢复：定时器与 `online` / 回到前台的监听；没在恢复是 `null`。 */
+  private recovery: (() => void) | null = null;
   private listeners = new Set<() => void>();
 
   status: LanguageClientState = {
@@ -148,6 +157,7 @@ export class LanguageClient {
       {
         onOpen: () => {
           this.reconnectAttempt = 0;
+          this.stopRecovery();
           if (this.status.reconnecting) this.publish({ reconnecting: false });
         },
         onClose: () => this.scheduleReconnect(),
@@ -180,6 +190,7 @@ export class LanguageClient {
     if (this.reconnectAttempt >= RECONNECT_DELAYS_MS.length) {
       this.publish({ state: "disconnected", reconnecting: false });
       this.clearDiagnostics();
+      this.startRecovery();
       return;
     }
     const delay = RECONNECT_DELAYS_MS[this.reconnectAttempt];
@@ -206,6 +217,7 @@ export class LanguageClient {
         sessionId: session.sessionId,
       });
       if (session.state === "unsupported") {
+        this.stopRecovery();
         this.publish({ reconnecting: false });
         return;
       }
@@ -215,6 +227,36 @@ export class LanguageClient {
     } catch {
       if (!this.disposed) this.scheduleReconnect();
     }
+  }
+
+  /**
+   * 五次退避都失败之后：每 {@link RECOVERY_INTERVAL_MS} 再开一轮，`online` 与页面
+   * 回到前台时马上开。一轮就是重新走一遍五次退避；连上（socket 打开）就停。
+   */
+  private startRecovery(): void {
+    if (this.disposed || this.recovery !== null) return;
+    const retry = () => {
+      if (this.disposed || this.reconnectTimer) return;
+      this.reconnectAttempt = 0;
+      this.publish({ reconnecting: true, sessionId: null });
+      void this.reopen();
+    };
+    const visible = () => {
+      if (globalThis.document?.visibilityState !== "hidden") retry();
+    };
+    const timer = setInterval(retry, RECOVERY_INTERVAL_MS);
+    globalThis.addEventListener?.("online", retry);
+    globalThis.document?.addEventListener("visibilitychange", visible);
+    this.recovery = () => {
+      clearInterval(timer);
+      globalThis.removeEventListener?.("online", retry);
+      globalThis.document?.removeEventListener("visibilitychange", visible);
+    };
+  }
+
+  private stopRecovery(): void {
+    this.recovery?.();
+    this.recovery = null;
   }
 
   /** 这个视图要用的扩展；没有会话时返回空数组（不装补全源，§6.1 第 1 条）。 */
@@ -231,6 +273,7 @@ export class LanguageClient {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.stopRecovery();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     this.clearDiagnostics();

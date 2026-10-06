@@ -8,10 +8,11 @@ import type { MediaKind } from "./types";
 /**
  * 非文本文件的预览：图片、音视频、PDF。
  *
- * 字节都是经 `file-download` 取回、在页面里按 Runtime 报的 MIME 包成 blob
- * 的——那条路由为了不让上传的 HTML 在 core 的来源里执行，永远回答
- * `application/octet-stream` 附件，不能直接当 `src`。播放和翻页都交给引擎
- * 自带的控件，这里不重画一套。
+ * 图片与音视频的 `src` 是媒体票的地址（契约 §37.4）：core 按真实类型内联回答、
+ * 认 `Range`，引擎边收边放，不经页面内存。老 core 与 PDF 退回整份取回、按
+ * Runtime 报的 MIME 包成的 `blob:`——`file-download` 为了不让上传的 HTML 在
+ * core 的来源里执行，永远回答 `application/octet-stream` 附件。播放和翻页都交给
+ * 引擎自带的控件，这里不重画一套。
  */
 export function MediaPreview({
   media,

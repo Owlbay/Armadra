@@ -57,6 +57,9 @@ export const SELF_GUARDED: readonly RegExp[] = [
   // 契约 procedure：一条路径前缀下是许多 procedure，各要各的权限。RPC 门面
   // （`http/rpc.ts`）按每条契约的 `meta.scope` 走同一道路由门（契约 §34.1）。
   /^\/api\/rpc\//,
+  // 媒体票（契约 §37.4）：票本身就是凭据，域按签票的会话再认一次、按签票时
+  // 的工作空间问 `files:read`。
+  /^\/api\/media\//,
 ];
 
 export function selfGuarded(path: string): boolean {
@@ -209,6 +212,8 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
   // 契约 procedure（契约 §34.1）：门面按每条的 `meta.scope` 判（{@link
   // SELF_GUARDED}）；这一行是清单——最少也要能读身份，与 `system.hello` 同一档。
   { pattern: /^\/api\/rpc\//, read: "identity:read", write: "identity:read" },
+  // 媒体票（契约 §37.4，{@link SELF_GUARDED}）：取字节与 `file-download` 同一档。
+  { pattern: /^\/api\/media\//, read: "files:read", write: "files:read" },
   // 控制面 WebSocket（契约 §35.1）：升级要能读身份（登录即可，成员也有），每条
   // 调用与订阅再按自己的 `meta.scope` 判；授权一变，连接按这一档复核（4403）。
   { pattern: /^\/api\/ws$/, read: "identity:read" },

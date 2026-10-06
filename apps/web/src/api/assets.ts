@@ -1,6 +1,12 @@
 import * as React from "react";
 
-import { type Source, knownSources, routedFetch, sourceForUrl } from "./source";
+import {
+  type Source,
+  currentSource,
+  knownSources,
+  routedFetch,
+  sourceForUrl,
+} from "./source";
 
 /**
  * 页面里 `<img src>` 指向 core 的资源（白板图片、Markdown 预览里的图，R-55）。
@@ -31,6 +37,62 @@ export function needsBearerFetch(
   return bearerSourceFor(url, sources) !== null;
 }
 
+/** 中继上签媒体票的路径（armadra-cloud cloud-api §12），相对源地址。 */
+export const RELAY_MEDIA_TICKET_PATH = "/_relay/media-tickets";
+
+export type MediaDisposition = "inline" | "attachment";
+
+/** 向 core 换一张媒体票（`files.mediaTicket`，契约 §37.4）。 */
+export type IssueMediaTicket = (
+  workspaceId: string,
+  path: string,
+  disposition: MediaDisposition,
+) => Promise<{ readonly url: string }>;
+
+/**
+ * 一个浏览器能直接取的地址（`<video src>`、`<img src>`、`<a href>`），不带头、
+ * 按 `Range` 取，不把文件读进页面（契约 §37.4）：
+ *
+ * 1. 经带凭据的 `files.mediaTicket` 换 core 的 `/api/media/<票>`；
+ * 2. 这个源眼下经中继到达时，再用带中继令牌的请求换一张中继的票
+ *    （`POST <源地址>/_relay/media-tickets`），地址成了 `<源地址>/_relay/m/<票>`。
+ *
+ * 地址里只有票：凭据、工作空间与文件路径都不在 URL 上。老 core（没有这条
+ * procedure）、老中继或任何一步失败答 `null`，调用方退回取回成 `blob:`。
+ */
+export async function directFileUrl(
+  workspaceId: string,
+  path: string,
+  disposition: MediaDisposition,
+  issue: IssueMediaTicket,
+  source: Source = currentSource(),
+): Promise<string | null> {
+  let ticket: { readonly url: string };
+  try {
+    ticket = await issue(workspaceId, path, disposition);
+  } catch {
+    return null;
+  }
+  if (!ticket.url.startsWith("/api/media/")) return null;
+  const base = source.httpBase.replace(/\/+$/, "");
+  if (source.relayed?.() !== true) return `${base}${ticket.url}`;
+  try {
+    const response = await source.fetch(`${base}${RELAY_MEDIA_TICKET_PATH}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: ticket.url }),
+      cache: "no-store",
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { path?: unknown };
+    return typeof body.path === "string" && body.path.startsWith("/_relay/m/")
+      ? `${base}${body.path}`
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** File System Access 的保存对话框（`showSaveFilePicker`）里用到的那一点。 */
 export interface SaveFileHandle {
   createWritable(): Promise<WritableStream<Uint8Array>>;
@@ -55,6 +117,12 @@ export interface DownloadOptions {
   readonly sources?: readonly Source[];
   /** 页面自己的来源；缺省 `location.origin`。 */
   readonly origin?: string;
+  /**
+   * 换一个不带头就能取的下载地址（媒体票，{@link directFileUrl}）。Bearer 的源
+   * 没有保存对话框时（iPad 上的原生 App）用它让浏览器边收边写，而不是先取回成
+   * `Blob`；答 `null` 再退回 `Blob`。
+   */
+  readonly direct?: () => Promise<string | null>;
 }
 
 /**
@@ -68,8 +136,9 @@ export interface DownloadOptions {
  *    状态，拿到响应头就中止，再交给浏览器自己的下载（core 答
  *    `content-disposition: attachment`），由浏览器边收边写盘。
  * 3. 其余（Bearer 的源，且没有保存对话框，比如 iPad 上的原生 App）：凭据只跟着
- *    `fetch` 走，一个直接的 `<a href>` 会是 401，只能取回成 `Blob` 再交给一个
- *    `blob:` 链接——这一条仍占内存。
+ *    `fetch` 走，一个直接的 `<a href>` 会是 401。给了 `direct` 就换一个媒体票的
+ *    下载地址（契约 §37.4，`attachment`）交给链接，由浏览器边收边写；换不到才
+ *    取回成 `Blob` 再交给一个 `blob:` 链接——那一条仍占内存。
  *
  * 取不回（非 2xx、网络错误、写盘失败）答 `false`。
  */
@@ -155,6 +224,11 @@ async function downloadWithoutPicker(
       controller.abort();
     }
     clickLink(url, filename);
+    return true;
+  }
+  const direct = await options.direct?.().catch(() => null);
+  if (typeof direct === "string") {
+    clickLink(direct, filename);
     return true;
   }
   let blob: Blob;

@@ -133,6 +133,15 @@ describe("HTTP 准入", () => {
     expect(answer.status).toBe(403);
   });
 
+  it("没有来源的媒体票地址（§37.4）放行到文件域，票由域自己认", async () => {
+    // 门放行之后由路由答：这台测试 core 没装文件域，答 404 而不是门的 403。
+    const answer = await get("/api/media/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", {});
+    expect(answer.status).not.toBe(403);
+    expect(answer.status).not.toBe(401);
+    const nested = await get("/api/media/AAAAAAAAAAAAAAAA/x", {});
+    expect(nested.status).toBe(403);
+  });
+
   it("中继托管页面的同源 GET（不带 Origin、Sec-Fetch-Site: same-origin）按会话来源认", async () => {
     const token = world.session(ISSUER);
     const answer = await get("/api/workspaces", {

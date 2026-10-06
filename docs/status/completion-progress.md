@@ -3013,3 +3013,35 @@ iPad（WebKit）经个人中转给 ACP Agent 发 prompt 偶发「这一轮没有
 - 中继托管页面上 `RUNTIME_VIA_SERVER_SHELL` 在模块加载时按 HTTPS 页面来源算成 `true`，导航因此列「账号与共享」；本包没改这个判定。
 - 经 Gateway 直连打开时关掉对外服务同样会自断，但 `gateway-e2e` 明确要求页面上能经 Gateway 自己关掉它（「在页面上点开关关掉对外服务」），本包不改这条既有行为；`useRemoteAccess().via === "direct"` 已可用于以后加确认。
 - 原生 App 的设置页按同一判定生效，但只在单测里验过（`mobile/` 不在本包范围）。
+
+## R5 经中继的数据流与覆盖：媒体票、语言会话恢复、两台经中继的源、WebKit（协议 minor 21）
+
+做了什么：
+
+- **媒体票与 Range**（契约 §37.4，§37.2 追加一句）：`files.mediaTicket`（`files:read`）答相对源的 `/api/media/<票>`；票在 core 内存里，绑签票时的请求身份、一个文件与用法（`inline` / `attachment`），可多次用，闲置 5 分钟或签出 30 分钟作废，每次取按签票会话复核、按那个文件的下载路由过路由门。`GET` / `HEAD /api/media/<票>` 由 `core/files/routes.ts` 的原样路由答：本机文件流式读盘、单区间 `Range` 回 206 / 416，图片（SVG 除外）与音视频按真实类型内联，其余附件 + octet-stream，带 nosniff、`sandbox` CSP、`no-store`；任何失败在路由里答完，路径（含票）不进日志。回环、Gateway、隧道三道门对这条路径只认票（`identity/transport.ts` 的 `mediaPath`）。`file-download` 也认单区间 `Range`，本机文件只读那一段。
+- **经中继**：armadra-cloud 的边缘加媒体票（cloud-api §12，PR 见下）：`POST <源地址>/_relay/media-tickets` 带中继令牌换票，`<源地址>/_relay/m/<票>` 不带头按票转到源上那条路径。页面 `api/assets.ts` 的 `directFileUrl` 先换 core 票，源经中继（`Source.relayed()`，含中继托管页面的本机源）时再换中继票。
+- **编辑器**：音视频与图片的 `src` 直接是票地址；图片 32 MiB、文本 1 MiB（不再先读正文）、退回 `blob:` 的那条（老 core、PDF）16 MiB 设上限，超了给「下载」。下载在 Bearer 源没有保存对话框时（iPad）用附件票地址交给链接，不取回成 `Blob`。
+- **桌面 CSP**：`img-src` / `media-src` 加回环与按源追加的 `https:` 来源（原来只许 `blob:`，票地址被拦）。
+- **`sourceForUrl` 按路径前缀认源**：同一个个人中转上的两台源来源相同，原来只按来源比，第二台的终端、媒体与流拿第一台的凭据（中继 `relay_source_mismatch`）。多源探针改成两台都经中继后暴露。
+- **语言会话**：五次退避都失败后不再停在「已断开」——每 30 秒再开一轮新会话，`online` 或页面回到前台立刻开，连上即停；§35.6 的独立连接不变。
+- **探针**：`multi-source` 两台 core 都经中继挂载（第二台换成不带壳的 core，服务器壳经中继绑定的主人没有工作空间权限，终端开不起来），补媒体票 Range、语言会话诊断往返与断开后重开、浏览器画面点击往返；`platform-lib` 加 `startPlainCore`、`relayedRoute`、`socketOpened`。新增 `webkit-roundtrip`（B 档，`requires: webkit`），e2e 运行器认 `webkit`，没装记 skipped；根 devDependency `playwright-core` 1.63.0（开发依赖，notices 不变）。
+
+实测（macOS arm64，基于 main 9f33e3df）：
+
+- core：`files/media.test.ts`（12）、`main.test.ts` 回环上不带头按票取 206、登出后 401；gateway / relay 准入、CSP、`parity-files`（18 条）。web：`EditorNode.media.test.tsx`（6）、`assets.test.ts` 的 `directFileUrl`（3）、`source.test.ts`（4）、语言恢复（2）。
+- `multi-source` 全过（中继镜像用 cloud 分支构建，`ARMADRA_PROBE_RELAY_IMAGE`）；`webkit-roundtrip` 经运行器 passed（WebKit 26.6：空闲 6 秒后的 POST 三轮都有 HTTP 答复，视频 206 `bytes 0-1/…` 后整段）。
+- `pnpm check` 通过；`pnpm libs:build && pnpm -r --if-present test`：desktop 5262 过 / 67 跳，web 3879 过，shared 372、server 98 / 4 跳、mobile 10、push-relay 9 过。
+
+没做 / 偏离：
+
+- 浏览器画面流：页面在 socket 打开时发的 `viewport` 落在服务端挂上观看者之前会丢（`core/browser/stream.ts` 在 attach 之后才接 `message`），换视口也不会主动出新帧；探针改用点击验往返，这两点留给后续。
+- ACP mock 发 prompt 不在 WebKit 跑法里（personal-roundtrip 本来没有）。CI 拉不到 armadra-cloud，`webkit-roundtrip` 与其余中继探针在 CI 上都是 skipped；ubuntu 上要跑需 `playwright-core install --with-deps webkit`。
+- 中继媒体票只在签票的那个中继进程内存里，SaaS 多节点要共享存储或粘连。
+- iPad 原生 App 的下载走 `<a href>` 附件票地址，真机行为没验（无设备）。
+
+接口：
+
+- 契约 §37.4；`files.mediaTicket` `{ workspaceId, path, disposition? } → { url, expiresAt, size, mimeType }`，自 1.21；`PROTOCOL_MINOR = 21`。
+- core：`files/media.ts`（`MediaTickets`、`parseRange`、`byteHeaders`、`writeBytes`）、`identity/transport.ts` 的 `MEDIA_PATH_PREFIX` / `mediaPath`。
+- 页面：`directFileUrl(workspaceId, path, disposition, issue, source?)`、`downloadRuntimeFile(…, { direct })`、`Source.relayed?()`、`runtimeApi.mediaTicket`。
+- 合并顺序：armadra-cloud 的媒体票 PR 先合（老中继上换中继票失败时页面退回 `blob:`，不坏），再合本 PR。

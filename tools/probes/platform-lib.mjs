@@ -616,7 +616,11 @@ function fetchCaPem(origin) {
  * stop() }`（另有 `fingerprint`：对外证书的 CA 指纹）——`origin` 是对外的 HTTPS（自签）来源，`pairLink` 是启动日志里的配对链接，
  * `session` 是经私有通道在 core 回环 HTTP 上换来的本机主人会话。
  */
-export async function startDirectServer({ scratch, tag = "direct" }) {
+export async function startDirectServer({
+  scratch,
+  tag = "direct",
+  extraEnv = {},
+}) {
   const entry = join(root, "apps/server/out/main.js");
   if (!existsSync(entry))
     throw new Error(
@@ -641,6 +645,7 @@ export async function startDirectServer({ scratch, tag = "direct" }) {
         // server-perf、tools/dev-stack/Dockerfile.dev 同一个做法）；不设时直连源上
         // 开的终端一连就断。
         NODE_PATH: join(root, "apps/desktop/node_modules"),
+        ...extraEnv,
       }),
     },
   );
@@ -691,6 +696,78 @@ export async function startDirectServer({ scratch, tag = "direct" }) {
     throw error;
   }
   return server;
+}
+
+/**
+ * 再起一台不带壳的 core（`apps/desktop/out/core/main.js`，浏览器后端是它自己起的
+ * headless Chromium）：临时数据目录与 HOME、file 后端的 SecretStore。答
+ * `{ dataDir, origin, session, log(), stop() }`，`session` 经私有通道换来。
+ */
+export async function startPlainCore({ scratch, tag, extraEnv = {} }) {
+  const entry = join(root, "apps/desktop/out/core/main.js");
+  if (!existsSync(entry))
+    throw new Error(
+      `core 未构建：${entry}（pnpm --filter @armadra/desktop build）`,
+    );
+  const dataDir = join(scratch, `core-${tag}`);
+  mkdirSync(dataDir, { recursive: true });
+  const isolated = probeHome(`armadra-${tag}-core-`);
+  const child = spawn(
+    process.execPath,
+    [entry, "--listen", "tcp:127.0.0.1:0", "--data-dir", dataDir],
+    {
+      cwd: root,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: isolatedEnv(isolated, {
+        ARMADRA_DATA_DIR: dataDir,
+        ARMADRA_SECRET_BACKEND: "file",
+        ARMADRA_NO_GLOBAL_WRITES: "1",
+        ARMADRA_LOG: "info",
+        ...extraEnv,
+      }),
+    },
+  );
+  let log = "";
+  const take = (chunk) => (log = (log + chunk).slice(-2_000_000));
+  child.stdout.on("data", take);
+  child.stderr.on("data", take);
+  const core = {
+    dataDir,
+    log: () => log,
+    async stop() {
+      child.kill("SIGTERM");
+      for (let i = 0; i < 50 && child.exitCode === null; i += 1)
+        await sleep(100);
+      if (child.exitCode === null) child.kill("SIGKILL");
+      // core 关停时保留 tmux 会话：按这台 core 自己的 socket 停掉它的服务器。
+      spawnSync("tmux", ["-S", join(dataDir, "tmux.sock"), "kill-server"], {
+        stdio: "ignore",
+      });
+      isolated.remove();
+    },
+  };
+  try {
+    core.origin = await until(
+      () => {
+        if (child.exitCode !== null)
+          throw new Error(`core 退出：${log.slice(-2000)}`);
+        try {
+          return JSON.parse(
+            readFileSync(join(dataDir, "endpoints.json"), "utf8"),
+          ).runtime.http;
+        } catch {
+          return null;
+        }
+      },
+      "core 写出 endpoints.json",
+      { timeout: 60_000, every: 200 },
+    );
+    core.session = await probeSession({ dataDir, base: core.origin });
+  } catch (error) {
+    await core.stop();
+    throw error;
+  }
+  return core;
 }
 
 /* ------------------------------- core 的 JSON 调用 ------------------------------- */
@@ -839,6 +916,72 @@ export async function registerSource({
     loginOwner,
     listed,
   };
+}
+
+/* --------------------------- 经中继直接对一台源说话 --------------------------- */
+
+/**
+ * 像原生客户端那样经中继连一台源（不经页面）：断言 + 中继令牌 → 经中继
+ * `cloud/login` 换 core 会话（来源 `https://localhost`）。答
+ * `{ base, relayToken, api(method, path, body?), raw(method, path, headers?),
+ * protocols(), socket(path, protocols) }`；`raw` 不解析正文，给 `Range` 一类用。
+ */
+export async function relayedRoute({
+  relay,
+  cloudToken,
+  sourceId,
+  device,
+  onSecret = () => {},
+}) {
+  const origin = "https://localhost";
+  const access = await relay.must("POST", `/v1/sources/${sourceId}/assertion`, {
+    body: { device },
+    token: cloudToken,
+  });
+  const relayToken = onSecret("中继令牌", access.relayToken);
+  const base = `/s/${sourceId}`;
+  const headers = { origin, "armadra-relay-token": relayToken };
+  const login = await relay.must("POST", `${base}/api/identity/cloud/login`, {
+    body: { assertion: access.assertion },
+    headers,
+  });
+  const accessToken = onSecret(
+    "经中继的 core 会话",
+    login.session.native.accessToken,
+  );
+  const api = (method, path, body) =>
+    relay.must(method, `${base}${path}`, {
+      body,
+      token: accessToken,
+      headers,
+    });
+  const raw = (method, path, extra = {}) =>
+    relay.call(method, path, { headers: extra });
+  const protocols = async () => {
+    const { ticket } = await api("POST", "/api/identity/ws-ticket", {});
+    return [`armadra-ticket.${ticket}`, `armadra-relay.${relayToken}`];
+  };
+  const WebSocketImpl = createRequire(join(root, "apps/desktop/package.json"))(
+    "ws",
+  );
+  const socket = (path, list) =>
+    new WebSocketImpl(
+      `${relay.issuer.replace(/^https/, "wss")}${base}${path}`,
+      list,
+      { ca: relay.caPem, servername: "", origin, maxPayload: 64 * 1024 * 1024 },
+    );
+  return { base, relayToken, api, raw, protocols, socket };
+}
+
+/** 等一条 `ws` 连接打开；升级被拒时带上状态码。 */
+export function socketOpened(socket) {
+  return new Promise((done, fail) => {
+    socket.once("open", done);
+    socket.once("error", fail);
+    socket.once("unexpected-response", (_request, response) =>
+      fail(new Error(`升级被拒 ${response.statusCode}`)),
+    );
+  });
 }
 
 /* ------------------------------ 日志里的秘密扫描 ------------------------------ */

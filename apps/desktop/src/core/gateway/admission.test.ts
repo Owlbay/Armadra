@@ -128,6 +128,32 @@ describe("认证门", () => {
     ).toBeUndefined();
   });
 
+  it("媒体票地址（§37.4）不看 Origin 与 Sec-Fetch-Site，不要会话", () => {
+    const ctx = context().value;
+    const media = "/api/media/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    expect(
+      gate({ method: "GET", path: media, headers: {} }, ctx),
+    ).toBeUndefined();
+    expect(
+      gate(
+        {
+          method: "GET",
+          path: media,
+          headers: { "sec-fetch-site": "cross-site" },
+        },
+        ctx,
+      ),
+    ).toBeUndefined();
+    expect(admit({ method: "GET", path: media, headers: {} }, ctx)).toEqual({});
+    // 只是这一段：媒体下面再有路径就照旧要来源。
+    expect(
+      gate({ method: "GET", path: `${media}/x`, headers: {} }, ctx),
+    ).toMatchObject({ status: 403 });
+    expect(
+      gate({ method: "GET", path: media, headers: {}, upgrade: true }, ctx),
+    ).toMatchObject({ status: 403 });
+  });
+
   it("Sec-Fetch-Site：发了就必须是同源，没发不放宽", () => {
     const ctx = context().value;
     expect(

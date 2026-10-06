@@ -12,7 +12,7 @@
 | B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`server-e2e --proxy=caddy`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                                                   | `nightly.yml`                       | 开 issue     |
 | C   | `agent-e2e`（真 CLI 与额度，`ARMADRA_E2E_REAL=1`，见「C 档运行手册」）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                                                                                           | 手动；清单在执行计划 §5             | 记进状态文档 |
 
-其余脚本（`browser-cdp`、`git-tool-window`、`forge-panel`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`、`language-load`）是单项核验，本地按需手动跑；`relay-web-e2e` 要 armadra-cloud 的检出，也是本地手动跑（见「中继托管页面端到端」）。平台探针 `personal-roundtrip`、`multi-source`、`link-join`（A 档）与 `nat-core-offline`（B 档）同样要 armadra-cloud 的检出（CI 上记 skipped）；后两者与 `multi-source` 的中继在容器里（要 Docker），`pnpm platform:e2e` 一次跑完，共用件在 `platform-lib.mjs`。
+其余脚本（`browser-cdp`、`git-tool-window`、`forge-panel`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`、`language-load`）是单项核验，本地按需手动跑；`relay-web-e2e` 要 armadra-cloud 的检出，也是本地手动跑（见「中继托管页面端到端」）。平台探针 `personal-roundtrip`、`multi-source`、`link-join`（A 档）与 `nat-core-offline`、`webkit-roundtrip`（B 档）同样要 armadra-cloud 的检出（CI 上记 skipped）；后两者与 `multi-source` 的中继在容器里（要 Docker），`pnpm platform:e2e` 一次跑完，共用件在 `platform-lib.mjs`。
 
 探针起的 core、服务器壳、桌面壳一律用临时 HOME（`probe-home.mjs`：HOME、XDG、各 CLI 配置目录与 git 全局配置都指进 mktemp 目录，并去掉指向真实账号的凭据变量），不读写操作员自己的 HOME。新写的探针也照此办；Vite / pnpm 这类工具链进程不在此列。
 
@@ -205,6 +205,19 @@ node tools/ci/e2e.mjs --tier a --only personal-roundtrip
 ```
 
 验证：中继 init（CA 指纹、口令不进输出、已初始化再 init 被拒）；core 登记、隧道 ready、绑定主人；`/app/` 账号口令登录、终端收发、实时板双向同步；分享链接 `/j/` 落地（片段被抹掉）、访客加入、开终端；桌面 Electron 粘贴链接并核对指纹、开终端；手机 390 宽模拟（来源 `https://localhost`、扫码结果注入）扫码挂载、开终端；撤销链接（accept 与落地页报错、已加入的访客被断开）、撤销登记（隧道停、中继答 `source_offline`、主人页面收到下线通知、中继侧撤销后不再签断言）；中继、core、Electron 与探针输出里没有口令、令牌与链接秘密。中继边缘对每个 IP 每分钟只放 200 次，所有客户端都来自回环，手机一步之前先等一个窗口。产物默认在 `target/personal-roundtrip/`（经运行器时在 `target/e2e/a/personal-roundtrip/`）。
+
+## 多源并存与 WebKit 跑法（经中继的数据流）
+
+`multi-source`（A 档，要 Docker 与 armadra-cloud 检出）：两台 core（NAT 后的宿主 core 与第二台不带壳的 core）都登记到容器里的个人中转，桌面 Electron 经中继挂载两台（`relayed`）。除侧栏分组、三个源各开终端、NAT 源下线灰显与恢复之外，补经中继的三条数据流：编辑器 `<video src>` 是中继的媒体票地址、按 Range 取到元数据，探针自己不带头按票取 `Range: bytes=0-1023` 回 206（契约 §37.4、armadra-cloud cloud-api §12）；语言会话经中继 `initialize` + `didOpen` 后 mock 语言服务器的诊断回来，流断开后新开一条会话照样往返；浏览器节点的画面流经中继到达，点一下页面、重画后的新帧再回来。中继镜像可用 `ARMADRA_PROBE_RELAY_IMAGE` 指定（并行的工作树各用自己的标签，免得互相覆盖 `armadra-probe-relay:local`）。
+
+`webkit-roundtrip`（B 档）：personal-roundtrip 里页面那几步换成 Playwright 的 WebKit（Safari / iPad 的引擎）：中继托管的 `/app/` 登录进画布、终端收发、空闲 6 秒后再 POST（中继与经中继的源各三轮，都要拿到 HTTP 答复）、空闲后终端再收发、编辑器视频按 Range 取到元数据。要根 devDependency `playwright-core` 与它的 WebKit：
+
+```sh
+pnpm exec playwright-core install webkit     # Linux 加 --with-deps
+node tools/ci/e2e.mjs --tier b --only webkit-roundtrip
+```
+
+没装 WebKit 时运行器记 `skipped` 并写明安装命令；没有 armadra-cloud 检出时同样 `skipped`，所以 CI 上它目前总是 skipped（ubuntu 的 WebKit 依赖也重，放 B 档）。ACP 的 mock 发 prompt 不在里面：personal-roundtrip 本来没有那一步。
 
 ## 控制面端到端
 
