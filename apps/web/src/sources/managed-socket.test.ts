@@ -289,4 +289,25 @@ describe("ManagedSocket", () => {
     expect(dead.readyState).toBe(3);
     expect(last().protocols).toEqual([`${WS_TICKET_PROTOCOL}T2`]);
   });
+
+  it("reconnect() 丢掉的那条之后补到的消息与关闭都不再转给调用方", async () => {
+    // 断网模拟：浏览器把帧扣在旧连接上，页面另开一条续订之后才补报出来。
+    const onMessage = vi.fn();
+    const onClose = vi.fn();
+    const { socket } = make({ onMessage, onClose });
+    await flush();
+    last().open();
+    const dead = last();
+    socket.reconnect();
+    await flush();
+    last().open();
+    dead.dispatchEvent(new MessageEvent("message", { data: "late" }));
+    dead.drop(1006);
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(socket.state).toBe("open");
+    last().dispatchEvent(new MessageEvent("message", { data: "fresh" }));
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage.mock.calls[0]![0].data).toBe("fresh");
+  });
 });
