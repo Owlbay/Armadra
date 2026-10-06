@@ -123,6 +123,18 @@ export function gatewayOrigin(value: string): string | null {
   return url.origin;
 }
 
+/**
+ * 原生 App 这一次启动选定的连接地址（`mobile/entry.ts`）：直连是 Gateway 来源，
+ * 经中继是中继给的 `relayBaseUrl`（带 `/s/<源>` 前缀）。只在内存里、只在第一次算
+ * 本机源地址之前设；没设时回到连接页记下的来源。
+ */
+let nativeBaseOverride: string | null = null;
+
+export function setNativeRuntimeBase(base: string | null): void {
+  nativeBaseOverride =
+    base === null || base === "" ? null : base.replace(/\/+$/, "");
+}
+
 /** 连接页记下的 Gateway 来源；没有或认不出是 `null`。 */
 export function savedRuntimeOrigin(): string | null {
   try {
@@ -157,7 +169,8 @@ export function resolveRuntimeUrl(
   if (configured === undefined) {
     // 原生 App：只认连接页记下的来源。Android 的页面来源 `https://localhost`
     // 长得像服务器壳，但那是包里的文件，不是 core。
-    if (isNativeAppPage(pageUrl)) return savedRuntimeOrigin() ?? LOCAL_RUNTIME;
+    if (isNativeAppPage(pageUrl))
+      return nativeBaseOverride ?? savedRuntimeOrigin() ?? LOCAL_RUNTIME;
     return (
       // 壳先问：它拉起的 Runtime 端口是内核分配的，页面地址推不出来，而且开发
       // 模式下页面来源是 Vite，回环默认端口多半是别人的 Runtime。

@@ -14,10 +14,14 @@ import { isNativeAppPage } from "../api/runtime-url";
  *
  * | 方法                                  | 返回                                                 |
  * | ------------------------------------- | ---------------------------------------------------- |
- * | `getSession()`                        | `{ session?: { origin, accessToken, refreshToken } }` |
- * | `setSession({ session })`             | —（写钥匙串 / Keystore）                             |
- * | `clearSession()`                      | —                                                    |
- * | `pin({ origin, fingerprint })`        | —（之后对该来源的 TLS 只认这个信任锚指纹）           |
+ * | `getSessions()`                       | `{ sessions: StoredSession[] }`（一个连接一份，钥匙串 / Keystore） |
+ * | `setSession({ session })`             | —（按 `sourceId` + `via` 写一份，同键覆盖）          |
+ * | `removeSession({ sourceId, origin? })` | —（删这个源的会话；给了 `origin` 只删发往它的那份） |
+ * | `getRemotes()`                        | `{ remotes: StoredRemote[] }`（远程服务的刷新令牌）  |
+ * | `setRemote({ remote })`               | —（按 `serviceId` 写一份）                           |
+ * | `removeRemote({ serviceId })`         | —                                                    |
+ * | `peek({ origin })`                    | `{ fingerprint?, trusted, pinned }`（不带凭据取一次信任锚指纹，什么也不存） |
+ * | `pin({ origin, fingerprint })`        | —（之后对该来源的 TLS 只认这个信任锚指纹；多个来源各存一份） |
  * | `scan()`                              | `{ text?: string }`（取消时没有 `text`）             |
  * | `pushRegistration()`                  | `{ registration?: { platform, transport, token?, publicKey?, unifiedpush? } }` |
  * | `pushRotated()`                       | `{ rotated: boolean }`（推送令牌或 UnifiedPush 端点换过、还没重新登记） |
@@ -28,11 +32,37 @@ import { isNativeAppPage } from "../api/runtime-url";
  * `onNewToken`、UnifiedPush 新端点、iOS 启动时 APNs 给了新令牌）。
  */
 
-/** 钥匙串里的一份会话：哪个 Gateway，加两把密钥。 */
+/** 一份会话走的路：直连 Gateway，或经中继。 */
+export type StoredVia = "direct" | "relayed";
+
+/**
+ * 钥匙串里的一份会话：哪个源、经哪条路、发往哪个来源（直连是 Gateway，中继是
+ * 签发方），加两把密钥与访问密钥的到期时刻（不知道是 0）。一个连接一份。
+ */
 export interface StoredSession {
+  readonly sourceId: string;
   readonly origin: string;
+  readonly via: StoredVia;
   readonly accessToken: string;
   readonly refreshToken: string;
+  readonly expiresAtMs: number;
+}
+
+/** 远程服务（个人中转、将来的 SaaS）的一份登录：刷新令牌只在钥匙串里。 */
+export interface StoredRemote {
+  readonly serviceId: string;
+  readonly issuer: string;
+  readonly kind: "personal" | "saas";
+  readonly refreshToken: string;
+  /** 个人中转的信任锚指纹；系统信任的证书与 SaaS 是空串。 */
+  readonly fingerprint: string;
+}
+
+/** 取到的信任锚：`trusted` 是系统本来就信，`pinned` 是已钉且与这次取到的一致。 */
+export interface PeekResult {
+  readonly fingerprint: string;
+  readonly trusted: boolean;
+  readonly pinned: boolean;
 }
 
 /** 原生推送注册：交给 `PUT /api/push/devices`（契约 §19.2）。 */
@@ -52,9 +82,14 @@ export interface NativeBridge {
   readonly available: boolean;
   /** 原生 App 能扫码（相机）。 */
   readonly canScan: boolean;
-  loadSession(): Promise<StoredSession | null>;
-  saveSession(session: StoredSession): Promise<void>;
-  clearSession(): Promise<void>;
+  getSessions(): Promise<StoredSession[]>;
+  setSession(session: StoredSession): Promise<void>;
+  removeSession(sourceId: string, origin?: string): Promise<void>;
+  getRemotes(): Promise<StoredRemote[]>;
+  setRemote(remote: StoredRemote): Promise<void>;
+  removeRemote(serviceId: string): Promise<void>;
+  /** 不带凭据取一次信任锚指纹；取不到（连不上、没有信任锚）是 `null`。 */
+  peek(origin: string): Promise<PeekResult | null>;
   pin(origin: string, fingerprint: string): Promise<void>;
   scan(): Promise<string | null>;
   pushRegistration(): Promise<NativePushRegistration | null>;
@@ -73,9 +108,16 @@ interface PluginListenerHandle {
 }
 
 interface ArmadraNativePlugin {
-  getSession?(): Promise<unknown>;
+  getSessions?(): Promise<unknown>;
   setSession?(options: { session: StoredSession }): Promise<unknown>;
-  clearSession?(): Promise<unknown>;
+  removeSession?(options: {
+    sourceId: string;
+    origin?: string;
+  }): Promise<unknown>;
+  getRemotes?(): Promise<unknown>;
+  setRemote?(options: { remote: StoredRemote }): Promise<unknown>;
+  removeRemote?(options: { serviceId: string }): Promise<unknown>;
+  peek?(options: { origin: string }): Promise<unknown>;
   pin?(options: { origin: string; fingerprint: string }): Promise<unknown>;
   scan?(): Promise<unknown>;
   pushRegistration?(): Promise<unknown>;
@@ -103,23 +145,74 @@ function plugin(): ArmadraNativePlugin | null {
   return found && typeof found === "object" ? found : null;
 }
 
+const SOURCE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+
 function storedSession(value: unknown): StoredSession | null {
   if (!value || typeof value !== "object") return null;
-  const session = (value as { session?: unknown }).session;
-  if (!session || typeof session !== "object") return null;
-  const { origin, accessToken, refreshToken } = session as Record<
-    string,
-    unknown
-  >;
+  const { sourceId, origin, via, accessToken, refreshToken, expiresAtMs } =
+    value as Record<string, unknown>;
   if (
+    typeof sourceId !== "string" ||
+    !SOURCE_ID.test(sourceId) ||
     typeof origin !== "string" ||
+    (via !== "direct" && via !== "relayed") ||
     typeof accessToken !== "string" ||
     typeof refreshToken !== "string" ||
     !SESSION_TOKEN.test(accessToken) ||
     !SESSION_TOKEN.test(refreshToken)
   )
     return null;
-  return { origin, accessToken, refreshToken };
+  return {
+    sourceId,
+    origin,
+    via,
+    accessToken,
+    refreshToken,
+    expiresAtMs:
+      typeof expiresAtMs === "number" && Number.isFinite(expiresAtMs)
+        ? expiresAtMs
+        : 0,
+  };
+}
+
+function storedRemote(value: unknown): StoredRemote | null {
+  if (!value || typeof value !== "object") return null;
+  const { serviceId, issuer, kind, refreshToken, fingerprint } =
+    value as Record<string, unknown>;
+  if (
+    typeof serviceId !== "string" ||
+    !SOURCE_ID.test(serviceId) ||
+    typeof issuer !== "string" ||
+    (kind !== "personal" && kind !== "saas") ||
+    typeof refreshToken !== "string" ||
+    refreshToken === "" ||
+    refreshToken.length > 4096 ||
+    typeof fingerprint !== "string" ||
+    (fingerprint !== "" && !FINGERPRINT.test(fingerprint))
+  )
+    return null;
+  return { serviceId, issuer, kind, refreshToken, fingerprint };
+}
+
+function listOf<T>(
+  value: unknown,
+  key: string,
+  parse: (item: unknown) => T | null,
+): T[] {
+  const list = (value as Record<string, unknown> | null)?.[key];
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((item) => {
+    const parsed = parse(item);
+    return parsed === null ? [] : [parsed];
+  });
+}
+
+function peekResult(value: unknown): PeekResult | null {
+  if (!value || typeof value !== "object") return null;
+  const { fingerprint, trusted, pinned } = value as Record<string, unknown>;
+  if (typeof fingerprint !== "string" || !FINGERPRINT.test(fingerprint))
+    return null;
+  return { fingerprint, trusted: trusted === true, pinned: pinned === true };
 }
 
 /**
@@ -200,9 +293,13 @@ export function externalUrl(value: string): boolean {
 const WEB_BRIDGE: NativeBridge = {
   available: false,
   canScan: false,
-  loadSession: () => Promise.resolve(null),
-  saveSession: () => Promise.resolve(),
-  clearSession: () => Promise.resolve(),
+  getSessions: () => Promise.resolve([]),
+  setSession: () => Promise.resolve(),
+  removeSession: () => Promise.resolve(),
+  getRemotes: () => Promise.resolve([]),
+  setRemote: () => Promise.resolve(),
+  removeRemote: () => Promise.resolve(),
+  peek: () => Promise.resolve(null),
   pin: () => Promise.resolve(),
   scan: () => Promise.resolve(null),
   pushRegistration: () => Promise.resolve(null),
@@ -234,24 +331,49 @@ export function nativeBridge(): NativeBridge {
   return {
     available: true,
     canScan: typeof native.scan === "function",
-    loadSession: () =>
+    getSessions: () =>
       quiet(
-        native.getSession && (() => native.getSession!()),
-        storedSession,
-        null,
+        native.getSessions && (() => native.getSessions!()),
+        (value) => listOf(value, "sessions", storedSession),
+        [],
       ),
-    saveSession: (session) =>
+    setSession: (session) =>
       quiet(
         native.setSession && (() => native.setSession!({ session })),
         () => undefined,
         undefined,
       ),
-    clearSession: () =>
+    removeSession: (sourceId, origin) =>
       quiet(
-        native.clearSession && (() => native.clearSession!()),
+        native.removeSession &&
+          (() =>
+            native.removeSession!({
+              sourceId,
+              ...(origin === undefined ? {} : { origin }),
+            })),
         () => undefined,
         undefined,
       ),
+    getRemotes: () =>
+      quiet(
+        native.getRemotes && (() => native.getRemotes!()),
+        (value) => listOf(value, "remotes", storedRemote),
+        [],
+      ),
+    setRemote: (remote) =>
+      quiet(
+        native.setRemote && (() => native.setRemote!({ remote })),
+        () => undefined,
+        undefined,
+      ),
+    removeRemote: (serviceId) =>
+      quiet(
+        native.removeRemote && (() => native.removeRemote!({ serviceId })),
+        () => undefined,
+        undefined,
+      ),
+    peek: (origin) =>
+      quiet(native.peek && (() => native.peek!({ origin })), peekResult, null),
     async pin(origin, fingerprint) {
       if (!FINGERPRINT.test(fingerprint)) throw new Error("bad fingerprint");
       if (native.pin === undefined) throw new Error("pinning unavailable");
