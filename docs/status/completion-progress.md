@@ -2532,3 +2532,31 @@
 - 形状错（类型不对）经 procedure 与 forge 旧路径由入参校验先答 `bad_request`（带 `details.issues`）；forge 入参的必填检查留在域里，所以缺字段仍是原话。
 - 门面补了一处：空体的旧路径 `DELETE` 把查询串当作体（上游只读 `GET` 的查询串）；`/api/forge/resolve` 在路由规则表里单列为读权限。
 - 大写拼法与 `error.permissionDenied` 文案键删去（`PERMISSION_DENIED` 现取 `error.forbidden`）；大写拼法的映射下个 minor 删。
+
+## E3-8a 工程规范化：acp、workflows、coordinator 三个域迁到契约（契约 §43.1–§43.3，E3-8 第一部分）
+
+规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-8）；契约 §43。E3-8 分 2–3 个 PR：本包做 `acp`、`workflows`、`coordinator`；`push`、`mail`、`credentials`、`gateway`、`diagnostics` 在第二部分，节号接在 §43.3 之后。
+
+做了什么：
+
+- **契约**（`packages/shared/src/contract/{acp,workflows,coordinator}.ts`）：`acp.*` 7 条（起会话、发提示、打断、切模式、切模型、读镜像、切换驱动）、`workflows.*` 15 条（草案 4、模板 6、运行 5，含关卡答复）、`coordinator.*` 2 条（任务读与重试）。`since` 1.12，协议 minor 11 → 12（E3-7 若先合要改号）。出参：ACP 镜像写成已知字段加原样透传；草案与模板的正文放宽成 JSON 对象（页面那份 `workflowDraftSchema` 带 `superRefine` 与默认值，契约不能比旧路径挑剔），页面读回时再解析一遍。入参只校形状，取值与长度仍在域里判。
+- **scope 进 meta**：每条等于 `route-scopes.ts` 给旧路径的要求（对偶测试逐条断言）：ACP 读镜像 `terminal:read`、其余 `terminal:create`；工作流与任务读 `canvas:read`、写 `agent:launch`（关卡答复也是 `agent:launch`，不是 `approval:answer`）。
+- **core**：`acp/routes.ts` 各动词收成一份操作，旧 handler 与 `registerProcedures(server, "acp", …)` 同调，`AcpError` 换成同码同状态的 `CoreFailure`。`workflow/routes.ts` 收成 `workflowOperations(service)` 与 `installWorkflowRoutes(server, service)`：**工作流原来整段挂在 `server.raw("/api/workflows/")` 上，不在路由表里，`meta.legacy` 挂不上，所以 13 条路径登记进 `http/routes.ts`（用一张小表生成，文件仍在 1500 行内），旧 handler 改走路由表**，`workflows.*` 与 `coordinator.*` 同调一份。调度域的 `upgrade` 桥改成显式收工作空间（旧路径从查询串读，procedure 从入参读，两种都到得了）。
+- **门面补一处**：`gateRequest` 还原旧路径时，读与删的入参一并放进查询串——否则路由门里按 `request.query.get("boardId")` 取画板的规则对 procedure 看不到，成员会被一律拒（旧路径不受影响）。
+- **页面**：`acp/api.ts`、`workflow/api.ts`、`coordinator/api.ts` 经 `currentClient()` / `clientFor(source)`（分派抽屉按事件所属的源发），导出的函数签名不变，答案仍过页面自己的 schema。`acp` 页面的审批卡片与 elicitation 答复改走已有的 `agents.answerApproval`；输出到画板的代码块与输入框租约不在这几个域，没动。
+- **契约 §43**：§43.1–§43.3 生成块与说明，§14、§15 加指向。
+
+实测（macOS arm64，基于最新 origin/main，protocol minor 12）：
+
+- `pnpm check` 通过（含 `contract:check`、lint 0 error、三处 typecheck、`repo:check`、notices）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：426 个文件通过、11 跳过（5091 过 / 74 跳过）。新增 `core/contract/parity-acp.test.ts`（19 条）与 `parity-workflows.test.ts`（25 条，含 coordinator）：路由表原 handler、旧路径、procedure 三者逐字节相等（含 201 / 204 的状态差、404、409、400 与带 `details.issues` 的形状错）。**投递门**一节用真的 `createRouteGuard`、真库查询与成员身份，两条路答同一个 403：只读 / 别的画布上的人开不了 ACP 会话（一行都没多出来）、拿别画布的节点起会话被拒；不是自己开的会话，viewer / editor / operator / 别的画布上的人写不进去，**镜像逐字节没变**，driver 写得进去；切换别人节点的驱动要 driver；`acp.*` 里没有答审批的动词。工作流：模板的写只有 owner（operator 与 driver 也被拒，模板没被改）；viewer / editor / 别的画布上的人确认不了草案、起不了跑、答不了关卡、取消不了运行、重试不了任务，**草案仍待确认、运行仍在等、任务仍是失败**；关卡的 scope 是 `agent:launch` 且不等于 `approval:answer`。
+- `pnpm --filter @armadra/web test`：403 个文件、3753 条通过；`typecheck` 通过。新增 `api/client.acp.test.ts`（7 条）、`api/client.workflows.test.ts`（9 条，含 coordinator 按源发）。`@armadra/server`（98 过 4 跳过）、`@armadra/shared`（366 过）测试通过。
+- A 档（`node tools/ci/e2e.mjs --tier a --only agent-e2e-self-test,acp-e2e,workflow-e2e`，先 build web / desktop / server）：三项通过——`acp-e2e` 44 s、`agent-e2e-self-test` 228 s（含 11-coordinator、12-acp 的 claude / codex / opencode / pi / omp / copilot 回合与驱动切换）、`workflow-e2e` 30 s。探针都用临时 HOME 与独立数据目录，没碰真实库。
+
+没做 / 偏离：
+
+- 「没有自动化域」（升级计划）与「协作域还没装好」（重试）从 `409 unsupported` 改成 `501 unsupported`：注册表里 `unsupported` 登记的就是 501，同一个码不能在两处答出两个状态。
+- 形状错（类型不对）经旧路径与 procedure 由入参校验先答 `bad_request`（带 `details.issues`），与迁移前域里那句原话不同，码与状态不变（与 E3-1–E3-6 同）；缺字段仍由域答原话。
+- 工作流从 `server.raw` 改进路由表后，意外的内部错误由门面统一答 `500 internal` 并上报，不再是旧 handler 吞掉后答的 `internal_error` / 「工作流请求处理失败」；未知路径与不收的方法由路由表答 404 / 405（码同前，原话换成路由表的）。
+- 这三个域没有订阅：ACP 与工作流的事件（`acp.update`、`acp.turn`、`workflow.run` 等）仍走工作空间事件流（§35 的 `workspaces.events`），不另起 `eventIterator`。
+- `exportText`（输出到画板的代码块）与 `drive`（输入框租约）不在这几个域，仍走各自的旧调用；节点令牌路径随凭据域在第二部分。
