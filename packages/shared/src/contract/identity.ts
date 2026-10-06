@@ -31,7 +31,7 @@ const section = (
 ) =>
   meta({
     scope,
-    since: "1.11",
+    since: "1.12",
     contract: "§42.1",
     legacy: { method, path },
   });
