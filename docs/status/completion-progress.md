@@ -2560,3 +2560,35 @@
 - 工作流从 `server.raw` 改进路由表后，意外的内部错误由门面统一答 `500 internal` 并上报，不再是旧 handler 吞掉后答的 `internal_error` / 「工作流请求处理失败」；未知路径与不收的方法由路由表答 404 / 405（码同前，原话换成路由表的）。
 - 这三个域没有订阅：ACP 与工作流的事件（`acp.update`、`acp.turn`、`workflow.run` 等）仍走工作空间事件流（§35 的 `workspaces.events`），不另起 `eventIterator`。
 - `exportText`（输出到画板的代码块）与 `drive`（输入框租约）不在这几个域，仍走各自的旧调用；节点令牌路径随凭据域在第二部分。
+
+## E3-7 工程规范化：identity、security、accounts 三个域迁到契约（契约 §42）
+
+规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-7）；契约 §42。
+
+做了什么：
+
+- **契约**（`packages/shared/src/contract/{identity,security,accounts}.ts`）：45 条会话内的动作——`identity.session`、`identity.devices.{list,revoke}`（§42.1，与 §31 的 `identity.cloud.*` 同一个域，`cloud.ts` 改成导出子树）；`security.*` 22 条（passkey 5、两步验证 6、会话 3、锁定 2、OAuth 提供方表 / 密钥 / 绑定 5、审计 1，§42.2）；`accounts.*` 20 条（账号 4 含签重置链接、凭据 3、邀请 4、组 6、共享 3，§42.3）。旧路径都挂在 `/api/identity/` 上（`meta.legacy`），`scope` 等于路由表给旧路径的那一档。`since` 1.13，协议 minor 12 → 13（11 给了 E3-6、12 给了 E3-8a）。
+- **留在 REST 的匿名面**（§42.4 登记）：hello、配对、ws-ticket、刷新 / 换 CSRF / 登出、口令登录与两步登录、passkey 断言、持邀请注册、OAuth 发起 / 回调 / 原生收尾、登录页的匿名提供方表、口令重置链接、审计导出（CSV）、`cloud/login`。§31–§33 已经是契约，只登记。`contract.test.ts` 加三条守卫：三域都要会话、节号 §42.1–§42.3；凭据换会话的那几条不在契约里；口令、密钥与邀请令牌只在入参。
+- **core 一份实现**：`identity/accounts-http.ts` 拆成三份——`http-support.ts`（上下文、认人、体的解析、加固审计、口令策略与泄露检查、失败计数、发会话）、`accounts-http.ts`（`accountOperations` 与账号面的分发、注册、审计）、`security-http.ts`（`securityOperations` 与登录、passkey、MFA、会话、锁定、重置链接的分发）。`identity/http.ts` 收出 `identityOperations`（会话与设备），OAuth 的提供方表、密钥与绑定成为 `OAuthHttp` 的公开方法。旧路径分发与 `identity/procedures.ts`（`registerProcedures` 三个域）调同一份；操作的入参是取值函数，旧路径照旧在认人之后才解析体，迁移前的判定顺序与答案不变。路由表的身份三域旧路径放在 `http/routes-identity.ts`（单文件 1500 行上限）。
+- **认人**：`RequestIdentity` 带上门认过的会话（`session: { sessionId, origin }`，`sessionIdentity` 给回环、Gateway、中继三道门共用）；`AccessRequest.verifiedSessionId` 按会话再认一次（会话活着、访问期没过、设备与账号没被撤或停用），不比对令牌——控制面上没有令牌可比，页面刷新过访问令牌之后连接仍是同一个会话。只由 core 从请求身份里取。门不在（`ARMADRA_LOOPBACK_OWNER=1` 的裸 core）时按请求里的凭据认，Cookie 会话的写要 CSRF，与旧路径同。
+- **码**：procedure 上身份域的大写码换成注册表的码（`unauthenticated` / `forbidden` / `bad_request` / `conflict` / `not_found` / `not_implemented`），§18 的具名码与状态不变，限流与锁定的等待秒数进 `details.retryAfterSeconds`。旧路径的码不变。
+- **页面**：`api/accounts.ts`、`api/security.ts` 的会话内动作经 `identityRpc`（`clientFor(localSource)`）发，函数签名与 `IdentityRequestError` / `IdentityTransportError` 不变；设备的列与撤从 `api/identity.ts` 挪到 `api/security.ts`；本机邀请（`api/remote-services.ts`）改用 `accounts.invitations.*`——A1-4 记下的「桌面壳跨端口带 Cookie 过不了 CORS」随之消失（Bearer、不带 Cookie）。登录、注册、重置链接与登录页的匿名提供方表仍走 `identity.ts` 的 REST 传输。
+- **两处页面传输的修补**：Bearer 传输的 401 只在会话失效（`unauthenticated`）时续期重发，具名的 401（`mfa_invalid_code`）不重发——重发会把一次输错的码记成两次失败；Cookie 会话的 RPC 发出时还没有 CSRF、途中会话建好了（配对那一刻），带上新令牌重发一次。设备查询带 `signal`，会话变了先取消在路上的那一次再重取（gateway-e2e 发现：配对与设备列表同时在路上时，表一直是空的）。
+- **契约 §42**：§42.1–§42.3 生成块与说明，§42.4 登记表；架构表加 `identity/procedures.ts`。E1 的 `system.*` 与 E2 的 `/api/ws` 要全局 `identity:read`、走 `route-access.ts` 的那条全局规则，与 §42 一致：§42 的 procedure 都挂在 `SELF_GUARDED` 的旧路径上，不经那一条。
+
+实测（macOS arm64，合入 origin/main（含 #159 E3-6、#160 E3-8a）之后）：
+
+- `pnpm check` 通过（含 `contract:check`、lint 0 error、三处 typecheck、`repo:check`、notices；本包改到的文件只有一条既有警告）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 428 个文件通过、10 跳过（5116 过 / 67 跳过），live 4 过，脚本 72 过 / 0 失败。新增 `core/contract/parity-identity.test.ts` 18 条：真 core（身份域整个装上、回环准入门、路由门、审计）上旧路径与 procedure 对同一件事逐字节相等（旧路径 201 对 procedure 200），覆盖全部 45 条；`system.hello` 报的表里都有、minor 13、scope 与路由表一致；控制面上同一条会话调 `identity.session` 与旧路径相同。**拒绝路径**两条路都拒：无会话与伪造的 Bearer 401；Cookie 会话错 CSRF 403（procedure 读也要 CSRF，带对的放行，Bearer 写不要）；成员越权（建人、锁定列表、MFA 重置、全局审计、全部会话、OAuth 密钥、邀请列表、共享、替 owner 签重置链接、撤设备）403，本人的照常，别人的会话 404，停用之后下一次 401；连错口令 5 次锁定后 `mfa.disable` 两条路都 429 `account_locked`，`Retry-After` 与 `retryAfterSeconds` 同一个数，owner 看得见、解得开，审计记了锁定、不含口令；会话被撤之后 procedure 401；口令（含策略拒绝的那一份）不出现在任何答案里。`http/peer.fixture.ts` 的 procedure 名按全部的点拆（三段名原来拼错）。
+- `pnpm --filter @armadra/web test`：404 个文件、3759 条通过；`typecheck` 通过。`api/accounts.csrf.test.ts` 按 procedure 改写（Cookie 会话读写都带 CSRF、被拒换一枚重发一次、再拒照实报）；新增 `api/identity-rpc.test.ts`（桌面壳里账号与本机邀请是 Bearer、不带 Cookie 与 CSRF）、`security.test.ts` 补 4 条（设备、错误换回、连不上、匿名提供方表仍走 REST）、`client.rpc.test.ts` 补 1 条、`sources/transport.test.ts` 补 1 条；`identity.test.ts`、`HostPage.test.tsx`、`remote-services.test.ts` 按新的线上形状改。
+- `@armadra/server` 98 过 4 跳过，`@armadra/shared` 372 过。
+- A 档（先 build desktop / server / web；`node tools/ci/e2e.mjs --tier a --only gateway-e2e,server-e2e,personal-roundtrip,ui-features-e2e`）：四项通过——`gateway-e2e` 33 s（配对、邀请注册、成员 403、页面配对、设备表、重置链接、passkey 审计）、`server-e2e` 89 s（服务器壳 Cookie 会话、共享与撤销、成员逐页打开设置无 403）、`personal-roundtrip` 114 s（个人中转登记、邀请链接、cloud/login、撤销）、`ui-features-e2e` 187 s。探针都用临时 HOME 与独立数据目录。
+
+没做 / 偏离：
+
+- 规格写「约 16 条路径」，按路径族数；落地是 45 条 procedure，覆盖 `/api/identity/` 下全部会话内动作。
+- 留在 REST 的比规格列的多：口令登录、两步登录、passkey 断言、持邀请注册、刷新 / 换 CSRF / 登出也先于会话或要发 Cookie，与配对同一类；`/api/rpc/` 在门上就要会话，它们进不来。页面开张时判「有没有会话」仍读旧路径 `GET session`（那时 Cookie 会话手里还没有 CSRF）；`identity.session` 给远程源与控制面用。
+- 旧路径的大写码不改（已装机的原生 App 认它们），错误码守卫的大写存量名单因此还留着身份域那几个；procedure 上已经是注册表的码。§18 的具名码（`password_*`、`passkey_*`、`mfa_*`、`oauth_*`）没有登记进注册表（注册表要求 core 里有字面量用法，这些码由变量给出），契约的 `errors` 一列只写注册过的，具名码写在 §42 的说明里。
+- `scope` 一列沿用路由表给 `/api/identity/` 的「管别人的」那一档（如 passkey 的写是 `identity:manage`），实际判定在身份域：门面按旧路径问路由门，`SELF_GUARDED` 对成员放行。路由表为清单补了会话、设备、锁定、账号、凭据、邀请、组与共享几行。
+- Cookie 会话上 procedure 一律 `POST`，读也要 CSRF（旧路径读不要）；页面的 Cookie 凭据本来就先换一枚再发。
+- `GatewaySection` 的「取消在路上的那一次」靠 gateway-e2e 覆盖，没有单独的组件用例。

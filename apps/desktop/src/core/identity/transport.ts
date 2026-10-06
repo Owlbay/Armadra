@@ -140,6 +140,7 @@ export function sessionIdentity(
   return {
     subject: subjectOf(principal),
     device: { deviceId: principal.deviceId, deviceName: principal.deviceName },
+    session: { sessionId: principal.sessionId, origin: principal.origin },
     accessExpiresAtMs: principal.accessExpiresAtMs,
     renew,
     revalidate: () => renew()?.subject,

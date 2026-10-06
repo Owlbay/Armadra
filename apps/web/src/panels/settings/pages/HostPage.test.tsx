@@ -147,24 +147,29 @@ function fakeCore(options: {
           deepLink: `armadra://pair?host=${encodeURIComponent(new URL(origin).host)}&ticket=${TICKET}&fp=${FP}`,
         });
       }
-      if (url.pathname === "/api/identity/devices") {
+      // 设备经 procedure（契约 §42.1）：体是 `{ json }`，答案也是。
+      if (url.pathname === "/api/rpc/identity/devices/list") {
         const devices = options.devices ?? 401;
         if (typeof devices === "number")
-          return answer(devices, { code: "UNAUTHENTICATED", message: "" });
+          return answer(devices, { code: "unauthenticated", message: "" });
         return answer(200, {
-          devices: devices.map((device, index) => ({
-            ...device,
-            principalId: "p",
-            epoch: index + 1,
-            createdAtMs: Date.UTC(2026, 9, 1),
-            revokedAtMs: 0,
-          })),
-          nextId: "",
-          hasMore: false,
+          json: {
+            devices: devices.map((device, index) => ({
+              ...device,
+              principalId: "p",
+              epoch: index + 1,
+              createdAtMs: Date.UTC(2026, 9, 1),
+              revokedAtMs: 0,
+            })),
+            nextId: "",
+            hasMore: false,
+          },
         });
       }
-      if (url.pathname === "/api/identity/devices/revoke")
-        return answer(200, { revoked: true });
+      if (url.pathname === "/api/rpc/identity/devices/revoke")
+        return answer(200, {
+          json: { deviceId: body.json.deviceId, revoked: true },
+        });
       return answer(404, { code: "not_found", message: "" });
     }),
   );
@@ -483,9 +488,9 @@ describe("HostPage · 对外服务", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "撤销" }));
     await waitFor(() =>
       expect(
-        calls.find((call) => call.path === "/api/identity/devices/revoke")
+        calls.find((call) => call.path === "/api/rpc/identity/devices/revoke")
           ?.body,
-      ).toEqual({ deviceId: "d-phone", expectedRevision: 2 }),
+      ).toEqual({ json: { deviceId: "d-phone", expectedRevision: 2 } }),
     );
   });
 

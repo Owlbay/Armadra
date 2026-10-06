@@ -5,11 +5,12 @@ import type {
   InferSchemaOutput,
 } from "@orpc/contract";
 
+import { accounts } from "./accounts.js";
 import { acp } from "./acp.js";
 import { agents } from "./agents.js";
 import { boards } from "./boards.js";
 import { coordinator } from "./coordinator.js";
-import { identity } from "./cloud.js";
+import { identity } from "./identity.js";
 import { files } from "./files.js";
 import { forge } from "./forge.js";
 import { git } from "./git.js";
@@ -18,6 +19,7 @@ import { gitRepository } from "./git-repository.js";
 import type { ProcedureMeta } from "./meta.js";
 import { settings } from "./settings.js";
 import { sources } from "./sources.js";
+import { security } from "./security.js";
 import { system } from "./system.js";
 import { terminals } from "./terminals.js";
 import { workflows } from "./workflows.js";
@@ -44,6 +46,8 @@ export const contract = {
   forge,
   github,
   gitRepository,
+  security,
+  accounts,
   acp,
   workflows,
   coordinator,
@@ -158,6 +162,14 @@ export {
   tunnelStatusSchema,
 } from "./cloud.js";
 export type { RelayPending } from "./cloud.js";
+export {
+  identityDevicePageWireSchema,
+  identitySessionWireSchema,
+} from "./identity.js";
+export type {
+  IdentityDevicePageWire,
+  IdentitySessionWire,
+} from "./identity.js";
 export {
   workspaceEventsCursorSchema,
   workspaceEventsItemSchema,

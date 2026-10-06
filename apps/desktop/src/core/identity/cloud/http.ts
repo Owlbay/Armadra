@@ -226,7 +226,7 @@ export class CloudHttp {
     request: CoreRequest,
     credentials: SessionCredentials,
   ): Record<string, unknown> {
-    const session = sessionJson(
+    const session: Record<string, unknown> = sessionJson(
       credentials.principal,
       credentials.accessExpiresAtMs,
     );

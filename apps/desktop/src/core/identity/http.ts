@@ -235,10 +235,7 @@ function grants(principal: Principal) {
 }
 
 /** 新面上的会话，JSON，camelCase。密钥不在里面——它们在 `native` 里单独给。 */
-export function sessionJson(
-  principal: Principal,
-  expiresAtUnixMs: number,
-): Record<string, unknown> {
+export function sessionJson(principal: Principal, expiresAtUnixMs: number) {
   return {
     hostId: principal.hostId,
     device: {
@@ -338,26 +335,11 @@ export class IdentityHttp {
           return;
         }
         case "GET session": {
-          const principal = this.service.authenticate(actor);
-          // 成员的快照只有底线，共享得来的授权每次现编；页面据此决定显示什么，
-          // 所以这里报的是「快照 ∪ 现编」，和判定用的是同一份。
-          const effective =
-            principal.role === "member" && this.options.accounts !== undefined
-              ? {
-                  ...principal,
-                  scopes: [
-                    ...principal.scopes,
-                    ...this.options.accounts.effectiveGrantScopes(
-                      principal.principalId,
-                    ),
-                  ],
-                }
-              : principal;
           this.json(
             response,
             cors,
             200,
-            sessionJson(effective, principal.accessExpiresAtMs),
+            this.operations(actor, csrf).session(),
           );
           return;
         }
@@ -427,12 +409,17 @@ export class IdentityHttp {
           return;
         }
         case "GET devices": {
-          const page = this.service.listDevices(
-            actor,
-            request.query.get("afterId") ?? "",
-            Number(request.query.get("limit") ?? 50),
+          const afterId = request.query.get("afterId") ?? "";
+          const limit = Number(request.query.get("limit") ?? 50);
+          this.json(
+            response,
+            cors,
+            200,
+            this.operations(actor, csrf).devices.list(() => ({
+              afterId,
+              limit,
+            })),
           );
-          this.json(response, cors, 200, page);
           return;
         }
         case "POST devices/revoke": {
@@ -446,15 +433,16 @@ export class IdentityHttp {
           ) {
             throw new IdentityError("invalid");
           }
-          this.service.revokeDevice(
-            { ...actor, requireCsrf: csrf },
-            body.deviceId,
-            body.expectedRevision,
-          );
-          this.json(response, cors, 200, {
+          const input = {
             deviceId: body.deviceId,
-            revoked: true,
-          });
+            expectedRevision: body.expectedRevision,
+          };
+          this.json(
+            response,
+            cors,
+            200,
+            this.operations(actor, csrf).devices.revoke(() => input),
+          );
           return;
         }
         default: {
@@ -547,6 +535,22 @@ export class IdentityHttp {
   }
 
   /**
+   * `identity.session` 与 `identity.devices.*` 的操作（契约 §42.1）：旧路径与
+   * procedure 同调。`actor` 是这次的凭据（旧路径是令牌，procedure 是门认过的
+   * 会话），`csrf` 是写操作要不要核对 CSRF。
+   */
+  operations(actor: AccessRequest, csrf: boolean) {
+    return identityOperations({
+      service: this.service,
+      ...(this.options.accounts === undefined
+        ? {}
+        : { accounts: this.options.accounts }),
+      actor,
+      csrf,
+    });
+  }
+
+  /**
    * 凭据换会话的那几条（配对、刷新、换 CSRF、登出）的限流：桶空了答 429，
    * 只有失败才扣（`Throttle.checkIp` / `chargeIp`）。没装加固时不限。
    */
@@ -565,7 +569,7 @@ export class IdentityHttp {
     request: CoreRequest,
     credentials: SessionCredentials,
   ): Record<string, unknown> {
-    const body = sessionJson(
+    const body: Record<string, unknown> = sessionJson(
       credentials.principal,
       credentials.accessExpiresAtMs,
     );
@@ -615,6 +619,60 @@ export class IdentityHttp {
     });
     response.end(payload);
   }
+}
+
+/** 会话与设备（契约 §42.1），旧路径与 procedure 同调。 */
+export function identityOperations(input: {
+  readonly service: IdentityService;
+  readonly accounts?: AccountsService;
+  readonly actor: AccessRequest;
+  readonly csrf: boolean;
+}) {
+  const { service, accounts, actor, csrf } = input;
+  return {
+    /**
+     * 这条会话。成员的快照只有底线，共享得来的授权每次现编；页面据此决定显示
+     * 什么，所以这里报的是「快照 ∪ 现编」，和判定用的是同一份。
+     */
+    session() {
+      const principal = service.authenticate(actor);
+      const effective =
+        principal.role === "member" && accounts !== undefined
+          ? {
+              ...principal,
+              scopes: [
+                ...principal.scopes,
+                ...accounts.effectiveGrantScopes(principal.principalId),
+              ],
+            }
+          : principal;
+      return sessionJson(effective, principal.accessExpiresAtMs);
+    },
+    devices: {
+      /** 本人配过的设备，按 id 分页。 */
+      list(read: () => { afterId?: string; limit?: number } | undefined) {
+        const query = read() ?? {};
+        return service.listDevices(
+          actor,
+          query.afterId ?? "",
+          query.limit ?? 50,
+        );
+      },
+      /**
+       * 撤销一台设备。`expectedRevision` 是读到那一行时的 epoch：两台设备同时
+       * 撤销同一台是两个决定，输的那个要知道自己输了。
+       */
+      revoke(read: () => { deviceId: string; expectedRevision: number }) {
+        const { deviceId, expectedRevision } = read();
+        service.revokeDevice(
+          { ...actor, requireCsrf: csrf },
+          deviceId,
+          expectedRevision,
+        );
+        return { deviceId, revoked: true as const };
+      },
+    },
+  };
 }
 
 function header(request: CoreRequest, name: string): string | undefined {

@@ -852,32 +852,6 @@ export async function fetchWsTicket(): Promise<string> {
   return answer.ticket;
 }
 
-/** 这个 principal 配过的设备，按 id 分页。 */
-export function listIdentityDevices(
-  afterId = "",
-  limit = 50,
-): Promise<IdentityDevicePage> {
-  const query = new URLSearchParams({ limit: String(limit) });
-  if (afterId) query.set("afterId", afterId);
-  return call(`devices?${query.toString()}`, identityDevicesSchema);
-}
-
-/**
- * 撤销一台设备。
- *
- * `expectedRevision` 是读到那一行时的 epoch：两台设备同时撤销同一台是两个
- * 决定，输的那个要知道自己输了，而不是把一次已经发生的撤销再执行一遍。
- */
-export async function revokeIdentityDevice(
-  deviceId: string,
-  expectedRevision: number,
-): Promise<void> {
-  await call("devices/revoke", z.object({ revoked: z.boolean() }), {
-    method: "POST",
-    body: { deviceId, expectedRevision },
-  });
-}
-
 /** 一条授权覆不覆盖这次动作。空的 `workspaceId` 表示「整台机器」。 */
 export function permits(
   session: IdentitySession,

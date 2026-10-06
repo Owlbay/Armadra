@@ -139,6 +139,38 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
     read: "identity:read",
     write: "identity:read",
   },
+  // 会话与设备（契约 §42.1）、账号、凭据、邀请、组与共享（§10、§42.3）、锁定
+  // （§18.1）：同样是清单。读身份是每个登录主体的底线；写的一列是「管别人的」
+  // 那一档——本人的设备与口令、组 admin 所管的组与邀请、兑换邀请，由身份域按
+  // 请求主体放行；共享看那块画布上的 `workspace:share`（工作空间在请求体或
+  // 查询串里，表说不出，由身份域判）。
+  { pattern: /^\/api\/identity\/session$/, read: "identity:read" },
+  {
+    pattern: /^\/api\/identity\/devices/,
+    read: "identity:read",
+    write: "identity:manage",
+  },
+  {
+    pattern: /^\/api\/identity\/lockouts/,
+    read: "identity:manage",
+    write: "identity:manage",
+  },
+  {
+    pattern: /^\/api\/identity\/invitations\/[^/]+\/accept$/,
+    read: "identity:read",
+    write: "identity:read",
+  },
+  {
+    pattern:
+      /^\/api\/identity\/(principals|credentials|invitations|groups)(\/|$)/,
+    read: "identity:read",
+    write: "identity:manage",
+  },
+  {
+    pattern: /^\/api\/identity\/grants$/,
+    read: "workspace:share",
+    write: "workspace:share",
+  },
 
   // 配对短码换票（契约 §24）：手机还没有任何身份，短码本身就是凭据；限流与
   // 档位（公网 `all` 档关掉）在 Gateway 域里判。签发短码随配对票一起，落在下面

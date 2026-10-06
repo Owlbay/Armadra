@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 const mocks = vi.hoisted(() => ({
   nativeShell: false,
@@ -23,7 +24,6 @@ import {
   identitySessionSchema,
   IdentityRequestError,
   IdentityTransportError,
-  listIdentityDevices,
   logoutIdentity,
   onIdentitySessionChange,
   pairIdentity,
@@ -32,7 +32,6 @@ import {
   replaceRejectedCsrf,
   resetIdentityCredentials,
   resumeIdentity,
-  revokeIdentityDevice,
   takePairingTicket,
 } from "./identity";
 
@@ -152,7 +151,11 @@ describe("the browser (server shell) transport", () => {
     expect(calls[0]?.init.credentials).toBe("include");
     expect(currentCsrf()).toBe(SECRET);
 
-    await revokeIdentityDevice("d2", 3);
+    // 旧路径上的写（procedure 那一面见 `security.test.ts`）。
+    await identityRequest("devices/revoke", z.unknown(), {
+      method: "POST",
+      body: { deviceId: "d2", expectedRevision: 3 },
+    });
     const headers = calls[1]?.init.headers as Record<string, string>;
     expect(headers["X-Armadra-CSRF"]).toBe(SECRET);
     expect(JSON.parse(calls[1]?.init.body as string)).toEqual({
@@ -226,7 +229,7 @@ describe("the desktop shell transport", () => {
     });
     expect(calls[0]?.init.credentials).toBe("omit");
 
-    await listIdentityDevices();
+    await identityRequest("devices", z.unknown());
     const headers = calls[1]?.init.headers as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer A");
     expect(headers["X-Armadra-CSRF"]).toBe(undefined);

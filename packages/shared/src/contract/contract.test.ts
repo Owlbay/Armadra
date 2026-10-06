@@ -76,6 +76,8 @@ describe("契约树", () => {
       "forge",
       "github",
       "gitRepository",
+      "security",
+      "accounts",
       "acp",
       "workflows",
       "coordinator",
@@ -309,6 +311,70 @@ describe("§31 与协议包同一份", () => {
           item.status,
         );
       }
+    }
+  });
+});
+
+describe("§42 身份三域", () => {
+  const identityDomains = entries.filter(
+    (entry) =>
+      (entry.path[0] === "identity" && entry.path[1] !== "cloud") ||
+      entry.path[0] === "security" ||
+      entry.path[0] === "accounts",
+  );
+
+  it("都要会话、都挂在 /api/identity/ 的旧路径上，节号是 §42.1–§42.3", () => {
+    expect(identityDomains.length).toBeGreaterThan(40);
+    for (const entry of identityDomains) {
+      expect(entry.meta.scope, entry.name).not.toBeNull();
+      expect(entry.meta.legacy?.path, entry.name).toMatch(/^\/api\/identity\//);
+      expect(entry.meta.contract, entry.name).toMatch(/^§42\.[123]$/);
+      expect(entry.meta.since, entry.name).toBe("1.13");
+    }
+  });
+
+  it("凭据换会话的那几条留在 REST 匿名面，不在契约里", () => {
+    const legacy = new Set(
+      entries.flatMap((entry) =>
+        entry.meta.legacy === undefined
+          ? []
+          : [`${entry.meta.legacy.method} ${entry.meta.legacy.path}`],
+      ),
+    );
+    for (const route of [
+      "GET /api/identity/hello",
+      "POST /api/identity/pair",
+      "POST /api/identity/ws-ticket",
+      "POST /api/identity/session/refresh",
+      "POST /api/identity/session/csrf",
+      "POST /api/identity/session/logout",
+      "POST /api/identity/login",
+      "POST /api/identity/register",
+      "POST /api/identity/mfa/verify",
+      "POST /api/identity/passkey/login/options",
+      "POST /api/identity/passkey/login/verify",
+      "POST /api/identity/oauth/{providerId}/start",
+      "GET /api/identity/oauth/{providerId}/callback",
+      "GET /api/identity/password-reset/{token}",
+      "POST /api/identity/password-reset/{token}",
+      "GET /api/identity/audit/export",
+    ]) {
+      expect(legacy.has(route), route).toBe(false);
+    }
+  });
+
+  it("口令、密钥与令牌只在入参里，出参里只有签发那一次的明文", () => {
+    const secretInputs = new Map([
+      ["accounts.credentials.setPassword", "password"],
+      ["security.oauth.setSecret", "clientSecret"],
+      ["accounts.invitations.accept", "token"],
+    ]);
+    for (const [name, field] of secretInputs) {
+      const entry = entries.find((one) => one.name === name);
+      const input = def(entry!).inputSchema as z.ZodObject;
+      const output = def(entry!).outputSchema as z.ZodObject;
+      expect(Object.keys(input.shape), name).toContain(field);
+      expect(Object.keys(output.shape), name).not.toContain(field);
     }
   });
 });

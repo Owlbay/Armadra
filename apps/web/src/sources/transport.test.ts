@@ -67,6 +67,45 @@ describe("Bearer fetch", () => {
     expect(own.status).toBe(401);
     expect(refresh).toHaveBeenCalledTimes(1);
   });
+
+  it("具名的 401（两步验证的码不对）不重发：重发只会再记一次失败", async () => {
+    const refresh = vi.fn(async () => true);
+    const answers = [
+      { code: "mfa_invalid_code", message: "x" },
+      { code: "unauthenticated", message: "y" },
+      { code: "ok" },
+    ];
+    const inner = vi.fn(
+      async () =>
+        new Response(JSON.stringify(answers.shift()), {
+          status: answers.length === 0 ? 200 : 401,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const wrapped = bearerFetch(inner as unknown as typeof fetch, {
+      origin: ORIGIN,
+      authorization: () => SECRET,
+      wsTicket: async () => "",
+      refresh,
+    });
+    const named = await wrapped(`${ORIGIN}/api/rpc/security/mfa/disable`, {
+      method: "POST",
+      body: "{}",
+    });
+    expect(named.status).toBe(401);
+    expect(((await named.json()) as { code: string }).code).toBe(
+      "mfa_invalid_code",
+    );
+    expect(refresh).not.toHaveBeenCalled();
+    // 会话不认了：换一枚再发一次。
+    const expired = await wrapped(`${ORIGIN}/api/rpc/identity/session`, {
+      method: "POST",
+      body: "{}",
+    });
+    expect(expired.status).toBe(200);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(inner).toHaveBeenCalledTimes(3);
+  });
 });
 
 /** 一个假的原生 WebSocket：记下 url 与协议，手动触发事件。 */

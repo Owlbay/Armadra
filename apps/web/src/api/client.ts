@@ -120,12 +120,18 @@ async function sendRpc(
     response = await send();
     const used = headers.get(CSRF_HEADER);
     if (
-      used !== null &&
+      source.credentials.mode === "cookie" &&
       response.status === 403 &&
       (await csrfRefusal(response))
     ) {
-      const renewed = await source.credentials.renewCsrf(used);
-      if (renewed !== null) {
+      // 发出时手里还没有令牌（会话恰好在这次调用途中才建好，比如配对的那一刻）：
+      // 现在有了就带上再发一次；带了却被拒是被别处换掉了，换一枚。门在处理之前
+      // 就拒了，不会执行两次。
+      const renewed =
+        used === null
+          ? await source.credentials.csrf()
+          : await source.credentials.renewCsrf(used);
+      if (renewed !== null && renewed !== used) {
         headers.set(CSRF_HEADER, renewed);
         response = await send();
       }

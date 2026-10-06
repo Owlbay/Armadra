@@ -21,6 +21,7 @@ import { createLoopbackAdmission } from "./loopback";
 import { HEARTBEAT_MS } from "./protocol";
 import { installCloud } from "./cloud";
 import { installOAuth } from "./oauth";
+import { installIdentityProcedures } from "./procedures";
 import { resolveBreachMode } from "./policy";
 import { createRouteGuard } from "./route-access";
 import { IdentityService } from "./service";
@@ -202,7 +203,16 @@ export function installIdentity(context: CoreContext): void {
 
   // OAuth / OIDC 的挂点（契约 §18.5）。它自己登记更长的原样前缀，所以放在
   // 哪一行都先于下面这条整段接管；放在这里是为了让它拿到同一份服务。
-  installOAuth(context, { store, service, accounts, security });
+  const oauth = installOAuth(context, { store, service, accounts, security });
+
+  // 身份三域的 procedure（契约 §42）：与上面这几条旧路径调同一份操作。
+  installIdentityProcedures(context.server, {
+    service,
+    accounts,
+    security,
+    http,
+    oauth,
+  });
 
   // 云登录与登记（契约 §31）：同一份会话、账号与加固；`/api/identity/cloud` 也是
   // 更长的原样前缀，先于下面的整段接管。
