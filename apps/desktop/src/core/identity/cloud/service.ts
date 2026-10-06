@@ -45,8 +45,9 @@ export class CloudService {
   register(
     input: { issuer: string; registrationToken: string; label?: string },
     principalId?: string,
+    pinnedFingerprint?: string,
   ) {
-    return this.registry.register(input, principalId);
+    return this.registry.register(input, principalId, pinnedFingerprint);
   }
 
   revoke(input: { issuer: string }, principalId?: string) {

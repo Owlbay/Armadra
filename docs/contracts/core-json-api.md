@@ -403,7 +403,9 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 
 角色是 `viewer` ⊂ `editor` ⊂ `operator` ⊂ `driver`，编译表只在 `core/identity/roles.ts`。
 
-G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：设成功之后撤掉这个人的其它会话（安全审查 L2）——本人换口令时留下发请求的这个会话，owner 或 `identity:manage` 替人设时那个人的会话全部撤掉；这个人手里还没用的口令重置令牌（§25）一并作废，审计 `identity.credential.set` 的 `detail` 多 `revokedSessions`。`POST invitations` 的 `ttlMs` 缺省 7 天、最长 30 天（安全审查 L3），更长的夹到 30 天，不是正整数答 400 `INVALID_ARGUMENT`；答案的 `expiresAtMs` 是夹过之后的。替某人签发口令重置链接是 `POST principals/{id}/password-reset`，见 §25。
+G5-02 追加：`POST credentials` 的答案多 `revokedSessions`（数字）：设成功之后撤掉这个人的其它会话（安全审查 L2）——本人换口令时留下发请求的这个会话，owner 或 `identity:manage` 替人设时那个人的会话全部撤掉；这个人手里还没用的口令重置令牌（§25）一并作废，审计 `identity.credential.set` 的 `detail` 多 `revokedSessions`。`POST invitations` 的 `ttlMs` 缺省 7 天、最长 30 天（安全审查 L3），更长的夹到 30 天，不是正整数答 400 `INVALID_ARGUMENT`；答案的 `expiresAtMs` 是夹过之后的。
+
+**多次使用（A4-1，表 `identity_invitation_uses` 在迁移 `0040`）。** `POST invitations` 可带 `maxUses`（1–1000 的整数，其它值答 400 `INVALID_ARGUMENT`；省略 = 一次性，沿用旧行为）；答案与 `GET invitations` 的每一项多 `maxUses`（一次性为 `null`）与 `uses`（已兑换的不同的人数）。兑换（`accept`、口令注册、云登录）在同一笔事务里以 `uses < max_uses` 的条件 UPDATE 计数并记下是谁，并发的第 N+1 个什么也改不动、答 401；同一个人再次兑换是幂等成功，不加计数、用满之后也仍成功（过期、作废之后不行）。用满时 `consumedBy` / `consumedAtMs` 记最后一位与时刻，作废沿用空主体。替某人签发口令重置链接是 `POST principals/{id}/password-reset`，见 §25。
 
 **判定在哪里生效**（R8）：
 
@@ -2164,6 +2166,7 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
   3. `POST <issuer>/v1/sources/register { registrationToken, sourceId, publicKey, name, kind, coreVersion, capabilities, protocol }`（`name` 缺省为主机名，`kind` 按壳是 `desktop` / `server`）。远程服务的拒绝换成本节的码：`registration_token_invalid` 401、`protocol_unsupported` 426、`source_taken` → `409 cloud_already_registered`、`rate_limited` 429；连不上或答案不完整 `502 source_unreachable`；证书与钉的指纹对不上 `400 fingerprint_mismatch`。登记答案里的 `issuer` 与 `jwksUrl` 的来源都必须是这个 issuer，否则 `400 cloud_issuer_mismatch`。
   4. `GET <jwksUrl>` 取公钥集，与可信来源、中继来源、远程服务账号一起写进 `cloud_registrations`；之后起隧道（§32，不等），审计 `cloud.register`，答 `{ issuer, sourceId, relayOrigins, trustedOrigins, tunnel }`。任何一步失败都不留行。
 - 对远程服务的请求按「远程服务」表（§33.2）里同一个 issuer 的 CA 指纹钉扎；表里没有就用系统信任。
+  - 只有旧路径 `POST /api/identity/cloud/register` 另收可选的 `fingerprint`（64 位十六进制，也收带冒号或大写的写法；procedure 的入参不含它）：用注册令牌登记自签证书的个人中转没有口令可走 `sources.remoteAdd`，服务器壳 CLI（`cloud register --fingerprint`）靠它先把信任锚钉进「远程服务」表（只带指纹、无凭据的一行），登记与隧道都按它验证；同一 issuer 已有行且指纹不同答 `400 fingerprint_mismatch`，登记失败时新建的那一行一并撤掉。
 - **撤销**（`revoke`，`{ issuer }`，也收查询串 `?issuer=`）：停隧道、行记 `revoked_at_ms`，之后这个 issuer 签的断言一律 `cloud_not_registered`；没有有效登记答 `404 not_found`。已映射的账号与授予不动（owner 在账号页逐个撤）。撤销过的 issuer 可以再登记。审计 `cloud.revoke`。
 - **状态**（`status`）：`{ registrations: [{ issuer, mode, label?, jwksFetchedAtMs, trustedOrigins, relayOrigins, registeredAtMs, tunnel }], sourcePublicKey, sourceId }`；`tunnel` 是 `tunnelStatusSchema`，没装隧道时恒为 `{ state: "disabled", node: null, since: null, streams: 0, lastError: null }`。源公钥第一次读状态时也会生成私钥。
 - **可信来源**（`trustedOrigins`，`PUT /api/identity/cloud/{issuer}/trusted-origins`，路径里的 issuer 按 URL 编码）：整份替换；每条取规范来源拼法（只收 `https:`，回环另收 `http:`），去重，最多 32 条；不合法 400，没有有效登记 404。隧道的准入（§32）按它判来源。

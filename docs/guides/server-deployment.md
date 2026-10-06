@@ -184,6 +184,23 @@ armadra.example.com {
 | Cloudflare Tunnel | `cloudflared` 指向 `https://127.0.0.1:8443`（`noTLSVerify` 或给它上游证书），`--public-origin https://armadra.example.com` | 免费；请求体上限 100 MB，大文件走分块上传（已支持）               |
 | 自托管反向隧道    | frp / rathole / wstunnel + 一台小 VPS，VPS 上按 3.3 做代理                                                                 | 全部自持                                                          |
 
+### 4.1 个人中转
+
+服务器壳可以登记到自己的个人中转（`armadra-relay personal`），经它的隧道出站，不开入站端口。命令对**运行中**的服务器壳操作（同一个 `--data-dir`），凭据只走环境变量或标准输入，不进命令行、输出与日志：
+
+```sh
+# 注册令牌（中继签发）与自签证书的 CA 指纹（中继 personal status 打印）
+ARMADRA_CLOUD_REGISTRATION_TOKEN=… armadra-server cloud register --issuer https://relay.example.com --fingerprint <64 位十六进制>
+# 或用账号口令：登录、取注册令牌、登记一步做完
+armadra-server cloud login --issuer https://relay.example.com --account me --fingerprint <指纹> --password-stdin < pw.txt
+armadra-server cloud status            # 登记与隧道状态（--output json）
+armadra-server cloud revoke --issuer https://relay.example.com
+# 生成分享链接：先建邀请，再让中继出链接，打印 https://<中继>/j/<id>#<密>.<令牌>
+armadra-server invite --cloud-link --issuer https://relay.example.com --workspace <画布 id> --role editor --max-uses 5 --expires 7d
+```
+
+命令都是幂等的（已登记则跳过）。容器里给 `ARMADRA_CLOUD_ISSUER` 与 `ARMADRA_CLOUD_REGISTRATION_TOKEN`（自签证书再加 `ARMADRA_CLOUD_FINGERPRINT`，可选 `ARMADRA_CLOUD_LABEL`），入口在 serve 就绪后自动登记一次，失败只记一行、不阻塞启动。Windows 上服务器壳没有私有通道，这些命令不可用。
+
 ## 5. 首个管理员与成员
 
 1. 启动日志里有一行 `armadra-server pairing https://…/#pair=<票>`，两分钟、一次性。容器：`docker compose logs armadra`。

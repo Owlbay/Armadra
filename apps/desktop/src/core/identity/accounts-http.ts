@@ -405,6 +405,9 @@ function invitations(
         targetGroupId: optional(body.targetGroupId),
         targetWorkspaceId: optional(body.targetWorkspaceId),
         ...(typeof body.ttlMs === "number" ? { ttlMs: body.ttlMs } : {}),
+        ...(body.maxUses !== undefined && body.maxUses !== null
+          ? { maxUses: body.maxUses as number }
+          : {}),
       }),
     };
   }
