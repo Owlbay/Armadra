@@ -76,6 +76,9 @@ describe("契约树", () => {
       "forge",
       "github",
       "gitRepository",
+      "acp",
+      "workflows",
+      "coordinator",
     ]);
   });
 

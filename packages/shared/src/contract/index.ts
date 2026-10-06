@@ -5,8 +5,10 @@ import type {
   InferSchemaOutput,
 } from "@orpc/contract";
 
+import { acp } from "./acp.js";
 import { agents } from "./agents.js";
 import { boards } from "./boards.js";
+import { coordinator } from "./coordinator.js";
 import { identity } from "./cloud.js";
 import { files } from "./files.js";
 import { forge } from "./forge.js";
@@ -18,6 +20,7 @@ import { settings } from "./settings.js";
 import { sources } from "./sources.js";
 import { system } from "./system.js";
 import { terminals } from "./terminals.js";
+import { workflows } from "./workflows.js";
 import { workspaces } from "./workspaces.js";
 
 /**
@@ -41,6 +44,9 @@ export const contract = {
   forge,
   github,
   gitRepository,
+  acp,
+  workflows,
+  coordinator,
 };
 
 export type Contract = typeof contract;
