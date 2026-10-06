@@ -562,8 +562,8 @@ describe("契约与 core 的两张表（files）", () => {
     entry.name.startsWith("files."),
   );
 
-  it("16 条都在契约里，且都绑工作空间", () => {
-    expect(entries).toHaveLength(16);
+  it("17 条都在契约里，且都绑工作空间", () => {
+    expect(entries).toHaveLength(17);
     for (const entry of entries) {
       expect(entry.meta.workspaceKey, entry.name).toBe("workspaceId");
     }
