@@ -100,3 +100,44 @@ describe("中继托管页面的登录", () => {
     );
   });
 });
+
+describe("刷新页面之后", () => {
+  it("续上了：不出表单，直接进画布", async () => {
+    const target = {
+      ...relay([host(A, "laptop")]),
+      resume: vi.fn(async () => ({ kind: "entered" as const })),
+    };
+    const onEntered = vi.fn();
+    render(<RelaySignIn relay={target} onEntered={onEntered} />);
+    expect(screen.queryByLabelText("口令")).toBeNull();
+    expect(screen.getByLabelText("连接中")).toBeTruthy();
+    await waitFor(() => expect(onEntered).toHaveBeenCalledTimes(1));
+    expect(target.resume).toHaveBeenCalledTimes(1);
+    expect(target.signIn).not.toHaveBeenCalled();
+  });
+
+  it("续不上（没记下、令牌被拒）：回到登录表单", async () => {
+    const target = {
+      ...relay([host(A, "laptop")]),
+      resume: vi.fn(async () => null),
+    };
+    render(<RelaySignIn relay={target} onEntered={vi.fn()} />);
+    expect(await screen.findByLabelText("口令")).toBeTruthy();
+  });
+
+  it("登录还在、那台主机进不去：列出目录与原因，可以再挑", async () => {
+    const target = {
+      ...relay([host(A, "laptop")]),
+      resume: vi.fn(async () => ({
+        kind: "signedIn" as const,
+        hosts: [host(A, "laptop", false), host(B, "desktop")],
+        failure: "offline" as const,
+      })),
+    };
+    const onEntered = vi.fn();
+    render(<RelaySignIn relay={target} onEntered={onEntered} />);
+    fireEvent.click(await screen.findByRole("button", { name: /desktop/ }));
+    await waitFor(() => expect(onEntered).toHaveBeenCalled());
+    expect(target.enter).toHaveBeenCalledWith(host(B, "desktop"));
+  });
+});
