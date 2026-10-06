@@ -73,6 +73,8 @@ describe("契约树", () => {
       "boards",
       "git",
       "agents",
+      "forge",
+      "github",
       "gitRepository",
       "security",
       "accounts",

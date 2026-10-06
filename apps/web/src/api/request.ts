@@ -41,8 +41,10 @@ export class RuntimeConnectionError extends Error {
  * 中文。所以认得出的码一律取这张表；认不出的才落到 `message`，那是最后一道
  * 兜底而不是常态。
  *
- * 大写那几个是 GitHub 面自己的码（`api/github.ts` 另有一层按用途的分类，
- * 那一层不受影响：它读的是 `code`，不是 `message`）。
+ * 大写那几个是 GitHub 面从前的拼法（契约 §41.1 已换成 snake_case）：再保留一个
+ * minor，让还没升级的 core 答的大写码照样认得，且与它对应的 snake_case 取同一句
+ * 话（`message-by-code.test.ts` 一一对着看）。`api/github.ts` 另有一层按用途的
+ * 分类，它读的是 `code`，不是 `message`。
  */
 const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   not_found: "error.notFound",
@@ -55,6 +57,7 @@ const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   not_implemented: "error.notImplemented",
   internal: "error.internal",
   unsupported: "error.unsupported",
+  unknown_outcome: "error.unknownOutcome",
   // 这一条有自己的那句话：要用户做的事不是「去装点什么」，是「工作区在别的
   // 机器上」——切换执行主机能解决它。
   unsupported_on_remote: "error.unsupportedOnRemote",
@@ -101,7 +104,7 @@ const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   link_exhausted: "error.linkExhausted",
   link_secret_invalid: "error.linkSecretInvalid",
   UNAUTHENTICATED: "error.unauthenticated",
-  PERMISSION_DENIED: "error.permissionDenied",
+  PERMISSION_DENIED: "error.forbidden",
   NOT_FOUND: "error.notFound",
   CONFLICT: "error.conflict",
   INVALID_ARGUMENT: "error.badRequest",

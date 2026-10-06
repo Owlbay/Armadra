@@ -88,7 +88,14 @@ export function isGithubError(
   return error instanceof GithubError && error.kind === kind;
 }
 
-/** JSON 面上的一次拒绝：HTTP 状态 + 状态码 + 一句固定的英文。 */
+/**
+ * JSON 面上的一次拒绝：HTTP 状态 + 码 + 一句固定的英文。
+ *
+ * 码是注册表里的 snake_case（`packages/shared/src/contract/errors.ts`，契约 §41.1）；
+ * 从前的大写拼法（`NOT_FOUND`、`PERMISSION_DENIED` ……）已换掉，页面在一个 minor
+ * 里两种拼法都认（`api/request.ts` 的 `MESSAGE_BY_CODE`、`api/github.ts` 的
+ * `classifyGithubFailure`）。
+ */
 export interface GithubFailure {
   readonly status: number;
   readonly code: string;
@@ -97,8 +104,8 @@ export interface GithubFailure {
 
 /**
  * 域错误 → 线上的拒绝。逐条对着合并前实现的
- * `githubFailure`，状态码和文案都不动——前端 `apps/web/src/api/github.ts`
- * 的 `classifyGithubFailure` 认的就是这些。
+ * `githubFailure`，状态与文案都不动，只有码换成 snake_case——前端
+ * `apps/web/src/api/github.ts` 的 `classifyGithubFailure` 按码分档。
  */
 export function githubFailure(error: unknown): GithubFailure {
   const kind = error instanceof GithubError ? error.kind : "internal";
@@ -106,51 +113,51 @@ export function githubFailure(error: unknown): GithubFailure {
     case "unsupported":
       return {
         status: 501,
-        code: "UNSUPPORTED",
+        code: "unsupported",
         message: "This Host has no usable GitHub credential",
       };
     case "permission":
       return {
         status: 403,
-        code: "PERMISSION_DENIED",
+        code: "forbidden",
         message: "GitHub permission or CSRF check failed",
       };
     case "invalid":
       return {
         status: 400,
-        code: "INVALID_ARGUMENT",
+        code: "bad_request",
         message: "Invalid GitHub request",
       };
     case "rateLimited":
       return {
         status: 429,
-        code: "RESOURCE_EXHAUSTED",
+        code: "rate_limited",
         message: "GitHub rate limit reached; retry after it resets",
       };
     case "unknownOutcome":
       // 这次写可能已经生效。调用方必须重新读，永远不要重试。
       return {
         status: 504,
-        code: "UNKNOWN_OUTCOME",
+        code: "unknown_outcome",
         message: "The GitHub write result was not read; reload before retrying",
       };
     case "conflict":
       return {
         status: 409,
-        code: "CONFLICT",
+        code: "conflict",
         message: "The remote or the stored revision changed; reload it",
       };
     case "notFound":
       return {
         status: 404,
-        code: "NOT_FOUND",
+        code: "not_found",
         message:
           "The repository, Issue, pull request or reference was not found",
       };
     default:
       return {
         status: 500,
-        code: "INTERNAL",
+        code: "internal",
         message: "GitHub operation failed",
       };
   }
@@ -159,6 +166,6 @@ export function githubFailure(error: unknown): GithubFailure {
 /** 身份域的拒绝，兼容面上的拼法和 Host `authFailure` 一致。 */
 export const UNAUTHENTICATED: GithubFailure = {
   status: 401,
-  code: "UNAUTHENTICATED",
+  code: "unauthenticated",
   message: "Device session is invalid or expired",
 };

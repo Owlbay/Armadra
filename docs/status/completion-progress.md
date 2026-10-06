@@ -2504,3 +2504,31 @@
 - 形状错（缺字段、类型不对）经旧路径与 procedure 由入参校验先答 `bad_request`（带 `details.issues`），与迁移前那句原话不同；码与状态不变。旧路径答 500 `internal_error` 时，门面按 §34.1 不外泄原话。
 - `log` 的 `limit` 在契约里是数字，旧路径体里写成数字串的会被形状校验拒绝（页面一直发数字）。
 - `log`、`statusBatch`、`worktreeBinding` 只读但旧路径是 `POST`，scope 照旧是 `git:write`，没有顺手改成 `git:read`。
+
+## E3-6 工程规范化：forge / github 域迁到契约（契约 §41）
+
+规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-6）；契约 §41。
+
+做了什么：
+
+- **33 个本地 schema 搬进 shared**（`packages/shared/src/api/github.ts`）：同一张字段表实例化两次——页面读回的形状（`int64` 回 `bigint`、缺字段补零、认不出的枚举落 `UNSPECIFIED`）与线上的形状（契约出参，无变换、多出的字段原样放行，`githubIssueWireSchema` 等）。13 个枚举常量一并搬入，页面 `api/github.ts` 原样再导出，调用点 import 不变。
+- **契约**：`github.*` 24 条（`contract/github.ts`，§41.1）、`forge.*` 20 条（`contract/forge.ts`，§41.2，旧路径全挂 `meta.legacy`；配置的两个路径形各一对 procedure）。`since` 1.11，协议 minor 10 → 11。
+- **core**：forge 收成一份 `operations`（`forge/routes.ts`），旧 handler 与 `registerProcedures` 共用；github 的 24 个动词经 `GithubHttp.register` 登记，与旧的 `POST /api/github/<动词>` 走同一个 `invoke` 与同一张字段表。procedure 的调用方来自准入门核验过的请求身份，`GithubService.authorize` 照旧再核。
+- **错误码 snake_case**：GitHub 面 `INVALID_ARGUMENT / UNAUTHENTICATED / PERMISSION_DENIED / NOT_FOUND / CONFLICT / RESOURCE_EXHAUSTED / UNSUPPORTED / UNKNOWN_OUTCOME / INTERNAL` 换成 `bad_request / unauthenticated / forbidden / not_found / conflict / rate_limited / unsupported / unknown_outcome / internal`（状态与英文原话不变）；forge 的 500 `internal_error` 并入 `internal`。页面 `MESSAGE_BY_CODE` 与 `classifyGithubFailure` 两种拼法都认一个 minor，`api/message-by-code.test.ts` 逐对核对取同一句话。
+- **页面**：`api/github.ts` 的 `GithubApi` 经 `githubApiFor(rpc)`（`runtimeApi.openGithub(workspaceId, source?)`）走 `clientFor(source)`；`api/forge.ts` 的函数经 `currentClient().forge`。
+- **契约 §41**：§41.1、§41.2 生成块与说明；§3.3 错误码表改写；§5、§29 加指向。
+
+实测（macOS arm64，基于最新 origin/main，protocol minor 11）：
+
+- `pnpm check`：除 `notices:check` 外全过（lint 0 error；`notices:check` 要装依赖的离线仓库，本机该 worktree 没有，本包未动依赖，未跑）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：424 个文件通过、11 跳过（5047 过 / 74 跳过），脚本 72 过 0 败。新增 `core/contract/parity-forge.test.ts`（16 条：路由表原 handler、旧路径、procedure 三者逐字节相等，含 GitLab 多级子组、DELETE 查询串、令牌与地址凭据不回显、远端 401/403/429 的码）与 `parity-github.test.ts`（12 条：旧路径与 procedure 经真会话对偶，含只读会话写被拒、别的工作空间被拒、限流原话不外传、无会话 401）。
+- `pnpm --filter @armadra/web test`：401 个文件、3737 条通过；`typecheck` 通过。`api/github.test.ts`、`api/forge.test.ts` 按 procedure 线上形状改写。`@armadra/server`、`@armadra/shared` 测试通过。
+- dev-stack Gitea（自起一个独立容器 `127.0.0.1:3010`，用后已删；共享卷里的管理员口令与本 worktree 的不符，所以没用 `dev-stack up gitea`，已把自己起的 `armadra-dev-gitea-1` 点名 `down`）：`gitea.devstack.integration.test.ts` 通过；`forge-panel` 探针（真 Gitea + 回放的假 GitLab，页面经 procedure）全部截图通过。A 档 `ui-features-e2e` 通过。
+
+没做 / 偏离：
+
+- **github 没有 `meta.legacy`**：`/api/github/` 是整段自己认证的原样路由（Origin、CSRF、查询串里的工作空间），不在路由表的逐条模式里；旧路径保留为原样路由，与 procedure 的对偶由 `parity-github.test.ts` 核对。
+- 旧路径的 GitHub 错误码也换成了 snake_case（外部脚本若认大写要跟着改）。
+- 形状错（类型不对）经 procedure 与 forge 旧路径由入参校验先答 `bad_request`（带 `details.issues`）；forge 入参的必填检查留在域里，所以缺字段仍是原话。
+- 门面补了一处：空体的旧路径 `DELETE` 把查询串当作体（上游只读 `GET` 的查询串）；`/api/forge/resolve` 在路由规则表里单列为读权限。
+- 大写拼法与 `error.permissionDenied` 文案键删去（`PERMISSION_DENIED` 现取 `error.forbidden`）；大写拼法的映射下个 minor 删。

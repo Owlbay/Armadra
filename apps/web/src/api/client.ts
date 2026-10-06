@@ -54,7 +54,7 @@ import { gitApiFor } from "./git";
 import { gitRepositoryApiFor } from "./git-repository";
 import { usageApi } from "./usage";
 import { settingsApiFor } from "./settings";
-import { githubApi } from "./github";
+import { githubApiFor } from "./github";
 import { automationsApi } from "./automations";
 
 export {
@@ -317,6 +317,6 @@ export const runtimeApi = {
   ...gitRepositoryApiFor(currentClient),
   ...usageApi,
   ...settingsApiFor(currentClient),
-  ...githubApi,
+  ...githubApiFor(sourceClient),
   ...automationsApi,
 };

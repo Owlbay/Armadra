@@ -113,6 +113,8 @@ export function install(context: CoreContext): GithubDomain | undefined {
   context.server.raw(API_PREFIX, (request, response, cors) =>
     http.handle(request, response, cors),
   );
+  // 同一份实现登记成契约 procedure（契约 §41.1）。
+  http.register(context.server);
   // 面板先看 Hello 的能力表再决定要不要发请求，所以装配成功要报出去。
   registerCapability(GITHUB_CAPABILITY);
   context.log.info("GitHub 域已装配", { methods: GITHUB_METHODS.length });
