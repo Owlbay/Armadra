@@ -201,8 +201,21 @@ describe("workspaces.events", () => {
     client.socket.pause();
     const total = 3_000;
     const padding = "x".repeat(8_000);
-    for (let index = 0; index < total; index += 1) {
-      publish(core, String(index), { padding });
+    // 一班事务里发完。outbox 不自己开事务（见 stream.ts `record`），单发就是
+    // 3000 次自动提交，每次 WAL 落盘一次：在真刷盘的盘上（Windows 的
+    // FlushFileBuffers，或 macOS 开 `PRAGMA fullfsync`）光写库就要几十秒到两分钟，
+    // 这段同步循环一直占着事件循环，用例在超时之后才回得来。这条用例测的是背压，
+    // 不是盘速；业务上的一阵事件本来也随一次写入的事务落库。
+    const database = core.db.database;
+    database.exec("BEGIN");
+    try {
+      for (let index = 0; index < total; index += 1) {
+        publish(core, String(index), { padding });
+      }
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
     }
     client.socket.resume();
     const ended = await client.until(
