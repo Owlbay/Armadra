@@ -51,7 +51,7 @@ const read = (path: string, method: "GET" | "POST" = "GET") =>
   });
 
 const write = (
-  section: "§33.1" | "§33.2" | "§33.6" | "§33.7",
+  section: "§33.1" | "§33.2" | "§33.6" | "§33.7" | "§33.9",
   method: "POST" | "PUT" | "DELETE",
   path: string,
 ) =>
@@ -73,6 +73,51 @@ export const mountByLinkInputSchema = z.object({
   url: z.string().min(1).max(4096),
   fingerprint: z.string().optional(),
   label: z.string().optional(),
+});
+
+/**
+ * 分享链接（契约 §33.9）：本机经一个远程服务发出的 `source_invite` 链接。`state`
+ * 由 core 按远程服务的记录算：撤销 > 过期 > 用尽 > 生效。`copyable` 表示本机还
+ * 存着带片段的整条链接（只有生效中的才存）；整条链接只经 `shareLinkUrl` 与创建的
+ * 答案出来，列表里没有。
+ */
+export const shareLinkStateSchema = z.enum([
+  "active",
+  "expired",
+  "exhausted",
+  "revoked",
+]);
+
+export const shareLinkSchema = z.object({
+  linkId: z.string(),
+  label: z.string(),
+  role: z.string(),
+  /** 链接背后那张邀请指向的工作空间；本机没有记录时为空串。 */
+  workspaceId: z.string(),
+  createdAtMs: z.number().int(),
+  expiresAtMs: z.number().int(),
+  uses: z.number().int(),
+  maxUses: z.number().int().nullable(),
+  revokedAtMs: z.number().int().nullable(),
+  state: shareLinkStateSchema,
+  copyable: z.boolean(),
+});
+
+/** 一条链接最多可用的次数（与 core 邀请的 `maxUses` 上限相同）。 */
+export const SHARE_LINK_MAX_USES = 1000;
+
+const shareLinkRefSchema = z.object({
+  serviceId: z.string(),
+  linkId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+});
+
+export const shareLinkCreateInputSchema = z.object({
+  serviceId: z.string(),
+  workspaceId: z.string().min(1).max(256),
+  role: z.string(),
+  ttlMs: z.number().int().positive(),
+  maxUses: z.number().int().min(1).max(SHARE_LINK_MAX_USES),
+  label: z.string().max(128).optional(),
 });
 
 export const sources = {
@@ -266,6 +311,100 @@ export const sources = {
       ),
     })
     .meta(write("§33.7", "POST", "/api/sources/join")),
+  /**
+   * 本机经这个远程服务发出的分享链接（§33.9），含已撤销、过期、用尽的；顺带删掉
+   * 不再生效的那些存着的整条链接。本机没登记到它时答空表。
+   */
+  shareLinks: oc
+    .input(z.object({ serviceId: z.string() }))
+    .output(z.object({ links: z.array(shareLinkSchema) }))
+    .errors({
+      ...denied,
+      ...errors.pick(
+        "not_found",
+        "source_unauthorized",
+        "source_unreachable",
+        "not_implemented",
+      ),
+    })
+    .meta(
+      meta({
+        scope: "settings:read",
+        since: "1.16",
+        contract: "§33.9",
+        legacy: {
+          method: "GET",
+          path: "/api/sources/remotes/{serviceId}/links",
+        },
+      }),
+    ),
+  /** 签一张本机邀请，请远程服务建一条指向它的链接，整条链接存进 SecretStore。 */
+  shareLinkCreate: oc
+    .input(shareLinkCreateInputSchema)
+    .output(z.object({ link: shareLinkSchema, url: z.string() }))
+    .errors({
+      ...denied,
+      ...errors.pick(
+        "bad_request",
+        "not_found",
+        "cloud_not_registered",
+        "source_unauthorized",
+        "source_unreachable",
+        "rate_limited",
+        "not_implemented",
+      ),
+    })
+    .meta(
+      meta({
+        scope: "settings:write",
+        since: "1.16",
+        contract: "§33.9",
+        legacy: {
+          method: "POST",
+          path: "/api/sources/remotes/{serviceId}/links",
+        },
+      }),
+    ),
+  /** 再取一次整条链接（含 `#` 片段）；本机没存着答 `not_found`。 */
+  shareLinkUrl: oc
+    .input(shareLinkRefSchema)
+    .output(z.object({ url: z.string() }))
+    .errors({ ...denied, ...errors.pick("not_found") })
+    .meta(
+      meta({
+        scope: "settings:write",
+        since: "1.16",
+        contract: "§33.9",
+        legacy: {
+          method: "POST",
+          path: "/api/sources/remotes/{serviceId}/links/{linkId}/url",
+        },
+      }),
+    ),
+  /** 远程服务撤链接（连同它名下的访客），本机作废那张邀请、删存着的整条链接。 */
+  shareLinkRevoke: oc
+    .input(shareLinkRefSchema)
+    .output(empty)
+    .errors({
+      ...denied,
+      ...errors.pick(
+        "not_found",
+        "source_unauthorized",
+        "source_unreachable",
+        "not_implemented",
+      ),
+    })
+    .meta(
+      meta({
+        scope: "settings:write",
+        since: "1.16",
+        contract: "§33.9",
+        legacy: {
+          method: "DELETE",
+          path: "/api/sources/remotes/{serviceId}/links/{linkId}",
+        },
+      }),
+    ),
 };
 
 export type ClientSource = z.infer<typeof clientSourceSchema>;
@@ -274,3 +413,6 @@ export type RemoteSourceSummary = z.infer<typeof remoteSourceSummarySchema>;
 export type SourceSession = z.infer<typeof sourceSessionSchema>;
 export type RemoteAddInput = z.infer<typeof remoteAddInputSchema>;
 export type MountByLinkInput = z.infer<typeof mountByLinkInputSchema>;
+export type ShareLink = z.infer<typeof shareLinkSchema>;
+export type ShareLinkState = z.infer<typeof shareLinkStateSchema>;
+export type ShareLinkCreateInput = z.infer<typeof shareLinkCreateInputSchema>;

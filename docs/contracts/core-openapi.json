@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "Armadra core",
-    "version": "1.15",
+    "version": "1.16",
     "description": "契约 procedure 的入参与出参（docs/contracts/core-json-api.md §34）。线上是 `POST /api/rpc/<域>/<动词>`，体按 `{ json }` 编码，下列 schema 是 `json` 那一格；失败一律是 `CoreError`。由 tools/contract/generate.mjs 生成，不要手改。"
   },
   "openapi": "3.1.1",
@@ -6895,6 +6895,586 @@
           "legacy": {
             "method": "POST",
             "path": "/api/sources/join"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/shareLinks": {
+      "post": {
+        "operationId": "sources.shareLinks",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "serviceId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["serviceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "links": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "linkId": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "role": {
+                            "type": "string"
+                          },
+                          "workspaceId": {
+                            "type": "string"
+                          },
+                          "createdAtMs": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "expiresAtMs": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "uses": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "maxUses": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "revokedAtMs": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "state": {
+                            "enum": [
+                              "active",
+                              "expired",
+                              "exhausted",
+                              "revoked"
+                            ],
+                            "type": "string"
+                          },
+                          "copyable": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "linkId",
+                          "label",
+                          "role",
+                          "workspaceId",
+                          "createdAtMs",
+                          "expiresAtMs",
+                          "uses",
+                          "maxUses",
+                          "revokedAtMs",
+                          "state",
+                          "copyable"
+                        ]
+                      }
+                    }
+                  },
+                  "required": ["links"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "501",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "502",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.9",
+          "scope": "settings:read",
+          "since": "1.16",
+          "legacy": {
+            "method": "GET",
+            "path": "/api/sources/remotes/{serviceId}/links"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/shareLinkCreate": {
+      "post": {
+        "operationId": "sources.shareLinkCreate",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "serviceId": {
+                    "type": "string"
+                  },
+                  "workspaceId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "role": {
+                    "type": "string"
+                  },
+                  "ttlMs": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991,
+                    "exclusiveMinimum": 0
+                  },
+                  "maxUses": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000
+                  },
+                  "label": {
+                    "type": "string",
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "serviceId",
+                  "workspaceId",
+                  "role",
+                  "ttlMs",
+                  "maxUses"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "link": {
+                      "type": "object",
+                      "properties": {
+                        "linkId": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "role": {
+                          "type": "string"
+                        },
+                        "workspaceId": {
+                          "type": "string"
+                        },
+                        "createdAtMs": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "expiresAtMs": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "uses": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "maxUses": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "revokedAtMs": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "state": {
+                          "enum": ["active", "expired", "exhausted", "revoked"],
+                          "type": "string"
+                        },
+                        "copyable": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "linkId",
+                        "label",
+                        "role",
+                        "workspaceId",
+                        "createdAtMs",
+                        "expiresAtMs",
+                        "uses",
+                        "maxUses",
+                        "revokedAtMs",
+                        "state",
+                        "copyable"
+                      ]
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["link", "url"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "400",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "429",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "501",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "502",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.9",
+          "scope": "settings:write",
+          "since": "1.16",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/sources/remotes/{serviceId}/links"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/shareLinkUrl": {
+      "post": {
+        "operationId": "sources.shareLinkUrl",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "serviceId": {
+                    "type": "string"
+                  },
+                  "linkId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                  }
+                },
+                "required": ["serviceId", "linkId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["url"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.9",
+          "scope": "settings:write",
+          "since": "1.16",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/sources/remotes/{serviceId}/links/{linkId}/url"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/shareLinkRevoke": {
+      "post": {
+        "operationId": "sources.shareLinkRevoke",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "serviceId": {
+                    "type": "string"
+                  },
+                  "linkId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                  }
+                },
+                "required": ["serviceId", "linkId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "501",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "502",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§33.9",
+          "scope": "settings:write",
+          "since": "1.16",
+          "legacy": {
+            "method": "DELETE",
+            "path": "/api/sources/remotes/{serviceId}/links/{linkId}"
           }
         }
       }
