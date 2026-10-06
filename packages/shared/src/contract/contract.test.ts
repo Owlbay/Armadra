@@ -308,6 +308,14 @@ describe("§31 与协议包同一份", () => {
     ]);
   });
 
+  const CORE_LOCAL_CODES = new Set([
+    "address_invalid",
+    "address_https_only",
+    "address_plaintext_loopback_only",
+    "address_has_credentials",
+    "fingerprint_invalid",
+  ]);
+
   it("§31 的错误码与协议包注册表同拼法、同状态", async () => {
     const { ERRORS } = (await import(
       "@armadra/platform-protocol/errors"
@@ -316,6 +324,8 @@ describe("§31 与协议包同一份", () => {
       one.name.startsWith("identity.cloud."),
     )) {
       for (const [code, item] of Object.entries(def(entry).errorMap)) {
+        // 地址与指纹格式的校验在 core 本地就答（§33.8），不经中继、不进协议包。
+        if (CORE_LOCAL_CODES.has(code)) continue;
         expect(ERRORS[code]?.status, `${entry.name}: ${code}`).toBe(
           item.status,
         );
