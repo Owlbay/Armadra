@@ -76,6 +76,11 @@ export class CloudService {
     return this.store.list();
   }
 
+  /** 对这个远程服务的 CA 指纹（「远程服务」表里同一 issuer 那一行）；空串 = 系统信任。 */
+  fingerprint(issuer: string): string {
+    return this.store.remoteFingerprint(issuer);
+  }
+
   /** `Authorization: Source <jws>`（`aud` = issuer），隧道取节点与令牌时用。 */
   signSourceJws(audience: string): Promise<string> {
     return this.key.signSourceJws(audience);
