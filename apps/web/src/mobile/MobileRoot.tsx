@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { App } from "../app/App";
+import { syncDocumentPreferences } from "../app/preferences-store";
 import { JoinPage } from "../shell/JoinPage";
 import { PageCaGuide } from "../panels/settings/pages/gateway/CaInstallGuide";
 import { ConnectScreen, type ConnectFailure } from "./ConnectScreen";
@@ -29,6 +30,12 @@ export function MobileRoot({ entry: initial }: { entry: Entry }) {
   const [entry, setEntry] = React.useState(initial);
   const relay = React.useMemo(() => createRelayEnrollment(), []);
   const [connected, setConnected] = React.useState(entry.kind === "app");
+  // 主题与语言写到文档上原本只由画布（App）做：连接页与分享链接落地页在它之前，
+  // 自己跟上偏好（明暗、语言），进画布后交还给 App。
+  React.useEffect(
+    () => (connected ? undefined : syncDocumentPreferences()),
+    [connected],
+  );
   if (connected) return <ConnectedApp />;
   if (entry.kind === "join")
     return <JoinPage onJoined={() => setConnected(true)} />;
