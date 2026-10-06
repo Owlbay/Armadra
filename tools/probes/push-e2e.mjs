@@ -397,6 +397,12 @@ await h.run(async () => {
   await api.pair(new URL(pairing).hash.replace(/^#pair=/, ""));
   step("服务器壳已起并完成配对", origin);
 
+  // 深链带签发它的源（契约 §19.4 的 `?s=`）：手机据此切到对应的连接。
+  const hello = await must(api.call("/api/identity/hello"), "hello");
+  const hostId = typeof hello.hostId === "string" ? hello.hostId : "";
+  if (hostId === "")
+    throw new Error(`hello 没有 hostId：${JSON.stringify(hello)}`);
+
   const config = await must(api.call("/api/push/config"), "推送配置");
   check(
     config.native.transport === "direct" &&
@@ -563,8 +569,9 @@ await h.run(async () => {
     check(
       !JSON.stringify(payload).includes(run) &&
         payload.title === "推送探针" &&
-        payload.url === `armadra://w/${workspace.id}/n/${nodeId}`,
-      `设备私钥解开 ${payload.kind}：标题是工作空间名、深链指向节点、明文里没有终端原文`,
+        payload.url ===
+          `armadra://w/${workspace.id}/n/${nodeId}?s=${encodeURIComponent(hostId)}`,
+      `设备私钥解开 ${payload.kind}：标题是工作空间名、深链指向节点并带签发它的源、明文里没有终端原文`,
       JSON.stringify(payload),
     );
   }

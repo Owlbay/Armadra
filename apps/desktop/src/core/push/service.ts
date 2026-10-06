@@ -39,6 +39,11 @@ export interface PushServiceOptions {
     principalKind: string,
     workspaceId: string,
   ) => boolean;
+  /**
+   * 本机的源标识（`hostId`）：进深链的 `s`，手机据此认出通知来自哪个连接
+   * （契约 §19.4）。省略或答空串时深链不带它。
+   */
+  readonly sourceId?: () => string;
   readonly fetch?: typeof fetch;
   readonly clock?: () => number;
 }
@@ -255,14 +260,24 @@ export class PushService {
     );
   }
 
+  private sourceId(): string {
+    try {
+      return this.options.sourceId?.() ?? "";
+    } catch {
+      return "";
+    }
+  }
+
   /** 一条草稿 → 每台有权限的设备一行队列。返回入队的条数。 */
   enqueue(draft: Draft, only?: (device: PushDevice) => boolean): number {
     const recipients = this.devices.recipients();
     if (recipients.length === 0) return 0;
     const allowed = new Map<string, boolean>();
+    const source = this.sourceId();
     const names = {
       workspace: this.workspaceName(draft.workspaceId),
       agent: (value: Draft) => this.agentName(value),
+      ...(source === "" ? {} : { source }),
     };
     let queued = 0;
     for (const { device, principalKind } of recipients) {
