@@ -17,6 +17,7 @@ import {
   cloudSources,
 } from "./cloud-client";
 import { createCachedCredentialProvider } from "./credentials";
+import type { ManagedSocketState } from "./managed-socket";
 import { type SiblingMount, mountSiblingSources } from "./mounts";
 import { sourceRegistry } from "./registry";
 import {
@@ -126,7 +127,15 @@ export function createMemoryRelayVault(): MemoryRelayVault {
 export interface HostedStatus {
   readonly state: SourceState;
   readonly lastError: SourceFailure | null;
+  /**
+   * 中继自己停了（不是来源主机下线）：`me.stream` 开过之后连不上中继超过
+   * {@link RELAY_DOWN_AFTER_MS}。中继回来、流重开时落回 `false`。
+   */
+  readonly relayDown: boolean;
 }
+
+/** `me.stream` 断开多久还连不上中继，才算中继停了（重启、换节点的短暂断开不算）。 */
+export const RELAY_DOWN_AFTER_MS = 4_000;
 
 /** 登录、挑主机的失败原因；文案键 `remote.error.<原因>`。 */
 export type HostedFailure =
@@ -171,6 +180,9 @@ export interface HostedRelayOptions {
   readonly enter?: typeof enterRoute;
   /** 测试注入：叫醒页面的流（缺省本机源上托管的流，即控制面）。 */
   readonly wake?: () => void;
+  /** 测试注入：计时器（判断中继停了）。 */
+  readonly setTimeout?: (run: () => void, ms: number) => unknown;
+  readonly clearTimeout?: (handle: unknown) => void;
   /** 测试注入：把目录里其余的主机挂进页面源表（缺省 `mounts.ts`）。 */
   readonly mount?: typeof mountSiblingSources;
 }
@@ -246,12 +258,20 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
     invalidate: (sourceId) => cached.invalidate(sourceId),
   };
 
-  let status: HostedStatus = { state: "idle", lastError: null };
+  let status: HostedStatus = {
+    state: "idle",
+    lastError: null,
+    relayDown: false,
+  };
   const listeners = new Set<() => void>();
-  const setStatus = (state: SourceState, lastError: SourceFailure | null) => {
-    if (status.state === state && status.lastError?.code === lastError?.code)
+  const publish = (next: HostedStatus) => {
+    if (
+      status.state === next.state &&
+      status.lastError?.code === next.lastError?.code &&
+      status.relayDown === next.relayDown
+    )
       return;
-    status = { state, lastError };
+    status = next;
     for (const listener of [...listeners]) {
       try {
         listener();
@@ -259,6 +279,43 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
         /* 一个订阅者出错不拖垮别的。 */
       }
     }
+  };
+  const setStatus = (state: SourceState, lastError: SourceFailure | null) =>
+    publish({ ...status, state, lastError });
+
+  /*
+   * 中继自己停了：`me.stream` 就连在中继上，开过之后一直回不到 `open` 就是中继
+   * 不通。主机下线时这条流照常开着（中继推 `sourceOffline`），两者由此分开。
+   */
+  const later =
+    options.setTimeout ?? ((run, ms) => globalThis.setTimeout(run, ms));
+  const cancel =
+    options.clearTimeout ??
+    ((handle) =>
+      globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>));
+  let streamOpened = false;
+  let relayTimer: unknown = null;
+  const stopRelayTimer = () => {
+    if (relayTimer !== null) cancel(relayTimer);
+    relayTimer = null;
+  };
+  const onStreamState = (state: ManagedSocketState) => {
+    if (state === "open") {
+      streamOpened = true;
+      stopRelayTimer();
+      publish({ ...status, relayDown: false });
+      return;
+    }
+    // 自己关的、凭据失效的：不是中继的事。
+    if (state === "closed" || state === "unauthorized") {
+      stopRelayTimer();
+      return;
+    }
+    if (!streamOpened || status.relayDown || relayTimer !== null) return;
+    relayTimer = later(() => {
+      relayTimer = null;
+      publish({ ...status, relayDown: true });
+    }, RELAY_DOWN_AFTER_MS);
   };
 
   let entered: EnteredRoute | null = null;
@@ -341,6 +398,7 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
         }
         applyMeStreamEvent(event, target);
       },
+      onStateChange: onStreamState,
       onOpen: () => {
         void resync();
         resyncTargets(siblingTargets());
@@ -497,6 +555,8 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
     dispose() {
       stream?.close();
       stream = null;
+      stopRelayTimer();
+      streamOpened = false;
       siblings?.dispose();
       siblings = null;
       directory = [];
@@ -505,7 +565,7 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
       vault.clear();
       if (current !== null) provider.invalidate(current);
       current = null;
-      setStatus("idle", null);
+      publish({ state: "idle", lastError: null, relayDown: false });
     },
   };
   return hosted;

@@ -118,6 +118,7 @@ export const remote: MessageModule = {
     "remote.hosted.open": "打开 {name}",
     "remote.hosted.offline": "离线",
     "remote.hosted.signInAgain": "重新登录",
+    "remote.hosted.relayDown": "中转服务不可用，正在重连",
   },
   en: {
     "remote.nav": "Remote services",
@@ -229,5 +230,6 @@ export const remote: MessageModule = {
     "remote.hosted.open": "Open {name}",
     "remote.hosted.offline": "Offline",
     "remote.hosted.signInAgain": "Sign in again",
+    "remote.hosted.relayDown": "Relay unavailable. Reconnecting",
   },
 };

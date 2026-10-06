@@ -8,6 +8,7 @@ import {
 import { setHostedRuntimeBase } from "../api/runtime-url";
 import { routedFetch } from "../mobile/testing";
 import {
+  RELAY_DOWN_AFTER_MS,
   createHostedRelay,
   detectRelayHost,
   hostedFailureOf,
@@ -247,6 +248,81 @@ describe("中继托管页面的源", () => {
     // 中继重启：页面一直以为就绪，流重开时主机在线也叫醒一次（经中继的流以 4404 收了尾）。
     stream().onOpen?.();
     await vi.waitFor(() => expect(wake).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("中继自己停了", () => {
+  function withTimers() {
+    const net = relayNet();
+    let stream: RemoteStreamOptions | null = null;
+    const timers = new Map<number, () => void>();
+    let next = 0;
+    const relay = createHostedRelay({
+      issuer: ISSUER,
+      cloud: { fetch: net.fetch },
+      enter: fakeEnter,
+      wake: vi.fn(),
+      createStream: (options) => {
+        stream = options;
+        return { issuer: ISSUER, state: "open", close: () => undefined };
+      },
+      setTimeout: (run, ms) => {
+        expect(ms).toBe(RELAY_DOWN_AFTER_MS);
+        timers.set(++next, run);
+        return next;
+      },
+      clearTimeout: (handle) => timers.delete(handle as number),
+    });
+    const fire = () => {
+      const pending = [...timers.values()];
+      timers.clear();
+      for (const run of pending) run();
+    };
+    return { relay, stream: () => stream!, timers, fire };
+  }
+
+  it("me.stream 开过之后一直连不上中继：过一段时间才算中继停了，流重开即恢复", async () => {
+    const { relay, stream, timers, fire } = withTimers();
+    await relay.enter((await relay.signIn("dev", "pw"))[0]!);
+    // 第一次还没开过：连得慢不算中继停了。
+    stream().onStateChange?.("connecting");
+    expect(timers.size).toBe(0);
+    stream().onStateChange?.("open");
+    stream().onStateChange?.("backoff");
+    stream().onStateChange?.("connecting");
+    stream().onStateChange?.("backoff");
+    expect(timers.size).toBe(1);
+    expect(relay.status.relayDown).toBe(false);
+    fire();
+    expect(relay.status).toMatchObject({ relayDown: true, state: "ready" });
+    stream().onStateChange?.("open");
+    expect(relay.status.relayDown).toBe(false);
+  });
+
+  it("短暂断开、自己关流、凭据失效：都不算中继停了", async () => {
+    const { relay, stream, timers } = withTimers();
+    await relay.enter((await relay.signIn("dev", "pw"))[0]!);
+    stream().onStateChange?.("open");
+    stream().onStateChange?.("backoff");
+    stream().onStateChange?.("open");
+    expect(timers.size).toBe(0);
+    stream().onStateChange?.("backoff");
+    stream().onStateChange?.("closed");
+    expect(timers.size).toBe(0);
+    stream().onStateChange?.("unauthorized");
+    expect(relay.status.relayDown).toBe(false);
+  });
+
+  it("主机下线（中继推 sourceOffline，流开着）：是等待上线，不是中继停了", async () => {
+    const { relay, stream, timers } = withTimers();
+    await relay.enter((await relay.signIn("dev", "pw"))[0]!);
+    stream().onStateChange?.("open");
+    stream().onEvent({ type: "sourceOffline", sourceId: SOURCE });
+    expect(relay.status).toMatchObject({
+      state: "waitingForSource",
+      relayDown: false,
+    });
+    expect(timers.size).toBe(0);
   });
 });
 
