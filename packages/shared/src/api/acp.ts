@@ -34,6 +34,91 @@ export const agentAcpInfoSchema = z.looseObject({
   resume: acpResumeSchema,
 });
 
+/* --------------------------- 适配器的安装（§39.7） --------------------------- */
+
+/**
+ * 有独立 ACP 适配器包、可以由 core 代装的那几家：键是内置 Agent id，值是 npm
+ * 包名。core 的安装只认这张表（allowlist），页面的复制命令也从这里来。
+ */
+export const ACP_ADAPTER_PACKAGES = {
+  claude: "@agentclientprotocol/claude-agent-acp",
+  codex: "@agentclientprotocol/codex-acp",
+  pi: "pi-acp",
+} as const;
+
+/**
+ * ACP 入口就是 CLI 本身的那几家：装的是 CLI，不代装，只给复制命令。没有公开
+ * npm 包的（omp）不列，不猜。
+ */
+export const AGENT_CLI_PACKAGES = {
+  opencode: "opencode-ai",
+  copilot: "@github/copilot",
+  ama: "@armadra/agent",
+} as const;
+
+export type AcpAdapterAgentId = keyof typeof ACP_ADAPTER_PACKAGES;
+
+/** 这家能不能由 core 代装适配器。 */
+export function acpAdapterInstallable(
+  agentId: string,
+): agentId is AcpAdapterAgentId {
+  return Object.prototype.hasOwnProperty.call(ACP_ADAPTER_PACKAGES, agentId);
+}
+
+/** 复制给用户的安装命令；两张表都没有的答 `null`。 */
+export function acpInstallCommand(agentId: string): string | null {
+  const name = acpAdapterInstallable(agentId)
+    ? ACP_ADAPTER_PACKAGES[agentId]
+    : Object.prototype.hasOwnProperty.call(AGENT_CLI_PACKAGES, agentId)
+      ? AGENT_CLI_PACKAGES[agentId as keyof typeof AGENT_CLI_PACKAGES]
+      : undefined;
+  return name === undefined ? null : `npm i -g ${name}`;
+}
+
+export const ADAPTER_INSTALL_STATES = [
+  "idle",
+  "running",
+  "succeeded",
+  "failed",
+] as const;
+
+/**
+ * 一次安装结束时的失败码（不是 HTTP 拒绝，是任务的结果）：
+ * `adapter_install_failed` npm 非零退出或起不来；`adapter_install_timeout`
+ * 超时被结束；`adapter_install_missing` npm 说成功了，但补齐过的 PATH 上仍找
+ * 不到适配器程序（全局目录不在 PATH 上）。
+ */
+export const ADAPTER_INSTALL_FAILURES = [
+  "adapter_install_failed",
+  "adapter_install_timeout",
+  "adapter_install_missing",
+] as const;
+
+/** 一家适配器的安装任务（`agents.installAdapter` / `agents.adapterInstall`）。 */
+export const adapterInstallJobSchema = z.looseObject({
+  agentId: z.string(),
+  state: z.enum(ADAPTER_INSTALL_STATES),
+  package: z.string(),
+  reinstall: z.boolean().optional(),
+  startedAt: z.string().optional(),
+  endedAt: z.string().optional(),
+  exitCode: z.number().nullable().optional(),
+  /** 输出的最后几行，去掉控制字符并脱敏；只在内存里，不落盘、不进日志。 */
+  output: z.array(z.string()),
+  /** 结束后重新探测的结果。 */
+  installed: z.boolean().optional(),
+  failure: z
+    .looseObject({
+      code: z.enum(ADAPTER_INSTALL_FAILURES),
+      message: z.string(),
+    })
+    .optional(),
+});
+
+export type AdapterInstallState = (typeof ADAPTER_INSTALL_STATES)[number];
+export type AdapterInstallFailure = (typeof ADAPTER_INSTALL_FAILURES)[number];
+export type AdapterInstallJob = z.infer<typeof adapterInstallJobSchema>;
+
 /* ------------------------------ ACP payloads ------------------------------ */
 
 /** One ACP content block; only `text` is rendered, the rest are kept. */

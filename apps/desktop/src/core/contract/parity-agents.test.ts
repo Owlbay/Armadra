@@ -1185,9 +1185,13 @@ describe("契约与 core 的两张表（agents）", () => {
     entry.name.startsWith("agents."),
   );
 
-  it("21 条都在契约里，每条都有旧路径", () => {
+  /** 只经 procedure 的（§39.7 适配器的安装）：没有旧路径。 */
+  const RPC_ONLY = new Set(["agents.adapterInstall", "agents.installAdapter"]);
+
+  it("23 条都在契约里，除 §39.7 外每条都有旧路径", () => {
     expect(entries.map((entry) => entry.name).sort()).toEqual(
       [
+        "adapterInstall",
         "amaCredentials",
         "answerApproval",
         "cancelDelivery",
@@ -1198,6 +1202,7 @@ describe("契约与 core 的两张表（agents）", () => {
         "deliveries",
         "dependencies",
         "importLegacyDependencies",
+        "installAdapter",
         "installIntegration",
         "integration",
         "list",
@@ -1212,12 +1217,17 @@ describe("契约与 core 的两张表（agents）", () => {
       ].map((name) => `agents.${name}`),
     );
     for (const entry of entries) {
+      if (RPC_ONLY.has(entry.name)) {
+        expect(entry.meta.legacy, entry.name).toBeUndefined();
+        continue;
+      }
       expect(entry.meta.legacy, entry.name).toBeDefined();
     }
   });
 
   it("meta.scope 与路由表给旧路径的要求一致；旧路径都在路由表里", () => {
     for (const entry of entries) {
+      if (RPC_ONLY.has(entry.name)) continue;
       const legacyRoute = entry.meta.legacy!;
       expect(
         routeScope(legacyRoute.method, legacyRoute.path)?.permission ?? null,
@@ -1240,7 +1250,7 @@ describe("契约与 core 的两张表（agents）", () => {
 
   it("绑在路径里工作空间上的，workspaceKey 都写了", () => {
     for (const entry of entries) {
-      if (!entry.meta.legacy!.path.startsWith("/api/workspaces/")) continue;
+      if (!entry.meta.legacy?.path.startsWith("/api/workspaces/")) continue;
       expect(entry.meta.workspaceKey, entry.name).toBe("workspaceId");
     }
   });
