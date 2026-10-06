@@ -404,6 +404,103 @@ describe("pull requests", () => {
         .reason,
     ).toBe("ALREADY_MERGED");
   });
+
+  it("合并方式按仓库的 allow_* 细分；字段缺省按允许", async () => {
+    expect(await forge.mergeOptions(REPO)).toEqual({
+      methods: ["merge", "squash", "rebase"],
+      autoMerge: true,
+      mergeTrain: false,
+    });
+    fake.repository.allow_merge_commits = false;
+    fake.repository.allow_rebase = false;
+    expect((await forge.mergeOptions(REPO)).methods).toEqual(["squash"]);
+    delete fake.repository.allow_merge_commits;
+    fake.repository.allow_squash_merge = false;
+    fake.repository.allow_rebase = true;
+    expect((await forge.mergeOptions(REPO)).methods).toEqual([
+      "merge",
+      "rebase",
+    ]);
+  });
+
+  it("检查通过后合并：排上答 201，详情从时间线读出；撤销后回落", async () => {
+    fake.pulls[0]!.checksPending = true;
+    expect((await forge.getPull(REPO, 5)).autoMerge).toBe(false);
+    const queued = await forge.autoMerge(REPO, 5, {
+      method: "squash",
+      headSha: SHA,
+    });
+    expect(queued).toEqual({ merged: false, sha: null, train: false });
+    const post = fake.requests.filter(
+      (r) => r.method === "POST" && r.path.endsWith("/merge"),
+    );
+    expect(post).toHaveLength(1);
+    expect(post[0]!.body).toEqual({
+      Do: "squash",
+      head_commit_id: SHA,
+      merge_when_checks_succeed: true,
+    });
+    expect((await forge.getPull(REPO, 5)).autoMerge).toBe(true);
+    // 列表不读时间线。
+    const listed = await forge.listPulls(REPO, {
+      state: "open",
+      page: 1,
+      limit: 50,
+    });
+    expect(listed.items[0]!.autoMerge).toBe(false);
+
+    await forge.cancelAutoMerge(REPO, 5);
+    expect((await forge.getPull(REPO, 5)).autoMerge).toBe(false);
+    expect((await rejection(forge.cancelAutoMerge(REPO, 5))).reason).toBe(
+      "NOT_SCHEDULED",
+    );
+  });
+
+  it("检查通过后合并：检查已过当场合并；方式不允许、head 变了都不发写", async () => {
+    fake.repository.allow_rebase = false;
+    expect(
+      (
+        await rejection(
+          forge.autoMerge(REPO, 5, { method: "rebase", headSha: SHA }),
+        )
+      ).reason,
+    ).toBe("MERGE_METHOD_UNSUPPORTED");
+    expect(
+      (
+        await rejection(
+          forge.autoMerge(REPO, 5, {
+            method: "merge",
+            headSha: "b".repeat(40),
+          }),
+        )
+      ).reason,
+    ).toBe("HEAD_CHANGED");
+    expect(fake.requests.some((r) => r.method === "POST")).toBe(false);
+
+    const merged = await forge.autoMerge(REPO, 5, {
+      method: "merge",
+      headSha: SHA,
+    });
+    expect(merged).toEqual({ merged: true, sha: "d".repeat(40), train: false });
+    expect((await forge.getPull(REPO, 5)).autoMerge).toBe(false);
+    expect((await rejection(forge.cancelAutoMerge(REPO, 5))).reason).toBe(
+      "NOT_SCHEDULED",
+    );
+  });
+
+  it("时间线读不到时详情照常、autoMerge 记 false", async () => {
+    fake.pulls[0]!.timeline = ["pull_scheduled_merge"];
+    fake.failNext("GET", /\/timeline$/, 403);
+    const pull = await forge.getPull(REPO, 5);
+    expect(pull.number).toBe(5);
+    expect(pull.autoMerge).toBe(false);
+    // 跨页：最后一条排程事件在第二页。
+    fake.pulls[0]!.timeline = [
+      ...Array.from({ length: 50 }, () => "comment"),
+      "pull_scheduled_merge",
+    ];
+    expect((await forge.getPull(REPO, 5)).autoMerge).toBe(true);
+  });
 });
 
 describe("传输", () => {

@@ -331,7 +331,7 @@ function operations(service: ForgeService) {
       return await service.forgeFor(repo).checks(repo, number);
     },
 
-    // 流水线通过后合并（GitLab，§29.6）：没有这个能力的平台答 400。
+    // 流水线 / 检查通过后合并（GitLab、Gitea，§29.6）：没有这个能力的平台答 400。
     async autoMerge(args: Args) {
       const repo = repoOf(args);
       const number = numberOf(args);

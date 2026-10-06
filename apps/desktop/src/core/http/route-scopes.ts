@@ -275,6 +275,12 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
 
   { pattern: new RegExp(`^${WORKSPACE}/events$`), read: "events:read" },
 
+  // 只读、但旧路径是 `POST`（筛选条件是体）的两条：按读算。
+  {
+    pattern: new RegExp(`^${WORKSPACE}/git/(log|repository/worktree-binding)$`),
+    read: "git:read",
+    write: "git:read",
+  },
   {
     pattern: new RegExp(`^${WORKSPACE}/git/`),
     read: "git:read",

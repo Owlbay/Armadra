@@ -121,7 +121,7 @@ export interface ForgeAutoMerge {
   readonly train: boolean;
 }
 
-/** 三种都给：GitHub 与 Gitea 不再按仓库设置细分。 */
+/** 三种都给：GitHub 这一面不按仓库设置细分（Gitea / GitLab 各按仓库给）。 */
 export const ALL_MERGE_METHODS: readonly ForgeMergeMethod[] = [
   "merge",
   "squash",
@@ -194,7 +194,7 @@ export interface Forge {
     input: MergeInput,
   ): Promise<ForgeMerged>;
   mergeOptions(repo: ForgeRepo): Promise<ForgeMergeOptions>;
-  /** 流水线通过后合并；只有 GitLab 有。同样核对 head。 */
+  /** 流水线 / 检查通过后合并（GitLab、Gitea）。同样核对 head。 */
   autoMerge?(
     repo: ForgeRepo,
     number: number,

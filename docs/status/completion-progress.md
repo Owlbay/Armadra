@@ -1432,7 +1432,7 @@
   - `github/http.test`、`schedule/api.test`：Bearer 写不核 CSRF，Cookie 写仍要。
   - `ama-credentials.test`、`ama-keys.test`：按供应商只答一家，没设模型时答全部并写审计。
   - 另有 `service.test` 测 `sessionAccess`，`entry.test` 测换票时的刷新。
-- 全量验证见 PR。
+- `pnpm libs:build && pnpm -r --if-present test`：shared 372、server 98 / 4 跳过、mobile 10、push-relay 9 全过；desktop 5208 过 / 74 跳过，live 4 过，脚本 73 过；web 首轮只有 i18n 用量检查认不出拼接的键，改成字面量后通过。desktop 的 `contract/parity-push.test` 一条本机在负载 290 上下时连跑 3 次都 `ECONNRESET`，本包没碰 push 域，看 CI。`pnpm --filter @armadra/web typecheck` 与 `pnpm check` 通过。
 
 **接口**
 
@@ -1609,7 +1609,7 @@
 
 - `require("acme-client")` 的导出只剩 `Client / directory / crypto / axios / setLogger`。`ARMADRA_DEV_STACK=1` 下 `acme.test` + `acme.pebble.test` 共 12 项全过，Pebble 真签发通过。
 - `xcode@3.0.1` + `uuid@11.1.1`：对 `apps/mobile/ios/App/App.xcodeproj` 做 `parseSync`、`generateUuid`、`addPbxGroup`、`writeSync`，都正常。
-- 全量验证见 PR。
+- `pnpm libs:build && pnpm -r --if-present test`：shared 372、server 98 / 4 跳过、mobile 10、push-relay 9 全过；desktop 5208 过 / 74 跳过，live 4 过，脚本 73 过；web 首轮只有 i18n 用量检查认不出拼接的键，改成字面量后通过。desktop 的 `contract/parity-push.test` 一条本机在负载 290 上下时连跑 3 次都 `ECONNRESET`，本包没碰 push 域，看 CI。`pnpm --filter @armadra/web typecheck` 与 `pnpm check` 通过。
 
 需用户在 GitHub 上 dismiss：
 
@@ -2806,3 +2806,26 @@ V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
 
 - web：`downloadRuntimeFile(url, filename, load?, { picker?, sources?, origin? })`、`saveFilePicker()`、`SaveFileHandle`、`SaveFilePicker`；`ui/safe-area.ts`：`measureSafeInsets`、`useSafeInsets`、`useOverlayCollisionPadding`、`hasSafeInsets`、`OVERLAY_SAFE_GAP`、`SAFE_CENTERED`；CSS `--overlay-inset-top`。
 - core：`SendQueue.push(frame, key?, settled?)`、`SettleOutcome`；`ViewerSocket.sendFrame(header, jpeg, sent?)`；`OUTBOUND.npmRegistry`、`SPAWNED_OUTBOUND`；`ADAPTER_INSTALL_OUTBOUND`。
+
+## P1 Forge / Git 小残项：Gitea 合并方式与检查通过后合并、fork 检出认远端、徽标直达、Git 只读 scope、status 的 paths
+
+做了什么：
+
+- Gitea 合并方式（G5-29 残项）：`merge-options` 读仓库的 `allow_merge_commits` / `allow_squash_merge` / `allow_rebase` 给出可用方式，字段缺省按允许；`rebase-merge`、`fast-forward-only` 不在三种之内。
+- Gitea 检查通过后合并（G5-29 残项）：`auto-merge` 先核 head、方式必须是仓库允许的，`POST …/merge` 带 `merge_when_checks_succeed: true`；远端 201 是排上了，200 是检查已过、当场合并（合并提交从 PR 读回）。撤销发 `DELETE …/merge`，远端 404 或 PR 不是开着的答 `409`。PR 本身没有「已排上」字段，单条详情从 `issues/{n}/timeline` 取最后一条排程 / 撤销事件（至多 10 页，读不到按 `false`，不让详情失败）；列表不读时间线。页面在 Gitea 上把按钮、确认与提示叫「检查通过后合并」，GitLab 仍是「流水线通过后合并」。
+- fork 检出认基仓库（G5-30 残项）：检出表单读本地远端的地址（`gitRepository.remotes`），主机与路径（去 `.git`、大小写不敏感，http(s) 允许站点前缀，整条对上优先）对上 PR 所在仓库的那个远端作缺省；认不出才退回 `origin` / 第一个，仍可手选。
+- 连接徽标直达（G5-15 / G5-30 残项）：Gitea / GitLab 的连接徽标点开时带上记着的仓库（含多级子组），抽屉按仓库走 `forge.detect`，不靠手填的地址，认出后直接打开那条 PR / MR 或 issue 的详情。GitHub 的徽标不变。
+- Git 只读 scope：`gitRepository.log` 与 `gitRepository.worktreeBinding` 的 `meta.scope` 改为 `git:read`；路由表为这两条 `POST` 旧路径单列 `git:read`（其余 Git 写仍是 `git:write`，`statusBatch` 维持 `git:write`）。契约 §40.2 说明与生成表同步。
+- `git.status` 的 `paths`：契约收、页面也传，但 core 原先只把 `path` 交下去，等于没过滤（契约里还写着「收下但不过滤」）。现在旧路径的逗号拼法与 procedure 的数组都交给 `readStatusFiltered`，计数与逐文件行按 pathspec 收窄，越出检出的路径答 `400`；远端 Worker 的 `git.status` 同步。§40.1 说明改了。
+
+实测（macOS arm64，2026-10-07）：
+
+- core：`forge/gitea.test` 新增 4 条（合并方式细分、排上 / 时间线 / 撤销、当场合并与不发写的拒绝、时间线读不到与跨页）；`forge/forge.test` 的 Gitea 路由用例按新设计改了断言：`merge-options` 现在读一次仓库、`autoMerge: true`，已合并 PR 的 `auto-merge` 答 `409` 而不是 `400`（旧断言写的是「Gitea 没有这个能力」，本包正是去补它）。`git/routes.test` 1 条、`contract/parity-git.test` 补 `paths` 的三方一致、`http/route-scopes.test` 补只读两条与同族写。
+- web：`model.test` 3 条（按地址认远端、子组与站点前缀、认不出）、`ForgeHosted.test` 3 条（Gitea 叫法、徽标焦点直达详情、fork 检出取地址对上的远端，去掉修复时这条失败）、`GithubDrawer.test` 1 条（子组徽标 → `forge.detect` → 直达 MR，不调 `resolve`）。
+- `pnpm libs:build && pnpm -r --if-present test`：shared 372、server 98 / 4 跳过、mobile 10、push-relay 9 全过；desktop 5208 过 / 74 跳过，live 4 过，脚本 73 过；web 首轮只有 i18n 用量检查认不出拼接的键，改成字面量后通过。desktop 的 `contract/parity-push.test` 一条本机在负载 290 上下时连跑 3 次都 `ECONNRESET`，本包没碰 push 域，看 CI。`pnpm --filter @armadra/web typecheck` 与 `pnpm check` 通过。
+
+没做 / 限制：
+
+- Gitea 的排程状态靠时间线推断：被远端自己撤掉（例如关掉 PR）而没写撤销事件时，开着的 PR 可能仍显示「已设自动合并」，撤销会答 `409`。
+- Gitea 普通合并不预先核对仓库允许的方式（多一次请求），不收的方式仍由远端答 405 / 422。
+- 都没有连真实的 Gitea / GitLab 实例。

@@ -472,20 +472,34 @@ describe("forge：写", () => {
     }
   });
 
-  it("没有流水线通过后合并的平台答 bad_request", async () => {
-    await same({
-      method: "POST",
-      path: `${REPO_PATH}/pulls/3/auto-merge`,
-      body: { headSha: SHA },
-      procedure: "forge.autoMerge",
-      input: { ...REPO, number: 3, headSha: SHA },
-    }).then((answer) => expect(answer.status).toBe(400));
+  it("检查通过后合并（Gitea）：仓库不收的方式答 bad_request，没排上的撤销答 conflict，都不发写", async () => {
+    gitea.repository.allow_rebase = false;
+    const before = gitea.requests.length;
+    try {
+      await same({
+        method: "POST",
+        path: `${REPO_PATH}/pulls/3/auto-merge`,
+        body: { method: "rebase", headSha: SHA },
+        procedure: "forge.autoMerge",
+        input: { ...REPO, number: 3, method: "rebase", headSha: SHA },
+      }).then((answer) => expect(answer.status).toBe(400));
+    } finally {
+      gitea.repository.allow_rebase = true;
+    }
     await same({
       method: "DELETE",
       path: `${REPO_PATH}/pulls/3/auto-merge`,
       procedure: "forge.cancelAutoMerge",
       input: { ...REPO, number: 3 },
-    }).then((answer) => expect(answer.status).toBe(400));
+    }).then((answer) => expect(answer.status).toBe(409));
+    expect(
+      gitea.requests
+        .slice(before)
+        .filter(
+          (request) =>
+            request.method === "POST" && request.path.endsWith("/merge"),
+        ),
+    ).toEqual([]);
   });
 
   it("合并后删源分支：三种答法各删自己的；分支动过、fork 与没合并的不删", async () => {

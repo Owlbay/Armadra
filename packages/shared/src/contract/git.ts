@@ -83,7 +83,8 @@ const write = errors.pick(
 export const git = {
   /**
    * 一个检出的状态（`git status --porcelain`）。不是仓库答 `repository: false`，
-   * 不是错误。`paths` 收下但不过滤（计数与行都是整个检出）。
+   * 不是错误。给 `paths` 时交给 Git 当 pathspec，计数与逐文件行按它收窄；分支
+   * 与领先 / 落后是检出的事实，不收窄。
    */
   status: oc
     .input(checkout.extend({ paths: pathList.optional() }))

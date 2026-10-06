@@ -321,7 +321,7 @@ export const forge = {
         legacy: { method: "POST", path: `${REPO}/pulls/{number}/merge` },
       }),
     ),
-  /** 流水线通过后合并（GitLab）；没有这个能力的平台答 `bad_request`。 */
+  /** 流水线 / 检查通过后合并（GitLab、Gitea）；没有这个能力的平台答 `bad_request`。 */
   autoMerge: oc
     .input(mergeBody)
     .output(forgeAutoMergeSchema)

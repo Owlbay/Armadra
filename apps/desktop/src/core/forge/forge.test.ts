@@ -551,26 +551,32 @@ describe("/api/forge/repos/…（§29.4）", () => {
       status: 200,
       body: { merged: true, sha: "d".repeat(40) },
     });
-    // Gitea 不按仓库设置细分合并方式：三种都给，不发请求。
+    // Gitea 按仓库的 allow_* 细分合并方式（读一次仓库），有检查通过后合并。
+    h.gitea.repository.allow_rebase = false;
     const before = h.gitea.requests.length;
     expect((await h.call("GET", `${REPO_PATH}/merge-options`)).body).toEqual({
-      methods: ["merge", "squash", "rebase"],
-      autoMerge: false,
+      methods: ["merge", "squash"],
+      autoMerge: true,
       mergeTrain: false,
     });
-    expect(h.gitea.requests.length).toBe(before);
-    // 没有「流水线通过后合并」：400，不发请求。
+    expect(h.gitea.requests.length).toBe(before + 1);
+    // 已合并的 PR：排不上也撤不了，409，不发写。
     expect(
       (
         await h.call("POST", `${REPO_PATH}/pulls/3/auto-merge`, {
+          method: "merge",
           headSha: SHA,
         })
       ).status,
-    ).toBe(400);
+    ).toBe(409);
     expect(
       (await h.call("DELETE", `${REPO_PATH}/pulls/3/auto-merge`)).status,
-    ).toBe(400);
-    expect(h.gitea.requests.length).toBe(before);
+    ).toBe(409);
+    expect(
+      h.gitea.requests
+        .slice(before)
+        .filter((request) => request.method !== "GET"),
+    ).toEqual([]);
     const pulls = await h.call("GET", `${REPO_PATH}/pulls`, undefined, {
       state: "closed",
     });
