@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 
+import { CoreFailure } from "../../http/errors";
 import type { SecretBackend } from "../../secrets/backend";
 import { CREDENTIAL_KINDS, CREDENTIAL_REF_ENV, kindRow } from "./inject";
 import { type CredentialRow, CredentialStore } from "./store";
@@ -20,13 +21,9 @@ export { CredentialStore, REF_PATTERN, type CredentialRow } from "./store";
  */
 
 /** 一次拒绝：路由与 `POST /api/terminals` 原样答 `{ code, message }`。 */
-export class CredentialError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
+export class CredentialError extends CoreFailure {
+  constructor(status: number, code: string, message: string) {
+    super(status, code, message);
     this.name = "CredentialError";
   }
 }

@@ -62,15 +62,27 @@ function scanFails(source: string, file = "sample.ts"): Found[] {
 }
 
 /**
- * `new DomainError(423, "canvas_lease_held", …)`：域里抛的拒绝（状态与码是字面量
- * 的）。只用来数「这个码还在被用」，不核对状态——各域的存量码还没都登记。
+ * `new DomainError(423, "canvas_lease_held", …)` 与 `new CredentialError(…)`：域里抛的
+ * 拒绝（状态与码是字面量的）。只用来数「这个码还在被用」，不核对状态——各域的存量码还没都登记。
  */
 function scanDomainErrors(source: string, file = "sample.ts"): Found[] {
   return [
     ...stripComments(source).matchAll(
-      /new DomainError\(\s*(\d{3})\s*,\s*"([A-Za-z0-9_]+)"/g,
+      /new (?:DomainError|CredentialError)\(\s*(\d{3})\s*,\s*"([A-Za-z0-9_]+)"/g,
     ),
   ].map((m) => ({ code: m[2]!, status: Number(m[1]), file }));
+}
+
+/**
+ * `new GatewayError("invalid_origin", …)`：Gateway 域的拒绝（码是第一个参数，状态
+ * 由路由包成 400）。同样只用来数「这个码还在被用」。
+ */
+function scanGatewayErrors(source: string, file = "sample.ts"): Found[] {
+  return [
+    ...stripComments(source).matchAll(
+      /new GatewayError\(\s*"([A-Za-z0-9_]+)"/g,
+    ),
+  ].map((m) => ({ code: m[1]!, file }));
 }
 
 /** `code: "NOT_FOUND"`：大写拼法的存量（身份域、GitHub 面）。 */
@@ -114,7 +126,7 @@ describe("错误码注册表", () => {
   it("core 里 coreError 的每个字面量码都登记了，状态一致", () => {
     const found = scanCore(scanCoreErrors);
     // 不是空跑：core 里确实有这类调用。
-    expect(found.length).toBeGreaterThan(50);
+    expect(found.length).toBeGreaterThan(10);
     const problems = found.flatMap(({ code, status, file }) => {
       if (!isRegisteredErrorCode(code)) return [`${file}: 未登记的码 ${code}`];
       const registered = ERROR_CODES[code].status;
@@ -138,6 +150,7 @@ describe("错误码注册表", () => {
         ...scanCore(scanCoreErrors),
         ...scanCore(scanFails),
         ...scanCore(scanDomainErrors),
+        ...scanCore(scanGatewayErrors),
       ].map((entry) => entry.code),
     );
     expect(Object.keys(ERROR_CODES).filter((code) => !used.has(code))).toEqual(

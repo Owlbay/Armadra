@@ -54,6 +54,16 @@ export const ERROR_CODES = {
   git_execution_required: { status: 403 },
   forge_scope: { status: 403 },
   pairing_code_disabled: { status: 403 },
+  /** 配对票的来源不是本 Gateway 的（契约 §43.7）。 */
+  invalid_origin: { status: 400 },
+  /** 节点凭据的拒绝（契约 §20、§43.6）。 */
+  credential_not_found: { status: 404 },
+  credential_mismatch: { status: 400 },
+  credential_kind_disabled: { status: 400 },
+  credential_unsupported_here: { status: 400 },
+  credential_backend_insecure: { status: 409 },
+  credential_unset: { status: 409 },
+  credential_unavailable: { status: 503 },
   pairing_code_invalid: { status: 404 },
   device_required: { status: 409 },
   forge_not_configured: { status: 409 },

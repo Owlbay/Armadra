@@ -104,7 +104,11 @@ interface Call {
   body: unknown;
 }
 
-/** 一个按路径答的 fetch：记下每次调用，`/api/gateway` 的状态随 PUT 改。 */
+/**
+ * 一个按路径答的 fetch：记下每次调用，`/api/gateway` 的状态随 PUT 改。对外服务
+ * 经 `gateway.*` procedure（契约 §43.7）：体与答案都是 `{ json }`，记下来的调用
+ * 还原成旧路径的样子（方法、路径、入参），断言照旧读。
+ */
 function fakeCore(options: {
   status?: GatewayStatus | number;
   devices?: { deviceId: string; name: string; role: string }[] | number;
@@ -121,24 +125,42 @@ function fakeCore(options: {
     vi.fn(async (input: string, init?: RequestInit) => {
       const url = new URL(String(input), "http://127.0.0.1");
       const method = init?.method ?? "GET";
-      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-      calls.push({ method, path: url.pathname, body });
-      if (url.pathname === "/api/gateway") {
+      const sent = init?.body ? JSON.parse(String(init.body)) : undefined;
+      const rpc = /^\/api\/rpc\/gateway\/(status|configure|pair)$/.exec(
+        url.pathname,
+      )?.[1];
+      const legacy = {
+        status: { method: "GET", path: "/api/gateway" },
+        configure: { method: "PUT", path: "/api/gateway" },
+        pair: { method: "POST", path: "/api/gateway/pairing" },
+      } as const;
+      const route =
+        rpc === undefined
+          ? { method, path: url.pathname }
+          : legacy[rpc as keyof typeof legacy];
+      const body = rpc === undefined ? sent : sent?.json;
+      calls.push({ method: route.method, path: route.path, body });
+      const reply = (code: number, payload: unknown) =>
+        answer(
+          code,
+          rpc !== undefined && code === 200 ? { json: payload } : payload,
+        );
+      if (route.path === "/api/gateway") {
         if (typeof status === "number")
           return answer(status, { code: "forbidden", message: "" });
-        if (method === "PUT") {
+        if (route.method === "PUT") {
           const patch = body as Partial<GatewayStatus>;
           status =
             patch.enabled === true
               ? runningStatus()
               : { ...status, ...patch, running: false, origins: [] };
         }
-        return answer(200, status);
+        return reply(200, status);
       }
-      if (url.pathname === "/api/gateway/pairing") {
+      if (route.path === "/api/gateway/pairing") {
         const origin =
           (body as { origin?: string }).origin ?? "https://192.168.1.20:8443";
-        return answer(200, {
+        return reply(200, {
           origin,
           ticket: TICKET,
           fingerprint: FP,

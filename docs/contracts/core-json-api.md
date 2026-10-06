@@ -1152,6 +1152,8 @@ G5-25 追加：`GET /api/usage` 与 `POST /api/usage/refresh` 里 Claude 那一�
 
 ## 17. Gateway：`/api/gateway*`
 
+> 自协议 1.14 起 `GET /api/gateway`、`PUT /api/gateway`、`POST /api/gateway/pairing` 同时是 `gateway.*` procedure（§43.7），旧路径与 procedure 调同一份实现；配对短码换票（§24）是匿名面，只经旧路径。
+
 Gateway 是 core 对外的 HTTPS 面（`apps/desktop/src/core/gateway/`，[补全架构](../design/completion-architecture.md) §7）。服务器壳的 `serve` 用命令行参数打开它；桌面壳按设置 `gateway.*` 打开它。下面三条路由在 core 的主监听器上与 Gateway 上都答，路由门按 `settings:read` / `settings:write` 判——只有 owner，成员一律 403 `forbidden`。字段名 camelCase，时间是带时区的 ISO 8601，错误 `{ code, message }`。
 
 ### 17.1 `GET /api/gateway`
@@ -1460,6 +1462,8 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 19. 推送：`/api/push/devices*`
 
+> 自协议 1.14 起这些路由同时是 `push.*` procedure（§43.4），旧路径与 procedure 调同一份实现。
+
 设计见[补全架构](../design/completion-architecture.md) §10 与[外部服务](../design/external-services.md) §5.2。代码在 `core/push/`，共享层 `api/push.ts`。表 `push_devices` / `push_outbox`（迁移 `*_push.sql`）。
 
 `/api/push/*` 不经路由门（`http/route-scopes.ts` 的 `SELF_GUARDED`），推送域自己认请求身份，**只碰请求主体自己的设备**：服务器壳的匿名主体答 401 `unauthenticated`；桌面壳的本机请求没有请求身份（主体是本机 owner、没有设备），看配置与列表可以，登记与测试答 409 `device_required`——桌面有系统通知，不用推送。错误一律 `{ code, message }`。
@@ -1554,6 +1558,8 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 - 先入队（`push_outbox`）再发；总共最多 3 次尝试（失败后 5 秒、30 秒各再试一次），只有网络错误、429 与 5xx 再试。平台说令牌作废（Web Push 404 / 410，APNs 410 / `BadDeviceToken` / `Unregistered`，FCM `UNREGISTERED`，中继 410 / `badToken`）立即停、设备登记撤销（`revoked_reason = 'gone'`）。终态行保留 7 天。App 按旧配置登记的（例如登记时是 `direct`，现在改成 `relay`）只记日志，等 App 按新配置重新登记。
 
 ## 20. 节点凭据：`/api/credentials*`
+
+> 自协议 1.14 起 §20.2 的四条路由同时是 `credentials.*` procedure（§43.6），旧路径与 procedure 调同一份实现。
 
 设计见 [补全架构](../design/completion-architecture.md) §9.1 与 [CLI 协作](../design/cli-collaboration.md) §7.3。一个节点可以绑定一条具名凭据，起终端时由 core 校验、CLI 启动时由画布启动器现取并只设给 CLI 进程。代码在 `core/agent/credentials/`，共享层 `packages/shared/src/api/credentials.ts`。
 
@@ -1941,6 +1947,8 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
 
 ## 28. 邮件通道：`/api/mail/*`
 
+> 自协议 1.14 起这些路由同时是 `mail.*` procedure（§43.5），旧路径与 procedure 调同一份实现。
+
 可选的 SMTP 通知通道：把邀请（§10）与口令重置（§25）链接发到一个邮箱。邀请与重置仍然设计成「管理员亲手把链接交给人」，邮件只是多一个出口。实现在 `core/mail/`。
 
 ### 28.1 配置
@@ -2103,6 +2111,8 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 - **fork 的 PR / MR 检出**（G5-30 追加）：仓库操作 `createWorktree`（`POST /api/workspaces/{id}/git/repository/operations`）可带 `pullHead: { remote, forge: "gitea" | "gitlab", number, headOid }`，只能与 `createBranch: true`、`startPoint: null` 同用。core 在操作执行时（不是排队时）从 `remote` fetch 平台发布的引用——GitLab `refs/merge-requests/<iid>/head`，Gitea / Forgejo `refs/pull/<n>/head`，引用由 core 按 `forge` 与 `number` 拼、不收调用方给的 refspec——到临时引用 `refs/armadra/checkout/<操作 id>`，用完即删；取到的提交与 `headOid` 不符时操作 `failed`（「head moved since it was reviewed」），不建分支也不留检出。GitHub 的检出不带这一项，行为不变。
 
 ## 30. 页面错误上报：`/api/diagnostics/client-error`
+
+> 自协议 1.14 起这两条路由同时是 `diagnostics.*` procedure（§43.8），旧路径与 procedure 调同一份实现。
 
 可选崩溃上报（外部服务 §11.2）的页面一侧：页面自己的 JS 错误（`window` 的 `error` 与 `unhandledrejection`）经同一个 DSN 发出。实现在 `core/diagnostics/{client-report,routes}.ts`、`main/diagnostics.ts`、`apps/web/src/diagnostics/`。
 
@@ -2959,7 +2969,7 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 - **认人**：procedure 经的那道门（回环 §3.2、Gateway §17.4、中继 §32.3）已经认过这次请求的会话，请求身份里带着这条会话；操作按它再认一次——会话被撤、设备被撤、账号停用，下一次调用就 `401`，与旧路径每次认令牌是同一个效果。控制面 `/api/ws`（§35）上同样能调，连接的访问期到了而没续仍以 `4401` 关。没有门的只有显式打开了回环匿名主人的裸 core（`ARMADRA_LOOPBACK_OWNER=1`），那里按请求里的凭据认，与旧路径一样。
 - **CSRF 只对 Cookie 会话**：`/api/rpc/` 只收 `POST`，Cookie 会话在门上对每一条核 `X-Armadra-CSRF`（读也要）；Bearer（桌面壳、原生 App、中继托管的页面）与控制面不核。旧路径照旧：Cookie 会话的写要、读不要。
 - **权限**：`scope` 一列是路由表（`core/http/route-scopes.ts`）给旧路径的那一档。`/api/identity/` 是身份域自己判的那一段（`SELF_GUARDED`），门面按旧路径去问路由门，对成员放行，判定在身份域、按请求主体：本人的东西（设备列表、passkey、两步验证、会话、OAuth 绑定、兑换邀请）登录即可；「管别人的」要 `identity:manage`；组 `admin` 管自己的组（加减成员、指向本组的邀请、给本组成员签重置链接）；共享看那块画布上的 `workspace:share`。成员越权一律 `403 forbidden`；别人的会话、passkey 与 OAuth 绑定答 `404`，不说它在不在。撤设备要 `identity:manage`，成员撤不了自己的设备（与旧路径相同）。
-- **错误**：身份域的大写码换成注册表的码——`UNAUTHENTICATED` → `unauthenticated`、`PERMISSION_DENIED` → `forbidden`、`INVALID_ARGUMENT` → `bad_request`、`CONFLICT` → `conflict`、`NOT_FOUND` → `not_found`、`NOT_IMPLEMENTED` → `not_implemented`，原话不变；§18 的具名码（口令策略 `password_*`、`passkey_*`、`mfa_*`、`oauth_*`）码与状态都不变。限流与锁定答 `429`（`rate_limited` / `account_locked`），等待的秒数在 `details.retryAfterSeconds`（旧路径是 `Retry-After` 头）。入参**形状**错由契约先答 `bad_request`（`details.issues` 只有字段路径与那句话，不带值）。旧路径的码不变：仍是大写码，已装机的原生 App 认的就是它们。
+- **错误**：身份域的大写码换成注册表的码——`UNAUTHENTICATED` → `unauthenticated`、`PERMISSION_DENIED` → `forbidden`、`INVALID_ARGUMENT` → `bad_request`、`CONFLICT` → `conflict`、`NOT_FOUND` → `not_found`、`NOT_IMPLEMENTED` → `not_implemented`，原话不变；§18 的具名码（口令策略 `password_*`、`passkey_*`、`mfa_*`、`oauth_*`）码与状态都不变。限流与锁定答 `429`（`rate_limited` / `account_locked`），等待的秒数在 `details.retryAfterSeconds`（旧路径是 `Retry-After` 头；自协议 1.14 起 procedure 的 HTTP 响应也带这个头，见 §43.5）。入参**形状**错由契约先答 `bad_request`（`details.issues` 只有字段路径与那句话，不带值）。旧路径的码不变：仍是大写码，已装机的原生 App 认的就是它们。
 - **凭据不外泄**：口令、OAuth client secret、邀请令牌只在入参里；签发的明文（邀请令牌、重置令牌、TOTP 密钥、恢复码）只在签发那一次的答案里，库里只有哈希或在 SecretStore。门面的日志只记 procedure 名与错误消息，不记入参与出参；审计记动作与对象，不记口令与令牌。
 - 旧路径答 `201` 的那几条（建账号、设口令、签邀请、建组、签重置链接、登记 passkey），procedure 的成功恒为 `200`，体相同。
 - 设备撤销的 `expectedRevision` 是读到那一行时的 `epoch`，对不上答 `409 conflict`。审计的筛选与旧路径的查询串同名（`action` 可重复）；写错的数字答 `400`，`limit` 缺省、不是整数或越界都取 100。
@@ -3065,9 +3075,9 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 
 `system.hello` / `system.ping`（§34.2–§34.3）与控制面的升级（§35.1）要 `identity:read`，没有旧路径：路由门对全局的 `identity:read` 按主体判（`identity/route-access.ts`），每个登录主体的会话快照里都有它，成员也过得去。§42 的 procedure 都挂在 `/api/identity/` 的旧路径上，不经这一条。
 
-## 43. `acp`、`workflows` 与 `coordinator`：ACP 会话、工作流与分派抽屉
+## 43. `acp`、`workflows`、`coordinator`、`push`、`mail`、`credentials`、`gateway` 与 `diagnostics`
 
-规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-8 的第一部分）。三个域各一节：§43.1 是 ACP 会话（`acp.*`，§14 的形状），§43.2 是工作流的草案、模板、运行与关卡（`workflows.*`，§15 的形状），§43.3 是分派抽屉的任务读与重试（`coordinator.*`，§15.7 的形状）。自协议 1.12（minor 12）起。`push`、`mail`、`credentials`、`gateway`、`diagnostics` 在 E3-8 的第二部分，节号接在 §43.4 之后。
+规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-8）。第一部分三个域各一节：§43.1 是 ACP 会话（`acp.*`，§14 的形状），§43.2 是工作流的草案、模板、运行与关卡（`workflows.*`，§15 的形状），§43.3 是分派抽屉的任务读与重试（`coordinator.*`，§15.7 的形状）。自协议 1.12（minor 12）起。E3-8 的第二部分是 §43.4 `push.*`（§19、§27 的形状）、§43.5 `mail.*`（§28）、§43.6 `credentials.*`（§20.2）、§43.7 `gateway.*`（§17、§24）、§43.8 `diagnostics.*`（§30），自协议 1.14（minor 14）起；它们的通则在 §43.4 之前的「通则」之后单列一段，各节只写与旧路径不同的地方。
 
 通则：
 
@@ -3142,5 +3152,101 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 | ------------------- | -------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | -------------- | ---- | ------------------------------------------ |
 | `coordinator.tasks` | query    | `{ boardId?: string }` | `{ tasks: ({ taskId: string, coordinatorNodeId: string, runnerId: string, nodeId: string, status: "running" \| "done" \| "failed" \| "stopped", startedAt: string, endedAt: string \| null, reason: string \| null, retryable: boolean })[] }` | `forbidden`                          | `canvas:read`  | 1.12 | `GET /api/workflows/tasks`                 |
 | `coordinator.retry` | mutation | `{ taskId: string }`   | `{ task: { taskId: string, coordinatorNodeId: string, runnerId: string, nodeId: string, status: "running" \| "done" \| "failed" \| "stopped", startedAt: string, endedAt: string \| null, reason: string \| null, retryable: boolean } }`      | `forbidden`、`not_found`、`conflict` | `agent:launch` | 1.12 | `POST /api/workflows/tasks/{taskId}/retry` |
+
+<!-- rpc:end -->
+
+### 43.4 `push.*`：推送配置与设备
+
+实现在 `core/push/routes.ts`：六个动作收成一份操作（`operations`），路由表里的旧 handler 与 `registerProcedures(server, "push", …)` 调同一份；身份都经 `requestIdentity()` 认，拒绝都是 `CoreFailure`。形状见 §19、§27。
+
+- **路由门不判这一段**（`SELF_GUARDED`）：推送域只碰请求主体自己的设备，自己认请求身份。`meta.scope` 声明的 `canvas:read` 与旧路径的清单一致，门面把它交给同一道路由门，门对这一段放行，判定仍在域里：服务器壳的匿名主体 `401 unauthenticated`；别人的设备与不存在的设备同答 `404 not_found`（不让成员借此探测设备 id；owner 能撤任何一台，但改偏好只有设备的主人）；桌面壳的本机请求没有设备，登记与测试通知答 `409 device_required`；设备已被撤销再登记 `403 forbidden`。
+- 登记（`push.register`）的入参是一个 JSON 对象，取值与互斥条件（传输与平台的搭配、令牌与公钥、UnifiedPush 端点）仍在域里判（`core/push/devices.ts`），错答 `400 bad_request`，原话与旧路径一样。登记体里的令牌与订阅密钥只出去一次，**答案里没有令牌、没有公钥本身**，只说有没有（`encrypted`、`unifiedpush`）；日志与审计也没有。
+- 旧路径 `POST /api/push/test` 答 `202`，procedure 成功恒为 `200`，体相同。
+
+<!-- rpc:begin contract=§43.4 -->
+
+| procedure       | kind     | input                                    | output                                                                                                                                                                                                                                                                                                                                                                                 | errors                                                           | scope         | 自   | 原路径                                |
+| --------------- | -------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------- | ---- | ------------------------------------- |
+| `push.config`   | query    | 可省 `{}`                                | `{ webpush: { enabled: boolean, publicKey: string \| null }, native: { transport: "direct" \| "relay" \| "log", status: "ready" \| "notConfigured", platforms: ("ios" \| "android")[] } }`                                                                                                                                                                                             | `unauthenticated`、`forbidden`                                   | `canvas:read` | 1.14 | `GET /api/push/config`                |
+| `push.devices`  | query    | 可省 `{}`                                | `{ devices: ({ deviceId: string, platform: "web" \| "ios" \| "android", transport: "webpush" \| "direct" \| "relay", appVersion: string, locale: string, encrypted: boolean, kinds?: ("approval" \| "agentDone" \| "agentError" \| "deliveryFailed" \| "schedule" \| "resources" \| "comment" \| "workflowGate")[], unifiedpush?: boolean, createdAt: string, current: boolean })[] }` | `unauthenticated`、`forbidden`                                   | `canvas:read` | 1.14 | `GET /api/push/devices`               |
+| `push.register` | mutation | `Record<string, JSON>`                   | `{ device: { deviceId: string, platform: "web" \| "ios" \| "android", transport: "webpush" \| "direct" \| "relay", appVersion: string, locale: string, encrypted: boolean, kinds?: ("approval" \| "agentDone" \| "agentError" \| "deliveryFailed" \| "schedule" \| "resources" \| "comment" \| "workflowGate")[], unifiedpush?: boolean, createdAt: string, current: boolean } }`      | `unauthenticated`、`forbidden`、`bad_request`、`device_required` | `canvas:read` | 1.14 | `PUT /api/push/devices`               |
+| `push.setKinds` | mutation | `{ deviceId: string, kinds?: string[] }` | `{ device: { deviceId: string, platform: "web" \| "ios" \| "android", transport: "webpush" \| "direct" \| "relay", appVersion: string, locale: string, encrypted: boolean, kinds?: ("approval" \| "agentDone" \| "agentError" \| "deliveryFailed" \| "schedule" \| "resources" \| "comment" \| "workflowGate")[], unifiedpush?: boolean, createdAt: string, current: boolean } }`      | `unauthenticated`、`forbidden`、`bad_request`、`not_found`       | `canvas:read` | 1.14 | `PATCH /api/push/devices/{deviceId}`  |
+| `push.revoke`   | mutation | `{ deviceId: string }`                   | `{ revoked: boolean }`                                                                                                                                                                                                                                                                                                                                                                 | `unauthenticated`、`forbidden`、`not_found`                      | `canvas:read` | 1.14 | `DELETE /api/push/devices/{deviceId}` |
+| `push.test`     | mutation | 可省 `{}`                                | `{ queued: true, id: string }`                                                                                                                                                                                                                                                                                                                                                         | `unauthenticated`、`forbidden`、`device_required`                | `canvas:read` | 1.14 | `POST /api/push/test`                 |
+
+<!-- rpc:end -->
+
+### 43.5 `mail.*`：邀请与口令重置链接的邮件通道
+
+实现在 `core/mail/routes.ts`：状态与两种发送收成一份操作，旧 handler 与 `registerProcedures(server, "mail", …)` 调同一份。形状见 §28。
+
+- 路由门不判这一段（`SELF_GUARDED`）：「能签发那条链接的人才能发」是身份域的判定（owner、`identity:manage`、组 admin 对本组成员），全局 scope 说不出「本组」。声明的 scope 与旧路径的清单一致：发送与签发同一档（`identity:manage`），`status` 是 `identity:read`。匿名主体 `401`；不能签这条链接的人 `403`；令牌不对、用过或过期 `409 link_invalid`；没有这条记录 `404`；这台服务器没有口令重置链接 `404`；没配 SMTP `409 mail_not_configured`；SMTP 不收 `502 mail_send_failed`。被拒时信箱里一封都没有多。
+- 限流（每来源每分钟 5 封）的 `429 rate_limited` 带 `details.retryAfterSeconds`，HTTP 上同时给 `Retry-After` 头——**旧路径的体因此也多了这个 `details`**（从前只有头）。
+- 令牌（`token`）与收件地址只在入参里出去一次：答案只有 `{ sent: true }`，审计只记地址的指纹，日志里也没有。入参只校形状，id 与令牌的拼法、邮箱地址仍在域里判（`400 bad_request`）。
+
+<!-- rpc:begin contract=§43.5 -->
+
+| procedure                | kind     | input                                                                  | output                                          | errors                                                                                                                                | scope             | 自   | 原路径                          |
+| ------------------------ | -------- | ---------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ---- | ------------------------------- |
+| `mail.status`            | query    | 可省 `{}`                                                              | `{ configured: boolean, from: string \| null }` | `unauthenticated`                                                                                                                     | `identity:read`   | 1.14 | `GET /api/mail/status`          |
+| `mail.sendInvitation`    | mutation | `{ invitationId: string, token: string, to: string, locale?: string }` | `{ sent: boolean }`                             | `bad_request`、`unauthenticated`、`forbidden`、`not_found`、`link_invalid`、`rate_limited`、`mail_not_configured`、`mail_send_failed` | `identity:manage` | 1.14 | `POST /api/mail/invitation`     |
+| `mail.sendPasswordReset` | mutation | `{ principalId: string, token: string, to: string, locale?: string }`  | `{ sent: boolean }`                             | `bad_request`、`unauthenticated`、`forbidden`、`not_found`、`link_invalid`、`rate_limited`、`mail_not_configured`、`mail_send_failed` | `identity:manage` | 1.14 | `POST /api/mail/password-reset` |
+
+<!-- rpc:end -->
+
+### 43.6 `credentials.*`：节点凭据
+
+实现在 `core/agent/credentials/routes.ts`：四个动作收成一份操作，旧 handler 与 `registerProcedures(server, "credentials", …)` 调同一份。形状见 §20.2。
+
+- **值只进不出**：`create` 与 `update` 的入参带 `value`，任何答案、错误细节、日志与审计都只有 `isSet`，没有值本身；出参的每个字段都列在下表，条目里没有任何能装下值的位置（不放透传）。入参只校形状，长度、种类表、「值是不是单行」仍在域里判。
+- 只有 owner（全局 `settings:*`），成员一律 `403`，被拒时条目与密钥后端里的值原样没动。
+- `CredentialError` 并入 `CoreFailure`（同码同状态）；操作里抛出的别的错误（密钥后端的失败）先换成**不带原因**的固定拒绝再往外走：认得的 `secret_unavailable` 是 `503 credential_unavailable`，其余是 `500 internal`，异常消息（可能带路径，门面又会把异常消息写进日志）不出去。`internal` 的原话从英文句子换成门面统一的那一句。
+- 旧路径新建答 `201`、删除答 `204`，procedure 成功恒为 `200`（删除无体）。新登记进错误码注册表的码：`credential_not_found`、`credential_mismatch`、`credential_kind_disabled`、`credential_unsupported_here`、`credential_backend_insecure`、`credential_unset`、`credential_unavailable`（与 §20 一致）。
+
+<!-- rpc:begin contract=§43.6 -->
+
+| procedure            | kind     | input                                                                | output                                                                                                                                                                                                                                         | errors                                                                                                                                                            | scope            | 自   | 原路径                          |
+| -------------------- | -------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | ---- | ------------------------------- |
+| `credentials.list`   | query    | 可省 `{}`                                                            | `{ backend: string, available: boolean, reason?: string, kinds: { providerId: string, kind: string, enabled: boolean }[], entries: { ref: string, providerId: string, kind: string, label: string, isSet: boolean, lastUsedAt?: integer }[] }` | `unauthenticated`、`forbidden`                                                                                                                                    | `settings:read`  | 1.14 | `GET /api/credentials`          |
+| `credentials.create` | mutation | `{ providerId: string, kind: string, label: string, value: string }` | `{ ref: string, providerId: string, kind: string, label: string, isSet: boolean, lastUsedAt?: integer }`                                                                                                                                       | `unauthenticated`、`forbidden`、`bad_request`、`credential_kind_disabled`、`credential_backend_insecure`、`credential_unsupported_here`、`credential_unavailable` | `settings:write` | 1.14 | `POST /api/credentials`         |
+| `credentials.update` | mutation | `{ ref: string, label?: string, value?: string }`                    | `{ ref: string, providerId: string, kind: string, label: string, isSet: boolean, lastUsedAt?: integer }`                                                                                                                                       | `unauthenticated`、`forbidden`、`bad_request`、`credential_not_found`、`credential_backend_insecure`、`credential_unsupported_here`、`credential_unavailable`     | `settings:write` | 1.14 | `PATCH /api/credentials/{ref}`  |
+| `credentials.remove` | mutation | `{ ref: string }`                                                    | 无                                                                                                                                                                                                                                             | `unauthenticated`、`forbidden`、`credential_not_found`                                                                                                            | `settings:write` | 1.14 | `DELETE /api/credentials/{ref}` |
+
+<!-- rpc:end -->
+
+### 43.7 `gateway.*`：对外 HTTPS 服务的状态、配置与配对票
+
+实现在 `core/gateway/routes.ts`（`gatewayOperations`）与 `core/gateway/index.ts`：状态、改配置、铸票收成一份操作，旧 handler 与 `registerProcedures(server, "gateway", …)` 调同一份。形状见 §17、§24。
+
+- 读与写只有 owner（全局 `settings:*`），成员一律 `403`。入参只校形状（字段类型与多余的键），取值（`listen` 的选项、端口范围、`publicOrigin` 必须是 https 来源、证书来源）仍在域里判，原话与旧路径一样；服务器壳托管时改配置 `409 gateway_managed_by_shell`，Gateway 没在运行时铸票 `409 gateway_not_running`，来源不是本 Gateway 的 `400 invalid_origin`（新登记进注册表）。
+- 配对票（`gateway.pair` 的答案）是两分钟内能换出一台 owner 设备的凭据：只答给调用方，不进审计与日志；私网档附带 8 位短码（`code`，公网 `all` 档与配了对外来源时为 `null`）。证书与私钥的文件路径不进审计。
+- **匿名面不经 RPC**：配对短码换票（§24.2）发生在手机还没有任何身份的时候，短码本身就是凭据，所以只经旧路径 `POST /api/gateway/pairing-code/exchange`（Gateway 的准入里放行、路由门不判；限流与档位在 Gateway 域里判）。它在契约里登记了形状、错误与权限（`gateway.exchangePairingCode`，`scope: null`，与 `identity.cloud.login` 同一种做法），**RPC 路径不实现**：答 `501 not_implemented`，不在 `system.hello` 的 procedure 表里，门面也不接管它的旧路径（仍由路由表里那条 handler 答）。`GET /ca.crt` 等 Gateway 上的其余匿名面（§17.4）不是 core 的 JSON 面，不在契约里。
+
+<!-- rpc:begin contract=§43.7 -->
+
+| procedure                     | kind     | input                                                                                                                                                              | output                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | errors                                                                                                                   | scope            | 自   | 原路径                                    |
+| ----------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------- | ---- | ----------------------------------------- |
+| `gateway.status`              | query    | 可省 `{}`                                                                                                                                                          | `{ enabled: boolean, running: boolean, managedBy: "settings" \| "shell", listen: "loopback" \| "private" \| "all", port: integer, publicOrigin: string, address: { host: string, port: integer } \| null, origin: string \| null, origins: string[], tls: { source: "localCa" \| "file" \| "acme" \| "selfSigned", certFile: string, keyFile: string, acmeEmail: string, fingerprint: string \| null, subject: string \| null, names: string[], notAfter: string \| null, caAvailable: boolean, acme?: {…} \| null }, error: { code: string, message: string } \| null }` | `unauthenticated`、`forbidden`                                                                                           | `settings:read`  | 1.14 | `GET /api/gateway`                        |
+| `gateway.configure`           | mutation | `{ enabled?: boolean, listen?: string, port?: number, publicOrigin?: string, tls?: { source?: string, certFile?: string, keyFile?: string, acmeEmail?: string } }` | `{ enabled: boolean, running: boolean, managedBy: "settings" \| "shell", listen: "loopback" \| "private" \| "all", port: integer, publicOrigin: string, address: { host: string, port: integer } \| null, origin: string \| null, origins: string[], tls: { source: "localCa" \| "file" \| "acme" \| "selfSigned", certFile: string, keyFile: string, acmeEmail: string, fingerprint: string \| null, subject: string \| null, names: string[], notAfter: string \| null, caAvailable: boolean, acme?: {…} \| null }, error: { code: string, message: string } \| null }` | `unauthenticated`、`forbidden`、`bad_request`、`gateway_managed_by_shell`、`settings_unavailable`                        | `settings:write` | 1.14 | `PUT /api/gateway`                        |
+| `gateway.pair`                | mutation | `{ origin?: string, deviceName?: string }`                                                                                                                         | `{ origin: string, ticket: string, fingerprint: string, expiresAt: string, webUrl: string, deepLink: string, code?: string \| null }`                                                                                                                                                                                                                                                                                                                                                                                                                                     | `unauthenticated`、`forbidden`、`bad_request`、`gateway_not_running`、`invalid_origin`                                   | `settings:write` | 1.14 | `POST /api/gateway/pairing`               |
+| `gateway.exchangePairingCode` | mutation | `{ code: string }`                                                                                                                                                 | `{ origin: string, ticket: string, fingerprint: string, expiresAt: string, webUrl: string, deepLink: string, code?: string \| null }`                                                                                                                                                                                                                                                                                                                                                                                                                                     | `bad_request`、`gateway_not_running`、`pairing_code_disabled`、`pairing_code_invalid`、`origin_mismatch`、`rate_limited` | 匿名             | 1.14 | `POST /api/gateway/pairing-code/exchange` |
+
+<!-- rpc:end -->
+
+### 43.8 `diagnostics.*`：页面错误上报
+
+实现在 `core/diagnostics/routes.ts`：两个动作收成一份操作，旧 handler 与 `registerProcedures(server, "diagnostics", …)` 调同一份。形状见 §30。
+
+- 路由门不判这一段（`SELF_GUARDED`）：登录即可，域自己认会话并按设备（其次 principal）限流；声明的 `canvas:read` 与旧路径的清单一致。匿名主体 `401`。默认关：关着时 `report` 答 `{ accepted: false }`、不看请求体。
+- 收下的错误先剥离再交出：栈里的地址与路径只留文件名，家目录、环境里的密钥与会话令牌被替换；终端原始输出与文件正文不进上报，请求体原文不进日志。入参是一个 JSON 对象，`kind`、`name`、`message`、`stack` 的取值与长度仍在域里判（`400 bad_request`，原话与旧路径一样）。
+- 限流的 `429 rate_limited` 带 `details.retryAfterSeconds`，HTTP 上同时给 `Retry-After` 头（旧路径的体因此也多了这个 `details`；头名统一为小写 `retry-after`）。
+- 旧路径 `POST` 经契约登记的成功状态一律答 `202`（`{ accepted: false }` 也是，从前是 `200`）；procedure 成功恒为 `200`。
+
+<!-- rpc:begin contract=§43.8 -->
+
+| procedure                       | kind     | input                  | output                  | errors                                           | scope         | 自   | 原路径                               |
+| ------------------------------- | -------- | ---------------------- | ----------------------- | ------------------------------------------------ | ------------- | ---- | ------------------------------------ |
+| `diagnostics.clientErrorStatus` | query    | 可省 `{}`              | `{ enabled: boolean }`  | `unauthenticated`                                | `canvas:read` | 1.14 | `GET /api/diagnostics/client-error`  |
+| `diagnostics.reportClientError` | mutation | `Record<string, JSON>` | `{ accepted: boolean }` | `bad_request`、`unauthenticated`、`rate_limited` | `canvas:read` | 1.14 | `POST /api/diagnostics/client-error` |
 
 <!-- rpc:end -->

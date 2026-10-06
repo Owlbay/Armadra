@@ -1,8 +1,7 @@
 import * as React from "react";
-import { pushDeviceResponseSchema } from "@armadra/shared";
 
 import { usePreferencesStore } from "../app/preferences-store";
-import { json, request } from "../api/request";
+import { pushApi } from "../api/push";
 import { nativeBridge, type NativeBridge } from "./native-bridge";
 
 /**
@@ -50,10 +49,7 @@ export function reregisterIfRotated(
     const registration = await bridge.pushRegistration();
     if (registration === null) return false;
     try {
-      await request("/api/push/devices", pushDeviceResponseSchema, {
-        method: "PUT",
-        ...json({ ...registration, locale }),
-      });
+      await pushApi.register({ ...registration, locale });
     } catch {
       return false;
     }

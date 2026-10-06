@@ -6,36 +6,39 @@ import {
   type GatewayPairingPayload,
 } from "@armadra/shared";
 
+import { currentClient } from "./client";
 import { IdentityRequestError, IdentityTransportError } from "./identity";
-import { json, request } from "./request";
 import { localSource } from "./source";
 
 /**
- * 对外服务（Gateway，契约 §17）。三条路由只有 owner 进得来，成员 403——设置页
- * 据此决定这一块出不出现。
+ * 对外服务（Gateway，契约 §43.7，形状见 §17），经 `gateway.*` procedure。三条
+ * 调用只有 owner 进得来，成员 403——设置页据此决定这一块出不出现。
  */
 export const gatewayApi = {
-  status: (signal?: AbortSignal) =>
-    request("/api/gateway", gatewayStatusSchema, { signal }),
+  status: async (signal?: AbortSignal) =>
+    gatewayStatusSchema.parse(
+      await currentClient().gateway.status(undefined, { signal }),
+    ),
   /** 未给的键不动；回答是写入并对账之后的状态。 */
-  configure: (patch: GatewayConfigPatch) =>
-    request("/api/gateway", gatewayStatusSchema, {
-      method: "PUT",
-      ...json(gatewayConfigPatchSchema.parse(patch)),
-    }),
+  configure: async (patch: GatewayConfigPatch) =>
+    gatewayStatusSchema.parse(
+      await currentClient().gateway.configure(
+        gatewayConfigPatchSchema.parse(patch),
+      ),
+    ),
   /** 铸一张两分钟的一次性配对票；`origin` 缺省用首选来源。 */
-  pair: (origin?: string) =>
-    request("/api/gateway/pairing", gatewayPairingPayloadSchema, {
-      method: "POST",
-      ...json(origin ? { origin } : {}),
-    }),
+  pair: async (origin?: string) =>
+    gatewayPairingPayloadSchema.parse(
+      await currentClient().gateway.pair(origin ? { origin } : {}),
+    ),
 };
 
 /**
- * `POST /api/gateway/pairing-code/exchange`（契约 §24）：手机上手输的 8 位配对码
+ * `POST /api/gateway/pairing-code/exchange`（契约 §24、§43.7）：手机上手输的 8 位配对码
  * 换出与 `#pair=` 同一张票。匿名、不带 Cookie 也不带 CSRF——这时还没有任何
- * 会话；失败与身份面同一种错误，连接页按 `code` 分原因。`base` 给原生 App
- * 用（它连的 Gateway 来源）。
+ * 会话，所以只经旧路径、不走 RPC 客户端（契约里它是 `scope: null` 的匿名面）；
+ * 失败与身份面同一种错误，连接页按 `code` 分原因。`base` 给原生 App 用（它连的
+ * Gateway 来源）。
  */
 export async function exchangePairingCode(
   code: string,
