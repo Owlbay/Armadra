@@ -9,6 +9,7 @@ import { boards } from "./boards.js";
 import { identity } from "./cloud.js";
 import { files } from "./files.js";
 import { git } from "./git.js";
+import { gitRepository } from "./git-repository.js";
 import type { ProcedureMeta } from "./meta.js";
 import { settings } from "./settings.js";
 import { sources } from "./sources.js";
@@ -33,6 +34,7 @@ export const contract = {
   terminals,
   boards,
   git,
+  gitRepository,
 };
 
 export type Contract = typeof contract;
