@@ -2207,7 +2207,7 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 隧道来的请求按 Bearer 模式准入，与 Gateway 的原生 App 那一条等价，不享受回环的匿名，也不认 Cookie：
 
 1. 路径落在 `loopbackOnlyPath`（`/hook/`、`/control/`、`/context-link/`、`/browser/`、`/verify`）一律 `403 forbidden`。
-2. 来源以 `OPEN.clientOrigin` 为准；请求头的 `Origin` 与它不一致 `403`。来源必须在这条登记的可信来源（§31.2 `trustedOrigins`）或原生 App 的两个来源（`capacitor://localhost`、`https://localhost`）之内，否则 `403`。没有来源（非浏览器）的请求只放行 `/health` 与 `/api/identity/*` 的匿名面，其余 `403`，升级一律 `403`。
+2. 来源以 `OPEN.clientOrigin` 为准；请求头的 `Origin` 与它不一致 `403`。来源必须在这条登记的可信来源（§31.2 `trustedOrigins`）或原生 App 的两个来源（`capacitor://localhost`、`https://localhost`）之内，否则 `403`。没有来源（非浏览器）的请求只放行 `/health` 与 `/api/identity/*` 的匿名面，其余 `403`，升级一律 `403`；例外是中继托管的页面（来源就是中继）发的同源 `GET` / `HEAD`：浏览器不带 `Origin`，带 `Sec-Fetch-Site: same-origin` 时按会话来源（`relayOrigins[0]`）认，照样要绑在它上面的 Bearer。
 3. 匿名面（`/health`、身份域自己的登录面，含 `POST /api/identity/cloud/login`）放行，以一个没有任何授权的成员身份跑；预检只答 CORS。
 4. `POST /api/identity/ws-ticket` 由隧道自己签票（30 秒、一次性，绑在会话来源上）；WebSocket 升级只认 `Sec-WebSocket-Protocol` 里的 `armadra-ticket.<票>`，票不对、用过或来源不符 `401`。
 5. 其余要 `Authorization: Bearer <访问密钥>`；没有或认不出 `401 unauthenticated`（JSON 形状同 §3）。

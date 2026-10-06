@@ -7,7 +7,10 @@
  *      `/browser/`、`/verify`）→ `403 forbidden`。
  *   2. 来源以 `OPEN.clientOrigin` 为准（中继给的元数据），请求头里的 `Origin` 与它
  *      不一致 → 403。来源必须在这条登记的可信来源 ∪ 原生 App 的两个来源之内；
- *      没有来源（非浏览器）只放行 `/health` 与身份域自己的匿名面。
+ *      没有来源（非浏览器）只放行 `/health` 与身份域自己的匿名面。例外：中继
+ *      托管的页面（来源就是中继自己）发的同源 GET 浏览器不带 `Origin`，这时认
+ *      `Sec-Fetch-Site: same-origin`（脚本改不了的头），来源取会话来源；升级
+ *      浏览器总带 `Origin`，不走这条。
  *   3. 匿名面放行（以一个没有任何授权的成员身份跑）；`POST /api/identity/ws-ticket`
  *      由这里签票；其余要 `Authorization: Bearer`，升级要 `armadra-ticket.<票>`。
  *      拒绝一律 `401 unauthenticated`。
@@ -111,6 +114,15 @@ function sameDeclaredOrigin(
   return declared === clientOrigin;
 }
 
+/**
+ * 浏览器在页面自己的来源上发的请求（同源 GET / HEAD 不带 `Origin`）。
+ * `Sec-Fetch-*` 是禁改头：页面脚本伪造不了；非浏览器客户端伪造它也只是把自己
+ * 绑到会话来源上，照样要那个来源签的 Bearer。
+ */
+function sameOriginBrowserRequest(headers: IncomingHttpHeaders): boolean {
+  return headers["sec-fetch-site"] === "same-origin";
+}
+
 /** 没有来源的客户端（非浏览器）只能碰这几条。 */
 function anonymousWithoutOrigin(path: string): boolean {
   return (
@@ -147,7 +159,12 @@ export function createTunnelGate(options: TunnelGateOptions): ListenerGate {
     if (clientOrigin !== null && !originAllowed(clientOrigin, registration)) {
       return { refusal: { status: 403, body: FORBIDDEN_BODY } };
     }
-    if (clientOrigin === null && (upgrade || !anonymousWithoutOrigin(path))) {
+    if (
+      clientOrigin === null &&
+      (upgrade ||
+        (!anonymousWithoutOrigin(path) &&
+          !sameOriginBrowserRequest(request.headers)))
+    ) {
       return refuse(403, FORBIDDEN_BODY);
     }
 
