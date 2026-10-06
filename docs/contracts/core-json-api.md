@@ -2277,6 +2277,21 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 - 错误码 `source_unreachable`（502）、`source_unauthorized`（401）、`source_offline`（503）、`fingerprint_mismatch`（400）、`credentials_invalid`（401）、`account_locked`（429，`details.retryAfterMs`）、`cloud_account_unlinked`（401）与协议包 `errors` 注册表同拼法、同状态，登记在 `packages/shared/src/contract/errors.ts`。
 - 以后新增的 procedure（例如按链接挂载 `mountByLink`）追加在本节末尾，不改已有条目。
 
+### 33.6 追加：登出与首次指纹
+
+> A1-4（「远程服务」设置页）追加。
+
+<!-- rpc:begin contract=§33.6 -->
+
+| procedure              | kind     | input                   | output | errors                                      | scope            | 自  | 原路径                                         |
+| ---------------------- | -------- | ----------------------- | ------ | ------------------------------------------- | ---------------- | --- | ---------------------------------------------- |
+| `sources.remoteLogout` | mutation | `{ serviceId: string }` | `{}`   | `unauthenticated`、`forbidden`、`not_found` | `settings:write` | 1.3 | `POST /api/sources/remotes/{serviceId}/logout` |
+
+<!-- rpc:end -->
+
+- **`remoteLogout`**：尽力 `auth.logout`（远程服务不可达不拦），删 `armadra-remote-<serviceId>` 与内存里的访问令牌，**保留行**（`hasCredentials` 变 `false`）；重新登录就是同一个 `issuer` 再 `remoteAdd` 一次。本机对它的登记（§31.2）不动。
+- **首次指纹**：`remoteAdd` 与 `addDirect`（地址 + 配对码那一种）没给 `fingerprint`、系统又不信任对端证书时，答 `400 fingerprint_mismatch`，`details.fingerprint` 是对端信任锚（链里最末那张；只发叶证书时取 `/ca.crt` 里签了它的那张）的指纹。页面请人核对后带着它重调；系统信任的对端（ACME / 公网证书）不要指纹，照常成功。
+
 ## 34. RPC 内核：`/api/rpc/{procedure}`
 
 > 状态：实施契约（E1，工程规范化 §2）。本节的形状表由 `tools/contract/generate.mjs` 从 `packages/shared/src/contract/` 生成，改形状改契约，不手改表；`pnpm check` 里的 `contract:check` 比对它们。机器可读的同一份在 [core-openapi.json](core-openapi.json)。
