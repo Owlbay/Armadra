@@ -17,9 +17,10 @@ import { getAgentStatus } from "../agent/status";
 import { loadNode, loadSession, workspaceRoot } from "../collab/nodes";
 import { humanActor } from "../drive/lease";
 import { isAcpMirror } from "../history/acp-mirror";
+import { CoreFailure } from "../http/errors";
 import type { CoreRequest, HandlerResult, RouteMatch } from "../http/router";
+import { type DomainHandlers, registerProcedures } from "../http/rpc";
 import type { CoreContext } from "../main";
-import { TerminalError } from "../terminal/backend";
 import { hibernatedSession } from "../terminal/hibernate";
 import { resumeLine } from "../terminal/hibernator";
 import type { TerminalSession } from "../terminal/manager";
@@ -69,15 +70,10 @@ function exclusive<T>(nodeId: string, job: () => Promise<T>): Promise<T> {
 }
 
 function failure(error: unknown): HandlerResult {
-  if (error instanceof DomainError) {
+  // `DomainError` 与 `TerminalError` 都是 `CoreFailure`。
+  if (error instanceof CoreFailure) {
     const { status, body } = error.response();
     return { status, body };
-  }
-  if (error instanceof TerminalError) {
-    return {
-      status: error.status,
-      body: { code: error.code, message: error.message },
-    };
   }
   if (error instanceof AcpError) {
     return { status: acpStatus(error.code), body: error.toJSON() };
@@ -176,6 +172,28 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
     });
   };
 
+  /**
+   * 契约 §43.1（`acp.*`）：旧路径的 handler 先把路径参数、查询串与体读出来，再调
+   * 下面同一份操作；procedure 的入参已由门面按契约解析。拒绝一律抛 `CoreFailure`，
+   * ACP 自己的错误（`AcpError`）在这里换成同码同状态的 `CoreFailure`。
+   */
+  const guarded =
+    <A extends unknown[], R>(operation: (...args: A) => Promise<R>) =>
+    async (...args: A): Promise<R> => {
+      try {
+        return await operation(...args);
+      } catch (error) {
+        if (error instanceof AcpError) {
+          throw new CoreFailure(
+            acpStatus(error.code),
+            error.code,
+            error.message,
+          );
+        }
+        throw error;
+      }
+    };
+
   /** 节点上这一行的下一代（接回）。休眠着的走休眠执行者，好让它的状态机对得上。 */
   const relaunch = (
     wiring: AcpTerminalWiring,
@@ -225,9 +243,8 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
 
   /* -------------------------------- 起会话 -------------------------------- */
 
-  route("POST", "/api/acp/sessions", async (_match, request) => {
+  const createSession = guarded(async (body: Record<string, unknown>) => {
     const wiring = await need();
-    const body = jsonObject(request.body);
     const workspaceId = optionalString(body, "workspaceId");
     const nodeId = optionalString(body, "nodeId");
     const cwd = optionalString(body, "cwd");
@@ -309,94 +326,74 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
         humanOf(wiring, row.id),
       );
     }
-    return { status: 200, body: wiring.manager.session(row.id) };
+    return wiring.manager.session(row.id);
   });
 
   /* --------------------------------- 回合 --------------------------------- */
 
-  route(
-    "POST",
-    "/api/acp/sessions/{sessionId}/prompt",
-    async (match, request) => {
-      const wiring = await need();
-      const body = jsonObject(request.body);
-      const prompt = optionalString(body, "text");
-      if (prompt === undefined || prompt.trim() === "") {
-        throw badRequest("text is required");
-      }
-      const row = await live(wiring, param(match, "sessionId"));
-      await wiring.manager.writeSubmit(
-        row.id,
-        row.generation,
-        prompt,
-        humanOf(wiring, row.id),
-      );
-      const turnId = wiring.backend.lastTurn(row.sessionKey) ?? "";
-      return { status: 200, body: { turnId } };
-    },
-  );
-
-  route("POST", "/api/acp/sessions/{sessionId}/cancel", async (match) => {
+  const sendPrompt = guarded(async (sessionId: string, text: unknown) => {
     const wiring = await need();
-    const rowId = param(match, "sessionId");
+    const prompt = optionalString({ text }, "text");
+    if (prompt === undefined || prompt.trim() === "") {
+      throw badRequest("text is required");
+    }
+    const row = await live(wiring, sessionId);
+    await wiring.manager.writeSubmit(
+      row.id,
+      row.generation,
+      prompt,
+      humanOf(wiring, row.id),
+    );
+    const turnId = wiring.backend.lastTurn(row.sessionKey) ?? "";
+    return { turnId };
+  });
+
+  const cancel = guarded(async (rowId: string) => {
+    const wiring = await need();
     const row = wiring.manager.session(rowId);
     if (row.backend !== "acp") {
       throw domain(409, "acp_session", "This session is not driven over ACP");
     }
     // 与节点头「打断这一轮」、`interrupt` 动词同一个原语：一个 ESC。
     await wiring.backend.sessionByRow(rowId)?.cancel();
-    return { status: 204 };
   });
 
-  route(
-    "POST",
-    "/api/acp/sessions/{sessionId}/mode",
-    async (match, request) => {
-      const wiring = await need();
-      const body = jsonObject(request.body);
-      const modeId = optionalString(body, "modeId");
-      if (modeId === undefined || modeId === "") {
-        throw badRequest("modeId is required");
-      }
-      const row = await live(wiring, param(match, "sessionId"));
-      const session = wiring.backend.sessionByRow(row.id);
-      if (session === undefined) {
-        throw domain(409, "acp_exited", "The ACP session has ended");
-      }
-      await session.setMode(modeId);
-      return { status: 204 };
-    },
-  );
+  const setMode = guarded(async (sessionId: string, value: unknown) => {
+    const wiring = await need();
+    const modeId = optionalString({ modeId: value }, "modeId");
+    if (modeId === undefined || modeId === "") {
+      throw badRequest("modeId is required");
+    }
+    const row = await live(wiring, sessionId);
+    const session = wiring.backend.sessionByRow(row.id);
+    if (session === undefined) {
+      throw domain(409, "acp_exited", "The ACP session has ended");
+    }
+    await session.setMode(modeId);
+  });
 
   // 契约 §26.2：`session/set_config_option` 落模型。目录里没有、或客户端没有
   // 这个能力时 409；节点数据里的 `agent.model` 由页面写回。
-  route(
-    "PUT",
-    "/api/acp/sessions/{sessionId}/model",
-    async (match, request) => {
-      const wiring = await need();
-      const body = jsonObject(request.body);
-      const modelId = optionalString(body, "modelId");
-      if (modelId === undefined || modelId === "") {
-        throw badRequest("modelId is required");
-      }
-      const row = await live(wiring, param(match, "sessionId"));
-      const session = wiring.backend.sessionByRow(row.id);
-      if (session === undefined) {
-        throw domain(409, "acp_exited", "The ACP session has ended");
-      }
-      await session.setModel(modelId);
-      return { status: 204 };
-    },
-  );
+  const setModel = guarded(async (sessionId: string, value: unknown) => {
+    const wiring = await need();
+    const modelId = optionalString({ modelId: value }, "modelId");
+    if (modelId === undefined || modelId === "") {
+      throw badRequest("modelId is required");
+    }
+    const row = await live(wiring, sessionId);
+    const session = wiring.backend.sessionByRow(row.id);
+    if (session === undefined) {
+      throw domain(409, "acp_exited", "The ACP session has ended");
+    }
+    await session.setModel(modelId);
+  });
 
   /* --------------------------------- 镜像 --------------------------------- */
 
-  route("GET", "/api/acp/sessions/{sessionId}/log", async (match, request) => {
+  const readLog = guarded(async (rowId: string, afterValue: unknown) => {
     const wiring = await need();
-    const rowId = param(match, "sessionId");
     const row = wiring.manager.session(rowId);
-    const afterRaw = Number(request.query.get("after") ?? "0");
+    const afterRaw = Number(afterValue ?? "0");
     const after =
       Number.isFinite(afterRaw) && afterRaw > 0 ? Math.floor(afterRaw) : 0;
     const session = wiring.backend.sessionByRow(rowId);
@@ -414,29 +411,24 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
         ? { entries: [], endOffset: 0 }
         : new AcpMirror(path).read(after);
     return {
-      status: 200,
-      body: {
-        entries: read.entries,
-        endOffset: read.endOffset,
-        modes: session?.modes ?? null,
-        models: session?.models ?? null,
-        ...(session === undefined
-          ? {}
-          : {
-              pending: session.pending(),
-              elicitations: session.pendingElicitations(),
-            }),
-      },
+      entries: read.entries,
+      endOffset: read.endOffset,
+      modes: session?.modes ?? null,
+      models: session?.models ?? null,
+      ...(session === undefined
+        ? {}
+        : {
+            pending: session.pending(),
+            elicitations: session.pendingElicitations(),
+          }),
     };
   });
 
   /* ------------------------------- 驱动切换 ------------------------------- */
 
-  route("POST", "/api/acp/nodes/{nodeId}/driver", async (match, request) => {
+  const changeDriver = guarded(async (nodeId: string, value: unknown) => {
     const wiring = await need();
-    const nodeId = param(match, "nodeId");
-    const body = jsonObject(request.body);
-    const driver = optionalString(body, "driver");
+    const driver = optionalString({ driver: value }, "driver");
     if (driver !== "acp" && driver !== "terminal") {
       throw badRequest("driver must be acp or terminal");
     }
@@ -451,11 +443,88 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
         resumed: result.resumed,
       },
     });
-    return {
-      status: 200,
-      body: { sessionId: result.sessionId, resumed: result.resumed },
-    };
+    return { sessionId: result.sessionId, resumed: result.resumed };
   });
+
+  /* ------------------------ 契约 §43.1 与旧路径的登记 ----------------------- */
+
+  const procedures = {
+    createSession: (input: Record<string, unknown>) => createSession(input),
+    prompt: ({ sessionId, text }: { sessionId: string; text?: unknown }) =>
+      sendPrompt(sessionId, text),
+    cancel: ({ sessionId }: { sessionId: string }) => cancel(sessionId),
+    setMode: ({ sessionId, modeId }: { sessionId: string; modeId?: unknown }) =>
+      setMode(sessionId, modeId),
+    setModel: ({
+      sessionId,
+      modelId,
+    }: {
+      sessionId: string;
+      modelId?: unknown;
+    }) => setModel(sessionId, modelId),
+    log: ({ sessionId, after }: { sessionId: string; after?: unknown }) =>
+      readLog(sessionId, after),
+    switchDriver: ({ nodeId, driver }: { nodeId: string; driver?: unknown }) =>
+      changeDriver(nodeId, driver),
+  };
+  registerProcedures(
+    context.server,
+    "acp",
+    procedures as unknown as DomainHandlers<"acp">,
+  );
+
+  route("POST", "/api/acp/sessions", async (_match, request) => ({
+    status: 200,
+    body: await createSession(jsonObject(request.body)),
+  }));
+  route(
+    "POST",
+    "/api/acp/sessions/{sessionId}/prompt",
+    async (match, request) => ({
+      status: 200,
+      body: await sendPrompt(
+        param(match, "sessionId"),
+        jsonObject(request.body).text,
+      ),
+    }),
+  );
+  route("POST", "/api/acp/sessions/{sessionId}/cancel", async (match) => {
+    await cancel(param(match, "sessionId"));
+    return { status: 204 };
+  });
+  route(
+    "POST",
+    "/api/acp/sessions/{sessionId}/mode",
+    async (match, request) => {
+      await setMode(param(match, "sessionId"), jsonObject(request.body).modeId);
+      return { status: 204 };
+    },
+  );
+  route(
+    "PUT",
+    "/api/acp/sessions/{sessionId}/model",
+    async (match, request) => {
+      await setModel(
+        param(match, "sessionId"),
+        jsonObject(request.body).modelId,
+      );
+      return { status: 204 };
+    },
+  );
+  route("GET", "/api/acp/sessions/{sessionId}/log", async (match, request) => ({
+    status: 200,
+    body: await readLog(
+      param(match, "sessionId"),
+      request.query.get("after") ?? "0",
+    ),
+  }));
+  route("POST", "/api/acp/nodes/{nodeId}/driver", async (match, request) => ({
+    status: 200,
+    body: await changeDriver(
+      param(match, "nodeId"),
+      jsonObject(request.body).driver,
+    ),
+  }));
 
   /**
    * 设计 §4.2 的五步：审批挂着就拒；结束当前驱动（行记 `switch`）；读 CLI 的
