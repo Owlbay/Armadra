@@ -276,7 +276,7 @@ const dependencyLaunchWireSchema = z.object({
 
 /* ------------------------------- procedure ------------------------------- */
 
-const since = "1.8";
+const since = "1.9";
 const CATALOG = { since, contract: "§39.1" } as const;
 const STATUS = { since, contract: "§39.2" } as const;
 const ANSWERS = { since, contract: "§39.3" } as const;

@@ -50,7 +50,7 @@ import { terminalsApiFor } from "./terminals";
 import { resourcesApi } from "./resources";
 import { conversationsApi } from "./conversations";
 import { handoffApi } from "./handoff";
-import { gitApi } from "./git";
+import { gitApiFor } from "./git";
 import { gitRepositoryApi } from "./git-repository";
 import { usageApi } from "./usage";
 import { settingsApiFor } from "./settings";
@@ -313,7 +313,7 @@ export const runtimeApi = {
   ...resourcesApi,
   ...conversationsApi,
   ...handoffApi,
-  ...gitApi,
+  ...gitApiFor(currentClient),
   ...gitRepositoryApi,
   ...usageApi,
   ...settingsApiFor(currentClient),

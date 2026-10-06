@@ -2374,3 +2374,50 @@
 偏离：入参形状不对时契约的 schema 先于域拒绝（码与状态一致，原话是字段路径）；`since` 取 1.7（main 已是 6）；评论与 `context-links` 未迁。
 
 实测（macOS arm64，Node 26.10.0，合入 main 27b71efe 之后）：新增 `contract/parity-boards.test` 11（旧路径、procedure、原 handler 三者逐字节一致，含 404、409、423、400 envelope）、`canvas/presence-subscription.test` 7、web `api/board-presence.test` 2、`client.test` 与 `use-board-sync.test` 改写补充。`pnpm check` 通过；A 档：design-showcase、gateway、realtime、server、ui-features（多设备画布）、workflow、ws-mux、core-terminal-\*、push 通过；acp、agent-e2e-self-test、remote 三项在探针的临时 HOME 下 `pnpm exec vite` 无输出、「Vite 没有就绪」，与本包无关（环境问题）。
+
+## V1 个人中转全流程探针（里程碑 M1 验收）
+
+规格：[开发栈与验证](../design/platform/dev-stack-and-verification.md) §4；总计划 §12.3。
+
+做了什么：
+
+- `tools/probes/personal-roundtrip.mjs`（A 档）：真个人中转（armadra-cloud `personal init` + `serve`，自签 TLS，托管 `apps/web/dist`）、真 core、真 Electron、无头 Chrome。七步：中继 init；core 登记、隧道 ready、绑定主人；`/app/` 账号口令登录、终端、实时板；`/j/` 访客加入、开终端；桌面粘贴链接挂载（核对指纹）、开终端；手机 390 宽模拟扫码挂载、开终端；撤销链接与撤销登记。最后扫中继、core、Electron 与探针输出，口令、令牌、链接秘密一个都不许出现。
+- e2e 清单新增依赖项 `cloud`（`tools/ci/e2e.mjs`、`tools/probes/cloud-source.mjs`）：找不到 armadra-cloud 检出（私有仓，CI 拉不到）时记 `skipped` 并写明原因，找到则经 `ARMADRA_DEV_STACK_CLOUD_SRC` 交给探针。清单 `personal-roundtrip.json` 列为 tier a，`platforms` 为 darwin、linux。
+- `startStack` 可追加 Chrome 参数；`relay-desktop.mjs` 导出 `attachRenderer`。
+
+实测（macOS arm64，2026-10-06，基于 main 13f20c09，armadra-cloud main 4cc09cc）：`node tools/ci/e2e.mjs --tier a --only personal-roundtrip` 连跑 3 次全过，100 s / 101 s / 116 s（其中 `/app/` 一段约 14.5 s、桌面一段约 8 s，第三次桌面一段 23 s；手机一步前固定等 62 s 的限流窗口）。
+
+发现与限制：
+
+- 中继边缘对每个来源 IP 每分钟 200 次（`edge.connect.ip`，写死在 cloud 的 `control/types.ts`，预检、请求、升级共用）。一台主机上的多个客户端（几个浏览器标签、桌面、手机模拟）共用回环 IP，手机页面启动一口气几十个请求，前面几步用掉额度后预检答 429，页面落在「连不上」。探针因此在手机一步前等一个窗口。真实部署里多人在同一出口 IP 后面（办公室、家庭）也会撞到。
+- 手机模拟需要 Chrome 的 `--disable-features=LocalNetworkAccessChecks`：页面来源是拦截出来的 `https://localhost`，Chrome 当它是公网页面而拦下对回环中继的访问；原生 WebView 没有这一层。
+- 手机没有真机或模拟器：原生桥是页面里的替身（钥匙串存页面存储，扫码结果注入）。
+- 访客兑换一次性邀请后列表里 `uses` 为 0、`consumedAtMs` 有值：一次性邀请不计 `uses`，只记消费时间。
+
+## E3-5a 工程规范化：git 域迁到契约（契约 §40.1，E3-5 第一部分）
+
+规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-5）；契约 §40。
+
+切分边界：E3-5 表里的「40 / 35」是整个 git 面的调用数 / 路径数（页面 `api/git.ts` 17 个调用 + `api/git-repository.ts` 23 个调用）。本包收 `api/git.ts` 那 17 个——`status`、`diff`、`head-commit`、`init`、`stage`、`unstage`、`resolve`、`revert`、`commit`、`hunks`（读与写）、`message/providers|source|generate`、`/api/git/clone`（起、读、取消）；`repositories`、`log`、`refs`、`identity` 与 `repository/*`（含操作队列与 rebase）留给第二部分（`gitRepository.*`，§40.2）。对偶测试里有一条用例核对这条边界：路由表里其余的 Git 路径都是仓库级的。
+
+做了什么：
+
+- **契约**（`packages/shared/src/contract/git.ts`）：`git.*` 17 条，`message.*` 与 `clone.*` 各成一棵子树。出参复用页面已有的 schema；入参只校形状，`scope` / `source` / `action` / `language` 是字符串，取值由域判断（拒绝的原话因此与旧路径一样）；旧路径查询串里的 `paths`（逗号拼）与 `ignoreWhitespace`（`"true"`）两种拼法都收。注册表登记 `git_execution_required`（403）。`since` 为 1.8，协议 minor 7 → 8。
+- **core**（`core/git/routes.ts`）：这 17 个路由的实现收成一份 `operations`，旧 handler 与 `registerProcedures(server, "git", …)` 调同一份；入参是取值函数，旧 handler 照旧在权限门之后才解析体。克隆保留任务模型：`clone.start` 只起任务答 `jobId`，进度靠 `clone.status` 轮询，完成时登记工作空间。仓库级路由未动。
+- **页面**：`api/git.ts` 改为 `gitApiFor(rpc)`，经 `currentClient`（换源跟着换），函数签名不变；入参照旧先过页面 schema，空路径、空提交信息、不认识的 `scope` 在发请求前同步抛出。
+- **契约 §40**：§40.1 生成块与说明，§40.2 占位写明第二部分的范围。
+
+实测（macOS arm64，基于 main 13f20c09）：
+
+- `pnpm check` 通过（lint 0 error；`notices:check` 要指向实际装依赖的离线仓库：`npm_config_store_dir=<仓库> pnpm notices:check` 通过，本包未动依赖）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 418 个文件通过、11 跳过（4952 过 / 72 跳过），脚本 68 过 / 2 跳过。新增 `core/contract/parity-git.test.ts` 17 条：旧路径、procedure、原 handler 逐字节相等，覆盖状态、差异（两种拼法）、HEAD 提交、暂存 / 取消暂存、带冲突标记的解决被拒、还原与不认识的来源、提交与 amend 的 HEAD 不符、按块读写与不认识的动作、AI 提交信息（替身 `claude`，不跑真 CLI）、初始化、读 / 写 / 执行授权与不存在的工作空间、克隆的拒绝与任务读取取消、形状错只比码与状态、scope 与路由表一致、切分边界。
+- `pnpm --filter @armadra/web test`：399 个文件、3699 条通过；`typecheck` 通过。新增 `api/client.git.test.ts` 15 条，`client.test.ts` 里旧的 git / 克隆用例搬过去按 procedure 线上形状改写。
+- 探针：`git-tool-window` 通过（日志、提交两页与手机四级导航的截图）；A 档 `ui-features-e2e` 通过；`remote-e2e` 的 Git 段（远端状态、暂存、提交、fetch 与取消）全部通过。
+
+没做 / 偏离：
+
+- 形状错（缺字段、类型不对）经旧路径与 procedure 由入参校验先答 `bad_request`（带 `details.issues`），与迁移前那句原话不同；码与状态不变。
+- 旧路径答 500 `internal_error`（如 Git 输出无法解析）时，门面按 §34.1 不外泄原话，与迁移前不同。
+- `status` 的 `paths` 收下但 core 从来不按它过滤（迁移前就如此），没有顺手改。
+- 探针在临时 HOME 下 `pnpm exec vite` 会先联网核对锁文件，本机断网时卡住；本地跑探针时加 `npm_config_verify_deps_before_run=false npm_config_minimum_release_age=0 npm_config_manage_package_manager_versions=false` 即可，探针本身未改。
+- `remote-e2e` 的 `08b-remote-acp`（ACP Agent 启动即退出）与 `server-e2e` 的「新建浏览器」菜单项等待超时失败，两处都不经过 git 面，与本包无关，未深究。

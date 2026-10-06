@@ -77,7 +77,8 @@ export async function until(
 }
 
 /**
- * 一整套环境：core + Vite + Chrome。`options.env` 追加给 core 的环境变量
+ * 一整套环境：core + Vite + Chrome。`options.chromeArgs` 追加给 Chrome 的参数；
+ * `options.env` 追加给 core 的环境变量
  * （比如状态页地址）；`options.home` 是造好的临时 HOME（集成页场景要先放
  * 残留文件再起 core）。
  */
@@ -230,6 +231,7 @@ export async function startStack(options = {}) {
       "--lang=zh-CN",
       "--remote-debugging-address=127.0.0.1",
       "--remote-debugging-port=0",
+      ...(options.chromeArgs ?? []),
       `--user-data-dir=${profile}`,
       "about:blank",
     ],

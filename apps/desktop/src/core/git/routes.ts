@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { type DomainHandlers, registerProcedures } from "../http/rpc";
 import type { CoreServer } from "../http/server";
 import type { CoreRequest, HandlerResult, RouteMatch } from "../http/router";
 import { canonicalDirectory, contains } from "../workspaces/roots";
@@ -68,6 +69,9 @@ import { badRequest, commaPaths, forbidden, requireExecution } from "./support";
  * is, the model runs here where its credentials are.
  */
 
+/** 一次调用的入参：旧路径的查询串或体，或 procedure 解析好的入参。 */
+type Args = Record<string, unknown>;
+
 export interface GitRouteDeps {
   readonly server: CoreServer;
   readonly database: DatabaseSync;
@@ -89,131 +93,82 @@ export function installRoutes(deps: GitRouteDeps): void {
     server.router.handle(method, path, answered(handler));
   };
 
-  /* --------------------------------- reads -------------------------------- */
+  /* ------------------------- `git.*`（契约 §40.1） ------------------------- */
 
-  handle(
-    "GET",
-    "/api/workspaces/{workspaceId}/git/status",
-    async (match, request) => {
-      const workspace = readWorkspace(deps, match);
+  // 一份实现：路由表里的旧 handler 与 procedure 都调它，拒绝的码与原话因此一样。
+  // 入参是一个取值函数而不是值：旧 handler 在权限门之后才解析请求体（体坏了
+  // 而工作空间又不许写时答的是 403），procedure 的入参由门面先解析好。
+  const operations = {
+    status: async (workspaceId: string, input: () => Args) => {
+      const workspace = workspaceById(deps, workspaceId);
       requireExecution(workspace.permissions.execute, "Git worktree status");
-      return ok(
-        await on(deps, workspace, "git.status", { path: pathOf(request) }),
-      );
+      return await on(deps, workspace, "git.status", {
+        path: pathField(input()),
+      });
     },
-  );
 
-  handle(
-    "GET",
-    "/api/workspaces/{workspaceId}/git/diff",
-    async (match, request) => {
-      const workspace = readWorkspace(deps, match);
-      return ok(
-        await on(deps, workspace, "git.diff", {
-          path: pathOf(request),
-          scope: scopeOf(request),
-          paths: commaPaths(request.query.get("paths")),
-          ignoreWhitespace: request.query.get("ignoreWhitespace") === "true",
-          execute: workspace.permissions.execute,
-        }),
-      );
+    diff: async (workspaceId: string, input: () => Args) => {
+      const workspace = workspaceById(deps, workspaceId);
+      const args = input();
+      return await on(deps, workspace, "git.diff", {
+        path: pathField(args),
+        scope: diffScopeOf(args.scope),
+        paths: pathListOf(args.paths),
+        ignoreWhitespace:
+          args.ignoreWhitespace === true || args.ignoreWhitespace === "true",
+        execute: workspace.permissions.execute,
+      });
     },
-  );
 
-  handle(
-    "GET",
-    "/api/workspaces/{workspaceId}/git/head-commit",
-    async (match, request) => {
-      const workspace = readWorkspace(deps, match);
+    headCommit: async (workspaceId: string, input: () => Args) => {
+      const workspace = workspaceById(deps, workspaceId);
       requireExecution(workspace.permissions.execute, "Git commit inspection");
-      return ok(
-        await on(deps, workspace, "git.headCommit", { path: pathOf(request) }),
-      );
+      return await on(deps, workspace, "git.headCommit", {
+        path: pathField(input()),
+      });
     },
-  );
 
-  /* -------------------------------- writes -------------------------------- */
-
-  handle("POST", "/api/workspaces/{workspaceId}/git/init", async (match) => {
-    // Creating a repository is the one write with no repository to queue on,
-    // so its permission check is inline.
-    const workspace = readWorkspace(deps, match);
-    if (!workspace.permissions.write) {
-      throw forbidden("Workspace does not allow Git writes");
-    }
-    requireExecution(
-      workspace.permissions.execute,
-      "Git repository initialization",
-    );
-    return ok(await on(deps, workspace, "git.init"));
-  });
-
-  handle(
-    "POST",
-    "/api/workspaces/{workspaceId}/git/stage",
-    async (match, request) => {
-      const { workspace, body } = writeRequest(deps, match, request);
-      return ok(
-        await on(deps, workspace, "git.stage", {
-          path: pathField(body),
-          paths: pathsField(body),
-        }),
+    init: async (workspaceId: string) => {
+      // Creating a repository is the one write with no repository to queue on,
+      // so its permission check is inline.
+      const workspace = workspaceById(deps, workspaceId);
+      if (!workspace.permissions.write) {
+        throw forbidden("Workspace does not allow Git writes");
+      }
+      requireExecution(
+        workspace.permissions.execute,
+        "Git repository initialization",
       );
+      return await on(deps, workspace, "git.init");
     },
-  );
 
-  handle(
-    "POST",
-    "/api/workspaces/{workspaceId}/git/unstage",
-    async (match, request) => {
-      const { workspace, body } = writeRequest(deps, match, request);
-      return ok(
-        await on(deps, workspace, "git.unstage", {
-          path: pathField(body),
-          paths: pathsField(body),
-        }),
-      );
+    paths: async (
+      operation: "git.stage" | "git.unstage" | "git.resolve",
+      workspaceId: string,
+      input: () => Args,
+    ) => {
+      const { workspace, body } = writeRequest(deps, workspaceId, input);
+      return await on(deps, workspace, operation, {
+        path: pathField(body),
+        paths: pathsField(body),
+      });
     },
-  );
 
-  handle(
-    "POST",
-    "/api/workspaces/{workspaceId}/git/resolve",
-    async (match, request) => {
-      const { workspace, body } = writeRequest(deps, match, request);
-      return ok(
-        await on(deps, workspace, "git.resolve", {
-          path: pathField(body),
-          paths: pathsField(body),
-        }),
-      );
-    },
-  );
-
-  handle(
-    "POST",
-    "/api/workspaces/{workspaceId}/git/revert",
-    async (match, request) => {
-      const { workspace, body } = writeRequest(deps, match, request);
+    revert: async (workspaceId: string, input: () => Args) => {
+      const { workspace, body } = writeRequest(deps, workspaceId, input);
       const source = body.source ?? "index";
       if (source !== "index" && source !== "head") {
         throw badRequest("Restore source must be `index` or `head`");
       }
-      return ok(
-        await on(deps, workspace, "git.revert", {
-          path: pathField(body),
-          paths: pathsField(body),
-          source: source as RestoreSource,
-        }),
-      );
+      return await on(deps, workspace, "git.revert", {
+        path: pathField(body),
+        paths: pathsField(body),
+        source: source as RestoreSource,
+      });
     },
-  );
 
-  handle(
-    "POST",
-    "/api/workspaces/{workspaceId}/git/commit",
-    async (match, request) => {
-      const { workspace, body } = writeRequest(deps, match, request);
+    commit: async (workspaceId: string, input: () => Args) => {
+      const { workspace, body } = writeRequest(deps, workspaceId, input);
       const message = body.message;
       if (typeof message !== "string") {
         throw badRequest("Commit message is invalid");
@@ -223,53 +178,35 @@ export function installRoutes(deps: GitRouteDeps): void {
           ? undefined
           : pathsField(body);
       const amend = amendOf(body);
-      return ok(
-        await on(deps, workspace, "git.commit", {
-          path: pathField(body),
-          message,
-          ...(paths === undefined ? {} : { paths }),
-          ...(amend === undefined ? {} : { amend }),
-        }),
-      );
+      return await on(deps, workspace, "git.commit", {
+        path: pathField(body),
+        message,
+        ...(paths === undefined ? {} : { paths }),
+        ...(amend === undefined ? {} : { amend }),
+      });
     },
-  );
 
-  /* ------------------------------- AI message ----------------------------- */
-
-  handle(
-    "GET",
-    "/api/workspaces/{workspaceId}/git/message/providers",
-    async (match) => {
+    messageProviders: async (workspaceId: string) => {
       // Listing providers runs nothing in the workspace; reading it is enough.
-      readWorkspace(deps, match);
-      return { status: 200, body: await providers() };
+      workspaceById(deps, workspaceId);
+      return await providers();
     },
-  );
 
-  handle(
-    "GET",
-    "/api/workspaces/{workspaceId}/git/message/source",
-    async (match) => {
-      const workspace = readWorkspace(deps, match);
+    messageSource: async (workspaceId: string) => {
+      const workspace = workspaceById(deps, workspaceId);
       requireExecution(
         workspace.permissions.execute,
         "AI staged-source inspection",
       );
-      return ok(
-        await on(deps, workspace, "git.messageSource", {
-          execute: workspace.permissions.execute,
-        }),
-      );
+      return await on(deps, workspace, "git.messageSource", {
+        execute: workspace.permissions.execute,
+      });
     },
-  );
 
-  handle(
-    "POST",
-    "/api/workspaces/{workspaceId}/git/message/generate",
-    async (match, request) => {
-      const workspace = readWorkspace(deps, match);
+    messageGenerate: async (workspaceId: string, input: () => Args) => {
+      const workspace = workspaceById(deps, workspaceId);
       requireExecution(workspace.permissions.execute, "AI generation");
-      const body = jsonObject(request.body);
+      const body = input();
       const language = body.language ?? "en";
       if (language !== "en" && language !== "zh") {
         throw badRequest("Unsupported message language");
@@ -284,32 +221,260 @@ export function installRoutes(deps: GitRouteDeps): void {
       if (isRemote(workspace)) {
         // 两台机器各跑一半：采集与复核在仓库那边（Worker），模型在凭据这边。
         const execute = workspace.permissions.execute;
-        return {
-          status: 200,
-          body: await generateFrom(
-            {
-              capture: async () =>
-                (await on(deps, workspace, "git.messageCapture", {
-                  execute,
-                })) as Capture,
-              source: async () =>
-                (await on(deps, workspace, "git.messageSource", {
-                  execute,
-                })) as GitMessageSource,
-            },
-            draft,
-          ),
-        };
-      }
-      return {
-        status: 200,
-        body: await generate(
-          deps.service.withExecution(workspace.permissions.execute),
-          workspace.rootPath,
+        return await generateFrom(
+          {
+            capture: async () =>
+              (await on(deps, workspace, "git.messageCapture", {
+                execute,
+              })) as Capture,
+            source: async () =>
+              (await on(deps, workspace, "git.messageSource", {
+                execute,
+              })) as GitMessageSource,
+          },
           draft,
-        ),
+        );
+      }
+      return await generate(
+        deps.service.withExecution(workspace.permissions.execute),
+        workspace.rootPath,
+        draft,
+      );
+    },
+
+    hunks: async (workspaceId: string, input: () => Args) => {
+      const workspace = workspaceById(deps, workspaceId);
+      requireExecution(
+        workspace.permissions.execute,
+        "Git hunk worktree validation",
+      );
+      const args = input();
+      const file = args.file;
+      if (typeof file !== "string") {
+        throw badRequest("A hunk read names no file");
+      }
+      return await on(deps, workspace, "git.hunks", {
+        path: pathField(args),
+        file,
+        scope: hunkScopeOf(args.scope),
+        execute: workspace.permissions.execute,
+      });
+    },
+
+    applyHunk: async (workspaceId: string, input: () => Args) => {
+      const workspace = workspaceById(deps, workspaceId);
+      if (!workspace.permissions.write) {
+        throw forbidden("Workspace does not allow this Git operation");
+      }
+      requireExecution(workspace.permissions.execute, "Git hunk writes");
+      const body = input();
+      const action = body.action;
+      if (action !== "stage" && action !== "unstage" && action !== "revert") {
+        throw badRequest("Hunk action, scope or identity is invalid");
+      }
+      return await on(deps, workspace, "git.applyHunk", {
+        execute: workspace.permissions.execute,
+        mutation: {
+          path: optionalString(body, "path") ?? ".",
+          file: requiredString(body, "file"),
+          scope: hunkScopeOf(optionalString(body, "scope")),
+          diffDigest: requiredString(body, "diffDigest"),
+          hunkId: requiredString(body, "hunkId"),
+          action,
+        },
+      });
+    },
+
+    cloneStart: (body: Args) => {
+      // A new project has no grant yet. If its destination is inside existing
+      // workspaces, every ancestor's restrictions are preserved rather than
+      // bypassed through this global creation endpoint.
+      const parent = canonicalDirectory(requiredString(body, "parent"));
+      for (const summary of listWorkspaces(deps.database)) {
+        let root: string;
+        try {
+          root = canonicalDirectory(summary.rootPath);
+        } catch {
+          continue;
+        }
+        if (!contains(root, parent)) continue;
+        if (!summary.permissions.read || !summary.permissions.write) {
+          throw forbidden(
+            "An ancestor workspace does not allow cloning into this destination",
+          );
+        }
+        requireExecution(
+          summary.permissions.execute,
+          "Cloning into an existing workspace",
+        );
+      }
+      const started = startClone(
+        requiredString(body, "url"),
+        parent,
+        optionalString(body, "name"),
+      );
+      return { jobId: started.jobId };
+    },
+
+    cloneStatus: (jobId: string) => {
+      const status = cloneStatus(jobId);
+      // `createWorkspace` is idempotent on the root path, so two polls landing
+      // at the same time cannot produce two workspaces.
+      const workspace =
+        status.state === "done"
+          ? createWorkspace(deps.database, {
+              name: validWorkspaceName(status.name),
+              rootPath: canonicalDirectory(status.target),
+            })
+          : undefined;
+      return {
+        state: status.state,
+        lines: status.lines,
+        ...(status.error === null ? {} : { error: status.error }),
+        ...(workspace === undefined ? {} : { workspace }),
       };
     },
+
+    cloneCancel: (jobId: string) => {
+      cancelClone(jobId);
+    },
+  };
+
+  type Input = Args & { workspaceId: string };
+  const given = (input: Args) => () => input;
+  const handlers = {
+    status: (input: Input) =>
+      operations.status(input.workspaceId, given(input)),
+    diff: (input: Input) => operations.diff(input.workspaceId, given(input)),
+    headCommit: (input: Input) =>
+      operations.headCommit(input.workspaceId, given(input)),
+    init: (input: Input) => operations.init(input.workspaceId),
+    stage: (input: Input) =>
+      operations.paths("git.stage", input.workspaceId, given(input)),
+    unstage: (input: Input) =>
+      operations.paths("git.unstage", input.workspaceId, given(input)),
+    resolve: (input: Input) =>
+      operations.paths("git.resolve", input.workspaceId, given(input)),
+    revert: (input: Input) =>
+      operations.revert(input.workspaceId, given(input)),
+    commit: (input: Input) =>
+      operations.commit(input.workspaceId, given(input)),
+    hunks: (input: Input) => operations.hunks(input.workspaceId, given(input)),
+    applyHunk: (input: Input) =>
+      operations.applyHunk(input.workspaceId, given(input)),
+    message: {
+      providers: (input: Input) =>
+        operations.messageProviders(input.workspaceId),
+      source: (input: Input) => operations.messageSource(input.workspaceId),
+      generate: (input: Input) =>
+        operations.messageGenerate(input.workspaceId, given(input)),
+    },
+    // 克隆是长操作：`start` 只起任务、答 `jobId`，进度由页面轮询 `status`。
+    clone: {
+      start: (input: Args) => operations.cloneStart(input),
+      status: ({ jobId }: { jobId: string }) => operations.cloneStatus(jobId),
+      cancel: ({ jobId }: { jobId: string }) => operations.cloneCancel(jobId),
+    },
+  };
+  registerProcedures(
+    server,
+    "git",
+    handlers as unknown as DomainHandlers<"git">,
+  );
+
+  // 旧路径：查询串或体先变成同一份入参，再调同一份实现。
+  const query =
+    (request: CoreRequest, ...names: string[]) =>
+    (): Args =>
+      Object.fromEntries(
+        names.flatMap((name) => {
+          const value = request.query.get(name);
+          return value === null ? [] : [[name, value]];
+        }),
+      );
+  const body = (request: CoreRequest) => () => jsonObject(request.body);
+  const at = (match: RouteMatch) => param(match, "workspaceId");
+
+  /* --------------------------------- reads -------------------------------- */
+
+  handle(
+    "GET",
+    "/api/workspaces/{workspaceId}/git/status",
+    async (match, request) =>
+      ok(await operations.status(at(match), query(request, "path"))),
+  );
+
+  handle(
+    "GET",
+    "/api/workspaces/{workspaceId}/git/diff",
+    async (match, request) =>
+      ok(
+        await operations.diff(
+          at(match),
+          query(request, "path", "scope", "paths", "ignoreWhitespace"),
+        ),
+      ),
+  );
+
+  handle(
+    "GET",
+    "/api/workspaces/{workspaceId}/git/head-commit",
+    async (match, request) =>
+      ok(await operations.headCommit(at(match), query(request, "path"))),
+  );
+
+  /* -------------------------------- writes -------------------------------- */
+
+  handle("POST", "/api/workspaces/{workspaceId}/git/init", async (match) =>
+    ok(await operations.init(at(match))),
+  );
+
+  for (const [verb, operation] of [
+    ["stage", "git.stage"],
+    ["unstage", "git.unstage"],
+    ["resolve", "git.resolve"],
+  ] as const) {
+    handle(
+      "POST",
+      `/api/workspaces/{workspaceId}/git/${verb}`,
+      async (match, request) =>
+        ok(await operations.paths(operation, at(match), body(request))),
+    );
+  }
+
+  handle(
+    "POST",
+    "/api/workspaces/{workspaceId}/git/revert",
+    async (match, request) =>
+      ok(await operations.revert(at(match), body(request))),
+  );
+
+  handle(
+    "POST",
+    "/api/workspaces/{workspaceId}/git/commit",
+    async (match, request) =>
+      ok(await operations.commit(at(match), body(request))),
+  );
+
+  /* ------------------------------- AI message ----------------------------- */
+
+  handle(
+    "GET",
+    "/api/workspaces/{workspaceId}/git/message/providers",
+    async (match) => ok(await operations.messageProviders(at(match))),
+  );
+
+  handle(
+    "GET",
+    "/api/workspaces/{workspaceId}/git/message/source",
+    async (match) => ok(await operations.messageSource(at(match))),
+  );
+
+  handle(
+    "POST",
+    "/api/workspaces/{workspaceId}/git/message/generate",
+    async (match, request) =>
+      ok(await operations.messageGenerate(at(match), body(request))),
   );
 
   /* ---------------------------------- hunks ------------------------------- */
@@ -317,54 +482,36 @@ export function installRoutes(deps: GitRouteDeps): void {
   handle(
     "GET",
     "/api/workspaces/{workspaceId}/git/hunks",
-    async (match, request) => {
-      const workspace = readWorkspace(deps, match);
-      requireExecution(
-        workspace.permissions.execute,
-        "Git hunk worktree validation",
-      );
-      const file = request.query.get("file");
-      if (file === null) throw badRequest("A hunk read names no file");
-      return ok(
-        await on(deps, workspace, "git.hunks", {
-          path: pathOf(request),
-          file,
-          scope: hunkScopeOf(request.query.get("scope")),
-          execute: workspace.permissions.execute,
-        }),
-      );
-    },
+    async (match, request) =>
+      ok(
+        await operations.hunks(
+          at(match),
+          query(request, "path", "file", "scope"),
+        ),
+      ),
   );
 
   handle(
     "POST",
     "/api/workspaces/{workspaceId}/git/hunks",
-    async (match, request) => {
-      const workspace = readWorkspace(deps, match);
-      if (!workspace.permissions.write) {
-        throw forbidden("Workspace does not allow this Git operation");
-      }
-      requireExecution(workspace.permissions.execute, "Git hunk writes");
-      const body = jsonObject(request.body);
-      const action = body.action;
-      if (action !== "stage" && action !== "unstage" && action !== "revert") {
-        throw badRequest("Hunk action, scope or identity is invalid");
-      }
-      return ok(
-        await on(deps, workspace, "git.applyHunk", {
-          execute: workspace.permissions.execute,
-          mutation: {
-            path: optionalString(body, "path") ?? ".",
-            file: requiredString(body, "file"),
-            scope: hunkScopeOf(optionalString(body, "scope") ?? null),
-            diffDigest: requiredString(body, "diffDigest"),
-            hunkId: requiredString(body, "hunkId"),
-            action,
-          },
-        }),
-      );
-    },
+    async (match, request) =>
+      ok(await operations.applyHunk(at(match), body(request))),
   );
+
+  /* ---------------------------------- clone ------------------------------- */
+
+  handle("POST", "/api/git/clone", async (_match, request) =>
+    ok(operations.cloneStart(jsonObject(request.body))),
+  );
+
+  handle("GET", "/api/git/clone/{jobId}", async (match) =>
+    ok(operations.cloneStatus(param(match, "jobId"))),
+  );
+
+  handle("DELETE", "/api/git/clone/{jobId}", async (match) => {
+    operations.cloneCancel(param(match, "jobId"));
+    return { status: 204 };
+  });
 
   /* ----------------------------- workspace reads -------------------------- */
 
@@ -778,67 +925,6 @@ export function installRoutes(deps: GitRouteDeps): void {
       return { status: 200, body: deps.service.cancel(operationId) };
     },
   );
-
-  /* ---------------------------------- clone ------------------------------- */
-
-  handle("POST", "/api/git/clone", async (_match, request) => {
-    const body = jsonObject(request.body);
-    // A new project has no grant yet. If its destination is inside existing
-    // workspaces, every ancestor's restrictions are preserved rather than
-    // bypassed through this global creation endpoint.
-    const parent = canonicalDirectory(requiredString(body, "parent"));
-    for (const summary of listWorkspaces(deps.database)) {
-      let root: string;
-      try {
-        root = canonicalDirectory(summary.rootPath);
-      } catch {
-        continue;
-      }
-      if (!contains(root, parent)) continue;
-      if (!summary.permissions.read || !summary.permissions.write) {
-        throw forbidden(
-          "An ancestor workspace does not allow cloning into this destination",
-        );
-      }
-      requireExecution(
-        summary.permissions.execute,
-        "Cloning into an existing workspace",
-      );
-    }
-    const started = startClone(
-      requiredString(body, "url"),
-      parent,
-      optionalString(body, "name"),
-    );
-    return { status: 200, body: { jobId: started.jobId } };
-  });
-
-  handle("GET", "/api/git/clone/{jobId}", async (match) => {
-    const status = cloneStatus(param(match, "jobId"));
-    // `createWorkspace` is idempotent on the root path, so two polls landing at
-    // the same time cannot produce two workspaces.
-    const workspace =
-      status.state === "done"
-        ? createWorkspace(deps.database, {
-            name: validWorkspaceName(status.name),
-            rootPath: canonicalDirectory(status.target),
-          })
-        : undefined;
-    return {
-      status: 200,
-      body: {
-        state: status.state,
-        lines: status.lines,
-        ...(status.error === null ? {} : { error: status.error }),
-        ...(workspace === undefined ? {} : { workspace }),
-      },
-    };
-  });
-
-  handle("DELETE", "/api/git/clone/{jobId}", async (match) => {
-    cancelClone(param(match, "jobId"));
-    return { status: 204 };
-  });
 }
 
 /* --------------------------------- helpers -------------------------------- */
@@ -872,7 +958,11 @@ function param(match: RouteMatch, name: string): string {
 }
 
 function readWorkspace(deps: GitRouteDeps, match: RouteMatch): Workspace {
-  const workspace = getWorkspace(deps.database, param(match, "workspaceId"));
+  return workspaceById(deps, param(match, "workspaceId"));
+}
+
+function workspaceById(deps: GitRouteDeps, workspaceId: string): Workspace {
+  const workspace = getWorkspace(deps.database, workspaceId);
   if (!workspace.permissions.read) {
     throw forbidden("Workspace does not allow Git reads");
   }
@@ -885,10 +975,10 @@ function readWorkspace(deps: GitRouteDeps, match: RouteMatch): Workspace {
  */
 function writeRequest(
   deps: GitRouteDeps,
-  match: RouteMatch,
-  request: CoreRequest,
-): { workspace: Workspace; body: Record<string, unknown> } {
-  const workspace = readWorkspace(deps, match);
+  workspaceId: string,
+  input: () => Args,
+): { workspace: Workspace; body: Args } {
+  const workspace = workspaceById(deps, workspaceId);
   if (!workspace.permissions.write) {
     throw forbidden("Workspace does not allow Git writes");
   }
@@ -896,7 +986,7 @@ function writeRequest(
     workspace.permissions.execute,
     "Git index, worktree, and commit writes",
   );
-  return { workspace, body: jsonObject(request.body) };
+  return { workspace, body: input() };
 }
 
 function ok(body: unknown): HandlerResult {
@@ -1016,15 +1106,23 @@ function positive(value: string, name: string): number {
   return parsed;
 }
 
-function scopeOf(request: CoreRequest): DiffScope {
-  const value = request.query.get("scope") ?? "worktree";
+/** 旧路径的查询串里是逗号拼成的一个字符串，JSON 体里是数组。 */
+function pathListOf(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string");
+  }
+  return commaPaths(typeof value === "string" ? value : undefined);
+}
+
+function diffScopeOf(scope: unknown): DiffScope {
+  const value = scope ?? "worktree";
   if (value !== "worktree" && value !== "staged") {
     throw badRequest("Diff scope must be `worktree` or `staged`");
   }
   return value;
 }
 
-function hunkScopeOf(value: string | null): GitHunkScope {
+function hunkScopeOf(value: unknown): GitHunkScope {
   if (value !== "worktree" && value !== "staged") {
     throw badRequest("Hunk scope must be `worktree` or `staged`");
   }
