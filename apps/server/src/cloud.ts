@@ -492,9 +492,20 @@ export async function runCloud(
       "DELETE",
       `/api/identity/cloud/register?issuer=${encodeURIComponent(issuer)}`,
     );
+    // 中继侧的源记录要远程服务 owner 的会话才删得掉（契约 §31.4）；服务器壳多半
+    // 没有那份会话，没删掉就如实说「中继侧待清理」和码。
+    const pending = (await core.call(
+      "GET",
+      "/api/identity/cloud/relay-pending",
+    )) as { pending?: { issuer?: string; code?: string }[] };
+    const relayPending =
+      pending.pending?.find((one) => one.issuer === issuer)?.code ?? null;
     emit(
-      { command: "cloud revoke", issuer, revoked: true },
-      () => `已撤销 ${issuer} 的登记`,
+      { command: "cloud revoke", issuer, revoked: true, relayPending },
+      () =>
+        relayPending === null
+          ? `已撤销 ${issuer} 的登记`
+          : `已撤销 ${issuer} 的登记；中继侧待清理（${relayPending}）`,
     );
     return;
   }

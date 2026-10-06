@@ -1,5 +1,5 @@
 /**
- * 云登录与登记的 SQL（迁移 0040，契约 §31）。
+ * 云登录与登记的 SQL（迁移 0040、0041，契约 §31）。
  *
  * 一行 = 这台 core 信任一个远程服务（issuer）签的断言、并向它开隧道。撤销只记
  * `revoked_at_ms`，同一个 issuer 再登记时整行覆盖。这里没有凭据：源私钥在
@@ -119,7 +119,8 @@ export class CloudStore {
            mode = excluded.mode,
            registered_by = excluded.registered_by,
            registered_at_ms = excluded.registered_at_ms,
-           revoked_at_ms = excluded.revoked_at_ms`,
+           revoked_at_ms = excluded.revoked_at_ms,
+           relay_cleanup = ''`,
       )
       .run(
         row.issuer,
@@ -163,6 +164,37 @@ export class CloudStore {
       )
       .run(atMs, issuer);
     return Number(result.changes) > 0;
+  }
+
+  /**
+   * 撤销时中继侧没删掉的那一份（迁移 0041）：记下当时的错误码；`""` 清掉。
+   * 只对已撤销的行有意义，再登记（{@link put}）时清空。
+   */
+  setRelayCleanup(issuer: string, code: string): void {
+    this.database
+      .prepare(
+        "UPDATE cloud_registrations SET relay_cleanup = ? WHERE issuer = ? AND revoked_at_ms > 0",
+      )
+      .run(code.slice(0, 64), issuer);
+  }
+
+  /** 已撤销、中继侧还欠着清理的登记，按撤销先后。 */
+  relayPending(): { issuer: string; revokedAtMs: number; code: string }[] {
+    return (
+      this.database
+        .prepare(
+          "SELECT issuer, revoked_at_ms, relay_cleanup FROM cloud_registrations WHERE revoked_at_ms > 0 AND relay_cleanup <> '' ORDER BY revoked_at_ms, issuer",
+        )
+        .all() as unknown as {
+        issuer: string;
+        revoked_at_ms: number;
+        relay_cleanup: string;
+      }[]
+    ).map((record) => ({
+      issuer: record.issuer,
+      revokedAtMs: Number(record.revoked_at_ms),
+      code: record.relay_cleanup,
+    }));
   }
 
   /**

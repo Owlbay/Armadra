@@ -167,9 +167,36 @@ export function assertNativeArch(releaseDir) {
   }
 }
 
+/**
+ * `--executable-only`: only the executable bit, nothing else — no compiler, no
+ * network, and no failure when node-pty is not installed (a filtered install
+ * such as the server image's). The root `postinstall` and `libs:build` run
+ * this, so a fresh worktree's terminals work before any `pretest` has: pnpm
+ * never runs node-pty's own install script here (`allowBuilds: false`), and
+ * its extraction drops the bit. Repeatable; touches only the node-pty this
+ * repository resolves from `apps/desktop`. (`--prebuilt`, which the server
+ * image passes, is the default mode: on Linux it still compiles the Node-ABI
+ * build the container needs.)
+ */
+export function ensurePrebuiltOnly() {
+  let root;
+  try {
+    root = nodePtyDir();
+  } catch {
+    return [];
+  }
+  return ensurePrebuiltExecutable(root);
+}
+
 if (process.argv[1] && process.argv[1].endsWith("ensure-node-pty.mjs")) {
   if (process.argv.includes("--rebuild")) ensureNodePtyForElectron();
-  else {
+  else if (process.argv.includes("--executable-only")) {
+    const fixed = ensurePrebuiltOnly();
+    if (fixed.length > 0)
+      process.stdout.write(
+        `node-pty: restored the executable bit on ${fixed.length} helper(s)\n`,
+      );
+  } else {
     if (ensureNodeAbiBuild() === "compiled")
       process.stdout.write("node-pty: compiled the Node-ABI build\n");
     const fixed = ensurePrebuiltExecutable();

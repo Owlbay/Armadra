@@ -5,6 +5,7 @@ import type {
   InferSchemaOutput,
 } from "@orpc/contract";
 
+import { agents } from "./agents.js";
 import { boards } from "./boards.js";
 import { identity } from "./cloud.js";
 import { files } from "./files.js";
@@ -34,6 +35,7 @@ export const contract = {
   terminals,
   boards,
   git,
+  agents,
   gitRepository,
 };
 
@@ -145,6 +147,7 @@ export {
   cloudStatusOutputSchema,
   tunnelStatusSchema,
 } from "./cloud.js";
+export type { RelayPending } from "./cloud.js";
 export {
   workspaceEventsCursorSchema,
   workspaceEventsItemSchema,

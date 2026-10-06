@@ -305,6 +305,16 @@ async function cloud(
       })),
     });
   }
+  const owned = /^\/v1\/sources\/([0-9a-f]{32})$/.exec(path);
+  if (owned !== null && request.method === "DELETE") {
+    // `sources.revoke`（cloud-api §4）：删掉目录里的这个源；没有答 not_found。
+    const index = world.cloud.sources.findIndex(
+      (one) => one.sourceId === owned[1],
+    );
+    if (index < 0) return json(404, { code: "not_found", message: "no" });
+    world.cloud.sources.splice(index, 1);
+    return json(200, {});
+  }
   const match = /^\/v1\/sources\/([0-9a-f]{32})\/assertion$/.exec(path);
   if (match !== null) {
     world.cloud.assertions += 1;

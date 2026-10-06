@@ -1,3 +1,4 @@
+import type { RelayPending } from "@armadra/shared";
 import { z } from "zod";
 
 import type { ShareRole } from "./accounts";
@@ -22,6 +23,7 @@ import { localSource } from "./source";
 
 export type {
   ClientSource,
+  RelayPending,
   RemoteService,
   RemoteSourceSummary,
 } from "@armadra/shared";
@@ -323,9 +325,35 @@ export async function shareThisMachine(input: {
   return registered;
 }
 
-/** 停止分享本机：撤销本机对这个远程服务的登记（隧道断开、断言不再被认）。 */
-export function stopSharing(issuer: string) {
-  return localClient().identity.cloud.revoke({ issuer });
+/**
+ * 停止分享本机：撤销本机对这个远程服务的登记（隧道断开、断言不再被认），core
+ * 随后尽力删中继侧的源记录（契约 §31.4）。答这个 issuer 是否还欠着中继侧清理
+ * 与码（`null` = 不欠）。
+ */
+export async function stopSharing(issuer: string): Promise<string | null> {
+  await localClient().identity.cloud.revoke({ issuer });
+  return pendingCode(await relayPending(), issuer);
+}
+
+/** 已撤销、中继侧还欠着清理的登记（§31.4）。 */
+export async function relayPending(): Promise<RelayPending[]> {
+  return (await localClient().identity.cloud.relayPending({})).pending;
+}
+
+/** 重试一条中继侧清理；答还欠着时的码（`null` = 清掉了）。 */
+export async function retryRelayCleanup(
+  issuer: string,
+): Promise<string | null> {
+  const answer = await localClient().identity.cloud.relayCleanup({ issuer });
+  return answer.pending ? answer.code : null;
+}
+
+/** 列表里这个 issuer 欠着的码。 */
+export function pendingCode(
+  pending: readonly RelayPending[],
+  issuer: string,
+): string | null {
+  return pending.find((one) => one.issuer === issuer)?.code ?? null;
 }
 
 /**

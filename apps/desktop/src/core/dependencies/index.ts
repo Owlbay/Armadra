@@ -7,6 +7,8 @@ import type {
   RouteMatch,
   Router,
 } from "../http/router";
+import { type DomainHandlers, registerProcedures } from "../http/rpc";
+import type { CoreServer } from "../http/server";
 import type { CoreContext } from "../main";
 import { DomainError } from "../workspaces/support";
 import { createDependencies } from "./create";
@@ -40,6 +42,7 @@ export function install(context: CoreContext): DependencyService {
   });
   setDependencyService(service);
   installRoutes(context.server.router, database);
+  registerDependencyProcedures(context.server, database);
   service.start();
   return service;
 }
@@ -92,18 +95,18 @@ export function launchJson(
   };
 }
 
-/* --------------------------------- 路由 ---------------------------------- */
+/* --------------------------------- 动作 ---------------------------------- */
 
-export function installRoutes(router: Router, database: DatabaseSync): void {
-  // 一个工作空间里还没了结的等待，按下游分组。节点头「等待 X」与 rope 边都
-  // 读它：界面上的等待关系由服务的状态派生，不再从节点数据里猜。
-  router.handle(
-    "GET",
-    "/api/workspaces/{workspaceId}/dependencies",
-    answered((match, request) => {
-      const workspaceId = param(match, "workspaceId");
-      const nodeId = request.query.get("nodeId") ?? undefined;
-      const all = request.query.get("all") === "true";
+/**
+ * 依赖编排的三个动作（契约 §39.5）：旧路径的 handler 与 `agents.dependencies` /
+ * `importLegacyDependencies` / `cancelDependency` 调的都是这一份，拒绝的码与原话
+ * 一样。入参是从路径、查询串或体里读出来的值，形状在这里判。
+ */
+export function dependencyOperations(database: DatabaseSync) {
+  return {
+    // 一个工作空间里还没了结的等待，按下游分组。节点头「等待 X」与 rope 边都
+    // 读它：界面上的等待关系由服务的状态派生，不再从节点数据里猜。
+    list: (workspaceId: string, nodeId: string | undefined, all: boolean) => {
       const launches = listForWorkspace(database, workspaceId, {
         ...(nodeId === undefined || nodeId === "" ? {} : { nodeId }),
         all,
@@ -111,48 +114,27 @@ export function installRoutes(router: Router, database: DatabaseSync): void {
         (entry) => loadNode(database, entry.launch.nodeId) !== undefined,
       );
       return {
-        status: 200,
-        body: {
-          launches: launches.map((entry) =>
-            launchJson(database, entry.launch, entry.dependencies),
-          ),
-        },
+        launches: launches.map((entry) =>
+          launchJson(database, entry.launch, entry.dependencies),
+        ),
       };
-    }),
-  );
+    },
 
-  // 不等这条边了。其余的边都已满足时，下游就在这一次取消里启动。
-  router.handle(
-    "DELETE",
-    "/api/workspaces/{workspaceId}/dependencies/{dependencyId}",
-    answered((match) => {
+    // 不等这条边了。其余的边都已满足时，下游就在这一次取消里启动。
+    cancel: (workspaceId: string, dependencyId: string) => {
       const service = requireService();
-      const cancelled = service.cancel(
-        param(match, "workspaceId"),
-        param(match, "dependencyId"),
-      );
+      const cancelled = service.cancel(workspaceId, dependencyId);
       if (cancelled === undefined) {
         throw new DomainError(404, "not_found", "没有这条依赖。");
       }
-      return {
-        status: 200,
-        body: { dependency: dependencyJson(database, cancelled) },
-      };
-    }),
-  );
+      return { dependency: dependencyJson(database, cancelled) };
+    },
 
-  // 旧数据迁入：页面挂载时发现节点数据里还躺着一份带依赖的 `pendingLaunch`，
-  // 就交给这里建成依赖行，然后自己把那份数据清掉。core 从此只读不写它。新
-  // 的依赖只由 `canvas open-agent --after` 建，这条路径只收旧数据，所以条件
-  // 固定是 `current`——旧实现等的就是「上游做完手上这一轮」。
-  router.handle(
-    "POST",
-    "/api/workspaces/{workspaceId}/dependencies",
-    answered((match, request) => {
-      const workspaceId = param(match, "workspaceId");
-      const body = jsonObject(request);
-      const nodeId = body.nodeId;
-      const after = body.after;
+    // 旧数据迁入：页面挂载时发现节点数据里还躺着一份带依赖的 `pendingLaunch`，
+    // 就交给这里建成依赖行，然后自己把那份数据清掉。core 从此只读不写它。新
+    // 的依赖只由 `canvas open-agent --after` 建，这条路径只收旧数据，所以条件
+    // 固定是 `current`——旧实现等的就是「上游做完手上这一轮」。
+    importLegacy: (workspaceId: string, nodeId: unknown, after: unknown) => {
       if (typeof nodeId !== "string" || nodeId === "") {
         throw badRequest("nodeId is required");
       }
@@ -170,14 +152,11 @@ export function installRoutes(router: Router, database: DatabaseSync): void {
       const existing = launchFor(database, nodeId);
       if (existing !== undefined) {
         return {
-          status: 200,
-          body: {
-            launch: launchJson(
-              database,
-              existing,
-              dependenciesOf(database, nodeId),
-            ),
-          },
+          launch: launchJson(
+            database,
+            existing,
+            dependenciesOf(database, nodeId),
+          ),
         };
       }
       // 旧实现把「上游已被删」当作满足、把普通终端当作永远等不到。迁入时两
@@ -204,10 +183,86 @@ export function installRoutes(router: Router, database: DatabaseSync): void {
             });
       void dependencyService()?.created(nodeId);
       return {
+        launch: launchJson(database, created.launch, created.dependencies),
+      };
+    },
+  };
+}
+
+/** 契约 §39.5 的三条 procedure，与 {@link installRoutes} 同一份实现。 */
+export function registerDependencyProcedures(
+  server: CoreServer,
+  database: DatabaseSync,
+): void {
+  const operations = dependencyOperations(database);
+  registerProcedures(server, "agents", {
+    dependencies: ({
+      workspaceId,
+      nodeId,
+      all,
+    }: {
+      workspaceId: string;
+      nodeId?: string;
+      all?: boolean | "true" | "false";
+    }) => operations.list(workspaceId, nodeId, all === true || all === "true"),
+    importLegacyDependencies: ({
+      workspaceId,
+      nodeId,
+      after,
+    }: {
+      workspaceId: string;
+      nodeId: string;
+      after: string[];
+    }) => operations.importLegacy(workspaceId, nodeId, after),
+    cancelDependency: ({
+      workspaceId,
+      dependencyId,
+    }: {
+      workspaceId: string;
+      dependencyId: string;
+    }) => operations.cancel(workspaceId, dependencyId),
+  } as unknown as DomainHandlers<"agents">);
+}
+
+/* --------------------------------- 路由 ---------------------------------- */
+
+export function installRoutes(router: Router, database: DatabaseSync): void {
+  const operations = dependencyOperations(database);
+
+  router.handle(
+    "GET",
+    "/api/workspaces/{workspaceId}/dependencies",
+    answered((match, request) => ({
+      status: 200,
+      body: operations.list(
+        param(match, "workspaceId"),
+        request.query.get("nodeId") ?? undefined,
+        request.query.get("all") === "true",
+      ),
+    })),
+  );
+
+  router.handle(
+    "DELETE",
+    "/api/workspaces/{workspaceId}/dependencies/{dependencyId}",
+    answered((match) => ({
+      status: 200,
+      body: operations.cancel(
+        param(match, "workspaceId"),
+        param(match, "dependencyId"),
+      ),
+    })),
+  );
+
+  router.handle(
+    "POST",
+    "/api/workspaces/{workspaceId}/dependencies",
+    answered((match, request) => {
+      const workspaceId = param(match, "workspaceId");
+      const body = jsonObject(request);
+      return {
         status: 200,
-        body: {
-          launch: launchJson(database, created.launch, created.dependencies),
-        },
+        body: operations.importLegacy(workspaceId, body.nodeId, body.after),
       };
     }),
   );

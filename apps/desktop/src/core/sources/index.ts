@@ -147,6 +147,11 @@ export function install(
   });
   service.ensureLocal();
   assembled = service;
+  // 云登录域撤销登记时删中继侧的源记录要远程服务的会话，会话在这一域：挂过去
+  // （契约 §31.4）。身份域在 DOMAINS 里排在前面，这里已经装好。
+  cloudDomain()?.attachRelayCleaner((issuer, sourceId) =>
+    service.removeRelaySource(issuer, sourceId),
+  );
 
   const handlers = {
     list: () => service.list(),

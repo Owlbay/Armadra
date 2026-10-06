@@ -16,9 +16,12 @@ import {
   mountRemoteSource,
   mountSourceByLink,
   notifyShellSourcesChanged,
+  pendingCode,
+  relayPending,
   remoteSources,
   removeRemote,
   removeSource,
+  retryRelayCleanup,
   stopSharing,
 } from "../../../api/remote-services";
 import { useT } from "../../../app/preferences-store";
@@ -34,7 +37,13 @@ import {
 } from "../../../sources/join-intent";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
-import { SHARE_STATUS_KEY, ShareDialog } from "../ShareDialog";
+import {
+  RELAY_PENDING_KEY,
+  SHARE_STATUS_KEY,
+  ShareDialog,
+  announceStopped,
+  relayPendingReason,
+} from "../ShareDialog";
 import { groupFingerprint } from "./gateway/PairingCard";
 import {
   ResponsiveAlertDialog,
@@ -78,6 +87,15 @@ export const SOURCES_QUERY_KEY = ["sources", "list"] as const;
 /** 设置导航里的分区 id（`nav.ts`）。 */
 export const REMOTE_SECTION = "remote";
 
+/** 地址的主机部分（显示用）；不是合法地址就原样。 */
+function hostOf(issuer: string): string {
+  try {
+    return new URL(issuer).host || issuer;
+  } catch {
+    return issuer;
+  }
+}
+
 /** 指纹短码：前 8 位，按两位一组。 */
 export function shortFingerprint(fingerprint: string): string {
   return fingerprint === "" ? "" : groupFingerprint(fingerprint.slice(0, 8));
@@ -92,6 +110,7 @@ function useSourceTableChanged() {
   return React.useCallback(async () => {
     await client.invalidateQueries({ queryKey: SOURCES_QUERY_KEY });
     void client.invalidateQueries({ queryKey: SHARE_STATUS_KEY });
+    void client.invalidateQueries({ queryKey: RELAY_PENDING_KEY });
     if (await notifyShellSourcesChanged()) reloadIntoSettings(REMOTE_SECTION);
   }, [client]);
 }
@@ -128,6 +147,12 @@ export function RemoteServicesPage() {
       }),
     [],
   );
+  // 撤销后中继侧没删掉的源记录（契约 §31.4）：本机行上标出来，可重试。
+  const pending = useQuery({
+    queryKey: RELAY_PENDING_KEY,
+    queryFn: relayPending,
+    retry: false,
+  });
   const [sharing, setSharing] = React.useState<RemoteService | null>(null);
   const [removing, setRemoving] = React.useState<Removal | null>(null);
 
@@ -140,6 +165,12 @@ export function RemoteServicesPage() {
   const local = sources?.find((source) => source.kind === "local");
   const mounted = (sources ?? []).filter((source) => source.kind !== "local");
   const signedIn = remotes.filter((remote) => remote.hasCredentials);
+  const pendingList = pending.data ?? [];
+  const pendingOf = (issuer: string) => pendingCode(pendingList, issuer);
+  // 远程服务行已经删了、中继侧还欠着的：单独列出，登录回来再重试。
+  const orphans = pendingList.filter(
+    (one) => !remotes.some((remote) => remote.issuer === one.issuer),
+  );
 
   const logout = useMutation({
     mutationFn: (serviceId: string) => logoutRemote(serviceId),
@@ -151,9 +182,9 @@ export function RemoteServicesPage() {
   });
   const unshare = useMutation({
     mutationFn: (issuer: string) => stopSharing(issuer),
-    onSuccess: () => {
+    onSuccess: (code) => {
       void changed();
-      toast.success(t("remote.share.stopped"));
+      announceStopped(t, code);
     },
     onError: (error: Error) => toast.error(error.message),
   });
@@ -162,12 +193,35 @@ export function RemoteServicesPage() {
     onSuccess: () => void changed(),
     onError: (error: Error) => toast.error(error.message),
   });
+  const cleanup = useMutation({
+    mutationFn: (issuer: string) => retryRelayCleanup(issuer),
+    onSuccess: (code) => {
+      void changed();
+      if (code === null) toast.success(t("remote.relayPending.cleaned"));
+      else toast.error(relayPendingReason(t, code) || t("remote.relayPending"));
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
   const remove = useMutation({
-    mutationFn: (target: Removal) =>
-      target.kind === "remote"
-        ? removeRemote(target.id)
-        : removeSource(target.id),
-    onSuccess: () => void changed(),
+    mutationFn: async (target: Removal) => {
+      if (target.kind === "source") {
+        await removeSource(target.id);
+        return null;
+      }
+      // 本机登记到它的，core 先撤销（连同中继侧的源记录）再删行。
+      await removeRemote(target.id);
+      return target.issuer === undefined || target.issuer === ""
+        ? null
+        : pendingCode(await relayPending(), target.issuer);
+    },
+    onSuccess: (code) => {
+      void changed();
+      if (code !== null) {
+        toast.warning(t("remote.relayPending"), {
+          description: relayPendingReason(t, code),
+        });
+      }
+    },
     onError: (error: Error) => toast.error(error.message),
   });
 
@@ -189,6 +243,11 @@ export function RemoteServicesPage() {
             {remote.registered && (
               <Badge variant="secondary" className="font-normal">
                 {t("remote.sharing")}
+              </Badge>
+            )}
+            {pendingOf(remote.issuer) !== null && (
+              <Badge variant="outline" className="font-normal">
+                {t("remote.relayPending")}
               </Badge>
             )}
             {remote.hasCredentials ? (
@@ -232,9 +291,16 @@ export function RemoteServicesPage() {
                   {t("remote.share.stop")}
                 </DropdownMenuItem>
               )}
-              {(remote.hasCredentials || remote.registered) && (
-                <DropdownMenuSeparator />
+              {pendingOf(remote.issuer) !== null && (
+                <DropdownMenuItem
+                  onSelect={() => cleanup.mutate(remote.issuer)}
+                >
+                  {t("remote.relayPending.retry")}
+                </DropdownMenuItem>
               )}
+              {(remote.hasCredentials ||
+                remote.registered ||
+                pendingOf(remote.issuer) !== null) && <DropdownMenuSeparator />}
               <DropdownMenuItem
                 variant="destructive"
                 onSelect={() =>
@@ -242,12 +308,32 @@ export function RemoteServicesPage() {
                     kind: "remote",
                     id: remote.serviceId,
                     name: remote.label,
+                    issuer: remote.issuer,
                   })
                 }
               >
                 {t("remote.remove")}
               </DropdownMenuItem>
             </RowMenu>
+          </SettingsRow>
+        ))}
+        {orphans.map((one) => (
+          <SettingsRow
+            key={one.issuer}
+            label={hostOf(one.issuer)}
+            footnote={relayPendingReason(t, one.code)}
+          >
+            <Badge variant="outline" className="font-normal">
+              {t("remote.relayPending")}
+            </Badge>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={cleanup.isPending}
+              onClick={() => cleanup.mutate(one.issuer)}
+            >
+              {t("remote.relayPending.retry")}
+            </Button>
           </SettingsRow>
         ))}
         <SettingsRow label={null}>
@@ -384,6 +470,8 @@ interface Removal {
   readonly kind: "remote" | "source";
   readonly id: string;
   readonly name: string;
+  /** 远程服务的 issuer：删完看中继侧是否还欠着清理。 */
+  readonly issuer?: string;
 }
 
 function RowMenu({

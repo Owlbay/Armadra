@@ -111,6 +111,7 @@ export function installCloud(
     coreVersion: deps.coreVersion,
     capabilities: deps.capabilities,
     relay: () => holder.service?.currentRelay() ?? IDLE_RELAY,
+    cleaner: () => holder.service?.currentCleaner(),
     now,
     log: context.log,
   });
@@ -145,6 +146,8 @@ export function installCloud(
         return ready.bind(who, input.assertion);
       },
       trustedOrigins: (input) => ready.trustedOrigins(input),
+      relayPending: () => ready.relayPending(),
+      relayCleanup: (input) => ready.relayCleanup(input),
     },
   } satisfies {
     cloud: Omit<DomainHandlers<"identity">["cloud"], "login">;

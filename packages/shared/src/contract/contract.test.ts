@@ -72,6 +72,7 @@ describe("契约树", () => {
       "terminals",
       "boards",
       "git",
+      "agents",
       "gitRepository",
     ]);
   });

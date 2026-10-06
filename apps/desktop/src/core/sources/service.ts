@@ -54,7 +54,8 @@ export interface SourcesLog {
  */
 export interface CloudRegistrations {
   registered(issuer: string): boolean;
-  revoke(input: { issuer: string }): unknown;
+  /** 本机撤销，并尽力删中继侧的源记录（契约 §31.4）。 */
+  revoke(input: { issuer: string }): Promise<unknown>;
 }
 
 export interface SourcesServiceOptions {
@@ -740,6 +741,36 @@ export class SourcesService {
     return { remote: await this.remoteJson(row), next: "ready" };
   }
 
+  /**
+   * 删中继侧的源记录（契约 §31.4，云登录域撤销登记时经 `attachRelayCleaner` 调）：
+   * 用这个 issuer 的远程服务会话调 `sources.revoke`。中继上本来就没有算删掉了；
+   * 没有这个远程服务、没有保存的登录或会话不是 owner 答 `source_unauthorized`，
+   * 连不上答 `source_unreachable`——由调用方记为待清理。
+   */
+  async removeRelaySource(issuer: string, sourceId: string): Promise<void> {
+    const row = this.store.remoteByIssuer(issuer);
+    if (row === undefined) {
+      throw fail("source_unauthorized", "没有这个远程服务的登录");
+    }
+    if (row.kind === "saas") {
+      throw fail("not_implemented", "SaaS 远程服务尚未开放");
+    }
+    const token = await this.remoteAccess(row);
+    try {
+      await this.remote.revokeSource(
+        this.endpoint(row),
+        token.accessToken,
+        sourceId,
+      );
+    } catch (error) {
+      if (error instanceof CoreFailure && error.code === "not_found") return;
+      throw error;
+    }
+    this.options.log.info("removed this machine from a remote service", {
+      serviceId: row.serviceId,
+    });
+  }
+
   async remoteDevicePoll(serviceId: string): Promise<never> {
     this.remoteRow(serviceId);
     // 只有 SaaS 的设备码登录要轮询；个人中转加入即就绪。
@@ -750,9 +781,10 @@ export class SourcesService {
     const row = this.remoteRow(serviceId);
     // 本机登记到它的，先撤销登记（停隧道、不再认它签的断言）：删掉远程服务却
     // 留着对它的信任，等于留一扇没人看着的门。
+    // 撤销要在登出、删凭据之前：删中继侧的源记录用的就是这份 owner 会话。
     const cloud = this.options.cloud?.();
     if (cloud?.registered(row.issuer) === true) {
-      cloud.revoke({ issuer: row.issuer });
+      await cloud.revoke({ issuer: row.issuer });
     }
     // 尽力登出：远程服务不可达不拦删除（旁路保证）。
     const cached = this.access.get(serviceId);
