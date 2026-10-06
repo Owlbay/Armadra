@@ -20,6 +20,15 @@
 //                       a server says about itself
 //   --apply-outside     the same, but naming a file outside the workspace
 //
+// Load shaping, for `language-load.mjs` (E3-9): sizes modelled on what a
+// TypeScript server answers, so the proxy carries frames of a realistic size.
+// Without them every answer stays the smallest valid one.
+//
+//   --completion-items=N  a completion not after `.` answers N items
+//   --member-items=N      a completion right after `.` answers N items
+//   --hover-bytes=N       hover answers ~N bytes of Markdown
+//   --diagnostics=N       every publish carries N more diagnostics
+//
 // It reads `Content-Length` frames on stdin and writes them on stdout, and it
 // prints nothing else to stdout — a stray line there would desynchronise the
 // framing, which is exactly the failure this file must not have.
@@ -47,6 +56,10 @@ const hang = flags.has("--hang");
 const bigResponse = flags.has("--big-response");
 const applyEdit = flags.has("--apply-edit") || flags.has("--apply-outside");
 const applyOutside = flags.has("--apply-outside");
+const completionItems = Number(options.get("--completion-items") ?? 0);
+const memberItems = Number(options.get("--member-items") ?? 0);
+const hoverBytes = Number(options.get("--hover-bytes") ?? 0);
+const extraDiagnostics = Number(options.get("--diagnostics") ?? 0);
 /**
  * Answer `initialize` with an error and stay up, the way a real server does
  * when it cannot serve this project — `typescript-language-server` with no
@@ -86,6 +99,18 @@ function diagnosticsFor(uri, text) {
       message: "TODO left in the file",
     });
   });
+  for (let index = 0; index < extraDiagnostics; index += 1) {
+    diagnostics.push({
+      range: {
+        start: { line: index, character: 2 },
+        end: { line: index, character: 14 },
+      },
+      severity: index % 3 === 0 ? 1 : 2,
+      code: 2300 + (index % 50),
+      source: "mock-lsp",
+      message: `Property 'value${index}' does not exist on type 'Options'. Did you mean 'values'?`,
+    });
+  }
   send({
     jsonrpc: "2.0",
     method: "textDocument/publishDiagnostics",
@@ -165,6 +190,58 @@ function wordAt(text, position) {
   return `${before ?? ""}${after ?? ""}`;
 }
 
+/** One completion item, shaped like a TypeScript server's. */
+function completionItem(index, uri, position) {
+  const label = `symbol${index.toString(36)}Value`;
+  const line = position?.line ?? 0;
+  const character = position?.character ?? 0;
+  return {
+    label,
+    kind: [2, 3, 5, 6, 7, 9, 10, 14, 21][index % 9],
+    sortText: String(11 + (index % 5)),
+    insertTextFormat: 1,
+    textEdit: {
+      range: {
+        start: { line, character: Math.max(0, character - 2) },
+        end: { line, character },
+      },
+      newText: label,
+    },
+    data: { uri, line: line + 1, offset: character + 1, entryNames: [label] },
+  };
+}
+
+function completionAnswer(params) {
+  const uri = params?.textDocument?.uri;
+  const position = params?.position;
+  const line = (documents.get(uri) ?? "").split("\n")[position?.line ?? 0];
+  const afterDot = line?.[(position?.character ?? 0) - 1] === ".";
+  const count = afterDot ? memberItems : completionItems;
+  if (count <= 0)
+    return [
+      { label: "alpha", kind: 1 },
+      { label: "beta", kind: 1 },
+      { label: "伽马", kind: 1 },
+    ];
+  return {
+    isIncomplete: false,
+    items: Array.from({ length: count }, (_, index) =>
+      completionItem(index, uri, position),
+    ),
+  };
+}
+
+function hoverText(word) {
+  if (hoverBytes <= 0) return word;
+  const head =
+    "```typescript\nfunction " +
+    word +
+    "(options: Options): Promise<Result>\n```\n\n";
+  const prose =
+    "Resolves the value for the given options. The promise settles once the underlying request completes. ";
+  return head + prose.repeat(Math.max(1, Math.ceil(hoverBytes / prose.length)));
+}
+
 function handle(message) {
   const { id, method, params } = message;
   switch (method) {
@@ -239,20 +316,16 @@ function handle(message) {
       if (hang) return;
       const uri = params?.textDocument?.uri;
       const word = wordAt(documents.get(uri) ?? "", params?.position);
-      const contents = bigResponse ? "x".repeat(1024 * 1024) : word;
+      const contents = bigResponse
+        ? "x".repeat(1024 * 1024)
+        : hoverBytes > 0
+          ? { kind: "markdown", value: hoverText(word) }
+          : word;
       send({ jsonrpc: "2.0", id, result: { contents } });
       return;
     }
     case "textDocument/completion":
-      send({
-        jsonrpc: "2.0",
-        id,
-        result: [
-          { label: "alpha", kind: 1 },
-          { label: "beta", kind: 1 },
-          { label: "伽马", kind: 1 },
-        ],
-      });
+      send({ jsonrpc: "2.0", id, result: completionAnswer(params) });
       return;
     case "textDocument/formatting":
       send({

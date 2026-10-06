@@ -1,0 +1,129 @@
+{
+  "_comment": "language-load.mjs --check 的基线（E3-9）：只比 mock 档下行单帧体积（确定性），偏离超过 20% 失败。reference 是 2026-10-06 macOS arm64 的一次实测，只作对照、不比。",
+  "traffic": {
+    "mock/editor": {
+      "downBytes": {
+        "p50": 14188,
+        "p95": 342358,
+        "max": 342358
+      }
+    },
+    "mock/stress": {
+      "downBytes": {
+        "p50": 14190,
+        "p95": 341159,
+        "max": 344759
+      }
+    }
+  },
+  "reference": {
+    "mock/editor": {
+      "downPerSecond": 3.5,
+      "downBytesPerSecond": 528592,
+      "upPerSecond": 3.5,
+      "burst100ms": {
+        "frames": 3,
+        "bytes": 356546
+      },
+      "completionMsP95": 47
+    },
+    "mock/stress": {
+      "downPerSecond": 161.6,
+      "downBytesPerSecond": 13536910,
+      "upPerSecond": 77.7,
+      "burst100ms": {
+        "frames": 26,
+        "bytes": 2297562
+      },
+      "completionMsP95": 40.2
+    },
+    "clangd/editor": {
+      "downPerSecond": 2.7,
+      "downBytesPerSecond": 28593,
+      "upPerSecond": 2.7,
+      "burst100ms": {
+        "frames": 3,
+        "bytes": 49807
+      },
+      "completionMsP95": 26.9
+    },
+    "clangd/stress": {
+      "downPerSecond": 158,
+      "downBytesPerSecond": 398346,
+      "upPerSecond": 73.7,
+      "burst100ms": {
+        "frames": 36,
+        "bytes": 309843
+      },
+      "completionMsP95": 12.5
+    },
+    "mixed: B 回环 仅事件": {
+      "eventP95Ms": 3.4,
+      "eventMaxMs": 12.7
+    },
+    "mixed: B 回环 事件 + 语言 stress": {
+      "eventP95Ms": 12.2,
+      "eventMaxMs": 22.7
+    },
+    "link: fair 仅事件": {
+      "eventP95Ms": 36.5,
+      "eventMaxMs": 41.2
+    },
+    "link: fair 语言 editor": {
+      "eventP95Ms": 36.4,
+      "eventMaxMs": 51.1
+    },
+    "link: fair 语言 stress": {
+      "eventP95Ms": 45.2,
+      "eventMaxMs": 95.5
+    },
+    "link: fair clangd editor": {
+      "eventP95Ms": 33.8,
+      "eventMaxMs": 41
+    },
+    "link: fair clangd stress": {
+      "eventP95Ms": 33.8,
+      "eventMaxMs": 38.5
+    },
+    "link: fifo 语言 editor": {
+      "eventP95Ms": 317.2,
+      "eventMaxMs": 356.5
+    },
+    "link: fifo 语言 stress": {
+      "eventP95Ms": 594.3,
+      "eventMaxMs": 848.9
+    },
+    "link: fifo clangd editor": {
+      "eventP95Ms": 29.6,
+      "eventMaxMs": 41
+    },
+    "link: fifo clangd stress": {
+      "eventP95Ms": 180.1,
+      "eventMaxMs": 312.1
+    },
+    "relay: 仅事件": {
+      "eventP95Ms": 6.5,
+      "eventMaxMs": 8.7
+    },
+    "relay: 语言 editor": {
+      "eventP95Ms": 5,
+      "eventMaxMs": 14.5
+    },
+    "relay: 语言 stress": {
+      "eventP95Ms": 15.4,
+      "eventMaxMs": 28.3
+    },
+    "relay: fair 仅事件": {
+      "eventP95Ms": 32.3,
+      "eventMaxMs": 67.3
+    },
+    "relay: fair 语言 editor": {
+      "eventP95Ms": 30.2,
+      "eventMaxMs": 43.9
+    },
+    "relay: fifo 语言 editor": {
+      "eventP95Ms": 283.5,
+      "eventMaxMs": 335.4
+    }
+  }
+}

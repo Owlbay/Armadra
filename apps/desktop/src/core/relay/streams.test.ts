@@ -208,8 +208,14 @@ describe("隧道流：HTTP 与 WebSocket", () => {
     tunnel.close(4492, "shutdown");
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(sockets.size).toBe(0);
-    // 退避 20 ms 之后重连上第二条。
+    // 退避 20 ms 之后重连上第二条。假中继在**发出** `ready` 时就交出隧道，客户端
+    // 要等这一帧经回环到了才进 ready：中间至少隔一次 I/O，Windows 上就会看到
+    // 还在 authenticating。等它处理完那一帧再看。
     await relay.nextTunnel(1);
+    const deadline = Date.now() + 3_000;
+    while (client.status().state !== "ready" && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     expect(client.status().state).toBe("ready");
   });
 });
