@@ -6,6 +6,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.util.Log;
 import android.webkit.WebView;
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
@@ -19,6 +20,7 @@ import com.google.firebase.messaging.FirebaseMessaging;
 import com.google.mlkit.vision.barcode.common.Barcode;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning;
+import dev.armadra.mobile.core.ConnectionRules;
 import dev.armadra.mobile.core.DeepLink;
 import dev.armadra.mobile.core.ExternalUrl;
 import dev.armadra.mobile.core.Pin;
@@ -32,11 +34,11 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.regex.Pattern;
 import kotlin.Unit;
 import org.json.JSONObject;
 import org.unifiedpush.android.connector.UnifiedPush;
@@ -46,9 +48,12 @@ import org.unifiedpush.android.connector.UnifiedPush;
  * 约定写在那个文件头里；与 iOS {@code ArmadraNativePlugin.swift} 一一对应。
  *
  * <ul>
- *   <li>{@code getSession / setSession / clearSession}：Keystore 加密的一份会话；
+ *   <li>{@code getSessions / setSession / removeSession}：Keystore 加密的会话，一个连接一份（{@code sourceId} +
+ *       {@code via} 为键）；
+ *   <li>{@code getRemotes / setRemote / removeRemote}：远程服务（个人中转）的刷新令牌，{@code serviceId} 为键；
+ *   <li>{@code peek}：不带凭据取一次信任锚指纹（{@code /ca.crt} 或握手链），什么也不存；
  *   <li>{@code pin}：取 {@code /ca.crt} 按指纹核对后存为信任锚，之后由
- *       {@link PinningWebViewClient} 只认它；失败必须 reject；
+ *       {@link PinningWebViewClient} 只认它，每个来源各存一份；失败必须 reject；
  *   <li>{@code scan}：Google 代码扫描器（Play 服务提供界面，不要相机权限）；
  *   <li>{@code pushRegistration}：装了 UnifiedPush 分发器时向它要端点（契约 §27.2），否则 FCM 令牌 + 设备
  *       X25519 公钥，配了中继时先换中继令牌；
@@ -64,14 +69,13 @@ import org.unifiedpush.android.connector.UnifiedPush;
         permissions = {@Permission(alias = "notifications", strings = {Manifest.permission.POST_NOTIFICATIONS})})
 public class ArmadraNativePlugin extends Plugin {
     static final String TAG = "ArmadraNative";
-    /** 会话密钥：{@code <32 位十六进制标识>.<43 位 base64url>}（core {@code identity/tokens.ts}）。 */
-    private static final Pattern SECRET = Pattern.compile("^[0-9a-f]{32}\\.[A-Za-z0-9_-]{43}$");
     /** 等 UnifiedPush 分发器给端点的上限；过了退回 FCM。 */
     private static final long UNIFIEDPUSH_TIMEOUT_MS = 30_000;
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private SecureStore store;
-    private volatile Pin pin;
+    /** 每个来源一份钉扎（Gateway 与个人中转各钉各的）；握手时按主机与端口找。 */
+    private volatile List<Pin> pins = List.of();
     private boolean pageLoaded = false;
     private String pendingScript;
     /** 已经交过深链的那个启动 intent。 */
@@ -80,8 +84,8 @@ public class ArmadraNativePlugin extends Plugin {
     @Override
     public void load() {
         store = new SecureStore(getContext());
-        pin = Pin.decode(store.read(SecureStore.PIN));
-        getBridge().setWebViewClient(new PinningWebViewClient(getBridge(), () -> pin));
+        pins = loadPins();
+        getBridge().setWebViewClient(new PinningWebViewClient(getBridge(), () -> pins));
         PushRotation.setListener(() -> notifyListeners("pushTokenRotated", new JSObject()));
         // 冷启动时带来的深链（App 在系统浏览器里走 OAuth 时被系统回收了）：页面加载完再交。同一个
         // intent 只交一次（活动重建时 getIntent() 还是它）；不改 intent 本身——测试框架按它认活动。
@@ -106,48 +110,144 @@ public class ArmadraNativePlugin extends Plugin {
         });
     }
 
-    // ---------------------------------------------------------------- 会话
+    // ------------------------------------------------------ 会话（多连接）
 
     @PluginMethod
-    public void getSession(PluginCall call) {
-        String stored = store.read(SecureStore.SESSION);
-        JSObject result = new JSObject();
-        if (stored != null) {
-            try {
-                result.put("session", new JSObject(stored));
-            } catch (Exception ignored) {
-                store.delete(SecureStore.SESSION);
+    public void getSessions(PluginCall call) {
+        JSArray sessions = new JSArray();
+        for (String name : store.names(ConnectionRules.SESSION_PREFIX)) {
+            JSObject record = readRecord(name);
+            if (record == null) continue;
+            String sourceId = record.getString("sourceId");
+            String via = record.getString("via");
+            // 键与内容对不上的丢掉，不张冠李戴。
+            if (sourceId == null || via == null || !name.equals(ConnectionRules.sessionKey(sourceId, via))) continue;
+            if (!ConnectionRules.validSession(sourceId, record.getString("origin"), via,
+                    record.getString("accessToken"), record.getString("refreshToken"), record.optDouble("expiresAtMs", 0))) {
+                continue;
             }
+            sessions.put(record);
         }
+        JSObject result = new JSObject();
+        result.put("sessions", sessions);
         call.resolve(result);
     }
 
     @PluginMethod
     public void setSession(PluginCall call) {
         JSObject session = call.getObject("session");
+        String sourceId = session == null ? null : session.getString("sourceId");
         String origin = session == null ? null : session.getString("origin");
+        String via = session == null ? null : session.getString("via");
         String access = session == null ? null : session.getString("accessToken");
         String refresh = session == null ? null : session.getString("refreshToken");
-        if (!PinPolicy.isOrigin(origin) || !isSecret(access) || !isSecret(refresh)) {
+        double expires = session == null ? 0 : session.optDouble("expiresAtMs", 0);
+        if (!ConnectionRules.validSession(sourceId, origin, via, access, refresh, expires)) {
             call.reject("invalid session");
             return;
         }
         JSObject value = new JSObject();
+        value.put("sourceId", sourceId);
         value.put("origin", origin);
+        value.put("via", via);
         value.put("accessToken", access);
         value.put("refreshToken", refresh);
-        if (store.write(SecureStore.SESSION, value.toString())) call.resolve();
+        value.put("expiresAtMs", expires);
+        if (store.write(ConnectionRules.sessionKey(sourceId, via), value.toString())) call.resolve();
+        else call.reject("keystore unavailable");
+    }
+
+    /** 删这个源的会话；给了 {@code origin} 只删发往它的那份。别的源不动。 */
+    @PluginMethod
+    public void removeSession(PluginCall call) {
+        String sourceId = call.getString("sourceId");
+        String origin = call.getString("origin");
+        if (!ConnectionRules.isName(sourceId)) {
+            call.reject("invalid session");
+            return;
+        }
+        for (String via : new String[] {"direct", "relayed"}) {
+            String key = ConnectionRules.sessionKey(sourceId, via);
+            JSObject record = readRecord(key);
+            if (record == null) continue;
+            if (origin != null && !origin.equals(record.getString("origin"))) continue;
+            store.delete(key);
+        }
+        call.resolve();
+    }
+
+    // -------------------------------------------------------------- 远程服务
+
+    @PluginMethod
+    public void getRemotes(PluginCall call) {
+        JSArray remotes = new JSArray();
+        for (String name : store.names(ConnectionRules.REMOTE_PREFIX)) {
+            JSObject record = readRecord(name);
+            if (record == null) continue;
+            String serviceId = record.getString("serviceId");
+            if (serviceId == null || !name.equals(ConnectionRules.remoteKey(serviceId))) continue;
+            if (!ConnectionRules.validRemote(serviceId, record.getString("issuer"), record.getString("kind"),
+                    record.getString("refreshToken"), record.getString("fingerprint"))) {
+                continue;
+            }
+            remotes.put(record);
+        }
+        JSObject result = new JSObject();
+        result.put("remotes", remotes);
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void setRemote(PluginCall call) {
+        JSObject remote = call.getObject("remote");
+        String serviceId = remote == null ? null : remote.getString("serviceId");
+        String issuer = remote == null ? null : remote.getString("issuer");
+        String kind = remote == null ? null : remote.getString("kind");
+        String refresh = remote == null ? null : remote.getString("refreshToken");
+        String fingerprint = remote == null ? null : remote.getString("fingerprint");
+        if (!ConnectionRules.validRemote(serviceId, issuer, kind, refresh, fingerprint)) {
+            call.reject("invalid remote");
+            return;
+        }
+        JSObject value = new JSObject();
+        value.put("serviceId", serviceId);
+        value.put("issuer", issuer);
+        value.put("kind", kind);
+        value.put("refreshToken", refresh);
+        value.put("fingerprint", fingerprint);
+        if (store.write(ConnectionRules.remoteKey(serviceId), value.toString())) call.resolve();
         else call.reject("keystore unavailable");
     }
 
     @PluginMethod
-    public void clearSession(PluginCall call) {
-        store.delete(SecureStore.SESSION);
+    public void removeRemote(PluginCall call) {
+        String serviceId = call.getString("serviceId");
+        if (!ConnectionRules.isName(serviceId)) {
+            call.reject("invalid remote");
+            return;
+        }
+        store.delete(ConnectionRules.remoteKey(serviceId));
         call.resolve();
     }
 
-    private static boolean isSecret(String text) {
-        return text != null && SECRET.matcher(text).matches();
+    private JSObject readRecord(String name) {
+        String stored = store.read(name);
+        if (stored == null) return null;
+        try {
+            return new JSObject(stored);
+        } catch (Exception ignored) {
+            store.delete(name);
+            return null;
+        }
+    }
+
+    private List<Pin> loadPins() {
+        List<Pin> out = new ArrayList<>();
+        for (String name : store.names(ConnectionRules.PIN_PREFIX)) {
+            Pin loaded = Pin.decode(store.read(name));
+            if (loaded != null && name.equals(ConnectionRules.pinKey(loaded.origin))) out.add(loaded);
+        }
+        return out;
     }
 
     // ------------------------------------------------------------ 证书钉扎
@@ -182,12 +282,59 @@ public class ArmadraNativePlugin extends Plugin {
                     return;
                 }
             }
-            if (!store.write(SecureStore.PIN, next.encode())) {
+            if (!store.write(ConnectionRules.pinKey(origin), next.encode())) {
                 call.reject("keystore unavailable");
                 return;
             }
-            pin = next;
+            // 同一个来源重钉是替换，别的来源的钉扎不动。
+            List<Pin> updated = new ArrayList<>();
+            String key = Pin.originKey(origin);
+            for (Pin existing : pins) {
+                if (!key.equals(Pin.originKey(existing.origin))) updated.add(existing);
+            }
+            updated.add(next);
+            pins = updated;
             call.resolve();
+        });
+    }
+
+    /**
+     * 不带凭据取一次信任锚指纹，让页面把它给人核对（个人中转自签 CA 的首次信任）。什么也不存：真正的钉扎
+     * 要等人确认之后页面再调 {@code pin}。指纹取服务端发的 {@code /ca.crt}（与中转启动日志打印的同一个），
+     * 没有就取握手链最后一张。{@code trusted} 是系统本来就信这条链，{@code pinned} 是已经钉过、而且服务端
+     * 仍发着那一张。
+     */
+    @PluginMethod
+    public void peek(PluginCall call) {
+        String origin = call.getString("origin");
+        if (!PinPolicy.isOrigin(origin)) {
+            call.reject("bad origin");
+            return;
+        }
+        worker.execute(() -> {
+            AnchorFetch.Fetched fetched = AnchorFetch.fetch(origin);
+            JSObject result = new JSObject();
+            if (fetched == null) {
+                call.resolve(result);
+                return;
+            }
+            List<X509Certificate> candidates = fetched.body.isEmpty() ? fetched.presented : fetched.body;
+            try {
+                String fingerprint = PinPolicy.fingerprint(candidates.get(candidates.size() - 1).getEncoded());
+                Pin existing = null;
+                String key = Pin.originKey(origin);
+                for (Pin candidate : pins) {
+                    if (key.equals(Pin.originKey(candidate.origin))) existing = candidate;
+                }
+                boolean pinned = existing != null && PinPolicy.anchor(fetched.all(), existing) != null;
+                result.put("fingerprint", pinned ? existing.fingerprint : fingerprint);
+                result.put("trusted", AnchorFetch.systemTrusts(origin));
+                result.put("pinned", pinned);
+            } catch (Exception error) {
+                call.resolve(new JSObject());
+                return;
+            }
+            call.resolve(result);
         });
     }
 

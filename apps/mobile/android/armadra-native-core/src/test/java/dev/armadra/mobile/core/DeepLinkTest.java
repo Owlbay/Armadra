@@ -33,6 +33,20 @@ public class DeepLinkTest {
     }
 
     @Test
+    public void joinLinksReloadLikePairing() {
+        String link = "armadra://join?link=" + "0".repeat(32) + "&issuer=https%3A%2F%2Frelay.example.com&s="
+                + "S".repeat(43) + "." + "c".repeat(32) + "." + "D".repeat(43);
+        DeepLink parsed = DeepLink.parse(link);
+        assertEquals(DeepLink.Kind.JOIN, parsed.kind);
+        assertEquals(link, parsed.link);
+        assertTrue(parsed.script().startsWith("history.replaceState(null,'',location.pathname+'#link='+encodeURIComponent("));
+        assertTrue(parsed.script().endsWith("location.reload();"));
+        assertNull(DeepLink.parse("armadra://join"));
+        assertNull(DeepLink.parse("armadra://join?link=a'+alert(1)+'"));
+        assertNull(DeepLink.parse("armadra://joinx?link=a"));
+    }
+
+    @Test
     public void scriptsMatchTheIosSpelling() {
         assertEquals("location.hash='#push='+encodeURIComponent(\"armadra:\\/\\/w\\/ws_1\\/n\\/node_1\");",
                 DeepLink.parse("armadra://w/ws_1/n/node_1").script());
