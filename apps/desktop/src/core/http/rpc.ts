@@ -199,7 +199,7 @@ const UPSTREAM_CODES: Readonly<Record<string, string>> = {
   GATEWAY_TIMEOUT: "internal",
 };
 
-const INTERNAL_MESSAGE = "核心处理请求时失败";
+export const INTERNAL_MESSAGE = "核心处理请求时失败";
 
 /** 线上的错误形状（契约 §5.1、§34.1）。 */
 export interface RpcErrorBody {
