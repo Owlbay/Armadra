@@ -447,8 +447,7 @@ export function classifyGithubFailure(error: unknown): GithubApiError {
       return fail("permission");
     case "unsupported":
     case "UNSUPPORTED":
-    // 没装配 GitHub 域的 core：procedure 没实现。
-    case "not_implemented":
+    case "not_implemented": // 没装配 GitHub 域的 core：procedure 没实现。
       return fail("unsupported");
     case "not_found":
     case "NOT_FOUND":

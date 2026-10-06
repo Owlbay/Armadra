@@ -11,7 +11,7 @@
  * 就是它。令牌只在 `configure` 里经过一次，不留在入参上，也不进错误细节。
  */
 
-import { CoreFailure, coreError, fail } from "../http/errors";
+import { CoreFailure, fail } from "../http/errors";
 import { registerProcedures } from "../http/rpc";
 import type { CoreRequest, HandlerResult, RouteMatch } from "../http/router";
 import type { CoreServer } from "../http/server";

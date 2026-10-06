@@ -483,7 +483,10 @@ describe("github：拒绝", () => {
     });
     // 不是数字的 int64：fromJson 解不开。
     const garbage = await same("GetIssue", { repository: REPO, number: "x" });
-    expect(garbage).toMatchObject({ status: 400, body: { code: "bad_request" } });
+    expect(garbage).toMatchObject({
+      status: 400,
+      body: { code: "bad_request" },
+    });
   });
 
   it("远端限流、远端 5xx：码是 snake_case，远端原话不外传", async () => {
