@@ -24,9 +24,10 @@ import { meta, oc } from "./meta.js";
  * 认出它是 GitHub，然后把面板交还给那一面。
  *
  * 出参复用 `api/forge.ts` 那套 schema：页面本来就拿它们解析，契约不另写一份。
- * 入参只校形状：编号是否合法、`state` / `method` 是不是认识的值、字符串多长这些
- * 判断在域里（`core/forge/`），旧路径与 procedure 走同一份实现，拒绝的码与原话
- * 一样，所以这里不加 `min` / `max` 之类会让入参校验抢在域前面拒绝的约束。
+ * 入参只校形状（字段的类型）：缺没缺、编号是否合法、`state` / `method` 是不是
+ * 认识的值、字符串多长这些判断在域里（`core/forge/`），旧路径与 procedure 走同
+ * 一份实现，拒绝的码与原话一样，所以这里不加 `min` / `max` 与必填之类会让入参
+ * 校验抢在域前面拒绝的约束。
  *
  * 旧路径的参数是路径段与查询串：`number`、`limit`、`expectedRevision` 以字符串
  * 到达，procedure 里是数字，两种拼法都收。GitLab 多级子组的 `owner`（`group/sub`）
@@ -58,8 +59,8 @@ const listing = repoRef.extend({
 });
 
 const config = z.object({
-  forge: z.string(),
-  apiBase: z.string(),
+  forge: z.string().optional(),
+  apiBase: z.string().optional(),
   /** 缺省保留已存的令牌；`""` 删掉它。 */
   token: z.string().optional(),
   expectedRevision: z.number().int().optional(),
@@ -67,7 +68,7 @@ const config = z.object({
 
 const mergeBody = numbered.extend({
   method: z.string().optional(),
-  headSha: z.string(),
+  headSha: z.string().optional(),
 });
 
 const read = errors.pick(
@@ -127,7 +128,7 @@ export const forge = {
     .input(
       z.object({
         host: z.string(),
-        expectedRevision: z.union([z.number(), z.string()]),
+        expectedRevision: z.union([z.number(), z.string()]).optional(),
       }),
     )
     .output(removal)
@@ -174,7 +175,7 @@ export const forge = {
   /* ------------------------------- 识别 --------------------------------- */
   /** 一个 git 远端地址 → 识别结果。地址在体里：它可能带凭据。 */
   resolve: oc
-    .input(z.object({ remoteUrl: z.string() }))
+    .input(z.object({ remoteUrl: z.string().optional() }))
     .output(forgeDetectionSchema)
     .errors(errors.pick("bad_request"))
     .meta(
@@ -221,7 +222,7 @@ export const forge = {
       }),
     ),
   setIssueState: oc
-    .input(numbered.extend({ state: z.string() }))
+    .input(numbered.extend({ state: z.string().optional() }))
     .output(forgeIssueSchema)
     .errors(write)
     .meta(
@@ -247,10 +248,10 @@ export const forge = {
   createPull: oc
     .input(
       repoRef.extend({
-        title: z.string(),
+        title: z.string().optional(),
         body: z.string().optional(),
-        head: z.string(),
-        base: z.string(),
+        head: z.string().optional(),
+        base: z.string().optional(),
         draft: z.boolean().optional(),
       }),
     )
@@ -348,7 +349,7 @@ export const forge = {
     ),
   /** 合并后删源分支：分支动过、受保护、来自 fork 或还没合并时答 `deleted: false`。 */
   deleteBranch: oc
-    .input(numbered.extend({ headSha: z.string() }))
+    .input(numbered.extend({ headSha: z.string().optional() }))
     .output(forgeBranchDeletionSchema)
     .errors(write)
     .meta(

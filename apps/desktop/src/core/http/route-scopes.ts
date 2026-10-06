@@ -221,6 +221,13 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
     read: "github:read",
     write: "github:write",
   },
+  // `resolve` 虽是 POST（地址在体里，远端地址可能带着凭据，不放查询串），只是读
+  // （契约 §29.2、§41.2）。
+  {
+    pattern: /^\/api\/forge\/resolve$/,
+    read: "github:read",
+    write: "github:read",
+  },
   // 托管平台（契约 §29）与 GitHub 同一档：forge 是把 GitHub 面推广到别的
   // 平台，读写的是同一类东西（issue、PR、检查）。
   {
