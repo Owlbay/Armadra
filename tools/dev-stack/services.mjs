@@ -14,6 +14,16 @@ import { connect } from "node:net";
 export const HOST = "127.0.0.1";
 
 /**
+ * personal 中继的对外地址：issuer、证书 SAN 与宿主机客户端访问的是同一个
+ * `https://127.0.0.1:8103`（端口的唯一来源就是下面服务表里的 8103）。
+ */
+export const RELAY_PERSONAL = {
+  port: 8103,
+  issuer: "https://127.0.0.1:8103",
+  account: "dev",
+};
+
+/**
  * `ports` 是宿主机端口（容器端口相同时省略）。`profile` 标了的是可选服务，
  * 只有 `pnpm dev-stack up --profile <名>` 才起。`check` 返回 `true` 或抛错。
  */
@@ -170,24 +180,34 @@ export const SERVICES = [
     name: "relay-personal",
     ports: [8103],
     profile: "personal",
-    purpose: "单人中转（personal 模式，不带数据库）",
-    // R2 落地前只有 --tls plain；落地后是自签 TLS。两种都认，只对回环。
+    purpose:
+      "单人中转（personal 模式，不带数据库）；issuer 是宿主机可达的 https://127.0.0.1:8103",
+    // 自签 TLS（SAN 含 127.0.0.1），只对回环跳过校验；issuer 必须就是宿主机访问的这个地址。
     check: async () => {
-      const base = await first(
-        ["https://127.0.0.1:8103", "http://127.0.0.1:8103"],
-        "/health",
-      );
-      expect(base.status === 200, `status ${base.status}`);
-      await platformMode(base.origin, "personal");
+      const { status } = await get(`${RELAY_PERSONAL.issuer}/health`);
+      expect(status === 200, `status ${status}`);
+      await platformMode(RELAY_PERSONAL.issuer, "personal");
     },
   },
   {
     name: "armadra-server-nat",
     ports: [],
-    profile: ["platform", "personal"],
+    profile: "platform",
     purpose:
       "模拟在 NAT 后、只能外连的 core：不发布端口，健康由容器内自己的 /health 给出",
     check: () => containerHealthy("armadra-server-nat"),
+  },
+  {
+    name: "armadra-server-nat-personal",
+    ports: [],
+    profile: "personal",
+    dependsOn: ["relay-personal"],
+    purpose:
+      "personal 里 NAT 后的 core：与中继共用网络命名空间，自动登记到 relay-personal，隧道 ready 才算健康",
+    check: async () => {
+      await containerHealthy("armadra-server-nat-personal");
+      await tunnelReady("armadra-server-nat-personal", RELAY_PERSONAL.issuer);
+    },
   },
   {
     name: "headscale",
@@ -327,19 +347,6 @@ async function platformMode(origin, mode) {
   expect(JSON.parse(body).mode === mode, `mode ${JSON.parse(body).mode}`);
 }
 
-/** 依次试几个回环源，取第一个连得上的（自签 TLS 与 plain 并存的过渡期）。 */
-async function first(origins, path) {
-  let last;
-  for (const origin of origins) {
-    try {
-      return { origin, ...(await get(`${origin}${path}`)) };
-    } catch (error) {
-      last = error;
-    }
-  }
-  throw last;
-}
-
 /**
  * 没有发布端口的服务：进容器里打它自己的回环 /health（宿主机够不到它，这正是「NAT 后」的
  * 含义）。容器没在跑、或 /health 不答 200 都算失败。
@@ -354,6 +361,41 @@ async function containerHealthy(service, port = 8443) {
     { encoding: "utf8", timeout: 10_000 },
   );
   expect(result.status === 0, `container ${service} /health failed`);
+}
+
+/**
+ * NAT 后的 core 登记到了 `issuer`、且隧道是 ready：进容器问 `cloud status`（登记在 core 自己的库里，
+ * 宿主机问不到）。没登记或隧道没起来都算失败。
+ */
+async function tunnelReady(service, issuer) {
+  const { spawnSync } = await import("node:child_process");
+  const docker = process.env.ARMADRA_DEV_STACK_DOCKER || "docker";
+  const result = spawnSync(
+    docker,
+    [
+      "exec",
+      `${PROJECT}-${service}-1`,
+      "node",
+      "/app/out/main.js",
+      "cloud",
+      "status",
+      "--data-dir",
+      "/data",
+      "--output",
+      "json",
+    ],
+    { encoding: "utf8", timeout: 20_000 },
+  );
+  expect(result.status === 0, `cloud status 失败（${service}）`);
+  let status;
+  try {
+    status = JSON.parse(result.stdout);
+  } catch {
+    throw new Error(`cloud status 不是 JSON（${service}）`);
+  }
+  const row = (status.registrations ?? []).find((r) => r.issuer === issuer);
+  expect(row !== undefined, `${service} 还没有登记到 ${issuer}`);
+  expect(row.tunnel?.state === "ready", `隧道 ${row.tunnel?.state ?? "未知"}`);
 }
 
 async function discovery(issuer) {

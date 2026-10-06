@@ -310,8 +310,11 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # 单人中转：不带数据库。R2 落地前只支持 --tls plain；落地后把 RELAY_TLS 默认改成
-  # self-signed，探针信任 /ca.crt（services.mjs 的检查两种都认）。
+  # 单人中转：不带数据库，自签 TLS。issuer 与对外地址是宿主机能访问的
+  # `https://127.0.0.1:8103`（证书 SAN = 127.0.0.1 + localhost），容器内外同一个端口 8103：
+  # 中继只认一个 issuer，所以不用 host.docker.internal 另开一个名字，而是让 NAT 后的 core
+  # 与中继共用网络命名空间（见下面的 armadra-server-nat-personal），它连 127.0.0.1:8103
+  # 就是连中继自己。自签 CA 的指纹由 dev-stack.mjs 在中继起来后取出来交给 core。
   relay-personal:
     image: ghcr.io/owlbay/armadra-relay:0.1.0
     profiles: ["personal"]
@@ -321,11 +324,11 @@ services:
       - --host
       - 127.0.0.1
       - --port
-      - "8443"
+      - "8103"
       - --listen
-      - "0.0.0.0:8443"
+      - "0.0.0.0:8103"
       - --tls
-      - "${ARMADRA_DEV_STACK_RELAY_TLS:-plain}"
+      - "${ARMADRA_DEV_STACK_RELAY_TLS:-self-signed}"
     environment:
       RELAY_DATA_DIR: /data
       RELAY_PERSONAL_ACCOUNT: dev
@@ -335,7 +338,7 @@ services:
     volumes:
       - relay-personal:/data
     ports:
-      - "127.0.0.1:8103:8443"
+      - "127.0.0.1:8103:8103"
     restart: unless-stopped
 
   # 模拟在 NAT 后、只能外连的 core：不发布端口，只有同一 compose 网络里的中继 / 探针够得到它。
@@ -344,11 +347,35 @@ services:
       context: ../..
       dockerfile: apps/server/docker/Dockerfile
     image: armadra-dev-server:local
-    profiles: ["platform", "personal"]
+    profiles: ["platform"]
     environment:
       ARMADRA_PUBLIC_ORIGIN: "https://armadra-server-nat:8443"
     volumes:
       - armadra-server-nat:/data
+    restart: unless-stopped
+
+  # personal 里的 NAT 后 core：与 relay-personal 共用网络命名空间，所以容器内的
+  # 127.0.0.1:8103 就是中继，issuer 与宿主机看到的完全一样（断言的签发方、证书 SAN 都对得上）。
+  # 仍然不发布端口。入口脚本拿 ARMADRA_CLOUD_ISSUER / REGISTRATION_TOKEN / FINGERPRINT 自动登记；
+  # 令牌与指纹由 dev-stack.mjs 在中继起来后取出，只经进程环境传入，不写进仓库。
+  armadra-server-nat-personal:
+    build:
+      context: ../..
+      dockerfile: apps/server/docker/Dockerfile
+    image: armadra-dev-server:local
+    profiles: ["personal"]
+    network_mode: "service:relay-personal"
+    environment:
+      ARMADRA_PUBLIC_ORIGIN: "https://127.0.0.1:8443"
+      ARMADRA_CLOUD_ISSUER: "https://127.0.0.1:8103"
+      ARMADRA_CLOUD_REGISTRATION_TOKEN: "${ARMADRA_CLOUD_REGISTRATION_TOKEN:-}"
+      ARMADRA_CLOUD_FINGERPRINT: "${ARMADRA_CLOUD_FINGERPRINT:-}"
+      ARMADRA_CLOUD_LABEL: dev-stack-nat
+    volumes:
+      - armadra-server-nat-personal:/data
+    depends_on:
+      relay-personal:
+        condition: service_started
     restart: unless-stopped
 
   headscale:
@@ -437,6 +464,7 @@ volumes:
   platform-postgres:
   relay-personal:
   armadra-server-nat:
+  armadra-server-nat-personal:
 
 secrets:
   personal_relay_password:

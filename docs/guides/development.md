@@ -337,27 +337,30 @@ pnpm dev-stack down gitea              # 只停并删这几个
 改为本地构建，并打印一行说明。
 
 ```sh
-pnpm platform:personal   # 个人中转：relay-personal + armadra-server-nat，起来后逐个健康检查
+pnpm platform:personal   # 个人中转：relay-personal + armadra-server-nat-personal（自动登记，隧道 ready 才算健康）
 pnpm platform:up         # 平台：postgres + redis + cloud + relay + armadra-server-nat，并跑 cloud 迁移
 pnpm platform:health     # 只跑 platform 的健康检查
 pnpm platform:down       # 只停 platform 的服务（不影响默认那组与别的 worktree）
 pnpm platform:e2e        # 跨仓端到端：A 档 personal-roundtrip / multi-source / link-join，B 档 nat-core-offline；relay-roundtrip 预留（等 SaaS 服务端）
-pnpm dev-stack down relay-personal armadra-server-nat   # 停个人中转那组：点名只停自己起的
+pnpm dev-stack down relay-personal armadra-server-nat-personal   # 停个人中转那组：点名只停自己起的
 ```
 
 `platform:down` 只停 `platform` profile；`pnpm dev-stack down` 不点名会停掉所有服务（含别的 worktree
 正在用的）。
 
-| 服务                 | 端口（127.0.0.1） | profile             | 用途                                                              |
-| -------------------- | ----------------- | ------------------- | ----------------------------------------------------------------- |
-| `platform-postgres`  | 5441              | platform            | 云控制面的 PostgreSQL（库 `armadra_cloud`）                       |
-| `platform-redis`     | 6391              | platform            | 控制面与中继共用的 Redis                                          |
-| `cloud`              | 8100              | platform            | 控制面，`/health`、`/ready`；SaaS 路由预留，答 501                |
-| `relay`              | 8101              | platform            | 多租户中继，本地走 HTTP，源地址形如 `<sourceId>.src.localhost`    |
-| `relay-personal`     | 8103              | personal            | 单人中转，不带数据库；自签 TLS 随 R2 落地，之前是 `--tls plain`   |
-| `armadra-server-nat` | 不发布            | platform / personal | 模拟在 NAT 后、只能外连的 core，健康由容器内自己的 `/health` 给出 |
+| 服务                          | 端口（127.0.0.1） | profile  | 用途                                                                                  |
+| ----------------------------- | ----------------- | -------- | ------------------------------------------------------------------------------------- |
+| `platform-postgres`           | 5441              | platform | 云控制面的 PostgreSQL（库 `armadra_cloud`）                                           |
+| `platform-redis`              | 6391              | platform | 控制面与中继共用的 Redis                                                              |
+| `cloud`                       | 8100              | platform | 控制面，`/health`、`/ready`；SaaS 路由预留，答 501                                    |
+| `relay`                       | 8101              | platform | 多租户中继，本地走 HTTP，源地址形如 `<sourceId>.src.localhost`                        |
+| `relay-personal`              | 8103              | personal | 单人中转，不带数据库，自签 TLS；issuer 即宿主机地址 `https://127.0.0.1:8103`          |
+| `armadra-server-nat`          | 不发布            | platform | 模拟在 NAT 后、只能外连的 core，健康由容器内自己的 `/health` 给出                     |
+| `armadra-server-nat-personal` | 不发布            | personal | 与 `relay-personal` 共用网络命名空间，经 `ARMADRA_CLOUD_*` 自动登记；健康含隧道 ready |
 
-平台探针（`tools/probes/{personal-roundtrip,multi-source,link-join,nat-core-offline}.mjs`）不用上面这组容器：dev-stack 里 `relay-personal` 的对外地址是容器内端口，宿主机上的客户端按断言签发方对不上，所以探针用 `platform-lib.mjs` 自己 `docker run` 一份同镜像的个人中转（随机端口与名字、收尾只删自己的，`docker pause` 即用它冻住中继），NAT 后的 core 是宿主进程。需要 armadra-cloud 的本地检出与 Docker；中继镜像取 `ARMADRA_PROBE_RELAY_IMAGE`，缺省从检出 `docker build`。
+personal 中继的 issuer、证书 SAN 与监听端口都是 `https://127.0.0.1:8103`（`services.mjs` 的 `RELAY_PERSONAL`），宿主机客户端可直接按断言签发方使用；中继只认一个 issuer，所以不用 `host.docker.internal`，而是让 NAT 后的 core 与中继共用网络命名空间，容器内的 `127.0.0.1:8103` 就是中继。`up` 先起中继，再用 `PERSONAL_RELAY_PASSWORD` 登录取注册令牌与 CA 指纹，只经进程环境交给 `armadra-server-nat-personal` 的入口脚本登记。
+
+平台探针（`tools/probes/{personal-roundtrip,multi-source,link-join,nat-core-offline}.mjs`）仍用 `platform-lib.mjs` 自己 `docker run` 一份同镜像的个人中转：随机端口与名字（多个 worktree 并行互不抢 8103）、收尾只删自己的、`docker pause` 冻住中继、挂载页面产物，这些 dev-stack 的固定端口共享项目都给不了；NAT 后的 core 是宿主进程。需要 armadra-cloud 的本地检出与 Docker；中继镜像取 `ARMADRA_PROBE_RELAY_IMAGE`，缺省从检出 `docker build`。
 
 随机生成的 `PLATFORM_DB_PASSWORD`、`PERSONAL_RELAY_PASSWORD`、`PLATFORM_SEED_PASSWORD`、
 `ARMADRA_CLOUD_MASTER_KEY` 在首次 `up` 时补进 `tools/dev-stack/.data/dev.env`（旧文件会被补全，不会重写）。
