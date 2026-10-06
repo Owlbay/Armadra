@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Server,
   ServerCog,
+  Waypoints,
   ShieldCheck,
   SlidersHorizontal,
   SquareTerminal,
@@ -132,6 +133,16 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
     groupKey: "settings.group.connection",
     labelKey: "host.nav",
     icon: ServerCog,
+  },
+  {
+    // 远程服务与挂载的源（客户端包 §3.1）：`host` 是本机源的详情，这一页是
+    // 「别的」——个人中转、自托管直连，以及把本机分享出去。读写的都是本机
+    // core 的源表（`settings:*`），所以只给 owner。
+    id: "remote",
+    groupKey: "settings.group.connection",
+    labelKey: "remote.nav",
+    icon: Waypoints,
+    ownerOnly: true,
   },
   {
     id: "accounts",
