@@ -241,6 +241,53 @@ describe("登记", () => {
     expect(again.body.code).toBe("cloud_already_registered");
   });
 
+  it("旧路径带 fingerprint：先钉扎再登记，登记与取公钥都按它验；失败不留钉", async () => {
+    const pin = "ab".repeat(32);
+    const pinned = () =>
+      call(
+        "POST",
+        "/api/identity/cloud/register",
+        {
+          issuer: ISSUER,
+          registrationToken: REGISTRATION_TOKEN,
+          fingerprint: pin,
+        },
+        asOwner(),
+      );
+    world.refuseRegister = { status: 401, code: "registration_token_invalid" };
+    expect((await pinned()).status).toBe(401);
+    expect(
+      core.db.database.prepare("SELECT 1 FROM remote_services").get(),
+    ).toBeUndefined();
+    const answer = await pinned();
+    expect(answer.status, answer.text).toBe(200);
+    expect(cloud.fingerprint(ISSUER)).toBe(pin);
+    expect(world.requests.every((request) => request.fingerprint === pin)).toBe(
+      true,
+    );
+    expect(answer.text).not.toContain(pin);
+    await call(
+      "DELETE",
+      `/api/identity/cloud/register?issuer=${encodeURIComponent(ISSUER)}`,
+      undefined,
+      asOwner(),
+    );
+    const bad = await call(
+      "POST",
+      "/api/identity/cloud/register",
+      { issuer: ISSUER, registrationToken: "x", fingerprint: "zz" },
+      asOwner(),
+    );
+    expect(bad.status).toBe(400);
+    const other = await call(
+      "POST",
+      "/api/identity/cloud/register",
+      { issuer: ISSUER, registrationToken: "x", fingerprint: "cd".repeat(32) },
+      asOwner(),
+    );
+    expect(other.body.code).toBe("fingerprint_mismatch");
+  });
+
   it("协议 major 不符 426、自报 issuer 不符 400、SaaS 501，都不留行", async () => {
     world.info = { ...world.info, protocol: { major: 2, minor: 0 } };
     expect((await register()).body.code).toBe("protocol_unsupported");
