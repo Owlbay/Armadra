@@ -157,7 +157,7 @@ const fallbackConnections = new WeakMap<Source, ControlSocketOpener>();
  * 没有的（测试、还没登记的源）按本机源的做法包一个——流经源自己的
  * `WebSocket`。
  */
-function connectionOf(source: Source): ControlSocketOpener {
+export function connectionOf(source: Source): ControlSocketOpener {
   const registry = sourceRegistry();
   const known =
     source === localSource ? registry.local() : registry.get(source.sourceId);

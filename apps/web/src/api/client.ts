@@ -41,7 +41,7 @@ import {
 import { agentsApi } from "./agents";
 import { systemApi } from "./system";
 import { workspacesApiFor } from "./workspaces";
-import { boardsApi } from "./boards";
+import { boardsApiFor } from "./boards";
 export { isLeaseHeld } from "./boards";
 import { filesApi } from "./files";
 import { languageApi } from "./language";
@@ -296,11 +296,16 @@ export function isDefinedError(error: unknown, code?: string): boolean {
   return code === undefined || error.code === code;
 }
 
+/** 迁到契约上的域交 `source` 的客户端；缺省是当前源。 */
+function boardsClient(source?: Source): ArmadraClient {
+  return source === undefined ? currentClient() : clientFor(source);
+}
+
 export const runtimeApi = {
   ...agentsApi,
   ...systemApi,
   ...workspacesApiFor(currentClient),
-  ...boardsApi,
+  ...boardsApiFor(boardsClient),
   ...filesApi,
   ...languageApi,
   ...searchApi,

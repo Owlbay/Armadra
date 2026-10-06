@@ -4,6 +4,7 @@ import {
   RuntimeConnectionError,
   RuntimeRequestError,
   isConflict,
+  isLeaseHeld,
   runtimeApi,
   terminalWebSocketUrl,
   workspaceEventsUrl,
@@ -101,42 +102,125 @@ describe("Runtime 连接失败", () => {
   });
 });
 
-describe("画布文档", () => {
-  it("PUT 时带上 CAS 时间戳与视口，不再有 strokes", async () => {
-    const fetchMock = stubJson(boardDocument);
+describe("画布文档（契约 §36）", () => {
+  it("保存调 boards.save，带上 CAS 时间戳与视口，不再有 strokes", async () => {
+    const fetchMock = stubJson({ json: boardDocument });
 
     await runtimeApi.saveBoard(workspaceId, boardId, boardDocument);
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(
-      `http://127.0.0.1:43120/api/workspaces/${workspaceId}/boards/${boardId}/document`,
-    );
-    expect(init.method).toBe("PUT");
-    expect(bodyOf(fetchMock)).toEqual({
-      expectedUpdatedAt: timestamp,
-      nodes: [],
-      edges: [],
-      viewport: { x: 12, y: -8, zoom: 0.75 },
-      whiteboard: "",
+    expect(url).toBe("http://127.0.0.1:43120/api/rpc/boards/save");
+    expect(init.method).toBe("POST");
+    expect(bodyOf(fetchMock)).toMatchObject({
+      json: {
+        workspaceId,
+        boardId,
+        expectedUpdatedAt: timestamp,
+        nodes: [],
+        edges: [],
+        viewport: { x: 12, y: -8, zoom: 0.75 },
+        whiteboard: "",
+      },
     });
   });
 
   it("读回画布时保留持久化的视口", async () => {
-    stubJson(boardDocument);
+    const fetchMock = stubJson({ json: boardDocument });
 
     const loaded = await runtimeApi.loadBoard(workspaceId, boardId);
     expect(loaded.board.viewport).toEqual({ x: 12, y: -8, zoom: 0.75 });
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe(
+      "http://127.0.0.1:43120/api/rpc/boards/load",
+    );
   });
 
   it("删除画布允许空响应体", async () => {
-    const fetchMock = stubJson(null);
+    const fetchMock = stubJson({});
 
     await expect(
       runtimeApi.deleteBoard(workspaceId, boardId),
     ).resolves.toBeUndefined();
-    expect((fetchMock.mock.calls[0] as [string, RequestInit])[1].method).toBe(
-      "DELETE",
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:43120/api/rpc/boards/delete");
+    expect(init.method).toBe("POST");
+    expect(bodyOf(fetchMock)).toMatchObject({
+      json: { workspaceId, boardId },
+    });
+  });
+
+  it("别人持有租约：保存与拿租约答 423，isLeaseHeld 认得", async () => {
+    stubJson(
+      { code: "canvas_lease_held", message: "Another client holds it" },
+      false,
+      423,
     );
+    const saved = await runtimeApi
+      .saveBoard(workspaceId, boardId, boardDocument, "tab-aaaaaaaaaaaa")
+      .catch((cause: unknown) => cause);
+    expect(isLeaseHeld(saved)).toBe(true);
+    expect(saved).toMatchObject({ status: 423 });
+    const asked = await runtimeApi
+      .acquireLease(workspaceId, boardId, {
+        clientId: "tab-aaaaaaaaaaaa",
+        deviceName: "Mac",
+        takeover: false,
+      })
+      .catch((cause: unknown) => cause);
+    expect(isLeaseHeld(asked)).toBe(true);
+  });
+
+  it("实时状态按给定的源发，缺省发往当前源", async () => {
+    const fetchMock = stubJson({
+      json: { realtime: true, materializedSeq: 3, enabled: true },
+    });
+    await expect(
+      runtimeApi.boardRealtime(workspaceId, boardId),
+    ).resolves.toMatchObject({ realtime: true, materializedSeq: 3 });
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe(
+      "http://127.0.0.1:43120/api/rpc/boards/realtime",
+    );
+  });
+
+  it("心跳、离开与拿租约各是一条 procedure", async () => {
+    const snapshot = {
+      boardId,
+      clients: [
+        {
+          clientId: "tab-aaaaaaaaaaaa",
+          deviceName: "Mac",
+          deviceKey: "k",
+          lastSeenAt: timestamp,
+        },
+      ],
+      lease: null,
+      writable: true,
+    };
+    const fetchMock = stubJson({ json: snapshot });
+    const body = { clientId: "tab-aaaaaaaaaaaa", deviceName: "Mac" };
+    await runtimeApi.presenceHeartbeat(workspaceId, boardId, {
+      ...body,
+      active: true,
+    });
+    await runtimeApi.leavePresence(workspaceId, boardId, body.clientId);
+    await runtimeApi.acquireLease(workspaceId, boardId, {
+      ...body,
+      takeover: true,
+    });
+    expect(
+      fetchMock.mock.calls.map(
+        (call) => (call as [string])[0].split("/api/")[1],
+      ),
+    ).toEqual([
+      "rpc/boards/heartbeat",
+      "rpc/boards/leave",
+      "rpc/boards/acquireLease",
+    ]);
+    expect(bodyOf(fetchMock, 0)).toMatchObject({
+      json: { workspaceId, boardId, ...body, active: true },
+    });
+    expect(bodyOf(fetchMock, 2)).toMatchObject({
+      json: { workspaceId, boardId, ...body, takeover: true },
+    });
   });
 
   it("从列表移除工作空间调 workspaces.delete（契约 §34.4）", async () => {

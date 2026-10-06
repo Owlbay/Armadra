@@ -97,6 +97,11 @@ export function markPresenceActivity(): void {
   active = true;
 }
 
+/** 看一眼有没有还没报的操作，不清零。 */
+export function peekPresenceActivity(): boolean {
+  return active;
+}
+
 /** 取走并清零。 */
 export function takePresenceActivity(): boolean {
   const was = active;
