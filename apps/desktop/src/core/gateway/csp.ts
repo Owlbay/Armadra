@@ -27,6 +27,15 @@ const CONNECT = [
   "ws://localhost:*",
 ];
 
+/** 图片与音视频可以直接取的回环来源（本机 core 的媒体票地址）。 */
+const MEDIA = ["http://127.0.0.1:*", "http://localhost:*"];
+
+/** 按源追加的授权里 `https:` 的那几条，给 `img-src` / `media-src`（前面带空格）。 */
+function httpsGrants(grants: readonly string[]): string {
+  const https = grants.filter((grant) => grant.startsWith("https://"));
+  return https.length === 0 ? "" : ` ${https.join(" ")}`;
+}
+
 /** 追加的连接授权只收这一种形状：协议 + 主机 + 可选端口，无通配、无路径。 */
 const CONNECT_GRANT =
   /^(https|wss):\/\/(\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(:\d{1,5})?$/i;
@@ -63,12 +72,13 @@ export function contentSecurityPolicy(
     `connect-src ${[...CONNECT, ...new Set(extra)].join(" ")}`,
     // Tailwind and the shadcn components set inline custom properties.
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: http://127.0.0.1:* http://localhost:*",
+    `img-src 'self' data: blob: ${MEDIA.join(" ")}${httpsGrants(extra)}`,
     "font-src 'self' data:",
     "worker-src 'self' blob:",
-    // 编辑器节点的音视频预览：字节经 `file-download` 取回，页面自己以声明的
-    // MIME 类型包成 blob 再交给 <video> / <audio>。
-    "media-src 'self' blob:",
+    // 编辑器节点的音视频预览：媒体票的地址（契约 §37.4）直接交给 <video> /
+    // <audio>，地址在本机 core（回环）或挂着的源上（与 `connect-src` 同一份
+    // 按源追加的 https 来源）；老 core 退回页面自己包的 blob。
+    `media-src 'self' blob: ${MEDIA.join(" ")}${httpsGrants(extra)}`,
     // Browser nodes (W3 replaces this with <webview>). `blob:` is the editor's
     // PDF preview: a blob the page itself built with type `application/pdf`,
     // which the engine hands to its PDF viewer rather than parsing as HTML.

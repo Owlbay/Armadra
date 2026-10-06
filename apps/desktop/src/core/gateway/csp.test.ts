@@ -44,6 +44,26 @@ describe("服务器壳的 CSP", () => {
   });
 });
 
+describe("桌面壳的 CSP", () => {
+  it("媒体票地址（§37.4）：图片与音视频可取本机 core 与按源追加的 https 来源，wss 不进", () => {
+    const policy = contentSecurityPolicy({
+      connect: ["https://relay.example:8443", "wss://relay.example:8443"],
+    });
+    const directive = (name: string) =>
+      policy.split("; ").find((entry) => entry.startsWith(`${name} `)) ?? "";
+    for (const name of ["media-src", "img-src"]) {
+      expect(directive(name)).toContain("http://127.0.0.1:*");
+      expect(directive(name)).toContain("https://relay.example:8443");
+      expect(directive(name)).not.toContain("wss://");
+    }
+    expect(directive("media-src")).toContain("blob:");
+    // 没有追加授权时只有回环。
+    expect(contentSecurityPolicy()).toContain(
+      "media-src 'self' blob: http://127.0.0.1:* http://localhost:*",
+    );
+  });
+});
+
 describe("原生 App（Capacitor）的 CSP", () => {
   it("指令集合与桌面壳相同，只多出连 Gateway 的 https / wss", () => {
     const names = (policy: string) =>
