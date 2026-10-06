@@ -2907,7 +2907,8 @@ V2 探针（#167）发现的缺陷。契约 §17.4、§32.2。
 
 - 新用例：`core/push/triggers.test`（深链带 `s` 与编码、测试通知与没给源时不带、入队载荷带本机 hostId）、`transport-relay` / `transport-unifiedpush` 断言线上没有 hostId 明文；`mobile/push-open.test` 7（带 `s` 的解析与拒收、五种去向、切连接留 `#push=`）；`mobile/credentials.test` 5（槽名、主人与访客各用各的槽并各自写回、旧单槽照读、记的槽缺失不借别人的、`me.stream` 选主人槽）；`mobile/connections.test` 1；`mobile/connect.test` 1（主人登录后访客扫码：两槽并存，移除访客只删它那槽）并更新两条既有断言（主人与访客不再落旧单槽）；`mobile/relay-status.test` 2；`shell/Banners.relay.test` 补 3（手机经中继：中继停了盖过运行时断开、中继还答话不说中继、正常时不探测）；`mobile/entry.test` 断言选路记下中继。
 - 原生：`swift test --filter DeepLinkTests` 4 过；`DeepLink.java` + `DeepLinkTest` 用 `javac` + JUnit 4 过。
-- 探针：`push-e2e` 的 APNs 深链断言改成带 `?s=<hostId>`（取自 `GET /api/identity/hello`）；`link-join` 加一段手机（App 页面、假钥匙串预置主人的旧单槽）扫同一条链接以访客加入，断言主人那一槽原样还在、访客另存一槽、主人的刷新令牌在中转上仍有效。
+- 探针：`push-e2e` 的 APNs 深链断言改成带 `?s=<hostId>`（取自 `GET /api/identity/hello`），本机全过；`link-join` 加一段手机（App 页面、假钥匙串预置主人的旧单槽）扫同一条链接以访客加入，断言主人那一槽原样还在、访客另存一槽、主人的刷新令牌在中转上仍有效——本机（Docker 中继，armadra-cloud 本地检出）全过。手机那一段的页面来源是拦截出来的 `https://localhost`，探针的 Chrome 关掉本地网络访问检查（同 `personal-roundtrip`）。`mobile-shell-e2e` 走配对、不涉及这三处，没改没跑。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 5248 过 / 67 跳（live 4 过），web 3883 过，shared 372 过，server 98 过 / 4 跳，mobile 10、push-relay 9 过；`pnpm --filter @armadra/web typecheck`、`pnpm check` 通过。
 
 接口：
 
