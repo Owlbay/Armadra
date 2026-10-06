@@ -548,9 +548,7 @@ describe("git", () => {
 describe("写文件", () => {
   it("PUT 携带已读内容版本", async () => {
     const fetchMock = stubJson({
-      path: "src/a.ts",
-      size: 7,
-      sha256: "b".repeat(64),
+      json: { path: "src/a.ts", size: 7, sha256: "b".repeat(64) },
     });
 
     const result = await runtimeApi.writeFile(
@@ -567,28 +565,29 @@ describe("写文件", () => {
       sha256: "b".repeat(64),
     });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(
-      `http://127.0.0.1:43120/api/workspaces/${workspaceId}/file`,
-    );
-    expect(init.method).toBe("PUT");
+    expect(url).toBe("http://127.0.0.1:43120/api/rpc/files/write");
+    expect(init.method).toBe("POST");
     expect(bodyOf(fetchMock)).toEqual({
-      path: "src/a.ts",
-      content: "content",
-      expectedSize: 3,
-      expectedSha256: "a".repeat(64),
+      json: {
+        workspaceId,
+        path: "src/a.ts",
+        content: "content",
+        expectedSize: 3,
+        expectedSha256: "a".repeat(64),
+      },
     });
   });
 
   it("不传 expectedSize 时不发这个键", async () => {
     const fetchMock = stubJson({
-      path: "a.ts",
-      size: 1,
-      sha256: "b".repeat(64),
+      json: { path: "a.ts", size: 1, sha256: "b".repeat(64) },
     });
 
     await runtimeApi.writeFile(workspaceId, "a.ts", "x");
 
-    expect(bodyOf(fetchMock)).toEqual({ path: "a.ts", content: "x" });
+    expect(bodyOf(fetchMock)).toEqual({
+      json: { workspaceId, path: "a.ts", content: "x" },
+    });
   });
 
   it("409 变成可判别的冲突错误", async () => {

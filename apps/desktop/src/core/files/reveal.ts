@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { dirname } from "node:path";
+import { type DomainHandlers, registerProcedures } from "../http/rpc";
 import type { CoreContext } from "../main";
 import { answeredAsync } from "../language/routes";
 import { resolveInRoot, workspaceRelativePath } from "../workspaces/roots";
@@ -83,42 +84,69 @@ export function installReveal(
   const platform = options.platform ?? process.platform;
   const launch = options.launch ?? launchReveal;
 
+  const checked = (id: string) => {
+    const workspace = getWorkspace(database, id);
+    if ((workspace.executionHostId ?? "") !== "") {
+      throw new DomainError(
+        501,
+        "unsupported",
+        "Revealing a file is only possible for a workspace on this machine",
+      );
+    }
+    // 只要求能看这个工作区：打开的是系统自己的文件管理器，不执行工作区里的
+    // 任何东西，所以不看工作区的 execute 开关（它默认是关的，看了等于这一项
+    // 几乎永远不出现）。「会拉起一个程序」这件事由路由 scope 那一档管。
+    if (!workspace.permissions.read) {
+      throw forbidden("This workspace is not readable");
+    }
+    return workspace;
+  };
+
+  // 旧路径与契约 §37 的 `files.reveal` 同一份实现。
+  const reveal = async (
+    id: string,
+    requested: string,
+  ): Promise<{ ok: boolean }> => {
+    const workspace = checked(id);
+    // `.` 是根目录本身；其余一律按工作区内相对路径解析，并在跟随符号链接之后
+    // 再证明一次仍在根目录里（`resolveInRoot` 用的就是 `contains`）。
+    const target = resolveInRoot(
+      workspace.rootPath,
+      requested === "." ? "." : workspaceRelativePath(requested),
+    );
+    try {
+      await launch(revealCommand(platform, target));
+    } catch (error) {
+      throw new DomainError(
+        500,
+        "reveal_failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    return { ok: true };
+  };
+
+  registerProcedures(context.server, "files", {
+    reveal: ({
+      workspaceId: id,
+      path,
+    }: {
+      workspaceId: string;
+      path: string;
+    }) => reveal(id, path),
+  } as unknown as DomainHandlers<"files">);
+
   context.server.router.handle(
     "POST",
     "/api/workspaces/{workspaceId}/reveal",
     answeredAsync(async (match, request) => {
-      const workspace = getWorkspace(database, workspaceId(match));
-      if ((workspace.executionHostId ?? "") !== "") {
-        throw new DomainError(
-          501,
-          "unsupported",
-          "Revealing a file is only possible for a workspace on this machine",
-        );
-      }
-      // 只要求能看这个工作区：打开的是系统自己的文件管理器，不执行工作区里的
-      // 任何东西，所以不看工作区的 execute 开关（它默认是关的，看了等于这一项
-      // 几乎永远不出现）。「会拉起一个程序」这件事由路由 scope 那一档管。
-      if (!workspace.permissions.read) {
-        throw forbidden("This workspace is not readable");
-      }
+      const id = workspaceId(match);
+      checked(id);
       const body = jsonObject(request.body);
-      const requested = requiredString(body, "path");
-      // `.` 是根目录本身；其余一律按工作区内相对路径解析，并在跟随符号链接之后
-      // 再证明一次仍在根目录里（`resolveInRoot` 用的就是 `contains`）。
-      const target = resolveInRoot(
-        workspace.rootPath,
-        requested === "." ? "." : workspaceRelativePath(requested),
-      );
-      try {
-        await launch(revealCommand(platform, target));
-      } catch (error) {
-        throw new DomainError(
-          500,
-          "reveal_failed",
-          error instanceof Error ? error.message : String(error),
-        );
-      }
-      return { status: 200, body: { ok: true } };
+      return {
+        status: 200,
+        body: await reveal(id, requiredString(body, "path")),
+      };
     }),
   );
 }
