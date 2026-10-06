@@ -79,6 +79,24 @@ export interface IssuedInvitation {
   readonly role: ShareRole;
   readonly targetGroupId: string;
   readonly targetWorkspaceId: string;
+  /** 空 = 一次性。 */
+  readonly maxUses: number | null;
+}
+
+/** 多次邀请最多能被几个人兑换（契约 §10）。 */
+export const INVITATION_MAX_USES_LIMIT = 1000;
+
+/** `maxUses`：缺省 = 一次性（null）；否则 1–1000 的整数。 */
+export function invitationMaxUses(maxUses: number | undefined): number | null {
+  if (maxUses === undefined) return null;
+  if (
+    !Number.isSafeInteger(maxUses) ||
+    maxUses < 1 ||
+    maxUses > INVITATION_MAX_USES_LIMIT
+  ) {
+    throw new IdentityError("invalid");
+  }
+  return maxUses;
 }
 
 export const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -483,8 +501,10 @@ export class AccountsService {
       targetGroupId?: string;
       targetWorkspaceId?: string;
       ttlMs?: number;
+      maxUses?: number;
     },
   ): IssuedInvitation {
+    const maxUses = invitationMaxUses(input.maxUses);
     const role = parseShareRole(input.role);
     const targetGroupId = input.targetGroupId ?? "";
     const targetWorkspaceId = input.targetWorkspaceId ?? "";
@@ -524,12 +544,14 @@ export class AccountsService {
         expiresAtMs,
         consumedBy: "",
         consumedAtMs: 0,
+        maxUses,
+        uses: 0,
       });
       this.note(tx.accounts, actor, now, {
         action: "identity.invitation.issue",
         target: invitationId,
         workspaceId: targetWorkspaceId,
-        detail: { role },
+        detail: maxUses === null ? { role } : { role, maxUses },
       });
       return {
         invitationId,
@@ -538,6 +560,7 @@ export class AccountsService {
         role,
         targetGroupId,
         targetWorkspaceId,
+        maxUses,
       };
     });
   }
@@ -552,6 +575,8 @@ export class AccountsService {
     expiresAtMs: number;
     consumedBy: string;
     consumedAtMs: number;
+    maxUses: number | null;
+    uses: number;
   }[] {
     return this.options.store.transaction((tx) => {
       // 管理员看全部；组管理员只看指向自己所管的组、且不带工作空间的那些——
@@ -581,6 +606,8 @@ export class AccountsService {
           expiresAtMs: row.expiresAtMs,
           consumedBy: row.consumedBy,
           consumedAtMs: row.consumedAtMs,
+          maxUses: row.maxUses,
+          uses: row.uses,
         }));
     });
   }
@@ -637,7 +664,7 @@ export class AccountsService {
     }
     const accepted = this.options.store.transaction((tx) => {
       const now = this.now();
-      const row = this.redeemable(tx.accounts, input, now);
+      const row = this.redeemable(tx.accounts, input, now, actor.principalId);
       if (tx.accounts.principal(actor.principalId) === undefined) {
         throw new IdentityError("unauthenticated");
       }
@@ -836,15 +863,24 @@ export class AccountsService {
     accounts: AccountsTx,
     input: { invitationId: string; token: string },
     now: number,
+    principalId = "",
   ): InvitationRow {
     const parsed = parseToken(input.token);
     if (!ID_PATTERN.test(input.invitationId) || parsed !== input.invitationId) {
       throw new IdentityError("unauthenticated");
     }
     const row = accounts.invitation(input.invitationId);
+    // 多次邀请用满后 `consumed_by` 是最后一个人；作废则是空主体。用满之后已兑换过的
+    // 人再来仍是幂等成功（过期之前）；其他一切同一个 401。
+    const exhaustedButMine =
+      row !== undefined &&
+      row.maxUses !== null &&
+      row.consumedBy !== "" &&
+      principalId !== "" &&
+      accounts.invitationUsedBy(row.invitationId, principalId);
     if (
       row === undefined ||
-      row.consumedAtMs !== 0 ||
+      (row.consumedAtMs !== 0 && !exhaustedButMine) ||
       now >= row.expiresAtMs ||
       !matches("bootstrap", input.token, row.tokenHash)
     ) {
@@ -884,7 +920,11 @@ export class AccountsService {
         nowMs: now,
       });
     }
-    accounts.consumeInvitation(row.invitationId, actor.principalId, now);
+    if (row.maxUses === null) {
+      accounts.consumeInvitation(row.invitationId, actor.principalId, now);
+    } else {
+      accounts.useInvitation(row.invitationId, actor.principalId, now);
+    }
     this.note(accounts, actor, now, {
       action: "identity.invitation.accept",
       target: row.invitationId,

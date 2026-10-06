@@ -2137,3 +2137,32 @@
 - 已挂载源不支持拖动排序（`sources.update.orderIndex` 未接界面）；SaaS 设备码流程不出现入口。
 - 没有复用手机的 `#connections` 连接页组件：手机直接调远程服务、凭据在钥匙串，桌面经本机 core 代管凭据（`sources.*`），流程与状态不同；共用的只有指纹分组显示（`groupFingerprint`）与二维码（`QrImage`）。
 - 窄屏与宽屏切换时设置对话框换外壳、内容重新挂载，刚生成的链接会从界面上消失（链接仍在，可在「生效中的链接」停用）。
+
+## A4-1 邀请多次使用 + A4-4 服务器壳 CLI（个人中转部分）
+
+规格：[核心包](../design/platform/core-packages.md) §5、§6；总计划 §12：A4-4 只做个人中转的登记与分享链接。
+
+做了什么：
+
+- **A4-1**（`core/identity/accounts*.ts`，契约 §10 追加一段，节号不变）：`0040` 里已有 `max_uses`、`uses` 与 `identity_invitation_uses`，**没有新迁移**。`POST invitations` 收 `maxUses`（1–1000，其它 400），答案与列表多 `maxUses`（一次性为 `null`）与 `uses`。兑换（`accept`、口令注册、云登录）在同一笔事务里 `UPDATE … SET uses = uses + 1 WHERE consumed_at_ms = 0 AND uses < max_uses` 加 `INSERT OR IGNORE identity_invitation_uses`，用满时收口 `consumed_*`；同一个人重复兑换幂等（不加计数，用满之后也成功，过期与作废不行）；一次性邀请的路径不变。
+- **A4-4**（`apps/server/src/cloud.ts`、`cli.ts`、`main.ts`）：`cloud register | revoke | status | login` 与 `invite --cloud-link`。CLI 是另一个进程，所以经数据目录里 0600 的私有通道（`core-control.sock`）取票、在 core 回环上换 Bearer（与桌面壳、探针同一条路），再调 `/api/identity/cloud*`、`/api/sources/*`；`cloud login` 与 `invite --cloud-link` 另用 core 持有的远程服务会话直接问个人中转（`networkTransport`，按指纹钉扎）要注册令牌、建链接。输出沿用服务器壳的中文单行与 `--output json`；退出码 0 / 1 / 2（用法），core 没起来是 69。
+- **容器入口**（`docker/entrypoint.sh`）：`ARMADRA_CLOUD_ISSUER` 与 `ARMADRA_CLOUD_REGISTRATION_TOKEN` 都给时，后台等 serve 就绪（退出 69 就重试，最多 2 分钟）再 `cloud register`，已登记跳过，失败只记一行；令牌只走环境变量，并从传给 serve 的环境里去掉。可选 `ARMADRA_CLOUD_FINGERPRINT`、`ARMADRA_CLOUD_LABEL`。
+
+接口：
+
+- 命令：`armadra-server cloud register --issuer URL (--token T | --token-stdin | $ARMADRA_CLOUD_REGISTRATION_TOKEN) [--fingerprint FP] [--label L]`；`cloud revoke --issuer URL`；`cloud status [--output json]`；`cloud login --issuer URL --account A [--fingerprint FP] [--label L] (--password-stdin | $ARMADRA_CLOUD_PASSWORD | 终端提示)`；`invite --cloud-link --issuer URL (--workspace ID | --group ID) [--role R] [--max-uses N] [--expires 7d] [--label L]`，打印 `https://<中继>/j/<id>#<密>.<邀请令牌>`。都对运行中的服务器壳（同一个 `--data-dir`）操作；Windows 没有私有通道，不可用。
+- core：旧路径 `POST /api/identity/cloud/register` 另收可选 `fingerprint`（契约 §31.2）——令牌登记自签个人中转没有口令可走 `sources.remoteAdd`，先把信任锚钉进「远程服务」表再登记，失败不留钉；procedure 的入参不变。
+
+实测（macOS arm64，2026-10-06，基于 main cabe898a）：
+
+- `pnpm check`、`pnpm libs:build && pnpm --filter @armadra/desktop test`（408 文件 / 4825 用例通过，11 文件 / 72 用例按设计跳过）、`pnpm --filter @armadra/server test`（98 通过，4 跳过）与 build 全绿。
+- 新增用例：`accounts.test.ts` 多次使用 4 条（20 个并发用 `maxUses = 5` 的邀请恰好 5 个成功、同人幂等、用满后用过的人仍成功、过期与作废、越界 400、一次性不变）；`cloud.test.ts` 钉扎登记 1 条；`apps/server/src/cloud.test.ts` 13 条（参数解析、每条命令对假 core 的调用、口令与令牌不出现在输出、退出码、中继拒绝时撤掉刚建的邀请）。
+- 真跑个人中转：armadra-cloud 主目录 `pnpm relay:personal`（自签 TLS，`127.0.0.1:8102`），服务器壳 `serve` 用临时数据目录。`cloud login`（口令经标准输入、指纹钉扎）→ 隧道 `ready` → `cloud status` → 再 `login` 幂等跳过 → `invite --cloud-link --max-uses 3 --expires 2d` 出链接、库里 `max_uses = 3` → `cloud revoke` → `status` 为空；另走令牌路径（清掉远程服务行，`--token` 来自环境变量 + `--fingerprint`）登记、`ready`、再登记跳过、撤销。服务器壳与中继日志里没有口令、令牌或链接密。实例已停、临时目录已删。
+
+没做 / 偏离规格：
+
+- 规格里的 `invite`（不带 `--cloud-link`）此前并不存在，这里只实现 `--cloud-link`，不带它是用法错误；`invite` 需要 `--workspace` 或 `--group`（core 的邀请必须指向一处）。
+- 规格的 `cloud register` 没有指纹参数；自签中继没有它就无法钉扎，所以加了 `--fingerprint` 与旧路径的 `fingerprint` 字段。
+- `cloud login` 的注册令牌由 CLI 向中继取（core 没有这条外呼），所以没有新增 core 外呼登记。
+- 在还没有管理员的服务器上，CLI 取票换会话会成为第一个 owner（与首张配对票同一规则）；正常流程是先由管理员配对。
+- 没有真 Docker 起容器跑 entrypoint（只做了 `sh -n` 语法检查与 CLI 侧的重试语义）；容器自动登记留待 server-container-e2e 覆盖。

@@ -10,6 +10,7 @@
  * 撤销只停隧道、记撤销时刻；已经映射过的账号与授予是 owner 的事，在账号页逐个撤。
  */
 
+import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 
 import type { Ed25519PublicJwk } from "@armadra/platform-protocol/assertion";
@@ -21,7 +22,10 @@ import type {
 import { PROTOCOL_VERSION } from "@armadra/platform-protocol";
 
 import { fail } from "../../http/errors";
-import { normalizeOrigin } from "../../sources/http-client";
+import {
+  normalizeFingerprint,
+  normalizeOrigin,
+} from "../../sources/http-client";
 import { audit } from "../audit";
 import { canonicalOrigin } from "../origin";
 import type { IdentityStore } from "../store";
@@ -115,6 +119,8 @@ export class CloudRegistry {
   async register(
     input: { issuer: string; registrationToken: string; label?: string },
     principalId?: string,
+    /** 自签证书的 CA 指纹（只经旧路径的 `fingerprint` 字段）：先钉住再登记。 */
+    pinned?: string,
   ): Promise<CloudRegisterOutput> {
     const issuer = issuerOf(input.issuer);
     const token = input.registrationToken.trim();
@@ -132,9 +138,27 @@ export class CloudRegistry {
     ) {
       throw fail("cloud_already_registered", "已经登记到这个远程服务");
     }
+    const fingerprint = normalizeFingerprint(pinned);
     this.inflight.add(issuer);
+    let created = false;
     try {
+      if (fingerprint !== "") {
+        const pin = this.options.cloud.pinRemote({
+          issuer,
+          fingerprint,
+          label: (label ?? (new URL(issuer).host || "Armadra")).slice(0, 128),
+          serviceId: randomBytes(16).toString("hex"),
+          atMs: this.now(),
+        });
+        if (pin === "conflict") {
+          throw fail("fingerprint_mismatch", "指纹与已记下的不一致");
+        }
+        created = pin === "created";
+      }
       return await this.registerOnce(issuer, token, label, registeredBy);
+    } catch (error) {
+      if (created) this.options.cloud.unpinRemote(issuer);
+      throw error;
     } finally {
       this.inflight.delete(issuer);
     }
