@@ -29,6 +29,10 @@ export interface FakePull {
   mergeSha?: string;
   /** head 在别人的仓库里（`head.repo_id` 与 `base.repo_id` 不同）。 */
   fork?: boolean;
+  /** 检查还没过：`merge_when_checks_succeed` 时排上（201）而不是当场合并。 */
+  checksPending?: boolean;
+  /** 时间线事件的类型，按时间先后。 */
+  timeline?: string[];
   files: {
     filename: string;
     status: string;
@@ -58,6 +62,12 @@ export interface FakeGitea {
   >;
   /** 仓库里的分支：名字 → head 与是否受保护。 */
   readonly branches: Map<string, { sha: string; protected: boolean }>;
+  /** 仓库的合并方式开关（`GET /repos/{o}/{r}` 答这几项）。 */
+  readonly repository: {
+    allow_merge_commits?: boolean;
+    allow_squash_merge?: boolean;
+    allow_rebase?: boolean;
+  };
   /** 下一条匹配的请求答这个状态（一次性）。 */
   failNext(method: string, path: RegExp, status: number): void;
   close(): Promise<void>;
@@ -100,6 +110,11 @@ export async function startFakeGitea(): Promise<FakeGitea> {
   >();
   const failures: { method: string; path: RegExp; status: number }[] = [];
   const branches = new Map<string, { sha: string; protected: boolean }>();
+  const repository: FakeGitea["repository"] = {
+    allow_merge_commits: true,
+    allow_squash_merge: true,
+    allow_rebase: true,
+  };
   let root = "";
 
   const issueJson = (issue: FakeIssue) => ({
@@ -197,6 +212,14 @@ export async function startFakeGitea(): Promise<FakeGitea> {
       return;
     }
     const rest = path.slice(prefix.length);
+    if (rest === "" && method === "GET") {
+      return send(200, {
+        id: 1,
+        name: REPO,
+        full_name: `${OWNER}/${REPO}`,
+        ...repository,
+      });
+    }
     const state = url.searchParams.get("state") ?? "open";
     const page = Number(url.searchParams.get("page") ?? "1");
     const limit = Number(url.searchParams.get("limit") ?? "30");
@@ -220,6 +243,16 @@ export async function startFakeGitea(): Promise<FakeGitea> {
       const { slice, headers } = paged(wanted);
       send(200, slice.map(issueJson), headers);
       return;
+    }
+    if ((match = rest.match(/^\/issues\/(\d+)\/timeline$/))) {
+      const pull = pulls.find((item) => item.number === Number(match![1]));
+      if (pull === undefined) return send(404, { message: "not found" });
+      const events = (pull.timeline ?? []).map((type, index) => ({
+        id: index + 1,
+        type,
+      }));
+      const { slice, headers } = paged(events);
+      return send(200, slice, headers);
     }
     if ((match = rest.match(/^\/issues\/(\d+)$/))) {
       const issue = issues.find((item) => item.number === Number(match![1]));
@@ -288,11 +321,28 @@ export async function startFakeGitea(): Promise<FakeGitea> {
           })),
         );
       }
+      if (suffix === "/merge" && method === "DELETE") {
+        const timeline = pull.timeline ?? [];
+        const scheduled =
+          timeline.filter((type) => type.startsWith("pull_")).at(-1) ===
+          "pull_scheduled_merge";
+        if (!scheduled) return send(404, { message: "not scheduled" });
+        pull.timeline = [...timeline, "pull_cancel_scheduled_merge"];
+        return send(204);
+      }
       if (suffix === "/merge" && method === "POST") {
-        const input = body as { Do?: string; head_commit_id?: string };
+        const input = body as {
+          Do?: string;
+          head_commit_id?: string;
+          merge_when_checks_succeed?: boolean;
+        };
         if (!pull.mergeable) return send(405, { message: "not mergeable" });
         if (input.head_commit_id !== pull.sha)
           return send(409, { message: "head out of date" });
+        if (input.merge_when_checks_succeed === true && pull.checksPending) {
+          pull.timeline = [...(pull.timeline ?? []), "pull_scheduled_merge"];
+          return send(201);
+        }
         pull.merged = true;
         pull.state = "closed";
         pull.mergeSha = "d".repeat(40);
@@ -339,6 +389,7 @@ export async function startFakeGitea(): Promise<FakeGitea> {
     pulls,
     statuses,
     branches,
+    repository,
     failNext: (method, path, status) => failures.push({ method, path, status }),
     close: () =>
       new Promise<void>((resolve) => {

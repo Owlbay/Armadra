@@ -7,10 +7,14 @@
  *   * 差异：文件表来自 `/pulls/{n}/files`，每个文件的补丁从 `/pulls/{n}.diff`
  *     按文件切出来（文件表本身不带补丁）。
  *   * 草稿：Gitea 按标题前缀 `WIP:` 认草稿，建草稿 PR 就加这个前缀。
+ *   * 合并方式按仓库的 `allow_merge_commits` / `allow_squash_merge` /
+ *     `allow_rebase` 细分（{@link giteaMergeMethods}）。
+ *   * 检查通过后合并：`POST …/merge` 带 `merge_when_checks_succeed`，排上了
+ *     答 201，检查已经过了就当场合并答 200；撤销是 `DELETE …/merge`。PR 上没有
+ *     「已排上」字段，详情从时间线最后一条排程 / 撤销事件读。
  */
 
 import {
-  ALL_MERGE_METHODS,
   type CreatePullInput,
   DEFAULT_LIMIT,
   type Forge,
@@ -23,6 +27,8 @@ import {
   type ForgeFileStatus,
   type ForgeIssue,
   type ForgeIssueState,
+  type ForgeAutoMerge,
+  type ForgeMergeMethod,
   type ForgeMergeOptions,
   type ForgeMerged,
   type ForgePage,
@@ -116,6 +122,16 @@ interface WirePull {
   created_at?: string;
   updated_at?: string;
 }
+/** `GET /repos/{o}/{r}` 里管合并方式的几项；老版本缺字段时按允许。 */
+interface WireRepo {
+  allow_merge_commits?: boolean;
+  allow_squash_merge?: boolean;
+  allow_rebase?: boolean;
+}
+/** `GET /repos/{o}/{r}/issues/{n}/timeline` 的一条；只看类型。 */
+interface WireTimelineEvent {
+  type?: string;
+}
 interface WireFile {
   filename?: string;
   previous_filename?: string;
@@ -188,6 +204,24 @@ function toPull(value: WirePull): ForgePull {
     fromFork: forked(value.head?.repo_id, value.base?.repo_id),
   };
 }
+
+/**
+ * 仓库允许的合并方式。Gitea 的 `rebase` 对应 `allow_rebase`；`rebase-merge`、
+ * `fast-forward-only` 不在三种之内，不给。字段缺省（老版本）按允许。
+ */
+export function giteaMergeMethods(repo: WireRepo): ForgeMergeMethod[] {
+  const methods: ForgeMergeMethod[] = [];
+  if (repo.allow_merge_commits !== false) methods.push("merge");
+  if (repo.allow_squash_merge !== false) methods.push("squash");
+  if (repo.allow_rebase !== false) methods.push("rebase");
+  return methods;
+}
+
+/** 时间线里的排程 / 撤销事件（Gitea 的评论类型名）。 */
+const SCHEDULED = "pull_scheduled_merge";
+const UNSCHEDULED = "pull_cancel_scheduled_merge";
+/** 时间线最多翻这么多页（每页 50 条）；更长的按看到的为准。 */
+const TIMELINE_PAGES = 10;
 
 /** 两边仓库 id 都在且不同才算 fork；缺字段（老版本）按同仓库。 */
 export function forked(head: unknown, base: unknown): boolean {
@@ -378,11 +412,50 @@ export class GiteaForge implements Forge {
     };
   }
 
+  /** 详情：开着的 PR 再从时间线读「检查通过后合并」排上了没有。 */
   async getPull(repo: ForgeRepo, number: number): Promise<ForgePull> {
+    const pull = await this.pullOnly(repo, number);
+    if (pull.state !== "open") return pull;
+    return { ...pull, autoMerge: await this.scheduled(repo, number) };
+  }
+
+  private async pullOnly(repo: ForgeRepo, number: number): Promise<ForgePull> {
     const response = await this.http.get(
       repoPath(repo, `/pulls/${numbered(number)}`),
     );
     return toPull(decodeJson<WirePull>(response));
+  }
+
+  /**
+   * 最后一条排程 / 撤销事件是不是排程。读不到时间线（老版本、权限）答
+   * `false`：这只是详情上的一个标记，不能让详情整个失败。
+   */
+  private async scheduled(repo: ForgeRepo, number: number): Promise<boolean> {
+    let last = false;
+    try {
+      let page = 1;
+      for (let read = 0; read < TIMELINE_PAGES; read += 1) {
+        const response = await this.http.get(
+          repoPath(repo, `/issues/${numbered(number)}/timeline`),
+          { page: String(page), limit: "50" },
+        );
+        const events = decodeJson<WireTimelineEvent[]>(response);
+        if (!Array.isArray(events)) return false;
+        for (const event of events) {
+          if (event?.type === SCHEDULED) last = true;
+          else if (event?.type === UNSCHEDULED) last = false;
+        }
+        if (response.nextPage <= page) break;
+        page = response.nextPage;
+      }
+    } catch {
+      return false;
+    }
+    return last;
+  }
+
+  private async repository(repo: ForgeRepo): Promise<WireRepo> {
+    return decodeJson<WireRepo>(await this.http.get(repoPath(repo)));
   }
 
   async createPull(
@@ -438,7 +511,7 @@ export class GiteaForge implements Forge {
   }
 
   async checks(repo: ForgeRepo, number: number): Promise<ForgeChecks> {
-    const pull = await this.getPull(repo, number);
+    const pull = await this.pullOnly(repo, number);
     if (pull.headSha === "") {
       return { headSha: "", rollup: "none", checks: [] };
     }
@@ -468,14 +541,7 @@ export class GiteaForge implements Forge {
     number: number,
     input: MergeInput,
   ): Promise<ForgeMerged> {
-    if (!validSha(input.headSha)) throw forgeError("invalid", "SHA_INVALID");
-    const before = await this.getPull(repo, number);
-    if (before.state === "merged")
-      throw forgeError("conflict", "ALREADY_MERGED");
-    if (before.state !== "open") throw forgeError("conflict", "NOT_OPEN");
-    if (before.headSha !== input.headSha) {
-      throw forgeError("conflict", "HEAD_CHANGED");
-    }
+    await this.reviewed(repo, number, input);
     await this.http.write(
       "POST",
       repoPath(repo, `/pulls/${numbered(number)}/merge`),
@@ -484,13 +550,88 @@ export class GiteaForge implements Forge {
         head_commit_id: input.headSha,
       },
     );
-    // 合并的答复没有正文；合并提交从 PR 上读。读不到不改变「已合并」这个事实。
+    return { merged: true, sha: await this.mergeCommit(repo, number) };
+  }
+
+  /** 合并前的核对：PR 开着，head 还是评审者看到的那个。 */
+  private async reviewed(
+    repo: ForgeRepo,
+    number: number,
+    input: MergeInput,
+  ): Promise<void> {
+    if (!validSha(input.headSha)) throw forgeError("invalid", "SHA_INVALID");
+    const before = await this.pullOnly(repo, number);
+    if (before.state === "merged")
+      throw forgeError("conflict", "ALREADY_MERGED");
+    if (before.state !== "open") throw forgeError("conflict", "NOT_OPEN");
+    if (before.headSha !== input.headSha) {
+      throw forgeError("conflict", "HEAD_CHANGED");
+    }
+  }
+
+  /** 合并的答复没有正文；合并提交从 PR 上读。读不到不改变「已合并」这个事实。 */
+  private async mergeCommit(
+    repo: ForgeRepo,
+    number: number,
+  ): Promise<string | null> {
     try {
-      const response = await this.http.get(repoPath(repo, `/pulls/${number}`));
+      const response = await this.http.get(
+        repoPath(repo, `/pulls/${numbered(number)}`),
+      );
       const sha = decodeJson<WirePull>(response).merge_commit_sha ?? "";
-      return { merged: true, sha: validSha(sha) ? sha : null };
+      return validSha(sha) ? sha : null;
     } catch {
-      return { merged: true, sha: null };
+      return null;
+    }
+  }
+
+  /**
+   * 检查通过后合并。与 {@link merge} 一样先核 head、不重试；方式必须是仓库
+   * 现在允许的。远端答 201 是排上了；答 200 是检查已经过了、当场合并。
+   */
+  async autoMerge(
+    repo: ForgeRepo,
+    number: number,
+    input: MergeInput,
+  ): Promise<ForgeAutoMerge> {
+    if (!validSha(input.headSha)) throw forgeError("invalid", "SHA_INVALID");
+    const allowed = giteaMergeMethods(await this.repository(repo));
+    if (!allowed.includes(input.method)) {
+      throw forgeError("invalid", "MERGE_METHOD_UNSUPPORTED");
+    }
+    await this.reviewed(repo, number, input);
+    const response = await this.http.write(
+      "POST",
+      repoPath(repo, `/pulls/${numbered(number)}/merge`),
+      {
+        Do: input.method,
+        head_commit_id: input.headSha,
+        merge_when_checks_succeed: true,
+      },
+    );
+    if (response.status === 201)
+      return { merged: false, sha: null, train: false };
+    return {
+      merged: true,
+      sha: await this.mergeCommit(repo, number),
+      train: false,
+    };
+  }
+
+  /** 撤掉还没发生的检查通过后合并；远端说没排上（404）答 `NOT_SCHEDULED`。 */
+  async cancelAutoMerge(repo: ForgeRepo, number: number): Promise<void> {
+    const before = await this.pullOnly(repo, number);
+    if (before.state !== "open") throw forgeError("conflict", "NOT_SCHEDULED");
+    try {
+      await this.http.write(
+        "DELETE",
+        repoPath(repo, `/pulls/${numbered(number)}/merge`),
+      );
+    } catch (error) {
+      if (error instanceof ForgeError && error.kind === "notFound") {
+        throw forgeError("conflict", "NOT_SCHEDULED");
+      }
+      throw error;
     }
   }
 
@@ -500,7 +641,7 @@ export class GiteaForge implements Forge {
     headSha: string,
   ): Promise<ForgeBranchDeletion> {
     if (!validSha(headSha)) throw forgeError("invalid", "SHA_INVALID");
-    const pull = await this.getPull(repo, number);
+    const pull = await this.pullOnly(repo, number);
     if (pull.state !== "merged") return refused("NOT_MERGED");
     if (pull.fromFork) return refused("FORK_BRANCH");
     if (!validRefName(pull.headRef) || pull.headRef === pull.baseRef) {
@@ -522,9 +663,13 @@ export class GiteaForge implements Forge {
     return { deleted: true, reasonCode: "" };
   }
 
-  /** 不按仓库的 `allow_*` 细分：远端不收的方式由合并本身答 405 / 422。 */
-  async mergeOptions(_repo: ForgeRepo): Promise<ForgeMergeOptions> {
-    return { methods: ALL_MERGE_METHODS, autoMerge: false, mergeTrain: false };
+  /** 按仓库的 `allow_*` 细分；检查通过后合并 Gitea 1.17 起都有。 */
+  async mergeOptions(repo: ForgeRepo): Promise<ForgeMergeOptions> {
+    return {
+      methods: giteaMergeMethods(await this.repository(repo)),
+      autoMerge: true,
+      mergeTrain: false,
+    };
   }
 }
 
