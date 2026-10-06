@@ -106,6 +106,8 @@ export interface FakeWorld {
     assertions: number;
     sources: { sourceId: string; name: string }[];
     links: Map<string, FakeLink>;
+    /** `platform.info` 报的能力。 */
+    capabilities: string[];
   };
   readonly cores: Map<string, FakeCore>;
   /** 直连 hello 不回答（等超时）。 */
@@ -158,6 +160,12 @@ export function fakeWorld(): FakeWorld {
         { sourceId: PEER_ID, name: "laptop" },
       ],
       links: new Map(),
+      capabilities: [
+        "auth.password",
+        "links.source-invite",
+        "links.update",
+        "me.stream",
+      ],
     },
     cores,
     slow: new Set(),
@@ -220,6 +228,26 @@ function sessionBody(world: FakeWorld, refreshToken: string, device: string) {
   };
 }
 
+/** `links.list` / `links.update` 的一行（cloud-api §5 `linkSummary`）。 */
+function linkSummary(linkId: string, link: FakeLink): Record<string, unknown> {
+  return {
+    linkId,
+    kind: "source_invite",
+    label: link.label ?? "",
+    role: link.role ?? "viewer",
+    sourceId: link.sourceId,
+    url: `${ISSUER}/j/${linkId}`,
+    uses: link.uses,
+    maxUses: link.state === "exhausted" ? link.uses : (link.maxUses ?? null),
+    expiresAtMs:
+      link.state === "expired"
+        ? Date.now() - 1
+        : (link.expiresAtMs ?? Date.now() + 86_400_000),
+    createdAtMs: link.createdAtMs ?? 0,
+    revokedAtMs: link.state === "revoked" ? Date.now() : null,
+  };
+}
+
 async function cloud(
   world: FakeWorld,
   request: OutboundRequest,
@@ -231,7 +259,7 @@ async function cloud(
       mode: "personal",
       issuer: ISSUER,
       protocol: { major: 0, minor: 1 },
-      capabilities: ["auth.password", "links.source-invite", "me.stream"],
+      capabilities: [...world.cloud.capabilities],
       relay: { addressing: "path" },
       webApp: null,
     });
@@ -346,26 +374,19 @@ async function cloud(
     return json(200, {
       links: [...world.cloud.links]
         .filter(([, link]) => sourceId === null || link.sourceId === sourceId)
-        .map(([linkId, link]) => ({
-          linkId,
-          kind: "source_invite",
-          label: link.label ?? "",
-          role: link.role ?? "viewer",
-          sourceId: link.sourceId,
-          url: `${ISSUER}/j/${linkId}`,
-          uses: link.uses,
-          maxUses:
-            link.state === "exhausted" ? link.uses : (link.maxUses ?? null),
-          expiresAtMs:
-            link.state === "expired"
-              ? Date.now() - 1
-              : (link.expiresAtMs ?? Date.now() + 86_400_000),
-          createdAtMs: link.createdAtMs ?? 0,
-          revokedAtMs: link.state === "revoked" ? Date.now() : null,
-        })),
+        .map(([linkId, link]) => linkSummary(linkId, link)),
     });
   }
   const linkPath = /^\/v1\/links\/([0-9a-f]+)$/.exec(path);
+  if (linkPath !== null && request.method === "PATCH") {
+    // `links.update`（cloud-api §5）：只改备注。
+    const linkId = linkPath[1] as string;
+    const link = world.cloud.links.get(linkId);
+    if (link === undefined)
+      return json(404, { code: "not_found", message: "no" });
+    link.label = String(input.label ?? "").trim();
+    return json(200, linkSummary(linkId, link));
+  }
   if (linkPath !== null && request.method === "DELETE") {
     const link = world.cloud.links.get(linkPath[1] as string);
     if (link === undefined || link.state === "revoked") {

@@ -4,7 +4,7 @@
  *
  * 只实现个人中转用到的那几条：`platform.info`、`auth.login`、`auth.refresh`、
  * `auth.logout`、`me.sources`、`sources.assertion`、`sources.revoke`、`links.accept`，
- * 以及分享链接的 `links.create` / `links.list` / `links.revoke`（契约 §33.9）。SaaS 的设备码登录等能力就绪
+ * 以及分享链接的 `links.create` / `links.list` / `links.update` / `links.revoke`（契约 §33.9、§33.10）。SaaS 的设备码登录等能力就绪
  * 后再加；在那之前 `service.ts` 对 `saas` 答 `not_implemented`。
  *
  * 线上编码是普通 JSON（上游 OpenAPI 编码），错误是 `{ code, message, … }`。这里把
@@ -168,7 +168,8 @@ function rejected(status: number, body: unknown, during: string): never {
       if (
         during === "取断言" ||
         during === "删除源" ||
-        during === "撤销分享链接"
+        during === "撤销分享链接" ||
+        during === "改分享链接备注"
       ) {
         throw fail("not_found", "远程服务上没有这个源");
       }
@@ -193,6 +194,26 @@ function rejected(status: number, body: unknown, during: string): never {
   throw fail("source_unreachable", `远程服务没能完成${during}（${status}）`);
 }
 
+/** `links.list` / `links.update` 的一行；`linkId` 不像样的丢掉（`null`）。 */
+function linkSummaryOf(value: unknown): LinkSummary | null {
+  const row = record(value);
+  const linkId = str(row.linkId);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(linkId)) return null;
+  return {
+    linkId,
+    kind: str(row.kind),
+    label: str(row.label),
+    role: str(row.role),
+    sourceId: str(row.sourceId),
+    url: str(row.url),
+    uses: num(row.uses),
+    maxUses: typeof row.maxUses === "number" ? row.maxUses : null,
+    expiresAtMs: num(row.expiresAtMs),
+    createdAtMs: num(row.createdAtMs),
+    revokedAtMs: typeof row.revokedAtMs === "number" ? row.revokedAtMs : null,
+  };
+}
+
 export class RemoteClient {
   constructor(
     private readonly transport: Transport,
@@ -201,7 +222,7 @@ export class RemoteClient {
 
   private async call(
     endpoint: RemoteEndpoint,
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PATCH" | "DELETE",
     path: string,
     during: string,
     body?: unknown,
@@ -458,26 +479,35 @@ export class RemoteClient {
     );
     const rows = Array.isArray(body.links) ? body.links : [];
     return rows.flatMap((value) => {
-      const row = record(value);
-      const linkId = str(row.linkId);
-      if (!/^[A-Za-z0-9_-]{1,64}$/.test(linkId)) return [];
-      return [
-        {
-          linkId,
-          kind: str(row.kind),
-          label: str(row.label),
-          role: str(row.role),
-          sourceId: str(row.sourceId),
-          url: str(row.url),
-          uses: num(row.uses),
-          maxUses: typeof row.maxUses === "number" ? row.maxUses : null,
-          expiresAtMs: num(row.expiresAtMs),
-          createdAtMs: num(row.createdAtMs),
-          revokedAtMs:
-            typeof row.revokedAtMs === "number" ? row.revokedAtMs : null,
-        } satisfies LinkSummary,
-      ];
+      const row = linkSummaryOf(value);
+      return row === null ? [] : [row];
     });
+  }
+
+  /**
+   * `PATCH /v1/links/{linkId}`（owner，cloud-api §5 `links.update`）：只改备注，
+   * 答改过之后的链接摘要。没有答 `not_found`。
+   */
+  async updateLink(
+    endpoint: RemoteEndpoint,
+    accessToken: string,
+    linkId: string,
+    label: string,
+  ): Promise<LinkSummary> {
+    const row = linkSummaryOf(
+      await this.call(
+        endpoint,
+        "PATCH",
+        `/v1/links/${encodeURIComponent(linkId)}`,
+        "改分享链接备注",
+        { label },
+        accessToken,
+      ),
+    );
+    if (row === null || row.linkId !== linkId) {
+      throw fail("source_unreachable", "远程服务改备注的答案不完整");
+    }
+    return row;
   }
 
   /** `DELETE /v1/links/{linkId}`（owner）：撤销链接与它名下的访客。没有答 `not_found`。 */
