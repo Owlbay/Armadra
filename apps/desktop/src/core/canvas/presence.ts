@@ -536,9 +536,10 @@ function stamp(at: number): string {
 
 /** 423：租约在别人手里。`message` 带上那台设备的名字，方便排查。 */
 export function leaseHeld(deviceName: string): DomainError {
+  // 码写字面量（与 `LEASE_HELD` 同值）：错误码守卫按字面量数登记的码还在不在用。
   return new DomainError(
     423,
-    LEASE_HELD,
+    "canvas_lease_held",
     deviceName === ""
       ? "Another client holds the edit lease for this board"
       : `Another client (${deviceName}) holds the edit lease for this board`,

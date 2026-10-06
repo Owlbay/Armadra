@@ -1,12 +1,22 @@
 import type { EventBus } from "../bus";
+import type {
+  BoardPresenceItem,
+  BoardRealtimeStateWire,
+  ProcedureResult,
+  contract,
+} from "@armadra/shared";
+import { fail } from "../http/errors";
+import { registerProcedures } from "../http/rpc";
 import type { RouteMatch } from "../http/router";
 import type { CoreContext } from "../main";
 import { audit } from "../identity/audit";
 import {
+  type RequestIdentity,
   accessGate,
   allows,
   onAccessChanged,
   requestIdentity,
+  runAs,
 } from "../identity/gate";
 import { scope } from "../identity/scopes";
 import { answered, workspaceId } from "../workspaces/routes";
@@ -28,6 +38,7 @@ import {
 } from "./boards";
 import { parseContextLinks, putContextLinks } from "./context-links";
 import type {
+  BoardDocument,
   CanvasEdge,
   CanvasNode,
   SaveBoardRequest,
@@ -35,6 +46,7 @@ import type {
 import { loadBoard, saveBoard } from "./documents";
 import {
   CanvasPresence,
+  HEARTBEAT_INTERVAL_MS,
   LOCAL_DEVICE,
   type PresenceSnapshot,
   type PresenceSource,
@@ -61,6 +73,27 @@ export function canvasPresence(): CanvasPresence | undefined {
   return assembled;
 }
 
+/** 一块板的实时状态怎么读（契约 §16.2）；实时域装配时登记，canvas 域不 import 它。 */
+export type RealtimeStateReader = (
+  workspaceId: string,
+  boardId: string,
+) => BoardRealtimeStateWire;
+
+let realtimeStateReader: RealtimeStateReader | undefined;
+
+/** 实时域登记「读一块板的实时状态」；返回撤销函数。 */
+export function setRealtimeStateReader(
+  reader: RealtimeStateReader,
+): () => void {
+  realtimeStateReader = reader;
+  return () => {
+    if (realtimeStateReader === reader) realtimeStateReader = undefined;
+  };
+}
+
+/** 同一个客户端同时开着几条在线订阅（严格模式的双挂载、重订的交叠）：最后一条走才算离开。 */
+const subscribed = new Map<string, number>();
+
 export function install(context: CoreContext): void {
   const database = context.db.database;
   const { server, bus } = context;
@@ -74,6 +107,175 @@ export function install(context: CoreContext): void {
   // 撤销共享、改成只读、停用账号、登出：在线表马上复判，被收权的那一方手里
   // 的租约当场释放并广播，而不是等它的心跳过期。
   unsubscribe = onAccessChanged(() => presence.recheck());
+
+  /**
+   * 画布域的动作。旧 REST 路径与契约 procedure（契约 §36）调的是同一份：两边只
+   * 是把各自的入参归成同一个样子，拒绝在这里一次抛出，码与原话因此一样。
+   */
+  const operations = {
+    save(id: string, board: string, body: Record<string, unknown>) {
+      if (Object.prototype.hasOwnProperty.call(body, "kanban")) {
+        throw badRequest(
+          "Task-board writes are retired; historical records are available as read-only archives",
+        );
+      }
+      const save = parseSaveRequest(body);
+      // 租约先于 CAS（契约 §9）：别人正在写是 423，手里那份旧了才是 409。
+      // 板子存不存在留给 `saveBoard` 判，它的 404 在租约之前也在之后都一样。
+      getBoardOrThrow(database, id, board);
+      presence.authorizeWrite(id, board, save.clientId, presenceSource());
+      const document = saveBoard(database, id, board, save);
+      publishBoardChanged(bus, id, document.board.id, document.board.updatedAt);
+      return document;
+    },
+    heartbeat(
+      id: string,
+      rawBoard: string,
+      input: { clientId: unknown; deviceName: unknown; active: unknown },
+    ) {
+      const board = getBoardOrThrow(database, id, rawBoard);
+      if (input.active !== undefined && typeof input.active !== "boolean") {
+        throw badRequest("active must be a boolean");
+      }
+      return beat(id, board, {
+        clientId: input.clientId,
+        deviceName: input.deviceName,
+        active: input.active === true,
+        source: presenceSource(),
+        // 心跳只要读权限；能不能写在这里另判一次：租约只落在能写的人手里，
+        // 回答里的 `writable` 让页面把只读共享的画布当只读画（契约 §9.1）。
+        // 每次心跳都现判，改角色、撤销共享在下一拍就反映出来。
+        writable: allows([scope("canvas:write", id)]),
+      });
+    },
+    leave(id: string, rawBoard: string, clientId: unknown) {
+      const board = getBoardOrThrow(database, id, rawBoard);
+      return presenceView(presence.leave(id, board, parseClientId(clientId)));
+    },
+    acquire(
+      id: string,
+      rawBoard: string,
+      input: { clientId: unknown; deviceName: unknown; takeover: unknown },
+    ) {
+      const board = getBoardOrThrow(database, id, rawBoard);
+      if (input.takeover !== undefined && typeof input.takeover !== "boolean") {
+        throw badRequest("takeover must be a boolean");
+      }
+      const clientId = parseClientId(input.clientId);
+      const source = presenceSource();
+      const before = presence.snapshot(board).lease;
+      const snapshot = presence.acquire(id, board, {
+        clientId,
+        deviceName: parseDeviceName(input.deviceName),
+        takeover: input.takeover === true,
+        source,
+      });
+      // 从别人手里接过来的才记：那一刻对方没保存的改动会被丢掉，事后要查得到
+      // 是谁、从哪台设备、在什么时候接的手（审计写入点「接管」）。
+      if (before !== null && before.clientId !== clientId) {
+        audit({
+          action: "canvas.lease.takeover",
+          target: board,
+          workspaceId: id,
+          detail: {
+            from: before.deviceName,
+            to: snapshot.lease?.deviceName ?? "",
+            sameDevice:
+              before.deviceKey !== "" &&
+              before.deviceKey === deviceKey(source.deviceId),
+          },
+        });
+      }
+      return presenceView(snapshot, { deviceKey: deviceKey(source.deviceId) });
+    },
+  };
+
+  /** 一次心跳，答「这个客户端看到的在线表」。 */
+  const beat = (
+    id: string,
+    board: string,
+    input: {
+      clientId: unknown;
+      deviceName: unknown;
+      active: boolean;
+      source: PresenceSource;
+      writable: boolean;
+    },
+  ): BoardPresenceItem =>
+    presenceView(
+      presence.heartbeat(id, board, {
+        clientId: parseClientId(input.clientId),
+        deviceName: parseDeviceName(input.deviceName),
+        active: input.active,
+        writer: input.writable,
+        source: input.source,
+      }),
+      {
+        writable: input.writable,
+        // 发心跳的这台设备的标识：页面拿它和租约持有者的比，同一台就是
+        // 「本机另一个窗口」（契约 §9.1）。和 `writable` 一样因人而异，
+        // 所以只在回答里、不在事件帧里。
+        deviceKey: deviceKey(input.source.deviceId),
+      },
+    );
+
+  /**
+   * 契约 §36：同一份实现。`null` 的排序与缺席同义（旧路径一直这样读）；订阅
+   * `presence` 见 {@link openPresence}。
+   */
+  registerProcedures(server, "boards", {
+    list: ({ workspaceId: id }) =>
+      listBoards(database, id).map((row) => ({ ...row })),
+    create: ({ workspaceId: id, name }) => createBoard(database, id, name),
+    update: ({ workspaceId: id, boardId: board, name, sortOrder }) =>
+      updateBoard(database, id, board, {
+        name,
+        sortOrder: sortOrder ?? undefined,
+      }),
+    delete: ({ workspaceId: id, boardId: board }) =>
+      deleteBoard(database, id, board),
+    load: ({ workspaceId: id, boardId: board }) =>
+      documentView(loadBoard(database, id, board)),
+    save: ({ workspaceId: id, boardId: board, ...body }) =>
+      documentView(operations.save(id, board, body)),
+    realtime: ({ workspaceId: id, boardId: board }) => {
+      if (realtimeStateReader === undefined) {
+        throw fail("not_implemented", "这台 core 没有装实时协同域");
+      }
+      return realtimeStateReader(id, board);
+    },
+    heartbeat: ({ workspaceId: id, boardId: board, ...rest }) =>
+      operations.heartbeat(id, board, {
+        clientId: rest.clientId,
+        deviceName: rest.deviceName,
+        active: rest.active,
+      }),
+    leave: ({ workspaceId: id, boardId: board, clientId }) =>
+      operations.leave(id, board, clientId),
+    acquireLease: ({ workspaceId: id, boardId: board, ...rest }) =>
+      operations.acquire(id, board, {
+        clientId: rest.clientId,
+        deviceName: rest.deviceName,
+        takeover: rest.takeover,
+      }),
+    presence: ({ workspaceId: id, boardId: board, ...rest }, call) => {
+      // 先决条件在这里判，拒绝是这次调用的错误，不是一条开了又断的订阅。
+      const resolved = getBoardOrThrow(database, id, board);
+      const clientId = parseClientId(rest.clientId);
+      const deviceName = parseDeviceName(rest.deviceName);
+      return openPresence({
+        bus,
+        presence,
+        workspaceId: id,
+        boardId: resolved,
+        clientId,
+        deviceName,
+        identity: call.identity,
+        signal: call.signal,
+        beat,
+      });
+    },
+  });
 
   server.router.handle(
     "GET",
@@ -142,37 +344,14 @@ export function install(context: CoreContext): void {
   server.router.handle(
     "PUT",
     "/api/workspaces/{workspaceId}/boards/{boardId}/document",
-    answered((match, request) => {
-      const body = jsonObject(request.body);
-      if (Object.prototype.hasOwnProperty.call(body, "kanban")) {
-        throw badRequest(
-          "Task-board writes are retired; historical records are available as read-only archives",
-        );
-      }
-      const save = parseSaveRequest(body);
-      // 租约先于 CAS（契约 §9）：别人正在写是 423，手里那份旧了才是 409。
-      // 板子存不存在留给 `saveBoard` 判，它的 404 在租约之前也在之后都一样。
-      getBoardOrThrow(database, workspaceId(match), boardId(match));
-      presence.authorizeWrite(
+    answered((match, request) => ({
+      status: 200,
+      body: operations.save(
         workspaceId(match),
         boardId(match),
-        save.clientId,
-        presenceSource(),
-      );
-      const document = saveBoard(
-        database,
-        workspaceId(match),
-        boardId(match),
-        save,
-      );
-      publishBoardChanged(
-        bus,
-        workspaceId(match),
-        document.board.id,
-        document.board.updatedAt,
-      );
-      return { status: 200, body: document };
-    }),
+        jsonObject(request.body),
+      ),
+    })),
   );
 
   // 在线设备的心跳（契约 §9.1）。只读的客户端也要心跳，所以它和读同一档
@@ -182,32 +361,13 @@ export function install(context: CoreContext): void {
     "/api/workspaces/{workspaceId}/boards/{boardId}/presence",
     answered((match, request) => {
       const body = jsonObject(request.body);
-      const id = workspaceId(match);
-      const board = getBoardOrThrow(database, id, boardId(match));
-      if (body.active !== undefined && typeof body.active !== "boolean") {
-        throw badRequest("active must be a boolean");
-      }
-      // 心跳只要读权限；能不能写在这里另判一次：租约只落在能写的人手里，
-      // 回答里的 `writable` 让页面把只读共享的画布当只读画（契约 §9.1）。
-      // 每次心跳都现判，改角色、撤销共享在下一拍就反映出来。
-      const writable = allows([scope("canvas:write", id)]);
-      const source = presenceSource();
       return {
         status: 200,
-        body: {
-          ...presence.heartbeat(id, board, {
-            clientId: parseClientId(body.clientId),
-            deviceName: parseDeviceName(body.deviceName),
-            active: body.active === true,
-            writer: writable,
-            source,
-          }),
-          writable,
-          // 发心跳的这台设备的标识：页面拿它和租约持有者的比，同一台就是
-          // 「本机另一个窗口」（契约 §9.1）。和 `writable` 一样因人而异，
-          // 所以只在回答里、不在事件帧里。
-          deviceKey: deviceKey(source.deviceId),
-        },
+        body: operations.heartbeat(workspaceId(match), boardId(match), {
+          clientId: body.clientId,
+          deviceName: body.deviceName,
+          active: body.active,
+        }),
       };
     }),
   );
@@ -217,14 +377,14 @@ export function install(context: CoreContext): void {
   server.router.handle(
     "DELETE",
     "/api/workspaces/{workspaceId}/boards/{boardId}/presence/{clientId}",
-    answered((match) => {
-      const id = workspaceId(match);
-      const board = getBoardOrThrow(database, id, boardId(match));
-      return {
-        status: 200,
-        body: presence.leave(id, board, parseClientId(match.params.clientId)),
-      };
-    }),
+    answered((match) => ({
+      status: 200,
+      body: operations.leave(
+        workspaceId(match),
+        boardId(match),
+        match.params.clientId,
+      ),
+    })),
   );
 
   // 拿 / 接管写租约（契约 §9.2）。接管的二次确认在页面上。
@@ -233,39 +393,13 @@ export function install(context: CoreContext): void {
     "/api/workspaces/{workspaceId}/boards/{boardId}/lease",
     answered((match, request) => {
       const body = jsonObject(request.body);
-      const id = workspaceId(match);
-      const board = getBoardOrThrow(database, id, boardId(match));
-      if (body.takeover !== undefined && typeof body.takeover !== "boolean") {
-        throw badRequest("takeover must be a boolean");
-      }
-      const clientId = parseClientId(body.clientId);
-      const source = presenceSource();
-      const before = presence.snapshot(board).lease;
-      const snapshot = presence.acquire(id, board, {
-        clientId,
-        deviceName: parseDeviceName(body.deviceName),
-        takeover: body.takeover === true,
-        source,
-      });
-      // 从别人手里接过来的才记：那一刻对方没保存的改动会被丢掉，事后要查得到
-      // 是谁、从哪台设备、在什么时候接的手（审计写入点「接管」）。
-      if (before !== null && before.clientId !== clientId) {
-        audit({
-          action: "canvas.lease.takeover",
-          target: board,
-          workspaceId: id,
-          detail: {
-            from: before.deviceName,
-            to: snapshot.lease?.deviceName ?? "",
-            sameDevice:
-              before.deviceKey !== "" &&
-              before.deviceKey === deviceKey(source.deviceId),
-          },
-        });
-      }
       return {
         status: 200,
-        body: { ...snapshot, deviceKey: deviceKey(source.deviceId) },
+        body: operations.acquire(workspaceId(match), boardId(match), {
+          clientId: body.clientId,
+          deviceName: body.deviceName,
+          takeover: body.takeover,
+        }),
       };
     }),
   );
@@ -297,8 +431,9 @@ export function install(context: CoreContext): void {
  * 服务器壳上是会话绑着的身份域设备；复判先重新认证会话（登出、撤销设备、
  * 停用账号都在这一步失效），再按那块画布上的授权判能看、能写还是都不能。
  */
-function presenceSource(): PresenceSource {
-  const identity = requestIdentity();
+function presenceSource(
+  identity: RequestIdentity | undefined = requestIdentity(),
+): PresenceSource {
   if (identity === undefined) {
     return { deviceId: LOCAL_DEVICE, deviceName: "" };
   }
@@ -320,6 +455,166 @@ function presenceSource(): PresenceSource {
         : "read";
     },
   };
+}
+
+type BoardDocumentView = ProcedureResult<typeof contract.boards.load>;
+
+/** 文档 → 线上的样子。节点的 `data` 是各类型自己的 JSON，core 不看里面。 */
+function documentView(document: BoardDocument): BoardDocumentView {
+  return {
+    board: { ...document.board },
+    nodes: document.nodes.map((node) => ({
+      ...node,
+      labels: [...node.labels],
+    })) as unknown as BoardDocumentView["nodes"],
+    edges: document.edges.map((edge) => ({ ...edge })),
+  };
+}
+
+/** 在线表快照 → 线上的样子（可变数组、可选的因人而异字段）。 */
+function presenceView(
+  snapshot: PresenceSnapshot,
+  extra: { writable?: boolean; deviceKey?: string } = {},
+): BoardPresenceItem {
+  return {
+    boardId: snapshot.boardId,
+    clients: snapshot.clients.map((client) => ({ ...client })),
+    lease: snapshot.lease === null ? null : { ...snapshot.lease },
+    ...extra,
+  };
+}
+
+interface OpenPresenceOptions {
+  readonly bus: EventBus;
+  readonly presence: CanvasPresence;
+  readonly workspaceId: string;
+  readonly boardId: string;
+  readonly clientId: string;
+  readonly deviceName: string;
+  readonly identity: RequestIdentity | undefined;
+  readonly signal: AbortSignal | undefined;
+  readonly beat: (
+    workspaceId: string,
+    boardId: string,
+    input: {
+      clientId: unknown;
+      deviceName: unknown;
+      active: boolean;
+      source: PresenceSource;
+      writable: boolean;
+    },
+  ) => BoardPresenceItem;
+}
+
+/**
+ * `boards.presence`：一个客户端在一块画布上的在线订阅（契约 §36.4）。
+ *
+ * 订上就是第一次心跳；连接着的时候 core 每 {@link HEARTBEAT_INTERVAL_MS} 替
+ * 页面续一次期（`active` 是页面经 `boards.heartbeat` 报的，这里续期不带，也就
+ * 不会让一个开着没人动的窗口一直占着租约）；订阅结束就是离开。每次这块板的
+ * 在线表或租约变了发一项：内容是这个客户端看到的那份（`writable`、`deviceKey`
+ * 因人而异，所以不能是广播的事件帧），与上一项相同的不重复发。
+ *
+ * 授权在每次醒来时复核：不再能读这块画布了以 `forbidden` 结束订阅，由此也不会
+ * 再替一个被收权的人续期。
+ */
+async function* openPresence(
+  options: OpenPresenceOptions,
+): AsyncGenerator<BoardPresenceItem, void, void> {
+  const { bus, workspaceId, boardId, clientId, identity, signal } = options;
+  const within = <T>(fn: () => T): T =>
+    identity === undefined ? fn() : runAs(identity, fn);
+  const source = within(() => presenceSource(identity));
+  const canRead = (): boolean => {
+    if (identity === undefined) {
+      return allows([scope("canvas:read", workspaceId)]);
+    }
+    const subject =
+      identity.revalidate === undefined
+        ? identity.subject
+        : identity.revalidate();
+    if (subject === undefined) return false;
+    return accessGate().permits(subject, [scope("canvas:read", workspaceId)]);
+  };
+  const current = (): BoardPresenceItem =>
+    options.beat(workspaceId, boardId, {
+      clientId,
+      deviceName: options.deviceName,
+      active: false,
+      source,
+      writable: within(() => allows([scope("canvas:write", workspaceId)])),
+    });
+
+  const key = `${boardId}:${clientId}`;
+  let wake: (() => void) | undefined;
+  const poke = () => {
+    const resolve = wake;
+    wake = undefined;
+    resolve?.();
+  };
+  let dirty = false;
+  const off = bus.on("workspace.event", (frame) => {
+    if (
+      frame.workspaceId === workspaceId &&
+      frame.event.type === "canvas.presence" &&
+      frame.event.boardId === boardId
+    ) {
+      dirty = true;
+      poke();
+    }
+  });
+  const timer = setInterval(() => {
+    dirty = true;
+    poke();
+  }, HEARTBEAT_INTERVAL_MS);
+  timer.unref?.();
+  signal?.addEventListener("abort", poke);
+  subscribed.set(key, (subscribed.get(key) ?? 0) + 1);
+  const aborted = (): boolean => signal?.aborted === true;
+  // 续期只刷新 `lastSeenAt`，不算「变了」：比较时不看它。
+  const fingerprint = (value: BoardPresenceItem): string =>
+    JSON.stringify({
+      ...value,
+      clients: value.clients.map(({ lastSeenAt: _seen, ...rest }) => rest),
+    });
+  let last = "";
+  try {
+    if (!canRead()) throw fail("forbidden", "没有这块画布的读授权了");
+    let item = current();
+    last = fingerprint(item);
+    yield item;
+    while (!aborted()) {
+      if (!dirty) {
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+        continue;
+      }
+      dirty = false;
+      if (aborted()) break;
+      if (!canRead()) throw fail("forbidden", "没有这块画布的读授权了");
+      item = current();
+      const text = fingerprint(item);
+      if (text === last) continue;
+      last = text;
+      yield item;
+    }
+  } finally {
+    clearInterval(timer);
+    off();
+    signal?.removeEventListener("abort", poke);
+    const left = (subscribed.get(key) ?? 1) - 1;
+    if (left > 0) subscribed.set(key, left);
+    else {
+      subscribed.delete(key);
+      // 最后一条订阅走了才算离开；板子被删了就没有什么可离开的。
+      try {
+        options.presence.leave(workspaceId, boardId, clientId);
+      } catch {
+        // 离开从不该让订阅的收尾失败。
+      }
+    }
+  }
 }
 
 /** `board.changed` — the frame every other window rebases its unsaved edits on. */
