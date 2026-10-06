@@ -34,6 +34,10 @@ docker run --rm -p 127.0.0.1:8443:8443 \
 | `ARMADRA_ACME_CHALLENGE`               | `http-01`      | `tls-alpn-01` 时不开 80，验证握手走 HTTPS 端口      |
 | `ARMADRA_DATA_DIR`                     | `/data`        | 数据目录，卷挂在这里                                |
 | `ARMADRA_BROWSER_PATH`                 | 见说明         | 浏览器节点的 Chromium；带 Chromium 构建时缺省指向它 |
+| `ARMADRA_CLOUD_ISSUER`                 | 无             | 个人中转地址；与下一项都给时首次启动自动登记        |
+| `ARMADRA_CLOUD_REGISTRATION_TOKEN`     | 无             | 中继签发的注册令牌（只在入口里用，不传给 serve）    |
+| `ARMADRA_CLOUD_FINGERPRINT`            | 无             | 自签证书的中继 CA 指纹；不给用系统信任              |
+| `ARMADRA_CLOUD_LABEL`                  | 主机名         | 登记名                                              |
 
 构建参数 `WITH_CHROMIUM=1`：装 Chromium 给服务器壳上的浏览器节点用（沙箱与共享内存的取舍见部署指南 §2.3）。
 
