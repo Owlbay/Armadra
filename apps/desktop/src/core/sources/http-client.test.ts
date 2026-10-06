@@ -155,13 +155,20 @@ describe("地址与指纹的规范拼法", () => {
     expect(normalizeOrigin("http://127.0.0.1:8102")).toBe(
       "http://127.0.0.1:8102",
     );
-    for (const bad of [
-      "http://192.168.1.2",
-      "ftp://x",
-      "https://user:pw@x.test",
-      "not a url",
-    ]) {
-      expect(() => normalizeOrigin(bad), bad).toThrow(CoreFailure);
+    const cases: Array<[string, string]> = [
+      ["http://192.168.1.2", "address_plaintext_loopback_only"],
+      ["ftp://x", "address_https_only"],
+      ["https://user:pw@x.test", "address_has_credentials"],
+      ["not a url", "address_invalid"],
+    ];
+    for (const [bad, expected] of cases) {
+      try {
+        normalizeOrigin(bad);
+        expect.unreachable(bad);
+      } catch (error) {
+        expect(error, bad).toBeInstanceOf(CoreFailure);
+        expect((error as CoreFailure).code, bad).toBe(expected);
+      }
     }
   });
 
@@ -169,6 +176,11 @@ describe("地址与指纹的规范拼法", () => {
     const colon = "AB:".repeat(31) + "AB";
     expect(normalizeFingerprint(colon)).toBe("ab".repeat(32));
     expect(normalizeFingerprint(undefined)).toBe("");
-    expect(() => normalizeFingerprint("abc")).toThrow(CoreFailure);
+    try {
+      normalizeFingerprint("abc");
+      expect.unreachable();
+    } catch (error) {
+      expect((error as CoreFailure).code).toBe("fingerprint_invalid");
+    }
   });
 });
