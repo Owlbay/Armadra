@@ -1,8 +1,13 @@
 import { scoped } from "../sources/scope";
 import * as React from "react";
 import { toast } from "sonner";
-import type { AcpSessionUpdate, TerminalNodeData } from "@armadra/shared";
+import type {
+  AcpLogResponse,
+  AcpSessionUpdate,
+  TerminalNodeData,
+} from "@armadra/shared";
 
+import { RuntimeRequestError } from "@/api/client";
 import { onWorkspaceConnection, onWorkspaceEvent } from "@/api/events";
 import { useT } from "@/app/preferences-store";
 import { useCanAnswer } from "@/app/use-access";
@@ -13,6 +18,7 @@ import { Button } from "@/ui/button";
 import { Empty, EmptyHeader, EmptyTitle } from "@/ui/empty";
 import { ScrollArea } from "@/ui/scroll-area";
 import { Skeleton } from "@/ui/skeleton";
+import { Spinner } from "@/ui/spinner";
 import { acpApi } from "./api";
 import { ElicitationCard } from "./ElicitationCard";
 import { MessageList } from "./MessageList";
@@ -97,10 +103,6 @@ function useAcpSession(nodeId: string, data: TerminalNodeData) {
 }
 
 /**
- * 读镜像、接活事件。先订阅再读：读回来之前到的分块已经写进了镜像（core 先写
- * 镜像再发事件），丢掉不画；工具调用按 id 合并，读回来之后再补一遍无妨。
- */
-/**
  * 已经并进 store 的那几条事件（按对象认：同一条事件派给每个订阅者的是同一个
  * 对象）。同一个节点可以同时挂两份会话视图——手机焦点页铺满屏幕时画布上那一份
  * 还在——两份各自订阅，不去重的话每个分块都会被拼两遍。
@@ -113,15 +115,26 @@ function firstTime(event: object): boolean {
   return true;
 }
 
-function useAcpLog(sessionId: string | null, nodeId: string) {
+/**
+ * 读镜像、接活事件。先订阅再读：工具调用按 id 合并，读回来之后再补一遍无妨。
+ * 控制面断开又连上后重读一遍（契约 §39.9），补上断线那段
+ * 漏掉的回合事件，再拿 `turns` 对账本页那一轮。`reread` 给「确认中」用。
+ */
+function useAcpLog(
+  sessionId: string | null,
+  nodeId: string,
+  workspaceId: string | null,
+) {
   const [state, setState] = React.useState<LoadState>("loading");
   const [attempt, setAttempt] = React.useState(0);
+  const rereadRef = React.useRef<(() => Promise<AcpLogResponse>) | null>(null);
 
   React.useEffect(() => {
     if (!sessionId) return;
     const store = useAcpStore.getState;
     let loaded = false;
     let cancelled = false;
+    let inflight: Promise<AcpLogResponse> | null = null;
     setState("loading");
 
     const early: { event: object; update: AcpSessionUpdate }[] = [];
@@ -149,33 +162,102 @@ function useAcpLog(sessionId: string | null, nodeId: string) {
       if (elicitation) store().addElicitation(nodeId, elicitation);
     });
 
-    acpApi
-      .log(sessionId)
-      .then((log) => {
-        if (cancelled) return;
-        store().hydrate(sessionId, nodeId, log);
+    // 读回来之前到的分块已经在镜像里（core 先写镜像再发事件），丢掉不画；读
+    // 失败时它们没被任何一次读覆盖，照常并进去。
+    const read = (): Promise<AcpLogResponse> => {
+      if (inflight) return inflight;
+      loaded = false;
+      const flush = (skipChunks: boolean) => {
         loaded = true;
         for (const { event, update } of early) {
-          if (update.sessionUpdate.endsWith("_chunk")) continue;
+          if (skipChunks && update.sessionUpdate.endsWith("_chunk")) continue;
           if (firstTime(event)) store().update(sessionId, update);
         }
         early.length = 0;
-        setState("ready");
+      };
+      const pending = acpApi.log(sessionId).then(
+        (log) => {
+          inflight = null;
+          if (cancelled) return log;
+          store().hydrate(sessionId, nodeId, log);
+          store().reconcile(sessionId, log.turns);
+          flush(true);
+          return log;
+        },
+        (error: unknown) => {
+          inflight = null;
+          if (!cancelled) flush(false);
+          throw error;
+        },
+      );
+      inflight = pending;
+      return pending;
+    };
+    rereadRef.current = read;
+
+    read()
+      .then(() => {
+        if (!cancelled) setState("ready");
       })
       .catch(() => {
         if (!cancelled) setState("failed");
       });
 
+    let down = false;
+    const offConnection = workspaceId
+      ? onWorkspaceConnection((id, connected) => {
+          if (id !== workspaceId) return;
+          if (!connected) {
+            down = true;
+            return;
+          }
+          if (!down) return;
+          down = false;
+          // 断线那段的分块与 `acp.turn` 收不到了：重读一遍补上。失败不打扰，
+          // 已经画着的照旧。
+          read().catch(() => undefined);
+        })
+      : () => undefined;
+
     return () => {
       cancelled = true;
+      if (rereadRef.current === read) rereadRef.current = null;
       offUpdate();
       offTurn();
       offApproval();
+      offConnection();
     };
-  }, [sessionId, nodeId, attempt]);
+  }, [sessionId, nodeId, workspaceId, attempt]);
 
-  return { state, retry: () => setAttempt((value) => value + 1) };
+  const reread = React.useCallback((): Promise<AcpLogResponse> => {
+    const read = rereadRef.current;
+    return read ? read() : Promise.reject(new Error("no session"));
+  }, []);
+
+  return { state, retry: () => setAttempt((value) => value + 1), reread };
 }
+
+/** 一轮的客户端 id；非安全上下文（局域网 http）没有 `randomUUID`。 */
+function newClientTurnId(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+}
+
+/** core 明确拒绝了这一轮（4xx 带码）：没有投递，照旧当场判失败。 */
+function refusedByCore(error: unknown): boolean {
+  return (
+    error instanceof RuntimeRequestError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.code !== undefined
+  );
+}
+
+/** 「确认中」重读镜像的间隔：第一次立刻读，之后等连接缓一缓。 */
+const RECONCILE_DELAYS_MS = [0, 1000, 3000] as const;
 
 function useConnected(workspaceId: string | null): boolean {
   const [connected, setConnected] = React.useState(true);
@@ -230,7 +312,8 @@ export function SessionView({
   const session = useAcpSession(nodeId, data);
   const sessionId = session.sessionId;
   const canAnswer = useCanAnswer(workspaceId ?? "", sessionId);
-  const log = useAcpLog(sessionId, nodeId);
+  const log = useAcpLog(sessionId, nodeId, workspaceId);
+  const { reread } = log;
   const connected = useConnected(workspaceId);
   const view = useAcpStore((state) =>
     sessionId
@@ -252,22 +335,55 @@ export function SessionView({
     elicitations,
   ]);
 
+  /**
+   * 请求断在路上（网络错误、没有答复）时不当场判失败：进入「确认中」，重读
+   * 镜像拿 `turns` 对账（契约 §39.9）。core 收到了就按真实回合画，确认没收到才
+   * 判没送达；重试沿用同一个 `clientTurnId`，core 只投递一次。
+   */
+  const confirmTurn = React.useCallback(
+    async (id: string, clientTurnId: string) => {
+      const pending = () => {
+        const view = useAcpStore.getState().sessions[scoped(id)];
+        return view?.confirming === true && view.clientTurnId === clientTurnId;
+      };
+      for (const delay of RECONCILE_DELAYS_MS) {
+        if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+        if (!pending()) return;
+        try {
+          await reread();
+          return;
+        } catch {
+          // 读不到就再等一会儿；读到了，结论由 `reconcile` 下。
+        }
+      }
+      // 一直读不到：无从确认，判没送达；重试同一个 id，重复不了。
+      if (pending()) useAcpStore.getState().reconcile(id, []);
+    },
+    [reread],
+  );
+
   const send = React.useCallback(
-    async (text: string) => {
+    async (text: string, retryTurnId?: string) => {
       if (!sessionId) return false;
       const store = useAcpStore.getState();
-      store.begin(sessionId, text);
+      const clientTurnId = retryTurnId ?? newClientTurnId();
+      store.begin(sessionId, text, clientTurnId);
       try {
-        await acpApi.prompt(sessionId, text);
-      } catch {
-        store.end(sessionId, nodeId, {
-          error: { code: "prompt_failed", message: "" },
-        });
-        toast.error(t("acp.prompt.failed"));
+        await acpApi.prompt(sessionId, text, clientTurnId);
+      } catch (error) {
+        if (refusedByCore(error)) {
+          store.end(sessionId, nodeId, {
+            error: { code: "prompt_failed", message: "" },
+          });
+          toast.error(t("acp.prompt.failed"));
+          return true;
+        }
+        store.confirm(sessionId);
+        void confirmTurn(sessionId, clientTurnId);
       }
       return true;
     },
-    [sessionId, nodeId, t],
+    [sessionId, nodeId, t, confirmTurn],
   );
 
   const cancel = React.useCallback(() => {
@@ -394,15 +510,30 @@ export function SessionView({
               canAnswer={canAnswer}
             />
           ))}
+        {view.confirming && (
+          <Alert data-slot="acp-confirming">
+            <Spinner />
+            <AlertTitle>{t("acp.turn.confirming")}</AlertTitle>
+          </Alert>
+        )}
         {view.failed && !view.streaming && (
           <Alert variant="destructive">
-            <AlertTitle>{t("acp.error.turn")}</AlertTitle>
+            <AlertTitle>
+              {t(view.undelivered ? "acp.error.undelivered" : "acp.error.turn")}
+            </AlertTitle>
             {view.lastPrompt && (
               <AlertAction>
                 <Button
                   size="xs"
                   variant="outline"
-                  onClick={() => void send(view.lastPrompt as string)}
+                  onClick={() =>
+                    void send(
+                      view.lastPrompt as string,
+                      view.undelivered
+                        ? (view.clientTurnId ?? undefined)
+                        : undefined,
+                    )
+                  }
                 >
                   {t("acp.error.retry")}
                 </Button>
