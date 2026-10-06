@@ -157,6 +157,26 @@ describe("HTTP 准入", () => {
     }
   });
 
+  it("桌面壳改写成的原生来源放行；页面原本的回环来源一律 403", async () => {
+    const token = world.session(ISSUER);
+    const desktop = await get("/api/workspaces", {
+      origin: "https://localhost",
+      authorization: `Bearer ${token}`,
+    });
+    expect(desktop.status).toBe(200);
+    for (const loopback of [
+      "http://127.0.0.1:53111",
+      "http://localhost:5173",
+      "http://[::1]:43120",
+    ]) {
+      const refused = await get("/api/workspaces", {
+        origin: loopback,
+        authorization: `Bearer ${token}`,
+      });
+      expect(refused.status).toBe(403);
+    }
+  });
+
   it("原生 App 的来源放行，CORS 回 App 自己的来源", async () => {
     const token = world.session(ISSUER);
     const answer = await get("/api/workspaces", {
