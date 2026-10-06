@@ -1,11 +1,12 @@
 import { activeSource, srcPrefix } from "../sources/scope";
 import { z } from "zod";
 
-import { json, request } from "@/api/request";
+import { clientFor } from "@/api/client";
 
 /**
- * 分派抽屉的调用面（契约 §15.7）：协调者在这块画板上分派出去的任务，与失败行
- * 的「重试」。正文（任务提示词、成员的结果）不在答复里。
+ * 分派抽屉的调用面（契约 §15.7、§43.3）：协调者在这块画板上分派出去的任务，与失败行
+ * 的「重试」，经 `coordinator.*` procedure。正文（任务提示词、成员的结果）不在
+ * 答复里。
  */
 
 export const TASK_STATUSES = ["running", "done", "failed", "stopped"] as const;
@@ -35,18 +36,10 @@ export const coordinatorKeys = {
 
 export const coordinatorApi = {
   // 发往此刻的源（事件派发中是事件所属的源），与查询键的源前缀一致。
-  tasks: (boardId: string, source = activeSource()) =>
-    request(
-      `/api/workflows/tasks?boardId=${encodeURIComponent(boardId)}`,
-      tasksSchema,
-      undefined,
-      source,
-    ).then((body) => body.tasks),
-  retry: (taskId: string, source = activeSource()) =>
-    request(
-      `/api/workflows/tasks/${encodeURIComponent(taskId)}/retry`,
-      taskSchema,
-      { method: "POST", ...json({}) },
-      source,
-    ).then((body) => body.task),
+  tasks: async (boardId: string, source = activeSource()) =>
+    tasksSchema.parse(await clientFor(source).coordinator.tasks({ boardId }))
+      .tasks,
+  retry: async (taskId: string, source = activeSource()) =>
+    taskSchema.parse(await clientFor(source).coordinator.retry({ taskId }))
+      .task,
 };

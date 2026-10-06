@@ -335,7 +335,7 @@ export class WorkflowService {
     }
     const collab = this.options.collab();
     if (collab === undefined) {
-      throw new DomainError(409, "unsupported", "协作域还没有装好。");
+      throw new DomainError(501, "unsupported", "协作域还没有装好。");
     }
     try {
       deliverPrompt(collab, {

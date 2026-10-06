@@ -10,7 +10,8 @@ import { setWorkflowDomain } from "./registry";
 import { nodeCreator } from "../identity/creators";
 import { runAs } from "../identity/gate";
 import { scope } from "../identity/scopes";
-import { GATE_SCOPE, answerWorkflowRequest, workflowRoutes } from "./routes";
+import { GATE_SCOPE } from "./routes";
+import { workflowDispatcher } from "./test-dispatch";
 import { WorkflowService } from "./service";
 import { finishTask, recordTaskStart } from "./task-runs";
 
@@ -22,7 +23,7 @@ import { finishTask, recordTaskStart } from "./task-runs";
 let fixture: AgentFixture;
 let service: WorkflowService;
 let engine: WorkflowEngine;
-let routes: ReturnType<typeof workflowRoutes>;
+let dispatch: ReturnType<typeof workflowDispatcher>;
 let coordinator: string;
 
 const DRAFT = {
@@ -59,7 +60,7 @@ async function call(
     raw: undefined as never,
     json: <T>(): T => JSON.parse(encoded.toString("utf8")) as T,
   } satisfies CoreRequest;
-  const answer = await answerWorkflowRequest(routes, request);
+  const answer = await dispatch(request);
   return {
     status: answer.status,
     body: (answer.body ?? {}) as Record<string, unknown>,
@@ -93,7 +94,7 @@ beforeEach(() => {
     collab: () => fixture.collab,
   });
   setWorkflowDomain({ engine, service, stop: () => engine.stop() });
-  routes = workflowRoutes(service);
+  dispatch = workflowDispatcher(service);
 });
 
 afterEach(async () => {

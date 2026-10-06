@@ -16,7 +16,7 @@ import { allScopes } from "../identity/scopes";
 import { IdentityService } from "../identity/service";
 import { IdentityStore } from "../identity/store";
 import type { CoreRequest } from "../http/router";
-import { answerWorkflowRequest, workflowRoutes } from "../workflow/routes";
+import { workflowDispatcher } from "../workflow/test-dispatch";
 import {
   type WorkflowDomain,
   setWorkflowDomain,
@@ -186,7 +186,7 @@ function setUp() {
       failure: apiFailure,
     }),
   );
-  const routes = workflowRoutes(workflows);
+  const dispatch = workflowDispatcher(workflows);
 
   function request(
     method: string,
@@ -222,10 +222,7 @@ function setUp() {
     payload?: unknown,
     anonymous = false,
   ) {
-    const answer = await answerWorkflowRequest(
-      routes,
-      request(method, path, payload, anonymous),
-    );
+    const answer = await dispatch(request(method, path, payload, anonymous));
     return {
       status: answer.status,
       body: (answer.body ?? {}) as Record<string, unknown>,

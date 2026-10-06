@@ -380,10 +380,24 @@ function gateRequest(
     });
   }
   const body = Buffer.from(JSON.stringify(fields), "utf8");
+  // 旧路径上读与删的入参在查询串里：路由门里按 `request.query` 取值的规则
+  // （工作流列表的 `boardId`）看到的与旧路径一样。
+  const query = new URLSearchParams();
+  if (method === "GET" || method === "DELETE") {
+    for (const [key, value] of Object.entries(fields)) {
+      if (
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean"
+      ) {
+        query.set(key, String(value));
+      }
+    }
+  }
   return {
     method,
     path,
-    query: new URLSearchParams(),
+    query,
     headers: core.headers,
     body,
     raw: core.raw,

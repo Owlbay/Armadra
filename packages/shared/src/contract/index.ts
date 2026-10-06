@@ -6,8 +6,10 @@ import type {
 } from "@orpc/contract";
 
 import { accounts } from "./accounts.js";
+import { acp } from "./acp.js";
 import { agents } from "./agents.js";
 import { boards } from "./boards.js";
+import { coordinator } from "./coordinator.js";
 import { identity } from "./identity.js";
 import { files } from "./files.js";
 import { forge } from "./forge.js";
@@ -20,6 +22,7 @@ import { sources } from "./sources.js";
 import { security } from "./security.js";
 import { system } from "./system.js";
 import { terminals } from "./terminals.js";
+import { workflows } from "./workflows.js";
 import { workspaces } from "./workspaces.js";
 
 /**
@@ -45,6 +48,9 @@ export const contract = {
   gitRepository,
   security,
   accounts,
+  acp,
+  workflows,
+  coordinator,
 };
 
 export type Contract = typeof contract;

@@ -28,6 +28,30 @@ export interface RouteEntry {
   readonly implemented?: true;
 }
 
+/** `/api/workflows/*` 的路由（契约 §15、§43.2–§43.3）：路径与它收的方法。 */
+const WORKFLOW_ROUTES: readonly RouteEntry[] = (
+  [
+    ["/drafts", ["GET"]],
+    ["/drafts/{draftId}", ["GET"]],
+    ["/drafts/{draftId}/confirm", ["POST"]],
+    ["/drafts/{draftId}/discard", ["POST"]],
+    ["/templates", ["GET", "POST"]],
+    ["/templates/{templateId}", ["GET", "PUT", "DELETE"]],
+    ["/templates/{templateId}/upgrade-schedules", ["POST"]],
+    ["/runs", ["GET", "POST"]],
+    ["/runs/{runId}", ["GET"]],
+    ["/runs/{runId}/cancel", ["POST"]],
+    ["/runs/{runId}/gates/{stepId}", ["POST"]],
+    ["/tasks", ["GET"]],
+    ["/tasks/{taskId}/retry", ["POST"]],
+  ] as const
+).map(([path, methods]) => ({
+  path: `/api/workflows${path}`,
+  methods,
+  surface: "runtime",
+  implemented: true,
+}));
+
 export const ROUTES: readonly RouteEntry[] = [
   // 「被读取 N 次」：谁读过这个节点的上下文（设计 agent-delivery.md §13）。
   // 不挂在工作空间下，因为它问的是一个节点的历史，而节点 id 全局唯一。
@@ -784,6 +808,9 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 工作流与协调者任务（契约 §15、§43.2–§43.3）：路由在 `core/workflow/routes.ts`，
+  // 与 `workflows.*` / `coordinator.*` procedure 同一份操作。
+  ...WORKFLOW_ROUTES,
   {
     path: "/api/terminals/{sessionId}/ws",
     methods: ["GET"],

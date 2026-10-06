@@ -78,6 +78,9 @@ describe("契约树", () => {
       "gitRepository",
       "security",
       "accounts",
+      "acp",
+      "workflows",
+      "coordinator",
     ]);
   });
 
@@ -326,7 +329,7 @@ describe("§42 身份三域", () => {
       expect(entry.meta.scope, entry.name).not.toBeNull();
       expect(entry.meta.legacy?.path, entry.name).toMatch(/^\/api\/identity\//);
       expect(entry.meta.contract, entry.name).toMatch(/^§42\.[123]$/);
-      expect(entry.meta.since, entry.name).toBe("1.12");
+      expect(entry.meta.since, entry.name).toBe("1.13");
     }
   });
 

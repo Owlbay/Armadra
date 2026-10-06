@@ -142,6 +142,9 @@ export function stubTerminal(): StubTerminal {
 
 export interface AgentFixture {
   readonly database: DatabaseSync;
+  /** 装好 agent 域路由的那台 core 服务（对偶测试要在它上面起监听）。 */
+  readonly server: CoreServer;
+  readonly platform: ReturnType<typeof nodePlatform>;
   readonly directory: string;
   readonly workspaceId: string;
   readonly boardId: string;
@@ -251,6 +254,8 @@ export function agentFixture(): AgentFixture {
 
   const fixture: AgentFixture = {
     database,
+    server,
+    platform,
     directory,
     workspaceId: workspace.id,
     boardId: board.id,
