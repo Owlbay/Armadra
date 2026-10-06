@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "Armadra core",
-    "version": "1.4",
+    "version": "1.5",
     "description": "契约 procedure 的入参与出参（docs/contracts/core-json-api.md §34）。线上是 `POST /api/rpc/<域>/<动词>`，体按 `{ json }` 编码，下列 schema 是 `json` 那一格；失败一律是 `CoreError`。由 tools/contract/generate.mjs 生成，不要手改。"
   },
   "openapi": "3.1.1",
@@ -7685,7 +7685,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "files:read",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "GET",
@@ -7790,7 +7790,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "files:read",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "GET",
@@ -7902,7 +7902,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "files:read",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "GET",
@@ -8030,7 +8030,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "files:write",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "PUT",
@@ -8131,7 +8131,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "files:write",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "POST",
@@ -8231,7 +8231,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "files:write",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "POST",
@@ -8333,7 +8333,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "files:write",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "POST",
@@ -8425,7 +8425,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "files:read",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "GET",
@@ -8522,7 +8522,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "files:write",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "POST",
@@ -8633,7 +8633,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "files:read",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "GET",
@@ -8886,7 +8886,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "files:write",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "POST",
@@ -9033,7 +9033,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "files:write",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "POST",
@@ -9110,7 +9110,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "files:write",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId"
         }
       }
@@ -9225,7 +9225,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "files:read",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "GET",
@@ -9318,7 +9318,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "terminal:create",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "POST",
@@ -9454,7 +9454,7 @@
         "x-armadra": {
           "contract": "§37.1",
           "scope": "files:write",
-          "since": "1.3",
+          "since": "1.5",
           "workspaceKey": "workspaceId",
           "legacy": {
             "method": "POST",
