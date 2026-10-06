@@ -1956,3 +1956,43 @@
 - 手机（钥匙串 + 远程服务）与云页面（`browser-cloud`）的 `CredentialProvider` 只有接口与缓存基座，实现随 A1-5 与 §7。
 - 远程直连的 `hello` 探测是跨来源请求，要对方 Gateway 的来源白名单与本机壳的 CSP `connect-src` 放行（A1-4 动态 CSP）；不放行时探测失败、退回中继。
 - 改到了 E2 的 `api/client.ts`（只去掉 `RUNTIME_URL` / `initRuntimeSockets` 的再导出，加 `clientFor` / `currentClient`，`runtimeApi` 经当前源）；`api/events.ts` 没动。
+
+## A2-3 云登录与登记（`core/identity/cloud/`，迁移 0040，契约 §31）
+
+设计：[平台实现规格 core 包](../design/platform/core-packages.md) §2；契约 §31。只实现个人中转这一个签发方，SaaS 只留形状（总计划 §12）。
+
+做了什么：
+
+- **迁移** `0040_cloud_identity.sql`：`cloud_registrations`（按规格，多一列 `label`）、`identity_invitations` 加 `max_uses` / `uses`、`identity_invitation_uses`（A4-1 用，消费逻辑未动）；`migrations.lock` 已登记。表里没有凭据。
+- **契约**（`packages/shared/src/contract/cloud.ts`，§31.1）：`identity.cloud.{login, register, revoke, status, bind, trustedOrigins}`，出入参取协议包 `core-api` 的同一份 schema；`login` 是唯一的匿名 procedure，只经旧路径。错误码注册表加 `cloud_not_registered`、`cloud_assertion_invalid`、`cloud_assertion_replayed`、`cloud_already_registered`、`cloud_issuer_mismatch`、`invitation_invalid`、`registration_token_invalid`、`protocol_unsupported`（与协议包同拼法同状态），页面 `api/request.ts` 与 `i18n/errors.ts` 中英文案；审计动作文案进 `i18n/security.ts`。
+- **RPC 门面**（`http/rpc.ts`）：`registerProcedures` 收嵌套的实现树，契约可以有子域（`identity.cloud.<动词>`）。
+- **core**（`core/identity/cloud/`）：`store.ts`（SQL）、`source-key.ts`（Ed25519，私钥 PKCS8 只在 SecretStore `armadra-cloud-source-key`，所有 issuer 共用，`kid = sourceId = hostId`；源 JWS 与 `signBytes` 给隧道）、`jwks.ts`（缓存在行里，`kid` 未知时同一 issuer 每 10 分钟最多取一次，取不到照样用缓存）、`assertion.ts`（`alg` / `typ`、按 `iss` 找登记、验签、`aud = hostId`、5 分钟偏差、寿命 ≤ 重放窗口，最后才记 `jti`）、`login.ts`（映射走 oauth 凭据 `provider = cloud:<sha256(iss) 前 16 位>`；带邀请建成员一笔事务；`link.invitationId` 必须是那张邀请；组织默认角色逐条授予；按 `(iss, sub)` 每分钟 5 次；`bind`）、`register.ts`（登记 / 撤销 / 状态 / 可信来源，`CloudRelay` 接口与空实现）、`cloud-client.ts`（`platform.info`、`sources.register`、JWKS，复用 `sources/http-client.ts` 的钉扎发送点）、`http.ts`（`/api/identity/cloud*` 原样路由，自己认会话并按契约 scope 判）、`service.ts` + `index.ts`（`installCloud`、`cloudDomain()`）。身份域装配时装它（与会话、账号、加固同一份）。`AccountsService.registerExternalWithInvitation`；`LoginMethod` 加 `cloud`；审计 `cloud.login`、`cloud.bind`、`cloud.register`、`cloud.revoke`、`invitation.accept.link`。
+- **源表**（A1-3 留的接口）：`RemoteService.registered` 读登记表；`remoteRemove` 删行前先撤销本机对它的登记。
+- `net/outbound.ts`：加 `cloudJwks`、`relayTunnel`（A3-2 用），`cloudApi` 用途补上登记。路由表与 `route-scopes.ts` 登记 `/api/identity/cloud*`。契约 §31 由占位补成实施契约（§31.1 生成表、§31.2 登记、§31.3 断言换会话），§33 两处「随 §31 落地」改为已接上；`architecture.md` 域表与迁移表各加一行。
+
+实测（macOS arm64，2026-10-06，基于 main 7025d0bd（含 #136、#137、#138）；合入 main c4e3a97f（#139，只动页面）后重跑 `pnpm check` 与 web 用例）：
+
+- `pnpm check` 通过（lint 0 error、285 warn，与 A1-3 基线相同，本包文件 0 warn）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：vitest 4770 过 / 63 跳过，live 4 过，脚本 68 过；`pnpm --filter @armadra/shared test` 348 过；`pnpm --filter @armadra/server test` 87 过 / 4 跳过，`pnpm --filter @armadra/server build` 通过（bundle 只带用到的常量，不带测试向量）；`pnpm --filter @armadra/web test` 3492 过（合入 #139 后 3550 过）。
+- 新用例：`cloud/store.test.ts` 5、`assertion.test.ts` 14（协议包 valid / guest / with-link 通过，expired / wrong-aud / wrong-alg 与另四种令牌拒，重放、篡改、未登记 / 已撤销、时间边界、离线验签、`kid` 未知刷新一次与 10 分钟节流、同 `kid` 别的钥）、`source-key.test.ts` 5（源 JWS 与 `source-jws.jwt` 逐字相等、持久化、并发只生成一把、写失败可重来）、`identity/identity-vectors.test.ts` 5（口令策略、scrypt、锁定、会话常量与协议包相等；scrypt 与令牌哈希向量逐字节相等）、`cloud.test.ts` 19（假个人中转：登记成功 / 426 / 400 / 501 / 401 透传 / 公钥集指到别处 / 502、成员 403 且零外呼、撤销后断言 `cloud_not_registered`、可信来源、未映射 401、绑定后换 owner 原生会话且能用、重放 / 篡改 / 受众 / 过期、带邀请建号与 `invitation.accept.link`、链接邀请不符、组织默认角色、停用 403、按 sub 限流 429、Cookie 来源、login 不经 RPC）、`errors.scan.test.ts` 1（本域 `fail("…")` 的码都在协议包注册表、状态一致）、`sources/service.test.ts` 补 2、`contract.test.ts` 补 3、`outbound.test.ts` 补 1。
+- **对真个人中转联调**：armadra-cloud main（be36b78）`pnpm relay:personal`（https://127.0.0.1:8102，自签，账号见 `.data/personal/dev.env`），`ARMADRA_PERSONAL_RELAY=1 ARMADRA_PERSONAL_RELAY_FP=… vitest run src/core/identity/cloud/personal-relay.devstack.integration.test.ts` 5 过：错注册令牌 401 `registration_token_invalid`；`/v1/sources/registration-tokens` 取的令牌 → `register` 200、状态与 `sources.list` 的 `registered: true` 正确、中继目录里有这台 core；中继签的断言 → `bind` → `cloud/login` 换到 owner 会话且能用，同一张再用 401 `cloud_assertion_replayed`；改了 `sub` 的断言 401 `cloud_assertion_invalid`；`links.create` → 匿名 `links.accept` 的访客断言 + core 邀请令牌 → 建成员、记 `invitation.accept.link`；`revoke` 后新断言 401 `cloud_not_registered`、`registered` 回到 `false`。A1-3 的联调 5 条同轮也过。中继日志除启动一行外无请求记录；联调后已停掉中继，并从中继目录撤掉了临时 core。
+
+接口（供 A3-2 / A1-4 / A4-4）：
+
+- 页面：`createClient(source).identity.cloud.<动词>(…)` 或旧路径 `/api/identity/cloud*`（契约 §31）。错误码按 `code` 取文案（`error.cloudNotRegistered` 等）。
+- A1-4「分享本机」：`sources.remoteSession { serviceId }` 取远程服务访问令牌 → 页面直接 `POST <issuer>/v1/sources/registration-tokens` → `identity.cloud.register { issuer: remote.issuer, registrationToken, label }`（`issuer` 用远程服务行里那一份，这样 `registered` 亮、登记按它的指纹钉扎）→ `identity.cloud.status`（`sourceId`、`tunnel`）；分享链接：core 签邀请（`/api/identity/invitations`）→ `POST <issuer>/v1/links { kind: "source_invite", sourceId, invitationId, … }` → `<url>#<secret>.<邀请令牌>`；停用 `identity.cloud.revoke { issuer }`。owner 自己经中继进来之前先 `identity.cloud.bind { assertion }` 把远程服务账号映射到自己。
+- A3-2：`cloudDomain()` → `CloudService`：`attachRelay({ start, stop, status })`（装好之后登记 / 撤销 / 状态经它）、`registrations()` / `registration(issuer)`（`trustedOrigins`、`relayOrigins`、`mode`）、`signSourceJws(issuer)`、`signBytes(data)`（握手 `auth`）、`revoke({ issuer })`（`source_revoked` 时调）。`installCloud` 的 `orgDefaultRole` 现在缺省 `null`，设置 `cloud.orgDefaultRole` 落地时在 `identity/index.ts` 接上。隧道来的请求要 `markBearerTransport(raw)`，`cloud/login` 才按原生会话答。
+- A4-4：`cloudDomain()?.register / revoke / status` 与 HTTP 同一份实现。
+
+没做 / 偏离规格：
+
+- `cloud_registrations` 多一列 `label`（状态要答 `label?`，规格的表里没有）。
+- 旧路径不经 RPC 门面的 OpenAPI 回挂：`/api/identity/` 是身份域的原样路由，先于契约旧路径；这里登记更长的原样前缀 `/api/identity/cloud`，自己认会话、按契约 scope 判，调的是与 procedure 同一份实现。`login` 不在 RPC 上登记（答 501），`system.hello` 的 `procedures` 里也就没有它。
+- 契约用了子域（`identity.cloud.*`）：RPC 门面原来只认 `域.动词` 两段，改成按路径放。
+- 登记的入参没有指纹：对远程服务的请求按「远程服务」表里同一 issuer 的指纹钉扎，没有那一行就用系统信任。`saas` 模式登记答 501。登记要有 owner（桌面壳没有请求主体时取 owner；还没配过对答 403）。
+- 撤销只在本机：中继侧 `DELETE /v1/sources/{id}` 要远程服务的 owner 会话，留给页面或 A4-4 在需要时调；撤销后中继仍会签断言，但本机一律 `cloud_not_registered`。
+- `bind` 多一个审计动作 `cloud.bind`、已映射给别人答 `409 conflict`；按 `sub` 的限流 `login` 与 `bind` 共用一个桶。`login` 的来源地址桶用「只有失败扣」那一档（与配对、刷新相同），不是每次扣。
+- 云登录不要求本机 TOTP：身份由远程服务证明（与口令登录不同）；断言寿命额外封顶 10 分钟（重放窗口）。
+- 组织默认角色的设置键与 `cloud.tunnel` 事件属于 A3-2；邀请多次使用的消费逻辑属于 A4-1（本包只建列）。
+- `relayTunnel` 的地址按 `https://` 记（外呼表的扫描只收 `https` / `smtp`），连接时升级为 `wss`。
+- `since` 写 `1.3`，协议 minor 不升（同 A1-3）。

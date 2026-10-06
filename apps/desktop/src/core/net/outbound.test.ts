@@ -112,11 +112,21 @@ describe("出站地址表", () => {
   });
 
   it("远程服务与客户端源：不配置即不联网，地址是用户给的（契约 §33）", () => {
-    for (const entry of [OUTBOUND.cloudApi, OUTBOUND.sourceGateway]) {
+    for (const entry of [
+      OUTBOUND.cloudApi,
+      OUTBOUND.cloudJwks,
+      OUTBOUND.sourceGateway,
+    ]) {
       expect(entry.switch).toBeNull();
       expect(entry.defaultOn).toBe(false);
       expect(entry.url).toContain("<");
     }
+  });
+
+  it("出站隧道：只有登记过才连，可经 cloud.relay.enabled 关掉（契约 §32）", () => {
+    expect(OUTBOUND.relayTunnel.switch).toBe("cloud.relay.enabled");
+    expect(OUTBOUND.relayTunnel.defaultOn).toBe(true);
+    expect(OUTBOUND.relayTunnel.url).toContain("<");
   });
 
   it("未登记的地址不算登记，前缀只按路径边界匹配", () => {

@@ -38,6 +38,7 @@
     "0036_password_resets.sql": "23c87aaeb8896df65264a86ae003fcd5abbec13213a733fdbe8de854a3707aff",
     "0037_push_preferences.sql": "0443ddc660bee9bee71e8af323da4bde4e2520a49808f60e79e5199d362398cc",
     "0038_forge.sql": "2feff1914b864421586af1841a5b5072d7972f0f10ca1c1164966660a288c8c8",
-    "0039_client_sources.sql": "0f50f45b00dc87f199c79b2a9f191e74ba739bd894111be193324ef11e10d51d"
+    "0039_client_sources.sql": "0f50f45b00dc87f199c79b2a9f191e74ba739bd894111be193324ef11e10d51d",
+    "0040_cloud_identity.sql": "5ed3f44ae13a440c124d547a2120af6c1b652af41c075aa4f1a7d1243c06c2b4"
   }
 }
