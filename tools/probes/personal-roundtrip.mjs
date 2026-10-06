@@ -11,8 +11,8 @@
 //   4. 分享链接：`/j/<id>#…` 落地、片段被抹掉、访客加入、打开链接指向的工作空间、开终端；
 //   5. 桌面 Electron 粘贴链接挂载（核对指纹）、打开工作空间、开终端；
 //   6. 手机：390 宽模拟（页面来源是拦截出来的 `https://localhost`，扫码结果注入）扫码挂载、开终端；
-//   7. 撤销链接：accept 与落地页报错，已加入的访客被断开；撤销登记：隧道停、中继答源离线、
-//      主人页面等待上线、中继侧撤销后断言被拒。
+//   7. 撤销链接：accept 与落地页报错，已加入的访客被断开；撤销登记：隧道停、core 用远程
+//      服务会话一并删掉中继侧的源记录（契约 §31.4）、经中继被拒、主人页面等待上线、断言被拒。
 //
 // 全程：随机端口、临时数据目录与 HOME、file 后端的 SecretStore，不碰钥匙串与操作员配置。
 // 最后扫一遍中继、core、Electron 与探针自己的输出，口令、令牌、链接秘密一个都不许出现。
@@ -1093,20 +1093,22 @@ try {
       { timeout: 30_000 },
     );
     run.ok("core 撤销登记：登记表清空、隧道停", stopped.state);
+    // 这台 core 有远程服务的 owner 会话：撤销连同中继侧的源记录一起删（契约
+    // §31.4），中继随之作废发给它的中继令牌，经中继答 401 而不是离线 503。
     const offline = await until(
       async () => {
         const answer = await call("GET", `/s/${sourceId}/health`, {
           headers: { "armadra-relay-token": assertion.relayToken },
         });
-        return answer.status === 503 ? answer : null;
+        return answer.status >= 400 ? answer : null;
       },
-      "中继答源离线",
+      "中继拒绝经它访问已撤销的源",
       { timeout: 30_000 },
     );
     run.check(
-      offline.body?.code === "source_offline",
-      "撤销登记后中继答 503 source_offline",
-      offline.body,
+      offline.status === 401 || offline.status === 503,
+      "撤销登记后经中继访问被拒（401 令牌随源作废，或 503 离线）",
+      { status: offline.status, code: offline.body?.code },
     );
     const ownerBanner = await page.until(
       `return [...document.querySelectorAll('[data-slot="banner"]')].map((b) => b.innerText.trim()).find((t) => t !== "") ?? null;`,
@@ -1115,10 +1117,20 @@ try {
     );
     await shotAt(page, "07-owner-after-revoke-1440");
     run.ok("撤销登记后经中继的主人页面收到下线通知", ownerBanner);
-    const gone = await call("DELETE", `/v1/sources/${sourceId}`, {
+    const pending = await owner("/api/identity/cloud/relay-pending");
+    run.check(
+      Array.isArray(pending?.pending) && pending.pending.length === 0,
+      "core 撤销时已删掉中继侧的源记录，不欠清理",
+      pending,
+    );
+    const listed = await must("GET", "/v1/me/sources", {
       token: await ownerToken(),
     });
-    run.check(gone.status < 300, "中继侧撤销这台源", gone.status);
+    run.check(
+      !(listed.sources ?? []).some((one) => one.sourceId === sourceId),
+      "中继的源目录里已经没有这台源",
+      (listed.sources ?? []).map((one) => one.sourceId),
+    );
     const refused = await call("POST", `/v1/sources/${sourceId}/assertion`, {
       body: { device },
       token: await ownerToken(),
