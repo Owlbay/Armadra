@@ -1080,6 +1080,25 @@ export class SourcesService {
     };
   }
 
+  /**
+   * 远程服务报的能力（`platform.info`）。记着的那份缺了要找的能力时，`refresh`
+   * 再问一次——远程服务可能升过级。
+   */
+  async remoteCapabilities(
+    serviceId: string,
+    options: { refresh?: boolean } = {},
+  ): Promise<readonly string[]> {
+    const row = this.remoteRow(serviceId);
+    let capabilities = options.refresh
+      ? undefined
+      : this.capabilities.get(serviceId);
+    if (capabilities === undefined) {
+      capabilities = (await this.remote.info(this.endpoint(row))).capabilities;
+      this.capabilities.set(serviceId, capabilities);
+    }
+    return capabilities;
+  }
+
   /** 这一行远程服务在不在（不联网）；不在答 `not_found`。 */
   remoteIssuer(serviceId: string): string {
     return this.remoteRow(serviceId).issuer;

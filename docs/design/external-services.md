@@ -434,8 +434,9 @@ core 的全部出站地址集中在一处（新 `core/net/outbound.ts` 导出常
 | `api.github.com/repos/<repo>/releases`                                               | 更新检查    | ≥ 6 小时、ETag   | `updates.autoCheck`              |
 | `api.pwnedpasswords.com/range/*`                                                     | 口令检查    | 设口令时         | `identity.passwords.breachCheck` |
 | ACME 目录、APNs、FCM、SMTP、GlitchTip DSN                                            | 各节        | 事件驱动         | 不配置即无                       |
+| `registry.npmjs.org`（或用户 `.npmrc` 的镜像，经 core 起的 npm）                     | 适配器安装  | 用户点安装时     | 不点即无                         |
 
-浏览器节点与各 CLI 自己的网络访问不在此表（它们是用户的程序）。
+浏览器节点与各 CLI 自己的网络访问不在此表（它们是用户的程序）；core 替用户起的联网子进程（如代装 ACP 适配器的 npm）在表里。
 
 ## 13. 用户需提供（按优先级）
 

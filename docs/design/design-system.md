@@ -444,7 +444,7 @@ SettingsRow 「监听地址」 Select（仅本机 / 局域网）
 - 对话框一律 `Sheet side="bottom"`，圆角 14 只在顶部，顶部 36×4 的拖柄（`--border-strong`），高度 `auto`，最高 `calc(100dvh - 48px - var(--safe-top))`。
 - 列表页（设备、审计、运行历史）用 `Item` 替代 `Table`，次要列折进第二行 11px。
 - 原生 App 壳：WebView 全屏 + 原生状态栏取 `--bg` 色；推送点开直接进焦点页；不在 WebView 里再画一次导航。
-- 安全区：`viewport-fit=cover`，App 根容器让开顶、左、右三边（`--safe-*`），贴边的 fixed 浮层（侧栏开关、抽屉、焦点页、底部导航、钉住的卡片、提示、Dock 与缩略图的底边）各自让开；状态栏文字颜色经 `SystemBars` 跟页面主题。iPadOS 窗口化时左上窗口控件不在安全区里，原生层用 `UIView.LayoutRegion` 的角落适配量出来写进 `--window-controls-left/top`，侧栏开关、抽屉关闭钮与焦点页「返回」按它右移，同桌面壳给 macOS 红绿灯的占位。
+- 安全区：`viewport-fit=cover`，App 根容器让开顶、左、右三边（`--safe-*`），贴边的 fixed 浮层（侧栏开关、抽屉、焦点页、底部导航、钉住的卡片、提示、Dock 与缩略图的底边）各自让开；状态栏文字颜色经 `SystemBars` 跟页面主题。iPadOS 窗口化时左上窗口控件不在安全区里，原生层用 `UIView.LayoutRegion` 的角落适配量出来写进 `--window-controls-left/top`，侧栏开关、抽屉关闭钮与焦点页「返回」按它右移，同桌面壳给 macOS 红绿灯的占位。浮层统一在 `ui/` 里让开：`--overlay-inset-top` = 安全区顶边与窗口控件高度里大的那个；Popover / DropdownMenu / Select / Tooltip / HoverCard / ContextMenu 的 `collisionPadding` 由 `ui/safe-area.ts` 把这几个变量量成像素（有安全区的边再加 4px，没有的边是 0，桌面不变），Select 有安全区时改用 popper；Dialog / AlertDialog 的中心挪到可用区域中心、最大宽高减去安全区；Sheet 按贴着的边加安全区内边距，关闭钮跟着挪。
 - 平板 768–1023：侧栏变可收起的覆盖抽屉（`Sheet side="left"` 280），设置两栏保留，Dock 完整。
 - 软键盘：`100dvh` 已处理；输入 16px；焦点页 PromptBox 固定底部。
 

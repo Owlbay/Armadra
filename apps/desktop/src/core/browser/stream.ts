@@ -133,8 +133,10 @@ export function attachStream(
         send: (data: string | Buffer) => {
           queue.push(data);
         },
-        sendFrame: (header: string, jpeg: Buffer) => {
-          queue.push([header, jpeg], nodeId);
+        // 帧确认等这一组真正写出（或被合并掉）才发：跟不上的客户端让
+        // Chromium 也停下来等，而不是照常编码再在这里丢。
+        sendFrame: (header: string, jpeg: Buffer, sent?: () => void) => {
+          queue.push([header, jpeg], nodeId, sent);
         },
         close: (code?: number, reason?: string) => socket.close(code, reason),
       };

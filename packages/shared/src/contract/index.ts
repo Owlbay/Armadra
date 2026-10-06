@@ -167,6 +167,7 @@ export type {
   RemoteSourceSummary,
   ShareLink,
   ShareLinkCreateInput,
+  ShareLinkUpdateInput,
   ShareLinkState,
   SourceSession,
 } from "./sources.js";

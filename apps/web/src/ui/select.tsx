@@ -4,6 +4,12 @@ import * as React from "react";
 import { Select as SelectPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/cn";
+import {
+  OVERLAY_SAFE_GAP,
+  hasSafeInsets,
+  useOverlayCollisionPadding,
+  useSafeInsets,
+} from "@/ui/safe-area";
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react";
 
 function Select({
@@ -60,14 +66,35 @@ function SelectTrigger({
 function SelectContent({
   className,
   children,
-  position = "item-aligned",
+  position: requested,
   align = "center",
+  collisionPadding,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
+  const padding = useOverlayCollisionPadding(collisionPadding);
+  // 「对齐选中项」的定位离视口边是写死的 10px，不认 collisionPadding；有安全区
+  // 时改用贴着触发器弹出的那种，才让得开刘海、状态栏与窗口控件。
+  const insets = useSafeInsets();
+  const position =
+    requested ?? (hasSafeInsets(insets) ? "popper" : "item-aligned");
+  // popper 的 Select 朝外还要再挪 4px（`translate-*-1`），没有安全区的那几条
+  // 边也得留出这一截，否则会探出视口。
+  const popperPadding =
+    collisionPadding === undefined &&
+    position === "popper" &&
+    typeof padding === "object"
+      ? {
+          top: Math.max(padding.top ?? 0, OVERLAY_SAFE_GAP),
+          right: Math.max(padding.right ?? 0, OVERLAY_SAFE_GAP),
+          bottom: Math.max(padding.bottom ?? 0, OVERLAY_SAFE_GAP),
+          left: Math.max(padding.left ?? 0, OVERLAY_SAFE_GAP),
+        }
+      : padding;
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
         data-slot="select-content"
+        collisionPadding={popperPadding}
         data-align-trigger={position === "item-aligned"}
         className={cn(
           "relative z-50 max-h-(--radix-select-content-available-height) min-w-36 origin-(--radix-select-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[align-trigger=true]:animate-none data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",

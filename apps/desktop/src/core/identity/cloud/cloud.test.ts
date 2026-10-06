@@ -495,6 +495,37 @@ describe("撤销", () => {
     expect(cloud.relayPending()).toEqual({ pending: [] });
   });
 
+  it("放弃清理（§31.5）：只删本机的登记，不再去删中继侧；审计 cloud.relayDismiss；不欠的 404", async () => {
+    await register();
+    const calls: string[] = [];
+    cloud.attachRelayCleaner(async (issuer) => {
+      calls.push(issuer);
+      const { fail } = await import("../../http/errors");
+      throw fail("source_unreachable", "x");
+    });
+    await rpc("identity.cloud.revoke", { issuer: ISSUER });
+    expect(cloud.relayPending().pending).toHaveLength(1);
+    const dismissed = await call(
+      "POST",
+      "/api/identity/cloud/relay-dismiss",
+      { issuer: ISSUER },
+      asOwner(),
+    );
+    expect(dismissed.status, dismissed.text).toBe(200);
+    expect(dismissed.body).toEqual({});
+    expect(calls).toEqual([ISSUER]);
+    expect(cloud.relayPending()).toEqual({ pending: [] });
+    expect(
+      audits.find((event) => event.action === "cloud.relayDismiss")?.detail,
+    ).toEqual({ issuer: ISSUER });
+    expect(
+      (await rpc("identity.cloud.relayDismiss", { issuer: ISSUER })).status,
+    ).toBe(404);
+    expect(
+      (await rpc("identity.cloud.relayCleanup", { issuer: ISSUER })).status,
+    ).toBe(404);
+  });
+
   it("待清理要 settings:read / settings:write：没有会话 401", async () => {
     expect(
       (await call("GET", "/api/identity/cloud/relay-pending")).status,
@@ -502,6 +533,13 @@ describe("撤销", () => {
     expect(
       (
         await call("POST", "/api/identity/cloud/relay-cleanup", {
+          issuer: ISSUER,
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await call("POST", "/api/identity/cloud/relay-dismiss", {
           issuer: ISSUER,
         })
       ).status,

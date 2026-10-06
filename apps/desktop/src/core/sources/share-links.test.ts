@@ -97,6 +97,7 @@ beforeEach(async () => {
     remote,
     access: (id) => service.remoteEndpoint(id),
     issuerOf: (id) => service.remoteIssuer(id),
+    capabilities: (id, options) => service.remoteCapabilities(id, options),
     registrations: () => ({
       registered: (issuer) => registered && issuer === ISSUER,
       sourceId: async () => THIS_SOURCE,
@@ -267,5 +268,87 @@ describe("契约 §33.9：分享链接", () => {
     expect(backend.values.has(shareLinksSecretName(serviceId))).toBe(true);
     await service.remoteRemove(serviceId);
     expect(backend.values.has(shareLinksSecretName(serviceId))).toBe(false);
+  });
+});
+
+describe("契约 §33.10：改链接备注", () => {
+  it("只改远程服务上的备注（去首尾空白），答改过的链接；本机存着的整条链接不动", async () => {
+    const created = await create();
+    const answer = await links.updateLabel({
+      serviceId,
+      linkId: created.link.linkId,
+      label: "  设计评审 ",
+    });
+    expect(answer.link).toMatchObject({
+      linkId: created.link.linkId,
+      label: "设计评审",
+      workspaceId: "ws-1",
+      state: "active",
+      copyable: true,
+    });
+    expect(world.cloud.links.get(created.link.linkId)?.label).toBe("设计评审");
+    const patch = world.requests.find((one) => one.method === "PATCH");
+    expect(patch?.url).toBe(`${ISSUER}/v1/links/${created.link.linkId}`);
+    expect(patch?.body).toEqual({ label: "设计评审" });
+    expect(await links.url(serviceId, created.link.linkId)).toEqual({
+      url: created.url,
+    });
+    // 撤销了的也能改，答历史状态、不可复制。
+    await links.revoke(serviceId, created.link.linkId);
+    const later = await links.updateLabel({
+      serviceId,
+      linkId: created.link.linkId,
+      label: "",
+    });
+    expect(later.link).toMatchObject({
+      label: "",
+      state: "revoked",
+      copyable: false,
+    });
+  });
+
+  it("远程服务上没有答 not_found；未知远程服务答 not_found", async () => {
+    expect(
+      await code(
+        links.updateLabel({ serviceId, linkId: "abcdef", label: "x" }),
+      ),
+    ).toBe("not_found");
+    expect(
+      await code(
+        links.updateLabel({ serviceId: "nope", linkId: "a", label: "x" }),
+      ),
+    ).toBe("not_found");
+  });
+
+  it("远程服务不报 links.update：重问一次 platform.info，仍没有答 not_implemented、不发 PATCH；升级后就能改", async () => {
+    const created = await create();
+    world.cloud.capabilities = ["auth.password", "links.source-invite"];
+    await service.remoteCapabilities(serviceId, { refresh: true });
+    const infos = () =>
+      world.requests.filter((one) =>
+        one.url.endsWith("/.well-known/armadra-platform"),
+      ).length;
+    const before = infos();
+    expect(
+      await code(
+        links.updateLabel({
+          serviceId,
+          linkId: created.link.linkId,
+          label: "x",
+        }),
+      ),
+    ).toBe("not_implemented");
+    expect(infos()).toBe(before + 1);
+    expect(world.requests.some((one) => one.method === "PATCH")).toBe(false);
+    world.cloud.capabilities.push("links.update");
+    expect(
+      (
+        await links.updateLabel({
+          serviceId,
+          linkId: created.link.linkId,
+          label: "x",
+        })
+      ).link.label,
+    ).toBe("x");
   });
 });

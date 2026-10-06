@@ -76,6 +76,27 @@ interface Unit {
   readonly frames: readonly Frame[];
   readonly bytes: number;
   readonly key: string | undefined;
+  /** 这一单元的结局（全部写完、被丢、或队列关了）；只调一次。 */
+  readonly settled: ((outcome: SettleOutcome) => void) | undefined;
+}
+
+/**
+ * 一个单元有了结局时调的回调（{@link SendQueue.push} 的第三个参数）：`sent`
+ * = 每一帧都写进了 socket（`ws` 的写完回调，出错也算）；`dropped` = 被合并、
+ * 被挤掉、没被接受，或队列关了还没发出去。
+ */
+export type SettleOutcome = "sent" | "dropped";
+
+function once(
+  callback: ((outcome: SettleOutcome) => void) | undefined,
+): ((outcome: SettleOutcome) => void) | undefined {
+  if (callback === undefined) return undefined;
+  let called = false;
+  return (outcome) => {
+    if (called) return;
+    called = true;
+    callback(outcome);
+  };
 }
 
 function sizeOf(frame: Frame): number {
@@ -106,19 +127,34 @@ export class SendQueue {
    * 交一个单元出去。数组是一组必须挨着发、一起留或一起丢的帧（画面的头帧
    * 与 JPEG）。`coalesce` 时同 `key` 的旧单元被替换。返回这一单元是否被接受：
    * 关了、socket 不在 OPEN、或 `pause` 队列已满时为 `false`。
+   *
+   * `settled` 在这一单元有结局时恰好调一次（见 {@link SettleOutcome}）：画面流
+   * 用它把 Chromium 的帧确认推迟到帧真正写出之后，跟不上的客户端因此让编码器
+   * 也慢下来，而不是让它照常编码、再由合并丢掉。
    */
-  push(frame: Frame | readonly Frame[], key?: string): boolean {
-    if (this.closed || this.target.readyState !== OPEN) return false;
+  push(
+    frame: Frame | readonly Frame[],
+    key?: string,
+    settled?: (outcome: SettleOutcome) => void,
+  ): boolean {
+    const settle = once(settled);
+    if (this.closed || this.target.readyState !== OPEN) {
+      settle?.("dropped");
+      return false;
+    }
     const frames: readonly Frame[] =
       typeof frame === "string" ||
       frame instanceof Uint8Array ||
       frame instanceof QueuedValue
         ? [frame]
         : frame;
-    if (frames.length === 0) return true;
+    if (frames.length === 0) {
+      settle?.("sent");
+      return true;
+    }
     let bytes = 0;
     for (const item of frames) bytes += sizeOf(item);
-    const unit: Unit = { frames, bytes, key };
+    const unit: Unit = { frames, bytes, key, settled: settle };
     if (!this.congested && this.queue.length === 0) {
       this.write(unit);
       this.checkCongestion();
@@ -155,7 +191,8 @@ export class SendQueue {
    */
   close(): void {
     this.closed = true;
-    this.queue.length = 0;
+    const pending = this.queue.splice(0);
+    for (const unit of pending) unit.settled?.("dropped");
     if (this.poll !== undefined) clearTimeout(this.poll);
     this.poll = undefined;
   }
@@ -170,6 +207,7 @@ export class SendQueue {
     const { policy, maxFrames } = this.options;
     if (policy === "pause") {
       if (this.queue.length >= maxFrames) {
+        unit.settled?.("dropped");
         this.options.onOverflow?.();
         return false;
       }
@@ -181,7 +219,7 @@ export class SendQueue {
     if (policy === "coalesce" && unit.key !== undefined) {
       const index = this.queue.findIndex((queued) => queued.key === unit.key);
       if (index >= 0) {
-        this.queue.splice(index, 1);
+        this.queue.splice(index, 1)[0]?.settled?.("dropped");
         dropped += 1;
       }
     }
@@ -195,7 +233,7 @@ export class SendQueue {
               this.queue.findIndex((queued) => queued.key !== undefined),
             )
           : 0;
-      this.queue.splice(victim, 1);
+      this.queue.splice(victim, 1)[0]?.settled?.("dropped");
       dropped += 1;
     }
     if (dropped > 0) {
@@ -207,6 +245,7 @@ export class SendQueue {
   }
 
   private write(unit: Unit): void {
+    let remaining = unit.frames.length;
     for (const frame of unit.frames) {
       const bytes = sizeOf(frame);
       this.inFlightBytes += bytes;
@@ -216,6 +255,8 @@ export class SendQueue {
         if (settled) return;
         settled = true;
         this.inFlightBytes -= bytes;
+        remaining -= 1;
+        if (remaining === 0) unit.settled?.("sent");
         this.drain();
       };
       try {
