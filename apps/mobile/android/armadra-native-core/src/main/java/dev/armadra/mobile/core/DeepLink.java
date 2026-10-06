@@ -9,7 +9,8 @@ import java.util.regex.Pattern;
  *   <li>{@code armadra://pair?…}：写进 {@code #link=} 再重载，连接页拿它当初值，人点「连接」才配；
  *   <li>{@code armadra://join?link=<id>&issuer=<签发方>&s=<片段>}：个人中转的分享链接（cloud 契约 §10），与配对一样
  *       写进 {@code #link=} 再重载，连接页收到就直接挂载；
- *   <li>{@code armadra://w/<工作空间>[/n/<节点>]}：写进 {@code #push=}，页面认 {@code hashchange}；
+ *   <li>{@code armadra://w/<工作空间>[/n/<节点>][?s=<源>]}：写进 {@code #push=}，页面认 {@code hashchange}
+ *       （{@code s} 是签发通知的主机，契约 §19.4，连着别的主机时页面自己切）；
  *   <li>{@code armadra://oauth?state=…&code=…}（或 {@code error=}）：原生 OAuth 的回调（R-56），与配对一样
  *       写进 {@code #link=} 再重载，入口在挂载前收尾。
  * </ul>
@@ -24,7 +25,7 @@ public final class DeepLink {
     private static final Pattern JOIN = Pattern.compile("^armadra://join\\?[A-Za-z0-9._~%&=:+-]+$");
     private static final Pattern OAUTH = Pattern.compile("^armadra://oauth\\?[A-Za-z0-9._~%&=:+*-]+$");
     private static final Pattern NODE =
-            Pattern.compile("^armadra://w/[A-Za-z0-9._~%-]+(/n/[A-Za-z0-9._~%-]+)?/?$");
+            Pattern.compile("^armadra://w/[A-Za-z0-9._~%-]+(/n/[A-Za-z0-9._~%-]+)?/?(\\?s=[A-Za-z0-9._~%-]+)?$");
 
     public final Kind kind;
     public final String link;

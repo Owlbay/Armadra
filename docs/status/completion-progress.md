@@ -2953,6 +2953,36 @@ iPad（WebKit）经个人中转给 ACP Agent 发 prompt 偶发「这一轮没有
 - cloud：`@armadra/cloud-shared/http` 导出 `HTTP_TIMEOUTS`、`applyHttpTimeouts`；`DEFAULT_LIMIT_RULES` 新缺省；`PREFLIGHT_MAX_AGE_S = "7200"`。
 - 合并顺序：先合 armadra-cloud 的 PR，再合本 PR（探针的 keep-alive 一项对旧中继会红）。
 
+## R4 手机端经中继的缺口：推送点开带主机、中继停了的通知条、访客令牌分槽
+
+补 A1-5 / P3 留下的三处：手机连着另一台时点通知没反应；中继停了的提示只在托管页；访客链接加入覆盖同一中继下主人的登录。
+
+做了什么：
+
+- **推送点开带主机**（契约 §19.4、§43.4 末条）：core 的深链加签发方 `armadra://w/<工作空间>[/n/<节点>]?s=<hostId>`（`core/push/triggers.ts::deepLink`，`PushService` 新选项 `sourceId`，装配时取 `IdentityStore.hostId()`）。`s` 只在 `url` 里，载荷键集合不变（仍 `strict`），随载荷端到端加密。页面 `mobile/push-open.ts`：`parseDeepLink` 多答 `sourceId`（旧格式为 `null`），`pushRouteOf` 决定就地打开（当前连接 / 已挂上且连上的远程源，先 `setCurrent`）、切连接（连接表里有：记为当前、深链留在 `#push=` 里重载后接着开）或提示（`mobile.push.unknownSource`，中英同步）。原生 `DeepLink.swift` / `DeepLink.java` 只多认一个 `?s=`。
+- **手机经中继的连接也显示「中转服务不可用」**：新 `mobile/relay-status.ts`。入口选路时记下中继来源（`setMobileRelayRoute`，直连是 `null`）；通知条在运行时断开时问一次中继自己的平台信息（匿名，5 秒一次），传输失败或代理 502–504 即算中继停了，复用 `remote.hosted.relayDown` 那一条并盖过「本地服务已断开」；中继答话（主机下线、凭据失效）仍是原来的提示。
+- **访客令牌不覆盖主人**：钥匙串的远程服务登录按（签发方，主体）分槽——主人 `personal:<host>:<账号>`（远程服务没答账号时 `owner`），访客 `personal:<host>:guest.<源>`（`credentials.ts::serviceIdOf(issuer, principal)`、`guestPrincipal`、`isGuestSlot`）。连接用哪一槽记在 `armadra.sources.remoteSlots`（只有键名，`connections.ts::remoteSlotOf / setRemoteSlot`，移除连接一并忘掉）。凭据来源一槽一个 `createRelayedAccess`（云会话缓存也分开）；`me.stream` 一个签发方一条，用主人那一槽，只有访客时才用访客的。移除连接只在没有别的连接用同一槽时删那一槽。
+- **迁移**：旧连接没有槽的记录，照旧读签发方原来的单槽 `personal:<host>`，钥匙串里的数据不搬不删；之后新登录的主人与访客各写自己那一槽，不再碰旧槽。原生侧键名规则（`[A-Za-z0-9._:-]{1,128}`）不变，不用改原生。
+
+实测（macOS arm64，基于 main 9f33e3df）：
+
+- 新用例：`core/push/triggers.test`（深链带 `s` 与编码、测试通知与没给源时不带、入队载荷带本机 hostId）、`transport-relay` / `transport-unifiedpush` 断言线上没有 hostId 明文；`mobile/push-open.test` 7（带 `s` 的解析与拒收、五种去向、切连接留 `#push=`）；`mobile/credentials.test` 5（槽名、主人与访客各用各的槽并各自写回、旧单槽照读、记的槽缺失不借别人的、`me.stream` 选主人槽）；`mobile/connections.test` 1；`mobile/connect.test` 1（主人登录后访客扫码：两槽并存，移除访客只删它那槽）并更新两条既有断言（主人与访客不再落旧单槽）；`mobile/relay-status.test` 2；`shell/Banners.relay.test` 补 3（手机经中继：中继停了盖过运行时断开、中继还答话不说中继、正常时不探测）；`mobile/entry.test` 断言选路记下中继。
+- 原生：`swift test --filter DeepLinkTests` 4 过；`DeepLink.java` + `DeepLinkTest` 用 `javac` + JUnit 4 过。
+- 探针：`push-e2e` 的 APNs 深链断言改成带 `?s=<hostId>`（取自 `GET /api/identity/hello`），本机全过；`link-join` 加一段手机（App 页面、假钥匙串预置主人的旧单槽）扫同一条链接以访客加入，断言主人那一槽原样还在、访客另存一槽、主人的刷新令牌在中转上仍有效——本机（Docker 中继，armadra-cloud 本地检出）全过。手机那一段的页面来源是拦截出来的 `https://localhost`，探针的 Chrome 关掉本地网络访问检查（同 `personal-roundtrip`）。`mobile-shell-e2e` 走配对、不涉及这三处，没改没跑。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 5248 过 / 67 跳（live 4 过），web 3883 过，shared 372 过，server 98 过 / 4 跳，mobile 10、push-relay 9 过；`pnpm --filter @armadra/web typecheck`、`pnpm check` 通过。
+
+接口：
+
+- core：`deepLink(workspaceId, nodeId?, sourceId?)`，`render(draft, locale, { workspace, agent, source? })`，`PushServiceOptions.sourceId`。
+- 页面：`parseDeepLink → { workspaceId, nodeId, sourceId }`、`pushRouteOf(sourceId, context)`、`switchConnectionFor(link, sourceId)`；`serviceIdOf(issuer, principal?)`、`guestPrincipal(sourceId)`、`isGuestSlot`；`remoteSlotOf / setRemoteSlot`；`MobileCredentialDeps.slotOf / connections`；`setMobileRelayRoute / useMobileRelayDown / probeRelay`。
+
+没做 / 偏离：
+
+- 深链用查询串 `?s=` 而不是新增载荷键：载荷 schema 是 `strict`，加键会让旧页面的 service worker 整条丢弃；放在 `url` 里旧客户端照样显示通知，只是旧版 App 点开不跳转（只进 App）。协议 minor 不升（procedure 形状没变）。
+- 经中继的远程源（一起挂着的其余连接）中继停了只在侧栏里灰着，通知条只说当前连接那一路。
+- 访客与主人在同一中继下时，`me.stream` 只开主人那一条：访客加入的那台若不在主人的目录里，它的上下线事件收不到（回前台与重连时照常补齐）。
+- 旧单槽里若已被旧版写成访客的令牌，无法分辨，照旧给那些旧连接用；重新添加即写入新槽。
+
 ## R5 经中继的数据流与覆盖：媒体票、语言会话恢复、两台经中继的源、WebKit（协议 minor 21）
 
 做了什么：

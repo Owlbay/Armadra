@@ -23,6 +23,7 @@ vi.mock("../api/client", () => ({
 }));
 
 const { resetHostedRelay } = await import("../sources/hosted");
+const { resetMobileRelayStatus } = await import("../mobile/relay-status");
 const { installDomPolyfills, TestProviders } = await import(
   "../app/test-harness"
 );
@@ -61,6 +62,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetHostedRelay();
+  resetMobileRelayStatus();
 });
 
 describe("中继托管页面的通知条", () => {
@@ -101,6 +103,50 @@ describe("中继托管页面的通知条", () => {
       </TestProviders>,
     );
     expect(await screen.findByText("等待上线")).toBeTruthy();
+    expect(screen.queryByText("中转服务不可用，正在重连")).toBeNull();
+  });
+});
+
+describe("手机经中继的连接", () => {
+  const RELAY = "https://relay.example";
+
+  it("运行时断开、中继也连不上：同一条「中转服务不可用」，盖过运行时断开", async () => {
+    health.fail = true;
+    const probe = vi.fn(async () => false);
+    resetMobileRelayStatus({ origin: RELAY, probe });
+    render(
+      <TestProviders>
+        <Banners />
+      </TestProviders>,
+    );
+    expect(await screen.findByText("中转服务不可用，正在重连")).toBeTruthy();
+    expect(screen.queryByText("本地服务已断开")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(probe).toHaveBeenCalledWith(RELAY);
+  });
+
+  it("中继还答话（主机下线等）：仍是运行时断开，不说中继", async () => {
+    health.fail = true;
+    resetMobileRelayStatus({ origin: RELAY, probe: async () => true });
+    render(
+      <TestProviders>
+        <Banners />
+      </TestProviders>,
+    );
+    expect(await screen.findByText("本地服务已断开")).toBeTruthy();
+    expect(screen.queryByText("中转服务不可用，正在重连")).toBeNull();
+  });
+
+  it("直连或运行时正常：不去问中继", async () => {
+    const probe = vi.fn(async () => false);
+    resetMobileRelayStatus({ origin: RELAY, probe });
+    render(
+      <TestProviders>
+        <Banners />
+      </TestProviders>,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(probe).not.toHaveBeenCalled();
     expect(screen.queryByText("中转服务不可用，正在重连")).toBeNull();
   });
 });

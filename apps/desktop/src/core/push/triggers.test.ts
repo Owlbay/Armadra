@@ -170,7 +170,7 @@ describe("每种事件一条通知", () => {
   }
 
   it("评论只发给被提及的人", () => {
-    const { push, ownerDeviceId, viewer, inbox } = setup();
+    const { push, ownerDeviceId, viewer, inbox, hostId } = setup();
     expect(
       push.handleEvent("w1", {
         type: "board.comment",
@@ -186,7 +186,7 @@ describe("每种事件一条通知", () => {
     expect(inbox(viewer.deviceId).map((item) => item.kind)).toEqual([
       "comment",
     ]);
-    expect(inbox(viewer.deviceId)[0]?.url).toBe(deepLink("w1", "n1"));
+    expect(inbox(viewer.deviceId)[0]?.url).toBe(deepLink("w1", "n1", hostId));
     expect(JSON.stringify(inbox(viewer.deviceId))).not.toContain(
       "COMMENT-BODY",
     );
@@ -224,14 +224,14 @@ describe("每种事件一条通知", () => {
   });
 
   it("按设备语言渲染，深链指向节点", () => {
-    const { push, viewer, ownerDeviceId, inbox } = setup();
+    const { push, viewer, ownerDeviceId, inbox, hostId } = setup();
     push.handleEvent("w1", EVENTS[1]?.[1] as EventFrame);
     expect(inbox(viewer.deviceId)[0]).toEqual({
       v: 1,
       kind: "agentDone",
       title: "支付服务",
       body: "Claude Code finished",
-      url: "armadra://w/w1/n/n2",
+      url: `armadra://w/w1/n/n2?s=${encodeURIComponent(hostId)}`,
       tag: "status:n2",
     });
     expect(inbox(ownerDeviceId)[0]?.body).toBe("Claude Code 已完成");
@@ -291,6 +291,34 @@ describe("不该叫人的那些", () => {
     expect([...payload.title]).toHaveLength(64);
     expect([...payload.tag]).toHaveLength(128);
     expect(payload.url).toBe("armadra://w/w");
+  });
+
+  it("深链带签发它的源（契约 §19.4）：编码后进 `s`，测试通知与没给源时不带", () => {
+    const names = { workspace: "W", agent: () => "Agent", source: "host/1" };
+    expect(
+      render(
+        { kind: "agentDone", workspaceId: "w 1", nodeId: "n1", tag: "t" },
+        "zh-CN",
+        names,
+      ).url,
+    ).toBe("armadra://w/w%201/n/n1?s=host%2F1");
+    expect(deepLink("w", undefined, "h")).toBe("armadra://w/w?s=h");
+    expect(deepLink("w", "n", "")).toBe("armadra://w/w/n/n");
+    expect(deepLink("", "n", "h")).toBe("armadra://");
+  });
+
+  it("入队的载荷带本机的 hostId", () => {
+    const { push, ownerDeviceId, inbox, hostId } = setup();
+    expect(hostId).not.toBe("");
+    push.handleEvent("w1", {
+      type: "agent.approval",
+      nodeId: "n1",
+      pendingId: "p9",
+      request: { id: "p9", request: {} },
+    } as EventFrame);
+    expect(inbox(ownerDeviceId)[0]?.url).toBe(
+      `armadra://w/w1/n/n1?s=${encodeURIComponent(hostId)}`,
+    );
   });
 });
 

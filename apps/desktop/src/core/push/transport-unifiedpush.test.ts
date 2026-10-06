@@ -29,7 +29,7 @@ const PAYLOAD: PushPayload = {
   kind: "approval",
   title: "支付服务",
   body: "Claude Code 等待审批",
-  url: "armadra://w/w1/n/n1",
+  url: "armadra://w/w1/n/n1?s=HOST-ID-1",
   tag: "approval:p1",
 };
 
@@ -74,6 +74,7 @@ describe("UnifiedPush 发送器", () => {
     const wire = bodyOf(record!).toString("utf8");
     expect(wire).not.toContain("支付服务");
     expect(wire).not.toContain("armadra://");
+    expect(wire).not.toContain("HOST-ID-1");
     const envelope = JSON.parse(wire) as PushEnvelope;
     expect(
       JSON.parse(openPayload(envelope, keys.privateKey).toString("utf8")),

@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activeConnection,
   loadConnections,
+  remoteSlotOf,
   removeConnection,
   setActiveConnection,
+  setRemoteSlot,
   upsertConnection,
 } from "./connections";
 import { memoryStorage } from "./testing";
@@ -82,5 +84,25 @@ describe("手机的连接表", () => {
     expect(loadConnections().map((row) => row.sourceId)).toEqual(["h1"]);
     localStorage.setItem("armadra.sources", "{oops");
     expect(loadConnections()).toEqual([]);
+  });
+
+  it("远程服务的槽：按连接记一份，移除连接时一并忘掉；旧数据没有记录答 null", () => {
+    upsertConnection(RELAYED);
+    upsertConnection({ ...RELAYED, sourceId: "h2" });
+    expect(remoteSlotOf("h1")).toBeNull();
+    setRemoteSlot("h1", "personal:relay.example.com:acct-1");
+    setRemoteSlot("h2", "personal:relay.example.com:guest.h2");
+    expect(remoteSlotOf("h1")).toBe("personal:relay.example.com:acct-1");
+    removeConnection("h2");
+    expect(remoteSlotOf("h2")).toBeNull();
+    expect(remoteSlotOf("h1")).toBe("personal:relay.example.com:acct-1");
+    // 槽的记录里只有键名，没有凭据；坏了当作没有。
+    expect(localStorage.getItem("armadra.sources.remoteSlots")).not.toMatch(
+      /token|secret|password/i,
+    );
+    localStorage.setItem("armadra.sources.remoteSlots", "[1,2]");
+    expect(remoteSlotOf("h1")).toBeNull();
+    localStorage.setItem("armadra.sources.remoteSlots", "{oops");
+    expect(remoteSlotOf("h1")).toBeNull();
   });
 });

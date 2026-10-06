@@ -1536,13 +1536,14 @@ CSV 按 RFC 4180：`\r\n` 换行，首行表头 `id,time,principalId,deviceId,ac
   "kind": "approval",
   "title": "支付服务",
   "body": "Claude Code 等待审批",
-  "url": "armadra://w/<workspaceId>/n/<nodeId>",
+  "url": "armadra://w/<workspaceId>/n/<nodeId>?s=<hostId>",
   "tag": "approval:<pendingId>"
 }
 ```
 
 - `kind`：`approval`、`agentDone`、`agentError`、`deliveryFailed`、`schedule`、`resources`、`comment`、`workflowGate`、`test`。
 - `title` 是工作空间名（≤ 64 字），`body` 是按 `kind` 与设备语言写死的一句（≤ 120 字，只会出现 Agent 注册表里的名字），`url` 是深链（与画布无关的通知是 `armadra://`），`tag` 相同的新通知替换旧的（≤ 128 字）。
+- 深链的 `s` 是签发这条通知的 core 的 `hostId`（URL 编码；手机连接表与中继目录里同一个源标识）。键集合不变（仍是 `strict`），`s` 只在 `url` 里，随载荷一起端到端加密，不进日志。没有 `s` 的旧格式照认（按当前连接打开）；旧版 App 不认带 `s` 的深链，点开只进 App。页面的处理见 §43.4 末条。
 - 不含终端原文、文件内容、命令、提示词、评论正文、拒收码。载荷因此可以落库（`push_outbox.payload_blob`）。
 
 ### 19.5 三条传输的线上形状
@@ -3330,6 +3331,7 @@ core 校验远程服务地址与指纹的写法时用具名码（状态均 400�
 - **路由门不判这一段**（`SELF_GUARDED`）：推送域只碰请求主体自己的设备，自己认请求身份。`meta.scope` 声明的 `canvas:read` 与旧路径的清单一致，门面把它交给同一道路由门，门对这一段放行，判定仍在域里：服务器壳的匿名主体 `401 unauthenticated`；别人的设备与不存在的设备同答 `404 not_found`（不让成员借此探测设备 id；owner 能撤任何一台，但改偏好只有设备的主人）；桌面壳的本机请求没有设备，登记与测试通知答 `409 device_required`；设备已被撤销再登记 `403 forbidden`。
 - 登记（`push.register`）的入参是一个 JSON 对象，取值与互斥条件（传输与平台的搭配、令牌与公钥、UnifiedPush 端点）仍在域里判（`core/push/devices.ts`），错答 `400 bad_request`，原话与旧路径一样。登记体里的令牌与订阅密钥只出去一次，**答案里没有令牌、没有公钥本身**，只说有没有（`encrypted`、`unifiedpush`）；日志与审计也没有。
 - 旧路径 `POST /api/push/test` 答 `202`，procedure 成功恒为 `200`，体相同。
+- 通知深链带签发方（§19.4 的 `?s=<hostId>`，procedure 形状不变、协议 minor 不变）。页面（`apps/web/src/mobile/push-open.ts`）点开时：没有 `s` 或 `s` 就是当前连接 → 就地打开；签发方作为远程源一起挂着且已连上 → 先切当前源再打开；原生 App 的连接表里有它 → 记为当前连接、深链留在 `#push=` 里重载后接着打开；连接表里没有 → 提示「这条通知来自未添加的主机」，不乱开。网页与中继托管的页面上通知来自给这一页供数的那台，按当前源打开。原生两端（`DeepLink.swift` / `DeepLink.java`）只多认一个 `?s=`，别的查询串仍不认。
 
 <!-- rpc:begin contract=§43.4 -->
 

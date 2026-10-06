@@ -45,7 +45,8 @@ export function install(context: CoreContext): void {
     return;
   }
   const database = context.db.database;
-  const authorizer = new Authorizer(new IdentityStore(database));
+  const identity = new IdentityStore(database);
+  const authorizer = new Authorizer(identity);
   const service = new PushService({
     database,
     dataDir: context.dataDir,
@@ -53,6 +54,7 @@ export function install(context: CoreContext): void {
     env: process.env,
     settings: () =>
       completionSettings(settingsDomain()?.settings.snapshot() ?? {}),
+    sourceId: () => identity.hostId(),
     canRead: (principalId, principalKind, workspaceId) =>
       authorizer.permits(
         {

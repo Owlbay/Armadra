@@ -42,7 +42,7 @@ export interface PushPayload {
   readonly kind: PushKind;
   readonly title: string;
   readonly body: string;
-  /** `armadra://w/<workspaceId>/n/<nodeId>`；与节点无关的通知只到工作空间。 */
+  /** `armadra://w/<workspaceId>/n/<nodeId>?s=<hostId>`（`triggers.ts::deepLink`）；与节点无关的通知只到工作空间。 */
   readonly url: string;
   /** 同一个 tag 的新通知替换旧的（同一次审批、同一个节点的完成）。 */
   readonly tag: string;
