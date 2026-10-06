@@ -85,6 +85,13 @@ function fakeCore(
       ) {
         return {};
       }
+      if (method === "GET" && path === "/api/identity/cloud/relay-pending") {
+        return {
+          pending: [
+            { issuer: ISSUER, revokedAtMs: 1, code: "source_unauthorized" },
+          ],
+        };
+      }
       if (method === "POST" && path === "/api/identity/invitations") {
         return {
           invitationId: "i".repeat(32),
@@ -274,6 +281,19 @@ describe("cloud register / revoke / status", () => {
     expect(calls[0]).toMatchObject({
       method: "DELETE",
       path: `/api/identity/cloud/register?issuer=${encodeURIComponent(ISSUER)}`,
+    });
+    // 服务器壳没有远程服务 owner 的会话：如实说中继侧待清理（契约 §31.4）。
+    expect(out.join("")).toContain("中继侧待清理（source_unauthorized）");
+    out.length = 0;
+    expect(
+      await main(
+        ["cloud", "revoke", "--issuer", ISSUER, "--output", "json"],
+        io,
+      ),
+    ).toBe(0);
+    expect(JSON.parse(out.join(""))).toMatchObject({
+      command: "cloud revoke",
+      relayPending: "source_unauthorized",
     });
     out.length = 0;
     expect(await main(["cloud", "status"], io)).toBe(0);

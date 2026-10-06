@@ -7781,6 +7781,173 @@
         }
       }
     },
+    "/api/rpc/identity/cloud/relayPending": {
+      "post": {
+        "operationId": "identity.cloud.relayPending",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pending": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "issuer": {
+                            "type": "string"
+                          },
+                          "revokedAtMs": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "code": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["issuer", "revokedAtMs", "code"]
+                      }
+                    }
+                  },
+                  "required": ["pending"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§31.4",
+          "scope": "settings:read",
+          "since": "1.3",
+          "legacy": {
+            "method": "GET",
+            "path": "/api/identity/cloud/relay-pending"
+          }
+        }
+      }
+    },
+    "/api/rpc/identity/cloud/relayCleanup": {
+      "post": {
+        "operationId": "identity.cloud.relayCleanup",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "issuer": {
+                    "type": "string"
+                  }
+                },
+                "required": ["issuer"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pending": {
+                      "type": "boolean"
+                    },
+                    "code": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["pending", "code"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§31.4",
+          "scope": "settings:write",
+          "since": "1.3",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/identity/cloud/relay-cleanup"
+          }
+        }
+      }
+    },
     "/api/rpc/files/list": {
       "post": {
         "operationId": "files.list",

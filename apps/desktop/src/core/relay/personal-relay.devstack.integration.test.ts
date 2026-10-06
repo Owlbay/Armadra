@@ -639,8 +639,12 @@ describe.skipIf(!enabled)("个人中转联调：隧道（契约 §32）", () => 
     expect(Date.now() - started).toBeLessThan(2_000);
     expect([1006, 4404]).toContain(code);
     expect(await tunnelState()).toBe("none");
+    // 本机有这个远程服务的 owner 会话：撤销连同中继侧的源记录一起删（契约
+    // §31.4），中继随之作废发给它的中继令牌，经中继的请求答 401 而不是离线 503。
     const offline = await viaRelay("GET", "/api/workspaces");
-    expect(offline.status).toBe(503);
+    expect(offline.status).toBe(401);
+    const pending = await own.fetch("/api/identity/cloud/relay-pending");
+    expect(await pending.json()).toEqual({ pending: [] });
   }, 30_000);
 
   it("中继侧撤销这台机器：隧道被关，重连时发现已撤销，本机登记跟着撤销", async () => {

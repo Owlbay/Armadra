@@ -13,7 +13,12 @@ import {
   shareThisMachine,
   stopSharing,
 } from "../../api/remote-services";
-import { usePreferencesStore, useT } from "../../app/preferences-store";
+import { localizedFailure } from "../../api/request";
+import {
+  type Translate,
+  usePreferencesStore,
+  useT,
+} from "../../app/preferences-store";
 import { useWorkspacesQuery } from "../../app/workspaces-query";
 import { useCanvasStore } from "../../store/canvas-store";
 import { QrImage } from "./pages/gateway/PairingCard";
@@ -59,6 +64,32 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const EXPIRY_DAYS = [1, 7, 30] as const;
 
 export const SHARE_STATUS_KEY = ["identity", "cloud", "status"] as const;
+/** 已撤销、中继侧还欠着清理的登记（契约 §31.4）。 */
+export const RELAY_PENDING_KEY = ["identity", "cloud", "relayPending"] as const;
+
+const RELAY_PENDING_REASONS: Readonly<Record<string, string>> = {
+  source_unauthorized: "remote.relayPending.source_unauthorized",
+  source_unreachable: "remote.relayPending.source_unreachable",
+};
+
+/** 中继侧没清理掉的原因：按码取文案，认不出的码按通用错误文案。 */
+export function relayPendingReason(t: Translate, code: string): string {
+  const key = RELAY_PENDING_REASONS[code];
+  return key === undefined ? localizedFailure(code, "") : t(key);
+}
+
+/** 停用分享之后的提示：中继侧没删掉时说「中继侧待清理」与原因。 */
+export function announceStopped(t: Translate, pending: string | null): void {
+  if (pending === null) {
+    toast.success(t("remote.share.stopped"));
+    return;
+  }
+  toast.warning(t("remote.share.stopped"), {
+    description: [t("remote.relayPending"), relayPendingReason(t, pending)]
+      .filter(Boolean)
+      .join(" · "),
+  });
+}
 
 interface CreatedLink {
   readonly linkId: string;
@@ -137,9 +168,10 @@ function ShareBody({
   });
   const stop = useMutation({
     mutationFn: () => stopSharing(remote.issuer),
-    onSuccess: () => {
+    onSuccess: (pending) => {
       refresh();
-      toast.success(t("remote.share.stopped"));
+      void client.invalidateQueries({ queryKey: RELAY_PENDING_KEY });
+      announceStopped(t, pending);
     },
     onError: (error: Error) => toast.error(error.message),
   });

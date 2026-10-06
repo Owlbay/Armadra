@@ -385,6 +385,49 @@ describe("邀请多次使用（A4-1）", () => {
       uses: 0,
     });
   });
+
+  it("一次性邀请被兑换：uses 同步加一、记下是谁，与 maxUses 同一口径；撤销不算使用", () => {
+    const { accounts, owner, database } = harness();
+    const first = accounts.createPrincipal(owner, { displayName: "甲" });
+    const second = accounts.createPrincipal(owner, { displayName: "乙" });
+    const invitation = accounts.issueInvitation(owner, {
+      role: "viewer",
+      targetWorkspaceId: "w1",
+    });
+    const input = {
+      invitationId: invitation.invitationId,
+      token: invitation.token,
+    };
+    accounts.acceptInvitation(member(first.principalId), input);
+    const used = () =>
+      accounts
+        .listInvitations(owner)
+        .find((row) => row.invitationId === invitation.invitationId);
+    expect(used()).toMatchObject({ maxUses: null, uses: 1 });
+    expect(used()?.consumedAtMs).toBeGreaterThan(0);
+    expect(
+      database
+        .prepare(
+          "SELECT principal_id FROM identity_invitation_uses WHERE invitation_id = ?",
+        )
+        .all(invitation.invitationId),
+    ).toEqual([{ principal_id: first.principalId }]);
+    // 第二个人兑换不动，计数不变。
+    expect(() =>
+      accounts.acceptInvitation(member(second.principalId), input),
+    ).toThrow(IdentityError);
+    expect(used()?.uses).toBe(1);
+
+    const revoked = accounts.issueInvitation(owner, {
+      role: "viewer",
+      targetWorkspaceId: "w1",
+    });
+    accounts.revokeInvitation(owner, revoked.invitationId);
+    const row = accounts
+      .listInvitations(owner)
+      .find((one) => one.invitationId === revoked.invitationId);
+    expect(row?.uses).toBe(0);
+  });
 });
 
 describe("口令与登录", () => {

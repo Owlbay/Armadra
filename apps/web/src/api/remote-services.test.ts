@@ -7,7 +7,13 @@ const rpc = vi.hoisted(() => ({
     addDirect: vi.fn(),
   },
   identity: {
-    cloud: { register: vi.fn(), bind: vi.fn(), revoke: vi.fn() },
+    cloud: {
+      register: vi.fn(),
+      bind: vi.fn(),
+      revoke: vi.fn(),
+      relayPending: vi.fn(),
+      relayCleanup: vi.fn(),
+    },
   },
 }));
 const accounts = vi.hoisted(() => ({
@@ -33,7 +39,9 @@ import {
   remoteFetch,
   revokeShareLink,
   shareLinkUrl,
+  retryRelayCleanup,
   shareThisMachine,
+  stopSharing,
 } from "./remote-services";
 import { z } from "zod";
 
@@ -66,6 +74,8 @@ afterEach(() => {
     rpc.identity.cloud.register,
     rpc.identity.cloud.bind,
     rpc.identity.cloud.revoke,
+    rpc.identity.cloud.relayPending,
+    rpc.identity.cloud.relayCleanup,
     accounts.issueInvitation,
     accounts.revokeInvitation,
   ])
@@ -292,5 +302,32 @@ describe("分享链接", () => {
     expect(url).toBe(`${ISSUER}/v1/links/L`);
     expect(init.method).toBe("DELETE");
     expect(accounts.revokeInvitation).toHaveBeenCalledWith("inv");
+  });
+});
+
+describe("停用分享与中继侧清理（契约 §31.4）", () => {
+  it("撤销后读待清理：这个 issuer 欠着就答码，不欠答 null", async () => {
+    rpc.identity.cloud.revoke.mockResolvedValue({});
+    rpc.identity.cloud.relayPending.mockResolvedValueOnce({
+      pending: [
+        { issuer: "https://other.test", revokedAtMs: 1, code: "x" },
+        { issuer: ISSUER, revokedAtMs: 2, code: "source_unauthorized" },
+      ],
+    });
+    expect(await stopSharing(ISSUER)).toBe("source_unauthorized");
+    expect(rpc.identity.cloud.revoke).toHaveBeenCalledWith({ issuer: ISSUER });
+    rpc.identity.cloud.relayPending.mockResolvedValueOnce({ pending: [] });
+    expect(await stopSharing(ISSUER)).toBeNull();
+  });
+
+  it("重试：清掉了答 null，还欠着答码", async () => {
+    rpc.identity.cloud.relayCleanup
+      .mockResolvedValueOnce({ pending: false, code: null })
+      .mockResolvedValueOnce({ pending: true, code: "source_unreachable" });
+    expect(await retryRelayCleanup(ISSUER)).toBeNull();
+    expect(await retryRelayCleanup(ISSUER)).toBe("source_unreachable");
+    expect(rpc.identity.cloud.relayCleanup).toHaveBeenCalledWith({
+      issuer: ISSUER,
+    });
   });
 });

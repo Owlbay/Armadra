@@ -1234,6 +1234,19 @@ export const ROUTES: readonly RouteEntry[] = [
     implemented: true,
   },
   {
+    // §31.4：撤销后中继侧还欠着清理的源记录，与重试。
+    path: "/api/identity/cloud/relay-pending",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/identity/cloud/relay-cleanup",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
     path: "/api/identity/cloud/{issuer}/trusted-origins",
     methods: ["PUT"],
     surface: "runtime",

@@ -145,6 +145,7 @@ export {
   cloudStatusOutputSchema,
   tunnelStatusSchema,
 } from "./cloud.js";
+export type { RelayPending } from "./cloud.js";
 export {
   workspaceEventsCursorSchema,
   workspaceEventsItemSchema,

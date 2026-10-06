@@ -248,10 +248,11 @@ export class CloudHttp {
   ): Promise<unknown> {
     const trusted = /^PUT \/([^/]+)\/trusted-origins$/.exec(route);
     const required: Scope | undefined =
-      route === "GET " || route === "GET /"
+      route === "GET " || route === "GET /" || route === "GET /relay-pending"
         ? scope("settings:read")
         : route === "POST /register" ||
             route === "DELETE /register" ||
+            route === "POST /relay-cleanup" ||
             trusted !== null
           ? scope("settings:write")
           : route === "POST /bind"
@@ -297,6 +298,10 @@ export class CloudHttp {
           ),
           principal.principalId,
         );
+      }
+      if (route === "GET /relay-pending") return cloud.relayPending();
+      if (route === "POST /relay-cleanup") {
+        return cloud.relayCleanup(parse(cloudRevokeInputSchema, body(request)));
       }
       if (route === "POST /bind") {
         return cloud.bind(

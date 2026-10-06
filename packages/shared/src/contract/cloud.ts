@@ -48,13 +48,32 @@ const section = (
   scope: "settings:read" | "settings:write" | "identity:read" | null,
   method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
+  contract: "§31.1" | "§31.4" = "§31.1",
 ) =>
   meta({
     scope,
     since: "1.3",
-    contract: "§31.1",
+    contract,
     legacy: { method, path },
   });
+
+/**
+ * 中继侧待清理（§31.4 追加）：撤销后没能删掉的中继侧源记录。这两条是 Armadra
+ * 自己的，协议包里没有；码是 core 的错误码（页面按码取文案）。
+ */
+export const relayPendingSchema = z.object({
+  issuer: z.string(),
+  revokedAtMs: z.number().int(),
+  code: z.string(),
+});
+export const cloudRelayPendingOutputSchema = z.object({
+  pending: z.array(relayPendingSchema),
+});
+export const cloudRelayCleanupOutputSchema = z.object({
+  pending: z.boolean(),
+  code: z.string().nullable(),
+});
+export type RelayPending = z.infer<typeof relayPendingSchema>;
 
 export const identity = {
   cloud: {
@@ -124,6 +143,32 @@ export const identity = {
           "settings:write",
           "PUT",
           "/api/identity/cloud/{issuer}/trusted-origins",
+        ),
+      ),
+    /** 已撤销、中继侧还欠着清理的登记。 */
+    relayPending: oc
+      .input(z.object({}).optional())
+      .output(cloudRelayPendingOutputSchema)
+      .errors(denied)
+      .meta(
+        section(
+          "settings:read",
+          "GET",
+          "/api/identity/cloud/relay-pending",
+          "§31.4",
+        ),
+      ),
+    /** 重试删一条待清理的中继侧源记录。 */
+    relayCleanup: oc
+      .input(cloudRevokeInputSchema)
+      .output(cloudRelayCleanupOutputSchema)
+      .errors({ ...denied, ...errors.pick("not_found") })
+      .meta(
+        section(
+          "settings:write",
+          "POST",
+          "/api/identity/cloud/relay-cleanup",
+          "§31.4",
         ),
       ),
   },
