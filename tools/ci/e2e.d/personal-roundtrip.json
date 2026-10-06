@@ -1,0 +1,9 @@
+{
+  "id": "personal-roundtrip",
+  "tier": "a",
+  "script": "tools/probes/personal-roundtrip.mjs",
+  "args": ["{out}"],
+  "requires": ["tmux", "chrome", "cloud"],
+  "platforms": ["darwin", "linux"],
+  "timeoutMinutes": 15
+}
