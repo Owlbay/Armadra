@@ -121,7 +121,7 @@ describe("runServeShell", () => {
     const f = fake();
     runServeShell(["--no-pairing"], f.deps);
     expect(f.calls).toHaveLength(1);
-    expect(f.calls[0].options).toMatchObject({ stdio: "inherit" });
+    expect(f.calls[0]?.options).toMatchObject({ stdio: "inherit" });
     f.child.emit("exit", 3, null);
     expect(f.exits).toEqual([3]);
   });
