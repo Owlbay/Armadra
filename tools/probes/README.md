@@ -184,6 +184,17 @@ ARMADRA_PERSONAL_RELAY_HOME=<armadra-cloud 检出> node tools/probes/relay-web-e
 
 验证：打开中继的 `/app/` 是中继登录页，中继账号口令登录后只有一台在线主机就直接进画布，请求都同源（`/v1`、`/s/<源>`）；经中继终端收发、实时板与本机页面双向同步；主机停掉隧道时通知条「等待上线」、再开由 `me.stream` 叫醒；杀掉中继再起，页面不刷新自己恢复。截 390 / 1440 宽、明暗两主题。产物默认在 `target/relay-web-e2e/`。
 
+## 个人中转全流程（V1 / M1）
+
+平台计划 V1：真个人中转（armadra-cloud 的 `personal init` + `personal serve`，托管 `apps/web/dist`）、真 core、真 Electron、无头 Chrome，没有模拟的服务端。要 armadra-cloud 的本地检出（`ARMADRA_DEV_STACK_CLOUD_SRC`，或仓库旁的 `../armadra-cloud`；私有仓，CI 拉不到）。清单 `tools/ci/e2e.d/personal-roundtrip.json` 依赖 `cloud`：没有检出时 e2e 运行器记 `skipped` 并写明原因，不算失败。
+
+```sh
+pnpm libs:build && pnpm --filter @armadra/desktop build && pnpm --filter @armadra/web build
+node tools/ci/e2e.mjs --tier a --only personal-roundtrip
+```
+
+验证：中继 init（CA 指纹、口令不进输出、已初始化再 init 被拒）；core 登记、隧道 ready、绑定主人；`/app/` 账号口令登录、终端收发、实时板双向同步；分享链接 `/j/` 落地（片段被抹掉）、访客加入、开终端；桌面 Electron 粘贴链接并核对指纹、开终端；手机 390 宽模拟（来源 `https://localhost`、扫码结果注入）扫码挂载、开终端；撤销链接（accept 与落地页报错、已加入的访客被断开）、撤销登记（隧道停、中继答 `source_offline`、主人页面收到下线通知、中继侧撤销后不再签断言）；中继、core、Electron 与探针输出里没有口令、令牌与链接秘密。中继边缘对每个 IP 每分钟只放 200 次，所有客户端都来自回环，手机一步之前先等一个窗口。产物默认在 `target/personal-roundtrip/`（经运行器时在 `target/e2e/a/personal-roundtrip/`）。
+
 ## 控制面端到端
 
 契约 §35 的页面侧：两个 browser context 同开一块板，工作空间事件流经 `/api/ws` 订阅（复用 `ui-features/harness.mjs`，它的 `killCore` / `startCore` 在同一端口与数据目录上重启 core）。

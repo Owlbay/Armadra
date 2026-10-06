@@ -22,7 +22,7 @@ import {
 } from "./ui-features/harness.mjs";
 
 /** 连上 Electron 的渲染页（回环 http 那个），给一组最小的页面工具。 */
-async function attachRenderer(port, log) {
+export async function attachRenderer(port, log) {
   let target;
   await until(
     async () => {
