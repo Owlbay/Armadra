@@ -181,9 +181,10 @@ describe("契约树", () => {
       expect(output, entry.name).toBeDefined();
       const yields = getEventIteratorSchemaDetails(output as never)?.yields;
       const found = loose((yields ?? output) as z.ZodType);
-      // 事件流的每一项就是页面那份 `workspaceEventSchema`，它有三处透传的
-      // `unknown`（`agent.approval` 的 `request`、ACP 帧的 `update` 与 `error`
-      // 的附加字段）。只许减少，不许增加；收紧在 E3 对应域迁移时做。
+      // 事件流的每一项就是页面那份 `workspaceEventSchema`。`agent.approval` 的
+      // `request` 已收紧成审批行（原话按 JSON 透传）；剩下的是 ACP 帧里工具调用的
+      // `rawInput` / `rawOutput`——适配器给的原样载荷，形状由各家 Agent 定。只许
+      // 减少，不许增加。
       const allowed = LOOSE_ALLOWANCE[entry.name] ?? 0;
       expect(found.length, entry.name).toBeLessThanOrEqual(allowed);
     }
@@ -204,7 +205,7 @@ describe("契约树", () => {
 });
 
 const LOOSE_ALLOWANCE: Readonly<Record<string, number>> = {
-  "workspaces.events": 3,
+  "workspaces.events": 2,
 };
 
 describe("守卫自己真的抓得到", () => {

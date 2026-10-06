@@ -67,14 +67,26 @@ async function peer(base: string): Promise<Peer> {
   return made;
 }
 
-function publish(core: RunningCore, nodeId: string, request: unknown = {}) {
+/** 发一条审批事件；`extra` 并进审批行（填充大小用）。 */
+function publish(
+  core: RunningCore,
+  nodeId: string,
+  extra: Record<string, unknown> = {},
+) {
   core.bus.emit("workspace.event", {
     workspaceId: WORKSPACE,
     event: {
       type: "agent.approval",
       nodeId,
       pendingId: nodeId,
-      request,
+      request: {
+        id: nodeId,
+        nodeId,
+        workspaceId: WORKSPACE,
+        request: null,
+        createdAt: "2026-10-06T00:00:00Z",
+        ...extra,
+      },
     },
   });
 }
