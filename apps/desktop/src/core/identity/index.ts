@@ -19,6 +19,7 @@ import {
 import { API_PREFIX, IdentityHttp, loopbackAnonymousOwner } from "./http";
 import { createLoopbackAdmission } from "./loopback";
 import { HEARTBEAT_MS } from "./protocol";
+import { installCloud } from "./cloud";
 import { installOAuth } from "./oauth";
 import { resolveBreachMode } from "./policy";
 import { createRouteGuard } from "./route-access";
@@ -202,6 +203,18 @@ export function installIdentity(context: CoreContext): void {
   // OAuth / OIDC 的挂点（契约 §18.5）。它自己登记更长的原样前缀，所以放在
   // 哪一行都先于下面这条整段接管；放在这里是为了让它拿到同一份服务。
   installOAuth(context, { store, service, accounts, security });
+
+  // 云登录与登记（契约 §31）：同一份会话、账号与加固；`/api/identity/cloud` 也是
+  // 更长的原样前缀，先于下面的整段接管。
+  installCloud(context, {
+    store,
+    service,
+    accounts,
+    authorizer,
+    security,
+    capabilities: () => http.capabilities(),
+    coreVersion: VERSION,
+  });
 
   context.server.raw(API_PREFIX, (request, response, cors) =>
     http.handle(request, response, cors),

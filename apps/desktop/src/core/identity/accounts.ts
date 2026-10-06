@@ -713,6 +713,97 @@ export class AccountsService {
     return registered;
   }
 
+  /**
+   * 拿着邀请、凭一个外部身份注册（云登录，契约 §31）：建一个成员、写外部身份
+   * 的映射凭据（`kind = 'oauth'`，`provider` / `subject`）、兑换邀请，一笔事务。
+   *
+   * 和 {@link registerWithInvitation} 是同一条路，只是凭据不是口令：这个人以后
+   * 还是凭同一个外部身份进来。`defaultRole` 给了就对 `workspaceIds` 逐条授予
+   * （组织默认角色，逐条可撤）。邀请不对一律 `unauthenticated`，不泄露是哪一种。
+   */
+  registerExternalWithInvitation(input: {
+    invitationId: string;
+    token: string;
+    displayName: string;
+    provider: string;
+    subject: string;
+    createdVia: string;
+    defaultRole?: { role: ShareRole; workspaceIds: readonly string[] };
+  }): {
+    principalId: string;
+    role: ShareRole;
+    groupId: string;
+    workspaceId: string;
+  } {
+    if (
+      !validName(input.displayName) ||
+      input.provider === "" ||
+      input.subject === ""
+    ) {
+      throw new IdentityError("invalid");
+    }
+    const registered = this.options.store.transaction((tx) => {
+      const now = this.now();
+      const row = this.redeemable(tx.accounts, input, now);
+      if (tx.accounts.liveOAuth(input.provider, input.subject) !== undefined) {
+        throw new IdentityError("conflict");
+      }
+      const principalId = newId();
+      tx.accounts.createPrincipal({
+        principalId,
+        kind: "member",
+        displayName: input.displayName,
+        createdAtMs: now,
+        disabledAtMs: 0,
+      });
+      tx.accounts.createCredential({
+        credentialId: newId(),
+        principalId,
+        kind: "oauth",
+        provider: input.provider,
+        subject: input.subject,
+        secretHash: Buffer.alloc(0),
+        salt: Buffer.alloc(0),
+        kdf: "",
+        cost: 0,
+        block: 0,
+        parallel: 0,
+        length: 0,
+        createdAtMs: now,
+        revokedAtMs: 0,
+      });
+      const actor: AuthorizationSubject = {
+        principalId,
+        kind: "member",
+        scopes: [],
+      };
+      this.note(tx.accounts, actor, now, {
+        action: "identity.principal.register",
+        target: principalId,
+        detail: {
+          invitationId: input.invitationId,
+          createdVia: input.createdVia,
+        },
+      });
+      const redeemed = this.redeem(tx.accounts, actor, row, now);
+      if (input.defaultRole !== undefined) {
+        for (const workspaceId of input.defaultRole.workspaceIds) {
+          this.put(tx.accounts, {
+            subjectKind: "principal",
+            subjectId: principalId,
+            workspaceId,
+            role: input.defaultRole.role,
+            grantedBy: row.issuedBy,
+            nowMs: now,
+          });
+        }
+      }
+      return { principalId, ...redeemed };
+    });
+    accessChanged();
+    return registered;
+  }
+
   /** 作废一张还没用掉的邀请。库里记成「被空主体用掉」，一次性的那道闸照旧。 */
   revokeInvitation(actor: AuthorizationSubject, invitationId: string): void {
     if (!ID_PATTERN.test(invitationId)) throw new IdentityError("invalid");

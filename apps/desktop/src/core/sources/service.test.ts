@@ -360,6 +360,47 @@ describe("远程服务（个人中转）", () => {
   });
 });
 
+describe("本机登记到远程服务（契约 §31）", () => {
+  it("registered 跟着登记表；删远程服务之前先撤销登记", async () => {
+    const registered = new Set<string>();
+    const revoked: string[] = [];
+    const cloud = {
+      registered: (issuer: string) => registered.has(issuer),
+      revoke: ({ issuer }: { issuer: string }) => {
+        revoked.push(issuer);
+        registered.delete(issuer);
+        return {};
+      },
+    };
+    service = new SourcesService({
+      store: new SourcesStore(opened.database),
+      secrets: new SourceSecrets(() => backend),
+      remote: new RemoteClient(world.transport, {
+        platform: "desktop",
+        name: "test",
+      }),
+      peer: new SourceClient(world.transport),
+      hostId: () => HOST_ID,
+      hostLabel: () => "this-mac",
+      log: { info: () => undefined, warn: () => undefined },
+      cloud: () => cloud,
+    });
+    const { remote } = await addRemote();
+    expect(remote.registered).toBe(false);
+    registered.add(ISSUER);
+    expect((await service.list()).remotes[0]?.registered).toBe(true);
+    await service.remoteRemove(remote.serviceId);
+    expect(revoked).toEqual([ISSUER]);
+    expect((await service.list()).remotes).toEqual([]);
+  });
+
+  it("没登记的远程服务：删的时候不碰登记", async () => {
+    const { remote } = await addRemote();
+    await service.remoteRemove(remote.serviceId);
+    expect((await service.list()).remotes).toEqual([]);
+  });
+});
+
 describe("挂载（经中继）", () => {
   it("remoteSources → mount → session 全流程", async () => {
     const { remote } = await addRemote();

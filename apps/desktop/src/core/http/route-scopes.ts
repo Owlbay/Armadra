@@ -72,6 +72,21 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
   // 事，所以它和健康检查同一档：不要求任何权限。
   { pattern: /^\/api\/identity\/hello$/, read: null, write: null },
 
+  // 云登录与登记（契约 §31）。整段自己认证（{@link SELF_GUARDED}），这几行是
+  // 清单：用断言换会话先于身份存在；绑定是本人的事；登记、撤销、可信来源只有
+  // owner（与设置同一档）。
+  { pattern: /^\/api\/identity\/cloud\/login$/, read: null, write: null },
+  {
+    pattern: /^\/api\/identity\/cloud\/bind$/,
+    read: "identity:read",
+    write: "identity:read",
+  },
+  {
+    pattern: /^\/api\/identity\/cloud(\/|$)/,
+    read: "settings:read",
+    write: "settings:write",
+  },
+
   // 身份扩展（契约 §18）。整段 `/api/identity/` 自己认证（{@link SELF_GUARDED}），
   // 这几行是清单而不是门：写的是「管别人的」那一档，本人的 passkey、MFA、
   // 会话与 OAuth 绑定由身份域按请求主体放行。登录本身的几步先于身份存在。

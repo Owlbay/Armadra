@@ -14,6 +14,7 @@ import { hostname } from "node:os";
 
 import { contract } from "@armadra/shared";
 
+import { cloudDomain } from "../identity/cloud";
 import { IdentityStore } from "../identity/store";
 import { CoreFailure, fail } from "../http/errors";
 import { type DomainHandlers, registerProcedures } from "../http/rpc";
@@ -133,6 +134,7 @@ export function install(
     hostId: () => identity.hostId(),
     hostLabel: () => hostname(),
     log: context.log,
+    cloud: () => cloudDomain(),
     ...(options.now === undefined ? {} : { now: options.now }),
   });
   service.ensureLocal();

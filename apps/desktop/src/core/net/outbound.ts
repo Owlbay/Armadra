@@ -208,10 +208,33 @@ export const OUTBOUND = {
     // 只是占位主机。个人中转多是自签证书，按加入时给的 CA 指纹钉扎。只有加过
     // 远程服务、且页面要用它时才连；core 启动与回环 API 从不等它。
     url: "https://<远程服务 issuer>",
-    purpose: "远程服务：登录、刷新、源目录与访问断言（/v1/*）",
-    cadence: "用户动作：加入、挂载、换票时",
+    purpose:
+      "远程服务：登录、刷新、源目录与访问断言（/v1/*）；本机登记（/.well-known/armadra-platform、/v1/sources/register）",
+    cadence: "用户动作：加入、挂载、换票、登记时；隧道令牌每 50 分钟",
     switch: null,
     defaultOn: false,
+    documented: true,
+  },
+  cloudJwks: {
+    // 本机登记过的远程服务的公钥集（契约 §31）：验它签的源访问断言。登记时取一次
+    // 并缓存在库里；之后只在断言的 kid 不认识时再取，同一个 issuer 最多每 10 分钟
+    // 一次。取不到照样用缓存验（离线验签）。
+    url: "https://<登记的远程服务 issuer>/.well-known/jwks.json",
+    purpose: "远程服务签名钥：验源访问断言",
+    cadence: "登记时 1 次；断言的 kid 未知时 1 次，最多每 10 分钟 1 次",
+    switch: null,
+    defaultOn: false,
+    documented: true,
+  },
+  relayTunnel: {
+    // 出站隧道（契约 §32，A3-2）：让客户端经中继访问本机 core。只有登记过远程
+    // 服务才连；隧道的建立与失败不阻塞 core 的启动与回环 API。表里按 https 记
+    // 地址，连接时在同一主机上升级为 wss。
+    url: "https://<中继节点>/t/v1",
+    purpose: "出站隧道：经中继访问本机 core",
+    cadence: "常连；心跳 20 秒；断开后退避 1–60 秒",
+    switch: "cloud.relay.enabled",
+    defaultOn: true,
     documented: true,
   },
   sourceGateway: {

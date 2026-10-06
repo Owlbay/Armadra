@@ -93,6 +93,13 @@ export const SECURITY_AUDIT_ACTIONS = [
   "ama.credential.clear",
   // G5-20（安全审查 L10）：ama 节点没设模型，兑换只能答全部已设的密钥。
   "ama.credential.unscoped",
+  // 云登录与登记（契约 §31）。登录本身另有 `identity.login`（`method: "cloud"`）；
+  // 断言原文、注册令牌、源私钥不进 `detail`。
+  "cloud.login",
+  "cloud.bind",
+  "cloud.register",
+  "cloud.revoke",
+  "invitation.accept.link",
 ] as const;
 
 export type SecurityAuditAction = (typeof SECURITY_AUDIT_ACTIONS)[number];

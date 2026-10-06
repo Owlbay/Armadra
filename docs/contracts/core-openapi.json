@@ -6603,6 +6603,888 @@
           }
         }
       }
+    },
+    "/api/rpc/identity/cloud/login": {
+      "post": {
+        "operationId": "identity.cloud.login",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "assertion": {
+                    "type": "string"
+                  },
+                  "invitationToken": {
+                    "type": "string"
+                  }
+                },
+                "required": ["assertion"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "session": {
+                      "type": "object",
+                      "properties": {
+                        "hostId": {
+                          "type": "string"
+                        },
+                        "device": {
+                          "type": "object",
+                          "properties": {
+                            "deviceId": {
+                              "type": "string"
+                            },
+                            "principalId": {
+                              "type": "string",
+                              "default": ""
+                            },
+                            "displayName": {
+                              "type": "string",
+                              "default": ""
+                            },
+                            "role": {
+                              "type": "string",
+                              "default": "owner"
+                            },
+                            "createdAtUnixMs": {
+                              "type": "number",
+                              "default": 0
+                            },
+                            "revision": {
+                              "type": "number",
+                              "default": 0
+                            }
+                          },
+                          "required": ["deviceId"]
+                        },
+                        "scopes": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "permission": {
+                                "type": "string"
+                              },
+                              "workspaceId": {
+                                "type": "string",
+                                "default": ""
+                              },
+                              "executionHostId": {
+                                "type": "string",
+                                "default": ""
+                              }
+                            },
+                            "required": ["permission"]
+                          },
+                          "default": []
+                        },
+                        "expiresAtUnixMs": {
+                          "type": "number",
+                          "default": 0
+                        },
+                        "csrfToken": {
+                          "type": "string"
+                        },
+                        "native": {
+                          "type": "object",
+                          "properties": {
+                            "accessToken": {
+                              "type": "string"
+                            },
+                            "refreshToken": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["accessToken", "refreshToken"]
+                        }
+                      },
+                      "required": ["hostId", "device"]
+                    },
+                    "principal": {
+                      "type": "object",
+                      "properties": {
+                        "principalId": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": ["owner", "member"],
+                          "type": "string"
+                        },
+                        "displayName": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["principalId", "kind", "displayName"]
+                    },
+                    "created": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["session", "principal", "created"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "400",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "429",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§31.1",
+          "scope": null,
+          "since": "1.3",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/identity/cloud/login"
+          }
+        }
+      }
+    },
+    "/api/rpc/identity/cloud/register": {
+      "post": {
+        "operationId": "identity.cloud.register",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "issuer": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "registrationToken": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  }
+                },
+                "required": ["issuer", "registrationToken"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "issuer": {
+                      "type": "string"
+                    },
+                    "sourceId": {
+                      "type": "string"
+                    },
+                    "relayOrigins": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "trustedOrigins": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "tunnel": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "enum": [
+                            "disabled",
+                            "connecting",
+                            "authenticating",
+                            "ready",
+                            "draining",
+                            "backoff"
+                          ],
+                          "type": "string"
+                        },
+                        "node": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "since": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "streams": {
+                          "type": "number"
+                        },
+                        "lastError": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "code": {
+                                  "type": "string"
+                                },
+                                "message": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["code", "message"]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "state",
+                        "node",
+                        "since",
+                        "streams",
+                        "lastError"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "issuer",
+                    "sourceId",
+                    "relayOrigins",
+                    "trustedOrigins",
+                    "tunnel"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "400",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "409",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "426",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "429",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "501",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "502",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§31.1",
+          "scope": "settings:write",
+          "since": "1.3",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/identity/cloud/register"
+          }
+        }
+      }
+    },
+    "/api/rpc/identity/cloud/revoke": {
+      "post": {
+        "operationId": "identity.cloud.revoke",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "issuer": {
+                    "type": "string"
+                  }
+                },
+                "required": ["issuer"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§31.1",
+          "scope": "settings:write",
+          "since": "1.3",
+          "legacy": {
+            "method": "DELETE",
+            "path": "/api/identity/cloud/register"
+          }
+        }
+      }
+    },
+    "/api/rpc/identity/cloud/status": {
+      "post": {
+        "operationId": "identity.cloud.status",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "registrations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "issuer": {
+                            "type": "string"
+                          },
+                          "mode": {
+                            "enum": ["saas", "personal"],
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "jwksFetchedAtMs": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "trustedOrigins": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "relayOrigins": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "registeredAtMs": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "tunnel": {
+                            "type": "object",
+                            "properties": {
+                              "state": {
+                                "enum": [
+                                  "disabled",
+                                  "connecting",
+                                  "authenticating",
+                                  "ready",
+                                  "draining",
+                                  "backoff"
+                                ],
+                                "type": "string"
+                              },
+                              "node": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "since": {
+                                "anyOf": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "streams": {
+                                "type": "number"
+                              },
+                              "lastError": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "code": {
+                                        "type": "string"
+                                      },
+                                      "message": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["code", "message"]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "state",
+                              "node",
+                              "since",
+                              "streams",
+                              "lastError"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "issuer",
+                          "mode",
+                          "jwksFetchedAtMs",
+                          "trustedOrigins",
+                          "relayOrigins",
+                          "registeredAtMs",
+                          "tunnel"
+                        ]
+                      }
+                    },
+                    "sourcePublicKey": {
+                      "type": "object",
+                      "properties": {
+                        "kty": {
+                          "const": "OKP"
+                        },
+                        "crv": {
+                          "const": "Ed25519"
+                        },
+                        "x": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_-]{43}$"
+                        },
+                        "kid": {
+                          "type": "string"
+                        },
+                        "alg": {
+                          "const": "EdDSA"
+                        },
+                        "use": {
+                          "const": "sig"
+                        }
+                      },
+                      "required": ["kty", "crv", "x"]
+                    },
+                    "sourceId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{32}$"
+                    }
+                  },
+                  "required": ["registrations", "sourcePublicKey", "sourceId"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§31.1",
+          "scope": "settings:read",
+          "since": "1.3",
+          "legacy": {
+            "method": "GET",
+            "path": "/api/identity/cloud"
+          }
+        }
+      }
+    },
+    "/api/rpc/identity/cloud/bind": {
+      "post": {
+        "operationId": "identity.cloud.bind",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "assertion": {
+                    "type": "string"
+                  }
+                },
+                "required": ["assertion"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "bound": {
+                      "const": true
+                    }
+                  },
+                  "required": ["bound"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "400",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "409",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "429",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§31.1",
+          "scope": "identity:read",
+          "since": "1.3",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/identity/cloud/bind"
+          }
+        }
+      }
+    },
+    "/api/rpc/identity/cloud/trustedOrigins": {
+      "post": {
+        "operationId": "identity.cloud.trustedOrigins",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "issuer": {
+                    "type": "string"
+                  },
+                  "origins": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["issuer", "origins"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "origins": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": ["origins"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "400",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§31.1",
+          "scope": "settings:write",
+          "since": "1.3",
+          "legacy": {
+            "method": "PUT",
+            "path": "/api/identity/cloud/{issuer}/trusted-origins"
+          }
+        }
+      }
     }
   },
   "components": {
