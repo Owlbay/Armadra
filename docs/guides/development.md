@@ -341,7 +341,7 @@ pnpm platform:personal   # 个人中转：relay-personal + armadra-server-nat，
 pnpm platform:up         # 平台：postgres + redis + cloud + relay + armadra-server-nat，并跑 cloud 迁移
 pnpm platform:health     # 只跑 platform 的健康检查
 pnpm platform:down       # 只停 platform 的服务（不影响默认那组与别的 worktree）
-pnpm platform:e2e        # 跨仓端到端，占位，随 V1 接入
+pnpm platform:e2e        # 跨仓端到端：A 档 personal-roundtrip / multi-source / link-join，B 档 nat-core-offline；relay-roundtrip 预留（等 SaaS 服务端）
 pnpm dev-stack down relay-personal armadra-server-nat   # 停个人中转那组：点名只停自己起的
 ```
 
@@ -356,6 +356,8 @@ pnpm dev-stack down relay-personal armadra-server-nat   # 停个人中转那组�
 | `relay`              | 8101              | platform            | 多租户中继，本地走 HTTP，源地址形如 `<sourceId>.src.localhost`    |
 | `relay-personal`     | 8103              | personal            | 单人中转，不带数据库；自签 TLS 随 R2 落地，之前是 `--tls plain`   |
 | `armadra-server-nat` | 不发布            | platform / personal | 模拟在 NAT 后、只能外连的 core，健康由容器内自己的 `/health` 给出 |
+
+平台探针（`tools/probes/{personal-roundtrip,multi-source,link-join,nat-core-offline}.mjs`）不用上面这组容器：dev-stack 里 `relay-personal` 的对外地址是容器内端口，宿主机上的客户端按断言签发方对不上，所以探针用 `platform-lib.mjs` 自己 `docker run` 一份同镜像的个人中转（随机端口与名字、收尾只删自己的，`docker pause` 即用它冻住中继），NAT 后的 core 是宿主进程。需要 armadra-cloud 的本地检出与 Docker；中继镜像取 `ARMADRA_PROBE_RELAY_IMAGE`，缺省从检出 `docker build`。
 
 随机生成的 `PLATFORM_DB_PASSWORD`、`PERSONAL_RELAY_PASSWORD`、`PLATFORM_SEED_PASSWORD`、
 `ARMADRA_CLOUD_MASTER_KEY` 在首次 `up` 时补进 `tools/dev-stack/.data/dev.env`（旧文件会被补全，不会重写）。

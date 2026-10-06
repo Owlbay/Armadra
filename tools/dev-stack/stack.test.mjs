@@ -233,6 +233,23 @@ test("根 package.json 的 platform:* 脚本指向 dev-stack 的对应 profile",
   assert.ok(scripts["platform:e2e"]);
 });
 
+test("platform:e2e 的每一条都在 e2e 清单里、档位对得上；预留的没有清单条目", async () => {
+  const { PLAN, RESERVED } = await import("./platform-e2e.mjs");
+  const { loadManifest } = await import("../ci/e2e.mjs");
+  const entries = loadManifest().entries;
+  for (const step of PLAN)
+    for (const id of step.only) {
+      const entry = entries.find((one) => one.id === id);
+      assert.ok(entry, `${id} 不在 tools/ci/e2e.d/`);
+      assert.equal(entry.tier, step.tier, `${id} 的档位`);
+    }
+  for (const item of RESERVED)
+    assert.ok(
+      !entries.some((one) => one.id === item.id),
+      `${item.id} 预留着，不该有清单条目`,
+    );
+});
+
 test("密钥只从 .data/dev.env 来，compose 里没有写死的口令", () => {
   const text = readFileSync(COMPOSE_FILE, "utf8");
   for (const variable of [
