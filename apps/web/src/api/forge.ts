@@ -130,6 +130,11 @@ export async function resolveForge(remoteUrl: string): Promise<ForgeDetection> {
   return forgeDetectionSchema.parse(await rpc().resolve({ remoteUrl }));
 }
 
+/** 一个已知仓库（外部连接里记着的那个）→ 识别结果。 */
+export async function detectForge(repo: ForgeRepo): Promise<ForgeDetection> {
+  return forgeDetectionSchema.parse(await rpc().detect(repo));
+}
+
 export async function forgeConfigs(): Promise<ForgeConfig[]> {
   return forgeConfigListSchema.parse(await rpc().configs({})).configs;
 }

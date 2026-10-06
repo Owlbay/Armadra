@@ -1,7 +1,11 @@
 import { Badge } from "@/ui/badge";
 import { useT } from "@/app/preferences-store";
 import { openGithubPanel } from "./open";
-import { referenceTab, useGithubReferences } from "./references";
+import {
+  referenceTab,
+  referenceTarget,
+  useGithubReferences,
+} from "./references";
 import { FORGE_NAMES } from "../../api/forge";
 import { Button } from "@/ui/button";
 
@@ -33,7 +37,11 @@ export function GithubReferenceBadge({ nodeId }: { nodeId: string }) {
             aria-label={t("github.reference.open")}
             onClick={(event) => {
               event.stopPropagation();
-              openGithubPanel(referenceTab(reference), reference.number);
+              openGithubPanel(
+                referenceTab(reference),
+                reference.number,
+                referenceTarget(reference),
+              );
             }}
           >
             {reference.forge && reference.forge !== "github"

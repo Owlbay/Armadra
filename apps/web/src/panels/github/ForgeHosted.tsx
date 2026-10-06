@@ -139,6 +139,15 @@ export interface ForgeHostedProps {
   open: boolean;
   /** 检出与清理作用于这个工作空间的根仓库；没有工作空间时不给这两样。 */
   workspaceId?: string | null;
+  /**
+   * 要直接打开的条目（画布上的连接徽标点进来）。`reveal` 每点一次加一，同一条
+   * 点两次也会再定位过去。
+   */
+  focus?: {
+    readonly tab: ForgeTab;
+    readonly number: number;
+    readonly reveal: number;
+  } | null;
 }
 
 export function ForgeHosted({
@@ -147,13 +156,25 @@ export function ForgeHosted({
   canWrite,
   open,
   workspaceId = null,
+  focus = null,
 }: ForgeHostedProps) {
   const t = useT();
   const forge = detection.forge ?? "gitea";
   const repo = detection.repository;
-  const [tab, setTab] = React.useState<ForgeTab>("pulls");
+  const [tab, setTab] = React.useState<ForgeTab>(focus?.tab ?? "pulls");
   const [state, setState] = React.useState<ForgeListState>("open");
-  const [selected, setSelected] = React.useState<number | null>(null);
+  const [selected, setSelected] = React.useState<number | null>(
+    focus?.number ?? null,
+  );
+  const reveal = focus?.reveal ?? 0;
+  const focusTab = focus?.tab;
+  const focusNumber = focus?.number;
+  React.useEffect(() => {
+    if (reveal === 0 || focusTab === undefined || focusNumber === undefined)
+      return;
+    setTab(focusTab);
+    setSelected(focusNumber);
+  }, [reveal, focusTab, focusNumber]);
 
   return (
     <Tabs
@@ -610,6 +631,9 @@ export function PullBody({
   /** 确认框问的是哪一种：直接合并，或流水线通过后合并。 */
   const [confirm, setConfirm] = React.useState<"merge" | "auto" | null>(null);
   const train = options.data?.mergeTrain === true;
+  // GitLab 等流水线，Gitea 等提交状态检查：同一个动作，叫法不同。
+  const autoKey =
+    forge === "gitea" ? "forge.autoMergeChecks" : "forge.autoMerge";
   const canAutoMerge =
     options.data?.autoMerge === true && !pull.autoMerge && !pull.draft;
   const files = useQuery({
@@ -632,7 +656,7 @@ export function PullBody({
             ? "forge.merge.done"
             : result.train
               ? "forge.autoMerge.trainDone"
-              : "forge.autoMerge.done",
+              : `${autoKey}.done`,
         ),
       );
       void client.invalidateQueries({ queryKey: forgeKeys.all });
@@ -813,7 +837,7 @@ export function PullBody({
               disabled={merge.isPending || autoMerge.isPending || !pull.headSha}
               onClick={() => setConfirm("auto")}
             >
-              {t(train ? "forge.autoMerge.train" : "forge.autoMerge")}
+              {t(train ? "forge.autoMerge.train" : autoKey)}
             </Button>
           )}
           {pull.autoMerge && (
@@ -836,6 +860,7 @@ export function PullBody({
           pull={{
             ...pull,
             forge: forge === "gitlab" ? "gitlab" : "gitea",
+            baseRepository: repo,
           }}
           busy={merge.isPending}
         />
@@ -875,7 +900,7 @@ export function PullBody({
                 confirm === "auto"
                   ? train
                     ? "forge.autoMerge.confirmTrain"
-                    : "forge.autoMerge.confirm"
+                    : `${autoKey}.confirm`
                   : "forge.merge.confirm",
               )}
             </ResponsiveAlertDialogTitle>
@@ -908,7 +933,7 @@ export function PullBody({
                 confirm === "auto"
                   ? train
                     ? "forge.autoMerge.train"
-                    : "forge.autoMerge"
+                    : autoKey
                   : "forge.merge",
               )}
             </ResponsiveAlertDialogAction>

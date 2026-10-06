@@ -73,6 +73,7 @@ vi.mock("@/host/github-session", () => {
  */
 const forgeApi = vi.hoisted(() => ({
   resolveForge: vi.fn(),
+  detectForge: vi.fn(),
   forgeIssues: vi.fn(),
   forgeIssue: vi.fn(),
   setForgeIssueState: vi.fn(),
@@ -111,7 +112,8 @@ vi.mock("@/api/client", () => ({
 import { runtimeApi } from "@/api/client";
 import { RuntimeRequestError } from "@/api/request";
 import { GithubDrawer } from "./GithubDrawer";
-import { useGithubFocus } from "./open";
+import { openGithubPanel, useGithubFocus } from "./open";
+import { referenceTarget } from "./references";
 import { chooseOption, optionLabels } from "../../app/test-harness";
 
 const repository = {
@@ -321,7 +323,12 @@ beforeEach(() => {
   session.connect.mockClear();
   session.state = { status: "idle" };
   session.client = null;
-  useGithubFocus.setState({ tab: "issues", number: null, reveal: 0 });
+  useGithubFocus.setState({
+    tab: "issues",
+    number: null,
+    target: null,
+    reveal: 0,
+  });
   vi.mocked(runtimeApi.gitRepositoryWorktrees).mockReset();
   vi.mocked(runtimeApi.gitRepositoryWorktrees).mockResolvedValue([]);
   vi.mocked(runtimeApi.gitRepositoryOperate).mockClear();
@@ -1177,6 +1184,61 @@ describe("Gitea and GitLab remotes (§29)", () => {
       owner: "platform/web",
       name: "app",
     });
+  });
+
+  it("GitLab subgroup badge: opens that merge request in its own repository", async () => {
+    ready(client());
+    const nested = {
+      host: "git.example.test",
+      owner: "platform/web",
+      name: "app",
+    };
+    forgeApi.detectForge.mockResolvedValue(
+      detection("gitlab", { repository: nested }),
+    );
+    forgeApi.forgePulls.mockResolvedValue({ items: [], nextCursor: null });
+    forgeApi.forgePull.mockResolvedValue(forgePull(31, "Subgroup change"));
+    forgeApi.forgePullFiles.mockResolvedValue([]);
+    forgeApi.forgePullChecks.mockResolvedValue({
+      headSha: MR_SHA,
+      rollup: "none",
+      checks: [],
+    });
+    forgeApi.forgeMergeOptions.mockResolvedValue({
+      methods: ["merge"],
+      autoMerge: false,
+      mergeTrain: false,
+    });
+    const target = referenceTarget(
+      githubExternalReference({
+        forge: "gitlab",
+        repository: { ...nested, apiBase: "https://git.example.test/api/v4" },
+        kind: GithubReferenceKind.PULL_REQUEST,
+        number: 31n,
+      }),
+    );
+    expect(target).toEqual({ forge: "gitlab", ...nested });
+    openGithubPanel("pulls", 31n, target);
+    expect(store.setPanel).toHaveBeenCalledWith("github", "drawer");
+    renderDrawer();
+    expect(await screen.findByText("Subgroup change")).toBeTruthy();
+    expect(forgeApi.detectForge).toHaveBeenCalledWith(nested);
+    expect(forgeApi.resolveForge).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(forgeApi.forgePull).toHaveBeenCalledWith(nested, 31),
+    );
+    // 直接是详情，不是列表。
+    expect(forgeApi.forgePulls).not.toHaveBeenCalled();
+    // GitHub 的连接不带仓库目标。
+    expect(
+      referenceTarget(
+        githubExternalReference({
+          forge: "github",
+          repository,
+          number: 1n,
+        }),
+      ),
+    ).toBeNull();
   });
 
   it("GitLab: a token missing a scope is named as such", async () => {

@@ -7,6 +7,7 @@ import {
   groupIssues,
   mergeReasonKey,
   pollInterval,
+  remoteForRepository,
   suggestedHeadRef,
 } from "./model";
 import {
@@ -112,5 +113,73 @@ describe("failures and reason codes", () => {
   it("explains only the merge codes the Host documents", () => {
     expect(mergeReasonKey("HEAD_MOVED")).toBe("github.mergeReason.HEAD_MOVED");
     expect(mergeReasonKey("SOMETHING_ELSE")).toBeNull();
+  });
+});
+
+describe("remoteForRepository", () => {
+  const repo = { host: "git.example.test", owner: "acme", name: "app" };
+  const remote = (name: string, fetchUrl: string) => ({ name, fetchUrl });
+
+  it("picks the remote whose address is the base repository, whatever its name", () => {
+    expect(
+      remoteForRepository(
+        [
+          remote("origin", "git@git.example.test:me/app.git"),
+          remote("upstream", "https://git.example.test/acme/app.git"),
+        ],
+        repo,
+      ),
+    ).toBe("upstream");
+    expect(
+      remoteForRepository(
+        [
+          remote("fork", "https://git.example.test/me/app"),
+          remote("base", "ssh://git@GIT.example.test:2222/Acme/App.git"),
+        ],
+        repo,
+      ),
+    ).toBe("base");
+  });
+
+  it("matches a GitLab subgroup and a site prefix, preferring the exact path", () => {
+    const nested = {
+      host: "git.example.test",
+      owner: "group/sub",
+      name: "app",
+    };
+    expect(
+      remoteForRepository(
+        [
+          remote(
+            "prefixed",
+            "https://git.example.test/gitlab/group/sub/app.git",
+          ),
+          remote("exact", "git@git.example.test:group/sub/app.git"),
+        ],
+        nested,
+      ),
+    ).toBe("exact");
+    expect(
+      remoteForRepository(
+        [remote("prefixed", "https://git.example.test/gitlab/group/sub/app")],
+        nested,
+      ),
+    ).toBe("prefixed");
+  });
+
+  it("answers null for another host, another path or an unreadable address", () => {
+    expect(
+      remoteForRepository(
+        [
+          remote("a", "https://other.example.test/acme/app.git"),
+          remote("b", "git@git.example.test:acme/other.git"),
+          remote("c", "not a url"),
+          remote("d", "https://git.example.test/%E0%A4%A"),
+          // 非 http(s) 地址不认站点前缀。
+          remote("e", "ssh://git@git.example.test/x/acme/app.git"),
+        ],
+        repo,
+      ),
+    ).toBeNull();
   });
 });
