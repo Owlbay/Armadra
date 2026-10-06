@@ -18,6 +18,31 @@ import type {
   SourceDescriptor,
   Via,
 } from "./types";
+import type { SocketEnvironment } from "./managed-socket";
+
+/** 可手动触发 `online` / 可见性的页面环境。 */
+function fakeEnvironment() {
+  const listeners = new Map<string, Set<() => void>>();
+  let visible = true;
+  const environment: SocketEnvironment = {
+    addEventListener(type, listener) {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type)!.add(listener);
+    },
+    removeEventListener(type, listener) {
+      listeners.get(type)?.delete(listener);
+    },
+    visible: () => visible,
+  };
+  return {
+    environment,
+    fire(type: "online" | "visibilitychange", nextVisible = true) {
+      visible = nextVisible;
+      for (const listener of [...(listeners.get(type) ?? [])]) listener();
+    },
+    count: (type: string) => listeners.get(type)?.size ?? 0,
+  };
+}
 
 /**
  * 一个源的连接（客户端包 §1.4）：两源并存、401 续期一次、4401 换票重连、4403
@@ -50,7 +75,7 @@ let calls: Call[];
 /** 每个来源的 core：答 hello 的 sourceId、某条路径要不要 401。 */
 let cores: Record<
   string,
-  { sourceId: string; reject?: (call: Call) => boolean }
+  { sourceId: string; reject?: (call: Call) => boolean; down?: boolean }
 >;
 
 const hello = (sourceId: string) => ({
@@ -78,7 +103,9 @@ const fakeFetch: typeof fetch = async (input, init) => {
   const core =
     cores[origin] ??
     Object.entries(cores).find(([base]) => url.startsWith(base))?.[1];
-  if (!core) throw new TypeError("refused");
+  if (!core || core.down) throw new TypeError("refused");
+  if (path === "/api/identity/hello")
+    return new Response(JSON.stringify({ hostId: core.sourceId }));
   if (core.reject?.(call))
     return new Response(JSON.stringify({ code: "unauthenticated" }), {
       status: 401,
@@ -396,5 +423,137 @@ describe("本机源的连接", () => {
       `${localSource.httpBase}/api/settings`,
       undefined,
     );
+  });
+});
+
+describe("经中继的源（A3-4）", () => {
+  const relayedB = descriptor(B, {
+    kind: "relayed",
+    relayOrigin: "https://relay.example",
+    cloudIssuer: "https://relay.example",
+  });
+
+  it("取访问时中继答源不在线：waitingForSource（不是 offline），再 connect 就绪", async () => {
+    let offline = true;
+    const provider = credentials({ [B]: { relayed: RELAY_B } });
+    provider.getAccess = vi.fn(async (id: string, via: Via) => {
+      if (offline)
+        throw Object.assign(new Error("offline"), { code: "source_offline" });
+      return {
+        accessToken: "b-1",
+        expiresAtMs: 0,
+        httpBase: RELAY_B,
+        wsBase: RELAY_B.replace(/^https/, "wss"),
+        relayToken: via === "relayed" ? "RT" : "",
+      };
+    });
+    const b = createRemoteConnection(
+      { ...relayedB, baseUrl: "" },
+      { ...options(provider), environment: null },
+    );
+    await b.connect();
+    expect(b.status).toMatchObject({
+      state: "waitingForSource",
+      lastError: { code: "source_offline" },
+    });
+    offline = false;
+    await b.connect();
+    expect(b.status).toMatchObject({ state: "ready", via: "relayed" });
+  });
+
+  it("revoke：关流、丢访问，unauthorized 带原因；再 connect 才重连", async () => {
+    const provider = credentials({ [B]: { relayed: RELAY_B } });
+    const b = createRemoteConnection(
+      { ...relayedB, baseUrl: "" },
+      { ...options(provider), environment: null },
+    );
+    await b.connect();
+    const socket = b.socket("/api/ws", { environment: null });
+    b.revoke({ code: "source_revoked", message: "" });
+    expect(socket.state).toBe("closed");
+    expect(b.status).toMatchObject({
+      state: "unauthorized",
+      lastError: { code: "source_revoked" },
+    });
+    expect(provider.invalidate).toHaveBeenCalledWith(B);
+    await b.connect();
+    expect(b.status.state).toBe("ready");
+  });
+
+  it("D27：走中继时 online / 回到前台 / 流退避重新探直连，通了换到直连并重连流", async () => {
+    cores[BASE_B]!.down = true;
+    const env = fakeEnvironment();
+    let clock = 1_000_000;
+    const provider = credentials({
+      [B]: { relayed: RELAY_B, direct: BASE_B },
+    });
+    const b = createRemoteConnection(relayedB, {
+      ...options(provider),
+      environment: env.environment,
+      now: () => clock,
+    });
+    await b.connect();
+    expect(b.status).toMatchObject({ state: "ready", via: "relayed" });
+    expect(env.count("online")).toBe(1);
+    const socket = b.socket("/api/ws", { environment: null });
+    await flush();
+    FakeSocket.made.at(-1)!.open();
+    expect(socket.state).toBe("open");
+
+    // 直连还不通：探了也留在中继。
+    env.fire("online");
+    await flush();
+    await flush();
+    expect(b.status.via).toBe("relayed");
+
+    // 间隔之内不再探。
+    cores[BASE_B]!.down = false;
+    env.fire("visibilitychange");
+    await flush();
+    expect(b.status.via).toBe("relayed");
+
+    clock += 6_000;
+    env.fire("visibilitychange");
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(b.status).toMatchObject({ state: "ready", via: "direct" });
+    expect(b.source.httpBase).toBe(BASE_B);
+    await flush();
+    const reopened = FakeSocket.made.at(-1)!;
+    expect(reopened.url).toBe("wss://b.example:8443/api/ws");
+    expect(
+      (reopened.protocols as string[]).some((p) =>
+        p.startsWith(RELAY_PROTOCOL),
+      ),
+    ).toBe(false);
+
+    b.disconnect();
+    expect(env.count("online")).toBe(0);
+  });
+
+  it("流在退避时也探一次直连", async () => {
+    cores[BASE_B]!.down = true;
+    const provider = credentials({
+      [B]: { relayed: RELAY_B, direct: BASE_B },
+    });
+    let clock = 1_000_000;
+    const b = createRemoteConnection(relayedB, {
+      ...options(provider),
+      environment: null,
+      now: () => clock,
+    });
+    await b.connect();
+    const socket = b.socket("/api/ws", {
+      environment: null,
+      setTimeout: () => 0,
+      clearTimeout: () => undefined,
+    });
+    await flush();
+    FakeSocket.made.at(-1)!.open();
+    cores[BASE_B]!.down = false;
+    clock += 6_000;
+    FakeSocket.made.at(-1)!.drop(1006);
+    for (let i = 0; i < 6; i += 1) await flush();
+    expect(socket.state).not.toBe("closed");
+    expect(b.status.via).toBe("direct");
   });
 });
