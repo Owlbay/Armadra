@@ -2518,7 +2518,7 @@
 - **页面**：`api/github.ts` 的 `GithubApi` 经 `githubApiFor(rpc)`（`runtimeApi.openGithub(workspaceId, source?)`）走 `clientFor(source)`；`api/forge.ts` 的函数经 `currentClient().forge`。
 - **契约 §41**：§41.1、§41.2 生成块与说明；§3.3 错误码表改写；§5、§29 加指向。
 
-实测（macOS arm64，基于 main 8d… 合入后的 origin/main，protocol minor 11）：
+实测（macOS arm64，基于最新 origin/main，protocol minor 11）：
 
 - `pnpm check`：除 `notices:check` 外全过（lint 0 error；`notices:check` 要装依赖的离线仓库，本机该 worktree 没有，本包未动依赖，未跑）。
 - `pnpm libs:build && pnpm --filter @armadra/desktop test`：424 个文件通过、11 跳过（5047 过 / 74 跳过），脚本 72 过 0 败。新增 `core/contract/parity-forge.test.ts`（16 条：路由表原 handler、旧路径、procedure 三者逐字节相等，含 GitLab 多级子组、DELETE 查询串、令牌与地址凭据不回显、远端 401/403/429 的码）与 `parity-github.test.ts`（12 条：旧路径与 procedure 经真会话对偶，含只读会话写被拒、别的工作空间被拒、限流原话不外传、无会话 401）。
