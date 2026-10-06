@@ -366,6 +366,7 @@ export const WORKSPACE_EVENT_TYPES = [
   "schedule.failed",
   "schedule.attention",
   "resources.threshold",
+  "cloud.tunnel",
 ] as const satisfies readonly WorkspaceEventType[];
 
 export interface CoreEvents {
