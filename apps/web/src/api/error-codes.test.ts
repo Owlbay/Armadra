@@ -89,8 +89,8 @@ function scanCore<T>(scan: (source: string, file: string) => T[]): T[] {
 }
 
 /**
- * 大写码的存量，只减不增：身份域与 GitHub 面的 gRPC 风格拼法，在 `identity` /
- * `forge` / `github` 域迁移时改成 snake_case 并从这里划掉。
+ * 大写码的存量，只减不增：身份域的 gRPC 风格拼法，在 `identity` 域迁移时改成
+ * snake_case 并从这里划掉。GitHub 面（契约 §41.1）已换成 snake_case。
  */
 const LEGACY_UPPER_CODES = new Set([
   "CONFLICT",
@@ -99,10 +99,7 @@ const LEGACY_UPPER_CODES = new Set([
   "NOT_FOUND",
   "NOT_IMPLEMENTED",
   "PERMISSION_DENIED",
-  "RESOURCE_EXHAUSTED",
   "UNAUTHENTICATED",
-  "UNKNOWN_OUTCOME",
-  "UNSUPPORTED",
 ]);
 
 describe("错误码注册表", () => {

@@ -27,7 +27,6 @@ export const errors: MessageModule = {
     "error.unsupportedOnRemote":
       "这个操作只能在 Armadra 所在的机器上执行，当前工作区在另一台。",
     "error.unauthenticated": "登录已失效，请重新连接账户",
-    "error.permissionDenied": "账户没有这项权限",
     "error.rateLimited": "请求过于频繁，请稍后重试",
     "error.unknownOutcome": "结果未知：请重新加载后确认是否已生效",
     "error.credentialsInvalid": "账号或口令不正确",
@@ -84,7 +83,6 @@ export const errors: MessageModule = {
     "error.unsupportedOnRemote":
       "This runs only on the machine Armadra is on; this workspace is on another.",
     "error.unauthenticated": "Your sign-in expired — reconnect the account",
-    "error.permissionDenied": "That account lacks this permission",
     "error.rateLimited": "Too many requests — try again shortly",
     "error.unknownOutcome":
       "Outcome unknown — reload to see whether it applied",

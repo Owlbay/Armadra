@@ -336,6 +336,28 @@ function toFetchRequest(core: CoreRequest): Request {
   });
 }
 
+/**
+ * 上游把 `GET` 之外的入参读自体：旧路径里带查询串的 `DELETE`（`?expectedRevision=`、
+ * `?headSha=`）读不到。体是空的、查询串不空时，把查询串当作体（值都是字符串）。
+ */
+function queryAsBody(core: CoreRequest): CoreRequest {
+  if (
+    core.method !== "DELETE" ||
+    core.body.byteLength > 0 ||
+    core.query.size === 0
+  ) {
+    return core;
+  }
+  const fields: Record<string, string> = {};
+  for (const [key, value] of core.query) fields[key] = value;
+  const body = Buffer.from(JSON.stringify(fields), "utf8");
+  return {
+    ...core,
+    body,
+    json: <T>() => JSON.parse(body.toString("utf8")) as T,
+  };
+}
+
 /** 路由门要看的那次请求：带旧路径的拿旧路径与旧的体去问，否则是一个不落在任何表规则上的名字。 */
 function gateRequest(
   core: CoreRequest,
@@ -948,7 +970,7 @@ export function installContract(
     ) {
       return undefined;
     }
-    const result = await openapi.handle(toFetchRequest(core), {
+    const result = await openapi.handle(toFetchRequest(queryAsBody(core)), {
       context: { request: core, requestId: randomUUID(), legacy: true },
     });
     if (!result.matched) return undefined;

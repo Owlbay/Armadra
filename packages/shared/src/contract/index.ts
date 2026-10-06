@@ -9,7 +9,9 @@ import { agents } from "./agents.js";
 import { boards } from "./boards.js";
 import { identity } from "./cloud.js";
 import { files } from "./files.js";
+import { forge } from "./forge.js";
 import { git } from "./git.js";
+import { github } from "./github.js";
 import { gitRepository } from "./git-repository.js";
 import type { ProcedureMeta } from "./meta.js";
 import { settings } from "./settings.js";
@@ -36,6 +38,8 @@ export const contract = {
   boards,
   git,
   agents,
+  forge,
+  github,
   gitRepository,
 };
 

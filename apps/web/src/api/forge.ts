@@ -21,13 +21,8 @@ import {
 } from "@armadra/shared";
 import { z } from "zod";
 
-import {
-  RuntimeConnectionError,
-  RuntimeRequestError,
-  json,
-  query,
-  request,
-} from "./request";
+import { currentClient } from "./client";
+import { RuntimeConnectionError, RuntimeRequestError } from "./request";
 
 /**
  * 托管平台面（契约 §29）：Gitea / Forgejo 与 GitLab 的 issue、PR（GitLab 的
@@ -35,6 +30,9 @@ import {
  * `resolve` 认出它是 GitHub，然后把面板交还给那一面。
  *
  * 令牌只在 `putForgeConfig` 里出去一次；任何答复都不带它。
+ *
+ * 调用经 RPC 客户端（`client.forge.*`，契约 §41.2），发往当前源；答案仍过页面自己
+ * 的 schema。
  */
 
 export type {
@@ -107,39 +105,36 @@ export function forgeFailureKey(error: unknown): string {
   return `forge.failure.${forgeFailure(error)}`;
 }
 
-/** GitLab 多级子组的 owner（`group/sub`）整条编码成一段：路由按段匹配。 */
-export function repoPath(repo: ForgeRepo): string {
-  return `/api/forge/repos/${query(repo.host)}/${query(repo.owner)}/${query(repo.name)}`;
+/**
+ * 配置行的键：`<host>` 或 `<host>/<owner>/<name>` → 一对 procedure 的入参。owner
+ * 可以是多级子组（`<host>/group/sub/name`）：首段是主机、末段是名字，中间整条
+ * 作 owner（线上编码成路径的一段，契约 §41.2）。
+ */
+export function configTarget(
+  repoKey: string,
+): { host: string } | { host: string; owner: string; name: string } {
+  const parts = repoKey.split("/");
+  if (parts.length < 3) return { host: parts.join("/") };
+  return {
+    host: parts[0] ?? "",
+    owner: parts.slice(1, -1).join("/"),
+    name: parts[parts.length - 1] ?? "",
+  };
 }
 
-/**
- * 配置行的键：`<host>` 或 `<host>/<owner>/<name>` → 路径。owner 可以是多级子组
- * （`<host>/group/sub/name`）：首段是主机、末段是名字，中间整条作 owner 编码成一段。
- */
-export function configPath(repoKey: string): string {
-  const parts = repoKey.split("/");
-  if (parts.length < 3) {
-    return `/api/forge/configs/${parts.map(query).join("/")}`;
-  }
-  const host = parts[0] ?? "";
-  const name = parts[parts.length - 1] ?? "";
-  const owner = parts.slice(1, -1).join("/");
-  return `/api/forge/configs/${query(host)}/${query(owner)}/${query(name)}`;
-}
+/** 当前源的 `forge.*`（契约 §41.2）；换了源，后面的调用就发往新的源。 */
+const rpc = () => currentClient().forge;
 
 /** 一个 git 远端地址 → 识别结果。地址在请求体里：它可能带凭据。 */
-export function resolveForge(remoteUrl: string): Promise<ForgeDetection> {
-  return request("/api/forge/resolve", forgeDetectionSchema, {
-    method: "POST",
-    ...json({ remoteUrl }),
-  });
+export async function resolveForge(remoteUrl: string): Promise<ForgeDetection> {
+  return forgeDetectionSchema.parse(await rpc().resolve({ remoteUrl }));
 }
 
 export async function forgeConfigs(): Promise<ForgeConfig[]> {
-  return (await request("/api/forge/configs", forgeConfigListSchema)).configs;
+  return forgeConfigListSchema.parse(await rpc().configs({})).configs;
 }
 
-export function putForgeConfig(
+export async function putForgeConfig(
   repoKey: string,
   input: {
     forge: ConfigurableForge;
@@ -148,71 +143,65 @@ export function putForgeConfig(
     expectedRevision: number;
   },
 ): Promise<ForgeConfig> {
-  return request(configPath(repoKey), forgeConfigSchema, {
-    method: "PUT",
-    ...json(input),
-  });
+  const target = configTarget(repoKey);
+  return forgeConfigSchema.parse(
+    "owner" in target
+      ? await rpc().putRepoConfig({ ...target, ...input })
+      : await rpc().putHostConfig({ ...target, ...input }),
+  );
 }
 
 export async function deleteForgeConfig(
   repoKey: string,
   expectedRevision: number,
 ): Promise<void> {
-  await request(
-    `${configPath(repoKey)}?expectedRevision=${expectedRevision}`,
-    z.object({ removed: z.boolean() }),
-    { method: "DELETE" },
-  );
+  const target = configTarget(repoKey);
+  if ("owner" in target) {
+    await rpc().removeRepoConfig({ ...target, expectedRevision });
+  } else {
+    await rpc().removeHostConfig({ ...target, expectedRevision });
+  }
 }
 
-function listQuery(state: ForgeListState, cursor: string | null): string {
-  const params = new URLSearchParams({ state });
-  if (cursor) params.set("cursor", cursor);
-  return params.toString();
-}
-
-export function forgeIssues(
+export async function forgeIssues(
   repo: ForgeRepo,
   state: ForgeListState,
   cursor: string | null = null,
 ) {
-  return request(
-    `${repoPath(repo)}/issues?${listQuery(state, cursor)}`,
-    forgeIssuePageSchema,
+  return forgeIssuePageSchema.parse(
+    await rpc().issues({ ...repo, state, ...(cursor ? { cursor } : {}) }),
   );
 }
 
-export function forgeIssue(repo: ForgeRepo, number: number) {
-  return request(`${repoPath(repo)}/issues/${number}`, forgeIssueSchema);
+export async function forgeIssue(repo: ForgeRepo, number: number) {
+  return forgeIssueSchema.parse(await rpc().issue({ ...repo, number }));
 }
 
-export function setForgeIssueState(
+export async function setForgeIssueState(
   repo: ForgeRepo,
   number: number,
   state: "open" | "closed",
 ) {
-  return request(`${repoPath(repo)}/issues/${number}`, forgeIssueSchema, {
-    method: "PATCH",
-    ...json({ state }),
-  });
+  return forgeIssueSchema.parse(
+    await rpc().setIssueState({ ...repo, number, state }),
+  );
 }
 
-export function forgePulls(
+export async function forgePulls(
   repo: ForgeRepo,
   state: ForgeListState,
   cursor: string | null = null,
 ) {
-  return request(
-    `${repoPath(repo)}/pulls?${listQuery(state, cursor)}`,
-    forgePullPageSchema,
+  return forgePullPageSchema.parse(
+    await rpc().pulls({ ...repo, state, ...(cursor ? { cursor } : {}) }),
   );
 }
 
-export function forgePull(repo: ForgeRepo, number: number) {
-  return request(`${repoPath(repo)}/pulls/${number}`, forgePullSchema);
+export async function forgePull(repo: ForgeRepo, number: number) {
+  return forgePullSchema.parse(await rpc().pull({ ...repo, number }));
 }
 
-export function createForgePull(
+export async function createForgePull(
   repo: ForgeRepo,
   input: {
     title: string;
@@ -222,50 +211,45 @@ export function createForgePull(
     draft: boolean;
   },
 ) {
-  return request(`${repoPath(repo)}/pulls`, forgePullSchema, {
-    method: "POST",
-    ...json(input),
-  });
+  return forgePullSchema.parse(await rpc().createPull({ ...repo, ...input }));
 }
 
 export async function forgePullFiles(repo: ForgeRepo, number: number) {
-  return (
-    await request(`${repoPath(repo)}/pulls/${number}/files`, forgeFilesSchema)
-  ).files;
+  return forgeFilesSchema.parse(await rpc().pullFiles({ ...repo, number }))
+    .files;
 }
 
-export function forgePullChecks(repo: ForgeRepo, number: number) {
-  return request(`${repoPath(repo)}/pulls/${number}/checks`, forgeChecksSchema);
+export async function forgePullChecks(repo: ForgeRepo, number: number) {
+  return forgeChecksSchema.parse(await rpc().pullChecks({ ...repo, number }));
 }
 
-export function mergeForgePull(
+export async function mergeForgePull(
   repo: ForgeRepo,
   number: number,
   input: { method: ForgeMergeMethod; headSha: string },
 ) {
-  return request(`${repoPath(repo)}/pulls/${number}/merge`, forgeMergedSchema, {
-    method: "POST",
-    ...json(input),
-  });
+  return forgeMergedSchema.parse(
+    await rpc().merge({ ...repo, number, ...input }),
+  );
 }
 
 export type ForgeMergeOptions = z.infer<typeof forgeMergeOptionsSchema>;
 
 /** 这个仓库现在能用的合并方式与自动合并（GitLab 按项目设置，§29.6）。 */
-export function forgeMergeOptions(repo: ForgeRepo): Promise<ForgeMergeOptions> {
-  return request(`${repoPath(repo)}/merge-options`, forgeMergeOptionsSchema);
+export async function forgeMergeOptions(
+  repo: ForgeRepo,
+): Promise<ForgeMergeOptions> {
+  return forgeMergeOptionsSchema.parse(await rpc().mergeOptions(repo));
 }
 
 /** 流水线通过后合并（GitLab）；项目开了合并列车时排进列车。 */
-export function autoMergeForgePull(
+export async function autoMergeForgePull(
   repo: ForgeRepo,
   number: number,
   input: { method: ForgeMergeMethod; headSha: string },
 ) {
-  return request(
-    `${repoPath(repo)}/pulls/${number}/auto-merge`,
-    forgeAutoMergeSchema,
-    { method: "POST", ...json(input) },
+  return forgeAutoMergeSchema.parse(
+    await rpc().autoMerge({ ...repo, number, ...input }),
   );
 }
 
@@ -273,26 +257,20 @@ export async function cancelAutoMergeForgePull(
   repo: ForgeRepo,
   number: number,
 ): Promise<void> {
-  await request(
-    `${repoPath(repo)}/pulls/${number}/auto-merge`,
-    z.object({ cancelled: z.boolean() }),
-    { method: "DELETE" },
-  );
+  await rpc().cancelAutoMerge({ ...repo, number });
 }
 
 /**
  * 合并后删源分支（Gitea / GitLab）：带页面上显示的 head；分支动过、受保护、
  * 来自 fork 或还没合并时答 `{ deleted: false, reasonCode }` 而不是照删。
  */
-export function deleteForgeBranch(
+export async function deleteForgeBranch(
   repo: ForgeRepo,
   number: number,
   headSha: string,
 ) {
-  return request(
-    `${repoPath(repo)}/pulls/${number}/branch?${new URLSearchParams({ headSha })}`,
-    forgeBranchDeletionSchema,
-    { method: "DELETE" },
+  return forgeBranchDeletionSchema.parse(
+    await rpc().deleteBranch({ ...repo, number, headSha }),
   );
 }
 

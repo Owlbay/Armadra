@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
-import { GithubApi, type GithubCredentialStatus } from "../api/github";
+import { runtimeApi } from "../api/client";
+import type { GithubApi, GithubCredentialStatus } from "../api/github";
 import {
   type IdentityHello,
   type IdentitySession,
@@ -135,11 +136,11 @@ export const useGithubSession = create<GithubSessionStore>((set, get) => {
         set({ state: { status: "blocked", reason: "noPermission" } });
         return;
       }
-      // 调用面打的是 core 的 `/api/github/*`；会话决定的是**能不能打开这块
+      // 调用面打的是 core 的 `github.*` procedure；会话决定的是**能不能打开这块
       // 面板**。
       let github: GithubApi;
       try {
-        github = new GithubApi({ workspaceId });
+        github = runtimeApi.openGithub(workspaceId);
       } catch {
         set({ state: { status: "blocked", reason: "noPermission" } });
         return;
