@@ -2592,3 +2592,33 @@
 - `scope` 一列沿用路由表给 `/api/identity/` 的「管别人的」那一档（如 passkey 的写是 `identity:manage`），实际判定在身份域：门面按旧路径问路由门，`SELF_GUARDED` 对成员放行。路由表为清单补了会话、设备、锁定、账号、凭据、邀请、组与共享几行。
 - Cookie 会话上 procedure 一律 `POST`，读也要 CSRF（旧路径读不要）；页面的 Cookie 凭据本来就先换一枚再发。
 - `GatewaySection` 的「取消在路上的那一次」靠 gateway-e2e 覆盖，没有单独的组件用例。
+
+## E3-8b 工程规范化：push、mail、credentials、gateway、diagnostics 五个域迁到契约（契约 §43.4–§43.8，E3-8 第二部分）
+
+规格：[工程规范化包](../design/platform/engineering-packages.md) §3（E3-8）；契约 §43。第一部分（acp、workflows、coordinator）见上一节，本包收尾 E3-8。
+
+做了什么：
+
+- **契约**（`packages/shared/src/contract/{push,mail,credentials,gateway,diagnostics}.ts`）：`push.*` 6 条（配置、设备列表、登记、改偏好、撤销、测试通知）、`mail.*` 3 条（状态、发邀请、发重置链接）、`credentials.*` 4 条、`gateway.*` 4 条（状态、改配置、铸票，加匿名的短码换票）、`diagnostics.*` 2 条。`since` 1.14，协议 minor 13 → 14（E3-7 的 13 已先合入）。出参复用页面那套 `api/*` schema，只有凭据的条目与列表另写一份不带透传的（原来的 `z.looseObject` 有未知键的位置，装得下东西；契约的守卫也不许）。入参只校形状，取值仍在域里判。
+- **scope 进 meta**：逐条等于 `route-scopes.ts` 给旧路径的清单（对偶测试逐条断言）：push 与 diagnostics 是 `canvas:read`，mail 的 `status` 是 `identity:read`、发送是 `identity:manage`，凭据与 Gateway 读 `settings:read`、写 `settings:write`。push、mail、diagnostics 在 `SELF_GUARDED` 里：门放行，判定（匿名 401、别人的设备 404、本组 admin、限流）在域里，和迁移前一样。
+- **core**：每个域把动作收成一份操作（`push/routes.ts` 的 `operations`、`mail/routes.ts`、`agent/credentials/routes.ts`、`gateway/routes.ts` 的 `gatewayOperations`、`diagnostics/routes.ts`），旧 handler 与 `registerProcedures` 调同一份，拒绝都是 `CoreFailure`。`CredentialError` 改为 `CoreFailure` 的子类；密钥后端抛的别的错误一律换成**不带原因**的固定拒绝再往外走（异常消息可能带路径，门面会把它写进日志）。
+- **门面补两处**（`http/rpc.ts`）：① 限流的 429 带 `details.retryAfterSeconds` 时，RPC 与旧路径的响应都给 `Retry-After` 头（`http/errors.ts` 加 `rateLimited` 与 `failureResult`；E3-7 的身份域本来就写 `details.retryAfterSeconds`，它的 procedure 现在也带这个头，`parity-identity.test.ts` 里那条「procedure 没有头」的断言相应改为有头）；② 旧路径只由**登记了实现**的 procedure 接管——匿名面的 procedure 只登记形状不登记实现，不再让门面把它的旧路径答成 501。
+- **匿名面**：配对短码换票（§24.2）登记成 `gateway.exchangePairingCode`（`scope: null`，与 `identity.cloud.login` 同一种做法），**RPC 路径不实现**（501，不在 `system.hello` 的表里），旧路径仍由路由表那条 handler 答（Gateway 准入放行、限流与档位在域里判）。`contract.test.ts` 的匿名清单与路径正则相应加这一条。`GET /ca.crt` 等 Gateway 的 REST 匿名面不是 core 的 JSON 面，不在契约里。
+- **页面**：新增 `api/push.ts`；`api/credentials.ts`、`api/gateway.ts`、`api/mail.ts`、`diagnostics/report.ts` 经 `currentClient()`，导出的函数签名不变，答案仍过页面自己的 schema；`push/service-worker.ts`、`mobile/PushPermission.tsx`、`mobile/push-rotation.ts` 改调 `pushApi`。换票 `exchangePairingCode` 不走 RPC 客户端（还没有会话）。
+- **契约 §43**：§43.4–§43.8 生成块与说明，§17、§19、§20、§28、§30 加指向；新登记进错误码注册表的码：`invalid_origin` 与七个 `credential_*`（`error-codes.test.ts` 的「还在被用」扫描加上 `CredentialError`、`GatewayError` 两种写法，`coreError` 字面量下限从 50 放到 10——迁走一批之后本来就少了）。
+
+实测（macOS arm64，基于合并了 E3-7 的最新 origin/main，protocol minor 14）：
+
+- `pnpm check` 通过（含 `contract:check`、lint 0 error、三处 typecheck、`repo:check`、notices）。
+- `pnpm libs:build && pnpm --filter @armadra/desktop test`：432 个文件通过、11 跳过（5172 过 / 74 跳过），脚本测试 72 过。新增 `core/contract/parity-{push,mail,credentials,gateway,diagnostics}.test.ts`（14 / 10 / 12 / 17 / 10 条）与共用件 `parity-kit.ts`：路由表原 handler、旧路径、procedure 三者逐字节相等（含 201 / 204 / 202 的状态差、404、409、400、401、429 与 `Retry-After`）。**安全面**：凭据——每个答案、日志与审计事件里都没有值（成功的、被拒的、后端坏了的，连异常消息里夹着值也没有），成员读写改删一律 403 且密钥后端的值原样没动；Gateway——成员 403、配对票不进审计与日志、取值错时设置没动、壳托管时 409、换票的限流与档位；邮件——本组 admin / 跨组 / 匿名、被拒时信箱里一封没多、令牌与地址不进答案与审计；推送——成员改不了也撤不掉别人的设备（与不存在同一句 404，设备原样在）、答案里没有令牌与密钥；页面错误上报——收下的错误先剥离（家目录与密钥不外泄）、关着不看请求体。
+- `pnpm --filter @armadra/web test`：405 个文件、3770 条通过；`typecheck` 通过。新增 `api/client.platform.test.ts`（11 条，五个域的页面一侧：procedure 名、体、答案、拒绝码、凭据值只出现在请求体）；`mobile/PushPermission.test.tsx`、`push-rotation.test.ts`、`HostPage.test.tsx` 的假 core 改成答 procedure。`@armadra/server`（98 过 4 跳过）、`@armadra/shared`（372 过）测试通过。
+- A 档（先 build web / desktop / server / push-relay）：`node tools/ci/e2e.mjs --tier a --only push-e2e,gateway-e2e,server-e2e` 三项通过（gateway-e2e 34 s、push-e2e 3 s、server-e2e 87 s）；`node tools/probes/credentials-e2e.mjs` 通过（假令牌、临时 HOME 与数据目录、`file-encrypted` 后端，值不在画面、日志与列表里）。
+
+没做 / 偏离：
+
+- 旧路径的体多了一个键：限流的 429（邮件、页面错误上报）现在带 `details.retryAfterSeconds`（从前只有头）；页面错误上报的头名从 `Retry-After` 统一成小写 `retry-after`（HTTP 头不分大小写）。
+- 页面错误上报的旧路径成功状态一律 `202`（`{ accepted: false }` 从前是 `200`）：契约的 `successStatus` 是静态的；procedure 恒为 `200`。页面不看状态。
+- 凭据的 `500 internal` 原话从英文句子换成门面统一的那一句；其余码、状态与原话不变。
+- 形状错（类型不对、Gateway 配置里多出来的键）经旧路径与 procedure 由入参校验先答 `bad_request`（带 `details.issues`），与迁移前域里那句原话不同，码与状态不变（与 E3-1–E3-8a 同）；缺字段与取值错仍由域答原话。
+- Gateway 的配对短码换票成功一路（需要真票）在对偶测试里没覆盖，由 `gateway.integration.test.ts` 与 `gateway-e2e` 覆盖；对偶测试覆盖它的 404 / 403 / 429 / 400 与「不经 RPC」。
+- 这五个域没有订阅；`gateway-e2e` 与 `push-e2e` 只证明旧路径经门面接管之后行为不变，没有改它们的断言。

@@ -1234,7 +1234,8 @@ describe("拒绝路径：两条路都拒", () => {
       (rpc.body as { details: { retryAfterSeconds: number } }).details
         .retryAfterSeconds,
     ).toBeGreaterThanOrEqual(seconds - 1);
-    expect(rpc.headers.get("retry-after")).toBeNull();
+    // RPC 门面对任何带 `details.retryAfterSeconds` 的 429 同时给 `Retry-After` 头（E3-8b）。
+    expect(Number(rpc.headers.get("retry-after"))).toBeGreaterThan(0);
     const listed = [
       await legacy("GET", "lockouts", { as: owner }),
       await procedure("security.lockouts.list", undefined, { as: owner }),
