@@ -5,7 +5,12 @@ import {
   hydrateSourcesAtStartup,
   takeSettingsReopen,
 } from "../sources/bootstrap";
+import { RUNTIME_VIA_SERVER_SHELL } from "../api/request";
+import { isDesktop } from "../platform";
+import { createDesktopCloudAuth } from "../sources/credentials";
+import { hostedRelay } from "../sources/hosted";
 import { type SourceRegistry, sourceRegistry } from "../sources/registry";
+import { attachRemoteStreams } from "../sources/remote-stream";
 import { useCanvasStore } from "../store/canvas-store";
 import { usePreferencesStore } from "./preferences-store";
 
@@ -13,15 +18,25 @@ import { usePreferencesStore } from "./preferences-store";
  * 页面启动时的两件小事（客户端包 §3）：
  *
  * - 挂过别的源才读本机 core 的源表，接进页面源表（零配置不发请求）；
+ * - 经中继挂上的源各远程服务一条 `me.stream`（主机上线叫醒、撤销失权，客户端包
+ *   §5）；源表里没有这类源时一条也不开。远程服务会话经本机 core 换。中继托管的
+ *   页面自己管它那一条（`sources/hosted.ts`），这里不接；
  * - 桌面壳为放行新来源重载了页面（CSP 只在载入时生效）：回到重载前那一页设置。
  */
 export function useSourcesBootstrap(): void {
   useEffect(() => {
     hydrateSourcesAtStartup();
     const section = takeSettingsReopen();
-    if (section === null) return;
-    usePreferencesStore.getState().setLastSettingsSection(section);
-    useCanvasStore.getState().setPanel("settings", true);
+    if (section !== null) {
+      usePreferencesStore.getState().setLastSettingsSection(section);
+      useCanvasStore.getState().setPanel("settings", true);
+    }
+    // 背后有本机 core 的页面（桌面壳、服务器壳）才接；设置页中途挂上的源也跟着开。
+    if ((!isDesktop() && !RUNTIME_VIA_SERVER_SHELL) || hostedRelay() !== null)
+      return;
+    return attachRemoteStreams(sourceRegistry(), {
+      auth: createDesktopCloudAuth(),
+    });
   }, []);
 }
 

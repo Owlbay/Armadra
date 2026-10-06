@@ -51,7 +51,7 @@ const read = (path: string, method: "GET" | "POST" = "GET") =>
   });
 
 const write = (
-  section: "§33.1" | "§33.2" | "§33.6",
+  section: "§33.1" | "§33.2" | "§33.6" | "§33.7",
   method: "POST" | "PUT" | "DELETE",
   path: string,
 ) =>
@@ -63,6 +63,17 @@ const write = (
   });
 
 const denied = errors.pick("unauthenticated", "forbidden");
+
+/**
+ * `sources.mountByLink` 的入参（契约 §33.7）：分享链接原样交给 core——网页链接
+ * `<issuer>/j/<linkId>#<秘密>.<邀请令牌>` 或深链 `armadra://join?…`。协议包里
+ * 还没有这一条，形状在这里定义；`fingerprint` 是首次核对过的签发方指纹。
+ */
+export const mountByLinkInputSchema = z.object({
+  url: z.string().min(1).max(4096),
+  fingerprint: z.string().optional(),
+  label: z.string().optional(),
+});
 
 export const sources = {
   list: oc
@@ -203,6 +214,33 @@ export const sources = {
     .output(empty)
     .errors({ ...denied, ...errors.pick("not_found") })
     .meta(write("§33.6", "POST", "/api/sources/remotes/{serviceId}/logout")),
+  /**
+   * 按分享链接挂载（§33.7）：`links.accept` → 经中继 `cloud/login`（断言 + 邀请
+   * 令牌）→ 存凭据，建 `relayed` 行（远程服务没登记过的顺带建一行访客的）。
+   */
+  mountByLink: oc
+    .input(mountByLinkInputSchema)
+    .output(clientSourceSchema)
+    .errors({
+      ...denied,
+      ...errors.pick(
+        "bad_request",
+        "conflict",
+        "fingerprint_mismatch",
+        "link_invalid",
+        "link_expired",
+        "link_exhausted",
+        "link_secret_invalid",
+        "invitation_invalid",
+        "rate_limited",
+        "source_offline",
+        "source_unauthorized",
+        "source_unreachable",
+        "cloud_not_registered",
+        "not_implemented",
+      ),
+    })
+    .meta(write("§33.7", "POST", "/api/sources/join")),
 };
 
 export type ClientSource = z.infer<typeof clientSourceSchema>;
@@ -210,3 +248,4 @@ export type RemoteService = z.infer<typeof remoteServiceSchema>;
 export type RemoteSourceSummary = z.infer<typeof remoteSourceSummarySchema>;
 export type SourceSession = z.infer<typeof sourceSessionSchema>;
 export type RemoteAddInput = z.infer<typeof remoteAddInputSchema>;
+export type MountByLinkInput = z.infer<typeof mountByLinkInputSchema>;

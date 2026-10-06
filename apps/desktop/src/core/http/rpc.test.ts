@@ -394,7 +394,7 @@ describe("装配好的 core", () => {
           "settings.get",
         ]),
       );
-      expect(body.protocol).toEqual({ major: 1, minor: 4 });
+      expect(body.protocol).toEqual({ major: 1, minor: 6 });
       expect(body.heartbeatMs).toBe(25_000);
       expect(typeof body.sessionExpiresAtMs).toBe("number");
       expect(body.sourceId).not.toBe("");

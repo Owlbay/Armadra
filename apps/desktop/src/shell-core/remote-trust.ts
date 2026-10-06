@@ -26,9 +26,18 @@ export interface RemoteTrust {
   /** 要放行的来源（`https://host[:port]`），按字典序去重。 */
   readonly origins: readonly string[];
   readonly pins: readonly PinnedHost[];
+  /**
+   * 经中继挂载的源的中继来源（按字典序去重）：页面发往它们的请求由壳改写
+   * `Origin`（`relay-origin.ts`）。
+   */
+  readonly relayOrigins: readonly string[];
 }
 
-export const EMPTY_TRUST: RemoteTrust = { origins: [], pins: [] };
+export const EMPTY_TRUST: RemoteTrust = {
+  origins: [],
+  pins: [],
+  relayOrigins: [],
+};
 
 const FINGERPRINT = /^[0-9a-f]{64}$/;
 
@@ -79,6 +88,7 @@ export function trustFromSourceTable(answer: unknown): RemoteTrust {
     pin(url, text(row.fingerprint));
     issuerPins.set(url.origin, text(row.fingerprint));
   }
+  const relayOrigins = new Set<string>();
   const sources = Array.isArray(body.sources) ? body.sources : [];
   for (const item of sources) {
     const row = record(item);
@@ -91,6 +101,7 @@ export function trustFromSourceTable(answer: unknown): RemoteTrust {
     const relay = httpsOrigin(text(row.relayOrigin));
     if (relay !== null) {
       origins.add(relay.origin);
+      relayOrigins.add(relay.origin);
       // 中继就是远程服务本身（个人中转）才沿用它的指纹（契约 §33.5）。
       const inherited = issuerPins.get(relay.origin);
       if (inherited !== undefined) pin(relay, inherited);
@@ -101,6 +112,7 @@ export function trustFromSourceTable(answer: unknown): RemoteTrust {
     pins: [...pins.values()].sort((a, b) =>
       `${a.host} ${a.fingerprint}`.localeCompare(`${b.host} ${b.fingerprint}`),
     ),
+    relayOrigins: [...relayOrigins].sort(),
   };
 }
 

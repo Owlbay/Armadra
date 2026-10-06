@@ -50,7 +50,12 @@ export type ConnectFailure =
   | "rateLimited"
   | "credentials"
   | "locked"
-  | "link"
+  | "linkInvalid"
+  | "linkExpired"
+  | "linkExhausted"
+  | "linkSecret"
+  | "invitation"
+  | "fingerprint"
   | "offline"
   | "noSources"
   | "address";
@@ -119,6 +124,19 @@ export interface ConnectScreenProps {
     readonly password?: string;
   };
 }
+
+/**
+ * 分享链接那几种失败与桌面、托管页面是同一句话（按错误码的那一套，`errors.ts`），
+ * 不在连接页另写一份。
+ */
+const SHARED_FAILURE_KEY: Partial<Record<ConnectFailure, string>> = {
+  linkInvalid: "error.linkInvalid",
+  linkExpired: "error.linkExpired",
+  linkExhausted: "error.linkExhausted",
+  linkSecret: "error.linkSecretInvalid",
+  invitation: "error.invitationInvalid",
+  fingerprint: "error.fingerprintMismatch",
+};
 
 /** 输入或链接里的主机（带端口），认不出是 `null`。 */
 function hostOf(text: string): string | null {
@@ -302,9 +320,11 @@ export function ConnectScreen({
   const message =
     shownFailure === null
       ? null
-      : t(`mobileConnect.error.${shownFailure}`, {
-          origin: origin ? new URL(origin).host : "",
-        });
+      : t(
+          SHARED_FAILURE_KEY[shownFailure] ??
+            `mobileConnect.error.${shownFailure}`,
+          { origin: origin ? new URL(origin).host : "" },
+        );
   const host = origin ? new URL(origin).host : null;
   const titleKey =
     view === "relay"

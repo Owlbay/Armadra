@@ -101,6 +101,22 @@ export function mountRemoteSource(serviceId: string, sourceId: string) {
   return localClient().sources.mount({ serviceId, sourceId });
 }
 
+/**
+ * 按分享链接挂载（契约 §33.7）：网页链接或 `armadra://join` 原样交给本机 core。
+ * 签发方第一次见、系统不信任它的证书时先答指纹，请人核对后带着它重调。
+ */
+export function mountSourceByLink(input: {
+  url: string;
+  fingerprint?: string;
+}) {
+  return confirmable(() =>
+    localClient().sources.mountByLink({
+      url: input.url.trim(),
+      ...(input.fingerprint ? { fingerprint: input.fingerprint } : {}),
+    }),
+  );
+}
+
 /* -------------------------------- 源 ---------------------------------- */
 
 /** 自托管直连：配对链接，或地址 + 配对码。 */

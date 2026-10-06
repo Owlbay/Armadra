@@ -7,6 +7,7 @@ import type {
 
 import { boards } from "./boards.js";
 import { identity } from "./cloud.js";
+import { files } from "./files.js";
 import type { ProcedureMeta } from "./meta.js";
 import { settings } from "./settings.js";
 import { sources } from "./sources.js";
@@ -26,6 +27,7 @@ export const contract = {
   settings,
   sources,
   identity,
+  files,
   boards,
 };
 

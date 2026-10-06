@@ -54,7 +54,6 @@ export const mobileConnect: MessageModule = {
     "mobileConnect.offline": "离线",
     "mobileConnect.error.credentials": "账号或口令不对",
     "mobileConnect.error.locked": "尝试次数过多，账号已暂时锁定",
-    "mobileConnect.error.link": "分享链接无效或已过期",
     "mobileConnect.error.offline": "这台主机不在线",
     "mobileConnect.error.noSources": "没有可连接的主机",
     "mobileConnect.error.address": "地址不对",
@@ -121,7 +120,6 @@ export const mobileConnect: MessageModule = {
     "mobileConnect.error.credentials": "Wrong account or password",
     "mobileConnect.error.locked":
       "Too many attempts. The account is locked for now.",
-    "mobileConnect.error.link": "This share link is invalid or expired",
     "mobileConnect.error.offline": "This host is offline",
     "mobileConnect.error.noSources": "No hosts to connect",
     "mobileConnect.error.address": "Invalid address",

@@ -2,7 +2,14 @@ import { z } from "zod";
 
 import { json, request } from "../api/request";
 import { localSource } from "../api/source";
-import type { CredentialProvider, SourceAccess, Via } from "./types";
+import {
+  type CloudAuth,
+  type CredentialProvider,
+  SOURCE_ERROR,
+  type SourceAccess,
+  SourceError,
+  type Via,
+} from "./types";
 
 export { type SessionTokens, createSessionTokens } from "./session-tokens";
 
@@ -121,4 +128,67 @@ export function createDesktopCredentialProvider(
   now?: () => number,
 ): CredentialProvider {
   return createCachedCredentialProvider(exchange, now);
+}
+
+/* ------------------------------ 远程服务的会话 ------------------------------ */
+
+const remoteListSchema = z.object({
+  remotes: z
+    .array(z.object({ serviceId: z.string().min(1), issuer: z.string() }))
+    .default([]),
+});
+
+const remoteSessionSchema = z.object({
+  accessToken: z.string().min(1),
+  accessExpiresAtMs: z.number(),
+});
+
+/**
+ * 桌面与服务器壳的页面：远程服务的访问令牌也由本机 core 代为换
+ * （`sources.remoteSession`，契约 §33）——刷新令牌留在 core。`me.stream` 用它。
+ */
+export function createDesktopCloudAuth(
+  now: () => number = Date.now,
+): CloudAuth {
+  const cache = new Map<string, { accessToken: string; expiresAtMs: number }>();
+  const pending = new Map<string, Promise<string>>();
+  return {
+    access(issuer) {
+      const cached = cache.get(issuer);
+      if (cached && cached.expiresAtMs - now() > ACCESS_RENEW_LEAD_MS)
+        return Promise.resolve(cached.accessToken);
+      let inflight = pending.get(issuer);
+      if (inflight === undefined) {
+        inflight = (async () => {
+          const { remotes } = await request(
+            "/api/sources",
+            remoteListSchema,
+            undefined,
+            localSource,
+          );
+          const remote = remotes.find((row) => row.issuer === issuer);
+          if (remote === undefined)
+            throw new SourceError(SOURCE_ERROR.unauthorized, "no remote");
+          const answer = await request(
+            `/api/sources/remotes/${encodeURIComponent(remote.serviceId)}/session`,
+            remoteSessionSchema,
+            { method: "POST", ...json({}) },
+            localSource,
+          );
+          cache.set(issuer, {
+            accessToken: answer.accessToken,
+            expiresAtMs: answer.accessExpiresAtMs,
+          });
+          return answer.accessToken;
+        })().finally(() => {
+          pending.delete(issuer);
+        });
+        pending.set(issuer, inflight);
+      }
+      return inflight;
+    },
+    invalidate(issuer) {
+      cache.delete(issuer);
+    },
+  };
 }

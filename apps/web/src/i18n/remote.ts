@@ -6,6 +6,8 @@ import type { MessageModule } from "./index";
  *
  * 术语：「远程服务」是个人中转这类账号服务；「源」是一台能挂载的 Armadra；
  * 「分享本机」是把这台机器登记到远程服务；「分享链接」是给别人加入用的链接。
+ * `remote.error.*` 与 `remote.hosted.*` 是经中继到达时的失败原因与中继托管页面的
+ * 登录（客户端包 §5）。
  */
 export const remote: MessageModule = {
   "zh-CN": {
@@ -72,6 +74,24 @@ export const remote: MessageModule = {
     "remote.mounted": "已挂载",
     "remote.forget": "断开",
     "remote.added": "已添加",
+    "remote.error.credentials": "账号或口令不对",
+    "remote.error.locked": "尝试次数过多，账号已暂时锁定",
+    "remote.error.rateLimited": "试得太频繁，请稍后再试",
+    "remote.error.unreachable": "连不上个人中转",
+    "remote.error.offline": "这台主机不在线",
+    "remote.error.unlinked": "这台主机还没有关联这个账号",
+    "remote.error.revoked": "这台主机已不再共享",
+    "remote.error.noSources": "没有可连接的主机",
+    "remote.error.failed": "没能连上这台主机",
+    "remote.error.sourceRevoked": "这台主机已不再共享",
+    "remote.error.accessRevoked": "你对这台主机的访问已被收回",
+    "remote.error.sourceMismatch": "连上的不是这台主机",
+    "remote.error.accountDisabled": "这个账号已停用",
+    "remote.hosted.title": "登录个人中转",
+    "remote.hosted.chooseHost": "选择主机",
+    "remote.hosted.open": "打开 {name}",
+    "remote.hosted.offline": "离线",
+    "remote.hosted.signInAgain": "重新登录",
   },
   en: {
     "remote.nav": "Remote services",
@@ -137,5 +157,23 @@ export const remote: MessageModule = {
     "remote.mounted": "Mounted",
     "remote.forget": "Disconnect",
     "remote.added": "Added",
+    "remote.error.credentials": "Wrong account or password",
+    "remote.error.locked": "Too many attempts. The account is locked for now",
+    "remote.error.rateLimited": "Too many attempts. Try again later",
+    "remote.error.unreachable": "Can't reach the relay",
+    "remote.error.offline": "This host is offline",
+    "remote.error.unlinked": "This host isn't linked to this account yet",
+    "remote.error.revoked": "This host is no longer shared",
+    "remote.error.noSources": "No hosts to connect to",
+    "remote.error.failed": "Couldn't connect to this host",
+    "remote.error.sourceRevoked": "This host is no longer shared",
+    "remote.error.accessRevoked": "Your access to this host was revoked",
+    "remote.error.sourceMismatch": "Connected to a different host",
+    "remote.error.accountDisabled": "This account is disabled",
+    "remote.hosted.title": "Sign in to relay",
+    "remote.hosted.chooseHost": "Choose a host",
+    "remote.hosted.open": "Open {name}",
+    "remote.hosted.offline": "Offline",
+    "remote.hosted.signInAgain": "Sign in again",
   },
 };

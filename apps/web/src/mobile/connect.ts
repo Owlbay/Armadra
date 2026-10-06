@@ -8,6 +8,8 @@ import {
 import { exchangePairingCode } from "../api/gateway";
 import { saveRuntimeOrigin } from "../api/runtime-url";
 import { parsePairingQr } from "../host/qr";
+import { LOCAL_SOURCE_ID } from "../api/source";
+import { openAfterJoin } from "../sources/join-intent";
 import { SourceError } from "../sources/types";
 import {
   CloudError,
@@ -21,7 +23,7 @@ import {
   cloudSources,
   coreCloudLogin,
   thisDevice,
-} from "./cloud-client";
+} from "../sources/cloud-client";
 import {
   loadConnections,
   removeConnection,
@@ -227,10 +229,15 @@ export function cloudFailureOf(error: unknown): ConnectFailure {
       case "rate_limited":
         return "rateLimited";
       case "link_invalid":
+        return "linkInvalid";
       case "link_expired":
+        return "linkExpired";
       case "link_exhausted":
+        return "linkExhausted";
       case "link_secret_invalid":
-        return "link";
+        return "linkSecret";
+      case "invitation_invalid":
+        return "invitation";
       case "source_offline":
         return "offline";
       default:
@@ -433,6 +440,8 @@ export function createRelayEnrollment(
             .catch(() => "");
           connectionOf(accepted.sourceId, name);
           setActiveConnection(accepted.sourceId);
+          // 重载进画布后打开链接指向的工作空间（本机源此时就是这条连接）。
+          openAfterJoin(LOCAL_SOURCE_ID);
         } catch (error) {
           return failed(cloudFailureOf(error));
         }
@@ -448,7 +457,8 @@ export function createRelayEnrollment(
       try {
         await deps.bridge.pin(issuer, fingerprint);
       } catch {
-        return failed("pin");
+        // 钉的时候对端出示的不是人刚核对过的那一张。
+        return failed("fingerprint");
       }
       resume = null;
       return next();

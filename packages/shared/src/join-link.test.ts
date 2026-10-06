@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { isJoinLink, issuerOrigin, parseJoinLink } from "./join-link";
+import {
+  isJoinLink,
+  issuerOrigin,
+  joinDeepLink,
+  parseJoinLink,
+} from "./join-link.js";
 
 const LINK_ID = "0123456789abcdef0123456789abcdef";
 const SECRET = "A".repeat(43);
@@ -68,5 +73,16 @@ describe("签发方地址", () => {
     expect(issuerOrigin("https://relay.example.com/?x=1")).toBeNull();
     expect(issuerOrigin("")).toBeNull();
     expect(issuerOrigin("ftp://relay.example.com")).toBeNull();
+  });
+});
+
+describe("深链写法", () => {
+  it("joinDeepLink 解析回来是同一条链接", () => {
+    const parsed = parseJoinLink(
+      `https://relay.example.com:8443/j/${LINK_ID}#${SECRET}.${INVITE}`,
+    )!;
+    const deep = joinDeepLink(parsed);
+    expect(deep.startsWith("armadra://join?")).toBe(true);
+    expect(parseJoinLink(deep)).toEqual(parsed);
   });
 });

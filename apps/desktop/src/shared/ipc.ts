@@ -205,6 +205,14 @@ export const IPC = {
   sourcesChanged: spec("app:sources-changed", "invoke", "window"),
 
   /**
+   * 分享深链（`armadra://join`，客户端包 §6.2）：壳收到一条就推这个不带数据的
+   * 提醒，页面经 `app:take-join-link` 取走（只取一次）。页面挂好之前推的提醒
+   * 丢了也不要紧，页面挂好时自己来取。
+   */
+  sourcesJoinLink: spec("app:join-link", "event", "window"),
+  sourcesTakeJoinLink: spec("app:take-join-link", "invoke", "window"),
+
+  /**
    * 页面的一条 JS 错误（G5-19，契约 §30）：`{ kind, name, message, stack }`，
    * 页面已剥离过。主进程按 `diagnostics.reportPageErrors` 与 DSN 再判、限流、
    * 再剥离，才交给 `@sentry/electron`（`ipcMode` 仍是 0，SDK 不开渲染进程通道）。
@@ -252,6 +260,7 @@ export const IMPLEMENTED_CHANNELS: readonly string[] = [
   IPC.browserClearData.channel,
   IPC.gatewayRefresh.channel,
   IPC.sourcesChanged.channel,
+  IPC.sourcesTakeJoinLink.channel,
   IPC.diagnosticsReport.channel,
 ];
 
