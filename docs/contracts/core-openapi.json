@@ -9542,12 +9542,10 @@
                   "type": "object",
                   "properties": {
                     "id": {
-                      "type": "string",
-                      "format": "uuid"
+                      "type": "string"
                     },
                     "workspaceId": {
-                      "type": "string",
-                      "format": "uuid"
+                      "type": "string"
                     },
                     "cwd": {
                       "type": "string"
@@ -9605,14 +9603,12 @@
                       "default": null
                     },
                     "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
+                      "type": "string"
                     },
                     "endedAt": {
                       "anyOf": [
                         {
-                          "type": "string",
-                          "format": "date-time"
+                          "type": "string"
                         },
                         {
                           "type": "null"
@@ -9638,8 +9634,7 @@
                     "lastOutputAt": {
                       "anyOf": [
                         {
-                          "type": "string",
-                          "format": "date-time"
+                          "type": "string"
                         },
                         {
                           "type": "null"
@@ -9869,12 +9864,10 @@
                   "type": "object",
                   "properties": {
                     "id": {
-                      "type": "string",
-                      "format": "uuid"
+                      "type": "string"
                     },
                     "workspaceId": {
-                      "type": "string",
-                      "format": "uuid"
+                      "type": "string"
                     },
                     "cwd": {
                       "type": "string"
@@ -9932,14 +9925,12 @@
                       "default": null
                     },
                     "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
+                      "type": "string"
                     },
                     "endedAt": {
                       "anyOf": [
                         {
-                          "type": "string",
-                          "format": "date-time"
+                          "type": "string"
                         },
                         {
                           "type": "null"
@@ -9965,8 +9956,7 @@
                     "lastOutputAt": {
                       "anyOf": [
                         {
-                          "type": "string",
-                          "format": "date-time"
+                          "type": "string"
                         },
                         {
                           "type": "null"
@@ -10304,12 +10294,10 @@
                   "type": "object",
                   "properties": {
                     "id": {
-                      "type": "string",
-                      "format": "uuid"
+                      "type": "string"
                     },
                     "workspaceId": {
-                      "type": "string",
-                      "format": "uuid"
+                      "type": "string"
                     },
                     "cwd": {
                       "type": "string"
@@ -10367,14 +10355,12 @@
                       "default": null
                     },
                     "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
+                      "type": "string"
                     },
                     "endedAt": {
                       "anyOf": [
                         {
-                          "type": "string",
-                          "format": "date-time"
+                          "type": "string"
                         },
                         {
                           "type": "null"
@@ -10400,8 +10386,7 @@
                     "lastOutputAt": {
                       "anyOf": [
                         {
-                          "type": "string",
-                          "format": "date-time"
+                          "type": "string"
                         },
                         {
                           "type": "null"
@@ -10620,12 +10605,10 @@
                   "type": "object",
                   "properties": {
                     "id": {
-                      "type": "string",
-                      "format": "uuid"
+                      "type": "string"
                     },
                     "workspaceId": {
-                      "type": "string",
-                      "format": "uuid"
+                      "type": "string"
                     },
                     "cwd": {
                       "type": "string"
@@ -10683,14 +10666,12 @@
                       "default": null
                     },
                     "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
+                      "type": "string"
                     },
                     "endedAt": {
                       "anyOf": [
                         {
-                          "type": "string",
-                          "format": "date-time"
+                          "type": "string"
                         },
                         {
                           "type": "null"
@@ -10716,8 +10697,7 @@
                     "lastOutputAt": {
                       "anyOf": [
                         {
-                          "type": "string",
-                          "format": "date-time"
+                          "type": "string"
                         },
                         {
                           "type": "null"
@@ -10838,12 +10818,10 @@
                   "type": "object",
                   "properties": {
                     "id": {
-                      "type": "string",
-                      "format": "uuid"
+                      "type": "string"
                     },
                     "workspaceId": {
-                      "type": "string",
-                      "format": "uuid"
+                      "type": "string"
                     },
                     "cwd": {
                       "type": "string"
@@ -10901,14 +10879,12 @@
                       "default": null
                     },
                     "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
+                      "type": "string"
                     },
                     "endedAt": {
                       "anyOf": [
                         {
-                          "type": "string",
-                          "format": "date-time"
+                          "type": "string"
                         },
                         {
                           "type": "null"
@@ -10934,8 +10910,7 @@
                     "lastOutputAt": {
                       "anyOf": [
                         {
-                          "type": "string",
-                          "format": "date-time"
+                          "type": "string"
                         },
                         {
                           "type": "null"
@@ -11056,12 +11031,10 @@
                   "type": "object",
                   "properties": {
                     "id": {
-                      "type": "string",
-                      "format": "uuid"
+                      "type": "string"
                     },
                     "workspaceId": {
-                      "type": "string",
-                      "format": "uuid"
+                      "type": "string"
                     },
                     "cwd": {
                       "type": "string"
@@ -11119,14 +11092,12 @@
                       "default": null
                     },
                     "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
+                      "type": "string"
                     },
                     "endedAt": {
                       "anyOf": [
                         {
-                          "type": "string",
-                          "format": "date-time"
+                          "type": "string"
                         },
                         {
                           "type": "null"
@@ -11152,8 +11123,7 @@
                     "lastOutputAt": {
                       "anyOf": [
                         {
-                          "type": "string",
-                          "format": "date-time"
+                          "type": "string"
                         },
                         {
                           "type": "null"

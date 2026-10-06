@@ -36,8 +36,17 @@ import { meta, oc } from "./meta.js";
 
 const sessionRef = z.object({ sessionId: z.string().min(1) });
 
-/** 页面拿到的会话行：页面 schema 加上 core 一直在答的两个字段。 */
+/**
+ * 页面拿到的会话行：页面 schema 加上 core 一直在答的两个字段，并把 id 与时刻放宽
+ * 成字符串——契约出参不能比旧路径更挑剔（探针与测试种的工作空间 id 不是 UUID），
+ * 格式由页面自己的 schema 再校一遍。
+ */
 export const terminalSessionWireSchema = terminalSessionSchema.extend({
+  id: z.string(),
+  workspaceId: z.string(),
+  createdAt: z.string(),
+  endedAt: z.string().nullable(),
+  lastOutputAt: z.string().nullable().optional(),
   kind: z.string().optional(),
   ownerNodeId: z.string().nullable().optional(),
 });
