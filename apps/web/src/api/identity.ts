@@ -76,15 +76,19 @@ export type IdentityDevice = z.infer<typeof deviceSchema>;
  * `capabilities` 是各域装配时报上来的能力名，页面据此判断一个面在不在——
  * 旧版本的沉默不是承诺，所以缺名字一律当「没有」。
  */
-export const identityHelloSchema = z.object({
-  protocol: z
-    .object({ major: z.number(), minor: z.number() })
-    .default({ major: 0, minor: 0 }),
-  hostId: z.string().default(""),
-  hostInstanceId: z.string().default(""),
-  capabilities: z.array(z.string()).default([]),
-  maxFrameBytes: z.number().default(0),
-});
+export const identityHelloSchema = z
+  .object({
+    protocol: z
+      .object({ major: z.number(), minor: z.number() })
+      .default({ major: 0, minor: 0 }),
+    hostId: z.string().default(""),
+    hostInstanceId: z.string().default(""),
+    capabilities: z.array(z.string()).default([]),
+    maxFrameBytes: z.number().default(0),
+  })
+  // 线上叫 `hostId`（core 的 JSON，契约不动）；页面里它是这台 core 的源标识，
+  // 叫 `sourceId`，与执行主机的 `executionHostId` 分开。
+  .transform(({ hostId, ...rest }) => ({ ...rest, sourceId: hostId }));
 
 export type IdentityHello = z.infer<typeof identityHelloSchema>;
 
@@ -747,7 +751,7 @@ export async function revokeIdentityDevice(
 export function permits(
   session: IdentitySession,
   permission: string,
-  options: { workspaceId?: string; hostId?: string } = {},
+  options: { workspaceId?: string; executionHostId?: string } = {},
 ): boolean {
   return session.scopes.some(
     (scope) =>
@@ -756,8 +760,8 @@ export function permits(
         ? !scope.workspaceId
         : !scope.workspaceId || scope.workspaceId === options.workspaceId) &&
       (!scope.executionHostId ||
-        options.hostId === undefined ||
-        scope.executionHostId === options.hostId),
+        options.executionHostId === undefined ||
+        scope.executionHostId === options.executionHostId),
   );
 }
 
