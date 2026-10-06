@@ -218,9 +218,12 @@ export function useTunnelEvents(): void {
 export function RemoteShareSection({
   remote,
   localLabel,
+  inUse = false,
 }: {
   remote: RemoteService;
   localLabel: string;
+  /** 页面正经这条隧道到达主机：分享开着时不给停（停了就是自断）。 */
+  inUse?: boolean;
 }) {
   const t = useT();
   const client = useQueryClient();
@@ -278,7 +281,7 @@ export function RemoteShareSection({
           <Switch
             aria-label={t("remote.share")}
             checked={registration !== undefined}
-            disabled={busy}
+            disabled={busy || (inUse && registration !== undefined)}
             onCheckedChange={(on) => {
               if (on) start.mutate();
               else setStopping(true);

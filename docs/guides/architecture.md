@@ -593,9 +593,13 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
     省略源时发往当前源（缺省本机），`<img>` 取图与下载按地址找所属的源。经中继的源由远程服务的
     `me.stream`（`sources/remote-stream.ts`）叫醒：主机上线即重连，撤销即失权。个人中转 `/app/` 托管的
     同一份页面（`sources/hosted.ts`）用中继账号登录、挑一台主机，经 `sources/route-entry.ts`（与手机共用）
-    把它装成本机源：请求全部同源，凭据只在这个标签页的内存里；目录里其余主机（手机是连接表里其余连接）
+    把它装成本机源：请求全部同源，访问令牌只在内存，两把刷新令牌与上次进的主机记在这个标签页的
+    `sessionStorage`，刷新页面静默续上（关标签、登出、被拒即清）；目录里其余主机（手机是连接表里其余连接）
     经 `sources/mounts.ts` 同时作为远程源挂进页面源表。中继自己停了（`me.stream` 回不到 open）与主机
-    下线分开提示。CSRF 只在
+    下线分开提示。设置页按 `panels/settings/remote-access.ts` 判断设置作用的 core 在不在眼前（经中继、
+    直连远端源、当前源是远程源）：只对本机有意义的分区不列，「在访达中打开」不出，更新页只读报主机
+    版本；页面正走的中继与当前源在远程服务页上不给停用、登出与移除。
+    CSRF 只在
     Cookie 会话上核对，Bearer 不是环境凭据（`identity/http.ts::csrfRequired`）。Gateway 的每个答案带
     HSTS 与 `nosniff`，接口答案再带沙箱 CSP 与缺省 `no-store`（`gateway/csp.ts`）。
   - 控制面：一个源一条 `/api/ws`（契约 §35），页面的工作空间事件流经它订阅（`lastEventId` 续订由 outbox

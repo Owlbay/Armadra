@@ -38,7 +38,8 @@ import {
  * 服务器壳上同一浏览器里的几个窗口共用一条 Cookie 会话，也就共用一枚 CSRF：
  * 谁换了新的，经同源的 `BroadcastChannel` 告诉其它窗口（见下面的「多窗口」）。
  * 中继托管的页面（`sources/hosted.ts`）同样走 Bearer：经中继 `cloud/login` 换来
- * 的会话只在内存里的保管处（{@link setHostedSession}），关标签即丢。
+ * 的会话在它的保管处（{@link setHostedSession}）：访问令牌只在内存，刷新令牌另记
+ * 在这个标签页的 `sessionStorage` 供刷新后续上，关标签即丢、登出即清。
  */
 
 const PREFIX = "/api/identity/";

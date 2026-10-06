@@ -12,6 +12,7 @@ export const updates: MessageModule = {
     "updates.note":
       "只查询是否有新版本，不会下载或安装。安装需要带签名的发布包，由你自己决定何时进行。",
     "updates.version": "当前版本",
+    "updates.hostVersion": "主机版本",
     "updates.version.unknown": "未知",
     "updates.channel": "更新通道",
     "updates.channel.stable": "稳定版",
@@ -124,6 +125,7 @@ export const updates: MessageModule = {
     "updates.note":
       "This only asks whether a newer release exists. Nothing is downloaded or installed; installing needs a signed package and stays your decision.",
     "updates.version": "Current version",
+    "updates.hostVersion": "Host version",
     "updates.version.unknown": "Unknown",
     "updates.channel": "Release channel",
     "updates.channel.stable": "Stable",

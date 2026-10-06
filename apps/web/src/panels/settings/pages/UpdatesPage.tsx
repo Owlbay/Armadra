@@ -18,6 +18,7 @@ import {
 } from "../../../updates/use-update-state";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
+import { useRemoteAccess } from "../remote-access";
 import { useRuntimeSettings } from "../use-runtime-settings";
 import { Alert, AlertDescription, AlertTitle } from "@/ui/alert";
 import { Badge } from "@/ui/badge";
@@ -45,6 +46,31 @@ const CHANNELS = ["stable", "beta"] as const;
  * 包括那条最重要的：任何一边没回答，都不写「已是最新」。
  */
 export function UpdatesPage() {
+  // 设置作用的 core 在别处：检查、下载、安装都由那台机器自己的壳做，这里够
+  // 不着；只读地报它的版本。
+  return useRemoteAccess().remote ? <RemoteUpdates /> : <LocalUpdates />;
+}
+
+/** 远端主机的版本（`health.version`），只读。 */
+function RemoteUpdates() {
+  const t = useT();
+  const health = useQuery({
+    queryKey: ["health"],
+    queryFn: runtimeApi.health,
+    retry: false,
+  });
+  return (
+    <SettingsGroup>
+      <SettingsRow label={t("updates.hostVersion")}>
+        <span className="text-[13px] tabular-nums text-muted-foreground">
+          {health.data?.version || t("updates.version.unknown")}
+        </span>
+      </SettingsRow>
+    </SettingsGroup>
+  );
+}
+
+function LocalUpdates() {
   const t = useT();
   const setPanel = useCanvasStore((state) => state.setPanel);
   const { settings, save } = useRuntimeSettings();

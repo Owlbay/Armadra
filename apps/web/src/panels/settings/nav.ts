@@ -67,6 +67,14 @@ export interface SettingsSection {
    * `server-accounts-and-sharing.md` §6）。所以对成员直接不列。
    */
   ownerOnly?: boolean;
+  /**
+   * 只对眼前这台设备有意义：设置作用的 core 在别处（经中继、直连远端源，或
+   * 当前源是挂载的远程源，`remote-access.ts`）时不列。
+   *
+   * 浏览器节点的内存配置说的是这扇窗口里的 `<webview>`；写到远端那台 core
+   * 上，改的是一台不画这些节点的机器。
+   */
+  localOnly?: boolean;
 }
 
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
@@ -120,6 +128,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
     icon: Globe,
     desktopOnly: true,
     ownerOnly: true,
+    localOnly: true,
   },
   {
     id: "workspace",
@@ -222,27 +231,35 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
 
 export const DEFAULT_SETTINGS_SECTION = SETTINGS_SECTIONS[0]!.id;
 
-/** 这台机器上真正能进的分区。壳不在时少几行，而不是几行点不动的。 */
+/**
+ * 这台机器上真正能进的分区。壳不在时少几行，而不是几行点不动的。
+ *
+ * `remote`：设置作用的 core 不在眼前这台设备上（`remote-access.ts`），只对
+ * 本机有意义的分区不列。
+ */
 export function visibleSettingsSections(
   server: boolean = RUNTIME_VIA_SERVER_SHELL,
   member = false,
+  remote = false,
 ): SettingsSection[] {
   const desktop = isDesktop();
   return SETTINGS_SECTIONS.filter(
     (section) =>
       (desktop || !section.desktopOnly) &&
       (server || !section.serverOnly) &&
-      (!member || !section.ownerOnly),
+      (!member || !section.ownerOnly) &&
+      (!remote || !section.localOnly),
   );
 }
 
 export function isSettingsSectionId(
   value: unknown,
   member = false,
+  remote = false,
 ): value is string {
   return (
     typeof value === "string" &&
-    visibleSettingsSections(RUNTIME_VIA_SERVER_SHELL, member).some(
+    visibleSettingsSections(RUNTIME_VIA_SERVER_SHELL, member, remote).some(
       (section) => section.id === value,
     )
   );

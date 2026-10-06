@@ -25,6 +25,7 @@ import { UpdatesPage } from "./settings/pages/UpdatesPage";
 import { WhiteboardPage } from "./settings/pages/WhiteboardPage";
 import { WorkspacePage } from "./settings/pages/WorkspacePage";
 import { SecurityPage } from "./settings/pages/security/SecurityPage";
+import { useRemoteAccess } from "./settings/remote-access";
 import { subpageTitleKey } from "./settings/subpage";
 import {
   DEFAULT_SETTINGS_SECTION,
@@ -113,15 +114,20 @@ function SettingsBody({ onClose }: { onClose: () => void }) {
   // 成员看不到本机管理的那几页（`nav.ts` 的 `ownerOnly`）；上次停在其中一页
   // 的，回到第一页。
   const { member } = useAccess();
-  const active = isSettingsSectionId(stored, member)
+  // 设置作用的 core 不在眼前（经中继、直连远端源、当前源是远程源）：只对本机
+  // 有意义的那几页不列（`nav.ts` 的 `localOnly`）。
+  const { remote } = useRemoteAccess();
+  const active = isSettingsSectionId(stored, member, remote)
     ? stored
     : DEFAULT_SETTINGS_SECTION;
   const section = settingsSection(active);
   const Page = SECTION_PAGES[active] ?? GeneralPage;
   const groups = React.useMemo(
     () =>
-      groupSections(visibleSettingsSections(RUNTIME_VIA_SERVER_SHELL, member)),
-    [member],
+      groupSections(
+        visibleSettingsSections(RUNTIME_VIA_SERVER_SHELL, member, remote),
+      ),
+    [member, remote],
   );
 
   return (

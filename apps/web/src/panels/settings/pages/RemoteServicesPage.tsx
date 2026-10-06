@@ -30,6 +30,7 @@ import {
   reloadIntoSettings,
 } from "../../../sources/bootstrap";
 import { useSource, useSourceStatus } from "../../../sources";
+import { hostedRelay } from "../../../sources/hosted";
 import {
   onJoinIntent,
   openAfterJoin,
@@ -84,6 +85,7 @@ import {
 } from "@/ui/select";
 import { Spinner } from "@/ui/spinner";
 import { StatusPill } from "@/ui/status-pill";
+import { sameOrigin, useRemoteAccess } from "../remote-access";
 import { sourcePill } from "../source-status";
 import { checkAddress } from "./remote-address";
 
@@ -161,10 +163,14 @@ export function RemoteServicesPage() {
   });
   const [removing, setRemoving] = React.useState<Removal | null>(null);
   const [dismissing, setDismissing] = React.useState<string | null>(null);
+  // 页面正走的隧道与当前源：对它们不给停用、登出、移除——那是自断。
+  const access = useRemoteAccess();
 
   const sources = table.data?.sources;
   React.useEffect(() => {
-    if (sources) void applySourceTable(sources);
+    // 中继托管的页面：这张表是那台主机的，页面的源表是中继目录挂上的
+    // （`sources/hosted.ts`），不拿主机的表去覆盖。
+    if (sources && hostedRelay() === null) void applySourceTable(sources);
   }, [sources]);
 
   const remotes = table.data?.remotes ?? [];
@@ -240,6 +246,7 @@ export function RemoteServicesPage() {
             remote={remote}
             localLabel={local?.label ?? ""}
             pending={pendingOf(remote.issuer)}
+            inUse={sameOrigin(remote.issuer, access.relayIssuer)}
             onSignIn={() =>
               setAdding({
                 issuer: remote.issuer,
@@ -312,6 +319,7 @@ export function RemoteServicesPage() {
           <MountedRow
             key={source.sourceId}
             source={source}
+            inUse={source.sourceId === access.currentSourceId}
             onForget={() => forget.mutate(source.sourceId)}
             onRemove={() =>
               setRemoving({
@@ -458,6 +466,7 @@ function RemoteRow({
   remote,
   localLabel,
   pending,
+  inUse = false,
   onSignIn,
   onSignOut,
   onRetryCleanup,
@@ -466,6 +475,8 @@ function RemoteRow({
   remote: RemoteService;
   localLabel: string;
   pending: string | null;
+  /** 页面正经这个远程服务的隧道到达主机：登出、移除、停用分享都会自断。 */
+  inUse?: boolean;
   onSignIn(): void;
   onSignOut(): void;
   onRetryCleanup(): void;
@@ -481,6 +492,7 @@ function RemoteRow({
         t("remote.kind.personal"),
         remote.accountHint,
         shortFingerprint(remote.fingerprint),
+        inUse ? t("remote.inUse") : "",
       ]
         .filter(Boolean)
         .join(" · ")}
@@ -502,7 +514,7 @@ function RemoteRow({
       )}
       <RowMenu name={remote.label}>
         {remote.hasCredentials && (
-          <DropdownMenuItem onSelect={onSignOut}>
+          <DropdownMenuItem disabled={inUse} onSelect={onSignOut}>
             {t("remote.signOut")}
           </DropdownMenuItem>
         )}
@@ -514,7 +526,11 @@ function RemoteRow({
         {(remote.hasCredentials || pending !== null) && (
           <DropdownMenuSeparator />
         )}
-        <DropdownMenuItem variant="destructive" onSelect={onRemove}>
+        <DropdownMenuItem
+          variant="destructive"
+          disabled={inUse}
+          onSelect={onRemove}
+        >
           {t("remote.remove")}
         </DropdownMenuItem>
       </RowMenu>
@@ -537,7 +553,11 @@ function RemoteRow({
     <Collapsible open={open} onOpenChange={setOpen}>
       {row}
       <CollapsibleContent>
-        <RemoteShareSection remote={remote} localLabel={localLabel} />
+        <RemoteShareSection
+          remote={remote}
+          localLabel={localLabel}
+          inUse={inUse}
+        />
       </CollapsibleContent>
     </Collapsible>
   );
@@ -567,10 +587,13 @@ function RowMenu({
 
 function MountedRow({
   source,
+  inUse = false,
   onForget,
   onRemove,
 }: {
   source: ClientSource;
+  /** 当前源就是它：忘掉凭据、移除都会把正在用的源断掉。 */
+  inUse?: boolean;
   onForget(): void;
   onRemove(): void;
 }) {
@@ -591,6 +614,7 @@ function MountedRow({
             : "remote.kind.direct",
         ),
         where.replace(/^https?:\/\//, ""),
+        inUse ? t("remote.inUse.current") : "",
       ]
         .filter(Boolean)
         .join(" · ")}
@@ -598,11 +622,15 @@ function MountedRow({
       <StatusPill tone={pill.tone} label={t(pill.key)} />
       <RowMenu name={source.label}>
         {source.hasCredentials && (
-          <DropdownMenuItem onSelect={onForget}>
+          <DropdownMenuItem disabled={inUse} onSelect={onForget}>
             {t("remote.forget")}
           </DropdownMenuItem>
         )}
-        <DropdownMenuItem variant="destructive" onSelect={onRemove}>
+        <DropdownMenuItem
+          variant="destructive"
+          disabled={inUse}
+          onSelect={onRemove}
+        >
           {t("remote.remove")}
         </DropdownMenuItem>
       </RowMenu>

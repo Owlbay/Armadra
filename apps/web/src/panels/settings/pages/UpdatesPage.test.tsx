@@ -82,6 +82,9 @@ vi.mock("../../../updates/use-update-state", () => {
   };
 });
 
+const access = vi.hoisted(() => ({ remote: false }));
+vi.mock("../remote-access", () => ({ useRemoteAccess: () => access }));
+
 import { UpdatesPage } from "./UpdatesPage";
 import { usePreferencesStore } from "../../../app/preferences-store";
 import { SETTINGS_SECTIONS } from "../nav";
@@ -149,9 +152,25 @@ beforeEach(() => {
   health.version = "0.1.0";
   usePreferencesStore.setState({ locale: "zh-CN" });
 });
-afterEach(cleanup);
+afterEach(() => {
+  access.remote = false;
+  cleanup();
+});
 
 describe("UpdatesPage", () => {
+  it("remote host: its version, read-only; no checks, no channel, no actions", async () => {
+    access.remote = true;
+    updates.start.mockClear();
+    health.version = "0.3.1";
+    draw({ state: "idle" });
+    expect(await screen.findByText("0.3.1")).toBeTruthy();
+    expect(screen.getByText("主机版本")).toBeTruthy();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(updates.start).not.toHaveBeenCalled();
+  });
+
   it("is an advanced settings section and stays idle until asked", async () => {
     const section = SETTINGS_SECTIONS.find((entry) => entry.id === "updates");
     expect(section?.groupKey).toBe("settings.group.advanced");
