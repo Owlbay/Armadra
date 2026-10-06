@@ -1,4 +1,5 @@
 import type { AddressInfo } from "node:net";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { contractEntries } from "@armadra/shared";
 import { installContract } from "../http/rpc";
@@ -314,6 +315,40 @@ describeUnix("开会话", () => {
       backend: "direct",
       generation: 1,
     });
+    expectParity(answers as unknown as [Answer, Answer, Answer]);
+  });
+
+  it("create：库里的工作空间 id 不是 RFC 变体的 UUID（探针与旧库如此）也照答，出参不比旧路径挑剔", async () => {
+    const odd = "00000000-0000-0000-0000-0000000000aa";
+    core.database
+      .prepare(
+        "INSERT INTO workspaces (id, name, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(
+        odd,
+        "odd",
+        join(core.directory, "odd"),
+        new Date().toISOString(),
+        new Date().toISOString(),
+      );
+    const input = {
+      workspaceId: odd,
+      cwd: core.directory,
+      command: "/bin/sh",
+      args: ["-c", "sleep 60"],
+    };
+    const answers: Answer[] = [];
+    for (const ask of [
+      () => table("POST", TERMINAL, input),
+      () => legacy("POST", TERMINAL, input),
+      () => procedure("terminals.create", input),
+    ]) {
+      const answer = await ask();
+      expect(answer.status).toBe(200);
+      sessions.push((answer.body as { id: string }).id);
+      answers.push(answer);
+    }
+    expect(answers[0]!.body).toMatchObject({ workspaceId: odd });
     expectParity(answers as unknown as [Answer, Answer, Answer]);
   });
 
