@@ -11,6 +11,11 @@ const mocks = vi.hoisted(() => ({
   complete: vi.fn(),
   route: vi.fn(),
   refresh: vi.fn(),
+  attach: vi.fn(
+    (..._args: unknown[]) =>
+      () =>
+        undefined,
+  ),
 }));
 
 vi.mock("./native-bridge", () => ({
@@ -30,7 +35,12 @@ vi.mock("./credentials", async (original) => ({
     getAccess: vi.fn(),
     refresh: (...args: unknown[]) => mocks.refresh(...args),
     invalidate: vi.fn(),
+    cloudAuth: { access: vi.fn(), invalidate: vi.fn() },
   }),
+}));
+vi.mock("../sources/remote-stream", async (original) => ({
+  ...(await original<typeof import("../sources/remote-stream")>()),
+  attachRemoteStreams: (...args: unknown[]) => mocks.attach(...args),
 }));
 vi.mock("./native-oauth", async (original) => ({
   ...(await original<typeof import("./native-oauth")>()),
@@ -62,6 +72,7 @@ import { IdentityRequestError } from "../api/identity";
 import { resetLocalRuntime } from "../api/local-runtime";
 import { resolveRuntimeUrl, setNativeRuntimeBase } from "../api/runtime-url";
 import { hostedRelay, resetHostedRelay } from "../sources/hosted";
+import { resetSourceRegistry, sourceRegistry } from "../sources/registry";
 import { SourceError } from "../sources/types";
 import { setActiveConnection, upsertConnection } from "./connections";
 import { prepareEntry, ticketWithRefresh } from "./entry";
@@ -80,12 +91,14 @@ beforeEach(() => {
   mocks.complete.mockReset();
   mocks.route.mockReset();
   mocks.refresh.mockReset();
+  mocks.attach.mockClear();
   vi.stubGlobal("localStorage", memoryStorage());
 });
 afterEach(() => {
   history.replaceState(null, "", "/");
   setNativeRuntimeBase(null);
   resetLocalRuntime();
+  resetSourceRegistry();
   vi.unstubAllGlobals();
 });
 
@@ -407,6 +420,58 @@ describe("原生 App：多连接", () => {
     });
     expect(transport.extraProtocols()).toEqual(["armadra-relay.relay.jwt"]);
     expect(runtimeBase()).toBe(RELAY_BASE);
+  });
+
+  it("表里不止一个连接：选中的装成本机源，其余同时挂进页面源表，经中继的开 me.stream", async () => {
+    mocks.app = true;
+    mocks.restored = true;
+    addDirect();
+    const OTHER = "b".repeat(32);
+    upsertConnection({
+      sourceId: OTHER,
+      label: "Studio",
+      baseUrl: "",
+      relayOrigin: ISSUER,
+      cloudIssuer: ISSUER,
+      fingerprint: "",
+    });
+    setActiveConnection(HOST);
+    mocks.route.mockImplementation(() => new Promise(() => undefined));
+    mocks.route.mockResolvedValueOnce({
+      via: "direct",
+      access: {
+        accessToken: "t",
+        expiresAtMs: 0,
+        httpBase: GATEWAY,
+        wsBase: "wss://192.168.1.8:8443",
+      },
+    });
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+    const ids = sourceRegistry()
+      .list()
+      .map((row) => row.descriptor.sourceId);
+    expect(ids).toEqual(["local", OTHER]);
+    expect(sourceRegistry().get(OTHER)?.descriptor.label).toBe("Studio");
+    expect(mocks.attach).toHaveBeenCalledTimes(1);
+  });
+
+  it("只有一个连接：页面源表不动，与单源时一样", async () => {
+    mocks.app = true;
+    mocks.restored = true;
+    addDirect();
+    mocks.route.mockResolvedValue({
+      via: "direct",
+      access: {
+        accessToken: "t",
+        expiresAtMs: 0,
+        httpBase: GATEWAY,
+        wsBase: "wss://192.168.1.8:8443",
+      },
+    });
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+    expect(sourceRegistry().list()).toHaveLength(1);
+    expect(sourceRegistry().local().descriptor.label).toBe("");
+    expect(mocks.attach).not.toHaveBeenCalled();
   });
 
   it("选中的连接连不上：回连接页，带着连接表与原因，其余连接可选", async () => {

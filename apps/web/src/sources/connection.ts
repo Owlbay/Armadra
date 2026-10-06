@@ -145,7 +145,15 @@ export const LOCAL_DESCRIPTOR: SourceDescriptor = {
  * （桌面壳与原生 App 的 Bearer、服务器壳的 Cookie）。
  */
 export function createLocalConnection(
-  options: { source?: Source; now?: () => number } = {},
+  options: {
+    source?: Source;
+    now?: () => number;
+    /**
+     * 本机源的名字：手机与中继托管的页面把选中的那台主机装成本机源，侧栏用它
+     * 的名字而不是「本机」。桌面与服务器壳留空。
+     */
+    label?: string;
+  } = {},
 ): SourceConnection {
   const source = options.source ?? localSource;
   const now = options.now ?? Date.now;
@@ -157,7 +165,11 @@ export function createLocalConnection(
   });
   const sockets = new Set<ManagedSocket>();
   return {
-    descriptor: { ...LOCAL_DESCRIPTOR, sourceId: source.sourceId },
+    descriptor: {
+      ...LOCAL_DESCRIPTOR,
+      sourceId: source.sourceId,
+      label: options.label ?? "",
+    },
     get status() {
       return status.current;
     },

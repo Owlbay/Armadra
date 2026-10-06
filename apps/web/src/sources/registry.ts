@@ -263,6 +263,18 @@ export function sourceRegistry(): SourceRegistry {
   return pageRegistry;
 }
 
+/**
+ * 换上一张带自己凭据来源的页面源表（手机：钥匙串；中继托管的页面：内存）。
+ * 在画布挂载之前调：原来那张（若已建）连同它的连接一起拆掉。
+ */
+export function installPageSourceRegistry(
+  options: Omit<SourceRegistryOptions, "global">,
+): SourceRegistry {
+  pageRegistry?.dispose();
+  pageRegistry = createSourceRegistry({ ...options, global: true });
+  return pageRegistry;
+}
+
 /** 测试换一张源表；传 `null` 丢掉现在那张。 */
 export function resetSourceRegistry(next: SourceRegistry | null = null): void {
   pageRegistry?.dispose();

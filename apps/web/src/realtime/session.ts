@@ -2,8 +2,9 @@ import { create } from "zustand";
 import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
 
-import { boardSyncUrl, runtimeApi } from "../api/client";
+import { boardSyncUrl } from "../api/client";
 import { currentSource, type Source } from "../api/source";
+import { sourceApi } from "../sources/source-api";
 import { containerSize, getFlow } from "../canvas/flow/flow-context";
 import { useCanvasStore } from "../store/canvas-store";
 import { presenceClientId, presenceDeviceName } from "../store/canvas/presence";
@@ -162,7 +163,7 @@ export function startRealtime(options: StartOptions): () => void {
   const check =
     options.checkState ??
     // 复核发往这块板所在的源，不是此刻的当前源（两者在切源的那一瞬会不同）。
-    (() => runtimeApi.boardRealtime(workspaceId, boardId, source));
+    (() => sourceApi(source).boardRealtime(workspaceId, boardId));
 
   const onStatus = (status: ClientStatus) => {
     if (stopped || live?.client !== client) return;

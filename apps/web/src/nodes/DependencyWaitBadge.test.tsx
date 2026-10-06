@@ -30,8 +30,8 @@ const core = vi.hoisted(() => ({
   fail: false,
 }));
 
-vi.mock("@/api/client", () => ({
-  runtimeApi: {
+vi.mock("@/sources/source-api", () => ({
+  sourceApi: () => ({
     dependencies: () =>
       core.fail
         ? Promise.reject(new Error("offline"))
@@ -49,7 +49,7 @@ vi.mock("@/api/client", () => ({
       core.imported.push({ nodeId, after });
       return Promise.resolve({ launch: {} });
     },
-  },
+  }),
 }));
 
 const edge = (id: string, patch: Record<string, unknown> = {}) => ({

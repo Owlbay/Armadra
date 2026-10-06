@@ -231,9 +231,8 @@ function SourceGroup({
   const state = local ? "ready" : status.state;
   const pill = sourcePill(state);
   const sourceId = source.descriptor.sourceId;
-  const label = local
-    ? t("remote.kind.local")
-    : source.descriptor.label || sourceId;
+  const label =
+    source.descriptor.label || (local ? t("remote.kind.local") : sourceId);
   const dimmed = state !== "ready" && state !== "connecting";
   return (
     <section

@@ -14,6 +14,7 @@ export {
   type SourceRegistryOptions,
   createSourceRegistry,
   loadSourcesFromLocalCore,
+  installPageSourceRegistry,
   resetSourceRegistry,
   sourceRegistry,
 } from "./registry";

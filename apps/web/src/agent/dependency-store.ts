@@ -21,10 +21,10 @@ import type {
   WorkspaceEvent,
 } from "@armadra/shared";
 
-import { runtimeApi } from "@/api/client";
 import { useCanvasStore } from "@/store/canvas-store";
 import { sourceById } from "@/api/source";
 import { activeSourceId } from "@/sources/scope";
+import { sourceApi } from "@/sources/source-api";
 
 /** 事件之后等这么久再重读：一轮结束常常是连着几帧。 */
 export const DEPENDENCY_REFRESH_DEBOUNCE_MS = 300;
@@ -65,9 +65,9 @@ export const useDependencyStore = create<DependencyState>((set, get) => ({
     if (!same()) {
       set({ sourceId, workspaceId, loaded: false, launches: {} });
     }
-    // 发往读数所属的源（事件派发中是事件的源），不是 `runtimeApi` 的当前源。
-    const promise = runtimeApi
-      .dependencies(workspaceId, undefined, sourceById(sourceId))
+    // 发往读数所属的源（事件派发中是事件的源），不是此刻的当前源。
+    const promise = sourceApi(sourceById(sourceId))
+      .dependencies(workspaceId)
       .then((answer) => {
         if (!same()) return;
         const launches: Record<string, DependencyLaunch> = {};
@@ -178,15 +178,15 @@ export async function cancelNodeDependencies(
   workspaceId: string,
   launch: DependencyLaunch,
 ): Promise<void> {
+  const sourceId = activeSourceId();
   const blocking = launch.dependencies.filter(
     (edge) => edge.state !== "satisfied" && edge.state !== "cancelled",
   );
   try {
     for (const edge of blocking) {
-      await runtimeApi.cancelDependency(
+      await sourceApi(sourceById(sourceId)).cancelDependency(
         workspaceId,
         edge.id,
-        sourceById(activeSourceId()),
       );
     }
   } finally {
@@ -204,11 +204,10 @@ export async function migrateLegacyLaunch(
   pending: PendingLaunch,
 ): Promise<boolean> {
   try {
-    await runtimeApi.importLegacyDependencies(
+    await sourceApi(sourceById(activeSourceId())).importLegacyDependencies(
       workspaceId,
       nodeId,
       pending.after,
-      sourceById(activeSourceId()),
     );
   } catch {
     return false;

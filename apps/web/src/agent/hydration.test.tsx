@@ -14,7 +14,9 @@ const mock = vi.hoisted(() => ({
     | ((workspaceId: string, connected: boolean, sourceId: string) => void)
     | undefined,
 }));
-vi.mock("../api/client", () => ({ runtimeApi: { sessions: mock.sessions } }));
+vi.mock("../sources/source-api", () => ({
+  sourceApi: () => ({ sessions: mock.sessions }),
+}));
 vi.mock("../api/events", () => ({
   onWorkspaceConnection: (handler: typeof mock.connection) => {
     mock.connection = handler;

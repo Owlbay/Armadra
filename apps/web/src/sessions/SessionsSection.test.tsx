@@ -20,6 +20,12 @@ import { SessionsSection } from "./SessionsSection";
 const sessions = vi.fn();
 const gitStatus = vi.fn();
 
+// 会话列表按源发（`sources/source-api`）：与上面的 `runtimeApi` 共用同一个替身。
+vi.mock("../sources/source-api", () => ({
+  sourceApi: () => ({
+    sessions: (...args: unknown[]) => sessions(...args),
+  }),
+}));
 vi.mock("../api/client", () => ({
   runtimeApi: {
     sessions: (...args: unknown[]) => sessions(...args),

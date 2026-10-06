@@ -8,11 +8,15 @@ import {
 import { setHostedRuntimeBase } from "../api/runtime-url";
 import { routedFetch } from "../mobile/testing";
 import {
+  RELAY_DOWN_AFTER_MS,
   createHostedRelay,
   detectRelayHost,
   hostedFailureOf,
   underRelayAppPath,
 } from "./hosted";
+import type { SourceConnection } from "./connection";
+import { type SiblingMountOptions, mountSiblingSources } from "./mounts";
+import { createSourceRegistry } from "./registry";
 import type { RemoteStreamOptions } from "./remote-stream";
 import type { EnterRouteOptions } from "./route-entry";
 import { SourceError } from "./types";
@@ -150,7 +154,7 @@ const fakeEnter = async (options: EnterRouteOptions) => {
   return { route, renew: async () => true, dispose: () => undefined };
 };
 
-function hosted() {
+function hosted(mount?: (options: SiblingMountOptions) => unknown) {
   const net = relayNet();
   let stream: RemoteStreamOptions | null = null;
   const wake = vi.fn();
@@ -159,6 +163,9 @@ function hosted() {
     cloud: { fetch: net.fetch },
     enter: fakeEnter,
     wake,
+    ...(mount === undefined
+      ? {}
+      : { mount: mount as typeof mountSiblingSources }),
     createStream: (options) => {
       stream = options;
       return { issuer: ISSUER, state: "open", close: () => undefined };
@@ -241,6 +248,190 @@ describe("中继托管页面的源", () => {
     // 中继重启：页面一直以为就绪，流重开时主机在线也叫醒一次（经中继的流以 4404 收了尾）。
     stream().onOpen?.();
     await vi.waitFor(() => expect(wake).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("中继自己停了", () => {
+  function withTimers() {
+    const net = relayNet();
+    let stream: RemoteStreamOptions | null = null;
+    const timers = new Map<number, () => void>();
+    let next = 0;
+    const relay = createHostedRelay({
+      issuer: ISSUER,
+      cloud: { fetch: net.fetch },
+      enter: fakeEnter,
+      wake: vi.fn(),
+      createStream: (options) => {
+        stream = options;
+        return { issuer: ISSUER, state: "open", close: () => undefined };
+      },
+      setTimeout: (run, ms) => {
+        expect(ms).toBe(RELAY_DOWN_AFTER_MS);
+        timers.set(++next, run);
+        return next;
+      },
+      clearTimeout: (handle) => timers.delete(handle as number),
+    });
+    const fire = () => {
+      const pending = [...timers.values()];
+      timers.clear();
+      for (const run of pending) run();
+    };
+    return { relay, stream: () => stream!, timers, fire };
+  }
+
+  it("me.stream 开过之后一直连不上中继：过一段时间才算中继停了，流重开即恢复", async () => {
+    const { relay, stream, timers, fire } = withTimers();
+    await relay.enter((await relay.signIn("dev", "pw"))[0]!);
+    // 第一次还没开过：连得慢不算中继停了。
+    stream().onStateChange?.("connecting");
+    expect(timers.size).toBe(0);
+    stream().onStateChange?.("open");
+    stream().onStateChange?.("backoff");
+    stream().onStateChange?.("connecting");
+    stream().onStateChange?.("backoff");
+    expect(timers.size).toBe(1);
+    expect(relay.status.relayDown).toBe(false);
+    fire();
+    expect(relay.status).toMatchObject({ relayDown: true, state: "ready" });
+    stream().onStateChange?.("open");
+    expect(relay.status.relayDown).toBe(false);
+  });
+
+  it("短暂断开、自己关流、凭据失效：都不算中继停了", async () => {
+    const { relay, stream, timers } = withTimers();
+    await relay.enter((await relay.signIn("dev", "pw"))[0]!);
+    stream().onStateChange?.("open");
+    stream().onStateChange?.("backoff");
+    stream().onStateChange?.("open");
+    expect(timers.size).toBe(0);
+    stream().onStateChange?.("backoff");
+    stream().onStateChange?.("closed");
+    expect(timers.size).toBe(0);
+    stream().onStateChange?.("unauthorized");
+    expect(relay.status.relayDown).toBe(false);
+  });
+
+  it("主机下线（中继推 sourceOffline，流开着）：是等待上线，不是中继停了", async () => {
+    const { relay, stream, timers } = withTimers();
+    await relay.enter((await relay.signIn("dev", "pw"))[0]!);
+    stream().onStateChange?.("open");
+    stream().onEvent({ type: "sourceOffline", sourceId: SOURCE });
+    expect(relay.status).toMatchObject({
+      state: "waitingForSource",
+      relayDown: false,
+    });
+    expect(timers.size).toBe(0);
+  });
+});
+
+describe("一个标签页同时挂多台主机", () => {
+  const OTHER = "b".repeat(32);
+
+  /** 目录里两台：选中的装成本机源，另一台挂进（测试用的）源表。 */
+  function twoHosts() {
+    const connections = new Map<
+      string,
+      { connect: ReturnType<typeof vi.fn>; revoke: ReturnType<typeof vi.fn> }
+    >();
+    const mounted: SiblingMountOptions[] = [];
+    const parts = hosted((options) => {
+      mounted.push(options);
+      return mountSiblingSources({
+        ...options,
+        install: (registryOptions) =>
+          createSourceRegistry({
+            ...registryOptions,
+            connect: (descriptor) => {
+              const spies = {
+                connect: vi.fn(async () => undefined),
+                revoke: vi.fn(),
+              };
+              connections.set(descriptor.sourceId, spies);
+              return {
+                descriptor,
+                status: {
+                  state: "waitingForSource",
+                  via: null,
+                  since: 0,
+                  lastError: null,
+                },
+                subscribe: () => () => undefined,
+                disconnect: () => undefined,
+                ...spies,
+              } as unknown as SourceConnection;
+            },
+          }),
+      });
+    });
+    const routes = parts.net.fetch as unknown as ReturnType<
+      typeof vi.fn<typeof fetch>
+    >;
+    const original = routes.getMockImplementation()!;
+    routes.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/v1/me/sources"))
+        return new Response(
+          JSON.stringify({
+            sources: [
+              { sourceId: SOURCE, name: "laptop", online: true },
+              { sourceId: OTHER, name: "studio", online: false },
+            ],
+          }),
+        );
+      return original(input, init);
+    });
+    return { ...parts, connections, mounted };
+  }
+
+  it("登录目录里的其余主机作为远程源挂上，选中的那台仍是本机源", async () => {
+    const { relay, connections, mounted } = twoHosts();
+    const listed = await relay.signIn("dev", "pw");
+    await relay.enter(listed[0]!);
+    expect(mounted).toHaveLength(1);
+    expect(mounted[0]!.primary).toMatchObject({
+      sourceId: SOURCE,
+      label: "laptop",
+    });
+    expect(mounted[0]!.cloudAuth).toBeUndefined();
+    expect([...connections.keys()]).toEqual([OTHER]);
+    expect(relay.status.state).toBe("ready");
+  });
+
+  it("me.stream 里其余主机的上线与撤销落到各自的连接上，不动选中那台", async () => {
+    const { relay, connections, stream } = twoHosts();
+    await relay.enter((await relay.signIn("dev", "pw"))[0]!);
+    const other = connections.get(OTHER)!;
+    // 挂上时源表在后台连过一次。
+    expect(other.connect).toHaveBeenCalledTimes(1);
+    stream().onEvent({ type: "sourceOnline", sourceId: OTHER });
+    expect(other.connect).toHaveBeenCalledTimes(2);
+    stream().onEvent({ type: "sourceOffline", sourceId: OTHER });
+    expect(relay.status.state).toBe("ready");
+    stream().onEvent({ type: "accessRevoked", sourceId: OTHER });
+    expect(other.revoke).toHaveBeenCalledWith({
+      code: "source_access_denied",
+      message: "",
+    });
+    expect(relay.status.state).toBe("ready");
+    // 流重开：在等的那台补叫一次。
+    stream().onOpen?.();
+    expect(other.connect).toHaveBeenCalledTimes(3);
+  });
+
+  it("只有一台：页面源表不换", async () => {
+    const mount = vi.fn((options: SiblingMountOptions) =>
+      mountSiblingSources({
+        ...options,
+        install: () => {
+          throw new Error("不该换源表");
+        },
+      }),
+    );
+    const { relay } = hosted(mount);
+    await relay.enter((await relay.signIn("dev", "pw"))[0]!);
+    expect(mount).toHaveBeenCalledTimes(1);
+    expect(mount.mock.results[0]!.value).toBeNull();
   });
 });
 

@@ -5,6 +5,7 @@ import {
   CloudOff,
   KeyRound,
   PlugZap,
+  ServerOff,
   Recycle,
   Repeat2,
   TerminalSquare,
@@ -126,9 +127,21 @@ export function Banners() {
     shellSessionFailure,
   );
 
-  // 中继托管的页面：主机下线时等它回来，被撤销时只能重新登录（客户端包 §5）。
+  // 中继托管的页面：中继自己停了时只说这一件（主机、运行时都连不上是它的
+  // 结果）；主机下线时等它回来，被撤销时只能重新登录（客户端包 §5）。凭据只在
+  // 内存，所以这里不给「刷新」——中继回来后页面自己恢复。
   const hosted = useHostedStatus();
-  if (hosted?.state === "waitingForSource") {
+  const relayDown = hosted?.relayDown === true;
+  if (relayDown) {
+    items.push(
+      <Banner
+        key="hosted-relay-down"
+        tone="danger"
+        icon={<ServerOff />}
+        text={t("remote.hosted.relayDown")}
+      />,
+    );
+  } else if (hosted?.state === "waitingForSource") {
     items.push(
       <Banner
         key="hosted-waiting"
@@ -196,7 +209,7 @@ export function Banners() {
     );
   }
 
-  if (health.isError && !dismissed.includes("runtime")) {
+  if (health.isError && !relayDown && !dismissed.includes("runtime")) {
     items.push(
       <Banner
         key="runtime"
