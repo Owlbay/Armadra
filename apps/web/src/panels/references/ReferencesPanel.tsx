@@ -44,7 +44,7 @@ export function ReferencesPanel() {
         side="right"
         showCloseButton={false}
         aria-describedby={undefined}
-        className="max-w-full gap-0 p-0 data-[side=right]:w-[min(100vw,var(--drawer-w))] data-[side=right]:sm:max-w-none"
+        className="max-w-full gap-0 p-0 pt-[var(--safe-top)] pr-[var(--safe-right)] pb-[var(--safe-bottom)] data-[side=right]:w-[min(100vw,var(--drawer-w))] data-[side=right]:sm:max-w-none"
       >
         <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border px-3">
           <SheetTitle className="flex-1 truncate text-[13px] font-semibold">

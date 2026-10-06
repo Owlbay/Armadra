@@ -136,7 +136,7 @@ function FullPage({ children }: { children: React.ReactNode }) {
   return (
     <div
       data-slot="identity-page"
-      className="flex h-full overflow-y-auto bg-background px-6 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
+      className="flex h-full overflow-y-auto bg-background pt-[var(--safe-top)] pr-[calc(1.5rem+var(--safe-right))] pb-[var(--safe-bottom)] pl-[calc(1.5rem+var(--safe-left))]"
     >
       <div className="m-auto w-full">{children}</div>
     </div>

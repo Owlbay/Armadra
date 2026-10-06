@@ -71,8 +71,10 @@ describe("ResponsiveDialog", () => {
     expect(dialog.getAttribute("data-side")).toBe("bottom");
     expect(dialog.getAttribute("data-responsive")).toBe("sheet");
     expect(dialog.className).toContain("rounded-t-[14px]");
-    expect(dialog.className).toContain("max-h-[calc(100dvh-48px)]");
-    expect(dialog.className).toContain("safe-area-inset-bottom");
+    expect(dialog.className).toContain(
+      "max-h-[calc(100dvh-48px-var(--safe-top))]",
+    );
+    expect(dialog.className).toContain("var(--safe-bottom)");
     // 桌面宽度的限宽被手机形态压掉
     expect(dialog.className).not.toContain("sm:max-w-[520px]");
     expect(
@@ -138,7 +140,7 @@ describe("ResponsiveAlertDialog", () => {
     expect(dialog.className).toContain("bottom-0");
     expect(dialog.className).not.toContain("top-1/2");
     expect(dialog.className).toContain("rounded-t-[14px]");
-    expect(dialog.className).toContain("safe-area-inset-bottom");
+    expect(dialog.className).toContain("var(--safe-bottom)");
     expect(dialog.className).not.toContain("sm:max-w-[420px]");
     expect(
       dialog.querySelector('[data-slot="responsive-dialog-handle"]'),

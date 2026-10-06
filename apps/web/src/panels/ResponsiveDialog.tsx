@@ -35,7 +35,7 @@ import {
 /**
  * 对话框的手机形态（设计系统 §5.15、§7 第 10 步）：桌面与平板仍是居中的
  * `Dialog`；≤767 换成 `Sheet side="bottom"`——顶部圆角 14、36×4 的拖柄、
- * 高度随内容、最高 `100dvh - 48px`，底部让出安全区。
+ * 高度随内容、最高 `100dvh - 48px - 顶部安全区`，左右与底部让出安全区。
  *
  * 两种外壳是同一个 Radix Dialog 根，只换内容层，所以 `open` / `onOpenChange`、
  * 焦点圈定与 Esc 关闭在两种宽度下行为一致。生成的 `ui/dialog`、`ui/sheet`
@@ -81,9 +81,10 @@ export function ResponsiveDialogContent({
       className={cn(
         className,
         // 手机形态压过调用方给桌面对话框定的宽度与高度。
-        "inset-x-0 max-h-[calc(100dvh-48px)] w-full max-w-none gap-4 overflow-y-auto sm:max-w-none",
-        "rounded-t-[14px] border-t border-border px-4 pt-3",
-        "pb-[calc(1rem+env(safe-area-inset-bottom))]",
+        // 最高处离状态栏下沿 48px；左右与底边让开刘海和主页横条（`--safe-*`）。
+        "inset-x-0 max-h-[calc(100dvh-48px-var(--safe-top))] w-full max-w-none gap-4 overflow-y-auto sm:max-w-none",
+        "rounded-t-[14px] border-t border-border pt-3 pr-[calc(1rem+var(--safe-right))] pl-[calc(1rem+var(--safe-left))]",
+        "pb-[calc(1rem+var(--safe-bottom))]",
       )}
       {...props}
     >
@@ -169,8 +170,8 @@ export const ResponsiveAlertDialogMedia = AlertDialogMedia;
 const ALERT_SHEET = cn(
   "top-auto bottom-0 left-0 w-full max-w-none sm:max-w-none translate-x-0 translate-y-0",
   "data-[size=default]:max-w-none data-[size=sm]:max-w-none data-[size=default]:sm:max-w-none",
-  "max-h-[calc(100dvh-48px)] overflow-y-auto",
-  "rounded-none rounded-t-[14px] px-4 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))]",
+  "max-h-[calc(100dvh-48px-var(--safe-top))] overflow-y-auto",
+  "rounded-none rounded-t-[14px] pt-3 pr-[calc(1rem+var(--safe-right))] pb-[calc(1rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))]",
   "data-open:zoom-in-100 data-open:slide-in-from-bottom data-closed:zoom-out-100 data-closed:slide-out-to-bottom",
 );
 

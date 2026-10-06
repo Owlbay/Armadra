@@ -69,7 +69,7 @@ export function UsageDashboard() {
       <aside
         aria-label={t("usage.dashboard.title")}
         style={{ width: PINNED_PANEL_WIDTH.usage }}
-        className="fixed top-[96px] right-[14px] bottom-[14px] z-[var(--z-cluster)] flex max-w-[calc(100vw-28px)] flex-col overflow-hidden rounded-xl border border-border bg-[color-mix(in_srgb,var(--card)_96%,transparent)] shadow-[var(--shadow-overlay)] backdrop-blur-md"
+        className="fixed top-[calc(96px+var(--safe-top))] right-[calc(14px+var(--safe-right))] bottom-[calc(14px+var(--safe-bottom))] z-[var(--z-cluster)] flex max-w-[calc(100vw-28px)] flex-col overflow-hidden rounded-xl border border-border bg-[color-mix(in_srgb,var(--card)_96%,transparent)] shadow-[var(--shadow-overlay)] backdrop-blur-md"
       >
         {header("h2")}
         {body}

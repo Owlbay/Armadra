@@ -402,3 +402,33 @@ describe("tokens.css", () => {
     });
   });
 });
+
+/**
+ * 安全区（设计系统 §3.1）：页面经 `viewport-fit=cover` 铺到屏幕边缘，贴边的浮层
+ * 只认这几个变量。`env()` 带 `0px` 回退——桌面壳与普通浏览器里它们都是 0，
+ * 布局与没有安全区时逐像素一致；窗口控件那两个缺省也是 0，只由手机壳原生层写。
+ */
+describe("安全区变量", () => {
+  const indexHtml = readFileSync(
+    fileURLToPath(new URL("../../index.html", import.meta.url)),
+    "utf8",
+  );
+
+  it("viewport 铺到状态栏与刘海下面", () => {
+    expect(indexHtml).toMatch(/name="viewport"[^>]*viewport-fit=cover/);
+  });
+
+  it.each(["top", "right", "bottom", "left"])(
+    "--safe-%s 取 env() 且回退 0px",
+    (side) => {
+      expect(tokensCss).toContain(
+        `--safe-${side}: env(safe-area-inset-${side}, 0px);`,
+      );
+    },
+  );
+
+  it("窗口控件占位缺省为 0", () => {
+    expect(tokensCss).toContain("--window-controls-left: 0px;");
+    expect(tokensCss).toContain("--window-controls-top: 0px;");
+  });
+});

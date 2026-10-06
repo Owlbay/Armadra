@@ -321,7 +321,9 @@ export function NewAgentWizard() {
     <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
       <ResponsiveDialogContent
         // 手机上整高（设计系统 §5.3），桌面 560 宽。
-        className={compact ? "h-[calc(100dvh-48px)]" : "sm:max-w-[560px]"}
+        className={
+          compact ? "h-[calc(100dvh-48px-var(--safe-top))]" : "sm:max-w-[560px]"
+        }
         aria-describedby={undefined}
       >
         <ResponsiveDialogHeader>

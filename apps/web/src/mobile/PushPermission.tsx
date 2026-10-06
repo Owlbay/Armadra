@@ -318,7 +318,7 @@ export function PushPermissionDock({
   children: React.ReactNode;
 }) {
   return (
-    <div className="pointer-events-none fixed inset-x-2 bottom-[calc(var(--mobile-nav-h)+env(safe-area-inset-bottom)+8px)] z-[var(--z-toast)] flex justify-center [&>*]:pointer-events-auto [&>*]:w-full [&>*]:max-w-md [&>*]:bg-popover [&>*]:shadow-[var(--shadow-overlay)]">
+    <div className="pointer-events-none fixed right-[calc(0.5rem+var(--safe-right))] bottom-[calc(var(--mobile-nav-h)+var(--safe-bottom)+8px)] left-[calc(0.5rem+var(--safe-left))] z-[var(--z-toast)] flex justify-center [&>*]:pointer-events-auto [&>*]:w-full [&>*]:max-w-md [&>*]:bg-popover [&>*]:shadow-[var(--shadow-overlay)]">
       {children}
     </div>
   );

@@ -107,7 +107,11 @@ function AppShell() {
   useAppKeybindings(dispatch);
 
   return (
-    <div className="flex h-full overflow-hidden bg-background">
+    // 根容器让开顶、左、右三边的安全区（`--safe-*`，设计系统 §3.1）：侧栏、画布
+    // 和画布里贴边的浮层（工具簇、通知条、Dock、缩略图）跟着整体内缩，状态栏下
+    // 只剩这块底色。底边不在这里让：手机布局的底部导航自己垫主页横条，画布底部
+    // 的浮层各自加 `--safe-bottom`，否则那一截会算两遍。
+    <div className="flex h-full overflow-hidden bg-background pt-[var(--safe-top)] pr-[var(--safe-right)] pl-[var(--safe-left)]">
       {/* 必须是整棵树的第一个子节点。原生层算可拖拽区域时按 DOM 顺序把
           `drag` 矩形并进去、`no-drag` 矩形减出来，后出现的覆盖先出现的——
           它排在侧栏后面时，侧栏标题栏里那几颗 `no-drag` 的按钮先减掉、再被
@@ -139,7 +143,15 @@ function AppShell() {
           会短暂盖住正在打字的地方（G2-10 遗留）。顶部让出状态栏安全区。 */}
       <Toaster
         position={compact ? "top-center" : "bottom-right"}
-        mobileOffset={{ top: "calc(env(safe-area-inset-top) + 8px)" }}
+        offset={{
+          bottom: "calc(24px + var(--safe-bottom))",
+          right: "calc(24px + var(--safe-right))",
+        }}
+        mobileOffset={{
+          top: "calc(var(--safe-top) + 8px)",
+          right: "calc(16px + var(--safe-right))",
+          left: "calc(16px + var(--safe-left))",
+        }}
       />
     </div>
   );
