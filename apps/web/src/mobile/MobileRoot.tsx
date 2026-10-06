@@ -16,6 +16,8 @@ import type { Entry } from "./entry";
 import { nativeBridge } from "./native-bridge";
 import { NativeMfa } from "./NativeMfa";
 import { PushPermission } from "./PushPermission";
+import { RelaySignIn } from "../shell/RelaySignIn";
+import { hostedRelay } from "../sources/hosted";
 import { usePushOpen } from "./push-open";
 import { usePushRotation } from "./push-rotation";
 
@@ -38,6 +40,12 @@ export function MobileRoot({ entry: initial }: { entry: Entry }) {
           setEntry({ kind: "connect", mode: "native", origin: entry.origin })
         }
       />
+    );
+  }
+  if (entry.kind === "relay") {
+    const relay = hostedRelay();
+    return relay === null ? null : (
+      <RelaySignIn relay={relay} onEntered={() => setConnected(true)} />
     );
   }
   if (entry.kind !== "connect") return null;

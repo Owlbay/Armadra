@@ -75,6 +75,11 @@ const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   source_unauthorized: "error.sourceUnauthorized",
   source_offline: "error.sourceOffline",
   cloud_account_unlinked: "error.cloudAccountUnlinked",
+  // 经中继到达的源（客户端包 §5）：页面自己的码与远程服务的拒绝。
+  source_mismatch: "remote.error.sourceMismatch",
+  source_revoked: "remote.error.sourceRevoked",
+  source_access_denied: "remote.error.accessRevoked",
+  account_disabled: "remote.error.accountDisabled",
   // 云登录与登记（契约 §31）。
   cloud_not_registered: "error.cloudNotRegistered",
   cloud_assertion_invalid: "error.cloudAssertionInvalid",

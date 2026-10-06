@@ -1,0 +1,166 @@
+import * as React from "react";
+
+import { useT } from "../app/preferences-store";
+import { RelayForm } from "../mobile/ConnectRelay";
+import type { CloudSource } from "../sources/cloud-client";
+import {
+  type HostedFailure,
+  type HostedRelay,
+  hostedFailureOf,
+} from "../sources/hosted";
+import { Alert, AlertTitle } from "@/ui/alert";
+import { Badge } from "@/ui/badge";
+import { BrandMark } from "@/ui/brand-mark";
+import { Button } from "@/ui/button";
+import { Item, ItemContent, ItemGroup, ItemTitle } from "@/ui/item";
+import { Spinner } from "@/ui/spinner";
+
+export interface RelaySignInProps {
+  readonly relay: Pick<HostedRelay, "issuer" | "signIn" | "enter">;
+  /** 装好了本机源：进画布。 */
+  readonly onEntered: () => void;
+  /** 展示页用：钉住视图与内容。 */
+  readonly initialHosts?: readonly CloudSource[];
+  readonly initialFailure?: HostedFailure;
+}
+
+/**
+ * 中继托管页面的入口（客户端包 §5）：中继账号口令登录 → 只有一台在线的主机就
+ * 直接进，几台就挑一台。凭据只在这个标签页的内存里。
+ */
+export function RelaySignIn({
+  relay,
+  onEntered,
+  initialHosts,
+  initialFailure,
+}: RelaySignInProps) {
+  const t = useT();
+  const errorId = React.useId();
+  const [hosts, setHosts] = React.useState<readonly CloudSource[] | null>(
+    initialHosts ?? null,
+  );
+  const [busy, setBusy] = React.useState(false);
+  const [entering, setEntering] = React.useState<string | null>(null);
+  const [failure, setFailure] = React.useState<HostedFailure | null>(
+    initialFailure ?? null,
+  );
+  const message = failure === null ? null : t(`remote.error.${failure}`);
+  const host = React.useMemo(() => {
+    try {
+      return new URL(relay.issuer).host;
+    } catch {
+      return relay.issuer;
+    }
+  }, [relay.issuer]);
+
+  const enter = async (source: CloudSource) => {
+    setBusy(true);
+    setEntering(source.sourceId);
+    setFailure(null);
+    try {
+      await relay.enter(source);
+      onEntered();
+    } catch (error) {
+      setFailure(hostedFailureOf(error));
+      setBusy(false);
+      setEntering(null);
+    }
+  };
+
+  const signIn = async (account: string, password: string) => {
+    setBusy(true);
+    setFailure(null);
+    let listed: CloudSource[];
+    try {
+      listed = await relay.signIn(account, password);
+    } catch (error) {
+      setFailure(hostedFailureOf(error));
+      setBusy(false);
+      return;
+    }
+    setHosts(listed);
+    // 只有一台而且在线：不必挑，直接进（失败留在列表上，可以再点）。
+    if (listed.length === 1 && listed[0]!.online) {
+      await enter(listed[0]!);
+      return;
+    }
+    if (listed.length === 0) setFailure("noSources");
+    setBusy(false);
+  };
+
+  return (
+    <main
+      data-slot="relay-sign-in"
+      className="flex min-h-[100dvh] w-full flex-col items-center overflow-y-auto bg-background px-6 pt-[max(env(safe-area-inset-top),15vh)] pb-[max(env(safe-area-inset-bottom),24px)]"
+    >
+      <div className="flex w-full max-w-sm flex-col gap-6">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <BrandMark className="size-12 rounded-[var(--r-panel)]" />
+          <h1 className="text-[length:var(--text-display)] leading-tight font-semibold text-balance">
+            {t(
+              hosts === null
+                ? "remote.hosted.title"
+                : "remote.hosted.chooseHost",
+            )}
+          </h1>
+          <p className="font-mono text-[13px] text-muted-foreground tabular-nums">
+            {host}
+          </p>
+        </div>
+        {hosts === null ? (
+          <RelayForm
+            issuer={relay.issuer}
+            busy={busy}
+            message={message}
+            errorId={errorId}
+            onEdit={() => setFailure(null)}
+            onSubmit={({ account, password }) => void signIn(account, password)}
+          />
+        ) : (
+          <div className="flex flex-col gap-4">
+            {message && (
+              <Alert variant="destructive" id={errorId}>
+                <AlertTitle>{message}</AlertTitle>
+              </Alert>
+            )}
+            <ItemGroup className="gap-2">
+              {hosts.map((source) => {
+                const name = source.name || source.sourceId.slice(0, 8);
+                return (
+                  <Item
+                    key={source.sourceId}
+                    variant="outline"
+                    className="flex-nowrap p-0"
+                  >
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={busy || !source.online}
+                      aria-label={t("remote.hosted.open", { name })}
+                      className="h-auto min-h-12 min-w-0 flex-1 justify-start gap-2.5 rounded-lg px-3 py-2 text-left font-normal whitespace-normal"
+                      onClick={() => void enter(source)}
+                    >
+                      <ItemContent className="min-w-0">
+                        <ItemTitle className="max-w-full truncate">
+                          {name}
+                        </ItemTitle>
+                      </ItemContent>
+                      {!source.online && (
+                        <Badge variant="outline">
+                          {t("remote.hosted.offline")}
+                        </Badge>
+                      )}
+                      {entering === source.sourceId && (
+                        <Spinner aria-label={t("remote.status.connecting")} />
+                      )}
+                    </Button>
+                  </Item>
+                );
+              })}
+            </ItemGroup>
+          </div>
+        )}
+      </div>
+    </main>
+  );
+}

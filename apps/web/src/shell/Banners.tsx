@@ -2,6 +2,7 @@ import { useState, useSyncExternalStore, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  CloudOff,
   KeyRound,
   PlugZap,
   Recycle,
@@ -23,6 +24,8 @@ import { useAccess } from "../app/use-access";
 import { useEnabledAgents } from "../app/use-agents";
 import { useCanvasStore, type PanelState } from "../store/canvas-store";
 import { useOfflineBanner } from "../realtime/OfflineBanner";
+import { hostedRelay, type HostedStatus } from "../sources/hosted";
+import { SOURCE_ERROR } from "../sources/types";
 import { cn } from "@/lib/cn";
 import { Button } from "@/ui/button";
 import { IconButton } from "@/ui/icon-button";
@@ -122,6 +125,37 @@ export function Banners() {
     onIdentitySessionChange,
     shellSessionFailure,
   );
+
+  // 中继托管的页面：主机下线时等它回来，被撤销时只能重新登录（客户端包 §5）。
+  const hosted = useHostedStatus();
+  if (hosted?.state === "waitingForSource") {
+    items.push(
+      <Banner
+        key="hosted-waiting"
+        tone="warn"
+        icon={<CloudOff />}
+        text={t(`remote.status.${hosted.state}`)}
+      />,
+    );
+  } else if (hosted?.state === "unauthorized") {
+    const code = hosted.lastError?.code;
+    items.push(
+      <Banner
+        key="hosted-revoked"
+        tone="danger"
+        icon={<KeyRound />}
+        text={t(
+          code === SOURCE_ERROR.accessRevoked
+            ? "remote.error.accessRevoked"
+            : code === SOURCE_ERROR.revoked
+              ? "remote.error.sourceRevoked"
+              : "remote.status.unauthorized",
+        )}
+        actionLabel={t("remote.hosted.signInAgain")}
+        onAction={() => location.reload()}
+      />,
+    );
+  }
 
   if (shellFailure !== null) {
     items.push(
@@ -254,6 +288,17 @@ export function Banners() {
     >
       {items}
     </div>
+  );
+}
+
+const NO_HOSTED = () => () => undefined;
+
+/** 中继托管页面上当前主机的状态；别的页面是 `null`。 */
+function useHostedStatus(): HostedStatus | null {
+  const relay = hostedRelay();
+  return useSyncExternalStore(
+    relay === null ? NO_HOSTED : relay.subscribe,
+    () => relay?.status ?? null,
   );
 }
 
