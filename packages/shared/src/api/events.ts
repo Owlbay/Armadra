@@ -261,6 +261,19 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
     nodeId: z.string().optional(),
     reasonCode: z.string(),
   }),
+  /** 出站中继隧道换了状态（契约 §32）；不进 outbox。 */
+  z.object({
+    type: z.literal("cloud.tunnel"),
+    issuer: z.string(),
+    state: z.enum([
+      "disabled",
+      "connecting",
+      "authenticating",
+      "ready",
+      "draining",
+      "backoff",
+    ]),
+  }),
   /** 一个会话的资源用量越过阈值（契约 §27）；`metric` 今天只有 `memory`（字节）。 */
   z.object({
     type: z.literal("resources.threshold"),
