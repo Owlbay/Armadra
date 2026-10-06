@@ -2235,7 +2235,7 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 
 - 只有中继发 `OPEN`；每条流在 core 里是一个 `Duplex`，交给一个只给隧道用的监听，由 Node 自己解析里面的 HTTP/1.1 与 WebSocket 升级。HTTP 流一流一个请求（中继给 `connection: close`）。流数超过 `limits.maxStreams` 答 `RST refused`。
 - 流控：`DATA` 按 64 KiB 切块，同时扣流信用与隧道信用，任一不足就等 `WINDOW`；交给上层的字节累计到窗口一半时补回。对端超发 → `RST 5` 并以 `4400` 关隧道。没发出去的字节留在流的写缓冲里，WebSocket 的 `bufferedAmount` 含这一段，五条长连接的发送队列（§3.4）照常据此判拥塞、暂停生产者。
-- 心跳：收到 `PING` 立即回 `PONG`；core 自己每 `heartbeatMs` 发一次 `PING`，连续两次没有 `PONG` 断开重连。长连接上 core 自己的 ws 心跳（§3.4）照旧经隧道走。
+- 心跳：收到 `PING` 立即回 `PONG`；core 自己每 `heartbeatMs` 发一次 `PING`，连续两次没有 `PONG` 断开重连。另有静默超时：就绪后连续 `heartbeatMisses × heartbeatMs`（缺省 40 秒）没收到中继的任何帧，同样以 `heartbeat_timeout` 断开、退避重连——中继被冻住或 NAT 表项悄悄失效时 TCP 不报错，只等 `PONG` 要到第三拍才发现。长连接上 core 自己的 ws 心跳（§3.4）照旧经隧道走。
 - `GOAWAY`：不退避，立即换节点再连一条；旧隧道不再接新流，流自然结束（或 `graceMs` 到了）后关闭。
 - 退避：`min(60 s, 1 s × 2^n) × (0.5 + 随机)`，就绪过一次 `n` 归零。
 - 隧道断开时这条隧道上的流以 `RST sourceGone` 结束，经它进来的 HTTP 与 WebSocket 随之结束；终端、Agent、画布不依赖连接存活。

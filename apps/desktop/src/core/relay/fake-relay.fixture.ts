@@ -72,6 +72,11 @@ export class FakeTunnel {
   pings = 0;
   /** `true`：收到的 PING 不答（让 core 的心跳超时）。 */
   silent = false;
+  /**
+   * `true`：像 `docker pause` 那样冻住——收到的帧一律丢、什么也不发，连接本身
+   * 不断（core 那头看不到 TCP 错误）。
+   */
+  frozen = false;
   /** `true`：流级 WINDOW 先扣下（窗口耗尽测试），`releaseWindows()` 再发。 */
   holdWindows = false;
   private held: Frame[] = [];
@@ -134,7 +139,7 @@ export class FakeTunnel {
   }
 
   send(frame: Frame): void {
-    if (this.ws.readyState !== WebSocket.OPEN) return;
+    if (this.frozen || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(encodeFrame(frame), { binary: true });
   }
 
@@ -144,6 +149,7 @@ export class FakeTunnel {
   }
 
   private receive(bytes: Uint8Array): void {
+    if (this.frozen) return;
     const frame = decodeFrame(bytes);
     switch (frame.type) {
       case "data": {

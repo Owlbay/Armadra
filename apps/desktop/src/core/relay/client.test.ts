@@ -117,10 +117,60 @@ describe("心跳、GOAWAY 与退避", () => {
     await world.register();
     const first = await world.relay.nextTunnel(0);
     first.silent = true;
-    const code = await first.closed;
-    expect(code).toBe(1006);
+    // 中继自己照常发 PING：隧道不静默，断开只能来自「两次没有 PONG」。
+    const chatter = setInterval(() => first.ping(), 10);
+    try {
+      const code = await first.closed;
+      expect(code).toBe(1006);
+    } finally {
+      clearInterval(chatter);
+    }
     expect(first.pings).toBeGreaterThanOrEqual(2);
     await world.relay.nextTunnel(1);
+  });
+
+  it("中继被冻住（不发任何帧、连接不断）：两个心跳周期内判定断开、进退避", async () => {
+    const heartbeatMs = 150;
+    world = await relayCore({
+      relay: { heartbeatMs },
+      backoff: () => 60_000,
+    });
+    await world.register();
+    const first = await world.relay.nextTunnel(0);
+    const current = world;
+    const issuer = current.cloud.registrations()[0]!.issuer;
+    await until(() => current.tunnels.status(issuer).state === "ready");
+    const frozenAt = performance.now();
+    first.frozen = true;
+    await until(
+      () => current.tunnels.status(issuer).state === "backoff",
+      5_000,
+    );
+    const detectedMs = performance.now() - frozenAt;
+    // 最后一帧不晚于冻住那一刻：至多两个周期（留一个周期的调度余量）。
+    expect(detectedMs).toBeLessThan(3 * heartbeatMs);
+    expect(world.tunnels.status(issuer).lastError).toEqual({
+      code: "heartbeat_timeout",
+      message: "中继超过两个心跳周期没有任何帧",
+    });
+    expect(world.tunnels.status(issuer).streams).toBe(0);
+  });
+
+  it("帧一直在来：静默看门狗不误判，隧道保持 ready", async () => {
+    const heartbeatMs = 60;
+    world = await relayCore({ relay: { heartbeatMs } });
+    await world.register();
+    const first = await world.relay.nextTunnel(0);
+    const current = world;
+    const issuer = current.cloud.registrations()[0]!.issuer;
+    await until(() => current.tunnels.status(issuer).state === "ready");
+    await new Promise((resolve) => setTimeout(resolve, 8 * heartbeatMs));
+    expect(first.closeCode).toBeUndefined();
+    expect(world.relay.connections).toBe(1);
+    expect(world.tunnels.status(issuer)).toMatchObject({
+      state: "ready",
+      lastError: null,
+    });
   });
 
   it("中继发的 PING 立即回 PONG", async () => {

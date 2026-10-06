@@ -7,6 +7,9 @@
  *                         │ 失败 / 关闭 ─────────────────────────────────────────────▶ backoff ─定时─▶ connecting
  * ```
  *
+ * 心跳：每 `heartbeatMs` 发 `PING`，连续两次没有 `PONG` 断开；另有静默看门狗，
+ * 就绪后 `heartbeatMisses × heartbeatMs` 没收到任何帧也断开（都记 `heartbeat_timeout`）。
+ *
  * 旁路保证：`start()` 不等任何网络，失败只进状态（`lastError`）与退避；隧道断开时
  * 只是这条隧道上的流以 `RST sourceGone` 结束，Node 的 HTTP 层自己收拾这些连接。
  * 终端、Agent、画布都不依赖连接存活，本机回环上的一切不受影响。
@@ -421,6 +424,14 @@ class TunnelConnection {
   private maxStreams: number = LIMITS.maxStreams;
   private missed = 0;
   private heartbeat: NodeJS.Timeout | undefined;
+  /**
+   * 静默看门狗：就绪后多久没收到中继的任何帧就判定断开（`heartbeatMisses ×
+   * heartbeatMs`）。中继被冻住（进程挂起、NAT 表项悄悄失效）时 TCP 不报错，
+   * 只靠「连续两次没有 PONG」要等到第三拍才发现；按最后一帧计时最多两拍。
+   */
+  private watchdog: NodeJS.Timeout | undefined;
+  private silenceLimitMs = 0;
+  private lastHeardAt = 0;
   private handshakeTimer: NodeJS.Timeout | undefined;
   private graceTimer: NodeJS.Timeout | undefined;
   private readonly nonce = randomBytes(16).toString("base64url");
@@ -477,6 +488,7 @@ class TunnelConnection {
       this.events.authenticating();
     });
     ws.on("message", (data: RawData, isBinary: boolean) => {
+      this.lastHeardAt = performance.now();
       if (isBinary) this.receive(bytesOf(data));
       else void this.onText(bytesOf(data).toString("utf8"));
     });
@@ -563,6 +575,9 @@ class TunnelConnection {
       this.everReady = true;
       this.heartbeat = setInterval(() => this.tick(), heartbeatMs);
       this.heartbeat.unref();
+      this.silenceLimitMs = LIMITS.heartbeatMisses * heartbeatMs;
+      this.lastHeardAt = performance.now();
+      this.watch(this.silenceLimitMs);
       this.events.ready(this.relayNode ?? "");
       return;
     }
@@ -722,7 +737,10 @@ class TunnelConnection {
   private tick(): void {
     if (this.phase === "closed") return;
     if (this.missed >= LIMITS.heartbeatMisses) {
-      this.error = { code: "heartbeat_timeout", message: "中继心跳超时" };
+      this.error = {
+        code: "heartbeat_timeout",
+        message: "中继连续两次没有回 PONG",
+      };
       this.ws?.terminate();
       return;
     }
@@ -730,10 +748,31 @@ class TunnelConnection {
     this.send({ type: "ping", ts: Date.now() });
   }
 
+  private watch(delayMs: number): void {
+    this.watchdog = setTimeout(() => this.checkSilence(), delayMs);
+    this.watchdog.unref();
+  }
+
+  private checkSilence(): void {
+    this.watchdog = undefined;
+    if (this.phase === "closed") return;
+    const silentMs = performance.now() - this.lastHeardAt;
+    if (silentMs >= this.silenceLimitMs) {
+      this.error = {
+        code: "heartbeat_timeout",
+        message: "中继超过两个心跳周期没有任何帧",
+      };
+      this.ws?.terminate();
+      return;
+    }
+    this.watch(this.silenceLimitMs - silentMs);
+  }
+
   private finish(code: number): void {
     if (this.phase === "closed") return;
     this.phase = "closed";
     if (this.heartbeat !== undefined) clearInterval(this.heartbeat);
+    if (this.watchdog !== undefined) clearTimeout(this.watchdog);
     if (this.handshakeTimer !== undefined) clearTimeout(this.handshakeTimer);
     if (this.graceTimer !== undefined) clearTimeout(this.graceTimer);
     for (const stream of [...this.streams.values()]) {
