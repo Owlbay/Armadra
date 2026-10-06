@@ -39,7 +39,7 @@ import { meta, oc } from "./meta.js";
  * 写是 `github:write`；`resolve` 虽是 `POST`，只是读。
  */
 
-const base = { since: "1.10", contract: "§41.2" } as const;
+const base = { since: "1.11", contract: "§41.2" } as const;
 const REPO = "/api/forge/repos/{host}/{owner}/{name}";
 
 const repoRef = z.object({

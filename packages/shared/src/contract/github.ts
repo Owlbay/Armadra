@@ -51,7 +51,7 @@ import { meta, oc } from "./meta.js";
  */
 
 const base = {
-  since: "1.10",
+  since: "1.11",
   contract: "§41.1",
   workspaceKey: "workspaceId",
 } as const;

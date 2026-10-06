@@ -215,7 +215,7 @@ describe("GitHub 的 HTTP 面", () => {
     );
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({
-      code: "PERMISSION_DENIED",
+      code: "forbidden",
       message: "GitHub permission or CSRF check failed",
     });
   });
@@ -249,7 +249,7 @@ describe("GitHub 的 HTTP 面", () => {
     });
     expect(write.status).toBe(403);
     expect(await write.json()).toEqual({
-      code: "PERMISSION_DENIED",
+      code: "forbidden",
       message: "GitHub permission or CSRF check failed",
     });
     const withCsrf = await apiCall(harnessed, "set-issue-state", closeIssue, {
@@ -275,7 +275,7 @@ describe("GitHub 的 HTTP 面", () => {
     );
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({
-      code: "UNAUTHENTICATED",
+      code: "unauthenticated",
       message: "Device session is invalid or expired",
     });
   });
@@ -287,7 +287,7 @@ describe("GitHub 的 HTTP 面", () => {
     const refused = await apiCall(harnessed, "get-credential", {}, anonymous);
     expect(refused.status).toBe(401);
     expect(await refused.json()).toEqual({
-      code: "UNAUTHENTICATED",
+      code: "unauthenticated",
       message: "Device session is invalid or expired",
     });
     setLoopbackAnonymousOwner(true);
@@ -362,12 +362,12 @@ describe("GitHub 的 HTTP 面", () => {
     });
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
-      code: "INVALID_ARGUMENT",
+      code: "bad_request",
       message: "Invalid GitHub request",
     });
   });
 
-  it("没报工作空间就是 INVALID_ARGUMENT，不是一次「空列表」", async () => {
+  it("没报工作空间就是 bad_request，不是一次「空列表」", async () => {
     const response = await fetch(
       `${harnessed.base}${API_PREFIX}get-credential`,
       {
@@ -382,13 +382,13 @@ describe("GitHub 的 HTTP 面", () => {
       },
     );
     expect(response.status).toBe(400);
-    expect((await response.json()).code).toBe("INVALID_ARGUMENT");
+    expect((await response.json()).code).toBe("bad_request");
   });
 
   it("没有这个动词就是 404，而不是一个看起来成功的空响应", async () => {
     const response = await apiCall(harnessed, "not-a-verb", {});
     expect(response.status).toBe(404);
-    expect((await response.json()).code).toBe("NOT_FOUND");
+    expect((await response.json()).code).toBe("not_found");
   });
 
   it("24 个动词各有一条 JSON 路由，拼法是方法名的 kebab-case", () => {
