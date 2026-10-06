@@ -258,6 +258,12 @@
    */
   --window-controls-left: 0px;
   --window-controls-top: 0px;
+  /*
+   * 浮层（对话框、抽屉、弹出层）的顶边：安全区与窗口控件里高的那个。`ui/` 的
+   * Dialog / AlertDialog / Sheet 用它让开；弹出层的 collisionPadding 由
+   * `ui/safe-area.ts` 按同一规则量成像素。
+   */
+  --overlay-inset-top: max(var(--safe-top), var(--window-controls-top));
   --drawer-w: 360px;
   --scm-w: 460px;
   /* Git 工具窗口停在底部（Git 工具窗口设计 §2.1）；拖过之后走偏好里的 px。 */

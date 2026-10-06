@@ -5,6 +5,7 @@ import { AlertDialog as AlertDialogPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/cn";
 import { Button } from "@/ui/button";
+import { SAFE_CENTERED } from "@/ui/safe-area";
 
 function AlertDialog({
   ...props
@@ -58,7 +59,9 @@ function AlertDialogContent({
         data-slot="alert-dialog-content"
         data-size={size}
         className={cn(
-          "group/alert-dialog-content fixed top-1/2 left-1/2 z-50 grid w-full -translate-x-1/2 -translate-y-1/2 gap-4 rounded-[var(--r-dialog)] bg-popover p-5 text-[length:var(--text-body)] text-popover-foreground shadow-[var(--shadow-dialog)] ring-1 ring-[var(--border)] duration-[120ms] outline-none data-[size=default]:max-w-xs data-[size=sm]:max-w-xs data-[size=default]:sm:max-w-[480px] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "group/alert-dialog-content fixed z-50 grid w-full -translate-x-1/2 -translate-y-1/2 overflow-y-auto",
+          SAFE_CENTERED,
+          "gap-4 rounded-[var(--r-dialog)] bg-popover p-5 text-[length:var(--text-body)] text-popover-foreground shadow-[var(--shadow-dialog)] ring-1 ring-[var(--border)] duration-[120ms] outline-none data-[size=default]:max-w-xs data-[size=sm]:max-w-xs data-[size=default]:sm:max-w-[480px] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className,
         )}
         {...props}

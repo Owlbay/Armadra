@@ -124,7 +124,8 @@ describe("ResponsiveAlertDialog", () => {
     const dialog = screen.getByRole("alertdialog", { name: "remove" });
     expect(dialog.getAttribute("data-slot")).toBe("alert-dialog-content");
     expect(dialog.getAttribute("data-responsive")).toBeNull();
-    expect(dialog.className).toContain("top-1/2");
+    // 居中点让开安全区（`ui/safe-area.ts` 的 SAFE_CENTERED），不再是 top-1/2。
+    expect(dialog.className).toContain("top-[calc(50%+");
     expect(dialog.className).toContain("sm:max-w-[420px]");
     expect(
       dialog.querySelector('[data-slot="responsive-dialog-handle"]'),
@@ -138,7 +139,7 @@ describe("ResponsiveAlertDialog", () => {
     const dialog = screen.getByRole("alertdialog", { name: "remove" });
     expect(dialog.getAttribute("data-responsive")).toBe("sheet");
     expect(dialog.className).toContain("bottom-0");
-    expect(dialog.className).not.toContain("top-1/2");
+    expect(dialog.className).not.toContain("top-[calc(50%+");
     expect(dialog.className).toContain("rounded-t-[14px]");
     expect(dialog.className).toContain("var(--safe-bottom)");
     expect(dialog.className).not.toContain("sm:max-w-[420px]");

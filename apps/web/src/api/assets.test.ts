@@ -154,6 +154,170 @@ describe("downloadRuntimeFile", () => {
   });
 });
 
+describe("downloadRuntimeFile 流式保存", () => {
+  function picked() {
+    const chunks: Uint8Array[] = [];
+    let closed = false;
+    const removed = vi.fn(async () => undefined);
+    const handle = {
+      createWritable: async () =>
+        new WritableStream<Uint8Array>({
+          write(chunk) {
+            chunks.push(chunk);
+          },
+          close() {
+            closed = true;
+          },
+        }),
+      remove: removed,
+    };
+    const picker = vi.fn(async () => handle);
+    return {
+      picker,
+      chunks,
+      removed,
+      get closed() {
+        return closed;
+      },
+    };
+  }
+
+  function streamed(parts: string[]): Response {
+    const encoder = new TextEncoder();
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const part of parts) controller.enqueue(encoder.encode(part));
+          controller.close();
+        },
+      }),
+    );
+  }
+
+  it("有保存对话框：先选文件，再把响应体逐块写进去，不取 Blob", async () => {
+    const save = picked();
+    const response = streamed(["ab", "cd", "ef"]);
+    const blob = vi.spyOn(response, "blob");
+    const load = vi.fn(async () => response) as unknown as typeof fetch;
+    await expect(
+      downloadRuntimeFile("http://core/x", "x.bin", load, {
+        picker: save.picker,
+      }),
+    ).resolves.toBe(true);
+    expect(save.picker).toHaveBeenCalledWith({ suggestedName: "x.bin" });
+    expect(save.chunks.map((chunk) => new TextDecoder().decode(chunk))).toEqual(
+      ["ab", "cd", "ef"],
+    );
+    expect(save.closed).toBe(true);
+    expect(blob).not.toHaveBeenCalled();
+    expect(created).toBe(0);
+  });
+
+  it("取消保存对话框答 true，不发请求", async () => {
+    const load = vi.fn();
+    const picker = vi.fn(async () => {
+      throw new DOMException("cancelled", "AbortError");
+    });
+    await expect(
+      downloadRuntimeFile(
+        "http://core/x",
+        "x",
+        load as unknown as typeof fetch,
+        {
+          picker,
+        },
+      ),
+    ).resolves.toBe(true);
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it("取不回答 false，并删掉对话框建出来的文件", async () => {
+    const save = picked();
+    const load = vi.fn(
+      async () => new Response("no", { status: 401 }),
+    ) as unknown as typeof fetch;
+    await expect(
+      downloadRuntimeFile("http://core/x", "x", load, { picker: save.picker }),
+    ).resolves.toBe(false);
+    expect(save.removed).toHaveBeenCalledTimes(1);
+  });
+
+  it("对话框打不开（没有用户激活）时退回 Blob", async () => {
+    const picker = vi.fn(async () => {
+      throw new DOMException("no activation", "SecurityError");
+    });
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    try {
+      await expect(
+        downloadRuntimeFile(
+          "http://core/x",
+          "x",
+          vi.fn(async () => new Response("x")) as unknown as typeof fetch,
+          { picker, sources: [], origin: "http://page" },
+        ),
+      ).resolves.toBe(true);
+    } finally {
+      click.mockRestore();
+    }
+    expect(created).toBe(1);
+  });
+
+  it("同源的 Cookie 源：只看状态就中止，正文交给浏览器自己的下载", async () => {
+    const PAGE = "https://armadra.example";
+    const url = `${PAGE}/api/workspaces/w1/file-download?path=big.iso`;
+    let signal: AbortSignal | undefined;
+    const response = streamed(["never read"]);
+    const blob = vi.spyOn(response, "blob");
+    const load = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return response;
+    }) as unknown as typeof fetch;
+    const clicked: { href: string; download: string }[] = [];
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        clicked.push({ href: this.href, download: this.download });
+      });
+    try {
+      await expect(
+        downloadRuntimeFile(url, "big.iso", load, {
+          picker: null,
+          sources: [source(PAGE, "cookie")],
+          origin: PAGE,
+        }),
+      ).resolves.toBe(true);
+    } finally {
+      click.mockRestore();
+    }
+    expect(signal?.aborted).toBe(true);
+    expect(blob).not.toHaveBeenCalled();
+    expect(clicked).toEqual([{ href: url, download: "big.iso" }]);
+    expect(created).toBe(0);
+  });
+
+  it("同源但是 Bearer 的源：直接的链接没有凭据，仍经 Blob", async () => {
+    const PAGE = "https://armadra.example";
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    try {
+      await expect(
+        downloadRuntimeFile(
+          `${PAGE}/api/x`,
+          "x",
+          vi.fn(async () => new Response("x")) as unknown as typeof fetch,
+          { picker: null, sources: [source(PAGE, "bearer")], origin: PAGE },
+        ),
+      ).resolves.toBe(true);
+    } finally {
+      click.mockRestore();
+    }
+    expect(created).toBe(1);
+  });
+});
+
 describe("acquireAssetUrl", () => {
   it("同一个地址共用一次取回；最后一个占用者走时回收", async () => {
     const load = vi.fn(async () => new Response("png"));

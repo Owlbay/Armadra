@@ -7,7 +7,8 @@
  *
  * 每条带用途、频率与关闭开关。开关是设置键（`null` = 不配置即不联网，没有单独的
  * 开关）；`defaultOn` 是那个键缺省时的值。浏览器节点与各 CLI 自己的网络访问不在
- * 这里——它们是用户的程序。
+ * 这里——它们是用户的程序；但 core 替用户起的联网子进程（如代装适配器的 npm）
+ * 要登记，并以 {@link SPAWNED_OUTBOUND} 标出是哪个程序在连。
  *
  * 本文件不 import 任何东西：表是数据，读开关的是各域自己。
  */
@@ -247,9 +248,32 @@ export const OUTBOUND = {
     defaultOn: false,
     documented: true,
   },
+  npmRegistry: {
+    // core 自己不连：它起 `npm install --global <包>`（契约 §39.7，`agent/
+    // adapter-install.ts`），由 npm 去连。用户的 `.npmrc` 可换成镜像或代理，
+    // 所以实际主机以用户配置为准；这里记 npm 的缺省 registry。
+    url: "https://registry.npmjs.org",
+    purpose: "ACP 适配器安装（core 起的 npm 子进程下载包）",
+    cadence: "用户动作：点「安装」时 1 次，10 分钟超时",
+    switch: null,
+    defaultOn: false,
+    documented: true,
+  },
 } as const satisfies Record<string, OutboundEndpoint>;
 
 export type OutboundId = keyof typeof OUTBOUND;
+
+/**
+ * 表里由 core 起的子进程去连、而不是 core 自己 `fetch` 的条目：id → 子进程的程序名
+ * 与起它的源文件（相对 core 根）。`outbound.test.ts` 核对那个文件确实引用了这条。
+ */
+export const SPAWNED_OUTBOUND: Readonly<
+  Partial<
+    Record<OutboundId, { readonly program: string; readonly file: string }>
+  >
+> = {
+  npmRegistry: { program: "npm", file: "agent/adapter-install.ts" },
+};
 
 /** FCM 服务账号断言的 OAuth scope：长得像地址，但不是要连的地方。 */
 export const FCM_MESSAGING_SCOPE =
