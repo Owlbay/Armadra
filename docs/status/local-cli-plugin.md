@@ -218,3 +218,9 @@ real-acceptance-preflight.json。没有修改业务实现、凭据或权限，�
 - 11 个 macOS 确定性探针通过：私有通道、普通双节点依赖执行、取消且保留无关运行、2 MiB 终端输出、提交后崩溃，以及 `launch.before/after`、`delivery.before/after` 四个边界；安装缓存客户端的 smoke 与双节点运行也通过。后者证明已安装客户端兼容新版 core，不替代 Codex 宿主或真实双模型验收。未知启动/投递结果保持 blocked，提交后的丢失会话为 failed；重放副作用次数均为 0。
 - 本轮成功探针合计 CLI 调用 164 次，stdout 85,588 字节；单次 2 MiB 终端输出未进入 CLI 响应。真实模型调用 0，宿主 token 数据本轮不可提供，不估算节省比例。证据在本机忽略目录 `target/sync-*.log`，主要文件包括 `sync-check-final.log`、`sync-{shared,web-final,desktop,server,release,plugin,real-test}.log`、`sync-{smoke,run,cancel,large-output,crash,launch-before,launch-after,delivery-before,delivery-after,installed-smoke,installed-run,build-final}.log`。
 - 真实 Codex→Claude、更新后的 Codex 宿主、Linux 实机与 tmux 恢复验收未在本次代码同步中完成；之前的阻塞与解锁条件仍有效。目标不因同步、构建或假 CLI 通过而标记完成。
+
+### 合并后 main CI 修复（2026-10-07）
+
+- Windows：`RunService.start` 在 win32 按设计返回 `unsupported_platform`，而 `runs/service.test.ts` 的编排用例未区分宿主，15 条在 Windows 全部失败。`RunServiceOptions` 增加可注入的 `platform`（缺省 `process.platform`，生产行为不变），编排用例注入 `linux`（终端为桩，与宿主无关）；新增用例在注入 `win32` 时断言拒绝且不写 `runs`。
+- Linux：`controller/channel.test.ts` 的超限请求在 413 响应后，客户端未写完的请求体可能因服务端关闭连接报 `EPIPE`；此时请求已不再监听 socket，错误成为未捕获异常，使整次测试失败。测试客户端改为 `agent: false` 并只吞掉响应之后的 socket 错误（响应前的错误仍使用例失败）；服务端超限时设 `shouldKeepAlive = false`，不复用未读完请求体的连接。断言未改。CLI 客户端发送前已按 256 KiB 拒绝，不受影响。
+- 本机：`pnpm check` 通过；desktop 5,318 passed / 74 skipped。三平台结果以 PR CI 为准。
