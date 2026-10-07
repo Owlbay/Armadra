@@ -22,6 +22,7 @@ import {
 import { useT } from "@/app/preferences-store";
 import { useCanvasStore } from "@/store/canvas-store";
 import { frameBindingOf } from "../frame-binding";
+import { ungroup } from "../import-group";
 import { runCanvasCommand } from "../commands";
 import { ReferenceSubmenu } from "./reference-menu";
 
@@ -176,6 +177,14 @@ export function NodeMenuContent({ node }: { node: CanvasNode }) {
         // Frame 可以当引用来源：引用它 = 引用它圈住的那一片
         // （`canvas/frame-reference.ts`）。白板对象那条路在 `item-menu.tsx`。
         <ReferenceSubmenu sourceId={node.id} />
+      ) : null}
+
+      {node.type === "group" ? (
+        // 解组：组员回到页面级、组框删掉（导入批次的组也这样拆开）。
+        <ContextMenuItem onSelect={() => ungroup(node.id)}>
+          <Ungroup />
+          {t("canvas.group.ungroup")}
+        </ContextMenuItem>
       ) : null}
 
       {frameBindingOf(node) ? (

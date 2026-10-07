@@ -121,6 +121,11 @@ const zh = {
   "canvas.selectAll": "全选",
   "canvas.fitView": "适应视图",
   "canvas.tidy": "整理画布",
+  "canvas.tidySelection": "整理选中",
+  /* 导入批次的组名（UI 设计 §6.3）与解组 */
+  "canvas.group.import": "导入",
+  "canvas.group.mermaid": "Mermaid", // i18n-exempt
+  "canvas.group.ungroup": "解组",
   "canvas.lock": "锁定视图",
   "canvas.unlock": "解锁视图",
   "canvas.minimap": "缩略图",
@@ -338,6 +343,10 @@ const en: Record<keyof typeof zh, string> = {
   "canvas.selectAll": "Select all",
   "canvas.fitView": "Fit view",
   "canvas.tidy": "Tidy",
+  "canvas.tidySelection": "Tidy selection",
+  "canvas.group.import": "Import",
+  "canvas.group.mermaid": "Mermaid", // i18n-exempt
+  "canvas.group.ungroup": "Ungroup",
   "canvas.lock": "Lock camera",
   "canvas.unlock": "Unlock camera",
   "canvas.minimap": "Minimap",

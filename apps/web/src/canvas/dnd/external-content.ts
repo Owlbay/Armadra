@@ -11,7 +11,8 @@ import {
 } from "@armadra/shared";
 import { runtimeApi } from "../../api/client";
 import { AssetTooLargeError, uploadAsset } from "../assets";
-import { addItems } from "../whiteboard/store";
+import type { Item } from "../whiteboard/model";
+import { commitBatch, emptyBatch, type ImportBatch } from "../import-group";
 import { isMermaidFileName } from "../whiteboard/mermaid/detect";
 import { openMermaidImport } from "../whiteboard/mermaid/open";
 import { viewportCentre } from "../interaction/pointer";
@@ -225,6 +226,7 @@ export async function createImageShapes(
   files: readonly File[],
   point: Position,
   target: ImportTarget | null = captureImportTarget(),
+  batch?: ImportBatch,
 ): Promise<string[]> {
   if (!target || files.length === 0) return [];
   const uploaded: { path: string; size: ImageBox; alt: string }[] = [];
@@ -254,21 +256,25 @@ export async function createImageShapes(
     uploaded.map((entry) => entry.size),
     point,
   );
-  return addItems(
-    uploaded.map((entry, index) => ({
-      id: crypto.randomUUID(),
-      kind: "image" as const,
-      x: points[index]!.x,
-      y: points[index]!.y,
-      w: entry.size.w,
-      h: entry.size.h,
-      z: 0,
-      parentId: null,
-      style: { color: "black" as const, size: "m" as const },
-      assetPath: entry.path,
-      alt: entry.alt,
-    })),
-  );
+  const items: Item[] = uploaded.map((entry, index) => ({
+    id: crypto.randomUUID(),
+    kind: "image" as const,
+    x: points[index]!.x,
+    y: points[index]!.y,
+    w: entry.size.w,
+    h: entry.size.h,
+    z: 0,
+    parentId: null,
+    style: { color: "black" as const, size: "m" as const },
+    assetPath: entry.path,
+    alt: entry.alt,
+  }));
+  // 调用方在攒一整批（图片 + 文件）时只交出对象，由它一次落地。
+  if (batch) {
+    batch.items.push(...items);
+    return items.map((item) => item.id);
+  }
+  return commitBatch({ nodes: [], items }, t("canvas.group.import")).itemIds;
 }
 
 /* ------------------------------- 节点落地 --------------------------------- */
@@ -306,16 +312,27 @@ export function importTargetIsActive(target: ImportTarget): boolean {
 }
 
 function addImportedNode(
-  target: ImportTarget,
+  batch: ImportBatch,
   file: ImportedFileInfo,
   position: Position,
 ) {
-  if (!importTargetIsActive(target)) return;
-  useCanvasStore.getState().addNode("editor", {
-    position,
-    title: file.name,
-    data: { kind: "editor", path: file.path },
+  batch.nodes.push({
+    type: "editor",
+    options: {
+      position,
+      title: file.name,
+      data: { kind: "editor", path: file.path },
+    },
   });
+}
+
+/**
+ * 一批导入的东西一次落地（UI 设计 §6.3）：≥ 2 个对象时套一个「导入」组，
+ * 整理时它是一个刚体；单个不套。导入中途换了画布就什么都不落。
+ */
+function commitImport(target: ImportTarget, batch: ImportBatch): void {
+  if (!importTargetIsActive(target)) return;
+  commitBatch(batch, t("canvas.group.import"));
 }
 
 export async function addNodeForPath(
@@ -336,29 +353,43 @@ export async function addWorkspaceEntriesToCanvas(
     throw new FileDragError("fileDrag.destinationChanged");
   if (!entries.length || entries.length > MAX_IMPORT_FILES)
     throw new FileDragError("fileDrag.invalidPayload");
-  for (const [index, entry] of entries.entries()) {
-    if (!importTargetIsActive(target)) return;
-    assertRelativeWorkspacePath(entry.path);
-    const point = offsetBy(position, index);
-    if (entry.kind === "directory") {
-      const directory = await runtimeApi.listFiles(
-        target.workspaceId,
-        entry.path,
-      );
-      assertRelativeWorkspacePath(directory.path, true);
-      if (importTargetIsActive(target))
-        useCanvasStore.getState().addNode("files", {
-          position: point,
-          title: entry.name,
-          data: { kind: "files", path: directory.path },
+  const batch = emptyBatch();
+  try {
+    for (const [index, entry] of entries.entries()) {
+      if (!importTargetIsActive(target)) return;
+      assertRelativeWorkspacePath(entry.path);
+      const point = offsetBy(position, index);
+      if (entry.kind === "directory") {
+        const directory = await runtimeApi.listFiles(
+          target.workspaceId,
+          entry.path,
+        );
+        assertRelativeWorkspacePath(directory.path, true);
+        batch.nodes.push({
+          type: "files",
+          options: {
+            position: point,
+            title: entry.name,
+            data: { kind: "files", path: directory.path },
+          },
         });
-    } else if (isImagePath(entry.path)) {
-      await importImageShape(target.workspaceId, entry.path, point, target);
-    } else {
-      const info = await runtimeApi.fileInfo(target.workspaceId, entry.path);
-      assertRelativeWorkspacePath(info.path);
-      addImportedNode(target, info, point);
+      } else if (isImagePath(entry.path)) {
+        const item = await importImageShape(
+          target.workspaceId,
+          entry.path,
+          point,
+          target,
+        );
+        if (item) batch.items.push(item);
+      } else {
+        const info = await runtimeApi.fileInfo(target.workspaceId, entry.path);
+        assertRelativeWorkspacePath(info.path);
+        addImportedNode(batch, info, point);
+      }
     }
+  } finally {
+    // 中途某一项抛错时，已经确认过的那些照样落地（与以前逐个落地一致）。
+    commitImport(target, batch);
   }
 }
 
@@ -373,16 +404,23 @@ export async function addNodesForPaths(
     return;
   }
   const external: { path: string; position: Position }[] = [];
+  const batch = emptyBatch();
   for (const [index, path] of paths.entries()) {
     if (!importTargetIsActive(target)) return;
     const point = offsetBy(position, index);
     if (isImagePath(path)) {
-      await importImageShape(target.workspaceId, path, point, target);
+      const item = await importImageShape(
+        target.workspaceId,
+        path,
+        point,
+        target,
+      );
+      if (item) batch.items.push(item);
       continue;
     }
     try {
       const info = await runtimeApi.fileInfo(target.workspaceId, path);
-      addImportedNode(target, info, point);
+      addImportedNode(batch, info, point);
     } catch {
       // Only an actual successful directory listing makes this a files node.
       // Permission errors must never masquerade as a file-type test.
@@ -390,30 +428,34 @@ export async function addNodesForPaths(
         .listFiles(target.workspaceId, path)
         .catch(() => null);
       if (directory) {
-        if (importTargetIsActive(target))
-          useCanvasStore.getState().addNode("files", {
+        batch.nodes.push({
+          type: "files",
+          options: {
             position: point,
             title: baseName(path),
             data: { kind: "files", path: directory.path },
-          });
+          },
+        });
       } else external.push({ path, position: point });
     }
   }
-  if (!external.length || !importTargetIsActive(target)) return;
-  try {
-    const result = await runtimeApi.importLocalFiles(
-      target.workspaceId,
-      external.map((entry) => entry.path),
-    );
-    result.files.forEach((file, index) =>
-      addImportedNode(target, file, external[index]!.position),
-    );
-    if (!importTargetIsActive(target)) toast.info(t("canvas.importSaved"));
-  } catch (cause) {
-    toast.error(t("canvas.importFailed"), {
-      description: (cause as Error).message,
-    });
+  if (external.length > 0 && importTargetIsActive(target)) {
+    try {
+      const result = await runtimeApi.importLocalFiles(
+        target.workspaceId,
+        external.map((entry) => entry.path),
+      );
+      result.files.forEach((file, index) =>
+        addImportedNode(batch, file, external[index]!.position),
+      );
+      if (!importTargetIsActive(target)) toast.info(t("canvas.importSaved"));
+    } catch (cause) {
+      toast.error(t("canvas.importFailed"), {
+        description: (cause as Error).message,
+      });
+    }
   }
+  commitImport(target, batch);
 }
 
 /** Browser paths are names relative to an imported copy, never local paths. */
@@ -434,33 +476,37 @@ export async function addBrowserFiles(
   const images = files.filter((file) => routeFile(file) === "image");
   const diagrams = files.filter((file) => routeFile(file) === "mermaid");
   const others = files.filter((file) => routeFile(file) === "file");
-  if (images.length) await createImageShapes(images, point, target);
+  // 图片与文件攒成一批，最后一次落地；Mermaid 走自己的对话框，自成一组。
+  const batch = emptyBatch();
+  if (images.length) await createImageShapes(images, point, target, batch);
   // 对话框一次只确认一张图，所以多个 `.mmd` 一起拖进来时只开第一个，
   // 其余按普通文件导入（设计 §4.4）。
   const [diagram, ...extraDiagrams] = diagrams;
   if (diagram) await openMermaidFile(diagram, point);
   others.push(...extraDiagrams);
-  if (!others.length || !importTargetIsActive(target)) return;
-  // Repeated names get distinct paths without overwriting either file.
-  const used = new Set<string>();
-  const entries = others.map((file) => {
-    let path = file.name;
-    let index = 2;
-    while (used.has(path)) path = `${index++}-${file.name}`;
-    used.add(path);
-    return { file, path };
-  });
-  try {
-    const result = await runtimeApi.importFiles(target.workspaceId, entries);
-    result.files.forEach((file, index) =>
-      addImportedNode(target, file, offsetBy(point, index + images.length)),
-    );
-    if (!importTargetIsActive(target)) toast.info(t("canvas.importSaved"));
-  } catch (cause) {
-    toast.error(t("canvas.importFailed"), {
-      description: (cause as Error).message,
+  if (others.length > 0 && importTargetIsActive(target)) {
+    // Repeated names get distinct paths without overwriting either file.
+    const used = new Set<string>();
+    const entries = others.map((file) => {
+      let path = file.name;
+      let index = 2;
+      while (used.has(path)) path = `${index++}-${file.name}`;
+      used.add(path);
+      return { file, path };
     });
+    try {
+      const result = await runtimeApi.importFiles(target.workspaceId, entries);
+      result.files.forEach((file, index) =>
+        addImportedNode(batch, file, offsetBy(point, index + images.length)),
+      );
+      if (!importTargetIsActive(target)) toast.info(t("canvas.importSaved"));
+    } catch (cause) {
+      toast.error(t("canvas.importFailed"), {
+        description: (cause as Error).message,
+      });
+    }
   }
+  commitImport(target, batch);
 }
 
 /** A keyboard/touch-friendly alternative to drag-and-drop, reusable by menus. */
@@ -501,36 +547,34 @@ async function importImageShape(
   path: string,
   position: Position,
   target: ImportTarget,
-): Promise<void> {
+): Promise<Item | null> {
   let asset: { id: string; path: string };
   try {
     asset = await runtimeApi.importAsset(workspaceId, path);
   } catch (cause) {
     toast.error(t("canvas.assetFailed", { name: baseName(path) }));
     void cause;
-    return;
+    return null;
   }
-  if (!importTargetIsActive(target)) return;
+  if (!importTargetIsActive(target)) return null;
   const natural =
     (await fetchImageSize(runtimeApi.assetUrl(workspaceId, asset.id))) ??
     FALLBACK_IMAGE_SIZE;
-  if (!importTargetIsActive(target)) return;
+  if (!importTargetIsActive(target)) return null;
   const size = imageShapeSize(natural);
-  addItems([
-    {
-      id: crypto.randomUUID(),
-      kind: "image",
-      x: position.x - size.w / 2,
-      y: position.y - size.h / 2,
-      w: size.w,
-      h: size.h,
-      z: 0,
-      parentId: null,
-      style: { color: "black", size: "m" },
-      assetPath: asset.path,
-      alt: baseName(path),
-    },
-  ]);
+  return {
+    id: crypto.randomUUID(),
+    kind: "image",
+    x: position.x - size.w / 2,
+    y: position.y - size.h / 2,
+    w: size.w,
+    h: size.h,
+    z: 0,
+    parentId: null,
+    style: { color: "black", size: "m" },
+    assetPath: asset.path,
+    alt: baseName(path),
+  };
 }
 
 async function fetchImageSize(url: string): Promise<ImageBox | null> {

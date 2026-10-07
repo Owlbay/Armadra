@@ -218,7 +218,14 @@ export interface CanvasActions {
   undo: () => void;
   redo: () => void;
   /** `options.aspect` 是当前视口宽高比（§23）；缺省时按 16:9 裹。 */
-  arrangeNodes: (options?: { aspect?: number }) => void;
+  /**
+   * 整理排布（UI 设计 §6.5）。`only` 给了就只整理这些顶层对象（选区），
+   * 否则整理全画布；一次一条历史。
+   */
+  arrangeNodes: (options?: {
+    aspect?: number;
+    only?: ReadonlySet<string> | null;
+  }) => void;
 }
 
 export type CanvasStore = CanvasState & CanvasActions;

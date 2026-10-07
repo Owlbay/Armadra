@@ -11,7 +11,7 @@ import {
   type Item,
   type Reference,
 } from "./whiteboard/model";
-import { arrangeCanvas } from "./tidy-flow";
+import { arrangeCanvas, tidySelection } from "./tidy-flow";
 
 /**
  * 整理排布的画布侧（React Flow 计划 T06 / F09）。
@@ -142,8 +142,9 @@ describe("参与排布的对象", () => {
     const applied = arrangeCanvas({ aspect: 16 / 9 });
     const xs = Object.values(applied).map((point) => point.x);
     const ys = Object.values(applied).map((point) => point.y);
+    // 左上角吸到 8px 网格：400 本来就在格上，250 落到 248。
     expect(Math.min(...xs)).toBe(400);
-    expect(Math.min(...ys)).toBe(250);
+    expect(Math.min(...ys)).toBe(248);
   });
 });
 
@@ -215,10 +216,10 @@ describe("提交", () => {
   });
 
   it("已经整齐时不提交，也不记历史", () => {
-    const only = makeNode("sticky", { position: { x: 100, y: 100 } });
+    const only = makeNode("sticky", { position: { x: 104, y: 104 } });
     load([only]);
     const applied = arrangeCanvas({ aspect: 1 });
-    expect(applied[only.id]).toEqual({ x: 100, y: 100 });
+    expect(applied[only.id]).toEqual({ x: 104, y: 104 });
     expect(canUndo()).toBe(false);
   });
 
@@ -230,6 +231,94 @@ describe("提交", () => {
 
     expect(arrangeCanvas({ aspect: 1 })).toEqual({});
     expect(positionOf(one.id)).toEqual({ x: 900, y: 40 });
+    expect(canUndo()).toBe(false);
+  });
+});
+
+describe("§6.4 / §6.5", () => {
+  it("主从边：主在左，从在右侧同一列顶对齐", () => {
+    const main = makeNode("terminal", { position: { x: 3000, y: 3000 } });
+    const subs = [0, 1, 2].map((index) =>
+      makeNode("terminal", { position: { x: index * 700, y: index * 50 } }),
+    );
+    load([main, ...subs], {
+      edges: subs.map((sub) => ({
+        ...makeEdge(main.id, sub.id),
+        role: "supervises" as const,
+      })),
+    });
+    const applied = arrangeCanvas({ aspect: 100 });
+    const xs = new Set(subs.map((sub) => applied[sub.id]!.x));
+    expect(xs.size).toBe(1);
+    expect([...xs][0]).toBeGreaterThan(applied[main.id]!.x);
+    expect(applied[subs[0]!.id]!.y).toBe(applied[main.id]!.y);
+  });
+
+  it("散落的白板孤岛整体平移，岛内相对位置不变", () => {
+    const box = makeItem("shape", { x: 1000, y: 1000, w: 100, h: 40 });
+    const label = makeItem("text", { x: 1010, y: 1050, w: 80, h: 20 });
+    const node = makeNode("sticky", { position: { x: 0, y: 0 } });
+    load([node], { items: [box, label] });
+    arrangeCanvas({ aspect: 1 });
+    const a = itemPositionOf(box.id);
+    const b = itemPositionOf(label.id);
+    expect({ dx: b.x - a.x, dy: b.y - a.y }).toEqual({ dx: 10, dy: 50 });
+  });
+
+  it("只整理选中：未选中的坐标不变，一次撤销全回", () => {
+    const one = makeNode("sticky", { position: { x: 900, y: 40 } });
+    const two = makeNode("sticky", { position: { x: 40, y: 900 } });
+    const untouched = makeNode("sticky", { position: { x: 5000, y: 5000 } });
+    load([one, two, untouched]);
+    useCanvasStore.setState({ selectedNodeIds: [one.id, two.id] });
+
+    const only = tidySelection(useCanvasStore.getState());
+    expect(only && [...only].sort()).toEqual([one.id, two.id].sort());
+    const applied = arrangeCanvas({ aspect: 1, only });
+    expect(Object.keys(applied).sort()).toEqual([one.id, two.id].sort());
+    expect(positionOf(untouched.id)).toEqual({ x: 5000, y: 5000 });
+    // 原点取选区包围盒左上角（吸网格）。
+    const xs = Object.values(applied).map((point) => point.x);
+    const ys = Object.values(applied).map((point) => point.y);
+    expect(Math.min(...xs)).toBe(40);
+    expect(Math.min(...ys)).toBe(40);
+
+    undo();
+    expect(canUndo()).toBe(false);
+    expect(positionOf(one.id)).toEqual({ x: 900, y: 40 });
+    expect(positionOf(two.id)).toEqual({ x: 40, y: 900 });
+  });
+
+  it("选区不足两个顶层单元时整理全画布", () => {
+    const frame = makeNode("group", {
+      position: { x: 0, y: 0 },
+      size: { width: 400, height: 300 },
+    });
+    const a = makeNode("sticky", { parentId: frame.id });
+    const b = makeNode("sticky", { parentId: frame.id });
+    load([frame, a, b]);
+    // 两个组员上溯到同一个组 = 一个单元。
+    useCanvasStore.setState({ selectedNodeIds: [a.id, b.id] });
+    expect(tidySelection(useCanvasStore.getState())).toBeNull();
+    useCanvasStore.setState({ selectedNodeIds: [a.id] });
+    expect(tidySelection(useCanvasStore.getState())).toBeNull();
+  });
+
+  it("整理两次，第二次不再提交", () => {
+    const main = makeNode("terminal", { position: { x: 333, y: 777 } });
+    const sub = makeNode("terminal", { position: { x: 10, y: 10 } });
+    const web = makeNode("browser", { position: { x: 2000, y: 1500 } });
+    const item = makeItem("shape", { x: 1234, y: 99 });
+    load([main, sub, web], {
+      items: [item],
+      edges: [
+        { ...makeEdge(main.id, sub.id), role: "supervises" as const },
+        makeEdge(sub.id, web.id),
+      ],
+    });
+    arrangeCanvas({ aspect: 16 / 9 });
+    resetHistory();
+    arrangeCanvas({ aspect: 16 / 9 });
     expect(canUndo()).toBe(false);
   });
 });

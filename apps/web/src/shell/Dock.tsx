@@ -32,6 +32,7 @@ import {
 } from "@/ui/context-menu";
 import { IconButton } from "@/ui/icon-button";
 import { runCanvasCommand } from "@/canvas/commands";
+import { tidySelection } from "@/canvas/tidy-flow";
 import { Separator } from "@/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui/tooltip";
 import { cn } from "@/lib/cn";
@@ -63,6 +64,9 @@ export function Dock() {
   const addNode = useCanvasStore((state) => state.addNode);
   const undo = useCanvasStore((state) => state.undo);
   const redo = useCanvasStore((state) => state.redo);
+  // 选区里有 ≥ 2 个顶层单元时「整理」只整理选中的（UI 设计 §6.5）。
+  const tidyScoped = useCanvasStore((state) => tidySelection(state) !== null);
+  const tidyLabel = tidyScoped ? t("canvas.tidySelection") : t("dock.tidy");
   const canUndo = useCanUndo();
   const canRedo = useCanRedo();
   const agents = useEnabledAgents();
@@ -179,13 +183,13 @@ export function Dock() {
           <TooltipTrigger asChild>
             <IconButton
               size="dock"
-              label={t("dock.tidy")}
+              label={tidyLabel}
               onClick={() => runCanvasCommand("canvas.tidy")}
             >
               <LayoutGrid />
             </IconButton>
           </TooltipTrigger>
-          <TooltipContent>{t("dock.tidy")}</TooltipContent>
+          <TooltipContent>{tidyLabel}</TooltipContent>
         </Tooltip>
 
         {/* 白板工具组（§5）；画布没挂载时整组连同分隔线一起不渲染。 */}
