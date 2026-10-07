@@ -1,4 +1,5 @@
 import {
+  ManualRunResponseSchema,
   agentListSchema,
   agentModelListSchema,
   agentStatusSchema,
@@ -29,6 +30,17 @@ import {
 import { RUNTIME_URL, json, query, request } from "./request";
 
 export const agentsApi = {
+  startManualRun: (
+    workspaceId: string,
+    boardId: string,
+    nodeId: string,
+    body: { prompt: string; expectedUpdatedAt: string; key: string },
+  ) =>
+    request(
+      `/api/workspaces/${query(workspaceId)}/boards/${query(boardId)}/nodes/${query(nodeId)}/run`,
+      ManualRunResponseSchema,
+      { method: "POST", ...json(body) },
+    ),
   /* --------------------------------- Agent 协作 -------------------------- */
   /** 投递记录（§5.7 第 10 条）。只有元数据，正文从来不落盘。 */
   deliveries: (workspaceId: string, limit = 200) =>

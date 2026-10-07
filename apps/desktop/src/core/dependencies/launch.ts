@@ -7,9 +7,14 @@ import {
 import { listAgents } from "../agent/list";
 import { loadBoard, saveBoard } from "../canvas/documents";
 import type { CanvasNode } from "../canvas/document-types";
-import { loadNode, loadSession, workspaceRoot } from "../collab/nodes";
+import {
+  loadNode,
+  loadSession,
+  workspaceRoot,
+  type NodeRef,
+} from "../collab/nodes";
 import { enqueue } from "../collab/send-queue";
-import type { CollabContext } from "../collab/service";
+import type { CollabContext, DriveActor } from "../collab/service";
 import { DomainError, uuidV7 } from "../workspaces/support";
 import type { LaunchRow } from "./store";
 
@@ -44,6 +49,15 @@ const SAVE_ATTEMPTS = 3;
 
 export interface LaunchEnvironment {
   readonly collab: CollabContext;
+  readonly run?: {
+    readonly node: NodeRef;
+    readonly command?: string;
+    allowed(): boolean;
+    bound(sessionId: string, generation: number): void;
+    beforeWrite(sessionId: string, generation: number): void;
+    afterWrite(): void;
+    driver(sessionId: string): DriveActor;
+  };
   readonly clock: () => number;
   readonly delay: (ms: number) => Promise<void>;
   readonly log: (message: string, fields?: Record<string, unknown>) => void;
@@ -61,7 +75,8 @@ export type LaunchOutcome =
   /** 再试也不会好。 */
   | { readonly kind: "failed"; readonly reason: string }
   /** 下游节点已经不在画布上了。 */
-  | { readonly kind: "gone" };
+  | { readonly kind: "gone" }
+  | { readonly kind: "uncertain"; readonly reason: string };
 
 export async function launchNode(
   environment: LaunchEnvironment,
@@ -69,19 +84,24 @@ export async function launchNode(
 ): Promise<LaunchOutcome> {
   const { collab } = environment;
   const database = collab.database;
-  const node = loadNode(database, launch.nodeId);
-  if (node === undefined) return { kind: "gone" };
+  const current = loadNode(database, launch.nodeId);
+  if (current === undefined) return { kind: "gone" };
+  const node = environment.run?.node ?? current;
+  if (environment.run && !environment.run.allowed())
+    return { kind: "failed", reason: "run_stopped" };
   const agentId = node.agentId;
   if (agentId === null) return { kind: "failed", reason: "notAgent" };
 
   let command: string;
   try {
-    command = launchLine(
-      collab,
-      agentId,
-      node.data,
-      liveShell(database, launch.nodeId),
-    );
+    command =
+      environment.run?.command ??
+      launchLine(
+        collab,
+        agentId,
+        node.data,
+        liveShell(database, launch.nodeId),
+      );
   } catch (error) {
     if (error instanceof LaunchRefused) {
       return { kind: "failed", reason: "launchRefused" };
@@ -103,6 +123,7 @@ export async function launchNode(
   if (existing !== undefined && live !== undefined) {
     sessionId = existing.sessionId;
     generation = live;
+    environment.run?.bound(sessionId, generation);
     const foreground = await terminals
       .foreground(sessionId)
       .catch(() => undefined);
@@ -137,6 +158,8 @@ export async function launchNode(
         ? stringField(ssh as Record<string, unknown>, "hostId")
         : undefined;
     try {
+      if (environment.run && !environment.run.allowed())
+        return { kind: "failed", reason: "run_stopped" };
       const started = await terminals.spawnForNode({
         workspaceId: node.workspaceId,
         nodeId: node.id,
@@ -148,28 +171,45 @@ export async function launchNode(
       sessionId = started.sessionId;
       generation = started.generation;
       spawned = true;
+      environment.run?.bound(sessionId, generation);
     } catch (error) {
       environment.log("依赖满足后无法为节点起终端", {
         nodeId: node.id,
         error: error instanceof Error ? error.message : String(error),
       });
-      return { kind: "retry", reason: "spawnFailed" };
+      return {
+        kind: environment.run ? "uncertain" : "retry",
+        reason: environment.run ? "launch_unknown" : "spawnFailed",
+      };
     }
   }
 
   const quiet = await waitForPrompt(environment, sessionId);
+  if (quiet === "stopped") return { kind: "failed", reason: "run_stopped" };
   if (quiet === "pending") {
     // 有人在这个 shell 里敲了半行：启动行接在后面就成了一条没人写过的命令。
     return { kind: "retry", reason: "inputPending" };
   }
   try {
-    await terminals.write(sessionId, generation, `${command}\r`);
+    if (environment.run && !environment.run.allowed())
+      return { kind: "failed", reason: "run_stopped" };
+    environment.run?.beforeWrite(sessionId, generation);
+    await terminals.write(
+      sessionId,
+      generation,
+      `${command}\r`,
+      environment.run?.driver(sessionId),
+    );
+    environment.run?.afterWrite();
   } catch (error) {
     environment.log("依赖满足后无法写入启动行", {
       nodeId: node.id,
       error: error instanceof Error ? error.message : String(error),
     });
-    return { kind: "retry", reason: "writeFailed" };
+    return {
+      kind: environment.run ? "uncertain" : "retry",
+      reason: environment.run ? "launch_write_unknown" : "writeFailed",
+    };
   }
   return finish(environment, launch, node, {
     sessionId,
@@ -302,10 +342,11 @@ function liveShell(
 async function waitForPrompt(
   environment: LaunchEnvironment,
   sessionId: string,
-): Promise<"quiet" | "pending"> {
+): Promise<"quiet" | "pending" | "stopped"> {
   const terminals = environment.collab.terminals;
   const started = environment.clock();
   for (;;) {
+    if (environment.run && !environment.run.allowed()) return "stopped";
     const observed = terminals?.observed?.(sessionId);
     if (observed?.pending === true) return "pending";
     const now = environment.clock();

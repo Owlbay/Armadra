@@ -61,6 +61,7 @@ export function useHibernation(
   );
 
   const wake = React.useCallback(() => {
+    if (refs.dataRef.current.launchPolicy === "manual") return;
     const status = refs.statusRef.current;
     const sessionId = sessionRef.current;
     if (status.connection !== "hibernated" || sessionId === undefined) return;

@@ -22,7 +22,7 @@ export const SEND_QUEUE_TTL_SECONDS = 300;
 export const SEND_QUEUE_MAX_PER_TARGET = 16;
 
 /** 三条入口，一条队列（§4.6、§5 第 1 条）。 */
-export type QueueOrigin = "send" | "mailbox-wake" | "first-task";
+export type QueueOrigin = "send" | "mailbox-wake" | "first-task" | "run-task";
 
 export type QueueState =
   | "queued"
@@ -37,7 +37,11 @@ const PENDING: readonly QueueState[] = ["queued", "delivering"];
 export interface QueueItem {
   readonly id: string;
   readonly workspaceId: string;
-  readonly sourceNodeId: string;
+  readonly sourceNodeId: string | null;
+  readonly sourceKind?: "controller";
+  readonly controllerId?: string;
+  readonly runId?: string;
+  readonly taskId?: string;
   readonly targetNodeId: string;
   readonly origin: QueueOrigin;
   readonly messageKey?: string;
@@ -56,7 +60,11 @@ export interface QueueItem {
 interface QueueRow {
   readonly id: string;
   readonly workspace_id: string;
-  readonly source_node_id: string;
+  readonly source_node_id: string | null;
+  readonly source_kind: string;
+  readonly controller_id: string | null;
+  readonly run_id: string | null;
+  readonly task_id: string | null;
   readonly target_node_id: string;
   readonly origin: string;
   readonly message_key: string | null;
@@ -72,7 +80,7 @@ interface QueueRow {
 
 const COLUMNS =
   "id, workspace_id, source_node_id, target_node_id, origin, message_key, body, " +
-  "hops, trail, created_at, expires_at, attempts, state, last_reason";
+  "hops, trail, created_at, expires_at, attempts, state, last_reason, source_kind, controller_id, run_id, task_id";
 
 function itemOf(row: QueueRow): QueueItem {
   let trail: string[] = [];
@@ -90,6 +98,14 @@ function itemOf(row: QueueRow): QueueItem {
     id: row.id,
     workspaceId: row.workspace_id,
     sourceNodeId: row.source_node_id,
+    ...(row.source_kind === "controller"
+      ? {
+          sourceKind: "controller" as const,
+          controllerId: row.controller_id!,
+          runId: row.run_id!,
+          taskId: row.task_id!,
+        }
+      : {}),
     targetNodeId: row.target_node_id,
     origin: row.origin as QueueOrigin,
     ...(row.message_key === null ? {} : { messageKey: row.message_key }),
@@ -107,7 +123,11 @@ function itemOf(row: QueueRow): QueueItem {
 export interface NewQueueItem {
   readonly id: string;
   readonly workspaceId: string;
-  readonly sourceNodeId: string;
+  readonly sourceNodeId: string | null;
+  readonly sourceKind?: "controller";
+  readonly controllerId?: string;
+  readonly runId?: string;
+  readonly taskId?: string;
   readonly targetNodeId: string;
   readonly origin: QueueOrigin;
   readonly messageKey?: string | undefined;
@@ -141,10 +161,29 @@ export function enqueue(
   database: DatabaseSync,
   item: NewQueueItem,
 ): InsertOutcome {
-  if (item.messageKey !== undefined) {
+  if (item.sourceKind === "controller") {
+    if (
+      item.sourceNodeId !== null ||
+      !item.controllerId ||
+      !item.runId ||
+      !item.taskId
+    )
+      throw new Error(
+        "Controller queue items require run ownership, never a node source",
+      );
+    const previous = database
+      .prepare(
+        `SELECT ${COLUMNS} FROM agent_send_queue WHERE source_kind = 'controller' AND controller_id = ? AND run_id = ? AND task_id = ?`,
+      )
+      .get(item.controllerId, item.runId, item.taskId) as QueueRow | undefined;
+    if (previous)
+      return previous.body === item.body
+        ? { kind: "duplicate", item: itemOf(previous) }
+        : { kind: "conflict", item: itemOf(previous) };
+  } else if (item.messageKey !== undefined) {
     const existing = findByKey(
       database,
-      item.sourceNodeId,
+      item.sourceNodeId!,
       item.targetNodeId,
       item.messageKey,
       item.now,
@@ -159,7 +198,7 @@ export function enqueue(
   const changes = database
     .prepare(
       `INSERT OR IGNORE INTO agent_send_queue (${COLUMNS}) ` +
-        "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ? WHERE " +
+        "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ? WHERE " +
         "(SELECT COUNT(*) FROM agent_send_queue WHERE target_node_id = ? " +
         "AND state IN ('queued','delivering') AND expires_at > ?) < ?",
     )
@@ -177,6 +216,10 @@ export function enqueue(
       expiresAt,
       item.state,
       item.lastReason ?? null,
+      item.sourceKind ?? "node",
+      item.controllerId ?? null,
+      item.runId ?? null,
+      item.taskId ?? null,
       item.targetNodeId,
       item.now,
       SEND_QUEUE_MAX_PER_TARGET,
@@ -394,3 +437,20 @@ export function targetsWithPending(
 }
 
 export { PENDING as QUEUE_PENDING_STATES };
+
+/** Display/lease identity, never a synthetic node ID in persisted source columns. */
+export function queueActorId(item: QueueItem): string {
+  return item.sourceKind === "controller"
+    ? item.controllerId!
+    : item.sourceNodeId!;
+}
+export function queueActorFields(item: QueueItem) {
+  return item.sourceKind === "controller"
+    ? {
+        sourceKind: "controller" as const,
+        controllerId: item.controllerId!,
+        runId: item.runId!,
+        taskId: item.taskId!,
+      }
+    : {};
+}

@@ -45,6 +45,7 @@ export function useLaunchSequence(
     const nodeData =
       node && node.data.kind === "terminal" ? node.data : refs.dataRef.current;
     const agent = nodeData.agent;
+    if (nodeData.launchPolicy === "manual") return;
     if (!agent) return;
     try {
       // 启动行永远在这里重拼，节点上那个 `initialCommand` 从来不是一条指令：
@@ -81,6 +82,7 @@ export function useLaunchSequence(
       node && node.data.kind === "terminal" ? node.data : refs.dataRef.current;
     const agent = nodeData.agent;
     refs.launchPhaseRef.current = "sent";
+    if (nodeData.launchPolicy === "manual") return;
     if (!agent) return;
     const workspaceId = store.workspace?.id;
     const send = (command: string) => {

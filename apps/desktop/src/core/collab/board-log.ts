@@ -22,6 +22,10 @@ export const RING_CAPACITY = 200;
 export interface Trace {
   readonly traceId: string;
   readonly source: string;
+  readonly sourceKind?: "controller";
+  readonly controllerId?: string;
+  readonly runId?: string;
+  readonly taskId?: string;
   readonly target: string;
   readonly outcome: string;
   readonly receipt?: string;
@@ -39,6 +43,14 @@ export class BoardLog {
       traceId: trace.traceId,
       ts: rfc3339(),
       source: trace.source,
+      ...(trace.sourceKind === "controller"
+        ? {
+            sourceKind: trace.sourceKind,
+            controllerId: trace.controllerId,
+            runId: trace.runId,
+            taskId: trace.taskId,
+          }
+        : {}),
       target: trace.target,
       outcome: trace.outcome,
       receipt: trace.receipt ?? null,

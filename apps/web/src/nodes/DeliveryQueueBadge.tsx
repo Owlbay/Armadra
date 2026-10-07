@@ -126,7 +126,11 @@ export function DeliveryQueueBadge({
             <li key={item.id} className="flex items-center gap-2">
               <span className="min-w-0 flex-1 truncate">
                 {t("delivery.queue.from", {
-                  name: item.sourceName || item.sourceNodeId,
+                  name:
+                    item.sourceName ||
+                    item.sourceNodeId ||
+                    item.controllerId ||
+                    "",
                   position: item.position,
                   chars: item.bodyChars,
                 })}

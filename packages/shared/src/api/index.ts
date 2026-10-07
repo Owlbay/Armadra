@@ -7,6 +7,8 @@
  */
 
 export * from "./common.js";
+export * from "./controller.js";
+export * from "./runs.js";
 export * from "./workspaces.js";
 export * from "./boards.js";
 export * from "./files.js";

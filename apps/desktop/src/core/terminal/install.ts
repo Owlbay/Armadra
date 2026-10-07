@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { VERSION } from "../instance";
 import type { CoreContext } from "../main";
 import { settingsDomain } from "../settings";
@@ -15,6 +15,7 @@ import { handleForNode } from "../canvas/handles";
 import { type EnvPairs, agentEnvironment, setHookClient } from "./environment";
 import { launcherClientBinary } from "../hook/install/shared";
 import { collab, setTerminalBridge } from "../agent";
+import { loadNode } from "../collab/nodes";
 import { canvasEnvironment, nodeDialect } from "../agent/canvas-launch";
 import type { ShellDialect } from "./shell";
 import { listAgents } from "../agent/list";
@@ -147,6 +148,7 @@ export function install(
 
   const manager = new TerminalManager({
     database: context.db.database,
+    sequenceDirectory: join(context.dataDir, "context-sequences"),
     backends,
     effective,
     ...(settings === undefined
@@ -358,6 +360,16 @@ export function install(
     if (invalid !== undefined) {
       throw new TerminalError(400, "bad_request", invalid);
     }
+    if (
+      body.nodeId &&
+      loadNode(context.db.database, body.nodeId)?.data.launchPolicy === "manual"
+    ) {
+      throw new TerminalError(
+        409,
+        "manual_launch_required",
+        "Use an explicit controller run to start this node",
+      );
+    }
     const owned = body.agent !== undefined && body.nodeId !== undefined;
     const env = owned
       ? ownedEnvironment(
@@ -506,7 +518,17 @@ export function install(
     const sessionId = params.sessionId as string;
     // The row, not the record: recycling a session this core never attached to
     // is a 404 about the session, not about the process behind it.
-    manager.session(sessionId);
+    const row = manager.session(sessionId);
+    if (
+      row.ownerNodeId &&
+      loadNode(context.db.database, row.ownerNodeId)?.data.launchPolicy ===
+        "manual"
+    )
+      throw new TerminalError(
+        409,
+        "manual_launch_required",
+        "Manual nodes can only be started by a controller run",
+      );
     return { status: 200, body: await manager.recycle(sessionId) };
   });
 
@@ -518,6 +540,16 @@ export function install(
   route("POST", "/api/terminals/{sessionId}/wake", async (params) => {
     const sessionId = params.sessionId as string;
     const row = manager.session(sessionId);
+    if (
+      row.ownerNodeId &&
+      loadNode(context.db.database, row.ownerNodeId)?.data.launchPolicy ===
+        "manual"
+    )
+      throw new TerminalError(
+        409,
+        "manual_launch_required",
+        "Manual nodes can only be started by a controller run",
+      );
     if (row.ownerNodeId === null) {
       throw new TerminalError(
         409,
@@ -609,6 +641,7 @@ export function install(
   // on a canvas whose panes are running.
   setTerminalBridge({
     ...terminalBridge(manager, context.db.database),
+    ready: () => ready.then(() => {}),
     // 投给休眠节点的消息：先叫醒再走 `send` 的整条门链（§7.2）。不是休眠着的
     // 节点立刻答 `false`，只多一次库查询。
     wakeNode: async (nodeId) => {

@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "armadra",
+  "version": "0.1.0",
+  "description": "Use an existing local Armadra workspace to edit canvases and run CLI Agents with dependencies, bounded progress and artifact references."
+}

@@ -405,10 +405,11 @@ export function listConversations(
       : (database
           .prepare(
             "SELECT provider, session_id, title, cwd, updated_at, bytes FROM conversations " +
-              "WHERE lower(title) LIKE ?1 ESCAPE '\\' OR lower(cwd) LIKE ?1 ESCAPE '\\' " +
-              "ORDER BY updated_at DESC LIMIT ?2",
+              "WHERE lower(title) LIKE ? ESCAPE '\\' OR lower(cwd) LIKE ? ESCAPE '\\' " +
+              "ORDER BY updated_at DESC LIMIT ?",
           )
           .all(
+            `%${escapeLike(needle.toLowerCase())}%`,
             `%${escapeLike(needle.toLowerCase())}%`,
             bounded,
           ) as unknown as ConversationRow[]);

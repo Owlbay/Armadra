@@ -115,6 +115,17 @@ export function reduce(
   event: Extract<WorkspaceEvent, { type: "agent.delivery" }>,
   now: number,
 ): Partial<Reducible> {
+  // External controllers have a target, but no canvas source node or link.
+  if (event.sourceNodeId === null)
+    return event.outcome === "refused"
+      ? {}
+      : {
+          queueVersion: {
+            ...state.queueVersion,
+            [event.targetNodeId]:
+              (state.queueVersion[event.targetNodeId] ?? 0) + 1,
+          },
+        };
   const key = edgeKey(event.sourceNodeId, event.targetNodeId);
   const mark: DeliveryMark = {
     sourceNodeId: event.sourceNodeId,

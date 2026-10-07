@@ -40,7 +40,11 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("agent.delivery"),
     traceId: z.string(),
-    sourceNodeId: z.string(),
+    sourceNodeId: z.string().nullable(),
+    sourceKind: z.literal("controller").optional(),
+    controllerId: z.string().optional(),
+    runId: z.string().optional(),
+    taskId: z.string().optional(),
     targetNodeId: z.string(),
     /** `delivered` / `queued` / `unknown` / `refused`。 */
     outcome: z.string(),

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { recordTrustedReport } from "../runs/reports";
 import type { EventBus } from "../bus";
 import { baseAgent, hasCapability } from "./capabilities";
 import type { AgentEvent } from "./normalize";
@@ -189,6 +190,22 @@ export function ingest(
   }
 
   apply(context, owner.workspaceId, agentId, event, payload);
+  if (binding !== undefined) {
+    try {
+      recordTrustedReport(
+        context.database,
+        binding,
+        event,
+        payload,
+        context.bus,
+      );
+    } catch (error) {
+      context.log.debug("运行关联报告无法持久化", {
+        nodeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   return ACCEPTED;
 }
 

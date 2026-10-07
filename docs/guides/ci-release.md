@@ -23,7 +23,13 @@
    `ci:workflows`、`release:check`）
 3. `pnpm repo:test`、`pnpm release:test`
 4. `pnpm -r --if-present test` / `typecheck`、`pnpm --filter @armadra/web build`
-5. `pnpm --filter @armadra/desktop build`（不打包）
+5. `pnpm plugin:test`（纯 Node 客户端资源、含空格路径、异 cwd，Windows 拒绝分支）
+   与 `pnpm controller:real:test`（真实验收的目录、信任、版本、质量与只读预检检查；
+   不运行真实模型，也不取用 CI 账号）。
+6. `pnpm --filter @armadra/desktop build`（不打包）
+7. 仅 Linux/macOS：`plugin:build` 与 `tools/probes/controller-{smoke,run}.mjs` 的
+   真 Unix socket/PTY、取消、大日志、重启与四个精确启动/投递崩溃边界。
+   内层是确定性假 CLI；CI 结果不替代真 Codex→Claude 验收。
 
 几条不显然的决定：
 

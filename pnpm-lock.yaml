@@ -20,6 +20,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@armadra/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       electron-updater:
         specifier: 6.8.9
         version: 6.8.9(supports-color@7.2.0)

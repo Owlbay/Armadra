@@ -294,7 +294,21 @@ export class DependencyService {
     const running = this.inFlight.get(nodeId);
     if (running !== undefined) return running;
     const launch = launchFor(this.database, nodeId);
-    if (launch === undefined || launch.state !== "waiting") {
+    if (
+      launch === undefined ||
+      launch.state !== "waiting" ||
+      launch.runId !== undefined
+    ) {
+      return Promise.resolve(undefined);
+    }
+    if (loadNode(this.database, nodeId)?.data.launchPolicy === "manual") {
+      noteLaunchAttempt(
+        this.database,
+        nodeId,
+        "manual_requires_run",
+        true,
+        this.nowSeconds(),
+      );
       return Promise.resolve(undefined);
     }
     const dependencies = dependenciesOf(this.database, nodeId);
@@ -339,6 +353,7 @@ export class DependencyService {
       case "gone":
         forgetLaunch(this.database, nodeId);
         return;
+      case "uncertain":
       case "failed":
         noteLaunchAttempt(this.database, nodeId, outcome.reason, true, now);
         return;

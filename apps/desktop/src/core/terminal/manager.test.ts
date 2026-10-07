@@ -523,6 +523,22 @@ describe("exits nobody was watching", () => {
     expect(row.status).toBe("running");
   });
 
+  it("generation-bound cancellation cannot kill the session after a recycle", async () => {
+    const { manager, backend } = harness();
+    const session = await spawn(manager, "node-a");
+    await manager.recycle(session.id);
+    const before = backend.calls.filter((call) =>
+      call.startsWith("terminate:"),
+    ).length;
+    await expect(manager.terminate(session.id, "session", 1)).rejects.toThrow();
+    expect(
+      backend.calls.filter((call) => call.startsWith("terminate:")),
+    ).toHaveLength(before);
+    expect(manager.generation(session.id)).toBe(2);
+    await manager.terminate(session.id, "session", 2);
+    expect(manager.isAlive(session.id)).toBe(false);
+  });
+
   /**
    * An explicit kill is recorded as `terminated` and must win: the exit that
    * follows it is the same event, not an independent one.
@@ -810,6 +826,24 @@ describe("驱动租约", () => {
     expect(written).toBe(
       `input:${session.sessionKey}:\u001b[200~\u4f60\u597d\n\u4e16\u754c\u001b[201~\r`,
     );
+  });
+
+  it("checks the half-input fence at the final submit boundary and returns its exact input revision", async () => {
+    const { manager, backend } = harness();
+    const session = await spawn(manager, "node-a");
+    await manager.input(session.id, 1, "half", undefined, human());
+    const before = backend.calls.filter((call) =>
+      call.startsWith("input:"),
+    ).length;
+    await expect(
+      manager.writeSubmit(session.id, 1, "prompt"),
+    ).rejects.toMatchObject({ code: "input_not_safe" });
+    expect(
+      backend.calls.filter((call) => call.startsWith("input:")),
+    ).toHaveLength(before);
+    await manager.input(session.id, 1, "\r", undefined, human());
+    const receipt = await manager.writeSubmit(session.id, 1, "prompt");
+    expect(receipt.inputRevision).toBe(manager.inputRevision(session.id));
   });
 
   it("driveTarget 把五态、持有者与代次放在一个答案里", async () => {

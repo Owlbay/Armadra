@@ -19,6 +19,7 @@
     "test": "vitest run && vitest run --config vitest.live.config.mts && node --test scripts/*.test.mjs"
   },
   "dependencies": {
+    "@armadra/shared": "workspace:*",
     "electron-updater": "6.8.9",
     "node-pty": "1.1.0",
     "ws": "8.18.3"

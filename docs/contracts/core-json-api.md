@@ -384,3 +384,92 @@ R7 删掉 `/rpc/*` 之后，这三条用例与它们比对的那一半一起消�
 - 工作空间事件 `terminal.hibernation`：`{ "type": "terminal.hibernation", "sessionId", "nodeId", "state", "reason"? }`，`state` 是 `hibernated`（进程确认结束之后才发）/ `resuming` / `running` / `failed`。`reason` 在 `resuming` / `running` 时是唤醒来源（`focus` / `delivery` / `schedule`），在 `failed` 时是稳定码（`noProviderSession`、`spawnFailed`、`agentDidNotStart` 等），不翻译。
 - 资源采样里休眠的会话照列，`unknownReason: "hibernated"`、`alive: false`、各项数字为 `null`。
 - 设置：`terminal.ecoMode`（布尔，缺省 `true`）、`terminal.ecoIdleMinutes`（5–1440，缺省 30）。
+
+## 12. 本机外部 controller：私有 Unix socket
+
+`POST /controller/v1/commands` 仅存在于 `controller.sock`，不映射到公开 HTTP、
+浏览器或身份取票通道。请求为 `{ schemaVersion: 1, requestId, instanceId, method,
+params, idempotencyKey? }`；`instanceId` 必须匹配实时 core，未知主版本拒绝。
+凭据通过 `Authorization: Bearer …` 传输。带 `Origin` 的请求拒绝。
+
+`doctor`、`workspaces.list`、`connect` 是同 OS 用户的引导命令；其他每个命令都
+独立核对有效 profile、workspace 范围与能力。`connect` 要求现有本机 workspace ID。
+仅连接响应在私有 socket 上向客户端交一次凭据，CLI 将其存到私有文件，stdout
+只返回 profile 名、workspace 和 scope。撤销的 profile 无权查询或修改。
+
+响应为 `{ schemaVersion: 1, ok, requestId, data? , error?: { code, message } }`。
+请求最多 256 KiB，响应最多 32 KiB。错误不附带正文、环境或凭据。
+CLI 退出码：成功 0、参数 2、连接/版本 3、授权 4、冲突 5、内部 6、结果未知 7。
+
+`boards.list` 和 `board.get` 返回定位摘要。`graph.validate` / `graph.apply`
+的 `params` 为 `{ boardId, input }`，`input` 包含 `schemaVersion: 1`、
+`expectedUpdatedAt` 与增量 `operations`。操作为 `createNode`、`updateNode`、
+`createContextLink`、`removeContextLink`；引用只能是 `{ id }` 或本批次 `{ key }`。
+最多 32 个新节点、128 个新连线；更新只允许 profile 创建节点的展示字段。
+终端数据不得携带会话 ID、启动行、shell、token 或任意配置。新终端由 core 写入
+`launchPolicy: manual`；旧节点缺省为 `onOpen`。
+
+幂等范围为 `(controllerId, workspaceId, method, idempotencyKey)`，规范请求摘要
+参与比较。同键同请求先返回已提交结果，再考虑旧版本；异请求返回
+`idempotency_conflict`。旧 revision 返回 `revision_conflict`，其他客户端持有
+编辑租约返回 `lease_held`。整批非法引用、路径越界、嵌套分组或数据库失败均零写入。
+图、上下文授权、归属、幂等回执与事件同事务；提交后才广播。
+
+controller 的持久运行方法见 §13，产物和恢复见 §14。
+
+## 13. 本机 controller 的持久 run
+
+`run.start` 的 `params` 为 `{ boardId, input }`，input 使用共享 `RunInputSchema`：
+`schemaVersion: 1`、`expectedUpdatedAt`、1–6 个 `{ key, nodeId, prompt, after, outputs }`
+任务、`maxConcurrency`（缺省 2，最大 4）和 `deadlineSeconds`（缺省 3600，最大 86400）。
+所有节点必须由本 profile 管理，位于选定本机 board；工作空间允许 execute，Agent
+具有可信完成适配器。prompt 上限复用 2000 字符投递限制，执行依赖必须是 DAG。
+
+start 事务冻结执行配置、任务、节点占用、意图和幂等回执，立即返回 `{ runId, state }`。
+后续由 core 推进，关闭 CLI 或画布不取消它。运行中的展示编辑不改变冻结执行配置。
+controller 总并发受活跃 run 的显式预算约束，未知启动仍占预算；不能靠多发默认 run
+绕过默认 2 的并发限制。旧节点来源记录与旧 Hook 接口保持兼容。
+
+`run.get` 要求 `{ runId }`，返回 state/reason、counts、任务状态、绑定的 sessionId、
+generation、deliveryId、依赖、声明输出预览和更新时间，附单调事件 cursor。
+不返回提示词、凭据、环境或终端转储。`completedMeans` 明确回合完成不等于质量验收。
+
+`run.wait` 使用 `{ runId, cursor, timeoutSeconds }`，最长 60 秒；返回 events、
+nextCursor、state、truncated、snapshotRequired、timedOut。默认最多 50 事件、8 KiB，
+JSON 不截断。正常超时是成功查询，不改变运行。等待期间与返回前均重验 profile；
+断开仅释放等待者。事件保留与产物完整契约待 P3 追加。
+
+可信报告只从已验证的 Hook ingest 进入，绑定实际 PTY/generation。每个 generation
+在启动前初始化持久单调序号；投递前保存包括尚在路上的 Hook 在内的序号基准。
+投递确认、本次提示词摘要、正常回合结束与未被其他输入改变的 revision 缺一不可。
+重放、旧 generation、unverified、observed 或退出码均不能作为本次完成证明。
+未知写入落 uncertain/blocked，不自动再提交业务任务。
+
+`run.cancel` 使用 `{ runId }` 与幂等 key，先持久化 cancelling 并停止排队项，再经
+manager 串行门内的原子 generation 检查终止绑定会话。完成与取消按持久顺序记录，
+不声称取消回滚了已执行工作。`run.artifacts` 与崩溃恢复见 §14。
+
+## 14. Run 产物、恢复与 GUI 手动入口
+
+`run.artifacts` 使用 `{ runId, cursor?: OFFSET }`，返回当前文件引用 artifacts、
+nextCursor、truncated、immutableSnapshot:false。每项含 taskId/key/path、exists、type、
+size、contentVersion 和 checkedAt。当前路径在冻结 workspace 内重新解析；新出现的
+符号链接逃逸拒绝。≤16 MiB 计算 SHA-256，更大文件明确标注 metadata 版本，读取时
+发生变化标 changedDuringCheck。缺失返回 exists:false，不更新任务完成状态。
+小文件打开时拒绝跟随新换入的符号链接，并在读取前核对 descriptor 的 dev/ino。
+路径校验后被替换返回 artifact_changed（409），重新查询不会启动或重放业务任务。
+
+`run.get --cursor OFFSET` 分页任务摘要；该 offset 与 run.wait 的事件 cursor 不同。
+摘要和产物页面最多 8 KiB，详细 wait 页面最多 32 KiB。事件每 run 保留最新 1000 条，
+floor 持久化；过期返回 snapshotRequired，超前返回 cursor_ahead。JSON 不字节截断。
+
+启动对账完成前旧 run 的队列不得投递。执行中的副作用意图在恢复时转 uncertain，
+不会重新入队；从未写入的 queued 项可继续。direct 会话丢失标 session_lost，tmux
+存活只附着原 generation；断线期间已运行回合不能可靠排除其他输入时保持
+connection_lost。没有 force-complete 接口。
+
+GUI `POST /api/workspaces/{workspaceId}/boards/{boardId}/nodes/{nodeId}/run` 是现有 owner
+授权面，要求 expectedUpdatedAt、prompt、key。core 按节点真实 controller_objects
+归属委托 profile，仍受当前 profile 撤销/能力检查与 RunService 规则约束，并记录
+human initiator。页面不接收任何 controller 凭据；body owner/controllerId 不构成
+授权。成员拒绝。该 GUI 面不把私有 socket 的引导方法暴露到 HTTP。

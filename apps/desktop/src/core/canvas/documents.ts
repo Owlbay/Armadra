@@ -207,6 +207,29 @@ export function saveBoard(
   boardId: string,
   request: SaveBoardRequest,
 ): BoardDocument {
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const saved = saveBoardInTransaction(
+      database,
+      workspaceId,
+      boardId,
+      request,
+    );
+    database.exec("COMMIT");
+    return saved;
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+/** Caller owns the transaction; use for atomic controller graph and receipt writes. */
+export function saveBoardInTransaction(
+  database: DatabaseSync,
+  workspaceId: string,
+  boardId: string,
+  request: SaveBoardRequest,
+): BoardDocument {
   const board = getBoard(database, workspaceId, boardId);
   validateDocument(board.id, request.nodes, request.edges);
   validateViewport(request.viewport);
@@ -222,133 +245,124 @@ export function saveBoard(
     whiteboard = request.whiteboard;
   }
 
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    const nextUpdatedAt = rfc3339();
-    const updated = database
-      .prepare(
-        "UPDATE boards SET updated_at = ?, viewport_json = ?, whiteboard_json = ? " +
-          "WHERE id = ? AND updated_at = ?",
-      )
-      .run(
-        nextUpdatedAt,
-        viewportJson,
-        whiteboard,
-        board.id,
-        request.expectedUpdatedAt,
-      );
-    if (updated.changes !== 1) {
-      throw conflict("Board changed since it was loaded; reload before saving");
-    }
-
-    const storedEdges = database
-      .prepare("SELECT id, role FROM edges WHERE board_id = ?")
-      .all(board.id) as unknown as { id: string; role: string }[];
-    const storedEdgeIds = storedEdges.map((row) => row.id);
-    // 一条边送上来时**没有** `role`，意思是「这一项我没有意见」，不是「把它
-    // 设回对等」。每一个还不认识这个字段的写者——一张旧的画布文档、一个还没
-    // 跟上的页面——否则都会在一次无关的保存里悄悄把主从关系抹平。同一条规矩
-    // 白板快照已经在用（省略即保留）。
-    const storedRoles = new Map(
-      storedEdges.map((row) => [row.id, row.role] as const),
+  const nextUpdatedAt = rfc3339();
+  const updated = database
+    .prepare(
+      "UPDATE boards SET updated_at = ?, viewport_json = ?, whiteboard_json = ? " +
+        "WHERE id = ? AND updated_at = ?",
+    )
+    .run(
+      nextUpdatedAt,
+      viewportJson,
+      whiteboard,
+      board.id,
+      request.expectedUpdatedAt,
     );
-    const storedNodeIds = (
-      database
-        .prepare("SELECT id FROM nodes WHERE board_id = ?")
-        .all(board.id) as unknown as { id: string }[]
-    ).map((row) => row.id);
-    const keptEdgeIds = new Set(request.edges.map((edge) => edge.id));
-    const keptNodeIds = new Set(request.nodes.map((node) => node.id));
-
-    // Edges first: an edge the document dropped may point at a node it also
-    // dropped, and `edges` is `ON DELETE CASCADE` on `nodes` too. Every edge
-    // that stays has both endpoints in `request.nodes` (`validateDocument`),
-    // so nothing surviving the node deletes is left dangling.
-    const deleteEdge = database.prepare("DELETE FROM edges WHERE id = ?");
-    for (const id of storedEdgeIds) {
-      if (!keptEdgeIds.has(id)) deleteEdge.run(id);
-    }
-    const droppedNodeIds = storedNodeIds.filter((id) => !keptNodeIds.has(id));
-    const deleteNode = database.prepare("DELETE FROM nodes WHERE id = ?");
-    for (const id of droppedNodeIds) deleteNode.run(id);
-    forgetNodes(database, droppedNodeIds);
-
-    // The `WHERE` guard keeps an id owned by another board from being moved
-    // onto this one: a plain INSERT would fail on the primary key, and
-    // silently stealing the row would be worse than either.
-    const upsertNode = database.prepare(
-      "INSERT INTO nodes (id, board_id, type, title, color, x, y, width, height, collapsed, " +
-        "expanded_height, parent_id, labels_json, note, data_json, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-        "ON CONFLICT(id) DO UPDATE SET " +
-        "type = excluded.type, title = excluded.title, color = excluded.color, " +
-        "x = excluded.x, y = excluded.y, width = excluded.width, height = excluded.height, " +
-        "collapsed = excluded.collapsed, expanded_height = excluded.expanded_height, " +
-        "parent_id = excluded.parent_id, labels_json = excluded.labels_json, " +
-        "note = excluded.note, data_json = excluded.data_json, " +
-        "created_at = excluded.created_at, updated_at = excluded.updated_at " +
-        "WHERE nodes.board_id = excluded.board_id",
-    );
-    for (const node of request.nodes) {
-      const written = upsertNode.run(
-        node.id,
-        node.boardId,
-        node.type,
-        node.title,
-        node.color,
-        node.position.x,
-        node.position.y,
-        node.size?.width ?? null,
-        node.size?.height ?? null,
-        node.collapsed === true ? 1 : 0,
-        node.expandedHeight ?? null,
-        node.parentId ?? null,
-        JSON.stringify(node.labels),
-        node.note,
-        canonicalJson(node.data),
-        node.createdAt,
-        node.updatedAt,
-      );
-      if (written.changes !== 1) {
-        throw badRequest("Board contains a node that belongs to another board");
-      }
-    }
-    const upsertEdge = database.prepare(
-      "INSERT INTO edges (id, board_id, source_node_id, target_node_id, kind, role, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) " +
-        "ON CONFLICT(id) DO UPDATE SET " +
-        "source_node_id = excluded.source_node_id, " +
-        "target_node_id = excluded.target_node_id, kind = excluded.kind, " +
-        "role = excluded.role, " +
-        "created_at = excluded.created_at, updated_at = excluded.updated_at " +
-        "WHERE edges.board_id = excluded.board_id",
-    );
-    for (const edge of request.edges) {
-      const written = upsertEdge.run(
-        edge.id,
-        edge.boardId,
-        edge.source,
-        edge.target,
-        edge.kind,
-        edge.role ?? storedRoles.get(edge.id) ?? "peer",
-        edge.createdAt,
-        edge.updatedAt,
-      );
-      if (written.changes !== 1) {
-        throw badRequest(
-          "Board contains an edge that belongs to another board",
-        );
-      }
-    }
-    // Agent 的名字（`docs/design/agent-delivery.md` §2.5）：`node_handles` 是
-    // 唯一来源，`data.handle` 是它的渲染副本，两者只有这一个写入点，所以不会
-    // 各自漂移。撞名在这里被拒绝——事务回滚，整次保存不落库。
-    syncHandles(database, board.id, request.nodes);
-    database.exec("COMMIT");
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
+  if (updated.changes !== 1) {
+    throw conflict("Board changed since it was loaded; reload before saving");
   }
+
+  const storedEdges = database
+    .prepare("SELECT id, role FROM edges WHERE board_id = ?")
+    .all(board.id) as unknown as { id: string; role: string }[];
+  const storedEdgeIds = storedEdges.map((row) => row.id);
+  // 一条边送上来时**没有** `role`，意思是「这一项我没有意见」，不是「把它
+  // 设回对等」。每一个还不认识这个字段的写者——一张旧的画布文档、一个还没
+  // 跟上的页面——否则都会在一次无关的保存里悄悄把主从关系抹平。同一条规矩
+  // 白板快照已经在用（省略即保留）。
+  const storedRoles = new Map(
+    storedEdges.map((row) => [row.id, row.role] as const),
+  );
+  const storedNodeIds = (
+    database
+      .prepare("SELECT id FROM nodes WHERE board_id = ?")
+      .all(board.id) as unknown as { id: string }[]
+  ).map((row) => row.id);
+  const keptEdgeIds = new Set(request.edges.map((edge) => edge.id));
+  const keptNodeIds = new Set(request.nodes.map((node) => node.id));
+
+  // Edges first: an edge the document dropped may point at a node it also
+  // dropped, and `edges` is `ON DELETE CASCADE` on `nodes` too. Every edge
+  // that stays has both endpoints in `request.nodes` (`validateDocument`),
+  // so nothing surviving the node deletes is left dangling.
+  const deleteEdge = database.prepare("DELETE FROM edges WHERE id = ?");
+  for (const id of storedEdgeIds) {
+    if (!keptEdgeIds.has(id)) deleteEdge.run(id);
+  }
+  const droppedNodeIds = storedNodeIds.filter((id) => !keptNodeIds.has(id));
+  const deleteNode = database.prepare("DELETE FROM nodes WHERE id = ?");
+  for (const id of droppedNodeIds) deleteNode.run(id);
+  forgetNodes(database, droppedNodeIds);
+
+  // The `WHERE` guard keeps an id owned by another board from being moved
+  // onto this one: a plain INSERT would fail on the primary key, and
+  // silently stealing the row would be worse than either.
+  const upsertNode = database.prepare(
+    "INSERT INTO nodes (id, board_id, type, title, color, x, y, width, height, collapsed, " +
+      "expanded_height, parent_id, labels_json, note, data_json, created_at, updated_at) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET " +
+      "type = excluded.type, title = excluded.title, color = excluded.color, " +
+      "x = excluded.x, y = excluded.y, width = excluded.width, height = excluded.height, " +
+      "collapsed = excluded.collapsed, expanded_height = excluded.expanded_height, " +
+      "parent_id = excluded.parent_id, labels_json = excluded.labels_json, " +
+      "note = excluded.note, data_json = excluded.data_json, " +
+      "created_at = excluded.created_at, updated_at = excluded.updated_at " +
+      "WHERE nodes.board_id = excluded.board_id",
+  );
+  for (const node of request.nodes) {
+    const written = upsertNode.run(
+      node.id,
+      node.boardId,
+      node.type,
+      node.title,
+      node.color,
+      node.position.x,
+      node.position.y,
+      node.size?.width ?? null,
+      node.size?.height ?? null,
+      node.collapsed === true ? 1 : 0,
+      node.expandedHeight ?? null,
+      node.parentId ?? null,
+      JSON.stringify(node.labels),
+      node.note,
+      canonicalJson(node.data),
+      node.createdAt,
+      node.updatedAt,
+    );
+    if (written.changes !== 1) {
+      throw badRequest("Board contains a node that belongs to another board");
+    }
+  }
+  const upsertEdge = database.prepare(
+    "INSERT INTO edges (id, board_id, source_node_id, target_node_id, kind, role, created_at, updated_at) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET " +
+      "source_node_id = excluded.source_node_id, " +
+      "target_node_id = excluded.target_node_id, kind = excluded.kind, " +
+      "role = excluded.role, " +
+      "created_at = excluded.created_at, updated_at = excluded.updated_at " +
+      "WHERE edges.board_id = excluded.board_id",
+  );
+  for (const edge of request.edges) {
+    const written = upsertEdge.run(
+      edge.id,
+      edge.boardId,
+      edge.source,
+      edge.target,
+      edge.kind,
+      edge.role ?? storedRoles.get(edge.id) ?? "peer",
+      edge.createdAt,
+      edge.updatedAt,
+    );
+    if (written.changes !== 1) {
+      throw badRequest("Board contains an edge that belongs to another board");
+    }
+  }
+  // Agent 的名字（`docs/design/agent-delivery.md` §2.5）：`node_handles` 是
+  // 唯一来源，`data.handle` 是它的渲染副本，两者只有这一个写入点，所以不会
+  // 各自漂移。撞名在这里被拒绝——事务回滚，整次保存不落库。
+  syncHandles(database, board.id, request.nodes);
   return loadBoard(database, workspaceId, boardId);
 }
 

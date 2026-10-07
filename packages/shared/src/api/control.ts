@@ -8,7 +8,11 @@ import { z } from "zod";
 export const agentDeliverySchema = z.object({
   traceId: z.string(),
   workspaceId: z.string(),
-  sourceNodeId: z.string(),
+  sourceNodeId: z.string().nullable(),
+  sourceKind: z.literal("controller").optional(),
+  controllerId: z.string().optional(),
+  runId: z.string().optional(),
+  taskId: z.string().optional(),
   targetNodeId: z.string(),
   outcome: z.string(),
   /**
@@ -34,7 +38,11 @@ export const deliveriesResponseSchema = z.array(agentDeliverySchema);
 export const deliveryQueueItemSchema = z.object({
   id: z.string(),
   workspaceId: z.string(),
-  sourceNodeId: z.string(),
+  sourceNodeId: z.string().nullable(),
+  sourceKind: z.literal("controller").optional(),
+  controllerId: z.string().optional(),
+  runId: z.string().optional(),
+  taskId: z.string().optional(),
   sourceName: z.string().default(""),
   targetNodeId: z.string(),
   origin: z.string().default("send"),

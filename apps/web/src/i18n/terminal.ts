@@ -2,6 +2,14 @@ import type { MessageModule } from "./index";
 
 /** 终端节点与 xterm 表面（计划书 §15.5 / §15.7）。组件一律 `useT()` 取串。 */
 const zh = {
+  "run.manual.open": "运行任务",
+  "run.manual.waiting": "待启动",
+  "run.manual.prompt": "任务内容",
+  "run.manual.description": "明确启动此节点的任务。关闭画布后任务仍会继续。",
+  "run.manual.queued": "任务已排队",
+  "run.manual.start": "开始运行",
+  "run.manual.starting": "正在启动…",
+
   "terminal.label": "终端",
   "terminal.input": "终端输入",
   "terminal.rerun": "重新运行",
@@ -68,6 +76,15 @@ const zh = {
 } as const;
 
 const en: Record<keyof typeof zh, string> = {
+  "run.manual.open": "Run task",
+  "run.manual.waiting": "Waiting to start",
+  "run.manual.prompt": "Task prompt",
+  "run.manual.description":
+    "Explicitly start a task for this node. It continues when the canvas closes.",
+  "run.manual.queued": "Task queued",
+  "run.manual.start": "Start run",
+  "run.manual.starting": "Starting…",
+
   "terminal.label": "Terminal",
   "terminal.input": "Terminal input",
   "terminal.rerun": "Run again",

@@ -41,7 +41,46 @@ test("the parser reads the shapes a workflow actually uses", () => {
     (step) => step.name === "给 Git 一个身份",
   );
   assert.match(identity.run, /set -euo pipefail[\s\S]*user\.email/);
-  assert.equal(document.jobs.check.steps.at(-1).name, "桌面壳构建（不打包）");
+  assert.equal(document.jobs.check.steps.at(-2).name, "桌面壳构建（不打包）");
+  assert.equal(
+    document.jobs.check.steps.at(-1).name,
+    "Unix controller 故障探针",
+  );
+});
+
+test("Unix controller probes run on Linux and macOS after the core is built", () => {
+  const document = parseYaml(
+    readFileSync(join(root, ".github/workflows/ci.yml"), "utf8"),
+  );
+  const steps = document.jobs.check.steps;
+  const probe = steps.find((step) => step.name === "Unix controller 故障探针");
+  assert.ok(
+    probe,
+    "Linux needs executable Unix controller evidence, not only platform branches",
+  );
+  assert.equal(probe.if, "runner.os != 'Windows'");
+  assert.equal(probe.shell, "bash");
+  assert.ok(
+    steps.indexOf(probe) >
+      steps.findIndex(
+        (step) => step.run === "pnpm --filter @armadra/desktop build",
+      ),
+  );
+  for (const command of [
+    "controller-smoke.mjs",
+    "--cancel",
+    "--large-output",
+    "--crash",
+    "--fault=launch.before",
+    "--fault=launch.after",
+    "--fault=delivery.before",
+    "--fault=delivery.after",
+  ])
+    assert.ok(probe.run.includes(command), `Missing ${command}`);
+  assert.ok(
+    steps.some((step) => step.run === "pnpm plugin:test"),
+    "Portable plugin installation paths need verification on every platform",
+  );
 });
 
 test("the three platforms are all in the matrix, and none is filtered out", () => {

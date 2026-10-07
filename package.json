@@ -7,6 +7,11 @@
     "node": ">=22"
   },
   "scripts": {
+    "plugin:build": "node tools/plugins/build-armadra.mjs",
+    "plugin:test": "node --test tools/plugins/*.test.mjs",
+    "controller:probe": "node tools/probes/controller-smoke.mjs",
+    "controller:real:test": "node --test tools/probes/controller-real.test.mjs",
+    "controller:real:preflight": "node tools/probes/controller-real.mjs --preflight",
     "repo:check": "node tools/repo-check.mjs",
     "repo:test": "node --test tools/repo-check.test.mjs",
     "ci:workflows": "node tools/ci/validate-workflows.mjs",

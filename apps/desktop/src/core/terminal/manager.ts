@@ -1,3 +1,11 @@
+import {
+  driveTargetFor,
+  observedActivityFor,
+  automatedInputWritable,
+  authorizeManagedInput,
+  assertSubmitInput,
+} from "./manager-status";
+import { initializeContextSequence } from "./sequences";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -47,13 +55,8 @@ import {
   TerminalDriveBook,
   type DriveSessionRef,
 } from "./drive";
-import { getAgentStatus } from "../agent/status";
 import { HIBERNATE_INTENT, rowHibernated } from "./hibernate";
-import {
-  type ObservedActivity,
-  type TargetState,
-  targetState,
-} from "../agent/target-state";
+import { type ObservedActivity, type TargetState } from "../agent/target-state";
 import { allows } from "../identity/gate";
 import { scope } from "../identity/scopes";
 import {
@@ -193,6 +196,7 @@ export interface AttachSession {
 }
 
 export interface TerminalManagerOptions {
+  readonly sequenceDirectory?: string;
   readonly database: DatabaseSync;
   /** Every backend this build can reach, by kind. */
   readonly backends: ReadonlyMap<BackendKind, TerminalBackend>;
@@ -257,8 +261,10 @@ export class TerminalManager {
   };
   private readonly onExit: TerminalManagerOptions["onExit"];
   private stopping = false;
+  private readonly sequenceDirectory: string | undefined;
 
   constructor(options: TerminalManagerOptions) {
+    this.sequenceDirectory = options.sequenceDirectory;
     this.database = options.database;
     this.backends = options.backends;
     this.effective = options.effective;
@@ -432,7 +438,7 @@ export class TerminalManager {
     const key = sessionKey(request.ownerNodeId ?? id);
     return this.withKey(key, async () => {
       const shell = request.shell ?? defaultShell();
-      const env = contextSessionEnvironment(
+      const env = this.sessionEnvironment(
         withUtf8Locale(request.env ?? []),
         id,
         1,
@@ -551,7 +557,7 @@ export class TerminalManager {
       const spec: TerminalSpec = {
         ...record.spec,
         generation: nextGeneration,
-        env: contextSessionEnvironment(
+        env: this.sessionEnvironment(
           record.spec.env,
           sessionId,
           nextGeneration,
@@ -681,7 +687,7 @@ export class TerminalManager {
         shell: String(row.shell),
         ...(command === undefined ? {} : { command }),
         args: [],
-        env: contextSessionEnvironment(
+        env: this.sessionEnvironment(
           withUtf8Locale(env),
           sessionId,
           nextGeneration,
@@ -867,6 +873,25 @@ export class TerminalManager {
     if (!record.exited) this.setAttachState(sessionId, "detached");
   }
 
+  private sessionEnvironment(
+    env: EnvPairs,
+    sessionId: string,
+    generation: number,
+  ): EnvPairs {
+    return contextSessionEnvironment(
+      env,
+      sessionId,
+      generation,
+      () =>
+        this.sequenceDirectory === undefined ||
+        initializeContextSequence(
+          this.sequenceDirectory,
+          sessionId,
+          generation,
+        ),
+    );
+  }
+
   /* ---------------------------------- input -------------------------------- */
 
   async input(
@@ -875,6 +900,8 @@ export class TerminalManager {
     data: string,
     writer?: TerminalWriter,
     driver?: Actor,
+    onWritten?: (revision: number) => void,
+    beforeWrite?: () => void,
   ): Promise<void> {
     const first = this.checked(sessionId, generation);
     // `terminal:drive` 的判定入口（设计 §4.4）：写入者 ≠ 会话创建者时才要这条
@@ -908,9 +935,13 @@ export class TerminalManager {
     this.noteDrive(sessionId, driver);
     return this.withKey(first.key, async () => {
       const record = this.checked(sessionId, generation);
+      authorizeManagedInput(this.database, record, driver);
+      beforeWrite?.();
       const bytes = Buffer.from(data, "utf8");
       this.noteInput(record, bytes);
+      const submittedRevision = record.inputRevision;
       await this.backend(record.kind).input(record.key, bytes);
+      onWritten?.(submittedRevision);
     });
   }
 
@@ -1039,30 +1070,13 @@ export class TerminalManager {
 
   /* ----------------------------- 留给阶段 C 的 ----------------------------- */
 
-  /**
-   * 一次投递要知道的全部：目标现在是五态里的哪一个、租约在谁手里、代次是几。
-   *
-   * 本阶段只提供，不调用（§11 阶段 B）。`send` 的门链在阶段 C 落地，它要的就是
-   * 这一个对象——把它放在这里，是为了让「现在谁在驱动、能不能投」只有一个答案。
-   */
   driveTarget(nodeId: string): DriveTarget {
-    const session = loadSession(this.database, nodeId);
-    const sessionId = session?.sessionId;
-    const live =
-      sessionId === undefined ? undefined : this.generation(sessionId);
-    const status = getAgentStatus(this.database, nodeId);
-    return {
+    return driveTargetFor(
+      this.database,
       nodeId,
-      ...(sessionId === undefined ? {} : { sessionId }),
-      state: targetState(status, live),
-      ...(status?.stateSource === undefined
-        ? {}
-        : { stateSource: status.stateSource }),
-      lease:
-        sessionId === undefined ? freeLease(0) : this.drives.lease(sessionId),
-      driveGeneration:
-        sessionId === undefined ? 0 : this.drives.generation(sessionId),
-    };
+      (id) => this.generation(id),
+      (id) => this.drives.lease(id),
+    );
   }
 
   /**
@@ -1080,32 +1094,34 @@ export class TerminalManager {
     generation: number,
     text: string,
     driver?: Actor,
-  ): Promise<void> {
+  ): Promise<{ readonly inputRevision: number }> {
+    let inputRevision = -1;
     await this.input(
       sessionId,
       generation,
       `${PASTE_START}${sanitizePaste(text)}${PASTE_END}\r`,
       undefined,
       driver,
+      (revision) => {
+        inputRevision = revision;
+      },
+      () => {
+        const record = this.checked(sessionId, generation);
+        assertSubmitInput(this.database, record);
+        this.noteDrive(sessionId, driver);
+        authorizeManagedInput(this.database, record, driver);
+      },
     );
+    return { inputRevision };
   }
 
-  /**
-   * 没有状态适配的会话，这个域对它知道的全部（设计 `agent-delivery.md` §4.3）。
-   *
-   * 三样都是已有的东西：输入围栏的 `pending`、最后一次活动的时刻。**不**解析
-   * 提示符、**不**识别 OSC。`lastActivity` 在输入与输出两侧都被更新，所以输入
-   * 与输出的时刻在这里是同一个数——那条启发式取的本来就是两者的较晚者。
-   */
-  observedActivity(sessionId: string): ObservedActivity | undefined {
+  inputRevision(sessionId: string): number | undefined {
     const record = this.records.get(sessionId);
-    if (record === undefined || record.exited) return undefined;
-    return {
-      pending: record.inputSafety.pending,
-      lastInputAt: record.lastActivity,
-      lastOutputAt: record.lastActivity,
-      startedAt: record.startedAt,
-    };
+    return record?.inputRevision;
+  }
+
+  observedActivity(sessionId: string): ObservedActivity | undefined {
+    return observedActivityFor(this.records.get(sessionId));
   }
 
   private noteInput(record: SessionRecord, bytes: Buffer): void {
@@ -1116,31 +1132,23 @@ export class TerminalManager {
     record.lastActivity = this.clock();
   }
 
-  /**
-   * Whether an automated write may be delivered into this node right now.
-   *
-   * A paste into a node showing a permission prompt answers the prompt: the
-   * first character of the text becomes the answer to "allow this?". That is
-   * the one input mistake a person cannot undo, so the programmatic paths ask
-   * here first. A person typing at their own prompt is not gated.
-   */
   writable(sessionId: string): boolean {
-    const record = this.records.get(sessionId);
-    if (record === undefined || record.exited) return false;
-    if (record.ownerNodeId === null) return true;
-    const row = this.database
-      .prepare("SELECT state FROM agent_status WHERE node_id = ?")
-      .get(record.ownerNodeId) as { state?: string } | undefined;
-    const state = row?.state;
-    return state !== "blocked" && state !== "waiting";
+    return automatedInputWritable(this.database, this.records.get(sessionId));
   }
 
   /* -------------------------------- terminate ------------------------------ */
 
-  async terminate(sessionId: string, mode: TerminateMode): Promise<void> {
+  async terminate(
+    sessionId: string,
+    mode: TerminateMode,
+    expectedGeneration?: number,
+  ): Promise<void> {
     const first = this.require(sessionId);
     return this.withKey(first.key, async () => {
-      const record = this.require(sessionId);
+      const record =
+        expectedGeneration === undefined
+          ? this.require(sessionId)
+          : this.checked(sessionId, expectedGeneration);
       this.database
         .prepare(
           "UPDATE terminal_sessions SET termination_intent = ? WHERE id = ?",

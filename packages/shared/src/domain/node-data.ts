@@ -130,6 +130,8 @@ export const sshTargetSchema = z.object({
 
 export const terminalNodeDataSchema = z.object({
   kind: z.literal("terminal"),
+  /** Absent on legacy nodes: launch on open. Manual nodes attach only; core starts runs. */
+  launchPolicy: z.enum(["onOpen", "manual"]).optional(),
   ...addressable,
   sessionId: z.string().uuid().optional(),
   cwd: z.string().max(4_000).optional(),

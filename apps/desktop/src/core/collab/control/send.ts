@@ -1,3 +1,4 @@
+import { runDeliveryBridge } from "../../runs/registry";
 import { expectedProcesses, paneRunsAgent } from "../../agent/launch";
 import {
   baseAgent,
@@ -52,6 +53,8 @@ import {
 import { MAX_HOPS, sendLimits } from "../send-limits";
 import {
   type QueueItem,
+  queueActorId,
+  queueActorFields,
   SEND_QUEUE_TTL_SECONDS,
   claim,
   enqueue,
@@ -145,6 +148,7 @@ export const SEND_CODES = {
   BODY_TOO_LONG: 400,
   KEY_CONFLICT: 409,
   DRIVE_DENIED: 403,
+  NODE_BUSY: 409,
   /**
    * 从想把文字打进主的终端（迁移 0024 的边角色）。
    *
@@ -440,6 +444,22 @@ export async function attempt(
     // （没连线、没权限、节点没了）照旧。
     const code = codeOf(error);
     if (
+      item.sourceKind === "controller" &&
+      (code === "TARGET_STARTING" ||
+        (error as { code?: string }).code === "recovery_pending")
+    ) {
+      const target = loadNode(context.database, item.targetNodeId);
+      if (target)
+        return queueOrRefuse(
+          context,
+          item,
+          target,
+          "TARGET_STARTING",
+          options,
+          now,
+        );
+    }
+    if (
       (code === "TARGET_GONE" || code === "TARGET_NOT_AGENT_PANE") &&
       context.terminals?.sleeping?.(item.targetNodeId) === true
     ) {
@@ -582,7 +602,7 @@ export async function attempt(
   if (
     live.leaseState === "agent" &&
     live.leaseHolderId !== "" &&
-    live.leaseHolderId !== item.sourceNodeId
+    live.leaseHolderId !== queueActorId(item)
   ) {
     return queueOrRefuse(
       context,
@@ -625,30 +645,63 @@ export async function attempt(
     requeue(context.database, item.id, "TARGET_GONE");
     throw new Refused(503, "internal_error", "终端域还没有装配好，无法投递。");
   }
-  const source = loadNode(context.database, item.sourceNodeId);
+  const source =
+    item.sourceNodeId === null
+      ? undefined
+      : loadNode(context.database, item.sourceNodeId);
   // 收件箱唤醒没有第二个节点在发话：那一条是应用自己说的，署名就该是应用，而
   // 不是把目标自己的名字写在 `from:` 上冒充一次对话（§5、§2.4）。
   const wake = item.origin === "mailbox-wake";
   const sourceName = wake
     ? WAKE_SENDER
-    : displayName(source, item.sourceNodeId);
+    : item.sourceKind === "controller"
+      ? "Armadra controller"
+      : displayName(source, item.sourceNodeId!);
   const envelope = buildEnvelope({
-    sourceNodeId: item.sourceNodeId,
+    ...(item.sourceKind === "controller"
+      ? {
+          source: {
+            kind: "controller" as const,
+            controllerId: item.controllerId!,
+          },
+          correlation: `run=${item.runId} task=${item.taskId} delivery=${item.id}`,
+        }
+      : { sourceNodeId: item.sourceNodeId! }),
     sourceName,
     trail: wake ? WAKE_VIA : renderTrail(context, item.trail),
     body: item.body,
   });
   const traceId = nonce(16);
+  const run =
+    item.sourceKind === "controller"
+      ? runDeliveryBridge(context.database)
+      : undefined;
+  if (item.sourceKind === "controller") {
+    if (!run) {
+      settle(context.database, item.id, "cancelled", "DRIVE_DENIED");
+      throw refuse("DRIVE_DENIED", "Run authority is unavailable");
+    }
+    try {
+      run.beforeSubmit(item, live.session, envelope);
+    } catch (error) {
+      settle(context.database, item.id, "cancelled", "DRIVE_DENIED");
+      throw error;
+    }
+  }
   try {
-    await submit(
+    const submitted = await submit(
       live.session.sessionId,
       live.session.generation,
       envelope,
-      agentActor(item.sourceNodeId, live.session.sessionId, sourceName),
+      run
+        ? run.driver(item, live.session.sessionId)
+        : agentActor(item.sourceNodeId!, live.session.sessionId, sourceName),
     );
+    run?.afterSubmit(item, "applied", submitted?.inputRevision);
   } catch (error) {
     // 写到一半失败：不知道对面收到了多少。它**不是**可以重试的那种失败，所以
     // 这一条不回队列（`schedule/dispatch.ts:200-208` 的同一条规矩）。
+    run?.afterSubmit(item, "uncertain");
     settle(context.database, item.id, "done", "WRITE_FAILED");
     const message = error instanceof Error ? error.message : String(error);
     const traced = trace(context, item, "unknown", traceId, "write-failed");
@@ -675,7 +728,7 @@ export async function attempt(
 
   settle(context.database, item.id, "done", "DELIVERED");
   const limits = sendLimits();
-  limits.noteDelivered(item.sourceNodeId, item.targetNodeId, nowMs);
+  limits.noteDelivered(queueActorId(item), item.targetNodeId, nowMs);
   // 下一跳的来源链从这里接上：目标再往外投时，链里已经有它的上游。
   limits.noteTrail(item.targetNodeId, item.trail, nowMs);
   audit({
@@ -684,6 +737,7 @@ export async function attempt(
     workspaceId: item.workspaceId,
     detail: {
       source: item.sourceNodeId,
+      ...queueActorFields(item),
       hops: item.hops,
       bodyChars: [...item.body].length,
       queueId: item.id,
@@ -894,19 +948,37 @@ async function gate(
   context: CollabContext,
   item: QueueItem,
 ): Promise<LiveTarget> {
-  const target = loadNode(context.database, item.targetNodeId);
-  const source = loadNode(context.database, item.sourceNodeId);
+  let target = loadNode(context.database, item.targetNodeId);
+  const source =
+    item.sourceNodeId === null
+      ? undefined
+      : loadNode(context.database, item.sourceNodeId);
   if (target === undefined) {
     throw refuse("TARGET_GONE", "目标节点已经不在画布上了。");
   }
-  if (source === undefined) {
-    throw refuse("NOT_LINKED", "发起这条投递的节点已经不在画布上了。");
+  const run = runDeliveryBridge(context.database);
+  if (item.sourceKind === "controller") {
+    if (!run)
+      throw refuse("TARGET_STARTING", "Controller run recovery is pending");
+    target = run.authorize(item);
+    if (
+      target.nodeType !== "terminal" ||
+      target.agentId === null ||
+      !hasCapability(context.settings, target.agentId, "contextLink")
+    )
+      throw refuse("DRIVE_DENIED", "Target no longer permits Agent execution");
+  } else {
+    if (run?.nodeOccupied(target.id))
+      throw refuse("NODE_BUSY", "This node is occupied by a controller run");
+    if (source === undefined)
+      throw refuse("NOT_LINKED", "发起这条投递的节点已经不在画布上了。");
+    authorize(context, source, target, {
+      requireLink: !(
+        item.origin === "mailbox-wake" &&
+        item.sourceNodeId === item.targetNodeId
+      ),
+    });
   }
-  authorize(context, source, target, {
-    requireLink: !(
-      item.origin === "mailbox-wake" && item.sourceNodeId === item.targetNodeId
-    ),
-  });
   return observe(context, target);
 }
 
@@ -1111,18 +1183,23 @@ function readKey(args: Args): string | undefined {
  * 一行假的帧边界。
  */
 export function buildEnvelope(options: {
-  readonly sourceNodeId: string;
+  readonly sourceNodeId?: string;
+  readonly source?: { kind: "controller"; controllerId: string };
+  readonly correlation?: string;
   readonly sourceName: string;
   readonly trail: string;
   readonly body: string;
 }): string {
   const frame = nonce(12);
   const from = collapseNewlines(
-    `${options.sourceName} (${options.sourceNodeId})`,
+    `${options.sourceName} (${options.source ? `controller:${options.source.controllerId}` : options.sourceNodeId})`,
   );
   return [
     `--- ARMADRA MESSAGE ${frame} ---`,
     `from: ${from}   via: ${collapseNewlines(options.trail)}`,
+    ...(options.correlation
+      ? [`correlation: ${collapseNewlines(options.correlation)}`]
+      : []),
     options.body,
     `--- END ARMADRA MESSAGE ${frame} ---`,
   ].join("\n");
@@ -1203,7 +1280,11 @@ function trace(
     workspaceRoot(context.database, item.workspaceId),
     {
       traceId,
-      source: item.sourceNodeId,
+      source:
+        item.sourceKind === "controller"
+          ? `controller:${item.controllerId}`
+          : item.sourceNodeId!,
+      ...queueActorFields(item),
       target: item.targetNodeId,
       outcome,
       receipt: receiptText,
@@ -1230,6 +1311,7 @@ function recordAndAnnounce(
     traceId,
     workspaceId: item.workspaceId,
     sourceNodeId: item.sourceNodeId,
+    ...queueActorFields(item),
     targetNodeId: item.targetNodeId,
     outcome,
     // 「结果如何」之外的另一半：凭什么。一条 `observed-quiet` 的 `delivered`
@@ -1243,6 +1325,7 @@ function recordAndAnnounce(
     type: "agent.delivery",
     traceId,
     sourceNodeId: item.sourceNodeId,
+    ...queueActorFields(item),
     targetNodeId: item.targetNodeId,
     outcome,
   });

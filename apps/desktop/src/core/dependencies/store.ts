@@ -46,6 +46,10 @@ export interface DependencyRow {
 }
 
 export interface LaunchRow {
+  readonly sourceKind?: "controller";
+  readonly controllerId?: string;
+  readonly runId?: string;
+  readonly taskId?: string;
   readonly nodeId: string;
   readonly workspaceId: string;
   readonly boardId: string;
@@ -101,6 +105,14 @@ function trailOf(raw: unknown): string[] {
 
 function launchOf(row: Row): LaunchRow {
   return {
+    ...(row.source_kind === "controller"
+      ? {
+          sourceKind: "controller" as const,
+          controllerId: String(row.controller_id),
+          runId: String(row.run_id),
+          taskId: String(row.task_id),
+        }
+      : {}),
     nodeId: String(row.node_id),
     workspaceId: String(row.workspace_id),
     boardId: String(row.board_id),
@@ -242,7 +254,7 @@ export function markObservedBusy(
   database
     .prepare(
       "UPDATE agent_dependencies SET observed_busy = 1, updated_at = ? " +
-        "WHERE id = ? AND state = 'waiting' AND observed_busy = 0",
+        "WHERE id = ? AND state = 'waiting' AND run_id IS NULL AND observed_busy = 0",
     )
     .run(now, id);
 }
@@ -262,7 +274,7 @@ export function rebaseline(
   database
     .prepare(
       "UPDATE agent_dependencies SET baseline_state = ?, baseline_event_at = ?, " +
-        "observed_busy = 0, reason = ?, updated_at = ? WHERE id = ? AND state = 'waiting'",
+        "observed_busy = 0, reason = ?, updated_at = ? WHERE id = ? AND state = 'waiting' AND run_id IS NULL",
     )
     .run(state, eventAt, reason, now, id);
 }
@@ -293,7 +305,7 @@ export function noteLaunchAttempt(
     .prepare(
       "UPDATE agent_dependency_launches SET attempts = attempts + 1, reason = ?, " +
         "state = CASE WHEN ? THEN 'failed' ELSE state END, updated_at = ? " +
-        "WHERE node_id = ? AND state = 'waiting'",
+        "WHERE node_id = ? AND state = 'waiting' AND run_id IS NULL",
     )
     .run(reason, failed ? 1 : 0, now, nodeId);
   return launchFor(database, nodeId);
@@ -349,7 +361,7 @@ export function waitingOn(
   return (
     database
       .prepare(
-        "SELECT * FROM agent_dependencies WHERE upstream_node_id = ? AND state = 'waiting'",
+        "SELECT * FROM agent_dependencies WHERE upstream_node_id = ? AND state = 'waiting' AND run_id IS NULL",
       )
       .all(upstreamNodeId) as Row[]
   ).map(dependencyOf);
@@ -359,7 +371,9 @@ export function waitingOn(
 export function allWaiting(database: DatabaseSync): DependencyRow[] {
   return (
     database
-      .prepare("SELECT * FROM agent_dependencies WHERE state = 'waiting'")
+      .prepare(
+        "SELECT * FROM agent_dependencies WHERE state = 'waiting' AND run_id IS NULL",
+      )
       .all() as Row[]
   ).map(dependencyOf);
 }
@@ -369,7 +383,7 @@ export function pendingLaunches(database: DatabaseSync): LaunchRow[] {
   return (
     database
       .prepare(
-        "SELECT * FROM agent_dependency_launches WHERE state = 'waiting' ORDER BY created_at",
+        "SELECT * FROM agent_dependency_launches WHERE state = 'waiting' AND run_id IS NULL ORDER BY created_at",
       )
       .all() as Row[]
   ).map(launchOf);
@@ -418,7 +432,7 @@ export function upstreamsOf(
     database
       .prepare(
         "SELECT upstream_node_id FROM agent_dependencies WHERE downstream_node_id = ? " +
-          "AND state = 'waiting'",
+          "AND state = 'waiting' AND run_id IS NULL",
       )
       .all(downstreamNodeId) as { upstream_node_id: string }[]
   ).map((row) => row.upstream_node_id);

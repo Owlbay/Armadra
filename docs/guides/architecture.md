@@ -1,5 +1,18 @@
 # 架构
 
+本机 CLI 插件入口由纯 Node `armadra` 客户端调用 core 数据目录的独立
+`controller.sock`（0700 目录、0600 socket）。该通道不注册到浏览器 HTTP 路由，
+不复用桌面全权票据或节点 token。发现文件的 `controller` 段和实时实例 ID 一起
+校验连接。profile 凭据只在客户端私有文件保存，数据库存摘要和 workspace scope。
+增量建图复用画布验证、布局、保存和上下文授权；对象归属、幂等结果、审计与事件
+同事务提交，提交后广播。新终端使用 `launchPolicy: manual`，页面只附着 core
+启动的会话；旧终端缺省仍随打开启动。运行由 core 的 `runs/RunService` 持有：run/task、节点占用和副作用意图持久化，
+后台启动借现有依赖启动器，任务仍经投递泵和 PTY 输入安全门。可信完成关联
+投递、PTY generation、Hook 单调序号、提示词摘要和输入 revision；进程退出与
+observed 状态均不能放行依赖。恢复按执行意图对账，unknown 不重放；产物与事件分页有范围和输出限额。
+本地 marketplace 已安装，真实宿主/双模型及平台验收仍待完成，证据见
+[本地 CLI 插件进度](../status/local-cli-plugin.md)。
+
 > 下一阶段目标见 [画布工作平台设计总纲](../design/canvas-platform-design.md)及其专项文档。本文件描述当前实现，不把目标能力提前计入现状。
 
 > 当前实现的架构。画布层细节见 [画布换成 React Flow](../design/canvas-react-flow.md)，

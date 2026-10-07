@@ -29,6 +29,7 @@ import { agentLabel } from "@/agent/launch";
 import { useAgentModels } from "../agent/models";
 import { useNodeCapabilities } from "@/agent/capabilities";
 import { PendingLaunchButton } from "@/agent/PendingLaunchButton";
+import { ManualRunButton } from "@/agent/ManualRunButton";
 import { StateSourceBadge } from "@/agent/StateSourceBadge";
 import {
   agentHeaderState,
@@ -320,6 +321,11 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
       {...(bell ? { "data-bell": "true" } : {})}
     >
       <PendingLaunchButton nodeId={id} />
+      {data?.launchPolicy === "manual" &&
+        agent &&
+        ["idle", "exited", "failed"].includes(surface.connection) && (
+          <ManualRunButton nodeId={id} />
+        )}
       {(exited || surface.hibernation === "failed") && (
         <IconButton
           label={t("terminal.rerun")}

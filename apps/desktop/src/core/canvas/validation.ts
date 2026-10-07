@@ -198,6 +198,11 @@ export function validNodeData(node: CanvasNode): boolean {
   switch (node.type) {
     case "terminal":
       return (
+        isAbsentOr(
+          data,
+          "launchPolicy",
+          (value) => value === "manual" || value === "onOpen",
+        ) &&
         optionalBoundedString(data, "cwd", 4_000) &&
         optionalBoundedString(data, "shell", 1_024) &&
         optionalUuidField(data, "sessionId") &&

@@ -63,6 +63,14 @@ export function useTerminalSession(
         }
       }
 
+      // Controller nodes only attach. A rerender, reconnect or Restart action
+      // cannot take over the core's explicit run lifecycle.
+      if (nodeData.launchPolicy === "manual") {
+        refs.freshSessionRef.current = false;
+        patch({ connection: "idle", error: null });
+        return;
+      }
+
       if (refs.creatingRef.current) return;
       refs.creatingRef.current = true;
       patch({ connection: "starting", hibernation: null, error: null });

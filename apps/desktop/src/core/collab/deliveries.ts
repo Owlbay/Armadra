@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { getWorkspace } from "../workspaces/table";
 import { rfc3339 } from "../workspaces/support";
 import { loadNode } from "./nodes";
-import { pendingFor, positionOf } from "./send-queue";
+import { pendingFor, positionOf, queueActorFields } from "./send-queue";
 import { displayName } from "./control/send";
 import type { CollabContext } from "./service";
 
@@ -23,7 +23,11 @@ import type { CollabContext } from "./service";
 export interface AgentDelivery {
   readonly traceId: string;
   readonly workspaceId: string;
-  readonly sourceNodeId: string;
+  readonly sourceNodeId: string | null;
+  readonly sourceKind?: "controller";
+  readonly controllerId?: string;
+  readonly runId?: string;
+  readonly taskId?: string;
   readonly targetNodeId: string;
   readonly outcome: string;
   /**
@@ -39,7 +43,11 @@ export interface AgentDelivery {
 interface DeliveryRow {
   readonly trace_id: string;
   readonly workspace_id: string;
-  readonly source_node_id: string;
+  readonly source_node_id: string | null;
+  readonly source_kind: string;
+  readonly controller_id: string | null;
+  readonly run_id: string | null;
+  readonly task_id: string | null;
   readonly target_node_id: string;
   readonly outcome: string;
   readonly target_state: string | null;
@@ -60,7 +68,7 @@ export function listDeliveries(
   const rows = context.database
     .prepare(
       "SELECT trace_id, workspace_id, source_node_id, target_node_id, outcome, target_state, " +
-        "receipt, body_chars, created_at " +
+        "receipt, body_chars, created_at, source_kind, controller_id, run_id, task_id " +
         "FROM agent_deliveries WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ?",
     )
     .all(workspaceId, bounded) as unknown as DeliveryRow[];
@@ -68,6 +76,14 @@ export function listDeliveries(
     traceId: row.trace_id,
     workspaceId: row.workspace_id,
     sourceNodeId: row.source_node_id,
+    ...(row.source_kind === "controller"
+      ? {
+          sourceKind: "controller" as const,
+          controllerId: row.controller_id!,
+          runId: row.run_id!,
+          taskId: row.task_id!,
+        }
+      : {}),
     targetNodeId: row.target_node_id,
     outcome: row.outcome,
     targetState: row.target_state ?? "",
@@ -80,7 +96,11 @@ export function listDeliveries(
 export interface NewDelivery {
   readonly traceId: string;
   readonly workspaceId: string;
-  readonly sourceNodeId: string;
+  readonly sourceNodeId: string | null;
+  readonly sourceKind?: "controller";
+  readonly controllerId?: string;
+  readonly runId?: string;
+  readonly taskId?: string;
   readonly targetNodeId: string;
   readonly outcome: string;
   /** 回执里的那个 `targetState`。没有就记空串。 */
@@ -104,8 +124,8 @@ export function recordDelivery(
     database
       .prepare(
         "INSERT OR REPLACE INTO agent_deliveries (trace_id, workspace_id, source_node_id, " +
-          "target_node_id, outcome, target_state, receipt, body_chars, created_at) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "target_node_id, outcome, target_state, receipt, body_chars, created_at, source_kind, controller_id, run_id, task_id) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         delivery.traceId,
@@ -117,6 +137,10 @@ export function recordDelivery(
         delivery.receipt ?? null,
         delivery.bodyChars,
         rfc3339(),
+        delivery.sourceKind ?? "node",
+        delivery.controllerId ?? null,
+        delivery.runId ?? null,
+        delivery.taskId ?? null,
       );
   } catch {
     // 见上：记录写不进去不是投递失败。
@@ -140,7 +164,11 @@ export function recordDelivery(
 export interface QueuedDelivery {
   readonly id: string;
   readonly workspaceId: string;
-  readonly sourceNodeId: string;
+  readonly sourceNodeId: string | null;
+  readonly sourceKind?: "controller";
+  readonly controllerId?: string;
+  readonly runId?: string;
+  readonly taskId?: string;
   /** 发起者的名字（handle），没起名退回标题，再退回 id。 */
   readonly sourceName: string;
   readonly targetNodeId: string;
@@ -167,10 +195,14 @@ export function listQueued(
       id: item.id,
       workspaceId: item.workspaceId,
       sourceNodeId: item.sourceNodeId,
-      sourceName: displayName(
-        loadNode(context.database, item.sourceNodeId),
-        item.sourceNodeId,
-      ),
+      ...queueActorFields(item),
+      sourceName:
+        item.sourceKind === "controller"
+          ? "Armadra controller"
+          : displayName(
+              loadNode(context.database, item.sourceNodeId!),
+              item.sourceNodeId!,
+            ),
       targetNodeId: item.targetNodeId,
       origin: item.origin,
       queuedAt: item.createdAt,

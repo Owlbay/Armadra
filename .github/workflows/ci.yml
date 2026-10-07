@@ -82,9 +82,30 @@ jobs:
       - run: pnpm -r --if-present test
       - run: pnpm -r --if-present typecheck
       - run: pnpm --filter @armadra/web build
+      - run: pnpm plugin:test
+      - run: pnpm controller:real:test
 
       # 桌面壳的 main/preload/renderer/core 四个 target 编译一遍，但不打包：
       # 打包（electron-builder）要平台特定的证书/公证输入，是发布流水线的事。
       # 这里要的是三个平台上 electron-vite 的构建图都过得去。
       - name: 桌面壳构建（不打包）
         run: pnpm --filter @armadra/desktop build
+
+      # Windows 首版明确不支持 controller transport；客户端的拒绝分支由上方
+      # 单测与插件路径测试覆盖。Unix 真 socket/PTY/崩溃路径在两种 runner 上执行。
+      - name: Unix controller 故障探针
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm plugin:build
+          node tools/probes/controller-smoke.mjs
+          node tools/probes/controller-run.mjs
+          node tools/probes/controller-run.mjs --cancel
+          node tools/probes/controller-run.mjs --large-output
+          node tools/probes/controller-run.mjs --crash
+          node tools/probes/build-controller-fault.mjs
+          node tools/probes/controller-run.mjs --fault=launch.before
+          node tools/probes/controller-run.mjs --fault=launch.after
+          node tools/probes/controller-run.mjs --fault=delivery.before
+          node tools/probes/controller-run.mjs --fault=delivery.after

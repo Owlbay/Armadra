@@ -1,4 +1,9 @@
 import type { Server } from "node:http";
+import { startControllerChannel } from "./controller/channel";
+import { ControllerService } from "./controller/service";
+import { RunService } from "./runs/service";
+import { installRunUi } from "./runs/ui";
+import { collab } from "./agent";
 import { USAGE, parseArguments, parseWorkerArguments } from "./args";
 import { install as installAssets } from "./assets/routes";
 import { install as installCanvas } from "./canvas/routes";
@@ -12,6 +17,7 @@ import { install as installHooks } from "./hook";
 import { hookService } from "./hook/service";
 import {
   RUNTIME_SERVICE,
+  CONTROLLER_SERVICE,
   type ServiceEndpoint,
   publish,
   serviceEndpointNow,
@@ -74,6 +80,11 @@ import { install as installGit } from "./git";
  */
 
 export interface RunOptions {
+  /** Embedding/probe seam; never exposed as a CLI or controller command. */
+  readonly runsFactory?: (
+    context: CoreContext,
+    collaboration: () => ReturnType<typeof collab>,
+  ) => RunService;
   readonly argv?: readonly string[];
   readonly env?: NodeJS.ProcessEnv;
   /** 没有别的说法时，从哪里开始往上找 `db/migrations`。 */
@@ -274,10 +285,19 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
   // singleton, so a second core started in the same process would otherwise be
   // the one this core stops.
   const language = languageDomain();
+  const collaboration = () => {
+    const current = collab();
+    return current?.database === context.db.database ? current : undefined;
+  };
+  const runs =
+    options.runsFactory?.(context, collaboration) ??
+    new RunService({ context, collab: collaboration });
+  installRunUi(context, runs);
 
   // Step 3.
   const listeners: { server: Server; spec: ListenSpec }[] = [];
   const bound: ListenSpec[] = [];
+  let controller: Awaited<ReturnType<typeof startControllerChannel>>;
   try {
     for (const spec of parsed.args.listen) {
       const listener = server.createListener();
@@ -287,7 +307,17 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
         spec: bound[bound.length - 1] as ListenSpec,
       });
     }
+    const service = new ControllerService(context, instanceId(), { runs });
+    controller = await startControllerChannel({
+      dataDir,
+      instanceId: instanceId(),
+      dispatch: (command, credential, signal) =>
+        service.dispatch(command, credential, signal),
+    });
+    runs.begin();
   } catch (error) {
+    await runs.stop();
+    await controller?.close();
     await server.close();
     opened.close();
     throw error;
@@ -300,6 +330,7 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
     released = true;
     try {
       withdraw(endpoints, RUNTIME_SERVICE);
+      withdraw(endpoints, CONTROLLER_SERVICE);
     } catch (error) {
       log.warn("could not withdraw the core endpoint", {
         error: describe(error),
@@ -310,6 +341,8 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
 
   // Step 4 — armed before step 5 publishes anything about this process.
   const stop = async (): Promise<void> => {
+    await controller?.close();
+    await runs.stop();
     await server.close();
     // Language servers are child processes of this one, and nothing else ends
     // them: a core that exits without this leaves one running per workspace it
@@ -334,6 +367,12 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
   // Step 5.
   try {
     publish(endpoints, RUNTIME_SERVICE, runtimeEndpoint(instanceId(), bound));
+    if (controller)
+      publish(
+        endpoints,
+        CONTROLLER_SERVICE,
+        runtimeEndpoint(instanceId(), [controller.spec]),
+      );
   } catch (error) {
     // Discovery is a convenience; an unwritable data directory must not stop a
     // core whose address the caller already knows.

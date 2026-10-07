@@ -76,7 +76,7 @@ export type LeaseState = "free" | "human" | "humanTakeover" | "agent";
 
 export interface LeaseHolder {
   /** `human` 或 `agent`。 */
-  readonly kind: "human" | "agent";
+  readonly kind: "human" | "agent" | "controller";
   /**
    * 人是客户端自己的不透明 id，Agent 是节点 id。永远不是一个经过认证的身份，
    * 所以它只用来把持有者彼此分开。
@@ -146,6 +146,12 @@ export type Actor =
       readonly nodeId: string;
       readonly sessionId: string;
       readonly displayName: string;
+    }
+  | {
+      readonly kind: "controller";
+      readonly controllerId: string;
+      readonly sessionId: string;
+      readonly displayName: string;
     };
 
 export function humanActor(deviceId: string, displayName: string): Actor {
@@ -161,7 +167,19 @@ export function agentActor(
 }
 
 export function actorId(actor: Actor): string {
-  return actor.kind === "human" ? actor.deviceId : actor.nodeId;
+  return actor.kind === "human"
+    ? actor.deviceId
+    : actor.kind === "controller"
+      ? actor.controllerId
+      : actor.nodeId;
+}
+
+export function controllerActor(
+  controllerId: string,
+  sessionId: string,
+  displayName: string,
+): Actor {
+  return { kind: "controller", controllerId, sessionId, displayName };
 }
 
 function holderOf(actor: Actor): LeaseHolder {
@@ -289,7 +307,7 @@ export class DriveLease {
   ): void {
     this.state = state;
     this.holder = holderOf(actor);
-    this.agentSession = actor.kind === "agent" ? actor.sessionId : "";
+    this.agentSession = actor.kind !== "human" ? actor.sessionId : "";
     this.expiresAt =
       // 接管是故意的，一直持有到交还为止。
       state === "humanTakeover"
@@ -329,14 +347,14 @@ export class DriveLease {
     }
     if (this.state === "human") {
       // 有人在打字。等他一下下。
-      if (actor.kind === "agent") return QUEUE;
+      if (actor.kind !== "human") return QUEUE;
       // 第二个人：谁最后碰的谁在驱动。
       this.hold(actor, "human", now, true);
       return GRANTED;
     }
     // 接管的意义就在这里：Agent 不排在它后面，另一台设备也不能点一下就走过去。
     return refused(
-      actor.kind === "agent" ? LEASE_REVOKED : LEASE_HELD_BY_HUMAN,
+      actor.kind !== "human" ? LEASE_REVOKED : LEASE_HELD_BY_HUMAN,
     );
   }
 

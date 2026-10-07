@@ -28,8 +28,12 @@ export const ENDPOINTS_VERSION = 1;
 
 export const RUNTIME_SERVICE = "runtime";
 export const HOST_SERVICE = "host";
+export const CONTROLLER_SERVICE = "controller";
 
-export type ServiceName = typeof RUNTIME_SERVICE | typeof HOST_SERVICE;
+export type ServiceName =
+  | typeof RUNTIME_SERVICE
+  | typeof HOST_SERVICE
+  | typeof CONTROLLER_SERVICE;
 
 export interface ServiceEndpoint {
   /** Identifies this *run*; it changes on every restart. */
@@ -50,6 +54,7 @@ export interface EndpointsDocument {
   version: number;
   runtime?: ServiceEndpoint | undefined;
   host?: ServiceEndpoint | undefined;
+  controller?: ServiceEndpoint | undefined;
 }
 
 /** A record for this process, stamped now. */
@@ -98,6 +103,7 @@ export function read(path: string): EndpointsDocument {
     version,
     runtime: endpointOf(record.runtime),
     host: endpointOf(record.host),
+    controller: endpointOf(record.controller),
   };
 }
 
@@ -156,7 +162,11 @@ function writeService(
  */
 function serialize(document: EndpointsDocument): Record<string, unknown> {
   const out: Record<string, unknown> = { version: document.version };
-  for (const service of [RUNTIME_SERVICE, HOST_SERVICE] as const) {
+  for (const service of [
+    RUNTIME_SERVICE,
+    HOST_SERVICE,
+    CONTROLLER_SERVICE,
+  ] as const) {
     const endpoint = document[service];
     if (endpoint === undefined) continue;
     const record: Record<string, unknown> = {

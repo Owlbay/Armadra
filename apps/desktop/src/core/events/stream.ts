@@ -131,9 +131,12 @@ export class WorkspaceEventStream {
    * Every domain emits `workspace.event`; nothing emits to a socket directly.
    */
   attach(bus: EventBus): () => void {
-    return bus.on("workspace.event", ({ workspaceId, event }) => {
-      this.publish(workspaceId, event);
-    });
+    return bus.on(
+      "workspace.event",
+      ({ workspaceId, event, persistedSequence }) => {
+        this.publish(workspaceId, event, persistedSequence);
+      },
+    );
   }
 
   /**
@@ -163,13 +166,19 @@ export class WorkspaceEventStream {
    * a no-op and never an error — a save that nobody is looking at is still a
    * save.
    */
-  publish(workspaceId: string, event: WorkspaceEvent): number {
+  publish(
+    workspaceId: string,
+    event: WorkspaceEvent,
+    persistedSequence?: number,
+  ): number {
     // 序列化在扇出之前，也在 outbox 之前：补发的必须是当初发出去的那一帧，
     // 从记录里重新拼一次就给了它一个走样的机会。
     const frame = JSON.stringify(event);
-    const seq = EPHEMERAL_EVENTS.has(event.type)
-      ? 0
-      : this.record(workspaceId, event, frame);
+    const seq =
+      persistedSequence ??
+      (EPHEMERAL_EVENTS.has(event.type)
+        ? 0
+        : this.record(workspaceId, event, frame));
     const watchers = this.subscriptions.get(workspaceId);
     if (watchers === undefined || watchers.size === 0) return 0;
     for (const subscription of watchers) this.enqueue(subscription, frame, seq);

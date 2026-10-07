@@ -56,6 +56,7 @@ export function putContextLinks(
   workspaceId: string,
   nodeId: string,
   links: readonly ContextLink[],
+  notify = true,
 ): ContextLinkDocument {
   if (links.length > 64) {
     throw badRequest("A node cannot link more than 64 other nodes");
@@ -115,12 +116,20 @@ export function putContextLinks(
         "links_json = excluded.links_json, updated_at = excluded.updated_at",
     )
     .run(nodeId, workspaceId, JSON.stringify(merged), now);
-  for (const listener of changeListeners) listener(workspaceId, nodeId);
+  if (notify) notifyContextLinksChanged(workspaceId, nodeId);
   return getContextLinks(database, nodeId);
 }
 
 type ChangeListener = (workspaceId: string, nodeId: string) => void;
 const changeListeners = new Set<ChangeListener>();
+
+/** Atomic writers notify only after commit, never while a rollback is possible. */
+export function notifyContextLinksChanged(
+  workspaceId: string,
+  nodeId: string,
+): void {
+  for (const listener of changeListeners) listener(workspaceId, nodeId);
+}
 
 /**
  * 某个节点的链接文档刚被写过。浏览器域用它决定哪些浏览器节点此刻被 Agent

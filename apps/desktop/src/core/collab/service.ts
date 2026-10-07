@@ -22,8 +22,15 @@ export type { DriveTarget, DriveActor };
 
 /** The PTY operations a collaboration verb needs. Implemented by R2. */
 export interface TerminalBridge {
+  /** Await startup reconciliation before recovery makes liveness decisions. */
+  ready?(): Promise<void>;
   /** Writes into a live session, refusing a generation that has moved on. */
-  write(sessionId: string, generation: number, data: string): Promise<void>;
+  write(
+    sessionId: string,
+    generation: number,
+    data: string,
+    driver?: DriveActor,
+  ): Promise<void>;
   /**
    * The last `lines` rendered rows of the pane.
    *
@@ -46,6 +53,12 @@ export interface TerminalBridge {
   /** The live generation, or `undefined` when nothing is running. */
   generation(sessionId: string): number | undefined;
   terminate(sessionId: string, mode: "session" | "process"): Promise<void>;
+  /** Atomic generation check and termination, for scoped run cancellation. */
+  terminateBound?(
+    sessionId: string,
+    generation: number,
+    mode: "session" | "process",
+  ): Promise<void>;
   /** Whether this really is the session the node is running right now. */
   isCurrentNodeSession(
     nodeId: string,
@@ -71,9 +84,11 @@ export interface TerminalBridge {
     generation: number,
     text: string,
     driver?: DriveActor,
-  ): Promise<void>;
+  ): Promise<void | { readonly inputRevision: number }>;
   /** 没有状态适配的会话，终端域对它知道的全部（§4.3 的启发式要的三样）。 */
   observed?(sessionId: string): ObservedActivity | undefined;
+  /** Current input fence revision; no inference from terminal output. */
+  inputRevision?(sessionId: string): number | undefined;
   /**
    * 替一个 Agent 节点起一个终端（一个 shell），与页面挂载时 `POST /api/terminals`
    * 起的是同一种：同样的地址变量、同样的节点令牌。

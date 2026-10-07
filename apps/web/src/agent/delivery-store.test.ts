@@ -44,6 +44,23 @@ beforeEach(() => {
 });
 
 describe("reduce", () => {
+  it("controller deliveries refresh the target queue without inventing a source node or edge", () => {
+    const result = reduce(
+      empty,
+      {
+        ...frame("delivered"),
+        sourceNodeId: null,
+        sourceKind: "controller",
+        controllerId: "controller",
+        runId: "run",
+        taskId: "task",
+      },
+      1000,
+    );
+    expect(result.queueVersion).toEqual({ "node-b": 1 });
+    expect(result.marks).toBeUndefined();
+    expect(result.notices).toBeUndefined();
+  });
   it("记下这条边最近一次投递，方向是有意义的", () => {
     const next = reduce(empty, frame("delivered"), 1_000);
     expect(next.marks?.[edgeKey("node-a", "node-b")]).toMatchObject({

@@ -30,6 +30,26 @@ pnpm --filter @armadra/desktop dev
 
 ## 监听方式与地址发现
 
+本地插件客户端单独构建，不需要 Electron 或原生 PTY ABI：
+
+```sh
+pnpm libs:build
+pnpm plugin:build
+node target/plugins/armadra/scripts/armadra.cjs doctor --json --data-dir /absolute/test-data
+node target/plugins/armadra/scripts/armadra.cjs workspaces list --json --data-dir /absolute/test-data
+node target/plugins/armadra/scripts/armadra.cjs connect --workspace WORKSPACE_ID --profile demo --json --data-dir /absolute/test-data
+node target/plugins/armadra/scripts/armadra.cjs boards list --profile demo --json --data-dir /absolute/test-data
+```
+
+core 必须先按既有命令启动；客户端不会自行启动进程。默认凭据目录为
+`~/.config/armadra/controller-profiles`，文件 0600、目录 0700，stdout 不输出凭据。
+`ARMADRA_CONTROLLER_PROFILES_DIR` 可指向隔离测试目录。写入图需显式 board ID、
+文件、当前 `expectedUpdatedAt` 和稳定 `--key`；同键重放返回原结果。
+`graph validate` 只校验，`graph apply` 只创建 manual 节点，不启动 shell。
+`run start/get/wait/cancel` 已接入；故障恢复、产物查询与本地插件安装已接入；真实宿主/双模型验收仍在推进。
+可执行 `node tools/probes/controller-run.mjs` 验证真实 PTY 中的确定性假 CLI。使用前查看
+[验收记录](../status/local-cli-plugin.md)。
+
 core 的 `--listen` 可重复，每次一个：`tcp:IP:PORT`（端口 `0` 由内核分配）、
 `unix:绝对路径`（0600）、`pipe:名字`（Windows 命名管道）。不给 `--listen` 时按
 `ARMADRA_RUNTIME_HOST` / `ARMADRA_RUNTIME_PORT`，再退回 `127.0.0.1:43120`。

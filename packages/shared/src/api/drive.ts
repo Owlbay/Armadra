@@ -20,7 +20,7 @@ export const driveLeaseSchema = z.object({
   expiresAt: z.string().default(""),
   holder: z
     .object({
-      kind: z.enum(["human", "agent"]),
+      kind: z.enum(["human", "agent", "controller"]),
       /** 人是 deviceId，Agent 是节点 id。 */
       id: z.string(),
       displayName: z.string().default(""),

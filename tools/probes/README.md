@@ -2,6 +2,42 @@
 
 这些入口只核验底层可行性，不启动应用服务，不构成完整浏览器或 Windows 持久终端实现。全部命令从仓库根目录运行；无需修改根 manifest。
 
+## 本机 controller 客户端
+
+```sh
+pnpm libs:build
+pnpm --filter @armadra/desktop build
+pnpm plugin:build
+pnpm controller:probe
+```
+
+`controller-smoke.mjs` 真起临时 core，从不同工作目录执行纯 Node 客户端，验证
+doctor、显式 workspace/profile/board、批量图校验、同键重放与撤销。它强制
+`ARMADRA_NO_GLOBAL_WRITES=1`，所有凭据和数据库在临时目录，并核对真实 Codex
+配置摘要前后不变。输出含 CLI 调用与输入输出字节计量；该探针不运行 Agent，
+不代表宿主插件安装或真实 Codex→Claude 验收。完整证据见
+[本地 CLI 插件进度](../../docs/status/local-cli-plugin.md)。
+
+`controller-run.mjs` 支持默认依赖闭环、`--cancel`（另一个运行必须存活）、
+`--large-output`（2 MiB 原始日志保持有限查询输出）、`--crash` 和
+`--fault=launch.before|launch.after|delivery.before|delivery.after`。精确故障先运行
+`node tools/probes/build-controller-fault.mjs`；CLI 不提供故障注入入口。
+`--client=ABSOLUTE_INSTALLED_SCRIPT` 可选择安装缓存客户端。Linux/macOS CI 会执行
+这些探针；需区分工作流已配置和 runner 已通过。
+
+`node tools/probes/controller-canvas.mjs` 使用已有 Chrome（CHROME_PATH 可选）打开真实
+应用页面，验证创建不启动、后台启动只附着、关页运行继续、重挂载不重复。页面的
+编辑租约先被正确拒绝，再由隔离页面离开自己的 presence 后建图。`controller-host.mjs
+ABSOLUTE_PLUGIN_DIRECTORY` 则启动已登录的真实 Codex 新会话，调用已安装 Skill/client；
+内层仍是假 Agents。只放行临时目录和指定 Unix socket，不修改全局权限、凭据或
+Hook 配置。两者证据在 target/local-cli-evidence，均不代表真实双 Agent 通过。
+
+真实模型入口为 `controller-real.mjs`，依赖已运行的临时 core、明确 workspace/board、
+独立登录且预先信任项目与 Hook 的隔离 Codex home，以及真实 Claude。先运行
+`pnpm controller:real:test` 和 `pnpm controller:real:preflight`；完整命令、路径约束、
+checkpoint 和质量门见[真实双 Agent 入口](../../docs/guides/local-cli-plugin.md#真实双-agent-验收入口)。
+单测通过或前置不足时输出 blocked 均不代表真实 A16 通过。
+
 ## 受控 Chromium
 
 需要 Node.js 22+（内置 WebSocket/fetch）和已安装的 Chrome/Chromium；脚本不下载浏览器。默认探测系统常见安装路径，也可显式选择可执行文件：

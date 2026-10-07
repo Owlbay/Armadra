@@ -61,7 +61,11 @@ export interface WorkspaceEventPayloads {
   };
   "agent.delivery": {
     readonly traceId: string;
-    readonly sourceNodeId: string;
+    readonly sourceNodeId: string | null;
+    readonly sourceKind?: "controller";
+    readonly controllerId?: string;
+    readonly runId?: string;
+    readonly taskId?: string;
     readonly targetNodeId: string;
     readonly outcome: string;
     /**
@@ -248,6 +252,7 @@ export const WORKSPACE_EVENT_TYPES = [
 ] as const satisfies readonly WorkspaceEventType[];
 
 export interface CoreEvents {
+  "run.report": { readonly nodeId: string; readonly seq: number };
   /**
    * Emitted once per run, right after the listeners are published. It carries
    * the instance id so a subscriber that attached to the wrong core can tell.
@@ -267,6 +272,8 @@ export interface CoreEvents {
   "workspace.event": {
     readonly workspaceId: string;
     readonly event: WorkspaceEvent;
+    /** Core-internal: already committed with its business write. */
+    readonly persistedSequence?: number;
   };
   /**
    * A workspace's grants changed, or the workspace is gone (`permissions:

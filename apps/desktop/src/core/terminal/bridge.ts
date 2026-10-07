@@ -21,8 +21,8 @@ export function terminalBridge(
   database: DatabaseSync,
 ): TerminalBridge {
   return {
-    write: (sessionId, generation, data) =>
-      manager.input(sessionId, generation, data),
+    write: (sessionId, generation, data, driver) =>
+      manager.input(sessionId, generation, data, undefined, driver),
     capture: async (sessionId, lines, withEscapes) => {
       const captured = await manager.capture(sessionId, lines, withEscapes);
       return { lines: captured.lines, data: captured.data };
@@ -43,6 +43,8 @@ export function terminalBridge(
     terminate: async (sessionId, mode) => {
       await manager.terminate(sessionId, mode);
     },
+    terminateBound: (sessionId, generation, mode) =>
+      manager.terminate(sessionId, mode, generation),
     isCurrentNodeSession: async (nodeId, sessionId, generation) =>
       isCurrentNodeSession(database, manager, nodeId, sessionId, generation),
     // 阶段 C 的 `send` 要的三样（设计 `agent-delivery.md` §4、§6）。都是
@@ -51,6 +53,7 @@ export function terminalBridge(
     writeSubmit: (sessionId, generation, text, driver) =>
       manager.writeSubmit(sessionId, generation, text, driver),
     observed: (sessionId) => manager.observedActivity(sessionId),
+    inputRevision: (sessionId) => manager.inputRevision(sessionId),
   };
 }
 
