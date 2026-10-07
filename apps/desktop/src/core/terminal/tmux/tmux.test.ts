@@ -113,7 +113,7 @@ describe("the generated configuration", () => {
     expect(conf).toContain('set -ga terminal-overrides ",*:Tc"');
     expect(conf).toContain('set -ga terminal-features ",xterm-256color:RGB"');
     expect(conf).toContain("set -g aggressive-resize on");
-    expect(conf).toContain("set -g window-size manual");
+    expect(conf).toContain("set -g window-size latest");
     expect(conf).not.toContain("{terminal}");
   });
 
@@ -388,6 +388,9 @@ describe.skipIf(!tmuxAvailable)("against a real tmux", () => {
         "#{window_width}x#{window_height}",
       );
 
+    expect(tmux("show-options", "-w", "-v", "-t", name, "window-size")).toBe(
+      "manual",
+    );
     const desk = await backend.attach(key, 1, { cols: 120, rows: 40 });
     const phone = await backend.attach(key, 1, { cols: 120, rows: 40 });
     await backend.resizeViewer(key, phone.attachmentId, { cols: 40, rows: 12 });

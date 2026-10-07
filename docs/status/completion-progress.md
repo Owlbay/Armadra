@@ -3073,7 +3073,7 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 
 做了什么：
 
-- **终端窗口尺寸（core）**：`record.cols/rows` 改为窗口尺寸，每个 attachment 自己记尺寸。窗口取谁的由纯函数 `windowSizeOf` 决定：有人类驾驶者（持终端驱动租约、经仍连着的那一端敲键）取驾驶者的；否则取面积最大的一端；同样大时保持当前，不来回切。只有结果变了才调后端一次。tmux 改 `window-size manual`，窗口由 core 用 `resize-window` 显式设置；resize 帧只改发出它的那一端自己的 tmux 客户端（后端新增可选的 `resizeViewer`，SSH 包装按内层透传）。direct / session-host 只有一个 pty：别端的 resize 只记下来，pty 只跟窗口走。attach 不再用新来者的尺寸覆盖窗口；没给尺寸的 attach 从窗口尺寸起步，`hello` 报的就是这一端自己的尺寸。驾驶者停手十秒租约过期后，窗口自动回到最大端。
+- **终端窗口尺寸（core）**：`record.cols/rows` 改为窗口尺寸，每个 attachment 自己记尺寸。窗口取谁的由纯函数 `windowSizeOf` 决定：有人类驾驶者（持终端驱动租约、经仍连着的那一端敲键）取驾驶者的；否则取面积最大的一端；同样大时保持当前，不来回切。只有结果变了才调后端一次。tmux 每个窗口建好（或重启后接管）就设成 `window-size manual`，窗口由 core 用 `resize-window` 显式设置（全局 conf 仍是 `latest`：全局 `manual` 会让 tmux 3.4 在第一次 detached `new-session` 时退出，Ubuntu 24.04 上复现过）；resize 帧只改发出它的那一端自己的 tmux 客户端（后端新增可选的 `resizeViewer`，SSH 包装按内层透传）。direct / session-host 只有一个 pty：别端的 resize 只记下来，pty 只跟窗口走。attach 不再用新来者的尺寸覆盖窗口；没给尺寸的 attach 从窗口尺寸起步，`hello` 报的就是这一端自己的尺寸。驾驶者停手十秒租约过期后，窗口自动回到最大端。
 - **页面 attach**：`hello` 尺寸与本地容器相同就不发 resize（`helloNeedsResize`）。比窗口小的一端由 tmux 裁切显示，比窗口大的一端右、下留空，不压主端。
 - **身份通知分级**：`onIdentitySessionChange` 的回调带 `appeared | gone | switched | rotated`。CSRF 轮换、Bearer 续期、同一会话的刷新都是 `rotated`；`forgetCsrf` 之后再采用别的窗口换来的令牌也算 `rotated`；登出与壳签不出票是 `gone`。`App.tsx` 只在 `appeared` 时失效此前以 401 / 403 失败的查询（`refusedForIdentity`），`switched`（换了人或设备）全量失效，`rotated` / `gone` 不动。
 - **租约模式丢租约**：`applyPresence` 判定 `lost` 时只切只读，不清本地改动、不改保存状态；`use-board-sync` 不再重取文档。画布活动只在真正的编辑（文档被 commit 置 dirty）时记，指针按下、按键不再算，空闲持有者的租约不会被「摸一下」抢走。

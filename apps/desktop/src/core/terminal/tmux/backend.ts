@@ -138,6 +138,7 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
     }
     args.push("--", executable(spec), ...spec.args);
     await this.control.run(args);
+    await this.pinWindow(name);
     await this.control.stampServer(coreFingerprint(this.options.version));
 
     this.sessions.set(spec.sessionKey, {
@@ -171,7 +172,26 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
       clients: new Map(),
       inCopyMode: false,
     });
+    // A session from an older build still follows its latest client.
+    await this.pinWindow(name);
     return this.control.panePid(name);
+  }
+
+  /**
+   * `window-size manual` on this one window: only {@link resize} moves it from
+   * now on, never a client attaching or resizing. Per window rather than in
+   * the conf, because a global `manual` makes tmux 3.4 exit on the first
+   * detached `new-session`.
+   */
+  private async pinWindow(name: string): Promise<void> {
+    await this.control.tryRun([
+      "set-option",
+      "-w",
+      "-t",
+      name,
+      "window-size",
+      "manual",
+    ]);
   }
 
   /**
@@ -390,11 +410,10 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
   }
 
   /**
-   * The window, set explicitly: `window-size manual` means no client moves it
-   * by attaching or resizing, so the program inside sees one SIGWINCH per
-   * decision of the manager and the other viewers are not redrawn.
-   * `resize-window` also pins the window to `manual` on a server that was
-   * started with an older conf.
+   * The window, set explicitly: the window is pinned to `manual`
+   * ({@link pinWindow}), so no client moves it by attaching or resizing, the
+   * program inside sees one SIGWINCH per decision of the manager and the other
+   * viewers are not redrawn.
    */
   async resize(key: SessionKey, size: TerminalSize): Promise<void> {
     const session = this.require(key);

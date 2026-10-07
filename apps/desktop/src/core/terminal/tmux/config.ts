@@ -41,9 +41,11 @@ set -g set-clipboard on
 set -g default-terminal "{terminal}"
 set -ga terminal-overrides ",*:Tc"
 set -ga terminal-features ",xterm-256color:RGB"
-# The core decides the window size (the driver's, else the largest viewer's)
-# and sets it with resize-window; a client attaching or resizing never does.
-set -g window-size manual
+# The core decides each window's size (the driver's, else the largest
+# viewer's) and pins the window to manual right after creating it; a client
+# attaching or resizing never moves it. Not set globally: a global manual makes
+# tmux 3.4 exit on the first detached new-session.
+set -g window-size latest
 set -g aggressive-resize on
 #
 # Selection and clipboard (plan §18.3 amendment, 鼠标 / 剪贴板 rows).
