@@ -347,6 +347,50 @@ await h.run(async () => {
   await waitUntil("A 回到 done", () => status(A)?.state === "done");
   await page.capture("04-permission-rejected");
 
+  /* ------------- 3b. 会话里的东西点得动、选得中（会话视图 §5）------------- */
+
+  // 剪贴板换成记录器：无头 Chrome 的剪贴板要权限，这里只验「点了复制写了什么」。
+  await page.evaluate(`
+    window.__copied = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (text) => { window.__copied.push(text); } },
+    });
+    return true;
+  `);
+  const tool = `${node(A)} [data-tool-call]`;
+  await page.click(`${tool} button`, "详情", { exact: true });
+  await page.waitFor(
+    `return !!document.querySelector(${JSON.stringify(`${tool} pre`)});`,
+    { what: "工具行展开出入参" },
+  );
+  await page.click(`${tool} button`, "复制入参", { exact: true });
+  const copied = await page.waitFor(
+    `return (window.__copied ?? []).find((text) => text.includes("note.txt")) ?? null;`,
+    { what: "复制入参写进剪贴板" },
+  );
+  const surface = await page.evaluate(`
+    const root = document.querySelector(${JSON.stringify(`${node(A)} [data-slot="acp-session-view"]`)});
+    return {
+      userSelect: root ? getComputedStyle(root).userSelect : null,
+      nopan: root?.classList.contains("nopan") ?? false,
+      plan: !!document.querySelector(${JSON.stringify(`${node(A)} [data-slot="acp-plan"]`)}),
+      tone: document.querySelector(${JSON.stringify(`${tool} [data-slot="status-pill"]`)})?.dataset.tone ?? null,
+    };
+  `);
+  report.sessionSurface = { ...surface, copied };
+  check(
+    surface.userSelect === "text" && surface.nopan && surface.plan,
+    "会话视图字可选、不平移画布，计划卡画出来了",
+    JSON.stringify(surface),
+  );
+  check(
+    surface.tone === "failed",
+    "被拒的工具调用是 failed 胶囊",
+    String(surface.tone),
+  );
+  await page.capture("04b-tool-expanded-copied");
+
   /* ------------------------- 4. send 投给 B ------------------------- */
 
   const canvasAs = (nodeId, ...argv) =>
