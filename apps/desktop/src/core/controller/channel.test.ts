@@ -107,6 +107,17 @@ if (process.platform !== "win32") {
     expect(
       (await ask(socket, input, { Origin: "http://localhost" })).status,
     ).toBe(403);
+    // Rejected before the body is read: the body is still drained, so the
+    // client reads the 403 rather than failing its write.
+    expect(
+      (
+        await ask(
+          socket,
+          { ...input, params: { text: "a".repeat(200_000) } },
+          { Origin: "http://localhost" },
+        )
+      ).status,
+    ).toBe(403);
     expect(
       (await ask(socket, { ...input, method: "shell.exec" })).body.error.code,
     ).toBe("unknown_method");

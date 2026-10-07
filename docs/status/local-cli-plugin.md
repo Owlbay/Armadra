@@ -222,5 +222,5 @@ real-acceptance-preflight.json。没有修改业务实现、凭据或权限，�
 ### 合并后 main CI 修复（2026-10-07）
 
 - Windows：`RunService.start` 在 win32 按设计返回 `unsupported_platform`，而 `runs/service.test.ts` 的编排用例未区分宿主，15 条在 Windows 全部失败。`RunServiceOptions` 增加可注入的 `platform`（缺省 `process.platform`，生产行为不变），编排用例注入 `linux`（终端为桩，与宿主无关）；新增用例在注入 `win32` 时断言拒绝且不写 `runs`。
-- Linux：`controller/channel.test.ts` 的超限请求，服务端读到 256 KiB 即回 413 并丢弃请求流，客户端尚未写完的请求体随连接关闭报 `EPIPE`，成为未捕获异常（首版改为超限即关连接后，macOS CI 在收到 413 前就报 `EPIPE`，证实是写入竞争）。服务端改为超限后继续读完并丢弃请求体再回 413，超过 4 倍上限才直接断开；测试客户端改用 `agent: false`，响应之后的 socket 错误不再成为未捕获异常。原 413 断言未改，新增超过排空上限时连接被断开的断言。CLI 客户端发送前已按 256 KiB 拒绝，不受影响。
+- Linux/macOS：`controller/channel.test.ts` 偶发 `EPIPE`。根因是服务端在请求体未读完时就答复（Origin/路径/方法的提前拒绝，以及读到 256 KiB 即回 413）并结束连接，客户端尚未写完的请求体随之 `EPIPE`：响应已到时成为未捕获异常，响应未到时请求直接失败。服务端改为任何答复前先读完并丢弃剩余请求体（上限 1 MiB，超过即断开连接），客户端总能读到 403/413。测试客户端改用 `agent: false`，响应之后的 socket 错误不再成为未捕获异常；原断言未改，新增「带 200 KB 请求体的 Origin 请求得到 403」（修复前本机稳定复现 `EPIPE`）与「超过排空上限即断开」两条断言。CLI 客户端发送前已按 256 KiB 拒绝，不受影响。
 - 本机：`pnpm check` 通过；desktop 5,318 passed / 74 skipped。三平台结果以 PR CI 为准。
