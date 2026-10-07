@@ -28,6 +28,8 @@ import {
   onIdentitySessionChange,
   pairIdentity,
   permits,
+  refreshIdentity,
+  refusedForIdentity,
   rememberCsrf,
   replaceRejectedCsrf,
   resetIdentityCredentials,
@@ -390,6 +392,18 @@ describe("windows of one browser sharing a session", () => {
     expect(calls).toHaveLength(1);
   });
 
+  /** ui-acp-refresh §7.3 E-2：刚因 403 丢掉一枚，再采用别的窗口换来的，是换票不是新会话。 */
+  it("treats a token adopted after forgetting one as a rotation", async () => {
+    const seen = vi.fn();
+    rememberCsrf(SECRET);
+    const stop = onIdentitySessionChange(seen);
+    forgetCsrf(SECRET);
+    other.postMessage({ csrf: NEWER });
+    await delivered(() => currentCsrf() === NEWER);
+    expect(seen.mock.calls).toEqual([["rotated"]]);
+    stop();
+  });
+
   /** Bearer 传输里每个窗口各有自己的会话：不广播，也不采用别人的。 */
   it("leaves the Bearer transport out of the sharing", async () => {
     mocks.nativeShell = true;
@@ -467,5 +481,72 @@ describe("identityRequest on a cookie session", () => {
         body: { name: "x" },
       }),
     ).rejects.toMatchObject({ status: 403 });
+  });
+});
+
+/** ui-acp-refresh §7.3 E-2：通知分级，只有会话出现 / 消失 / 换人才是会话变化。 */
+describe("what kind of session change is announced", () => {
+  it("calls a pairing an appearance and a refresh of it a rotation", async () => {
+    const seen = vi.fn();
+    const stop = onIdentitySessionChange(seen);
+    await pairIdentity("ticket");
+    // 刷新换了 CSRF：同一条会话。
+    answer = (call) =>
+      call.url.includes("session/refresh")
+        ? { body: { ...session, csrfToken: "r".repeat(43) } }
+        : defaultAnswer(call);
+    await refreshIdentity();
+    rememberCsrf("s".repeat(43));
+    expect(seen.mock.calls).toEqual([["appeared"], ["rotated"], ["rotated"]]);
+    stop();
+  });
+
+  it("calls a bearer renewal of the same device a rotation", async () => {
+    mocks.nativeShell = true;
+    const seen = vi.fn();
+    const stop = onIdentitySessionChange(seen);
+    const bearer = (access: string) => ({
+      body: {
+        ...session,
+        csrfToken: "",
+        native: { accessToken: access, refreshToken: "R" },
+      },
+    });
+    answer = (call) =>
+      call.url.includes("/pair") ? bearer("A") : bearer("A2");
+    await pairIdentity("ticket");
+    await refreshIdentity();
+    expect(seen.mock.calls).toEqual([["appeared"], ["rotated"]]);
+    stop();
+  });
+
+  it("calls another person's session a switch, and a logout gone", async () => {
+    const seen = vi.fn();
+    const stop = onIdentitySessionChange(seen);
+    await pairIdentity("ticket");
+    answer = (call) =>
+      call.url.includes("/pair")
+        ? {
+            body: {
+              ...session,
+              device: { ...session.device, principalId: "p2" },
+            },
+          }
+        : defaultAnswer(call);
+    await pairIdentity("ticket");
+    await logoutIdentity();
+    expect(seen.mock.calls).toEqual([["appeared"], ["switched"], ["gone"]]);
+    stop();
+  });
+
+  it("re-reads only queries that failed for want of a session", () => {
+    const query = (status: string, error: unknown) => ({
+      state: { status, error },
+    });
+    expect(refusedForIdentity(query("error", { status: 401 }))).toBe(true);
+    expect(refusedForIdentity(query("error", { status: 403 }))).toBe(true);
+    expect(refusedForIdentity(query("error", { status: 500 }))).toBe(false);
+    expect(refusedForIdentity(query("error", new Error("x")))).toBe(false);
+    expect(refusedForIdentity(query("success", null))).toBe(false);
   });
 });

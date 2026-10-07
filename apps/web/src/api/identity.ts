@@ -156,28 +156,60 @@ const tokens: SessionTokens = createSessionTokens();
 let csrf = "";
 /** 访问密钥的到期时刻（毫秒）；不知道是 0。 */
 let renewing: Promise<string> | null = null;
-const listeners = new Set<() => void>();
+const listeners = new Set<(change: IdentityChange) => void>();
 
 /**
- * 会话变了（配对成功、刷新、登出）时通知一次。
+ * 会话变了哪一种（ui-acp-refresh §7.3 E-2）。订阅者按它决定动静多大：
+ *
+ *   * `appeared`：从没有会话到有了（配对、登录、过期后重新接上）；
+ *   * `switched`：换了一个人或一台设备的会话；
+ *   * `gone`：没有会话了（登出、壳签不出票）；
+ *   * `rotated`：还是同一条会话，只是换了一枚 CSRF 或续了访问密钥——core 每次
+ *     刷新都换 CSRF，桌面壳约每 13 分钟续一次，这些都不该让页面重取。
+ */
+export type IdentityChange = "appeared" | "gone" | "switched" | "rotated";
+
+/** 这条会话是谁的（主机 · 人 · 设备）；`null` 是还没有、或已经没了。 */
+let owner: string | null = null;
+/**
+ * `forgetCsrf` 刚清掉了手里那枚：接下来拿到的新令牌是换票，不是新会话。
+ */
+let forgotten = false;
+
+/**
+ * 会话变了（配对成功、刷新、登出）时通知一次，带上变的是哪一种。
  *
  * 配对之前页面上的每一次 `/api` 请求都会被拒掉，那些失败会留在 React Query
  * 的缓存里；配对成功之后不重新取一遍，用户看到的就是一个刚登录完却写着
  * 「已断开」的界面。返回退订函数。
  */
-export function onIdentitySessionChange(listener: () => void): () => void {
+export function onIdentitySessionChange(
+  listener: (change: IdentityChange) => void,
+): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
 
-function announce(): void {
+function announce(change: IdentityChange): void {
   for (const listener of [...listeners]) {
     try {
-      listener();
+      listener(change);
     } catch {
       /* 一个订阅者出错不该拖垮其它订阅者。 */
     }
   }
+}
+
+/**
+ * 这次查询是不是因为没有会话（401 / 403）才失败的。会话出现之后只重取这些，
+ * 其余查询的数据本来就是对的。
+ */
+export function refusedForIdentity(query: {
+  readonly state: { readonly status: string; readonly error: unknown };
+}): boolean {
+  if (query.state.status !== "error") return false;
+  const status = (query.state.error as { status?: unknown } | null)?.status;
+  return status === 401 || status === 403;
 }
 
 /* ------------------------------- 多窗口 -------------------------------- */
@@ -215,8 +247,11 @@ function adoptCsrf(value: string): void {
   if (!SECRET.test(value) || value === csrf) return;
   const had = csrf !== "";
   csrf = value;
+  const renewed = forgotten;
+  forgotten = false;
   // 本来没有令牌的窗口这才算有了会话；已经有的只是换了一枚，不算会话变化。
-  if (!had) announce();
+  // 自己刚因为 403 丢掉一枚的窗口也一样：那是换票，不是新会话。
+  if (!had) announce(renewed ? "rotated" : "appeared");
 }
 
 /** 在跨窗口的那把锁里跑；没有 Web Locks 时直接跑。 */
@@ -228,13 +263,22 @@ function withRenewLock<T>(task: () => Promise<T>): Promise<T> {
 
 /** 记住（或作废）一枚刚拿到的 CSRF 令牌；新的一枚告诉其它窗口。 */
 export function rememberCsrf(value: string): void {
+  const change = storeCsrf(value);
+  if (change !== null) announce(change);
+}
+
+/** 换上一枚 CSRF，答这算哪一种会话变化；没变答 `null`。不通知。 */
+function storeCsrf(value: string): IdentityChange | null {
   const next = SECRET.test(value) ? value : "";
-  const changed = next !== csrf;
+  const previous = csrf;
+  const renewed = forgotten;
   csrf = next;
   renewing = null;
-  if (changed && next && !bearerTransport())
-    csrfChannel?.postMessage({ csrf: next });
-  if (changed) announce();
+  forgotten = false;
+  if (next === previous) return null;
+  if (next && !bearerTransport()) csrfChannel?.postMessage({ csrf: next });
+  if (next === "") return "gone";
+  return previous === "" && !renewed ? "appeared" : "rotated";
 }
 
 /**
@@ -243,6 +287,7 @@ export function rememberCsrf(value: string): void {
  */
 export function forgetCsrf(rejected?: string): void {
   if (rejected !== undefined && rejected !== csrf) return;
+  if (csrf !== "") forgotten = true;
   csrf = "";
   renewing = null;
 }
@@ -265,6 +310,8 @@ export function currentCsrf(): string {
 /** 测试与登出后重置：丢掉全部内存凭据。 */
 export function resetIdentityCredentials(): void {
   csrf = "";
+  owner = null;
+  forgotten = false;
   tokens.clear();
   renewing = null;
   shellFailure = null;
@@ -401,10 +448,15 @@ function remember(
         expiresAtMs: tokens.accessExpiresAt,
       });
   }
-  rememberCsrf(session.csrfToken ?? "");
-  // CSRF 没变（例如原生传输上两次都是空）时也要announce一次：换了会话。
-  if (session.csrfToken === undefined || !SECRET.test(session.csrfToken))
-    announce();
+  const csrfChange = storeCsrf(session.csrfToken ?? "");
+  const who = `${session.hostId}\n${session.device.principalId}\n${session.device.deviceId}`;
+  const change: IdentityChange =
+    owner === null ? "appeared" : owner === who ? "rotated" : "switched";
+  owner = who;
+  // 同一条会话、CSRF 也没变、又不是续了密钥：什么都没变，不通知。
+  if (change === "rotated" && csrfChange === null && !session.native)
+    return session;
+  announce(change);
   return session;
 }
 
@@ -645,7 +697,7 @@ export async function logoutIdentity(): Promise<void> {
     resetIdentityCredentials();
     if (isNativeApp()) await clearNativeSession();
     hosted?.clear();
-    announce();
+    announce("gone");
   }
 }
 
@@ -725,7 +777,8 @@ export function shellSessionFailure(): NativeSessionFailure | null {
 function noteShellFailure(next: NativeSessionFailure | null): void {
   if (next === shellFailure) return;
   shellFailure = next;
-  announce();
+  // 签不出票就是没有会话；从签不出到签得出，会话才算回来。
+  announce(next === null ? "appeared" : "gone");
 }
 
 /** `resumeIdentity` 那一串，记下壳签不出票的原因；失败答 `null`。 */
