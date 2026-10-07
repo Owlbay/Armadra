@@ -3509,3 +3509,17 @@ GUI `POST /api/workspaces/{workspaceId}/boards/{boardId}/nodes/{nodeId}/run` 是
 归属委托 profile，仍受当前 profile 撤销/能力检查与 RunService 规则约束，并记录
 human initiator。页面不接收任何 controller 凭据；body owner/controllerId 不构成
 授权。成员拒绝。该 GUI 面不把私有 socket 的引导方法暴露到 HTTP。
+
+## 49. ACP 会话视图：镜像的图片与资源链接、`acp.log` 的活进程快照
+
+自协议 1.23 起。会话视图（2026-10-07 界面整理的包 C）要画 Agent 发来的图片与资源链接，重载页面后还要画得出计划、用量与斜杠命令。本节只加字段，不改已有形状；`acp.update` 仍原样转发全部 `session/update`，`acp.turn` 仍带 `stopReason`。实现在 `core/acp/mirror.ts`（写）、`core/history/acp-mirror.ts`（读）、`core/acp/session.ts`（快照）与 `core/acp/routes.ts`。
+
+- **镜像多两种块**：`agent_message_chunk`（以及回放进空镜像的 `user_message_chunk`）的内容块按种类记：
+  - `{ type: "image", mimeType, data }`——`data` 是 base64，超过 512 KiB（按字符计）不记正文，改记 `{ type: "image", mimeType, dropped: true }`；
+  - `{ type: "resource_link", uri, name, mimeType?, title? }`——没有 `name` 时取 URI 的最后一段；
+  - 内嵌的 `resource`：有 `text` 记成 `{ type: "text" }`，没有记成 `resource_link`（`name` 取 URI 最后一段，不记 `blob`）。
+- **工具结果带差异**：工具调用 `content[]` 里的 `diff` 块（最近一次给的那一份）随它的终态结果记成 `tool_result.diffs: [{ path, oldText?, newText }]`，整份保留；结果正文仍按 8000 字符截断。以 `failed` 结束的结果多一个 `status: "failed"`。
+- **工具调用带种类与文件**：`tool_use` 多可选的 `kind`（ACP 的 `ToolKind`）与 `locations: [{ path, line? }]`（最多 20 个），重载后工具行的图标与文件胶囊照旧。
+- **谁读得到**：只有 `acp.log`（`GET /api/acp/sessions/{id}/log`）的 `entries` 带这两种块与 `diffs` / `status` / `kind` / `locations`。连线读取、摘要、交接、终端画面（`capture`）这些经 `history/registry.ts` 读镜像的读取方照旧只看到 `text` / `tool_use` / `tool_result`，图片的 base64 不进别人的上下文。
+- **`acp.log` 的 `snapshot`**：出参多一个可选的 `snapshot: { plan: AcpPlanEntry[], usage: { used, size, cost?: { amount, currency } } | null, availableCommands: { name, description }[], title: string | null }`，是活进程最近一次 `plan` / `usage_update` / `available_commands_update` / `session_info_update` 的值（命令最多 200 条）。与 `pending`、`turns` 同一条件：没有活进程时缺席。回放（`session/load`）的这几种不进快照。
+- 镜像与快照都不含凭据；`title` 只给页面作命名建议，core 不拿它改节点。

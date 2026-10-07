@@ -50,6 +50,8 @@ const logWireSchema = loose({
   elicitations: z.array(jsonObjectSchema).optional(),
   /** §39.9：活会话最近的回合（排队、在跑、已结束），对账用。 */
   turns: z.array(jsonObjectSchema).optional(),
+  /** §49：活进程的计划、用量、斜杠命令与标题；没有活进程时缺席。 */
+  snapshot: jsonObjectSchema.optional(),
 });
 
 export const acp = {

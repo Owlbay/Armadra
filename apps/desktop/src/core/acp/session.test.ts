@@ -128,6 +128,25 @@ describe("an ACP session", () => {
     ).toEqual(["user_message_chunk", "agent_message_chunk", "usage_update"]);
   });
 
+  it("remembers the plan and usage of the live process for the log snapshot (§49)", async () => {
+    const { session, sink } = await open();
+    expect(session.snapshot()).toEqual({
+      plan: [],
+      usage: null,
+      availableCommands: [],
+      title: null,
+    });
+    session.prompt("[plan] go");
+    await until(
+      () => turns(sink).length,
+      (count) => count === 1,
+    );
+    const snapshot = session.snapshot();
+    expect(snapshot.plan.length).toBeGreaterThan(0);
+    expect(snapshot.plan[0]).toHaveProperty("content");
+    expect(snapshot.usage).toMatchObject({ size: 1000 });
+  });
+
   it("queues prompts: one turn at a time", async () => {
     const { session, sink } = await open();
     session.prompt("one");

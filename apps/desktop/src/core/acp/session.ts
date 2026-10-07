@@ -134,6 +134,27 @@ export interface AcpTurnRecord {
   readonly error?: { readonly code: string; readonly message: string };
 }
 
+/**
+ * 活进程说过、镜像不记的那几样（契约 §49，`…/log` 的 `snapshot`）：页面重载后
+ * 计划、用量、斜杠命令与标题照样画得出来。
+ */
+export interface AcpSessionSnapshot {
+  readonly plan: readonly Record<string, unknown>[];
+  readonly usage: {
+    readonly used: number;
+    readonly size: number;
+    readonly cost?: { readonly amount: number; readonly currency: string };
+  } | null;
+  readonly availableCommands: readonly {
+    readonly name: string;
+    readonly description: string;
+  }[];
+  readonly title: string | null;
+}
+
+/** 斜杠命令最多记这么多条：一家给几百条也不撑大 `…/log`。 */
+const MAX_COMMANDS = 200;
+
 /** 记多少个最近的回合：够页面对账断线那一会儿，不随会话变长。 */
 const RECENT_TURNS = 32;
 
@@ -180,6 +201,10 @@ export class AcpSession implements AcpSessionIdentity {
   private closed = false;
   private modeState: AcpSessionModeState | null = null;
   private modelCatalog: AcpModelCatalog | null = null;
+  private plan: Record<string, unknown>[] = [];
+  private usage: AcpSessionSnapshot["usage"] = null;
+  private commands: AcpSessionSnapshot["availableCommands"] = [];
+  private title: string | null = null;
 
   constructor(options: AcpSessionOptions) {
     this.options = options;
@@ -282,6 +307,77 @@ export class AcpSession implements AcpSessionIdentity {
 
   private clientTurnOf(turnId: string): string | undefined {
     return this.recent.find((turn) => turn.turnId === turnId)?.clientTurnId;
+  }
+
+  /** 计划、用量、斜杠命令与标题的此刻值（`…/log` 的 `snapshot`，契约 §49）。 */
+  snapshot(): AcpSessionSnapshot {
+    return {
+      plan: [...this.plan],
+      usage: this.usage,
+      availableCommands: [...this.commands],
+      title: this.title,
+    };
+  }
+
+  /** 镜像不记的那几种 update：记下此刻值给 `snapshot`。 */
+  private remember(update: AcpSessionUpdate): void {
+    const body = update as unknown as Record<string, unknown>;
+    switch (update.sessionUpdate as string) {
+      case "plan":
+        if (Array.isArray(body.entries)) {
+          this.plan = body.entries.filter(
+            (entry): entry is Record<string, unknown> =>
+              typeof entry === "object" &&
+              entry !== null &&
+              typeof (entry as { content?: unknown }).content === "string",
+          );
+        }
+        return;
+      case "usage_update": {
+        if (typeof body.used !== "number" || typeof body.size !== "number") {
+          return;
+        }
+        const cost = body.cost as { amount?: unknown; currency?: unknown };
+        this.usage = {
+          used: body.used,
+          size: body.size,
+          ...(typeof cost?.amount === "number" &&
+          typeof cost.currency === "string"
+            ? { cost: { amount: cost.amount, currency: cost.currency } }
+            : {}),
+        };
+        return;
+      }
+      case "available_commands_update":
+        if (Array.isArray(body.availableCommands)) {
+          this.commands = body.availableCommands
+            .flatMap((item: unknown) => {
+              const command = item as { name?: unknown; description?: unknown };
+              return typeof command?.name === "string" && command.name !== ""
+                ? [
+                    {
+                      name: command.name,
+                      description:
+                        typeof command.description === "string"
+                          ? command.description
+                          : "",
+                    },
+                  ]
+                : [];
+            })
+            .slice(0, MAX_COMMANDS);
+        }
+        return;
+      case "session_info_update":
+        if (typeof body.title === "string") {
+          this.title = body.title === "" ? null : body.title;
+        } else if (body.title === null) {
+          this.title = null;
+        }
+        return;
+      default:
+        return;
+    }
   }
 
   /** 挂起的审批（`…/log` 的 `pending`）。 */
@@ -521,6 +617,7 @@ export class AcpSession implements AcpSessionIdentity {
       }
       return;
     }
+    this.remember(update);
     if (update.sessionUpdate === "current_mode_update") {
       const modeId = (update as { currentModeId?: unknown }).currentModeId;
       if (typeof modeId === "string" && this.modeState !== null) {

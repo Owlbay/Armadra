@@ -121,10 +121,28 @@ export type AdapterInstallJob = z.infer<typeof adapterInstallJobSchema>;
 
 /* ------------------------------ ACP payloads ------------------------------ */
 
-/** One ACP content block; only `text` is rendered, the rest are kept. */
+/**
+ * One ACP content block. `text`, `image`, `resource_link` and an embedded
+ * `resource` are drawn (§49); any other type is kept as is.
+ */
 export const acpContentBlockSchema = z.looseObject({
   type: z.string(),
   text: z.string().optional(),
+  /** `image` (base64 `data`) and `resource_link`. */
+  mimeType: z.string().nullish(),
+  data: z.string().optional(),
+  /** `image` (optional) and `resource_link`. */
+  uri: z.string().nullish(),
+  name: z.string().optional(),
+  title: z.string().nullish(),
+  /** An embedded `resource`: `{ uri, text?, blob?, mimeType? }`. */
+  resource: z
+    .looseObject({
+      uri: z.string(),
+      text: z.string().optional(),
+      mimeType: z.string().nullish(),
+    })
+    .optional(),
 });
 
 export const ACP_TOOL_KINDS = [
@@ -214,6 +232,22 @@ export const acpPlanEntrySchema = z.looseObject({
   priority: z.string().optional(),
   status: z.string().optional(),
 });
+
+/** `usage_update` (§49): context window use; `cost` when the agent reports it. */
+export const acpUsageSchema = z.looseObject({
+  used: z.number(),
+  size: z.number(),
+  cost: z.looseObject({ amount: z.number(), currency: z.string() }).nullish(),
+});
+
+/** One entry of `available_commands_update` (§49). */
+export const acpAvailableCommandSchema = z.looseObject({
+  name: z.string(),
+  description: z.string().default(""),
+});
+
+export type AcpUsage = z.infer<typeof acpUsageSchema>;
+export type AcpAvailableCommand = z.infer<typeof acpAvailableCommandSchema>;
 
 /**
  * `session/update`'s `update`, as the core forwards it verbatim. Only the
@@ -400,13 +434,56 @@ export const acpTranscriptBlockSchema = z.union([
     name: z.string(),
     id: z.string().optional(),
     input: z.unknown().optional(),
+    /** §49: the call's kind and files, for the session view. */
+    kind: z.string().optional(),
+    locations: z.array(acpToolCallLocationSchema).optional(),
   }),
   z.looseObject({
     type: z.literal("tool_result"),
     id: z.string().optional(),
     content: z.unknown().optional(),
+    /** §49: set when the call ended `failed`. */
+    status: z.literal("failed").optional(),
+    /** §49: the call's file diffs, kept whole (the text is clipped, diffs are not). */
+    diffs: z
+      .array(
+        z.looseObject({
+          path: z.string(),
+          oldText: z.string().nullish(),
+          newText: z.string(),
+        }),
+      )
+      .optional(),
+  }),
+  /** §49: `data` is base64; over 512 KiB it is left out and `dropped` is set. */
+  z.looseObject({
+    type: z.literal("image"),
+    mimeType: z.string(),
+    data: z.string().optional(),
+    dropped: z.literal(true).optional(),
+  }),
+  /** §49: a `resource_link`, or an embedded `resource` that has no text. */
+  z.looseObject({
+    type: z.literal("resource_link"),
+    uri: z.string(),
+    name: z.string(),
+    mimeType: z.string().optional(),
+    title: z.string().optional(),
   }),
 ]);
+
+/**
+ * §49: the live process's plan, usage, slash commands and title, so a
+ * reloaded page draws them again. Absent when no process is running.
+ */
+export const acpLogSnapshotSchema = z.looseObject({
+  plan: z.array(acpPlanEntrySchema),
+  usage: acpUsageSchema.nullable(),
+  availableCommands: z.array(acpAvailableCommandSchema),
+  title: z.string().nullable(),
+});
+
+export type AcpLogSnapshot = z.infer<typeof acpLogSnapshotSchema>;
 
 /** One normalised record (`core/history/types.ts::TranscriptEntry`). */
 export const acpTranscriptEntrySchema = z.looseObject({
@@ -433,6 +510,8 @@ export const acpLogResponseSchema = z.looseObject({
   elicitations: z.array(acpPendingElicitationSchema).optional(),
   /** §39.9: the live session's recent turns; absent when none is running. */
   turns: z.array(acpTurnRecordSchema).optional(),
+  /** §49: what the live process last said that the mirror does not keep. */
+  snapshot: acpLogSnapshotSchema.optional(),
 });
 
 /** `POST /api/acp/nodes/{nodeId}/driver` (design §4.2). */
