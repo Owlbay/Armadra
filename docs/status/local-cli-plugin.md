@@ -209,3 +209,12 @@ real-acceptance-preflight.json。没有修改业务实现、凭据或权限，�
 - 本次合并后的验证结果在完成后追加；此前的验收数据仅对应合并前版本，真实双 Agent、Linux、tmux 的待验收状态保持。
 
 合并验证过程中发现并修复两项兼容问题：新的响应式对话框约定要求手动启动入口使用 `ResponsiveDialog`；PTY 假 CLI 必须呈现输入提示符才能通过新增画面门。保留原来的回执、状态、投递次数和恢复断言，未跳过失败用例，也未降低生产输入门。
+
+### 合并后的验证记录
+
+- `pnpm install --frozen-lockfile`、`pnpm libs:build`、桌面构建、`pnpm check`、`pnpm repo:test` 全部通过。检查包括契约生成一致性、格式、lint、六包类型检查、仓库规则、五份 workflow、版本和第三方声明；lint 为 0 error / 311 warning。已发布迁移 0001–0041 与远端一致，新增迁移的回执保留测试通过。
+- shared：372 passed；web：3,940 passed；desktop：5,317 passed / 74 skipped，live：4 passed，桌面脚本：73 passed / 2 skipped；server：98 passed / 4 skipped。跳过项沿用平台和可用工具条件，没有新增排除或删改关键断言。
+- `release:test`：189 passed / 3 skipped；`plugin:test`：1 passed（两个安装位置、含空格路径与异 cwd）；`controller:real:test`：12 passed，仅预检与质量校验单测，不调用真实模型。
+- 11 个 macOS 确定性探针通过：私有通道、普通双节点依赖执行、取消且保留无关运行、2 MiB 终端输出、提交后崩溃，以及 `launch.before/after`、`delivery.before/after` 四个边界；安装缓存客户端的 smoke 与双节点运行也通过。后者证明已安装客户端兼容新版 core，不替代 Codex 宿主或真实双模型验收。未知启动/投递结果保持 blocked，提交后的丢失会话为 failed；重放副作用次数均为 0。
+- 本轮成功探针合计 CLI 调用 164 次，stdout 85,588 字节；单次 2 MiB 终端输出未进入 CLI 响应。真实模型调用 0，宿主 token 数据本轮不可提供，不估算节省比例。证据在本机忽略目录 `target/sync-*.log`，主要文件包括 `sync-check-final.log`、`sync-{shared,web-final,desktop,server,release,plugin,real-test}.log`、`sync-{smoke,run,cancel,large-output,crash,launch-before,launch-after,delivery-before,delivery-after,installed-smoke,installed-run,build-final}.log`。
+- 真实 Codex→Claude、更新后的 Codex 宿主、Linux 实机与 tmux 恢复验收未在本次代码同步中完成；之前的阻塞与解锁条件仍有效。目标不因同步、构建或假 CLI 通过而标记完成。
