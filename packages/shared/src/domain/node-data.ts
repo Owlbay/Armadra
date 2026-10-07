@@ -213,6 +213,11 @@ export const groupNodeDataSchema = z.object({
   ...addressable,
   /** Absent for an ordinary Frame; present once one is bound to a checkout. */
   binding: frameBindingSchema.nullish(),
+  /**
+   * Where the frame came from: an import batch, an agent team, or the user.
+   * Absent means `manual`. Tidy treats every frame alike; this only labels it.
+   */
+  origin: z.enum(["import", "team", "manual"]).optional(),
 });
 
 /**

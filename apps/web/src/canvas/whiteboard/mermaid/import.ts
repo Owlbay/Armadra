@@ -3,7 +3,9 @@ import type { Position } from "@armadra/shared";
 import { fontSize } from "../palette";
 import { canvasScheme } from "../scheme";
 import { getNextStyle } from "../../interaction/tool-store";
-import { addItems, createItemId, select } from "../store";
+import { t } from "../../../app/preferences-store";
+import { commitBatch } from "../../import-group";
+import { createItemId } from "../store";
 import { centreLayout, layoutGraph, type LayoutOptions } from "./layout";
 import { parseMermaid, type MermaidGraph } from "./parse";
 import { graphToItems } from "./to-items";
@@ -11,8 +13,8 @@ import { graphToItems } from "./to-items";
 /**
  * 一次导入的编排（[Mermaid 导入](../../../../../../docs/design/mermaid-import.md) §3）。
  *
- * 解析 → 布局 → 生成对象三步**全在内存里做完**，只有最后一次 `addItems`
- * 才碰文档。所以「不产生半成品」是结构保证的，不是靠每一步自己小心
+ * 解析 → 布局 → 生成对象三步**全在内存里做完**，只有最后一次
+ * `commitBatch`（新建对象 + 套进一个组，一条历史）才碰文档。所以「不产生半成品」是结构保证的，不是靠每一步自己小心
  * （设计 §6）。
  *
  * 图片回退不在这里：它要 `dnd/external-content` 与资产接口，由对话框那边
@@ -36,7 +38,7 @@ export function layoutOptions(): LayoutOptions {
 /**
  * flowchart → 白板对象，一次落地。
  *
- * 返回建出来的对象 id；调用方不用管选中（这里顺手选上，和粘贴一致）。
+ * 返回建出来的对象 id；调用方不用管选中（这里顺手选上外面那个组）。
  */
 export function placeGraph(graph: MermaidGraph, at: Position): string[] {
   const laid = centreLayout(layoutGraph(graph, layoutOptions()), at);
@@ -47,10 +49,14 @@ export function placeGraph(graph: MermaidGraph, at: Position): string[] {
     newId: createItemId,
   });
   if (items.length === 0) return [];
-  // 一次调用 = 一次 `setWhiteboard` = 一条历史：撤销一次整张图消失。
-  const ids = addItems(items, { label: "whiteboard.mermaid" });
-  select(ids);
-  return ids;
+  // 整张图进一个组（UI 设计 §6.3）：整理时它是一个刚体，不会被拆成一长排。
+  // 新建、套组、选中在一个合并会话里：撤销一次整张图消失。
+  const { itemIds } = commitBatch(
+    { nodes: [], items },
+    t("canvas.group.mermaid"),
+    "whiteboard.mermaid",
+  );
+  return itemIds;
 }
 
 export type ImportOutcome =

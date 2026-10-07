@@ -1,7 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BoardDocument } from "@armadra/shared";
+
+const fileInfo = vi.fn();
+vi.mock("../../api/client", () => ({
+  runtimeApi: {
+    fileInfo: (...args: unknown[]) => fileInfo(...args),
+    listFiles: vi.fn().mockRejectedValue(new Error("not a directory")),
+    importLocalFiles: vi.fn().mockResolvedValue({ files: [] }),
+  },
+}));
 
 import { megabytes, withinUploadLimit } from "../assets";
+import { useCanvasStore } from "../../store/canvas-store";
+import { canUndo, resetHistory, undo } from "../../store/canvas/history";
+import { emptyWhiteboard } from "../whiteboard/model";
 import {
+  addNodesForPaths,
   IMAGE_GAP,
   MAX_IMAGE_DIMENSION,
   baseName,
@@ -162,5 +176,66 @@ describe("资产限额", () => {
 
   it("megabytes 用来拼提示语", () => {
     expect(megabytes(8 * 1024 * 1024)).toBe("8");
+  });
+});
+
+/* ----------------------- 导入批次成组（UI 设计 §6.3） ----------------------- */
+
+describe("导入批次", () => {
+  const STAMP = "2026-10-07T00:00:00.000Z";
+  beforeEach(() => {
+    resetHistory();
+    fileInfo
+      .mockReset()
+      .mockImplementation((_workspace: string, path: string) =>
+        Promise.resolve({ path, name: baseName(path) }),
+      );
+    useCanvasStore.setState({
+      workspace: { id: "w1", rootPath: "/w" } as never,
+      document: {
+        board: {
+          id: "019ff7d1-0d12-7421-833d-2c5e8d64ed00",
+          workspaceId: "w1",
+          name: "board",
+          sortOrder: 0,
+          viewport: { x: 0, y: 0, zoom: 1 },
+          whiteboard: "",
+          createdAt: STAMP,
+          updatedAt: STAMP,
+        },
+        nodes: [],
+        edges: [],
+      } as unknown as BoardDocument,
+      whiteboard: emptyWhiteboard(),
+    });
+  });
+  afterEach(() => {
+    resetHistory();
+    useCanvasStore.setState({ document: null, whiteboard: emptyWhiteboard() });
+  });
+
+  const nodes = () => useCanvasStore.getState().document?.nodes ?? [];
+
+  it("一次拖入 ≥ 2 个文件：套一个「导入」组，节点 parentId 指向它", async () => {
+    await addNodesForPaths(["src/a.ts", "src/b.ts", "README.md"], {
+      x: 100,
+      y: 100,
+    });
+    const groups = nodes().filter((node) => node.type === "group");
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.data).toMatchObject({ kind: "group", origin: "import" });
+    const editors = nodes().filter((node) => node.type === "editor");
+    expect(editors).toHaveLength(3);
+    expect(editors.every((node) => node.parentId === groups[0]!.id)).toBe(true);
+    // 一条历史：撤销一次整批消失。
+    undo();
+    expect(canUndo()).toBe(false);
+    expect(nodes()).toHaveLength(0);
+  });
+
+  it("单个文件不套组", async () => {
+    await addNodesForPaths(["src/a.ts"], { x: 0, y: 0 });
+    expect(nodes().map((node) => node.type)).toEqual(["editor"]);
+    expect(nodes()[0]!.parentId).toBeUndefined();
   });
 });
