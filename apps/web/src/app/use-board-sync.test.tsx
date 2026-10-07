@@ -172,6 +172,32 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
+/** 另一台设备拿走了租约的那一帧。 */
+const takeover = () => ({
+  type: "canvas.presence" as const,
+  boardId: board.id,
+  clients: [
+    {
+      clientId: presenceClientId(),
+      deviceName: "",
+      deviceKey: "",
+      lastSeenAt: stamp,
+    },
+    {
+      clientId: "other-client-01",
+      deviceName: "iPad",
+      deviceKey: "",
+      lastSeenAt: stamp,
+    },
+  ],
+  lease: {
+    clientId: "other-client-01",
+    deviceName: "iPad",
+    deviceKey: "",
+    acquiredAt: later,
+  },
+});
+
 const positionOf = () =>
   useCanvasStore.getState().document?.nodes[0]?.position.x;
 
@@ -261,7 +287,11 @@ describe("useBoardSync", () => {
     expect(loadBoard.mock.calls.length).toBe(reads);
   });
 
-  it("别的设备接管后转只读，并按远端重载", async () => {
+  /**
+   * ui-acp-refresh §7.3 E-3：丢了租约只切只读，不立刻重取；别人之后的改动照常经
+   * `board.changed` 合进来。
+   */
+  it("别的设备接管后只转只读，不重载；远端改动经 board.changed 进来", async () => {
     renderHook(() => useBoardSync(), { wrapper });
     await waitFor(() => expect(positionOf()).toBe(0));
     await waitFor(() =>
@@ -270,42 +300,25 @@ describe("useBoardSync", () => {
     const reads = loadBoard.mock.calls.length;
     remote = document(77, later);
     act(() => {
-      dispatchWorkspaceEvent({
-        type: "canvas.presence",
-        boardId: board.id,
-        clients: [
-          {
-            clientId: presenceClientId(),
-            deviceName: "",
-            deviceKey: "",
-            lastSeenAt: stamp,
-          },
-          {
-            clientId: "other-client-01",
-            deviceName: "iPad",
-            deviceKey: "",
-            lastSeenAt: stamp,
-          },
-        ],
-        lease: {
-          clientId: "other-client-01",
-          deviceName: "iPad",
-          deviceKey: "",
-          acquiredAt: later,
-        },
-      });
+      dispatchWorkspaceEvent(takeover());
     });
     expect(isReadOnly(useCanvasStore.getState())).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(loadBoard.mock.calls.length).toBe(reads);
+    expect(positionOf()).toBe(0);
+
+    act(() => {
+      dispatchWorkspaceEvent({
+        type: "board.changed",
+        boardId: board.id,
+        updatedAt: later,
+      });
+    });
     await waitFor(() => expect(positionOf()).toBe(77));
-    expect(loadBoard.mock.calls.length).toBeGreaterThan(reads);
   });
 
-  /**
-   * 远端这段时间没变过：重取回来的文档与缓存里那份逐字相同，React Query 的
-   * 结构共享会原样还回旧引用。以前合并那道「同一份响应只合一次」的闸门就此
-   * 把它挡掉，本地那笔没落盘的改动留在屏幕上（实浏览器两设备探针里发现）。
-   */
-  it("被接管时丢掉本地未落盘的改动，即使远端没有变过", async () => {
+  /** ui-acp-refresh §7.3 E-3：被接管时本地未落盘的改动留在屏上，不清、不重载。 */
+  it("被接管时保留本地未落盘的改动，不重取", async () => {
     renderHook(() => useBoardSync(), { wrapper });
     await waitFor(() => expect(positionOf()).toBe(0));
     await waitFor(() =>
@@ -317,36 +330,31 @@ describe("useBoardSync", () => {
     expect(positionOf()).toBe(55);
     const reads = loadBoard.mock.calls.length;
     act(() => {
-      dispatchWorkspaceEvent({
-        type: "canvas.presence",
-        boardId: board.id,
-        clients: [
-          {
-            clientId: presenceClientId(),
-            deviceName: "",
-            deviceKey: "",
-            lastSeenAt: stamp,
-          },
-          {
-            clientId: "other-client-01",
-            deviceName: "iPad",
-            deviceKey: "",
-            lastSeenAt: stamp,
-          },
-        ],
-        lease: {
-          clientId: "other-client-01",
-          deviceName: "iPad",
-          deviceKey: "",
-          acquiredAt: later,
-        },
-      });
+      dispatchWorkspaceEvent(takeover());
     });
     expect(isReadOnly(useCanvasStore.getState())).toBe(true);
-    await waitFor(() =>
-      expect(loadBoard.mock.calls.length).toBeGreaterThan(reads),
-    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(loadBoard.mock.calls.length).toBe(reads);
+    expect(positionOf()).toBe(55);
+    expect(useCanvasStore.getState().saveState).toBe("dirty");
+  });
+
+  /** ui-acp-refresh §7.3 E-3：只有编辑算活动，点一下不算。 */
+  it("编辑才记一次活动，指针按下不算", async () => {
+    renderHook(() => useBoardSync(), { wrapper });
     await waitFor(() => expect(positionOf()).toBe(0));
+    await waitFor(() =>
+      expect(useCanvasStore.getState().presence?.lease).toBeTruthy(),
+    );
+    const { takePresenceActivity } = await import("../store/canvas/presence");
+    takePresenceActivity();
+    window.dispatchEvent(new Event("pointerdown"));
+    window.dispatchEvent(new Event("keydown"));
+    expect(takePresenceActivity()).toBe(false);
+    act(() => {
+      useCanvasStore.getState().updateNode(NODE, { position: { x: 9, y: 0 } });
+    });
+    expect(takePresenceActivity()).toBe(true);
   });
 
   it("订阅 boards.presence：每一项在线表放进 store，不必等心跳", async () => {
@@ -359,7 +367,6 @@ describe("useBoardSync", () => {
       clientId: presenceClientId(),
     });
     const reads = loadBoard.mock.calls.length;
-    remote = document(31, later);
     act(() => {
       watches[0]!.onPresence({
         boardId: board.id,
@@ -388,8 +395,9 @@ describe("useBoardSync", () => {
       });
     });
     expect(isReadOnly(useCanvasStore.getState())).toBe(true);
-    await waitFor(() => expect(positionOf()).toBe(31));
-    expect(loadBoard.mock.calls.length).toBeGreaterThan(reads);
+    // 丢租约只切只读，不重取（ui-acp-refresh §7.3 E-3）。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(loadBoard.mock.calls.length).toBe(reads);
   });
 
   it("订阅连着时定时心跳只在有操作要报时发；订阅结束就回到整拍兜底", async () => {
