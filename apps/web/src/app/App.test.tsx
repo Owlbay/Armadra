@@ -59,7 +59,6 @@ import { runtimeApi } from "../api/client";
 import { usePreferencesStore } from "./preferences-store";
 import { useCanvasStore } from "../store/canvas-store";
 import { App } from "./App";
-import { refusedForIdentity } from "../api/identity";
 
 installDomPolyfills();
 
@@ -138,8 +137,8 @@ describe("App", () => {
 });
 
 /**
- * ui-acp-refresh §7.3 E-2：CSRF 轮换、令牌续期不让整页重取；会话出现时只重取因 401/403
- * 失败过的；换了人才全量重取。
+ * ui-acp-refresh §7.3 E-2：CSRF 轮换、令牌续期、会话消失都不让整页重取；会话
+ * 出现或换人时全量重取。
  */
 describe("identity changes", () => {
   it("re-reads only what the change calls for", async () => {
@@ -158,9 +157,6 @@ describe("identity changes", () => {
 
     fire("appeared");
     expect(invalidate).toHaveBeenCalledTimes(1);
-    expect(invalidate).toHaveBeenLastCalledWith({
-      predicate: refusedForIdentity,
-    });
 
     fire("switched");
     expect(invalidate).toHaveBeenCalledTimes(2);

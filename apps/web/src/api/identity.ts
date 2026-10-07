@@ -200,18 +200,6 @@ function announce(change: IdentityChange): void {
   }
 }
 
-/**
- * 这次查询是不是因为没有会话（401 / 403）才失败的。会话出现之后只重取这些，
- * 其余查询的数据本来就是对的。
- */
-export function refusedForIdentity(query: {
-  readonly state: { readonly status: string; readonly error: unknown };
-}): boolean {
-  if (query.state.status !== "error") return false;
-  const status = (query.state.error as { status?: unknown } | null)?.status;
-  return status === 401 || status === 403;
-}
-
 /* ------------------------------- 多窗口 -------------------------------- */
 
 /**

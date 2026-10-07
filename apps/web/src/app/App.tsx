@@ -23,7 +23,7 @@ import { MobileFocusPage } from "../shell/MobileFocusPage";
 import { WindowDragLayer } from "../shell/WindowDragLayer";
 import { useCanvasStore } from "../store/canvas-store";
 import { useWorkspaceSource } from "../sources/workspace-source";
-import { onIdentitySessionChange, refusedForIdentity } from "../api/identity";
+import { onIdentitySessionChange } from "../api/identity";
 import { Toaster } from "@/ui/sonner";
 import { useCompactLayout } from "@/platform/layout";
 import { TooltipProvider } from "@/ui/tooltip";
@@ -83,17 +83,16 @@ function AppShell() {
   const compact = useCompactLayout();
 
   const queryClient = useQueryClient();
-  // Every /api call made before this device paired was refused. Once the Host
-  // session appears, re-read those — and only those — rather than leaving the
-  // shell showing the failures from before the user signed in. A CSRF or token
-  // rotation is the same session and re-reads nothing; another person's
-  // session re-reads everything, because none of the cached answers are theirs.
+  // Every /api call made before this device paired was refused, and some
+  // answered "nobody" successfully (the access query). Once a session appears
+  // — or another person's replaces it — re-read everything. A CSRF or token
+  // rotation is the same session and re-reads nothing (ui-acp-refresh §7.3
+  // E-2): those happen every few minutes and made every panel flicker.
   useEffect(
     () =>
       onIdentitySessionChange((change) => {
-        if (change === "switched") void queryClient.invalidateQueries();
-        else if (change === "appeared")
-          void queryClient.invalidateQueries({ predicate: refusedForIdentity });
+        if (change === "appeared" || change === "switched")
+          void queryClient.invalidateQueries();
       }),
     [queryClient],
   );

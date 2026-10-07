@@ -29,7 +29,6 @@ import {
   pairIdentity,
   permits,
   refreshIdentity,
-  refusedForIdentity,
   rememberCsrf,
   replaceRejectedCsrf,
   resetIdentityCredentials,
@@ -537,16 +536,5 @@ describe("what kind of session change is announced", () => {
     await logoutIdentity();
     expect(seen.mock.calls).toEqual([["appeared"], ["switched"], ["gone"]]);
     stop();
-  });
-
-  it("re-reads only queries that failed for want of a session", () => {
-    const query = (status: string, error: unknown) => ({
-      state: { status, error },
-    });
-    expect(refusedForIdentity(query("error", { status: 401 }))).toBe(true);
-    expect(refusedForIdentity(query("error", { status: 403 }))).toBe(true);
-    expect(refusedForIdentity(query("error", { status: 500 }))).toBe(false);
-    expect(refusedForIdentity(query("error", new Error("x")))).toBe(false);
-    expect(refusedForIdentity(query("success", null))).toBe(false);
   });
 });
