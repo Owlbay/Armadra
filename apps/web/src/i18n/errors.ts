@@ -59,6 +59,8 @@ export const errors: MessageModule = {
     "error.adapterNotInstallable": "这个 Agent 没有可安装的适配器", // i18n-exempt
     "error.adapterAlreadyInstalled": "适配器已安装",
     "error.npmNotFound": "找不到 npm，请先安装 Node.js", // i18n-exempt
+    "error.adapterInstallBusy": "正在装另一项",
+    "error.adapterRollbackUnavailable": "没有可恢复的上一版本",
 
     /* 投递的拒绝码（`agent-delivery.md` §3.5）。机器码本身不翻译，这里给的是
        「发生了什么」，因为看着画布的人不该去读 core 的中文句子。 */
@@ -137,6 +139,8 @@ export const errors: MessageModule = {
     "error.adapterNotInstallable": "This agent has no adapter to install",
     "error.adapterAlreadyInstalled": "The adapter is already installed",
     "error.npmNotFound": "npm not found. Install Node.js first.",
+    "error.adapterInstallBusy": "Another install is running",
+    "error.adapterRollbackUnavailable": "No previous version to restore",
 
     "error.delivery.LOOP_DETECTED":
       "These two nodes are feeding each other — stopped",
