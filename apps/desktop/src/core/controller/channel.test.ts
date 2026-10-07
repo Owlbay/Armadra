@@ -24,6 +24,7 @@ async function fixture() {
 }
 
 function ask(socketPath: string, input: unknown, headers = {}) {
+  const label = `${JSON.stringify(input)?.length ?? 0}B ${JSON.stringify(headers)}`;
   return new Promise<{ status: number; body: any }>((resolve, reject) => {
     const call = request(
       {
@@ -47,7 +48,9 @@ function ask(socketPath: string, input: unknown, headers = {}) {
     // A socket error after the response (the request no longer listens) must
     // not become an uncaught exception; errors before it still reject below.
     call.on("socket", (socket) => socket.on("error", () => {}));
-    call.on("error", reject);
+    call.on("error", (error) =>
+      reject(new Error(`${label}: ${error.message}`, { cause: error })),
+    );
     call.end(JSON.stringify(input));
   });
 }
