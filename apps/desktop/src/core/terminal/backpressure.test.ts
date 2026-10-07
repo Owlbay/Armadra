@@ -40,6 +40,7 @@ function harness() {
       attachment,
       record: { kind: "tmux" },
       snapshot: undefined,
+      size: { cols: 80, rows: 24 },
     }),
     acknowledgedInput: () => 0,
     generation: () => 1,

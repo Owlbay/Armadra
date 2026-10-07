@@ -1,0 +1,8 @@
+{
+  "id": "join-no-refresh",
+  "tier": "a",
+  "script": "tools/probes/join-no-refresh.mjs",
+  "args": ["{out}"],
+  "requires": ["tmux", "chrome"],
+  "timeoutMinutes": 10
+}

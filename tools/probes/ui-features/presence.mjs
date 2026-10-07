@@ -4,7 +4,7 @@
 //   - 只有一台时不出现在线设备条，且它拿着租约（能拖动节点）；
 //   - 第二台只读：显示「X 正在编辑」，拖不动节点；
 //   - 第一台有一笔没能落盘的改动（保存请求被 CDP 拦下失败）时，第二台接管：
-//     接管后第一台变只读、丢掉那笔改动、按远端重新加载；
+//     接管后第一台变只读，那笔改动留在屏上、不重载（ui-acp-refresh §7.3 E-3）；
 //
 // 两个 context 连的是同一个桌面 core、同一份本机凭据，在身份域里是同一台设备
 // （契约 §9.1 的 deviceKey 相同）：条上写「本机另一个窗口正在编辑」，接管不弹
@@ -220,13 +220,14 @@ export default async function presence({ stack, output, report, scenario }) {
     "接管后第一台变只读",
     firstReadOnly,
   );
-  const reverted = await first.until(
-    `const node = document.querySelector('.react-flow__node[data-id="${sticky.id}"]');
-     const m = /translate\\(([-\\d.]+)px,\\s*([-\\d.]+)px/.exec(node?.style.transform ?? "");
-     return m && Math.abs(Number(m[2]) - ${remoteY}) < 1 ? Number(m[2]) : null;`,
-    "第一台丢掉本地改动并按远端重载",
+  // 丢了租约只切只读（ui-acp-refresh §7.3 E-3）：本地那笔改动留在屏上、不重载。
+  await sleep(1500);
+  const kept = await positionOf(first, sticky.id);
+  run.check(
+    kept !== null && Math.abs(kept.y - local) < 1,
+    "第一台被接管后保留本地改动，不按远端重载",
+    { local, kept, remoteY },
   );
-  run.ok("第一台丢掉未保存的改动，回到远端位置", `${local} → ${reverted}`);
   offFetch();
   await first.call("Fetch.disable");
   run.check(

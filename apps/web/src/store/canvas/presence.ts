@@ -1,7 +1,6 @@
 import type { BoardPresence } from "@armadra/shared";
 
 import { useCanvasStore } from "../canvas-store";
-import { clearLocalEdits } from "./pending";
 import type { CanvasGet, CanvasSet, CanvasState, CanvasStore } from "./types";
 
 /**
@@ -92,7 +91,10 @@ export function presenceDeviceName(): string {
 
 let active = false;
 
-/** 指针或键盘碰过画布。下一次心跳带着它，好让 core 判断谁在空闲。 */
+/**
+ * 这块画布上有过一次编辑。下一次心跳带着它，好让 core 判断谁在空闲；只是点一下、
+ * 平移一下不算（ui-acp-refresh §7.3 E-3），否则空闲持有者的租约会被「摸一下」抢走。
+ */
 export function markPresenceActivity(): void {
   active = true;
 }
@@ -188,9 +190,9 @@ export function useCanvasReadOnly(): boolean {
 /**
  * 收下一份在线表（心跳的回答或 `canvas.presence` 事件）。
  *
- * 从可写变成只读的那一刻（别的设备接管了），本地还没落盘的改动作废：它们
- * 写出去只会被 423 拒，留着只会让保存指示灯一直亮着「未保存」。返回值告诉
- * 调用方要不要按远端重载这块画布。
+ * 从可写变成只读的那一刻（别的设备接管了）只是切成只读（ui-acp-refresh §7.3 E-3）：
+ * 不清本地改动、不动保存状态、不重载——画布不闪，撤销栈也还在；别人之后的
+ * 改动照常经 `board.changed` 合进来。返回值告诉调用方租约是丢了还是回来了。
  */
 export function applyPresence(presence: BoardPresence): {
   lost: boolean;
@@ -213,10 +215,6 @@ export function applyPresence(presence: BoardPresence): {
   };
   state.setPresence(snapshot);
   const after = isReadOnly(useCanvasStore.getState());
-  if (!before && after) {
-    clearLocalEdits();
-    useCanvasStore.setState({ saveState: "saved", saveError: null });
-  }
   return { lost: !before && after, gained: before && !after };
 }
 

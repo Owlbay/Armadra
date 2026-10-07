@@ -195,6 +195,15 @@ export class SshBackend implements TerminalBackend {
     return this.options.inner.resize(key, size);
   }
 
+  /** Only when the inner backend has a view per viewer (tmux does). */
+  get resizeViewer(): TerminalBackend["resizeViewer"] {
+    const inner = this.options.inner;
+    return inner.resizeViewer === undefined
+      ? undefined
+      : (key, attachmentId, size) =>
+          inner.resizeViewer!(key, attachmentId, size);
+  }
+
   capture(
     key: SessionKey,
     lines: number,

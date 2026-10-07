@@ -18,7 +18,8 @@ import {
   sessionName,
 } from "./backend";
 import { TerminalManager } from "./manager";
-import { type Lease, agentActor, humanActor } from "../drive/lease";
+import { type WindowViewer, windowSizeOf } from "./viewers";
+import { type Lease, agentActor, freeLease, humanActor } from "../drive/lease";
 import {
   TERMINAL_AGENT_IDLE_SECONDS,
   TERMINAL_HUMAN_IDLE_SECONDS,
@@ -44,6 +45,8 @@ class FakeBackend implements AdoptableBackend {
   readonly kind: BackendKind = "tmux";
   readonly sessions = new Map<SessionKey, FakeSession>();
   readonly calls: string[] = [];
+  /** Window and per-viewer resizes, apart from `calls` so no other test moves. */
+  readonly sizes: string[] = [];
   private readonly sinks: ((notice: BackendNotice) => void)[] = [];
   private nextId = 1;
   /** Set to make the next `create` fail, as a recycle onto a dead shell would. */
@@ -100,7 +103,17 @@ class FakeBackend implements AdoptableBackend {
     this.calls.push(`paste:${key}:${text}:${String(enter)}`);
   }
 
-  async resize(): Promise<void> {}
+  async resize(_key: SessionKey, size: TerminalSize): Promise<void> {
+    this.sizes.push(`window:${size.cols}x${size.rows}`);
+  }
+
+  async resizeViewer(
+    _key: SessionKey,
+    attachmentId: number,
+    size: TerminalSize,
+  ): Promise<void> {
+    this.sizes.push(`viewer${attachmentId}:${size.cols}x${size.rows}`);
+  }
 
   async capture(): Promise<string> {
     return "line one\nline two";
@@ -186,10 +199,13 @@ interface LeaseEvent {
   lease: Lease;
 }
 
-function harness(policy?: {
-  detachedGraceMinutes: number;
-  dormantAfterSeconds: number;
-}): Harness {
+function harness(
+  policy?: {
+    detachedGraceMinutes: number;
+    dormantAfterSeconds: number;
+  },
+  options: { singlePty?: boolean } = {},
+): Harness {
   open = fixture([]);
   const database = open.database;
   database
@@ -200,6 +216,10 @@ function harness(policy?: {
     .run(`${open.directory}/ws`);
   let now = Date.parse("2026-09-20T12:00:00.000Z");
   const backend = new FakeBackend();
+  // direct / session-host：只有一个 pty，没有每端自己的视图。
+  if (options.singlePty === true) {
+    Object.defineProperty(backend, "resizeViewer", { value: undefined });
+  }
   const leases: LeaseEvent[] = [];
   const manager = new TerminalManager({
     database,
@@ -875,5 +895,188 @@ describe("驱动租约", () => {
     expect(manager.driveTarget("node-missing")).toMatchObject({
       state: "exited",
     });
+  });
+});
+
+/**
+ * 多端尺寸（ui-acp-refresh §7.3 E-1）：窗口取驾驶者的，否则取最大端的；每端自己的视图
+ * 各自独立；尺寸没变就什么都不发。
+ */
+describe("the window size of a terminal several viewers watch", () => {
+  const viewer = (id: number, cols: number, rows: number, actor = `d${id}`) =>
+    ({ id, actor, cols, rows }) satisfies WindowViewer;
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  it("picks the largest viewer when nobody drives", () => {
+    expect(
+      windowSizeOf([viewer(1, 120, 40), viewer(2, 40, 12)], freeLease(1), {
+        cols: 40,
+        rows: 12,
+      }),
+    ).toEqual({ cols: 120, rows: 40 });
+    expect(windowSizeOf([], freeLease(1), { cols: 80, rows: 24 })).toBe(
+      undefined,
+    );
+  });
+
+  it("keeps the current window between equally large viewers", () => {
+    expect(
+      windowSizeOf([viewer(1, 100, 30), viewer(2, 75, 40)], freeLease(1), {
+        cols: 75,
+        rows: 40,
+      }),
+    ).toEqual({ cols: 75, rows: 40 });
+  });
+
+  it("follows the person holding the drive lease, through the viewer that typed", () => {
+    const lease: Lease = {
+      state: "human",
+      generation: 2,
+      expiresAt: "",
+      holder: { kind: "human", id: "phone", displayName: "" },
+    };
+    const viewers = [
+      viewer(1, 120, 40),
+      viewer(2, 40, 12, "phone"),
+      viewer(3, 50, 14, "phone"),
+    ];
+    expect(windowSizeOf(viewers, lease, { cols: 120, rows: 40 }, 2)).toEqual({
+      cols: 40,
+      rows: 12,
+    });
+    // Without a typing viewer: the largest of the holder's own.
+    expect(windowSizeOf(viewers, lease, { cols: 120, rows: 40 })).toEqual({
+      cols: 50,
+      rows: 14,
+    });
+    // An agent holding the lease has no size of its own.
+    expect(
+      windowSizeOf(
+        viewers,
+        {
+          ...lease,
+          state: "agent",
+          holder: { kind: "agent", id: "phone", displayName: "" },
+        },
+        { cols: 120, rows: 40 },
+      ),
+    ).toEqual({ cols: 120, rows: 40 });
+  });
+
+  it("does not let a second viewer's attach or resize move the first one", async () => {
+    const { manager, backend } = harness();
+    const session = await spawn(manager);
+    const desk = await manager.attach(
+      session.id,
+      { cols: 120, rows: 40 },
+      "desk",
+    );
+    expect(backend.sizes).toEqual(["window:120x40"]);
+
+    // The phone joins without a size: it starts at the window's, and the
+    // hello says so — attaching resizes nothing.
+    const phone = await manager.attach(session.id, undefined, "phone");
+    expect(phone.size).toEqual({ cols: 120, rows: 40 });
+    expect(backend.sizes).toEqual(["window:120x40"]);
+
+    // Its own container is 40×12: only its own view follows.
+    await manager.resize(
+      session.id,
+      1,
+      { cols: 40, rows: 12 },
+      phone.attachment.attachmentId,
+    );
+    expect(backend.sizes).toEqual([
+      "window:120x40",
+      `viewer${phone.attachment.attachmentId}:40x12`,
+    ]);
+    expect(manager.windowOf(session.id)?.window).toEqual({
+      cols: 120,
+      rows: 40,
+    });
+
+    // The same size again is not a resize.
+    await manager.resize(
+      session.id,
+      1,
+      { cols: 40, rows: 12 },
+      phone.attachment.attachmentId,
+    );
+    expect(backend.sizes).toHaveLength(2);
+    void desk;
+  });
+
+  it("gives the window to the viewer that drives, and back once it lets go", async () => {
+    const { manager, backend, advance } = harness();
+    const session = await spawn(manager);
+    await manager.attach(session.id, { cols: 120, rows: 40 }, "desk");
+    const phone = await manager.attach(
+      session.id,
+      { cols: 40, rows: 12 },
+      "phone",
+    );
+    expect(manager.windowOf(session.id)?.window).toEqual({
+      cols: 120,
+      rows: 40,
+    });
+
+    manager.noteViewerInput(session.id, phone.attachment.attachmentId);
+    await manager.input(session.id, 1, "x", undefined, humanActor("phone", ""));
+    await settle();
+    expect(manager.windowOf(session.id)?.window).toEqual({
+      cols: 40,
+      rows: 12,
+    });
+
+    advance(TERMINAL_HUMAN_IDLE_SECONDS * 1_000 + 1);
+    expect(manager.sweepDrives()).toBe(1);
+    await settle();
+    expect(manager.windowOf(session.id)?.window).toEqual({
+      cols: 120,
+      rows: 40,
+    });
+    expect(backend.sizes.filter((size) => size.startsWith("window:"))).toEqual([
+      "window:120x40",
+      "window:40x12",
+      "window:120x40",
+    ]);
+  });
+
+  it("hands the window to the next largest viewer when the largest leaves", async () => {
+    const { manager } = harness();
+    const session = await spawn(manager);
+    const desk = await manager.attach(
+      session.id,
+      { cols: 120, rows: 40 },
+      "desk",
+    );
+    await manager.attach(session.id, { cols: 90, rows: 30 }, "laptop");
+    expect(manager.windowOf(session.id)?.window).toEqual({
+      cols: 120,
+      rows: 40,
+    });
+    await manager.detached(session.id, desk.attachment.attachmentId);
+    expect(manager.windowOf(session.id)?.window).toEqual({
+      cols: 90,
+      rows: 30,
+    });
+    expect(manager.windowOf(session.id)?.viewers).toHaveLength(1);
+  });
+
+  it("on a single-pty backend only remembers a smaller viewer's size", async () => {
+    const { manager, backend } = harness(undefined, { singlePty: true });
+    const session = await spawn(manager);
+    await manager.attach(session.id, { cols: 120, rows: 40 }, "desk");
+    const phone = await manager.attach(session.id, undefined, "phone");
+    await manager.resize(
+      session.id,
+      1,
+      { cols: 40, rows: 12 },
+      phone.attachment.attachmentId,
+    );
+    expect(backend.sizes).toEqual(["window:120x40"]);
+    expect(manager.windowOf(session.id)?.viewers.map((v) => v.cols)).toEqual([
+      120, 40,
+    ]);
   });
 });

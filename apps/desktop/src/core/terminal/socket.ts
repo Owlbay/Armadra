@@ -181,6 +181,12 @@ export async function serveTerminalSocket(
   options: SocketOptions,
 ): Promise<void> {
   const { manager, sessionId, writer } = options;
+  // Only a caller that knows the viewer's size passes one; otherwise the
+  // viewer starts at the window's and the `hello` says so (ui-acp-refresh §7.3 E-1).
+  const requested =
+    options.cols !== undefined && options.rows !== undefined
+      ? { cols: options.cols, rows: options.rows }
+      : undefined;
   const cols = options.cols ?? DEFAULT_COLS;
   const rows = options.rows ?? DEFAULT_ROWS;
   // Set once the attachment exists; until then there is nothing to pause.
@@ -211,7 +217,7 @@ export async function serveTerminalSocket(
 
   let attached;
   try {
-    attached = await manager.attach(sessionId, { cols, rows });
+    attached = await manager.attach(sessionId, requested, writer);
   } catch (error) {
     // Nothing live behind the row: the socket still gets a `hello` and the
     // final `status`, so the page can show the exit instead of a blank pane.
@@ -238,7 +244,7 @@ export async function serveTerminalSocket(
     return;
   }
 
-  const { attachment, record, snapshot } = attached;
+  const { attachment, record, snapshot, size } = attached;
   flow = attachment;
   // A socket that was already behind before the attachment existed.
   if (queue.paused) attachment.pause?.();
@@ -256,8 +262,10 @@ export async function serveTerminalSocket(
     sessionId,
     generation,
     backend: record.kind,
-    rows,
-    cols,
+    // This viewer's own size: a page whose container already matches it has
+    // nothing to resize, and so redraws nobody.
+    rows: size.rows,
+    cols: size.cols,
     alive: true,
     // A reconnecting client is told what its own writer already reached, so it
     // resends only what never landed instead of replaying keystrokes. The
@@ -352,7 +360,9 @@ export async function serveTerminalSocket(
           if (frame.type === "input") {
             // 键盘上来的字节就是「人在驱动」（设计 `agent-delivery.md`
             // §6.1）：它抢占 Agent 的租约，而 Agent 的下一次投递会被告知
-            // `LEASE_HELD_BY_HUMAN`。人停手十秒，租约自己过期。
+            // `LEASE_HELD_BY_HUMAN`。人停手十秒，租约自己过期。驾驶期间窗口
+            // 跟着这一端的尺寸走。
+            manager.noteViewerInput(sessionId, attachment.attachmentId);
             await manager.input(
               sessionId,
               generation,
@@ -370,10 +380,13 @@ export async function serveTerminalSocket(
             return;
           }
           if (frame.type === "resize") {
-            await manager.resize(sessionId, generation, {
-              cols: frame.cols,
-              rows: frame.rows,
-            });
+            // 只改这一端自己的视图；窗口要不要跟着变由 manager 判。
+            await manager.resize(
+              sessionId,
+              generation,
+              { cols: frame.cols, rows: frame.rows },
+              attachment.attachmentId,
+            );
             return;
           }
           await manager.terminate(sessionId, frame.mode ?? "process");
