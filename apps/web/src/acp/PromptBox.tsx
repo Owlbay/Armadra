@@ -1,10 +1,16 @@
 import * as React from "react";
 import { ArrowUp, Ellipsis, Square } from "lucide-react";
-import type { AcpModeState, AcpModelState } from "@armadra/shared";
+import type {
+  AcpAvailableCommand,
+  AcpModeState,
+  AcpModelState,
+} from "@armadra/shared";
 
-import { useT } from "@/app/preferences-store";
+import { usePreferencesStore, useT } from "@/app/preferences-store";
+import { cn } from "@/lib/cn";
 import { useCompactLayout } from "@/platform/layout";
 import { Button } from "@/ui/button";
+import { Command, CommandEmpty, CommandItem, CommandList } from "@/ui/command";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,8 +27,84 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/ui/select";
+import { Progress } from "@/ui/progress";
 import { Textarea } from "@/ui/textarea";
 import { acpApi } from "./api";
+import type { AcpUsageView } from "./store";
+
+/** 用量到这个比例换警示色（文字 + 颜色）。 */
+export const USAGE_WARN_RATIO = 0.9;
+
+/** 一次回填：`seq` 变了才填，同一句可以填第二次。 */
+export interface PromptPrefill {
+  readonly text: string;
+  readonly seq: number;
+}
+
+/** `/` 开头、还没有空格时，按名字筛命令。 */
+export function matchCommands(
+  text: string,
+  commands: readonly AcpAvailableCommand[],
+): AcpAvailableCommand[] | null {
+  if (!text.startsWith("/") || /\s/.test(text) || commands.length === 0)
+    return null;
+  const query = text.slice(1).toLowerCase();
+  const starts = commands.filter((c) => c.name.toLowerCase().startsWith(query));
+  const rest = commands.filter(
+    (c) =>
+      !c.name.toLowerCase().startsWith(query) &&
+      c.name.toLowerCase().includes(query),
+  );
+  return [...starts, ...rest];
+}
+
+/** 上下文用量：`12.3k / 200k` + 2px 进度条；花费有就放在悬停提示里。 */
+function Usage({ usage }: { usage: AcpUsageView }) {
+  const t = useT();
+  const locale = usePreferencesStore((state) => state.locale);
+  const compact = new Intl.NumberFormat(locale, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  });
+  const ratio = usage.size > 0 ? usage.used / usage.size : 0;
+  const values = {
+    used: compact.format(usage.used),
+    size: compact.format(usage.size),
+  };
+  let title = t("acp.usage", values);
+  if (usage.cost) {
+    try {
+      title = t("acp.usage.cost", {
+        ...values,
+        cost: new Intl.NumberFormat(locale, {
+          style: "currency",
+          currency: usage.cost.currency,
+        }).format(usage.cost.amount),
+      });
+    } catch {
+      // 币种认不出来：只给用量。
+    }
+  }
+  const warn = ratio >= USAGE_WARN_RATIO;
+  return (
+    <div
+      data-slot="acp-usage"
+      data-warn={warn || undefined}
+      title={title}
+      className={cn(
+        "flex h-8 shrink-0 flex-col justify-center gap-1 text-[11px] text-muted-foreground tabular-nums",
+        warn && "text-[var(--warn-text)]",
+      )}
+    >
+      <span>{t("acp.usage", values)}</span>
+      <Progress
+        value={Math.min(100, Math.round(ratio * 100))}
+        aria-label={title}
+        className={cn("h-0.5", warn && "[&>*]:bg-[var(--warn)]")}
+      />
+    </div>
+  );
+}
 
 /**
  * 会话视图底部的输入（ACP 设计 §6、§5.6）。
@@ -49,6 +131,9 @@ export function PromptBox({
   onModel,
   inputRef,
   compact: forceCompact,
+  commands = [],
+  usage = null,
+  prefill = null,
 }: {
   sessionId: string | null;
   disabled: boolean;
@@ -63,12 +148,53 @@ export function PromptBox({
   inputRef?: React.Ref<HTMLTextAreaElement>;
   /** 展示页用：不看视口，直接画窄屏那一版。 */
   compact?: boolean;
+  /** `available_commands_update`：输入 `/` 时列出来。 */
+  commands?: readonly AcpAvailableCommand[];
+  usage?: AcpUsageView | null;
+  /** 「编辑后重发」：把这句填进来，光标在末尾，不发。 */
+  prefill?: PromptPrefill | null;
 }) {
   const t = useT();
   const narrow = useCompactLayout();
   const compact = forceCompact ?? narrow;
   const [text, setText] = React.useState("");
   const holding = React.useRef<string | null>(null);
+  const localRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const setRefs = React.useCallback(
+    (node: HTMLTextAreaElement | null) => {
+      localRef.current = node;
+      if (typeof inputRef === "function") inputRef(node);
+      else if (inputRef)
+        (inputRef as React.RefObject<HTMLTextAreaElement | null>).current =
+          node;
+    },
+    [inputRef],
+  );
+
+  React.useEffect(() => {
+    if (!prefill) return;
+    setText(prefill.text);
+    const input = localRef.current;
+    if (!input) return;
+    input.focus();
+    // 填进去之后再放光标：这一帧 value 还是旧的。
+    requestAnimationFrame(() => {
+      const end = input.value.length;
+      input.setSelectionRange(end, end);
+    });
+  }, [prefill]);
+
+  // 斜杠命令：`/` 开头时列出来，上下键选、Enter / Tab 插入、Esc 收起。
+  const [dismissed, setDismissed] = React.useState<string | null>(null);
+  const [picked, setPicked] = React.useState(0);
+  const matches = dismissed === text ? null : matchCommands(text, commands);
+  const listOpen = matches !== null && !disabled;
+  React.useEffect(() => setPicked(0), [text]);
+  const insert = (command: AcpAvailableCommand) => {
+    setText(`/${command.name} `);
+    setDismissed(null);
+    localRef.current?.focus();
+  };
 
   const take = React.useCallback(() => {
     if (!sessionId || holding.current === sessionId) return;
@@ -101,9 +227,40 @@ export function PromptBox({
     models && onModel && models.availableModels.length > 0 ? models : null;
 
   return (
-    <div className="flex items-end gap-1.5 border-t border-[var(--border)] p-1.5">
+    <div className="relative flex items-end gap-1.5 border-t border-[var(--border)] p-1.5">
+      {listOpen && (
+        <Command
+          shouldFilter={false}
+          value={matches[picked]?.name ?? ""}
+          data-slot="acp-commands"
+          aria-label={t("acp.commands.label")}
+          className="absolute right-1.5 bottom-full left-1.5 z-10 mb-1 h-auto rounded-[var(--r-card)]! border border-[var(--border)] shadow-[var(--shadow-overlay)]"
+        >
+          <CommandList className="max-h-56">
+            <CommandEmpty className="py-3">
+              {t("acp.commands.empty")}
+            </CommandEmpty>
+            {matches.map((command) => (
+              <CommandItem
+                key={command.name}
+                value={command.name}
+                className="h-auto min-h-8 items-baseline py-1"
+                onMouseDown={(event) => event.preventDefault()}
+                onSelect={() => insert(command)}
+              >
+                <span className="shrink-0 font-mono text-[13px]">
+                  /{command.name}
+                </span>
+                <span className="min-w-0 truncate text-[length:var(--text-caption)] text-muted-foreground">
+                  {command.description}
+                </span>
+              </CommandItem>
+            ))}
+          </CommandList>
+        </Command>
+      )}
       <Textarea
-        ref={inputRef}
+        ref={setRefs}
         aria-label={t("acp.prompt.label")}
         rows={1}
         value={text}
@@ -113,6 +270,33 @@ export function PromptBox({
         onFocus={take}
         onBlur={release}
         onKeyDown={(event) => {
+          if (listOpen && !event.nativeEvent.isComposing) {
+            const count = matches.length;
+            if (event.key === "ArrowDown" && count > 0) {
+              event.preventDefault();
+              setPicked((index) => (index + 1) % count);
+              return;
+            }
+            if (event.key === "ArrowUp" && count > 0) {
+              event.preventDefault();
+              setPicked((index) => (index - 1 + count) % count);
+              return;
+            }
+            if (
+              (event.key === "Enter" || event.key === "Tab") &&
+              !event.shiftKey &&
+              matches[picked]
+            ) {
+              event.preventDefault();
+              insert(matches[picked]);
+              return;
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setDismissed(text);
+              return;
+            }
+          }
           if (event.key === "Escape" && streaming) {
             event.preventDefault();
             onCancel();
@@ -226,6 +410,7 @@ export function PromptBox({
           )}
         </>
       )}
+      {usage && usage.size > 0 && <Usage usage={usage} />}
       {streaming ? (
         <Button
           size="icon-sm"

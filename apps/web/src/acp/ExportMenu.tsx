@@ -11,23 +11,17 @@ import type { ContentSource } from "@armadra/shared";
 
 import { useT } from "@/app/preferences-store";
 import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/ui/context-menu";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/ui/dropdown-menu";
-import { IconButton } from "@/ui/icon-button";
 import {
   availableExports,
   exportToBoard,
   type ExportKind,
 } from "./export-to-board";
+import { Action } from "./MessageActions";
 
 const ITEMS: readonly { kind: ExportKind; icon: LucideIcon }[] = [
   { kind: "sticky", icon: StickyNote },
@@ -37,7 +31,7 @@ const ITEMS: readonly { kind: ExportKind; icon: LucideIcon }[] = [
 ];
 
 /** 选区落在这条消息里时用选中的那段，否则整条。 */
-function selectedTextWithin(root: HTMLElement | null): string {
+export function selectedTextWithin(root: HTMLElement | null): string {
   const selection =
     typeof window === "undefined" ? null : window.getSelection();
   if (!root || !selection || selection.isCollapsed) return "";
@@ -49,83 +43,56 @@ function selectedTextWithin(root: HTMLElement | null): string {
 }
 
 /**
- * 助手消息的「输出到画板」（设计系统 §5.2）：悬停出一个 `⋯`，菜单四项；
- * 右键同样四项，有选区时只输出选中的那段。不可用的项灰掉，不解释原因。
+ * 助手消息的「输出到画板」（设计系统 §5.2）：消息工具条里的一个 `⋯`，菜单
+ * 四项。只包工具条、不包正文（ACP 会话视图 §5.1）：正文照常选字、点链接。
+ * 按下时选区落在这条消息里就只输出选中的那段。不可用的项灰掉，不解释原因。
  */
 export function ExportMenu({
   text,
   source,
-  children,
+  selectionRoot,
   defaultOpen,
 }: {
   text: string;
   source: ContentSource;
-  children: React.ReactNode;
+  /** 这条消息的正文：选区在它里面时输出选中的那段。 */
+  selectionRoot?: React.RefObject<HTMLElement | null>;
   /** 只给展示页：让菜单展开着截图。 */
   defaultOpen?: boolean;
 }) {
   const t = useT();
-  const rootRef = React.useRef<HTMLDivElement>(null);
   const [picked, setPicked] = React.useState(text);
+  React.useEffect(() => setPicked(text), [text]);
   const available = React.useMemo(() => availableExports(picked), [picked]);
-  const whole = React.useMemo(() => availableExports(text), [text]);
-
-  const items = (Item: typeof DropdownMenuItem | typeof ContextMenuItem) =>
-    ITEMS.map(({ kind, icon: Icon }) => (
-      <Item
-        key={kind}
-        className="text-[13px]"
-        disabled={!(Item === DropdownMenuItem ? whole : available).has(kind)}
-        onSelect={() =>
-          void exportToBoard(
-            kind,
-            Item === DropdownMenuItem ? text : picked,
-            source,
-          )
-        }
-      >
-        <Icon />
-        {t(`acp.export.${kind}`)}
-      </Item>
-    ));
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          ref={rootRef}
-          data-slot="acp-export"
-          className="group/export relative"
-          onContextMenu={(event) => {
-            // 节点自己的右键菜单不再弹：这里是消息的菜单。
+    <DropdownMenu {...(defaultOpen ? { defaultOpen: true, modal: false } : {})}>
+      <DropdownMenuTrigger asChild>
+        <Action
+          label={t("acp.export.menu")}
+          onPointerDown={(event) => {
             event.stopPropagation();
-            setPicked(selectedTextWithin(rootRef.current) || text);
+            setPicked(
+              selectedTextWithin(selectionRoot?.current ?? null) || text,
+            );
           }}
         >
-          {children}
-          <div className="absolute -top-1 right-0 opacity-0 transition-opacity group-hover/export:opacity-100 focus-within:opacity-100 has-data-[state=open]:opacity-100">
-            <DropdownMenu
-              {...(defaultOpen ? { defaultOpen: true, modal: false } : {})}
-            >
-              <DropdownMenuTrigger asChild>
-                <IconButton
-                  label={t("acp.export.menu")}
-                  className="bg-[var(--card)]"
-                  onPointerDown={(event) => event.stopPropagation()}
-                >
-                  <Ellipsis />
-                </IconButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-48">
-                {items(DropdownMenuItem)}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="min-w-48">
-        {items(ContextMenuItem)}
-      </ContextMenuContent>
-    </ContextMenu>
+          <Ellipsis />
+        </Action>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-48">
+        {ITEMS.map(({ kind, icon: Icon }) => (
+          <DropdownMenuItem
+            key={kind}
+            className="text-[13px]"
+            disabled={!available.has(kind)}
+            onSelect={() => void exportToBoard(kind, picked, source)}
+          >
+            <Icon />
+            {t(`acp.export.${kind}`)}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

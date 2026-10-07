@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import type {
   AcpLogResponse,
@@ -128,6 +129,12 @@ async function pickModel(name: string) {
 
 afterEach(cleanup);
 
+/**
+ * 消息流本身（`role="log"`）。回合结束时最后一条助手文字还会出现在读屏的
+ * `role="status"` 里（§5.7），按文字找消息要限定在这里面。
+ */
+const messages = () => within(screen.getByRole("log"));
+
 function setConnected(connected: boolean) {
   act(() => {
     for (const handler of [...connection.handlers])
@@ -181,7 +188,7 @@ describe("SessionView turn reconciliation (§39.9)", () => {
     expect(screen.queryByText("这一轮没有完成")).toBeNull();
     await waitFor(() => expect(api.log).toHaveBeenCalledTimes(2));
     act(() => answer(loggedTurn(clientTurnId, "ended")));
-    expect(await screen.findByText("done it")).toBeTruthy();
+    expect(await messages().findByText("done it")).toBeTruthy();
     expect(screen.queryByText("正在确认这一轮")).toBeNull();
     expect(screen.queryByText("这一轮没有送达")).toBeNull();
     expect(screen.queryByLabelText("正在输出")).toBeNull();
@@ -196,7 +203,7 @@ describe("SessionView turn reconciliation (§39.9)", () => {
       loggedTurn(api.prompt.mock.calls[0]?.[2] as string, "running"),
     );
     const clientTurnId = await sendPrompt("go");
-    expect(await screen.findByText("done it")).toBeTruthy();
+    expect(await messages().findByText("done it")).toBeTruthy();
     expect(screen.getByLabelText("正在输出")).toBeTruthy();
     // 结束帧带着它的 clientTurnId 来：照常收尾。
     emit({
@@ -280,7 +287,7 @@ describe("SessionView turn reconciliation (§39.9)", () => {
     setConnected(false);
     api.log.mockResolvedValue(loggedTurn(clientTurnId, "ended"));
     setConnected(true);
-    expect(await screen.findByText("done it")).toBeTruthy();
+    expect(await messages().findByText("done it")).toBeTruthy();
     expect(api.log).toHaveBeenCalledTimes(2);
     expect(screen.queryByLabelText("正在输出")).toBeNull();
   });
@@ -393,8 +400,11 @@ describe("SessionView", () => {
 
     // 回合边界之后的输出是新的一条，不接在上一条后面。
     text("agent_message_chunk", "Next");
-    expect(screen.getByText("Next")).toBeTruthy();
-    expect(screen.getByText("Running tests")).toBeTruthy();
+    expect(messages().getByText("Next")).toBeTruthy();
+    expect(messages().getByText("Running tests")).toBeTruthy();
+    // 回合结束时读屏念一次最后那条回复（消息流本身不逐块念）。
+    expect(screen.getByRole("log").getAttribute("aria-live")).toBe("off");
+    expect(screen.getByRole("status").textContent).toBe("Running tests");
   });
 
   it("ignores events of other sessions", async () => {
@@ -492,12 +502,12 @@ describe("SessionView", () => {
       sessionId: SESSION,
       nodeId: "n1",
       turnId: "turn-1",
-      stopReason: "refusal",
+      error: { code: "acp_protocol", message: "boom" },
     });
     expect(screen.getByText("这一轮没有完成")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await waitFor(() => expect(api.prompt).toHaveBeenCalledTimes(2));
-    // 第三个参数是 §39.9 的 clientTurnId：拒答是 core 跑完的一轮，重发是新的
+    // 第三个参数是 §39.9 的 clientTurnId：出错的是 core 跑完的一轮，重发是新的
     // 一轮，换一个 id（沿用旧的会被 core 当成同一轮去重掉）。
     expect(api.prompt).toHaveBeenLastCalledWith(
       SESSION,
@@ -506,6 +516,166 @@ describe("SessionView", () => {
     );
     expect(api.prompt.mock.calls[1]?.[2]).not.toBe(
       api.prompt.mock.calls[0]?.[2],
+    );
+  });
+
+  it("draws a row for each stop reason that is not end_turn (§5.2)", async () => {
+    const cases = [
+      ["max_tokens", "已到上限", "继续"],
+      ["max_turn_requests", "已到上限", "继续"],
+      ["refusal", "这一轮被拒绝", "编辑后重发"],
+      ["cancelled", "已停止", "重新发送"],
+    ] as const;
+    for (const [stopReason, line, action] of cases) {
+      useAcpStore.getState().reset();
+      api.prompt.mockClear();
+      render(<SessionView nodeId="n1" data={data} />);
+      await sendPrompt(`ask ${stopReason}`);
+      emit({
+        type: "acp.turn",
+        sessionId: SESSION,
+        nodeId: "n1",
+        turnId: "turn-1",
+        stopReason,
+      });
+      const row = screen.getByText(line).closest("[data-stop]") as HTMLElement;
+      expect(row.dataset.stop).toBe(stopReason);
+      expect(screen.queryByText("这一轮没有完成")).toBeNull();
+      expect(within(row).getByRole("button", { name: action })).toBeTruthy();
+      cleanup();
+    }
+    // 正常说完什么都不画。
+    useAcpStore.getState().reset();
+    render(<SessionView nodeId="n1" data={data} />);
+    await sendPrompt("fine");
+    emit({
+      type: "acp.turn",
+      sessionId: SESSION,
+      nodeId: "n1",
+      turnId: "turn-1",
+      stopReason: "end_turn",
+    });
+    for (const line of ["已到上限", "这一轮被拒绝", "已停止"])
+      expect(screen.queryByText(line)).toBeNull();
+  });
+
+  it("continues, resends and edits from the stop rows", async () => {
+    render(<SessionView nodeId="n1" data={data} />);
+    const first = await sendPrompt("long one");
+    emit({
+      type: "acp.turn",
+      sessionId: SESSION,
+      nodeId: "n1",
+      turnId: "turn-1",
+      clientTurnId: first,
+      stopReason: "max_tokens",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    await waitFor(() =>
+      expect(api.prompt).toHaveBeenLastCalledWith(
+        SESSION,
+        "继续",
+        expect.any(String),
+      ),
+    );
+    emit({
+      type: "acp.turn",
+      sessionId: SESSION,
+      nodeId: "n1",
+      turnId: "turn-2",
+      stopReason: "cancelled",
+    });
+    fireEvent.click(
+      within(
+        document.querySelector("[data-stop=cancelled]") as HTMLElement,
+      ).getByRole("button", { name: "重新发送" }),
+    );
+    await waitFor(() => expect(api.prompt).toHaveBeenCalledTimes(3));
+    expect(api.prompt.mock.calls[2]?.[1]).toBe("继续");
+    emit({
+      type: "acp.turn",
+      sessionId: SESSION,
+      nodeId: "n1",
+      turnId: "turn-3",
+      stopReason: "refusal",
+    });
+    // 拒答：编辑后重发把提问填回输入框，不自动发。
+    fireEvent.click(
+      within(
+        document.querySelector("[data-stop=refusal]") as HTMLElement,
+      ).getByRole("button", { name: "编辑后重发" }),
+    );
+    const input = screen.getByLabelText("消息") as HTMLTextAreaElement;
+    await waitFor(() => expect(input.value).toBe("继续"));
+    expect(api.prompt).toHaveBeenCalledTimes(3);
+  });
+
+  it("lets text be selected and keeps the canvas from panning or dragging", async () => {
+    const { container } = render(<SessionView nodeId="n1" data={data} />);
+    await screen.findByText("向它说第一句话");
+    const root = container.querySelector("[data-slot=acp-session-view]")!;
+    for (const name of ["select-text", "nopan", "nodrag", "nowheel"])
+      expect(root.classList.contains(name)).toBe(true);
+  });
+
+  it("lists the agent's slash commands while typing / and inserts one", async () => {
+    // cmdk 把选中的项滚进视野；jsdom 没有这个方法。
+    Element.prototype.scrollIntoView ??= () => undefined;
+    render(<SessionView nodeId="n1" data={data} />);
+    const input = (await screen.findByLabelText("消息")) as HTMLTextAreaElement;
+    update({
+      sessionUpdate: "available_commands_update",
+      availableCommands: [
+        { name: "review", description: "Review changes" },
+        { name: "init", description: "Write AGENTS.md" },
+      ],
+    });
+    fireEvent.change(input, { target: { value: "/" } });
+    expect(screen.getByText("/review")).toBeTruthy();
+    expect(screen.getByText("/init")).toBeTruthy();
+    fireEvent.change(input, { target: { value: "/in" } });
+    expect(screen.queryByText("/review")).toBeNull();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input.value).toBe("/init ");
+    expect(api.prompt).not.toHaveBeenCalled();
+    // 有空格之后不再弹；Esc 收起。
+    expect(document.querySelector("[data-slot=acp-commands]")).toBeNull();
+    fireEvent.change(input, { target: { value: "/re" } });
+    expect(document.querySelector("[data-slot=acp-commands]")).not.toBeNull();
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(document.querySelector("[data-slot=acp-commands]")).toBeNull();
+    expect(api.cancel).not.toHaveBeenCalled();
+  });
+
+  it("restores the plan, usage and commands from the log snapshot (§49)", async () => {
+    api.log.mockResolvedValue({
+      entries: [
+        {
+          role: "user",
+          blocks: [{ type: "text", text: "plan it" }],
+          endOffset: 1,
+          at: "2026-10-07T06:02:00.000Z",
+        },
+      ],
+      endOffset: 1,
+      turns: [],
+      snapshot: {
+        plan: [
+          { content: "step one", status: "completed" },
+          { content: "step two", status: "pending" },
+        ],
+        usage: { used: 950, size: 1000 },
+        availableCommands: [{ name: "review", description: "" }],
+        title: "Planning",
+      },
+    } satisfies AcpLogResponse);
+    render(<SessionView nodeId="n1" data={data} />);
+    expect(await screen.findByText("1/2 已完成")).toBeTruthy();
+    const usage = document.querySelector("[data-slot=acp-usage]");
+    expect(usage?.textContent).toContain("950");
+    expect(usage?.getAttribute("data-warn")).toBe("true");
+    expect(useAcpStore.getState().sessions[scoped(SESSION)]?.title).toBe(
+      "Planning",
     );
   });
 

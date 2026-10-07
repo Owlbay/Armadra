@@ -71,4 +71,43 @@ describe("PermissionCard", () => {
     // 同一张卡，按钮换成徽标（设计系统 §5.8）。
     expect(screen.getByText("等待接管")).toBeTruthy();
   });
+
+  it("expands details with the diff, the input and the files before answering", () => {
+    const detailed: AcpPermissionView = {
+      ...permission,
+      toolCall: {
+        toolCallId: "t1",
+        title: "Edit a.ts",
+        locations: [{ path: "/repo/a.ts", line: 3 }],
+        rawInput: { path: "a.ts", content: "new" },
+        content: [
+          { type: "diff", path: "/elsewhere/a.ts", oldText: "x", newText: "y" },
+        ],
+      },
+    };
+    render(<PermissionCard permission={detailed} canAnswer />);
+    expect(screen.queryByText("/repo/a.ts:3")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "详情" }));
+    expect(screen.getByText("/repo/a.ts:3")).toBeTruthy();
+    expect(screen.getByText("/elsewhere/a.ts")).toBeTruthy();
+    expect(screen.getByText(/"content": "new"/)).toBeTruthy();
+    expect(api.answer).not.toHaveBeenCalled();
+  });
+
+  it("puts focus on the first allow when pinned, unless someone is typing", () => {
+    render(<PermissionCard permission={permission} canAnswer pinned />);
+    expect(document.activeElement?.textContent).toBe("始终允许");
+    cleanup();
+    const field = document.createElement("textarea");
+    document.body.appendChild(field);
+    field.focus();
+    render(<PermissionCard permission={permission} canAnswer pinned />);
+    expect(document.activeElement).toBe(field);
+    // Esc 不答。
+    fireEvent.keyDown(screen.getByRole("button", { name: "始终允许" }), {
+      key: "Escape",
+    });
+    expect(api.answer).not.toHaveBeenCalled();
+    field.remove();
+  });
 });

@@ -36,7 +36,9 @@ const texts = (items: readonly AcpItem[]) =>
   items.map((item) =>
     item.kind === "message"
       ? `${item.role}:${item.text}`
-      : `tool:${item.call.title}`,
+      : item.kind === "tool"
+        ? `tool:${item.call.title}`
+        : `${item.kind}`,
   );
 
 describe("applyUpdate", () => {
@@ -157,18 +159,174 @@ describe("applyUpdate", () => {
     expect(view.modes?.currentModeId).toBe("plan");
     expect(view.plan).toHaveLength(1);
     expect(view.usage).toEqual({ used: 10, size: 100 });
-    expect(view.items).toEqual([]);
+    // 模式换了在消息流里落一行（§5.2）；不认识的 update 什么都不画。
+    expect(view.items).toEqual([
+      { kind: "notice", id: "n0", turn: 0, notice: "mode", name: "Plan" },
+    ]);
+  });
+});
+
+describe("the ten session/update kinds (§5.2)", () => {
+  const modes = {
+    currentModeId: "default",
+    availableModes: [
+      { id: "default", name: "Default" },
+      { id: "plan", name: "Plan" },
+    ],
+  };
+  const started = () =>
+    beginTurn({ ...EMPTY_SESSION, modes, models: null }, "go", "c1");
+
+  it("user_message_chunk opens a turn with its time", () => {
+    const view = run(EMPTY_SESSION, chunk("user_message_chunk", "hi"));
+    expect(view.items[0]).toMatchObject({ role: "user", text: "hi", turn: 1 });
+    expect(typeof (view.items[0] as { at?: string }).at).toBe("string");
+  });
+
+  it("agent_message_chunk keeps images and resource links as attachments", () => {
+    const view = run(
+      started(),
+      chunk("agent_message_chunk", "see "),
+      {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "image", mimeType: "image/png", data: "aGk=" },
+      },
+      {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "resource_link", uri: "file:///repo/a.md", name: "a" },
+      },
+      {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "resource",
+          resource: { uri: "file:///repo/b.md", text: " inline" },
+        },
+      },
+      {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "resource",
+          resource: { uri: "file:///repo/c%20d.bin" },
+        },
+      },
+      { sessionUpdate: "agent_message_chunk", content: { type: "audio" } },
+    );
+    const reply = view.items.at(-1) as Extract<AcpItem, { kind: "message" }>;
+    expect(reply.text).toBe("see  inline");
+    expect(reply.attachments).toEqual([
+      { type: "image", mimeType: "image/png", data: "aGk=" },
+      { type: "resource_link", uri: "file:///repo/a.md", name: "a" },
+      { type: "resource_link", uri: "file:///repo/c%20d.bin", name: "c d.bin" },
+    ]);
+  });
+
+  it("agent_thought_chunk is its own message", () => {
+    const view = run(started(), chunk("agent_thought_chunk", "hmm"));
+    expect(view.items.at(-1)).toMatchObject({ role: "thought", text: "hmm" });
+  });
+
+  it("tool_call and tool_call_update keep the locations", () => {
+    const view = run(
+      started(),
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "t1",
+        title: "Edit",
+        locations: [{ path: "/repo/a.ts", line: 2 }],
+      },
+      { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "failed" },
+    );
+    const tool = view.items.at(-1) as Extract<AcpItem, { kind: "tool" }>;
+    expect(tool.call.locations).toEqual([{ path: "/repo/a.ts", line: 2 }]);
+    expect(tool.call.status).toBe("failed");
+  });
+
+  it("plan belongs to the current turn and folds when the turn ends", () => {
+    const view = run(started(), {
+      sessionUpdate: "plan",
+      entries: [{ content: "a", status: "pending" }],
+    });
+    expect(view).toMatchObject({ planTurn: view.turn, planSettled: false });
+    expect(endTurn(view, { stopReason: "end_turn" }).planSettled).toBe(true);
+  });
+
+  it("current_mode_update switches the mode and leaves a notice once", () => {
+    const view = run(
+      started(),
+      { sessionUpdate: "current_mode_update", currentModeId: "plan" },
+      { sessionUpdate: "current_mode_update", currentModeId: "plan" },
+    );
+    expect(view.modes?.currentModeId).toBe("plan");
+    expect(view.items.filter((item) => item.kind === "notice")).toHaveLength(1);
+  });
+
+  it("config_option_update is followed only with a catalog", () => {
+    const view = run(started(), {
+      sessionUpdate: "config_option_update",
+      configOptions: [],
+    });
+    expect(view.models).toBeNull();
+  });
+
+  it("usage_update keeps the cost", () => {
+    const view = run(started(), {
+      sessionUpdate: "usage_update",
+      used: 5,
+      size: 10,
+      cost: { amount: 0.25, currency: "USD" },
+    });
+    expect(view.usage).toEqual({
+      used: 5,
+      size: 10,
+      cost: { amount: 0.25, currency: "USD" },
+    });
+  });
+
+  it("available_commands_update replaces the slash commands", () => {
+    const view = run(started(), {
+      sessionUpdate: "available_commands_update",
+      availableCommands: [{ name: "review", description: "r" }, { bad: 1 }],
+    });
+    expect(view.commands).toEqual([{ name: "review", description: "r" }]);
+  });
+
+  it("session_info_update records the title, not an item", () => {
+    const view = run(started(), {
+      sessionUpdate: "session_info_update",
+      title: "Fix config",
+    });
+    expect(view.title).toBe("Fix config");
+    expect(view.items).toHaveLength(1);
+    expect(
+      run(view, { sessionUpdate: "session_info_update", title: null }).title,
+    ).toBeNull();
   });
 });
 
 describe("endTurn", () => {
-  it("marks refusals and errors as failed but not a cancel", () => {
+  it("marks only errors as failed; limits, refusals and cancels end with a stop row", () => {
     const started = beginTurn(EMPTY_SESSION, "x");
-    expect(endTurn(started, { stopReason: "refusal" }).failed).toBe(true);
     expect(
       endTurn(started, { error: { code: "acp_protocol", message: "" } }).failed,
     ).toBe(true);
-    expect(endTurn(started, { stopReason: "cancelled" }).failed).toBe(false);
+    for (const stopReason of [
+      "max_tokens",
+      "max_turn_requests",
+      "refusal",
+      "cancelled",
+    ] as const) {
+      const ended = endTurn(started, { stopReason });
+      expect(ended.failed).toBe(false);
+      expect(ended.items.at(-1)).toMatchObject({
+        kind: "stop",
+        stopReason,
+        turn: started.turn,
+      });
+    }
+    // 正常说完不画。
+    expect(endTurn(started, { stopReason: "end_turn" }).items).toEqual(
+      started.items,
+    );
   });
 });
 
@@ -213,6 +371,100 @@ describe("fromLog", () => {
     const tool = view.items[2] as Extract<AcpItem, { kind: "tool" }>;
     expect(tool.call.status).toBe("completed");
     expect(tool.call.rawOutput).toBe("body");
+  });
+});
+
+describe("fromLog with the session-view blocks (§49)", () => {
+  it("rebuilds images, links, tool kinds, locations, failures and diffs", () => {
+    const view = fromLog([
+      {
+        role: "user",
+        blocks: [{ type: "text", text: "draw" }],
+        endOffset: 1,
+        at: "2026-10-07T06:00:00.000Z",
+      },
+      {
+        role: "assistant",
+        blocks: [
+          { type: "image", mimeType: "image/png", dropped: true },
+          { type: "resource_link", uri: "file:///repo/a.md", name: "a.md" },
+        ],
+        endOffset: 2,
+      },
+      {
+        role: "assistant",
+        blocks: [
+          {
+            type: "tool_use",
+            name: "Edit a.ts",
+            id: "t1",
+            kind: "edit",
+            locations: [{ path: "/repo/a.ts" }],
+          },
+        ],
+        endOffset: 3,
+      },
+      {
+        role: "user",
+        blocks: [
+          {
+            type: "tool_result",
+            id: "t1",
+            content: "no",
+            status: "failed",
+            diffs: [{ path: "/repo/a.ts", oldText: "a", newText: "b" }],
+          },
+        ],
+        endOffset: 4,
+      },
+    ]);
+    expect(view.items[0]).toMatchObject({
+      role: "user",
+      at: "2026-10-07T06:00:00.000Z",
+    });
+    expect(view.items[1]).toMatchObject({
+      role: "assistant",
+      text: "",
+      attachments: [
+        { type: "image", mimeType: "image/png", dropped: true },
+        { type: "resource_link", uri: "file:///repo/a.md", name: "a.md" },
+      ],
+    });
+    const tool = view.items[2] as Extract<AcpItem, { kind: "tool" }>;
+    expect(tool.call).toMatchObject({
+      kind: "edit",
+      status: "failed",
+      locations: [{ path: "/repo/a.ts" }],
+      content: [
+        { type: "diff", path: "/repo/a.ts", oldText: "a", newText: "b" },
+      ],
+    });
+  });
+
+  it("hydrates the snapshot: plan, usage, commands and title", () => {
+    useAcpStore.getState().reset();
+    useAcpStore.getState().hydrate("s1", "n1", {
+      entries: [
+        { role: "user", blocks: [{ type: "text", text: "go" }], endOffset: 1 },
+      ],
+      endOffset: 1,
+      turns: [{ turnId: "1-1", state: "running" }],
+      snapshot: {
+        plan: [{ content: "a" }],
+        usage: { used: 1, size: 2 },
+        availableCommands: [{ name: "init", description: "" }],
+        title: "T",
+      },
+    });
+    const view = useAcpStore.getState().sessions[scoped("s1")]!;
+    expect(view).toMatchObject({
+      plan: [{ content: "a" }],
+      planTurn: 1,
+      planSettled: false,
+      usage: { used: 1, size: 2 },
+      commands: [{ name: "init", description: "" }],
+      title: "T",
+    });
   });
 });
 
@@ -356,7 +608,11 @@ describe("turn reconciliation (§39.9)", () => {
         stopReason: "refusal",
       },
     ]);
-    expect(refused).toMatchObject({ failed: true, undelivered: false });
+    expect(refused).toMatchObject({ failed: false, undelivered: false });
+    expect(refused.items.at(-1)).toMatchObject({
+      kind: "stop",
+      stopReason: "refusal",
+    });
   });
 
   it("keeps a queued or running turn streaming and its prompt drawn once", () => {

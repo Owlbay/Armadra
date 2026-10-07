@@ -197,7 +197,7 @@ function originOf(source: ContentSource): Origin | null {
 
 /** 节点类型的落点：以「来源右侧」为锚点，压住别的节点就按 32px 让开。 */
 function nodeAt(
-  type: "sticky" | "editor",
+  type: "sticky" | "editor" | "diff",
   origin: Position,
   index = 0,
 ): Position {
@@ -245,6 +245,33 @@ export function exportSticky(
     const created = store.addNode("sticky", {
       position: nodeAt("sticky", origin.topLeft),
       data: { kind: "sticky", content, source },
+    });
+    if (created) store.addEdge(created, source.nodeId);
+    return created;
+  });
+  if (!id) return null;
+  revealCreatedNode(id);
+  flashNodes([id]);
+  return { nodeIds: [id], itemIds: [] };
+}
+
+/**
+ * 工具调用里的一处文件差异 → 变更节点（只看这一个文件的工作区差异）+ 一条
+ * `link` 边连回来源 Agent，一条历史（ACP 会话视图 §5.2「落为变更节点」）。
+ * `path` 是工作区相对路径；不在工作区里的文件没有这一项。
+ */
+export function exportDiff(
+  path: string,
+  source: ContentSource,
+): ExportResult | null {
+  const origin = originOf(source);
+  const root = useCanvasStore.getState().workspace?.rootPath;
+  if (!origin || !root) return null;
+  const id = asOneStep("acp.diff.toNode", () => {
+    const store = useCanvasStore.getState();
+    const created = store.addNode("diff", {
+      position: nodeAt("diff", origin.topLeft),
+      data: { kind: "diff", repoPath: root, scope: "worktree", paths: [path] },
     });
     if (created) store.addEdge(created, source.nodeId);
     return created;
