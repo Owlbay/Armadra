@@ -24,9 +24,15 @@ async function fixture() {
 }
 
 function ask(socketPath: string, input: unknown, headers = {}) {
+  const label = `${JSON.stringify(input)?.length ?? 0}B ${JSON.stringify(headers)}`;
   return new Promise<{ status: number; body: any }>((resolve, reject) => {
     const call = request(
-      { socketPath, path: CONTROLLER_PATH, method: "POST", headers },
+      {
+        socketPath,
+        path: CONTROLLER_PATH,
+        method: "POST",
+        headers,
+      },
       (response) => {
         const chunks: Buffer[] = [];
         response.on("data", (chunk) => chunks.push(chunk));
@@ -38,7 +44,12 @@ function ask(socketPath: string, input: unknown, headers = {}) {
         );
       },
     );
-    call.on("error", reject);
+    // A socket error after the response (the request no longer listens) must
+    // not become an uncaught exception; errors before it still reject below.
+    call.on("socket", (socket) => socket.on("error", () => {}));
+    call.on("error", (error) =>
+      reject(new Error(`${label}: ${error.message}`, { cause: error })),
+    );
     call.end(JSON.stringify(input));
   });
 }
@@ -98,6 +109,17 @@ if (process.platform !== "win32") {
     expect(
       (await ask(socket, input, { Origin: "http://localhost" })).status,
     ).toBe(403);
+    // Rejected before the body is read: the body is still drained, so the
+    // client reads the 403 rather than failing its write.
+    expect(
+      (
+        await ask(
+          socket,
+          { ...input, params: { text: "a".repeat(200_000) } },
+          { Origin: "http://localhost" },
+        )
+      ).status,
+    ).toBe(403);
     expect(
       (await ask(socket, { ...input, method: "shell.exec" })).body.error.code,
     ).toBe("unknown_method");
@@ -106,5 +128,8 @@ if (process.platform !== "win32") {
       (await ask(socket, { ...input, params: { text: "a".repeat(270_000) } }))
         .status,
     ).toBe(413);
+    await expect(
+      ask(socket, { ...input, params: { text: "a".repeat(1_200_000) } }),
+    ).rejects.toThrow();
   });
 }

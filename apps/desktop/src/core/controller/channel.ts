@@ -66,6 +66,28 @@ export async function startControllerChannel(
   };
 }
 
+const DRAIN_BYTES = CONTROLLER_LIMITS.bodyBytes * 4;
+
+/**
+ * Reads and discards what is left of the request body, up to `DRAIN_BYTES`, so
+ * the client finishes writing before it reads an early rejection; answering
+ * mid-upload races the client's write and surfaces as EPIPE instead of the
+ * reply. Returns false when the body is too large or the stream failed.
+ */
+async function drain(request: IncomingMessage): Promise<boolean> {
+  if (request.readableEnded) return true;
+  let seen = 0;
+  try {
+    for await (const chunk of request) {
+      seen += (chunk as Buffer).length;
+      if (seen > DRAIN_BYTES) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function handle(
   options: ControllerChannelOptions,
   request: IncomingMessage,
@@ -116,10 +138,16 @@ async function handle(
     let length = 0;
     for await (const chunk of request) {
       length += chunk.length;
-      if (length > CONTROLLER_LIMITS.bodyBytes)
-        throw new ControllerError("body_limit", "Request exceeds 256 KiB", 413);
-      chunks.push(Buffer.from(chunk));
+      // Keep reading an oversized body (see `drain`) before answering 413.
+      if (length > DRAIN_BYTES) {
+        response.destroy();
+        return;
+      }
+      if (length <= CONTROLLER_LIMITS.bodyBytes)
+        chunks.push(Buffer.from(chunk));
     }
+    if (length > CONTROLLER_LIMITS.bodyBytes)
+      throw new ControllerError("body_limit", "Request exceeds 256 KiB", 413);
     let raw: unknown;
     try {
       raw = JSON.parse(Buffer.concat(chunks).toString());
@@ -157,6 +185,10 @@ async function handle(
     const data = await options.dispatch(parsed.data, credential, abort.signal);
     answer(200, { schemaVersion: 1, ok: true, requestId, data });
   } catch (error) {
+    if (!(await drain(request))) {
+      response.destroy();
+      return;
+    }
     const failure =
       error instanceof ControllerError
         ? error
