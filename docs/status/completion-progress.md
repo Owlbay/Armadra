@@ -3066,3 +3066,32 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - Windows `soak` 的 powershell 偶发无回显只见过一次，没有证据指向产品问题，没改。
 
 接口：无变化。页面只多一个 `data-connect-method="link"` 标记（给真机 UI 用例用）。
+
+## C ACP 会话视图的展示与动作（契约 §49，协议 1.23）
+
+会话视图按 ACP 的内容类型逐类补上展示与操作，并修「会话里什么都点不了 / 选不了」。
+
+- **根因**（在浏览器里核实）：按钮的点击本身能到，问题是 React Flow 给 `.react-flow__node` 的 `user-select: none` 让整块会话的字选不中、复制不了，而且会话里除了展开工具行几乎没有可点的东西；手形工具开着时在会话里拖动会平移画布。会话视图根上加 `select-text nopan nodrag nowheel`，`ExportMenu` 不再包住正文，只是消息工具条里的一个 `⋯`。
+- **页面**（`apps/web/src/acp/*`）：回合分组与时间；消息工具条（复制、编辑后重发、重新发送、重新生成、输出到画板），代码块单独复制；图片缩略图与资源链接（工作区内文件开编辑器、`http(s)` 开浏览器节点、其余只复制）；思考的流式指示与 40 字摘要；工具行 `completed` 改 `done` 胶囊、文件胶囊（≤2 + `+N`，工作区内的点了跳行）、复制入参 / 输出 / 命令、失败时「让它重试」；差异块复制补丁 / 路径、落为变更节点（`exportDiff`，一条历史）、超过 200 行折到 60 行；计划卡（回合结束自动折叠，图标 + 读屏文字）；模式切换行；`max_tokens` / `max_turn_requests` / `refusal` / `cancelled` 的回合尾行（`refusal` 不再算失败，只有协议错误进「这一轮没有完成」）；权限卡「详情」（差异、入参前 20 行、文件），钉住时焦点落到第一枚允许钮、人在输入时不抢、Esc 不答；输入框斜杠命令列表、上下文用量（≥90% 警示色）、编辑后回填。重发走同一条 `send`：只有「没送达」的那一轮沿用 `clientTurnId`（§39.9），跑完的回合重发换新 id。消息区 `role="log"` 不逐块念，回合结束时把最后一条回复放进 `role="status"`。
+- **core**：镜像多记 `image`（base64 超 512 KiB 只记 `dropped`）、`resource_link`、工具结果的 `diffs` / `status: "failed"`、`tool_use` 的 `kind` / `locations`；只有 `acp.log` 以 rich 读法拿到，连线读取与摘要照旧。`acp.log` 出参多 `snapshot`（计划、用量、斜杠命令、标题），条件与 `pending` 相同。
+
+实测：
+
+- 隔离数据目录 + 临时 HOME 起 core 与 Vite，用假 ACP Agent 在浏览器里点：字可选（选择模式与手形工具下都是选字、视口不动）、编辑后重发回填、停止后「已停止 · 重新发送」、计划卡与用量、重载后计划 / 用量 / 工具种类与文件胶囊 / 失败状态都在。
+- `acp-e2e.mjs` 新增 3b（展开工具行、复制入参写进剪贴板、根上 `user-select: text` 与 `nopan`、计划卡、失败胶囊）全过；唯一失败是第 5 步「终端里敲了恢复行」：worktree 路径更长，`fake-agent-main` 在 xterm 里折行被拆开，与本包无关。
+- `design-showcase.mjs --only=acp` 两主题 × 1440 / 1024 / 390，对比度与控制台检查过。
+- 新增 / 扩充用例：`store.test.ts`（十种 update、附件、计划折叠、快照）、`MessageList.test.tsx`、`ToolCallRow.test.tsx`、`DiffBlock.test.tsx`、`PermissionCard.test.tsx`、`PromptBox.test.tsx`、`SessionView.test.tsx`（四种停止原因各一行、根类名、`/` 命令、快照恢复）、`open-link.test.ts`；core `mirror.test.ts`、`session.test.ts`、`routes.test.ts`（`snapshot`）。
+
+没做 / 偏离：
+
+- 经中继看别人 core 时节点头的「源名」徽标没做：它在 `HeaderChips` / `TerminalNode`（包 B 与节点文件），超出本包文件边界；`acp.source.remote` 文案也就没加。
+- `session_info_update` 的标题只记在 store（`view.title`），没接到节点命名建议（同样在 `nodes/*`）。
+- 回合尾的停止行与模式切换行不进镜像，重载或断线重读后不再画；重载后计划卡画在最后一回合（快照不知道它属于哪一回合）。
+- 镜像的读写改了 `core/acp/mirror.ts` 与 `core/history/acp-mirror.ts`（设计写的是 `session.ts`，实际写镜像的在这两处）。
+- 没改全局 `PROTOCOL_MINOR`（仍 21）；§49 写「自协议 1.23 起」，由最后合入的包统一改。
+
+接口：
+
+- 契约 §49；`acpTranscriptBlockSchema` 多 `image` / `resource_link` 两种块，`tool_use.kind?` / `locations?`，`tool_result.status?` / `diffs?`；`acpLogResponseSchema.snapshot?: AcpLogSnapshot`；新导出 `acpUsageSchema`、`acpAvailableCommandSchema`、`acpLogSnapshotSchema`。
+- core：`AcpSession.snapshot()`、`AcpMirror.read()` 返回 `MirrorEntry`；`readMirrorEntries(path, from, max, { rich: true })`。
+- 页面：`PromptBox` 新增可选 `commands` / `usage` / `prefill`，`PermissionCard` 新增 `pinned`，`MessageList` 新增 `plan` / `actions`，`ExportMenu` 不再收 `children`（改为工具条按钮）。
