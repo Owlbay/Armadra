@@ -222,5 +222,5 @@ real-acceptance-preflight.json。没有修改业务实现、凭据或权限，�
 ### 合并后 main CI 修复（2026-10-07）
 
 - Windows：`RunService.start` 在 win32 按设计返回 `unsupported_platform`，而 `runs/service.test.ts` 的编排用例未区分宿主，15 条在 Windows 全部失败。`RunServiceOptions` 增加可注入的 `platform`（缺省 `process.platform`，生产行为不变），编排用例注入 `linux`（终端为桩，与宿主无关）；新增用例在注入 `win32` 时断言拒绝且不写 `runs`。
-- Linux：`controller/channel.test.ts` 的超限请求在 413 响应后，客户端未写完的请求体可能因服务端关闭连接报 `EPIPE`；此时请求已不再监听 socket，错误成为未捕获异常，使整次测试失败。测试客户端改为 `agent: false` 并只吞掉响应之后的 socket 错误（响应前的错误仍使用例失败）；服务端超限时设 `shouldKeepAlive = false`，不复用未读完请求体的连接。断言未改。CLI 客户端发送前已按 256 KiB 拒绝，不受影响。
+- Linux：`controller/channel.test.ts` 的超限请求，服务端读到 256 KiB 即回 413 并丢弃请求流，客户端尚未写完的请求体随连接关闭报 `EPIPE`，成为未捕获异常（首版改为超限即关连接后，macOS CI 在收到 413 前就报 `EPIPE`，证实是写入竞争）。服务端改为超限后继续读完并丢弃请求体再回 413，超过 4 倍上限才直接断开；测试客户端改用 `agent: false`，响应之后的 socket 错误不再成为未捕获异常。原 413 断言未改，新增超过排空上限时连接被断开的断言。CLI 客户端发送前已按 256 KiB 拒绝，不受影响。
 - 本机：`pnpm check` 通过；desktop 5,318 passed / 74 skipped。三平台结果以 PR CI 为准。

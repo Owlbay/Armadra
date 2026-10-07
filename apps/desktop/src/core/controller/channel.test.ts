@@ -44,10 +44,8 @@ function ask(socketPath: string, input: unknown, headers = {}) {
         );
       },
     );
-    // The server answers 413 without reading the rest of an oversized body and
-    // then closes; the client's unfinished write may fail with EPIPE after the
-    // response already arrived, when the request no longer listens. Errors before
-    // a response still reject through the request below.
+    // A socket error after the response (the request no longer listens) must
+    // not become an uncaught exception; errors before it still reject below.
     call.on("socket", (socket) => socket.on("error", () => {}));
     call.on("error", reject);
     call.end(JSON.stringify(input));
@@ -117,5 +115,8 @@ if (process.platform !== "win32") {
       (await ask(socket, { ...input, params: { text: "a".repeat(270_000) } }))
         .status,
     ).toBe(413);
+    await expect(
+      ask(socket, { ...input, params: { text: "a".repeat(1_200_000) } }),
+    ).rejects.toThrow();
   });
 }

@@ -116,13 +116,18 @@ async function handle(
     let length = 0;
     for await (const chunk of request) {
       length += chunk.length;
-      if (length > CONTROLLER_LIMITS.bodyBytes) {
-        // The rest of the body stays unread; never reuse this connection.
-        response.shouldKeepAlive = false;
-        throw new ControllerError("body_limit", "Request exceeds 256 KiB", 413);
+      // Drain a moderately oversized body so the client finishes writing and
+      // reads the 413; answering mid-upload races the client's write (EPIPE).
+      // Beyond the drain cap, drop the connection instead.
+      if (length > CONTROLLER_LIMITS.bodyBytes * 4) {
+        response.destroy();
+        return;
       }
-      chunks.push(Buffer.from(chunk));
+      if (length <= CONTROLLER_LIMITS.bodyBytes)
+        chunks.push(Buffer.from(chunk));
     }
+    if (length > CONTROLLER_LIMITS.bodyBytes)
+      throw new ControllerError("body_limit", "Request exceeds 256 KiB", 413);
     let raw: unknown;
     try {
       raw = JSON.parse(Buffer.concat(chunks).toString());
