@@ -8,6 +8,18 @@ import { useCanvasStore } from "@/store/canvas-store";
 import type { SurfaceRefs } from "./refs";
 import type { ConnectionStatus } from "./types";
 
+/**
+ * 被另一端叫醒、本地还是休眠占位的那几个表面：下一次连接不必清屏（ui-acp-refresh §7.3
+ * E-4）。只认 tmux——它 attach 时自己整屏重绘；direct 会补发 snapshot，不清屏
+ * 就会叠一份。
+ */
+const wokenElsewhere = new WeakSet<SurfaceRefs>();
+
+/** 连接前问一次：这次能不能不清屏。问过即作废。 */
+export function takeWakeWithoutReset(refs: SurfaceRefs): boolean {
+  return wokenElsewhere.delete(refs);
+}
+
 export interface Hibernation {
   /** 这个节点的会话在节能休眠：不连 socket，等人唤醒。 */
   enter: (sessionId: string) => void;
@@ -93,7 +105,9 @@ export function useHibernation(
             if (sleeping) patch({ hibernation: "resuming" });
             return;
           case "running":
-            if (sleeping) awake(event.sessionId);
+            if (!sleeping) return;
+            if (refs.backendRef.current === "tmux") wokenElsewhere.add(refs);
+            awake(event.sessionId);
             return;
           case "failed":
             if (sleeping) patch({ hibernation: "failed" });

@@ -43,6 +43,7 @@ import {
 import { IconButton } from "@/ui/icon-button";
 import { cn } from "@/lib/cn";
 import { Button } from "@/ui/button";
+import { useCompactLayout } from "@/platform/layout";
 
 /** 分区 id → 页面。顺序由 `nav.ts` 决定，这里只管挂组件。 */
 const SECTION_PAGES: Record<string, () => React.ReactElement> = {
@@ -69,6 +70,25 @@ const SECTION_PAGES: Record<string, () => React.ReactElement> = {
 };
 
 /**
+ * 弹窗尺寸（设计系统 §2.7）。桌面按视口比例取 `--settings-dialog-w/h`，再夹进
+ * 视口减 48px 与安全区；平板（768–1023）满宽减 32、满高减 48。
+ */
+export const SETTINGS_DIALOG_CLASS = cn(
+  "h-[var(--settings-dialog-h)] w-[var(--settings-dialog-w)]",
+  "max-h-[calc(100dvh-48px-var(--safe-top)-var(--safe-bottom))]",
+  "max-w-[calc(100vw-48px-var(--safe-left)-var(--safe-right))] sm:max-w-[calc(100vw-48px-var(--safe-left)-var(--safe-right))]",
+  "max-lg:h-[calc(100dvh-48px-var(--safe-top)-var(--safe-bottom))] max-lg:w-[calc(100vw-32px)]",
+  "max-lg:max-w-[calc(100vw-32px)] max-lg:sm:max-w-[calc(100vw-32px)]",
+);
+
+/**
+ * 手机底部 Sheet 取整高：有左导航，`auto` 高度会让导航与正文抢高度。带
+ * `data-[side=bottom]:` 是为了压过 Sheet 自己那条同变体的 `h-auto`。
+ */
+export const SETTINGS_SHEET_CLASS =
+  "data-[side=bottom]:h-[calc(100dvh-48px-var(--safe-top))]";
+
+/**
  * 设置（⌘,，§24.1）。
  *
  * Codex 桌面端的分栏设置：居中对话框，左 200px 导航，右侧是**当前分区独立的
@@ -78,6 +98,7 @@ const SECTION_PAGES: Record<string, () => React.ReactElement> = {
  */
 export function SettingsDialog() {
   const t = useT();
+  const compact = useCompactLayout();
   const open = useCanvasStore((state) => state.panels.settings);
   const setPanel = useCanvasStore((state) => state.setPanel);
   const closeSubpage = usePreferencesStore((state) => state.setSettingsSubpage);
@@ -93,7 +114,11 @@ export function SettingsDialog() {
     >
       <ResponsiveDialogContent
         showCloseButton={false}
-        className="z-[var(--z-dialog)] h-[680px] max-h-[calc(100dvh-48px-var(--safe-top)-var(--safe-bottom))] w-[920px] max-w-[calc(100vw-48px-var(--safe-left)-var(--safe-right))] gap-0 overflow-hidden rounded-[14px] p-0 sm:max-w-[calc(100vw-48px-var(--safe-left)-var(--safe-right))]"
+        data-testid="settings-dialog"
+        className={cn(
+          "z-[var(--z-dialog)] gap-0 overflow-hidden rounded-[14px] p-0",
+          compact ? SETTINGS_SHEET_CLASS : SETTINGS_DIALOG_CLASS,
+        )}
       >
         <ResponsiveDialogTitle className="sr-only">
           {t("settings.title")}
@@ -134,7 +159,7 @@ function SettingsBody({ onClose }: { onClose: () => void }) {
     <div className="settings-layout flex h-full min-h-0 flex-row">
       <nav
         aria-label={t("settings.title")}
-        className="settings-navigation flex h-full w-[200px] shrink-0 flex-col gap-3 overflow-y-auto border-r border-border bg-panel p-3"
+        className="settings-navigation flex h-full w-[200px] shrink-0 max-lg:w-[176px] flex-col gap-3 overflow-y-auto border-r border-border bg-panel p-3"
       >
         {groups.map((group) => (
           <div key={group.groupKey} className="flex flex-col gap-0.5">
@@ -179,9 +204,15 @@ function SettingsBody({ onClose }: { onClose: () => void }) {
           key={subpage ?? active}
           data-testid="settings-page"
           data-section={active}
-          className="settings-page flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-6 pt-5 pb-8 duration-150 animate-in fade-in motion-reduce:animate-none"
+          className="settings-page flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pt-5 pb-8 duration-150 animate-in fade-in motion-reduce:animate-none"
         >
-          <Page />
+          {/* 正文列封顶 960 且靠左：弹窗再宽，阅读起点也不漂。 */}
+          <div
+            data-slot="settings-column"
+            className="flex w-full max-w-[960px] flex-col gap-6"
+          >
+            <Page />
+          </div>
         </div>
       </div>
     </div>

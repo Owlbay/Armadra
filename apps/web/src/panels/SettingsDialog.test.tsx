@@ -48,7 +48,7 @@ import { installDomPolyfills, TestProviders } from "../app/test-harness";
 import { usePreferencesStore } from "../app/preferences-store";
 import { useCanvasStore } from "../store/canvas-store";
 import { translate } from "../i18n";
-import { SettingsDialog } from "./SettingsDialog";
+import { SETTINGS_SHEET_CLASS, SettingsDialog } from "./SettingsDialog";
 import { visibleSettingsSections } from "./settings/nav";
 
 installDomPolyfills();
@@ -205,6 +205,29 @@ describe("SettingsDialog", () => {
         quickOpen: false,
       },
     });
+  });
+
+  it("弹窗按视口比例取尺寸，正文列封顶 960（设计系统 §2.7）", async () => {
+    open();
+    await screen.findByText(zh("settings.theme"));
+    const dialog = screen.getByTestId("settings-dialog");
+    expect(dialog.className).toContain("w-[var(--settings-dialog-w)]");
+    expect(dialog.className).toContain("h-[var(--settings-dialog-h)]");
+    expect(dialog.className).toContain(
+      "max-h-[calc(100dvh-48px-var(--safe-top)-var(--safe-bottom))]",
+    );
+    expect(dialog.className).toContain("max-lg:w-[calc(100vw-32px)]");
+    expect(dialog.className).not.toContain("w-[920px]");
+    const column = screen
+      .getByTestId("settings-page")
+      .querySelector('[data-slot="settings-column"]') as HTMLElement;
+    expect(column.className).toContain("max-w-[960px]");
+  });
+
+  it("手机底部 Sheet 取整高，压过 Sheet 自己的 h-auto", () => {
+    expect(SETTINGS_SHEET_CLASS).toBe(
+      "data-[side=bottom]:h-[calc(100dvh-48px-var(--safe-top))]",
+    );
   });
 
   it("导航列出注册表里的每个分区，且没有搜索框", async () => {

@@ -138,6 +138,7 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
     }
     args.push("--", executable(spec), ...spec.args);
     await this.control.run(args);
+    await this.pinWindow(name);
     await this.control.stampServer(coreFingerprint(this.options.version));
 
     this.sessions.set(spec.sessionKey, {
@@ -171,7 +172,26 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
       clients: new Map(),
       inCopyMode: false,
     });
+    // A session from an older build still follows its latest client.
+    await this.pinWindow(name);
     return this.control.panePid(name);
+  }
+
+  /**
+   * `window-size manual` on this one window: only {@link resize} moves it from
+   * now on, never a client attaching or resizing. Per window rather than in
+   * the conf, because a global `manual` makes tmux 3.4 exit on the first
+   * detached `new-session`.
+   */
+  private async pinWindow(name: string): Promise<void> {
+    await this.control.tryRun([
+      "set-option",
+      "-w",
+      "-t",
+      name,
+      "window-size",
+      "manual",
+    ]);
   }
 
   /**
@@ -390,19 +410,41 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
   }
 
   /**
-   * `window-size latest` makes the pane follow whichever client last moved, so
-   * resizing the client ptys is all that is needed.
+   * The window, set explicitly: the window is pinned to `manual`
+   * ({@link pinWindow}), so no client moves it by attaching or resizing, the
+   * program inside sees one SIGWINCH per decision of the manager and the other
+   * viewers are not redrawn.
    */
   async resize(key: SessionKey, size: TerminalSize): Promise<void> {
     const session = this.require(key);
-    const cols = Math.max(2, Math.trunc(size.cols));
-    const rows = Math.max(2, Math.trunc(size.rows));
-    for (const client of session.clients.values()) {
-      try {
-        client.pty?.resize(cols, rows);
-      } catch {
-        // A client that died between the lookup and the call.
-      }
+    await this.control.run([
+      "resize-window",
+      "-t",
+      session.name,
+      "-x",
+      String(Math.max(2, Math.trunc(size.cols))),
+      "-y",
+      String(Math.max(2, Math.trunc(size.rows))),
+    ]);
+  }
+
+  /**
+   * One viewer's own client pty. tmux crops a window larger than the client
+   * and leaves the rest of a larger client empty; nobody else is redrawn.
+   */
+  async resizeViewer(
+    key: SessionKey,
+    attachmentId: number,
+    size: TerminalSize,
+  ): Promise<void> {
+    const client = this.require(key).clients.get(attachmentId);
+    try {
+      client?.pty?.resize(
+        Math.max(2, Math.trunc(size.cols)),
+        Math.max(2, Math.trunc(size.rows)),
+      );
+    } catch {
+      // A client that died between the lookup and the call.
     }
   }
 
