@@ -82,6 +82,7 @@ import {
 } from "./tools";
 import { DANGER_ACTION_CLASS } from "@/lib/danger-action";
 import { MAX_ZOOM, MIN_ZOOM } from "./zoom";
+import { tidySelection } from "./tidy-flow";
 import { isZoomWheel, zoomCanvasByWheel } from "./interaction/wheel-zoom";
 
 /**
@@ -144,6 +145,16 @@ function onBoardOpened(document: BoardDocument): void {
 }
 
 const ATTRIBUTION = { hideAttribution: true } as const;
+
+/** 整理的过渡时长（`--dur-page` 220ms）加一点余量，之后撤掉 `data-tidying`。 */
+const TIDY_TRANSITION_MS = 260;
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
 
 /**
  * **画布自己订阅，不跟着应用壳重渲。**
@@ -307,19 +318,33 @@ function FlowWorkspaceInner() {
       };
     }
 
+    let tidyTimer = 0;
+
     return registerCanvasCommands({
       "canvas.undo": () => store().undo(),
       "canvas.redo": () => store().redo(),
       "canvas.tidy": () => {
         // 目标区域按当前视口的宽高比裹，排出来的矩形才贴合屏幕。
-        const rect = container.current?.getBoundingClientRect();
+        const stage = container.current;
+        const rect = stage?.getBoundingClientRect();
         const aspect =
           rect && rect.width > 0 && rect.height > 0
             ? rect.width / rect.height
             : undefined;
-        store().arrangeNodes({ aspect });
-        // 整理完 fitView：既然已经裹成一屏的形状，就让它真的落在一屏里。
-        window.requestAnimationFrame(fitView);
+        // 选区里有 ≥ 2 个顶层单元就只整理选中的（UI 设计 §6.5）。
+        const only = tidySelection(store());
+        // 过渡只在整理这一下打开（canvas.css），平时拖动不能带缓动。
+        if (stage && !prefersReducedMotion()) {
+          stage.dataset.tidying = "true";
+          window.clearTimeout(tidyTimer);
+          tidyTimer = window.setTimeout(() => {
+            delete stage.dataset.tidying;
+          }, TIDY_TRANSITION_MS);
+        }
+        store().arrangeNodes({ aspect, only });
+        // 整理全画布之后 fitView：既然已经裹成一屏的形状，就让它真的落在
+        // 一屏里。只整理选中时相机不动，免得把用户正看着的地方带走。
+        if (!only) window.requestAnimationFrame(fitView);
       },
       "canvas.fitView": fitView,
       "canvas.zoomIn": () => zoomByStep(1),

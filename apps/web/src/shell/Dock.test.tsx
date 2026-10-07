@@ -70,6 +70,27 @@ describe("Dock", () => {
     expect(await screen.findByText("新建终端")).toBeTruthy();
   });
 
+  it("选区有 ≥ 2 个顶层单元时「整理」改叫「整理选中」", () => {
+    useCanvasStore.setState({ selectedNodeIds: ["a"], selectedItemIds: [] });
+    const { rerender } = render(
+      <TestProviders>
+        <Dock />
+      </TestProviders>,
+    );
+    expect(screen.getByLabelText("一键整理")).toBeTruthy();
+    useCanvasStore.setState({
+      selectedNodeIds: ["a"],
+      selectedItemIds: ["wb:b"],
+    });
+    rerender(
+      <TestProviders>
+        <Dock />
+      </TestProviders>,
+    );
+    expect(screen.getByLabelText("整理选中")).toBeTruthy();
+    useCanvasStore.setState({ selectedNodeIds: [], selectedItemIds: [] });
+  });
+
   it("撤销/重做在画布未挂载时禁用", () => {
     render(
       <TestProviders>
