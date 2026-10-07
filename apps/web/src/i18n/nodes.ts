@@ -13,6 +13,7 @@ const zh = {
   "node.group": "分组",
   "node.editor": "编辑器",
   "node.diff": "变更",
+  "node.menu.spawnAgent": "派生 Agent…", // i18n-exempt
   "node.files": "文件",
   "node.browser": "浏览器",
   "node.automation": "定时计划",
@@ -139,6 +140,7 @@ const en: Record<keyof typeof zh, string> = {
   "node.group": "Group",
   "node.editor": "Editor",
   "node.diff": "Diff",
+  "node.menu.spawnAgent": "Spawn agent…",
   "node.files": "Files",
   "node.browser": "Browser",
   "node.automation": "Scheduled plan",

@@ -3117,3 +3117,35 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 代码注释里的 `ui-acp-refresh §7.3 E-1…E-4` 指向本轮 UI / ACP 设计文档，若该文档最终不进仓库需要改成本节。
 
 接口：无契约变化。终端 WS（不在契约里）：`hello` 的 `cols/rows` 改为这一端自己的起始尺寸（未给尺寸时等于当前窗口）；resize 帧只作用于发出它的连接。页面：`onIdentitySessionChange(listener: (change: IdentityChange) => void)`，新增导出 `IdentityChange`。core：`TerminalManager.attach(sessionId, size?, writer?)` 返回多一个 `size`，`resize(…, attachmentId?)`，新增 `noteViewerInput`、`windowOf`；观看者与窗口规则在新文件 `core/terminal/viewers.ts`（纯函数 `windowSizeOf`、`TerminalWindows`）；`TerminalBackend.resizeViewer?`。`manager.ts` 的公开类型挪到 `manager-types.ts`（`manager.ts` 照旧全部再导出），否则超过仓库 1500 行的上限。
+
+## 包 A 集成页重设计、适配器与 CLI 代装、在画布中创建 Agent（契约 §47 §48）
+
+设计：[界面与 ACP 刷新](../design/ui-acp-refresh.md) §1、§2（本包把设计文档收进仓库）。
+
+做了什么：
+
+- **代装两张白名单（§47）**：`agents.installAdapter` 入参加 `target?: "adapter" | "cli"`（缺省 `adapter`）与 `rollback?`；`AGENT_CLI_PACKAGES` 补齐七家 CLI 包（claude / codex / opencode / pi / omp / copilot / ama），删掉 omp「没有公开 npm 包」的过时注释。任务键 `${agentId}:${target}`，同一家另一样在装答 409 `adapter_install_busy`。开始前用同一个 npm 跑 `npm ls --global --depth=0 --json <包>` 记 `previousVersion`；`rollback` 装回 `<包>@<previousVersion>`，没有就 409 `adapter_rollback_unavailable`。
+- **canvasAgents（§48）**：`agents.integration` 出参加 `canvasAgents: { terminal, acp, reasons }`，`core/hook/install/integration.ts::canvasAgentsOf` 纯函数按 CLI 在不在、Hook / 技能、启动器警告、ACP 程序、适配器 `canvasTools`、`AcpClient.features.mcpServers` 判。适配器表加 `canvasTools: "mcp" | "runners" | "none"`；pi 改 `none` 并 `injection.mcp: false`（不再给 pi-acp 带 `mcpServers`）。
+- **集成页**：一家一张 `SettingsGroup`（标题 CLI 名），行 CLI / ACP / 画布注入 / 在画布中创建 Agent / 本地历史；值是灰字不是徽标，正常时不出任何提示。CLI 与 ACP 各一个「安装 / 重新安装」（原生 ACP 的 ACP 行写「随 CLI」、无动作；`custom:` 只给「复制命令」）；失败时行下一条 `Alert`：「{包名} 没有装上」+ 重试 / 查看输出 / 恢复上一版本；没有 npm 时「没有找到 npm」+ 复制命令。注入行只在待更新 / 缺 Hook / 缺技能 / 注入受限时有值，旧残留是「修复 N」弹层（看清单再修）。「已清理全局安装」改成首次一条提示（`localStorage` 记已提示）。加载 >300ms 才出 `Skeleton`，空列表是 `Empty`。
+- **派生 Agent…**：Agent 节点 `···` 菜单多一项，打开同一个新建向导（`openSpawnAgentWizard(supervisorNodeId)`，标题「派生 Agent」），建好后 `addEdge` + `setEdgeRole("supervises")`，新节点放在主节点右侧（被占就往下错开）；节点与边在一次合并历史里，撤销一次全回。向导的直接安装钮在 CLI 没装时装 CLI。
+- 文案进 `i18n/integration.ts`（按设计 §1.5 重排，删掉 `mode.* / hook.revision / skill.revision / stale / launcherWarning / migrated / acp.missing…` 等不再用的键）与 `i18n/nodes.ts` 一个键；两个新错误码进注册表与 `i18n/errors.ts`。
+
+实测：
+
+- core：`adapter-install.test.ts`（CLI 表、任务键与 busy、记上一版本与回滚、`npm ls` 解析、procedure 的 `target`）、`integration.test.ts`（`canvasAgentsOf` 各分支、`state()` 在临时 PATH 上答 claude 全可用 / pi 会话视图受限）、`adapters.test.ts`（`canvasTools === "mcp"` ⇔ `injection.mcp`）、`mcp.test.ts`（pi 不带 MCP）。全部用假 runner / 假 npm，没有在本机执行 `npm i -g`。
+- 页面：`IntegrationPage.test.tsx`（五行、健康时没有徽标、历史值、修复弹层、注入受限与原因提示、原生「随 CLI」、CLI 安装）、`adapter-install.test.tsx`（两样各自安装、失败 Alert、查看输出、恢复上一版本带 `rollback`、没有 npm、向导装 CLI）、`NewAgentWizard.test.tsx`（派生：位置、主从边、一次撤销）、`terminal-menu.test.ts`、`SettingsDialog.test.tsx` 集成两例改新结构。
+- `design-showcase.mjs --only=integration --width=1440,390`：深浅两主题四张图，对比度通过，控制台无 error。
+- `pnpm libs:build && pnpm -r --if-present test`：shared 372、server 98、web 3945、desktop 5329 过；desktop 整套并行时 `parity-terminals` 的 afterAll 与 `hibernator.pty` 的 5 秒计时各超时一次（机器负载高），单独重跑两文件 19 条全过；desktop live 4 条、scripts 73 条过。`pnpm --filter @armadra/web typecheck`、`pnpm check` 过。
+
+没做 / 偏离：
+
+- `PROTOCOL_MINOR` 没改（由最后合入的包统一改到 22）；§47 沿用 §39.7 的两条 procedure，`since` 仍是 1.15，扩展字段写在 §47。
+- 文件边界外多动了几处（都是接线所需）：`packages/shared/src/api/agents.ts`（`integrationStateSchema.canvasAgents`）、`contract/errors.ts` 与 `apps/web/src/api/request.ts` / `i18n/errors.ts`（两个新码）、`apps/web/src/api/agents.ts`（`target` / `rollback` 入参，缺省不写 `target` 以兼容旧 core）、`core/acp/mcp.test.ts`（pi 不再带 MCP）、`panels/SettingsDialog.test.tsx` 两例（与包 B 同文件不同用例）、`i18n/showcase.ts` 一条展示页说明。
+- 远端执行主机上的代装、经中继看别人 core 时的安装（`available === false` 分支不出按钮）不在本包。`team` 不带 `--cwd / --resume` 仍是协调者设计剩余项。
+- 真实 npm 安装、真实 CLI 登录没有在本机跑（规矩不许）；需要用户在自己机器上点一次「安装 / 恢复上一版本」确认 npm 全局前缀落在 PATH 上。
+
+接口：
+
+- 契约 §47：`agents.installAdapter { agentId, reinstall?, target?, rollback? }`、`agents.adapterInstall { agentId, target? }`；任务多 `target`、`rollback?`、`previousVersion?`；错误码 `adapter_install_busy`(409)、`adapter_rollback_unavailable`(409)。共享层 `AGENT_CLI_PACKAGES`、`ADAPTER_INSTALL_TARGETS`、`installablePackage(agentId, target)`、`agentCliInstallable`、`acpInstallCommand(agentId, target?)`。
+- 契约 §48：`IntegrationState.canvasAgents`（共享层 `canvasAgentsSchema`）；core `AcpAdapter.canvasTools`、`canvasAgentsOf`。
+- 页面：`useInstallJob(agent, target)`、`InstallButton`、`InstallFailure`、`AgentIntegrationGroup`（取代 `AgentIntegrationRow`）、`openSpawnAgentWizard(nodeId)`、`spawnPosition(nodes, supervisorId)`。

@@ -112,6 +112,8 @@ const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   adapter_not_installable: "error.adapterNotInstallable",
   adapter_already_installed: "error.adapterAlreadyInstalled",
   npm_not_found: "error.npmNotFound",
+  adapter_install_busy: "error.adapterInstallBusy",
+  adapter_rollback_unavailable: "error.adapterRollbackUnavailable",
   UNAUTHENTICATED: "error.unauthenticated",
   PERMISSION_DENIED: "error.forbidden",
   NOT_FOUND: "error.notFound",

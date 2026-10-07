@@ -143,6 +143,12 @@ export const ERROR_CODES = {
     i18n: "error.adapterAlreadyInstalled",
   },
   npm_not_found: { status: 409, i18n: "error.npmNotFound" },
+  // 适配器与 CLI 的安装（契约 §47）：同一家另一样在装；没有可恢复的上一版本。
+  adapter_install_busy: { status: 409, i18n: "error.adapterInstallBusy" },
+  adapter_rollback_unavailable: {
+    status: 409,
+    i18n: "error.adapterRollbackUnavailable",
+  },
   // 工作空间文件（契约 §37）。
   /** 调用方断开了连接，还在跑的项目搜索停下（`files.search`）。没人读得到这个答案。 */
   cancelled: { status: 499 },

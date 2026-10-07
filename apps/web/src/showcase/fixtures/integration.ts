@@ -1,4 +1,6 @@
 import type {
+  AdapterInstallJob,
+  AdapterInstallTarget,
   AgentInfo,
   ExecutionHost,
   ExecutionHostHealth,
@@ -105,7 +107,11 @@ export const FLEET: ExecutionHost[] = [
 function cli(
   id: string,
   label: string,
-  acpInstalled: boolean | null,
+  acp: {
+    installed: boolean;
+    support?: "native" | "official" | "community";
+  } | null,
+  extra: Partial<AgentInfo> = {},
 ): AgentInfo {
   return {
     id,
@@ -118,16 +124,25 @@ function cli(
     resolvedPath: `/usr/local/bin/${id}`,
     installed: true,
     clientRevision: 3,
-    ...(acpInstalled === null
+    probe: {
+      agentId: id,
+      launchCmd: id,
+      version: "2.1.0",
+      status: "ok",
+      probedAt: at(0),
+    },
+    history: { index: "available", cost: "available", transcript: "available" },
+    ...(acp === null
       ? {}
       : {
           acp: {
-            support: "official",
-            program: `${id}-acp`,
-            installed: acpInstalled,
+            support: acp.support ?? "official",
+            program: acp.support === "native" ? id : `${id}-acp`,
+            installed: acp.installed,
             resume: "load",
           },
         }),
+    ...extra,
   } as AgentInfo;
 }
 
@@ -146,18 +161,34 @@ function state(
     launchArgs: [],
     launchEnv: [],
     globalWrites: [],
+    canvasAgents: { terminal: "available", acp: "available", reasons: [] },
     ...extra,
   } as IntegrationState;
 }
 
-/** 正常 · 版本过旧（带一台 Worker 待升级的主机）· 启动器异常 · ACP 未装。 */
+/** 一家一样东西的安装任务（展示页预先放进缓存，不去问 core）。 */
+export function idleJob(
+  agentId: string,
+  target: AdapterInstallTarget,
+): AdapterInstallJob {
+  return { agentId, target, state: "idle", package: agentId, output: [] };
+}
+
+/**
+ * 正常 · 版本过旧（带一台 Worker 待升级的主机）· 原生 ACP、启动器异常 · 适配器
+ * 不接画布工具、重新安装失败可恢复 · CLI 未检测到。
+ */
 export const CLI_GROUP: readonly {
   agent: AgentInfo;
   integration: IntegrationState;
+  jobs?: Partial<Record<AdapterInstallTarget, AdapterInstallJob>>;
 }[] = [
-  { agent: cli("claude", "Claude Code", true), integration: state("claude") },
   {
-    agent: cli("codex", "Codex", true),
+    agent: cli("claude", "Claude Code", { installed: true }),
+    integration: state("claude"),
+  },
+  {
+    agent: cli("codex", "Codex", { installed: true }),
     integration: state("codex", {
       stale: true,
       installedRevision: 412,
@@ -165,10 +196,58 @@ export const CLI_GROUP: readonly {
     }),
   },
   {
-    agent: cli("copilot", "Copilot", null),
+    agent: cli("copilot", "Copilot", { installed: true, support: "native" }),
     integration: state("copilot", {
       launcherWarning: "armadra-launch.exe is missing",
+      canvasAgents: {
+        terminal: "limited",
+        acp: "available",
+        reasons: ["launcher_limited"],
+      },
     }),
   },
-  { agent: cli("pi", "Pi", false), integration: state("pi") },
+  {
+    agent: cli("pi", "Pi", { installed: true, support: "community" }),
+    integration: state("pi", {
+      canvasAgents: {
+        terminal: "available",
+        acp: "limited",
+        reasons: ["mcp_not_wired"],
+      },
+    }),
+    jobs: {
+      adapter: {
+        agentId: "pi",
+        target: "adapter",
+        state: "failed",
+        package: "pi-acp",
+        reinstall: true,
+        previousVersion: "0.0.30",
+        startedAt: at(30),
+        endedAt: at(31),
+        exitCode: 1,
+        installed: false,
+        output: [
+          "npm error code ETARGET",
+          "npm error notarget No matching version",
+        ],
+        failure: { code: "adapter_install_failed", message: "npm 以 1 退出" },
+      },
+    },
+  },
+  {
+    agent: cli(
+      "opencode",
+      "OpenCode",
+      { installed: false, support: "native" },
+      { installed: false, resolvedPath: null, history: undefined },
+    ),
+    integration: state("opencode", {
+      canvasAgents: {
+        terminal: "unavailable",
+        acp: "unavailable",
+        reasons: ["cli_missing", "acp_missing"],
+      },
+    }),
+  },
 ];
