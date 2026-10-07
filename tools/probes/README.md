@@ -48,7 +48,7 @@ checkpoint 和质量门见[真实双 Agent 入口](../../docs/guides/local-cli-p
 | B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`server-e2e --proxy=caddy`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                                                   | `nightly.yml`                       | 开 issue     |
 | C   | `agent-e2e`（真 CLI 与额度，`ARMADRA_E2E_REAL=1`，见「C 档运行手册」）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                                                                                           | 手动；清单在执行计划 §5             | 记进状态文档 |
 
-其余脚本（`browser-cdp`、`git-tool-window`、`forge-panel`、`connection-drag`、`browser-agent-e2e`、`timezone-picker`、`language-load`）是单项核验，本地按需手动跑；`relay-web-e2e` 要 armadra-cloud 的检出，也是本地手动跑（见「中继托管页面端到端」）。平台探针 `personal-roundtrip`、`multi-source`、`link-join`（A 档）与 `nat-core-offline`、`webkit-roundtrip`（B 档）同样要 armadra-cloud 的检出（CI 上记 skipped）；后两者与 `multi-source` 的中继在容器里（要 Docker），`pnpm platform:e2e` 一次跑完，共用件在 `platform-lib.mjs`。
+其余脚本（`browser-cdp`、`git-tool-window`、`forge-panel`、`connection-drag`、`canvas-tidy`、`browser-agent-e2e`、`timezone-picker`、`language-load`）是单项核验，本地按需手动跑；`relay-web-e2e` 要 armadra-cloud 的检出，也是本地手动跑（见「中继托管页面端到端」）。平台探针 `personal-roundtrip`、`multi-source`、`link-join`（A 档）与 `nat-core-offline`、`webkit-roundtrip`（B 档）同样要 armadra-cloud 的检出（CI 上记 skipped）；后两者与 `multi-source` 的中继在容器里（要 Docker），`pnpm platform:e2e` 一次跑完，共用件在 `platform-lib.mjs`。
 
 探针起的 core、服务器壳、桌面壳一律用临时 HOME（`probe-home.mjs`：HOME、XDG、各 CLI 配置目录与 git 全局配置都指进 mktemp 目录，并去掉指向真实账号的凭据变量），不读写操作员自己的 HOME。新写的探针也照此办；Vite / pnpm 这类工具链进程不在此列。
 
@@ -168,6 +168,20 @@ node tools/probes/canvas-stress.mjs [输出目录] [终端数]
 便签那一段点的是便签正文，找 textarea 也限在 `[data-slot="sticky-node"]` 里：每个终端的 xterm 都挂着一个隐藏的 helper textarea，排在便签前面。2026-09-26 之前的脚本用的是不限范围的 `querySelector("textarea")`，字符其实打进了第一个终端的 PTY——那之前记下的「输入 100 字符」各项数字量的都不是便签。
 
 无头 Chrome 的 rAF 上限是 60 Hz（既有基线在有屏幕的 120 Hz 窗口里跑，所以那张表的 fps 不能和这张直接比）。fps 在这里很快撞顶，**真正有判别力的是重渲组件数与最慢帧**。撤销栈深度放在最后数——数法是一直点到按钮灰掉，那会真的把改动撤回去。
+
+## 画布整理（导入不被打散、主从成簇）
+
+复现「导入项目后点整理，导入的东西被打散成一长排、Agent 簇散落」（UI 设计 2026-10-07 §6）。画布里放 1 个主 Agent + 3 个子 Agent（主从边）、一个连着子 Agent 的浏览器、一张走新入口导入的 Mermaid 图（自带组）、一张修复前那样散在顶层的 Mermaid 图与几笔手画框线，点 Dock 上的「整理」。
+
+```sh
+pnpm libs:build
+pnpm --filter @armadra/desktop build
+node tools/probes/canvas-tidy.mjs [输出目录]
+```
+
+断言：主从边条数不变；顶层对象两两不重叠；导入组、散落的旧导入、手画框线各自内部相对位置不变；子 Agent 保持原阅读顺序、在主右侧同一列、顶对齐且等距，浏览器挂在所连子 Agent 正下方；顶层节点在 8px 网格上；包围盒宽高比 < 6（不是一长排）；再整理一次位移为 0；撤销一次整块回到整理前。产物默认在 `target/canvas-tidy/`：`result.json`、`before.png`、`after.png`。
+
+主从角色在页面里用 `setEdgeRole` 设（等实时协同首次同步、画布可写之后），因为文档 REST 保存不收边的 `role`。断言读的是页面 store（模块从 Vite 的 `/src/...` 取，与应用同一份实例）；整理过渡在 `prefers-reduced-motion` 下跳过，所以截图不用等动画。core、HOME、数据目录与浏览器 profile 全是临时的，跑完删除。
 
 ## core 的终端域
 
