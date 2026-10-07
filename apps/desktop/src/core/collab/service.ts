@@ -103,7 +103,15 @@ export interface TerminalBridge {
     readonly cwd: string;
     readonly shell?: string | undefined;
     readonly sshHostId?: string | undefined;
-  }): Promise<{ readonly sessionId: string; readonly generation: number }>;
+  }): Promise<{
+    readonly sessionId: string;
+    readonly generation: number;
+    /**
+     * `acp`：节点以 ACP 驱动，起的是适配器、会话已经开好——没有 shell，也就
+     * 没有启动行要敲（ACP 设计 §4.4）。缺席是终端。
+     */
+    readonly driver?: "acp";
+  }>;
   /**
    * 这个节点休眠着（Eco 模式，终端宿主设计 §7.2）就把它接回来，答 `true`；
    * 醒着答 `false`。`send` 在走门链之前踢它一下（不等）：投给一个休眠节点的

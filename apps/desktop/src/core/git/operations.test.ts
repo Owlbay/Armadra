@@ -652,6 +652,149 @@ describe("worktree verbs", () => {
   });
 });
 
+describe("checking out a hosted pull request's head", () => {
+  /** A base repository whose platform published a fork's head under `ref`. */
+  function published(name: string, ref: string) {
+    const repo = repository(name);
+    const remote = bareRemote(`${name}-remote`);
+    repo.git("remote", "add", "origin", remote);
+    repo.git("push", "-q", "origin", "main");
+    // The fork's commit exists only under the platform's ref, never as a branch.
+    const fork = repository(`${name}-fork`, false);
+    run(fork.path, "remote", "add", "origin", remote);
+    run(fork.path, "fetch", "-q", "origin");
+    run(fork.path, "switch", "-q", "-c", "topic", "origin/main");
+    fork.write("fork.txt", "fork\n");
+    fork.commit("from the fork");
+    run(fork.path, "push", "-q", "origin", `HEAD:${ref}`);
+    const head = fork.git("rev-parse", "HEAD").trim();
+    return { repo, head };
+  }
+
+  for (const [forge, number, ref] of [
+    ["gitlab", 7, "refs/merge-requests/7/head"],
+    ["gitea", 9, "refs/pull/9/head"],
+  ] as const) {
+    it(`fetches ${ref} only when the checkout runs and starts the branch there`, async () => {
+      const { repo, head } = published(`pull-head-${forge}`, ref);
+      const repositoryService = service();
+      // Nothing was fetched up front: the commit is not in this clone yet.
+      expect(() => repo.git("cat-file", "-e", head)).toThrow();
+      const result = await start(repositoryService, repo.path, {
+        kind: "createWorktree",
+        path: `checkouts/${forge}`,
+        branch: `review-${number}`,
+        createBranch: true,
+        startPoint: null,
+        expectedOid: null,
+        pullHead: { remote: "origin", forge, number, headOid: head },
+      });
+      expect(result.state).toBe("succeeded");
+      expect(
+        run(join(repo.path, `checkouts/${forge}`), "rev-parse", "HEAD").trim(),
+      ).toBe(head);
+      expect(existsSync(join(repo.path, `checkouts/${forge}/fork.txt`))).toBe(
+        true,
+      );
+      // The temporary ref is gone, and the platform's ref was not mirrored.
+      expect(
+        repo
+          .git(
+            "for-each-ref",
+            "refs/armadra/",
+            "refs/merge-requests/",
+            "refs/pull/",
+          )
+          .trim(),
+      ).toBe("");
+    });
+  }
+
+  it("refuses a head that moved since it was reviewed and leaves no checkout", async () => {
+    const { repo } = published("pull-head-moved", "refs/pull/3/head");
+    const repositoryService = service();
+    const reviewed = repo.git("rev-parse", "HEAD").trim();
+    const result = await start(repositoryService, repo.path, {
+      kind: "createWorktree",
+      path: "checkouts/moved",
+      branch: "review-3",
+      createBranch: true,
+      startPoint: null,
+      expectedOid: null,
+      pullHead: {
+        remote: "origin",
+        forge: "gitea",
+        number: 3,
+        headOid: reviewed,
+      },
+    });
+    expect(result.state).toBe("failed");
+    expect(result.message).toContain("moved since it was reviewed");
+    expect(existsSync(join(repo.path, "checkouts/moved"))).toBe(false);
+    expect(repo.git("for-each-ref", "refs/armadra/").trim()).toBe("");
+    expect(repo.git("branch", "--list", "review-3").trim()).toBe("");
+  });
+
+  it("refuses a pull head mixed with a start point, a bad number or an unknown remote", async () => {
+    const repo = repository("pull-head-refused");
+    const repositoryService = service();
+    const expected = await repositoryService.head(repo.path);
+    const headOid = expected.headOid as string;
+    const base = {
+      kind: "createWorktree" as const,
+      path: "checkouts/refused",
+      branch: "review",
+      createBranch: true,
+      startPoint: null,
+      expectedOid: null,
+    };
+    for (const [action, message] of [
+      [
+        {
+          ...base,
+          startPoint: "main",
+          pullHead: {
+            remote: "origin",
+            forge: "gitea" as const,
+            number: 1,
+            headOid,
+          },
+        },
+        "creates a new branch from the fetched head",
+      ],
+      [
+        {
+          ...base,
+          pullHead: {
+            remote: "origin",
+            forge: "gitea" as const,
+            number: 0,
+            headOid,
+          },
+        },
+        "number is invalid",
+      ],
+      [
+        {
+          ...base,
+          pullHead: {
+            remote: "nowhere",
+            forge: "gitlab" as const,
+            number: 1,
+            headOid,
+          },
+        },
+        "",
+      ],
+    ] as const) {
+      const refused = await failure(() =>
+        startOperation(repositoryService, repo.path, ".", action, expected),
+      );
+      expect(refused.message).toContain(message);
+    }
+  });
+});
+
 describe("the queue itself", () => {
   it("runs one repository's operations in the order they arrived", async () => {
     const repo = repository("queue-order");

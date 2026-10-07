@@ -8,11 +8,12 @@
  * 「查看队列」打开的是节点头上已经有的那个浮层，不另画一份列表：两份列表就会
  * 有两份「取消」，也就会有两种行为。
  */
+import { scoped } from "../sources/scope";
 import type { CanvasNode } from "@armadra/shared";
 
 import { requestDeliveryQueue } from "@/agent/delivery-store";
 import { useDriveStore, type NodeDrive } from "@/agent/drive-store";
-import { terminalsApi } from "@/api/terminals";
+import { runtimeApi } from "@/api/client";
 import { requestCenterOnNode } from "@/canvas/flow/flow-context";
 import { useCanvasStore } from "@/store/canvas-store";
 
@@ -64,13 +65,13 @@ export function terminalNodeCommands(
     commands.push({
       id: "delivery.release",
       label: t("delivery.palette.release", { title }),
-      run: () => void terminalsApi.driveTerminal(sessionId, "release"),
+      run: () => void runtimeApi.driveTerminal(sessionId, "release"),
     });
   } else {
     commands.push({
       id: "delivery.takeover",
       label: t("delivery.palette.takeover", { title }),
-      run: () => void terminalsApi.driveTerminal(sessionId, "takeover"),
+      run: () => void runtimeApi.driveTerminal(sessionId, "takeover"),
     });
   }
   return commands;
@@ -83,7 +84,7 @@ export function useTerminalNodeCommands(t: Translate): NodeCommand[] {
   const nodeId = selected.length === 1 ? selected[0] : undefined;
   const node = nodes?.find((entry) => entry.id === nodeId);
   const drive = useDriveStore((state) =>
-    nodeId === undefined ? undefined : state.drives[nodeId],
+    nodeId === undefined ? undefined : state.drives[scoped(nodeId)],
   );
   return terminalNodeCommands({ node, drive, t });
 }

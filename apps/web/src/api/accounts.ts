@@ -1,27 +1,20 @@
 import { z } from "zod";
 
 import {
-  ensureCsrf,
-  forgetCsrf,
-  IdentityRequestError,
-  IdentityTransportError,
+  identityRequest,
   identitySessionSchema,
   rememberCsrf,
   type IdentitySession,
 } from "./identity";
-import { RUNTIME_URL } from "./request";
+import { identityRpc } from "./identity-rpc";
 
 /**
- * 账号、组、邀请与共享的客户端 —— core 的 `/api/identity/*` 管理面
- * （`docs/design/server-accounts-and-sharing.md` §3，契约
- * `docs/contracts/core-json-api.md` §10）。
- *
- * 只在服务器壳托管的页面上用：那里的会话是 HttpOnly Cookie + 双提交 CSRF，
- * 所以这里不碰 Bearer，写请求带 `X-Armadra-CSRF`。桌面单机只有一个 owner，
- * 没有可管理的人，这一面不出现。
+ * 账号、组、邀请与共享的客户端（`docs/design/server-accounts-and-sharing.md`
+ * §3，契约 §10、§42.3）：`accounts.*` procedure，经本机源的契约客户端发
+ * （`identity-rpc.ts`）。桌面壳的页面是 Bearer、服务器壳托管的页面是 Cookie +
+ * CSRF，由源决定，这里不碰凭据。持邀请注册与口令登录发的是会话，留在 REST
+ * 匿名面（`identity.ts` 的传输）。
  */
-
-const PREFIX = "/api/identity/";
 
 export const SHARE_ROLES = ["viewer", "editor", "operator", "driver"] as const;
 export type ShareRole = (typeof SHARE_ROLES)[number];
@@ -91,98 +84,82 @@ const grantSchema = z.object({
 });
 export type Grant = z.infer<typeof grantSchema>;
 
-const okSchema = z.object({}).passthrough();
-
-async function call<T>(
-  action: string,
-  schema: z.ZodType<T>,
-  options: { method?: string; body?: unknown } = {},
-): Promise<T> {
-  const method = options.method ?? "GET";
-  const headers: Record<string, string> = { Accept: "application/json" };
-  if (options.body !== undefined) headers["Content-Type"] = "application/json";
-  if (method !== "GET") {
-    const csrf = await ensureCsrf();
-    if (csrf) headers["X-Armadra-CSRF"] = csrf;
-  }
-  let response: Response;
-  try {
-    response = await fetch(`${RUNTIME_URL}${PREFIX}${action}`, {
-      method,
-      headers,
-      body:
-        options.body === undefined ? undefined : JSON.stringify(options.body),
-      credentials: "include",
-      redirect: "error",
-      cache: "no-store",
-    });
-  } catch (cause) {
-    throw new IdentityTransportError(cause);
-  }
-  const payload: unknown = await response.json().catch(() => null);
-  if (!response.ok) {
-    // 403 可能是 CSRF 过期：作废本地这枚，下一次写请求重新取。
-    if (response.status === 403) forgetCsrf();
-    const body = (payload ?? {}) as { code?: unknown; message?: unknown };
-    throw new IdentityRequestError(
-      response.status,
-      typeof body.code === "string" ? body.code : "UNKNOWN",
-      typeof body.message === "string" ? body.message : "",
-    );
-  }
-  return schema.parse(payload);
-}
-
 /* --------------------------------- 成员 ---------------------------------- */
 
 export async function listPrincipals(): Promise<Principal[]> {
-  return (
-    await call("principals", z.object({ principals: z.array(principalSchema) }))
-  ).principals;
+  return z
+    .array(principalSchema)
+    .parse(
+      (await identityRpc((client) => client.accounts.principals.list()))
+        .principals,
+    );
 }
 
 /** 管理员直接建一个成员并给他设初始口令。 */
 export async function createMember(
   displayName: string,
   password: string,
-): Promise<Principal> {
-  const created = await call("principals", principalSchema, {
-    method: "POST",
-    body: { displayName },
-  });
-  await setPassword(created.principalId, password);
-  return created;
+): Promise<{ principal: Principal; passwordBreached: boolean }> {
+  const created = principalSchema.parse(
+    await identityRpc((client) =>
+      client.accounts.principals.create({ displayName }),
+    ),
+  );
+  const { passwordBreached } = await setPassword(created.principalId, password);
+  return { principal: created, passwordBreached };
 }
 
 export async function disablePrincipal(principalId: string): Promise<void> {
-  await call(`principals/${principalId}/disable`, okSchema, {
-    method: "POST",
-  });
+  await identityRpc((client) =>
+    client.accounts.principals.disable({ principalId }),
+  );
 }
 
+/**
+ * 设口令。答撤掉了这个人几个其它会话（安全审查 L2：本人换口令留下当前会话，
+ * owner 替人设时那个人的会话全撤；旧 core 不报时为 0），以及泄露检查 `warn`
+ * 档是否命中（契约 §18.1）。
+ */
 export async function setPassword(
   principalId: string,
   password: string,
-): Promise<void> {
-  await call("credentials", okSchema, {
-    method: "POST",
-    body: { kind: "password", principalId, password },
-  });
+): Promise<{ revokedSessions: number; passwordBreached: boolean }> {
+  const answer = z
+    .object({
+      revokedSessions: z.number().default(0),
+      passwordBreached: z.boolean().default(false),
+    })
+    .parse(
+      await identityRpc((client) =>
+        client.accounts.credentials.setPassword({
+          kind: "password",
+          principalId,
+          password,
+        }),
+      ),
+    );
+  return {
+    revokedSessions: answer.revokedSessions,
+    passwordBreached: answer.passwordBreached,
+  };
 }
 
 /* ---------------------------------- 组 ----------------------------------- */
 
 export async function listGroups(): Promise<Group[]> {
-  return (await call("groups", z.object({ groups: z.array(groupSchema) })))
-    .groups;
+  return z
+    .array(groupSchema)
+    .parse(
+      (await identityRpc((client) => client.accounts.groups.list())).groups,
+    );
 }
 
 export async function createGroup(name: string): Promise<void> {
-  await call("groups", okSchema, { method: "POST", body: { name } });
+  await identityRpc((client) => client.accounts.groups.create({ name }));
 }
 
 export async function deleteGroup(groupId: string): Promise<void> {
-  await call(`groups/${groupId}`, okSchema, { method: "DELETE" });
+  await identityRpc((client) => client.accounts.groups.remove({ groupId }));
 }
 
 export async function putGroupMember(
@@ -190,45 +167,45 @@ export async function putGroupMember(
   principalId: string,
   role: GroupRole,
 ): Promise<void> {
-  await call(`groups/${groupId}/members/${principalId}`, okSchema, {
-    method: "PUT",
-    body: { role },
-  });
+  await identityRpc((client) =>
+    client.accounts.groups.putMember({ groupId, principalId, role }),
+  );
 }
 
 export async function removeGroupMember(
   groupId: string,
   principalId: string,
 ): Promise<void> {
-  await call(`groups/${groupId}/members/${principalId}`, okSchema, {
-    method: "DELETE",
-  });
+  await identityRpc((client) =>
+    client.accounts.groups.removeMember({ groupId, principalId }),
+  );
 }
 
 /* --------------------------------- 邀请 ---------------------------------- */
 
 export async function listInvitations(): Promise<Invitation[]> {
-  return (
-    await call(
-      "invitations",
-      z.object({ invitations: z.array(invitationSchema) }),
-    )
-  ).invitations;
+  return z
+    .array(invitationSchema)
+    .parse(
+      (await identityRpc((client) => client.accounts.invitations.list()))
+        .invitations,
+    );
 }
 
-export function issueInvitation(input: {
+export async function issueInvitation(input: {
   role: ShareRole;
   targetWorkspaceId?: string;
   targetGroupId?: string;
 }): Promise<IssuedInvitation> {
-  return call("invitations", issuedInvitationSchema, {
-    method: "POST",
-    body: input,
-  });
+  return issuedInvitationSchema.parse(
+    await identityRpc((client) => client.accounts.invitations.issue(input)),
+  );
 }
 
 export async function revokeInvitation(invitationId: string): Promise<void> {
-  await call(`invitations/${invitationId}`, okSchema, { method: "DELETE" });
+  await identityRpc((client) =>
+    client.accounts.invitations.revoke({ invitationId }),
+  );
 }
 
 /**
@@ -261,14 +238,20 @@ export function takeInvitationToken(): string {
   return found[1] as string;
 }
 
+/** 注册的答案：会话，泄露检查 `warn` 命中时多 `passwordBreached`。 */
+const registeredSchema = identitySessionSchema.extend({
+  passwordBreached: z.boolean().optional(),
+});
+
 /** 拿着邀请注册：建账号、兑换邀请、登录，一次请求。 */
 export async function redeemInvitation(input: {
   token: string;
   displayName: string;
   password: string;
-}): Promise<IdentitySession> {
-  const session = await call("register", identitySessionSchema, {
+}): Promise<IdentitySession & { passwordBreached?: boolean }> {
+  const session = await identityRequest("register", registeredSchema, {
     method: "POST",
+    anonymous: true,
     body: { ...input, deviceName: deviceName() },
   });
   rememberCsrf(session.csrfToken ?? "");
@@ -280,8 +263,9 @@ export async function loginWithPassword(
   principalId: string,
   password: string,
 ): Promise<IdentitySession> {
-  const session = await call("login", identitySessionSchema, {
+  const session = await identityRequest("login", identitySessionSchema, {
     method: "POST",
+    anonymous: true,
     body: { principalId, password, deviceName: deviceName() },
   });
   rememberCsrf(session.csrfToken ?? "");
@@ -305,12 +289,15 @@ function deviceName(): string {
 /* --------------------------------- 共享 ---------------------------------- */
 
 export async function listGrants(workspaceId: string): Promise<Grant[]> {
-  return (
-    await call(
-      `grants?${new URLSearchParams({ workspaceId }).toString()}`,
-      z.object({ grants: z.array(grantSchema) }),
-    )
-  ).grants;
+  return z
+    .array(grantSchema)
+    .parse(
+      (
+        await identityRpc((client) =>
+          client.accounts.grants.list({ workspaceId }),
+        )
+      ).grants,
+    );
 }
 
 export async function putGrant(input: {
@@ -319,7 +306,7 @@ export async function putGrant(input: {
   subjectId: string;
   role: ShareRole;
 }): Promise<void> {
-  await call("grants", okSchema, { method: "PUT", body: input });
+  await identityRpc((client) => client.accounts.grants.put(input));
 }
 
 export async function revokeGrant(input: {
@@ -327,5 +314,5 @@ export async function revokeGrant(input: {
   subjectKind: Grant["subjectKind"];
   subjectId: string;
 }): Promise<void> {
-  await call("grants", okSchema, { method: "DELETE", body: input });
+  await identityRpc((client) => client.accounts.grants.revoke(input));
 }

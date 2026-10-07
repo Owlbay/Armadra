@@ -331,3 +331,21 @@ it("keeps notifications outside failed transactions and rejects lost capabilitie
   ).rejects.toMatchObject({ code: "scope_denied" });
   unsubscribe();
 });
+
+it("rejects a SQL graph mutation on a realtime board without ownership, receipt or outbox side effects", async () => {
+  core.database
+    .prepare("UPDATE boards SET realtime = 1 WHERE id = ?")
+    .run(board.id);
+  await expect(
+    call("graph.apply", { boardId: board.id, input: graph() }, "realtime"),
+  ).rejects.toMatchObject({ code: "realtime_active" });
+  for (const table of [
+    "nodes",
+    "controller_objects",
+    "controller_commands",
+    "events",
+  ])
+    expect(
+      core.database.prepare(`SELECT count(*) n FROM ${table}`).get(),
+    ).toMatchObject({ n: 0 });
+});

@@ -187,6 +187,8 @@ describe("a stream that ended", () => {
       detached: async () => {},
     } as unknown as TerminalManager;
     const connection = {
+      readyState: 1,
+      bufferedAmount: 0,
       send: (payload: Buffer) =>
         sent.push(
           JSON.parse(payload.toString("utf8")) as Record<string, unknown>,
@@ -278,6 +280,8 @@ describe("a socket that closes while it is still attaching", () => {
       },
     } as unknown as TerminalManager;
     const connection = {
+      readyState: 1,
+      bufferedAmount: 0,
       send: () => {},
       close: () => {},
       on: (event: string, handler: () => void) => {

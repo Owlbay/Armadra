@@ -130,6 +130,25 @@ describe("tabs are the browser's targets", () => {
     made.close();
   });
 
+  it("attaches a tab it opened once, though Chromium announces it first", async () => {
+    fake.announceCreated = true;
+    const made = backend();
+    const node = await made.ensure("node-a");
+    await node.host().requestTab("new", "", "https://second.test/");
+    await settle();
+    expect(node.listTabs()).toHaveLength(2);
+    for (const id of fake.targetIds()) {
+      expect(
+        fake
+          .called("Target.attachToTarget")
+          .filter((call) => call.params.targetId === id),
+      ).toHaveLength(1);
+    }
+    // One session per tab, so one preparation per tab.
+    expect(fake.called("Page.setInterceptFileChooserDialog")).toHaveLength(2);
+    made.close();
+  });
+
   it("adopts a page the page itself opened", async () => {
     const made = backend();
     const node = await made.ensure("node-a");
@@ -215,6 +234,72 @@ describe("the one viewer", () => {
     expect(viewer.binaries).toHaveLength(2);
     const header = viewer.messages().at(-1);
     expect(header).toMatchObject({ type: "frame", seq: 2, width: 1_280 });
+    made.close();
+  });
+
+  /**
+   * A viewer with a send queue gets the header and the JPEG as one unit, so
+   * its queue can keep or drop them together (`coalesce`, platform spec core
+   * packages §3.3).
+   */
+  it("hands a frame's header and bytes over together when the viewer can take a pair", async () => {
+    const made = backend();
+    const node = await made.ensure("node-a");
+    const pairs: { header: Record<string, unknown>; bytes: number }[] = [];
+    const singles: unknown[] = [];
+    node.attachViewer({
+      send: (data) => singles.push(data),
+      sendFrame: (header, jpeg) =>
+        pairs.push({
+          header: JSON.parse(header) as Record<string, unknown>,
+          bytes: jpeg.byteLength,
+        }),
+      close: () => {},
+    });
+    await settle();
+    const session = fake.sessionFor(node.listTabs()[0]?.id ?? "");
+    fake.frame(session, 21);
+    await settle();
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]?.header).toMatchObject({ type: "frame", seq: 1 });
+    expect(pairs[0]?.bytes).toBeGreaterThan(0);
+    // Only the hello went the single-message way.
+    expect(singles).toHaveLength(1);
+    made.close();
+  });
+
+  /**
+   * Backpressure: a viewer behind a send queue hands the ack back only once
+   * the frame is on the wire, so Chromium does not encode the next one for a
+   * client that has not taken the last.
+   */
+  it("holds a frame's ack until the viewer says the frame went out", async () => {
+    const made = backend();
+    const node = await made.ensure("node-a");
+    const sent: (() => void)[] = [];
+    node.attachViewer({
+      send: () => undefined,
+      sendFrame: (_header, _jpeg, done) => {
+        if (done !== undefined) sent.push(done);
+      },
+      close: () => {},
+    });
+    await settle();
+    const session = fake.sessionFor(node.listTabs()[0]?.id ?? "");
+    const acks = () =>
+      fake
+        .called("Page.screencastFrameAck")
+        .map((call) => call.params.sessionId);
+    fake.frame(session, 41);
+    await settle();
+    expect(sent).toHaveLength(1);
+    expect(acks()).toEqual([]);
+
+    sent[0]?.();
+    sent[0]?.();
+    await settle();
+    // Once, however often the queue says so.
+    expect(acks()).toEqual([41]);
     made.close();
   });
 
@@ -310,6 +395,30 @@ describe("a browser that went away", () => {
     );
     // The viewer is told rather than left watching a frozen last frame.
     expect(viewer.closedWith).toBeDefined();
+    made.close();
+  });
+
+  /**
+   * Chromium keeps writing until its pipe drains: a frame can arrive after the
+   * node stopped. Acknowledging it used to throw `browser_unavailable` out of
+   * the pipe's `data` listener — an uncaught exception that ends the core.
+   */
+  it("drops a frame that arrives after the browser was stopped", async () => {
+    const made = backend();
+    const node = await made.ensure("node-a");
+    const viewer = new FakeViewer();
+    node.attachViewer(viewer);
+    await settle();
+    const session = fake.sessionFor(node.listTabs()[0]?.id ?? "");
+    // The process is told to go, but its pipe has not drained yet.
+    fake.crash = () => undefined;
+    node.stop();
+    const acks = fake.called("Page.screencastFrameAck").length;
+    fake.frame(session, 30);
+    await settle();
+    expect(node.isAlive()).toBe(false);
+    expect(fake.called("Page.screencastFrameAck")).toHaveLength(acks);
+    expect(viewer.binaries).toHaveLength(0);
     made.close();
   });
 

@@ -1,3 +1,4 @@
+import { cn } from "@/lib/cn";
 import {
   useCallback,
   useEffect,
@@ -52,6 +53,8 @@ export const WORK_PANEL_WIDTH = {
   github: "var(--scm-w)",
   automation: "var(--scm-w)",
   handoff: "var(--scm-w)",
+  workflow: "var(--scm-w)",
+  dispatch: "var(--drawer-w)",
 } as const;
 
 /** 右侧停靠的那几块。 */
@@ -101,7 +104,7 @@ function useMobileNavInset(): string | null {
   const compact = useCompactLayout();
   const focusNodeId = useCanvasStore((state) => state.focusNodeId);
   return compact && !focusNodeId
-    ? "calc(var(--mobile-nav-h) + env(safe-area-inset-bottom))"
+    ? "calc(var(--mobile-nav-h) + var(--safe-bottom))"
     : null;
 }
 /** 全部工作面板：右侧那几块，加上底部停靠的 Git 工具窗口。 */
@@ -260,7 +263,22 @@ export function WorkPanelSheet({
         // `data-[side=right]:sm:max-w-none` 必须照抄这个变体：生成组件里的
         // `data-[side=right]:sm:max-w-sm`（384px）比裸 `sm:max-w-none` 特异性
         // 高，不写这一条的话 460px 的源码控制会被悄悄压到 384。
-        className="max-w-full gap-0 p-0 data-[side=right]:sm:max-w-none"
+        //
+        // 安全区（`--safe-*`）：抽屉贴着屏幕边缘，底色铺到边上，内容让开状态栏、
+        // 刘海 / 窗口边与主页横条。底边停在手机底部导航上时那一截导航已经垫过。
+        className={cn(
+          "max-w-full gap-0 p-0 data-[side=right]:sm:max-w-none",
+          bottom
+            ? cn(
+                "pr-[var(--safe-right)] pl-[var(--safe-left)]",
+                maximized && "pt-[var(--safe-top)]",
+              )
+            : cn(
+                "pt-[var(--safe-top)] pr-[var(--safe-right)]",
+                compact && "pl-[var(--safe-left)]",
+              ),
+          !navInset && "pb-[var(--safe-bottom)]",
+        )}
       >
         {bottom && onHeightChange && !maximized && (
           <div

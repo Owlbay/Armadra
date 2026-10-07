@@ -1,5 +1,6 @@
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type AgentFixture, agentFixture, callerFor } from "../agent/fixture";
 import { runMailbox } from "../collab/mailbox";
@@ -363,5 +364,56 @@ describe("sanitizing", () => {
     for (const path of ["src/a.ts", "docs/env.md"]) {
       expect(sensitive(path)).toBe(false);
     }
+  });
+});
+
+describe("prepare 的转录：没有文件的来源", () => {
+  let previous: string | undefined;
+
+  beforeEach(() => {
+    previous = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = join(fixture.directory, "xdg");
+  });
+
+  afterEach(() => {
+    if (previous === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = previous;
+  });
+
+  it("OpenCode 来源没有转录路径：按它报的会话 id 读库，摘进交接材料", async () => {
+    const dir = join(fixture.directory, "xdg", "opencode");
+    mkdirSync(dir, { recursive: true });
+    const database = new DatabaseSync(join(dir, "opencode.db"));
+    database.exec(
+      "CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT NOT NULL, " +
+        "title TEXT NOT NULL, time_updated INTEGER NOT NULL, cost REAL NOT NULL DEFAULT 0, " +
+        "tokens_input INTEGER NOT NULL DEFAULT 0);" +
+        "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, " +
+        "time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);" +
+        "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, " +
+        "time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);" +
+        "INSERT INTO message VALUES ('msg_1', 'ses_oc', 1000, 1000, '{\"role\":\"user\"}');" +
+        "INSERT INTO part VALUES ('prt_1', 'msg_1', 'ses_oc', 0, 0, '{\"type\":\"text\",\"text\":\"把导出做完\"}');",
+    );
+    database.close();
+
+    const oc = fixture.agentNode("OC", "opencode");
+    fixture.link(oc, target);
+    const ocSession = fixture.session(oc, "opencode");
+    fixture.database
+      .prepare(
+        "INSERT INTO agent_status (node_id, workspace_id, agent_id, state, unread, verified, restored, " +
+          "updated_at, session_id) VALUES (?, ?, 'opencode', 'done', 0, 1, 0, ?, 'ses_oc')",
+      )
+      .run(oc, fixture.workspaceId, new Date().toISOString());
+    const view = await prepared({
+      sourceNodeId: oc,
+      sourceSessionId: ocSession,
+      includeTranscript: true,
+    });
+    expect(view.bundle.transcriptExcerpt).toContain("[用户] 把导出做完");
+    expect(view.bundle.budget.omitted).not.toContain(
+      "noGenerationBoundTranscript",
+    );
   });
 });

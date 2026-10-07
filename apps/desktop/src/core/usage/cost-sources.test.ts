@@ -46,15 +46,21 @@ describe("采集适配器", () => {
     return state;
   }
 
-  it("映射里只有留下本地记录的那两家", () => {
-    expect(Object.keys(COST_SOURCES)).toEqual(["claude", "codex"]);
+  it("映射里只有留下本地记录的那几家", () => {
+    expect(Object.keys(COST_SOURCES)).toEqual([
+      "claude",
+      "codex",
+      "pi",
+      "omp",
+      "copilot",
+    ]);
     expect(costSource("claude")?.agentId).toBe("claude");
     expect(costSource("codex")?.agentId).toBe("codex");
+    expect(costSource("pi")?.agentId).toBe("pi");
+    expect(costSource("omp")?.agentId).toBe("omp");
     // 没有本地来源的 agent 不在映射里——汇总于是报零，而不是编一个数字。
     expect(costSource("opencode")).toBeUndefined();
-    expect(costSource("pi")).toBeUndefined();
-    expect(costSource("omp")).toBeUndefined();
-    expect(costSource("copilot")).toBeUndefined();
+    expect(costSource("copilot")?.agentId).toBe("copilot");
     expect(costSource("nobody")).toBeUndefined();
   });
 

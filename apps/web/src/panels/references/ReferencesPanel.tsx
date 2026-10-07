@@ -12,6 +12,7 @@ import { Badge } from "@/ui/badge";
 import { IconButton } from "@/ui/icon-button";
 import { ScrollArea } from "@/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/ui/sheet";
+import { Button } from "@/ui/button";
 
 /**
  * 引用面板（语言服务设计 §1.1「符号」、§4.2 `ReferencesPanel.tsx`）。
@@ -43,7 +44,7 @@ export function ReferencesPanel() {
         side="right"
         showCloseButton={false}
         aria-describedby={undefined}
-        className="max-w-full gap-0 p-0 data-[side=right]:w-[min(100vw,var(--drawer-w))] data-[side=right]:sm:max-w-none"
+        className="max-w-full gap-0 p-0 pt-[var(--safe-top)] pr-[var(--safe-right)] pb-[var(--safe-bottom)] data-[side=right]:w-[min(100vw,var(--drawer-w))] data-[side=right]:sm:max-w-none"
       >
         <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border px-3">
           <SheetTitle className="flex-1 truncate text-[13px] font-semibold">
@@ -105,10 +106,12 @@ function Group({ group }: { group: ReferenceGroup }) {
   const toggle = useReferencesStore((state) => state.toggle);
   return (
     <div className="min-w-0">
-      <button
+      <Button
+        variant="ghost"
+        size="xs"
         type="button"
         aria-expanded={!collapsed}
-        className="flex w-full min-w-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 py-0.5 text-left hover:bg-[var(--hover)]"
+        className="flex h-auto w-full justify-start font-normal min-w-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 py-0.5 text-left hover:bg-[var(--hover)]"
         onClick={() => toggle(group.uri)}
       >
         {collapsed ? (
@@ -122,7 +125,7 @@ function Group({ group }: { group: ReferenceGroup }) {
         <span className="shrink-0 text-[length:var(--text-caption)] text-muted-foreground">
           {group.locations.length}
         </span>
-      </button>
+      </Button>
       {!collapsed && (
         <ul className="flex flex-col">
           {group.locations.map((location, index) => {
@@ -130,13 +133,15 @@ function Group({ group }: { group: ReferenceGroup }) {
             const line = location.line + 1;
             return (
               <li key={`${location.line}:${location.character}:${index}`}>
-                <button
+                <Button
+                  variant="ghost"
+                  size="xs"
                   type="button"
                   aria-label={t("references.open", {
                     path: group.path,
                     line: String(line),
                   })}
-                  className="flex w-full min-w-0 items-start gap-2 rounded-[var(--radius-sm)] px-1 py-0.5 text-left hover:bg-[var(--hover)]"
+                  className="flex h-auto w-full justify-start font-normal min-w-0 items-start gap-2 rounded-[var(--radius-sm)] px-1 py-0.5 text-left hover:bg-[var(--hover)]"
                   onClick={() => openFileInEditor(group.path, { line })}
                 >
                   <span className="w-8 shrink-0 text-right font-mono text-[length:var(--text-caption)] tabular-nums text-muted-foreground">
@@ -145,7 +150,7 @@ function Group({ group }: { group: ReferenceGroup }) {
                   <span className="min-w-0 flex-1 truncate font-mono text-[11px]">
                     {location.preview ?? ""}
                   </span>
-                </button>
+                </Button>
               </li>
             );
           })}

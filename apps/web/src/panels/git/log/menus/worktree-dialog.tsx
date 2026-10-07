@@ -6,14 +6,25 @@ import { useT } from "../../../../app/preferences-store";
 import { Button } from "../../../../ui/button";
 import { Input } from "../../../../ui/input";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../../../../ui/dialog";
-import { Check, Field, ReadError, selectClass } from "../../forms";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "../../../ResponsiveDialog";
+import { sk } from "../../../../sources/scope";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../../../ui/select";
+import { Check, Field, ReadError } from "../../forms";
+
+/** Radix 的选项值不能是空串，「未选」用这个占位值换算回空串。 */
+const NONE = "__none__";
 import { createWorktreeAction, localBranch } from "../../worktree";
 import {
   EMPTY_WORKTREE_FORM,
@@ -64,7 +75,7 @@ export function WorktreeCreateDialog({
   useEffect(() => setValue(EMPTY_WORKTREE_FORM), [repositoryPath]);
 
   const snapshot = useQuery({
-    queryKey: ["git-log-worktree-branches", workspaceId, repositoryPath],
+    queryKey: sk("git-log-worktree-branches", workspaceId, repositoryPath),
     queryFn: ({ signal }) => loadBranches(repositoryPath!, signal),
     enabled: repositoryPath !== null,
     retry: false,
@@ -95,21 +106,23 @@ export function WorktreeCreateDialog({
   };
 
   return (
-    <Dialog
+    <ResponsiveDialog
       open={repositoryPath !== null}
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
     >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t("gitRepo.createWorktree")}</DialogTitle>
+      <ResponsiveDialogContent>
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {t("gitRepo.createWorktree")}
+          </ResponsiveDialogTitle>
           {repositoryPath && (
-            <DialogDescription className="break-all font-mono">
+            <ResponsiveDialogDescription className="break-all font-mono">
               {repositoryPath}
-            </DialogDescription>
+            </ResponsiveDialogDescription>
           )}
-        </DialogHeader>
+        </ResponsiveDialogHeader>
         <form
           className="min-w-0 space-y-2"
           onSubmit={(event) => {
@@ -134,19 +147,27 @@ export function WorktreeCreateDialog({
                   onChange={(event) => patch({ branch: event.target.value })}
                 />
               ) : (
-                <select
-                  className={selectClass}
-                  value={selected?.name ?? ""}
+                <Select
+                  value={selected?.name ?? NONE}
                   required
-                  onChange={(event) => patch({ branch: event.target.value })}
+                  onValueChange={(next) =>
+                    patch({ branch: next === NONE ? "" : next })
+                  }
                 >
-                  <option value="">{t("gitRepo.chooseBranch")}</option>
-                  {local.map((record) => (
-                    <option key={record.fullRef} value={record.name}>
-                      {record.name}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="h-9 w-full min-w-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="z-[var(--z-dialog)]">
+                    <SelectItem value={NONE}>
+                      {t("gitRepo.chooseBranch")}
+                    </SelectItem>
+                    {local.map((record) => (
+                      <SelectItem key={record.fullRef} value={record.name}>
+                        {record.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               )}
             </Field>
             <Check
@@ -194,13 +215,13 @@ export function WorktreeCreateDialog({
           <p className="text-xs text-muted-foreground">
             {t("gitRepo.worktreeSafety")}
           </p>
-          <DialogFooter>
+          <ResponsiveDialogFooter>
             <Button type="submit" disabled={busy || !ready}>
               {t("gitRepo.createWorktree")}
             </Button>
-          </DialogFooter>
+          </ResponsiveDialogFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
+import { Ellipsis, KeyRound, ShieldAlert, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -15,7 +15,6 @@ import {
   listGroups,
   listInvitations,
   listPrincipals,
-  loginWithPassword,
   putGrant,
   putGroupMember,
   redeemInvitation,
@@ -36,27 +35,43 @@ import {
 } from "../../../api/identity";
 import { localizedFailure } from "../../../api/request";
 import { useWorkspacesQuery } from "../../../app/workspaces-query";
-import { useT } from "../../../app/preferences-store";
+import { usePreferencesStore, useT } from "../../../app/preferences-store";
+import { resetMfa } from "../../../api/security";
+import { SignIn } from "../../../session/SignIn";
+import { passwordFailure } from "../../../session/sign-in-errors";
+import {
+  MailLinkForm,
+  ResetLinkDialog,
+  type ResetTarget,
+} from "./ResetLinkDialog";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { CONTROL_WIDTH } from "./GeneralPage";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+import { Alert, AlertTitle } from "@/ui/alert";
+import { Card } from "@/ui/card";
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/ui/dropdown-menu";
+import { FieldError } from "@/ui/field";
+import {
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { IconButton } from "@/ui/icon-button";
 import { Input } from "@/ui/input";
 import {
@@ -80,10 +95,13 @@ import {
  * 这里取走令牌、弹出兑换对话框。
  */
 export function AccountsSharingPage() {
+  const t = useT();
   const [session, setSession] = React.useState<
     IdentitySession | null | undefined
   >(undefined);
   const [invite, setInvite] = React.useState("");
+  // 泄露检查 `warn` 档命中（契约 §18.1）：口令照常设上，页顶留一条提示。
+  const [breached, setBreached] = React.useState(false);
 
   React.useEffect(() => {
     const token = takeInvitationToken();
@@ -107,7 +125,13 @@ export function AccountsSharingPage() {
     false;
 
   return (
-    <>
+    <PasswordWarning.Provider value={() => setBreached(true)}>
+      {breached && (
+        <Alert data-slot="password-breached">
+          <ShieldAlert />
+          <AlertTitle>{t("security.password.breached")}</AlertTitle>
+        </Alert>
+      )}
       {invite && (
         <RedeemDialog
           token={invite}
@@ -117,11 +141,23 @@ export function AccountsSharingPage() {
           }}
         />
       )}
-      {session === null && !invite && <SignIn onSignedIn={setSession} />}
+      {session === null && !invite && (
+        <SignIn
+          onSignedIn={(next, mfaEnrollmentRequired) => {
+            setSession(next);
+            // 策略要求第二因素而还没登记：带去「安全」那一页登记（契约 §18.3）。
+            if (mfaEnrollmentRequired)
+              usePreferencesStore.getState().setLastSettingsSection("security");
+          }}
+        />
+      )}
       {session && <MyAccount session={session} />}
       {session && canManage && (
         <>
-          <Members self={session.device.principalId} />
+          <Members
+            self={session.device.principalId}
+            selfOwner={session.device.role !== "member"}
+          />
           <Groups />
           <Invitations />
           <Sharing />
@@ -130,9 +166,12 @@ export function AccountsSharingPage() {
       {session && !canManage && (
         <GroupAdmin self={session.device.principalId} />
       )}
-    </>
+    </PasswordWarning.Provider>
   );
 }
+
+/** 设口令成功而泄露检查 `warn` 档命中时调一下（页顶出提示）。 */
+const PasswordWarning = React.createContext<() => void>(() => {});
 
 /**
  * 组管理员的那一份：没有管的组时什么都不画。能做什么由 core 判（组管理员只
@@ -157,6 +196,8 @@ function GroupAdmin({ self }: { self: string }) {
 /* --------------------------------- 公共 ---------------------------------- */
 
 function failureText(error: unknown, t: ReturnType<typeof useT>): string {
+  const password = passwordFailure(error, t);
+  if (password !== null) return password;
   return error instanceof IdentityRequestError
     ? localizedFailure(error.code, error.message || t("sharing.failed"))
     : t("sharing.failed");
@@ -178,6 +219,34 @@ function useAct() {
       }
     },
     [client, t],
+  );
+}
+
+/**
+ * 设口令的那几个表单：口令策略拒绝（契约 §18.1 的规则名）留在对话框里、显示在
+ * 输入框下面，其余失败照常弹一条；`warn` 档命中时页顶出提示。
+ */
+function usePasswordAct() {
+  const t = useT();
+  const client = useQueryClient();
+  const warn = React.useContext(PasswordWarning);
+  return React.useCallback(
+    async (
+      work: () => Promise<{ passwordBreached?: boolean } | unknown>,
+    ): Promise<boolean | string> => {
+      try {
+        const done = (await work()) as { passwordBreached?: boolean } | null;
+        if (done?.passwordBreached === true) warn();
+        await client.invalidateQueries({ queryKey: ["accounts"] });
+        return true;
+      } catch (error) {
+        const inline = passwordFailure(error, t);
+        if (inline !== null) return inline;
+        toast.error(failureText(error, t));
+        return false;
+      }
+    },
+    [client, t, warn],
   );
 }
 
@@ -243,36 +312,43 @@ function FormDialog({
   fields: { label: string; secret?: boolean }[];
   submitLabel: string;
   onClose: () => void;
-  onSubmit: (values: string[]) => Promise<boolean>;
+  /** 答 `true` 关掉；一句话就留着对话框、把它显示在输入框下面。 */
+  onSubmit: (values: string[]) => Promise<boolean | string>;
 }) {
   const t = useT();
   const [values, setValues] = React.useState<string[]>([]);
   const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState("");
   React.useEffect(() => {
-    if (open) setValues(fields.map(() => ""));
+    if (open) {
+      setValues(fields.map(() => ""));
+      setError("");
+    }
     // 字段只在打开的那一刻定形。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   return (
-    <Dialog
+    <ResponsiveDialog
       open={open}
       onOpenChange={(next) => {
         if (!next && !busy) onClose();
       }}
     >
-      <DialogContent className="z-[var(--z-dialog)] sm:max-w-[400px]">
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-        </DialogHeader>
+      <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[400px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{title}</ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
         <form
           className="flex flex-col gap-3"
           onSubmit={(event) => {
             event.preventDefault();
             if (busy || values.some((value) => value.trim() === "")) return;
             setBusy(true);
+            setError("");
             void onSubmit(values).then((done) => {
               setBusy(false);
-              if (done) onClose();
+              if (typeof done === "string") setError(done);
+              else if (done) onClose();
             });
           }}
         >
@@ -285,16 +361,19 @@ function FormDialog({
               placeholder={field.label}
               value={values[index] ?? ""}
               disabled={busy}
-              onChange={(event) =>
+              aria-invalid={(error !== "" && field.secret) || undefined}
+              onChange={(event) => {
+                setError("");
                 setValues((current) =>
                   current.map((value, at) =>
                     at === index ? event.target.value : value,
                   ),
-                )
-              }
+                );
+              }}
             />
           ))}
-          <DialogFooter>
+          {error && <FieldError>{error}</FieldError>}
+          <ResponsiveDialogFooter>
             <Button
               type="button"
               variant="ghost"
@@ -307,72 +386,14 @@ function FormDialog({
             <Button type="submit" size="sm" disabled={busy}>
               {submitLabel}
             </Button>
-          </DialogFooter>
+          </ResponsiveDialogFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 
 /* ------------------------------ 登录与兑换 ------------------------------- */
-
-function SignIn({
-  onSignedIn,
-}: {
-  onSignedIn: (session: IdentitySession) => void;
-}) {
-  const t = useT();
-  const [account, setAccount] = React.useState("");
-  const [password, setPasswordValue] = React.useState("");
-  const [busy, setBusy] = React.useState(false);
-  return (
-    <SettingsGroup title={t("sharing.signIn")}>
-      <form
-        className="flex flex-col gap-3 px-4 py-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (busy || !account.trim() || !password) return;
-          setBusy(true);
-          void loginWithPassword(account.trim(), password).then(
-            (session) => {
-              setPasswordValue("");
-              setBusy(false);
-              onSignedIn(session);
-            },
-            (error: unknown) => {
-              setPasswordValue("");
-              setBusy(false);
-              toast.error(failureText(error, t));
-            },
-          );
-        }}
-      >
-        <Input
-          aria-label={t("sharing.accountId")}
-          placeholder={t("sharing.accountId")}
-          autoComplete="username"
-          value={account}
-          disabled={busy}
-          onChange={(event) => setAccount(event.target.value)}
-        />
-        <Input
-          type="password"
-          aria-label={t("sharing.password")}
-          placeholder={t("sharing.password")}
-          autoComplete="current-password"
-          value={password}
-          disabled={busy}
-          onChange={(event) => setPasswordValue(event.target.value)}
-        />
-        <div>
-          <Button type="submit" size="sm" disabled={busy}>
-            {t("sharing.signIn")}
-          </Button>
-        </div>
-      </form>
-    </SettingsGroup>
-  );
-}
 
 function RedeemDialog({
   token,
@@ -382,6 +403,7 @@ function RedeemDialog({
   onClose: (joined: IdentitySession | null) => void;
 }) {
   const t = useT();
+  const warn = React.useContext(PasswordWarning);
   return (
     <FormDialog
       open
@@ -400,9 +422,12 @@ function RedeemDialog({
             password: password ?? "",
           });
           toast.success(t("sharing.redeem.done"));
+          if (session.passwordBreached === true) warn();
           onClose(session);
           return false;
         } catch (error) {
+          const inline = passwordFailure(error, t);
+          if (inline !== null) return inline;
           toast.error(failureText(error, t));
           return false;
         }
@@ -415,7 +440,7 @@ function RedeemDialog({
 
 function MyAccount({ session }: { session: IdentitySession }) {
   const t = useT();
-  const act = useAct();
+  const act = usePasswordAct();
   const [editing, setEditing] = React.useState(false);
   const principalId = session.device.principalId;
   return (
@@ -451,12 +476,15 @@ function MyAccount({ session }: { session: IdentitySession }) {
 
 /* ---------------------------------- 成员 ---------------------------------- */
 
-function Members({ self }: { self: string }) {
+function Members({ self, selfOwner }: { self: string; selfOwner: boolean }) {
   const t = useT();
   const act = useAct();
+  const passwordAct = usePasswordAct();
   const principals = usePrincipals();
   const [adding, setAdding] = React.useState(false);
   const [confirm, setConfirm] = React.useState<Principal | null>(null);
+  const [resetting, setResetting] = React.useState<ResetTarget | null>(null);
+  const [mfaConfirm, setMfaConfirm] = React.useState<Principal | null>(null);
   return (
     <SettingsGroup title={t("sharing.members")}>
       {(principals.data ?? []).map((principal) => (
@@ -468,15 +496,47 @@ function Members({ self }: { self: string }) {
             <span className="text-[12px] text-muted-foreground">
               {t("sharing.members.disabled")}
             </span>
-          ) : principal.kind !== "owner" && principal.principalId !== self ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => setConfirm(principal)}
-            >
-              {t("sharing.members.disable")}
-            </Button>
+          ) : principal.principalId !== self &&
+            (principal.kind !== "owner" || selfOwner) ? (
+            // owner 的重置只有 owner 自己能签；他的两步验证与停用不在这里动。
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <IconButton
+                  label={t("sharing.members.actions", {
+                    name: principalName(principal, t),
+                  })}
+                >
+                  <Ellipsis />
+                </IconButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="z-[var(--z-dialog)]">
+                <DropdownMenuItem
+                  onSelect={() =>
+                    setResetting({
+                      principalId: principal.principalId,
+                      name: principalName(principal, t),
+                    })
+                  }
+                >
+                  <KeyRound />
+                  {t("reset.issue")}
+                </DropdownMenuItem>
+                {principal.kind !== "owner" && (
+                  <>
+                    <DropdownMenuItem onSelect={() => setMfaConfirm(principal)}>
+                      {t("sharing.members.resetMfa")}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onSelect={() => setConfirm(principal)}
+                    >
+                      {t("sharing.members.disable")}
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           ) : null}
         </SettingsRow>
       ))}
@@ -500,26 +560,70 @@ function Members({ self }: { self: string }) {
         submitLabel={t("sharing.save")}
         onClose={() => setAdding(false)}
         onSubmit={([name, password]) =>
-          act(() => createMember((name ?? "").trim(), password ?? ""))
+          passwordAct(() => createMember((name ?? "").trim(), password ?? ""))
         }
       />
-      <AlertDialog
+      <ResetLinkDialog target={resetting} onClose={() => setResetting(null)} />
+      <ResponsiveAlertDialog
+        open={mfaConfirm !== null}
+        onOpenChange={(open) => {
+          if (!open) setMfaConfirm(null);
+        }}
+      >
+        <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
+              {t("sharing.members.resetMfaConfirm", {
+                name: principalName(mfaConfirm ?? undefined, t),
+              })}
+            </ResponsiveAlertDialogTitle>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("sharing.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                const target = mfaConfirm;
+                setMfaConfirm(null);
+                if (target)
+                  void act(async () => {
+                    const existed = await resetMfa(target.principalId);
+                    toast.success(
+                      t(
+                        existed
+                          ? "sharing.members.mfaReset"
+                          : "sharing.members.mfaNone",
+                      ),
+                    );
+                  });
+              }}
+            >
+              {t("sharing.members.resetMfa")}
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
+      <ResponsiveAlertDialog
         open={confirm !== null}
         onOpenChange={(open) => {
           if (!open) setConfirm(null);
         }}
       >
-        <AlertDialogContent className="z-[var(--z-dialog)]">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+        <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t("sharing.members.disableConfirm", {
                 name: principalName(confirm ?? undefined, t),
               })}
-            </AlertDialogTitle>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("sharing.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
+            </ResponsiveAlertDialogTitle>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("sharing.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               variant="destructive"
               onClick={() => {
                 const target = confirm;
@@ -529,10 +633,10 @@ function Members({ self }: { self: string }) {
               }}
             >
               {t("sharing.members.disable")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </SettingsGroup>
   );
 }
@@ -608,6 +712,7 @@ function GroupDialog({
   const act = useAct();
   const principals = usePrincipals();
   const [pick, setPick] = React.useState("");
+  const [resetting, setResetting] = React.useState<ResetTarget | null>(null);
   const byId = new Map(
     (principals.data ?? []).map((principal) => [
       principal.principalId,
@@ -623,17 +728,17 @@ function GroupDialog({
       ),
   );
   return (
-    <Dialog
+    <ResponsiveDialog
       open
       onOpenChange={(next) => {
         if (!next) onClose();
       }}
     >
-      <DialogContent className="z-[var(--z-dialog)] sm:max-w-[480px]">
-        <DialogHeader>
-          <DialogTitle>{group.name}</DialogTitle>
-        </DialogHeader>
-        <div className="settings-group divide-y divide-border/60 rounded-lg border border-border/70 bg-card">
+      <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[480px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{group.name}</ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
+        <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 settings-group divide-y divide-border/60">
           {group.members.length === 0 && (
             <SettingsRow label={t("sharing.groups.empty")} />
           )}
@@ -670,6 +775,20 @@ function GroupDialog({
                   </SelectItem>
                 </SelectContent>
               </Select>
+              {restricted && member.role === "member" && (
+                // 组管理员能替本组角色是 member 的人签重置链接（契约 §25）。
+                <IconButton
+                  label={t("reset.issue")}
+                  onClick={() =>
+                    setResetting({
+                      principalId: member.principalId,
+                      name: principalName(byId.get(member.principalId), t),
+                    })
+                  }
+                >
+                  <KeyRound />
+                </IconButton>
+              )}
               <IconButton
                 label={t("sharing.groups.remove")}
                 onClick={() =>
@@ -718,8 +837,8 @@ function GroupDialog({
               {t("sharing.groups.join")}
             </Button>
           </SettingsRow>
-        </div>
-        <DialogFooter>
+        </Card>
+        <ResponsiveDialogFooter>
           {!restricted && (
             <Button
               type="button"
@@ -737,9 +856,13 @@ function GroupDialog({
           <Button type="button" size="sm" onClick={onClose}>
             {t("sharing.save")}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+        <ResetLinkDialog
+          target={resetting}
+          onClose={() => setResetting(null)}
+        />
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 
@@ -792,6 +915,10 @@ function Invitations({ groupsOnly }: { groupsOnly?: Group[] }) {
   const [groupId, setGroupId] = React.useState("");
   const [role, setRole] = React.useState<ShareRole>("viewer");
   const [link, setLink] = React.useState("");
+  const [issued, setIssued] = React.useState<{
+    invitationId: string;
+    token: string;
+  } | null>(null);
   const now = Date.now();
   const pending = (invitations.data ?? []).filter(
     (invitation) =>
@@ -846,12 +973,14 @@ function Invitations({ groupsOnly }: { groupsOnly?: Group[] }) {
           {t("sharing.invites.create")}
         </Button>
       </SettingsRow>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="z-[var(--z-dialog)] sm:max-w-[440px]">
-          <DialogHeader>
-            <DialogTitle>{t("sharing.invites.create")}</DialogTitle>
-          </DialogHeader>
-          <div className="settings-group divide-y divide-border/60 rounded-lg border border-border/70 bg-card">
+      <ResponsiveDialog open={open} onOpenChange={setOpen}>
+        <ResponsiveDialogContent className="z-[var(--z-dialog)] sm:max-w-[440px]">
+          <ResponsiveDialogHeader>
+            <ResponsiveDialogTitle>
+              {t("sharing.invites.create")}
+            </ResponsiveDialogTitle>
+          </ResponsiveDialogHeader>
+          <Card className="gap-0 overflow-visible rounded-lg border border-border/70 py-0 text-[length:inherit] ring-0 settings-group divide-y divide-border/60">
             {groupsOnly ? (
               <SettingsRow label={t("sharing.groups")}>
                 <Select value={groupId} onValueChange={setGroupId}>
@@ -888,7 +1017,7 @@ function Invitations({ groupsOnly }: { groupsOnly?: Group[] }) {
                 </SettingsRow>
               </>
             )}
-          </div>
+          </Card>
           {link && (
             <div className="flex items-center gap-2">
               <Input
@@ -911,7 +1040,14 @@ function Invitations({ groupsOnly }: { groupsOnly?: Group[] }) {
               </Button>
             </div>
           )}
-          <DialogFooter>
+          {link && issued && (
+            <MailLinkForm
+              kind="invitation"
+              id={issued.invitationId}
+              token={issued.token}
+            />
+          )}
+          <ResponsiveDialogFooter>
             <Button
               type="button"
               size="sm"
@@ -926,14 +1062,18 @@ function Invitations({ groupsOnly }: { groupsOnly?: Group[] }) {
                       : { role, targetWorkspaceId: workspaceId },
                   );
                   setLink(invitationLink(issued.token));
+                  setIssued({
+                    invitationId: issued.invitationId,
+                    token: issued.token,
+                  });
                 })
               }
             >
               {t("sharing.invites.generate")}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </ResponsiveDialogFooter>
+        </ResponsiveDialogContent>
+      </ResponsiveDialog>
     </SettingsGroup>
   );
 }

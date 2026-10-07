@@ -1,11 +1,17 @@
+import { type AcpResume, type AcpSupport, adapterFor } from "../acp/adapters";
+import { rememberedAcpVersion } from "../acp/host";
+import {
+  type HistoryAvailability,
+  availabilityOf,
+} from "../history/availability";
 import { state as integrationState } from "../hook/install/integration";
-import type { LaunchWord } from "../terminal/shell";
 import { type AgentProbe, storedProbe } from "./probe";
 import {
   type AgentInfo,
   type AgentSettings,
   customInfo,
   detect,
+  resolveCommand,
 } from "./registry";
 
 /**
@@ -18,10 +24,12 @@ import {
  *     static;
  *   * `installed` / `resolvedPath` are this box's PATH, probed per request
  *     because a CLI installed a minute ago must appear without a restart;
- *   * `clientRevision`, `skillsRevision` and `launchArgs` are the integration's
- *     — `--settings <file>` names a path inside the running data directory, so
- *     it is answered now rather than remembered (docs/guides/agent-collaboration.md,
- *     "启动参数由 `GET /api/agents` 的 `launchArgs` 给出").
+ *   * `clientRevision`, `skillsRevision` and `launcher` are the integration's
+ *     — the launcher `run/<cli>` is a path inside the running data directory,
+ *     so it is answered now rather than remembered
+ *     (docs/design/canvas-launcher.md §8.1). The injected argv is no longer on
+ *     the row: the launcher appends it, and a caller that wants to see it reads
+ *     `GET /api/agents/{id}/integration`'s `launchArgs`.
  *
  * A revision is **omitted** rather than zeroed when its half is not installed:
  * the page draws "not integrated" from the field's absence, and a `0` would
@@ -36,13 +44,14 @@ export interface ListAgentsOptions {
 export interface AgentListRow extends AgentInfo {
   readonly clientRevision?: number;
   readonly skillsRevision?: number;
-  readonly launchArgs?: readonly string[];
   /**
-   * The canvas injection as words for the typed launch line — what the page
-   * appends, quoting them for the node terminal's shell. Codex's name
-   * environment variables its node terminal carries (`{ prefix, env }`).
+   * `run/<cli>` on this machine (`run\<cli>.exe` on Windows) — what a canvas
+   * launch line starts, with the CLI's program and flags as its arguments. A
+   * `custom:` entry answers its base CLI's. Absent while there is no current
+   * launcher (not written yet, Windows without `armadra-launch.exe`): the page
+   * then types a bare line.
    */
-  readonly launchWords?: readonly LaunchWord[];
+  readonly launcher?: string;
   /**
    * 缓存好的 `--version` 探测（`probe.ts`）。缺席表示这个 CLI 还没被探过，共享
    * 的求交集把它读成 unknown——**从不**读成「支持」。
@@ -50,6 +59,27 @@ export interface AgentListRow extends AgentInfo {
    * 这里只**读**缓存：探测在后台扫描里跑，一次列表绝不等一个子进程。
    */
   readonly probe?: AgentProbe;
+  /**
+   * 本机有没有这家 CLI 的历史数据（契约 §12.2）。只 stat 根目录，不扫描：
+   * 列表要便宜。
+   */
+  readonly history: HistoryAvailability;
+  /**
+   * 这家 CLI 在本机怎么说 ACP（契约 §14.1）。`installed` 在补齐过的 PATH 上找
+   * 适配器程序，每次请求都探；`version` 只读最近一次起会话或探测时
+   * `initialize` 报的值，没有就缺席——列表从不为它起进程。没有 ACP 入口的行
+   * 不带这个键。
+   */
+  readonly acp?: AgentAcpInfo;
+}
+
+/** `GET /api/agents` 行的 `acp`（契约 §14.1）。 */
+export interface AgentAcpInfo {
+  readonly support: AcpSupport;
+  readonly program: string;
+  readonly installed: boolean;
+  readonly version?: string;
+  readonly resume: AcpResume;
 }
 
 export function listAgents(options: ListAgentsOptions): AgentListRow[] {
@@ -57,7 +87,38 @@ export function listAgents(options: ListAgentsOptions): AgentListRow[] {
     ...detect(),
     ...options.settings.customAgents().map((custom) => customInfo(custom)),
   ];
-  return rows.map((row) => withIntegration(row, options));
+  return rows.map((row) => {
+    const acp = acpOf(row, options);
+    return {
+      ...withIntegration(row, options),
+      history: availabilityOf(row.id, options.settings, options.env),
+      ...(acp === undefined ? {} : { acp }),
+    };
+  });
+}
+
+/**
+ * ACP 那一半。一个 `custom:` 条目借它基础适配器的：ACP 入口是那家 CLI 的
+ * 适配器程序，与用户给它起的标签无关——只有基础 CLI 自己就是 ACP 入口
+ * （`native`）时，条目的启动程序就是它的入口（`acp/adapters.ts::adapterFor`）。
+ */
+function acpOf(
+  row: AgentInfo,
+  options: ListAgentsOptions,
+): AgentAcpInfo | undefined {
+  const provider = row.baseAgent ?? row.id;
+  const adapter = adapterFor(options.settings, row.id);
+  if (adapter === undefined) return undefined;
+  const installed =
+    resolveCommand(adapter.program, options.env ?? process.env) !== undefined;
+  const version = installed ? rememberedAcpVersion(provider) : undefined;
+  return {
+    support: adapter.support,
+    program: adapter.program,
+    installed,
+    ...(version === undefined ? {} : { version }),
+    resume: adapter.resume,
+  };
 }
 
 /**
@@ -65,7 +126,7 @@ export function listAgents(options: ListAgentsOptions): AgentListRow[] {
  *
  * A `custom:` entry borrows its base adapter's integration: the files on disk
  * belong to the CLI, not to the label the user gave it, so a custom Claude
- * reports the same revisions and the same `--settings` argv as Claude itself.
+ * reports the same revisions and the same launcher as Claude itself.
  *
  * Reading it must never take the list down. An unreadable config home is the
  * normal state of a CLI that is not installed, and the answer for it is a row
@@ -74,7 +135,7 @@ export function listAgents(options: ListAgentsOptions): AgentListRow[] {
 function withIntegration(
   row: AgentInfo,
   options: ListAgentsOptions,
-): AgentListRow {
+): Omit<AgentListRow, "history"> {
   const provider = row.baseAgent ?? row.id;
   let state;
   try {
@@ -89,8 +150,7 @@ function withIntegration(
     ...row,
     ...(state.hook.installed ? { clientRevision: state.hook.revision } : {}),
     ...(state.skill.installed ? { skillsRevision: state.skill.revision } : {}),
-    ...(state.launchArgs.length > 0 ? { launchArgs: state.launchArgs } : {}),
-    ...(state.launchWords.length > 0 ? { launchWords: state.launchWords } : {}),
+    ...(state.launcher === undefined ? {} : { launcher: state.launcher }),
     ...withProbe(row),
   };
 }

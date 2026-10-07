@@ -5,11 +5,13 @@
  * `agent.status` 事件给出「它们现在怎么样」，两者在这里合流成 `SessionRow`。
  * 分桶与排序都是纯函数，侧栏只负责渲染。
  */
+import { activeSourceId, scoped, srcKey } from "../sources/scope";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { AgentState, AgentStatus, SessionSummary } from "@armadra/shared";
 
-import { runtimeApi } from "../api/client";
+import { sourceById } from "../api/source";
+import { sourceApi } from "../sources/source-api";
 import { isAttention, useAgentStatusStore } from "./status-store";
 
 export interface SessionRow {
@@ -25,6 +27,8 @@ export interface SessionRow {
   updatedAt: string;
   /** 该 Runtime 实例里进程还活着。 */
   alive: boolean;
+  /** 会话的驱动方式；`acp` 的行带一个徽标（ACP 设计 §4.4）。 */
+  backend?: SessionSummary["backend"];
   /** 停留在当前状态多久（毫秒）。 */
   sinceMs: number;
 }
@@ -66,7 +70,7 @@ export function mergeSessions(
 ): SessionRow[] {
   return summaries
     .map((summary) => {
-      const status = statuses[summary.nodeId];
+      const status = statuses[scoped(summary.nodeId)];
       const fresher =
         status !== undefined &&
         millis(status.updatedAt) >= millis(summary.updatedAt);
@@ -83,6 +87,7 @@ export function mergeSessions(
         pendingId: fresher ? status.pendingId : summary.pendingId,
         updatedAt,
         alive: summary.alive,
+        ...(summary.backend ? { backend: summary.backend } : {}),
         sinceMs: Math.max(0, now - millis(updatedAt)),
       } satisfies SessionRow;
     })
@@ -151,13 +156,22 @@ export interface UseSessionsResult {
   refresh: () => void;
 }
 
-export function useSessions(workspaceId: string | null): UseSessionsResult {
-  const query = useQuery({
-    queryKey: ["sessions", workspaceId],
-    queryFn: () => runtimeApi.sessions(workspaceId!),
+/**
+ * 会话列表的查询（侧栏与镜像补齐共用一份缓存）：键与请求绑在同一个源上——
+ * 键是渲染时的源，请求也发往它，不随之后的当前源漂走。
+ */
+export function sessionsQuery(workspaceId: string | null) {
+  const sourceId = activeSourceId();
+  return {
+    queryKey: srcKey(sourceId, "sessions", workspaceId),
+    queryFn: () => sourceApi(sourceById(sourceId)).sessions(workspaceId!),
     enabled: Boolean(workspaceId),
     retry: false,
-  });
+  } as const;
+}
+
+export function useSessions(workspaceId: string | null): UseSessionsResult {
+  const query = useQuery(sessionsQuery(workspaceId));
   const statuses = useAgentStatusStore((state) => state.statuses);
   const tick = useTick(5_000);
 

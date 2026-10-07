@@ -13,6 +13,7 @@ import type {
   GitIntegrationSnapshot,
 } from "@armadra/shared";
 import { CherryPick, type CherryPickProps } from "./CherryPick";
+import { chooseOption } from "../../app/test-harness";
 vi.mock("../../app/preferences-store", () => ({
   useT: () => (key: string) => key,
 }));
@@ -119,9 +120,10 @@ describe("cherry-pick review", () => {
       screen.getByRole("button", { name: "gitRepo.startCherryPick" }),
     );
     expect(props.request).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText("gitIntegration.mainline"), {
-      target: { value: "2" },
-    });
+    await chooseOption(
+      screen.getByLabelText("gitIntegration.mainline"),
+      /^2 · /,
+    );
     await screen.findByText("+parent 2");
     fireEvent.click(
       screen.getByRole("button", { name: "gitRepo.startCherryPick" }),
@@ -154,9 +156,9 @@ describe("cherry-pick review", () => {
     const { props } = setup({ loadPreview });
     await enter();
     const select = await screen.findByLabelText("gitIntegration.mainline");
-    fireEvent.change(select, { target: { value: "1" } });
+    await chooseOption(select, /^1 · /);
     await screen.findByText("+parent 1");
-    fireEvent.change(select, { target: { value: "2" } });
+    await chooseOption(select, /^2 · /);
     fireEvent.click(
       screen.getByRole("button", { name: "gitRepo.startCherryPick" }),
     );

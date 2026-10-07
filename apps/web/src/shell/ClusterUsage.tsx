@@ -8,13 +8,17 @@ import {
   useT,
   type Translate,
 } from "../app/preferences-store";
+import { formatTokens } from "../lib/cost";
 import {
+  usageEstimatePercent,
+  usageLocalEstimate,
   usagePercent,
   usageReasonKey,
   usageWindowLabel as windowLabel,
 } from "../lib/usage";
 import { useCanvasStore } from "../store/canvas-store";
 import { useCompactLayout } from "../platform/layout";
+import { Button } from "@/ui/button";
 import { IconButton } from "@/ui/icon-button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui/tooltip";
 
@@ -47,10 +51,15 @@ const RING_COLOR: Record<Level, string> = {
   danger: "var(--danger)",
 };
 
-/** 只有 `ok` 与 `error` 上环；`unavailable` 当作这台机器上没有这个 CLI。 */
+/**
+ * 只有 `ok` 与 `error` 上环；`unavailable` 当作这台机器上没有这个 CLI——除非
+ * 它带着本地估算（额度端点按政策关着，契约 §12.1）。
+ */
 function visible(usage: Usage | undefined): UsageProvider[] {
   return (usage?.providers ?? []).filter(
-    (provider) => provider.status !== "unavailable",
+    (provider) =>
+      provider.status !== "unavailable" ||
+      usageLocalEstimate(provider) !== null,
   );
 }
 
@@ -60,6 +69,11 @@ function maxPercent(providers: UsageProvider[], now: number): number | null {
     .filter((provider) => provider.status === "ok")
     .flatMap((provider) =>
       provider.windows.map((w) => usagePercent(provider, w, now)),
+    )
+    .concat(
+      providers.flatMap((provider) =>
+        (usageLocalEstimate(provider) ?? []).map(usageEstimatePercent),
+      ),
     )
     .filter((value): value is number => value !== null);
   return values.length === 0 ? null : Math.max(...values);
@@ -74,6 +88,18 @@ function summary(
   return providers
     .map((provider) => {
       const name = t(`usage.provider.${provider.id}`);
+      const estimate = usageLocalEstimate(provider);
+      if (estimate !== null)
+        return `${name} ${t("usage.estimate.local")} ${estimate
+          .map((w) => {
+            const percent = usageEstimatePercent(w);
+            return `${windowLabel(t, w)} ${
+              percent === null
+                ? t("usage.cost.tokenCount", { value: formatTokens(w.used) })
+                : t("usage.percent", { value: Math.round(percent) })
+            }`;
+          })
+          .join(" ")}`;
       if (provider.status === "error")
         return `${name} ${t("usage.status.error")} · ${t(
           usageReasonKey(provider.reason),
@@ -143,14 +169,16 @@ export function ClusterUsage() {
   return (
     <Tooltip delayDuration={500}>
       <TooltipTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-sm"
           data-slot="cluster-usage"
           data-level={ringLevel ?? "none"}
           aria-label={t("usage.dockLabel", { value: detail })}
           aria-pressed={usagePanel !== "closed"}
           onClick={open}
-          className="grid size-7 shrink-0 place-items-center rounded-full p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          className="grid size-7 place-items-center rounded-full p-0"
           style={
             {
               "--pct": percent ?? 0,
@@ -162,10 +190,10 @@ export function ClusterUsage() {
             } as CSSProperties
           }
         >
-          <span className="grid size-[22px] place-items-center rounded-full bg-panel text-[10px] leading-none font-medium tabular-nums text-foreground">
+          <span className="grid size-[22px] place-items-center rounded-full bg-panel text-[length:var(--text-caption)] leading-none font-medium tabular-nums text-foreground">
             {percent === null ? "—" : Math.round(percent)}
           </span>
-        </button>
+        </Button>
       </TooltipTrigger>
       <TooltipContent side="left">{detail}</TooltipContent>
     </Tooltip>

@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseYaml } from "./workflow-yaml.mjs";
 import { TARGETS } from "../release/artifacts.mjs";
+import { loadManifest } from "./e2e.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const WORKFLOW_DIR = join(root, ".github/workflows");
@@ -44,6 +45,9 @@ export const RUNNERS = new Set([
   "windows-2022",
   "windows-11-arm",
 ]);
+
+/** The runner label prefix of each `process.platform` a tier B entry may name. */
+const RUNNER_PREFIX = { linux: "ubuntu-", darwin: "macos-", win32: "windows-" };
 
 /** Every value a matrix gives one key, across both `include` and list form. */
 function matrixValues(job, key) {
@@ -235,11 +239,119 @@ export function checkWorkflow(name, document) {
   return problems;
 }
 
+/** Every `run` line of a job, joined; empty for a job that is not a mapping. */
+function jobRuns(job) {
+  if (!job || !Array.isArray(job.steps)) return "";
+  return job.steps
+    .map((step) => (typeof step?.run === "string" ? step.run : ""))
+    .join("\n");
+}
+
+/**
+ * The end-to-end tiers (docs/guides/ci-release.md §1.1): tier A runs on every
+ * push as ci.yml's `e2e` job, tier B nightly. A tier that silently stops being
+ * scheduled looks exactly like a tier that passes, so its wiring is asserted.
+ *
+ * For tier B that means: every system a tier B entry names in `platforms` has a
+ * nightly job on that system running `--tier b`; a failure opens an issue (a
+ * job gated on `failure()` that needs every tier B job and may write issues);
+ * and the workflow reads no secret but the default GITHUB_TOKEN, because a
+ * scheduled run on a fork or a broken probe must not be able to spend one.
+ */
+export function checkE2eTiers(documents, entries = loadManifest().entries) {
+  const problems = [];
+  const ci = documents["ci.yml"];
+  // The tiers hang off ci.yml; a directory without it is not this repository's.
+  if (!ci || typeof ci !== "object") return problems;
+  {
+    const job = ci.jobs?.e2e;
+    if (!job) problems.push("ci.yml: has no e2e job running tier A");
+    else {
+      if (!/tools\/ci\/e2e\.mjs\s+--tier\s+a\b/.test(jobRuns(job)))
+        problems.push(
+          "ci.yml: job e2e does not run node tools/ci/e2e.mjs --tier a",
+        );
+      if (!runnerLabels(job).every((label) => label.startsWith("ubuntu-")))
+        problems.push("ci.yml: job e2e must run on ubuntu (tmux, xvfb)");
+    }
+  }
+  const nightly = documents["nightly.yml"];
+  if (!nightly || typeof nightly !== "object")
+    problems.push("nightly.yml: is missing; tier B has nowhere to run");
+  else {
+    const triggers = nightly.on ?? nightly[true] ?? {};
+    if (!Array.isArray(triggers.schedule) || triggers.schedule.length === 0)
+      problems.push("nightly.yml: has no schedule trigger");
+    if (!("workflow_dispatch" in triggers))
+      problems.push("nightly.yml: cannot be run by hand (workflow_dispatch)");
+    const jobs = Object.entries(nightly.jobs ?? {});
+    const tierB = jobs.filter(([, job]) =>
+      /tools\/ci\/e2e\.mjs\s+--tier\s+b\b/.test(jobRuns(job)),
+    );
+    if (tierB.length === 0)
+      problems.push("nightly.yml: no job runs node tools/ci/e2e.mjs --tier b");
+    else {
+      const wanted = new Map();
+      for (const entry of entries.filter((item) => item.tier === "b"))
+        for (const platform of entry.platforms ?? [])
+          wanted.set(platform, [...(wanted.get(platform) ?? []), entry.id]);
+      for (const [platform, ids] of wanted) {
+        const prefix = RUNNER_PREFIX[platform];
+        if (
+          !tierB.some(([, job]) =>
+            runnerLabels(job).some((label) => label.startsWith(prefix)),
+          )
+        )
+          problems.push(
+            `nightly.yml: no job runs --tier b on ${platform}, where ${ids.join(", ")} must run`,
+          );
+      }
+      const reporter = jobs.find(
+        ([, job]) =>
+          /\bfailure\(\)/.test(String(job?.if ?? "")) &&
+          /gh issue (create|comment)/.test(jobRuns(job)),
+      );
+      if (!reporter)
+        problems.push(
+          "nightly.yml: no job opens an issue when a tier B job fails",
+        );
+      else {
+        const [name, job] = reporter;
+        const needs = [job.needs ?? []].flat();
+        const unwatched = tierB
+          .map(([jobName]) => jobName)
+          .filter((jobName) => !needs.includes(jobName));
+        if (unwatched.length > 0)
+          problems.push(
+            `nightly.yml: job ${name} does not need ${unwatched.join(", ")}, so their failures open no issue`,
+          );
+        if (job.permissions?.issues !== "write")
+          problems.push(
+            `nightly.yml: job ${name} opens issues without permissions: issues: write`,
+          );
+      }
+    }
+    const secrets = [
+      ...new Set(
+        [...JSON.stringify(nightly).matchAll(/secrets\.([A-Za-z0-9_]+)/g)]
+          .map((match) => match[1])
+          .filter((name) => name !== "GITHUB_TOKEN"),
+      ),
+    ];
+    if (secrets.length > 0)
+      problems.push(
+        `nightly.yml: reads ${secrets.join(", ")}; tier B may use only the default GITHUB_TOKEN`,
+      );
+  }
+  return problems;
+}
+
 /** Check every workflow in the repository. */
 export function checkWorkflowDirectory(directory = WORKFLOW_DIR) {
   const problems = [];
   const files = readdirSync(directory).filter((name) => /\.ya?ml$/.test(name));
   if (files.length === 0) problems.push(`${directory} holds no workflows`);
+  const documents = {};
   for (const file of files.sort()) {
     let document;
     try {
@@ -248,8 +360,10 @@ export function checkWorkflowDirectory(directory = WORKFLOW_DIR) {
       problems.push(`${file}: ${error.message}`);
       continue;
     }
+    documents[file] = document;
     problems.push(...checkWorkflow(file, document));
   }
+  problems.push(...checkE2eTiers(documents));
   return { files, problems };
 }
 

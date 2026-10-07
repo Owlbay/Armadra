@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { probeSession } from "./probe-session.mjs";
 const faultPoint = process.argv
   .find((arg) => arg.startsWith("--fault="))
   ?.slice(8);
@@ -513,17 +514,17 @@ try {
     if (runId) {
       const snapshot = cli(["run", "get", "--run", runId]);
       const hints = JSON.parse(readFileSync(join(dataDir, "endpoints.json")));
+      const session = await probeSession({ dataDir, base: hints.runtime.http });
       for (const task of snapshot.tasks ?? [])
         if (task.sessionId) {
           // The normal owner terminal route is used solely to clean up this fixture's PTYs.
-          await fetch(
-            hints.runtime.http + `/api/terminals/${task.sessionId}/terminate`,
-            {
+          await session
+            .fetch(`/api/terminals/${task.sessionId}/terminate`, {
               method: "POST",
               headers: { "content-type": "application/json" },
               body: JSON.stringify({ mode: "session" }),
-            },
-          ).catch(() => {});
+            })
+            .catch(() => {});
         }
     }
   } catch {

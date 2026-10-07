@@ -1,0 +1,22 @@
+# Rendered by tools/release/publish-channels.mjs for {{repo}} {{tag}}.
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+PackageIdentifier: {{wingetId}}
+PackageVersion: {{version}}
+InstallerType: nullsoft
+Scope: user
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+InstallerSwitches:
+  Custom: /currentuser
+UpgradeBehavior: install
+Installers:
+  - Architecture: x64
+    InstallerUrl: {{downloadBase}}/v{{version}}/Armadra_{{version}}_windows-x86_64-setup.exe
+    InstallerSha256: {{SHA256:windows-x86_64-setup.exe}}
+  - Architecture: arm64
+    InstallerUrl: {{downloadBase}}/v{{version}}/Armadra_{{version}}_windows-aarch64-setup.exe
+    InstallerSha256: {{SHA256:windows-aarch64-setup.exe}}
+ManifestType: installer
+ManifestVersion: 1.10.0

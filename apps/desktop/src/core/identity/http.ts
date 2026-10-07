@@ -2,9 +2,10 @@ import type { ServerResponse } from "node:http";
 import { MAX_FRAME_BYTES, PROTOCOL_MAJOR, PROTOCOL_MINOR } from "./protocol";
 import type { CoreRequest } from "../http/router";
 import type { AccountsService } from "./accounts";
-import { handleAccounts } from "./accounts-http";
+import { type IdentitySecurity, handleAccounts } from "./accounts-http";
 import { IdentityError, identityFailure } from "./errors";
 import { nativeOrigin } from "./origin";
+import type { WsTickets } from "./transport";
 import type {
   AccessRequest,
   IdentityService,
@@ -42,17 +43,99 @@ export interface IdentityHttpOptions {
   readonly accounts?: AccountsService;
   /** 额外的能力名，各域装配时追加。 */
   readonly capabilities?: () => readonly string[];
+  /**
+   * 加固（契约 §18.1–§18.4）：口令策略、锁定、passkey、MFA、会话列表。没有它时
+   * 登录照旧、那几条路径 404。
+   */
+  readonly security?: IdentitySecurity;
+  /**
+   * 回环监听上的 WebSocket 票（契约 §3.2，安全审查 L9）。给了才答
+   * `POST ws-ticket`：桌面壳的页面拿访问密钥换一张，升级时由回环的门兑换
+   * （`identity/loopback.ts`）。经 Gateway 来的那一张由 Gateway 自己签。
+   */
+  readonly wsTickets?: WsTickets;
+}
+
+/**
+ * 请求的来源地址：socket 的对端，IPv4 映射地址去掉前缀。不读
+ * `X-Forwarded-For`——它谁都能写；反向代理后面看到的是代理，限流按代理算，
+ * 宁紧勿松。
+ */
+export function remoteAddress(request: CoreRequest): string {
+  const raw = request.raw.socket?.remoteAddress ?? "";
+  return (raw.startsWith("::ffff:") ? raw.slice(7) : raw).slice(0, 64);
 }
 
 /* ------------------------------ 凭据的读取 -------------------------------- */
 
-/** 这个请求走不走原生传输：明文连接 + 壳能呈现的回环 HTTP 来源。 */
+/**
+ * Gateway 认定为原生 App（Bearer 模式，架构 §7）的那些请求：TLS 上来、来源是
+ * App 的固定来源，凭据和桌面壳的原生传输一样走 `Authorization` 与响应体，不发
+ * Cookie。由 `core/gateway/listener.ts` 在转交之前标上；按请求对象记，请求
+ * 结束就随它回收。
+ */
+const bearerTransports = new WeakSet<object>();
+
+export function markBearerTransport(raw: object): void {
+  bearerTransports.add(raw);
+}
+
+/**
+ * 这个请求走不走原生传输：明文连接 + 壳能呈现的回环 HTTP 来源，或者 Gateway
+ * 标过的 Bearer 模式请求。
+ */
 export function nativeRequest(request: CoreRequest): boolean {
+  if (bearerTransports.has(request.raw)) return true;
   const origin = header(request, "origin");
   return !isSecure(request) && origin !== undefined && nativeOrigin(origin);
 }
 
-function isSecure(request: CoreRequest): boolean {
+/**
+ * 这次写请求要不要 `X-Armadra-CSRF`（契约 §3.2、§17.4）：凭据是 Cookie（浏览器
+ * 会话）时要——Cookie 是环境凭据，跨站页面发起的请求会自动带上它，双提交的那枚
+ * 密钥是唯一分得清「是不是这张页面」的东西；凭据是 `Authorization: Bearer`
+ * （桌面壳的原生传输、Gateway 的原生 App）时不要——跨站页面拿不到也带不上那个
+ * 头，页面在这两种传输上本来就不发 CSRF 头。
+ */
+export function csrfRequired(request: CoreRequest): boolean {
+  return !nativeRequest(request);
+}
+
+/**
+ * 明文回环上没带凭据的一次调用，要不要按本机主人处理（契约 §3.2，安全审查 L9）。
+ *
+ * 缺省**不**：自 0.2.0 起桌面壳的页面经票据换来的 Bearer 打这两面（GitHub、
+ * 自动化），本机另一个回环端口上的网页再也冒充不了主人。只有探针与开发命令
+ * 起的裸 core（页面不在壳里、拿不到票）经 `ARMADRA_LOOPBACK_OWNER=1` 显式打开；
+ * 桌面壳与服务器壳都不开（`core/main.ts` 的 `loopbackAnonymousOwner`）。
+ */
+let loopbackOwner = false;
+
+export function setLoopbackAnonymousOwner(enabled: boolean): void {
+  loopbackOwner = enabled;
+}
+
+export function loopbackAnonymousOwner(): boolean {
+  return loopbackOwner;
+}
+
+/**
+ * 这次调用走不走「按本机主人」那条路：选项打开、明文回环来源、一个凭据都没带。
+ * Gateway 标过的 Bearer 模式请求永远不算——那是经网络来的原生 App。
+ */
+export function anonymousLoopbackOwner(
+  request: CoreRequest,
+  token: string,
+): boolean {
+  return (
+    loopbackOwner &&
+    token === "" &&
+    !bearerTransports.has(request.raw) &&
+    nativeRequest(request)
+  );
+}
+
+export function isSecure(request: CoreRequest): boolean {
   return (request.raw.socket as { encrypted?: boolean }).encrypted === true;
 }
 
@@ -102,7 +185,7 @@ export function credential(
     : cookieCredential(request, hostId, purpose);
 }
 
-function sessionCookies(
+export function sessionCookies(
   request: CoreRequest,
   response: ServerResponse,
   hostId: string,
@@ -152,10 +235,7 @@ function grants(principal: Principal) {
 }
 
 /** 新面上的会话，JSON，camelCase。密钥不在里面——它们在 `native` 里单独给。 */
-export function sessionJson(
-  principal: Principal,
-  expiresAtUnixMs: number,
-): Record<string, unknown> {
+export function sessionJson(principal: Principal, expiresAtUnixMs: number) {
   return {
     hostId: principal.hostId,
     device: {
@@ -215,18 +295,26 @@ export class IdentityHttp {
       origin,
       csrfToken,
     };
+    const csrf = csrfRequired(request);
+    const remoteIp = remoteAddress(request);
+    const userAgent = (header(request, "user-agent") ?? "").slice(0, 256);
     try {
       switch (`${request.method} ${action}`) {
         case "POST pair": {
           const body = request.json<{ ticket?: unknown }>();
           if (typeof body?.ticket !== "string")
             throw new IdentityError("invalid");
-          const credentials = this.service.consumeBootstrap({
-            ticket: body.ticket,
-            hostId,
-            instanceId: this.options.instanceId,
-            origin,
-          });
+          const ticket = body.ticket;
+          const credentials = this.throttled(remoteIp, () =>
+            this.service.consumeBootstrap({
+              ticket,
+              hostId,
+              instanceId: this.options.instanceId,
+              origin,
+              remoteIp,
+              userAgent,
+            }),
+          );
           sessionCookies(request, response, hostId, credentials);
           this.json(
             response,
@@ -247,36 +335,24 @@ export class IdentityHttp {
           return;
         }
         case "GET session": {
-          const principal = this.service.authenticate(actor);
-          // 成员的快照只有底线，共享得来的授权每次现编；页面据此决定显示什么，
-          // 所以这里报的是「快照 ∪ 现编」，和判定用的是同一份。
-          const effective =
-            principal.role === "member" && this.options.accounts !== undefined
-              ? {
-                  ...principal,
-                  scopes: [
-                    ...principal.scopes,
-                    ...this.options.accounts.effectiveGrantScopes(
-                      principal.principalId,
-                    ),
-                  ],
-                }
-              : principal;
           this.json(
             response,
             cors,
             200,
-            sessionJson(effective, principal.accessExpiresAtMs),
+            this.operations(actor, csrf).session(),
           );
           return;
         }
         case "POST session/refresh": {
-          const credentials = this.service.refresh({
-            refreshToken: credential(request, hostId, "refresh"),
-            csrfToken,
-            hostId,
-            origin,
-          });
+          const credentials = this.throttled(remoteIp, () =>
+            this.service.refresh({
+              refreshToken: credential(request, hostId, "refresh"),
+              csrfToken,
+              requireCsrf: csrf,
+              hostId,
+              origin,
+            }),
+          );
           sessionCookies(request, response, hostId, credentials);
           this.json(
             response,
@@ -287,33 +363,65 @@ export class IdentityHttp {
           return;
         }
         case "POST session/csrf": {
-          this.json(response, cors, 200, {
-            csrfToken: this.service.renewCsrf({
+          const renewed = this.throttled(remoteIp, () =>
+            this.service.renewCsrf({
               refreshToken: credential(request, hostId, "refresh"),
               hostId,
               origin,
             }),
-          });
+          );
+          this.json(response, cors, 200, { csrfToken: renewed });
           return;
         }
         case "POST session/logout": {
-          this.service.logoutRefresh({
-            refreshToken: credential(request, hostId, "refresh"),
-            csrfToken,
-            hostId,
-            origin,
-          });
+          this.throttled(remoteIp, () =>
+            this.service.logoutRefresh({
+              refreshToken: credential(request, hostId, "refresh"),
+              csrfToken,
+              requireCsrf: csrf,
+              hostId,
+              origin,
+            }),
+          );
           clearSessionCookies(request, response, hostId);
           this.json(response, cors, 200, { closed: true });
           return;
         }
+        case "POST ws-ticket": {
+          const tickets = this.options.wsTickets;
+          // 只给原生传输：浏览器会话（Cookie）的流经 Gateway 的门认 Cookie，用
+          // 不着票。
+          if (tickets === undefined || !nativeRequest(request)) {
+            this.json(response, cors, 400, {
+              code: "bearer_required",
+              message: "WebSocket 票只发给原生传输",
+            });
+            return;
+          }
+          this.service.authenticate(actor);
+          const issued = tickets.issue({
+            accessToken: actor.accessToken,
+            origin: actor.origin,
+          });
+          response.setHeader("cache-control", "no-store");
+          this.json(response, cors, 200, {
+            ticket: issued.ticket,
+            expiresAt: new Date(issued.expiresAtMs).toISOString(),
+          });
+          return;
+        }
         case "GET devices": {
-          const page = this.service.listDevices(
-            actor,
-            request.query.get("afterId") ?? "",
-            Number(request.query.get("limit") ?? 50),
+          const afterId = request.query.get("afterId") ?? "";
+          const limit = Number(request.query.get("limit") ?? 50);
+          this.json(
+            response,
+            cors,
+            200,
+            this.operations(actor, csrf).devices.list(() => ({
+              afterId,
+              limit,
+            })),
           );
-          this.json(response, cors, 200, page);
           return;
         }
         case "POST devices/revoke": {
@@ -327,39 +435,79 @@ export class IdentityHttp {
           ) {
             throw new IdentityError("invalid");
           }
-          this.service.revokeDevice(
-            { ...actor, requireCsrf: true },
-            body.deviceId,
-            body.expectedRevision,
-          );
-          this.json(response, cors, 200, {
+          const input = {
             deviceId: body.deviceId,
-            revoked: true,
-          });
+            expectedRevision: body.expectedRevision,
+          };
+          this.json(
+            response,
+            cors,
+            200,
+            this.operations(actor, csrf).devices.revoke(() => input),
+          );
           return;
         }
         default: {
           // 账号 / 组 / 共享这一面（R6b）。认证在它内部按需发生：`login` 与
           // 邀请接受之前调用方可能还没有会话，而其余动作都要求一个。
           const accounts = this.options.accounts;
+          // 和配对同一条规矩：原生传输的密钥在响应体里，浏览器会话才发
+          // Cookie（而且只在 HTTPS 的权威来源上带 Secure）。
+          const issue = (credentials: SessionCredentials) => {
+            sessionCookies(request, response, hostId, credentials);
+            return this.credentialJson(request, credentials);
+          };
+          const security = this.options.security;
           const answered =
             accounts === undefined
               ? undefined
-              : handleAccounts(action, request, {
+              : await handleAccounts(action, request, {
                   accounts,
-                  authenticate: () => this.service.authenticate(actor),
-                  login: (input) => {
-                    const credentials = this.service.loginWithPassword({
-                      ...input,
-                      hostId,
-                      origin,
-                    });
-                    // 和配对同一条规矩：原生传输的密钥在响应体里，浏览器会话
-                    // 才发 Cookie（而且只在 HTTPS 的权威来源上带 Secure）。
-                    sessionCookies(request, response, hostId, credentials);
-                    return this.credentialJson(request, credentials);
-                  },
+                  // 写操作在 Cookie 会话上要 CSRF（契约 §10 与 §18 同一套）。
+                  authenticate: (write = false) =>
+                    this.service.authenticate({
+                      ...actor,
+                      requireCsrf: write && csrf,
+                    }),
+                  login: (input) =>
+                    issue(
+                      this.service.loginWithPassword({
+                        ...input,
+                        hostId,
+                        origin,
+                        remoteIp,
+                        userAgent,
+                      }),
+                    ),
+                  ...(security === undefined
+                    ? {}
+                    : {
+                        security: {
+                          security,
+                          service: this.service,
+                          actor,
+                          csrf,
+                          hostId,
+                          origin,
+                          remoteIp,
+                          userAgent,
+                          issue,
+                        },
+                      }),
                 });
+          if (answered?.text !== undefined) {
+            // 审计导出（契约 §18.6）是这一面唯一不是 JSON 的答案。
+            const payload = Buffer.from(answered.text.body, "utf8");
+            response.writeHead(answered.status, {
+              ...cors,
+              "content-type": answered.text.contentType,
+              "content-length": String(payload.byteLength),
+              "content-disposition": `attachment; filename="${answered.text.filename}"`,
+              "cache-control": "no-store",
+            });
+            response.end(payload);
+            return;
+          }
           if (answered !== undefined) {
             this.json(response, cors, answered.status, answered.body);
             return;
@@ -375,6 +523,12 @@ export class IdentityHttp {
       const failure = identityFailure(
         error instanceof SyntaxError ? new IdentityError("invalid") : error,
       );
+      if (failure.retryAfterMs !== undefined) {
+        response.setHeader(
+          "retry-after",
+          String(Math.max(1, Math.ceil(failure.retryAfterMs / 1000))),
+        );
+      }
       this.json(response, cors, failure.status, {
         code: failure.code,
         message: failure.message,
@@ -382,11 +536,42 @@ export class IdentityHttp {
     }
   }
 
+  /**
+   * `identity.session` 与 `identity.devices.*` 的操作（契约 §42.1）：旧路径与
+   * procedure 同调。`actor` 是这次的凭据（旧路径是令牌，procedure 是门认过的
+   * 会话），`csrf` 是写操作要不要核对 CSRF。
+   */
+  operations(actor: AccessRequest, csrf: boolean) {
+    return identityOperations({
+      service: this.service,
+      ...(this.options.accounts === undefined
+        ? {}
+        : { accounts: this.options.accounts }),
+      actor,
+      csrf,
+    });
+  }
+
+  /**
+   * 凭据换会话的那几条（配对、刷新、换 CSRF、登出）的限流：桶空了答 429，
+   * 只有失败才扣（`Throttle.checkIp` / `chargeIp`）。没装加固时不限。
+   */
+  private throttled<T>(remoteIp: string, action: () => T): T {
+    const throttle = this.options.security?.throttle;
+    throttle?.checkIp(remoteIp);
+    try {
+      return action();
+    } catch (error) {
+      if (error instanceof IdentityError) throttle?.chargeIp(remoteIp);
+      throw error;
+    }
+  }
+
   private credentialJson(
     request: CoreRequest,
     credentials: SessionCredentials,
   ): Record<string, unknown> {
-    const body = sessionJson(
+    const body: Record<string, unknown> = sessionJson(
       credentials.principal,
       credentials.accessExpiresAtMs,
     );
@@ -436,6 +621,60 @@ export class IdentityHttp {
     });
     response.end(payload);
   }
+}
+
+/** 会话与设备（契约 §42.1），旧路径与 procedure 同调。 */
+export function identityOperations(input: {
+  readonly service: IdentityService;
+  readonly accounts?: AccountsService;
+  readonly actor: AccessRequest;
+  readonly csrf: boolean;
+}) {
+  const { service, accounts, actor, csrf } = input;
+  return {
+    /**
+     * 这条会话。成员的快照只有底线，共享得来的授权每次现编；页面据此决定显示
+     * 什么，所以这里报的是「快照 ∪ 现编」，和判定用的是同一份。
+     */
+    session() {
+      const principal = service.authenticate(actor);
+      const effective =
+        principal.role === "member" && accounts !== undefined
+          ? {
+              ...principal,
+              scopes: [
+                ...principal.scopes,
+                ...accounts.effectiveGrantScopes(principal.principalId),
+              ],
+            }
+          : principal;
+      return sessionJson(effective, principal.accessExpiresAtMs);
+    },
+    devices: {
+      /** 本人配过的设备，按 id 分页。 */
+      list(read: () => { afterId?: string; limit?: number } | undefined) {
+        const query = read() ?? {};
+        return service.listDevices(
+          actor,
+          query.afterId ?? "",
+          query.limit ?? 50,
+        );
+      },
+      /**
+       * 撤销一台设备。`expectedRevision` 是读到那一行时的 epoch：两台设备同时
+       * 撤销同一台是两个决定，输的那个要知道自己输了。
+       */
+      revoke(read: () => { deviceId: string; expectedRevision: number }) {
+        const { deviceId, expectedRevision } = read();
+        service.revokeDevice(
+          { ...actor, requireCsrf: csrf },
+          deviceId,
+          expectedRevision,
+        );
+        return { deviceId, revoked: true as const };
+      },
+    },
+  };
 }
 
 function header(request: CoreRequest, name: string): string | undefined {

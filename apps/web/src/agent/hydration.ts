@@ -14,9 +14,10 @@
 import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { runtimeApi } from "../api/client";
 import { onWorkspaceConnection } from "../api/events";
+import { sessionsQuery } from "./sessions";
 import { useAgentStatusStore } from "./status-store";
+import { activeSourceId, sk } from "../sources/scope";
 
 /**
  * 在应用挂载处补齐镜像，并在事件流重连后重放。
@@ -26,26 +27,23 @@ import { useAgentStatusStore } from "./status-store";
  */
 export function useAgentStatusHydration(workspaceId: string | null): void {
   const queryClient = useQueryClient();
-  const query = useQuery({
-    queryKey: ["sessions", workspaceId],
-    queryFn: () => runtimeApi.sessions(workspaceId!),
-    enabled: Boolean(workspaceId),
-    retry: false,
-  });
+  const query = useQuery(sessionsQuery(workspaceId));
   const hydrate = useAgentStatusStore((state) => state.hydrate);
 
   useEffect(() => {
-    if (query.data && workspaceId) hydrate(query.data, workspaceId);
+    if (query.data && workspaceId)
+      hydrate(query.data, workspaceId, activeSourceId());
   }, [query.data, workspaceId, hydrate]);
 
   useEffect(() => {
     if (!workspaceId) return;
-    return onWorkspaceConnection((eventWorkspaceId, connected) => {
+    return onWorkspaceConnection((eventWorkspaceId, connected, from) => {
+      if (from !== activeSourceId()) return;
       // 只认自己这个工作空间的上升沿：切换工作空间时旧连接的关闭事件不该
       // 触发新工作空间的重取。
       if (eventWorkspaceId !== workspaceId || !connected) return;
       void queryClient.invalidateQueries({
-        queryKey: ["sessions", workspaceId],
+        queryKey: sk("sessions", workspaceId),
       });
     });
   }, [workspaceId, queryClient]);

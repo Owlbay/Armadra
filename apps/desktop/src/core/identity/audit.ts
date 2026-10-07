@@ -50,3 +50,57 @@ export function audit(event: AuditEvent): void {
     // 见上：审计不改变调用方的结果。
   }
 }
+
+/**
+ * 身份加固（契约 §18.1–§18.4）写的审计动作，安全页（G2-8）按它们筛选。
+ * `identity.login` 的 `detail.method` 是 `password | passkey | totp | recovery | oauth`。
+ */
+export const SECURITY_AUDIT_ACTIONS = [
+  "identity.login",
+  "identity.login.failed",
+  "identity.lockout",
+  "identity.lockout.clear",
+  "identity.passkey.add",
+  "identity.passkey.remove",
+  // G5-02：passkey 改名、口令重置链接（契约 §25）。令牌不进 `detail`。
+  "identity.passkey.rename",
+  "identity.password.reset.issue",
+  "identity.password.reset.use",
+  "identity.mfa.enroll",
+  "identity.mfa.disable",
+  "identity.mfa.reset",
+  "identity.mfa.recovery.used",
+  "identity.mfa.recovery.regenerate",
+  "identity.session.revoke",
+  "identity.session.revoke-others",
+  // OAuth / OIDC（契约 §18.5，G1-12）。登录本身仍是 `identity.login`，`method: "oauth"`。
+  "identity.oauth.bind",
+  "identity.oauth.unbind",
+  "identity.oauth.signup",
+  "identity.oauth.failed",
+  "identity.oauth.secret.set",
+  "identity.oauth.secret.clear",
+  // 安全收尾（G3-8）：泄露检查、对外服务、节点凭据与 ama 模型密钥。值、票、
+  // 口令都不进 `detail`。
+  "identity.password.breached",
+  "identity.password.breach_check_failed",
+  "gateway.configure",
+  "gateway.pairing.issue",
+  "credential.create",
+  "credential.update",
+  "credential.delete",
+  "ama.credential.set",
+  "ama.credential.clear",
+  // G5-20（安全审查 L10）：ama 节点没设模型，兑换只能答全部已设的密钥。
+  "ama.credential.unscoped",
+  // 云登录与登记（契约 §31）。登录本身另有 `identity.login`（`method: "cloud"`）；
+  // 断言原文、注册令牌、源私钥不进 `detail`。
+  "cloud.login",
+  "cloud.bind",
+  "cloud.register",
+  "cloud.revoke",
+  "cloud.relayDismiss",
+  "invitation.accept.link",
+] as const;
+
+export type SecurityAuditAction = (typeof SECURITY_AUDIT_ACTIONS)[number];

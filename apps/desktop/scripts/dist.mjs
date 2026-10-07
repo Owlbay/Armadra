@@ -13,6 +13,12 @@
  * (W2.2's read side keys off this field): a local build is indistinguishable
  * from a published one to `app.isPackaged`, so without this marker it would
  * poll a production update feed that never published its version.
+ *
+ * `ARMADRA_DIST_RELEASE=1` is the one thing that leaves the marker out: the
+ * release workflow sets it, and so does `tools/probes/update-e2e.mjs`, whose
+ * whole point is a package that updates. `ARMADRA_DIST_VERSION` packages under
+ * another version (`extraMetadata.version`) without touching the manifests —
+ * the probe's "next release" is the same tree with a higher number.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -124,11 +130,50 @@ function restrictArch(config, arch) {
   return result;
 }
 
-export function resolveConfig({ env = process.env, local = true } = {}) {
+/** The release-build switch: set, the package carries no disabled-updates marker. */
+export const RELEASE_ENV = "ARMADRA_DIST_RELEASE";
+/** Package under this version instead of the manifest's. */
+export const VERSION_ENV = "ARMADRA_DIST_VERSION";
+
+/** Whether this run is a local build (the default) or a release build. */
+export function isLocalBuild(env = process.env) {
+  const value = (env[RELEASE_ENV] ?? "").trim();
+  return value === "" || value === "0";
+}
+
+/**
+ * The AppImage toolset a Linux arm64 build packs with.
+ *
+ * electron-builder's default (`0.0.0`, AppImageKit 12) ships an arm64 runtime
+ * that is dynamically linked against the unversioned `libz.so` — a name only
+ * the zlib *development* package provides — so on a clean system the AppImage
+ * stops before it has extracted anything:
+ * `error while loading shared libraries: libz.so`. Putting a zlib into the
+ * image cannot help; the runtime is what fails to load. Toolset `1.0.3` packs
+ * the static type-2 runtime instead, which needs no shared library at all.
+ * The default toolset's x64 runtime links the versioned `libz.so.1`, which
+ * every glibc system has (zlib1g is essential on Debian/Ubuntu), so x64 keeps
+ * the toolset its releases have always shipped with.
+ */
+export const ARM64_APPIMAGE_TOOLSET = "1.0.3";
+
+export function appImageToolset(arch) {
+  return arch === "arm64"
+    ? { toolsets: { appimage: ARM64_APPIMAGE_TOOLSET } }
+    : {};
+}
+
+export function resolveConfig({
+  env = process.env,
+  local = isLocalBuild(env),
+} = {}) {
   const base = load(readFileSync(join(app, "electron-builder.yml"), "utf8"));
   const plan = signingPlan({ env });
   let config = restrictArch(
-    mergeConfig(base, configOverride(plan, env)),
+    mergeConfig(
+      mergeConfig(base, configOverride(plan, env)),
+      appImageToolset(distArch(env)),
+    ),
     distArch(env),
   );
   if (local) {
@@ -136,10 +181,21 @@ export function resolveConfig({ env = process.env, local = true } = {}) {
       extraMetadata: { armadraUpdates: "disabled" },
     });
   }
+  const version = (env[VERSION_ENV] ?? "").trim();
+  if (version !== "") {
+    if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version))
+      throw new Error(
+        `${VERSION_ENV} must be a semver version, not ${version}`,
+      );
+    config = mergeConfig(config, { extraMetadata: { version } });
+  }
   return { config, plan };
 }
 
-export async function dist({ env = process.env, local = true } = {}) {
+export async function dist({
+  env = process.env,
+  local = isLocalBuild(env),
+} = {}) {
   const { config, plan } = resolveConfig({ env, local });
   if (plan.mode === "refuse") {
     console.error(`✗ ${plan.message}`);
@@ -148,7 +204,20 @@ export async function dist({ env = process.env, local = true } = {}) {
   (plan.mode === "skip" ? console.warn : console.log)(
     `${plan.mode === "skip" ? "!" : "→"} ${plan.message}`,
   );
+  // electron-builder reads the notarization credentials from `process.env`
+  // itself; the plan names the set that must not be there (signing-electron.mjs).
+  for (const name of plan.unsetEnv ?? []) {
+    delete env[name];
+    delete process.env[name];
+  }
 
+  // The installer carries the server shell too (`Armadra serve`); its
+  // `out/main.js` is placed by after-pack.mjs, so it is built first.
+  execFileSync(
+    process.execPath,
+    [join(app, "..", "server", "scripts", "build.mjs")],
+    { cwd: join(app, "..", "server"), stdio: "inherit" },
+  );
   execFileSync(process.execPath, [electronViteEntry(), "build"], {
     cwd: app,
     stdio: "inherit",

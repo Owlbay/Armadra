@@ -9,6 +9,7 @@ import { terminalHandle } from "../nodes/terminal-registry";
 import { canFocusOnPhone } from "./mobile-focus";
 import { useHeadlessBrowser } from "../nodes/browser/availability";
 import { MOBILE_CONTROL_KEYS, MOBILE_KEYS } from "./mobile-keys";
+import { useVisibleArea } from "../mobile/keyboard";
 import { cn } from "@/lib/cn";
 import { Button } from "@/ui/button";
 import {
@@ -39,6 +40,7 @@ export function MobileFocusPage() {
   const selectNodes = useCanvasStore((state) => state.selectNodes);
 
   const headlessBrowser = useHeadlessBrowser(compact);
+  const visible = useVisibleArea();
 
   const node = nodes?.find((item) => item.id === focusNodeId);
   const focusable = React.useMemo(
@@ -53,6 +55,11 @@ export function MobileFocusPage() {
     return null;
   const Body = NODE_BODY[node.type];
   const meta = nodeMeta(node.type);
+  // ACP 驱动的终端节点体是会话视图：输入走 PromptBox，PTY 按键条没有对象。
+  // （与 `acp/driver.ts::driverOf` 同一条判断；不 import 它，免得把设置页的
+  // 钩子拖进首屏。）
+  const acp =
+    node.data.kind === "terminal" && node.data.agent?.driver === "acp";
 
   return (
     <div
@@ -61,12 +68,17 @@ export function MobileFocusPage() {
       aria-label={t("mobile.focus.label")}
       data-slot="mobile-focus"
       className={cn(
-        "fixed inset-0 z-[var(--z-modal,60)] flex flex-col bg-background",
+        "fixed inset-0 z-[var(--z-focus-page)] flex flex-col bg-background",
+        // 整页盖住状态栏一带：顶栏与节点体让开状态栏和左右刘海（`--safe-*`）。
+        "pt-[var(--safe-top)] pr-[var(--safe-right)] pl-[var(--safe-left)]",
         // 软键盘弹起时可视高度会缩，dvh 跟着变，工具条不会被顶出屏幕。
         "h-[100dvh]",
       )}
+      // iOS 的软键盘不缩视口：键盘弹起时按可视视口摆，输入框坐在键盘上沿。
+      style={visible ? { height: visible.height, top: visible.top } : undefined}
     >
-      <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-2">
+      {/* 「返回」在左上角：iPadOS 窗口化时让开窗口控件。 */}
+      <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border pr-2 pl-[calc(0.5rem+var(--window-controls-left))]">
         <Button
           type="button"
           size="sm"
@@ -112,6 +124,9 @@ export function MobileFocusPage() {
           "relative min-h-0 flex-1 overflow-hidden",
           "[&_[data-slot=connection-handle]]:hidden",
           "[&_.node-frame]:rounded-none [&_.node-frame]:border-0",
+          // 会话视图的输入框在手机上 16px，否则 iOS 聚焦时放大整页（设计系统 §2.3）。
+          "[&_[data-slot=acp-session-view]_textarea]:text-[length:var(--text-input-touch)]",
+          "[&_[data-slot=acp-session-view]]:pb-[var(--safe-bottom)]",
         )}
         data-node-type={node.type}
         data-min-width={meta.minSize.width}
@@ -123,7 +138,7 @@ export function MobileFocusPage() {
         </React.Suspense>
       </div>
 
-      {node.type === "terminal" && <TerminalKeyBar nodeId={node.id} />}
+      {node.type === "terminal" && !acp && <TerminalKeyBar nodeId={node.id} />}
     </div>
   );
 }
@@ -132,7 +147,7 @@ export function MobileFocusPage() {
  * 软键盘工具条。触摸键盘上没有 Esc / Tab / 方向键，`sendKeys` 把它们原样写进
  * PTY；粘贴走终端自己的剪贴板路径，和右键菜单是同一条。
  */
-function TerminalKeyBar({ nodeId }: { nodeId: string }) {
+export function TerminalKeyBar({ nodeId }: { nodeId: string }) {
   const t = useT();
   const [controls, setControls] = React.useState(false);
 
@@ -145,7 +160,7 @@ function TerminalKeyBar({ nodeId }: { nodeId: string }) {
       aria-label={t("mobile.keys.label")}
       role="toolbar"
       data-slot="mobile-key-bar"
-      className="shrink-0 border-t border-border bg-[var(--panel)] pb-[env(safe-area-inset-bottom)]"
+      className="shrink-0 border-t border-border bg-[var(--panel)] pb-[var(--safe-bottom)]"
     >
       {controls && (
         <div className="flex gap-1 overflow-x-auto px-2 pt-2">
@@ -193,14 +208,17 @@ function KeyButton({
   onPress: () => void;
 }) {
   return (
-    <button
+    <Button
+      variant="outline"
+      size="xs"
       type="button"
       aria-pressed={pressed}
       className={cn(
-        "min-h-10 min-w-11 shrink-0 rounded-md border border-border px-2",
-        "font-mono text-[13px] leading-none",
+        "h-auto min-h-10 min-w-11 shrink-0 rounded-md border border-border px-2",
+        "font-mono text-[13px] leading-none font-normal",
+        // 按下（Ctrl 锁住）是选中态：品牌浅底 + 品牌字（设计系统 §3.4）。
         pressed
-          ? "border-[var(--brand)] text-[var(--brand)]"
+          ? "border-[var(--brand)] bg-[var(--brand-soft)] text-[var(--brand-text)]"
           : "bg-card text-foreground",
       )}
       // 按下不抢终端的焦点，否则每按一个键软键盘就收一次。
@@ -209,6 +227,6 @@ function KeyButton({
       onClick={onPress}
     >
       {label}
-    </button>
+    </Button>
   );
 }

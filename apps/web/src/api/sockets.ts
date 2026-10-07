@@ -1,23 +1,17 @@
-import { resolveSocketBase, runtimeSocketUrl } from "./runtime-url";
-import { RUNTIME_URL, query } from "./request";
+import { runtimeSocketUrl } from "./runtime-url";
+import { query } from "./request";
+import { type Source, currentSource } from "./source";
 
 /* ------------------------------- WebSocket URL ---------------------------- */
 
 /**
  * WebSocket 的基址不一定等于 HTTP 的基址：桌面壳里 Runtime 的端口由内核分配，
- * 两个基址都由壳在页面加载前一并给出（electron-migration §2.1）。由
- * {@link initRuntimeSockets} 在建立任何 socket 之前定下来。
+ * 两个基址都由壳在页面加载前一并给出（electron-migration §2.1）；经中继的源
+ * 是中继的 `wss://`。所以基址取源的 `wsBase`，每个地址现算，不在模块里留一份。
+ * `source` 省略是当前源。
  */
-let socketBase = RUNTIME_URL;
-
-/** 应用启动时调用一次；壳之外保持 HTTP 基址，二者本来就相同。 */
-export async function initRuntimeSockets(): Promise<string> {
-  socketBase = resolveSocketBase(RUNTIME_URL);
-  return socketBase;
-}
-
-function socketUrl(pathname: string): string {
-  return runtimeSocketUrl(socketBase, pathname);
+function socketUrl(pathname: string, source: Source): string {
+  return runtimeSocketUrl(source.wsBase, pathname);
 }
 
 /**
@@ -27,8 +21,9 @@ function socketUrl(pathname: string): string {
 export function terminalWebSocketUrl(
   sessionId: string,
   writerId?: string,
+  source: Source = currentSource(),
 ): string {
-  const base = socketUrl(`/api/terminals/${sessionId}/ws`);
+  const base = socketUrl(`/api/terminals/${sessionId}/ws`, source);
   return writerId ? `${base}?writer=${query(writerId)}` : base;
 }
 
@@ -45,8 +40,9 @@ export function terminalWebSocketUrl(
 export function workspaceEventsUrl(
   workspaceId: string,
   cursor?: number | "now",
+  source: Source = currentSource(),
 ): string {
-  const base = socketUrl(`/api/workspaces/${workspaceId}/events`);
+  const base = socketUrl(`/api/workspaces/${workspaceId}/events`, source);
   return cursor === undefined ? base : `${base}?cursor=${cursor}`;
 }
 
@@ -57,9 +53,14 @@ export function workspaceEventsUrl(
  * 桌面壳里浏览器节点是本窗口的一个 `<webview>`，这条路由回 501，页面也不会
  * 去开它。一个节点同时只接受一个观看者，第二个在升级之前就被回 409。
  */
-export function browserStreamUrl(workspaceId: string, nodeId: string): string {
+export function browserStreamUrl(
+  workspaceId: string,
+  nodeId: string,
+  source: Source = currentSource(),
+): string {
   return socketUrl(
     `/api/workspaces/${workspaceId}/browser/${query(nodeId)}/stream`,
+    source,
   );
 }
 
@@ -73,8 +74,25 @@ export function browserStreamUrl(workspaceId: string, nodeId: string): string {
 export function languageSessionUrl(
   workspaceId: string,
   sessionId: string,
+  source: Source = currentSource(),
 ): string {
   return socketUrl(
     `/api/workspaces/${workspaceId}/language/sessions/${query(sessionId)}/stream`,
+    source,
+  );
+}
+
+/**
+ * 一块板的实时同步流（契约 §16.1）：二进制帧，`y-protocols` 的 sync 与
+ * awareness。页面在 `GET …/realtime` 答 `realtime || enabled` 时才开它。
+ */
+export function boardSyncUrl(
+  workspaceId: string,
+  boardId: string,
+  source: Source = currentSource(),
+): string {
+  return socketUrl(
+    `/api/workspaces/${query(workspaceId)}/boards/${query(boardId)}/sync`,
+    source,
   );
 }

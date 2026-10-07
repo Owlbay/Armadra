@@ -1,0 +1,470 @@
+# B 档夜间作业（docs/guides/ci-release.md §1.1）：打包冒烟、deb 安装验证、
+# update-e2e、服务器壳性能与容器模式 server-e2e 等需要打包、容器或较慢的探针。清单是 tools/ci/e2e.d/ 里 tier b 的条目，
+# 每个系统一条作业，条目用 platforms 说明自己在哪个系统上跑。失败开 issue
+# （report 作业，只用默认的 GITHUB_TOKEN），不阻断合并。
+name: nightly
+
+on:
+  schedule:
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PNPM_VERSION: "11.18.0"
+  NODE_VERSION: "22"
+
+jobs:
+  # Linux：在发布同一个 runner（22.04，glibc 基线）上打 AppImage / deb / rpm，
+  # 断言 glibc 基线，再跑 B 档里 platforms 含 linux 的条目——xvfb 下起 AppImage
+  # 的打包冒烟、ubuntu:22.04 容器里装 deb、服务器壳性能、对着镜像跑的
+  # server-e2e（只构建不推送）、update-e2e。devStack 条目要的替身由
+  # ARMADRA_DEV_STACK=1 让 e2e.mjs 先 `pnpm dev-stack up`、跑完 down。
+  linux:
+    name: Linux 打包与 B 档
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    outputs:
+      failed: ${{ steps.tier.outputs.failed }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 给 Git 一个身份
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global user.name "Armadra CI"
+          git config --global user.email "ci@armadra.invalid"
+
+      # file 与 rpm 是 electron-builder 打 AppImage / rpm 要的（与 release.yml 同）；
+      # 其余是打包版 Electron 在桌面上要的库，干净系统上 deb 会把它们拉进来，
+      # AppImage 则默认它们已经在。fonts-noto-cjk 只为截图里的中文不是方块。
+      - name: 装打包依赖、tmux、xvfb 与 Electron 运行库
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            file rpm tmux xvfb xauth fonts-noto-cjk \
+            libgtk-3-0 libnss3 libasound2 libgbm1 libxss1 libxtst6 libnotify4 libsecret-1-0
+          tmux -V
+
+      - uses: browser-actions/setup-chrome@v2
+        id: chrome
+        with:
+          chrome-version: stable
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # 没有任何签名 secret：dist 自己报告跳过签名，产物照出。发布构建
+      # （ARMADRA_DIST_RELEASE=1，不带本地构建的停更标记）：与 release.yml 出的包
+      # 同一种，update-e2e 也只认这种（AppImage 里的标记读不出来，本地构建会在
+      # 起来后答 localBuild）。
+      - name: 打 Linux 包
+        shell: bash
+        env:
+          ARMADRA_DIST_RELEASE: "1"
+        run: |
+          set -euo pipefail
+          pnpm libs:build
+          pnpm --filter @armadra/web build
+          pnpm --filter @armadra/server build
+          pnpm --filter @armadra/desktop dist
+          ls -l apps/desktop/release
+
+      - name: 校验 Linux 的 glibc 基线
+        shell: bash
+        run: bash tools/release/verify-linux-glibc-baseline.sh
+
+      - name: B 档（Linux）
+        id: tier
+        shell: bash
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          ARMADRA_DEV_STACK: "1"
+        run: xvfb-run -a node tools/ci/e2e.mjs --tier b --out target/e2e/b-linux
+
+      - name: 上传 B 档产物
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-tier-b-linux
+          path: target/e2e/b-linux
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Linux arm64：发布同一种 runner（ubuntu-22.04-arm）上打包，只跑 deb-install——
+  # 干净 ubuntu:22.04 arm64 容器里装 deb、问版本，并在同一个容器里用
+  # APPIMAGE_EXTRACT_AND_RUN 起 arm64 AppImage（旧运行时要开发包里的 libz.so，
+  # 见 scripts/dist.mjs 的 ARM64_APPIMAGE_TOOLSET）。其余 B 档条目与架构无关，只在
+  # 上面的 x64 作业跑。
+  linux-arm64:
+    name: Linux arm64 打包与安装
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 90
+    outputs:
+      failed: ${{ steps.tier.outputs.failed }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 装打包依赖
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends file rpm
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: 打 Linux arm64 包
+        shell: bash
+        env:
+          ARMADRA_DIST_RELEASE: "1"
+        run: |
+          set -euo pipefail
+          pnpm libs:build
+          pnpm --filter @armadra/desktop dist
+          ls -l apps/desktop/release
+      - name: 校验 Linux 的 glibc 基线
+        shell: bash
+        run: bash tools/release/verify-linux-glibc-baseline.sh
+      - name: deb 与 AppImage 安装（arm64）
+        id: tier
+        shell: bash
+        run: node tools/ci/e2e.mjs --tier b --only deb-install --out target/e2e/b-linux-arm64
+      - name: 上传产物
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-tier-b-linux-arm64
+          path: target/e2e/b-linux-arm64
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # macOS：现有的打包冒烟（迁移全局安装、PDF 与视频、终端、控制台）。不签名不
+  # 公证，直接执行 release 目录里的 .app。
+  macos:
+    name: macOS 打包与 B 档
+    runs-on: macos-14
+    timeout-minutes: 120
+    outputs:
+      failed: ${{ steps.tier.outputs.failed }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 给 Git 一个身份，装 tmux
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global user.name "Armadra CI"
+          git config --global user.email "ci@armadra.invalid"
+          command -v tmux >/dev/null || brew install tmux
+          tmux -V
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: 打 macOS 包
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm libs:build
+          pnpm --filter @armadra/desktop dist
+          ls -l apps/desktop/release
+
+      - name: B 档（macOS）
+        id: tier
+        shell: bash
+        run: node tools/ci/e2e.mjs --tier b --out target/e2e/b-macos
+
+      - name: 上传 B 档产物
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-tier-b-macos
+          path: target/e2e/b-macos
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # 手机壳（补全计划 G3-1）：原生层单测、不签名的模拟器 / debug 构建，再在模拟器里
+  # 跑「连接 → 配对 → 画布」（tools/probes/mobile-shell-e2e.mjs）。产物名见
+  # tools/release/artifacts.mjs 的 mobileAssets；真机、签名与商店上传要用户的证书。
+  mobile-ios:
+    name: mobile (ios simulator)
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: 构建页面、core 与手机壳的 www
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm libs:build
+          pnpm --filter @armadra/web build
+          pnpm --filter @armadra/desktop build
+          pnpm --filter @armadra/mobile sync
+      - name: ArmadraNativeKit 单测（钉扎判定、推送解密、深链）
+        run: swift test --package-path apps/mobile/ios/ArmadraNativeKit
+      # 「Sign to Run Locally」：不要证书，但模拟器只在有 application-identifier
+      # 时才给钥匙串（CODE_SIGNING_ALLOWED=NO 的包存不进会话）。
+      - name: 模拟器构建（本地签名，不要证书）
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./apps/mobile/package.json').version")
+          xcodebuild build -project apps/mobile/ios/App/App.xcodeproj -scheme App \
+            -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath target/mobile/ios MARKETING_VERSION="$version"
+          name=$(node --input-type=module -e "import { mobileAssets } from './tools/release/artifacts.mjs'; console.log(mobileAssets('$version')[1].name)")
+          ditto -c -k --keepParent \
+            target/mobile/ios/Build/Products/Debug-iphonesimulator/App.app \
+            "target/mobile/$name"
+      - name: 连接 → 配对 → 画布（XCUITest）
+        run: node tools/probes/mobile-shell-e2e.mjs --platform ios target/mobile-shell-e2e/ios
+      - name: 上传产物
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-ios
+          path: |
+            target/mobile/*.zip
+            target/mobile-shell-e2e/ios/result.json
+            target/mobile-shell-e2e/ios/*.log
+            target/mobile-shell-e2e/ios/*.xcresult
+          if-no-files-found: warn
+
+  mobile-android:
+    name: mobile (android emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: pnpm install --frozen-lockfile
+      - name: 构建页面、core 与手机壳的 www
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm libs:build
+          pnpm --filter @armadra/web build
+          pnpm --filter @armadra/desktop build
+          node apps/desktop/scripts/ensure-node-pty.mjs
+          pnpm --filter @armadra/mobile sync
+      - name: armadra-native-core 单测（钉扎判定、推送解密、深链）与 debug APK
+        shell: bash
+        working-directory: apps/mobile/android
+        run: |
+          set -euo pipefail
+          ./gradlew :armadra-native-core:test :app:assembleDebug --no-daemon --stacktrace
+          version=$(node -p "require('../package.json').version")
+          name=$(node --input-type=module -e "import { mobileAssets } from '../../../tools/release/artifacts.mjs'; console.log(mobileAssets('$version')[0].name)")
+          mkdir -p ../../../target/mobile
+          cp app/build/outputs/apk/debug/app-debug.apk "../../../target/mobile/$name"
+      # 模拟器要 KVM：在一次性的 runner 上放开 /dev/kvm。
+      - name: 放开 KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: 连接 → 配对 → 画布（插桩用例）
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: node tools/probes/mobile-shell-e2e.mjs --platform android target/mobile-shell-e2e/android
+      - name: 上传产物
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-android
+          path: |
+            target/mobile/*.apk
+            target/mobile-shell-e2e/android/result.json
+            target/mobile-shell-e2e/android/*.log
+            apps/mobile/android/armadra-native-core/build/reports/tests/
+          if-no-files-found: warn
+
+  # Windows 打包验收（补全计划 G3-2）：在 windows runner 上打 NSIS 安装包，用
+  # tools/probes/windows-acceptance.mjs 走一遍真机清单——静默安装、会话宿主与命名
+  # 管道、三种 shell 里的画布启动器与凭据兑换、Gateway、文件监听、保活（缩到两
+  # 分钟）、杀主进程后接回、ConPTY 关闭、静默卸载、用户配置未动。真机上的长时间
+  # 保活与真 CLI 仍要用户跑（docs/guides/development.md「Windows 真机验收」）。
+  windows-acceptance:
+    name: windows acceptance (NSIS + session host)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # 与 release.yml 同一个理由：实时扫描会占住刚写出的二进制，打包时撞 EBUSY。
+      - name: 让扫描器放过打包目录
+        shell: pwsh
+        run: |
+          $desktop = Join-Path $env:GITHUB_WORKSPACE 'apps\desktop'
+          Add-MpPreference -ExclusionPath (Join-Path $desktop 'out')
+          Add-MpPreference -ExclusionPath (Join-Path $desktop 'release')
+          try {
+            Set-MpPreference -DisableRealtimeMonitoring $true
+          } catch {
+            Write-Host "::warning::无法关闭实时监控：$($_.Exception.Message)"
+          }
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: 打 Windows 安装包（本地构建，不签名）
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm libs:build
+          pnpm --filter @armadra/desktop dist
+
+      - name: 真机验收清单（runner 版）
+        shell: bash
+        run: |
+          set -euo pipefail
+          installer=$(ls apps/desktop/release/Armadra-Setup-*-x64.exe | head -n 1)
+          node tools/probes/windows-acceptance.mjs --installer "$installer" \
+            --soak-minutes 2 --out target/windows-acceptance
+
+      - name: 上传验收结果
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-acceptance
+          path: target/windows-acceptance
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # 依赖与死代码报告（工程规范化 §5 第 1 步）：knip 只出报告上传产物、不判失败；
+  # 生产依赖里出现 high 及以上的漏洞时本作业失败，由 report 开 issue，不阻断合并。
+  hygiene:
+    name: 依赖审计与 knip 报告
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: knip 报告
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/hygiene
+          pnpm exec knip --no-progress --no-exit-code --reporter markdown > target/hygiene/knip.md
+          pnpm exec knip --no-progress --no-exit-code --reporter compact
+
+      - name: 上传 knip 报告
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: knip-report
+          path: target/hygiene
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: 生产依赖漏洞（high 及以上）
+        run: pnpm audit --prod --audit-level=high
+
+  # 任一作业失败就开一个 issue；已经有一个开着的同名 issue 时改成在下面追加评论，
+  # 免得每晚一个。只在 main 上报（手动在分支上触发的失败看运行页即可）。
+  report:
+    name: 失败开 issue
+    needs:
+      - linux
+      - linux-arm64
+      - macos
+      - mobile-ios
+      - mobile-android
+      - windows-acceptance
+      - hygiene
+    if: ${{ failure() && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: 开 issue 或追加评论
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LINUX_RESULT: ${{ needs.linux.result }}
+          LINUX_FAILED: ${{ needs.linux.outputs.failed }}
+          LINUX_ARM64_RESULT: ${{ needs.linux-arm64.result }}
+          LINUX_ARM64_FAILED: ${{ needs.linux-arm64.outputs.failed }}
+          MACOS_RESULT: ${{ needs.macos.result }}
+          MACOS_FAILED: ${{ needs.macos.outputs.failed }}
+          MOBILE_IOS_RESULT: ${{ needs.mobile-ios.result }}
+          MOBILE_ANDROID_RESULT: ${{ needs.mobile-android.result }}
+          WINDOWS_RESULT: ${{ needs.windows-acceptance.result }}
+          HYGIENE_RESULT: ${{ needs.hygiene.result }}
+        run: |
+          set -euo pipefail
+          title="夜间 B 档失败"
+          body="$(printf '运行：%s\n\n| 作业 | 结果 | 失败的条目 |\n| --- | --- | --- |\n| linux | %s | %s |\n| linux-arm64 | %s | %s |\n| macos | %s | %s |\n| mobile-ios | %s | mobile-shell-e2e |\n| mobile-android | %s | mobile-shell-e2e |\n| windows-acceptance | %s | 见产物 windows-acceptance/result.json |\n| hygiene | %s | pnpm audit --prod 有 high 及以上漏洞 |\n\n条目为空而结果是 failure 时，失败在打包或 glibc 校验，看运行日志。\n' \
+            "$RUN_URL" "$LINUX_RESULT" "${LINUX_FAILED:--}" "$LINUX_ARM64_RESULT" "${LINUX_ARM64_FAILED:--}" "$MACOS_RESULT" "${MACOS_FAILED:--}" "$MOBILE_IOS_RESULT" "$MOBILE_ANDROID_RESULT" "$WINDOWS_RESULT" "$HYGIENE_RESULT")"
+          existing="$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+            --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

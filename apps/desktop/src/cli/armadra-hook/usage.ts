@@ -11,18 +11,14 @@ import { VERB_NAMES, browserUsage } from "../../core/browser/verb-spec.js";
 /** Protocol version carried in every hook body. */
 export const HOOK_PROTOCOL_VERSION = 1;
 
-/**
- * Value of the `X-Armadra-Hook-Client` header. Bumped when the wire behaviour
- * of this client changes so the runtime can flag stale installs — this port
- * changes no wire behaviour at all, so it stays on the Rust client's number.
- */
-export const HOOK_CLIENT_REVISION = "4";
+/** Value of the `X-Armadra-Hook-Client` header; owned by the shared client. */
+export { HOOK_CLIENT_REVISION } from "../../hook-client/session.js";
 
 /** Upper bound on the hook payload we are willing to buffer, in bytes. */
 export const MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 /** Reported by `--version`; the Rust client reports its crate version. */
-export const CLIENT_VERSION = "0.1.0";
+export const CLIENT_VERSION = "0.2.1";
 
 /** The context-link verbs the runtime exposes. */
 export const CONTEXT_VERBS = [
@@ -42,33 +38,11 @@ export const CONTEXT_VERBS = [
 export const BROWSER_VERBS: readonly string[] = VERB_NAMES;
 
 /**
- * Text printed by `--help` and by any usage error. The browser section is
- * generated from the verb list, so it cannot describe a flag or a verb the
- * runtime does not have (`verb-spec.test.ts`).
+ * The canvas verb table: printed by `canvas --help` on its own and embedded in
+ * {@link USAGE}. The runtime still owns the verbs (`canvas help` is served from
+ * its registry); this is the local, offline summary of the same list.
  */
-export const USAGE = `armadra-hook — Armadra hook client
-
-USAGE:
-  armadra-hook <agentId>                       report a hook event (payload on stdin)
-  armadra-hook context <verb> [options]        read a linked node's context
-  armadra-hook canvas <verb> [--flag value]    drive the canvas
-  armadra-hook browser <verb> [--flag value]   drive a linked browser node
-  armadra-hook doctor                          diagnose the local hook endpoint
-
-CONTEXT VERBS:
-  list                      list the nodes linked to this one
-  summary                   a <=2 KB digest of a linked node; read this first
-  transcript [-n N]         the linked node's transcript, 20 entries by default
-  terminal [-n N]           the linked node's terminal screen, 40 lines by default
-
-CONTEXT OPTIONS:
-  --node <name|id|title>    which linked node to read (defaults to the only link)
-  -n, --lines <N>           entries for transcript (20), lines for terminal (40, max 200)
-  --since                   transcript: only what is new since your last read
-  --full --max-kb <N>       transcript: lift the 32 KB cap, up to 128 KB
-  Every link has a read budget: 64 KB/minute and 1 MB/hour, then RATE_LIMITED.
-
-CANVAS:
+export const CANVAS_USAGE = `CANVAS:
   help                      short collaboration guide (no provider configuration needed)
   post --to NAME --key KEY --body TEXT store a handoff for a linked agent
   inbox --limit 10 --after 0           read your pending messages without acknowledgement
@@ -76,12 +50,15 @@ CANVAS:
   open-agent --agent ID [--task TEXT] [--title T] [--permission-mode M]
                                       [--model M] [--after ID]
                                       [--after-turn current|next] [--ttl MIN]
-                                      [--worktree NAME_OR_PATH]
+                                      [--worktree NAME_OR_PATH] [--cwd DIR]
+                                      [--resume SESSION_ID]
                                       open an agent
                                       node, link it, and give it a first task
                                       once it reports idle; --worktree puts it
                                       in that checkout's Frame (created if
-                                      missing)
+                                      missing); --cwd starts it in a directory
+                                      inside the workspace; --resume continues
+                                      that CLI's own session
   team --member "AGENT[@MODEL]|TITLE|TASK[|worktree=DIR]"... [--chain]
        [--gather "AGENT|TITLE|TASK"] [--after ID]
                                       open up to 6 agents at once; --chain
@@ -105,7 +82,37 @@ CANVAS:
   armadra-hook canvas <verb> [--flag value | --flag=value | --flag]...
   Repeated flags become arrays; a bare flag is \`true\`. \`--dry-run\` is passed
   through to the runtime, which then validates without mutating the board.
+`;
 
+/**
+ * Text printed by `--help` and by any usage error. The browser section is
+ * generated from the verb list, so it cannot describe a flag or a verb the
+ * runtime does not have (`verb-spec.test.ts`).
+ */
+export const USAGE = `armadra-hook — Armadra hook client
+
+USAGE:
+  armadra-hook <agentId>                       report a hook event (payload on stdin)
+  armadra-hook context <verb> [options]        read a linked node's context
+  armadra-hook canvas <verb> [--flag value]    drive the canvas
+  armadra-hook browser <verb> [--flag value]   drive a linked browser node
+  armadra-hook doctor                          diagnose the local hook endpoint
+  armadra-hook mcp                             serve the canvas tools over MCP on stdio (ACP sessions)
+
+CONTEXT VERBS:
+  list                      list the nodes linked to this one
+  summary                   a <=2 KB digest of a linked node; read this first
+  transcript [-n N]         the linked node's transcript, 20 entries by default
+  terminal [-n N]           the linked node's terminal screen, 40 lines by default
+
+CONTEXT OPTIONS:
+  --node <name|id|title>    which linked node to read (defaults to the only link)
+  -n, --lines <N>           entries for transcript (20), lines for terminal (40, max 200)
+  --since                   transcript: only what is new since your last read
+  --full --max-kb <N>       transcript: lift the 32 KB cap, up to 128 KB
+  Every link has a read budget: 64 KB/minute and 1 MB/hour, then RATE_LIMITED.
+
+${CANVAS_USAGE}
 TEXT FROM STDIN OR A FILE (canvas and browser verbs):
   --body -                  read the value from stdin (one flag per call)
   --body-file PATH          read it from a file; --task-file, --member-file,

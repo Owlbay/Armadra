@@ -8,19 +8,20 @@ import type {
   GitHunkResult,
   GitHunkScope,
 } from "@armadra/shared";
+import { sk } from "../../sources/scope";
 import { useT } from "../../app/preferences-store";
 import { Button } from "../../ui/button";
 import { Badge } from "../../ui/badge";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../../ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 
 export interface ChangesHunksProps {
   workspaceId: string;
@@ -98,7 +99,7 @@ function HunkSession({
   const query = useQuery({
     // 检出路径必须进键：两个仓库里的同名文件是两份差异，共用一个键会把别人的
     // hunk 当成自己的显示出来，连带那份 `diffDigest` 也是别人的。
-    queryKey: ["git-hunks", workspaceId, repositoryPath, file, scope],
+    queryKey: sk("git-hunks", workspaceId, repositoryPath, file, scope),
     queryFn: async ({ signal }) => {
       const value = await load(
         workspaceId,
@@ -141,7 +142,7 @@ function HunkSession({
           "git-repository-history",
           "git-repository-worktrees",
         ].map((key) =>
-          client.invalidateQueries({ queryKey: [key, workspaceId] }),
+          client.invalidateQueries({ queryKey: sk(key, workspaceId) }),
         ),
       );
       if (active.current) onChanged?.(workspaceId, file, scope);
@@ -256,19 +257,21 @@ function HunkSession({
             </div>
           </section>
         ))}
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={confirmation !== null}
         onOpenChange={(open) => {
           if (!open) setConfirmation(null);
         }}
       >
-        <AlertDialogContent className="max-h-[90dvh] overflow-y-auto">
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("gitHunk.revertTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
+        <ResponsiveAlertDialogContent className="max-h-[90dvh] overflow-y-auto">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
+              {t("gitHunk.revertTitle")}
+            </ResponsiveAlertDialogTitle>
+            <ResponsiveAlertDialogDescription>
               {t("gitHunk.revertDescription")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
+            </ResponsiveAlertDialogDescription>
+          </ResponsiveAlertDialogHeader>
           <p className="break-all text-xs font-medium">{file}</p>
           {confirmation && <HunkBody hunk={confirmation.hunk} />}
           {!confirmationCurrent && (
@@ -276,9 +279,11 @@ function HunkSession({
               {t("gitHunk.stale")}
             </p>
           )}
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("gitHunk.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("gitHunk.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               disabled={busy || !confirmationCurrent}
               onClick={() => {
                 if (confirmation && confirmationCurrent && !busy) {
@@ -288,10 +293,10 @@ function HunkSession({
               }}
             >
               {t("gitHunk.revert")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </section>
   );
 }

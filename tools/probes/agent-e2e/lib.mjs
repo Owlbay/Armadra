@@ -1,7 +1,6 @@
 // agent-e2e 的共用部分：报告、等待、临时环境与 core / Vite / Chrome 的装配。
 // 入口在 ../agent-e2e.mjs，场景在同目录的 scenario-*.mjs。
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { once } from "node:events";
 import {
   copyFileSync,
@@ -21,6 +20,15 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { LOOPBACK_OWNER_ENV } from "../probe-home.mjs";
+
+import { stepTrustDialog } from "./trust-dialog.mjs";
+import {
+  claudeDefaultMode,
+  claudeStateBlame,
+  claudeStateDigest,
+  fingerprint,
+} from "./safety.mjs";
 
 export const root = fileURLToPath(new URL("../../../", import.meta.url));
 const argv = process.argv.slice(2);
@@ -28,7 +36,7 @@ const onlyFlag = argv.indexOf("--only");
 export const only =
   onlyFlag >= 0
     ? new Set(argv[onlyFlag + 1].split(",").map((part) => part.trim()))
-    : new Set(["1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+    : new Set(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]);
 // `--backend direct`：终端后端改成 direct（非 tmux）再跑。缺省按平台（macOS
 // 装了 tmux 就是 tmux）。
 const backendFlag = argv.indexOf("--backend");
@@ -41,6 +49,40 @@ const positional = argv.filter(
 );
 export const output = resolve(positional[0] ?? join(root, "target/agent-e2e"));
 mkdirSync(output, { recursive: true });
+
+/* ------------------------------ C 档的开关 ------------------------------- */
+
+/**
+ * 起真 CLI、花真额度的场景（1–8、10、11 的 `--real-model`、12）只在
+ * `ARMADRA_E2E_REAL=1` 时跑：曾有一次真跑把 Claude 的启动对话框当成了投递目标、
+ * 改掉了操作员的 ~/.claude/settings.json。没设就在起任何进程之前报错退出。
+ */
+export const REAL_FLAG = "ARMADRA_E2E_REAL";
+export const realAllowed = process.env[REAL_FLAG] === "1";
+/**
+ * `--self-test`：场景 11 / 12 把真 CLI / 真模型换成假 ACP Agent、假 TUI 与脚本化
+ * 模型，其余装配（隔离目录、包装脚本、指纹、断言）照真跑那条路走——证明探针
+ * 本身没烂。不要登录、不联网、不花额度，不需要 `ARMADRA_E2E_REAL`。
+ */
+export const selfTest = argv.includes("--self-test");
+/** `--real-model`：场景 11 用真模型（供应商与 key 从环境变量读，见 README）。 */
+export const realModel = argv.includes("--real-model");
+/** `--record-compat`：场景 12 真跑通过的那几家，把版本写进 compatibility.json。 */
+export const recordCompat = argv.includes("--record-compat");
+/** `--preflight`：只答各家前提与场景计划，不起 core、不起 CLI 会话。 */
+export const preflight = argv.includes("--preflight");
+/**
+ * `--setup-only`：走完共用装配（core、页面、按前提建的节点）就收尾，不跑场景。
+ * 用来在 PATH 上全是假 CLI、HOME 是临时目录时证明「缺哪家都不让装配崩」。
+ */
+export const setupOnly = argv.includes("--setup-only");
+
+export function requireReal(what) {
+  if (selfTest || realAllowed) return;
+  throw new Error(
+    `${what}会起真 CLI、用真账号与额度：确认按 tools/probes/README.md「C 档运行手册」准备好之后，以 ${REAL_FLAG}=1 运行；只验证探针本身用 --self-test`,
+  );
+}
 
 /** 秒级休眠阈值。20 秒：比一轮「回复 OK」长，又不至于让场景等几分钟。 */
 export const ECO_IDLE_SECONDS = 20;
@@ -96,6 +138,12 @@ export function scenario(id) {
     },
     finish() {
       entry.status = entry.checks.every((c) => c.ok) ? "passed" : "failed";
+    },
+    /** 前提不满足（没装、认证不上、没选）：整场景记 skipped 并写原因。 */
+    skip(reason) {
+      entry.status = "skipped";
+      entry.reason = reason;
+      console.log(`  skip  [${id}] ${reason}`);
     },
     fail(error) {
       entry.checks.push({
@@ -174,67 +222,32 @@ export async function putDocument(api, documentPath, mutate) {
   );
 }
 
-/* -------------------------- 操作员配置的字节快照 -------------------------- */
-
-const guarded = [
-  join(homedir(), ".claude/settings.json"),
-  join(homedir(), ".codex/config.toml"),
-  join(homedir(), ".codex/hooks.json"),
-  join(homedir(), ".codex/auth.json"),
-  // 旧版装进各 CLI 全局目录的东西：迁移只该在真实应用里发生，探针一个都不碰。
-  join(homedir(), ".claude/skills/armadra/SKILL.md"),
-  join(homedir(), ".codex/skills/armadra/SKILL.md"),
-  join(homedir(), ".copilot/hooks/armadra.json"),
-  join(homedir(), ".config/opencode/plugins/armadra-status.js"),
-  join(homedir(), ".pi/agent/extensions/armadra-status.ts"),
-  join(homedir(), ".omp/agent/extensions/armadra-status.ts"),
-  // 场景 6 的四个 CLI：凭据只复制出去，配置一个字节都不该变。
-  join(homedir(), ".config/opencode/opencode.json"),
-  join(homedir(), ".local/share/opencode/auth.json"),
-  join(homedir(), ".pi/agent/auth.json"),
-  join(homedir(), ".pi/agent/settings.json"),
-  join(homedir(), ".omp/agent/config.yml"),
-  join(homedir(), ".omp/agent/models.yml"),
-  join(homedir(), ".copilot/config.json"),
-];
-export function fingerprint() {
-  const answer = {};
-  for (const file of guarded) {
-    try {
-      answer[file] = createHash("sha256")
-        .update(readFileSync(file))
-        .digest("hex");
-    } catch {
-      answer[file] = null;
-    }
-  }
-  return answer;
-}
+export * from "./safety.mjs";
+export * from "./cli-homes.mjs";
+export * from "./isolated.mjs";
 
 /* --------------------------------- 装配 ---------------------------------- */
 
-/** 起临时环境、core、Vite 与 Chrome，挂上页面；答场景共用的上下文。 */
-export async function setup() {
+/**
+ * 起临时环境、core、Vite 与 Chrome，挂上页面；答场景共用的上下文。`clis` 是
+ * `preflight.mjs::cliPrerequisites` 的结果：没装或认证不上的那家不建节点、不
+ * 预热，依赖它的场景由入口记 skipped（`ctx.clis` 照传给场景）。
+ */
+export async function setup(clis) {
   const before = fingerprint();
-  report.safety.before = before;
-
-  // Codex 的 token：临时目录里刷新会轮换 refresh token。
-  const auth = JSON.parse(
-    readFileSync(join(homedir(), ".codex/auth.json"), "utf8"),
+  // 先跑过的独立场景（12）已经记过开场的那一份：以最早的为准。
+  report.safety.before ??= before;
+  report.safety.claudeDefaultMode ??= { before: claudeDefaultMode() };
+  const hasClaude = clis.claude.ok;
+  const hasCodex = clis.codex.ok;
+  // Codex 的 token 是否过期已在开跑前检查过（临时目录里刷新会轮换真实那份）。
+  const auth = clis.codex.auth;
+  const refreshedAt = clis.codex.refreshedAt;
+  report.versions = Object.fromEntries(
+    ["claude", "codex"]
+      .filter((id) => clis[id].ok)
+      .map((id) => [id, clis[id].version]),
   );
-  const refreshedAt = Date.parse(auth.last_refresh ?? "");
-  if (
-    !Number.isFinite(refreshedAt) ||
-    Date.now() - refreshedAt > 7 * 86_400_000
-  ) {
-    throw new Error(
-      "~/.codex/auth.json 超过 7 天没刷新：在临时 CODEX_HOME 里刷新会让真实那份失效，先在自己的终端里跑一次 codex 再来",
-    );
-  }
-  report.versions = {
-    claude: execFileSync("claude", ["--version"], { encoding: "utf8" }).trim(),
-    codex: execFileSync("codex", ["--version"], { encoding: "utf8" }).trim(),
-  };
   note("CLI 版本", report.versions);
 
   const scratch = mkdtempSync(join(tmpdir(), "armadra-agent-e2e-"));
@@ -250,10 +263,11 @@ export async function setup() {
 
   const codexHome = join(scratch, "codex-home");
   mkdirSync(codexHome);
-  copyFileSync(
-    join(homedir(), ".codex/auth.json"),
-    join(codexHome, "auth.json"),
-  );
+  if (hasCodex)
+    copyFileSync(
+      join(homedir(), ".codex/auth.json"),
+      join(codexHome, "auth.json"),
+    );
   // 省 token：低推理强度。另外两条都是「启动时不上报的 CLI 屏幕上停着一个
   // 安静的提示」（设计 §4.3 的误判面），第一条任务会成为它的答案：
   //   * 目录信任——预先信任工作目录；
@@ -268,16 +282,17 @@ export async function setup() {
   // 一个全新的 CODEX_HOME，会在它自己的 sqlite 迁移上撞车（「migration 2: no
   // such column」，进程直接退出）。操作员自己的 CODEX_HOME 早就迁移过，碰不到
   // 这个；这一下让临时目录也处在那个状态。约两千 token。
-  execFileSync(
-    "codex",
-    ["exec", "--skip-git-repo-check", "Reply with just OK."],
-    {
-      cwd: project,
-      env: { ...process.env, CODEX_HOME: codexHome },
-      stdio: "ignore",
-      timeout: 120_000,
-    },
-  );
+  if (hasCodex)
+    execFileSync(
+      "codex",
+      ["exec", "--skip-git-repo-check", "Reply with just OK."],
+      {
+        cwd: project,
+        env: { ...process.env, CODEX_HOME: codexHome },
+        stdio: "ignore",
+        timeout: 120_000,
+      },
+    );
   const claudeInstallHome = join(scratch, "claude-install-home");
   mkdirSync(claudeInstallHome);
 
@@ -309,10 +324,16 @@ export async function setup() {
     // core 启动时的一次性迁移按这些目录找旧的全局安装：全指到临时目录，探针
     // 不替操作员清他机器上的东西（那是升级后真实应用第一次启动的事）。
     XDG_CONFIG_HOME: join(scratch, "xdg"),
+    // OpenCode 的库在 `XDG_DATA_HOME/opencode`：不给的话 core 的会话索引、成本与
+    // 转录会去读操作员真实的 `~/.local/share/opencode`。场景 10 的 OpenCode 也
+    // 用这一份，core 才认得出它的会话。
+    XDG_DATA_HOME: join(scratch, "xdg-data"),
     COPILOT_HOME: join(scratch, "copilot-home"),
     PI_CODING_AGENT_DIR: join(scratch, "pi-agent"),
     SHELL: shell,
     ARMADRA_TEST_ECO_IDLE_SECONDS: String(ECO_IDLE_SECONDS),
+    // 裸 core 显式打开回环匿名按主人（契约 §3.2）：探针的页面不在壳里、拿不到票。
+    ...LOOPBACK_OWNER_ENV,
   };
   delete environment.TMUX;
   delete environment.TMUX_PANE;
@@ -402,18 +423,19 @@ export async function setup() {
   const agents = await api("/api/agents");
   const claudeRow = agents.find((row) => row.id === "claude");
   const codexRow = agents.find((row) => row.id === "codex");
-  report.launch = {
-    claude: { path: claudeRow?.resolvedPath, args: claudeRow?.launchArgs },
-    codex: { path: codexRow?.resolvedPath, args: codexRow?.launchArgs },
-  };
-  const injected =
-    claudeRow?.launchArgs?.[0] === "--settings" &&
-    String(claudeRow.launchArgs[1]).startsWith(data);
-  if (!injected)
-    throw new Error(
-      `Claude 不是启动时注入（launchArgs=${JSON.stringify(claudeRow?.launchArgs)}），不能用真实配置目录`,
-    );
-  note("Claude 启动时注入", claudeRow.launchArgs.join(" "));
+  // 注入只由数据目录里的启动器追加（canvas-launcher §8.1）：Claude 用真实配置目录。
+  const claudeArgs = (await api("/api/agents/claude/integration")).launchArgs;
+  const runDir = join(data, "integration", "run");
+  report.launch = { claude: claudeRow?.launcher, codex: codexRow?.launcher };
+  if (
+    (hasClaude &&
+      (report.launch.claude !== join(runDir, "claude") ||
+        claudeArgs[0] !== "--settings" ||
+        !String(claudeArgs[1]).startsWith(data))) ||
+    (hasCodex && report.launch.codex !== join(runDir, "codex"))
+  )
+    throw new Error(`没有经临时数据目录里的启动器注入，不能用真实配置目录`);
+  note("启动器", report.launch);
 
   const hookBin = join(data, "bin", "armadra-hook");
   if (!existsSync(hookBin)) throw new Error(`没有 ${hookBin}`);
@@ -459,6 +481,11 @@ export async function setup() {
   const codexA = makeNode("codex-a", 1500, 0, "codex");
   const codexB = makeNode("codex-b", 2100, 0, "codex");
   const claudeA = makeNode("claude-a", 1500, 420, "claude");
+  // 场景 2、4、8 都往 claude-a 里投递。操作员的缺省权限模式是 bypass 时，新版
+  // Claude 起来先弹「把 auto 设成缺省权限模式？」（缺省为是），投进去的回车就
+  // 替人答了它、改写真实的 ~/.claude/settings.json（场景 10 首跑实测）。显式的
+  // `--permission-mode` 不弹这个对话框，与场景 7、10 一样用「自动编辑」起。
+  claudeA.data.agent.permissionMode = "auto-edit";
   const edge = (from, to, role) => ({
     id: randomUUID(),
     boardId: board.id,
@@ -469,17 +496,26 @@ export async function setup() {
     createdAt: stamp,
     updatedAt: stamp,
   });
-  const seeded = [source, codexA, codexB, claudeA];
+  // 没装或认证不上的那家不建节点：页面挂上去就会敲启动行。
+  const seeded = [
+    source,
+    ...(hasCodex ? [codexA, codexB] : []),
+    ...(hasClaude ? [claudeA] : []),
+  ];
   await api(documentPath, {
     method: "PUT",
     body: JSON.stringify({
       expectedUpdatedAt: initial.board.updatedAt,
       nodes: seeded,
       edges: [
-        edge(source, codexA, "supervises"),
-        edge(source, codexB, "supervises"),
-        edge(source, claudeA, "supervises"),
-        edge(codexA, codexB, "peer"),
+        ...(hasCodex
+          ? [
+              edge(source, codexA, "supervises"),
+              edge(source, codexB, "supervises"),
+              edge(codexA, codexB, "peer"),
+            ]
+          : []),
+        ...(hasClaude ? [edge(source, claudeA, "supervises")] : []),
       ],
       viewport: { x: 30, y: 60, zoom: 0.4 },
       whiteboard: "",
@@ -545,19 +581,23 @@ export async function setup() {
 
   /* --------------------------- 发送方：armadra-hook ---------------------------- */
 
-  const sourceEnv = () => ({
+  const sourceEnv = (nodeId = source.id) => ({
     PATH: process.env.PATH,
     HOME: homedir(),
-    ARMADRA_NODE_ID: source.id,
+    ARMADRA_NODE_ID: nodeId,
     ARMADRA_ENDPOINT_FILE: join(data, "hook-endpoint.env"),
   });
-  /** `armadra-hook canvas <verb> …`，以源节点的身份（节点令牌是 core 签发的那一份）。 */
-  const canvas = (verb, ...args) =>
+  /**
+   * `armadra-hook <argv…>`，以 `nodeId` 的身份：节点令牌按名字从
+   * `<data>/node-tokens/<nodeId>` 读，会话装起来时 core 就写好了，所以换身份只
+   * 需要换 `ARMADRA_NODE_ID`。`label` 只用于时间线。
+   */
+  const hookAs = (nodeId, argv, label) =>
     new Promise((done) => {
       execFile(
         hookBin,
-        ["canvas", verb, ...args],
-        { env: sourceEnv(), timeout: 60_000 },
+        argv,
+        { env: sourceEnv(nodeId), timeout: 60_000 },
         (error, stdout, stderr) => {
           let json;
           try {
@@ -569,8 +609,9 @@ export async function setup() {
             stderr: stderr.trim(),
             json,
           };
-          note(`canvas ${verb}`, {
-            args,
+          note(label, {
+            ...(nodeId === source.id ? {} : { as: nodeId }),
+            args: argv.slice(2),
             code: answer.code,
             out:
               (json ?? answer.stdout ?? "").toString().slice(0, 300) ||
@@ -581,6 +622,30 @@ export async function setup() {
         },
       );
     });
+  /** `armadra-hook canvas <verb> …`，以指定节点的身份。 */
+  const canvasAs = (nodeId, verb, ...args) =>
+    hookAs(nodeId, ["canvas", verb, ...args], `canvas ${verb}`);
+  /** `armadra-hook canvas <verb> …`，以源节点的身份（节点令牌是 core 签发的那一份）。 */
+  const canvas = (verb, ...args) => canvasAs(source.id, verb, ...args);
+  /** `armadra-hook context <verb> …`（读连线那头的节点），以指定节点的身份。 */
+  const contextAs = (nodeId, verb, ...args) =>
+    hookAs(nodeId, ["context", verb, ...args], `context ${verb}`);
+  /** 某个节点的收件箱（含已确认与回执），按到达顺序。 */
+  const inboxOf = (nodeId) =>
+    all(
+      "SELECT sequence, source_node_id, message_key, body, created_at, acknowledged_at FROM agent_mailbox WHERE target_node_id = ? ORDER BY sequence",
+      nodeId,
+    );
+  /** 会话索引表；给了 `cwd` 就只取那个目录的（不把操作员别处的会话读出来）。 */
+  const conversationsRows = (cwd) =>
+    cwd === undefined
+      ? all(
+          "SELECT provider, session_id, title, cwd, path, updated_at, bytes FROM conversations ORDER BY updated_at DESC",
+        )
+      : all(
+          "SELECT provider, session_id, title, cwd, path, updated_at, bytes FROM conversations WHERE cwd = ? ORDER BY updated_at DESC",
+          cwd,
+        );
 
   /* ------------------------------- 浏览器 --------------------------------- */
 
@@ -634,6 +699,8 @@ export async function setup() {
     executable,
     [
       "--headless=new",
+      "--use-mock-keychain",
+      "--password-store=basic",
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-background-networking",
@@ -867,32 +934,33 @@ export async function setup() {
       `${agent} 起到提示符`,
       async () => {
         const text = await screen(nodeId);
-        // Claude 进一个新目录先问信任；那一下是人的事，经页面按回车。
-        if (
-          agent === "claude" &&
-          !trusted &&
-          /trust/i.test(text) &&
-          /folder|files/i.test(text)
-        ) {
-          if (page === undefined) return false;
-          // 缺省高亮的是「No, exit」：先下移到「Yes, I trust this folder」再回车。
-          // 开场事件在信任之前还是之后到，决定了首投放行门会不会把正文打进这
-          // 个对话框里——记下来。
-          report.trustPrompt = {
-            statusWhileAsking: statusSummary(nodeId),
-            at: new Date().toISOString(),
-          };
-          note(
-            "Claude 问是否信任工作目录，经页面选「信任」并回车",
-            report.trustPrompt,
-          );
-          await page.focusNode(nodeId);
-          await page.key("ArrowDown", 40);
-          await sleep(300);
-          await page.enter();
-          trusted = true;
-          await sleep(1500);
-          return false;
+        // Claude 进一个新目录先问信任；那一下是人的事，经页面答——只答认得出
+        // 的那两种形态（`trust-dialog.mjs`），认不出就等到超时。
+        if (agent === "claude" && !trusted && page !== undefined) {
+          const step = await stepTrustDialog(text, {
+            capture: () => screen(nodeId),
+            focus: () => page.focusNode(nodeId),
+            down: () => page.key("ArrowDown", 40),
+            enter: () => page.enter(),
+            type: (value) => page.type(value),
+            sleep,
+          });
+          if (step === "answered") {
+            // 开场事件在信任之前还是之后到，决定了首投放行门会不会把正文打进
+            // 这个对话框里——记下来。
+            report.trustPrompt = {
+              statusWhileAsking: statusSummary(nodeId),
+              at: new Date().toISOString(),
+            };
+            note(
+              "Claude 问是否信任工作目录，经页面选「信任」",
+              report.trustPrompt,
+            );
+            trusted = true;
+            await sleep(1500);
+            return false;
+          }
+          if (step === "waiting") return false;
         }
         if (agent === "codex") {
           if (/Update available|Update now/i.test(text))
@@ -1100,6 +1168,7 @@ export async function setup() {
   });
 
   return {
+    clis,
     auth,
     refreshedAt,
     scratch,
@@ -1124,7 +1193,6 @@ export async function setup() {
     agents,
     claudeRow,
     codexRow,
-    injected,
     hookBin,
     workspace,
     boards,
@@ -1151,6 +1219,10 @@ export async function setup() {
     statusSummary,
     sourceEnv,
     canvas,
+    canvasAs,
+    contextAs,
+    inboxOf,
+    conversationsRows,
     port,
     vite,
     served,
@@ -1179,15 +1251,18 @@ export function finalize() {
     } catch {}
   }
   const after = fingerprint();
-  // CLI 自己升级也算改了操作员的机器。
-  try {
-    report.safety.versionsAfter = {
-      claude: execFileSync("claude", ["--version"], {
-        encoding: "utf8",
-      }).trim(),
-      codex: execFileSync("codex", ["--version"], { encoding: "utf8" }).trim(),
-    };
-  } catch {}
+  // CLI 自己升级也算改了操作员的机器。只在开场记过版本（真跑了 CLI）时复核：
+  // 只跑假 CLI 的场景连 `--version` 也不起真 CLI。
+  if (report.versions !== undefined) {
+    try {
+      report.safety.versionsAfter = Object.fromEntries(
+        Object.keys(report.versions).map((id) => [
+          id,
+          execFileSync(id, ["--version"], { encoding: "utf8" }).trim(),
+        ]),
+      );
+    } catch {}
+  }
   const versionsKept =
     report.versions === undefined ||
     JSON.stringify(report.versions) ===
@@ -1208,18 +1283,41 @@ export function finalize() {
         report.safety.blamed.push(file);
     } catch {}
   }
+  const claudeState = report.safety.claudeState;
+  if (claudeState !== undefined) {
+    const verdict = claudeStateBlame(
+      claudeState.before,
+      claudeStateDigest(),
+      claudeState.scratchRoots ?? [],
+    );
+    // 摘要本身不进报告：只留结论。
+    report.safety.claudeState = verdict;
+    report.safety.blamed.push(...verdict.blamed);
+  }
+  const mode = report.safety.claudeDefaultMode;
+  if (mode !== undefined) {
+    mode.after = claudeDefaultMode();
+    if (mode.after !== mode.before)
+      report.safety.blamed.push(
+        `${join(homedir(), ".claude/settings.json")} permissions.defaultMode`,
+      );
+  }
   report.safety.untouched =
     versionsKept &&
     report.safety.before !== undefined &&
     report.safety.blamed.length === 0;
   const errors = report.consoleErrors.length;
   const scenarios = Object.values(report.scenarios);
-  report.status =
-    report.error === undefined &&
-    report.safety.untouched &&
-    errors === 0 &&
-    scenarios.length > 0 &&
-    scenarios.every((entry) => entry.status === "passed")
+  const preflightOnly =
+    report.status === "preflight" && report.error === undefined;
+  report.status = preflightOnly
+    ? "preflight"
+    : report.error === undefined &&
+        report.safety.untouched &&
+        errors === 0 &&
+        scenarios.length > 0 &&
+        scenarios.some((entry) => entry.status === "passed") &&
+        scenarios.every((entry) => ["passed", "skipped"].includes(entry.status))
       ? "ok"
       : "failed";
   report.seconds = Math.round((Date.now() - started) / 1000);
@@ -1233,5 +1331,5 @@ export function finalize() {
   for (const [id, entry] of Object.entries(report.scenarios))
     console.log(`  ${entry.status.padEnd(7)} ${id}`);
   console.log(`  报告  ${join(output, "result.json")}`);
-  process.exit(report.status === "ok" ? 0 : 1);
+  process.exit(report.status === "ok" || preflightOnly ? 0 : 1);
 }

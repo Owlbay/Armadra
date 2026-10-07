@@ -45,6 +45,24 @@ export const usageCredentialSourceSchema = z
 /** 预付余额（Codex credits）。只有数字，没有账户信息。 */
 export const usageCreditsSchema = z.object({ balance: z.number() });
 
+/**
+ * 本地估算的一个窗口（契约 §12.1）：额度端点按政策关着时，core 按本机转录累计的
+ * token。`limit` 只在知道这一档的额度时才有；没有就只报用量，不算百分比。
+ */
+export const usageEstimateWindowSchema = z.object({
+  key: usageWindowKeySchema,
+  label: z.string(),
+  windowStartMs: z.number(),
+  resetsAtMs: z.number().optional(),
+  used: z.number().min(0),
+  limit: z.number().positive().optional(),
+});
+
+export const usageEstimateSchema = z.object({
+  source: z.literal("local"),
+  windows: z.array(usageEstimateWindowSchema),
+});
+
 export const usageProviderSchema = z.object({
   id: usageProviderIdSchema,
   status: usageProviderStatusSchema,
@@ -52,6 +70,8 @@ export const usageProviderSchema = z.object({
    * `status: "error"` 的原因代码（Runtime `UsageFailure`：`expired_credentials`、
    * `network`、`unauthorized` …）。只有代码，没有上游文本；新 Runtime 可能多出
    * 前端还不认识的值，所以是字符串而不是枚举，前端认不出的按通用原因显示。
+   * `status: "unavailable"` 也可能带两个原因：`policy_off`（借用登录令牌的
+   * 额度端点按出站政策默认关，外部服务 §9.3）、`unsupported`（端点答了网页）。
    */
   reason: z.string().optional(),
   credentialSource: usageCredentialSourceSchema,
@@ -60,6 +80,8 @@ export const usageProviderSchema = z.object({
   /** 数字来自本地 CLI 回退而不是 provider 自己的 OAuth 接口。 */
   viaCli: z.boolean().optional(),
   fetchedAt: z.string().nullable(),
+  /** 只跟着 `reason: "policy_off"` 出现；界面标「本地估算」。 */
+  estimate: usageEstimateSchema.optional(),
 });
 
 export const usageSchema = z.object({
@@ -122,10 +144,21 @@ export const costStatusSchema = z.enum(["ok", "disabled", "unavailable"]);
  */
 export const costAgentSourceSchema = z.enum(["local", "none"]);
 
-/** 一个 agent 在某个窗口里的用量。`agent` 是注册表里的 id（`claude` / `codex` …）。 */
+/**
+ * 成本行的单位：`tokens`，或者 `premiumRequests`（Copilot，只有请求数，不折算
+ * 成 token 或金额）。见契约 §12.1。
+ */
+export const costUnitSchema = z.enum(["tokens", "premiumRequests"]);
+
+/**
+ * 一个 agent 在某个窗口里的用量。`agent` 是注册表里的 id（`claude` / `codex` …）。
+ * `unit` 为 `premiumRequests` 时用量在 `requests`，`tokens` 为零、`costUsd` 为 0。
+ */
 export const costAgentSchema = z.object({
   agent: z.string(),
+  unit: costUnitSchema.default("tokens"),
   tokens: costTokensSchema,
+  requests: z.number().default(0),
   costUsd: z.number(),
   complete: z.boolean(),
   source: costAgentSourceSchema,
@@ -192,6 +225,8 @@ export type UsageProviderId = z.infer<typeof usageProviderIdSchema>;
 export type UsageProviderStatus = z.infer<typeof usageProviderStatusSchema>;
 export type UsageWindow = z.infer<typeof usageWindowSchema>;
 export type UsageWindowKey = z.infer<typeof usageWindowKeySchema>;
+export type UsageEstimate = z.infer<typeof usageEstimateSchema>;
+export type UsageEstimateWindow = z.infer<typeof usageEstimateWindowSchema>;
 export type UsageCredentialSource = z.infer<typeof usageCredentialSourceSchema>;
 export type UsageCredits = z.infer<typeof usageCreditsSchema>;
 export type CostTokens = z.infer<typeof costTokensSchema>;
@@ -201,6 +236,7 @@ export type CostDay = z.infer<typeof costDaySchema>;
 export type CostSession = z.infer<typeof costSessionSchema>;
 export type CostStatus = z.infer<typeof costStatusSchema>;
 export type CostAgentSource = z.infer<typeof costAgentSourceSchema>;
+export type CostUnit = z.infer<typeof costUnitSchema>;
 export type CostAgent = z.infer<typeof costAgentSchema>;
 export type CostPoint = z.infer<typeof costPointSchema>;
 export type CostRangeKey = z.infer<typeof costRangeKeySchema>;

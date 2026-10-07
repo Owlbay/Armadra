@@ -8,9 +8,18 @@ import type {
   GitRebaseTodoPreview,
   GitRepositoryAction,
 } from "@armadra/shared";
+import { sk } from "../../sources/scope";
 import { useT } from "../../app/preferences-store";
 import { Button } from "../../ui/button";
-import { Field, ReadError, selectClass, textareaClass } from "./forms";
+import { Textarea } from "../../ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../ui/select";
+import { Field, ReadError } from "./forms";
 
 export interface RebaseTodoProps {
   workspaceId: string;
@@ -43,7 +52,12 @@ export function RebaseTodo({
   const t = useT();
   const [entries, setEntries] = useState<GitRebaseTodoEntry[]>([]);
   const preview = useQuery({
-    queryKey: ["git-repository-rebase-todo", workspaceId, repositoryKey, onto],
+    queryKey: sk(
+      "git-repository-rebase-todo",
+      workspaceId,
+      repositoryKey,
+      onto,
+    ),
     queryFn: ({ signal }) => loadPreview(onto, signal),
     enabled: Boolean(onto),
     retry: false,
@@ -134,27 +148,37 @@ export function RebaseTodo({
               {entry.oid.slice(0, 12)}
             </p>
             <Field label={t("gitRepo.rebaseTodoCommand")}>
-              <select
-                className={selectClass}
+              <Select
                 value={entry.command}
                 disabled={disabled}
-                onChange={(event) =>
-                  setCommand(index, event.target.value as GitRebaseTodoCommand)
+                onValueChange={(next) =>
+                  setCommand(index, next as GitRebaseTodoCommand)
                 }
               >
-                {(
-                  ["pick", "reword", "edit", "squash", "fixup", "drop"] as const
-                ).map((command) => (
-                  <option key={command} value={command}>
-                    {t(`gitRepo.rebaseTodo.${command}`)}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-9 w-full min-w-0">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="z-[var(--z-dialog)]">
+                  {(
+                    [
+                      "pick",
+                      "reword",
+                      "edit",
+                      "squash",
+                      "fixup",
+                      "drop",
+                    ] as const
+                  ).map((command) => (
+                    <SelectItem key={command} value={command}>
+                      {t(`gitRepo.rebaseTodo.${command}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </Field>
             {entry.command === "reword" && (
               <Field label={t("gitRepo.rebaseTodoMessage")}>
-                <textarea
-                  className={textareaClass}
+                <Textarea
                   rows={3}
                   value={entry.message ?? ""}
                   disabled={disabled}

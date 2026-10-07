@@ -40,23 +40,13 @@ export function ComponentList({
           key={`${component.process.pid}:${component.process.startTimeUnixMs ?? "?"}`}
           className="flex flex-col rounded-[var(--r-control)] px-1.5 py-1 hover:bg-accent"
         >
+          {/*
+            说明单独占一整行并允许折行：它是一句解释（「只算这个进程：它启动的
+            会话在上面」），截成「只算这个进程：它启动的会话在…」等于没说。
+          */}
           <div className="flex w-full items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-[12px]">
-                {t(`resources.component.${component.kind}`)}
-              </div>
-              <div className="truncate text-[11px] text-muted-foreground">
-                {component.tree
-                  ? t("resources.component.tree")
-                  : component.kind === "runtime"
-                    ? t("resources.component.selfOnly")
-                    : t("resources.component.single")}
-                {` · pid ${component.process.pid}`}
-                {component.location === "remote" &&
-                  ` · ${t("resources.location.remote")}`}
-                {component.unknownReason === "remote" &&
-                  ` · ${t("resources.unknown.remote")}`}
-              </div>
+            <div className="min-w-0 flex-1 truncate text-[12px]">
+              {t(`resources.component.${component.kind}`)}
             </div>
             <span className="w-14 shrink-0 text-right text-[12px] tabular-nums">
               {formatPercent(component.process.cpuPercent)}
@@ -64,6 +54,18 @@ export function ComponentList({
             <span className="w-20 shrink-0 text-right text-[12px] tabular-nums">
               {formatMetricBytes(component.process.memoryBytes)}
             </span>
+          </div>
+          <div className="text-[11px] text-muted-foreground [overflow-wrap:anywhere]">
+            {component.tree
+              ? t("resources.component.tree")
+              : component.kind === "runtime"
+                ? t("resources.component.selfOnly")
+                : t("resources.component.single")}
+            {` · pid ${component.process.pid}`}
+            {component.location === "remote" &&
+              ` · ${t("resources.location.remote")}`}
+            {component.unknownReason === "remote" &&
+              ` · ${t("resources.unknown.remote")}`}
           </div>
           {component.tree && (
             <ProcessTree

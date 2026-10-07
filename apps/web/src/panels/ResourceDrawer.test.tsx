@@ -208,6 +208,8 @@ beforeEach(() => {
       resources: "closed",
       automation: "closed",
       handoff: "closed",
+      workflow: "closed",
+      dispatch: "closed",
       usage: "closed",
       github: "closed",
       problems: "closed",

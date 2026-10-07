@@ -61,8 +61,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # pnpm check = libs:build + prettier + typecheck + repo:check +
-      # ci:workflows + release:check。
+      # pnpm check = libs:build + prettier + eslint（只有 error 失败）+ typecheck +
+      # repo:check + ci:workflows + release:check + notices:check。
       # 三个平台都跑：换行与路径分隔符都是平台差异的常见出口。
       - run: pnpm check
 
@@ -79,7 +79,22 @@ jobs:
       # @armadra/desktop 的 `test`（vitest + `node --test scripts/*.test.mjs`），
       # 覆盖 core 的全部单测，以及 electron-builder.yml、entitlements、
       # signing-electron.mjs、after-pack.mjs 与产物矩阵一致性；不再重复一遍。
+      # 覆盖率（工程规范化 §5）只在 Linux 上开、只出报告不设门槛：web、desktop、
+      # server 三个 vitest 配置读 ARMADRA_COVERAGE，三平台不重复算。
       - run: pnpm -r --if-present test
+        env:
+          ARMADRA_COVERAGE: ${{ runner.os == 'Linux' && '1' || '' }}
+      - name: 上传覆盖率报告
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: |
+            apps/web/coverage/lcov.info
+            apps/desktop/coverage/lcov.info
+            apps/server/coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
       - run: pnpm -r --if-present typecheck
       - run: pnpm --filter @armadra/web build
       - run: pnpm plugin:test
@@ -109,3 +124,74 @@ jobs:
           node tools/probes/controller-run.mjs --fault=launch.after
           node tools/probes/controller-run.mjs --fault=delivery.before
           node tools/probes/controller-run.mjs --fault=delivery.after
+  # A 档端到端（docs/guides/ci-release.md §1.1）：tools/ci/e2e.d/ 里 tier a 的
+  # 探针逐条跑——真 core、真页面、新 profile 的无头 Chrome、各自私有的 tmux
+  # socket。只在 Linux 上跑：探针要 tmux，而三平台的差异已经由上面的单测守着。
+  # 失败阻断合并；每条的 result.json、截图与输出作为产物上传。
+  e2e:
+    name: e2e (tier a)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: 给 Git 一个身份
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global user.name "Armadra CI"
+          git config --global user.email "ci@armadra.invalid"
+
+      # Ubuntu 24.04 的 AppArmor 默认不许非特权用户命名空间，Chrome 的沙箱起不来；
+      # 在一次性的 runner 上放开，而不是给探针加 --no-sandbox。
+      # fonts-noto-cjk 只为截图里的中文不是方块，断言不看字形。
+      - name: 装 tmux、xvfb 与中文字体，放开用户命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tmux xvfb fonts-noto-cjk
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          tmux -V
+
+      - uses: browser-actions/setup-chrome@v2
+        id: chrome
+        with:
+          chrome-version: stable
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: 构建探针要的产物
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm libs:build
+          pnpm --filter @armadra/web build
+          pnpm --filter @armadra/desktop build
+          pnpm --filter @armadra/server build
+          pnpm --filter @armadra/push-relay build
+          # node-pty 只带 macOS / Windows 的预编译；Linux 上给 Node 编一份，
+          # 否则 core 的直连终端起不来（与 desktop 的 pretest 同一个脚本）。
+          node apps/desktop/scripts/ensure-node-pty.mjs
+
+      - name: A 档端到端
+        shell: bash
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: xvfb-run -a node tools/ci/e2e.mjs --tier a --out target/e2e/a
+
+      - name: 上传端到端产物
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-tier-a
+          path: target/e2e/a
+          if-no-files-found: ignore
+          retention-days: 14

@@ -3,11 +3,18 @@
  *
  *   node tools/release/assemble.mjs --dir <dir> --version X.Y.Z \
  *     --repo owner/name --tag vX.Y.Z [--unnotarized macOS,Windows] \
- *     [--note release-note.md]
+ *     [--changelog CHANGELOG.md [--require-released] | --notes-from <file>] \
+ *     [--note release-note.md] [--mirror-base <url> --mirror-out <dir>]
+ *
+ * The release note's body is this version's section of `CHANGELOG.md`
+ * (`--changelog`, see changelog.mjs); a missing section fails before anything
+ * is signed. `--notes-from` reads a whole file instead, for tests and one-offs.
  *
  * In order: check that every file is one the updater can place, sign every
  * artifact, write latest.json from the signatures that produced, write
- * SHA256SUMS, then verify what was just produced. The last step matters most —
+ * SHA256SUMS, then verify what was just produced — including that each
+ * target's electron-updater feed (`latest-<target>….yml`) names a published
+ * bundle by the same bytes `SHA256SUMS` lists. The last step matters most —
  * it is the only one that can catch a release that each individual step was
  * happy with.
  *
@@ -24,24 +31,52 @@
  * note says so: a release that looks signed and is not is worse than one that
  * admits it.
  */
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { TARGETS, assetComponent, assetTarget } from "./artifacts.mjs";
-import { verifyChecksums, writeChecksums } from "./checksums.mjs";
+import {
+  TARGETS,
+  assetComponent,
+  assetTarget,
+  desktopAssets,
+  updaterFeedFile,
+} from "./artifacts.mjs";
+import {
+  parseChecksums,
+  verifyChecksums,
+  writeChecksums,
+} from "./checksums.mjs";
+import { readReleaseNotes } from "./changelog.mjs";
 import { readCompatibility, releaseNote } from "./compatibility.mjs";
-import { keyFromSecret, publicKeyFile } from "./minisign.mjs";
+import { keyFromSecret, publicKeyFile, signDetached } from "./minisign.mjs";
 import { SECRET_ENV, signDirectory, verifyDirectory } from "./sign.mjs";
 import { writeManifest } from "./updater-manifest.mjs";
+import { PUBLIC_KEY_ASSET } from "./sign-gpg.mjs";
+import { normalizeSha512, parseFeed, sha512Base64 } from "./stage-desktop.mjs";
 
-/** Every file must be one the updater can place, or it can never be offered. */
+/**
+ * Every file must be one the updater can place, or it can never be offered.
+ *
+ * Two kinds of file describe a package rather than being one, and are let
+ * through by shape: a detached signature — minisign `.sig`, or the GPG `.asc`
+ * `sign-gpg.mjs` writes beside a Linux package, whose own name is checked like
+ * any other — and the GPG public key those `.asc` files verify against.
+ */
 export function checkNames(directory) {
   const problems = [];
   for (const name of readdirSync(directory)) {
     if (
       name.endsWith(".sig") ||
       name === "SHA256SUMS" ||
-      name === "latest.json"
+      name === "latest.json" ||
+      name === PUBLIC_KEY_ASSET
     )
       continue;
     const component = assetComponent(name);
@@ -49,9 +84,87 @@ export function checkNames(directory) {
       problems.push(`${name} declares no component the updater can read`);
       continue;
     }
-    if (component === "web") continue;
+    if (
+      component === "web" ||
+      component === "manifest" ||
+      component === "mobile"
+    )
+      continue;
     if (assetTarget(name) === "")
       problems.push(`${name} declares no target the updater can read`);
+  }
+  return problems;
+}
+
+/**
+ * electron-updater 的清单与发布的字节是否是同一回事（外部服务 §3.2 第 2 条）。
+ *
+ * 对每个发布了更新包的目标：清单必须在（否则 electron-updater 的下载一步是 404），
+ * 版本对，`files[].url` 是本目录里真有的文件，清单的 sha512 是这份字节的 sha512，
+ * `SHA256SUMS` 给这个文件记的 sha256 也是这份字节的——两份清单说的是同一个文件；
+ * latest.json 的 `feed.sha256` 是这份 yml 的。返回问题列表，不抛。
+ */
+export function verifyFeeds({ directory, version, manifest }) {
+  const problems = [];
+  let sums = new Map();
+  try {
+    sums = parseChecksums(readFileSync(join(directory, "SHA256SUMS"), "utf8"));
+  } catch (error) {
+    problems.push(`SHA256SUMS cannot be read: ${error.message}`);
+  }
+  for (const target of TARGETS) {
+    const updater = desktopAssets(version, target).find((a) => a.updater);
+    if (!existsSync(join(directory, updater.name))) continue;
+    const feedName = updaterFeedFile(target);
+    const feedPath = join(directory, feedName);
+    if (!existsSync(feedPath)) {
+      problems.push(
+        `${feedName} is missing: electron-updater cannot download ${updater.name}`,
+      );
+      continue;
+    }
+    const feedBytes = readFileSync(feedPath);
+    let feed;
+    try {
+      feed = parseFeed(feedBytes.toString("utf8"));
+    } catch (error) {
+      problems.push(`${feedName} is malformed: ${error.message}`);
+      continue;
+    }
+    if (feed.version !== version)
+      problems.push(
+        `${feedName} names version ${feed.version}, not ${version}`,
+      );
+    if (feed.files.length === 0) problems.push(`${feedName} lists no file`);
+    if (feed.files.length > 0 && feed.path !== feed.files[0].url)
+      problems.push(`${feedName} path is not its first file`);
+    for (const file of feed.files) {
+      const path = join(directory, String(file.url ?? ""));
+      if (!file.url || file.url.includes("/") || !existsSync(path)) {
+        problems.push(`${feedName} names ${file.url}, which is not published`);
+        continue;
+      }
+      const bytes = readFileSync(path);
+      if (normalizeSha512(file.sha512) !== sha512Base64(bytes))
+        problems.push(`${feedName} sha512 for ${file.url} is not its bytes`);
+      if (!/^[A-Za-z0-9+/]+={0,2}$/.test(String(file.sha512)))
+        problems.push(`${feedName} sha512 for ${file.url} is not base64`);
+      if (Number(file.size) !== bytes.length)
+        problems.push(`${feedName} size for ${file.url} is not its length`);
+      const listed = sums.get(file.url);
+      const actual = createHash("sha256").update(bytes).digest("hex");
+      if (listed !== actual)
+        problems.push(
+          `${feedName} and SHA256SUMS do not describe the same ${file.url}`,
+        );
+    }
+    const entry = manifest?.platforms?.[target];
+    if (entry) {
+      const feedDigest = createHash("sha256").update(feedBytes).digest("hex");
+      if (!entry.feed) problems.push(`latest.json ${target} names no feed`);
+      else if (entry.feed.sha256 !== feedDigest)
+        problems.push(`latest.json ${target} feed digest is not ${feedName}`);
+    }
   }
   return problems;
 }
@@ -59,6 +172,58 @@ export function checkNames(directory) {
 /** Which targets published nothing the updater could offer. */
 export function missingUpdaterPlatforms(manifest) {
   return TARGETS.filter((target) => !manifest.platforms[target]);
+}
+
+/**
+ * Where a mirror serves a release's files: the same path shape as GitHub's,
+ * `<base>/releases/download/<tag>/<name>`, under the mirror's public base.
+ */
+export function mirrorDownloadUrl(base, tag, name) {
+  return `${String(base).replace(/\/+$/, "")}/releases/download/${tag}/${encodeURIComponent(name)}`;
+}
+
+/**
+ * The mirror's own `latest.json` (W-MIRROR, external-services §3.3).
+ *
+ * The release's `latest.json` names GitHub for every bundle and feed, so a
+ * client that reached the mirror for the check would still download from
+ * GitHub. This one names the same bytes at the mirror's addresses and is signed
+ * by the same key with the same trusted comment, so it verifies as
+ * `latest.json` wherever it is served. It is written outside the release
+ * directory: it is not a release asset, and `SHA256SUMS` lists the release's
+ * own. `tools/release/mirror.mjs` lays it over the copy it uploads.
+ */
+export function writeMirrorManifest({
+  directory,
+  out,
+  base,
+  version,
+  tag,
+  notes,
+  key,
+  rollout,
+}) {
+  mkdirSync(out, { recursive: true });
+  const output = join(out, "latest.json");
+  const { manifest, skipped } = writeManifest({
+    directory,
+    version,
+    notes,
+    targets: TARGETS,
+    downloadUrl: (name) => mirrorDownloadUrl(base, tag, name),
+    rollout,
+    output,
+  });
+  if (key)
+    writeFileSync(
+      `${output}.sig`,
+      signDetached(
+        key,
+        readFileSync(output),
+        `file:latest.json${version ? ` version:${version}` : ""}`,
+      ),
+    );
+  return { manifest, skipped, path: output };
 }
 
 export async function assemble({
@@ -69,6 +234,8 @@ export async function assemble({
   unnotarized = [],
   notes = "",
   secret = process.env[SECRET_ENV],
+  rollout,
+  mirror,
 }) {
   const problems = checkNames(directory);
   const download = (name) =>
@@ -85,6 +252,7 @@ export async function assemble({
     notes,
     targets: TARGETS,
     downloadUrl: download,
+    rollout,
   });
   // A build without ARMADRA_RELEASE_SIGNING_KEY signs nothing, and that is a
   // release that admits it cannot update itself, not a broken one: every
@@ -119,6 +287,25 @@ export async function assemble({
     problems.push(...signatureProblems);
   }
   problems.push(...(await verifyChecksums(directory)));
+  problems.push(...verifyFeeds({ directory, version, manifest }));
+
+  if (mirror?.base && mirror?.out) {
+    const mirrored = writeMirrorManifest({
+      directory,
+      out: mirror.out,
+      base: mirror.base,
+      version,
+      tag,
+      notes,
+      key,
+      rollout,
+    });
+    if (
+      Object.keys(mirrored.manifest.platforms).length !==
+      Object.keys(manifest.platforms).length
+    )
+      problems.push("the mirror's latest.json offers other platforms");
+  }
 
   const compatibility = readCompatibility();
   const unsigned = secret ? [] : ["component packages (no signing key)"];
@@ -152,11 +339,30 @@ async function main(argv) {
   const tag = flag(argv, "tag") || `v${version}`;
   if (!directory || !version || !repo) {
     console.error(
-      "usage: node tools/release/assemble.mjs --dir <dir> --version X.Y.Z --repo owner/name [--tag vX.Y.Z] [--unnotarized a,b] [--note file]",
+      "usage: node tools/release/assemble.mjs --dir <dir> --version X.Y.Z --repo owner/name [--tag vX.Y.Z] [--unnotarized a,b] [--changelog CHANGELOG.md [--require-released] | --notes-from file] [--note file] [--rollout <percent>] [--mirror-base <url> [--mirror-out <dir>]]",
     );
     return 2;
   }
   const notesFile = flag(argv, "notes-from");
+  const changelog = flag(argv, "changelog");
+  if (notesFile && changelog) {
+    console.error("--notes-from and --changelog are two sources; give one");
+    return 2;
+  }
+  let notes = `Armadra ${version}.`;
+  if (notesFile) notes = readFileSync(notesFile, "utf8");
+  if (changelog) {
+    const read = readReleaseNotes({
+      file: resolve(changelog),
+      version,
+      requireReleased: argv.includes("--require-released"),
+    });
+    if (read.problem) {
+      console.error(`✗ ${read.problem}`);
+      return 1;
+    }
+    notes = read.notes;
+  }
   const result = await assemble({
     directory: resolve(directory),
     version,
@@ -166,7 +372,16 @@ async function main(argv) {
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean),
-    notes: notesFile ? readFileSync(notesFile, "utf8") : `Armadra ${version}.`,
+    notes,
+    mirror: flag(argv, "mirror-base")
+      ? {
+          base: flag(argv, "mirror-base"),
+          out: resolve(flag(argv, "mirror-out") || "mirror"),
+        }
+      : undefined,
+    rollout: flag(argv, "rollout")
+      ? { percent: Number(flag(argv, "rollout")) }
+      : undefined,
   });
   const notePath = flag(argv, "note");
   if (notePath) writeFileSync(notePath, result.note);

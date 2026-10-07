@@ -206,6 +206,122 @@ export interface WorkspaceEventPayloads {
     readonly size: number | null;
     readonly mtime: string | null;
   };
+  /**
+   * 工作流（契约 §15.4）：草案出现或换了状态、一次运行或它的某一步换了状态、
+   * 一个关卡开始等人或被答复。页面据此重读 `/api/workflows/*`，帧里不带正文。
+   */
+  "workflow.draft": {
+    readonly draftId: string;
+    readonly boardId: string;
+    readonly status: string;
+  };
+  "workflow.run": {
+    readonly runId: string;
+    readonly boardId: string;
+    readonly status: string;
+    readonly stepId?: string;
+    readonly stepStatus?: string;
+  };
+  "workflow.gate": {
+    readonly runId: string;
+    readonly boardId: string;
+    readonly stepId: string;
+    readonly label: string;
+    readonly state: "waiting" | "approved" | "rejected" | "cancelled";
+    /** 运行的 Frame：推送的深链打开它（契约 §15.4）。 */
+    readonly nodeId?: string;
+  };
+  /*
+   * ACP 驱动的会话（契约 §14.3）。`sessionId` 是 `terminal_sessions.id`；
+   * `update` 是 ACP `session/update` 的 `update` 原样。
+   */
+  "acp.update": {
+    readonly sessionId: string;
+    readonly nodeId: string;
+    readonly update: { readonly sessionUpdate: string } & OpaquePayload;
+  };
+  "acp.turn": {
+    readonly sessionId: string;
+    readonly nodeId: string;
+    readonly turnId: string;
+    /** 契约 §39.9：prompt 带了页面的回合 id 时原样带回。 */
+    readonly clientTurnId?: string;
+    readonly stopReason?: string;
+    readonly error?: { readonly code: string; readonly message: string };
+  };
+  "acp.driver": {
+    readonly nodeId: string;
+    readonly driver: "terminal" | "acp";
+    readonly sessionId: string;
+    readonly resumed: boolean;
+  };
+  /*
+   * 自动化计划（契约 §27，G5-00 只定义形状，G5-10 发）：到点起跑一次、一次
+   * 运行失败、计划连续失败到要人处理。只带标识与稳定码，不带命令、参数与
+   * 输出——推送正文按种类写死，深链指向 `nodeId`。
+   */
+  "schedule.fired": {
+    readonly planId: string;
+    readonly runId: string;
+    readonly nodeId?: string;
+  };
+  "schedule.failed": {
+    readonly planId: string;
+    readonly runId: string;
+    readonly nodeId?: string;
+    readonly reasonCode: string;
+  };
+  "schedule.attention": {
+    readonly planId: string;
+    readonly nodeId?: string;
+    readonly reasonCode: string;
+  };
+  /*
+   * 一个会话的资源用量越过设置里的阈值（契约 §27，G5-10 发）。越线那一下发
+   * 一次，回落之后再越线才再发；`metric` 今天只有 `memory`，单位是字节。
+   */
+  "resources.threshold": {
+    readonly sessionId: string;
+    readonly nodeId?: string;
+    readonly metric: string;
+    readonly value: number;
+    readonly threshold: number;
+  };
+  /*
+   * 一条评论变了（契约 §16.3）。不带正文：页面据此重新拉列表，推送域按
+   * `mentions`（被提及的 principal，不含作者）叫人。
+   */
+  /**
+   * 出站中继隧道换了状态（契约 §32）：设置页据此实时显示。发给每块正被人看着的
+   * 画布（`events:read`），不进 outbox——续订的页面重新读一次
+   * `identity.cloud.status` 就是当前那一份。
+   */
+  "cloud.tunnel": {
+    readonly issuer: string;
+    readonly state:
+      | "disabled"
+      | "connecting"
+      | "authenticating"
+      | "ready"
+      | "draining"
+      | "backoff";
+  };
+  "board.comment": {
+    readonly boardId: string;
+    readonly action:
+      | "created"
+      | "updated"
+      | "resolved"
+      | "reopened"
+      | "deleted";
+    readonly comment: {
+      readonly id: string;
+      readonly parentId: string | null;
+      readonly anchorKind: "node" | "item" | "point";
+      readonly anchorId?: string;
+    };
+    readonly mentions: readonly string[];
+  };
 }
 
 export type WorkspaceEventType = keyof WorkspaceEventPayloads;
@@ -249,6 +365,14 @@ export const WORKSPACE_EVENT_TYPES = [
   "language.session",
   "language.server",
   "file.changed",
+  "workflow.draft",
+  "workflow.run",
+  "workflow.gate",
+  "schedule.fired",
+  "schedule.failed",
+  "schedule.attention",
+  "resources.threshold",
+  "cloud.tunnel",
 ] as const satisfies readonly WorkspaceEventType[];
 
 export interface CoreEvents {

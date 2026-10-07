@@ -12,12 +12,13 @@ import { z } from "zod";
 const csrf = vi.hoisted(() => ({
   value: "a".repeat(43),
   ensure: vi.fn(),
-  forget: vi.fn(),
+  replace: vi.fn(),
 }));
 
 vi.mock("./identity", () => ({
   ensureCsrf: () => csrf.ensure() as Promise<string>,
-  forgetCsrf: () => csrf.forget(),
+  replaceRejectedCsrf: (rejected: string) =>
+    csrf.replace(rejected) as Promise<string>,
 }));
 
 const PAGE = "https://armadra.test/";
@@ -29,22 +30,27 @@ const { request, RUNTIME_VIA_SERVER_SHELL } = await import("./request");
 
 let calls: { url: string; init: RequestInit }[];
 let status: number[];
+let bodies: unknown[];
 
 beforeEach(() => {
   calls = [];
   status = [200];
+  bodies = [];
   csrf.ensure.mockReset().mockResolvedValue(csrf.value);
-  csrf.forget.mockReset();
+  csrf.replace.mockReset().mockResolvedValue("b".repeat(43));
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {
       calls.push({ url, init });
       const code = status.shift() ?? 200;
-      return {
+      const body = bodies.shift() ?? { ok: true };
+      const response = {
         ok: code >= 200 && code < 300,
         status: code,
-        json: async () => ({ ok: true }),
-      } as unknown as Response;
+        json: async () => body,
+        clone: () => response,
+      };
+      return response as unknown as Response;
     }),
   );
 });
@@ -78,14 +84,33 @@ describe("the server shell's CSRF header", () => {
    */
   it("retries a rotated token exactly once", async () => {
     status = [403, 200];
-    csrf.ensure
-      .mockResolvedValueOnce(csrf.value)
-      .mockResolvedValueOnce("b".repeat(43));
     await request("/api/settings", schema, { method: "PATCH", body: "{}" });
-    expect(csrf.forget).toHaveBeenCalledTimes(1);
+    // 交出被拒的那一枚：别的窗口已经换过时用那一枚，而不是再换一次。
+    expect(csrf.replace).toHaveBeenCalledTimes(1);
+    expect(csrf.replace).toHaveBeenCalledWith(csrf.value);
     expect(calls).toHaveLength(2);
     expect(
       (calls[1]?.init.headers as Record<string, string>)["X-Armadra-CSRF"],
     ).toBe("b".repeat(43));
+  });
+
+  it("does not resend a write a handler already refused with its own code", async () => {
+    status = [403];
+    bodies = [{ code: "forge_scope", message: "x" }];
+    await expect(
+      request("/api/forge/repos/h/o/n/pulls/1/merge", schema, {
+        method: "POST",
+        body: "{}",
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "forge_scope" });
+    expect(csrf.replace).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("still renews on the gateway's own CSRF refusal", async () => {
+    status = [403, 200];
+    bodies = [{ code: "forbidden", message: "CSRF" }];
+    await request("/api/settings", schema, { method: "PATCH", body: "{}" });
+    expect(calls).toHaveLength(2);
   });
 });

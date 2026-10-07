@@ -343,6 +343,67 @@ describe("language client", () => {
   });
 });
 
+describe("断线放弃之后的恢复（契约 §35.6 的独立连接）", () => {
+  async function giveUp() {
+    const { client, release } = acquireLanguageClient(
+      "w1",
+      "python",
+      fakeSocketFactory,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      lastSocket()!.drop();
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(client.status.state).toBe("disconnected");
+    return { client, release };
+  }
+
+  it("网络恢复时马上重开会话，连上后不再重试", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client } = await giveUp();
+      const before = openLanguageSession.mock.calls.length;
+      openLanguageSession.mockResolvedValue(session({ sessionId: "s9" }));
+      globalThis.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(openLanguageSession).toHaveBeenCalledTimes(before + 1);
+      const socket = lastSocket()!;
+      socket.open();
+      answerInitialize(socket);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.status.state).toBe("running");
+      expect(client.status.sessionId).toBe("s9");
+      expect(client.status.reconnecting).toBe(false);
+      // 连上了：定时器与监听都撤了。
+      await vi.advanceTimersByTimeAsync(120_000);
+      globalThis.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(openLanguageSession).toHaveBeenCalledTimes(before + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("没有网络事件也每 30 秒再试一轮；释放之后不再试", async () => {
+    vi.useFakeTimers();
+    try {
+      const { release } = await giveUp();
+      const before = openLanguageSession.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(openLanguageSession.mock.calls.length).toBeGreaterThan(before);
+      release();
+      const after = openLanguageSession.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(120_000);
+      globalThis.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(openLanguageSession).toHaveBeenCalledTimes(after);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("opening a session", () => {
   it("probes once per workspace before the first session", async () => {
     // Runtime only launches the absolute path a probe froze. A session sent

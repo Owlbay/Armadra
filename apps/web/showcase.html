@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="/icon.png" type="image/png" />
+    <title>Armadra</title>
+  </head>
+  <body>
+    <!--
+      设计展示页（docs/design/design-showcase.md）：只有 Vite 开发服务器会提供它。
+      生产构建的入口在 vite.config.ts 里显式只列 index.html，所以这个文件与
+      src/showcase/ 都不会进 dist/；`data-theme` 由 src/showcase/main.tsx 按
+      `?theme=` 写。
+    -->
+    <div id="root"></div>
+    <script type="module" src="/src/showcase/main.tsx"></script>
+  </body>
+</html>

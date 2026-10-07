@@ -113,7 +113,11 @@ export function removeTrustState(
     }
     kept.push(line);
   }
-  return kept.join("\n");
+  const out = kept.join("\n");
+  // A table dropped at the very end takes the file's final newline with it.
+  return document.endsWith("\n") && !out.endsWith("\n") && out !== ""
+    ? `${out}\n`
+    : out;
 }
 
 /**

@@ -3,6 +3,8 @@ import type { CostRangeKey, CostSummary } from "@armadra/shared";
 
 import { useT } from "../../app/preferences-store";
 import { useAgentsQuery } from "../../app/use-agents";
+import { formatRequests } from "../../lib/cost";
+import { ColorDot } from "@/ui/color-dot";
 import { DimensionChart, type DimensionSeries } from "./DimensionChart";
 import { MetricCards } from "./MetricCards";
 import { RangeMetricBar } from "./RangeMetricBar";
@@ -63,7 +65,7 @@ export function UsagePanel({ summary }: { summary: CostSummary }) {
   const agentSeries = useMemo<DimensionSeries[]>(
     () =>
       current.byAgent
-        .filter((entry) => entry.source === "local")
+        .filter((entry) => entry.source === "local" && entry.unit === "tokens")
         .map((entry, index) => {
           const info = agentList?.find((agent) => agent.id === entry.agent);
           return {
@@ -84,6 +86,28 @@ export function UsagePanel({ summary }: { summary: CostSummary }) {
         }),
     [agentList, current.byAgent, metric],
   );
+
+  // 按请求计的 Agent（Copilot）不进 token / 费用的堆叠面积，单列请求数。
+  const requestRows = current.byAgent
+    .filter(
+      (entry) => entry.source === "local" && entry.unit === "premiumRequests",
+    )
+    .map((entry, index) => {
+      const info = agentList?.find((agent) => agent.id === entry.agent);
+      const value = point
+        ? (point.agents.find((candidate) => candidate.agent === entry.agent)
+            ?.requests ?? 0)
+        : entry.requests;
+      return {
+        agent: entry.agent,
+        label: info?.label ?? entry.agent,
+        color:
+          info?.color ??
+          SERIES_COLORS[index % SERIES_COLORS.length] ??
+          MUTED_SERIES_COLOR,
+        value,
+      };
+    });
 
   const withoutSource = current.byAgent
     .filter((entry) => entry.source === "none")
@@ -132,12 +156,41 @@ export function UsagePanel({ summary }: { summary: CostSummary }) {
         metric={metric}
         selected={point}
         noteBelow={
-          withoutSource.length > 0 ? (
-            <p className="text-[11px] text-muted-foreground">
-              {t("usage.breakdown.noLocalSource", {
-                value: withoutSource.join(t("usage.cost.separator")),
-              })}
-            </p>
+          requestRows.length > 0 || withoutSource.length > 0 ? (
+            <>
+              {requestRows.length > 0 && (
+                <div className="flex flex-col gap-0.5">
+                  {requestRows.map((row) => (
+                    <div
+                      key={row.agent}
+                      data-slot="usage-request-item"
+                      data-agent={row.agent}
+                      className="flex items-center gap-1.5 px-1 py-0.5 text-xs"
+                    >
+                      <ColorDot color={row.color} size={8} />
+                      <span
+                        className="min-w-0 flex-1 truncate"
+                        title={row.label}
+                      >
+                        {row.label}
+                      </span>
+                      <span className="shrink-0 tabular-nums text-muted-foreground">
+                        {t("usage.unit.premiumRequests", {
+                          value: formatRequests(row.value),
+                        })}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {withoutSource.length > 0 && (
+                <p className="text-[11px] text-muted-foreground">
+                  {t("usage.breakdown.noLocalSource", {
+                    value: withoutSource.join(t("usage.cost.separator")),
+                  })}
+                </p>
+              )}
+            </>
           ) : undefined
         }
       />

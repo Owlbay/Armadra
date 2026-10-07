@@ -1,6 +1,6 @@
 # 远端画布注入：SSH 终端里的 Hook、技能与画布说明
 
-> 状态：**已实施（2026-09-26）**。补 [画布内注入](./canvas-only-integration.md) 没覆盖的一块：SSH 终端里起的 CLI。远端执行主机的其余部分见状态文档 §34、§44、§55。
+> 状态：**已实施（2026-09-26）**，2026-10-02 按[画布启动器](./canvas-launcher.md) §6.2、§10.2 回改：垫片委托远端的 `run/<cli>` 启动器，Worker 不再写 Codex 信任记录（能力 `remote.integration.v2`）。补 [画布内注入](./canvas-only-integration.md) 没覆盖的一块：SSH 终端里起的 CLI。远端执行主机的其余部分见状态文档 §34、§44、§55。
 
 ## 1. 问题
 
@@ -18,12 +18,12 @@
 
 1. **产物同步**：控制端按执行主机上的根目录生成同一套产物（`hook/install/remote.ts`，复用 `artifactFiles`，路径用 `path.posix`），经 Worker 写到 `<Worker 状态目录>/integration/<版本>/`。状态目录是 `--state-dir`，缺省 `~/.armadra-worker`。控制端先只报路径与 SHA-256，Worker 答缺了或不一样的那些，控制端只发这些的内容；Worker 不重写相同的文件，并拒绝落在注入目录之外的路径。同一台主机指纹没变就不再同步，连接断开后重新确认一次。
 2. **Hook 客户端**：`armadra-hook.js` 这份包本身同步过去，旁边写一个启动器 `bin/armadra-hook`，用 Worker 自己那个 node（`process.execPath`）跑它。远端一定有 node：Worker 就是用它跑的（`remote/node-probe.ts` 在连接前已经确认过版本）。
-3. **垫片**：每个 CLI 一个同名垫片 `shims/<cli>`（POSIX sh）。它把自己的目录从 `PATH` 里摘掉，设好注入要的环境变量（OpenCode 的配置目录、Copilot 的说明目录），然后 `exec <cli> "$@" <注入的 argv>`。启动行因此不带任何注入的词，也不带本机的程序路径：页面、依赖编排、节能唤醒拼的都是 `claude --model …`（`agent/canvas-launch.ts` 的 `ssh` 分支、`web/agent/launch.ts` 的 `remote` 参数）。Codex 那几 KB 的 `-c` 值写在垫片里，不经 PTY，也就没有 §3 的截断问题。
+3. **启动器与垫片**：每个 CLI 一个启动器 `run/<cli>` 与一个同名垫片 `shims/<cli>`（POSIX sh），与本机同一个生成器（`hook/install/launcher.ts::launcherFiles`，[画布启动器](./canvas-launcher.md) §4、§6.2）。垫片把自己的目录从 `PATH` 里摘掉，再 `exec run/<cli> <cli> "$@"`；启动器在有 `ARMADRA_NODE_ID` 时设好注入要的环境变量（OpenCode 的配置目录、Copilot 的说明目录），把注入的 argv 接在后面 exec CLI，没有时原样启动。启动行因此不带任何注入的词，也不带本机的程序路径：页面、依赖编排、节能唤醒拼的都是 `claude --model …`（`agent/canvas-launch.ts` 的 `ssh` 分支、`web/agent/launch.ts` 的 `remote` 参数）。Codex 的 `-c` 值与 `--dangerously-bypass-hook-trust` 写在远端启动器里，不经 PTY。
 4. **远端 shell 的环境**：画布 Agent 的 SSH 终端不再只是 `ssh -t host`，而是 `ssh -t host 'env ARMADRA_NODE_ID=… … ARMADRA_SHIMS=… /bin/sh -c '\''PATH="$ARMADRA_SHIMS:$PATH"; export PATH; exec "${SHELL:-/bin/sh}" -l'\'''`（`terminal/ssh/argv.ts::remoteShellCommand`）。转过去的是节点身份、会话代次与权限等待这些 `ARMADRA_*` 值；`ARMADRA_ENDPOINT_FILE` 换成远端这个控制端的端点文件，另加 `ARMADRA_HOOK_TIMEOUT_MS=4000`（多一趟中继往返）。远端登录 shell 可能是 sh、fish 或 csh，所以 shell 相关的都放进 `/bin/sh -c`，值一律单引号，含 `'`、`\`、`!` 或控制字符的值不转（目前只可能是节点名，它只是显示用的）。
 
 一个终端要起的时候（`terminal/ssh/backend.ts` 的 `decorate`，新建与回收都走这里）由 `remote/integration.ts` 依次：定位（`integration.locate`）→ 同步产物 → 同步这个节点的令牌文件（与本机同一个派生值，0600）→ 确保中继开着 → 答远端环境。最多等 30 秒；任何一步失败都只让这个终端不带注入：没有远端命令、没有垫片，CLI 照常启动。不是 Agent 的 SSH 终端、主机没配 Worker、Worker 太旧（不带 `remote.integration.v1`）同理。
 
-Codex 只跑它信任的 Hook，信任只从用户层 `config.toml` 读，所以同步时顺带在执行主机上写信任记录（命令是远端启动器的路径）——规则与本机相同：那台机器有 `~/.codex` 才写，`ARMADRA_NO_GLOBAL_WRITES=1` 时不写，认不出的 `config.toml` 不改写。
+Codex 的 Hook 信任与本机一样靠会话级旗标 `--dangerously-bypass-hook-trust`，执行主机上除 Worker 的状态目录外不写任何文件。`integration.sync` 不再带 `codexCommand`；新 Worker（能力 `remote.integration.v2`）在第一次同步时把旧版本写进执行主机 `~/.codex/config.toml` 的 `/<session-flags>/` 信任记录清掉一次（存在才做、认不出不改、有变化才留备份），记进状态目录的 `integration/global-migration.json`。只报 v1 的旧 Worker 照常同步，控制端把它记为待升级：它之前写下的信任记录要等升级后才会清（契约 [§13.4](../contracts/core-json-api.md)）。
 
 ## 3. Hook 上报的回传通道：Worker 中继
 
@@ -45,11 +45,12 @@ Codex 只跑它信任的 Hook，信任只从用户层 `config.toml` 读，所以
 
 - 远端登录 shell 的 profile 若整条重设 `PATH`（不是在前面追加），垫片目录就丢了，CLI 照常启动但不带注入。macOS 的 `path_helper` 会把已有条目挪到系统路径之后：真 CLI 若装在 `/usr/local/bin` 这类系统路径里，同样绕过垫片。Linux 执行主机的常见配置不受影响。
 - 只有六个内置 CLI 有垫片。`custom:` 条目若改了程序名（`launchCmd`），远端不注入。
+- 执行主机的 Worker 待升级时，集成页与执行主机页各有一个「Worker 待升级」徽标与「重新同步」（2026-10-03 起，G1-2）：`RemoteIntegration.outdatedWorkers()` 与 Worker 舰队（`core/remote/fleet.ts`）一起给出集成状态的 `outdatedHosts`（契约 [§21.2](../contracts/core-json-api.md)）。
 - 核心重启后，SSH 终端（tmux 窗格）还活着，但中继要等这台主机的控制连接下次建立时才重开（远端工作空间一打开就会建立；只有 SSH 终端的主机要等下一次开终端）。
 - 端到端用的是假 ssh（`tools/probes/remote-e2e.mjs` 场景 8）：同一台机器上的 `/bin/sh -c`，没有验证真实 sshd 对远端命令的处理。
 
 ## 5. 验证
 
-- `remote/integration.test.ts`：本机子进程跑真 Worker（`--state-dir` 指向临时目录），Hook 客户端打成包由 Worker 的 node 跑；按哈希只同步一次、令牌文件权限、端点文件里没有应用令牌；把 `remoteShellCommand` 交给 `/bin/sh -c`（sshd 做的事），远端登录 shell 换成只敲 `claude --model m` 的脚本，假 CLI 经垫片拿到 `--settings` / `--plugin-dir` / `--append-system-prompt-file`、读到说明与技能、`PATH` 里已没有垫片目录，并照 `settings.json` 的 Hook 命令报一次 SessionStart——这次上报经中继到达控制端的 Hook 服务，令牌已换成控制端的；Worker 断线后中继自己恢复。
+- `remote/integration.test.ts`：本机子进程跑真 Worker（`--state-dir` 指向临时目录），Hook 客户端打成包由 Worker 的 node 跑；按哈希只同步一次、令牌文件权限、端点文件里没有应用令牌；`integration.sync` 不带 `codexCommand`，Worker 的一次性清理只做一次；把 `remoteShellCommand` 交给 `/bin/sh -c`（sshd 做的事），远端登录 shell 换成只敲 `claude --model m` 的脚本，假 CLI 经垫片与远端启动器拿到 `--settings` / `--plugin-dir` / `--append-system-prompt-file`、读到说明与技能、`PATH` 里已没有垫片目录，并照 `settings.json` 的 Hook 命令报一次 SessionStart——这次上报经中继到达控制端的 Hook 服务，令牌已换成控制端的；Worker 断线后中继自己恢复。
 - `agent/canvas-launch.test.ts`：SSH 节点的启动行与恢复行只有程序名与 CLI 自己的旗标。
 - `tools/probes/remote-e2e.mjs` 场景 8：见状态文档 §55。

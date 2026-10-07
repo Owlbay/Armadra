@@ -4,13 +4,13 @@ import { isConflict } from "@/api/client";
 import { useT } from "@/app/preferences-store";
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Input } from "@/ui/input";
 
 /** 请求错误带着的 HTTP 状态；读不出来就是别的失败。 */
@@ -81,22 +81,24 @@ export function RelocateDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="z-[var(--z-dialog)]">
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent className="z-[var(--z-dialog)]">
         <form
           onSubmit={(event) => {
             event.preventDefault();
             void run(onMerge);
           }}
         >
-          <DialogHeader>
-            <DialogTitle>{t("editor.relocate")}</DialogTitle>
+          <ResponsiveDialogHeader>
+            <ResponsiveDialogTitle>
+              {t("editor.relocate")}
+            </ResponsiveDialogTitle>
             {confirming && (
-              <DialogDescription>
+              <ResponsiveDialogDescription>
                 {t("editor.relocate.confirm", { path: target })}
-              </DialogDescription>
+              </ResponsiveDialogDescription>
             )}
-          </DialogHeader>
+          </ResponsiveDialogHeader>
           <div className="flex flex-col gap-1.5 py-3">
             <label
               className="text-[length:var(--text-caption)] text-muted-foreground"
@@ -114,13 +116,13 @@ export function RelocateDialog({
             {error && (
               <p
                 role="alert"
-                className="break-words text-[12px] text-[var(--danger)]"
+                className="break-words text-[12px] text-[var(--danger-text)]"
               >
                 {error}
               </p>
             )}
           </div>
-          <DialogFooter>
+          <ResponsiveDialogFooter>
             <Button
               type="button"
               variant="ghost"
@@ -154,9 +156,9 @@ export function RelocateDialog({
                 </Button>
               </>
             )}
-          </DialogFooter>
+          </ResponsiveDialogFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

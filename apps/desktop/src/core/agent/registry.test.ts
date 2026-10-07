@@ -4,6 +4,7 @@ import {
   AGENT_REGISTRY,
   AGENT_STATE_SOURCES,
   OBSERVED,
+  STATE_SOURCE_ACP,
   STATE_SOURCE_EXTENSION,
   STATE_SOURCE_HOOK,
   customInfo,
@@ -21,7 +22,7 @@ import {
 const NO_CUSTOM = { customAgents: () => [] };
 
 describe("the agent registry", () => {
-  it("lists exactly the six CLIs, and Gemini is not one of them", () => {
+  it("lists exactly the seven CLIs, and Gemini is not one of them", () => {
     expect(AGENT_REGISTRY).toHaveLength(AGENT_IDS.length);
     expect([...AGENT_IDS]).not.toContain("gemini");
     for (const agent of AGENT_REGISTRY) {
@@ -36,7 +37,51 @@ describe("the agent registry", () => {
     expect(definition("pi")?.launchCmd).toBe("pi");
     expect(definition("omp")?.launchCmd).toBe("omp");
     expect(definition("copilot")?.launchCmd).toBe("copilot");
+    expect(definition("ama")?.launchCmd).toBe("ama");
+    expect(definition("ama")?.label).toBe("Armadra Agent");
     expect(definition("gemini")).toBeUndefined();
+  });
+
+  /**
+   * `packages/shared`'s ama entry, restated: the core has no dependency on
+   * that package (coordinator-agent §2.2).
+   */
+  it("carries ama as the seventh built-in, as packages/shared states it", () => {
+    expect([...AGENT_IDS]).toEqual([
+      "claude",
+      "codex",
+      "opencode",
+      "pi",
+      "omp",
+      "copilot",
+      "ama",
+    ]);
+    const ama = definition("ama");
+    expect(ama?.color).toBe("#2f6fed");
+    expect(ama?.promptMode).toBe("argv");
+    expect(ama?.capabilities).not.toContain("subagent");
+    expect([...(ama?.capabilities ?? [])].sort()).toEqual(
+      [
+        "hooks",
+        "resume",
+        "contextLink",
+        "browser",
+        "usage",
+        "structuredInputAck",
+        "supportsModelSelection",
+      ].sort(),
+    );
+    expect(ama?.expectedProcess).toEqual([
+      "ama",
+      "ama.cjs",
+      "armadra",
+      "Armadra",
+      "Electron",
+      "electron",
+    ]);
+    for (const agent of AGENT_REGISTRY) {
+      if (agent.id !== "ama") expect(agent.expectedProcess).toEqual([agent.id]);
+    }
   });
 
   it("never reads an observation as a report", () => {
@@ -47,6 +92,9 @@ describe("the agent registry", () => {
     expect(stateSourceIsReported(STATE_SOURCE_HOOK)).toBe(true);
     expect(stateSourceIsReported(STATE_SOURCE_EXTENSION)).toBe(true);
     expect(stateSourceIsReported(OBSERVED)).toBe(false);
+    // ACP 驱动：协议本身报回合，与 hook 一样算上报。
+    expect(stateSourceIsReported(STATE_SOURCE_ACP)).toBe(true);
+    expect(AGENT_STATE_SOURCES as readonly string[]).toContain("acp");
     expect(stateSourceIsReported(undefined)).toBe(false);
     expect(stateSourceIsReported(null)).toBe(false);
     expect(stateSourceIsReported("")).toBe(false);
@@ -65,6 +113,8 @@ describe("the agent registry", () => {
     expect(stateSourceFor("pi")).toBe(STATE_SOURCE_EXTENSION);
     expect(stateSourceFor("omp")).toBe(STATE_SOURCE_EXTENSION);
     expect(stateSourceFor("opencode")).toBe(STATE_SOURCE_EXTENSION);
+    // ama reports from its host adapter, inside its own process.
+    expect(stateSourceFor("ama")).toBe(STATE_SOURCE_EXTENSION);
     // No provider is ever guessed at: an id with no adapter has no source, and
     // neither does a custom entry, whose base picks the channel first.
     expect(stateSourceFor("custom:wrapper")).toBeUndefined();

@@ -9,13 +9,13 @@ import { IconButton } from "@/ui/icon-button";
 import { Button } from "@/ui/button";
 import { Textarea } from "@/ui/textarea";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+} from "@/panels/ResponsiveDialog";
 
 export function ManualRunButton({ nodeId }: { nodeId: string }) {
   const t = useT(),
@@ -67,12 +67,18 @@ export function ManualRunButton({ nodeId }: { nodeId: string }) {
       <IconButton label={t("run.manual.open")} onClick={() => setOpen(true)}>
         <Play className="size-3" />
       </IconButton>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent onPointerDown={(event) => event.stopPropagation()}>
-          <DialogHeader>
-            <DialogTitle>{t("run.manual.open")}</DialogTitle>
-            <DialogDescription>{t("run.manual.description")}</DialogDescription>
-          </DialogHeader>
+      <ResponsiveDialog open={open} onOpenChange={setOpen}>
+        <ResponsiveDialogContent
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <ResponsiveDialogHeader>
+            <ResponsiveDialogTitle>
+              {t("run.manual.open")}
+            </ResponsiveDialogTitle>
+            <ResponsiveDialogDescription>
+              {t("run.manual.description")}
+            </ResponsiveDialogDescription>
+          </ResponsiveDialogHeader>
           <form onSubmit={(event) => void submit(event)} className="space-y-4">
             <label htmlFor={`run-prompt-${nodeId}`} className="text-sm">
               {t("run.manual.prompt")}
@@ -87,14 +93,14 @@ export function ManualRunButton({ nodeId }: { nodeId: string }) {
                 frozen.current = null;
               }}
             />
-            <DialogFooter>
+            <ResponsiveDialogFooter>
               <Button type="submit" disabled={saving || !prompt.trim()}>
                 {saving ? t("run.manual.starting") : t("run.manual.start")}
               </Button>
-            </DialogFooter>
+            </ResponsiveDialogFooter>
           </form>
-        </DialogContent>
-      </Dialog>
+        </ResponsiveDialogContent>
+      </ResponsiveDialog>
     </>
   );
 }

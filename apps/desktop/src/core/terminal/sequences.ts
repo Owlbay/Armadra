@@ -9,6 +9,23 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
+import { type EnvPairs, contextSessionEnvironment } from "./environment";
+
+export function sequenceSessionEnvironment(
+  env: EnvPairs,
+  sessionId: string,
+  generation: number,
+  directory: string | undefined,
+): EnvPairs {
+  return contextSessionEnvironment(
+    env,
+    sessionId,
+    generation,
+    () =>
+      directory === undefined ||
+      initializeContextSequence(directory, sessionId, generation),
+  );
+}
 
 /** Initialize once before PTY spawn. Existing/corrupt allocators are never reset. */
 export function initializeContextSequence(

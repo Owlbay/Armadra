@@ -18,6 +18,7 @@
  * 项目（通知按下时这一段换成 Agent 状态面板）/ 设置。
  */
 import { useCompactLayout } from "../platform/layout";
+import { isSimpleMode } from "../acp/simple-mode";
 import { Sheet, SheetClose, SheetContent, SheetTitle } from "@/ui/sheet";
 import { useState } from "react";
 import { createPortal } from "react-dom";
@@ -52,7 +53,8 @@ export function LeftSidebar() {
   const visible = open && (!compact || !settingsOpen);
   const setPanel = useCanvasStore((state) => state.setPanel);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [agentsOpen, setAgentsOpen] = useState(false);
+  // 简洁模式下 Agent 面板默认展开（ACP 设计 §8 第 3 条）；只定初值，之后由人收放。
+  const [agentsOpen, setAgentsOpen] = useState(isSimpleMode);
 
   const content = (
     <div className="flex h-full w-full flex-col overflow-hidden">
@@ -67,7 +69,8 @@ export function LeftSidebar() {
             <IconButton
               size="cluster"
               label={t("sidebar.collapse")}
-              className="absolute top-2 left-2"
+              // 抽屉从屏幕左上角铺起：iPadOS 窗口化时那里是窗口控件。
+              className="absolute top-2 left-[calc(0.5rem+var(--window-controls-left))]"
             >
               <PanelLeft />
             </IconButton>
@@ -104,7 +107,8 @@ export function LeftSidebar() {
             side="left"
             showCloseButton={false}
             aria-describedby={undefined}
-            className="gap-0 bg-panel p-0 data-[side=left]:w-[min(280px,calc(100vw-48px))]"
+            // 抽屉贴着屏幕左缘从顶铺到底：底色铺满，内容让开状态栏、左侧安全区与主页横条。
+            className="gap-0 bg-panel p-0 pt-[var(--safe-top)] pb-[var(--safe-bottom)] pl-[var(--safe-left)] data-[side=left]:w-[min(calc(280px+var(--safe-left)),calc(100vw-48px))]"
             onCloseAutoFocus={(event) => {
               event.preventDefault();
               // Radix may run this after the closing render. Read current
@@ -227,7 +231,9 @@ function SidebarToggle({ open }: { open: boolean }) {
       {...noDragProps()}
       data-slot="sidebar-toggle"
       style={{ left: trafficLightInset() + 8 }}
-      className="fixed top-0 z-[calc(var(--z-tabbar)+1)] flex h-[var(--tabbar-h)] items-center"
+      // 挂在 body 上，不吃根容器的安全区内缩：自己让开状态栏（top）、左侧刘海与
+      // iPadOS 窗口化时左上角的窗口控件（margin 叠在 left 上）。桌面与浏览器里都是 0。
+      className="fixed top-[var(--safe-top)] ml-[calc(var(--safe-left)+var(--window-controls-left))] z-[calc(var(--z-tabbar)+1)] flex h-[var(--tabbar-h)] items-center"
     >
       <Tooltip delayDuration={500}>
         <TooltipTrigger asChild>

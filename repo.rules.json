@@ -7,16 +7,21 @@
     ".gitignore",
     ".prettierignore",
     "AGENTS.md",
+    "CHANGELOG.md",
     "CLAUDE.md",
     "LICENSE",
     "README.md",
+    "THIRD_PARTY_NOTICES.md",
     "apps",
     "armadra.sh",
     "assets",
     "docs",
+    "eslint.config.js",
+    "knip.json",
     "migrations.lock",
     "package.json",
     "packages",
+    "patches",
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
     "repo.rules.json",
@@ -48,6 +53,11 @@
       "directory": "packages",
       "manifest": "package.json",
       "prefix": "@armadra/"
+    },
+    {
+      "directory": "apps",
+      "manifest": "package.json",
+      "prefix": "@armadra/"
     }
   ],
   "fileSize": {
@@ -66,5 +76,11 @@
         "kind": "directory"
       }
     ]
-  }
+  },
+  "pinnedVersions": [
+    {
+      "$comment": "工程规范化 §5 / F15：oRPC 精确锁版、各包同一版本、不跟 beta；E6 升 2.x 时改这里的说明，不改规则。",
+      "packages": "@orpc/*"
+    }
+  ]
 }

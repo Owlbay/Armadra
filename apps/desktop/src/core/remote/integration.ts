@@ -23,7 +23,7 @@ import {
   type RemoteFile,
   type RemoteIntegrationSite,
   fingerprint,
-  remoteCodexCommand,
+  remoteClientBin,
   remoteIntegrationFiles,
   remoteInjectionReady,
   shimDirectory,
@@ -31,6 +31,7 @@ import {
 import { defaultBundleCandidates } from "../hook/install/shared";
 import { hookEndpointFile } from "../paths";
 import type { RemoteChannel, RemoteListener, RemotePushEvent } from "./execute";
+import { INTEGRATION_V2_CAPABILITY } from "./operations";
 
 type EnvPairs = readonly (readonly [string, string])[];
 
@@ -56,6 +57,14 @@ export interface RemoteIntegrationOptions {
   readonly hookBundle?: () => string | undefined;
   /** 本机 Hook 服务；缺省读 `<数据目录>/hook-endpoint.env`。 */
   readonly hookEndpoint?: () => LocalHookEndpoint | undefined;
+  /**
+   * 这台主机上活着的 Worker 是否声明了某个能力；还没握手是 `undefined`。用来
+   * 认出只有 `remote.integration.v1` 的旧 Worker。缺省当作不知道。
+   */
+  readonly capability?: (
+    hostId: string,
+    capability: string,
+  ) => boolean | undefined;
   /** 断线后隔多久自己重连；测试调短。 */
   readonly reconnectMs?: number;
   readonly log?: (message: string, fields: Record<string, unknown>) => void;
@@ -91,6 +100,8 @@ interface HostState {
   listening?: Promise<void>;
   wanted: boolean;
   timer?: NodeJS.Timeout;
+  /** 上次同步时 Worker 只有 v1：它之前写的 Codex 信任记录要升级后才会清。 */
+  outdated?: boolean;
 }
 
 export class RemoteIntegration implements RemoteListener {
@@ -120,6 +131,27 @@ export class RemoteIntegration implements RemoteListener {
    * 不支持或任何一步失败，答 `undefined`。
    */
   async terminal(hostId: string, env: EnvPairs): Promise<EnvPairs | undefined> {
+    return (await this.node(hostId, env))?.env;
+  }
+
+  /**
+   * SSH 节点的 ACP 会话要的画布工具（契约 §26 的 SSH 小节）：与 {@link terminal}
+   * 同一套准备（产物、节点令牌、中继），答执行主机上 Hook 客户端的路径与它要
+   * 带的环境。`armadra-hook mcp` 经同一条中继 socket 回到本机 Hook 服务。
+   */
+  async canvas(
+    hostId: string,
+    env: EnvPairs,
+  ): Promise<{ readonly client: string; readonly env: EnvPairs } | undefined> {
+    const prepared = await this.node(hostId, env);
+    if (prepared === undefined) return undefined;
+    return { client: remoteClientBin(prepared.site.root), env: prepared.env };
+  }
+
+  private async node(
+    hostId: string,
+    env: EnvPairs,
+  ): Promise<{ site: RemoteIntegrationSite; env: EnvPairs } | undefined> {
     const lookup = new Map(env.map(([key, value]) => [key, value]));
     const nodeId = lookup.get("ARMADRA_NODE_ID");
     if (nodeId === undefined || lookup.get("ARMADRA_AGENT_ID") === undefined) {
@@ -136,17 +168,11 @@ export class RemoteIntegration implements RemoteListener {
     try {
       const state = this.state(hostId);
       state.wanted = true;
-      const site = await this.site(hostId, state);
-      const files = remoteIntegrationFiles(site, bundle);
-      const print = fingerprint(files);
-      if (state.synced !== print) {
-        await this.sync(hostId, files, remoteCodexCommand(site.root));
-        state.synced = print;
-      }
+      const site = await this.prepare(hostId, state, bundle);
       const token = issueNodeToken(this.options.dataDir, nodeId);
       await this.sync(hostId, [tokenFile(site, nodeId, token)]);
       await this.listen(hostId, state);
-      return remoteEnvironment(env, site);
+      return { site, env: remoteEnvironment(env, site) };
     } catch (failure) {
       this.options.log?.("could not prepare the remote canvas injection", {
         hostId,
@@ -154,6 +180,44 @@ export class RemoteIntegration implements RemoteListener {
       });
       return undefined;
     }
+  }
+
+  /** 定位、按指纹同步产物，并记下这台主机的 Worker 是否只有 v1。 */
+  private async prepare(
+    hostId: string,
+    state: HostState,
+    bundle: string,
+  ): Promise<RemoteIntegrationSite> {
+    const site = await this.site(hostId, state);
+    const files = remoteIntegrationFiles(site, bundle);
+    const print = fingerprint(files);
+    if (state.synced !== print) {
+      await this.sync(hostId, files);
+      state.synced = print;
+    }
+    state.outdated =
+      this.options.capability?.(hostId, INTEGRATION_V2_CAPABILITY) === false;
+    return site;
+  }
+
+  /**
+   * 「重新同步」（`POST /api/execution-hosts/{id}/resync`，契约 §21.2）：忘掉这台
+   * 主机的位置、指纹与「待升级」记号，开过画布 SSH 终端的主机立刻重新定位、
+   * 同步产物并重开中继——升级后的 Worker 在这一次同步里清掉旧版的信任记录。
+   * 没开过的主机只清记号，下一次开终端时照常同步。失败照实抛出，由路由答复。
+   */
+  async resync(hostId: string): Promise<void> {
+    const state = this.hosts.get(hostId);
+    if (state === undefined) return;
+    state.site = undefined;
+    state.synced = undefined;
+    state.listening = undefined;
+    state.outdated = undefined;
+    if (!state.wanted || !remoteInjectionReady()) return;
+    const bundle = (this.options.hookBundle ?? readHookBundle)();
+    if (bundle === undefined) return;
+    await this.prepare(hostId, state, bundle);
+    await this.listen(hostId, state);
   }
 
   private async site(
@@ -179,11 +243,24 @@ export class RemoteIntegration implements RemoteListener {
     return site;
   }
 
-  /** 先只报哈希，再只发缺的那些。 */
+  /**
+   * 同步过注入、而 Worker 只有 `remote.integration.v1` 的主机：旧 Worker 收到
+   * `codexCommand` 时写过 Codex 信任记录，只有升级后的 Worker 才清（集成页据此
+   * 提示升级）。连接断了不清——换 Worker 要等下一次同步才知道。
+   */
+  outdatedWorkers(): string[] {
+    return [...this.hosts]
+      .filter(([, state]) => state.outdated === true)
+      .map(([hostId]) => hostId);
+  }
+
+  /**
+   * 先只报哈希，再只发缺的那些。不带 `codexCommand`：旧 Worker 只在收到它时
+   * 写 Codex 信任，所以同步只要 v1。
+   */
   private async sync(
     hostId: string,
     files: readonly RemoteFile[],
-    codexCommand?: string,
   ): Promise<void> {
     const manifest = files.map(({ path, sha256, mode }) => ({
       path,
@@ -192,7 +269,6 @@ export class RemoteIntegration implements RemoteListener {
     }));
     const first = (await this.options.call(hostId, "integration.sync", {
       files: manifest,
-      ...(codexCommand === undefined ? {} : { codexCommand }),
     })) as { missing?: string[] };
     const missing = new Set(first.missing ?? []);
     if (missing.size === 0) return;
@@ -207,7 +283,6 @@ export class RemoteIntegration implements RemoteListener {
             }
           : { path: entry.path, sha256: entry.sha256, mode: entry.mode },
       ),
-      ...(codexCommand === undefined ? {} : { codexCommand }),
     })) as { missing?: string[] };
     if ((second.missing ?? []).length > 0) {
       throw new Error("The execution host did not take the injection files");

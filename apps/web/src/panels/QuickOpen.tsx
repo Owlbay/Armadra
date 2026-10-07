@@ -32,6 +32,7 @@ import {
   SquareFunction,
   Variable,
 } from "lucide-react";
+import { sk } from "../sources/scope";
 
 import { runtimeApi } from "@/api/client";
 import { useT } from "@/app/preferences-store";
@@ -55,6 +56,7 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/ui/command";
+import { COMMAND_INPUT_FOCUS } from "./tabs-focus";
 
 /** 输入去抖：一次键入不该变成一次全工作区扫描。 */
 const DEBOUNCE_MS = 150;
@@ -138,7 +140,7 @@ export function QuickOpen() {
         : debounced;
 
   const index = useQuery({
-    queryKey: ["file-index", workspaceId, term],
+    queryKey: sk("file-index", workspaceId, term),
     queryFn: () => runtimeApi.fileIndex(workspaceId!, term),
     enabled: open && mode === "files" && !lineMode && Boolean(workspaceId),
     retry: false,
@@ -160,7 +162,7 @@ export function QuickOpen() {
   };
 
   const symbols = useQuery({
-    queryKey: ["language-symbols", workspaceId, mode, currentPath, term],
+    queryKey: sk("language-symbols", workspaceId, mode, currentPath, term),
     queryFn: () =>
       mode === "document"
         ? documentSymbols(workspaceId!, currentPath!)
@@ -195,6 +197,7 @@ export function QuickOpen() {
       className="z-[var(--z-dialog)]"
     >
       <CommandInput
+        className={COMMAND_INPUT_FOCUS}
         placeholder={t("quickOpen.placeholder")}
         value={query}
         onValueChange={setQuery}

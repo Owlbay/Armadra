@@ -124,6 +124,15 @@ export async function launchNode(
     sessionId = existing.sessionId;
     generation = live;
     environment.run?.bound(sessionId, generation);
+    // 以 ACP 驱动的节点（ACP 设计 §4.4）：会话本身就是 Agent，没有 shell 可敲。
+    if (acpSession(database, sessionId)) {
+      return finish(environment, launch, node, {
+        sessionId,
+        spawned,
+        command,
+        wrote: false,
+      });
+    }
     const foreground = await terminals
       .foreground(sessionId)
       .catch(() => undefined);
@@ -172,6 +181,14 @@ export async function launchNode(
       generation = started.generation;
       spawned = true;
       environment.run?.bound(sessionId, generation);
+      if (started.driver === "acp") {
+        return finish(environment, launch, node, {
+          sessionId,
+          spawned,
+          command,
+          wrote: false,
+        });
+      }
     } catch (error) {
       environment.log("依赖满足后无法为节点起终端", {
         nodeId: node.id,
@@ -294,6 +311,8 @@ export function launchLine(
       : {};
   const permissionMode = stringField(agent, "permissionMode");
   const model = stringField(agent, "model");
+  // `open-agent --resume`（契约 §15.5）：接回 CLI 自己的那段会话。
+  const resume = stringField(agent, "resume");
   let row: ReturnType<typeof listAgents>[number] | undefined;
   try {
     row = listAgents({
@@ -314,6 +333,7 @@ export function launchLine(
     ssh,
     ...(permissionMode === undefined ? {} : { permissionMode }),
     ...(model === undefined ? {} : { model }),
+    ...(resume === undefined ? {} : { resume }),
     ...(row?.resolvedPath == null ? {} : { program: row.resolvedPath }),
   });
 }
@@ -437,4 +457,15 @@ function stringField(
 ): string | undefined {
   const field = value[key];
   return typeof field === "string" && field !== "" ? field : undefined;
+}
+
+/** 这一行是 ACP 驱动的会话（`backend_kind = 'acp'`）。 */
+function acpSession(
+  database: import("node:sqlite").DatabaseSync,
+  sessionId: string,
+): boolean {
+  const row = database
+    .prepare("SELECT backend_kind FROM terminal_sessions WHERE id = ?")
+    .get(sessionId) as { backend_kind?: string } | undefined;
+  return row?.backend_kind === "acp";
 }

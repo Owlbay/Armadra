@@ -1,5 +1,10 @@
+import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentStatus, SessionSummary } from "@armadra/shared";
+import type {
+  AgentApprovalRecord,
+  AgentStatus,
+  SessionSummary,
+} from "@armadra/shared";
 
 import {
   APPROVAL_TTL_MS,
@@ -13,6 +18,21 @@ import {
 
 const NODE = "019ff7d1-0d12-7421-833d-2c5e8d64ed21";
 const WORKSPACE = "019ff7d1-0d12-7421-833d-2c5e8d64ed22";
+
+/** `agent.approval` 带的审批行（core 的 `AgentApproval`）；`patch` 写答复。 */
+function approvalRecord(
+  id: string,
+  patch: Partial<AgentApprovalRecord> = {},
+): AgentApprovalRecord {
+  return {
+    id,
+    nodeId: NODE,
+    workspaceId: WORKSPACE,
+    request: null,
+    createdAt: "2026-10-06T00:00:00Z",
+    ...patch,
+  };
+}
 const BASE = Date.parse("2026-09-04T10:00:00.000Z");
 
 function status(
@@ -56,13 +76,13 @@ describe("agent status mirror", () => {
     store().upsert(status({ state: "working", updatedAt: at(500) }), {
       now: BASE + 500,
     });
-    expect(store().statuses[NODE]!.state).toBe("done");
+    expect(store().statuses[scoped(NODE)]!.state).toBe("done");
 
     store().upsert(
       status({ state: "working", updatedAt: at(DONE_HOLDOFF_MS + 10) }),
       { now: BASE + DONE_HOLDOFF_MS + 10 },
     );
-    expect(store().statuses[NODE]!.state).toBe("working");
+    expect(store().statuses[scoped(NODE)]!.state).toBe("working");
   });
 
   it("carries the runtime's unread badge when the node is not being watched", () => {
@@ -72,10 +92,10 @@ describe("agent status mirror", () => {
       focused: true,
       remote: false,
     });
-    expect(store().statuses[NODE]!.unread).toBe(true);
+    expect(store().statuses[scoped(NODE)]!.unread).toBe(true);
 
     store().markRead(NODE, { remote: false });
-    expect(store().statuses[NODE]!.unread).toBe(false);
+    expect(store().statuses[scoped(NODE)]!.unread).toBe(false);
   });
 
   it("counts a turn that ends under the user's eyes as read, and says so", async () => {
@@ -84,13 +104,12 @@ describe("agent status mirror", () => {
       selected: true,
       focused: true,
     });
-    expect(store().statuses[NODE]!.unread).toBe(false);
+    expect(store().statuses[scoped(NODE)]!.unread).toBe(false);
     // 只有客户端知道用户在看，所以回执必须由客户端补，否则刷新后徽标回来。
-    await Promise.resolve();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]![0]).toContain(
-      `/api/agent-status/${NODE}/read`,
-    );
+    // 回执经契约客户端发（契约 §39.2 `agents.markRead`），多几拍微任务。
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0]![0]).toContain("/api/rpc/agents/markRead");
+    expect(String(fetchMock.mock.calls[0]![1]?.body)).toContain(NODE);
   });
 
   it("keeps the badge when the window is blurred even if the node is selected", () => {
@@ -100,7 +119,7 @@ describe("agent status mirror", () => {
       focused: false,
       remote: false,
     });
-    expect(store().statuses[NODE]!.unread).toBe(true);
+    expect(store().statuses[scoped(NODE)]!.unread).toBe(true);
   });
 
   /**
@@ -123,8 +142,8 @@ describe("agent status mirror", () => {
       }),
       { now: BASE + DONE_HOLDOFF_MS + 1, remote: false },
     );
-    expect(store().statuses[NODE]!.unread).toBe(true);
-    expect(store().statuses[NODE]!.state).toBe("working");
+    expect(store().statuses[scoped(NODE)]!.unread).toBe(true);
+    expect(store().statuses[scoped(NODE)]!.state).toBe("working");
   });
 
   it("ignores frames older than the one already stored", () => {
@@ -134,7 +153,7 @@ describe("agent status mirror", () => {
     store().upsert(status({ state: "blocked", updatedAt: at(500) }), {
       now: BASE + 1_000,
     });
-    expect(store().statuses[NODE]!.state).toBe("working");
+    expect(store().statuses[scoped(NODE)]!.state).toBe("working");
   });
 
   it("attaches a pendingId from an approval event", () => {
@@ -145,9 +164,9 @@ describe("agent status mirror", () => {
       type: "agent.approval",
       nodeId: NODE,
       pendingId: "pending-1",
-      request: {},
+      request: approvalRecord("pending-1"),
     });
-    expect(store().statuses[NODE]!.pendingId).toBe("pending-1");
+    expect(store().statuses[scoped(NODE)]!.pendingId).toBe("pending-1");
   });
 
   it("drops the mirror when the terminal exits", () => {
@@ -160,7 +179,7 @@ describe("agent status mirror", () => {
       nodeId: NODE,
       exitCode: 0,
     });
-    expect(NODE in store().statuses).toBe(false);
+    expect(scoped(NODE) in store().statuses).toBe(false);
   });
 
   it("hydrates from the sessions payload without clobbering fresher state", () => {
@@ -178,15 +197,15 @@ describe("agent status mirror", () => {
       alive: true,
     };
     store().hydrate([session], WORKSPACE);
-    expect(store().statuses[NODE]!.state).toBe("done");
-    expect(store().statuses[NODE]!.unread).toBe(true);
-    expect(store().statuses[NODE]!.restored).toBe(true);
+    expect(store().statuses[scoped(NODE)]!.state).toBe("done");
+    expect(store().statuses[scoped(NODE)]!.unread).toBe(true);
+    expect(store().statuses[scoped(NODE)]!.restored).toBe(true);
 
     store().upsert(status({ state: "working", updatedAt: at(10_000) }), {
       now: BASE + 10_000,
     });
     store().hydrate([session], WORKSPACE);
-    expect(store().statuses[NODE]!.state).toBe("working");
+    expect(store().statuses[scoped(NODE)]!.state).toBe("working");
   });
 
   // 刷新后来源徽标要还在：`agent.status` 帧只描述下一个回合，重建镜像的
@@ -211,7 +230,7 @@ describe("agent status mirror", () => {
       ],
       WORKSPACE,
     );
-    expect(store().statuses[NODE]!.stateSource).toBe("extension");
+    expect(store().statuses[scoped(NODE)]!.stateSource).toBe("extension");
   });
 
   // 没有来源的会话（自定义 CLI、还没有人上报过）不能被编造成一个来源。
@@ -234,7 +253,7 @@ describe("agent status mirror", () => {
       ],
       WORKSPACE,
     );
-    expect(store().statuses[NODE]!.stateSource).toBeUndefined();
+    expect(store().statuses[scoped(NODE)]!.stateSource).toBeUndefined();
   });
 
   it("skips sessions without an agent", () => {
@@ -254,7 +273,7 @@ describe("agent status mirror", () => {
       ],
       WORKSPACE,
     );
-    expect(NODE in store().statuses).toBe(false);
+    expect(scoped(NODE) in store().statuses).toBe(false);
   });
 
   it("counts the three sidebar signals per workspace", () => {
@@ -288,10 +307,10 @@ describe("agent status mirror", () => {
       remote: false,
     });
     store().markRead(NODE);
-    await Promise.resolve();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain(`/api/agent-status/${NODE}/read`);
+    expect(url).toContain("/api/rpc/agents/markRead");
+    expect(String(init.body)).toContain(NODE);
     expect(init.method).toBe("POST");
 
     // 已经读过了就不再发第二次回执。
@@ -307,7 +326,7 @@ describe("agent status mirror", () => {
       remote: false,
     });
     store().markRead(NODE, { remote: false });
-    expect(store().statuses[NODE]!.unread).toBe(false);
+    expect(store().statuses[scoped(NODE)]!.unread).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -320,11 +339,11 @@ describe("agent status mirror", () => {
       type: "agent.approval",
       nodeId: NODE,
       pendingId: "p1",
-      request: { id: "p1", answer: "allow", answeredAt: at(1) },
+      request: approvalRecord("p1", { answer: "allow", answeredAt: at(1) }),
     });
-    expect(store().statuses[NODE]!.pendingId).toBeUndefined();
+    expect(store().statuses[scoped(NODE)]!.pendingId).toBeUndefined();
     // 状态本身不动：下一条 `agent.status` 才有权改它。
-    expect(store().statuses[NODE]!.state).toBe("blocked");
+    expect(store().statuses[scoped(NODE)]!.state).toBe("blocked");
   });
 
   it("recognises both resolved shapes", () => {
@@ -344,15 +363,15 @@ describe("agent status mirror", () => {
         type: "agent.approval",
         nodeId: NODE,
         pendingId: "p1",
-        request: {},
+        request: approvalRecord("p1"),
       },
       { now: BASE },
     );
     store().sweepApprovals(BASE + APPROVAL_TTL_MS - 1);
-    expect(store().statuses[NODE]!.pendingId).toBe("p1");
+    expect(store().statuses[scoped(NODE)]!.pendingId).toBe("p1");
 
     store().sweepApprovals(BASE + APPROVAL_TTL_MS);
-    expect(store().statuses[NODE]!.pendingId).toBeUndefined();
+    expect(store().statuses[scoped(NODE)]!.pendingId).toBeUndefined();
   });
 
   it("maps states to the pill and the glow", () => {
@@ -447,7 +466,7 @@ describe("agent status mirror", () => {
       nodeId: NODE,
       exitCode: 137,
     });
-    expect(NODE in store().statuses).toBe(false);
+    expect(scoped(NODE) in store().statuses).toBe(false);
 
     // 60s 后巡检补出来的合成收尾：终端早没了，镜像不该被它重新变出来。
     store().upsert(
@@ -460,7 +479,7 @@ describe("agent status mirror", () => {
       },
       { now: BASE + 60_000, remote: false },
     );
-    expect(NODE in store().statuses).toBe(false);
+    expect(scoped(NODE) in store().statuses).toBe(false);
   });
 
   it("shows TURN FAILED and PAUSED when the runtime reports them", () => {

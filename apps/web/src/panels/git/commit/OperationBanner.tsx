@@ -77,7 +77,7 @@ function Banner({
           {state.head.branch ?? t("gitRepo.detached")}
         </span>
         {state.conflicts.length > 0 && (
-          <span className="text-[var(--danger)] tabular-nums">
+          <span className="text-[var(--danger-text)] tabular-nums">
             {t("gitCommit.group.conflicts")} {state.conflicts.length}
           </span>
         )}

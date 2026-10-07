@@ -1,6 +1,6 @@
 import { IdentityError } from "./errors";
 import { accessChanged } from "./gate";
-import { validOrigin } from "./origin";
+import { nativeOrigin, validOrigin } from "./origin";
 import { CURRENT_KDF, derivePassword, verifyPassword } from "./passwords";
 import {
   type Scope,
@@ -12,6 +12,7 @@ import {
   scope,
 } from "./scopes";
 import {
+  type DeviceActivity,
   type IdentityDevice,
   type IdentitySession,
   IdentityStore,
@@ -90,6 +91,15 @@ export interface BootstrapRequest {
 
 export interface AccessRequest {
   readonly accessToken: string;
+  /**
+   * 门已经认过的会话（`RequestIdentity.session`，契约 §42）：准入门在这次请求
+   * （或控制面连接的升级）上已经用访问令牌、Cookie 或一次性票认过它。有它时按
+   * 会话认——会话仍活着、访问期没过、设备与账号没被撤销或停用——不再比对令牌：
+   * 控制面上的调用没有令牌可比，而页面刷新过访问令牌之后，连接仍是同一个会话。
+   *
+   * **只由 core 从门交出的请求身份里取**，绝不从请求头、请求体或查询串里读。
+   */
+  readonly verifiedSessionId?: string;
   readonly hostId: string;
   readonly origin: string;
   readonly requiredScopes?: readonly Scope[];
@@ -102,6 +112,24 @@ export interface RefreshRequest {
   readonly csrfToken: string;
   readonly hostId: string;
   readonly origin: string;
+  /**
+   * 要不要核对会话绑定的 CSRF 密钥（契约 §3、§17.4）：Cookie 会话要——刷新票是
+   * 环境凭据；`Authorization: Bearer` 传输（桌面壳、原生 App、隧道、作为客户端
+   * 的另一台 core）不要。缺省 `true`：只有 HTTP 层按 `csrfRequired` 判过才放宽。
+   */
+  readonly requireCsrf?: boolean;
+}
+
+/** 刷新与登出共用的 CSRF 判定：要核时格式与哈希都得对。 */
+function refreshCsrfValid(
+  request: RefreshRequest,
+  csrfHash: Uint8Array,
+): boolean {
+  if (request.requireCsrf === false) return true;
+  return (
+    validSecret(request.csrfToken) &&
+    matches("csrf", request.csrfToken, csrfHash)
+  );
 }
 
 export interface DevicePage {
@@ -118,7 +146,67 @@ export interface PublicDevice {
   readonly epoch: number;
   readonly createdAtMs: number;
   readonly revokedAtMs: number;
+  /**
+   * 由这台设备最近那个会话的 UA 归出来的平台；UA 原文不出这个域。设备上没有
+   * 任何会话（迁移之前的行）时没有这一项。
+   */
+  readonly platform?: DevicePlatform;
+  /** 这台设备所有会话里最晚的一次活动；没记过时没有这一项。 */
+  readonly lastSeenAtMs?: number;
 }
+
+export const DEVICE_PLATFORMS = [
+  "macos",
+  "windows",
+  "linux",
+  "ios",
+  "android",
+  "web",
+  "unknown",
+] as const;
+export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
+
+/**
+ * UA → 平台。顺序有讲究：iPad 的 UA 也写 `Mac OS X`，Android 的也写 `Linux`，
+ * 所以移动端先判。认得出是浏览器、说不出系统的是 `web`；空串与其余是 `unknown`。
+ */
+export function devicePlatform(userAgent: string): DevicePlatform {
+  const ua = userAgent.slice(0, 256);
+  if (/\b(iPhone|iPad|iPod)\b|\biOS\b/.test(ua)) return "ios";
+  if (/\bAndroid\b/.test(ua)) return "android";
+  if (/\bWindows\b/.test(ua)) return "windows";
+  if (/\bMac ?OS ?X\b|\bMacintosh\b|\bDarwin\b/.test(ua)) return "macos";
+  if (/\bLinux\b|\bX11\b|\bCrOS\b/.test(ua)) return "linux";
+  if (/\bMozilla\/|\b(Chrome|Safari|Firefox|Edg)\//.test(ua)) return "web";
+  return "unknown";
+}
+
+/** 进 `identity.login` 审计的那一个字：这次是怎么证明身份的。 */
+export type LoginMethod =
+  | "password"
+  | "passkey"
+  | "totp"
+  | "recovery"
+  | "oauth"
+  // 远程服务签的源访问断言（契约 §31）。
+  | "cloud";
+
+/** 会话列表的一行（契约 §18.4）。密钥与哈希不出这个域。 */
+export interface SessionView {
+  readonly sessionId: string;
+  readonly principalId: string;
+  readonly deviceId: string;
+  readonly deviceName: string;
+  readonly createdAtMs: number;
+  readonly lastSeenAtMs: number;
+  readonly expiresAtMs: number;
+  readonly remoteIp: string;
+  readonly userAgent: string;
+  readonly current: boolean;
+}
+
+/** 最近活动最多这么久写一次，免得每个请求都写库。 */
+export const LAST_SEEN_RESOLUTION_MS = 60 * 1000;
 
 export class IdentityService {
   private readonly clock: () => number;
@@ -139,11 +227,11 @@ export class IdentityService {
   /**
    * 本机主人，带上它当前那台设备。
    *
-   * 给 `/api/` 那张 JSON 面用（R7a）。那一面由页面经普通 `fetch` 打，页面手上
-   * 没有会话密钥——桌面壳的会话是**原生**的，密钥在壳里，既不发 Cookie 也进不了
-   * `apps/web/src/api/request.ts`。所以在**明文 + 回环来源**（`nativeRequest`）
-   * 上，没带凭据的一次调用按「它就是本机的壳」处理，和 core 里其余 `/api/`
-   * 路由的判定入口（`core/identity/gate.ts`，对 owner 恒真）一致。
+   * 给 GitHub 与自动化两张 JSON 面用（契约 §3.2）：只在 core 显式打开
+   * `loopbackAnonymousOwner`（`ARMADRA_LOOPBACK_OWNER=1`，探针与开发命令起的
+   * 裸 core）时，明文回环上没带凭据的一次调用才按本机主人处理
+   * （`identity/http.ts::anonymousLoopbackOwner`）。桌面壳的页面带票据换来的
+   * Bearer，两种壳都不开这条路（安全审查 L9）。
    *
    * 三条边界：只在原生请求上用（TLS 的服务器壳仍然必须带凭据）；必须真有一台
    * 没被撤销的设备——自动化的授权记录要拿它的 epoch 复核，一个编出来的设备标识
@@ -256,6 +344,8 @@ export class IdentityService {
     hostId: string;
     instanceId: string;
     origin: string;
+    remoteIp?: string;
+    userAgent?: string;
   }): SessionCredentials {
     const ticketId = parseToken(request.ticket);
     if (
@@ -289,7 +379,12 @@ export class IdentityService {
         owner = { principalId: newId(), createdAtMs: now };
         tx.createOwner(owner);
       }
-      const device: IdentityDevice = {
+      // 桌面壳的页面与托盘每次启动都配一次对（来源是内核分配的回环端口，每次
+      // 都不同）。原来每次都新建一台「本机桌面」，设备列表越积越多；现在回环
+      // 明文来源的票复用同一台本机设备，只多一条会话。
+      const device: IdentityDevice = (nativeOrigin(ticket.origin)
+        ? reusableLocalDevice(tx, owner.principalId, ticket.deviceName)
+        : undefined) ?? {
         deviceId,
         principalId: owner.principalId,
         name: ticket.deviceName,
@@ -298,13 +393,13 @@ export class IdentityService {
         createdAtMs: now,
         revokedAtMs: 0,
       };
-      tx.createDevice(device);
+      if (device.deviceId === deviceId) tx.createDevice(device);
       const accessExpiresAtMs = now + ACCESS_TTL_MS;
       const expiresAtMs = now + SESSION_TTL_MS;
       const session: IdentitySession = {
         sessionId,
-        deviceId,
-        deviceEpoch: 1,
+        deviceId: device.deviceId,
+        deviceEpoch: device.epoch,
         origin: ticket.origin,
         scopes: ticket.scopes,
         accessHash: digest("access", secrets.accessToken),
@@ -315,6 +410,9 @@ export class IdentityService {
         accessExpiresAtMs,
         expiresAtMs,
         revokedAtMs: 0,
+        lastSeenAtMs: now,
+        remoteIp: request.remoteIp ?? "",
+        userAgent: request.userAgent ?? "",
       };
       tx.createSession(session);
       // 一次性：第二次兑换在这里改不动任何行，整笔事务回滚。
@@ -348,19 +446,33 @@ export class IdentityService {
     hostId: string;
     origin: string;
     deviceName: string;
+    remoteIp?: string;
+    userAgent?: string;
   }): SessionCredentials {
+    this.verifyPassword(request);
+    return this.openSession({ ...request, method: "password" });
+  }
+
+  /**
+   * 只核对口令，不建会话：两步登录（契约 §18.3）的第一步，以及锁定计数的依据。
+   *
+   * 账号不存在、被停用、没设口令、口令不对，对调用方是同一个 401：区分它们等于
+   * 把「这个账号存在吗」做成一个探测接口。参数升级只发生在这一刻：明文口令在手，
+   * 而且这一次已经校验通过。
+   */
+  verifyPassword(request: {
+    principalId: string;
+    password: string;
+    hostId: string;
+    origin: string;
+  }): { principalId: string; kind: string } {
     if (
       !ID_PATTERN.test(request.principalId) ||
-      !this.audience(request.hostId, request.origin) ||
-      !validName(request.deviceName)
+      !this.audience(request.hostId, request.origin)
     ) {
       throw new IdentityError("unauthenticated");
     }
-    const sessionId = newId();
-    const deviceId = newId();
-    const secrets = makeSecrets(sessionId);
-    const credentials = this.store.transaction((tx) => {
-      const now = this.now();
+    return this.store.transaction((tx) => {
       const principal = tx.accounts.principal(request.principalId);
       const stored = tx.accounts.livePassword(request.principalId);
       if (
@@ -368,8 +480,6 @@ export class IdentityService {
         principal.disabledAtMs !== 0 ||
         stored === undefined
       ) {
-        // 账号不存在、被停用、没设口令，对调用方是同一个 401：区分它们等于
-        // 把「这个账号存在吗」做成一个探测接口。
         throw new IdentityError("unauthenticated");
       }
       const verified = verifyPassword(request.password, {
@@ -383,7 +493,6 @@ export class IdentityService {
       });
       if (!verified.ok) throw new IdentityError("unauthenticated");
       if (verified.upgrade) {
-        // 参数升级只发生在这一刻：明文口令在手，而且这一次已经校验通过。
         const derived = derivePassword(request.password, CURRENT_KDF);
         tx.accounts.updateCredentialSecret(
           stored.credentialId,
@@ -398,10 +507,45 @@ export class IdentityService {
           },
         );
       }
-      // 成员的快照只有底线：共享得来的授权**不进快照**，每次判定现编
-      // （`Authorizer.permits` 是「快照 ∪ 现编的授予」）。进了快照，撤销一条
-      // 共享要等这个会话过期才生效；设计 §2 那句「撤销后下一次请求重新编译」
-      // 说的就是这件事。
+      return { principalId: principal.principalId, kind: principal.kind };
+    });
+  }
+
+  /**
+   * 给一个已经证明过身份的 principal 建会话。调用方负责「证明过」：口令（无 MFA
+   * 要求时）、口令 + 第二因素、或 passkey。`method` 进审计。
+   *
+   * 和票据兑换（{@link consumeBootstrap}）落在同一张会话表上，区别只有：授权快照
+   * 是**编译出来的**而不是票里带的。owner 拿全量，其余 principal 拿
+   * `identity:read`——共享得来的授权**不进快照**，每次判定现编
+   * （`Authorizer.permits` 是「快照 ∪ 现编的授予」），撤销一条共享因此在下一个
+   * 请求上就生效。
+   */
+  openSession(request: {
+    principalId: string;
+    hostId: string;
+    origin: string;
+    deviceName: string;
+    method: LoginMethod;
+    remoteIp?: string;
+    userAgent?: string;
+  }): SessionCredentials {
+    if (
+      !ID_PATTERN.test(request.principalId) ||
+      !this.audience(request.hostId, request.origin) ||
+      !validName(request.deviceName)
+    ) {
+      throw new IdentityError("unauthenticated");
+    }
+    const sessionId = newId();
+    const deviceId = newId();
+    const secrets = makeSecrets(sessionId);
+    return this.store.transaction((tx) => {
+      const now = this.now();
+      const principal = tx.accounts.principal(request.principalId);
+      if (principal === undefined || principal.disabledAtMs !== 0) {
+        throw new IdentityError("unauthenticated");
+      }
       const granted =
         principal.kind === "owner" ? allScopes() : [scope("identity:read")];
       const encoded = encodeScopes(granted);
@@ -431,6 +575,9 @@ export class IdentityService {
         accessExpiresAtMs,
         expiresAtMs,
         revokedAtMs: 0,
+        lastSeenAtMs: now,
+        remoteIp: request.remoteIp ?? "",
+        userAgent: request.userAgent ?? "",
       };
       tx.createSession(session);
       tx.accounts.appendAudit({
@@ -440,7 +587,7 @@ export class IdentityService {
         action: "identity.login",
         target: sessionId,
         workspaceId: "",
-        detailJson: JSON.stringify({ method: "password" }),
+        detailJson: JSON.stringify({ method: request.method }),
       });
       return {
         ...secrets,
@@ -454,13 +601,131 @@ export class IdentityService {
         ),
       };
     });
-    return credentials;
+  }
+
+  /**
+   * 我的会话（契约 §18.4）。`all` 只给有 `identity:manage` 的人（owner）：列出
+   * 所有人的。只列还活着的；`current` 标出发这个请求的那一个。
+   */
+  listSessions(actor: AccessRequest, all = false): SessionView[] {
+    return this.store.transaction((tx) => {
+      const now = this.now();
+      const principal = this.authenticateIn(tx, actor, now);
+      if (all && !permits(principal.scopes, [scope("identity:manage")])) {
+        throw new IdentityError("permission");
+      }
+      return tx
+        .liveSessions(now, all ? undefined : principal.principalId)
+        .map(({ session, device }) => ({
+          sessionId: session.sessionId,
+          principalId: device.principalId,
+          deviceId: device.deviceId,
+          deviceName: device.name,
+          createdAtMs: session.createdAtMs,
+          lastSeenAtMs: session.lastSeenAtMs ?? 0,
+          expiresAtMs: session.expiresAtMs,
+          remoteIp: session.remoteIp ?? "",
+          userAgent: session.userAgent ?? "",
+          current: session.sessionId === principal.sessionId,
+        }));
+    });
+  }
+
+  /**
+   * 撤销一个会话。自己的随便撤；别人的要 `identity:manage`（owner 看全部、也能
+   * 撤全部）。撤销连带设备一起：一个登录建一台设备，留着设备没有意义，而且
+   * 设备撤销推进 epoch，是唯一不靠逐条找会话的办法。
+   */
+  revokeSessionById(actor: AccessRequest, sessionId: string): void {
+    if (!ID_PATTERN.test(sessionId)) throw new IdentityError("invalid");
+    this.store.transaction((tx) => {
+      const now = this.now();
+      const principal = this.authenticateIn(tx, actor, now);
+      const session = tx.session(sessionId);
+      if (session === undefined) throw new IdentityError("notFound");
+      const device = tx.device(session.deviceId);
+      if (device === undefined) throw new IdentityError("notFound");
+      if (
+        device.principalId !== principal.principalId &&
+        !permits(principal.scopes, [scope("identity:manage")])
+      ) {
+        // 别人的会话：不说它存不存在。
+        throw new IdentityError("notFound");
+      }
+      if (session.revokedAtMs !== 0) return;
+      tx.revokeSession(sessionId, now);
+      tx.accounts.appendAudit({
+        atMs: now,
+        principalId: principal.principalId,
+        deviceId: principal.deviceId,
+        action: "identity.session.revoke",
+        target: sessionId,
+        workspaceId: "",
+        detailJson: JSON.stringify({ owner: device.principalId }),
+      });
+    });
+    accessChanged();
+  }
+
+  /** 「其它设备全部登出」：撤掉我除这个之外的所有会话。返回撤了几个。 */
+  revokeOtherSessions(actor: AccessRequest): number {
+    const count = this.store.transaction((tx) => {
+      const now = this.now();
+      const principal = this.authenticateIn(tx, actor, now);
+      let revoked = 0;
+      for (const { session } of tx.liveSessions(now, principal.principalId)) {
+        if (session.sessionId === principal.sessionId) continue;
+        tx.revokeSession(session.sessionId, now);
+        revoked += 1;
+      }
+      tx.accounts.appendAudit({
+        atMs: now,
+        principalId: principal.principalId,
+        deviceId: principal.deviceId,
+        action: "identity.session.revoke-others",
+        target: principal.sessionId,
+        workspaceId: "",
+        detailJson: JSON.stringify({ revoked }),
+      });
+      return revoked;
+    });
+    accessChanged();
+    return count;
   }
 
   authenticate(request: AccessRequest): Principal {
     return this.store.transaction((tx) =>
       this.authenticateIn(tx, request, this.now()),
     );
+  }
+
+  /**
+   * 长连接的复核（安全审查 L1）：按**会话**而不是某一把访问令牌认——页面刷新过
+   * 之后旧令牌不再匹配，而会话还是同一个。会话失效（登出、撤销、停用、过期）或
+   * 访问期已过而没有刷新，一律 `unauthenticated`。只给 core 内部用：调用方必须
+   * 已经在升级前用访问令牌认过这个会话。
+   */
+  sessionAccess(request: {
+    readonly sessionId: string;
+    readonly hostId: string;
+    readonly origin: string;
+  }): Principal {
+    if (!this.audience(request.hostId, request.origin)) {
+      throw new IdentityError("unauthenticated");
+    }
+    return this.store.transaction((tx) => {
+      const now = this.now();
+      const live = this.liveSession(tx, request.sessionId, request.origin, now);
+      if (now >= live.session.accessExpiresAtMs) {
+        throw new IdentityError("unauthenticated");
+      }
+      return principalOf(
+        this.store.hostId(),
+        live.session,
+        live.device,
+        live.scopes,
+      );
+    });
   }
 
   /**
@@ -472,7 +737,7 @@ export class IdentityService {
     if (
       sessionId === undefined ||
       !this.audience(request.hostId, request.origin) ||
-      !validSecret(request.csrfToken)
+      (request.requireCsrf !== false && !validSecret(request.csrfToken))
     ) {
       throw new IdentityError("unauthenticated");
     }
@@ -482,7 +747,7 @@ export class IdentityService {
       const live = this.liveSession(tx, sessionId, request.origin, now);
       if (
         !matches("refresh", request.refreshToken, live.session.refreshHash) ||
-        !matches("csrf", request.csrfToken, live.session.csrfHash)
+        !refreshCsrfValid(request, live.session.csrfHash)
       ) {
         throw new IdentityError("unauthenticated");
       }
@@ -555,7 +820,7 @@ export class IdentityService {
     if (
       sessionId === undefined ||
       !this.audience(request.hostId, request.origin) ||
-      !validSecret(request.csrfToken)
+      (request.requireCsrf !== false && !validSecret(request.csrfToken))
     ) {
       throw new IdentityError("unauthenticated");
     }
@@ -564,7 +829,7 @@ export class IdentityService {
       const live = this.liveSession(tx, sessionId, request.origin, now);
       if (
         !matches("refresh", request.refreshToken, live.session.refreshHash) ||
-        !matches("csrf", request.csrfToken, live.session.csrfHash)
+        !refreshCsrfValid(request, live.session.csrfHash)
       ) {
         throw new IdentityError("unauthenticated");
       }
@@ -675,6 +940,7 @@ export class IdentityService {
       const hasMore = values.length > limit;
       const page = hasMore ? values.slice(0, limit) : values;
       const devices: PublicDevice[] = [];
+      const activity = tx.deviceActivity(page.map((value) => value.deviceId));
       let nextId = "";
       for (const value of page) {
         if (value.principalId !== principal.principalId) {
@@ -688,6 +954,7 @@ export class IdentityService {
           epoch: value.epoch,
           createdAtMs: value.createdAtMs,
           revokedAtMs: value.revokedAtMs,
+          ...deviceColumns(activity.get(value.deviceId)),
         });
         nextId = value.deviceId;
       }
@@ -700,9 +967,12 @@ export class IdentityService {
     request: AccessRequest,
     now: number,
   ): Principal {
-    const sessionId = parseToken(request.accessToken);
+    const verified = request.verifiedSessionId;
+    const sessionId =
+      verified === undefined ? parseToken(request.accessToken) : verified;
     if (
       sessionId === undefined ||
+      sessionId === "" ||
       !this.audience(request.hostId, request.origin)
     ) {
       throw new IdentityError("unauthenticated");
@@ -714,7 +984,8 @@ export class IdentityService {
     const live = this.liveSession(tx, sessionId, request.origin, now);
     if (
       now >= live.session.accessExpiresAtMs ||
-      !matches("access", request.accessToken, live.session.accessHash)
+      (verified === undefined &&
+        !matches("access", request.accessToken, live.session.accessHash))
     ) {
       throw new IdentityError("unauthenticated");
     }
@@ -726,6 +997,9 @@ export class IdentityService {
       throw new IdentityError("permission");
     }
     if (!permits(live.scopes, required)) throw new IdentityError("permission");
+    if (now - (live.session.lastSeenAtMs ?? 0) >= LAST_SEEN_RESOLUTION_MS) {
+      tx.touchSession(live.session.sessionId, now);
+    }
     return principalOf(
       this.store.hostId(),
       live.session,
@@ -805,4 +1079,46 @@ function principalOf(
     accessExpiresAtMs: session.accessExpiresAtMs,
     scopes,
   };
+}
+
+/** 设备表的「平台」「最近访问」两列；没有会话的设备两项都不带。 */
+function deviceColumns(
+  activity: DeviceActivity | undefined,
+): Pick<PublicDevice, "platform" | "lastSeenAtMs"> {
+  if (activity === undefined) return {};
+  return {
+    platform: devicePlatform(activity.userAgent),
+    ...(activity.lastSeenAtMs > 0
+      ? { lastSeenAtMs: activity.lastSeenAtMs }
+      : {}),
+  };
+}
+
+/**
+ * 可以复用的本机设备（桌面壳的页面与托盘）：主人名下、同名、没被撤销，而且它
+ * 签过的每一条会话都来自回环明文来源——经 Gateway 配对的手机（HTTPS 来源）与
+ * 口令登录的设备永远不会被认成本机设备。有多台时取最早的那台，答案稳定。
+ */
+function reusableLocalDevice(
+  tx: IdentityTx,
+  principalId: string,
+  name: string,
+): IdentityDevice | undefined {
+  let found: IdentityDevice | undefined;
+  let cursor = "";
+  for (;;) {
+    const page = tx.devices(cursor, 200, principalId);
+    if (page.length === 0) break;
+    for (const device of page) {
+      if (device.revokedAtMs !== 0 || device.name !== name) continue;
+      if (found !== undefined && found.createdAtMs <= device.createdAtMs)
+        continue;
+      const origins = tx.deviceSessionOrigins(device.deviceId);
+      if (origins.length === 0 || !origins.every(nativeOrigin)) continue;
+      found = device;
+    }
+    cursor = page[page.length - 1]?.deviceId ?? "";
+    if (page.length < 200) break;
+  }
+  return found;
 }

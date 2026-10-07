@@ -12,6 +12,8 @@
  *
  * 路径参数按 core 自己的 camelCase 拼。
  */
+import { IDENTITY_ROUTES } from "./routes-identity";
+
 export type RouteSurface = "runtime" | "hook";
 
 export interface RouteEntry {
@@ -25,6 +27,30 @@ export interface RouteEntry {
   /** 这个构建真的答。不是 `true` 的答 501。 */
   readonly implemented?: true;
 }
+
+/** `/api/workflows/*` 的路由（契约 §15、§43.2–§43.3）：路径与它收的方法。 */
+const WORKFLOW_ROUTES: readonly RouteEntry[] = (
+  [
+    ["/drafts", ["GET"]],
+    ["/drafts/{draftId}", ["GET"]],
+    ["/drafts/{draftId}/confirm", ["POST"]],
+    ["/drafts/{draftId}/discard", ["POST"]],
+    ["/templates", ["GET", "POST"]],
+    ["/templates/{templateId}", ["GET", "PUT", "DELETE"]],
+    ["/templates/{templateId}/upgrade-schedules", ["POST"]],
+    ["/runs", ["GET", "POST"]],
+    ["/runs/{runId}", ["GET"]],
+    ["/runs/{runId}/cancel", ["POST"]],
+    ["/runs/{runId}/gates/{stepId}", ["POST"]],
+    ["/tasks", ["GET"]],
+    ["/tasks/{taskId}/retry", ["POST"]],
+  ] as const
+).map(([path, methods]) => ({
+  path: `/api/workflows${path}`,
+  methods,
+  surface: "runtime",
+  implemented: true,
+}));
 
 export const ROUTES: readonly RouteEntry[] = [
   // 「被读取 N 次」：谁读过这个节点的上下文（设计 agent-delivery.md §13）。
@@ -216,6 +242,17 @@ export const ROUTES: readonly RouteEntry[] = [
     implemented: true,
   },
   { path: "/health", methods: ["GET"], surface: "runtime", implemented: true },
+  // 契约 procedure（契约 §34.1）：`/api/rpc/<域>/<动词>`，整段由 RPC 门面
+  // （`http/rpc.ts`）接管；`{procedure}` 在这里只占一格，真实路径是两段。
+  {
+    path: "/api/rpc/{procedure}",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  // 控制面 WebSocket（契约 §35）：调用与订阅多路复用在一条连接上，子协议
+  // `armadra-rpc.v1`，由 RPC 门面接管（`http/ws-control.ts`）。
+  { path: "/api/ws", methods: ["GET"], surface: "runtime", implemented: true },
   {
     path: "/api/health",
     methods: ["GET"],
@@ -481,6 +518,38 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 实时协同（契约 §16.1–§16.2）：同步流与一块板的实时状态。
+  {
+    path: "/api/workspaces/{workspaceId}/boards/{boardId}/sync",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workspaces/{workspaceId}/boards/{boardId}/realtime",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  // 评论（契约 §16.3，G2-6）：列表与新建、改正文与删除、解决 / 重新打开。
+  {
+    path: "/api/workspaces/{workspaceId}/boards/{boardId}/comments",
+    methods: ["GET", "POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workspaces/{workspaceId}/boards/{boardId}/comments/{commentId}",
+    methods: ["PATCH", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/workspaces/{workspaceId}/boards/{boardId}/comments/{commentId}/resolve",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/workspaces/{workspaceId}/deliveries",
     methods: ["GET"],
@@ -603,6 +672,13 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 输出到画板的代码块（契约 §14.5，G2-2）。
+  {
+    path: "/api/workspaces/{workspaceId}/exports/{exportId}/text",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/workspaces/{workspaceId}/assets",
     methods: ["POST"],
@@ -693,6 +769,54 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // ACP 驱动的会话（契约 §14.2）：同一张 `terminal_sessions` 的行，路由在
+  // `core/acp/routes.ts`。
+  {
+    path: "/api/acp/sessions",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/acp/sessions/{sessionId}/prompt",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/acp/sessions/{sessionId}/cancel",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/acp/sessions/{sessionId}/mode",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  // 按模型选择（契约 §26.2）。
+  {
+    path: "/api/acp/sessions/{sessionId}/model",
+    methods: ["PUT"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/acp/sessions/{sessionId}/log",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/acp/nodes/{nodeId}/driver",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  // 工作流与协调者任务（契约 §15、§43.2–§43.3）：路由在 `core/workflow/routes.ts`，
+  // 与 `workflows.*` / `coordinator.*` procedure 同一份操作。
+  ...WORKFLOW_ROUTES,
   {
     path: "/api/terminals/{sessionId}/ws",
     methods: ["GET"],
@@ -781,6 +905,19 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // ama 的模型密钥（契约 §12.4）：只答有没有、存在哪，从不答值。
+  {
+    path: "/api/agents/ama/credentials",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/agents/ama/credentials/{provider}",
+    methods: ["PUT", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/agents/{agentId}/integration",
     methods: ["GET"],
@@ -841,6 +978,103 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 客户端源表与远程服务（契约 §33）：owner 专用，`settings:*`。
+  {
+    path: "/api/sources",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/direct",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/{sourceId}",
+    methods: ["PUT", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/{sourceId}/forget",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/{sourceId}/session",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}",
+    methods: ["DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}/poll",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}/sources",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}/mount",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}/session",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}/logout",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/join",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}/links",
+    methods: ["GET", "POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}/links/{linkId}",
+    methods: ["PUT", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/remotes/{serviceId}/links/{linkId}/url",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
   {
     path: "/api/execution-hosts",
     methods: ["GET"],
@@ -861,12 +1095,20 @@ export const ROUTES: readonly RouteEntry[] = [
   },
   {
     path: "/api/execution-hosts/{hostId}",
-    methods: ["PUT", "DELETE"],
+    // GET：Worker 舰队（契约 §21.2）加的单台主机读取。
+    methods: ["GET", "PUT", "DELETE"],
     surface: "runtime",
     implemented: true,
   },
   {
     path: "/api/execution-hosts/{hostId}/validate",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  // Worker 舰队（G1-2，契约 §21.2）：重连并重新同步画布注入。
+  {
+    path: "/api/execution-hosts/{hostId}/resync",
     methods: ["POST"],
     surface: "runtime",
     implemented: true,
@@ -974,6 +1216,20 @@ export const ROUTES: readonly RouteEntry[] = [
     implemented: true,
   },
   {
+    // 契约 §20.4：画布启动器兑换节点凭据。只在本机 hook 通道上，带节点 token。
+    path: "/credential",
+    methods: ["POST"],
+    surface: "hook",
+    implemented: true,
+  },
+  {
+    // 契约 §12.4：画布启动器 `run/ama` 兑换 ama 的模型密钥。同一道门，外加节点是 ama。
+    path: "/credential/ama",
+    methods: ["POST"],
+    surface: "hook",
+    implemented: true,
+  },
+  {
     // R6c: a browser node on a shell with no window. The desktop build never
     // answers it — there the page is a `<webview>` the person is looking at.
     path: "/api/workspaces/{workspaceId}/browser/{nodeId}/stream",
@@ -1001,6 +1257,237 @@ export const ROUTES: readonly RouteEntry[] = [
     // R7a：Hello 的 JSON 形状。能力表与 `HostService/Hello` 是同一张。
     path: "/api/identity/hello",
     methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  // 云登录与登记（契约 §31）：整段 `/api/identity/cloud` 由身份域的原样路由
+  // 接（`identity/cloud/http.ts`），这几行让契约的旧路径有表可查。
+  {
+    path: "/api/identity/cloud",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/identity/cloud/login",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/identity/cloud/register",
+    methods: ["POST", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/identity/cloud/bind",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    // §31.4：撤销后中继侧还欠着清理的源记录，与重试。
+    path: "/api/identity/cloud/relay-pending",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/identity/cloud/relay-cleanup",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    // §31.5：放弃一条待清理。
+    path: "/api/identity/cloud/relay-dismiss",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/identity/cloud/{issuer}/trusted-origins",
+    methods: ["PUT"],
+    surface: "runtime",
+    implemented: true,
+  },
+  ...IDENTITY_ROUTES,
+  {
+    // 契约 §20.2：节点凭据条目。只有 owner（`route-scopes.ts`）。
+    path: "/api/credentials",
+    methods: ["GET", "POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/credentials/{ref}",
+    methods: ["PATCH", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  // Gateway（契约 §17）：状态与配置、铸配对票。只有 owner（route-scopes）。
+  {
+    path: "/api/gateway",
+    methods: ["GET", "PUT"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/gateway/pairing",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  // 配对短码换票（契约 §24）：匿名，短码就是凭据；档位与限流在 Gateway 域里。
+  {
+    path: "/api/gateway/pairing-code/exchange",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  // 页面错误上报（契约 §30）：登录即可，诊断域自己认会话、限流、再剥离。
+  {
+    path: "/api/diagnostics/client-error",
+    methods: ["GET", "POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  // 推送（契约 §19）：配置、设备登记与撤销、测试通知。只碰请求主体自己的设备，
+  // 身份由推送域自己认（`route-scopes.ts` 的 `SELF_GUARDED`）。
+  {
+    path: "/api/push/config",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/push/devices",
+    methods: ["GET", "PUT"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/push/devices/{deviceId}",
+    methods: ["PATCH", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/push/test",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  // 邮件通道（契约 §28）：只有服务器壳会配。能签那条链接的人才能发，身份由
+  // 邮件域自己认（`route-scopes.ts` 的 `SELF_GUARDED`）。
+  {
+    path: "/api/mail/status",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/mail/invitation",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/mail/password-reset",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  // 托管平台（契约 §29）：与 GitHub 同一档权限（`route-scopes.ts`）；
+  // `resolve` 是读，登记时声明 `github:read`。
+  {
+    path: "/api/forge/configs",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/configs/{host}",
+    methods: ["PUT", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/configs/{host}/{owner}/{name}",
+    methods: ["PUT", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/resolve",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/issues",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/issues/{number}",
+    methods: ["GET", "PATCH"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/pulls",
+    methods: ["GET", "POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}/files",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}/checks",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}/merge",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/merge-options",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}/auto-merge",
+    methods: ["POST", "DELETE"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}/branch",
+    methods: ["DELETE"],
     surface: "runtime",
     implemented: true,
   },

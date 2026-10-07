@@ -92,3 +92,21 @@ export function editAutomationPlan(planId: string): void {
   useAutomationFocus.getState().editPlan(planId);
   useCanvasStore.getState().setPanel("automation", "drawer");
 }
+
+/**
+ * 「定时运行」：从工作流模板库开自动化的创建表单，目标预填成这个模板（契约
+ * §15.6）。什么都不创建、不激活——人看过日程再保存。
+ */
+export function scheduleWorkflow(input: {
+  templateId: string;
+  name: string;
+  params: Record<string, string>;
+}): void {
+  proposePlanFromNative({
+    targetKind: "workflow",
+    nodeId: "",
+    title: input.name,
+    origin: "workflow",
+    workflow: { templateId: input.templateId, params: input.params },
+  });
+}

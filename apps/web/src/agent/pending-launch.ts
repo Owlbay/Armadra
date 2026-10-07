@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { useEffect } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -80,7 +81,7 @@ export function dependencySatisfied(
 ): boolean {
   // 节点已被删除：等它等不到了，放行。
   if (!nodeIds.has(dependencyId)) return true;
-  const status = statuses[dependencyId];
+  const status = statuses[scoped(dependencyId)];
   // 从来没报过状态 = 未知，不放行。
   if (!status?.state) return false;
   return status.state === "done" && status.errored !== true;
@@ -113,7 +114,7 @@ function clearTimer(record: Record_): void {
 
 /** 节点自己报过状态、或 CLI 已经自报了会话 id，就算启动行落地了。 */
 function acknowledged(nodeId: string): boolean {
-  if (useAgentStatusStore.getState().statuses[nodeId]) return true;
+  if (useAgentStatusStore.getState().statuses[scoped(nodeId)]) return true;
   const node = useCanvasStore
     .getState()
     .document?.nodes.find((item) => item.id === nodeId);

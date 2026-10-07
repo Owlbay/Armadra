@@ -1,14 +1,22 @@
-import { useState, type ReactNode } from "react";
+import { useState, useSyncExternalStore, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  CloudOff,
+  KeyRound,
   PlugZap,
+  ServerOff,
   Recycle,
   Repeat2,
   TerminalSquare,
   X,
 } from "lucide-react";
 import { runtimeApi } from "../api/client";
+import {
+  onIdentitySessionChange,
+  shellBearer,
+  shellSessionFailure,
+} from "../api/identity";
 import { useDeliveryStore } from "../agent/delivery-store";
 import { requestCenterOnNode } from "../canvas/flow/flow-context";
 import { usePresenceBarVisible } from "../canvas/PresenceBar";
@@ -16,6 +24,10 @@ import { usePreferencesStore, useT } from "../app/preferences-store";
 import { useAccess } from "../app/use-access";
 import { useEnabledAgents } from "../app/use-agents";
 import { useCanvasStore, type PanelState } from "../store/canvas-store";
+import { useOfflineBanner } from "../realtime/OfflineBanner";
+import { hostedRelay, type HostedStatus } from "../sources/hosted";
+import { useMobileRelayDown } from "../mobile/relay-status";
+import { SOURCE_ERROR } from "../sources/types";
 import { cn } from "@/lib/cn";
 import { Button } from "@/ui/button";
 import { IconButton } from "@/ui/icon-button";
@@ -109,6 +121,82 @@ export function Banners() {
   });
 
   const items: ReactNode[] = [];
+  const offline = useOfflineBanner();
+  // 桌面壳签不出票：每个请求都会 401，说清楚原因（契约 §3.2）。
+  const shellFailure = useSyncExternalStore(
+    onIdentitySessionChange,
+    shellSessionFailure,
+  );
+
+  // 中继托管的页面：中继自己停了时只说这一件（主机、运行时都连不上是它的
+  // 结果）；主机下线时等它回来，被撤销时只能重新登录（客户端包 §5）。凭据只在
+  // 内存，所以这里不给「刷新」——中继回来后页面自己恢复。手机经中继的连接同一条
+  // （`mobile/relay-status.ts`：运行时断开时再问一次中继自己）。
+  const hosted = useHostedStatus();
+  const mobileRelayDown = useMobileRelayDown(health.isError);
+  const relayDown = hosted?.relayDown === true || mobileRelayDown;
+  if (relayDown) {
+    items.push(
+      <Banner
+        key="hosted-relay-down"
+        tone="danger"
+        icon={<ServerOff />}
+        text={t("remote.hosted.relayDown")}
+      />,
+    );
+  } else if (hosted?.state === "waitingForSource") {
+    items.push(
+      <Banner
+        key="hosted-waiting"
+        tone="warn"
+        icon={<CloudOff />}
+        text={t(`remote.status.${hosted.state}`)}
+      />,
+    );
+  } else if (hosted?.state === "unauthorized") {
+    const code = hosted.lastError?.code;
+    items.push(
+      <Banner
+        key="hosted-revoked"
+        tone="danger"
+        icon={<KeyRound />}
+        text={t(
+          code === SOURCE_ERROR.accessRevoked
+            ? "remote.error.accessRevoked"
+            : code === SOURCE_ERROR.revoked
+              ? "remote.error.sourceRevoked"
+              : "remote.status.unauthorized",
+        )}
+        actionLabel={t("remote.hosted.signInAgain")}
+        onAction={() => location.reload()}
+      />,
+    );
+  }
+
+  if (shellFailure !== null) {
+    items.push(
+      <Banner
+        key="shell-session"
+        tone="danger"
+        icon={<KeyRound />}
+        text={t(`hostNative.blocked.${shellFailure}`)}
+        actionLabel={t("banner.runtimeRetry")}
+        onAction={() => void shellBearer()}
+      />,
+    );
+  }
+
+  // 实时板断线（补全架构 §6.4）：本地照常编辑，重连后自动补齐。
+  if (offline) {
+    items.push(
+      <Banner
+        key="realtime-offline"
+        tone="warn"
+        icon={offline.icon}
+        text={offline.text}
+      />,
+    );
+  }
 
   if (saveState === "error" && !dismissed.includes("save")) {
     items.push(
@@ -124,7 +212,7 @@ export function Banners() {
     );
   }
 
-  if (health.isError && !dismissed.includes("runtime")) {
+  if (health.isError && !relayDown && !dismissed.includes("runtime")) {
     items.push(
       <Banner
         key="runtime"
@@ -219,6 +307,17 @@ export function Banners() {
   );
 }
 
+const NO_HOSTED = () => () => undefined;
+
+/** 中继托管页面上当前主机的状态；别的页面是 `null`。 */
+function useHostedStatus(): HostedStatus | null {
+  const relay = hostedRelay();
+  return useSyncExternalStore(
+    relay === null ? NO_HOSTED : relay.subscribe,
+    () => relay?.status ?? null,
+  );
+}
+
 /**
  * 堆栈在画布面（`.workspace-surface`）里左右各让到哪儿。
  *
@@ -265,7 +364,7 @@ function Banner({
       data-tone={tone}
       data-slot="banner"
       {...noDragProps()}
-      className="pointer-events-auto motion-fade-in flex h-9 max-w-full min-w-0 items-center gap-2 rounded-[var(--r-card)] border border-border bg-[var(--panel)]/90 pr-1.5 pl-3 shadow-[var(--shadow-pill)] backdrop-blur-[12px] data-[tone=danger]:text-danger data-[tone=warn]:text-warn"
+      className="pointer-events-auto motion-fade-in flex h-9 max-w-full min-w-0 items-center gap-2 rounded-[var(--r-card)] border border-border bg-[var(--panel)]/90 pr-1.5 pl-3 shadow-[var(--shadow-pill)] backdrop-blur-[12px] data-[tone=danger]:text-danger-text data-[tone=warn]:text-warn"
     >
       <span className="shrink-0 [&_svg]:size-4 [&_svg]:[stroke-width:1.5]">
         {icon}

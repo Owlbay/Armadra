@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  type AgentDriver,
   TERMINAL_BACKEND_CHOICES,
   answerSshPromptRequestSchema,
   customAgentSchema,
@@ -19,6 +20,7 @@ import {
   trustSshHostKeyRequestSchema,
   workspaceSchema,
   type CustomAgent,
+  type JsonValue,
   type ExecutionHostRefusal,
   type ImportExecutionHostsRequest,
   type PowerPolicy,
@@ -32,6 +34,7 @@ import {
   query,
   request,
 } from "./request";
+import type { ArmadraClient } from "./client";
 
 /* ------------------------------------ 设置 -------------------------------- */
 
@@ -109,9 +112,34 @@ export const runtimeSettingsSchema = z.looseObject({
       refreshMinutes: z.number().int().nonnegative().optional(),
       providers: z.record(z.string(), z.boolean()).optional(),
       codexCliFallback: z.boolean().optional(),
-      /** Provider 状态页徽标（roadmap §3.9），默认开。 */
+      /** Provider 状态页徽标（roadmap §3.9），默认开。旧键，读 `statusBadges`。 */
       statusPage: z.boolean().optional(),
+      statusBadges: z.boolean().optional(),
+      /** 借用登录令牌读额度的两个端点，默认关（外部服务 §9.3）。 */
+      claudeUsage: z.boolean().optional(),
+      copilotUsage: z.boolean().optional(),
+      /** 额度端点关着时按本机转录估算窗口（G5-25），默认开。 */
+      claudeLocalWindow: z.boolean().optional(),
       cost: z.looseObject({ enabled: z.boolean().optional() }).optional(),
+    })
+    .optional(),
+  /** `models.catalog.autoRefresh`：models.dev 目录的每日后台抓取，默认开。 */
+  models: z
+    .looseObject({
+      catalog: z
+        .looseObject({ autoRefresh: z.boolean().optional() })
+        .optional(),
+    })
+    .optional(),
+  /**
+   * `diagnostics.crashReportDsn`：可选崩溃上报（外部服务 §11.2）。空串 = 关
+   * （缺省）；壳只在它是合格 DSN 时才加载 SDK。
+   */
+  diagnostics: z
+    .looseObject({
+      crashReportDsn: z.string().optional(),
+      /** 页面 JS 错误也经同一个 DSN 上报（G5-19），默认关。 */
+      reportPageErrors: z.boolean().optional(),
     })
     .optional(),
   /**
@@ -171,7 +199,11 @@ export const runtimeSettingsSchema = z.looseObject({
     .optional(),
   /** 资源面板打开时的采样间隔；Runtime 侧会夹在 500ms–60s 之间。 */
   resources: z
-    .looseObject({ intervalMs: z.number().int().positive().optional() })
+    .looseObject({
+      intervalMs: z.number().int().positive().optional(),
+      /** 会话内存提醒阈值（契约 §27.4）：core 越线发事件、推送叫人。 */
+      memoryWarnBytes: z.number().int().positive().optional(),
+    })
     .optional(),
   /**
    * 用户改过的键位（§24.1 快捷键页；终端宿主设计 §10）。
@@ -202,7 +234,8 @@ export interface RuntimeSettingsPatch {
   workspaces?: Record<string, { defaultAgent?: string | null }>;
   /** 数组是整段替换（Runtime 的 merge 只对对象递归），删主机就是发新数组。 */
   ssh?: { hosts: SshHost[] };
-  agents?: { custom: CustomAgent[] };
+  /** `defaultDriver`：新建 Agent 节点缺省走会话视图还是终端（ACP 设计 §8）。 */
+  agents?: { custom?: CustomAgent[]; defaultDriver?: AgentDriver };
   hooks?: { replyApprovals?: boolean };
   usage?: {
     enabled?: boolean;
@@ -210,8 +243,15 @@ export interface RuntimeSettingsPatch {
     providers?: Record<string, boolean>;
     codexCliFallback?: boolean;
     statusPage?: boolean;
+    statusBadges?: boolean;
+    claudeUsage?: boolean;
+    copilotUsage?: boolean;
+    claudeLocalWindow?: boolean;
     cost?: { enabled?: boolean };
   };
+  models?: { catalog?: { autoRefresh?: boolean } };
+  /** 崩溃上报的 DSN；空串关掉。 */
+  diagnostics?: { crashReportDsn?: string; reportPageErrors?: boolean };
   logs?: { retentionDays?: number };
   /** 更新通道与两个开关（S03 §4.1）。 */
   updates?: {
@@ -238,8 +278,10 @@ export interface RuntimeSettingsPatch {
   power?: { policy?: PowerPolicy; keepAwakeWhileWorking?: boolean };
   /** 会话索引的范围。 */
   conversations?: { scope?: ConversationScope };
+  /** 实时协同（契约 §16.2）：关掉就回到租约 + CAS。 */
+  collab?: { realtime?: boolean };
   /** 资源面板采样间隔；Runtime 侧会夹回 500ms–60s。 */
-  resources?: { intervalMs?: number };
+  resources?: { intervalMs?: number; memoryWarnBytes?: number };
   /**
    * 分平台的键位覆盖：`{ mac: { "canvas.tidy": "Mod+Shift+K" } }`，外加
    * `profile` 与 `profiles.<id>`。`null` 删掉一条（回到上一层），
@@ -248,16 +290,23 @@ export interface RuntimeSettingsPatch {
   keymap?: Record<string, unknown>;
 }
 
-export const settingsApi = {
+/**
+ * 设置与执行主机。`settings.*` 已迁到契约上（§34.5），经 RPC 客户端调；客户端由
+ * `api/client.ts` 交进来（这个模块被它 import）。SSH、主机密钥、执行主机这些
+ * 还在 REST，迁移时逐段换。
+ */
+export const settingsApiFor = (rpc: () => ArmadraClient) => ({
   /* ----------------------------------- 设置 ----------------------------- */
-  settings: () => request("/api/settings", runtimeSettingsSchema),
+  settings: async () =>
+    runtimeSettingsSchema.parse(await rpc().settings.get({})),
   /**
    * 哪些键存在本机（迁移 §1.4）。
    *
    * 永远问 Runtime，不问 Host：本地那一半不随所有权迁移，所以无论设置文档
    * 归谁写，这份清单都由跑在这台机器上的进程回答。
    */
-  localSettings: () => request("/api/settings/local", localSettingsSchema),
+  localSettings: async () =>
+    localSettingsSchema.parse(await rpc().settings.local({})),
   /**
    * 连通性探测（§21）：Runtime 跑一次
    * `ssh -o BatchMode=yes -o ConnectTimeout=5 <目标> true`，
@@ -274,11 +323,16 @@ export const settingsApi = {
       remoteWorkerProbeSchema,
       { method: "POST" },
     ),
-  updateSettings: (patch: RuntimeSettingsPatch) =>
-    request("/api/settings", runtimeSettingsSchema, {
-      method: "PATCH",
-      ...json(patch),
-    }),
+  /**
+   * 体按 JSON 的规矩走一遍：值为 `undefined` 的键不发（迁移前 `JSON.stringify`
+   * 就是这样丢掉它们的），否则 core 的入参校验会把它当成一个不是 JSON 的值。
+   */
+  updateSettings: async (patch: RuntimeSettingsPatch) =>
+    runtimeSettingsSchema.parse(
+      await rpc().settings.update(
+        JSON.parse(JSON.stringify(patch)) as Record<string, JsonValue>,
+      ),
+    ),
 
   /* --------------------------------- 主机密钥 --------------------------- */
 
@@ -355,6 +409,16 @@ export const settingsApi = {
       executionHostValidationSchema,
       { method: "POST" },
     ),
+  /** 单台主机的一行，带上次握手见到的 Worker（契约 §21.2）。 */
+  executionHost: (hostId: string) =>
+    request(`/api/execution-hosts/${query(hostId)}`, executionHostSchema),
+  /** 重连这台主机的 Worker 并重新同步画布注入；答更新后的那一行。 */
+  resyncExecutionHost: (hostId: string) =>
+    request(
+      `/api/execution-hosts/${query(hostId)}/resync`,
+      executionHostSchema,
+      { method: "POST" },
+    ),
   /** 可携带的主机表；里面没有任何能用来认证的东西。 */
   exportExecutionHosts: () =>
     request("/api/execution-hosts/export", executionHostPackageSchema),
@@ -383,7 +447,7 @@ export const settingsApi = {
         ...json(switchExecutionHostRequestSchema.parse(input)),
       },
     ),
-};
+});
 
 /**
  * 从一次失败的改绑里读出结构化拒绝；不是拒绝就返回 `null`。

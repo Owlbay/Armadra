@@ -10,6 +10,7 @@ import {
   HandoffDialog,
   HandoffHistoryDrawer,
   CodeActionMenu,
+  DispatchDrawer,
   EditPreviewDialog,
   MergeDialog,
   ProblemsPanel,
@@ -20,11 +21,15 @@ import {
   GitToolWindow,
   SshPromptDialog,
   UsageDashboard,
+  WorkflowPanel,
 } from "./lazy";
+import { DraftLayer } from "@/workflow/DraftCard";
 import { AgentSettingsDialog } from "@/nodes/AgentSettingsDialog";
 import { NodeNameDialog } from "@/nodes/NodeNameDialog";
+import { JoinedSourceOpener } from "./joined-source";
 import { useMountedOnce, useOverlayRequested } from "./overlay-gates";
 import { useLinkFragments } from "./use-link-fragments";
+import { useSourcesBootstrap } from "./use-sources-bootstrap";
 
 /**
  * 所有浮层的挂载点。
@@ -56,9 +61,11 @@ export function Overlays() {
   const editPreview = useOverlayRequested("editPreview");
   const merge = useOverlayRequested("merge");
   useLinkFragments();
+  useSourcesBootstrap();
 
   return (
     <Suspense fallback={null}>
+      <JoinedSourceOpener />
       <Gate open={panels.explorer !== "closed"}>
         <ExplorerDrawer />
       </Gate>
@@ -104,12 +111,20 @@ export function Overlays() {
       <Gate open={panels.handoff !== "closed"}>
         <HandoffHistoryDrawer />
       </Gate>
+      <Gate open={panels.workflow !== "closed"}>
+        <WorkflowPanel />
+      </Gate>
+      <Gate open={panels.dispatch !== "closed"}>
+        <DispatchDrawer />
+      </Gate>
       {/* 事件流驱动的四个：必须先订阅，不能等状态。 */}
       <ControlConfirmDialog />
       <NodeNameDialog />
       <AgentSettingsDialog />
       <SshPromptDialog />
       <HandoffDialog />
+      {/* 工作流草案卡：`workflow.draft` 到达前就要订阅（设计系统 §5.5）。 */}
+      <DraftLayer />
     </Suspense>
   );
 }

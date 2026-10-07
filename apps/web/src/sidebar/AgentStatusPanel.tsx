@@ -32,6 +32,7 @@ import {
   type AgentInspectTarget,
 } from "./AgentInspectDialog";
 import { gotoNode } from "./goto-node";
+import { displayName } from "./display-name";
 
 export function AgentStatusPanel({ onClose }: { onClose: () => void }) {
   const t = useT();
@@ -42,8 +43,9 @@ export function AgentStatusPanel({ onClose }: { onClose: () => void }) {
 
   const sections = useMemo(() => agentSections(sessions), [sessions]);
   const boardNames = useMemo(
-    () => new Map(boards.map((board) => [board.id, board.name])),
-    [boards],
+    () =>
+      new Map(boards.map((board) => [board.id, displayName(board.name, t)])),
+    [boards, t],
   );
 
   useEffect(() => {

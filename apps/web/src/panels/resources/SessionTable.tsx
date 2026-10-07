@@ -17,15 +17,15 @@ import { useT } from "@/app/preferences-store";
 import { centerNode } from "@/sessions/SessionRow";
 import { useCanvasStore } from "@/store/canvas-store";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Badge } from "@/ui/badge";
 import { IconButton } from "@/ui/icon-button";
 import { usePreferencesStore } from "@/app/preferences-store";
@@ -43,6 +43,7 @@ import {
   unknownReasonKey,
   type SessionSort,
 } from "./metrics";
+import { Button } from "@/ui/button";
 
 export function SessionTable({
   sessions,
@@ -125,17 +126,19 @@ export function SessionTable({
         {t("resources.host.filter")}
       </span>
       {(["all", ...hosts] as const).map((value) => (
-        <button
+        <Button
+          variant="ghost"
+          size="xs"
           key={value === "all" ? "all" : (value ?? "unknown")}
           type="button"
           data-slot="resource-host-filter"
           data-host={value === "all" ? "all" : (value ?? "unknown")}
           data-active={host === value ? "true" : undefined}
           onClick={() => setHost(value)}
-          className="max-w-32 truncate rounded-[var(--r-control)] px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent data-[active=true]:bg-accent data-[active=true]:text-foreground"
+          className="block h-auto max-w-32 truncate rounded-[var(--r-control)] px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground hover:bg-accent data-[active=true]:bg-accent data-[active=true]:text-foreground"
         >
           {value === "all" ? t("resources.host.filter.all") : hostLabel(value)}
-        </button>
+        </Button>
       ))}
     </div>
   );
@@ -164,16 +167,18 @@ export function SessionTable({
       <div className="flex items-center gap-1 pb-1">
         {/* 排序只换看的顺序，测不出来的一律排在最后，不当 0 混进来。 */}
         {(["cpu", "memory", "name"] as const).map((key) => (
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             key={key}
             type="button"
             onClick={() => onSorted(key)}
             data-active={sort === key ? "true" : undefined}
             title={t("resources.sort.hint")}
-            className="rounded-[var(--r-control)] px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent data-[active=true]:bg-accent data-[active=true]:text-foreground"
+            className="h-auto rounded-[var(--r-control)] px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground hover:bg-accent data-[active=true]:bg-accent data-[active=true]:text-foreground"
           >
             {t(`resources.sort.${key}`)}
-          </button>
+          </Button>
         ))}
       </div>
 
@@ -184,17 +189,32 @@ export function SessionTable({
           const high = crossedThreshold(session.memoryBytes, threshold);
           const open = expanded.has(session.sessionId);
           const expandable = session.children.length > 0;
+          const detail = reasonKey
+            ? t(reasonKey)
+            : [
+                t("resources.session.children", {
+                  count: formatCount(session.childCount),
+                }),
+                session.state,
+                // 不让「pid」和号码被折到两行。
+                typeof session.pid === "number"
+                  ? `pid\u00a0${session.pid}`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ");
           return (
             <li
               key={session.sessionId}
               data-high={high ? "true" : undefined}
               className="group flex flex-col rounded-[var(--r-control)] px-1.5 py-1 hover:bg-accent data-[high=true]:bg-[var(--danger)]/8"
             >
-              <div className="flex w-full items-center gap-2">
-                {/*
-                没有子进程时留一个占位方块而不是一个禁用按钮：一个点不动的
-                「展开进程树」按钮在读屏器里仍然会被念出来。
+              {/*
+                两行：名字一行独占（只给操作按钮让位），说明与数字一行。原来四样挤
+                在一行，抽屉里留给名字和说明的只有一百来像素，「MacBookPr…」
+                「子进程 5 · sle…」全被截断。现在说明可以折行，名字放不下时悬停看全名。
               */}
+              <div className="flex w-full items-center gap-2">
                 {expandable ? (
                   <IconButton
                     label={
@@ -216,62 +236,30 @@ export function SessionTable({
                 ) : (
                   <span aria-hidden="true" className="size-[24px] shrink-0" />
                 )}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="truncate text-[12px]">
-                      {titleOf(session)}
-                    </span>
-                    {session.location === "remote" && (
-                      <Badge variant="outline" className="text-[10px]">
-                        {t("resources.location.remote")}
-                      </Badge>
-                    )}
-                    {high && (
-                      <Badge
-                        variant="outline"
-                        className="border-[var(--danger)] text-[10px] text-[var(--danger)]"
-                      >
-                        {t("resources.session.high")}
-                      </Badge>
-                    )}
-                  </div>
-                  <div className="truncate text-[11px] text-muted-foreground">
-                    {reasonKey ? (
-                      t(reasonKey)
-                    ) : (
-                      <>
-                        {t("resources.session.children", {
-                          count: formatCount(session.childCount),
-                        })}
-                        {session.state ? ` · ${session.state}` : ""}
-                        {typeof session.pid === "number"
-                          ? ` · pid ${session.pid}`
-                          : ""}
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                <span className="w-14 shrink-0 text-right text-[12px] tabular-nums">
-                  {formatPercent(session.cpuPercent)}
-                </span>
-                <span
-                  className={`w-20 shrink-0 text-right text-[12px] tabular-nums ${
-                    high ? "text-[var(--danger)]" : ""
-                  }`}
-                  // 共享页会被重复计入，所以这是估计值而不是独占内存（设计 §8）。
-                  title={
-                    session.memoryEstimated
-                      ? t("resources.session.memoryEstimated")
-                      : undefined
-                  }
+                <div
+                  className="flex min-w-0 flex-1 items-center gap-1.5"
+                  title={titleOf(session)}
                 >
-                  {formatMetricBytes(session.memoryBytes)}
-                  {session.memoryEstimated && session.memoryBytes !== null ? (
-                    <span className="ml-0.5 text-muted-foreground">≈</span>
-                  ) : null}
-                </span>
-
+                  <span className="truncate text-[12px]">
+                    {titleOf(session)}
+                  </span>
+                  {session.location === "remote" && (
+                    <Badge
+                      variant="outline"
+                      className="text-[length:var(--text-caption)]"
+                    >
+                      {t("resources.location.remote")}
+                    </Badge>
+                  )}
+                  {high && (
+                    <Badge
+                      variant="outline"
+                      className="border-[var(--danger)] text-[length:var(--text-caption)] text-[var(--danger-text)]"
+                    >
+                      {t("resources.session.high")}
+                    </Badge>
+                  )}
+                </div>
                 <div className="flex shrink-0 items-center">
                   {session.nodeId && (
                     <IconButton
@@ -296,7 +284,33 @@ export function SessionTable({
                   )}
                 </div>
               </div>
-
+              <div className="flex w-full items-start gap-2 pl-8">
+                <div
+                  className="min-w-0 flex-1 text-[11px] text-muted-foreground [overflow-wrap:anywhere]"
+                  title={detail}
+                >
+                  {detail}
+                </div>
+                <span className="w-14 shrink-0 text-right text-[12px] tabular-nums">
+                  {formatPercent(session.cpuPercent)}
+                </span>
+                <span
+                  className={`w-20 shrink-0 text-right text-[12px] tabular-nums ${
+                    high ? "text-[var(--danger-text)]" : ""
+                  }`}
+                  // 共享页会被重复计入，所以这是估计值而不是独占内存（设计 §8）。
+                  title={
+                    session.memoryEstimated
+                      ? t("resources.session.memoryEstimated")
+                      : undefined
+                  }
+                >
+                  {formatMetricBytes(session.memoryBytes)}
+                  {session.memoryEstimated && session.memoryBytes !== null ? (
+                    <span className="ml-0.5 text-muted-foreground">≈</span>
+                  ) : null}
+                </span>
+              </div>
               {open && (
                 <ProcessTree
                   processes={session.children}
@@ -308,32 +322,36 @@ export function SessionTable({
         })}
       </ul>
 
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={ending !== null}
         onOpenChange={(open) => {
           if (!open) setEnding(null);
         }}
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("resources.endTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
+        <ResponsiveAlertDialogContent>
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
+              {t("resources.endTitle")}
+            </ResponsiveAlertDialogTitle>
+            <ResponsiveAlertDialogDescription>
               {t("resources.endBody", {
                 name: ending ? titleOf(ending) : "",
               })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("resources.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
+            </ResponsiveAlertDialogDescription>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("resources.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               onClick={() => ending && endSession(ending)}
               className="bg-[var(--danger)] text-white hover:bg-[var(--danger)]/90"
             >
               {t("resources.session.end")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </>
   );
 }

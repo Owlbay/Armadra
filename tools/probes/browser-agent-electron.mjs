@@ -11,6 +11,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 
 import { freePort, killTmux, sleep } from "./shell-e2e-lib.mjs";
+import { isolatedEnv, probeHome } from "./probe-home.mjs";
 
 export async function runElectron(ctx) {
   const { h, root, base, cross, check, step, everyVerb, hookOf, output } = ctx;
@@ -21,7 +22,10 @@ export async function runElectron(ctx) {
 
   const data = h.temp("armadra-browser-agent-electron-");
   const project = h.temp("armadra-browser-agent-electron-project-");
-  const home = h.temp("armadra-browser-agent-electron-home-");
+  // 临时 HOME：桌面壳与它起的 core 不读操作员的 CLI 登录状态与配置。
+  const isolated = probeHome("armadra-browser-agent-electron-home-");
+  h.cleanups.push(isolated.remove);
+  const home = isolated.path;
   h.cleanups.push(() => killTmux(data));
   const port = await freePort();
   const app = spawn(
@@ -31,16 +35,17 @@ export async function runElectron(ctx) {
       `--remote-debugging-port=${port}`,
       "--remote-allow-origins=*",
       `--user-data-dir=${join(data, "electron")}`,
+      // 临时 HOME 下没有登录钥匙串：不让 Chromium 去找它。
+      "--use-mock-keychain",
     ],
     {
       // 端口随机：缺省的 43120 可能正被操作员自己的应用占着。
-      env: {
-        ...process.env,
+      env: isolatedEnv(isolated, {
         ARMADRA_DATA_DIR: data,
         // 开发构建缺省连外面的 core；这里要桌面壳自己起一个，drive 通道才接得上。
         ARMADRA_DESKTOP_OWNS_RUNTIME: "1",
         ARMADRA_RUNTIME_PORT: String(await freePort()),
-      },
+      }),
       stdio: ["ignore", "pipe", "pipe"],
     },
   );

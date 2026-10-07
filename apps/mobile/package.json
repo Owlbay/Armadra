@@ -1,0 +1,30 @@
+{
+  "name": "@armadra/mobile",
+  "description": "Armadra 的 Capacitor 手机壳：打包 apps/web 的产物，原生只补钥匙串、证书钉扎、扫码、推送与深链",
+  "homepage": "https://github.com/yovinchen/Armadra",
+  "author": {
+    "name": "YoVinchen",
+    "email": "gzh298255@gmail.com"
+  },
+  "version": "0.2.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "web:prepare": "node scripts/prepare-web.mjs",
+    "sync": "node scripts/prepare-web.mjs && cap sync",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.2",
+    "@capacitor/core": "8.5.2",
+    "@capacitor/ios": "8.5.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.2",
+    "@types/node": "24.3.0",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11"
+  }
+}

@@ -12,6 +12,7 @@ import {
 import { tmpdir, homedir } from "node:os";
 import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { probeSession } from "./probe-session.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const installed = resolve(
   process.argv[2] ??
@@ -291,16 +292,14 @@ try {
       );
       const tasks = JSON.parse(query.stdout).data.tasks;
       const hints = JSON.parse(readFileSync(join(dataDir, "endpoints.json")));
+      const session = await probeSession({ dataDir, base: hints.runtime.http });
       for (const task of tasks)
         if (task.sessionId)
-          await fetch(
-            hints.runtime.http + `/api/terminals/${task.sessionId}/terminate`,
-            {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ mode: "session" }),
-            },
-          );
+          await session.fetch(`/api/terminals/${task.sessionId}/terminate`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ mode: "session" }),
+          });
     }
   } catch {}
   if (core.exitCode === null) {

@@ -23,6 +23,51 @@ describe("usage dashboard contracts", () => {
   };
   const ranges = { "24h": range, "7d": range, "30d": range, all: range };
 
+  it("carries Claude's local estimate next to policy_off", () => {
+    const parsed = usageSchema.parse({
+      providers: [
+        {
+          id: "claude",
+          status: "unavailable",
+          reason: "policy_off",
+          credentialSource: "none",
+          windows: [],
+          fetchedAt: null,
+          estimate: {
+            source: "local",
+            windows: [
+              {
+                key: "five_hour",
+                label: "5h",
+                windowStartMs: 1,
+                resetsAtMs: 2,
+                used: 300,
+              },
+              {
+                key: "seven_day",
+                label: "7d",
+                windowStartMs: 0,
+                used: 900,
+                limit: 1000,
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(parsed.providers[0]?.estimate?.windows[1]?.limit).toBe(1000);
+    expect(() =>
+      usageSchema.parse({
+        providers: [
+          {
+            ...parsed.providers[0],
+            estimate: { source: "remote", windows: [] },
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
   it("accepts Copilot as a provider and carries unlimited buckets and credits", () => {
     const parsed = usageSchema.parse({
       providers: [

@@ -7,7 +7,7 @@
 //   1. 管理员打开启动日志里的配对链接，页面自己完成配对；
 //   2. 管理员在「账号与共享」生成邀请，成员在另一个上下文打开 `#invite=` 链接注册；
 //   3. 只读共享：成员看得见、写被拒（403 与界面反应）；改成可写后能写；撤销
-//      之后成员已开的事件流以 4403 关闭，下一次请求 403；
+//      之后成员已开的事件订阅（控制面 `/api/ws`）以 forbidden 结束，下一次请求 403；
 //   4. 成员打开页面不撞任何全局 403（§56 的权限表：无害的全局读放行，本机管理
 //      的入口对成员不摆出来），设置导航里没有本机管理的那几页；
 //   5. 撤销共享的那一刻，被撤销者手里的写租约当场释放（§56），不等心跳过期；
@@ -26,22 +26,65 @@
 //   node tools/probes/server-e2e.mjs [输出目录]
 //
 // 产物：<输出目录>/result.json 与各步截图，默认 target/server-e2e/。
+//
+// 容器模式（补全计划 G3-5，B 档）：`--container=<镜像>` 时不用本机的构建产物，
+// 改为 `docker run` 那个镜像（`apps/server/docker/Dockerfile`），只发布到
+// 127.0.0.1 的随机端口，对外来源就是它；共享项目是挂进容器的临时目录
+// （`/projects`）。缺省镜像里没有 Chromium，第 7 步（浏览器节点）记 skipped；
+// 镜像带 Chromium（构建参数 `WITH_CHROMIUM=1`，`health` 报 `headlessBrowser`）
+// 时照走，探针页由容器里自己的回环服务。
+//   docker build -f apps/server/docker/Dockerfile -t armadra-server:local .
+//   node tools/probes/server-e2e.mjs --container=armadra-server:local [输出目录]
+// 加 `--build` 时探针先自己 `docker build` 出这个标签（CI 的 B 档条目这样用），
+// 再加 `--with-chromium` 时以 `--build-arg WITH_CHROMIUM=1` 构建。
+//
+// 反向代理模式（G5-16）：`--proxy=caddy` 时本机的服务器壳只监听回环、对外来源
+// 是 `https://localhost:<代理端口>`，前面放一个 Caddy 容器，配置就是
+// `tools/dev-stack/caddy/Caddyfile`（部署指南 §3.3 那一份），上游的 CA 从
+// `GET /ca.crt` 取。整条线（配对、邀请、事件流、撤销）都经代理走。容器只发布
+// 到 127.0.0.1；macOS 上经 `host.docker.internal` 回到宿主回环，Linux 上用
+// `--network host`。
+//   node tools/probes/server-e2e.mjs --proxy=caddy [输出目录]
+import { execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   child,
+  freePort,
   harness,
   killTmux,
   sleep,
   startChrome,
 } from "./shell-e2e-lib.mjs";
+import { isolatedEnv, probeHome } from "./probe-home.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const output = resolve(process.argv[2] ?? join(root, "target/server-e2e"));
+const args = process.argv.slice(2);
+const image =
+  args
+    .find((argument) => argument.startsWith("--container="))
+    ?.slice("--container=".length) || undefined;
+const build = args.includes("--build");
+const withChromium = args.includes("--with-chromium");
+const proxy =
+  args
+    .find((argument) => argument.startsWith("--proxy="))
+    ?.slice("--proxy=".length) || undefined;
+if (proxy !== undefined && proxy !== "caddy")
+  throw new Error(`--proxy 只认 caddy：${proxy}`);
+if (proxy !== undefined && image !== undefined)
+  throw new Error("--proxy 与 --container 不能一起用");
+/** 与 `tools/dev-stack/docker-compose.yml` 的 caddy 服务同一个镜像。 */
+const CADDY_IMAGE = "caddy:2.10.2-alpine";
+const output = resolve(
+  args.find((argument) => !argument.startsWith("--")) ??
+    join(root, "target/server-e2e"),
+);
 mkdirSync(output, { recursive: true });
 const h = harness(output);
 const { report, step } = h;
@@ -49,6 +92,11 @@ report.failures = [];
 report.memberForbidden = [];
 
 /** 一项检查没过：记下来，跑完整条线再判失败——一处坏不该挡住后面的观察。 */
+/** 页面保存画布文档发出的那次请求：旧路径 `PUT …/document`，或契约 §36.2 的 `boards.save`。 */
+function isBoardSave(url) {
+  return url.endsWith("/document") || url.endsWith("/api/rpc/boards/save");
+}
+
 function check(ok, name, detail = "") {
   if (ok) step(name, detail);
   else {
@@ -57,41 +105,236 @@ function check(ok, name, detail = "") {
   }
 }
 
+/**
+ * 部署指南 §3.3 的 Caddy：先从服务器壳的 `GET /ca.crt` 取上游的根，再用仓库里
+ * 那份 Caddyfile 起容器，等到经它的 `/health` 是 200。
+ */
+async function startCaddy({ upstream, port }) {
+  const anchor = await httpsText({
+    host: "127.0.0.1",
+    port: upstream,
+    path: "/ca.crt",
+  });
+  if (anchor.status !== 200 || !anchor.body.includes("BEGIN CERTIFICATE"))
+    throw new Error(`取不到上游的 CA：${anchor.status}`);
+  const trust = h.temp("armadra-server-e2e-caddy-");
+  writeFileSync(join(trust, "upstream.crt"), anchor.body);
+  chmodSync(trust, 0o755);
+  const name = `armadra-caddy-e2e-${randomUUID().slice(0, 8)}`;
+  h.cleanups.push(() => {
+    try {
+      execFileSync("docker", ["rm", "-f", name], { stdio: "ignore" });
+    } catch {}
+  });
+  const linux = process.platform === "linux";
+  const caddy = child(h, "docker", [
+    "run",
+    "--rm",
+    "--name",
+    name,
+    ...(linux
+      ? ["--network", "host"]
+      : [
+          "--add-host",
+          "host.docker.internal:host-gateway",
+          "-p",
+          `127.0.0.1:${port}:${port}`,
+        ]),
+    "-v",
+    `${join(root, "tools/dev-stack/caddy/Caddyfile")}:/etc/caddy/Caddyfile:ro`,
+    "-v",
+    `${trust}:/etc/caddy/upstream:ro`,
+    "-e",
+    `ARMADRA_CADDY_SITE=localhost:${port}`,
+    "-e",
+    `ARMADRA_CADDY_UPSTREAM=https://${linux ? "127.0.0.1" : "host.docker.internal"}:${upstream}`,
+    "-e",
+    "ARMADRA_CADDY_SERVER_NAME=localhost",
+    CADDY_IMAGE,
+  ]);
+  let health = { status: 0 };
+  for (let attempt = 0; attempt < 300 && health.status !== 200; attempt += 1) {
+    if (caddy.process.exitCode !== null)
+      throw new Error(`Caddy 退出：${caddy.tail()}`);
+    health = await httpsText({
+      host: "127.0.0.1",
+      port,
+      servername: "localhost",
+      path: "/health",
+      headers: { host: `localhost:${port}` },
+    }).catch((error) => ({ status: 0, body: error.message }));
+    if (health.status !== 200) await sleep(200);
+  }
+  if (health.status !== 200)
+    throw new Error(
+      `经 Caddy 的 /health 不是 200：${health.status} ${caddy.tail()}`,
+    );
+  report.proxy = { kind: "caddy", image: CADDY_IMAGE, name, port, upstream };
+  step("Caddy 已在前面", `https://localhost:${port} → 127.0.0.1:${upstream}`);
+}
+
+/** 不验证书的 HTTPS GET（上游自签、Caddy 内部 CA），只给探针自己用。 */
+function httpsText(options) {
+  return new Promise((done, failed) => {
+    const request = httpsRequest(
+      { ...options, rejectUnauthorized: false, agent: false, timeout: 5000 },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () =>
+          done({
+            status: response.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+          }),
+        );
+      },
+    );
+    request.on("timeout", () => request.destroy(new Error("timeout")));
+    request.on("error", failed);
+    request.end();
+  });
+}
+
+/** 配对最多试几次（每次一张新票）。 */
+const PAIRING_ATTEMPTS = 3;
+
+/**
+ * 让服务器壳再铸一张配对票（SIGUSR2，`apps/server/src/main.ts`），等启动日志
+ * 里出现与 `previous` 不同的那一行。
+ */
+async function freshPairingLink(previous) {
+  if (report.container !== undefined)
+    execFileSync(
+      "docker",
+      ["kill", "--signal", "USR2", report.container.name],
+      { stdio: "ignore" },
+    );
+  else currentServer.process.kill("SIGUSR2");
+  for (let wait = 0; wait < 100; wait += 1) {
+    const links = [
+      ...currentServer.tail().matchAll(/armadra-server pairing (\S+)/g),
+    ].map((match) => match[1]);
+    const latest = links.at(-1);
+    if (latest !== undefined && latest !== previous) return latest;
+    await sleep(100);
+  }
+  throw new Error("服务器壳没有铸出新的配对票");
+}
+
+/** 正在跑的服务器壳（本机进程或 `docker run` 客户端）。 */
+let currentServer;
+
 await h.run(async () => {
-  for (const [what, file] of [
-    ["core", "apps/desktop/out/core/main.js"],
-    ["服务器壳", "apps/server/out/main.js"],
-    ["前端产物", "apps/web/dist/index.html"],
-  ]) {
+  for (const [what, file] of image !== undefined
+    ? []
+    : [
+        ["core", "apps/desktop/out/core/main.js"],
+        ["服务器壳", "apps/server/out/main.js"],
+        ["前端产物", "apps/web/dist/index.html"],
+      ]) {
     if (!existsSync(join(root, file)))
       throw new Error(`${what}未构建：${file}（见文件头的构建命令）`);
   }
 
   /* ------------------------------ 服务器壳 ------------------------------- */
 
-  const data = h.temp("armadra-server-e2e-");
-  h.cleanups.push(() => killTmux(data));
-  const server = child(
-    h,
-    process.execPath,
-    [
-      join(root, "apps/server/out/main.js"),
-      "serve",
-      "--data-dir",
-      data,
-      "--web-root",
-      join(root, "apps/web/dist"),
-    ],
-    { cwd: root, env: { ...process.env, ARMADRA_LOG: "warn" } },
-  );
+  // 共享项目：本机模式是临时目录本身；容器模式挂进容器的 `/projects`。
+  const projectRoot = h.temp("armadra-server-e2e-project-");
+  let projectPath = projectRoot;
+  let server;
+  let behindProxy;
+  if (image === undefined) {
+    if (proxy !== undefined) {
+      behindProxy = { upstream: await freePort(), port: await freePort() };
+    }
+    const data = h.temp("armadra-server-e2e-");
+    h.cleanups.push(() => killTmux(data));
+    // 临时 HOME：服务器壳里的 core 不读操作员的 CLI 登录状态与配置。
+    const home = probeHome("armadra-server-e2e-home-");
+    h.cleanups.push(home.remove);
+    server = child(
+      h,
+      process.execPath,
+      [
+        join(root, "apps/server/out/main.js"),
+        "serve",
+        "--data-dir",
+        data,
+        "--web-root",
+        join(root, "apps/web/dist"),
+        ...(behindProxy === undefined
+          ? []
+          : [
+              "--listen",
+              `127.0.0.1:${behindProxy.upstream}`,
+              "--public-origin",
+              `https://localhost:${behindProxy.port}`,
+            ]),
+      ],
+      { cwd: root, env: isolatedEnv(home, { ARMADRA_LOG: "warn" }) },
+    );
+  } else {
+    if (build) {
+      execFileSync(
+        "docker",
+        [
+          "build",
+          ...(withChromium ? ["--build-arg", "WITH_CHROMIUM=1"] : []),
+          "-f",
+          join(root, "apps/server/docker/Dockerfile"),
+          "-t",
+          image,
+          root,
+        ],
+        { stdio: "inherit" },
+      );
+      step("镜像已构建", image);
+    }
+    const port = await freePort();
+    const name = `armadra-server-e2e-${randomUUID().slice(0, 8)}`;
+    // 容器里是 uid 10001：目录要让它写得进去。
+    chmodSync(projectRoot, 0o777);
+    projectPath = "/projects";
+    // 先于临时目录被删：容器写下的文件归容器用户，在容器里清掉再停它。
+    h.cleanups.push(() => {
+      try {
+        execFileSync(
+          "docker",
+          ["exec", name, "sh", "-c", "rm -rf /projects/* /projects/.[!.]*"],
+          { stdio: "ignore" },
+        );
+      } catch {}
+      execFileSync("docker", ["rm", "-f", "-v", name], { stdio: "ignore" });
+    });
+    server = child(h, "docker", [
+      "run",
+      "--rm",
+      "--name",
+      name,
+      "-p",
+      `127.0.0.1:${port}:${port}`,
+      "-e",
+      `ARMADRA_LISTEN=0.0.0.0:${port}`,
+      "-e",
+      `ARMADRA_PUBLIC_ORIGIN=https://127.0.0.1:${port}`,
+      "-e",
+      "ARMADRA_LOG=warn",
+      "-v",
+      `${projectRoot}:/projects`,
+      image,
+    ]);
+    report.container = { image, name, port };
+  }
   let pairing = "";
-  for (let attempt = 0; attempt < 300 && !pairing; attempt += 1) {
+  for (let attempt = 0; attempt < 600 && !pairing; attempt += 1) {
     if (server.process.exitCode !== null)
       throw new Error(`服务器壳退出：${server.tail()}`);
     pairing = /armadra-server pairing (\S+)/.exec(server.tail())?.[1] ?? "";
     if (!pairing) await sleep(100);
   }
   if (!pairing) throw new Error(`启动日志里没有配对链接：${server.tail()}`);
+  currentServer = server;
+  if (behindProxy !== undefined) await startCaddy(behindProxy);
   const origin = new URL(pairing).origin;
   step("服务器壳已启动", origin);
 
@@ -100,15 +343,57 @@ await h.run(async () => {
 
   /* ------------------------------ 1. 配对 -------------------------------- */
 
-  await admin.navigate(pairing);
-  await admin.settle();
-  await admin.waitFor(
-    `return document.body.innerText.includes("服务所有者");`,
-    {
-      what: "配对完成（后台服务页出现「服务所有者」）",
-      timeout: 30_000,
-    },
-  );
+  // 一次配对等不到就留下现场，再要一张新票重来，最多三次。票是一次性的，
+  // 第一次可能已经被页面取走了：新票由服务器壳收到 SIGUSR2 时铸（容器里经
+  // `docker kill --signal`）。重试过的配对照样记进报告，偶发不会被悄悄吞掉。
+  report.pairingFailures = [];
+  let link = pairing;
+  for (let attempt = 1; ; attempt += 1) {
+    await admin.navigate(link);
+    await admin.settle();
+    const paired = await admin
+      .waitFor(`return document.body.innerText.includes("服务所有者");`, {
+        what: "配对完成（后台服务页出现「服务所有者」）",
+        timeout: 30_000,
+      })
+      .then(
+        () => true,
+        async (error) => {
+          // 留下页面、接口应答与服务器输出，看得出是没连上、配对被拒，还是
+          // 页面没走到后台服务页。
+          await admin
+            .capture(`01-admin-pairing-failed-${attempt}`)
+            .catch(() => undefined);
+          report.pairingFailures.push({
+            attempt,
+            error: String(error?.message ?? error),
+            url: await admin
+              .evaluate(`return location.origin + location.pathname;`)
+              .catch(() => null),
+            text: (await admin.text().catch(() => "")).slice(0, 800),
+            traffic: admin.traffic.slice(-40),
+            errors: admin.drain().errors.map((entry) => entry.text),
+            // 配对票只在片段里：抹掉再记。
+            server: server
+              .tail()
+              .slice(-3000)
+              .replace(/#pair=\S+/g, "#pair=…"),
+          });
+          // Windows 上的本机进程收不到 SIGUSR2：铸不了新票就不重试。
+          const canMint =
+            report.container !== undefined || process.platform !== "win32";
+          if (attempt >= PAIRING_ATTEMPTS || !canMint) throw error;
+          return false;
+        },
+      );
+    if (paired) break;
+    console.error(`  RETRY 配对第 ${attempt} 次没等到，换一张新票再试`);
+    link = await freshPairingLink(link);
+    // 同源只换片段不会重载页面：先离开，新票由一次完整的加载接住。
+    await admin.navigate("about:blank");
+  }
+  if (report.pairingFailures.length > 0)
+    step("配对重试后完成", `${report.pairingFailures.length} 次没等到`);
   await admin.capture("01-admin-paired");
   check(
     !(await admin.evaluate(`return location.hash;`)),
@@ -133,11 +418,18 @@ await h.run(async () => {
       return text ? JSON.parse(text) : null;
     `);
 
-  const projectRoot = h.temp("armadra-server-e2e-project-");
+  // 这条线验的是租约 + CAS 的多人语义（契约 §9：只读共享、接管、撤销时释放
+  // 租约）；实时协同缺省开，先关掉，共享画布留在租约模式。实时那条路由
+  // realtime-e2e 验。
+  await adminApi("/api/settings", {
+    method: "PATCH",
+    body: { collab: { realtime: false } },
+  });
+
   writeFileSync(join(projectRoot, "README.md"), "# 共享项目\n");
   const shared = await adminApi("/api/workspaces", {
     method: "POST",
-    body: { name: "共享项目", rootPath: projectRoot },
+    body: { name: "共享项目", rootPath: projectPath },
   });
   const boards = await adminApi(`/api/workspaces/${shared.id}/boards`);
   const board = boards[0];
@@ -227,8 +519,9 @@ await h.run(async () => {
 
   /* ---------------- 4. 成员打开页面：全局路由的 403 逐条记下 ---------------- */
 
-  // 页面自己的每一条 WebSocket 都记下关闭码：撤销共享时要看见应用自己的事件流
-  // 以 4403 关掉，而不是探针另开的一条。
+  // 页面自己的每一条 WebSocket 都记下关闭码与控制面上订阅结束的错误码：撤销
+  // 共享时要看见应用自己的事件订阅被结束（控制面 `/api/ws` 上的
+  // `workspaces.events` 以 `forbidden` 结束，契约 §35.4），而不是探针另开的一条。
   await member.call("Page.addScriptToEvaluateOnNewDocument", {
     source: `
       window.__probeSockets = [];
@@ -236,9 +529,17 @@ await h.run(async () => {
       window.WebSocket = class extends Native {
         constructor(...args) {
           super(...args);
-          const entry = { url: String(args[0]), code: null };
+          const entry = { url: String(args[0]), code: null, errors: [] };
           window.__probeSockets.push(entry);
           this.addEventListener("close", (event) => { entry.code = event.code; });
+          this.addEventListener("message", (event) => {
+            if (typeof event.data !== "string") return;
+            try {
+              const frame = JSON.parse(event.data);
+              const code = frame?.t === 3 && frame.p?.e === "error" ? frame.p.d?.json?.code : undefined;
+              if (typeof code === "string") entry.errors.push(code);
+            } catch {}
+          });
         }
       };
     `,
@@ -263,6 +564,16 @@ await h.run(async () => {
   }
   report.memberForbidden = tally;
   report.memberErrors = opened.errors;
+  // 现场：被拒的正文（门拒的是 CSRF 还是权限）与这一段的接口顺序。
+  report.memberForbiddenBodies = await Promise.all(
+    opened.responses
+      .filter((answer) => answer.status === 403)
+      .map(async (answer) => ({
+        url: answer.url,
+        body: await member.bodyOf(answer.requestId),
+      })),
+  );
+  report.memberTrafficOnOpen = member.traffic.slice(-120);
   const bannerText = () =>
     member.evaluate(`
       return [...document.querySelectorAll("[data-sonner-toast], [role=alert]")]
@@ -308,7 +619,7 @@ await h.run(async () => {
     "集成",
     "终端",
     "工作区",
-    "GitHub",
+    "Git 托管",
     "SSH",
     "执行主机",
     "数据",
@@ -407,9 +718,7 @@ await h.run(async () => {
   check(Math.abs(afterDrag.left - before.left) < 2, "只读：便签拖不动");
   const readOnlyWrites = member.drain();
   check(
-    !readOnlyWrites.responses.some((answer) =>
-      answer.url.endsWith("/document"),
-    ),
+    !readOnlyWrites.responses.some((answer) => isBoardSave(answer.url)),
     "只读：拖动之后没有发出被拒的保存",
   );
   const refused = await memberFetch(
@@ -479,25 +788,26 @@ await h.run(async () => {
   await member.capture("08-member-editor");
   const editorView = member.drain();
   check(
-    !editorView.responses.some((answer) => answer.url.endsWith("/document")),
+    !editorView.responses.some((answer) => isBoardSave(answer.url)),
     "可写：保存没有被拒",
   );
 
-  // 撤销共享：成员已开的事件流以 4403 关掉，下一次请求 403。
+  // 撤销共享：成员已开的事件订阅以 forbidden 结束，下一次请求 403。
   await admin.clickAt(
     await rowControl(admin, "成员甲", 'button[aria-label="取消共享"]'),
   );
   await sleep(1500);
   await admin.capture("09-admin-revoked");
-  const closes = await member.waitFor(
-    `const closed = (window.__probeSockets ?? []).filter((entry) => entry.url.includes("/events") && entry.code !== null);
-     return closed.length ? closed.map((entry) => entry.code) : null;`,
-    { what: "成员的事件流被关掉", timeout: 15_000 },
+  const ended = await member.waitFor(
+    `const ended = (window.__probeSockets ?? []).flatMap((entry) =>
+       entry.url.includes("/api/ws") ? entry.errors : entry.url.includes("/events") && entry.code !== null ? [String(entry.code)] : []);
+     return ended.length ? ended : null;`,
+    { what: "成员的事件订阅被结束", timeout: 15_000 },
   );
   check(
-    closes.includes(4403),
-    "撤销后成员已开的事件流以 4403 关闭",
-    closes.join(","),
+    ended.includes("forbidden") || ended.includes("4403"),
+    "撤销后成员已开的事件订阅以 forbidden 结束（控制面，契约 §35.4）",
+    ended.join(","),
   );
   const afterRevoke = await memberFetch(`/api/workspaces/${shared.id}/boards`);
   check(
@@ -526,24 +836,44 @@ await h.run(async () => {
     `return fetch("/api/health").then((answer) => answer.json());`,
   );
   report.capabilities = health.capabilities;
-  check(
-    health.capabilities?.headlessBrowser === true,
-    "health 报 headlessBrowser 能力位",
-  );
-  // 起始页是探针自己的回环页面：不访问外网，画面里也有一段认得出的内容。
-  const page = createServer((_request, response) => {
-    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    response.end(
-      `<!doctype html><body style="margin:0;background:#0a84ff;color:#fff;font:48px sans-serif;display:grid;place-items:center;height:100vh">服务器壳里的浏览器</body>`,
+  if (image === undefined) {
+    check(
+      health.capabilities?.headlessBrowser === true,
+      "health 报 headlessBrowser 能力位",
     );
-  });
-  page.listen(0, "127.0.0.1");
-  await once(page, "listening");
-  h.cleanups.push(() => page.close());
-  const startPage = `http://127.0.0.1:${page.address().port}/`;
-  await admin.evaluate(
-    `localStorage.setItem("armadra.browser.startPage", ${JSON.stringify(startPage)}); return true;`,
-  );
+  }
+  // 起始页是探针自己的回环页面：不访问外网，画面里也有一段认得出的内容。
+  const probePage = `<!doctype html><body style="margin:0;background:#0a84ff;color:#fff;font:48px sans-serif;display:grid;place-items:center;height:100vh">服务器壳里的浏览器</body>`;
+  let startPage;
+  if (image === undefined) {
+    const page = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(probePage);
+    });
+    page.listen(0, "127.0.0.1");
+    await once(page, "listening");
+    h.cleanups.push(() => page.close());
+    startPage = `http://127.0.0.1:${page.address().port}/`;
+  } else if (health.capabilities?.headlessBrowser === true) {
+    // 镜像带 Chromium：探针页放在容器自己的回环上（宿主的回环容器连不到），
+    // 随容器一起结束。
+    const port = 18_080;
+    execFileSync("docker", [
+      "exec",
+      "-d",
+      report.container.name,
+      "node",
+      "-e",
+      `require("node:http").createServer((q, r) => { r.writeHead(200, { "content-type": "text/html; charset=utf-8" }); r.end(${JSON.stringify(probePage)}); }).listen(${port}, "127.0.0.1");`,
+    ]);
+    startPage = `http://127.0.0.1:${port}/`;
+    report.container.chromium = true;
+  }
+  if (startPage !== undefined) {
+    await admin.evaluate(
+      `localStorage.setItem("armadra.browser.startPage", ${JSON.stringify(startPage)}); return true;`,
+    );
+  }
   await admin.navigate(`${origin}/?workspace=${shared.id}&board=${board.id}`);
   await admin.settle();
   await admin.waitFor(
@@ -630,8 +960,82 @@ await h.run(async () => {
   }
   second.drain();
   await second.navigate("about:blank");
-  await admin.click('[data-slot="dock"] button', "新建");
-  await admin.click('[role="menuitem"]', "新建浏览器");
+  if (startPage === undefined) {
+    // 缺省镜像不带 Chromium。
+    report.browserNode = "skipped";
+    step("容器模式：镜像里没有 Chromium，浏览器节点一步 skipped");
+    const errors = admin.drain().errors;
+    report.adminErrors = errors;
+    check(
+      errors.length === 0,
+      "管理员一侧没有控制台错误",
+      errors.map((error) => error.text).join(" | "),
+    );
+    return;
+  }
+  // 现场：菜单开过没有、谁拿走了焦点、指针落在哪。
+  await admin.evaluate(`
+    const t0 = performance.now();
+    const log = (window.__probeMenuLog = []);
+    const name = (node) => node instanceof Element
+      ? node.tagName.toLowerCase() + (node.getAttribute("role") ? "[" + node.getAttribute("role") + "]" : "") + (node.getAttribute("aria-label") ? "「" + node.getAttribute("aria-label") + "」" : "") + (node.getAttribute("data-slot") ? "{" + node.getAttribute("data-slot") + "}" : "")
+      : String(node);
+    const at = () => Math.round(performance.now() - t0);
+    for (const type of ["pointerdown", "pointerup", "click", "focusin", "keydown"])
+      document.addEventListener(type, (event) => log.push([at(), type, name(event.target)]), true);
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes)
+          if (node instanceof Element && (node.matches('[role="menu"]') || node.querySelector('[role="menu"]'))) log.push([at(), "menu+"]);
+        for (const node of record.removedNodes)
+          if (node instanceof Element && (node.matches('[role="menu"]') || node.querySelector('[role="menu"]'))) log.push([at(), "menu-"]);
+        if (record.type === "attributes" && record.target.matches?.('[data-slot="dock"] button[aria-haspopup]'))
+          log.push([at(), "trigger", record.target.getAttribute("data-state")]);
+      }
+    }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-state"] });
+    return true;
+  `);
+  // 像人一样按住一会儿再松开（CI 上 CDP 两次往返之间本来就隔着一两百毫秒）：
+  // 菜单要是展开时盖住了 `+`，松开的那一下会选中底下那一项。
+  {
+    const plus = await admin.locate('[data-slot="dock"] button', "新建");
+    const mouse = (type, extra = {}) =>
+      admin.call("Input.dispatchMouseEvent", {
+        type,
+        x: plus.x,
+        y: plus.y,
+        button: "left",
+        clickCount: 1,
+        pointerType: "mouse",
+        ...extra,
+      });
+    await mouse("mouseMoved", { button: "none", buttons: 0 });
+    await mouse("mousePressed", { buttons: 1 });
+    await sleep(200);
+    await mouse("mouseReleased", { buttons: 0 });
+    await sleep(250);
+  }
+  await admin.click('[role="menuitem"]', "新建浏览器").catch(async (error) => {
+    // 现场：菜单开没开、开了列的是什么、页面在不在前台、health 问到没有。
+    await admin.capture("11-admin-add-menu-failed");
+    report.addMenuFailure = {
+      page: await admin
+        .evaluate(
+          `return {
+            visibility: document.visibilityState,
+            focused: document.hasFocus(),
+            menus: document.querySelectorAll('[role="menu"]').length,
+            items: [...document.querySelectorAll('[role="menuitem"]')].map((node) => node.innerText.trim()),
+            presence: document.querySelector('[data-slot="presence-bar"]')?.innerText ?? "",
+            active: document.activeElement?.outerHTML.slice(0, 200) ?? "",
+            log: window.__probeMenuLog ?? [],
+          };`,
+        )
+        .catch((cause) => String(cause)),
+      traffic: admin.traffic.slice(-60),
+    };
+    throw error;
+  });
   await admin.waitFor(
     `return [...document.querySelectorAll(".react-flow__node")].some((node) => node.querySelector("canvas"));`,
     { what: "浏览器节点出现在画布上" },
@@ -652,7 +1056,11 @@ await h.run(async () => {
       await admin.capture("11-admin-browser-stream-failed");
       report.browserFailure = {
         text: (await admin.text()).slice(0, 600),
-        server: server.tail().slice(-3000),
+        // 配对票只在片段里：抹掉再记。
+        server: server
+          .tail()
+          .slice(-3000)
+          .replace(/#pair=\S+/g, "#pair=…"),
       };
       throw error;
     });

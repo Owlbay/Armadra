@@ -642,6 +642,7 @@ export const GithubExternalReferenceSchema = describe<GithubExternalReference>(
   {
     referenceId: str,
     workspaceId: str,
+    forge: str,
     repository: msg(() => GithubRepositoryRefSchema),
     kind: enumOf(GithubReferenceKind.UNSPECIFIED),
     number: i64,

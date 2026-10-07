@@ -13,7 +13,15 @@ import { uuidV7 } from "../workspaces/support";
 /** 读取动词。写进 `context_reads.verb`，也是节点头那份清单的分类。 */
 export type ReadVerb = "summary" | "transcript" | "terminal" | "content";
 
-/** 一条游标：读的是哪份文件、读到第几个字节。 */
+/**
+ * 一条游标：读的是哪份文件、读到第几个字节。
+ *
+ * 两列对没有文件的来源是不透明的：`transcript_path` 存的是 `Located.key`，
+ * `byte_offset` 存的是那家适配器自己的游标。OpenCode（`history/opencode.ts`）
+ * 的键是 `opencode:<sessionId>`，游标是最后交出去的那条消息的
+ * `message.time_created`（毫秒），下次只读严格晚于它的消息。列名不改、不需要迁
+ * 移：「同一个键才续读」的判据对两种来源一样成立。
+ */
 export interface ReadCursor {
   readonly transcriptPath: string;
   readonly byteOffset: number;

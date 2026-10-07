@@ -20,6 +20,12 @@ import { SessionsSection } from "./SessionsSection";
 const sessions = vi.fn();
 const gitStatus = vi.fn();
 
+// 会话列表按源发（`sources/source-api`）：与上面的 `runtimeApi` 共用同一个替身。
+vi.mock("../sources/source-api", () => ({
+  sourceApi: () => ({
+    sessions: (...args: unknown[]) => sessions(...args),
+  }),
+}));
 vi.mock("../api/client", () => ({
   runtimeApi: {
     sessions: (...args: unknown[]) => sessions(...args),
@@ -156,6 +162,30 @@ beforeEach(() => {
 });
 
 describe("SessionsSection", () => {
+  it("marks an ACP-driven session row and leaves PTY rows alone", async () => {
+    sessions.mockResolvedValue([
+      session({
+        nodeId: "019ff7d1-0d12-7421-833d-2c5e8d64ed40",
+        title: "接口重构",
+        agentId: "codex",
+        state: "working",
+        backend: "acp",
+      }),
+      session({
+        nodeId: "019ff7d1-0d12-7421-833d-2c5e8d64ed41",
+        title: "登录修复",
+        agentId: "claude",
+        state: "working",
+        backend: "tmux",
+      }),
+    ]);
+    const { container } = renderSection();
+    await screen.findByText("接口重构");
+    const badges = container.querySelectorAll('[data-slot="session-row-acp"]');
+    expect(badges).toHaveLength(1);
+    expect(badges[0]?.textContent).toBe("ACP");
+  });
+
   it("lists the live sessions grouped by status, newest buckets first", async () => {
     renderSection();
 
@@ -163,7 +193,10 @@ describe("SessionsSection", () => {
     expect(screen.getByText("登录修复")).toBeTruthy();
     // 已关闭的会话只出现在「历史」折叠里，默认不展开。
     expect(screen.queryByText("旧终端")).toBeNull();
-    expect(screen.getByText("Claude Code")).toBeTruthy();
+    // Agent 名用文字色（设计系统 §2.4），不用标识色。
+    expect(screen.getByText("Claude Code").style.color).toBe(
+      "var(--agent-claude-text)",
+    );
     // 分组头按「需要你 → 运行中」排；工作空间维度已经交给上面的树。
     const buckets = screen
       .getAllByRole("heading", { level: 3 })

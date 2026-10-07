@@ -32,6 +32,11 @@ export type TargetState =
 export interface TargetStatus {
   readonly state: TargetState;
   readonly generation: number;
+  /**
+   * `busy` 的具体理由，进运行的 `reasonCode`。缺席时内核记 `TARGET_NOT_IDLE`；
+   * 画面门退回时是 `TARGET_NOT_AT_PROMPT`（契约 §22）。
+   */
+  readonly reason?: string;
 }
 
 /** 一次探测允许做什么。 */
@@ -78,7 +83,34 @@ export interface EngineOptions {
   readonly claimLeaseMs?: number;
   readonly dispatchTimeoutMs?: number;
   readonly pollIntervalMs?: number;
+  /**
+   * 调度三时刻（契约 §27.3）发到哪里：装配时接到事件总线的 `workspace.event`。
+   * 只在提交成功之后调；不给就不发（单测与只要内核的调用方）。
+   */
+  readonly publish?: (workspaceId: string, event: ScheduleEvent) => void;
 }
+
+/** 内核发的三种事件：只带标识与稳定码，不带命令、参数与输出。 */
+export type ScheduleEvent =
+  | {
+      readonly type: "schedule.fired";
+      readonly planId: string;
+      readonly runId: string;
+      readonly nodeId?: string;
+    }
+  | {
+      readonly type: "schedule.failed";
+      readonly planId: string;
+      readonly runId: string;
+      readonly nodeId?: string;
+      readonly reasonCode: string;
+    }
+  | {
+      readonly type: "schedule.attention";
+      readonly planId: string;
+      readonly nodeId?: string;
+      readonly reasonCode: string;
+    };
 
 export interface PlanSnapshot {
   readonly plan: AutomationPlan;

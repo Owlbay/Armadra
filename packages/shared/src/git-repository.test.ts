@@ -73,6 +73,36 @@ describe("Git repository wire contract", () => {
       ).toBe(false);
     }
   });
+  it("checks a hosted pull request's head out only as a new branch", () => {
+    const base = {
+      kind: "createWorktree",
+      expectedOid: null,
+      path: "trees/review",
+      branch: "review-7",
+      createBranch: true,
+      startPoint: null,
+    };
+    const pullHead = {
+      remote: "origin",
+      forge: "gitlab",
+      number: 7,
+      headOid: oid,
+    };
+    expect(
+      gitRepositoryActionSchema.safeParse({ ...base, pullHead }).success,
+    ).toBe(true);
+    expect(
+      gitRepositoryActionSchema.safeParse({ ...base, pullHead: null }).success,
+    ).toBe(true);
+    for (const refused of [
+      { ...base, startPoint: "main", pullHead },
+      { ...base, pullHead: { ...pullHead, forge: "github" } },
+      { ...base, pullHead: { ...pullHead, number: 0 } },
+      { ...base, pullHead: { ...pullHead, ref: "refs/heads/x" } },
+    ]) {
+      expect(gitRepositoryActionSchema.safeParse(refused).success).toBe(false);
+    }
+  });
   it("overwrites remote history only through a lease naming the remote OID", () => {
     const push = {
       kind: "push",

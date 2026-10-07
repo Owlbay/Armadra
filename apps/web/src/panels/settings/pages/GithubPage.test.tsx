@@ -38,7 +38,30 @@ vi.mock("../../../host/github-session", () => {
   return { useGithubSession };
 });
 
+/** Gitea / GitLab 的配置面（契约 §29.3）。缺省一行 GitLab 主机配置。 */
+const forgeApi = vi.hoisted(() => ({
+  forgeConfigs: vi.fn(),
+  putForgeConfig: vi.fn(),
+  deleteForgeConfig: vi.fn(),
+}));
+
+vi.mock("../../../api/forge", async (original) => ({
+  ...(await original<typeof import("../../../api/forge")>()),
+  ...forgeApi,
+}));
+
 import { GithubPage } from "./GithubPage";
+
+const gitlabRow = {
+  repoKey: "gitlab.example.test",
+  forge: "gitlab" as const,
+  apiBase: "https://gitlab.example.test/api/v4",
+  credential: true,
+  accountLogin: "bot",
+  revision: 2,
+  createdAtMs: 1,
+  updatedAtMs: 1,
+};
 
 /** A status that would echo a token back if the page ever trusted one. */
 const status = githubCredentialStatus({
@@ -91,6 +114,15 @@ function tokenField(): HTMLInputElement {
 }
 
 beforeEach(() => {
+  for (const fn of Object.values(forgeApi)) fn.mockReset();
+  forgeApi.forgeConfigs.mockResolvedValue([gitlabRow]);
+  forgeApi.putForgeConfig.mockImplementation(async (repoKey, input) => ({
+    ...gitlabRow,
+    repoKey,
+    forge: input.forge,
+    revision: input.expectedRevision + 1,
+  }));
+  forgeApi.deleteForgeConfig.mockResolvedValue(undefined);
   session.connect.mockClear();
   session.state = { status: "idle" };
   session.client = null;
@@ -163,6 +195,97 @@ describe("GitHub credential settings", () => {
       expect(api.revokeCredential).toHaveBeenCalledWith({
         expectedRevision: 3n,
       }),
+    );
+  });
+});
+
+describe("Gitea / GitLab per host or repository (§29.3)", () => {
+  function forgeToken(): HTMLInputElement {
+    return document.querySelector(
+      "[data-slot='forge-token']",
+    ) as HTMLInputElement;
+  }
+  function inForm(selector: string): HTMLInputElement {
+    return document.querySelector(
+      `[data-slot='forge-config-form'] ${selector}`,
+    ) as HTMLInputElement;
+  }
+
+  it("lists each config with its platform and account, never a token", async () => {
+    renderPage(client());
+    expect(await screen.findByText("gitlab.example.test")).toBeTruthy();
+    expect(screen.getByText("GitLab")).toBeTruthy();
+    expect(screen.getByText("bot")).toBeTruthy();
+    expect(screen.getByText("其他平台")).toBeTruthy();
+  });
+
+  it("adds a GitLab repository and drops the token once the Host took it", async () => {
+    renderPage(client());
+    await screen.findByText("gitlab.example.test");
+    fireEvent.click(screen.getByText("添加"));
+    fireEvent.change(inForm("input"), {
+      target: { value: "Git.Example.test/acme/app" },
+    });
+    fireEvent.change(inForm("select"), { target: { value: "gitlab" } });
+    fireEvent.change(inForm("input[type='url']"), {
+      target: { value: "https://git.example.test" },
+    });
+    expect(forgeToken().type).toBe("password");
+    fireEvent.change(forgeToken(), { target: { value: "glpat-secret" } });
+    fireEvent.click(inForm("button[type='submit']"));
+    await waitFor(() =>
+      expect(forgeApi.putForgeConfig).toHaveBeenCalledWith(
+        "git.example.test/acme/app",
+        {
+          forge: "gitlab",
+          apiBase: "https://git.example.test",
+          token: "glpat-secret",
+          expectedRevision: 0,
+        },
+      ),
+    );
+    await waitFor(() => expect(forgeToken()).toBeNull());
+  });
+
+  it("edits against the revision it read, keeping the token unless one is typed or cleared", async () => {
+    renderPage(client());
+    await screen.findByText("gitlab.example.test");
+    fireEvent.click(screen.getByText("编辑"));
+    // 令牌框从不回填；地址回填成站点根。
+    expect(forgeToken().value).toBe("");
+    expect(inForm("input[type='url']").value).toBe(
+      "https://gitlab.example.test",
+    );
+    fireEvent.click(inForm("button[type='submit']"));
+    await waitFor(() =>
+      expect(forgeApi.putForgeConfig).toHaveBeenLastCalledWith(
+        "gitlab.example.test",
+        {
+          forge: "gitlab",
+          apiBase: "https://gitlab.example.test",
+          expectedRevision: 2,
+        },
+      ),
+    );
+    fireEvent.click(await screen.findByText("编辑"));
+    fireEvent.click(screen.getByText("清除令牌"));
+    await waitFor(() =>
+      expect(forgeApi.putForgeConfig).toHaveBeenLastCalledWith(
+        "gitlab.example.test",
+        expect.objectContaining({ token: "", expectedRevision: 2 }),
+      ),
+    );
+  });
+
+  it("deletes against the revision it displayed", async () => {
+    renderPage(client());
+    await screen.findByText("gitlab.example.test");
+    fireEvent.click(screen.getByText("删除"));
+    await waitFor(() =>
+      expect(forgeApi.deleteForgeConfig).toHaveBeenCalledWith(
+        "gitlab.example.test",
+        2,
+      ),
     );
   });
 });

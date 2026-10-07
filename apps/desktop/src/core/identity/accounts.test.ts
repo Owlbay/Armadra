@@ -253,6 +253,183 @@ describe("邀请", () => {
   });
 });
 
+describe("邀请多次使用（A4-1）", () => {
+  const member = (id: string) =>
+    ({ principalId: id, kind: "member", scopes: [] }) as AuthorizationSubject;
+
+  it("20 个并发去用 maxUses=5 的邀请，恰好成功 5 个", async () => {
+    const { accounts, owner, database } = harness();
+    const invitation = accounts.issueInvitation(owner, {
+      role: "editor",
+      targetWorkspaceId: "w1",
+      maxUses: 5,
+    });
+    expect(invitation.maxUses).toBe(5);
+    const people = Array.from({ length: 20 }, (_, index) =>
+      accounts.createPrincipal(owner, { displayName: `同事${index}` }),
+    );
+    const results = await Promise.all(
+      people.map(
+        async (person) =>
+          await Promise.resolve().then(() => {
+            try {
+              accounts.acceptInvitation(member(person.principalId), {
+                invitationId: invitation.invitationId,
+                token: invitation.token,
+              });
+              return true;
+            } catch (error) {
+              expect(error).toBeInstanceOf(IdentityError);
+              return false;
+            }
+          }),
+      ),
+    );
+    expect(results.filter(Boolean)).toHaveLength(5);
+    expect(accounts.listGrants(owner, "w1")).toHaveLength(5);
+    const listed = accounts
+      .listInvitations(owner)
+      .find((row) => row.invitationId === invitation.invitationId);
+    expect(listed).toMatchObject({ maxUses: 5, uses: 5 });
+    expect(
+      database
+        .prepare("SELECT COUNT(*) AS n FROM identity_invitation_uses")
+        .get(),
+    ).toMatchObject({ n: 5 });
+  });
+
+  it("同一个人重复使用是幂等的，不多占名额", () => {
+    const { accounts, owner } = harness();
+    const first = accounts.createPrincipal(owner, { displayName: "甲" });
+    const second = accounts.createPrincipal(owner, { displayName: "乙" });
+    const third = accounts.createPrincipal(owner, { displayName: "丙" });
+    const invitation = accounts.issueInvitation(owner, {
+      role: "viewer",
+      targetWorkspaceId: "w1",
+      maxUses: 2,
+    });
+    const input = {
+      invitationId: invitation.invitationId,
+      token: invitation.token,
+    };
+    accounts.acceptInvitation(member(first.principalId), input);
+    accounts.acceptInvitation(member(first.principalId), input);
+    accounts.acceptInvitation(member(first.principalId), input);
+    expect(
+      accounts.listInvitations(owner).find((row) => row.maxUses === 2)?.uses,
+    ).toBe(1);
+    accounts.acceptInvitation(member(second.principalId), input);
+    // 名额用满：第三个人进不来，但用过的人再来仍然成功。
+    expect(() =>
+      accounts.acceptInvitation(member(third.principalId), input),
+    ).toThrow(IdentityError);
+    expect(
+      accounts.acceptInvitation(member(second.principalId), input).role,
+    ).toBe("viewer");
+    expect(accounts.listGrants(owner, "w1")).toHaveLength(2);
+  });
+
+  it("过期与作废之后接不了，maxUses 越界是 invalid", () => {
+    const { accounts, owner } = harness();
+    const person = accounts.createPrincipal(owner, { displayName: "甲" });
+    const expiring = accounts.issueInvitation(owner, {
+      role: "viewer",
+      targetWorkspaceId: "w1",
+      maxUses: 3,
+      ttlMs: 60_000,
+    });
+    const revoked = accounts.issueInvitation(owner, {
+      role: "viewer",
+      targetWorkspaceId: "w1",
+      maxUses: 3,
+    });
+    accounts.acceptInvitation(member(person.principalId), {
+      invitationId: revoked.invitationId,
+      token: revoked.token,
+    });
+    accounts.revokeInvitation(owner, revoked.invitationId);
+    const other = accounts.createPrincipal(owner, { displayName: "乙" });
+    expect(() =>
+      accounts.acceptInvitation(member(other.principalId), {
+        invitationId: revoked.invitationId,
+        token: revoked.token,
+      }),
+    ).toThrow(IdentityError);
+    clock += 60_001;
+    expect(() =>
+      accounts.acceptInvitation(member(other.principalId), {
+        invitationId: expiring.invitationId,
+        token: expiring.token,
+      }),
+    ).toThrow(IdentityError);
+    for (const maxUses of [0, 1001, 1.5, -1]) {
+      expect(() =>
+        accounts.issueInvitation(owner, {
+          role: "viewer",
+          targetWorkspaceId: "w1",
+          maxUses,
+        }),
+      ).toThrow(IdentityError);
+    }
+  });
+
+  it("不带 maxUses 仍是一次性", () => {
+    const { accounts, owner } = harness();
+    const invitation = accounts.issueInvitation(owner, {
+      role: "viewer",
+      targetWorkspaceId: "w1",
+    });
+    expect(invitation.maxUses).toBeNull();
+    expect(accounts.listInvitations(owner)[0]).toMatchObject({
+      maxUses: null,
+      uses: 0,
+    });
+  });
+
+  it("一次性邀请被兑换：uses 同步加一、记下是谁，与 maxUses 同一口径；撤销不算使用", () => {
+    const { accounts, owner, database } = harness();
+    const first = accounts.createPrincipal(owner, { displayName: "甲" });
+    const second = accounts.createPrincipal(owner, { displayName: "乙" });
+    const invitation = accounts.issueInvitation(owner, {
+      role: "viewer",
+      targetWorkspaceId: "w1",
+    });
+    const input = {
+      invitationId: invitation.invitationId,
+      token: invitation.token,
+    };
+    accounts.acceptInvitation(member(first.principalId), input);
+    const used = () =>
+      accounts
+        .listInvitations(owner)
+        .find((row) => row.invitationId === invitation.invitationId);
+    expect(used()).toMatchObject({ maxUses: null, uses: 1 });
+    expect(used()?.consumedAtMs).toBeGreaterThan(0);
+    expect(
+      database
+        .prepare(
+          "SELECT principal_id FROM identity_invitation_uses WHERE invitation_id = ?",
+        )
+        .all(invitation.invitationId),
+    ).toEqual([{ principal_id: first.principalId }]);
+    // 第二个人兑换不动，计数不变。
+    expect(() =>
+      accounts.acceptInvitation(member(second.principalId), input),
+    ).toThrow(IdentityError);
+    expect(used()?.uses).toBe(1);
+
+    const revoked = accounts.issueInvitation(owner, {
+      role: "viewer",
+      targetWorkspaceId: "w1",
+    });
+    accounts.revokeInvitation(owner, revoked.invitationId);
+    const row = accounts
+      .listInvitations(owner)
+      .find((one) => one.invitationId === revoked.invitationId);
+    expect(row?.uses).toBe(0);
+  });
+});
+
 describe("口令与登录", () => {
   it("设了口令就能登录，错口令是 401", () => {
     const { accounts, service, store, owner } = harness();

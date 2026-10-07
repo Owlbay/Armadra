@@ -378,6 +378,8 @@ async function sessionOfFrame(
   if (children.some((child) => child.targetId === frameId)) {
     return children.find((child) => child.targetId === frameId)?.sessionId;
   }
+  // A cross-origin iframe that stopped answering: not the page's frame.
+  if (session.childTargetIds().has(frameId)) return undefined;
   const main = (await session.send("Page.getFrameTree", {})) as {
     frameTree?: FrameTree;
   };

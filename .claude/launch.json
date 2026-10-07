@@ -59,6 +59,39 @@
       ],
       "port": 1423,
       "url": "http://localhost:1423"
+    },
+    {
+      "$comment": "界面审查用：隔离数据目录，不碰本机真实数据。",
+      "name": "core-ui-review",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "apps/desktop/out/core/main.js",
+        "--listen",
+        "tcp:127.0.0.1:43125"
+      ],
+      "env": {
+        "ARMADRA_DATA_DIR": "/tmp/armadra-ui-review"
+      },
+      "port": 43125,
+      "url": "http://127.0.0.1:43125"
+    },
+    {
+      "name": "web-ui-review",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@armadra/web",
+        "dev",
+        "--port",
+        "1424",
+        "--host",
+        "localhost"
+      ],
+      "env": {
+        "ARMADRA_DATA_DIR": "/tmp/armadra-ui-review"
+      },
+      "port": 1424,
+      "url": "http://localhost:1424"
     }
   ]
 }

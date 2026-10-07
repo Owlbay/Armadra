@@ -25,7 +25,8 @@ export function SignalDot({
           "pointer-events-none absolute top-[5px] right-[5px] ring-2 ring-[var(--panel)]",
       )}
       style={{
-        background: tone === "attention" ? "var(--danger)" : "var(--brand)",
+        background:
+          tone === "attention" ? "var(--status-attention)" : "var(--brand)",
       }}
     />
   );

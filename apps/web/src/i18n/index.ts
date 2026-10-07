@@ -1,3 +1,6 @@
+// 桌面壳的 tsconfig 也会类型检查这个文件（托盘文案经 `./desktop` 引到这里），
+// 它没有 Vite 的环境类型；`import.meta.env.DEV` 要靠这一行认出来。
+/// <reference types="vite/client" />
 import { account } from "./account";
 import { agent } from "./agent";
 import { agentInspect } from "./agent-inspect";
@@ -5,6 +8,7 @@ import { automation } from "./automation";
 import { browser } from "./browser";
 import { canvas } from "./canvas";
 import { collab } from "./collab";
+import { connection } from "./connection";
 import { commands } from "./commands";
 import { executionHosts } from "./execution-hosts";
 import { errors } from "./errors";
@@ -44,6 +48,22 @@ import { editorFiles } from "./editor-files";
 import { terminal } from "./terminal";
 import { updates } from "./updates";
 import { usage } from "./usage";
+import { acp } from "./acp";
+import { workflow } from "./workflow";
+import { realtime } from "./realtime";
+import { gateway } from "./gateway";
+import { security } from "./security";
+import { push } from "./push";
+import { credentials } from "./credentials";
+import { mobileConnect } from "./mobile-connect";
+import { coordinator } from "./coordinator";
+import { forge } from "./forge";
+import { mail } from "./mail";
+import { diagnostics } from "./diagnostics";
+import { passwordReset } from "./password-reset";
+import { remote } from "./remote";
+import { links } from "./links";
+import { showcase } from "./showcase";
 
 export type Locale = "zh-CN" | "en";
 
@@ -104,11 +124,30 @@ export const MESSAGE_MODULES = {
   commands,
   format,
   collab,
+  connection,
   meta,
   updates,
   usage,
   desktop,
   errors,
+  acp,
+  workflow,
+  realtime,
+  gateway,
+  security,
+  push,
+  credentials,
+  "mobile-connect": mobileConnect,
+  coordinator,
+  forge,
+  mail,
+  diagnostics,
+  "password-reset": passwordReset,
+  remote,
+  links,
+  // 设计展示页只在开发构建里存在：生产构建里 `import.meta.env.DEV` 是字面量
+  // false，这一项连同 `./showcase` 的文案一起被摇掉，不进产物。
+  ...(import.meta.env.DEV ? { showcase } : {}),
 } satisfies Record<string, MessageModule>;
 
 const modules: MessageModule[] = Object.values(MESSAGE_MODULES);

@@ -18,6 +18,7 @@ export const RULES = [
   "root-allowlist",
   "file-size",
   "migrations",
+  "pinned-versions",
 ];
 
 // ------------------------------------------------------------------ helpers
@@ -341,6 +342,94 @@ function checkMigrations(context, problems) {
   }
 }
 
+// ------------------------------------------------------- pinned-versions
+
+const DEPENDENCY_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "optionalDependencies",
+];
+
+/** `@orpc/*` 这类简写：`*` 只匹配一段包名，不跨 `/`。 */
+function packageGlob(pattern) {
+  const body = pattern
+    .split("*")
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[^/]+");
+  return new RegExp(`^${body}$`);
+}
+
+/** 锁文件 `packages:` 段里解析出的 `名字@版本`（只读段首的键，不解析 YAML）。 */
+function lockedPackages(text) {
+  const start = text.search(/^packages:\s*$/m);
+  if (start === -1) return [];
+  const rest = text.slice(start).split(/^snapshots:\s*$/m)[0];
+  const found = [];
+  for (const match of rest.matchAll(
+    /^ {2}'?((?:@[^@/\s']+\/)?[^@\s']+)@([^\s(':]+)/gm,
+  )) {
+    found.push({ name: match[1], version: match[2] });
+  }
+  return found;
+}
+
+/**
+ * 上游锁版（工程规范化 §5、F15）：匹配的包在每个 package.json 里必须写精确版本、
+ * 不得是预发布（beta / rc …），且整棵树——清单与锁文件——只允许同一个版本。
+ * 一个都没有时规则直接通过。
+ */
+function checkPinnedVersions(context, problems) {
+  for (const rule of context.rules.pinnedVersions ?? []) {
+    const matcher = packageGlob(rule.packages);
+    const seen = [];
+    for (const path of context.files) {
+      if (path !== "package.json" && !path.endsWith("/package.json")) continue;
+      if (path.includes("/node_modules/")) continue;
+      const text = readIfPresent(context.root, path);
+      if (text === null) continue;
+      const manifest = JSON.parse(text);
+      for (const field of DEPENDENCY_FIELDS) {
+        for (const [name, spec] of Object.entries(manifest[field] ?? {})) {
+          if (!matcher.test(name)) continue;
+          const where = `${path} ${field}.${name}`;
+          if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(spec)) {
+            problems.push(
+              `${rule.packages} 必须写精确版本：${where} = "${spec}"`,
+            );
+            continue;
+          }
+          seen.push({ where, version: spec });
+        }
+      }
+    }
+    const lockPath = rule.lock ?? "pnpm-lock.yaml";
+    const lock = readIfPresent(context.root, lockPath);
+    if (lock !== null) {
+      for (const { name, version } of lockedPackages(lock)) {
+        if (matcher.test(name))
+          seen.push({ where: `${lockPath} ${name}`, version });
+      }
+    }
+    for (const { where, version } of seen) {
+      if (version.includes("-")) {
+        problems.push(
+          `${rule.packages} 不得用预发布版本：${where} = "${version}"`,
+        );
+      }
+    }
+    const versions = [...new Set(seen.map((entry) => entry.version))].sort();
+    if (versions.length > 1) {
+      const detail = seen
+        .map(({ where, version }) => `${where}@${version}`)
+        .join("、");
+      problems.push(
+        `${rule.packages} 版本不一致（${versions.join(" / ")}）：${detail}`,
+      );
+    }
+  }
+}
+
 const CHECKS = {
   "docs-index": checkDocsIndex,
   links: checkLinks,
@@ -349,6 +438,7 @@ const CHECKS = {
   "root-allowlist": checkRootAllowlist,
   "file-size": checkFileSize,
   migrations: checkMigrations,
+  "pinned-versions": checkPinnedVersions,
 };
 
 /** 对一个仓库根跑规则，返回问题列表；空列表表示通过。 */

@@ -1,3 +1,4 @@
+import { scoped } from "../../sources/scope";
 import * as React from "react";
 import { MiniMap, Panel, useReactFlow } from "@xyflow/react";
 import type { MiniMapNodeProps } from "@xyflow/react";
@@ -40,7 +41,7 @@ export const MINIMAP_COLORS = {
   /** working：陶土色。 */
   working: "var(--agent-working)",
   /** needs-you。 */
-  attention: "var(--danger)",
+  attention: "var(--status-attention)",
   /** 未读。 */
   unread: "var(--brand)",
   /** 无状态的节点、白板对象与分组：一块低对比的底。 */
@@ -167,7 +168,7 @@ export function Minimap() {
   const statuses = useAgentStatusStore((state) => state.statuses);
 
   const glowOf = React.useCallback(
-    (nodeId: string) => agentHeaderState(statuses[nodeId]).glow,
+    (nodeId: string) => agentHeaderState(statuses[scoped(nodeId)]).glow,
     [statuses],
   );
 

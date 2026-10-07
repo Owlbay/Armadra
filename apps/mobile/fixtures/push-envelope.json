@@ -1,0 +1,13 @@
+{
+  "privateKey": "UBQDRl3uxtxGj9VAa4wxSxK20lfcvtFBrpMzO5u-Ckg",
+  "publicKey": "Mb0wddPMedULBQlg6Q4uAX0WLJV1JM94c8COF_6jnWM",
+  "plaintext": "{\"v\":1,\"kind\":\"approval\",\"title\":\"支付服务\",\"body\":\"Claude Code 等待审批\",\"url\":\"armadra://w/ws_1/n/node_1\",\"tag\":\"approval:p1\"}",
+  "envelope": {
+    "v": 1,
+    "alg": "x25519-hkdf-sha256-a256gcm",
+    "epk": "GmZYgGPwX4h6FxVe9VcRDOIG_NO2rZDNakdHONTblyY",
+    "salt": "EDXNS6H3T-UZSEJPcj77cA",
+    "iv": "7KihqaqwHmht_ZlE",
+    "ct": "mI3kOg1okl7bP5gPDOfe9v76Vm-aHFDk4DhzXBRkZ5FKYEsp9PirsZDgqyKnIY2M9vtttb1PHd29l1hBZ-m8y7mdn_OBAxnefEwD1DiNwE5FsHlIhZ_igViniXG4ifQggogR7-mQ247Lpm4L9dy2-Ozxqs3ufc7HCBTHzMyH2xUHypGNFRsbL1SEY512FffBFbkgEaoCU6g"
+  }
+}

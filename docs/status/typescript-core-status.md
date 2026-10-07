@@ -2,23 +2,25 @@
 
 > 本文只记已验证的事实：跑过的命令、量到的数字、当场看见的结论。目标设计在 [TypeScript Core](../design/typescript-core.md)，不在这里。
 > 每条结论后面跟的是复现它的命令。
+> 本文各节是当时的记录，不回改；之后的补全（G0–G4）与 G5 改动逐包记在[补全进度](./completion-progress.md)，现状以[架构](../guides/architecture.md)为准。下文个别节已被后续工作取代的，在节首注明。
 
 ## 1. 阶段状态
 
-| 阶段   | 范围                                                                                                                                                                                                                                                                                                                                    | 状态                                                     |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| **R0** | core 进程骨架、三种监听、`/health`、SQLite 账本                                                                                                                                                                                                                                                                                         | 已合入（`6f2207dd4`）                                    |
-| **R1** | 画布 / 工作空间 / 设置 / 身份、统一库迁移                                                                                                                                                                                                                                                                                               | 已合入（`e7cbaf38c`）                                    |
-| **R2** | 终端域：tmux 纵切、direct / sessionHost、SSH、GC                                                                                                                                                                                                                                                                                        | 已合入（`00d551f71`）                                    |
-| **R3** | Hook 面、Agent / 协作、TS `armadra-hook`                                                                                                                                                                                                                                                                                                | 已合入（`00d551f71`）                                    |
-| **R4** | Git、文件 / 导入导出、定时与事件 outbox                                                                                                                                                                                                                                                                                                 | 已合入（`9131d4f59`）                                    |
-| **R5** | 语言服务、GitHub / 资源 / 用量、浏览器授权与租约                                                                                                                                                                                                                                                                                        | 已合入（`9131d4f59`）                                    |
-| **R6** | 服务器壳（R6a）、账号与共享（R6b）、远程浏览器（R6c）、Windows session-host（R6d）                                                                                                                                                                                                                                                      | 全部已合入                                               |
-| R7a    | GitHub 与自动化改打 JSON 面（R7 的前置）                                                                                                                                                                                                                                                                                                | 已合入                                                   |
-| R7c    | 页面的身份 / 会话 / 事件流 / 更新脱离 `host-client`                                                                                                                                                                                                                                                                                     | 已合入                                                   |
-| R7d    | 收尾：删 Rust / Go / proto 与 `/rpc/` 面，CI、规则、打包与文档收口                                                                                                                                                                                                                                                                      | 全部已合入；发布干跑六目标 + 公证 + 汇总全绿（§17、§18） |
-| 补齐轮 | 2026-09-25/26 两批：远端执行主机 Worker 与补齐（§34、§44）、冷启动与防休眠（§35）、依赖编排（§36）、编辑器节点（§37）、搜索 / 文件树 / 语言授权 / Projects（§38）、浏览器与状态徽标（§39）、快捷键与更新器（§40）、在线设备与编辑租约（§41）、账号与共享（§42）、节能休眠（§43）、零散缺口（§45）                                       | 全部已合入                                               |
-| 第三批 | 2026-09-26：端到端探针与打包版复跑（§47）、Agent 协作 / 界面 / 服务器壳与远端的端到端（§48–§50）、画布内注入（§51）与远端注入 / 交接 / 分块（§55）、浏览器 Agent 工具补强（§52、§59）、三平台 CI 与 Windows 启动行 / `.cmd` 绕过 / `.exe` 启动器（§53、§54、§57、§61）、成员权限与组管理员（§56）、界面收尾（§58）、真实环境复验（§60） | 全部已合入                                               |
+| 阶段     | 范围                                                                                                                                                                                                                                                                                                                                    | 状态                                                     |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| **R0**   | core 进程骨架、三种监听、`/health`、SQLite 账本                                                                                                                                                                                                                                                                                         | 已合入（`6f2207dd4`）                                    |
+| **R1**   | 画布 / 工作空间 / 设置 / 身份、统一库迁移                                                                                                                                                                                                                                                                                               | 已合入（`e7cbaf38c`）                                    |
+| **R2**   | 终端域：tmux 纵切、direct / sessionHost、SSH、GC                                                                                                                                                                                                                                                                                        | 已合入（`00d551f71`）                                    |
+| **R3**   | Hook 面、Agent / 协作、TS `armadra-hook`                                                                                                                                                                                                                                                                                                | 已合入（`00d551f71`）                                    |
+| **R4**   | Git、文件 / 导入导出、定时与事件 outbox                                                                                                                                                                                                                                                                                                 | 已合入（`9131d4f59`）                                    |
+| **R5**   | 语言服务、GitHub / 资源 / 用量、浏览器授权与租约                                                                                                                                                                                                                                                                                        | 已合入（`9131d4f59`）                                    |
+| **R6**   | 服务器壳（R6a）、账号与共享（R6b）、远程浏览器（R6c）、Windows session-host（R6d）                                                                                                                                                                                                                                                      | 全部已合入                                               |
+| R7a      | GitHub 与自动化改打 JSON 面（R7 的前置）                                                                                                                                                                                                                                                                                                | 已合入                                                   |
+| R7c      | 页面的身份 / 会话 / 事件流 / 更新脱离 `host-client`                                                                                                                                                                                                                                                                                     | 已合入                                                   |
+| R7d      | 收尾：删 Rust / Go / proto 与 `/rpc/` 面，CI、规则、打包与文档收口                                                                                                                                                                                                                                                                      | 全部已合入；发布干跑六目标 + 公证 + 汇总全绿（§17、§18） |
+| 补齐轮   | 2026-09-25/26 两批：远端执行主机 Worker 与补齐（§34、§44）、冷启动与防休眠（§35）、依赖编排（§36）、编辑器节点（§37）、搜索 / 文件树 / 语言授权 / Projects（§38）、浏览器与状态徽标（§39）、快捷键与更新器（§40）、在线设备与编辑租约（§41）、账号与共享（§42）、节能休眠（§43）、零散缺口（§45）                                       | 全部已合入                                               |
+| 第三批   | 2026-09-26：端到端探针与打包版复跑（§47）、Agent 协作 / 界面 / 服务器壳与远端的端到端（§48–§50）、画布内注入（§51）与远端注入 / 交接 / 分块（§55）、浏览器 Agent 工具补强（§52、§59）、三平台 CI 与 Windows 启动行 / `.cmd` 绕过 / `.exe` 启动器（§53、§54、§57、§61）、成员权限与组管理员（§56）、界面收尾（§58）、真实环境复验（§60） | 全部已合入                                               |
+| 第一部分 | 2026-10-02：后续规划第一部分（CLI 协作）——另外四种 CLI 的本地历史适配器、投递终态回执、历史数据可用性、场景 10，以及收尾批次的投递画面门（§62）                                                                                                                                                                                         | 主体已合入（PR #9，`1d01d314`）；收尾批次见 §62.3        |
 
 ## 2. R2 纵切：只有 tmux 后端的建 / 附 / 输入 / 断
 
@@ -470,6 +472,8 @@ R7 要删 `proto/`、`packages/protocol`、`packages/host-client` 与 core 的 `
 
 ### 15.4 更新：发布侧暂时没有来源
 
+> 后续：G5-17 起设置页的「检查」经壳的 `updates:check` 问发布索引，`noReleaseSource` 只在壳没有发布源时出现（补全进度 G5-17）。
+
 `host/updates-session.ts`（host-client 的 updates 面）删除。桌面壳那一半照常：staged 包的下载、安装、取消与重启报告都走 `apps/desktop/src/main/updates/**` 的桥。发布侧——「有没有新版本」——**没有来源**：R5 计划里的 `core/updates` 没有写，而 Go Host 的那条面在 `ARMADRA_CORE=ts` 下本来就连不上。所以 `updates/use-update-state.ts` 把发布侧固定报 `blocked: noReleaseSource`，`mergeUpdatesState` 的那条规则照旧成立：**任何一边没回答，都不写「已是最新」**。补上 `core/updates` 之后这里换一个真的来源即可，合并逻辑一行不动。
 
 Go Host 的「对外服务」开关（`/host/external-service`）与它的设置面板一并删除：那是 Host 自己的一条管理路由，服务器壳由运维用 `armadra-server` 起，页面不再是它的开关。
@@ -497,6 +501,8 @@ R7 要删 `proto/`、`packages/protocol`、`packages/host-client` 与 core 里�
 **摘要换了一个数。** `configSha256` 与 `command_sessions.launch_sha256` 从「protobuf 字节的 SHA-256」改成「规范 JSON（键排序、无空白、UTF-8）的 SHA-256」。直接后果是**已经激活的计划要重新授权一次**；产品未发布，这是可接受的代价，换来的是摘要不再依赖一份 protobuf 序列化器的字段顺序。`convert-legacy.test.ts` 有一条用例就是断言这个数**确实变了**，而不是希望它没变。
 
 ### 16.2 三张面上的认证多一条
+
+> 后续：「明文回环 + 无凭据 = 本机主人」自 0.2.0 起只在显式打开 `loopbackAnonymousOwner` 的裸 core 上成立；桌面壳的页面与托盘都带自己的会话（补全进度 G5-24、G5-28，契约 §3.2）。
 
 `/api/github/*` 与 `/api/automations/*` 本来只认会话凭据。问题是页面经 `apps/web/src/api/request.ts` 打这一面，而**桌面壳的会话是原生的**：密钥在壳里，既不发 Cookie 也到不了那个 `fetch`（`HostIdentityClient` 只会发 `/rpc/` 的 protobuf 帧，令牌是它的私有字段）。
 
@@ -2582,7 +2588,7 @@ H04 的前置（设计 `design/canvas-platform-design.md` §3 H04、`design/serv
 
 ### 60.5 发现但没有处理
 
-- 自定义 Agent（`custom:`，底层是 Claude）拿不到画布审批：`terminal/install.ts` 给 `permissionWaitEnvironment` 传的是原始 id，只认 `claude`。本节没有走这条路径，已另开任务。
+- **已修（9ba14061）**：自定义 Agent（`custom:`，底层是 Claude）拿不到画布审批：`terminal/install.ts` 给 `permissionWaitEnvironment` 传的是原始 id，只认 `claude`。本节没有走这条路径，已另开任务。
 - 本机操作员真实 HOME 里各 CLI 的旧全局安装在 16:12 已被迁走（`~/.copilot/hooks/armadra.json.armadra-backup-20260926081202` 等，`~/.claude/skills/armadra`、`~/.codex/skills/armadra` 已不在，`~/.codex/hooks.json` 为空）。复查过：本节的探针环境不会碰真实 HOME（同一环境起 core、假 HOME 里造旧安装，一个都没动），打包版冒烟与改过的 `core-terminal-packaged` 都用临时 HOME；迁移出自本机上别的进程（其他任务或操作员自己的 Armadra），记在这里。
 - 会话宿主后端（Windows）的 capture 仍是回放去转义，只多了右移与跳列的空格；要读成屏幕得接上 `replay-screen.ts`，留给 Windows 那一侧。
 
@@ -2630,3 +2636,72 @@ H04 的前置（设计 `design/canvas-platform-design.md` §3 H04、`design/serv
 
 - C# 启动器本机（macOS）编不了，只在 Windows CI 上真正编译与运行；首次跑前没有实机结果。
 - Git Bash 会把形如 `/c/...` 的参数改写成 Windows 路径，这是 MSYS 自己的行为，正文以 `/` 开头时同样建议走文件或标准输入；技能里没单独写。
+
+## 62. 后续规划第一部分：另外四种 CLI 的本地历史、投递终态回执、历史数据可用性、场景 10，以及投递画面门（2026-10-02）
+
+设计在 [CLI 接入、通信与共享上下文](../design/cli-collaboration.md)；主体随 PR #9 合入 main（`1d01d314`），本节末尾的收尾批次在分支 `fix/part1-followups`。
+
+### 62.1 交付了什么
+
+| 批次 | 内容                                                                                                                                                            | 依据                                                      |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| H0   | 新建 `core/history/`，Claude 与 Codex 搬入，行为不变（`history.test.ts` 对拆分前逐字一致）                                                                      | `96d740ed`、`320c540a`                                    |
+| H1   | Pi / OMP 适配器：会话索引、按会话 id 与 cwd + 启动时间定位、转录归一化、逐行成本                                                                                | `9241254e`；`history/pi.ts`                               |
+| H2   | OpenCode 适配器：只读打开 SQLite，按 `time_created` 加同一毫秒序号增量读，快照式成本                                                                            | `3954bea2`、`3f2f8ac9`、`23ee9c08`；`history/opencode.ts` |
+| H3   | Copilot 适配器；成本行加 `unit` 与 `requests`，Copilot 按高级请求数单列，`totals` 只合并 token                                                                  | `32b9df9f`、`6e6b2244`；契约 §12.1                        |
+| R1   | 投递终态回执（迁移 0029）：过期、目标侧拒收、出队时门链拒绝写进发送方收件箱，不计唤醒与容量；投递浮层加「我发出的」                                             | `5afd4a09`、`82e57d92`、`d2aff113`；契约 §12.3            |
+| M1   | `/api/agents` 每行补 `history`（索引 / 成本 / 转录四种取值），集成页三个徽标                                                                                    | `7bb46136`、`b80f6d31`；契约 §12.2                        |
+| 定位 | 交接、转录面板、改名建议与连线读取经注册表定位，补传终端 cwd 与启动时间                                                                                         | `e33d132c`                                                |
+| E1   | `agent-e2e` 场景 10「六家互读」；真跑修掉两处：交接对 Pi / OMP / Copilot 的转录摘录为空（`f36b7311`），Pi 与 OMP 根重合时同一会话在索引里出现两次（`97ec9776`） | `d4d8b755`；`tools/probes/README.md`                      |
+| X1   | 多账号调研：六家都能整目录切换，也都能只靠环境变量换凭据；第二阶段只做按节点注入凭据环境变量，先 Claude 与 Copilot                                              | `177117cc`；设计 §7                                       |
+
+### 62.2 实测
+
+- 场景 10（`node tools/probes/agent-e2e.mjs --only 10`，2026-10-02）：本机 Claude Code 2.1.286、Codex 0.159.3、Pi 0.99.2 三家交互式 TUI 通过，84 秒；OpenCode / OMP / Copilot 本机未安装，记 skipped。设计 §9 E1。
+- 首跑踩中一处产品问题：操作员缺省权限为 `bypassPermissions` 时，Claude 起来先弹「Make auto mode your default permission mode?」（缺省为是），Hook 照样报开场，首投放行门把环上那条 `send` 的正文加回车打进去，回车替人确认了对话框，`~/.claude/settings.json` 的 `defaultMode` 被改成 `auto`（已手动改回）。场景 10 当时改为以「自动编辑」起 Claude 绕开，收尾单独比对 `permissions.defaultMode`；产品侧的修复见 62.3。
+
+### 62.3 收尾批次：投递画面门、探针的 Claude 节点
+
+1. **画面门**（[投递设计](../design/agent-delivery.md) §4.3「画面门」）。`attempt()` 在租约与半截输入门之后、认领之前经终端桥 `capture` 取目标最后 60 行画面，交给纯函数 `agent/screen-gate.ts::judgeScreen`：画面上有已知对话框的特征行、且在最后一处提示符之后，排队 `TARGET_NOT_AT_PROMPT`（`--no-queue` 拒绝）；按首投放行门放行的那一次另要求看得见提示符。登记的特征：Claude 三个（目录信任、bypass 警告、把 auto 设为缺省，文字取自安装包字符串）与提示符（单独一个 `❯`、`? for shortcuts`、`(shift+tab to cycle)`，取自本机画面）；Codex 两个（目录信任、升级提示，取自本机画面）与提示符（`›` 后面不是编号）；Copilot 一个（目录信任，依据官方文档，未核实）。Pi / OMP / OpenCode 不登记，整条门不跑。队头是这个理由时出队泵照样 2 秒快探（人在终端里答掉对话框不会有上报）；过期回执在码后补一句人话。页面错误文案中英各一条。
+2. **探针**：`claude-a`（场景 2、4、8 往里投递）改为以「自动编辑」起，场景 2 断言首起、4 与 8 断言接回的进程都带 `--permission-mode acceptEdits`。场景 7 本来就以「自动编辑」起（`claude-ask`），`node -e` 写文件在 acceptEdits 下仍要审批。
+
+验证：
+
+- 单测：`agent/screen-gate.test.ts` 12 条（各家对话框与提示符的自编画面、对话框选项不算提示符、答过的对话框留在历史里、提示符之后又弹对话框、滚出窗口、首投空白、capture 失败）；`collab/send-screen.test.ts` 8 条（首投停在对话框上排队、答掉后快探投出；Hook 报过空闲照样拦；`--no-queue` 拒绝并发事件；首投还没画出提示符；首投见提示符投出；平常投递只拦已知对话框且每次取一次画面；没有画面特征的 CLI 不取画面；过期回执的说明）。`session-start`、`silent-start`、`first-task` 三个文件的夹具补上提示符画面。
+- `node tools/probes/agent-e2e.mjs --only 7`（tmux）：13 项全过，审批仍触发（allow 写出文件、deny 没写）；控制台错误 0，操作员配置未改动，`permissions.defaultMode` 前后都是 `bypassPermissions`。场景 2、4、8 与全量没有重跑（花真实额度）。
+- `pnpm libs:build && pnpm -r --if-present test`：shared 29 文件 284 条；server 10 文件 85 条；desktop 290 文件通过、2 跳过（3419 条通过、14 跳过），live 配置 2 文件 3 条，脚本用例 43 条（42 通过、0 失败）；web 290 文件 2825 条。全部通过。
+
+### 62.4 没做 / 已知
+
+- 多账号第二阶段待 §7.4 的 T1–T9 用真实账号实测后再实施，代码未动。
+- 放开「SSH 终端里的 Agent 限同一执行主机」（设计 §6）未做，`handoff/store.ts` 仍返回 501。
+- OpenCode、OMP、Copilot 的交互式 TUI 没有实跑；OMP 是否上报 `transcript_path` 待验证。Copilot 的对话框特征未在本机核实，三家的提示符特征都没有登记（首投不要求提示符）。
+- 画面门只认登记过的对话框；CLI 改版换了文字就认不出，没登记的对话框照旧可能被答掉。`schedule/dispatch.ts` 的计划投递有自己的门链，没有接画面门。
+
+## 63. 画布启动器：页面经 `launcher` 拼行、集成页去掉信任记录、场景 5 改为经启动器（2026-10-02）
+
+> 后续：页面对旧 core 的 `launchWords` / `launchArgs` 退路与 `LegacyLaunchWord` 已在 G5-17 删除（契约 §13.1）。
+
+[画布启动器](../design/canvas-launcher.md) §17 的 WP5，叠在 WP1（启动器生成与注入）、WP2（启动行出口与契约 §13）之上。
+
+### 63.1 改了什么
+
+- 页面 `web/agent/launch.ts`：`GET /api/agents` 的行有 `launcher` 时，程序换成启动器，原来的程序（用户的启动命令、`launchTarget.program`、`resolvedPath`、`launchCmd` 中先有的那个）与 `launchTarget` 的前置词作它的参数，行上没有注入；只对没有 `launcher` 的旧 core 退回 `launchWords` / `launchArgs`，两者都没有就是裸行；SSH 节点不变。`canvas-launch.test.ts` 的结构性用例补上「页面读 `?.launcher`」。
+- 集成页：不再画 `globalWrites`（`integration.globalWrite` 中英一起删）；`launcherWarning` 画成「注入受限」徽标、原因在悬停提示里；「已清理全局安装」把迁移第二步清掉的 Codex 会话信任记录与备份一并算进去。
+- 探针：场景 5 按设计 §13.3 重写；装配处改为确认 Claude / Codex 的启动器指向临时数据目录；场景 6 经启动器起四个 CLI，并断言节点终端环境有 `ARMADRA_SHIMS`、没有 `OPENCODE_CONFIG_*` / `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`。
+
+### 63.2 实测
+
+`pnpm --filter @armadra/desktop build && node tools/probes/agent-e2e.mjs <输出目录> --only 1,4,5`（2026-10-02，本机 macOS，tmux 后端，Claude Code 2.1.287、Codex 0.160.0）：三个场景全过，59 项，206 秒；控制台错误 0，操作员配置未改动。
+
+- 场景 5（28 项）：两行的 `launcher` 都是 `<临时数据目录>/integration/run/<cli>`，行上没有 `launchWords` / `launchArgs`；Codex 的 `launchArgs` 以 `--dangerously-bypass-hook-trust` 开头、八个 `-c hooks.*`（SessionStart … SubagentStop）；`globalWrites` 为空；迁移记录 `version: 2`、`sessionTrust.removed` 为空。画布内 `<launcher> codex exec --skip-git-repo-check "<prompt>"`：注入落在 prompt 之后仍生效，会话记录里有 `[Armadra canvas rules r16]` 与技能路径，stderr 有旗标警告，Hook 打到 core；去掉 `ARMADRA_NODE_ID` 重跑同一行、裸程序带节点身份，两遍都没有画布规则、没有旗标、Hook 没打到 core。只放了 `auth.json` 的新 `CODEX_HOME` 三遍跑完没有 `config.toml`。Claude 同样三遍（`-p --output-format stream-json`，prompt 在注入之前）：画布内 init 有 `armadra` 插件（`armadra@inline`，版本 416）与 `armadra:armadra` 技能、Hook 打到 core；另两遍都没有。
+- 场景 1（14 项）：页面敲的启动行经启动器，两个 Codex 起到提示符，首投 delivered + observed-quiet，Hook 报 working → done；TUI 的旗标警告不挡首投。
+- 场景 4（17 项）：休眠前记下的 CLI 进程命令行是启动器 exec 之后的 `claude … --settings …` 与 `codex --dangerously-bypass-hook-trust …`（启动器不留中间进程）；唤醒的 `--resume` / `resume` 行经启动器，答出 418，provider 会话 id 不变。
+- 第一次跑场景 1、4 失败：新 worktree 里 node-pty 的 `spawn-helper` 没有执行位，页面挂终端时 `posix_spawnp failed`；补上执行位后重跑如上。与本改动无关。
+- 单测：`pnpm --filter @armadra/web test` 290 文件 2834 条；`pnpm --filter @armadra/web typecheck` 通过；`pnpm libs:build && pnpm --filter @armadra/desktop test` 292 文件通过、2 跳过（3452 条通过、14 跳过），live 配置 2 文件 3 条，脚本用例 43 条（42 通过、1 跳过）。
+
+### 63.3 没做 / 已知
+
+- 集成页没有「执行主机的 Worker 旧」提示：控制端只在 `RemoteIntegration.outdatedWorkers()` 里记着，集成状态与 API 都没有给出这一项。
+- 场景 6（另外四个 CLI）没有实跑：要各家的凭据；`tools/probes/packaged-smoke.mjs` 仍断言 Codex 信任记录写进临时 HOME，未随本方案改，打包版冒烟会在这一项上红。
+- Windows 上的页面行（`& '<run\codex.exe>' '<node.exe>' '<codex.js>' …`）只有单测，没有在 Windows 真机上经页面跑过。

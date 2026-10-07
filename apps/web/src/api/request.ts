@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { isServerShellServed, resolveRuntimeUrl } from "./runtime-url";
-import { ensureCsrf, forgetCsrf } from "./identity";
+import { localRuntime } from "./local-runtime";
 import { t } from "../app/preferences-store";
+import { type Source, currentSource } from "./source";
 
 /**
  * Runtime HTTP 客户端 —— docs/contracts/v3-agent-terminal-plan.md §7 / §15。
@@ -14,19 +14,12 @@ import { t } from "../app/preferences-store";
  *  3. 这里不做任何缓存 / 重试 / 状态；调用方自己决定。
  */
 
-const PAGE_URL =
-  typeof window === "undefined" ? "http://localhost/" : window.location.href;
-
-export const RUNTIME_URL = resolveRuntimeUrl(
-  import.meta.env.VITE_RUNTIME_URL,
-  PAGE_URL,
-);
-
-/** 这份页面是不是由服务器壳托管：那条路上写请求要带会话 CSRF 头。 */
-export const RUNTIME_VIA_SERVER_SHELL = isServerShellServed(
-  import.meta.env.VITE_RUNTIME_URL,
-  PAGE_URL,
-);
+/**
+ * 这份页面是不是由服务器壳托管：那条路上写请求要带会话 CSRF 头，界面也按它
+ * 收起桌面才有的几页。这是页面本身的事实，不随当前源变；发往哪台 core 由源
+ * 决定（`api/source.ts`、`sources/`）。
+ */
+export const RUNTIME_VIA_SERVER_SHELL = localRuntime().viaServerShell;
 
 /** 204 / 空响应体在进 schema 之前先变成 `undefined`。 */
 export const noContentSchema = z.unknown().transform(() => undefined);
@@ -48,8 +41,10 @@ export class RuntimeConnectionError extends Error {
  * 中文。所以认得出的码一律取这张表；认不出的才落到 `message`，那是最后一道
  * 兜底而不是常态。
  *
- * 大写那几个是 GitHub 面自己的码（`api/github.ts` 另有一层按用途的分类，
- * 那一层不受影响：它读的是 `code`，不是 `message`）。
+ * 大写那几个是 GitHub 面从前的拼法（契约 §41.1 已换成 snake_case）：再保留一个
+ * minor，让还没升级的 core 答的大写码照样认得，且与它对应的 snake_case 取同一句
+ * 话（`message-by-code.test.ts` 一一对着看）。`api/github.ts` 另有一层按用途的
+ * 分类，它读的是 `code`，不是 `message`。
  */
 const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   not_found: "error.notFound",
@@ -62,12 +57,63 @@ const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   not_implemented: "error.notImplemented",
   internal: "error.internal",
   unsupported: "error.unsupported",
+  unknown_outcome: "error.unknownOutcome",
   // 这一条有自己的那句话：要用户做的事不是「去装点什么」，是「工作区在别的
   // 机器上」——切换执行主机能解决它。
   unsupported_on_remote: "error.unsupportedOnRemote",
   git_execution_required: "gitRepo.executionRequired",
+  // 节点凭据（契约 §20）：起终端与凭据页的拒绝。
+  credential_not_found: "credentials.error.credential_not_found",
+  credential_mismatch: "credentials.error.credential_mismatch",
+  credential_kind_disabled: "credentials.error.credential_kind_disabled",
+  credential_unsupported_here: "credentials.error.credential_unsupported_here",
+  credential_backend_insecure: "credentials.error.credential_backend_insecure",
+  credential_unset: "credentials.error.credential_unset",
+  credential_unavailable: "credentials.error.credential_unavailable",
+  // 客户端源表与远程服务（契约 §33）。
+  credentials_invalid: "error.credentialsInvalid",
+  account_locked: "error.accountLocked",
+  fingerprint_mismatch: "error.fingerprintMismatch",
+  address_invalid: "error.addressInvalid",
+  address_https_only: "error.addressHttpsOnly",
+  address_plaintext_loopback_only: "error.addressPlaintextLoopbackOnly",
+  address_has_credentials: "error.addressHasCredentials",
+  fingerprint_invalid: "error.fingerprintInvalid",
+  source_unreachable: "error.sourceUnreachable",
+  source_unauthorized: "error.sourceUnauthorized",
+  source_offline: "error.sourceOffline",
+  cloud_account_unlinked: "error.cloudAccountUnlinked",
+  // 经中继到达的源（客户端包 §5）：页面自己的码与远程服务的拒绝。
+  source_mismatch: "remote.error.sourceMismatch",
+  account_disabled: "remote.error.accountDisabled",
+  // 云登录与登记（契约 §31）。
+  cloud_not_registered: "error.cloudNotRegistered",
+  cloud_assertion_invalid: "error.cloudAssertionInvalid",
+  cloud_assertion_replayed: "error.cloudAssertionInvalid",
+  cloud_already_registered: "error.cloudAlreadyRegistered",
+  cloud_issuer_mismatch: "error.cloudIssuerMismatch",
+  invitation_invalid: "error.invitationInvalid",
+  registration_token_invalid: "error.registrationTokenInvalid",
+  protocol_unsupported: "error.protocolUnsupported",
+  // 页面直接调远程服务（`/v1/*`，cloud-api §1）时它答的账号与源类的码。
+  rate_limited: "error.rateLimited",
+  unauthenticated: "error.unauthenticated",
+  session_expired: "error.remoteSessionExpired",
+  session_revoked: "error.remoteSessionExpired",
+  source_access_denied: "error.sourceAccessDenied",
+  source_revoked: "error.sourceRevoked",
+  limit_reached: "error.limitReached",
+  // 分享链接（契约 §33.7；手机与托管页面直接调远程服务时同样的码）。
+  link_invalid: "error.linkInvalid",
+  link_expired: "error.linkExpired",
+  link_exhausted: "error.linkExhausted",
+  link_secret_invalid: "error.linkSecretInvalid",
+  // ACP 适配器的安装（契约 §39.7）。
+  adapter_not_installable: "error.adapterNotInstallable",
+  adapter_already_installed: "error.adapterAlreadyInstalled",
+  npm_not_found: "error.npmNotFound",
   UNAUTHENTICATED: "error.unauthenticated",
-  PERMISSION_DENIED: "error.permissionDenied",
+  PERMISSION_DENIED: "error.forbidden",
   NOT_FOUND: "error.notFound",
   CONFLICT: "error.conflict",
   INVALID_ARGUMENT: "error.badRequest",
@@ -145,8 +191,18 @@ function unsafeMethod(method: string | undefined): boolean {
   return value !== "GET" && value !== "HEAD";
 }
 
-async function send(path: string, init: RequestInit | undefined, csrf: string) {
-  return fetch(`${RUNTIME_URL}${path}`, {
+/**
+ * Bearer 不在这里加：由源自己的 `fetch` 补上（本机源在桌面壳与原生 App 里由
+ * `installLocalTransport` 装凭据，契约 §3.2；远程源见 `sources/connection.ts`）；
+ * Cookie 会话的源这里只补双提交的 CSRF。
+ */
+async function send(
+  source: Source,
+  path: string,
+  init: RequestInit | undefined,
+  csrf: string,
+) {
+  return source.fetch(`${source.httpBase}${path}`, {
     ...init,
     headers: {
       ...(init?.body instanceof FormData
@@ -158,29 +214,53 @@ async function send(path: string, init: RequestInit | undefined, csrf: string) {
   });
 }
 
+/**
+ * 这个 403 是不是 Gateway 的 CSRF 拒绝（`code: "forbidden"`，或没有 code）。
+ * 带别的码的 403 已经到过处理器——例如托管平台的 `forge_scope`：远端拒了这次
+ * 写，换一枚令牌再发一遍就是把写重试了一次。
+ */
+export async function csrfRefusal(response: Response): Promise<boolean> {
+  if (typeof response.clone !== "function") return true;
+  const body = (await response
+    .clone()
+    .json()
+    .catch(() => null)) as { code?: unknown } | null;
+  const code = body && typeof body === "object" ? body.code : undefined;
+  return code === undefined || code === "forbidden";
+}
+
+/**
+ * 发一次 REST 请求。`source` 省略是当前源（`api/source.ts` 的
+ * {@link currentSource}，没挂远程源时就是本机）。
+ */
 export async function request<T>(
   path: string,
   schema: z.ZodType<T>,
   init?: RequestInit,
+  source: Source = currentSource(),
 ): Promise<T> {
-  const guarded = RUNTIME_VIA_SERVER_SHELL && unsafeMethod(init?.method);
+  const credentials = source.credentials;
+  const guarded = credentials.mode === "cookie" && unsafeMethod(init?.method);
   let response: Response;
   try {
-    response = await send(path, init, guarded ? await ensureCsrf() : "");
+    const used = guarded ? ((await credentials.csrf()) ?? "") : "";
+    response = await send(source, path, init, used);
     // A rotated token is the one failure worth retrying: the request never
     // reached a handler, so nothing was executed twice. Any other 403 is the
     // core refusing this device, and repeating it would not change that.
+    // Another window of this browser may have rotated it already and said so;
+    // then that one is used rather than rotating it away again.
     if (
       guarded &&
       response.status === 403 &&
-      !(init?.body instanceof FormData)
+      !(init?.body instanceof FormData) &&
+      (await csrfRefusal(response))
     ) {
-      forgetCsrf();
-      const renewed = await ensureCsrf();
-      if (renewed) response = await send(path, init, renewed);
+      const renewed = await credentials.renewCsrf(used);
+      if (renewed) response = await send(source, path, init, renewed);
     }
   } catch (cause) {
-    throw new RuntimeConnectionError(RUNTIME_URL, cause);
+    throw new RuntimeConnectionError(source.httpBase, cause);
   }
   const payload = (await response.json().catch(() => null)) as unknown;
   if (!response.ok) {

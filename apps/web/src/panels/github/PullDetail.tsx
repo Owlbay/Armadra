@@ -3,20 +3,27 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { Textarea } from "@/ui/textarea";
 import { useT } from "@/app/preferences-store";
-import { Field, selectClass } from "../git/forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/select";
+import { Field } from "../git/forms";
 import { CheckoutWorktree } from "./CheckoutWorktree";
 import { ChecksSection } from "./ChecksSection";
 import { DiffReview } from "./DiffReview";
@@ -381,20 +388,24 @@ export function PullDetail({
               ) : (
                 <>
                   <Field label={t("github.merge.method")}>
-                    <select
-                      className={selectClass}
+                    <Select
                       value={String(chosen ?? "")}
-                      onChange={(event) =>
+                      onValueChange={(next) =>
                         // 枚举在线上是名字，所以下拉框的值就是那个名字。
-                        setMethod(event.target.value as GithubMergeMethod)
+                        setMethod(next as GithubMergeMethod)
                       }
                     >
-                      {methods.map((value) => (
-                        <option key={value} value={String(value)}>
-                          {t(mergeMethodKey(value))}
-                        </option>
-                      ))}
-                    </select>
+                      <SelectTrigger className="h-9 w-full min-w-0">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="z-[var(--z-dialog)]">
+                        {methods.map((value) => (
+                          <SelectItem key={value} value={String(value)}>
+                            {t(mergeMethodKey(value))}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </Field>
                   <Button
                     size="sm"
@@ -446,19 +457,21 @@ export function PullDetail({
             />
           )}
 
-          <AlertDialog
+          <ResponsiveAlertDialog
             open={confirm}
             onOpenChange={(next) => {
               if (!next) setConfirm(false);
             }}
           >
-            <AlertDialogContent className="z-[var(--z-dialog)]">
-              <AlertDialogHeader>
-                <AlertDialogTitle>{t("github.merge.confirm")}</AlertDialogTitle>
-                <AlertDialogDescription>
+            <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+              <ResponsiveAlertDialogHeader>
+                <ResponsiveAlertDialogTitle>
+                  {t("github.merge.confirm")}
+                </ResponsiveAlertDialogTitle>
+                <ResponsiveAlertDialogDescription>
                   {t("github.merge.note")}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
+                </ResponsiveAlertDialogDescription>
+              </ResponsiveAlertDialogHeader>
               <dl className="grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
                 <dt className="text-muted-foreground">
                   {t("github.repository")}
@@ -489,11 +502,11 @@ export function PullDetail({
                     : t("github.pull.noChecks")}
                 </dd>
               </dl>
-              <AlertDialogFooter>
-                <AlertDialogCancel className="min-h-10">
+              <ResponsiveAlertDialogFooter>
+                <ResponsiveAlertDialogCancel className="min-h-10">
                   {t("github.cancel")}
-                </AlertDialogCancel>
-                <AlertDialogAction
+                </ResponsiveAlertDialogCancel>
+                <ResponsiveAlertDialogAction
                   className="min-h-10"
                   disabled={busy}
                   onClick={() => {
@@ -503,10 +516,10 @@ export function PullDetail({
                   }}
                 >
                   {t("github.merge")}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+                </ResponsiveAlertDialogAction>
+              </ResponsiveAlertDialogFooter>
+            </ResponsiveAlertDialogContent>
+          </ResponsiveAlertDialog>
         </>
       )}
     </div>

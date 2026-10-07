@@ -41,6 +41,19 @@ export const usage: MessageModule = {
     "usage.reason.network": "连不上用量接口，检查网络或代理后再刷新",
     "usage.reason.parse": "用量接口的返回无法解析，可能是接口改了",
     "usage.reason.no_windows": "用量接口没有返回任何窗口",
+    "usage.reason.unsupported": "用量接口返回了网页而不是数据，暂不支持",
+    "usage.reason.policy_off":
+      "额度读取已默认关闭，可在「设置 → 账号与用量」开启",
+    "usage.estimate.local": "本地估算",
+    /* 出站政策（外部服务 §9.3）。 */
+    "usage.policy.claude":
+      "使用 Claude Code 的登录令牌调用未公开端点，可能违反 Anthropic 条款",
+    "usage.policy.copilot": "调用 GitHub 内部端点，可能违反 Copilot 条款",
+    "usage.policy.codex": "非官方端点",
+    "usage.policy.notice": "{providers} 的额度读取现已默认关闭",
+    "usage.policy.open": "打开设置",
+    "usage.policy.separator": "、",
+    "usage.catalogAutoRefresh": "自动更新模型目录",
     "usage.source.opencode": "请在 OpenCode 或所用服务商查看",
     "usage.source.provider": "额度随所选模型的服务商计算",
 
@@ -86,6 +99,7 @@ export const usage: MessageModule = {
     "usage.breakdown.byAgent": "按 Agent",
     "usage.breakdown.other": "其他",
     "usage.breakdown.noLocalSource": "暂无本地用量数据：{value}",
+    "usage.unit.premiumRequests": "{value} 次高级请求",
     "usage.tokens.input": "输入",
     "usage.tokens.output": "输出",
     "usage.tokens.cacheRead": "缓存读",
@@ -151,6 +165,21 @@ export const usage: MessageModule = {
     "usage.reason.parse":
       "The usage endpoint's answer could not be parsed; it may have changed",
     "usage.reason.no_windows": "The usage endpoint returned no windows",
+    "usage.reason.unsupported":
+      "The usage endpoint returned a web page instead of data; not supported",
+    "usage.reason.policy_off":
+      "Quota reading is off by default; turn it on under Settings → Account & usage",
+    "usage.estimate.local": "Local estimate",
+    "usage.policy.claude":
+      "Calls an undocumented endpoint with Claude Code's sign-in token; may violate Anthropic's terms",
+    "usage.policy.copilot":
+      "Calls an internal GitHub endpoint; may violate Copilot's terms",
+    "usage.policy.codex": "Unofficial endpoint",
+    "usage.policy.notice":
+      "Quota reading for {providers} is now off by default",
+    "usage.policy.open": "Open settings",
+    "usage.policy.separator": " and ",
+    "usage.catalogAutoRefresh": "Update model catalog automatically",
     "usage.source.opencode": "View in OpenCode or your model provider",
     "usage.source.provider": "Quota belongs to the selected model provider",
 
@@ -196,6 +225,7 @@ export const usage: MessageModule = {
     "usage.breakdown.byAgent": "By agent",
     "usage.breakdown.other": "Other",
     "usage.breakdown.noLocalSource": "No local usage data: {value}",
+    "usage.unit.premiumRequests": "{value} premium requests",
     "usage.tokens.input": "Input",
     "usage.tokens.output": "Output",
     "usage.tokens.cacheRead": "Cache read",

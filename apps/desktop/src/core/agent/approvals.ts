@@ -13,6 +13,8 @@ import { agentIdOf, loadNode, loadSession } from "../collab/nodes";
 import type { CollabContext } from "../collab/service";
 import { conflict, badRequest, notFound, rfc3339 } from "../workspaces/support";
 import { getAgentStatus } from "./status";
+import { checkElicitationAnswer, elicitationOf } from "../acp/elicitation";
+import type { AcpElicitationResult } from "../acp/types";
 
 /**
  * Permission answers — the round trip closed by an answer file, and the CAS
@@ -49,7 +51,89 @@ export const PERM_WAIT_SECONDS = 45;
 
 export const DECISIONS = ["allow", "deny"] as const;
 
-export type ApprovalRoute = "file" | "keys" | "none";
+/**
+ * How a decision reached the CLI: an answer file the hook client was polling
+ * for, keys typed into the PTY, the pending `session/request_permission` of an
+ * ACP session (ACP 会话视图设计 §5.5), or nothing.
+ */
+export type ApprovalRoute = "file" | "keys" | "acp" | "none";
+
+/**
+ * The ACP half of the answer: the core's ACP domain registers it
+ * (`core/acp/index.ts`) and it answers the pending request with this option.
+ * `false` when no live session holds that request any more.
+ */
+export type AcpApprovalAnswerer = (
+  approval: AgentApproval,
+  optionId: string,
+) => boolean;
+
+let acpAnswerer: AcpApprovalAnswerer | undefined;
+
+export function setAcpApprovalAnswerer(
+  answerer: AcpApprovalAnswerer | undefined,
+): void {
+  acpAnswerer = answerer;
+}
+
+/**
+ * The elicitation half (contract §26.1): the ACP domain registers it and it
+ * hands the checked answer to the pending `elicitation/create`. `false` when no
+ * live session holds that request any more.
+ */
+export type AcpElicitationAnswerer = (
+  approval: AgentApproval,
+  result: AcpElicitationResult,
+) => boolean;
+
+let elicitationAnswerer: AcpElicitationAnswerer | undefined;
+
+export function setAcpElicitationAnswerer(
+  answerer: AcpElicitationAnswerer | undefined,
+): void {
+  elicitationAnswerer = answerer;
+}
+
+/** One option of an ACP permission request, as stored in `request_json`. */
+export interface AcpApprovalOption {
+  readonly optionId: string;
+  readonly kind: string;
+}
+
+/** The options of an ACP approval; `undefined` for any other approval. */
+export function acpOptionsOf(
+  request: unknown,
+): readonly AcpApprovalOption[] | undefined {
+  if (typeof request !== "object" || request === null) return undefined;
+  const raw = request as { protocol?: unknown; options?: unknown };
+  if (raw.protocol !== "acp" || !Array.isArray(raw.options)) return undefined;
+  return raw.options.filter(
+    (option): option is AcpApprovalOption =>
+      typeof option === "object" &&
+      option !== null &&
+      typeof (option as AcpApprovalOption).optionId === "string" &&
+      typeof (option as AcpApprovalOption).kind === "string",
+  );
+}
+
+/**
+ * The option an ACP answer selects. An explicit `optionId` must be one of the
+ * agent's and agree with the decision (`allow_*` for allow, `reject_*` for
+ * deny); without one, the first option of the decision's kind — the header's
+ * allow / deny buttons. `undefined`: nothing fits.
+ */
+export function acpOptionFor(
+  options: readonly AcpApprovalOption[],
+  decision: string,
+  optionId: string | undefined,
+): AcpApprovalOption | undefined {
+  const prefix = decision === "allow" ? "allow_" : "reject_";
+  if (optionId !== undefined) {
+    const chosen = options.find((option) => option.optionId === optionId);
+    return chosen?.kind.startsWith(prefix) === true ? chosen : undefined;
+  }
+  return options.find((option) => option.kind.startsWith(prefix));
+}
 
 export interface AgentApproval {
   readonly id: string;
@@ -140,7 +224,12 @@ export function insertApproval(
 }
 
 export interface AnswerRequest {
-  readonly decision: string;
+  /**
+   * `allow` / `deny`. May be left out when {@link elicitation} is given: an
+   * elicitation's decision follows from its action (`accept` → allow,
+   * `decline` / `cancel` → deny).
+   */
+  readonly decision?: string;
   /** Who answered. The local user is `user`; a peer device is its principal. */
   readonly answeredBy?: string;
   /**
@@ -149,11 +238,72 @@ export interface AnswerRequest {
    * second answer, because an answered row is not open to being answered.
    */
   readonly expectedRevision?: number;
+  /** An ACP approval's chosen option (contract §14.4). */
+  readonly optionId?: string;
+  /**
+   * The answer to an ACP `elicitation/create` (contract §26.1). The content is
+   * checked against the request's own schema and goes to the agent only: it
+   * is never stored, audited, logged or published.
+   */
+  readonly elicitation?: {
+    readonly action: unknown;
+    readonly content?: unknown;
+  };
 }
 
 export interface AnswerResult {
   readonly approval: AgentApproval;
   readonly route: ApprovalRoute;
+  /** The action an elicitation was answered with (never its content). */
+  readonly elicitation?: { readonly action: string };
+}
+
+/**
+ * An elicitation answer, settled before anything is recorded: the decision it
+ * implies and what goes to the agent. `undefined` for any other approval.
+ */
+function elicitationAnswer(
+  existing: AgentApproval,
+  request: AnswerRequest,
+):
+  | {
+      readonly ok: true;
+      readonly decision: string;
+      readonly result: AcpElicitationResult;
+    }
+  | { readonly ok: false; readonly message: string }
+  | undefined {
+  const stored = elicitationOf(existing.request);
+  if (stored === undefined) {
+    return request.elicitation === undefined
+      ? undefined
+      : {
+          ok: false,
+          message: "elicitation is only for ACP elicitation requests",
+        };
+  }
+  // The header's allow / deny buttons work too: deny declines, allow accepts
+  // an empty form (which only passes when nothing is required).
+  const answer =
+    request.elicitation ??
+    (request.decision === "allow"
+      ? { action: "accept" }
+      : request.decision === "deny"
+        ? { action: "decline" }
+        : undefined);
+  if (answer === undefined) {
+    return { ok: false, message: "Approval decision must be allow or deny" };
+  }
+  const checked = checkElicitationAnswer(stored, answer);
+  if (!checked.ok) return checked;
+  const decision = checked.result.action === "accept" ? "allow" : "deny";
+  if (request.decision !== undefined && request.decision !== decision) {
+    return {
+      ok: false,
+      message: `decision ${request.decision} does not match action ${checked.result.action}`,
+    };
+  }
+  return { ok: true, decision, result: checked.result };
 }
 
 /**
@@ -173,8 +323,25 @@ export async function answerApproval(
   if (!validPendingId(pendingId)) {
     throw badRequest("Approval id is invalid");
   }
-  const decision = request.decision;
   const answeredBy = request.answeredBy ?? "user";
+  // An elicitation is settled first: its decision follows from its action.
+  const asked = getApproval(context, pendingId);
+  const elicitation = elicitationAnswer(asked, request);
+  if (elicitation !== undefined && !elicitation.ok) {
+    const answered = asked.answer !== null;
+    audit(context, asked, {
+      decision: request.decision ?? "",
+      answeredBy,
+      expectedRevision: request.expectedRevision ?? asked.revision,
+      accepted: false,
+      route: "",
+      refusal: answered ? "already_answered" : "elicitation_invalid",
+    });
+    if (answered) throw conflict("Approval request was already answered");
+    throw badRequest(elicitation.message);
+  }
+  const decision =
+    elicitation?.ok === true ? elicitation.decision : (request.decision ?? "");
   if (!(DECISIONS as readonly string[]).includes(decision)) {
     // Audited even though nothing could have been written: a device sending a
     // decision this build does not know is worth seeing in the trail.
@@ -192,6 +359,33 @@ export async function answerApproval(
 
   const existing = getApproval(context, pendingId);
   const expected = request.expectedRevision ?? existing.revision;
+
+  // An ACP request is answered with one of the agent's own options. Checked
+  // before the CAS: a choice that cannot be delivered is not a decision.
+  const acpOptions = acpOptionsOf(existing.request);
+  const acpOption =
+    acpOptions === undefined
+      ? undefined
+      : acpOptionFor(acpOptions, decision, request.optionId);
+  if (
+    existing.answer === null &&
+    ((acpOptions !== undefined && acpOption === undefined) ||
+      (acpOptions === undefined && request.optionId !== undefined))
+  ) {
+    audit(context, existing, {
+      decision,
+      answeredBy,
+      expectedRevision: expected,
+      accepted: false,
+      route: "",
+      refusal: "option_invalid",
+    });
+    throw badRequest(
+      acpOptions === undefined
+        ? "optionId is only for ACP approvals"
+        : "optionId is not one of the agent's options for this decision",
+    );
+  }
 
   // A question somebody has already decided is not one to decide again.
   // Reloading would not produce a state in which answering is right, so this
@@ -235,7 +429,16 @@ export async function answerApproval(
   // failure is reported as itself: the answer stands, and what could not
   // happen is the CLI hearing it.
   let route: ApprovalRoute = "none";
-  if (writeAnswerFile(pendingDir(context), pendingId, decision)) {
+  if (elicitation?.ok === true) {
+    // ACP elicitation: the checked answer goes to the pending request.
+    if (elicitationAnswerer?.(approval, elicitation.result) === true) {
+      route = "acp";
+    }
+  } else if (acpOption !== undefined) {
+    // ACP: the answer goes to the pending `session/request_permission`. Never
+    // typed into anything — an ACP session has no prompt to type at.
+    if (acpAnswerer?.(approval, acpOption.optionId) === true) route = "acp";
+  } else if (writeAnswerFile(pendingDir(context), pendingId, decision)) {
     route = "file";
   } else if (await typeIntoPty(context, approval, decision)) {
     route = "keys";
@@ -251,23 +454,86 @@ export async function answerApproval(
     refusal: "",
   });
 
+  const action =
+    elicitation?.ok === true
+      ? { action: elicitation.result.action }
+      : undefined;
   context.publish(approval.workspaceId, {
     type: "agent.approval",
     nodeId: approval.nodeId,
     pendingId: approval.id,
     // Resolution reuses the event: `request.resolved` tells a client this is
     // the answer rather than a new question.
-    request: resolvedPayload(approval, decision, route),
+    request: resolvedPayload(approval, decision, route, action),
   });
-  return { approval, route };
+  return {
+    approval,
+    route,
+    ...(action === undefined ? {} : { elicitation: action }),
+  };
 }
 
 function resolvedPayload(
   approval: AgentApproval,
   decision: string,
   route: ApprovalRoute,
+  elicitation?: { readonly action: string },
 ): Record<string, unknown> {
-  return { ...approval, resolved: true, decision, answer: decision, route };
+  return {
+    ...approval,
+    resolved: true,
+    decision,
+    answer: decision,
+    route,
+    ...(elicitation === undefined ? {} : { elicitation }),
+  };
+}
+
+/**
+ * Closes an approval nobody answered: an ACP request withdrawn because its turn
+ * was cancelled, the adapter exited, the node switched driver or hibernated
+ * (ACP 会话视图设计 §5.5 第 4 条). Recorded as `cancelled` by `core`, audited
+ * like any other attempt, and published as a resolution so every header drops
+ * its buttons. An approval somebody already answered is left alone.
+ */
+export function cancelOpenApproval(
+  context: Pick<CollabContext, "database" | "publish">,
+  pendingId: string,
+): AgentApproval | undefined {
+  const row = context.database
+    .prepare(`${SELECT}WHERE id = ?`)
+    .get(pendingId) as ApprovalRow | undefined;
+  if (row === undefined || row.answer !== null) return undefined;
+  const existing = approvalOf(row);
+  const next = existing.revision + 1;
+  const updated = context.database
+    .prepare(
+      "UPDATE agent_approvals SET answer = 'cancelled', answered_by = 'core', answered_at = ?, revision = ? " +
+        "WHERE id = ? AND answer IS NULL AND revision = ?",
+    )
+    .run(rfc3339(), next, pendingId, existing.revision);
+  if (Number(updated.changes) === 0) return undefined;
+  const approval = approvalOf(
+    context.database
+      .prepare(`${SELECT}WHERE id = ?`)
+      .get(pendingId) as unknown as ApprovalRow,
+  );
+  audit(context, approval, {
+    decision: "cancelled",
+    answeredBy: "core",
+    expectedRevision: existing.revision,
+    applied: next,
+    accepted: true,
+    route: "acp",
+    refusal: "",
+  });
+  context.publish(approval.workspaceId, {
+    type: "agent.approval",
+    nodeId: approval.nodeId,
+    pendingId: approval.id,
+    request: resolvedPayload(approval, "cancelled", "acp"),
+  });
+  return approval;
 }
 
 /* ---------------------------------- audit --------------------------------- */
@@ -283,7 +549,7 @@ export interface AuditEntry {
 }
 
 function audit(
-  context: CollabContext,
+  context: Pick<CollabContext, "database">,
   approval: AgentApproval,
   entry: AuditEntry,
 ): void {
@@ -433,6 +699,7 @@ export function answerKeys(agentId: string, decision: string): string {
     case "pi":
     case "omp":
     case "copilot":
+    case "ama":
       return allow ? "y\r" : "n\r";
     default:
       return allow ? "y\r" : "n\r";
@@ -459,15 +726,23 @@ export function validPendingId(value: string): boolean {
  *
  * A client that was killed mid-wait leaves both files behind, and they contain
  * the tool call the agent wanted to make. Returns how many files went away.
+ *
+ * `now` is the caller's clock, passed in rather than read here: a file's mtime
+ * comes from the file system's clock, not the process's, and on Windows the
+ * two can disagree by a few milliseconds in either direction. Callers in
+ * production pass `Date.now()`; tests pin both sides.
  */
-export function sweepOrphans(directory: string, olderThanMs: number): number {
+export function sweepOrphans(
+  directory: string,
+  olderThanMs: number,
+  now: number,
+): number {
   let entries;
   try {
     entries = readdirSync(directory, { withFileTypes: true });
   } catch {
     return 0;
   }
-  const now = Date.now();
   let removed = 0;
   for (const entry of entries) {
     if (!entry.isFile()) continue;

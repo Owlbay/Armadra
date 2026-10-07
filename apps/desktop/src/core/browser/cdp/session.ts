@@ -1,4 +1,4 @@
-import { CdpRefusal } from "./codes";
+import { CdpRefusal, DRIVE_CODES } from "./codes";
 import { isAllowed, refusalMessage, type Viewport } from "./allowlist";
 import { DevLog } from "./devlog";
 import { RefTable } from "./refs";
@@ -60,6 +60,24 @@ export interface SnapshotMemory {
 /** Children kept per page; an advert grid cannot grow this without bound. */
 const MAX_CHILDREN = 32;
 
+/**
+ * How long one command to a cross-origin iframe's session may take.
+ *
+ * Each of those iframes is a renderer of its own, and on the macOS runner one
+ * of them was seen not answering at all while the page and the browser did.
+ * Without a bound of its own, a read that walks the iframes waits out the
+ * transport's 30 s and fails the whole verb over one advert. A child that
+ * does not answer in time is skipped until it answers something again.
+ */
+export const CHILD_TIMEOUT_MS = 5_000;
+
+export interface CdpSessionOptions {
+  /** {@link CHILD_TIMEOUT_MS}, for tests. */
+  readonly childTimeoutMs?: number;
+}
+
+const CHILD_SILENT = "那个跨源 iframe 没有应答";
+
 export class CdpSession {
   readonly refs = new RefTable();
   readonly devlog = new DevLog();
@@ -68,12 +86,16 @@ export class CdpSession {
   interceptedDrag: unknown;
   private readonly dispatch: CdpDispatch;
   private readonly children = new Map<string, ChildFrame>();
+  /** Children that let a command time out and have not answered since. */
+  private readonly silent = new Set<string>();
+  private readonly childTimeoutMs: number;
   private measured: Viewport = { width: 0, height: 0 };
   /** Set while a person is driving, so a verb in flight can be told. */
   private revoked: string | null = null;
 
-  constructor(dispatch: CdpDispatch) {
+  constructor(dispatch: CdpDispatch, options: CdpSessionOptions = {}) {
     this.dispatch = dispatch;
+    this.childTimeoutMs = options.childTimeoutMs ?? CHILD_TIMEOUT_MS;
   }
 
   viewport(): Viewport {
@@ -159,11 +181,40 @@ export class CdpSession {
     if (!isAllowed(method, params, viewport)) {
       throw new CdpRefusal("browser_refused", refusalMessage(method));
     }
+    if (frame !== "" && this.silent.has(frame)) {
+      throw new CdpRefusal(DRIVE_CODES.timeout, CHILD_SILENT);
+    }
     if (sent.length >= SENT_LIMIT) sent.shift();
     sent.push(method);
     return frame === ""
       ? this.dispatch(method, params)
-      : this.dispatch(method, params, frame);
+      : this.toChild(method, params, frame);
+  }
+
+  /**
+   * A command to a child session, bounded by {@link CHILD_TIMEOUT_MS}. The
+   * transport keeps its own, longer bound on the command itself; a late
+   * answer is dropped here but still tells us the child is back.
+   */
+  private toChild(
+    method: string,
+    params: Record<string, unknown>,
+    frame: string,
+  ): Promise<unknown> {
+    const answer = this.dispatch(method, params, frame);
+    answer.then(
+      () => this.silent.delete(frame),
+      () => undefined,
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, fail) => {
+      timer = setTimeout(() => {
+        this.silent.add(frame);
+        fail(new CdpRefusal(DRIVE_CODES.timeout, CHILD_SILENT));
+      }, this.childTimeoutMs);
+      timer.unref?.();
+    });
+    return Promise.race([answer, late]).finally(() => clearTimeout(timer));
   }
 
   /**
@@ -199,9 +250,25 @@ export class CdpSession {
     ).catch(() => undefined);
   }
 
-  /** The cross-origin iframes this page has right now. */
+  /**
+   * The cross-origin iframes this page has right now and that answer. One
+   * that let a command time out is left out until it answers again, so a
+   * snapshot, a text search or a locator walking the iframes skips it rather
+   * than waiting on it once per verb.
+   */
   childFrames(): readonly ChildFrame[] {
-    return [...this.children.values()];
+    return [...this.children.values()].filter(
+      (child) => !this.silent.has(child.sessionId),
+    );
+  }
+
+  /**
+   * Every cross-origin iframe's target id, answering or not. The page's own
+   * frame tree lists them too; a reader that skips a silent child must still
+   * know that frame is not the page's to read.
+   */
+  childTargetIds(): ReadonlySet<string> {
+    return new Set([...this.children.values()].map((child) => child.targetId));
   }
 
   hasChild(sessionId: string): boolean {
@@ -502,7 +569,10 @@ export class CdpSession {
     }
     if (method === "Target.detachedFromTarget") {
       const gone = (params as { sessionId?: string } | undefined)?.sessionId;
-      if (typeof gone === "string") this.children.delete(gone);
+      if (typeof gone === "string") {
+        this.children.delete(gone);
+        this.silent.delete(gone);
+      }
       return;
     }
     if (child && method === "Page.frameNavigated") {

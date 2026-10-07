@@ -54,6 +54,9 @@ export interface InvitationRow {
   readonly expiresAtMs: number;
   readonly consumedBy: string;
   readonly consumedAtMs: number;
+  /** 空 = 一次性（旧行为）；有值 = 最多这么多个不同的人可以兑换。 */
+  readonly maxUses: number | null;
+  readonly uses: number;
 }
 
 export interface GroupRow {
@@ -79,6 +82,18 @@ export interface GrantRow {
   readonly grantedBy: string;
   readonly createdAtMs: number;
   readonly revokedAtMs: number;
+}
+
+/** 审计查询的筛选（契约 §18.6），彼此 AND；`actions` 之间 OR。 */
+export interface AuditFilter {
+  readonly principalId?: string;
+  readonly workspaceId?: string;
+  /** 动作或动作族（命中自己与 `<它>.*`）。 */
+  readonly actions?: readonly string[];
+  readonly sinceMs?: number;
+  readonly untilMs?: number;
+  readonly beforeId?: number;
+  readonly limit?: number;
 }
 
 export interface AuditRow {
@@ -184,6 +199,16 @@ export class AccountsTx {
     return row === undefined ? undefined : toCredential(row);
   }
 
+  /** 一个第三方身份当前绑在谁身上，最多一份（唯一索引，契约 §18.5）。 */
+  liveOAuth(provider: string, subject: string): CredentialRow | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT ${CREDENTIAL_COLUMNS} WHERE kind = 'oauth' AND provider = ? AND subject = ? AND revoked_at_ms = 0`,
+      )
+      .get(provider, subject) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : toCredential(row);
+  }
+
   createCredential(row: CredentialRow): void {
     this.database
       .prepare(
@@ -269,8 +294,8 @@ export class AccountsTx {
     this.database
       .prepare(
         "INSERT INTO identity_invitations(invitation_id, issued_by, target_group_id, target_workspace_id, " +
-          "role, token_hash, created_at_ms, expires_at_ms, consumed_by, consumed_at_ms) " +
-          "VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', 0)",
+          "role, token_hash, created_at_ms, expires_at_ms, consumed_by, consumed_at_ms, max_uses) " +
+          "VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', 0, ?)",
       )
       .run(
         row.invitationId,
@@ -281,25 +306,80 @@ export class AccountsTx {
         new Uint8Array(row.tokenHash),
         row.createdAtMs,
         row.expiresAtMs,
+        row.maxUses,
       );
+  }
+
+  /** 这个人是不是已经兑换过这张多次邀请。 */
+  invitationUsedBy(invitationId: string, principalId: string): boolean {
+    return (
+      this.database
+        .prepare(
+          "SELECT 1 FROM identity_invitation_uses WHERE invitation_id = ? AND principal_id = ?",
+        )
+        .get(invitationId, principalId) !== undefined
+    );
+  }
+
+  /**
+   * 多次邀请的一次兑换：计数加一并记下是谁，次数用满时同时收口（`consumed_*`），
+   * 此后 {@link consumeInvitation} 的闸与一次性邀请一致。条件 UPDATE 在同一笔
+   * 事务里判 `uses < max_uses`，所以并发的第 N+1 个什么也改不动、整笔回滚。
+   * 同一个人再来是幂等的：不加计数，也不报错。
+   */
+  useInvitation(
+    invitationId: string,
+    principalId: string,
+    nowMs: number,
+  ): void {
+    if (this.invitationUsedBy(invitationId, principalId)) return;
+    const changes = this.database
+      .prepare(
+        "UPDATE identity_invitations SET uses = uses + 1 " +
+          "WHERE invitation_id = ? AND consumed_at_ms = 0 AND max_uses IS NOT NULL AND uses < max_uses",
+      )
+      .run(invitationId).changes;
+    if (Number(changes) !== 1) throw new IdentityError("conflict");
+    this.database
+      .prepare(
+        "INSERT OR IGNORE INTO identity_invitation_uses(invitation_id, principal_id, used_at_ms) VALUES(?, ?, ?)",
+      )
+      .run(invitationId, principalId, nowMs);
+    this.database
+      .prepare(
+        "UPDATE identity_invitations SET consumed_by = ?, consumed_at_ms = ? " +
+          "WHERE invitation_id = ? AND uses >= max_uses AND consumed_at_ms = 0",
+      )
+      .run(principalId, nowMs, invitationId);
   }
 
   /**
    * 标记一张邀请被用掉。一次性就在这个 `consumed_at_ms = 0` 条件里：第二次接受
    * 改不动任何行，整笔事务回滚，于是第二个人什么也拿不到。
+   *
+   * 有人兑换（`principalId` 非空）时计数与多次邀请同一口径：`uses` 加一、记下
+   * 是谁；撤销（`principalId` 为空串）只收口，不算一次使用。
    */
   consumeInvitation(
     invitationId: string,
     principalId: string,
     nowMs: number,
   ): void {
+    const used = principalId === "" ? 0 : 1;
     const changes = this.database
       .prepare(
-        "UPDATE identity_invitations SET consumed_by = ?, consumed_at_ms = ? " +
+        "UPDATE identity_invitations SET consumed_by = ?, consumed_at_ms = ?, uses = uses + ? " +
           "WHERE invitation_id = ? AND consumed_at_ms = 0",
       )
-      .run(principalId, nowMs, invitationId).changes;
+      .run(principalId, nowMs, used, invitationId).changes;
     if (Number(changes) !== 1) throw new IdentityError("conflict");
+    if (used === 1) {
+      this.database
+        .prepare(
+          "INSERT OR IGNORE INTO identity_invitation_uses(invitation_id, principal_id, used_at_ms) VALUES(?, ?, ?)",
+        )
+        .run(invitationId, principalId, nowMs);
+    }
   }
 
   /* --------------------------------- groups ------------------------------- */
@@ -499,11 +579,7 @@ export class AccountsTx {
       );
   }
 
-  auditEntries(filter: {
-    readonly principalId?: string;
-    readonly workspaceId?: string;
-    readonly limit?: number;
-  }): AuditRow[] {
+  auditEntries(filter: AuditFilter): AuditRow[] {
     const clauses: string[] = [];
     const values: (string | number)[] = [];
     if (filter.principalId) {
@@ -513,6 +589,29 @@ export class AccountsTx {
     if (filter.workspaceId) {
       clauses.push("workspace_id = ?");
       values.push(filter.workspaceId);
+    }
+    const actions = (filter.actions ?? []).filter((value) => value !== "");
+    if (actions.length > 0) {
+      // 动作族：`identity.login` 命中它自己与 `identity.login.*`。LIKE 的通配符
+      // 先转义，动作名里的 `_` 不当通配用。
+      clauses.push(
+        `(${actions.map(() => "action = ? OR action LIKE ? ESCAPE '\\'").join(" OR ")})`,
+      );
+      for (const action of actions) {
+        values.push(action, `${action.replace(/[\\%_]/g, "\\$&")}.%`);
+      }
+    }
+    if (filter.sinceMs !== undefined) {
+      clauses.push("at_ms >= ?");
+      values.push(filter.sinceMs);
+    }
+    if (filter.untilMs !== undefined) {
+      clauses.push("at_ms < ?");
+      values.push(filter.untilMs);
+    }
+    if (filter.beforeId !== undefined) {
+      clauses.push("id < ?");
+      values.push(filter.beforeId);
     }
     const where = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
     values.push(filter.limit ?? 100);
@@ -533,7 +632,7 @@ const CREDENTIAL_COLUMNS =
   "kdf_parallel, kdf_length, created_at_ms, revoked_at_ms FROM identity_credentials";
 const INVITATION_COLUMNS =
   "invitation_id, issued_by, target_group_id, target_workspace_id, role, token_hash, created_at_ms, " +
-  "expires_at_ms, consumed_by, consumed_at_ms FROM identity_invitations";
+  "expires_at_ms, consumed_by, consumed_at_ms, max_uses, uses FROM identity_invitations";
 const GRANT_COLUMNS =
   "grant_id, subject_kind, subject_id, workspace_id, role, granted_by, created_at_ms, revoked_at_ms " +
   "FROM identity_grants";
@@ -579,6 +678,8 @@ function toInvitation(row: Record<string, unknown>): InvitationRow {
     expiresAtMs: Number(row.expires_at_ms),
     consumedBy: String(row.consumed_by),
     consumedAtMs: Number(row.consumed_at_ms),
+    maxUses: row.max_uses === null ? null : Number(row.max_uses),
+    uses: Number(row.uses),
   };
 }
 

@@ -98,6 +98,12 @@ const sessionRows = (page) =>
   `);
 
 /**
+ * Dock 里打开用量看板的那一格：没有可画的用量时是仪表图标，有（包括 Claude 的
+ * 本地估算）时是用量环。两者点了都开看板。
+ */
+const USAGE_BUTTON = `"button[aria-label='打开用量看板'], button[data-slot='cluster-usage']"`;
+
+/**
  * 打开用量看板。它是单独的一块懒加载代码（带图表库）：开发服务器第一次遇到
  * 它时可能要现编、甚至重新预构建依赖并整页刷新——那样抽屉状态就丢了，再点一次。
  */
@@ -109,11 +115,11 @@ async function openUsage(page) {
     if (open) return;
     await page.settle();
     const pressed = await page.evaluate(
-      `return document.querySelector("button[aria-label='打开用量看板']")?.getAttribute("aria-pressed") === "true";`,
+      `return document.querySelector(${USAGE_BUTTON})?.getAttribute("aria-pressed") === "true";`,
     );
     if (!pressed) {
       await page.clickOn(
-        `return document.querySelector("button[aria-label='打开用量看板']");`,
+        `return document.querySelector(${USAGE_BUTTON});`,
         "用量看板按钮",
       );
     }

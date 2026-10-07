@@ -1,7 +1,8 @@
+import { scoped } from "../sources/scope";
 import type { DriveLease } from "@armadra/shared";
 
 import { useDriveStore } from "@/agent/drive-store";
-import { terminalsApi } from "@/api/terminals";
+import { runtimeApi } from "@/api/client";
 import { useT } from "@/app/preferences-store";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
@@ -30,7 +31,7 @@ export function DriveBadge({
   const t = useT();
   // 状态只从 `terminal.lease` 来，而那份镜像是全局的一份（`agent/drive-store`）：
   // 节点头与命令面板读同一个答案，不各自订阅、各自记一份。
-  const lease = useDriveStore((state) => state.drives[nodeId]?.lease);
+  const lease = useDriveStore((state) => state.drives[scoped(nodeId)]?.lease);
 
   const label = driveLabel(lease);
   if (label === undefined) return null;
@@ -60,7 +61,7 @@ export function DriveBadge({
           onClick={() => {
             // 徽标不读这次的答复：那一帧 `terminal.lease` 会到每一台看着这块
             // 画布的设备上，自己先翻一次只会让两台设备短暂地说两句话。
-            void terminalsApi.driveTerminal(sessionId, action);
+            void runtimeApi.driveTerminal(sessionId, action);
           }}
         >
           {t(

@@ -7,10 +7,17 @@
  * when the network is down, and a release pipeline is exactly the thing one
  * cannot afford to leave untested until the day it runs for real.
  *
- * It binds loopback on an ephemeral port. The Host accepts a plain-HTTP
- * release source only on loopback, which is what makes this usable without
- * inventing a certificate.
+ * It binds loopback on an ephemeral port by default. The Host accepts a
+ * plain-HTTP release source only on loopback, which is what makes this usable
+ * without inventing a certificate.
+ *
+ * The listen address is configurable so the same server runs inside the
+ * dev-stack container (`tools/dev-stack/`): there it listens on `0.0.0.0`,
+ * Docker publishes it on the host's loopback, and `publicBase` keeps the
+ * download links pointing at that loopback address rather than at the
+ * container's own.
  */
+import { createHash } from "node:crypto";
 import { createReadStream, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
@@ -78,17 +85,25 @@ export async function describeRelease({
  * `faults` lets a test ask for the failures a real host produces: `status` to
  * answer the index with an error code, `truncate` to cut a download short, and
  * `corrupt` to flip a byte so a digest check has something to catch.
+ *
+ * The index carries an `ETag` and answers a matching `If-None-Match` with 304,
+ * as GitHub does — a 304 does not count against the anonymous rate limit, which
+ * is what lets every installation behind one office NAT keep checking
+ * (external services §3.1). `notModified` counts how often that happened.
  */
 export async function startMockReleaseServer({
   releases,
   faults = {},
   owner = "armadra",
   repo = "armadra",
+  host = "127.0.0.1",
+  port: listenPort = 0,
+  publicBase,
 }) {
   const server = createServer();
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise((resolve) => server.listen(listenPort, host, resolve));
   const port = server.address().port;
-  const base = `http://127.0.0.1:${port}`;
+  const base = publicBase ?? `http://127.0.0.1:${port}`;
   const documents = [];
   for (const release of releases) {
     documents.push(await describeRelease({ ...release, base }));
@@ -97,6 +112,8 @@ export async function startMockReleaseServer({
     releases.map((release) => [release.tag, release.directory]),
   );
   const requests = [];
+  const etag = `"${createHash("sha256").update(JSON.stringify(documents)).digest("hex").slice(0, 32)}"`;
+  let notModified = 0;
 
   server.on("request", (request, response) => {
     requests.push(request.url);
@@ -112,7 +129,12 @@ export async function startMockReleaseServer({
           .end("not json");
         return;
       }
-      response.writeHead(200, { "content-type": "application/json" });
+      if (request.headers["if-none-match"] === etag) {
+        notModified += 1;
+        response.writeHead(304, { etag }).end();
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json", etag });
       // Drafts are served exactly as GitHub does — visible to the API, and
       // skipped by the Host — so the "not published yet" path is real.
       response.end(JSON.stringify(documents));
@@ -170,6 +192,10 @@ export async function startMockReleaseServer({
     /** The value an operator would pass to --updates-source. */
     source: `${base}/repos/${owner}/${repo}`,
     requests,
+    etag,
+    get notModified() {
+      return notModified;
+    },
     async close() {
       // Node's fetch keeps its sockets alive, so close() alone would wait for
       // a client that has no intention of hanging up. A test server outlives
@@ -188,8 +214,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     );
     process.exit(2);
   }
+  // 监听地址可配（dev-stack 容器里用）；不设时与之前一样是回环上的临时端口。
+  const env = process.env;
   const server = await startMockReleaseServer({
     releases: [{ directory, tag, body: readFileSync(notePath, "utf8") }],
+    host: env.MOCK_RELEASE_HOST || undefined,
+    port: env.MOCK_RELEASE_PORT ? Number(env.MOCK_RELEASE_PORT) : undefined,
+    publicBase: env.MOCK_RELEASE_PUBLIC_BASE || undefined,
   });
   console.log(`Serving ${directory} as ${tag}`);
   console.log(`--updates-source ${server.source}`);

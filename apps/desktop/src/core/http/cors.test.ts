@@ -46,6 +46,15 @@ describe("which origins a loopback core answers", () => {
     });
   });
 
+  it("lets the page send its Bearer across ports", () => {
+    // 页面在壳的静态服务上、core 在另一个回环端口：带 Authorization 的请求先
+    // 预检，这个头不在放行表里，浏览器就不发（契约 §3.2）。
+    expect(CORS_HEADERS.split(",").map((name) => name.trim())).toEqual([
+      "content-type",
+      "authorization",
+    ]);
+  });
+
   it("refuses an origin that is not loopback", () => {
     expect(corsHeaders("http://example.com")).toBeUndefined();
   });

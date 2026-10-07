@@ -1,7 +1,9 @@
+import { scoped } from "../../sources/scope";
 import * as React from "react";
 import { toast } from "sonner";
 
-import { RUNTIME_URL, runtimeApi } from "@/api/client";
+import { runtimeApi } from "@/api/client";
+import { currentSource } from "@/api/source";
 import { t as translate } from "@/app/preferences-store";
 import { useAgentStatusStore } from "@/agent/status-store";
 import {
@@ -68,7 +70,8 @@ export function useFileDropPaste(
           creating: refs.creatingRef.current,
           pendingPhase: usePendingLaunchStore.getState().entries[nodeId]?.phase,
           acknowledged: Boolean(
-            agent?.sessionId || useAgentStatusStore.getState().statuses[nodeId],
+            agent?.sessionId ||
+              useAgentStatusStore.getState().statuses[scoped(nodeId)],
           ),
         };
       };
@@ -77,7 +80,7 @@ export function useFileDropPaste(
         return;
       }
       const target = {
-        runtimeUrl: RUNTIME_URL,
+        runtimeUrl: currentSource().httpBase,
         workspaceId: workspace.id,
         workspaceRoot: workspace.rootPath,
         sessionId: session,

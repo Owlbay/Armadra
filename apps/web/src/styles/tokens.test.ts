@@ -49,6 +49,7 @@ const LAYOUT_CONSTANTS: Record<string, string> = {
 /** §3.1 的 z 轴栈，顺序不能乱。 */
 const Z_SCALE: Array<[string, number]> = [
   ["--z-pills", 5],
+  ["--z-canvas-overlay", 8],
   ["--z-sessions", 12],
   ["--z-dock", 20],
   ["--z-cluster", 26],
@@ -57,6 +58,9 @@ const Z_SCALE: Array<[string, number]> = [
   ["--z-focus", 40],
   ["--z-menu", 46],
   ["--z-dialog", 55],
+  ["--z-focus-page", 60],
+  ["--z-toast", 70],
+  ["--z-splash", 90],
 ];
 
 /** §3.4 的 Agent 品牌色。 */
@@ -67,6 +71,30 @@ const AGENT_COLORS: Record<string, string> = {
   "--agent-pi": "#e8b86d",
   "--agent-omp": "#d4a373",
   "--agent-copilot": "#a371f7",
+  "--agent-ama": "#1cb5c9",
+};
+
+/** 设计系统 §2.4：每个内置 Agent 一个文字色，两套主题各自声明。 */
+const AGENT_TEXT_COLORS = Object.keys(AGENT_COLORS).map(
+  (name) => `${name}-text`,
+);
+
+/** 设计系统 §2.3–§2.10 新增、两套主题都要有的名字。 */
+const THEMED_ADDITIONS = [
+  "--on-agent",
+  "--warn-text",
+  "--success-text",
+  "--working-text",
+  ...Array.from({ length: 8 }, (_, index) => `--member-${index + 1}`),
+];
+
+/** 设计系统 §2.6–§2.10 新增、与主题无关的常量。 */
+const SCALE_ADDITIONS: Record<string, string> = {
+  "--text-display": "22px",
+  "--text-code": "12px",
+  "--text-input-touch": "16px",
+  "--dur-page": "220ms",
+  "--r-pill": "999px",
 };
 
 /** §3.4 的节点调色板 7 色。 */
@@ -135,6 +163,13 @@ describe("tokens.css", () => {
     expect(light.get(alias)).toBeTruthy();
   });
 
+  // 设计系统 §7 第 11 步：旧别名删除后不许再出现，也不许有人再引用它们。
+  it.each(["--accent-text", "--accent-soft"])("旧别名 %s 已删除", (alias) => {
+    expect(dark.has(alias)).toBe(false);
+    expect(light.has(alias)).toBe(false);
+    expect(tokensCss).not.toContain(`var(${alias})`);
+  });
+
   it("没有悬空的 var() 引用", () => {
     const missing: string[] = [];
     for (const [theme, table] of [
@@ -169,7 +204,7 @@ describe("tokens.css", () => {
     // shadcn 的 --accent 是菜单高亮底色；品牌蓝在 --brand / --primary
     expect(dark.get("--brand")).toBe("#0a84ff");
     expect(light.get("--brand")).toBe("#007aff");
-    expect(dark.get("--primary")).toBe("var(--brand)");
+    expect(dark.get("--primary")).toBe("var(--brand-solid)");
     expect(dark.get("--accent")).not.toContain("--brand");
   });
 
@@ -201,10 +236,34 @@ describe("tokens.css", () => {
     expect(values).toEqual(sorted);
   });
 
-  it("Agent 品牌色与主题无关，只在深色块里声明一次", () => {
+  it("Agent 品牌色深色保持各家原值，浅色换成压暗值（设计系统 §2.4）", () => {
+    // 原先两套主题共用原值；白底上原值都不到 3:1，§2.4 改为浅色另给一组压暗值。
     for (const [name, value] of Object.entries(AGENT_COLORS)) {
       expect(dark.get(name)).toBe(value);
-      expect(light.has(name)).toBe(false);
+      expect(light.get(name)).toMatch(/^#[0-9a-f]{6}$/);
+      expect(light.get(name)).not.toBe(value);
+    }
+  });
+
+  it.each(AGENT_TEXT_COLORS)("Agent 文字色 %s 两套主题都有", (name) => {
+    expect(dark.has(name)).toBe(true);
+    expect(light.has(name)).toBe(true);
+  });
+
+  it.each(THEMED_ADDITIONS)("新增 token %s 两套主题都有", (name) => {
+    expect(dark.has(name)).toBe(true);
+    expect(light.has(name)).toBe(true);
+  });
+
+  it("新增的字号、动效、圆角常量按设计系统取值", () => {
+    for (const [name, value] of Object.entries(SCALE_ADDITIONS)) {
+      expect(dark.get(name)).toBe(value);
+    }
+  });
+
+  it("深色成员色前七条就是节点调色板（§2.5）", () => {
+    for (let n = 1; n <= 7; n += 1) {
+      expect(dark.get(`--member-${n}`)).toBe(`var(--node-color-${n})`);
     }
   });
 
@@ -281,5 +340,95 @@ describe("tokens.css", () => {
 
   it("不加载在线字体", () => {
     expect(tokensCss).not.toMatch(/@font-face|fonts\.googleapis|https?:/);
+  });
+  /**
+   * 几组会被悄悄改坏的对比度（WCAG 2.x 相对亮度公式）：实底按钮的白字、
+   * 叠在自身浅底上的危险文字，以及按 50% 透明画的焦点环（1.4.11 要 3:1）。
+   * 背景取两套主题里所有表面档位，按最差的那一档断言。
+   */
+  describe("对比度", () => {
+    type Rgb = readonly [number, number, number];
+    const hex = (value: string | undefined): Rgb => {
+      const match = /^#([0-9a-f]{6})$/i.exec(value ?? "");
+      if (!match?.[1]) throw new Error(`不是 6 位十六进制色：${value}`);
+      const n = Number.parseInt(match[1], 16);
+      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    };
+    const channel = (c: number) => {
+      const v = c / 255;
+      return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+    };
+    const luminance = ([r, g, b]: Rgb) =>
+      0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+    const ratio = (a: Rgb, b: Rgb) => {
+      const hi = Math.max(luminance(a), luminance(b));
+      const lo = Math.min(luminance(a), luminance(b));
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    const over = ([r, g, b]: Rgb, alpha: number, [br, bg, bb]: Rgb): Rgb => [
+      Math.round(r * alpha + br * (1 - alpha)),
+      Math.round(g * alpha + bg * (1 - alpha)),
+      Math.round(b * alpha + bb * (1 - alpha)),
+    ];
+    const surfaces = (theme: Map<string, string>) =>
+      ["--bg", "--surface-card", "--surface-raised", "--surface-overlay"]
+        .map((name) => theme.get(name) ?? dark.get(name))
+        .filter((value): value is string => /^#/.test(value ?? ""))
+        .map(hex);
+    const white: Rgb = [255, 255, 255];
+
+    it.each([
+      ["深色", dark],
+      ["浅色", light],
+    ])("%s：实底按钮白字 ≥ 4.5，焦点环 50% ≥ 3", (_, theme) => {
+      expect(
+        ratio(white, hex(theme.get("--brand-solid"))),
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        ratio(white, hex(theme.get("--danger-solid"))),
+      ).toBeGreaterThanOrEqual(4.5);
+      const ring = hex(theme.get("--focus-ring"));
+      for (const bg of surfaces(theme)) {
+        expect(ratio(over(ring, 0.5, bg), bg)).toBeGreaterThanOrEqual(3);
+      }
+    });
+
+    it("深色：危险文字叠在自身 20% 的浅底上 ≥ 4.5（卡片与面板）", () => {
+      const text = hex(dark.get("--danger-text"));
+      for (const name of ["--surface-card", "--panel"]) {
+        const bg = hex(dark.get(name));
+        expect(ratio(text, over(text, 0.2, bg))).toBeGreaterThanOrEqual(4.5);
+      }
+    });
+  });
+});
+
+/**
+ * 安全区（设计系统 §3.1）：页面经 `viewport-fit=cover` 铺到屏幕边缘，贴边的浮层
+ * 只认这几个变量。`env()` 带 `0px` 回退——桌面壳与普通浏览器里它们都是 0，
+ * 布局与没有安全区时逐像素一致；窗口控件那两个缺省也是 0，只由手机壳原生层写。
+ */
+describe("安全区变量", () => {
+  const indexHtml = readFileSync(
+    fileURLToPath(new URL("../../index.html", import.meta.url)),
+    "utf8",
+  );
+
+  it("viewport 铺到状态栏与刘海下面", () => {
+    expect(indexHtml).toMatch(/name="viewport"[^>]*viewport-fit=cover/);
+  });
+
+  it.each(["top", "right", "bottom", "left"])(
+    "--safe-%s 取 env() 且回退 0px",
+    (side) => {
+      expect(tokensCss).toContain(
+        `--safe-${side}: env(safe-area-inset-${side}, 0px);`,
+      );
+    },
+  );
+
+  it("窗口控件占位缺省为 0", () => {
+    expect(tokensCss).toContain("--window-controls-left: 0px;");
+    expect(tokensCss).toContain("--window-controls-top: 0px;");
   });
 });

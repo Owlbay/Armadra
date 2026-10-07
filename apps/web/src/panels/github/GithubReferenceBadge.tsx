@@ -1,10 +1,17 @@
 import { Badge } from "@/ui/badge";
 import { useT } from "@/app/preferences-store";
 import { openGithubPanel } from "./open";
-import { referenceTab, useGithubReferences } from "./references";
+import {
+  referenceTab,
+  referenceTarget,
+  useGithubReferences,
+} from "./references";
+import { FORGE_NAMES } from "../../api/forge";
+import { Button } from "@/ui/button";
 
 /**
- * The GitHub items linked to a terminal or frame node (canvas platform §4).
+ * The hosted items linked to a terminal or frame node (canvas platform §4).
+ * A Gitea / GitLab link names its platform; a GitHub one stays a bare `#n`.
  *
  * Only a badge and a way back to the item: a session is not turned into a task
  * card, and nothing is drawn at all when the GitHub session is not ready.
@@ -22,17 +29,26 @@ export function GithubReferenceBadge({ nodeId }: { nodeId: string }) {
           variant="outline"
           className="cursor-pointer"
         >
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             type="button"
             title={reference.title || t("github.reference.open")}
             aria-label={t("github.reference.open")}
             onClick={(event) => {
               event.stopPropagation();
-              openGithubPanel(referenceTab(reference), reference.number);
+              openGithubPanel(
+                referenceTab(reference),
+                reference.number,
+                referenceTarget(reference),
+              );
             }}
           >
+            {reference.forge && reference.forge !== "github"
+              ? `${FORGE_NAMES[reference.forge] ?? reference.forge} `
+              : ""}
             #{String(reference.number)}
-          </button>
+          </Button>
         </Badge>
       ))}
     </>

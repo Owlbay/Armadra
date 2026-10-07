@@ -25,7 +25,7 @@
 
 - 先写 6 项授权、图、幂等、回滚与租约测试，首次全部失败；实现后通过。扩展同键并发、跨板引用、能力撤销及通知提交时序测试。
 - 图数据、双向上下文授权、profile 对象归属、命令回执、controller 审计事件与 workspace outbox 同事务写入。`saveBoardInTransaction` 保留旧 `saveBoard` 的事务行为。提交后广播使用已持久序号，避免重复记录。
-- 新增连续迁移 `0029_local_controllers.sql`，更新 lock；没有改动旧迁移或清库。
+- 新增连续迁移 `0042_local_controllers.sql`，更新 lock；没有改动旧迁移或清库。
 - 前端测试复现 manual 节点挂载建 shell、计时器重复输入 CLI 的旧行为（2 项失败）。修复后 2 项通过；后端手动节点创建拒绝测试通过，前端类型检查通过。
 - 图保存与事件相关测试阶段共 25 项通过。后续扩展测试一次失败源于测试调用旧 `createBoard` 参数形状错误，按真实接口修正，保留所有关键断言；最终结果继续追加。
 - 下一步：实现持久 run/task 和可信报告通道；复用 `launchNode`、`SendPump`、`attempt` 与 `InputSafety`。旧依赖的历史 done 判定不能用于本次任务。
@@ -47,7 +47,7 @@
 
 ### P2：持久运行与真实 PTY 假 CLI
 
-- 新增连续迁移 `0030_controller_runs.sql` 并更新 lock。新增 run/task、节点占用、执行意图、事件与可信报告；队列和投递历史扩展为真实 controller actor，其 `sourceNodeId` 为 null。旧 node 行保留原值，旧依赖服务只推进未归属 run 的记录。
+- 新增连续迁移 `0043_controller_runs.sql` 并更新 lock。新增 run/task、节点占用、执行意图、事件与可信报告；队列和投递历史扩展为真实 controller actor，其 `sourceNodeId` 为 null。旧 node 行保留原值，旧依赖服务只推进未归属 run 的记录。
 - RunService 复用 `dependencies/launchNode`、SendPump、send/attempt、TerminalManager 和 InputSafety。冻结执行配置，投递只在依赖任务本次可信完成后入队；同键重试不重新启动，并发预算覆盖同 controller 的多个 run。
 - 10 项运行接入用例通过：离线画布依赖、幂等、DAG、节点占用、全局并发、未知启动/投递、失败分支、取消、撤销、乱序报告、重放和节点删除。此处是确定性桥接模拟，不是真实模型验证。
 - 真实 PTY 假 CLI 探针首次失败，状态为 `completion_unknown`。发现现有终端只注入绑定变量，却未创建 Hook 的持久序号文件。增加 16 字节 count/inverse 初始化，0600 文件/0700 目录；已有序号不重置，损坏拒绝。旧 Hook 仍保留失败容错，缺可靠绑定时 run 不写业务任务。
@@ -200,3 +200,12 @@ oct05-resumed-audit-3.json 和 real-acceptance-preflight.json。本次恢复没�
 Linux/tmux 均未解锁，真实预检业务调用/任务为 0；本轮重新标 blocked，未标 complete。
 证据在 oct06-resumed-audit-2.json、oct06-resumed-audit-3.json 及
 real-acceptance-preflight.json。没有修改业务实现、凭据或权限，没有重复已通过回归。
+
+## 上游合并（2026-10-07）
+
+- 拉取 `origin/main` 至 `596c5ca7`（0.2.1），合并本地 CLI 插件实现。保留已发布 0001–0041 迁移及其锁定字节，本地未发布迁移顺延为 0042、0043；队列扩展保留 0029 引入的 `settled_by`、`notified_at`。旧测试临时数据目录的迁移账本与新版不同，保留旧目录，不自动迁移、清库或改写账本。
+- 上游契约 §1–43 保留，本地私有 controller、run、产物契约追加为 §44–46。投递 REST/RPC 接受 controller 的 null 来源并保留 run/task 身份，新增传输一致性与旧队列回执迁移测试。
+- 普通租约画布仍支持原子建图；实时 Yjs 画布返回 `realtime_active`，SQL 图修改不会绕过实时文档。实时画布的原子外部编辑需要另行实现跨文档事务，不以直接写表代替。
+- 本次合并后的验证结果在完成后追加；此前的验收数据仅对应合并前版本，真实双 Agent、Linux、tmux 的待验收状态保持。
+
+合并验证过程中发现并修复两项兼容问题：新的响应式对话框约定要求手动启动入口使用 `ResponsiveDialog`；PTY 假 CLI 必须呈现输入提示符才能通过新增画面门。保留原来的回执、状态、投递次数和恢复断言，未跳过失败用例，也未降低生产输入门。

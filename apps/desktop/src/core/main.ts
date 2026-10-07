@@ -8,11 +8,13 @@ import { USAGE, parseArguments, parseWorkerArguments } from "./args";
 import { install as installAssets } from "./assets/routes";
 import { install as installCanvas } from "./canvas/routes";
 import { install as installWorkspaces } from "./workspaces/routes";
+import { installContract, rpcOptionsFromEnv } from "./http/rpc";
 import { EventBus } from "./bus";
 import { absorbHostDatabase } from "./db/absorb-host";
 import { DatabaseRefused, type OpenedDatabase, openDatabase } from "./db/open";
 import { resolveMigrationsDir } from "./db/migrations";
 import { installIdentity } from "./identity";
+import { setLoopbackAnonymousOwner } from "./identity/http";
 import { install as installHooks } from "./hook";
 import { hookService } from "./hook/service";
 import {
@@ -41,6 +43,7 @@ import {
   createLog,
   logLevel,
   nodePlatform,
+  reportError,
 } from "./platform";
 import { install as installLanguage, languageDomain } from "./language";
 import { install as installRemote } from "./remote";
@@ -53,6 +56,16 @@ import { install as installBrowser } from "./browser";
 import { install as installSchedule } from "./schedule";
 import { install as installDependencies } from "./dependencies";
 import { install as installGit } from "./git";
+import { install as installAcp } from "./acp";
+import { install as installWorkflow } from "./workflow";
+import { install as installRealtime, realtimeDomain } from "./realtime";
+import { install as installPush } from "./push";
+import { gatewayDomainOf, install as installGateway } from "./gateway";
+import { install as installForge } from "./forge";
+import { install as installMail } from "./mail";
+import { install as installDiagnostics } from "./diagnostics";
+import { install as installSources } from "./sources";
+import { install as installRelay, relayDomain } from "./relay";
 
 /**
  * The core process.
@@ -110,6 +123,12 @@ export interface RunOptions {
     isPackaged: boolean;
     log: ReturnType<typeof createLog>;
   }) => CorePlatform;
+  /**
+   * 明文回环上没带凭据的调用按本机主人处理（契约 §3.2，安全审查 L9）。缺省
+   * `false`；不给时读 `ARMADRA_LOOPBACK_OWNER=1`——只有探针与开发命令起的裸
+   * core 这么开。桌面壳不传、也不把这个变量带给 core，服务器壳显式传 `false`。
+   */
+  readonly loopbackAnonymousOwner?: boolean;
 }
 
 /**
@@ -153,6 +172,11 @@ export const DOMAINS: readonly ((context: CoreContext) => void)[] = [
   // After settings: the data page reports the log retention that store holds.
   installData,
   installIdentity,
+  // 客户端源表（契约 §33）在身份之后：本机那一行的 `sourceId` 就是身份域的
+  // `hostId`。装配只 upsert 这一行，不联网。
+  (context) => {
+    installSources(context);
+  },
   // GitHub after identity: its two faces authenticate every call against the
   // identity store, and it reads `store_meta.host_id` at assembly time.
   installGithub,
@@ -188,9 +212,33 @@ export const DOMAINS: readonly ((context: CoreContext) => void)[] = [
   // Git last among the domains that own routes: it reads the workspace table
   // and subscribes to `file.changed`, both of which have to exist first.
   installGit,
-  // Last: the hook service publishes an endpoint file, and nothing may be
-  // advertised before the domains that answer a hook report exist.
+  // 托管平台（G5-00 先放空骨架）在 GitHub 与 Git 之后：它把 GitHub 的客户端装进
+  // 同一个接口，按仓库的远端地址认平台。
+  installForge,
+  // 补全计划的四个域（G0-3 先放空骨架，顺序在这里定死）。ACP 在终端之后：
+  // 它的会话行是 `terminal_sessions` 的一种，桥经终端域组合。工作流在 ACP
+  // 之后：一次运行要开节点、投递，两种驱动都得已经在。实时协同在工作流之后：
+  // 控制动词与工作流都经 `saveBoard` 写板，拦截挂在它们全部就位之后。推送
+  // 最后订阅 bus：它要转发前面每个域的事件。
+  installAcp,
+  installWorkflow,
+  installRealtime,
+  installPush,
+  // G5 的两个域（G5-00 先放空骨架）。邮件在推送之后：它发的是身份域签出的
+  // 邀请与重置链接，与推送同是「把一件事告诉人」的出口。页面错误上报只认会话、
+  // 不依赖别的域，放在 hook 服务之前即可。
+  installMail,
+  installDiagnostics,
+  // 出站中继隧道（契约 §32）：隧道来的请求与 Gateway 交接进来的同样经全部路由，
+  // 所以在每个域之后。装配不联网，真正连中继在回环监听开始之后（`run` 的第 5 步
+  // 之后），而且不等。
+  installRelay,
+  // The hook service publishes an endpoint file, and nothing may be advertised
+  // before the domains that answer a hook report exist.
   installHooks,
+  // Gateway 真正最后：它对外监听，开始监听的那一刻每条路由、每个对外公布的
+  // 端点都必须已经就位。
+  installGateway,
 ];
 
 export async function run(options: RunOptions = {}): Promise<RunningCore> {
@@ -280,7 +328,13 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
     platform,
     log,
   };
+  setLoopbackAnonymousOwner(
+    options.loopbackAnonymousOwner ?? env.ARMADRA_LOOPBACK_OWNER === "1",
+  );
   for (const install of options.domains ?? DOMAINS) install(context);
+  // 每个域都交过自己那部分契约实现了：挂到 `/api/rpc/*` 与迁过来的旧路径上
+  // （契约 §34.1）。在任何监听开始之前。
+  installContract(server, rpcOptionsFromEnv(env, platform));
   // Captured here rather than read at shutdown: the accessor is a module-level
   // singleton, so a second core started in the same process would otherwise be
   // the one this core stops.
@@ -293,6 +347,8 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
     options.runsFactory?.(context, collaboration) ??
     new RunService({ context, collab: collaboration });
   installRunUi(context, runs);
+  const realtime = realtimeDomain();
+  const relay = relayDomain();
 
   // Step 3.
   const listeners: { server: Server; spec: ListenSpec }[] = [];
@@ -343,7 +399,28 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
   const stop = async (): Promise<void> => {
     await controller?.close();
     await runs.stop();
+    // 对外的 Gateway 先关：它的监听与经它进来的流不在 `server` 的名单上。
+    try {
+      await gatewayDomainOf(server)?.close();
+    } catch (error) {
+      log.warn("could not stop the gateway", { error: describe(error) });
+    }
+    // 出站隧道同理：断掉它，经它进来的流随之结束。
+    try {
+      relay?.close();
+    } catch (error) {
+      log.warn("could not stop the relay tunnels", { error: describe(error) });
+    }
     await server.close();
+    // 实时板：活动文档物化、写快照。更新早已逐条落库，这一步只是让表与快照
+    // 在退出时追平，下次启动不必重放。
+    try {
+      realtime?.stop();
+    } catch (error) {
+      log.warn("could not settle the realtime boards", {
+        error: describe(error),
+      });
+    }
     // Language servers are child processes of this one, and nothing else ends
     // them: a core that exits without this leaves one running per workspace it
     // opened. They are also the only domain that holds an OS resource outside
@@ -363,6 +440,12 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
   };
   process.on("SIGTERM", onSignal);
   process.on("SIGINT", onSignal);
+  // 没人接住的异常（含按缺省规则转成异常的未处理拒绝）：报给壳（外部服务
+  // §11.2）。用 monitor 而不是 `uncaughtException`——它不改变进程照旧崩溃这件事。
+  const onUncaught = (error: unknown): void => {
+    reportError(platform, error, { source: "uncaught" });
+  };
+  process.on("uncaughtExceptionMonitor", onUncaught);
 
   // Step 5.
   try {
@@ -384,6 +467,13 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
   for (const spec of bound)
     log.info("Armadra core is listening", { spec: formatListenSpec(spec) });
   bus.emit("runtime.hello", { instanceId: instanceId(), version: VERSION });
+  // 出站隧道在回环监听之后起，不等：中继不可达、隧道失败都只进隧道自己的状态，
+  // 不拖住启动，也不影响回环 API（契约 §32 的旁路保证）。
+  try {
+    relay?.startAll();
+  } catch (error) {
+    log.warn("could not start the relay tunnels", { error: describe(error) });
+  }
 
   return {
     ...context,
@@ -392,6 +482,7 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
     stop: async () => {
       process.off("SIGTERM", onSignal);
       process.off("SIGINT", onSignal);
+      process.off("uncaughtExceptionMonitor", onUncaught);
       await stop();
     },
   };

@@ -63,7 +63,11 @@ export function WorkspacePage() {
               })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.workspaceDefaultAgent")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">

@@ -3,6 +3,7 @@ import { getAgentStatus } from "../agent/status";
 import { stateSourceIsReported } from "../agent/target-state";
 import { attempt } from "./control/send";
 import { loadNode, loadSession } from "./nodes";
+import { writeReceipts } from "./receipts";
 import { sendLimits } from "./send-limits";
 import { expireQueue, pendingFor, targetsWithPending } from "./send-queue";
 import { type CollabContext, nowSeconds } from "./service";
@@ -139,10 +140,12 @@ export class SendPump {
       // 排队项不带参数：`--no-queue` 是一次性的，一条已经排进去的投递按定义
       // 就是愿意等的那种。`--interrupt` 同理——打断是投的那一刻的决定，不是
       // 五分钟后替调用者再做一次。
-      await attempt(context, next, { queue: true });
+      await attempt(context, next, { queue: true, dequeued: true });
     } catch (error) {
       // 出队时被门链拒绝不是这个泵的失败：那一条已经在 `attempt` 里被落了
-      // 状态与理由，调用者会在 `outbox` 里看见。
+      // 状态与理由（`settled_by = 'gate'`）。发起者此刻没有在等回执，所以当场
+      // 往它的收件箱写一条，不等一分钟后的清扫（`cli-collaboration.md` §4）。
+      writeReceipts(context, nowSeconds(context));
       this.onError(error);
     } finally {
       this.running.delete(targetNodeId);
@@ -157,7 +160,11 @@ export class SendPump {
     // 是「隔一会儿再看一眼」。不等它的结果——清扫的返回值说的是过期，不是投递。
     void this.probeSilentStarters();
     try {
-      return expireQueue(context.database, nowSeconds(context));
+      const now = nowSeconds(context);
+      // 标完过期、删之前写回执：删的时候只删回执已经写过的（§4）。
+      return expireQueue(context.database, now, () =>
+        writeReceipts(context, now),
+      );
     } catch (error) {
       this.onError(error);
       return 0;
@@ -211,10 +218,18 @@ export class SendPump {
    *   * 标了 `startsSilently`、且从未上报过（Codex）；
    *   * 只报过一条开场、还没开过一轮（Claude：`SessionStart` 把状态清空，下一
    *     条事件要等人提交输入）。`restored` 的行不算——它等的是新进程的上报。
+   *
+   * 另有一种不看 CLI、看队头：最前面那条是因为画面停在对话框上退回来的
+   * （`TARGET_NOT_AT_PROMPT`，§4.3「画面门」）。人在终端里答掉那个对话框不会
+   * 产生任何上报——Hook 早就报过空闲了——所以同样得靠快探再看一眼画面。
    */
   private silentStarter(context: CollabContext, nodeId: string): boolean {
     const node = loadNode(context.database, nodeId);
     if (node?.agentId == null) return false;
+    const head = pendingFor(context.database, nodeId, nowSeconds(context)).find(
+      (item) => item.state === "queued",
+    );
+    if (head?.lastReason === "TARGET_NOT_AT_PROMPT") return true;
     const status = getAgentStatus(context.database, nodeId);
     if (
       status !== undefined &&

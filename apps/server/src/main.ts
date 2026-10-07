@@ -16,8 +16,29 @@ import {
   wantsJson,
 } from "./cli";
 import { serve } from "./serve";
-import { SELF_SIGNED_CERT, SELF_SIGNED_DIR } from "./tls";
-import { defaultWebRoot } from "./web-root";
+import {
+  CloudCliError,
+  type CloudDeps,
+  defaultDeps,
+  runCloud,
+  runInvite,
+} from "./cloud";
+import { masterKeyFile, serverSecrets } from "./secrets";
+import {
+  checkSecretName,
+  forcedFileBackend,
+  previousKeyFile,
+  rotateMasterKey,
+  secretsDirectory,
+} from "../../desktop/src/core/secrets";
+import {
+  ACME_CERT,
+  ACME_DIR,
+  ACME_STATE,
+  SELF_SIGNED_CERT,
+  SELF_SIGNED_DIR,
+} from "../../desktop/src/core/gateway/tls";
+import { defaultWebRoot } from "../../desktop/src/core/gateway/web-root";
 import {
   generate,
   readMarker,
@@ -58,6 +79,12 @@ export interface MainIo {
   readonly env: NodeJS.ProcessEnv;
   /** 本模块所在目录，用于往上找检出里的 `apps/web/dist`。 */
   readonly moduleDir: string;
+  /** 标准输入读到尽头（`secrets set` 的值从这里来，不上命令行）。 */
+  readonly stdin?: () => Promise<string>;
+  /** 终端里不回显地读一行（`cloud login` 的口令）；没有终端不给。 */
+  readonly prompt?: (label: string) => Promise<string>;
+  /** 用例换掉取本机会话与发往个人中转的那两个口子。 */
+  readonly cloud?: Partial<CloudDeps>;
   /** `serve` 装配完成后的回调，用例靠它拿到句柄并停掉。 */
   readonly serving?: (
     running: Awaited<ReturnType<typeof serve>>,
@@ -77,7 +104,7 @@ export async function main(
     io.stderr(`${parsed.reason}\n`);
     return 2;
   }
-  const { command, values } = parsed;
+  const { command, values, positionals } = parsed;
   const json = wantsJson(values);
   const dataDir = resolveDataDir(
     single(values, "--data-dir"),
@@ -106,8 +133,32 @@ export async function main(
         return runLogs(values, dataDir, io, json);
       case "upgrade":
         return await runUpgrade(values, io, json);
+      case "secrets":
+        return await runSecrets(positionals, dataDir, io, json);
+      case "cloud":
+        await runCloud(
+          positionals,
+          values,
+          dataDir,
+          defaultDeps(io, io.cloud),
+          (document, text) => emit(io, json, document, text),
+        );
+        return 0;
+      case "invite":
+        await runInvite(
+          values,
+          dataDir,
+          defaultDeps(io, io.cloud),
+          (document, text) => emit(io, json, document, text),
+        );
+        return 0;
     }
   } catch (error) {
+    if (error instanceof CloudCliError) {
+      io.stderr(`${error.message}\n`);
+      // 69：运行中的服务器壳还没起来，容器入口按它重试。
+      return error.usage ? 2 : error.code === "host_unavailable" ? 69 : 1;
+    }
     io.stderr(`${describe(error)}\n`);
     return 1;
   }
@@ -161,6 +212,9 @@ async function runServe(
     webRoot,
     certFile: single(values, "--tls-cert"),
     keyFile: single(values, "--tls-key"),
+    acmeEmail: single(values, "--acme") ?? io.env.ARMADRA_ACME_EMAIL,
+    smtpUrl: single(values, "--smtp-url") ?? io.env.ARMADRA_SMTP_URL,
+    smtpFrom: single(values, "--smtp-from") ?? io.env.ARMADRA_SMTP_FROM,
     deviceName: single(values, "--device-name") ?? DEFAULT_DEVICE_NAME,
     pairing: !switched(values, "--no-pairing"),
     env: io.env,
@@ -196,6 +250,81 @@ function waitForSignal(
       });
     }
   });
+}
+
+/* --------------------------------- secrets -------------------------------- */
+
+/**
+ * `secrets rotate`：换 master key 并重封数据目录里的每个条目（`rotateMasterKey`，
+ * 外部服务 §12.1）。顺序保证任何一步中断都不丢条目，中断后再跑一次即可做完；
+ * core 每次操作现读钥匙，所以服务不必停。
+ *
+ * `secrets set NAME`：从标准输入读值写进 NAME，值永远不出现在命令行、进程表与
+ * 输出里。`--smtp-url` 的 `secret://armadra-smtp` 就是这样放进去的。
+ */
+async function runSecrets(
+  positionals: readonly string[],
+  dataDir: string,
+  io: MainIo,
+  json: boolean,
+): Promise<number> {
+  const [action, name] = positionals;
+  if (forcedFileBackend(io.env)) {
+    io.stderr(
+      "ARMADRA_SECRET_BACKEND=file 是明文后端，没有 master key；去掉它再用 secrets\n",
+    );
+    return 2;
+  }
+  if (action === "rotate" && name === undefined) {
+    const key = masterKeyFile(dataDir, io.env);
+    if (!existsSync(key.path)) {
+      io.stderr(
+        `没有 master key：${key.path}（服务器壳还没在这个数据目录里启动过）\n`,
+      );
+      return 1;
+    }
+    const resumed = existsSync(previousKeyFile(key.path));
+    const resealed = rotateMasterKey({
+      directory: secretsDirectory(dataDir),
+      keyFile: key.path,
+    });
+    emit(
+      io,
+      json,
+      { command: "secrets rotate", keyFile: key.path, resealed, resumed },
+      () =>
+        `${resumed ? "接着上次中断的轮换做完；" : ""}已换 master key（${key.path}），重封 ${resealed} 个条目`,
+    );
+    return 0;
+  }
+  if (action === "set" && name !== undefined) {
+    try {
+      checkSecretName(name);
+    } catch {
+      io.stderr(`条目名要以 armadra- 开头，只含字母、数字与 ._@-：${name}\n`);
+      return 2;
+    }
+    if (io.stdin === undefined) {
+      io.stderr("secrets set 从标准输入读值\n");
+      return 2;
+    }
+    const value = (await io.stdin()).replace(/\r?\n$/, "");
+    if (value === "" || /[\r\n]/.test(value)) {
+      io.stderr("标准输入要是一行非空的值\n");
+      return 2;
+    }
+    const backend = serverSecrets(dataDir, io.env);
+    await backend.set(name, value);
+    emit(
+      io,
+      json,
+      { command: "secrets set", name, backend: backend.kind },
+      () => `已写入 ${name}（${backend.kind}）`,
+    );
+    return 0;
+  }
+  io.stderr("用法: armadra-server secrets rotate | secrets set NAME\n");
+  return 2;
 }
 
 /* --------------------------------- install -------------------------------- */
@@ -357,7 +486,7 @@ function runStatus(dataDir: string, io: MainIo, json: boolean): number {
       `${COMPONENT_NAME} ${VERSION}（node ${process.versions.node}）`,
       `数据目录：${dataDir}`,
       `服务定义：${String(definition.state)}${definition.path === undefined ? "" : ` ${String(definition.path)}`}`,
-      `TLS：${document.tls.kind}${document.tls.notAfter === undefined ? "" : `，有效期至 ${document.tls.notAfter}`}`,
+      `TLS：${document.tls.kind}${document.tls.notAfter === undefined ? "" : `，有效期至 ${document.tls.notAfter}`}${document.tls.acmeFailures ? `，续期已连续失败 ${document.tls.acmeFailures} 次` : ""}`,
       `core：${document.core.running ? `在跑（pid ${String(document.core.processId)}）` : "没在跑"}`,
     ].join("\n"),
   );
@@ -367,7 +496,38 @@ function runStatus(dataDir: string, io: MainIo, json: boolean): number {
 function tlsStatus(
   dataDir: string,
   certFile: string,
-): { kind: string; certFile?: string; notAfter?: string } {
+): {
+  kind: string;
+  certFile?: string;
+  notAfter?: string;
+  acmeFailures?: number;
+} {
+  const acme = join(dataDir, SELF_SIGNED_DIR, ACME_DIR);
+  if (certFile === "" && existsSync(join(acme, ACME_CERT))) {
+    // ACME 来源：报到期时间与连续失败次数（失败期间仍在用旧证书）。
+    try {
+      const parsed = new X509Certificate(
+        readFileSync(join(acme, ACME_CERT), "utf8"),
+      );
+      let failures = 0;
+      try {
+        const state = JSON.parse(
+          readFileSync(join(acme, ACME_STATE), "utf8"),
+        ) as { failures?: unknown };
+        if (typeof state.failures === "number") failures = state.failures;
+      } catch {
+        /* 没有状态文件 = 还没失败过。 */
+      }
+      return {
+        kind: "ACME",
+        certFile: join(acme, ACME_CERT),
+        notAfter: parsed.validTo,
+        acmeFailures: failures,
+      };
+    } catch {
+      return { kind: "读不出来", certFile: join(acme, ACME_CERT) };
+    }
+  }
   const path =
     certFile !== ""
       ? certFile
@@ -492,6 +652,44 @@ async function runUpgrade(
 
 /* --------------------------------- 进程入口 -------------------------------- */
 
+/** 终端里不回显地读一行：原始模式逐字符收，回车结束，Ctrl-C 放弃。 */
+function promptHidden(label: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const input = process.stdin;
+    process.stderr.write(label);
+    input.setRawMode(true);
+    input.resume();
+    input.setEncoding("utf8");
+    let typed = "";
+    const finish = (): void => {
+      input.setRawMode(false);
+      input.pause();
+      input.removeListener("data", onData);
+      process.stderr.write("\n");
+    };
+    const onData = (chunk: string): void => {
+      for (const character of chunk) {
+        if (character === "\r" || character === "\n") {
+          finish();
+          resolve(typed);
+          return;
+        }
+        if (character === "\u0003") {
+          finish();
+          reject(new Error("已取消"));
+          return;
+        }
+        if (character === "\u007f" || character === "\b") {
+          typed = typed.slice(0, -1);
+        } else {
+          typed += character;
+        }
+      }
+    };
+    input.on("data", onData);
+  });
+}
+
 const isEntryPoint =
   typeof require !== "undefined" &&
   typeof module !== "undefined" &&
@@ -503,6 +701,12 @@ if (isEntryPoint) {
     stderr: (line) => process.stderr.write(line),
     env: process.env,
     moduleDir: typeof __dirname === "string" ? __dirname : process.cwd(),
+    stdin: async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+      return Buffer.concat(chunks).toString("utf8");
+    },
+    ...(process.stdin.isTTY ? { prompt: promptHidden } : {}),
   }).then((code) => {
     if (code !== 0) process.exitCode = code;
   });

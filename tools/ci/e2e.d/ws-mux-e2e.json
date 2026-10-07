@@ -1,0 +1,8 @@
+{
+  "id": "ws-mux-e2e",
+  "tier": "a",
+  "script": "tools/probes/ws-mux-e2e.mjs",
+  "args": ["{out}"],
+  "requires": ["tmux", "chrome"],
+  "timeoutMinutes": 10
+}

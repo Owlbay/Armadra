@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -156,5 +157,55 @@ describe("DeliveryQueueBadge", () => {
     );
     expect(screen.getAllByText("有上报")).toHaveLength(1);
     expect(screen.getAllByText("按观察放行")).toHaveLength(1);
+  });
+
+  it("「我发出的」列这个节点发出去的终态，不列还排着的", async () => {
+    queue.items = [item("q-1")];
+    const record = (traceId: string, patch: Record<string, unknown>) => ({
+      traceId,
+      workspaceId: "workspace-1",
+      sourceNodeId: "node-b",
+      targetNodeId: "node-c",
+      outcome: "delivered",
+      targetState: "",
+      bodyChars: 8,
+      createdAt: new Date().toISOString(),
+      ...patch,
+    });
+    queue.records = [
+      record("s-1", { outcome: "expired" }),
+      record("s-2", { outcome: "cancelled" }),
+      record("s-3", { outcome: "delivered", targetState: "idle" }),
+      // 还排着的、别人发的，都不列。
+      record("s-4", { outcome: "queued" }),
+      record("s-5", { sourceNodeId: "node-a", outcome: "expired" }),
+    ];
+    renderBadge();
+    fireEvent.click(await screen.findByTestId("delivery-queue-node-b"));
+    expect(await screen.findByText("我发出的")).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        document.querySelectorAll('[data-slot="delivery-sent"]'),
+      ).toHaveLength(3),
+    );
+    expect(screen.getAllByText("已过期")).toHaveLength(1);
+    expect(screen.getAllByText("已取消")).toHaveLength(1);
+    expect(screen.getAllByText("已投递")).toHaveLength(1);
+  });
+
+  it("排队项的终态也让发起者重读", () => {
+    act(() => {
+      dispatchWorkspaceEvent({
+        type: "agent.delivery",
+        traceId: "t-9",
+        sourceNodeId: "node-b",
+        targetNodeId: "node-c",
+        outcome: "expired",
+        code: "TARGET_BUSY",
+      } as WorkspaceEvent);
+    });
+    const versions = useDeliveryStore.getState().queueVersion;
+    expect(versions[scoped("node-b")]).toBe(1);
+    expect(versions[scoped("node-c")]).toBe(1);
   });
 });

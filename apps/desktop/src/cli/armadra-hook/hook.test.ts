@@ -6,7 +6,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { nextRevision } from "./binding.js";
 import {
@@ -20,15 +20,22 @@ import {
   pollForAnswer,
   writeRequestFile,
 } from "./hook.js";
-import { asObject, parseJson } from "./json.js";
-import type { JsonValue } from "./json.js";
+import { asObject, parseJson } from "../../hook-client/json.js";
+import type { JsonValue } from "../../hook-client/json.js";
 import {
   launcherFileName,
   launcherScript,
   windowsLaunchConfig,
   writeLauncher,
 } from "./launcher.js";
-import { CLIENT_VERSION, MAX_PAYLOAD_BYTES } from "./usage.js";
+import { runCanvas } from "./control.js";
+import { main } from "./main.js";
+import {
+  CANVAS_USAGE,
+  CLIENT_VERSION,
+  MAX_PAYLOAD_BYTES,
+  USAGE,
+} from "./usage.js";
 
 const temporaries: string[] = [];
 
@@ -170,6 +177,19 @@ describe("permission files", () => {
       expect(fs.statSync(file).mode & 0o777).toBe(0o600);
       expect(fs.statSync(pending).mode & 0o777).toBe(0o700);
     }
+    // 写在旁边再改名：目录里只剩完整的 `<id>.json`，没有半截的临时文件。
+    expect(fs.readdirSync(pending)).toEqual(["n1-1-2.json"]);
+  });
+
+  it("leaves no temporary file behind when the request cannot be placed", () => {
+    const pending = path.join(tempdir(), "pending");
+    const file = path.join(pending, "n1-1-2.json");
+    // 目标名被一个非空目录占着，改名一定失败。
+    fs.mkdirSync(path.join(file, "occupied"), { recursive: true });
+    expect(writeRequestFile(pending, file, parseJson('{"a":1}'))).toMatch(
+      /^cannot create /,
+    );
+    expect(fs.readdirSync(pending)).toEqual(["n1-1-2.json"]);
   });
 });
 
@@ -248,6 +268,43 @@ describe("launcher", () => {
     );
   });
 
+  it("writes the same launcher under another name for the bundled ama", () => {
+    expect(launcherFileName("linux", "ama")).toBe("ama");
+    expect(launcherFileName("win32", "ama")).toBe("ama.exe");
+    const directory = path.join(tempdir(), "bin");
+    const target = { runner: "/opt/Armadra", bundle: "/res/agent/ama.cjs" };
+    const posix = writeLauncher(directory, target, "linux", { name: "ama" });
+    expect(posix).toBe(path.join(directory, "ama"));
+    const script = fs.readFileSync(posix, "utf8");
+    expect(script).toContain("ELECTRON_RUN_AS_NODE=1");
+    expect(script).toContain('exec "/opt/Armadra" "/res/agent/ama.cjs" "$@"');
+    expect(script).toContain("Armadra launcher for ama");
+    // The hook client's own launcher is untouched beside it.
+    expect(fs.existsSync(path.join(directory, "armadra-hook"))).toBe(false);
+
+    // Windows: the compiled hook launcher is reused, reading `ama.launch`.
+    const built = path.join(tempdir(), "armadra-hook.exe");
+    fs.writeFileSync(built, "MZ launcher");
+    const windows = writeLauncher(
+      directory,
+      {
+        runner: "C:\\A\\armadra.exe",
+        bundle: "C:\\A\\ama.cjs",
+        windowsExe: built,
+      },
+      "win32",
+      { name: "ama" },
+    );
+    expect(windows).toBe(path.join(directory, "ama.exe"));
+    expect(fs.readFileSync(path.join(directory, "ama.launch"), "utf8")).toBe(
+      "C:\\A\\armadra.exe\r\nC:\\A\\ama.cjs\r\n",
+    );
+    expect(fs.existsSync(path.join(directory, "ama.cmd"))).toBe(true);
+    expect(() =>
+      writeLauncher(directory, target, "linux", { name: "../x" }),
+    ).toThrow(/launcher name/);
+  });
+
   it("refuses a launch config the .exe would misread", () => {
     expect(() =>
       windowsLaunchConfig({ runner: "C:\\a\nb.exe", bundle: "C:\\b.js" }),
@@ -283,5 +340,65 @@ describe("launcher", () => {
         "linux",
       ),
     ).toContain('exec "/opt/A B/armadra" "/opt/a.js" "$@"');
+  });
+});
+
+describe("canvas --help", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function captured(): { out: () => string; err: () => string } {
+    let out = "";
+    let err = "";
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      out += String(chunk);
+      return true;
+    });
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      err += String(chunk);
+      return true;
+    });
+    return { out: () => out, err: () => err };
+  }
+
+  it("prints the verb table and exits 0 without an endpoint", async () => {
+    for (const flag of ["--help", "-h"]) {
+      const io = captured();
+      expect(await main(["canvas", flag])).toBe(0);
+      expect(io.out()).toBe(CANVAS_USAGE);
+      expect(io.err()).toBe("");
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("lists the verbs an agent drives the canvas with", () => {
+    for (const verb of [
+      "help",
+      "post",
+      "inbox",
+      "ack",
+      "open-agent",
+      "team",
+      "open-browser",
+      "rename",
+      "link",
+      "send",
+      "outbox",
+      "cancel",
+    ]) {
+      expect(CANVAS_USAGE, verb).toMatch(new RegExp(`^  ${verb} `, "m"));
+    }
+    expect(CANVAS_USAGE.startsWith("CANVAS:\n")).toBe(true);
+  });
+
+  it("is the same section the full usage carries", () => {
+    expect(USAGE).toContain(`\n${CANVAS_USAGE}\nTEXT FROM STDIN OR A FILE`);
+  });
+
+  it("still refuses any other flag where a verb belongs", async () => {
+    const io = captured();
+    expect(await runCanvas(["--verbose"])).toBe(1);
+    expect(io.err()).toContain("expected a canvas verb");
   });
 });

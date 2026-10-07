@@ -243,7 +243,11 @@ export function mergeReasonKey(code: string): string | null {
  * pull requests are therefore suggested under a `pr-<number>` name derived
  * from the pull request itself, and same-repository ones keep their own ref.
  */
-export function suggestedHeadRef(pull: GithubPullRequest): string {
+export function suggestedHeadRef(pull: {
+  number: number | bigint;
+  headRef: string;
+  fromFork: boolean;
+}): string {
   if (!pull.fromFork && pull.headRef) return pull.headRef;
   return `pr-${pull.number}`;
 }
@@ -267,4 +271,75 @@ export function instant(
 /** Short, copyable head identity — the full SHA stays available as a title. */
 export function shortSha(sha: string): string {
   return sha ? sha.slice(0, 12) : "";
+}
+
+/** 远端地址 → 主机名（不带端口）与路径各段，`.git` 去掉。认不出答 `null`。 */
+function remoteParts(
+  remoteUrl: string,
+): { host: string; segments: string[]; web: boolean } | null {
+  const raw = remoteUrl.trim();
+  if (raw === "" || /\s/.test(raw)) return null;
+  let host: string;
+  let path: string;
+  let web = false;
+  if (raw.includes("://")) {
+    try {
+      const parsed = new URL(raw);
+      web = parsed.protocol === "https:" || parsed.protocol === "http:";
+      host = parsed.hostname;
+      path = decodeURIComponent(parsed.pathname);
+    } catch {
+      return null;
+    }
+  } else {
+    const at = raw.lastIndexOf("@");
+    const rest = at >= 0 ? raw.slice(at + 1) : raw;
+    const colon = rest.indexOf(":");
+    if (colon <= 0) return null;
+    host = rest.slice(0, colon);
+    path = rest.slice(colon + 1);
+  }
+  const segments = path
+    .split("/")
+    .filter((segment) => segment !== "")
+    .map((segment) => segment.toLowerCase());
+  if (segments.length < 2) return null;
+  segments[segments.length - 1] = segments[segments.length - 1]!.replace(
+    /\.git$/,
+    "",
+  );
+  return { host: host.toLowerCase().replace(/\.$/, ""), segments, web };
+}
+
+/**
+ * 本地哪一个远端指向这个托管仓库：按 fetch 地址的主机与路径认，不看远端叫什么。
+ * 路径整条对上优先；http(s) 地址允许前面多出站点前缀（GitLab 装在子路径下）。
+ * 认不出答 `null`，由调用方退回缺省。
+ */
+export function remoteForRepository(
+  remotes: readonly { name: string; fetchUrl: string }[],
+  repository: { host: string; owner: string; name: string },
+): string | null {
+  const host = repository.host.toLowerCase().replace(/:\d+$/, "");
+  const wanted = [...repository.owner.split("/"), repository.name].map(
+    (segment) => segment.toLowerCase(),
+  );
+  const same = (segments: readonly string[]) =>
+    segments.length === wanted.length &&
+    segments.every((segment, index) => segment === wanted[index]);
+  let suffix: string | null = null;
+  for (const remote of remotes) {
+    const parts = remoteParts(remote.fetchUrl);
+    if (parts === null || parts.host !== host) continue;
+    if (same(parts.segments)) return remote.name;
+    if (
+      suffix === null &&
+      parts.web &&
+      parts.segments.length > wanted.length &&
+      same(parts.segments.slice(-wanted.length))
+    ) {
+      suffix = remote.name;
+    }
+  }
+  return suffix;
 }

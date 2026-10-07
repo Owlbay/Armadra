@@ -5,7 +5,12 @@ import { createReadStream } from "node:fs";
 
 import { IPC } from "../../shared/ipc";
 import { dataDir } from "../../shell-core/paths";
-import { initialState } from "../../shell-core/updates/availability";
+import {
+  initialState,
+  installRefusal,
+  shouldEnableUpdater,
+  type UpdaterEnvironment,
+} from "../../shell-core/updates/availability";
 import { Cancellation } from "../../shell-core/updates/cancel";
 import * as coordinate from "../../shell-core/updates/coordinate";
 import {
@@ -22,6 +27,7 @@ import {
   notificationTitle,
   stagedCleared,
   stagedReady,
+  unsignedNotificationBody,
   wantsNotification,
   type Staged,
 } from "../../shell-core/updates/notify";
@@ -32,7 +38,12 @@ import {
   type HostVerdict,
 } from "../../shell-core/updates/verdict";
 import { sendToWindow } from "../window";
-import { updaterEnvironment } from "./environment";
+import {
+  allowInsecureLoopback,
+  currentTarget,
+  releaseSource,
+  updaterEnvironment,
+} from "./environment";
 
 /**
  * Shell-side application updates, on electron-updater
@@ -97,6 +108,13 @@ export interface UpdatesDeps {
    * 认不出来，拿回来是 `undefined`——更新会悄悄不工作。
    */
   readonly updaterModule?: () => typeof import("electron-updater");
+  /**
+   * The four answers about this installation (`environment.ts`). Injected by
+   * tests that need a packaged, unsigned build without being one; read fresh
+   * on every use otherwise, because it is cheap and a cached Windows
+   * signature read is already memoised underneath.
+   */
+  readonly environment?: () => UpdaterEnvironment;
 }
 
 declare const require: (id: string) => unknown;
@@ -115,6 +133,8 @@ export class UpdatesController {
   private transfer: CancellationToken | null = null;
   private staged: { offer: Offer; file: string } | null = null;
   private readonly stagedListeners = new Set<(staged: Staged) => void>();
+  /** The channel of the last check; a download uses the same one. */
+  private channel: offer.Channel = "stable";
 
   constructor(private readonly deps: UpdatesDeps) {}
 
@@ -136,8 +156,12 @@ export class UpdatesController {
 
   /* ------------------------------ the state ------------------------------ */
 
+  private environment(): UpdaterEnvironment {
+    return (this.deps.environment ?? updaterEnvironment)();
+  }
+
   private current(): Machine {
-    this.machine ??= Machine.of(initialState(updaterEnvironment()));
+    this.machine ??= Machine.of(initialState(this.environment()));
     return this.machine;
   }
 
@@ -161,6 +185,117 @@ export class UpdatesController {
     const started = this.apply({ type: "checkStarted" });
     if (started.state !== "checking") return started;
     return this.apply(await evaluate(readVerdict(input)));
+  }
+
+  /**
+   * Asks the release index itself (external services §3.1, §3.4): the index at
+   * `releaseSource()`, conditionally on the last answer's `ETag` so an
+   * unchanged index costs a 304 rather than a rate-limited call; only releases
+   * the `updates.channel` setting allows; then the same cross-check against
+   * the manifest every Host answer goes through, and the staged rollout.
+   *
+   * `manual` is a person pressing "check"; otherwise the call is the timer's,
+   * and it does nothing until the interval since the last check has passed.
+   */
+  async checkRelease(
+    options: { manual?: boolean; nowMs?: number } = {},
+  ): Promise<UpdateState> {
+    if (!shouldEnableUpdater(this.environment())) return this.state();
+    const source = releaseSource();
+    const target = currentTarget();
+    if (source === null || target === null) return this.state();
+    const nowMs = options.nowMs ?? Date.now();
+    const directory = dataDir();
+    const settings = await this.readSettings();
+    this.channel = offer.channelFrom(settings);
+    const key = coordinate.releaseCacheKey(source, this.channel);
+    const cached = coordinate.readReleaseCache(directory);
+    const usable = cached !== null && cached.key === key ? cached : null;
+    if (
+      options.manual !== true &&
+      usable !== null &&
+      nowMs - usable.checkedAtMs < coordinate.MIN_CHECK_INTERVAL_MS
+    ) {
+      return this.state();
+    }
+    const started = this.apply({ type: "checkStarted" });
+    if (started.state !== "checking") return started;
+    const index = await fetchIndex(source, usable);
+    if (!index.ok) {
+      return this.apply({
+        type: "checkRefused",
+        reason: index.reason,
+        retryAfterMs: index.retryAfterMs,
+        atMs: nowMs,
+      });
+    }
+    coordinate.writeReleaseCache(directory, {
+      key,
+      etag: index.etag,
+      body: index.body,
+      checkedAtMs: nowMs,
+    });
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(index.body);
+    } catch {
+      parsed = null;
+    }
+    const verdict = offer.releaseVerdict(parsed, {
+      channel: this.channel,
+      currentVersion: app.getVersion(),
+      target,
+      checkedAtMs: nowMs,
+    });
+    if (this.state().state !== "checking") return this.state();
+    return this.apply(await evaluate(verdict, coordinate.installId(directory)));
+  }
+
+  /**
+   * The automatic check: once after start-up, then every six hours or more,
+   * spread by jitter (`coordinate.nextCheckDelayMs`), and only while
+   * `updates.autoCheck` is on. Returns the stop function.
+   */
+  startSchedule(random: () => number = Math.random): () => void {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let stopped = false;
+    const arm = () => {
+      if (stopped) return;
+      const cached = coordinate.readReleaseCache(dataDir());
+      timer = setTimeout(
+        () => void run(),
+        coordinate.nextCheckDelayMs(
+          cached?.checkedAtMs ?? null,
+          Date.now(),
+          random(),
+        ),
+      );
+      timer.unref?.();
+    };
+    const run = async () => {
+      try {
+        if (offer.autoCheckFrom(await this.readSettings())) {
+          await this.checkRelease();
+        }
+      } catch {
+        // A failed automatic check is reported through the state, or not at
+        // all; it never stops the next one.
+      }
+      arm();
+    };
+    arm();
+    return () => {
+      stopped = true;
+      if (timer !== null) clearTimeout(timer);
+    };
+  }
+
+  private async readSettings(): Promise<Uint8Array | string> {
+    try {
+      return await this.deps.settings();
+    } catch {
+      return "";
+    }
   }
 
   /** "Skip this version": claims nothing about whether a newer one exists. */
@@ -241,6 +376,11 @@ export class UpdatesController {
     } catch {
       return { ok: false, reason: "sourceMalformed" };
     }
+    // The feed electron-updater is about to read is checked by the shell first:
+    // the one the release's `latest.json` names, by digest, describing exactly
+    // the bundle on offer. A release without one would 404 a step later.
+    const checkedFeed = await verifiedFeed(pending, feed);
+    if (!checkedFeed.ok) return checkedFeed;
     const { CancellationToken, autoUpdater } = this.updater();
     // The feed of the release the Host offered, not an address this bundle was
     // built with: that is what lets a beta build update.
@@ -248,6 +388,13 @@ export class UpdatesController {
       provider: "generic",
       url: new URL(offer.directory(feed), feed).toString(),
     });
+    // One release directory holds six targets' feeds; the channel picks this
+    // target's (`latest-<target>….yml`, `offer.feedName`). Setting a channel
+    // turns `allowDowngrade` on as a side effect — turned off again at once,
+    // because the Host's offer is what decides the version, never a downgrade.
+    autoUpdater.channel = offer.updaterChannel(pending.target);
+    autoUpdater.allowDowngrade = false;
+    autoUpdater.allowPrerelease = offer.allowPrerelease(this.channel);
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
     // The digest below is checked against the file that arrives, and a
@@ -321,6 +468,15 @@ export class UpdatesController {
     }
     const pending = preparing.offer;
 
+    // A package without a platform signature stages and verifies updates (with
+    // ARMADRA_UPDATES_DEV=1) but never hands them to an installer. Checked
+    // before anything is stopped: nothing about this restart is going to
+    // happen, so nothing should be interrupted for it.
+    const refusal = installRefusal(this.environment());
+    if (refusal !== null) {
+      return this.apply({ type: "restartAbandoned", reason: refusal });
+    }
+
     const stopped = await this.stopOwnedBackground();
     if (stopped !== null) {
       // The install never started. Nothing was replaced, nothing was written,
@@ -346,6 +502,17 @@ export class UpdatesController {
     try {
       // 走到这一步必然已经下载过，模块早就加载好了；这里只是把句柄再取一次。
       const { autoUpdater } = this.updater();
+      // On macOS `quitAndInstall` only *asks* Squirrel.Mac, which then fetches
+      // the staged zip and checks it against this app's designated requirement
+      // — a different signer (a rotated certificate, an ad-hoc rehearsal build)
+      // is refused there, asynchronously, as an `error` event. Without this the
+      // page would sit in "installing" while nothing happens.
+      autoUpdater.once("error", (error: unknown) => {
+        const now = this.state();
+        if (now.state === "downloaded" && now.phase === "installing") {
+          this.failInstall(transferReason(error));
+        }
+      });
       this.deps.onBeforeRestart();
       // Never returns: the installer replaces this process.
       autoUpdater.quitAndInstall();
@@ -413,7 +580,8 @@ export class UpdatesController {
    * the same thing without either of them.
    */
   private async announceStaged(pending: Offer): Promise<void> {
-    this.announce(stagedReady(pending.version));
+    const installable = installRefusal(this.environment()) === null;
+    this.announce(stagedReady(pending.version, installable));
     if (this.deps.notify === undefined) return;
     let settings: Uint8Array | string;
     try {
@@ -425,7 +593,9 @@ export class UpdatesController {
     const locale = localeFromEnvironment();
     this.deps.notify(
       notificationTitle(locale),
-      notificationBody(locale, pending.version),
+      installable
+        ? notificationBody(locale, pending.version)
+        : unsignedNotificationBody(locale, pending.version),
     );
   }
 
@@ -444,13 +614,26 @@ export class UpdatesController {
 
 /* --------------------------------- helpers -------------------------------- */
 
-async function evaluate(verdict: HostVerdict): Promise<Event> {
+async function evaluate(
+  verdict: HostVerdict,
+  installId: string | null = null,
+): Promise<Event> {
   const atMs = verdict.checkedAtMs;
   if (verdict.state === "upToDate") {
     return { type: "checkedUpToDate", atMs };
   }
   if (verdict.state === "available") {
     const resolved = await resolveOffer(verdict);
+    // A staged rollout that does not include this installation is no offer
+    // for it — the same answer electron-updater's own staging gives. The check
+    // was made; the release is simply not this installation's yet.
+    if (
+      resolved.ok &&
+      installId !== null &&
+      !offer.rolloutAccepts(resolved.rollout, installId)
+    ) {
+      return { type: "checkedUpToDate", atMs };
+    }
     return resolved.ok
       ? { type: "checkedAvailable", offer: resolved.value }
       : {
@@ -472,21 +655,130 @@ async function evaluate(verdict: HostVerdict): Promise<Event> {
 
 async function resolveOffer(
   verdict: HostVerdict,
-): Promise<offer.Resolved<Offer>> {
-  const insecure = !app.isPackaged;
+): Promise<
+  | { ok: true; value: Offer; rollout: offer.Rollout | null }
+  | { ok: false; reason: Reason }
+> {
+  const insecure = allowInsecureLoopback();
   const target = offer.pointer(verdict.answer, verdict.target, insecure);
   if (!target.ok) return target;
   const manifest = await fetchManifest(target.value.url);
   if (!manifest.ok) return manifest;
   // No minisign key exists in an Electron build; the manifest's own signature
   // field is therefore not compared against one. See `offer.ts`.
-  return offer.resolve(
+  const resolved = offer.resolve(
     verdict.answer,
     target.value,
     manifest.value,
     "",
     insecure,
   );
+  if (!resolved.ok) return resolved;
+  return {
+    ok: true,
+    value: resolved.value,
+    rollout: offer.readRollout(manifest.value),
+  };
+}
+
+/**
+ * The feed for the offer, fetched and checked before electron-updater is
+ * pointed at it. When the offer came from `latest.json`, the feed is the one
+ * it names, by digest; when it came from a feed directly, that feed is read
+ * again and has to describe the same bundle.
+ */
+async function verifiedFeed(
+  pending: Offer,
+  manifest: URL,
+): Promise<offer.Resolved<void>> {
+  const insecure = allowInsecureLoopback();
+  let feedUrl = manifest;
+  let expected: string | null = null;
+  if (manifest.pathname.endsWith("/latest.json")) {
+    const text = await fetchManifest(manifest);
+    if (!text.ok) return text;
+    const named = offer.feedFor(text.value, pending.target);
+    if (!named.ok) return named;
+    const url = offer.releaseUrl(named.value.url, insecure);
+    if (!url.ok) return url;
+    if (!offer.sameRelease(url.value, manifest)) {
+      return { ok: false, reason: "sourceMalformed" };
+    }
+    feedUrl = url.value;
+    expected = named.value.sha256;
+  }
+  if (!feedUrl.pathname.endsWith(`/${offer.feedName(pending.target)}`)) {
+    return { ok: false, reason: "sourceMalformed" };
+  }
+  const feedText = await fetchManifest(feedUrl);
+  if (!feedText.ok) return feedText;
+  return offer.verifyFeed(feedText.value, expected, feedUrl, pending);
+}
+
+/** The release index as fetched: a fresh body, or the cached one on a 304. */
+type IndexAnswer =
+  | { ok: true; etag: string; body: string }
+  | { ok: false; reason: Reason; retryAfterMs: number };
+
+/** The largest release index read; GitHub's first page is far below it. */
+const INDEX_LIMIT_BYTES = 4 * 1024 * 1024;
+
+/**
+ * `GET <source>/releases`, conditional on the cached `ETag`. A 304 reuses the
+ * cached body; a 403 / 429 is the rate limit, and its reset time becomes the
+ * retry hint rather than a "could not check" that invites pressing again.
+ */
+async function fetchIndex(
+  source: string,
+  cached: coordinate.ReleaseCache | null,
+): Promise<IndexAnswer> {
+  const headers: Record<string, string> = {
+    accept: "application/vnd.github+json",
+  };
+  if (cached !== null && cached.etag.length > 0) {
+    headers["if-none-match"] = cached.etag;
+  }
+  let response: Response;
+  try {
+    response = await fetch(`${source}/releases?per_page=30`, {
+      headers,
+      signal: AbortSignal.timeout(15_000),
+      redirect: "follow",
+    });
+  } catch {
+    return { ok: false, reason: "sourceUnreachable", retryAfterMs: 0 };
+  }
+  if (response.status === 304 && cached !== null) {
+    return { ok: true, etag: cached.etag, body: cached.body };
+  }
+  if (response.status === 403 || response.status === 429) {
+    const reset = Number(response.headers.get("x-ratelimit-reset") ?? "0");
+    const after = Number(response.headers.get("retry-after") ?? "0");
+    const retryAfterMs =
+      after > 0
+        ? after * 1000
+        : reset > 0
+          ? Math.max(0, reset * 1000 - Date.now())
+          : 0;
+    return { ok: false, reason: "sourceUnreachable", retryAfterMs };
+  }
+  if (!response.ok) {
+    return { ok: false, reason: "sourceUnreachable", retryAfterMs: 0 };
+  }
+  const declared = Number(response.headers.get("content-length") ?? "0");
+  if (declared > INDEX_LIMIT_BYTES) {
+    return { ok: false, reason: "sourceMalformed", retryAfterMs: 0 };
+  }
+  let body: string;
+  try {
+    body = await response.text();
+  } catch {
+    return { ok: false, reason: "sourceUnreachable", retryAfterMs: 0 };
+  }
+  if (body.length > INDEX_LIMIT_BYTES) {
+    return { ok: false, reason: "sourceMalformed", retryAfterMs: 0 };
+  }
+  return { ok: true, etag: response.headers.get("etag") ?? "", body };
 }
 
 /**

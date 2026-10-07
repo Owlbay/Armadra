@@ -1,30 +1,43 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { codexTomlString } from "../hook/install/inject";
-import { tempDir } from "../testing/temp-dir";
+import { delimiter, dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
-  type LaunchWord,
-  type ShellDialect,
-  shellCommandLine,
-} from "../terminal/shell";
+  type WindowsLauncherSpec,
+  shimTargetFor,
+  windowsLauncherFiles,
+  windowsLauncherPath,
+  windowsShimPath,
+  writeWindowsLauncherFiles,
+} from "../hook/install/windows-launcher";
+import { tempDir } from "../testing/temp-dir";
+import { type ShellDialect, shellCommandLine } from "../terminal/shell";
 import { launchTargetOf, resolveCommand } from "./registry";
+import type { ShimTarget } from "./windows-shim";
 
 /**
- * 启动行真的交给 Windows 的 shell 读一遍（Windows 专用；别的平台跳过）。
+ * 启动行经 Windows 画布启动器（`run\<cli>.exe`，docs/design/canvas-launcher.md
+ * §5）交给真的 Windows shell 读一遍。Windows 专用：`armadra-launch.exe` 要用
+ * 系统自带的 `csc.exe` 现编，别的平台整组跳过（`runIf`），`.launch` 的写法由
+ * `hook/install/windows-launcher.test.ts` 在所有平台上测。
  *
- * `terminal/shell.ts` 的单测只比对写出来的字，`cmd.exe` 的读法在那边是模拟的。
- * 这里把生成的整行交给真的 `cmd.exe` 与 PowerShell 执行：程序是一个把 argv 与
- * 环境变量原样回显成 JSON 的 node 脚本，断言每个参数、每个由行展开的环境变量都
- * 一字不差地到了程序手里。
+ * 程序是一个把 argv 与环境回显成 JSON 的 node 脚本。断言：
  *
- * 前三条的程序直接是 `node.exe`。批处理的 `%*` 会让 `cmd.exe` 把参数再读一遍，
- * 任何引用都挡不住（含 `\"` 与 `&` 的参数会在第二遍里露出来），所以启动行绕过
- * npm 的 `.cmd` 包装（`windows-shim.ts`）——后两条造一个包装，走的就是这条路。
+ *   * `cmd.exe`、pwsh 7、Windows PowerShell 5.1 敲进去的整行里，调用者的每个
+ *     值原样到达，注入的词（带 `"`、`\`、`&`、`%`、中文的 Codex 式 TOML 串）
+ *     原样接在后面，注入的环境变量只在 CLI 进程里；
+ *   * 没有 `ARMADRA_NODE_ID` 时不注入——画布外重跑同一行就是普通启动；
+ *   * 退出码透传；
+ *   * 程序是读不出的 `.cmd` 包装时经 `cmd.exe` 起来，不安全的注入词整组跳过并
+ *     在 stderr 说明，安全的照常注入；
+ *   * 垫片模式起 `.launch` 里的程序，并从 PATH 摘掉自己的目录。
  */
 
-/** 各种要特殊处理的字符；`cmd.exe` 收不了换行，这里没有。 */
+const windows = process.platform === "win32";
+const desktop = resolve(import.meta.dirname, "../../..");
+
+/** 调用者的值：各种要特殊处理的字符；`cmd.exe` 收不了换行，这里没有。 */
 const VALUES = [
   "plain",
   "a b",
@@ -46,72 +59,125 @@ const VALUES = [
   "",
 ];
 
-/**
- * 由行展开的环境变量：一个普通值，和 Codex 那样的 TOML 串。`cmd.exe` 把值原样
- * 贴进引号里，所以普通值里不能有 `"`、也不能以 `\` 结尾（见 `shellEnvWord`）；
- * 带引号的值要像 Codex 的那样先写成 `codexTomlString` 的形状。
- */
+/** 注入的词：照 Codex 的形状，写在 `.launch` 里，不经任何 shell。 */
+const TOML =
+  'hooks.SessionStart=[{hooks=[{type="command",command="C:\\\\Program Files\\\\armadra-hook.exe codex & 100% 画布"}]}]';
+const INJECTED = [
+  "--dangerously-bypass-hook-trust",
+  "-c",
+  TOML,
+  "-c",
+  'developer_instructions="r16\\n%PATH% ^ | <x>"',
+  "C:\\trailing\\",
+];
+/** 只给 CLI 进程的变量。 */
 const PLAIN = "a b & c | d <e> 100% ^f 画布 C:\\dir\\x";
-const TOML_SOURCE =
-  'hook "C:\\Program Files\\armadra-hook.exe" codex & 100% 画布';
+const NODE_ID = "node-1";
 
 const ECHO = [
-  "const out = { argv: process.argv.slice(2), plain: process.env.ARMADRA_PLAIN };",
+  "const out = { argv: process.argv.slice(2), plain: process.env.ARMADRA_PLAIN ?? null, path: process.env.PATH ?? '' };",
   // 只输出 ASCII：控制台代码页不该决定断言。
   "process.stdout.write(JSON.stringify(out).replace(/[\\u0080-\\uffff]/g, (c) => '\\\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')));",
 ].join("\n");
 
-/** 启动行开头的程序与它自己要的词：直接的 `node.exe <脚本>`，或者包装。 */
-interface Launch {
-  readonly program: string;
-  readonly args: readonly string[];
+interface Echo {
+  argv: string[];
+  plain: string | null;
+  path: string;
 }
 
-function echoScript(root = tempDir("armadra-windows-launch-")): string {
-  const script = join(root, "echo.js");
-  writeFileSync(script, ECHO, "utf8");
-  return script;
+let root = "";
+let exe = "";
+let echo = "";
+let launcher = "";
+let shim = "";
+let shimDir = "";
+
+/** 编出 `armadra-launch.exe`，写一个 CLI 的 `run\` 与 `shims\`。 */
+function writeLauncher(
+  agentId: string,
+  args: readonly string[],
+  env: readonly (readonly [string, string])[],
+  shimTarget?: ShimTarget,
+): WindowsLauncherSpec {
+  const spec: WindowsLauncherSpec = {
+    agentId,
+    runDir: join(root, "integration", "run"),
+    shimDir: join(root, "integration", "shims"),
+    args,
+    env,
+    exe,
+    ...(shimTarget === undefined ? {} : { shimTarget }),
+  };
+  writeWindowsLauncherFiles(windowsLauncherFiles(spec));
+  return spec;
 }
 
-function fixture(
+beforeAll(async () => {
+  if (!windows) return;
+  root = tempDir("armadra-windows-launch-");
+  const script = pathToFileURL(join(desktop, "scripts", "launch-exe.mjs")).href;
+  const { compileLaunchExe } = (await import(script)) as {
+    compileLaunchExe(output: string): string;
+  };
+  exe = compileLaunchExe(join(root, "build", "armadra-launch.exe"));
+  echo = join(root, "echo.js");
+  writeFileSync(echo, ECHO, "utf8");
+  const spec = writeLauncher("claude", INJECTED, [["ARMADRA_PLAIN", PLAIN]], {
+    program: process.execPath,
+    args: [echo],
+  });
+  launcher = windowsLauncherPath(spec.runDir, "claude");
+  shim = windowsShimPath(spec.shimDir, "claude");
+  shimDir = spec.shimDir;
+}, 120_000);
+
+/** 画布节点终端的环境：门开着。 */
+function canvasEnv(): NodeJS.ProcessEnv {
+  return { ...outsideEnv(), ARMADRA_NODE_ID: NODE_ID };
+}
+
+/** 画布外：同一个环境去掉 `ARMADRA_NODE_ID`。 */
+function outsideEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (name.toUpperCase() !== "ARMADRA_NODE_ID") env[name] = value;
+  }
+  return env;
+}
+
+/** 敲进节点 shell 的那一行：启动器、程序、程序前置词、调用者的值。 */
+function launchLine(
   dialect: ShellDialect,
   values: readonly string[] = VALUES,
-  launch: Launch = { program: process.execPath, args: [echoScript()] },
-): {
-  line: string;
-  env: NodeJS.ProcessEnv;
-} {
-  const words: LaunchWord[] = [
-    ...launch.args,
-    ...values,
-    { prefix: "plain=", env: "ARMADRA_PLAIN" },
-    { prefix: "developer_instructions=", env: "ARMADRA_TOML" },
-  ];
-  return {
-    line: shellCommandLine(launch.program, words, dialect),
-    env: {
-      ...process.env,
-      ARMADRA_PLAIN: PLAIN,
-      ARMADRA_TOML: codexTomlString(TOML_SOURCE, dialect),
-    },
-  };
+): string {
+  return shellCommandLine(
+    launcher,
+    [process.execPath, echo, ...values],
+    dialect,
+  );
 }
 
-function expectArrived(
-  stdout: string,
-  values: readonly string[] = VALUES,
-): void {
-  const out = JSON.parse(stdout) as { argv: string[]; plain: string };
+/** `env` with `first` put in front of its `PATH`, however `PATH` was spelt. */
+function withPath(env: NodeJS.ProcessEnv, first: string): NodeJS.ProcessEnv {
+  const copy: NodeJS.ProcessEnv = {};
+  let path = "";
+  for (const [name, value] of Object.entries(env)) {
+    if (name.toUpperCase() === "PATH") path = value ?? "";
+    else copy[name] = value;
+  }
+  copy.PATH = `${first}${delimiter}${path}`;
+  return copy;
+}
+
+function parse(stdout: string): Echo {
+  return JSON.parse(stdout) as Echo;
+}
+
+function expectInjected(stdout: string, values: readonly string[] = VALUES) {
+  const out = parse(stdout);
+  expect(out.argv).toEqual([...values, ...INJECTED]);
   expect(out.plain).toBe(PLAIN);
-  expect(out.argv.slice(0, values.length)).toEqual(values);
-  expect(out.argv[values.length]).toBe(`plain=${PLAIN}`);
-  const toml = out.argv[values.length + 1] as string;
-  expect(toml.startsWith("developer_instructions=")).toBe(true);
-  // Codex 读到的是一条 TOML 基本字符串；这里的转义都是 JSON 也认的那几种。
-  expect(JSON.parse(toml.slice("developer_instructions=".length))).toBe(
-    TOML_SOURCE,
-  );
-  expect(out.argv).toHaveLength(values.length + 2);
 }
 
 /** `cmd.exe /d /s /c "<行>"`：去掉最外一层引号，其余照交互时敲进去的那样读。 */
@@ -119,11 +185,7 @@ function runCmd(line: string, env: NodeJS.ProcessEnv) {
   return spawnSync(
     process.env.COMSPEC ?? "cmd.exe",
     ["/d", "/s", "/c", `"${line}"`],
-    {
-      env,
-      encoding: "utf8",
-      windowsVerbatimArguments: true,
-    },
+    { env, encoding: "utf8", windowsVerbatimArguments: true },
   );
 }
 
@@ -140,8 +202,6 @@ function runPowerShell(program: string, line: string, env: NodeJS.ProcessEnv) {
   );
 }
 
-const windows = process.platform === "win32";
-
 function powershellMajor(program: string): number {
   if (!windows) return 0;
   const probe = spawnSync(
@@ -153,54 +213,180 @@ function powershellMajor(program: string): number {
 }
 
 /**
- * PowerShell 7.3 起把参数按 C 运行库的规则交给原生程序，值里的 `"` 才能原样
- * 到达；Windows PowerShell 5.1 做不到，它的行在 `--%` 之后写（`shell.ts`），
- * 那里带不了 `%` 与 `|`。
+ * PowerShell 7.3 起把参数按 C 运行库的规则交给原生程序；Windows PowerShell 5.1
+ * 的行在 `--%` 之后写（`shell.ts`），那里带不了 `%` 与 `|`——这只限制调用者
+ * 的值，注入的词不经 shell，`%`、`|` 照样到达。
  */
 const modern = powershellMajor("pwsh") >= 7;
 const legacy = powershellMajor("powershell.exe") === 5;
 const LEGACY_VALUES = VALUES.filter((value) => !/[%|]/.test(value));
 
-describe("launch lines read by the real Windows shells", () => {
-  it.runIf(windows)("cmd.exe", () => {
-    // `/d` 不跑 AutoRun；整行不能再经 node 按 C 运行库的规则转义一遍。
-    const { line, env } = fixture("cmd");
-    const result = runCmd(line, env);
+describe.runIf(windows)(
+  "the canvas launcher read by the real Windows shells",
+  () => {
+    it("cmd.exe", () => {
+      const result = runCmd(launchLine("cmd"), canvasEnv());
+      expect(result.status, result.stderr).toBe(0);
+      expectInjected(result.stdout);
+    });
+
+    it.runIf(modern)("PowerShell 7", () => {
+      const result = runPowerShell(
+        "pwsh",
+        launchLine("powershell"),
+        canvasEnv(),
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expectInjected(result.stdout);
+    });
+
+    it.runIf(legacy)("Windows PowerShell 5.1", () => {
+      const line = launchLine("windows-powershell", LEGACY_VALUES);
+      expect(line).toContain(" --% ");
+      const result = runPowerShell("powershell.exe", line, canvasEnv());
+      expect(result.status, result.stderr).toBe(0);
+      expectInjected(result.stdout, LEGACY_VALUES);
+    });
+
+    it("injects nothing without ARMADRA_NODE_ID: the same line outside a canvas", () => {
+      const result = runCmd(launchLine("cmd"), outsideEnv());
+      expect(result.status, result.stderr).toBe(0);
+      const out = parse(result.stdout);
+      expect(out.argv).toEqual(VALUES);
+      expect(out.plain).toBeNull();
+    });
+
+    it("finds a bare program name on PATH", () => {
+      const result = spawnSync(launcher, ["node", echo, "x y"], {
+        env: withPath(canvasEnv(), dirname(process.execPath)),
+        encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(parse(result.stdout).argv).toEqual(["x y", ...INJECTED]);
+    });
+
+    it("passes the program's exit code through", () => {
+      const exit = join(root, "exit.js");
+      writeFileSync(exit, "process.exit(7)", "utf8");
+      const line = shellCommandLine(launcher, [process.execPath, exit], "cmd");
+      expect(runCmd(line, canvasEnv()).status).toBe(7);
+      expect(runCmd(line, outsideEnv()).status).toBe(7);
+    });
+
+    it("refuses a missing program and an unknown .launch", () => {
+      const missing = spawnSync(launcher, [join(root, "missing.exe")], {
+        env: canvasEnv(),
+        encoding: "utf8",
+      });
+      expect(missing.status).toBe(1);
+      expect(missing.stderr).toMatch(/program not found/);
+
+      const broken = writeLauncher("pi", [], []);
+      const brokenExe = windowsLauncherPath(broken.runDir, "pi");
+      writeFileSync(
+        brokenExe.replace(/\.exe$/, ".launch"),
+        "something else\r\n",
+      );
+      const refused = spawnSync(brokenExe, [process.execPath, echo], {
+        env: canvasEnv(),
+        encoding: "utf8",
+      });
+      expect(refused.status).toBe(1);
+      expect(refused.stderr).toMatch(/armadra-launch 1/);
+    });
+  },
+);
+
+/**
+ * 读不出的 `.cmd` 包装（`custom:` 条目指向手写的批处理）：`launchTargetOf`
+ * 答不出它背后的程序，启动器只好经 `cmd.exe` 起它，`%*` 让参数被再读一遍。
+ */
+describe.runIf(windows)("a batch wrapper behind the launcher", () => {
+  function wrapper(): string {
+    const dir = join(root, "batch");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "mine.cmd");
+    writeFileSync(
+      file,
+      `@echo off\r\nset "PROG=${process.execPath}"\r\n"%PROG%" "${echo}" %*\r\n`,
+      "utf8",
+    );
+    expect(launchTargetOf(file)).toBeUndefined();
+    return file;
+  }
+
+  const SAFE = ["plain", "a b", "it's", "$HOME", "`id`", "!x!", "C:\\dir\\"];
+
+  it("skips injected words cmd.exe would read again, and says so", () => {
+    const line = shellCommandLine(launcher, [wrapper(), ...SAFE], "cmd");
+    const result = runCmd(line, canvasEnv());
     expect(result.status, result.stderr).toBe(0);
-    expectArrived(result.stdout);
+    expect(result.stderr).toMatch(/batch wrapper; canvas injection skipped/);
+    const out = parse(result.stdout);
+    expect(out.argv).toEqual(SAFE);
+    expect(out.plain).toBeNull();
   });
 
-  it.runIf(windows && modern)("PowerShell 7", () => {
-    const { line, env } = fixture("powershell");
-    const result = runPowerShell("pwsh", line, env);
+  it("injects words that survive the second read", () => {
+    const safe = ["--extension", "C:\\dir with space\\m.js", "it's"];
+    const spec = writeLauncher("omp", safe, [["ARMADRA_PLAIN", PLAIN]]);
+    const line = shellCommandLine(
+      windowsLauncherPath(spec.runDir, "omp"),
+      [wrapper(), ...SAFE],
+      "cmd",
+    );
+    const result = runCmd(line, canvasEnv());
     expect(result.status, result.stderr).toBe(0);
-    expectArrived(result.stdout);
+    expect(result.stderr).toBe("");
+    const out = parse(result.stdout);
+    expect(out.argv).toEqual([...SAFE, ...safe]);
+    expect(out.plain).toBe(PLAIN);
+  });
+});
+
+/** 垫片：手敲 `claude` 命中 `shims\claude.exe`，它起 `.launch` 里的程序。 */
+describe.runIf(windows)("the canvas shim", () => {
+  it("starts its program, drops its own directory from PATH, injects", () => {
+    const result = spawnSync(shim, VALUES, {
+      env: withPath(canvasEnv(), `${shimDir}\\`),
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const out = parse(result.stdout);
+    expect(out.argv).toEqual([...VALUES, ...INJECTED]);
+    expect(out.plain).toBe(PLAIN);
+    const entries = out.path
+      .split(delimiter)
+      .map((entry) => entry.replace(/\\+$/, "").toLowerCase());
+    expect(entries).not.toContain(shimDir.toLowerCase());
   });
 
-  it.runIf(windows && legacy)("Windows PowerShell 5.1", () => {
-    const { line, env } = fixture("windows-powershell", LEGACY_VALUES);
-    expect(line).toContain(" --% ");
-    const result = runPowerShell("powershell.exe", line, env);
+  it("is found by name from cmd.exe and injects nothing outside a canvas", () => {
+    const result = runCmd(
+      'claude "a&b" "c d"',
+      withPath(outsideEnv(), shimDir),
+    );
     expect(result.status, result.stderr).toBe(0);
-    expectArrived(result.stdout, LEGACY_VALUES);
+    const out = parse(result.stdout);
+    expect(out.argv).toEqual(["a&b", "c d"]);
+    expect(out.plain).toBeNull();
   });
 });
 
 /**
- * npm 装的 CLI 在 Windows 上是 `.cmd` 包装。这里照 npm 7–10 的 cmd-shim 格式
- * 造一个，指向同一个回显脚本：`launchTargetOf` 读出它背后的 `node <脚本>`，
- * 整行绕过包装，于是 `.cmd` 挡不住的那些值也原样到达。读不出来的包装留作程
- * 序本身，只放行两遍都读不坏的值。
+ * npm 装的 CLI 是 `.cmd` 包装：`launchTargetOf` 读出它背后的 `node <脚本>`，
+ * 启动行与垫片都绕过包装，`.cmd` 挡不住的值也原样到达。
  */
-describe("npm wrappers on Windows", () => {
-  function npmShim(): { shim: string; script: string } {
-    const root = tempDir("armadra-windows-shim-");
-    const bin = join(root, "node_modules", "fake-cli", "bin");
+describe.runIf(windows)("npm wrappers behind the launcher", () => {
+  function npmShim(): { shim: string; script: string; dir: string } {
+    const dir = join(root, "npm");
+    const bin = join(dir, "node_modules", "fake-cli", "bin");
     mkdirSync(bin, { recursive: true });
-    const script = echoScript(bin);
-    const shim = join(root, "fake.cmd");
+    const script = join(bin, "echo.js");
+    writeFileSync(script, ECHO, "utf8");
+    const file = join(dir, "claude.cmd");
     writeFileSync(
-      shim,
+      file,
       [
         "@ECHO off",
         "GOTO start",
@@ -223,52 +409,218 @@ describe("npm wrappers on Windows", () => {
       ].join("\r\n"),
       "utf8",
     );
-    return { shim, script };
+    return { shim: file, script, dir };
   }
 
-  it.runIf(windows)("starts node past the wrapper, every value intact", () => {
-    const { shim, script } = npmShim();
-    expect(resolveCommand(shim)).toBe(shim);
-    const target = launchTargetOf(shim);
+  it("starts node past the wrapper, every value and injected word intact", () => {
+    const { shim: wrapperFile, script } = npmShim();
+    expect(resolveCommand(wrapperFile)).toBe(wrapperFile);
+    const target = launchTargetOf(wrapperFile);
     expect(target?.args).toEqual([script]);
     expect(target?.program.toLowerCase()).toMatch(/node\.exe$/);
-    const { line, env } = fixture("cmd", VALUES, target as Launch);
-    const result = runCmd(line, env);
+    const line = shellCommandLine(
+      launcher,
+      [target!.program, ...target!.args, ...VALUES],
+      "cmd",
+    );
+    const result = runCmd(line, canvasEnv());
     expect(result.status, result.stderr).toBe(0);
-    expectArrived(result.stdout);
+    expectInjected(result.stdout);
   });
 
-  it.runIf(windows)("keeps an unreadable wrapper to the safe words", () => {
-    const root = tempDir("armadra-windows-batch-");
-    const script = echoScript(root);
-    const shim = join(root, "mine.cmd");
-    writeFileSync(
-      shim,
-      `@echo off\r\nset "PROG=${process.execPath}"\r\n"%PROG%" "${script}" %*\r\n`,
-      "utf8",
+  it("gives the shim node and the script behind the wrapper (§5.4)", () => {
+    const { dir, script } = npmShim();
+    const ambient = withPath(
+      { HOME: root, PATH: dirname(process.execPath) },
+      dir,
     );
-    expect(launchTargetOf(shim)).toBeUndefined();
-    const safe = [
-      "plain",
-      "a b",
-      "it's",
-      "$HOME",
-      "`id`",
-      "!x!",
-      "C:\\dir\\",
-      "",
-    ];
-    const words: LaunchWord[] = [
-      ...safe,
-      { prefix: "plain=", env: "ARMADRA_SAFE" },
-    ];
-    const result = runCmd(shellCommandLine(shim, words, "cmd"), {
-      ...process.env,
-      ARMADRA_SAFE: "a b c",
+    const claude = shimTargetFor("claude", { ambient, shimDir });
+    expect(claude?.args).toEqual([script]);
+    expect(claude?.program.toLowerCase()).toMatch(/node\.exe$/);
+    const spec = writeLauncher(
+      "claude",
+      INJECTED,
+      [["ARMADRA_PLAIN", PLAIN]],
+      claude,
+    );
+    try {
+      const result = runCmd(
+        'claude "a&b" "c d"',
+        withPath(canvasEnv(), spec.shimDir),
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(parse(result.stdout).argv).toEqual(["a&b", "c d", ...INJECTED]);
+    } finally {
+      writeLauncher("claude", INJECTED, [["ARMADRA_PLAIN", PLAIN]], {
+        program: process.execPath,
+        args: [echo],
+      });
+    }
+  });
+});
+
+/**
+ * 节点凭据与 ama 密钥的兑换（契约 §20.4、§12.4）：门开着且有
+ * `ARMADRA_CREDENTIAL_REF` 时启动器起 `<客户端> credential`，答复的变量只进
+ * CLI 进程；名字不在名单里、客户端失败或缺席都拒绝启动，CLI 不运行。客户端是
+ * 一个 `.cmd` 包装的假客户端（真客户端 `armadra-hook.exe` 的回退形状）。
+ */
+describe.runIf(windows)("the credential exchange behind the launcher", () => {
+  const TOKEN = "tok en=v & %PATH% ^ 画布";
+  const CLIENT = [
+    "const ama = process.argv[3] === '--ama';",
+    "const mode = process.env.FAKE_CLIENT_MODE ?? 'ok';",
+    "if (process.argv[2] !== 'credential') process.exit(9);",
+    "if (mode === 'fail') { process.stderr.write('fake: refused\\n'); process.exit(3); }",
+    "if (ama) {",
+    "  if (mode === 'bad') process.stdout.write('EVIL=1\\n');",
+    "  else if (mode !== 'none') process.stdout.write('AMA_API_KEY_OPENAI=sk-o\\r\\nAMA_API_KEY_ANTHROPIC=sk=a=b\\n');",
+    "} else {",
+    "  process.stdout.write(mode === 'bad' ? 'PATH=C:\\\\evil' : 'ARMADRA_TEST_TOKEN=' + process.env.FAKE_TOKEN);",
+    "}",
+  ].join("\n");
+  const SHOW = [
+    "const pick = (name) => process.env[name] ?? null;",
+    "const out = { token: pick('ARMADRA_TEST_TOKEN'), openai: pick('AMA_API_KEY_OPENAI'), anthropic: pick('AMA_API_KEY_ANTHROPIC') };",
+    "process.stdout.write(JSON.stringify(out).replace(/[\\u0080-\\uffff]/g, (c) => '\\\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')));",
+  ].join("\n");
+
+  let client = "";
+  let show = "";
+
+  function exchangeLauncher(
+    agentId: string,
+    extra: Pick<WindowsLauncherSpec, "credential" | "amaKeys">,
+  ): string {
+    const spec: WindowsLauncherSpec = {
+      agentId,
+      runDir: join(root, "exchange", "run"),
+      shimDir: join(root, "exchange", "shims"),
+      args: [],
+      env: [],
+      exe,
+      ...extra,
+    };
+    writeWindowsLauncherFiles(windowsLauncherFiles(spec));
+    return windowsLauncherPath(spec.runDir, agentId);
+  }
+
+  function run(
+    launcherExe: string,
+    env: NodeJS.ProcessEnv,
+  ): ReturnType<typeof spawnSync> & { stdout: string; stderr: string } {
+    return spawnSync(launcherExe, [process.execPath, show], {
+      env: { ...env, FAKE_TOKEN: TOKEN },
+      encoding: "utf8",
+    }) as ReturnType<typeof spawnSync> & { stdout: string; stderr: string };
+  }
+
+  beforeAll(() => {
+    const dir = join(root, "exchange");
+    mkdirSync(dir, { recursive: true });
+    const script = join(dir, "fake-client.js");
+    writeFileSync(script, CLIENT, "utf8");
+    client = join(dir, "armadra-hook.cmd");
+    writeFileSync(client, `@"${process.execPath}" "${script}" %*\r\n`, "utf8");
+    show = join(dir, "show.js");
+    writeFileSync(show, SHOW, "utf8");
+  });
+
+  const credential = () => ({
+    credential: { client, variables: ["ARMADRA_TEST_TOKEN"] },
+  });
+
+  it("sets the redeemed variable for the CLI only when a credential is bound", () => {
+    const launcherExe = exchangeLauncher("claude", credential());
+    const bound = run(launcherExe, {
+      ...canvasEnv(),
+      ARMADRA_CREDENTIAL_REF: "3f9c2a1b7d4e8f60",
     });
-    expect(result.status, result.stderr).toBe(0);
-    const out = JSON.parse(result.stdout) as { argv: string[] };
-    expect(out.argv).toEqual([...safe, "plain=a b c"]);
-    expect(() => shellCommandLine(shim, ["a&b"], "cmd")).toThrow(/batch/);
+    expect(bound.status, bound.stderr).toBe(0);
+    expect(JSON.parse(bound.stdout).token).toBe(TOKEN);
+    // The value is never echoed by the launcher.
+    expect(bound.stderr).not.toContain("tok en");
+
+    const unbound = run(launcherExe, canvasEnv());
+    expect(unbound.status, unbound.stderr).toBe(0);
+    expect(JSON.parse(unbound.stdout).token).toBeNull();
+
+    // Outside a canvas the reference alone does nothing.
+    const outside = run(launcherExe, {
+      ...outsideEnv(),
+      ARMADRA_CREDENTIAL_REF: "3f9c2a1b7d4e8f60",
+    });
+    expect(outside.status, outside.stderr).toBe(0);
+    expect(JSON.parse(outside.stdout).token).toBeNull();
+  });
+
+  it("refuses to start the CLI when the exchange fails", () => {
+    const launcherExe = exchangeLauncher("claude", credential());
+    const env = { ...canvasEnv(), ARMADRA_CREDENTIAL_REF: "3f9c2a1b7d4e8f60" };
+
+    const failed = run(launcherExe, { ...env, FAKE_CLIENT_MODE: "fail" });
+    expect(failed.status).toBe(3);
+    expect(failed.stdout).toBe("");
+    expect(failed.stderr).toMatch(/fake: refused/);
+
+    const unexpected = run(launcherExe, { ...env, FAKE_CLIENT_MODE: "bad" });
+    expect(unexpected.status).toBe(1);
+    expect(unexpected.stdout).toBe("");
+    expect(unexpected.stderr).toMatch(/unexpected node credential variable/);
+
+    const noClient = run(
+      exchangeLauncher("copilot", {
+        credential: { client: "", variables: ["ARMADRA_TEST_TOKEN"] },
+      }),
+      env,
+    );
+    expect(noClient.status).toBe(1);
+    expect(noClient.stdout).toBe("");
+    expect(noClient.stderr).toMatch(/needs the armadra-hook client/);
+
+    const missing = run(
+      exchangeLauncher("pi", {
+        credential: {
+          client: join(root, "exchange", "missing.exe"),
+          variables: ["ARMADRA_TEST_TOKEN"],
+        },
+      }),
+      env,
+    );
+    expect(missing.status).toBe(1);
+    expect(missing.stdout).toBe("");
+  });
+
+  it("sets every ama key the client answers, and refuses an unknown one", () => {
+    const launcherExe = exchangeLauncher("ama", {
+      amaKeys: {
+        client,
+        variables: ["AMA_API_KEY_OPENAI", "AMA_API_KEY_ANTHROPIC"],
+      },
+    });
+    const ok = run(launcherExe, canvasEnv());
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(JSON.parse(ok.stdout)).toMatchObject({
+      openai: "sk-o",
+      anthropic: "sk=a=b",
+    });
+
+    const none = run(launcherExe, { ...canvasEnv(), FAKE_CLIENT_MODE: "none" });
+    expect(none.status, none.stderr).toBe(0);
+    expect(JSON.parse(none.stdout)).toMatchObject({
+      openai: null,
+      anthropic: null,
+    });
+
+    const bad = run(launcherExe, { ...canvasEnv(), FAKE_CLIENT_MODE: "bad" });
+    expect(bad.status).toBe(1);
+    expect(bad.stdout).toBe("");
+    expect(bad.stderr).toMatch(/unexpected ama key variable/);
+
+    const outside = run(launcherExe, {
+      ...outsideEnv(),
+      FAKE_CLIENT_MODE: "fail",
+    });
+    expect(outside.status, outside.stderr).toBe(0);
   });
 });

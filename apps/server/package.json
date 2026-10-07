@@ -6,7 +6,7 @@
     "name": "YoVinchen",
     "email": "gzh298255@gmail.com"
   },
-  "version": "0.1.0",
+  "version": "0.2.1",
   "private": true,
   "main": "./out/main.js",
   "scripts": {
@@ -20,5 +20,8 @@
     "esbuild": "0.28.2",
     "typescript": "5.9.2",
     "vitest": "4.1.11"
+  },
+  "dependencies": {
+    "@sentry/node": "10.75.0"
   }
 }

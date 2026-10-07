@@ -7,9 +7,17 @@ import { defineConfig } from "vitest/config";
  */
 export default defineConfig({
   test: {
-    include: ["src/core/browser/headless/*live.integration.test.ts"],
+    include: [
+      "src/core/browser/headless/*live.integration.test.ts",
+      // passkey 对真 Chromium 的 WebAuthn（CDP 虚拟认证器）。
+      "src/core/identity/*live.integration.test.ts",
+    ],
     environment: "node",
     pool: "forks",
+    // One file at a time: each of these starts its own Chromium, and three
+    // cold starts side by side on a four-core Windows runner were what pushed
+    // a first CDP command past its bound (all three failed together).
+    fileParallelism: false,
     setupFiles: ["src/core/testing/setup.ts"],
     testTimeout: 120_000,
     hookTimeout: 60_000,

@@ -4,7 +4,7 @@ import {
   PERMISSION_MODES,
   permissionModeSchema,
   type PermissionMode,
-} from "./domain/index.js";
+} from "./domain/primitives.js";
 import {
   posixQuote,
   shellCommandLine,
@@ -27,6 +27,7 @@ export const AGENT_IDS = [
   "pi",
   "omp",
   "copilot",
+  "ama",
 ] as const;
 export type BuiltinAgentId = (typeof AGENT_IDS)[number];
 
@@ -50,7 +51,7 @@ export type PromptMode = (typeof PROMPT_MODES)[number];
  * The three later entries were added with the M2 capability work:
  *
  *   * `nativeRecurrence` — the CLI runs loops/cron of its own that we can
- *     *observe*. No built-in adapter claims it yet: none of the seven exposes a
+ *     *observe*. No built-in adapter claims it yet: none of the built-ins exposes a
  *     readable job list, and §1 forbids inferring a capability from a name. The
  *     vocabulary exists so an adapter that gains one can declare it.
  *   * `structuredInputAck` — a delivered prompt can be tied back to the turn it
@@ -284,6 +285,45 @@ export const AGENT_REGISTRY: Readonly<Record<BuiltinAgentId, AgentDefinition>> =
       ],
       expectedProcess: ["copilot"],
     },
+    ama: {
+      id: "ama",
+      label: "Armadra Agent",
+      color: "#2f6fed",
+      launchCmd: "ama",
+      promptMode: "argv",
+      permissionFlag: {
+        default: [],
+        "auto-edit": ["--permission-mode", "auto-edit"],
+        "full-auto": ["--permission-mode", "full-auto"],
+        plan: ["--permission-mode", "plan"],
+      },
+      modelFlag: "--model",
+      sessionIdFlag: "--session-id",
+      resume: { style: "flag", flag: "--resume" },
+      exitCommand: "/exit",
+      // Our own agent (docs/design/coordinator-agent.md §2.2). No `subagent`:
+      // the canvas rules want it to open sibling nodes (`canvas open-agent` /
+      // team) rather than hide work inside its own process.
+      capabilities: [
+        "hooks",
+        "resume",
+        "contextLink",
+        "browser",
+        "usage",
+        "structuredInputAck",
+        "supportsModelSelection",
+      ],
+      // The launcher execs into the bundled runtime, so tmux's
+      // `pane_current_command` sees the runner rather than `ama`.
+      expectedProcess: [
+        "ama",
+        "ama.cjs",
+        "armadra",
+        "Armadra",
+        "Electron",
+        "electron",
+      ],
+    },
   };
 
 export const AGENT_LIST: readonly AgentDefinition[] = AGENT_IDS.map(
@@ -388,20 +428,12 @@ export interface AssembleLaunchCommandInput {
   /**
    * Words the program itself needs in front of the CLI's argv — the script
    * when an npm wrapper on Windows is started as `node.exe <cli.js>` (the
-   * row's `launchTarget`). Only on the typed line: a frozen plan names the
-   * agent, and its executor resolves the program on its own machine.
+   * row's `launchTarget`), and, when the program is the canvas launcher
+   * (the row's `launcher`), the CLI's program before them. Only on the typed
+   * line: a frozen plan names the agent, and its executor resolves the
+   * program on its own machine.
    */
   programArgs?: readonly string[];
-  /** Extra argv appended after the flags (custom agents). */
-  extraArgs?: readonly string[];
-  /**
-   * Words appended to the *typed* line, in front of the prompt: the canvas
-   * injection the runtime answers as `launchWords`, some of which read an
-   * environment variable of the node's terminal. Quoted with {@link dialect}
-   * like the rest. Not part of {@link assembleLaunchArgv} — a frozen plan
-   * never carries the injection.
-   */
-  shellWords?: readonly LaunchWord[];
   /**
    * The dialect of the shell the line is typed into (`shellDialect` of the
    * node terminal's shell). POSIX when absent.
@@ -522,9 +554,9 @@ export function assembleLaunchArgv(
     args.push(base.sessionIdFlag, input.sessionId);
   }
 
-  // The custom entry's own argv comes first: it is part of how that program is
-  // invoked (`npx -y my-cli`), while `extraArgs` is a per-launch addition.
-  args.push(...(custom?.args ?? []), ...(input.extraArgs ?? []));
+  // The custom entry's own argv: it is part of how that program is invoked
+  // (`npx -y my-cli`).
+  args.push(...(custom?.args ?? []));
 
   const prompt = input.prompt ? collapsePrompt(input.prompt) : "";
   let stdinPrompt: string | undefined;
@@ -554,15 +586,7 @@ export function assembleLaunchCommand(
   input: AssembleLaunchCommandInput,
 ): LaunchCommand {
   const { program, args, stdinPrompt } = assembleLaunchArgv(input);
-  // The prompt, when it is on the line, stays last: the injected words go in
-  // front of it. How many words it took is what the same launch without it
-  // lacks — one positional, or a flag and its value.
-  const withoutPrompt = input.prompt
-    ? assembleLaunchArgv({ ...input, prompt: undefined }).args.length
-    : args.length;
-  const words: LaunchWord[] = [...args];
-  words.splice(withoutPrompt, 0, ...(input.shellWords ?? []));
-  words.unshift(...(input.programArgs ?? []));
+  const words: LaunchWord[] = [...(input.programArgs ?? []), ...args];
   return {
     command: shellCommandLine(program, words, input.dialect ?? "posix"),
     ...(stdinPrompt ? { stdinPrompt } : {}),

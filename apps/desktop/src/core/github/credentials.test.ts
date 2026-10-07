@@ -4,7 +4,17 @@ import { GithubCredentialSource, GithubSecretStore } from "./types";
 
 import { apiFailure } from "./errors";
 import { githubFixture, type GithubFixture } from "./fixture";
-import { reference, validToken } from "./credentials";
+import {
+  githubSecretStore,
+  reference,
+  secretName,
+  storeKindOf,
+  validToken,
+} from "./credentials";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { resolveSecretBackend } from "../secrets";
+import { tempDir } from "../testing/temp-dir";
 
 /** 移植自合并前实现的对应用例。 */
 describe("GitHub 凭据", () => {
@@ -155,5 +165,59 @@ describe("GitHub 凭据", () => {
   it("引用名是账号标签，从不是密钥", () => {
     expect(reference("api.github.com")).toBe("api@api.github.com");
     expect(() => reference("not a host")).toThrow("invalid");
+  });
+});
+
+describe("GitHub 令牌走 core 统一的密钥后端", () => {
+  it("名字是 armadra-github-<引用>，文件后端报 file_fallback", async () => {
+    const dataDir = tempDir("armadra-github-secrets-");
+    const resolved = resolveSecretBackend({
+      dataDir,
+      env: { ARMADRA_SECRET_BACKEND: "file" },
+    });
+    const secrets = githubSecretStore(resolved);
+    expect(secrets.kind()).toBe("file_fallback");
+    await secrets.put("api@github.com", "ghp_unified_token");
+    expect(secretName("api@github.com")).toBe("armadra-github-api@github.com");
+    expect(
+      readFileSync(
+        join(dataDir, "secrets", "armadra-github-api@github.com.token"),
+        "utf8",
+      ),
+    ).toBe("ghp_unified_token");
+    expect(await secrets.get("api@github.com")).toBe("ghp_unified_token");
+    await expect(secrets.put("api@github.com", "bad\nvalue")).rejects.toThrow(
+      "invalid",
+    );
+    await secrets.delete("api@github.com");
+    await expect(secrets.get("api@github.com")).rejects.toThrow("unavailable");
+  });
+
+  it("库里记着的引用名，旧 github-credentials/ 文件第一次读时搬过来", async () => {
+    const dataDir = tempDir("armadra-github-secrets-");
+    const legacyDir = join(dataDir, "github-credentials");
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(
+      join(legacyDir, "api_at_github_com.token"),
+      "ghp_legacy_tok",
+      {
+        mode: 0o600,
+      },
+    );
+    const resolved = resolveSecretBackend({
+      dataDir,
+      env: { ARMADRA_SECRET_BACKEND: "file" },
+    });
+    const secrets = githubSecretStore(resolved, () => ["api@github.com"]);
+    expect(await secrets.get("api@github.com")).toBe("ghp_legacy_tok");
+    expect(existsSync(join(legacyDir, "api_at_github_com.token"))).toBe(false);
+  });
+
+  it("OS 存储类的后端报 os_keychain", () => {
+    expect(storeKindOf("keychain")).toBe("os_keychain");
+    expect(storeKindOf("dpapi")).toBe("os_keychain");
+    expect(storeKindOf("libsecret")).toBe("os_keychain");
+    expect(storeKindOf("file-encrypted")).toBe("file_fallback");
+    expect(storeKindOf("file")).toBe("file_fallback");
   });
 });

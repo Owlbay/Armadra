@@ -82,7 +82,9 @@ function point(key: string, scale: number): CostPoint {
       : EMPTY;
     return {
       agent,
+      unit: "tokens",
       tokens: agentTokens,
+      requests: 0,
       costUsd: local ? total(agentTokens) / 400_000 : 0,
       complete: true,
       source: local ? "local" : "none",
@@ -119,7 +121,9 @@ function rollUp(points: CostPoint[], granularity: "hour" | "day"): CostRange {
       const seen = byAgent.get(agent.agent);
       byAgent.set(agent.agent, {
         agent: agent.agent,
+        unit: agent.unit,
         tokens: add(seen?.tokens ?? EMPTY, agent.tokens),
+        requests: (seen?.requests ?? 0) + agent.requests,
         costUsd: (seen?.costUsd ?? 0) + agent.costUsd,
         complete: true,
         source: agent.source,
@@ -154,7 +158,9 @@ function rollUp(points: CostPoint[], granularity: "hour" | "day"): CostRange {
       (agent) =>
         byAgent.get(agent) ?? {
           agent,
+          unit: "tokens",
           tokens: EMPTY,
+          requests: 0,
           costUsd: 0,
           complete: true,
           source: "none",

@@ -11,12 +11,15 @@
 import { create } from "zustand";
 import type { DriveLease, WorkspaceEvent } from "@armadra/shared";
 
+import { scoped } from "../sources/scope";
+
 export interface NodeDrive {
   readonly sessionId: string;
   readonly lease: DriveLease;
 }
 
 interface DriveState {
+  /** 键是 `${sourceId}:${nodeId}`。 */
   readonly drives: Readonly<Record<string, NodeDrive>>;
   handleEvent: (event: WorkspaceEvent) => void;
   reset: () => void;
@@ -26,9 +29,9 @@ export const useDriveStore = create<DriveState>((set) => ({
   drives: {},
   handleEvent: (event) => {
     if (event.type === "terminal.lease") {
-      const nodeId = event.nodeId;
       // 不属于任何节点的终端没有节点头，也没有面板入口。
-      if (nodeId === undefined) return;
+      if (event.nodeId === undefined) return;
+      const nodeId = scoped(event.nodeId);
       set((state) => ({
         drives: {
           ...state.drives,
@@ -38,7 +41,7 @@ export const useDriveStore = create<DriveState>((set) => ({
       return;
     }
     if (event.type === "terminal.exit" && event.nodeId !== undefined) {
-      const nodeId = event.nodeId;
+      const nodeId = scoped(event.nodeId);
       set((state) => {
         if (state.drives[nodeId] === undefined) return state;
         const drives = { ...state.drives };

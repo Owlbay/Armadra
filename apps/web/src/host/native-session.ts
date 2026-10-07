@@ -24,6 +24,7 @@ export const NATIVE_SESSION_FAILURES = [
   "cliFailed",
   "timeout",
   "malformed",
+  "channelUnavailable",
   "shellUnavailable",
 ] as const;
 export type NativeSessionFailure = (typeof NATIVE_SESSION_FAILURES)[number];

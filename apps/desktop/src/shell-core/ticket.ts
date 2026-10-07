@@ -35,7 +35,12 @@ export type NativeTicketReason =
   | "cliFailed"
   | "timeout"
   /** 答回来的东西不是一张属于这台 core 的票。 */
-  | "malformed";
+  | "malformed"
+  /**
+   * Windows 上 core 不是这个壳起的（接管了上一个、或外接 Runtime）：那里只有
+   * fork 的 IPC 一条取票路，这个壳没有它。只有重开应用、由壳自己起 core 才行。
+   */
+  | "channelUnavailable";
 
 export class NativeTicketError extends Error {
   readonly name = "NativeTicketError";

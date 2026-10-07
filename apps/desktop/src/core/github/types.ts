@@ -632,6 +632,11 @@ export interface DeleteGithubBranchResponse {
 export interface GithubExternalReference {
   referenceId: string;
   workspaceId: string;
+  /**
+   * 连接指向哪个托管平台：`github` | `gitea` | `gitlab`（契约 §29.6）。请求里
+   * 空串按 `github` 处理；答复里总有值。
+   */
+  forge: string;
   repository?: GithubRepositoryRef;
   kind: GithubReferenceKind;
   number: bigint;

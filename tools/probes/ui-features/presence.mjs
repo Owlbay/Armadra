@@ -4,7 +4,12 @@
 //   - 只有一台时不出现在线设备条，且它拿着租约（能拖动节点）；
 //   - 第二台只读：显示「X 正在编辑」，拖不动节点；
 //   - 第一台有一笔没能落盘的改动（保存请求被 CDP 拦下失败）时，第二台接管：
-//     接管要二次确认；确认后第一台变只读、丢掉那笔改动、按远端重新加载；
+//     接管后第一台变只读、丢掉那笔改动、按远端重新加载；
+//
+// 两个 context 连的是同一个桌面 core、同一份本机凭据，在身份域里是同一台设备
+// （契约 §9.1 的 deviceKey 相同）：条上写「本机另一个窗口正在编辑」，接管不弹
+// 确认框。不同设备之间的文案与二次确认由 server-e2e 的成员那一轮与
+// PresenceBar.test 守。
 //   - 关掉持有者页面后租约释放，剩下那台恢复可写，设备条消失。
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -49,6 +54,12 @@ async function dragNode(page, id, dx, dy) {
 
 export default async function presence({ stack, output, report, scenario }) {
   const run = scenario(report, "多设备画布（§41）", output);
+  // 这一场验的是租约 + CAS（契约 §9）；实时协同缺省开，这里先关掉，新板留在
+  // 租约模式。实时那条路由 realtime-e2e 验。
+  await stack.api("/api/settings", {
+    method: "PATCH",
+    body: JSON.stringify({ collab: { realtime: false } }),
+  });
   const project = join(stack.scratch, "presence-project");
   mkdirSync(project, { recursive: true });
   writeFileSync(join(project, "README.md"), "# presence\n");
@@ -117,8 +128,8 @@ export default async function presence({ stack, output, report, scenario }) {
     "第二台显示「X 正在编辑」",
   );
   run.check(
-    readOnlyText.includes("Windows · Chrome 正在编辑"),
-    "第二台只读，显示持有者设备名",
+    readOnlyText.includes("本机另一个窗口正在编辑"),
+    "第二台只读，认出持有者是本机另一个窗口",
     readOnlyText,
   );
   const firstBar = (
@@ -145,9 +156,12 @@ export default async function presence({ stack, output, report, scenario }) {
   await run.shot(second, "presence-2-readonly");
 
   /* --------------- 第一台留一笔没落盘的改动，第二台接管 ----------------- */
-  // 拦下第一台对画布文档的 PUT，让这次拖动停在「本地未保存」。
+  // 拦下第一台对画布文档的保存（契约 §36.2：`POST /api/rpc/boards/save`），
+  // 让这次拖动停在「本地未保存」。
   await first.call("Fetch.enable", {
-    patterns: [{ urlPattern: "*/document*", requestStage: "Request" }],
+    patterns: [
+      { urlPattern: "*/api/rpc/boards/save*", requestStage: "Request" },
+    ],
   });
   const offFetch = stack.browser.on((message) => {
     if (
@@ -156,7 +170,7 @@ export default async function presence({ stack, output, report, scenario }) {
     )
       return;
     const { requestId, request } = message.params;
-    if (request.method === "PUT")
+    if (request.method === "POST")
       void first
         .call("Fetch.failRequest", { requestId, errorReason: "Failed" })
         .catch(() => {});
@@ -188,24 +202,13 @@ export default async function presence({ stack, output, report, scenario }) {
     `return [...document.querySelectorAll('[data-slot="presence-bar"] button')].find((b) => b.textContent.trim() === "接管");`,
     "接管按钮",
   );
-  const dialog = await second.until(
-    `const d = document.querySelector('[role="alertdialog"]'); return d ? d.textContent.trim() : null;`,
-    "接管确认框",
-  );
+  // 同一台设备的另一个窗口：接管不再二次确认。
+  await sleep(300);
   run.check(
-    dialog.includes("接管编辑"),
-    "接管需要二次确认",
-    dialog.slice(0, 80),
-  );
-  await run.shot(second, "presence-3-confirm");
-  // 确认框打开时，租约还在第一台手里。
-  run.check(
-    (await presenceText(second)).includes("正在编辑"),
-    "确认之前没有转手",
-  );
-  await second.clickOn(
-    `return [...document.querySelectorAll('[role="alertdialog"] button')].find((b) => b.textContent.trim() === "接管");`,
-    "确认接管",
+    !(await second.evaluate(
+      `return !!document.querySelector('[role="alertdialog"]')`,
+    )),
+    "同一台设备接管不弹确认框",
   );
   const firstReadOnly = await first.until(
     `const bar = document.querySelector('[data-slot="presence-bar"]');
@@ -213,7 +216,7 @@ export default async function presence({ stack, output, report, scenario }) {
     "第一台变只读",
   );
   run.check(
-    firstReadOnly.includes("macOS · Chrome 正在编辑"),
+    firstReadOnly.includes("本机另一个窗口正在编辑"),
     "接管后第一台变只读",
     firstReadOnly,
   );
@@ -283,5 +286,9 @@ export default async function presence({ stack, output, report, scenario }) {
   run.consoleClean(first, phone);
   await phone.close();
   await first.close();
+  await stack.api("/api/settings", {
+    method: "PATCH",
+    body: JSON.stringify({ collab: { realtime: true } }),
+  });
   run.entry.status = "passed";
 }

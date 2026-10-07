@@ -10,16 +10,20 @@
  * a second source of truth that drifts the first time a verb is added.
  */
 
-import { envVar } from "./endpoint.js";
+import { envVar } from "../../hook-client/endpoint.js";
 import { percentEncodeSegment } from "./hook.js";
-import { canonicalJsonBytes, tryParseJson } from "./json.js";
-import type { JsonValue } from "./json.js";
-import { isSuccess, postJsonRequest, totalTimeoutMs } from "./http.js";
-import type { HookResponse } from "./http.js";
-import { headersFor, loadSession, send } from "./session.js";
+import { canonicalJsonBytes, tryParseJson } from "../../hook-client/json.js";
+import type { JsonValue } from "../../hook-client/json.js";
+import {
+  isSuccess,
+  postJsonRequest,
+  totalTimeoutMs,
+} from "../../hook-client/http.js";
+import type { HookResponse } from "../../hook-client/http.js";
+import { headersFor, loadSession, send } from "../../hook-client/session.js";
 import { FILE_SUFFIX, STDIN_VALUE, TextReader } from "./text-input.js";
 import type { TextSources } from "./text-input.js";
-import { BROWSER_VERBS, CONTEXT_VERBS } from "./usage.js";
+import { BROWSER_VERBS, CANVAS_USAGE, CONTEXT_VERBS } from "./usage.js";
 
 /** The `{flag: value}` object a control route carries as `args`. */
 export type Args = Record<string, JsonValue>;
@@ -101,6 +105,11 @@ export async function runCanvas(args: string[]): Promise<number> {
   const verb = args[0];
   if (verb === undefined)
     return fail("usage: armadra-hook canvas <verb> [--flag value]...");
+  // The verb table, offline: no endpoint, no node token, nothing sent.
+  if (verb === "--help" || verb === "-h") {
+    process.stdout.write(CANVAS_USAGE);
+    return 0;
+  }
   if (verb.startsWith("-"))
     return fail(`expected a canvas verb, got \`${verb}\``);
   const parsed = parseFlags(args.slice(1));
@@ -147,6 +156,22 @@ export function browserTimeoutMs(): number {
   return envVar("ARMADRA_HOOK_TIMEOUT_MS") === undefined
     ? BROWSER_TIMEOUT_MS
     : totalTimeoutMs();
+}
+
+/**
+ * How long one canvas or context verb may take, per endpoint candidate.
+ *
+ * Also NOT the hook's 1.5 s. An agent calls these on purpose and waits for the
+ * answer; a verb that outlives the hook budget after the request left is
+ * reported as failed even though it may have run — on a loaded CI runner ama
+ * read a slow `inbox` as "no messages" and never dispatched the task it had
+ * just been sent. `ARMADRA_HOOK_TIMEOUT_MS` can only widen it: the remote
+ * shim sets it to 4 s for hook events, which is still too short for a verb.
+ */
+export const VERB_TIMEOUT_MS = 15_000;
+
+export function verbTimeoutMs(): number {
+  return Math.max(VERB_TIMEOUT_MS, totalTimeoutMs());
 }
 
 export async function runBrowser(args: string[]): Promise<number> {
@@ -279,7 +304,7 @@ export function controlBody(nodeId: string, args: Args): Buffer {
 async function request(
   path: string,
   args: Args,
-  total?: number,
+  total = verbTimeoutMs(),
 ): Promise<number> {
   const loaded = loadSession();
   if ("error" in loaded) return fail(loaded.error);

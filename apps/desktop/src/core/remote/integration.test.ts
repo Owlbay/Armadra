@@ -30,6 +30,10 @@ import {
   expect,
   it,
 } from "vitest";
+import {
+  CODEX_SESSION_KEY_PREFIX,
+  readMigration,
+} from "../hook/install/migrate";
 import { registerSkillContent } from "../hook/install/skills";
 import { issueNodeToken } from "../hook/tokens";
 import type { SshHost } from "../settings/ssh-hosts";
@@ -44,6 +48,8 @@ import {
   setRemoteCaller,
 } from "./execute";
 import { RemoteIntegration } from "./integration";
+import { sync as syncIntegration } from "./integration-worker";
+import { INTEGRATION_V2_CAPABILITY } from "./operations";
 import { RemoteWorker } from "./worker";
 import {
   disposeWorkerBundle,
@@ -378,5 +384,147 @@ describe("the remote command", () => {
       "env ARMADRA_NODE_ID='n1' ARMADRA_SHIMS='/home/u/.armadra-worker/integration/1/shims' /bin/sh -c " +
         `'PATH="$ARMADRA_SHIMS:$PATH"; export PATH; exec "\${SHELL:-/bin/sh}" -l'`,
     );
+  });
+});
+
+describe("Codex's trust on an execution host", () => {
+  const ours = `[hooks.state."${CODEX_SESSION_KEY_PREFIX}stop:0:0"]\nenabled = true\ntrusted_hash = "sha256:ours"\n`;
+  const theirs = 'model = "gpt-5"\n';
+
+  function host(config: string | undefined): {
+    stateDir: string;
+    codexHome: string;
+    env: NodeJS.ProcessEnv;
+  } {
+    const root = tempDir("armadra-far-codex-");
+    const codexHome = join(root, "home", ".codex");
+    if (config !== undefined) {
+      mkdirSync(codexHome, { recursive: true });
+      writeFileSync(join(codexHome, "config.toml"), config, "utf8");
+    }
+    return {
+      stateDir: join(root, "state"),
+      codexHome,
+      env: {
+        ...process.env,
+        HOME: join(root, "home"),
+        CODEX_HOME: codexHome,
+        ARMADRA_NO_GLOBAL_WRITES: "",
+      },
+    };
+  }
+
+  it("clears the old Worker's records once, with a backup, and ignores codexCommand", () => {
+    const { stateDir, codexHome, env } = host(`${theirs}\n${ours}`);
+    const config = join(codexHome, "config.toml");
+    const answer = syncIntegration(
+      stateDir,
+      { files: [], codexCommand: "/old/armadra-hook codex" },
+      env,
+    );
+    expect(answer).toEqual({ missing: [], written: 0 });
+    expect(readFileSync(config, "utf8")).toBe(theirs);
+    const record = readMigration(stateDir);
+    expect(record?.version).toBe(2);
+    expect(record?.sessionTrust?.removed).toEqual([
+      `${CODEX_SESSION_KEY_PREFIX}stop:0:0`,
+    ]);
+    const backup = record?.sessionTrust?.backup as string;
+    expect(readFileSync(backup, "utf8")).toContain(CODEX_SESSION_KEY_PREFIX);
+
+    // 只做一次：之后再出现的记录不归这一步管，也不再写回信任。
+    writeFileSync(config, `${theirs}\n${ours}`, "utf8");
+    syncIntegration(stateDir, { files: [] }, env);
+    expect(readFileSync(config, "utf8")).toBe(`${theirs}\n${ours}`);
+  });
+
+  it("does not create ~/.codex on a host without Codex", () => {
+    const { stateDir, codexHome, env } = host(undefined);
+    syncIntegration(stateDir, { files: [] }, env);
+    expect(existsSync(codexHome)).toBe(false);
+    expect(readMigration(stateDir)?.sessionTrust?.removed).toEqual([]);
+  });
+
+  it("does nothing while global writes are off", () => {
+    const { stateDir, codexHome, env } = host(ours);
+    syncIntegration(
+      stateDir,
+      { files: [] },
+      {
+        ...env,
+        ARMADRA_NO_GLOBAL_WRITES: "1",
+      },
+    );
+    expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(ours);
+    expect(readMigration(stateDir)).toBeUndefined();
+  });
+
+  it("syncs without codexCommand and names a Worker that only speaks v1", async () => {
+    const unregister = registerSkillContent({
+      skill: () => "# armadra skill\n<!-- armadra:skill-revision 13 -->\n",
+      instructions: (skillPath) => `canvas rules; skill at ${skillPath}\n`,
+      developerInstructions: (skillPath) => `developer rules ${skillPath}`,
+    });
+    try {
+      const calls: [string, Record<string, unknown>][] = [];
+      const capabilities = new Map<string, boolean>([
+        ["old", false],
+        ["new", true],
+      ]);
+      const integration = new RemoteIntegration({
+        dataDir: tempDir("armadra-control-"),
+        version: "0.1.0",
+        call: async (_hostId, operation, args) => {
+          calls.push([operation, args]);
+          if (operation === "integration.locate") {
+            return {
+              root: "/far/integration/0.1.0",
+              node: "/usr/bin/node",
+              socket: "/far/run/c.sock",
+              endpointFile: "/far/integration/0.1.0/endpoints/c.env",
+              tokenDir: "/far/integration/0.1.0/node-tokens",
+              platform: "linux",
+            };
+          }
+          return { missing: [] };
+        },
+        capability: (hostId, capability) =>
+          capability === INTEGRATION_V2_CAPABILITY
+            ? capabilities.get(hostId)
+            : true,
+        hookBundle: () => "// hook client\n",
+      });
+      const env = [
+        ["ARMADRA_NODE_ID", NODE_ID],
+        ["ARMADRA_AGENT_ID", "codex"],
+      ] as const;
+      for (const hostId of ["old", "new", "unknown"]) {
+        expect(await integration.terminal(hostId, env)).toBeDefined();
+      }
+      const syncs = calls.filter(
+        ([operation]) => operation === "integration.sync",
+      );
+      expect(syncs.length).toBeGreaterThan(0);
+      for (const [, args] of syncs) {
+        expect(args).not.toHaveProperty("codexCommand");
+      }
+      expect(integration.outdatedWorkers()).toEqual(["old"]);
+
+      // 「重新同步」（契约 §21.2）：升级后的 Worker 重新定位、同步、开中继，
+      // 待升级记号随之消失；没开过终端的主机什么也不发。
+      capabilities.set("old", true);
+      const before = calls.length;
+      await integration.resync("old");
+      const resynced = calls.slice(before).map(([operation]) => operation);
+      expect(resynced[0]).toBe("integration.locate");
+      expect(resynced).toContain("hook.listen");
+      expect(integration.outdatedWorkers()).toEqual([]);
+      const idle = calls.length;
+      await integration.resync("never-opened");
+      expect(calls.length).toBe(idle);
+      integration.stop();
+    } finally {
+      unregister();
+    }
   });
 });

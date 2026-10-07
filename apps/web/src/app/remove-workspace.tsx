@@ -10,15 +10,16 @@ import { toast } from "sonner";
 
 import { runtimeApi } from "../api/client";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
+import { sk } from "../sources/scope";
 import { useT } from "./preferences-store";
 import { useCloseWorkspace } from "./workspace-actions";
 
@@ -35,7 +36,7 @@ export function useRemoveWorkspace() {
       runtimeApi.deleteWorkspace(workspaceId),
     onSuccess: (_result, workspaceId) => {
       closeWorkspace(workspaceId);
-      void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+      void queryClient.invalidateQueries({ queryKey: sk("workspaces") });
     },
     onError: (cause: Error) => toast.error(cause.message),
   });
@@ -55,21 +56,25 @@ export function RemoveWorkspaceDialog({
   const t = useT();
 
   return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent className="z-[var(--z-dialog)]">
-        <AlertDialogHeader>
-          <AlertDialogTitle>{t("launcher.removeTitle")}</AlertDialogTitle>
-          <AlertDialogDescription>
+    <ResponsiveAlertDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+        <ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogTitle>
+            {t("launcher.removeTitle")}
+          </ResponsiveAlertDialogTitle>
+          <ResponsiveAlertDialogDescription>
             {t("launcher.removeNote")}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>{t("launcher.cancel")}</AlertDialogCancel>
-          <AlertDialogAction disabled={pending} onClick={onConfirm}>
+          </ResponsiveAlertDialogDescription>
+        </ResponsiveAlertDialogHeader>
+        <ResponsiveAlertDialogFooter>
+          <ResponsiveAlertDialogCancel>
+            {t("launcher.cancel")}
+          </ResponsiveAlertDialogCancel>
+          <ResponsiveAlertDialogAction disabled={pending} onClick={onConfirm}>
             {t("launcher.removeConfirm")}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+          </ResponsiveAlertDialogAction>
+        </ResponsiveAlertDialogFooter>
+      </ResponsiveAlertDialogContent>
+    </ResponsiveAlertDialog>
   );
 }

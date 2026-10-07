@@ -1,18 +1,24 @@
 import * as React from "react";
 
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
+import { useQuery } from "@tanstack/react-query";
 import { useT } from "@/app/preferences-store";
+import { useAccess } from "@/app/use-access";
+import { useCanvasStore } from "@/store/canvas-store";
+import { workflowsApi } from "@/workflow/api";
+import { FrozenScheduleAlert } from "@/workflow/FrozenScheduleAlert";
+import { workflowKeys } from "@/workflow/store";
 import { digestLabel, instant, planStateKey, scheduleKind } from "./model";
 import {
   AutomationPlanState,
@@ -61,6 +67,25 @@ export function PlanRow({
   onDisableAndDetach,
 }: PlanRowProps) {
   const t = useT();
+  // 工作流目标（契约 §15.6）：显示模板名，读不到就显示 id。
+  const workflowRun = snapshot.plan?.config?.target?.workflowRun;
+  const member = useAccess().member;
+  const templates = useQuery({
+    queryKey: workflowKeys.templates(),
+    queryFn: () => workflowsApi.templates(),
+    enabled: Boolean(workflowRun) && !member,
+    retry: false,
+  });
+  const template = templates.data?.find(
+    (item) => item.id === workflowRun?.templateId,
+  );
+  const templateName = template?.name;
+  const workspaceId = useCanvasStore((state) => state.workspace?.id ?? "");
+  // 模板改过而计划还冻结在旧版本上：到点会跳过（契约 §15.6）。
+  const frozen =
+    workflowRun !== undefined &&
+    template !== undefined &&
+    Number(workflowRun.templateVersion) < template.version;
   const [confirm, setConfirm] = React.useState<"activate" | "runNow" | null>(
     null,
   );
@@ -103,6 +128,15 @@ export function PlanRow({
           {plan.attentionReasonCode ? ` · ${plan.attentionReasonCode}` : ""}
         </p>
       )}
+      {frozen && (
+        <FrozenScheduleAlert
+          templateId={template.id}
+          templateVersion={template.version}
+          workspaceId={workspaceId}
+          planId={plan.id}
+          canManage={canManage}
+        />
+      )}
       <dl className="grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
         <dt className="text-muted-foreground">{t("automation.nextDue")}</dt>
         <dd className="min-w-0 truncate">
@@ -111,7 +145,9 @@ export function PlanRow({
         </dd>
         <dt className="text-muted-foreground">{t("automation.target")}</dt>
         <dd className="min-w-0 truncate select-text">
-          {plan.config?.target?.sessionId}
+          {workflowRun
+            ? `${t("automation.wizard.targetKind.workflow")} · ${templateName ?? workflowRun.templateId}`
+            : plan.config?.target?.sessionId}
         </dd>
         {zone ? (
           <>
@@ -226,29 +262,29 @@ export function PlanRow({
         </div>
       )}
 
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={confirm !== null}
         onOpenChange={(open) => {
           if (!open) setConfirm(null);
         }}
       >
-        <AlertDialogContent className="z-[var(--z-dialog)]">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+        <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t(
                 confirm === "runNow"
                   ? "automation.confirmRunNow"
                   : "automation.confirmActivate",
               )}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
+            </ResponsiveAlertDialogTitle>
+            <ResponsiveAlertDialogDescription>
               {t(
                 confirm === "runNow"
                   ? "automation.confirmRunNowNote"
                   : "automation.confirmActivateNote",
               )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
+            </ResponsiveAlertDialogDescription>
+          </ResponsiveAlertDialogHeader>
           <dl className="grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
             <dt className="text-muted-foreground">
               {t("automation.configVersion")}
@@ -265,11 +301,11 @@ export function PlanRow({
               {digest}
             </dd>
           </dl>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="min-h-10">
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel className="min-h-10">
               {t("automation.cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               className="min-h-10"
               disabled={busy}
               onClick={() => {
@@ -284,10 +320,10 @@ export function PlanRow({
                   ? "automation.runNow"
                   : "automation.activate",
               )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </section>
   );
 }

@@ -4,7 +4,16 @@ import { gitGateway } from "@/git/gateway";
 import { useGitTarget } from "@/git/target";
 import { useT } from "@/app/preferences-store";
 import { useCanvasStore } from "@/store/canvas-store";
-import { selectClass } from "../git/forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectGroup,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/select";
+import { sk } from "../../sources/scope";
 import {
   GithubApi,
   GithubApiError,
@@ -81,13 +90,13 @@ export function useLinkTargets(workspaceId: string): LinkTargets {
   const nodes = useCanvasStore((state) => state.document?.nodes);
   const target = useGitTarget(workspaceId, ".");
   const branches = useQuery({
-    queryKey: ["git-repository-branches", workspaceId],
+    queryKey: sk("git-repository-branches", workspaceId),
     queryFn: ({ signal }) => gitGateway.branches(target, signal),
     enabled: workspaceId.length > 0,
     retry: false,
   });
   const worktrees = useQuery({
-    queryKey: ["git-repository-worktrees", workspaceId],
+    queryKey: sk("git-repository-worktrees", workspaceId),
     queryFn: ({ signal }) => gitGateway.worktrees(target, signal),
     enabled: workspaceId.length > 0,
     retry: false,
@@ -113,6 +122,9 @@ export function useLinkTargets(workspaceId: string): LinkTargets {
   };
 }
 
+/** Radix 的选项值不能是空串，「未选」用这个占位值换算回空串。 */
+const NONE = "__none__";
+
 /** One select over every target kind; the empty value means "nothing chosen". */
 export function TargetSelect({
   value,
@@ -127,32 +139,39 @@ export function TargetSelect({
 }) {
   const t = useT();
   return (
-    <select
-      className={selectClass}
-      value={value}
+    <Select
+      value={value === "" ? NONE : value}
       disabled={disabled}
-      aria-label={t("github.link.target")}
-      onChange={(event) => onChange(event.target.value)}
+      onValueChange={(next) => onChange(next === NONE ? "" : next)}
     >
-      <option value="">{t("github.link.choose")}</option>
-      {(
-        [
-          ["github.link.sessions", targets.sessions],
-          ["github.link.branches", targets.branches],
-          ["github.link.worktrees", targets.worktrees],
-        ] as const
-      ).map(([key, options]) =>
-        options.length === 0 ? null : (
-          <optgroup key={key} label={t(key)}>
-            {options.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </optgroup>
-        ),
-      )}
-    </select>
+      <SelectTrigger
+        className="h-9 w-full min-w-0"
+        aria-label={t("github.link.target")}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent className="z-[var(--z-dialog)]">
+        <SelectItem value={NONE}>{t("github.link.choose")}</SelectItem>
+        {(
+          [
+            ["github.link.sessions", targets.sessions],
+            ["github.link.branches", targets.branches],
+            ["github.link.worktrees", targets.worktrees],
+          ] as const
+        ).map(([key, options]) =>
+          options.length === 0 ? null : (
+            <SelectGroup key={key}>
+              <SelectLabel>{t(key)}</SelectLabel>
+              {options.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          ),
+        )}
+      </SelectContent>
+    </Select>
   );
 }
 

@@ -21,7 +21,23 @@ export const integration: MessageModule = {
     "integration.hook.missing": "Hook 未生成", // i18n-exempt
     "integration.skill.revision": "技能 rev {value}", // i18n-exempt
     "integration.skill.missing": "技能未生成",
-    "integration.globalWrite": "信任记录写在 {path}",
+    "integration.history.index": "索引：{state}",
+    "integration.history.cost": "成本：{state}",
+    "integration.history.transcript": "转录：{state}",
+    "integration.launcherWarning": "注入受限",
+    "integration.stale": "待重新生成",
+    "integration.acp.missing": "ACP 未安装", // i18n-exempt
+    "integration.acp.installed": "ACP 已安装", // i18n-exempt
+    "integration.acp.installing": "安装中…",
+    "integration.acp.failed": "ACP 安装失败", // i18n-exempt
+    "integration.acp.install": "安装",
+    "integration.acp.reinstall": "重新安装",
+    "integration.acp.done": "{name} 的 ACP 适配器已安装", // i18n-exempt
+    "integration.acp.output": "输出",
+    "integration.acp.failure.failed": "npm 安装失败（退出码 {code}）", // i18n-exempt
+    "integration.acp.failure.timeout": "安装超时，已停止",
+    "integration.acp.failure.missing":
+      "安装完成，但找不到适配器程序，请检查 npm 全局目录是否在 PATH 中", // i18n-exempt
     "integration.migrated": "已清理全局安装",
     "integration.regenerate": "重新生成",
     "integration.regenerated": "注入产物已重新生成",
@@ -35,6 +51,11 @@ export const integration: MessageModule = {
     "integration.repair.removed": "移除 {count} 处",
     "integration.repair.kept": "保留 {count} 处（不是我们写的）",
     "integration.backup": "原文件已备份到 {path}",
+    "integration.outdatedHost": "Worker 待升级",
+    "integration.outdatedHost.version": "Worker 待升级 · {version}",
+    "integration.resync": "重新同步",
+    "integration.resynced": "已重新同步 {name}",
+    "integration.resyncFailed": "重新同步失败",
   },
   en: {
     "integration.nav": "Integration",
@@ -48,7 +69,23 @@ export const integration: MessageModule = {
     "integration.hook.missing": "Hook not generated",
     "integration.skill.revision": "Skill rev {value}",
     "integration.skill.missing": "Skill not generated",
-    "integration.globalWrite": "Trust records in {path}",
+    "integration.history.index": "Index: {state}",
+    "integration.history.cost": "Cost: {state}",
+    "integration.history.transcript": "Transcript: {state}",
+    "integration.launcherWarning": "Injection limited",
+    "integration.stale": "Out of date",
+    "integration.acp.missing": "ACP not installed",
+    "integration.acp.installed": "ACP installed",
+    "integration.acp.installing": "Installing…",
+    "integration.acp.failed": "ACP install failed",
+    "integration.acp.install": "Install",
+    "integration.acp.reinstall": "Reinstall",
+    "integration.acp.done": "ACP adapter for {name} installed",
+    "integration.acp.output": "Output",
+    "integration.acp.failure.failed": "npm install failed (exit code {code})",
+    "integration.acp.failure.timeout": "The install timed out and was stopped",
+    "integration.acp.failure.missing":
+      "Installed, but the adapter can't be found. Check that npm's global folder is on PATH.",
     "integration.migrated": "Global install removed",
     "integration.regenerate": "Regenerate",
     "integration.regenerated": "Injection regenerated",
@@ -62,5 +99,10 @@ export const integration: MessageModule = {
     "integration.repair.removed": "Removed {count}",
     "integration.repair.kept": "Kept {count} (not written by us)",
     "integration.backup": "The original was backed up to {path}",
+    "integration.outdatedHost": "Worker outdated",
+    "integration.outdatedHost.version": "Worker outdated · {version}",
+    "integration.resync": "Resync",
+    "integration.resynced": "Resynced {name}",
+    "integration.resyncFailed": "Resync failed",
   },
 };

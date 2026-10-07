@@ -7,6 +7,10 @@
 import { sleep } from "./harness.mjs";
 
 const META = 4;
+// 这一场景按 macOS 的键位写（⌘、`platform == mac`）。页面按 UA 判平台，
+// 所以在 Linux / Windows 上跑时把页面伪装成 Mac，断言与键位都不用分叉。
+const MAC_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 const SHIFT = 8;
 const CTRL = 2;
 
@@ -24,6 +28,8 @@ async function openShortcuts(page) {
     `return [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "设置");`,
     "设置按钮",
   );
+  // 「快捷键」在侧栏最底下：对话框还在放大的动画里时按坐标点，最容易点到下边缘外。
+  await page.dialogSettled("设置对话框停稳");
   await page.clickOn(
     `return [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent.trim() === "快捷键");`,
     "快捷键页",
@@ -90,6 +96,17 @@ export default async function keybindings({ stack, output, report, scenario }) {
   const { workspace, board } = await stack.workspace("快捷键", stack.scratch);
   const url = stack.boardUrl(workspace.id, board.id);
   const page = await stack.browser.page(await stack.browser.context());
+  await page.call("Emulation.setUserAgentOverride", {
+    userAgent: MAC_UA,
+    platform: "MacIntel",
+    userAgentMetadata: {
+      platform: "macOS",
+      platformVersion: "14.0.0",
+      architecture: "arm",
+      model: "",
+      mobile: false,
+    },
+  });
   await page.goto(url);
   await page.settle();
 
@@ -247,6 +264,7 @@ export default async function keybindings({ stack, output, report, scenario }) {
     `return document.querySelector("nav[data-slot='mobile-bottom-nav'] button[aria-label='设置']");`,
     "手机底栏「设置」",
   );
+  await phone.dialogSettled("手机设置抽屉停稳");
   await phone.clickOn(
     `return [...document.querySelectorAll('[role="dialog"] button, [role="dialog"] a')].find((b) => b.textContent.trim() === "快捷键");`,
     "手机快捷键页",

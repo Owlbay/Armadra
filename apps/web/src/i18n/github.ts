@@ -10,8 +10,8 @@ import type { MessageModule } from "./index";
 const zh = {
   /* 页与入口 */
   "github.title": "GitHub",
-  "cluster.github": "GitHub",
-  "cmd.app.github": "GitHub 面板",
+  "cluster.github": "Git 托管",
+  "cmd.app.github": "Git 托管面板",
   "github.tab.issues": "Issues",
   "github.tab.pulls": "Pull requests",
   "github.reload": "刷新",
@@ -24,7 +24,7 @@ const zh = {
   /* 不可用状态（§9：不出现伪按钮） */
   "github.blocked.noWorkspace": "先打开一个工作空间",
   "github.blocked.nativeSession":
-    "桌面壳未能建立本机会话，原因见「设置 → 连接 → 后台服务」",
+    "桌面壳未能建立本机会话，原因见「设置 → 连接 → 后台服务与对外服务」",
   "github.blocked.disconnected": "连不上 Host",
   "github.blocked.unsupported": "这个 Host 没有 GitHub 服务",
   "github.blocked.noSession": "这个 Host 不支持浏览器会话",
@@ -32,7 +32,7 @@ const zh = {
   "github.blocked.noPermission": "这台设备没有该工作空间的 GitHub 权限",
   "github.blocked.noCredential": "Host 现在拿不到可用的 GitHub 凭据",
   "github.blocked.action": "前往设置 → 连接",
-  "github.blocked.credentialAction": "前往设置 → GitHub",
+  "github.blocked.credentialAction": "前往设置 → Git 托管",
 
   /* 仓库与筛选 */
   "github.repository": "仓库",
@@ -329,6 +329,7 @@ const zh = {
   "github.checkout.branch": "本地分支",
   "github.checkout.forkNote":
     "这个 PR 的 head 在 fork 里，本地分支另起名字，不覆盖同名分支",
+  "github.checkout.startRef": "起点（检出时从远端取）",
   "github.checkout.submit": "创建 worktree",
   "github.checkout.queued": "已提交 worktree 创建",
   "github.checkout.needsBranch": "填一个本地分支名",
@@ -350,7 +351,7 @@ const zh = {
   "github.error.unknownOutcome": "请求已发出但结果未知，刷新后核对远端状态",
 
   /* 设置 → GitHub */
-  "github.nav": "GitHub",
+  "github.nav": "Git 托管",
   "github.settings.note": "GitHub API 凭据由 Host 保管，令牌不会回到界面。",
   "github.settings.source": "凭据来源",
   "github.settings.apiBase": "API base",
@@ -383,8 +384,8 @@ const zh = {
 
 const en: Record<keyof typeof zh, string> = {
   "github.title": "GitHub",
-  "cluster.github": "GitHub",
-  "cmd.app.github": "GitHub panel",
+  "cluster.github": "Git hosting",
+  "cmd.app.github": "Git hosting panel",
   "github.tab.issues": "Issues",
   "github.tab.pulls": "Pull requests",
   "github.reload": "Reload",
@@ -396,7 +397,7 @@ const en: Record<keyof typeof zh, string> = {
 
   "github.blocked.noWorkspace": "Open a workspace first",
   "github.blocked.nativeSession":
-    "The desktop shell could not open a local session; see Settings → Connection → Background service",
+    "The desktop shell could not open a local session; see Settings → Connections → Background and external services",
   "github.blocked.disconnected": "Cannot reach the Host",
   "github.blocked.unsupported": "This Host has no GitHub service",
   "github.blocked.noSession": "This Host does not support browser sessions",
@@ -405,8 +406,8 @@ const en: Record<keyof typeof zh, string> = {
     "This device has no GitHub permission for this workspace",
   "github.blocked.noCredential":
     "The Host cannot produce a usable GitHub credential",
-  "github.blocked.action": "Go to Settings → Connection",
-  "github.blocked.credentialAction": "Go to Settings → GitHub",
+  "github.blocked.action": "Go to Settings → Connections",
+  "github.blocked.credentialAction": "Go to Settings → Git hosting",
 
   "github.repository": "Repository",
   "github.remoteUrl": "Remote URL",
@@ -711,6 +712,7 @@ const en: Record<keyof typeof zh, string> = {
   "github.checkout.branch": "Local branch",
   "github.checkout.forkNote":
     "This pull request's head lives in a fork; the local branch gets its own name and never overwrites yours",
+  "github.checkout.startRef": "Start point (fetched on checkout)",
   "github.checkout.submit": "Create worktree",
   "github.checkout.queued": "Worktree creation submitted",
   "github.checkout.needsBranch": "Enter a local branch name",
@@ -731,7 +733,7 @@ const en: Record<keyof typeof zh, string> = {
   "github.error.unknownOutcome":
     "The request was sent but its result is unknown; reload and check the remote",
 
-  "github.nav": "GitHub",
+  "github.nav": "Git hosting",
   "github.settings.note":
     "The Host holds the GitHub API credential; a token never comes back to this page.",
   "github.settings.source": "Credential source",

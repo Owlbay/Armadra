@@ -25,6 +25,62 @@ describe("runtime agents API", () => {
     expect(info.capabilities).toContain("hooks");
   });
 
+  /** docs/design/canvas-launcher.md §8.1：行答启动器，注入不在行上。 */
+  it("answers the canvas launcher on a row, and still reads an older core's", () => {
+    const row = {
+      id: "claude",
+      label: "Claude Code",
+      color: "#d97757",
+      launchCmd: "claude",
+      promptMode: "argv",
+      installed: true,
+    };
+    const current = agentInfoSchema.parse({
+      ...row,
+      launcher: "/data/integration/run/claude",
+    });
+    expect(current.launcher).toBe("/data/integration/run/claude");
+    // 旧 core 的 launchWords / launchArgs 自 0.2.0 起退役：行上不再有这两个字段。
+    const older = agentInfoSchema.parse({
+      ...row,
+      id: "codex",
+      launchCmd: "codex",
+      launchArgs: ["-c", "check_for_update_on_startup=false"],
+      launchWords: ["-c", { prefix: "hooks.Stop=", env: "ARMADRA_CODEX_HOOK" }],
+    });
+    expect(older.launcher).toBeUndefined();
+    expect(older).not.toHaveProperty("launchArgs");
+    expect(older).not.toHaveProperty("launchWords");
+  });
+
+  it("reads the launcher half of an integration state", () => {
+    const state = integrationStateSchema.parse({
+      agentId: "codex",
+      mode: "canvas",
+      hook: { installed: true, path: "/data/integration/run/codex" },
+      skill: { installed: true, revision: 16 },
+      legacy: { found: [] },
+      revision: 1616,
+      launchArgs: ["--dangerously-bypass-hook-trust"],
+      launcher: "/data/integration/run/codex",
+      shim: "/data/integration/shims/codex",
+      launcherWarning: "Codex 0.133.0 is too old",
+      migration: {
+        migratedAt: "2026-10-02T00:00:00.000Z",
+        sessionTrust: {
+          at: "2026-10-02T00:00:00.000Z",
+          removed: ["/<session-flags>/config.toml:session_start:0:0"],
+        },
+      },
+    });
+    expect(state.launcher).toBe("/data/integration/run/codex");
+    expect(state.shim).toBe("/data/integration/shims/codex");
+    expect(state.launcherWarning).toContain("too old");
+    expect(state.globalWrites).toEqual([]);
+    expect(state.migration?.sessionTrust?.removed).toHaveLength(1);
+    expect(state.migration?.removed).toEqual([]);
+  });
+
   /**
    * Hook 与技能是一个安装单元，所以状态也只有一份
    * （docs/design/agent-integration.md §5）。

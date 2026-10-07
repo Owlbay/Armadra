@@ -43,10 +43,29 @@ export function setPageUrl(url: string): void {
  */
 export function applyContentSecurityPolicy(
   pageOrigin: string,
-  options: { devServer?: boolean } = {},
+  options: {
+    devServer?: boolean;
+    /**
+     * 源表放行的来源（`main/remote-trust.ts`）。每次载入页面文档时现取：CSP
+     * 只在载入时生效，源表变了要重载页面才跟上。
+     */
+    connect?: () => readonly string[];
+    /**
+     * 别的响应要改的头（经中继访问源时回显 CORS，`main/remote-trust.ts`）：一个
+     * 会话只能挂一个 `onHeadersReceived`，所以由这里转一下。答 `undefined` 是
+     * 不改。
+     */
+    otherResponse?: (
+      details: Electron.OnHeadersReceivedListenerDetails,
+    ) => Record<string, string[]> | undefined;
+  } = {},
 ): void {
-  const policy = contentSecurityPolicy(options);
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const other = options.otherResponse?.(details);
+    if (other !== undefined) {
+      callback({ responseHeaders: other });
+      return;
+    }
     // Only OUR document. A browser node frames other people's pages, and
     // imposing `default-src 'self'` on those would break every site the user
     // opens while looking like the site's own bug.
@@ -64,7 +83,14 @@ export function applyContentSecurityPolicy(
       if (name.toLowerCase() === "content-security-policy")
         delete headers[name];
     }
-    headers["Content-Security-Policy"] = [policy];
+    headers["Content-Security-Policy"] = [
+      contentSecurityPolicy({
+        ...(options.devServer === undefined
+          ? {}
+          : { devServer: options.devServer }),
+        connect: options.connect?.() ?? [],
+      }),
+    ];
     callback({ responseHeaders: headers });
   });
 }

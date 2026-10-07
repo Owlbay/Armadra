@@ -16,12 +16,14 @@ import type { AddressInfo } from "node:net";
 import { GithubCredentialSource } from "./types";
 import { EventBus } from "../bus";
 import { openDatabase, type OpenedDatabase } from "../db/open";
+import { allowOrigins } from "../http/cors";
 import { CoreServer } from "../http/server";
 import {
   IdentityService,
   IdentityStore,
   identityInstanceId,
 } from "../identity";
+import { cookieName, setLoopbackAnonymousOwner } from "../identity/http";
 import { allScopes } from "../identity/scopes";
 import { createLog, nodePlatform } from "../platform";
 import { CredentialService } from "./credentials";
@@ -37,12 +39,16 @@ import { GithubService } from "./service";
 import { GithubStore } from "./store";
 
 const ORIGIN = "http://127.0.0.1:5173";
+/** 浏览器会话（Cookie）的来源：不是回环明文，凭据只认 Cookie。 */
+const COOKIE_ORIGIN = "https://armadra.test";
 
 interface Harness {
   readonly base: string;
   readonly github: FakeGithub;
   readonly accessToken: string;
   readonly csrfToken: string;
+  /** 同一台主机上一个 Cookie 会话：`cookie` 是整条 Cookie 头。 */
+  readonly cookie: { readonly header: string; readonly csrfToken: string };
   readonly workspaceId: string;
   close(): Promise<void>;
 }
@@ -71,6 +77,23 @@ async function harness(): Promise<Harness> {
     instanceId,
     origin: ORIGIN,
   });
+
+  const browser = identity.issueBootstrap({
+    hostId: identityStore.hostId(),
+    instanceId,
+    origin: COOKIE_ORIGIN,
+    deviceName: "browser",
+    scopes: allScopes(),
+  });
+  const browserSession = identity.consumeBootstrap({
+    ticket: browser.ticket,
+    hostId: identityStore.hostId(),
+    instanceId,
+    origin: COOKIE_ORIGIN,
+  });
+
+  // 服务器壳那样把公网来源注入 CORS 的放行集合。
+  allowOrigins([COOKIE_ORIGIN]);
 
   const store = new GithubStore(opened.database);
   const credentialService = new CredentialService({
@@ -124,8 +147,13 @@ async function harness(): Promise<Harness> {
     github,
     accessToken: credentials.accessToken,
     csrfToken: credentials.csrfToken,
+    cookie: {
+      header: `${cookieName(identityStore.hostId(), false, "access")}=${browserSession.accessToken}`,
+      csrfToken: browserSession.csrfToken,
+    },
     workspaceId: "ws-1",
     async close() {
+      allowOrigins([]);
       await server.close();
       opened.close();
       await github.close();
@@ -187,29 +215,53 @@ describe("GitHub 的 HTTP 面", () => {
     );
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({
-      code: "PERMISSION_DENIED",
+      code: "forbidden",
       message: "GitHub permission or CSRF check failed",
     });
   });
 
-  it("写没有 CSRF 就 403，读不要求", async () => {
-    const write = await apiCall(
-      harnessed,
-      "set-issue-state",
-      {
-        repository: { owner: "octo", name: "repo" },
-        number: "7",
-        state: "GITHUB_ISSUE_STATE_CLOSED",
-        expectedUpdatedAtUnixMs: "1",
-      },
-      { headers: { "x-armadra-csrf": "" } },
-    );
+  // 安全审查 L8：原来 Bearer 写也要 CSRF，原生 App 经 Gateway 写这一面一律 403。
+  // 规则与 M2 一致——CSRF 只在 Cookie 会话上核对（`identity/http.ts::csrfRequired`）。
+  const closeIssue = {
+    repository: { owner: "octo", name: "repo" },
+    number: "7",
+    state: "GITHUB_ISSUE_STATE_CLOSED",
+    expectedUpdatedAtUnixMs: "1",
+  };
+
+  it("Bearer 传输的写不核 CSRF（不是环境凭据）", async () => {
+    const write = await apiCall(harnessed, "set-issue-state", closeIssue, {
+      headers: { "x-armadra-csrf": "" },
+    });
+    expect(write.status).not.toBe(403);
+    expect(write.status).not.toBe(401);
+  });
+
+  it("Cookie 会话的写没有 CSRF 就 403，读不要求", async () => {
+    const cookie = {
+      origin: COOKIE_ORIGIN,
+      authorization: "",
+      cookie: harnessed.cookie.header,
+      "x-armadra-csrf": "",
+    };
+    const write = await apiCall(harnessed, "set-issue-state", closeIssue, {
+      headers: cookie,
+    });
     expect(write.status).toBe(403);
+    expect(await write.json()).toEqual({
+      code: "forbidden",
+      message: "GitHub permission or CSRF check failed",
+    });
+    const withCsrf = await apiCall(harnessed, "set-issue-state", closeIssue, {
+      headers: { ...cookie, "x-armadra-csrf": harnessed.cookie.csrfToken },
+    });
+    expect(withCsrf.status).not.toBe(403);
+    expect(withCsrf.status).not.toBe(401);
     const read = await apiCall(
       harnessed,
       "get-credential",
       {},
-      { headers: { "x-armadra-csrf": "" } },
+      { headers: cookie },
     );
     expect(read.status).toBe(200);
   });
@@ -223,9 +275,63 @@ describe("GitHub 的 HTTP 面", () => {
     );
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({
-      code: "UNAUTHENTICATED",
+      code: "unauthenticated",
       message: "Device session is invalid or expired",
     });
+  });
+
+  // 安全审查 L9：明文回环上没带凭据原来按本机主人处理，本机任何一个回环端口上
+  // 的网页都能打这一面。自 0.2.0 起缺省 401，只有裸 core 显式打开。
+  it("回环匿名缺省是 401，显式打开才按本机主人", async () => {
+    const anonymous = { headers: { authorization: "", "x-armadra-csrf": "" } };
+    const refused = await apiCall(harnessed, "get-credential", {}, anonymous);
+    expect(refused.status).toBe(401);
+    expect(await refused.json()).toEqual({
+      code: "unauthenticated",
+      message: "Device session is invalid or expired",
+    });
+    setLoopbackAnonymousOwner(true);
+    try {
+      const opened = await apiCall(harnessed, "get-credential", {}, anonymous);
+      expect(opened.status).toBe(200);
+    } finally {
+      setLoopbackAnonymousOwner(false);
+    }
+    // 打开了也只管回环明文：Cookie 来源上的匿名调用照旧 401。
+    setLoopbackAnonymousOwner(true);
+    try {
+      const cookieOrigin = await apiCall(
+        harnessed,
+        "get-credential",
+        {},
+        {
+          headers: { ...anonymous.headers, origin: COOKIE_ORIGIN },
+        },
+      );
+      expect(cookieOrigin.status).toBe(401);
+    } finally {
+      setLoopbackAnonymousOwner(false);
+    }
+  });
+
+  it("预检放行 Authorization：壳里的页面跨端口带 Bearer", async () => {
+    const preflight = await fetch(
+      `${harnessed.base}${API_PREFIX}get-credential?workspaceId=${harnessed.workspaceId}`,
+      {
+        method: "OPTIONS",
+        headers: {
+          origin: ORIGIN,
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "authorization,content-type",
+        },
+      },
+    );
+    expect(preflight.status).toBe(204);
+    expect(
+      (preflight.headers.get("access-control-allow-headers") ?? "")
+        .split(",")
+        .map((name) => name.trim()),
+    ).toContain("authorization");
   });
 
   it("GET 一条动词路径是 404，这一面只有 POST", async () => {
@@ -256,12 +362,12 @@ describe("GitHub 的 HTTP 面", () => {
     });
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
-      code: "INVALID_ARGUMENT",
+      code: "bad_request",
       message: "Invalid GitHub request",
     });
   });
 
-  it("没报工作空间就是 INVALID_ARGUMENT，不是一次「空列表」", async () => {
+  it("没报工作空间就是 bad_request，不是一次「空列表」", async () => {
     const response = await fetch(
       `${harnessed.base}${API_PREFIX}get-credential`,
       {
@@ -276,13 +382,13 @@ describe("GitHub 的 HTTP 面", () => {
       },
     );
     expect(response.status).toBe(400);
-    expect((await response.json()).code).toBe("INVALID_ARGUMENT");
+    expect((await response.json()).code).toBe("bad_request");
   });
 
   it("没有这个动词就是 404，而不是一个看起来成功的空响应", async () => {
     const response = await apiCall(harnessed, "not-a-verb", {});
     expect(response.status).toBe(404);
-    expect((await response.json()).code).toBe("NOT_FOUND");
+    expect((await response.json()).code).toBe("not_found");
   });
 
   it("24 个动词各有一条 JSON 路由，拼法是方法名的 kebab-case", () => {

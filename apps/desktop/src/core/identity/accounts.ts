@@ -1,4 +1,5 @@
 import type {
+  AuditFilter,
   AccountsTx,
   GrantSubjectKind,
   GroupRole,
@@ -9,9 +10,17 @@ import { type AuthorizationSubject, compileGrants } from "./authorize";
 import { IdentityError } from "./errors";
 import { accessChanged } from "./gate";
 import { derivePassword, validPassword } from "./passwords";
+import {
+  type IssuedPasswordReset,
+  PASSWORD_RESET_TTL_MS,
+  type PasswordResetTarget,
+  newResetToken,
+  resetRefusal,
+  resetTokenHash,
+} from "./password-reset";
 import { type ShareRole, parseShareRole, rolePermissions } from "./roles";
 import { type Scope, scope } from "./scopes";
-import type { IdentityStore } from "./store";
+import type { IdentityStore, IdentityTx, PasswordResetRow } from "./store";
 import {
   ID_PATTERN,
   digest,
@@ -70,9 +79,58 @@ export interface IssuedInvitation {
   readonly role: ShareRole;
   readonly targetGroupId: string;
   readonly targetWorkspaceId: string;
+  /** 空 = 一次性。 */
+  readonly maxUses: number | null;
+}
+
+/** 多次邀请最多能被几个人兑换（契约 §10）。 */
+export const INVITATION_MAX_USES_LIMIT = 1000;
+
+/** `maxUses`：缺省 = 一次性（null）；否则 1–1000 的整数。 */
+export function invitationMaxUses(maxUses: number | undefined): number | null {
+  if (maxUses === undefined) return null;
+  if (
+    !Number.isSafeInteger(maxUses) ||
+    maxUses < 1 ||
+    maxUses > INVITATION_MAX_USES_LIMIT
+  ) {
+    throw new IdentityError("invalid");
+  }
+  return maxUses;
 }
 
 export const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * 邀请最长活 30 天（安全审查 L3）：调用方要得更长就夹到 30 天，而不是原样
+ * 写进库里变成一张几乎不过期的门票。
+ */
+export const INVITATION_TTL_MAX_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** 邀请的有效期：缺省 7 天，最长 30 天；不是正整数毫秒的是写错了。 */
+export function invitationTtl(ttlMs: number | undefined): number {
+  if (ttlMs === undefined) return INVITATION_TTL_MS;
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
+    throw new IdentityError("invalid");
+  }
+  return Math.min(ttlMs, INVITATION_TTL_MAX_MS);
+}
+
+/** 撤掉这个人的活会话（`keepSessionId` 除外），答撤了几个。 */
+function revokeSessionsOf(
+  tx: IdentityTx,
+  principalId: string,
+  now: number,
+  keepSessionId: string,
+): number {
+  let revoked = 0;
+  for (const { session } of tx.liveSessions(now, principalId)) {
+    if (session.sessionId === keepSessionId) continue;
+    tx.revokeSession(session.sessionId, now);
+    revoked += 1;
+  }
+  return revoked;
+}
 
 export class AccountsService {
   private readonly clock: () => number;
@@ -174,50 +232,249 @@ export class AccountsService {
     });
   }
 
-  /** 设置（或替换）口令。旧的那份撤销而不是删除，撤销记录是审计的一部分。 */
+  /**
+   * 设置（或替换）口令。旧的那份撤销而不是删除，撤销记录是审计的一部分。
+   *
+   * 换了口令就撤掉这个人的其它会话（安全审查 L2）：口令被人看见过才会去换，
+   * 而换之前已经登进去的那些会话不会因为换了口令而失效。`keepSessionId` 是发
+   * 这个请求的会话——本人换口令时留着它，owner 替人设时它不属于那个人，于是
+   * 那个人的会话全部撤掉。手里还没用的重置链接一并作废。
+   */
   setPassword(
     actor: AuthorizationSubject,
     principalId: string,
     password: string,
-  ): { credentialId: string } {
+    keepSessionId = "",
+  ): { credentialId: string; revokedSessions: number } {
     if (!ID_PATTERN.test(principalId) || !validPassword(password)) {
       throw new IdentityError("invalid");
     }
     const derived = derivePassword(password);
-    return this.options.store.transaction((tx) => {
+    const result = this.options.store.transaction((tx) => {
       this.requireSelfOrManage(tx.accounts, actor, principalId);
       const now = this.now();
       if (tx.accounts.principal(principalId) === undefined) {
         throw new IdentityError("notFound");
       }
-      const existing = tx.accounts.livePassword(principalId);
-      if (existing !== undefined) {
-        tx.accounts.revokeCredential(existing.credentialId, now);
-      }
-      const credentialId = newId();
-      tx.accounts.createCredential({
-        credentialId,
+      const credentialId = this.writePassword(tx, principalId, derived, now);
+      const revokedSessions = revokeSessionsOf(
+        tx,
         principalId,
-        kind: "password",
-        provider: "",
-        subject: "",
-        secretHash: derived.hash,
-        salt: derived.salt,
-        kdf: derived.parameters.kdf,
-        cost: derived.parameters.cost,
-        block: derived.parameters.block,
-        parallel: derived.parameters.parallel,
-        length: derived.parameters.length,
-        createdAtMs: now,
-        revokedAtMs: 0,
-      });
+        now,
+        keepSessionId,
+      );
+      tx.supersedePasswordResets(principalId, now);
       this.note(tx.accounts, actor, now, {
         action: "identity.credential.set",
         target: credentialId,
-        detail: { kind: "password", principalId },
+        detail: { kind: "password", principalId, revokedSessions },
       });
-      return { credentialId };
+      return { credentialId, revokedSessions };
     });
+    if (result.revokedSessions > 0) accessChanged();
+    return result;
+  }
+
+  /** 换掉这个人的口令凭据，答新凭据的标识。调用方已在事务里判定过。 */
+  private writePassword(
+    tx: IdentityTx,
+    principalId: string,
+    derived: ReturnType<typeof derivePassword>,
+    now: number,
+  ): string {
+    const existing = tx.accounts.livePassword(principalId);
+    if (existing !== undefined) {
+      tx.accounts.revokeCredential(existing.credentialId, now);
+    }
+    const credentialId = newId();
+    tx.accounts.createCredential({
+      credentialId,
+      principalId,
+      kind: "password",
+      provider: "",
+      subject: "",
+      secretHash: derived.hash,
+      salt: derived.salt,
+      kdf: derived.parameters.kdf,
+      cost: derived.parameters.cost,
+      block: derived.parameters.block,
+      parallel: derived.parameters.parallel,
+      length: derived.parameters.length,
+      createdAtMs: now,
+      revokedAtMs: 0,
+    });
+    return credentialId;
+  }
+
+  /* ---------------------------- 口令重置链接 ------------------------------ */
+
+  /**
+   * 替某人签发一枚口令重置令牌（契约 §25）。owner 与持 `identity:manage` 的人
+   * 对任何成员都能签；组 `admin` 只能对自己所管的组里角色是 `member` 的人签。
+   * owner 的只有 owner 自己能签——否则持 `identity:manage` 的成员就能接管这台
+   * 服务器。停用了的人与服务账号没有口令可重置。
+   *
+   * 同一个人手里还没用的旧令牌随之作废：一个人同一时刻只有一条有效链接。明文
+   * 只在这一次返回，库里只有哈希，审计里没有令牌。
+   */
+  issuePasswordReset(
+    actor: AuthorizationSubject,
+    principalId: string,
+  ): IssuedPasswordReset {
+    if (!ID_PATTERN.test(principalId)) throw new IdentityError("invalid");
+    const token = newResetToken();
+    const tokenHash = resetTokenHash(token) as Buffer;
+    return this.options.store.transaction((tx) => {
+      const target = tx.accounts.principal(principalId);
+      if (target === undefined) {
+        // 看不到这个人的调用方不该靠 404 / 403 的区别探出账号：先判权限。
+        this.require(tx.accounts, actor, [scope("identity:read")]);
+        throw new IdentityError("notFound");
+      }
+      this.requireResetRights(tx.accounts, actor, target);
+      if (target.disabledAtMs !== 0 || target.kind === "service") {
+        throw new IdentityError("invalid");
+      }
+      const now = this.now();
+      tx.supersedePasswordResets(principalId, now);
+      const expiresAtMs = now + PASSWORD_RESET_TTL_MS;
+      tx.createPasswordReset({
+        tokenHash,
+        principalId,
+        issuedBy: actor.principalId,
+        createdAtMs: now,
+        expiresAtMs,
+        usedAtMs: 0,
+      });
+      this.note(tx.accounts, actor, now, {
+        action: "identity.password.reset.issue",
+        target: principalId,
+        detail: { expiresAtMs },
+      });
+      return { token, expiresAtMs };
+    });
+  }
+
+  /**
+   * 调用方能不能替这个人签重置链接——与 {@link issuePasswordReset} 同一套判定，
+   * 不签、不写库。邮件通道（契约 §28）发信前用它认调用方。
+   */
+  requirePasswordResetRights(
+    actor: AuthorizationSubject,
+    principalId: string,
+  ): void {
+    if (!ID_PATTERN.test(principalId)) throw new IdentityError("invalid");
+    this.options.store.transaction((tx) => {
+      const target = tx.accounts.principal(principalId);
+      if (target === undefined) {
+        this.require(tx.accounts, actor, [scope("identity:read")]);
+        throw new IdentityError("notFound");
+      }
+      this.requireResetRights(tx.accounts, actor, target);
+    });
+  }
+
+  /**
+   * 打开重置链接时看一眼：令牌对、没用过、没过期，答这是谁的。认不出一律
+   * `invalid_reset_token`，不分「不存在」「用过」「过期」——令牌本身就是凭据，
+   * 多说一句就是多给猜的人一条线索。
+   */
+  inspectPasswordReset(token: string): PasswordResetTarget {
+    return this.options.store.transaction((tx) => {
+      const { row, principal } = this.liveReset(tx, token, this.now());
+      return {
+        principalId: row.principalId,
+        displayName: principal.displayName,
+        expiresAtMs: row.expiresAtMs,
+      };
+    });
+  }
+
+  /**
+   * 用重置令牌设新口令。一笔事务里：令牌作废（一次性）、换口令、撤掉这个人的
+   * **全部**会话（拿着链接的人不一定是原来那几台设备）、记审计。口令策略与
+   * 泄露检查由 HTTP 层先做（同 `credentials`）。
+   */
+  completePasswordReset(
+    token: string,
+    password: string,
+  ): { principalId: string; revokedSessions: number } {
+    if (!validPassword(password)) throw new IdentityError("invalid");
+    // 先认令牌再派生：scrypt 不该替一枚编出来的令牌白跑一趟。
+    this.inspectPasswordReset(token);
+    const derived = derivePassword(password);
+    const result = this.options.store.transaction((tx) => {
+      const now = this.now();
+      const { row } = this.liveReset(tx, token, now);
+      if (!tx.usePasswordReset(row.tokenHash, now)) {
+        throw resetRefusal();
+      }
+      const credentialId = this.writePassword(
+        tx,
+        row.principalId,
+        derived,
+        now,
+      );
+      const revokedSessions = revokeSessionsOf(tx, row.principalId, now, "");
+      tx.supersedePasswordResets(row.principalId, now);
+      this.note(
+        tx.accounts,
+        { principalId: row.principalId, kind: "member", scopes: [] },
+        now,
+        {
+          action: "identity.password.reset.use",
+          target: row.principalId,
+          detail: { credentialId, issuedBy: row.issuedBy, revokedSessions },
+        },
+      );
+      return { principalId: row.principalId, revokedSessions };
+    });
+    accessChanged();
+    return result;
+  }
+
+  private liveReset(
+    tx: IdentityTx,
+    token: string,
+    now: number,
+  ): {
+    row: PasswordResetRow;
+    principal: NonNullable<ReturnType<AccountsTx["principal"]>>;
+  } {
+    const hash = resetTokenHash(token);
+    if (hash === undefined) throw resetRefusal();
+    const row = tx.passwordReset(hash);
+    if (row === undefined || row.usedAtMs !== 0 || row.expiresAtMs <= now) {
+      throw resetRefusal();
+    }
+    const principal = tx.accounts.principal(row.principalId);
+    if (
+      principal === undefined ||
+      principal.disabledAtMs !== 0 ||
+      principal.kind === "service"
+    ) {
+      throw resetRefusal();
+    }
+    return { row, principal };
+  }
+
+  private requireResetRights(
+    accounts: AccountsTx,
+    actor: AuthorizationSubject,
+    target: { principalId: string; kind: PrincipalKind },
+  ): void {
+    if (target.kind === "owner") {
+      if (actor.kind === "owner") return;
+      throw new IdentityError("permission");
+    }
+    if (this.manages(accounts, actor)) return;
+    for (const groupId of this.administeredGroups(accounts, actor)) {
+      const member = accounts
+        .groupMembers(groupId)
+        .find((row) => row.principalId === target.principalId);
+      if (member?.role === "member") return;
+    }
+    throw new IdentityError("permission");
   }
 
   revokeCredential(actor: AuthorizationSubject, credentialId: string): void {
@@ -244,8 +501,10 @@ export class AccountsService {
       targetGroupId?: string;
       targetWorkspaceId?: string;
       ttlMs?: number;
+      maxUses?: number;
     },
   ): IssuedInvitation {
+    const maxUses = invitationMaxUses(input.maxUses);
     const role = parseShareRole(input.role);
     const targetGroupId = input.targetGroupId ?? "";
     const targetWorkspaceId = input.targetWorkspaceId ?? "";
@@ -273,7 +532,7 @@ export class AccountsService {
       ) {
         throw new IdentityError("notFound");
       }
-      const expiresAtMs = now + (input.ttlMs ?? INVITATION_TTL_MS);
+      const expiresAtMs = now + invitationTtl(input.ttlMs);
       tx.accounts.createInvitation({
         invitationId,
         issuedBy: actor.principalId,
@@ -285,12 +544,14 @@ export class AccountsService {
         expiresAtMs,
         consumedBy: "",
         consumedAtMs: 0,
+        maxUses,
+        uses: 0,
       });
       this.note(tx.accounts, actor, now, {
         action: "identity.invitation.issue",
         target: invitationId,
         workspaceId: targetWorkspaceId,
-        detail: { role },
+        detail: maxUses === null ? { role } : { role, maxUses },
       });
       return {
         invitationId,
@@ -299,6 +560,7 @@ export class AccountsService {
         role,
         targetGroupId,
         targetWorkspaceId,
+        maxUses,
       };
     });
   }
@@ -313,6 +575,8 @@ export class AccountsService {
     expiresAtMs: number;
     consumedBy: string;
     consumedAtMs: number;
+    maxUses: number | null;
+    uses: number;
   }[] {
     return this.options.store.transaction((tx) => {
       // 管理员看全部；组管理员只看指向自己所管的组、且不带工作空间的那些——
@@ -342,7 +606,45 @@ export class AccountsService {
           expiresAtMs: row.expiresAtMs,
           consumedBy: row.consumedBy,
           consumedAtMs: row.consumedAtMs,
+          maxUses: row.maxUses,
+          uses: row.uses,
         }));
+    });
+  }
+
+  /**
+   * 邮件通道（契约 §28）发一张邀请之前的判定：调用方得是能签发它的人（与签发、
+   * 作废同一套 {@link requireInvitationRights}），令牌得是这张邀请的、而且还能
+   * 兑换。库里只有哈希，链接只能由刚签出它的人连同令牌一起交过来。
+   *
+   * 不存在答 `notFound`（先判过 `identity:read` 才说，免得用 404 / 403 探 id）；
+   * 令牌不对、用过、过期一律 `conflict`——调用方是有权的人，这里不必含糊。
+   */
+  invitationForDelivery(
+    actor: AuthorizationSubject,
+    input: { invitationId: string; token: string },
+  ): { expiresAtMs: number } {
+    if (!ID_PATTERN.test(input.invitationId)) {
+      throw new IdentityError("invalid");
+    }
+    return this.options.store.transaction((tx) => {
+      const row = tx.accounts.invitation(input.invitationId);
+      if (row === undefined) {
+        this.require(tx.accounts, actor, [scope("identity:read")]);
+        throw new IdentityError("notFound");
+      }
+      this.requireInvitationRights(
+        tx.accounts,
+        actor,
+        row.targetGroupId,
+        row.targetWorkspaceId,
+      );
+      try {
+        this.redeemable(tx.accounts, input, this.now());
+      } catch {
+        throw new IdentityError("conflict");
+      }
+      return { expiresAtMs: row.expiresAtMs };
     });
   }
 
@@ -362,7 +664,7 @@ export class AccountsService {
     }
     const accepted = this.options.store.transaction((tx) => {
       const now = this.now();
-      const row = this.redeemable(tx.accounts, input, now);
+      const row = this.redeemable(tx.accounts, input, now, actor.principalId);
       if (tx.accounts.principal(actor.principalId) === undefined) {
         throw new IdentityError("unauthenticated");
       }
@@ -438,6 +740,97 @@ export class AccountsService {
     return registered;
   }
 
+  /**
+   * 拿着邀请、凭一个外部身份注册（云登录，契约 §31）：建一个成员、写外部身份
+   * 的映射凭据（`kind = 'oauth'`，`provider` / `subject`）、兑换邀请，一笔事务。
+   *
+   * 和 {@link registerWithInvitation} 是同一条路，只是凭据不是口令：这个人以后
+   * 还是凭同一个外部身份进来。`defaultRole` 给了就对 `workspaceIds` 逐条授予
+   * （组织默认角色，逐条可撤）。邀请不对一律 `unauthenticated`，不泄露是哪一种。
+   */
+  registerExternalWithInvitation(input: {
+    invitationId: string;
+    token: string;
+    displayName: string;
+    provider: string;
+    subject: string;
+    createdVia: string;
+    defaultRole?: { role: ShareRole; workspaceIds: readonly string[] };
+  }): {
+    principalId: string;
+    role: ShareRole;
+    groupId: string;
+    workspaceId: string;
+  } {
+    if (
+      !validName(input.displayName) ||
+      input.provider === "" ||
+      input.subject === ""
+    ) {
+      throw new IdentityError("invalid");
+    }
+    const registered = this.options.store.transaction((tx) => {
+      const now = this.now();
+      const row = this.redeemable(tx.accounts, input, now);
+      if (tx.accounts.liveOAuth(input.provider, input.subject) !== undefined) {
+        throw new IdentityError("conflict");
+      }
+      const principalId = newId();
+      tx.accounts.createPrincipal({
+        principalId,
+        kind: "member",
+        displayName: input.displayName,
+        createdAtMs: now,
+        disabledAtMs: 0,
+      });
+      tx.accounts.createCredential({
+        credentialId: newId(),
+        principalId,
+        kind: "oauth",
+        provider: input.provider,
+        subject: input.subject,
+        secretHash: Buffer.alloc(0),
+        salt: Buffer.alloc(0),
+        kdf: "",
+        cost: 0,
+        block: 0,
+        parallel: 0,
+        length: 0,
+        createdAtMs: now,
+        revokedAtMs: 0,
+      });
+      const actor: AuthorizationSubject = {
+        principalId,
+        kind: "member",
+        scopes: [],
+      };
+      this.note(tx.accounts, actor, now, {
+        action: "identity.principal.register",
+        target: principalId,
+        detail: {
+          invitationId: input.invitationId,
+          createdVia: input.createdVia,
+        },
+      });
+      const redeemed = this.redeem(tx.accounts, actor, row, now);
+      if (input.defaultRole !== undefined) {
+        for (const workspaceId of input.defaultRole.workspaceIds) {
+          this.put(tx.accounts, {
+            subjectKind: "principal",
+            subjectId: principalId,
+            workspaceId,
+            role: input.defaultRole.role,
+            grantedBy: row.issuedBy,
+            nowMs: now,
+          });
+        }
+      }
+      return { principalId, ...redeemed };
+    });
+    accessChanged();
+    return registered;
+  }
+
   /** 作废一张还没用掉的邀请。库里记成「被空主体用掉」，一次性的那道闸照旧。 */
   revokeInvitation(actor: AuthorizationSubject, invitationId: string): void {
     if (!ID_PATTERN.test(invitationId)) throw new IdentityError("invalid");
@@ -470,15 +863,24 @@ export class AccountsService {
     accounts: AccountsTx,
     input: { invitationId: string; token: string },
     now: number,
+    principalId = "",
   ): InvitationRow {
     const parsed = parseToken(input.token);
     if (!ID_PATTERN.test(input.invitationId) || parsed !== input.invitationId) {
       throw new IdentityError("unauthenticated");
     }
     const row = accounts.invitation(input.invitationId);
+    // 多次邀请用满后 `consumed_by` 是最后一个人；作废则是空主体。用满之后已兑换过的
+    // 人再来仍是幂等成功（过期之前）；其他一切同一个 401。
+    const exhaustedButMine =
+      row !== undefined &&
+      row.maxUses !== null &&
+      row.consumedBy !== "" &&
+      principalId !== "" &&
+      accounts.invitationUsedBy(row.invitationId, principalId);
     if (
       row === undefined ||
-      row.consumedAtMs !== 0 ||
+      (row.consumedAtMs !== 0 && !exhaustedButMine) ||
       now >= row.expiresAtMs ||
       !matches("bootstrap", input.token, row.tokenHash)
     ) {
@@ -518,7 +920,11 @@ export class AccountsService {
         nowMs: now,
       });
     }
-    accounts.consumeInvitation(row.invitationId, actor.principalId, now);
+    if (row.maxUses === null) {
+      accounts.consumeInvitation(row.invitationId, actor.principalId, now);
+    } else {
+      accounts.useInvitation(row.invitationId, actor.principalId, now);
+    }
     this.note(accounts, actor, now, {
       action: "identity.invitation.accept",
       target: row.invitationId,
@@ -808,7 +1214,7 @@ export class AccountsService {
 
   readAudit(
     actor: AuthorizationSubject,
-    filter: { principalId?: string; workspaceId?: string; limit?: number },
+    filter: AuditFilter,
   ): {
     id: number;
     atMs: number;

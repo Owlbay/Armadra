@@ -12,6 +12,7 @@ export const updates: MessageModule = {
     "updates.note":
       "只查询是否有新版本，不会下载或安装。安装需要带签名的发布包，由你自己决定何时进行。",
     "updates.version": "当前版本",
+    "updates.hostVersion": "主机版本",
     "updates.version.unknown": "未知",
     "updates.channel": "更新通道",
     "updates.channel.stable": "稳定版",
@@ -85,6 +86,8 @@ export const updates: MessageModule = {
       "本应用启动的后台服务没有停止，因此没有开始安装。",
     "updates.shellReason.installFailed": "安装失败，当前版本没有被替换。",
     "updates.shellReason.updaterUnavailable": "此构建的更新器不可用。",
+    "updates.shellReason.notSigned":
+      "更新已下载并通过校验，但当前安装未签名，不会安装。请从发布页手动安装。",
     "updates.release": "新版本",
     "updates.signature": "签名",
     "updates.signature.present": "发布包附带签名，由安装程序验证",
@@ -122,6 +125,7 @@ export const updates: MessageModule = {
     "updates.note":
       "This only asks whether a newer release exists. Nothing is downloaded or installed; installing needs a signed package and stays your decision.",
     "updates.version": "Current version",
+    "updates.hostVersion": "Host version",
     "updates.version.unknown": "Unknown",
     "updates.channel": "Release channel",
     "updates.channel.stable": "Stable",
@@ -202,6 +206,8 @@ export const updates: MessageModule = {
       "The install failed; the running version was not replaced.",
     "updates.shellReason.updaterUnavailable":
       "This build's updater is unusable.",
+    "updates.shellReason.notSigned":
+      "The update was downloaded and verified, but this installation is unsigned, so it is not installed. Install it from the release page.",
     "updates.release": "New release",
     "updates.signature": "Signature",
     "updates.signature.present":

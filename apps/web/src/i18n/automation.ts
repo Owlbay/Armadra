@@ -20,7 +20,7 @@ const zh = {
   /* 不可用状态（§5：不出现伪按钮） */
   "automation.blocked.noWorkspace": "先打开一个工作空间",
   "automation.blocked.nativeSession":
-    "桌面壳未能建立本机会话，原因见「设置 → 连接 → 后台服务」",
+    "桌面壳未能建立本机会话，原因见「设置 → 连接 → 后台服务与对外服务」",
   "automation.blocked.disconnected": "连不上 Host",
   "automation.blocked.unsupported": "这个 Host 没有执行 Worker，无法运行计划",
   "automation.blocked.noSession": "这个 Host 不支持浏览器会话",
@@ -69,6 +69,7 @@ const zh = {
     "这个计划正在运行中。保存新版本会作废当前激活，把它退回草稿——要重新启用才会继续执行。",
   "automation.savedDraft": "已保存为新版本；计划回到草稿，需要重新启用",
   "automation.runs.more": "加载更早的记录",
+  "automation.runs.plan": "计划",
   "automation.runs.loading": "正在加载",
   "automation.cancel": "取消",
   "automation.confirmActivate": "启用这个计划？",
@@ -98,6 +99,10 @@ const zh = {
   "automation.wizard.targetKind": "目标类型",
   "automation.wizard.targetKind.command": "非交互命令",
   "automation.wizard.targetKind.agent": "Agent 终端（写入提示词）",
+  "automation.wizard.targetKind.workflow": "运行工作流",
+  "automation.wizard.workflowTemplate": "工作流",
+  "automation.wizard.workflowRequired": "先选一个工作流",
+  "automation.wizard.workflowParamsMissing": "还有参数没填",
   "automation.wizard.agentNode": "Agent 节点",
   "automation.wizard.prompt": "提示词",
   "automation.wizard.promptRequired": "写入 Agent 的计划必须填提示词",
@@ -223,7 +228,7 @@ const en: Record<keyof typeof zh, string> = {
 
   "automation.blocked.noWorkspace": "Open a workspace first",
   "automation.blocked.nativeSession":
-    "The desktop shell could not open a local session; see Settings → Connection → Background service",
+    "The desktop shell could not open a local session; see Settings → Connections → Background and external services",
   "automation.blocked.disconnected": "Cannot reach the Host",
   "automation.blocked.unsupported":
     "This Host has no execution Worker, so it cannot run plans",
@@ -231,7 +236,7 @@ const en: Record<keyof typeof zh, string> = {
   "automation.blocked.signedOut": "This device is not paired with the Host",
   "automation.blocked.noPermission":
     "This device holds no automation permission for this workspace",
-  "automation.blocked.action": "Go to Settings → Connection",
+  "automation.blocked.action": "Go to Settings → Connections",
   "automation.readOnly": "Read-only: plans can be viewed but not changed",
 
   "automation.planState.unspecified": "Unknown",
@@ -273,6 +278,7 @@ const en: Record<keyof typeof zh, string> = {
   "automation.savedDraft":
     "Saved as a new version. The plan is a draft again and needs re-activating.",
   "automation.runs.more": "Load older runs",
+  "automation.runs.plan": "Plan",
   "automation.runs.loading": "Loading",
   "automation.cancel": "Cancel",
   "automation.confirmActivate": "Activate this plan?",
@@ -303,6 +309,10 @@ const en: Record<keyof typeof zh, string> = {
   "automation.wizard.targetKind": "Target",
   "automation.wizard.targetKind.command": "Non-interactive command",
   "automation.wizard.targetKind.agent": "Agent terminal (write a prompt)",
+  "automation.wizard.targetKind.workflow": "Run a workflow",
+  "automation.wizard.workflowTemplate": "Workflow",
+  "automation.wizard.workflowRequired": "Pick a workflow first",
+  "automation.wizard.workflowParamsMissing": "Some parameters are empty",
   "automation.wizard.agentNode": "Agent node",
   "automation.wizard.prompt": "Prompt",
   "automation.wizard.promptRequired":

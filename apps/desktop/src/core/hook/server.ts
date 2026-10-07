@@ -8,6 +8,19 @@ import { type ListenSpec, bind, release } from "../listen";
 import { ROUTES } from "../http/routes";
 import { Router, type CoreRequest, type HandlerResult } from "../http/router";
 import { readBody } from "../http/server";
+import {
+  CredentialError,
+  credentialsDomain,
+  persistedBinding,
+} from "../agent/credentials";
+import {
+  amaCredentials,
+  amaKeyScope,
+  persistedAmaModel,
+} from "../agent/ama-credentials";
+import { audit } from "../identity/audit";
+import { parseCustomAgents } from "../settings/custom-agents";
+import { settingsDomain } from "../settings";
 import { collabDispatcher } from "./collab";
 import {
   CLIENT_REVISION_HEADER,
@@ -70,6 +83,13 @@ export class HookServer {
         headerRecord(request),
       );
     });
+
+    this.router.handle("POST", "/credential", (_match, request) =>
+      this.credential(request),
+    );
+    this.router.handle("POST", "/credential/ama", (_match, request) =>
+      this.amaKeys(request),
+    );
 
     for (const family of ["context-link", "control", "browser"] as const) {
       this.router.handle("POST", `/${family}/{verb}`, async (match, request) =>
@@ -152,6 +172,150 @@ export class HookServer {
     return answer.kind === "text"
       ? text(answer.status, answer.body)
       : { status: answer.status, body: answer.body };
+  }
+
+  /**
+   * 画布启动器兑换节点凭据（契约 §20.4）。值只走这一条本机回环通道：要应用
+   * bearer，且节点 token 必须**验过**（`legacy` 没 token 的不行），只答这个节点
+   * 此刻绑定的那一条。答复与失败都不记日志。
+   */
+  private async credential(request: CoreRequest): Promise<HandlerResult> {
+    const refusal = this.requireBearer(request);
+    if (refusal !== undefined) return refusal;
+    let body: { nodeId?: unknown; ref?: unknown };
+    try {
+      body = (request.json<{ nodeId?: unknown; ref?: unknown }>() ?? {}) as {
+        nodeId?: unknown;
+        ref?: unknown;
+      };
+    } catch {
+      body = {};
+    }
+    const nodeId = typeof body.nodeId === "string" ? body.nodeId : "";
+    const ref = typeof body.ref === "string" ? body.ref : "";
+    const verdict = this.options.hooks.verdict(
+      nodeId,
+      single(request.headers[NODE_TOKEN_HEADER]),
+    );
+    if (nodeId === "" || ref === "" || verdict !== "verified") {
+      return {
+        status: 403,
+        body: { code: "forbidden", message: "The node token is not valid" },
+      };
+    }
+    const domain = credentialsDomain();
+    if (domain === undefined) {
+      return {
+        status: 503,
+        body: {
+          code: "credential_unavailable",
+          message: "Node credentials are not assembled",
+        },
+      };
+    }
+    try {
+      const redeemed = await domain.redeem(
+        nodeId,
+        ref,
+        persistedBinding(this.options.database, nodeId),
+      );
+      return {
+        status: 200,
+        body: redeemed,
+        headers: { "cache-control": "no-store" },
+      };
+    } catch (failure) {
+      if (failure instanceof CredentialError) {
+        return {
+          status: failure.status,
+          body: { code: failure.code, message: failure.message },
+        };
+      }
+      return {
+        status: 500,
+        body: { code: "internal", message: "Could not redeem the credential" },
+      };
+    }
+  }
+
+  /**
+   * ama 的模型密钥（契约 §12.4），给画布启动器 `run/ama` 兑换：与 `/credential`
+   * 同一道门——应用 bearer、节点 token 必须**验过**——外加节点在画布上就是 ama
+   * （或以它为基础的自定义 Agent），别的节点拿不到。答已设的那几家，变量名是
+   * ama 自己读的 `AMA_API_KEY_<供应商>`。答复与失败都不记日志。
+   */
+  private async amaKeys(request: CoreRequest): Promise<HandlerResult> {
+    const refusal = this.requireBearer(request);
+    if (refusal !== undefined) return refusal;
+    let nodeId = "";
+    try {
+      const body = request.json<{ nodeId?: unknown }>();
+      if (typeof body?.nodeId === "string") nodeId = body.nodeId;
+    } catch {
+      nodeId = "";
+    }
+    const verdict = this.options.hooks.verdict(
+      nodeId,
+      single(request.headers[NODE_TOKEN_HEADER]),
+    );
+    if (nodeId === "" || verdict !== "verified") {
+      return {
+        status: 403,
+        body: { code: "forbidden", message: "The node token is not valid" },
+      };
+    }
+    const agentId = persistedBinding(this.options.database, nodeId).agentId;
+    const base =
+      agentId === undefined
+        ? undefined
+        : (parseCustomAgents(settingsDomain()?.settings.snapshot() ?? {}).find(
+            (custom) => custom.id === agentId,
+          )?.baseAgent ?? agentId);
+    if (base !== "ama") {
+      return {
+        status: 403,
+        body: { code: "forbidden", message: "This node is not an ama node" },
+      };
+    }
+    const keys = amaCredentials();
+    if (keys === undefined) {
+      return {
+        status: 503,
+        body: {
+          code: "credential_unavailable",
+          message: "ama's model keys are not assembled",
+        },
+      };
+    }
+    // 只答节点模型那一家（安全审查 L10）；没设模型时 ama 从已设的里挑缺省，
+    // 只能答全部，记一条审计。
+    const scope = amaKeyScope(persistedAmaModel(this.options.database, nodeId));
+    if (scope.kind === "unscoped") {
+      audit({
+        action: "ama.credential.unscoped",
+        target: nodeId,
+        detail: { reason: "no_model" },
+      });
+    }
+    try {
+      return {
+        status: 200,
+        body: {
+          variables: await keys.variables(
+            scope.kind === "provider" ? scope.providers : undefined,
+          ),
+        },
+        headers: { "cache-control": "no-store" },
+      };
+    } catch {
+      return {
+        status: 503,
+        body: {
+          code: "secret_unavailable",
+          message: "The secret store is unavailable",
+        },
+      };
+    }
   }
 
   /** One listener per address; the router is shared. */

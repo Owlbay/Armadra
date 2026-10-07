@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 const mocks = vi.hoisted(() => ({
   nativeShell: false,
@@ -19,17 +20,18 @@ import {
   forgetCsrf,
   currentCsrf,
   identityHello,
+  identityRequest,
   identitySessionSchema,
   IdentityRequestError,
   IdentityTransportError,
-  listIdentityDevices,
   logoutIdentity,
   onIdentitySessionChange,
   pairIdentity,
   permits,
+  rememberCsrf,
+  replaceRejectedCsrf,
   resetIdentityCredentials,
   resumeIdentity,
-  revokeIdentityDevice,
   takePairingTicket,
 } from "./identity";
 
@@ -149,7 +151,11 @@ describe("the browser (server shell) transport", () => {
     expect(calls[0]?.init.credentials).toBe("include");
     expect(currentCsrf()).toBe(SECRET);
 
-    await revokeIdentityDevice("d2", 3);
+    // 旧路径上的写（procedure 那一面见 `security.test.ts`）。
+    await identityRequest("devices/revoke", z.unknown(), {
+      method: "POST",
+      body: { deviceId: "d2", expectedRevision: 3 },
+    });
     const headers = calls[1]?.init.headers as Record<string, string>;
     expect(headers["X-Armadra-CSRF"]).toBe(SECRET);
     expect(JSON.parse(calls[1]?.init.body as string)).toEqual({
@@ -223,7 +229,7 @@ describe("the desktop shell transport", () => {
     });
     expect(calls[0]?.init.credentials).toBe("omit");
 
-    await listIdentityDevices();
+    await identityRequest("devices", z.unknown());
     const headers = calls[1]?.init.headers as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer A");
     expect(headers["X-Armadra-CSRF"]).toBe(undefined);
@@ -287,8 +293,179 @@ describe("takePairingTicket", () => {
     expect(replaceState).toHaveBeenCalledWith(null, "", "/");
   });
 
+  it("accepts the gateway's trailing fingerprint and drops it", () => {
+    vi.stubGlobal("location", {
+      hash: `#pair=abc-123&fp=${"ab".repeat(32)}`,
+      pathname: "/",
+      search: "",
+    });
+    vi.stubGlobal("history", { replaceState: vi.fn() });
+    expect(takePairingTicket()).toBe("abc-123");
+  });
+
   it("ignores anything that is not a pairing fragment", () => {
     vi.stubGlobal("location", { hash: "#settings", pathname: "/", search: "" });
     expect(takePairingTicket()).toBe("");
+  });
+});
+
+/**
+ * 同一浏览器的几个窗口共用一条会话、一枚 CSRF：各换各的就是互相作废，两边
+ * 同时换时「403 → 换一枚 → 重发」也救不回来（server-e2e 同机第二个窗口偶发
+ * 停在空白画布上）。换来的新令牌经 BroadcastChannel 告诉其它窗口。
+ */
+describe("windows of one browser sharing a session", () => {
+  const OTHER = "b".repeat(43);
+  const NEWER = "c".repeat(43);
+  let other: BroadcastChannel;
+  let heard: unknown[];
+
+  beforeEach(() => {
+    heard = [];
+    other = new BroadcastChannel("armadra.identity.csrf");
+    other.onmessage = (event) => heard.push(event.data);
+  });
+  afterEach(() => other.close());
+
+  /** 消息是异步投递的：等它到。 */
+  const delivered = async (check: () => boolean) => {
+    for (let i = 0; i < 50 && !check(); i += 1)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(check()).toBe(true);
+  };
+
+  it("tells the other windows about a token it renewed", async () => {
+    await ensureCsrf();
+    await delivered(() => heard.length > 0);
+    expect(heard).toEqual([{ csrf: SECRET }]);
+  });
+
+  it("uses a token another window renewed instead of renewing its own", async () => {
+    other.postMessage({ csrf: OTHER });
+    await delivered(() => currentCsrf() === OTHER);
+    expect(await ensureCsrf()).toBe(OTHER);
+    expect(calls).toHaveLength(0);
+    // 别人告诉的不再往外转。
+    expect(heard).toEqual([]);
+  });
+
+  it("ignores a message that is not a token", async () => {
+    rememberCsrf(SECRET);
+    other.postMessage({ csrf: "short" });
+    other.postMessage("nonsense");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(currentCsrf()).toBe(SECRET);
+  });
+
+  it("retries a rejected write with the token another window already rotated to", async () => {
+    rememberCsrf(SECRET);
+    other.postMessage({ csrf: NEWER });
+    await delivered(() => currentCsrf() === NEWER);
+    expect(await replaceRejectedCsrf(SECRET)).toBe(NEWER);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("renews when the rejected token is still the one it holds", async () => {
+    rememberCsrf(OTHER);
+    expect(await replaceRejectedCsrf(OTHER)).toBe(SECRET);
+    expect(calls.map((call) => call.url)).toEqual([
+      expect.stringContaining("/api/identity/session/csrf"),
+    ]);
+  });
+
+  /**
+   * 同一个窗口里几次写带着同一枚旧令牌一起被拒：只换一次。以前每一次 403 都
+   * 作废手里的再换，后到的那次把先到的刚换来、正要拿去重发的那枚又作废了。
+   */
+  it("renews once for several writes rejected with the same token", async () => {
+    rememberCsrf(OTHER);
+    const [first, second] = await Promise.all([
+      replaceRejectedCsrf(OTHER),
+      replaceRejectedCsrf(OTHER),
+    ]);
+    expect(first).toBe(SECRET);
+    expect(second).toBe(SECRET);
+    // 来得晚的那次 403 也不再换。
+    expect(await replaceRejectedCsrf(OTHER)).toBe(SECRET);
+    expect(calls).toHaveLength(1);
+  });
+
+  /** Bearer 传输里每个窗口各有自己的会话：不广播，也不采用别人的。 */
+  it("leaves the Bearer transport out of the sharing", async () => {
+    mocks.nativeShell = true;
+    rememberCsrf(SECRET);
+    other.postMessage({ csrf: OTHER });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(currentCsrf()).toBe(SECRET);
+    expect(heard).toEqual([]);
+  });
+
+  it("forgets only the token that was rejected", () => {
+    rememberCsrf(NEWER);
+    forgetCsrf(SECRET);
+    expect(currentCsrf()).toBe(NEWER);
+    forgetCsrf(NEWER);
+    expect(currentCsrf()).toBe("");
+  });
+
+  /** 等锁的窗口拿到锁时，别的窗口已经换好了：直接用，不再换第二次。 */
+  it("checks again under the renew lock before renewing", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    vi.stubGlobal("navigator", {
+      locks: {
+        request: (_name: string, task: () => Promise<unknown>) =>
+          held.then(task),
+      },
+    });
+    const pending = ensureCsrf();
+    other.postMessage({ csrf: OTHER });
+    await delivered(() => currentCsrf() === OTHER);
+    release();
+    expect(await pending).toBe(OTHER);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("identityRequest on a cookie session", () => {
+  /** 令牌被别处换掉时 403：换一枚重发一次；再 403 照实报。 */
+  it("retries a rotated CSRF token exactly once", async () => {
+    rememberCsrf(SECRET);
+    const fresh = "c".repeat(43);
+    let writes = 0;
+    answer = (call) => {
+      if (call.url.includes("session/csrf"))
+        return { body: { csrfToken: fresh } };
+      writes += 1;
+      return writes === 1
+        ? { status: 403, body: { code: "PERMISSION_DENIED", message: "" } }
+        : { body: { ok: true } };
+    };
+    const { z } = await import("zod");
+    await expect(
+      identityRequest("groups", z.object({ ok: z.boolean() }), {
+        method: "POST",
+        body: { name: "x" },
+      }),
+    ).resolves.toEqual({ ok: true });
+    const sent = calls
+      .filter((call) => call.url.endsWith("/groups"))
+      .map(
+        (call) =>
+          (call.init.headers as Record<string, string>)["X-Armadra-CSRF"],
+      );
+    expect(sent).toEqual([SECRET, fresh]);
+
+    writes = 0;
+    answer = (call) =>
+      call.url.includes("session/csrf")
+        ? { body: { csrfToken: "d".repeat(43) } }
+        : { status: 403, body: { code: "PERMISSION_DENIED", message: "" } };
+    await expect(
+      identityRequest("groups", z.object({ ok: z.boolean() }), {
+        method: "POST",
+        body: { name: "x" },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
   });
 });

@@ -28,7 +28,19 @@ export default defineConfig({
     // Each file's `tempDir()` directories are removed after it (and any tmux
     // server under them stopped).
     setupFiles: ["src/core/testing/setup.ts"],
+    // One migrated database template for the whole run (fixtures copy it).
+    globalSetup: ["src/core/testing/db-template.global.ts"],
     // The Host and Runtime process tests wait on real timeouts.
     testTimeout: 60_000,
+    // 工程规范化 §5：覆盖率只出报告、不设门槛。CI 只在 Linux 作业里开
+    // （ARMADRA_COVERAGE=1），本机用 `pnpm test:coverage` 或 `vitest run --coverage`。
+    coverage: {
+      enabled: process.env.ARMADRA_COVERAGE === "1",
+      provider: "v8",
+      reporter: ["text-summary", "lcov"],
+      reportsDirectory: "coverage",
+      include: ["src/**/*.ts"],
+      exclude: ["src/**/*.test.ts", "src/core/testing/**"],
+    },
   },
 });

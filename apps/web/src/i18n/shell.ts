@@ -10,6 +10,7 @@ export const shell: MessageModule = {
   "zh-CN": {
     "sidebar.rename": "重命名",
     "sidebar.workspaceName": "工作空间名称",
+    "sidebar.defaultName": "默认",
     "sidebar.nameRequired": "名称不能为空",
     "sidebar.renameFailed": "重命名失败，请重试",
     "app.brand": "Armadra",
@@ -80,7 +81,7 @@ export const shell: MessageModule = {
     "sidebar.boardDelete": "删除",
     "sidebar.boardDeleteTitle": "删除「{name}」？",
     "sidebar.boardDeleteDescription": "画布与其中的节点都会被删除。",
-    "sidebar.boardDeleteConfirm": "删除",
+    "sidebar.boardDeleteConfirm": "删除画布",
     "sidebar.cancel": "取消",
 
     "search.title": "搜索",
@@ -109,6 +110,7 @@ export const shell: MessageModule = {
   en: {
     "sidebar.rename": "Rename",
     "sidebar.workspaceName": "Workspace name",
+    "sidebar.defaultName": "Default",
     "sidebar.nameRequired": "Name cannot be empty",
     "sidebar.renameFailed": "Could not rename. Try again.",
     "app.brand": "Armadra",
@@ -182,7 +184,7 @@ export const shell: MessageModule = {
     "sidebar.boardDelete": "Delete",
     "sidebar.boardDeleteTitle": "Delete “{name}”?",
     "sidebar.boardDeleteDescription": "The board and its nodes are removed.",
-    "sidebar.boardDeleteConfirm": "Delete",
+    "sidebar.boardDeleteConfirm": "Delete board",
     "sidebar.cancel": "Cancel",
 
     "search.title": "Search",

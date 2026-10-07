@@ -189,6 +189,45 @@ export const IPC = {
    * partition 由主进程按前缀判定。
    */
   browserClearData: spec("browser:clear-data", "invoke", "window"),
+
+  /**
+   * The page changed `gateway.*` (settings → external access); the tray's
+   * check mark re-reads `GET /api/gateway` instead of waiting for its poll.
+   * Carries nothing: the tray asks the core, not the page.
+   */
+  gatewayRefresh: spec("app:gateway-refresh", "invoke", "window"),
+
+  /**
+   * 页面改了源表（设置 → 远程服务：加 / 删远程服务、挂载 / 移除源）。不带数据：
+   * 壳自己经 core 重读 `GET /api/sources`，更新 CSP 的 `connect-src` 与证书钉扎；
+   * 答 `{ reload }`——新来源要重载页面文档 CSP 才放行（`main/remote-trust.ts`）。
+   */
+  sourcesChanged: spec("app:sources-changed", "invoke", "window"),
+
+  /**
+   * 分享深链（`armadra://join`，客户端包 §6.2）：壳收到一条就推这个不带数据的
+   * 提醒，页面经 `app:take-join-link` 取走（只取一次）。页面挂好之前推的提醒
+   * 丢了也不要紧，页面挂好时自己来取。
+   */
+  sourcesJoinLink: spec("app:join-link", "event", "window"),
+  sourcesTakeJoinLink: spec("app:take-join-link", "invoke", "window"),
+
+  /**
+   * 分享链接交给系统分享菜单（macOS `ShareMenu`）：`{ title, url }`，答
+   * `{ shared }`。平台没有菜单或请求不像样答 `false`，页面退回复制
+   * （`main/share.ts`）。
+   */
+  appShare: spec("app:share", "invoke", "window"),
+
+  /**
+   * 页面的一条 JS 错误（G5-19，契约 §30）：`{ kind, name, message, stack }`，
+   * 页面已剥离过。主进程按 `diagnostics.reportPageErrors` 与 DSN 再判、限流、
+   * 再剥离，才交给 `@sentry/electron`（`ipcMode` 仍是 0，SDK 不开渲染进程通道）。
+   * 答 `{ accepted }`，从不拒绝——上报失败不能再变成页面上的一个错误。
+   *
+   * `window`：只有这扇窗口的页面装了 preload；浏览器节点的 guest 没有这条路。
+   */
+  diagnosticsReport: spec("diagnostics:report", "invoke", "window"),
 } as const satisfies Record<string, ChannelSpec>;
 
 export type ChannelName = (typeof IPC)[keyof typeof IPC]["channel"];
@@ -226,6 +265,11 @@ export const IMPLEMENTED_CHANNELS: readonly string[] = [
   IPC.browserView.channel,
   IPC.browserControl.channel,
   IPC.browserClearData.channel,
+  IPC.gatewayRefresh.channel,
+  IPC.sourcesChanged.channel,
+  IPC.sourcesTakeJoinLink.channel,
+  IPC.appShare.channel,
+  IPC.diagnosticsReport.channel,
 ];
 
 /** What `browser:clear-data` answers. */
@@ -384,6 +428,7 @@ export const NATIVE_TICKET_REASONS = [
   "cliFailed",
   "timeout",
   "malformed",
+  "channelUnavailable",
 ] as const;
 
 /**

@@ -6,6 +6,7 @@ import { useT } from "../../../app/preferences-store";
 import { revealPath } from "../../../platform";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
+import { useRemoteAccess } from "../remote-access";
 import { useRuntimeSettings } from "../use-runtime-settings";
 import { CONTROL_WIDTH } from "./GeneralPage";
 import { Button } from "@/ui/button";
@@ -16,6 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/ui/select";
+import { formatBytes } from "@/lib/format";
 
 /** `logs.retentionDays` 的四个取值；`0` = 永久（Runtime 只接受这几个）。 */
 const RETENTION_CHOICES = [7, 30, 90, 0] as const;
@@ -30,6 +32,9 @@ export function DataPage() {
   const t = useT();
   const queryClient = useQueryClient();
   const { settings, save } = useRuntimeSettings();
+  // 数据目录在设置作用的那台 core 上：远端时「在访达中打开」打开的是眼前这台
+  // 机器上一个不存在的路径，不列。
+  const { remote } = useRemoteAccess();
 
   const info = useQuery({
     queryKey: ["data-info"],
@@ -68,27 +73,29 @@ export function DataPage() {
           <span className="max-w-[280px] truncate text-[11px] text-muted-foreground">
             {info.data?.dataDir ?? "—"}
           </span>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={!info.data}
-            onClick={() => {
-              const dir = info.data?.dataDir;
-              if (!dir) return;
-              void revealPath(dir).then((outcome) => {
-                // 三种结局都说一声：这个按钮以前失败时完全没有反馈，
-                // 点下去什么也不发生就只能读成「应用坏了」。
-                if (outcome === "copied")
-                  toast.success(t("settings.reveal.copied"));
-                else if (outcome === "failed")
-                  toast.error(t("settings.reveal.failed"), {
-                    description: dir,
-                  });
-              });
-            }}
-          >
-            {t("settings.reveal")}
-          </Button>
+          {!remote && (
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!info.data}
+              onClick={() => {
+                const dir = info.data?.dataDir;
+                if (!dir) return;
+                void revealPath(dir).then((outcome) => {
+                  // 三种结局都说一声：这个按钮以前失败时完全没有反馈，
+                  // 点下去什么也不发生就只能读成「应用坏了」。
+                  if (outcome === "copied")
+                    toast.success(t("settings.reveal.copied"));
+                  else if (outcome === "failed")
+                    toast.error(t("settings.reveal.failed"), {
+                      description: dir,
+                    });
+                });
+              }}
+            >
+              {t("settings.reveal")}
+            </Button>
+          )}
         </SettingsRow>
 
         <SettingsRow label={t("settings.dbSize")}>
@@ -144,7 +151,11 @@ export function DataPage() {
               );
             }}
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.logRetention")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -159,17 +170,4 @@ export function DataPage() {
       </SettingsGroup>
     </>
   );
-}
-
-/** 1024 进制、最多一位小数；单位是符号，不进 i18n。 */
-export function formatBytes(bytes: number): string {
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  const rounded = unit === 0 ? String(value) : value.toFixed(1);
-  return `${rounded} ${units[unit]}`;
 }

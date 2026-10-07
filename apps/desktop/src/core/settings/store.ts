@@ -72,6 +72,7 @@ export class SettingsStore {
   private readonly sharedFile: string | undefined;
   private readonly localFile: string | undefined;
   private readonly onError: (error: unknown) => void;
+  private readonly listeners = new Set<(document: JsonObject) => void>();
 
   private constructor(
     document: JsonObject,
@@ -138,7 +139,27 @@ export class SettingsStore {
     const next: JsonValue = merge(clone<JsonObject>(this.document), patch);
     this.document = normalize(next);
     this.persist();
-    return this.snapshot();
+    const snapshot = this.snapshot();
+    for (const listener of [...this.listeners]) {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        // 一个订阅者失败不影响这次写入，也不影响别的订阅者。
+        this.onError(error);
+      }
+    }
+    return snapshot;
+  }
+
+  /**
+   * 每次 `patch` 之后叫一次，带写完的整份文档。给那些开关一翻就要动的域——出站
+   * 隧道（`cloud.relay.enabled`）关掉就得立刻断，不能等下一次读。返回退订函数。
+   */
+  onChange(listener: (document: JsonObject) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   /** `terminal.backend`, `terminal.detachedGraceMinutes`, … already valid. */

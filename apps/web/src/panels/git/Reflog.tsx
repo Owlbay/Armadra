@@ -6,9 +6,17 @@ import type {
   GitReflogPage,
   GitRepositoryAction,
 } from "@armadra/shared";
+import { sk } from "../../sources/scope";
 import { useT } from "../../app/preferences-store";
 import { Button } from "../../ui/button";
-import { Check, Field, ReadError, selectClass } from "./forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../ui/select";
+import { Check, Field, ReadError } from "./forms";
 import { Input } from "../../ui/input";
 import { writeClipboard } from "../../terminal/TerminalSurface";
 import {
@@ -55,7 +63,7 @@ export function Reflog({
 }: ReflogProps) {
   const t = useT();
   const integration = useQuery({
-    queryKey: ["git-repository-integration", workspaceId, repositoryKey],
+    queryKey: sk("git-repository-integration", workspaceId, repositoryKey),
     queryFn: ({ signal }) => loadState(signal),
     retry: false,
   });
@@ -64,7 +72,12 @@ export function Reflog({
   const [reference, setReference] = useState("HEAD");
   const [selected, setSelected] = useState<string | null>(null);
   const log = useInfiniteQuery({
-    queryKey: ["git-repository-reflog", workspaceId, repositoryKey, reference],
+    queryKey: sk(
+      "git-repository-reflog",
+      workspaceId,
+      repositoryKey,
+      reference,
+    ),
     queryFn: ({ pageParam, signal }) => loadPage(reference, pageParam, signal),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
@@ -104,9 +117,10 @@ export function Reflog({
       <ol className="space-y-1">
         {entries.map((entry) => (
           <li key={entry.selector} className="min-w-0">
-            <button
+            <Button
               type="button"
-              className="w-full rounded-md border border-border p-2 text-left hover:bg-accent"
+              variant="ghost"
+              className="h-auto w-full flex-col items-stretch justify-start gap-0 rounded-md border-border p-2 text-left text-[length:inherit] font-normal whitespace-normal hover:bg-accent"
               aria-expanded={selected === entry.selector}
               onClick={() =>
                 setSelected(selected === entry.selector ? null : entry.selector)
@@ -126,7 +140,7 @@ export function Reflog({
                 <span>{entry.loggedAt}</span>
                 <span>{entry.committerName}</span>
               </span>
-            </button>
+            </Button>
             {selected === entry.selector && (
               <ReflogActions
                 entry={entry}
@@ -243,20 +257,24 @@ function ReflogActions({
       >
         <fieldset disabled={busy} className="min-w-0 space-y-2">
           <Field label={t("gitRepo.resetMode")}>
-            <select
-              className={selectClass}
+            <Select
               value={resetMode}
-              onChange={(event) => {
-                setResetMode(event.target.value as "soft" | "mixed" | "hard");
+              onValueChange={(next) => {
+                setResetMode(next as "soft" | "mixed" | "hard");
                 setDiscardChanges(false);
               }}
             >
-              {(["soft", "mixed", "hard"] as const).map((mode) => (
-                <option key={mode} value={mode}>
-                  {t(`gitRepo.reset.${mode}`)}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="h-9 w-full min-w-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="z-[var(--z-dialog)]">
+                {(["soft", "mixed", "hard"] as const).map((mode) => (
+                  <SelectItem key={mode} value={mode}>
+                    {t(`gitRepo.reset.${mode}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Field>
           <p className="text-muted-foreground">
             {t(`gitRepo.resetSafety.${resetMode}`)}

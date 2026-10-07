@@ -54,7 +54,13 @@ async function start(): Promise<{ core: RunningCore; root: string }> {
   directories.push(dataDir, root);
   const core = await run({
     argv: ["--listen", "tcp:127.0.0.1:0", "--data-dir", dataDir],
-    env: { ARMADRA_CORE_MIGRATIONS_DIR: migrationsDir, ARMADRA_LOG: "error" },
+    env: {
+      ARMADRA_CORE_MIGRATIONS_DIR: migrationsDir,
+      ARMADRA_LOG: "error",
+      // 这里验的是语言域，不是回环的门（那在 `main.test.ts`）：裸 core 显式
+      // 打开回环匿名（契约 §3.2）。
+      ARMADRA_LOOPBACK_OWNER: "1",
+    },
     stdout: () => {},
   });
   running.push(core);

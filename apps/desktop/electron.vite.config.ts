@@ -1,4 +1,6 @@
-import { resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import { type Plugin, type UserConfig, build } from "vite";
 import webConfig from "../web/vite.config";
@@ -134,6 +136,11 @@ const coreConfig: UserConfig = {
  *
  * `codeSplitting: false` keeps it to the one file the launcher names; nothing
  * but the shell's own externals is external, so the bundle is self-contained.
+ *
+ * `src/hook-client/` (endpoint discovery, node token, HTTP, the verb tool
+ * table) is shared source, not a package: it is inlined into this same file
+ * through the CLI's imports, and the adapters that reuse it inline it into
+ * their own bundles the same way. `ssr.noExternal` is what keeps it inside.
  */
 const cliConfig: UserConfig = {
   build: {
@@ -190,6 +197,88 @@ const sessionHostConfig: UserConfig = {
   ssr: { noExternal: true },
 };
 
+/**
+ * The session host's companion: `out/session-host/shutdown-if-idle.cjs`, which
+ * the NSIS installer runs (same `ELECTRON_RUN_AS_NODE=1 <Electron>` launch)
+ * to ask a leftover host to leave before it touches `Armadra.exe`
+ * (`build/installer.nsh`). Its own build because the bundle is one file per
+ * entry, and into the same directory without emptying it.
+ */
+const sessionHostShutdownConfig: UserConfig = {
+  ...sessionHostConfig,
+  build: {
+    ...sessionHostConfig.build,
+    emptyOutDir: false,
+    rollupOptions: {
+      ...sessionHostConfig.build?.rollupOptions,
+      input: {
+        "shutdown-if-idle": resolve(
+          here,
+          "src/session-host/shutdown-if-idle.ts",
+        ),
+      },
+    },
+  },
+};
+
+/**
+ * The seventh target: ama's host adapter (docs/design/coordinator-agent.md
+ * §2.5, §3).
+ *
+ * Built like the hook client — one CJS file, nothing external — because it is
+ * loaded the same way: by path, from outside the asar, by a program that is
+ * not this app (ama `require`s the profile's `host`). It inlines the shared
+ * `src/hook-client/` source and imports only *types* from `@armadra/agent`.
+ */
+const agentHostConfig: UserConfig = {
+  build: {
+    outDir: resolve(here, "out/agent-host"),
+    emptyOutDir: true,
+    target: "node22",
+    ssr: true,
+    minify: false,
+    rollupOptions: {
+      input: { "ama-armadra": resolve(here, "src/agent-host/ama/main.ts") },
+      external: EXTERNAL,
+      output: {
+        format: "cjs" as const,
+        entryFileNames: "[name].cjs",
+        exports: "named" as const,
+        codeSplitting: false,
+      },
+    },
+  },
+  ssr: { noExternal: true },
+};
+
+/**
+ * The files of the pinned `@armadra/agent` (exact devDependency) that ship:
+ * its single-file runtime and the sandbox helper it loads from beside itself.
+ * Copied, never imported — the app runs them with its own Electron as Node,
+ * through the `<data>/bin/ama` launcher.
+ */
+export const AGENT_FILES = ["ama.cjs", "ama-sandbox.cjs"] as const;
+
+export function copyAgentBundle(
+  from: string = dirname(
+    createRequire(join(here, "package.json")).resolve("@armadra/agent/bundle"),
+  ),
+  to: string = resolve(here, "out/agent"),
+): string[] {
+  rmSync(to, { recursive: true, force: true });
+  mkdirSync(to, { recursive: true });
+  const copied: string[] = [];
+  for (const name of AGENT_FILES) {
+    const source = join(from, name);
+    if (!existsSync(source)) {
+      throw new Error(`@armadra/agent has no ${name} at ${source}`);
+    }
+    copyFileSync(source, join(to, name));
+    copied.push(join(to, name));
+  }
+  return copied;
+}
+
 function buildCore(): Plugin {
   return {
     name: "armadra-core-bundle",
@@ -198,6 +287,9 @@ function buildCore(): Plugin {
       await build(coreConfig);
       await build(cliConfig);
       await build(sessionHostConfig);
+      await build(sessionHostShutdownConfig);
+      await build(agentHostConfig);
+      copyAgentBundle();
     },
   };
 }
@@ -210,7 +302,12 @@ export default defineConfig(({ command, mode }) => ({
     ],
     build: {
       rollupOptions: {
-        input: { index: resolve(here, "src/main/index.ts") },
+        // `entry` 是包的入口（`package.json` 的 `main`）：先判 `Armadra serve`，再
+        // `require("./index")`。两个入口各自一份文件，没有共享块。
+        input: {
+          entry: resolve(here, "src/main/entry.ts"),
+          index: resolve(here, "src/main/index.ts"),
+        },
         external: EXTERNAL,
         output: cjs,
       },

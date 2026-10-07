@@ -103,6 +103,11 @@ export const AutomationTargetKind = {
   UNSPECIFIED: "AUTOMATION_TARGET_KIND_UNSPECIFIED",
   NON_INTERACTIVE_COMMAND: "AUTOMATION_TARGET_KIND_NON_INTERACTIVE_COMMAND",
   AGENT_SESSION_PROMPT: "AUTOMATION_TARGET_KIND_AGENT_SESSION_PROMPT",
+  /**
+   * 起一次工作流运行（补全架构 §5.4、契约 §15.6）：模板与画布在
+   * `workflowRun` 里，参数是计划的载荷（`{"params":{…}}`）。
+   */
+  WORKFLOW_RUN: "AUTOMATION_TARGET_KIND_WORKFLOW_RUN",
 } as const;
 export type AutomationTargetKind =
   (typeof AutomationTargetKind)[keyof typeof AutomationTargetKind];
@@ -166,6 +171,16 @@ export interface AgentLaunchSpec {
   accountId: string;
 }
 
+/**
+ * 冻结的工作流目标：哪个模板的哪一版、起在哪块画布上。版本冻结——模板改过
+ * 之后，计划指着的那一版已经不存在，到点按「目标不受支持」跳过，要人重新存。
+ */
+export interface WorkflowRunTarget {
+  templateId: string;
+  templateVersion: number;
+  boardId: string;
+}
+
 export interface AutomationTarget {
   executionHostId: string;
   sessionId: string;
@@ -174,6 +189,7 @@ export interface AutomationTarget {
   nodeId: string;
   coldStartPolicy: AutomationColdStartPolicy;
   agentLaunch?: AgentLaunchSpec;
+  workflowRun?: WorkflowRunTarget;
 }
 
 export interface AutomationPlanConfig {
@@ -343,6 +359,11 @@ export const AgentLaunchSpecSchema = describe<AgentLaunchSpec>(
   },
 );
 
+export const WorkflowRunTargetSchema = describe<WorkflowRunTarget>(
+  "WorkflowRunTarget",
+  { templateId: str, templateVersion: u32, boardId: str },
+);
+
 export const AutomationTargetSchema = describe<AutomationTarget>(
   "AutomationTarget",
   {
@@ -353,6 +374,7 @@ export const AutomationTargetSchema = describe<AutomationTarget>(
     nodeId: str,
     coldStartPolicy: enumOf(AutomationColdStartPolicy.UNSPECIFIED),
     agentLaunch: msg(() => AgentLaunchSpecSchema),
+    workflowRun: msg(() => WorkflowRunTargetSchema),
   },
 );
 

@@ -1,6 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
-import { badRequest, conflict, rfc3339 } from "../workspaces/support";
-import { getBoard } from "./boards";
+import {
+  DomainError,
+  badRequest,
+  conflict,
+  rfc3339,
+} from "../workspaces/support";
+import { type Board, getBoard } from "./boards";
 import type {
   BoardDocument,
   CanvasEdge,
@@ -63,7 +68,82 @@ interface EdgeRow {
   updated_at: string;
 }
 
+/* --------------------------- 实时板（契约 §16.2） -------------------------- */
+
+/**
+ * 实时板的两个挂点，由 `core/realtime` 装配时登记（按库登记：同一进程里的两个
+ * core 各有各的）。
+ *
+ *   * `beforeLoad`：读一块实时板之前，把文档里还没物化的更新先落进表，读到的
+ *     就是文档的当前投影。
+ *   * `save`：core 自己的写者（控制动词、调度、依赖编排）对实时板的保存。
+ *     拦截把请求与文档 diff 后以 `origin: "core"` 的事务写进文档，再物化。
+ *
+ * 没登记时实时板一律拒写：表不是这块板的真相，绕过文档写表等于丢掉别人的
+ * 编辑。
+ */
+export interface RealtimeBoardHooks {
+  beforeLoad(
+    database: DatabaseSync,
+    workspaceId: string,
+    boardId: string,
+  ): void;
+  save(
+    database: DatabaseSync,
+    workspaceId: string,
+    boardId: string,
+    request: SaveBoardRequest,
+  ): BoardDocument;
+}
+
+const realtimeHooks = new WeakMap<DatabaseSync, RealtimeBoardHooks>();
+
+/** 登记（`undefined` 撤销）这个库的实时挂点。返回撤销函数。 */
+export function setRealtimeHooks(
+  database: DatabaseSync,
+  hooks: RealtimeBoardHooks | undefined,
+): () => void {
+  if (hooks === undefined) realtimeHooks.delete(database);
+  else realtimeHooks.set(database, hooks);
+  return () => {
+    if (realtimeHooks.get(database) === hooks) realtimeHooks.delete(database);
+  };
+}
+
+/** 409 `realtime_active`：这块板已经切到实时，表不能直接写（契约 §16.2）。 */
+export function realtimeActive(): DomainError {
+  return new DomainError(
+    409,
+    "realtime_active",
+    "Board is in realtime mode; edits go through the sync stream",
+  );
+}
+
+/** `boards.realtime`：这块板的真相是不是 `Y.Doc`。 */
+export function isRealtimeBoard(
+  database: DatabaseSync,
+  boardId: string,
+): boolean {
+  const row = database
+    .prepare("SELECT realtime FROM boards WHERE id = ?")
+    .get(boardId) as { realtime: number | bigint } | undefined;
+  return row !== undefined && Number(row.realtime) === 1;
+}
+
 export function loadBoard(
+  database: DatabaseSync,
+  workspaceId: string,
+  boardId: string,
+): BoardDocument {
+  const hooks = realtimeHooks.get(database);
+  if (hooks !== undefined && isRealtimeBoard(database, boardId)) {
+    hooks.beforeLoad(database, workspaceId, boardId);
+  }
+  return readBoard(database, workspaceId, boardId);
+}
+
+/** 只读表、不经实时挂点。物化自己读回结果用它，免得再触发一次物化。 */
+export function readBoard(
   database: DatabaseSync,
   workspaceId: string,
   boardId: string,
@@ -200,6 +280,9 @@ function orderNode(node: Record<string, unknown>): CanvasNode {
  * orphan cleanup and the upserts. A save that fails part way takes the
  * cleanup back with it — a node that still exists must never be missing its
  * status.
+ *
+ * 实时板（契约 §16.2）：带 `clientId` 的写（HTTP 那条路，旧页面）一律 409
+ * `realtime_active`；core 自己的写者交给实时挂点，经文档写入；没有挂点也拒。
  */
 export function saveBoard(
   database: DatabaseSync,
@@ -207,23 +290,211 @@ export function saveBoard(
   boardId: string,
   request: SaveBoardRequest,
 ): BoardDocument {
-  database.exec("BEGIN IMMEDIATE");
+  const board = getBoard(database, workspaceId, boardId);
+  if (isRealtimeBoard(database, board.id)) {
+    const hooks = realtimeHooks.get(database);
+    if (request.clientId !== undefined || hooks === undefined) {
+      throw realtimeActive();
+    }
+    return hooks.save(database, workspaceId, boardId, request);
+  }
+  validateDocument(board.id, request.nodes, request.edges);
+  validateViewport(request.viewport);
+  let whiteboard = board.whiteboard;
+  if (request.whiteboard !== undefined) {
+    validateWhiteboard(request.whiteboard);
+    whiteboard = request.whiteboard;
+  }
+  writeDocument(database, board, {
+    expectedUpdatedAt: request.expectedUpdatedAt,
+    nodes: request.nodes,
+    edges: request.edges,
+    viewportJson: JSON.stringify({
+      x: request.viewport.x,
+      y: request.viewport.y,
+      zoom: request.viewport.zoom,
+    }),
+    whiteboard,
+  });
+  return readBoard(database, workspaceId, boardId);
+}
+
+/**
+ * 物化入口：把实时板文档的投影写进表（补全架构 §6.3）。
+ *
+ * 只给 `core/realtime` 用。与 `saveBoard` 同一套校验与差异写入，区别只有两处：
+ * 没有调用方的修订号可比（文档就是真相，CAS 比的是此刻表里的那一份），视口
+ * 不进文档，所以原样保留。
+ */
+export function materializeBoard(
+  database: DatabaseSync,
+  workspaceId: string,
+  boardId: string,
+  projection: {
+    readonly nodes: readonly CanvasNode[];
+    readonly edges: readonly CanvasEdge[];
+    readonly whiteboard: string;
+  },
+): BoardDocument {
+  const board = getBoard(database, workspaceId, boardId);
+  validateDocument(board.id, projection.nodes, projection.edges);
+  validateWhiteboard(projection.whiteboard);
+  writeDocument(database, board, {
+    expectedUpdatedAt: board.updatedAt,
+    nodes: projection.nodes,
+    edges: projection.edges,
+    viewportJson: JSON.stringify(board.viewport),
+    whiteboard: projection.whiteboard,
+  });
+  return readBoard(database, workspaceId, boardId);
+}
+
+interface DocumentWrite {
+  readonly expectedUpdatedAt: string;
+  readonly nodes: readonly CanvasNode[];
+  readonly edges: readonly CanvasEdge[];
+  readonly viewportJson: string;
+  readonly whiteboard: string;
+}
+
+function writeDocument(
+  database: DatabaseSync,
+  board: Board,
+  request: DocumentWrite,
+  manageTransaction = true,
+): void {
+  const viewportJson = request.viewportJson;
+  const whiteboard = request.whiteboard;
+  if (manageTransaction) database.exec("BEGIN IMMEDIATE");
   try {
-    const saved = saveBoardInTransaction(
-      database,
-      workspaceId,
-      boardId,
-      request,
+    const nextUpdatedAt = rfc3339();
+    const updated = database
+      .prepare(
+        "UPDATE boards SET updated_at = ?, viewport_json = ?, whiteboard_json = ? " +
+          "WHERE id = ? AND updated_at = ?",
+      )
+      .run(
+        nextUpdatedAt,
+        viewportJson,
+        whiteboard,
+        board.id,
+        request.expectedUpdatedAt,
+      );
+    if (updated.changes !== 1) {
+      throw conflict("Board changed since it was loaded; reload before saving");
+    }
+
+    const storedEdges = database
+      .prepare("SELECT id, role FROM edges WHERE board_id = ?")
+      .all(board.id) as unknown as { id: string; role: string }[];
+    const storedEdgeIds = storedEdges.map((row) => row.id);
+    // 一条边送上来时**没有** `role`，意思是「这一项我没有意见」，不是「把它
+    // 设回对等」。每一个还不认识这个字段的写者——一张旧的画布文档、一个还没
+    // 跟上的页面——否则都会在一次无关的保存里悄悄把主从关系抹平。同一条规矩
+    // 白板快照已经在用（省略即保留）。
+    const storedRoles = new Map(
+      storedEdges.map((row) => [row.id, row.role] as const),
     );
-    database.exec("COMMIT");
-    return saved;
+    const storedNodeIds = (
+      database
+        .prepare("SELECT id FROM nodes WHERE board_id = ?")
+        .all(board.id) as unknown as { id: string }[]
+    ).map((row) => row.id);
+    const keptEdgeIds = new Set(request.edges.map((edge) => edge.id));
+    const keptNodeIds = new Set(request.nodes.map((node) => node.id));
+
+    // Edges first: an edge the document dropped may point at a node it also
+    // dropped, and `edges` is `ON DELETE CASCADE` on `nodes` too. Every edge
+    // that stays has both endpoints in `request.nodes` (`validateDocument`),
+    // so nothing surviving the node deletes is left dangling.
+    const deleteEdge = database.prepare("DELETE FROM edges WHERE id = ?");
+    for (const id of storedEdgeIds) {
+      if (!keptEdgeIds.has(id)) deleteEdge.run(id);
+    }
+    const droppedNodeIds = storedNodeIds.filter((id) => !keptNodeIds.has(id));
+    const deleteNode = database.prepare("DELETE FROM nodes WHERE id = ?");
+    for (const id of droppedNodeIds) deleteNode.run(id);
+    forgetNodes(database, droppedNodeIds);
+
+    // The `WHERE` guard keeps an id owned by another board from being moved
+    // onto this one: a plain INSERT would fail on the primary key, and
+    // silently stealing the row would be worse than either.
+    const upsertNode = database.prepare(
+      "INSERT INTO nodes (id, board_id, type, title, color, x, y, width, height, collapsed, " +
+        "expanded_height, parent_id, labels_json, note, data_json, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET " +
+        "type = excluded.type, title = excluded.title, color = excluded.color, " +
+        "x = excluded.x, y = excluded.y, width = excluded.width, height = excluded.height, " +
+        "collapsed = excluded.collapsed, expanded_height = excluded.expanded_height, " +
+        "parent_id = excluded.parent_id, labels_json = excluded.labels_json, " +
+        "note = excluded.note, data_json = excluded.data_json, " +
+        "created_at = excluded.created_at, updated_at = excluded.updated_at " +
+        "WHERE nodes.board_id = excluded.board_id",
+    );
+    for (const node of request.nodes) {
+      const written = upsertNode.run(
+        node.id,
+        node.boardId,
+        node.type,
+        node.title,
+        node.color,
+        node.position.x,
+        node.position.y,
+        node.size?.width ?? null,
+        node.size?.height ?? null,
+        node.collapsed === true ? 1 : 0,
+        node.expandedHeight ?? null,
+        node.parentId ?? null,
+        JSON.stringify(node.labels),
+        node.note,
+        canonicalJson(node.data),
+        node.createdAt,
+        node.updatedAt,
+      );
+      if (written.changes !== 1) {
+        throw badRequest("Board contains a node that belongs to another board");
+      }
+    }
+    const upsertEdge = database.prepare(
+      "INSERT INTO edges (id, board_id, source_node_id, target_node_id, kind, role, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET " +
+        "source_node_id = excluded.source_node_id, " +
+        "target_node_id = excluded.target_node_id, kind = excluded.kind, " +
+        "role = excluded.role, " +
+        "created_at = excluded.created_at, updated_at = excluded.updated_at " +
+        "WHERE edges.board_id = excluded.board_id",
+    );
+    for (const edge of request.edges) {
+      const written = upsertEdge.run(
+        edge.id,
+        edge.boardId,
+        edge.source,
+        edge.target,
+        edge.kind,
+        edge.role ?? storedRoles.get(edge.id) ?? "peer",
+        edge.createdAt,
+        edge.updatedAt,
+      );
+      if (written.changes !== 1) {
+        throw badRequest(
+          "Board contains an edge that belongs to another board",
+        );
+      }
+    }
+    // Agent 的名字（`docs/design/agent-delivery.md` §2.5）：`node_handles` 是
+    // 唯一来源，`data.handle` 是它的渲染副本，两者只有这一个写入点，所以不会
+    // 各自漂移。撞名在这里被拒绝——事务回滚，整次保存不落库。
+    syncHandles(database, board.id, request.nodes);
+    if (manageTransaction) database.exec("COMMIT");
   } catch (error) {
-    database.exec("ROLLBACK");
+    if (manageTransaction) database.exec("ROLLBACK");
     throw error;
   }
 }
 
-/** Caller owns the transaction; use for atomic controller graph and receipt writes. */
+/** Controller transaction combines graph, ownership, receipt and outbox atomically. */
 export function saveBoardInTransaction(
   database: DatabaseSync,
   workspaceId: string,
@@ -231,139 +502,25 @@ export function saveBoardInTransaction(
   request: SaveBoardRequest,
 ): BoardDocument {
   const board = getBoard(database, workspaceId, boardId);
+  // Yjs is authoritative for realtime boards; a SQL-only transaction cannot edit it.
+  if (isRealtimeBoard(database, board.id)) throw realtimeActive();
   validateDocument(board.id, request.nodes, request.edges);
   validateViewport(request.viewport);
-
-  const viewportJson = JSON.stringify({
-    x: request.viewport.x,
-    y: request.viewport.y,
-    zoom: request.viewport.zoom,
-  });
-  let whiteboard = board.whiteboard;
-  if (request.whiteboard !== undefined) {
-    validateWhiteboard(request.whiteboard);
-    whiteboard = request.whiteboard;
-  }
-
-  const nextUpdatedAt = rfc3339();
-  const updated = database
-    .prepare(
-      "UPDATE boards SET updated_at = ?, viewport_json = ?, whiteboard_json = ? " +
-        "WHERE id = ? AND updated_at = ?",
-    )
-    .run(
-      nextUpdatedAt,
-      viewportJson,
+  const whiteboard = request.whiteboard ?? board.whiteboard;
+  validateWhiteboard(whiteboard);
+  writeDocument(
+    database,
+    board,
+    {
+      expectedUpdatedAt: request.expectedUpdatedAt,
+      nodes: request.nodes,
+      edges: request.edges,
+      viewportJson: JSON.stringify(request.viewport),
       whiteboard,
-      board.id,
-      request.expectedUpdatedAt,
-    );
-  if (updated.changes !== 1) {
-    throw conflict("Board changed since it was loaded; reload before saving");
-  }
-
-  const storedEdges = database
-    .prepare("SELECT id, role FROM edges WHERE board_id = ?")
-    .all(board.id) as unknown as { id: string; role: string }[];
-  const storedEdgeIds = storedEdges.map((row) => row.id);
-  // 一条边送上来时**没有** `role`，意思是「这一项我没有意见」，不是「把它
-  // 设回对等」。每一个还不认识这个字段的写者——一张旧的画布文档、一个还没
-  // 跟上的页面——否则都会在一次无关的保存里悄悄把主从关系抹平。同一条规矩
-  // 白板快照已经在用（省略即保留）。
-  const storedRoles = new Map(
-    storedEdges.map((row) => [row.id, row.role] as const),
+    },
+    false,
   );
-  const storedNodeIds = (
-    database
-      .prepare("SELECT id FROM nodes WHERE board_id = ?")
-      .all(board.id) as unknown as { id: string }[]
-  ).map((row) => row.id);
-  const keptEdgeIds = new Set(request.edges.map((edge) => edge.id));
-  const keptNodeIds = new Set(request.nodes.map((node) => node.id));
-
-  // Edges first: an edge the document dropped may point at a node it also
-  // dropped, and `edges` is `ON DELETE CASCADE` on `nodes` too. Every edge
-  // that stays has both endpoints in `request.nodes` (`validateDocument`),
-  // so nothing surviving the node deletes is left dangling.
-  const deleteEdge = database.prepare("DELETE FROM edges WHERE id = ?");
-  for (const id of storedEdgeIds) {
-    if (!keptEdgeIds.has(id)) deleteEdge.run(id);
-  }
-  const droppedNodeIds = storedNodeIds.filter((id) => !keptNodeIds.has(id));
-  const deleteNode = database.prepare("DELETE FROM nodes WHERE id = ?");
-  for (const id of droppedNodeIds) deleteNode.run(id);
-  forgetNodes(database, droppedNodeIds);
-
-  // The `WHERE` guard keeps an id owned by another board from being moved
-  // onto this one: a plain INSERT would fail on the primary key, and
-  // silently stealing the row would be worse than either.
-  const upsertNode = database.prepare(
-    "INSERT INTO nodes (id, board_id, type, title, color, x, y, width, height, collapsed, " +
-      "expanded_height, parent_id, labels_json, note, data_json, created_at, updated_at) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-      "ON CONFLICT(id) DO UPDATE SET " +
-      "type = excluded.type, title = excluded.title, color = excluded.color, " +
-      "x = excluded.x, y = excluded.y, width = excluded.width, height = excluded.height, " +
-      "collapsed = excluded.collapsed, expanded_height = excluded.expanded_height, " +
-      "parent_id = excluded.parent_id, labels_json = excluded.labels_json, " +
-      "note = excluded.note, data_json = excluded.data_json, " +
-      "created_at = excluded.created_at, updated_at = excluded.updated_at " +
-      "WHERE nodes.board_id = excluded.board_id",
-  );
-  for (const node of request.nodes) {
-    const written = upsertNode.run(
-      node.id,
-      node.boardId,
-      node.type,
-      node.title,
-      node.color,
-      node.position.x,
-      node.position.y,
-      node.size?.width ?? null,
-      node.size?.height ?? null,
-      node.collapsed === true ? 1 : 0,
-      node.expandedHeight ?? null,
-      node.parentId ?? null,
-      JSON.stringify(node.labels),
-      node.note,
-      canonicalJson(node.data),
-      node.createdAt,
-      node.updatedAt,
-    );
-    if (written.changes !== 1) {
-      throw badRequest("Board contains a node that belongs to another board");
-    }
-  }
-  const upsertEdge = database.prepare(
-    "INSERT INTO edges (id, board_id, source_node_id, target_node_id, kind, role, created_at, updated_at) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?) " +
-      "ON CONFLICT(id) DO UPDATE SET " +
-      "source_node_id = excluded.source_node_id, " +
-      "target_node_id = excluded.target_node_id, kind = excluded.kind, " +
-      "role = excluded.role, " +
-      "created_at = excluded.created_at, updated_at = excluded.updated_at " +
-      "WHERE edges.board_id = excluded.board_id",
-  );
-  for (const edge of request.edges) {
-    const written = upsertEdge.run(
-      edge.id,
-      edge.boardId,
-      edge.source,
-      edge.target,
-      edge.kind,
-      edge.role ?? storedRoles.get(edge.id) ?? "peer",
-      edge.createdAt,
-      edge.updatedAt,
-    );
-    if (written.changes !== 1) {
-      throw badRequest("Board contains an edge that belongs to another board");
-    }
-  }
-  // Agent 的名字（`docs/design/agent-delivery.md` §2.5）：`node_handles` 是
-  // 唯一来源，`data.handle` 是它的渲染副本，两者只有这一个写入点，所以不会
-  // 各自漂移。撞名在这里被拒绝——事务回滚，整次保存不落库。
-  syncHandles(database, board.id, request.nodes);
-  return loadBoard(database, workspaceId, boardId);
+  return readBoard(database, workspaceId, boardId);
 }
 
 export type { BoardDocument, CanvasEdge, CanvasNode, SaveBoardRequest };

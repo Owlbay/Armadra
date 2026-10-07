@@ -14,6 +14,20 @@ import {
   RENDER_BUDGET_RANGE,
   setRenderBudget as applyRenderBudget,
 } from "../terminal/render-budget";
+import { syncNativeStatusBar } from "../mobile/status-bar";
+import { activeSourceId, scoped } from "../sources/scope";
+import {
+  COLLAPSED_WORKSPACES_KEY,
+  LAST_BOARD_KEY,
+  LAST_WORKSPACE_KEY,
+  OPEN_WORKSPACES_KEY,
+  PINNED_BOARDS_KEY,
+  PINNED_WORKSPACES_KEY,
+  migrateSourceScopedPreferences,
+  storedLast,
+  storedScopedIds,
+  writeScopedIds,
+} from "./preferences/sources";
 import {
   readStored,
   storedBoolean,
@@ -70,12 +84,8 @@ export const THEME_PREFERENCES: readonly ThemePreference[] = [
 
 const THEME_KEY = "armadra.theme";
 const LOCALE_KEY = "armadra.locale";
-const OPEN_WORKSPACES_KEY = "armadra.openWorkspaces";
 /** 侧栏「项目」组里收起来的工作空间（§26；默认展开，所以存的是收起的那些）。 */
-const COLLAPSED_WORKSPACES_KEY = "armadra.collapsedWorkspaces";
 /** 侧栏「置顶」组里的画布 id（§26）。 */
-const PINNED_BOARDS_KEY = "armadra.pinnedBoards";
-const PINNED_WORKSPACES_KEY = "armadra.pinnedWorkspaces";
 const DISABLED_AGENTS_KEY = "armadra.disabledAgents";
 /** 每个 Agent 的三态（默认 / 启用 / 禁用），§24.1 Agent 页。 */
 const AGENT_MODES_KEY = "armadra.agentModes";
@@ -127,8 +137,7 @@ const NODE_COLOR_STYLE_KEY = "armadra.nodeColorStyle";
 /** 设置页上次停在的分区（§24.1）；⌘, 直接回到那一页。 */
 const LAST_SETTINGS_SECTION_KEY = "armadra.settingsSection";
 /** 上次打开的工作空间 / 画布；启动时用来跳过启动页。 */
-export const LAST_WORKSPACE_KEY = "armadra.workspace";
-export const LAST_BOARD_KEY = "armadra.board";
+export { LAST_BOARD_KEY, LAST_WORKSPACE_KEY };
 
 export const NODE_COLOR_STYLES = ["dot", "bar"] as const;
 export type NodeColorStyle = (typeof NODE_COLOR_STYLES)[number];
@@ -206,14 +215,18 @@ export interface PreferencesState {
   theme: ThemePreference;
   locale: Locale;
   systemTheme: ResolvedTheme;
-  /** 侧栏工作空间树里的行，顺序即打开顺序（§22 第一栏）。 */
-  openWorkspaceIds: string[];
-  /** 「项目」组里收起来的工作空间 id（§26）。默认全部展开。 */
-  collapsedWorkspaceIds: string[];
-  /** 「置顶」组里的画布 id，顺序即置顶顺序（§26）。 */
-  pinnedBoardIds: string[];
-  /** 置顶的项目（工作空间）id：在「项目」组里排到最前面。 */
-  pinnedWorkspaceIds: string[];
+  /**
+   * 侧栏工作空间树里的行，顺序即打开顺序（§22 第一栏）。
+   * 下面四张表的元素都是 `${sourceId}:${id}`；落盘是 `{ sourceId, … }[]`
+   * （`preferences/sources.ts`），取某个源里的 id 用 `idsInSource`。
+   */
+  openWorkspaceKeys: string[];
+  /** 「项目」组里收起来的工作空间（§26）。默认全部展开。 */
+  collapsedWorkspaceKeys: string[];
+  /** 「置顶」组里的画布，顺序即置顶顺序（§26）。 */
+  pinnedBoardKeys: string[];
+  /** 置顶的项目（工作空间）：在「项目」组里排到最前面。 */
+  pinnedWorkspaceKeys: string[];
   /**
    * 每个 Agent 的三态（§24.1）。没有条目就是 `default`。
    * Runtime 侧还没有对应的持久化端点，先存在本地。
@@ -270,11 +283,20 @@ export interface PreferencesState {
   setTheme: (theme: ThemePreference) => void;
   setLocale: (locale: Locale) => void;
   setSystemTheme: (theme: ResolvedTheme) => void;
-  openWorkspaceTab: (workspaceId: string) => void;
-  closeWorkspaceTab: (workspaceId: string) => void;
-  setWorkspaceCollapsed: (workspaceId: string, collapsed: boolean) => void;
-  setBoardPinned: (boardId: string, pinned: boolean) => void;
-  setWorkspacePinned: (workspaceId: string, pinned: boolean) => void;
+  /** `sourceId` 省略 = 当前源。 */
+  openWorkspaceTab: (workspaceId: string, sourceId?: string) => void;
+  closeWorkspaceTab: (workspaceId: string, sourceId?: string) => void;
+  setWorkspaceCollapsed: (
+    workspaceId: string,
+    collapsed: boolean,
+    sourceId?: string,
+  ) => void;
+  setBoardPinned: (boardId: string, pinned: boolean, sourceId?: string) => void;
+  setWorkspacePinned: (
+    workspaceId: string,
+    pinned: boolean,
+    sourceId?: string,
+  ) => void;
   setAgentMode: (agentId: string, mode: AgentMode) => void;
   setLaunchOverride: (agentId: string, program: string) => void;
   setDefaultAgentId: (agentId: string | null) => void;
@@ -312,14 +334,20 @@ export interface PreferencesState {
   ) => void;
 }
 
+// 旧版本的裸 id 在读之前先迁到本机源下。
+migrateSourceScopedPreferences();
+
 export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   theme: storedEnum(THEME_KEY, THEME_PREFERENCES, "system"),
   locale: storedEnum(LOCALE_KEY, LOCALES, DEFAULT_LOCALE),
   systemTheme: systemColorScheme(),
-  openWorkspaceIds: storedIds(OPEN_WORKSPACES_KEY),
-  collapsedWorkspaceIds: storedIds(COLLAPSED_WORKSPACES_KEY),
-  pinnedBoardIds: storedIds(PINNED_BOARDS_KEY),
-  pinnedWorkspaceIds: storedIds(PINNED_WORKSPACES_KEY),
+  openWorkspaceKeys: storedScopedIds(OPEN_WORKSPACES_KEY, "workspaceId"),
+  collapsedWorkspaceKeys: storedScopedIds(
+    COLLAPSED_WORKSPACES_KEY,
+    "workspaceId",
+  ),
+  pinnedBoardKeys: storedScopedIds(PINNED_BOARDS_KEY, "boardId"),
+  pinnedWorkspaceKeys: storedScopedIds(PINNED_WORKSPACES_KEY, "workspaceId"),
   agentModes: storedAgentModes(),
   launchOverrides: storedRecord(LAUNCH_OVERRIDES_KEY),
   defaultAgentId: readStored(DEFAULT_AGENT_KEY),
@@ -377,61 +405,67 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   setSystemTheme(systemTheme) {
     set({ systemTheme });
   },
-  openWorkspaceTab(workspaceId) {
+  openWorkspaceTab(workspaceId, sourceId) {
+    const key = scoped(workspaceId, sourceId);
     set((state) => {
-      if (state.openWorkspaceIds.includes(workspaceId)) return state;
-      const openWorkspaceIds = [...state.openWorkspaceIds, workspaceId];
-      writeStored(OPEN_WORKSPACES_KEY, JSON.stringify(openWorkspaceIds));
-      return { openWorkspaceIds };
+      if (state.openWorkspaceKeys.includes(key)) return state;
+      const openWorkspaceKeys = [...state.openWorkspaceKeys, key];
+      writeScopedIds(OPEN_WORKSPACES_KEY, "workspaceId", openWorkspaceKeys);
+      return { openWorkspaceKeys };
     });
   },
-  closeWorkspaceTab(workspaceId) {
+  closeWorkspaceTab(workspaceId, sourceId) {
+    const key = scoped(workspaceId, sourceId);
     set((state) => {
-      const openWorkspaceIds = state.openWorkspaceIds.filter(
-        (id) => id !== workspaceId,
+      const openWorkspaceKeys = state.openWorkspaceKeys.filter(
+        (entry) => entry !== key,
       );
-      if (openWorkspaceIds.length === state.openWorkspaceIds.length) {
+      if (openWorkspaceKeys.length === state.openWorkspaceKeys.length) {
         return state;
       }
-      writeStored(OPEN_WORKSPACES_KEY, JSON.stringify(openWorkspaceIds));
-      return { openWorkspaceIds };
+      writeScopedIds(OPEN_WORKSPACES_KEY, "workspaceId", openWorkspaceKeys);
+      return { openWorkspaceKeys };
     });
   },
-  setWorkspaceCollapsed(workspaceId, collapsed) {
+  setWorkspaceCollapsed(workspaceId, collapsed, sourceId) {
+    const key = scoped(workspaceId, sourceId);
     set((state) => {
-      const has = state.collapsedWorkspaceIds.includes(workspaceId);
+      const has = state.collapsedWorkspaceKeys.includes(key);
       if (has === collapsed) return state;
-      const collapsedWorkspaceIds = collapsed
-        ? [...state.collapsedWorkspaceIds, workspaceId]
-        : state.collapsedWorkspaceIds.filter((id) => id !== workspaceId);
-      writeStored(
+      const collapsedWorkspaceKeys = collapsed
+        ? [...state.collapsedWorkspaceKeys, key]
+        : state.collapsedWorkspaceKeys.filter((entry) => entry !== key);
+      writeScopedIds(
         COLLAPSED_WORKSPACES_KEY,
-        JSON.stringify(collapsedWorkspaceIds),
+        "workspaceId",
+        collapsedWorkspaceKeys,
       );
-      return { collapsedWorkspaceIds };
+      return { collapsedWorkspaceKeys };
     });
   },
-  setWorkspacePinned(workspaceId, pinned) {
+  setWorkspacePinned(workspaceId, pinned, sourceId) {
+    const key = scoped(workspaceId, sourceId);
     set((state) => {
-      const has = state.pinnedWorkspaceIds.includes(workspaceId);
+      const has = state.pinnedWorkspaceKeys.includes(key);
       if (has === pinned) return state;
-      const pinnedWorkspaceIds = pinned
-        ? [...state.pinnedWorkspaceIds, workspaceId]
-        : state.pinnedWorkspaceIds.filter((id) => id !== workspaceId);
-      writeStored(PINNED_WORKSPACES_KEY, JSON.stringify(pinnedWorkspaceIds));
-      return { pinnedWorkspaceIds };
+      const pinnedWorkspaceKeys = pinned
+        ? [...state.pinnedWorkspaceKeys, key]
+        : state.pinnedWorkspaceKeys.filter((entry) => entry !== key);
+      writeScopedIds(PINNED_WORKSPACES_KEY, "workspaceId", pinnedWorkspaceKeys);
+      return { pinnedWorkspaceKeys };
     });
   },
-  setBoardPinned(boardId, pinned) {
+  setBoardPinned(boardId, pinned, sourceId) {
+    const key = scoped(boardId, sourceId);
     set((state) => {
-      const has = state.pinnedBoardIds.includes(boardId);
+      const has = state.pinnedBoardKeys.includes(key);
       if (has === pinned) return state;
       // 新置顶的排在最后：置顶组的顺序就是用户按下的顺序，不重排。
-      const pinnedBoardIds = pinned
-        ? [...state.pinnedBoardIds, boardId]
-        : state.pinnedBoardIds.filter((id) => id !== boardId);
-      writeStored(PINNED_BOARDS_KEY, JSON.stringify(pinnedBoardIds));
-      return { pinnedBoardIds };
+      const pinnedBoardKeys = pinned
+        ? [...state.pinnedBoardKeys, key]
+        : state.pinnedBoardKeys.filter((entry) => entry !== key);
+      writeScopedIds(PINNED_BOARDS_KEY, "boardId", pinnedBoardKeys);
+      return { pinnedBoardKeys };
     });
   },
   setAgentMode(agentId, mode) {
@@ -593,6 +627,7 @@ export function syncDocumentPreferences(): () => void {
     const root = document.documentElement;
     root.dataset.theme = resolved;
     root.style.colorScheme = resolved;
+    syncNativeStatusBar(resolved);
     root.lang = state.locale;
     applyRenderBudget(state.renderBudget);
   };
@@ -642,8 +677,12 @@ export const t: Translate = (key, values) =>
 
 /* --------------------------------- 最近使用 -------------------------------- */
 
-export function rememberWorkspace(workspaceId: string | null) {
-  if (workspaceId) writeStored(LAST_WORKSPACE_KEY, workspaceId);
+export function rememberWorkspace(
+  workspaceId: string | null,
+  sourceId: string = activeSourceId(),
+) {
+  if (workspaceId)
+    writeStored(LAST_WORKSPACE_KEY, JSON.stringify({ sourceId, workspaceId }));
   else
     try {
       localStorage.removeItem(LAST_WORKSPACE_KEY);
@@ -652,8 +691,12 @@ export function rememberWorkspace(workspaceId: string | null) {
     }
 }
 
-export function rememberBoard(boardId: string | null) {
-  if (boardId) writeStored(LAST_BOARD_KEY, boardId);
+export function rememberBoard(
+  boardId: string | null,
+  sourceId: string = activeSourceId(),
+) {
+  if (boardId)
+    writeStored(LAST_BOARD_KEY, JSON.stringify({ sourceId, boardId }));
   else
     try {
       localStorage.removeItem(LAST_BOARD_KEY);
@@ -662,10 +705,19 @@ export function rememberBoard(boardId: string | null) {
     }
 }
 
+/** 上次的工作空间在哪个源、叫什么；没记过是 `null`。 */
+export function lastWorkspaceRef(): {
+  sourceId: string;
+  workspaceId: string;
+} | null {
+  const last = storedLast(LAST_WORKSPACE_KEY, "workspaceId");
+  return last && { sourceId: last.sourceId, workspaceId: last.id };
+}
+
 export function lastWorkspaceId(): string | null {
-  return readStored(LAST_WORKSPACE_KEY);
+  return lastWorkspaceRef()?.workspaceId ?? null;
 }
 
 export function lastBoardId(): string | null {
-  return readStored(LAST_BOARD_KEY);
+  return storedLast(LAST_BOARD_KEY, "boardId")?.id ?? null;
 }

@@ -10,7 +10,14 @@ import { usePreferencesStore, useT } from "../../../app/preferences-store";
 import { useGithubSession } from "../../../host/github-session";
 import { useCanvasStore } from "../../../store/canvas-store";
 import { SettingsGroup } from "../SettingsGroup";
-import { Field, selectClass } from "../../git/forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/ui/select";
+import { Field } from "../../git/forms";
 import {
   credentialSourceKey,
   failureKey,
@@ -18,9 +25,12 @@ import {
   secretStoreKey,
 } from "../../github/model";
 import { githubKeys } from "../../github/queries";
+import { ForgeConfigs } from "./ForgeConfigs";
+import { FORGE_NAMES } from "../../../api/forge";
 
 /**
- * 设置 → GitHub（Git/GitHub 设计 §9）。
+ * 设置 → Git 托管（Git/GitHub 设计 §9，契约 §29.3）：上面是 GitHub 的凭据（§5），
+ * 下面是按主机 / 仓库配置的 Gitea 与 GitLab（{@link ForgeConfigs}）。
  *
  * 令牌只往外走一次：输入框是 password 类型，永远不回填、不从任何回应里读回来，
  * 保存成功后立即从组件状态里清掉。降级到 0600 文件时明说，不写成「已安全保存」。
@@ -105,7 +115,7 @@ export function GithubPage() {
         </p>
       ) : (
         <>
-          <SettingsGroup>
+          <SettingsGroup title={FORGE_NAMES.github}>
             <form
               className="flex min-w-0 flex-col gap-3 px-4 py-3"
               noValidate
@@ -121,24 +131,30 @@ export function GithubPage() {
               }}
             >
               <Field label={t("github.settings.source")}>
-                <select
-                  className={selectClass}
+                <Select
                   value={String(source)}
-                  onChange={(event) =>
+                  onValueChange={(next) =>
                     // 枚举在线上是名字，下拉框的值就是那个名字。
-                    setSource(event.target.value as GithubCredentialSource)
+                    setSource(next as GithubCredentialSource)
                   }
                 >
-                  <option value={String(GithubCredentialSource.NONE)}>
-                    {t("github.source.none")}
-                  </option>
-                  <option value={String(GithubCredentialSource.GH_CLI)}>
-                    {t("github.source.ghCli")}
-                  </option>
-                  <option value={String(GithubCredentialSource.TOKEN_REF)}>
-                    {t("github.source.token")}
-                  </option>
-                </select>
+                  <SelectTrigger className="h-9 w-full min-w-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="z-[var(--z-dialog)]">
+                    <SelectItem value={String(GithubCredentialSource.NONE)}>
+                      {t("github.source.none")}
+                    </SelectItem>
+                    <SelectItem value={String(GithubCredentialSource.GH_CLI)}>
+                      {t("github.source.ghCli")}
+                    </SelectItem>
+                    <SelectItem
+                      value={String(GithubCredentialSource.TOKEN_REF)}
+                    >
+                      {t("github.source.token")}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
               </Field>
               <Field label={t("github.settings.apiBase")}>
                 <Input
@@ -298,6 +314,8 @@ export function GithubPage() {
               )}
             </dl>
           </SettingsGroup>
+
+          <ForgeConfigs />
         </>
       )}
     </>

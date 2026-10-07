@@ -1,0 +1,67 @@
+{
+  "realm": "armadra",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "clients": [
+    {
+      "clientId": "armadra-dev",
+      "name": "Armadra dev-stack (public)",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "frontchannelLogout": true,
+      "redirectUris": [
+        "https://localhost:8443/api/identity/oauth/callback",
+        "http://127.0.0.1/*"
+      ],
+      "webOrigins": ["+"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://localhost:8443/*##http://127.0.0.1/*"
+      }
+    },
+    {
+      "clientId": "armadra-dev-confidential",
+      "name": "Armadra dev-stack (confidential)",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "dev-stack-fixture-not-a-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "https://localhost:8443/api/identity/oauth/callback",
+        "http://127.0.0.1/*"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "dev",
+      "email": "dev@armadra.test",
+      "emailVerified": true,
+      "firstName": "Dev",
+      "lastName": "Stack",
+      "enabled": true,
+      "credentials": [
+        { "type": "password", "value": "password", "temporary": false }
+      ]
+    },
+    {
+      "username": "unverified",
+      "email": "unverified@armadra.test",
+      "emailVerified": false,
+      "firstName": "Unverified",
+      "lastName": "Stack",
+      "enabled": true,
+      "credentials": [
+        { "type": "password", "value": "password", "temporary": false }
+      ]
+    }
+  ]
+}

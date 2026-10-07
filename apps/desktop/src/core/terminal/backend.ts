@@ -51,6 +51,8 @@
  * about processes and bytes; the manager knows about rows.
  */
 
+import { CoreFailure } from "../http/errors";
+
 /* --------------------------------- identity ------------------------------- */
 
 /**
@@ -64,15 +66,26 @@ export function sessionKey(value: string): SessionKey {
   return value as SessionKey;
 }
 
-/** `terminal_sessions.backend_kind`. The strings are contractual. */
-export type BackendKind = "direct" | "tmux" | "sessionHost";
+/**
+ * `terminal_sessions.backend_kind`. The strings are contractual.
+ *
+ * `acp` is not a terminal: it is the same node driven over the Agent Client
+ * Protocol (`core/acp/bridge.ts`, ACP 设计 §4.1). It is a backend all the same
+ * so that the row, the generation, the drive lease, the exit notice and Eco
+ * hibernation are the manager's one implementation rather than a second one.
+ * It is never the effective kind: only a request that names it gets it.
+ */
+export type BackendKind = "direct" | "tmux" | "sessionHost" | "acp";
 
 /**
  * Parsing an unknown value as `direct` would claim a session this build cannot
  * reach is reachable, so unknown rows stay unknown.
  */
 export function parseBackendKind(value: string): BackendKind | undefined {
-  return value === "direct" || value === "tmux" || value === "sessionHost"
+  return value === "direct" ||
+    value === "tmux" ||
+    value === "sessionHost" ||
+    value === "acp"
     ? value
     : undefined;
 }
@@ -146,6 +159,15 @@ export interface Attachment {
   onData(listener: (chunk: Buffer) => void): void;
   /** The session ended by itself. Not called for a detach. */
   onExit(listener: (exitCode: number | undefined) => void): void;
+  /**
+   * Stop reading output for this attachment until {@link resume}: the socket
+   * behind it is not keeping up (platform spec, core packages §3). The bytes
+   * stay where they are — in the PTY, the tmux client or the session host —
+   * and the program writing them blocks the way it would on a slow terminal.
+   * Idempotent; a detach releases it.
+   */
+  pause?(): void;
+  resume?(): void;
 }
 
 /** One live backend session as the backend itself sees it. */
@@ -202,17 +224,14 @@ export type BackendNotice = {
 /* --------------------------------- errors --------------------------------- */
 
 /**
- * Backend failures carry the HTTP status the API face owes them, because the
- * distinction matters: a stale generation is a 409 the client recovers from by
+ * Backend failures carry the HTTP status the API face owes them (they are
+ * {@link CoreFailure}s, so a contract procedure throws them as they are),
+ * because the distinction matters: a stale generation is a 409 the client recovers from by
  * reconnecting, and an exited session is a 404, and neither is a 500.
  */
-export class TerminalError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
+export class TerminalError extends CoreFailure {
+  constructor(status: number, code: string, message: string) {
+    super(status, code, message);
     this.name = "TerminalError";
   }
 }

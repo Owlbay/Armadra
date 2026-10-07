@@ -1,5 +1,14 @@
 import { execFile } from "node:child_process";
 
+import {
+  CRASH_REPORT_ENV,
+  type ErrorSource,
+  crashReportMessage,
+  scrubContext,
+  scrubText,
+} from "./diagnostics/crash";
+import type { SecretBackend } from "./secrets/backend";
+
 /**
  * The one seam between the core and whichever shell assembled it.
  *
@@ -24,6 +33,17 @@ export interface CorePlatform {
   readonly resourcesPath?: string | undefined;
   /** Three levels, filtered by `ARMADRA_LOG`. */
   readonly log: CoreLog;
+  /**
+   * 壳给的密钥后端（服务器壳：master key 封装的 `file-encrypted`）。不给时 core
+   * 按 `core/secrets` 的表自己挑：桌面壳的 `safeStorage` 经 fork 的 IPC 通道、
+   * macOS 钥匙串、或 0600 文件。
+   */
+  readonly secrets?: SecretBackend | undefined;
+  /**
+   * 哪一种壳装配了这个 core。缺省是桌面壳。服务器壳的 Gateway 由命令行参数
+   * 打开（`apps/server` 的 `serve`），设置 `gateway.*` 不驱动它。
+   */
+  readonly shell?: "desktop" | "server";
   /** Hands a URL to the desktop. A server shell has nowhere to open one. */
   openExternal(url: string): Promise<void>;
   /**
@@ -31,6 +51,63 @@ export interface CorePlatform {
    * request — the core does not wait for a shell to answer.
    */
   notify(channel: string, payload: unknown): void;
+  /**
+   * 一个没人接住的错误（外部服务 §11.2）。壳注入：打开了崩溃上报的壳把它交给
+   * Sentry 协议的 SDK（剥离之后）；没打开、或者壳没给，就只写本地日志——见
+   * {@link reportError}。core 自己不 import 任何 SDK。
+   */
+  reportError?(error: unknown, context: ErrorContext): void;
+  /**
+   * 壳的崩溃上报此刻是不是真的在发（DSN 合格、SDK 已加载）。服务器壳的 DSN 可能
+   * 来自它自己的环境变量，core 读不到，所以由壳回答；没给就按设置文档里的
+   * `diagnostics.crashReportDsn` 判。页面错误上报（契约 §30）用它决定收不收。
+   */
+  crashReportingActive?(): boolean;
+}
+
+/** 报错时带的上下文：只有来源，别的一概不带（路径、请求体都可能含用户数据）。 */
+export interface ErrorContext {
+  readonly source: ErrorSource;
+}
+
+/**
+ * 报一个错误。壳给了 `reportError` 就交给它，否则写一行本地日志。日志里只有
+ * 剥离过的错误名与消息。
+ */
+export function reportError(
+  platform: Pick<CorePlatform, "log" | "reportError">,
+  error: unknown,
+  context: ErrorContext,
+): void {
+  try {
+    if (platform.reportError !== undefined) {
+      platform.reportError(error, context);
+      return;
+    }
+    logError(platform.log, error, context);
+  } catch {
+    // 报错本身不能再抛：调用点多半在 catch 里或进程退出的路上。
+  }
+}
+
+export function logError(
+  log: CoreLog,
+  error: unknown,
+  context: ErrorContext,
+): void {
+  // 页面交来的错误（契约 §30）只进上报，不进本机日志：正文是别人的页面报的，
+  // 日志里留一行「来过」就够了。
+  if (context.source === "page") {
+    log.debug("page error reported", { source: context.source });
+    return;
+  }
+  const scrub = scrubContext();
+  const name = error instanceof Error ? error.name : "Error";
+  const message = error instanceof Error ? error.message : String(error);
+  log.error("unhandled error", {
+    source: context.source,
+    error: `${name}: ${scrubText(message, scrub)}`,
+  });
 }
 
 export interface CoreLog {
@@ -105,7 +182,22 @@ export function nodePlatform(options: {
     log,
     openExternal: (url) => openExternal(url),
     notify: (channel, payload) => log.debug("notify", { channel, payload }),
+    reportError: (error, context) => {
+      logError(log, error, context);
+      forwardToShell(error, context);
+    },
   };
+}
+
+/**
+ * 桌面壳 spawn 的 core：壳设了 {@link CRASH_REPORT_ENV}，错误剥离后经 fork 的
+ * IPC 交给壳（壳决定发不发——开关与 DSN 只在壳那边读）。不是被这样起的 core
+ * 什么都不发。
+ */
+function forwardToShell(error: unknown, context: ErrorContext): void {
+  if (process.env[CRASH_REPORT_ENV] !== "1") return;
+  if (typeof process.send !== "function" || !process.connected) return;
+  process.send(crashReportMessage(error, context.source, scrubContext()));
 }
 
 /**

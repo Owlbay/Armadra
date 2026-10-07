@@ -48,9 +48,21 @@ export type Launcher = (options: LaunchOptions) => BrowserProcess;
  * default-browser nagging, no crash reporter, no keychain prompt on a machine
  * with no desktop session to answer it.
  */
-export function chromiumArgs(options: LaunchOptions): string[] {
+export function chromiumArgs(
+  options: LaunchOptions,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
   return [
     "--headless=new",
+    // No GPU process on macOS. On the macOS CI runner (a VM with a
+    // paravirtual GPU) the GPU path froze the whole browser now and then:
+    // right after an `Input.dispatchMouseEvent`, even browser-level commands
+    // (`Target.getTargets`, `SystemInfo.getProcessInfo`) stopped answering
+    // for 30 s. Measured with the wire trace, the same live suite stalled in
+    // 12 of 68 rounds as it was and in 0 of 36 with `--disable-gpu`. A headless
+    // node paints for a screencast, which software compositing does — the
+    // same path a Linux server without a GPU already takes.
+    ...(platform === "darwin" ? ["--disable-gpu"] : []),
     "--remote-debugging-pipe",
     `--user-data-dir=${options.profileDir}`,
     `--window-size=${options.width},${options.height}`,
@@ -72,9 +84,14 @@ export function chromiumArgs(options: LaunchOptions): string[] {
 export const spawnChromium: Launcher = (options) => {
   mkdirSync(options.profileDir, { recursive: true, mode: 0o700 });
   const child = spawn(options.executable, chromiumArgs(options), {
-    // 0/1/2 as usual, then the CDP pair. `ignore` on stdin because Chromium
-    // reads nothing, `pipe` on stderr so a launch failure has a message.
-    stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
+    // 0/1/2 as usual, then the CDP pair. stderr is `ignore`, not an unread
+    // `pipe`: nobody read that pipe, so once Chromium had logged enough to fill
+    // it, its next log line blocked — every thread that logs stops, the CDP
+    // pipe's included, and the first command timed out (`Target.
+    // setDiscoverTargets did not answer in time`, on a Windows runner). What
+    // Chromium logs can carry page URLs and console text, which do not belong
+    // in the core's log either; a launch failure is reported by the exit.
+    stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
     // Not detached: the browser belongs to this process's group, so a signal
     // that ends the core ends it too.
     detached: false,

@@ -3,8 +3,11 @@ import { createInterface } from "node:readline";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { connect } from "node:net";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { userInfo } from "node:os";
+import { join, resolve } from "node:path";
 import { dataDir, endpointsFile } from "../shell-core/paths";
+import { attachTicketChannel } from "./core-ticket";
 import {
   type HealthResponse,
   PROBE_INTERVAL_MS,
@@ -24,6 +27,7 @@ import {
   DRIVE_ADDRESS_ENV,
   DRIVE_TOKEN_ENV,
 } from "../shell-core/browser/drive";
+import type { SecretChannel } from "./secrets";
 
 /**
  * The two variables the browser drive channel travels on (§4.2).
@@ -49,6 +53,24 @@ export function coreEntry(
 }
 
 /**
+ * 壳起的 core 拿到的环境：壳自己的环境叠上这一轮的通道变量，再去掉
+ * `ARMADRA_LOOPBACK_OWNER`。
+ *
+ * 那个变量让 core 把明文回环上没带凭据的调用当成本机主人（契约 §3.2，安全审查
+ * L9），只给探针与开发命令起的裸 core 用。壳的页面带着票据换来的 Bearer，hook
+ * 与启动器走 hook 服务的令牌，没有哪个调用方要它；从操作员的 shell 或探针的
+ * 临时环境里继承下来也不能让桌面壳退回旧规则。
+ */
+export function coreEnvironment(
+  base: NodeJS.ProcessEnv,
+  extra: Record<string, string> = {},
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, ...extra };
+  delete env.ARMADRA_LOOPBACK_OWNER;
+  return env;
+}
+
+/**
  * 命令行里证明「这是壳起的 core」的那一小段，给孤儿进程清扫用。
  *
  * 另一半是 `--desktop-control-stdin`，它是把一个人从终端里手跑的 core 挡在接管
@@ -58,6 +80,31 @@ export const CORE_PROCESS_MARKER = "core/main.js";
 
 export function setDriveEnvironment(address: string, token: string): void {
   driveEnvironment = { [DRIVE_ADDRESS_ENV]: address, [DRIVE_TOKEN_ENV]: token };
+}
+
+/**
+ * 密钥通道（`main/secrets.ts`）：spawn 时给 core 的环境变量，以及在新 child 上挂
+ * `safeStorage` 应答。每次 spawn 都重挂，重启的 core 也有通道。
+ */
+let secretChannel: SecretChannel | undefined;
+
+export function setSecretChannel(channel: SecretChannel): void {
+  secretChannel = channel;
+}
+
+/**
+ * 崩溃上报通道（`main/diagnostics.ts`，外部服务 §11.2）：同样每次 spawn 都重挂。
+ * 发不发由那边按设置决定，这里只负责把 child 交过去。
+ */
+let crashChannel:
+  | {
+      environment(): Record<string, string>;
+      attach(child: Pick<ChildProcess, "on">): void;
+    }
+  | undefined;
+
+export function setCrashChannel(channel: typeof crashChannel): void {
+  crashChannel = channel;
 }
 
 /**
@@ -150,7 +197,11 @@ export class RuntimeProcess {
     // loopback port and the token is one random value per shell run, so both
     // exist only here and in the environment of this one child. Nothing is
     // written to disk, and a Runtime this shell did not start has no channel.
-    const env = { ...process.env, ...driveEnvironment };
+    const env = coreEnvironment(process.env, {
+      ...driveEnvironment,
+      ...(secretChannel?.environment() ?? {}),
+      ...(crashChannel?.environment() ?? {}),
+    });
     // `child_process.fork`, not `utilityProcess.fork`: everything below this
     // line — the announcement reader, the exit bookkeeping, the SIGKILL
     // fallback — is written against a `ChildProcess`, and `utilityProcess` has
@@ -162,6 +213,11 @@ export class RuntimeProcess {
       silent: true,
       env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
     });
+    secretChannel?.attach(child);
+    crashChannel?.attach(child);
+    // Windows 上票经这条 IPC 通道签（`core-ticket.ts`）；别的平台用不着它，
+    // 挂上也无妨。
+    attachTicketChannel(child);
     child.on("error", (error) => {
       this.exited = true;
       process.stderr.write(
@@ -276,13 +332,14 @@ export async function socketHealth(
   address: RuntimeAddress,
   timeoutMs = 500,
 ): Promise<HealthResponse | undefined> {
-  if (address.kind !== "socket") {
-    return httpHealth(
-      `http://${address.kind === "tcp" ? address.authority : ""}`,
-      timeoutMs,
-    );
+  if (address.kind === "tcp") {
+    return httpHealth(`http://${address.authority}`, timeoutMs);
   }
-  const body = await requestOverSocket(address.path, "/health", timeoutMs);
+  const body = await requestOverSocket(
+    localEndpoint(address),
+    "/health",
+    timeoutMs,
+  );
   return body === undefined ? undefined : parseHealth(body);
 }
 
@@ -526,10 +583,11 @@ export async function waitUntilAddressIsFree(
  * connection is what tells the shell the address is its to take.
  */
 export function addressIsHeld(address: RuntimeAddress): Promise<boolean> {
-  if (address.kind !== "socket") return Promise.resolve(false);
-  if (!existsSync(address.path)) return Promise.resolve(false);
+  if (address.kind === "tcp") return Promise.resolve(false);
+  if (address.kind === "socket" && !existsSync(address.path))
+    return Promise.resolve(false);
   return new Promise((done) => {
-    const socket = connect(address.path);
+    const socket = connect(localEndpoint(address));
     const finish = (held: boolean): void => {
       socket.destroy();
       done(held);
@@ -540,9 +598,51 @@ export function addressIsHeld(address: RuntimeAddress): Promise<boolean> {
   });
 }
 
-/** Where the shell asks its own Runtime to listen. */
-export function ownedRuntimeAddress(): RuntimeAddress {
-  return { kind: "socket", path: join(dataDir(), "runtime.sock") };
+/**
+ * Where the shell asks its own Runtime to listen: a Unix socket in the data
+ * directory, or on Windows — which has no socket files the core can bind
+ * (`core/listen.ts` refuses `unix:` there) — a named pipe whose name is
+ * derived from the user and the data directory, so two data directories never
+ * share a Runtime. Before this a packaged Windows build asked for
+ * `unix:C:\…\runtime.sock`, the core refused, and the window never opened.
+ */
+export function ownedRuntimeAddress(
+  platform: NodeJS.Platform = process.platform,
+  directory: string = dataDir(),
+): RuntimeAddress {
+  if (platform === "win32") {
+    return { kind: "pipe", name: runtimePipeName(directory) };
+  }
+  return { kind: "socket", path: join(directory, "runtime.sock") };
+}
+
+/** `armadra-runtime-<16 hex>`: what `core/listen.ts` accepts as a pipe name. */
+export function runtimePipeName(
+  directory: string,
+  user: string = safeUserName(),
+): string {
+  const digest = createHash("sha256")
+    .update(`${user.toLowerCase()}\0${resolve(directory).toLowerCase()}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `armadra-runtime-${digest}`;
+}
+
+function safeUserName(): string {
+  try {
+    return userInfo().username;
+  } catch {
+    return "";
+  }
+}
+
+/** What `net.connect` takes for a local address: the socket path or the pipe. */
+export function localEndpoint(
+  address: Exclude<RuntimeAddress, { kind: "tcp" }>,
+): string {
+  return address.kind === "socket"
+    ? address.path
+    : `\\\\.\\pipe\\${address.name}`;
 }
 
 /**

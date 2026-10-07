@@ -1,14 +1,36 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { HelpRequested, type RunningCore, run, runtimeEndpoint } from "./main";
+import {
+  DOMAINS,
+  HelpRequested,
+  type RunningCore,
+  run,
+  runtimeEndpoint,
+} from "./main";
+import { install as installAcp } from "./acp";
+import { install as installGateway } from "./gateway";
+import { install as installHooks } from "./hook";
+import { installIdentity } from "./identity";
+import { install as installPush } from "./push";
+import { install as installRealtime } from "./realtime";
+import { install as installTerminals } from "./terminal/install";
+import { install as installWorkflow } from "./workflow";
+import { install as installForge } from "./forge";
+import { install as installGit } from "./git";
+import { install as installGithub } from "./github";
+import { install as installMail } from "./mail";
+import { install as installDiagnostics } from "./diagnostics";
 import { read } from "./endpoints";
+import { loopbackAnonymousOwner } from "./identity/http";
 import { ROUTES } from "./http/routes";
-import { parseAnnouncement } from "./instance";
+import { selfGuarded } from "./http/route-scopes";
+import { parseAnnouncement, VERSION } from "./instance";
 import { endpointsFile } from "./paths";
 import { tempDir } from "./testing/temp-dir";
+import { TEST_ORIGIN, loopbackSession } from "./testing/loopback-session";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = resolve(here, "db/migrations");
@@ -38,6 +60,7 @@ function upgrade(
   core: RunningCore,
   path: string,
   origin?: string,
+  protocol?: string,
 ): Promise<string> {
   const tcp = core.bound.find((spec) => spec.kind === "tcp");
   if (tcp?.kind !== "tcp") throw new Error("no TCP listener");
@@ -48,6 +71,9 @@ function upgrade(
           `Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n` +
           `Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n` +
           (origin === undefined ? "" : `Origin: ${origin}\r\n`) +
+          (protocol === undefined
+            ? ""
+            : `Sec-WebSocket-Protocol: ${protocol}\r\n`) +
           `\r\n`,
       );
     });
@@ -172,6 +198,43 @@ describe("the core process", () => {
     expect(seen).toEqual({ instanceId: core.instanceId, version: "0.1.0" });
   });
 
+  // 安全审查 L9：回环匿名不再按本机主人处理。缺省关；裸 core 用环境变量显式
+  // 打开；壳传的选项优先于环境（服务器壳传 false，环境里有也不开）。
+  it("回环匿名按主人缺省关，ARMADRA_LOOPBACK_OWNER=1 才开，选项优先", async () => {
+    const env = {
+      ARMADRA_CORE_MIGRATIONS_DIR: migrationsDir,
+      ARMADRA_LOG: "error",
+    };
+    const plain = await start(temporary());
+    expect(loopbackAnonymousOwner()).toBe(false);
+    const refused = await fetch(
+      `${base(plain.core)}/api/automations/plans?workspaceId=ws`,
+      { headers: { origin: "http://127.0.0.1:1420" } },
+    );
+    expect(refused.status).toBe(401);
+    await plain.core.stop();
+    running.splice(running.indexOf(plain.core), 1);
+
+    const opened = await run({
+      argv: ["--listen", "tcp:127.0.0.1:0", "--data-dir", temporary()],
+      env: { ...env, ARMADRA_LOOPBACK_OWNER: "1" },
+      stdout: () => {},
+    });
+    running.push(opened);
+    expect(loopbackAnonymousOwner()).toBe(true);
+    await opened.stop();
+    running.splice(running.indexOf(opened), 1);
+
+    const pinned = await run({
+      argv: ["--listen", "tcp:127.0.0.1:0", "--data-dir", temporary()],
+      env: { ...env, ARMADRA_LOOPBACK_OWNER: "1" },
+      stdout: () => {},
+      loopbackAnonymousOwner: false,
+    });
+    running.push(pinned);
+    expect(loopbackAnonymousOwner()).toBe(false);
+  });
+
   it("prints usage for --help and starts nothing", async () => {
     const lines: string[] = [];
     await expect(
@@ -213,7 +276,7 @@ describe("what the core answers", () => {
     expect(first).toEqual(second);
     expect(first).toEqual({
       status: "ok",
-      version: "0.1.0",
+      version: VERSION,
       instanceId: core.instanceId,
       build: expect.any(String) as string,
       // R3 brought the hook service up with the core: the endpoint file names
@@ -234,9 +297,10 @@ describe("what the core answers", () => {
 
   it("answers a route it has not written with 501 naming that path", async () => {
     const { core } = await start(temporary());
+    const session = await loopbackSession(core, base(core));
     // askpass 那两条在表里但**故意**不在 HTTP 面上（助手走它自己的 0600 socket），
     // 所以主监听器上能观察到 501 的只剩它们。
-    const response = await fetch(`${base(core)}/api/ssh/askpass/prompts/x`);
+    const response = await session.fetch("/api/ssh/askpass/prompts/x");
     expect(response.status).toBe(501);
     expect(await response.json()).toEqual({
       code: "not_implemented",
@@ -274,9 +338,33 @@ describe("what the core answers", () => {
     expect(undeclared, "答得出来却没打标记").toEqual([]);
   });
 
+  /**
+   * 路由 scope 的覆盖率，补上路由表之外的那一半（安全审查 2026-10）：整段
+   * 接管的前缀（身份、OAuth、GitHub、自动化、工作流）不在路由表里，路由门照样
+   * 按 `route-scopes.ts` 判它们。每个前缀下的读写都必须有声明，或者在自己认
+   * 身份的 `SELF_GUARDED` 里——缺一条，成员在那里就是缺省拒绝之外的一个洞。
+   */
+  it("整段接管的前缀也都声明了 scope 或自己认身份", async () => {
+    const { core } = await start(temporary());
+    const prefixes = core.server.rawPrefixes();
+    expect(prefixes.length).toBeGreaterThan(0);
+    const undeclared: string[] = [];
+    for (const prefix of prefixes) {
+      const probe = `${prefix.replace(/\/$/, "")}/probe`;
+      if (selfGuarded(probe)) continue;
+      for (const method of ["GET", "POST", "PUT", "DELETE"]) {
+        if (core.server.router.requiredScope(method, probe) === undefined) {
+          undeclared.push(`${method} ${prefix}`);
+        }
+      }
+    }
+    expect(undeclared).toEqual([]);
+  });
+
   it("answers a path nobody claimed with 404, not 501", async () => {
     const { core } = await start(temporary());
-    const response = await fetch(`${base(core)}/api/invented`);
+    const session = await loopbackSession(core, base(core));
+    const response = await session.fetch("/api/invented");
     expect(response.status).toBe(404);
     expect((await response.json()).code).toBe("not_found");
   });
@@ -348,13 +436,190 @@ describe("what the core answers", () => {
    */
   it("lets a stream that exists answer its own refusal", async () => {
     const { core } = await start(temporary());
+    const session = await loopbackSession(core, base(core));
     expect(
       await upgrade(
         core,
         "/api/workspaces/ws-1/events",
-        "http://127.0.0.1:1420",
+        TEST_ORIGIN,
+        await session.wsProtocol(),
       ),
     ).toMatch(/^HTTP\/1\.1 404/);
+  });
+
+  /**
+   * 安全审查 L9：本机另一个回环端口上的网页（或任何不带会话的本机进程）调
+   * core 的 `/api/` 与流，一律被拒。只有不要会话的那几条放行。
+   */
+  describe("回环上没带会话的请求（契约 §3.2，安全审查 L9）", () => {
+    const STRANGER = "http://127.0.0.1:8080";
+
+    it("别的回环来源与不报来源的调用打 /api/ 都是 401", async () => {
+      const { core } = await start(temporary());
+      const callers: Record<string, string>[] = [{ origin: STRANGER }, {}];
+      for (const headers of callers) {
+        const settings = await fetch(`${base(core)}/api/settings`, { headers });
+        expect(settings.status).toBe(401);
+        expect(await settings.json()).toEqual({
+          code: "unauthenticated",
+          message: "需要一个已配对设备的会话",
+        });
+        const write = await fetch(`${base(core)}/api/workspaces`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ name: "x", rootPath: "/tmp" }),
+        });
+        expect(write.status).toBe(401);
+      }
+      // 带着一个编出来的 Bearer 也一样。
+      const forged = await fetch(`${base(core)}/api/settings`, {
+        headers: {
+          origin: STRANGER,
+          authorization: `Bearer ${"0".repeat(32)}.${"a".repeat(43)}`,
+        },
+      });
+      expect(forged.status).toBe(401);
+    });
+
+    it("不要会话的那几条照旧：健康检查、hello、预检", async () => {
+      const { core } = await start(temporary());
+      const headers = { origin: STRANGER };
+      expect((await fetch(`${base(core)}/health`, { headers })).status).toBe(
+        200,
+      );
+      expect(
+        (await fetch(`${base(core)}/api/health`, { headers })).status,
+      ).toBe(200);
+      expect(
+        (await fetch(`${base(core)}/api/identity/hello`, { headers })).status,
+      ).toBe(200);
+      const preflight = await fetch(`${base(core)}/api/settings`, {
+        method: "OPTIONS",
+        headers,
+      });
+      expect(preflight.status).toBe(204);
+    });
+
+    it("没带票的升级是 401；票只认签它的来源、只用一次", async () => {
+      const { core } = await start(temporary());
+      const session = await loopbackSession(core, base(core));
+      const workspace = (await (
+        await session.fetch("/api/workspaces")
+      ).json()) as { id: string }[];
+      const events = `/api/workspaces/${workspace[0]?.id}/events`;
+      expect(await upgrade(core, events, STRANGER)).toMatch(/^HTTP\/1\.1 401/);
+      expect(
+        await upgrade(core, events, STRANGER, await session.wsProtocol()),
+      ).toMatch(/^HTTP\/1\.1 401/);
+      const protocol = await session.wsProtocol();
+      expect(await upgrade(core, events, TEST_ORIGIN, protocol)).toMatch(
+        /^HTTP\/1\.1 101/,
+      );
+      expect(await upgrade(core, events, TEST_ORIGIN, protocol)).toMatch(
+        /^HTTP\/1\.1 401/,
+      );
+    });
+
+    it("媒体票（§37.4）：不带头直接取得到，签票的会话登出之后作废", async () => {
+      const { core } = await start(temporary());
+      const session = await loopbackSession(core, base(core));
+      const project = temporary();
+      writeFileSync(join(project, "clip.mp4"), Buffer.alloc(4096, 7));
+      const created = (await (
+        await session.fetch("/api/workspaces", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "media", rootPath: project }),
+        })
+      ).json()) as { id: string };
+      const issued = await session.fetch("/api/rpc/files/mediaTicket", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          json: { workspaceId: created.id, path: "clip.mp4" },
+        }),
+      });
+      expect(issued.status).toBe(200);
+      const { url } = ((await issued.json()) as { json: { url: string } }).json;
+      // 浏览器的 `<video src>`：没有 Origin、没有 Authorization。
+      const part = await fetch(`${base(core)}${url}`, {
+        headers: { range: "bytes=0-1023" },
+      });
+      expect(part.status).toBe(206);
+      expect((await part.arrayBuffer()).byteLength).toBe(1024);
+      // 同一个文件不带票照旧 401。
+      const bare = await fetch(
+        `${base(core)}/api/workspaces/${created.id}/file-download?path=clip.mp4`,
+        { headers: { origin: TEST_ORIGIN } },
+      );
+      expect(bare.status).toBe(401);
+      const loggedOut = await fetch(
+        `${base(core)}/api/identity/session/logout`,
+        {
+          method: "POST",
+          headers: {
+            origin: session.origin,
+            authorization: `Bearer ${session.refreshToken}`,
+          },
+        },
+      );
+      expect(loggedOut.status).toBeLessThan(300);
+      const after = await fetch(`${base(core)}${url}`);
+      expect(after.status).toBe(401);
+    });
+
+    it("配对之后带 Bearer 是 200；会话绑在来源上，换个来源不认", async () => {
+      const { core } = await start(temporary());
+      const session = await loopbackSession(core, base(core));
+      expect((await session.fetch("/api/settings")).status).toBe(200);
+      const elsewhere = await fetch(`${base(core)}/api/settings`, {
+        headers: { ...session.headers, origin: STRANGER },
+      });
+      expect(elsewhere.status).toBe(401);
+    });
+
+    it("反复配对（页面重载、托盘）设备列表不增长", async () => {
+      const { core } = await start(temporary());
+      await loopbackSession(core, base(core), "http://127.0.0.1:50001");
+      await loopbackSession(core, base(core), "http://127.0.0.1:50002");
+      const tray = await loopbackSession(
+        core,
+        base(core),
+        new URL(base(core)).origin,
+      );
+      const answer = await tray.fetch("/api/identity/devices");
+      expect(answer.status).toBe(200);
+      expect(
+        ((await answer.json()) as { devices: unknown[] }).devices,
+      ).toHaveLength(1);
+    });
+
+    it("ws-ticket 只发给带着会话的原生传输", async () => {
+      const { core } = await start(temporary());
+      const anonymous = await fetch(`${base(core)}/api/identity/ws-ticket`, {
+        method: "POST",
+        headers: { origin: STRANGER },
+      });
+      expect(anonymous.status).toBe(401);
+    });
+
+    it("显式打开回环匿名（裸 core）时这道门不在", async () => {
+      const dataDir = temporary();
+      const core = await run({
+        argv: ["--listen", "tcp:127.0.0.1:0", "--data-dir", dataDir],
+        env: {
+          ARMADRA_CORE_MIGRATIONS_DIR: migrationsDir,
+          ARMADRA_LOG: "error",
+          ARMADRA_LOOPBACK_OWNER: "1",
+        },
+        stdout: () => {},
+      });
+      running.push(core);
+      const settings = await fetch(`${base(core)}/api/settings`, {
+        headers: { origin: STRANGER },
+      });
+      expect(settings.status).toBe(200);
+    });
   });
 
   it("stops accepting once it has stopped", async () => {
@@ -393,6 +658,39 @@ describe("the published record", () => {
     ]);
     expect(private_.http).toBeUndefined();
     expect(private_.websocket).toBeUndefined();
+  });
+});
+
+describe("the assembly order", () => {
+  it("补全计划的域按 identity → 终端 → acp → workflow → realtime → push → gateway 装配", () => {
+    const order = [
+      installIdentity,
+      installTerminals,
+      installAcp,
+      installWorkflow,
+      installRealtime,
+      installPush,
+      installGateway,
+    ].map((install) => DOMAINS.indexOf(install));
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // Gateway 对外监听，开始时每个域都得已经装好；hook 服务公布端点，也在
+    // 每个答得了 hook 报告的域之后。
+    expect(DOMAINS.at(-1)).toBe(installGateway);
+    expect(DOMAINS.at(-2)).toBe(installHooks);
+  });
+
+  it("G5 的三个域：forge 在 GitHub 与 Git 之后，邮件与页面错误上报在推送之后、hook 服务之前", () => {
+    const at = (install: (typeof DOMAINS)[number]) => DOMAINS.indexOf(install);
+    for (const install of [installForge, installMail, installDiagnostics]) {
+      expect(at(install)).toBeGreaterThanOrEqual(0);
+    }
+    expect(at(installForge)).toBeGreaterThan(at(installGithub));
+    expect(at(installForge)).toBeGreaterThan(at(installGit));
+    expect(at(installMail)).toBeGreaterThan(at(installPush));
+    expect(at(installDiagnostics)).toBeGreaterThan(at(installPush));
+    expect(at(installMail)).toBeLessThan(at(installHooks));
+    expect(at(installDiagnostics)).toBeLessThan(at(installHooks));
   });
 });
 

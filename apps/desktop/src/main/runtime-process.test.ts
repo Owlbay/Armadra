@@ -10,13 +10,21 @@ import {
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RuntimeRecord } from "../shell-core/runtime/identity";
+import {
+  type RuntimeRecord,
+  listenArgument,
+} from "../shell-core/runtime/identity";
+import { parseListenSpec } from "../core/listen";
 import {
   RuntimeProcess,
   addressIsHeld,
   CORE_PROCESS_MARKER,
   coreEntry,
+  coreEnvironment,
   externalRuntimeBase,
+  localEndpoint,
+  ownedRuntimeAddress,
+  runtimePipeName,
   processCommandLine,
   isPackagedShell,
   setPackagedShell,
@@ -197,6 +205,63 @@ describe.runIf(unix)("taking the address back", () => {
   });
 });
 
+describe("where the shell asks its own Runtime to listen", () => {
+  it("is a socket in the data directory off Windows", () => {
+    expect(ownedRuntimeAddress("darwin", "/data/armadra")).toEqual({
+      kind: "socket",
+      path: join("/data/armadra", "runtime.sock"),
+    });
+  });
+
+  /**
+   * Windows: the core refuses `unix:` there (core/listen.ts), so the packaged
+   * app asked for one and never opened a window. The pipe name has to be
+   * one `parseListenSpec` accepts, stable for a data directory, and different
+   * for another directory or another user.
+   */
+  it("is a named pipe per user and data directory on Windows", () => {
+    const address = ownedRuntimeAddress(
+      "win32",
+      "C:\\Users\\me\\AppData\\Roaming\\Armadra",
+    );
+    expect(address.kind).toBe("pipe");
+    if (address.kind !== "pipe") return;
+    expect(address.name).toMatch(/^armadra-runtime-[0-9a-f]{16}$/);
+    expect(parseListenSpec(listenArgument(address))).toEqual({
+      ok: true,
+      spec: { kind: "pipe", name: address.name },
+    });
+    expect(runtimePipeName("C:\\data", "me")).toBe(
+      runtimePipeName("c:\\DATA", "ME"),
+    );
+    expect(runtimePipeName("C:\\data", "me")).not.toBe(
+      runtimePipeName("C:\\other", "me"),
+    );
+    expect(runtimePipeName("C:\\data", "me")).not.toBe(
+      runtimePipeName("C:\\data", "you"),
+    );
+    expect(localEndpoint(address)).toBe(`\\\\.\\pipe\\${address.name}`);
+  });
+
+  it.runIf(process.platform === "win32")(
+    "reads a pipe as held only while something accepts on it",
+    async () => {
+      const address = {
+        kind: "pipe",
+        name: `armadra-runtime-test-${process.pid}`,
+      } as const;
+      expect(await addressIsHeld(address)).toBe(false);
+      const server = createServer();
+      await new Promise<void>((done) =>
+        server.listen(localEndpoint(address), done),
+      );
+      expect(await addressIsHeld(address)).toBe(true);
+      await new Promise<void>((done) => server.close(() => done()));
+      await expect(waitUntilAddressIsFree(address)).resolves.toBeUndefined();
+    },
+  );
+});
+
 describe("是不是一份打好包的应用", () => {
   it("答案来自 Electron，不是环境变量", () => {
     setPackagedShell(false);
@@ -236,6 +301,20 @@ describe("壳启动的 core", () => {
     expect(coreEntry({ ARMADRA_CORE_ENTRY: "/elsewhere/main.js" })).toBe(
       "/elsewhere/main.js",
     );
+  });
+
+  it("不把回环匿名按主人的开关带给 core（安全审查 L9）", () => {
+    const env = coreEnvironment(
+      { PATH: "/bin", ARMADRA_LOOPBACK_OWNER: "1" },
+      { ARMADRA_BROWSER_DRIVE: "x" },
+    );
+    expect(env.ARMADRA_LOOPBACK_OWNER).toBeUndefined();
+    expect(env.PATH).toBe("/bin");
+    expect(env.ARMADRA_BROWSER_DRIVE).toBe("x");
+    expect(
+      coreEnvironment({}, { ARMADRA_LOOPBACK_OWNER: "1" })
+        .ARMADRA_LOOPBACK_OWNER,
+    ).toBeUndefined();
   });
 
   it("孤儿清扫认的是 core 的那段命令行", () => {

@@ -15,6 +15,18 @@ import type { StoreApi } from "zustand";
 import type { WhiteboardDoc } from "../../canvas/whiteboard/model";
 import type { CommitOptions } from "./history";
 
+export interface RealtimeLink {
+  boardId: string;
+  writable: boolean;
+}
+
+/** 实时板文档的投影（`realtime/doc.ts::readRemote`）。 */
+export interface RealtimeState {
+  nodes: CanvasNode[];
+  edges: BoardDocument["edges"];
+  whiteboard: WhiteboardDoc;
+}
+
 export type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
 
 export interface BoardBrief {
@@ -56,6 +68,10 @@ export interface PanelState {
   automation: "closed" | "drawer";
   /** 工作空间的交接历史（自动化设计 §7）。只读，不发起交接。 */
   handoff: "closed" | "drawer";
+  /** 工作流：模板库与运行记录（设计系统 §5.5）。 */
+  workflow: "closed" | "drawer";
+  /** 协调者（ama）的分派抽屉（设计系统 §5.4）：看哪个协调者在 `coordinator/store.ts`。 */
+  dispatch: "closed" | "drawer";
   /** 额度、用量与成本看板（§4.2）。抽屉或右侧常驻浮卡。 */
   usage: "closed" | "drawer" | "pinned";
   /** 右侧工作面板的「GitHub」页（Git/GitHub 设计 §1 / 画布平台设计 §4）。 */
@@ -91,6 +107,8 @@ export interface AddNodeOptions {
 
 export interface CanvasState {
   workspace: Workspace | null;
+  /** 这个工作空间所在的源（客户端包 §2）；没有工作空间时是当前源。 */
+  sourceId: string;
   boards: BoardBrief[];
   boardId: string | null;
   document: BoardDocument | null;
@@ -115,10 +133,17 @@ export interface CanvasState {
    * 旧快照不参与只读判定（`presence.ts`）。
    */
   presence: BoardPresence | null;
+  /**
+   * 这块板走实时协同（补全架构 §6.4，`realtime/session.ts` 写）。`writable`
+   * 为假时画布只读：还没完成第一次同步，或者 core 以 4403 说了没有写权限。
+   * 属于别的板的旧值不参与判定。
+   */
+  realtime: RealtimeLink | null;
 }
 
 export interface CanvasActions {
-  setWorkspace: (workspace: Workspace | null) => void;
+  /** `sourceId` 省略 = 同一工作空间沿用原来的源，否则取当前源。 */
+  setWorkspace: (workspace: Workspace | null, sourceId?: string) => void;
   setBoards: (boards: BoardBrief[]) => void;
   selectBoard: (boardId: string | null) => void;
   setDocument: (document: BoardDocument) => void;
@@ -130,9 +155,16 @@ export interface CanvasActions {
    * `canvas/sync/merge.ts`。
    */
   mergeRemoteDocument: (document: BoardDocument) => void;
+  /**
+   * 实时板的远端灌入（补全架构 §6.4，`realtime/binding.ts` 调）：`Y.Doc` 的
+   * 投影直接成为节点、连线与白板。文档就是真相，所以没有变基——视口、选区
+   * 留本地，历史、待存登记与保存态一律不动。
+   */
+  applyRealtimeState: (state: RealtimeState) => void;
   setSaveState: (state: SaveState) => void;
   setSaveError: (message: string | null) => void;
   setPresence: (presence: BoardPresence | null) => void;
+  setRealtime: (realtime: RealtimeLink | null) => void;
   setPanel: <K extends keyof PanelState>(key: K, value: PanelState[K]) => void;
 
   selectNodes: (ids: string[]) => void;

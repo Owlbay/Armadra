@@ -2,6 +2,12 @@
  * Produce a whole release into a temporary directory and check it.
  *
  *   pnpm release:dry-run [--keep] [--out <dir>]
+ *   pnpm release:dry-run --against <source> --pubkey <minisign.pub> [--target <os>-<arch>]
+ *
+ * The second form checks a release someone else is serving — the dev-stack
+ * `release` service at `http://127.0.0.1:8090/repos/armadra/armadra`, say —
+ * the way a client would: check the index (and again with its ETag, expecting
+ * 304), download the manifests, then verify every statement about the bytes.
  *
  * Nothing here builds real binaries or touches GitHub: the point is to
  * exercise the parts of the pipeline that decide what a release *is* — the
@@ -15,6 +21,7 @@
  * it as well, so the format claim is not only asserted against our own reader.
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -28,14 +35,23 @@ import { fileURLToPath } from "node:url";
 import {
   MANIFEST_ASSETS,
   TARGETS,
+  UPDATER_FEEDS,
   assetComponent,
   assetTarget,
   desktopAssets,
+  updaterFeedFile,
   webAsset,
 } from "./artifacts.mjs";
+import { verifyFeeds } from "./assemble.mjs";
+import { readReleaseNotes } from "./changelog.mjs";
 import { readCompatibility, releaseNote } from "./compatibility.mjs";
-import { verifyChecksums, writeChecksums } from "./checksums.mjs";
-import { generateKey, publicKeyFile } from "./minisign.mjs";
+import {
+  parseChecksums,
+  verifyChecksums,
+  writeChecksums,
+} from "./checksums.mjs";
+import { generateKey, publicKeyFile, verifyDetached } from "./minisign.mjs";
+import { formatFeed, parseFeed, sha512Base64 } from "./stage-desktop.mjs";
 import { signDirectory, verifyDirectory } from "./sign.mjs";
 import { startMockReleaseServer } from "./mock-release-server.mjs";
 import { writeManifest } from "./updater-manifest.mjs";
@@ -61,6 +77,24 @@ export function stageAssets({ directory, version }) {
       // and `assemble.mjs` signs the directory itself before it builds the
       // manifest. Staging one here would hide whether that ordering holds.
     }
+    // The feed `stage-desktop.mjs` would have written for this target, over
+    // the same placeholder bytes.
+    const updater = desktopAssets(version, target).find((a) => a.updater);
+    const bytes = placeholder(updater.name);
+    writeFileSync(
+      join(directory, updaterFeedFile(target)),
+      formatFeed({
+        version,
+        files: [
+          {
+            url: updater.name,
+            sha512: sha512Base64(bytes),
+            size: bytes.length,
+          },
+        ],
+      }),
+    );
+    staged.push(updaterFeedFile(target));
   }
   writeFileSync(
     join(directory, webAsset(version)),
@@ -86,11 +120,16 @@ export async function auditRelease({ directory, version, publicKeyText }) {
       problems.push(`${name} declares no component the updater can read`);
       continue;
     }
-    if (component === "manifest" || component === "web") continue;
+    if (
+      component === "manifest" ||
+      component === "web" ||
+      component === "mobile"
+    )
+      continue;
     if (assetTarget(name) === "")
       problems.push(`${name} declares no target the updater can read`);
   }
-  for (const required of MANIFEST_ASSETS) {
+  for (const required of [...MANIFEST_ASSETS, ...UPDATER_FEEDS]) {
     if (!staged.has(required)) problems.push(`${required} is missing`);
   }
   problems.push(...(await verifyChecksums(directory)));
@@ -111,7 +150,162 @@ export async function auditRelease({ directory, version, publicKeyText }) {
     if (!manifest.platforms[key])
       problems.push(`latest.json has no entry for ${key}`);
   }
+  problems.push(...verifyFeeds({ directory, version, manifest }));
   return problems;
+}
+
+function sha256Hex(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
+ * Check → download the manifests → verify, against a served release.
+ *
+ * What a client does, in that order, and every statement about the bytes it
+ * would rely on: the index answers 304 to its own ETag; `SHA256SUMS` and
+ * `latest.json` carry minisign signatures by `publicKeyText`; each target's
+ * electron-updater feed is the one `latest.json` names (by sha256) and the one
+ * `SHA256SUMS` lists; the bundle the feed names has the feed's sha512, the
+ * index's sha256, the list's sha256 and a valid minisign signature. Returns
+ * the problems and what was checked.
+ */
+export async function verifyServedRelease({
+  source,
+  publicKeyText,
+  targets = TARGETS,
+}) {
+  const problems = [];
+  const checked = [];
+  const get = async (url, headers = {}) => {
+    const response = await fetch(url, { headers });
+    return response;
+  };
+  const bytesOf = async (url) => {
+    const response = await get(url);
+    if (!response.ok) throw new Error(`${url} answered ${response.status}`);
+    return Buffer.from(await response.arrayBuffer());
+  };
+
+  // 1. The check, and the same check made conditional.
+  const first = await get(`${source}/releases`);
+  if (!first.ok)
+    return { problems: [`index answered ${first.status}`], checked };
+  const etag = first.headers.get("etag");
+  const index = await first.json();
+  if (!etag) problems.push("the index carries no ETag");
+  else {
+    const again = await get(`${source}/releases`, { "if-none-match": etag });
+    if (again.status !== 304)
+      problems.push(
+        `a matching If-None-Match answered ${again.status}, not 304`,
+      );
+    else checked.push("index 304 on If-None-Match");
+  }
+  const release = index.find((entry) => !entry.draft);
+  if (!release)
+    return { problems: [...problems, "no published release"], checked };
+  const assets = new Map(release.assets.map((asset) => [asset.name, asset]));
+  const version = release.tag_name.replace(/^v/, "");
+
+  // 2. The manifests, each with its signature.
+  const signed = async (name) => {
+    const asset = assets.get(name);
+    const signature = assets.get(`${name}.sig`);
+    if (!asset || !signature) {
+      problems.push(`the release does not publish ${name} with its .sig`);
+      return null;
+    }
+    const bytes = await bytesOf(asset.browser_download_url);
+    const verdict = verifyDetached(
+      publicKeyText,
+      (await bytesOf(signature.browser_download_url)).toString("utf8"),
+      bytes,
+    );
+    if (!verdict.ok) problems.push(`${name} signature: ${verdict.reason}`);
+    else checked.push(`${name} minisign`);
+    return bytes;
+  };
+  const sumsBytes = await signed("SHA256SUMS");
+  const latestBytes = await signed("latest.json");
+  if (!sumsBytes || !latestBytes) return { problems, checked };
+  const sums = parseChecksums(sumsBytes.toString("utf8"));
+  const latest = JSON.parse(latestBytes.toString("utf8"));
+  if (latest.version !== version)
+    problems.push(`latest.json names ${latest.version}, the tag ${version}`);
+
+  // 3. Per target: the feed, then the bundle it names.
+  for (const target of targets) {
+    const entry = latest.platforms?.[target];
+    if (!entry) {
+      problems.push(`latest.json has no entry for ${target}`);
+      continue;
+    }
+    const feedName = updaterFeedFile(target);
+    if (!entry.feed) {
+      problems.push(`latest.json ${target} names no feed`);
+      continue;
+    }
+    const feedBytes = await bytesOf(entry.feed.url);
+    const feedDigest = sha256Hex(feedBytes);
+    if (feedDigest !== entry.feed.sha256)
+      problems.push(`${feedName} is not the feed latest.json names`);
+    if (sums.get(feedName) !== feedDigest)
+      problems.push(`${feedName} is not the feed SHA256SUMS lists`);
+    const feed = parseFeed(feedBytes.toString("utf8"));
+    if (feed.version !== version)
+      problems.push(`${feedName} names ${feed.version}, not ${version}`);
+    const file = feed.files[0];
+    if (!file) {
+      problems.push(`${feedName} lists no file`);
+      continue;
+    }
+    // electron-updater resolves a feed's file against the feed's own URL.
+    const bundleUrl = new URL(file.url, entry.feed.url).toString();
+    if (bundleUrl !== entry.url)
+      problems.push(`${feedName} names ${file.url}, latest.json ${entry.url}`);
+    const bundle = await bytesOf(bundleUrl);
+    const digest = sha256Hex(bundle);
+    if (sha512Base64(bundle) !== file.sha512)
+      problems.push(`${file.url} does not match the feed's sha512`);
+    if (Number(file.size) !== bundle.length)
+      problems.push(`${file.url} does not match the feed's size`);
+    if (sums.get(file.url) !== digest)
+      problems.push(`${file.url} does not match SHA256SUMS`);
+    if (assets.get(file.url)?.digest !== `sha256:${digest}`)
+      problems.push(`${file.url} does not match the index digest`);
+    const verdict = verifyDetached(publicKeyText, entry.signature, bundle);
+    if (!verdict.ok) problems.push(`${file.url} signature: ${verdict.reason}`);
+    if (problems.length === 0) checked.push(`${target} feed and bundle`);
+  }
+  return { problems, checked, version };
+}
+
+/** `--against`: check a release someone else serves. */
+async function against(argv) {
+  const flag = (name) => {
+    const index = argv.indexOf(`--${name}`);
+    return index >= 0 ? argv[index + 1] : undefined;
+  };
+  const source = flag("against");
+  const pubkey = flag("pubkey");
+  if (!source || !pubkey) {
+    console.error(
+      "usage: pnpm release:dry-run --against <source> --pubkey <minisign.pub> [--target <os>-<arch>]",
+    );
+    return 2;
+  }
+  const target = flag("target");
+  const { problems, checked, version } = await verifyServedRelease({
+    source,
+    publicKeyText: readFileSync(pubkey, "utf8"),
+    targets: target ? [target] : TARGETS,
+  });
+  console.log(`Release ${version ?? "?"} at ${source}`);
+  for (const line of checked) console.log(`  ✓ ${line}`);
+  for (const problem of problems) console.error(`✗ ${problem}`);
+  if (problems.length > 0) return 1;
+  console.log("Served release verified.");
+  return 0;
 }
 
 /** Check the signatures again with the real minisign, when it is installed. */
@@ -132,6 +326,7 @@ export function crossCheckWithMinisign({ directory, publicKeyPath, sample }) {
 }
 
 async function main(argv) {
+  if (argv.includes("--against")) return against(argv);
   const keep = argv.includes("--keep");
   const outFlag = argv.indexOf("--out");
   const directory =
@@ -146,11 +341,12 @@ async function main(argv) {
 
     stageAssets({ directory, version });
     const compatibility = readCompatibility();
-    const note = releaseNote({
-      version,
-      notes: `Armadra ${version} dry run.`,
-      compatibility,
-    });
+    // The note is what release.yml writes: this version's CHANGELOG.md section
+    // with the fence after it. A missing section fails here as it would there.
+    const changelog = readReleaseNotes({ version });
+    if (changelog.problem) problems.push(changelog.problem);
+    const notes = changelog.notes ?? `Armadra ${version} dry run.`;
+    const note = releaseNote({ version, notes, compatibility });
 
     // Neither the release note nor the public key is a release asset. The note
     // is the release's own body, and a key served from the same place as the
@@ -169,13 +365,19 @@ async function main(argv) {
     // one this step just produced.
     signDirectory({ directory, key, version });
 
+    // The manifest's links have to reach the server that serves it below, so
+    // its port is taken first and the server is started on that port later.
+    const probe = await startMockReleaseServer({ releases: [] });
+    const port = Number(new URL(probe.base).port);
+    await probe.close();
+    const publicBase = `http://127.0.0.1:${port}`;
     const manifest = writeManifest({
       directory,
       version,
-      notes: `Armadra ${version} dry run.`,
+      notes,
       targets: TARGETS,
       downloadUrl: (name) =>
-        `https://example.invalid/download/v${version}/${name}`,
+        `${publicBase}/download/v${version}/${encodeURIComponent(name)}`,
     });
     for (const skip of manifest.skipped)
       problems.push(`latest.json skipped ${skip.asset}: ${skip.reason}`);
@@ -192,14 +394,20 @@ async function main(argv) {
     );
 
     // A release is read through the API shape, not through a directory, so the
-    // dry run serves it and reads it back the way a client would.
+    // dry run serves it and reads it back the way a client would: check (with
+    // its ETag), download the manifests, verify every statement about the bytes.
     const server = await startMockReleaseServer({
       releases: [{ directory, tag: `v${version}`, body: note }],
+      port,
     });
     try {
       const index = await (await fetch(`${server.source}/releases`)).json();
       const names = new Set(index[0].assets.map((asset) => asset.name));
-      for (const required of [...MANIFEST_ASSETS, `SHA256SUMS.sig`]) {
+      for (const required of [
+        ...MANIFEST_ASSETS,
+        `SHA256SUMS.sig`,
+        ...UPDATER_FEEDS,
+      ]) {
         if (!names.has(required))
           problems.push(`the served release omits ${required}`);
       }
@@ -211,6 +419,11 @@ async function main(argv) {
       ).text();
       if (fetched !== checksums.content)
         problems.push("the served SHA256SUMS is not the one written");
+      const served = await verifyServedRelease({
+        source: server.source,
+        publicKeyText: publicKeyFile(key),
+      });
+      problems.push(...served.problems.map((p) => `served: ${p}`));
     } finally {
       await server.close();
     }

@@ -12,7 +12,7 @@ import { CdpRefusal, DRIVE_CODES } from "../cdp/codes";
 import { CdpSession } from "../cdp/session";
 import type { VerbDialog, VerbHost, VerbTab } from "../cdp/verbs";
 import { jailMessage, jailWritePath } from "../cdp/workspace-path";
-import { CdpConnection } from "./connection";
+import { CdpConnection, STARTUP_TIMEOUT_MS } from "./connection";
 import type { BrowserProcess, Launcher } from "./process";
 import { spawnChromium } from "./process";
 import {
@@ -48,6 +48,17 @@ const DEFAULT_VIEWPORT = clampViewport(1_280, 800);
 
 export interface ViewerSocket {
   send(data: string | Buffer): void;
+  /**
+   * One screencast frame: the JSON header and the JPEG it describes, which
+   * must travel together. A socket with a send queue keeps only the newest
+   * pair when it falls behind; without this, the two `send`s are the frame.
+   *
+   * `sent` is called once the pair has been written to the socket, or has
+   * been dropped for a newer one. The frame's ack to Chromium waits for it,
+   * so a viewer that cannot keep up slows the encoder down instead of making
+   * it encode frames that are thrown away (backpressure).
+   */
+  sendFrame?(header: string, jpeg: Buffer, sent?: () => void): void;
   close(code?: number, reason?: string): void;
 }
 
@@ -89,6 +100,8 @@ export class HeadlessNode {
   private connection: CdpConnection | undefined;
   private readonly tabs = new Map<string, Tab>();
   private readonly bySession = new Map<string, Tab>();
+  /** Attaches in flight, by target: see {@link attach}. */
+  private readonly attaching = new Map<string, Promise<Tab>>();
   private activeTargetId = "";
   private viewport: Viewport = DEFAULT_VIEWPORT;
   private dialog: VerbDialog | undefined;
@@ -139,7 +152,14 @@ export class HeadlessNode {
       this.lost("the browser process exited");
     });
 
-    await connection.send("Target.setDiscoverTargets", { discover: true });
+    // The first command waits for the browser to come up (`STARTUP_TIMEOUT_MS`);
+    // everything after it is held to the ordinary command bound.
+    await connection.send(
+      "Target.setDiscoverTargets",
+      { discover: true },
+      undefined,
+      STARTUP_TIMEOUT_MS,
+    );
     // Downloads land in a private directory under a name this process chose,
     // and stay there until `download --accept`. Bytes a page picked do not
     // enter somebody's project because a driven page asked for them.
@@ -169,7 +189,28 @@ export class HeadlessNode {
     return targetId;
   }
 
-  private async attach(targetId: string, url: string): Promise<Tab> {
+  /**
+   * Attaches to a target once. Chromium announces a target it creates with
+   * `Target.targetCreated` BEFORE it answers the `Target.createTarget` that
+   * made it, so `openTab` and the event handler both reach here for every tab
+   * this process opens. Two `attachToTarget`s made two debugger sessions on
+   * one page — both prepared, one forgotten but still routed — and the live
+   * trace of a stalled `read --tab` showed exactly that pair right before it.
+   * The second caller now waits for the first one's attach.
+   */
+  private attach(targetId: string, url: string): Promise<Tab> {
+    const pending = this.attaching.get(targetId);
+    if (pending !== undefined) return pending;
+    const known = this.tabs.get(targetId);
+    if (known !== undefined) return Promise.resolve(known);
+    const started = this.attachNow(targetId, url).finally(() => {
+      this.attaching.delete(targetId);
+    });
+    this.attaching.set(targetId, started);
+    return started;
+  }
+
+  private async attachNow(targetId: string, url: string): Promise<Tab> {
     const connection = this.need();
     const attached = (await connection.send("Target.attachToTarget", {
       targetId,
@@ -220,6 +261,82 @@ export class HeadlessNode {
       url: tab.url,
       title: tab.title,
     }));
+  }
+
+  /**
+   * What this node's browser looks like right now, for a stall that needs
+   * explaining: commands still waiting, the tail of the wire trace (only with
+   * `ARMADRA_CDP_TRACE=1`), and three short questions to Chromium — which
+   * targets it has, how busy each of its processes has been, and whether the
+   * active page answers at all. No URLs, titles or page text.
+   */
+  async diagnose(): Promise<Record<string, unknown>> {
+    const connection = this.connection;
+    const report: Record<string, unknown> = {
+      alive: this.isAlive(),
+      pid: this.process?.pid ?? null,
+      uptimeMs: this.launchedAt === null ? null : Date.now() - this.launchedAt,
+      tabs: [...this.tabs.values()].map((tab) => ({
+        active: tab.targetId === this.activeTargetId,
+        sessionId: tab.sessionId,
+      })),
+      pending: connection?.pending() ?? [],
+      trace: connection?.traced().slice(-120) ?? [],
+    };
+    if (connection === undefined || !connection.isOpen()) return report;
+    report.targets = await connection
+      .send("Target.getTargets", {}, undefined, 3_000)
+      .then((answer) =>
+        (
+          (answer as { targetInfos?: { type?: string; attached?: boolean }[] })
+            .targetInfos ?? []
+        ).map((target) => ({ type: target.type, attached: target.attached })),
+      )
+      .catch((error: unknown) => String((error as Error).message));
+    // Which Chromium processes there are and how much CPU each has used: a
+    // renderer pegged at 100% and one sitting idle are different stalls.
+    report.processes = await connection
+      .send("SystemInfo.getProcessInfo", {}, undefined, 3_000)
+      .then((answer) =>
+        (
+          (answer as { processInfo?: { type?: string; cpuTime?: number }[] })
+            .processInfo ?? []
+        ).map((info) => ({ type: info.type, cpuTime: info.cpuTime })),
+      )
+      .catch((error: unknown) => String((error as Error).message));
+    // Does each tab answer at all — and each of its cross-origin iframes,
+    // which live in renderers of their own? Two questions, short-bounded:
+    // `Page.getFrameTree` is answered by the browser process, so on its own it
+    // says nothing about the renderer; `DOM.getDocument` (depth 0) is answered
+    // by the renderer's main thread. The stalled `read --tab` of the macOS
+    // runner was a background TAB whose browser side answered while its
+    // renderer did not; the active tab alone could not show that.
+    const ask = async (method: string, sessionId: string): Promise<string> => {
+      const asked = Date.now();
+      return connection
+        .send(
+          method,
+          method === "DOM.getDocument" ? { depth: 0 } : {},
+          sessionId,
+          3_000,
+        )
+        .then(() => `answered in ${Date.now() - asked} ms`)
+        .catch((error: unknown) => String((error as Error).message));
+    };
+    const ping = async (sessionId: string): Promise<string> =>
+      `${await ask("Page.getFrameTree", sessionId)}; renderer ${await ask("DOM.getDocument", sessionId)}`;
+    const tab = this.activeTab();
+    if (tab !== undefined) report.page = await ping(tab.sessionId);
+    const pages: Record<string, string> = {};
+    const frames: Record<string, string> = {};
+    for (const each of this.tabs.values()) {
+      pages[each.sessionId] = await ping(each.sessionId);
+      for (const child of each.session.childFrames())
+        frames[child.sessionId] = await ping(child.sessionId);
+    }
+    report.pages = pages;
+    report.frames = frames;
+    return report;
   }
 
   activeTab(): Tab | undefined {
@@ -306,8 +423,9 @@ export class HeadlessNode {
           }
         )?.targetInfo;
         if (!info?.targetId || info.type !== "page") return;
-        if (this.tabs.has(info.targetId)) return;
         if (this.tabs.size === 0) return; // the first tab attaches itself
+        // `attach` is once per target: a tab `openTab` is opening is joined,
+        // not attached a second time.
         void this.attach(info.targetId, info.url ?? "").catch(() => undefined);
         return;
       }
@@ -417,6 +535,7 @@ export class HeadlessNode {
     this.viewer = undefined;
     this.tabs.clear();
     this.bySession.clear();
+    this.attaching.clear();
     this.connection?.close(reason);
     this.options.emit({
       type: "event",
@@ -523,22 +642,34 @@ export class HeadlessNode {
     };
     // The ack is not optional: Chromium sends the next frame only after the
     // previous one is acknowledged, so a missed ack is a stream that stops.
-    if (typeof frame.sessionId === "number") {
+    // It is also the only brake there is: a viewer with a send queue gets it
+    // back only once the frame is on the wire (or dropped for a newer one).
+    let acked = false;
+    const ack = (): void => {
+      if (acked || typeof frame.sessionId !== "number") return;
+      acked = true;
       void this.raw(
         "Page.screencastFrameAck",
         { sessionId: frame.sessionId },
         sessionId,
       ).catch(() => undefined);
-    }
+    };
     const viewer = this.viewer;
-    if (viewer === undefined || typeof frame.data !== "string") return;
+    if (viewer === undefined || typeof frame.data !== "string") {
+      ack();
+      return;
+    }
     const bytes = Buffer.from(frame.data, "base64");
     this.frames += 1;
-    viewer.send(
-      JSON.stringify(
-        frameHeader(this.frames, frame.metadata, this.viewport, bytes.length),
-      ),
+    const header = JSON.stringify(
+      frameHeader(this.frames, frame.metadata, this.viewport, bytes.length),
     );
+    if (viewer.sendFrame !== undefined) {
+      viewer.sendFrame(header, bytes, ack);
+      return;
+    }
+    ack();
+    viewer.send(header);
     viewer.send(bytes);
   }
 
@@ -549,8 +680,13 @@ export class HeadlessNode {
    * about pixels) and a person's own input, whose gate is the lease rather
    * than the allowlist — see the note at the top of `viewer.ts`. Everything an
    * agent causes goes through {@link CdpSession.send}.
+   *
+   * `async` on purpose: with no browser running, {@link need} throws, and the
+   * callers that fire and forget (`void this.raw(…).catch(…)`, the frame ack
+   * among them) only catch a rejection. A synchronous throw from the frame ack
+   * escaped the pipe's `data` listener as an uncaught exception.
    */
-  private raw(
+  private async raw(
     method: string,
     params: Record<string, unknown>,
     sessionId: string,

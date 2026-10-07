@@ -8,14 +8,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { TARGETS, desktopAssets } from "./artifacts.mjs";
+import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
+import { TARGETS, desktopAssets, updaterFeedFile } from "./artifacts.mjs";
 import {
   BUNDLE_KINDS,
+  builderFeedFile,
   findBundle,
   isReleaseAsset,
   matchesArch,
+  parseFeed,
   stageDesktop,
 } from "./stage-desktop.mjs";
 
@@ -30,6 +34,37 @@ function writeOutput(bundle, name) {
   mkdirSync(bundle, { recursive: true });
   writeFileSync(join(bundle, name), `${name} bytes\n`);
   return join(bundle, name);
+}
+
+/**
+ * The manifest electron-builder writes beside the bundles, describing the
+ * given output files by their real bytes. `urls` lets a test spell an entry the
+ * way the packager does (a space in a file name becomes "-" there).
+ */
+function writeBuilderFeed(
+  bundle,
+  feedName,
+  entries,
+  { version = VERSION, hex = false } = {},
+) {
+  const lines = [`version: ${version}`, "files:"];
+  for (const { file, url = file } of entries) {
+    const bytes = readFileSync(join(bundle, file));
+    const digest = createHash("sha512")
+      .update(bytes)
+      .digest(hex ? "hex" : "base64");
+    lines.push(
+      `  - url: ${url}`,
+      `    sha512: ${digest}`,
+      `    size: ${bytes.length}`,
+    );
+  }
+  lines.push(
+    `path: ${entries[0].url ?? entries[0].file}`,
+    "sha512: x",
+    "releaseDate: '2026-10-03T00:00:00.000Z'",
+  );
+  writeFileSync(join(bundle, feedName), `${lines.join("\n")}\n`);
 }
 
 test("every bundle a target publishes is one this script knows how to find", () => {
@@ -153,6 +188,8 @@ test("the architecture token is matched as a whole word", () => {
     ["armadra_0.1.0_amd64.deb", "linux-x86_64"],
     ["Armadra Setup 0.1.0-x64.exe", "windows-x86_64"],
     ["Armadra Setup 0.1.0-arm64.exe", "windows-aarch64"],
+    ["Armadra-Setup-0.1.0-x64.exe", "windows-x86_64"],
+    ["Armadra-Setup-0.1.0-arm64.exe", "windows-aarch64"],
   ])
     assert.equal(matchesArch(name, target), true, `${name} / ${target}`);
   for (const [name, target] of [
@@ -184,7 +221,9 @@ test("a Linux release is renamed to the three names it publishes", () => {
     writeOutput(bundle, "Armadra-0.1.0.AppImage");
     writeOutput(bundle, "armadra_0.1.0_amd64.deb");
     writeOutput(bundle, "armadra-0.1.0.x86_64.rpm");
-    writeOutput(bundle, "latest-linux.yml");
+    writeBuilderFeed(bundle, "latest-linux.yml", [
+      { file: "Armadra-0.1.0.AppImage" },
+    ]);
     const out = join(root, "artifacts");
     const { staged, missing } = stageDesktop({
       target: "linux-x86_64",
@@ -200,6 +239,7 @@ test("a Linux release is renamed to the three names it publishes", () => {
         `Armadra_${VERSION}_linux-x86_64.AppImage`,
         `Armadra_${VERSION}_linux-x86_64.deb`,
         `Armadra_${VERSION}_linux-x86_64.rpm`,
+        updaterFeedFile("linux-x86_64"),
       ].sort(),
     );
     assert.deepEqual(staged.map((item) => item.kind).sort(), [
@@ -218,6 +258,10 @@ test("macOS publishes the zip the updater applies and the dmg a person mounts", 
     const bundle = join(root, "release");
     writeOutput(bundle, "Armadra-0.1.0-arm64.dmg");
     writeOutput(bundle, "Armadra-0.1.0-arm64-mac.zip");
+    writeBuilderFeed(bundle, "latest-mac.yml", [
+      { file: "Armadra-0.1.0-arm64-mac.zip" },
+      { file: "Armadra-0.1.0-arm64.dmg" },
+    ]);
     const out = join(root, "artifacts");
     const { missing } = stageDesktop({
       target: "darwin-aarch64",
@@ -230,6 +274,7 @@ test("macOS publishes the zip the updater applies and the dmg a person mounts", 
     assert.deepEqual(readdirSync(out).sort(), [
       `Armadra_${VERSION}_darwin-aarch64.dmg`,
       `Armadra_${VERSION}_darwin-aarch64.zip`,
+      updaterFeedFile("darwin-aarch64"),
     ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -240,8 +285,12 @@ test("Windows publishes the installer the updater runs and the portable zip", ()
   const root = scratch();
   try {
     const bundle = join(root, "release");
-    writeOutput(bundle, "Armadra Setup 0.1.0.exe");
+    // The name `nsis.artifactName` now produces: no space, an arch token.
+    writeOutput(bundle, "Armadra-Setup-0.1.0-x64.exe");
     writeOutput(bundle, "Armadra-0.1.0-x64-win.zip");
+    writeBuilderFeed(bundle, "latest.yml", [
+      { file: "Armadra-Setup-0.1.0-x64.exe" },
+    ]);
     const out = join(root, "artifacts");
     const { missing } = stageDesktop({
       target: "windows-x86_64",
@@ -254,6 +303,7 @@ test("Windows publishes the installer the updater runs and the portable zip", ()
     assert.deepEqual(readdirSync(out).sort(), [
       `Armadra_${VERSION}_windows-x86_64-portable.zip`,
       `Armadra_${VERSION}_windows-x86_64-setup.exe`,
+      updaterFeedFile("windows-x86_64"),
     ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -312,6 +362,169 @@ test("a missing plain installer is a failure whether or not updates are required
     });
     assert.equal(missing.length, 1);
     assert.match(missing[0], /rpm/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/* ------------------------- electron-updater feeds ------------------------- */
+
+test("electron-builder's feed name is the one each target's runner writes", () => {
+  assert.equal(builderFeedFile("darwin-aarch64"), "latest-mac.yml");
+  assert.equal(builderFeedFile("darwin-x86_64"), "latest-mac.yml");
+  assert.equal(builderFeedFile("windows-aarch64"), "latest.yml");
+  assert.equal(builderFeedFile("linux-x86_64"), "latest-linux.yml");
+  assert.equal(builderFeedFile("linux-aarch64"), "latest-linux-arm64.yml");
+  // Published per target: six runners merge into one directory, and two of
+  // the packager's names would otherwise overwrite each other.
+  const published = TARGETS.map(updaterFeedFile);
+  assert.equal(new Set(published).size, TARGETS.length);
+});
+
+test("the staged feed names the published bundle, by its bytes, in base64", () => {
+  const root = scratch();
+  try {
+    const bundle = join(root, "release");
+    // One local `dist` writes both architectures and one latest-mac.yml that
+    // lists both; the x64 target's feed must list the x64 zip only.
+    writeOutput(bundle, "Armadra-0.1.0-arm64-mac.zip");
+    writeOutput(bundle, "Armadra-0.1.0-mac.zip");
+    writeOutput(bundle, "Armadra-0.1.0.dmg");
+    writeBuilderFeed(
+      bundle,
+      "latest-mac.yml",
+      [
+        { file: "Armadra-0.1.0-arm64-mac.zip" },
+        { file: "Armadra-0.1.0-mac.zip" },
+      ],
+      { hex: true },
+    );
+    const out = join(root, "artifacts");
+    const { missing, feed } = stageDesktop({
+      target: "darwin-x86_64",
+      bundle,
+      out,
+      version: VERSION,
+      requireUpdater: true,
+    });
+    assert.deepEqual(missing, []);
+    assert.equal(feed.name, "latest-darwin-x86_64-mac.yml");
+    const parsed = parseFeed(readFileSync(feed.path, "utf8"));
+    const zip = `Armadra_${VERSION}_darwin-x86_64.zip`;
+    const bytes = readFileSync(join(out, zip));
+    assert.equal(parsed.version, VERSION);
+    assert.deepEqual(parsed.files, [
+      {
+        url: zip,
+        sha512: createHash("sha512").update(bytes).digest("base64"),
+        size: String(bytes.length),
+      },
+    ]);
+    assert.equal(parsed.path, zip);
+    assert.equal(parsed.sha512, parsed.files[0].sha512);
+    assert.equal(parsed.releaseDate, "2026-10-03T00:00:00.000Z");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a missing feed is tolerated unsigned and refused when required", () => {
+  const root = scratch();
+  try {
+    const bundle = join(root, "release");
+    writeOutput(bundle, "Armadra-0.1.0.AppImage");
+    writeOutput(bundle, "armadra_0.1.0_amd64.deb");
+    writeOutput(bundle, "armadra-0.1.0.x86_64.rpm");
+    const options = { target: "linux-x86_64", bundle, version: VERSION };
+    const tolerated = stageDesktop({
+      ...options,
+      out: join(root, "unsigned"),
+      requireUpdater: false,
+    });
+    assert.deepEqual(tolerated.missing, []);
+    assert.equal(tolerated.feed, null);
+    const refused = stageDesktop({
+      ...options,
+      out: join(root, "signed"),
+      requireUpdater: true,
+    });
+    assert.deepEqual(refused.missing, ["feedMissing"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a feed that describes other bytes or another version is refused", () => {
+  const root = scratch();
+  try {
+    const bundle = join(root, "release");
+    writeOutput(bundle, "Armadra-0.1.0.AppImage");
+    writeOutput(bundle, "armadra_0.1.0_amd64.deb");
+    writeOutput(bundle, "armadra-0.1.0.x86_64.rpm");
+    writeBuilderFeed(bundle, "latest-linux.yml", [
+      { file: "armadra_0.1.0_amd64.deb", url: "Armadra-0.1.0.AppImage" },
+    ]);
+    const options = {
+      target: "linux-x86_64",
+      bundle,
+      version: VERSION,
+      requireUpdater: false,
+    };
+    const mismatch = stageDesktop({ ...options, out: join(root, "a") });
+    assert.equal(mismatch.missing.length, 1);
+    assert.match(mismatch.missing[0], /^feedMismatch/);
+    assert.equal(mismatch.feed, null);
+
+    writeBuilderFeed(
+      bundle,
+      "latest-linux.yml",
+      [{ file: "Armadra-0.1.0.AppImage" }],
+      {
+        version: "0.1.9",
+      },
+    );
+    const stale = stageDesktop({ ...options, out: join(root, "b") });
+    assert.match(stale.missing[0], /^feedVersion/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The installer name electron-builder is told to write must have no space:
+ * Azure Artifact Signing's module splits its file list on spaces and signs
+ * nothing (external services §2.2, electron-builder #8626). And whatever it
+ * expands to has to be one `findBundle` finds for its own architecture.
+ */
+test("the NSIS installer name has no space and is found for both architectures", () => {
+  const config = readFileSync(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../apps/desktop/electron-builder.yml",
+    ),
+    "utf8",
+  );
+  const nsis = /^nsis:\n(?:[ \t].*\n)*?\s+artifactName:\s*(.+)$/m.exec(config);
+  assert.ok(nsis, "nsis.artifactName is set");
+  const pattern = nsis[1].trim();
+  assert.doesNotMatch(pattern, /\s/);
+  const root = scratch();
+  try {
+    for (const [arch, target] of [
+      ["x64", "windows-x86_64"],
+      ["arm64", "windows-aarch64"],
+    ]) {
+      const bundle = join(root, arch);
+      const name = pattern
+        .replace("${version}", "0.1.0")
+        .replace("${arch}", arch)
+        .replace("${ext}", "exe");
+      writeOutput(bundle, name);
+      assert.equal(
+        findBundle({ bundle, kind: "nsis", target }),
+        join(bundle, name),
+      );
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { Bell, Check, X } from "lucide-react";
 import { toast } from "sonner";
 
-import { agentLabel } from "../agent/launch";
+import { agentLabel, agentTextColorVar } from "../agent/launch";
 import { basename, type SessionRow as SessionRowData } from "../agent/sessions";
 import { isAttention, useAgentStatusStore } from "../agent/status-store";
 import { runtimeApi } from "../api/client";
@@ -21,15 +21,16 @@ import { formatDuration } from "../lib/format";
 import { useT } from "../app/preferences-store";
 import { useCanvasStore } from "../store/canvas-store";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { ColorDot } from "../ui/color-dot";
 import { IconButton } from "../ui/icon-button";
@@ -69,6 +70,12 @@ export function SessionRow({ row }: { row: SessionRowData }) {
   // 名字与颜色都走 `agent/launch`：自定义 Agent 不在内置注册表里，
   // 得靠 `GET /api/agents` 那份快照才认得（§24.1）。
   const agentId = row.agentId;
+  // 会话行带上 core 报的驱动方式；旧 core 不报时退回节点数据里写明的那个。
+  const nodeDriver = useCanvasStore((state) => {
+    const node = state.document?.nodes.find((item) => item.id === row.nodeId);
+    return node?.data.kind === "terminal" ? node.data.agent?.driver : undefined;
+  });
+  const acp = row.backend ? row.backend === "acp" : nodeDriver === "acp";
 
   const activate = () => {
     markRead(row.nodeId);
@@ -128,7 +135,7 @@ export function SessionRow({ row }: { row: SessionRowData }) {
       ) : (
         <Button
           variant="ghost"
-          className="motion-hover h-auto min-h-[40px] flex-1 flex-col items-stretch gap-px rounded-[var(--r-control)] px-2 py-1 font-normal hover:bg-[var(--hover)] data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_15%,transparent)] data-[selected=true]:text-[var(--brand)]"
+          className="motion-hover h-auto min-h-[40px] flex-1 flex-col items-stretch gap-px rounded-[var(--r-control)] px-2 py-1 font-normal hover:bg-[var(--hover)] data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_15%,transparent)] data-[selected=true]:text-[var(--brand-text)]"
           data-selected={selected ? "true" : undefined}
           title={row.cwd}
           onClick={activate}
@@ -154,8 +161,21 @@ export function SessionRow({ row }: { row: SessionRowData }) {
             <span className="flex-1 truncate text-left text-[length:var(--text-body)]">
               {row.title}
             </span>
+            {acp && (
+              <Badge
+                variant="outline"
+                data-slot="session-row-acp"
+                className="h-4 shrink-0 px-1 text-[length:var(--text-caption)] font-normal"
+              >
+                {t("acp.backend")}
+              </Badge>
+            )}
             {agentId && (
-              <span className="shrink-0 text-[length:var(--text-caption)] text-muted-foreground">
+              <span
+                data-slot="session-row-agent"
+                className="shrink-0 text-[length:var(--text-caption)]"
+                style={{ color: agentTextColorVar(agentId) }}
+              >
                 {agentLabel(agentId)}
               </span>
             )}
@@ -177,24 +197,26 @@ export function SessionRow({ row }: { row: SessionRowData }) {
         <X />
       </IconButton>
 
-      <AlertDialog open={confirming} onOpenChange={setConfirming}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+      <ResponsiveAlertDialog open={confirming} onOpenChange={setConfirming}>
+        <ResponsiveAlertDialogContent>
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t("sessions.terminateTitle", { title: row.title })}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
+            </ResponsiveAlertDialogTitle>
+            <ResponsiveAlertDialogDescription>
               {t("sessions.terminateDescription")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("sessions.cancel")}</AlertDialogCancel>
-            <AlertDialogAction onClick={terminate}>
+            </ResponsiveAlertDialogDescription>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("sessions.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction onClick={terminate}>
               {t("sessions.terminateConfirm")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </div>
   );
 }

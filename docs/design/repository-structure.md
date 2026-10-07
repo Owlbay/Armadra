@@ -54,9 +54,10 @@
 │   └── research/              研究材料
 ├── assets/brand/              Logo 源文件（第 2 步已迁入）
 ├── .github/workflows/         CI
-├── AGENTS.md CLAUDE.md README.md LICENSE
+├── AGENTS.md CLAUDE.md README.md CHANGELOG.md LICENSE
 ├── armadra.sh                 开发者入口，内部只调用 tools/ 与包脚本
 ├── package.json pnpm-workspace.yaml tsconfig.base.json
+├── patches/                   pnpm 依赖补丁，理由写在 pnpm-workspace.yaml 对应条目旁
 ├── Cargo.toml Cargo.lock
 └── repo.rules.json            §3 规则的机器可读版本，供 tools/repo-check 读取
 ```
@@ -125,12 +126,13 @@
 
 ### 3.6 仓库卫生
 
-| 规则                                                                           | 校验方式                  |
-| ------------------------------------------------------------------------------ | ------------------------- |
-| 禁止提交：`output/`、`*.db*`、`.idea/`、`.playwright-cli/`、`dist/`、`target/` | `git ls-files` 匹配黑名单 |
-| 根目录只允许白名单文件                                                         | 目录列表比对              |
-| 提交信息 `type(scope): subject`，scope 取自目录名                              | commit-msg 钩子（可选）   |
-| 分支与 worktree 命名 `feature/`、`fix/`、`docs/` 前缀                          | 文档约定，不强制          |
+| 规则                                                                                              | 校验方式                                                  |
+| ------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| 禁止提交：`output/`、`*.db*`、`.idea/`、`.playwright-cli/`、`dist/`、`target/`                    | `git ls-files` 匹配黑名单                                 |
+| 根目录只允许白名单文件                                                                            | 目录列表比对                                              |
+| 上游锁版：`repo.rules.json` 的 `pinnedVersions`（现为 `@orpc/*`）精确版本、非预发布、全树同一版本 | 读各 `package.json` 与 `pnpm-lock.yaml` 的 `packages:` 段 |
+| 提交信息 `type(scope): subject`，scope 取自目录名                                                 | commit-msg 钩子（可选）                                   |
+| 分支与 worktree 命名 `feature/`、`fix/`、`docs/` 前缀                                             | 文档约定，不强制                                          |
 
 ## 4. 校验入口
 

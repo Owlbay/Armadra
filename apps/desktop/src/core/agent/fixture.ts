@@ -7,7 +7,8 @@ import { EventBus } from "../bus";
 import type { WorkspaceEvent } from "../bus";
 import { createBoard } from "../canvas/boards";
 import { putContextLinks } from "../canvas/context-links";
-import { type OpenedDatabase, openDatabase } from "../db/open";
+import type { OpenedDatabase } from "../db/open";
+import { openFreshDatabase } from "../db/fresh.fixture";
 import { CoreServer } from "../http/server";
 import type { CoreRequest } from "../http/router";
 import { createLog, nodePlatform } from "../platform";
@@ -141,6 +142,9 @@ export function stubTerminal(): StubTerminal {
 
 export interface AgentFixture {
   readonly database: DatabaseSync;
+  /** 装好 agent 域路由的那台 core 服务（对偶测试要在它上面起监听）。 */
+  readonly server: CoreServer;
+  readonly platform: ReturnType<typeof nodePlatform>;
   readonly directory: string;
   readonly workspaceId: string;
   readonly boardId: string;
@@ -173,10 +177,10 @@ export interface AgentFixture {
 
 export function agentFixture(): AgentFixture {
   const directory = canonicalize(mkdtempSync(join(tmpdir(), "armadra-agent-")));
-  const opened: OpenedDatabase = openDatabase({
-    file: join(directory, "canvas.db"),
-    migrationsDir: migrationsDir(),
-  });
+  const opened: OpenedDatabase = openFreshDatabase(
+    join(directory, "canvas.db"),
+    migrationsDir(),
+  );
   const database = opened.database;
   const log = createLog("error");
   const platform = nodePlatform({
@@ -250,6 +254,8 @@ export function agentFixture(): AgentFixture {
 
   const fixture: AgentFixture = {
     database,
+    server,
+    platform,
     directory,
     workspaceId: workspace.id,
     boardId: board.id,

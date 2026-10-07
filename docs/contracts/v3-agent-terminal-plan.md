@@ -96,7 +96,7 @@ z-index 栈固定为：画布内容 0 → pills 5 → sessions 12 → dock 20 �
 
 头部 `padding 6px 8px; gap 8px; bg-panel-header; cursor grab`，从左到右：折叠三角 → 12px 色点（点击弹 7 色调色板 Popover）→ 标题（点击变 input，`max-w-[220px]` 省略）→ 会话名 chip → Agent chip（品牌色）→ 状态胶囊 → spacer → 右侧图标钮：刷新 ⟳ / 搜索 / 最大化 / 关闭 ×。
 
-状态胶囊：9.5px / 700 / `tracking-[.06em]` 全大写 + 前置 7px 圆点：`RUNNING`（陶土色，点脉冲）· `NEEDS YOU`（红，脉冲）· `TURN FAILED`（红，不脉冲）· `QUEUED`（灰，尾随 ▶）· `PAUSED`（灰）。`blocked` 且有 `pendingId` 时头部直接出现 `✓ 允许` / `✕ 拒绝` 两个内联按钮。
+状态胶囊：9.5px / 700 / `tracking-[.06em]` 全大写 + 前置 7px 圆点：`RUNNING`（陶土色，点脉冲）· `NEEDS YOU`（橙，脉冲）· `TURN FAILED`（红，不脉冲）（2026-09-30：NEEDS YOU 由红改橙，减少动效时不再只靠脉冲区分两者）· `QUEUED`（灰，尾随 ▶）· `PAUSED`（灰）。`blocked` 且有 `pendingId` 时头部直接出现 `✓ 允许` / `✕ 拒绝` 两个内联按钮。
 
 Agent 品牌色：Claude `#d97757`、Codex `#10a37f`、Gemini `#4285f4`、OpenCode `#a78bfa`。节点调色板 7 色：`#0a84ff #32d74b #ffd60a #ff453a #bf5af2 #6ac4dc #ff9f0a`。
 

@@ -50,10 +50,24 @@ import {
  *   * **Exit is conservative.** The host leaves when it owns no live session
  *     and has owned none for the idle period. While one session lives it
  *     stays, forever if need be.
+ *   * **Holding nothing for nobody is not a reason to stay.** With no live
+ *     session *and* no authenticated client (no core connected), the host
+ *     leaves after {@link DEFAULT_ORPHAN_EXIT_MS}: a process that would sit
+ *     on `Armadra.exe` for half an hour after the app quit is exactly what
+ *     an uninstall or an upgrade then has to kill. A core that connects in
+ *     that window cancels it. `shutdownIfIdle` is the same rule, asked for
+ *     outright by the shell on quit and by the installer.
  */
 
 /** How long the host stays alive after its last session ended. */
 export const DEFAULT_IDLE_EXIT_MS = 30 * 60 * 1000;
+
+/**
+ * How long the host stays when it owns no live session and no client is
+ * connected. Short, because nothing is lost by leaving: the next core to need
+ * a host starts one.
+ */
+export const DEFAULT_ORPHAN_EXIT_MS = 10_000;
 
 /** How often the idle check runs. */
 const TICK_MS = 5_000;
@@ -96,6 +110,7 @@ export interface SessionHostOptions {
   readonly key: Buffer;
   readonly version: string;
   readonly idleExitMs?: number;
+  readonly orphanExitMs?: number;
   readonly tickMs?: number;
   /** Injected by the tests; production opens a real ConPTY. */
   readonly spawn?: PtySpawner;
@@ -117,6 +132,7 @@ export class SessionHost {
   private readonly verifier: HandshakeVerifier;
   private readonly spawn: PtySpawner;
   private readonly idleExitMs: number;
+  private readonly orphanExitMs: number;
   private readonly tickMs: number;
   private readonly log: (line: string) => void;
   private readonly instanceId: string;
@@ -125,12 +141,18 @@ export class SessionHost {
   private nextConnection: ConnectionId = 1;
   private idleSince: number | undefined = Date.now();
   private stopping: Promise<void> | undefined;
-  private readonly leaving: (() => void)[] = [];
+  private readonly leaving: ((reason: string) => void)[] = [];
+  /** Set once the host has decided to go; nothing new is started after it. */
+  private leavingDecided = false;
+  /** Set once the leaving listeners have been told. */
+  private departed = false;
+  private orphanTimer: NodeJS.Timeout | undefined;
 
   constructor(private readonly options: SessionHostOptions) {
     this.verifier = new HandshakeVerifier(options.key, options.endpoint);
     this.spawn = options.spawn ?? openConsole;
     this.idleExitMs = options.idleExitMs ?? DEFAULT_IDLE_EXIT_MS;
+    this.orphanExitMs = options.orphanExitMs ?? DEFAULT_ORPHAN_EXIT_MS;
     this.tickMs = options.tickMs ?? TICK_MS;
     this.log = options.log ?? (() => {});
     // Cheap and sufficient: it only has to differ between runs of this
@@ -139,9 +161,14 @@ export class SessionHost {
     this.instanceId = `${process.pid}-${Date.now()}`;
   }
 
-  /** Resolves when the host has decided to leave. */
-  onLeaving(listener: () => void): void {
+  /** Called once, with the reason, when the host has decided to leave. */
+  onLeaving(listener: (reason: string) => void): void {
     this.leaving.push(listener);
+  }
+
+  /** Whether the host has decided to leave (and refuses new sessions). */
+  get isLeaving(): boolean {
+    return this.leavingDecided;
   }
 
   /**
@@ -168,6 +195,9 @@ export class SessionHost {
         this.log(`session host listening on ${this.options.endpoint}`);
         this.ticker = setInterval(() => void this.tick(), this.tickMs);
         this.ticker.unref?.();
+        // Started by a core that is about to connect; if none does, there is
+        // nobody to serve.
+        this.reconsiderOrphan();
         resolve();
       });
     });
@@ -189,6 +219,8 @@ export class SessionHost {
   private async shutdown(): Promise<void> {
     if (this.ticker !== undefined) clearInterval(this.ticker);
     this.ticker = undefined;
+    if (this.orphanTimer !== undefined) clearTimeout(this.orphanTimer);
+    this.orphanTimer = undefined;
     for (const connection of [...this.connections.values()]) {
       this.tell(connection.id, {
         type: "bye",
@@ -257,6 +289,56 @@ export class SessionHost {
     if (this.table.allOver && this.idleSince === undefined) {
       this.idleSince = Date.now();
     }
+    this.reconsiderOrphan();
+  }
+
+  /** Decides to leave, once; every later call is a no-op. */
+  private leave(reason: string): void {
+    if (this.departed) return;
+    this.departed = true;
+    this.decideToLeave();
+    this.log(`${reason}; leaving`);
+    for (const listener of this.leaving.splice(0)) listener(reason);
+  }
+
+  private decideToLeave(): void {
+    this.leavingDecided = true;
+    if (this.orphanTimer !== undefined) clearTimeout(this.orphanTimer);
+    this.orphanTimer = undefined;
+  }
+
+  /** Whether any connection has passed the handshake — a core, in practice. */
+  private hasClient(): boolean {
+    for (const connection of this.connections.values()) {
+      if (connection.greeted) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Arms or disarms the short exit for "no live session and nobody
+   * connected". Called wherever either half can change: a greeting, a
+   * connection going, a session starting or ending.
+   */
+  private reconsiderOrphan(): void {
+    const orphaned =
+      this.server !== undefined &&
+      !this.leavingDecided &&
+      this.table.allOver &&
+      !this.hasClient();
+    if (!orphaned) {
+      if (this.orphanTimer !== undefined) clearTimeout(this.orphanTimer);
+      this.orphanTimer = undefined;
+      return;
+    }
+    if (this.orphanTimer !== undefined) return;
+    this.orphanTimer = setTimeout(() => {
+      this.orphanTimer = undefined;
+      if (this.table.allOver && !this.hasClient()) {
+        this.leave(`no live session and no client for ${this.orphanExitMs}ms`);
+      }
+    }, this.orphanExitMs);
+    this.orphanTimer.unref?.();
   }
 
   /**
@@ -269,14 +351,12 @@ export class SessionHost {
     if (over && this.idleSince === undefined) this.idleSince = Date.now();
     if (!over) this.idleSince = undefined;
     if (this.table.drained) {
-      this.log("drained; leaving");
-      for (const listener of this.leaving.splice(0)) listener();
+      this.leave("drained");
       return;
     }
     const since = this.idleSince;
     if (since !== undefined && Date.now() - since >= this.idleExitMs) {
-      this.log(`idle for ${this.idleExitMs}ms; leaving`);
-      for (const listener of this.leaving.splice(0)) listener();
+      this.leave(`idle for ${this.idleExitMs}ms`);
     }
   }
 
@@ -381,6 +461,7 @@ export class SessionHost {
     this.log(
       `client greeted on connection ${connection.id}: ${message.client}`,
     );
+    this.reconsiderOrphan();
     this.tell(connection.id, {
       type: "welcome",
       protocol: PROTOCOL_MAJOR,
@@ -434,6 +515,7 @@ export class SessionHost {
     for (const key of this.table.disconnect(id)) {
       this.live.get(key)?.console.setPaused(false);
     }
+    if (connection.greeted) this.reconsiderOrphan();
   }
 
   /** The reader may resume for anything this connection had paused. */
@@ -569,7 +651,46 @@ export class SessionHost {
         this.ok(id, message.id);
         return;
       }
+      case "shutdownIfIdle":
+        this.shutdownIfIdle(id, message.id);
+        return;
     }
+  }
+
+  /**
+   * Leaves now when no live session is held; otherwise says so and stays.
+   *
+   * The answer is written **before** the decision takes effect, and the
+   * leaving waits for that write to be flushed: shutting down destroys every
+   * socket, and a reply still in a buffer would turn "yes, leaving" into a
+   * connection that simply went away.
+   */
+  private shutdownIfIdle(id: ConnectionId, requestId: number): void {
+    const connection = this.connections.get(id);
+    if (connection === undefined) return;
+    const leaving = this.table.allOver;
+    this.log(
+      `shutdownIfIdle on connection ${id}: ${leaving ? "leaving" : `staying for ${this.liveCount()} live session(s)`}`,
+    );
+    if (!leaving) {
+      this.ok(id, requestId, { leaving: false });
+      return;
+    }
+    // Decided now, so a create racing this request is refused rather than
+    // started and then torn down a moment later.
+    this.decideToLeave();
+    connection.socket.write(
+      jsonFrame({ type: "ok", id: requestId, leaving: true }),
+      () => this.leave("shutdownIfIdle"),
+    );
+  }
+
+  private liveCount(): number {
+    let count = 0;
+    for (const entry of this.table.entries()) {
+      if (!isOver(entry.state)) count += 1;
+    }
+    return count;
   }
 
   /**
@@ -602,6 +723,10 @@ export class SessionHost {
   }
 
   private create(id: ConnectionId, spec: CreateSpec & { id: number }): void {
+    if (this.leavingDecided) {
+      this.fail(id, spec.id, "draining", "the session host is shutting down");
+      return;
+    }
     // Reserve the row first, so two creates racing for one key cannot both
     // start a console.
     try {
@@ -658,6 +783,7 @@ export class SessionHost {
     if (entry !== undefined) entry.pid = console.pid;
     this.live.set(key, { console, replay, responder });
     this.idleSince = undefined;
+    this.reconsiderOrphan();
     this.ok(id, spec.id, { session: entry?.summary() });
   }
 
@@ -736,6 +862,7 @@ export class SessionHost {
     if (this.table.allOver && this.idleSince === undefined) {
       this.idleSince = Date.now();
     }
+    this.reconsiderOrphan();
     if (refusal !== undefined) {
       this.fail(id, requestId, "internal", refusal.message);
       return;

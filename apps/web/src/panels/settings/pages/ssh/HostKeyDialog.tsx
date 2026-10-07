@@ -6,24 +6,22 @@ import type { SshHost, SshHostKey, SshHostKeyScan } from "@armadra/shared";
 
 import { runtimeApi } from "@/api/client";
 import { useT } from "@/app/preferences-store";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 
 /**
  * 确认一台主机的公钥（远端补完设计 §3.6）。
@@ -83,7 +81,7 @@ export function HostKeyDialog({ host }: { host: SshHost }) {
         {t("ssh.hostKey.action")}
       </Button>
 
-      <Dialog
+      <ResponsiveDialog
         open={open}
         onOpenChange={(next) => {
           setOpen(next);
@@ -93,12 +91,12 @@ export function HostKeyDialog({ host }: { host: SshHost }) {
           }
         }}
       >
-        <DialogContent className="z-[var(--z-dialog)]">
-          <DialogHeader>
-            <DialogTitle>
+        <ResponsiveDialogContent className="z-[var(--z-dialog)]">
+          <ResponsiveDialogHeader>
+            <ResponsiveDialogTitle>
               {t("ssh.hostKey.title", { name: host.name })}
-            </DialogTitle>
-          </DialogHeader>
+            </ResponsiveDialogTitle>
+          </ResponsiveDialogHeader>
 
           {changed && (
             <div className="flex flex-col gap-1">
@@ -151,7 +149,7 @@ export function HostKeyDialog({ host }: { host: SshHost }) {
             ))}
           </div>
 
-          <DialogFooter>
+          <ResponsiveDialogFooter>
             <Button
               variant="ghost"
               size="sm"
@@ -171,42 +169,44 @@ export function HostKeyDialog({ host }: { host: SshHost }) {
             <Button size="sm" onClick={() => setOpen(false)}>
               {t("ssh.hostKey.close")}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </ResponsiveDialogFooter>
+        </ResponsiveDialogContent>
+      </ResponsiveDialog>
 
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={pending !== null}
         onOpenChange={(next) => {
           if (!next) setPending(null);
         }}
       >
-        <AlertDialogContent className="z-[var(--z-dialog)]">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+        <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t("ssh.hostKey.replaceTitle", {
                 fingerprint: pending?.fingerprint ?? "",
               })}
-            </AlertDialogTitle>
-          </AlertDialogHeader>
+            </ResponsiveAlertDialogTitle>
+          </ResponsiveAlertDialogHeader>
           <div className="flex flex-col gap-1">
             {scan?.known.map((fingerprint) => (
               <Known key={fingerprint} fingerprint={fingerprint} />
             ))}
           </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("ssh.dialog.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("ssh.dialog.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               onClick={() => {
                 if (pending)
                   trust.mutate({ line: pending.line, replace: true });
               }}
             >
               {t("ssh.hostKey.replaceConfirm")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </>
   );
 }

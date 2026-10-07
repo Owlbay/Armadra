@@ -12,6 +12,9 @@ Armadra 启动真实 CLI，保留各 CLI 的账户、模型选择、工具策略
 | Pi             | 位置参数（`argv`）                    | `--session PATH_OR_ID` | 进程内扩展 | 仅 CLI 默认                  |
 | Oh My Pi       | 位置参数（`argv`）                    | `--resume ID`          | 进程内扩展 | auto-edit / full-auto        |
 | GitHub Copilot | `--interactive TEXT`（`flag-prompt`） | `--resume ID`          | 命令 Hook  | auto-edit / full-auto / plan |
+| ama            | 位置参数（`argv`）                    | `--resume ID`          | 宿主适配器 | auto-edit / full-auto / plan |
+
+`ama` 是 Armadra 自己的协调 Agent（随包的 `@armadra/agent`，第七个内置 Agent），见下文「协调者与 runners」。
 
 「启动提示」这一列只描述**人**在这里敲一条带提示词的启动行时会拼成什么。Agent
 新建的节点不走这一列：`canvas open-agent` 的启动行从不带提示词，第一条任务由
@@ -20,7 +23,7 @@ Armadra 启动真实 CLI，保留各 CLI 的账户、模型选择、工具策略
 的意思是「永远不上命令行」。这张表与 `packages/shared/src/agents.ts`、
 `core/agent/registry.ts` 三方一致，由 `launch.test.ts` 的一条用例守着。
 
-Gemini CLI 于 2026-09-19 从产品移除（迁移 `0014_retire_gemini.sql` 清理其会话索引、状态、Hook 安装记录与终端节点上的 agent 绑定）。恢复能力表示可以正确构建已有会话 ID 的启动命令；当前历史会话索引仍只扫描 Claude/Codex，其他 CLI 可用自身会话选择器或上述命令恢复。六种 CLI 都能启动、选择模型、连接节点、主动读上下文、使用收件箱；子 Agent 与额度这类没有实现的能力不显示。CLI 自身扩展提供的工具能力与 Armadra 的适配能力是两件事。
+Gemini CLI 于 2026-09-19 从产品移除（迁移 `0014_retire_gemini.sql` 清理其会话索引、状态、Hook 安装记录与终端节点上的 agent 绑定）。恢复能力表示可以正确构建已有会话 ID 的启动命令；会话索引覆盖六种 CLI（[CLI 协作](../design/cli-collaboration.md) §3）。六种 CLI 都能启动、选择模型、连接节点、主动读上下文、使用收件箱；子 Agent 与额度这类没有实现的能力不显示。CLI 自身扩展提供的工具能力与 Armadra 的适配能力是两件事。
 
 Pi 的 `--resume` 打开选择器；指定会话要用 `--session`。OMP 的 `--plan` 选择规划模型，而 `--plan-yolo` 会自动执行规划，因此不能将它们冒充只读计划模式。Copilot 的 `-p/--prompt` 会进入非交互模式并在完成后退出，这里使用 `--interactive`。不支持的非默认权限模式会在启动前明确报错，不静默降级。设置页和终端菜单只提供有对应参数的权限模式；新建节点会采用保存的默认权限。
 
@@ -48,9 +51,9 @@ core 分不出也不会因此多给任何权限。区别只是省掉每个事件
 
 ## 集成：只在画布内注入
 
-Hook、技能（`SKILL.md`）与画布说明是一组**注入产物**，生成在 `<数据目录>/integration/<cli>/`，只经画布节点的启动行与终端环境交给 CLI；用户在画布外自己启动的 CLI 什么都看不到。各 CLI 的参数、恢复时的行为与 Codex 的信任记录见 [画布内注入](../design/canvas-only-integration.md) §3–§4。修订号仍是 `INTEGRATION_REVISION`（`<Hook 修订>×100 + <技能修订>`），变了就在下一次启动时重写产物；Hook 事件契约（`HOOK_CLIENT_REVISION`）不随之变。
+Hook、技能（`SKILL.md`）与画布说明是一组**注入产物**，生成在 `<数据目录>/integration/<cli>/`，由同目录下的启动器 `run/<cli>` 在 CLI 启动时交给它：画布节点的启动行是 `<launcher> <程序> <旗标>`，启动器路径由 `GET /api/agents` 每行的 `launcher` 给出（契约 §13.1），注入只在环境里有 `ARMADRA_NODE_ID` 时追加；在画布外重跑同一行、或用户自己启动的 CLI 什么都看不到。各 CLI 的参数与恢复时的行为见 [画布内注入](../design/canvas-only-integration.md) §3，启动器见 [画布启动器](../design/canvas-launcher.md)。修订号仍是 `INTEGRATION_REVISION`（`<Hook 修订>×100 + <技能修订>`），变了就在下一次启动时重写产物；Hook 事件契约（`HOOK_CLIENT_REVISION`）不随之变。
 
-唯一写进 CLI 自己配置的是 Codex 的信任记录（`~/.codex/config.toml` 里 `/<session-flags>/config.toml:…` 那几条）：Codex 只从那里读信任。升级后第一次启动会把旧版装进各 CLI 全局配置的 Hook、模块与技能备份后清掉，只做一次，结果记在 `<数据目录>/integration/global-migration.json`，集成页上可见。集成页没有「安装 / 卸载」，只有「重新生成」。
+数据目录之外不写任何文件：Codex 的 Hook 信任靠启动器追加的会话级旗标 `--dangerously-bypass-hook-trust`。升级后第一次启动会把旧版装进各 CLI 全局配置的 Hook、模块与技能备份后清掉，并清掉旧版本写进 `~/.codex/config.toml` 的 `/<session-flags>/` 信任记录，只做一次，结果记在 `<数据目录>/integration/global-migration.json`（`version: 2`），集成页上可见。集成页没有「安装 / 卸载」，只有「重新生成」。
 
 ### 旧残留与修复
 
@@ -162,19 +165,48 @@ Electron，第二行 bundle），设 `ELECTRON_RUN_AS_NODE=1`，把调用方的�
 
 `post` 成功仅表示消息已存储，不表示 Agent 已看到、已处理或完成任务。`ack` 表示接收者主动确认该消息，仍不等同于用户验收。协议保留来源和稳定标识，后续可扩展任务状态、人工审核或其他客户端，而不改变现有 CLI 的提示词与配置。
 
-### 没有主动投递
+### 推式投递与打断
 
-Armadra 不把一个 Agent 的话打进另一个 Agent 的终端。原有的 `canvas send / reply / notify`、工作空间开关 `agentMessaging`、投递队列与投递门链都已删除：消息只进 `agent_mailbox`，由接收方自己读。
+拉取式信箱之外，`canvas send` 把一句任务投进目标终端：进投递队列，经驱动租约、半截输入门、前台进程门与画面门（目标停在 CLI 的启动对话框上或首投时看不到提示符就退回 `TARGET_NOT_AT_PROMPT`），目标空闲时才写；休眠的目标先唤醒再投；终态（过期、拒收、被门拦下）以回执回到发送方收件箱。语义与错误码见 [Agent 投递设计](../design/agent-delivery.md)，契约 §12.3、§22。ACP 驱动的目标同样经这条队列，写入落成 `session/prompt`。
 
-唯一保留的写入是 `canvas interrupt --to <已连线节点>`，它不带任何正文——只向目标会话发一个 Escape，用于打断跑偏的一轮。Escape 是一个键，不是一句话：它停下当前回合，不替换、不提交、也没有地方能夹带文字。
+`canvas interrupt --to <已连线节点>` 不带任何正文——只向目标会话发一个 Escape，用于打断跑偏的一轮。Escape 是一个键，不是一句话：它停下当前回合，不替换、不提交、也没有地方能夹带文字。
 
 授权与 mailbox 完全一致：调用者要有本运行时签发的节点令牌、目标要在调用者自己的连线文档里、且与调用者同工作空间（连线残留不能跨工作空间生效）。**没有空闲门**——打断一个正忙的 Agent 正是它的用途，而对着空闲提示符发 Escape 是空操作。前台进程门还在：目标终端当前跑的必须仍是它声称的那个 Agent，否则拒绝。每次都写 `board-log.jsonl`，`bodyChars` 记为 0。
 
 节点头部「更多 → 打断这一轮」是同一个键的手动入口，走用户自己按键的那条 socket，不经 hook 路由。它和上面的「中断」不是一回事：后者发 Ctrl+C 给前台进程组。
 
-`agent_deliveries` 表因为迁移已发布而保留，没有写者；`GET /api/workspaces/{id}/deliveries` 仍能读回历史行。
+Armadra 的协作设计以节点身份、作用域与投递门禁为边界：默认协作走持久化的拉取协议，推式投递只在门链全部放行时写入，避免把大段协作指令和无关上下文塞进每个 Agent 的会话。
 
-Armadra 的协作设计以节点身份、作用域与投递门禁为边界，采用持久化的拉取协议，将默认协作从终端输入移到应用收件箱，避免把大段协作指令和无关上下文塞进每个 Agent 的会话。
+## ACP 模式（会话视图）
+
+ACP 是同一个 Agent 节点的另一种驱动方式，不是第二条 Agent 通道（[ACP 会话视图](../design/acp-session-view.md)，契约 §14）。节点数据 `agent.driver: "acp"` 时 core 不开 PTY，直接起这家 CLI 的 ACP 入口；会话仍是 `terminal_sessions` 的一行（`backend_kind = 'acp'`），状态来源记为 `acp`，审批进同一张 `agent_approvals`，连线读取、`send`、`interrupt`、依赖编排与 Eco 休眠不变。
+
+| Agent    | ACP 入口                | 支持 | 接回会话 |
+| -------- | ----------------------- | ---- | -------- |
+| Claude   | `claude-agent-acp`      | 官方 | `load`   |
+| Codex    | `codex-acp`             | 官方 | `load`   |
+| OpenCode | `opencode acp`          | 原生 | `load`   |
+| Pi       | `pi-acp`                | 社区 | `load`   |
+| OMP      | `omp acp`               | 原生 | `load`   |
+| Copilot  | `copilot --acp --stdio` | 原生 | 不支持   |
+| ama      | `ama --mode acp`        | 原生 | `resume` |
+
+表的来源是 `core/acp/adapters.ts`；版本区间记在 `tools/release/compatibility.json`，由 C 档场景 12 真跑（`--record-compat`）填：Claude（claude-agent-acp 0.85.1）与 Pi（pi-acp 0.0.34）已记入；Codex、OpenCode、OMP、Copilot 等装好并登录的机器（[用户待办清单](../status/user-action-checklist.md)）。
+
+- 页面：节点头 `⋯` 或右键在「会话视图 / 终端视图」之间切换（`POST /api/acp/nodes/{id}/driver`，同一行上以另一种驱动接回 CLI 自己的会话）；会话视图里是消息流、工具调用、文件差异与权限卡。设置 → Agent 的「缺省视图」写 `agents.defaultDriver`；新建菜单的「新建 Agent…」向导只列有 ACP 入口的 Agent。
+- 画布工具：ACP 下没有终端可敲 `armadra-hook canvas`，core 开会话时把 `armadra-hook mcp`（stdio MCP，工具表即动词表）放进 `mcpServers`；ama 不加，它的画布工具来自宿主适配器。
+- 输出到画板：助手消息的 `⋯` 可落成便签、白板文字、编辑器节点（代码块写进 `.armadra/exports/acp/<nodeId>/`）或 Mermaid 白板对象，带回指来源节点的引用。
+- 表单与模型：Agent 发 `elicitation/create` 时会话视图出表单卡，答复只交给 Agent、不落库；开会话答出模型目录时输入框旁可换模型（`PUT /api/acp/sessions/{id}/model`，契约 §26.1–§26.2）。
+- 凭据：适配器起之前由 core 兑换节点凭据与 ama 模型密钥，只设给适配器进程（契约 §26.4）。
+- SSH 节点：适配器经 `ssh` 起在执行主机上，画布工具走 Worker 的 Hook 中继，凭据在远端不兑换（契约 §26.5）。
+
+## 协调者与 runners
+
+`ama` 在画布里经宿主适配器（`apps/desktop/src/agent-host/ama/`）直接调用画布动词，不走技能文本。它的子任务工具 `task` 由 runners 落成画布节点：内置六家、`ama` 自己与每个 `custom:*` 各注册一个 runner，`start` 是 `open-agent --task-id <会话:任务>`（同一任务 id 幂等，节点删了就新建并换绑），`wait()` 循环控制动词 `wait`（长轮询，`running / done / failed / blocked / needsInput`），成员在任务末尾按 `task:<id>:result` 键 `post` 回报（成员技能里有这一句）。`blocked` 只报告、不替人答审批；ama 自己的审批先在画布上等答复，等不到让给终端对话框。
+
+工作流把一次协作沉淀成模板：协调者经 `workflow-propose` 交草案，人在工作面板「工作流」页确认成模板、填参数起跑，或在自动化里定时运行；每次运行在画布上建一个 Frame 与各角色节点，关卡停下等人答复，运行记录可回看与对比（契约 §15）。
+
+模型密钥只在密钥后端（`armadra-ama-<供应商>`），启动器凭节点 token 经 hook 通道兑换、只设给 ama 进程；Windows 上由 `armadra-launch.exe` 兑换；SSH 执行主机不兑换。runner 把 `task` 的 `cwd` / `resume` 映射成 `open-agent --cwd` / `--resume`（`--cwd` 只认本机工作区内的目录），core 拒绝时去掉那一项重起一次；ama 节点头部的「N 成员」打开分派抽屉，列出各成员任务的状态与汇总便签，失败的任务可重试（契约 §15.5、§15.7）。
 
 ## 对话交接
 

@@ -25,6 +25,8 @@ import type { StatusTone } from "../ui/status-pill";
 import { runtimeApi } from "../api/client";
 import { useCanvasStore } from "../store/canvas-store";
 import { agentGateway } from "./gateway";
+import { currentSource } from "../api/source";
+import { activeSourceId, scoped } from "../sources/scope";
 
 /** 迟到的 `working` 在这个窗口内不能覆盖 `done`。 */
 export const DONE_HOLDOFF_MS = 3_000;
@@ -48,6 +50,7 @@ export interface StatusContext {
 }
 
 export interface AgentStatusState {
+  /** 键是 `${sourceId}:${nodeId}`（`sources/scope.ts`）：两个源里同名的节点不碰撞。 */
   statuses: Record<string, AgentStatus>;
   /** 每个节点最近一次进入 `done` 的时刻（毫秒），保持窗口用。 */
   doneAt: Record<string, number>;
@@ -58,18 +61,30 @@ export interface AgentStatusState {
    * 清未读：本地立刻清，同时把回执 POST 给 Runtime（否则重连 / 重启后
    * `GET /sessions` 又会把未读补回来）。`remote: false` 只在测试里用。
    */
-  markRead: (nodeId: string, options?: { remote?: boolean }) => void;
+  markRead: (
+    nodeId: string,
+    options?: { remote?: boolean; sourceId?: string },
+  ) => void;
   /** 权限已答复（或已过期）：丢掉 `pendingId`，头部按钮随之消失。 */
   resolveApproval: (pendingId: string) => void;
   /** 扫掉超过 `APPROVAL_TTL_MS` 的 `pendingId`。 */
   sweepApprovals: (now?: number) => void;
-  hydrate: (sessions: SessionSummary[], workspaceId?: string) => void;
+  hydrate: (
+    sessions: SessionSummary[],
+    workspaceId?: string,
+    sourceId?: string,
+  ) => void;
   handleEvent: (event: WorkspaceEvent, context?: StatusContext) => void;
   reset: () => void;
 }
 
 function isNodeSelected(nodeId: string): boolean {
-  return useCanvasStore.getState().selectedNodeIds.includes(nodeId);
+  const canvas = useCanvasStore.getState();
+  // 选区属于画布所在的那个源；别的源推来的帧不算「正在看」。
+  return (
+    canvas.sourceId === activeSourceId() &&
+    canvas.selectedNodeIds.includes(nodeId)
+  );
 }
 
 function isWindowFocused(): boolean {
@@ -83,10 +98,6 @@ function millis(timestamp: string): number {
 }
 
 /* ------------------------------- 已读回执 -------------------------------- */
-
-const RUNTIME_BASE: string =
-  (import.meta.env.VITE_RUNTIME_URL as string | undefined) ??
-  "http://127.0.0.1:43120";
 
 interface OptionalRuntimeApi {
   markAgentRead?: (nodeId: string) => Promise<unknown>;
@@ -113,8 +124,9 @@ export async function postAgentRead(
     return;
   }
   if (typeof fetch !== "function") return;
-  await fetch(
-    `${RUNTIME_BASE}/api/agent-status/${encodeURIComponent(nodeId)}/read`,
+  const source = currentSource();
+  await source.fetch(
+    `${source.httpBase}/api/agent-status/${encodeURIComponent(nodeId)}/read`,
     { method: "POST" },
   );
 }
@@ -126,7 +138,8 @@ export const useAgentStatusStore = create<AgentStatusState>((set, get) => ({
 
   upsert: (incoming, context) => {
     const now = context?.now ?? Date.now();
-    const previous = get().statuses[incoming.nodeId];
+    const key = scoped(incoming.nodeId);
+    const previous = get().statuses[key];
 
     // 乱序帧：只按时间戳判断，不按到达顺序。
     if (previous && millis(incoming.updatedAt) < millis(previous.updatedAt)) {
@@ -138,7 +151,7 @@ export const useAgentStatusStore = create<AgentStatusState>((set, get) => ({
     if (!previous && isSyntheticClose(incoming)) return;
 
     let state = incoming.state;
-    const doneAt = get().doneAt[incoming.nodeId];
+    const doneAt = get().doneAt[key];
     const holding =
       previous?.state === "done" &&
       incoming.state === "working" &&
@@ -166,15 +179,15 @@ export const useAgentStatusStore = create<AgentStatusState>((set, get) => ({
     const next: AgentStatus = { ...incoming, state, unread };
     set((current) => {
       const pendingSince = { ...current.pendingSince };
-      if (!next.pendingId) delete pendingSince[incoming.nodeId];
+      if (!next.pendingId) delete pendingSince[key];
       else if (previous?.pendingId !== next.pendingId) {
-        pendingSince[incoming.nodeId] = now;
+        pendingSince[key] = now;
       }
       return {
-        statuses: { ...current.statuses, [incoming.nodeId]: next },
+        statuses: { ...current.statuses, [key]: next },
         doneAt:
           state === "done" && previous?.state !== "done"
-            ? { ...current.doneAt, [incoming.nodeId]: now }
+            ? { ...current.doneAt, [key]: now }
             : current.doneAt,
         pendingSince,
       };
@@ -189,12 +202,13 @@ export const useAgentStatusStore = create<AgentStatusState>((set, get) => ({
   },
 
   markRead: (nodeId, options) => {
-    const status = get().statuses[nodeId];
+    const key = scoped(nodeId, options?.sourceId);
+    const status = get().statuses[key];
     if (!status || !status.unread) return;
     set((current) => ({
       statuses: {
         ...current.statuses,
-        [nodeId]: { ...current.statuses[nodeId]!, unread: false },
+        [key]: { ...current.statuses[key]!, unread: false },
       },
     }));
     if (options?.remote === false) return;
@@ -208,12 +222,12 @@ export const useAgentStatusStore = create<AgentStatusState>((set, get) => ({
         ([, status]) => status.pendingId === pendingId,
       );
       if (!entry) return current;
-      const [nodeId, status] = entry;
+      const [key, status] = entry;
       const { pendingId: _dropped, ...rest } = status;
       const pendingSince = { ...current.pendingSince };
-      delete pendingSince[nodeId];
+      delete pendingSince[key];
       return {
-        statuses: { ...current.statuses, [nodeId]: rest },
+        statuses: { ...current.statuses, [key]: rest },
         pendingSince,
       };
     }),
@@ -240,16 +254,17 @@ export const useAgentStatusStore = create<AgentStatusState>((set, get) => ({
    * 用 `GET /sessions` 的结果补齐镜像（冷启动、重连后）。
    * 只补有 Agent 的会话——普通终端没有状态可镜像——并且不覆盖更新的本地条目。
    */
-  hydrate: (sessions, workspaceId) =>
+  hydrate: (sessions, workspaceId, sourceId) =>
     set((current) => {
       const statuses = { ...current.statuses };
       let changed = false;
       for (const session of sessions) {
         if (!session.agentId) continue;
-        const previous = statuses[session.nodeId];
+        const key = scoped(session.nodeId, sourceId);
+        const previous = statuses[key];
         if (previous && millis(session.updatedAt) <= millis(previous.updatedAt))
           continue;
-        statuses[session.nodeId] = {
+        statuses[key] = {
           nodeId: session.nodeId,
           workspaceId: workspaceId ?? previous?.workspaceId ?? "",
           agentId: session.agentId,
@@ -284,33 +299,35 @@ export const useAgentStatusStore = create<AgentStatusState>((set, get) => ({
         }
         // Runtime 在 approval 之前已经推过一条 `blocked` 状态；这里只补
         // `pendingId`，不凭空造状态条目（缺 workspaceId / agentId）。
-        const previous = get().statuses[event.nodeId];
+        const key = scoped(event.nodeId);
+        const previous = get().statuses[key];
         if (!previous) return;
         const now = context?.now ?? Date.now();
         set((current) => ({
           statuses: {
             ...current.statuses,
-            [event.nodeId]: {
+            [key]: {
               ...previous,
               state: "blocked",
               pendingId: event.pendingId,
             },
           },
-          pendingSince: { ...current.pendingSince, [event.nodeId]: now },
+          pendingSince: { ...current.pendingSince, [key]: now },
         }));
         return;
       }
       case "terminal.exit": {
         // 进程没了就没有 Agent 状态可言，会话行改由 `alive=false` 表达。
-        const nodeId = event.nodeId;
-        if (!nodeId || !get().statuses[nodeId]) return;
+        if (!event.nodeId) return;
+        const key = scoped(event.nodeId);
+        if (!get().statuses[key]) return;
         set((current) => {
           const statuses = { ...current.statuses };
           const doneAt = { ...current.doneAt };
           const pendingSince = { ...current.pendingSince };
-          delete statuses[nodeId];
-          delete doneAt[nodeId];
-          delete pendingSince[nodeId];
+          delete statuses[key];
+          delete doneAt[key];
+          delete pendingSince[key];
           return { statuses, doneAt, pendingSince };
         });
         return;
@@ -323,8 +340,13 @@ export const useAgentStatusStore = create<AgentStatusState>((set, get) => ({
   reset: () => set({ statuses: {}, doneAt: {}, pendingSince: {} }),
 }));
 
-export function useAgentStatus(nodeId: string): AgentStatus | undefined {
-  return useAgentStatusStore((state) => state.statuses[nodeId]);
+export function useAgentStatus(
+  nodeId: string,
+  sourceId?: string,
+): AgentStatus | undefined {
+  return useAgentStatusStore(
+    (state) => state.statuses[scoped(nodeId, sourceId)],
+  );
 }
 
 /** 侧栏项目头的三个信号徽标（§3.5）。 */

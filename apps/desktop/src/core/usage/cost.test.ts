@@ -3,7 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { DatabaseSync } from "node:sqlite";
 import { AGENT_IDS } from "../agent/registry";
+import { collectFrom } from "../history/opencode";
 import {
   BUILT_IN_PRICES,
   CHUNK_BYTES,
@@ -19,6 +21,7 @@ import {
   priceFor,
   summarize,
   undated,
+  type SnapshotSource,
   type TokenTotals,
 } from "./cost";
 
@@ -698,7 +701,10 @@ describe("汇总", () => {
     expect(byAgent.map((one) => one.agent)).toEqual([...AGENT_IDS]);
     expect(
       byAgent.filter((one) => one.source === "local").map((one) => one.agent),
-    ).toEqual(["claude", "codex"]);
+    ).toEqual(["claude", "codex", "opencode", "pi", "omp", "copilot"]);
+    expect(byAgent.find((one) => one.agent === "opencode")?.unit).toBe(
+      "tokens",
+    );
     expect(byAgent.find((one) => one.agent === "codex")?.costUsd).toBe(1.25);
     expect(byAgent.find((one) => one.agent === "claude")?.costUsd).toBe(5);
     for (const one of byAgent.filter((entry) => entry.source === "none")) {
@@ -715,6 +721,44 @@ describe("汇总", () => {
     expect(
       summary.ranges["30d"].points.at(-1)?.agents.map((one) => one.agent),
     ).toEqual(["claude", "codex"]);
+  });
+
+  it("混合单位：totals 只合并 token，Copilot 行是请求数", async () => {
+    const result = {
+      ...scanned([[localToday(), "claude-opus-5", 1_000_000]]),
+      requestBuckets: new Map([
+        [bucketKey(localToday(), "copilot", "unknown"), 4],
+        [bucketKey(localDay(40), "copilot", "unknown"), 2],
+      ]),
+    };
+    const summary = summarize(result, BUILT_IN_PRICES, NOW);
+    const thirty = summary.ranges["30d"];
+    expect(thirty.totals.tokens.input).toBe(1_000_000);
+    expect(thirty.totals.costUsd).toBe(5);
+    expect(thirty.byModel.map((one) => one.model)).toEqual(["claude-opus-5"]);
+    expect(summary.today.tokens.input).toBe(1_000_000);
+    expect(summary.unpricedModels).toEqual([]);
+    const copilot = thirty.byAgent.find((one) => one.agent === "copilot");
+    expect(copilot).toMatchObject({
+      unit: "premiumRequests",
+      requests: 4,
+      costUsd: 0,
+      complete: true,
+      source: "local",
+    });
+    expect(copilot?.tokens.input).toBe(0);
+    const claude = thirty.byAgent.find((one) => one.agent === "claude");
+    expect(claude).toMatchObject({ unit: "tokens", requests: 0 });
+    // 窗口外的增量只进 all。
+    expect(
+      summary.ranges.all.byAgent.find((one) => one.agent === "copilot")
+        ?.requests,
+    ).toBe(6);
+    // 点上列出有请求数的 Copilot。
+    expect(thirty.points.at(-1)?.agents.map((one) => one.agent)).toEqual([
+      "claude",
+      "copilot",
+    ]);
   });
 
   it("agent 的 complete 和窗口是同一套规则：有没价格的模型就不完整", async () => {
@@ -850,5 +894,250 @@ describe("会话数", () => {
     expect(week.points.at(-2)?.sessions).toBe(2);
     expect(week.points.at(-3)?.sessions).toBe(0);
     expect(summary.ranges["24h"].sessions).toBe(0);
+  });
+});
+
+describe("快照式来源（OpenCode）", () => {
+  const NOW = Date.parse("2026-09-20T12:00:00Z");
+  const HOUR = 60 * 60_000;
+
+  interface Row {
+    readonly id: string;
+    readonly key: string;
+    readonly model: string;
+    readonly at: number;
+    readonly input: number;
+    readonly reportedCost?: number;
+  }
+
+  /** 和 OpenCode 适配器同一条规矩：取 `at >= sinceMs` 的，按 id 在 `seen` 里去重。 */
+  function source(
+    rows: Row[],
+    calls: number[] = [],
+    present = () => true,
+  ): SnapshotSource {
+    return {
+      agentId: "opencode",
+      present,
+      collect(sinceMs, ctx) {
+        calls.push(sinceMs);
+        return rows
+          .filter((row) => row.at >= sinceMs)
+          .filter((row) => {
+            const key = digest(`opencode:${row.id}`);
+            if (ctx.seen.has(key)) return false;
+            ctx.seen.add(key);
+            return true;
+          })
+          .map((row) => ({
+            key: row.key,
+            model: row.model,
+            timestamp: row.at,
+            tokens: {
+              input: row.input,
+              output: 0,
+              cacheRead: 0,
+              cacheCreation: 0,
+            },
+            ...(row.reportedCost === undefined
+              ? {}
+              : { reportedCost: row.reportedCost }),
+          }));
+      },
+    };
+  }
+
+  it("样本按 key 进状态与桶，下一趟从交出过的最大时间起收，同一毫秒不漏不重", async () => {
+    const rows: Row[] = [
+      {
+        id: "m1",
+        key: "opencode:a",
+        model: "gpt-5",
+        at: NOW - 2 * HOUR,
+        input: 100,
+      },
+      {
+        id: "m2",
+        key: "opencode:b",
+        model: "gpt-5",
+        at: NOW - HOUR,
+        input: 10,
+      },
+    ];
+    const calls: number[] = [];
+    const state = new ScanState(() => NOW);
+    const first = await state.scan([], [source(rows, calls)]);
+    expect(first.files.opencode).toBe(2);
+    expect(
+      [...first.buckets.values()].reduce((sum, t) => sum + t.input, 0),
+    ).toBe(110);
+    expect(first.hourBuckets.size).toBe(2);
+
+    // 和 m2 同一毫秒的新消息：游标停在 m2 的时间，含等于取，m2 靠去重不再计。
+    rows.push({
+      id: "m3",
+      key: "opencode:b",
+      model: "gpt-5",
+      at: NOW - HOUR,
+      input: 1,
+    });
+    const second = await state.scan([], [source(rows, calls)]);
+    expect(calls).toEqual([0, NOW - HOUR]);
+    const total = [...second.buckets.values()].reduce(
+      (sum, t) => sum + t.input,
+      0,
+    );
+    expect(total).toBe(111);
+    expect(second.files.opencode).toBe(2);
+
+    // 来源没了：这家的贡献整体作废，游标也重置。
+    const gone = await state.scan([], [source(rows, calls, () => false)]);
+    expect(gone.buckets.size).toBe(0);
+    await state.scan([], [source(rows, calls)]);
+    expect(calls.at(-1)).toBe(0);
+  });
+
+  it("只传 roots 时不扫快照式来源（测试不碰开发机上的库）", async () => {
+    const result = await new ScanState(() => NOW).scan([]);
+    expect(result.files.opencode).toBeUndefined();
+  });
+
+  it("进汇总：source 是 local、unit 是 tokens；表认得的按表算，认不出的用 CLI 报的成本兜底", async () => {
+    const rows: Row[] = [
+      // 表认得：CLI 报的 9 美元不看，按表算 1.25。
+      {
+        id: "p",
+        key: "opencode:a",
+        model: "gpt-5",
+        at: NOW - HOUR,
+        input: 1_000_000,
+        reportedCost: 9,
+      },
+      // 表认不出、报了成本：用它，算有价格。
+      {
+        id: "r",
+        key: "opencode:a",
+        model: "glm-x",
+        at: NOW - HOUR,
+        input: 1_000,
+        reportedCost: 0.5,
+      },
+      // 表认不出、报的是 0：没有价格。
+      {
+        id: "z",
+        key: "opencode:b",
+        model: "free-x",
+        at: NOW - HOUR,
+        input: 1_000,
+        reportedCost: 0,
+      },
+    ];
+    const result = await new ScanState(() => NOW).scan([], [source(rows)]);
+    const summary = summarize(result, BUILT_IN_PRICES, NOW);
+    const agent = summary.ranges["30d"].byAgent.find(
+      (one) => one.agent === "opencode",
+    );
+    expect(agent).toMatchObject({
+      source: "local",
+      unit: "tokens",
+      requests: 0,
+    });
+    expect(agent?.tokens.input).toBe(1_002_000);
+    expect(agent?.costUsd).toBe(1.75);
+    expect(agent?.complete).toBe(false);
+    const models = summary.last30Days.models;
+    expect(models.find((m) => m.model === "gpt-5")?.costUsd).toBe(1.25);
+    expect(models.find((m) => m.model === "glm-x")?.costUsd).toBe(0.5);
+    expect(models.find((m) => m.model === "free-x")?.costUsd).toBeNull();
+    expect(summary.unpricedModels).toEqual(["free-x"]);
+    expect(summary.today.costUsd).toBe(1.75);
+    expect(summary.ranges["24h"].totals.costUsd).toBe(1.75);
+
+    // 只有报了成本的那个：complete 为真。
+    const priced = await new ScanState(() => NOW).scan(
+      [],
+      [source(rows.slice(1, 2))],
+    );
+    const only = summarize(priced, BUILT_IN_PRICES, NOW);
+    expect(only.last30Days).toMatchObject({ costUsd: 0.5, complete: true });
+    expect(only.currentSession).toMatchObject({
+      provider: "opencode",
+      costUsd: 0.5,
+      complete: true,
+    });
+  });
+
+  it("经真实适配器读一个临时库进汇总", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "armadra-cost-opencode-"));
+    try {
+      const path = join(dir, "opencode.db");
+      const database = new DatabaseSync(path);
+      database.exec(
+        "CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT NOT NULL, " +
+          "title TEXT NOT NULL, time_updated INTEGER NOT NULL, cost REAL NOT NULL DEFAULT 0, " +
+          "tokens_input INTEGER NOT NULL DEFAULT 0);" +
+          "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, " +
+          "time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);",
+      );
+      const insert = database.prepare(
+        "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+      );
+      const assistant = (input: number) =>
+        JSON.stringify({
+          role: "assistant",
+          modelID: "gpt-5",
+          cost: 0,
+          tokens: {
+            input,
+            output: 0,
+            reasoning: 0,
+            cache: { read: 0, write: 0 },
+          },
+          time: { created: 1, completed: 2 },
+        });
+      insert.run(
+        "msg_1",
+        "ses_a",
+        NOW - HOUR,
+        NOW - HOUR,
+        assistant(1_000_000),
+      );
+      insert.run(
+        "msg_2",
+        "ses_a",
+        NOW - HOUR,
+        NOW - HOUR,
+        assistant(1_000_000),
+      );
+      database.close();
+      const real: SnapshotSource = {
+        agentId: "opencode",
+        present: () => true,
+        collect: (sinceMs, ctx) => collectFrom(path, sinceMs, ctx),
+      };
+      const state = new ScanState(() => NOW);
+      const summary = summarize(
+        await state.scan([], [real]),
+        BUILT_IN_PRICES,
+        NOW,
+      );
+      const agent = summary.ranges["30d"].byAgent.find(
+        (one) => one.agent === "opencode",
+      );
+      expect(agent?.tokens.input).toBe(2_000_000);
+      expect(agent?.costUsd).toBe(2.5);
+      // 第二趟：同一毫秒的两条都已经交过，不再计。
+      const again = summarize(
+        await state.scan([], [real]),
+        BUILT_IN_PRICES,
+        NOW,
+      );
+      expect(
+        again.ranges["30d"].byAgent.find((one) => one.agent === "opencode")
+          ?.tokens.input,
+      ).toBe(2_000_000);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

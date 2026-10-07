@@ -152,6 +152,8 @@ export async function startChrome(h) {
     executable,
     [
       "--headless=new",
+      "--use-mock-keychain",
+      "--password-store=basic",
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-background-networking",
@@ -286,6 +288,7 @@ async function page(h, call, listeners, sessionId, { width, height, name }) {
           url: new URL(url).pathname,
           status,
           method: params.type,
+          requestId: params.requestId,
         });
     } else if (
       method === "Network.webSocketClosed" ||
@@ -398,7 +401,13 @@ async function page(h, call, listeners, sessionId, { width, height, name }) {
     await clickAt(point);
     return point;
   };
-  const locateSource = (selector, text, exact = false) => `(() => {
+  /*
+   * 量两次、隔 50ms，位置没变才算找到：面板与弹层是滑进来的（Sheet 从底边
+   * 滑入 40px、200ms），滑到一半量下的坐标，等鼠标按下去时元素已经不在那里，
+   * 点击落空却不报错——remote-e2e 的「提交」页签就这样偶发点不中，Git 面板
+   * 停在「日志」页，下一步等不到勾选框。
+   */
+  const locateSource = (selector, text, exact = false) => `(async () => {
       const all = [...document.querySelectorAll(${JSON.stringify(selector)})]
         .filter((node) => node.getClientRects().length > 0 && !node.disabled);
       const text = ${JSON.stringify(text ?? null)};
@@ -408,7 +417,11 @@ async function page(h, call, listeners, sessionId, { width, height, name }) {
         node.getAttribute("aria-label") === text)).at(-1);
       if (!found) return null;
       found.scrollIntoView({ block: "center", inline: "center" });
+      const first = found.getBoundingClientRect();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (!found.isConnected) return null;
       const rect = found.getBoundingClientRect();
+      if (Math.abs(rect.left - first.left) > 0.5 || Math.abs(rect.top - first.top) > 0.5) return null;
       return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     })()`;
   /** 聚焦输入框、清空、输入。经 `Input.insertText` 走真实的输入事件。 */
@@ -450,6 +463,15 @@ async function page(h, call, listeners, sessionId, { width, height, name }) {
     await sleep(80);
   };
   const text = () => evaluate(`return document.body.innerText;`);
+  /** 一条失败应答的正文（排查用）；页面换了文档、取不到时答 `null`。 */
+  const bodyOf = async (requestId) => {
+    try {
+      const { body } = await call("Network.getResponseBody", { requestId });
+      return String(body).slice(0, 400);
+    } catch {
+      return null;
+    }
+  };
   /** 取走并清空这一段收集到的错误与失败应答。 */
   const drain = () => ({
     errors: errors.splice(0),
@@ -473,6 +495,7 @@ async function page(h, call, listeners, sessionId, { width, height, name }) {
     key,
     text,
     drain,
+    bodyOf,
     errors,
     responses,
     events,

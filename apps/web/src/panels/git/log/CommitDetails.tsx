@@ -11,6 +11,7 @@ import { Button } from "../../../ui/button";
 import { ReadError } from "../forms";
 import { refBadges } from "../CommitGraph";
 import { buildFileRows } from "./file-tree";
+import { sk } from "../../../sources/scope";
 
 /**
  * 详情栏（Git 工具窗口设计 §2.2「详情」）。
@@ -56,20 +57,26 @@ export function CommitDetails({
   const repositoryKey = `${target.repositoryPath}:${commit.repositoryPath}`;
 
   const detail = useQuery({
-    queryKey: ["git-log-commit", workspaceId, repositoryKey, commit.oid, base],
+    queryKey: sk(
+      "git-log-commit",
+      workspaceId,
+      repositoryKey,
+      commit.oid,
+      base,
+    ),
     queryFn: ({ signal }) =>
       gitGateway.commitDetail(target, commit.oid, base, signal),
     retry: false,
   });
   const patch = useQuery({
-    queryKey: [
+    queryKey: sk(
       "git-log-commit-file",
       workspaceId,
       repositoryKey,
       commit.oid,
       base,
       file,
-    ],
+    ),
     queryFn: ({ signal }) =>
       gitGateway.commitFile(target, commit.oid, base, file!, signal),
     enabled: file !== null,
@@ -108,9 +115,9 @@ export function CommitDetails({
             <span
               key={`${badge.kind}:${badge.label}`}
               className={cn(
-                "rounded px-1 text-[10px] leading-4",
+                "rounded px-1 text-[length:var(--text-caption)] leading-4",
                 badge.kind === "tag"
-                  ? "bg-[color-mix(in_srgb,var(--brand)_16%,transparent)] text-[var(--brand)]"
+                  ? "bg-[color-mix(in_srgb,var(--brand)_16%,transparent)] text-[var(--brand-text)]"
                   : badge.kind === "head"
                     ? "bg-foreground text-background"
                     : "border border-border text-muted-foreground",
@@ -199,15 +206,16 @@ export function CommitDetails({
             </li>
           ) : (
             <li key={`file:${row.path}`} className="min-w-0">
-              <button
+              <Button
                 type="button"
+                variant="ghost"
                 aria-pressed={file === row.path}
                 onClick={() => {
                   setFile(row.path);
                   onOpenFile?.(row.path);
                 }}
                 style={{ paddingLeft: `${row.depth * 12}px` }}
-                className="flex w-full min-w-0 items-center gap-2 rounded py-0.5 pr-1 text-left hover:bg-muted aria-pressed:bg-muted"
+                className="h-auto w-full min-w-0 justify-start gap-2 rounded border-0 py-0.5 pr-1 text-left text-[length:inherit] font-normal hover:bg-muted aria-pressed:bg-muted"
               >
                 <span className="w-3 shrink-0 font-mono">
                   {row.file?.status.slice(0, 1)}
@@ -221,12 +229,12 @@ export function CommitDetails({
                     </span>
                   )}
                 </span>
-                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                <span className="shrink-0 font-mono text-[length:var(--text-caption)] text-muted-foreground">
                   {row.file?.additions === null || row.file?.deletions === null
                     ? t("gitRepo.binaryFile")
                     : `+${row.file?.additions} −${row.file?.deletions}`}
                 </span>
-              </button>
+              </Button>
             </li>
           ),
         )}

@@ -9,9 +9,11 @@ import {
   parseFlags,
   render,
   renderError,
+  VERB_TIMEOUT_MS,
+  verbTimeoutMs,
 } from "./control.js";
 import type { Args } from "./control.js";
-import type { HookResponse } from "./http.js";
+import type { HookResponse } from "../../hook-client/http.js";
 
 function flags(input: string[]): Args {
   const parsed = parseFlags(input);
@@ -124,6 +126,27 @@ describe("a browser verb's budget", () => {
       expect(BROWSER_TIMEOUT_MS).toBeGreaterThan(45_000 + 15_000);
       process.env.ARMADRA_HOOK_TIMEOUT_MS = "90000";
       expect(browserTimeoutMs()).toBe(90_000);
+    } finally {
+      if (saved === undefined) delete process.env.ARMADRA_HOOK_TIMEOUT_MS;
+      else process.env.ARMADRA_HOOK_TIMEOUT_MS = saved;
+    }
+  });
+});
+
+describe("a canvas or context verb's budget", () => {
+  it("is wider than the hook's 1.5 s and the env var only widens it", () => {
+    // A slow `inbox` that outlived the hook budget came back as an error, and
+    // ama took it for an empty inbox (CI run 37317042914, scenario 11).
+    const saved = process.env.ARMADRA_HOOK_TIMEOUT_MS;
+    delete process.env.ARMADRA_HOOK_TIMEOUT_MS;
+    try {
+      expect(verbTimeoutMs()).toBe(VERB_TIMEOUT_MS);
+      expect(VERB_TIMEOUT_MS).toBeGreaterThan(1_500);
+      // The remote shim's 4 s is for hook events; it must not shorten a verb.
+      process.env.ARMADRA_HOOK_TIMEOUT_MS = "4000";
+      expect(verbTimeoutMs()).toBe(VERB_TIMEOUT_MS);
+      process.env.ARMADRA_HOOK_TIMEOUT_MS = "30000";
+      expect(verbTimeoutMs()).toBe(30_000);
     } finally {
       if (saved === undefined) delete process.env.ARMADRA_HOOK_TIMEOUT_MS;
       else process.env.ARMADRA_HOOK_TIMEOUT_MS = saved;

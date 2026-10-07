@@ -8,10 +8,18 @@ import {
   type GitMessageDraft,
   type GitMessageLanguage,
 } from "@armadra/shared";
+import { sk } from "../../sources/scope";
 import { usePreferencesStore, useT } from "../../app/preferences-store";
 import { Button } from "../../ui/button";
 import { Textarea } from "../../ui/textarea";
-import { Check, Field, selectClass } from "./forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../ui/select";
+import { Check, Field } from "./forms";
 
 export interface CommitMessageAssistantProps {
   workspaceId: string;
@@ -50,12 +58,12 @@ function AssistantSession({
   const t = useT();
   const client = useQueryClient();
   const choices = useQuery({
-    queryKey: ["git-message-providers", workspaceId],
+    queryKey: sk("git-message-providers", workspaceId),
     queryFn: ({ signal }) => providers(workspaceId, signal),
     retry: false,
   });
   const baseline = useQuery({
-    queryKey: ["git-message-source", workspaceId],
+    queryKey: sk("git-message-source", workspaceId),
     queryFn: ({ signal }) => source(workspaceId, signal),
     retry: false,
   });
@@ -94,7 +102,7 @@ function AssistantSession({
   const updateSource = async () => {
     const value = await source(workspaceId);
     if (active.current)
-      client.setQueryData(["git-message-source", workspaceId], value);
+      client.setQueryData(sk("git-message-source", workspaceId), value);
     return value;
   };
   const makeDraft = async () => {
@@ -180,34 +188,40 @@ function AssistantSession({
       <h3 className="font-medium">{t("gitMessage.title")}</h3>
       <p className="text-muted-foreground">{t("gitMessage.note")}</p>
       <Field label={t("gitMessage.provider")}>
-        <select
-          className={selectClass}
+        <Select
           value={selected?.id ?? ""}
           disabled={busy !== null}
-          onChange={(event) => setChosen(event.target.value)}
+          onValueChange={setChosen}
         >
-          {choices.data?.map((provider) => (
-            <option key={provider.id} value={provider.id}>
-              {provider.label}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="h-9 w-full min-w-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="z-[var(--z-dialog)]">
+            {choices.data?.map((provider) => (
+              <SelectItem key={provider.id} value={provider.id}>
+                {provider.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </Field>
       <Field label={t("gitMessage.language")}>
-        <select
-          className={selectClass}
+        <Select
           value={language}
           disabled={busy !== null}
-          onChange={(event) =>
-            setLanguage(event.target.value as GitMessageLanguage)
-          }
+          onValueChange={(next) => setLanguage(next as GitMessageLanguage)}
         >
-          {GIT_MESSAGE_LANGUAGES.map((value) => (
-            <option key={value} value={value}>
-              {t(`gitMessage.language.${value}`)}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="h-9 w-full min-w-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="z-[var(--z-dialog)]">
+            {GIT_MESSAGE_LANGUAGES.map((value) => (
+              <SelectItem key={value} value={value}>
+                {t(`gitMessage.language.${value}`)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </Field>
       <Check
         label={t("gitMessage.conventional")}

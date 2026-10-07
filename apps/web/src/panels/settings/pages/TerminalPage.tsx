@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/ui/select";
 import { Switch } from "@/ui/switch";
+import { clamp } from "@/lib/math";
 
 /**
  * `settings.terminal.backend`（§15.1 + T01）。
@@ -102,8 +103,10 @@ export function TerminalPage() {
   const t = useT();
   const terminal = usePreferencesStore((state) => state.terminal);
   const set = usePreferencesStore((state) => state.setTerminalPreference);
-  // 阈值只影响本机的徽标与提醒，所以和终端外观一样存在本地，不进 Runtime。
-  const memoryWarnBytes = usePreferencesStore(
+  // 阈值存两处：core 的设置（越线发 `resources.threshold`，推送据此叫人，
+  // 契约 §27.4）与本地偏好（徽标变色、本机提醒不等设置读回来）。显示以 core
+  // 为准。
+  const localMemoryWarnBytes = usePreferencesStore(
     (state) => state.sessionMemoryWarnBytes,
   );
   const setMemoryWarnBytes = usePreferencesStore(
@@ -113,6 +116,8 @@ export function TerminalPage() {
   const renderBudget = usePreferencesStore((state) => state.renderBudget);
   const setRenderBudget = usePreferencesStore((state) => state.setRenderBudget);
   const { settings, save } = useRuntimeSettings();
+  const memoryWarnBytes =
+    settings.data?.resources?.memoryWarnBytes ?? localMemoryWarnBytes;
   const runtimeTerminal = settings.data?.terminal;
 
   return (
@@ -128,7 +133,11 @@ export function TerminalPage() {
               save.mutate({ terminal: { backend: value as TerminalBackend } })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.terminalBackend")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -155,7 +164,11 @@ export function TerminalPage() {
               save.mutate({ terminal: { dormantAfterSeconds: Number(value) } })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("terminal.settings.dormantAfter")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -190,7 +203,11 @@ export function TerminalPage() {
               save.mutate({ terminal: { ecoIdleMinutes: Number(value) } })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("terminal.settings.ecoIdle")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -211,7 +228,11 @@ export function TerminalPage() {
               save.mutate({ terminal: { detachedGraceMinutes: Number(value) } })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.detachedGrace")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -239,7 +260,11 @@ export function TerminalPage() {
               save.mutate({ power: { policy: value as PowerPolicyChoice } })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("resources.power.policyLabel")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -278,7 +303,11 @@ export function TerminalPage() {
               save.mutate({ resources: { intervalMs: Number(value) } })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("resources.intervalLabel")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -297,9 +326,16 @@ export function TerminalPage() {
         >
           <Select
             value={String(memoryWarnBytes)}
-            onValueChange={(value) => setMemoryWarnBytes(Number(value))}
+            onValueChange={(value) => {
+              setMemoryWarnBytes(Number(value));
+              save.mutate({ resources: { memoryWarnBytes: Number(value) } });
+            }}
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("resources.memory.thresholdLabel")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -320,7 +356,11 @@ export function TerminalPage() {
             value={String(renderBudget)}
             onValueChange={(value) => setRenderBudget(Number(value))}
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("terminal.settings.renderBudget")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -356,7 +396,7 @@ export function TerminalPage() {
             onChange={(event) =>
               set(
                 "fontSize",
-                clamp(event.target.value, TERMINAL_FONT_SIZE_RANGE),
+                clamp(Number(event.target.value), ...TERMINAL_FONT_SIZE_RANGE),
               )
             }
           />
@@ -374,7 +414,10 @@ export function TerminalPage() {
             onChange={(event) =>
               set(
                 "lineHeight",
-                clamp(event.target.value, TERMINAL_LINE_HEIGHT_RANGE),
+                clamp(
+                  Number(event.target.value),
+                  ...TERMINAL_LINE_HEIGHT_RANGE,
+                ),
               )
             }
           />
@@ -387,7 +430,11 @@ export function TerminalPage() {
               set("cursorStyle", value as TerminalCursorStyle)
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("terminal.settings.cursor")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -436,11 +483,4 @@ export function TerminalPage() {
       </SettingsGroup>
     </>
   );
-}
-
-/** 输入框里随手打的值可能越界或不是数字；越界就夹回范围。 */
-function clamp(raw: string, [min, max]: readonly [number, number]): number {
-  const value = Number(raw);
-  if (!Number.isFinite(value)) return min;
-  return Math.min(max, Math.max(min, value));
 }

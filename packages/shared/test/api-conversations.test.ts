@@ -35,19 +35,22 @@ describe("runtime conversations API", () => {
       ]).success,
     ).toBe(true);
 
-    // opencode has no readable transcript store, so it is not a provider here.
-    expect(
+    // Every built-in agent with a history adapter can own a row (design
+    // cli-collaboration §3); a provider outside AGENT_IDS still cannot.
+    const accepts = (provider: string) =>
       conversationsResponseSchema.safeParse([
         {
-          provider: "opencode",
+          provider,
           sessionId: "s",
           title: "t",
           cwd: "",
           updatedAt: "2026-09-04T02:06:15.000Z",
           bytes: 0,
         },
-      ]).success,
-    ).toBe(false);
+      ]).success;
+    expect(accepts("opencode")).toBe(true);
+    expect(accepts("copilot")).toBe(true);
+    expect(accepts("nobody")).toBe(false);
   });
 
   it("types the rescan report and the suggested title", () => {

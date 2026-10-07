@@ -21,6 +21,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LOOPBACK_OWNER_ENV } from "../probe-home.mjs";
 
 export const root = fileURLToPath(new URL("../../../", import.meta.url));
 export const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -76,7 +77,8 @@ export async function until(
 }
 
 /**
- * 一整套环境：core + Vite + Chrome。`options.env` 追加给 core 的环境变量
+ * 一整套环境：core + Vite + Chrome。`options.chromeArgs` 追加给 Chrome 的参数；
+ * `options.env` 追加给 core 的环境变量
  * （比如状态页地址）；`options.home` 是造好的临时 HOME（集成页场景要先放
  * 残留文件再起 core）。
  */
@@ -111,33 +113,44 @@ export async function startStack(options = {}) {
     XDG_CONFIG_HOME: join(home, ".config"),
     ARMADRA_DATA_DIR: data,
     ARMADRA_LOG: options.log ?? "info",
+    // 页面停在普通浏览器里，拿不到壳的票（契约 §3.2）。
+    ...LOOPBACK_OWNER_ENV,
     ...options.env,
   };
-  const runtime = spawn(
-    process.execPath,
-    [binary, "--listen", "tcp:127.0.0.1:0", "--data-dir", data],
-    { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: environment },
-  );
+  // 起一个 core；`listen` 缺省让内核分配端口。重启（`killCore` + `startCore`）在同一个
+  // 端口、同一个数据目录上再起一次——Vite 的代理目标在它启动时就定了。
+  let runtime;
   let coreLog = "";
-  const onLog = (chunk) => {
-    coreLog += chunk;
-    if (coreLog.length > 4_000_000) coreLog = coreLog.slice(-2_000_000);
-  };
-  runtime.stdout.on("data", onLog);
-  runtime.stderr.on("data", onLog);
-  cleanups.push(() => runtime.kill("SIGKILL"));
-  let origin = "";
-  for (let attempt = 0; attempt < 300 && !origin; attempt += 1) {
-    if (runtime.exitCode !== null)
-      throw new Error(`core 退出：${coreLog.slice(-2000)}`);
-    try {
-      origin = JSON.parse(readFileSync(join(data, "endpoints.json"), "utf8"))
-        .runtime.http;
-    } catch {
-      await sleep(100);
+  const launchCore = async (listen = "tcp:127.0.0.1:0") => {
+    rmSync(join(data, "endpoints.json"), { force: true });
+    const child = spawn(
+      process.execPath,
+      [binary, "--listen", listen, "--data-dir", data],
+      { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: environment },
+    );
+    const onLog = (chunk) => {
+      coreLog += chunk;
+      if (coreLog.length > 4_000_000) coreLog = coreLog.slice(-2_000_000);
+    };
+    child.stdout.on("data", onLog);
+    child.stderr.on("data", onLog);
+    runtime = child;
+    let found = "";
+    for (let attempt = 0; attempt < 300 && !found; attempt += 1) {
+      if (child.exitCode !== null)
+        throw new Error(`core 退出：${coreLog.slice(-2000)}`);
+      try {
+        found = JSON.parse(readFileSync(join(data, "endpoints.json"), "utf8"))
+          .runtime.http;
+      } catch {
+        await sleep(100);
+      }
     }
-  }
-  if (!origin) throw new Error("core 没有写出 endpoints.json");
+    if (!found) throw new Error("core 没有写出 endpoints.json");
+    return found;
+  };
+  cleanups.push(() => runtime?.kill("SIGKILL"));
+  const origin = await launchCore();
 
   const api = async (path, init = {}) => {
     const answer = await fetch(new URL(path, origin), {
@@ -210,6 +223,8 @@ export async function startStack(options = {}) {
     executable,
     [
       "--headless=new",
+      "--use-mock-keychain",
+      "--password-store=basic",
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-background-networking",
@@ -218,6 +233,7 @@ export async function startStack(options = {}) {
       "--lang=zh-CN",
       "--remote-debugging-address=127.0.0.1",
       "--remote-debugging-port=0",
+      ...(options.chromeArgs ?? []),
       `--user-data-dir=${profile}`,
       "about:blank",
     ],
@@ -252,6 +268,18 @@ export async function startStack(options = {}) {
     chrome: version.Browser,
     coreLog: () => coreLog,
     cleanups,
+    /** 杀掉 core（SIGKILL，不给它关流的机会）。 */
+    async killCore() {
+      const child = runtime;
+      if (child === undefined || child.exitCode !== null) return;
+      child.kill("SIGKILL");
+      await once(child, "exit");
+    },
+    /** 在同一个端口、同一个数据目录上再起 core。 */
+    async startCore() {
+      const again = await launchCore(`tcp:${new URL(origin).host}`);
+      if (again !== origin) throw new Error(`core 换了地址：${again}`);
+    },
     /** 建一个工作空间与它的第一块画布。 */
     async workspace(
       name,
@@ -602,6 +630,21 @@ async function createPage(
       );
       await sleep(600);
     },
+    /**
+     * 等对话框（窄屏下是从底部滑上来的抽屉）停稳：连续三次量到同一个位置。
+     * 滑动中按坐标点进去，点到的是动画里那一帧的位置，不是按钮。
+     */
+    async dialogSettled(what = "对话框停稳") {
+      await page.evaluate(`window.__probeDialogTops = []; return true;`);
+      await page.until(
+        `const d = document.querySelector('[role="dialog"]');
+         if (!d) return null;
+         const tops = window.__probeDialogTops;
+         tops.push(Math.round(d.getBoundingClientRect().top));
+         return tops.length >= 3 && tops.slice(-3).every((t) => t === tops.at(-1)) ? true : null;`,
+        what,
+      );
+    },
     /** 这一页攒下的、不在白名单里的错误。 */
     unexpected() {
       return problems.filter(
@@ -616,6 +659,8 @@ async function createPage(
     },
   };
   await page.viewport(width, height);
+  // 场景失败时入口给它开过的每一页补一张截图，不只是截过图的那几页。
+  runningEntry?.pages.add(page);
   return page;
 }
 
@@ -655,6 +700,9 @@ export function newRepository(directory) {
  * 场景记录器：每个场景一份 `{ name, status, checks, shots, problems }`。
  * `check` 失败就抛，场景整体记为失败；截图路径进 `shots`。
  */
+/** 正在跑的场景：它开的页面记在它名下。 */
+let runningEntry = null;
+
 export function scenario(report, name, output) {
   const entry = {
     name,
@@ -669,6 +717,7 @@ export function scenario(report, name, output) {
     enumerable: false,
   });
   report.scenarios.push(entry);
+  runningEntry = entry;
   console.log(`\n== ${name}`);
   return {
     entry,

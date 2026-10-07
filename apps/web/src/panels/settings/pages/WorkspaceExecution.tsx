@@ -1,3 +1,4 @@
+import { sk } from "../../../sources/scope";
 import { useRef } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { WorkspaceSummary } from "@armadra/shared";
@@ -24,7 +25,7 @@ export function WorkspaceExecution() {
       // 经文件域网关：这个开关改的是「这个工作空间允许执行吗」。
     }) => filesGateway.updatePermissions(id, permissions),
     onSuccess: (updated) => {
-      client.setQueryData<WorkspaceSummary[]>(["workspaces"], (rows) =>
+      client.setQueryData<WorkspaceSummary[]>(sk("workspaces"), (rows) =>
         rows?.map((row) =>
           row.id === updated.workspaceId
             ? { ...row, permissions: updated.permissions }

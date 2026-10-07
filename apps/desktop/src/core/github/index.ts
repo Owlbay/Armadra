@@ -19,13 +19,23 @@ import {
   IdentityStore,
   identityInstanceId,
 } from "../identity";
-import { CredentialService, openSecretStore } from "./credentials";
+import {
+  forcedFileBackend,
+  resolveSecretBackend,
+  secretsFor,
+} from "../secrets";
+import { CredentialService, githubSecretStore } from "./credentials";
 import { API_PREFIX, GITHUB_METHODS, GithubHttp } from "./http";
 import { GithubService } from "./service";
 import { GithubStore } from "./store";
 
 export { GithubClient } from "./client";
-export { CredentialService, openSecretStore, validToken } from "./credentials";
+export {
+  CredentialService,
+  githubSecretStore,
+  secretName,
+  validToken,
+} from "./credentials";
 export { GithubError, githubError, githubFailure } from "./errors";
 export { API_METHODS, API_PREFIX, GITHUB_METHODS, GithubHttp } from "./http";
 export { checkMapping, validateMapping } from "./mapping";
@@ -52,6 +62,24 @@ export function githubDomain(): GithubDomain | undefined {
   return assembled;
 }
 
+/**
+ * 这一域的密钥后端就是 core 统一的那一个。`ARMADRA_GITHUB_SECRET_STORE=file` 是
+ * 统一之前的旧开关，照旧只把这一域强制成明文文件。
+ */
+function githubSecrets(context: CoreContext) {
+  const legacy = process.env.ARMADRA_GITHUB_SECRET_STORE ?? "";
+  if (
+    legacy.trim().toLowerCase() === "file" &&
+    !forcedFileBackend(process.env)
+  ) {
+    return resolveSecretBackend({
+      dataDir: context.dataDir,
+      env: { ARMADRA_SECRET_BACKEND: "file" },
+    });
+  }
+  return secretsFor(context);
+}
+
 export function install(context: CoreContext): GithubDomain | undefined {
   if (!context.db.unified) {
     context.log.info("GitHub 域未装配：统一库迁移尚未应用");
@@ -60,7 +88,10 @@ export function install(context: CoreContext): GithubDomain | undefined {
   const store = new GithubStore(context.db.database);
   const credentials = new CredentialService({
     store,
-    secrets: openSecretStore(context.dataDir),
+    secrets: githubSecretStore(githubSecrets(context), () => {
+      const name = store.config()?.secretRef ?? "";
+      return name === "" ? [] : [name];
+    }),
     // 运维可以把第一次配置落到一个企业版 base 上；客户端不能。
     ...(process.env.ARMADRA_GITHUB_API_BASE === undefined
       ? {}
@@ -82,6 +113,8 @@ export function install(context: CoreContext): GithubDomain | undefined {
   context.server.raw(API_PREFIX, (request, response, cors) =>
     http.handle(request, response, cors),
   );
+  // 同一份实现登记成契约 procedure（契约 §41.1）。
+  http.register(context.server);
   // 面板先看 Hello 的能力表再决定要不要发请求，所以装配成功要报出去。
   registerCapability(GITHUB_CAPABILITY);
   context.log.info("GitHub 域已装配", { methods: GITHUB_METHODS.length });

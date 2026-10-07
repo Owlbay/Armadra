@@ -1,0 +1,9 @@
+{
+  "id": "webkit-roundtrip",
+  "tier": "b",
+  "script": "tools/probes/webkit-roundtrip.mjs",
+  "args": ["{out}"],
+  "requires": ["tmux", "cloud", "webkit"],
+  "platforms": ["darwin", "linux"],
+  "timeoutMinutes": 10
+}

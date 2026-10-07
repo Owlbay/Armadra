@@ -250,6 +250,42 @@ export const executionHostRefusalSchema = z.object({
  * first. The local row has an empty id and no SSH block: it needs no
  * registration, which is why it has no row to edit or delete either.
  */
+/**
+ * The Worker an execution host answered with at its last handshake (contract
+ * §21.2). Absent until the host has been connected to once.
+ */
+export const executionHostWorkerSchema = z.object({
+  /** The Worker's `runtimeVersion`; empty when it did not report one. */
+  version: z.string(),
+  capabilities: z.array(z.string()).default([]),
+  /** Older than this core, or missing a capability this core's Worker has. */
+  outdated: z.boolean(),
+  /** Whether the control connection is up right now. */
+  connected: z.boolean(),
+  /** When that handshake happened (RFC 3339). */
+  checkedAt: z.string(),
+});
+
+/**
+ * One health sample of an execution host (contract §21.3): a handshake, a
+ * dropped control connection, or a failed validation / resync. In memory for
+ * this run only, oldest first, at most {@link EXECUTION_HOST_HEALTH_LIMIT}.
+ */
+export const EXECUTION_HOST_HEALTH_EVENTS = [
+  "handshake",
+  "disconnected",
+  "failed",
+] as const;
+export const EXECUTION_HOST_HEALTH_LIMIT = 20;
+export const executionHostHealthSchema = z.object({
+  at: z.string(),
+  event: z.enum(EXECUTION_HOST_HEALTH_EVENTS),
+  ok: z.boolean(),
+  version: z.string().optional(),
+  /** The validation `reason` or the resync error code. */
+  code: z.string().optional(),
+});
+
 export const executionHostSchema = z.object({
   executionHostId: z.string(),
   name: z.string(),
@@ -261,6 +297,8 @@ export const executionHostSchema = z.object({
    */
   workerConfigured: z.boolean(),
   workspaceCount: z.number().int().nonnegative(),
+  worker: executionHostWorkerSchema.optional(),
+  health: z.array(executionHostHealthSchema).optional(),
 });
 
 /**
@@ -321,6 +359,8 @@ export type RootFingerprint = z.infer<typeof rootFingerprintSchema>;
 export type ExecutionHostBlocker = z.infer<typeof executionHostBlockerSchema>;
 export type ExecutionHostRefusal = z.infer<typeof executionHostRefusalSchema>;
 export type ExecutionHost = z.infer<typeof executionHostSchema>;
+export type ExecutionHostWorker = z.infer<typeof executionHostWorkerSchema>;
+export type ExecutionHostHealth = z.infer<typeof executionHostHealthSchema>;
 export type ExecutionHostValidation = z.infer<
   typeof executionHostValidationSchema
 >;

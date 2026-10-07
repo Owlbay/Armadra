@@ -7,6 +7,7 @@ import {
   agentEnvironment,
   agentPath,
   asRecord,
+  canvasPath,
   childEnvironment,
   contextSessionEnvironment,
   defaultShell,
@@ -14,7 +15,12 @@ import {
   setHookClient,
   withUtf8Locale,
 } from "./environment";
-import { parseProcessLine, processTable, processTree } from "./process";
+import {
+  parseProcessLine,
+  processTable,
+  processTree,
+  readProcessTable,
+} from "./process";
 
 describe("the inheritance allow-list", () => {
   /**
@@ -35,6 +41,39 @@ describe("the inheritance allow-list", () => {
     expect(inherited("TMUX_PANE")).toBe(false);
     expect(inherited("ARMADRA_NODE_ID")).toBe(false);
     expect(inherited("PATH")).toBe(false);
+  });
+
+  it("keeps Windows' own variables however they are spelt, on Windows only", () => {
+    const env = asRecord(
+      childEnvironment({
+        platform: "win32",
+        ambient: {
+          SystemRoot: "C:\\Windows",
+          ComSpec: "C:\\Windows\\system32\\cmd.exe",
+          TEMP: "C:\\Users\\me\\AppData\\Local\\Temp",
+          PATHEXT: ".COM;.EXE;.BAT;.CMD",
+          USERPROFILE: "C:\\Users\\me",
+          "ProgramFiles(x86)": "C:\\Program Files (x86)",
+          PSModulePath: "C:\\Program Files\\PowerShell\\7\\Modules",
+          CLAUDECODE: "1",
+        },
+      }),
+    );
+    expect(env).toMatchObject({
+      SystemRoot: "C:\\Windows",
+      ComSpec: "C:\\Windows\\system32\\cmd.exe",
+      TEMP: "C:\\Users\\me\\AppData\\Local\\Temp",
+      PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      USERPROFILE: "C:\\Users\\me",
+      "ProgramFiles(x86)": "C:\\Program Files (x86)",
+    });
+    // pwsh 7's module path would stop Windows PowerShell 5.1 loading its own.
+    expect(env).not.toHaveProperty("PSModulePath");
+    expect(env).not.toHaveProperty("CLAUDECODE");
+    // Elsewhere names are exact: a lower-case look-alike is not inherited.
+    expect(inherited("SystemRoot", "linux")).toBe(false);
+    expect(inherited("SYSTEMROOT", "linux")).toBe(true);
+    expect(inherited("ComSpec", "win32")).toBe(true);
   });
 
   it("builds a child environment rather than copying one", () => {
@@ -91,6 +130,43 @@ describe("the agent PATH", () => {
       if (entry === "/usr/bin") continue;
       expect(seen.has(entry)).toBe(false);
       seen.add(entry);
+    }
+  });
+});
+
+describe("a canvas node's PATH", () => {
+  /** docs/design/canvas-launcher.md §4.3: the shims first, then the rest. */
+  it("puts the shims directory first and keeps the agent PATH after it", () => {
+    const shims = "/data/integration/shims";
+    const ambient = { PATH: ["/usr/bin", "/bin"].join(delimiter) };
+    const path = canvasPath(shims, ambient, undefined);
+    expect(path).toBe([shims, agentPath(ambient)].join(delimiter));
+    // 普通终端的 PATH 不带垫片。
+    expect(asRecord(childEnvironment({ ambient })).PATH).toBe(
+      agentPath(ambient),
+    );
+  });
+
+  it("lists the shims once, even when the ambient PATH already has them", () => {
+    const shims = "/data/integration/shims";
+    const path = canvasPath(
+      shims,
+      { PATH: ["/usr/bin", shims, "/bin"].join(delimiter) },
+      undefined,
+    ).split(delimiter);
+    expect(path[0]).toBe(shims);
+    expect(path.filter((entry) => entry === shims)).toHaveLength(1);
+  });
+
+  it("keeps the hook client's directory, as every terminal gets it", () => {
+    const directory = mkdtempSync(join(tmpdir(), "armadra-canvas-path-"));
+    try {
+      const hookBin = join(directory, "armadra-hook");
+      writeFileSync(hookBin, "", "utf8");
+      const path = canvasPath("/s", { PATH: "/usr/bin" }, hookBin);
+      expect(path.split(delimiter)).toContain(directory);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 });
@@ -231,6 +307,22 @@ describe("the process table", () => {
     expect(table.size).toBeGreaterThan(20);
     expect(processTree(process.pid, table)).toContain(process.pid);
   });
+  it.skipIf(process.platform === "win32")(
+    "reads the same table without blocking the event loop",
+    async () => {
+      let ticked = false;
+      setImmediate(() => {
+        ticked = true;
+      });
+      const reading = readProcessTable();
+      const table = await reading;
+      // The `ps` ran while the loop kept turning.
+      expect(ticked).toBe(true);
+      expect(table.has(process.pid)).toBe(true);
+      expect(table.size).toBeGreaterThan(20);
+      expect(table.get(process.pid)?.parent).toBe(process.ppid);
+    },
+  );
 });
 
 /**

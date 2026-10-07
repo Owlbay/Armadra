@@ -5,7 +5,6 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 import { parseHostForm } from "./SshPage";
 import { parseAgentForm, parseEnvText } from "./AgentPage";
-import { formatBytes } from "./DataPage";
 
 describe("parseHostForm", () => {
   const empty = {
@@ -163,13 +162,5 @@ describe("parseAgentForm", () => {
     expect(
       parseAgentForm({ ...empty, label: "x", launchCmd: "y" }, "plain"),
     ).toBeNull();
-  });
-});
-
-describe("formatBytes", () => {
-  it("1024 进制，单位随大小走", () => {
-    expect(formatBytes(0)).toBe("0 B");
-    expect(formatBytes(2048)).toBe("2.0 KB");
-    expect(formatBytes(1024 * 1024 * 3.5)).toBe("3.5 MB");
   });
 });

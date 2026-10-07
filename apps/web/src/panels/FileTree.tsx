@@ -29,6 +29,7 @@ import {
   RotateCw,
   Trash2,
 } from "lucide-react";
+import { sk } from "../sources/scope";
 import type { FileEntry, GitFileStatus } from "@armadra/shared";
 
 type DiffFileStatus = GitFileStatus["status"];
@@ -42,15 +43,15 @@ import { useCanvasStore } from "../store/canvas-store";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -59,6 +60,9 @@ import {
   ContextMenuTrigger,
 } from "../ui/context-menu";
 import { IconButton } from "../ui/icon-button";
+import { Alert, AlertTitle } from "../ui/alert";
+import { Empty, EmptyDescription } from "../ui/empty";
+import { Skeleton } from "../ui/skeleton";
 import { nodeDropPosition } from "@/canvas/placement";
 import { FileEntryDialog } from "./FileEntryDialog";
 import { useWorkspaceFileDrag } from "../files/use-workspace-file-drag";
@@ -116,7 +120,7 @@ export function FileTree() {
   );
 
   const status = useQuery({
-    queryKey: ["git-status", workspace?.id],
+    queryKey: sk("git-status", workspace?.id),
     queryFn: ({ signal }) => gitGateway.status(gitStatusTarget, {}, signal),
     enabled: Boolean(workspace),
     refetchInterval: GIT_REFETCH_MS,
@@ -210,26 +214,28 @@ export function FileTree() {
         }}
       />
 
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={pending?.kind === "delete"}
         onOpenChange={(open) => {
           if (!open) setPending(null);
         }}
       >
-        <AlertDialogContent className="z-[var(--z-dialog)]">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+        <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t("fileOps.deleteTitle", {
                 name: pending?.kind === "delete" ? pending.name : "",
               })}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
+            </ResponsiveAlertDialogTitle>
+            <ResponsiveAlertDialogDescription>
               {t("fileOps.deleteDescription")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("dialog.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
+            </ResponsiveAlertDialogDescription>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("dialog.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               onClick={() => {
                 if (pending?.kind !== "delete") return;
                 actions.trashEntry(pending.path, pending.name);
@@ -237,10 +243,10 @@ export function FileTree() {
               }}
             >
               {t("fileOps.delete")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </div>
   );
 }
@@ -271,7 +277,7 @@ function Directory({
 }: TreeProps) {
   const t = useT();
   const files = useQuery({
-    queryKey: ["files", workspaceId, path],
+    queryKey: sk("files", workspaceId, path),
     queryFn: () => runtimeApi.listFiles(workspaceId, path),
     retry: false,
   });
@@ -287,35 +293,43 @@ function Directory({
   return (
     <>
       {files.isPending && (
-        <p
-          className="px-2 py-1 text-xs text-muted-foreground"
+        <div
+          role="status"
+          data-slot="file-tree-loading"
+          className="flex flex-col gap-1.5 px-2 py-1.5"
           style={indent(depth)}
         >
-          {t("explorer.loading")}
-        </p>
+          <span className="sr-only">{t("explorer.loading")}</span>
+          <Skeleton className="h-3 w-2/3" />
+          <Skeleton className="h-3 w-1/2" />
+        </div>
       )}
       {files.isError && (
-        <div
-          className="flex items-center gap-1 px-2 py-1 text-xs text-destructive"
-          role="alert"
+        <Alert
+          variant="destructive"
+          className="flex items-center gap-1 rounded-none border-0 bg-transparent px-2 py-1 text-xs"
           style={indent(depth)}
         >
-          <span className="truncate">{files.error.message}</span>
+          <AlertTitle className="min-w-0 flex-1 truncate font-normal">
+            {files.error.message}
+          </AlertTitle>
           <IconButton
             label={t("explorer.retry")}
             onClick={() => void files.refetch()}
           >
             <RotateCw />
           </IconButton>
-        </div>
+        </Alert>
       )}
       {files.isSuccess && entries.length === 0 && (
-        <p
-          className="px-2 py-1 text-xs text-muted-foreground"
+        <Empty
+          className="items-start gap-0 rounded-none p-0 px-2 py-1 text-left"
           style={indent(depth)}
         >
-          {t("explorer.empty")}
-        </p>
+          <EmptyDescription className="text-xs">
+            {t("explorer.empty")}
+          </EmptyDescription>
+        </Empty>
       )}
       {entries.map((entry) => (
         <Row

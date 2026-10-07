@@ -14,9 +14,11 @@
 
 import { execFile, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { configRoot } from "../history/home";
+import { COPILOT_USER_PATH, OUTBOUND } from "../net/outbound";
+import type { SecretBackendKind } from "../secrets";
 import type {
   CredentialSource,
   UsageCredits,
@@ -62,11 +64,8 @@ export function failureFromStatus(status: number): UsageFailure {
   return "provider_error";
 }
 
-/** `~`，Windows 用 `USERPROFILE`。 */
-export function homeDir(): string | undefined {
-  const value = process.env.HOME ?? process.env.USERPROFILE ?? homedir();
-  return value === "" ? undefined : value;
-}
+// `~` 的解析与各 CLI 的配置目录合并进了 `history/home.ts`，这里照旧转出。
+export { homeDir } from "../history/home";
 
 /**
  * `604800 → "7d"`、`18000 → "5h"`。供应商按秒报窗口大小；胶囊要的是 CLI 打印的
@@ -102,15 +101,32 @@ async function getJson(
   } catch {
     throw new ProviderError("network");
   }
+  // 未公开的端点会答一页 HTML（登录墙、人机挑战、改版后的落地页），不管状态码
+  // 是几。那不是这台机器的毛病，是端点这条路走不通了：判 `unsupported`。
+  if (isHtml(response.headers.get("content-type"))) {
+    throw new ProviderError("unsupported");
+  }
   if (!response.ok) {
     // 正文会回显账号细节；状态是我们唯一留下的东西。
     throw new ProviderError(failureFromStatus(response.status));
   }
+  let text: string;
   try {
-    return (await response.json()) as unknown;
+    text = await response.text();
   } catch {
-    throw new ProviderError("parse");
+    throw new ProviderError("network");
   }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    // 没标 content-type 的 HTML 也是同一回事。
+    throw new ProviderError(/^\s*</.test(text) ? "unsupported" : "parse");
+  }
+}
+
+function isHtml(contentType: string | null): boolean {
+  const type = contentType?.split(";")[0]?.trim().toLowerCase() ?? "";
+  return type === "text/html" || type === "application/xhtml+xml";
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -138,7 +154,7 @@ function num(value: unknown): number | undefined {
 // `anthropic-beta: oauth-2025-04-20`——OAuth 令牌不是 `x-api-key`）。
 
 export const CLAUDE_ID = "claude";
-const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+const CLAUDE_USAGE_URL = OUTBOUND.claudeUsage.url;
 const CLAUDE_OAUTH_BETA = "oauth-2025-04-20";
 const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 
@@ -198,13 +214,7 @@ function claudeKeychainPayload(): Promise<string | undefined> {
 }
 
 function claudeFilePayload(): string | undefined {
-  const configured = process.env.CLAUDE_CONFIG_DIR;
-  const directory =
-    configured !== undefined && configured !== ""
-      ? configured
-      : homeDir() === undefined
-        ? undefined
-        : join(homeDir() as string, ".claude");
+  const directory = configRoot("claude");
   if (directory === undefined) return undefined;
   try {
     return readFileSync(join(directory, ".credentials.json"), "utf8");
@@ -291,7 +301,7 @@ export async function fetchClaude(
 // 只被**解码**、从不被验证：它是我们自己的文件，而后端无论如何都会验它。
 
 export const CODEX_ID = "codex";
-const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+const CODEX_USAGE_URL = OUTBOUND.codexUsage.url;
 const CODEX_ORIGINATOR = "codex_cli_rs";
 const CODEX_AUTH_CLAIM = "https://api.openai.com/auth";
 /** 握手加一次 RPC 是一次亚秒级交换；更久意味着 CLI 在提示或者卡住了。 */
@@ -315,13 +325,7 @@ export function accountIdFromJwt(token: string): string | undefined {
 export function codexCredentials():
   | { token: string; accountId: string }
   | undefined {
-  const configured = process.env.CODEX_HOME;
-  const directory =
-    configured !== undefined && configured !== ""
-      ? configured
-      : homeDir() === undefined
-        ? undefined
-        : join(homeDir() as string, ".codex");
+  const directory = configRoot("codex");
   if (directory === undefined) return undefined;
   let raw: string;
   try {
@@ -664,19 +668,24 @@ export function githubApiBase(): string {
   const configured = process.env.ARMADRA_GITHUB_API_BASE;
   return configured !== undefined && configured.trim() !== ""
     ? configured
-    : "https://api.github.com";
+    : OUTBOUND.githubApi.url;
 }
 
 export async function fetchCopilot(
   fetcher: Fetcher,
   token: string | undefined,
-  backend: "keychain" | "file",
+  backend: SecretBackendKind,
 ): Promise<ProviderResult> {
   if (token === undefined) return { report: undefined, source: "none" };
-  const source: CredentialSource = backend === "keychain" ? "keychain" : "file";
+  // 用量快照只分「OS 凭据库」与「文件」两档：DPAPI / libsecret 算前者，数据目录里
+  // 的加密文件算后者。
+  const source: CredentialSource =
+    backend === "keychain" || backend === "dpapi" || backend === "libsecret"
+      ? "keychain"
+      : "file";
   const user = (await getJson(
     fetcher,
-    `${githubApiBase()}/copilot_internal/user`,
+    `${githubApiBase()}${COPILOT_USER_PATH}`,
     {
       // Copilot 的内部端点吃的是经典的 `token` 方案，不是 `Bearer`。
       authorization: `token ${token}`,

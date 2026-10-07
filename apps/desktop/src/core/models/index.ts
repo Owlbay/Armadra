@@ -20,6 +20,7 @@ import { parseCustomAgents } from "../settings/custom-agents";
 import { settingsDomain } from "../settings";
 import { DomainError, notFound } from "../workspaces/support";
 import type { HandlerResult } from "../http/router";
+import { type DomainHandlers, registerProcedures } from "../http/rpc";
 import { forgetMenus, menuFor } from "./agents";
 import { BUILT_IN_PRICES } from "../usage/cost";
 import type { ModelPrice, PriceTable } from "../usage/cost";
@@ -146,6 +147,9 @@ export function install(context: CoreContext): ModelsDomain {
     log: (message, fields) => context.log.info(message, fields ?? {}),
     // 菜单是按上一份目录拼的；刚要求更新的人不该再等满它的 TTL。
     onInstalled: forgetMenus,
+    // 归一化已经补好缺省（开）；没有设置存储时同样按开。
+    autoRefresh: () =>
+      settingsDomain()?.settings.get("models.catalog.autoRefresh") !== false,
   });
   // 只读盘。网络那一趟等到第一次有人读目录才武装。
   catalog.load();
@@ -166,22 +170,21 @@ export function install(context: CoreContext): ModelsDomain {
     return { status: 200, body: catalogDocument(catalog, outcome.error) };
   });
 
+  // 契约 §39.1（`agents.models`）：旧路径与 procedure 同一份实现。
+  const models = async (agentId: string) => {
+    const { baseAgent, launchCmd } = resolveAgent(agentId);
+    return menuFor({ baseAgent, launchCmd, catalog: catalog.current() });
+  };
+  registerProcedures(context.server, "agents", {
+    models: ({ agentId }: { agentId: string }) => models(agentId),
+  } as unknown as DomainHandlers<"agents">);
+
   router.handle(
     "GET",
     "/api/agents/{agentId}/models",
     async (match): Promise<HandlerResult> => {
       try {
-        const { baseAgent, launchCmd } = resolveAgent(
-          match.params.agentId ?? "",
-        );
-        return {
-          status: 200,
-          body: await menuFor({
-            baseAgent,
-            launchCmd,
-            catalog: catalog.current(),
-          }),
-        };
+        return { status: 200, body: await models(match.params.agentId ?? "") };
       } catch (error) {
         if (error instanceof DomainError) {
           const { status, body } = error.response();

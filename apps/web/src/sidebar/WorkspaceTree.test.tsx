@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -16,6 +17,12 @@ const updateWorkspace = vi.fn();
 const deleteWorkspace = vi.fn();
 const sessions = vi.fn();
 
+// 会话列表按源发（`sources/source-api`）：与上面的 `runtimeApi` 共用同一个替身。
+vi.mock("../sources/source-api", () => ({
+  sourceApi: () => ({
+    sessions: (...args: unknown[]) => sessions(...args),
+  }),
+}));
 vi.mock("../api/client", () => ({
   runtimeApi: {
     listWorkspaces: (...args: unknown[]) => listWorkspaces(...args),
@@ -108,9 +115,9 @@ beforeEach(() => {
   deleteWorkspace.mockReset();
   sessions.mockReset().mockResolvedValue([]);
   usePreferencesStore.setState({
-    openWorkspaceIds: [workspace.id],
-    collapsedWorkspaceIds: [],
-    pinnedBoardIds: [],
+    openWorkspaceKeys: [scoped(workspace.id)],
+    collapsedWorkspaceKeys: [],
+    pinnedBoardKeys: [],
   });
   setBoards(2);
 });
@@ -120,7 +127,7 @@ describe("WorkspaceTree", () => {
     renderTree();
 
     expect(await screen.findByText("repo")).toBeTruthy();
-    expect(screen.getByText("Default")).toBeTruthy();
+    expect(screen.getByText("默认")).toBeTruthy();
     expect(screen.getByText("实验")).toBeTruthy();
     expect(screen.queryByText("3")).toBeNull();
     expect(screen.queryByText("7")).toBeNull();
@@ -145,7 +152,7 @@ describe("WorkspaceTree", () => {
     ]);
     renderTree();
 
-    await screen.findByText("Default");
+    await screen.findByText("默认");
     // 会话只喂行尾那颗点，标题不进树
     expect(await screen.findByLabelText("未读")).toBeTruthy();
     expect(screen.queryByText("Codex")).toBeNull();
@@ -263,8 +270,8 @@ describe("WorkspaceTree", () => {
 
     fireEvent.click(await screen.findByText("repo"));
     expect(screen.queryByText("实验")).toBeNull();
-    expect(usePreferencesStore.getState().collapsedWorkspaceIds).toEqual([
-      workspace.id,
+    expect(usePreferencesStore.getState().collapsedWorkspaceKeys).toEqual([
+      scoped(workspace.id),
     ]);
   });
 
@@ -282,7 +289,9 @@ describe("WorkspaceTree", () => {
     openMenu(screen.getAllByLabelText("画布操作")[1]!);
     fireEvent.click(await screen.findByRole("menuitem", { name: "置顶" }));
 
-    expect(usePreferencesStore.getState().pinnedBoardIds).toEqual([SECOND]);
+    expect(usePreferencesStore.getState().pinnedBoardKeys).toEqual([
+      scoped(SECOND),
+    ]);
     // 置顶组出现，「实验」在树里出现两次（置顶一次、项目一次）
     expect(await screen.findByLabelText("置顶")).toBeTruthy();
     await waitFor(() => expect(screen.getAllByText("实验").length).toBe(2));
@@ -292,7 +301,7 @@ describe("WorkspaceTree", () => {
     setBoards(1);
     renderTree();
 
-    await screen.findByText("Default");
+    await screen.findByText("默认");
     openMenu(screen.getByLabelText("画布操作"));
     const item = await screen.findByRole("menuitem", { name: "删除" });
     expect(item.getAttribute("aria-disabled")).toBe("true");
@@ -308,7 +317,7 @@ describe("WorkspaceTree", () => {
     await screen.findByText("实验");
     openMenu(screen.getAllByLabelText("画布操作")[1]!);
     fireEvent.click(await screen.findByRole("menuitem", { name: "删除" }));
-    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除画布" }));
 
     await waitFor(() =>
       expect(deleteBoard).toHaveBeenCalledWith(workspace.id, SECOND),
@@ -345,7 +354,7 @@ describe("WorkspaceTree", () => {
       expect(deleteWorkspace).toHaveBeenCalledWith(workspace.id),
     );
     await waitFor(() =>
-      expect(usePreferencesStore.getState().openWorkspaceIds).toEqual([]),
+      expect(usePreferencesStore.getState().openWorkspaceKeys).toEqual([]),
     );
   });
 

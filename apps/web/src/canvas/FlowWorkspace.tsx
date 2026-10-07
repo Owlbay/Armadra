@@ -12,16 +12,18 @@ import "@xyflow/react/dist/style.css";
 import "../styles/canvas.css";
 import { useCanvasReadOnly } from "../store/canvas/presence";
 import { PresenceBar } from "./PresenceBar";
+import { CursorLayer } from "../realtime/CursorLayer";
+import { CommentLayer } from "../realtime/comments/CommentLayer";
 
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { ContextMenu, ContextMenuTrigger } from "@/ui/context-menu";
 import { useT } from "@/app/preferences-store";
 import { usePreferencesStore, useResolvedTheme } from "@/app/preferences-store";
@@ -78,6 +80,7 @@ import {
   isToolDisabledWhenLocked,
   splitSelectionForDelete,
 } from "./tools";
+import { DANGER_ACTION_CLASS } from "@/lib/danger-action";
 import { MAX_ZOOM, MIN_ZOOM } from "./zoom";
 import { isZoomWheel, zoomCanvasByWheel } from "./interaction/wheel-zoom";
 
@@ -478,6 +481,10 @@ function FlowWorkspaceInner() {
             <Minimap />
             <ViewportPortal>
               <CanvasOverlays />
+              {/* 实时板上别人的光标与选区（补全架构 §6.4）；非实时板不画。 */}
+              <CursorLayer />
+              {/* 评论钉与评论模式（契约 §16.3）；任何板都有。 */}
+              <CommentLayer />
             </ViewportPortal>
             {/* 白板工具覆盖层（`whiteboard/tools/ToolLayer.tsx`）。 */}
             <ToolLayer />
@@ -489,24 +496,31 @@ function FlowWorkspaceInner() {
 
       {menus}
 
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={pendingDelete !== null}
         onOpenChange={(open) => {
           if (!open) setPendingDelete(null);
         }}
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("delete.session.title")}</AlertDialogTitle>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("delete.cancel")}</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete}>
+        <ResponsiveAlertDialogContent>
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
+              {t("delete.session.title")}
+            </ResponsiveAlertDialogTitle>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("delete.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
+              className={DANGER_ACTION_CLASS}
+              onClick={confirmDelete}
+            >
               {t("delete.session.confirm")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </ContextMenu>
   );
 }

@@ -175,6 +175,13 @@ export class Hub {
   features: Feature[] = [];
   readonly documents = new Documents();
   readonly sessions = new Map<string, Sink>();
+  /**
+   * Sessions whose socket is behind (backpressure, platform spec core
+   * packages §3.3). One server answers every session of the hub, so its
+   * stdout is paused while any of them is: the alternative is an unbounded
+   * backlog for the slow one.
+   */
+  private readonly pausedSessions = new Set<string>();
   readonly pending = new Map<string, Pending>();
   sequence = 0;
   stderrTail = "";
@@ -251,6 +258,7 @@ export class Hub {
       return reason.SERVER_PROBE_FAILED;
     }
     this.process = started;
+    this.applyFlow();
     this.generation = generation;
     this.state = "starting";
     this.reason = undefined;
@@ -354,7 +362,10 @@ export class Hub {
     this.process = undefined;
     if (process !== undefined) {
       // Ask first, then insist. A server given `shutdown`/`exit` closes its
-      // own index files; one that ignores them gets five seconds.
+      // own index files; one that ignores them gets five seconds. One that
+      // does exit is not waited on for the rest of them: a fixed sleep made
+      // every stop cost the full grace, which on a loaded Windows runner
+      // pushed core shutdown past a ten-second test hook.
       process.send(
         Buffer.from(
           JSON.stringify(request("armadra:shutdown", "shutdown", null)),
@@ -364,7 +375,16 @@ export class Hub {
       process.send(
         Buffer.from(JSON.stringify(notification("exit", null)), "utf8"),
       );
-      await new Promise((resolve) => setTimeout(resolve, this.shutdownGraceMs));
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        process.exited(),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, this.shutdownGraceMs);
+        }),
+      ]);
+      clearTimeout(timer);
+      // Still called after a clean exit: helpers the server forked can outlive
+      // the leader, and the tree kill is what ends them.
       await process.terminate();
     }
     this.publishStatus();
@@ -412,6 +432,30 @@ export class Hub {
         ? { stderrTail: this.stderrTail }
         : {}),
     });
+  }
+
+  /** The session's socket is behind: stop reading the server. */
+  pauseSession(sessionId: string): void {
+    if (!this.sessions.has(sessionId) || this.pausedSessions.has(sessionId)) {
+      return;
+    }
+    this.pausedSessions.add(sessionId);
+    this.applyFlow();
+  }
+
+  /** The session's socket drained, or the session is gone. */
+  resumeSession(sessionId: string): void {
+    if (this.pausedSessions.delete(sessionId)) this.applyFlow();
+  }
+
+  /** Whether the server's output is being held back for a slow session. */
+  get outputPaused(): boolean {
+    return this.pausedSessions.size > 0;
+  }
+
+  private applyFlow(): void {
+    if (this.pausedSessions.size > 0) this.process?.pause();
+    else this.process?.resume();
   }
 
   /** Sends one already-rewritten message to one session. */

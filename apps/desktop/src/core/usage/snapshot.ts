@@ -23,6 +23,8 @@
  *     reports.
  */
 
+import type { LocalWindowEstimates } from "./local-window";
+
 /** Every provider the core has a module for, in the order the snapshot lists them. */
 export const USAGE_PROVIDER_IDS = ["claude", "codex", "copilot"] as const;
 
@@ -43,7 +45,17 @@ export type UsageFailure =
   | "provider_error"
   | "network"
   | "parse"
-  | "no_windows";
+  | "no_windows"
+  /**
+   * 端点答了一页 HTML（挑战页、改版）。和下一个一样随 `unavailable` 报，
+   * 不算错误。
+   */
+  | "unsupported"
+  /**
+   * 这家的额度端点要借用 CLI 的登录令牌，有条款风险，出站政策默认关
+   * （`usage.claudeUsage` / `usage.copilotUsage`，外部服务 §9.3）。
+   */
+  | "policy_off";
 
 /**
  * One rate-limit window. `label` is a unit abbreviation (`5h`, `7d`), not
@@ -71,13 +83,21 @@ export interface UsageCredits {
 export interface ProviderUsage {
   readonly id: UsageProviderId;
   readonly status: UsageStatus;
-  /** Only with `status: "error"`. */
+  /**
+   * With `status: "error"`; with `unavailable` only `unsupported` or
+   * `policy_off`.
+   */
   readonly reason?: UsageFailure;
   readonly credentialSource: CredentialSource;
   readonly windows: readonly UsageWindow[];
   readonly credits?: UsageCredits;
   readonly viaCli?: boolean;
   readonly fetchedAt: string | null;
+  /**
+   * 只跟着 `reason: "policy_off"` 出现：额度端点关着，用本机转录估出来的窗口
+   * （`local-window.ts`，契约 §12.1）。不是额度端点的答案，界面标「本地估算」。
+   */
+  readonly estimate?: LocalWindowEstimates;
 }
 
 export interface UsageSnapshot {

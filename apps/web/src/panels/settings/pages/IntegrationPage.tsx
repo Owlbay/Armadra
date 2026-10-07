@@ -1,11 +1,17 @@
-import { useMutation } from "@tanstack/react-query";
-import { Wrench } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { RefreshCw, Wrench } from "lucide-react";
 import { toast } from "sonner";
-import type { AgentInfo, LegacyIntegrationFinding } from "@armadra/shared";
+import type {
+  AgentHistory,
+  AgentInfo,
+  HistoryState,
+  LegacyIntegrationFinding,
+} from "@armadra/shared";
 
 import { runtimeApi } from "../../../api/client";
 import { useAgentsQuery } from "../../../app/use-agents";
 import { useT, type Translate } from "../../../app/preferences-store";
+import { AdapterInstallStatus } from "@/acp/adapter-install";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { Badge } from "@/ui/badge";
@@ -23,15 +29,21 @@ import {
  *
  * Hook、技能与画布说明只在从画布启动 CLI 时交给它：产物生成在应用数据目录
  * 里，由启动行与节点终端的环境带过去，画布外启动的 CLI 什么都看不到。所以
- * 这里不再有「安装 / 卸载」——每种 CLI 一行，回答四件事：
+ * 这里不再有「安装 / 卸载」——每种 CLI 一行，回答四件事（启动器见
+ * [画布启动器](../../../../../docs/design/canvas-launcher.md) §8.2）：
  *
  *  1. **注入方式**——画布内注入。
  *  2. **Hook / 技能**——注入产物是不是当前版本。唯一的动作是「重新生成」，
  *     平时不用点：每次从画布启动都会先确保它们是最新的。
- *  3. **全局写入**——只有 Codex 有：它只认用户 `config.toml` 里的信任记录，
- *     这是整个集成唯一写进 CLI 自己配置的地方，徽标上写明写在哪。
+ *  3. **启动器警告**——画布内启动少带了东西（Windows 没有启动器、Codex 太旧
+ *     不带 Hook）；原因在悬停提示里。数据目录之外不写任何文件，所以不再有
+ *     「信任记录写在…」。
  *  4. **迁移与旧残留**——升级时清掉的旧全局安装（备份在哪），以及更早的产品
  *     名留下的条目与「修复」。
+ *
+ * 页首另有一组「Worker 待升级」的执行主机（契约 §21.2，集成状态的
+ * `outdatedHosts`）：那些主机上 SSH 终端里的画布启动带的是旧注入，每台一个
+ * 「重新同步」。各 CLI 的集成状态给的是同一份主机表，所以只画一次。
  */
 export function IntegrationPage() {
   const t = useT();
@@ -39,18 +51,68 @@ export function IntegrationPage() {
   const list = agents.data ?? [];
 
   return (
+    <>
+      {list[0] && <OutdatedWorkers agent={list[0]} />}
+      <SettingsGroup>
+        {list.map((agent) => (
+          <AgentIntegrationRow key={agent.id} agent={agent} />
+        ))}
+        {/* 一行都没有时整页是空白的——没有 CLI 与还没读完看起来一模一样。 */}
+        {list.length === 0 && (
+          <SettingsRow
+            label={t(
+              agents.isPending ? "integration.loading" : "integration.empty",
+            )}
+          />
+        )}
+      </SettingsGroup>
+    </>
+  );
+}
+
+/** 过旧 Worker 的执行主机，每台一行：徽标 + 「重新同步」。没有就什么都不画。 */
+export function OutdatedWorkers({ agent }: { agent: AgentInfo }) {
+  const t = useT();
+  const client = useQueryClient();
+  const { integration } = useAgentIntegration(agent);
+  const resync = useMutation({
+    mutationFn: (hostId: string) => runtimeApi.resyncExecutionHost(hostId),
+    onSuccess: (host) => {
+      void client.invalidateQueries({ queryKey: ["agent-integration"] });
+      void client.invalidateQueries({ queryKey: ["execution-hosts"] });
+      toast.success(
+        t("integration.resynced", { name: host.name || host.executionHostId }),
+      );
+    },
+    onError: (cause: Error) =>
+      toast.error(t("integration.resyncFailed"), {
+        description: cause.message,
+      }),
+  });
+  const hosts = integration?.outdatedHosts ?? [];
+  if (hosts.length === 0) return null;
+  return (
     <SettingsGroup>
-      {list.map((agent) => (
-        <AgentIntegrationRow key={agent.id} agent={agent} />
+      {hosts.map((host) => (
+        <SettingsRow key={host.hostId} label={host.name || host.hostId}>
+          <Badge variant="destructive">
+            {host.version
+              ? t("integration.outdatedHost.version", {
+                  version: host.version,
+                })
+              : t("integration.outdatedHost")}
+          </Badge>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={resync.isPending}
+            onClick={() => resync.mutate(host.hostId)}
+          >
+            <RefreshCw />
+            {t("integration.resync")}
+          </Button>
+        </SettingsRow>
       ))}
-      {/* 一行都没有时整页是空白的——没有 CLI 与还没读完看起来一模一样。 */}
-      {list.length === 0 && (
-        <SettingsRow
-          label={t(
-            agents.isPending ? "integration.loading" : "integration.empty",
-          )}
-        />
-      )}
     </SettingsGroup>
   );
 }
@@ -70,7 +132,7 @@ function repairDescription(
   return lines.join("\n");
 }
 
-function AgentIntegrationRow({ agent }: { agent: AgentInfo }) {
+export function AgentIntegrationRow({ agent }: { agent: AgentInfo }) {
   const t = useT();
   const refresh = useIntegrationRefresh();
   const { integration } = useAgentIntegration(agent);
@@ -112,7 +174,14 @@ function AgentIntegrationRow({ agent }: { agent: AgentInfo }) {
   }
   const ready = integration.hook.installed;
   const legacy = integration.legacy.found;
-  const migrated = integration.migration?.removed.length ?? 0;
+  const sessionTrust = integration.migration?.sessionTrust;
+  const migrated =
+    (integration.migration?.removed.length ?? 0) +
+    (sessionTrust?.removed.length ?? 0);
+  const backups = [
+    ...(integration.migration?.backups ?? []),
+    ...(sessionTrust?.backup ? [sessionTrust.backup] : []),
+  ];
 
   // 状态徽标放在名字下面、动作按钮留在右边：几样东西挤在一行时右侧不收缩，
   // 左列被压成一条窄缝，名字被推出视口。
@@ -149,20 +218,25 @@ function AgentIntegrationRow({ agent }: { agent: AgentInfo }) {
             : t("integration.skill.missing")}
         </Badge>
 
-        {(integration.globalWrites ?? []).map((path) => (
-          <Badge key={path} variant="outline" title={path}>
-            {t("integration.globalWrite", { path: shortenHome(path) })}
+        {/* 磁盘上的产物比这个版本写的旧：下次从画布启动会自己重写。 */}
+        {integration.stale && ready && (
+          <Badge variant="outline">{t("integration.stale")}</Badge>
+        )}
+        {/* ACP 适配器：状态与「安装 / 重新安装」（契约 §39.7）。没装时向导里
+            这家是灰的，原因与入口都在这里。 */}
+        <AdapterInstallStatus agent={agent} />
+        {integration.launcherWarning && (
+          <Badge variant="destructive" title={integration.launcherWarning}>
+            {t("integration.launcherWarning")}
           </Badge>
-        ))}
+        )}
         {migrated > 0 && (
-          <Badge
-            variant="secondary"
-            title={integration.migration?.backups.join("\n")}
-          >
+          <Badge variant="secondary" title={backups.join("\n")}>
             {t("integration.migrated")}
           </Badge>
         )}
         {legacy.length > 0 && <LegacyBadge findings={legacy} />}
+        {agent.history && <HistoryBadges history={agent.history} />}
       </span>
     </span>
   );
@@ -192,6 +266,33 @@ function AgentIntegrationRow({ agent }: { agent: AgentInfo }) {
   );
 }
 
+const HISTORY_PARTS = ["index", "cost", "transcript"] as const;
+
+const HISTORY_STATE_KEY: Record<HistoryState, string> = {
+  available: "capability.state.supported",
+  "not-found": "capability.state.notFound",
+  unsupported: "capability.state.unsupported",
+  disabled: "capability.state.disabled",
+};
+
+/**
+ * 本机历史数据三项（契约 §12.2）。没有数据也写状态词，不写成 0 或留空：「没
+ * 找到」和「这家不支持」是两回事。
+ */
+function HistoryBadges({ history }: { history: AgentHistory }) {
+  const t = useT();
+  return HISTORY_PARTS.map((part) => (
+    <Badge
+      key={part}
+      variant={history[part] === "available" ? "secondary" : "outline"}
+    >
+      {t(`integration.history.${part}`, {
+        state: t(HISTORY_STATE_KEY[history[part]]),
+      })}
+    </Badge>
+  ));
+}
+
 /**
  * 「旧残留 N」徽标，点开是按文件分组的清单。
  *
@@ -206,9 +307,9 @@ function LegacyBadge({ findings }: { findings: LegacyIntegrationFinding[] }) {
     <Popover>
       <PopoverTrigger asChild>
         <Badge asChild variant="destructive">
-          <button type="button">
+          <Button variant="ghost" size="xs" type="button">
             {t("integration.legacy.count", { count: findings.length })}
-          </button>
+          </Button>
         </Badge>
       </PopoverTrigger>
       {/* 设置对话框在 --z-dialog 上，弹层与它同层、后挂载，才不会被盖住。 */}

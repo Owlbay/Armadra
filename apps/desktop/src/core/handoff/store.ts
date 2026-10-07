@@ -6,13 +6,12 @@ import {
   MAX_PENDING as MAILBOX_MAX_PENDING,
   pendingCount,
 } from "../collab/mailbox";
-import { type Caller, loadNode } from "../collab/nodes";
+import { type Caller, historyHint, loadNode } from "../collab/nodes";
 import { render } from "../collab/transcript";
 import { type CollabContext, nowDate, nowSeconds } from "../collab/service";
 import { UNAVAILABLE } from "../git/fingerprint";
 import { executeOn } from "../remote/execute";
 import {
-  DomainError,
   badRequest,
   conflict,
   forbidden,
@@ -38,9 +37,12 @@ import {
 import {
   type CaptureRequest,
   type Captured,
+  type TranscriptSource,
+  type TranscriptTail,
   capture,
   readTranscriptTail,
 } from "./capture";
+import { captureTranscript, requireCaptureHost } from "./remote-capture";
 
 /** 控制端这台机器在交接材料里的名字。 */
 const LOCAL_HOST = "local-runtime";
@@ -48,6 +50,13 @@ const LOCAL_HOST = "local-runtime";
 /** 执行主机在交接材料里的名字。 */
 function hostLabel(hostId: string): string {
   return hostId === "" ? LOCAL_HOST : `execution-host:${hostId}`;
+}
+
+/** {@link hostLabel} 反过来：本机是空串。 */
+function hostIdOf(label: string): string {
+  return label.startsWith("execution-host:")
+    ? label.slice("execution-host:".length)
+    : "";
 }
 
 /**
@@ -200,7 +209,6 @@ function session(context: CollabContext, sessionId: string): SessionRow {
  */
 function identity(
   context: CollabContext,
-  space: { readonly executionHostId: string },
   workspaceId: string,
   nodeId: string,
   sessionId: string,
@@ -226,24 +234,16 @@ function identity(
   ) {
     throw conflict("Handoff session generation changed");
   }
-  // An Agent in an SSH terminal works in a directory on that host. The one
-  // correspondence that can be checked is "the terminal's host is the
-  // workspace's execution host": then its files, repository and transcript
-  // are all read there. Any other SSH host names a machine the bundle's
-  // material says nothing about.
+  // An Agent in an SSH terminal works on that host. Its identity says so; a
+  // host other than the workspace's is no longer a refusal (contract §21.1):
+  // the source's transcript is read there by `remote-capture.ts`, and a
+  // target anywhere can take material that is text and relative paths.
   const sshHost =
     node.data.ssh !== undefined &&
     node.data.ssh !== null &&
     typeof node.data.ssh === "object"
       ? String((node.data.ssh as { hostId?: unknown }).hostId ?? "")
       : undefined;
-  if (sshHost !== undefined && sshHost !== space.executionHostId) {
-    throw new DomainError(
-      501,
-      "unsupported",
-      "跨执行主机交接不可用：SSH 终端里的 Agent 只能与绑在同一台执行主机上的工作空间交接",
-    );
-  }
   if (!hasCapability(context.settings, agent, "contextLink")) {
     throw forbidden("Context links are disabled for this Agent");
   }
@@ -298,7 +298,6 @@ export async function prepare(
   }
   const source = identity(
     context,
-    space,
     workspaceId,
     request.sourceNodeId,
     request.sourceSessionId,
@@ -306,7 +305,6 @@ export async function prepare(
   );
   const target = identity(
     context,
-    space,
     workspaceId,
     request.targetNodeId,
     request.targetSessionId,
@@ -329,7 +327,6 @@ export async function prepare(
   // A recycle during snapshot collection must not silently relabel old data.
   identity(
     context,
-    space,
     workspaceId,
     request.sourceNodeId,
     request.sourceSessionId,
@@ -337,7 +334,6 @@ export async function prepare(
   );
   identity(
     context,
-    space,
     workspaceId,
     request.targetNodeId,
     request.targetSessionId,
@@ -404,6 +400,39 @@ export async function prepare(
  *     is not a repository, reports `unavailable` — an invented `observed` would
  *     be a claim about a worktree nobody looked at.
  */
+/**
+ * 交接去哪找来源的转录：`agent_status` 报来的路径与会话 id，加上节点终端的 cwd
+ * 与启动时间。一样线索都没有时是 `undefined`——那就是没有转录。
+ */
+function transcriptSource(
+  context: CollabContext,
+  source: Identity,
+  status: { readonly transcriptPath?: string; readonly sessionId?: string },
+): TranscriptSource | undefined {
+  const hint = historyHint(
+    context.database,
+    source.nodeId,
+    source.provider,
+    status,
+  );
+  if (
+    hint.transcriptPath === undefined &&
+    hint.sessionId === undefined &&
+    (hint.cwd === undefined || hint.startedAtMs === undefined)
+  ) {
+    return undefined;
+  }
+  return {
+    provider: source.provider,
+    ...(hint.transcriptPath === undefined ? {} : { path: hint.transcriptPath }),
+    ...(hint.sessionId === undefined ? {} : { sessionId: hint.sessionId }),
+    ...(hint.cwd === undefined ? {} : { cwd: hint.cwd }),
+    ...(hint.startedAtMs === undefined
+      ? {}
+      : { startedAtMs: hint.startedAtMs }),
+  };
+}
+
 async function build(
   context: CollabContext,
   space: { readonly rootPath: string; readonly executionHostId: string },
@@ -425,27 +454,35 @@ async function build(
     sourceUpdatedAt: status?.lastEventAt ?? null,
   };
   let excerpt = "";
-  // Provider home directories are never scanned: only a path the current
-  // verified, generation-bound provider named is eligible.
-  const eligible =
+  // Only a verified, generation-bound provider's report makes the transcript
+  // eligible. Past the path it reported, the agent's history adapter may find
+  // the session by what that same report and the node's terminal say — the
+  // session id, the cwd and the launch time (Codex by id, Pi / OMP by cwd and
+  // time, OpenCode's database by id) — never by scanning a home at large.
+  const eligible: TranscriptSource | undefined =
     request.includeTranscript &&
     status !== undefined &&
     status.verified &&
     !status.restored
-      ? (status.transcriptPath ?? undefined)
+      ? transcriptSource(context, source, status)
       : undefined;
   // The transcript is on the machine the source Agent runs on, the files and
   // the repository on the workspace's: an SSH Agent on the execution host has
-  // both there, a local Agent on a remote workspace has them apart.
-  const sourceRemote = source.executionHost !== LOCAL_HOST;
+  // both there, a local Agent on a remote workspace has them apart, and an
+  // SSH Agent on another host has its transcript read on that host
+  // (`remote-capture.ts`, contract §21.1).
+  const sourceHost = hostIdOf(source.executionHost);
+  const sameHost = sourceHost !== "" && sourceHost === space.executionHostId;
+  const elsewhere = sourceHost !== "" && !sameHost;
+  // Checked before anything is read: an unregistered host or one without a
+  // Worker is a refusal, not a bundle that quietly lacks its transcript.
+  if (eligible !== undefined && elsewhere) requireCaptureHost(sourceHost);
   const execute = workspaceExecute(context, workspaceId);
   const wanted: CaptureRequest = {
     paths: request.filePaths,
     execute: execute === true,
     executionHost: hostLabel(space.executionHostId),
-    ...(eligible !== undefined && sourceRemote
-      ? { transcript: { provider: source.provider, path: eligible } }
-      : {}),
+    ...(eligible !== undefined && sameHost ? { transcript: eligible } : {}),
   };
   const captured =
     space.executionHostId === ""
@@ -455,13 +492,21 @@ async function build(
           "handoff.capture",
           wanted as unknown as Record<string, unknown>,
         )) as Captured);
+  let capturedOn: string | undefined;
   if (request.includeTranscript) {
-    const tail =
-      eligible === undefined
-        ? undefined
-        : sourceRemote
-          ? captured.transcript
-          : readTranscriptTail(source.provider, eligible);
+    let tail: TranscriptTail | undefined;
+    if (eligible === undefined) {
+      tail = undefined;
+    } else if (elsewhere) {
+      const remote = await captureTranscript(sourceHost, eligible);
+      capturedOn = remote.capturedOn;
+      tail = remote.transcript;
+    } else if (sameHost) {
+      capturedOn = sourceHost;
+      tail = captured.transcript;
+    } else {
+      tail = readTranscriptTail(eligible);
+    }
     if (tail?.state === "read") {
       excerpt = render(tail.text).join("\n");
       cutoff = {
@@ -498,6 +543,7 @@ async function build(
     sourcePreserved: true,
     files: [...files],
     git,
+    ...(capturedOn === undefined ? {} : { capturedOn }),
     attachments: [],
     budget: {
       byteLimit: request.byteBudget,
@@ -685,7 +731,7 @@ export function accept(
   id: string,
   request: ConfirmRequest,
 ): HandoffView {
-  const space = workspace(context, workspaceId, true);
+  workspace(context, workspaceId, true);
   const existing = get(context, workspaceId, id);
   if (existing.digest !== request.expectedDigest) {
     throw conflict("Handoff preview digest changed");
@@ -695,7 +741,6 @@ export function accept(
   const target = existing.bundle.target;
   identity(
     context,
-    space,
     workspaceId,
     target.nodeId,
     target.sessionId,
@@ -882,11 +927,6 @@ export async function readForCaller(
   }
   identity(
     context,
-    {
-      executionHostId:
-        getWorkspace(context.database, caller.node.workspaceId)
-          .executionHostId ?? "",
-    },
     caller.node.workspaceId,
     target.nodeId,
     sessionId,

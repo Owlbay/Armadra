@@ -18,7 +18,13 @@ export const AGENT_STATES = ["working", "waiting", "blocked", "done"] as const;
  * be read as "not a report" by every gate and as a label by the header, which
  * is two different answers to one question.
  */
-export const AGENT_STATE_SOURCES = ["hook", "extension", "observed"] as const;
+export const AGENT_STATE_SOURCES = [
+  "hook",
+  "extension",
+  "observed",
+  // core 以 ACP 驱动的会话（ACP 会话视图设计 §4.1），由 `core/acp` 写入。
+  "acp",
+] as const;
 
 /**
  * Which transport a provider reports on. Derived from the provider, never
@@ -38,6 +44,7 @@ export function stateSourceFor(provider: string): string | undefined {
     case "pi":
     case "omp":
     case "opencode":
+    case "ama":
       return "extension";
     default:
       return undefined;

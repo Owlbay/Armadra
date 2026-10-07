@@ -7,7 +7,14 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -17,6 +24,7 @@ import { EventBus } from "../bus";
 import { openDatabase, type OpenedDatabase } from "../db/open";
 import { CoreServer } from "../http/server";
 import { createLog, nodePlatform } from "../platform";
+import { install as installSettings, settingsDomain } from "../settings";
 import { install } from "./index";
 import { readTokenFile } from "./secret-store";
 
@@ -91,9 +99,14 @@ async function harness(): Promise<Harness> {
   process.env.ARMADRA_GITHUB_OAUTH_BASE = oauth.base;
   process.env.ARMADRA_GITHUB_API_BASE = oauth.base;
   process.env.ARMADRA_SECRET_BACKEND = "file";
-  // 扫描的两棵树指向这个空目录，所以成本汇总不会去翻开发者自己的记录。
+  // 扫描的几棵树指向这个空目录，所以成本汇总不会去翻开发者自己的记录。
   process.env.CLAUDE_CONFIG_DIR = join(dataDir, "claude");
   process.env.CODEX_HOME = join(dataDir, "codex");
+  // Pi 与 OMP 共用这个覆盖（没有 profile 时）。
+  process.env.PI_CODING_AGENT_DIR = join(dataDir, "pi");
+  process.env.COPILOT_HOME = join(dataDir, "copilot");
+  // OpenCode 的库在 XDG_DATA_HOME 下：指到空目录，成本汇总不读开发机的库。
+  process.env.XDG_DATA_HOME = join(dataDir, "xdg");
 
   const opened: OpenedDatabase = openDatabase({
     file: join(dataDir, "canvas.db"),
@@ -110,14 +123,18 @@ async function harness(): Promise<Harness> {
     bus: new EventBus(),
     version: "0.0.0-test",
   });
-  const domain = install({
+  const context = {
     dataDir,
     db: opened,
     server,
     bus: new EventBus(),
     platform,
     log: createLog("error"),
-  });
+  };
+  // 设备流在 `usage.copilotUsage` 后面（默认关）；这组用例走的是打开之后的路。
+  installSettings(context);
+  settingsDomain()!.settings.patch({ usage: { copilotUsage: true } });
+  const domain = install(context);
   const listener = server.createListener();
   await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
   const port = (listener.address() as AddressInfo).port;
@@ -133,9 +150,11 @@ async function harness(): Promise<Harness> {
       rmSync(dataDir, { recursive: true, force: true });
       delete process.env.ARMADRA_GITHUB_OAUTH_BASE;
       delete process.env.ARMADRA_GITHUB_API_BASE;
-      delete process.env.ARMADRA_SECRET_BACKEND;
       delete process.env.CLAUDE_CONFIG_DIR;
       delete process.env.CODEX_HOME;
+      delete process.env.PI_CODING_AGENT_DIR;
+      delete process.env.COPILOT_HOME;
+      delete process.env.XDG_DATA_HOME;
     },
   };
 }
@@ -195,6 +214,58 @@ describe("用量的九条路由", () => {
     expect(again.scannedAt).toBe(summary.scannedAt);
   });
 
+  it("Claude 额度关着时快照带本地估算窗口，关掉 claudeLocalWindow 就不带", async () => {
+    // 夹具转录写在测试自己的 CLAUDE_CONFIG_DIR 下，不碰开发机的记录。
+    const projects = join(state.dataDir, "claude/projects/demo");
+    mkdirSync(projects, { recursive: true });
+    writeFileSync(
+      join(projects, "session.jsonl"),
+      `${JSON.stringify({
+        type: "assistant",
+        requestId: "req-local",
+        timestamp: new Date(Date.now() - 10 * 60_000).toISOString(),
+        message: {
+          model: "claude-opus-5",
+          usage: {
+            input_tokens: 120,
+            output_tokens: 80,
+            cache_read_input_tokens: 5000,
+          },
+        },
+      })}\n`,
+    );
+    await json("/api/usage/cost/refresh", "POST");
+    await json("/api/usage/refresh", "POST");
+    const snapshot = await json("/api/usage");
+    const claude = (snapshot.providers as Record<string, unknown>[]).find(
+      (provider) => provider.id === "claude",
+    );
+    expect(claude).toMatchObject({
+      status: "unavailable",
+      reason: "policy_off",
+      windows: [],
+      estimate: {
+        source: "local",
+        windows: [
+          { key: "five_hour", label: "5h", used: 200 },
+          { key: "seven_day", label: "7d", used: 200 },
+        ],
+      },
+    });
+    // 没有目录额度：只报用量。
+    for (const window of (claude!.estimate as { windows: object[] }).windows) {
+      expect(window).not.toHaveProperty("limit");
+    }
+
+    settingsDomain()!.settings.patch({ usage: { claudeLocalWindow: false } });
+    const off = await json("/api/usage");
+    const plain = (off.providers as Record<string, unknown>[]).find(
+      (provider) => provider.id === "claude",
+    );
+    expect(plain?.reason).toBe("policy_off");
+    expect(plain).not.toHaveProperty("estimate");
+  });
+
   it("Copilot 的设备流能走完登录 → 轮询 → 登出", async () => {
     const before = await json("/api/usage/copilot");
     expect(before).toEqual({ signedIn: false, backend: "file" });
@@ -218,14 +289,33 @@ describe("用量的九条路由", () => {
     // 令牌进的是 0600 文件后端，而不是响应。
     expect(JSON.stringify(authorized)).not.toContain("gho_test_token");
     expect(
-      readTokenFile(join(state.dataDir, "secrets/Armadra Copilot.token")),
+      readTokenFile(join(state.dataDir, "secrets/armadra-copilot.token")),
     ).toBe("gho_test_token");
 
     const out = await json("/api/usage/copilot/logout", "POST");
     expect(out.signedIn).toBe(false);
     expect(
-      readTokenFile(join(state.dataDir, "secrets/Armadra Copilot.token")),
+      readTokenFile(join(state.dataDir, "secrets/armadra-copilot.token")),
     ).toBeUndefined();
+  });
+
+  it("旧名字下的令牌第一次读时搬到 armadra-copilot，只搬一次", async () => {
+    const legacy = join(state.dataDir, "secrets/Armadra Copilot.token");
+    mkdirSync(join(state.dataDir, "secrets"), { recursive: true });
+    writeFileSync(legacy, "gho_legacy_token", { mode: 0o600 });
+
+    const before = await json("/api/usage/copilot", "GET");
+    expect(before.signedIn).toBe(true);
+    expect(before.backend).toBe("file");
+    expect(existsSync(legacy)).toBe(false);
+    expect(
+      readTokenFile(join(state.dataDir, "secrets/armadra-copilot.token")),
+    ).toBe("gho_legacy_token");
+    expect(
+      JSON.parse(
+        readFileSync(join(state.dataDir, "secrets/migrated.json"), "utf8"),
+      ).migrated,
+    ).toContain("copilot.file");
   });
 
   it("用户拒绝是一个终态，而不是继续轮询", async () => {
@@ -242,6 +332,31 @@ describe("用量的九条路由", () => {
     const result = await json("/api/usage/copilot/poll", "POST");
     expect(result.progress).toBe("expired");
     expect(result.pending).toBeUndefined();
+  });
+
+  it("copilotUsage 关着时设备流不联网，答 409；登出照常", async () => {
+    settingsDomain()!.settings.patch({ usage: { copilotUsage: false } });
+    for (const path of [
+      "/api/usage/copilot/login",
+      "/api/usage/copilot/poll",
+    ]) {
+      const response = await fetch(`${state.base}${path}`, { method: "POST" });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        code: "copilot_usage_disabled",
+      });
+    }
+    expect(state.oauth.requests).toEqual([]);
+    const out = await json("/api/usage/copilot/logout", "POST");
+    expect(out.signedIn).toBe(false);
+  });
+
+  it("状态徽标读 usage.statusBadges，关着时一个请求都不发", async () => {
+    settingsDomain()!.settings.patch({ usage: { statusBadges: false } });
+    expect(await json("/api/usage/status")).toEqual({
+      enabled: false,
+      providers: [],
+    });
   });
 
   it("重新打开的设置页继续显示用户正在敲的那个码", async () => {

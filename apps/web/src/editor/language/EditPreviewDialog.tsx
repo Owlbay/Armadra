@@ -5,13 +5,13 @@ import { PatchBody } from "@/nodes/DiffNode";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { ScrollArea } from "@/ui/scroll-area";
 import { applyEditPreview } from "./edit-preview";
 import { useEditPreviewStore } from "./edit-preview-store";
@@ -53,16 +53,18 @@ export function EditPreviewDialog() {
   };
 
   return (
-    <Dialog
+    <ResponsiveDialog
       open={open}
       onOpenChange={(next) => {
         if (!next) store.getState().close();
       }}
     >
-      <DialogContent className="flex max-h-[80vh] w-[min(92vw,52rem)] max-w-none flex-col gap-3">
-        <DialogHeader>
-          <DialogTitle>{preview?.title ?? t("lsp.preview.title")}</DialogTitle>
-          <DialogDescription>
+      <ResponsiveDialogContent className="flex max-h-[80vh] w-[min(92vw,52rem)] max-w-none flex-col gap-3">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {preview?.title ?? t("lsp.preview.title")}
+          </ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
             {loading
               ? t("lsp.preview.computing")
               : preview
@@ -70,10 +72,12 @@ export function EditPreviewDialog() {
                     count: String(preview.files.length),
                   })
                 : ""}
-          </DialogDescription>
-        </DialogHeader>
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
 
-        {error && <p className="text-[12px] text-[var(--danger)]">{error}</p>}
+        {error && (
+          <p className="text-[12px] text-[var(--danger-text)]">{error}</p>
+        )}
 
         {preview?.blocked && (
           <p className="text-[12px] text-[var(--warn)]">
@@ -95,7 +99,7 @@ export function EditPreviewDialog() {
               })}
             </span>
             {result.failed.length > 0 && (
-              <div className="flex flex-col gap-0.5 text-[var(--danger)]">
+              <div className="flex flex-col gap-0.5 text-[var(--danger-text)]">
                 <span>{t("lsp.preview.failedTitle")}</span>
                 {result.failed.map((failure) => (
                   <span key={failure.path} className="break-all">
@@ -136,7 +140,7 @@ export function EditPreviewDialog() {
           </div>
         </ScrollArea>
 
-        <DialogFooter>
+        <ResponsiveDialogFooter>
           <Button variant="ghost" onClick={() => store.getState().close()}>
             {result ? t("lsp.preview.close") : t("lsp.preview.cancel")}
           </Button>
@@ -154,8 +158,8 @@ export function EditPreviewDialog() {
               {t("lsp.preview.apply")}
             </Button>
           )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

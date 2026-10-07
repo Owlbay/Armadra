@@ -112,26 +112,202 @@ describe("AccountPage usage controls", () => {
   it("单个 provider 关掉后立刻重新取用量，只发那一个键", async () => {
     getSettings.mockResolvedValue({ usage: { enabled: true } });
     updateSettings.mockResolvedValue({
-      usage: { enabled: true, providers: { copilot: false } },
+      usage: { enabled: true, providers: { codex: false } },
     });
     render(
       <TestProviders>
         <AccountPage />
       </TestProviders>,
     );
-    const copilot = await screen.findByRole("switch", { name: "Copilot" });
+    const codex = await screen.findByRole("switch", { name: "Codex" });
     // 设置还没到之前每个控件都是禁用的，先等它可用再点。
     await waitFor(() =>
-      expect((copilot as HTMLButtonElement).disabled).toBe(false),
+      expect((codex as HTMLButtonElement).disabled).toBe(false),
     );
+    expect(codex.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText("非官方端点")).toBeTruthy();
     // 归一化后 Runtime 会补齐四个键，但补丁只带用户动过的那一个。
-    fireEvent.click(copilot);
+    fireEvent.click(codex);
     await waitFor(() =>
       expect(updateSettings).toHaveBeenCalledWith({
-        usage: { providers: { copilot: false } },
+        usage: { providers: { codex: false } },
       }),
     );
     await waitFor(() => expect(refreshUsage).toHaveBeenCalledTimes(1));
+  });
+
+  it("Claude / Copilot 默认关并写明条款风险，打开时两个键一起开", async () => {
+    getSettings.mockResolvedValue({
+      usage: {
+        enabled: true,
+        providers: { claude: true, codex: true, copilot: true },
+        claudeUsage: false,
+        copilotUsage: false,
+      },
+    });
+    updateSettings.mockResolvedValue({ usage: { claudeUsage: true } });
+    render(
+      <TestProviders>
+        <AccountPage />
+      </TestProviders>,
+    );
+    const claude = await screen.findByRole("switch", { name: "Claude" });
+    await waitFor(() =>
+      expect((claude as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(claude.getAttribute("aria-checked")).toBe("false");
+    expect(
+      screen
+        .getByRole("switch", { name: "Copilot" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(screen.getByText(/可能违反 Anthropic 条款/)).toBeTruthy();
+    expect(screen.getByText(/可能违反 Copilot 条款/)).toBeTruthy();
+    // 政策关着时不能开始 Copilot 登录。
+    expect(
+      (screen.getByRole("button", { name: "登录" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    fireEvent.click(claude);
+    await waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({
+        usage: { providers: { claude: true }, claudeUsage: true },
+      }),
+    );
+  });
+
+  it("关掉 Claude 时两个键一起关", async () => {
+    getSettings.mockResolvedValue({
+      usage: { enabled: true, claudeUsage: true },
+    });
+    updateSettings.mockResolvedValue({ usage: { claudeUsage: false } });
+    render(
+      <TestProviders>
+        <AccountPage />
+      </TestProviders>,
+    );
+    const claude = await screen.findByRole("switch", { name: "Claude" });
+    await waitFor(() =>
+      expect(claude.getAttribute("aria-checked")).toBe("true"),
+    );
+    fireEvent.click(claude);
+    await waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({
+        usage: { providers: { claude: false }, claudeUsage: false },
+      }),
+    );
+  });
+
+  it("状态徽标写 statusBadges，模型目录自动更新写 models.catalog", async () => {
+    getSettings.mockResolvedValue({
+      usage: { enabled: true, statusPage: true, statusBadges: true },
+      models: { catalog: { autoRefresh: true } },
+    });
+    updateSettings.mockResolvedValue({});
+    render(
+      <TestProviders>
+        <AccountPage />
+      </TestProviders>,
+    );
+    const badges = await screen.findByRole("switch", { name: "服务状态徽标" });
+    await waitFor(() =>
+      expect((badges as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(badges);
+    await waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({
+        usage: { statusBadges: false },
+      }),
+    );
+    const catalog = screen.getByRole("switch", { name: "自动更新模型目录" });
+    await waitFor(() =>
+      expect((catalog as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(catalog);
+    await waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({
+        models: { catalog: { autoRefresh: false } },
+      }),
+    );
+  });
+
+  it("Claude 本地额度估算缺省开，关掉只写 usage.claudeLocalWindow", async () => {
+    getSettings.mockResolvedValue({ usage: { enabled: true } });
+    updateSettings.mockResolvedValue({});
+    render(
+      <TestProviders>
+        <AccountPage />
+      </TestProviders>,
+    );
+    const toggle = await screen.findByRole("switch", {
+      name: "Claude 本地额度估算",
+    });
+    await waitFor(() =>
+      expect((toggle as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({
+        usage: { claudeLocalWindow: false },
+      }),
+    );
+  });
+
+  it("成本扫描关着时本地估算开关不可用，并照实显示存着的值", async () => {
+    getSettings.mockResolvedValue({
+      usage: {
+        enabled: true,
+        claudeLocalWindow: false,
+        cost: { enabled: false },
+      },
+    });
+    usePreferencesStore.setState({ locale: "en" });
+    render(
+      <TestProviders>
+        <AccountPage />
+      </TestProviders>,
+    );
+    const toggle = await screen.findByRole("switch", {
+      name: "Claude local window estimate",
+    });
+    await screen.findByRole("switch", { name: "Local cost tracking" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect((toggle as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("政策关着的那家在卡片上说怎么打开，而不是说凭据丢了", async () => {
+    getSettings.mockResolvedValue({ usage: { enabled: true } });
+    getUsage.mockResolvedValue({
+      providers: [
+        {
+          id: "claude",
+          status: "unavailable",
+          reason: "policy_off",
+          windows: [],
+          fetchedAt: null,
+        },
+        {
+          id: "codex",
+          status: "unavailable",
+          reason: "unsupported",
+          windows: [],
+          fetchedAt: null,
+        },
+      ],
+    });
+    render(
+      <TestProviders>
+        <AccountPage />
+      </TestProviders>,
+    );
+    await screen.findByText(
+      "额度读取已默认关闭，可在「设置 → 账号与用量」开启",
+    );
+    expect(
+      screen.getByText("用量接口返回了网页而不是数据，暂不支持"),
+    ).toBeTruthy();
+    expect(screen.queryByText("未找到可用的登录凭据")).toBeNull();
   });
 
   it("刷新节奏选「手动」时保存 0 分钟", async () => {
@@ -151,7 +327,9 @@ describe("AccountPage usage controls", () => {
   });
 
   it("Copilot 登录显示用户码，且不显示任何 device code", async () => {
-    getSettings.mockResolvedValue({ usage: { enabled: true } });
+    getSettings.mockResolvedValue({
+      usage: { enabled: true, copilotUsage: true },
+    });
     copilotLogin.mockResolvedValue({
       signedIn: false,
       backend: "keychain",
@@ -176,6 +354,22 @@ describe("AccountPage usage controls", () => {
     expect(screen.getByText(/github\.com\/login\/device/)).toBeTruthy();
     // 登录进行中按钮变成登出的前提是已登录；这里还没有。
     expect(screen.queryByRole("button", { name: "登出" })).toBeNull();
+  });
+
+  it("Copilot 一行只说令牌存在哪儿", async () => {
+    getSettings.mockResolvedValue({ usage: { enabled: true } });
+    copilotAuth.mockResolvedValue({ signedIn: true, backend: "dpapi" });
+    render(
+      <TestProviders>
+        <AccountPage />
+      </TestProviders>,
+    );
+    await screen.findByText("令牌经 Windows DPAPI 加密保存。");
+    expect(
+      screen.queryByText(
+        "本平台没有可用的钥匙串，令牌存在权限 0600 的文件里。",
+      ),
+    ).toBeNull();
   });
 
   it("已登录时提供登出，文件后端会说明这是降级", async () => {

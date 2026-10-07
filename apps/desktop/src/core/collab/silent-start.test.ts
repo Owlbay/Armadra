@@ -91,6 +91,8 @@ beforeEach(() => {
   fixture = agentFixture();
   me = fixture.agentNode("Caller");
   fixture.name(me, "planner");
+  // 首投要求画面上看得见提示符（§4.3「画面门」）：这里的目标都停在Codex的输入框上。
+  fixture.terminal.capture = "› Ask Codex to do anything\n\n  ? for shortcuts";
 });
 
 afterEach(() => {

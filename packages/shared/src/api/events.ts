@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { jsonValueSchema } from "../contract/json.js";
 import { agentEventSchema, agentStatusSchema } from "../domain/index.js";
 
 import {
@@ -11,6 +12,11 @@ import {
   browserSessionSchema,
   browserTabListSchema,
 } from "./browser.js";
+import {
+  acpDriverEventSchema,
+  acpTurnEventSchema,
+  acpUpdateEventSchema,
+} from "./acp.js";
 import { boardPresenceSchema } from "./boards.js";
 import { driveLeaseSchema } from "./drive.js";
 import { fileChangeKindSchema } from "./files.js";
@@ -18,8 +24,43 @@ import {
   languageServerEventSchema,
   languageSessionEventSchema,
 } from "./language.js";
+import { boardCommentEventSchema } from "./realtime.js";
 import { resourceSnapshotSchema } from "./resources.js";
 import { sshPromptSchema } from "./ssh.js";
+import {
+  workflowDraftEventSchema,
+  workflowGateEventSchema,
+  workflowRunEventSchema,
+} from "./workflows.js";
+
+/**
+ * `agent.approval` 的 `request`：core 的审批行（`core/agent/approvals.ts` 的
+ * `AgentApproval`，hook 面记的那份在 `core/hook/store.ts`，没答的字段缺席而不是
+ * `null`）。新请求时没有 `answer`；答复与撤回复用同一个事件，带
+ * `resolved: true`、`decision`、`route`（ACP 的 elicitation 再带 `elicitation`）。
+ * 里面的 `request` 才是 CLI 或 ACP 适配器的原话（hook 载荷、权限请求），按原样
+ * 的 JSON 透传（库里那一行解析不了时是 `null` 或原样的字符串）。
+ */
+export const agentApprovalRecordSchema = z
+  .object({
+    id: z.string(),
+    nodeId: z.string(),
+    workspaceId: z.string(),
+    request: jsonValueSchema,
+    answer: z.string().nullish(),
+    answeredBy: z.string().nullish(),
+    createdAt: z.string(),
+    answeredAt: z.string().nullish(),
+    /** 答复的 CAS 修订号；hook 面记的审批行（`core/hook/store.ts`）没有它。 */
+    revision: z.number().optional(),
+    resolved: z.literal(true).optional(),
+    decision: z.string().optional(),
+    route: z.string().optional(),
+    elicitation: z.object({ action: z.string() }).optional(),
+  })
+  .catchall(jsonValueSchema);
+
+export type AgentApprovalRecord = z.infer<typeof agentApprovalRecordSchema>;
 
 /** `WS /api/workspaces/{id}/events` — plan §5.4 / §7. */
 export const workspaceEventSchema = z.discriminatedUnion("type", [
@@ -35,7 +76,7 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
     type: z.literal("agent.approval"),
     nodeId: z.string(),
     pendingId: z.string(),
-    request: z.unknown(),
+    request: agentApprovalRecordSchema,
   }),
   z.object({
     type: z.literal("agent.delivery"),
@@ -46,7 +87,11 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
     runId: z.string().optional(),
     taskId: z.string().optional(),
     targetNodeId: z.string(),
-    /** `delivered` / `queued` / `unknown` / `refused`。 */
+    /**
+     * `delivered` / `queued` / `unknown` / `refused`，以及排队项的终态
+     * `expired` / `cancelled`（设计 `cli-collaboration.md` §4，终态的 `code` 是
+     * 它最后一次没投出去的理由）。
+     */
     outcome: z.string(),
     /**
      * 被拦下时的稳定码（`LOOP_DETECTED`、`RATE_LIMITED`…）。页面按它取文案，
@@ -54,6 +99,10 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
      */
     code: z.string().optional(),
   }),
+  /** ACP sessions (contract §14.3): one update, a turn's end, a driver switch. */
+  acpUpdateEventSchema,
+  acpTurnEventSchema,
+  acpDriverEventSchema,
   z.object({
     type: z.literal("terminal.exit"),
     sessionId: z.string(),
@@ -94,6 +143,8 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
    * 换手时各一帧。
    */
   boardPresenceSchema.extend({ type: z.literal("canvas.presence") }),
+  /** 一条评论变了（契约 §16.3）：页面重新拉评论，推送按提及叫人。 */
+  boardCommentEventSchema,
   /**
    * A control verb added a node on behalf of `originNodeId` — the node whose
    * agent ran the verb.
@@ -217,6 +268,55 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
     size: z.number().int().nonnegative().nullish(),
     mtime: z.string().nullish(),
   }),
+  /** Workflow drafts, runs and gates (contract §15.4). */
+  workflowDraftEventSchema,
+  workflowRunEventSchema,
+  workflowGateEventSchema,
+  /**
+   * 自动化计划的三种时刻（契约 §27）：到点起跑、一次运行失败、连续失败到要人
+   * 处理。只带标识与稳定码，不带命令与输出。
+   */
+  z.object({
+    type: z.literal("schedule.fired"),
+    planId: z.string(),
+    runId: z.string(),
+    nodeId: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("schedule.failed"),
+    planId: z.string(),
+    runId: z.string(),
+    nodeId: z.string().optional(),
+    reasonCode: z.string(),
+  }),
+  z.object({
+    type: z.literal("schedule.attention"),
+    planId: z.string(),
+    nodeId: z.string().optional(),
+    reasonCode: z.string(),
+  }),
+  /** 出站中继隧道换了状态（契约 §32）；不进 outbox。 */
+  z.object({
+    type: z.literal("cloud.tunnel"),
+    issuer: z.string(),
+    state: z.enum([
+      "disabled",
+      "connecting",
+      "authenticating",
+      "ready",
+      "draining",
+      "backoff",
+    ]),
+  }),
+  /** 一个会话的资源用量越过阈值（契约 §27）；`metric` 今天只有 `memory`（字节）。 */
+  z.object({
+    type: z.literal("resources.threshold"),
+    sessionId: z.string(),
+    nodeId: z.string().optional(),
+    metric: z.string(),
+    value: z.number().nonnegative(),
+    threshold: z.number().nonnegative(),
+  }),
 ]);
 
 export type FileChangedEvent = Extract<
@@ -235,6 +335,10 @@ export type LanguageServerWorkspaceEvent = Extract<
 export type ResourceSampleEvent = Extract<
   WorkspaceEvent,
   { type: "resource.sample" }
+>;
+export type BoardCommentEvent = Extract<
+  WorkspaceEvent,
+  { type: "board.comment" }
 >;
 export type CanvasPresenceEvent = Extract<
   WorkspaceEvent,
@@ -267,6 +371,14 @@ export type BrowserDialogEvent = Extract<
 export type BrowserFileChooserEvent = Extract<
   WorkspaceEvent,
   { type: "browser.fileChooser" }
+>;
+export type ScheduleEvent = Extract<
+  WorkspaceEvent,
+  { type: "schedule.fired" | "schedule.failed" | "schedule.attention" }
+>;
+export type ResourcesThresholdEvent = Extract<
+  WorkspaceEvent,
+  { type: "resources.threshold" }
 >;
 export type SshPromptEvent = Extract<WorkspaceEvent, { type: "ssh.prompt" }>;
 export type WorkspaceUpdatedEvent = Extract<

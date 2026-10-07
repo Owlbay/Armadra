@@ -22,6 +22,7 @@ import { useT } from "@/app/preferences-store";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
 import { usePageVisible } from "@/panels/resources/use-visibility";
 import { Badge } from "@/ui/badge";
+import { Button } from "@/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui/popover";
 
 /** 悬停里最多几条。再多就不是「最近」了，那是审计面板的事。 */
@@ -53,7 +54,7 @@ export function ContextReadsBadge({
 
   const total = reads.data?.total ?? 0;
   if (reads.isError || total === 0) return null;
-  const recent = (reads.data?.recent ?? []).slice(0, RECENT_SHOWN);
+  const recent = (reads.data?.reads ?? []).slice(0, RECENT_SHOWN);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -64,8 +65,10 @@ export function ContextReadsBadge({
           className="h-[18px] px-1.5 text-[length:var(--text-caption)]"
           data-no-drag="true"
         >
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
             data-slot="context-reads"
             data-testid={`context-reads-${nodeId}`}
             aria-label={t("contextReads.count", { count: total })}
@@ -77,7 +80,7 @@ export function ContextReadsBadge({
           >
             <Eye className="size-2.5" />
             {t("contextReads.count", { count: total })}
-          </button>
+          </Button>
         </Badge>
       </PopoverTrigger>
       <PopoverContent
@@ -90,12 +93,12 @@ export function ContextReadsBadge({
         ) : (
           <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
             {recent.map((entry) => (
-              <li
-                key={`${entry.readerNodeId}-${entry.atMs}`}
-                className="min-w-0 truncate"
-              >
+              <li key={entry.id} className="min-w-0 truncate">
                 {t("contextReads.entry", {
-                  name: entry.readerName ?? entry.readerNodeId,
+                  name:
+                    entry.readerTitle ??
+                    entry.readerHandle ??
+                    entry.readerNodeId,
                   verb: entry.verb,
                   bytes: formatBytes(entry.bytes),
                 })}

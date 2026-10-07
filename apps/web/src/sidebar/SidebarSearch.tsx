@@ -26,6 +26,7 @@ import {
   useConversations,
   type Conversation,
 } from "../meta/conversations";
+import { sk } from "../sources/scope";
 import { useCanvasStore } from "../store/canvas-store";
 import {
   Command,
@@ -37,14 +38,16 @@ import {
   CommandShortcut,
 } from "@/ui/command";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { gotoNode } from "./goto-node";
 import { searchBoards, type SearchBoard, type SearchHit } from "./search-index";
+import { displayName } from "./display-name";
+import { COMMAND_INPUT_FOCUS } from "@/panels/tabs-focus";
 
 export interface SidebarSearchProps {
   open: boolean;
@@ -68,7 +71,7 @@ export function SidebarSearch({ open, onOpenChange }: SidebarSearchProps) {
    */
   const documents = useQueries({
     queries: boards.map((board) => ({
-      queryKey: ["board", workspace?.id, board.id],
+      queryKey: sk("board", workspace?.id, board.id),
       queryFn: () => runtimeApi.loadBoard(workspace!.id, board.id),
       enabled: open && Boolean(workspace),
       staleTime: 30_000,
@@ -80,7 +83,7 @@ export function SidebarSearch({ open, onOpenChange }: SidebarSearchProps) {
     () =>
       boards.map((board, index) => ({
         id: board.id,
-        name: board.name,
+        name: displayName(board.name, t),
         // 当前这块板用 store 里的文档：它包含还没落盘的编辑。
         nodes:
           board.id === boardId && document?.board.id === board.id
@@ -94,6 +97,7 @@ export function SidebarSearch({ open, onOpenChange }: SidebarSearchProps) {
       boards,
       document,
       documents.map((item) => item.dataUpdatedAt).join(),
+      t,
     ],
   );
 
@@ -133,17 +137,20 @@ export function SidebarSearch({ open, onOpenChange }: SidebarSearchProps) {
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent
         showCloseButton={false}
         className="top-1/4 z-[var(--z-dialog)] max-w-[600px]! translate-y-0 overflow-hidden rounded-[var(--r-dialog)]! p-0 sm:max-w-[600px]"
       >
-        <DialogHeader className="sr-only">
-          <DialogTitle>{t("search.title")}</DialogTitle>
-          <DialogDescription>{t("search.placeholder")}</DialogDescription>
-        </DialogHeader>
+        <ResponsiveDialogHeader className="sr-only">
+          <ResponsiveDialogTitle>{t("search.title")}</ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
+            {t("search.placeholder")}
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
         <Command className="p-0" shouldFilter={false}>
           <CommandInput
+            className={COMMAND_INPUT_FOCUS}
             placeholder={t("search.placeholder")}
             value={query}
             onValueChange={setQuery}
@@ -212,7 +219,7 @@ export function SidebarSearch({ open, onOpenChange }: SidebarSearchProps) {
             )}
           </CommandList>
         </Command>
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

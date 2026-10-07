@@ -33,6 +33,7 @@ import {
   loadHandles,
   resolveLink,
 } from "../addressing";
+import { checkScreen } from "../screen";
 import { recordDelivery } from "../deliveries";
 import { MAX_BODY_CHARS } from "../mailbox";
 import {
@@ -55,6 +56,7 @@ import {
   type QueueItem,
   queueActorId,
   queueActorFields,
+  type SettledBy,
   SEND_QUEUE_TTL_SECONDS,
   claim,
   enqueue,
@@ -138,6 +140,15 @@ export const SEND_CODES = {
   TARGET_AWAITING_APPROVAL: 409,
   TARGET_INPUT_PENDING: 409,
   TARGET_STATE_UNVERIFIED: 409,
+  /**
+   * 目标的终端画面不是输入提示符：停在 CLI 自己的对话框上（启动时的信任 / 权限
+   * 模式 / 升级提示），或者首投时画面上还看不见提示符（§4.3「画面门」）。
+   *
+   * 与 `TARGET_AWAITING_APPROVAL` 是同一类事——正文加回车就是替人选了那个对话
+   * 框的缺省项——但事实来源不同：那一个是状态通道报的，这一个是看画面看出来
+   * 的。分成两个码，看回执的人才知道该去终端里找什么。
+   */
+  TARGET_NOT_AT_PROMPT: 409,
   [LEASE_HELD_BY_HUMAN]: 409,
   [LEASE_REVOKED]: 409,
   [LEASE_HELD_BY_AGENT]: 409,
@@ -190,6 +201,7 @@ type QueueReason =
   | "TARGET_STARTING"
   | "TARGET_AWAITING_APPROVAL"
   | "TARGET_INPUT_PENDING"
+  | "TARGET_NOT_AT_PROMPT"
   | typeof LEASE_HELD_BY_HUMAN
   | typeof LEASE_HELD_BY_AGENT;
 
@@ -200,6 +212,8 @@ const QUEUE_MESSAGES: Record<QueueReason, string> = {
     "目标停在一个权限提示或提问上；写进去就是替人回答了那个问题。",
   TARGET_INPUT_PENDING:
     "目标的输入行上有半截没提交的字；投进去就会接在那半行后面。",
+  TARGET_NOT_AT_PROMPT:
+    "目标的终端画面不是输入提示符（停在 CLI 的对话框上，或者还没画出提示符）；写进去再回车就是替人选了那个对话框的缺省项。",
   [LEASE_HELD_BY_HUMAN]: "有人正在这个终端里打字。",
   [LEASE_HELD_BY_AGENT]: "另一个 Agent 正在驱动它。",
 };
@@ -209,6 +223,8 @@ const QUEUE_STATE: Record<QueueReason, TargetState> = {
   TARGET_STARTING: "starting",
   TARGET_AWAITING_APPROVAL: "awaiting-approval",
   TARGET_INPUT_PENDING: "idle",
+  // 停在对话框上的目标在等人回答，与停在权限提示上是同一种「在等人」。
+  TARGET_NOT_AT_PROMPT: "awaiting-approval",
   [LEASE_HELD_BY_HUMAN]: "idle",
   [LEASE_HELD_BY_AGENT]: "idle",
 };
@@ -418,6 +434,15 @@ export interface AttemptOptions {
    * 那一次没有人在等那个回执。
    */
   readonly announce?: boolean;
+  /**
+   * 这一次是出队泵发起的。硬拒绝落 `settled_by = 'gate'`，给发送方写回执；发送
+   * 当下的那一次不需要——拒绝回执已经当场交到调用者手里了（`cli-collaboration.md` §4）。
+   */
+  readonly dequeued?: boolean;
+}
+
+function refusedBy(options: AttemptOptions): SettledBy {
+  return options.dequeued === true ? "gate" : "source";
 }
 
 /**
@@ -488,12 +513,21 @@ export async function attempt(
       throw error;
     }
     // 门链上的硬拒绝：这一条再等也不会变好，从队列里拿掉。
-    settle(context.database, item.id, "cancelled", codeOf(error));
+    settle(
+      context.database,
+      item.id,
+      "cancelled",
+      codeOf(error),
+      refusedBy(options),
+    );
     throw error;
   }
   const target = live.target;
   let state = live.state;
   let targetStateLabel: string = state;
+  // 这一次是不是按首投放行门放行的（下面两处之一）。那两条门凭的是「会话够
+  // 老」，不是任何一条说「输入框在前台」的事实，所以投之前要看得见提示符。
+  let firstDelivery = false;
 
   // 没有状态适配的通道（§4.3）。默认拒绝而不是默认放行：这种节点上「在等人」
   // 这个事实根本不存在，放行就没法保证不替人回答权限提示。
@@ -513,6 +547,7 @@ export async function attempt(
     if (silentStart(context, live, nowMs)) {
       state = "idle";
       targetStateLabel = OBSERVED_QUIET;
+      firstDelivery = true;
     } else if (hasStateChannel(context, target)) {
       return queueOrRefuse(
         context,
@@ -523,7 +558,13 @@ export async function attempt(
         now,
       );
     } else if (options.unverified !== true) {
-      settle(context.database, item.id, "cancelled", "TARGET_STATE_UNVERIFIED");
+      settle(
+        context.database,
+        item.id,
+        "cancelled",
+        "TARGET_STATE_UNVERIFIED",
+        refusedBy(options),
+      );
       throw refuse(
         "TARGET_STATE_UNVERIFIED",
         `「${target.title}」没有装状态适配，只有 PTY 观测；改用 canvas post，或显式加 --unverified 自负其责。`,
@@ -555,12 +596,19 @@ export async function attempt(
   ) {
     state = "idle";
     targetStateLabel = state;
+    firstDelivery = true;
   }
 
   // `--interrupt`：只对真的在一轮里的目标有意义。空闲提示符上的 `ESC` 是空
   // 操作，而权限提示上的 `ESC` 的意思是「拒绝这次工具调用」——那是替人做决定。
   if (options.interrupt === true && state === "awaiting-approval") {
-    settle(context.database, item.id, "cancelled", "TARGET_AWAITING_APPROVAL");
+    settle(
+      context.database,
+      item.id,
+      "cancelled",
+      "TARGET_AWAITING_APPROVAL",
+      refusedBy(options),
+    );
     throw refuse(
       "TARGET_AWAITING_APPROVAL",
       `「${target.title}」停在一个权限提示上，Escape 在那里的意思是「拒绝这次工具调用」，已拒绝。`,
@@ -583,7 +631,13 @@ export async function attempt(
 
   // 租约（§6）。人在打字就不是 Agent 的回合；接管更是明说了不自动恢复。
   if (live.leaseState === "humanTakeover") {
-    settle(context.database, item.id, "cancelled", LEASE_REVOKED);
+    settle(
+      context.database,
+      item.id,
+      "cancelled",
+      LEASE_REVOKED,
+      refusedBy(options),
+    );
     throw refuse(
       LEASE_REVOKED,
       `有人接管了「${target.title}」的终端，Agent 的驱动权要等对方交还；读 canvas outbox 并告诉用户。`,
@@ -629,6 +683,23 @@ export async function attempt(
       options,
       now,
     );
+  }
+
+  // 画面门（§4.3）。状态通道说「空闲」，说的是这一轮结束了或会话开场了，不是
+  // 「输入框在前台」：CLI 自己的启动对话框（信任目录、把 auto 设为缺省、升级
+  // 提示）停在那里时 Hook 照样报。正文加回车落进去就是替人选了缺省项——
+  // 2026-10-02 实测，Claude 的「把 auto 设为缺省权限模式？」就这样被答掉，改写
+  // 了用户真实的 `~/.claude/settings.json`。只认已知对话框；首投另要求看得见
+  // 提示符。判据在 `agent/screen-gate.ts`，取画面在 `collab/screen.ts`。
+  const screen = await checkScreen({
+    terminals: context.terminals,
+    settings: context.settings,
+    agentId: live.target.agentId,
+    sessionId: live.session.sessionId,
+    first: firstDelivery,
+  });
+  if (screen.kind !== "clear") {
+    return queueOrRefuse(context, item, target, screen.reason, options, now);
   }
 
   /* ------------------------------- 真的投 ------------------------------- */
@@ -788,7 +859,7 @@ function queueOrRefuse(
   now: number,
 ): Outcome {
   if (!options.queue) {
-    settle(context.database, item.id, "cancelled", reason);
+    settle(context.database, item.id, "cancelled", reason, refusedBy(options));
     throw refuse(
       reason,
       `${QUEUE_MESSAGES[reason]}没有排队，因为你给了 --no-queue。`,

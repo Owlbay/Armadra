@@ -13,5 +13,15 @@ export default defineConfig({
     // 用例经 `tempDir()` 建的临时目录，每个文件跑完统一删（与桌面壳同一套）。
     setupFiles: ["../desktop/src/core/testing/setup.ts"],
     testTimeout: 60_000,
+    // 工程规范化 §5：覆盖率只出报告、不设门槛。CI 只在 Linux 作业里开
+    // （ARMADRA_COVERAGE=1），本机用 `pnpm test:coverage` 或 `vitest run --coverage`。
+    coverage: {
+      enabled: process.env.ARMADRA_COVERAGE === "1",
+      provider: "v8",
+      reporter: ["text-summary", "lcov"],
+      reportsDirectory: "coverage",
+      include: ["src/**/*.ts"],
+      exclude: ["src/**/*.test.ts", "src/**/*.d.ts"],
+    },
   },
 });

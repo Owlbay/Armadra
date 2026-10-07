@@ -28,7 +28,7 @@ import {
   trimCaptured,
 } from "../backend";
 import { asRecord, childEnvironment } from "../environment";
-import { childCommands, terminateTree } from "../process";
+import { childCommands, readProcessTable, terminateTree } from "../process";
 import { type Pty, openPty, releasePty } from "../pty";
 import {
   LIST_ALIVE_FORMAT,
@@ -76,6 +76,7 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
   private readonly sinks: ((notice: BackendNotice) => void)[] = [];
   private nextClientId = 1;
   private readonly options: TmuxBackendOptions;
+  private detection: ReturnType<typeof detect> | undefined;
 
   constructor(options: TmuxBackendOptions) {
     this.options = options;
@@ -89,7 +90,12 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
   }
 
   getCapabilities(): BackendCapabilities {
-    const detection = detect();
+    // `tmux -V` is a synchronous spawn, and the manager asks on every attach.
+    // A usable answer is kept for the backend's life (tmux does not uninstall
+    // itself under a running server); an unusable one is asked again, so a
+    // tmux installed later is picked up.
+    const detection = this.detection?.usable ? this.detection : detect();
+    this.detection = detection;
     return {
       kind: "tmux",
       persistent: true,
@@ -284,6 +290,11 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
         for (const chunk of buffered.splice(0)) listener(chunk);
       },
       onExit: (listener) => exitListeners.push(listener),
+      // One tmux client per socket, so pausing its pty slows only this
+      // viewer: tmux stops writing to a client that does not read, and the
+      // pane itself carries on.
+      pause: () => client.pty?.pause(),
+      resume: () => client.pty?.resume(),
     };
   }
 
@@ -474,7 +485,10 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
     return {
       ...(pane.pid === undefined ? {} : { pid: pane.pid }),
       ...(pane.command === undefined ? {} : { command: pane.command }),
-      children: pane.pid === undefined ? [] : childCommands(pane.pid),
+      children:
+        pane.pid === undefined
+          ? []
+          : childCommands(pane.pid, await readProcessTable()),
     };
   }
 

@@ -15,6 +15,12 @@ export const createTerminalAgentSchema = z.object({
   permissionMode: permissionModeSchema.optional(),
   model: z.string().max(120).optional(),
   sessionId: z.string().max(200).optional(),
+  /**
+   * A node credential to hand the CLI (contract §20): a **name** in the
+   * execution host's credential store, never a value. The core checks the
+   * entry exists and belongs to the node's base CLI, or refuses the launch.
+   */
+  credentialRef: z.string().min(1).max(200).optional(),
 });
 
 export const createTerminalRequestSchema = z.object({
@@ -42,8 +48,17 @@ export const createTerminalRequestSchema = z.object({
  * does. It is a third value rather than a flavour of `direct`, because the
  * two differ in the one way that matters — whether a terminal survives a
  * restart — and the UI must not imply the wrong answer.
+ *
+ * `acp` is a session the core drives over the Agent Client Protocol
+ * (docs/design/acp-session-view.md §4.1): a row in the same table, but no PTY
+ * behind it — the page reads its log instead of attaching.
  */
-export const TERMINAL_BACKENDS = ["direct", "tmux", "sessionHost"] as const;
+export const TERMINAL_BACKENDS = [
+  "direct",
+  "tmux",
+  "sessionHost",
+  "acp",
+] as const;
 export const terminalBackendKindSchema = z.enum(TERMINAL_BACKENDS);
 export const TERMINAL_ATTACH_STATES = ["detached", "live", "exited"] as const;
 export const terminalAttachStateSchema = z.enum(TERMINAL_ATTACH_STATES);
@@ -71,6 +86,11 @@ export const terminalSessionSchema = z.object({
    * 可以在同一个会话 id 上接回来。旧 core 不报这个字段。
    */
   hibernation: z.enum(["hibernated"]).nullable().optional(),
+  /**
+   * 创建者 = 触发者（契约 §23）：服务器壳上「自己起的终端」按它判，空串是本机
+   * owner。`GET /api/terminals/{id}` 带它，起会话的回答与旧 core 不带。
+   */
+  creatorPrincipalId: z.string().optional(),
 });
 
 /** `GET /api/terminals/backend` — which backend is in effect (plan §15.1). */
@@ -145,6 +165,8 @@ export const sessionSummarySchema = z.object({
   updatedAt: z.string().datetime({ offset: true }),
   /** The PTY is still running in this runtime instance. */
   alive: z.boolean(),
+  /** How the session is driven; the sidebar marks `acp` rows. */
+  backend: terminalBackendKindSchema.optional(),
 });
 
 export const sessionsResponseSchema = z.array(sessionSummarySchema);

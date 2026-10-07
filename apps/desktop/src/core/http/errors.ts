@@ -1,3 +1,5 @@
+import { ERROR_CODES, type ErrorCode } from "@armadra/shared";
+
 /**
  * Every failure the core reports, in one shape.
  *
@@ -49,4 +51,81 @@ export const internal = (message: string): ErrorResponse =>
  */
 export function notImplemented(path: string): ErrorResponse {
   return coreError(501, "not_implemented", `未实现：${path}`);
+}
+
+/**
+ * 抛出来的拒绝（工程规范化 §2.3.2）：码、状态与可选的细节。
+ *
+ * `coreError` 是「答一个值」，给按路径分派的 handler 用；契约 procedure 的实现
+ * 是普通函数，拒绝就抛这个，RPC 门面（`http/rpc.ts`）把它改写成
+ * `{ code, message, requestId?, details? }`。状态从注册表查，同一个码不会在两处
+ * 答出两个状态；还没登记的码（各域对象形拒绝的存量）由调用方给状态。
+ */
+export class CoreFailure extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly details: Readonly<Record<string, unknown>> | undefined;
+
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    details?: Readonly<Record<string, unknown>>,
+  ) {
+    super(message);
+    this.name = "CoreFailure";
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+
+  response(): ErrorResponse {
+    return coreError(this.status, this.code, this.message);
+  }
+}
+
+/** `throw fail("not_found", "…")`：状态按注册表。 */
+export function fail(
+  code: ErrorCode,
+  message: string,
+  details?: Readonly<Record<string, unknown>>,
+): CoreFailure {
+  return new CoreFailure(ERROR_CODES[code].status, code, message, details);
+}
+
+/**
+ * 限流的拒绝：重试的秒数放进 `details.retryAfterSeconds`，HTTP 上 RPC 门面与旧路径
+ * 同时给 `Retry-After` 头（`http/rpc.ts` 的 `retryAfter`、{@link failureResult}）。
+ */
+export function rateLimited(
+  message: string,
+  retryAfterMs: number,
+): CoreFailure {
+  return fail("rate_limited", message, {
+    retryAfterSeconds: Math.max(1, Math.ceil(retryAfterMs / 1000)),
+  });
+}
+
+/**
+ * 旧路径 handler 把一个抛出的拒绝答成响应：与 RPC 门面同一个形状——带细节时体里有
+ * `details`，限流时多一个 `Retry-After` 头。
+ */
+export function failureResult(error: CoreFailure): {
+  readonly status: number;
+  readonly body: CoreError & {
+    readonly details?: Readonly<Record<string, unknown>>;
+  };
+  readonly headers?: Readonly<Record<string, string>>;
+} {
+  const seconds = error.details?.retryAfterSeconds;
+  return {
+    status: error.status,
+    body:
+      error.details === undefined
+        ? { code: error.code, message: error.message }
+        : { code: error.code, message: error.message, details: error.details },
+    ...(error.status === 429 && typeof seconds === "number"
+      ? { headers: { "retry-after": String(seconds) } }
+      : {}),
+  };
 }

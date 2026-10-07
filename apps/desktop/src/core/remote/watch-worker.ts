@@ -9,11 +9,17 @@
  *
  * 父目录不存在或 watcher 起不来时，那几个文件在 Worker 自己这里按
  * {@link FALLBACK_MS} 复查——仍是 Worker 推送，控制端不必为此另开轮询。
+ * watcher 刚建好的那一小段还不生效（macOS 的 FSEvents 尤甚），起好之后再按
+ * `STARTUP_RECHECK_MS` 补看两次。
  */
 
 import { type FSWatcher, watch } from "node:fs";
 import { dirname, join } from "node:path";
-import { type FileVersion, fileVersion } from "../files/watch";
+import {
+  type FileVersion,
+  STARTUP_RECHECK_MS,
+  fileVersion,
+} from "../files/watch";
 import { canonicalDirectory, workspaceRelativePath } from "../workspaces/roots";
 import type { WorkerSession } from "./session";
 
@@ -32,6 +38,8 @@ interface WatchSet {
   readonly dirty: Set<string>;
   settle: NodeJS.Timeout | undefined;
   fallback: NodeJS.Timeout | undefined;
+  /** Late looks after the watchers start (`STARTUP_RECHECK_MS`). */
+  readonly rechecks: NodeJS.Timeout[];
 }
 
 type Sets = Map<string, WatchSet>;
@@ -52,6 +60,8 @@ function close(set: WatchSet): void {
   set.directories.clear();
   if (set.settle !== undefined) clearTimeout(set.settle);
   if (set.fallback !== undefined) clearInterval(set.fallback);
+  for (const timer of set.rechecks) clearTimeout(timer);
+  set.rechecks.length = 0;
   set.settle = undefined;
   set.fallback = undefined;
 }
@@ -115,6 +125,7 @@ export function watchFiles(
     dirty: new Set(),
     settle: undefined,
     fallback: undefined,
+    rechecks: [],
   };
   all.set(watchId, set);
 
@@ -155,6 +166,19 @@ export function watchFiles(
     } catch {
       for (const file of files) set.unwatched.add(file);
     }
+  }
+  // The versions above were read before the watchers existed, and a platform
+  // watcher (FSEvents above all) is not live the moment `watch` returns: a
+  // write in that gap is never reported. Look again twice, the same way an
+  // event would — an unchanged file publishes nothing. See
+  // `STARTUP_RECHECK_MS` in `files/watch.ts`.
+  for (const delay of STARTUP_RECHECK_MS) {
+    const timer = setTimeout(
+      () => check(session, watchId, set, [...set.known.keys()]),
+      delay,
+    );
+    timer.unref?.();
+    set.rechecks.push(timer);
   }
   set.fallback = setInterval(() => {
     if (set.unwatched.size > 0) check(session, watchId, set, set.unwatched);

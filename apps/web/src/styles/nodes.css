@@ -94,6 +94,12 @@
   border-color: var(--border-strong);
 }
 
+/* 工作流运行里已完成的角色节点（设计系统 §4）：1px `--success`，选中时让给品牌色。 */
+[data-slot="node-shell"]:not([data-selected="true"])
+  > .node-frame:has([data-workflow-done="true"]) {
+  border-color: var(--success);
+}
+
 [data-slot="node-shell"][data-selected="true"] > .node-frame {
   border-color: var(--brand);
 }
@@ -236,8 +242,8 @@
 .node-glow[data-glow="attention"]::after {
   animation: armadra-glow 1.8s ease-in-out infinite;
   box-shadow:
-    0 0 0 2px var(--danger),
-    0 0 18px 2px var(--danger);
+    0 0 0 2px var(--status-attention),
+    0 0 18px 2px var(--status-attention);
 }
 
 @keyframes armadra-glow {

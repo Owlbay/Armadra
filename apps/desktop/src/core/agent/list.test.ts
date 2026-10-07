@@ -1,7 +1,16 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fakeAcpAgentPath } from "@armadra/agent/acp";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { forgetAcpVersions, probeAcp } from "../acp/host";
+import { launcherPath } from "../hook/install/inject";
 import { install as installIntegration } from "../hook/install/integration";
 import { type AgentListRow, listAgents } from "./list";
 import { forgetProbes, rememberProbe } from "./probe";
@@ -34,6 +43,8 @@ function isolated(): NodeJS.ProcessEnv {
     // The installer writes a hook entry naming a real file; the suite supplies
     // a stub rather than the packaged sidecar, which does not exist in a test.
     ARMADRA_HOOK_BIN: hookBin,
+    // Windows' launcher is a copy of it; any bytes do. Ignored elsewhere.
+    ARMADRA_LAUNCH_EXE: join(home, "armadra-launch.exe"),
     HOME: home,
     CLAUDE_CONFIG_DIR: join(home, "claude"),
     CODEX_HOME: join(home, "codex"),
@@ -48,6 +59,7 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "armadra-agents-"));
   hookBin = join(home, "armadra-hook");
   writeFileSync(hookBin, "#!/bin/sh\n", "utf8");
+  writeFileSync(join(home, "armadra-launch.exe"), "MZ", "utf8");
 });
 
 afterEach(() => {
@@ -93,7 +105,7 @@ describe("listAgents and the integration", () => {
     customAgents: () => custom,
   });
 
-  it("omits both revisions and the argv while nothing is installed", () => {
+  it("omits both revisions and the launcher while nothing is installed", () => {
     const rows = listAgents({
       dataDir: fixture.directory,
       settings: settings(),
@@ -103,10 +115,11 @@ describe("listAgents and the integration", () => {
     // Absent, not zero: `0` would read as "integrated, by an ancient build".
     expect(claude?.clientRevision).toBeUndefined();
     expect(claude?.skillsRevision).toBeUndefined();
-    expect(claude?.launchArgs).toBeUndefined();
+    expect(claude?.launcher).toBeUndefined();
   });
 
-  it("carries `--settings <file>` once Claude's adapter is installed", () => {
+  /** docs/design/canvas-launcher.md §8.1: `launcher`, no injected argv. */
+  it("answers Claude's launcher once its integration is written", () => {
     const env = isolated();
     installIntegration("claude", { dataDir: fixture.directory, env });
     const rows = listAgents({
@@ -115,13 +128,53 @@ describe("listAgents and the integration", () => {
       env,
     });
     const claude = rows.find((row) => row.id === "claude");
-    // The path is inside *this* data directory, which is why the argv is
-    // answered per request rather than frozen into a launch definition.
-    expect(claude?.launchArgs?.[0]).toBe("--settings");
-    expect(claude?.launchArgs?.[1]).toContain(fixture.directory);
+    // The path is inside *this* data directory, which is why it is answered
+    // per request rather than frozen into a launch definition.
+    expect(claude?.launcher).toBe(launcherPath(fixture.directory, "claude"));
     expect(claude?.clientRevision).toBeGreaterThan(0);
-    // Codex was not installed, so its row is untouched by Claude's.
-    expect(rows.find((row) => row.id === "codex")?.launchArgs).toBeUndefined();
+    // 注入的 argv 不在行上：由启动器追加，要看的读 /integration 的 launchArgs。
+    expect(claude).not.toHaveProperty("launchArgs");
+    expect(claude).not.toHaveProperty("launchWords");
+    // Codex was not written, so its row is untouched by Claude's.
+    expect(rows.find((row) => row.id === "codex")?.launcher).toBeUndefined();
+  });
+
+  it("answers history availability on every row, the custom one by its base", () => {
+    const env = isolated();
+    mkdirSync(join(home, "claude", "projects"), { recursive: true });
+    const rows = listAgents({
+      dataDir: fixture.directory,
+      settings: settings([
+        {
+          id: "custom:mine",
+          label: "My Claude",
+          baseAgent: "claude",
+          launchCmd: "/nope/claude-wrapper",
+          disabledCapabilities: ["contextLink"],
+        },
+      ]),
+      env,
+    });
+    for (const row of rows) {
+      expect(Object.keys(row.history).sort()).toEqual([
+        "cost",
+        "index",
+        "transcript",
+      ]);
+    }
+    expect(rows.find((row) => row.id === "claude")?.history).toEqual({
+      index: "available",
+      cost: "available",
+      transcript: "available",
+    });
+    expect(rows.find((row) => row.id === "codex")?.history.index).toBe(
+      "not-found",
+    );
+    expect(rows.find((row) => row.id === "custom:mine")?.history).toEqual({
+      index: "available",
+      cost: "available",
+      transcript: "disabled",
+    });
   });
 
   it("gives a custom entry the integration of the base it borrows", () => {
@@ -140,7 +193,9 @@ describe("listAgents and the integration", () => {
       env,
     });
     const mine = rows.find((row) => row.id === "custom:mine");
-    expect(mine?.launchArgs?.[0]).toBe("--settings");
+    expect(mine?.launcher).toBe(
+      rows.find((row) => row.id === "claude")?.launcher,
+    );
     expect(mine?.clientRevision).toBeGreaterThan(0);
   });
 });
@@ -182,5 +237,92 @@ describe("listAgents 与版本探测", () => {
     });
     // 别人的行不受影响：版本是那一个程序的事实。
     expect(rows.find((row) => row.id === "claude")?.probe).toBeUndefined();
+  });
+});
+
+/**
+ * `acp` 那一栏（契约 §14.1）：`installed` 每次在补齐过的 PATH 上找适配器程序；
+ * `version` 只读最近一次 `initialize` 报的值，列表从不为它起进程。
+ */
+describe("listAgents 的 acp", () => {
+  afterEach(() => forgetAcpVersions());
+
+  /** PATH 上放一个名叫 `name` 的可执行文件；HOME 用临时目录，不碰本机的。 */
+  function withProgram(name: string): NodeJS.ProcessEnv {
+    const bin = join(home, "bin");
+    mkdirSync(bin, { recursive: true });
+    const file = join(bin, process.platform === "win32" ? `${name}.cmd` : name);
+    writeFileSync(file, "#!/bin/sh\n", "utf8");
+    chmodSync(file, 0o755);
+    return { ...isolated(), PATH: bin };
+  }
+
+  const rowsWith = (env: NodeJS.ProcessEnv, custom: CustomAgent[] = []) =>
+    listAgents({
+      dataDir: fixture.directory,
+      settings: { customAgents: () => custom },
+      env,
+    });
+
+  it("answers the adapter row on every built-in, installed by its program", () => {
+    const rows = rowsWith(withProgram("codex-acp"), [
+      {
+        id: "custom:mine",
+        label: "My Codex",
+        baseAgent: "codex",
+        launchCmd: "/nope/codex-wrapper",
+      },
+    ]);
+    const codex = rows.find((row) => row.id === "codex");
+    expect(codex?.acp).toEqual({
+      support: "official",
+      program: "codex-acp",
+      installed: true,
+      resume: "load",
+    });
+    expect(rows.find((row) => row.id === "copilot")?.acp).toMatchObject({
+      support: "native",
+      program: "copilot",
+      resume: "none",
+    });
+    expect(rows.find((row) => row.id === "pi")?.acp).toMatchObject({
+      support: "community",
+      program: "pi-acp",
+    });
+    for (const row of rows) {
+      expect(Object.keys(row.acp ?? {}).sort(), row.id).toEqual([
+        "installed",
+        "program",
+        "resume",
+        "support",
+      ]);
+    }
+    // custom 借它基础适配器的。
+    expect(rows.find((row) => row.id === "custom:mine")?.acp).toEqual(
+      codex?.acp,
+    );
+  });
+
+  it("carries the version the last initialize reported, and only once installed", async () => {
+    await probeAcp({
+      agentId: "codex",
+      program: process.execPath,
+      args: [fakeAcpAgentPath()],
+      cwd: home,
+    });
+    const installed = rowsWith(withProgram("codex-acp"));
+    expect(installed.find((row) => row.id === "codex")?.acp?.version).toBe(
+      "1.0.0",
+    );
+    expect(
+      installed.find((row) => row.id === "claude")?.acp?.version,
+    ).toBeUndefined();
+    const gone = rowsWith({ ...isolated(), PATH: join(home, "empty") });
+    expect(gone.find((row) => row.id === "codex")?.acp).toMatchObject({
+      installed: false,
+    });
+    expect(gone.find((row) => row.id === "codex")?.acp).not.toHaveProperty(
+      "version",
+    );
   });
 });

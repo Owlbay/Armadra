@@ -37,14 +37,72 @@ export function webAsset(version) {
 }
 
 /**
+ * 手机壳的产物（补全架构 §10，计划 G3-1）：夜间作业产出的 debug APK 与 iOS 模拟器
+ * `.app`（zip）。都不签名、不进更新清单（App 没有自更新，商店分发要用户的证书），
+ * 名字没有 `<os>-<arch>` 目标段，只给人装来试。
+ */
+export function mobileAssets(version) {
+  return [
+    { name: `armadra-mobile_${version}_android-debug.apk`, kind: "apk" },
+    {
+      name: `armadra-mobile_${version}_ios-simulator.app.zip`,
+      kind: "simulator-app",
+    },
+  ];
+}
+
+/**
+ * electron-updater 的「通道」名：桌面壳下载前设 `autoUpdater.channel` 为它。
+ *
+ * 一次发布把六个目标的产物放进同一个扁平目录，而 electron-builder 的清单名只按
+ * 平台区分——两台 macOS runner 都写 `latest-mac.yml`，两台 Windows runner 都写
+ * `latest.yml`，合并时后到的覆盖先到的。按目标起通道名，每个目标就有自己的一份。
+ */
+export function updaterChannel(target) {
+  return `latest-${target}`;
+}
+
+/**
+ * 某目标的 electron-updater 清单在发布里的文件名。
+ *
+ * 这是 electron-updater（6.8.9）对通道 `updaterChannel(target)` 自己算出的名字：
+ * `<channel><平台后缀>.yml`，macOS 后缀 `-mac`，Linux 后缀 `-linux`（非 x64 再加
+ * `-<process.arch>`），Windows 没有后缀（`providers/Provider.js::getChannelFilePrefix`）。
+ * 名字对不上，下载一步就是 404；`apps/desktop` 里有一条测试拿钉住的 electron-updater
+ * 自己的算法核对这里。
+ */
+export function updaterFeedFile(target) {
+  const [system, arch] = target.split("-");
+  const channel = updaterChannel(target);
+  if (system === "darwin") return `${channel}-mac.yml`;
+  if (system === "windows") return `${channel}.yml`;
+  if (system === "linux")
+    return `${channel}-linux${arch === "x86_64" ? "" : "-arm64"}.yml`;
+  throw new Error(`no updater feed for target ${target}`);
+}
+
+/** 每个目标一份 electron-updater 清单。 */
+export const UPDATER_FEEDS = TARGETS.map(updaterFeedFile);
+
+/** 文件名是哪个目标的 electron-updater 清单；不是清单则为 ""。 */
+export function feedTarget(name) {
+  return TARGETS.find((target) => updaterFeedFile(target) === name) ?? "";
+}
+
+/**
  * The component a published name declares. A name that follows no convention
  * declares none, and nothing matches it.
  */
 export function assetComponent(name) {
   if (MANIFEST_ASSETS.includes(name)) return "manifest";
+  if (feedTarget(name) !== "") return "manifest";
   const separator = name.indexOf("_");
   if (separator < 0) return "";
-  const prefixes = { Armadra: "desktop", "armadra-web": "web" };
+  const prefixes = {
+    Armadra: "desktop",
+    "armadra-web": "web",
+    "armadra-mobile": "mobile",
+  };
   return prefixes[name.slice(0, separator)] ?? "";
 }
 
@@ -73,10 +131,10 @@ export function assetTarget(name) {
  * drift apart.
  *
  * The names below are NOT electron-builder's own. It writes
- * `Armadra-0.1.0-arm64.dmg`, `Armadra Setup 0.1.0.exe` and
+ * `Armadra-0.1.0-arm64.dmg`, `Armadra-Setup-0.1.0-arm64.exe` and
  * `armadra_0.1.0_amd64.deb`, and none of those declares a target `assetTarget`
- * can read (it finds nothing in `arm64` or `amd64`, and a space in a
- * name is its own problem). `stage-desktop.mjs` looks each bundle up by `kind`
+ * can read (it finds nothing in `arm64` or `amd64`). None of them, and none
+ * of the names below, has a space: Azure Artifact Signing cannot sign one. `stage-desktop.mjs` looks each bundle up by `kind`
  * and renames it to the name here, so the rename is stated once rather than
  * repeated as a `find` in every release job.
  *

@@ -13,14 +13,22 @@ import { useT } from "../../../app/preferences-store";
 import { Button } from "../../../ui/button";
 import { Input } from "../../../ui/input";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../../../ui/dialog";
-import { Check, Field, ReadError, selectClass } from "../forms";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "../../ResponsiveDialog";
+import { sk } from "../../../sources/scope";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../../ui/select";
+import { Check, Field, ReadError } from "../forms";
 import type { RepositoryRequest } from "../actions/integration";
 import {
   canCreateStash,
@@ -59,21 +67,24 @@ function RepositoryPicker({
   if (repositories.length <= 1) return null;
   return (
     <Field label={t("gitRepo.repository")}>
-      <select
-        className={selectClass}
-        aria-label={t("gitRepo.repository")}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {repositories.map((repository) => (
-          <option
-            key={repository.repositoryPath}
-            value={repository.repositoryPath}
-          >
-            {repository.name}
-          </option>
-        ))}
-      </select>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger
+          className="h-9 w-full min-w-0"
+          aria-label={t("gitRepo.repository")}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent className="z-[var(--z-dialog)]">
+          {repositories.map((repository) => (
+            <SelectItem
+              key={repository.repositoryPath}
+              value={repository.repositoryPath}
+            >
+              {repository.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </Field>
   );
 }
@@ -85,7 +96,7 @@ function useStashes(
 ) {
   const target = useGitTarget(workspaceId, repositoryPath);
   return useQuery({
-    queryKey: ["git-repository-stashes", workspaceId, repositoryPath],
+    queryKey: sk("git-repository-stashes", workspaceId, repositoryPath),
     queryFn: ({ signal }) => gitGateway.stashes(target, signal),
     enabled,
     retry: false,
@@ -116,12 +127,14 @@ export function StashDialog({
     setMessage("");
   };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90dvh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{t("gitCommit.stash")}</DialogTitle>
-          <DialogDescription>{t("gitStash.safety")}</DialogDescription>
-        </DialogHeader>
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent className="max-h-[90dvh] overflow-y-auto">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{t("gitCommit.stash")}</ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
+            {t("gitStash.safety")}
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
         <div className="space-y-3 text-xs">
           <RepositoryPicker
             repositories={repositories}
@@ -153,7 +166,7 @@ export function StashDialog({
             </p>
           )}
         </div>
-        <DialogFooter>
+        <ResponsiveDialogFooter>
           <Button
             variant="outline"
             size="sm"
@@ -168,9 +181,9 @@ export function StashDialog({
           >
             {t("gitRepo.createStash")}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 
@@ -194,12 +207,12 @@ export function UnstashDialog({
     state?.stashes.find((entry) => entry.oid === selectedOid) ?? null;
   const target = useGitTarget(workspaceId, repositoryPath);
   const detail = useQuery({
-    queryKey: [
+    queryKey: sk(
       "git-repository-stash-detail",
       workspaceId,
       repositoryPath,
       selected?.oid,
-    ],
+    ),
     queryFn: async ({ signal }) => {
       const result = await gitGateway.stashDetail(
         target,
@@ -228,12 +241,16 @@ export function UnstashDialog({
     onOpenChange(false);
   };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90dvh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{t("gitCommit.unstash")}</DialogTitle>
-          <DialogDescription>{t("gitStash.conflictSafety")}</DialogDescription>
-        </DialogHeader>
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent className="max-h-[90dvh] overflow-y-auto">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>
+            {t("gitCommit.unstash")}
+          </ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
+            {t("gitStash.conflictSafety")}
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
         <div className="space-y-3 text-xs">
           <RepositoryPicker
             repositories={repositories}
@@ -253,11 +270,12 @@ export function UnstashDialog({
           <ul aria-label={t("gitStash.title")} className="space-y-1">
             {state?.stashes.map((entry) => (
               <li key={`${entry.selector}:${entry.oid}`}>
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
                   aria-pressed={entry.oid === selectedOid}
                   onClick={() => setSelectedOid(entry.oid)}
-                  className="flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-muted aria-pressed:bg-muted"
+                  className="h-auto w-full min-w-0 flex-col items-stretch justify-start gap-0.5 rounded-md px-2 py-1.5 text-left text-[length:inherit] font-normal whitespace-normal hover:bg-muted aria-pressed:bg-muted"
                 >
                   <span className="min-w-0 truncate font-medium">
                     {entry.subject}
@@ -265,7 +283,7 @@ export function UnstashDialog({
                   <span className="min-w-0 truncate font-mono text-muted-foreground">
                     {entry.selector} · {entry.authorName} · {entry.authorTime}
                   </span>
-                </button>
+                </Button>
               </li>
             ))}
           </ul>
@@ -300,7 +318,7 @@ export function UnstashDialog({
             </section>
           )}
         </div>
-        <DialogFooter>
+        <ResponsiveDialogFooter>
           <Button
             variant="outline"
             size="sm"
@@ -325,8 +343,8 @@ export function UnstashDialog({
           >
             {t("gitRepo.dropStash")}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }

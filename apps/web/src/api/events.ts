@@ -1,38 +1,56 @@
 /**
- * 工作空间事件流（§5.4 / §7 / §13.4）。
+ * 工作空间事件流（§5.4 / §7 / §13.4，契约 §35.4）。
  *
- * 一个工作空间一条 WebSocket：`App` 里 `useWorkspaceEvents` 挂一次，
- * 其余模块通过 `onWorkspaceEvent(type, handler)` 订阅，不各自开连接。
+ * 每个源里一个工作空间一条订阅（键 `${sourceId}:${workspaceId}`）：`App` 里
+ * `useWorkspaceEvents` 挂一次，其余模块通过 `onWorkspaceEvent(type, handler)`
+ * 订阅，不各自开连接。事件带上所属的源：`onWorkspaceEvent` 缺省只收当前源的，
+ * 传 `{ allSources: true }` 收所有源。
  *
- * 每一帧都先 `workspaceEventSchema` 解析；解析失败只丢这一帧并告警，
- * 不断开连接（core 可能比前端新，多出来的事件类型不该让侧栏失效）。
+ * 订阅走控制面 `/api/ws`（`client.workspaces.events`，工程规范化 §3）：一个源
+ * 一条连接，事件流与别的调用、订阅多路复用在上面。每一项先 `workspaceEventSchema`
+ * 解析；解析失败只丢这一项（core 可能比前端新，多出来的事件类型不该让侧栏失效）。
  *
- * **断线续订**（R4c）。core 的事件与业务写入同事务，编号是一条单调的
- * durable sequence，所以「我看到哪儿了」就是一个数。收到的每一条业务帧后面
- * 跟着一条 `{"type":"cursor",…}` 控制帧——它不是第 22 个 `WorkspaceEvent`，
- * 只发给带了 `?cursor=` 的订阅——这里记下那个数，重连时从它之后续，于是断开
- * 的那一段会被补发，而不是被当成「什么都没发生」。
+ * **断线续订**。core 的事件与业务写入同事务，编号是一条单调的 outbox 序号，就是
+ * 每一项的事件 `id`。连接断了由 `api/ws.ts` 退避重连，订阅由上游的重试插件带着
+ * 最后一个 `id`（`lastEventId`）重订，core 先补发断开的那一段再接实时——这里什么
+ * 都不用记。每次（重新）订上，core 先发一帧位置帧 `{ type: "cursor" }`：它不是
+ * 事件，不派发，只当作「订上了」的上升沿。
  *
- * 第一次连接不带游标：那时还没有可续的位置，从 0 订会把整段历史当成刚发生的
- * 改动重放一遍。
+ * 续不上（位置掉出保留下限、或这台 core 换了库）时 core 答 `snapshot_required` /
+ * `cursor_ahead`：落下连接状态再从现在重订，订阅者（会话列表、Agent 镜像）在
+ * 上升沿上整份重读，缺口由读补上。
  */
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { workspaceEventSchema, type WorkspaceEvent } from "@armadra/shared";
 
-import { workspaceEventsUrl } from "./client";
+import {
+  controlClient,
+  controlClosedWith,
+  errorCode,
+  onControlDrop,
+} from "./client";
 import { useAgentStatusStore } from "../agent/status-store";
 import { useDeliveryStore } from "../agent/delivery-store";
 import { useDependencyStore } from "../agent/dependency-store";
 import { useDriveStore } from "../agent/drive-store";
 import { useLanguageStatusStore } from "../editor/language/status-store";
+import { currentSource, localSource, type Source } from "./source";
+import { scoped, srcKey, withSource } from "../sources/scope";
+import { createLocalConnection } from "../sources/connection";
+import { sourceRegistry } from "../sources/registry";
+import { CLOSE_REVOKED, type ControlSocketOpener } from "./ws";
 
 type EventType = WorkspaceEvent["type"];
 type EventOf<T extends EventType> = Extract<WorkspaceEvent, { type: T }>;
-type AnyHandler = (event: WorkspaceEvent) => void;
+type AnyHandler = (event: WorkspaceEvent, sourceId: string) => void;
 
 const handlers = new Map<EventType, Set<AnyHandler>>();
-type ConnectionHandler = (workspaceId: string, connected: boolean) => void;
+type ConnectionHandler = (
+  workspaceId: string,
+  connected: boolean,
+  sourceId: string,
+) => void;
 const connectionHandlers = new Set<ConnectionHandler>();
 /** Transport lifecycle lets volatile read models discard a previous runtime's cache. */
 export function onWorkspaceConnection(handler: ConnectionHandler): () => void {
@@ -43,14 +61,16 @@ export function onWorkspaceConnection(handler: ConnectionHandler): () => void {
 }
 
 /**
- * core 关事件流用的码：这个人对这块工作空间的读授权没了（服务器壳上撤销
- * 共享、停用账号，契约 §10）。
+ * 授权被收回的关闭码（服务器壳上撤销共享、停用账号，契约 §10、§35.2）。控制面
+ * 整条以它关闭时，与这块工作空间的订阅以 `forbidden` 结束同样对待。
  */
-export const ACCESS_REVOKED_CLOSE = 4403;
-const accessLostHandlers = new Set<(workspaceId: string) => void>();
-/** 事件流因为授权被收回而关闭（{@link ACCESS_REVOKED_CLOSE}）。 */
+export const ACCESS_REVOKED_CLOSE = CLOSE_REVOKED;
+const accessLostHandlers = new Set<
+  (workspaceId: string, sourceId: string) => void
+>();
+/** 这块工作空间的读授权被收回（订阅以 `forbidden` 结束，或控制面以 4403 关）。 */
 export function onWorkspaceAccessLost(
-  handler: (workspaceId: string) => void,
+  handler: (workspaceId: string, sourceId: string) => void,
 ): () => void {
   accessLostHandlers.add(handler);
   return () => {
@@ -58,14 +78,24 @@ export function onWorkspaceAccessLost(
   };
 }
 
-/** 订阅一种事件；返回退订函数。 */
+/**
+ * 订阅一种事件；返回退订函数。
+ *
+ * 默认只收**当前源**的事件：订阅者大多在处理「眼前这块工作空间」，别的源
+ * 的连接推来的同名帧与它们无关。要看全部源（按源记账的 store、按源失效
+ * 查询键）的传 `{ allSources: true }`，第二个参数是事件所属的源。
+ */
 export function onWorkspaceEvent<T extends EventType>(
   type: T,
-  handler: (event: EventOf<T>) => void,
+  handler: (event: EventOf<T>, sourceId: string) => void,
+  options: { allSources?: boolean } = {},
 ): () => void {
   const bucket = handlers.get(type) ?? new Set<AnyHandler>();
   handlers.set(type, bucket);
-  const wrapped = handler as AnyHandler;
+  const wrapped: AnyHandler = (event, sourceId) => {
+    if (!options.allSources && sourceId !== currentSource().sourceId) return;
+    (handler as AnyHandler)(event, sourceId);
+  };
   bucket.add(wrapped);
   return () => {
     bucket.delete(wrapped);
@@ -76,7 +106,16 @@ export function onWorkspaceEvent<T extends EventType>(
  * 派发一条已解析的事件：先喂状态镜像，再通知订阅者。
  * 导出是为了让不接 WebSocket 的测试与本地回放也能走同一条路径。
  */
-export function dispatchWorkspaceEvent(event: WorkspaceEvent): void {
+export function dispatchWorkspaceEvent(
+  event: WorkspaceEvent,
+  sourceId: string = currentSource().sourceId,
+): void {
+  // 状态镜像按 `${sourceId}:${id}` 记（`sources/scope.ts`）：同步派发期间
+  // 默认源就是这条连接所属的源。
+  withSource(sourceId, () => dispatchInSource(event, sourceId));
+}
+
+function dispatchInSource(event: WorkspaceEvent, sourceId: string): void {
   useAgentStatusStore.getState().handleEvent(event);
   // 语言会话与服务器状态走同一条流（语言服务设计 §2.9）：状态栏和设置页
   // 因此不必为了看一眼状态就开一条会话 socket。
@@ -88,211 +127,232 @@ export function dispatchWorkspaceEvent(event: WorkspaceEvent): void {
   useDriveStore.getState().handleEvent(event);
   // 依赖等待：帧里没有等待本身，只有「该重读了」（Agent 自动化设计 §6）。
   useDependencyStore.getState().handleEvent(event);
-  for (const handler of handlers.get(event.type) ?? []) handler(event);
+  for (const handler of handlers.get(event.type) ?? [])
+    handler(event, sourceId);
 }
 
-/* ------------------------------- 重连退避 -------------------------------- */
+/* -------------------------------- 订阅来源 -------------------------------- */
 
-export const RECONNECT_MIN_MS = 1_000;
-export const RECONNECT_MAX_MS = 10_000;
-
-/** 指数退避 1s → 2s → 4s → 8s → 10s（封顶）。 */
-export function nextReconnectDelay(previous: number | null): number {
-  if (previous === null || previous <= 0) return RECONNECT_MIN_MS;
-  return Math.min(previous * 2, RECONNECT_MAX_MS);
+/**
+ * 订阅从哪来。缺省是每个源各自的控制面（一个源一条 `/api/ws`）；测试换成假的
+ * （不必起一条 WebSocket）。
+ */
+export interface WorkspaceEventTransport {
+  /** 订一个源里的一块工作空间：交回逐项的迭代器；断线续订由它自己做。 */
+  subscribe(
+    source: Source,
+    workspaceId: string,
+    signal: AbortSignal,
+  ): Promise<AsyncIterable<unknown>>;
+  /** 这个源的连接断了（订阅在重订，期间不算「已连上」）。 */
+  onDrop(source: Source, listener: () => void): () => void;
+  /** 这个源的连接因致命关闭码停下了（4403 / 4409 / 4429）；还在连的是 `null`。 */
+  closedWith(source: Source): number | null;
 }
+
+const fallbackConnections = new WeakMap<Source, ControlSocketOpener>();
+
+/**
+ * 一个源在源层的连接（`sources/registry.ts`）：控制面的流由它托管。源表里
+ * 没有的（测试、还没登记的源）按本机源的做法包一个——流经源自己的
+ * `WebSocket`。
+ */
+export function connectionOf(source: Source): ControlSocketOpener {
+  const registry = sourceRegistry();
+  const known =
+    source === localSource ? registry.local() : registry.get(source.sourceId);
+  if (known !== undefined && known.source === source) return known;
+  let made = fallbackConnections.get(source);
+  if (made === undefined) {
+    made = createLocalConnection({ source });
+    fallbackConnections.set(source, made);
+  }
+  return made;
+}
+
+const controlTransport: WorkspaceEventTransport = {
+  subscribe: (source, workspaceId, signal) =>
+    controlClient(connectionOf(source)).workspaces.events(
+      { workspaceId },
+      { signal },
+    ),
+  onDrop: (source, listener) => onControlDrop(connectionOf(source), listener),
+  closedWith: (source) => controlClosedWith(connectionOf(source)),
+};
+
+let transport: WorkspaceEventTransport = controlTransport;
+
+/** 测试用：换掉订阅来源；`null` 换回控制面。 */
+export function setWorkspaceEventTransport(
+  next: WorkspaceEventTransport | null,
+): void {
+  transport = next ?? controlTransport;
+}
+
+/** 续不上就从现在重订之前缓一下，免得一块坏库把订阅转成忙循环。 */
+export const RESUBSCRIBE_DELAY_MS = 1_000;
 
 /* -------------------------------- 连接管理 ------------------------------- */
 
 interface Connection {
   workspaceId: string;
-  socket: WebSocket | null;
-  timer: ReturnType<typeof setTimeout> | null;
-  delay: number | null;
+  /** 这条订阅发往哪个源。 */
+  source: Source;
   refs: number;
   stopped: boolean;
-  /** 最后一条控制帧报的位置；`null` 表示还没读到过任何位置。 */
-  cursor: number | null;
-  /**
-   * 还要不要带游标订阅。
-   *
-   * core 在升级**之前**就拒绝一个掉出保留下限或超出水位的游标（409），
-   * 那条连接根本不会打开。继续拿同一个数重连只会撞上同一堵墙，而重连是
-   * 按秒退避的——所以拒绝一次就回到实时订阅，那一段缺口由调用方照常重读
-   * 补上，而不是把一次拒绝变成一个重连风暴。
-   */
-  resuming: boolean;
-  /** 这一次连接有没有真的打开过。用来分辨「被拒绝」和「断开了」。 */
-  opened: boolean;
+  /** 订上了：收到过这一轮的位置帧，之后没断过。 */
+  connected: boolean;
+  readonly abort: AbortController;
+  offDrop: () => void;
 }
 
-let current: Connection | null = null;
+/** 每个源里的每个工作空间一条订阅（键 `${sourceId}:${workspaceId}`）。 */
+const connections = new Map<string, Connection>();
 
-/** core 的游标控制帧。只有带 `?cursor=` 的订阅才会收到。 */
-interface CursorFrame {
-  cursor: number;
-  floor: number;
-  watermark: number;
+function connectionKey(sourceId: string, workspaceId: string): string {
+  return scoped(workspaceId, sourceId);
 }
 
-function parseFrame(
-  raw: unknown,
-): { event: WorkspaceEvent } | { cursor: CursorFrame } | null {
-  if (typeof raw !== "string") return null;
-  let payload: unknown;
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  const control = payload as Partial<CursorFrame> & { type?: unknown };
-  if (
-    control?.type === "cursor" &&
-    typeof control.cursor === "number" &&
-    typeof control.floor === "number" &&
-    typeof control.watermark === "number"
-  ) {
-    return {
-      cursor: {
-        cursor: control.cursor,
-        floor: control.floor,
-        watermark: control.watermark,
-      },
-    };
-  }
-  const parsed = workspaceEventSchema.safeParse(payload);
-  if (!parsed.success) return null;
-  return { event: parsed.data };
+function announce(connection: Connection, connected: boolean): void {
+  if (connection.connected === connected) return;
+  connection.connected = connected;
+  for (const handler of [...connectionHandlers])
+    handler(connection.workspaceId, connected, connection.source.sourceId);
 }
 
-function open(connection: Connection): void {
-  if (connection.stopped) return;
-  connection.opened = false;
-  const Socket = globalThis.WebSocket;
-  if (!Socket) return;
+function lose(connection: Connection): void {
+  connection.stopped = true;
+  // 下一次订阅同一块工作空间（重新共享之后）要开一条新的，而不是复用这条。
+  forget(connection);
+  connection.abort.abort();
+  connection.offDrop();
+  announce(connection, false);
+  for (const handler of [...accessLostHandlers])
+    handler(connection.workspaceId, connection.source.sourceId);
+}
 
-  let socket: WebSocket;
-  try {
-    socket = new Socket(
-      workspaceEventsUrl(
+/** 一轮订阅：一直读，直到被拒、被取消，或连接停下。 */
+async function pump(connection: Connection): Promise<void> {
+  const { source } = connection;
+  while (!connection.stopped) {
+    try {
+      const items = await transport.subscribe(
+        source,
         connection.workspaceId,
-        connection.resuming ? (connection.cursor ?? "now") : undefined,
-      ),
-    );
-  } catch {
-    schedule(connection);
-    return;
+        connection.abort.signal,
+      );
+      for await (const item of items) {
+        if (connection.stopped) return;
+        if ((item as { type?: unknown } | null)?.type === "cursor") {
+          announce(connection, true);
+          continue;
+        }
+        const parsed = workspaceEventSchema.safeParse(item);
+        if (parsed.success)
+          dispatchWorkspaceEvent(parsed.data, source.sourceId);
+      }
+    } catch (error) {
+      if (connection.stopped) return;
+      const code = errorCode(error);
+      if (
+        code === "forbidden" ||
+        transport.closedWith(source) === CLOSE_REVOKED
+      ) {
+        lose(connection);
+        return;
+      }
+      if (transport.closedWith(source) !== null) {
+        // 4409 / 4429：页面另有提示（`app/use-control-notices.ts`），不再订。
+        connection.stopped = true;
+        announce(connection, false);
+        return;
+      }
+      // `snapshot_required` / `cursor_ahead`：从现在重订，订阅者在上升沿上重读。
+      // 其余（没装事件域、工作空间刚被删）同样缓一下再试。
+      announce(connection, false);
+      await new Promise((resolve) => setTimeout(resolve, RESUBSCRIBE_DELAY_MS));
+      continue;
+    }
+    // core 主动结束了这一轮（不该发生）：缓一下再订。
+    announce(connection, false);
+    await new Promise((resolve) => setTimeout(resolve, RESUBSCRIBE_DELAY_MS));
   }
-  connection.socket = socket;
-
-  socket.onopen = () => {
-    if (connection.socket !== socket || connection.stopped) return;
-    connection.opened = true;
-    connection.delay = null;
-    for (const handler of connectionHandlers)
-      handler(connection.workspaceId, true);
-  };
-  socket.onmessage = (event: MessageEvent) => {
-    const parsed = parseFrame(event.data);
-    if (!parsed) return;
-    if ("event" in parsed) {
-      dispatchWorkspaceEvent(parsed.event);
-      return;
-    }
-    // 游标只准前进：往回退等于把已经应用过的改动当成没发生。
-    const { cursor } = parsed;
-    if (connection.cursor === null || cursor.cursor > connection.cursor)
-      connection.cursor = cursor.cursor;
-  };
-  socket.onclose = (event?: CloseEvent) => {
-    if (connection.socket !== socket || connection.stopped) return;
-    // 没打开过就关了 = core 在升级之前拒绝了这个游标。放弃续订，回到实时。
-    if (!connection.opened && connection.resuming) {
-      connection.resuming = false;
-      connection.cursor = null;
-    }
-    for (const handler of connectionHandlers)
-      handler(connection.workspaceId, false);
-    connection.socket = null;
-    // 授权被收回：重连的升级只会再被 403 拒。不再重连，告诉页面重取工作空间
-    // 列表——这块画布会从列表里消失，而不是停在一份再也存不进去的旧文档上。
-    if (event?.code === ACCESS_REVOKED_CLOSE) {
-      connection.stopped = true;
-      // 下一次订阅同一块工作空间（重新共享之后）要开一条新的，而不是复用这条。
-      if (current === connection) current = null;
-      for (const handler of [...accessLostHandlers])
-        handler(connection.workspaceId);
-      return;
-    }
-    schedule(connection);
-  };
-  // `onerror` 之后浏览器一定会再发 `onclose`，重连只挂在 close 上，避免排两次。
-  socket.onerror = () => {};
-}
-
-function schedule(connection: Connection): void {
-  if (connection.stopped || connection.timer) return;
-  const delay = nextReconnectDelay(connection.delay);
-  connection.delay = delay;
-  connection.timer = setTimeout(() => {
-    connection.timer = null;
-    open(connection);
-  }, delay);
 }
 
 function teardown(connection: Connection): void {
-  for (const handler of connectionHandlers)
-    handler(connection.workspaceId, false);
   connection.stopped = true;
-  if (connection.timer) clearTimeout(connection.timer);
-  connection.timer = null;
-  const socket = connection.socket;
-  connection.socket = null;
-  if (socket) {
-    socket.onopen = null;
-    socket.onmessage = null;
-    socket.onclose = null;
-    socket.onerror = null;
-    socket.close();
-  }
-  if (current === connection) current = null;
+  connection.abort.abort();
+  connection.offDrop();
+  for (const handler of [...connectionHandlers])
+    handler(connection.workspaceId, false, connection.source.sourceId);
+  connection.connected = false;
+  forget(connection);
+}
+
+function forget(connection: Connection): void {
+  const key = connectionKey(connection.source.sourceId, connection.workspaceId);
+  if (connections.get(key) === connection) connections.delete(key);
 }
 
 /**
- * 连接（或复用）某个工作空间的事件流，返回释放函数。
- * 引用计数保证 StrictMode 的双次挂载不会来回开关连接。
+ * 订阅（或复用）某个源里某个工作空间的事件流，返回释放函数。
+ * 引用计数保证 StrictMode 的双次挂载不会来回开关订阅。
  */
-export function connectWorkspaceEvents(workspaceId: string): () => void {
-  if (current && current.workspaceId !== workspaceId) teardown(current);
-  const connection: Connection = current ?? {
-    workspaceId,
-    socket: null,
-    timer: null,
-    delay: null,
-    refs: 0,
-    stopped: false,
-    cursor: null,
-    resuming: true,
-    opened: false,
-  };
-  if (!current) {
-    current = connection;
-    open(connection);
+export function connectWorkspaceEvents(
+  workspaceId: string,
+  source: Source = currentSource(),
+): () => void {
+  const key = connectionKey(source.sourceId, workspaceId);
+  // 同一个源里同一时刻只订一个工作空间（与加源之前一样）；别的源各有各的一条。
+  for (const other of [...connections.values()]) {
+    if (
+      other.source.sourceId === source.sourceId &&
+      other.workspaceId !== workspaceId
+    )
+      teardown(other);
   }
-  connection.refs += 1;
+  let connection = connections.get(key);
+  if (!connection) {
+    const made: Connection = {
+      workspaceId,
+      source,
+      refs: 0,
+      stopped: false,
+      connected: false,
+      abort: new AbortController(),
+      offDrop: () => {},
+    };
+    made.offDrop = transport.onDrop(source, () => announce(made, false));
+    connections.set(key, made);
+    connection = made;
+    void pump(made);
+  }
+  const held = connection;
+  held.refs += 1;
 
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    connection.refs -= 1;
-    if (connection.refs <= 0) teardown(connection);
+    held.refs -= 1;
+    if (held.refs <= 0) teardown(held);
   };
 }
 
-/** 测试与热重载用：断开当前连接并清空订阅者。 */
+/** 现在有几条事件订阅（测试用）。 */
+export function openEventConnections(): readonly {
+  sourceId: string;
+  workspaceId: string;
+}[] {
+  return [...connections.values()].map((connection) => ({
+    sourceId: connection.source.sourceId,
+    workspaceId: connection.workspaceId,
+  }));
+}
+
+/** 测试与热重载用：断开全部订阅并清空订阅者。 */
 export function resetWorkspaceEvents(): void {
-  if (current) teardown(current);
+  for (const connection of [...connections.values()]) teardown(connection);
   handlers.clear();
   connectionHandlers.clear();
   accessLostHandlers.clear();
@@ -304,35 +364,61 @@ export function resetWorkspaceEvents(): void {
  * App 挂一次。除了维持连接，还负责把服务端事件翻译成查询失效：
  * 会话列表与 Git 状态都是「服务端为准」的读模型，事件到了就重取。
  */
-export function useWorkspaceEvents(workspaceId: string | null): void {
+export function useWorkspaceEvents(
+  workspaceId: string | null,
+  source: Source = currentSource(),
+): void {
   const queryClient = useQueryClient();
+  const sourceId = source.sourceId;
 
   useEffect(() => {
     if (!workspaceId) return;
-    const release = connectWorkspaceEvents(workspaceId);
+    const release = connectWorkspaceEvents(workspaceId, source);
     const invalidate = () => {
       void queryClient.invalidateQueries({
-        queryKey: ["sessions", workspaceId],
+        queryKey: srcKey(sourceId, "sessions", workspaceId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["git-status", workspaceId],
+        queryKey: srcKey(sourceId, "git-status", workspaceId),
       });
       void queryClient.invalidateQueries({
-        queryKey: ["git-diff", workspaceId],
+        queryKey: srcKey(sourceId, "git-diff", workspaceId),
       });
     };
-    const offExit = onWorkspaceEvent("terminal.exit", invalidate);
-    const offBoard = onWorkspaceEvent("board.changed", invalidate);
+    const mine = (from: string) => from === sourceId;
+    const all = { allSources: true };
+    const offExit = onWorkspaceEvent(
+      "terminal.exit",
+      (_event, from) => {
+        if (mine(from)) invalidate();
+      },
+      all,
+    );
+    const offBoard = onWorkspaceEvent(
+      "board.changed",
+      (_event, from) => {
+        if (mine(from)) invalidate();
+      },
+      all,
+    );
     // 改绑执行主机之后，工作空间的每一条路径都指向另一台机器了。事件本身
     // 不带任何字段，就是要求整份重取，而不是往手里这份上打补丁。
-    const offUpdated = onWorkspaceEvent("workspace.updated", (event) => {
-      if (event.workspaceId !== workspaceId) return;
-      void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
-      invalidate();
-    });
-    const offLost = onWorkspaceAccessLost((lost) => {
-      if (lost !== workspaceId) return;
-      void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+    const offUpdated = onWorkspaceEvent(
+      "workspace.updated",
+      (event, from) => {
+        if (event.workspaceId !== workspaceId || !mine(from)) return;
+        void queryClient.invalidateQueries({
+          queryKey: srcKey(sourceId, "workspaces"),
+        });
+        invalidate();
+      },
+      all,
+    );
+    const offLost = onWorkspaceAccessLost((lost, from) => {
+      if (lost !== workspaceId || !mine(from)) return;
+      void queryClient.invalidateQueries({
+        queryKey: srcKey(sourceId, "workspaces"),
+      });
     });
     return () => {
       offExit();
@@ -341,5 +427,5 @@ export function useWorkspaceEvents(workspaceId: string | null): void {
       offLost();
       release();
     };
-  }, [workspaceId, queryClient]);
+  }, [workspaceId, queryClient, source, sourceId]);
 }

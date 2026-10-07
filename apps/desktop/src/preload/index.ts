@@ -55,6 +55,7 @@ const onKeyIntent = subscribe<[string, string]>(IPC.windowKeyIntent.channel);
 const onNotificationClick = subscribe<[{ nodeId: string }]>(
   IPC.windowNotificationClick.channel,
 );
+const onJoinLinkPending = subscribe<[]>(IPC.sourcesJoinLink.channel);
 
 export interface ArmadraDesktopApi {
   readonly transport: {
@@ -144,6 +145,37 @@ export interface ArmadraDesktopApi {
       workspaceIds: readonly string[];
     }): Promise<BrowserClearDataResult>;
   };
+  /** The tray's external-access item re-reads the gateway after the page changed it. */
+  readonly gateway: {
+    refresh(): Promise<{ ok: boolean }>;
+  };
+  /** 源表变了：壳重读 CSP 与证书钉扎，答页面要不要重载（`app:sources-changed`）。 */
+  readonly sources: {
+    changed(): Promise<{ reload: boolean }>;
+    /** 壳收到的 `armadra://join` 深链（取一次即清）；没有是 `null`。 */
+    takeJoinLink(): Promise<string | null>;
+    /** 壳又收到一条深链：自己取走后交给监听者。 */
+    onJoinLink(listener: (url: string) => void): () => void;
+  };
+  /**
+   * 系统分享菜单（`app:share`）：`available` 是这个平台有没有；`url` 答
+   * `{ shared }`，`false` 时页面退回复制。
+   */
+  readonly share: {
+    readonly available: boolean;
+    url(request: { title: string; url: string }): Promise<{ shared: boolean }>;
+  };
+  /**
+   * 页面的一条 JS 错误（契约 §30），页面已剥离过；主进程再判开关、限流、剥离。
+   */
+  readonly diagnostics: {
+    report(report: {
+      kind: "error" | "rejection";
+      name: string;
+      message: string;
+      stack: string;
+    }): Promise<{ accepted: boolean }>;
+  };
   /**
    * The absolute path of a dropped or picked `File`. The page hands the path
    * to the Runtime, which is the process allowed to read it; the bytes never
@@ -207,6 +239,30 @@ const api: ArmadraDesktopApi = {
     onDrive: (listener) => onBrowserDrive(listener),
     clearData: (request) =>
       ipcRenderer.invoke(IPC.browserClearData.channel, request),
+  },
+  gateway: {
+    refresh: () => ipcRenderer.invoke(IPC.gatewayRefresh.channel),
+  },
+  sources: {
+    changed: () => ipcRenderer.invoke(IPC.sourcesChanged.channel),
+    takeJoinLink: () => ipcRenderer.invoke(IPC.sourcesTakeJoinLink.channel),
+    onJoinLink: (listener) =>
+      onJoinLinkPending(() => {
+        void ipcRenderer
+          .invoke(IPC.sourcesTakeJoinLink.channel)
+          .then((url: unknown) => {
+            if (typeof url === "string") listener(url);
+          });
+      }),
+  },
+  share: {
+    // 与 `shell-core/share-request.ts` 的 `nativeShareAvailable` 同一条：只有 macOS。
+    available: process.platform === "darwin",
+    url: (request) => ipcRenderer.invoke(IPC.appShare.channel, request),
+  },
+  diagnostics: {
+    report: (report) =>
+      ipcRenderer.invoke(IPC.diagnosticsReport.channel, report),
   },
   pathForFile: (file) => webUtils.getPathForFile(file),
 };

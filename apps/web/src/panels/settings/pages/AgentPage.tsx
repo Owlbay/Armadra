@@ -1,16 +1,20 @@
 import * as React from "react";
 import { Plus } from "lucide-react";
 import {
+  AGENT_DRIVERS,
   AGENT_IDS,
   supportedPermissionModes,
   customAgentSchema,
   type BuiltinAgentId,
   type AgentCapability,
+  type AgentDriver,
   type CustomAgent,
   type PermissionMode,
 } from "@armadra/shared";
 import { toast } from "sonner";
 import { CapabilityInheritance } from "@/agent/CapabilityInheritance";
+import { driverSettingOf } from "@/acp/driver";
+import { useSimpleModeStore } from "@/acp/simple-mode";
 
 import { useAgentsQuery } from "../../../app/use-agents";
 import {
@@ -27,16 +31,18 @@ import {
   CONVERSATION_SCOPES,
   type ConversationScope,
 } from "../../../api/settings";
+import { AgentCredentials } from "./AgentCredentials";
 import { CONTROL_WIDTH } from "./GeneralPage";
+import { AmaKeys } from "./AmaKeys";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { Button } from "@/ui/button";
 import { Input } from "@/ui/input";
 import { Switch } from "@/ui/switch";
@@ -48,6 +54,7 @@ import {
   SelectValue,
 } from "@/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/ui/toggle-group";
+import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from "@/ui/empty";
 
 /**
  * 设置 → Agent（§24.1）。
@@ -80,6 +87,9 @@ export function AgentPage() {
   const setPermissionMode = usePreferencesStore(
     (state) => state.setDefaultPermissionMode,
   );
+
+  const simpleMode = useSimpleModeStore((state) => state.simpleMode);
+  const setSimpleMode = useSimpleModeStore((state) => state.setSimpleMode);
 
   const list = agents.data ?? [];
   // 自定义 Agent 也在 `GET /api/agents` 里（§24.1），但三态、启动命令这两组
@@ -121,6 +131,18 @@ export function AgentPage() {
       />
     );
   }
+
+  const addCustom = (
+    <Button
+      variant="secondary"
+      size="sm"
+      disabled={!settings.data}
+      onClick={() => subpage.open("agent", "new")}
+    >
+      <Plus />
+      {t("settings.customAgent.add")}
+    </Button>
+  );
 
   return (
     <>
@@ -170,6 +192,8 @@ export function AgentPage() {
         ))}
       </SettingsGroup>
 
+      <AmaKeys />
+
       <SettingsGroup>
         <SettingsRow label={t("settings.defaultAgent")}>
           <Select
@@ -182,7 +206,11 @@ export function AgentPage() {
               setDefaultAgentId(id);
             }}
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.defaultAgent")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -202,7 +230,11 @@ export function AgentPage() {
               setPermissionMode(value as PermissionMode)
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.defaultPermission")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -213,6 +245,43 @@ export function AgentPage() {
               ))}
             </SelectContent>
           </Select>
+        </SettingsRow>
+      </SettingsGroup>
+
+      {/* 普通用户入口（ACP 设计 §8）：缺省驱动与简洁模式。 */}
+      <SettingsGroup>
+        <SettingsRow label={t("acp.settings.defaultDriver")}>
+          <Select
+            value={driverSettingOf(settings.data)}
+            disabled={!settings.data}
+            onValueChange={(value) =>
+              save.mutate({ agents: { defaultDriver: value as AgentDriver } })
+            }
+          >
+            <SelectTrigger
+              aria-label={t("acp.settings.defaultDriver")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="z-[var(--z-dialog)]">
+              {[...AGENT_DRIVERS].reverse().map((driver) => (
+                <SelectItem key={driver} value={driver}>
+                  {t(
+                    driver === "acp" ? "acp.view.session" : "acp.view.terminal",
+                  )}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </SettingsRow>
+        <SettingsRow label={t("acp.settings.simpleMode")}>
+          <Switch
+            checked={simpleMode}
+            aria-label={t("acp.settings.simpleMode")}
+            onCheckedChange={setSimpleMode}
+          />
         </SettingsRow>
       </SettingsGroup>
 
@@ -243,7 +312,11 @@ export function AgentPage() {
               })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.conversations.scope")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -271,21 +344,22 @@ export function AgentPage() {
             </span>
           </SettingsRow>
         ))}
-        {custom.length === 0 && (
-          <SettingsRow label={t("settings.customAgent.empty")} />
+        {custom.length === 0 ? (
+          // 空态：一句话 + 一个动作（设计系统 §5.16），不再单列一行「添加」。
+          <Empty className="py-6">
+            <EmptyHeader>
+              <EmptyTitle className="text-[13px] font-normal text-muted-foreground">
+                {t("settings.customAgent.empty")}
+              </EmptyTitle>
+            </EmptyHeader>
+            <EmptyContent>{addCustom}</EmptyContent>
+          </Empty>
+        ) : (
+          <SettingsRow label={null}>{addCustom}</SettingsRow>
         )}
-        <SettingsRow label={null}>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={!settings.data}
-            onClick={() => subpage.open("agent", "new")}
-          >
-            <Plus />
-            {t("settings.customAgent.add")}
-          </Button>
-        </SettingsRow>
       </SettingsGroup>
+
+      <AgentCredentials />
     </>
   );
 }
@@ -431,7 +505,11 @@ function CustomAgentForm({
               }))
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.customAgent.base")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -498,27 +576,32 @@ function CustomAgentForm({
         </div>
       </div>
 
-      <AlertDialog open={pendingDelete} onOpenChange={setPendingDelete}>
-        <AlertDialogContent className="z-[var(--z-dialog)]">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+      <ResponsiveAlertDialog
+        open={pendingDelete}
+        onOpenChange={setPendingDelete}
+      >
+        <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t("settings.customAgent.deleteTitle", {
                 name: existing?.label ?? "",
               })}
-            </AlertDialogTitle>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("dialog.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
+            </ResponsiveAlertDialogTitle>
+          </ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel>
+              {t("dialog.cancel")}
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               onClick={() =>
                 onSubmit(custom.filter((entry) => entry.id !== existing?.id))
               }
             >
               {t("settings.customAgent.delete")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </>
   );
 }

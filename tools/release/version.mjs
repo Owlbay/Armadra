@@ -11,12 +11,17 @@
  *   node tools/release/version.mjs set X.Y.Z
  *   node tools/release/version.mjs print
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
+  AGENT_PACKAGE,
   compareVersions,
   parseVersion,
+  PLATFORM_PACKAGE,
+  readAgentPin,
   readCompatibility,
+  readPlatformPin,
 } from "./compatibility.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -32,11 +37,23 @@ export const VERSION_SITES = [
   { path: "package.json", kind: "json" },
   { path: "apps/desktop/package.json", kind: "json" },
   { path: "apps/server/package.json", kind: "json" },
+  // 手机壳随桌面 / 服务器一起发（补全架构 §10）；Android 的版本名从这里读。
+  { path: "apps/mobile/package.json", kind: "json" },
+  // core 与 armadra-hook 各把版本写成常量（运行时不读 manifest）；漏改时
+  // instance.test / hook.test 才会在单测里红，这里让 set 一起改、check 一起看。
+  { path: "apps/desktop/src/core/instance.ts", kind: "ts", name: "VERSION" },
+  {
+    path: "apps/desktop/src/cli/armadra-hook/usage.ts",
+    kind: "ts",
+    name: "CLIENT_VERSION",
+  },
 ];
 
 const JSON_VERSION = /^(\s*"version"\s*:\s*")([^"]*)(")/m;
 
-function pattern() {
+function pattern(site) {
+  if (site.kind === "ts")
+    return new RegExp(`^(export const ${site.name} = ")([^"]*)(";)`, "m");
   return JSON_VERSION;
 }
 
@@ -44,7 +61,7 @@ function pattern() {
 export function readVersions(base = root) {
   return VERSION_SITES.map((site) => {
     const text = readFileSync(base + site.path, "utf8");
-    const match = pattern(site.kind).exec(text);
+    const match = pattern(site).exec(text);
     if (!match) throw new Error(`no version field in ${site.path}`);
     return { ...site, version: match[2] };
   });
@@ -102,6 +119,166 @@ export function checkVersions({ base = root, tag = "", compatibility } = {}) {
   return { version: expected, problems };
 }
 
+/**
+ * The pinned `@armadra/agent` (compatibility.json's `agent`) against what is
+ * installed: the desktop manifest's devDependency must be that exact version,
+ * and the lockfile's specifier and resolved version too. Returns problems.
+ */
+export function checkAgentPin({ base = root, agent } = {}) {
+  const problems = [];
+  let pin;
+  try {
+    pin = agent ?? readAgentPin();
+  } catch (error) {
+    return [String(error instanceof Error ? error.message : error)];
+  }
+  const manifest = JSON.parse(
+    readFileSync(base + "apps/desktop/package.json", "utf8"),
+  );
+  const declared =
+    manifest.devDependencies?.[AGENT_PACKAGE] ??
+    manifest.dependencies?.[AGENT_PACKAGE];
+  if (declared !== pin.version) {
+    problems.push(
+      `apps/desktop/package.json pins ${AGENT_PACKAGE} at ${declared ?? "nothing"}, compatibility.json at ${pin.version}`,
+    );
+  }
+  const lock = readFileSync(base + "pnpm-lock.yaml", "utf8");
+  const entry = new RegExp(
+    `'${AGENT_PACKAGE.replace("/", "\\/")}':\\n\\s+specifier: (\\S+)\\n\\s+version: (\\S+)`,
+  ).exec(lock);
+  if (entry === null) {
+    problems.push(`pnpm-lock.yaml installs no ${AGENT_PACKAGE}`);
+  } else {
+    const installed = entry[2].replace(/\(.*$/, "");
+    if (entry[1] !== pin.version || installed !== pin.version) {
+      problems.push(
+        `pnpm-lock.yaml has ${AGENT_PACKAGE} ${entry[1]} → ${installed}, compatibility.json pins ${pin.version}`,
+      );
+    }
+  }
+  return problems;
+}
+
+/** Workspaces that depend on the protocol package (platform-protocol §1.3). */
+const PLATFORM_CONSUMERS = ["packages/shared", "apps/desktop", "apps/web"];
+
+/**
+ * The pinned `@armadra/platform-protocol` (compatibility.json's `platform`)
+ * against what is installed: each consumer manifest names the vendored
+ * tarball of that exact version, the tarball's sha256 is the recorded one, the
+ * lockfile resolved it from that file, and the installed copy reports the
+ * version. Returns problems.
+ */
+export function checkPlatformPin({ base = root, platform } = {}) {
+  const problems = [];
+  let pin;
+  try {
+    pin = platform ?? readPlatformPin();
+  } catch (error) {
+    return [String(error instanceof Error ? error.message : error)];
+  }
+  const tarball = `tools/vendor/${pin.tarball.file}`;
+  if (!pin.tarball.file.endsWith(`-${pin.version}.tgz`)) {
+    problems.push(
+      `platform.tarball.file ${pin.tarball.file} does not carry version ${pin.version}`,
+    );
+  }
+  if (!existsSync(base + tarball)) {
+    problems.push(`${tarball} is missing`);
+  } else {
+    const sha = createHash("sha256")
+      .update(readFileSync(base + tarball))
+      .digest("hex");
+    if (sha !== pin.tarball.sha256)
+      problems.push(
+        `${tarball} has sha256 ${sha}, compatibility.json records ${pin.tarball.sha256}`,
+      );
+  }
+  for (const dir of PLATFORM_CONSUMERS) {
+    const manifest = JSON.parse(
+      readFileSync(`${base}${dir}/package.json`, "utf8"),
+    );
+    const declared =
+      manifest.dependencies?.[PLATFORM_PACKAGE] ??
+      manifest.devDependencies?.[PLATFORM_PACKAGE];
+    const depth = "../".repeat(dir.split("/").length);
+    const expected = `file:${depth}${tarball}`;
+    if (declared !== expected) {
+      problems.push(
+        `${dir}/package.json depends on ${PLATFORM_PACKAGE} at ${declared ?? "nothing"}, expected ${expected}`,
+      );
+    }
+    const installed = `${base}${dir}/node_modules/${PLATFORM_PACKAGE}/package.json`;
+    if (existsSync(installed)) {
+      const version = JSON.parse(readFileSync(installed, "utf8")).version;
+      if (version !== pin.version)
+        problems.push(
+          `${dir} has ${PLATFORM_PACKAGE} ${version} installed, compatibility.json pins ${pin.version}`,
+        );
+    } else {
+      problems.push(
+        `${dir} has no installed ${PLATFORM_PACKAGE}; run pnpm install`,
+      );
+    }
+  }
+  const lock = readFileSync(base + "pnpm-lock.yaml", "utf8");
+  const key = `'${PLATFORM_PACKAGE}@file:${tarball}`;
+  const at = lock.indexOf(key);
+  if (at < 0) {
+    problems.push(
+      `pnpm-lock.yaml resolves no ${PLATFORM_PACKAGE} from ${tarball}`,
+    );
+  } else if (!/^\s+version: (\S+)/m.test(lock.slice(at, at + 600))) {
+    problems.push(
+      `pnpm-lock.yaml entry for ${PLATFORM_PACKAGE} has no version`,
+    );
+  } else {
+    const lockVersion = /^\s+version: (\S+)/m.exec(lock.slice(at, at + 600))[1];
+    if (lockVersion !== pin.version)
+      problems.push(
+        `pnpm-lock.yaml has ${PLATFORM_PACKAGE} ${lockVersion}, compatibility.json pins ${pin.version}`,
+      );
+    if (!/integrity: sha512-/.test(lock.slice(at, at + 600)))
+      problems.push(`pnpm-lock.yaml has no integrity for ${PLATFORM_PACKAGE}`);
+  }
+  return problems;
+}
+
+/**
+ * The desktop package carries the server shell (`Armadra serve`, platform plan
+ * A5-1): the manifest's `main` is the gate `main/entry.ts` builds, the build
+ * config emits it, and `after-pack.mjs` places the shell's `main.js` and page
+ * under `resources/server/`. Returns problems.
+ */
+export function checkDesktopServe({ base = root } = {}) {
+  const problems = [];
+  const read = (path) => {
+    try {
+      return readFileSync(base + path, "utf8");
+    } catch {
+      problems.push(`${path} is missing`);
+      return "";
+    }
+  };
+  const main = JSON.parse(read("apps/desktop/package.json") || "{}").main;
+  if (main !== "./out/main/entry.js")
+    problems.push(
+      `apps/desktop/package.json main is ${main}, expected ./out/main/entry.js (the Armadra serve gate)`,
+    );
+  if (
+    !/entry:\s*resolve\(here,\s*"src\/main\/entry\.ts"\)/.test(
+      read("apps/desktop/electron.vite.config.ts"),
+    )
+  )
+    problems.push("electron.vite.config.ts does not build src/main/entry.ts");
+  const afterPack = read("apps/desktop/scripts/after-pack.mjs");
+  for (const place of ['SERVER_TO = "server/main.js"', 'WEB_TO = "server/web"'])
+    if (!afterPack.includes(place))
+      problems.push(`after-pack.mjs no longer places ${place}`);
+  return problems;
+}
+
 /** Write a new version into every site. */
 export function setVersion(next, base = root) {
   const version = parseVersion(next).text;
@@ -109,14 +286,11 @@ export function setVersion(next, base = root) {
   for (const site of VERSION_SITES) {
     const file = base + site.path;
     const text = readFileSync(file, "utf8");
-    const replaced = text.replace(
-      pattern(site.kind),
-      (_, head, current, tail) => {
-        if (current !== version)
-          changed.push(`${site.path}: ${current} -> ${version}`);
-        return head + version + tail;
-      },
-    );
+    const replaced = text.replace(pattern(site), (_, head, current, tail) => {
+      if (current !== version)
+        changed.push(`${site.path}: ${current} -> ${version}`);
+      return head + version + tail;
+    });
     if (replaced !== text) writeFileSync(file, replaced);
   }
   return { version, changed };
@@ -146,6 +320,9 @@ function main(argv) {
   const { version, problems } = checkVersions({
     tag: tag.startsWith("v") ? tag : "",
   });
+  problems.push(...checkAgentPin());
+  problems.push(...checkPlatformPin());
+  problems.push(...checkDesktopServe());
   for (const problem of problems) console.error(`✗ ${problem}`);
   if (problems.length > 0) {
     console.error(
@@ -154,7 +331,7 @@ function main(argv) {
     return 1;
   }
   console.log(
-    `Version ${version} agrees across ${VERSION_SITES.length} files${tag ? ` and tag ${tag}` : ""}.`,
+    `Version ${version} agrees across ${VERSION_SITES.length} files${tag ? ` and tag ${tag}` : ""}; ${AGENT_PACKAGE} and ${PLATFORM_PACKAGE} pinned as installed.`,
   );
   return 0;
 }

@@ -94,7 +94,7 @@ function ready(overrides: Record<string, unknown> = {}) {
   session.state = {
     status: "ready",
     canManage: true,
-    hello: { hostId: "a".repeat(32) },
+    hello: { sourceId: "a".repeat(32) },
     session: { scopes: [] },
     client: {
       listPlans: vi.fn(async () => ({

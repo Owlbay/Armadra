@@ -12,9 +12,10 @@
  *     snapshot and no server hello — the front end's own reducers are seeded by
  *     the REST reads it already made, and a snapshot frame would be a 22nd
  *     event type nothing parses.
- *   * **No heartbeat.** Neither side pings. The Rust loop is a `select!` over
- *     the broadcast receiver and the incoming stream and writes nothing of its
- *     own, so a quiet workspace is a quiet socket.
+ *   * **No application heartbeat.** No frame of this protocol is a ping. The
+ *     `ws`-level ping every stream gets from `http/server.ts` (control frames,
+ *     answered by the browser itself) is what keeps a quiet socket alive
+ *     through proxies and ends a dead one.
  *   * **Read-only.** A client frame matters only as a close. Anything else is
  *     ignored rather than answered, and there is no ack: the transport is the
  *     acknowledgement, and a client that missed frames re-reads instead.
@@ -33,6 +34,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { WebSocket } from "ws";
 
 import type { EventBus, WorkspaceEvent } from "../bus";
+import { OPEN, SendQueue, wsTarget } from "../http/stream-queue";
 import { appendEvent, catchUp, outboxReady, prune, watermark } from "./outbox";
 
 /**
@@ -44,6 +46,7 @@ import { appendEvent, catchUp, outboxReady, prune, watermark } from "./outbox";
  */
 export const EPHEMERAL_EVENTS: ReadonlySet<string> = new Set([
   "canvas.presence",
+  "cloud.tunnel",
 ]);
 
 /**
@@ -56,6 +59,12 @@ export const EPHEMERAL_EVENTS: ReadonlySet<string> = new Set([
  * has to be kept here.
  */
 export const MAX_QUEUED_FRAMES = 256;
+
+/**
+ * 一条连接的缓冲超过多少字节就算跟不上（平台规格 core 包 §3.3）：之后的帧进
+ * 有界队列，满了丢最旧的。
+ */
+export const EVENT_HIGH_WATER_BYTES = 1024 * 1024;
 
 /** 一次续订最多读多少页 outbox。有界，所以一个坏游标转不起来。 */
 export const MAX_REPLAY_PASSES = 32;
@@ -71,17 +80,20 @@ export const MAX_REPLAY_PASSES = 32;
 export interface EventSink {
   /** Serialised frame, ready for the wire. */
   send(frame: string, written: () => void): void;
+  /** The socket's own backlog, when there is a socket; `0` when absent. */
+  readonly bufferedAmount?: number;
+  /** `1` (open) when absent. */
+  readonly readyState?: number;
 }
 
 interface Subscription {
-  readonly sink: EventSink;
-  /** Oldest first. Bounded by `MAX_QUEUED_FRAMES`; the oldest is dropped. */
-  readonly queue: string[];
-  /** True while a `send` is in flight; the queue drains one frame at a time. */
-  writing: boolean;
+  /**
+   * `drop-oldest`, bounded by `MAX_QUEUED_FRAMES` past a backlog of
+   * `EVENT_HIGH_WATER_BYTES` — the shared queue every stream uses
+   * (`http/stream-queue.ts`), which also counts the drops.
+   */
+  readonly queue: SendQueue;
   closed: boolean;
-  /** How many frames this connection has lost to the bound, for diagnostics. */
-  dropped: number;
   /**
    * 这条订阅带了 `?cursor=`，所以它还要收游标控制帧。
    *
@@ -118,8 +130,15 @@ export function cursorFrame(
  * slower one's backlog the faster one's latency — which is precisely the
  * property the acceptance asks about ("慢客户端不拖慢快客户端").
  */
+/**
+ * 控制面订阅（`workspaces.events`，契约 §35.4）收帧的回调：序列化好的那一帧和
+ * 它的 outbox 序号（不进 outbox 的是 0）。背压由 RPC 门面的有界队列管。
+ */
+export type EventListener = (frame: string, seq: number) => void;
+
 export class WorkspaceEventStream {
   private readonly subscriptions = new Map<string, Set<Subscription>>();
+  private readonly listeners = new Map<string, Set<EventListener>>();
   /** 有库就有 outbox；没有就退回 R1b 的纯内存扇出。 */
   private database: DatabaseSync | undefined;
   /** 每写多少帧裁剪一次，摊掉 `DELETE` 的成本。 */
@@ -179,10 +198,36 @@ export class WorkspaceEventStream {
       (EPHEMERAL_EVENTS.has(event.type)
         ? 0
         : this.record(workspaceId, event, frame));
+    const listeners = this.listeners.get(workspaceId);
+    for (const listener of listeners ?? []) {
+      try {
+        listener(frame, seq);
+      } catch {
+        // 一个订阅出错不该让其余的漏帧。
+      }
+    }
     const watchers = this.subscriptions.get(workspaceId);
-    if (watchers === undefined || watchers.size === 0) return 0;
+    if (watchers === undefined || watchers.size === 0) {
+      return listeners?.size ?? 0;
+    }
     for (const subscription of watchers) this.enqueue(subscription, frame, seq);
-    return watchers.size;
+    return watchers.size + (listeners?.size ?? 0);
+  }
+
+  /**
+   * 控制面订阅收帧（契约 §35.4），返回退订函数。和 {@link subscribe} 一样算一个
+   * 「在看」的人：资源采样与 Agent 状态按它决定发不发。
+   */
+  listen(workspaceId: string, listener: EventListener): () => void {
+    const set = this.listeners.get(workspaceId) ?? new Set<EventListener>();
+    set.add(listener);
+    this.listeners.set(workspaceId, set);
+    return () => {
+      set.delete(listener);
+      if (set.size === 0 && this.listeners.get(workspaceId) === set) {
+        this.listeners.delete(workspaceId);
+      }
+    };
   }
 
   /**
@@ -221,11 +266,23 @@ export class WorkspaceEventStream {
     options: { readonly cursored?: boolean } = {},
   ): () => void {
     const subscription: Subscription = {
-      sink,
-      queue: [],
-      writing: false,
+      queue: new SendQueue(
+        {
+          send: (frame, written) => sink.send(frame as string, written),
+          get bufferedAmount() {
+            return sink.bufferedAmount ?? 0;
+          },
+          get readyState() {
+            return sink.readyState ?? OPEN;
+          },
+        },
+        {
+          policy: "drop-oldest",
+          maxFrames: MAX_QUEUED_FRAMES,
+          highWaterBytes: EVENT_HIGH_WATER_BYTES,
+        },
+      ),
       closed: false,
-      dropped: 0,
       cursored: options.cursored === true,
     };
     const watchers =
@@ -234,7 +291,7 @@ export class WorkspaceEventStream {
     this.subscriptions.set(workspaceId, watchers);
     return () => {
       subscription.closed = true;
-      subscription.queue.length = 0;
+      subscription.queue.close();
       watchers.delete(subscription);
       // A workspace nobody watches keeps no entry: the map would otherwise grow
       // by one every time a board was opened and closed for the rest of the run.
@@ -244,55 +301,33 @@ export class WorkspaceEventStream {
 
   /** How many connections are watching one workspace. */
   subscriberCount(workspaceId: string): number {
-    return this.subscriptions.get(workspaceId)?.size ?? 0;
+    return (
+      (this.subscriptions.get(workspaceId)?.size ?? 0) +
+      (this.listeners.get(workspaceId)?.size ?? 0)
+    );
   }
 
   /** Every workspace with at least one watcher, for the sampling domains. */
   watchedWorkspaces(): string[] {
-    return [...this.subscriptions.keys()];
+    return [
+      ...new Set([...this.subscriptions.keys(), ...this.listeners.keys()]),
+    ];
   }
 
   private enqueue(subscription: Subscription, frame: string, seq = 0): void {
     if (subscription.closed) return;
-    subscription.queue.push(frame);
     // 续订客户端在每一帧之后收到它的序号。两条消息而不是一个字段，因为帧的
     // 形状是契约；控制帧排在业务帧之后，所以客户端记下的游标永远指向一条它
     // 已经收下的帧。
+    //
+    // A client that falls behind loses the oldest frames, never its
+    // connection: the Rust receiver resumed at the oldest frame still in its
+    // ring, and dropping from the front of the queue is the same thing said
+    // from the other end.
+    subscription.queue.push(frame);
     if (subscription.cursored && seq > 0) {
       subscription.queue.push(cursorFrame(seq, 0, seq));
     }
-    // The ring overwrites its oldest entry, and the Rust receiver resumes at
-    // the oldest one still in it. Dropping from the front is the same thing
-    // said from the other end.
-    while (subscription.queue.length > MAX_QUEUED_FRAMES) {
-      subscription.queue.shift();
-      subscription.dropped += 1;
-    }
-    this.drain(subscription);
-  }
-
-  /**
-   * Writes one frame and waits for it to leave before writing the next.
-   *
-   * The wait is what makes the bound mean anything. `WebSocket.send` returns as
-   * soon as the frame is queued in the socket's own buffer, so a loop that
-   * pushed the whole queue at once would move an unbounded backlog from this
-   * queue into `bufferedAmount` and the drop rule would never fire.
-   */
-  private drain(subscription: Subscription): void {
-    if (subscription.writing || subscription.closed) return;
-    const frame = subscription.queue.shift();
-    if (frame === undefined) return;
-    subscription.writing = true;
-    let advanced = false;
-    subscription.sink.send(frame, () => {
-      // A sink that called back twice for one frame would let two writes race
-      // down the same queue; the second call is ignored rather than trusted.
-      if (advanced) return;
-      advanced = true;
-      subscription.writing = false;
-      this.drain(subscription);
-    });
   }
 
   /**
@@ -313,20 +348,10 @@ export class WorkspaceEventStream {
     if (options.cursor === "now") this.seed(socket);
     else if (cursored)
       this.replay(workspaceId, socket, options.cursor as number);
-    return this.subscribe(
-      workspaceId,
-      {
-        send(frame, written) {
-          socket.send(frame, () => {
-            // A failed write is a socket on its way out; `close` will arrive and
-            // release the subscription. Advancing anyway keeps the queue from
-            // wedging in the meantime.
-            written();
-          });
-        },
-      },
-      { cursored },
-    );
+    // A failed write is a socket on its way out; `close` will arrive and
+    // release the subscription. The queue settles the frame either way, so it
+    // does not wedge in the meantime.
+    return this.subscribe(workspaceId, wsTarget(socket), { cursored });
   }
 
   /**
@@ -372,7 +397,7 @@ export class WorkspaceEventStream {
   /** Diagnostics: how many frames each connection has lost to the bound. */
   droppedFrames(workspaceId: string): number[] {
     return [...(this.subscriptions.get(workspaceId) ?? [])].map(
-      (subscription) => subscription.dropped,
+      (subscription) => subscription.queue.dropped,
     );
   }
 }

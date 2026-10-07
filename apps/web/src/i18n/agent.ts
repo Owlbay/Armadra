@@ -6,6 +6,14 @@ import type { MessageModule } from "./index";
  */
 const zh = {
   "agent.restart": "重启 Agent",
+  "agent.amaKeys": "Armadra Agent 的模型密钥",
+  "agent.amaKeys.provider": "供应商",
+  "agent.amaKeys.key": "API Key",
+  "agent.amaKeys.save": "保存",
+  "agent.amaKeys.clear": "清除",
+  "agent.amaKeys.set": "已设置",
+  "agent.amaKeys.saved": "已保存",
+  "agent.amaKeys.failed": "保存失败",
   "agent.permissionMode": "权限模式",
   "agent.mode.default": "默认",
   "agent.mode.auto-edit": "自动编辑",
@@ -32,6 +40,8 @@ const zh = {
   "agent.stateSource.hook.note": "状态来自 CLI 的 Hook 上报。", // i18n-exempt
   "agent.stateSource.extension": "扩展上报",
   "agent.stateSource.extension.note": "状态来自 CLI 进程内的扩展上报。",
+  "agent.stateSource.acp": "ACP 上报", // i18n-exempt
+  "agent.stateSource.acp.note": "状态来自 ACP 会话。", // i18n-exempt
   "agent.stateSource.observed": "终端观测",
   "agent.stateSource.observed.note":
     "没有适配器，状态由终端输出推测；交接与消息投递仍会被拒绝。",
@@ -39,6 +49,14 @@ const zh = {
 
 const en: Record<keyof typeof zh, string> = {
   "agent.restart": "Restart agent",
+  "agent.amaKeys": "Armadra Agent model keys",
+  "agent.amaKeys.provider": "Provider",
+  "agent.amaKeys.key": "API key",
+  "agent.amaKeys.save": "Save",
+  "agent.amaKeys.clear": "Clear",
+  "agent.amaKeys.set": "Set",
+  "agent.amaKeys.saved": "Saved",
+  "agent.amaKeys.failed": "Could not save",
   "agent.permissionMode": "Permission mode",
   "agent.mode.default": "Default",
   "agent.mode.auto-edit": "Auto edit",
@@ -64,6 +82,9 @@ const en: Record<keyof typeof zh, string> = {
   "agent.stateSource.extension": "Reported by extension",
   "agent.stateSource.extension.note":
     "The state comes from an extension inside the CLI's own process.",
+  "agent.stateSource.acp": "Reported over ACP",
+  "agent.stateSource.acp.note":
+    "The state comes from the Agent Client Protocol session.",
   "agent.stateSource.observed": "Observed in the terminal",
   "agent.stateSource.observed.note":
     "No adapter: the state is a guess from terminal output. Handoffs and message delivery are still refused.",

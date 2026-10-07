@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { SessionHint } from "../history/types";
 import { Refusal } from "./refusals";
 
 /**
@@ -117,6 +118,63 @@ export function loadSession(
     generation: Math.max(0, Number(row.generation)),
     status: row.status,
     createdAtMs: Number.isNaN(createdAtMs) ? undefined : createdAtMs,
+  };
+}
+
+/**
+ * 这个节点的终端是在哪个目录、什么时候起的——本地历史适配器兜底定位要的那两样
+ * （Pi / OMP 按 cwd 加启动时间找会话文件）。挑哪一行与 {@link loadSession} 同一条
+ * 规矩：活着的优先，再按代数与创建时间。没有这一行、或者字段读不出来就不给。
+ */
+export function launchOf(
+  database: DatabaseSync,
+  nodeId: string,
+): { readonly cwd?: string; readonly startedAtMs?: number } {
+  const row = database
+    .prepare(
+      "SELECT cwd, created_at FROM terminal_sessions WHERE owner_node_id = ? " +
+        "ORDER BY (status = 'running') DESC, generation DESC, created_at DESC " +
+        "LIMIT 1",
+    )
+    .get(nodeId) as
+    | { cwd: string | null; created_at: string | null }
+    | undefined;
+  if (row === undefined) return {};
+  const cwd =
+    typeof row.cwd === "string" && row.cwd !== "" ? row.cwd : undefined;
+  const startedAtMs =
+    typeof row.created_at === "string"
+      ? Date.parse(row.created_at)
+      : Number.NaN;
+  return {
+    ...(cwd === undefined ? {} : { cwd }),
+    ...(Number.isFinite(startedAtMs) ? { startedAtMs } : {}),
+  };
+}
+
+/**
+ * 定位一个节点的本地历史要的全部线索：CLI 报来的转录路径与会话 id（`agent_status`），
+ * 加上终端的 cwd 与启动时间。缺哪样就不带哪样。
+ */
+export function historyHint(
+  database: DatabaseSync,
+  nodeId: string,
+  agentId: string,
+  status:
+    | {
+        readonly transcriptPath?: string | undefined;
+        readonly sessionId?: string | undefined;
+      }
+    | undefined,
+): SessionHint {
+  const launch = launchOf(database, nodeId);
+  return {
+    agentId,
+    ...(status?.transcriptPath === undefined
+      ? {}
+      : { transcriptPath: status.transcriptPath }),
+    ...(status?.sessionId === undefined ? {} : { sessionId: status.sessionId }),
+    ...launch,
   };
 }
 

@@ -1,0 +1,237 @@
+# 分发渠道推送（外部服务 §4，docs/guides/ci-release.md §3.1）。
+#
+# release.yml 只建 draft，渠道清单里的下载地址在人把 Release 转正之前对外是 404，
+# 所以推送挂在 `release: published` 上，而不是 release.yml 的某个作业里。清单从
+# 已发布 Release 的 SHA256SUMS 重新渲染（tools/release/publish-channels.mjs），
+# 与 release.yml 的 channels 作业校验过的是同一份模板。
+#
+# 每个渠道一个作业，各认各的 secret，缺了就跳过并告警，不让整个工作流失败：
+#   - publish-tap：HOMEBREW_TAP_TOKEN，推 Casks/armadra.rb 到 tap 仓库（变量
+#     ARMADRA_HOMEBREW_TAP，缺省 Owlbay/homebrew-tap）；
+#   - publish-scoop：SCOOP_BUCKET_TOKEN，推 bucket/armadra.json（变量
+#     ARMADRA_SCOOP_BUCKET，缺省 Owlbay/scoop-bucket）；
+#   - publish-winget：WINGET_TOKEN，wingetcreate 向 microsoft/winget-pkgs 提 PR——
+#     包已在仓库里时 `update`，第一次用渲染好的三件套 `submit`（首次人工审核）。
+#   - mirror：更新镜像（W-MIRROR）。release.yml 的 mirror 作业已把这一版传到桶里
+#     releases/download/v<版本>/；这里把那一版的清单服务端复制到 releases/latest/download/，
+#     镜像的「最新」与 GitHub 的同时变（tools/release/mirror.mjs promote）。缺设置跳过。
+# 预发布与 draft 不进渠道。
+name: distribute
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 已发布的标签，例如 v0.1.0
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: distribute-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      stable: ${{ steps.release.outputs.stable }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: 读 Release 并渲染渠道清单
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          state="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"')"
+          version="${TAG#v}"
+          printf 'version=%s\ntag=%s\n' "$version" "$TAG" >> "$GITHUB_OUTPUT"
+          if [ "$state" != "false false" ]; then
+            echo "::notice::$TAG 是 draft 或预发布（$state），不进分发渠道"
+            printf 'stable=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir release
+          node tools/release/publish-channels.mjs render \
+            --sums release/SHA256SUMS \
+            --version "$version" \
+            --repo "$GITHUB_REPOSITORY" \
+            --out rendered
+          printf 'stable=true\n' >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        if: steps.release.outputs.stable == 'true'
+        with:
+          name: channels
+          path: rendered
+          if-no-files-found: error
+
+  publish-tap:
+    needs: render
+    if: needs.render.outputs.stable == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 有没有 HOMEBREW_TAP_TOKEN
+        id: token
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::warning::没有 HOMEBREW_TAP_TOKEN，跳过 Homebrew tap"
+            printf 'enabled=false\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'enabled=true\n' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.token.outputs.enabled == 'true'
+        with:
+          ref: ${{ needs.render.outputs.tag }}
+      - uses: actions/download-artifact@v4
+        if: steps.token.outputs.enabled == 'true'
+        with:
+          name: channels
+          path: rendered
+      - name: 推 Casks/armadra.rb
+        if: steps.token.outputs.enabled == 'true'
+        shell: bash
+        env:
+          CHANNEL_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP: ${{ vars.ARMADRA_HOMEBREW_TAP || 'Owlbay/homebrew-tap' }}
+        run: |
+          set -euo pipefail
+          node tools/release/publish-channels.mjs push --channel tap \
+            --rendered rendered --remote "https://github.com/$TAP.git" \
+            --version "${{ needs.render.outputs.version }}"
+
+  publish-scoop:
+    needs: render
+    if: needs.render.outputs.stable == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 有没有 SCOOP_BUCKET_TOKEN
+        id: token
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::warning::没有 SCOOP_BUCKET_TOKEN，跳过 Scoop bucket"
+            printf 'enabled=false\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'enabled=true\n' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.token.outputs.enabled == 'true'
+        with:
+          ref: ${{ needs.render.outputs.tag }}
+      - uses: actions/download-artifact@v4
+        if: steps.token.outputs.enabled == 'true'
+        with:
+          name: channels
+          path: rendered
+      - name: 推 bucket/armadra.json
+        if: steps.token.outputs.enabled == 'true'
+        shell: bash
+        env:
+          CHANNEL_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          BUCKET: ${{ vars.ARMADRA_SCOOP_BUCKET || 'Owlbay/scoop-bucket' }}
+        run: |
+          set -euo pipefail
+          node tools/release/publish-channels.mjs push --channel scoop \
+            --rendered rendered --remote "https://github.com/$BUCKET.git" \
+            --version "${{ needs.render.outputs.version }}"
+
+  publish-winget:
+    needs: render
+    if: needs.render.outputs.stable == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: 有没有 WINGET_TOKEN
+        id: token
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::warning::没有 WINGET_TOKEN，跳过 winget"
+            printf 'enabled=false\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'enabled=true\n' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v4
+        if: steps.token.outputs.enabled == 'true'
+        with:
+          name: channels
+          path: rendered
+      # 包还不在 winget-pkgs 里时 update 无从更新，用渲染好的三件套 submit 首个 PR。
+      - name: wingetcreate 提 PR
+        if: steps.token.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          VERSION: ${{ needs.render.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          $id = 'Owlbay.Armadra'
+          $existing = $true
+          try {
+            Invoke-RestMethod -Uri "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/o/Owlbay/Armadra" -Headers @{ 'User-Agent' = 'armadra-release' } | Out-Null
+          } catch {
+            $existing = $false
+          }
+          $base = "https://github.com/$env:REPO/releases/download/v$env:VERSION"
+          if ($existing) {
+            .\wingetcreate.exe update $id --version $env:VERSION `
+              --urls "$base/Armadra_$($env:VERSION)_windows-x86_64-setup.exe|x64" "$base/Armadra_$($env:VERSION)_windows-aarch64-setup.exe|arm64" `
+              --submit --token $env:WINGET_TOKEN
+          } else {
+            .\wingetcreate.exe submit --token $env:WINGET_TOKEN "rendered/winget/manifests/o/Owlbay/Armadra/$env:VERSION"
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  mirror:
+    needs: render
+    if: needs.render.outputs.stable == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.render.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: 把这一版提为镜像的最新
+        shell: bash
+        env:
+          ARMADRA_MIRROR_ENDPOINT: ${{ vars.CLOUDFLARE_ACCOUNT_ID && format('https://{0}.r2.cloudflarestorage.com', vars.CLOUDFLARE_ACCOUNT_ID) || '' }}
+          ARMADRA_MIRROR_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
+          ARMADRA_MIRROR_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          ARMADRA_MIRROR_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+        run: node tools/release/mirror.mjs promote --version "${{ needs.render.outputs.version }}"

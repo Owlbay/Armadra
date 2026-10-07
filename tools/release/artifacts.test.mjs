@@ -3,9 +3,14 @@ import { test } from "node:test";
 import {
   MANIFEST_ASSETS,
   TARGETS,
+  UPDATER_FEEDS,
   assetComponent,
   assetTarget,
   desktopAssets,
+  feedTarget,
+  updaterChannel,
+  updaterFeedFile,
+  mobileAssets,
   webAsset,
 } from "./artifacts.mjs";
 
@@ -115,4 +120,35 @@ test("the web bundle is the one published artifact with no target", () => {
   assert.equal(name, "armadra-web_0.2.0.tar.gz");
   assert.equal(assetComponent(name), "web");
   assert.equal(assetTarget(name), "");
+});
+
+test("the mobile shell's CI builds are named but never placed by the updater", () => {
+  const [apk, simulator] = mobileAssets("0.2.0");
+  assert.equal(apk.name, "armadra-mobile_0.2.0_android-debug.apk");
+  assert.equal(simulator.name, "armadra-mobile_0.2.0_ios-simulator.app.zip");
+  for (const asset of [apk, simulator]) {
+    assert.equal(assetComponent(asset.name), "mobile", asset.name);
+    assert.equal(assetTarget(asset.name), "", asset.name);
+  }
+});
+
+test("each target's electron-updater feed is a manifest of its own", () => {
+  assert.deepEqual(TARGETS.map(updaterFeedFile), [
+    "latest-darwin-aarch64-mac.yml",
+    "latest-darwin-x86_64-mac.yml",
+    "latest-linux-x86_64-linux.yml",
+    "latest-linux-aarch64-linux-arm64.yml",
+    "latest-windows-x86_64.yml",
+    "latest-windows-aarch64.yml",
+  ]);
+  assert.deepEqual(UPDATER_FEEDS, TARGETS.map(updaterFeedFile));
+  for (const target of TARGETS) {
+    const name = updaterFeedFile(target);
+    assert.equal(assetComponent(name), "manifest", name);
+    assert.equal(feedTarget(name), target, name);
+    assert.equal(updaterChannel(target), `latest-${target}`);
+  }
+  // electron-builder's own names are not published.
+  for (const name of ["latest-mac.yml", "latest.yml", "latest-linux.yml"])
+    assert.equal(assetComponent(name), "", name);
 });

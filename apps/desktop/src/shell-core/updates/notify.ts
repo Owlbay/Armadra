@@ -48,14 +48,21 @@ export interface Staged {
   ready: boolean;
   /** The version those bytes install. Empty when `ready` is false. */
   version: string;
+  /**
+   * Whether a restart would install them. `false` is a package without a
+   * platform signature (`availability.ts::installRefusal`): the bytes are
+   * staged and verified, and the tray must not offer a restart that is going
+   * to be refused.
+   */
+  installable: boolean;
 }
 
-export function stagedReady(version: string): Staged {
-  return { ready: true, version };
+export function stagedReady(version: string, installable = true): Staged {
+  return { ready: true, version, installable };
 }
 
 export function stagedCleared(): Staged {
-  return { ready: false, version: "" };
+  return { ready: false, version: "", installable: false };
 }
 
 /**
@@ -111,4 +118,24 @@ export function notificationBody(locale: Locale, version: string): string {
   return named.length === 0
     ? "Restart Armadra to finish updating."
     : `Restart Armadra to update to ${named}.`;
+}
+
+/**
+ * The notification's body when the update is staged but this installation is
+ * unsigned: the download worked and was verified, and nothing will install it.
+ * Saying "restart to update" here would be a promise the restart cannot keep.
+ */
+export function unsignedNotificationBody(
+  locale: Locale,
+  version: string,
+): string {
+  const named = version.trim();
+  if (locale === "zhCn") {
+    return named.length === 0
+      ? "更新已下载并通过校验，但当前安装未签名，不会自动安装。请从发布页手动安装。"
+      : `${named} 已下载并通过校验，但当前安装未签名，不会自动安装。请从发布页手动安装。`;
+  }
+  return named.length === 0
+    ? "The update was downloaded and verified, but this installation is unsigned, so it will not be installed automatically. Install it from the release page."
+    : `${named} was downloaded and verified, but this installation is unsigned, so it will not be installed automatically. Install it from the release page.`;
 }

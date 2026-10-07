@@ -4,6 +4,8 @@ import type { GitRefsRepository } from "@armadra/shared";
 
 import { useT } from "../../../app/preferences-store";
 import { cn } from "../../../lib/cn";
+import { Button } from "../../../ui/button";
+import { Toggle } from "../../../ui/toggle";
 import { Input } from "../../../ui/input";
 import {
   buildBranchTree,
@@ -108,13 +110,15 @@ export function BranchTree({
               )}
               style={{ paddingLeft: `${depth * 12 + 4}px` }}
             >
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon-xs"
                 aria-hidden={!expandable}
                 tabIndex={expandable ? 0 : -1}
                 aria-label={node.label}
                 className={cn(
-                  "flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted",
+                  "size-4 rounded text-muted-foreground hover:bg-muted",
                   !expandable && "invisible",
                 )}
                 onClick={(event) => {
@@ -127,7 +131,7 @@ export function BranchTree({
                 ) : (
                   <ChevronRight className="size-3" />
                 )}
-              </button>
+              </Button>
               {node.kind === "repository" && (
                 <span
                   aria-hidden
@@ -140,10 +144,11 @@ export function BranchTree({
                   }}
                 />
               )}
-              <button
+              <Button
                 type="button"
+                variant="ghost"
                 className={cn(
-                  "min-w-0 flex-1 truncate rounded px-1 py-0.5 text-left hover:bg-muted",
+                  "block h-auto min-w-0 flex-1 truncate rounded px-1 py-0.5 text-left text-[length:inherit] font-normal hover:bg-muted",
                   node.current && node.kind === "branch" && "font-semibold",
                 )}
                 title={node.reference ?? node.label}
@@ -159,40 +164,38 @@ export function BranchTree({
                       })
                     : t(`gitLog.tree.${node.group}`)
                   : node.label}
-              </button>
+              </Button>
               {node.kind === "branch" &&
                 (node.ahead ? (
-                  <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground">
+                  <span className="shrink-0 tabular-nums text-[length:var(--text-caption)] text-muted-foreground">
                     ↑{node.ahead}
                   </span>
                 ) : null)}
               {node.kind === "branch" &&
                 (node.behind ? (
-                  <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground">
+                  <span className="shrink-0 tabular-nums text-[length:var(--text-caption)] text-muted-foreground">
                     ↓{node.behind}
                   </span>
                 ) : null)}
               {key !== null &&
                 (node.kind === "branch" || node.kind === "tag") && (
-                  <button
-                    type="button"
-                    aria-pressed={node.favorite ?? false}
+                  <Toggle
+                    size="sm"
+                    pressed={node.favorite ?? false}
                     aria-label={t(
                       node.favorite
                         ? "gitLog.tree.unfavorite"
                         : "gitLog.tree.favorite",
                     )}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onToggleFavorite(key);
-                    }}
-                    className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted aria-pressed:text-[var(--brand)]"
+                    onClick={(event) => event.stopPropagation()}
+                    onPressedChange={() => onToggleFavorite(key)}
+                    className="h-auto min-w-0 shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted aria-pressed:bg-transparent aria-pressed:text-[var(--brand-text)] data-[state=on]:bg-transparent"
                   >
                     <Star
                       className="size-3"
                       fill={node.favorite ? "currentColor" : "none"}
                     />
-                  </button>
+                  </Toggle>
                 )}
             </div>
           );

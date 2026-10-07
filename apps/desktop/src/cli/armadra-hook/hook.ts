@@ -9,14 +9,18 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { envVar, isValidNodeId, pendingDir } from "./endpoint.js";
-import type { Endpoint } from "./endpoint.js";
+import {
+  envVar,
+  isValidNodeId,
+  pendingDir,
+} from "../../hook-client/endpoint.js";
+import type { Endpoint } from "../../hook-client/endpoint.js";
 import { loadBinding } from "./binding.js";
-import { canonicalJsonBytes, parseJson } from "./json.js";
-import type { JsonValue } from "./json.js";
-import { postJsonRequest, send as httpSend } from "./http.js";
-import { headersFor, loadSession, send } from "./session.js";
-import type { Session } from "./session.js";
+import { canonicalJsonBytes, parseJson } from "../../hook-client/json.js";
+import type { JsonValue } from "../../hook-client/json.js";
+import { postJsonRequest, send as httpSend } from "../../hook-client/http.js";
+import { headersFor, loadSession, send } from "../../hook-client/session.js";
+import type { Session } from "../../hook-client/session.js";
 import { HOOK_PROTOCOL_VERSION, MAX_PAYLOAD_BYTES } from "./usage.js";
 
 /**
@@ -403,16 +407,26 @@ export function writeRequestFile(
     return `cannot create ${directory}: ${message(error)}`;
   }
   restrictDir(directory);
+  // Written beside the target and renamed into place, the same way the
+  // runtime writes the answer: whoever sees `<id>.json` sees all of it. A plain
+  // open-then-write left an empty file visible in between, which a reader on a
+  // slow file system (Windows CI) did catch.
+  const temporary = path.join(
+    path.dirname(file),
+    `.${path.basename(file)}.${process.pid}.tmp`,
+  );
   try {
     // On Windows the ACL inherited from the per-user data directory is the
     // best we can do without extra dependencies.
-    const handle = fs.openSync(file, "w", 0o600);
+    const handle = fs.openSync(temporary, "w", 0o600);
     try {
       fs.writeFileSync(handle, canonicalJsonBytes(payload));
     } finally {
       fs.closeSync(handle);
     }
+    fs.renameSync(temporary, file);
   } catch (error) {
+    removeQuietly(temporary);
     return `cannot create ${file}: ${message(error)}`;
   }
   return undefined;

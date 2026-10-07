@@ -14,6 +14,7 @@ const mock = vi.hoisted(() => ({
   installIntegration: vi.fn(),
   uninstallIntegration: vi.fn(),
   repair: vi.fn(),
+  resync: vi.fn(),
 }));
 
 vi.mock("@/api/client", async () => {
@@ -26,6 +27,7 @@ vi.mock("@/api/client", async () => {
       installAgentIntegration: (id: string) => mock.installIntegration(id),
       uninstallAgentIntegration: (id: string) => mock.uninstallIntegration(id),
       repairAgentIntegration: (id: string) => mock.repair(id),
+      resyncExecutionHost: (id: string) => mock.resync(id),
     },
   };
 });
@@ -69,6 +71,7 @@ describe("IntegrationPage", () => {
     mock.installIntegration.mockReset();
     mock.uninstallIntegration.mockReset();
     mock.repair.mockReset();
+    mock.resync.mockReset();
   });
 
   it("lists every leftover entry before offering the repair", async () => {
@@ -156,10 +159,11 @@ describe("IntegrationPage", () => {
   });
 
   /**
-   * 画布内注入：没有「安装 / 卸载」，只有「重新生成」；唯一的全局写入（Codex
-   * 的信任记录）与升级时清掉的旧全局安装都在徽标上说出来。
+   * 画布内注入：没有「安装 / 卸载」，只有「重新生成」。数据目录之外不写文件，
+   * 旧 core 答的 globalWrites 也不再画；升级时清掉的旧全局安装与 Codex 的
+   * 会话信任记录在一个徽标上说出来。
    */
-  it("shows the global write and the migration, and only regenerates", async () => {
+  it("shows the migration but no global write, and only regenerates", async () => {
     mock.integration.mockResolvedValue({
       agentId: "claude",
       mode: "canvas",
@@ -177,11 +181,8 @@ describe("IntegrationPage", () => {
     mock.installIntegration.mockResolvedValue({});
     view();
     expect(await screen.findByText(zh("integration.mode.canvas"))).toBeTruthy();
-    expect(
-      screen.getByText(
-        zh("integration.globalWrite").replace("{path}", "~/.codex/config.toml"),
-      ),
-    ).toBeTruthy();
+    expect(screen.queryByText(/config\.toml/)).toBeNull();
+    expect(screen.queryByText(zh("integration.launcherWarning"))).toBeNull();
     expect(screen.getByText(zh("integration.migrated"))).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: zh("integration.repair") }),
@@ -193,6 +194,215 @@ describe("IntegrationPage", () => {
       expect(mock.installIntegration).toHaveBeenCalledWith("claude"),
     );
     expect(mock.uninstallIntegration).not.toHaveBeenCalled();
+  });
+
+  /** 启动器少带了东西：徽标说「注入受限」，原因在悬停提示里。 */
+  it("shows the launcher warning and the cleared session trust", async () => {
+    mock.integration.mockResolvedValue({
+      agentId: "claude",
+      mode: "canvas",
+      hook: { installed: true, revision: 4 },
+      skill: { installed: true, revision: 16 },
+      legacy: { found: [] },
+      revision: 416,
+      globalWrites: [],
+      launcherWarning: "Codex 0.133.0 is older than 0.134.0",
+      migration: {
+        migratedAt: "2026-09-26T00:00:00Z",
+        removed: [],
+        backups: [],
+        sessionTrust: {
+          at: "2026-10-02T00:00:00Z",
+          removed: ["/<session-flags>/config.toml:stop:0:0"],
+          backup: "/Users/dev/.codex/config.toml.armadra-backup-20261002",
+        },
+      },
+    });
+    view();
+    const warning = await screen.findByText(zh("integration.launcherWarning"));
+    expect(warning.getAttribute("title")).toBe(
+      "Codex 0.133.0 is older than 0.134.0",
+    );
+    expect(
+      screen.getByText(zh("integration.migrated")).getAttribute("title"),
+    ).toBe("/Users/dev/.codex/config.toml.armadra-backup-20261002");
+  });
+
+  /** 版本过旧与 ACP 未装各一个徽标；都正常时两个都不出现。 */
+  it("marks an out-of-date install and a missing ACP adapter", async () => {
+    mock.agents.mockReset().mockResolvedValue([
+      {
+        ...claude,
+        acp: {
+          support: "official",
+          program: "claude-agent-acp",
+          installed: false,
+          resume: "load",
+        },
+      },
+    ]);
+    mock.integration.mockResolvedValue({
+      agentId: "claude",
+      mode: "canvas",
+      hook: { installed: true, revision: 4 },
+      skill: { installed: true, revision: 12 },
+      legacy: { found: [] },
+      revision: 416,
+      installedRevision: 412,
+      stale: true,
+    });
+    view();
+    expect(await screen.findByText(zh("integration.stale"))).toBeTruthy();
+    expect(screen.getByText(zh("integration.acp.missing"))).toBeTruthy();
+  });
+
+  it("shows neither badge when current and the adapter is there", async () => {
+    mock.agents.mockReset().mockResolvedValue([
+      {
+        ...claude,
+        acp: {
+          support: "official",
+          program: "claude-agent-acp",
+          installed: true,
+          resume: "load",
+        },
+      },
+    ]);
+    mock.integration.mockResolvedValue({
+      agentId: "claude",
+      mode: "canvas",
+      hook: { installed: true, revision: 4 },
+      skill: { installed: true, revision: 12 },
+      legacy: { found: [] },
+      revision: 412,
+    });
+    view();
+    expect(await screen.findByText(zh("integration.mode.canvas"))).toBeTruthy();
+    expect(screen.queryByText(zh("integration.stale"))).toBeNull();
+    expect(screen.queryByText(zh("integration.acp.missing"))).toBeNull();
+  });
+
+  /** 历史数据三项：没有数据写状态词，不写 0。 */
+  it("shows the three history badges with a state word each", async () => {
+    mock.agents.mockReset().mockResolvedValue([
+      {
+        ...claude,
+        history: {
+          index: "available",
+          cost: "unsupported",
+          transcript: "not-found",
+        },
+      },
+    ]);
+    mock.integration.mockResolvedValue({
+      agentId: "claude",
+      mode: "canvas",
+      hook: { installed: true, revision: 4 },
+      skill: { installed: true, revision: 12 },
+      legacy: { found: [] },
+      revision: 4,
+    });
+    view();
+    const badge = (part: string, state: string) =>
+      zh(`integration.history.${part}`).replace("{state}", zh(state));
+    const index = await screen.findByText(
+      badge("index", "capability.state.supported"),
+    );
+    expect(index.getAttribute("data-variant")).toBe("secondary");
+    const cost = screen.getByText(
+      badge("cost", "capability.state.unsupported"),
+    );
+    expect(cost.getAttribute("data-variant")).toBe("outline");
+    expect(
+      screen.getByText(badge("transcript", "capability.state.notFound")),
+    ).toBeTruthy();
+  });
+
+  it("marks a transcript switched off on a custom entry as disabled", async () => {
+    mock.agents.mockReset().mockResolvedValue([
+      {
+        ...claude,
+        history: {
+          index: "not-found",
+          cost: "not-found",
+          transcript: "disabled",
+        },
+      },
+    ]);
+    mock.integration.mockResolvedValue({
+      agentId: "claude",
+      mode: "canvas",
+      hook: { installed: true, revision: 4 },
+      skill: { installed: true, revision: 12 },
+      legacy: { found: [] },
+      revision: 4,
+    });
+    view();
+    expect(
+      await screen.findByText(
+        zh("integration.history.transcript").replace(
+          "{state}",
+          zh("capability.state.disabled"),
+        ),
+      ),
+    ).toBeTruthy();
+  });
+
+  /**
+   * Worker 过旧的执行主机（契约 §21.2）：页首一组，每台一个徽标与「重新同步」；
+   * 同步成功后重读集成状态，徽标随之消失。
+   */
+  it("offers a resync for each execution host with an outdated Worker", async () => {
+    const base = {
+      agentId: "claude",
+      mode: "canvas",
+      hook: { installed: true, revision: 4 },
+      skill: { installed: true, revision: 12 },
+      legacy: { found: [] },
+      revision: 4,
+    };
+    mock.integration
+      .mockResolvedValueOnce({
+        ...base,
+        outdatedHosts: [{ hostId: "far", name: "Build box", version: "0.0.9" }],
+      })
+      .mockResolvedValue({ ...base, outdatedHosts: [] });
+    mock.resync.mockResolvedValue({
+      executionHostId: "far",
+      name: "Build box",
+      kind: "ssh",
+      workerConfigured: true,
+      workspaceCount: 0,
+    });
+    view();
+    expect(await screen.findByText("Build box")).toBeTruthy();
+    expect(
+      screen.getByText(
+        zh("integration.outdatedHost.version").replace("{version}", "0.0.9"),
+      ),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: zh("integration.resync") }),
+    );
+    await waitFor(() => expect(mock.resync).toHaveBeenCalledWith("far"));
+    await waitFor(() => expect(screen.queryByText("Build box")).toBeNull());
+  });
+
+  it("draws no outdated group when every Worker is current", async () => {
+    mock.integration.mockResolvedValue({
+      agentId: "claude",
+      mode: "canvas",
+      hook: { installed: true, revision: 4 },
+      skill: { installed: true, revision: 12 },
+      legacy: { found: [] },
+      revision: 4,
+      outdatedHosts: [],
+    });
+    view();
+    expect(await screen.findByText("Claude Code")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: zh("integration.resync") }),
+    ).toBeNull();
   });
 
   /**

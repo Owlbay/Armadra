@@ -1,6 +1,14 @@
-import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import {
+  blocksOf,
+  documentEntries,
+  entryFromJson,
+  lineEntries,
+} from "../history/entries";
+import { locateHistory } from "../history/registry";
+import type { Block, TranscriptEntry } from "../history/types";
+
+// 读文件的共用件搬进了 `history/files.ts`，这里照旧转出，调用方不用改。
+export { findUnder, readRange, readTail, type Range } from "../history/files";
 
 /**
  * Locating and rendering another agent's transcript.
@@ -21,47 +29,12 @@ export const MAX_RENDERED_BYTES = 200 * 1024;
 const MAX_TOOL_DETAIL = 120;
 /** One rendered message line is trimmed to this before it reaches the agent. */
 const MAX_LINE = 2_000;
-/** Ceiling on how many directory entries a session-id search will look at. */
-const MAX_SCAN_ENTRIES = 20_000;
-const MAX_SCAN_DEPTH = 6;
 
 /** Where a transcript came from, so the reply can say so. */
 export interface Located {
   readonly path: string;
   /** Human sentence naming the provider and file. */
   readonly origin: string;
-}
-
-/**
- * Reads at most the last `maxBytes` of a file, starting at the first newline
- * inside the window so the first line is never a fragment.
- */
-export function readTail(path: string, maxBytes: number): string {
-  const handle = openSync(path, "r");
-  try {
-    const length = statSync(path).size;
-    const start = Math.max(0, length - maxBytes);
-    const size = Math.min(length - start, maxBytes);
-    const buffer = Buffer.alloc(size);
-    let filled = 0;
-    while (filled < size) {
-      const read = readSync(
-        handle,
-        buffer,
-        filled,
-        size - filled,
-        start + filled,
-      );
-      if (read === 0) break;
-      filled += read;
-    }
-    const text = buffer.subarray(0, filled).toString("utf8");
-    if (start === 0) return text;
-    const newline = text.indexOf("\n");
-    return newline === -1 ? "" : text.slice(newline + 1);
-  } finally {
-    closeSync(handle);
-  }
 }
 
 /**
@@ -111,56 +84,6 @@ export interface TranscriptRecord {
   readonly endOffset: number;
 }
 
-/** 一次增量读取的结果：读到的文本，以及现在的文件尾在第几个字节。 */
-export interface Range {
-  readonly text: string;
-  readonly startOffset: number;
-  readonly endOffset: number;
-}
-
-/**
- * 从 `startByte` 读到文件尾，最多 `maxBytes`（增量游标那条路）。
- *
- * 偏移大于文件长度的时候从头读：转录被换掉或者被截短了，那个偏移在新内容里指
- * 的是另一段话。路径是否还是同一个由游标自己判（`context-reads.ts`），长度这
- * 一层的判据在这里。
- */
-export function readRange(
-  path: string,
-  startByte: number,
-  maxBytes: number,
-): Range {
-  const handle = openSync(path, "r");
-  try {
-    const length = statSync(path).size;
-    const start = startByte > length || startByte < 0 ? 0 : startByte;
-    // 超过上限时保留**尾部**：新的那些比旧的那些有用。
-    const from = Math.max(start, length - maxBytes);
-    const size = Math.max(0, length - from);
-    if (size === 0) return { text: "", startOffset: from, endOffset: length };
-    const buffer = Buffer.alloc(size);
-    let filled = 0;
-    while (filled < size) {
-      const read = readSync(
-        handle,
-        buffer,
-        filled,
-        size - filled,
-        from + filled,
-      );
-      if (read === 0) break;
-      filled += read;
-    }
-    return {
-      text: buffer.subarray(0, filled).toString("utf8"),
-      startOffset: from,
-      endOffset: length,
-    };
-  } finally {
-    closeSync(handle);
-  }
-}
-
 /**
  * Renders JSONL (or a JSON array / object of messages) into one line per
  * message. Unknown lines are skipped rather than reported.
@@ -175,107 +98,59 @@ export function renderRecords(
   options?: RenderOptions,
 ): TranscriptRecord[] {
   const context = contextOf(options);
-  const total = Buffer.byteLength(text, "utf8");
-  const trimmed = text.trimStart();
-  if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-    let value: unknown;
-    try {
-      value = JSON.parse(trimmed);
-    } catch {
-      value = undefined;
-    }
-    if (value !== undefined) {
-      const rendered = renderDocument(value, context);
-      // 整份 JSON 没有「读到一半」这回事：偏移一律是文件尾。
-      if (rendered.length > 0) {
-        return rendered.map((line) => ({ line, endOffset: total }));
-      }
-    }
+  // 整份 JSON 文档先试；它一条都渲染不出来时再按行试一遍。
+  const document = documentEntries(text);
+  if (document !== undefined) {
+    const rendered = renderWith(document, context);
+    if (rendered.length > 0) return rendered;
   }
+  return renderWith(lineEntries(text), context);
+}
+
+/**
+ * 归一化记录 → 一条一行的散文，认不出内容的记录跳过。偏移原样带出，调用方的
+ * 增量游标不必知道记录是从哪种形状来的。
+ */
+export function renderEntries(
+  entries: readonly TranscriptEntry[],
+  options?: RenderOptions,
+): TranscriptRecord[] {
+  return renderWith(entries, contextOf(options));
+}
+
+function renderWith(
+  entries: readonly TranscriptEntry[],
+  context: RenderContext,
+): TranscriptRecord[] {
   const records: TranscriptRecord[] = [];
-  let offset = 0;
-  for (const raw of text.split("\n")) {
-    // `+1` 是被 `split` 吃掉的那个换行；最后一段多算一个字节不影响判据（游标
-    // 只会因此少读零字节），但少算会让同一条被读第二次。
-    offset += Buffer.byteLength(raw, "utf8") + 1;
-    const line = raw.trim();
-    if (line === "") continue;
-    let value: unknown;
-    try {
-      value = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const rendered = renderEntry(value, context);
-    if (rendered !== undefined) {
-      records.push({ line: rendered, endOffset: Math.min(offset, total) });
-    }
+  for (const entry of entries) {
+    const line = renderOne(entry, context);
+    if (line !== undefined) records.push({ line, endOffset: entry.endOffset });
   }
   return records;
 }
 
-function renderDocument(value: unknown, context: RenderContext): string[] {
-  const render = (entry: unknown): string | undefined =>
-    renderEntry(entry, context);
-  if (Array.isArray(value)) {
-    return value
-      .map(render)
-      .filter((line): line is string => line !== undefined);
-  }
-  if (value === null || typeof value !== "object") return [];
-  const record = value as Record<string, unknown>;
-  for (const key of ["messages", "history", "chat", "turns", "items"]) {
-    const items = record[key];
-    if (Array.isArray(items)) {
-      return items
-        .map(render)
-        .filter((line): line is string => line !== undefined);
-    }
-  }
-  return [];
-}
-
-const ROLES = ["user", "assistant", "system"];
-
 /** One transcript entry → one prose line, or nothing. */
 export function renderEntry(
   value: unknown,
-  options?: RenderOptions | RenderContext,
+  options?: RenderOptions,
 ): string | undefined {
-  const context = isContext(options) ? options : contextOf(options);
-  if (value === null || typeof value !== "object") return undefined;
-  const record = value as Record<string, unknown>;
-  // Codex wraps everything in `{type, payload}`; unwrap once.
-  const payload = record.payload;
-  if (
-    payload !== null &&
-    typeof payload === "object" &&
-    !Array.isArray(payload)
-  ) {
-    return renderEntry(payload, context);
-  }
-  const kind = record.type;
-  const role =
-    typeof kind === "string" && ROLES.includes(kind)
-      ? kind
-      : typeof record.role === "string"
-        ? record.role
-        : undefined;
-  if (role === undefined) return undefined;
+  const entry = entryFromJson(value, 0);
+  return entry === undefined ? undefined : renderOne(entry, contextOf(options));
+}
 
-  const message = record.message;
-  const content =
-    message !== null && typeof message === "object" && !Array.isArray(message)
-      ? ((message as Record<string, unknown>).content ??
-        record.content ??
-        record.text)
-      : (record.content ?? record.text);
-  if (content === undefined || content === null) return undefined;
-
-  const body = renderContent(content, context).trim();
+function renderOne(
+  entry: TranscriptEntry,
+  context: RenderContext,
+): string | undefined {
+  const body = renderBlocks(entry.blocks, context).trim();
   if (body === "") return undefined;
   const label =
-    role === "user" ? "[用户]" : role === "assistant" ? "[助手]" : "[系统]";
+    entry.role === "user"
+      ? "[用户]"
+      : entry.role === "assistant"
+        ? "[助手]"
+        : "[系统]";
   // A tool line already carries its own label.
   if (body.startsWith("[工具") || body.startsWith("[结果")) {
     return clamp(body, context.maxLineChars);
@@ -283,75 +158,51 @@ export function renderEntry(
   return clamp(`${label} ${body}`, context.maxLineChars);
 }
 
-function isContext(
-  options: RenderOptions | RenderContext | undefined,
-): options is RenderContext {
-  return options !== undefined && "toolNames" in options;
-}
-
-/** `content` is a string in some CLIs and a block array in others. */
-function renderContent(content: unknown, context: RenderContext): string {
-  if (typeof content === "string") return collapse(content);
-  if (Array.isArray(content)) {
-    return content
-      .map((block) => renderBlock(block, context))
-      .filter((part): part is string => part !== undefined)
-      .join(" ");
-  }
-  if (content !== null && typeof content === "object") {
-    return renderBlock(content, context) ?? "";
-  }
-  return "";
-}
-
-function renderBlock(
-  block: unknown,
+/** 块之间用一个空格连起来；`loose` 的块渲染不读，见 `history/types.ts`。 */
+function renderBlocks(
+  blocks: readonly Block[],
   context: RenderContext,
-): string | undefined {
-  if (block === null || typeof block !== "object") return undefined;
-  const record = block as Record<string, unknown>;
-  const kind = typeof record.type === "string" ? record.type : "text";
-  switch (kind) {
-    case "text":
-    case "output_text":
-    case "input_text": {
-      const text = record.text;
-      if (typeof text !== "string") return undefined;
-      const collapsed = collapse(text);
+): string {
+  return blocks
+    .map((block) =>
+      block.loose === true ? undefined : renderBlock(block, context),
+    )
+    .filter((part): part is string => part !== undefined)
+    .join(" ");
+}
+
+function renderBlock(block: Block, context: RenderContext): string | undefined {
+  switch (block.type) {
+    case "text": {
+      const collapsed = collapse(block.text);
       return collapsed === "" ? undefined : collapsed;
     }
-    case "tool_use":
-    case "function_call": {
-      const name = typeof record.name === "string" ? record.name : "未命名工具";
-      const id = record.id ?? record.tool_use_id ?? record.call_id;
-      if (typeof id === "string" && id !== "") context.toolNames.set(id, name);
-      const input = record.input ?? record.arguments;
-      const detail = input === undefined ? "" : summarizeInput(input);
-      return detail === "" ? `[工具 ${name}]` : `[工具 ${name} ${detail}]`;
-    }
-    case "tool_result":
-    case "function_call_output": {
+    case "tool_use": {
+      if (block.id !== undefined) context.toolNames.set(block.id, block.name);
       const detail =
-        record.content === undefined
+        block.input === undefined ? "" : summarizeInput(block.input);
+      return detail === ""
+        ? `[工具 ${block.name}]`
+        : `[工具 ${block.name} ${detail}]`;
+    }
+    case "tool_result": {
+      const detail =
+        block.content === undefined
           ? ""
-          : typeof record.content === "string"
-            ? record.content
-            : renderContent(record.content, context);
+          : typeof block.content === "string"
+            ? block.content
+            : renderBlocks(blocksOf(block.content), context);
       if (!context.briefToolResults) {
         return `[结果 ${shorten(collapse(detail), MAX_TOOL_DETAIL)}]`;
       }
-      const id = record.tool_use_id ?? record.call_id ?? record.id;
       const name =
-        (typeof id === "string" ? context.toolNames.get(id) : undefined) ??
-        "工具";
+        (block.id === undefined
+          ? undefined
+          : context.toolNames.get(block.id)) ?? "工具";
       const bytes = Buffer.byteLength(detail, "utf8");
       const first = collapse(detail.split("\n")[0] ?? "");
       return `[结果 ${name} ${bytes} B${first === "" ? "" : ` 首行：${shorten(first, MAX_TOOL_DETAIL)}`}]`;
     }
-    // Thinking blocks are the model talking to itself; not somebody else's
-    // context.
-    default:
-      return undefined;
   }
 }
 
@@ -397,104 +248,30 @@ function clamp(line: string, maxChars: number): string {
 
 /* -------------------------------- locating -------------------------------- */
 
-export function home(): string {
-  return process.env.HOME ?? process.env.USERPROFILE ?? homedir() ?? ".";
-}
-
-export function codexHome(): string {
-  const configured = process.env.CODEX_HOME;
-  if (configured !== undefined && configured !== "") return configured;
-  return join(home(), ".codex");
-}
-
 /**
  * Finds the transcript for a node.
  *
- * `transcriptPath` is what the CLI itself reported (claude); the others are
- * found by session id under their own config home. A provider with neither is
- * `undefined`, which the caller must report as "this CLI keeps nothing
- * readable" rather than as an empty conversation.
+ * `transcriptPath` is what the CLI itself reported; past that it is the
+ * agent's history adapter (`history/registry.ts`) — codex is found by session
+ * id under its own config home. A provider with neither is `undefined`, which
+ * the caller must report as "this CLI keeps nothing readable" rather than as
+ * an empty conversation.
  */
 export function locate(
   agentId: string,
   transcriptPath: string | undefined,
   sessionId: string | undefined,
+  launch: { readonly cwd?: string; readonly startedAtMs?: number } = {},
 ): Located | undefined {
-  if (transcriptPath !== undefined && isFile(transcriptPath)) {
-    return { path: transcriptPath, origin: `转录文件 ${transcriptPath}` };
-  }
-  if (sessionId === undefined || sessionId === "") return undefined;
-  if (agentId !== "codex") return undefined;
-  const found = findUnder(
-    join(codexHome(), "sessions"),
-    (name) =>
-      name.startsWith("rollout-") &&
-      name.includes(sessionId) &&
-      name.endsWith(".jsonl"),
-  );
-  return found === undefined
+  // `launch` 是节点终端的 cwd 与启动时间（`collab/nodes.ts::launchOf`）：Pi / OMP
+  // 没报路径时靠它兜底。
+  const found = locateHistory({
+    agentId,
+    transcriptPath,
+    sessionId,
+    ...launch,
+  });
+  return found?.path === undefined
     ? undefined
-    : { path: found, origin: `Codex 会话记录 ${found}` };
-}
-
-function isFile(path: string): boolean {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
-}
-
-/**
- * A bounded walk that answers with the newest matching file.
- *
- * Codex does not document its directory layout, so the search is by file name;
- * the bounds are what keep a surprising layout (a symlink loop, a
- * million-file cache) from turning a read into a hang.
- */
-export function findUnder(
-  root: string,
-  matches: (name: string) => boolean,
-): string | undefined {
-  if (!isDirectory(root)) return undefined;
-  const frontier: [string, number][] = [[root, 0]];
-  let seen = 0;
-  let best: { modified: number; path: string } | undefined;
-  while (frontier.length > 0) {
-    const [directory, depth] = frontier.pop() as [string, number];
-    let entries;
-    try {
-      entries = readdirSync(directory, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      seen += 1;
-      if (seen > MAX_SCAN_ENTRIES) return best?.path;
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        if (depth < MAX_SCAN_DEPTH) frontier.push([path, depth + 1]);
-        continue;
-      }
-      if (!entry.isFile() || !matches(entry.name)) continue;
-      let modified = 0;
-      try {
-        modified = statSync(path).mtimeMs;
-      } catch {
-        modified = 0;
-      }
-      if (best === undefined || modified > best.modified) {
-        best = { modified, path };
-      }
-    }
-  }
-  return best?.path;
-}
-
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
+    : { path: found.path, origin: found.origin };
 }

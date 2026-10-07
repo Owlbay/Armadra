@@ -27,6 +27,7 @@ const updates = vi.hoisted(() => ({
   restart: null as Record<string, unknown> | null,
   start: vi.fn(() => () => undefined),
   check: vi.fn(async () => {}),
+  refresh: vi.fn(async () => {}),
   download: vi.fn(async () => {}),
   install: vi.fn(async () => {}),
   dismiss: vi.fn(async () => {}),
@@ -81,6 +82,9 @@ vi.mock("../../../updates/use-update-state", () => {
   };
 });
 
+const access = vi.hoisted(() => ({ remote: false }));
+vi.mock("../remote-access", () => ({ useRemoteAccess: () => access }));
+
 import { UpdatesPage } from "./UpdatesPage";
 import { usePreferencesStore } from "../../../app/preferences-store";
 import { SETTINGS_SECTIONS } from "../nav";
@@ -129,6 +133,7 @@ beforeEach(() => {
   store.setPanel.mockClear();
   save.mutate.mockClear();
   updates.check.mockClear();
+  updates.refresh.mockClear();
   updates.download.mockClear();
   updates.install.mockClear();
   updates.dismiss.mockClear();
@@ -147,9 +152,25 @@ beforeEach(() => {
   health.version = "0.1.0";
   usePreferencesStore.setState({ locale: "zh-CN" });
 });
-afterEach(cleanup);
+afterEach(() => {
+  access.remote = false;
+  cleanup();
+});
 
 describe("UpdatesPage", () => {
+  it("remote host: its version, read-only; no checks, no channel, no actions", async () => {
+    access.remote = true;
+    updates.start.mockClear();
+    health.version = "0.3.1";
+    draw({ state: "idle" });
+    expect(await screen.findByText("0.3.1")).toBeTruthy();
+    expect(screen.getByText("主机版本")).toBeTruthy();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(updates.start).not.toHaveBeenCalled();
+  });
+
   it("is an advanced settings section and stays idle until asked", async () => {
     const section = SETTINGS_SECTIONS.find((entry) => entry.id === "updates");
     expect(section?.groupKey).toBe("settings.group.advanced");
@@ -157,6 +178,18 @@ describe("UpdatesPage", () => {
     draw({ state: "idle" });
     await waitFor(() => expect(status()).toBe("尚未检查更新"));
     expect(updates.check).not.toHaveBeenCalled();
+  });
+
+  it("only reads the shell's state back on its timer; the shell runs the check", async () => {
+    vi.useFakeTimers();
+    try {
+      draw({ state: "idle" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(updates.refresh).toHaveBeenCalledTimes(1);
+      expect(updates.check).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   /** One rendering assertion per state of design §4.1. */
@@ -310,6 +343,31 @@ describe("UpdatesPage", () => {
     expect(cancel.hasAttribute("disabled")).toBe(false);
     fireEvent.click(cancel);
     expect(updates.cancel).toHaveBeenCalled();
+  });
+
+  it("draws the transfer as a progress bar beside the byte count", async () => {
+    draw(
+      {
+        state: "downloading",
+        offer,
+        receivedBytes: 1_048_576,
+        totalBytes: 4_194_304,
+      },
+      answered("available"),
+    );
+    expect(
+      await screen.findByRole("progressbar", { name: "已下载" }),
+    ).toBeTruthy();
+  });
+
+  it("puts a failed install in a destructive alert with retry", async () => {
+    draw(
+      { state: "failed", reason: "digestMismatch", offer },
+      answered("available"),
+    );
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("更新失败");
+    expect(screen.getByRole("button", { name: "重试" })).toBeTruthy();
   });
 
   it("shows the transfer as bytes rather than a fraction of nothing", async () => {

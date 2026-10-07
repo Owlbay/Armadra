@@ -22,6 +22,8 @@ export const agentCapabilities: MessageModule = {
     "capability.state.supported": "可用",
     "capability.state.unsupported": "不可用",
     "capability.state.unknown": "未知",
+    "capability.state.notFound": "未找到",
+    "capability.state.disabled": "已关闭",
   },
   en: {
     "capability.title": "Inherited capabilities",
@@ -45,5 +47,7 @@ export const agentCapabilities: MessageModule = {
     "capability.state.supported": "Available",
     "capability.state.unsupported": "Unavailable",
     "capability.state.unknown": "Unknown",
+    "capability.state.notFound": "Not found",
+    "capability.state.disabled": "Disabled",
   },
 };

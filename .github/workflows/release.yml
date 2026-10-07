@@ -3,6 +3,8 @@
 # 五个作业：verify 拦住版本与标签不一致的发布，build 按目标矩阵打包并把打包器
 # 的产物改名成发布用的名字，web 打服务器壳要托管的前端产物，assemble 汇总校验
 # 清单与签名并只创建 draft Release，notarize 在缺少 secret 时跳过并在说明里标注。
+# 之后的 channels / channels-macos / channels-windows 渲染并试装分发渠道清单，
+# 不推送；推送在 Release 转正后由 distribute.yml 做（ci-release.md §3.1）。
 # 发布是人的动作：本工作流永远不会把 Release 从 draft 转正。
 name: release
 
@@ -107,6 +109,17 @@ jobs:
           else
             printf 'publish=false\n' >> "$GITHUB_OUTPUT"
           fi
+      # 发布说明是 CHANGELOG.md 里本版那一节（tools/release/changelog.mjs）。缺了这一节
+      # 在这里就失败，而不是两个小时的构建之后；真建 Release 时标题还标着「未发布」也算缺。
+      - name: CHANGELOG.md 有本版一节
+        shell: bash
+        env:
+          PUBLISH: ${{ steps.version.outputs.publish }}
+        run: |
+          set -euo pipefail
+          released=()
+          [ "$PUBLISH" = "true" ] && released=(--released)
+          node tools/release/changelog.mjs check --version "${{ steps.version.outputs.version }}" "${released[@]}"
       - run: node tools/ci/validate-workflows.mjs
       - run: node --test tools/release/*.test.mjs
       - run: pnpm libs:build
@@ -157,8 +170,8 @@ jobs:
             target: darwin-x86_64
           # glibc 的符号版本是单向的：在 24.04（glibc 2.39）上链接出来的二进制
           # 会记下 GLIBC_2.38/2.39，到 22.04 上动态链接器直接拒绝启动，而构建
-          # 本身一切正常。LiveAgent 就是这样发出去过一个版本（#714），修法是把
-          # Linux 行钉在 22.04 并在产物上断言基线。
+          # 本身一切正常，问题只会在用户那里暴露。所以把 Linux 行钉在 22.04，
+          # 并在产物上断言基线。
           # 这两个 runner 与 Ubuntu 22.04 LTS 的标准支持同在 2027-04 退役，
           # 届时换成 ubuntu:22.04 容器构建。
           - runner: ubuntu-22.04
@@ -208,9 +221,14 @@ jobs:
           SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
-          if [ -z "${APPLE_CERTIFICATE_P12_BASE64:-}" ] || [ -z "${APPLE_CERTIFICATE_PASSWORD:-}" ]; then
+          if [ -z "${APPLE_CERTIFICATE_P12_BASE64:-}" ] && [ -z "${APPLE_CERTIFICATE_PASSWORD:-}" ]; then
             echo "::warning::没有 APPLE_CERTIFICATE_P12_BASE64 与 APPLE_CERTIFICATE_PASSWORD，macOS 产物不签名，首次打开会有 Gatekeeper 提示"
             exit 0
+          fi
+          # 只给了一半是配置错误，不是「不签名」：在这里失败，而不是发一个悄悄没签的包。
+          if [ -z "${APPLE_CERTIFICATE_P12_BASE64:-}" ] || [ -z "${APPLE_CERTIFICATE_PASSWORD:-}" ]; then
+            echo "::error::APPLE_CERTIFICATE_P12_BASE64 与 APPLE_CERTIFICATE_PASSWORD 要一起给"
+            exit 1
           fi
           keychain="$RUNNER_TEMP/armadra-release.keychain-db"
           keychain_password="$(openssl rand -hex 24)"
@@ -244,52 +262,167 @@ jobs:
           } >> "$GITHUB_ENV"
 
       # store-credentials --validate 会真的去问一次 Apple。凭据不对时它在这里
-      # 报错，而不是在打包最后一步排队等公证时。
+      # 报错，而不是在打包最后一步排队等公证时。两套凭据（外部服务 §2.1）：
+      # App Store Connect API key 优先（.p8 解到 $RUNNER_TEMP/AuthKey.p8），
+      # Apple ID + app 专用密码作回退。app-builder-lib 只要看到 APPLE_ID 就走
+      # Apple ID 分支，所以只把选中的那一套写进环境。一套给了一半是配置错误，
+      # 在这里就失败；两套都没有才是「不公证」，告警后继续。
       - name: 预检公证凭据
         if: startsWith(matrix.target, 'darwin-')
         shell: bash
         env:
+          NOTARY_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          NOTARY_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          NOTARY_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
           NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
           NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           NOTARY_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD || secrets.APPLE_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "${NOTARY_APPLE_ID:-}" ] || [ -z "${NOTARY_TEAM_ID:-}" ] || [ -z "${NOTARY_PASSWORD:-}" ]; then
-            echo "::warning::缺少 APPLE_ID / APPLE_TEAM_ID / APPLE_APP_SPECIFIC_PASSWORD，macOS 产物不公证"
+          count() { local n=0; for value in "$@"; do [ -n "$value" ] && n=$((n + 1)); done; echo "$n"; }
+          api="$(count "${NOTARY_API_KEY_P8_BASE64:-}" "${NOTARY_API_KEY_ID:-}" "${NOTARY_API_ISSUER:-}")"
+          appleid="$(count "${NOTARY_APPLE_ID:-}" "${NOTARY_TEAM_ID:-}" "${NOTARY_PASSWORD:-}")"
+          if [ "$api" = 3 ]; then
+            key="$RUNNER_TEMP/AuthKey.p8"
+            printf '%s' "$NOTARY_API_KEY_P8_BASE64" | base64 --decode > "$key"
+            chmod 600 "$key"
+            xcrun notarytool store-credentials armadra-notary \
+              --key "$key" \
+              --key-id "$NOTARY_API_KEY_ID" \
+              --issuer "$NOTARY_API_ISSUER" \
+              --validate
+            # electron-builder 认这三个变量（signing-electron.mjs 的
+            # APPLE_API_KEY_ENV / APPLE_API_KEY_ID_ENV / APPLE_API_ISSUER_ENV）；
+            # APPLE_API_KEY 是 .p8 的路径，不是内容。
+            {
+              printf 'APPLE_API_KEY=%s\n' "$key"
+              printf 'APPLE_API_KEY_ID=%s\n' "$NOTARY_API_KEY_ID"
+              printf 'APPLE_API_ISSUER=%s\n' "$NOTARY_API_ISSUER"
+            } >> "$GITHUB_ENV"
+            [ "$appleid" = 0 ] || echo "::notice::App Store Connect API key 与 Apple ID 都配了，公证用 API key"
             exit 0
           fi
-          xcrun notarytool store-credentials armadra-notary \
-            --apple-id "$NOTARY_APPLE_ID" \
-            --team-id "$NOTARY_TEAM_ID" \
-            --password "$NOTARY_PASSWORD" \
-            --validate
-          # electron-builder 认这三个变量（signing-electron.mjs 的
-          # APPLE_ID_ENV / APPLE_PASSWORD_ENV / APPLE_TEAM_ENV），公证与装订
-          # 由它在打包末尾做。
-          {
-            printf 'APPLE_ID=%s\n' "$NOTARY_APPLE_ID"
-            printf 'APPLE_TEAM_ID=%s\n' "$NOTARY_TEAM_ID"
-            printf 'APPLE_APP_SPECIFIC_PASSWORD=%s\n' "$NOTARY_PASSWORD"
-          } >> "$GITHUB_ENV"
+          if [ "$api" != 0 ] && [ "$appleid" != 3 ]; then
+            echo "::error::APPLE_API_KEY_P8_BASE64 / APPLE_API_KEY_ID / APPLE_API_ISSUER_ID 只配了 $api 个，三个要一起给"
+            exit 1
+          fi
+          if [ "$appleid" = 3 ]; then
+            xcrun notarytool store-credentials armadra-notary \
+              --apple-id "$NOTARY_APPLE_ID" \
+              --team-id "$NOTARY_TEAM_ID" \
+              --password "$NOTARY_PASSWORD" \
+              --validate
+            # electron-builder 认这三个变量（signing-electron.mjs 的
+            # APPLE_ID_ENV / APPLE_PASSWORD_ENV / APPLE_TEAM_ENV），公证与装订
+            # 由它在打包末尾做。
+            {
+              printf 'APPLE_ID=%s\n' "$NOTARY_APPLE_ID"
+              printf 'APPLE_TEAM_ID=%s\n' "$NOTARY_TEAM_ID"
+              printf 'APPLE_APP_SPECIFIC_PASSWORD=%s\n' "$NOTARY_PASSWORD"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ "$appleid" != 0 ]; then
+            echo "::error::APPLE_ID / APPLE_TEAM_ID / APPLE_APP_SPECIFIC_PASSWORD 只配了 $appleid 个，三个要一起给"
+            exit 1
+          fi
+          echo "::warning::没有 App Store Connect API key（APPLE_API_KEY_P8_BASE64 / APPLE_API_KEY_ID / APPLE_API_ISSUER_ID），也没有 Apple ID 三件套，macOS 产物不公证"
 
-      # Windows 的 Authenticode：electron-builder 同样认 CSC_LINK /
-      # CSC_KEY_PASSWORD，所以这里只是把 Windows 的那张证书填进同一对变量。
-      - name: 解出 Windows 签名证书
+      # Windows 的 Authenticode 三条路，只能配一条（外部服务 §2.2，
+      # signing-electron.mjs 的 windowsPlan）：
+      #   - Azure Artifact Signing：secrets AZURE_TENANT_ID / AZURE_CLIENT_ID /
+      #     AZURE_CLIENT_SECRET + 变量 AZURE_SIGNING_ENDPOINT / AZURE_SIGNING_ACCOUNT /
+      #     AZURE_SIGNING_PROFILE / ARMADRA_WIN_PUBLISHER_NAME，齐全才合并
+      #     win.azureSignOptions；
+      #   - OV 证书文件：WINDOWS_CERT_BASE64 / WINDOWS_CERT_PASSWORD → CSC_LINK /
+      #     CSC_KEY_PASSWORD；
+      #   - 自托管 runner 上的 USB 令牌：变量 ARMADRA_WIN_CERT_SHA1（Windows 两行
+      #     的 runs-on 要改成 [self-hosted, windows, signing]，见 ci-release.md §3）。
+      # 给了一半就在这里失败；都没有才是「不签名」，告警后继续。
+      - name: 选 Windows 签名路径
         if: startsWith(matrix.target, 'windows-')
         shell: bash
         env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+          PUBLISHER_NAME: ${{ vars.ARMADRA_WIN_PUBLISHER_NAME }}
+          CERT_SHA1: ${{ vars.ARMADRA_WIN_CERT_SHA1 }}
           WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "${WINDOWS_CERT_BASE64:-}" ]; then
-            echo "::warning::没有 WINDOWS_CERT_BASE64，Windows 安装包不签名，SmartScreen 会提示"
+          azure=(AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_SIGNING_PROFILE)
+          set_count=0
+          missing=()
+          for name in "${azure[@]}"; do
+            if [ -n "${!name:-}" ]; then set_count=$((set_count + 1)); else missing+=("$name"); fi
+          done
+          [ -n "${PUBLISHER_NAME:-}" ] || missing+=("ARMADRA_WIN_PUBLISHER_NAME")
+          if [ "$set_count" -gt 0 ]; then
+            if [ ${#missing[@]} -gt 0 ]; then
+              echo "::error::Azure Artifact Signing 只配了一半，缺：${missing[*]}"
+              exit 1
+            fi
+            if [ -n "${WINDOWS_CERT_BASE64:-}" ] || [ -n "${CERT_SHA1:-}" ]; then
+              echo "::error::Azure Artifact Signing 与 WINDOWS_CERT_BASE64 / ARMADRA_WIN_CERT_SHA1 同时配置，只能选一条"
+              exit 1
+            fi
+            {
+              for name in "${azure[@]}"; do printf '%s=%s\n' "$name" "${!name}"; done
+              printf 'ARMADRA_WIN_PUBLISHER_NAME=%s\n' "$PUBLISHER_NAME"
+            } >> "$GITHUB_ENV"
+            echo "Windows：Azure Artifact Signing（$AZURE_SIGNING_ACCOUNT / $AZURE_SIGNING_PROFILE）"
             exit 0
           fi
-          {
-            printf 'CSC_LINK=%s\n' "$WINDOWS_CERT_BASE64"
-            printf 'CSC_KEY_PASSWORD=%s\n' "${WINDOWS_CERT_PASSWORD:-}"
-          } >> "$GITHUB_ENV"
+          if [ -n "${WINDOWS_CERT_BASE64:-}" ] && [ -n "${CERT_SHA1:-}" ]; then
+            echo "::error::WINDOWS_CERT_BASE64 与 ARMADRA_WIN_CERT_SHA1 同时配置，只能选一条"
+            exit 1
+          fi
+          if [ -n "${WINDOWS_CERT_BASE64:-}" ]; then
+            if [ -z "${WINDOWS_CERT_PASSWORD:-}" ]; then
+              echo "::error::有 WINDOWS_CERT_BASE64 但没有 WINDOWS_CERT_PASSWORD"
+              exit 1
+            fi
+            {
+              printf 'CSC_LINK=%s\n' "$WINDOWS_CERT_BASE64"
+              printf 'CSC_KEY_PASSWORD=%s\n' "$WINDOWS_CERT_PASSWORD"
+              [ -z "${PUBLISHER_NAME:-}" ] || printf 'ARMADRA_WIN_PUBLISHER_NAME=%s\n' "$PUBLISHER_NAME"
+            } >> "$GITHUB_ENV"
+            echo "Windows：证书文件（CSC_LINK）"
+            exit 0
+          fi
+          if [ -n "${CERT_SHA1:-}" ]; then
+            {
+              printf 'ARMADRA_WIN_CERT_SHA1=%s\n' "$CERT_SHA1"
+              [ -z "${PUBLISHER_NAME:-}" ] || printf 'ARMADRA_WIN_PUBLISHER_NAME=%s\n' "$PUBLISHER_NAME"
+            } >> "$GITHUB_ENV"
+            echo "Windows：本 runner 证书库里的 $CERT_SHA1"
+            exit 0
+          fi
+          echo "::warning::没有配置任何 Windows 签名路径，安装包不签名：SmartScreen 会提示、Smart App Control 直接拦，装好的副本也不会自动更新"
+
+      # 证书文件那条路：证书主体的 CN 必须就是钉住的 publisherName。装好的副本
+      # 每次更新都拿安装包证书的 CN 与它比，对不上就拒装——换证书时最容易踩。
+      - name: 核对 Windows 证书主体与 publisherName
+        if: startsWith(matrix.target, 'windows-')
+        shell: pwsh
+        env:
+          WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERT_BASE64 -or -not $env:ARMADRA_WIN_PUBLISHER_NAME) {
+            Write-Host "没有证书文件或没有钉 publisherName，跳过"
+            exit 0
+          }
+          $bytes = [Convert]::FromBase64String($env:WINDOWS_CERT_BASE64)
+          $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($bytes, $env:WINDOWS_CERT_PASSWORD)
+          $subject = $cert.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+          node apps/desktop/scripts/signing-electron.mjs check-publisher --subject "$subject"
+          exit $LASTEXITCODE
 
       # Windows runner 的实时扫描会把刚写出的文件占住几秒到几十秒，复制到包里
       # 时就撞上 EBUSY。把产物目录排除出扫描范围，比只在复制处重试可靠；runner
@@ -322,7 +455,42 @@ jobs:
         shell: bash
         env:
           ARMADRA_UPDATER_ENDPOINTS: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
+          # 发布包不带本地构建的停更标记（scripts/dist.mjs 的 RELEASE_ENV）。
+          ARMADRA_DIST_RELEASE: "1"
         run: pnpm --filter @armadra/desktop dist
+
+      # 「有 _CodeSignature」不等于「Gatekeeper 认」：签过名的 .app 上传前先过
+      # codesign --verify --deep --strict（外部服务 §2.1 第 3 条）。没签名就没什么可验。
+      - name: 校验 macOS 签名
+        if: startsWith(matrix.target, 'darwin-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CSC_LINK:-}" ]; then
+            echo "未签名构建，跳过 codesign --verify"
+            exit 0
+          fi
+          node apps/desktop/scripts/signing-electron.mjs verify-mac --dir apps/desktop/release
+
+      # Windows 签过名的安装包与包里的 armadra.exe 都必须是 Authenticode Valid。
+      - name: 校验 Windows 签名
+        if: startsWith(matrix.target, 'windows-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CSC_LINK:-}" ] && [ -z "${AZURE_CLIENT_ID:-}" ] && [ -z "${ARMADRA_WIN_CERT_SHA1:-}" ]; then
+            echo "未签名构建，跳过 Authenticode 校验"
+            exit 0
+          fi
+          node apps/desktop/scripts/signing-electron.mjs verify-windows --dir apps/desktop/release
+
+      # 打进 out/ 的第三方包都要在 THIRD_PARTY_NOTICES.md 里：--prod 之外被打包器整段
+      # 带进来的构建期依赖由 tools/notices.mjs 的 BUNDLED_DEV_DEPENDENCIES 列出，这里按
+      # 产物里的 #region 注释与 CSS 版权头核一遍。out/ 各平台相同，查一台就够。
+      - name: 第三方声明覆盖打进包里的依赖
+        if: matrix.target == 'linux-x86_64'
+        shell: bash
+        run: node tools/notices.mjs --scan apps/desktop/out
 
       # 产物已经落地，先断言它能在承诺的系统上启动，再去改名上传。
       - name: 校验 Linux 的 glibc 基线
@@ -374,8 +542,9 @@ jobs:
         shell: bash
         env:
           HAS_APPLE_CERT: ${{ (secrets.APPLE_CERTIFICATE_P12_BASE64 || secrets.APPLE_CERTIFICATE) != '' }}
-          HAS_APPLE_NOTARY: ${{ secrets.APPLE_ID != '' && (secrets.APPLE_APP_SPECIFIC_PASSWORD || secrets.APPLE_PASSWORD) != '' }}
-          HAS_WINDOWS: ${{ secrets.WINDOWS_CERT_BASE64 != '' }}
+          HAS_APPLE_NOTARY: ${{ (secrets.APPLE_API_KEY_P8_BASE64 != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER_ID != '') || (secrets.APPLE_ID != '' && (secrets.APPLE_APP_SPECIFIC_PASSWORD || secrets.APPLE_PASSWORD) != '') }}
+          HAS_WINDOWS: ${{ secrets.WINDOWS_CERT_BASE64 != '' || secrets.AZURE_CLIENT_SECRET != '' || vars.ARMADRA_WIN_CERT_SHA1 != '' }}
+          HAS_LINUX_GPG: ${{ secrets.ARMADRA_LINUX_GPG_KEY != '' }}
         run: |
           set -euo pipefail
           missing=()
@@ -383,6 +552,7 @@ jobs:
             missing+=("macOS")
           fi
           [ "$HAS_WINDOWS" = "true" ] || missing+=("Windows")
+          [ "$HAS_LINUX_GPG" = "true" ] || missing+=("Linux (GPG)")
           printf 'unnotarized=%s\n' "$(IFS=,; echo "${missing[*]:-}")" >> "$GITHUB_OUTPUT"
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::warning::未公证/未签名的平台：${missing[*]}；首次安装会有系统提示"
@@ -396,8 +566,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.sha }}
-          # generate-notes 要能看到上一个标签，浅克隆里没有。
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -406,44 +574,61 @@ jobs:
           pattern: release-*
           merge-multiple: true
           path: artifacts
-      # 变更清单交给 GitHub 自己生成：它按两个标签之间合并的 PR 写，比任何我们
-      # 自己维护的清单都更接近真实发生的事。标签还不存在时（分支演练）它会失败，
-      # 那就退回一行标题，说明照样有兼容性围栏。
-      - name: 取 GitHub 生成的变更说明
-        id: notes
+      # Linux 包的 GPG 签名（外部服务 §2.3）：rpm 先 rpmsign --addsign 改写包，
+      # 再给 AppImage / deb / rpm 各出 .asc，并导出公钥 armadra-linux.gpg 作
+      # Release 资产。必须在 assemble.mjs 之前：校验和与 minisign 签的是最终字节。
+      # 仓库里已有 apps/web/public/armadra-linux.gpg 时，签名密钥的指纹必须与它
+      # 一致。没有 ARMADRA_LINUX_GPG_KEY 就跳过并告警。
+      - name: GPG 签 Linux 包
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+          ARMADRA_LINUX_GPG_KEY: ${{ secrets.ARMADRA_LINUX_GPG_KEY }}
+          ARMADRA_LINUX_GPG_PASSPHRASE: ${{ secrets.ARMADRA_LINUX_GPG_PASSPHRASE }}
         run: |
           set -euo pipefail
-          path="$RUNNER_TEMP/generated-notes.md"
-          if ! gh api "repos/$GH_REPO/releases/generate-notes" \
-            -f tag_name="$RELEASE_TAG" --jq ".body" > "$path" 2>/dev/null; then
-            printf 'Armadra %s\n' "$RELEASE_TAG" > "$path"
+          if [ -z "${ARMADRA_LINUX_GPG_KEY:-}" ]; then
+            echo "::warning::没有 ARMADRA_LINUX_GPG_KEY，Linux 包不带 .asc，rpm 不签名"
+            exit 0
           fi
-          [ -s "$path" ] || printf 'Armadra %s\n' "$RELEASE_TAG" > "$path"
-          printf 'path=%s\n' "$path" >> "$GITHUB_OUTPUT"
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y rpm
+          node tools/release/sign-gpg.mjs sign --dir artifacts --published apps/web/public/armadra-linux.gpg
+          node tools/release/sign-gpg.mjs verify --dir artifacts --public-key artifacts/armadra-linux.gpg
+      # 说明正文取 CHANGELOG.md 本版一节，兼容性围栏由 assemble 追加；建 Release 的
+      # 那一次还要求标题已去掉「未发布」（verify 作业已先查过一遍）。
+      # 配了镜像的公开地址（变量 ARMADRA_MIRROR_PUBLIC_URL，例如 https://updates.armadra.dev）
+      # 时，另写一份链接指向镜像的 latest.json 到 mirror/，同一把钥匙签；mirror 作业把它
+      # 盖在镜像里那一版的 latest.json 上（tools/release/mirror.mjs）。
       - name: 生成清单、校验列表与说明
         shell: bash
         env:
           ARMADRA_RELEASE_SIGNING_KEY: ${{ secrets.ARMADRA_RELEASE_SIGNING_KEY }}
+          PUBLISH: ${{ needs.verify.outputs.publish }}
+          MIRROR_PUBLIC_URL: ${{ vars.ARMADRA_MIRROR_PUBLIC_URL }}
         run: |
           set -euo pipefail
+          released=()
+          [ "$PUBLISH" = "true" ] && released=(--require-released)
+          mirror=()
+          [ -n "${MIRROR_PUBLIC_URL:-}" ] && mirror=(--mirror-base "$MIRROR_PUBLIC_URL" --mirror-out mirror)
           node tools/release/assemble.mjs \
             --dir artifacts \
             --version "${{ needs.verify.outputs.version }}" \
             --repo "${{ github.repository }}" \
             --tag "${{ needs.verify.outputs.tag }}" \
             --unnotarized "${{ needs.notarize.outputs.unnotarized }}" \
-            --notes-from "${{ steps.notes.outputs.path }}" \
+            --changelog CHANGELOG.md "${released[@]}" "${mirror[@]}" \
             --note release-note.md
       - uses: actions/upload-artifact@v4
         with:
           name: release-assembled
           path: artifacts
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-mirror-manifest
+          path: mirror
+          if-no-files-found: ignore
       # 只创建 draft：产物清单与说明由人审阅后再点击发布，更新检查会跳过
       # draft，所以未发布前任何客户端都看不到它。
       - name: 创建 draft Release
@@ -461,3 +646,184 @@ jobs:
             args+=(--prerelease)
           fi
           gh release create "$RELEASE_TAG" "${args[@]}" artifacts/*
+
+  # 更新镜像（W-MIRROR，外部服务 §3.3，ci-release.md §3.3）：把这一版传进 S3 兼容桶
+  # （Cloudflare R2）的 releases/download/v<版本>/，包先、清单后，传完 rclone check。
+  # 只传带版本的路径——那里没有客户端会去问；「最新」在人把 Release 转正后由
+  # distribute.yml 的 mirror 作业提上去。四个设置一个都没有就跳过，给了一半就失败。
+  mirror:
+    needs: [verify, assemble]
+    if: needs.verify.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assembled
+          path: artifacts
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: release-mirror-manifest
+          path: mirror
+      - name: 传到镜像桶
+        shell: bash
+        env:
+          ARMADRA_MIRROR_ENDPOINT: ${{ vars.CLOUDFLARE_ACCOUNT_ID && format('https://{0}.r2.cloudflarestorage.com', vars.CLOUDFLARE_ACCOUNT_ID) || '' }}
+          ARMADRA_MIRROR_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
+          ARMADRA_MIRROR_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          ARMADRA_MIRROR_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          manifest=()
+          [ -s mirror/latest.json ] && manifest=(--manifest mirror)
+          node tools/release/mirror.mjs stage --dir artifacts --version "${{ needs.verify.outputs.version }}" "${manifest[@]}"
+
+  # 分发渠道（外部服务 §4，ci-release.md §3.1）：从刚汇总的 SHA256SUMS 渲染 Homebrew
+  # cask、Scoop、winget 与 AUR 的 PKGBUILD，并在后面两个作业里各自装一遍。这里只渲染
+  # 与校验，不推送任何渠道：Release 此时还是 draft，下载地址对外是 404。推送在人把
+  # Release 转正之后由 distribute.yml 做。预发布不进渠道。
+  channels:
+    needs: [verify, assemble]
+    if: needs.verify.outputs.prerelease != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assembled
+          path: artifacts
+      # 两份：channels/ 指向 GitHub Release（发布时用的就是它），channels-local/
+      # 指向 127.0.0.1:8765，给下面两个作业从本地起的静态服务器上真装一遍。
+      - name: 渲染渠道清单
+        shell: bash
+        run: |
+          set -euo pipefail
+          for variant in channels channels-local; do
+            base=()
+            [ "$variant" = channels-local ] && base=(--download-base http://127.0.0.1:8765)
+            node tools/release/publish-channels.mjs render \
+              --sums artifacts/SHA256SUMS \
+              --version "${{ needs.verify.outputs.version }}" \
+              --repo "${{ github.repository }}" \
+              --out "rendered/$variant" "${base[@]}"
+          done
+      # makepkg 不许 root 跑，所以在 Arch 容器里建一个普通用户；namcap 的告警只打印。
+      - name: PKGBUILD 过 makepkg --printsrcinfo 与 namcap
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD/rendered/channels/aur:/pkg:ro" archlinux:latest bash -euo pipefail -c '
+            sed -i "/^\[options\]/a DisableSandbox" /etc/pacman.conf
+            pacman -Syu --noconfirm --needed namcap >/dev/null
+            useradd -m builder
+            install -o builder -m 644 /pkg/PKGBUILD /home/builder/PKGBUILD
+            cd /home/builder
+            su builder -c "makepkg --printsrcinfo"
+            namcap PKGBUILD
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-channels
+          path: rendered
+          if-no-files-found: error
+
+  # brew style / audit 用一个本地 tap；install 从本地静态服务器装进临时 appdir，
+  # 顺带断言 after-pack 放回 Contents/Resources/ 的两份 Electron 声明与第三方声明。
+  channels-macos:
+    needs: [verify, channels]
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-channels
+          path: rendered
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-darwin-*
+          merge-multiple: true
+          path: serve/v${{ needs.verify.outputs.version }}
+      - name: brew style、audit 与 install --cask
+        shell: bash
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_ANALYTICS: "1"
+        run: |
+          set -euo pipefail
+          brew tap-new --no-git armadra-release/local
+          tap="$(brew --repository armadra-release/local)"
+          mkdir -p "$tap/Casks"
+          cp rendered/channels/homebrew/Casks/armadra.rb "$tap/Casks/"
+          brew style --cask armadra-release/local/armadra
+          brew audit --cask --strict armadra-release/local/armadra
+          cp rendered/channels-local/homebrew/Casks/armadra.rb "$tap/Casks/"
+          (cd serve && python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1 &)
+          sleep 2
+          appdir="$RUNNER_TEMP/apps"
+          mkdir -p "$appdir"
+          brew install --cask --appdir="$appdir" armadra-release/local/armadra
+          resources="$appdir/Armadra.app/Contents/Resources"
+          for name in LICENSE.electron.txt LICENSES.chromium.html THIRD_PARTY_NOTICES.md agent/THIRD_PARTY_NOTICES.md; do
+            [ -s "$resources/$name" ] || { echo "::error::$name 不在 $resources"; exit 1; }
+          done
+          brew uninstall --cask armadra-release/local/armadra
+
+  # winget validate 校验三件套；Scoop 从本地静态服务器装便携 zip，装好后找得到
+  # armadra.exe 与它旁边的 Electron 声明。
+  channels-windows:
+    needs: [verify, channels]
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-channels
+          path: rendered
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-windows-x86_64
+          path: serve/v${{ needs.verify.outputs.version }}
+      - name: winget validate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -Force | Out-Null
+            Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery | Out-Null
+            Repair-WinGetPackageManager -AllUsers -Latest
+          }
+          $dir = Get-ChildItem -Directory -Recurse rendered/channels/winget/manifests | Where-Object { Test-Path (Join-Path $_.FullName 'Owlbay.Armadra.yaml') } | Select-Object -First 1
+          winget validate --manifest $dir.FullName --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: scoop install
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-RestMethod -Uri https://get.scoop.sh -OutFile "$env:RUNNER_TEMP\install-scoop.ps1"
+          & "$env:RUNNER_TEMP\install-scoop.ps1" -RunAsAdmin
+          $env:PATH = "$env:USERPROFILE\scoop\shims;$env:PATH"
+          $server = Start-Process python -ArgumentList '-m','http.server','8765','--bind','127.0.0.1' -WorkingDirectory serve -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 2
+          # 相对路径会被当成「bucket/应用」，要给绝对路径。
+          scoop install (Resolve-Path rendered/channels-local/scoop/bucket/armadra.json).Path
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $app = "$env:USERPROFILE\scoop\apps\armadra\current"
+          foreach ($name in 'armadra.exe', 'LICENSE.electron.txt', 'LICENSES.chromium.html', 'resources\THIRD_PARTY_NOTICES.md') {
+            if (-not (Test-Path (Join-Path $app $name))) { Write-Host "::error::$name 不在 $app"; exit 1 }
+          }
+          scoop uninstall armadra
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Stop-Process -Id $server.Id

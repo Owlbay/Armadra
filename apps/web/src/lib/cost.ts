@@ -61,6 +61,12 @@ export function formatTokens(value: number): string {
   return String(Math.round(value));
 }
 
+/** Premium request 数：可能带小数（倍率计费），最多两位，不补零。 */
+export function formatRequests(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  return String(Math.round(value * 100) / 100);
+}
+
 /**
  * 金额。低于 1 分钱但不是 0 时显示 `<$0.01`——四舍五入成 `$0.00`
  * 会让人以为没花钱。

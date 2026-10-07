@@ -16,6 +16,7 @@ import {
   Rows3,
   Undo2,
 } from "lucide-react";
+import { sk } from "../../../sources/scope";
 import type { GitRestoreSource } from "@armadra/shared";
 import { runtimeApi } from "../../../api/client";
 import { gitGateway } from "../../../git/gateway";
@@ -96,7 +97,7 @@ export function CommitPage({
   const rootTarget = useGitTarget(workspaceId, ".");
   const at = (repositoryPath: string) =>
     gitTarget(workspaceId, workspaceRoot, repositoryPath);
-  const statusKey = ["git-status-all", workspaceId, paths.join(",")];
+  const statusKey = sk("git-status-all", workspaceId, paths.join(","));
   const status = useQuery({
     queryKey: statusKey,
     queryFn: ({ signal }) =>
@@ -108,11 +109,11 @@ export function CommitPage({
   // 出哪些路径还没解决，所以每个检出各读一次。
   const integrations = useQueries({
     queries: records.map((record) => ({
-      queryKey: [
+      queryKey: sk(
         "git-repository-integration",
         workspaceId,
         record.repositoryPath,
-      ],
+      ),
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         gitGateway.integration(at(record.repositoryPath), signal),
       retry: false,
@@ -160,7 +161,7 @@ export function CommitPage({
         ? groups[0]
         : null;
   const head = useQuery({
-    queryKey: ["git-head-commit", workspaceId, amendTarget?.repositoryPath],
+    queryKey: sk("git-head-commit", workspaceId, amendTarget?.repositoryPath),
     queryFn: ({ signal }) =>
       runtimeApi.gitHeadCommit(
         workspaceId,

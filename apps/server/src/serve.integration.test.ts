@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { serve } from "./serve";
 import { tempDir } from "../../desktop/src/core/testing/temp-dir";
+import { loopbackAnonymousOwner } from "../../desktop/src/core/identity/http";
 
 /**
  * 装配级用例：真起一次 `serve`。
@@ -107,6 +108,8 @@ beforeAll(async () => {
     env: {
       ARMADRA_CORE_MIGRATIONS_DIR: migrationsDir,
       ARMADRA_LOG: "error",
+      // 探针的环境里有它（`tools/probes/probe-home.mjs`）；服务器壳不听。
+      ARMADRA_LOOPBACK_OWNER: "1",
     },
     stdout: () => {},
     moduleDir: here,
@@ -191,6 +194,10 @@ describe("服务器壳的装配", () => {
     expect((await call("/hook/anything", { origin: null })).status).toBe(404);
   });
 
+  it("回环匿名不按本机主人：环境变量开不了，选项钉死为关（安全审查 L9）", () => {
+    expect(loopbackAnonymousOwner()).toBe(false);
+  });
+
   it("配对之后带 Cookie 的请求是 200，撤销之后立刻回到 401", async () => {
     const ticket = running.pairingTicket as string;
     expect(ticket).toMatch(/^[0-9a-f]{32}\.[A-Za-z0-9_-]{43}$/);
@@ -244,6 +251,38 @@ describe("服务器壳的装配", () => {
     expect(revoked.status).toBe(200);
     const after = await call("/api/workspaces", { cookie });
     expect(after.status).toBe(401);
+  });
+
+  it("/api/gateway 报的是命令行开的这一个，设置改不动它；/ca.crt 匿名发自签名证书", async () => {
+    const paired = await call("/api/identity/pair", {
+      method: "POST",
+      body: JSON.stringify({ ticket: running.pair().ticket }),
+    });
+    expect(paired.status).toBe(200);
+    const session = JSON.parse(paired.body);
+    const cookie = (paired.headers["set-cookie"] as string[])
+      .map((value) => (value.split(";")[0] as string).trim())
+      .join("; ");
+    const status = await call("/api/gateway", { cookie });
+    expect(status.status).toBe(200);
+    const body = JSON.parse(status.body);
+    expect(body.managedBy).toBe("shell");
+    expect(body.running).toBe(true);
+    expect(body.origin).toBe(origin);
+    expect(body.tls.source).toBe("selfSigned");
+    expect(body.tls.fingerprint).toBe(running.tls.fingerprint);
+    const refused = await call("/api/gateway", {
+      method: "PUT",
+      cookie,
+      csrf: session.csrfToken,
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(refused.status).toBe(409);
+    expect(JSON.parse(refused.body).code).toBe("gateway_managed_by_shell");
+
+    const anchor = await call("/ca.crt", { origin: null });
+    expect(anchor.status).toBe(200);
+    expect(anchor.body).toBe(running.tls.cert);
   });
 
   it("同源的只读请求不带 Origin：凭 Sec-Fetch-Site 与 Host 补上页面来源", async () => {

@@ -12,6 +12,7 @@ import {
 
 import {
   type AgentSettings,
+  NO_CUSTOM_AGENTS,
   baseAgent,
   startsSilently,
 } from "../agent/registry";
@@ -28,6 +29,7 @@ import {
   loadSession,
   workspaceRoot,
 } from "../collab/nodes";
+import { checkScreen } from "../collab/screen";
 import type { TerminalBridge } from "../collab/service";
 import { PASTE_END, PASTE_START, sanitizePaste } from "../terminal/backend";
 import {
@@ -41,8 +43,14 @@ import {
   agentLauncher,
   launchLine,
   rememberSession,
+  stampColdStartCreator,
 } from "./cold-start";
-import { ScheduleError, agentTarget, big, num } from "./plan";
+import { ScheduleError, agentTarget, big, num, workflowTarget } from "./plan";
+import {
+  lookupWorkflowRun,
+  startWorkflowRun,
+  workflowTargetStatus,
+} from "./workflow-target";
 import { COMMAND_SESSION_READY, ScheduleStore } from "./store";
 import type { Dispatcher, ProbeOptions, TargetStatus } from "./engine";
 
@@ -123,6 +131,8 @@ export class TerminalDispatcher implements Dispatcher {
     if (target.executionHostId !== this.context.hostId) {
       return { state: "unsupported", generation: 0 };
     }
+    // 工作流目标（契约 §15.6）：不碰终端，只问模板与画布还在不在。
+    if (workflowTarget(target)) return workflowTargetStatus("", target);
     return agentTarget(target)
       ? this.supportsAgent(target, options.coldStart === true)
       : this.supportsCommand(target);
@@ -132,7 +142,7 @@ export class TerminalDispatcher implements Dispatcher {
    * Agent 目标的探测。
    *
    * 节点存在、是这个 Agent、当前有一个活着的会话，并且那个会话不在等人、输入
-   * 行上没有人留下的半行——都成立才叫 `ready`。
+   * 行上没有人留下的半行、画面没停在 CLI 的对话框上——都成立才叫 `ready`。
    */
   private async supportsAgent(
     target: AutomationTarget,
@@ -194,6 +204,20 @@ export class TerminalDispatcher implements Dispatcher {
     ) {
       return { state: "busy", generation: live };
     }
+    // 画面门（投递设计 §4.3）：与 `send` 同一道。状态说「空闲」不等于输入框在
+    // 前台——CLI 自己的对话框（信任目录、升级、把 auto 设为缺省……）停在那里时
+    // 写进去，回车就替人选了缺省项。停在对话框上、或首投时看不见提示符，算忙，
+    // 等下一拍再看；人在终端里答掉之后下一次探测自然放行。
+    const screen = await checkScreen({
+      terminals,
+      settings: this.context.settings?.() ?? NO_CUSTOM_AGENTS,
+      agentId: node.agentId,
+      sessionId: session.sessionId,
+      first: firstDelivery(status, startedAt),
+    });
+    if (screen.kind !== "clear") {
+      return { state: "busy", generation: live, reason: screen.reason };
+    }
     return { state: "ready", generation: live };
   }
 
@@ -210,20 +234,8 @@ export class TerminalDispatcher implements Dispatcher {
     startedAtMs: number,
     observed: ObservedActivity | undefined,
   ): boolean {
-    const reportedAt = Date.parse(status?.lastEventAt ?? "");
-    // 时间戳可能只精确到秒：按冷启动那一秒比，而不是那一毫秒。
-    const fresh =
-      status !== undefined &&
-      !status.restored &&
-      stateSourceIsReported(status.stateSource) &&
-      Number.isFinite(reportedAt) &&
-      reportedAt >= Math.floor(startedAtMs / 1000) * 1000;
-    if (fresh) {
-      return (
-        status.state === "idle" ||
-        status.state === "done" ||
-        status.state === "error"
-      );
+    if (status !== undefined && reportedSince(status, startedAtMs)) {
+      return turnEnded(status);
     }
     const settings = this.context.settings?.();
     if (settings === undefined || node.agentId === null) return false;
@@ -281,6 +293,7 @@ export class TerminalDispatcher implements Dispatcher {
       return offline;
     }
     this.coldStarts.note(node.id, started.sessionId, nowMs);
+    stampColdStartCreator(this.context.database, started.sessionId);
     rememberSession(
       this.context.database,
       node,
@@ -367,6 +380,20 @@ export class TerminalDispatcher implements Dispatcher {
     if (!sameBytes(digest, config.payloadSha256)) {
       throw unsupported("载荷与它被冻结时的摘要对不上");
     }
+    if (workflowTarget(target)) {
+      const status = workflowTargetStatus(run.workspaceId, target);
+      if (status.state !== "ready") {
+        return this.record(
+          run,
+          AutomationOutcome.NOT_DISPATCHED,
+          "TARGET_NOT_READY",
+        );
+      }
+      // 起跑就是这次投递；运行 id 从操作标识推出来，重试不会起第二次。
+      return startWorkflowRun(run, target, payload.payload, (outcome, reason) =>
+        this.record(run, outcome, reason),
+      );
+    }
     const status = await this.supports(target);
     if (status.state !== "ready") {
       // 探测和写入之间目标变了。这是**肯定的没投递**：什么都还没写出去，所以
@@ -374,7 +401,7 @@ export class TerminalDispatcher implements Dispatcher {
       return this.record(
         run,
         AutomationOutcome.NOT_DISPATCHED,
-        "TARGET_NOT_READY",
+        status.reason ?? "TARGET_NOT_READY",
       );
     }
     const sessionId = agentTarget(target)
@@ -409,6 +436,14 @@ export class TerminalDispatcher implements Dispatcher {
   /** 这次投递到底做了什么，从这个 core 自己的收据表里读。 */
   async lookup(run: AutomationRun): Promise<AutomationReceipt | undefined> {
     const stored = this.context.store.receipt(run.operationId);
+    // 工作流目标：「送到」之后还看得见结局——运行的状态就是证据。状态变了就
+    // 记一张序号更大的收据，内核据此推进；没变交回存着的那张。
+    if (workflowTarget(run.frozenConfig?.target)) {
+      const next = lookupWorkflowRun(run, stored, (outcome, reason, sequence) =>
+        this.record(run, outcome, reason, undefined, sequence),
+      );
+      if (next !== undefined) return next;
+    }
     if (stored === undefined) {
       // 没有记录就是没有证据。「没有证据」不等于「没有发生」，所以这里答
       // UNKNOWN 而不是 NOT_DISPATCHED——后者是可以重试的，而重试会再写一遍。
@@ -422,8 +457,9 @@ export class TerminalDispatcher implements Dispatcher {
     outcome: AutomationOutcome,
     reasonCode: string,
     _detail?: string,
+    sequence?: number,
   ): AutomationReceipt {
-    const receipt = this.receipt(run, outcome, reasonCode);
+    const receipt = this.receipt(run, outcome, reasonCode, sequence);
     this.context.store.putReceipt(receipt);
     return receipt;
   }
@@ -432,6 +468,7 @@ export class TerminalDispatcher implements Dispatcher {
     run: AutomationRun,
     outcome: AutomationOutcome,
     reasonCode: string,
+    sequence?: number,
   ): AutomationReceipt {
     return create(AutomationReceiptSchema, {
       operationId: run.operationId,
@@ -439,11 +476,52 @@ export class TerminalDispatcher implements Dispatcher {
       outcome,
       // 序号从这次投递的尝试次数来：同一次尝试重复观察得到同一个序号，而下一次
       // 尝试的收据一定比上一次大。
-      sequence: big(Math.max(1, run.dispatchAttempts)),
+      sequence: big(sequence ?? Math.max(1, run.dispatchAttempts)),
       observedAtUnixMs: big(Math.max(1, this.now())),
       reasonCode,
     });
   }
+}
+
+/** 一条真上报（不是 `restored` 读回来的行）。 */
+function reported(status: AgentStatus): boolean {
+  return !status.restored && stateSourceIsReported(status.stateSource);
+}
+
+/** 这条真上报晚于 `sinceMs`。时间戳可能只精确到秒：按那一秒比。 */
+function reportedSince(status: AgentStatus, sinceMs: number): boolean {
+  const reportedAt = Date.parse(status.lastEventAt ?? "");
+  return (
+    reported(status) &&
+    Number.isFinite(reportedAt) &&
+    reportedAt >= Math.floor(sinceMs / 1000) * 1000
+  );
+}
+
+function turnEnded(status: AgentStatus): boolean {
+  return (
+    status.state === "idle" ||
+    status.state === "done" ||
+    status.state === "error"
+  );
+}
+
+/**
+ * 画面门的「首投」：这一次放行凭的不是一条「这一轮结束了」的真上报。
+ *
+ * 没人报过、只报了开场、读回来的旧行，或者我们冷启动之后还没有一条新的回合结
+ * 束——这些时候没有任何事实说输入框在前台，所以要求画面上看得见提示符。
+ */
+function firstDelivery(
+  status: AgentStatus | undefined,
+  coldStartedAtMs: number | undefined,
+): boolean {
+  if (status === undefined || !reported(status) || !turnEnded(status)) {
+    return true;
+  }
+  return (
+    coldStartedAtMs !== undefined && !reportedSince(status, coldStartedAtMs)
+  );
 }
 
 /** 工作空间的根目录；读不到就是空串，冷启动因此答离线而不是抛。 */

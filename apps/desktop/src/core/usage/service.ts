@@ -3,9 +3,15 @@
  * `UsageService`。
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+import { configRoot } from "../history/home";
+import { OUTBOUND } from "../net/outbound";
 import type { SettingsStore } from "../settings/store";
 import { BUILT_IN_PRICES, CostService, type PriceTable } from "./cost";
 import { CopilotLogin } from "./copilot-login";
+import { estimateLocalWindows, type LocalWindowLimits } from "./local-window";
 import {
   CLAUDE_ID,
   CODEX_ID,
@@ -17,7 +23,17 @@ import {
   type Fetcher,
   type ProviderReport,
 } from "./providers";
-import { SecretStore } from "./secret-store";
+import {
+  type LegacySecret,
+  type ResolvedSecrets,
+  SecretStore,
+  legacyFile,
+  legacyKeychain,
+  migrateLegacySecrets,
+  migrationRecordFile,
+  resolveSecretBackend,
+  secretsDirectory,
+} from "../secrets";
 import {
   emptySnapshot,
   USAGE_PROVIDER_IDS,
@@ -36,12 +52,46 @@ const TICK_INTERVAL_MS = 30_000;
 /** `POST /api/usage/refresh` 是一次用户手势；30 秒一次足够，也挡住一个卡住的 UI。 */
 export const MANUAL_REFRESH_COOLDOWN_MS = 30_000;
 
-/** Copilot 令牌存在哪个 service 名下。 */
-export const COPILOT_SECRET_SERVICE = "Armadra Copilot";
+/** Copilot 令牌存在哪个名字下。 */
+export const COPILOT_SECRET_SERVICE = "armadra-copilot";
+
+/** 统一 `armadra-*` 前缀之前的名字：钥匙串 service 与文件名都是它。 */
+export const LEGACY_COPILOT_SERVICE = "Armadra Copilot";
+
+/**
+ * Copilot 令牌的旧位置：macOS 钥匙串里旧 service 名的条目（只在当前后端就是钥匙串
+ * 时去敲），以及数据目录里旧名字的 0600 文件。
+ */
+export function copilotLegacySecrets(secrets: ResolvedSecrets): LegacySecret[] {
+  const items: LegacySecret[] = [];
+  if (secrets.backend.kind === "keychain") {
+    items.push(
+      legacyKeychain(
+        "copilot.keychain",
+        COPILOT_SECRET_SERVICE,
+        secrets.security,
+        { service: LEGACY_COPILOT_SERVICE },
+      ),
+    );
+  }
+  items.push(
+    legacyFile(
+      "copilot.file",
+      COPILOT_SECRET_SERVICE,
+      join(
+        secretsDirectory(secrets.dataDir),
+        `${LEGACY_COPILOT_SERVICE}.token`,
+      ),
+    ),
+  );
+  return items;
+}
 
 export interface UsageServiceOptions {
   readonly settings: SettingsStore | undefined;
   readonly dataDir: string;
+  /** 这一轮 core 的密钥后端；不给时按数据目录与环境自己挑（不接壳的 IPC）。 */
+  readonly secrets?: ResolvedSecrets;
   readonly fetch?: Fetcher;
   readonly now?: () => number;
   /**
@@ -51,6 +101,11 @@ export interface UsageServiceOptions {
    * ——下一趟就该用上新价格。不给就只有内置表，和以前一样。
    */
   readonly catalogPrices?: () => PriceTable;
+  /**
+   * Claude 订阅档的窗口额度（token），本地估算用来算百分比。不给或者某个窗口没有
+   * 数字，那个窗口就只报用量。
+   */
+  readonly claudeWindowLimits?: () => LocalWindowLimits | undefined;
 }
 
 export class UsageService {
@@ -75,8 +130,18 @@ export class UsageService {
           ? BUILT_IN_PRICES
           : [BUILT_IN_PRICES, options.catalogPrices()],
     );
+    const secrets =
+      options.secrets ?? resolveSecretBackend({ dataDir: options.dataDir });
+    // 旧名字下的令牌在第一次读写时搬过来，装配本身不碰任何存储。
+    let migrated: Promise<unknown> | undefined;
+    const migrate = () =>
+      (migrated ??= migrateLegacySecrets(
+        secrets.backend,
+        copilotLegacySecrets(secrets),
+        migrationRecordFile(secrets.dataDir),
+      ));
     this.copilot = new CopilotLogin(
-      new SecretStore(COPILOT_SECRET_SERVICE, options.dataDir),
+      new SecretStore(secrets.backend, COPILOT_SECRET_SERVICE, migrate),
       this.now,
     );
   }
@@ -87,6 +152,36 @@ export class UsageService {
 
   private providerEnabled(id: string): boolean {
     return this.options.settings?.usageProviderEnabled(id) ?? true;
+  }
+
+  /**
+   * 出站政策（外部服务 §9.3）：Claude 与 Copilot 的额度端点要借用登录令牌，
+   * 各有一个默认关的开关，和逐个 provider 的开关是「且」的关系。没有设置存储
+   * （测试里裸装的 core）按缺省值算，也就是关。
+   */
+  policyAllows(id: UsageProviderId): boolean {
+    const key =
+      id === CLAUDE_ID
+        ? OUTBOUND.claudeUsage.switch
+        : id === COPILOT_ID
+          ? OUTBOUND.copilotUsage.switch
+          : undefined;
+    if (key === undefined) return true;
+    return this.options.settings?.get(key) === true;
+  }
+
+  /**
+   * 政策关着的这家，本机上看起来有没有在用——有才报 `policy_off`，好让页面说
+   * 「默认关了，可以开」；没有就和没装一样报 `unavailable`。只看目录与自己的
+   * 密钥存储，不读 Claude 的钥匙串，也不联网。
+   */
+  private async appearsInUse(id: UsageProviderId): Promise<boolean> {
+    if (id === CLAUDE_ID) {
+      const directory = configRoot("claude");
+      return directory !== undefined && existsSync(directory);
+    }
+    if (id === COPILOT_ID) return this.copilot.signedIn();
+    return false;
   }
 
   private costEnabled(): boolean {
@@ -110,17 +205,56 @@ export class UsageService {
 
   /** 缓存着的快照。从不在网络上阻塞。 */
   snapshot(): UsageSnapshot {
-    return this.enabled() ? this.snapshotValue : emptySnapshot();
+    return this.enabled()
+      ? this.withLocalEstimate(this.snapshotValue)
+      : emptySnapshot();
+  }
+
+  /** `usage.claudeLocalWindow`，缺省开。 */
+  private claudeLocalWindow(): boolean {
+    const value = this.options.settings?.get("usage.claudeLocalWindow");
+    return typeof value === "boolean" ? value : true;
+  }
+
+  /**
+   * Claude 因政策关着而 `policy_off` 时，挂上按本机转录估出来的窗口。每次读快照
+   * 时现算：桶跟着成本扫描走，不必等下一次额度刷新。没有扫描结果（成本扫描关着、
+   * 还没扫过）就不挂。
+   */
+  private withLocalEstimate(snapshot: UsageSnapshot): UsageSnapshot {
+    if (!this.claudeLocalWindow()) return snapshot;
+    const index = snapshot.providers.findIndex(
+      (provider) =>
+        provider.id === CLAUDE_ID &&
+        provider.status === "unavailable" &&
+        provider.reason === "policy_off",
+    );
+    if (index === -1) return snapshot;
+    const scanned = this.cost.scannedBuckets();
+    if (scanned === undefined) return snapshot;
+    const providers = [...snapshot.providers];
+    providers[index] = {
+      ...(providers[index] as ProviderUsage),
+      estimate: estimateLocalWindows(
+        scanned,
+        CLAUDE_ID,
+        this.now(),
+        this.options.claudeWindowLimits?.(),
+      ),
+    };
+    return { ...snapshot, providers };
   }
 
   /** 并发地取支持的供应商并替换缓存。 */
   async refresh(): Promise<UsageSnapshot> {
     // 在已有的那次刷新上排队，两个调用方共享同一次完成的取数。
-    if (this.refreshing !== undefined) return this.refreshing;
+    if (this.refreshing !== undefined) {
+      return this.refreshing.then((value) => this.withLocalEstimate(value));
+    }
     const running = this.refreshLocked();
     this.refreshing = running;
     try {
-      return await running;
+      return this.withLocalEstimate(await running);
     } finally {
       this.refreshing = undefined;
     }
@@ -172,6 +306,12 @@ export class UsageService {
     if (!this.providerEnabled(id)) {
       return unavailable(id, "none");
     }
+    // 政策关着同样一个请求都不发、也不读凭据。
+    if (!this.policyAllows(id)) {
+      return (await this.appearsInUse(id).catch(() => false))
+        ? { ...unavailable(id, "none"), reason: "policy_off" }
+        : unavailable(id, "none");
+    }
     try {
       const { report, source } = await fetchOne();
       if (report === undefined) {
@@ -194,6 +334,10 @@ export class UsageService {
         fetchedAt: new Date(this.now()).toISOString(),
       };
     } catch (error) {
+      if (error instanceof ProviderError && error.reason === "unsupported") {
+        // 端点答了 HTML：这条路走不通，不是一次失败（外部服务 §9.3）。
+        return { ...unavailable(id, "none"), reason: "unsupported" };
+      }
       return errored(
         id,
         "none",

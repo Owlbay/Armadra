@@ -114,7 +114,7 @@ export const useAutomationSession = create<AutomationSessionStore>(
           set({ state: { status: "blocked", reason: "signedOut" } });
           return;
         }
-        const scope = { workspaceId, hostId: hello.hostId };
+        const scope = { workspaceId, executionHostId: hello.sourceId };
         if (!permits(session, "automation:read", scope)) {
           set({ state: { status: "blocked", reason: "noPermission" } });
           return;

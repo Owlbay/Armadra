@@ -97,7 +97,15 @@ export function ArmadraNode({
           `fallback={null}` 而不是一个骨架——节点体本来就要等自己的数据
           （终端等第一帧输出，编辑器等文件），多画一个骨架只是多一次闪。 */}
       {NODE_SHELL_SELF.has(node.type) ? (
-        <React.Suspense fallback={null}>
+        // 这几类的壳画在节点体里面，`fallback={null}` 会让整个节点（连头部）
+        // 在分块加载完之前都看不见，只剩一个空的选中框；先画一个空壳顶上。
+        <React.Suspense
+          fallback={
+            <NodeShell node={node} selected={selected}>
+              {null}
+            </NodeShell>
+          }
+        >
           <Body {...bodyProps} />
         </React.Suspense>
       ) : (

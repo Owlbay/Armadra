@@ -4,7 +4,10 @@
 // 空间用一遍：建工作空间、文件树与编辑保存、Git 状态 / 暂存 / 提交与一次 fetch
 // 长操作的进度和取消、远端语言服务、文件监听推送、资源面板按主机筛选、把工作
 // 空间在本机与远端之间来回切换；画布上一个 SSH 终端里的 Agent 拿到远端的画布
-// 注入（技能、说明与 Hook，经 Worker 中继回到 core）。每一步都截图。
+// 注入（技能、说明与 Hook，经 Worker 中继回到 core）；同一台主机上的 SSH 节点以
+// ACP 驱动（适配器经 ssh 起在那边，答一轮、切终端再切回）；本机工作空间里一个跑在
+// 假远端 SSH 终端里的 Agent 把交接材料交给本机 Agent，转录经那台主机的 Worker
+// 读（契约 §21.1），执行主机页显示 Worker 版本并重新同步（§21.2）。每一步都截图。
 //
 // 「远端」是这台机器自己，经一个**假 ssh**：core 的 `ARMADRA_REMOTE_WORKER_LAUNCHER`
 // 本来就替换每条 `ssh` 启动行的 argv[0]（`core/remote/index.ts`），探针把它指到
@@ -16,8 +19,8 @@
 // 配置；也因此**没有**验证真实的 ssh 传输、主机密钥与 askpass。
 //
 // 一切都是临时的、回环的：随机端口，mktemp 出来的数据目录、工作空间、Worker
-// 状态目录、裸仓库与浏览器 profile，跑完全部删除并停掉 tmux 服务器；不读写
-// 操作员自己的数据目录。
+// 状态目录、裸仓库、HOME 与浏览器 profile，跑完全部删除并停掉 tmux 服务器；
+// 不读写操作员自己的数据目录与 HOME。
 //
 // 用法（仓库根目录）：
 //   pnpm libs:build
@@ -46,6 +49,7 @@ import {
   startChrome,
   startVite,
 } from "./shell-e2e-lib.mjs";
+import { isolatedEnv, probeHome } from "./probe-home.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const output = resolve(process.argv[2] ?? join(root, "target/remote-e2e"));
@@ -55,6 +59,10 @@ const { report, step } = h;
 report.failures = [];
 const HOST_ID = "fake-remote";
 const HOST_NAME = "假远端";
+/** 资源面板里的平台名（core 的 `platformName()`）：假远端就是这台机器。 */
+const PLATFORM =
+  { darwin: "macos", win32: "windows", linux: "linux" }[process.platform] ??
+  "unknown";
 /** ⌘（macOS）或 Ctrl 的 CDP 修饰位。 */
 const MOD = process.platform === "darwin" ? 4 : 2;
 
@@ -115,7 +123,7 @@ exec /bin/sh -c "$*"
  * SessionStart——那条命令是同步到执行主机上的 `armadra-hook`，端点是 Worker 的
  * 中继 socket。
  */
-const FAKE_CLAUDE = (report) => `#!${process.execPath}
+const FAKE_CLAUDE = (report, transcript) => `#!${process.execPath}
 const { readFileSync, writeFileSync } = require("node:fs");
 const { execSync } = require("node:child_process");
 const argv = process.argv.slice(2);
@@ -131,7 +139,7 @@ if (settings) {
   const command = JSON.parse(readFileSync(settings, "utf8")).hooks.SessionStart[0].hooks[0].command;
   out.hook = command;
   try {
-    execSync(command, { input: JSON.stringify({ hook_event_name: "SessionStart", session_id: "remote-probe-session", cwd: process.cwd() }) });
+    execSync(command, { input: JSON.stringify({ hook_event_name: "SessionStart", session_id: "remote-probe-session", transcript_path: ${JSON.stringify(transcript)}, cwd: process.cwd() }) });
     out.hookExit = 0;
   } catch (error) { out.hookExit = error.status ?? -1; }
 }
@@ -169,7 +177,18 @@ await h.run(async () => {
   const remoteCli = join(base, "remote-cli");
   mkdirSync(remoteCli);
   const cliReport = join(base, "remote-cli-report.json");
-  writeFileSync(join(remoteCli, "claude"), FAKE_CLAUDE(cliReport));
+  // 执行主机上那个 CLI 的转录：交接（第 9 步）经 Worker 在「那台主机」上读它。
+  const remoteHistory = join(base, "remote-history");
+  mkdirSync(remoteHistory);
+  const remoteTranscript = join(remoteHistory, "session.jsonl");
+  writeFileSync(
+    remoteTranscript,
+    `${JSON.stringify({ type: "user", message: { role: "user", content: "把远端那块迁完（远端转录）" } })}\n`,
+  );
+  writeFileSync(
+    join(remoteCli, "claude"),
+    FAKE_CLAUDE(cliReport, remoteTranscript),
+  );
   chmodSync(join(remoteCli, "claude"), 0o755);
   const worker = join(bin, "armadra-worker");
   writeFileSync(
@@ -214,15 +233,17 @@ await h.run(async () => {
   const data = join(base, "data");
   mkdirSync(data);
   h.cleanups.push(() => killTmux(data));
-  const environment = {
-    ...process.env,
+  // 临时 HOME：core、Worker 与画布终端都不读操作员的 CLI 登录状态与配置。
+  const home = probeHome("armadra-remote-e2e-home-");
+  h.cleanups.push(home.remove);
+  const environment = isolatedEnv(home, {
     ARMADRA_DATA_DIR: data,
     ARMADRA_LOG: process.env.ARMADRA_LOG ?? "warn",
     ARMADRA_REMOTE_WORKER_LAUNCHER: fakeSsh,
     // 探针不碰操作员的 CLI 配置：启动时的迁移、本机与执行主机上的 Codex 信任记录都不写。
     ARMADRA_NO_GLOBAL_WRITES: "1",
     PATH: `${sshBin}:${remoteCli}:${process.env.PATH ?? ""}`,
-  };
+  });
   const runtime = child(
     h,
     process.execPath,
@@ -421,9 +442,15 @@ async function scenario(ctx) {
     await sleep(300);
     await page.click('button[aria-label="源码控制"]');
     await page.click('[role="tab"]', "提交", { exact: true });
+    // 只认 Git 面板里、带勾选框的那一行：画布上 README.md 编辑器节点的标题
+    // 也写着「README.md」，按全页文字等会在没切到「提交」页时就放行。
     await page.waitFor(
-      `return [...document.querySelectorAll("label, div, span")].some((node) => node.innerText?.trim() === "README.md");`,
-      { what: "Git 状态列出改过的 README.md" },
+      `const tab = [...document.querySelectorAll('[role="tab"]')].find((node) => node.textContent.trim() === "提交");
+       if (tab?.getAttribute("aria-selected") !== "true") return false;
+       const panel = document.querySelector('[data-slot="sheet-content"]');
+       return [...(panel?.querySelectorAll('button[role="checkbox"], input[type="checkbox"]') ?? [])]
+         .some((box) => box.closest("label, div")?.innerText?.includes("README.md"));`,
+      { what: "「提交」页列出改过的 README.md" },
     );
     await page.capture("03a-git-status");
     const status = git(project, "status", "--porcelain");
@@ -697,13 +724,13 @@ async function scenario(ctx) {
     const hostCards = () =>
       page.evaluate(`
         const text = document.body.innerText;
-        return { local: text.includes("本机\\n接电源"), remote: text.includes("远程\\n${HOST_NAME}") };
+        return { local: /本机\\n(接电源|电池|充电中|电源状态未知)/.test(text), remote: text.includes("远程\\n${HOST_NAME}") };
       `);
     // 远端主机的数是「上一轮登记、下一轮取回」的缓存（§44）：刚打开时那张卡
     // 各项为空，等 Worker 答过一轮再看。
     const opened = Date.now();
     await page.waitFor(
-      `return document.body.innerText.includes("macos\\n远程\\n${HOST_NAME}");`,
+      `return document.body.innerText.includes("${PLATFORM}\\n远程\\n${HOST_NAME}");`,
       {
         what: "远端主机卡拿到第一轮数字",
         timeout: 30_000,
@@ -961,6 +988,322 @@ async function scenario(ctx) {
       body: { mode: "process" },
       allowFailure: true,
     });
+  });
+
+  /* ---------- 8b. SSH 节点以 ACP 驱动：一轮回复、切终端再切回（§26） ---------- */
+
+  await attempt(ctx, "08b-remote-acp", async () => {
+    const workspaceId = ctx.remote.id;
+    // 假 ACP Agent（`@armadra/agent/acp` 的那一个）登记成基础 CLI 为 OpenCode
+    // 的自定义条目：适配器经假 ssh 起在「执行主机」上，装没装由 Worker 的
+    // `agents.probe` 答。
+    const fakeAgent = join(
+      root,
+      "apps/desktop/node_modules/@armadra/agent/dist/drivers/acp/testing/fake-agent-main.js",
+    );
+    await api("/api/settings", {
+      method: "PATCH",
+      body: {
+        agents: {
+          custom: [
+            {
+              id: "custom:remote-acp",
+              label: "Remote ACP",
+              launchCmd: process.execPath,
+              args: [fakeAgent],
+              baseAgent: "opencode",
+            },
+          ],
+        },
+      },
+    });
+    const board = (await api(`/api/workspaces/${workspaceId}/boards`)).body[0];
+    const documentPath = `/api/workspaces/${workspaceId}/boards/${board.id}/document`;
+    const current = (await api(documentPath)).body;
+    const stamp = new Date().toISOString();
+    const nodeId = randomUUID();
+    await api(documentPath, {
+      method: "PUT",
+      body: {
+        expectedUpdatedAt: current.board.updatedAt,
+        nodes: [
+          ...current.nodes,
+          {
+            id: nodeId,
+            boardId: board.id,
+            type: "terminal",
+            title: "远端 ACP",
+            color: "#0a84ff",
+            position: { x: 1500, y: 600 },
+            size: { width: 520, height: 330 },
+            labels: [],
+            note: "",
+            data: {
+              kind: "terminal",
+              cwd: ctx.project,
+              agent: { id: "custom:remote-acp", driver: "acp" },
+              ssh: { hostId: HOST_ID },
+            },
+            createdAt: stamp,
+            updatedAt: stamp,
+          },
+        ],
+        edges: current.edges,
+        viewport: current.board.viewport ?? { x: 0, y: 0, zoom: 1 },
+        whiteboard: current.whiteboard ?? "",
+      },
+    });
+    const texts = async (sessionId) =>
+      (await api(`/api/acp/sessions/${sessionId}/log`)).body.entries.flatMap(
+        (entry) => entry.blocks.map((block) => block.text ?? ""),
+      );
+    const waitText = async (sessionId, wanted) => {
+      for (let round = 0; round < 150; round += 1) {
+        if ((await texts(sessionId)).includes(wanted)) return true;
+        await sleep(100);
+      }
+      return false;
+    };
+    const session = (
+      await api("/api/acp/sessions", {
+        method: "POST",
+        body: {
+          workspaceId,
+          nodeId,
+          cwd: ctx.project,
+          agentId: "custom:remote-acp",
+          prompt: "远端一轮",
+        },
+      })
+    ).body;
+    check(
+      session.backend === "acp" &&
+        (await waitText(session.id, "echo: 远端一轮")),
+      "SSH 节点以 ACP 驱动：适配器在执行主机上答了一轮",
+      session.id,
+    );
+    await page.capture("08b-remote-acp");
+
+    const toTerminal = await api(`/api/acp/nodes/${nodeId}/driver`, {
+      method: "POST",
+      body: { driver: "terminal" },
+    });
+    const asTerminal = (await api(`/api/terminals/${session.id}`)).body;
+    check(
+      toTerminal.body.sessionId === session.id &&
+        asTerminal.backend !== "acp" &&
+        asTerminal.generation === session.generation + 1,
+      "切到终端：同一行下一代，经 SSH 起",
+      `${asTerminal.backend} · 第 ${asTerminal.generation} 代`,
+    );
+    const toAcp = await api(`/api/acp/nodes/${nodeId}/driver`, {
+      method: "POST",
+      body: { driver: "acp" },
+    });
+    check(
+      toAcp.body.sessionId === session.id && toAcp.body.resumed === true,
+      "切回 ACP：接回同一个会话",
+      JSON.stringify(toAcp.body),
+    );
+    await api(`/api/acp/sessions/${session.id}/prompt`, {
+      method: "POST",
+      body: { text: "切回之后" },
+    });
+    check(
+      await waitText(session.id, "echo: 切回之后"),
+      "切回之后远端适配器照常答复",
+    );
+    await page.capture("08b-remote-acp-switched");
+    await api(`/api/terminals/${session.id}/terminate`, {
+      method: "POST",
+      body: { mode: "process" },
+      allowFailure: true,
+    });
+  });
+
+  /* ------------- 9. 跨主机交接与 Worker 舰队（契约 §21.1 / §21.2） ------------- */
+
+  await attempt(ctx, "09-handoff-fleet", async () => {
+    // 本机工作空间：来源 Agent 在假远端的 SSH 终端里，目标在本机。
+    const root = join(ctx.base, "handoff-project");
+    mkdirSync(root);
+    writeFileSync(join(root, "plan.md"), "交接用的项目\n");
+    const workspace = (
+      await api("/api/workspaces", {
+        method: "POST",
+        body: {
+          name: "handoff-project",
+          rootPath: root,
+          permissions: { read: true, write: true, execute: true },
+        },
+      })
+    ).body;
+    const boards = (await api(`/api/workspaces/${workspace.id}/boards`)).body;
+    const documentPath = `/api/workspaces/${workspace.id}/boards/${boards[0].id}/document`;
+    const current = (await api(documentPath)).body;
+    const stamp = new Date().toISOString();
+    const sourceId = randomUUID();
+    const targetId = randomUUID();
+    const terminalNode = (id, title, x, data) => ({
+      id,
+      boardId: boards[0].id,
+      type: "terminal",
+      title,
+      color: "#0a84ff",
+      position: { x, y: 0 },
+      size: { width: 520, height: 330 },
+      labels: [],
+      note: "",
+      data: { kind: "terminal", agent: { id: "claude" }, ...data },
+      createdAt: stamp,
+      updatedAt: stamp,
+    });
+    await api(documentPath, {
+      method: "PUT",
+      body: {
+        expectedUpdatedAt: current.board.updatedAt,
+        nodes: [
+          ...current.nodes,
+          terminalNode(sourceId, "远端来源", 0, { ssh: { hostId: HOST_ID } }),
+          terminalNode(targetId, "本机目标", 600, {}),
+        ],
+        edges: current.edges,
+        viewport: current.board.viewport ?? { x: 0, y: 0, zoom: 1 },
+        whiteboard: current.whiteboard ?? "",
+      },
+    });
+    for (const [from, to, title] of [
+      [sourceId, targetId, "本机目标"],
+      [targetId, sourceId, "远端来源"],
+    ]) {
+      await api(`/api/workspaces/${workspace.id}/context-links/${from}`, {
+        method: "PUT",
+        body: { links: [{ id: to, title, kind: "terminal" }] },
+      });
+    }
+    const source = (
+      await api("/api/terminals", {
+        method: "POST",
+        body: {
+          workspaceId: workspace.id,
+          cwd: root,
+          nodeId: sourceId,
+          agent: { id: "claude" },
+          ssh: { hostId: HOST_ID },
+        },
+      })
+    ).body;
+    const target = (
+      await api("/api/terminals", {
+        method: "POST",
+        body: {
+          workspaceId: workspace.id,
+          cwd: root,
+          nodeId: targetId,
+          agent: { id: "claude" },
+        },
+      })
+    ).body;
+    const capture = async () =>
+      (await api(`/api/terminals/${source.id}/capture?lines=40`)).body.data ??
+      "";
+    for (let round = 0; round < 100; round += 1) {
+      if (/\$\s*$/mu.test(await capture())) break;
+      await sleep(100);
+    }
+    // 假 CLI 在「执行主机」上报 SessionStart，带着那边的转录路径。
+    await api(`/api/terminals/${source.id}/paste`, {
+      method: "POST",
+      body: { text: "claude --model probe", enter: true },
+    });
+    const database = new DatabaseSync(join(ctx.data, "canvas.db"), {
+      readOnly: true,
+    });
+    let status;
+    try {
+      for (let round = 0; round < 150 && status === undefined; round += 1) {
+        status = database
+          .prepare(
+            "SELECT * FROM agent_status WHERE node_id = ? AND session_id = 'remote-probe-session' AND verified = 1",
+          )
+          .get(sourceId);
+        if (status === undefined) await sleep(100);
+      }
+    } finally {
+      database.close();
+    }
+    if (status === undefined) {
+      throw new Error(`来源 Agent 的 SessionStart 没有到：${await capture()}`);
+    }
+    const prepared = await api(`/api/workspaces/${workspace.id}/handoffs`, {
+      method: "POST",
+      allowFailure: true,
+      body: {
+        sourceNodeId: sourceId,
+        sourceSessionId: source.id,
+        sourceGeneration: source.generation ?? 1,
+        targetNodeId: targetId,
+        targetSessionId: target.id,
+        targetGeneration: target.generation ?? 1,
+        sections: { goal: "接着把远端那块迁完" },
+        filePaths: ["plan.md"],
+        byteBudget: 8192,
+        includeTranscript: true,
+      },
+    });
+    const bundle = prepared.body?.bundle;
+    check(
+      prepared.status === 200 && bundle?.capturedOn === HOST_ID,
+      "跨主机交接：来源转录在假远端上采集，capturedOn 记主机",
+      `${prepared.status} · ${bundle?.capturedOn ?? JSON.stringify(prepared.body)}`,
+    );
+    check(
+      String(bundle?.transcriptExcerpt).includes("远端转录") &&
+        bundle?.files?.[0]?.executionHost === "local-runtime",
+      "转录来自执行主机，文件引用仍在本机工作空间读",
+      `${String(bundle?.transcriptExcerpt).slice(0, 60)} · ${bundle?.files?.[0]?.executionHost}`,
+    );
+
+    // Worker 舰队：执行主机行带上次握手的 Worker，重新同步走一遍真握手。
+    const row = (await api(`/api/execution-hosts/${HOST_ID}`)).body;
+    check(
+      row.worker?.version !== undefined && row.worker.outdated === false,
+      "执行主机行带 Worker 版本，未过旧",
+      JSON.stringify(row.worker ?? null),
+    );
+    const integration = (await api("/api/agents/claude/integration")).body;
+    check(
+      Array.isArray(integration.outdatedHosts) &&
+        integration.outdatedHosts.length === 0,
+      "集成状态给出 outdatedHosts（同一构建的 Worker 不在其中）",
+      JSON.stringify(integration.outdatedHosts),
+    );
+    await openSettings(page, "执行主机");
+    await page.waitFor(
+      `return document.body.innerText.includes("Worker ${row.worker?.version ?? ""}");`,
+      { what: "执行主机页的 Worker 版本徽标" },
+    );
+    await page.click('[role="dialog"] button', "重新同步", { exact: true });
+    await page.waitFor(
+      `return document.body.innerText.includes("已重新同步 ${HOST_NAME}");`,
+      { what: "「已重新同步」提示", timeout: 60_000 },
+    );
+    await page.capture("09-handoff-fleet");
+    const after = (await api(`/api/execution-hosts/${HOST_ID}`)).body;
+    check(
+      after.worker?.connected === true &&
+        after.worker.checkedAt >= row.worker.checkedAt,
+      "重新同步：重新握手，Worker 在线",
+      JSON.stringify(after.worker ?? null),
+    );
+    await closeDialogs(page);
+    for (const session of [source, target]) {
+      await api(`/api/terminals/${session.id}/terminate`, {
+        method: "POST",
+        body: { mode: "process" },
+        allowFailure: true,
+      });
+    }
   });
 
   const final = page.drain();

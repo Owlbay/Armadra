@@ -69,6 +69,18 @@ describe("GET /api/settings", () => {
     expect((body.terminal as JsonObject).backend).toBe("auto");
   });
 
+  it("answers the completion-plan sections with their defaults", () => {
+    const body = getSettings(deps()).body as JsonObject;
+    expect((body.gateway as JsonObject).enabled).toBe(false);
+    expect((body.push as JsonObject).transport).toBe("log");
+    expect(((body.identity as JsonObject).mfa as JsonObject).requireFor).toBe(
+      "none",
+    );
+    expect((body.collab as JsonObject).realtime).toBe(true);
+    expect((body.usage as JsonObject).claudeUsage).toBe(false);
+    expect((body.diagnostics as JsonObject).crashReportDsn).toBe("");
+  });
+
   it("says where the local half lives rather than implying it", () => {
     const answer = getLocalSettings(deps());
     const body = answer.body as JsonObject;
@@ -81,6 +93,10 @@ describe("GET /api/settings", () => {
       "agents.probes",
       "language.probes",
       "language.servers",
+      "gateway",
+      "push.apns.keyFile",
+      "push.fcm.serviceAccountFile",
+      "cloud.relay",
     ]);
   });
 });

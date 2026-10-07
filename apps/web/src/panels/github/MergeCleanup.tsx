@@ -3,15 +3,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
+import { sk } from "../../sources/scope";
 import { Button } from "@/ui/button";
 import { runtimeApi } from "@/api/client";
 import { useT } from "@/app/preferences-store";
@@ -21,7 +22,6 @@ import { invalidateGitQueries } from "../git/queries";
 import { failureKey, shortSha } from "./model";
 import { githubKeys } from "./queries";
 import {
-  DeleteGithubBranchResponse,
   GithubApi,
   GithubPullRequest,
   GithubPullState,
@@ -35,6 +35,70 @@ export interface MergeCleanupProps {
   pull: GithubPullRequest;
   canWrite: boolean;
   busy: boolean;
+}
+
+/** GitHub 那一面：删分支走 §5 的 `delete-branch`。 */
+export function MergeCleanup({
+  client,
+  workspaceId,
+  repository,
+  pull,
+  canWrite,
+  busy,
+}: MergeCleanupProps) {
+  const queryClient = useQueryClient();
+  return (
+    <MergeCleanupView
+      workspaceId={workspaceId}
+      pull={{
+        headRef: pull.headRef,
+        headSha: pull.headSha,
+        fromFork: pull.fromFork,
+        merged: pull.state === GithubPullState.MERGED,
+      }}
+      canWrite={canWrite}
+      busy={busy}
+      failureKey={failureKey}
+      deleteBranch={() =>
+        client.deleteBranch({
+          repository,
+          branch: pull.headRef,
+          // The SHA the panel displayed. A branch that moved since then carries
+          // commits this merge did not take, and the Host refuses.
+          expectedSha: pull.headSha,
+        })
+      }
+      onBranchDeleted={() =>
+        void queryClient.invalidateQueries({ queryKey: githubKeys.all })
+      }
+    />
+  );
+}
+
+/** 清理要的那几项：GitHub 的 PR 与 Gitea / GitLab 的 PR·MR 都有。 */
+export interface CleanupPull {
+  readonly headRef: string;
+  readonly headSha: string;
+  readonly fromFork: boolean;
+  readonly merged: boolean;
+}
+
+/** 删分支的结果：没删时 `reasonCode` 说为什么（与 §5 / §29 同形）。 */
+export interface BranchDeletion {
+  readonly deleted: boolean;
+  readonly reasonCode: string;
+}
+
+export interface MergeCleanupViewProps {
+  workspaceId: string;
+  pull: CleanupPull;
+  canWrite: boolean;
+  busy: boolean;
+  /** 删远端分支（带着页面上显示的 head）。 */
+  deleteBranch: () => Promise<BranchDeletion>;
+  onBranchDeleted: () => void;
+  /** 拒绝 → i18n 键（GitHub 与托管平台各有各的错误码）。 */
+  failureKey: (error: unknown) => string;
 }
 
 /**
@@ -53,21 +117,22 @@ export interface MergeCleanupProps {
  * 绑定，不动磁盘，两者顺序反过来就会留下一个指不到东西的 Frame。运行中的
  * 会话一概不动。
  */
-export function MergeCleanup({
-  client,
+export function MergeCleanupView({
   workspaceId,
-  repository,
   pull,
   canWrite,
   busy,
-}: MergeCleanupProps) {
+  deleteBranch: removeBranch,
+  onBranchDeleted,
+  failureKey: refusalKey,
+}: MergeCleanupViewProps) {
   const t = useT();
   const queryClient = useQueryClient();
   const [confirm, setConfirm] = React.useState<"branch" | "worktree" | null>(
     null,
   );
   const [branchOutcome, setBranchOutcome] =
-    React.useState<DeleteGithubBranchResponse | null>(null);
+    React.useState<BranchDeletion | null>(null);
 
   const workspaceRoot = useCanvasStore((state) => state.workspace?.rootPath);
   const nodes = useCanvasStore((state) => state.document?.nodes);
@@ -75,9 +140,9 @@ export function MergeCleanup({
   // Cleanup is only a question once the pull request is merged, so the
   // worktree list is only read then: an unmerged pull request must not make
   // the panel walk the repository for a section nobody is going to see.
-  const merged = canWrite && pull.state === GithubPullState.MERGED;
+  const merged = canWrite && pull.merged;
   const worktrees = useQuery({
-    queryKey: ["git-repository-worktrees", workspaceId, "."],
+    queryKey: sk("git-repository-worktrees", workspaceId, "."),
     queryFn: ({ signal }) =>
       runtimeApi.gitRepositoryWorktrees(workspaceId, signal),
     enabled: merged,
@@ -101,19 +166,12 @@ export function MergeCleanup({
     Boolean(checkout.headOid);
 
   const deleteBranch = useMutation({
-    mutationFn: () =>
-      client.deleteBranch({
-        repository,
-        branch: pull.headRef,
-        // The SHA the panel displayed. A branch that moved since then carries
-        // commits this merge did not take, and the Host refuses.
-        expectedSha: pull.headSha,
-      }),
+    mutationFn: removeBranch,
     onSuccess: (result) => {
       setBranchOutcome(result);
-      void queryClient.invalidateQueries({ queryKey: githubKeys.all });
+      onBranchDeleted();
     },
-    onError: (error: unknown) => toast.error(t(failureKey(error))),
+    onError: (error: unknown) => toast.error(t(refusalKey(error))),
   });
 
   const removeWorktree = useMutation({
@@ -214,29 +272,29 @@ export function MergeCleanup({
         </p>
       )}
 
-      <AlertDialog
+      <ResponsiveAlertDialog
         open={confirm !== null}
         onOpenChange={(open) => {
           if (!open) setConfirm(null);
         }}
       >
-        <AlertDialogContent className="z-[var(--z-dialog)]">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
+        <ResponsiveAlertDialogContent className="z-[var(--z-dialog)]">
+          <ResponsiveAlertDialogHeader>
+            <ResponsiveAlertDialogTitle>
               {t(
                 confirm === "worktree"
                   ? "github.cleanup.confirmWorktree"
                   : "github.cleanup.confirmBranch",
               )}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
+            </ResponsiveAlertDialogTitle>
+            <ResponsiveAlertDialogDescription>
               {t(
                 confirm === "worktree"
                   ? "github.cleanup.confirmWorktreeNote"
                   : "github.cleanup.confirmBranchNote",
               )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
+            </ResponsiveAlertDialogDescription>
+          </ResponsiveAlertDialogHeader>
           <dl className="grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
             <dt className="text-muted-foreground">{t("github.pull.head")}</dt>
             <dd className="min-w-0 truncate">{pull.headRef}</dd>
@@ -268,11 +326,11 @@ export function MergeCleanup({
               </>
             )}
           </dl>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="min-h-10">
+          <ResponsiveAlertDialogFooter>
+            <ResponsiveAlertDialogCancel className="min-h-10">
               {t("github.cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
+            </ResponsiveAlertDialogCancel>
+            <ResponsiveAlertDialogAction
               className="min-h-10"
               onClick={() => {
                 const action = confirm;
@@ -286,10 +344,10 @@ export function MergeCleanup({
               }}
             >
               {t("github.cleanup.confirmAction")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </ResponsiveAlertDialogAction>
+          </ResponsiveAlertDialogFooter>
+        </ResponsiveAlertDialogContent>
+      </ResponsiveAlertDialog>
     </section>
   );
 }

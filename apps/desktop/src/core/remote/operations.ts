@@ -48,7 +48,7 @@ import {
   stagePaths,
   unstagePaths,
 } from "../git/stage";
-import { readStatusAt, readStatusBatch } from "../git/status";
+import { readStatusBatch, readStatusFiltered } from "../git/status";
 import { ImportBatch, fileInfo } from "../imports/batch";
 import {
   createEntry,
@@ -66,10 +66,21 @@ import { badRequest } from "../workspaces/support";
 import type { WorkerSession } from "./session";
 import { type RootFingerprint, fingerprintOf } from "./switch";
 import { trackOperation } from "./git-worker";
+import {
+  ASSETS_CAPABILITY,
+  FILES_CAPABILITY,
+  GIT_CAPABILITY,
+  GIT_OPERATIONS_CAPABILITY,
+  HANDOFF_CAPABILITY,
+  INTEGRATION_CAPABILITY,
+  RESOURCES_CAPABILITY,
+  TRANSFER_CAPABILITY,
+  WATCH_CAPABILITY,
+} from "./capabilities";
+import { handoffCapture } from "./handoff-worker";
 import { readRemoteResources } from "./resources-worker";
 import { unwatchFiles, watchFiles } from "./watch-worker";
-import { capture as captureHandoff, captureArgs } from "../handoff/capture";
-import { writePngExport } from "../assets/exports";
+import { writePngExport, writeTextExport } from "../assets/exports";
 import {
   assetExtension,
   decodeAssetDataUrl,
@@ -87,6 +98,7 @@ import {
   transferStatus,
   writeChunk,
 } from "./transfer-worker";
+import { probeAgents } from "./node-probe";
 import {
   listenHooks,
   locate as locateIntegration,
@@ -457,10 +469,23 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
       dataUrl,
     );
   }),
+  /** 输出到画板的代码块：落在 Agent 的工作目录（在工作区内时）或工作区根。 */
+  "assets.exportText": write((context, root, args) =>
+    writeTextExport(
+      canonicalDirectory(root),
+      text(args, "exportId"),
+      text(args, "name"),
+      typeof args.content === "string"
+        ? args.content
+        : takeTransfer(context.stateDir, args.transfer, true).toString("utf8"),
+      typeof args.cwd === "string" ? args.cwd : undefined,
+    ),
+  ),
 
   /* ------------------------------- git ------------------------------- */
   "git.status": read(
-    async (_c, root, args) => await readStatusAt(root, path(args)),
+    async (_c, root, args) =>
+      await readStatusFiltered(root, path(args), texts(args, "paths")),
   ),
   "git.statusBatch": read(
     async (_c, root, args) =>
@@ -763,11 +788,15 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
     replyHook(context.session, args),
   ),
 
+  /**
+   * 这台机器上装没装这些 Agent 程序（SSH 节点的 ACP，契约 §26）；只读。能力位
+   * 复用 `remote.integration.v1`：没有这个动作的旧 Worker 答 501。
+   */
+  "agents.probe": read((_context, _root, args) => probeAgents(args)),
+
   /* ------------------------------ 交接 ------------------------------ */
   /** 交接材料里要在执行主机上读的：文件引用、Git 指纹、SSH Agent 的转录尾巴。 */
-  "handoff.capture": read((_c, root, args) =>
-    captureHandoff(root, captureArgs(args)),
-  ),
+  "handoff.capture": read((_c, root, args) => handoffCapture(root, args)),
 
   "git.rebaseTodo": read(
     async (context, root, args) =>
@@ -780,15 +809,18 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
   ),
 };
 
-/** 远端握手里声明的能力组；缺哪组，控制端对那组答 501 并写明能力名。 */
-export const FILES_CAPABILITY = "remote.files.v1";
-export const GIT_CAPABILITY = "remote.git.v1";
-/** 长操作队列、集成状态、工作树绑定与 AI 提交信息的采集。 */
-export const GIT_OPERATIONS_CAPABILITY = "remote.git.operations.v1";
-/** Worker 侧文件监听，变化主动推送。 */
-export const WATCH_CAPABILITY = "remote.watch.v1";
-/** 远端主机总览与会话进程树的一轮读取。 */
-export const RESOURCES_CAPABILITY = "remote.resources.v1";
+export {
+  ASSETS_CAPABILITY,
+  FILES_CAPABILITY,
+  GIT_CAPABILITY,
+  GIT_OPERATIONS_CAPABILITY,
+  HANDOFF_CAPABILITY,
+  INTEGRATION_CAPABILITY,
+  INTEGRATION_V2_CAPABILITY,
+  RESOURCES_CAPABILITY,
+  TRANSFER_CAPABILITY,
+  WATCH_CAPABILITY,
+} from "./capabilities";
 
 const GIT_OPERATION_NAMES = new Set([
   "git.operationStart",
@@ -799,17 +831,6 @@ const GIT_OPERATION_NAMES = new Set([
   "git.worktreeBinding",
   "git.messageCapture",
 ]);
-
-/** 画布注入的产物同步与 Hook 中继。 */
-export const INTEGRATION_CAPABILITY = "remote.integration.v1";
-
-/** 比一帧大的字节：分块上传、续传与分块下载。 */
-export const TRANSFER_CAPABILITY = "remote.transfer.v1";
-/** 白板图片资产与画布导出落在执行主机上。 */
-export const ASSETS_CAPABILITY = "remote.assets.v1";
-
-/** 交接材料在执行主机上的采集。 */
-export const HANDOFF_CAPABILITY = "remote.handoff.v1";
 
 /** 一个操作属于哪个能力组。 */
 export function capabilityOf(operation: string): string | undefined {
@@ -830,7 +851,11 @@ export function capabilityOf(operation: string): string | undefined {
   if (operation.startsWith("git.")) return GIT_CAPABILITY;
   if (operation.startsWith("resources.")) return RESOURCES_CAPABILITY;
   if (operation.startsWith("handoff.")) return HANDOFF_CAPABILITY;
-  if (operation.startsWith("integration.") || operation.startsWith("hook.")) {
+  if (
+    operation.startsWith("integration.") ||
+    operation.startsWith("hook.") ||
+    operation.startsWith("agents.")
+  ) {
     return INTEGRATION_CAPABILITY;
   }
   return undefined;

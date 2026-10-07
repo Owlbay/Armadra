@@ -18,7 +18,12 @@ export function isLoopbackOrigin(origin: string): boolean {
 }
 
 export const CORS_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
-export const CORS_HEADERS = "content-type";
+/**
+ * `authorization`：桌面壳的页面跨端口打 core（页面在壳的静态服务上），GitHub 与
+ * 自动化两面要它带票据换来的 Bearer（契约 §3.2，安全审查 L9）。它不在 CORS 的
+ * 安全名单上，不在这里列出，浏览器的预检就把带它的请求拦掉。
+ */
+export const CORS_HEADERS = "content-type, authorization";
 
 /**
  * 壳注入的额外允许来源。

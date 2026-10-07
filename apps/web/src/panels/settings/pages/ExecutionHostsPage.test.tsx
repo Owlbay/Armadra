@@ -18,6 +18,7 @@ const api = vi.hoisted(() => ({
   exportExecutionHosts: vi.fn(),
   importExecutionHosts: vi.fn(),
   switchExecutionHost: vi.fn(),
+  resyncExecutionHost: vi.fn(),
 }));
 const refusal = vi.hoisted(() => vi.fn());
 const toasts = vi.hoisted(() => ({
@@ -203,6 +204,141 @@ describe("execution hosts page", () => {
     expect(
       screen.queryByRole("button", { name: "Stop and switch" }),
     ).toBeNull();
+  });
+
+  /**
+   * The Worker fleet (contract §21.2): a host seen at a handshake carries its
+   * Worker — the version, or "outdated" — and every host with a Worker gets a
+   * resync that reconnects it and re-syncs the canvas injection.
+   */
+  it("shows the Worker it last saw and resyncs the host", async () => {
+    const worker = {
+      version: "0.0.9",
+      capabilities: [],
+      outdated: true,
+      connected: false,
+      checkedAt: "2026-10-03T00:00:00Z",
+    };
+    api.executionHosts.mockResolvedValue([local, { ...box, worker }]);
+    api.resyncExecutionHost.mockResolvedValue({
+      ...box,
+      worker: { ...worker, version: "0.1.0", outdated: false },
+    });
+    mount();
+    expect(await screen.findByText("Worker outdated")).toBeTruthy();
+    await click(screen.getByRole("button", { name: "Resync" }));
+    await waitFor(() =>
+      expect(api.resyncExecutionHost).toHaveBeenCalledWith("build-box"),
+    );
+    await waitFor(() =>
+      expect(toasts.success).toHaveBeenCalledWith("Resynced Build box"),
+    );
+  });
+
+  it("shows a current Worker's version and offers no resync without one", async () => {
+    api.executionHosts.mockResolvedValue([
+      local,
+      {
+        ...box,
+        worker: {
+          version: "0.1.0",
+          capabilities: [],
+          outdated: false,
+          connected: true,
+          checkedAt: "2026-10-03T00:00:00Z",
+        },
+      },
+      {
+        ...box,
+        executionHostId: "bare",
+        name: "Bare",
+        workerConfigured: false,
+      },
+    ]);
+    mount();
+    expect(await screen.findByText("Worker 0.1.0")).toBeTruthy();
+    expect(screen.queryByText("Worker outdated")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Resync" })).toHaveLength(1);
+  });
+
+  /**
+   * The fleet view (contract §21.3): online or not, the health history behind
+   * a button that opens the detail table, and one "resync all" that goes host
+   * by host and says which ones did not make it.
+   */
+  it("shows online state and health history, and resyncs the whole fleet", async () => {
+    const worker = {
+      version: "0.1.0",
+      capabilities: [],
+      outdated: false,
+      connected: true,
+      checkedAt: "2026-10-03T00:00:00Z",
+    };
+    const far = {
+      ...box,
+      executionHostId: "far",
+      name: "Far",
+      worker: { ...worker, connected: false },
+      health: [
+        {
+          at: "2026-10-03T00:00:00Z",
+          event: "handshake" as const,
+          ok: true,
+          version: "0.1.0",
+        },
+        {
+          at: "2026-10-03T00:01:00Z",
+          event: "disconnected" as const,
+          ok: false,
+        },
+        {
+          at: "2026-10-03T00:02:00Z",
+          event: "failed" as const,
+          ok: false,
+          code: "unreachable",
+        },
+      ],
+    };
+    api.executionHosts.mockResolvedValue([local, { ...box, worker }, far]);
+    api.resyncExecutionHost.mockImplementation(async (id: string) => {
+      if (id === "far") throw new Error("unavailable");
+      return { ...box, worker };
+    });
+    mount();
+    expect(await screen.findByText("Online")).toBeTruthy();
+    expect(screen.getByText("Offline")).toBeTruthy();
+
+    const history = screen.getByRole("button", {
+      name: "Health history: 3 entries, 2 problems",
+    });
+    await click(history);
+    expect(await screen.findByText("Disconnected")).toBeTruthy();
+    expect(screen.getByText("Handshake")).toBeTruthy();
+    // 验证的原因码有现成译文。
+    expect(screen.getByText("Unreachable")).toBeTruthy();
+    await act(async () => {
+      fireEvent.keyDown(document.activeElement ?? document.body, {
+        key: "Escape",
+      });
+    });
+
+    await click(screen.getByRole("button", { name: "Resync all" }));
+    await waitFor(() =>
+      expect(toasts.error).toHaveBeenCalledWith("1 hosts did not resync", {
+        description: "Far",
+      }),
+    );
+    expect(api.resyncExecutionHost.mock.calls.map((call) => call[0])).toEqual([
+      "build-box",
+      "far",
+    ]);
+  });
+
+  it("offers no resync-all with a single Worker host", async () => {
+    api.executionHosts.mockResolvedValue([local, box]);
+    mount();
+    expect(await screen.findByRole("button", { name: "Resync" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Resync all" })).toBeNull();
   });
 
   /**

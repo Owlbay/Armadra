@@ -24,14 +24,19 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
+  statSync,
+  writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   HOOK_LAUNCHER_RESOURCE,
   compileHookLauncher,
 } from "./hook-launcher.mjs";
+import { LAUNCH_EXE_RESOURCE, compileLaunchExe } from "./launch-exe.mjs";
 
 const app = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -144,12 +149,32 @@ export function bundleResources(platformName) {
     // `process.resourcesPath` in a packaged app; without this entry the
     // packaged tray logged "could not be loaded" and stayed off.
     { from: "build/icons/icon.png", to: "tray.png" },
+    // The bundled `ama` (the pinned `@armadra/agent`'s single-file runtime and
+    // the sandbox helper it loads from beside itself) and Armadra's host
+    // adapter for it (docs/design/coordinator-agent.md §2.5). Real files: the
+    // `<data>/bin/ama` launcher names the first, the profile's `host` the
+    // last, and neither reader can open an asar. On Windows the launcher is a
+    // copy of `cli/armadra-hook.exe`, so no second program is built.
+    { from: "out/agent/ama.cjs", to: "agent/ama.cjs" },
+    { from: "out/agent/ama-sandbox.cjs", to: "agent/ama-sandbox.cjs" },
+    {
+      from: "out/agent-host/ama-armadra.cjs",
+      to: "agent-host/ama-armadra.cjs",
+    },
   ];
   if (platformName === "win32")
-    resources.push({
-      from: "out/session-host/host.cjs",
-      to: "session-host/host.cjs",
-    });
+    resources.push(
+      {
+        from: "out/session-host/host.cjs",
+        to: "session-host/host.cjs",
+      },
+      // What build/installer.nsh runs before it replaces or removes the
+      // executable a leftover host is running on.
+      {
+        from: "out/session-host/shutdown-if-idle.cjs",
+        to: "session-host/shutdown-if-idle.cjs",
+      },
+    );
   return resources;
 }
 
@@ -176,17 +201,235 @@ export function migrationResources(from = join(app, MIGRATIONS_FROM)) {
 }
 
 /**
- * Everything this hook places for a platform: the `out/` bundles, then the
- * migrations the core reads at start-up.
+ * The server shell the installer carries, so `Armadra serve` can run the same
+ * core and page on its own (`main/serve-launch.ts`; platform plan A5-1):
+ * `apps/server/out/main.js` (esbuild, one CJS file) and the page under
+ * `resources/server/web/`. The page is the desktop's own `out/renderer` —
+ * electron-vite builds it from `apps/web`'s config unchanged, so it is the
+ * artifact `pnpm --filter @armadra/web build` produces and the window and the
+ * served page cannot drift apart. The migrations, the hook client and the bundled ama are
+ * not copied again: the shell finds `resources/migrations` through
+ * `ARMADRA_CORE_MIGRATIONS_DIR` and the rest one directory up from itself.
+ * `node-pty` is the one native module and stays where the desktop has it
+ * (`app.asar.unpacked`), reached through `NODE_PATH`, so both shells run the
+ * same binary under the same Electron ABI.
+ */
+export const SERVER_FROM = "../server/out/main.js";
+export const SERVER_TO = "server/main.js";
+export const WEB_FROM = "out/renderer";
+export const WEB_TO = "server/web";
+
+/** Every file under `directory`, relative and `/`-separated, sorted. */
+function filesUnder(directory, prefix = "") {
+  return readdirSync(directory)
+    .sort()
+    .flatMap((name) => {
+      const full = join(directory, name);
+      const relative = prefix === "" ? name : `${prefix}/${name}`;
+      return statSync(full).isDirectory()
+        ? filesUnder(full, relative)
+        : [relative];
+    });
+}
+
+/**
+ * The server shell and the page it serves, as `{from, to}` pairs. Copied file
+ * by file for the same reason as the migrations: one retry path for everything
+ * this hook places. A checkout that has not built the page yet lists none of
+ * its files (so the pure listing still works in tests); the hook itself
+ * refuses to pack without it ({@link requireServerBuild}).
+ */
+export function serverResources(webFrom = join(app, WEB_FROM)) {
+  return [
+    { from: SERVER_FROM, to: SERVER_TO },
+    ...(existsSync(webFrom) ? filesUnder(webFrom) : []).map((name) => ({
+      from: `${WEB_FROM}/${name}`,
+      to: `${WEB_TO}/${name}`,
+    })),
+  ];
+}
+
+/** Both server-shell products must exist before anything is packed. */
+export function requireServerBuild(
+  webFrom = join(app, WEB_FROM),
+  serverFrom = join(app, SERVER_FROM),
+  exists = existsSync,
+) {
+  if (!exists(serverFrom))
+    throw new Error(
+      `after-pack: ${serverFrom} is missing; run pnpm --filter @armadra/server build before packaging`,
+    );
+  if (!exists(join(webFrom, "index.html")))
+    throw new Error(
+      `after-pack: ${join(webFrom, "index.html")} is missing; run electron-vite build before packaging`,
+    );
+}
+
+/**
+ * The third-party notices that ship inside every bundle (external-services
+ * §11.3), as `{from, to}` pairs under the resources directory:
+ *
+ * - the repository's generated `THIRD_PARTY_NOTICES.md` (`tools/notices.mjs`),
+ *   which Settings → About also shows;
+ * - the bundled ama's own `LICENSE` and `THIRD_PARTY_NOTICES.md`, beside the
+ *   `agent/ama.cjs` they describe — `@armadra/agent` is bundled into that one
+ *   file, so its notices would otherwise not travel at all.
+ */
+export function noticeResources() {
+  return [
+    { from: "../../THIRD_PARTY_NOTICES.md", to: "THIRD_PARTY_NOTICES.md" },
+    { from: "node_modules/@armadra/agent/LICENSE", to: "agent/LICENSE" },
+    {
+      from: "node_modules/@armadra/agent/THIRD_PARTY_NOTICES.md",
+      to: "agent/THIRD_PARTY_NOTICES.md",
+    },
+  ];
+}
+
+/**
+ * Electron's own two notice files, which its license and Chromium's require to
+ * accompany the binaries: `LICENSE` (published as `LICENSE.electron.txt`) and
+ * `LICENSES.chromium.html`.
+ *
+ * electron-builder copies them next to the executable on Windows and Linux but
+ * drops them on macOS (electron/electron#34236), so on macOS they are put back
+ * into `Contents/Resources/`; on the other two they are put where they belong
+ * only if the packager left them out. `{from, to}` with `from` relative to the
+ * Electron distribution and `to` an absolute path.
+ */
+export function electronNoticePlacements(
+  platformName,
+  { appOutDir, resourcesDir },
+) {
+  const into = platformName === "darwin" ? resourcesDir : appOutDir;
+  return [
+    { from: "LICENSE", to: join(into, "LICENSE.electron.txt") },
+    {
+      from: "LICENSES.chromium.html",
+      to: join(into, "LICENSES.chromium.html"),
+    },
+  ];
+}
+
+/**
+ * The unpacked Electron distribution this checkout installed, unpacking it
+ * first when it is not there.
+ *
+ * electron-builder packs from its own download cache, so `node_modules/electron`
+ * can be a package with no `dist/` at all — pnpm runs electron's postinstall
+ * only for an install made after `allowBuilds.electron` (see
+ * `ensure-electron.mjs`), and the release runners hit exactly that. The two
+ * notice files exist only in that distribution, so this runs electron's own
+ * `install.js` (the same download, through the same cache) when they are
+ * missing. Called only when a notice actually has to be copied.
+ */
+export function electronDist({ run = spawnSync, log = console.log } = {}) {
+  const require = createRequire(join(app, "package.json"));
+  const packageDir = dirname(require.resolve("electron/package.json"));
+  const dist = join(packageDir, "dist");
+  if (!existsSync(join(dist, "LICENSES.chromium.html"))) {
+    log(
+      "after-pack: Electron's distribution is not unpacked; running electron's install.js for its notices",
+    );
+    const result = run(process.execPath, [join(packageDir, "install.js")], {
+      cwd: packageDir,
+      stdio: "inherit",
+    });
+    if (result.status !== 0)
+      throw new Error(
+        `after-pack: electron's install.js exited with ${result.status}; its notices cannot be shipped`,
+      );
+  }
+  return dist;
+}
+
+/** Places Electron's notices; returns the destinations written. */
+export function placeElectronNotices(
+  platformName,
+  dirs,
+  { dist = electronDist, copy = copyWithRetry, exists = existsSync } = {},
+) {
+  const written = [];
+  let from;
+  for (const placement of electronNoticePlacements(platformName, dirs)) {
+    if (platformName !== "darwin" && exists(placement.to)) continue;
+    from ??= dist();
+    const source = join(from, placement.from);
+    if (!exists(source))
+      throw new Error(
+        `after-pack: ${source} is missing; Electron's notices must ship with the bundle`,
+      );
+    mkdirSync(dirname(placement.to), { recursive: true });
+    copy(source, placement.to);
+    written.push(placement.to);
+  }
+  return written;
+}
+
+/**
+ * Everything this hook places for a platform: the `out/` bundles, the
+ * third-party notices, the migrations the core reads at start-up, then the
+ * server shell and its page.
  *
  * There are no sidecar binaries any more. The core is one of those `out/`
  * bundles and runs on the Electron the app already ships, so nothing here is
  * marked executable.
  */
 export function placements(platformName) {
-  return [...bundleResources(platformName), ...migrationResources()].map(
-    (resource) => ({ ...resource, executable: false }),
-  );
+  return [
+    ...bundleResources(platformName),
+    ...noticeResources(),
+    ...migrationResources(),
+    ...serverResources(),
+  ].map((resource) => ({ ...resource, executable: false }));
+}
+
+/**
+ * The directory electron-updater caches downloads in, under the OS cache
+ * directory, and where the NSIS installer leaves its copy for the next
+ * differential download.
+ *
+ * electron-builder derives it from the package name (`AppInfo`'s
+ * `updaterCacheDirName` getter); a scoped name gives `@armadradesktop-updater`.
+ * The configuration has no key for it — a `publish.updaterCacheDirName` is
+ * overwritten — and renaming the package would also rename the Linux
+ * packages. So this hook does two things: it pins the getter on this build's
+ * `AppInfo`, which every later reader goes through (the deb / rpm targets
+ * write `app-update.yml` again after this hook, NSIS defines its store path
+ * from it), and it rewrites the `app-update.yml` electron-builder's own
+ * afterPack handler already wrote (system handlers run before user hooks).
+ */
+export const UPDATER_CACHE_DIR_NAME = "armadra-updater";
+
+/** Pins `appInfo.updaterCacheDirName` for the rest of this build. */
+export function pinUpdaterCacheDir(appInfo, name = UPDATER_CACHE_DIR_NAME) {
+  if (!appInfo || appInfo.updaterCacheDirName === name) return false;
+  Object.defineProperty(appInfo, "updaterCacheDirName", {
+    value: name,
+    configurable: true,
+  });
+  if (appInfo.updaterCacheDirName !== name)
+    throw new Error("after-pack: could not pin updaterCacheDirName");
+  return true;
+}
+
+/** `app-update.yml` with `updaterCacheDirName` set to ours. */
+export function withUpdaterCacheDir(text, name = UPDATER_CACHE_DIR_NAME) {
+  const line = `updaterCacheDirName: ${name}`;
+  if (/^updaterCacheDirName:.*$/m.test(text))
+    return text.replace(/^updaterCacheDirName:.*$/m, line);
+  return `${text.replace(/\n*$/, "\n")}${line}\n`;
+}
+
+/**
+ * Rewrites `<resources>/app-update.yml` when the packager wrote one (every
+ * target that can update). Returns whether a file was there.
+ */
+export function placeUpdaterCacheDir(resourcesDir) {
+  const path = join(resourcesDir, "app-update.yml");
+  if (!existsSync(path)) return false;
+  writeFileSync(path, withUpdaterCacheDir(readFileSync(path, "utf8")));
+  return true;
 }
 
 export default async function afterPack(context) {
@@ -194,6 +437,7 @@ export default async function afterPack(context) {
   const archName = ARCH_NAMES[context.arch] ?? process.arch;
   platformFor(platformName, archName);
   const resourcesDir = context.packager.getResourcesDir(context.appOutDir);
+  requireServerBuild();
   for (const placement of placements(platformName)) {
     const source = join(app, placement.from);
     if (!existsSync(source)) {
@@ -208,7 +452,18 @@ export default async function afterPack(context) {
       chmodSync(destination, 0o755);
     console.log(`after-pack: placed ${placement.to}`);
   }
+  for (const placed of placeElectronNotices(platformName, {
+    appOutDir: context.appOutDir,
+    resourcesDir,
+  }))
+    console.log(`after-pack: placed ${placed}`);
+  pinUpdaterCacheDir(context.packager.appInfo);
+  if (placeUpdaterCacheDir(resourcesDir))
+    console.log(
+      `after-pack: app-update.yml caches in ${UPDATER_CACHE_DIR_NAME}`,
+    );
   placeHookLauncher(platformName, resourcesDir);
+  placeLaunchExe(platformName, resourcesDir);
 }
 
 /**
@@ -238,5 +493,33 @@ export function placeHookLauncher(
   }
   const output = compile(join(resourcesDir, HOOK_LAUNCHER_RESOURCE));
   log(`after-pack: built ${HOOK_LAUNCHER_RESOURCE}`);
+  return output;
+}
+
+/**
+ * Builds `cli/armadra-launch.exe`, the canvas launcher, for a Windows target
+ * (see launch-exe.mjs). Same rule as {@link placeHookLauncher}: only a Windows
+ * host can compile it, a Windows target packaged elsewhere says so, and a
+ * failed compile on a Windows host fails the build. Without it that build's
+ * core starts canvas agents on a bare line, without injection.
+ */
+export function placeLaunchExe(
+  platformName,
+  resourcesDir,
+  {
+    host = process.platform,
+    compile = compileLaunchExe,
+    log = console.log,
+  } = {},
+) {
+  if (platformName !== "win32") return undefined;
+  if (host !== "win32") {
+    log(
+      `after-pack: WARNING ${LAUNCH_EXE_RESOURCE} not built (needs a Windows host); canvas agents on this build start without injection`,
+    );
+    return undefined;
+  }
+  const output = compile(join(resourcesDir, LAUNCH_EXE_RESOURCE));
+  log(`after-pack: built ${LAUNCH_EXE_RESOURCE}`);
   return output;
 }

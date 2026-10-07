@@ -16,6 +16,7 @@ import {
 import { useT } from "../../../app/preferences-store";
 import { cn } from "../../../lib/cn";
 import { Badge } from "../../../ui/badge";
+import { Checkbox as CheckboxPrimitive } from "../../../ui/checkbox";
 import { FileTypeIcon } from "../../../nodes/files/file-icons";
 import {
   pendingKey,
@@ -63,18 +64,13 @@ function Checkbox({
   onChange: (next: boolean) => void;
 }) {
   return (
-    <input
-      type="checkbox"
+    <CheckboxPrimitive
       aria-label={label}
-      className="size-3.5 shrink-0 accent-[var(--brand)]"
-      checked={checked}
+      className="size-3.5 shrink-0"
+      checked={partial && !checked ? "indeterminate" : checked}
       disabled={disabled}
-      // indeterminate 只有属性没有 attribute，只能落到节点上。
-      ref={(node) => {
-        if (node) node.indeterminate = Boolean(partial) && !checked;
-      }}
       onClick={(event) => event.stopPropagation()}
-      onChange={(event) => onChange(event.target.checked)}
+      onCheckedChange={(next) => onChange(next === true)}
     />
   );
 }
@@ -169,7 +165,7 @@ function FileRow({
       {node.group === "conflicts" && (
         <GitMerge
           aria-hidden
-          className="size-3.5 shrink-0 text-[var(--danger)]"
+          className="size-3.5 shrink-0 text-[var(--danger-text)]"
         />
       )}
       <StatusBadge node={node} />
@@ -351,7 +347,8 @@ export function ChangeTree({
                     className={cn(
                       "px-2 py-1 text-[11px] font-semibold tracking-wide text-muted-foreground",
                       showRepositories && "pl-4",
-                      section.group === "conflicts" && "text-[var(--danger)]",
+                      section.group === "conflicts" &&
+                        "text-[var(--danger-text)]",
                     )}
                   >
                     {t(`gitCommit.group.${section.group}`)}

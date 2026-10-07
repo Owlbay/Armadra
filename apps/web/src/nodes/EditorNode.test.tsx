@@ -54,13 +54,35 @@ describe("file attachments", () => {
         }
       />,
     );
-    const download = await screen.findByRole("link", { name: "下载文件" });
-    expect(download.getAttribute("download")).toBe("report.pdf");
-    expect(download.getAttribute("href")).toContain(
-      "file-download?path=.armadra%2Fimports%2Fa%2Freport.pdf",
-    );
+    const download = await screen.findByRole("button", { name: "下载文件" });
     expect(screen.getByText("2 KB · application/pdf")).toBeTruthy();
     expect(readFile).not.toHaveBeenCalled();
+    // 下载经 `fetch` 取回再交给一个 `blob:` 链接：桌面壳与原生 App 的凭据只
+    // 跟着 `fetch` 走（契约 §3.2），直接的 `<a href>` 在那两处是 401。
+    const fetchFile = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob(["%PDF"]),
+    });
+    vi.stubGlobal("fetch", fetchFile);
+    const createObjectURL = vi.fn(() => "blob:download");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    const clicked: { href: string; download: string }[] = [];
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        clicked.push({ href: this.href, download: this.download });
+      });
+    fireEvent.click(download);
+    await vi.waitFor(() => expect(clicked).toHaveLength(1));
+    expect(String(fetchFile.mock.calls[0]?.[0])).toContain(
+      "file-download?path=.armadra%2Fimports%2Fa%2Freport.pdf",
+    );
+    expect(clicked[0]).toEqual({
+      href: "blob:download",
+      download: "report.pdf",
+    });
+    click.mockRestore();
   });
   it("previews an image as bytes and releases its object URL on unmount", async () => {
     const createObjectURL = vi.fn(() => "blob:image-preview");
@@ -136,8 +158,9 @@ describe("file attachments", () => {
       />,
     );
     fireEvent.error(await screen.findByRole("img"));
-    const download = await screen.findByRole("link", { name: "下载文件" });
-    expect(download.getAttribute("download")).toBe("photo.heic");
+    expect(
+      await screen.findByRole("button", { name: "下载文件" }),
+    ).toBeTruthy();
     expect(screen.queryByRole("img")).toBeNull();
   });
 
@@ -195,7 +218,9 @@ describe("file attachments", () => {
     );
     // 播放不了就退回下载卡片。
     fireEvent.error(document.querySelector("audio")!);
-    expect(await screen.findByRole("link", { name: "下载文件" })).toBeTruthy();
+    expect(
+      await screen.findByRole("button", { name: "下载文件" }),
+    ).toBeTruthy();
     expect(readFile).not.toHaveBeenCalled();
   });
 
@@ -230,5 +255,40 @@ describe("file attachments", () => {
     expect(image.style.width).toBe("");
     // 透明区域铺棋盘格。
     expect(image.style.backgroundImage).toContain("repeating-conic-gradient");
+  });
+});
+
+describe("load states", () => {
+  it("says the read failed and reads again on retry", async () => {
+    usePreferencesStore.setState({ locale: "zh-CN" });
+    fileInfo.mockReset().mockRejectedValueOnce(new Error("offline"));
+    fileInfo.mockResolvedValue({
+      path: "docs/a.pdf",
+      name: "a.pdf",
+      size: 10,
+      mimeType: "application/pdf",
+      preview: "download",
+    });
+    render(
+      <EditorNode
+        id="node"
+        selected={false}
+        collapsed={false}
+        focused={false}
+        node={
+          {
+            title: "a.pdf",
+            data: { kind: "editor", path: "docs/a.pdf" },
+          } as never
+        }
+      />,
+    );
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("读取失败");
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(
+      await screen.findByRole("button", { name: "下载文件" }),
+    ).toBeTruthy();
+    expect(fileInfo).toHaveBeenCalledTimes(2);
   });
 });

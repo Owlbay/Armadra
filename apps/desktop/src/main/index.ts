@@ -1,4 +1,5 @@
-import { app, dialog, ipcMain, session } from "electron";
+import { app, dialog, ipcMain, safeStorage, session } from "electron";
+import { writeSync } from "node:fs";
 import { join } from "node:path";
 import {
   ALL_CHANNELS,
@@ -12,18 +13,27 @@ import {
   ipcRejection,
 } from "../shared/ipc";
 import { dataDir } from "../shell-core/paths";
+import { PendingJoinLink, joinLinkFromArgv } from "../shell-core/join-link";
+import {
+  type SecondInstanceData,
+  instanceProfileDir,
+  joinLinkOfData,
+} from "../shell-core/single-instance";
 import { DEFAULT_DEV_RENDERER_URL } from "../shell-core/window-rules";
 import {
+  APP_NAME,
   iconPath,
   setAboutPanel,
   setApplicationName,
   setDockIcon,
 } from "./branding";
 import { deviceName, issueCoreTicket } from "./core-ticket";
+import { CoreSession } from "../shell-core/core-session";
 import {
   DesktopLifecycle,
   quitFailureDialog,
   runQuitSequence,
+  sessionHostRelease,
 } from "./lifecycle";
 import {
   RuntimeProcess,
@@ -34,6 +44,15 @@ import {
 } from "./runtime-process";
 import { type PageSource, startPageSource } from "./static-server";
 import { traceLifecycle } from "./trace";
+import {
+  type CoreFetch,
+  connectGrants,
+  installCertificatePinning,
+  installRelayOriginRewrite,
+  relayResponseHeaders,
+  refreshRemoteTrust,
+} from "./remote-trust";
+import { installDiagnostics } from "./diagnostics";
 import { installUpdates } from "./updates";
 import {
   endpointsSnapshot,
@@ -61,17 +80,51 @@ import {
   setHostRect,
 } from "./browser";
 import { clearBrowsingData } from "./browser/clear-data";
-import { setDriveEnvironment } from "./runtime-process";
+import {
+  setCrashChannel,
+  setDriveEnvironment,
+  setSecretChannel,
+} from "./runtime-process";
+import { secretChannel } from "./secrets";
 import { pickDirectory } from "./dialogs";
 import { openExternal, showItemInFolder } from "./external";
+import { shareUrl } from "./share";
 import {
   installApplicationMenu,
   installKeydownIntercept,
   settleKeyIntent,
 } from "./menu";
 import { applyShortcuts, releaseShortcuts } from "./shortcuts";
-import { createTray, destroyTray } from "./tray";
+import { createTray, destroyTray, refreshGateway } from "./tray";
 import { ownsRuntime } from "../shell-core/runtime/identity";
+import { versionLine } from "./version-flag";
+
+// `armadra --version` answers and leaves before anything below is assembled:
+// no window, no Runtime, no data directory (see version-flag.ts). The write is
+// synchronous because stdout to a pipe is not on every platform.
+{
+  const line = versionLine(process.argv, APP_NAME, app.getVersion());
+  if (line !== null) {
+    writeSync(1, line);
+    process.exit(0);
+  }
+}
+
+// 单实例锁，按数据目录分（`shell-core/single-instance.ts`）：profile 目录先定，
+// 锁跟着它。已经有一个壳开着同一份数据目录时，把深链交给它（`second-instance`）
+// 就走——Windows 与 Linux 上点 `armadra://join` 不再起第二个窗口。在任何服务、
+// 窗口与 Runtime 装配之前判，第二个实例什么都不碰。
+{
+  const profile = instanceProfileDir(process.argv, process.env);
+  if (profile !== null) app.setPath("userData", profile);
+  const handoff: SecondInstanceData = {
+    joinLink: joinLinkFromArgv(process.argv),
+  };
+  if (!app.requestSingleInstanceLock(handoff)) {
+    // 交接在上面那次调用里已同步送达；同步退出，后面的装配不运行。
+    process.exit(0);
+  }
+}
 
 /**
  * The application's assembly. Everything with a rule worth stating lives in
@@ -84,8 +137,48 @@ const lifecycle = new DesktopLifecycle();
 const runtime = new RuntimeProcess();
 const development = !app.isPackaged;
 const updates = installUpdates(lifecycle, runtime);
+/**
+ * 可选崩溃上报（外部服务 §11.2）：设置里没填 DSN 就什么都不加载。在 ready
+ * 之前装，好让启动阶段的异常也算数；core 交来的错误经同一个通道。
+ */
+const diagnostics = installDiagnostics({
+  dataDir: dataDir(),
+  release: app.getVersion(),
+  environment: app.isPackaged ? "production" : "development",
+});
+setCrashChannel(diagnostics);
 /** Set by `start()` before any window exists; every origin decision reads it. */
 let page: PageSource | null = null;
+/** 主进程带会话打 core（`start()` 里装上）；源表变了时重读用。 */
+let coreFetch: CoreFetch | null = null;
+
+/**
+ * 分享深链（`armadra://join`，客户端包 §6.2）：Windows 与 Linux 把它放进启动
+ * 参数，macOS 走 `open-url`。记下来、提醒页面，页面取走后在「远程服务」里预填，
+ * 人点「加入」才挂载。协议只由打包配置（`electron-builder.yml` 的 `protocols`）
+ * 在安装时登记，壳运行时不改系统设置。
+ */
+const joinLinks = new PendingJoinLink(joinLinkFromArgv(process.argv));
+
+function receiveJoinLink(url: unknown): void {
+  if (!joinLinks.offer(url)) return;
+  const window = getMainWindow();
+  if (window === null) return;
+  window.webContents.send(IPC.sourcesJoinLink.channel);
+  revealWindow();
+}
+
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  receiveJoinLink(url);
+});
+// 同一份数据目录的第二个实例（Windows 与 Linux 上点深链）：深链优先取它交来的
+// 附加数据，没有再从它的 argv 找；只预填、不挂载。有没有深链都把窗口拿到前面。
+app.on("second-instance", (_event, argv, _cwd, data) => {
+  receiveJoinLink(joinLinkOfData(data) ?? joinLinkFromArgv(argv));
+  // 窗口还没建（启动途中）就不抢着建：页面载入后自己来取深链。
+  if (getMainWindow() !== null) revealWindow();
+});
 
 /* ------------------------------ the IPC table ----------------------------- */
 
@@ -103,6 +196,18 @@ function registerIpc(): void {
     [IPC.identityTicket.channel]: nativeTicket,
     [IPC.appLocale.channel]: () => app.getLocale(),
     [IPC.windowIsFocused.channel]: () => getMainWindow()?.isFocused() ?? false,
+    // 页面错误上报（契约 §30）：开关、限流与再剥离都在 `main/diagnostics.ts`。
+    [IPC.diagnosticsReport.channel]: (report) => diagnostics.reportPage(report),
+    [IPC.gatewayRefresh.channel]: async () => {
+      await refreshGateway();
+      return { ok: true };
+    },
+    // 页面改了源表（远程服务、挂载的源）：壳自己重读，不信页面带来的数据。
+    [IPC.sourcesChanged.channel]: () =>
+      coreFetch === null ? { reload: false } : refreshRemoteTrust(coreFetch),
+    [IPC.sourcesTakeJoinLink.channel]: () => joinLinks.take(),
+    // 分享链接交给系统分享菜单；没有菜单的平台答 false，页面退回复制。
+    [IPC.appShare.channel]: (request) => shareUrl(request, getMainWindow()),
     // The page answering a claimed chord. `menu.ts` owns the arbitration,
     // because it is the module that claimed the chord in the first place.
     [IPC.windowKeyIntentResult.channel]: (result) => {
@@ -273,7 +378,11 @@ let quitRequested = false;
 async function requestQuit(): Promise<void> {
   if (!lifecycle.state.beginQuit()) return;
   quitRequested = true;
-  const outcome = await runQuitSequence(lifecycle, runtime);
+  const outcome = await runQuitSequence(
+    lifecycle,
+    runtime,
+    runtime.owns() ? sessionHostRelease(dataDir()) : undefined,
+  );
   if (!outcome.ok) {
     quitRequested = false;
     process.stderr.write(
@@ -312,6 +421,8 @@ async function start(): Promise<void> {
   // variable's: a double-clicked application inherits nobody's shell.
   setPackagedShell(app.isPackaged);
   registerIpc();
+  // core 拿不到 `safeStorage`，封与解经 fork 的 IPC 问这里（W-SECRETS）。
+  setSecretChannel(secretChannel(safeStorage));
 
   // The drive channel binds BEFORE the Runtime is spawned, because its address
   // and one-time token only reach the Runtime through that spawn's environment.
@@ -335,8 +446,23 @@ async function start(): Promise<void> {
   // would miss the first window, and the menu is process-wide.
   onWindowCreated(installKeydownIntercept);
   installApplicationMenu();
+  // 托盘打 core 也带会话（契约 §3.2）：票经和页面同一条私有通道签，来源是
+  // core 自己的回环基址，与页面的会话分开。
+  const coreSession = new CoreSession({
+    base: async () => (await transportEndpoints()).httpBase,
+    ticket: async (origin) =>
+      (
+        await issueCoreTicket({
+          dataDir: dataDir(),
+          origin,
+          deviceName: deviceName(app.getLocale()),
+        })
+      ).ticket,
+  });
+  coreFetch = (path, init) => coreSession.fetch(path, init);
   createTray({
     runtimeBase: async () => (await transportEndpoints()).httpBase,
+    request: (path, init) => coreSession.fetch(path, init),
     quit: () => app.quit(),
   });
 
@@ -350,7 +476,11 @@ async function start(): Promise<void> {
   // Only the Vite dev server serves inline scripts (the refresh preamble).
   applyContentSecurityPolicy(page.origin, {
     devServer: Boolean(process.env.ELECTRON_RENDERER_URL),
+    connect: connectGrants,
+    otherResponse: relayResponseHeaders,
   });
+  installCertificatePinning();
+  installRelayOriginRewrite();
   traceLifecycle(`page origin ${page.origin}`);
 
   if (ownsRuntime(development, process.env.ARMADRA_DESKTOP_OWNS_RUNTIME)) {
@@ -369,6 +499,9 @@ async function start(): Promise<void> {
   }
 
   publishEndpoints(await transportEndpoints());
+  // 源表里记着的远程服务与源：CSP 与证书钉扎在页面载入前就位。零配置时表里
+  // 只有本机，什么也不放行；读不到不挡窗口。
+  await refreshRemoteTrust((path, init) => coreSession.fetch(path, init));
   void loadRenderer(createMainWindow());
 }
 

@@ -10,6 +10,7 @@ import { useT } from "../app/preferences-store";
 import { useCompactLayout } from "../platform/layout";
 import { useCanvasStore, type PanelState } from "../store/canvas-store";
 import { cn } from "@/lib/cn";
+import { Button } from "@/ui/button";
 
 /**
  * 手机底部导航（客户端平台设计，移动端能力矩阵）。
@@ -98,27 +99,29 @@ export function MobileBottomNav() {
       className={cn(
         "fixed inset-x-0 bottom-0 z-[var(--z-cluster)] flex items-stretch",
         "border-t border-border bg-[var(--panel)]/95 backdrop-blur-[12px]",
-        // 手机的主页横条压在底部，内容再往上抬一层。
-        "pb-[env(safe-area-inset-bottom)]",
+        // 手机的主页横条压在底部，内容再往上抬一层；横屏时左右让开刘海。
+        "pr-[var(--safe-right)] pb-[var(--safe-bottom)] pl-[var(--safe-left)]",
       )}
     >
       {DESTINATIONS.map((destination) => {
         const Icon = destination.icon;
         const current = active === destination.id;
         return (
-          <button
+          <Button
             key={destination.id}
             type="button"
+            variant="ghost"
             // 图标下面那行小字在这个尺寸下会被截断，所以无障碍名称单独给一份
             // 完整的，不指望读屏去拼 `<span>` 里的残字。
             aria-label={t(destination.labelKey)}
             aria-current={current ? "page" : undefined}
             disabled={needsWorkspace && destination.panel !== "settings"}
             className={cn(
-              "flex min-h-[var(--mobile-nav-h)] flex-1 flex-col items-center justify-center gap-1 px-1",
-              "text-[11px] leading-4 transition-colors disabled:opacity-40",
+              "h-auto min-h-[var(--mobile-nav-h)] min-w-0 flex-1 flex-col gap-1 rounded-none px-1",
+              "text-[11px] leading-4 font-normal transition-colors disabled:opacity-40",
+              "hover:bg-transparent",
               current
-                ? "text-[var(--brand)]"
+                ? "text-[var(--brand-text)] hover:text-[var(--brand-text)]"
                 : "text-muted-foreground hover:text-foreground",
             )}
             onClick={() => {
@@ -136,7 +139,7 @@ export function MobileBottomNav() {
             <span aria-hidden className="max-w-full truncate">
               {t(destination.labelKey)}
             </span>
-          </button>
+          </Button>
         );
       })}
     </nav>

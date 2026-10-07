@@ -38,11 +38,59 @@ export type CdpEventHandler = (
  * long is a page a verb has lost, and every verb above has its own bound. */
 export const CALL_TIMEOUT_MS = 30_000;
 
+/**
+ * Longest the FIRST command after a launch may take. It is not a page being
+ * slow: it is the browser process coming up, opening its profile and the pipe,
+ * before anything can answer. A cold start measured 7–10 s on the Windows
+ * runner with three browsers starting side by side, and its tail crossed the
+ * 30 s command bound — every browser of that run failed on its first command
+ * at the same moment.
+ */
+export const STARTUP_TIMEOUT_MS = 90_000;
+
 interface Waiter {
   settle: (value: unknown) => void;
   fail: (error: Error) => void;
   timer: NodeJS.Timeout;
   method: string;
+  sessionId: string;
+  sentAt: number;
+}
+
+/**
+ * Turns on the wire trace below. Off by default; the live tests set it so a
+ * stall on a CI runner leaves something to read.
+ */
+export const CDP_TRACE_ENV = "ARMADRA_CDP_TRACE";
+/** How many wire entries the trace keeps. */
+export const CDP_TRACE_LENGTH = 300;
+
+/**
+ * One line of the wire trace: direction, id, method, session — and nothing
+ * else. Params and results carry page text, URLs and typed values, none of
+ * which belongs in a diagnostic.
+ */
+export interface CdpTraceEntry {
+  readonly at: number;
+  /** `>` sent, `<` answered, `!` refused by the browser, `~` event, `x` timed out. */
+  readonly kind: ">" | "<" | "!" | "~" | "x";
+  readonly id?: number;
+  readonly method: string;
+  readonly sessionId: string;
+  /**
+   * For `Target.attachedToTarget` / `detachedFromTarget` only: the child
+   * session and (on attach) its target type, so a stalled command on a child
+   * session can be traced to what it was. Never a URL.
+   */
+  readonly child?: string;
+}
+
+/** A command still waiting for its answer. */
+export interface CdpPending {
+  readonly id: number;
+  readonly method: string;
+  readonly sessionId: string;
+  readonly ageMs: number;
 }
 
 export class CdpConnection {
@@ -53,9 +101,16 @@ export class CdpConnection {
   private nextId = 1;
   private closed = false;
   private closeReason = "the browser went away";
+  private readonly trace: CdpTraceEntry[] | undefined;
 
-  constructor(write: Writable, read: Readable) {
+  constructor(
+    write: Writable,
+    read: Readable,
+    options: { trace?: boolean } = {},
+  ) {
     this.write = write;
+    this.trace =
+      (options.trace ?? process.env[CDP_TRACE_ENV] === "1") ? [] : undefined;
     read.on("data", (chunk: Buffer | string) => {
       this.receive(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
     });
@@ -72,6 +127,28 @@ export class CdpConnection {
     this.handlers.push(handler);
   }
 
+  /** Commands sent and not yet answered, oldest first. */
+  pending(): CdpPending[] {
+    const now = Date.now();
+    return [...this.waiters.entries()].map(([id, waiter]) => ({
+      id,
+      method: waiter.method,
+      sessionId: waiter.sessionId,
+      ageMs: now - waiter.sentAt,
+    }));
+  }
+
+  /** The wire trace, oldest first; empty unless tracing is on. */
+  traced(): CdpTraceEntry[] {
+    return [...(this.trace ?? [])];
+  }
+
+  private note(entry: Omit<CdpTraceEntry, "at">): void {
+    if (this.trace === undefined) return;
+    this.trace.push({ at: Date.now(), ...entry });
+    if (this.trace.length > CDP_TRACE_LENGTH) this.trace.shift();
+  }
+
   /**
    * Sends one command. `sessionId` names the target; omitted, it is a
    * browser-level command (`Target.*`, `Browser.*`).
@@ -80,6 +157,7 @@ export class CdpConnection {
     method: string,
     params: Record<string, unknown> = {},
     sessionId?: string,
+    timeoutMs = CALL_TIMEOUT_MS,
   ): Promise<unknown> {
     if (this.closed) {
       throw new CdpRefusal(DRIVE_CODES.unavailable, this.closeReason);
@@ -91,15 +169,24 @@ export class CdpConnection {
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.waiters.delete(id);
+        this.note({ kind: "x", id, method, sessionId: sessionId ?? "" });
         reject(
           new CdpRefusal(
             DRIVE_CODES.timeout,
             `${method} did not answer in time`,
           ),
         );
-      }, CALL_TIMEOUT_MS);
+      }, timeoutMs);
       timer.unref?.();
-      this.waiters.set(id, { settle: resolve, fail: reject, timer, method });
+      this.waiters.set(id, {
+        settle: resolve,
+        fail: reject,
+        timer,
+        method,
+        sessionId: sessionId ?? "",
+        sentAt: Date.now(),
+      });
+      this.note({ kind: ">", id, method, sessionId: sessionId ?? "" });
       try {
         this.write.write(`${JSON.stringify(envelope)}\0`);
       } catch (error) {
@@ -140,6 +227,12 @@ export class CdpConnection {
       if (waiter === undefined) return;
       this.waiters.delete(message.id);
       clearTimeout(waiter.timer);
+      this.note({
+        kind: message.error ? "!" : "<",
+        id: message.id,
+        method: waiter.method,
+        sessionId: waiter.sessionId,
+      });
       if (message.error) {
         // Chromium's own refusal, carried as one of ours. `browser_failed`
         // rather than `browser_refused`: the allowlist already ran, so this is
@@ -155,9 +248,26 @@ export class CdpConnection {
       waiter.settle(message.result ?? null);
       return;
     }
-    if (typeof message.method === "string") {
+    // Events stop at close. Chromium keeps writing until the pipe drains — a
+    // screencast frame can still be in the buffer after the node stopped — and
+    // a handler that answers it would be talking to a browser that is gone.
+    if (typeof message.method === "string")
+      this.note({
+        kind: "~",
+        method: message.method,
+        sessionId: message.sessionId ?? "",
+        ...childOf(message.method, message.params),
+      });
+    if (typeof message.method === "string" && !this.closed) {
       for (const handler of this.handlers) {
-        handler(message.method, message.params, message.sessionId ?? "");
+        // This runs inside the pipe's `data` listener: a handler that threw
+        // would escape as an uncaught exception and take the whole core down,
+        // not just this node. One bad event is dropped instead.
+        try {
+          handler(message.method, message.params, message.sessionId ?? "");
+        } catch {
+          // Nothing to tell: the event was the browser's, not a caller's.
+        }
       }
     }
   }
@@ -183,4 +293,23 @@ export class CdpConnection {
       // Already gone.
     }
   }
+}
+
+/** The child a target event names, for the trace: session id and type only. */
+function childOf(method: string, params: unknown): { child?: string } {
+  if (
+    method !== "Target.attachedToTarget" &&
+    method !== "Target.detachedFromTarget"
+  )
+    return {};
+  const event = params as {
+    sessionId?: unknown;
+    targetInfo?: { type?: unknown };
+  } | null;
+  const session = typeof event?.sessionId === "string" ? event.sessionId : "";
+  const type =
+    typeof event?.targetInfo?.type === "string"
+      ? `:${event.targetInfo.type}`
+      : "";
+  return { child: `${session}${type}` };
 }

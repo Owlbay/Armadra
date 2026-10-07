@@ -1,4 +1,7 @@
 import { join, resolve } from "node:path";
+import { type DomainHandlers, registerProcedures } from "../http/rpc";
+import { allows } from "../identity/gate";
+import { scope } from "../identity/scopes";
 import { VERSION } from "../instance";
 import type { CoreContext } from "../main";
 import { settingsDomain } from "../settings";
@@ -13,11 +16,30 @@ import { DirectBackend } from "./direct";
 import { nodeRole } from "../canvas/context-links";
 import { handleForNode } from "../canvas/handles";
 import { type EnvPairs, agentEnvironment, setHookClient } from "./environment";
-import { launcherClientBinary } from "../hook/install/shared";
+import {
+  agentLauncherBinary,
+  launcherClientBinary,
+} from "../hook/install/shared";
 import { collab, setTerminalBridge } from "../agent";
+import {
+  acpAdapter,
+  agentSettings as acpAgentSettings,
+  createAcpBackend,
+  prepareAcpStart,
+  provideAcpTerminal,
+  sshHostOf,
+} from "../acp";
+import { acpSwitching } from "../acp/routes";
 import { loadNode } from "../collab/nodes";
-import { canvasEnvironment, nodeDialect } from "../agent/canvas-launch";
-import type { ShellDialect } from "./shell";
+import { canvasEnvironment } from "../agent/canvas-launch";
+import {
+  CredentialError,
+  CredentialsDomain,
+  persistedBinding,
+  setCredentialsDomain,
+} from "../agent/credentials";
+import { installRoutes as installCredentialRoutes } from "../agent/credentials/routes";
+import { type SecretBackend, secretsFor } from "../secrets";
 import { listAgents } from "../agent/list";
 import { baseAgent } from "../agent/registry";
 import { parseCustomAgents } from "../settings/custom-agents";
@@ -43,7 +65,11 @@ import {
   selectBackend,
 } from "./select";
 import { SessionHostBackend } from "./session-host/backend";
-import { serveTerminalSocket, validWriter } from "./socket";
+import {
+  TERMINAL_MAX_PAYLOAD_BYTES,
+  serveTerminalSocket,
+  validWriter,
+} from "./socket";
 import { TmuxBackend } from "./tmux/backend";
 import { detect } from "./tmux/config";
 
@@ -96,6 +122,13 @@ export interface TerminalInstallOptions {
    * running it has tmux would be a suite that proves nothing.
    */
   readonly configured?: BackendChoice;
+  /**
+   * The secret backend node credentials use, for the tests: the suite's
+   * default is the `file` backend, which this domain refuses on purpose.
+   */
+  readonly credentialSecrets?: SecretBackend;
+  /** Platform the credential domain judges availability by (tests). */
+  readonly platform?: NodeJS.Platform;
 }
 
 export function install(
@@ -139,6 +172,10 @@ export function install(
   for (const [kind, backend] of [...backends]) {
     backends.set(kind, wrapSsh(context, backend));
   }
+  // ACP 驱动（ACP 设计 §4.1）：同一张表里的另一种后端，不经 SSH 装饰——ACP 会话
+  // 第一版只在本机起（§5.3 最后一条）。从不是 effective：只有点名它的请求拿到。
+  const acpBackend = createAcpBackend(context);
+  backends.set("acp", acpBackend);
   // A selection this build cannot honour falls back rather than throwing at
   // assembly time: an unusable effective backend would take the whole core
   // down over a preference.
@@ -260,13 +297,64 @@ export function install(
       customAgents: () =>
         parseCustomAgents(settingsDomain()?.settings.snapshot() ?? {}),
     };
-  // `dialect`：这个终端要跑的 shell 的方言。Codex 那两个由启动行展开的环境变
-  // 量要按它写（`hook/install/inject.ts::codexTomlString`）。
+  // `ssh`：这个终端是 SSH 会话——本机的垫片目录在执行主机上不存在，那边的
+  // `PATH` 由远端 shell 命令前置远端的垫片（`remote/integration.ts`）。
+  // 节点凭据（契约 §20）：校验在起终端之前；环境里只有条目名，值由画布启动器
+  // 在 CLI 启动时经 hook 通道现取。
+  const credentials = new CredentialsDomain({
+    database: context.db.database,
+    secrets: options.credentialSecrets ?? secretsFor(context).backend,
+    ...(options.platform === undefined ? {} : { platform: options.platform }),
+    baseOf: (id) => baseAgent(agentSettings(), id),
+    log: (message, fields) => context.log.info(message, fields),
+  });
+  setCredentialsDomain(credentials);
+  installCredentialRoutes(context.server, credentials);
+  // `credential`：`POST /api/terminals` 带来的那个（`requested` 缺席就是没绑定）；
+  // 其余几条路（唤醒、依赖编排、冷启动）不传，读节点数据里的绑定。
+  // `acp`：节点以 ACP 驱动。适配器不经画布启动器、不在 shell 里，所以不给它
+  // 垫片目录在前的 `PATH`（否则它起的 CLI 会经启动器再挂一套 Hook，一个节点
+  // 两个状态来源），也不给 Hook 等答复的变量——ACP 的审批走协议本身。
   const ownedEnvironment = (
     nodeId: string,
     agentId: string,
-    dialect: ShellDialect,
+    ssh: boolean,
+    credential?: { readonly requested: string | undefined },
+    options: { readonly acp?: boolean } = {},
   ) => {
+    const acp = options.acp === true;
+    const bound =
+      credential === undefined
+        ? persistedBinding(context.db.database, nodeId).ref
+        : undefined;
+    // 节点凭据是 owner 的账号（契约 §20.3）：共享角色里没有 `credential:use`，
+    // 成员起的终端 / ACP 会话不能带上它——否则节点 shell 经 hook 面就能把值
+    // 兑换出来。本机壳与 core 自己的动作没有请求身份，问到的是 owner，照旧。
+    if (
+      (credential?.requested ?? bound) !== undefined &&
+      !allows([scope("credential:use")])
+    ) {
+      throw new TerminalError(
+        403,
+        "credential_forbidden",
+        "Launching with a node credential requires credential:use",
+      );
+    }
+    let credentialEnv: readonly (readonly [string, string])[];
+    try {
+      credentialEnv = credentials.environment(
+        nodeId,
+        agentId,
+        ssh,
+        credential?.requested,
+        bound,
+      );
+    } catch (failure) {
+      if (failure instanceof CredentialError) {
+        throw new TerminalError(failure.status, failure.code, failure.message);
+      }
+      throw failure;
+    }
     try {
       issueNodeToken(context.dataDir, nodeId);
     } catch (failure) {
@@ -287,21 +375,26 @@ export function install(
       ),
       // Contract §5.5: the one variable that switches the hook client from
       // "report and exit" to "wait for the canvas' answer".
-      ...permissionWaitEnvironment(
-        agentId,
-        settingsDomain()?.settings.get("hooks.replyApprovals") !== false,
-        (id) => baseAgent(agentSettings(), id),
-      ),
-      // 画布注入的环境半边（OpenCode 的配置目录、Copilot 的说明目录）；也是
-      // 注入产物确保为最新的时刻——这个终端就要起这个 CLI 了。
-      ...canvasEnvironment(
-        agentSettings(),
-        context.dataDir,
-        agentId,
-        nodeId,
-        (message, fields) => context.log.warn(message, fields),
-        dialect,
-      ),
+      ...(acp
+        ? []
+        : permissionWaitEnvironment(
+            agentId,
+            settingsDomain()?.settings.get("hooks.replyApprovals") !== false,
+            (id) => baseAgent(agentSettings(), id),
+          )),
+      // 画布启动器的终端半边：`ARMADRA_SHIMS` 与把垫片目录放在最前的 `PATH`
+      // （画布启动器设计 §4.3）；也是注入产物与启动器确保为最新的时刻——这个
+      // 终端就要起这个 CLI 了。注入自己的环境变量只由启动器给 CLI 进程设。
+      ...(acp
+        ? []
+        : canvasEnvironment(
+            agentSettings(),
+            context.dataDir,
+            agentId,
+            (message, fields) => context.log.warn(message, fields),
+            { ssh },
+          )),
+      ...credentialEnv,
     ];
   };
 
@@ -322,8 +415,8 @@ export function install(
         ? policy
         : { ...policy, idleMinutes: ecoOverride.idleMinutes };
     },
-    environment: (nodeId, agentId, dialect) =>
-      ownedEnvironment(nodeId, agentId, dialect),
+    environment: (nodeId, agentId, ssh, options) =>
+      ownedEnvironment(nodeId, agentId, ssh, undefined, options),
     // 与依赖编排拼启动行时同一个来源：本机解析到的程序路径；画布注入的 argv
     // 由恢复行经 `agent/canvas-launch.ts` 从数据目录取。
     program: (agentId) => {
@@ -354,15 +447,86 @@ export function install(
   }, ecoOverride?.intervalMs ?? HIBERNATE_INTERVAL_MS);
   hibernateTimer.unref?.();
 
-  route("POST", "/api/terminals", async (_params, request) => {
-    const body = json<CreateTerminalRequest>(request);
-    const invalid = validateCreate(body);
-    if (invalid !== undefined) {
-      throw new TerminalError(400, "bad_request", invalid);
+  // 本机解析到的 CLI 程序路径：与休眠恢复行、依赖编排同一个来源。
+  const programOf = (agentId: string): { path?: string } => {
+    try {
+      const row = listAgents({
+        dataDir: context.dataDir,
+        settings: agentSettings(),
+      }).find((entry) => entry.id === agentId);
+      return row?.resolvedPath ? { path: row.resolvedPath } : {};
+    } catch {
+      return {};
     }
+  };
+  // ACP 域在本域之后装配：交给它管理器、休眠执行者与节点环境（ACP 设计 §4）。
+  provideAcpTerminal({
+    manager,
+    hibernator,
+    backend: acpBackend,
+    ready,
+    environment: (nodeId, agentId, options) =>
+      ownedEnvironment(nodeId, agentId, options.ssh === true, undefined, {
+        acp: options.acp,
+      }),
+    typeLaunchLine: (sessionId, generation, line) =>
+      typeLaunchLine(manager, sessionId, generation, line),
+    program: programOf,
+  });
+  /** 节点数据里写明以 ACP 驱动的 Agent 节点（缺省按终端，ACP 设计 §4.1）。 */
+  const drivenOverAcp = (nodeId: string, agentId: string): boolean => {
+    const agent = loadNode(context.db.database, nodeId)?.data.agent;
+    return (
+      agent !== null &&
+      typeof agent === "object" &&
+      (agent as { driver?: unknown }).driver === "acp" &&
+      acpAdapter(baseAgent(acpAgentSettings(), agentId)) !== undefined
+    );
+  };
+  /** 替一个 ACP 节点起会话（依赖编排、定时冷启动）：新开，第一条任务经投递。 */
+  const spawnAcpForNode = async (request: {
+    readonly workspaceId: string;
+    readonly nodeId: string;
+    readonly agentId: string;
+    readonly cwd: string;
+  }) => {
+    const data = loadNode(context.db.database, request.nodeId)?.data;
+    const ssh = sshHostOf(data) !== undefined;
+    const agent = data?.agent as Record<string, unknown> | undefined;
+    prepareAcpStart(request.nodeId, {
+      agentId: request.agentId,
+      permissionMode:
+        typeof agent?.permissionMode === "string"
+          ? agent.permissionMode
+          : undefined,
+      model: typeof agent?.model === "string" ? agent.model : undefined,
+      resume: null,
+    });
+    return manager.spawn({
+      workspaceId: request.workspaceId,
+      // 执行主机上的路径不按本机的规则解析。
+      cwd: ssh ? request.cwd : resolve(request.cwd),
+      command: acpAdapter(baseAgent(acpAgentSettings(), request.agentId))
+        ?.program,
+      kind: "terminal",
+      ownerNodeId: request.nodeId,
+      agentId: request.agentId,
+      backend: "acp",
+      env: ownedEnvironment(request.nodeId, request.agentId, ssh, undefined, {
+        acp: true,
+      }),
+    });
+  };
+
+  /*
+   * 每个操作一份实现：路由表里的旧 handler（先把查询串与体解析成这里的入参）
+   * 与契约 §38 的 procedure 都调它，拒绝的码与原话由这里决定，两条路一样。
+   * 终端的输出只在 `capture` 的返回值里过，这里不记日志、不落盘。
+   */
+  const refuseManualLaunch = (nodeId: string | null | undefined) => {
     if (
-      body.nodeId &&
-      loadNode(context.db.database, body.nodeId)?.data.launchPolicy === "manual"
+      nodeId &&
+      loadNode(context.db.database, nodeId)?.data.launchPolicy === "manual"
     ) {
       throw new TerminalError(
         409,
@@ -370,108 +534,85 @@ export function install(
         "Use an explicit controller run to start this node",
       );
     }
-    const owned = body.agent !== undefined && body.nodeId !== undefined;
-    const env = owned
-      ? ownedEnvironment(
-          body.nodeId as string,
-          (body.agent as { id: string }).id,
-          nodeDialect(body.shell, body.ssh !== undefined),
-        )
-      : [];
-    const session = await manager.spawn({
-      workspaceId: body.workspaceId as string,
-      // Resolved, so a relative `cwd` cannot mean two directories. The
-      // root-confinement check needs the workspace row, which is R1's; until
-      // then a cwd outside the workspace is refused by the filesystem.
-      cwd: resolve(body.cwd as string),
-      ...(body.shell === undefined ? {} : { shell: body.shell }),
-      ...(body.command === undefined ? {} : { command: body.command }),
-      args: body.args ?? [],
-      kind: "terminal",
-      ...(body.nodeId === undefined ? {} : { ownerNodeId: body.nodeId }),
-      ...(body.agent === undefined ? {} : { agentId: body.agent.id }),
-      ...(body.ssh === undefined ? {} : { sshHostId: body.ssh.hostId }),
-      env,
-    });
-    return { status: 200, body: session };
-  });
+  };
+  const operations = {
+    create: async (body: CreateTerminalRequest) => {
+      const invalid = validateCreate(body);
+      if (invalid !== undefined) {
+        throw new TerminalError(400, "bad_request", invalid);
+      }
+      refuseManualLaunch(body.nodeId);
+      const owned = body.agent !== undefined && body.nodeId !== undefined;
+      const env = owned
+        ? ownedEnvironment(
+            body.nodeId as string,
+            (body.agent as { id: string }).id,
+            body.ssh !== undefined,
+            { requested: body.agent?.credentialRef },
+          )
+        : [];
+      return manager.spawn({
+        workspaceId: body.workspaceId as string,
+        // Resolved, so a relative `cwd` cannot mean two directories. The
+        // root-confinement check needs the workspace row, which is R1's; until
+        // then a cwd outside the workspace is refused by the filesystem.
+        cwd: resolve(body.cwd as string),
+        ...(body.shell === undefined ? {} : { shell: body.shell }),
+        ...(body.command === undefined ? {} : { command: body.command }),
+        args: body.args ?? [],
+        kind: "terminal",
+        ...(body.nodeId === undefined ? {} : { ownerNodeId: body.nodeId }),
+        ...(body.agent === undefined ? {} : { agentId: body.agent.id }),
+        ...(body.ssh === undefined ? {} : { sshHostId: body.ssh.hostId }),
+        env,
+      });
+    },
 
-  /* ---------------------------------- reads -------------------------------- */
-
-  route("GET", "/api/terminals/backend", () => {
-    const info: BackendInfo = {
+    backend: (): BackendInfo & { platform: "unix" | "windows" } => ({
       effective,
       configured,
       tmuxVersion: detection.version ?? null,
       tmuxSocket: tmux?.socket ?? null,
       reason: selection.reason ?? null,
       platform: process.platform === "win32" ? "windows" : "unix",
-    };
-    return { status: 200, body: info };
-  });
+    }),
 
-  route("GET", "/api/terminals/{sessionId}", (params) => ({
-    status: 200,
-    body: manager.session(params.sessionId as string),
-  }));
+    get: (sessionId: string) => manager.session(sessionId),
 
-  route(
-    "GET",
-    "/api/terminals/{sessionId}/capture",
-    async (params, request) => {
-      const sessionId = params.sessionId as string;
+    capture: async (
+      sessionId: string,
+      requested: number | undefined,
+      escapes: boolean,
+    ) => {
       // The row is read first so an unknown session is a 404 rather than
       // "nothing is running", which is what a session that ended looks like.
       manager.session(sessionId);
       const lines = Math.min(
-        positive(request.query.get("lines")) ?? DEFAULT_CAPTURE_LINES,
+        requested ?? DEFAULT_CAPTURE_LINES,
         MAX_CAPTURE_LINES,
       );
-      const escapes = request.query.get("escapes") === "true";
-      return {
-        status: 200,
-        body: await manager.capture(sessionId, lines, escapes),
-      };
+      return manager.capture(sessionId, lines, escapes);
     },
-  );
 
-  route("GET", "/api/workspaces/{workspaceId}/sessions", (params) => ({
-    status: 200,
-    body: listSessions(
-      context.db.database,
-      params.workspaceId as string,
-      (id) => manager.isAlive(id),
-    ),
-  }));
+    sessions: (workspaceId: string) =>
+      listSessions(context.db.database, workspaceId, (id) =>
+        manager.isAlive(id),
+      ),
 
-  /* ---------------------------------- writes ------------------------------- */
+    paste: async (sessionId: string, text: unknown, enter: boolean) => {
+      if (typeof text !== "string") {
+        throw new TerminalError(400, "bad_request", "缺少 text");
+      }
+      if ([...text].length > MAX_PASTE_CHARACTERS) {
+        throw new TerminalError(400, "bad_request", "Pasted text is too large");
+      }
+      // 页面上的「粘贴」是人在驱动，与键盘上来的字节同一条语义。
+      await manager.paste(sessionId, text, enter, humanActor("local", ""));
+      return manager.session(sessionId);
+    },
 
-  route("POST", "/api/terminals/{sessionId}/paste", async (params, request) => {
-    const sessionId = params.sessionId as string;
-    const body = json<{ text?: unknown; enter?: unknown }>(request);
-    if (typeof body?.text !== "string") {
-      throw new TerminalError(400, "bad_request", "缺少 text");
-    }
-    if ([...body.text].length > MAX_PASTE_CHARACTERS) {
-      throw new TerminalError(400, "bad_request", "Pasted text is too large");
-    }
-    // 页面上的「粘贴」是人在驱动，与键盘上来的字节同一条语义。
-    await manager.paste(
-      sessionId,
-      body.text,
-      body.enter === true,
-      humanActor("local", ""),
-    );
-    return { status: 200, body: manager.session(sessionId) };
-  });
-
-  route(
-    "POST",
-    "/api/terminals/{sessionId}/scroll",
-    async (params, request) => {
-      const body = json<{ lines?: unknown }>(request);
-      const lines =
-        typeof body?.lines === "number" ? Math.trunc(body.lines) : NaN;
+    scroll: async (sessionId: string, value: unknown): Promise<void> => {
+      const lines = typeof value === "number" ? Math.trunc(value) : NaN;
       if (!Number.isFinite(lines)) {
         throw new TerminalError(400, "bad_request", "缺少 lines");
       }
@@ -482,23 +623,12 @@ export function install(
           "Scroll distance is too large",
         );
       }
-      await manager.scroll(params.sessionId as string, lines);
-      return { status: 204 };
+      await manager.scroll(sessionId, lines);
     },
-  );
 
-  route(
-    "POST",
-    "/api/terminals/{sessionId}/terminate",
-    async (params, request) => {
-      const sessionId = params.sessionId as string;
+    terminate: async (sessionId: string, mode: TerminateMode) => {
       if (!manager.exists(sessionId)) {
         throw new TerminalError(404, "not_found", "没有这个终端会话");
-      }
-      let mode: TerminateMode = "process";
-      if (request.body.byteLength > 0) {
-        const parsed = json<{ mode?: TerminateMode }>(request);
-        if (parsed?.mode !== undefined) mode = parsed.mode;
       }
       try {
         await manager.terminate(sessionId, mode);
@@ -510,95 +640,235 @@ export function install(
           manager.session(sessionId).status !== "running";
         if (!alreadyOver) throw failure;
       }
-      return { status: 200, body: manager.session(sessionId) };
+      return manager.session(sessionId);
+    },
+
+    recycle: async (sessionId: string) => {
+      // The row, not the record: recycling a session this core never attached to
+      // is a 404 about the session, not about the process behind it.
+      refuseManualLaunch(manager.session(sessionId).ownerNodeId);
+      return manager.recycle(sessionId);
+    },
+
+    /**
+     * 页面上点了（或聚焦了）一个休眠中的节点：用 CLI 自己的 resume 在同一个会话
+     * id 上接回来（终端宿主设计 §7.2）。已经醒着就答它现在的样子——两台设备同时
+     * 点、或者投递先一步叫醒了它，都不会起第二个 CLI。
+     */
+    wake: async (sessionId: string) => {
+      const row = manager.session(sessionId);
+      refuseManualLaunch(row.ownerNodeId);
+      if (row.ownerNodeId === null) {
+        throw new TerminalError(
+          409,
+          "not_hibernated",
+          "This terminal does not belong to a node",
+        );
+      }
+      const woken = await hibernator.wake(row.ownerNodeId, "focus");
+      return manager.session(woken.sessionId);
+    },
+
+    /**
+     * 人按节点头的「接管」/「交还」（设计 `agent-delivery.md` §6.1、§10）。
+     *
+     * 接管与抢占不是一回事，所以它需要一条自己的门而不是一次空写入：抢占是人
+     * 敲键的副作用、十秒后自然过期；接管是一句明确的「现在归我」，Agent 一律
+     * 收 `LEASE_REVOKED` 直到有人按「交还」。租约的变化由 `TerminalDriveBook`
+     * 的 `onChange` 广播成一帧 `terminal.lease`，所以按下之后每台看着这块画布
+     * 的设备都会同时翻徽标——不靠各自按「我刚点过」推断。
+     */
+    drive: (sessionId: string, action: unknown) => {
+      manager.session(sessionId);
+      if (action !== "takeover" && action !== "release") {
+        throw new TerminalError(
+          400,
+          "bad_request",
+          "action 只能是 takeover 或 release",
+        );
+      }
+      // 「谁在交还」不是「谁按了按钮」。人的抢占是**敲键那一侧**记下的，持有者
+      // 于是是那条 socket 的设备 id，而按钮来自同一个人的另一条路（HTTP）。按
+      // `local` 去交还会被状态机当成「放别人的租约」而拒绝，于是按钮一按什么都
+      // 不发生——真机上就是这么撞出来的。所以这里认的是**当前持有者**：这台壳
+      // 前面只有一个人，他敲键与他按钮是同一个人。Agent 的租约不在此列，它仍然
+      // 只能由 Agent 自己放掉，或者由人「接管」撤销。
+      const held = manager.driveLease(sessionId).holder;
+      const actor =
+        held?.kind === "human"
+          ? humanActor(held.id, held.displayName)
+          : humanActor("local", "");
+      return action === "takeover"
+        ? manager.takeoverDrive(sessionId, actor)
+        : manager.releaseDrive(sessionId, actor);
+    },
+  };
+
+  // 契约 §38：与下面的旧路径同一份实现；同样等启动对账完成再答。
+  const gated =
+    <A extends unknown[], R>(operation: (...args: A) => R | Promise<R>) =>
+    async (...args: A): Promise<R> => {
+      await ready;
+      return operation(...args);
+    };
+  const handlers = {
+    create: gated((input: CreateTerminalRequest) => operations.create(input)),
+    backend: gated(() => operations.backend()),
+    get: gated(({ sessionId }: { sessionId: string }) =>
+      operations.get(sessionId),
+    ),
+    capture: gated(
+      ({
+        sessionId,
+        lines,
+        escapes,
+      }: {
+        sessionId: string;
+        lines?: number | undefined;
+        escapes?: boolean | "true" | "false" | undefined;
+      }) =>
+        operations.capture(
+          sessionId,
+          countOrUndefined(lines),
+          escapes === true || escapes === "true",
+        ),
+    ),
+    sessions: gated(({ workspaceId }: { workspaceId: string }) =>
+      operations.sessions(workspaceId),
+    ),
+    paste: gated(
+      ({
+        sessionId,
+        text,
+        enter,
+      }: {
+        sessionId: string;
+        text: string;
+        enter?: boolean | undefined;
+      }) => operations.paste(sessionId, text, enter === true),
+    ),
+    scroll: gated(
+      ({ sessionId, lines }: { sessionId: string; lines: number }) =>
+        operations.scroll(sessionId, lines),
+    ),
+    terminate: gated(
+      ({
+        sessionId,
+        mode,
+      }: {
+        sessionId: string;
+        mode?: TerminateMode | undefined;
+      }) => operations.terminate(sessionId, mode ?? "process"),
+    ),
+    recycle: gated(({ sessionId }: { sessionId: string }) =>
+      operations.recycle(sessionId),
+    ),
+    wake: gated(({ sessionId }: { sessionId: string }) =>
+      operations.wake(sessionId),
+    ),
+    drive: gated(
+      ({ sessionId, action }: { sessionId: string; action: string }) =>
+        operations.drive(sessionId, action),
+    ),
+  };
+  registerProcedures(
+    context.server,
+    "terminals",
+    handlers as unknown as DomainHandlers<"terminals">,
+  );
+
+  route("POST", "/api/terminals", async (_params, request) => ({
+    status: 200,
+    body: await operations.create(json<CreateTerminalRequest>(request)),
+  }));
+
+  /* ---------------------------------- reads -------------------------------- */
+
+  route("GET", "/api/terminals/backend", () => ({
+    status: 200,
+    body: operations.backend(),
+  }));
+
+  route("GET", "/api/terminals/{sessionId}", (params) => ({
+    status: 200,
+    body: operations.get(params.sessionId as string),
+  }));
+
+  route(
+    "GET",
+    "/api/terminals/{sessionId}/capture",
+    async (params, request) => ({
+      status: 200,
+      body: await operations.capture(
+        params.sessionId as string,
+        positive(request.query.get("lines")),
+        request.query.get("escapes") === "true",
+      ),
+    }),
+  );
+
+  route("GET", "/api/workspaces/{workspaceId}/sessions", (params) => ({
+    status: 200,
+    body: operations.sessions(params.workspaceId as string),
+  }));
+
+  /* ---------------------------------- writes ------------------------------- */
+
+  route("POST", "/api/terminals/{sessionId}/paste", async (params, request) => {
+    const body = json<{ text?: unknown; enter?: unknown }>(request);
+    return {
+      status: 200,
+      body: await operations.paste(
+        params.sessionId as string,
+        body?.text,
+        body?.enter === true,
+      ),
+    };
+  });
+
+  route(
+    "POST",
+    "/api/terminals/{sessionId}/scroll",
+    async (params, request) => {
+      const body = json<{ lines?: unknown }>(request);
+      await operations.scroll(params.sessionId as string, body?.lines);
+      return { status: 204 };
     },
   );
 
-  route("POST", "/api/terminals/{sessionId}/recycle", async (params) => {
-    const sessionId = params.sessionId as string;
-    // The row, not the record: recycling a session this core never attached to
-    // is a 404 about the session, not about the process behind it.
-    const row = manager.session(sessionId);
-    if (
-      row.ownerNodeId &&
-      loadNode(context.db.database, row.ownerNodeId)?.data.launchPolicy ===
-        "manual"
-    )
-      throw new TerminalError(
-        409,
-        "manual_launch_required",
-        "Manual nodes can only be started by a controller run",
-      );
-    return { status: 200, body: await manager.recycle(sessionId) };
-  });
+  route(
+    "POST",
+    "/api/terminals/{sessionId}/terminate",
+    async (params, request) => {
+      let mode: TerminateMode = "process";
+      if (request.body.byteLength > 0) {
+        const parsed = json<{ mode?: TerminateMode }>(request);
+        if (parsed?.mode !== undefined) mode = parsed.mode;
+      }
+      return {
+        status: 200,
+        body: await operations.terminate(params.sessionId as string, mode),
+      };
+    },
+  );
 
-  /**
-   * 页面上点了（或聚焦了）一个休眠中的节点：用 CLI 自己的 resume 在同一个会话
-   * id 上接回来（终端宿主设计 §7.2）。已经醒着就答它现在的样子——两台设备同时
-   * 点、或者投递先一步叫醒了它，都不会起第二个 CLI。
-   */
-  route("POST", "/api/terminals/{sessionId}/wake", async (params) => {
-    const sessionId = params.sessionId as string;
-    const row = manager.session(sessionId);
-    if (
-      row.ownerNodeId &&
-      loadNode(context.db.database, row.ownerNodeId)?.data.launchPolicy ===
-        "manual"
-    )
-      throw new TerminalError(
-        409,
-        "manual_launch_required",
-        "Manual nodes can only be started by a controller run",
-      );
-    if (row.ownerNodeId === null) {
-      throw new TerminalError(
-        409,
-        "not_hibernated",
-        "This terminal does not belong to a node",
-      );
-    }
-    const woken = await hibernator.wake(row.ownerNodeId, "focus");
-    return { status: 200, body: manager.session(woken.sessionId) };
-  });
+  route("POST", "/api/terminals/{sessionId}/recycle", async (params) => ({
+    status: 200,
+    body: await operations.recycle(params.sessionId as string),
+  }));
 
-  /**
-   * 人按节点头的「接管」/「交还」（设计 `agent-delivery.md` §6.1、§10）。
-   *
-   * 接管与抢占不是一回事，所以它需要一条自己的门而不是一次空写入：抢占是人
-   * 敲键的副作用、十秒后自然过期；接管是一句明确的「现在归我」，Agent 一律
-   * 收 `LEASE_REVOKED` 直到有人按「交还」。租约的变化由 `TerminalDriveBook`
-   * 的 `onChange` 广播成一帧 `terminal.lease`，所以按下之后每台看着这块画布
-   * 的设备都会同时翻徽标——不靠各自按「我刚点过」推断。
-   */
-  route("POST", "/api/terminals/{sessionId}/drive", (params, request) => {
-    const sessionId = params.sessionId as string;
-    manager.session(sessionId);
-    const body = json<{ action?: unknown }>(request);
-    const action = body?.action;
-    if (action !== "takeover" && action !== "release") {
-      throw new TerminalError(
-        400,
-        "bad_request",
-        "action 只能是 takeover 或 release",
-      );
-    }
-    // 「谁在交还」不是「谁按了按钮」。人的抢占是**敲键那一侧**记下的，持有者
-    // 于是是那条 socket 的设备 id，而按钮来自同一个人的另一条路（HTTP）。按
-    // `local` 去交还会被状态机当成「放别人的租约」而拒绝，于是按钮一按什么都
-    // 不发生——真机上就是这么撞出来的。所以这里认的是**当前持有者**：这台壳
-    // 前面只有一个人，他敲键与他按钮是同一个人。Agent 的租约不在此列，它仍然
-    // 只能由 Agent 自己放掉，或者由人「接管」撤销。
-    const held = manager.driveLease(sessionId).holder;
-    const actor =
-      held?.kind === "human"
-        ? humanActor(held.id, held.displayName)
-        : humanActor("local", "");
-    const lease =
-      action === "takeover"
-        ? manager.takeoverDrive(sessionId, actor)
-        : manager.releaseDrive(sessionId, actor);
-    return { status: 200, body: lease };
-  });
+  route("POST", "/api/terminals/{sessionId}/wake", async (params) => ({
+    status: 200,
+    body: await operations.wake(params.sessionId as string),
+  }));
+
+  route("POST", "/api/terminals/{sessionId}/drive", (params, request) => ({
+    status: 200,
+    body: operations.drive(
+      params.sessionId as string,
+      json<{ action?: unknown }>(request)?.action,
+    ),
+  }));
 
   /* ---------------------------------- socket ------------------------------- */
 
@@ -627,11 +897,16 @@ export function install(
       if (!manager.exists(params.sessionId as string)) {
         return { status: 404, reason: "Not Found" };
       }
+      // ACP 驱动的会话没有 PTY 可附着（契约 §14.2 的 `acp_session`）。
+      if (manager.session(params.sessionId as string).backend === "acp") {
+        return { status: 409, reason: "Conflict" };
+      }
       if (validWriter(request.query.get("writer")) === undefined) {
         return { status: 400, reason: "Bad Request" };
       }
       return undefined;
     },
+    { maxPayload: TERMINAL_MAX_PAYLOAD_BYTES },
   );
 
   // The seam the agent domain published before this one was assembled. Until
@@ -652,12 +927,24 @@ export function install(
       await hibernator.wake(nodeId, "delivery");
       return true;
     },
-    // 休眠着或正在接回：`send` 的门链把这段时间的「没有会话」当「还早」排队。
-    sleeping: (nodeId) => hibernator.sleeping(nodeId),
+    // 休眠着或正在接回，或正在切换驱动方式（ACP 设计 §4.2）：`send` 的门链把
+    // 这段时间的「没有会话」当「还早」排队。
+    sleeping: (nodeId) => hibernator.sleeping(nodeId) || acpSwitching(nodeId),
     // 依赖编排在页面没开时替节点起终端（Agent 自动化设计 §6）。与
     // `POST /api/terminals` 同一套环境与令牌，只是请求来自 core 自己。
     spawnForNode: async (request) => {
       await ready;
+      // 以 ACP 驱动的节点起的是适配器（ACP 设计 §4.4 依赖编排一行）：会话开好
+      // 就能收 prompt，第一条任务照旧经投递队列，不敲启动行。
+      // SSH 节点也一样：适配器经 `ssh` 起在执行主机上（契约 §26 的 SSH 小节）。
+      if (drivenOverAcp(request.nodeId, request.agentId)) {
+        const session = await spawnAcpForNode(request);
+        return {
+          sessionId: session.id,
+          generation: session.generation,
+          driver: "acp" as const,
+        };
+      }
       const session = await manager.spawn({
         workspaceId: request.workspaceId,
         cwd: resolve(request.cwd),
@@ -672,7 +959,7 @@ export function install(
         env: ownedEnvironment(
           request.nodeId,
           request.agentId,
-          nodeDialect(request.shell, request.sshHostId !== undefined),
+          request.sshHostId !== undefined,
         ),
       });
       return { sessionId: session.id, generation: session.generation };
@@ -680,6 +967,11 @@ export function install(
   });
   // 定时任务的冷启动（自动化设计 §4.2）：同一条建会话的路，外加敲一行启动行。
   setAgentLauncher(async (request) => {
+    // ACP 节点：起适配器即可，任务由调度随后经 `writeSubmit` 投成一次 prompt。
+    if (drivenOverAcp(request.nodeId, request.agentId)) {
+      const session = await spawnAcpForNode(request);
+      return { sessionId: session.id, generation: session.generation };
+    }
     const session = await manager.spawn({
       workspaceId: request.workspaceId,
       cwd: resolve(request.cwd),
@@ -688,11 +980,7 @@ export function install(
       ownerNodeId: request.nodeId,
       agentId: request.agentId,
       // 冷启动起的是本机缺省的 shell，启动行（`schedule/cold-start.ts`）也按它写。
-      env: ownedEnvironment(
-        request.nodeId,
-        request.agentId,
-        nodeDialect(undefined),
-      ),
+      env: ownedEnvironment(request.nodeId, request.agentId, false),
     });
     void typeLaunchLine(
       manager,
@@ -717,6 +1005,8 @@ export function install(
       // manager that is shutting down would be told a session is missing
       // rather than that there is nothing to talk to.
       setTerminalBridge(undefined);
+      provideAcpTerminal(undefined);
+      setCredentialsDomain(undefined);
       setAgentLauncher(undefined);
       setHibernationWaker(undefined);
       clearInterval(hibernateTimer);
@@ -791,6 +1081,16 @@ function publishHookClient(context: CoreContext): void {
     context.log.info("no armadra-hook bundle: the canvas verbs have no client");
   } else {
     context.log.debug("armadra-hook client", { path });
+  }
+  // The bundled `ama` gets the same kind of launcher in the same directory
+  // (docs/design/coordinator-agent.md §2.5).
+  try {
+    const ama = agentLauncherBinary({ dataDir: context.dataDir });
+    if (ama !== undefined) context.log.debug("ama launcher", { path: ama });
+  } catch (error) {
+    context.log.warn("could not write the ama launcher", {
+      error: describe(error),
+    });
   }
 }
 
@@ -932,7 +1232,7 @@ interface CreateTerminalRequest {
   readonly command?: string;
   readonly args?: readonly string[];
   readonly nodeId?: string;
-  readonly agent?: { readonly id: string };
+  readonly agent?: { readonly id: string; readonly credentialRef?: string };
   /**
    * `ssh: { hostId }` — the session runs `ssh …` instead of a shell.
    *
@@ -959,6 +1259,15 @@ function validateCreate(body: CreateTerminalRequest): string | undefined {
     // hook client would refuse to report anyway.
     return "An agent terminal requires the owning nodeId";
   }
+  const credentialRef = body.agent?.credentialRef;
+  if (
+    credentialRef !== undefined &&
+    (typeof credentialRef !== "string" ||
+      credentialRef === "" ||
+      credentialRef.length > 200)
+  ) {
+    return "credentialRef is invalid";
+  }
   if (
     body.ssh !== undefined &&
     (typeof body.ssh.hostId !== "string" || body.ssh.hostId === "")
@@ -974,6 +1283,13 @@ function json<T>(request: import("../http/router").CoreRequest): T {
   } catch {
     throw new TerminalError(400, "bad_request", "请求体不是 JSON");
   }
+}
+
+/** 非负整数才算数；其余按没给。procedure 的数字与旧路径的查询串同一个判据。 */
+function countOrUndefined(value: number | undefined): number | undefined {
+  return value !== undefined && Number.isInteger(value) && value >= 0
+    ? value
+    : undefined;
 }
 
 function positive(value: string | null): number | undefined {

@@ -18,11 +18,14 @@ import { HostPage } from "./settings/pages/HostPage";
 import { KeybindingsPage } from "./settings/pages/KeybindingsPage";
 import { NotificationsPage } from "./settings/pages/NotificationsPage";
 import { ExecutionHostsPage } from "./settings/pages/ExecutionHostsPage";
+import { RemoteServicesPage } from "./settings/pages/RemoteServicesPage";
 import { SshPage } from "./settings/pages/SshPage";
 import { TerminalPage } from "./settings/pages/TerminalPage";
 import { UpdatesPage } from "./settings/pages/UpdatesPage";
 import { WhiteboardPage } from "./settings/pages/WhiteboardPage";
 import { WorkspacePage } from "./settings/pages/WorkspacePage";
+import { SecurityPage } from "./settings/pages/security/SecurityPage";
+import { useRemoteAccess } from "./settings/remote-access";
 import { subpageTitleKey } from "./settings/subpage";
 import {
   DEFAULT_SETTINGS_SECTION,
@@ -32,9 +35,14 @@ import {
   visibleSettingsSections,
   type SettingsSection,
 } from "./settings/nav";
-import { Dialog, DialogContent, DialogTitle } from "@/ui/dialog";
+import {
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { IconButton } from "@/ui/icon-button";
 import { cn } from "@/lib/cn";
+import { Button } from "@/ui/button";
 
 /** 分区 id → 页面。顺序由 `nav.ts` 决定，这里只管挂组件。 */
 const SECTION_PAGES: Record<string, () => React.ReactElement> = {
@@ -44,7 +52,9 @@ const SECTION_PAGES: Record<string, () => React.ReactElement> = {
   agent: AgentPage,
   integration: IntegrationPage,
   host: HostPage,
+  remote: RemoteServicesPage,
   accounts: AccountsSharingPage,
+  security: SecurityPage,
   github: GithubPage,
   terminal: TerminalPage,
   browser: BrowserPage,
@@ -73,7 +83,7 @@ export function SettingsDialog() {
   const closeSubpage = usePreferencesStore((state) => state.setSettingsSubpage);
 
   return (
-    <Dialog
+    <ResponsiveDialog
       open={open}
       onOpenChange={(next) => {
         // 关掉设置就丢掉子页：重开时该回到分区页，而不是停在一张表单上。
@@ -81,14 +91,16 @@ export function SettingsDialog() {
         setPanel("settings", next);
       }}
     >
-      <DialogContent
+      <ResponsiveDialogContent
         showCloseButton={false}
-        className="z-[var(--z-dialog)] h-[680px] max-h-[calc(100dvh-48px)] w-[920px] max-w-[calc(100vw-48px)] gap-0 overflow-hidden rounded-[14px] p-0 sm:max-w-[calc(100vw-48px)]"
+        className="z-[var(--z-dialog)] h-[680px] max-h-[calc(100dvh-48px-var(--safe-top)-var(--safe-bottom))] w-[920px] max-w-[calc(100vw-48px-var(--safe-left)-var(--safe-right))] gap-0 overflow-hidden rounded-[14px] p-0 sm:max-w-[calc(100vw-48px-var(--safe-left)-var(--safe-right))]"
       >
-        <DialogTitle className="sr-only">{t("settings.title")}</DialogTitle>
+        <ResponsiveDialogTitle className="sr-only">
+          {t("settings.title")}
+        </ResponsiveDialogTitle>
         <SettingsBody onClose={() => setPanel("settings", false)} />
-      </DialogContent>
-    </Dialog>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 
@@ -102,15 +114,20 @@ function SettingsBody({ onClose }: { onClose: () => void }) {
   // 成员看不到本机管理的那几页（`nav.ts` 的 `ownerOnly`）；上次停在其中一页
   // 的，回到第一页。
   const { member } = useAccess();
-  const active = isSettingsSectionId(stored, member)
+  // 设置作用的 core 不在眼前（经中继、直连远端源、当前源是远程源）：只对本机
+  // 有意义的那几页不列（`nav.ts` 的 `localOnly`）。
+  const { remote } = useRemoteAccess();
+  const active = isSettingsSectionId(stored, member, remote)
     ? stored
     : DEFAULT_SETTINGS_SECTION;
   const section = settingsSection(active);
   const Page = SECTION_PAGES[active] ?? GeneralPage;
   const groups = React.useMemo(
     () =>
-      groupSections(visibleSettingsSections(RUNTIME_VIA_SERVER_SHELL, member)),
-    [member],
+      groupSections(
+        visibleSettingsSections(RUNTIME_VIA_SERVER_SHELL, member, remote),
+      ),
+    [member, remote],
   );
 
   return (
@@ -183,14 +200,16 @@ function NavItem({
   const t = useT();
   const Icon = section.icon;
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="xs"
       type="button"
       data-active={active}
       aria-current={active ? "page" : undefined}
       title={t(section.labelKey)}
       aria-label={t(section.labelKey)}
       className={cn(
-        "flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] text-muted-foreground transition-colors",
+        "flex h-8 w-full items-center justify-start gap-2 rounded-lg px-2 text-left text-[13px] font-normal text-muted-foreground transition-colors",
         "hover:bg-muted hover:text-foreground",
         "data-[active=true]:bg-raised data-[active=true]:text-foreground",
       )}
@@ -198,6 +217,6 @@ function NavItem({
     >
       <Icon className="size-4 shrink-0" strokeWidth={1.5} />
       <span className="settings-nav-label truncate">{t(section.labelKey)}</span>
-    </button>
+    </Button>
   );
 }

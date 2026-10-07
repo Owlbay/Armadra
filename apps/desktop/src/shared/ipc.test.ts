@@ -65,6 +65,16 @@ describe("the IPC table", () => {
         "browser:view",
         "browser:control",
         "browser:clear-data",
+        // G2-7: the tray's external-access item re-reads after the page.
+        "app:gateway-refresh",
+        // A1-4: the page changed the source table; the shell re-reads CSP and pins.
+        "app:sources-changed",
+        // A4-3p: the page takes the share deep link the shell received.
+        "app:take-join-link",
+        // P4: the page hands a share link to the system share menu.
+        "app:share",
+        // G5-19: the page's own JS errors, opt-in (contract §30).
+        "diagnostics:report",
       ].sort(),
     );
   });
@@ -113,6 +123,8 @@ describe("the IPC table", () => {
     expect([...domains].sort()).toEqual([
       "app",
       "browser",
+      // G5-19 adds one domain beyond §2.2: the page's opt-in error report.
+      "diagnostics",
       "dialog",
       "identity",
       "shell",

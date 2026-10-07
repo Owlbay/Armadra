@@ -54,7 +54,33 @@ describe("runtime workspace events API", () => {
         type: "agent.approval",
         nodeId: uuid,
         pendingId: "p-1",
-        request: { tool: "Bash" },
+        request: {
+          id: "p-1",
+          nodeId: uuid,
+          workspaceId: uuid,
+          request: { tool: "Bash" },
+          createdAt: timestamp,
+        },
+      },
+      {
+        // 答复复用同一个事件：core 的审批行加上怎么交到 CLI 手里的。
+        type: "agent.approval",
+        nodeId: uuid,
+        pendingId: "p-1",
+        request: {
+          id: "p-1",
+          nodeId: uuid,
+          workspaceId: uuid,
+          request: null,
+          answer: "allow",
+          answeredBy: "user",
+          createdAt: timestamp,
+          answeredAt: timestamp,
+          revision: 1,
+          resolved: true,
+          decision: "allow",
+          route: "file",
+        },
       },
       {
         type: "agent.delivery",
@@ -140,6 +166,66 @@ describe("runtime workspace events API", () => {
     expect(workspaceEventSchema.safeParse({ type: "acp.update" }).success).toBe(
       false,
     );
+    // 审批行不再是任意值：缺了行的标识或原话不是 JSON 的都不收。
+    for (const request of [
+      { tool: "Bash" },
+      {
+        id: "p-1",
+        nodeId: uuid,
+        workspaceId: uuid,
+        request: () => undefined,
+        createdAt: timestamp,
+      },
+    ]) {
+      expect(
+        workspaceEventSchema.safeParse({
+          type: "agent.approval",
+          nodeId: uuid,
+          pendingId: "p-1",
+          request,
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("models the G5 schedule and resources events without commands or output", () => {
+    const events = [
+      { type: "schedule.fired", planId: "p-1", runId: "r-1", nodeId: uuid },
+      {
+        type: "schedule.failed",
+        planId: "p-1",
+        runId: "r-1",
+        reasonCode: "target_offline",
+      },
+      { type: "schedule.attention", planId: "p-1", reasonCode: "streak" },
+      {
+        type: "resources.threshold",
+        sessionId: uuid,
+        nodeId: otherUuid,
+        metric: "memory",
+        value: 2_147_483_648,
+        threshold: 1_073_741_824,
+      },
+    ];
+    for (const event of events) {
+      const parsed = workspaceEventSchema.safeParse(event);
+      expect(parsed.success, JSON.stringify(event.type)).toBe(true);
+    }
+    // 失败与要人处理必须带稳定码，越线必须带数值。
+    expect(
+      workspaceEventSchema.safeParse({
+        type: "schedule.failed",
+        planId: "p-1",
+        runId: "r-1",
+      }).success,
+    ).toBe(false);
+    expect(
+      workspaceEventSchema.safeParse({
+        type: "resources.threshold",
+        sessionId: uuid,
+        metric: "memory",
+      }).success,
+    ).toBe(false);
   });
 
   it("decodes the browser tab / dialog / chooser events the runtime emits", () => {

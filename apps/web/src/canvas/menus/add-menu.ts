@@ -12,6 +12,7 @@ import {
   Globe,
   LayoutGrid,
   Maximize,
+  MessageSquarePlus,
   Network,
   SquareDashedMousePointer,
   StickyNote,
@@ -33,7 +34,10 @@ import { addItems, createItemId, select } from "../whiteboard/store";
 import { textItemAt } from "../whiteboard/tools/draft";
 import { openMermaidImport } from "../whiteboard/mermaid/open";
 import { openAutomationPanel } from "../../panels/automation/open";
+import { openWorkflowPanel } from "../../workflow/store";
 import { isDesktop } from "../../platform";
+import { preferredDriver } from "../../acp/driver";
+import { openNewAgentWizard } from "../../acp/wizard-open";
 
 /**
  * 新建菜单（§13.3）。
@@ -63,7 +67,8 @@ export interface AddMenuItem {
   id: string;
   label: string;
   icon: LucideIcon;
-  group: "terminal" | "agent" | "ssh" | "content" | "canvas";
+  /** `start` 是第一项「新建 Agent…」自己一组，不带组标题。 */
+  group: "start" | "terminal" | "agent" | "ssh" | "content" | "canvas";
   /** 右侧显示的快捷键；键位从 `keybindings.ts` 取，不在这里写死。 */
   shortcut?: CommandId;
   /** Agent 品牌色，渲染成图标右边的小色点。 */
@@ -147,8 +152,8 @@ export function sshMenuItems(hosts: SshHost[], t: Translate): AddMenuItem[] {
 }
 
 /**
- * 菜单项按 §3.2 的顺序：
- * 新建终端 → 各 Agent → 便签 → 文件管理器 → 打开文件… → 浏览器
+ * 菜单项按 §3.2 的顺序（ACP 设计 §8 在最前面加了「新建 Agent…」）：
+ * 新建 Agent… → 新建终端 → 各 Agent → 便签 → 文件管理器 → 打开文件… → 浏览器
  * → ─ → 全选 / 适应视图 / 整理画布。
  */
 export function buildAddMenu(
@@ -182,6 +187,8 @@ export function buildAddMenu(
           agent: {
             id: agent.id,
             ...(permissionMode !== "default" ? { permissionMode } : {}),
+            // 缺省驱动（ACP 设计 §8 第 2 条）：没装适配器的这一家退回终端。
+            driver: preferredDriver(agent),
           },
         },
       });
@@ -191,6 +198,13 @@ export function buildAddMenu(
   }));
 
   return [
+    {
+      id: "add.newAgent",
+      label: t("wizard.open"),
+      icon: MessageSquarePlus,
+      group: "start",
+      run: (context) => openNewAgentWizard(context.position),
+    },
     {
       id: "add.terminal",
       label: t("add.terminal"),
@@ -307,6 +321,14 @@ export function buildAddMenu(
       // 计划本身住在 Host 上，所以这一项开的是自动化页，而不是先造一张
       // 指向不存在计划的空卡片。
       run: () => openAutomationPanel(null),
+    },
+    {
+      id: "add.workflow",
+      label: t("add.workflow"),
+      icon: Workflow,
+      group: "content",
+      // 工作流是模板库里的东西，不是一张卡：这一项开模板库（设计系统 §5.5）。
+      run: () => openWorkflowPanel("templates"),
     },
     {
       id: "add.agentActivity",

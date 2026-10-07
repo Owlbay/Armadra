@@ -17,6 +17,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@armadra/platform-protocol": "file:../../tools/vendor/armadra-platform-protocol-0.2.1.tgz",
+    "@orpc/contract": "1.15.4",
     "zod": "4.4.3"
   },
   "devDependencies": {

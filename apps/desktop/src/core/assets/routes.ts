@@ -15,7 +15,8 @@ import {
   optionalString,
 } from "../workspaces/support";
 import { getWorkspace } from "../workspaces/table";
-import { writePngExport } from "./exports";
+import { type DomainHandlers, registerProcedures } from "../http/rpc";
+import { writePngExport, writeTextExport } from "./exports";
 import {
   assetExtension,
   assetMime,
@@ -89,6 +90,74 @@ export function install(context: CoreContext): void {
         ),
       };
     }),
+  );
+
+  // 输出到画板的代码块（契约 §14.5、§37.3）：落在来源 Agent 节点的工作目录里
+  // （在工作区内时），远端工作空间经 Worker 的 `assets.exportText` 落在那台机器
+  // 上。旧路径与 `files.exportText` 调同一份；旧路径在判过工作空间之后才读体。
+  const exportText = async (
+    id: string,
+    exportId: string,
+    read: () => Record<string, unknown>,
+  ): Promise<unknown> => {
+    const workspace = getWorkspace(database, id);
+    if (!workspace.permissions.write) {
+      throw new DomainError(
+        403,
+        "forbidden",
+        "This workspace is opened read-only",
+      );
+    }
+    const body = read();
+    const name = optionalString(body, "name");
+    const content = optionalString(body, "content");
+    if (name === undefined || content === undefined) {
+      throw badRequest("Export body needs a name and a content");
+    }
+    const cwd = agentCwd(database, workspace.id, exportId);
+    if (isRemote(workspace)) {
+      const bytes = Buffer.from(content, "utf8");
+      return withStaged(workspace, bytes, INLINE_FILE_BYTES, (carried) =>
+        executeOn(workspace, "assets.exportText", {
+          exportId,
+          name,
+          ...(cwd === undefined ? {} : { cwd }),
+          ...(carried.transfer === undefined
+            ? { content }
+            : { transfer: carried.transfer }),
+        }),
+      );
+    }
+    return writeTextExport(
+      canonicalDirectory(workspace.rootPath),
+      exportId,
+      name,
+      content,
+      cwd,
+    );
+  };
+  registerProcedures(server, "files", {
+    exportText: ({
+      workspaceId: id,
+      exportId,
+      ...body
+    }: {
+      workspaceId: string;
+      exportId: string;
+    } & Record<string, unknown>) => exportText(id, exportId, () => body),
+  } as unknown as DomainHandlers<"files">);
+
+  server.router.handle(
+    "POST",
+    "/api/workspaces/{workspaceId}/exports/{exportId}/text",
+    answered(async (match, request) => ({
+      status: 200,
+      body: await exportText(
+        workspaceId(match),
+        match.params.exportId ?? "",
+        () => jsonObject(request.body),
+      ),
+    })),
   );
 
   server.router.handle(
@@ -192,11 +261,37 @@ export function install(context: CoreContext): void {
           // An SVG is served as an image and must never be sniffed into a
           // document; the header costs nothing on the other seven types.
           "x-content-type-options": "nosniff",
+          // 直接导航到这个地址时，一张带脚本的 SVG 会作为文档在 core（或
+          // Gateway）的来源上运行。`sandbox` 把它放进不透明来源、脚本一行不跑；
+          // 经 `<img>` 显示时这条头不起作用（安全审查 2026-10 的 H3）。
+          "content-security-policy": ASSET_CSP,
         },
       };
     }),
   );
 }
+
+/**
+ * 来源 Agent 节点的工作目录：这个工作空间里归它的最近一个终端会话的 `cwd`。
+ * 页面不传路径——写到哪里只由 core 自己记的会话决定。
+ */
+export function agentCwd(
+  database: CoreContext["db"]["database"],
+  workspaceId: string,
+  nodeId: string,
+): string | undefined {
+  const row = database
+    .prepare(
+      "SELECT cwd FROM terminal_sessions WHERE workspace_id = ? AND owner_node_id = ? " +
+        "ORDER BY (status = 'running') DESC, generation DESC, created_at DESC LIMIT 1",
+    )
+    .get(workspaceId, nodeId.toLowerCase()) as { cwd: string } | undefined;
+  return row?.cwd === "" ? undefined : row?.cwd;
+}
+
+/** 资产答案的 CSP：图片用不到任何来源，文档化的 SVG 什么都做不了。 */
+export const ASSET_CSP =
+  "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox";
 
 async function readRemoteAsset(
   workspace: { readonly rootPath: string; readonly executionHostId?: string },

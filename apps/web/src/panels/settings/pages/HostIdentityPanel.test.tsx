@@ -76,7 +76,7 @@ const hostId = "1".repeat(32),
   otherId = "4".repeat(32);
 
 const hello: IdentityHello = {
-  hostId,
+  sourceId: hostId,
   hostInstanceId,
   protocol: { major: 1, minor: 1 },
   capabilities: ["identity.browser-session.v1"],
@@ -215,6 +215,19 @@ describe("HostIdentityPanel", () => {
     expect(mocks.resume).not.toHaveBeenCalled();
   });
 
+  it("pairs from a ticket that lands in the address bar while it is open", async () => {
+    render(<HostIdentityPanel hello={hello} />);
+    await waitFor(() => expect(mocks.resume).toHaveBeenCalled());
+    mocks.takeTicket.mockReturnValue("ticket-pasted-later");
+    await act(async () => {
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(mocks.pair).toHaveBeenCalledWith("ticket-pasted-later"),
+    );
+  });
+
   it("clears the pasted ticket immediately and uses no browser storage", async () => {
     render(<HostIdentityPanel hello={hello} />);
     const field = await screen.findByLabelText(
@@ -240,21 +253,14 @@ describe("HostIdentityPanel", () => {
     expect(mocks.listDevices).not.toHaveBeenCalled();
   });
 
-  it("requires named confirmation and sends the displayed revision", async () => {
+  // 设备表并进了对外服务那一块（G3-11）：这里只报会话，不再自己列设备。
+  it("reports the session upward instead of listing devices itself", async () => {
     mocks.resume.mockResolvedValue(session);
-    render(<HostIdentityPanel hello={hello} />);
-    const button = await screen.findByLabelText(
-      hostIdentity["zh-CN"]["hostIdentity.revokeNamed"]!.replace(
-        "{name}",
-        "Phone",
-      ),
-    );
-    fireEvent.click(button);
-    const dialog = await screen.findByRole("alertdialog");
-    fireEvent.click(
-      within(dialog).getByText(hostIdentity["zh-CN"]["hostIdentity.confirm"]!),
-    );
-    await waitFor(() => expect(mocks.revoke).toHaveBeenCalledWith(otherId, 4));
+    const onSession = vi.fn();
+    render(<HostIdentityPanel hello={hello} onSession={onSession} />);
+    await waitFor(() => expect(onSession).toHaveBeenLastCalledWith(session));
+    expect(mocks.listDevices).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /撤销/ })).toBeNull();
   });
 
   it("does not announce logout until the core confirms it", async () => {
@@ -315,7 +321,7 @@ describe("HostIdentityPanel", () => {
     expect((await screen.findAllByText(/My browser/))[0]).toBeTruthy();
     act(() => usePreferencesStore.setState({ locale: "en" }));
     expect(
-      await screen.findByText(hostIdentity.en["hostIdentity.devices"]!),
+      await screen.findByText(hostIdentity.en["hostIdentity.logout"]!),
     ).toBeTruthy();
     expect(mocks.resume).toHaveBeenCalledTimes(1);
   });

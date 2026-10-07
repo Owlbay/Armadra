@@ -25,6 +25,7 @@ const zh = {
   "add.importFiles": "导入文件…",
   "add.browser": "新建浏览器",
   "add.automation": "新建定时计划",
+  "add.workflow": "工作流",
   "add.agentActivity": "新建活动卡片",
   "add.notInstalled": "未安装",
   "add.noTerminal": "画布上还没有终端",
@@ -211,7 +212,7 @@ const zh = {
 
   /* 删除确认：只有节点里跑着会话时才弹 */
   "delete.session.title": "结束会话并删除？",
-  "delete.session.confirm": "删除",
+  "delete.session.confirm": "结束并删除",
   "delete.cancel": "取消",
 
   /* 在线设备与编辑租约（core JSON §9） */
@@ -247,6 +248,7 @@ const en: Record<keyof typeof zh, string> = {
   "add.importFiles": "Import files…",
   "add.browser": "New browser",
   "add.automation": "New scheduled plan",
+  "add.workflow": "Workflows",
   "add.agentActivity": "New activity card",
   "add.notInstalled": "Not installed",
   "add.noTerminal": "No terminal on this canvas",
@@ -412,7 +414,7 @@ const en: Record<keyof typeof zh, string> = {
   "wb.input.trackpad": "Trackpad",
 
   "delete.session.title": "End the session and delete?",
-  "delete.session.confirm": "Delete",
+  "delete.session.confirm": "End and delete",
   "delete.cancel": "Cancel",
 
   "presence.label": "Devices online",

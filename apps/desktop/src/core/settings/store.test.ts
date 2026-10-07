@@ -119,7 +119,15 @@ describe("the local split", () => {
     // follow them; only the probe cache underneath it is local.
     expect(isLocal("agents.custom")).toBe(false);
     expect(localPaths()).toContain("agents.probes");
-    expect(localPaths()).toHaveLength(7);
+    // 推送密钥的文件路径指的是这台机器上的文件；其余推送项跟着账号走。
+    expect(isLocal("push.apns.keyFile")).toBe(true);
+    expect(isLocal("push.fcm.serviceAccountFile")).toBe(true);
+    expect(isLocal("push.apns.keyId")).toBe(false);
+    expect(isLocal("push.relayUrl")).toBe(false);
+    // 出站隧道开不开、连哪个节点只对这台机器成立；组织默认角色跟着账号走。
+    expect(isLocal("cloud.relay.enabled")).toBe(true);
+    expect(isLocal("cloud.orgDefaultRole")).toBe(false);
+    expect(localPaths()).toHaveLength(11);
   });
 
   it("recognises a document written before the split", () => {
@@ -168,6 +176,8 @@ describe("SettingsStore", () => {
     expect((shared.terminal as JsonObject).detachedGraceMinutes).toBe(30);
     expect("backend" in (shared.terminal as JsonObject)).toBe(false);
     expect("power" in shared).toBe(false);
+    // Gateway 的配置整段在本机：监听接口、端口与证书文件都只对这台机器成立。
+    expect("gateway" in shared).toBe(false);
 
     const local = readJson(files.local);
     expect((local.terminal as JsonObject).backend).toBe("tmux");
@@ -175,7 +185,22 @@ describe("SettingsStore", () => {
     // Only the local paths are in it. `browser.executablePath` is one of them
     // and `normalize` always writes it, so an empty string here is the
     // documented "detect a browser" and not a leak of the account's half.
-    expect(Object.keys(local).sort()).toEqual(["browser", "power", "terminal"]);
+    // 推送的两个密钥路径同理：缺省是空串，只有这两项、没有别的推送设置。
+    expect(Object.keys(local).sort()).toEqual([
+      "browser",
+      "cloud",
+      "gateway",
+      "power",
+      "push",
+      "terminal",
+    ]);
+    expect(local.push).toEqual({
+      apns: { keyFile: "" },
+      fcm: { serviceAccountFile: "" },
+    });
+    expect(local.cloud).toEqual({
+      relay: { enabled: true, preferredNode: "" },
+    });
     expect("usage" in local).toBe(false);
     expect("detachedGraceMinutes" in (local.terminal as JsonObject)).toBe(
       false,
@@ -271,6 +296,21 @@ describe("SettingsStore", () => {
     });
     document = store.patch({ ssh: { hosts: [] } });
     expect(document.ssh).toEqual({ hosts: [] });
+  });
+
+  it("tells its listeners after every patch, with the document it wrote", () => {
+    const store = SettingsStore.inMemory({});
+    const seen: unknown[] = [];
+    const stop = store.onChange((document) =>
+      seen.push((document.cloud as JsonObject).relay),
+    );
+    store.onChange(() => {
+      throw new Error("一个订阅者失败不影响别的");
+    });
+    store.patch({ cloud: { relay: { enabled: false } } });
+    stop();
+    store.patch({ cloud: { relay: { enabled: true } } });
+    expect(seen).toEqual([{ enabled: false, preferredNode: "" }]);
   });
 
   it("deletes a key a patch sets to null", () => {

@@ -52,6 +52,41 @@ export const INHERITED_ENV: readonly string[] = [
   "LOCALAPPDATA",
 ];
 
+/**
+ * What a Windows program expects to find besides the identity variables:
+ * without `SystemRoot` Windows PowerShell 5.1 does not even start ("Loading
+ * managed Windows PowerShell failed with error 8009001d"), without `TEMP` /
+ * `TMP` every tool writes into the system directory, without `PATHEXT` a bare
+ * `claude` is not found. Not `PSModulePath`: pwsh 7 puts its own modules there
+ * and 5.1 then cannot load its own (G3-3).
+ */
+export const WINDOWS_INHERITED_ENV: readonly string[] = [
+  "SystemRoot",
+  "SystemDrive",
+  "windir",
+  "ComSpec",
+  "PATHEXT",
+  "TEMP",
+  "TMP",
+  "USERNAME",
+  "USERDOMAIN",
+  "COMPUTERNAME",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "ProgramData",
+  "ProgramFiles",
+  "ProgramFiles(x86)",
+  "ProgramW6432",
+  "CommonProgramFiles",
+  "CommonProgramFiles(x86)",
+  "CommonProgramW6432",
+  "ALLUSERSPROFILE",
+  "PUBLIC",
+  "OS",
+  "NUMBER_OF_PROCESSORS",
+  "PROCESSOR_ARCHITECTURE",
+];
+
 export type EnvPairs = readonly (readonly [string, string])[];
 
 /**
@@ -63,7 +98,21 @@ export type EnvPairs = readonly (readonly [string, string])[];
  * is about to drive. They are not on the allow-list, so they are dropped — the
  * test asserts that directly rather than trusting the list to be read.
  */
-export function inherited(name: string): boolean {
+export function inherited(
+  name: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  // Windows spells its variables as it likes (`SystemRoot`, `ComSpec`) and
+  // treats them case-insensitively; an exact-name match dropped every one of
+  // them, PowerShell 5.1 included (G3-2 acceptance run).
+  if (platform === "win32") {
+    const upper = name.toUpperCase();
+    if (
+      INHERITED_ENV.some((known) => known.toUpperCase() === upper) ||
+      WINDOWS_INHERITED_ENV.some((known) => known.toUpperCase() === upper)
+    )
+      return true;
+  }
   return (
     INHERITED_ENV.includes(name) ||
     name.toUpperCase().endsWith("_PROXY") ||
@@ -142,10 +191,42 @@ export function agentPath(
   return directories.join(delimiter);
 }
 
+/** The directory `armadra-hook` is in, when there is one on this box. */
+function hookDirectoryOf(hookBin: string | undefined): string | undefined {
+  return hookBin !== undefined && existsSync(hookBin)
+    ? join(hookBin, "..")
+    : undefined;
+}
+
+/**
+ * `PATH` for a canvas node's terminal: the integration's `shims/` directory
+ * first, then {@link agentPath} exactly as every other terminal gets it
+ * (docs/design/canvas-launcher.md §4.3).
+ *
+ * The one prepended entry. A shim has the CLI's own name, so a `claude` the
+ * user types after leaving the CLI still goes through the canvas launcher;
+ * the shim takes its directory off `PATH` and hands over to whatever the rest
+ * of `PATH` finds, so the user's own tool still wins — it is only wrapped.
+ * The pair replaces {@link childEnvironment}'s `PATH` by name in every
+ * backend (direct and session-host by key, tmux per session with `-e`).
+ */
+export function canvasPath(
+  shims: string,
+  ambient: NodeJS.ProcessEnv = process.env,
+  hookBin: string | undefined = hookClient(),
+): string {
+  const rest = agentPath(ambient, hookDirectoryOf(hookBin))
+    .split(delimiter)
+    .filter((entry) => entry !== "" && entry !== shims);
+  return [shims, ...rest].join(delimiter);
+}
+
 export interface ChildEnvironmentOptions {
   readonly ambient?: NodeJS.ProcessEnv;
   /** Where `armadra-hook` lives, when R3 has told us. */
   readonly hookBin?: string | undefined;
+  /** Whose variable names apply; defaults to this process' platform (tests). */
+  readonly platform?: NodeJS.Platform;
 }
 
 /**
@@ -181,14 +262,11 @@ export function childEnvironment(
   const ambient = options.ambient ?? process.env;
   const env: (readonly [string, string])[] = [];
   for (const [key, value] of Object.entries(ambient)) {
-    if (value !== undefined && inherited(key)) env.push([key, value]);
+    if (value !== undefined && inherited(key, options.platform))
+      env.push([key, value]);
   }
   const hookBin = options.hookBin ?? hookClient();
-  const hookDirectory =
-    hookBin !== undefined && existsSync(hookBin)
-      ? join(hookBin, "..")
-      : undefined;
-  env.push(["PATH", agentPath(ambient, hookDirectory)]);
+  env.push(["PATH", agentPath(ambient, hookDirectoryOf(hookBin))]);
   if (hookBin !== undefined) {
     // The sidecar's directory is on that PATH, but an rc file may replace PATH
     // wholesale; the skill then says to use this instead.

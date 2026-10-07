@@ -14,6 +14,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { probeSession } from "./probe-session.mjs";
 import {
   checkRealDirectories,
   realVersion,
@@ -114,8 +115,10 @@ function cli(args) {
     );
   return reply.data;
 }
+let metadataSession;
 async function getMetadata(origin, path) {
-  const response = await fetch(origin + path, {
+  metadataSession ??= await probeSession({ dataDir, base: origin });
+  const response = await metadataSession.fetch(path, {
     signal: AbortSignal.timeout(10000),
   });
   if (!response.ok)

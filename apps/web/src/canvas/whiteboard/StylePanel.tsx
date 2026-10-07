@@ -18,6 +18,7 @@ import {
 } from "@/app/preferences/whiteboard";
 import { Button } from "@/ui/button";
 import { ColorDot } from "@/ui/color-dot";
+import { IconButton } from "@/ui/icon-button";
 import { Separator } from "@/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui/tooltip";
@@ -230,24 +231,24 @@ export function CanvasStylePanel() {
             {t("style.arrow")}
           </span>
           <div className="flex items-center gap-1">
-            <Button
-              variant={arrowStart ? "secondary" : "ghost"}
-              size="icon-sm"
-              aria-pressed={arrowStart}
+            <IconButton
+              size="cluster"
+              label={t("style.arrow.start")}
+              active={arrowStart}
               title={t("style.arrow.start")}
               onClick={() => applyArrow({ arrowStart: !arrowStart })}
             >
               <ArrowLeft />
-            </Button>
-            <Button
-              variant={arrowEnd ? "secondary" : "ghost"}
-              size="icon-sm"
-              aria-pressed={arrowEnd}
+            </IconButton>
+            <IconButton
+              size="cluster"
+              label={t("style.arrow.end")}
+              active={arrowEnd}
               title={t("style.arrow.end")}
               onClick={() => applyArrow({ arrowEnd: !arrowEnd })}
             >
               <ArrowRight />
-            </Button>
+            </IconButton>
           </div>
         </div>
       ) : null}

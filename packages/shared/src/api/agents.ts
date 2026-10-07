@@ -3,12 +3,40 @@ import { z } from "zod";
 import { agentProbeSchema } from "../agent-capabilities.js";
 import { AGENT_CAPABILITIES, AGENT_IDS, PROMPT_MODES } from "../agents.js";
 import { agentIdSchema } from "../domain/index.js";
+import { agentAcpInfoSchema } from "./acp.js";
 
-/** A `LaunchWord` (`shell.ts`): a literal value, or a prefix and a variable. */
-export const launchWordSchema = z.union([
-  z.string(),
-  z.object({ prefix: z.string(), env: z.string() }),
-]);
+/** One of `history.index` / `cost` / `transcript` (contract §12.2). */
+export const HISTORY_STATES = [
+  "available",
+  "not-found",
+  "unsupported",
+  "disabled",
+] as const;
+export const historyStateSchema = z.enum(HISTORY_STATES);
+export type HistoryState = z.infer<typeof historyStateSchema>;
+
+export const agentHistorySchema = z.object({
+  index: historyStateSchema,
+  cost: historyStateSchema,
+  transcript: historyStateSchema,
+});
+export type AgentHistory = z.infer<typeof agentHistorySchema>;
+
+/**
+ * An execution host whose Worker is older than this build expects (contract
+ * §21.2): canvas launches there carry a stale injection until it is resynced.
+ * Reported on the integration state (`GET /api/agents/{id}/integration`)
+ * only — the hosts are the same for every agent, so the agent rows do not
+ * repeat them.
+ */
+export const outdatedHostSchema = z.looseObject({
+  hostId: z.string().min(1),
+  /** The host's name in the registry, when it is still there. */
+  name: z.string().optional(),
+  /** The Worker version the host reported, when it reported one. */
+  version: z.string().optional(),
+});
+export type OutdatedHost = z.infer<typeof outdatedHostSchema>;
 
 /** `GET /api/agents` — registry entry plus local detection. */
 export const agentInfoSchema = z.object({
@@ -54,29 +82,31 @@ export const agentInfoSchema = z.object({
    */
   probe: agentProbeSchema.nullish(),
   /**
-   * Argv a canvas launch of this agent carries — the canvas injection
-   * (docs/design/canvas-only-integration.md §2): Claude's `--settings` /
-   * `--plugin-dir` / `--append-system-prompt-file`, Codex's `-c` hooks and
-   * developer instructions, and so on. Empty when nothing is prepared.
+   * The canvas launcher on the core's machine (docs/design/canvas-launcher.md
+   * §8.1): `run/<cli>` in its data directory, `run\<cli>.exe` on Windows. A
+   * canvas launch line starts it with the CLI's program, the words that go in
+   * front of the CLI's own and the CLI's flags as its arguments; the launcher
+   * appends the injection (hooks, skill, canvas instructions) and sets the
+   * injected environment for the CLI process only, and only inside a canvas
+   * node (`ARMADRA_NODE_ID` set). A `custom:` entry answers its base CLI's.
    *
-   * It is answered per request rather than frozen into a launch definition
-   * because both halves are the runtime's: the path is that data directory's
-   * and the flag is that CLI version's.
-   *
-   * Optional rather than defaulted: the runtime omits it when there is nothing
-   * to add, and "this agent needs no argv" and "this runtime predates the
-   * field" are the same instruction to the caller — add nothing.
+   * Absent when there is no current launcher — not written yet, no data
+   * directory, Windows without `armadra-launch.exe`: the line is then bare.
+   * The injected argv is not on the row; `GET /api/agents/{id}/integration`
+   * answers it as `launchArgs` (contract §13.2).
    */
-  launchArgs: z.array(z.string()).optional(),
+  launcher: z.string().optional(),
   /**
-   * The same injection as words for a typed launch line, not yet quoted: the
-   * page quotes them for the node terminal's shell (`shell.ts`). Codex's
-   * words name environment variables the node's terminal carries
-   * (`{ prefix, env }`) instead of spelling kilobytes out: a line that long is
-   * cut off while a fresh shell is still echoing it. The page uses these when
-   * present, and `launchArgs` otherwise.
+   * Whether this machine has the CLI's local history (contract §12.2): the
+   * session index, local cost, and transcripts read over a link. Optional
+   * because a runtime that predates the field simply does not say.
    */
-  launchWords: z.array(launchWordSchema).optional(),
+  history: agentHistorySchema.optional(),
+  /**
+   * How this CLI speaks the Agent Client Protocol on this machine (contract
+   * §14.1). Absent from a core without ACP, and for an agent without a path.
+   */
+  acp: agentAcpInfoSchema.optional(),
 });
 
 export const agentListSchema = z.array(agentInfoSchema);
@@ -170,19 +200,30 @@ export const integrationStateSchema = z.looseObject({
   installedRevision: z.number().int().nonnegative().optional(),
   stale: z.boolean().default(false),
   /**
-   * Argv a session of this agent must carry for its adapter to load. Empty for
-   * every mode but `launch`, and for an integration that is not installed.
+   * Argv the launcher appends to a canvas launch of this agent, literal — for
+   * display and for a probe that execs the CLI itself. Empty for an
+   * integration that is not written.
    */
   launchArgs: z.array(z.string()).default([]),
-  /** The same as words for a typed launch line, unquoted. */
-  launchWords: z.array(launchWordSchema).default([]),
-  /** Names of the environment variables a canvas launch sets. */
+  /** Names of the environment variables the launcher sets for the CLI. */
   launchEnv: z.array(z.string()).default([]),
   /**
-   * Files outside the data directory this integration writes — Codex's
-   * `config.toml`, for its hook trust records, and nothing else.
+   * @deprecated Files outside the data directory this integration writes:
+   * none any more (docs/design/canvas-launcher.md §8.2), always `[]` from a
+   * current core. Kept one release for an older core, which listed Codex's
+   * `config.toml` here for its hook trust records.
    */
   globalWrites: z.array(z.string()).default([]),
+  /** `run/<cli>` on the core's machine, when it is there and current. */
+  launcher: z.string().optional(),
+  /** `shims/<cli>` on the core's machine, when it is there. */
+  shim: z.string().optional(),
+  /**
+   * Why canvas launches of this agent carry less than they should: no
+   * launcher on Windows (`armadra-launch.exe` missing), or a Codex too old
+   * for hooks without persisted trust.
+   */
+  launcherWarning: z.string().optional(),
   /** What the one-time move away from the old global install did here. */
   migration: z
     .object({
@@ -190,9 +231,26 @@ export const integrationStateSchema = z.looseObject({
       removed: z.array(z.string()).default([]),
       backups: z.array(z.string()).default([]),
       error: z.string().optional(),
+      /**
+       * Codex only: the session-flag trust records (`/<session-flags>/…`) the
+       * migration's second step took out of `~/.codex/config.toml`.
+       */
+      sessionTrust: z
+        .object({
+          at: z.string(),
+          removed: z.array(z.string()).default([]),
+          backup: z.string().optional(),
+          error: z.string().optional(),
+        })
+        .optional(),
     })
     .optional(),
   clientBin: z.string().optional(),
+  /**
+   * Execution hosts whose Worker needs an upgrade and a resync (contract
+   * §21.2). Present from a core with the Worker fleet; usually empty.
+   */
+  outdatedHosts: z.array(outdatedHostSchema).optional(),
   /** Something worked but deserves a sentence in the settings page. */
   warning: z.string().optional(),
 });
@@ -215,6 +273,8 @@ export const integrationRepairReportSchema = z.looseObject({
 
 export const answerApprovalRequestSchema = z.object({
   decision: z.enum(["allow", "deny"]),
+  /** An ACP approval's chosen option (contract §14.4). */
+  optionId: z.string().optional(),
 });
 
 /**
@@ -229,7 +289,8 @@ export const answerApprovalResponseSchema = z.looseObject({
   answer: z.enum(["allow", "deny"]),
   answeredAt: z.string().datetime({ offset: true }),
   revision: z.number(),
-  route: z.enum(["file", "keys", "none"]),
+  /** `acp`: answered on the pending `session/request_permission`. */
+  route: z.enum(["file", "keys", "none", "acp"]),
 });
 
 /**
@@ -303,3 +364,19 @@ export type IntegrationRepairReport = z.infer<
 export type AnswerApprovalRequest = z.infer<typeof answerApprovalRequestSchema>;
 export type ContextLink = z.infer<typeof contextLinkSchema>;
 export type ContextLinkContent = z.infer<typeof contextLinkContentSchema>;
+
+/**
+ * `GET /api/agents/ama/credentials`（契约 §12.4）：Armadra Agent 的模型密钥。
+ * 只说哪家供应商设了、存在哪个后端（与 `copilotBackendSchema` 同一组取值），
+ * 从不带值；供应商列表由 core 给，页面不自己列。
+ */
+export const amaCredentialStatusSchema = z.object({
+  backend: z.enum(["keychain", "dpapi", "libsecret", "file-encrypted", "file"]),
+  providers: z.array(z.object({ id: z.string(), isSet: z.boolean() })),
+});
+export type AmaCredentialStatus = z.infer<typeof amaCredentialStatusSchema>;
+
+/** `PUT /api/agents/ama/credentials/{provider}` 的请求体。 */
+export const amaCredentialRequestSchema = z.object({
+  apiKey: z.string().min(1),
+});

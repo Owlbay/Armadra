@@ -12,8 +12,9 @@ import { terminalNodeCommands } from "./delivery-commands";
 
 const drives = vi.hoisted(() => ({ calls: [] as [string, string][] }));
 
-vi.mock("@/api/terminals", () => ({
-  terminalsApi: {
+vi.mock("@/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/client")>()),
+  runtimeApi: {
     driveTerminal: (sessionId: string, action: string) => {
       drives.calls.push([sessionId, action]);
       return Promise.resolve({});

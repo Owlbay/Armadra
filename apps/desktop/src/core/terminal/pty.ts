@@ -1,4 +1,4 @@
-import { accessSync, constants, statSync } from "node:fs";
+import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import { internal } from "./backend";
 
@@ -70,15 +70,50 @@ let cached: NodePtyModule | undefined;
  */
 export function loadNodePty(): NodePtyModule {
   if (cached !== undefined) return cached;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    cached = require("node-pty") as NodePtyModule;
-  } catch (error) {
-    throw internal(
-      `node-pty 无法加载，终端不可用：${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
+  cached = requireNodePty();
   return cached;
+}
+
+/**
+ * Where node-pty is when it cannot be found by name: a bundle copied *out of*
+ * the asar — the Windows session host runs as
+ * `<resources>/session-host/host.cjs` — has no `node_modules` above it, so
+ * `require("node-pty")` fails there although the package sits, unpacked, in
+ * `<resources>/app.asar.unpacked/node_modules/node-pty` (electron-builder's
+ * `asarUnpack`). A packaged Windows build answered every new terminal with
+ * "Cannot find module 'node-pty'" until this (G3-2 acceptance run).
+ */
+export function nodePtyCandidates(directory: string = __dirname): string[] {
+  return [
+    join(directory, "..", "app.asar.unpacked", "node_modules", "node-pty"),
+  ];
+}
+
+/** `require("node-pty")`, then {@link nodePtyCandidates}; the first error is the one reported. */
+export function requireNodePty(
+  load: (id: string) => unknown = (id) =>
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require(id),
+  candidates: readonly string[] = nodePtyCandidates(),
+  exists: (path: string) => boolean = existsSync,
+): NodePtyModule {
+  let first: unknown;
+  try {
+    return load("node-pty") as NodePtyModule;
+  } catch (error) {
+    first = error;
+  }
+  for (const candidate of candidates) {
+    if (!exists(candidate)) continue;
+    try {
+      return load(candidate) as NodePtyModule;
+    } catch {
+      // The first failure says more than this one.
+    }
+  }
+  throw internal(
+    `node-pty 无法加载，终端不可用：${first instanceof Error ? first.message : String(first)}`,
+  );
 }
 
 /** Test seam: hands the loader a stub without touching the real module. */

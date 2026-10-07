@@ -1,13 +1,16 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { RotateCw, X } from "lucide-react";
+import { CalendarClock, RotateCw, X } from "lucide-react";
 
+import { Alert, AlertTitle } from "@/ui/alert";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui/empty";
 import { IconButton } from "@/ui/icon-button";
 import { ScrollArea } from "@/ui/scroll-area";
 import { SheetTitle } from "@/ui/sheet";
+import { Skeleton } from "@/ui/skeleton";
 import { WorkPanelSheet } from "../WorkPanelSheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui/tabs";
 import { usePreferencesStore, useT } from "@/app/preferences-store";
@@ -80,7 +83,7 @@ export function AutomationDrawer() {
 
   const client = state.status === "ready" ? state.client : null;
   const canManage = state.status === "ready" && state.canManage;
-  const hostId = state.status === "ready" ? state.hello.hostId : "";
+  const hostId = state.status === "ready" ? state.hello.sourceId : "";
 
   const plans = useQuery({
     queryKey: automationKeys.plans(workspaceId ?? ""),
@@ -234,13 +237,12 @@ export function AutomationDrawer() {
       </div>
 
       {blocked ? (
-        <div
-          role="status"
-          className="min-w-0 space-y-3 p-4 text-[13px] leading-5"
-        >
-          <p className="text-muted-foreground">
-            {t(`automation.blocked.${blocked}`)}
-          </p>
+        <Empty role="status" className="min-w-0 p-4">
+          <EmptyHeader>
+            <EmptyTitle className="text-[13px] leading-5 font-normal text-muted-foreground">
+              {t(`automation.blocked.${blocked}`)}
+            </EmptyTitle>
+          </EmptyHeader>
           <Button
             size="sm"
             variant="secondary"
@@ -253,11 +255,16 @@ export function AutomationDrawer() {
           >
             {t("automation.blocked.action")}
           </Button>
-        </div>
+        </Empty>
       ) : !client ? (
-        <p role="status" className="p-4 text-[13px] text-muted-foreground">
-          {t("automation.loading")}
-        </p>
+        <div
+          role="status"
+          aria-label={t("automation.loading")}
+          className="space-y-2 p-3"
+        >
+          <Skeleton className="h-16 w-full rounded-[var(--r-card)]" />
+          <Skeleton className="h-16 w-full rounded-[var(--r-card)]" />
+        </div>
       ) : (
         <Tabs
           value={tab}
@@ -289,14 +296,23 @@ export function AutomationDrawer() {
             <ScrollArea className="min-h-0 flex-1">
               <div className="min-w-0 space-y-2 p-3">
                 {plans.isError && (
-                  <p role="status" className="text-[12px] text-destructive">
-                    {t(failureKey(plans.error))}
-                  </p>
+                  <Alert variant="destructive">
+                    <AlertTitle className="font-normal break-words">
+                      {t(failureKey(plans.error))}
+                    </AlertTitle>
+                  </Alert>
                 )}
                 {plans.isSuccess && plans.data.length === 0 && (
-                  <p className="text-[12px] text-muted-foreground">
-                    {t("automation.empty")}
-                  </p>
+                  <Empty data-slot="automation-empty">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <CalendarClock />
+                      </EmptyMedia>
+                      <EmptyTitle className="text-[13px] font-normal text-muted-foreground">
+                        {t("automation.empty")}
+                      </EmptyTitle>
+                    </EmptyHeader>
+                  </Empty>
                 )}
                 {plans.data?.map((snapshot) => (
                   <PlanRow
@@ -366,9 +382,13 @@ export function AutomationDrawer() {
                   }}
                 />
               ) : (
-                <p className="p-3 text-[12px] text-muted-foreground">
-                  {t("automation.readOnly")}
-                </p>
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyTitle className="text-[13px] font-normal text-muted-foreground">
+                      {t("automation.readOnly")}
+                    </EmptyTitle>
+                  </EmptyHeader>
+                </Empty>
               )}
             </ScrollArea>
           </TabsContent>

@@ -194,6 +194,8 @@ describe("SettingsDialog", () => {
         resources: "closed",
         automation: "closed",
         handoff: "closed",
+        workflow: "closed",
+        dispatch: "closed",
         usage: "closed",
         github: "closed",
         problems: "closed",
@@ -383,7 +385,7 @@ describe("SettingsDialog", () => {
     open();
     fireEvent.click(navItem(zh("settings.section.data")));
     expect(await screen.findByText("/tmp/armadra")).toBeTruthy();
-    expect(screen.getByText("2.0 KB")).toBeTruthy();
+    expect(screen.getByText("2 KB")).toBeTruthy();
     expect(
       screen.getByText(
         zh("settings.conversationCount").replace("{value}", "12"),

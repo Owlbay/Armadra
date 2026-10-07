@@ -2,7 +2,10 @@
  * The settings domain: the preferences document, the local split, and the
  * execution host registry read out of it.
  *
- * Nine routes, all of them phase 1. `POST /api/execution-hosts/{id}/validate`
+ * Nine routes from phase 1, plus `GET /api/execution-hosts/{id}` and
+ * `POST …/{id}/resync` for the Worker fleet (contract §21.2; the reconnect
+ * itself is the remote domain's, reached through `remote/fleet.ts`).
+ * `POST /api/execution-hosts/{id}/validate`
  * is the tenth in the table and is **not** here: it reaches a machine over
  * `ssh` and runs the Worker's version handshake, so it is registered by
  * `core/remote`, which owns the host-key file, the askpass helper and the
@@ -17,18 +20,29 @@ import {
   deleteExecutionHost,
   exportExecutionHosts,
   importExecutionHosts,
+  getExecutionHost,
   listExecutionHosts,
   putExecutionHost,
+  resyncExecutionHost,
   type ExecutionHostDeps,
 } from "./execution-hosts";
-import { getLocalSettings, getSettings, patchSettings } from "./routes";
+import { CoreFailure } from "../http/errors";
+import { registerProcedures } from "../http/rpc";
+import type { JsonObject } from "./local";
+import { localPaths } from "./local";
+import {
+  applySettingsPatch,
+  getLocalSettings,
+  getSettings,
+  patchSettings,
+} from "./routes";
 import { SettingsStore } from "./store";
 import { workspaceCounts } from "./workspace-counts";
 
 export { SettingsStore } from "./store";
 export type { JsonObject, JsonValue } from "./local";
 export { isLocal, localPaths, LOCAL_PATHS } from "./local";
-export { normalize, merge } from "./schema";
+export { completionSettings, normalize, merge } from "./schema";
 export { parseHosts, validateHost, type SshHost } from "./ssh-hosts";
 
 /** The store this run assembled, so other domains can read a preference. */
@@ -68,6 +82,22 @@ export function install(context: CoreContext): SettingsDomain {
   };
 
   const { router } = context.server;
+  // 契约 §34.5：与下面三条旧路径同一份实现。
+  registerProcedures(context.server, "settings", {
+    get: () => deps.settings.snapshot(),
+    update: (patch) => {
+      const answer = applySettingsPatch(deps, patch);
+      if (answer.status >= 400) {
+        const { code, message } = answer.body as {
+          code: string;
+          message: string;
+        };
+        throw new CoreFailure(answer.status, code, message);
+      }
+      return answer.body as JsonObject;
+    },
+    local: () => ({ paths: [...localPaths()], file: deps.workerSettingsFile }),
+  });
   router.handle("GET", "/api/settings", () => getSettings(deps));
   router.handle("PATCH", "/api/settings", (_match, request) =>
     patchSettings(deps, request),
@@ -86,6 +116,13 @@ export function install(context: CoreContext): SettingsDomain {
   );
   router.handle("DELETE", "/api/execution-hosts/{hostId}", (match) =>
     deleteExecutionHost(hosts, match.params.hostId ?? ""),
+  );
+  // Worker 舰队（契约 §21.2）：单台主机的行（带 `worker`）与重新同步。
+  router.handle("GET", "/api/execution-hosts/{hostId}", (match) =>
+    getExecutionHost(hosts, match.params.hostId ?? ""),
+  );
+  router.handle("POST", "/api/execution-hosts/{hostId}/resync", (match) =>
+    resyncExecutionHost(hosts, match.params.hostId ?? ""),
   );
 
   assembled = { settings };

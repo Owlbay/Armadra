@@ -3,7 +3,10 @@ import { existsSync } from "node:fs";
 import test from "node:test";
 
 import {
+  RELEASE_ENV,
+  VERSION_ENV,
   distArch,
+  isLocalBuild,
   electronViteEntry,
   mergeConfig,
   platformKey,
@@ -84,4 +87,30 @@ test("the target types handed to the packager are the config's, per platform", (
   assert.equal(platformKey({ name: "mac" }), "mac");
   assert.equal(platformKey({ name: "windows" }), "win");
   assert.equal(platformKey({ name: "linux" }), "linux");
+});
+
+test("ARMADRA_DIST_RELEASE=1 is a release build: the package keeps its updater", () => {
+  const { config } = resolveConfig({ env: { [RELEASE_ENV]: "1" } });
+  assert.equal(config.extraMetadata, undefined);
+  assert.equal(isLocalBuild({ [RELEASE_ENV]: "0" }), true);
+  assert.equal(isLocalBuild({}), true);
+  assert.equal(isLocalBuild({ [RELEASE_ENV]: "1" }), false);
+});
+
+test("ARMADRA_DIST_VERSION packages under another version without touching the manifest", () => {
+  const { config } = resolveConfig({
+    env: { [RELEASE_ENV]: "1", [VERSION_ENV]: "9.8.7" },
+  });
+  assert.deepEqual(config.extraMetadata, { version: "9.8.7" });
+  assert.throws(
+    () => resolveConfig({ env: { [VERSION_ENV]: "next" } }),
+    /semver/,
+  );
+});
+
+test("only a Linux arm64 build packs AppImages with the static-runtime toolset", () => {
+  const arm = resolveConfig({ env: { ARMADRA_DIST_ARCH: "arm64" } }).config;
+  assert.equal(arm.toolsets?.appimage, "1.0.3");
+  const x64 = resolveConfig({ env: { ARMADRA_DIST_ARCH: "x64" } }).config;
+  assert.equal(x64.toolsets?.appimage, undefined);
 });

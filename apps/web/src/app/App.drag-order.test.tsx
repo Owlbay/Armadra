@@ -3,7 +3,6 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import type { Workspace } from "@armadra/shared";
 
 vi.mock("../api/client", () => ({
-  RUNTIME_URL: "http://127.0.0.1:0",
   runtimeApi: {
     listWorkspaces: vi.fn().mockResolvedValue([]),
     listBoards: vi.fn().mockResolvedValue([]),
@@ -70,9 +69,9 @@ beforeEach(() => {
   useCanvasStore.setState({ workspace: null, boards: [], boardId: null });
   useCanvasStore.getState().setPanel("sidebar", "open");
   usePreferencesStore.setState({
-    openWorkspaceIds: [],
-    collapsedWorkspaceIds: [],
-    pinnedBoardIds: [],
+    openWorkspaceKeys: [],
+    collapsedWorkspaceKeys: [],
+    pinnedBoardKeys: [],
   });
   // 拖拽属性只看 `window.armadra` 在不在（window-region.ts 的 isShell）；
   // 壳挂起来之后 App 还会去装全局快捷键、订阅窗口意图，所以桩得把这几样

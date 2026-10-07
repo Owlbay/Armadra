@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useGithubSession } from "@/host/github-session";
 import { githubKeys } from "./queries";
 import { GithubExternalReference, GithubReferenceKind } from "../../api/github";
+import type { ForgeFocusTarget } from "./open";
 
 /**
  * The GitHub items linked to one canvas node.
@@ -34,4 +35,20 @@ export function referenceTab(
   return reference.kind === GithubReferenceKind.PULL_REQUEST
     ? "pulls"
     : "issues";
+}
+
+/** Where a Gitea / GitLab reference's item lives; `null` for GitHub. */
+export function referenceTarget(
+  reference: GithubExternalReference,
+): ForgeFocusTarget | null {
+  const forge = reference.forge;
+  const repository = reference.repository;
+  if ((forge !== "gitea" && forge !== "gitlab") || !repository) return null;
+  if (!repository.host || !repository.owner || !repository.name) return null;
+  return {
+    forge,
+    host: repository.host,
+    owner: repository.owner,
+    name: repository.name,
+  };
 }

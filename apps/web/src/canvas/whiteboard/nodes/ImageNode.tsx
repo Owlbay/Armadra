@@ -1,6 +1,7 @@
 import * as React from "react";
 import type { Node, NodeProps } from "@xyflow/react";
 
+import { useAssetUrl } from "@/api/assets";
 import { useCanvasStore } from "@/store/canvas-store";
 import { assetUrlFor } from "../../assets";
 import type { ImageItem } from "../model";
@@ -13,6 +14,9 @@ import { ItemFrame } from "./ItemFrame";
  * （`assets.assetUrlFor`）——存下来的 `http://127.0.0.1:<port>` 在下一次
  * 启动时可能指向别人的端口，那样重开应用所有图片都会碎掉。
  *
+ * 原生 App 里 `<img>` 带不了 Bearer：地址经 `useAssetUrl` 换成 `blob:`（R-55），
+ * 取回之前先空着。
+ *
  * resize 锁比例：白板上的图不该被拉扁，要裁剪请回到图片工具（§1.3 明确
  * 放弃了裁剪与翻转）。
  */
@@ -24,12 +28,12 @@ export function ImageNode({
   selected = false,
 }: NodeProps<ImageFlowNode>) {
   const workspaceId = useCanvasStore((state) => state.workspace?.id ?? null);
-  const src = assetUrlFor(workspaceId, data.assetPath);
+  const src = useAssetUrl(assetUrlFor(workspaceId, data.assetPath));
   const [broken, setBroken] = React.useState(false);
 
   return (
     <ItemFrame item={data} selected={selected} keepAspectRatio>
-      {src && !broken ? (
+      {src === undefined ? null : src && !broken ? (
         <img
           src={src}
           alt={data.alt ?? ""}

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 
+import { acpAdapter } from "../acp/adapters";
 import { canvasLaunchLine, nodeDialect } from "../agent/canvas-launch";
 import type { ShellDialect } from "./shell";
 import {
@@ -29,7 +30,7 @@ import {
   scheduledFor,
 } from "./hibernate";
 import type { SessionRecord, TerminalManager } from "./manager";
-import { processTable } from "./process";
+import { readProcessTable } from "./process";
 
 /**
  * Eco 休眠的执行者：巡检、结束、接回（终端宿主设计 §7.2）。
@@ -57,13 +58,13 @@ export interface HibernatorOptions {
   readonly policy: () => EcoPolicy;
   /**
    * 节点令牌与地址变量——与 `POST /api/terminals` 起 Agent 终端时同一份。
-   * `dialect` 是接回来的那一代要跑的 shell 的方言：Codex 从环境里展开的值要
-   * 按它写。
+   * `ssh`：节点终端是 SSH 会话，本机的垫片目录不进它的环境。
    */
   readonly environment: (
     nodeId: string,
     agentId: string,
-    dialect: ShellDialect,
+    ssh: boolean,
+    options?: { readonly acp?: boolean },
   ) => EnvPairs;
   /**
    * 本机解析到的程序路径（`GET /api/agents` 那一行的 `resolvedPath`）。缺席时
@@ -81,7 +82,7 @@ export interface HibernatorOptions {
   readonly processes?: (
     panePid: number,
     agentNames: readonly string[],
-  ) => { shellChildren: string[]; agentDescendants: string[] };
+  ) => Promise<{ shellChildren: string[]; agentDescendants: string[] }>;
   readonly clock?: () => number;
   readonly delay?: (ms: number) => Promise<void>;
   readonly log?: (message: string, fields?: Record<string, unknown>) => void;
@@ -220,9 +221,18 @@ export class Hibernator {
       observed?.lastOutputAt ?? 0,
       Number.isFinite(reportedAt) ? reportedAt : 0,
     );
+    // ACP 驱动的会话（ACP 设计 §5.3）：续接看适配器表（`none` 的 Copilot 永不
+    // 休眠），前台就是适配器进程本身，没有 shell 也就没有「退回了 shell」。
+    const acp = record.kind === "acp";
+    const resumable =
+      agentId !== null &&
+      (acp
+        ? (acpAdapter(baseAgent(settings, agentId))?.resume ?? "none") !==
+          "none"
+        : canResume(settings, agentId));
     const facts = {
       agentId,
-      resumable: agentId !== null && canResume(settings, agentId),
+      resumable,
       providerSessionId: status?.sessionId,
       remote: record.spec.sshHostId !== undefined,
       state: status?.state,
@@ -239,7 +249,7 @@ export class Hibernator {
       thresholdMs: policy.idleMinutes * 60_000,
     };
     const cheap = hibernationBlockers(facts);
-    if (cheap.length > 0 || agentId === null) return cheap;
+    if (cheap.length > 0 || agentId === null || acp) return cheap;
 
     // 前台与进程树。问不到就当「不是」：看不清的会话不动。
     const names = expectedProcesses(baseAgent(settings, agentId));
@@ -263,7 +273,7 @@ export class Hibernator {
           );
     let background = false;
     if (isAgent === true && foreground?.pid !== undefined) {
-      const tree = (this.options.processes ?? processesUnder)(
+      const tree = await (this.options.processes ?? processesUnder)(
         foreground.pid,
         names,
       );
@@ -283,7 +293,10 @@ export class Hibernator {
     // 判完到动手之间隔着一次 `ps`：这期间有人附着了就不动它。
     if (this.manager.attachedSockets(record.id) > 0) return false;
     this.states.set(nodeId, "hibernate-requested");
-    const quit = await this.askToQuit(record, nodeId);
+    // ACP 会话没有可敲退出命令的输入框：结束就是 cancel 之后收掉适配器（后端
+    // 的 `terminate`），挂起的审批随之回 `cancelled`。
+    const quit =
+      record.kind === "acp" ? "none" : await this.askToQuit(record, nodeId);
     try {
       await this.manager.hibernate(record.id);
     } catch (error) {
@@ -360,6 +373,20 @@ export class Hibernator {
       }
       if (this.clock() - started >= EXIT_GRACE_MS) return "timeout";
     }
+  }
+
+  /**
+   * 切换驱动方式的收尾（ACP 设计 §4.2 第 2 步）：与休眠同一个「先礼后兵」——
+   * 在 CLI 的输入框里敲它自己的退出命令、等它把会话写完。之后由调用方结束会
+   * 话。不是这个进程里活着的会话答 `none`。
+   */
+  async quitForSwitch(sessionId: string): Promise<"quit" | "timeout" | "none"> {
+    const record = this.manager
+      .liveRecords()
+      .find((candidate) => candidate.id === sessionId);
+    if (record === undefined || record.ownerNodeId === null) return "none";
+    if (record.kind === "acp") return "none";
+    return this.askToQuit(record, record.ownerNodeId);
   }
 
   /* --------------------------------- 接回 --------------------------------- */
@@ -440,11 +467,19 @@ export class Hibernator {
       return fail("noProviderSession");
     }
     const settings = this.options.settings();
+    if (rowKind(this.database, sessionId) === "acp") {
+      return this.resumeAcp(
+        nodeId,
+        agentId,
+        sessionId,
+        workspaceId,
+        reason,
+        fail,
+      );
+    }
     // 下一代在同一行上起，跑的是同一个 shell；SSH 节点的行由远端的 shell 读。
-    const dialect = nodeDialect(
-      hibernated.shell ?? undefined,
-      node.data.ssh !== null && typeof node.data.ssh === "object",
-    );
+    const ssh = node.data.ssh !== null && typeof node.data.ssh === "object";
+    const dialect = nodeDialect(hibernated.shell ?? undefined, ssh);
     let line: string;
     try {
       line = resumeLine(settings, agentId, node.data, providerSessionId, {
@@ -463,7 +498,7 @@ export class Hibernator {
     try {
       revived = await this.manager.revive(
         sessionId,
-        this.options.environment(nodeId, agentId, dialect),
+        this.options.environment(nodeId, agentId, ssh),
       );
     } catch (error) {
       return fail("spawnFailed", error);
@@ -486,6 +521,38 @@ export class Hibernator {
     }
     this.states.delete(nodeId);
     this.log("Eco 休眠的会话已接回", { nodeId, sessionId, reason });
+    this.announce(workspaceId, sessionId, nodeId, "running", reason);
+    this.options.nudge?.(nodeId);
+    return { sessionId, generation: revived.generation };
+  }
+
+  /**
+   * ACP 驱动的接回（ACP 设计 §5.3）：同一行上起下一代就是再起适配器并以 CLI 的
+   * 会话 id `session/load`（或 `resume`）——计划由 ACP 域从节点数据与状态行推出
+   * （`core/acp/index.ts`）。适配器起来时会话已经开好，没有提示符要等、没有恢复
+   * 行要敲；回放的历史不进页面。
+   */
+  private async resumeAcp(
+    nodeId: string,
+    agentId: string,
+    sessionId: string,
+    workspaceId: string,
+    reason: WakeReason,
+    fail: (why: string, error?: unknown) => never,
+  ): Promise<WakeResult> {
+    this.states.set(nodeId, "resuming");
+    this.announce(workspaceId, sessionId, nodeId, "resuming", reason);
+    let revived;
+    try {
+      revived = await this.manager.revive(
+        sessionId,
+        this.options.environment(nodeId, agentId, false, { acp: true }),
+      );
+    } catch (error) {
+      return fail("spawnFailed", error);
+    }
+    this.states.delete(nodeId);
+    this.log("Eco 休眠的 ACP 会话已接回", { nodeId, sessionId, reason });
     this.announce(workspaceId, sessionId, nodeId, "running", reason);
     this.options.nudge?.(nodeId);
     return { sessionId, generation: revived.generation };
@@ -623,14 +690,14 @@ function text(value: unknown): string | undefined {
 
 /**
  * pane shell 的直接子进程，与其中那个 Agent 的整棵子树（不含它自己）。
- * 一次 `ps`；Windows 上表是空的，于是两样都是空——那边的会话由 session-host
- * 持有，这条判据如实答「没看到后台作业」。
+ * 一次异步 `ps`（不在事件循环上等子进程）；Windows 上表是空的，于是两样都是
+ * 空——那边的会话由 session-host 持有，这条判据如实答「没看到后台作业」。
  */
-export function processesUnder(
+export async function processesUnder(
   panePid: number,
   agentNames: readonly string[],
-): { shellChildren: string[]; agentDescendants: string[] } {
-  const table = processTable();
+): Promise<{ shellChildren: string[]; agentDescendants: string[] }> {
+  const table = await readProcessTable();
   const direct = [...table.entries()].filter(
     ([, row]) => row.parent === panePid,
   );
@@ -657,6 +724,13 @@ export function processesUnder(
     shellChildren: direct.map(([, row]) => row.argv),
     agentDescendants: descendants,
   };
+}
+
+function rowKind(database: DatabaseSync, sessionId: string): string | null {
+  const row = database
+    .prepare("SELECT backend_kind FROM terminal_sessions WHERE id = ?")
+    .get(sessionId) as { backend_kind?: string | null } | undefined;
+  return row?.backend_kind ?? null;
 }
 
 function rowAgent(database: DatabaseSync, sessionId: string): string | null {

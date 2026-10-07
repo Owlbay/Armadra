@@ -25,6 +25,8 @@ import { setImmediate as yieldToLoop } from "node:timers/promises";
 import { join } from "node:path";
 
 import { AGENT_IDS, type AgentId } from "../agent/registry";
+import { HISTORY_ADAPTERS } from "../history/registry";
+import type { CostSample } from "../history/types";
 import {
   addToBucket,
   addTokens,
@@ -33,12 +35,16 @@ import {
   hourAt,
   isEmptyTokens,
   pruneHours,
+  record as recordTokens,
+  recordReportedCost,
   splitKey,
   totalTokens,
+  type CostUnit,
   type FileState,
   type TokenTotals,
 } from "./cost-buckets";
 import { COST_SOURCES, costSource, type AbsorbContext } from "./cost-sources";
+import type { ScannedBuckets } from "./local-window";
 
 export {
   addTokens,
@@ -51,7 +57,7 @@ export {
   splitKey,
   totalTokens,
 } from "./cost-buckets";
-export type { FileState, TokenTotals } from "./cost-buckets";
+export type { CostUnit, FileState, TokenTotals } from "./cost-buckets";
 export { COST_SOURCES, costSource } from "./cost-sources";
 export type { AgentCostSource } from "./cost-sources";
 
@@ -114,9 +120,18 @@ export type CostStatus = "ok" | "disabled" | "unavailable";
 /** `none` = 这家 agent 目前没有任何本地来源，token 一律是零而不是一个估数。 */
 export type CostAgentSource = "local" | "none";
 
+/**
+ * 一家 agent 在一个窗口里的用量（契约 §12.1）。
+ *
+ * `unit` 是 `"premiumRequests"` 时用量在 `requests`，`tokens` 是零、`costUsd` 是
+ * 0、`complete` 为真——请求数不折算成金额（设计 `cli-collaboration.md` §10）。
+ * `"tokens"` 的行 `requests` 是 0。
+ */
 export interface AgentCost {
   readonly agent: AgentId;
+  readonly unit: CostUnit;
   readonly tokens: TokenTotals;
+  readonly requests: number;
   readonly costUsd: number;
   readonly complete: boolean;
   readonly source: CostAgentSource;
@@ -177,8 +192,24 @@ function emptyWindow(): CostWindow {
   return { tokens: emptyTokens(), costUsd: 0, complete: true, models: [] };
 }
 
+/** 声明了快照式成本的那几家（OpenCode）。 */
+const SNAPSHOT_AGENTS: ReadonlySet<string> = new Set(
+  HISTORY_ADAPTERS.flatMap((adapter) =>
+    adapter.cost?.kind === "snapshot" ? [adapter.agentId] : [],
+  ),
+);
+
 function sourceOf(agent: AgentId): CostAgentSource {
-  return costSource(agent) === undefined ? "none" : "local";
+  return costSource(agent) !== undefined || SNAPSHOT_AGENTS.has(agent)
+    ? "local"
+    : "none";
+}
+
+/**
+ * 这家的成本行按什么计：逐行来源自己声明；快照式来源与没有来源的按 token。
+ */
+function unitOf(agent: AgentId): CostUnit {
+  return costSource(agent)?.unit ?? "tokens";
 }
 
 function emptyRange(granularity: "hour" | "day"): CostRange {
@@ -189,7 +220,9 @@ function emptyRange(granularity: "hour" | "day"): CostRange {
     byModel: [],
     byAgent: AGENT_IDS.map((agent) => ({
       agent,
+      unit: unitOf(agent),
       tokens: emptyTokens(),
+      requests: 0,
       costUsd: 0,
       complete: true,
       source: sourceOf(agent),
@@ -373,6 +406,20 @@ export interface ScanResult {
   readonly buckets: Map<string, TokenTotals>;
   /** 同一个形状，第一段是本地小时，只有最近 48 小时。 */
   readonly hourBuckets: Map<string, TokenTotals>;
+  /**
+   * 按请求计的来源（Copilot）记下的请求增量，键同 `buckets`。没有这类来源时可以
+   * 不给。不进 token 桶，也不进 `totals`。
+   */
+  readonly requestBuckets?: Map<string, number>;
+  /** 同上，小时粒度，只有最近 48 小时。 */
+  readonly requestHourBuckets?: Map<string, number>;
+  /**
+   * CLI 自己报的美元成本（快照式来源，OpenCode），键同 `buckets`。只在价格表认
+   * 不出模型时用来兜底，见 {@link windowFrom}。
+   */
+  readonly reportedCost?: Map<string, number>;
+  /** 同上，小时粒度，只有最近 48 小时。 */
+  readonly reportedHourCost?: Map<string, number>;
   /** 日期或小时 → 在那一格里有活动的文件（一次扫描内的序号）。 */
   readonly sessions: Map<string, Set<number>>;
   readonly files: Record<string, number>;
@@ -383,8 +430,45 @@ export interface ScanResult {
         tokens: TokenTotals;
         models: string[];
         updatedMs: number;
+        /** CLI 自己报的成本合计（快照式来源）；没有就没有。 */
+        reportedCost?: number;
       }
     | undefined;
+}
+
+/**
+ * 一个快照式成本来源（设计 `cli-collaboration.md` §9 H2）：没有逐行文件，每趟扫描
+ * 把某个时间之后的用量一次交齐。
+ */
+export interface SnapshotSource {
+  readonly agentId: AgentId;
+  /** 这家的来源（OpenCode 的库文件）还在不在。不在时它的贡献整体作废。 */
+  present(): boolean;
+  collect(sinceMs: number, ctx: AbsorbContext): readonly CostSample[];
+}
+
+/** 从注册表派生：每个声明了 `cost.kind === "snapshot"` 的适配器一项。 */
+export function snapshotSources(): SnapshotSource[] {
+  return HISTORY_ADAPTERS.flatMap((adapter): SnapshotSource[] => {
+    const cost = adapter.cost;
+    if (cost?.kind !== "snapshot") return [];
+    return [
+      {
+        agentId: adapter.agentId,
+        present: () => adapter.roots().some(exists),
+        collect: (sinceMs, ctx) => cost.collect(sinceMs, ctx),
+      },
+    ];
+  });
+}
+
+function exists(path: string): boolean {
+  try {
+    statSync(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** 每个有本地来源的 agent 要扫的根目录，见 {@link COST_SOURCES}。 */
@@ -590,18 +674,42 @@ async function eachAppendedLine(
 
 export class ScanState {
   private readonly files = new Map<string, FileState>();
+  /** 快照式来源的状态，以 `CostSample.key`（`opencode:<id>`）为键。 */
+  private readonly snapshots = new Map<string, FileState>();
+  /**
+   * 每家快照式来源交出过的最大时间戳，下一趟的 `sinceMs`。适配器按「含等于」取，
+   * 同一毫秒里已经交过的那些靠 {@link seen} 去重。
+   */
+  private readonly snapshotSince = new Map<AgentId, number>();
   private readonly seen = new Set<number>();
 
   constructor(private readonly now: () => number = () => Date.now()) {}
 
-  /** 对每个注册了来源的 agent 的记录树跑一趟。异步，因为文件解析要给事件循环让路。 */
+  /**
+   * 对每个注册了来源的 agent 的记录树跑一趟。异步，因为文件解析要给事件循环让路。
+   *
+   * 显式传了 `roots`（测试把逐行来源指向临时目录）而没传 `snapshots` 时，快照式
+   * 来源一个都不扫：否则测试会读到开发机上真实的 OpenCode 库。
+   */
   async scan(
-    roots: readonly (readonly [AgentId, string])[] = scanRoots(),
+    roots?: readonly (readonly [AgentId, string])[],
+    snapshots?: readonly SnapshotSource[],
   ): Promise<ScanResult> {
+    const wantedSnapshots =
+      snapshots ?? (roots === undefined ? snapshotSources() : []);
+    roots ??= scanRoots();
     const nowMs = this.now();
+    const requestBuckets = new Map<string, number>();
+    const requestHourBuckets = new Map<string, number>();
+    const reportedCost = new Map<string, number>();
+    const reportedHourCost = new Map<string, number>();
     const result: ScanResult = {
       buckets: new Map(),
       hourBuckets: new Map(),
+      requestBuckets,
+      requestHourBuckets,
+      reportedCost,
+      reportedHourCost,
       sessions: new Map(),
       files: {},
       truncated: false,
@@ -627,7 +735,10 @@ export class ScanState {
       }
     });
     if (shortened) {
+      // `seen` 一清，快照式来源的去重也没了：它们一起从头收。
       this.files.clear();
+      this.snapshots.clear();
+      this.snapshotSince.clear();
       this.seen.clear();
     }
 
@@ -640,10 +751,11 @@ export class ScanState {
     for (const path of [...this.files.keys()]) {
       if (!live.has(path)) this.files.delete(path);
     }
+    this.collectSnapshots(wantedSnapshots, result);
 
     let current: FileState | undefined;
     let fileId = 0;
-    for (const state of this.files.values()) {
+    for (const state of [...this.files.values(), ...this.snapshots.values()]) {
       fileId += 1;
       // 这里清，而不是在 `parse()` 里：一个什么都没被追加的文件早退，它的小时桶也
       // 得跟着时间往前走。
@@ -655,6 +767,20 @@ export class ScanState {
       for (const [key, tokens] of state.hourBuckets) {
         addToBucket(result.hourBuckets, key, tokens);
         addSession(result.sessions, key, fileId);
+      }
+      for (const [key, count] of state.requestBuckets ?? []) {
+        requestBuckets.set(key, (requestBuckets.get(key) ?? 0) + count);
+        addSession(result.sessions, key, fileId);
+      }
+      for (const [key, count] of state.requestHourBuckets ?? []) {
+        requestHourBuckets.set(key, (requestHourBuckets.get(key) ?? 0) + count);
+        addSession(result.sessions, key, fileId);
+      }
+      for (const [key, cost] of state.reportedCost ?? []) {
+        reportedCost.set(key, (reportedCost.get(key) ?? 0) + cost);
+      }
+      for (const [key, cost] of state.reportedHourCost ?? []) {
+        reportedHourCost.set(key, (reportedHourCost.get(key) ?? 0) + cost);
       }
       if (state.buckets.size === 0) continue;
       if (current === undefined || state.modifiedMs > current.modifiedMs) {
@@ -668,14 +794,86 @@ export class ScanState {
         addTokens(tokens, value);
         models.add(splitKey(key).model);
       }
+      let reported = 0;
+      for (const cost of current.reportedCost?.values() ?? []) reported += cost;
       result.current = {
         agent: current.agent,
         tokens,
         models: [...models].sort(),
         updatedMs: current.modifiedMs,
+        ...(reported > 0 ? { reportedCost: reported } : {}),
       };
     }
     return result;
+  }
+
+  /**
+   * 快照式来源：从上一趟交出的最大时间戳起收样本，按 `key` 写进各自的状态。
+   *
+   * 来源不在了（库被删了）时这家的状态与游标一起丢掉，和消失了的文件同一条规矩。
+   * `collect` 抛错按这一趟没有新样本算：已经记下的不动，游标不动。
+   */
+  private collectSnapshots(
+    sources: readonly SnapshotSource[],
+    result: ScanResult,
+  ): void {
+    const nowMs = this.now();
+    const context: AbsorbContext = { nowMs, seen: this.seen };
+    for (const source of sources) {
+      const agent = source.agentId;
+      if (!source.present()) {
+        for (const [key, state] of [...this.snapshots]) {
+          if (state.agent === agent) this.snapshots.delete(key);
+        }
+        this.snapshotSince.delete(agent);
+        continue;
+      }
+      let since = this.snapshotSince.get(agent) ?? 0;
+      let samples: readonly CostSample[] = [];
+      try {
+        samples = source.collect(since, context);
+      } catch {
+        samples = [];
+      }
+      for (const sample of samples) {
+        let state = this.snapshots.get(sample.key);
+        if (state === undefined) {
+          state = {
+            agent,
+            len: 0,
+            mtimeMs: 0,
+            offset: 0,
+            modifiedMs: 0,
+            model: undefined,
+            buckets: new Map(),
+            hourBuckets: new Map(),
+          };
+          this.snapshots.set(sample.key, state);
+        }
+        // 毫秒时间戳转成 RFC 3339：桶的时间解析只认字符串，数字会被当成「现在」。
+        const at = snapshotMs(sample.timestamp, nowMs);
+        const stamp = new Date(at).toISOString();
+        recordTokens(state, sample.model, stamp, sample.tokens, nowMs);
+        if (sample.reportedCost !== undefined) {
+          recordReportedCost(
+            state,
+            sample.model,
+            stamp,
+            sample.reportedCost,
+            nowMs,
+          );
+        }
+        state.offset = Math.max(state.offset, at);
+        state.modifiedMs = Math.max(state.modifiedMs, at);
+        if (at > since) since = at;
+      }
+      this.snapshotSince.set(agent, since);
+      let sessions = 0;
+      for (const state of this.snapshots.values()) {
+        if (state.agent === agent) sessions += 1;
+      }
+      result.files[agent] = (result.files[agent] ?? 0) + sessions;
+    }
   }
 
   private async parse(agent: AgentId, path: string): Promise<void> {
@@ -741,17 +939,44 @@ export class ScanState {
   }
 }
 
+/** 样本的时间：毫秒数原样，字符串按 RFC 3339 解析，都读不出来按现在。 */
+function snapshotMs(timestamp: unknown, nowMs: number): number {
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
+    return timestamp;
+  }
+  const parsed =
+    typeof timestamp === "string" ? Date.parse(timestamp) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : nowMs;
+}
+
 /* --------------------------------- 汇总 ---------------------------------- */
 
+/** 一个模型在一个窗口里的 token，以及 CLI 自己报的成本（有才有）。 */
+type ModelEntry = readonly [string, TokenTotals, number?];
+
+/**
+ * 一组 (模型, token) 定价求和。
+ *
+ * 价格表（内置 → 目录）认得的模型按表算，CLI 自己报的成本不看——同一个模型在
+ * 不同 agent 下必须按同一个价算出同一个数。表认不出、而 CLI 自己报了一个大于零
+ * 的成本（OpenCode 的 `message.cost`）时用它兜底：那是 CLI 按它自己的价目算出来
+ * 的实际花费，不是从名字相近的模型猜的；这样的模型算「有价格」，不让
+ * `complete` 变假。报的是零不算数：OpenCode 对订阅制或没配价目的供应商一律写
+ * 0，那不是「免费」而是「不知道」。
+ */
 function windowFrom(
-  entries: readonly (readonly [string, TokenTotals])[],
+  entries: readonly ModelEntry[],
   prices: PriceLookup,
 ): CostWindow {
   const merged = new Map<string, TokenTotals>();
-  for (const [model, tokens] of entries) {
+  const reported = new Map<string, number>();
+  for (const [model, tokens, cost] of entries) {
     const bucket = merged.get(model) ?? emptyTokens();
     addTokens(bucket, tokens);
     merged.set(model, bucket);
+    if (cost !== undefined && cost > 0) {
+      reported.set(model, (reported.get(model) ?? 0) + cost);
+    }
   }
   const total = emptyTokens();
   let cost = 0;
@@ -762,8 +987,13 @@ function windowFrom(
   )) {
     addTokens(total, tokens);
     const price = priceFor(prices, model);
+    const fallback = reported.get(model);
     const priced =
-      price === undefined ? null : roundCents(costOf(price, tokens));
+      price !== undefined
+        ? roundCents(costOf(price, tokens))
+        : fallback !== undefined
+          ? roundCents(fallback)
+          : null;
     if (priced !== null) cost += priced;
     else if (!isEmptyTokens(tokens)) complete = false;
     models.push({ model, tokens, costUsd: priced });
@@ -789,11 +1019,19 @@ function addSession(
   else files.add(fileId);
 }
 
-/** 一个桶对一个点的贡献：谁、哪个模型、多少 token。 */
+/**
+ * 一个桶对一个点的贡献：谁、哪个模型、多少 token。
+ *
+ * 请求桶的格子带 `requests`、`tokens` 是零：它们只进 agent 拆分，不进模型拆分、
+ * 不进 token 合计，也不参与定价。
+ */
 interface Cell {
   readonly agent: string;
   readonly model: string;
   readonly tokens: TokenTotals;
+  readonly requests?: number;
+  /** CLI 自己报的成本（快照式来源），只在 token 格子上。 */
+  readonly reportedCost?: number;
 }
 
 /**
@@ -801,25 +1039,53 @@ interface Cell {
  *
  * 一趟线性遍历：`buckets` 可能有几千个键，而每条轴只按键查表，不再各自走一遍。
  */
-function groupCells(buckets: ReadonlyMap<string, TokenTotals>): {
+function groupCells(
+  buckets: ReadonlyMap<string, TokenTotals>,
+  requestBuckets: ReadonlyMap<string, number> = new Map(),
+  reportedCost: ReadonlyMap<string, number> = new Map(),
+): {
   readonly cells: Map<string, Cell[]>;
   readonly earliest: string | undefined;
 } {
   const cells = new Map<string, Cell[]>();
   let earliest: string | undefined;
-  for (const [key, tokens] of buckets) {
+  const put = (key: string, cell: (agent: string, model: string) => Cell) => {
     const { date, agent, model } = splitKey(key);
-    const cell: Cell = { agent, model, tokens };
     const list = cells.get(date);
-    if (list === undefined) cells.set(date, [cell]);
-    else list.push(cell);
+    if (list === undefined) cells.set(date, [cell(agent, model)]);
+    else list.push(cell(agent, model));
     if (earliest === undefined || date < earliest) earliest = date;
+  };
+  for (const [key, tokens] of buckets) {
+    const reported = reportedCost.get(key);
+    put(key, (agent, model) =>
+      reported === undefined
+        ? { agent, model, tokens }
+        : { agent, model, tokens, reportedCost: reported },
+    );
+  }
+  for (const [key, requests] of requestBuckets) {
+    put(key, (agent, model) => ({
+      agent,
+      model,
+      tokens: emptyTokens(),
+      requests,
+    }));
   }
   return { cells, earliest };
 }
 
-function modelEntries(cells: readonly Cell[]): [string, TokenTotals][] {
-  return cells.map((cell) => [cell.model, cell.tokens]);
+/** 按 token 计的格子，按模型摊开。请求格子不在里面。 */
+function modelEntries(cells: readonly Cell[]): ModelEntry[] {
+  return cells.flatMap((cell): ModelEntry[] =>
+    cell.requests === undefined ? [entryOf(cell)] : [],
+  );
+}
+
+function entryOf(cell: Cell): ModelEntry {
+  return cell.reportedCost === undefined
+    ? [cell.model, cell.tokens]
+    : [cell.model, cell.tokens, cell.reportedCost];
 }
 
 /**
@@ -833,9 +1099,14 @@ function agentCosts(
   prices: PriceLookup,
   everyAgent: boolean,
 ): AgentCost[] {
-  const perAgent = new Map<string, [string, TokenTotals][]>();
+  const perAgent = new Map<string, ModelEntry[]>();
+  const requests = new Map<string, number>();
   for (const cell of cells) {
-    const entry: [string, TokenTotals] = [cell.model, cell.tokens];
+    if (cell.requests !== undefined) {
+      requests.set(cell.agent, (requests.get(cell.agent) ?? 0) + cell.requests);
+      continue;
+    }
+    const entry = entryOf(cell);
     const list = perAgent.get(cell.agent);
     if (list === undefined) perAgent.set(cell.agent, [entry]);
     else list.push(entry);
@@ -843,11 +1114,14 @@ function agentCosts(
   const out: AgentCost[] = [];
   for (const agent of AGENT_IDS) {
     const entries = perAgent.get(agent);
-    if (entries === undefined && !everyAgent) continue;
+    const count = requests.get(agent);
+    if (entries === undefined && count === undefined && !everyAgent) continue;
     const window = windowFrom(entries ?? [], prices);
     out.push({
       agent,
+      unit: unitOf(agent),
       tokens: window.tokens,
+      requests: count ?? 0,
       costUsd: window.costUsd,
       complete: window.complete,
       source: sourceOf(agent),
@@ -888,13 +1162,16 @@ function rangeOf(
       sessions: ownSessions?.size ?? 0,
     });
     const total = totalTokens(window.tokens);
-    if (total === 0) {
+    // 只有请求数的格子（Copilot）也算活跃，但峰值仍按 token 比。
+    const requested = own.some((cell) => cell.requests !== undefined);
+    if (total === 0 && !requested) {
       streak = 0;
       continue;
     }
     activeIntervals += 1;
     streak += 1;
     if (streak > longestStreak) longestStreak = streak;
+    if (total === 0) continue;
     if (peak === null || total > totalTokens(peak.tokens)) {
       peak = { key, tokens: window.tokens, costUsd: window.costUsd };
     }
@@ -962,21 +1239,35 @@ export function summarize(
   const today = dates[dates.length - 1] ?? dateAt(nowMs);
   const oldest = dates[0] ?? today;
 
-  const { cells: dayCells, earliest } = groupCells(result.buckets);
-  const { cells: hourCells } = groupCells(result.hourBuckets);
+  const { cells: dayCells, earliest } = groupCells(
+    result.buckets,
+    result.requestBuckets,
+    result.reportedCost,
+  );
+  const { cells: hourCells } = groupCells(
+    result.hourBuckets,
+    result.requestHourBuckets,
+    result.reportedHourCost,
+  );
   const sessions = result.sessions;
 
   const unpriced = new Set<string>();
-  const windowModels: [string, TokenTotals][] = [];
-  const todayModels: [string, TokenTotals][] = [];
+  const windowModels: ModelEntry[] = [];
+  const todayModels: ModelEntry[] = [];
+  const reportedModels = new Set<string>();
   for (const [date, cells] of dayCells) {
     if (date < oldest) continue;
     for (const cell of cells) {
-      windowModels.push([cell.model, cell.tokens]);
-      if (date === today) todayModels.push([cell.model, cell.tokens]);
+      if (cell.requests !== undefined) continue;
+      windowModels.push(entryOf(cell));
+      if (date === today) todayModels.push(entryOf(cell));
+      if ((cell.reportedCost ?? 0) > 0) reportedModels.add(cell.model);
       if (priceFor(prices, cell.model) === undefined) unpriced.add(cell.model);
     }
   }
+  // 价格表认不出、但 CLI 自己报了成本的模型有价格（见 `windowFrom`），不列进
+  // 「没有价格」。
+  for (const model of reportedModels) unpriced.delete(model);
 
   const daily: DailyCost[] = dates.map((date) => ({
     date,
@@ -1005,19 +1296,28 @@ export function summarize(
       session.models.length === 1
         ? priceFor(prices, session.models[0] as string)
         : undefined;
+    // 表认不出时同 `windowFrom`：CLI 自己报了成本就用它。
+    const reported = session.reportedCost;
     currentSession = {
       provider: session.agent,
       models: session.models,
       tokens: session.tokens,
       costUsd:
-        price === undefined ? 0 : roundCents(costOf(price, session.tokens)),
-      complete: price !== undefined,
+        price !== undefined
+          ? roundCents(costOf(price, session.tokens))
+          : reported !== undefined
+            ? roundCents(reported)
+            : 0,
+      complete: price !== undefined || reported !== undefined,
       updatedAt: new Date(session.updatedMs).toISOString(),
     };
   }
 
   return {
-    status: result.buckets.size === 0 ? "unavailable" : "ok",
+    status:
+      result.buckets.size === 0 && (result.requestBuckets?.size ?? 0) === 0
+        ? "unavailable"
+        : "ok",
     today: windowFrom(todayModels, prices),
     last30Days: windowFrom(windowModels, prices),
     ...(currentSession === undefined ? {} : { currentSession }),
@@ -1034,6 +1334,7 @@ export function summarize(
 /** 缓存好的汇总加上增量扫描状态。 */
 export class CostService {
   private summaryValue: CostSummary = emptySummary("unavailable");
+  private scanned: ScannedBuckets | undefined;
   private readonly state: ScanState;
   private lastScanMs: number | undefined;
 
@@ -1054,6 +1355,14 @@ export class CostService {
   /** 缓存着的汇总。从不碰文件系统。 */
   summary(): CostSummary {
     return this.enabled() ? this.summaryValue : emptySummary("disabled");
+  }
+
+  /**
+   * 最近一趟扫描的日桶与小时桶，给本地额度窗口估算（`local-window.ts`）用。
+   * 扫描关着或者还没扫过是 `undefined`。
+   */
+  scannedBuckets(): ScannedBuckets | undefined {
+    return this.enabled() ? this.scanned : undefined;
   }
 
   /** 后台那一趟：最多五分钟一次扫描。 */
@@ -1094,6 +1403,10 @@ export class CostService {
       .scan()
       .then((result) => {
         this.lastScanMs = nowMs;
+        this.scanned = {
+          buckets: result.buckets,
+          hourBuckets: result.hourBuckets,
+        };
         this.summaryValue = {
           // 价格在这里才读：刚抓回来的目录这一趟就算得上，不必等重启。
           ...summarize(

@@ -3,6 +3,7 @@
 //
 // 用法（仓库根目录）：
 //   pnpm libs:build && pnpm --filter @armadra/desktop build
+//   pnpm --filter @armadra/web build   # 手机场景（mobile）经 Gateway 托管页面产物
 //   node tools/probes/ui-features-e2e.mjs [输出目录] [--only=presence,editor,...]
 //
 // 产物默认在 target/ui-features-e2e/：result.json 与每个场景的截图。
@@ -12,9 +13,15 @@
 // 一切都是临时的、回环的：随机端口、mktemp 出来的数据目录、HOME、CLI 配置
 // 目录与浏览器 profile，结束时全部删除并停掉自己起的 tmux 服务器。不读写
 // 操作员自己的数据目录与 CLI 配置，不联网（状态页指向本地 fixture）。
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 
 import {
   root,
@@ -29,6 +36,7 @@ import integration, {
 } from "./ui-features/integration.mjs";
 import keybindings from "./ui-features/keybindings.mjs";
 import layout from "./ui-features/layout.mjs";
+import mobile, { WEB_DIST } from "./ui-features/mobile.mjs";
 import presence from "./ui-features/presence.mjs";
 import resources, {
   startStatusFixture,
@@ -45,6 +53,7 @@ const SCENARIOS = {
   integration,
   resources,
   layout,
+  mobile,
 };
 
 const args = process.argv.slice(2);
@@ -69,6 +78,15 @@ try {
   // 替身 ssh 与远端 Worker 启动脚本：路径不能含空白，放在 mktemp 出来的目录里。
   const shimDirectory = mkdtempSync(join(tmpdir(), "armadra-ui-shims-"));
   const shims = writeRemoteShims(shimDirectory);
+  // 替身 claude：「已安装」按 PATH 判，操作员机器上装没装不该改变结果——
+  // 没有它，CI 上的 Claude 不算已启用，旧版接入残留的顶部提示条也就不出来。
+  const bin = join(shimDirectory, "bin");
+  mkdirSync(bin);
+  writeFileSync(
+    join(bin, "claude"),
+    '#!/bin/sh\n[ "$1" = "--version" ] && echo "0.0.0 (probe)"\nexit 0\n',
+  );
+  chmodSync(join(bin, "claude"), 0o755);
   stack = await startStack({
     home: home.path,
     // 搜索取消场景靠 core 的 debug 日志（「文件搜索随连接断开中止」）断言。
@@ -76,6 +94,10 @@ try {
     env: {
       ARMADRA_STATUS_PAGE_BASE: fixture.base,
       ARMADRA_REMOTE_WORKER_LAUNCHER: shims.launcher,
+      PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+      // 手机场景经 Gateway 打开页面：它托管构建好的页面产物（没有就跳过那一场）。
+      ARMADRA_GATEWAY_WEB_ROOT: WEB_DIST,
+      ARMADRA_SECRET_BACKEND: "file",
     },
   });
   stack.cleanups.push(() => home.remove());
@@ -111,7 +133,9 @@ try {
       console.error(`  FAIL  ${message}`);
     }
   }
-  report.status = report.scenarios.every((entry) => entry.status === "passed")
+  report.status = report.scenarios.every(
+    (entry) => entry.status === "passed" || entry.status === "skipped",
+  )
     ? "ok"
     : "failed";
 } catch (error) {

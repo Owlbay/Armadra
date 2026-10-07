@@ -50,14 +50,13 @@ export type ShellDialect =
   | "windows-powershell";
 
 /**
- * A word of a launch line before it is quoted: a literal value, or a value the
- * shell reads from an environment variable of the node's terminal, after a
- * literal prefix (`-c "hooks.Stop=$VAR"`). The second form keeps a long value
- * off the typed line; the environment is the terminal's own.
+ * A word of a launch line before it is quoted: a literal value.
+ *
+ * The canvas injection is not on the typed line — the data directory's
+ * launcher `run/<cli>` appends it (docs/design/canvas-launcher.md §2) — so a
+ * word is never more than its value.
  */
-export type LaunchWord =
-  | string
-  | { readonly prefix: string; readonly env: string };
+export type LaunchWord = string;
 
 /** `C:\Windows\System32\cmd.exe` → `cmd`; `/usr/local/bin/fish` → `fish`. */
 export function shellProgramName(shell: string): string {
@@ -97,7 +96,6 @@ const FISH_SAFE = /^[A-Za-z0-9_@+=:,./-]+$/;
 /** `\` and `~` (8.3 names) are ordinary to `cmd.exe`; a path goes as it is. */
 const CMD_SAFE = /^[A-Za-z0-9_@+=:,./\\~-]+$/;
 const POWERSHELL_SAFE = /^[A-Za-z0-9_+=:./\\-]+$/;
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** What `cmd.exe` acts on outside quotes; each is escaped with `^`. */
 const CMD_META = /[()%!^"<>&|]/g;
 const LINE_BREAK = /[\r\n]/;
@@ -161,55 +159,12 @@ export function quoteShellWord(value: string, dialect: ShellDialect): string {
   }
 }
 
-/**
- * `prefix` followed by the value of the environment variable `name`, as one
- * word — double quotes in every dialect, so the value is never split:
- * `"p$NAME"` / `"p%NAME%"` / `"p${env:NAME}"`.
- *
- * `cmd.exe` pastes the value's text into those quotes before it reads the
- * line, so there the *value* must hold no `"` and not end in `\` (which would
- * escape the closing quote for the program). The environment is ours, so it is
- * written for that — see the core's `codexTomlString`.
- */
-export function shellEnvWord(
-  prefix: string,
-  name: string,
-  dialect: ShellDialect,
-): string {
-  if (!ENV_NAME.test(name)) {
-    throw new Error(`Not an environment variable name: ${name}`);
-  }
-  if (LINE_BREAK.test(prefix)) {
-    throw new Error("A line break cannot be typed inside a word");
-  }
-  switch (dialect) {
-    case "posix":
-      // `!` is history expansion inside double quotes in bash and zsh.
-      if (prefix.includes("!")) {
-        throw new Error("`!` cannot be typed inside double quotes");
-      }
-      return `"${prefix.replace(/[\\$`"]/g, "\\$&")}\${${name}}"`;
-    case "fish":
-      return `"${prefix.replace(/[\\$"]/g, "\\$&")}$${name}"`;
-    case "cmd":
-      if (/[%!"]/.test(prefix)) {
-        throw new Error("cmd.exe would expand or unquote this prefix");
-      }
-      return `"${prefix}%${name}%"`;
-    case "powershell":
-    case "windows-powershell":
-      return `"${prefix.replace(/[`$"\u201c\u201d\u201e]/g, "`$&")}\${env:${name}}"`;
-  }
-}
-
 /** A {@link LaunchWord} as typed text. */
 export function renderLaunchWord(
   word: LaunchWord,
   dialect: ShellDialect,
 ): string {
-  return typeof word === "string"
-    ? quoteShellWord(word, dialect)
-    : shellEnvWord(word.prefix, word.env, dialect);
+  return quoteShellWord(word, dialect);
 }
 
 /**
@@ -221,10 +176,9 @@ export function renderLaunchWord(
  * first word that would not survive its argument passing
  * ({@link needsVerbatim}): after it the rest
  * of the line goes to the program as it is, so the words are written in the C
- * runtime's quoting the program splits them with, and a variable is `%NAME%`
- * — the one expansion `--%` still does. Moving the value into an environment
- * variable instead would not help: 5.1 strips the quotes when it passes the
- * argument on, wherever the string came from.
+ * runtime's quoting the program splits them with. Moving the value into an
+ * environment variable instead would not help: 5.1 strips the quotes when it
+ * passes the argument on, wherever the string came from.
  *
  * After a batch program, a word {@link batchSafeWord} does not let through is
  * refused: better no launch than a line `cmd.exe` takes apart.
@@ -273,18 +227,13 @@ export function isBatchProgram(program: string): boolean {
  * not quoted. The launch is meant to call the CLI past its shim
  * (`agent/windows-shim.ts`); this is what is left when the shim could not be
  * read.
- *
- * A variable's prefix is checked the same way; its value is the caller's and
- * must hold nothing either read acts on (Codex's `codexTomlString` in its
- * `cmd.exe` form).
  */
 export function batchSafeWord(word: LaunchWord): boolean {
-  return !/["%^&|<>()\r\n]/.test(typeof word === "string" ? word : word.prefix);
+  return !/["%^&|<>()\r\n]/.test(word);
 }
 
 /** A word Windows PowerShell 5.1 would not pass on intact. */
 function needsVerbatim(word: LaunchWord): boolean {
-  if (typeof word !== "string") return true;
   return (
     word === "" ||
     word.includes('"') ||
@@ -298,15 +247,6 @@ function needsVerbatim(word: LaunchWord): boolean {
  * — and it stops at a `|`, so a value holding either is refused.
  */
 function verbatimWord(word: LaunchWord): string {
-  if (typeof word !== "string") {
-    if (!ENV_NAME.test(word.env)) {
-      throw new Error(`Not an environment variable name: ${word.env}`);
-    }
-    if (/["%|\r\n]/.test(word.prefix)) {
-      throw new Error("Windows PowerShell cannot pass this prefix after --%");
-    }
-    return `"${word.prefix}%${word.env}%"`;
-  }
   if (/[%|\r\n]/.test(word)) {
     throw new Error("Windows PowerShell cannot pass this value after --%");
   }

@@ -61,13 +61,26 @@ import {
 } from "./schema";
 import { fromJson, toJson, type MessageDesc } from "../contract/message";
 
-import { bearerCredential, credential, nativeRequest } from "../identity/http";
+import {
+  bearerCredential,
+  anonymousLoopbackOwner,
+  credential,
+  csrfRequired,
+} from "../identity/http";
 import { IdentityError } from "../identity/errors";
 import type { IdentityService } from "../identity/service";
 import { scope } from "../identity/scopes";
+import { CoreFailure } from "../http/errors";
 import type { CoreRequest } from "../http/router";
+import { type RpcCall, registerProcedures } from "../http/rpc";
+import type { CoreServer } from "../http/server";
 import { rerunChecks, deleteBranch } from "./cleanup";
-import { UNAUTHENTICATED, githubFailure, type GithubFailure } from "./errors";
+import {
+  UNAUTHENTICATED,
+  githubError,
+  githubFailure,
+  type GithubFailure,
+} from "./errors";
 import {
   commentIssue,
   createIssue,
@@ -309,7 +322,7 @@ export class GithubHttp {
     const method = API_METHODS[action];
     if (method === undefined || request.method !== "POST") {
       this.json(response, cors, 404, {
-        code: "NOT_FOUND",
+        code: "not_found",
         message: "No such method",
       });
       return;
@@ -323,7 +336,7 @@ export class GithubHttp {
       );
     } catch {
       this.json(response, cors, 400, {
-        code: "INVALID_ARGUMENT",
+        code: "bad_request",
         message: "Invalid GitHub request",
       });
       return;
@@ -361,16 +374,100 @@ export class GithubHttp {
   }
 
   /**
+   * 把这一面的 24 个动词登记成契约 procedure（`github.*`，契约 §41.1）。
+   *
+   * 与 `handle` 走同一份实现：入参按同一张字段表解码、同一个 `invoke`、同一个
+   * 响应编码，拒绝同一组码与原话。不同只在两处：工作空间在入参里（不在查询串
+   * 里），调用方来自准入门已经核验过的请求身份（{@link procedureCaller}）。
+   */
+  register(server: CoreServer): void {
+    const handlers: Record<string, unknown> = {};
+    for (const method of GITHUB_METHODS) {
+      handlers[method.charAt(0).toLowerCase() + method.slice(1)] = (
+        input: unknown,
+        call: RpcCall,
+      ) => this.procedure(method, input as Record<string, unknown>, call);
+    }
+    registerProcedures(server, "github", handlers as never);
+  }
+
+  private async procedure(
+    method: GithubMethod,
+    input: Record<string, unknown>,
+    call: RpcCall,
+  ): Promise<never> {
+    const schema = SCHEMAS[method];
+    let decoded: unknown;
+    try {
+      decoded = fromJson(schema.request, input);
+    } catch {
+      throw refusal(githubFailure(githubError("invalid")));
+    }
+    let caller: Caller;
+    try {
+      caller = this.procedureCaller(call, String(input.workspaceId ?? ""));
+    } catch (error) {
+      throw refusal(this.authFailure(error));
+    }
+    try {
+      const result = withoutBodies(
+        method,
+        await this.invoke(method, caller, decoded),
+      );
+      return toJson(schema.response, result) as never;
+    } catch (error) {
+      throw refusal(githubFailure(error));
+    } finally {
+      // 令牌只在这一次请求里经过；不留在解析出来的对象上。
+      if (method === "ConfigureCredential") {
+        (decoded as { token: string }).token = "";
+        if (typeof input.token === "string") input.token = "";
+      }
+    }
+  }
+
+  /**
+   * procedure 的调用方：身份来自准入门核验过的会话（来源、CSRF 与令牌在那里判过，
+   * 工作空间级的权限由门面按 `meta.scope` 与 `workspaceId` 判过），这里把它翻成
+   * 域服务认的 {@link Caller}，`GithubService.authorize` 照旧再核一次。
+   *
+   * 没有请求身份只剩一种合法情形：显式打开了回环匿名主人（探针与开发命令起的
+   * 裸 core，`ARMADRA_LOOPBACK_OWNER=1`），按本机主人处理；其余一律 401。
+   */
+  private procedureCaller(call: RpcCall, workspaceId: string): Caller {
+    if (workspaceId === "") throw new IdentityError("invalid");
+    const identity = call.identity;
+    if (identity === undefined) {
+      if (!anonymousLoopbackOwner(call.request, "")) {
+        throw new IdentityError("unauthenticated");
+      }
+      const owner = this.options.identity.localOwner();
+      if (owner === undefined) throw new IdentityError("unauthenticated");
+      return { ...owner, workspaceId };
+    }
+    const deviceId = identity.device?.deviceId ?? "";
+    if (deviceId === "") throw new IdentityError("permission");
+    return {
+      principalId: identity.subject.principalId,
+      deviceId,
+      // 会话已由准入门核验；设备纪元只在这里要求为正。
+      deviceEpoch: 1,
+      workspaceId,
+      scopes: identity.subject.scopes,
+    };
+  }
+
+  /**
    * 这一面的调用方。
    *
    * 两条规矩：
    *
    *   1. **工作空间跟着查询串走**。一次调用可以说它想操作哪个工作空间，不能说它
    *      有什么权限——那仍然只来自会话。
-   *   2. **明文回环上的无凭据调用按本机主人处理**（{@link IdentityService.localOwner}）。
-   *      页面经 `apps/web/src/api/request.ts` 打这一面，而桌面壳的会话是原生的，
-   *      密钥在壳里：既不发 Cookie，也到不了那个 `fetch`。TLS 的服务器壳上这条
-   *      路不存在，凭据仍然是必须的。
+   *   2. **明文回环上的无凭据调用只在 core 显式打开时按本机主人处理**
+   *      （{@link IdentityService.localOwner}，`ARMADRA_LOOPBACK_OWNER=1`，只给
+   *      探针与开发命令起的裸 core）。桌面壳的页面带着票据换来的 Bearer
+   *      （`apps/web/src/api/request.ts`）；两种壳都不开这条路（安全审查 L9）。
    */
   private caller(request: CoreRequest, method: GithubMethod): Caller {
     const origin = header(request, "origin");
@@ -386,7 +483,7 @@ export class GithubHttp {
     const rule = PERMISSIONS[method];
     const identity = this.options.identity;
     const token = credential(request, identity.hostId(), "access");
-    if (token === "" && nativeRequest(request)) {
+    if (anonymousLoopbackOwner(request, token)) {
       const owner = identity.localOwner();
       if (owner === undefined) throw new IdentityError("unauthenticated");
       return { ...owner, workspaceId };
@@ -396,7 +493,8 @@ export class GithubHttp {
       hostId: identity.hostId(),
       origin,
       csrfToken: header(request, "x-armadra-csrf") ?? "",
-      requireCsrf: rule.mutating,
+      // 写只在 Cookie 会话上核 CSRF；Bearer 不是环境凭据（契约 §17.4，安全审查 L8）。
+      requireCsrf: rule.mutating && csrfRequired(request),
       requiredScopes: [scope(rule.permission, workspaceId, hostId)],
     });
     return {
@@ -414,13 +512,13 @@ export class GithubHttp {
       if (error.kind === "invalid") {
         return {
           status: 400,
-          code: "INVALID_ARGUMENT",
+          code: "bad_request",
           message: "Invalid GitHub request",
         };
       }
       return {
         status: 403,
-        code: "PERMISSION_DENIED",
+        code: "forbidden",
         message: "GitHub permission or CSRF check failed",
       };
     }
@@ -519,6 +617,11 @@ export class GithubHttp {
     });
     response.end(payload);
   }
+}
+
+/** 一次拒绝 → 抛出的拒绝（procedure 的实现不答值，抛 `CoreFailure`）。 */
+function refusal(failure: GithubFailure): CoreFailure {
+  return new CoreFailure(failure.status, failure.code, failure.message);
 }
 
 /** 路径上的动词名：方法名的 kebab-case。 */

@@ -1,6 +1,10 @@
 import { statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import type { AgentId } from "../agent/registry";
+import { claudeAdapter, fallbackTitle } from "../history/claude";
+import { HISTORY_ADAPTERS, historyAdapter } from "../history/registry";
+import type { Located } from "../history/types";
 import * as claude from "./claude";
 import * as codex from "./codex";
 import { type Parsed, clamp } from "./scan";
@@ -34,10 +38,15 @@ import { settingsDomain } from "../settings";
  * has disappeared is dropped at the end of the scan.
  */
 
-/** Providers whose transcripts this build knows how to read. */
-export const PROVIDERS = ["claude", "codex"] as const;
+/**
+ * Providers whose transcripts this build knows how to read — every agent with
+ * a history adapter (`history/registry.ts`), in registry order.
+ */
+export const PROVIDERS: readonly AgentId[] = HISTORY_ADAPTERS.map(
+  (adapter) => adapter.agentId,
+);
 
-export type Provider = (typeof PROVIDERS)[number];
+export type Provider = AgentId;
 
 /** How often the index is refreshed once the core is up. */
 export const REFRESH_INTERVAL_MS = 60_000;
@@ -144,10 +153,9 @@ export function inScope(scope: Scope, cwd: string): boolean {
 
 /** Where each provider keeps its transcripts on this machine. */
 export function defaultRoots(): Roots {
-  return [
-    ["claude", claude.root()],
-    ["codex", codex.root()],
-  ];
+  return HISTORY_ADAPTERS.flatMap((adapter) =>
+    adapter.roots().map((root) => [adapter.agentId, root] as const),
+  );
 }
 
 /**
@@ -231,8 +239,9 @@ function scanProvider(
   known: Map<string, KnownRow>,
   scope: Scope,
 ): { rows: IndexRow[]; seen: string[] } {
-  const found =
-    provider === "codex" ? codex.candidates(root) : claude.candidates(root);
+  const adapter = historyAdapter(provider);
+  if (adapter === undefined) return { rows: [], seen: [] };
+  const found = adapter.list(root);
   const rows: IndexRow[] = [];
   const seen: string[] = [];
   for (const candidate of found) {
@@ -243,10 +252,7 @@ function scanProvider(
       if (inScope(scope, cached.cwd)) seen.push(candidate.path);
       continue;
     }
-    const parsed: Parsed | undefined =
-      provider === "codex"
-        ? codex.parse(candidate.path)
-        : claude.parse(candidate.path);
+    const parsed: Parsed | undefined = adapter.parse(candidate);
     if (parsed === undefined || parsed.sessionId === "") continue;
     // 范围外的转录不进索引，也不算「见过」：上一轮留下的那一行随后被清掉。
     if (!inScope(scope, parsed.cwd)) continue;
@@ -254,7 +260,7 @@ function scanProvider(
     // A session whose opening message could not be read is still worth a row —
     // it is resumable — so it borrows its directory's name.
     const title =
-      parsed.title === "" ? claude.fallbackTitle(parsed.cwd) : parsed.title;
+      parsed.title === "" ? fallbackTitle(parsed.cwd) : parsed.title;
     rows.push({
       provider,
       sessionId: parsed.sessionId,
@@ -331,7 +337,7 @@ function upsert(database: DatabaseSync, rows: readonly IndexRow[]): number {
 /**
  * Drops rows whose file the walk no longer finds.
  *
- * The one special case is a provider whose root directory is gone: an absent
+ * The one special case is a provider whose root is gone: an absent
  * `~/.codex` means codex was uninstalled or its home moved, and every row for
  * it is stale. A root that exists but yielded nothing is the ordinary case of
  * "all of those transcripts were deleted".
@@ -342,9 +348,12 @@ function forgetMissing(
   root: string,
   seen: readonly string[],
 ): number {
+  // 根不一定是目录：OpenCode 的根是它的 SQLite 库文件，候选是库里的行
+  // （`opencode:<id>`），不是文件。根还在（目录或文件）就按候选逐行对账。
   let present = false;
   try {
-    present = statSync(root).isDirectory();
+    const stats = statSync(root);
+    present = stats.isDirectory() || stats.isFile();
   } catch {
     present = false;
   }
@@ -449,12 +458,33 @@ export function transcriptTitle(
   } catch {
     return undefined;
   }
-  const parsed =
-    agentId === "codex"
-      ? codex.parse(path)
-      : // Custom agents borrow a base agent's adapter and claude's JSONL shape
-        // is the common one, so it is also the default.
-        claude.parse(path);
+  // Custom agents borrow a base agent's adapter and claude's JSONL shape is
+  // the common one, so it is also the default for an agent with no adapter.
+  const adapter = historyAdapter(agentId) ?? claudeAdapter;
+  const parsed = adapter.parse({ path, updatedAt: "", bytes: 0 });
+  if (parsed === undefined) return undefined;
+  const title = clamp(parsed.title, MAX_SUGGESTED_TITLE_CHARS);
+  return title === "" ? undefined : title;
+}
+
+/**
+ * 一份定位到了的本地历史的标题：有文件按 {@link transcriptTitle}；没有文件的来源
+ * （OpenCode 的 `opencode:<id>`）交给那家适配器的 `parse`，它自己决定取会话标题
+ * 还是首条用户消息。更新时间传空：不借会话索引那一趟的缓存。
+ */
+export function historyTitle(
+  agentId: string,
+  located: Located,
+): string | undefined {
+  if (located.path !== undefined) return transcriptTitle(agentId, located.path);
+  const adapter = historyAdapter(agentId);
+  if (adapter === undefined) return undefined;
+  let parsed: Parsed | undefined;
+  try {
+    parsed = adapter.parse({ path: located.key, updatedAt: "", bytes: 0 });
+  } catch {
+    return undefined;
+  }
   if (parsed === undefined) return undefined;
   const title = clamp(parsed.title, MAX_SUGGESTED_TITLE_CHARS);
   return title === "" ? undefined : title;

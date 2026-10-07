@@ -8,6 +8,7 @@ import { gitTarget } from "@/git/target";
 import { useT } from "@/app/preferences-store";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
+import { Card } from "@/ui/card";
 import { useCanvasStore } from "@/store/canvas-store";
 import {
   bindingRepairState,
@@ -15,6 +16,7 @@ import {
   frameBindingOf,
   repositoryForBinding,
 } from "../../frame-binding";
+import { sk } from "../../../sources/scope";
 
 /**
  * 绑定徽章（roadmap §3.4 G03）。
@@ -58,7 +60,7 @@ export function WorktreeBindingBadge({ node }: { node: CanvasNode }) {
   const binding = frameBindingOf(node);
 
   const repositories = useQuery({
-    queryKey: ["git-repositories", workspaceId],
+    queryKey: sk("git-repositories", workspaceId),
     queryFn: ({ signal }) =>
       gitGateway.repositories(
         gitTarget(workspaceId ?? "", workspace?.rootPath, "."),
@@ -79,13 +81,13 @@ export function WorktreeBindingBadge({ node }: { node: CanvasNode }) {
    * 徽章退回发现结果那一档，而不是宣布绑定坏了。
    */
   const verdict = useQuery({
-    queryKey: [
+    queryKey: sk(
       "git-worktree-binding",
       workspaceId,
       binding?.worktreePath,
       binding?.branch,
       binding?.repositoryId,
-    ],
+    ),
     queryFn: ({ signal }) =>
       gitGateway.worktreeBinding(
         gitTarget(workspaceId ?? "", workspace?.rootPath, "."),
@@ -115,8 +117,8 @@ export function WorktreeBindingBadge({ node }: { node: CanvasNode }) {
   });
 
   return (
-    <div
-      className="flex max-w-full flex-col gap-1 rounded-md border border-border bg-card/90 p-1.5 text-xs shadow-sm backdrop-blur-sm"
+    <Card
+      className="max-w-full gap-1 overflow-visible rounded-md border border-border bg-card/90 p-1.5 py-1.5 text-xs shadow-sm ring-0 backdrop-blur-sm"
       data-testid="worktree-binding-badge"
     >
       <div className="flex min-w-0 flex-wrap items-center gap-1">
@@ -138,7 +140,7 @@ export function WorktreeBindingBadge({ node }: { node: CanvasNode }) {
       {repair !== "ok" ? (
         <RepairPrompt node={node} binding={binding} reason={repair} />
       ) : null}
-    </div>
+    </Card>
   );
 }
 
@@ -203,7 +205,7 @@ function RepairPrompt({
   );
   const target = gitTarget(workspaceId ?? "", workspaceRoot, ".");
   const branches = useQuery({
-    queryKey: ["git-repository-branches", workspaceId, "."],
+    queryKey: sk("git-repository-branches", workspaceId, "."),
     queryFn: ({ signal }) => gitGateway.branches(target, signal),
     enabled: Boolean(workspaceId),
     retry: false,

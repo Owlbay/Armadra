@@ -9,7 +9,17 @@ import type {
 import { useT } from "../../app/preferences-store";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
-import { Check, Field, ReadError, selectClass } from "./forms";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../ui/select";
+import { Check, Field, ReadError } from "./forms";
+
+/** Radix 的选项值不能是空串，「未选」用这个占位值换算回 null。 */
+const NONE = "__none__";
 export interface CherryPickProps {
   workspaceId: string;
   repositoryKey: string;
@@ -137,23 +147,32 @@ export function CherryPick({
           <p className="break-all font-mono">{metadata.data.targetOid}</p>
           {isMerge && (
             <Field label={t("gitIntegration.mainline")}>
-              <select
-                aria-label={t("gitIntegration.mainline")}
-                className={selectClass}
-                value={selectedParent ?? ""}
-                onChange={(event) =>
-                  setMainline(
-                    event.target.value ? Number(event.target.value) : null,
-                  )
+              <Select
+                value={selectedParent ? String(selectedParent) : NONE}
+                onValueChange={(next) =>
+                  setMainline(next === NONE ? null : Number(next))
                 }
               >
-                <option value="">{t("gitIntegration.chooseMainline")}</option>
-                {metadata.data.parents.map((parent, index) => (
-                  <option key={`${index}:${parent}`} value={index + 1}>
-                    {index + 1} · {parent}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger
+                  aria-label={t("gitIntegration.mainline")}
+                  className="h-9 w-full min-w-0"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="z-[var(--z-dialog)]">
+                  <SelectItem value={NONE}>
+                    {t("gitIntegration.chooseMainline")}
+                  </SelectItem>
+                  {metadata.data.parents.map((parent, index) => (
+                    <SelectItem
+                      key={`${index}:${parent}`}
+                      value={String(index + 1)}
+                    >
+                      {index + 1} · {parent}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <span>{t("gitIntegration.mainlineSafety")}</span>
             </Field>
           )}

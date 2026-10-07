@@ -35,6 +35,7 @@ import { getWorkspace } from "../workspaces/table";
 import type { AppliedFile } from "./edits";
 import type { HubEvents } from "./mux";
 import { Manager } from "./lifecycle";
+import { SESSION_MAX_PAYLOAD_BYTES } from "./limits";
 import { remoteLanguage } from "./remote";
 import {
   SessionSockets,
@@ -250,6 +251,7 @@ export function install(context: CoreContext): LanguageDomain {
     // Before the upgrade, exactly as the Rust route does: a session that does
     // not exist is an HTTP 404, not a socket that opens and closes.
     (params) => sessionGuard(deps, sockets, params),
+    { maxPayload: SESSION_MAX_PAYLOAD_BYTES },
   );
 
   // 失去 execute（或工作区被删）就立刻停掉它的语言服务器（设计 §1.3）：进程是

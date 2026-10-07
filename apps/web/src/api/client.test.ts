@@ -4,6 +4,7 @@ import {
   RuntimeConnectionError,
   RuntimeRequestError,
   isConflict,
+  isLeaseHeld,
   runtimeApi,
   terminalWebSocketUrl,
   workspaceEventsUrl,
@@ -43,18 +44,6 @@ const boardDocument: BoardDocument = {
   },
   nodes: [],
   edges: [],
-};
-
-const terminalSession = {
-  id: sessionId,
-  workspaceId,
-  cwd: "/tmp/one",
-  shell: "/bin/zsh",
-  command: null,
-  status: "running",
-  exitCode: null,
-  createdAt: timestamp,
-  endedAt: null,
 };
 
 afterEach(() => {
@@ -101,234 +90,137 @@ describe("Runtime 连接失败", () => {
   });
 });
 
-describe("画布文档", () => {
-  it("PUT 时带上 CAS 时间戳与视口，不再有 strokes", async () => {
-    const fetchMock = stubJson(boardDocument);
+describe("画布文档（契约 §36）", () => {
+  it("保存调 boards.save，带上 CAS 时间戳与视口，不再有 strokes", async () => {
+    const fetchMock = stubJson({ json: boardDocument });
 
     await runtimeApi.saveBoard(workspaceId, boardId, boardDocument);
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(
-      `http://127.0.0.1:43120/api/workspaces/${workspaceId}/boards/${boardId}/document`,
-    );
-    expect(init.method).toBe("PUT");
-    expect(bodyOf(fetchMock)).toEqual({
-      expectedUpdatedAt: timestamp,
-      nodes: [],
-      edges: [],
-      viewport: { x: 12, y: -8, zoom: 0.75 },
-      whiteboard: "",
+    expect(url).toBe("http://127.0.0.1:43120/api/rpc/boards/save");
+    expect(init.method).toBe("POST");
+    expect(bodyOf(fetchMock)).toMatchObject({
+      json: {
+        workspaceId,
+        boardId,
+        expectedUpdatedAt: timestamp,
+        nodes: [],
+        edges: [],
+        viewport: { x: 12, y: -8, zoom: 0.75 },
+        whiteboard: "",
+      },
     });
   });
 
   it("读回画布时保留持久化的视口", async () => {
-    stubJson(boardDocument);
+    const fetchMock = stubJson({ json: boardDocument });
 
     const loaded = await runtimeApi.loadBoard(workspaceId, boardId);
     expect(loaded.board.viewport).toEqual({ x: 12, y: -8, zoom: 0.75 });
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe(
+      "http://127.0.0.1:43120/api/rpc/boards/load",
+    );
   });
 
   it("删除画布允许空响应体", async () => {
-    const fetchMock = stubJson(null);
+    const fetchMock = stubJson({});
 
     await expect(
       runtimeApi.deleteBoard(workspaceId, boardId),
     ).resolves.toBeUndefined();
-    expect((fetchMock.mock.calls[0] as [string, RequestInit])[1].method).toBe(
-      "DELETE",
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:43120/api/rpc/boards/delete");
+    expect(init.method).toBe("POST");
+    expect(bodyOf(fetchMock)).toMatchObject({
+      json: { workspaceId, boardId },
+    });
+  });
+
+  it("别人持有租约：保存与拿租约答 423，isLeaseHeld 认得", async () => {
+    stubJson(
+      { code: "canvas_lease_held", message: "Another client holds it" },
+      false,
+      423,
+    );
+    const saved = await runtimeApi
+      .saveBoard(workspaceId, boardId, boardDocument, "tab-aaaaaaaaaaaa")
+      .catch((cause: unknown) => cause);
+    expect(isLeaseHeld(saved)).toBe(true);
+    expect(saved).toMatchObject({ status: 423 });
+    const asked = await runtimeApi
+      .acquireLease(workspaceId, boardId, {
+        clientId: "tab-aaaaaaaaaaaa",
+        deviceName: "Mac",
+        takeover: false,
+      })
+      .catch((cause: unknown) => cause);
+    expect(isLeaseHeld(asked)).toBe(true);
+  });
+
+  it("实时状态按给定的源发，缺省发往当前源", async () => {
+    const fetchMock = stubJson({
+      json: { realtime: true, materializedSeq: 3, enabled: true },
+    });
+    await expect(
+      runtimeApi.boardRealtime(workspaceId, boardId),
+    ).resolves.toMatchObject({ realtime: true, materializedSeq: 3 });
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe(
+      "http://127.0.0.1:43120/api/rpc/boards/realtime",
     );
   });
 
-  it("从列表移除工作空间打 DELETE /api/workspaces/{id}", async () => {
-    const fetchMock = stubJson(null);
+  it("心跳、离开与拿租约各是一条 procedure", async () => {
+    const snapshot = {
+      boardId,
+      clients: [
+        {
+          clientId: "tab-aaaaaaaaaaaa",
+          deviceName: "Mac",
+          deviceKey: "k",
+          lastSeenAt: timestamp,
+        },
+      ],
+      lease: null,
+      writable: true,
+    };
+    const fetchMock = stubJson({ json: snapshot });
+    const body = { clientId: "tab-aaaaaaaaaaaa", deviceName: "Mac" };
+    await runtimeApi.presenceHeartbeat(workspaceId, boardId, {
+      ...body,
+      active: true,
+    });
+    await runtimeApi.leavePresence(workspaceId, boardId, body.clientId);
+    await runtimeApi.acquireLease(workspaceId, boardId, {
+      ...body,
+      takeover: true,
+    });
+    expect(
+      fetchMock.mock.calls.map(
+        (call) => (call as [string])[0].split("/api/")[1],
+      ),
+    ).toEqual([
+      "rpc/boards/heartbeat",
+      "rpc/boards/leave",
+      "rpc/boards/acquireLease",
+    ]);
+    expect(bodyOf(fetchMock, 0)).toMatchObject({
+      json: { workspaceId, boardId, ...body, active: true },
+    });
+    expect(bodyOf(fetchMock, 2)).toMatchObject({
+      json: { workspaceId, boardId, ...body, takeover: true },
+    });
+  });
+
+  it("从列表移除工作空间调 workspaces.delete（契约 §34.4）", async () => {
+    const fetchMock = stubJson({});
 
     await expect(
       runtimeApi.deleteWorkspace(workspaceId),
     ).resolves.toBeUndefined();
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url.endsWith(`/api/workspaces/${workspaceId}`)).toBe(true);
-    expect(init.method).toBe("DELETE");
-  });
-});
-
-describe("终端", () => {
-  it("创建终端时带上 agent 段与 nodeId", async () => {
-    const fetchMock = stubJson(terminalSession);
-
-    await runtimeApi.createTerminal({
-      workspaceId,
-      cwd: "/tmp/one",
-      args: [],
-      nodeId: boardId,
-      agent: { id: "claude", permissionMode: "plan" },
-    });
-
-    expect(bodyOf(fetchMock)).toMatchObject({
-      workspaceId,
-      cwd: "/tmp/one",
-      nodeId: boardId,
-      agent: { id: "claude", permissionMode: "plan" },
-    });
-  });
-
-  it("抓屏把 lines/escapes 放进查询串", async () => {
-    const fetchMock = stubJson({ generation: 2, lines: 40, data: "$ " });
-
-    const capture = await runtimeApi.captureTerminal(sessionId, {
-      lines: 40,
-      escapes: false,
-    });
-
-    expect(capture.generation).toBe(2);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      `http://127.0.0.1:43120/api/terminals/${sessionId}/capture?lines=40&escapes=false`,
-    );
-  });
-
-  it("粘贴默认不回车", async () => {
-    const fetchMock = stubJson(null);
-
-    await runtimeApi.pasteTerminal(sessionId, "ls -al");
-
-    expect(bodyOf(fetchMock)).toEqual({ text: "ls -al", enter: false });
-  });
-
-  it("终止默认走 process 级别", async () => {
-    const fetchMock = stubJson(terminalSession);
-
-    await runtimeApi.terminateTerminal(sessionId);
-    expect(bodyOf(fetchMock)).toEqual({ mode: "process" });
-
-    stubJson(terminalSession);
-    const second = stubJson(terminalSession);
-    await runtimeApi.terminateTerminal(sessionId, "session");
-    expect(bodyOf(second)).toEqual({ mode: "session" });
-  });
-
-  it("回收命中 recycle 路由", async () => {
-    const fetchMock = stubJson({ ...terminalSession, generation: 3 });
-
-    const session = await runtimeApi.recycleTerminal(sessionId);
-
-    expect(session.generation).toBe(3);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      `http://127.0.0.1:43120/api/terminals/${sessionId}/recycle`,
-    );
-  });
-
-  it("旧 Runtime 不报 pid 时补 null", async () => {
-    stubJson(terminalSession);
-
-    const session = await runtimeApi.getTerminal(sessionId);
-    expect(session.pid).toBeNull();
-  });
-
-  it("读后端信息", async () => {
-    stubJson({
-      effective: "tmux",
-      configured: "auto",
-      tmuxVersion: "3.4",
-      tmuxSocket: "/tmp/tmux.sock",
-      reason: null,
-    });
-
-    await expect(runtimeApi.terminalBackend()).resolves.toMatchObject({
-      effective: "tmux",
-      configured: "auto",
-    });
-  });
-});
-
-describe("会话、Agent 与审批", () => {
-  it("会话列表命中工作空间路由", async () => {
-    const fetchMock = stubJson([]);
-
-    await runtimeApi.sessions(workspaceId);
-
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      `http://127.0.0.1:43120/api/workspaces/${workspaceId}/sessions`,
-    );
-  });
-
-  it("Agent 列表保留 resolvedPath 为 null 的未安装项", async () => {
-    stubJson([
-      {
-        id: "codex",
-        label: "Codex",
-        color: "#10a37f",
-        launchCmd: "codex",
-        promptMode: "argv",
-        capabilities: ["hooks"],
-        resolvedPath: null,
-        installed: false,
-      },
-    ]);
-
-    const agents = await runtimeApi.agents();
-    expect(agents[0]).toMatchObject({ id: "codex", installed: false });
-    expect(agents[0]?.resolvedPath).toBeNull();
-  });
-
-  it("回答审批时只发 decision", async () => {
-    const fetchMock = stubJson({
-      id: "p1",
-      nodeId: "node-1",
-      answer: "allow",
-      answeredAt: timestamp,
-      revision: 1,
-      route: "file",
-    });
-
-    await runtimeApi.answerApproval("p1", "allow");
-
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      "http://127.0.0.1:43120/api/approvals/p1/answer",
-    );
-    expect(bodyOf(fetchMock)).toEqual({ decision: "allow" });
-  });
-
-  // core 答的是审批那一行本身加 `route`（`core/agent/routes.ts`）。页面照旧的
-  // `{ pendingId, decision }` 去校验，决定已经记下、答案文件也写了，页面却抛
-  // 一个没人接的 ZodError——2026-09-26 端到端里每点一次「允许 / 拒绝」控制台
-  // 就多一条。
-  it("审批答复按 core 真正答的形状读", async () => {
-    stubJson({
-      id: "p1",
-      nodeId: "node-1",
-      workspaceId,
-      request: { tool: "Bash" },
-      answer: "allow",
-      answeredBy: "user",
-      createdAt: timestamp,
-      answeredAt: timestamp,
-      revision: 1,
-      route: "file",
-    });
-
-    await expect(
-      runtimeApi.answerApproval("p1", "allow"),
-    ).resolves.toMatchObject({ id: "p1", answer: "allow", route: "file" });
-  });
-
-  it("写上下文链接是整表替换", async () => {
-    const fetchMock = stubJson({
-      nodeId: boardId,
-      links: [],
-      updatedAt: timestamp,
-    });
-
-    await runtimeApi.putContextLinks(workspaceId, boardId, [
-      { id: sessionId, title: "构建", kind: "terminal" },
-    ]);
-
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(
-      `http://127.0.0.1:43120/api/workspaces/${workspaceId}/context-links/${boardId}`,
-    );
-    expect(init.method).toBe("PUT");
-    expect(bodyOf(fetchMock)).toEqual({
-      links: [{ id: sessionId, title: "构建", kind: "terminal" }],
-    });
+    expect(url).toBe("http://127.0.0.1:43120/api/rpc/workspaces/delete");
+    expect(init.method).toBe("POST");
+    expect(bodyOf(fetchMock)).toMatchObject({ json: { workspaceId } });
   });
 });
 
@@ -433,123 +325,10 @@ describe("白板资产与导出", () => {
   });
 });
 
-describe("git", () => {
-  it("暂存时提交路径列表", async () => {
-    const fetchMock = stubJson({ staged: ["src/App.tsx"] });
-
-    const result = await runtimeApi.gitStage(workspaceId, ["src/App.tsx"]);
-
-    expect(result.staged).toEqual(["src/App.tsx"]);
-    // 每个写请求都点名作用于哪个仓库；缺省是工作空间根（roadmap §4.1）。
-    expect(bodyOf(fetchMock)).toEqual({ paths: ["src/App.tsx"], path: "." });
-  });
-
-  it("暂存可以指向工作空间下的另一个仓库", async () => {
-    const fetchMock = stubJson({ staged: ["main.rs"] });
-
-    await runtimeApi.gitStage(workspaceId, ["main.rs"], "apps/inner");
-
-    expect(bodyOf(fetchMock)).toEqual({
-      paths: ["main.rs"],
-      path: "apps/inner",
-    });
-  });
-
-  it("空路径的回滚在发请求前就被拦下", async () => {
-    const fetchMock = stubJson({ reverted: [] });
-
-    expect(() => runtimeApi.gitRevert(workspaceId, [])).toThrow();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("提交在没有指定路径时不发 paths 字段", async () => {
-    const fetchMock = stubJson({
-      commit: "abc1234",
-      committed: [],
-      summary: "1 file changed",
-    });
-
-    await runtimeApi.gitCommit(workspaceId, "feat: 画布");
-
-    expect(bodyOf(fetchMock)).toEqual({ message: "feat: 画布", path: "." });
-  });
-
-  it("空提交信息在发请求前就被拦下", async () => {
-    const fetchMock = stubJson({});
-
-    expect(() => runtimeApi.gitCommit(workspaceId, "   ")).toThrow();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("diff 默认取工作区，scope / paths 都进查询串", async () => {
-    const fetchMock = stubJson({ repository: true, clean: true, files: [] });
-
-    await runtimeApi.gitDiff(workspaceId);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      `http://127.0.0.1:43120/api/workspaces/${workspaceId}/git/diff?path=.&scope=worktree`,
-    );
-
-    await runtimeApi.gitDiff(workspaceId, {
-      scope: "staged",
-      paths: ["src/a.ts", "src/b.ts"],
-    });
-    const url = String(fetchMock.mock.calls[1]?.[0]);
-    expect(url).toContain("scope=staged");
-    expect(decodeURIComponent(url)).toContain("paths=src/a.ts,src/b.ts");
-  });
-
-  it("未知 scope 在发请求前就被拦下", async () => {
-    const fetchMock = stubJson({ repository: true, clean: true, files: [] });
-
-    expect(() =>
-      runtimeApi.gitDiff(workspaceId, {
-        scope: "index" as unknown as "staged",
-      }),
-    ).toThrow();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("status 带回逐文件的暂存 / 未暂存两列", async () => {
-    stubJson({
-      repository: true,
-      branch: "main",
-      changedCount: 1,
-      files: [{ path: "a.ts", status: "M", staged: true, unstaged: true }],
-    });
-
-    const status = await runtimeApi.gitStatus(workspaceId);
-    expect(status.files[0]).toEqual({
-      path: "a.ts",
-      status: "M",
-      staged: true,
-      unstaged: true,
-      // A Runtime that predates the rename origin omits the key; the row is
-      // still a row, it just has no arrow to draw.
-      originPath: null,
-    });
-  });
-
-  it("取消暂存走独立路由", async () => {
-    const fetchMock = stubJson({ unstaged: ["src/a.ts"] });
-
-    const result = await runtimeApi.gitUnstage(workspaceId, ["src/a.ts"]);
-
-    expect(result.unstaged).toEqual(["src/a.ts"]);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(
-      `http://127.0.0.1:43120/api/workspaces/${workspaceId}/git/unstage`,
-    );
-    expect(init.method).toBe("POST");
-    expect(bodyOf(fetchMock)).toEqual({ paths: ["src/a.ts"], path: "." });
-  });
-});
-
 describe("写文件", () => {
   it("PUT 携带已读内容版本", async () => {
     const fetchMock = stubJson({
-      path: "src/a.ts",
-      size: 7,
-      sha256: "b".repeat(64),
+      json: { path: "src/a.ts", size: 7, sha256: "b".repeat(64) },
     });
 
     const result = await runtimeApi.writeFile(
@@ -566,28 +345,29 @@ describe("写文件", () => {
       sha256: "b".repeat(64),
     });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(
-      `http://127.0.0.1:43120/api/workspaces/${workspaceId}/file`,
-    );
-    expect(init.method).toBe("PUT");
+    expect(url).toBe("http://127.0.0.1:43120/api/rpc/files/write");
+    expect(init.method).toBe("POST");
     expect(bodyOf(fetchMock)).toEqual({
-      path: "src/a.ts",
-      content: "content",
-      expectedSize: 3,
-      expectedSha256: "a".repeat(64),
+      json: {
+        workspaceId,
+        path: "src/a.ts",
+        content: "content",
+        expectedSize: 3,
+        expectedSha256: "a".repeat(64),
+      },
     });
   });
 
   it("不传 expectedSize 时不发这个键", async () => {
     const fetchMock = stubJson({
-      path: "a.ts",
-      size: 1,
-      sha256: "b".repeat(64),
+      json: { path: "a.ts", size: 1, sha256: "b".repeat(64) },
     });
 
     await runtimeApi.writeFile(workspaceId, "a.ts", "x");
 
-    expect(bodyOf(fetchMock)).toEqual({ path: "a.ts", content: "x" });
+    expect(bodyOf(fetchMock)).toEqual({
+      json: { workspaceId, path: "a.ts", content: "x" },
+    });
   });
 
   it("409 变成可判别的冲突错误", async () => {
@@ -609,141 +389,9 @@ describe("写文件", () => {
   });
 });
 
-describe("集成安装", () => {
-  /** 一份装好的集成状态（设计 agent-integration §5）。 */
-  function installed(overrides: Record<string, unknown> = {}) {
-    return {
-      agentId: "claude",
-      mode: "launch",
-      hook: {
-        installed: true,
-        path: "/data/integration/claude/settings.json",
-        revision: 4,
-      },
-      skill: {
-        installed: true,
-        path: "/home/u/.claude/skills/armadra/SKILL.md",
-        revision: 6,
-      },
-      legacy: { found: [] },
-      revision: 406,
-      installedRevision: 406,
-      stale: false,
-      launchArgs: ["--settings", "/data/integration/claude/settings.json"],
-      ...overrides,
-    };
-  }
-
-  it("读状态是 GET，装 / 卸是 POST，两半一起答", async () => {
-    const fetchMock = stubJson(installed());
-    const state = await runtimeApi.agentIntegration("claude");
-    expect(state.mode).toBe("launch");
-    expect(state.hook.installed && state.skill.installed).toBe(true);
-    expect(state.launchArgs).toEqual([
-      "--settings",
-      "/data/integration/claude/settings.json",
-    ]);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("http://127.0.0.1:43120/api/agents/claude/integration");
-    expect(init?.method ?? "GET").toBe("GET");
-
-    const installMock = stubJson(installed());
-    await expect(
-      runtimeApi.installAgentIntegration("claude"),
-    ).resolves.toMatchObject({ stale: false });
-    const [installUrl, installInit] = installMock.mock.calls[0] as [
-      string,
-      RequestInit,
-    ];
-    expect(installUrl).toBe(
-      "http://127.0.0.1:43120/api/agents/claude/integration/install",
-    );
-    expect(installInit.method).toBe("POST");
-
-    stubJson(
-      installed({
-        agentId: "custom:x",
-        hook: { installed: false, revision: 0 },
-        skill: { installed: false, revision: 0 },
-        launchArgs: [],
-      }),
-    );
-    const removed = await runtimeApi.uninstallAgentIntegration("custom:x");
-    expect(removed.hook.installed || removed.skill.installed).toBe(false);
-  });
-
-  /** 装了旧版本：两半都在，但修订不是这一版的。 */
-  it("旧修订读出来就是 stale，旧残留原样带回来", async () => {
-    stubJson(
-      installed({
-        installedRevision: 305,
-        stale: true,
-        legacy: {
-          found: [
-            {
-              kind: "hook_entry",
-              path: "/home/u/.claude/settings.json",
-              detail: "/usr/local/bin/aicc-hook claude",
-            },
-          ],
-        },
-      }),
-    );
-    const state = await runtimeApi.agentIntegration("claude");
-    expect(state.stale).toBe(true);
-    expect(state.legacy.found[0]?.kind).toBe("hook_entry");
-  });
-
-  it("修复报告说清删了什么、留了什么、备份在哪", async () => {
-    const fetchMock = stubJson({
-      agentId: "claude",
-      found: [
-        {
-          kind: "codex_unknown_key",
-          path: "/home/u/.codex/hooks.json",
-          detail: "version",
-        },
-      ],
-      removed: ["/home/u/.codex/hooks.json: version"],
-      kept: ["/home/u/.codex/hooks.json: session_start → /opt/audit.sh"],
-      backup: "/home/u/.codex/hooks.json.armadra-backup-20260913101500",
-      backups: ["/home/u/.codex/hooks.json.armadra-backup-20260913101500"],
-    });
-    const report = await runtimeApi.repairAgentIntegration("claude");
-    expect(report.removed).toHaveLength(1);
-    expect(report.kept[0]).toContain("/opt/audit.sh");
-    expect(report.backup).toContain(".armadra-backup-");
-    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(
-      "http://127.0.0.1:43120/api/agents/claude/integration/repair",
-    );
-  });
-
-  it("清未读标记打到 agent-status 路由", async () => {
-    const fetchMock = stubJson({
-      nodeId: workspaceId,
-      workspaceId,
-      agentId: "claude",
-      unread: false,
-      verified: true,
-      restored: false,
-      updatedAt: timestamp,
-    });
-
-    const status = await runtimeApi.markAgentRead(workspaceId);
-
-    expect(status.unread).toBe(false);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(
-      `http://127.0.0.1:43120/api/agent-status/${workspaceId}/read`,
-    );
-    expect(init.method).toBe("POST");
-  });
-});
-
-describe("设置", () => {
+describe("设置（契约 §34.5，经 RPC）", () => {
   it("补齐缺失的终端段默认值", async () => {
-    stubJson({});
+    stubJson({ json: {} });
 
     await expect(runtimeApi.settings()).resolves.toMatchObject({
       terminal: { backend: "auto", detachedGraceMinutes: 1440 },
@@ -752,8 +400,10 @@ describe("设置", () => {
 
   it("透传 Runtime 写入的未知键", async () => {
     stubJson({
-      terminal: { backend: "tmux", detachedGraceMinutes: 60 },
-      future: { key: 1 },
+      json: {
+        terminal: { backend: "tmux", detachedGraceMinutes: 60 },
+        future: { key: 1 },
+      },
     });
 
     const settings = await runtimeApi.settings();
@@ -761,69 +411,21 @@ describe("设置", () => {
     expect(settings).toMatchObject({ future: { key: 1 } });
   });
 
-  it("PATCH 只发改动的段", async () => {
+  it("update 只发改动的段，值为 undefined 的键不发", async () => {
     const fetchMock = stubJson({
-      terminal: { backend: "direct", detachedGraceMinutes: 1440 },
+      json: { terminal: { backend: "direct", detachedGraceMinutes: 1440 } },
     });
 
-    await runtimeApi.updateSettings({ terminal: { backend: "direct" } });
+    await runtimeApi.updateSettings({
+      terminal: { backend: "direct", ecoMode: undefined },
+    });
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("http://127.0.0.1:43120/api/settings");
-    expect(init.method).toBe("PATCH");
-    expect(bodyOf(fetchMock)).toEqual({ terminal: { backend: "direct" } });
-  });
-});
-
-describe("克隆仓库", () => {
-  it("POST 只发 url / parent / name", async () => {
-    const fetchMock = stubJson({ jobId: "job-1" });
-
-    await expect(
-      runtimeApi.cloneRepository({
-        url: "https://example.test/demo.git",
-        parent: "/tmp",
-      }),
-    ).resolves.toEqual({ jobId: "job-1" });
-
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("http://127.0.0.1:43120/api/git/clone");
+    expect(url).toBe("http://127.0.0.1:43120/api/rpc/settings/update");
     expect(init.method).toBe("POST");
-    expect(bodyOf(fetchMock)).toEqual({
-      url: "https://example.test/demo.git",
-      parent: "/tmp",
+    expect((bodyOf(fetchMock) as { json: unknown }).json).toEqual({
+      terminal: { backend: "direct" },
     });
-  });
-
-  it("轮询带回完成后的工作空间", async () => {
-    stubJson({
-      state: "done",
-      lines: ["Receiving objects: 100% (20/20)"],
-      workspace: {
-        id: workspaceId,
-        name: "demo",
-        rootPath: "/tmp/demo",
-        color: "#5B5BD6",
-        permissions: { read: true, write: true, execute: true },
-        lastOpenedAt: timestamp,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
-    });
-
-    const status = await runtimeApi.gitCloneStatus("job-1");
-    expect(status.state).toBe("done");
-    expect(status.workspace?.rootPath).toBe("/tmp/demo");
-  });
-
-  it("取消发 DELETE", async () => {
-    const fetchMock = stubJson(null);
-
-    await runtimeApi.cancelClone("job-1");
-
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("http://127.0.0.1:43120/api/git/clone/job-1");
-    expect(init.method).toBe("DELETE");
   });
 });
 

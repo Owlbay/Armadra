@@ -217,6 +217,50 @@ describe("read --mode snapshot", () => {
     expect(text).toContain("heading");
   });
 
+  it("skips a cross-origin iframe whose session does not answer", async () => {
+    session = new CdpSession(page.dispatch, { childTimeoutMs: 50 });
+    await session.refreshViewport();
+    page.elements.push(el(20, "Iframe", ""));
+    page.elements.push(el(21, "button", "跨源按钮", { frame: "child-1" }));
+    page.children.set("child-1", {
+      targetId: "frame-x",
+      owner: 20,
+      url: "https://other.test/x",
+    });
+    page.hung.add("child-1");
+    session.noteEvent("Target.attachedToTarget", {
+      sessionId: "child-1",
+      targetInfo: {
+        type: "iframe",
+        targetId: "frame-x",
+        url: "https://other.test/x",
+      },
+    });
+    // The page itself still reads; the silent iframe is left out.
+    const started = Date.now();
+    const text = await run("read");
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(text).toContain('button "提交"');
+    expect(text).not.toContain("跨源按钮");
+    // Once silent, it is not asked again on the next read.
+    expect(session.childFrames()).toEqual([]);
+    const before = page.sent.filter((each) => each.session === "child-1");
+    await run("read");
+    expect(page.sent.filter((each) => each.session === "child-1")).toEqual(
+      before,
+    );
+    await expect(
+      session.send("DOM.getDocument", { depth: 0 }, "child-1"),
+    ).rejects.toThrow("没有应答");
+    // An answer, however late, brings it back.
+    page.wake("child-1");
+    await new Promise((done) => setTimeout(done, 0));
+    expect(session.childFrames().map((each) => each.sessionId)).toEqual([
+      "child-1",
+    ]);
+    expect(await run("read")).toContain("跨源按钮");
+  });
+
   it("reads into a cross-origin iframe through its own session", async () => {
     page.elements.push(el(20, "Iframe", ""));
     page.elements.push(el(21, "button", "跨源按钮", { frame: "child-1" }));
@@ -876,6 +920,42 @@ describe("scroll", () => {
     expect(text).toContain("已滚动 0 px，横向 300 px");
     const wheel = page.sent.find((each) => each.params.type === "mouseWheel");
     expect(wheel?.params).toMatchObject({ deltaX: 300, deltaY: 0 });
+  });
+
+  /**
+   * The compositor applies a wheel on its own schedule: the first reading after
+   * the wheel can still be the old position. Linux CI once read "scrolled 0 px"
+   * for a page that did scroll; the move is measured once the page settles.
+   */
+  it("measures the move after the page has settled, not the first reading", async () => {
+    const at = (top: number) => ({
+      top,
+      left: 0,
+      height: 2_000,
+      width: 800,
+      viewportHeight: 600,
+      viewportWidth: 800,
+    });
+    page.scripts.scrollPosition = [at(0), at(0), at(120), at(300), at(300)];
+    const text = await run("scroll", { direction: "down", amount: 300 });
+    expect(text).toContain("已滚动 300 px");
+  });
+
+  it("reports a page that does not move as zero, without waiting forever", async () => {
+    page.scripts.scrollPosition = [
+      {
+        top: 0,
+        left: 0,
+        height: 600,
+        width: 800,
+        viewportHeight: 600,
+        viewportWidth: 800,
+      },
+    ];
+    const started = Date.now();
+    const text = await run("scroll", { direction: "down", amount: 300 });
+    expect(text).toContain("已滚动 0 px");
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 
   it("brings an element into view with --ref", async () => {

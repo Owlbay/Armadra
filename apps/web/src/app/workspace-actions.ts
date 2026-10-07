@@ -1,3 +1,5 @@
+import { idsInSource } from "./preferences/sources";
+import { activeSourceId } from "../sources/scope";
 import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Workspace, WorkspaceSummary } from "@armadra/shared";
@@ -11,6 +13,7 @@ import {
   rememberWorkspace,
   usePreferencesStore,
 } from "./preferences-store";
+import { sk } from "../sources/scope";
 import { workspaceRequest } from "./workspace-create";
 
 /**
@@ -30,7 +33,7 @@ export function useCreateWorkspace() {
       options: { createDirectory?: boolean } = {},
     ): Promise<Workspace> => {
       const existing =
-        queryClient.getQueryData<WorkspaceSummary[]>(["workspaces"]) ?? [];
+        queryClient.getQueryData<WorkspaceSummary[]>(sk("workspaces")) ?? [];
       const request = workspaceRequest(
         rootPath,
         existing,
@@ -47,7 +50,7 @@ export function useCreateWorkspace() {
           createDirectory: false,
         });
       }
-      void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+      void queryClient.invalidateQueries({ queryKey: sk("workspaces") });
       return workspace;
     },
     [queryClient],
@@ -68,13 +71,16 @@ export function useOpenWorkspace() {
   );
 
   return useCallback(
-    (workspace: Workspace) => {
-      const current = useCanvasStore.getState().workspace;
-      if (current?.id === workspace.id) return;
+    // `sourceId` 省略 = 此刻的源。同一个 id 在两个源里是两个工作空间，所以
+    // 「已经开着」要源也相同（侧栏从别的源组里打开时先切当前源再调这里）。
+    (workspace: Workspace, sourceId: string = activeSourceId()) => {
+      const state = useCanvasStore.getState();
+      if (state.workspace?.id === workspace.id && state.sourceId === sourceId)
+        return;
       rememberWorkspace(workspace.id);
       rememberBoard(null);
       openWorkspaceTab(workspace.id);
-      setWorkspace(workspace);
+      setWorkspace(workspace, sourceId);
       selectBoard(null);
       void runtimeApi.openWorkspace(workspace.id).catch(() => undefined);
     },
@@ -121,11 +127,12 @@ export function useCloseWorkspace() {
       closeWorkspaceTab(workspaceId);
       const state = useCanvasStore.getState();
       if (state.workspace?.id !== workspaceId) return;
-      const remaining = usePreferencesStore
-        .getState()
-        .openWorkspaceIds.filter((id) => id !== workspaceId);
+      const remaining = idsInSource(
+        usePreferencesStore.getState().openWorkspaceKeys,
+        activeSourceId(),
+      ).filter((id) => id !== workspaceId);
       const summaries =
-        queryClient.getQueryData<Workspace[]>(["workspaces"]) ?? [];
+        queryClient.getQueryData<Workspace[]>(sk("workspaces")) ?? [];
       const next = remaining
         .map((id) => summaries.find((item) => item.id === id))
         .find((item): item is Workspace => Boolean(item));

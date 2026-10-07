@@ -6,7 +6,7 @@
 
 **在同一张无限画布上，打破 Agent 之间的界限，让不同模型围绕同一个目标协作。**
 
-本地优先 · 一个 core、两种壳 · 桌面 / 浏览器 / 手机共用同一份页面
+本地优先 · 一个 core、两种壳 · 桌面、浏览器与手机共用同一份页面
 
 [产品说明](docs/guides/product-overview.md) · [快速开始](#快速开始) · [能力一览](#能力一览) · [设计](#设计) · [路线图](#路线图) · [文档](docs/README.md)
 
@@ -37,7 +37,7 @@ Workflow 能将步骤明确的任务编排成可重复流程。开放任务的�
 
 Armadra 的 Agent 节点运行 Claude Code、Codex 等成熟产品，复用它们已有的多轮执行、工具调用和会话机制。你可以按工作目标安排调查、实现与审查，让节点内部的细节由 Agent 推进，并通过画布检查材料与成果。
 
-Workflow 也能嵌入 Agent，两种方式可以结合：先探索和验证任务，再将稳定的协作过程沉淀为可复用 workflow。完整模板复用属于后续规划，详细比较见[产品说明](docs/guides/product-overview.md#workflow-已经解决了什么代价又在哪里)。
+Workflow 也能嵌入 Agent，两种方式可以结合：先探索和验证任务，再将稳定的协作过程沉淀为可复用 workflow（协调者交草案、人确认成模板、按参数或定时重跑）。详细比较见[产品说明](docs/guides/product-overview.md#workflow-已经解决了什么代价又在哪里)。
 
 ### 需求依据
 
@@ -71,17 +71,20 @@ AI Coding 画布覆盖软件开发、算法开发、数据分析与科研编程�
 - React Flow 画布 + 自写白板层（手绘、几何、直线 / 箭头、文字、图片），与节点共用相机和撤销栈。
 - Mermaid 导入：flowchart 落成可编辑的原生对象，其余图种回退为图片。
 - 白板对象与 Frame 可「引用到 Agent」，以 PNG / 文字形式成为资料。
-- 自动保存、revision CAS、多设备在线表与编辑租约（谁在看、谁在写、接管）。
+- 自动保存、revision CAS；多人实时编辑（在线条、光标与选区、离线编辑重连补齐），也可退回编辑租约。
+- 评论：评论钉、线程、`@` 提及；Agent 经连线读节点时附上未解决的评论。
 
 ### Agent 协作
 
-- 6 种内置 CLI 与自定义 CLI：启动、resume、权限模式、模型选择、版本探测。
+- 6 种内置 CLI、协调者 `ama` 与自定义 CLI：启动、resume、权限模式、模型选择、版本探测；节点可绑定 Claude / Copilot 的第二个账号。
 - Hook / 进程内扩展 / 插件三种状态通道，归一为 `working / waiting / blocked / done`；权限请求在节点头部直答。
 - **画布内注入**：Hook、技能与画布说明只随画布启动带上，画布外启动的 CLI 零影响；SSH 终端同样适用。
 - **按连线读取上下文**：对等 / 主从两种链接，转录、摘要、终端画面按预算读取。
 - **两种消息模型**：拉取式 `post / inbox / ack`，推式 `send` + 投递队列、驱动租约、半截输入门，休眠节点先唤醒再投。
 - **编排**：`open-agent --after / --after-turn`、`canvas team` 并行 / 流水线 / 汇总，成员各带一条 worktree。
-- 对话交接（prepare → 预览 → accept）、子代理卡片、原生 Loop / Cron 观察卡片、会话索引、自动命名。
+- 对话交接（prepare → 预览 → accept，可跨执行主机）、子代理卡片、原生 Loop / Cron 观察卡片、会话索引、自动命名。
+- **会话视图（ACP）**：同一个 Agent 在终端与对话视图间切换；消息、工具调用、差异、权限卡；回复可一键落成便签、白板对象或编辑器节点。
+- **协调者与工作流**：`ama` 把子任务落成画布节点并收齐结果；协作沉淀为模板，按参数或定时重跑，关卡等人确认，运行记录可对比。
 
 ### 终端与主机
 
@@ -104,15 +107,17 @@ AI Coding 画布覆盖软件开发、算法开发、数据分析与科研编程�
 
 ### 自动化、用量与资源
 
-- core 内持久调度：Cron / Interval / Once / 完成后循环，misfire、并发与重试策略；目标为 Agent 时走投递门。
-- Claude / Codex / Copilot 额度窗口与重置时间、本地成本统计、Provider 状态页徽标、托盘迷你条。
+- core 内持久调度：Cron / Interval / Once / 完成后循环，misfire、并发与重试策略；目标为 Agent 时走投递门，也可定时运行工作流。
+- Claude / Codex / Copilot 额度窗口与重置时间（借用 CLI 令牌的端点默认关）、本地成本统计、Provider 状态页徽标、托盘迷你条。
 - 按会话进程树采集内存 / CPU，主机总览、阈值提醒，覆盖远端执行主机。
 
 ### 远程与多端
 
 - **远端执行主机**：经 SSH 拉起同一份 core 作为 Worker，文件、Git、语言服务、资源读取在执行主机上完成。
-- **服务器壳**：TLS、设备配对、`__Host-` 会话与 CSRF；账号、组与按工作空间共享，收权即断流、即释放写租约。
-- 手机网页：焦点页、底部导航、软键盘工具条、抽屉布局。
+- **服务器壳**：TLS、设备配对、`__Host-` 会话与 CSRF；账号、组与按工作空间共享，收权即断流、即释放写租约；容器镜像与内建 ACME。
+- **桌面对外服务（Gateway）**：本地 CA 或 ACME，扫码配对手机与其他设备。
+- **账号安全**：passkey、TOTP 与恢复码、GitHub / OIDC 登录与 SSO、限流与锁定、审计导出；Agent 按角色驱动与答审批。
+- 手机：网页的焦点页、底部导航、软键盘工具条、连接页与推送；iOS / Android 原生壳（证书钉扎、钥匙串、扫码、推送解密）。
 - 快捷键按平台 / 设备覆盖、中英双语、主题、SQLite 一致性备份。
 
 ### 支持的 Agent
@@ -125,8 +130,9 @@ AI Coding 画布覆盖软件开发、算法开发、数据分析与科研编程�
 | Pi             | 进程内扩展 | `--session PATH_OR_ID` | CLI 默认                     |
 | Oh My Pi       | 进程内扩展 | `--resume ID`          | auto-edit / full-auto        |
 | GitHub Copilot | 命令 Hook  | `--resume ID`          | auto-edit / full-auto / plan |
+| ama            | 宿主适配器 | `--resume ID`          | auto-edit / full-auto / plan |
 
-自定义 Agent 可借用任一内置 CLI 的形状。完整差异见 [Agent 协作](docs/guides/agent-collaboration.md)，
+六种 CLI 与 ama 都可经 ACP 以会话视图驱动（Copilot 不能接回会话）。自定义 Agent 可借用任一内置 CLI 的形状。完整差异见 [Agent 协作](docs/guides/agent-collaboration.md)，
 逐项现状与依据见 [功能预期总表](docs/status/feature-roadmap.md)。
 
 ## 设计
@@ -135,10 +141,10 @@ AI Coding 画布覆盖软件开发、算法开发、数据分析与科研编程�
             apps/web  —— 唯一页面（React 19 · React Flow · xterm.js · CodeMirror 6）
            ┌───────────────────────┴───────────────────────┐
   apps/desktop  Electron 壳                      apps/server  无窗口服务器壳
-  窗口 · 托盘 · 通知 · <webview>                 TLS · 设备配对 · 账号与共享
+  窗口 · 托盘 · 通知 · <webview>                 TLS · ACME · 账号与共享
            └───────────────────────┬───────────────────────┘
                  apps/desktop/src/core  —— 唯一执行者（Electron-free TypeScript）
-       画布 · 终端 · 文件 · Git · GitHub · 调度 · 语言服务 · 浏览器 · Hook · 身份
+   画布 · 终端 · ACP · 工作流 · 实时协同 · Gateway · 推送 · 身份 · Git · 调度 · Hook
            │                         │                          │
    armadra-hook（CLI 回调）   remote Worker（经 ssh）   session-host（Windows ConPTY）
 ```
@@ -179,27 +185,18 @@ pnpm --filter @armadra/server build    # 服务器壳 → apps/server/out/main.j
 
 ## 路线图
 
-后续按四个部分推进，平台线并行（详见 [后续规划](docs/design/product-roadmap.md)）：
+[后续规划](docs/design/product-roadmap.md)的四个部分（CLI 协作、ACP 会话视图、协调者与工作流、多人协同）与平台线的代码大部分已经合入。剩下的：
 
-1. **CLI 接入、通信与共享上下文**（当前优先）：六种 CLI 能力对齐、会话索引与多账号、投递回执、跨主机通信、真 CLI 端到端。
-2. **ACP 接入与会话视图**：现有 CLI 经 ACP 以对话形式展示，Agent 的产出一键落到画板，面向普通用户。
-3. **协调 Agent 与工作流**：以 Pi 为核心的协调 Agent 拆分与分派任务，协作过程沉淀为可一键复用的工作流。
-4. **多人协同**：一块画板多人实时协作，服务器部署后外部成员登录协同，配套登录服务与安全强度校验。
+| 方向                   | 现状                                                            | 缺的条件                                     |
+| ---------------------- | --------------------------------------------------------------- | -------------------------------------------- |
+| 签名发布与自动更新安装 | 签名、公证、更新清单与通道已接，未签名包只走到「暂存」          | 代码签名证书、公证凭据、发布密钥             |
+| Windows 正式支持       | 打包版验收包在 Windows runner 上每晚通过                        | 真机安装与长时间运行                         |
+| 手机原生应用与推送     | 模拟器里配对到画布已通过，推送对假端点走通                      | 开发者账号、推送密钥、真机                   |
+| 另外三家 CLI 与 ACP    | Claude / Codex / Pi 已真跑；ACP 真跑探针已备、只对假 Agent 跑过 | 装好 OpenCode / OMP / Copilot 与适配器的机器 |
+| 多账号 CLI             | Claude / Copilot 的节点凭据已开放，其余种类待实测               | 测试账号与凭据                               |
+| 公网登录               | passkey、OAuth 在本地与假提供方上验证                           | 域名与证书、OAuth 应用                       |
 
-平台线：桌面端 Gateway 供手机与其他设备访问 → 移动网页完善 → 手机 / 平板原生应用 → 桌面三平台与服务端优化。
-
-此外，代码侧已经完成、收尾依赖外部条件的项：
-
-| 方向               | 现状                                                         | 缺的条件                   |
-| ------------------ | ------------------------------------------------------------ | -------------------------- |
-| Windows 正式支持   | 会话宿主、启动行方言、`.exe` Hook 启动器已由 Windows CI 覆盖 | 真机安装与长时间运行       |
-| 签名发布与自动更新 | 检查 → 下载 → 验签 → 安装链路已接，未签名构建里关闭          | 代码签名证书、公证、发布源 |
-| 手机原生应用       | 网页端焦点页、底部导航、软键盘工具条已交付                   | 原生壳、商店签名、推送服务 |
-| passkey / OAuth    | 账号模型已预留，接口按设计返回 501                           | 依赖方域名、OAuth 应用     |
-| 多账号 CLI         | 节点账号绑定只有 schema 与只读徽标                           | 各 CLI 的多账号凭据形态    |
-| 真实 SSH 端到端    | Worker、远端注入与 Hook 中继已用本机子进程验证               | 一台真实远端主机           |
-
-逐项状态以 [功能预期总表](docs/status/feature-roadmap.md) 与 [TypeScript Core 进度](docs/status/typescript-core-status.md) 为准。
+逐项状态以 [功能预期总表](docs/status/feature-roadmap.md) 与 [补全进度](docs/status/completion-progress.md) 为准。
 
 ## 项目结构
 
@@ -208,6 +205,8 @@ pnpm --filter @armadra/server build    # 服务器壳 → apps/server/out/main.j
 | [apps/web](apps/web/README.md)               | React / Vite / React Flow 前端，两种壳共用                |
 | [apps/desktop](apps/desktop/README.md)       | Electron 桌面壳；`src/core/` 是业务所在                   |
 | [apps/server](apps/server/README.md)         | 无窗口服务器壳：同一个 core，外加 TLS、配对、账号与共享   |
+| `apps/mobile`                                | Capacitor 手机壳（iOS / Android），打包同一份页面         |
+| [apps/push-relay](apps/push-relay/README.md) | 商店版 App 的推送中继（只转发端到端加密的信封）           |
 | [packages/shared](packages/shared/README.md) | 领域模型、CLI 注册表与 JSON schema                        |
 | `tools/`                                     | 仓库校验、CI、发布与探针脚本                              |
 | `docs/`                                      | 指南、设计、进度与契约，入口是 [文档索引](docs/README.md) |

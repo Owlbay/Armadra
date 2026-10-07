@@ -1,15 +1,16 @@
 import type { GitExpectedState, GitRepositoryAction } from "@armadra/shared";
 import { useT } from "../../app/preferences-store";
+import { Checkbox } from "../../ui/checkbox";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../../ui/alert-dialog";
+  ResponsiveAlertDialog,
+  ResponsiveAlertDialogAction,
+  ResponsiveAlertDialogCancel,
+  ResponsiveAlertDialogContent,
+  ResponsiveAlertDialogDescription,
+  ResponsiveAlertDialogFooter,
+  ResponsiveAlertDialogHeader,
+  ResponsiveAlertDialogTitle,
+} from "@/panels/ResponsiveDialog";
 import { actionTarget, type Confirmation } from "./operations";
 
 /**
@@ -42,19 +43,21 @@ export function RepositoryConfirmDialog({
       ? confirmation.action.forceWithLease
       : null;
   return (
-    <AlertDialog
+    <ResponsiveAlertDialog
       open={confirmation !== null}
       onOpenChange={(open) => {
         if (!open) setConfirmation(null);
       }}
     >
-      <AlertDialogContent className="max-h-[90dvh] overflow-y-auto">
-        <AlertDialogHeader>
-          <AlertDialogTitle>{t("gitRepo.confirmTitle")}</AlertDialogTitle>
-          <AlertDialogDescription>
+      <ResponsiveAlertDialogContent className="max-h-[90dvh] overflow-y-auto">
+        <ResponsiveAlertDialogHeader>
+          <ResponsiveAlertDialogTitle>
+            {t("gitRepo.confirmTitle")}
+          </ResponsiveAlertDialogTitle>
+          <ResponsiveAlertDialogDescription>
             {t("gitRepo.confirmDescription")}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
+          </ResponsiveAlertDialogDescription>
+        </ResponsiveAlertDialogHeader>
         {confirmation && (
           <dl className="space-y-2 break-all text-xs">
             {confirmation.review && (
@@ -158,13 +161,9 @@ export function RepositoryConfirmDialog({
                 <dd>{t("gitRepo.leaseSafety")}</dd>
                 <dd>
                   <label className="flex min-h-9 items-center gap-2">
-                    <input
-                      type="checkbox"
-                      className="size-4 accent-[var(--brand)]"
+                    <Checkbox
                       checked={acknowledged}
-                      onChange={(event) =>
-                        setAcknowledged(event.target.checked)
-                      }
+                      onCheckedChange={(next) => setAcknowledged(next === true)}
                     />
                     {t("gitRepo.leaseAcknowledge")}
                   </label>
@@ -222,9 +221,11 @@ export function RepositoryConfirmDialog({
             </div>
           </dl>
         )}
-        <AlertDialogFooter>
-          <AlertDialogCancel>{t("gitRepo.cancel")}</AlertDialogCancel>
-          <AlertDialogAction
+        <ResponsiveAlertDialogFooter>
+          <ResponsiveAlertDialogCancel>
+            {t("gitRepo.cancel")}
+          </ResponsiveAlertDialogCancel>
+          <ResponsiveAlertDialogAction
             disabled={blocked || (Boolean(lease) && !acknowledged)}
             onClick={() => {
               if (confirmation && !blocked && (!lease || acknowledged)) {
@@ -234,9 +235,9 @@ export function RepositoryConfirmDialog({
             }}
           >
             {t(lease ? "gitRepo.confirmForce" : "gitRepo.confirm")}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+          </ResponsiveAlertDialogAction>
+        </ResponsiveAlertDialogFooter>
+      </ResponsiveAlertDialogContent>
+    </ResponsiveAlertDialog>
   );
 }

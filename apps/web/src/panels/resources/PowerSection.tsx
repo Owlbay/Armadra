@@ -75,7 +75,10 @@ export function PowerSection({
             : t("resources.power.idle")}
         </Badge>
         {power.mechanism && (
-          <Badge variant="outline" className="font-mono text-[10px]">
+          <Badge
+            variant="outline"
+            className="font-mono text-[length:var(--text-caption)]"
+          >
             {power.mechanism}
           </Badge>
         )}
@@ -121,7 +124,10 @@ export function PowerSection({
                 }}
               />
               <span className="min-w-0 flex-1 truncate">{lease.reason}</span>
-              <Badge variant="ghost" className="shrink-0 text-[10px]">
+              <Badge
+                variant="ghost"
+                className="shrink-0 text-[length:var(--text-caption)]"
+              >
                 {t(`resources.power.source.${lease.source}`)}
               </Badge>
               <span className="shrink-0 text-[11px] text-muted-foreground">

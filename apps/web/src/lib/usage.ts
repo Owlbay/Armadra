@@ -1,8 +1,15 @@
-import type { UsageProvider, UsageWindow } from "@armadra/shared";
+import type {
+  UsageEstimateWindow,
+  UsageProvider,
+  UsageWindow,
+} from "@armadra/shared";
 import type { Translate } from "../app/preferences-store";
 import { formatRelativeTime } from "./format";
 
-export function usageWindowLabel(t: Translate, window: UsageWindow): string {
+export function usageWindowLabel(
+  t: Translate,
+  window: Pick<UsageWindow, "label" | "group">,
+): string {
   const key = `usage.window.${window.label}`;
   const translated = t(key);
   const label = translated === key ? window.label : translated;
@@ -58,6 +65,17 @@ const USAGE_REASONS: ReadonlySet<string> = new Set([
   "network",
   "parse",
   "no_windows",
+  "unsupported",
+  "policy_off",
+]);
+
+/**
+ * `unavailable` 也可能带原因：`policy_off`（出站政策默认关）与 `unsupported`
+ * （端点答了网页）。其余 `unavailable` 就是「本机没有凭据」。
+ */
+export const UNAVAILABLE_REASONS: ReadonlySet<string> = new Set([
+  "unsupported",
+  "policy_off",
 ]);
 
 /**
@@ -67,4 +85,27 @@ const USAGE_REASONS: ReadonlySet<string> = new Set([
 export function usageReasonKey(reason: string | undefined): string {
   const known = reason !== undefined && USAGE_REASONS.has(reason);
   return `usage.reason.${known ? reason : "provider_error"}`;
+}
+
+/**
+ * 额度端点按政策关着时，core 按本机转录估出来的窗口（契约 §12.1）。只有带了
+ * `estimate` 的 `policy_off` 才算。
+ */
+export function usageLocalEstimate(
+  provider: UsageProvider,
+): readonly UsageEstimateWindow[] | null {
+  return provider.status === "unavailable" &&
+    provider.reason === "policy_off" &&
+    provider.estimate !== undefined &&
+    provider.estimate.windows.length > 0
+    ? provider.estimate.windows
+    : null;
+}
+
+/** 估算窗口的占用百分比；不知道这一档的额度就没有。 */
+export function usageEstimatePercent(
+  window: UsageEstimateWindow,
+): number | null {
+  if (window.limit === undefined || !(window.limit > 0)) return null;
+  return Math.min(100, Math.max(0, (window.used / window.limit) * 100));
 }

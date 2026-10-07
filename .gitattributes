@@ -20,3 +20,6 @@
 *.otf binary
 *.bin binary
 *.db binary
+*.mp4 binary
+*.webm binary
+*.tgz binary

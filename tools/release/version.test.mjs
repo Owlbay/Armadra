@@ -13,6 +13,9 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   VERSION_SITES,
+  checkAgentPin,
+  checkDesktopServe,
+  checkPlatformPin,
   checkVersions,
   readVersions,
   setVersion,
@@ -22,6 +25,13 @@ import {
   compareVersions,
   extractFence,
   normalize,
+  normalizeAcp,
+  normalizeAgentPin,
+  normalizePlatformPin,
+  readAcpCompatibility,
+  readAgentPin,
+  readCompatibility,
+  readPlatformPin,
   releaseNote,
   renderFence,
 } from "./compatibility.mjs";
@@ -64,6 +74,31 @@ test("one file left behind fails the check", () => {
     });
     assert.equal(problems.length, 1);
     assert.match(problems[0], /apps\/desktop\/package\.json says 0\.1\.9/);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("set rewrites the version constants in source, and check reads them", () => {
+  const base = workspace("0.3.1");
+  try {
+    for (const path of [
+      "apps/desktop/src/core/instance.ts",
+      "apps/desktop/src/cli/armadra-hook/usage.ts",
+    ]) {
+      assert.match(readFileSync(base + path, "utf8"), /= "0\.3\.1";/);
+    }
+    const stale = base + "apps/desktop/src/core/instance.ts";
+    writeFileSync(
+      stale,
+      readFileSync(stale, "utf8").replace('"0.3.1"', '"0.3.0"'),
+    );
+    const { problems } = checkVersions({
+      base,
+      compatibility: normalize({ minimumInstalled: "0.1.0" }),
+    });
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /instance\.ts says 0\.3\.0/);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
@@ -168,6 +203,44 @@ test("the fence round-trips and refuses what a reader would refuse", () => {
   );
 });
 
+test("the acp key sits beside the fence and never enters it", () => {
+  const fence = readCompatibility();
+  assert.equal("acp" in fence, false);
+  assert.match(
+    renderFence(fence),
+    /^```armadra-compatibility\n\{"minimumInstalled"/,
+  );
+  const acp = readAcpCompatibility();
+  assert.equal(acp.protocolVersion, 1);
+  assert.equal(acp.adapters.claude.program, "claude-agent-acp");
+  // The fence itself still refuses it: a reader parses the fence strictly.
+  assert.throws(
+    () => normalize({ minimumInstalled: "0.1.0", acp: {} }),
+    /unknown compatibility key/,
+  );
+  assert.deepEqual(
+    normalizeAcp({
+      protocolVersion: 1,
+      adapters: {
+        codex: { program: "codex-acp", verified: { min: "1.10.0" } },
+      },
+    }).adapters.codex,
+    { program: "codex-acp", verified: { min: "1.10.0" } },
+  );
+  for (const bad of [
+    { protocolVersion: 2, adapters: {} },
+    { protocolVersion: 1, adapters: { x: { program: "", verified: null } } },
+    {
+      protocolVersion: 1,
+      adapters: {
+        x: { program: "x", verified: { min: "2.0.0", max: "1.0.0" } },
+      },
+    },
+  ]) {
+    assert.throws(() => normalizeAcp(bad));
+  }
+});
+
 test("a release note carries the fence and says when nothing notarised it", () => {
   const range = { minimumInstalled: "0.1.0" };
   const plain = releaseNote({
@@ -185,4 +258,119 @@ test("a release note carries the fence and says when nothing notarised it", () =
   });
   assert.match(unsigned.split("\n")[0], /^> Not notarised.*macOS, Windows/);
   assert.deepEqual(extractFence(unsigned), range);
+});
+
+test("the agent pin agrees with the desktop manifest and the lockfile", () => {
+  assert.deepEqual(checkAgentPin(), []);
+  const pin = readAgentPin();
+  assert.equal(pin.package, "@armadra/agent");
+  assert.equal(pin.hostApi, 1);
+  // Never in the fence: a reader parses it strictly.
+  assert.ok(!renderFence(readCompatibility()).includes("agent"));
+});
+
+test("an agent pin that moved alone fails the check", () => {
+  const base = mkdtempSync(join(tmpdir(), "armadra-agent-pin-")) + "/";
+  try {
+    mkdirSync(base + "apps/desktop", { recursive: true });
+    cpSync(
+      root + "apps/desktop/package.json",
+      base + "apps/desktop/package.json",
+    );
+    cpSync(root + "pnpm-lock.yaml", base + "pnpm-lock.yaml");
+    const moved = { ...readAgentPin(), version: "9.9.9" };
+    const problems = checkAgentPin({ base, agent: moved });
+    assert.equal(problems.length, 2);
+    assert.match(problems[0], /apps\/desktop\/package\.json pins/);
+    assert.match(problems[1], /pnpm-lock\.yaml/);
+    assert.throws(() => normalizeAgentPin({ ...moved, version: "^0.6.2" }));
+    assert.throws(() => normalizeAgentPin({ ...moved, package: "other" }));
+    assert.throws(() => normalizeAgentPin({ ...moved, extra: 1 }));
+    // A fence is parsed strictly: the agent key is refused there.
+    assert.throws(() => normalize({ minimumInstalled: "0.1.0", agent: moved }));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("the platform pin agrees with the manifests, tarball, lockfile and install", () => {
+  assert.deepEqual(checkPlatformPin(), []);
+  const pin = readPlatformPin();
+  assert.equal(pin.package, "@armadra/platform-protocol");
+  // Never in the fence: installed clients parse it strictly.
+  assert.ok(!renderFence(readCompatibility()).includes("platform"));
+});
+
+test("a platform pin that moved alone, or a changed tarball, fails the check", () => {
+  const base = mkdtempSync(join(tmpdir(), "armadra-platform-pin-")) + "/";
+  try {
+    const pin = readPlatformPin();
+    const tarball = "tools/vendor/" + pin.tarball.file;
+    mkdirSync(base + "tools/vendor", { recursive: true });
+    cpSync(root + tarball, base + tarball);
+    cpSync(root + "pnpm-lock.yaml", base + "pnpm-lock.yaml");
+    for (const dir of ["packages/shared", "apps/desktop", "apps/web"]) {
+      mkdirSync(base + dir, { recursive: true });
+      cpSync(root + dir + "/package.json", base + dir + "/package.json");
+    }
+    // No node_modules in the copy: only the install check complains.
+    const only = (problems) =>
+      problems.filter((problem) => !/no installed/.test(problem));
+    assert.deepEqual(only(checkPlatformPin({ base })), []);
+    writeFileSync(base + tarball, "tampered");
+    assert.match(only(checkPlatformPin({ base }))[0], /sha256/);
+    cpSync(root + tarball, base + tarball);
+    const moved = { ...pin, version: "9.9.9" };
+    assert.ok(only(checkPlatformPin({ base, platform: moved })).length > 0);
+    assert.throws(() =>
+      normalizePlatformPin({ ...pin, images: { ...pin.images, relay: "x" } }),
+    );
+    assert.throws(() => normalizePlatformPin({ ...pin, version: "^0.1.0" }));
+    assert.throws(() => normalizePlatformPin({ ...pin, extra: 1 }));
+    assert.throws(() =>
+      normalizePlatformPin({
+        ...pin,
+        tarball: { ...pin.tarball, sha256: "a" },
+      }),
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("the desktop package carries the server shell behind the serve gate", () => {
+  assert.deepEqual(checkDesktopServe(), []);
+  const base = mkdtempSync(join(tmpdir(), "desktop-serve-"));
+  try {
+    for (const file of [
+      "apps/desktop/package.json",
+      "apps/desktop/electron.vite.config.ts",
+      "apps/desktop/scripts/after-pack.mjs",
+    ]) {
+      mkdirSync(dirname(join(base, file)), { recursive: true });
+      cpSync(join(root, file), join(base, file));
+    }
+    const base2 = base + "/";
+    assert.deepEqual(checkDesktopServe({ base: base2 }), []);
+    // A manifest that points `main` back at index.js skips the gate.
+    const manifest = join(base, "apps/desktop/package.json");
+    writeFileSync(
+      manifest,
+      readFileSync(manifest, "utf8").replace("entry.js", "index.js"),
+    );
+    assert.match(checkDesktopServe({ base: base2 })[0], /entry\.js/);
+    // An after-pack that stops placing the shell fails too.
+    const hook = join(base, "apps/desktop/scripts/after-pack.mjs");
+    writeFileSync(
+      hook,
+      readFileSync(hook, "utf8").replace('"server/main.js"', '"x/main.js"'),
+    );
+    assert.ok(
+      checkDesktopServe({ base: base2 }).some((p) =>
+        /server\/main\.js/.test(p),
+      ),
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });

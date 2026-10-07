@@ -15,6 +15,12 @@ export interface TokenTotals {
   cacheCreation: number;
 }
 
+/**
+ * 成本行的单位。绝大多数来源按 token 计；Copilot 只留下 premium request 的
+ * 累计数，按请求计，不折算成 token 或金额（设计 `cli-collaboration.md` §10）。
+ */
+export type CostUnit = "tokens" | "premiumRequests";
+
 export function emptyTokens(): TokenTotals {
   return { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
 }
@@ -106,6 +112,21 @@ export interface FileState {
   buckets: Map<string, TokenTotals>;
   /** 只有最近 {@link HOUR_WINDOW_MS} 的行进这里。 */
   hourBuckets: Map<string, TokenTotals>;
+  /**
+   * 按请求计的来源（Copilot）：会话累计值读到的最后一个。token 来源没有这个字段。
+   */
+  requests?: number;
+  /** 每条累计值相对上一条的增量，记在那一条自己的时间点上。键同 `buckets`。 */
+  requestBuckets?: Map<string, number>;
+  /** 同上，只有最近 {@link HOUR_WINDOW_MS}。 */
+  requestHourBuckets?: Map<string, number>;
+  /**
+   * CLI 自己报的美元成本（OpenCode 的 `message.cost`），键同 `buckets`。价格表认
+   * 不出模型时汇总拿它兜底，见 `cost.ts::windowFrom`。别的来源没有这个字段。
+   */
+  reportedCost?: Map<string, number>;
+  /** 同上，只有最近 {@link HOUR_WINDOW_MS}。 */
+  reportedHourCost?: Map<string, number>;
 }
 
 export function addToBucket(
@@ -136,12 +157,62 @@ export function record(
   );
 }
 
+/** CLI 自己报的这一条的美元成本，记进与 {@link record} 同一个日桶 / 小时桶键。 */
+export function recordReportedCost(
+  state: FileState,
+  model: string,
+  timestamp: unknown,
+  cost: number,
+  nowMs: number,
+): void {
+  if (!(cost > 0)) return;
+  const at = stampMs(timestamp, nowMs);
+  const days = (state.reportedCost ??= new Map());
+  const dayKey = bucketKey(dateAt(at), state.agent, model);
+  days.set(dayKey, (days.get(dayKey) ?? 0) + cost);
+  if (at < nowMs - HOUR_WINDOW_MS) return;
+  const hours = (state.reportedHourCost ??= new Map());
+  const hourKey = bucketKey(hourAt(at), state.agent, model);
+  hours.set(hourKey, (hours.get(hourKey) ?? 0) + cost);
+}
+
+/**
+ * 一条会话累计的请求数：只把比上一条多出来的那部分记到这一条的时间点上，
+ * `state.requests` 停在这一条的值。累计值变小说明会话从头计了，这一条整段算新的。
+ */
+export function recordRequests(
+  state: FileState,
+  model: string,
+  timestamp: unknown,
+  total: number,
+  nowMs: number,
+): void {
+  const previous = state.requests ?? 0;
+  const delta = total >= previous ? total - previous : total;
+  state.requests = total;
+  if (delta <= 0) return;
+  const at = stampMs(timestamp, nowMs);
+  const days = (state.requestBuckets ??= new Map());
+  const dayKey = bucketKey(dateAt(at), state.agent, model);
+  days.set(dayKey, (days.get(dayKey) ?? 0) + delta);
+  if (at < nowMs - HOUR_WINDOW_MS) return;
+  const hours = (state.requestHourBuckets ??= new Map());
+  const hourKey = bucketKey(hourAt(at), state.agent, model);
+  hours.set(hourKey, (hours.get(hourKey) ?? 0) + delta);
+}
+
 /** 掉出 48 小时窗口的小时键。日桶不动——看板的 30 天轴要它们。 */
 export function pruneHours(state: FileState, nowMs: number): void {
-  if (state.hourBuckets.size === 0) return;
   const oldest = hourAt(nowMs - HOUR_WINDOW_MS);
-  for (const key of [...state.hourBuckets.keys()]) {
-    if (splitKey(key).date < oldest) state.hourBuckets.delete(key);
+  for (const hours of [
+    state.hourBuckets,
+    state.requestHourBuckets,
+    state.reportedHourCost,
+  ]) {
+    if (hours === undefined || hours.size === 0) continue;
+    for (const key of [...hours.keys()]) {
+      if (splitKey(key).date < oldest) hours.delete(key);
+    }
   }
 }
 

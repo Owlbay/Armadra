@@ -64,33 +64,62 @@
   --color-brand: var(--brand);
   --color-brand-text: var(--brand-text);
   --color-brand-soft: var(--brand-soft);
+  --color-brand-solid: var(--brand-solid);
 
   /* ── 状态色 ──────────────────────────────────────────────────────── */
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
+  --color-success-text: var(--success-text);
   --color-warn: var(--warn);
   --color-warn-soft: var(--warn-soft);
+  --color-warn-text: var(--warn-text);
   --color-caution: var(--caution);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
+  --color-danger-text: var(--danger-text);
+  --color-danger-solid: var(--danger-solid);
   --color-working: var(--agent-working);
   --color-working-soft: var(--agent-working-soft);
+  --color-working-text: var(--working-text);
 
   /* ── Agent 品牌色 ────────────────────────────────────────────────── */
   --color-agent-claude: var(--agent-claude);
   --color-agent-codex: var(--agent-codex);
   --color-agent-opencode: var(--agent-opencode);
+  --color-agent-pi: var(--agent-pi);
+  --color-agent-omp: var(--agent-omp);
+  --color-agent-copilot: var(--agent-copilot);
+  --color-agent-ama: var(--agent-ama);
+  --color-agent-claude-text: var(--agent-claude-text);
+  --color-agent-codex-text: var(--agent-codex-text);
+  --color-agent-opencode-text: var(--agent-opencode-text);
+  --color-agent-pi-text: var(--agent-pi-text);
+  --color-agent-omp-text: var(--agent-omp-text);
+  --color-agent-copilot-text: var(--agent-copilot-text);
+  --color-agent-ama-text: var(--agent-ama-text);
+  --color-on-agent: var(--on-agent);
+
+  /* ── 成员色（§2.5） ──────────────────────────────────────────────── */
+  --color-member-1: var(--member-1);
+  --color-member-2: var(--member-2);
+  --color-member-3: var(--member-3);
+  --color-member-4: var(--member-4);
+  --color-member-5: var(--member-5);
+  --color-member-6: var(--member-6);
+  --color-member-7: var(--member-7);
+  --color-member-8: var(--member-8);
 
   /* ── 圆角 ────────────────────────────────────────────────────────── */
   --radius-sm: var(--r-sm);
-  --radius-md: var(--r-md);
-  --radius-lg: var(--r-lg);
+  --radius-md: var(--r-control);
+  --radius-lg: var(--r-card);
   --radius-xl: var(--r-xl);
   /* §24.2 的四档语义圆角：`rounded-control` / `-card` / `-panel` / `-dialog` */
   --radius-control: var(--r-control);
   --radius-card: var(--r-card);
   --radius-panel: var(--r-panel);
   --radius-dialog: var(--r-dialog);
+  --radius-pill: var(--r-pill);
 
   /* ── 字体 ────────────────────────────────────────────────────────── */
   --font-sans: var(--font-ui);
@@ -322,5 +351,24 @@
   [data-slot="sheet-content"] [data-slot="icon-button"] {
     min-width: 36px;
     min-height: 36px;
+  }
+  /* 选择器按 `button` 而不是 `icon-button`：套了 Tooltip 的钮 data-slot 会被
+     改写成 `tooltip-trigger`。
+     触屏上把 Dock（横排）与右上工具簇（竖排）的钮往「不挨着邻居」的方向
+     扩到 44px：Dock 向上下扩，工具簇向左右扩，扩出来的区域互不重叠。 */
+  [data-slot="dock"] button,
+  [data-slot="controls-cluster"] button {
+    position: relative;
+  }
+  [data-slot="dock"] button::after,
+  [data-slot="controls-cluster"] button::after {
+    content: "";
+    position: absolute;
+  }
+  [data-slot="dock"] button::after {
+    inset: -6px 0;
+  }
+  [data-slot="controls-cluster"] button::after {
+    inset: 0 -8px;
   }
 }

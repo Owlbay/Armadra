@@ -97,6 +97,11 @@ export function markPresenceActivity(): void {
   active = true;
 }
 
+/** 看一眼有没有还没报的操作，不清零。 */
+export function peekPresenceActivity(): boolean {
+  return active;
+}
+
 /** 取走并清零。 */
 export function takePresenceActivity(): boolean {
   const was = active;
@@ -113,6 +118,22 @@ export function currentPresence(
   const presence = state.presence;
   if (!presence || presence.boardId !== state.boardId) return null;
   return presence;
+}
+
+/** 当前画布的实时协同状态；属于别的画布的旧值不算。 */
+export function currentRealtime(
+  state: Pick<CanvasState, "boardId"> & Partial<Pick<CanvasState, "realtime">>,
+): CanvasState["realtime"] {
+  const live = state.realtime ?? null;
+  if (!live || live.boardId !== state.boardId) return null;
+  return live;
+}
+
+/** 这块板走实时协同吗（租约与 CAS 那条路停用）。 */
+export function isRealtimeBoard(
+  state: Pick<CanvasState, "boardId"> & Partial<Pick<CanvasState, "realtime">>,
+): boolean {
+  return currentRealtime(state) !== null;
 }
 
 /**
@@ -148,10 +169,14 @@ export function leaseOnThisDevice(
  * （服务器壳上的只读共享，心跳回答 `writable: false`）。
  */
 export function isReadOnly(
-  state: Pick<CanvasState, "boardId" | "presence">,
+  state: Pick<CanvasState, "boardId" | "presence"> &
+    Partial<Pick<CanvasState, "realtime">>,
 ): boolean {
   const current = currentPresence(state);
   if (current?.writable === false) return true;
+  // 实时板（补全架构 §6.3）：租约不拦写入，只看同步层说能不能写。
+  const live = currentRealtime(state);
+  if (live) return !live.writable;
   const lease = current?.lease;
   return Boolean(lease && lease.clientId !== presenceClientId());
 }
@@ -200,10 +225,12 @@ export function applyPresence(presence: BoardPresence): {
 export function createPresenceSlice(
   set: CanvasSet,
   _get: CanvasGet,
-): Pick<CanvasStore, "presence" | "setPresence"> {
+): Pick<CanvasStore, "presence" | "realtime" | "setPresence" | "setRealtime"> {
   return {
     presence: null,
+    realtime: null,
     setPresence: (presence) => set({ presence }),
+    setRealtime: (realtime) => set({ realtime }),
   };
 }
 

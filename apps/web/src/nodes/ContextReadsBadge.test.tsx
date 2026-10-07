@@ -33,9 +33,11 @@ vi.mock("@/api/client", () => ({
   },
 }));
 
+let entrySeq = 0;
 const entry = (patch: Record<string, unknown> = {}) => ({
+  id: `read-${(entrySeq += 1)}`,
   readerNodeId: "node-a",
-  readerName: "planner",
+  readerTitle: "planner",
   verb: "context summary",
   bytes: 2048,
   atMs: Date.now() - 60_000,
@@ -55,7 +57,7 @@ function renderBadge(visible = true) {
 
 beforeEach(() => {
   api.reads = 0;
-  api.answer = { total: 0, recent: [] };
+  api.answer = { total: 0, bytes: 0, reads: [] };
   api.fail = null;
 });
 
@@ -72,7 +74,7 @@ describe("ContextReadsBadge", () => {
   });
 
   it("数的是 core 答的那个总数", async () => {
-    api.answer = { total: 7, recent: [entry()] };
+    api.answer = { total: 7, reads: [entry()] };
     renderBadge();
     const badge = await screen.findByTestId("context-reads-node-b");
     expect(badge.textContent).toContain("被读取 7 次");
@@ -81,7 +83,10 @@ describe("ContextReadsBadge", () => {
   it("悬停说得出是谁、什么动词、多少字节、多久以前", async () => {
     api.answer = {
       total: 2,
-      recent: [entry(), entry({ readerNodeId: "node-c", readerName: null })],
+      reads: [
+        entry(),
+        entry({ readerNodeId: "node-c", readerTitle: undefined }),
+      ],
     };
     renderBadge();
     fireEvent.mouseEnter(await screen.findByTestId("context-reads-node-b"));
@@ -96,8 +101,12 @@ describe("ContextReadsBadge", () => {
   it("最多五条，多的不进浮层", async () => {
     api.answer = {
       total: 9,
-      recent: Array.from({ length: 9 }, (_, index) =>
-        entry({ readerNodeId: `node-${index}`, readerName: null, atMs: index }),
+      reads: Array.from({ length: 9 }, (_, index) =>
+        entry({
+          readerNodeId: `node-${index}`,
+          readerTitle: undefined,
+          atMs: index,
+        }),
       ),
     };
     renderBadge();
@@ -117,7 +126,7 @@ describe("ContextReadsBadge", () => {
     // 假时钟：`waitFor` 在假时钟下自己也在等真时间，所以这一条全部靠
     // `advanceTimersByTimeAsync` 推进，它顺带清空微任务队列。
     vi.useFakeTimers();
-    api.answer = { total: 3, recent: [entry()] };
+    api.answer = { total: 3, reads: [entry()] };
     renderBadge(true);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);

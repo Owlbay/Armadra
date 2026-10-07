@@ -1,47 +1,42 @@
-import type { AddressInfo } from "node:net";
-import { createServer as createHttpsServer, type Server } from "node:https";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Duplex } from "node:stream";
-import { allowOrigins } from "../../desktop/src/core/http/cors";
 import { DOMAINS, type RunningCore, run } from "../../desktop/src/core/main";
-import { identityInstanceId } from "../../desktop/src/core/identity";
-import { AccountsService } from "../../desktop/src/core/identity/accounts";
-import type { AuthorizationSubject } from "../../desktop/src/core/identity/authorize";
+import { gatewayDomainOf, startAcme } from "../../desktop/src/core/gateway";
+import type { AcmeManager } from "../../desktop/src/core/gateway/acme";
 import {
-  type RequestIdentity,
-  runAs,
-} from "../../desktop/src/core/identity/gate";
+  type Gateway,
+  openGateway,
+} from "../../desktop/src/core/gateway/listener";
 import {
-  IdentityService,
-  type Principal,
-} from "../../desktop/src/core/identity/service";
-import { IdentityStore } from "../../desktop/src/core/identity/store";
-import { canonicalOrigin } from "../../desktop/src/core/identity/origin";
-import { allScopes } from "../../desktop/src/core/identity/scopes";
-import type { CoreLog } from "../../desktop/src/core/platform";
-import { type ListenAddress, loopbackHost } from "./cli";
-import { type Admission, type Refusal, admit, impliedOrigin } from "./auth";
-import { serverPlatform } from "./platform-node";
-import { type TlsMaterial, resolveTls } from "./tls";
+  type ListenAddress,
+  loopbackHost,
+  originsFor as gatewayOrigins,
+  certificateHosts as gatewayCertificateHosts,
+} from "../../desktop/src/core/gateway/network";
+import type { TlsMaterial } from "../../desktop/src/core/gateway/tls";
 import {
   type WebRoot,
   openWebRoot,
-  resolveFile,
-  sendFile,
-  staticHeaders,
-} from "./web-root";
+} from "../../desktop/src/core/gateway/web-root";
+import { AccountsService } from "../../desktop/src/core/identity/accounts";
+import {
+  type SmtpConfig,
+  mailDomainOf,
+  parseSmtpUrl,
+} from "../../desktop/src/core/mail";
+import { IdentityStore } from "../../desktop/src/core/identity/store";
+import { allScopes } from "../../desktop/src/core/identity/scopes";
+import {
+  type ServerDiagnostics,
+  installServerDiagnostics,
+} from "./diagnostics";
+import { serverPlatform } from "./platform-node";
+import { serverSecrets } from "./secrets";
 
 /**
- * `serve`：在**同一个进程**里装配 core，并在它前面放一层 TLS。
+ * `serve`：在**同一个进程**里装配 core，然后「解析参数 → `openGateway`」。
  *
- * 没有代理。`run()` 装出来的 `CoreServer` 已经是一台完整的 HTTP 服务，只是它
- * 自己创建的监听都在回环上；这里向它要一个**不绑定任何地址**的 `http.Server`
- * 当作交接点，然后把 TLS 那一侧收到的 `request` / `upgrade` 原样转给它。走的是
- * 同一个事件循环里的一次函数调用，没有第二个套接字、没有一次多余的序列化，也
- * 没有 Go Host 时代那道代理层——那份东西存在的唯一理由是两个进程。
- *
- * core 仍然自己在回环上监听一个内核分配的端口：hook 客户端、`endpoints.json`
- * 的发现提示、以及同机的诊断都打那里，公网这一侧只认 TLS 上的那个地址。
+ * TLS、准入、CSP、页面根目录都在 core 的 Gateway 域里（`core/gateway/`，桌面壳
+ * 的对外服务用的是同一份）；这里只剩服务器壳自己的那几件事：拒绝不声明来源
+ * 就挂到非回环地址上、没有管理员时提示配对、命令行上签邀请。
  *
  * 打包选型：`esbuild`（`scripts/build.mjs`）。理由是 core 与桌面壳共用的
  * electron-vite 也是 esbuild 系，同一个 bundler 的外部化规则不会在两种壳之间
@@ -56,6 +51,20 @@ export interface ServeOptions {
   readonly webRoot: string;
   readonly certFile?: string | undefined;
   readonly keyFile?: string | undefined;
+  /**
+   * ACME 的联系邮箱（`--acme` / `ARMADRA_ACME_EMAIL`）：给了就由 core 的 ACME
+   * 管理器签证书并续期（`core/gateway/acme.ts`），其余 `ARMADRA_ACME_*` 从
+   * `env` 读。与 `certFile` / `keyFile` 互斥。
+   */
+  readonly acmeEmail?: string | undefined;
+  /**
+   * 可选邮件通道（`--smtp-url` / `ARMADRA_SMTP_URL`，契约 §28）：给了就把 SMTP
+   * 配置交给 core 的邮件域，邀请与重置链接可以「发送邮件」。口令写成
+   * `secret://armadra-smtp` 时从这台服务器的密钥后端现取。
+   */
+  readonly smtpUrl?: string | undefined;
+  /** 发件人（`--smtp-from` / `ARMADRA_SMTP_FROM`），缺省是 SMTP 用户名。 */
+  readonly smtpFrom?: string | undefined;
   readonly deviceName: string;
   /** 启动时铸一张配对票并打印。`--no-pairing` 时为假。 */
   readonly pairing: boolean;
@@ -99,12 +108,7 @@ export function originsFor(
   address: ListenAddress,
   publicOrigins: readonly string[],
 ): string[] {
-  const own = canonicalOrigin(
-    `https://${address.host.includes(":") ? `[${address.host}]` : address.host}:${address.port}`,
-  );
-  const all = [...publicOrigins];
-  if (own !== undefined) all.push(own);
-  return [...new Set(all)];
+  return gatewayOrigins([address.host], address.port, publicOrigins);
 }
 
 /**
@@ -112,7 +116,7 @@ export function originsFor(
  *
  * 和配对票同一条理由放在片段里：片段不上请求行，于是令牌不进任何访问日志，
  * 也不进 `Referer`。页面读到它就打开兑换对话框（起名、设口令），兑换走的是
- * `POST /api/identity/register`——身份域自己的匿名面，门在 `auth.ts` 里放行。
+ * `POST /api/identity/register`——身份域自己的匿名面，门在 Gateway 的准入里放行。
  */
 export function invitationUrl(origin: string, token: string): string {
   return `${origin}/#invite=${token}`;
@@ -123,12 +127,7 @@ export function certificateHosts(
   address: ListenAddress,
   publicOrigins: readonly string[],
 ): string[] {
-  const hosts = publicOrigins.map((origin) => new URL(origin).hostname);
-  hosts.push(address.host);
-  // `0.0.0.0` 是「所有接口」，不是一个名字；它进不了 SAN。
-  return [
-    ...new Set(hosts.filter((host) => host !== "0.0.0.0" && host !== "::")),
-  ];
+  return gatewayCertificateHosts([address.host], publicOrigins);
 }
 
 export async function serve(options: ServeOptions): Promise<RunningServer> {
@@ -140,6 +139,29 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
       `拒绝在 ${options.listen.host} 上监听而不声明对外来源：加 --public-origin https://主机名`,
     );
   }
+  const acmeEmail = options.acmeEmail?.trim() || undefined;
+  if (
+    acmeEmail !== undefined &&
+    (options.certFile !== undefined || options.keyFile !== undefined)
+  ) {
+    throw new Error("--acme 与 --tls-cert / --tls-key 只能二选一");
+  }
+  if (acmeEmail !== undefined && options.publicOrigins.length === 0) {
+    throw new Error(
+      "--acme 需要 --public-origin https://域名：证书签给对外来源的主机名",
+    );
+  }
+  // 邮件配置不对是启动时的错：等到第一次「发送邮件」才发现，管理员已经不在
+  // 命令行前了。
+  let smtp: SmtpConfig | undefined;
+  const smtpUrl = options.smtpUrl?.trim() ?? "";
+  if (smtpUrl !== "") {
+    const parsed = parseSmtpUrl(smtpUrl, options.smtpFrom ?? "");
+    if (!parsed.ok) throw new Error(`--smtp-url：${parsed.reason}`);
+    smtp = parsed.config;
+  } else if ((options.smtpFrom ?? "").trim() !== "") {
+    throw new Error("--smtp-from 要和 --smtp-url 一起给");
+  }
   const webRoot = await openWebRoot(options.webRoot);
   const env: NodeJS.ProcessEnv = {
     ...(options.env ?? process.env),
@@ -148,8 +170,9 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
   };
   const stdout =
     options.stdout ?? ((line: string) => process.stdout.write(line));
+  let diagnostics: ServerDiagnostics | undefined;
   const core = await run({
-    // core 自己的监听留在回环：公网这一侧由本文件的 TLS 服务负责。
+    // core 自己的监听留在回环：对外这一侧由 Gateway 的 TLS 服务负责。
     argv: [
       "--listen",
       "tcp:127.0.0.1:0",
@@ -157,94 +180,94 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
     ],
     env,
     domains: DOMAINS,
+    // 回环匿名不按本机主人（契约 §3.2，安全审查 L9）：服务器壳的页面走 Cookie
+    // 会话，同机别的进程打 core 的回环监听也得带凭据；环境变量也开不了它。
+    loopbackAnonymousOwner: false,
     stdout,
     ...(options.moduleDir === undefined
       ? {}
       : { moduleDir: options.moduleDir }),
-    platform: serverPlatform,
+    platform: (base) => {
+      // 可选崩溃上报（外部服务 §11.2）：没配 DSN 时只写本地日志。
+      diagnostics = installServerDiagnostics({
+        dataDir: base.dataDir,
+        env,
+        release: base.appVersion,
+        log: base.log,
+      });
+      return {
+        ...serverPlatform(base),
+        secrets: serverSecrets(base.dataDir, env),
+        reportError: diagnostics.reportError,
+        // 页面错误上报（契约 §30）：DSN 可能来自环境变量，只有壳知道在不在发。
+        crashReportingActive: () => (diagnostics?.active() ?? null) !== null,
+      };
+    },
   });
   const log = core.platform.log;
   if (!core.db.unified) {
     await core.stop();
+    await diagnostics?.stop();
     throw new Error(
       "这个数据目录还没过统一库迁移，服务器壳没有身份表可用；先用桌面壳跑一次 ARMADRA_CORE=ts",
     );
   }
 
   const store = new IdentityStore(core.db.database);
-  const service = new IdentityService(store, identityInstanceId());
   const accounts = new AccountsService({ store });
-  const hostId = service.hostId();
   const hasAdmin = () => store.transaction((tx) => tx.owner() !== undefined);
 
-  let tls: TlsMaterial;
-  let https: Server;
-  let bound: ListenAddress;
-  let origins: string[];
+  let gateway: Gateway;
+  let acme: AcmeManager | undefined;
   try {
-    tls = resolveTls({
-      certFile: options.certFile,
-      keyFile: options.keyFile,
-      dataDir: core.dataDir,
-      hosts: certificateHosts(options.listen, options.publicOrigins),
-    });
-    const delegate = core.server.createListener();
-    https = createHttpsServer({ cert: tls.cert, key: tls.key });
-    bound = await listen(https, options.listen);
-    origins = originsFor(bound, options.publicOrigins);
-    // core 的 CORS 默认只放行回环来源。服务器壳的页面不在回环上，所以这里把
-    // 这次运行的来源注入进去——注入点在 `core/http/cors.ts`，判定仍然只有一处。
-    allowOrigins(origins);
-    const context = { origins: new Set(origins), service, hostId };
-    https.on("request", (request, response) => {
-      void handle(request, response, {
-        context,
-        delegate,
-        webRoot,
-        log,
-      });
-    });
-    https.on("upgrade", (request, socket, head) => {
-      const admission = admit(
-        {
-          method: request.method ?? "GET",
-          path: pathOf(request),
-          headers: request.headers,
-          upgrade: true,
-        },
-        context,
-      );
-      const refusal = admission.refusal;
-      if (refusal !== undefined) {
-        socket.write(
-          `HTTP/1.1 ${refusal.status} ${refusal.body.code}\r\nConnection: close\r\n\r\n`,
-        );
-        socket.destroy();
-        return;
-      }
-      // 升级在这个人的身份下进行：事件流的订阅判定与之后的复核都认它。
-      runAs(requestIdentityOf(admission, context), () =>
-        delegate.emit("upgrade", request, socket as Duplex, head),
-      );
+    // ACME 先签（或读出数据目录里还能用的那张）再监听。
+    acme =
+      acmeEmail === undefined
+        ? undefined
+        : await startAcme(core, {
+            email: acmeEmail,
+            publicOrigins: options.publicOrigins,
+            env,
+            tlsListen: options.listen,
+          });
+    gateway = await openGateway(core, {
+      listen: options.listen,
+      publicOrigins: options.publicOrigins,
+      hosts: () => [options.listen.host],
+      tls:
+        acme !== undefined
+          ? { generated: "acme" }
+          : {
+              certFile: options.certFile,
+              keyFile: options.keyFile,
+              generated: "selfSigned",
+            },
+      webRoot,
+      acme,
+      deviceName: options.deviceName,
     });
   } catch (error) {
+    await acme?.close();
     await core.stop();
+    await diagnostics?.stop();
     throw error;
   }
+  // 续期成功后热换证书，已有连接不断。
+  acme?.onRenewed(() => gateway.refresh());
+  // `/api/gateway` 报的就是这一个；它的配置来自命令行，设置页改不动它。
+  gatewayDomainOf(core.server)?.adopt(gateway, acme);
+  const origin = gateway.origin();
+  const hostId = gateway.hostId;
+  if (smtp !== undefined) {
+    // 链接的来源每封现取：ACME / 本地 CA 换了主机，信里的链接跟着走。
+    mailDomainOf(core.server)?.configure(smtp, () => gateway.origin());
+  }
 
-  const origin = origins[0] as string;
   const pair = (): { ticket: string; url: string; expiresAtMs: number } => {
-    const issued = service.issueBootstrap({
-      hostId,
-      instanceId: identityInstanceId(),
-      origin,
-      deviceName: options.deviceName,
-      // 单 owner 的服务器壳：配对出来的设备拿全套授权。R6b 的账号线会把这里
-      // 换成按 principal 编译出来的 scope，接口点就是这一个参数。
-      scopes: allScopes(),
-    });
+    const issued = gateway.pair();
     return {
-      ...issued,
+      ticket: issued.ticket,
+      expiresAtMs: issued.expiresAtMs,
       // 票只进片段，不进路径也不进查询：片段不上请求行，因此不进任何访问日志。
       url: `${origin}/#pair=${issued.ticket}`,
     };
@@ -270,9 +293,15 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
     };
   };
 
+  const tls = gateway.tls();
   log.info("Armadra 服务器壳已就绪", {
     origin,
-    tls: tls.selfSigned ? "自签名" : tls.certFile,
+    tls:
+      tls.source === "acme"
+        ? `ACME（有效期至 ${tls.notAfter}）`
+        : tls.selfSigned
+          ? "自签名"
+          : tls.certFile,
     webRoot: webRoot.directory,
   });
   let pairingTicket: string | undefined;
@@ -289,9 +318,9 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
 
   return {
     core,
-    address: bound,
+    address: gateway.address,
     origin,
-    origins,
+    origins: gateway.origins(),
     tls,
     webRoot,
     hostId,
@@ -300,151 +329,10 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
     hasAdmin,
     invite,
     stop: async () => {
-      await new Promise<void>((done) => {
-        https.close(() => done());
-        https.closeAllConnections();
-      });
+      await gateway.close();
+      await acme?.close();
       await core.stop();
+      await diagnostics?.stop();
     },
   };
-}
-
-interface HandleContext {
-  readonly context: {
-    readonly origins: ReadonlySet<string>;
-    readonly service: IdentityService;
-    readonly hostId: string;
-  };
-  readonly delegate: import("node:http").Server;
-  readonly webRoot: WebRoot;
-  readonly log: CoreLog;
-}
-
-function pathOf(request: IncomingMessage): string {
-  return new URL(request.url ?? "/", "https://server").pathname;
-}
-
-async function handle(
-  request: IncomingMessage,
-  response: ServerResponse,
-  options: HandleContext,
-): Promise<void> {
-  const path = pathOf(request);
-  const method = (request.method ?? "GET").toUpperCase();
-  // 补在请求头上而不是只给门看：core 的身份域（`GET /api/identity/session`）
-  // 与 CORS 也各自读 Origin，三处必须看到同一个来源。
-  const implied = impliedOrigin(
-    method,
-    request.headers,
-    options.context.origins,
-  );
-  if (implied !== undefined) request.headers.origin = implied;
-  const admission = admit(
-    { method, path, headers: request.headers },
-    options.context,
-  );
-  if (admission.refusal !== undefined) {
-    refuse(response, admission.refusal);
-    return;
-  }
-  if (path === "/health" || path === "/api" || path.startsWith("/api/")) {
-    // core 里的路由门与各域的判定按这个身份判（`core/identity/gate.ts`）。
-    runAs(requestIdentityOf(admission, options.context), () =>
-      options.delegate.emit("request", request, response),
-    );
-    return;
-  }
-  if (method !== "GET" && method !== "HEAD") {
-    response.writeHead(405, { ...staticHeaders(), allow: "GET, HEAD" }).end();
-    return;
-  }
-  try {
-    const file = await resolveFile(options.webRoot, request.url ?? "/");
-    if (file === undefined) {
-      response.writeHead(404, staticHeaders()).end();
-      return;
-    }
-    sendFile(response, file, method);
-  } catch (error) {
-    options.log.error("静态产物读取失败", {
-      path,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    response.writeHead(500, staticHeaders()).end();
-  }
-}
-
-/**
- * 匿名面上的请求身份：一个什么授权都没有的成员。
- *
- * 不留空（留空 core 会当成本机 owner）：身份域自己的登录面不经路由门，而除它
- * 以外任何一处判定问到这个身份，答案都该是「不行」。
- */
-const ANONYMOUS: RequestIdentity = {
-  subject: { principalId: "", kind: "member", scopes: [] },
-};
-
-function subjectOf(principal: Principal): AuthorizationSubject {
-  return {
-    principalId: principal.principalId,
-    kind: principal.role === "member" ? "member" : "owner",
-    scopes: principal.scopes,
-  };
-}
-
-function requestIdentityOf(
-  admission: Admission,
-  context: HandleContext["context"],
-): RequestIdentity {
-  const principal = admission.principal;
-  if (principal === undefined) return ANONYMOUS;
-  const accessToken = admission.accessToken ?? "";
-  const origin = admission.origin ?? "";
-  return {
-    subject: subjectOf(principal),
-    device: { deviceId: principal.deviceId, deviceName: principal.deviceName },
-    // 长连接的复核：会话还在就给出当前主体。访问密钥过期（页面会刷新出一把
-    // 新的）也算失效——被关掉的 socket 由页面带着新 Cookie 重连，门在升级前。
-    revalidate: () => {
-      try {
-        return subjectOf(
-          context.service.authenticate({
-            accessToken,
-            hostId: context.hostId,
-            origin,
-          }),
-        );
-      } catch {
-        return undefined;
-      }
-    },
-  };
-}
-
-function refuse(response: ServerResponse, refusal: Refusal): void {
-  const payload = Buffer.from(JSON.stringify(refusal.body), "utf8");
-  response.writeHead(refusal.status, {
-    "content-type": "application/json",
-    "content-length": String(payload.byteLength),
-    "cache-control": "no-store",
-  });
-  response.end(payload);
-}
-
-function listen(
-  server: Server,
-  address: ListenAddress,
-): Promise<ListenAddress> {
-  return new Promise((done, failed) => {
-    server.once("error", failed);
-    server.listen(address.port, address.host, () => {
-      const bound = server.address() as AddressInfo | null;
-      if (bound === null) {
-        failed(new Error("TLS 服务没有绑定到任何地址"));
-        return;
-      }
-      server.removeListener("error", failed);
-      done({ host: address.host, port: bound.port });
-    });
-  });
 }

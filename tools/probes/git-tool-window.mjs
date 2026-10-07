@@ -30,6 +30,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isolatedEnv, probeHome } from "./probe-home.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const output = resolve(process.argv[2] ?? join(root, "target/git-tool-window"));
@@ -169,11 +170,13 @@ async function main() {
       stdio: "ignore",
     }),
   );
-  const environment = {
-    ...process.env,
+  // 临时 HOME：core 不读操作员的 CLI 登录状态与配置。
+  const home = probeHome("armadra-git-tool-window-home-");
+  cleanups.push(home.remove);
+  const environment = isolatedEnv(home, {
     ARMADRA_DATA_DIR: data,
     ARMADRA_LOG: process.env.ARMADRA_LOG ?? "warn",
-  };
+  });
   const runtime = spawn(
     process.execPath,
     [binary, "--listen", "tcp:127.0.0.1:0", "--data-dir", data],
@@ -310,6 +313,8 @@ createRoot(document.getElementById("root")!).render(
     executable,
     [
       "--headless=new",
+      "--use-mock-keychain",
+      "--password-store=basic",
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-background-networking",

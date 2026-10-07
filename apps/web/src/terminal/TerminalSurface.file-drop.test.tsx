@@ -1,3 +1,4 @@
+import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -42,8 +43,12 @@ vi.mock("@/store/canvas-store", () => ({
     }),
   },
 }));
+vi.mock("@/api/source", async (original) => {
+  const actual = await original<typeof import("@/api/source")>();
+  const runtime = { ...actual.localSource, httpBase: "http://runtime" };
+  return { ...actual, currentSource: () => runtime };
+});
 vi.mock("@/api/client", () => ({
-  RUNTIME_URL: "http://runtime",
   terminalWebSocketUrl: () => "ws://runtime/session",
   runtimeApi: {
     getTerminal: (...args: unknown[]) => fixture.getTerminal(...args),
@@ -289,7 +294,7 @@ describe("TerminalSurface file input guards", () => {
   it("does not settle DAG retries when validation fails, but settles confirmed retries just before paste", async () => {
     fixture.data.agent = { id: "claude" };
     fixture.entries.node = { phase: "sent", attempts: 1 };
-    fixture.statuses.node = {};
+    fixture.statuses[scoped("node")] = {};
     const target = await mounted();
     fixture.fileInfo.mockRejectedValueOnce(new Error("missing"));
     drop(target);

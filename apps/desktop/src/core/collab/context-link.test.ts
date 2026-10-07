@@ -6,7 +6,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type AgentFixture, agentFixture, callerFor } from "../agent/fixture";
 import { putContextLinks } from "../canvas/context-links";
 import { rfc3339 } from "../workspaces/support";
-import { readableAs, runContextLink } from "./context-link";
+import { createComment, setCommentResolved } from "../realtime/comments-store";
+import {
+  MAX_COMMENT_APPENDIX_BYTES,
+  readableAs,
+  runContextLink,
+} from "./context-link";
 import { Args, Refusal } from "./refusals";
 
 /** Ported from the pre-merge implementation. */
@@ -273,3 +278,154 @@ function node(type: string, title: string, data: unknown): string {
 function editorNode(title: string, path: string): string {
   return node("editor", title, { kind: "editor", path });
 }
+
+describe("评论作为附加资料", () => {
+  function bytesRead(target: string): number {
+    const row = fixture.database
+      .prepare(
+        "SELECT COALESCE(SUM(bytes), 0) AS total FROM context_reads WHERE reader_node_id = ? AND target_node_id = ?",
+      )
+      .get(me, target) as { total: number | bigint };
+    return Number(row.total);
+  }
+
+  it("读节点时附上未解决的评论，提及换成纯文本，字节记进预算", async () => {
+    const note = fixture.stickyNode("Note", "hello");
+    fixture.link(me, note);
+    const before = await read(me, "summary", { node: "Note" });
+    expect(before).not.toContain("上的评论");
+    const plain = bytesRead(note);
+
+    const open = createComment(fixture.database, {
+      boardId: fixture.boardId,
+      anchor: { kind: "node", id: note },
+      body: "请 @[张三](principal:p1) 改成 world",
+      authorPrincipalId: "",
+    });
+    createComment(fixture.database, {
+      boardId: fixture.boardId,
+      anchor: { kind: "node", id: note },
+      body: "收到",
+      authorPrincipalId: "",
+      parentId: open.id,
+    });
+    const done = createComment(fixture.database, {
+      boardId: fixture.boardId,
+      anchor: { kind: "node", id: note },
+      body: "旧的讨论",
+      authorPrincipalId: "",
+    });
+    setCommentResolved(fixture.database, fixture.boardId, done.id, true);
+
+    const body = await read(me, "summary", { node: "Note" });
+    expect(body).toContain("节点「Note」上的评论");
+    expect(body).toContain("请 @张三 改成 world");
+    expect(body).toContain("↳ 画布主人：收到");
+    expect(body).not.toContain("principal:");
+    expect(body).not.toContain("旧的讨论");
+    // 第二次读取记下的字节比第一次多出整段评论。
+    const second = bytesRead(note) - plain;
+    expect(second).toBe(Buffer.byteLength(body, "utf8"));
+    expect(second).toBeGreaterThan(Buffer.byteLength(before, "utf8"));
+  });
+
+  it("评论再多也只附一段有上限的", async () => {
+    const note = fixture.stickyNode("Long", "x");
+    fixture.link(me, note);
+    for (let index = 0; index < 20; index += 1) {
+      createComment(fixture.database, {
+        boardId: fixture.boardId,
+        anchor: { kind: "node", id: note },
+        body: "很长的评论".repeat(200),
+        authorPrincipalId: "",
+      });
+    }
+    const body = await read(me, "summary", { node: "Long" });
+    expect(body).toContain("评论过长，已截断");
+    expect(Buffer.byteLength(body, "utf8")).toBeLessThan(
+      MAX_COMMENT_APPENDIX_BYTES + 1024,
+    );
+  });
+
+  it("readableAs 说明读得到的节点附带评论", () => {
+    expect(readableAs("sticky")).toContain("评论");
+    expect(readableAs("group")).not.toContain("评论");
+    expect(readableAs("shape")).toContain("评论");
+  });
+
+  it("白板引用附上锚在那个对象上的未解决评论，字节记进预算", async () => {
+    const item = "018f0000-0000-7000-8000-0000000000aa";
+    const link = "018f0000-0000-7000-8000-0000000000bb";
+    putContextLinks(fixture.database, fixture.workspaceId, me, [
+      {
+        id: link,
+        title: "Sketch",
+        kind: "shape",
+        content: { sourceShapeId: `wb:${item}`, shapeType: "text", text: "画" },
+      },
+    ]);
+    const plain = await read(me, "summary", { node: "Sketch" });
+    expect(plain).not.toContain("上的评论");
+    expect(bytesRead(link)).toBe(0);
+
+    const open = createComment(fixture.database, {
+      boardId: fixture.boardId,
+      anchor: { kind: "item", id: item },
+      body: "**箭头** 改成 @[张三](principal:p1) 说的颜色",
+      authorPrincipalId: "",
+    });
+    createComment(fixture.database, {
+      boardId: fixture.boardId,
+      anchor: { kind: "item", id: item },
+      body: "好",
+      authorPrincipalId: "",
+      parentId: open.id,
+    });
+    const done = createComment(fixture.database, {
+      boardId: fixture.boardId,
+      anchor: { kind: "item", id: item },
+      body: "已经谈完",
+      authorPrincipalId: "",
+    });
+    setCommentResolved(fixture.database, fixture.boardId, done.id, true);
+    // 别的对象、别的板上的评论不跟着来。
+    createComment(fixture.database, {
+      boardId: fixture.boardId,
+      anchor: { kind: "item", id: "018f0000-0000-7000-8000-0000000000cc" },
+      body: "别处的",
+      authorPrincipalId: "",
+    });
+
+    const body = await read(me, "summary", { node: "Sketch" });
+    expect(body.startsWith(plain)).toBe(true);
+    expect(body).toContain("白板内容「Sketch」上的评论");
+    expect(body).toContain("改成 @张三 说的颜色");
+    expect(body).toContain("↳ 画布主人：好");
+    expect(body).not.toContain("已经谈完");
+    expect(body).not.toContain("别处的");
+    expect(bytesRead(link)).toBe(
+      Buffer.byteLength(body.slice(plain.length), "utf8"),
+    );
+  });
+
+  it("Frame 引用附上锚在分组节点上的评论", async () => {
+    const frame = "018f0000-0000-7000-8000-0000000000dd";
+    putContextLinks(fixture.database, fixture.workspaceId, me, [
+      {
+        id: "018f0000-0000-7000-8000-0000000000ee",
+        title: "Frame A",
+        kind: "shape",
+        content: { sourceShapeId: frame, shapeType: "group", text: "成员" },
+      },
+    ]);
+    createComment(fixture.database, {
+      boardId: fixture.boardId,
+      anchor: { kind: "node", id: frame },
+      body: "整组再排一下",
+      authorPrincipalId: "",
+    });
+    const body = await read(me, "summary", { node: "Frame A" });
+    expect(body).toContain("白板内容「Frame A」上的评论");
+    expect(body).toContain("整组再排一下");
+  });
+});

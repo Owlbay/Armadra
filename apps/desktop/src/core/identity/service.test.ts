@@ -7,6 +7,7 @@ import {
   ACCESS_TTL_MS,
   BOOTSTRAP_TTL_MS,
   IdentityService,
+  devicePlatform,
   SESSION_TTL_MS,
 } from "./service";
 import { allScopes, scope } from "./scopes";
@@ -402,6 +403,139 @@ describe("rotating a session", () => {
     });
     expect(rotated.principal.deviceId).toBe(credentials.principal.deviceId);
   });
+
+  it("checks the bound CSRF by default and only skips it when told the transport is Bearer", () => {
+    const fix = fixture();
+    const { credentials } = pair(fix);
+    // Cookie 会话（缺省）：缺 CSRF、或 CSRF 不是这把会话的，都拒。
+    for (const csrfToken of ["", "A".repeat(43)]) {
+      expect(
+        kind(() =>
+          fix.service.refresh({
+            refreshToken: credentials.refreshToken,
+            csrfToken,
+            hostId: fix.hostId,
+            origin: ORIGIN,
+          }),
+        ),
+      ).toBe("unauthenticated");
+    }
+    // Bearer 传输（契约 §17.4）：不核 CSRF，刷新票本身照核。
+    const rotated = fix.service.refresh({
+      refreshToken: credentials.refreshToken,
+      csrfToken: "",
+      hostId: fix.hostId,
+      origin: ORIGIN,
+      requireCsrf: false,
+    });
+    expect(rotated.principal.deviceId).toBe(credentials.principal.deviceId);
+    expect(
+      kind(() =>
+        fix.service.refresh({
+          refreshToken: credentials.refreshToken,
+          csrfToken: "",
+          hostId: fix.hostId,
+          origin: ORIGIN,
+          requireCsrf: false,
+        }),
+      ),
+    ).toBe("unauthenticated");
+    expect(
+      kind(() =>
+        fix.service.logoutRefresh({
+          refreshToken: rotated.refreshToken,
+          csrfToken: "",
+          hostId: fix.hostId,
+          origin: ORIGIN,
+        }),
+      ),
+    ).toBe("unauthenticated");
+    fix.service.logoutRefresh({
+      refreshToken: rotated.refreshToken,
+      csrfToken: "",
+      hostId: fix.hostId,
+      origin: ORIGIN,
+      requireCsrf: false,
+    });
+    expect(
+      kind(() =>
+        fix.service.authenticate({
+          accessToken: rotated.accessToken,
+          hostId: fix.hostId,
+          origin: ORIGIN,
+        }),
+      ),
+    ).toBe("unauthenticated");
+  });
+});
+
+describe("re-checking a long-lived stream's session (security review L1)", () => {
+  it("follows the session across a refresh, not the access token it began with", () => {
+    const fix = fixture();
+    const { credentials } = pair(fix);
+    const session = {
+      sessionId: credentials.principal.sessionId,
+      hostId: fix.hostId,
+      origin: ORIGIN,
+    };
+    expect(fix.service.sessionAccess(session).accessExpiresAtMs).toBe(
+      credentials.accessExpiresAtMs,
+    );
+    // The access token's fifteen minutes run out with no refresh: refused.
+    fix.advance(ACCESS_TTL_MS);
+    expect(kind(() => fix.service.sessionAccess(session))).toBe(
+      "unauthenticated",
+    );
+    // The page refreshes: the old access token is dead, the session is not.
+    const rotated = fix.service.refresh({
+      refreshToken: credentials.refreshToken,
+      csrfToken: credentials.csrfToken,
+      hostId: fix.hostId,
+      origin: ORIGIN,
+    });
+    expect(
+      kind(() =>
+        fix.service.authenticate({
+          accessToken: credentials.accessToken,
+          hostId: fix.hostId,
+          origin: ORIGIN,
+        }),
+      ),
+    ).toBe("unauthenticated");
+    expect(fix.service.sessionAccess(session).accessExpiresAtMs).toBe(
+      rotated.accessExpiresAtMs,
+    );
+    // Logged out: refused, whatever the clock says.
+    fix.service.logoutRefresh({
+      refreshToken: rotated.refreshToken,
+      csrfToken: rotated.csrfToken,
+      hostId: fix.hostId,
+      origin: ORIGIN,
+    });
+    expect(kind(() => fix.service.sessionAccess(session))).toBe(
+      "unauthenticated",
+    );
+  });
+
+  it("refuses another origin or host", () => {
+    const fix = fixture();
+    const { credentials } = pair(fix);
+    const sessionId = credentials.principal.sessionId;
+    expect(
+      kind(() =>
+        fix.service.sessionAccess({
+          sessionId,
+          hostId: fix.hostId,
+          origin: "http://127.0.0.1:9",
+        }),
+      ),
+    ).toBe("unauthenticated");
+    expect(
+      kind(() =>
+        fix.service.sessionAccess({ sessionId, hostId: "x", origin: ORIGIN }),
+      ),
+    ).toBe("unauthenticated");
+  });
 });
 
 describe("logging out and revoking", () => {
@@ -620,5 +754,115 @@ describe("listing devices", () => {
         }),
       ),
     ).toBe("permission");
+  });
+});
+
+describe("devicePlatform", () => {
+  it("UA 归成平台：移动端先判，认得出浏览器而说不出系统的是 web", () => {
+    const cases: [string, string][] = [
+      [
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
+        "ios",
+      ],
+      [
+        "Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15",
+        "ios",
+      ],
+      [
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/126.0",
+        "android",
+      ],
+      [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0",
+        "windows",
+      ],
+      [
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 Electron/38.0",
+        "macos",
+      ],
+      [
+        "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+        "linux",
+      ],
+      ["Mozilla/5.0 (X11; CrOS x86_64 15359.58.0) Chrome/126.0", "linux"],
+      ["Mozilla/5.0 Chrome/126.0", "web"],
+      ["armadra-test/1.0", "unknown"],
+      ["", "unknown"],
+    ];
+    for (const [ua, platform] of cases) {
+      expect(devicePlatform(ua), ua).toBe(platform);
+    }
+  });
+});
+
+/**
+ * 桌面壳的页面与托盘每次启动都配一次对，来源是每次都不同的回环端口。设备列表
+ * 不能因此越积越多：回环明文来源的票复用同一台本机设备，只多一条会话。
+ */
+describe("本机设备复用", () => {
+  function pairAt(
+    fix: ReturnType<typeof fixture>,
+    origin: string,
+    name = "本机桌面",
+  ) {
+    const ticket = fix.service.issueBootstrap({
+      hostId: fix.hostId,
+      instanceId: INSTANCE,
+      origin,
+      deviceName: name,
+      scopes: allScopes(),
+    });
+    return fix.service.consumeBootstrap({
+      ticket: ticket.ticket,
+      hostId: fix.hostId,
+      instanceId: INSTANCE,
+      origin,
+    });
+  }
+
+  const listed = (fix: ReturnType<typeof fixture>) =>
+    fix.store.transaction((tx) => tx.devices("", 200));
+
+  it("页面与托盘反复配对（每次端口都不同）只有一台设备，旧会话照样能用", () => {
+    const fix = fixture();
+    const first = pairAt(fix, "http://127.0.0.1:50001");
+    for (let port = 50002; port < 50012; port += 1) {
+      pairAt(fix, `http://127.0.0.1:${port}`);
+    }
+    const tray = pairAt(fix, "http://127.0.0.1:43120");
+    expect(listed(fix)).toHaveLength(1);
+    expect(tray.principal.deviceId).toBe(first.principal.deviceId);
+    expect(
+      fix.service.authenticate({
+        accessToken: first.accessToken,
+        hostId: fix.hostId,
+        origin: "http://127.0.0.1:50001",
+      }).deviceId,
+    ).toBe(first.principal.deviceId);
+  });
+
+  it("经 Gateway 配对的设备（HTTPS 来源）每台都是新的，也不会被本机配对认领", () => {
+    const fix = fixture();
+    const phone = pairAt(fix, "https://192.168.1.8:8443", "本机桌面");
+    const desktop = pairAt(fix, "http://127.0.0.1:50001");
+    const another = pairAt(fix, "https://192.168.1.8:8443", "本机桌面");
+    expect(desktop.principal.deviceId).not.toBe(phone.principal.deviceId);
+    expect(another.principal.deviceId).not.toBe(phone.principal.deviceId);
+    expect(listed(fix)).toHaveLength(3);
+  });
+
+  it("撤销过的本机设备不复用；换了名字的是另一台", () => {
+    const fix = fixture();
+    const first = pairAt(fix, "http://127.0.0.1:50001");
+    fix.store.transaction((tx) =>
+      tx.revokeDevice(first.principal.deviceId, 1, fix.at()),
+    );
+    const next = pairAt(fix, "http://127.0.0.1:50002");
+    expect(next.principal.deviceId).not.toBe(first.principal.deviceId);
+    const english = pairAt(fix, "http://127.0.0.1:50003", "This desktop");
+    expect(english.principal.deviceId).not.toBe(next.principal.deviceId);
+    expect(pairAt(fix, "http://127.0.0.1:50004").principal.deviceId).toBe(
+      next.principal.deviceId,
+    );
   });
 });

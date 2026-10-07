@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { type OpenedDatabase, openDatabase } from "../db/open";
+import { cookieName, setLoopbackAnonymousOwner } from "../identity/http";
 import { allScopes } from "../identity/scopes";
 import { IdentityService } from "../identity/service";
 import { IdentityStore } from "../identity/store";
@@ -26,11 +27,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = resolve(here, "../db/migrations");
 
 const ORIGIN = "http://127.0.0.1:1420";
+/** 浏览器会话（Cookie）的来源：不是回环明文，凭据只认 Cookie。 */
+const COOKIE_ORIGIN = "https://armadra.test";
 const INSTANCE = "0123456789abcdef0123456789abcdef";
 
 const closing: (() => void)[] = [];
 const directories: string[] = [];
 afterEach(() => {
+  setLoopbackAnonymousOwner(false);
   for (const close of closing.splice(0)) close();
   for (const directory of directories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
@@ -49,7 +53,13 @@ interface Fixture {
     method: string,
     path: string,
     body?: unknown,
-    options?: { anonymous?: boolean },
+    options?: {
+      anonymous?: boolean;
+      /** 覆盖 `X-Armadra-CSRF`；空串即不带。 */
+      csrf?: string;
+      /** 走 Cookie 会话而不是 Bearer。 */
+      cookie?: boolean;
+    },
   ): Promise<Answer>;
 }
 
@@ -76,6 +86,20 @@ function setUp(): Fixture {
     hostId,
     instanceId: INSTANCE,
     origin: ORIGIN,
+  });
+
+  const browser = identity.issueBootstrap({
+    hostId,
+    instanceId: INSTANCE,
+    origin: COOKIE_ORIGIN,
+    deviceName: "浏览器",
+    scopes: allScopes(),
+  });
+  const browserSession = identity.consumeBootstrap({
+    ticket: browser.ticket,
+    hostId,
+    instanceId: INSTANCE,
+    origin: COOKIE_ORIGIN,
   });
 
   const store = new ScheduleStore(opened.database);
@@ -137,14 +161,19 @@ function setUp(): Fixture {
         path: pathname,
         query: new URLSearchParams(search),
         headers: {
-          origin: ORIGIN,
+          origin: options.cookie ? COOKIE_ORIGIN : ORIGIN,
           "content-type": "application/json",
           ...(options.anonymous
             ? {}
-            : {
-                authorization: `Bearer ${credentials.accessToken}`,
-                "x-armadra-csrf": credentials.csrfToken,
-              }),
+            : options.cookie
+              ? {
+                  cookie: `${cookieName(hostId, false, "access")}=${browserSession.accessToken}`,
+                  "x-armadra-csrf": options.csrf ?? browserSession.csrfToken,
+                }
+              : {
+                  authorization: `Bearer ${credentials.accessToken}`,
+                  "x-armadra-csrf": options.csrf ?? credentials.csrfToken,
+                }),
         },
         body: Buffer.from(text, "utf8"),
         raw: { socket: {} },
@@ -184,13 +213,21 @@ function planConfigJson(hostId: string): Record<string, unknown> {
   };
 }
 
-async function definePlan(fixture: Fixture): Promise<Answer> {
-  return fixture.call("POST", "/api/automations/plans?workspaceId=ws", {
-    planId: "plan-1",
-    config: planConfigJson(fixture.hostId),
-    payload: "跑一次检查",
-    expectedRevision: 0,
-  });
+async function definePlan(
+  fixture: Fixture,
+  options?: Parameters<Fixture["call"]>[3],
+): Promise<Answer> {
+  return fixture.call(
+    "POST",
+    "/api/automations/plans?workspaceId=ws",
+    {
+      planId: "plan-1",
+      config: planConfigJson(fixture.hostId),
+      payload: "跑一次检查",
+      expectedRevision: 0,
+    },
+    options,
+  );
 }
 
 describe("自动化的 JSON 面", () => {
@@ -307,7 +344,30 @@ describe("自动化的 JSON 面", () => {
     expect(missing.body.code).toBe("not_found");
   });
 
-  it("明文回环上没带凭据按本机主人算，其余照常认证", async () => {
+  // 安全审查 L8：原来 Bearer 写也要 CSRF，原生 App 经 Gateway 写这一面一律 403。
+  // 规则与 M2 一致——CSRF 只在 Cookie 会话上核对（`identity/http.ts::csrfRequired`）。
+  it("Bearer 传输的写不核 CSRF（不是环境凭据）", async () => {
+    const fixture = setUp();
+    const defined = await definePlan(fixture, { csrf: "" });
+    expect(defined.status).toBe(200);
+  });
+
+  it("Cookie 会话的写没有 CSRF 就拒，带上就过；读不要求", async () => {
+    const fixture = setUp();
+    const refused = await definePlan(fixture, { cookie: true, csrf: "" });
+    expect(refused.status).toBe(403);
+    const defined = await definePlan(fixture, { cookie: true });
+    expect(defined.status).toBe(200);
+    const listed = await fixture.call(
+      "GET",
+      "/api/automations/plans?workspaceId=ws",
+      undefined,
+      { cookie: true, csrf: "" },
+    );
+    expect(listed.status).toBe(200);
+  });
+
+  it("回环匿名缺省是 401：桌面壳不再按本机主人处理（契约 §3.2，安全审查 L9）", async () => {
     const fixture = setUp();
     const anonymous = await fixture.call(
       "GET",
@@ -315,7 +375,27 @@ describe("自动化的 JSON 面", () => {
       undefined,
       { anonymous: true },
     );
-    // 壳与 core 在同一台机器上，页面手上没有会话密钥：这条路存在，否则面板打不开。
+    expect(anonymous.status).toBe(401);
+    expect(anonymous.body).toMatchObject({ code: "unauthenticated" });
+    const written = await fixture.call(
+      "POST",
+      "/api/automations/plans/p/pause?workspaceId=ws",
+      { expectedRevision: "1" },
+      { anonymous: true },
+    );
+    expect(written.status).toBe(401);
+  });
+
+  it("显式打开（ARMADRA_LOOPBACK_OWNER=1）时明文回环上没带凭据按本机主人算", async () => {
+    setLoopbackAnonymousOwner(true);
+    const fixture = setUp();
+    const anonymous = await fixture.call(
+      "GET",
+      "/api/automations/plans?workspaceId=ws",
+      undefined,
+      { anonymous: true },
+    );
+    // 探针与开发命令起的裸 core：页面不在壳里、拿不到票，这条路留给它们。
     expect(anonymous.status).toBe(200);
     expect(anonymous.body).toMatchObject({ plans: [], hasMore: false });
   });

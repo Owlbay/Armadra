@@ -79,6 +79,33 @@ describe("会话表", () => {
     expect(screen.queryByText("gone")).toBeNull();
   });
 
+  it("说明整句给出、可以折行，名字悬停有全名：窄抽屉里不再截成「子进程 5 · sle…」", () => {
+    render(
+      <SessionTable
+        sessions={[
+          session({
+            sessionId: "long",
+            cwd: "/tmp/MacBookPro.local-with-a-long-name",
+            childCount: 5,
+            state: "sleeping",
+            pid: 71113,
+          }),
+        ]}
+        sort="cpu"
+        onSorted={() => {}}
+      />,
+    );
+    const detail = screen.getByTitle(/^子进程 5 · sleeping · pid.71113$/);
+    // 「pid」与号码之间是不折行空格。
+    expect(detail.textContent).toContain("pid\u00a071113");
+    expect(detail.textContent).toBe(detail.getAttribute("title"));
+    expect(detail.className).not.toContain("truncate");
+    const name = screen.getByText("MacBookPro.local-with-a-long-name");
+    expect(name.closest("[title]")?.getAttribute("title")).toBe(
+      "MacBookPro.local-with-a-long-name",
+    );
+  });
+
   it("一个会话都不剩时是空状态，而不是一列死行", () => {
     render(
       <SessionTable

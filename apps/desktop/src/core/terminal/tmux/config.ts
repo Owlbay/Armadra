@@ -33,7 +33,10 @@ set -g prefix None
 set -g status off
 set -g history-limit 5000
 set -g escape-time 0
-set -g allow-passthrough on
+# \`-q\`: allow-passthrough is tmux 3.3+, and MINIMUM_VERSION is 3.2 (Ubuntu
+# 22.04 ships 3.2a). Without it 3.2 opens every session on a config-error
+# screen that swallows keystrokes until dismissed (nightly packaged smoke).
+set -gq allow-passthrough on
 set -g set-clipboard on
 set -g default-terminal "{terminal}"
 set -ga terminal-overrides ",*:Tc"
@@ -76,6 +79,8 @@ set -g remain-on-exit off
 set -g detach-on-destroy on
 `;
 
+let terminalEntry: "tmux-256color" | "screen-256color" | undefined;
+
 /**
  * The terminfo entry tmux should claim inside the session.
  *
@@ -86,8 +91,14 @@ set -g detach-on-destroy on
  * `tmux-256color`.
  */
 export function defaultTerminal(): "tmux-256color" | "screen-256color" {
-  const probe = spawnSync("infocmp", ["tmux-256color"], { stdio: "ignore" });
-  return probe.status === 0 ? "tmux-256color" : "screen-256color";
+  // Asked once per process: `ensureConf` renders the conf on every create, and
+  // a synchronous `infocmp` there blocked the event loop for every new
+  // terminal. The terminfo database does not change under a running core.
+  if (terminalEntry === undefined) {
+    const probe = spawnSync("infocmp", ["tmux-256color"], { stdio: "ignore" });
+    terminalEntry = probe.status === 0 ? "tmux-256color" : "screen-256color";
+  }
+  return terminalEntry;
 }
 
 /** The conf as it should be on disk right now. */

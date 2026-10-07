@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentInfo } from "@armadra/shared";
 
 import { setCoreHost } from "@/app/core-host";
+import { usePreferencesStore } from "@/app/preferences-store";
 import {
   agentColor,
   agentColorVar,
   agentLabel,
   agentSessionRequest,
+  agentTextColorVar,
   buildAgentLaunch,
   buildResumeLaunch,
   customAgentFor,
@@ -51,6 +53,14 @@ describe("自定义 Agent 的显示名与颜色", () => {
     expect(agentLabel("claude")).toBe("Claude Code");
     expect(agentColorVar("codex")).toBe("var(--agent-codex)");
     expect(agentLabel(undefined)).toBe("");
+  });
+
+  it("文字色只给内置 Agent 用 `-text` 变量，自定义与缺省退回正文色", () => {
+    setAgentRegistry([echo]);
+    expect(agentTextColorVar("claude")).toBe("var(--agent-claude-text)");
+    expect(agentTextColorVar("codex")).toBe("var(--agent-codex-text)");
+    expect(agentTextColorVar("custom:echo")).toBe("var(--text)");
+    expect(agentTextColorVar(undefined)).toBe("var(--text)");
   });
 });
 
@@ -109,6 +119,110 @@ describe("启动行用探测到的绝对路径", () => {
   });
 });
 
+describe("启动行经画布启动器", () => {
+  const launcher =
+    "/Users/me/Library/Application Support/Armadra/integration/run/codex";
+  const codex: AgentInfo = {
+    id: "codex",
+    label: "Codex",
+    color: "#000",
+    launchCmd: "codex",
+    promptMode: "argv",
+    capabilities: [],
+    args: [],
+    resolvedPath: "/opt/homebrew/bin/codex",
+    installed: true,
+    launcher,
+  };
+
+  afterEach(() => {
+    usePreferencesStore.setState({ launchOverrides: {} });
+  });
+
+  it("启动器在前，程序作它的第一个参数，行上没有注入", () => {
+    setAgentRegistry([codex]);
+    expect(buildAgentLaunch({ id: "codex", model: "gpt-5" }).command).toBe(
+      `'${launcher}' /opt/homebrew/bin/codex --model gpt-5`,
+    );
+  });
+
+  it("恢复与带帧粘贴同样经启动器，prompt 仍在最后", () => {
+    setAgentRegistry([codex]);
+    expect(buildResumeLaunch("codex", "t-1").command).toBe(
+      `'${launcher}' /opt/homebrew/bin/codex resume t-1`,
+    );
+    expect(buildAgentLaunch({ id: "codex" }, "Reply OK").command).toBe(
+      `'${launcher}' /opt/homebrew/bin/codex 'Reply OK'`,
+    );
+  });
+
+  it("用户的启动命令与 npm 包装背后的程序都作启动器的参数", () => {
+    usePreferencesStore.setState({
+      launchOverrides: { codex: "/usr/local/bin/codex" },
+    });
+    setAgentRegistry([codex]);
+    expect(buildAgentLaunch({ id: "codex" }).command).toBe(
+      `'${launcher}' /usr/local/bin/codex`,
+    );
+    usePreferencesStore.setState({ launchOverrides: {} });
+    const exe =
+      "C:\\Users\\Ada Bell\\AppData\\Roaming\\Armadra\\integration\\run\\codex.exe";
+    const node = "C:\\Program Files\\nodejs\\node.exe";
+    const script =
+      "C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js";
+    setAgentRegistry([
+      {
+        ...codex,
+        launcher: exe,
+        launchTarget: { program: node, args: [script] },
+      },
+    ]);
+    expect(
+      buildAgentLaunch({ id: "codex", model: "gpt-5" }, undefined, "powershell")
+        .command,
+    ).toBe(`& '${exe}' '${node}' '${script}' --model gpt-5`);
+  });
+
+  it("自定义条目的程序是它自己的启动命令", () => {
+    setAgentRegistry([
+      {
+        ...echo,
+        resolvedPath: null,
+        launcher: "/data/integration/run/claude",
+      },
+    ]);
+    expect(buildAgentLaunch({ id: "custom:echo" }).command).toBe(
+      "/data/integration/run/claude /bin/echo hello",
+    );
+  });
+
+  it("没有启动器时是裸行", () => {
+    setAgentRegistry([{ ...codex, launcher: undefined }]);
+    expect(buildAgentLaunch({ id: "codex" }).command).toBe(
+      "/opt/homebrew/bin/codex",
+    );
+  });
+
+  it("旧 core 的 launchWords / launchArgs 自 0.2.0 起退役，不再写上行", () => {
+    // 字段按计划删除（G4-2）：即使有旧 core 答了，页面也不再拼它们。
+    const legacy = {
+      launchArgs: ["-c", "a b"],
+      launchWords: ["-c", { prefix: "hooks.Stop=", env: "ARMADRA_CODEX_HOOK" }],
+    } as object;
+    setAgentRegistry([{ ...codex, launcher: undefined, ...legacy }]);
+    expect(buildAgentLaunch({ id: "codex" }).command).toBe(
+      "/opt/homebrew/bin/codex",
+    );
+  });
+
+  it("SSH 节点不经启动器：执行主机上没有这条路径", () => {
+    setAgentRegistry([codex]);
+    expect(
+      buildAgentLaunch({ id: "codex" }, undefined, "posix", true).command,
+    ).toBe("codex");
+  });
+});
+
 describe("启动行按节点终端的 shell 引用", () => {
   const codex: AgentInfo = {
     id: "codex",
@@ -120,7 +234,6 @@ describe("启动行按节点终端的 shell 引用", () => {
     args: [],
     resolvedPath: "C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd",
     installed: true,
-    launchWords: ["-c", { prefix: "hooks.Stop=", env: "ARMADRA_CODEX_HOOK" }],
   };
 
   afterEach(() => {
@@ -140,30 +253,20 @@ describe("启动行按节点终端的 shell 引用", () => {
     expect(launchDialect({})).toBe("posix");
   });
 
-  it("cmd.exe 与 PowerShell 各用自己的引号和环境变量写法", () => {
+  it("cmd.exe 与 PowerShell 各用自己的引号写法", () => {
     setAgentRegistry([codex]);
-    expect(buildAgentLaunch({ id: "codex" }, undefined, "cmd").command).toBe(
-      '"C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd" -c "hooks.Stop=%ARMADRA_CODEX_HOOK%"',
+    expect(buildAgentLaunch({ id: "codex" }, "hi there", "cmd").command).toBe(
+      '"C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd" "hi there"',
     );
     expect(
-      buildAgentLaunch({ id: "codex" }, undefined, "powershell").command,
+      buildAgentLaunch({ id: "codex" }, "hi there", "powershell").command,
     ).toBe(
-      "& 'C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd' -c \"hooks.Stop=${env:ARMADRA_CODEX_HOOK}\"",
+      "& 'C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd' 'hi there'",
     );
     // 恢复行没有显式方言时按 core 的缺省 shell。
     setCoreHost({ platform: "win32", defaultShell: "cmd.exe" });
     expect(buildResumeLaunch("codex", "t-1").command).toBe(
-      '"C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd" resume t-1 -c "hooks.Stop=%ARMADRA_CODEX_HOOK%"',
-    );
-  });
-
-  it("Windows PowerShell 5.1 的 Codex 行写在 --% 后面", () => {
-    setAgentRegistry([codex]);
-    expect(
-      buildAgentLaunch({ id: "codex" }, undefined, "windows-powershell")
-        .command,
-    ).toBe(
-      "& 'C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd' -c --% \"hooks.Stop=%ARMADRA_CODEX_HOOK%\"",
+      '"C:\\Users\\Ada Bell\\AppData\\Roaming\\npm\\codex.cmd" resume t-1',
     );
   });
 
@@ -177,9 +280,7 @@ describe("启动行按节点终端的 shell 引用", () => {
     // 批处理挡不住的 `&` 与 `"`，直接起 node 时照常引用就能原样到达。
     expect(
       buildAgentLaunch({ id: "codex" }, 'fix "a" & b', "cmd").command,
-    ).toBe(
-      `"${node}" "${script}" -c "hooks.Stop=%ARMADRA_CODEX_HOOK%" ^"fix \\^"a\\^" ^& b^"`,
-    );
+    ).toBe(`"${node}" "${script}" ^"fix \\^"a\\^" ^& b^"`);
     // 没读出来时 .cmd 就是程序：这样的提示词宁可不启动。
     setAgentRegistry([codex]);
     expect(() =>
@@ -224,14 +325,25 @@ describe("建会话请求里的账号绑定（S02 预留）", () => {
     ).toBe("new");
   });
 
-  it("凭据引用不上行：Runtime 没有凭据接口，发过去也没人读", () => {
+  it("凭据引用上行（契约 §20）：只是条目名，放不放行由 core 判", () => {
     const request = agentSessionRequest({
       id: "claude",
       account: {
         accountId: "default",
-        credentialRef: "keychain://armadra/claude/default",
+        providerId: "claude",
+        label: "Work",
+        credentialRef: "0123456789abcdef",
       },
     });
-    expect(JSON.stringify(request)).not.toContain("keychain");
+    expect(request).toEqual({
+      id: "claude",
+      accountId: "default",
+      credentialRef: "0123456789abcdef",
+    });
+    // 显示名不上行：它从来不决定会话能做什么。
+    expect(JSON.stringify(request)).not.toContain("Work");
+    expect(
+      agentSessionRequest({ id: "claude", account: { accountId: "default" } }),
+    ).toEqual({ id: "claude", accountId: "default" });
   });
 });

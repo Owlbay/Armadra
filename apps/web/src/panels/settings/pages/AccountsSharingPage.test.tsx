@@ -15,7 +15,33 @@ const mocks = vi.hoisted(() => ({
   issue: vi.fn(),
   putGrant: vi.fn(),
   groupRole: vi.fn(() => "member"),
+  setPassword: vi.fn(),
+  issueReset: vi.fn(),
+  resetMfa: vi.fn(),
+  mailConfigured: vi.fn(async () => false),
+  mailReset: vi.fn(),
+  extraMembers: vi.fn(
+    (): { principalId: string; role: string; joinedAtMs: number }[] => [],
+  ),
 }));
+
+vi.mock("../../../api/security", async (original) => {
+  const actual = await original<typeof import("../../../api/security")>();
+  return {
+    ...actual,
+    issuePasswordReset: (...args: never[]) => mocks.issueReset(...args),
+    resetMfa: (...args: never[]) => mocks.resetMfa(...args),
+  };
+});
+
+vi.mock("../../../api/mail", async (original) => {
+  const actual = await original<typeof import("../../../api/mail")>();
+  return {
+    ...actual,
+    mailConfigured: () => mocks.mailConfigured(),
+    mailPasswordReset: (...args: never[]) => mocks.mailReset(...args),
+  };
+});
 
 vi.mock("../../../api/identity", async (original) => {
   const actual = await original<typeof import("../../../api/identity")>();
@@ -33,6 +59,7 @@ vi.mock("../../../api/accounts", async (original) => {
     redeemInvitation: (...args: never[]) => mocks.redeem(...args),
     issueInvitation: (...args: never[]) => mocks.issue(...args),
     putGrant: (...args: never[]) => mocks.putGrant(...args),
+    setPassword: (...args: never[]) => mocks.setPassword(...args),
     listPrincipals: async () => [
       {
         principalId: OWNER,
@@ -59,6 +86,7 @@ vi.mock("../../../api/accounts", async (original) => {
         createdAtMs: 1,
         members: [
           { principalId: MEMBER, role: mocks.groupRole(), joinedAtMs: 1 },
+          ...mocks.extraMembers(),
         ],
       },
     ],
@@ -84,7 +112,10 @@ vi.mock("../../../app/workspaces-query", () => ({
   }),
 }));
 
-import type { IdentitySession } from "../../../api/identity";
+import {
+  IdentityRequestError,
+  type IdentitySession,
+} from "../../../api/identity";
 import { invitationLink } from "../../../api/accounts";
 import { usePreferencesStore } from "../../../app/preferences-store";
 import { visibleSettingsSections } from "../nav";
@@ -134,6 +165,7 @@ beforeEach(() => {
   usePreferencesStore.setState({ locale: "zh-CN" });
   mocks.takeToken.mockReturnValue("");
   mocks.groupRole.mockReturnValue("member");
+  mocks.extraMembers.mockReturnValue([]);
 });
 
 afterEach(() => {
@@ -251,7 +283,9 @@ describe("设置 → 账号与共享", () => {
   it("没有会话时给登录表单", async () => {
     mocks.resume.mockResolvedValue(null);
     mount();
-    expect(await screen.findByRole("button", { name: "登录" })).toBeTruthy();
+    // 登录分两步（设计系统 §5.9）：先账号「继续」，再口令。
+    expect(await screen.findByRole("heading", { name: "登录" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "继续" })).toBeTruthy();
     expect(screen.getByLabelText("账号标识")).toBeTruthy();
   });
 
@@ -279,4 +313,134 @@ describe("设置 → 账号与共享", () => {
     );
     expect(await screen.findByText("我的账号")).toBeTruthy();
   });
+
+  it("成员行菜单：签发重置链接给出 #reset= 链接与二维码，配了邮件时能发", async () => {
+    mocks.resume.mockResolvedValue(
+      session(OWNER, "owner", ["identity:manage", "identity:read"]),
+    );
+    const token = `${"f".repeat(32)}.${"R".repeat(43)}`;
+    mocks.issueReset.mockResolvedValue({
+      token,
+      expiresAtMs: Date.UTC(2026, 9, 5, 12),
+    });
+    mocks.mailConfigured.mockResolvedValue(true);
+    mocks.mailReset.mockResolvedValue(undefined);
+    mount();
+    const menu = await screen.findByRole("button", { name: "同事 的操作" });
+    // owner 自己那一行没有菜单。
+    expect(screen.queryByRole("button", { name: "管理员 的操作" })).toBeNull();
+    openMenu(menu);
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "签发重置链接" }),
+    );
+    await waitFor(() => expect(mocks.issueReset).toHaveBeenCalledWith(MEMBER));
+    const link = (await screen.findByLabelText("重置链接")) as HTMLInputElement;
+    expect(link.value).toBe(`${location.origin}/#reset=${token}`);
+    expect(screen.getByRole("img", { name: "重置链接二维码" })).toBeTruthy();
+    fireEvent.change(await screen.findByLabelText("邮箱地址"), {
+      target: { value: "colleague@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送邮件" }));
+    await waitFor(() =>
+      expect(mocks.mailReset).toHaveBeenCalledWith({
+        principalId: MEMBER,
+        token,
+        to: "colleague@example.com",
+        locale: "zh",
+      }),
+    );
+  });
+
+  it("没配邮件时重置对话框里没有「发送邮件」", async () => {
+    mocks.resume.mockResolvedValue(
+      session(OWNER, "owner", ["identity:manage", "identity:read"]),
+    );
+    mocks.issueReset.mockResolvedValue({
+      token: `${"f".repeat(32)}.${"R".repeat(43)}`,
+      expiresAtMs: Date.now() + 1000,
+    });
+    mocks.mailConfigured.mockResolvedValue(false);
+    mount();
+    openMenu(await screen.findByRole("button", { name: "同事 的操作" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "签发重置链接" }),
+    );
+    expect(await screen.findByLabelText("重置链接")).toBeTruthy();
+    await waitFor(() => expect(mocks.mailConfigured).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "发送邮件" })).toBeNull();
+  });
+
+  it("成员行菜单：重置两步验证先确认", async () => {
+    mocks.resume.mockResolvedValue(
+      session(OWNER, "owner", ["identity:manage", "identity:read"]),
+    );
+    mocks.resetMfa.mockResolvedValue(true);
+    mount();
+    openMenu(await screen.findByRole("button", { name: "同事 的操作" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "重置两步验证" }),
+    );
+    expect(await screen.findByText("重置「同事」的两步验证？")).toBeTruthy();
+    expect(mocks.resetMfa).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "重置两步验证" }));
+    await waitFor(() => expect(mocks.resetMfa).toHaveBeenCalledWith(MEMBER));
+  });
+
+  it("设口令：策略拒绝按 code 显示在对话框里；warn 档命中时页顶提示", async () => {
+    mocks.resume.mockResolvedValue(
+      session(MEMBER, "member", ["identity:read"]),
+    );
+    mocks.setPassword.mockRejectedValueOnce(
+      new IdentityRequestError(400, "password_too_common", "common"),
+    );
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "设置口令" }));
+    fireEvent.change(await screen.findByLabelText("新口令"), {
+      target: { value: "password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("这个口令太常见")).toBeTruthy();
+    // 对话框还开着，换一个就能设上。
+    mocks.setPassword.mockResolvedValueOnce({
+      revokedSessions: 0,
+      passwordBreached: true,
+    });
+    fireEvent.change(screen.getByLabelText("新口令"), {
+      target: { value: "Tr0ub4dor&3" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("这个口令出现在已知泄露里")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("组管理员能替本组角色是 member 的人签重置链接", async () => {
+    mocks.groupRole.mockReturnValue("admin");
+    mocks.extraMembers.mockReturnValue([
+      { principalId: "9".repeat(32), role: "member", joinedAtMs: 2 },
+    ]);
+    mocks.resume.mockResolvedValue(
+      session(MEMBER, "member", ["identity:read"]),
+    );
+    mocks.issueReset.mockResolvedValue({
+      token: `${"f".repeat(32)}.${"R".repeat(43)}`,
+      expiresAtMs: Date.now() + 1000,
+    });
+    mount();
+    fireEvent.click(await screen.findByText("前端组"));
+    // 只有 member 那一行有；自己（组 admin）那一行没有。
+    const buttons = await screen.findAllByRole("button", {
+      name: "签发重置链接",
+    });
+    expect(buttons).toHaveLength(1);
+    fireEvent.click(buttons[0]!);
+    await waitFor(() =>
+      expect(mocks.issueReset).toHaveBeenCalledWith("9".repeat(32)),
+    );
+    expect(await screen.findByLabelText("重置链接")).toBeTruthy();
+  });
 });
+
+/** Radix 的菜单在 pointerdown 上开；jsdom 里用键盘开。 */
+function openMenu(trigger: HTMLElement) {
+  fireEvent.keyDown(trigger, { key: "Enter" });
+}

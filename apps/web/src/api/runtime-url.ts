@@ -5,9 +5,9 @@ const LOCAL_RUNTIME = "http://127.0.0.1:43120";
  * `fetch` / `WebSocket` 直连 Runtime。Runtime 的端口由内核分配，只有壳知道，
  * 所以基址从 preload 桥一次性取来。
  *
- * 同步读取是必须的：`request.ts` 在模块求值时就要定下 `RUNTIME_URL`，那时还
- * 没有 `await` 可用。壳在窗口加载页面之前就把答案准备好了，所以这里是读一个
- * 已决定的值，不是等一次调用。
+ * 同步读取是必须的：本机源的地址（`api/local-runtime.ts`）是同步的 getter，第一次
+ * 用到时才算，那时没有 `await` 可用。壳在窗口加载页面之前就把答案准备好了，
+ * 所以这里是读一个已决定的值，不是等一次调用。
  */
 export interface ShellEndpoints {
   readonly httpBase: string;
@@ -64,19 +64,132 @@ function loopbackBase(base: string, protocol: string): boolean {
   );
 }
 
+/* ------------------------------ 原生 App 的来源 ----------------------------- */
+
+/**
+ * 原生 App（Capacitor）里页面打在包里：iOS 是 `capacitor://localhost`，Android
+ * 是 `https://localhost`（架构 §7「原生 App 的准入」）。页面来源推不出 core 在
+ * 哪，所以连接页配对成功后把 Gateway 的来源记下来，之后每次启动从这里读。
+ *
+ * 来源不是凭据（凭据在钥匙串里，见 `mobile/native-bridge.ts`），放 localStorage
+ * 足够；但只有原生 App 的页面认它——桌面窗口与经 Gateway 打开的网页各有自己的
+ * 答案，一个残留的值不该改变它们连到哪。
+ */
+const SAVED_ORIGIN_KEY = "armadra.runtimeOrigin";
+
+const NATIVE_APP_PAGES = new Set([
+  "capacitor://localhost",
+  "https://localhost",
+]);
+
+/** 页面是不是原生 App 打在包里的那一份：来源对得上，而且 Capacitor 说自己是原生。 */
+export function isNativeAppPage(
+  pageUrl: string = globalThis.location?.href ?? "",
+): boolean {
+  let url: URL;
+  try {
+    url = new URL(pageUrl);
+  } catch {
+    return false;
+  }
+  if (!NATIVE_APP_PAGES.has(`${url.protocol}//${url.host}`)) return false;
+  const capacitor = (
+    globalThis as { Capacitor?: { isNativePlatform?: () => boolean } }
+  ).Capacitor;
+  try {
+    return capacitor?.isNativePlatform?.() === true;
+  } catch {
+    return false;
+  }
+}
+
+/** 规范成 `https://host[:port]`；不是干净的 HTTPS 来源一律 `null`。 */
+export function gatewayOrigin(value: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (url.pathname !== "/" && url.pathname !== "")
+  )
+    return null;
+  return url.origin;
+}
+
+/**
+ * 原生 App 这一次启动选定的连接地址（`mobile/entry.ts`）：直连是 Gateway 来源，
+ * 经中继是中继给的 `relayBaseUrl`（带 `/s/<源>` 前缀）。只在内存里、只在第一次算
+ * 本机源地址之前设；没设时回到连接页记下的来源。
+ */
+let nativeBaseOverride: string | null = null;
+
+export function setNativeRuntimeBase(base: string | null): void {
+  nativeBaseOverride =
+    base === null || base === "" ? null : base.replace(/\/+$/, "");
+}
+
+/**
+ * 中继托管的页面（`sources/hosted.ts`）挂上的源：本机源就是它的
+ * `relayBaseUrl`（`<中继>/s/<源>`）。只在内存里，优先于一切推断与构建配置——
+ * 这张页面背后没有本机 core。
+ */
+let hostedBaseOverride: string | null = null;
+
+export function setHostedRuntimeBase(base: string | null): void {
+  hostedBaseOverride =
+    base === null || base === "" ? null : base.replace(/\/+$/, "");
+}
+
+/** 连接页记下的 Gateway 来源；没有或认不出是 `null`。 */
+export function savedRuntimeOrigin(): string | null {
+  try {
+    const value = globalThis.localStorage?.getItem(SAVED_ORIGIN_KEY);
+    return value ? gatewayOrigin(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveRuntimeOrigin(origin: string): void {
+  const clean = gatewayOrigin(origin);
+  if (clean === null) throw new Error("not an https origin");
+  globalThis.localStorage?.setItem(SAVED_ORIGIN_KEY, clean);
+}
+
+export function forgetRuntimeOrigin(): void {
+  try {
+    globalThis.localStorage?.removeItem(SAVED_ORIGIN_KEY);
+  } catch {
+    /* 存储不可用时本来也没有记下什么。 */
+  }
+}
+
 /** An explicit relative/empty URL opts a web deployment into its own origin. */
 export function resolveRuntimeUrl(
   configured: string | undefined,
   pageUrl: string,
 ): string {
+  if (hostedBaseOverride !== null) return hostedBaseOverride;
   const shell = shellEndpoints();
   // 显式配置永远优先：桌面开发模式靠它连外部 Runtime。
-  if (configured === undefined)
+  if (configured === undefined) {
+    // 原生 App：只认连接页记下的来源。Android 的页面来源 `https://localhost`
+    // 长得像服务器壳，但那是包里的文件，不是 core。
+    if (isNativeAppPage(pageUrl))
+      return nativeBaseOverride ?? savedRuntimeOrigin() ?? LOCAL_RUNTIME;
     return (
       // 壳先问：它拉起的 Runtime 端口是内核分配的，页面地址推不出来，而且开发
       // 模式下页面来源是 Vite，回环默认端口多半是别人的 Runtime。
       shell?.httpBase ?? serverShellOrigin(pageUrl) ?? LOCAL_RUNTIME
     );
+  }
   // Vite 开发服务器发现 Runtime 后会把这个值定义成 `""`，让浏览器标签页走同源
   // 代理。壳里的页面不该走那条弯路：壳知道内核分配的端口，打包版也从不经代理，
   // 而且代理在连接关闭时会往主进程日志里刷 EPIPE。非空的显式地址仍然最优先。
@@ -146,7 +259,8 @@ export function runtimeSocketUrl(base: string, path: string): string {
   const url = new URL(
     `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`,
   );
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.protocol =
+    url.protocol === "https:" || url.protocol === "wss:" ? "wss:" : "ws:";
   return url.href;
 }
 

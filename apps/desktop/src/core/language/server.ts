@@ -244,6 +244,24 @@ export class ServerProcess {
     }
   }
 
+  /**
+   * Stops reading the server's stdout until {@link resume}. The server blocks
+   * on its own writes once the pipe fills, which is how a session socket that
+   * is not keeping up slows it down (platform spec, core packages §3.3).
+   */
+  pause(): void {
+    this.child.stdout?.pause();
+  }
+
+  resume(): void {
+    this.child.stdout?.resume();
+  }
+
+  /** Resolves once the OS has reaped the child, however it ended. */
+  exited(): Promise<void> {
+    return this.reaped;
+  }
+
   stderrTail(): string {
     return this.stderr.text();
   }

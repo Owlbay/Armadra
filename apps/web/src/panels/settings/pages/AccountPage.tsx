@@ -25,6 +25,14 @@ import { Switch } from "@/ui/switch";
 const PROVIDERS: UsageProviderId[] = ["claude", "codex", "copilot"];
 
 /**
+ * 出站政策（外部服务 §9.3）：这两家的额度要借用登录令牌，另有一个默认关的
+ * 设置键。页面上仍是一个开关——开 = 两个键都开，关 = 两个键都关。
+ */
+const POLICY_KEYS: Partial<
+  Record<UsageProviderId, "claudeUsage" | "copilotUsage">
+> = { claude: "claudeUsage", copilot: "copilotUsage" };
+
+/**
  * 刷新节奏（§4.2）。`0` = 只手动刷新；其余是后台自动刷新的分钟数。
  * Runtime 的 `normalize` 只接受这几个值，改动要两边一起改。
  */
@@ -49,11 +57,28 @@ export function AccountPage() {
   // Runtime 侧默认开（settings.rs 归一化时补 `true`）。
   const usageEnabled = settings.data?.usage?.enabled !== false;
   const costEnabled = settings.data?.usage?.cost?.enabled !== false;
+  // 缺省开（G5-25）；估算来自成本扫描，扫描关着时这一项没有意义。
+  const claudeLocalWindow = settings.data?.usage?.claudeLocalWindow !== false;
   const cliFallback = settings.data?.usage?.codexCliFallback === true;
-  const statusPage = settings.data?.usage?.statusPage !== false;
+  const statusBadges =
+    (settings.data?.usage?.statusBadges ?? settings.data?.usage?.statusPage) !==
+    false;
+  const catalogAutoRefresh =
+    settings.data?.models?.catalog?.autoRefresh !== false;
   const refreshMinutes = settings.data?.usage?.refreshMinutes ?? 5;
-  const providerOn = (id: string) =>
-    settings.data?.usage?.providers?.[id] !== false;
+  const providerOn = (id: UsageProviderId) => {
+    const policy = POLICY_KEYS[id];
+    return (
+      settings.data?.usage?.providers?.[id] !== false &&
+      (policy === undefined || settings.data?.usage?.[policy] === true)
+    );
+  };
+  const providerPatch = (id: UsageProviderId, next: boolean) => {
+    const policy = POLICY_KEYS[id];
+    return policy === undefined
+      ? { providers: { [id]: next } }
+      : { providers: { [id]: next }, [policy]: next };
+  };
   const busy = !settings.data || save.isPending;
 
   return (
@@ -92,7 +117,11 @@ export function AccountPage() {
               save.mutate({ usage: { refreshMinutes: Number(value) } })
             }
           >
-            <SelectTrigger size="sm" className={CONTROL_WIDTH}>
+            <SelectTrigger
+              aria-label={t("settings.usageCadence")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
@@ -110,15 +139,27 @@ export function AccountPage() {
 
       <SettingsGroup>
         {PROVIDERS.map((id) => (
-          <SettingsRow key={id} label={t(`usage.provider.${id}`)}>
+          <SettingsRow
+            key={id}
+            label={t(`usage.provider.${id}`)}
+            footnote={t(`usage.policy.${id}`)}
+          >
             <Switch
               checked={providerOn(id)}
               disabled={busy || !usageEnabled}
               aria-label={t(`usage.provider.${id}`)}
               onCheckedChange={(next) =>
                 save.mutate(
-                  { usage: { providers: { [id]: next } } },
-                  { onSuccess: () => refresh.mutate() },
+                  { usage: providerPatch(id, next) },
+                  {
+                    onSuccess: () => {
+                      refresh.mutate();
+                      if (id === "copilot")
+                        void queryClient.invalidateQueries({
+                          queryKey: ["copilot-auth"],
+                        });
+                    },
+                  },
                 )
               }
             />
@@ -142,12 +183,12 @@ export function AccountPage() {
           footnote={t("usage.statusPageHint")}
         >
           <Switch
-            checked={statusPage}
+            checked={statusBadges}
             disabled={busy}
             aria-label={t("usage.statusPage")}
             onCheckedChange={(next) =>
               save.mutate(
-                { usage: { statusPage: next } },
+                { usage: { statusBadges: next } },
                 {
                   onSuccess: () =>
                     void queryClient.invalidateQueries({
@@ -160,7 +201,7 @@ export function AccountPage() {
         </SettingsRow>
       </SettingsGroup>
 
-      <CopilotSignIn disabled={busy} />
+      <CopilotSignIn disabled={busy} signInDisabled={!providerOn("copilot")} />
 
       <SettingsGroup>
         <SettingsRow
@@ -181,6 +222,40 @@ export function AccountPage() {
                     }),
                 },
               )
+            }
+          />
+        </SettingsRow>
+        <SettingsRow
+          label={t("settings.claudeLocalWindow")}
+          footnote={t("settings.claudeLocalWindowHint")}
+        >
+          <Switch
+            checked={claudeLocalWindow}
+            disabled={busy || !costEnabled}
+            aria-label={t("settings.claudeLocalWindow")}
+            onCheckedChange={(next) =>
+              save.mutate(
+                { usage: { claudeLocalWindow: next } },
+                {
+                  onSuccess: () =>
+                    void queryClient.invalidateQueries({
+                      queryKey: ["usage"],
+                    }),
+                },
+              )
+            }
+          />
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup>
+        <SettingsRow label={t("usage.catalogAutoRefresh")}>
+          <Switch
+            checked={catalogAutoRefresh}
+            disabled={busy}
+            aria-label={t("usage.catalogAutoRefresh")}
+            onCheckedChange={(next) =>
+              save.mutate({ models: { catalog: { autoRefresh: next } } })
             }
           />
         </SettingsRow>
@@ -222,7 +297,7 @@ export function AccountPage() {
       </SettingsGroup>
 
       {usageEnabled && (refreshFailed || usage.isError) && (
-        <p role="status" className="text-xs text-danger">
+        <p role="status" className="text-xs text-danger-text">
           {t("usage.refreshError")}
         </p>
       )}

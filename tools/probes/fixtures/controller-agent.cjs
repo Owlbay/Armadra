@@ -40,7 +40,12 @@ function hook(payload) {
     process.stderr.write("fixture Hook transport failed\n");
 }
 if (agent === "claude") hook({ hook_event_name: "SessionStart" });
-process.stdout.write("deterministic fixture ready\n");
+process.stdout.write(
+  "deterministic fixture ready\n" +
+    (agent === "claude"
+      ? "❯\n? for shortcuts\n"
+      : "› Ask Codex to do anything\n"),
+);
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 let bytes = "",
   busy = false;
