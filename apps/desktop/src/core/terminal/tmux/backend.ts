@@ -390,19 +390,42 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
   }
 
   /**
-   * `window-size latest` makes the pane follow whichever client last moved, so
-   * resizing the client ptys is all that is needed.
+   * The window, set explicitly: `window-size manual` means no client moves it
+   * by attaching or resizing, so the program inside sees one SIGWINCH per
+   * decision of the manager and the other viewers are not redrawn.
+   * `resize-window` also pins the window to `manual` on a server that was
+   * started with an older conf.
    */
   async resize(key: SessionKey, size: TerminalSize): Promise<void> {
     const session = this.require(key);
-    const cols = Math.max(2, Math.trunc(size.cols));
-    const rows = Math.max(2, Math.trunc(size.rows));
-    for (const client of session.clients.values()) {
-      try {
-        client.pty?.resize(cols, rows);
-      } catch {
-        // A client that died between the lookup and the call.
-      }
+    await this.control.run([
+      "resize-window",
+      "-t",
+      session.name,
+      "-x",
+      String(Math.max(2, Math.trunc(size.cols))),
+      "-y",
+      String(Math.max(2, Math.trunc(size.rows))),
+    ]);
+  }
+
+  /**
+   * One viewer's own client pty. tmux crops a window larger than the client
+   * and leaves the rest of a larger client empty; nobody else is redrawn.
+   */
+  async resizeViewer(
+    key: SessionKey,
+    attachmentId: number,
+    size: TerminalSize,
+  ): Promise<void> {
+    const client = this.require(key).clients.get(attachmentId);
+    try {
+      client?.pty?.resize(
+        Math.max(2, Math.trunc(size.cols)),
+        Math.max(2, Math.trunc(size.rows)),
+      );
+    } catch {
+      // A client that died between the lookup and the call.
     }
   }
 

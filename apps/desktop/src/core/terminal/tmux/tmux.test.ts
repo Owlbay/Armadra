@@ -6,12 +6,13 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { SESSION_PREFIX, sessionKey } from "../backend";
-import { childEnvironment } from "../environment";
+import { agentPath, childEnvironment } from "../environment";
 import { killTmuxServer } from "../../testing/temp-dir";
 import {
   MINIMUM_VERSION,
@@ -112,7 +113,7 @@ describe("the generated configuration", () => {
     expect(conf).toContain('set -ga terminal-overrides ",*:Tc"');
     expect(conf).toContain('set -ga terminal-features ",xterm-256color:RGB"');
     expect(conf).toContain("set -g aggressive-resize on");
-    expect(conf).toContain("set -g window-size latest");
+    expect(conf).toContain("set -g window-size manual");
     expect(conf).not.toContain("{terminal}");
   });
 
@@ -347,6 +348,60 @@ describe.skipIf(!tmuxAvailable)("against a real tmux", () => {
     await expect(
       backend.attach(key, 0, { cols: 80, rows: 24 }),
     ).rejects.toMatchObject({ status: 409 });
+    await backend.terminate(key, "session");
+  }, 30_000);
+
+  /**
+   * 多端尺寸（ui-acp-refresh §7.3 E-1）：一端改自己的客户端不动别端，也不动窗口；窗口只
+   * 由 `resize` 显式设置。
+   */
+  it("resizes one viewer's client without touching the others or the window", async () => {
+    const directory = tempDir();
+    const backend = new TmuxBackend({ dataDir: directory, version: "test" });
+    const key = sessionKey("viewer-sizes");
+    const handle = await backend.create({
+      sessionKey: key,
+      workspaceId: "viewer-sizes-workspace",
+      generation: 1,
+      cwd: directory,
+      shell: "/bin/sh",
+      args: [],
+      env: [],
+      size: { cols: 120, rows: 40 },
+    });
+    const name = handle.backendRef!;
+    const tmux = (...args: string[]) =>
+      execFileSync("tmux", ["-S", backend.socket, ...args], {
+        encoding: "utf8",
+        env: { ...process.env, PATH: agentPath(process.env) },
+      }).trim();
+    const clients = () =>
+      tmux("list-clients", "-t", name, "-F", "#{client_width}x#{client_height}")
+        .split("\n")
+        .sort();
+    const window = () =>
+      tmux(
+        "display-message",
+        "-p",
+        "-t",
+        name,
+        "#{window_width}x#{window_height}",
+      );
+
+    const desk = await backend.attach(key, 1, { cols: 120, rows: 40 });
+    const phone = await backend.attach(key, 1, { cols: 120, rows: 40 });
+    await backend.resizeViewer(key, phone.attachmentId, { cols: 40, rows: 12 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(clients()).toEqual(["120x40", "40x12"]);
+    expect(window()).toBe("120x40");
+
+    await backend.resize(key, { cols: 100, rows: 30 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(window()).toBe("100x30");
+    expect(clients()).toEqual(["120x40", "40x12"]);
+
+    await backend.detach(key, desk.attachmentId);
+    await backend.detach(key, phone.attachmentId);
     await backend.terminate(key, "session");
   }, 30_000);
 });
