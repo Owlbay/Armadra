@@ -116,8 +116,11 @@ async function handle(
     let length = 0;
     for await (const chunk of request) {
       length += chunk.length;
-      if (length > CONTROLLER_LIMITS.bodyBytes)
+      if (length > CONTROLLER_LIMITS.bodyBytes) {
+        // The rest of the body stays unread; never reuse this connection.
+        response.shouldKeepAlive = false;
         throw new ControllerError("body_limit", "Request exceeds 256 KiB", 413);
+      }
       chunks.push(Buffer.from(chunk));
     }
     let raw: unknown;

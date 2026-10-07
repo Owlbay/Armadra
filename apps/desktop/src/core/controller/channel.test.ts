@@ -26,7 +26,13 @@ async function fixture() {
 function ask(socketPath: string, input: unknown, headers = {}) {
   return new Promise<{ status: number; body: any }>((resolve, reject) => {
     const call = request(
-      { socketPath, path: CONTROLLER_PATH, method: "POST", headers },
+      {
+        socketPath,
+        path: CONTROLLER_PATH,
+        method: "POST",
+        headers,
+        agent: false,
+      },
       (response) => {
         const chunks: Buffer[] = [];
         response.on("data", (chunk) => chunks.push(chunk));
@@ -38,6 +44,11 @@ function ask(socketPath: string, input: unknown, headers = {}) {
         );
       },
     );
+    // The server answers 413 without reading the rest of an oversized body and
+    // then closes; the client's unfinished write may fail with EPIPE after the
+    // response already arrived, when the request no longer listens. Errors before
+    // a response still reject through the request below.
+    call.on("socket", (socket) => socket.on("error", () => {}));
     call.on("error", reject);
     call.end(JSON.stringify(input));
   });
