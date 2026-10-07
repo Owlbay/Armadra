@@ -3066,3 +3066,35 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - Windows `soak` 的 powershell 偶发无回显只见过一次，没有证据指向产品问题，没改。
 
 接口：无变化。页面只多一个 `data-connect-method="link"` 标记（给真机 UI 用例用）。
+
+## 画布「整理」按刚体排、导入成组（UI 设计 2026-10-07 §6，包 D）
+
+用户报：导入一个项目后点「整理」，导入的东西被打散成一长排，Agent 簇散落。根因是整理按无向连通分量分簇：Mermaid 导入的框 / 字 / 线全是顶层白板对象、彼此没有链接，每一个都成了独立的盒子；主从边与对等边一视同仁；列内顺序是输入顺序。
+
+做了什么：
+
+- `canvas/tidy.ts` 重写内核（接口 `tidy(boxes, links, options)` 保留）：白板对象按「相交或间距 ≤ 24px」并成孤岛（并查集），组节点、顶层节点、孤岛各是一个刚体，内部相对位置不变；单元按原位置的阅读顺序（`y` 以 48 量化成行、行内按 `x`）排；只取 `role: "supervises"` 的边建主从森林，主在第 0 列、从在第 1 列顶对齐主且纵向等距、孙按父分段，环从阅读顺序最靠前处剪断；对等边连着树成员的非 Agent 单元作为附件挂在那个成员正下方；其余分量拓扑分列、之后各列按重心法排；每步前进量向上取整到 8px 网格（等高兄弟仍等距），簇照旧按视口宽高比裹行。整理两次第二次位移为 0。2000 个单元约 11 ms。
+- `canvas/tidy-flow.ts`：盒子带原位置与 `kind`（带 `agent` 的终端或主从边端点是 Agent），链接带 `role`；新增 `tidySelection(state)`：选区换算到顶层后 ≥ 2 个才只整理选中的，原点取选区包围盒左上角；原点吸网格。一次整理仍是一条历史。
+- `FlowWorkspace` 的 `canvas.tidy`：只整理选中时不 `fitView`；整理那一下给画布根加 `data-tidying`，`canvas.css` 只在这时给节点开 220ms 的 transform 过渡，260ms 后撤掉；减少动效下不加。Dock 的按钮在有可整理选区时提示「整理选中」。
+- 导入批次 = 一个 `group` 节点（新模块 `canvas/import-group.ts`：`commitBatch` / `wrapInGroup` / `ungroup`）：导入 Mermaid、一次拖入 / 选择 / 粘贴 ≥ 2 个图片或文件时，新建对象、套组（`data.origin: "import"`，组名「Mermaid」/「导入」）、选中组在一个合并会话里完成，撤销一次整批消失；单个对象不套组。外部内容的几条入口改成先攒一批再一次落地。组节点右键菜单加「解组」。
+- `@armadra/shared` 的 `groupNodeDataSchema` 加可选 `origin: "import" | "team" | "manual"`（缺省即 manual），不改 `whiteboard_json v2`，无迁移。
+- 新探针 `tools/probes/canvas-tidy.mjs`（登记在 `tools/probes/README.md`）。
+
+实测（macOS arm64，基于 main fb54e0b1）：
+
+- `tidy.test.ts` 加 §6.7 (a)–(h) 与环、重心法；`tidy-flow.test.ts` 加主从、孤岛、只整理选中（未选中不动、一次撤销全回）、选区不足两个单元、二次整理不提交；`import-group.test.ts`、`mermaid/import.test.ts`、`external-content.test.ts`（≥ 2 个成组、单个不套）、`Dock.test.tsx`（提示切换）。
+- `canvas-tidy.mjs` 全过：主从边 3 → 3、8 个顶层单元两两不重叠、导入组 11 个 / 旧导入孤岛 8 个 / 手画 3 个对象相对位置不变、子 Agent 保持阅读顺序且同列顶对齐等距、浏览器挂在所连从下方、8px 网格、包围盒 1436×1556、二次整理位移 0、撤销一次全回；`canvas-stress.mjs` 跑通。
+- `pnpm libs:build && pnpm -r --if-present test` 全过（web 3964、desktop 5324 / 67 跳、shared 372、server 98 / 4 跳）；web typecheck、`pnpm check` 通过。
+
+没做 / 偏离：
+
+- 新增了 `canvas/import-group.ts`（+test）、`mermaid/import.test.ts` 与 `Dock.test.tsx` 的一条用例，不在 §9 列出的文件里：成组逻辑 Mermaid 与外部内容两处共用，放进任何一边都要另一边反向依赖。
+- `design-showcase` 的「整理后」固定状态没加（`showcase/sections/canvas.tsx` 与包 B 共改，避免冲突）；整理前后对比由探针截图给。
+- 「插入 Memory」仓库里没有这个入口，没有对应改动；导入链接目前每次只落一个对象，不成组。已有画布里散落的旧导入不自动补组，整理按孤岛保持它们不散；手动补组用现有「成组」（只收节点，白板对象不进组，沿用现状）。
+- 发现但未修（core，不在本包边界）：文档 REST 保存的 `parseEdge`（`core/canvas/routes.ts`）不收边的 `role`，非实时板上页面设的主从会在下一次保存后变回对等；实时板经 Yjs 落盘不受影响。探针因此等画布可写后用 `setEdgeRole` 设主从。
+
+接口：
+
+- 页面：`tidy(boxes, links, options)` 的 `TidyBox` 多 `x? / y? / kind?`，`TidyLink` 多 `role?`，`TidyOptions` 多 `grid?`；`tidyKindOf(node)`；`arrangeCanvas({ aspect, only })`、`tidySelection(state)`；store `arrangeNodes({ aspect?, only? })`；`commitBatch(batch, title, label?)`、`wrapInGroup(nodeIds, itemIds, title)`、`ungroup(groupId)`。
+- 共享：`GroupNodeData.origin?`。契约、协议号、数据库都不变。
+- 文案：`canvas.tidySelection`、`canvas.group.import`、`canvas.group.mermaid`、`canvas.group.ungroup`（`i18n/canvas.ts` 中英）。
