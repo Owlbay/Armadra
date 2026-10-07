@@ -8,11 +8,11 @@ import {
   ForgeConfigs,
   forgeConfigKeys,
 } from "@/panels/settings/pages/ForgeConfigs";
+import { adapterInstallKey } from "@/acp/adapter-install";
 import {
-  AgentIntegrationRow,
+  AgentIntegrationGroup,
   OutdatedWorkers,
 } from "@/panels/settings/pages/IntegrationPage";
-import { SettingsGroup } from "@/panels/settings/SettingsGroup";
 import { FleetGroup } from "@/panels/settings/pages/execution-hosts/FleetGroup";
 import { integrationKey } from "@/panels/settings/pages/integration/use-integration";
 import {
@@ -21,6 +21,7 @@ import {
   FLEET,
   GPU_NODE,
   LOCAL,
+  idleJob,
 } from "../fixtures/integration";
 import {
   FORGE_CONFIGS,
@@ -59,9 +60,10 @@ function Sample({
  * 手、只跑终端）· 正在全部重新同步 · 只有一台 Worker 主机时（没有「全部重新
  * 同步」，那一台正在同步）。
  *
- * CLI 分组：集成设置页真的行组件，集成状态预先放进 query 缓存（永不过期，
- * 不去请求 core）——正常、版本过旧（页首带一台 Worker 待升级的主机）、启动器
- * 异常、ACP 未装各一行。
+ * CLI 分组：集成设置页真的分组组件，集成状态与安装任务预先放进 query 缓存
+ * （永不过期，不去请求 core）——正常、版本过旧（页首带一台 Worker 待升级的
+ * 主机）、原生 ACP 而启动器异常、适配器不接画布工具且重新安装失败、CLI 未检测
+ * 到各一组。
  *
  * 托管平台（{@link ForgeSamples}）：Gitea 的 PR 列表、GitLab 的 MR 详情与设置页
  * 的配置行。
@@ -71,8 +73,15 @@ function CliGroup() {
   // 渲染之前放好：行组件第一次读缓存就拿到，不出现「读取中」也不发请求。
   useState(() => {
     client.setQueryDefaults(["agent-integration"], { staleTime: Infinity });
-    for (const { agent, integration } of CLI_GROUP) {
+    client.setQueryDefaults(["acp-adapter-install"], { staleTime: Infinity });
+    for (const { agent, integration, jobs } of CLI_GROUP) {
       client.setQueryData(integrationKey(agent.id), integration);
+      for (const target of ["cli", "adapter"] as const) {
+        client.setQueryData(
+          adapterInstallKey(agent.baseAgent ?? agent.id, target),
+          jobs?.[target] ?? idleJob(agent.id, target),
+        );
+      }
     }
     return true;
   });
@@ -80,13 +89,11 @@ function CliGroup() {
     ({ integration }) => (integration.outdatedHosts?.length ?? 0) > 0,
   );
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-6">
       {outdated && <OutdatedWorkers agent={outdated.agent} />}
-      <SettingsGroup>
-        {CLI_GROUP.map(({ agent }) => (
-          <AgentIntegrationRow key={agent.id} agent={agent} />
-        ))}
-      </SettingsGroup>
+      {CLI_GROUP.map(({ agent }) => (
+        <AgentIntegrationGroup key={agent.id} agent={agent} />
+      ))}
     </div>
   );
 }

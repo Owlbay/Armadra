@@ -427,11 +427,11 @@ export class AdapterInstaller {
     agentId: string,
     options: StartOptions | boolean = {},
   ): AdapterInstallJob {
-    const { target = "adapter", rollback = false } =
+    const given: StartOptions =
       typeof options === "boolean" ? { reinstall: options } : options;
-    const reinstall =
-      rollback ||
-      (typeof options === "boolean" ? options : options.reinstall === true);
+    const target = given.target ?? "adapter";
+    const rollback = given.rollback === true;
+    const reinstall = rollback || given.reinstall === true;
     const name = this.packageOf(agentId, target);
     const key = keyOf(agentId, target);
     const current = this.jobs.get(key);

@@ -340,26 +340,21 @@ describe("SettingsDialog", () => {
   });
 
   /**
-   * 画布内注入（canvas-only-integration §5）：一种 CLI 一行，一行里注入方式、
-   * Hook、技能、旧残留全都在；没有「安装 / 卸载」，只有「重新生成」。
+   * 集成页（ui-acp-refresh §1）：一家一张分组，画布注入一行说清哪一半没生成；
+   * 旧残留收在「修复 N」里，看过清单再修。没有「安装 / 卸载」，只有「重新生成」。
    */
-  it("集成页一行说清注入方式、Hook、技能与旧残留", async () => {
+  it("集成页一家一张分组：注入缺哪一半、旧残留与重新生成", async () => {
     open();
     fireEvent.click(navItem(zh("integration.nav")));
-    // 旧残留逐条列出来，用户在按「修复」之前看得见将要动哪些东西；清单收在
-    // 「旧残留」徽标里。徽标也是「Runtime 真的答了这一行」的证据：
-    // `GET /api/agents` 那份兜底报不出残留，所以等它出现就等于等接口落地。
+    // 「修复 N」也是「Runtime 真的答了这一组」的证据：`GET /api/agents` 那份
+    // 兜底报不出残留，所以等它出现就等于等接口落地。
     fireEvent.click(
       await screen.findByRole("button", {
-        name: zh("integration.legacy.count").replace("{count}", "1"),
+        name: zh("integration.action.repair").replace("{count}", "1"),
       }),
     );
     expect(await screen.findByText(/hooks\.SessionStart\[0\]/)).toBeTruthy();
-    expect(
-      screen.getByText(zh("integration.hook.revision").replace("{value}", "3")),
-    ).toBeTruthy();
-    expect(screen.getByText(zh("integration.mode.canvas"))).toBeTruthy();
-    expect(screen.getByText(zh("integration.skill.missing"))).toBeTruthy();
+    expect(screen.getByText(zh("integration.state.skillMissing"))).toBeTruthy();
 
     fireEvent.click(
       screen.getByRole("button", { name: zh("integration.regenerate") }),
@@ -373,6 +368,11 @@ describe("SettingsDialog", () => {
   it("「修复」按 found / removed / kept / backup 报结果", async () => {
     open();
     fireEvent.click(navItem(zh("integration.nav")));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: zh("integration.action.repair").replace("{count}", "1"),
+      }),
+    );
     fireEvent.click(
       await screen.findByRole("button", { name: zh("integration.repair") }),
     );

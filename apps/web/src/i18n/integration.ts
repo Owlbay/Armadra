@@ -1,49 +1,68 @@
 import type { MessageModule } from "./index";
 
 /**
- * 设置 → 集成（[Agent 接入归一](../../../../docs/design/agent-integration-mcp.md) §2）。
+ * 设置 → 集成（[界面与 ACP 刷新](../../../../docs/design/ui-acp-refresh.md) §1.5）。
  *
- * 取代原来分散在 `modals` 里的 `settings.hooks.*` / `settings.skills.*`：
- * 一种 CLI 一行，所以文案也归到一处。Claude / Codex 这些是 CLI 名，保留原文
- * （§14 第 2 条）；`aicc-hook` 与上一个产品名是磁盘上的字面量（见 core 的
+ * 一家 CLI 一张分组、固定五行，所以文案也归到一处。CLI、ACP、Hook 是术语，
+ * 保留原文；`aicc-hook` 与上一个产品名是磁盘上的字面量（见 core 的
  * `hook/install/repair.ts` `LEGACY_MARKERS`），同样不翻译。
  */
 export const integration: MessageModule = {
   "zh-CN": {
     "integration.nav": "集成",
     "integration.empty": "没有可接入的 CLI",
-    "integration.mode.canvas": "画布内注入",
-    "integration.mode.launch": "启动时注入",
-    "integration.mode.file": "写配置文件",
-    "integration.mode.extension": "进程内扩展",
-    "integration.agentMissing": "未检测到 CLI",
-    "integration.hook.revision": "Hook rev {value}", // i18n-exempt
-    "integration.hook.missing": "Hook 未生成", // i18n-exempt
-    "integration.skill.revision": "技能 rev {value}", // i18n-exempt
-    "integration.skill.missing": "技能未生成",
-    "integration.history.index": "索引：{state}",
-    "integration.history.cost": "成本：{state}",
-    "integration.history.transcript": "转录：{state}",
-    "integration.launcherWarning": "注入受限",
-    "integration.stale": "待重新生成",
-    "integration.acp.missing": "ACP 未安装", // i18n-exempt
-    "integration.acp.installed": "ACP 已安装", // i18n-exempt
-    "integration.acp.installing": "安装中…",
-    "integration.acp.failed": "ACP 安装失败", // i18n-exempt
-    "integration.acp.install": "安装",
-    "integration.acp.reinstall": "重新安装",
-    "integration.acp.done": "{name} 的 ACP 适配器已安装", // i18n-exempt
-    "integration.acp.output": "输出",
+    "integration.row.cli": "CLI", // i18n-exempt
+    "integration.row.acp": "ACP", // i18n-exempt
+    "integration.row.injection": "画布注入",
+    "integration.row.canvasAgents": "在画布中创建 Agent", // i18n-exempt
+    "integration.row.history": "本地历史",
+    "integration.state.installed": "已安装",
+    "integration.state.installedVersion": "已安装 · {version}",
+    "integration.state.missing": "未安装",
+    "integration.state.cliMissing": "未检测到",
+    "integration.state.viaCli": "随 CLI", // i18n-exempt
+    "integration.state.stale": "待更新",
+    "integration.state.hookMissing": "Hook 未生成", // i18n-exempt
+    "integration.state.skillMissing": "技能未生成",
+    "integration.state.notGenerated": "未生成",
+    "integration.state.limited": "注入受限",
+    "integration.action.install": "安装",
+    "integration.action.reinstall": "重新安装",
+    "integration.action.installing": "安装中",
+    "integration.action.copyCommand": "复制命令",
+    "integration.action.repair": "修复 {count}",
+    "integration.action.rollback": "恢复上一版本",
+    "integration.action.output": "查看输出",
+    "integration.action.retry": "重试",
+    "integration.install.failed": "{name} 没有装上",
+    "integration.install.done": "{name} 已安装",
+    "integration.install.npmMissing": "没有找到 npm", // i18n-exempt
+    "integration.install.busy": "正在装另一项",
     "integration.acp.failure.failed": "npm 安装失败（退出码 {code}）", // i18n-exempt
     "integration.acp.failure.timeout": "安装超时，已停止",
     "integration.acp.failure.missing":
-      "安装完成，但找不到适配器程序，请检查 npm 全局目录是否在 PATH 中", // i18n-exempt
-    "integration.migrated": "已清理全局安装",
+      "安装完成，但找不到程序，请检查 npm 全局目录是否在 PATH 中", // i18n-exempt
+    "integration.history.index": "索引",
+    "integration.history.cost": "成本",
+    "integration.history.transcript": "转录",
+    "integration.history.notFound": "{part}（未找到）",
+    "integration.canvasAgents.both": "会话视图 · 终端视图",
+    "integration.canvasAgents.terminal": "仅终端视图",
+    "integration.canvasAgents.acp": "仅会话视图",
+    "integration.canvasAgents.none": "不可用",
+    "integration.reason.hook_missing": "Hook 未生成", // i18n-exempt
+    "integration.reason.skill_missing": "技能未生成",
+    "integration.reason.launcher_limited": "注入受限",
+    "integration.reason.cli_missing": "未检测到 CLI", // i18n-exempt
+    "integration.reason.acp_missing": "ACP 未安装", // i18n-exempt
+    "integration.reason.mcp_not_wired": "适配器不接画布工具",
+    "integration.reason.client_without_mcp": "客户端不带画布工具",
+    "integration.revision": "第 {n} 版",
+    "integration.migrated.notice": "已清理 {name} 的旧全局安装",
+    "integration.wizard.spawnTitle": "派生 Agent", // i18n-exempt
     "integration.regenerate": "重新生成",
     "integration.regenerated": "注入产物已重新生成",
     "integration.failed": "接入操作失败",
-    "integration.legacy.count": "旧残留 {count}",
-    "integration.loading": "读取中…",
     "integration.repair": "修复",
     "integration.repair.done": "已清理旧残留",
     "integration.repair.failed": "修复失败",
@@ -60,38 +79,58 @@ export const integration: MessageModule = {
   en: {
     "integration.nav": "Integration",
     "integration.empty": "No CLI to integrate",
-    "integration.mode.canvas": "Canvas only",
-    "integration.mode.launch": "Injected at launch",
-    "integration.mode.file": "Writes a config file",
-    "integration.mode.extension": "In-process extension",
-    "integration.agentMissing": "CLI not detected",
-    "integration.hook.revision": "Hook rev {value}",
-    "integration.hook.missing": "Hook not generated",
-    "integration.skill.revision": "Skill rev {value}",
-    "integration.skill.missing": "Skill not generated",
-    "integration.history.index": "Index: {state}",
-    "integration.history.cost": "Cost: {state}",
-    "integration.history.transcript": "Transcript: {state}",
-    "integration.launcherWarning": "Injection limited",
-    "integration.stale": "Out of date",
-    "integration.acp.missing": "ACP not installed",
-    "integration.acp.installed": "ACP installed",
-    "integration.acp.installing": "Installing…",
-    "integration.acp.failed": "ACP install failed",
-    "integration.acp.install": "Install",
-    "integration.acp.reinstall": "Reinstall",
-    "integration.acp.done": "ACP adapter for {name} installed",
-    "integration.acp.output": "Output",
+    "integration.row.cli": "CLI",
+    "integration.row.acp": "ACP",
+    "integration.row.injection": "Canvas injection",
+    "integration.row.canvasAgents": "Create agents on the canvas",
+    "integration.row.history": "Local history",
+    "integration.state.installed": "Installed",
+    "integration.state.installedVersion": "Installed · {version}",
+    "integration.state.missing": "Not installed",
+    "integration.state.cliMissing": "Not detected",
+    "integration.state.viaCli": "With the CLI",
+    "integration.state.stale": "Out of date",
+    "integration.state.hookMissing": "Hook not generated",
+    "integration.state.skillMissing": "Skill not generated",
+    "integration.state.notGenerated": "Not generated",
+    "integration.state.limited": "Injection limited",
+    "integration.action.install": "Install",
+    "integration.action.reinstall": "Reinstall",
+    "integration.action.installing": "Installing",
+    "integration.action.copyCommand": "Copy command",
+    "integration.action.repair": "Repair {count}",
+    "integration.action.rollback": "Restore previous version",
+    "integration.action.output": "View output",
+    "integration.action.retry": "Retry",
+    "integration.install.failed": "{name} was not installed",
+    "integration.install.done": "{name} installed",
+    "integration.install.npmMissing": "npm not found",
+    "integration.install.busy": "Another install is running",
     "integration.acp.failure.failed": "npm install failed (exit code {code})",
     "integration.acp.failure.timeout": "The install timed out and was stopped",
     "integration.acp.failure.missing":
-      "Installed, but the adapter can't be found. Check that npm's global folder is on PATH.",
-    "integration.migrated": "Global install removed",
+      "Installed, but the program can't be found. Check that npm's global folder is on PATH.",
+    "integration.history.index": "Index",
+    "integration.history.cost": "Cost",
+    "integration.history.transcript": "Transcript",
+    "integration.history.notFound": "{part} (not found)",
+    "integration.canvasAgents.both": "Session view · Terminal view",
+    "integration.canvasAgents.terminal": "Terminal view only",
+    "integration.canvasAgents.acp": "Session view only",
+    "integration.canvasAgents.none": "Unavailable",
+    "integration.reason.hook_missing": "Hook not generated",
+    "integration.reason.skill_missing": "Skill not generated",
+    "integration.reason.launcher_limited": "Injection limited",
+    "integration.reason.cli_missing": "CLI not detected",
+    "integration.reason.acp_missing": "ACP not installed",
+    "integration.reason.mcp_not_wired": "The adapter has no canvas tools",
+    "integration.reason.client_without_mcp": "The client has no canvas tools",
+    "integration.revision": "Revision {n}",
+    "integration.migrated.notice": "Removed the old global install for {name}",
+    "integration.wizard.spawnTitle": "Spawn agent",
     "integration.regenerate": "Regenerate",
     "integration.regenerated": "Injection regenerated",
     "integration.failed": "Integration action failed",
-    "integration.legacy.count": "{count} left over",
-    "integration.loading": "Loading…",
     "integration.repair": "Repair",
     "integration.repair.done": "Leftovers cleaned up",
     "integration.repair.failed": "Repair failed",
