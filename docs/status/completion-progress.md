@@ -3067,6 +3067,118 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 
 接口：无变化。页面只多一个 `data-connect-method="link"` 标记（给真机 UI 用例用）。
 
+## 设置弹窗按视口取尺寸、节点头控件常显（UI 包 B）
+
+设置弹窗原先固定 920×680，大屏上只占视口三分之一；节点头的 `···` 与 × 悬停才出现，而同一行的名字、内存常显，看起来像「有时有、有时没有」。
+
+- **设置弹窗**：`tokens.css` 新增 `--settings-dialog-w: clamp(760px, 78vw, 1280px)`、`--settings-dialog-h: clamp(560px, 80vh, 960px)`，`SettingsDialog` 用它们并保留「视口 −48 与安全区」的上限；平板（768–1023）满宽 −32、满高 −48，导航 176；手机底部 Sheet 改整高（`data-[side=bottom]:h-…` 压过 Sheet 自己的 `h-auto`）；正文列 `max-w-[960px]` 靠左。
+- **节点头**：删掉 `.node-secondary-action` 的隐藏规则，所有控件常显。头部分身份 / 胶囊簇 / 状态 / 审批 / 动作几段：段间 8px，身份段内 4px，审批与动作段内 2px；没内容的段不渲染。胶囊统一走 `nodes/header-chip.ts` 的 `HEADER_CHIP_CLASS`（`Badge` 18px / caption / `px-1.5` / 等宽数字），内存徽标的触发器改成同款 `Badge outline`。胶囊簇最多占 40%，挤的时候胶囊逐个让，不再压到折叠计数上；身份段 `flex-auto`，标题不会被让光。
+- 设计系统 §2.7 加两条 token，§4 加「节点头」一行；展示页 `canvas` 分区加满载节点头的固定状态，`components` 分区加真设置弹窗的触发器。
+
+实测：
+
+- `SettingsDialog.test.tsx`（token 与整高）、`NodeShell.test.tsx`（`···` / × 常显、分段与间距）、新增 `HeaderChips.test.tsx`、`styles/nodes.test.ts`（样式表里没有隐藏规则、胶囊簇 40%）、`tokens.test.ts` 过；web 全量测试与 typecheck 过。
+- 无头 Chromium 实量设置弹窗（深浅两套）：1920×1080 → 1280×864，1440×900 → 1123×720，1280×800 → 998×640，1024×768 → 799×614，900×1100 → 868×1052（导航 176），390×844 → 390×796 底部整高；`design-showcase.mjs --only=canvas,components` 在 1440 / 1024 / 390 与两套主题下全过（对比度、Tab 可达、焦点环、减少动效、控制台）。
+
+没做 / 偏离：
+
+- 账号与交接两枚胶囊（`agent/account/AccountBindingBadge.tsx`、`agent/handoff/HandoffBadge.tsx`）不在本包文件边界内，没对齐到 `HEADER_CHIP_CLASS`。
+- 展示页探针只认 1440 / 1024 / 390 三档宽度，1280 / 1920 由上面的单独实量覆盖；设置弹窗要点开才出现，探针的整页截图里看不到它。
+
+接口：无契约改动。新增 `HEADER_CHIP_CLASS`（`apps/web/src/nodes/header-chip.ts`）、`SETTINGS_DIALOG_CLASS` / `SETTINGS_SHEET_CLASS`（`panels/SettingsDialog.tsx`）、token `--settings-dialog-w/h`。
+
+## 多端加入不刷新：终端多端尺寸、身份通知分级、租约只读（包 E）
+
+现象：手机或第二台电脑打开同一块画布时，已经开着的那一端「全部刷新一下」。根因已在隔离数据目录复现：终端尺寸是会话级共享的——新页面 attach 后无条件发一次 resize，core 把这个会话**所有** tmux 客户端改成新来者的尺寸，`window-size latest` 让窗口跟着变，每一端的终端都整屏重绘（去掉了 smcup/rmcup，每次重绘还往 scrollback 追加一屏）；手机端列数小，桌面端被压成手机宽且不会自己恢复。次因是身份层每次 CSRF 轮换、令牌续期都通知「会话变了」，`App.tsx` 随即整个 QueryClient 失效。
+
+做了什么：
+
+- **终端窗口尺寸（core）**：`record.cols/rows` 改为窗口尺寸，每个 attachment 自己记尺寸。窗口取谁的由纯函数 `windowSizeOf` 决定：有人类驾驶者（持终端驱动租约、经仍连着的那一端敲键）取驾驶者的；否则取面积最大的一端；同样大时保持当前，不来回切。只有结果变了才调后端一次。tmux 每个窗口建好（或重启后接管）就设成 `window-size manual`，窗口由 core 用 `resize-window` 显式设置（全局 conf 仍是 `latest`：全局 `manual` 会让 tmux 3.4 在第一次 detached `new-session` 时退出，Ubuntu 24.04 上复现过）；resize 帧只改发出它的那一端自己的 tmux 客户端（后端新增可选的 `resizeViewer`，SSH 包装按内层透传）。direct / session-host 只有一个 pty：别端的 resize 只记下来，pty 只跟窗口走。attach 不再用新来者的尺寸覆盖窗口；没给尺寸的 attach 从窗口尺寸起步，`hello` 报的就是这一端自己的尺寸。驾驶者停手十秒租约过期后，窗口自动回到最大端。
+- **页面 attach**：`hello` 尺寸与本地容器相同就不发 resize（`helloNeedsResize`）。比窗口小的一端由 tmux 裁切显示，比窗口大的一端右、下留空，不压主端。
+- **身份通知分级**：`onIdentitySessionChange` 的回调带 `appeared | gone | switched | rotated`。CSRF 轮换、Bearer 续期、同一会话的刷新都是 `rotated`；`forgetCsrf` 之后再采用别的窗口换来的令牌也算 `rotated`；登出与壳签不出票是 `gone`。`App.tsx` 只在 `appeared`、`switched` 时整体失效，`rotated` / `gone` 不动。
+- **租约模式丢租约**：`applyPresence` 判定 `lost` 时只切只读，不清本地改动、不改保存状态；`use-board-sync` 不再重取文档。画布活动只在真正的编辑（文档被 commit 置 dirty）时记，指针按下、按键不再算，空闲持有者的租约不会被「摸一下」抢走。
+- **休眠唤醒**：休眠中的 tmux 终端被别的端叫醒时，本页重连不再 `terminal.reset()`（direct 会补发 snapshot，仍清屏）。
+
+实测：
+
+- core 单测：`windowSizeOf`（最大端、同大保持、驾驶者、Agent 持租约不算）；两端 attach，B resize 只改 B 的视图、窗口不动、同尺寸不再下发；B 敲键拿到租约后窗口变 B 的，十秒后回到 A 的；最大端断开后顺延；单 pty 后端只记尺寸。真 tmux：一端 `resizeViewer` 后 `list-clients` 里另一端尺寸与窗口不变，`resize` 只改窗口。socket：`hello` 报 manager 给的尺寸、resize 带 attachmentId、按键先记驾驶端。
+- web 单测：`helloNeedsResize`；`use-hibernation` 被别端叫醒的 tmux 表面重连不清屏、direct 照旧；`identity.test.ts` 配对 `appeared`、刷新与 CSRF 轮换 `rotated`、Bearer 续期 `rotated`、换人 `switched`、登出 `gone`、`forgetCsrf` 后采用 `rotated`；`App.test.tsx` `rotated` / `gone` 不失效、`appeared` / `switched` 全量；`use-board-sync.test.tsx` 被接管只读不重取、本地改动保留、只有编辑记活动（原来两条「被接管就按远端重载 / 丢掉本地改动」的断言按新设计改写）。
+- 新探针 `tools/probes/join-no-refresh.mjs`（A 档，`tools/ci/e2e.d/join-no-refresh.json`）：A 1440×900 开两终端一便签，手机 390×844、第二台桌面 1280×800 先后加入，再从手机端开一条终端连接发 `resize 40x12`；每步断言 A 无整页重载、无重挂载、终端 WS 不断、3 秒内 output 帧 0、tmux 里 A 的客户端与窗口尺寸不变、画面逐行相同、只有周期请求与在线心跳、视口不变；手机那一端客户端是 40×12。本分支通过；把 `apps/` 换回 main 的代码再跑，第一步就失败（A 收到 8 帧重绘），和调查时的 7 帧一致。
+- `realtime-e2e` 回归通过；`ui-features-e2e --only=presence` 的接管一步按新行为改为断言「第一台保留本地改动、不重载」后通过；`gateway-e2e` 通过。
+
+没做 / 偏离：
+
+- 文件边界外动了几处，都是接口或仓库规则所需：新增 `core/terminal/viewers.ts`、`core/terminal/manager-types.ts`（只是把类型挪出去），`core/terminal/backpressure.test.ts` 的假 manager 补 `size`，以及`core/terminal/backend.ts`（`TerminalBackend.resizeViewer?` 与 `resize` 的语义注释）、`core/terminal/ssh/backend.ts`（透传 `resizeViewer`，否则 SSH 下的 tmux 会话退回单 pty 行为）。
+- `appeared` 也整体失效，而不是设计里的「只失效以 401 / 403 失败的查询」：配对前有些查询是**成功地**答「没有会话」（`useAccess` 的会话查询答 `null`），只重取失败的会让经 Gateway 打开、刚配对完的页面一直按成员处理（`gateway-e2e` 的「对外服务开着、二维码出来」超时，CI 上复现、本地验证）。`appeared` 只在配对、登录、过期后重新接上时出现，与别端加入无关；`switched` 同理全量，缓存里的数据不是这个人的。
+- `IdentityGate`、`Banners`、`GatewaySection` 三个订阅者不在本包边界内，没改：前者在 `rotated` 时仍失效一次会话查询（只是一条 `GET session`），`Banners` 用它刷新壳签票失败的通知条（需要所有通知），`GatewaySection` 在设备列表页才挂载。
+- 租约模式下，丢租约前还在去抖里的编辑，会在下一次保存时被 `autosave` 的只读分支丢掉（`save/autosave.ts` 不在边界内）；画布不再闪、撤销栈保留。
+- 单 pty 后端（direct / session-host）的别端仍按窗口宽度换行显示，这是单 pty 的固有限制。
+- 驾驶者是手机时窗口会变成手机尺寸，桌面端看到的是裁切视图；手机停手十秒（租约过期）后窗口回到桌面尺寸，这期间各端会各重绘一次。
+- 代码注释里的 `ui-acp-refresh §7.3 E-1…E-4` 指向本轮 UI / ACP 设计文档，若该文档最终不进仓库需要改成本节。
+
+接口：无契约变化。终端 WS（不在契约里）：`hello` 的 `cols/rows` 改为这一端自己的起始尺寸（未给尺寸时等于当前窗口）；resize 帧只作用于发出它的连接。页面：`onIdentitySessionChange(listener: (change: IdentityChange) => void)`，新增导出 `IdentityChange`。core：`TerminalManager.attach(sessionId, size?, writer?)` 返回多一个 `size`，`resize(…, attachmentId?)`，新增 `noteViewerInput`、`windowOf`；观看者与窗口规则在新文件 `core/terminal/viewers.ts`（纯函数 `windowSizeOf`、`TerminalWindows`）；`TerminalBackend.resizeViewer?`。`manager.ts` 的公开类型挪到 `manager-types.ts`（`manager.ts` 照旧全部再导出），否则超过仓库 1500 行的上限。
+
+## 包 A 集成页重设计、适配器与 CLI 代装、在画布中创建 Agent（契约 §47 §48）
+
+设计：[界面与 ACP 刷新](../design/ui-acp-refresh.md) §1、§2（本包把设计文档收进仓库）。
+
+做了什么：
+
+- **代装两张白名单（§47）**：`agents.installAdapter` 入参加 `target?: "adapter" | "cli"`（缺省 `adapter`）与 `rollback?`；`AGENT_CLI_PACKAGES` 补齐七家 CLI 包（claude / codex / opencode / pi / omp / copilot / ama），删掉 omp「没有公开 npm 包」的过时注释。任务键 `${agentId}:${target}`，同一家另一样在装答 409 `adapter_install_busy`。开始前用同一个 npm 跑 `npm ls --global --depth=0 --json <包>` 记 `previousVersion`；`rollback` 装回 `<包>@<previousVersion>`，没有就 409 `adapter_rollback_unavailable`。
+- **canvasAgents（§48）**：`agents.integration` 出参加 `canvasAgents: { terminal, acp, reasons }`，`core/hook/install/integration.ts::canvasAgentsOf` 纯函数按 CLI 在不在、Hook / 技能、启动器警告、ACP 程序、适配器 `canvasTools`、`AcpClient.features.mcpServers` 判。适配器表加 `canvasTools: "mcp" | "runners" | "none"`；pi 改 `none` 并 `injection.mcp: false`（不再给 pi-acp 带 `mcpServers`）。
+- **集成页**：一家一张 `SettingsGroup`（标题 CLI 名），行 CLI / ACP / 画布注入 / 在画布中创建 Agent / 本地历史；值是灰字不是徽标，正常时不出任何提示。CLI 与 ACP 各一个「安装 / 重新安装」（原生 ACP 的 ACP 行写「随 CLI」、无动作；`custom:` 只给「复制命令」）；失败时行下一条 `Alert`：「{包名} 没有装上」+ 重试 / 查看输出 / 恢复上一版本；没有 npm 时「没有找到 npm」+ 复制命令。注入行只在待更新 / 缺 Hook / 缺技能 / 注入受限时有值，旧残留是「修复 N」弹层（看清单再修）。「已清理全局安装」改成首次一条提示（`localStorage` 记已提示）。加载 >300ms 才出 `Skeleton`，空列表是 `Empty`。
+- **派生 Agent…**：Agent 节点 `···` 菜单多一项，打开同一个新建向导（`openSpawnAgentWizard(supervisorNodeId)`，标题「派生 Agent」），建好后 `addEdge` + `setEdgeRole("supervises")`，新节点放在主节点右侧（被占就往下错开）；节点与边在一次合并历史里，撤销一次全回。向导的直接安装钮在 CLI 没装时装 CLI。
+- 文案进 `i18n/integration.ts`（按设计 §1.5 重排，删掉 `mode.* / hook.revision / skill.revision / stale / launcherWarning / migrated / acp.missing…` 等不再用的键）与 `i18n/nodes.ts` 一个键；两个新错误码进注册表与 `i18n/errors.ts`。
+
+实测：
+
+- core：`adapter-install.test.ts`（CLI 表、任务键与 busy、记上一版本与回滚、`npm ls` 解析、procedure 的 `target`）、`integration.test.ts`（`canvasAgentsOf` 各分支、`state()` 在临时 PATH 上答 claude 全可用 / pi 会话视图受限）、`adapters.test.ts`（`canvasTools === "mcp"` ⇔ `injection.mcp`）、`mcp.test.ts`（pi 不带 MCP）。全部用假 runner / 假 npm，没有在本机执行 `npm i -g`。
+- 页面：`IntegrationPage.test.tsx`（五行、健康时没有徽标、历史值、修复弹层、注入受限与原因提示、原生「随 CLI」、CLI 安装）、`adapter-install.test.tsx`（两样各自安装、失败 Alert、查看输出、恢复上一版本带 `rollback`、没有 npm、向导装 CLI）、`NewAgentWizard.test.tsx`（派生：位置、主从边、一次撤销）、`terminal-menu.test.ts`、`SettingsDialog.test.tsx` 集成两例改新结构。
+- `design-showcase.mjs --only=integration --width=1440,390`：深浅两主题四张图，对比度通过，控制台无 error。
+- `pnpm libs:build && pnpm -r --if-present test`：shared 372、server 98、web 3945、desktop 5329 过；desktop 整套并行时 `parity-terminals` 的 afterAll 与 `hibernator.pty` 的 5 秒计时各超时一次（机器负载高），单独重跑两文件 19 条全过；desktop live 4 条、scripts 73 条过。`pnpm --filter @armadra/web typecheck`、`pnpm check` 过。
+
+没做 / 偏离：
+
+- `PROTOCOL_MINOR` 没改（由最后合入的包统一改到 22）；§47 沿用 §39.7 的两条 procedure，`since` 仍是 1.15，扩展字段写在 §47。
+- 文件边界外多动了几处（都是接线所需）：`packages/shared/src/api/agents.ts`（`integrationStateSchema.canvasAgents`）、`contract/errors.ts` 与 `apps/web/src/api/request.ts` / `i18n/errors.ts`（两个新码）、`apps/web/src/api/agents.ts`（`target` / `rollback` 入参，缺省不写 `target` 以兼容旧 core）、`core/acp/mcp.test.ts`（pi 不再带 MCP）、`panels/SettingsDialog.test.tsx` 两例（与包 B 同文件不同用例）、`i18n/showcase.ts` 一条展示页说明。
+- 远端执行主机上的代装、经中继看别人 core 时的安装（`available === false` 分支不出按钮）不在本包。`team` 不带 `--cwd / --resume` 仍是协调者设计剩余项。
+- 真实 npm 安装、真实 CLI 登录没有在本机跑（规矩不许）；需要用户在自己机器上点一次「安装 / 恢复上一版本」确认 npm 全局前缀落在 PATH 上。
+
+接口：
+
+- 契约 §47：`agents.installAdapter { agentId, reinstall?, target?, rollback? }`、`agents.adapterInstall { agentId, target? }`；任务多 `target`、`rollback?`、`previousVersion?`；错误码 `adapter_install_busy`(409)、`adapter_rollback_unavailable`(409)。共享层 `AGENT_CLI_PACKAGES`、`ADAPTER_INSTALL_TARGETS`、`installablePackage(agentId, target)`、`agentCliInstallable`、`acpInstallCommand(agentId, target?)`。
+- 契约 §48：`IntegrationState.canvasAgents`（共享层 `canvasAgentsSchema`）；core `AcpAdapter.canvasTools`、`canvasAgentsOf`。
+- 页面：`useInstallJob(agent, target)`、`InstallButton`、`InstallFailure`、`AgentIntegrationGroup`（取代 `AgentIntegrationRow`）、`openSpawnAgentWizard(nodeId)`、`spawnPosition(nodes, supervisorId)`。
+
+## C ACP 会话视图的展示与动作（契约 §49，协议 1.23）
+
+会话视图按 ACP 的内容类型逐类补上展示与操作，并修「会话里什么都点不了 / 选不了」。
+
+- **根因**（在浏览器里核实）：按钮的点击本身能到，问题是 React Flow 给 `.react-flow__node` 的 `user-select: none` 让整块会话的字选不中、复制不了，而且会话里除了展开工具行几乎没有可点的东西；手形工具开着时在会话里拖动会平移画布。会话视图根上加 `select-text nopan nodrag nowheel`，`ExportMenu` 不再包住正文，只是消息工具条里的一个 `⋯`。
+- **页面**（`apps/web/src/acp/*`）：回合分组与时间；消息工具条（复制、编辑后重发、重新发送、重新生成、输出到画板），代码块单独复制；图片缩略图与资源链接（工作区内文件开编辑器、`http(s)` 开浏览器节点、其余只复制）；思考的流式指示与 40 字摘要；工具行 `completed` 改 `done` 胶囊、文件胶囊（≤2 + `+N`，工作区内的点了跳行）、复制入参 / 输出 / 命令、失败时「让它重试」；差异块复制补丁 / 路径、落为变更节点（`exportDiff`，一条历史）、超过 200 行折到 60 行；计划卡（回合结束自动折叠，图标 + 读屏文字）；模式切换行；`max_tokens` / `max_turn_requests` / `refusal` / `cancelled` 的回合尾行（`refusal` 不再算失败，只有协议错误进「这一轮没有完成」）；权限卡「详情」（差异、入参前 20 行、文件），钉住时焦点落到第一枚允许钮、人在输入时不抢、Esc 不答；输入框斜杠命令列表、上下文用量（≥90% 警示色）、编辑后回填。重发走同一条 `send`：只有「没送达」的那一轮沿用 `clientTurnId`（§39.9），跑完的回合重发换新 id。消息区 `role="log"` 不逐块念，回合结束时把最后一条回复放进 `role="status"`。
+- **core**：镜像多记 `image`（base64 超 512 KiB 只记 `dropped`）、`resource_link`、工具结果的 `diffs` / `status: "failed"`、`tool_use` 的 `kind` / `locations`；只有 `acp.log` 以 rich 读法拿到，连线读取与摘要照旧。`acp.log` 出参多 `snapshot`（计划、用量、斜杠命令、标题），条件与 `pending` 相同。
+
+实测：
+
+- 隔离数据目录 + 临时 HOME 起 core 与 Vite，用假 ACP Agent 在浏览器里点：字可选（选择模式与手形工具下都是选字、视口不动）、编辑后重发回填、停止后「已停止 · 重新发送」、计划卡与用量、重载后计划 / 用量 / 工具种类与文件胶囊 / 失败状态都在。
+- `acp-e2e.mjs` 新增 3b（展开工具行、复制入参写进剪贴板、根上 `user-select: text` 与 `nopan`、计划卡、失败胶囊）全过；唯一失败是第 5 步「终端里敲了恢复行」：worktree 路径更长，`fake-agent-main` 在 xterm 里折行被拆开，与本包无关。
+- `design-showcase.mjs --only=acp` 两主题 × 1440 / 1024 / 390，对比度与控制台检查过。
+- 新增 / 扩充用例：`store.test.ts`（十种 update、附件、计划折叠、快照）、`MessageList.test.tsx`、`ToolCallRow.test.tsx`、`DiffBlock.test.tsx`、`PermissionCard.test.tsx`、`PromptBox.test.tsx`、`SessionView.test.tsx`（四种停止原因各一行、根类名、`/` 命令、快照恢复）、`open-link.test.ts`；core `mirror.test.ts`、`session.test.ts`、`routes.test.ts`（`snapshot`）。
+
+没做 / 偏离：
+
+- 经中继看别人 core 时节点头的「源名」徽标没做：它在 `HeaderChips` / `TerminalNode`（包 B 与节点文件），超出本包文件边界；`acp.source.remote` 文案也就没加。
+- `session_info_update` 的标题只记在 store（`view.title`），没接到节点命名建议（同样在 `nodes/*`）。
+- 回合尾的停止行与模式切换行不进镜像，重载或断线重读后不再画；重载后计划卡画在最后一回合（快照不知道它属于哪一回合）。
+- 镜像的读写改了 `core/acp/mirror.ts` 与 `core/history/acp-mirror.ts`（设计写的是 `session.ts`，实际写镜像的在这两处）。
+- 没改全局 `PROTOCOL_MINOR`（仍 21）；§49 写「自协议 1.23 起」，由最后合入的包统一改。
+
+接口：
+
+- 契约 §49；`acpTranscriptBlockSchema` 多 `image` / `resource_link` 两种块，`tool_use.kind?` / `locations?`，`tool_result.status?` / `diffs?`；`acpLogResponseSchema.snapshot?: AcpLogSnapshot`；新导出 `acpUsageSchema`、`acpAvailableCommandSchema`、`acpLogSnapshotSchema`。
+- core：`AcpSession.snapshot()`、`AcpMirror.read()` 返回 `MirrorEntry`；`readMirrorEntries(path, from, max, { rich: true })`。
+- 页面：`PromptBox` 新增可选 `commands` / `usage` / `prefill`，`PermissionCard` 新增 `pinned`，`MessageList` 新增 `plan` / `actions`，`ExportMenu` 不再收 `children`（改为工具条按钮）。
+
 ## 画布「整理」按刚体排、导入成组（UI 设计 2026-10-07 §6，包 D）
 
 用户报：导入一个项目后点「整理」，导入的东西被打散成一长排，Agent 簇散落。根因是整理按无向连通分量分簇：Mermaid 导入的框 / 字 / 线全是顶层白板对象、彼此没有链接，每一个都成了独立的盒子；主从边与对等边一视同仁；列内顺序是输入顺序。

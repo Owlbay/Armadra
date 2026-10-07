@@ -17,6 +17,8 @@ import {
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui/popover";
+import { cn } from "@/lib/cn";
+import { HEADER_CHIP_CLASS } from "./header-chip";
 
 export function DependencyWaitBadge({
   nodeId,
@@ -50,10 +52,10 @@ export function DependencyWaitBadge({
         <Badge
           asChild
           variant="outline"
-          className={
-            "h-[18px] px-1.5 text-[length:var(--text-caption)]" +
-            (stuck ? " text-[var(--danger-text)]" : "")
-          }
+          className={cn(
+            HEADER_CHIP_CLASS,
+            stuck && "text-[var(--danger-text)]",
+          )}
           data-no-drag="true"
         >
           <Button

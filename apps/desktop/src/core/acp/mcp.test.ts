@@ -77,11 +77,12 @@ describe("canvasMcpServer", () => {
 });
 
 describe("acpMcpServers", () => {
-  it("follows the adapter table: MCP for the six CLIs, none for ama", () => {
+  it("follows the adapter table: MCP for five CLIs, none for pi and ama", () => {
     setHookClient(HOOK);
-    for (const id of ["claude", "codex", "opencode", "pi", "omp", "copilot"]) {
+    for (const id of ["claude", "codex", "opencode", "omp", "copilot"]) {
       expect(acpMcpServers(acpAdapter(id)!, INPUT)).toHaveLength(1);
     }
+    expect(acpMcpServers(acpAdapter("pi")!, INPUT)).toEqual([]);
     expect(acpMcpServers(acpAdapter("ama")!, INPUT)).toEqual([]);
     expect(acpMcpServers(acpAdapter("claude")!, undefined)).toEqual([]);
     setHookClient(undefined);

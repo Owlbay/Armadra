@@ -11,6 +11,7 @@ import { useCanvasStore } from "../store/canvas-store";
 import { realtimeActive, startRealtime } from "../realtime/session";
 import {
   applyPresence,
+  isReadOnly,
   markPresenceActivity,
   presenceClientId,
   peekPresenceActivity,
@@ -141,27 +142,8 @@ export function useBoardSync() {
     });
   }, [onCanvasChanged, queryClient, workspaceId]);
 
-  /**
-   * 丢了租约：按远端重载，而且**不靠文档查询的引用变没变**。远端这段时间
-   * 没人改过时，重取回来的那份与缓存逐字相同，React Query 的结构共享原样
-   * 还回旧引用，下面「同一份响应只合一次」的闸门会把它挡掉——本地那笔没落盘
-   * 的改动就这样一直留在屏幕上。所以这里自己取一份、直接合进去（此时
-   * `saveState` 已被置回 `saved`，合并以远端为准）。
-   */
-  const onLeaseLost = useCallback(() => {
-    if (!workspaceId || !boardId) return;
-    void queryClient
-      .fetchQuery({
-        queryKey: sk("board", workspaceId, boardId),
-        queryFn: () => runtimeApi.loadBoard(workspaceId, boardId),
-        staleTime: 0,
-      })
-      .then((remote) => useCanvasStore.getState().mergeRemoteDocument(remote))
-      .catch(() => undefined);
-    void queryClient.invalidateQueries({ queryKey: sk("boards", workspaceId) });
-  }, [boardId, queryClient, workspaceId]);
-
-  useBoardPresence(workspaceId, boardId, onCanvasChanged, onLeaseLost);
+  // 丢了租约只切只读（ui-acp-refresh §7.3 E-3）：不清本地改动、不重取文档。
+  useBoardPresence(workspaceId, boardId, onCanvasChanged);
 
   /* ------------------------ 启动：恢复上次的工作空间 ---------------------- */
   /**
@@ -350,7 +332,6 @@ function useBoardPresence(
   workspaceId: string | null,
   boardId: string | null,
   reload: () => void,
-  discard: () => void,
 ): void {
   useEffect(() => {
     if (!workspaceId || !boardId) return;
@@ -363,9 +344,8 @@ function useBoardPresence(
 
     const apply = (snapshot: Parameters<typeof applyPresence>[0]) => {
       if (stopped) return;
-      const change = applyPresence(snapshot);
-      if (change.lost) discard();
-      else if (change.gained) reload();
+      // 丢了只是变只读，画布原样；拿回来时按远端合一次。
+      if (applyPresence(snapshot).gained) reload();
     };
     const beat = () => {
       void runtimeApi
@@ -416,11 +396,21 @@ function useBoardPresence(
     const onVisible = () => {
       if (document.visibilityState === "visible") beat();
     };
-    const onActivity = () => markPresenceActivity();
+    // 只有真正的编辑才算活动（ui-acp-refresh §7.3 E-3）：结构性编辑都经 `commit`，
+    // 它把文档换掉并置 dirty。点一下、平移、敲快捷键都不算，空闲持有者的
+    // 租约不会被别人「摸一下」抢走。
+    const stopActivity = useCanvasStore.subscribe((state, previous) => {
+      if (
+        state.document !== previous.document &&
+        state.saveState === "dirty" &&
+        state.document?.board.id === boardId &&
+        !isReadOnly(previous)
+      ) {
+        markPresenceActivity();
+      }
+    });
     window.addEventListener(LEASE_LOST_EVENT, onLost);
     document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("pointerdown", onActivity, { capture: true });
-    window.addEventListener("keydown", onActivity, { capture: true });
     // 关页面时控制面连接随之断开，core 据此离开；不再依赖一个 `keepalive` 的请求。
 
     return () => {
@@ -430,9 +420,8 @@ function useBoardPresence(
       stopWatching();
       window.removeEventListener(LEASE_LOST_EVENT, onLost);
       document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("pointerdown", onActivity, { capture: true });
-      window.removeEventListener("keydown", onActivity, { capture: true });
+      stopActivity();
       leave();
     };
-  }, [boardId, discard, reload, workspaceId]);
+  }, [boardId, reload, workspaceId]);
 }

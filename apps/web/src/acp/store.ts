@@ -13,6 +13,7 @@
 import { scoped } from "../sources/scope";
 import { create } from "zustand";
 import {
+  acpAvailableCommandSchema,
   acpContentBlockSchema,
   acpElicitationRequestSchema,
   acpModeStateSchema,
@@ -20,6 +21,9 @@ import {
   acpPermissionRequestSchema,
   acpPlanEntrySchema,
   acpToolCallSchema,
+  acpToolKindSchema,
+  acpUsageSchema,
+  type AcpAvailableCommand,
   type AcpElicitation,
   type AcpLogResponse,
   type AcpModeState,
@@ -29,6 +33,7 @@ import {
   type AcpPermissionOption,
   type AcpPlanEntry,
   type AcpSessionUpdate,
+  type AcpStopReason,
   type AcpToolCall,
   type AcpToolCallContent,
   type AcpToolCallStatus,
@@ -41,15 +46,42 @@ import { z } from "zod";
 
 export type AcpMessageRole = "user" | "assistant" | "thought";
 
+/** 消息里文字以外的内容块（契约 §49）。 */
+export type AcpAttachment =
+  | {
+      readonly type: "image";
+      readonly mimeType: string;
+      /** base64；镜像里超过上限的只剩 `dropped`。 */
+      readonly data?: string;
+      readonly uri?: string;
+      readonly dropped?: true;
+    }
+  | {
+      readonly type: "resource_link";
+      readonly uri: string;
+      readonly name: string;
+      readonly mimeType?: string;
+      readonly title?: string;
+    };
+
+export interface AcpToolLocation {
+  readonly path: string;
+  readonly line?: number | null | undefined;
+}
+
 export interface AcpToolCallView {
   readonly toolCallId: string;
   readonly title: string;
   readonly kind?: AcpToolKind | undefined;
   readonly status?: AcpToolCallStatus | undefined;
   readonly content: readonly AcpToolCallContent[];
+  readonly locations?: readonly AcpToolLocation[];
   readonly rawInput?: unknown;
   readonly rawOutput?: unknown;
 }
+
+/** 回合尾要画一行的停止原因；`end_turn` 不画。 */
+export type AcpVisibleStop = Exclude<AcpStopReason, "end_turn">;
 
 export type AcpItem =
   | {
@@ -58,6 +90,9 @@ export type AcpItem =
       readonly role: AcpMessageRole;
       readonly text: string;
       readonly turn: number;
+      readonly attachments?: readonly AcpAttachment[];
+      /** 这一条的时间（RFC 3339）：镜像里记的，或者页面收到它的那一刻。 */
+      readonly at?: string;
       /** 页面自己先画上的那条用户消息：适配器回显的同一句不再画第二遍。 */
       readonly local?: true;
     }
@@ -66,7 +101,28 @@ export type AcpItem =
       readonly id: string;
       readonly call: AcpToolCallView;
       readonly turn: number;
+    }
+  /** `current_mode_update`：消息流里一行「模式已切换为 …」。 */
+  | {
+      readonly kind: "notice";
+      readonly id: string;
+      readonly turn: number;
+      readonly notice: "mode";
+      readonly name: string;
+    }
+  /** 回合没有正常说完（契约 §14.3 `stopReason`）：回合尾一行。 */
+  | {
+      readonly kind: "stop";
+      readonly id: string;
+      readonly turn: number;
+      readonly stopReason: AcpVisibleStop;
     };
+
+export interface AcpUsageView {
+  readonly used: number;
+  readonly size: number;
+  readonly cost?: { readonly amount: number; readonly currency: string };
+}
 
 export interface AcpSessionView {
   readonly items: readonly AcpItem[];
@@ -78,8 +134,16 @@ export interface AcpSessionView {
   /** 契约 §26.2：Agent 给的模型目录；不给选时 `null`。 */
   readonly models: AcpModelState | null;
   readonly plan: readonly AcpPlanEntry[];
-  readonly usage: { readonly used: number; readonly size: number } | null;
-  /** 上一回合没有正常结束；重试重发 `lastPrompt`。 */
+  /** 计划画在哪一回合的顶部；没有计划时 `null`。 */
+  readonly planTurn: number | null;
+  /** 那一回合已经结束：计划卡默认折叠成一行。 */
+  readonly planSettled: boolean;
+  readonly usage: AcpUsageView | null;
+  /** `available_commands_update`：输入 `/` 时的命令列表。 */
+  readonly commands: readonly AcpAvailableCommand[];
+  /** `session_info_update` 的标题；只作命名建议，不改节点。 */
+  readonly title: string | null;
+  /** 上一回合没有正常结束（协议错误、没送达）；重试重发 `lastPrompt`。 */
   readonly failed: boolean;
   readonly lastPrompt: string | null;
   readonly endOffset: number;
@@ -110,7 +174,11 @@ export const EMPTY_SESSION: AcpSessionView = {
   modes: null,
   models: null,
   plan: [],
+  planTurn: null,
+  planSettled: false,
   usage: null,
+  commands: [],
+  title: null,
   failed: false,
   lastPrompt: null,
   endOffset: 0,
@@ -121,10 +189,86 @@ export const EMPTY_SESSION: AcpSessionView = {
 
 /* --------------------------------- 归约 ---------------------------------- */
 
-function textOf(content: unknown): string {
-  const block = acpContentBlockSchema.safeParse(content);
-  if (!block.success) return "";
-  return block.data.type === "text" ? (block.data.text ?? "") : "";
+/** 一个内容块里能画的那一部分：文字，或一个附件。 */
+type Piece =
+  | { readonly text: string; readonly attachment?: undefined }
+  | { readonly text?: undefined; readonly attachment: AcpAttachment };
+
+/** URI 的最后一段，资源没有名字时当名字。 */
+function nameOf(uri: string): string {
+  const tail = uri.replace(/[?#].*$/, "").replace(/\/+$/, "");
+  const name = tail.slice(tail.lastIndexOf("/") + 1);
+  try {
+    return decodeURIComponent(name) || uri;
+  } catch {
+    return name || uri;
+  }
+}
+
+/**
+ * ACP 内容块 / 镜像块 → 能画的那一部分（契约 §49）：`text`、`image`、
+ * `resource_link`；内嵌 `resource` 有正文当文字、没有当链接。其余不画。
+ */
+export function pieceOf(content: unknown): Piece | null {
+  const parsed = acpContentBlockSchema.safeParse(content);
+  if (!parsed.success) return null;
+  const block = parsed.data;
+  switch (block.type) {
+    case "text":
+      return block.text ? { text: block.text } : null;
+    case "image": {
+      const raw = content as { dropped?: unknown };
+      const mimeType = block.mimeType || "image/png";
+      if (block.data) {
+        return {
+          attachment: {
+            type: "image",
+            mimeType,
+            data: block.data,
+            ...(block.uri ? { uri: block.uri } : {}),
+          },
+        };
+      }
+      if (raw.dropped === true || block.uri) {
+        return {
+          attachment: {
+            type: "image",
+            mimeType,
+            ...(block.uri ? { uri: block.uri } : {}),
+            ...(raw.dropped === true ? { dropped: true as const } : {}),
+          },
+        };
+      }
+      return null;
+    }
+    case "resource_link":
+      return block.uri
+        ? {
+            attachment: {
+              type: "resource_link",
+              uri: block.uri,
+              name: block.name || nameOf(block.uri),
+              ...(block.mimeType ? { mimeType: block.mimeType } : {}),
+              ...(block.title ? { title: block.title } : {}),
+            },
+          }
+        : null;
+    case "resource": {
+      const resource = block.resource;
+      if (!resource) return null;
+      if (resource.text) return { text: resource.text };
+      return {
+        attachment: {
+          type: "resource_link",
+          uri: resource.uri,
+          name: nameOf(resource.uri),
+          ...(resource.mimeType ? { mimeType: resource.mimeType } : {}),
+        },
+      };
+    }
+    default:
+      return null;
+  }
 }
 
 function toolView(call: AcpToolCall, previous?: AcpToolCallView) {
@@ -134,55 +278,63 @@ function toolView(call: AcpToolCall, previous?: AcpToolCallView) {
     kind: call.kind ?? previous?.kind,
     status: call.status ?? previous?.status,
     content: call.content ?? previous?.content ?? [],
+    locations: call.locations ?? previous?.locations ?? [],
     rawInput: call.rawInput !== undefined ? call.rawInput : previous?.rawInput,
     rawOutput:
       call.rawOutput !== undefined ? call.rawOutput : previous?.rawOutput,
   } satisfies AcpToolCallView;
 }
 
-function appendText(
+type MessageItem = Extract<AcpItem, { kind: "message" }>;
+
+function grow(item: MessageItem, piece: Piece): MessageItem {
+  if (piece.attachment) {
+    return {
+      ...item,
+      attachments: [...(item.attachments ?? []), piece.attachment],
+    };
+  }
+  return { ...item, text: item.text + piece.text };
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function appendPiece(
   view: AcpSessionView,
   role: AcpMessageRole,
-  text: string,
+  piece: Piece | null,
+  at?: string,
 ): AcpSessionView {
-  if (!text) return view;
+  if (!piece) return view;
   const last = view.items.at(-1);
+  const fresh = (turn: number): MessageItem => ({
+    kind: "message",
+    id: `m${view.items.length}`,
+    role,
+    text: piece.text ?? "",
+    turn,
+    ...(piece.attachment ? { attachments: [piece.attachment] } : {}),
+    at: at ?? nowIso(),
+  });
   if (role === "user") {
     // 回放里的用户消息开新回合；本回合页面已经画过的那一句不再重复。
     if (last?.kind === "message" && last.role === "user") {
       if (last.local) return view;
-      return replaceLast(view, { ...last, text: last.text + text });
+      return replaceLast(view, grow(last, piece));
     }
     const turn = view.turn + 1;
-    return {
-      ...view,
-      turn,
-      items: [
-        ...view.items,
-        { kind: "message", id: `m${view.items.length}`, role, text, turn },
-      ],
-    };
+    return { ...view, turn, items: [...view.items, fresh(turn)] };
   }
   if (
     last?.kind === "message" &&
     last.role === role &&
     last.turn === view.turn
   ) {
-    return replaceLast(view, { ...last, text: last.text + text });
+    return replaceLast(view, grow(last, piece));
   }
-  return {
-    ...view,
-    items: [
-      ...view.items,
-      {
-        kind: "message",
-        id: `m${view.items.length}`,
-        role,
-        text,
-        turn: view.turn,
-      },
-    ],
-  };
+  return { ...view, items: [...view.items, fresh(view.turn)] };
 }
 
 function replaceLast(view: AcpSessionView, item: AcpItem): AcpSessionView {
@@ -213,7 +365,21 @@ function upsertTool(view: AcpSessionView, call: AcpToolCall): AcpSessionView {
   };
 }
 
-const usageSchema = z.looseObject({ used: z.number(), size: z.number() });
+function usageOf(value: unknown): AcpUsageView | null {
+  const usage = acpUsageSchema.safeParse(value);
+  if (!usage.success) return null;
+  const { used, size, cost } = usage.data;
+  return { used, size, ...(cost ? { cost } : {}) };
+}
+
+function commandsOf(value: unknown): AcpAvailableCommand[] | null {
+  const list = z.array(z.unknown()).safeParse(value);
+  if (!list.success) return null;
+  return list.data.flatMap((item) => {
+    const command = acpAvailableCommandSchema.safeParse(item);
+    return command.success && command.data.name ? [command.data] : [];
+  });
+}
 
 /** 一条 `session/update`。不画的种类原样返回。 */
 export function applyUpdate(
@@ -223,11 +389,11 @@ export function applyUpdate(
   const body = update as Record<string, unknown>;
   switch (update.sessionUpdate) {
     case "user_message_chunk":
-      return appendText(view, "user", textOf(body.content));
+      return appendPiece(view, "user", pieceOf(body.content));
     case "agent_message_chunk":
-      return appendText(view, "assistant", textOf(body.content));
+      return appendPiece(view, "assistant", pieceOf(body.content));
     case "agent_thought_chunk":
-      return appendText(view, "thought", textOf(body.content));
+      return appendPiece(view, "thought", pieceOf(body.content));
     case "tool_call":
     case "tool_call_update": {
       const call = acpToolCallSchema.safeParse(body);
@@ -235,13 +401,35 @@ export function applyUpdate(
     }
     case "plan": {
       const entries = z.array(acpPlanEntrySchema).safeParse(body.entries);
-      return entries.success ? { ...view, plan: entries.data } : view;
+      return entries.success
+        ? {
+            ...view,
+            plan: entries.data,
+            planTurn: view.turn,
+            planSettled: false,
+          }
+        : view;
     }
     case "current_mode_update": {
       if (typeof body.currentModeId !== "string" || !view.modes) return view;
+      const modeId = body.currentModeId;
+      if (modeId === view.modes.currentModeId) return view;
+      const name =
+        view.modes.availableModes.find((mode) => mode.id === modeId)?.name ??
+        modeId;
       return {
         ...view,
-        modes: { ...view.modes, currentModeId: body.currentModeId },
+        modes: { ...view.modes, currentModeId: modeId },
+        items: [
+          ...view.items,
+          {
+            kind: "notice",
+            id: `n${view.items.length}`,
+            turn: view.turn,
+            notice: "mode",
+            name,
+          },
+        ],
       };
     }
     case "config_option_update": {
@@ -251,10 +439,17 @@ export function applyUpdate(
       return models ? { ...view, models } : view;
     }
     case "usage_update": {
-      const usage = usageSchema.safeParse(body);
-      return usage.success
-        ? { ...view, usage: { used: usage.data.used, size: usage.data.size } }
-        : view;
+      const usage = usageOf(body);
+      return usage ? { ...view, usage } : view;
+    }
+    case "available_commands_update": {
+      const commands = commandsOf(body.availableCommands);
+      return commands ? { ...view, commands } : view;
+    }
+    case "session_info_update": {
+      if (typeof body.title === "string")
+        return { ...view, title: body.title || null };
+      return body.title === null ? { ...view, title: null } : view;
     }
     default:
       return view;
@@ -353,14 +548,23 @@ export function beginTurn(
         role: "user",
         text,
         turn,
+        at: nowIso(),
         local: true,
       },
     ],
   };
 }
 
+const VISIBLE_STOPS: ReadonlySet<string> = new Set<AcpVisibleStop>([
+  "max_tokens",
+  "max_turn_requests",
+  "refusal",
+  "cancelled",
+]);
+
 /**
- * `acp.turn`：回合结束。拒答与协议错误算失败，取消不算。本页那一轮还在对账
+ * `acp.turn`：回合结束。协议错误算失败（顶部「这一轮没有完成」+ 重试）；
+ * 到上限、拒答、取消在回合尾各画一行（`stop`），不算失败。本页那一轮还在对账
  * （或已判没送达）时，带着别的 `clientTurnId` 的结束帧不是它的结局，不动。
  */
 export function endTurn(
@@ -374,13 +578,29 @@ export function endTurn(
   ) {
     return view;
   }
-  const failed = Boolean(event.error) || event.stopReason === "refusal";
+  const failed = Boolean(event.error);
+  const stop =
+    !failed && event.stopReason && VISIBLE_STOPS.has(event.stopReason)
+      ? (event.stopReason as AcpVisibleStop)
+      : null;
   return {
     ...view,
     streaming: false,
     failed,
     confirming: false,
     undelivered: false,
+    planSettled: true,
+    items: stop
+      ? [
+          ...view.items,
+          {
+            kind: "stop",
+            id: `s${view.items.length}`,
+            turn: view.turn,
+            stopReason: stop,
+          },
+        ]
+      : view.items,
     // 回合边界之后的第一段输出必须是新的一条，哪怕上一条也是助手说的。
     turn: view.turn + 1,
   };
@@ -406,6 +626,7 @@ function withLocalPrompt(view: AcpSessionView): AcpSessionView {
         role: "user",
         text,
         turn,
+        at: nowIso(),
         local: true,
       },
     ],
@@ -465,34 +686,51 @@ export function fromLog(
   for (const entry of entries) {
     if (entry.role === "system") continue;
     if (entry.role === "user") {
-      const text = entry.blocks
-        .map((block) => (block.type === "text" ? block.text : ""))
-        .join("");
+      const pieces = entry.blocks
+        .filter((block) => block.type !== "tool_result")
+        .map((block) => pieceOf(block));
       // 只有工具结果的 user 记录（Claude 的转录这样存）不开新回合。
-      if (text) {
-        view = appendText(view, "user", text);
+      if (pieces.some(Boolean)) {
+        for (const piece of pieces) {
+          view = appendPiece(view, "user", piece, entry.at);
+        }
         continue;
       }
     }
     for (const block of entry.blocks) {
-      if (block.type === "text") {
-        view = appendText(view, "assistant", block.text);
-      } else if (block.type === "tool_use" && block.id) {
+      if (block.type === "tool_use" && block.id) {
+        const kind = acpToolKindSchema.safeParse(block.kind);
         view = upsertTool(view, {
           toolCallId: block.id,
           title: block.name,
           rawInput: block.input,
+          ...(kind.success ? { kind: kind.data } : {}),
+          ...(block.locations ? { locations: block.locations } : {}),
         });
       } else if (block.type === "tool_result" && block.id) {
+        const diffs = (block.diffs ?? []).map((diff) => ({
+          type: "diff" as const,
+          path: diff.path,
+          oldText: diff.oldText ?? null,
+          newText: diff.newText,
+        }));
         view = upsertTool(view, {
           toolCallId: block.id,
-          status: "completed",
+          status: block.status === "failed" ? "failed" : "completed",
           rawOutput: block.content,
+          ...(diffs.length > 0 ? { content: diffs } : {}),
         });
+      } else {
+        view = appendPiece(view, "assistant", pieceOf(block), entry.at);
       }
     }
   }
-  return { ...view, turn: view.turn + 1 };
+  const last = view.items.at(-1);
+  return {
+    ...view,
+    turn: view.turn + 1,
+    planTurn: base.plan.length > 0 ? (last?.turn ?? null) : null,
+  };
 }
 
 /**
@@ -597,8 +835,21 @@ export const useAcpStore = create<AcpStoreState>((set) => ({
       const previous = state.sessions[key] ?? EMPTY_SESSION;
       const modes = acpModeStateSchema.safeParse(log.modes);
       const models = acpModelStateSchema.safeParse(log.models);
+      const snapshot = log.snapshot;
+      const plan = snapshot ? snapshot.plan : previous.plan;
+      const rebuilt = fromLog(log.entries, { ...previous, plan });
       const view: AcpSessionView = {
-        ...fromLog(log.entries, previous),
+        ...rebuilt,
+        ...(snapshot
+          ? {
+              usage: usageOf(snapshot.usage),
+              commands: snapshot.availableCommands,
+              title: snapshot.title,
+              planSettled: !(log.turns ?? []).some(
+                (turn) => turn.state !== "ended",
+              ),
+            }
+          : {}),
         modes: modes.success ? modes.data : previous.modes,
         // `null` 是「不给选」，照样记下；字段不在（旧 core）时保留之前的。
         models: models.success

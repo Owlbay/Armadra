@@ -55,8 +55,11 @@ const { installDomPolyfills, TestProviders } = await import(
   "@/app/test-harness"
 );
 const { useCanvasStore, resetHistory } = await import("@/store/canvas-store");
-const { NewAgentWizard, wizardAgents } = await import("./NewAgentWizard");
-const { openNewAgentWizard, useWizardOpen } = await import("./wizard-open");
+const { NewAgentWizard, spawnPosition, wizardAgents } = await import(
+  "./NewAgentWizard"
+);
+const { openNewAgentWizard, openSpawnAgentWizard, useWizardOpen } =
+  await import("./wizard-open");
 
 installDomPolyfills();
 
@@ -111,7 +114,7 @@ beforeEach(() => {
   useCanvasStore.getState().setWorkspace(workspace);
   useCanvasStore.getState().setDocument(document);
   resetHistory();
-  useWizardOpen.setState({ open: false, at: null });
+  useWizardOpen.setState({ open: false, at: null, supervisorNodeId: null });
 });
 afterEach(cleanup);
 
@@ -249,6 +252,61 @@ describe("NewAgentWizard", () => {
     renderWizard();
     expect(await screen.findByText("还没有可用的 Agent")).toBeTruthy();
     expect(screen.getByRole("button", { name: "打开集成设置" })).toBeTruthy();
+  });
+});
+
+describe("派生 Agent", () => {
+  const lead: CanvasNode = {
+    id: "019ff7d1-0000-7000-8000-00000000a001",
+    boardId: board.id,
+    type: "terminal",
+    title: "Lead",
+    color: "#0a84ff",
+    position: { x: 100, y: 200 },
+    size: { width: 600, height: 400 },
+    labels: [],
+    note: "",
+    data: { kind: "terminal", agent: { id: "codex", driver: "acp" } },
+    createdAt: stamp,
+    updatedAt: stamp,
+  } as CanvasNode;
+
+  it("同一个向导：标题换成「派生 Agent」，建好后连主从边并放在主的右侧；撤销一次全回", async () => {
+    useCanvasStore.getState().setDocument({ board, nodes: [lead], edges: [] });
+    resetHistory();
+    api.createSession.mockResolvedValue({ id: "sess-spawn" });
+    openSpawnAgentWizard(lead.id);
+    renderWizard();
+    expect(await screen.findByText("派生 Agent")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(useWizardOpen.getState().open).toBe(false));
+
+    const document = useCanvasStore.getState().document!;
+    const created = document.nodes.find((node) => node.id !== lead.id)!;
+    expect(created.position).toEqual({ x: 100 + 600 + 60, y: 200 });
+    expect(document.edges).toHaveLength(1);
+    expect(document.edges[0]).toMatchObject({
+      source: lead.id,
+      target: created.id,
+      role: "supervises",
+    });
+
+    useCanvasStore.getState().undo();
+    const after = useCanvasStore.getState().document!;
+    expect(after.nodes.map((node) => node.id)).toEqual([lead.id]);
+    expect(after.edges).toEqual([]);
+  });
+
+  it("右侧已经有节点时往下错开", () => {
+    const taken = {
+      ...lead,
+      id: "019ff7d1-0000-7000-8000-00000000a002",
+      position: { x: 760, y: 200 },
+    } as CanvasNode;
+    const position = spawnPosition([lead, taken], lead.id)!;
+    expect(position.x).toBe(760);
+    expect(position.y).toBeGreaterThanOrEqual(200 + 400);
+    expect(spawnPosition([lead], "missing")).toBeNull();
   });
 });
 

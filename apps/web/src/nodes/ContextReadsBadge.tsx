@@ -24,6 +24,7 @@ import { usePageVisible } from "@/panels/resources/use-visibility";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui/popover";
+import { HEADER_CHIP_CLASS } from "./header-chip";
 
 /** 悬停里最多几条。再多就不是「最近」了，那是审计面板的事。 */
 const RECENT_SHOWN = 5;
@@ -62,7 +63,7 @@ export function ContextReadsBadge({
         <Badge
           asChild
           variant="outline"
-          className="h-[18px] px-1.5 text-[length:var(--text-caption)]"
+          className={HEADER_CHIP_CLASS}
           data-no-drag="true"
         >
           <Button

@@ -273,8 +273,12 @@ export function NodeShell({
 /* ---------------------------------- 头部 ---------------------------------- */
 
 /**
- * 一行 `HEADER_HEIGHT`（2026-09-19 起 30px），从左到右只有五样东西（F5）：
- * 来源色点 → 标题 → 常驻徽标（内存）→ 状态胶囊 → `···` → ×。
+ * 一行 `HEADER_HEIGHT`（2026-09-19 起 30px），分四段（设计系统 §4 节点头）：
+ *
+ * 身份（色点 → 标题 → 名字 → 主从）→ 胶囊簇 → 状态 → 审批 → 动作（节点自己的
+ * 主操作 → `···` → ×）。段内 4px（审批与动作 2px），段间 8px；没有内容的段
+ * 不渲染，也就不占间距。所有控件常显——同一行里一半常显一半悬停才出现，读起来
+ * 就是「有时有、有时没有」。
  *
  * 折叠、最大化、搜索、上下文占用、Agent 名全部收进 `···`：用户的原话是
  * 「头部信息太多，只想看内存」。
@@ -309,23 +313,29 @@ export function NodeHeader({
       data-slot="node-header"
       className={cn(
         DRAG_HANDLE_CLASS,
-        "flex shrink-0 items-center gap-1 px-1.5",
+        "flex shrink-0 items-center gap-2 px-1.5",
         "bg-[var(--card)]",
       )}
       style={{ height: HEADER_HEIGHT }}
       // 头部是拖拽区：只有里面的控件吃掉 pointerdown，其余放行给 select 工具
       onPointerDown={onHeaderPointerDown}
     >
-      {headerMark}
+      <span
+        data-slot="node-header-identity"
+        // `flex-auto`：挤的时候身份段与胶囊簇按各自宽度一起让，标题不被让光。
+        className="flex min-w-0 flex-auto items-center gap-1"
+      >
+        {headerMark}
 
-      <NodeTitle node={node} editing={renaming} onEditing={setRenaming} />
+        <NodeTitle node={node} editing={renaming} onEditing={setRenaming} />
 
-      {/* Agent 之间的名字（设计 §2.3）。没起名就不画，所以它不占没名字的那些
-          节点的头部；有名字时它排在类型自己的徽标之前，因为它是「这是谁」。 */}
-      <NodeNameBadge node={node} />
+        {/* Agent 之间的名字（设计 §2.3）。没起名就不画，所以它不占没名字的那些
+            节点的头部；有名字时它排在类型自己的徽标之前，因为它是「这是谁」。 */}
+        <NodeNameBadge node={node} />
 
-      {/* 主从关系紧跟名字：两枚合起来才是「这是谁、他归谁」。 */}
-      <SupervisionBadge node={node} />
+        {/* 主从关系紧跟名字：两枚合起来才是「这是谁、他归谁」。 */}
+        <SupervisionBadge node={node} />
+      </span>
 
       <HeaderChips>{headerChips}</HeaderChips>
 
@@ -340,7 +350,7 @@ export function NodeHeader({
       )}
 
       {approval && (
-        <span className="node-header-approval flex shrink-0 items-center gap-1">
+        <span className="node-header-approval flex shrink-0 items-center gap-0.5">
           <Button
             size="xs"
             variant="ghost"
@@ -364,23 +374,28 @@ export function NodeHeader({
         </span>
       )}
 
-      {headerActions}
-
-      <NodeMenu
-        node={node}
-        collapsed={collapsed}
-        maximized={maximized}
-        items={menuItems}
-        onRename={() => setRenaming(true)}
-      />
-
-      <IconButton
-        className="node-secondary-action hover:text-[var(--danger-text)]"
-        label={t("node.close")}
-        onClick={() => closeNode(node.id)}
+      <span
+        data-slot="node-header-actions"
+        className="flex shrink-0 items-center gap-0.5"
       >
-        <X />
-      </IconButton>
+        {headerActions}
+
+        <NodeMenu
+          node={node}
+          collapsed={collapsed}
+          maximized={maximized}
+          items={menuItems}
+          onRename={() => setRenaming(true)}
+        />
+
+        <IconButton
+          className="hover:text-[var(--danger-text)]"
+          label={t("node.close")}
+          onClick={() => closeNode(node.id)}
+        >
+          <X />
+        </IconButton>
+      </span>
     </div>
   );
 }
@@ -403,9 +418,7 @@ function NodeMenu(props: {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        {/* Revealed together with the close button: one control that is
-            always there beside one that appears on hover reads as a glitch. */}
-        <IconButton className="node-secondary-action" label={t("node.more")}>
+        <IconButton label={t("node.more")}>
           <MoreHorizontal />
         </IconButton>
       </DropdownMenuTrigger>

@@ -1,6 +1,7 @@
 import {
   ManualRunResponseSchema,
   adapterInstallJobSchema,
+  type AdapterInstallTarget,
   agentListSchema,
   amaCredentialRequestSchema,
   amaCredentialStatusSchema,
@@ -191,16 +192,33 @@ export const agentsApiFor = (rpc: (source?: Source) => ArmadraClient) => ({
       await rpc().agents.clearAmaCredential({ provider }),
     ),
   /**
-   * 装 / 重装一家的 ACP 适配器（契约 §39.7）：立刻答任务，进度用
-   * {@link acpAdapterInstall} 读。只认有独立适配器包的那几家，只有 owner。
+   * 装 / 重装 / 恢复一家的 ACP 适配器或 CLI（契约 §39.7、§47）：立刻答任务，进度
+   * 用 {@link acpAdapterInstall} 读。只认两张白名单里的包，只有 owner。缺省的
+   * `adapter` 不写进入参：1.22 之前的 core 不认 `target`。
    */
-  installAcpAdapter: async (agentId: string, reinstall: boolean) =>
+  installAcpAdapter: async (
+    agentId: string,
+    reinstall: boolean,
+    target: AdapterInstallTarget = "adapter",
+    rollback = false,
+  ) =>
     adapterInstallJobSchema.parse(
-      await rpc().agents.installAdapter({ agentId, reinstall }),
+      await rpc().agents.installAdapter({
+        agentId,
+        reinstall,
+        ...(target === "adapter" ? {} : { target }),
+        ...(rollback ? { rollback } : {}),
+      }),
     ),
-  acpAdapterInstall: async (agentId: string) =>
+  acpAdapterInstall: async (
+    agentId: string,
+    target: AdapterInstallTarget = "adapter",
+  ) =>
     adapterInstallJobSchema.parse(
-      await rpc().agents.adapterInstall({ agentId }),
+      await rpc().agents.adapterInstall({
+        agentId,
+        ...(target === "adapter" ? {} : { target }),
+      }),
     ),
   /** 清掉某个节点的未读标记；其它窗口通过 workspace 事件流同步。 */
   markAgentRead: async (nodeId: string) =>

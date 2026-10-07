@@ -179,6 +179,7 @@ describe("a stream that ended", () => {
         attachment,
         record: { kind: "tmux" },
         snapshot: undefined,
+        size: { cols: 80, rows: 24 },
       }),
       acknowledgedInput: () => 0,
       generation: () => currentGeneration,
@@ -270,6 +271,7 @@ describe("a socket that closes while it is still attaching", () => {
               attachment,
               record: { kind: "tmux" },
               snapshot: undefined,
+              size: { cols: 80, rows: 24 },
             });
         }),
       acknowledgedInput: () => 0,
@@ -298,5 +300,82 @@ describe("a socket that closes while it is still attaching", () => {
     release?.();
     await served;
     expect(detached).toEqual([7]);
+  });
+});
+
+/**
+ * 多端尺寸（ui-acp-refresh §7.3 E-1）：hello 报这一端自己的起始尺寸；resize 帧只作用于
+ * 发出它的那一端；按键先记下是哪一端在驾驶。
+ */
+describe("a viewer's own size", () => {
+  it("reports the viewer's size in the hello and scopes resizes to it", async () => {
+    const sent: Record<string, unknown>[] = [];
+    const handlers = new Map<string, (data?: unknown) => void>();
+    const calls: unknown[][] = [];
+    const attachment: Attachment = {
+      attachmentId: 9,
+      generation: 1,
+      onData: () => {},
+      onExit: () => {},
+    };
+    const manager = {
+      attach: async (...args: unknown[]) => {
+        calls.push(["attach", ...args]);
+        return {
+          attachment,
+          record: { kind: "tmux" },
+          snapshot: undefined,
+          size: { cols: 132, rows: 43 },
+        };
+      },
+      acknowledgedInput: () => 0,
+      generation: () => 1,
+      noteOutput: () => {},
+      noteViewerInput: (...args: unknown[]) =>
+        calls.push(["noteViewerInput", ...args]),
+      input: async () => calls.push(["input"]),
+      resize: async (...args: unknown[]) => calls.push(["resize", ...args]),
+      detached: async () => {},
+    } as unknown as TerminalManager;
+    const connection = {
+      readyState: 1,
+      bufferedAmount: 0,
+      send: (payload: Buffer) =>
+        sent.push(
+          JSON.parse(payload.toString("utf8")) as Record<string, unknown>,
+        ),
+      close: () => handlers.get("close")?.(),
+      on: (event: string, handler: (data?: unknown) => void) => {
+        handlers.set(event, handler);
+      },
+    } as unknown as WebSocket;
+    const served = serveTerminalSocket(connection, {
+      manager,
+      sessionId: "s1",
+      writer: "phone",
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    // No size in the request: the manager decides where the viewer starts.
+    expect(calls[0]).toEqual(["attach", "s1", undefined, "phone"]);
+    expect(sent[0]).toMatchObject({ type: "hello", cols: 132, rows: 43 });
+
+    handlers.get("message")?.(
+      JSON.stringify({ type: "resize", cols: 40, rows: 12 }),
+    );
+    handlers.get("message")?.(JSON.stringify({ type: "input", data: "x" }));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(calls).toContainEqual([
+      "resize",
+      "s1",
+      1,
+      { cols: 40, rows: 12 },
+      9,
+    ]);
+    const order = calls.map((call) => call[0]);
+    expect(order.indexOf("noteViewerInput")).toBeLessThan(
+      order.indexOf("input"),
+    );
+    connection.close();
+    await served;
   });
 });

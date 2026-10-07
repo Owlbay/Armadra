@@ -78,12 +78,23 @@ describe("ACP_ADAPTERS", () => {
     // Copilot 跨进程不可接回，所以永不休眠。
     expect(rule("copilot")).toEqual(["native", "opaque", "none"]);
     expect(rule("ama")).toEqual(["native", "same", "resume"]);
-    // ama 的画布工具走 profile 的 host 适配器，不加 MCP；其余六家都加。
+    // ama 的画布工具走 profile 的 host 适配器，pi-acp 不接通 MCP：两家都不带，
+    // 其余五家都带（契约 §48）。
     for (const adapter of ACP_ADAPTERS) {
       expect(adapter.injection.mcp, adapter.agentId).toBe(
-        adapter.agentId !== "ama",
+        adapter.agentId !== "ama" && adapter.agentId !== "pi",
       );
     }
+  });
+
+  it("canvasTools: mcp exactly when MCP is injected; ama runners, pi none", () => {
+    for (const adapter of ACP_ADAPTERS) {
+      expect(adapter.canvasTools === "mcp", adapter.agentId).toBe(
+        adapter.injection.mcp,
+      );
+    }
+    expect(acpAdapter("ama")?.canvasTools).toBe("runners");
+    expect(acpAdapter("pi")?.canvasTools).toBe("none");
   });
 
   it("names the same programs as the release compatibility table", () => {

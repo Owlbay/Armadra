@@ -79,7 +79,17 @@ export interface AcpAdapter {
   };
   /** 前台进程门认的 argv[0] basename（会话 pid 就是适配器 pid）。 */
   readonly expectedProcess: readonly string[];
+  /**
+   * 以 ACP 驱动时它怎么在画布上建 Agent（契约 §48）：`mcp` = `canvas_open_agent`
+   * / `canvas_team` 两个 MCP 工具（`injection.mcp` 必须为真）；`runners` = ama 的
+   * 宿主 `HostApi.runners`；`none` = 适配器不接 MCP（pi-acp 接受参数但不接通），
+   * 只有终端视图能建。
+   */
+  readonly canvasTools: AcpCanvasTools;
 }
+
+export const ACP_CANVAS_TOOLS = ["mcp", "runners", "none"] as const;
+export type AcpCanvasTools = (typeof ACP_CANVAS_TOOLS)[number];
 
 const NONE: AcpModeMapping = {};
 
@@ -101,6 +111,7 @@ export const ACP_ADAPTERS: readonly AcpAdapter[] = [
     // 下没有对应参数（D6）；`CLAUDE_CONFIG_DIR` 不设，沿用用户登录。
     injection: { mcp: true, reuse: [] },
     expectedProcess: ["claude-agent-acp"],
+    canvasTools: "mcp",
   },
   {
     agentId: "codex",
@@ -117,6 +128,7 @@ export const ACP_ADAPTERS: readonly AcpAdapter[] = [
     },
     injection: { mcp: true, reuse: ["env"] },
     expectedProcess: ["codex-acp"],
+    canvasTools: "mcp",
   },
   {
     agentId: "opencode",
@@ -133,6 +145,7 @@ export const ACP_ADAPTERS: readonly AcpAdapter[] = [
     },
     injection: { mcp: true, reuse: ["env"] },
     expectedProcess: ["opencode"],
+    canvasTools: "mcp",
   },
   {
     agentId: "pi",
@@ -149,8 +162,10 @@ export const ACP_ADAPTERS: readonly AcpAdapter[] = [
       "full-auto": null,
       plan: null,
     },
-    injection: { mcp: true, reuse: ["args"], passthrough: "--" },
+    // pi-acp 收下 `mcpServers` 却不接通：不带，少起一个 MCP 子进程（§48）。
+    injection: { mcp: false, reuse: ["args"], passthrough: "--" },
     expectedProcess: ["pi-acp"],
+    canvasTools: "none",
   },
   {
     agentId: "omp",
@@ -167,6 +182,7 @@ export const ACP_ADAPTERS: readonly AcpAdapter[] = [
     },
     injection: { mcp: true, reuse: ["args"] },
     expectedProcess: ["omp"],
+    canvasTools: "mcp",
   },
   {
     agentId: "copilot",
@@ -184,6 +200,7 @@ export const ACP_ADAPTERS: readonly AcpAdapter[] = [
     },
     injection: { mcp: true, reuse: ["args", "env"] },
     expectedProcess: ["copilot"],
+    canvasTools: "mcp",
   },
   {
     agentId: "ama",
@@ -202,6 +219,7 @@ export const ACP_ADAPTERS: readonly AcpAdapter[] = [
     },
     injection: { mcp: false, reuse: [] },
     expectedProcess: ["ama", "ama.cjs"],
+    canvasTools: "runners",
   },
 ];
 

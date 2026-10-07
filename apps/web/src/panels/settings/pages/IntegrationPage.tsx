@@ -1,72 +1,110 @@
+import * as React from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, Wrench } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
-import type {
-  AgentHistory,
-  AgentInfo,
-  HistoryState,
-  LegacyIntegrationFinding,
+import {
+  type AgentHistory,
+  type AgentInfo,
+  type CanvasAgents,
+  type HistoryState,
+  type LegacyIntegrationFinding,
 } from "@armadra/shared";
 
 import { runtimeApi } from "../../../api/client";
 import { useAgentsQuery } from "../../../app/use-agents";
 import { useT, type Translate } from "../../../app/preferences-store";
-import { AdapterInstallStatus } from "@/acp/adapter-install";
+import {
+  CopyCommandButton,
+  InstallButton,
+  InstallFailure,
+  useInstallJob,
+} from "@/acp/adapter-install";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui/popover";
+import { Empty, EmptyHeader, EmptyTitle } from "@/ui/empty";
 import { ScrollArea } from "@/ui/scroll-area";
-import type { IntegrationRepairReport } from "./integration/types";
+import { Skeleton } from "@/ui/skeleton";
+import { Spinner } from "@/ui/spinner";
+import type {
+  AgentIntegration,
+  IntegrationRepairReport,
+} from "./integration/types";
 import {
   useAgentIntegration,
   useIntegrationRefresh,
 } from "./integration/use-integration";
 
 /**
- * 设置 → 集成（[画布内注入](../../../../../docs/design/canvas-only-integration.md) §5）。
+ * 设置 → 集成（[界面与 ACP 刷新](../../../../../docs/design/ui-acp-refresh.md) §1）。
  *
- * Hook、技能与画布说明只在从画布启动 CLI 时交给它：产物生成在应用数据目录
- * 里，由启动行与节点终端的环境带过去，画布外启动的 CLI 什么都看不到。所以
- * 这里不再有「安装 / 卸载」——每种 CLI 一行，回答四件事（启动器见
- * [画布启动器](../../../../../docs/design/canvas-launcher.md) §8.2）：
- *
- *  1. **注入方式**——画布内注入。
- *  2. **Hook / 技能**——注入产物是不是当前版本。唯一的动作是「重新生成」，
- *     平时不用点：每次从画布启动都会先确保它们是最新的。
- *  3. **启动器警告**——画布内启动少带了东西（Windows 没有启动器、Codex 太旧
- *     不带 Hook）；原因在悬停提示里。数据目录之外不写任何文件，所以不再有
- *     「信任记录写在…」。
- *  4. **迁移与旧残留**——升级时清掉的旧全局安装（备份在哪），以及更早的产品
- *     名留下的条目与「修复」。
- *
- * 页首另有一组「Worker 待升级」的执行主机（契约 §21.2，集成状态的
- * `outdatedHosts`）：那些主机上 SSH 终端里的画布启动带的是旧注入，每台一个
- * 「重新同步」。各 CLI 的集成状态给的是同一份主机表，所以只画一次。
+ * 页首一组「Worker 待升级」的执行主机（契约 §21.2，集成状态的 `outdatedHosts`）；
+ * 然后一家 CLI 一张分组，固定五行，顺序按用户要做的事排：CLI、ACP、画布注入、
+ * 在画布中创建 Agent、本地历史。每行右侧一个值、至多一个动作；**没有问题的行不
+ * 出任何徽标**（设计系统 §5.15）。安装失败时行下一条 `Alert`。
  */
 export function IntegrationPage() {
   const t = useT();
   const agents = useAgentsQuery();
   const list = agents.data ?? [];
+  const slow = useDelayed(agents.isPending, 300);
 
+  if (agents.isPending) {
+    return slow ? <IntegrationSkeleton /> : <div aria-busy="true" />;
+  }
+  if (list.length === 0) {
+    return (
+      <Empty className="border-0 p-6">
+        <EmptyHeader>
+          <EmptyTitle className="text-[13px] font-normal">
+            {t("integration.empty")}
+          </EmptyTitle>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
   return (
-    <>
+    <div className="flex flex-col gap-6">
       {list[0] && <OutdatedWorkers agent={list[0]} />}
-      <SettingsGroup>
-        {list.map((agent) => (
-          <AgentIntegrationRow key={agent.id} agent={agent} />
-        ))}
-        {/* 一行都没有时整页是空白的——没有 CLI 与还没读完看起来一模一样。 */}
-        {list.length === 0 && (
-          <SettingsRow
-            label={t(
-              agents.isPending ? "integration.loading" : "integration.empty",
-            )}
-          />
-        )}
-      </SettingsGroup>
-    </>
+      {list.map((agent) => (
+        <AgentIntegrationGroup key={agent.id} agent={agent} />
+      ))}
+    </div>
+  );
+}
+
+/** `on` 持续 `ms` 之后才答真：短的读取不闪一下骨架（设计系统 §3.2）。 */
+function useDelayed(on: boolean, ms: number): boolean {
+  const [late, setLate] = React.useState(false);
+  React.useEffect(() => {
+    if (!on) {
+      setLate(false);
+      return;
+    }
+    const timer = setTimeout(() => setLate(true), ms);
+    return () => clearTimeout(timer);
+  }, [on, ms]);
+  return late;
+}
+
+function IntegrationSkeleton() {
+  return (
+    <div className="flex flex-col gap-6" data-slot="integration-skeleton">
+      {[0, 1].map((group) => (
+        <section key={group} className="flex flex-col gap-2">
+          <Skeleton className="h-4 w-24" />
+          <SettingsGroup>
+            {[0, 1, 2].map((row) => (
+              <SettingsRow key={row} label={<Skeleton className="h-4 w-28" />}>
+                <Skeleton className="h-4 w-20" />
+              </SettingsRow>
+            ))}
+          </SettingsGroup>
+        </section>
+      ))}
+    </div>
   );
 }
 
@@ -132,10 +170,72 @@ function repairDescription(
   return lines.join("\n");
 }
 
-export function AgentIntegrationRow({ agent }: { agent: AgentInfo }) {
+/** 一行右侧的值：13px 灰字，不是徽标。 */
+function RowValue({
+  children,
+  title,
+  tone = "muted",
+}: {
+  children: React.ReactNode;
+  title?: string;
+  tone?: "muted" | "danger";
+}) {
+  return (
+    <span
+      title={title}
+      className={
+        tone === "danger"
+          ? "text-[13px] text-[var(--danger-text)]"
+          : "text-[13px] text-muted-foreground"
+      }
+    >
+      {children}
+    </span>
+  );
+}
+
+const HISTORY_PARTS = ["index", "cost", "transcript"] as const;
+
+/** 本地历史一行的值：可用的列出来，没找到的带「（未找到）」，不支持的不列。 */
+export function historyValue(
+  t: Translate,
+  history: AgentHistory | undefined,
+): string | null {
+  if (!history) return null;
+  const parts: string[] = [];
+  for (const part of HISTORY_PARTS) {
+    const state: HistoryState = history[part];
+    const name = t(`integration.history.${part}`);
+    if (state === "available") parts.push(name);
+    else if (state === "not-found" || state === "disabled") {
+      parts.push(t("integration.history.notFound", { part: name }));
+    }
+  }
+  return parts.length === 0 ? null : parts.join(" · ");
+}
+
+/** 「在画布中创建 Agent」一行的值（契约 §48）；旧 core 不带时答 `null`。 */
+export function canvasAgentsValue(
+  canvasAgents: CanvasAgents | undefined,
+): "both" | "terminal" | "acp" | "none" | null {
+  if (!canvasAgents) return null;
+  const terminal = canvasAgents.terminal === "available";
+  const acp = canvasAgents.acp === "available";
+  if (terminal && acp) return "both";
+  if (terminal) return "terminal";
+  if (acp) return "acp";
+  return "none";
+}
+
+/**
+ * 一家 CLI 一张分组（设计 §1.2）。标题是 CLI 名，不加头像。
+ */
+export function AgentIntegrationGroup({ agent }: { agent: AgentInfo }) {
   const t = useT();
   const refresh = useIntegrationRefresh();
   const { integration } = useAgentIntegration(agent);
+  const cli = useInstallJob(agent, "cli");
+  const adapter = useInstallJob(agent, "adapter");
 
   const regenerate = useMutation({
     mutationFn: () => runtimeApi.installAgentIntegration(agent.id),
@@ -161,160 +261,235 @@ export function AgentIntegrationRow({ agent }: { agent: AgentInfo }) {
       }),
   });
 
-  // 能力位说的是「这个适配器有没有 Hook 通道」；没有的话生成什么都没有对象。
+  useMigrationNotice(agent, integration);
+
+  // 能力位说的是「这个适配器有没有 Hook 通道」；没有的话注入那一行没有对象。
   const hooked = agent.capabilities.includes("hooks");
+  const custom = agent.id.startsWith("custom:");
   const busy = regenerate.isPending || repair.isPending;
-  // 第一次读还没回来：只画标签与一个「读取中」徽标，不猜任何状态。
-  if (!integration) {
-    return (
-      <SettingsRow label={agent.label}>
-        <Badge variant="outline">{t("integration.loading")}</Badge>
-      </SettingsRow>
-    );
-  }
-  const ready = integration.hook.installed;
-  const legacy = integration.legacy.found;
-  const sessionTrust = integration.migration?.sessionTrust;
-  const migrated =
-    (integration.migration?.removed.length ?? 0) +
-    (sessionTrust?.removed.length ?? 0);
-  const backups = [
-    ...(integration.migration?.backups ?? []),
-    ...(sessionTrust?.backup ? [sessionTrust.backup] : []),
-  ];
 
-  // 状态徽标放在名字下面、动作按钮留在右边：几样东西挤在一行时右侧不收缩，
-  // 左列被压成一条窄缝，名字被推出视口。
-  const label = (
-    <span className="flex min-w-0 flex-col gap-1.5">
-      <span>{agent.label}</span>
-      <span className="flex flex-wrap items-center gap-1.5">
-        <Badge variant="outline">
-          {t(`integration.mode.${integration.mode}`)}
-        </Badge>
+  /* ---------------------------------- CLI ---------------------------------- */
+  // `custom:` 条目的 CLI 是用户自己的启动行：值就是它，动作只有「复制命令」。
+  const version = agent.probe?.version;
+  const cliValue = custom
+    ? agent.launchCmd
+    : agent.installed
+      ? version
+        ? t("integration.state.installedVersion", { version })
+        : t("integration.state.installed")
+      : t("integration.state.cliMissing");
+  const cliAction = cli.available ? (
+    <InstallButton install={cli} installed={agent.installed} />
+  ) : custom && agent.launchCmd ? (
+    <CopyCommandButton command={agent.launchCmd} />
+  ) : null;
 
-        {/* Hook 与技能各一个状态徽标：它们一起生成，但可以各自掉，而「掉了
-            哪一半」正是用户要知道的事。 */}
-        <Badge
-          variant={ready ? "secondary" : "outline"}
-          title={integration.hook.path ?? undefined}
-        >
-          {hooked && !agent.installed
-            ? t("integration.agentMissing")
-            : ready
-              ? t("integration.hook.revision", {
-                  value: integration.hook.revision ?? integration.revision,
-                })
-              : t("integration.hook.missing")}
-        </Badge>
-        <Badge
-          variant={integration.skill.installed ? "secondary" : "outline"}
-          title={integration.skill.path ?? undefined}
-        >
-          {integration.skill.installed
-            ? t("integration.skill.revision", {
-                value: integration.skill.revision ?? integration.revision,
-              })
-            : t("integration.skill.missing")}
-        </Badge>
+  /* ---------------------------------- ACP ---------------------------------- */
+  const acp = agent.acp;
+  const native = acp?.support === "native";
+  const acpValue = !acp
+    ? null
+    : native && agent.installed
+      ? t("integration.state.viaCli")
+      : acp.installed
+        ? acp.version
+          ? t("integration.state.installedVersion", { version: acp.version })
+          : t("integration.state.installed")
+        : t("integration.state.missing");
+  const acpAction =
+    acp && !native ? (
+      <InstallButton install={adapter} installed={acp.installed} />
+    ) : null;
 
-        {/* 磁盘上的产物比这个版本写的旧：下次从画布启动会自己重写。 */}
-        {integration.stale && ready && (
-          <Badge variant="outline">{t("integration.stale")}</Badge>
-        )}
-        {/* ACP 适配器：状态与「安装 / 重新安装」（契约 §39.7）。没装时向导里
-            这家是灰的，原因与入口都在这里。 */}
-        <AdapterInstallStatus agent={agent} />
-        {integration.launcherWarning && (
-          <Badge variant="destructive" title={integration.launcherWarning}>
-            {t("integration.launcherWarning")}
-          </Badge>
-        )}
-        {migrated > 0 && (
-          <Badge variant="secondary" title={backups.join("\n")}>
-            {t("integration.migrated")}
-          </Badge>
-        )}
-        {legacy.length > 0 && <LegacyBadge findings={legacy} />}
-        {agent.history && <HistoryBadges history={agent.history} />}
-      </span>
-    </span>
+  /* -------------------------------- 画布注入 -------------------------------- */
+  const legacy = integration?.legacy.found ?? [];
+  const hookMissing = integration ? !integration.hook.installed : false;
+  const skillMissing = integration ? !integration.skill.installed : false;
+  const injectionProblem = !integration
+    ? null
+    : hookMissing && skillMissing
+      ? t("integration.state.notGenerated")
+      : hookMissing
+        ? t("integration.state.hookMissing")
+        : skillMissing
+          ? t("integration.state.skillMissing")
+          : integration.stale
+            ? t("integration.state.stale")
+            : null;
+  const limited = integration?.launcherWarning;
+  const regenerateButton = (
+    <Button
+      variant={injectionProblem ? "secondary" : "ghost"}
+      size="sm"
+      disabled={!hooked || busy || !integration}
+      title={
+        integration
+          ? t("integration.revision", { n: integration.revision })
+          : undefined
+      }
+      onClick={() => regenerate.mutate()}
+    >
+      {regenerate.isPending && <Spinner aria-hidden />}
+      {t("integration.regenerate")}
+    </Button>
   );
+
+  /* --------------------------- 在画布中创建 Agent --------------------------- */
+  const canvasAgents = integration?.canvasAgents;
+  const spawn = canvasAgentsValue(canvasAgents);
+  const reasons = canvasAgents?.reasons ?? [];
+  const spawnFix =
+    spawn !== "none" ? null : reasons.includes("cli_missing") &&
+      cli.available ? (
+      <InstallButton install={cli} installed={false} />
+    ) : reasons.includes("acp_missing") &&
+      acp &&
+      !native &&
+      adapter.available ? (
+      <InstallButton install={adapter} installed={false} />
+    ) : reasons.some(
+        (reason) => reason === "hook_missing" || reason === "skill_missing",
+      ) && hooked ? (
+      regenerateButton
+    ) : null;
+
+  const history = historyValue(t, agent.history);
 
   return (
-    <SettingsRow label={label}>
-      <Button
-        variant="secondary"
-        size="sm"
-        disabled={!hooked || busy}
-        onClick={() => regenerate.mutate()}
-      >
-        {t("integration.regenerate")}
-      </Button>
-      {legacy.length > 0 && (
-        <Button
-          variant="destructive"
-          size="sm"
-          disabled={busy}
-          onClick={() => repair.mutate()}
-        >
-          <Wrench />
-          {t("integration.repair")}
-        </Button>
+    <SettingsGroup title={agent.label}>
+      <SettingsRow label={t("integration.row.cli")}>
+        <RowValue title={agent.resolvedPath ?? undefined}>{cliValue}</RowValue>
+        {cliAction}
+      </SettingsRow>
+      {acpValue !== null && (
+        <SettingsRow label={t("integration.row.acp")}>
+          <RowValue title={acp?.program}>{acpValue}</RowValue>
+          {acpAction}
+        </SettingsRow>
       )}
-    </SettingsRow>
+      <InstallFailure agent={agent} jobs={[cli, adapter]} />
+      {hooked && (
+        <SettingsRow label={t("integration.row.injection")}>
+          {integration ? (
+            <>
+              {injectionProblem && (
+                <RowValue title={integration.hook.path ?? undefined}>
+                  {injectionProblem}
+                </RowValue>
+              )}
+              {!injectionProblem && limited && (
+                <RowValue title={limited}>
+                  {t("integration.state.limited")}
+                </RowValue>
+              )}
+            </>
+          ) : (
+            <Skeleton className="h-4 w-16" />
+          )}
+          {regenerateButton}
+          {legacy.length > 0 && (
+            <RepairButton
+              findings={legacy}
+              busy={busy}
+              onRepair={() => repair.mutate()}
+            />
+          )}
+        </SettingsRow>
+      )}
+      {spawn !== null && (
+        <SettingsRow label={t("integration.row.canvasAgents")}>
+          <RowValue
+            title={
+              reasons.length > 0
+                ? reasons
+                    .map((reason) => t(`integration.reason.${reason}`))
+                    .join(" · ")
+                : undefined
+            }
+          >
+            {t(`integration.canvasAgents.${spawn}`)}
+          </RowValue>
+          {spawnFix}
+        </SettingsRow>
+      )}
+      {history !== null && (
+        <SettingsRow label={t("integration.row.history")}>
+          <RowValue>{history}</RowValue>
+        </SettingsRow>
+      )}
+    </SettingsGroup>
   );
 }
 
-const HISTORY_PARTS = ["index", "cost", "transcript"] as const;
-
-const HISTORY_STATE_KEY: Record<HistoryState, string> = {
-  available: "capability.state.supported",
-  "not-found": "capability.state.notFound",
-  unsupported: "capability.state.unsupported",
-  disabled: "capability.state.disabled",
-};
-
 /**
- * 本机历史数据三项（契约 §12.2）。没有数据也写状态词，不写成 0 或留空：「没
- * 找到」和「这家不支持」是两回事。
+ * 升级时清掉旧全局安装是一次性事件：第一次看到时一条提示，记进
+ * `localStorage`，之后不再说（设计 §1.2）。备份路径在提示的描述里。
  */
-function HistoryBadges({ history }: { history: AgentHistory }) {
+function useMigrationNotice(
+  agent: AgentInfo,
+  integration: AgentIntegration | null,
+) {
   const t = useT();
-  return HISTORY_PARTS.map((part) => (
-    <Badge
-      key={part}
-      variant={history[part] === "available" ? "secondary" : "outline"}
-    >
-      {t(`integration.history.${part}`, {
-        state: t(HISTORY_STATE_KEY[history[part]]),
-      })}
-    </Badge>
-  ));
+  const migration = integration?.migration;
+  const sessionTrust = migration?.sessionTrust;
+  const removed =
+    (migration?.removed.length ?? 0) + (sessionTrust?.removed.length ?? 0);
+  const stamp = migration
+    ? `${migration.migratedAt}|${sessionTrust?.at ?? ""}`
+    : null;
+  React.useEffect(() => {
+    if (stamp === null || removed === 0) return;
+    const key = `armadra.integration.migrated.${agent.id}`;
+    try {
+      if (window.localStorage.getItem(key) === stamp) return;
+      window.localStorage.setItem(key, stamp);
+    } catch {
+      return;
+    }
+    const backups = [
+      ...(migration?.backups ?? []),
+      ...(sessionTrust?.backup ? [sessionTrust.backup] : []),
+    ];
+    toast.success(t("integration.migrated.notice", { name: agent.label }), {
+      ...(backups.length > 0 ? { description: backups.join("\n") } : {}),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stamp, removed, agent.id]);
 }
 
 /**
- * 「旧残留 N」徽标，点开是按文件分组的清单。
+ * 「修复 N」：点开是按文件分组的清单，看过再按清单底下的「修复」。
  *
  * 残留不放进行脚注：一条就是一整段 shell 命令，同一条命令在每个 Hook 事件下
  * 各挂一次，十几条拼成一段会把整行撑到几屏高。这里同一文件里相同的条目只
  * 列一次并标出次数，命令超过两行就截断，完整内容在悬停提示里。
  */
-function LegacyBadge({ findings }: { findings: LegacyIntegrationFinding[] }) {
+function RepairButton({
+  findings,
+  busy,
+  onRepair,
+}: {
+  findings: LegacyIntegrationFinding[];
+  busy: boolean;
+  onRepair: () => void;
+}) {
   const t = useT();
   const groups = groupFindings(findings);
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Badge asChild variant="destructive">
-          <Button variant="ghost" size="xs" type="button">
-            {t("integration.legacy.count", { count: findings.length })}
-          </Button>
-        </Badge>
+        <Button
+          variant="outline"
+          size="sm"
+          type="button"
+          className="text-[var(--danger-text)]"
+        >
+          {t("integration.action.repair", { count: findings.length })}
+        </Button>
       </PopoverTrigger>
       {/* 设置对话框在 --z-dialog 上，弹层与它同层、后挂载，才不会被盖住。 */}
       <PopoverContent
-        align="start"
+        align="end"
         className="z-[var(--z-dialog)] w-[28rem] max-w-[90vw] p-0"
       >
         <ScrollArea className="max-h-80">
@@ -351,6 +526,16 @@ function LegacyBadge({ findings }: { findings: LegacyIntegrationFinding[] }) {
             ))}
           </div>
         </ScrollArea>
+        <div className="flex justify-end border-t border-border p-2">
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={busy}
+            onClick={onRepair}
+          >
+            {t("integration.repair")}
+          </Button>
+        </div>
       </PopoverContent>
     </Popover>
   );

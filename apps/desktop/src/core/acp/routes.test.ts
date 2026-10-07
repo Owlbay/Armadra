@@ -100,6 +100,40 @@ describe("the ACP session routes", () => {
     expect(update).toMatchObject({ sessionId: row.id, nodeId });
   });
 
+  it("carries the live process's plan, usage, commands and title in the log snapshot (§49)", async () => {
+    open = await acpCore();
+    const seen = events(open);
+    const nodeId = await open.node();
+    const row = await session(open, nodeId, "[plan] go");
+    await until(
+      () => seen.filter((event) => event.type === "acp.turn"),
+      (turns) => turns.length > 0,
+    );
+    const log = await open.core.call("GET", `/api/acp/sessions/${row.id}/log`);
+    const body = log.body as {
+      snapshot?: {
+        plan: { content: string }[];
+        usage: { used: number; size: number } | null;
+        availableCommands: unknown[];
+        title: string | null;
+      };
+    };
+    expect(body.snapshot?.plan.length).toBeGreaterThan(0);
+    expect(body.snapshot?.usage).toMatchObject({ size: 1000 });
+    expect(body.snapshot?.availableCommands).toEqual([]);
+    expect(body.snapshot?.title).toBeNull();
+
+    // 没有活进程就没有 snapshot（与 `pending` 同一条件）。
+    await open.terminal.manager.terminate(row.id, "session");
+    const gone = await until(
+      async () =>
+        (await open!.core.call("GET", `/api/acp/sessions/${row.id}/log`))
+          .body as { snapshot?: unknown; pending?: unknown },
+      (value) => !("pending" in value),
+    );
+    expect(gone.snapshot).toBeUndefined();
+  });
+
   it("delivers a prompt with the same clientTurnId once and lists it in the log (§39.9)", async () => {
     open = await acpCore();
     const seen = events(open);

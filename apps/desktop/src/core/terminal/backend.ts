@@ -289,7 +289,24 @@ export interface TerminalBackend {
   /** Bracketed paste, so a CLI that understands it treats the text as data. */
   paste(key: SessionKey, text: string, pressEnter: boolean): Promise<void>;
 
+  /**
+   * The **window**: the size the program inside the session sees. The manager
+   * decides it (`windowSizeOf`) and calls this only when the answer changes,
+   * so a viewer joining or leaving never redraws the others.
+   */
   resize(key: SessionKey, size: TerminalSize): Promise<void>;
+
+  /**
+   * One viewer's own view, for a backend that has one per attachment (tmux:
+   * one client per socket). Changes nothing the other viewers or the program
+   * see. A backend with a single pty has no such thing and leaves it out: the
+   * viewer's size is then only remembered by the manager.
+   */
+  resizeViewer?(
+    key: SessionKey,
+    attachmentId: number,
+    size: TerminalSize,
+  ): Promise<void>;
 
   /** Plain text for agents to read, escape-carrying text for a snapshot. */
   capture(

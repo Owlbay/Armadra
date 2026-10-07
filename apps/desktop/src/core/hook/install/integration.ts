@@ -31,6 +31,9 @@ import {
   describe,
 } from "./shared";
 import { revisionOf } from "./skills";
+import { type AcpCanvasTools, acpAdapter } from "../../acp/adapters";
+import { acpClientFeatures } from "../../acp/client";
+import { definition, resolveCommand } from "../../agent/registry";
 import type { OutdatedHost } from "../../remote/fleet";
 
 /**
@@ -114,6 +117,71 @@ export interface IntegrationState {
    */
   readonly outdatedHosts?: readonly OutdatedHost[];
   readonly warning?: string;
+  /** 能不能在画布中创建 Agent（契约 §48）。 */
+  readonly canvasAgents: CanvasAgents;
+}
+
+/* ---------------------------- 在画布中创建 Agent ---------------------------- */
+
+export type CanvasAgentState = "available" | "limited" | "unavailable";
+export type CanvasAgentReason =
+  | "hook_missing"
+  | "skill_missing"
+  | "launcher_limited"
+  | "cli_missing"
+  | "acp_missing"
+  | "mcp_not_wired"
+  | "client_without_mcp";
+
+export interface CanvasAgents {
+  readonly terminal: CanvasAgentState;
+  readonly acp: CanvasAgentState | "none";
+  readonly reasons: readonly CanvasAgentReason[];
+}
+
+export interface CanvasAgentsInput {
+  readonly cliInstalled: boolean;
+  readonly hookInstalled: boolean;
+  readonly skillInstalled: boolean;
+  readonly launcherLimited: boolean;
+  /** 这家没有 ACP 入口时缺席。 */
+  readonly acp?: {
+    readonly installed: boolean;
+    readonly canvasTools: AcpCanvasTools;
+  };
+  /** 这一版 ACP 客户端开会话时能不能带 MCP 服务器。 */
+  readonly clientMcp: boolean;
+}
+
+/**
+ * 两种驱动下能不能建 Agent（契约 §48）。终端驱动靠注入的技能与 Hook 身份：技能
+ * 在而 Hook 缺或启动器受限 = `limited`（能发命令，但没有节点身份，core 会拒）；
+ * CLI 没装或技能缺 = `unavailable`。会话视图靠适配器的画布工具。
+ */
+export function canvasAgentsOf(input: CanvasAgentsInput): CanvasAgents {
+  const reasons: CanvasAgentReason[] = [];
+  let terminal: CanvasAgentState;
+  if (!input.cliInstalled) reasons.push("cli_missing");
+  if (!input.skillInstalled) reasons.push("skill_missing");
+  if (!input.hookInstalled) reasons.push("hook_missing");
+  if (input.launcherLimited) reasons.push("launcher_limited");
+  if (!input.cliInstalled || !input.skillInstalled) terminal = "unavailable";
+  else if (!input.hookInstalled || input.launcherLimited) terminal = "limited";
+  else terminal = "available";
+
+  let acp: CanvasAgents["acp"];
+  if (input.acp === undefined) acp = "none";
+  else if (!input.acp.installed) {
+    acp = "unavailable";
+    reasons.push("acp_missing");
+  } else if (input.acp.canvasTools === "none") {
+    acp = "limited";
+    reasons.push("mcp_not_wired");
+  } else if (input.acp.canvasTools === "mcp" && !input.clientMcp) {
+    acp = "limited";
+    reasons.push("client_without_mcp");
+  } else acp = "available";
+  return { terminal, acp, reasons };
 }
 
 export interface IntegrationOptions {
@@ -127,6 +195,8 @@ export interface IntegrationOptions {
   readonly launchExe?: string;
   /** The Worker fleet's outdated hosts (`remote/fleet.ts::outdatedHosts`). */
   readonly outdatedHosts?: () => readonly OutdatedHost[];
+  /** ACP 客户端能不能带 MCP；缺省问 `acpClientFeatures()`（用例注入）。 */
+  readonly clientMcp?: () => boolean;
 }
 
 function requireInjected(agentId: string): void {
@@ -212,6 +282,24 @@ export function state(
   const launcherWarning =
     readLauncherMarker(options.dataDir)?.warning ??
     (agentId === "codex" ? codexHooksWarning() : undefined);
+  const launchCmd = definition(agentId)?.launchCmd;
+  const adapter = acpAdapter(agentId);
+  const canvasAgents = canvasAgentsOf({
+    cliInstalled:
+      launchCmd !== undefined && resolveCommand(launchCmd, env) !== undefined,
+    hookInstalled,
+    skillInstalled: skillRevision !== undefined,
+    launcherLimited: launcherWarning !== undefined,
+    ...(adapter === undefined
+      ? {}
+      : {
+          acp: {
+            installed: resolveCommand(adapter.program, env) !== undefined,
+            canvasTools: adapter.canvasTools,
+          },
+        }),
+    clientMcp: (options.clientMcp ?? (() => acpClientFeatures().mcpServers))(),
+  });
   return {
     agentId,
     mode: "canvas",
@@ -242,6 +330,7 @@ export function state(
       ? {}
       : { outdatedHosts: options.outdatedHosts() }),
     ...(warning === undefined ? {} : { warning }),
+    canvasAgents,
   };
 }
 

@@ -4,8 +4,21 @@ import { terminalWebSocketUrl } from "@/api/client";
 import { useCanvasStore } from "@/store/canvas-store";
 import { bufferOffscreenChunk, drainOffscreenBuffer } from "../render-state";
 import { createTerminalTransport } from "../transport";
+import { takeWakeWithoutReset } from "./use-hibernation";
 import type { SurfaceRefs } from "./refs";
 import type { ConnectionStatus } from "./types";
+
+/**
+ * attach 之后要不要补一次 resize：hello 报的是 core 给这一端开的尺寸，本地
+ * 容器已经是这个尺寸就不发——多发一次就是让 core 再判一次窗口，最坏会让别的
+ * 端整屏重绘（ui-acp-refresh §7.3 E-1）。
+ */
+export function helloNeedsResize(
+  hello: { readonly cols: number; readonly rows: number },
+  local: { readonly cols: number; readonly rows: number },
+): boolean {
+  return hello.cols !== local.cols || hello.rows !== local.rows;
+}
 
 /**
  * 传输的生命周期：连接前清屏，`hello` 之后对齐尺寸并决定要不要敲启动行，
@@ -54,8 +67,10 @@ export function useTerminalTransport(
     // （?1049h、鼠标追踪、DA/OSC 查询）必须原样落到一块干净的屏上；
     // 在 hello 之后再清会把这波重绘抹掉。
     // 上一条连接攒下、还没灌完的字节属于被清掉的那块屏，一起丢。
+    // 例外：休眠着的 tmux 终端被别的端叫醒，屏上本来就是它休眠前那一屏，
+    // tmux 接回来会自己整屏重绘，不清屏也不叠（ui-acp-refresh §7.3 E-4）。
     drainOffscreenBuffer(refs.bufferRef.current);
-    terminal.reset();
+    if (!takeWakeWithoutReset(refs)) terminal.reset();
 
     /**
      * 写一段输出。
@@ -101,10 +116,12 @@ export function useTerminalTransport(
               ? { sessionId: hello.sessionId, generation: hello.generation }
               : null,
           });
-          // attach 后必须至少发一次 resize：后端按 80×24 建的 pty，
-          // 之后 `refit()` 只在真的变了才发（§18.2 规则 2）。
+          // hello 带着 core 给这一端开的尺寸；本地容器不同才发 resize，
+          // 之后 `refit()` 只在真的变了才发（§18.2 规则 2）。`refit()` 刚发过
+          // 的同一尺寸 core 当作没变，不会再动窗口。
           refit();
-          transport.resize(terminal.cols, terminal.rows);
+          if (helloNeedsResize(hello, terminal))
+            transport.resize(terminal.cols, terminal.rows);
 
           const store = useCanvasStore.getState();
           const node = store.document?.nodes.find((item) => item.id === nodeId);

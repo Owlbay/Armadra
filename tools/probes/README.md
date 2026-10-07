@@ -42,11 +42,11 @@ checkpoint 和质量门见[真实双 Agent 入口](../../docs/guides/local-cli-p
 
 按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.d/` 的清单跑（一条一个文件 `<id>.json`，新增探针就新增一个文件）（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
-| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                                                                                                              | 何时跑                              | 失败时       |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
-| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`overlay-safe-area`、`realtime-e2e`、`ws-mux-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e`、`agent-e2e-self-test`（场景 11 / 12 的 `--self-test`） | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`server-e2e --proxy=caddy`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                                                   | `nightly.yml`                       | 开 issue     |
-| C   | `agent-e2e`（真 CLI 与额度，`ARMADRA_E2E_REAL=1`，见「C 档运行手册」）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                                                                                           | 手动；清单在执行计划 §5             | 记进状态文档 |
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                                                                                                                                 | 何时跑                              | 失败时       |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`overlay-safe-area`、`realtime-e2e`、`join-no-refresh`、`ws-mux-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e`、`agent-e2e-self-test`（场景 11 / 12 的 `--self-test`） | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`server-e2e --proxy=caddy`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                                                                      | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度，`ARMADRA_E2E_REAL=1`，见「C 档运行手册」）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                                                                                                              | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`forge-panel`、`connection-drag`、`canvas-tidy`、`browser-agent-e2e`、`timezone-picker`、`language-load`）是单项核验，本地按需手动跑；`relay-web-e2e` 要 armadra-cloud 的检出，也是本地手动跑（见「中继托管页面端到端」）。平台探针 `personal-roundtrip`、`multi-source`、`link-join`（A 档）与 `nat-core-offline`、`webkit-roundtrip`（B 档）同样要 armadra-cloud 的检出（CI 上记 skipped）；后两者与 `multi-source` 的中继在容器里（要 Docker），`pnpm platform:e2e` 一次跑完，共用件在 `platform-lib.mjs`。
 
@@ -234,6 +234,18 @@ node tools/probes/realtime-e2e.mjs [输出目录]
 
 验证：第一台打开即切到实时（`GET …/realtime`）、两边在线条列出对方；两边同时各拖一个节点，两边与 core 物化的表一致；成员光标与选区外框；同一张便签一个在开头、一个在结尾同时输入，提交后收敛且两个人的字都在；断网（探针注入的 WebSocket 包装切断 `…/sync` 并拒绝重连）时顶部「离线编辑」、在线条置灰，期间的拖动对方看不到，恢复后自动重连补齐。最后一台开评论模式在便签上放钉并发送，另一台经 `board.comment` 看到评论钉（契约 §16.3）。产物默认在 `target/realtime-e2e/`。租约模式的多设备场景（`ui-features` 的 presence、`server-e2e`）开头先把 `collab.realtime` 关掉。
 
+## 多端加入不刷新
+
+终端多端尺寸与身份通知分级（completion-progress 的「多端加入不刷新」一节）的页面侧回归。真 core、真 Vite 页面、新 profile 的无头 Chrome（复用 `ui-features/harness.mjs`）。
+
+```sh
+pnpm libs:build
+pnpm --filter @armadra/desktop build
+node tools/probes/join-no-refresh.mjs [输出目录]
+```
+
+A（1440×900）打开一块有两个终端的板，手机端（390×844）、第二台桌面（1280×800）先后加入，再从手机端开一条终端连接发 `resize 40x12`。每一步之后断言 A：没有整页重载、节点与 xterm 没有重挂载、终端 WS 没有断开、3 秒内终端 output 帧为 0、tmux 里 A 的客户端与窗口尺寸不变、终端画面逐行相同、除周期性请求与在线心跳外没有重取、视口不变；手机那一端自己的客户端是 40×12。产物默认在 `target/join-no-refresh/`。
+
 ## 中继托管页面端到端
 
 客户端包 §5（A3-4）：真个人中转（armadra-cloud 的 `personal serve`，自签 TLS，`/app/` 托管本仓库的 `apps/web/dist`）、真 core（file 后端的 SecretStore，登记到中继、隧道连上、中继账号绑定为主人）、新 profile 的无头 Chrome（复用 `ui-features/harness.mjs`）。
@@ -323,7 +335,7 @@ node tools/probes/ui-features-e2e.mjs [输出目录] [--only=presence,editor,fil
 - **fileTree**：右键「复制路径 / 复制相对路径」写进剪贴板的内容（授予 context 剪贴板权限后读回），浏览器里没有「在访达中显示」。
 - **search**：先直接问 core 量一次整轮扫描（约 3.6 万个文件），再在页面上中途换关键词、点「停止」；core 的 debug 日志「文件搜索随连接断开中止」带着 `visited`，断言它明显小于整轮文件数。
 - **keybindings**：设为无、追加第二组键、`when` 的语法错与未知键提示且不能保存；回到画布用真实键盘事件确认改动生效，最后全部重置。
-- **integration**：临时 HOME 的 `.claude/settings.json` 里 11 条相同的旧 Hook；行布局、「旧残留 11」弹层在设置对话框之上、同一命令合并为 ×11；「修复」只清残留、保留用户自己的命令并留备份。
+- **integration**：临时 HOME 的 `.claude/settings.json` 里 11 条相同的旧 Hook；分组与行布局、「修复 11」的清单弹层在设置对话框之上、同一命令合并为 ×11；清单底下的「修复」只清残留、保留用户自己的命令并留备份。
 - **layout**（§58）：顶部提示条（临时 HOME 里有旧版接入残留，所以总有一条）坐在 44px 标题带里、不压侧栏开关 / 工具簇 / 设备条，多设备时退到设备条下面；它原来位置上的节点标题栏按得到、拖得动；外框里本体之外的点不命中。1440 宽开资源管理器时 Dock 整个在抽屉左边、缩放百分比按得到，开 460px 的自动化抽屉时提示条也让开。390 宽开「文件」与「自动化」时抽屉铺满宽度、底边停在底部导航上沿，导航五个去处都按得到，工具簇没被推出屏幕，点「画布」收起。
 - **resources**：`ARMADRA_REMOTE_WORKER_LAUNCHER` 指向探针写的替身 ssh，远端命令是本仓库的 `main.js worker --stdio`，所以「构建机」的总览是 Worker 真读出来的；主机筛选（全部 / 本机 / 构建机）；休眠会话在节点与面板上的显示；`ARMADRA_STATUS_PAGE_BASE` 指向本机 fixture 时用量卡的状态徽标。
 

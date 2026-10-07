@@ -142,6 +142,8 @@ import {
   STATUS_TONES,
 } from "../fixtures/components";
 import { COMMAND_INPUT_FOCUS } from "@/panels/tabs-focus";
+import { SettingsDialog } from "@/panels/SettingsDialog";
+import { useCanvasStore } from "@/store/canvas-store";
 import {
   Command,
   CommandEmpty,
@@ -739,6 +741,18 @@ function Gallery() {
             </SheetHeader>
           </SheetContent>
         </Sheet>
+      </Sample>
+      {/* 真的设置弹窗（设计系统 §2.7 的尺寸）：只在点开时挂页面。 */}
+      <Sample name="settings-dialog">
+        <Button
+          variant="outline"
+          size="sm"
+          data-showcase-settings
+          onClick={() => useCanvasStore.getState().setPanel("settings", true)}
+        >
+          {t("settings.title")}
+        </Button>
+        <SettingsDialog />
       </Sample>
       <Sample name="popover · hover-card · brand-mark">
         <Popover>

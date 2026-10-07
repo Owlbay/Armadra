@@ -25,6 +25,7 @@ import {
   TAIL_LINES,
   cleanLine,
   installAdapterInstallRoutes,
+  parseNpmLsVersion,
   locateNpm,
   npmInvocation,
 } from "./adapter-install";
@@ -170,6 +171,7 @@ describe("任务", () => {
     });
     expect(installer.status("claude")).toEqual({
       agentId: "claude",
+      target: "adapter",
       state: "idle",
       package: "@agentclientprotocol/claude-agent-acp",
       output: [],
@@ -273,6 +275,141 @@ describe("任务", () => {
     );
     expect(installer.status("codex").state).toBe("idle");
     expect(fake.commands).toEqual([]);
+  });
+});
+
+describe("CLI 与回滚（§47）", () => {
+  it("target: cli 只认 CLI 表，命令装 CLI 包；任务键分开", async () => {
+    const fake = fakeRunner(["added 1 package\n"]);
+    const probes: string[] = [];
+    let done = false;
+    const installer = new AdapterInstaller({
+      runner: fake.runner,
+      probe: (agentId, target) => {
+        probes.push(`${agentId}:${target}`);
+        return done;
+      },
+      locate: () => NPM,
+    });
+    expect(
+      rejection(() => installer.start("custom:x", { target: "cli" })).code,
+    ).toBe("adapter_not_installable");
+    for (const [agentId, name] of [
+      ["omp", "@oh-my-pi/pi-coding-agent"],
+      ["pi", "@mariozechner/pi-coding-agent"],
+      ["claude", "@anthropic-ai/claude-code"],
+      ["codex", "@openai/codex"],
+      ["opencode", "opencode-ai"],
+      ["copilot", "@github/copilot"],
+      ["ama", "@armadra/agent"],
+    ] as const) {
+      expect(installer.status(agentId, "cli")).toMatchObject({
+        target: "cli",
+        state: "idle",
+        package: name,
+      });
+    }
+    const started = installer.start("omp", { target: "cli" });
+    expect(started).toMatchObject({ target: "cli", state: "running" });
+    done = true;
+    const finished = await installer.settled("omp", "cli");
+    expect(finished).toMatchObject({ state: "succeeded", installed: true });
+    expect(fake.commands.at(-1)?.args).toEqual([
+      "install",
+      "--global",
+      "@oh-my-pi/pi-coding-agent",
+    ]);
+    expect(probes).toContain("omp:cli");
+    // 适配器那一样没被碰过。
+    expect(installer.status("pi").state).toBe("idle");
+  });
+
+  it("同一家另一样在装 → 409 adapter_install_busy；同一样再点答那一个任务", async () => {
+    const fake = fakeRunner([], 0, { hang: true });
+    const installer = new AdapterInstaller({
+      runner: fake.runner,
+      probe: () => false,
+      locate: () => NPM,
+    });
+    const first = installer.start("claude", { target: "cli" });
+    expect(installer.start("claude", { target: "cli" }).startedAt).toBe(
+      first.startedAt,
+    );
+    const busy = rejection(() => installer.start("claude"));
+    expect(busy.code).toBe("adapter_install_busy");
+    expect(busy.status).toBe(409);
+    // 别家不受影响。
+    expect(installer.start("codex").state).toBe("running");
+    installer.dispose();
+  });
+
+  it("开始前记下上一版本；失败后 rollback 装回 <包>@<版本>", async () => {
+    let exitCode = 1;
+    const commands: InstallCommand[] = [];
+    const installer = new AdapterInstaller({
+      runner: (command, onOutput) => {
+        commands.push(command);
+        const code = exitCode;
+        return {
+          done: Promise.resolve().then(() => {
+            onOutput("npm output\n");
+            return { exitCode: code };
+          }),
+          kill: () => undefined,
+        };
+      },
+      probe: () => true,
+      locate: () => NPM,
+      installedVersion: async (name) =>
+        name === "pi-acp" ? "0.0.30" : undefined,
+    });
+    expect(
+      rejection(() => installer.start("pi", { rollback: true })).code,
+    ).toBe("adapter_rollback_unavailable");
+    installer.start("pi", { reinstall: true });
+    const failed = await installer.settled("pi");
+    expect(failed).toMatchObject({
+      state: "failed",
+      previousVersion: "0.0.30",
+      failure: { code: "adapter_install_failed" },
+    });
+    exitCode = 0;
+    const rolled = installer.start("pi", { rollback: true });
+    expect(rolled).toMatchObject({ rollback: true, previousVersion: "0.0.30" });
+    expect((await installer.settled("pi")).state).toBe("succeeded");
+    expect(commands.at(-1)?.args).toEqual([
+      "install",
+      "--global",
+      "pi-acp@0.0.30",
+    ]);
+  });
+
+  it("拿不到上一版本时不带 previousVersion，回滚被拒", async () => {
+    const installer = new AdapterInstaller({
+      runner: fakeRunner([], 1).runner,
+      probe: () => false,
+      locate: () => NPM,
+      installedVersion: async () => undefined,
+    });
+    installer.start("codex", { target: "cli" });
+    const done = await installer.settled("codex", "cli");
+    expect(done.previousVersion).toBeUndefined();
+    expect(
+      rejection(() =>
+        installer.start("codex", { target: "cli", rollback: true }),
+      ).code,
+    ).toBe("adapter_rollback_unavailable");
+  });
+
+  it("parseNpmLsVersion 读 npm ls --json 的 dependencies.<包>.version", () => {
+    expect(
+      parseNpmLsVersion(
+        JSON.stringify({ dependencies: { "pi-acp": { version: "0.0.34" } } }),
+        "pi-acp",
+      ),
+    ).toBe("0.0.34");
+    expect(parseNpmLsVersion("{}", "pi-acp")).toBeUndefined();
+    expect(parseNpmLsVersion("not json", "pi-acp")).toBeUndefined();
   });
 });
 
@@ -453,6 +590,26 @@ describe("agents.installAdapter / agents.adapterInstall", () => {
     expect((answer.body as { code: string }).code).toBe(
       "adapter_not_installable",
     );
+  });
+
+  it("target: cli 经 procedure 起 CLI 安装，进度按 target 读", async () => {
+    const started = await kit.procedure(
+      "agents.installAdapter",
+      { agentId: "opencode", target: "cli" },
+      "owner",
+    );
+    expect(started.status).toBe(200);
+    expect(started.body).toMatchObject({
+      target: "cli",
+      package: "opencode-ai",
+    });
+    const read = await kit.procedure(
+      "agents.adapterInstall",
+      { agentId: "opencode", target: "cli" },
+      "owner",
+    );
+    expect(read.status).toBe(200);
+    expect((read.body as { target: string }).target).toBe("cli");
   });
 
   it("入参只收 agentId 与 reinstall：多给的参数不进命令", async () => {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { ADAPTER_INSTALL_STATES } from "../api/acp.js";
+import { ADAPTER_INSTALL_STATES, ADAPTER_INSTALL_TARGETS } from "../api/acp.js";
 import { errors } from "./errors.js";
 import { jsonObjectSchema, jsonValueSchema } from "./json.js";
 import { meta, oc } from "./meta.js";
@@ -127,6 +127,12 @@ const integrationStateWireSchema = loose({
   launchArgs: z.array(z.string()).optional(),
   launchEnv: z.array(z.string()).optional(),
   globalWrites: z.array(z.string()).optional(),
+  /** 在画布中创建 Agent 的可用性（§48，自 1.22 起）。 */
+  canvasAgents: loose({
+    terminal: z.string(),
+    acp: z.string(),
+    reasons: z.array(z.string()),
+  }).optional(),
 });
 
 /** 清掉旧产品名留下的条目：做了什么，认不出的原样留下了什么。 */
@@ -288,7 +294,10 @@ const adapterInstallJobWireSchema = loose({
   agentId: z.string(),
   state: z.enum(ADAPTER_INSTALL_STATES),
   package: z.string(),
+  target: z.enum(ADAPTER_INSTALL_TARGETS).optional(),
   reinstall: z.boolean().optional(),
+  rollback: z.boolean().optional(),
+  previousVersion: z.string().optional(),
   startedAt: z.string().optional(),
   endedAt: z.string().optional(),
   exitCode: z.number().nullable().optional(),
@@ -743,12 +752,21 @@ export const agents = {
   /* --------------------------- §39.7 ACP 适配器的安装 --------------------------- */
 
   /**
-   * 起一次适配器安装（只认 `ACP_ADAPTER_PACKAGES` 里的那几家，跑固定的
-   * `npm install --global <包>`），立刻答任务；进度用 {@link adapterInstall} 读。
-   * 同一家已经在装时答那一个任务。只有 owner。
+   * 起一次安装（只认 `ACP_ADAPTER_PACKAGES` 与 `AGENT_CLI_PACKAGES` 两张表，跑
+   * 固定的 `npm install --global <包>`），立刻答任务；进度用 {@link adapterInstall}
+   * 读。同一家同一样已经在装时答那一个任务，另一样在装答 409。只有 owner。
    */
   installAdapter: oc
-    .input(z.object({ agentId: z.string(), reinstall: z.boolean().optional() }))
+    .input(
+      z.object({
+        agentId: z.string(),
+        reinstall: z.boolean().optional(),
+        /** 自 1.22 起（§47）：缺省 `adapter`。 */
+        target: z.enum(ADAPTER_INSTALL_TARGETS).optional(),
+        /** 自 1.22 起（§47）：装回开始前记下的上一版本。 */
+        rollback: z.boolean().optional(),
+      }),
+    )
     .output(adapterInstallJobWireSchema)
     .errors(
       errors.pick(
@@ -756,13 +774,19 @@ export const agents = {
         "forbidden",
         "adapter_not_installable",
         "adapter_already_installed",
+        "adapter_install_busy",
+        "adapter_rollback_unavailable",
         "npm_not_found",
       ),
     )
     .meta(meta({ ...ADAPTER_INSTALL, scope: "settings:write" })),
-  /** 这家最近一次安装任务；没装过答 `state: "idle"`。只有 owner。 */
+  /** 这家这一样最近一次安装任务；没装过答 `state: "idle"`。只有 owner。 */
   adapterInstall: oc
-    .input(agentRef)
+    .input(
+      agentRef.extend({
+        target: z.enum(ADAPTER_INSTALL_TARGETS).optional(),
+      }),
+    )
     .output(adapterInstallJobWireSchema)
     .errors(errors.pick("bad_request", "forbidden", "adapter_not_installable"))
     .meta(meta({ ...ADAPTER_INSTALL, scope: "settings:read" })),
