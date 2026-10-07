@@ -656,4 +656,48 @@ describe("NodeShell", () => {
       document.removeEventListener("pointerdown", seen);
     }
   });
+
+  /**
+   * 头部控件全部常显（设计系统 §4 节点头）：`···` 与 × 不靠悬停 / 选中才出现。
+   * 样式表那一半在 `styles/nodes.test.ts`。
+   */
+  it("keeps ··· and × visible without hover or selection", () => {
+    renderShell({ status: { tone: "idle", label: "空闲" } });
+    for (const label of ["更多", "关闭"]) {
+      const control = screen.getByLabelText(label);
+      expect(control.className).not.toContain("node-secondary-action");
+      expect(control.closest('[data-slot="node-header-actions"]')).toBeTruthy();
+    }
+  });
+
+  it("groups the header into identity, chips, status and action clusters", () => {
+    const view = renderShell({
+      status: { tone: "idle", label: "空闲" },
+      headerChips: <span data-testid="chip">6.6 MB</span>,
+    });
+    const header = view.container.querySelector(
+      '[data-slot="node-header"]',
+    ) as HTMLElement;
+    expect(header.className).toContain("gap-2");
+    const identity = header.querySelector(
+      '[data-slot="node-header-identity"]',
+    ) as HTMLElement;
+    expect(identity.className).toContain("gap-1");
+    expect(identity.textContent).toContain("便签 1");
+    const actions = header.querySelector(
+      '[data-slot="node-header-actions"]',
+    ) as HTMLElement;
+    expect(actions.className).toContain("gap-0.5");
+    const order = Array.from(header.children).map(
+      (child) =>
+        (child as HTMLElement).dataset.slot ??
+        (child as HTMLElement).className.split(" ")[0],
+    );
+    expect(order).toEqual([
+      "node-header-identity",
+      "node-header-chips",
+      "node-header-status",
+      "node-header-actions",
+    ]);
+  });
 });
