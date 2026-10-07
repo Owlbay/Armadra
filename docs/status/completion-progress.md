@@ -3066,3 +3066,23 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - Windows `soak` 的 powershell 偶发无回显只见过一次，没有证据指向产品问题，没改。
 
 接口：无变化。页面只多一个 `data-connect-method="link"` 标记（给真机 UI 用例用）。
+
+## 设置弹窗按视口取尺寸、节点头控件常显（UI 包 B）
+
+设置弹窗原先固定 920×680，大屏上只占视口三分之一；节点头的 `···` 与 × 悬停才出现，而同一行的名字、内存常显，看起来像「有时有、有时没有」。
+
+- **设置弹窗**：`tokens.css` 新增 `--settings-dialog-w: clamp(760px, 78vw, 1280px)`、`--settings-dialog-h: clamp(560px, 80vh, 960px)`，`SettingsDialog` 用它们并保留「视口 −48 与安全区」的上限；平板（768–1023）满宽 −32、满高 −48，导航 176；手机底部 Sheet 改整高（`data-[side=bottom]:h-…` 压过 Sheet 自己的 `h-auto`）；正文列 `max-w-[960px]` 靠左。
+- **节点头**：删掉 `.node-secondary-action` 的隐藏规则，所有控件常显。头部分身份 / 胶囊簇 / 状态 / 审批 / 动作几段：段间 8px，身份段内 4px，审批与动作段内 2px；没内容的段不渲染。胶囊统一走 `nodes/header-chip.ts` 的 `HEADER_CHIP_CLASS`（`Badge` 18px / caption / `px-1.5` / 等宽数字），内存徽标的触发器改成同款 `Badge outline`。胶囊簇最多占 40%，挤的时候胶囊逐个让，不再压到折叠计数上；身份段 `flex-auto`，标题不会被让光。
+- 设计系统 §2.7 加两条 token，§4 加「节点头」一行；展示页 `canvas` 分区加满载节点头的固定状态，`components` 分区加真设置弹窗的触发器。
+
+实测：
+
+- `SettingsDialog.test.tsx`（token 与整高）、`NodeShell.test.tsx`（`···` / × 常显、分段与间距）、新增 `HeaderChips.test.tsx`、`styles/nodes.test.ts`（样式表里没有隐藏规则、胶囊簇 40%）、`tokens.test.ts` 过；web 全量测试与 typecheck 过。
+- 无头 Chromium 实量设置弹窗（深浅两套）：1920×1080 → 1280×864，1440×900 → 1123×720，1280×800 → 998×640，1024×768 → 799×614，900×1100 → 868×1052（导航 176），390×844 → 390×796 底部整高；`design-showcase.mjs --only=canvas,components` 在 1440 / 1024 / 390 与两套主题下全过（对比度、Tab 可达、焦点环、减少动效、控制台）。
+
+没做 / 偏离：
+
+- 账号与交接两枚胶囊（`agent/account/AccountBindingBadge.tsx`、`agent/handoff/HandoffBadge.tsx`）不在本包文件边界内，没对齐到 `HEADER_CHIP_CLASS`。
+- 展示页探针只认 1440 / 1024 / 390 三档宽度，1280 / 1920 由上面的单独实量覆盖；设置弹窗要点开才出现，探针的整页截图里看不到它。
+
+接口：无契约改动。新增 `HEADER_CHIP_CLASS`（`apps/web/src/nodes/header-chip.ts`）、`SETTINGS_DIALOG_CLASS` / `SETTINGS_SHEET_CLASS`（`panels/SettingsDialog.tsx`）、token `--settings-dialog-w/h`。

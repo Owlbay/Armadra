@@ -44,6 +44,8 @@ const LAYOUT_CONSTANTS: Record<string, string> = {
   "--dock-h": "44px",
   "--drawer-w": "360px",
   "--scm-w": "460px",
+  "--settings-dialog-w": "clamp(760px, 78vw, 1280px)",
+  "--settings-dialog-h": "clamp(560px, 80vh, 960px)",
 };
 
 /** §3.1 的 z 轴栈，顺序不能乱。 */

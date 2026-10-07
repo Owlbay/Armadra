@@ -115,37 +115,8 @@
   pointer-events: none;
 }
 
-/* Reserve action slots so labels never move when controls appear. Hover,
-   selection, an open menu or keyboard focus on the control itself reveals
-   them; coarse pointers always get the full affordance. Focus *inside* the
-   body (a terminal being typed in) deliberately does not: that kept the
-   close button lit on whichever node the cursor lived in. */
-.node-secondary-action {
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    opacity var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
-}
-
-[data-slot="node-shell"]:hover .node-secondary-action,
-[data-slot="node-shell"][data-selected="true"] .node-secondary-action,
-.node-secondary-action[aria-expanded="true"],
-.node-secondary-action:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-@media (hover: none), (any-pointer: coarse) {
-  .node-secondary-action {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .node-frame,
-  .node-secondary-action,
   .react-flow__handle.node-connection-handle {
     transition: none;
   }
@@ -155,11 +126,14 @@
   flex-shrink: 1;
 }
 
+/* Header controls are always visible (design system §4): the chip cluster
+   gets more room so the title still fits beside them on wide nodes. */
 .node-header-chips {
-  max-width: 28%;
+  max-width: 40%;
 }
 
-.node-header-chips:empty {
+.node-header-chips:empty,
+.node-header-chips:has(> [data-slot="header-chips"]:empty) {
   display: none;
 }
 
@@ -167,6 +141,13 @@
   max-width: 130px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* When the cluster is squeezed the chips give way one by one instead of
+   spilling over the overflow counter beside them. */
+.node-header-chips > [data-slot="header-chips"] > * {
+  flex-shrink: 1;
+  min-width: 0;
 }
 
 @container canvas-node (max-width: 440px) {
