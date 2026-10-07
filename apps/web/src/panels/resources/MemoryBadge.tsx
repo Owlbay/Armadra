@@ -25,6 +25,9 @@ import { claimAlert, crossedThreshold } from "./memory-alert";
 import { useSessionResources } from "./use-resources";
 import { useOnScreen, usePageVisible } from "./use-visibility";
 import { Button } from "@/ui/button";
+import { Badge } from "@/ui/badge";
+import { cn } from "@/lib/cn";
+import { HEADER_CHIP_CLASS } from "@/nodes/header-chip";
 
 export interface MemoryBadgeProps {
   nodeId: string;
@@ -100,21 +103,29 @@ export function MemoryBadge({
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="xs"
-          ref={anchor}
-          type="button"
-          data-testid={`memory-badge-${nodeId}`}
-          data-over={over ? "true" : undefined}
-          className={`flex h-auto min-h-6 shrink-0 items-center gap-1 rounded px-1 text-[length:var(--text-caption)] font-normal tabular-nums hover:bg-accent ${
-            over ? "text-[var(--danger-text)]" : "text-muted-foreground"
-          }`}
-          aria-label={t("resources.memory.badge", { value: label })}
-          onPointerDown={(event) => event.stopPropagation()}
+        <Badge
+          asChild
+          variant="outline"
+          className={cn(
+            HEADER_CHIP_CLASS,
+            "font-normal",
+            over && "text-[var(--danger-text)]",
+          )}
+          data-no-drag="true"
         >
-          <span className="whitespace-nowrap">{label}</span>
-        </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            ref={anchor}
+            type="button"
+            data-testid={`memory-badge-${nodeId}`}
+            data-over={over ? "true" : undefined}
+            aria-label={t("resources.memory.badge", { value: label })}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <span className="whitespace-nowrap">{label}</span>
+          </Button>
+        </Badge>
       </PopoverTrigger>
       <PopoverContent
         className="w-72 max-w-[calc(100vw-1rem)] text-xs"

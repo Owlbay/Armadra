@@ -1,6 +1,7 @@
 import { scoped } from "../sources/scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
 import type { Workspace } from "@armadra/shared";
 
 vi.mock("../api/client", () => ({
@@ -33,6 +34,20 @@ vi.mock("../api/events", () => ({
   onWorkspaceAccessLost: () => () => undefined,
   useRuntimeConnection: () => "open",
 }));
+
+const identity = vi.hoisted(() => ({
+  listeners: new Set<(change: string) => void>(),
+}));
+vi.mock("../api/identity", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api/identity")>();
+  return {
+    ...actual,
+    onIdentitySessionChange: (listener: (change: string) => void) => {
+      identity.listeners.add(listener);
+      return () => identity.listeners.delete(listener);
+    },
+  };
+});
 
 /** 画布本身在 jsdom 里跑不动，这里只关心它在不在。 */
 vi.mock("../canvas/FlowWorkspace", () => ({
@@ -118,5 +133,34 @@ describe("App", () => {
 
     expect(screen.getByTestId("canvas")).toBeTruthy();
     expect(screen.getByLabelText("侧栏")).toBeTruthy();
+  });
+});
+
+/**
+ * ui-acp-refresh §7.3 E-2：CSRF 轮换、令牌续期、会话消失都不让整页重取；会话
+ * 出现或换人时全量重取。
+ */
+describe("identity changes", () => {
+  it("re-reads only what the change calls for", async () => {
+    const invalidate = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    render(<App />);
+    await act(async () => {});
+    invalidate.mockClear();
+    const fire = (change: string) =>
+      act(() => {
+        for (const listener of identity.listeners) listener(change);
+      });
+
+    fire("rotated");
+    fire("gone");
+    expect(invalidate).not.toHaveBeenCalled();
+
+    fire("appeared");
+    expect(invalidate).toHaveBeenCalledTimes(1);
+
+    fire("switched");
+    expect(invalidate).toHaveBeenCalledTimes(2);
+    expect(invalidate).toHaveBeenLastCalledWith();
+    invalidate.mockRestore();
   });
 });

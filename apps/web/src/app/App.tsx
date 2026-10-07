@@ -83,11 +83,17 @@ function AppShell() {
   const compact = useCompactLayout();
 
   const queryClient = useQueryClient();
-  // Every /api call made before this device paired was refused. Once the Host
-  // session appears, re-read rather than leaving the shell showing the
-  // failures from before the user signed in.
+  // Every /api call made before this device paired was refused, and some
+  // answered "nobody" successfully (the access query). Once a session appears
+  // — or another person's replaces it — re-read everything. A CSRF or token
+  // rotation is the same session and re-reads nothing (ui-acp-refresh §7.3
+  // E-2): those happen every few minutes and made every panel flicker.
   useEffect(
-    () => onIdentitySessionChange(() => void queryClient.invalidateQueries()),
+    () =>
+      onIdentitySessionChange((change) => {
+        if (change === "appeared" || change === "switched")
+          void queryClient.invalidateQueries();
+      }),
     [queryClient],
   );
 

@@ -4,6 +4,7 @@ import { useT } from "@/app/preferences-store";
 import { supervisionBadge, supervisionFor } from "@/canvas/supervision";
 import { useCanvasStore } from "@/store/canvas-store";
 import { Badge } from "@/ui/badge";
+import { HEADER_CHIP_CLASS } from "./header-chip";
 
 /**
  * 主从关系在节点头上的那一枚（连线角色）。
@@ -28,7 +29,7 @@ export function SupervisionBadge({ node }: { node: CanvasNode }) {
   return (
     <Badge
       variant={badge.kind === "orphan" ? "outline" : "secondary"}
-      className="h-[18px] px-1.5 text-[length:var(--text-caption)]"
+      className={HEADER_CHIP_CLASS}
       data-slot="supervision-badge"
       data-role={badge.kind}
       title={label}

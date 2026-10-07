@@ -41,6 +41,10 @@ set -g set-clipboard on
 set -g default-terminal "{terminal}"
 set -ga terminal-overrides ",*:Tc"
 set -ga terminal-features ",xterm-256color:RGB"
+# The core decides each window's size (the driver's, else the largest
+# viewer's) and pins the window to manual right after creating it; a client
+# attaching or resizing never moves it. Not set globally: a global manual makes
+# tmux 3.4 exit on the first detached new-session.
 set -g window-size latest
 set -g aggressive-resize on
 #
@@ -61,8 +65,9 @@ set -g focus-events off
 # Keep the CLIENT out of the alternate screen. tmux then draws into xterm's
 # normal buffer, so tmux's scrollback lands in xterm's own scrollback: the
 # wheel scrolls history and drag-selection works without ever entering
-# copy-mode. Cost: a full redraw (reattach, resize) appends a duplicate screen
-# to the scrollback, which is the accepted trade.
+# copy-mode. Cost: a full redraw of a client (its own reattach or resize)
+# appends a duplicate screen to that viewer's scrollback, the accepted trade;
+# with window-size manual no other viewer is redrawn.
 set -ga terminal-overrides ",*:smcup@:rmcup@"
 # Let an inner app's OSC 52 reach the outer terminal. \`set-clipboard on\` alone
 # is not enough: tmux only forwards the sequence when the client's terminal is

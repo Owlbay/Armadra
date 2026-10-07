@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { forgetProbes, rememberProbe } from "../../agent/probe";
 import { installCollaborationSkill } from "../../collab/skill";
@@ -17,6 +17,7 @@ import {
 } from "./inject";
 import {
   type IntegrationOptions,
+  canvasAgentsOf,
   install,
   prepareAtStartup,
   state,
@@ -206,4 +207,109 @@ describe("start-up", () => {
     expect(readMigration(dataDir)).toBeUndefined();
     expect(existsSync(codexConfigPath(join(root, "codex")))).toBe(false);
   });
+});
+
+/* ------------------------- 在画布中创建 Agent（§48） ------------------------- */
+
+describe("canvasAgents", () => {
+  const ready = {
+    cliInstalled: true,
+    hookInstalled: true,
+    skillInstalled: true,
+    launcherLimited: false,
+    acp: { installed: true, canvasTools: "mcp" as const },
+    clientMcp: true,
+  };
+
+  it("both drivers available when everything is in place", () => {
+    expect(canvasAgentsOf(ready)).toEqual({
+      terminal: "available",
+      acp: "available",
+      reasons: [],
+    });
+  });
+
+  it("terminal: skill without hook or with a limited launcher is limited", () => {
+    expect(canvasAgentsOf({ ...ready, hookInstalled: false })).toMatchObject({
+      terminal: "limited",
+      reasons: ["hook_missing"],
+    });
+    expect(canvasAgentsOf({ ...ready, launcherLimited: true })).toMatchObject({
+      terminal: "limited",
+      reasons: ["launcher_limited"],
+    });
+  });
+
+  it("terminal: no CLI or no skill is unavailable", () => {
+    expect(canvasAgentsOf({ ...ready, cliInstalled: false }).terminal).toBe(
+      "unavailable",
+    );
+    expect(
+      canvasAgentsOf({ ...ready, skillInstalled: false, hookInstalled: false }),
+    ).toMatchObject({
+      terminal: "unavailable",
+      reasons: ["skill_missing", "hook_missing"],
+    });
+  });
+
+  it("acp: none without an entry, unavailable when not installed", () => {
+    const { acp: _drop, ...noAcp } = ready;
+    expect(canvasAgentsOf(noAcp).acp).toBe("none");
+    expect(
+      canvasAgentsOf({
+        ...ready,
+        acp: { installed: false, canvasTools: "mcp" },
+      }),
+    ).toMatchObject({ acp: "unavailable", reasons: ["acp_missing"] });
+  });
+
+  it("acp: an adapter without MCP or a client without MCP is limited", () => {
+    expect(
+      canvasAgentsOf({
+        ...ready,
+        acp: { installed: true, canvasTools: "none" },
+      }),
+    ).toMatchObject({ acp: "limited", reasons: ["mcp_not_wired"] });
+    expect(canvasAgentsOf({ ...ready, clientMcp: false })).toMatchObject({
+      acp: "limited",
+      reasons: ["client_without_mcp"],
+    });
+    // ama 的 runners 不经 MCP：客户端带不带都可用。
+    expect(
+      canvasAgentsOf({
+        ...ready,
+        clientMcp: false,
+        acp: { installed: true, canvasTools: "runners" },
+      }).acp,
+    ).toBe("available");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "state() answers it from the PATH, the artifacts and the adapter table",
+    () => {
+      const bin = join(root, "path-bin");
+      mkdirSync(bin, { recursive: true });
+      for (const name of ["claude", "claude-agent-acp", "pi", "pi-acp"]) {
+        writeFileSync(join(bin, name), "#!/bin/sh\nexit 0\n");
+        chmodSync(join(bin, name), 0o755);
+      }
+      const withPath = (agentId: string): IntegrationOptions => ({
+        ...options(agentId),
+        env: env({ PATH: [bin, process.env.PATH ?? ""].join(delimiter) }),
+        clientMcp: () => true,
+      });
+      install("claude", withPath("claude"));
+      expect(state("claude", withPath("claude")).canvasAgents).toEqual({
+        terminal: "available",
+        acp: "available",
+        reasons: [],
+      });
+      install("pi", withPath("pi"));
+      expect(state("pi", withPath("pi")).canvasAgents).toEqual({
+        terminal: "available",
+        acp: "limited",
+        reasons: ["mcp_not_wired"],
+      });
+    },
+  );
 });

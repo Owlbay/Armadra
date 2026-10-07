@@ -93,3 +93,29 @@ describe("driver items", () => {
     expect(items({ id: "pi" })).toEqual([]);
   });
 });
+
+describe("spawn agent", () => {
+  function entries(data: Record<string, unknown>) {
+    const node = { id: "lead", type: "terminal", data } as CanvasNode;
+    return registration.factory!({ node, targetIds: [node.id] });
+  }
+
+  it("offers 「派生 Agent…」 on an agent node and opens the wizard for it", async () => {
+    const { useWizardOpen } = await import("@/acp/wizard-open");
+    const spawn = entries({ kind: "terminal", agent: { id: "codex" } }).find(
+      (item) => item.id === "agent.spawn",
+    );
+    expect(spawn).toBeDefined();
+    spawn!.run();
+    expect(useWizardOpen.getState()).toMatchObject({
+      open: true,
+      supervisorNodeId: "lead",
+    });
+  });
+
+  it("is not on a plain terminal", () => {
+    expect(
+      entries({ kind: "terminal" }).some((item) => item.id === "agent.spawn"),
+    ).toBe(false);
+  });
+});

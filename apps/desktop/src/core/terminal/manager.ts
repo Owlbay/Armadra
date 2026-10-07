@@ -9,7 +9,6 @@ import { sequenceSessionEnvironment } from "./sequences";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  type Attachment,
   type BackendKind,
   type BackendNotice,
   type ForegroundInfo,
@@ -29,6 +28,14 @@ import {
   TerminalError,
 } from "./backend";
 import { AttachmentBook } from "./attachments";
+import { TerminalWindows, clampSize } from "./viewers";
+import type {
+  AttachSession,
+  DriveTarget,
+  SessionRecord,
+  TerminalManagerOptions,
+  TerminalSession,
+} from "./manager-types";
 import type { ReviveOptions, SpawnRequest } from "./spawn-request";
 import { type EnvPairs, defaultShell, withUtf8Locale } from "./environment";
 import {
@@ -52,7 +59,7 @@ import {
   type DriveSessionRef,
 } from "./drive";
 import { HIBERNATE_INTENT, rowHibernated } from "./hibernate";
-import { type ObservedActivity, type TargetState } from "../agent/target-state";
+import { type ObservedActivity } from "../agent/target-state";
 import { allows } from "../identity/gate";
 import { scope } from "../identity/scopes";
 import {
@@ -94,118 +101,14 @@ export const DEFAULT_ROWS = 24;
  * trail: one write every few seconds of continuous output is enough. */
 export const ACTIVITY_THROTTLE_MS = 5_000;
 
-/** The row shape `/api/terminals` answers with. camelCase, contract §5.1. */
-export interface TerminalSession {
-  readonly id: string;
-  readonly workspaceId: string;
-  readonly cwd: string;
-  readonly shell: string;
-  readonly command: string | null;
-  readonly kind: string;
-  readonly ownerNodeId: string | null;
-  readonly agentId: string | null;
-  readonly status: string;
-  readonly exitCode: number | null;
-  readonly pid: number | null;
-  readonly createdAt: string;
-  readonly endedAt: string | null;
-  readonly sessionKey: string;
-  readonly backend: string;
-  readonly generation: number;
-  readonly attachState: string;
-  readonly lastOutputAt: string | null;
-  /**
-   * 这一行以 Eco 休眠结束（终端宿主设计 §7.2）：进程已经不在，节点上的会话可以
-   * 用 CLI 自己的 resume 接回来。活着的行恒为 `null`。
-   */
-  readonly hibernation: "hibernated" | null;
-  /** 创建者 = 触发者（契约 §23）；空串是本机 owner。读行时才带，起会话的回答里缺席。 */
-  readonly creatorPrincipalId?: string;
-}
-
-/**
- * 一次投递要知道的全部（设计 `agent-delivery.md` §4 / §6）：目标在五态里的
- * 哪一个、租约在谁手里、代次是几。留给阶段 C 的 `send`。
- */
-export interface DriveTarget {
-  readonly nodeId: string;
-  /** 这个节点当前那个终端会话；没有会话时缺席，此时 `state` 是 `exited`。 */
-  readonly sessionId?: string;
-  readonly state: TargetState;
-  /** 状态是从哪条通道学来的；`observed` 与缺席都不满足空闲门（§4.3）。 */
-  readonly stateSource?: string;
-  readonly lease: Lease;
-  /** `terminal_sessions.drive_generation`，乐观并发用的那个数。 */
-  readonly driveGeneration: number;
-}
-
+export type {
+  AttachSession,
+  DriveTarget,
+  SessionRecord,
+  TerminalManagerOptions,
+  TerminalSession,
+} from "./manager-types";
 export type { ReviveOptions, SpawnRequest } from "./spawn-request";
-
-export interface SessionRecord {
-  readonly id: string;
-  readonly key: SessionKey;
-  readonly workspaceId: string;
-  readonly ownerNodeId: string | null;
-  kind: BackendKind;
-  generation: number;
-  pid: number | undefined;
-  cols: number;
-  rows: number;
-  exited: boolean;
-  /** Kept so `recycle` can restart the same terminal, environment included. */
-  spec: TerminalSpec;
-  inputRevision: number;
-  inputSafety: InputSafety;
-  /** When this session last had input written in, or output come back out. */
-  lastActivity: number | undefined;
-  /**
-   * 这一代进程起来（或重启后被接管）的时刻。行上的 `created_at` 是第一代的：
-   * 回收、节能唤醒都在同一行上起下一代，首投放行门要的「会话够老」得从这里算。
-   */
-  startedAt: number;
-}
-
-/** What one socket needs to serve a terminal. */
-export interface AttachSession {
-  readonly attachment: Attachment;
-  readonly record: SessionRecord;
-  /** The replay, for a backend that does not redraw on attach. */
-  readonly snapshot: string | undefined;
-}
-
-export interface TerminalManagerOptions {
-  readonly sequenceDirectory?: string;
-  readonly database: DatabaseSync;
-  /** Every backend this build can reach, by kind. */
-  readonly backends: ReadonlyMap<BackendKind, TerminalBackend>;
-  /** The one new sessions are created with (contract §15.1). */
-  readonly effective: BackendKind;
-  /** `terminal.detachedGraceMinutes` / `terminal.dormantAfterSeconds`. */
-  readonly policy?: () => {
-    detachedGraceMinutes: number;
-    dormantAfterSeconds: number;
-  };
-  /** Injected so a test can make the timestamps deterministic. */
-  readonly now?: () => string;
-  readonly clock?: () => number;
-  readonly log?: (message: string, fields?: Record<string, unknown>) => void;
-  readonly onExit?: (event: {
-    workspaceId: string;
-    sessionId: string;
-    nodeId: string | null;
-    exitCode: number | null;
-  }) => void;
-  /**
-   * 驱动租约换手了（设计 `agent-delivery.md` §6）。抢占、接管、自然过期各一
-   * 帧，节点头的徽标从这里同步。
-   */
-  readonly onLease?: (event: {
-    workspaceId: string;
-    sessionId: string;
-    nodeId: string | null;
-    lease: Lease;
-  }) => void;
-}
 
 const DEFAULT_POLICY = {
   detachedGraceMinutes: 1_440,
@@ -227,6 +130,23 @@ export class TerminalManager {
   private readonly drives: TerminalDriveBook;
   private readonly timers: NodeJS.Timeout[] = [];
   private readonly lastRowWrite = new Map<string, number>();
+  /** Who watches each session, at which size (ui-acp-refresh §7.3 E-1). */
+  private readonly viewers = new TerminalWindows({
+    window: (sessionId) => {
+      const record = this.records.get(sessionId);
+      if (record === undefined || record.exited) return undefined;
+      return {
+        size: { cols: record.cols, rows: record.rows },
+        apply: async (next) => {
+          record.cols = next.cols;
+          record.rows = next.rows;
+          await this.backend(record.kind).resize(record.key, next);
+        },
+      };
+    },
+    lease: (sessionId) => this.drives.lease(sessionId),
+    log: (message, fields) => this.log(message, fields),
+  });
   private readonly now: () => string;
   private readonly clock: () => number;
   private readonly log: (
@@ -256,6 +176,9 @@ export class TerminalManager {
       database: this.database,
       now: () => new Date(this.clock()),
       onChange: (session, lease) => {
+        // A person starting or stopping to drive may move the window to
+        // their size or back to the largest viewer's.
+        void this.viewers.refresh(session.sessionId);
         options.onLease?.({
           workspaceId: session.workspaceId,
           sessionId: session.sessionId,
@@ -749,6 +672,7 @@ export class TerminalManager {
     this.records.delete(sessionId);
     this.attachments.forget(sessionId);
     this.lastRowWrite.delete(sessionId);
+    this.viewers.forget(sessionId);
     this.drive.forget(sessionId);
     // 租约的对象是一个 PTY 会话：那个进程没了，谁在驱动它这个问题就不存在了。
     this.drives.forget(sessionId);
@@ -832,17 +756,29 @@ export class TerminalManager {
 
   /* --------------------------------- attach -------------------------------- */
 
-  async attach(sessionId: string, size: TerminalSize): Promise<AttachSession> {
+  /**
+   * Attaches one viewer, at `size` or else at the window's (what the `hello`
+   * reports). It moves the window only if the rule now picks this viewer.
+   */
+  async attach(
+    sessionId: string,
+    size?: TerminalSize,
+    writer = "",
+  ): Promise<AttachSession> {
     if (this.stopping) throw conflict("Core is shutting down");
     const record = this.records.get(sessionId);
     if (record === undefined || record.exited) {
       throw notFound("Terminal session is not running");
     }
     const backend = this.backend(record.kind);
+    const window = { cols: record.cols, rows: record.rows };
+    const own = size === undefined ? window : clampSize(size);
+    // A backend with a view per viewer opens this one at its own size; one
+    // with a single pty is attached at the window, so it does not resize it.
     const attachment = await backend.attach(
       record.key,
       record.generation,
-      size,
+      backend.resizeViewer === undefined ? window : own,
     );
     // Waking is deliberately *after* the backend attach and deliberately not a
     // create: a dormant session is a running process whose delivery was slowed
@@ -856,23 +792,38 @@ export class TerminalManager {
       }
     }
     this.attachments.acquire(sessionId);
-    record.cols = size.cols;
-    record.rows = size.rows;
+    this.viewers.add(sessionId, attachment.attachmentId, writer, own);
+    await this.viewers.refresh(sessionId);
     this.setAttachState(sessionId, "live");
     // Only a backend that does not redraw owes the socket a replay.
     const snapshot = backend.getCapabilities().redrawsOnAttach
       ? undefined
       : backend.snapshot?.(record.key);
-    return { attachment, record, snapshot };
+    return { attachment, record, snapshot, size: own };
   }
 
   /** Called when a socket closes. Detaching is not terminating. */
   async detached(sessionId: string, attachmentId: number): Promise<void> {
     const record = this.records.get(sessionId);
     this.attachments.release(sessionId);
+    this.viewers.remove(sessionId, attachmentId);
     if (record === undefined) return;
     await this.backend(record.kind).detach(record.key, attachmentId);
+    await this.viewers.refresh(sessionId);
     if (!record.exited) this.setAttachState(sessionId, "detached");
+  }
+
+  /** The viewer `attachmentId` sent keystrokes: it may now drive the window. */
+  noteViewerInput(sessionId: string, attachmentId: number): void {
+    this.viewers.noteInput(sessionId, attachmentId);
+  }
+
+  /** The current window and every viewer's size; for tests and diagnostics. */
+  windowOf(sessionId: string) {
+    const record = this.records.get(sessionId);
+    if (record === undefined) return undefined;
+    const window: TerminalSize = { cols: record.cols, rows: record.rows };
+    return { window, viewers: this.viewers.list(sessionId) };
   }
 
   private sessionEnvironment(
@@ -946,18 +897,36 @@ export class TerminalManager {
     this.inputs.applied(sessionId, writerId, inputId);
   }
 
+  /**
+   * One viewer's container changed. Only that viewer's own view follows
+   * (tmux: its client pty); the window — what the program and everyone else
+   * see — moves only if the rule now picks a different size (ui-acp-refresh §7.3 E-1). An
+   * unchanged size is not a resize at all.
+   */
   async resize(
     sessionId: string,
     generation: number,
     size: TerminalSize,
+    attachmentId?: number,
   ): Promise<void> {
     const record = this.checked(sessionId, generation);
-    record.cols = Math.max(2, size.cols);
-    record.rows = Math.max(2, size.rows);
-    await this.backend(record.kind).resize(record.key, {
-      cols: record.cols,
-      rows: record.rows,
-    });
+    const next = clampSize(size);
+    const viewer = this.viewers.resize(sessionId, attachmentId, next);
+    if (viewer === "same") return;
+    if (viewer === "unknown") {
+      // Nobody known to be watching through this call: it sets the window.
+      if (next.cols === record.cols && next.rows === record.rows) return;
+      record.cols = next.cols;
+      record.rows = next.rows;
+      await this.backend(record.kind).resize(record.key, next);
+      return;
+    }
+    await this.backend(record.kind).resizeViewer?.(
+      record.key,
+      attachmentId!,
+      next,
+    );
+    await this.viewers.refresh(sessionId);
   }
 
   /**

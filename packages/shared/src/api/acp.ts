@@ -34,11 +34,12 @@ export const agentAcpInfoSchema = z.looseObject({
   resume: acpResumeSchema,
 });
 
-/* --------------------------- 适配器的安装（§39.7） --------------------------- */
+/* ----------------------- 适配器与 CLI 的安装（§39.7、§47） ----------------------- */
 
 /**
  * 有独立 ACP 适配器包、可以由 core 代装的那几家：键是内置 Agent id，值是 npm
- * 包名。core 的安装只认这张表（allowlist），页面的复制命令也从这里来。
+ * 包名。core 的安装只认这张表与 {@link AGENT_CLI_PACKAGES}（allowlist），页面的
+ * 复制命令也从这里来。
  */
 export const ACP_ADAPTER_PACKAGES = {
   claude: "@agentclientprotocol/claude-agent-acp",
@@ -47,33 +48,99 @@ export const ACP_ADAPTER_PACKAGES = {
 } as const;
 
 /**
- * ACP 入口就是 CLI 本身的那几家：装的是 CLI，不代装，只给复制命令。没有公开
- * npm 包的（omp）不列，不猜。
+ * 各家 CLI 自己的 npm 包（§47，自 1.22 起 core 也代装）。ACP 入口就是 CLI 本身的
+ * 那几家（opencode / omp / copilot / ama）装了 CLI 即装了 ACP。
  */
 export const AGENT_CLI_PACKAGES = {
+  claude: "@anthropic-ai/claude-code",
+  codex: "@openai/codex",
   opencode: "opencode-ai",
+  pi: "@mariozechner/pi-coding-agent",
+  omp: "@oh-my-pi/pi-coding-agent",
   copilot: "@github/copilot",
   ama: "@armadra/agent",
 } as const;
 
 export type AcpAdapterAgentId = keyof typeof ACP_ADAPTER_PACKAGES;
+export type AgentCliAgentId = keyof typeof AGENT_CLI_PACKAGES;
+
+/** 装哪一样：适配器包，还是 CLI 本身（§47）。 */
+export const ADAPTER_INSTALL_TARGETS = ["adapter", "cli"] as const;
+export type AdapterInstallTarget = (typeof ADAPTER_INSTALL_TARGETS)[number];
+
+function has(table: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(table, key);
+}
 
 /** 这家能不能由 core 代装适配器。 */
 export function acpAdapterInstallable(
   agentId: string,
 ): agentId is AcpAdapterAgentId {
-  return Object.prototype.hasOwnProperty.call(ACP_ADAPTER_PACKAGES, agentId);
+  return has(ACP_ADAPTER_PACKAGES, agentId);
 }
 
-/** 复制给用户的安装命令；两张表都没有的答 `null`。 */
-export function acpInstallCommand(agentId: string): string | null {
-  const name = acpAdapterInstallable(agentId)
-    ? ACP_ADAPTER_PACKAGES[agentId]
-    : Object.prototype.hasOwnProperty.call(AGENT_CLI_PACKAGES, agentId)
-      ? AGENT_CLI_PACKAGES[agentId as keyof typeof AGENT_CLI_PACKAGES]
-      : undefined;
-  return name === undefined ? null : `npm i -g ${name}`;
+/** 这家的 CLI 能不能由 core 代装。 */
+export function agentCliInstallable(
+  agentId: string,
+): agentId is AgentCliAgentId {
+  return has(AGENT_CLI_PACKAGES, agentId);
 }
+
+/** 这家这一样的 npm 包；表里没有答 `null`。 */
+export function installablePackage(
+  agentId: string,
+  target: AdapterInstallTarget,
+): string | null {
+  if (target === "cli") {
+    return agentCliInstallable(agentId) ? AGENT_CLI_PACKAGES[agentId] : null;
+  }
+  return acpAdapterInstallable(agentId) ? ACP_ADAPTER_PACKAGES[agentId] : null;
+}
+
+/**
+ * 复制给用户的安装命令：给了 `target` 就是那一样；不给时先适配器、再 CLI（新建
+ * 向导的口径：缺的是 ACP 入口）。表里都没有的答 `null`。
+ */
+export function acpInstallCommand(
+  agentId: string,
+  target?: AdapterInstallTarget,
+): string | null {
+  const name =
+    target === undefined
+      ? (installablePackage(agentId, "adapter") ??
+        installablePackage(agentId, "cli"))
+      : installablePackage(agentId, target);
+  return name === null ? null : `npm i -g ${name}`;
+}
+
+/**
+ * 「在画布中创建 Agent」能不能用（§48，`agents.integration` 的 `canvasAgents`）。
+ * `terminal` 是终端驱动（注入的 `armadra-hook canvas open-agent / team`），`acp`
+ * 是会话视图（MCP 工具或 ama 的宿主 runners）；这家没有 ACP 入口时 `acp` 是
+ * `none`。`reasons` 是两边缺的东西，页面据此给修复动作。
+ */
+export const CANVAS_AGENT_STATES = [
+  "available",
+  "limited",
+  "unavailable",
+] as const;
+export const CANVAS_AGENT_REASONS = [
+  "hook_missing",
+  "skill_missing",
+  "launcher_limited",
+  "cli_missing",
+  "acp_missing",
+  "mcp_not_wired",
+  "client_without_mcp",
+] as const;
+export const canvasAgentsSchema = z.looseObject({
+  terminal: z.enum(CANVAS_AGENT_STATES),
+  acp: z.enum([...CANVAS_AGENT_STATES, "none"]),
+  reasons: z.array(z.string()).default([]),
+});
+export type CanvasAgentState = (typeof CANVAS_AGENT_STATES)[number];
+export type CanvasAgentReason = (typeof CANVAS_AGENT_REASONS)[number];
+export type CanvasAgents = z.infer<typeof canvasAgentsSchema>;
 
 export const ADAPTER_INSTALL_STATES = [
   "idle",
@@ -94,12 +161,18 @@ export const ADAPTER_INSTALL_FAILURES = [
   "adapter_install_missing",
 ] as const;
 
-/** 一家适配器的安装任务（`agents.installAdapter` / `agents.adapterInstall`）。 */
+/** 一家一样东西的安装任务（`agents.installAdapter` / `agents.adapterInstall`）。 */
 export const adapterInstallJobSchema = z.looseObject({
   agentId: z.string(),
   state: z.enum(ADAPTER_INSTALL_STATES),
   package: z.string(),
+  /** 装的是哪一样；1.22 之前的 core 不带，按 `adapter` 读。 */
+  target: z.enum(ADAPTER_INSTALL_TARGETS).optional(),
   reinstall: z.boolean().optional(),
+  /** 这次是「恢复上一版本」。 */
+  rollback: z.boolean().optional(),
+  /** 开始前已装的版本；拿不到就缺席，页面也就没有「恢复上一版本」。 */
+  previousVersion: z.string().optional(),
   startedAt: z.string().optional(),
   endedAt: z.string().optional(),
   exitCode: z.number().nullable().optional(),

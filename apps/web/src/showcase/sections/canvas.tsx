@@ -3,6 +3,7 @@ import {
   Background,
   BackgroundVariant,
   ReactFlow,
+  ReactFlowProvider,
   type Edge,
   type Node,
   type NodeProps,
@@ -19,6 +20,8 @@ import { edgeKey, useDeliveryStore } from "@/agent/delivery-store";
 import { edgeTypes } from "@/canvas/flow/edges/edge-types";
 import GroupNode from "@/canvas/flow/nodes/GroupNode";
 import { NodeShell } from "@/nodes/NodeShell";
+import { HEADER_CHIP_CLASS } from "@/nodes/header-chip";
+import { Badge } from "@/ui/badge";
 import { ColorDot } from "@/ui/color-dot";
 import { memberColorVar } from "@/ui/member-dot";
 import {
@@ -224,6 +227,108 @@ function CommentPin({
   );
 }
 
+/* ------------------------- 节点头：全部常显（§4） ------------------------- */
+
+const HEADER_WIDTH = 600;
+const HEADER_HEIGHT_PX = 72;
+
+/** 一个头部塞满的终端：名字、三枚胶囊加一枚折叠计数、状态、审批、动作。 */
+const HEADER_NODE: CanvasNode = {
+  ...(CANVAS_NODES.find((node) => node.id === CANVAS_IDS.terminal) ??
+    CANVAS_NODES[0]!),
+  id: "00000000-0000-4000-8000-0000000000f1",
+  position: { x: 0, y: 0 },
+  size: { width: HEADER_WIDTH, height: HEADER_HEIGHT_PX },
+  data: {
+    kind: "terminal",
+    agent: { id: "claude" },
+    handle: "reviewer",
+  } as CanvasNode["data"],
+};
+
+function HeaderSpecimenNode({ data: node }: NodeProps<ShowcaseFlowNode>) {
+  const t = useT();
+  return (
+    <NodeShell
+      node={node}
+      selected={false}
+      headerMark={<ColorDot color={agentColorVar("claude")} size={8} />}
+      headerChips={
+        <>
+          <Badge variant="outline" className={HEADER_CHIP_CLASS}>
+            6.6 MB
+          </Badge>
+          <Badge variant="outline" className={HEADER_CHIP_CLASS}>
+            {t("delivery.queued", { count: 2 })}
+          </Badge>
+          <Badge variant="outline" className={HEADER_CHIP_CLASS}>
+            {t("contextReads.count", { count: 3 })}
+          </Badge>
+          <Badge variant="destructive" className={HEADER_CHIP_CLASS}>
+            exit 1
+          </Badge>
+        </>
+      }
+      status={{ tone: "attention", label: t("showcase.tone.attention") }}
+      approval={{ pendingId: "showcase", onAnswer: () => undefined }}
+    >
+      <TerminalBody />
+    </NodeShell>
+  );
+}
+
+const headerNodeTypes: NodeTypes = { showcase: HeaderSpecimenNode };
+
+const headerFlowNodes: ShowcaseFlowNode[] = [
+  {
+    id: HEADER_NODE.id,
+    type: "showcase",
+    position: { x: 0, y: 0 },
+    data: HEADER_NODE,
+    width: HEADER_WIDTH,
+    height: HEADER_HEIGHT_PX,
+    draggable: false,
+    selectable: false,
+    dragHandle: ".drag-handle",
+  },
+];
+
+/** 节点头四段的固定状态：不悬停、不选中，所有控件也都在（设计系统 §4）。 */
+function HeaderSpecimen({ scale }: { scale: number }) {
+  return (
+    <div style={{ height: (HEADER_HEIGHT_PX + 2) * scale }}>
+      <div
+        data-showcase-node-header
+        className="canvas-stage relative origin-top-left overflow-hidden rounded-[var(--r-panel)] border border-border"
+        style={{
+          width: HEADER_WIDTH + 2,
+          height: HEADER_HEIGHT_PX + 2,
+          transform: scale < 1 ? `scale(${scale})` : undefined,
+        }}
+      >
+        {/* 自己的 provider：展示页外层那一个归上面的假画布，共用会互相覆盖节点。 */}
+        <ReactFlowProvider>
+          <ReactFlow
+            nodes={headerFlowNodes}
+            edges={[]}
+            nodeTypes={headerNodeTypes}
+            defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+            nodesDraggable={false}
+            nodesConnectable={false}
+            elementsSelectable={false}
+            panOnDrag={false}
+            zoomOnScroll={false}
+            zoomOnPinch={false}
+            zoomOnDoubleClick={false}
+            preventScrolling={false}
+            proOptions={{ hideAttribution: true }}
+          />
+        </ReactFlowProvider>
+      </div>
+    </div>
+  );
+}
+
 export default function CanvasSection() {
   // 投递流光只在「刚投递」的两秒内画；展示页把时刻放到未来，让它一直亮着。
   React.useEffect(() => {
@@ -256,56 +361,59 @@ export default function CanvasSection() {
   }, []);
 
   return (
-    <div ref={frame} style={{ height: (HEIGHT + 2) * scale }}>
-      <div
-        data-showcase-canvas
-        className="canvas-stage relative origin-top-left overflow-hidden rounded-[var(--r-panel)] border border-border"
-        style={{
-          width: WIDTH + 2,
-          height: HEIGHT + 2,
-          transform: scale < 1 ? `scale(${scale})` : undefined,
-        }}
-      >
-        <ReactFlow
-          nodes={flowNodes}
-          edges={flowEdges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          defaultViewport={{ x: 0, y: 0, zoom: 1 }}
-          nodesDraggable={false}
-          nodesConnectable={false}
-          elementsSelectable={false}
-          panOnDrag={false}
-          zoomOnScroll={false}
-          zoomOnPinch={false}
-          zoomOnDoubleClick={false}
-          preventScrolling={false}
-          proOptions={{ hideAttribution: true }}
-        >
-          <Background
-            variant={BackgroundVariant.Dots}
-            color="var(--canvas-dot)"
-            gap={20}
-          />
-        </ReactFlow>
+    <div ref={frame} className="flex flex-col gap-4">
+      <div style={{ height: (HEIGHT + 2) * scale }}>
         <div
-          className="pointer-events-none absolute inset-0"
-          style={{ zIndex: "var(--z-canvas-overlay)" }}
+          data-showcase-canvas
+          className="canvas-stage relative origin-top-left overflow-hidden rounded-[var(--r-panel)] border border-border"
+          style={{
+            width: WIDTH + 2,
+            height: HEIGHT + 2,
+            transform: scale < 1 ? `scale(${scale})` : undefined,
+          }}
         >
-          {PINS.map((pin) => (
-            <CommentPin key={`${pin.x}-${pin.y}`} {...pin} />
-          ))}
-          {PEERS.map((peer) => (
-            <PeerCursor
-              key={peer.member}
-              member={peer.member}
-              name={peer.name}
-              x={peer.cursor.x}
-              y={peer.cursor.y}
+          <ReactFlow
+            nodes={flowNodes}
+            edges={flowEdges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+            nodesDraggable={false}
+            nodesConnectable={false}
+            elementsSelectable={false}
+            panOnDrag={false}
+            zoomOnScroll={false}
+            zoomOnPinch={false}
+            zoomOnDoubleClick={false}
+            preventScrolling={false}
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background
+              variant={BackgroundVariant.Dots}
+              color="var(--canvas-dot)"
+              gap={20}
             />
-          ))}
+          </ReactFlow>
+          <div
+            className="pointer-events-none absolute inset-0"
+            style={{ zIndex: "var(--z-canvas-overlay)" }}
+          >
+            {PINS.map((pin) => (
+              <CommentPin key={`${pin.x}-${pin.y}`} {...pin} />
+            ))}
+            {PEERS.map((peer) => (
+              <PeerCursor
+                key={peer.member}
+                member={peer.member}
+                name={peer.name}
+                x={peer.cursor.x}
+                y={peer.cursor.y}
+              />
+            ))}
+          </div>
         </div>
       </div>
+      <HeaderSpecimen scale={scale} />
     </div>
   );
 }

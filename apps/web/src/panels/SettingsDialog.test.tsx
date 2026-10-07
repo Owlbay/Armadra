@@ -48,7 +48,7 @@ import { installDomPolyfills, TestProviders } from "../app/test-harness";
 import { usePreferencesStore } from "../app/preferences-store";
 import { useCanvasStore } from "../store/canvas-store";
 import { translate } from "../i18n";
-import { SettingsDialog } from "./SettingsDialog";
+import { SETTINGS_SHEET_CLASS, SettingsDialog } from "./SettingsDialog";
 import { visibleSettingsSections } from "./settings/nav";
 
 installDomPolyfills();
@@ -207,6 +207,29 @@ describe("SettingsDialog", () => {
     });
   });
 
+  it("弹窗按视口比例取尺寸，正文列封顶 960（设计系统 §2.7）", async () => {
+    open();
+    await screen.findByText(zh("settings.theme"));
+    const dialog = screen.getByTestId("settings-dialog");
+    expect(dialog.className).toContain("w-[var(--settings-dialog-w)]");
+    expect(dialog.className).toContain("h-[var(--settings-dialog-h)]");
+    expect(dialog.className).toContain(
+      "max-h-[calc(100dvh-48px-var(--safe-top)-var(--safe-bottom))]",
+    );
+    expect(dialog.className).toContain("max-lg:w-[calc(100vw-32px)]");
+    expect(dialog.className).not.toContain("w-[920px]");
+    const column = screen
+      .getByTestId("settings-page")
+      .querySelector('[data-slot="settings-column"]') as HTMLElement;
+    expect(column.className).toContain("max-w-[960px]");
+  });
+
+  it("手机底部 Sheet 取整高，压过 Sheet 自己的 h-auto", () => {
+    expect(SETTINGS_SHEET_CLASS).toBe(
+      "data-[side=bottom]:h-[calc(100dvh-48px-var(--safe-top))]",
+    );
+  });
+
   it("导航列出注册表里的每个分区，且没有搜索框", async () => {
     open();
     await screen.findByText(zh("settings.theme"));
@@ -340,26 +363,21 @@ describe("SettingsDialog", () => {
   });
 
   /**
-   * 画布内注入（canvas-only-integration §5）：一种 CLI 一行，一行里注入方式、
-   * Hook、技能、旧残留全都在；没有「安装 / 卸载」，只有「重新生成」。
+   * 集成页（ui-acp-refresh §1）：一家一张分组，画布注入一行说清哪一半没生成；
+   * 旧残留收在「修复 N」里，看过清单再修。没有「安装 / 卸载」，只有「重新生成」。
    */
-  it("集成页一行说清注入方式、Hook、技能与旧残留", async () => {
+  it("集成页一家一张分组：注入缺哪一半、旧残留与重新生成", async () => {
     open();
     fireEvent.click(navItem(zh("integration.nav")));
-    // 旧残留逐条列出来，用户在按「修复」之前看得见将要动哪些东西；清单收在
-    // 「旧残留」徽标里。徽标也是「Runtime 真的答了这一行」的证据：
-    // `GET /api/agents` 那份兜底报不出残留，所以等它出现就等于等接口落地。
+    // 「修复 N」也是「Runtime 真的答了这一组」的证据：`GET /api/agents` 那份
+    // 兜底报不出残留，所以等它出现就等于等接口落地。
     fireEvent.click(
       await screen.findByRole("button", {
-        name: zh("integration.legacy.count").replace("{count}", "1"),
+        name: zh("integration.action.repair").replace("{count}", "1"),
       }),
     );
     expect(await screen.findByText(/hooks\.SessionStart\[0\]/)).toBeTruthy();
-    expect(
-      screen.getByText(zh("integration.hook.revision").replace("{value}", "3")),
-    ).toBeTruthy();
-    expect(screen.getByText(zh("integration.mode.canvas"))).toBeTruthy();
-    expect(screen.getByText(zh("integration.skill.missing"))).toBeTruthy();
+    expect(screen.getByText(zh("integration.state.skillMissing"))).toBeTruthy();
 
     fireEvent.click(
       screen.getByRole("button", { name: zh("integration.regenerate") }),
@@ -373,6 +391,11 @@ describe("SettingsDialog", () => {
   it("「修复」按 found / removed / kept / backup 报结果", async () => {
     open();
     fireEvent.click(navItem(zh("integration.nav")));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: zh("integration.action.repair").replace("{count}", "1"),
+      }),
+    );
     fireEvent.click(
       await screen.findByRole("button", { name: zh("integration.repair") }),
     );

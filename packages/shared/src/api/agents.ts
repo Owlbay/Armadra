@@ -3,7 +3,7 @@ import { z } from "zod";
 import { agentProbeSchema } from "../agent-capabilities.js";
 import { AGENT_CAPABILITIES, AGENT_IDS, PROMPT_MODES } from "../agents.js";
 import { agentIdSchema } from "../domain/index.js";
-import { agentAcpInfoSchema } from "./acp.js";
+import { agentAcpInfoSchema, canvasAgentsSchema } from "./acp.js";
 
 /** One of `history.index` / `cost` / `transcript` (contract §12.2). */
 export const HISTORY_STATES = [
@@ -253,6 +253,8 @@ export const integrationStateSchema = z.looseObject({
   outdatedHosts: z.array(outdatedHostSchema).optional(),
   /** Something worked but deserves a sentence in the settings page. */
   warning: z.string().optional(),
+  /** 能不能在画布中创建 Agent（契约 §48，自 1.22 起）；旧 core 不带。 */
+  canvasAgents: canvasAgentsSchema.optional(),
 });
 
 /**
