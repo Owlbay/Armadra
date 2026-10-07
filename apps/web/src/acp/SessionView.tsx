@@ -21,9 +21,10 @@ import { Skeleton } from "@/ui/skeleton";
 import { Spinner } from "@/ui/spinner";
 import { acpApi } from "./api";
 import { ElicitationCard } from "./ElicitationCard";
-import { MessageList } from "./MessageList";
+import { MessageList, type MessageListActions } from "./MessageList";
 import { PermissionCard } from "./PermissionCard";
-import { PromptBox } from "./PromptBox";
+import type { PlanView } from "./PlanCard";
+import { PromptBox, type PromptPrefill } from "./PromptBox";
 import {
   EMPTY_SESSION,
   acpElicitationOf,
@@ -296,9 +297,38 @@ function useStickToBottom(
   }, [root, signal]);
 }
 
+/** 读屏在回合结束时念的那一段最多这么长。 */
+const ANNOUNCE_CHARS = 280;
+
 /**
- * ACP 驱动的终端节点的节点体（ACP 设计 §6，设计系统 §5.1）。头部、徽标、
- * 菜单都在 `TerminalNode`，这里只有消息流、审批卡与输入框。
+ * 流式分块不逐块念（消息区 `aria-live="off"`）：回合结束时把最后一条助手
+ * 文字放进一个稳定的 `role="status"` 区域，念一次（ACP 会话视图 §5.7）。
+ */
+function useTurnAnnouncement(
+  items: readonly { kind: string; role?: string; text?: string }[],
+  streaming: boolean,
+): string {
+  const [said, setSaid] = React.useState("");
+  const was = React.useRef(streaming);
+  React.useEffect(() => {
+    if (was.current && !streaming) {
+      const last = [...items]
+        .reverse()
+        .find((item) => item.kind === "message" && item.role === "assistant");
+      setSaid((last?.text ?? "").slice(0, ANNOUNCE_CHARS));
+    }
+    was.current = streaming;
+  }, [items, streaming]);
+  return said;
+}
+
+/**
+ * ACP 驱动的终端节点的节点体（ACP 设计 §6，设计系统 §5.1，ACP 会话视图
+ * §5）。头部、徽标、菜单都在 `TerminalNode`，这里只有消息流、审批卡与输入框。
+ *
+ * 根上 `select-text nopan nodrag nowheel`：React Flow 给节点的
+ * `user-select: none` 在这里撤掉（字能选、能复制），手形工具开着时按在会话
+ * 里也不平移画布、不拖节点，滚轮归消息流。
  */
 export function SessionView({
   nodeId,
@@ -328,6 +358,8 @@ export function SessionView({
   );
   const rootRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
+  const [prefill, setPrefill] = React.useState<PromptPrefill | null>(null);
+  const announcement = useTurnAnnouncement(view.items, view.streaming);
   useStickToBottom(rootRef, [
     view.items,
     view.streaming,
@@ -384,6 +416,53 @@ export function SessionView({
       return true;
     },
     [sessionId, nodeId, t, confirmTurn],
+  );
+
+  /**
+   * 重发一条提问（重新发送、重新生成）。只有「没送达」的那一轮沿用它的
+   * `clientTurnId`（契约 §39.9，core 只投递一次）；跑完了的回合再发是新的
+   * 一轮，换一个 id，否则会被 core 当成同一轮去重掉。
+   */
+  const resend = React.useCallback(
+    (text: string) => {
+      if (!sessionId) return;
+      const current = useAcpStore.getState().sessions[scoped(sessionId)];
+      const reuse =
+        current?.undelivered && current.lastPrompt === text
+          ? (current.clientTurnId ?? undefined)
+          : undefined;
+      void send(text, reuse);
+    },
+    [sessionId, send],
+  );
+
+  const prefillSeq = React.useRef(0);
+  const actions = React.useMemo<MessageListActions>(() => {
+    const last = view.items.at(-1);
+    return {
+      onEdit: (text) => {
+        prefillSeq.current += 1;
+        setPrefill({ text, seq: prefillSeq.current });
+      },
+      onResend: resend,
+      onPrompt: (text) => void send(text),
+      resendable:
+        view.failed ||
+        (last?.kind === "stop" &&
+          (last.stopReason === "cancelled" || last.stopReason === "refusal")),
+    };
+  }, [view.items, view.failed, resend, send]);
+
+  const plan = React.useMemo<PlanView | null>(
+    () =>
+      view.plan.length > 0 && view.planTurn !== null
+        ? {
+            entries: view.plan,
+            turn: view.planTurn,
+            settled: view.planSettled,
+          }
+        : null,
+    [view.plan, view.planTurn, view.planSettled],
   );
 
   const cancel = React.useCallback(() => {
@@ -492,6 +571,8 @@ export function SessionView({
           items={view.items}
           streaming={view.streaming}
           source={sessionId ? { nodeId, sessionId } : undefined}
+          plan={plan}
+          actions={actions}
         />
         {pendingCount > 1 &&
           permissions.map((permission) => (
@@ -526,14 +607,7 @@ export function SessionView({
                 <Button
                   size="xs"
                   variant="outline"
-                  onClick={() =>
-                    void send(
-                      view.lastPrompt as string,
-                      view.undelivered
-                        ? (view.clientTurnId ?? undefined)
-                        : undefined,
-                    )
-                  }
+                  onClick={() => resend(view.lastPrompt as string)}
                 >
                   {t("acp.error.retry")}
                 </Button>
@@ -549,7 +623,7 @@ export function SessionView({
     <div
       ref={rootRef}
       data-slot="acp-session-view"
-      className="flex h-full w-full flex-col bg-[var(--card)]"
+      className="nopan nodrag nowheel flex h-full w-full cursor-auto flex-col bg-[var(--card)] select-text"
       onClick={(event) => {
         // 空态那一句话是「点一下就能说」：点空白处把焦点交给输入框。
         if (empty && event.target === event.currentTarget)
@@ -562,12 +636,17 @@ export function SessionView({
         </Alert>
       )}
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex min-h-full flex-col gap-2 p-2.5">{body}</div>
+        <div className="flex min-h-full flex-col gap-3 p-2.5">{body}</div>
       </ScrollArea>
+      <div role="status" className="sr-only">
+        {announcement}
+      </div>
       {pinned && (
         <PermissionCard
+          key={pinned.pendingId}
           permission={pinned}
           canAnswer={canAnswer}
+          pinned
           className="mx-2 mb-1.5"
         />
       )}
@@ -591,6 +670,9 @@ export function SessionView({
         onCancel={cancel}
         onMode={selectMode}
         onModel={selectModel}
+        commands={view.commands}
+        usage={view.usage}
+        prefill={prefill}
       />
     </div>
   );

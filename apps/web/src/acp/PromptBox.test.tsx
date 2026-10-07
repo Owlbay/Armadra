@@ -219,4 +219,58 @@ describe("PromptBox", () => {
       restore();
     }
   });
+
+  it("fills the box from an edit-and-resend without sending, cursor at the end", async () => {
+    const { rerender } = renderBox({ prefill: { text: "try again", seq: 1 } });
+    const input = screen.getByLabelText("消息") as HTMLTextAreaElement;
+    await waitFor(() => expect(input.value).toBe("try again"));
+    expect(document.activeElement).toBe(input);
+    expect(onSubmit).not.toHaveBeenCalled();
+    // 同一句再填一次（seq 变了）也照样填进来。
+    fireEvent.change(input, { target: { value: "" } });
+    rerender(
+      <PromptBox
+        sessionId="s1"
+        disabled={false}
+        streaming={false}
+        modes={null}
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+        onMode={onMode}
+        prefill={{ text: "try again", seq: 2 }}
+      />,
+    );
+    await waitFor(() => expect(input.value).toBe("try again"));
+  });
+
+  it("shows context usage and turns to the warning colour near the limit", () => {
+    renderBox({ usage: { used: 12_300, size: 200_000 } });
+    const usage = document.querySelector("[data-slot=acp-usage]")!;
+    // 数字按界面语言紧凑写（中文是「万」）。
+    expect(usage.textContent).toBe("1.2万 / 20万");
+    expect(usage.getAttribute("data-warn")).toBeNull();
+    cleanup();
+    renderBox({ usage: { used: 190, size: 200 } });
+    expect(
+      document
+        .querySelector("[data-slot=acp-usage]")
+        ?.getAttribute("data-warn"),
+    ).toBe("true");
+  });
+
+  it("moves through slash commands with the arrow keys", () => {
+    Element.prototype.scrollIntoView ??= () => undefined;
+    renderBox({
+      commands: [
+        { name: "review", description: "" },
+        { name: "init", description: "" },
+      ],
+    });
+    const input = screen.getByLabelText("消息") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "/" } });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Tab" });
+    expect(input.value).toBe("/init ");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
 });

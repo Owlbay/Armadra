@@ -488,6 +488,7 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
             pending: session.pending(),
             elicitations: session.pendingElicitations(),
             turns: session.recentTurns(),
+            snapshot: session.snapshot(),
           }),
     };
   });
