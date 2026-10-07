@@ -3075,25 +3075,25 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 
 - **终端窗口尺寸（core）**：`record.cols/rows` 改为窗口尺寸，每个 attachment 自己记尺寸。窗口取谁的由纯函数 `windowSizeOf` 决定：有人类驾驶者（持终端驱动租约、经仍连着的那一端敲键）取驾驶者的；否则取面积最大的一端；同样大时保持当前，不来回切。只有结果变了才调后端一次。tmux 每个窗口建好（或重启后接管）就设成 `window-size manual`，窗口由 core 用 `resize-window` 显式设置（全局 conf 仍是 `latest`：全局 `manual` 会让 tmux 3.4 在第一次 detached `new-session` 时退出，Ubuntu 24.04 上复现过）；resize 帧只改发出它的那一端自己的 tmux 客户端（后端新增可选的 `resizeViewer`，SSH 包装按内层透传）。direct / session-host 只有一个 pty：别端的 resize 只记下来，pty 只跟窗口走。attach 不再用新来者的尺寸覆盖窗口；没给尺寸的 attach 从窗口尺寸起步，`hello` 报的就是这一端自己的尺寸。驾驶者停手十秒租约过期后，窗口自动回到最大端。
 - **页面 attach**：`hello` 尺寸与本地容器相同就不发 resize（`helloNeedsResize`）。比窗口小的一端由 tmux 裁切显示，比窗口大的一端右、下留空，不压主端。
-- **身份通知分级**：`onIdentitySessionChange` 的回调带 `appeared | gone | switched | rotated`。CSRF 轮换、Bearer 续期、同一会话的刷新都是 `rotated`；`forgetCsrf` 之后再采用别的窗口换来的令牌也算 `rotated`；登出与壳签不出票是 `gone`。`App.tsx` 只在 `appeared` 时失效此前以 401 / 403 失败的查询（`refusedForIdentity`），`switched`（换了人或设备）全量失效，`rotated` / `gone` 不动。
+- **身份通知分级**：`onIdentitySessionChange` 的回调带 `appeared | gone | switched | rotated`。CSRF 轮换、Bearer 续期、同一会话的刷新都是 `rotated`；`forgetCsrf` 之后再采用别的窗口换来的令牌也算 `rotated`；登出与壳签不出票是 `gone`。`App.tsx` 只在 `appeared`、`switched` 时整体失效，`rotated` / `gone` 不动。
 - **租约模式丢租约**：`applyPresence` 判定 `lost` 时只切只读，不清本地改动、不改保存状态；`use-board-sync` 不再重取文档。画布活动只在真正的编辑（文档被 commit 置 dirty）时记，指针按下、按键不再算，空闲持有者的租约不会被「摸一下」抢走。
 - **休眠唤醒**：休眠中的 tmux 终端被别的端叫醒时，本页重连不再 `terminal.reset()`（direct 会补发 snapshot，仍清屏）。
 
 实测：
 
 - core 单测：`windowSizeOf`（最大端、同大保持、驾驶者、Agent 持租约不算）；两端 attach，B resize 只改 B 的视图、窗口不动、同尺寸不再下发；B 敲键拿到租约后窗口变 B 的，十秒后回到 A 的；最大端断开后顺延；单 pty 后端只记尺寸。真 tmux：一端 `resizeViewer` 后 `list-clients` 里另一端尺寸与窗口不变，`resize` 只改窗口。socket：`hello` 报 manager 给的尺寸、resize 带 attachmentId、按键先记驾驶端。
-- web 单测：`helloNeedsResize`；`use-hibernation` 被别端叫醒的 tmux 表面重连不清屏、direct 照旧；`identity.test.ts` 配对 `appeared`、刷新与 CSRF 轮换 `rotated`、Bearer 续期 `rotated`、换人 `switched`、登出 `gone`、`forgetCsrf` 后采用 `rotated`；`App.test.tsx` `rotated` / `gone` 不失效、`appeared` 只带 `refusedForIdentity`、`switched` 全量；`use-board-sync.test.tsx` 被接管只读不重取、本地改动保留、只有编辑记活动（原来两条「被接管就按远端重载 / 丢掉本地改动」的断言按新设计改写）。
+- web 单测：`helloNeedsResize`；`use-hibernation` 被别端叫醒的 tmux 表面重连不清屏、direct 照旧；`identity.test.ts` 配对 `appeared`、刷新与 CSRF 轮换 `rotated`、Bearer 续期 `rotated`、换人 `switched`、登出 `gone`、`forgetCsrf` 后采用 `rotated`；`App.test.tsx` `rotated` / `gone` 不失效、`appeared` / `switched` 全量；`use-board-sync.test.tsx` 被接管只读不重取、本地改动保留、只有编辑记活动（原来两条「被接管就按远端重载 / 丢掉本地改动」的断言按新设计改写）。
 - 新探针 `tools/probes/join-no-refresh.mjs`（A 档，`tools/ci/e2e.d/join-no-refresh.json`）：A 1440×900 开两终端一便签，手机 390×844、第二台桌面 1280×800 先后加入，再从手机端开一条终端连接发 `resize 40x12`；每步断言 A 无整页重载、无重挂载、终端 WS 不断、3 秒内 output 帧 0、tmux 里 A 的客户端与窗口尺寸不变、画面逐行相同、只有周期请求与在线心跳、视口不变；手机那一端客户端是 40×12。本分支通过；把 `apps/` 换回 main 的代码再跑，第一步就失败（A 收到 8 帧重绘），和调查时的 7 帧一致。
-- `realtime-e2e` 回归通过。
+- `realtime-e2e` 回归通过；`ui-features-e2e --only=presence` 的接管一步按新行为改为断言「第一台保留本地改动、不重载」后通过；`gateway-e2e` 通过。
 
 没做 / 偏离：
 
 - 文件边界外动了几处，都是接口或仓库规则所需：新增 `core/terminal/viewers.ts`、`core/terminal/manager-types.ts`（只是把类型挪出去），`core/terminal/backpressure.test.ts` 的假 manager 补 `size`，以及`core/terminal/backend.ts`（`TerminalBackend.resizeViewer?` 与 `resize` 的语义注释）、`core/terminal/ssh/backend.ts`（透传 `resizeViewer`，否则 SSH 下的 tmux 会话退回单 pty 行为）。
-- `switched` 全量失效而不是只失效 401 / 403 的查询：换了人或设备时缓存里的数据都不是这个人的，按设计只重取被拒的会留下前一个人的数据。
+- `appeared` 也整体失效，而不是设计里的「只失效以 401 / 403 失败的查询」：配对前有些查询是**成功地**答「没有会话」（`useAccess` 的会话查询答 `null`），只重取失败的会让经 Gateway 打开、刚配对完的页面一直按成员处理（`gateway-e2e` 的「对外服务开着、二维码出来」超时，CI 上复现、本地验证）。`appeared` 只在配对、登录、过期后重新接上时出现，与别端加入无关；`switched` 同理全量，缓存里的数据不是这个人的。
 - `IdentityGate`、`Banners`、`GatewaySection` 三个订阅者不在本包边界内，没改：前者在 `rotated` 时仍失效一次会话查询（只是一条 `GET session`），`Banners` 用它刷新壳签票失败的通知条（需要所有通知），`GatewaySection` 在设备列表页才挂载。
 - 租约模式下，丢租约前还在去抖里的编辑，会在下一次保存时被 `autosave` 的只读分支丢掉（`save/autosave.ts` 不在边界内）；画布不再闪、撤销栈保留。
 - 单 pty 后端（direct / session-host）的别端仍按窗口宽度换行显示，这是单 pty 的固有限制。
 - 驾驶者是手机时窗口会变成手机尺寸，桌面端看到的是裁切视图；手机停手十秒（租约过期）后窗口回到桌面尺寸，这期间各端会各重绘一次。
 - 代码注释里的 `ui-acp-refresh §7.3 E-1…E-4` 指向本轮 UI / ACP 设计文档，若该文档最终不进仓库需要改成本节。
 
-接口：无契约变化。终端 WS（不在契约里）：`hello` 的 `cols/rows` 改为这一端自己的起始尺寸（未给尺寸时等于当前窗口）；resize 帧只作用于发出它的连接。页面：`onIdentitySessionChange(listener: (change: IdentityChange) => void)`，新增导出 `IdentityChange`、`refusedForIdentity`。core：`TerminalManager.attach(sessionId, size?, writer?)` 返回多一个 `size`，`resize(…, attachmentId?)`，新增 `noteViewerInput`、`windowOf`；观看者与窗口规则在新文件 `core/terminal/viewers.ts`（纯函数 `windowSizeOf`、`TerminalWindows`）；`TerminalBackend.resizeViewer?`。`manager.ts` 的公开类型挪到 `manager-types.ts`（`manager.ts` 照旧全部再导出），否则超过仓库 1500 行的上限。
+接口：无契约变化。终端 WS（不在契约里）：`hello` 的 `cols/rows` 改为这一端自己的起始尺寸（未给尺寸时等于当前窗口）；resize 帧只作用于发出它的连接。页面：`onIdentitySessionChange(listener: (change: IdentityChange) => void)`，新增导出 `IdentityChange`。core：`TerminalManager.attach(sessionId, size?, writer?)` 返回多一个 `size`，`resize(…, attachmentId?)`，新增 `noteViewerInput`、`windowOf`；观看者与窗口规则在新文件 `core/terminal/viewers.ts`（纯函数 `windowSizeOf`、`TerminalWindows`）；`TerminalBackend.resizeViewer?`。`manager.ts` 的公开类型挪到 `manager-types.ts`（`manager.ts` 照旧全部再导出），否则超过仓库 1500 行的上限。
