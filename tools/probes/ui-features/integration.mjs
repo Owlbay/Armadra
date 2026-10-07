@@ -2,10 +2,10 @@
 //
 // core 的 HOME / CLAUDE_CONFIG_DIR 指向探针自己造的临时目录（`prepareIntegrationHome`
 // 在 core 启动前调用），里面的 `.claude/settings.json` 在 11 个 Hook 事件下各挂
-// 一条同样的旧命令，外加一条用户自己的命令。截图确认：名字没有被挤出视口、
-// 行高正常、「旧残留 11」徽标点开的弹层在设置对话框之上且没被盖住、同一条
-// 命令合并成一行并标 ×11。最后点「修复」：残留清掉、用户自己的那条留着、
-// 旁边多一份备份——这些都只发生在临时目录里。
+// 一条同样的旧命令，外加一条用户自己的命令。截图确认：Claude Code 那张分组的
+// 标题在视口里、「画布注入」一行行高正常、「修复 11」点开的清单弹层在设置对话框
+// 之上且没被盖住、同一条命令合并成一行并标 ×11。最后点清单底下的「修复」：残留
+// 清掉、用户自己的那条留着、旁边多一份备份——这些都只发生在临时目录里。
 import {
   existsSync,
   mkdirSync,
@@ -89,21 +89,24 @@ export default async function integration({ stack, output, report, scenario }) {
   await page.settle();
   await openIntegration(page);
 
-  const badge = `return [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent.trim() === "旧残留 11");`;
-  await page.centerOf(badge, "「旧残留 11」徽标");
-  // Claude 那一行：名字在视口里、行高没有被一段命令撑开。
+  const badge = `return [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent.trim() === "修复 11");`;
+  await page.centerOf(badge, "「修复 11」");
+  // Claude Code 那张分组：标题在分组里、「画布注入」一行没有被一段命令撑开。
   const row = await page.evaluate(`
-    const name = [...document.querySelectorAll('[role="dialog"] *')].find((e) => e.children.length === 0 && e.textContent.trim() === "Claude Code");
     const badge = (() => { ${badge} })();
-    let row = badge;
-    while (row && !row.contains(name)) row = row.parentElement;
-    const r = row.getBoundingClientRect();
-    const n = name.getBoundingClientRect();
-    return { rowHeight: Math.round(r.height), nameLeft: Math.round(n.left), nameWidth: Math.round(n.width), rowLeft: Math.round(r.left), rowRight: Math.round(r.right) };
+    const group = badge.closest("section");
+    const title = group?.querySelector("h3");
+    const line = badge.closest(".settings-row");
+    const r = line.getBoundingClientRect();
+    const n = title.getBoundingClientRect();
+    return { title: title.textContent.trim(), rowHeight: Math.round(r.height), nameLeft: Math.round(n.left), nameWidth: Math.round(n.width), rowLeft: Math.round(r.left), rowRight: Math.round(r.right) };
   `);
   run.check(
-    row.rowHeight < 120 && row.nameWidth > 40 && row.nameLeft >= row.rowLeft,
-    "Claude 一行布局正常（名字在行内、行高不被撑开）",
+    row.title === "Claude Code" &&
+      row.rowHeight < 120 &&
+      row.nameWidth > 40 &&
+      row.nameLeft >= row.rowLeft - 8,
+    "Claude Code 分组布局正常（标题在分组上、注入一行行高不被撑开）",
     row,
   );
   await run.shot(page, "integration-1-page");
@@ -134,16 +137,15 @@ export default async function integration({ stack, output, report, scenario }) {
   );
   await sleep(300);
   await run.shot(page, "integration-2-popover");
-  await page.key("Escape");
-  await sleep(200);
 
   /* -------------------------------- 修复 --------------------------------- */
+  // 看过清单再修：「修复」在弹层底下。
   await page.clickOn(
-    `return [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent.trim() === "修复");`,
+    `return [...document.querySelectorAll('[data-slot="popover-content"] button')].find((b) => b.textContent.trim() === "修复");`,
     "修复",
   );
   await page.until(
-    `return !document.body.innerText.includes("旧残留 11")`,
+    `return !document.body.innerText.includes("修复 11")`,
     "修复后徽标消失",
     { timeout: 20_000 },
   );
@@ -180,7 +182,7 @@ export default async function integration({ stack, output, report, scenario }) {
     `return [...document.querySelectorAll('[role="dialog"] button, [role="dialog"] a')].find((b) => b.getAttribute("aria-label") === "集成" || b.textContent.trim() === "集成");`,
     "手机集成页",
   );
-  await phone.clickOn(badge, "手机上点开徽标");
+  await phone.clickOn(badge, "手机上点开「修复 11」");
   await phone.until(
     `return !!document.querySelector('[data-slot="popover-content"]')`,
     "手机弹层",
