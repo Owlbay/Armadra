@@ -147,6 +147,9 @@ beforeEach(async () => {
       clock += ms;
     },
     sweepEveryMs: false,
+    // Orchestration is host-independent here (stub terminal); the Windows gate
+    // itself is covered by its own test below.
+    platform: "linux",
     probe: () => ({ installed: true, trustedCompletion: true }),
     sourceRevision: () => 0,
   });
@@ -269,6 +272,32 @@ it("persists a run immediately, starts roots off-page, and only starts review af
     kind: "controller",
     controllerId: actor.controllerId,
   });
+});
+
+it("refuses to start a run on a Windows host before persisting anything", async () => {
+  const windows = new RunService({
+    context: core,
+    collab: () => collab,
+    sweepEveryMs: false,
+    platform: "win32",
+  });
+  try {
+    expect(() =>
+      windows.start(actor, boardId, input(), {
+        schemaVersion: 1,
+        requestId: "test",
+        instanceId: "instance",
+        method: "run.start",
+        params: { boardId, input: input() },
+        idempotencyKey: "windows",
+      }),
+    ).toThrow(expect.objectContaining({ code: "unsupported_platform" }));
+    expect(
+      core.database.prepare("SELECT count(*) n FROM runs").get(),
+    ).toMatchObject({ n: 0 });
+  } finally {
+    await windows.stop();
+  }
 });
 
 it("returns the same run on concurrent retries, rejects another owner and node occupation, and validates DAG atomically", async () => {
