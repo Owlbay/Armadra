@@ -522,25 +522,64 @@ export function probeLaunchConfig({ client }) {
 /**
  * 装进页面的小工具：经页面自己的地址与身份调 core（core 判的就是这个来源），
  * 终端经 WebSocket 附着、输入、等输出。
+ *
+ * 0.2.0 起回环上每条 `/api/` 与每条流都要会话（`core/identity/loopback.ts`，
+ * 契约 §3.2）：和页面自己一样，经壳的桥取一张票、`POST /api/identity/pair`
+ * 换 Bearer，HTTP 带 `Authorization`，WebSocket 先换一次性票放进
+ * `Sec-WebSocket-Protocol`。Bearer 只在页面内存里，不回传给探针。
  */
 export const PAGE_HELPERS = `(() => {
   const bridge = globalThis.window?.armadra;
   if (!bridge?.transport) throw new Error("window.armadra 上没有壳的桥");
   const { httpBase, wsBase } = bridge.transport.endpointsSync();
-  async function api(method, path, body) {
-    const response = await fetch(httpBase + path, {
+  let access = "";
+  let pairing = null;
+  async function pair() {
+    const answer = await bridge.identity.ticket();
+    if (!answer?.ok) throw new Error("壳没签出票：" + JSON.stringify(answer?.error ?? null));
+    const response = await fetch(httpBase + "/api/identity/pair", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ticket: answer.ticket.ticket }),
+    });
+    const session = await response.json().catch(() => null);
+    if (!response.ok || !session?.native?.accessToken)
+      throw new Error("配对失败：" + response.status);
+    access = session.native.accessToken;
+    return access;
+  }
+  async function bearer(rejected) {
+    if (access && access !== rejected) return access;
+    pairing ??= pair().finally(() => { pairing = null; });
+    return await pairing;
+  }
+  async function send(method, path, body, token) {
+    const headers = { authorization: "Bearer " + token };
+    if (body !== undefined) headers["content-type"] = "application/json";
+    return await fetch(httpBase + path, {
       method,
-      headers: body === undefined ? {} : { "content-type": "application/json" },
+      headers,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
+  }
+  async function api(method, path, body) {
+    const used = await bearer();
+    let response = await send(method, path, body, used);
+    if (response.status === 401) response = await send(method, path, body, await bearer(used));
     const text = await response.text();
     let json = null;
     try { json = text === "" ? null : JSON.parse(text); } catch { json = { raw: text.slice(0, 500) }; }
     return { status: response.status, body: json };
   }
-  function terminal(sessionId, writer, lines, waitFor, timeoutMs) {
-    return new Promise((done) => {
-      const socket = new WebSocket(wsBase + "/api/terminals/" + sessionId + "/ws?writer=" + writer);
+  async function wsProtocols() {
+    const answer = await api("POST", "/api/identity/ws-ticket");
+    if (answer.status !== 200 || !answer.body?.ticket) throw new Error("ws-ticket " + answer.status);
+    return ["armadra-ticket." + answer.body.ticket];
+  }
+  async function terminal(sessionId, writer, lines, waitFor, timeoutMs) {
+    const protocols = await wsProtocols();
+    return await new Promise((done) => {
+      const socket = new WebSocket(wsBase + "/api/terminals/" + sessionId + "/ws?writer=" + writer, protocols);
       let output = "";
       let hello = null;
       let inputId = 0;
@@ -570,8 +609,9 @@ export const PAGE_HELPERS = `(() => {
     });
   }
   async function events(workspaceId, type, trigger, timeoutMs) {
+    const protocols = await wsProtocols();
     return await new Promise((done) => {
-      const socket = new WebSocket(wsBase + "/api/workspaces/" + workspaceId + "/events");
+      const socket = new WebSocket(wsBase + "/api/workspaces/" + workspaceId + "/events", protocols);
       const timer = setTimeout(() => { try { socket.close(); } catch {} done({ ok: false, reason: "timeout" }); }, timeoutMs);
       socket.onopen = () => { setTimeout(() => trigger(), 300); };
       socket.onmessage = (event) => {

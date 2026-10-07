@@ -212,6 +212,21 @@ describe("连接页 · 多连接（添加连接）", () => {
     expect(document.body.textContent).not.toMatch(/SaaS|即将|预留|敬请/);
   });
 
+  it("「配对链接」有不依赖文案的标记，点了才出输入框（真机插桩用例按它走）", () => {
+    render(<ConnectScreen {...base} relay={outcomes()} />);
+    expect(
+      document.querySelector('[data-slot="mobile-connect"] input'),
+    ).toBeNull();
+    const link = document.querySelector<HTMLButtonElement>(
+      '[data-slot="mobile-connect"] [data-connect-method="link"]',
+    );
+    expect(link?.textContent).toBe("配对链接");
+    fireEvent.click(link as HTMLButtonElement);
+    expect(
+      document.querySelector('[data-slot="mobile-connect"] input'),
+    ).not.toBeNull();
+  });
+
   it("个人中转：地址、账号、口令 → 核对指纹 → 选择主机 → 挂载", async () => {
     const relay = outcomes();
     relay.begin.mockResolvedValue({ kind: "fingerprint", fingerprint: FP });

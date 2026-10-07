@@ -417,6 +417,7 @@ export function ConnectScreen({
                 variant="outline"
                 className="h-11 w-full"
                 disabled={shownBusy}
+                data-connect-method="link"
                 onClick={() => {
                   setFailure(null);
                   setView("link");

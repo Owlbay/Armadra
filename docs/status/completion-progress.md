@@ -3045,3 +3045,24 @@ iPad（WebKit）经个人中转给 ACP Agent 发 prompt 偶发「这一轮没有
 - core：`files/media.ts`（`MediaTickets`、`parseRange`、`byteHeaders`、`writeBytes`）、`identity/transport.ts` 的 `MEDIA_PATH_PREFIX` / `mediaPath`。
 - 页面：`directFileUrl(workspaceId, path, disposition, issue, source?)`、`downloadRuntimeFile(…, { direct })`、`Source.relayed?()`、`runtimeApi.mediaTicket`。
 - 合并顺序：armadra-cloud 的媒体票 PR 先合（老中继上换中继票失败时页面退回 `blob:`，不坏），再合本 PR。
+
+## nightly 回归修复（2026-10-05 起连续失败）
+
+nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业对完整日志与产物，四个作业里三个是探针 / 用例没跟上新行为，一个是基线没跟上契约内核带来的内存：
+
+- **windows acceptance**：`terminal.backend` 答 401 `unauthenticated`，之后整串跳过。根因是 `78d277c5`（回环上每条 `/api/` 与每条流都要会话，契约 §3.2）——探针装进页面的 `PAGE_HELPERS` 直接 `fetch` 不带凭据。改成与页面同一条路：经 `window.armadra.identity.ticket()` 取票、`POST /api/identity/pair` 换 Bearer，HTTP 带 `Authorization`（401 时换一枚只重发一次），WebSocket 先 `POST /api/identity/ws-ticket` 再放进 `Sec-WebSocket-Protocol`。Bearer 只在页面内存里。
+- **mobile (android / ios)**：多连接连接页（`4f84ed65`）在还没有连接时先列添加方式（扫码 / 配对链接 / 个人中转），输入框要点「配对链接」才出现；Android 与 iOS 的用例还在一上来找输入框。给「配对链接」按钮加不依赖文案的 `data-connect-method="link"`，Android 用例先点它；iOS 按「配对链接 / Pairing link」等连接页、点开后再找输入框，深链那条直接落在预填的输入框。Android 的取图（R-55）在 `86271782` 就已失败（`Failed to fetch`）：`2f72173e` 起页面不再改写全局 `fetch`，凭据装在本机源上，用例改为从 Keystore（`ArmadraNative.getSessions()`）读回这台 Gateway 的会话、自己带 `Authorization` 取。`adb: device offline` 只是模拟器启动等待期的输出，不是失败原因。
+- **Linux 打包与 B 档**：只有 `server-perf` 判 RSS 退化（稳态 175.9 → 228–260 MiB）。定位到契约内核与 E3 各域契约：`@armadra/shared` 在模块求值时建全部 zod schema（约 40 MiB 活对象，zod 4 classic 每个实例约 7.5 KiB），只加载服务器壳 bundle 的 RSS 就从 135 涨到 254 MiB。不是泄漏、也不是这次能顺手降的东西，`rssPeakMiB` / `rssSteadyMiB` 按三次夜间中位数重录（`server-performance-baseline.md` §3.2），其余指标不动。
+
+实测：
+
+- `windows-acceptance.test.mjs` 加页面工具的配对、401 重配、WS 票子协议用例；`ConnectScreen.test.tsx` 加 `data-connect-method` 用例；`server-perf.test.mjs` 过。
+- 分支上手动触发 nightly 37545888094：android、ios、macOS、Linux arm64、knip 全过；Windows 首跑全部检查过、只有 `soak` 的 powershell 30 秒内没回显（之前 4 次 nightly 都过），重跑作业通过；Linux 只剩 `server-perf` 的 RSS 两项（重录前）。
+- `pnpm libs:build && pnpm -r --if-present test` 全过。
+
+没做 / 偏离：
+
+- 服务器壳启动内存的真正下降（换 `zod/mini` 或按需构建契约）没做，留作独立工作。
+- Windows `soak` 的 powershell 偶发无回显只见过一次，没有证据指向产品问题，没改。
+
+接口：无变化。页面只多一个 `data-connect-method="link"` 标记（给真机 UI 用例用）。
