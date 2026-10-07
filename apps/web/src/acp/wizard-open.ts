@@ -12,17 +12,28 @@ interface WizardOpenState {
   open: boolean;
   /** 新节点的中心锚点；null = 视口中心。 */
   at: Position | null;
+  /**
+   * 「派生 Agent…」（设计 ui-acp-refresh §2.3）：新节点是这个节点的从，建好后
+   * 连一条 `role: "supervises"` 的边，并放在它右侧。null = 普通新建。
+   */
+  supervisorNodeId: string | null;
 }
 
 export const useWizardOpen = create<WizardOpenState>(() => ({
   open: false,
   at: null,
+  supervisorNodeId: null,
 }));
 
 export function openNewAgentWizard(at: Position | null = null): void {
-  useWizardOpen.setState({ open: true, at });
+  useWizardOpen.setState({ open: true, at, supervisorNodeId: null });
+}
+
+/** 从一个 Agent 节点派生一个从：同一个向导，创建后连主从边。 */
+export function openSpawnAgentWizard(supervisorNodeId: string): void {
+  useWizardOpen.setState({ open: true, at: null, supervisorNodeId });
 }
 
 export function closeNewAgentWizard(): void {
-  useWizardOpen.setState({ open: false, at: null });
+  useWizardOpen.setState({ open: false, at: null, supervisorNodeId: null });
 }

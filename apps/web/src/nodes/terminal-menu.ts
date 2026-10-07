@@ -8,6 +8,7 @@ import {
   SlidersHorizontal,
   SquareTerminal,
   Tag,
+  UserPlus,
 } from "lucide-react";
 import { supportedPermissionModes, type PermissionMode } from "@armadra/shared";
 
@@ -21,6 +22,7 @@ import { t } from "@/app/preferences-store";
 import { openNodeAnnotation } from "@/meta/annotations";
 import { canUseAcp, driverOf, switchDriver } from "@/acp/driver";
 import { visibleNodeMenu } from "@/acp/simple-mode";
+import { openSpawnAgentWizard } from "@/acp/wizard-open";
 import { openAgentSettings } from "./agent-settings";
 import { terminalHandle } from "./terminal-registry";
 
@@ -59,6 +61,14 @@ export function registerTerminalNodeMenu(): () => void {
         label: t("handoff.historyTitle"),
         icon: History,
         run: () => useCanvasStore.getState().setPanel("handoff", "drawer"),
+      },
+      // 派生 Agent（ui-acp-refresh §2.3）：人替它做 `canvas open-agent --role
+      // supervises`——同一个向导，建好后连主从边、放在它右侧。
+      {
+        id: "agent.spawn",
+        label: t("node.menu.spawnAgent"),
+        icon: UserPlus,
+        run: () => openSpawnAgentWizard(node.id),
       },
       // Agent 设置（设计 §10）：收件箱唤醒、从的投递、转录读取三项的唯一入口。
       {

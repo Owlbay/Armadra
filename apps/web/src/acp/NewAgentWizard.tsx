@@ -19,6 +19,7 @@ import {
   inheritedNodeData,
 } from "@/canvas/frame-binding";
 import { nodeDropPosition } from "@/canvas/placement";
+import { defaultNodeSize } from "@/store/defaults";
 import {
   ResponsiveDialog,
   ResponsiveDialogContent,
@@ -26,7 +27,11 @@ import {
   ResponsiveDialogTitle,
 } from "@/panels/ResponsiveDialog";
 import { useCompactLayout } from "@/platform/layout";
-import { useCanvasStore } from "@/store/canvas-store";
+import {
+  beginCoalesce,
+  endCoalesce,
+  useCanvasStore,
+} from "@/store/canvas-store";
 import { AgentAvatar } from "@/ui/agent-avatar";
 import { Button } from "@/ui/button";
 import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from "@/ui/empty";
@@ -36,6 +41,41 @@ import { RadioGroup, RadioGroupItem } from "@/ui/radio-group";
 import { WizardInstallButton } from "./adapter-install";
 import { acpApi } from "./api";
 import { closeNewAgentWizard, useWizardOpen } from "./wizard-open";
+
+/** 派生的从与主之间、从与从之间的间距（与 core 的 `collab/control/board.ts` 同规则）。 */
+const SPAWN_GAP = 60;
+
+/**
+ * 派生的从放在哪：主节点右侧隔 {@link SPAWN_GAP}、顶边对齐；那里已经有东西
+ * 就往下错开一个节点高加间距，直到不重叠（设计 ui-acp-refresh §2.3）。
+ */
+export function spawnPosition(
+  nodes: readonly CanvasNode[],
+  supervisorId: string,
+): Position | null {
+  const supervisor = nodes.find((node) => node.id === supervisorId);
+  if (!supervisor) return null;
+  const width =
+    supervisor.size?.width ?? defaultNodeSize(supervisor.type).width;
+  const size = defaultNodeSize("terminal");
+  const x = supervisor.position.x + width + SPAWN_GAP;
+  let y = supervisor.position.y;
+  const overlaps = (top: number) =>
+    nodes.some((node) => {
+      if (node.parentId) return false;
+      const box = node.size ?? defaultNodeSize(node.type);
+      return (
+        node.position.x < x + size.width &&
+        node.position.x + box.width > x &&
+        node.position.y < top + size.height &&
+        node.position.y + box.height > top
+      );
+    });
+  for (let attempt = 0; attempt < 64 && overlaps(y); attempt += 1) {
+    y += size.height + SPAWN_GAP;
+  }
+  return { x, y };
+}
 
 /**
  * 新建 Agent 向导（ACP 设计 §8 第 1 条，设计系统 §5.3）。
@@ -223,6 +263,7 @@ function permissionFor(agent: AgentInfo): PermissionMode | undefined {
 export async function createAgentFromWizard(
   agent: AgentInfo,
   position: Position,
+  supervisorNodeId: string | null = null,
 ): Promise<string | null> {
   const store = useCanvasStore.getState();
   const workspace = store.workspace;
@@ -242,13 +283,46 @@ export async function createAgentFromWizard(
     ...(permissionMode ? { permissionMode } : {}),
   });
   // 不写 cwd：addNode 按同一落点继承出同一个目录，会话与节点不会分家。
-  const id = useCanvasStore.getState().addNode("terminal", {
+  // 派生时节点与主从边是一个动作，撤销一次全回。
+  const spawn =
+    supervisorNodeId !== null &&
+    store.document.nodes.some((node) => node.id === supervisorNodeId);
+  if (spawn) beginCoalesce("agent.spawn");
+  try {
+    const id = addAgentNode(
+      agent,
+      nodeId,
+      position,
+      session.id,
+      permissionMode,
+    );
+    if (!id) return null;
+    if (spawn) {
+      const canvas = useCanvasStore.getState();
+      const edge = canvas.addEdge(supervisorNodeId, id);
+      if (edge) canvas.setEdgeRole(edge, "supervises");
+    }
+    revealCreatedNode(id);
+    return id;
+  } finally {
+    if (spawn) endCoalesce();
+  }
+}
+
+function addAgentNode(
+  agent: AgentInfo,
+  nodeId: string,
+  position: Position,
+  sessionId: string,
+  permissionMode: PermissionMode | undefined,
+): string | null {
+  return useCanvasStore.getState().addNode("terminal", {
     id: nodeId,
     title: agent.label,
     position,
     data: {
       kind: "terminal",
-      sessionId: session.id,
+      sessionId,
       agent: {
         id: agent.id,
         driver: "acp",
@@ -256,15 +330,12 @@ export async function createAgentFromWizard(
       },
     },
   });
-  if (!id) return null;
-  revealCreatedNode(id);
-  return id;
 }
 
 /** 挂在画布上，跟着 `wizard-open` 开关。 */
 export function NewAgentWizard() {
   const t = useT();
-  const { open, at } = useWizardOpen();
+  const { open, at, supervisorNodeId } = useWizardOpen();
   const compact = useCompactLayout();
   const agents = useAgentsQuery().data ?? [];
   /** 新节点的落点在打开时定下来：会话目录看它，节点也放在这里。 */
@@ -276,7 +347,12 @@ export function NewAgentWizard() {
   // 每次打开都重来；Agent 列表晚到时补上缺省选中。
   React.useEffect(() => {
     if (open) {
-      setPosition(nodeDropPosition("terminal", at ? { anchor: at } : {}));
+      const nodes = useCanvasStore.getState().document?.nodes ?? [];
+      setPosition(
+        (supervisorNodeId !== null
+          ? spawnPosition(nodes, supervisorNodeId)
+          : null) ?? nodeDropPosition("terminal", at ? { anchor: at } : {}),
+      );
       setState(initialWizardState(agents));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -299,6 +375,7 @@ export function NewAgentWizard() {
       const id = await createAgentFromWizard(
         agent,
         position ?? nodeDropPosition("terminal", at ? { anchor: at } : {}),
+        supervisorNodeId,
       );
       if (!id) throw new Error("not created");
       closeNewAgentWizard();
@@ -327,7 +404,13 @@ export function NewAgentWizard() {
         aria-describedby={undefined}
       >
         <ResponsiveDialogHeader>
-          <ResponsiveDialogTitle>{t("wizard.title")}</ResponsiveDialogTitle>
+          <ResponsiveDialogTitle>
+            {t(
+              supervisorNodeId !== null
+                ? "integration.wizard.spawnTitle"
+                : "wizard.title",
+            )}
+          </ResponsiveDialogTitle>
         </ResponsiveDialogHeader>
         <WizardBody
           state={state}
