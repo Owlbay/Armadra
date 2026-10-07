@@ -57,6 +57,8 @@ export interface RunServiceOptions {
   clock?: () => number;
   delay?: (ms: number) => Promise<void>;
   sweepEveryMs?: number | false;
+  /** Host platform; tests inject a Unix host to exercise the orchestration on any OS. */
+  platform?: NodeJS.Platform;
   probe?: (agentId: string) => AgentRunProbe;
   sourceRevision?: (
     sessionId: string,
@@ -229,7 +231,7 @@ export class RunService implements RunDeliveryBridge {
     command: ControllerCommand,
     initiator?: { kind: "human"; principalId: string },
   ): { runId: string; state: string } {
-    if (process.platform === "win32")
+    if ((this.options.platform ?? process.platform) === "win32")
       throw new ControllerError(
         "unsupported_platform",
         "Controller runs v1 requires a macOS or Linux Unix host",
