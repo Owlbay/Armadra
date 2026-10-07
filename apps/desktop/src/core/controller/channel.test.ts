@@ -32,7 +32,6 @@ function ask(socketPath: string, input: unknown, headers = {}) {
         path: CONTROLLER_PATH,
         method: "POST",
         headers,
-        agent: false,
       },
       (response) => {
         const chunks: Buffer[] = [];
