@@ -65,6 +65,30 @@
   left: -2px;
 }
 
+/* 上下两个把手：圆点骑在边框正中，命中区往节点外偏，少占节点头与底栏。 */
+.react-flow__handle.node-connection-handle:is(
+    [data-side="top"],
+    [data-side="bottom"]
+  ) {
+  top: auto;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.react-flow__handle.node-connection-handle:is(
+    [data-side="top"],
+    [data-side="bottom"]
+  )::before {
+  top: auto;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.react-flow__handle.node-connection-handle[data-side="top"]::before {
+  bottom: -2px;
+}
+.react-flow__handle.node-connection-handle[data-side="bottom"]::before {
+  top: -2px;
+}
+
 @media (hover: none), (any-pointer: coarse) {
   .react-flow__handle.node-connection-handle {
     --connection-port-size: 16px;
@@ -183,6 +207,14 @@
 
 .react-flow__handle.node-connection-handle[data-side="right"] {
   right: calc(var(--connection-port-size) * -0.5);
+}
+
+.react-flow__handle.node-connection-handle[data-side="top"] {
+  top: calc(var(--connection-port-size) * -0.5);
+}
+
+.react-flow__handle.node-connection-handle[data-side="bottom"] {
+  bottom: calc(var(--connection-port-size) * -0.5);
 }
 
 .react-flow__handle.node-connection-handle:hover,
