@@ -490,9 +490,11 @@ async function main() {
   // 等它可写再动手，否则改动会被冲掉。
   let writable = false;
   for (let attempt = 0; attempt < 120 && !writable; attempt += 1) {
+    // 实时连接是挂载后才起的：一开始 `realtime` 还是空的，不能当成「不走实时」。
+    // 起来了就等它可写；三秒还没起来才按非实时板处理。
     writable = await evaluate(`
       const realtime = store.getState().realtime;
-      return !realtime || realtime.writable === true;
+      return realtime ? realtime.writable === true : ${attempt >= 12};
     `);
     if (!writable) await sleep(250);
   }
@@ -652,15 +654,19 @@ async function main() {
     ys.size === 1 && subs[0].y > main.y + main.h,
     `主 y=${main.y}，子 y=${[...ys].join("/")}`,
   );
-  const blockMid = (subs[0].x + subs[2].x + subs[2].w) / 2;
-  check(
-    "主水平居中于子、子左右等距",
-    Math.abs(main.x + main.w / 2 - blockMid) <= 8 &&
-      subs[1].x - subs[0].x === subs[2].x - subs[1].x,
-    subs.map((sub) => sub.x).join(" / "),
-  );
   const web = now.get(seeded.browser.id);
   const host = now.get(seeded.subs[2].id);
+  // 附件计入宿主的块（§4.3），所以子块的右边是浏览器的右边。
+  const blockMid =
+    (subs[0].x + Math.max(subs[2].x + subs[2].w, web.x + web.w)) / 2;
+  check(
+    "主水平居中于子块、子左右等距",
+    Math.abs(main.x + main.w / 2 - blockMid) <= 8 &&
+      subs[1].x - subs[0].x === subs[2].x - subs[1].x,
+    `主中线 ${main.x + main.w / 2}，子块中线 ${blockMid}；子 x ${subs
+      .map((sub) => sub.x)
+      .join(" / ")}`,
+  );
   check(
     "浏览器挂在所连子 Agent 右侧同一行",
     web.y === host.y && web.x > host.x,
