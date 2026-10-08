@@ -2,12 +2,13 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isLegacyCommand, repairIn, scanIn } from "./repair";
+import { isOwnCommand, repairIn, scanIn } from "./repair";
 import { SKILLS_ROOT } from "./skills";
 import { tempDir } from "../../testing/temp-dir";
 
@@ -19,63 +20,75 @@ function readJson(path: string): Record<string, never> {
   return JSON.parse(readFileSync(path, "utf8")) as Record<string, never>;
 }
 
-describe("recognising what an earlier product name left behind", () => {
-  it("calls a command legacy when it names a binary of ours that is gone", () => {
-    expect(isLegacyCommand("/usr/local/bin/aicc-hook claude")).toBe(true);
-    expect(isLegacyCommand("~/.nodeterm/bin/hook codex")).toBe(true);
-    expect(isLegacyCommand("/repo/target/debug/armadra-hook claude")).toBe(
-      true,
-    );
+/** Another tool that installs into the same CLI files. */
+const OTHER_HOOK = "sh '/Users/dev/.othertool/agent-hooks/claude.sh'";
+
+describe("recognising what is ours", () => {
+  it("counts a command only when its program is our hook client", () => {
+    expect(isOwnCommand("/usr/local/bin/aicc-hook claude")).toBe(true);
+    expect(isOwnCommand("/opt/armadra/armadra-hook claude")).toBe(true);
+    expect(isOwnCommand('"/a b/aicc-hook" codex')).toBe(true);
+    expect(isOwnCommand("/repo/target/debug/armadra-hook claude")).toBe(true);
     expect(
-      isLegacyCommand(String.raw`C:\repo\target\debug\armadra-hook.exe claude`),
+      isOwnCommand(String.raw`C:\repo\target\debug\armadra-hook.exe claude`),
     ).toBe(true);
-    // The current install, and a stranger's, are both left alone.
-    expect(isLegacyCommand("/opt/armadra/armadra-hook claude")).toBe(false);
-    expect(isLegacyCommand("/usr/local/bin/notify.sh")).toBe(false);
+    expect(isOwnCommand("armadra-hook context-usage")).toBe(true);
+    // Another tool's commands, however they are spelled.
+    expect(isOwnCommand(OTHER_HOOK)).toBe(false);
+    expect(isOwnCommand("~/.othertool/bin/hook codex")).toBe(false);
+    expect(isOwnCommand("/repo/target/debug/othertool-hook claude")).toBe(
+      false,
+    );
+    expect(isOwnCommand("sh '/x/.aicc/aicc-hook/claude.sh'")).toBe(false);
+    expect(isOwnCommand("/usr/local/bin/notify.sh")).toBe(false);
   });
 });
 
 describe("repairing an instruction file", () => {
-  /**
-   * The `~/.codex/AGENTS.md` one user actually had: two legacy instruction
-   * blocks around their own text. Only the blocks go; the backup keeps the
-   * whole.
-   */
-  it("loses only its legacy marked blocks", () => {
+  it("removes only the blocks we fenced", () => {
     const directory = home();
     const path = join(directory, "AGENTS.md");
     const text =
       "# Mine\n\nkeep this line\n\n" +
-      "<!-- nodeterm:get-linked-context:start -->\nold words\n<!-- nodeterm:get-linked-context:end -->\n\n" +
-      "<!-- nodeterm:manage-canvas:start -->\nsh nodeterm.sh open-claude\n<!-- nodeterm:manage-canvas:end -->\n\n" +
-      "<!-- somebody:else:start -->\ntheirs\n<!-- somebody:else:end -->\n\n" +
+      "<!-- aicc:skills:start -->\nold words\n<!-- aicc:skills:end -->\n\n" +
+      "<!-- armadra:skills:start -->\nsh armadra-hook canvas list\n<!-- armadra:skills:end -->\n\n" +
+      "<!-- othertool:manage-canvas:start -->\ntheirs\n<!-- othertool:manage-canvas:end -->\n\n" +
       "<!-- aicc:dangling:start -->\nno end marker\n";
     writeFileSync(path, text, "utf8");
 
     const found = scanIn("codex", directory);
-    expect(
-      found
-        .filter((one) => one.kind === "instruction_block")
-        .map((one) => one.detail),
-    ).toEqual(["nodeterm:get-linked-context", "nodeterm:manage-canvas"]);
+    expect(found.map((one) => one.detail)).toEqual([
+      "aicc:skills",
+      "armadra:skills",
+    ]);
 
     const report = repairIn("codex", directory);
     const after = readFileSync(path, "utf8");
     expect(after, after).toContain("keep this line");
-    expect(after, after).toContain("<!-- somebody:else:start -->");
+    expect(after, after).toContain(
+      "<!-- othertool:manage-canvas:start -->\ntheirs\n<!-- othertool:manage-canvas:end -->",
+    );
     expect(after, after).toContain("<!-- aicc:dangling:start -->");
-    expect(after, after).not.toContain("nodeterm");
+    expect(after, after).not.toContain("aicc:skills");
+    expect(after, after).not.toContain("armadra:skills");
     expect(after, after).not.toContain("\n\n\n");
-    expect(
-      report.removed.some((entry) => entry.includes("nodeterm:manage-canvas")),
-    ).toBe(true);
-    const backup = report.backup as string;
-    expect(readFileSync(backup, "utf8")).toContain("open-claude");
-    expect(
-      scanIn("codex", directory).every(
-        (one) => one.kind !== "instruction_block",
-      ),
-    ).toBe(true);
+    expect(JSON.stringify(report)).not.toContain("othertool:");
+    expect(readFileSync(report.backup as string, "utf8")).toBe(text);
+    expect(scanIn("codex", directory)).toEqual([]);
+  });
+
+  it("does not touch a file holding only another tool's blocks", () => {
+    const directory = home();
+    const path = join(directory, "AGENTS.md");
+    const text =
+      "<!-- othertool:get-context:start -->\ntheirs\n<!-- othertool:get-context:end -->\n";
+    writeFileSync(path, text, "utf8");
+    expect(scanIn("codex", directory)).toEqual([]);
+    const report = repairIn("codex", directory);
+    expect(report.removed).toEqual([]);
+    expect(report.backups).toEqual([]);
+    expect(readFileSync(path, "utf8")).toBe(text);
+    expect(readdirSync(directory)).toEqual(["AGENTS.md"]);
   });
 });
 
@@ -109,14 +122,24 @@ function claudeFixture(): [string, string] {
             {
               hooks: [{ type: "command", command: "/usr/local/bin/notify.sh" }],
             },
+            { hooks: [{ type: "command", command: OTHER_HOOK }] },
           ],
           SessionStart: [
             {
               hooks: [
                 {
                   type: "command",
-                  command:
-                    "/Users/dev/nodeterm/target/debug/armadra-hook claude",
+                  command: "/Users/dev/src/target/debug/armadra-hook claude",
+                },
+              ],
+            },
+          ],
+          SessionEnd: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: "/Users/dev/othertool/target/debug/othertool-hook",
                 },
               ],
             },
@@ -138,12 +161,16 @@ describe("repairing a hook file", () => {
     expect(found, JSON.stringify(found)).toHaveLength(3);
     expect(found.some((one) => one.kind === "status_line")).toBe(true);
     expect(found.filter((one) => one.kind === "hook_entry")).toHaveLength(2);
+    expect(JSON.stringify(found)).not.toContain("othertool");
 
     const report = repairIn("claude", directory);
     const backup = report.backup as string;
     expect(backup).toContain(".armadra-backup-");
     // The backup is the file as it was.
     expect(readFileSync(backup, "utf8")).toContain("aicc-hook");
+    // Another tool's entries are neither removed nor reported.
+    expect(JSON.stringify(report)).not.toContain("othertool");
+    expect(JSON.stringify(report)).not.toContain("notify.sh");
 
     const settings = readJson(path) as unknown as {
       model: string;
@@ -152,15 +179,13 @@ describe("repairing a hook file", () => {
     };
     expect(settings.model).toBe("opus");
     expect(settings.statusLine).toBeUndefined();
-    // Their notify hook survives; the event that was only ours is gone.
-    expect(settings.hooks.Stop).toHaveLength(1);
-    expect(settings.hooks.Stop?.[0]?.hooks[0]?.command).toBe(
-      "/usr/local/bin/notify.sh",
-    );
-    expect(settings.hooks.SessionStart).toBeUndefined();
     expect(
-      report.kept.some((entry) => entry.includes("/usr/local/bin/notify.sh")),
-    ).toBe(true);
+      settings.hooks.Stop?.map((group) => group.hooks[0]?.command),
+    ).toEqual(["/usr/local/bin/notify.sh", OTHER_HOOK]);
+    expect(settings.hooks.SessionStart).toBeUndefined();
+    expect(settings.hooks.SessionEnd?.[0]?.hooks[0]?.command).toBe(
+      "/Users/dev/othertool/target/debug/othertool-hook",
+    );
 
     // Repairing twice finds nothing and writes no second backup.
     const again = repairIn("claude", directory);
@@ -169,10 +194,10 @@ describe("repairing a hook file", () => {
   });
 
   /**
-   * The reported Codex failure: a top-level `version` some other installer
-   * wrote makes Codex reject the whole file, so nobody's hooks run.
+   * The reported Codex failure: the top-level `version` our installer wrote
+   * makes Codex reject the whole file, so nobody's hooks run.
    */
-  it("rewrites a Codex file with an unknown top-level key", () => {
+  it("drops the version key our Codex installer wrote, beside our entry", () => {
     const directory = home();
     const path = join(directory, "hooks.json");
     writeFileSync(
@@ -223,7 +248,23 @@ describe("repairing a hook file", () => {
     );
   });
 
-  it("removes a Copilot file that was only ours and rewrites a shared one", () => {
+  it("leaves a Codex file with no entry of ours exactly as it is", () => {
+    const directory = home();
+    const path = join(directory, "hooks.json");
+    const text = JSON.stringify({
+      version: 1,
+      othertool: { enabled: true },
+      hooks: { stop: [{ hooks: [{ type: "command", command: OTHER_HOOK }] }] },
+    });
+    writeFileSync(path, text, "utf8");
+    expect(scanIn("codex", directory)).toEqual([]);
+    const report = repairIn("codex", directory);
+    expect(report.removed).toEqual([]);
+    expect(readFileSync(path, "utf8")).toBe(text);
+    expect(readdirSync(directory)).toEqual(["hooks.json"]);
+  });
+
+  it("removes a Copilot file that was only ours and never touches another tool's", () => {
     const directory = home();
     const hooks = join(directory, "hooks");
     mkdirSync(hooks, { recursive: true });
@@ -247,37 +288,35 @@ describe("repairing a hook file", () => {
       ),
       "utf8",
     );
-    writeFileSync(
-      join(hooks, "theirs.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          hooks: {
-            sessionStart: [
-              {
-                type: "command",
-                exec: "/opt/nodeterm/hook",
-                args: ["copilot"],
-              },
-              { type: "command", exec: "/opt/mine.sh" },
-            ],
-          },
+    const theirs = JSON.stringify(
+      {
+        version: 1,
+        hooks: {
+          sessionStart: [
+            {
+              type: "command",
+              bash: "sh '/Users/dev/.othertool/agent-hooks/copilot.sh'",
+            },
+            { type: "command", exec: "/opt/mine.sh" },
+          ],
         },
-        null,
-        2,
-      ),
-      "utf8",
+      },
+      null,
+      2,
     );
+    writeFileSync(join(hooks, "othertool-status.json"), theirs, "utf8");
 
-    expect(scanIn("copilot", directory)).toHaveLength(2);
+    expect(scanIn("copilot", directory)).toHaveLength(1);
     const report = repairIn("copilot", directory);
     expect(existsSync(join(hooks, "armadra.json"))).toBe(false);
-    const theirs = readJson(join(hooks, "theirs.json")) as unknown as {
-      hooks: Record<string, { exec: string }[]>;
-    };
-    expect(theirs.hooks.sessionStart).toHaveLength(1);
-    expect(theirs.hooks.sessionStart?.[0]?.exec).toBe("/opt/mine.sh");
-    expect(report.backups, JSON.stringify(report.backups)).toHaveLength(2);
+    expect(readFileSync(join(hooks, "othertool-status.json"), "utf8")).toBe(
+      theirs,
+    );
+    expect(
+      readdirSync(hooks).filter((name) => name.startsWith("othertool")),
+    ).toEqual(["othertool-status.json"]);
+    expect(report.backups, JSON.stringify(report.backups)).toHaveLength(1);
+    expect(JSON.stringify(report)).not.toContain("othertool");
   });
 
   it("never rewrites a file it cannot parse", () => {
@@ -292,34 +331,38 @@ describe("repairing a hook file", () => {
 });
 
 describe("repairing skills and generated modules", () => {
-  it("removes legacy skill directories and keeps a user file beside one", () => {
+  it("removes our skill directories by signature and nothing else", () => {
     const directory = home();
     const root = join(directory, SKILLS_ROOT);
-    for (const name of [
-      "aicc-canvas",
-      "get-linked-context",
-      "manage-nodeterm-canvas",
-    ]) {
+    const skill = (name: string, body: string) => {
       mkdirSync(join(root, name), { recursive: true });
-      writeFileSync(
-        join(root, name, "SKILL.md"),
-        "---\nname: old\n---\n",
-        "utf8",
-      );
-    }
+      writeFileSync(join(root, name, "SKILL.md"), body, "utf8");
+    };
+    skill(
+      "aicc-canvas",
+      "---\nname: aicc-canvas\n---\naicc-hook canvas list\n",
+    );
+    skill(
+      "armadra",
+      "---\nname: armadra\n---\n<!-- armadra:skill-revision 9 -->\n",
+    );
+    // Another tool's skills, and one of our names without our signature.
+    skill("othertool-canvas", "---\nname: othertool-canvas\n---\n");
+    skill("othertool-linked-context", "sh othertool.sh context\n");
+    skill("aicc-linked-context", "---\nname: aicc-linked-context\n---\n");
     // Something of the user's, in a directory that is otherwise ours.
     writeFileSync(join(root, "aicc-canvas", "notes.md"), "mine", "utf8");
-    // The current skill is not residue, however it got there.
-    mkdirSync(join(root, "armadra"), { recursive: true });
-    writeFileSync(join(root, "armadra", "SKILL.md"), "current", "utf8");
 
     const found = scanIn("claude", directory);
-    expect(found.filter((one) => one.kind === "skill_dir")).toHaveLength(3);
+    expect(
+      found
+        .filter((one) => one.kind === "skill_dir")
+        .map((one) => one.detail)
+        .sort(),
+    ).toEqual(["aicc-canvas", "armadra"]);
 
     const report = repairIn("claude", directory);
-    expect(existsSync(join(root, "get-linked-context"))).toBe(false);
-    expect(existsSync(join(root, "manage-nodeterm-canvas"))).toBe(false);
-    // Ours went; theirs stayed, and the report says the directory remains.
+    expect(existsSync(join(root, "armadra"))).toBe(false);
     expect(existsSync(join(root, "aicc-canvas", "SKILL.md"))).toBe(false);
     expect(readFileSync(join(root, "aicc-canvas", "notes.md"), "utf8")).toBe(
       "mine",
@@ -327,10 +370,17 @@ describe("repairing skills and generated modules", () => {
     expect(report.kept.some((entry) => entry.includes("aicc-canvas"))).toBe(
       true,
     );
-    expect(statSync(join(root, "armadra", "SKILL.md")).isFile()).toBe(true);
+    for (const name of [
+      "othertool-canvas",
+      "othertool-linked-context",
+      "aicc-linked-context",
+    ]) {
+      expect(statSync(join(root, name, "SKILL.md")).isFile(), name).toBe(true);
+    }
+    expect(JSON.stringify(report)).not.toContain("othertool");
   });
 
-  it("deletes a generated module from the old name and not a stranger's", () => {
+  it("deletes a generated module of ours and not a stranger's", () => {
     const directory = home();
     const extensions = join(directory, "extensions");
     mkdirSync(extensions, { recursive: true });
@@ -340,14 +390,16 @@ describe("repairing skills and generated modules", () => {
       "utf8",
     );
     writeFileSync(
-      join(extensions, "theirs.ts"),
-      "export default () => {};\n",
+      join(extensions, "othertool-status.ts"),
+      'const HOOK = "/Users/dev/.othertool/agent-hooks/pi.sh";\n',
       "utf8",
     );
 
     expect(scanIn("pi", directory)).toHaveLength(1);
     repairIn("pi", directory);
     expect(existsSync(join(extensions, "aicc-status.ts"))).toBe(false);
-    expect(statSync(join(extensions, "theirs.ts")).isFile()).toBe(true);
+    expect(statSync(join(extensions, "othertool-status.ts")).isFile()).toBe(
+      true,
+    );
   });
 });
