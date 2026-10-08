@@ -3448,7 +3448,7 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - **预启动**（新 `core/acp/prestart.ts`，`POST /api/acp/prestart { workspaceId, agentId }` → 204）：`(agentId, workspaceId)` 一个已 `initialize` 的进程，10 s 没领走就收；起会话时启动签名相同就领走，直接 `session/new`。回调经 `callbackRelay` 转接，领走时换成会话那一套。
 - **预热**：`adapter-install.ts` 装好 / 升级成功后、core 空闲 10 s 后、预启动时发现适配器程序（路径 + mtime）换过，对每家已装适配器跑一次 `initialize` 并执行一次自带 CLI 的 `--version`（`bundledCli` 找 SDK 平台包里的 `claude`、`@openai/codex-<平台>` 里的原生程序）；串行、同一家同一份程序 10 分钟一次；Codex 也过闸门。`ARMADRA_ACP_WARMUP=0` 关空闲预热；vitest 与 `ARMADRA_NO_GLOBAL_WRITES=1`（探针）里不做——`agent-e2e-self-test` 断言探针 core 不替人起任何真 CLI。
 - **页面**（`acp/SessionView.tsx`）：输入框只在断线或起会话失败时禁用；会话就绪前发的第一条先画成用户气泡，`createSession` 还没发出就随 `prompt` 一起发，已发出就等会话开好、镜像读到后经 `acp.prompt`（带 `clientTurnId`）发；骨架区上方一行 11px 阶段提示 + 12px Spinner，`session` 阶段超过 3 s 追加「首次启动较慢」；超时显示「启动超时」+「重试」。节点挂载时工作空间还没读到的，读到后再起会话（以前不会再起）。
-- **菜单打开时预启动**：`acp/api.ts::usePrestartOnOpen(agents)`，`AddMenuContent.tsx` 加一行；只对默认 Agent、以 ACP 驱动、本机源。
+- **菜单打开时预启动**：`acp/api.ts::usePrestartOnOpen(agents)`，`AddMenuContent.tsx` 加一行；只对默认 Agent、以 ACP 驱动、本机源。画布右键、Dock `+`、会话侧栏 `+` 与包 C2 的拖线到空白处菜单都经这份组件，打开即预启动；节点菜单的「派生」子菜单不经它，没接。
 - 契约 §51（§14.2 错误码、§14.3 事件列表各加一句指向）；协议 minor 统一升到 24（`identity/protocol.ts`、`parity-identity.test.ts`、`http/rpc.test.ts`）；文案 `acp.starting.{spawn,initialize,session,configure,cold}`、`acp.error.timeout` 中英同步；`docs/guides/architecture.md`、`development.md`（`ARMADRA_ACP_WARMUP`）。
 
 实测（macOS arm64，隔离 `ARMADRA_DATA_DIR` + 临时 HOME + `ARMADRA_NO_GLOBAL_WRITES=1`，无任何账号；Vite 开发页 + 无头 Chrome；从点下菜单里的 Agent 到「输入框可输入」/「会话就绪」，每家 4 次取后 3 次）：
@@ -3461,7 +3461,7 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 「可输入」剩下的 ~160 ms 是建节点、懒加载会话视图（开发模式）；「就绪」仍取决于 CLI 自己的启动，预启动只省 spawn + `initialize`（Claude 约 180–200 ms）。core 日志里每次都有 `prestarted: true` 的 timings；空闲预热记了 claude 205 ms / `--version` 11 ms、codex 2175 ms / 18 ms（量的时候空闲预热在 `ARMADRA_NO_GLOBAL_WRITES=1` 下还开着；之后改为探针模式不预热，表里的「可输入 / 就绪」不靠它）。
 - `acp-e2e.mjs` 全过，新增一步：会话视图挂出到输入框可聚焦 0 ms（≤ 200 ms），节点出现到可输入 316 ms。
 - 新增用例：`host.test.ts`（四阶段按序、计时只有数字、`session/new` 不答 300 ms 后 `acp_session_timeout` 且进程被收、预启动进程不再 spawn / 协商且回调接上）、`prestart.test.ts`（签名与环境顺序无关、领走一次且幂等、签名不同不领、10 s 回收、起不来丢弃、`bundledCli`、预热节流与换文件重做、过闸门、`adapterPhases` 只取名字与数字、HTTP 预启动 → 领走只报 session / configure、注入按节点的不预启动、400 / 404、两个 Codex 过闸门串行）、web `SessionView.test.tsx`（起会话期间可输入可聚焦、阶段文字随事件变、首条等会话开好经 prompt 发、请求未发时随 `createSession.prompt` 发、首次启动较慢、启动超时）、`acp/api.test.ts`（默认 Agent 以 ACP 驱动才预启动、只一次、远程源与没有工作空间不调、失败不打扰）。
-- `pnpm libs:build && pnpm -r --if-present test` 全过（web 4104、desktop 5385 / 67 跳、shared 372、server 98 / 4 跳）；web typecheck、`pnpm check` 通过。
+- `pnpm libs:build && pnpm -r --if-present test` 全过（web 4104、desktop 5385 / 67 跳、shared 372、server 98 / 4 跳）；合入 C2（#204）后重跑 web 4120、desktop 5390 / 67 跳；web typecheck、`pnpm check` 通过。
 
 没做 / 偏离：
 
