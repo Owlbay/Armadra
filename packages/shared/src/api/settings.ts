@@ -6,6 +6,7 @@ import {
   COMPLETION_SETTINGS_DEFAULTS,
   GATEWAY_LISTEN_CHOICES,
   GATEWAY_TLS_SOURCES,
+  LAYOUT_DIRECTION_CHOICES,
   MAX_OAUTH_PROVIDERS,
   MFA_REQUIRE_CHOICES,
   OAUTH_PROVIDER_KINDS,
@@ -241,6 +242,15 @@ export const completionSettingsSchema = z.looseObject({
     })
     .catch({ ...D.agents })
     .default({ ...D.agents }),
+  canvas: z
+    .looseObject({
+      layoutDirection: z
+        .enum(LAYOUT_DIRECTION_CHOICES)
+        .catch(D.canvas.layoutDirection)
+        .default(D.canvas.layoutDirection),
+    })
+    .catch({ ...D.canvas })
+    .default({ ...D.canvas }),
   collab: z
     .looseObject({
       realtime: z.boolean().catch(D.collab.realtime).default(D.collab.realtime),

@@ -237,6 +237,8 @@ export interface RuntimeSettingsPatch {
   /** `defaultDriver`：新建 Agent 节点缺省走会话视图还是终端（ACP 设计 §8）。 */
   agents?: { custom?: CustomAgent[]; defaultDriver?: AgentDriver };
   hooks?: { replyApprovals?: boolean };
+  /** 派发树往哪个方向长（契约 §50）；整理与 core 的放置都按它。 */
+  canvas?: { layoutDirection?: "vertical" | "horizontal" };
   usage?: {
     enabled?: boolean;
     refreshMinutes?: number;
