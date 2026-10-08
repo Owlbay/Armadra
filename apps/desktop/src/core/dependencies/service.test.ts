@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type AgentFixture, agentFixture, callerFor } from "../agent/fixture";
 import { EventBus } from "../bus";
+import {
+  LaunchGate,
+  configDirFor,
+  installLaunchGate,
+  resetLaunchGate,
+} from "../agent/launch-gate";
 import { loadBoard } from "../canvas/documents";
 import { controlDispatcher, type ControlOutcome } from "../collab/control";
 import { resetSendLimits } from "../collab/send-limits";
@@ -219,6 +225,45 @@ describe("服务端触发（没有页面）", () => {
       expect.objectContaining({ sessionId }),
     ]);
     expect(launchFor(fixture.database, created)?.state).toBe("launched");
+  });
+
+  it("core 起的 Codex 也过启动闸门：前一个没起来就不敲", async () => {
+    const gate = new LaunchGate({
+      now: () => Date.now(),
+      setTimeout: (callback, ms) => setTimeout(callback, ms),
+      clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
+      random: () => 0,
+    });
+    resetLaunchGate(gate);
+    const off = installLaunchGate(bus);
+    try {
+      report(upstream, "working");
+      const created = await openAfter();
+      await gate.acquire({
+        agentId: "codex",
+        configDir: configDirFor("codex"),
+        nodeId: "holder",
+      });
+      report(upstream, "done");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(fixture.terminal.writes).toHaveLength(0);
+      expect(gate.position(created)).toBe(1);
+
+      // 持有者报出第一条真上报：放行，抖动 500 ms 之后轮到它。
+      bus.emit("workspace.event", {
+        workspaceId: fixture.workspaceId,
+        event: {
+          type: "agent.status",
+          status: { nodeId: "holder", stateSource: "hook" },
+        },
+      });
+      await settled(created);
+      expect(fixture.terminal.writes).toHaveLength(1);
+      expect(launchFor(fixture.database, created)?.state).toBe("launched");
+    } finally {
+      off();
+      resetLaunchGate();
+    }
   });
 
   it("上游早已干净地做完，current 当场放行", async () => {

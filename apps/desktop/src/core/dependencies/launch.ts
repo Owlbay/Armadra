@@ -4,7 +4,9 @@ import {
   expectedProcesses,
   paneRunsAgent,
 } from "../agent/launch";
+import { activeLaunchGate, configDirFor } from "../agent/launch-gate";
 import { listAgents } from "../agent/list";
+import { baseAgent } from "../agent/registry";
 import { loadBoard, saveBoard } from "../canvas/documents";
 import type { CanvasNode } from "../canvas/document-types";
 import {
@@ -201,6 +203,18 @@ export async function launchNode(
     }
   }
 
+  // 启动闸门（契约 §52）：同一份配置目录上的 Codex 一个一个起。等不到也照敲，
+  // 闸门是减速带不是门禁。
+  const gate = activeLaunchGate();
+  if (gate !== undefined && node.data.ssh == null) {
+    const base = baseAgent(collab.settings, agentId);
+    await gate.acquire({
+      agentId: base,
+      configDir: configDirFor(base),
+      nodeId: node.id,
+    });
+  }
+
   const quiet = await waitForPrompt(environment, sessionId);
   if (quiet === "stopped") return { kind: "failed", reason: "run_stopped" };
   if (quiet === "pending") {
@@ -334,7 +348,13 @@ export function launchLine(
     ...(permissionMode === undefined ? {} : { permissionMode }),
     ...(model === undefined ? {} : { model }),
     ...(resume === undefined ? {} : { resume }),
-    ...(row?.resolvedPath == null ? {} : { program: row.resolvedPath }),
+    // 版本管理器的垫片已经穿透过（契约 §52）：起垫片背后那一份。Windows 包装
+    // 的前置词由 `canvasLaunch` 自己再读一遍，那时仍给包装本身。
+    ...(row?.launchTarget !== undefined && row.launchTarget.args.length === 0
+      ? { program: row.launchTarget.program }
+      : row?.resolvedPath == null
+        ? {}
+        : { program: row.resolvedPath }),
   });
 }
 
