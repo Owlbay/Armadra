@@ -401,7 +401,11 @@ describe("SettingsDialog", () => {
     fireEvent.click(navItem(zh("settings.section.agents")));
     // 技能没生成：主表这一行是「需更新」，动作是「更新」。
     expect(
-      await screen.findByText(zh("agents.state.updateNeeded")),
+      await screen.findByText(
+        zh("agents.state.updateNeeded"),
+        {},
+        { timeout: 5_000 },
+      ),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Claude Code/ }));
     expect(screen.getByTestId("settings-heading").textContent).toBe(
@@ -428,8 +432,13 @@ describe("SettingsDialog", () => {
   it("主表的「更新」就是重新生成注入产物", async () => {
     open();
     fireEvent.click(navItem(zh("settings.section.agents")));
+    // 集成状态读回来才知道要更新：慢机器上这一步可能超过默认的 1 秒。
     fireEvent.click(
-      await screen.findByRole("button", { name: zh("agents.action.update") }),
+      await screen.findByRole(
+        "button",
+        { name: zh("agents.action.update") },
+        { timeout: 5_000 },
+      ),
     );
     await waitFor(() =>
       expect(installAgentIntegration).toHaveBeenCalledWith("claude"),
