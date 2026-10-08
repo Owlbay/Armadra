@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   type GateClock,
@@ -139,11 +140,11 @@ describe("LaunchGate", () => {
 describe("configDirFor", () => {
   it("reads the CLI's own home variable", () => {
     expect(configDirFor("codex", { CODEX_HOME: "/x" }, "/h")).toBe("/x");
-    expect(configDirFor("codex", {}, "/h")).toBe("/h/.codex");
+    expect(configDirFor("codex", {}, "/h")).toBe(join("/h", ".codex"));
     expect(configDirFor("claude", { CLAUDE_CONFIG_DIR: "/c" }, "/h")).toBe(
       "/c",
     );
-    expect(configDirFor("pi", {}, "/h")).toBe("/h/.pi");
+    expect(configDirFor("pi", {}, "/h")).toBe(join("/h", ".pi"));
   });
 
   it("only codex has a concurrency limit", () => {
