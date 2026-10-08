@@ -3,21 +3,13 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  realpathSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
-import { settingsPath } from "./claude";
+import { integrationDir } from "./inject";
 import {
-  configPath as codexConfigPath,
-  hooksPath as codexHooksPath,
-} from "./codex";
-import { hooksPath as copilotHooksPath } from "./copilot";
-import { modulePath } from "./extensions";
-import { prepareAtStartup } from "./integration";
-import {
-  CODEX_SESSION_KEY_PREFIX,
   type MigrationRecord,
   migrateGlobalInstalls,
   migrationPath,
@@ -29,14 +21,6 @@ const OURS = "/opt/armadra/bin/armadra-hook";
 const SKILL =
   "---\nname: armadra\n---\nbody\n<!-- armadra:skill-revision 11 -->\n";
 
-/** What the canvas-only build wrote for its session-flag hooks. */
-const SESSION_TRUST = ["session_start", "stop"]
-  .map(
-    (event) =>
-      `[hooks.state."${CODEX_SESSION_KEY_PREFIX}${event}:0:0"]\nenabled = true\ntrusted_hash = "sha256:${event}"\n`,
-  )
-  .join("\n");
-
 function put(path: string, contents: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, contents, "utf8");
@@ -46,314 +30,124 @@ function json(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-/** Six config homes carrying what the old global installer wrote. */
-function oldMachine(): { dataDir: string; homes: Record<string, string> } {
+/** Every file under `root`, relative path → bytes. */
+function snapshot(root: string): Record<string, string> {
+  const files: Record<string, string> = {};
+  const walk = (directory: string) => {
+    for (const name of readdirSync(directory)) {
+      const path = join(directory, name);
+      if (statSync(path).isDirectory()) walk(path);
+      else files[relative(root, path)] = readFileSync(path, "utf8");
+    }
+  };
+  walk(root);
+  return files;
+}
+
+/**
+ * A home carrying an old global install of ours beside another tool's hooks,
+ * skills and instruction blocks.
+ */
+function oldMachine(): { home: string; dataDir: string } {
   const root = tempDir("armadra-migrate-");
-  const homes: Record<string, string> = {};
-  for (const agentId of [
-    "claude",
-    "codex",
-    "opencode",
-    "pi",
-    "omp",
-    "copilot",
-  ]) {
-    homes[agentId] = join(root, agentId);
-    put(join(homes[agentId], "skills", "armadra", "SKILL.md"), SKILL);
-  }
+  const home = join(root, "home");
   put(
-    settingsPath(homes.claude as string),
+    join(home, ".claude", "settings.json"),
     json({
-      model: "opus",
       hooks: {
         Stop: [
-          { hooks: [{ type: "command", command: "/usr/local/bin/mine.sh" }] },
           { hooks: [{ type: "command", command: `${OURS} claude` }] },
+          {
+            hooks: [
+              {
+                type: "command",
+                command: "sh '/Users/dev/.othertool/agent-hooks/claude.sh'",
+              },
+            ],
+          },
         ],
       },
     }),
   );
-  const codex = homes.codex as string;
+  put(join(home, ".claude", "skills", "armadra", "SKILL.md"), SKILL);
   put(
-    codexHooksPath(codex),
-    json({
-      hooks: {
-        Stop: [
-          { hooks: [{ type: "command", command: "/usr/local/bin/mine.sh" }] },
-          { hooks: [{ type: "command", command: `${OURS} codex` }] },
-        ],
-      },
-    }),
-  );
-  const source = realpathSync(codexHooksPath(codex));
-  // 键是 TOML 基本字符串，要像 Codex 写的那样转义：Windows 路径里的 `\U`、`\A`
-  // 原样写进去就成了转义序列，读回来已经不是这个路径。
-  const header = (key: string) => `[hooks.state.${JSON.stringify(key)}]`;
-  put(
-    codexConfigPath(codex),
-    `model = "gpt-5"\n\n${header(`${source}:stop:0:0`)}\ntrusted_hash = "sha256:mine"\n\n${header(`${source}:stop:1:0`)}\nenabled = true\ntrusted_hash = "sha256:ours"\n\n${SESSION_TRUST}`,
+    join(home, ".claude", "skills", "othertool-linked-context", "SKILL.md"),
+    "---\nname: othertool-linked-context\n---\n",
   );
   put(
-    copilotHooksPath(homes.copilot as string),
+    join(home, ".codex", "hooks.json"),
+    json({ version: 1, hooks: { Stop: [{ hooks: [{ command: OURS }] }] } }),
+  );
+  put(
+    join(home, ".codex", "config.toml"),
+    '[hooks.state."/<session-flags>/config.toml:stop:0:0"]\nenabled = true\n',
+  );
+  put(
+    join(home, ".copilot", "hooks", "othertool-status.json"),
     json({
       version: 1,
       hooks: {
-        sessionStart: [{ type: "command", exec: OURS, args: ["copilot"] }],
+        sessionStart: [{ type: "command", bash: "sh ~/.othertool/c.sh" }],
       },
     }),
   );
-  for (const agentId of ["opencode", "pi", "omp"]) {
-    put(
-      modulePath(agentId, homes[agentId] as string),
-      `const ARMADRA_CLIENT = "${OURS}";\n`,
-    );
-  }
-  // Somebody else's plugin, beside ours.
-  put(join(homes.opencode as string, "plugins", "theirs.js"), "export {};\n");
-  return { dataDir: join(root, "data"), homes };
+  put(
+    join(home, ".config", "opencode", "AGENTS.md"),
+    "<!-- othertool:manage-canvas:start -->\nx\n<!-- othertool:manage-canvas:end -->\n",
+  );
+  return { home, dataDir: join(root, "data") };
 }
 
-describe("the one-time migration away from global installs", () => {
-  it("backs up, removes only ours, and records it once", () => {
-    const { dataDir, homes } = oldMachine();
-    const now = () => new Date("2026-09-26T01:02:03Z");
-    const record = migrateGlobalInstalls({ dataDir, homes, now });
-
-    // Claude: our handler gone, theirs and the rest kept, a backup beside it.
-    const claude = homes.claude as string;
-    const settings = readFileSync(settingsPath(claude), "utf8");
-    expect(settings).not.toContain("armadra-hook");
-    expect(settings).toContain("/usr/local/bin/mine.sh");
-    expect(settings).toContain('"model": "opus"');
-    const claudeBackup = `${settingsPath(claude)}.armadra-backup-20260926010203`;
-    expect(readFileSync(claudeBackup, "utf8")).toContain(`${OURS} claude`);
-    expect(record.agents.claude?.backups).toContain(claudeBackup);
-
-    // Codex: hooks.json and the trust state move together, both backed up.
-    const codex = homes.codex as string;
-    expect(readFileSync(codexHooksPath(codex), "utf8")).not.toContain(OURS);
-    const config = readFileSync(codexConfigPath(codex), "utf8");
-    expect(config).toContain(":stop:0:0");
-    expect(config).not.toContain(":stop:1:0");
-    expect(config).toContain('model = "gpt-5"');
-    expect(config).not.toContain(CODEX_SESSION_KEY_PREFIX);
-    expect(
-      existsSync(`${codexHooksPath(codex)}.armadra-backup-20260926010203`),
-    ).toBe(true);
-    // Both steps edit config.toml under the same stamp: the first step's copy
-    // is the original, the second's is in between.
-    const firstBackup = `${codexConfigPath(codex)}.armadra-backup-20260926010203`;
-    expect(readFileSync(firstBackup, "utf8")).toContain(":stop:1:0");
-    expect(readFileSync(firstBackup, "utf8")).toContain(
-      CODEX_SESSION_KEY_PREFIX,
-    );
-    expect(record.version).toBe(2);
-    expect(record.sessionTrust).toEqual({
-      at: "2026-09-26T01:02:03.000Z",
-      path: codexConfigPath(codex),
-      removed: [
-        `${CODEX_SESSION_KEY_PREFIX}session_start:0:0`,
-        `${CODEX_SESSION_KEY_PREFIX}stop:0:0`,
-      ],
-      backup: `${firstBackup}-2`,
+describe("the start-up migration", () => {
+  it("changes nothing under the user's home, ours or anyone else's", () => {
+    const { home, dataDir } = oldMachine();
+    const before = snapshot(home);
+    const record = migrateGlobalInstalls({
+      dataDir,
+      now: () => new Date("2026-10-08T01:02:03Z"),
     });
-    const secondBackup = readFileSync(`${firstBackup}-2`, "utf8");
-    expect(secondBackup).not.toContain(":stop:1:0");
-    expect(secondBackup).toContain(CODEX_SESSION_KEY_PREFIX);
-
-    // Copilot: a file that was only ours is gone.
-    expect(existsSync(copilotHooksPath(homes.copilot as string))).toBe(false);
-
-    // Modules and skills: gone from the scanned directories, kept in the vault.
-    for (const agentId of ["opencode", "pi", "omp"]) {
-      expect(existsSync(modulePath(agentId, homes[agentId] as string))).toBe(
-        false,
-      );
-    }
-    expect(
-      existsSync(join(homes.opencode as string, "plugins", "theirs.js")),
-    ).toBe(true);
-    for (const home of Object.values(homes)) {
-      expect(existsSync(join(home, "skills", "armadra"))).toBe(false);
-    }
-    const vault = join(dataDir, "integration", "global-backup-20260926010203");
-    expect(readdirSync(vault).sort()).toEqual(
-      ["claude", "codex", "copilot", "omp", "opencode", "pi"].sort(),
-    );
-    expect(
-      readFileSync(join(vault, "pi", "skills", "armadra", "SKILL.md"), "utf8"),
-    ).toBe(SKILL);
-
+    expect(snapshot(home)).toEqual(before);
+    expect(record).toEqual({
+      version: 3,
+      migratedAt: "2026-10-08T01:02:03.000Z",
+      agents: {},
+    });
     expect(readMigration(dataDir)).toEqual(record);
-    for (const entry of Object.values(record.agents)) {
-      expect(entry.error).toBeUndefined();
-    }
+  });
+
+  it("removes the old installer's marker from our own data directory", () => {
+    const { dataDir } = oldMachine();
+    const marker = join(integrationDir(dataDir, "claude"), "installed.json");
+    put(marker, "{}\n");
+    migrateGlobalInstalls({ dataDir });
+    expect(existsSync(marker)).toBe(false);
   });
 
   it("does not run twice", () => {
-    const { dataDir, homes } = oldMachine();
-    migrateGlobalInstalls({ dataDir, homes });
-    // Something of ours appears again afterwards: it is not the migration's
-    // business any more.
-    put(join(homes.pi as string, "skills", "armadra", "SKILL.md"), SKILL);
-    const again = migrateGlobalInstalls({ dataDir, homes });
-    expect(
-      existsSync(join(homes.pi as string, "skills", "armadra", "SKILL.md")),
-    ).toBe(true);
-    expect(again).toEqual(readMigration(dataDir));
+    const { dataDir } = oldMachine();
+    const first = migrateGlobalInstalls({ dataDir });
+    const marker = join(integrationDir(dataDir, "pi"), "installed.json");
+    put(marker, "{}\n");
+    expect(migrateGlobalInstalls({ dataDir })).toEqual(first);
+    expect(existsSync(marker)).toBe(true);
   });
 
-  it("leaves a skill named armadra that is not ours", () => {
-    const { dataDir, homes } = oldMachine();
-    const mine = join(homes.codex as string, "skills", "armadra", "SKILL.md");
-    put(mine, "---\nname: armadra\n---\nmy own notes\n");
-    migrateGlobalInstalls({ dataDir, homes });
-    expect(readFileSync(mine, "utf8")).toContain("my own notes");
-  });
-
-  it("records a machine with nothing to migrate, without backups", () => {
-    const root = tempDir("armadra-migrate-empty-");
-    const homes = Object.fromEntries(
-      ["claude", "codex", "opencode", "pi", "omp", "copilot"].map((id) => [
-        id,
-        join(root, id),
-      ]),
-    );
-    const dataDir = join(root, "data");
-    const record = migrateGlobalInstalls({ dataDir, homes });
-    for (const entry of Object.values(record.agents)) {
-      expect(entry.removed).toEqual([]);
-      expect(entry.backups).toEqual([]);
-    }
-    expect(existsSync(migrationPath(dataDir))).toBe(true);
-  });
-});
-
-/** A machine the previous build migrated, then ran Codex on the canvas. */
-function migratedMachine(config: string | undefined): {
-  dataDir: string;
-  homes: Record<string, string>;
-  v1: MigrationRecord;
-} {
-  const root = tempDir("armadra-migrate-v1-");
-  const homes = Object.fromEntries(
-    ["claude", "codex", "opencode", "pi", "omp", "copilot"].map((id) => [
-      id,
-      join(root, id),
-    ]),
-  );
-  const dataDir = join(root, "data");
-  const v1: MigrationRecord = {
-    version: 1,
-    migratedAt: "2026-09-26T00:00:00.000Z",
-    agents: {
-      codex: { removed: ["/somewhere/hooks.json: armadra-hook"], backups: [] },
-    },
-  };
-  put(migrationPath(dataDir), json(v1));
-  if (config !== undefined) put(codexConfigPath(homes.codex as string), config);
-  return { dataDir, homes, v1 };
-}
-
-describe("the second step: Codex's session-flag trust records", () => {
-  const now = () => new Date("2026-10-02T03:04:05Z");
-  const theirs =
-    '[hooks.state."/home/u/.codex/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:mine"\n';
-
-  it("runs alone on a version-1 record and raises it to version 2", () => {
-    const { dataDir, homes, v1 } = migratedMachine(
-      `model = "gpt-5"\n\n${SESSION_TRUST}\n${theirs}`,
-    );
-    // The first step is not repeated: something it would remove stays.
-    const skill = join(homes.pi as string, "skills", "armadra", "SKILL.md");
-    put(skill, SKILL);
-    const record = migrateGlobalInstalls({ dataDir, homes, now });
-
-    const path = codexConfigPath(homes.codex as string);
-    // The blank lines that separated the dropped tables go with them.
-    expect(readFileSync(path, "utf8")).toBe(`model = "gpt-5"\n${theirs}`);
-    expect(existsSync(skill)).toBe(true);
-    expect(record).toEqual({
-      ...v1,
-      version: 2,
-      sessionTrust: {
-        at: "2026-10-02T03:04:05.000Z",
-        path,
-        removed: [
-          `${CODEX_SESSION_KEY_PREFIX}session_start:0:0`,
-          `${CODEX_SESSION_KEY_PREFIX}stop:0:0`,
-        ],
-        backup: `${path}.armadra-backup-20261002030405`,
+  it("answers an earlier build's record as it is", () => {
+    const { home, dataDir } = oldMachine();
+    const v1: MigrationRecord = {
+      version: 1,
+      migratedAt: "2026-09-26T00:00:00.000Z",
+      agents: {
+        codex: {
+          removed: ["/somewhere/hooks.json: armadra-hook"],
+          backups: [],
+        },
       },
-    });
-    expect(
-      readFileSync(`${path}.armadra-backup-20261002030405`, "utf8"),
-    ).toContain(CODEX_SESSION_KEY_PREFIX);
-    expect(readMigration(dataDir)).toEqual(record);
-  });
-
-  it("does not run a second time", () => {
-    const { dataDir, homes } = migratedMachine(SESSION_TRUST);
-    migrateGlobalInstalls({ dataDir, homes, now });
-    const path = codexConfigPath(homes.codex as string);
-    put(path, SESSION_TRUST);
-    const again = migrateGlobalInstalls({ dataDir, homes, now });
-    expect(readFileSync(path, "utf8")).toBe(SESSION_TRUST);
-    expect(again).toEqual(readMigration(dataDir));
-    expect(again.version).toBe(2);
-  });
-
-  it("leaves no backup when nothing was ours", () => {
-    const config = `model = "gpt-5"\n\n${theirs}`;
-    const { dataDir, homes } = migratedMachine(config);
-    const record = migrateGlobalInstalls({ dataDir, homes, now });
-    const path = codexConfigPath(homes.codex as string);
-    expect(readFileSync(path, "utf8")).toBe(config);
-    expect(record.sessionTrust).toEqual({
-      at: "2026-10-02T03:04:05.000Z",
-      path,
-      removed: [],
-    });
-    expect(readdirSync(homes.codex as string)).toEqual(["config.toml"]);
-  });
-
-  it("records a config.toml it cannot edit and leaves it alone", () => {
-    const config = `model = "gpt-5\n[unterminated\n${SESSION_TRUST}`;
-    const { dataDir, homes } = migratedMachine(config);
-    const record = migrateGlobalInstalls({ dataDir, homes, now });
-    const path = codexConfigPath(homes.codex as string);
-    expect(readFileSync(path, "utf8")).toBe(config);
-    expect(record.version).toBe(2);
-    expect(record.sessionTrust?.removed).toEqual([]);
-    expect(record.sessionTrust?.error).toContain("not valid TOML");
-    expect(record.sessionTrust?.backup).toBeUndefined();
-  });
-
-  it("does not create a Codex home that is not there", () => {
-    const { dataDir, homes } = migratedMachine(undefined);
-    const record = migrateGlobalInstalls({ dataDir, homes, now });
-    expect(record.sessionTrust).toEqual({
-      at: "2026-10-02T03:04:05.000Z",
-      removed: [],
-    });
-    expect(existsSync(homes.codex as string)).toBe(false);
-  });
-
-  it("does not run when global writes are off", () => {
-    const { dataDir, homes, v1 } = migratedMachine(SESSION_TRUST);
-    const report = prepareAtStartup({
-      dataDir,
-      env: {
-        ...process.env,
-        HOME: join(dataDir, "..", "home"),
-        CODEX_HOME: homes.codex,
-        ARMADRA_NO_GLOBAL_WRITES: "1",
-      },
-    });
-    expect(report.migration).toBeUndefined();
-    expect(readFileSync(codexConfigPath(homes.codex as string), "utf8")).toBe(
-      SESSION_TRUST,
-    );
+    };
+    put(migrationPath(dataDir), json(v1));
+    const before = snapshot(home);
+    expect(migrateGlobalInstalls({ dataDir })).toEqual(v1);
     expect(readMigration(dataDir)).toEqual(v1);
+    expect(snapshot(home)).toEqual(before);
   });
 });
