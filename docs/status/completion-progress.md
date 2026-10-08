@@ -3461,7 +3461,7 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 「可输入」剩下的 ~160 ms 是建节点、懒加载会话视图（开发模式）；「就绪」仍取决于 CLI 自己的启动，预启动只省 spawn + `initialize`（Claude 约 180–200 ms）。core 日志里每次都有 `prestarted: true` 的 timings；空闲预热记了 claude 205 ms / `--version` 11 ms、codex 2175 ms / 18 ms（量的时候空闲预热在 `ARMADRA_NO_GLOBAL_WRITES=1` 下还开着；之后改为探针模式不预热，表里的「可输入 / 就绪」不靠它）。
 - `acp-e2e.mjs` 全过，新增一步：会话视图挂出到输入框可聚焦 0 ms（≤ 200 ms），节点出现到可输入 316 ms。
 - 新增用例：`host.test.ts`（四阶段按序、计时只有数字、`session/new` 不答 300 ms 后 `acp_session_timeout` 且进程被收、预启动进程不再 spawn / 协商且回调接上）、`prestart.test.ts`（签名与环境顺序无关、领走一次且幂等、签名不同不领、10 s 回收、起不来丢弃、`bundledCli`、预热节流与换文件重做、过闸门、`adapterPhases` 只取名字与数字、HTTP 预启动 → 领走只报 session / configure、注入按节点的不预启动、400 / 404、两个 Codex 过闸门串行）、web `SessionView.test.tsx`（起会话期间可输入可聚焦、阶段文字随事件变、首条等会话开好经 prompt 发、请求未发时随 `createSession.prompt` 发、首次启动较慢、启动超时）、`acp/api.test.ts`（默认 Agent 以 ACP 驱动才预启动、只一次、远程源与没有工作空间不调、失败不打扰）。
-- `pnpm libs:build && pnpm -r --if-present test` 全过（web 4104、desktop 5385 / 67 跳、shared 372、server 98 / 4 跳）；合入 C2（#204）后重跑 web 4120、desktop 5390 / 67 跳；web typecheck、`pnpm check` 通过。
+- `pnpm libs:build && pnpm -r --if-present test` 全过（web 4104、desktop 5385 / 67 跳、shared 372、server 98 / 4 跳）；合入 C2（#204）与 B（#205）后重跑 web 4131、desktop 5390 / 67 跳；web typecheck、`pnpm check` 通过。
 
 没做 / 偏离：
 
