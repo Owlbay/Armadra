@@ -140,3 +140,69 @@ export const PINS = [
   { member: 2, x: 330, y: 44, count: 2, resolved: false },
   { member: 5, x: 578, y: 206, count: 1, resolved: true },
 ] as const;
+
+/**
+ * 簇色固定状态（ui-wave2 §5.4）：两棵派发树 + 一个独立 Agent + 一张便签。
+ * id 按创建顺序排（第一棵树取第一个簇色）。纵向布局：主在上、从在下。
+ */
+export const CLUSTER_IDS = {
+  leadA: "00000000-0000-4000-8000-000000000101",
+  subA1: "00000000-0000-4000-8000-000000000102",
+  subA2: "00000000-0000-4000-8000-000000000103",
+  lone: "00000000-0000-4000-8000-000000000104",
+  leadB: "00000000-0000-4000-8000-000000000105",
+  subB1: "00000000-0000-4000-8000-000000000106",
+  note: "00000000-0000-4000-8000-000000000107",
+} as const;
+
+const CLUSTER_SIZE = { width: 130, height: 72 };
+
+function agentNode(
+  id: string,
+  title: string,
+  agent: string,
+  x: number,
+  y: number,
+): CanvasNode {
+  return node({
+    id,
+    type: "terminal",
+    title,
+    position: { x, y },
+    size: CLUSTER_SIZE,
+    data: { kind: "terminal", agent: { id: agent } },
+  });
+}
+
+export const CLUSTER_NODES: CanvasNode[] = [
+  agentNode(CLUSTER_IDS.leadA, "planner", "claude", 90, 16),
+  agentNode(CLUSTER_IDS.subA1, "codex-1", "codex", 16, 150),
+  agentNode(CLUSTER_IDS.subA2, "codex-2", "codex", 164, 150),
+  agentNode(CLUSTER_IDS.lone, "reviewer", "codex", 250, 16),
+  agentNode(CLUSTER_IDS.leadB, "lead", "opencode", 440, 16),
+  agentNode(CLUSTER_IDS.subB1, "worker", "claude", 456, 150),
+  node({
+    id: CLUSTER_IDS.note,
+    type: "sticky",
+    title: "约定",
+    position: { x: 308, y: 150 },
+    size: CLUSTER_SIZE,
+    data: { kind: "sticky", content: "" },
+  }),
+];
+
+export const CLUSTER_EDGES = [
+  [CLUSTER_IDS.leadA, CLUSTER_IDS.subA1, "supervises"],
+  [CLUSTER_IDS.leadA, CLUSTER_IDS.subA2, "supervises"],
+  [CLUSTER_IDS.leadB, CLUSTER_IDS.subB1, "supervises"],
+  [CLUSTER_IDS.note, CLUSTER_IDS.lone, "peer"],
+].map(([source, target, role]) => ({
+  id: `cluster-${source}-${target}`,
+  boardId: BOARD,
+  kind: "link" as const,
+  source: source!,
+  target: target!,
+  role: role as "peer" | "supervises",
+  createdAt: AT,
+  updatedAt: AT,
+}));

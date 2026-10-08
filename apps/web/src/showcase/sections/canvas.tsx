@@ -2,6 +2,7 @@ import * as React from "react";
 import {
   Background,
   BackgroundVariant,
+  MiniMap,
   ReactFlow,
   ReactFlowProvider,
   type Edge,
@@ -10,7 +11,7 @@ import {
   type NodeTypes,
 } from "@xyflow/react";
 import { MousePointer2 } from "lucide-react";
-import type { CanvasNode } from "@armadra/shared";
+import type { BoardDocument, CanvasNode } from "@armadra/shared";
 
 import "@xyflow/react/dist/style.css";
 import "../../styles/canvas.css";
@@ -18,6 +19,15 @@ import { useT } from "@/app/preferences-store";
 import { agentColorVar } from "@/agent/launch";
 import { edgeKey, useDeliveryStore } from "@/agent/delivery-store";
 import { edgeTypes } from "@/canvas/flow/edges/edge-types";
+import { useFamilies } from "@/canvas/family";
+import {
+  MinimapNode,
+  minimapFill,
+  minimapItemOf,
+  minimapStroke,
+} from "@/canvas/flow/Minimap";
+import type { CanvasFlowNode } from "@/canvas/sync/project";
+import { useCanvasStore } from "@/store/canvas-store";
 import GroupNode from "@/canvas/flow/nodes/GroupNode";
 import { NodeShell } from "@/nodes/NodeShell";
 import { HEADER_CHIP_CLASS } from "@/nodes/header-chip";
@@ -28,6 +38,8 @@ import {
   CANVAS_EDGES,
   CANVAS_IDS,
   CANVAS_NODES,
+  CLUSTER_EDGES,
+  CLUSTER_NODES,
   DELIVERY,
   EDITOR_LINES,
   PEERS,
@@ -329,7 +341,148 @@ function HeaderSpecimen({ scale }: { scale: number }) {
   );
 }
 
+/* ------------------------------ 簇色固定状态 ------------------------------ */
+
+const CLUSTER_WIDTH = 600;
+const CLUSTER_HEIGHT = 330;
+
+/**
+ * 簇色读的是 canvas-store 里的文档（`family.ts`）。展示页没有真画布，挂载时把
+ * 两块假画布的节点与边写进去，卸载时还原。
+ */
+const SHOWCASE_DOCUMENT: BoardDocument = {
+  board: {} as BoardDocument["board"],
+  nodes: [...CANVAS_NODES, ...CLUSTER_NODES],
+  edges: [
+    ...CANVAS_EDGES.filter((edge) => edge.type === "link").map((edge) => ({
+      id: edge.id,
+      boardId: CLUSTER_EDGES[0]!.boardId,
+      kind: "link" as const,
+      source: edge.source,
+      target: edge.target,
+      ...("role" in edge.data ? { role: edge.data.role } : {}),
+      createdAt: CLUSTER_EDGES[0]!.createdAt,
+      updatedAt: CLUSTER_EDGES[0]!.updatedAt,
+    })),
+    ...CLUSTER_EDGES,
+  ],
+};
+
+function ClusterNode({ data: node }: NodeProps<ShowcaseFlowNode>) {
+  return (
+    <NodeShell
+      node={node}
+      selected={false}
+      {...(node.data.kind === "terminal"
+        ? {
+            headerMark: (
+              <ColorDot color={agentColorVar(node.data.agent?.id)} size={8} />
+            ),
+          }
+        : {})}
+    >
+      {null}
+    </NodeShell>
+  );
+}
+
+const clusterNodeTypes: NodeTypes = { armadra: ClusterNode };
+
+const clusterFlowNodes = CLUSTER_NODES.map((node) => ({
+  id: node.id,
+  type: "armadra" as const,
+  position: node.position,
+  data: node,
+  width: node.size?.width,
+  height: node.size?.height,
+  draggable: false,
+  selectable: false,
+  dragHandle: ".drag-handle",
+}));
+
+const clusterFlowEdges: Edge[] = CLUSTER_EDGES.map((edge) => ({
+  id: edge.id,
+  type: "link",
+  source: edge.source,
+  target: edge.target,
+  data: { role: edge.role },
+  selectable: false,
+}));
+
+const noGlow = () => undefined;
+
+/** 两簇 + 独立 Agent + 便签，配一张同色的小地图（设计 ui-wave2 §5.4）。 */
+function ClusterSpecimen({ scale }: { scale: number }) {
+  const families = useFamilies();
+  return (
+    <div style={{ height: (CLUSTER_HEIGHT + 2) * scale }}>
+      <div
+        data-showcase-clusters
+        className="canvas-stage relative origin-top-left overflow-hidden rounded-[var(--r-panel)] border border-border"
+        style={{
+          width: CLUSTER_WIDTH + 2,
+          height: CLUSTER_HEIGHT + 2,
+          transform: scale < 1 ? `scale(${scale})` : undefined,
+        }}
+      >
+        <ReactFlowProvider>
+          <ReactFlow
+            nodes={clusterFlowNodes}
+            edges={clusterFlowEdges}
+            nodeTypes={clusterNodeTypes}
+            edgeTypes={edgeTypes}
+            defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+            nodesDraggable={false}
+            nodesConnectable={false}
+            elementsSelectable={false}
+            panOnDrag={false}
+            zoomOnScroll={false}
+            zoomOnPinch={false}
+            zoomOnDoubleClick={false}
+            preventScrolling={false}
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background
+              variant={BackgroundVariant.Dots}
+              color="var(--canvas-dot)"
+              gap={20}
+            />
+            <MiniMap<CanvasFlowNode>
+              // 真画布的位置规则（`styles/canvas.css`）读这三个变量，SVG 的
+              // 尺寸读 width / height；展示页没有 Dock，贴着右下角放一张小的。
+              style={
+                {
+                  width: 150,
+                  height: 90,
+                  "--minimap-w": "150px",
+                  "--minimap-h": "90px",
+                  "--navigation-bottom": "10px",
+                } as React.CSSProperties
+              }
+              nodeColor={(node) =>
+                minimapFill(minimapItemOf(node, noGlow, families))
+              }
+              nodeStrokeColor={(node) =>
+                minimapStroke(minimapItemOf(node, noGlow, families))
+              }
+              nodeComponent={MinimapNode}
+              nodeBorderRadius={3}
+            />
+          </ReactFlow>
+        </ReactFlowProvider>
+      </div>
+    </div>
+  );
+}
+
 export default function CanvasSection() {
+  // 簇色从 canvas-store 读：挂载期间换成展示用的文档，卸载时还原。
+  React.useEffect(() => {
+    const previous = useCanvasStore.getState().document;
+    useCanvasStore.setState({ document: SHOWCASE_DOCUMENT });
+    return () => useCanvasStore.setState({ document: previous });
+  }, []);
+
   // 投递流光只在「刚投递」的两秒内画；展示页把时刻放到未来，让它一直亮着。
   React.useEffect(() => {
     const key = edgeKey(DELIVERY.source, DELIVERY.target);
@@ -414,6 +567,7 @@ export default function CanvasSection() {
         </div>
       </div>
       <HeaderSpecimen scale={scale} />
+      <ClusterSpecimen scale={scale} />
     </div>
   );
 }
