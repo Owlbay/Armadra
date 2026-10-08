@@ -765,9 +765,9 @@ async function passkeyFromThePage(base, owner, workspaceId) {
   );
   await openSecurity();
   await page.waitFor(
-    `return [...document.querySelectorAll('[role="dialog"] h3')]
-       .some((node) => node.innerText.includes("会话与设备"));`,
-    { what: "用通行密钥登录后安全页回来", timeout: 30_000 },
+    `return [...document.querySelectorAll('[role="dialog"] table td')]
+       .some((cell) => cell.innerText.includes("Chrome"));`,
+    { what: "用通行密钥登录后安全页回来（通行密钥表在）", timeout: 30_000 },
   );
   const who = await page.evaluate(`
     const answer = await fetch("/api/identity/session");
