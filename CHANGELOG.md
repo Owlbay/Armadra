@@ -2,6 +2,14 @@
 
 每个版本一节，按发布倒序。括号里是合入的 PR 编号（github.com/Owlbay/Armadra）。兼容范围以 `tools/release/compatibility.json` 为准，发布说明里的 `armadra-compatibility` 围栏由它渲染。
 
+## 0.2.3（2026-10-08）
+
+修复版。
+
+### 修复
+
+- 集成与启动迁移只认本产品自己写入的 hook、技能目录与指令块；其他工具的注入不再展示、修改或删除，启动迁移不再写用户 HOME，执行主机上的 Worker 不再改 Codex 配置（#198）。
+
 ## 0.2.2（2026-10-08）
 
 界面与多端体验修整。中转仍用 armadra-cloud 0.2.1。
