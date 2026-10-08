@@ -136,6 +136,15 @@ describe("spawn", () => {
     ]);
   });
 
+  it("一家可用的都没有时整项置灰", () => {
+    registry.agents = [{ id: "pi", label: "Pi", installed: false }];
+    const spawn = entries({ kind: "terminal", agent: { id: "codex" } }).find(
+      (item) => item.id === "agent.spawn",
+    );
+    expect(spawn?.disabled).toBe(true);
+    expect(spawn?.children).toEqual([]);
+  });
+
   it("is not on a plain terminal", () => {
     expect(
       entries({ kind: "terminal" }).some((item) => item.id === "agent.spawn"),

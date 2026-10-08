@@ -102,7 +102,8 @@ function SpawnDropMenu({
 }) {
   const workspace = useCanvasStore((state) => state.workspace);
   const agents = useEnabledAgents();
-  if (!workspace) return null;
+  // 一家可用的 Agent 都没有：菜单里只会剩一行标题，不如不弹。
+  if (!workspace || agents.length === 0) return null;
   return (
     <DropdownMenu
       open

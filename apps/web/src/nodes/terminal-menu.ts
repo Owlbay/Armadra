@@ -72,13 +72,7 @@ export function registerTerminalNodeMenu(): () => void {
       },
       // 派生（ui-wave2 §6.2）：人替它做 `canvas open-agent`——选哪家就直接
       // 建哪家的从，连主从边、按布局方向放，没有向导。
-      {
-        id: "agent.spawn",
-        label: t("node.menu.spawn"),
-        icon: UserPlus,
-        run: () => undefined,
-        children: spawnChildren(node.id, agent.id),
-      },
+      spawnItem(node.id, agent.id),
       // Agent 设置（设计 §10）：收件箱唤醒、从的投递、转录读取三项的唯一入口。
       {
         id: "agent.settings",
@@ -143,6 +137,19 @@ export function registerTerminalNodeMenu(): () => void {
     return visibleNodeMenu(items);
   });
   return dispose;
+}
+
+/** 「派生」：一层子菜单；一家可用的 Agent 都没有时整项置灰。 */
+function spawnItem(parentId: string, parentAgentId: string): NodeMenuItem {
+  const children = spawnChildren(parentId, parentAgentId);
+  return {
+    id: "agent.spawn",
+    label: t("node.menu.spawn"),
+    icon: UserPlus,
+    disabled: children.length === 0,
+    run: () => undefined,
+    children,
+  };
 }
 
 /** 「派生」子菜单：新建菜单里同一批 Agent，与父同一家的排第一。 */
