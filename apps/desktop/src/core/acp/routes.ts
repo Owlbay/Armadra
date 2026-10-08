@@ -45,6 +45,15 @@ export interface AcpRouteDeps {
     agentId: string,
   ) => AcpAdapter | undefined;
   readonly cwdOf: (path: string) => string;
+  /**
+   * 契约 §51：预启动这家的适配器（不等它起好）。没装配时（只起部分域的用例）
+   * 缺席，路由照样答 204。
+   */
+  readonly prestart?: (
+    workspaceId: string,
+    agentId: string,
+    cwd: string,
+  ) => void;
 }
 
 /** 正在切换驱动或接回的节点：这段时间里投递把「没有会话」当「还早」。 */
@@ -126,6 +135,8 @@ function acpStatus(code: string): number {
     case "acp_session":
     case "awaiting_approval":
       return 409;
+    case "acp_session_timeout":
+      return 504;
     default:
       return 502;
   }
@@ -354,6 +365,24 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
     return wiring.manager.session(row.id);
   });
 
+  /* -------------------------------- 预启动 -------------------------------- */
+
+  // 契约 §51：菜单打开时页面对默认 Agent 调一次。只是提速：工作空间没有根目录、
+  // 不是 ACP 入口时同样答 204，不报错。
+  const prestart = guarded(async (body: Record<string, unknown>) => {
+    const workspaceId = optionalString(body, "workspaceId");
+    const agentId = optionalString(body, "agentId");
+    if (!workspaceId || !agentId) {
+      throw badRequest("workspaceId and agentId are required");
+    }
+    const root = workspaceRoot(database, workspaceId);
+    if (root === undefined) {
+      throw domain(404, "not_found", "Workspace not found");
+    }
+    if (deps.adapterFor(deps.settings(), agentId) === undefined) return;
+    deps.prestart?.(workspaceId, agentId, deps.cwdOf(root));
+  });
+
   /* --------------------------------- 回合 --------------------------------- */
 
   const deliverPrompt = (
@@ -549,6 +578,10 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
     procedures as unknown as DomainHandlers<"acp">,
   );
 
+  route("POST", "/api/acp/prestart", async (_match, request) => {
+    await prestart(jsonObject(request.body));
+    return { status: 204 };
+  });
   route("POST", "/api/acp/sessions", async (_match, request) => ({
     status: 200,
     body: await createSession(jsonObject(request.body)),

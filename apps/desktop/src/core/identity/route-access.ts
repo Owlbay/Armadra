@@ -361,6 +361,12 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
         },
       };
     }
+    // 预启动（契约 §51）：路径里没有工作空间，按体里的判；还没有节点。
+    if (path === "/api/acp/prestart" && method === "POST") {
+      const workspaceId = bodyWorkspace(request);
+      if (workspaceId === "") return DENY;
+      return onWorkspace(subject, "terminal:drive", workspaceId);
+    }
     const acpSession = ACP_SESSION.exec(path);
     if (acpSession !== null) {
       const sessionId = decodeURIComponent(acpSession[1] as string);

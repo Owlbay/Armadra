@@ -53,6 +53,85 @@ import type {
 /** `initialize` 的缺省截止时间：`npx` 起的适配器第一次可能要装包。 */
 export const INITIALIZE_TIMEOUT_MS = 30_000;
 
+/**
+ * `session/new` 的截止时间（契约 §51）。适配器在这一步同步跑完 CLI 的整套启动
+ * （设置、插件、SessionStart hook、账号探测），网络卡住时不能让页面一直等。
+ */
+export const SESSION_NEW_TIMEOUT_MS = 60_000;
+
+/**
+ * 起会话的阶段（契约 §51 的 `acp.starting`）：起进程、协商、开会话、落模式与
+ * 模型。每阶段开始时报一次。
+ */
+export type AcpStartPhase = "spawn" | "initialize" | "session" | "configure";
+
+/**
+ * 一次起会话各段的毫秒数：只有数字，不含任何输出正文。`prestarted` 为真时
+ * 进程与协商是预启动做的，`spawnMs` / `initializeMs` 记 0。
+ */
+export interface AcpStartTimings {
+  readonly spawnMs: number;
+  readonly initializeMs: number;
+  readonly sessionMs: number;
+  readonly configureMs: number;
+  readonly totalMs: number;
+  readonly prestarted: boolean;
+}
+
+/** 进程上的回调：起进程时给，预启动的进程领走时再接上。 */
+export interface AcpProcessCallbacks {
+  readonly onUpdate?: (notification: AcpSessionNotification) => void;
+  readonly onPermission?: (pending: AcpPendingPermission) => void;
+  readonly onPermissionSettled?: (
+    pending: AcpPendingPermission,
+    settlement: AcpPermissionSettlement,
+  ) => void;
+  readonly onElicitation?: (pending: AcpPendingElicitation) => void;
+  readonly onElicitationSettled?: (
+    pending: AcpPendingElicitation,
+    settlement: AcpElicitationSettlement,
+  ) => void;
+  readonly onStderr?: (text: string) => void;
+  readonly onExit?: (exit: AcpExit) => void;
+}
+
+/**
+ * 预启动好的进程（`prestart.ts`）：已经 `initialize` 过，回调经一层转接，领走
+ * 时 {@link attach} 换成会话的那一套。
+ */
+export interface AcpPrestarted {
+  readonly process: AcpProcess;
+  readonly initialized: AcpInitializeResult;
+  attach(callbacks: AcpProcessCallbacks): void;
+}
+
+/**
+ * 回调转接：进程起的时候还不知道交给谁（预启动），之后 {@link attach}。接上
+ * 之前到的 stderr 与退出照样转给 `fallback`。
+ */
+export function callbackRelay(fallback: AcpProcessCallbacks = {}): {
+  readonly callbacks: Required<AcpProcessCallbacks>;
+  attach(target: AcpProcessCallbacks): void;
+} {
+  let target: AcpProcessCallbacks = fallback;
+  return {
+    callbacks: {
+      onUpdate: (notification) => target.onUpdate?.(notification),
+      onPermission: (pending) => target.onPermission?.(pending),
+      onPermissionSettled: (pending, settlement) =>
+        target.onPermissionSettled?.(pending, settlement),
+      onElicitation: (pending) => target.onElicitation?.(pending),
+      onElicitationSettled: (pending, settlement) =>
+        target.onElicitationSettled?.(pending, settlement),
+      onStderr: (text) => target.onStderr?.(text),
+      onExit: (exit) => target.onExit?.(exit),
+    },
+    attach: (next) => {
+      target = next;
+    },
+  };
+}
+
 /** Agent 在 `initialize` 里说了什么，摊平成会话层要问的几个问题。 */
 export interface AcpCapabilities {
   readonly protocolVersion: number;
@@ -110,8 +189,19 @@ export interface AcpStartOptions {
   /** 开会话时交给 Agent 的 MCP 服务器（§5.8）；缺席或空 = 不带。 */
   readonly mcpServers?: readonly AcpMcpServer[];
   readonly initializeTimeoutMs?: number;
+  /** 缺省 {@link SESSION_NEW_TIMEOUT_MS}。 */
+  readonly sessionTimeoutMs?: number;
   /** 缺省在本机直接起；见 {@link AcpTransport}。 */
   readonly transport?: AcpTransport;
+  /**
+   * 用预启动好的进程（契约 §51）：不再起进程、不再协商，直接开会话。
+   * `program` / `args` / `env` 此时只作记录。
+   */
+  readonly prestarted?: AcpPrestarted;
+  /** 每阶段开始时（契约 §51 的 `acp.starting`）。 */
+  readonly onPhase?: (phase: AcpStartPhase) => void;
+  /** 开好（或起失败）之后各段耗时；只有数字。 */
+  readonly onTimings?: (timings: AcpStartTimings) => void;
   readonly onUpdate?: (
     notification: AcpSessionNotification,
     meta: AcpUpdateMeta,
@@ -214,13 +304,8 @@ export async function startAcp(
   options: AcpStartOptions,
 ): Promise<AcpHostSession> {
   let replaying: string | undefined;
-  const launch = launchOf(options);
-  const process_ = AcpProcess.spawn({
-    program: launch.program,
-    args: launch.args,
-    cwd: launch.cwd,
-    ...(launch.env === undefined ? {} : { env: launch.env }),
-    clientInfo: { name: "armadra", title: "Armadra", version: "1" },
+  const clock = startClock(options);
+  const callbacks: AcpProcessCallbacks = {
     onUpdate: (notification) =>
       options.onUpdate?.(notification, {
         replay: replaying !== undefined && notification.sessionId === replaying,
@@ -239,14 +324,39 @@ export async function startAcp(
       : { onElicitationSettled: options.onElicitationSettled }),
     ...(options.onStderr === undefined ? {} : { onStderr: options.onStderr }),
     ...(options.onExit === undefined ? {} : { onExit: options.onExit }),
-  });
+  };
+  let process_: AcpProcess;
+  if (options.prestarted !== undefined) {
+    process_ = options.prestarted.process;
+    options.prestarted.attach(callbacks);
+  } else {
+    clock.phase("spawn");
+    const launch = launchOf(options);
+    process_ = AcpProcess.spawn({
+      program: launch.program,
+      args: launch.args,
+      cwd: launch.cwd,
+      ...(launch.env === undefined ? {} : { env: launch.env }),
+      clientInfo: ACP_CLIENT_INFO,
+      ...callbacks,
+    });
+  }
 
   try {
-    const { capabilities, initialized } = await negotiate(process_, options);
+    let capabilities: AcpCapabilities;
+    let initialized: AcpInitializeResult;
+    if (options.prestarted !== undefined) {
+      initialized = options.prestarted.initialized;
+      capabilities = capabilitiesOf(initialized);
+    } else {
+      clock.phase("initialize");
+      ({ capabilities, initialized } = await negotiate(process_, options));
+    }
     if (options.agentId !== undefined && capabilities.agent !== undefined) {
       versions.set(options.agentId, capabilities.agent.version);
     }
 
+    clock.phase("session");
     const opener = sessionOpener(process_.client, options.mcpServers ?? []);
     let opened: AcpOpenMethod = "new";
     let sessionId: string | undefined;
@@ -291,11 +401,15 @@ export async function startAcp(
 
     if (sessionId === undefined) {
       try {
-        const result = await opener.newSession(options.cwd);
+        const result = await withDeadline(
+          opener.newSession(options.cwd),
+          options.sessionTimeoutMs ?? SESSION_NEW_TIMEOUT_MS,
+        );
         sessionId = result.sessionId;
         modes = result.modes ?? null;
         config = configOptionsOf(result);
       } catch (error) {
+        if (error instanceof AcpError) throw error;
         if (await gone(process_, error)) throw exitedError(process_);
         if (rpcCode(error) === -32000) {
           throw new AcpError(
@@ -307,6 +421,7 @@ export async function startAcp(
       }
     }
 
+    clock.phase("configure");
     let modeApplied: boolean | undefined;
     if (options.modeId !== undefined) {
       modeApplied = await applyMode(process_, sessionId, modes, options.modeId);
@@ -336,6 +451,7 @@ export async function startAcp(
       models = applied.models;
     }
 
+    clock.done();
     return {
       process: process_,
       sessionId,
@@ -352,9 +468,92 @@ export async function startAcp(
         : { mcpInjected: opener.mcpInjected }),
     };
   } catch (error) {
+    clock.done();
     await process_.terminate();
     throw error;
   }
+}
+
+/** 起会话时报给 Agent 的客户端信息。 */
+export const ACP_CLIENT_INFO = {
+  name: "armadra",
+  title: "Armadra",
+  version: "1",
+};
+
+/**
+ * 阶段与计时：每进一个阶段报一次 {@link AcpStartOptions.onPhase}，结束（成功或
+ * 失败）时报一次各段毫秒数。
+ */
+function startClock(
+  options: Pick<AcpStartOptions, "onPhase" | "onTimings" | "prestarted">,
+): { phase(next: AcpStartPhase): void; done(): void } {
+  const started = performance.now();
+  const marks = new Map<AcpStartPhase, number>();
+  let reported = false;
+  const span = (from: AcpStartPhase, to: number | undefined) => {
+    const at = marks.get(from);
+    return at === undefined || to === undefined ? 0 : Math.round(to - at);
+  };
+  return {
+    phase(next) {
+      marks.set(next, performance.now());
+      try {
+        options.onPhase?.(next);
+      } catch {
+        // 报阶段只是提示，不拦启动。
+      }
+    },
+    done() {
+      if (reported) return;
+      reported = true;
+      const end = performance.now();
+      const order: AcpStartPhase[] = [
+        "spawn",
+        "initialize",
+        "session",
+        "configure",
+      ];
+      const next = (phase: AcpStartPhase) => {
+        for (const later of order.slice(order.indexOf(phase) + 1)) {
+          const at = marks.get(later);
+          if (at !== undefined) return at;
+        }
+        return end;
+      };
+      try {
+        options.onTimings?.({
+          spawnMs: span("spawn", next("spawn")),
+          initializeMs: span("initialize", next("initialize")),
+          sessionMs: span("session", next("session")),
+          configureMs: span("configure", next("configure")),
+          totalMs: Math.round(end - started),
+          prestarted: options.prestarted !== undefined,
+        });
+      } catch {
+        // 同上。
+      }
+    },
+  };
+}
+
+/** 到点没答就拒（`acp_session_timeout`）；调用方收进程。 */
+function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new AcpError(
+            "acp_session_timeout",
+            "the agent did not open a session in time",
+          ),
+        ),
+      ms,
+    );
+    timer.unref?.();
+  });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
 }
 
 /** 实际起的子进程：缺省就是选项里的那一个，给了 transport 由它改写。 */
@@ -379,7 +578,7 @@ function launchOf(
   return options.transport({ ...direct, env: options.env });
 }
 
-async function negotiate(
+export async function negotiate(
   process_: AcpProcess,
   options: Pick<AcpStartOptions, "initializeTimeoutMs">,
 ): Promise<{
@@ -524,6 +723,18 @@ export function startAdapter(
   adapter: AcpAdapter,
   options: AcpAdapterStart,
 ): Promise<AcpHostSession> {
+  const plan = adapterStartOptions(adapter, options);
+  return plan instanceof AcpError ? Promise.reject(plan) : startAcp(plan);
+}
+
+/**
+ * {@link startAdapter} 实际交给 {@link startAcp} 的那一份：程序、argv、环境与
+ * MCP 服务器。预启动（`prestart.ts`）按同一份起进程，领走时才对得上。
+ */
+export function adapterStartOptions(
+  adapter: AcpAdapter,
+  options: AcpAdapterStart,
+): AcpStartOptions | AcpError {
   const ambient = options.env ?? process.env;
   // 经 transport 起的程序在别的机器上：本机不解析，由那边的 PATH 找（是否装了
   // 由调用方先问过那台机器）。
@@ -532,11 +743,9 @@ export function startAdapter(
       ? resolveCommand(adapter.program, ambient)
       : adapter.program;
   if (resolved === undefined) {
-    return Promise.reject(
-      new AcpError(
-        "acp_not_installed",
-        `${adapter.program} is not installed on this machine`,
-      ),
+    return new AcpError(
+      "acp_not_installed",
+      `${adapter.program} is not installed on this machine`,
     );
   }
   const plan = acpLaunchPlan(adapter, {
@@ -548,9 +757,7 @@ export function startAdapter(
       ? {}
       : { injectionArgs: options.injectionArgs }),
   });
-  if ("code" in plan) {
-    return Promise.reject(new AcpError(plan.code, plan.message));
-  }
+  if ("code" in plan) return new AcpError(plan.code, plan.message);
   const target =
     options.transport === undefined
       ? launchTargetOf(resolved, ambient)
@@ -563,7 +770,7 @@ export function startAdapter(
   const { canvasMcp, mcpServers: given, ...rest } = options;
   // 给了现成的服务器（SSH 节点：执行主机上的 Hook 客户端）就用它们。
   const mcpServers = given ?? acpMcpServers(adapter, canvasMcp);
-  return startAcp({
+  return {
     ...rest,
     env,
     ...(mcpServers.length === 0 ? {} : { mcpServers }),
@@ -584,7 +791,7 @@ export function startAdapter(
             method: adapter.resume,
           },
         }),
-  });
+  };
 }
 
 /**

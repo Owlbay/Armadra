@@ -10,6 +10,8 @@ import { AcpError } from "./client";
 import {
   type AcpHostSession,
   type AcpStartOptions,
+  type AcpStartPhase,
+  type AcpStartTimings,
   type AcpUpdateMeta,
   forgetAcpVersions,
   probeAcp,
@@ -18,6 +20,7 @@ import {
   startAcp,
   startAdapter,
 } from "./host";
+import { spawnPrestarted } from "./prestart";
 import type { AcpSessionNotification } from "./types";
 
 /**
@@ -304,5 +307,102 @@ describe.skipIf(process.platform === "win32")("startAdapter", () => {
     });
     sessions.push(session);
     expect(session).toMatchObject({ opened: "load", resumed: true });
+  });
+});
+
+/**
+ * 一个只答 `initialize`、对 `session/new` 永远不答的 ACP Agent：模拟 CLI 启动
+ * 卡在网络探测上。
+ */
+function hangingAgent(): { program: string; args: string[]; cwd: string } {
+  const dir = mkdtempSync(join(tmpdir(), "armadra-acp-hang-"));
+  cleanup.push(dir);
+  const script = join(dir, "hang.cjs");
+  writeFileSync(
+    script,
+    [
+      'const rl = require("node:readline").createInterface({ input: process.stdin });',
+      'rl.on("line", (line) => {',
+      "  const message = JSON.parse(line);",
+      '  if (message.method === "initialize") {',
+      '    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: {} } }) + "\\n");',
+      "  }",
+      "});",
+      'process.stdin.on("end", () => process.exit(0));',
+    ].join("\n"),
+  );
+  return { program: process.execPath, args: [script], cwd: tmpdir() };
+}
+
+describe("startAcp: phases, timings and the session/new deadline (contract §51)", () => {
+  it("reports the four phases in order and only numbers as timings", async () => {
+    const phases: AcpStartPhase[] = [];
+    let timings: AcpStartTimings | undefined;
+    await start({
+      modeId: "plan",
+      onPhase: (phase) => phases.push(phase),
+      onTimings: (value) => {
+        timings = value;
+      },
+    });
+    expect(phases).toEqual(["spawn", "initialize", "session", "configure"]);
+    expect(timings).toMatchObject({ prestarted: false });
+    for (const value of Object.values(timings ?? {})) {
+      expect(["number", "boolean"]).toContain(typeof value);
+    }
+    expect(timings?.totalMs).toBeGreaterThanOrEqual(timings?.sessionMs ?? 0);
+  });
+
+  it("gives up on session/new after the deadline with acp_session_timeout and reaps the process", async () => {
+    const exits: unknown[] = [];
+    const phases: AcpStartPhase[] = [];
+    let timings: AcpStartTimings | undefined;
+    const error = await startError({
+      ...hangingAgent(),
+      sessionTimeoutMs: 300,
+      onPhase: (phase) => phases.push(phase),
+      onTimings: (value) => {
+        timings = value;
+      },
+      onExit: (exit) => exits.push(exit),
+    });
+    expect(error.code).toBe("acp_session_timeout");
+    expect(phases).toEqual(["spawn", "initialize", "session"]);
+    expect(timings?.sessionMs).toBeGreaterThanOrEqual(250);
+    expect(exits).toHaveLength(1);
+  });
+
+  it("defaults the deadline to 60 s", async () => {
+    const { SESSION_NEW_TIMEOUT_MS } = await import("./host");
+    expect(SESSION_NEW_TIMEOUT_MS).toBe(60_000);
+  });
+
+  it("opens a session on a prestarted process without spawning or negotiating again", async () => {
+    const prestarted = await spawnPrestarted(fakeLaunch());
+    const phases: AcpStartPhase[] = [];
+    const updates: AcpSessionNotification[] = [];
+    let timings: AcpStartTimings | undefined;
+    const session = await start({
+      program: "/nonexistent/should-not-spawn",
+      prestarted,
+      onPhase: (phase) => phases.push(phase),
+      onTimings: (value) => {
+        timings = value;
+      },
+      onUpdate: (notification) => updates.push(notification),
+    });
+    expect(session.process).toBe(prestarted.process);
+    expect(session.sessionId).toMatch(/^fake-/);
+    expect(phases).toEqual(["session", "configure"]);
+    expect(timings).toMatchObject({
+      prestarted: true,
+      spawnMs: 0,
+      initializeMs: 0,
+    });
+    // 领走之后回调接到了会话这一套上。
+    await session.process.prompt(session.sessionId, [
+      { type: "text", text: "hi" },
+    ]);
+    expect(updates.length).toBeGreaterThan(0);
   });
 });
