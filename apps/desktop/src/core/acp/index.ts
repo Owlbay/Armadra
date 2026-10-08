@@ -40,6 +40,7 @@ import {
   persistedBinding,
 } from "../agent/credentials";
 import { expectedProcesses } from "../agent/launch";
+import { configDirFor, launchGate } from "../agent/launch-gate";
 import { type AgentSettings, baseAgent, customAgent } from "../agent/registry";
 import { acpInjection } from "../agent/canvas-launch";
 import { getAgentStatus } from "../agent/status";
@@ -61,6 +62,7 @@ import type { EnvPairs } from "../terminal/environment";
 import type { Hibernator } from "../terminal/hibernator";
 import type { TerminalManager } from "../terminal/manager";
 import {
+  ACP_ADAPTERS,
   type AcpAdapter,
   acpResumeId,
   adapterFor,
@@ -68,7 +70,21 @@ import {
 } from "./adapters";
 import { AcpBackend } from "./bridge";
 import { AcpError } from "./client";
-import { startAdapter } from "./host";
+import {
+  type AcpAdapterStart,
+  type AcpStartPhase,
+  type AcpStartTimings,
+  adapterStartOptions,
+  startAdapter,
+} from "./host";
+import {
+  AcpPrestartPool,
+  AcpWarmer,
+  IDLE_WARM_DELAY_MS,
+  type WarmTarget,
+  adapterPhases,
+  setAcpWarmer,
+} from "./prestart";
 import { AcpMirror, mirrorPath } from "./mirror";
 import { installRoutes } from "./routes";
 import { AcpSession, type AcpSessionSink } from "./session";
@@ -184,11 +200,155 @@ export function agentSettings(): AgentSettings {
 
 /* --------------------------------- 运行时 --------------------------------- */
 
+/** 本机起适配器的那一份（不含节点自己的环境与密钥）：起会话与预启动共用。 */
+interface LocalLaunch {
+  readonly adapter: AcpAdapter;
+  readonly baseAgentId: string;
+  /** core 的环境 + 自定义条目的 `env` + 注入的环境。 */
+  readonly baseEnv: NodeJS.ProcessEnv;
+  readonly customEnv: Readonly<Record<string, string>>;
+  readonly injection: {
+    readonly profilePath?: string;
+    readonly args: readonly string[];
+    readonly env: readonly (readonly [string, string])[];
+  };
+}
+
 class AcpRuntime {
   private readonly prepared = new Map<string, AcpStartPlan>();
   private readonly memory = new Map<string, Memory>();
+  /** 菜单打开时预启动的适配器（契约 §51）。 */
+  readonly pool: AcpPrestartPool;
+  readonly warmer: AcpWarmer;
 
-  constructor(private readonly context: CoreContext) {}
+  constructor(private readonly context: CoreContext) {
+    this.pool = new AcpPrestartPool({
+      log: (message, fields) => context.log.info(message, fields),
+    });
+    this.warmer = new AcpWarmer({
+      targets: () => this.warmTargets(),
+      log: (message, fields) => context.log.info(message, fields),
+      gate: async (agentId, run) => {
+        const nodeId = `warm:${agentId}`;
+        await launchGate().acquire({
+          agentId,
+          configDir: configDirFor(agentId),
+          nodeId,
+        });
+        try {
+          await run();
+        } finally {
+          launchGate().release(nodeId);
+        }
+      },
+    });
+  }
+
+  /** 本机起这家适配器要的程序、环境与注入；不是 ACP 入口时 `undefined`。 */
+  private localLaunch(
+    agentId: string,
+    options: { readonly inject?: boolean } = {},
+  ): LocalLaunch | undefined {
+    const settings = agentSettings();
+    const adapter = adapterFor(settings, agentId);
+    if (adapter === undefined) return undefined;
+    const custom = customAgent(settings, agentId);
+    // 预热只为把程序跑一遍：不准备注入产物。
+    const injection =
+      options.inject === false
+        ? { env: [] as [string, string][], args: [] as string[] }
+        : acpInjection(
+            settings,
+            this.context.dataDir,
+            agentId,
+            adapter,
+            (message, fields) => this.context.log.warn(message, fields),
+          );
+    const customEnv = custom?.env ?? {};
+    const baseEnv: NodeJS.ProcessEnv = { ...process.env };
+    for (const [name, value] of Object.entries(customEnv)) {
+      baseEnv[name] = value;
+    }
+    for (const [name, value] of injection.env) baseEnv[name] = value;
+    return {
+      adapter,
+      baseAgentId: baseAgent(settings, agentId),
+      baseEnv,
+      customEnv,
+      injection: {
+        ...("profilePath" in injection && injection.profilePath !== undefined
+          ? { profilePath: injection.profilePath }
+          : {}),
+        args: injection.args,
+        env: injection.env,
+      },
+    };
+  }
+
+  /** 预启动与领走比的那一份计划（缺省模式、没有节点身份）。 */
+  private prestartPlan(launch: LocalLaunch, cwd: string) {
+    const options: AcpAdapterStart = {
+      cwd,
+      env: launch.baseEnv,
+      ...(launch.injection.profilePath === undefined
+        ? {}
+        : { profilePath: launch.injection.profilePath }),
+      ...(launch.injection.args.length === 0
+        ? {}
+        : { injectionArgs: launch.injection.args }),
+    };
+    return adapterStartOptions(launch.adapter, options);
+  }
+
+  /**
+   * 契约 §51 的预启动：只给注入不靠节点身份的那几家（`injection.reuse` 为空），
+   * 没装、不是 ACP 入口时什么都不做。
+   */
+  prestart(workspaceId: string, agentId: string, cwd: string): void {
+    const launch = this.localLaunch(agentId);
+    if (launch === undefined) return;
+    if (launch.adapter.injection.reuse.length > 0) return;
+    const plan = this.prestartPlan(launch, cwd);
+    if (plan instanceof AcpError) return;
+    this.pool.prestart(AcpPrestartPool.key(agentId, workspaceId), plan);
+    const target = { agentId: launch.adapter.agentId, plan };
+    if (this.warmer.stale(target)) {
+      void this.warmer.warm("changed", target.agentId);
+    }
+  }
+
+  /** 已装的内置适配器：预热的对象。 */
+  private warmTargets(): WarmTarget[] {
+    const out: WarmTarget[] = [];
+    for (const adapter of ACP_ADAPTERS) {
+      const launch = this.localLaunch(adapter.agentId, { inject: false });
+      if (launch === undefined) continue;
+      const plan = this.prestartPlan(launch, this.context.dataDir);
+      if (plan instanceof AcpError) continue;
+      out.push({ agentId: adapter.agentId, plan });
+    }
+    return out;
+  }
+
+  private phase(workspaceId: string, nodeId: string, phase: AcpStartPhase) {
+    this.context.bus.emit("workspace.event", {
+      workspaceId,
+      event: {
+        type: "acp.starting",
+        nodeId,
+        phase,
+        at: new Date().toISOString(),
+      },
+    });
+  }
+
+  private timings(nodeId: string, agentId: string, timings: AcpStartTimings) {
+    this.context.log.info("ACP session start timings", {
+      nodeId,
+      agentId,
+      ...timings,
+    });
+  }
 
   prepare(nodeId: string, plan: AcpStartPlan): void {
     this.prepared.set(nodeId, plan);
@@ -412,12 +572,24 @@ class AcpRuntime {
       ...(plan.model === undefined ? {} : { modelId: plan.model }),
       ...(resume === undefined ? {} : { resumeSessionId: resume }),
       ...session.callbacks(),
-      onStderr: (text: string) =>
+      onStderr: (text: string) => {
         this.context.log.debug("ACP agent stderr", {
           nodeId,
           bytes: text.length,
-        }),
+        });
+        for (const phase of adapterPhases(text)) {
+          this.context.log.info("ACP adapter phase", {
+            nodeId,
+            agentId,
+            ...phase,
+          });
+        }
+      },
+      onTimings: (timings: AcpStartTimings) =>
+        this.timings(nodeId, agentId, timings),
     };
+    const onPhase = (phase: AcpStartPhase) =>
+      this.phase(spec.workspaceId, nodeId, phase);
 
     let host;
     if (sshHostId !== undefined) {
@@ -432,6 +604,7 @@ class AcpRuntime {
         spec.cwd;
       host = await startRemoteAdapter(adapter, {
         ...common,
+        onPhase,
         cwd: remoteCwd,
         hostId: sshHostId,
         dataDir,
@@ -439,54 +612,74 @@ class AcpRuntime {
         nodeEnv: spec.env,
       });
     } else {
-      const injection = acpInjection(
-        settings,
-        dataDir,
-        agentId,
-        adapter,
-        (message, fields) => this.context.log.warn(message, fields),
-      );
+      const launch = this.localLaunch(agentId) as LocalLaunch;
       const processEnv: NodeJS.ProcessEnv = { ...process.env };
       for (const [name, value] of spec.env) processEnv[name] = value;
-      for (const [name, value] of Object.entries(custom?.env ?? {})) {
+      for (const [name, value] of Object.entries(launch.customEnv)) {
         processEnv[name] = value;
       }
-      for (const [name, value] of injection.env) processEnv[name] = value;
+      const injected = launch.injection;
+      for (const [name, value] of injected.env) processEnv[name] = value;
       // §26.4：适配器不经画布启动器，兑换由 core 在这里做。值只进这个进程的
       // 环境：不进节点数据、镜像、日志，也不进任何答复。
-      for (const [name, value] of await this.secrets(
+      const secrets = await this.secrets(nodeId, agentId, spec.env);
+      for (const [name, value] of secrets) processEnv[name] = value;
+      // 菜单打开时预启动的那一个（契约 §51）：节点没带凭据、注入不靠节点身份、
+      // 启动签名相同才领。
+      const reference =
+        secrets.length === 0 && adapter.injection.reuse.length === 0
+          ? this.prestartPlan(launch, spec.cwd)
+          : undefined;
+      const prestarted =
+        reference === undefined || reference instanceof AcpError
+          ? undefined
+          : await this.pool.claim(
+              AcpPrestartPool.key(agentId, spec.workspaceId),
+              reference,
+            );
+      // 启动闸门（契约 §52）：Codex 一次一个；`session/new` 答了（进入落设置
+      // 那一段）就放下一个。
+      const gate = launchGate();
+      await gate.acquire({
+        agentId: launch.baseAgentId,
+        configDir: configDirFor(launch.baseAgentId, processEnv),
         nodeId,
-        agentId,
-        spec.env,
-      )) {
-        processEnv[name] = value;
-      }
-      host = await startAdapter(adapter, {
-        ...common,
-        env: processEnv,
-        ...(injection.profilePath === undefined
-          ? {}
-          : { profilePath: injection.profilePath }),
-        ...(injection.args.length === 0
-          ? {}
-          : { injectionArgs: injection.args }),
-        canvasMcp: {
-          nodeId,
-          agentId,
-          dataDir,
-          ...(() => {
-            const name = handleForNode(database, nodeId);
-            return name === undefined ? {} : { nodeName: name };
-          })(),
-          ...(() => {
-            const role = nodeRole(database, nodeId);
-            return role === undefined ? {} : { nodeRole: role };
-          })(),
-          ...(rowId === ""
-            ? {}
-            : { session: { id: rowId, generation: spec.generation } }),
-        },
       });
+      try {
+        host = await startAdapter(adapter, {
+          ...common,
+          onPhase: (phase) => {
+            onPhase(phase);
+            if (phase === "configure") gate.release(nodeId);
+          },
+          env: processEnv,
+          ...(prestarted === undefined ? {} : { prestarted }),
+          ...(injected.profilePath === undefined
+            ? {}
+            : { profilePath: injected.profilePath }),
+          ...(injected.args.length === 0
+            ? {}
+            : { injectionArgs: injected.args }),
+          canvasMcp: {
+            nodeId,
+            agentId,
+            dataDir,
+            ...(() => {
+              const name = handleForNode(database, nodeId);
+              return name === undefined ? {} : { nodeName: name };
+            })(),
+            ...(() => {
+              const role = nodeRole(database, nodeId);
+              return role === undefined ? {} : { nodeRole: role };
+            })(),
+            ...(rowId === ""
+              ? {}
+              : { session: { id: rowId, generation: spec.generation } }),
+          },
+        });
+      } finally {
+        gate.release(nodeId);
+      }
     }
     session.opened(host);
     return {
@@ -571,6 +764,11 @@ export function createAcpBackend(context: CoreContext): AcpBackend {
   return backend;
 }
 
+/** 预启动池（用例看）。 */
+export function acpPrestartPool(): AcpPrestartPool | undefined {
+  return runtime?.pool;
+}
+
 /** 下一次为这个节点起 ACP 会话时用这份计划（起会话、切换驱动）。 */
 export function prepareAcpStart(nodeId: string, plan: AcpStartPlan): void {
   runtime?.prepare(nodeId, plan);
@@ -625,7 +823,28 @@ export function install(context: CoreContext): void {
     exitHooked = true;
     // 适配器是自成进程组起的（一棵子树一次收掉），core 退出时它们不会跟着
     // PTY 一起没：同步地各发一个 SIGTERM。
-    process.once("exit", () => backend?.killAllSync());
+    process.once("exit", () => {
+      backend?.killAllSync();
+      runtime?.pool.killAllSync();
+    });
+  }
+
+  // 冷启动预热（契约 §51）：core 起来空闲一会儿之后，每家已装的适配器跑一次
+  // `initialize` 与自带 CLI 的 `--version`。用例与探针里不做（不替人起真 CLI，
+  // `ARMADRA_NO_GLOBAL_WRITES=1` 时不碰操作员的 CLI），`ARMADRA_ACP_WARMUP=0`
+  // 关掉。
+  const owner = runtime;
+  setAcpWarmer(owner?.warmer);
+  if (
+    owner !== undefined &&
+    process.env.VITEST === undefined &&
+    process.env.ARMADRA_NO_GLOBAL_WRITES !== "1" &&
+    process.env.ARMADRA_ACP_WARMUP !== "0"
+  ) {
+    const timer = setTimeout(() => {
+      void owner.warmer.warm("idle");
+    }, IDLE_WARM_DELAY_MS);
+    timer.unref?.();
   }
 
   installRoutes(context, {
@@ -634,5 +853,7 @@ export function install(context: CoreContext): void {
     settings: agentSettings,
     adapterFor,
     cwdOf: (path) => resolve(path),
+    prestart: (workspaceId, agentId, cwd) =>
+      runtime?.prestart(workspaceId, agentId, cwd),
   });
 }

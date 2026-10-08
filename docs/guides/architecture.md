@@ -347,6 +347,10 @@ ACP 只是同一个 Agent 节点的另一种驱动方式（`core/acp/`，[ACP �
 模型目录来自开会话答的 `configOptions`；这两样按 `AcpClient.features` 判断有无。`pi-acp` 的
 ACP 会话 id 经它的映射文件对回 Pi 的会话文件（`adapters.ts`）。适配器不经画布启动器，节点凭据与
 ama 模型密钥由 core 在起适配器前按启动器同一个兑换取值、只设给适配器进程（契约 §26）。
+起会话报阶段事件 `acp.starting`、`session/new` 有 60 s 截止，本机会话在起适配器前过启动闸门
+（`agent/launch-gate.ts`），各段毫秒数记进 info 日志；页面在会话就绪前就可以输入。新建菜单打开时
+`prestart.ts` 按同一份启动计划预起默认 Agent 的适配器并完成 `initialize`，10 s 内同工作空间同一家
+的起会话领走它；装好适配器后与 core 空闲时对已装的适配器预热一次（契约 §51）。
 SSH 节点的适配器起在执行主机上（`ssh.ts`）：`host.ts` 的 transport 把它换成一条不带 TTY 的
 `ssh … -- <主机> <远端命令>`，stdio 就是 ACP 传输；装没装由 Worker 的 `agents.probe` 答；画布
 工具是执行主机上的 `armadra-hook mcp`，走 Worker 的 Hook 中继；凭据在远端不兑换（契约 §26.5）。

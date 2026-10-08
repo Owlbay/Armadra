@@ -626,6 +626,34 @@ export const acpDriverEventSchema = z.object({
   resumed: z.boolean(),
 });
 
+/**
+ * 起 ACP 会话的阶段（契约 §51，自 1.24）：起进程、协商、开会话、落设置，每阶段
+ * 开始时一次。页面在会话就绪前画阶段提示。
+ */
+export const ACP_START_PHASES = [
+  "spawn",
+  "initialize",
+  "session",
+  "configure",
+] as const;
+export const acpStartPhaseSchema = z.enum(ACP_START_PHASES);
+
+export const acpStartingEventSchema = z.object({
+  type: z.literal("acp.starting"),
+  nodeId: z.string(),
+  phase: acpStartPhaseSchema,
+  at: z.string(),
+});
+
+/**
+ * `POST /api/acp/prestart`（契约 §51）：菜单打开时预启动默认 Agent 的适配器；
+ * 答 204，幂等。
+ */
+export const acpPrestartRequestSchema = z.object({
+  workspaceId: z.string().min(1),
+  agentId: agentIdSchema,
+});
+
 /* §14.4: the answer is `answerApprovalRequestSchema` (`agents.ts`) with its
  * optional `optionId`. */
 
@@ -659,6 +687,9 @@ export type AcpTurnEvent = z.infer<typeof acpTurnEventSchema>;
 export type AcpTurnRecord = z.infer<typeof acpTurnRecordSchema>;
 export type AcpPromptRequest = z.infer<typeof acpPromptRequestSchema>;
 export type AcpDriverEvent = z.infer<typeof acpDriverEventSchema>;
+export type AcpStartPhase = (typeof ACP_START_PHASES)[number];
+export type AcpStartingEvent = z.infer<typeof acpStartingEventSchema>;
+export type AcpPrestartRequest = z.infer<typeof acpPrestartRequestSchema>;
 export type AcpElicitationField = z.infer<typeof acpElicitationFieldSchema>;
 export type AcpElicitationForm = z.infer<typeof acpElicitationFormSchema>;
 export type AcpElicitation = z.infer<typeof acpElicitationSchema>;

@@ -31,7 +31,10 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => ({ acpApi: api }));
 
 const store = vi.hoisted(() => ({
-  workspace: { id: "w1", rootPath: "/repo" },
+  workspace: { id: "w1", rootPath: "/repo" } as null | {
+    id: string;
+    rootPath: string;
+  },
   document: null as null | { nodes: Record<string, unknown>[] },
   updateNodeData: vi.fn(),
 }));
@@ -96,6 +99,7 @@ beforeEach(() => {
   api.answerElicitation.mockResolvedValue({});
   store.updateNodeData.mockReset();
   store.document = null;
+  store.workspace = { id: "w1", rootPath: "/repo" };
   useAcpStore.getState().reset();
 });
 
@@ -735,6 +739,118 @@ describe("SessionView", () => {
     expect(await screen.findByText("会话没有启动")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await waitFor(() => expect(api.createSession).toHaveBeenCalledTimes(2));
+  });
+
+  it("lets the first message be typed while starting and sends it once the session is open (§51)", async () => {
+    let open: (value: { id: string }) => void = () => undefined;
+    api.createSession.mockReturnValue(
+      new Promise((resolve) => {
+        open = resolve;
+      }),
+    );
+    const fresh: TerminalNodeData = {
+      kind: "terminal",
+      agent: { id: "claude", driver: "acp" },
+    };
+    let view: ReturnType<typeof render> | undefined;
+    store.updateNodeData.mockImplementationOnce(() => {
+      view?.rerender(
+        <SessionView nodeId="n1" data={{ ...fresh, sessionId: SESSION }} />,
+      );
+    });
+    view = render(<SessionView nodeId="n1" data={fresh} />);
+    const input = await screen.findByLabelText("消息");
+    expect((input as HTMLTextAreaElement).disabled).toBe(false);
+    input.focus();
+    expect(document.activeElement).toBe(input);
+
+    // 阶段提示随 `acp.starting` 变。
+    emit({ type: "acp.starting", nodeId: "n1", phase: "spawn", at: "" });
+    expect(await screen.findByText("启动适配器")).toBeTruthy();
+    emit({ type: "acp.starting", nodeId: "other", phase: "session", at: "" });
+    emit({ type: "acp.starting", nodeId: "n1", phase: "initialize", at: "" });
+    expect(await screen.findByText("连接")).toBeTruthy();
+
+    fireEvent.change(input, { target: { value: "hi there" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    // 先画出用户气泡，请求等会话开好再发。
+    expect(await screen.findByText("hi there")).toBeTruthy();
+    expect(api.prompt).not.toHaveBeenCalled();
+
+    await act(async () => open({ id: SESSION }));
+    await waitFor(() =>
+      expect(api.prompt).toHaveBeenCalledWith(
+        SESSION,
+        "hi there",
+        expect.any(String),
+      ),
+    );
+    expect(api.createSession.mock.calls[0]?.[0]).not.toHaveProperty("prompt");
+    expect(messages().getByText("hi there")).toBeTruthy();
+  });
+
+  it("carries the first message in createSession when the request had not gone out yet (§51)", async () => {
+    api.createSession.mockResolvedValue({ id: SESSION });
+    store.workspace = null;
+    const fresh: TerminalNodeData = {
+      kind: "terminal",
+      agent: { id: "claude", driver: "acp" },
+    };
+    let view: ReturnType<typeof render> | undefined;
+    store.updateNodeData.mockImplementationOnce(() => {
+      view?.rerender(
+        <SessionView nodeId="n1" data={{ ...fresh, sessionId: SESSION }} />,
+      );
+    });
+    view = render(<SessionView nodeId="n1" data={fresh} />);
+    const input = await screen.findByLabelText("消息");
+    fireEvent.change(input, { target: { value: "early" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(api.createSession).not.toHaveBeenCalled();
+
+    // 工作空间读到了：起会话，第一条随 `prompt` 一起发。
+    store.workspace = { id: "w1", rootPath: "/repo" };
+    view.rerender(<SessionView nodeId="n1" data={fresh} />);
+    await waitFor(() =>
+      expect(api.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ prompt: "early" }),
+      ),
+    );
+    await waitFor(() => expect(messages().getByText("early")).toBeTruthy());
+    expect(api.prompt).not.toHaveBeenCalled();
+  });
+
+  it("adds that the first start is slower when loading the config takes long", async () => {
+    api.createSession.mockReturnValue(new Promise(() => undefined));
+    const fresh: TerminalNodeData = {
+      kind: "terminal",
+      agent: { id: "claude", driver: "acp" },
+    };
+    render(<SessionView nodeId="n1" data={fresh} />);
+    await screen.findByLabelText("消息");
+    vi.useFakeTimers();
+    try {
+      emit({ type: "acp.starting", nodeId: "n1", phase: "session", at: "" });
+      expect(screen.getByText("加载配置")).toBeTruthy();
+      expect(screen.queryByText("首次启动较慢")).toBeNull();
+      act(() => vi.advanceTimersByTime(3_000));
+      expect(screen.getByText("首次启动较慢")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says the start timed out when session/new did not answer (§51)", async () => {
+    api.createSession.mockRejectedValueOnce(
+      new RuntimeRequestError(504, "timeout", "acp_session_timeout"),
+    );
+    const fresh: TerminalNodeData = {
+      kind: "terminal",
+      agent: { id: "claude", driver: "acp" },
+    };
+    render(<SessionView nodeId="n1" data={fresh} />);
+    expect(await screen.findByText("启动超时")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重试" })).toBeTruthy();
   });
 
   it("draws an elicitation from the event stream, answers it and folds it away", async () => {

@@ -814,6 +814,13 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // 菜单打开时预启动（契约 §51）。
+  {
+    path: "/api/acp/prestart",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
   // 工作流与协调者任务（契约 §15、§43.2–§43.3）：路由在 `core/workflow/routes.ts`，
   // 与 `workflows.*` / `coordinator.*` procedure 同一份操作。
   ...WORKFLOW_ROUTES,

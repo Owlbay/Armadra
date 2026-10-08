@@ -14,6 +14,7 @@ import {
 } from "./browser.js";
 import {
   acpDriverEventSchema,
+  acpStartingEventSchema,
   acpTurnEventSchema,
   acpUpdateEventSchema,
 } from "./acp.js";
@@ -103,6 +104,8 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
   acpUpdateEventSchema,
   acpTurnEventSchema,
   acpDriverEventSchema,
+  /** §51: starting an ACP session, one frame per phase. */
+  acpStartingEventSchema,
   z.object({
     type: z.literal("terminal.exit"),
     sessionId: z.string(),

@@ -8,8 +8,10 @@
  * `terminals.drive`（§38）。都发往当前源。答案照旧过页面自己的 schema，调用点的
  * 签名不变。
  */
+import * as React from "react";
 import {
   acpDriverRequestSchema,
+  acpPrestartRequestSchema,
   acpDriverResponseSchema,
   acpElicitationAnswerRequestSchema,
   acpLogResponseSchema,
@@ -27,10 +29,16 @@ import {
   terminalSessionSchema,
   type AcpElicitationAnswer,
   type AgentDriver,
+  type AgentInfo,
   type CreateAcpSessionRequest,
 } from "@armadra/shared";
 
 import { currentClient } from "@/api/client";
+import { json, noContentSchema, request } from "@/api/request";
+import { LOCAL_SOURCE_ID, currentSource } from "@/api/source";
+import { usePreferencesStore } from "@/app/preferences-store";
+import { useCanvasStore } from "@/store/canvas-store";
+import { preferredDriver } from "./driver";
 
 export const acpApi = {
   createSession: async (input: CreateAcpSessionRequest) =>
@@ -124,4 +132,31 @@ export const acpApi = {
         ...terminalDriveRequestSchema.parse({ action }),
       }),
     ),
+  /**
+   * 菜单打开时预启动默认 Agent 的适配器（契约 §51）：只是提速，答 204；失败不打扰。
+   */
+  prestart: (workspaceId: string, agentId: string) =>
+    request("/api/acp/prestart", noContentSchema, {
+      method: "POST",
+      ...json(acpPrestartRequestSchema.parse({ workspaceId, agentId })),
+    }),
 };
+
+/**
+ * 新建菜单挂出来时调一次（契约 §51）：默认 Agent 以 ACP 驱动时让 core 先把它的
+ * 适配器起好、协商完，点下去就直接开会话。只对本机源；远程源不调。
+ */
+export function usePrestartOnOpen(agents: readonly AgentInfo[]): void {
+  const workspaceId = useCanvasStore((state) => state.workspace?.id ?? null);
+  const preferred = usePreferencesStore((state) => state.defaultAgentId);
+  React.useEffect(() => {
+    if (!workspaceId) return;
+    if (currentSource().sourceId !== LOCAL_SOURCE_ID) return;
+    const agent =
+      agents.find((item) => item.id === preferred) ?? agents[0] ?? undefined;
+    if (!agent || preferredDriver(agent) !== "acp") return;
+    acpApi.prestart(workspaceId, agent.id).catch(() => undefined);
+    // 只在菜单挂出来那一刻：Agent 列表刷新不再起一次。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId]);
+}

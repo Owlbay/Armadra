@@ -13,6 +13,7 @@ import {
 
 import { acpAdapter } from "../acp/adapters";
 import { forgetAcpVersion } from "../acp/host";
+import { warmAfterInstall } from "../acp/prestart";
 import { REDACTED, redact } from "../collab/redact";
 import { fail } from "../http/errors";
 import type { CoreServer } from "../http/server";
@@ -570,6 +571,8 @@ export class AdapterInstaller {
         };
       } else {
         job.state = "succeeded";
+        // 装好或升级之后的第一次创建是冷启动：先把它跑一遍（契约 §51）。
+        warmAfterInstall(job.agentId);
       }
       audit({
         action: "agent.adapter.install.finish",

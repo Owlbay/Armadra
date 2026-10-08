@@ -227,6 +227,12 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
   // ACP 会话（契约 §14）：看会话与看终端同一档，开会话、发提示与开终端同一档。
   // 路径里没有工作空间：服务器壳的路由门按会话行 / 节点查出画布再判，往别人
   // 起的会话里写与切换别人节点的驱动要 `terminal:drive`（契约 §23）。
+  // 预启动（契约 §51）：替这块画布先起一个适配器进程，与往终端里写同一档。
+  {
+    pattern: /^\/api\/acp\/prestart$/,
+    read: "terminal:read",
+    write: "terminal:drive",
+  },
   {
     pattern: /^\/api\/acp\//,
     read: "terminal:read",

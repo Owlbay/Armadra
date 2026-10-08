@@ -255,6 +255,12 @@ export interface WorkspaceEventPayloads {
     readonly sessionId: string;
     readonly resumed: boolean;
   };
+  /** 起 ACP 会话的阶段（契约 §51）：每阶段开始时一次，`acp.driver` 之前。 */
+  "acp.starting": {
+    readonly nodeId: string;
+    readonly phase: "spawn" | "initialize" | "session" | "configure";
+    readonly at: string;
+  };
   /*
    * 自动化计划（契约 §27，G5-00 只定义形状，G5-10 发）：到点起跑一次、一次
    * 运行失败、计划连续失败到要人处理。只带标识与稳定码，不带命令、参数与

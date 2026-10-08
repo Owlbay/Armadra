@@ -20,6 +20,9 @@
 //      pid 换了、CLI 会话 id 没变；
 //   7. 全程页面没有控制台错误。
 //
+// 另外（契约 §51）：节点的会话视图挂出来后 200 ms 内输入框就可以聚焦，不等
+// `session/new`；同时记下从节点出现到可输入用了多久。
+//
 // 用法（仓库根目录）：
 //   pnpm libs:build
 //   pnpm --filter @armadra/desktop build
@@ -243,6 +246,30 @@ await h.run(async () => {
   /* ------------------------- 1. 挂载即起会话 ------------------------- */
 
   page.drain();
+  // 契约 §51：页面里记下每个节点、它的会话视图、可输入的输入框各自第一次出现的
+  // 时刻（`performance.now()`），导航前装好，第一帧不漏。
+  await page.call("Page.addScriptToEvaluateOnNewDocument", {
+    source: `(() => {
+      const seen = (window.__acpReady = {});
+      const mark = () => {
+        for (const el of document.querySelectorAll(".react-flow__node[data-id]")) {
+          const id = el.getAttribute("data-id");
+          const entry = (seen[id] ??= { node: performance.now() });
+          if (entry.view === undefined && el.querySelector('[data-slot="acp-session-view"]'))
+            entry.view = performance.now();
+          const input = el.querySelector('[data-slot="acp-session-view"] textarea');
+          if (entry.input === undefined && input && !input.disabled)
+            entry.input = performance.now();
+        }
+      };
+      new MutationObserver(mark).observe(document, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["disabled"],
+      });
+    })();`,
+  });
   await page.navigate(`${web}/?workspace=${workspace.id}&board=${board.id}`);
   await page.settle();
   const node = (id) => `.react-flow__node[data-id="${id}"]`;
@@ -285,6 +312,26 @@ await h.run(async () => {
     { what: "A 的会话视图与输入框" },
   );
   await sleep(500);
+  {
+    const marks = await page.evaluate(`return window.__acpReady ?? {};`);
+    const a = marks[A] ?? {};
+    const viewToInput =
+      a.view === undefined || a.input === undefined
+        ? undefined
+        : Math.round(a.input - a.view);
+    report.inputReady = {
+      nodeToInputMs:
+        a.node === undefined || a.input === undefined
+          ? null
+          : Math.round(a.input - a.node),
+      viewToInputMs: viewToInput ?? null,
+    };
+    check(
+      viewToInput !== undefined && viewToInput <= 200,
+      "会话视图挂出后 200 ms 内输入框可以聚焦（§51）",
+      JSON.stringify(report.inputReady),
+    );
+  }
   await page.capture("01-sessions-open");
   report.trafficAtOpen = [...page.traffic];
   report.errorsAtOpen = [...page.errors];
