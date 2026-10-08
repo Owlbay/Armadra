@@ -171,6 +171,17 @@ describe("runtime agents API", () => {
       }).links,
     ).toHaveLength(1);
     expect(contextLinksRequestSchema.parse({}).links).toEqual([]);
+    // role 必须穿过 schema：被剥掉的话，界面改主从后 core 只会保留旧方向。
+    expect(
+      contextLinksRequestSchema.parse({
+        links: [{ id: uuid, title: "Codex", kind: "terminal", role: "sub" }],
+      }).links[0]?.role,
+    ).toBe("sub");
+    expect(
+      contextLinksRequestSchema.safeParse({
+        links: [{ id: uuid, title: "Codex", kind: "terminal", role: "boss" }],
+      }).success,
+    ).toBe(false);
     expect(gitCommitRequestSchema.parse({ message: " ship v3 " }).message).toBe(
       "ship v3",
     );

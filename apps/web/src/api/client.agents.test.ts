@@ -225,14 +225,14 @@ describe("投递、连线与依赖", () => {
   it("写上下文链接是整表替换", async () => {
     ok({ nodeId, links: [], updatedAt: timestamp });
     await runtimeApi.putContextLinks(workspaceId, nodeId, [
-      { id: otherId, title: "构建", kind: "terminal" },
+      { id: otherId, title: "构建", kind: "terminal", role: "sub" },
     ]);
     expect(procedure()).toBe("agents/putContextLinks");
     expect(sent()).toEqual({
       json: {
         workspaceId,
         nodeId,
-        links: [{ id: otherId, title: "构建", kind: "terminal" }],
+        links: [{ id: otherId, title: "构建", kind: "terminal", role: "sub" }],
       },
     });
   });
