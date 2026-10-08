@@ -42,6 +42,37 @@ describe("箭头方向与标签（§21）", () => {
   });
 });
 
+describe("派发线（ui-wave2 §3.2）", () => {
+  it("只在子那一端画箭头，没有常驻标签", () => {
+    const view = linkView(LEFT, RIGHT, "terminal", "terminal", "supervises");
+    expect(view.arrowStart).toBe(false);
+    expect(view.arrowEnd).toBe(true);
+    expect(view.labelKey).toBeNull();
+  });
+
+  it("纵向锚走底 → 顶，对等线缺省走就近边", () => {
+    const below: Box = { x: 300, y: 400, width: 100, height: 100 };
+    const dispatch = linkView(
+      LEFT,
+      RIGHT,
+      "terminal",
+      "terminal",
+      "supervises",
+      "vertical",
+    );
+    expect([dispatch.curve.sourceSide, dispatch.curve.targetSide]).toEqual([
+      "bottom",
+      "top",
+    ]);
+    const peer = linkView(LEFT, below, "terminal", "terminal", "peer");
+    expect(peer.labelKey).toBe("edge.context");
+    expect([peer.curve.sourceSide, peer.curve.targetSide]).toEqual([
+      "bottom",
+      "top",
+    ]);
+  });
+});
+
 describe("贴边起笔", () => {
   it("目标在右边时从右侧边中点出发、落在目标左侧边中点", () => {
     const { curve } = linkView(LEFT, RIGHT, "terminal", "terminal");

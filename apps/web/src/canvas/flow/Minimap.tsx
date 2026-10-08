@@ -13,6 +13,7 @@ import { useMinimapPreferences } from "@/app/minimap-preferences";
 import { useT } from "@/app/preferences-store";
 import { IconButton } from "@/ui/icon-button";
 import { isItemId } from "../whiteboard/model";
+import { useFamilies, type Family } from "../family";
 import type { CanvasFlowNode } from "../sync/project";
 
 /**
@@ -25,6 +26,9 @@ import type { CanvasFlowNode } from "../sync/project";
  * 函数**，正好就是我们要的那个入口（粗细是个常数，所以另配一个 20 行的
  * `nodeComponent`）。于是整块自绘换成三个纯函数，几何、命中测试、指针换算、
  * DPR、主题重读全部由库负责。
+ *
+ * 配色（ui-wave2 §5.2）：填充按 `familyOf`——派发簇同色、独立 Agent 标识色、
+ * 其他节点按类型；描边仍是三种状态，派发簇成员无状态时描边用簇色。
  *
  * 保留的行为：三种状态描边、点一下定位到那个节点、可收起（收起状态在
  * `app/minimap-preferences.ts`）、位置右下角、离右边与下边各 14px，
@@ -53,6 +57,10 @@ export interface MinimapItem {
   plain?: boolean;
   glow?: AgentGlow;
   selected?: boolean;
+  /** `familyOf` 给的颜色（簇色 / 标识色 / 类型色）；白板对象没有。 */
+  color?: string;
+  /** 派发簇成员：无状态时描边也用簇色。 */
+  cluster?: boolean;
 }
 
 /**
@@ -71,7 +79,8 @@ export function minimapStroke(item: MinimapItem): string {
     case "unread":
       return MINIMAP_COLORS.unread;
     default:
-      return MINIMAP_COLORS.plain;
+      // 派发簇的描边用簇色：同一个主派出来的一眼连成一片。对等线不改色。
+      return item.cluster && item.color ? item.color : MINIMAP_COLORS.plain;
   }
 }
 
@@ -93,25 +102,32 @@ export function minimapStrokeWidth(stroke: string): number {
   return STATUS_STROKES.has(stroke) ? 4 : 2;
 }
 
-/** 矩形填充：选中的节点实一点，白板对象与无状态节点淡一点。 */
+/**
+ * 矩形填充：节点按 `familyOf` 的颜色取 55%（选中 80%），分组 35%；
+ * 白板对象没有家族色，退回中性色 35%。
+ */
 export function minimapFill(item: MinimapItem): string {
-  const alpha = item.plain ? 0.35 : item.selected ? 0.55 : 0.28;
-  return `color-mix(in srgb, var(--muted-foreground) ${Math.round(
-    alpha * 100,
-  )}%, transparent)`;
+  const color = item.color ?? "var(--muted-foreground)";
+  const alpha = item.plain ? 0.35 : item.selected ? 0.8 : 0.55;
+  return `color-mix(in srgb, ${color} ${Math.round(alpha * 100)}%, transparent)`;
 }
 
-/** RF 的节点 → 上色要看的那三个位（分组和白板对象都算 `plain`）。 */
+/** RF 的节点 → 上色要看的那几个位（分组和白板对象都算 `plain`）。 */
 export function minimapItemOf(
   node: Pick<CanvasFlowNode, "id" | "type" | "selected">,
   glowOf: (nodeId: string) => AgentGlow | undefined,
+  families?: ReadonlyMap<string, Family>,
 ): MinimapItem {
-  const plain = node.type !== "armadra" || isItemId(node.id);
+  const item = isItemId(node.id);
+  const plain = node.type !== "armadra" || item;
   const glow = plain ? undefined : glowOf(node.id);
+  const family = item ? undefined : families?.get(node.id);
   return {
     plain,
     selected: node.selected === true,
     ...(glow ? { glow } : {}),
+    ...(family ? { color: family.color } : {}),
+    ...(family?.kind === "cluster" && !plain ? { cluster: true } : {}),
   };
 }
 
@@ -172,13 +188,17 @@ export function Minimap() {
     [statuses],
   );
 
+  const families = useFamilies();
+
   const nodeStrokeColor = React.useCallback(
-    (node: CanvasFlowNode) => minimapStroke(minimapItemOf(node, glowOf)),
-    [glowOf],
+    (node: CanvasFlowNode) =>
+      minimapStroke(minimapItemOf(node, glowOf, families)),
+    [glowOf, families],
   );
   const nodeColor = React.useCallback(
-    (node: CanvasFlowNode) => minimapFill(minimapItemOf(node, glowOf)),
-    [glowOf],
+    (node: CanvasFlowNode) =>
+      minimapFill(minimapItemOf(node, glowOf, families)),
+    [glowOf, families],
   );
   const onNodeClick = React.useCallback(
     (_event: React.MouseEvent, node: CanvasFlowNode) => {

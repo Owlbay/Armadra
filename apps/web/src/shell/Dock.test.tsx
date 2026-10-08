@@ -6,12 +6,20 @@ const fetchAgents = vi.fn();
 vi.mock("../api/client", () => ({
   runtimeApi: { agents: () => fetchAgents() },
 }));
+const zoomByStep = vi.hoisted(() => vi.fn());
+vi.mock("../canvas/flow/use-flow-viewport", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../canvas/flow/use-flow-viewport")
+  >()),
+  zoomByStep,
+}));
 
 import { installDomPolyfills, TestProviders } from "../app/test-harness";
 import { usePreferencesStore } from "../app/preferences-store";
 import { useCanvasStore } from "../store/canvas-store";
 import { initialPanels } from "../store/canvas/internal";
-import { Dock } from "./Dock";
+import { MAX_ZOOM, MIN_ZOOM } from "../canvas/zoom";
+import { Dock, ZoomControls } from "./Dock";
 
 installDomPolyfills();
 afterEach(cleanup);
@@ -161,5 +169,50 @@ describe("Dock 让开右侧工作面板", () => {
       "calc(14px + min(100vw, var(--drawer-w)))",
     );
     expect(row(container)?.getAttribute("data-panel-inset")).toBe("true");
+  });
+});
+
+describe("缩放段 [−] [NN%] [+]", () => {
+  beforeEach(() => zoomByStep.mockClear());
+
+  it("− / + 按一档缩放，中间是当前百分比", () => {
+    render(
+      <TestProviders>
+        <ZoomControls zoom={0.8} />
+      </TestProviders>,
+    );
+    expect(screen.getByLabelText("适应").textContent).toBe("80%");
+    fireEvent.click(screen.getByLabelText("缩小"));
+    expect(zoomByStep).toHaveBeenLastCalledWith(-1);
+    fireEvent.click(screen.getByLabelText("放大"));
+    expect(zoomByStep).toHaveBeenLastCalledWith(1);
+  });
+
+  it("到最小 / 最大缩放时对应一侧禁用", () => {
+    const { rerender } = render(
+      <TestProviders>
+        <ZoomControls zoom={MIN_ZOOM} />
+      </TestProviders>,
+    );
+    expect(screen.getByLabelText("缩小").hasAttribute("disabled")).toBe(true);
+    expect(screen.getByLabelText("放大").hasAttribute("disabled")).toBe(false);
+    rerender(
+      <TestProviders>
+        <ZoomControls zoom={MAX_ZOOM} />
+      </TestProviders>,
+    );
+    expect(screen.getByLabelText("缩小").hasAttribute("disabled")).toBe(false);
+    expect(screen.getByLabelText("放大").hasAttribute("disabled")).toBe(true);
+  });
+
+  it("Dock 里挂着这一段", () => {
+    useCanvasStore.setState({ workspace, saveState: "saved" });
+    render(
+      <TestProviders>
+        <Dock />
+      </TestProviders>,
+    );
+    expect(screen.getByLabelText("缩小")).toBeTruthy();
+    expect(screen.getByLabelText("放大")).toBeTruthy();
   });
 });

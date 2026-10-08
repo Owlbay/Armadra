@@ -453,7 +453,7 @@ describe("NodeShell", () => {
     ).toBe("true");
     expect(
       container.querySelectorAll('[data-slot="connection-handle"]'),
-    ).toHaveLength(2);
+    ).toHaveLength(4);
   });
 
   it("commits an edited title on Enter", () => {
@@ -574,10 +574,10 @@ describe("NodeShell", () => {
     });
     expect(
       container.querySelectorAll('[data-slot="connection-handle"]'),
-    ).toHaveLength(2);
+    ).toHaveLength(4);
     unmount();
 
-    // 任意互连：编辑器也能被连线读取，所以它也有两个把手。
+    // 任意互连：编辑器也能被连线读取，所以它也有四个把手。
     const editor = renderShell({
       node: makeNode({
         type: "editor",
@@ -586,7 +586,7 @@ describe("NodeShell", () => {
     });
     expect(
       editor.container.querySelectorAll('[data-slot="connection-handle"]'),
-    ).toHaveLength(2);
+    ).toHaveLength(4);
   });
 
   /**

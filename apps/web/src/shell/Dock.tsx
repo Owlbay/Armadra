@@ -1,5 +1,13 @@
 import { useViewport } from "@xyflow/react";
-import { LayoutGrid, Lock, LockOpen, Plus, Redo2, Undo2 } from "lucide-react";
+import {
+  LayoutGrid,
+  Lock,
+  LockOpen,
+  Minus,
+  Plus,
+  Redo2,
+  Undo2,
+} from "lucide-react";
 import {
   ADD_MENU_CONTENT_CLASS,
   AddMenuContent,
@@ -10,7 +18,14 @@ import { CommentModeButton } from "@/realtime/comments/CommentLayer";
 import { setCanvasLocked, useCanvasLocked } from "../canvas/canvas-lock";
 import { useMenuTooltip } from "./menu-tooltip";
 import { currentViewportCenter } from "../canvas/placement";
-import { fitView, zoomToLevel } from "../canvas/flow/use-flow-viewport";
+import {
+  fitView,
+  MAX_ZOOM,
+  MIN_ZOOM,
+  zoomByStep,
+  zoomToLevel,
+} from "../canvas/flow/use-flow-viewport";
+import { commandKeysLabel } from "../keybindings/active";
 import { useCanUndo, useCanRedo, useCanvasStore } from "../store/canvas-store";
 import { useEnabledAgents } from "../app/use-agents";
 import { useT } from "../app/preferences-store";
@@ -37,8 +52,11 @@ import { Separator } from "@/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui/tooltip";
 import { cn } from "@/lib/cn";
 
-/** 缩放预设（§20）：50 / 100 / 150 + 适应。以视口中心为锚点。 */
-const ZOOM_STEPS = [0.5, 1, 1.5] as const;
+/** 缩放档位（右键菜单）+ 适应。以视口中心为锚点。 */
+export const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2] as const;
+
+/** 视口缩放是浮点，夹到边界时差一点点也算到了。 */
+const ZOOM_EPSILON = 0.001;
 
 /**
  * 底部 Dock（§3.1）：`+` / 撤销 / 重做 / 整理 / 工具 / 保存点 / 缩放 / 用量。
@@ -200,44 +218,93 @@ export function Dock() {
 
         <SaveDot />
 
-        {/* 单击 = 适应视图（用户反馈 2026-09-22：这一格该像「适应全屏」那样
-            一下到位）；右键才是缩放档位。⌘ / Ctrl + 滚轮的缩放走画布自己那条。 */}
-        <ContextMenu>
-          <Tooltip delayDuration={500}>
-            <TooltipTrigger asChild>
-              <ContextMenuTrigger asChild>
-                <IconButton
-                  size="dock"
-                  label={t("dock.zoomFit")}
-                  className="w-[52px] text-[length:var(--text-caption)] font-medium tabular-nums"
-                  onClick={fitView}
-                >
-                  {Math.round(zoom * 100)}%
-                </IconButton>
-              </ContextMenuTrigger>
-            </TooltipTrigger>
-            <TooltipContent>{t("dock.zoomFitHint")}</TooltipContent>
-          </Tooltip>
-          <ContextMenuContent className="z-[var(--z-menu)] w-auto min-w-32">
-            {ZOOM_STEPS.map((step) => (
-              <ContextMenuItem
-                key={step}
-                data-checked={
-                  Math.abs(zoom - step) < 0.005 ? "true" : undefined
-                }
-                onSelect={() => zoomToLevel(step)}
-              >
-                {Math.round(step * 100)}%
-              </ContextMenuItem>
-            ))}
-            <ContextMenuSeparator />
-            <ContextMenuItem onSelect={fitView}>
-              {t("dock.zoomFit")}
-            </ContextMenuItem>
-          </ContextMenuContent>
-        </ContextMenu>
+        <ZoomControls zoom={zoom} />
       </div>
     </div>
+  );
+}
+
+/** 缩放 −/+ 的提示：名字 + 当前键位（键位从命令表读，不写死）。 */
+function zoomTooltip(
+  command: "canvas.zoomIn" | "canvas.zoomOut",
+  t: ReturnType<typeof useT>,
+): string {
+  const label = t(`cmd.${command}`);
+  const keys = commandKeysLabel(command);
+  return keys ? `${label} · ${keys}` : label;
+}
+
+/**
+ * 缩放段 `[−] [NN%] [+]`（ui-wave2 §5.3）。到 `MIN_ZOOM` / `MAX_ZOOM` 时对应
+ * 一侧禁用。百分比钮：单击 = 适应视图（用户反馈 2026-09-22：这一格该像
+ * 「适应全屏」那样一下到位），右键才是缩放档位。⌘ / Ctrl + 滚轮的缩放走画布
+ * 自己那条。
+ */
+export function ZoomControls({ zoom }: { zoom: number }) {
+  const t = useT();
+  const atMin = zoom <= MIN_ZOOM + ZOOM_EPSILON;
+  const atMax = zoom >= MAX_ZOOM - ZOOM_EPSILON;
+  return (
+    <>
+      <Tooltip delayDuration={500}>
+        <TooltipTrigger asChild>
+          <IconButton
+            size="dock"
+            label={t("cmd.canvas.zoomOut")}
+            disabled={atMin}
+            onClick={() => zoomByStep(-1)}
+          >
+            <Minus />
+          </IconButton>
+        </TooltipTrigger>
+        <TooltipContent>{zoomTooltip("canvas.zoomOut", t)}</TooltipContent>
+      </Tooltip>
+      <ContextMenu>
+        <Tooltip delayDuration={500}>
+          <TooltipTrigger asChild>
+            <ContextMenuTrigger asChild>
+              <IconButton
+                size="dock"
+                label={t("dock.zoomFit")}
+                className="w-[52px] text-[length:var(--text-caption)] font-medium tabular-nums"
+                onClick={fitView}
+              >
+                {Math.round(zoom * 100)}%
+              </IconButton>
+            </ContextMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent>{t("dock.zoomFitHint")}</TooltipContent>
+        </Tooltip>
+        <ContextMenuContent className="z-[var(--z-menu)] w-auto min-w-32">
+          {ZOOM_STEPS.map((step) => (
+            <ContextMenuItem
+              key={step}
+              data-checked={Math.abs(zoom - step) < 0.005 ? "true" : undefined}
+              onSelect={() => zoomToLevel(step)}
+            >
+              {Math.round(step * 100)}%
+            </ContextMenuItem>
+          ))}
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={fitView}>
+            {t("dock.zoomFit")}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      <Tooltip delayDuration={500}>
+        <TooltipTrigger asChild>
+          <IconButton
+            size="dock"
+            label={t("cmd.canvas.zoomIn")}
+            disabled={atMax}
+            onClick={() => zoomByStep(1)}
+          >
+            <Plus />
+          </IconButton>
+        </TooltipTrigger>
+        <TooltipContent>{zoomTooltip("canvas.zoomIn", t)}</TooltipContent>
+      </Tooltip>
+    </>
   );
 }
 

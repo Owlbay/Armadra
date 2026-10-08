@@ -5,12 +5,14 @@ import type { CanvasEdgeRole, CanvasNode } from "@armadra/shared";
 
 import { useDeliveryEdge, type DeliveryMark } from "@/agent/delivery-store";
 import { useT } from "@/app/preferences-store";
+import { useFamilyColor } from "@/canvas/family";
 import { displayNameOf } from "@/canvas/supervision";
 import { formatRelativeTime } from "@/lib/format";
-import type { Box } from "../../geometry";
+import type { Box, LinkAnchor } from "../../geometry";
 import type { LinkFlowEdge } from "../../sync/project";
 import {
   arrowHead,
+  DISPATCH_LABEL_KEY,
   linkView,
   INTERACTION_WIDTH,
   LABEL_FONT_SIZE,
@@ -20,17 +22,20 @@ import {
 } from "./link-visual";
 
 /**
- * 上下文连线（React Flow 计划 F06 / §2.3，归属 B1）。
+ * 连线（React Flow 计划 F06 / §2.3；按 role 分两种画法，ui-wave2 §3.2）。
  *
- * 画的是 v3 那条贝塞尔：两个节点**相对的边的中点**之间的三次曲线，
- * 只走左右两侧（免得从头部上方绕过去挡住标题）。几何在
- * `flow/edges/link-path.ts`，配色与箭头方向在 `link-visual.ts`，
- * 这个文件只负责把两端的矩形取出来再把 SVG 吐出去。
+ * 画的是两个节点**相对的边的中点**之间的三次贝塞尔：
  *
- * **不用把手坐标**（`EdgeProps` 给的 `sourceX/sourceY`）：把手是节点左右
- * 两侧固定的两个点，而这条曲线要根据两端的相对位置自己选边——节点在右边
- * 时从右侧出发、在左边时从左侧出发，跟用户从哪个把手拖出来无关。所以这里
- * 读 `useInternalNode` 的绝对矩形，两端一动就自动重算。
+ * - 对等（上下文）线：就近边、中性色、按端点类型写标签（「上下文」…）；
+ * - 派发线（`supervises`）：按布局方向走主底 → 子顶（或主右 → 子左），
+ *   簇色（`family.ts`），只在子那一端画箭头，没有常驻标签，选中时写「派发」。
+ *
+ * 几何在 `flow/edges/link-path.ts`，箭头与标签在 `link-visual.ts`，这个文件
+ * 只负责把两端的矩形取出来再把 SVG 吐出去。
+ *
+ * **不用把手坐标**（`EdgeProps` 给的 `sourceX/sourceY`）：节点四边都有把手，
+ * 而这条曲线要根据两端的相对位置自己选边，跟用户从哪个把手拖出来无关。
+ * 所以这里读 `useInternalNode` 的绝对矩形，两端一动就自动重算。
  */
 
 /** 一端的矩形；React Flow 还没量到尺寸时退回投影给的宽高。 */
@@ -106,6 +111,9 @@ export function LinkEdge({
   data,
 }: EdgeProps<LinkFlowEdge>) {
   const t = useT();
+  // 派发线的走向跟着布局方向（纵向：主底 → 子顶）。
+  const direction: "vertical" | "horizontal" = "vertical";
+  const familyColor = useFamilyColor(source);
   const sourceNode = useInternalNode(source);
   const targetNode = useInternalNode(target);
   // 缩得太小时标签只剩糊成一团的墨点（§2.3）。只订阅缩放这一个数，
@@ -130,25 +138,33 @@ export function LinkEdge({
   const targetBox = boxOf(targetNode);
   if (!sourceBox || !targetBox) return null;
 
+  const supervises = role === "supervises";
+  const anchor: LinkAnchor = supervises
+    ? direction === "vertical"
+      ? "vertical"
+      : "horizontal"
+    : "free";
   const view = linkView(
     sourceBox,
     targetBox,
     typeOf(sourceNode),
     typeOf(targetNode),
+    role,
+    anchor,
   );
-  const { curve } = view;
+  const { curve, arrowStart, arrowEnd } = view;
   const width = selected ? STROKE_WIDTH_SELECTED : STROKE_WIDTH;
-  // 主从边一律用品牌色并且**只画一个箭头**（指向从）：它是画布上唯一一条有
-  // 方向的关系，读者要能在不悬停的情况下看出方向。对等边照旧按两端的类型决定
-  // 箭头，颜色也照旧中性——大多数边都是对等的，全画成高亮就等于没有高亮。
-  const supervises = role === "supervises";
+  // 派发线用簇色：同一个主派出来的线同色，不同主不同色；对等线中性——大多数
+  // 边都是对等的，全画成高亮就等于没有高亮。选中与投递那一下都用品牌色。
   const color =
-    flashing || selected || supervises
+    flashing || selected
       ? "var(--brand)"
-      : "var(--muted-foreground)";
-  const arrowStart = supervises ? false : view.arrowStart;
-  const arrowEnd = supervises ? true : view.arrowEnd;
-  const label = zoom >= LABEL_MIN_ZOOM ? t(view.labelKey) : "";
+      : supervises
+        ? (familyColor ?? "var(--brand)")
+        : "var(--muted-foreground)";
+  const labelKey =
+    view.labelKey ?? (supervises && selected ? DISPATCH_LABEL_KEY : null);
+  const label = labelKey !== null && zoom >= LABEL_MIN_ZOOM ? t(labelKey) : "";
 
   return (
     <g

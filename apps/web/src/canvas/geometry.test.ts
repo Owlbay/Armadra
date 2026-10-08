@@ -56,6 +56,24 @@ describe("facingSides", () => {
 });
 
 describe("anchorPoint / edgeGeometry", () => {
+  it("纵向锚只走上下两侧，横向差再大也不走左右", () => {
+    expect(facingSides(box(0, 0), box(900, 300), "vertical")).toEqual({
+      source: "bottom",
+      target: "top",
+    });
+    expect(facingSides(box(0, 400), box(900, 0), "vertical")).toEqual({
+      source: "top",
+      target: "bottom",
+    });
+  });
+
+  it("自由锚在横向差更大时走左右", () => {
+    expect(facingSides(box(0, 0), box(600, 100), "free")).toEqual({
+      source: "right",
+      target: "left",
+    });
+  });
+
   it("锚点落在对应边的中点", () => {
     expect(anchorPoint(box(0, 0, 100, 60), "right")).toEqual({ x: 100, y: 30 });
     expect(anchorPoint(box(0, 0, 100, 60), "top")).toEqual({ x: 50, y: 0 });

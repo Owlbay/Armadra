@@ -36,6 +36,8 @@ export interface LinkDocuments {
 
 /**
  * 每个终端节点 → 它连到的所有节点（无向，两头都算）+ 它的内容链接。
+ * 节点链接带 `role`：对方相对本节点是 `main` / `sub` / `peer`（派发边的主那
+ * 一侧看见 `sub`，从那一侧看见 `main`）。
  *
  * `content` 是白板图形那一半（`useContentLinks()` 的结果），省略时就是纯节点
  * 文档——`buildLinkDocuments` 的老调用方与单测不受影响。
@@ -50,15 +52,18 @@ export function buildLinkDocuments(
     if (node.type === "terminal") documents[node.id] = [];
   }
   for (const edge of document.edges) {
-    for (const [owner, other] of [
-      [edge.source, edge.target],
-      [edge.target, edge.source],
+    const supervises = edge.role === "supervises";
+    for (const [owner, other, role] of [
+      [edge.source, edge.target, supervises ? "sub" : "peer"],
+      [edge.target, edge.source, supervises ? "main" : "peer"],
     ] as const) {
       const links = documents[owner];
       const peer = byId.get(other);
       if (!links || !peer) continue;
       if (links.some((link) => link.id === peer.id)) continue;
-      links.push({ id: peer.id, title: peer.title, kind: peer.type });
+      // 每项都带 role：缺省在 core 那边读作「保留旧值」，界面改了主从而不带
+      // role，投递授权就停在旧方向上。
+      links.push({ id: peer.id, title: peer.title, kind: peer.type, role });
     }
   }
   for (const [nodeId, shapes] of Object.entries(content)) {
@@ -98,6 +103,7 @@ export function sameLinks(
       link.id === other.id &&
       link.title === other.title &&
       link.kind === other.kind &&
+      link.role === other.role &&
       // 内容链接的正文 / PNG 路径变了也要重推（`kind: "shape"`，§6.3）。
       JSON.stringify(link.content ?? null) ===
         JSON.stringify(other.content ?? null)
