@@ -4,7 +4,7 @@
 // 在 core 启动前调用），里面的 `.claude/settings.json` 在 11 个 Hook 事件下各挂
 // 一条同样的本产品旧版命令，外加一条用户自己的命令、一条别的工具的命令和一条
 // 与本产品改名前同名的命令（现在只认 armadra 命名，它按别的工具对待）。截图
-// 确认：Claude Code 那张分组的标题在视口里、「画布注入」一行行高正常、「清理旧版
+// 确认：Agent CLI 主表点进 Claude Code 子页、「画布注入」一行行高正常、「清理旧版
 // 11」点开的清单弹层在设置对话框之上且没被盖住、同一条命令合并成一行并标 ×11、
 // 别的工具与改名前同名的命令不出现。最后点清单底下的「清理」：我们的条目清掉、用户与别的工具
 // 的留着、旁边多一份备份——这些都只发生在临时目录里。
@@ -75,9 +75,18 @@ async function openIntegration(page) {
     `return [...document.querySelectorAll('[role="dialog"] button, [role="dialog"] a')].find((b) => b.textContent.trim() === "Agent CLI");`,
     "Agent CLI 页",
   );
+  await openClaude(page);
+}
+
+/** Agent CLI 主表里点 Claude Code，进它的子页（细节与「清理旧版」在那里）。 */
+async function openClaude(page) {
+  await page.clickOn(
+    `return [...document.querySelectorAll('[data-testid="settings-page"] button')].find((b) => b.textContent.trim() === "Claude Code");`,
+    "Claude Code 一行",
+  );
   await page.until(
-    `return document.body.innerText.includes("Claude Code")`,
-    "集成页载入",
+    `return document.querySelector('[data-testid="settings-heading"]')?.textContent.trim() === "Claude Code"`,
+    "Claude Code 子页载入",
   );
 }
 
@@ -99,22 +108,21 @@ export default async function integration({ stack, output, report, scenario }) {
 
   const badge = `return [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent.trim() === "清理旧版 11");`;
   await page.centerOf(badge, "「清理旧版 11」");
-  // Claude Code 那张分组：标题在分组里、「画布注入」一行没有被一段命令撑开。
+  // Claude Code 子页：页头是名字，「画布注入」组里那一行没有被一段命令撑开。
   const row = await page.evaluate(`
     const badge = (() => { ${badge} })();
     const group = badge.closest("section");
     const title = group?.querySelector("h3");
+    const heading = document.querySelector('[data-testid="settings-heading"]');
     const line = badge.closest(".settings-row");
     const r = line.getBoundingClientRect();
-    const n = title.getBoundingClientRect();
-    return { title: title.textContent.trim(), rowHeight: Math.round(r.height), nameLeft: Math.round(n.left), nameWidth: Math.round(n.width), rowLeft: Math.round(r.left), rowRight: Math.round(r.right) };
+    return { heading: heading?.textContent.trim(), group: title?.textContent.trim(), rowHeight: Math.round(r.height) };
   `);
   run.check(
-    row.title === "Claude Code" &&
-      row.rowHeight < 120 &&
-      row.nameWidth > 40 &&
-      row.nameLeft >= row.rowLeft - 8,
-    "Claude Code 分组布局正常（标题在分组上、注入一行行高不被撑开）",
+    row.heading === "Claude Code" &&
+      row.group === "画布注入" &&
+      row.rowHeight < 120,
+    "Claude Code 子页布局正常（页头是名字、注入一行行高不被撑开）",
     row,
   );
   await run.shot(page, "integration-1-page");
@@ -194,6 +202,7 @@ export default async function integration({ stack, output, report, scenario }) {
     `return [...document.querySelectorAll('[role="dialog"] button, [role="dialog"] a')].find((b) => b.getAttribute("aria-label") === "Agent CLI");`,
     "手机 Agent CLI 页",
   );
+  await openClaude(phone);
   await phone.clickOn(badge, "手机上点开「清理旧版 11」");
   await phone.until(
     `return !!document.querySelector('[data-slot="popover-content"]')`,

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import { useT } from "@/app/preferences-store";
 import { CaInstallGuide } from "@/panels/settings/pages/gateway/CaInstallGuide";
+import { GatewayDevices } from "@/panels/settings/pages/gateway/GatewayDevices";
 import { GatewayPanel } from "@/panels/settings/pages/gateway/GatewayPanel";
 import { PairingCard } from "@/panels/settings/pages/gateway/PairingCard";
 import {
@@ -53,9 +54,6 @@ export default function GatewaySection() {
     pairing: null,
     pairingBusy: false,
     onNewPairing: noop,
-    devices: null,
-    revoking: null,
-    onRevoke: noop,
     now: NOW,
   };
   return (
@@ -84,17 +82,14 @@ export default function GatewaySection() {
       </div>
       <div className="flex min-w-0 flex-col gap-6">
         <Sample caption={t("gateway.showcase.running")}>
-          <GatewayPanel
-            {...panel}
-            status={RUNNING}
-            pairing={PAIRING}
+          <GatewayPanel {...panel} status={RUNNING} pairing={PAIRING} />
+          <GatewayDevices
             devices={DEVICES}
             revoking="dev-ipad"
-            deviceOptions={{
-              currentDeviceId: CURRENT_DEVICE,
-              hasMore: true,
-              onMore: noop,
-            }}
+            onRevoke={noop}
+            currentDeviceId={CURRENT_DEVICE}
+            hasMore
+            onMore={noop}
           />
         </Sample>
         <Sample caption={t("gateway.acme.renewFailed")}>

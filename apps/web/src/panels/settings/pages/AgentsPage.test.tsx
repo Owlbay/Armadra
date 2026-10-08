@@ -14,7 +14,6 @@ const mock = vi.hoisted(() => ({
   installIntegration: vi.fn(),
   uninstallIntegration: vi.fn(),
   repair: vi.fn(),
-  resync: vi.fn(),
   installStatus: vi.fn(),
 }));
 
@@ -28,7 +27,6 @@ vi.mock("@/api/client", async () => {
       installAgentIntegration: (id: string) => mock.installIntegration(id),
       uninstallAgentIntegration: (id: string) => mock.uninstallIntegration(id),
       repairAgentIntegration: (id: string) => mock.repair(id),
-      resyncExecutionHost: (id: string) => mock.resync(id),
       acpAdapterInstall: (id: string, target: string) =>
         mock.installStatus(id, target),
       installAcpAdapter: vi.fn(),
@@ -39,7 +37,7 @@ vi.mock("@/api/client", async () => {
 import { installDomPolyfills, TestProviders } from "@/app/test-harness";
 import { usePreferencesStore } from "@/app/preferences-store";
 import { translate } from "@/i18n";
-import { IntegrationPage } from "./IntegrationPage";
+import { AgentsPage } from "./AgentsPage";
 
 installDomPolyfills();
 afterEach(cleanup);
@@ -59,15 +57,17 @@ const claude: AgentInfo = {
   clientRevision: 3,
 };
 
-function view() {
+/** 缺省打开 Claude Code 的子页（细节都在那里）；`main` 停在主表。 */
+function view(subpage: string | null = "cli:claude") {
+  usePreferencesStore.setState({ settingsSubpage: subpage });
   return render(
     <TestProviders>
-      <IntegrationPage />
+      <AgentsPage />
     </TestProviders>,
   );
 }
 
-describe("IntegrationPage", () => {
+describe("Agent CLI 子页", () => {
   beforeEach(() => {
     usePreferencesStore.setState({ locale: "zh-CN" });
     mock.agents.mockReset().mockResolvedValue([claude]);
@@ -75,7 +75,6 @@ describe("IntegrationPage", () => {
     mock.installIntegration.mockReset();
     mock.uninstallIntegration.mockReset();
     mock.repair.mockReset();
-    mock.resync.mockReset();
     mock.installStatus
       .mockReset()
       .mockImplementation(async (agentId: string, target: string) => ({
@@ -86,6 +85,7 @@ describe("IntegrationPage", () => {
         output: [],
       }));
     window.localStorage.clear();
+    usePreferencesStore.setState({ agentModes: {}, launchOverrides: {} });
   });
 
   const healthy = {
@@ -98,8 +98,8 @@ describe("IntegrationPage", () => {
     canvasAgents: { terminal: "available", acp: "available", reasons: [] },
   };
 
-  /** 一家一张分组，标题是 CLI 名；没有问题的行只有值，没有任何徽标。 */
-  it("draws one group per CLI with fixed rows and no badges when healthy", async () => {
+  /** 启动 · 安装 · 画布注入三组；没有问题的行只有值，没有任何徽标。 */
+  it("draws the three groups with fixed rows and no badges when healthy", async () => {
     mock.agents.mockReset().mockResolvedValue([
       {
         ...claude,
@@ -125,13 +125,21 @@ describe("IntegrationPage", () => {
     ]);
     mock.integration.mockResolvedValue(healthy);
     const { container } = view();
-    expect(
-      await screen.findByRole("heading", { name: "Claude Code" }),
-    ).toBeTruthy();
+    for (const group of [
+      "agents.group.launch",
+      "agents.group.install",
+      "agents.group.injection",
+    ]) {
+      expect(
+        await screen.findByRole("heading", { name: zh(group) }),
+      ).toBeTruthy();
+    }
     for (const row of [
+      "agents.row.mode",
+      "settings.launchCommand",
       "integration.row.cli",
       "integration.row.acp",
-      "integration.row.injection",
+      "agents.row.artifacts",
       "integration.row.canvasAgents",
       "integration.row.history",
     ]) {
@@ -153,7 +161,15 @@ describe("IntegrationPage", () => {
         ).replace("{part}", zh("integration.history.transcript"))}`,
       ),
     ).toBeTruthy();
-    expect(container.querySelector("[data-slot=badge]")).toBeNull();
+    // 启动两行是本设备项，行尾各一枚作用范围徽标；其余行没有徽标。
+    expect(
+      container.querySelectorAll(
+        "[data-slot=badge]:not([data-settings-scope])",
+      ),
+    ).toHaveLength(0);
+    expect(
+      container.querySelectorAll("[data-settings-scope=device]"),
+    ).toHaveLength(2);
     expect(screen.queryByText(zh("integration.state.stale"))).toBeNull();
   });
 
@@ -222,7 +238,7 @@ describe("IntegrationPage", () => {
       },
     });
     view();
-    expect(await screen.findByText("Claude Code")).toBeTruthy();
+    expect(await screen.findByText(zh("agents.row.artifacts"))).toBeTruthy();
     expect(screen.queryByText(/armadra-hook claude/)).toBeNull();
     fireEvent.click(
       await screen.findByRole("button", {
@@ -347,7 +363,7 @@ describe("IntegrationPage", () => {
       },
     ]);
     mock.integration.mockResolvedValue({ ...healthy, agentId: "opencode" });
-    view();
+    view("cli:opencode");
     expect(
       await screen.findByText(zh("integration.state.viaCli")),
     ).toBeTruthy();
@@ -373,61 +389,122 @@ describe("IntegrationPage", () => {
   });
 
   /**
-   * Worker 过旧的执行主机（契约 §21.2）：页首一组，每台一个徽标与「重新同步」；
-   * 同步成功后重读集成状态，徽标随之消失。
-   */
-  it("offers a resync for each execution host with an outdated Worker", async () => {
-    const base = {
-      agentId: "claude",
-      mode: "canvas",
-      hook: { installed: true, revision: 4 },
-      skill: { installed: true, revision: 12 },
-      legacy: { found: [] },
-      revision: 4,
-    };
-    mock.integration
-      .mockResolvedValueOnce({
-        ...base,
-        outdatedHosts: [{ hostId: "far", name: "Build box", version: "0.0.9" }],
-      })
-      .mockResolvedValue({ ...base, outdatedHosts: [] });
-    mock.resync.mockResolvedValue({
-      executionHostId: "far",
-      name: "Build box",
-      kind: "ssh",
-      workerConfigured: true,
-      workspaceCount: 0,
-    });
-    view();
-    expect(await screen.findByText("Build box")).toBeTruthy();
-    expect(
-      screen.getByText(
-        zh("integration.outdatedHost.version").replace("{version}", "0.0.9"),
-      ),
-    ).toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: zh("integration.resync") }),
-    );
-    await waitFor(() => expect(mock.resync).toHaveBeenCalledWith("far"));
-    await waitFor(() => expect(screen.queryByText("Build box")).toBeNull());
-  });
-
-  it("draws no outdated group when every Worker is current", async () => {
-    mock.integration.mockResolvedValue({ ...healthy, outdatedHosts: [] });
-    view();
-    expect(await screen.findByText("Claude Code")).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: zh("integration.resync") }),
-    ).toBeNull();
-  });
-
-  /**
    * 接口没答上来时整页是空白的：没有 CLI 与还没读完长得一模一样，用户
    * 只能看着一张空页猜。
    */
   it("says so when there is no CLI to list", async () => {
     mock.agents.mockReset().mockResolvedValue([]);
-    view();
+    view(null);
     expect(await screen.findByText(zh("integration.empty"))).toBeTruthy();
+  });
+});
+
+describe("Agent CLI 主表", () => {
+  beforeEach(() => {
+    usePreferencesStore.setState({
+      locale: "zh-CN",
+      agentModes: {},
+      launchOverrides: {},
+    });
+    mock.installStatus
+      .mockReset()
+      .mockImplementation(async (agentId: string, target: string) => ({
+        agentId,
+        target,
+        state: "idle",
+        package: "pkg",
+        output: [],
+      }));
+    mock.installIntegration.mockReset().mockResolvedValue({});
+    window.localStorage.clear();
+  });
+
+  const ok = (agentId: string, extra: Record<string, unknown> = {}) => ({
+    agentId,
+    mode: "canvas",
+    hook: { installed: true, revision: 4 },
+    skill: { installed: true, revision: 12 },
+    legacy: { found: [] },
+    revision: 4,
+    canvasAgents: { terminal: "available", acp: "available", reasons: [] },
+    ...extra,
+  });
+
+  it("一家一行：正常时不画状态徽标，写出能用的视图，动作是三态", async () => {
+    mock.agents.mockReset().mockResolvedValue([claude]);
+    mock.integration.mockReset().mockResolvedValue(ok("claude"));
+    const { container } = view(null);
+    expect(
+      await screen.findByText(zh("integration.canvasAgents.both")),
+    ).toBeTruthy();
+    expect(container.querySelector("[data-agent-state]")).toBeNull();
+    expect(
+      screen.getByRole("combobox", {
+        name: `Claude Code ${zh("agents.row.mode")}`,
+      }),
+    ).toBeTruthy();
+  });
+
+  it("没装：「需安装」+「安装」；注入待更新：「需更新」+「更新」；禁用：「已禁用」", async () => {
+    mock.agents.mockReset().mockResolvedValue([
+      { ...claude, installed: false },
+      { ...claude, id: "codex", label: "Codex", launchCmd: "codex" },
+      { ...claude, id: "pi", label: "Pi", launchCmd: "pi" },
+    ]);
+    mock.integration
+      .mockReset()
+      .mockImplementation(async (id: string) =>
+        ok(id, id === "codex" ? { stale: true } : {}),
+      );
+    usePreferencesStore.setState({ agentModes: { pi: "disabled" } });
+    const { container } = view(null);
+    await waitFor(() =>
+      expect(container.querySelectorAll("[data-agent-state]")).toHaveLength(3),
+    );
+    expect(screen.getByText(zh("agents.state.installNeeded"))).toBeTruthy();
+    expect(screen.getByText(zh("agents.state.updateNeeded"))).toBeTruthy();
+    expect(screen.getByText(zh("agents.state.disabled"))).toBeTruthy();
+    const install = await screen.findByRole("button", {
+      name: zh("integration.action.install"),
+    });
+    expect(install.getAttribute("data-install-target")).toBe("cli");
+    fireEvent.click(
+      screen.getByRole("button", { name: zh("agents.action.update") }),
+    );
+    await waitFor(() =>
+      expect(mock.installIntegration).toHaveBeenCalledWith("codex"),
+    );
+  });
+
+  it("都不能在画布里创建时写「—」；自定义 Agent 不在这一页", async () => {
+    mock.agents
+      .mockReset()
+      .mockResolvedValue([
+        claude,
+        { ...claude, id: "custom:x", label: "我的", baseAgent: "claude" },
+      ]);
+    mock.integration.mockReset().mockResolvedValue(
+      ok("claude", {
+        canvasAgents: {
+          terminal: "unavailable",
+          acp: "unavailable",
+          reasons: ["cli_missing"],
+        },
+      }),
+    );
+    view(null);
+    expect(await screen.findByText("—")).toBeTruthy();
+    expect(screen.queryByText("我的")).toBeNull();
+  });
+
+  it("点名称推入这一家的子页", async () => {
+    mock.agents.mockReset().mockResolvedValue([claude]);
+    mock.integration.mockReset().mockResolvedValue(ok("claude"));
+    view(null);
+    fireEvent.click(await screen.findByRole("button", { name: /Claude Code/ }));
+    expect(usePreferencesStore.getState().settingsSubpage).toBe("cli:claude");
+    expect(
+      await screen.findByRole("heading", { name: zh("agents.group.launch") }),
+    ).toBeTruthy();
   });
 });

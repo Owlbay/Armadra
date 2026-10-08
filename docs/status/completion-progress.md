@@ -3404,3 +3404,34 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 接口：
 
 - core：`OWN_SKILL_DIRS` 只剩三个 armadra 目录；`isOwnCommand` 只认 `armadra-hook`。形状不变，契约 §13.5 新增、§39.1 改写。
+
+## 设置拆页：Agent CLI、主机、远程访问与账号各页（界面第二波 §2.5–§2.7，包 B）
+
+做了什么：
+
+- `pages/index.ts` 的 `SECTION_PAGES` 一页一个组件，A 留的过渡指向与 `stack()` 删除。删掉 `AgentPage`、`IntegrationPage`、`TerminalPage`、`HostPage`、`SshPage`、`ExecutionHostsPage`、`DataPage`；`GithubPage → ForgePage`、`AccountPage → UsagePage`、`RemoteServicesPage → RemoteAccessPage`、`execution-hosts/FleetGroup → MachinesTable` 改名。
+- Agent CLI（`AgentsPage` + `AgentDetailPage`，共用件在 `pages/integration/parts.tsx`）：一家一行，状态只在不正常时一枚 `Badge outline`（需安装 / 需更新 / 已禁用，`agentState()`），能用的视图（都不能用写「—」），主动作（安装 / 更新 = 重新生成 / 三态 `Select`）；点名称推入子页 `cli:<id>`（`subpage.ts` 加 `cli` 类，页头是 CLI 名）：启动（三态、启动命令，行尾「本设备」）· 安装（CLI、ACP）· 画布注入（Hook 与技能 + 重新生成；`legacy.found` 非空时 `outline`「清理旧版 N」弹层清单，沿用现有键，不再红色）· 在画布中创建 Agent · 本地历史。自定义条目不在这一页。页首「Worker 待升级」删掉（功能在远程机器页）。
+- 自定义 Agent（`CustomAgentsPage`，原 Agent 页的列表与子页表单）、会话（`SessionsPage`：自动命名带「本设备」、索引范围、已索引条数与重建）、凭据与密钥（`CredentialsPage`：节点凭据、模型密钥、Copilot 登录）、用量与额度（`UsagePage` 去掉 Copilot 登录）。
+- 工作空间：执行权限 · 运行主机 + 切换（子页 `executionHosts:switch` 从执行主机页移来）· 默认 Agent · 语言服务 · 实时协同。
+- 本机服务（`ServicePage`）：连接一行（打开即查一次，ID / 进程 / 能力折进 `Collapsible`「诊断」）；终端会话、电源与资源、数据（目录、大小、备份、日志保留）、崩溃上报只给 owner。
+- 远程机器（`MachinesPage`）：SSH 主机与执行主机合成一张 `Table`（窄屏 `Item`）：名称 · 地址 · Worker（版本 / `destructive` 过期 / `outline` 未配置）· 工作区数 ·「验证」（一步问完 ssh 与 Worker）；点名称进子页：连接参数、Worker 重新同步、在那台机器上打开项目、主机密钥、健康记录表；表尾添加、全部重新同步（两台以上）、导入 / 导出（对话框）。
+- 远程访问（`RemoteAccessPage`）：「让别的设备访问本机」一张卡：局域网直连（Gateway 开关、监听、证书、配对码，`GatewayConfigSection`）+ 经中转（每个登录着的中转账号一个分享开关与分享链接；没有账号时动作是「添加中转账号」）；中转账号（有账号才出现）；我连接的其他 Armadra。术语：「远程服务」→「中转账号」、「已挂载的源」→「我连接的其他 Armadra」、「挂载」→「连接」、对外服务开关叫「局域网直连」。
+- 设备与会话（`DevicesPage`）：CA 引导、设备登录（打开即查连接，失败一句原因 + 检查连接）、已配对设备（`GatewayDevicesSection`）、登录会话（`security/LoginSessions`）；账号与安全去掉会话一组。`#pair=` 打开到 `devices`（`use-link-fragments.ts`）；自动化 / Git 托管面板「前往设置」没配对时去 `devices`，其余去 `service`；「前往设置 → 连接 / Git 托管」等旧指引改成新页名。
+- 探针：`gateway-e2e` 开关与二维码改在远程访问页找（`局域网直连`）、设备表在设备与会话页；`remote-e2e` 打开远程项目与重新同步先点进机器子页、切换主机走工作空间页；`link-join` / `relay-web-e2e` 分享开关叫「经中转」；`forge-panel` 引 `ForgePage`。DS §5.15 改写为 Agent CLI 与远程机器；架构、客户端平台、服务器部署指南里的页名同步。
+
+实测（macOS arm64，基于 main 368d1bb9）：
+
+- 新增 / 改写测试：`AgentsPage`（主表状态与动作、子页三组、清理清单分组计数、迁移提示一次、启动器受限、ACP 随 CLI、代装 CLI）、`MachinesPage`、`WorkspacePage`（切换的阻塞项、草稿、已停止提示）、`ServicePage`、`DevicesPage`（配对链接自查与重试、局域网直连开关与二维码、设备撤销、成员只读）、`SessionsPage`、`CustomAgentsPage`、`CredentialsPage`、`security/LoginSessions`、`RemoteAccessPage`（三段结构）、`SettingsDialog`（Agent CLI 主表三态、子页、更新、清理）、`index.test`（每页挂组件且不共用）。
+- 隔离 `ARMADRA_DATA_DIR` + 临时 HOME + `ARMADRA_NO_GLOBAL_WRITES=1` 起 core 与 Vite，内置浏览器 1280 / 1920 / 390、明暗看过 Agent CLI 主表与子页、本机服务、远程机器（表与子页）、远程访问、设备与会话；`design-showcase.mjs --only=integration,gateway --width=1280,1920,390` 两主题、对比度、控制台全过。
+- `pnpm check`、web typecheck、全量 `pnpm libs:build && pnpm -r --if-present test` 通过。
+
+没做 / 偏离：
+
+- 子页「画布注入」组里那一行叫「Hook 与技能」，不与组名重复；`agents.state.ready`、`agents.nav` 没加（正常不画徽标、页名用 `settings.section.agents`）。「清理旧版」沿用 `integration.action.repair` / `integration.repair`，没新造 `cleanupLegacy` 键。
+- 「检查连接」去掉了「取消」（打开页面自动查一次）。
+- 远程访问页「经中转」是每个中转账号一个开关，不是一个总开关（分享本身按账号登记）。
+- 改了包 B 边界外的几处，都是删页的直接后果：`subpage.ts`（`cli` 类）、`SettingsDialog.test.tsx`、`showcase/sections/gateway.tsx`、`use-link-fragments.ts`+test、`AutomationDrawer.tsx` / `GithubDrawer.tsx`+test 的去向、`i18n/{modals,automation,github,forge}.ts` 删无人引用的键与改旧页名指引、上面列的探针与指南。未改 core。
+
+接口：
+
+- `AgentsPage.tsx`：`agentState`、`AgentRow`；`AgentDetailPage.tsx`：`AgentModeSelect`；`integration/parts.tsx`：`useIntegrationActions`、`useMigrationNotice`、`CleanupButton`、`injectionProblem`、`historyValue`、`canvasAgentsValue`；`MachinesPage.tsx`：`machineRows`、`executionHostLabel`、`EXECUTION_HOSTS_KEY`、`parseHostForm`；`execution-hosts/MachinesTable.tsx`：`MachinesTable`、`HealthTable`；`gateway/GatewaySection.tsx`：`GatewayConfigSection({ extra })`、`GatewayDevicesSection`；`GatewayPanel` 去掉设备表 props、加 `extra`；`RemoteShareSection` 加 `label`；`SessionsPage.tsx`：`DATA_INFO_KEY`；`ServicePage.tsx`：`ConnectionGroup`；`security/LoginSessions.tsx`。契约、协议号、数据库都不变。

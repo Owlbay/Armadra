@@ -367,7 +367,11 @@ async function scenario(ctx) {
   /* --------------------------- 1. 建远端工作空间 --------------------------- */
 
   await attempt(ctx, "01-remote-workspace", async () => {
+    // 远程机器表里点名称进这台机器的子页：在那台机器上打开项目在那里。
     await openSettings(page, "远程机器");
+    await page.click('[role="dialog"] table button', HOST_NAME, {
+      exact: true,
+    });
     await page.fill('input[aria-label="远程项目路径"]', project);
     await page.click('[role="dialog"] button', "打开远程项目");
     await page.waitFor(
@@ -802,8 +806,9 @@ async function scenario(ctx) {
       `${ctx.viteUrl}/?workspace=${created.id}&board=${boards[0].id}`,
     );
     await page.settle();
+    // 当前工作空间跑在哪台、怎么切换在「工作空间」页。
     const switchTo = async (hostLabel) => {
-      await openSettings(page, "远程机器");
+      await openSettings(page, "工作空间");
       await page.click('[role="dialog"] button', "切换", { exact: true });
       await page.click('[role="dialog"] button[role="combobox"]');
       await page.click('[role="option"]', hostLabel, { exact: true });
@@ -1280,9 +1285,13 @@ async function scenario(ctx) {
     );
     await openSettings(page, "远程机器");
     await page.waitFor(
-      `return document.body.innerText.includes("Worker ${row.worker?.version ?? ""}");`,
-      { what: "执行主机页的 Worker 版本徽标" },
+      `return [...document.querySelectorAll('[role="dialog"] table td')]
+         .some((cell) => cell.innerText.trim() === ${JSON.stringify(String(row.worker?.version ?? ""))});`,
+      { what: "远程机器表的 Worker 版本" },
     );
+    await page.click('[role="dialog"] table button', HOST_NAME, {
+      exact: true,
+    });
     await page.click('[role="dialog"] button', "重新同步", { exact: true });
     await page.waitFor(
       `return document.body.innerText.includes("已重新同步 ${HOST_NAME}");`,

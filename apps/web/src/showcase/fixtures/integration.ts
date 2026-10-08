@@ -175,7 +175,7 @@ export function idleJob(
 }
 
 /**
- * 正常 · 版本过旧（带一台 Worker 待升级的主机）· 原生 ACP、启动器异常 · 适配器
+ * 正常 · 注入待更新（带两条本产品旧版本的残留）· 原生 ACP、启动器异常 · 适配器
  * 不接画布工具、重新安装失败可恢复 · CLI 未检测到。
  */
 export const CLI_GROUP: readonly {
@@ -192,7 +192,20 @@ export const CLI_GROUP: readonly {
     integration: state("codex", {
       stale: true,
       installedRevision: 412,
-      outdatedHosts: [{ hostId: "gpu-01", name: "gpu-01", version: "0.0.9" }],
+      legacy: {
+        found: [
+          {
+            kind: "hook_entry",
+            path: "/Users/demo/.codex/hooks.json",
+            detail: "armadra-hook --event session-start",
+          },
+          {
+            kind: "hook_entry",
+            path: "/Users/demo/.codex/hooks.json",
+            detail: "armadra-hook --event session-start",
+          },
+        ],
+      },
     }),
   },
   {

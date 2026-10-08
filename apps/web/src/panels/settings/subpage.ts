@@ -1,3 +1,5 @@
+import { agentDefinition } from "@armadra/shared";
+
 import { usePreferencesStore } from "../../app/preferences-store";
 
 /**
@@ -7,12 +9,13 @@ import { usePreferencesStore } from "../../app/preferences-store";
  * 把「是哪一类、编辑的是谁」放进这一个字符串里，页头的标题就能由 id 推出来，
  * 不必让页面把文案回传给对话框。
  */
-export type SubpageKind = "ssh" | "agent" | "executionHosts";
+export type SubpageKind = "ssh" | "agent" | "executionHosts" | "cli";
 
 const SUBPAGE_KINDS: readonly SubpageKind[] = [
   "ssh",
   "agent",
   "executionHosts",
+  "cli",
 ];
 
 export function subpageId(kind: SubpageKind, ref: string): string {
@@ -31,7 +34,10 @@ export function parseSubpage(
   return { kind: kind as SubpageKind, ref };
 }
 
-/** 子页标题的 i18n 键；新建与编辑各一句。 */
+/**
+ * 子页标题的 i18n 键；新建与编辑各一句。Agent CLI 的子页标题就是那一家的
+ * 名字（产品名不翻译），这里直接答名字，`t()` 认不出的键原样显示。
+ */
 export function subpageTitleKey(subpage: string): string {
   const parsed = parseSubpage(subpage);
   if (!parsed) return "settings.title";
@@ -40,6 +46,8 @@ export function subpageTitleKey(subpage: string): string {
     return isNew ? "ssh.dialog.add" : "ssh.dialog.edit";
   }
   if (parsed.kind === "executionHosts") return "executionHosts.switch.title";
+  if (parsed.kind === "cli")
+    return agentDefinition(parsed.ref)?.label ?? "settings.section.agents";
   return isNew ? "settings.customAgent.new" : "settings.customAgent.edit";
 }
 

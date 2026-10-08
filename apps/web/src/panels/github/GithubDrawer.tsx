@@ -290,7 +290,7 @@ export function GithubDrawer() {
     createIssue.isPending ||
     createPull.isPending;
 
-  const toSettings = (section: "forge" | "service") => {
+  const toSettings = (section: "forge" | "service" | "devices") => {
     setPanel("github", "closed");
     usePreferencesStore.getState().setLastSettingsSection(section);
     setPanel("settings", true);
@@ -361,7 +361,15 @@ export function GithubDrawer() {
             size="sm"
             variant="secondary"
             className="min-h-10"
-            onClick={() => toSettings("service")}
+            onClick={() =>
+              toSettings(
+                pageBlocked === "signedOut" ||
+                  pageBlocked === "noPermission" ||
+                  pageBlocked === "nativeSession"
+                  ? "devices"
+                  : "service",
+              )
+            }
           >
             {t("github.blocked.action")}
           </Button>

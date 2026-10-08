@@ -35,7 +35,7 @@ import { FORGE_NAMES } from "../../../api/forge";
  * 令牌只往外走一次：输入框是 password 类型，永远不回填、不从任何回应里读回来，
  * 保存成功后立即从组件状态里清掉。降级到 0600 文件时明说，不写成「已安全保存」。
  */
-export function GithubPage() {
+export function ForgePage() {
   const t = useT();
   const locale = usePreferencesStore((state) => state.locale);
   const workspace = useCanvasStore((state) => state.workspace);

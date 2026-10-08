@@ -36,7 +36,10 @@ vi.mock("./HostIdentityPanel", async () => {
   };
 });
 
-import { HostPage } from "./HostPage";
+vi.mock("./security/LoginSessions", () => ({ LoginSessions: () => null }));
+
+import { DevicesPage } from "./DevicesPage";
+import { GatewayConfigSection } from "./gateway/GatewaySection";
 import { usePreferencesStore } from "../../../app/preferences-store";
 import {
   IdentityRequestError,
@@ -44,9 +47,18 @@ import {
   type IdentityHello,
   type IdentitySession,
 } from "../../../api/identity";
-import { SETTINGS_SECTIONS } from "../nav";
 import { TestProviders } from "../../../app/test-harness";
 import { parsePairingQr } from "../../../host/qr";
+
+/** 远程访问页的局域网直连与设备与会话页放在一起：配置与设备表各一份。 */
+function HostPage() {
+  return (
+    <>
+      <GatewayConfigSection />
+      <DevicesPage />
+    </>
+  );
+}
 
 function render(element: ReactElement) {
   return renderBare(<TestProviders>{element}</TestProviders>);
@@ -246,51 +258,28 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("HostPage", () => {
-  it("is the local service entry and remains idle until explicitly checked", () => {
-    const section = SETTINGS_SECTIONS.find((entry) => entry.id === "service");
-    expect(section?.groupKey).toBe("settings.group.host");
-    render(<HostPage />);
-    expect(screen.getByRole("status").textContent).toBe("尚未检查连接");
-    expect(
-      screen.getByText(/不会切换当前正在运行的工作空间或终端/),
-    ).toBeTruthy();
-    expect(probe).not.toHaveBeenCalled();
-  });
-
-  it("opened from a pairing link it checks once by itself, so the ticket can be used", async () => {
-    // 服务器壳的配对链接 `…/#pair=<票>`：票要等身份面「可用」才会被取走，而
-    // 可用要先检查一次连接。不自己检查，链接打开后什么都不会发生。
+describe("DevicesPage", () => {
+  it("opens with one connection check, so device sign-in can confirm the service", async () => {
     probe.mockResolvedValue(hello);
-    const original = window.location.hash;
-    window.history.replaceState(null, "", "#pair=abc.def");
-    try {
-      render(<HostPage />);
-      await act(async () => {
-        await Promise.resolve();
-      });
-      expect(probe).toHaveBeenCalledTimes(1);
-    } finally {
-      window.history.replaceState(
-        null,
-        "",
-        original || window.location.pathname,
-      );
-    }
+    render(<DevicesPage />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(probe).toHaveBeenCalledTimes(1);
   });
 
   it("checks when a pairing link lands in a page that is already open", async () => {
     probe.mockResolvedValue(hello);
     const original = window.location.hash;
     try {
-      render(<HostPage />);
-      expect(probe).not.toHaveBeenCalled();
+      render(<DevicesPage />);
+      await waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
       await act(async () => {
         window.history.replaceState(null, "", "#pair=abc.def");
         window.dispatchEvent(new HashChangeEvent("hashchange"));
         await Promise.resolve();
       });
-      expect(probe).toHaveBeenCalledTimes(1);
+      expect(probe).toHaveBeenCalledTimes(2);
     } finally {
       window.history.replaceState(
         null,
@@ -305,7 +294,7 @@ describe("HostPage", () => {
     const original = window.location.hash;
     window.history.replaceState(null, "", "#pair=abc.def");
     try {
-      render(<HostPage />);
+      render(<DevicesPage />);
       await waitFor(() => expect(probe).toHaveBeenCalledTimes(3), {
         timeout: 4_000,
       });
@@ -320,83 +309,28 @@ describe("HostPage", () => {
     }
   });
 
-  it("keeps a confirmed identity in expandable details", async () => {
-    probe.mockResolvedValue(hello);
-    render(<HostPage />);
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "检查连接" }));
-    });
-    expect(screen.getByRole("status").textContent).toBe("已确认服务响应");
-    const details = screen.getByText("连接详情").closest("details");
-    expect(details).toBeTruthy();
-    expect(details?.open).toBe(false);
-    expect(screen.getByText("host-confirmed")).toBeTruthy();
-    expect(screen.getByText("process-confirmed")).toBeTruthy();
-    // 能力名原样列出：这一页说的是 core 报了什么，不是页面猜它支持什么。
-    expect(screen.getByText("identity.native-session.v1")).toBeTruthy();
-  });
-
-  /**
-   * 远端返回的文字不进界面：一句可以本地化的话说明该去看哪一边，
-   * 原样打印一段服务端消息既翻译不了，也可能带出不该出现在屏幕上的东西。
-   */
-  it("localizes a refusal without printing remote text", async () => {
+  it("a failed check says why and offers to check again, without remote text", async () => {
     probe.mockRejectedValue(
       new IdentityRequestError(403, "PERMISSION_DENIED", "raw remote detail"),
     );
-    render(<HostPage />);
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "检查连接" }));
-    });
-    const status = screen.getByRole("status");
+    render(<DevicesPage />);
+    const status = await screen.findByRole("status");
     expect(status.textContent).toContain("拒绝访问");
     expect(status.textContent).not.toContain("raw remote detail");
-  });
-
-  it("allows cancellation while checking and ignores the old result", async () => {
-    let resolve!: (value: IdentityHello) => void;
-    probe.mockReturnValue(
-      new Promise<IdentityHello>((done) => {
-        resolve = done;
-      }),
-    );
-    render(<HostPage />);
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "检查连接" }));
-    });
-    expect(screen.getByRole("status").textContent).toBe("正在检查连接…");
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "取消" }));
-    });
-    expect(screen.getByRole("status").textContent).toBe("已取消检查");
-    await act(async () => {
-      resolve(hello);
-      await Promise.resolve();
-    });
-    expect(screen.getByRole("status").textContent).toBe("已取消检查");
-  });
-
-  it("updates status translations without repeating a request", async () => {
-    probe.mockRejectedValue(new IdentityTransportError());
-    render(<HostPage />);
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "检查连接" }));
-    });
-    expect(screen.getByRole("status").textContent).toContain("无法连接");
-    act(() => usePreferencesStore.setState({ locale: "en" }));
-    expect(screen.getByRole("status").textContent).toContain("Cannot connect");
-    expect(probe).toHaveBeenCalledTimes(1);
+    probe.mockResolvedValue(hello);
+    fireEvent.click(screen.getByRole("button", { name: "检查连接" }));
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
   });
 });
 
-describe("HostPage · 对外服务", () => {
+describe("局域网直连与已配对设备", () => {
   it("is absent for anyone the core refuses /api/gateway to", async () => {
     const calls = fakeCore({ status: 403 });
     render(<HostPage />);
     await waitFor(() =>
       expect(calls.some((call) => call.path === "/api/gateway")).toBe(true),
     );
-    expect(screen.queryByRole("switch", { name: "对外服务" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "局域网直连" })).toBeNull();
   });
 
   it("a member on the server shell does not even ask", async () => {
@@ -409,13 +343,13 @@ describe("HostPage · 对外服务", () => {
     expect(
       calls.filter((call) => call.path.startsWith("/api/gateway")),
     ).toEqual([]);
-    expect(screen.queryByRole("switch", { name: "对外服务" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "局域网直连" })).toBeNull();
   });
 
   it("off shows only the switch; turning it on PUTs /api/gateway and shows a pairing QR", async () => {
     const calls = fakeCore({});
     render(<HostPage />);
-    const toggle = await screen.findByRole("switch", { name: "对外服务" });
+    const toggle = await screen.findByRole("switch", { name: "局域网直连" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(screen.queryByRole("combobox", { name: "监听地址" })).toBeNull();
     expect(screen.queryByRole("img", { name: "配对二维码" })).toBeNull();
@@ -453,7 +387,7 @@ describe("HostPage · 对外服务", () => {
     await screen.findByRole("img", { name: "配对二维码" });
     expect(await screen.findByText("iPhone")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("switch", { name: "对外服务" }));
+    fireEvent.click(screen.getByRole("switch", { name: "局域网直连" }));
     await waitFor(() =>
       expect(screen.queryByRole("img", { name: "配对二维码" })).toBeNull(),
     );
@@ -484,7 +418,7 @@ describe("HostPage · 对外服务", () => {
     render(<HostPage />);
     await screen.findByRole("img", { name: "配对二维码" });
     expect(
-      (screen.getByRole("switch", { name: "对外服务" }) as HTMLButtonElement)
+      (screen.getByRole("switch", { name: "局域网直连" }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
   });
@@ -527,7 +461,7 @@ describe("HostPage · 对外服务", () => {
     const table = await screen.findByRole("table");
     expect(within(table).getByText("Mac")).toBeTruthy();
     expect(within(table).queryByRole("button")).toBeNull();
-    expect(screen.queryByRole("switch", { name: "对外服务" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "局域网直连" })).toBeNull();
   });
 
   it("says when ACME renewal keeps failing and when it retries", async () => {

@@ -249,7 +249,9 @@ export function AutomationDrawer() {
             className="min-h-10"
             onClick={() => {
               setPanel("automation", "closed");
-              usePreferencesStore.getState().setLastSettingsSection("service");
+              usePreferencesStore
+                .getState()
+                .setLastSettingsSection(blockedSection(blocked));
               setPanel("settings", true);
             }}
           >
@@ -396,4 +398,16 @@ export function AutomationDrawer() {
       )}
     </WorkPanelSheet>
   );
+}
+
+/**
+ * 被挡住时「前往设置」去哪一页：这台设备没配对、没权限是「设备与会话」，
+ * 连不上或服务不支持是「本机服务」。
+ */
+function blockedSection(blocked: string): string {
+  return blocked === "signedOut" ||
+    blocked === "noPermission" ||
+    blocked === "nativeSession"
+    ? "devices"
+    : "service";
 }

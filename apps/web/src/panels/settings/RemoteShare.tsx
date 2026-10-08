@@ -211,7 +211,7 @@ export function useTunnelEvents(): void {
 }
 
 /**
- * 远程服务行展开后的「分享」区（客户端包 §3.2）：分享本机的开关与隧道状态；
+ * 远程访问页「经中转」那一行（客户端包 §3.2）：分享本机的开关与隧道状态；
  * 分享着时列出经它发出的链接——生效的可复制、看二维码、系统分享、撤销；失效的
  * 折进历史。整条链接存在本机 core 的 SecretStore（契约 §33.9），随时可再取。
  */
@@ -219,11 +219,14 @@ export function RemoteShareSection({
   remote,
   localLabel,
   inUse = false,
+  label,
 }: {
   remote: RemoteService;
   localLabel: string;
   /** 页面正经这条隧道到达主机：分享开着时不给停（停了就是自断）。 */
   inUse?: boolean;
+  /** 开关那一行的名字；缺省「分享本机」。 */
+  label?: string;
 }) {
   const t = useT();
   const client = useQueryClient();
@@ -269,17 +272,17 @@ export function RemoteShareSection({
   return (
     <div
       data-slot="remote-share"
-      className="flex min-w-0 flex-col gap-3 px-4 pb-4"
+      className="flex min-w-0 flex-col gap-3 px-4 py-3"
     >
       <div className="flex min-h-8 min-w-0 items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="text-[13px]">{t("remote.share")}</span>
+          <span className="text-[13px]">{label ?? t("remote.share")}</span>
           {pill && <StatusPill tone={pill.tone} label={t(pill.key)} />}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {busy && <Spinner aria-hidden />}
           <Switch
-            aria-label={t("remote.share")}
+            aria-label={label ?? t("remote.share")}
             checked={registration !== undefined}
             disabled={busy || (inUse && registration !== undefined)}
             onCheckedChange={(on) => {

@@ -3,7 +3,7 @@ import type { MessageModule } from "./index";
 /** 设置 → 后台服务与对外服务 → 对外服务（设计系统 §5.12），与配对页的 CA 引导。 */
 export const gateway: MessageModule = {
   "zh-CN": {
-    "gateway.title": "对外服务",
+    "gateway.title": "局域网直连",
     "gateway.listen": "监听地址",
     "gateway.listen.loopback": "仅本机",
     "gateway.listen.private": "局域网",
@@ -74,7 +74,7 @@ export const gateway: MessageModule = {
     "gateway.showcase.phone": "手机配对页",
   },
   en: {
-    "gateway.title": "External access",
+    "gateway.title": "Local network",
     "gateway.listen": "Listen on",
     "gateway.listen.loopback": "This computer only",
     "gateway.listen.private": "Local network",

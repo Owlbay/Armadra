@@ -66,7 +66,7 @@ vi.mock("../remote-access", async (original) => ({
   useRemoteAccess: () => access,
 }));
 
-import { RemoteServicesPage } from "./RemoteServicesPage";
+import { RemoteAccessPage } from "./RemoteAccessPage";
 import { offerJoinLink } from "../../../sources/join-intent";
 import { useShowingStore } from "../RemoteShare";
 import { dispatchWorkspaceEvent } from "../../../api/events";
@@ -128,27 +128,33 @@ function mount() {
   });
   render(
     <QueryClientProvider client={client}>
-      <RemoteServicesPage />
+      <RemoteAccessPage />
     </QueryClientProvider>,
   );
 }
 
-describe("远程服务页", () => {
+describe("远程访问页", () => {
   it("零配置：只有本机一行与两个添加入口，没有 SaaS 入口", async () => {
     api.listSources.mockResolvedValue({ sources: [local], remotes: [] });
     mount();
     await screen.findByText("this-mac");
+    // 三段：谁能连进来（经中转一行的动作是添加中转账号）· 我连接的其他 Armadra；
+    // 没有中转账号时不单列一张空的账号卡。
     expect(
-      screen.getByRole("button", { name: "Add remote service" }),
+      screen.getByText("Let other devices reach this machine"),
+    ).toBeTruthy();
+    expect(screen.getByText("Via relay")).toBeTruthy();
+    expect(screen.getByText("Other Armadra hosts")).toBeTruthy();
+    expect(screen.queryByText("Relay accounts")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Add relay account" }),
     ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Add self-hosted" }),
     ).toBeTruthy();
     expect(screen.queryByText(/saas|cloud/i)).toBeNull();
     // 没登录任何远程服务时没有「从远程服务添加」。
-    expect(
-      screen.queryByRole("button", { name: "Add from remote service" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add from relay" })).toBeNull();
     await waitFor(() =>
       expect(boot.applySourceTable).toHaveBeenCalledWith([local]),
     );
@@ -162,7 +168,7 @@ describe("远程服务页", () => {
     api.notifyShellSourcesChanged.mockResolvedValue(true);
     mount();
     fireEvent.click(
-      await screen.findByRole("button", { name: "Add remote service" }),
+      await screen.findByRole("button", { name: "Add relay account" }),
     );
     fireEvent.change(screen.getByLabelText("Address"), {
       target: { value: ISSUER },
@@ -205,7 +211,7 @@ describe("远程服务页", () => {
     );
     mount();
     fireEvent.click(
-      await screen.findByRole("button", { name: "Add remote service" }),
+      await screen.findByRole("button", { name: "Add relay account" }),
     );
     fireEvent.change(screen.getByLabelText("Address"), {
       target: { value: ISSUER },
@@ -294,7 +300,7 @@ describe("远程服务页", () => {
     });
     mount();
     const toggle = await screen.findByRole("switch", {
-      name: "Share this machine",
+      name: "Via relay",
     });
     await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
     fireEvent.click(toggle);
@@ -384,7 +390,7 @@ describe("添加时的地址提示", () => {
     api.listSources.mockResolvedValue({ sources: [local], remotes: [] });
     mount();
     fireEvent.click(
-      await screen.findByRole("button", { name: "Add remote service" }),
+      await screen.findByRole("button", { name: "Add relay account" }),
     );
     fireEvent.change(screen.getByLabelText("Address"), {
       target: { value: address },
@@ -564,9 +570,7 @@ describe("通过链接加入（A4-3p）", () => {
     });
     mount();
     await screen.findByText(relay.label);
-    expect(
-      screen.queryByRole("switch", { name: "Share this machine" }),
-    ).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Via relay" })).toBeNull();
   });
 });
 
@@ -604,7 +608,7 @@ describe("中继侧待清理（契约 §31.4）", () => {
     mount();
     await screen.findByText("Sharing");
     const toggle = await screen.findByRole("switch", {
-      name: "Share this machine",
+      name: "Via relay",
     });
     await waitFor(() =>
       expect(toggle.getAttribute("aria-checked")).toBe("true"),
@@ -865,7 +869,7 @@ describe("经远端访问时不自断", () => {
       await screen.findByText(/This page connects through it/),
     ).toBeTruthy();
     const toggle = await screen.findByRole("switch", {
-      name: "Share this machine",
+      name: "Via relay",
     });
     await waitFor(() =>
       expect(toggle.getAttribute("aria-checked")).toBe("true"),

@@ -138,7 +138,6 @@ export const modals: MessageModule = {
       "命令面板能搜到哪些历史会话。只索引本应用工作空间下的那些会更快，也不会把别的项目摊在面前。",
     "settings.conversations.scope.workspaces": "本应用的工作空间",
     "settings.conversations.scope.all": "全部项目",
-    "settings.customAgents": "自定义 Agent", // i18n-exempt
     "settings.customAgent.add": "添加",
     "settings.customAgent.new": "新建自定义 Agent", // i18n-exempt
     "settings.customAgent.edit": "编辑自定义 Agent", // i18n-exempt
@@ -220,7 +219,6 @@ export const modals: MessageModule = {
     "settings.reveal.copied": "路径已复制到剪贴板",
     "settings.reveal.failed": "打不开这个目录",
     "settings.dbSize": "数据库大小",
-    "settings.conversationIndex": "对话索引",
     "settings.conversationCount": "{value} 条",
     "settings.rebuild": "重建",
     "settings.rebuild.done": "已重建 {value} 条",
@@ -462,7 +460,6 @@ export const modals: MessageModule = {
       "Which past sessions the command palette can find. Indexing only this app's workspaces is faster and keeps unrelated projects out of the list.",
     "settings.conversations.scope.workspaces": "This app's workspaces",
     "settings.conversations.scope.all": "All projects",
-    "settings.customAgents": "Custom agents",
     "settings.customAgent.add": "Add",
     "settings.customAgent.new": "New custom agent",
     "settings.customAgent.edit": "Edit custom agent",
@@ -545,7 +542,6 @@ export const modals: MessageModule = {
     "settings.reveal.copied": "Path copied to the clipboard",
     "settings.reveal.failed": "That folder could not be opened",
     "settings.dbSize": "Database size",
-    "settings.conversationIndex": "Conversation index",
     "settings.conversationCount": "{value} entries",
     "settings.rebuild": "Rebuild",
     "settings.rebuild.done": "Indexed {value} entries",

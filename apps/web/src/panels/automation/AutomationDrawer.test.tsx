@@ -53,6 +53,7 @@ vi.mock("@/canvas/placement", () => ({
   nodeDropPosition: () => ({ x: 0, y: 0 }),
 }));
 
+import { usePreferencesStore } from "@/app/preferences-store";
 import { AutomationDrawer, failureKey } from "./AutomationDrawer";
 import { useAutomationFocus } from "./open";
 
@@ -181,8 +182,10 @@ describe("automation page availability", () => {
     // No pretend actions while the Host is unusable.
     expect(screen.queryByText("新建计划")).toBeNull();
     expect(screen.queryByText("启用")).toBeNull();
-    fireEvent.click(screen.getByText("前往设置 → 连接"));
+    fireEvent.click(screen.getByText("前往设置"));
     expect(store.setPanel).toHaveBeenCalledWith("settings", true);
+    // 没配对：去「设备与会话」，那里是这台设备的登录。
+    expect(usePreferencesStore.getState().lastSettingsSection).toBe("devices");
   });
 
   it("says a Host without a Worker cannot run plans", async () => {

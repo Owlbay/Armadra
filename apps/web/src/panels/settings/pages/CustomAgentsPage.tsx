@@ -11,23 +11,12 @@ import { toast } from "sonner";
 import { CapabilityInheritance } from "@/agent/CapabilityInheritance";
 
 import { useAgentsQuery } from "../../../app/use-agents";
-import {
-  AGENT_MODES,
-  usePreferencesStore,
-  useT,
-  type AgentMode,
-} from "../../../app/preferences-store";
+import { useT } from "../../../app/preferences-store";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { useSubpage } from "../subpage";
 import { useRuntimeSettings } from "../use-runtime-settings";
-import {
-  CONVERSATION_SCOPES,
-  type ConversationScope,
-} from "../../../api/settings";
-import { AgentCredentials } from "./AgentCredentials";
 import { CONTROL_WIDTH } from "./GeneralPage";
-import { AmaKeys } from "./AmaKeys";
 import {
   ResponsiveAlertDialog,
   ResponsiveAlertDialogAction,
@@ -39,7 +28,6 @@ import {
 } from "@/panels/ResponsiveDialog";
 import { Button } from "@/ui/button";
 import { Input } from "@/ui/input";
-import { Switch } from "@/ui/switch";
 import {
   Select,
   SelectContent,
@@ -47,38 +35,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/ui/select";
-import { ToggleGroup, ToggleGroupItem } from "@/ui/toggle-group";
 import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from "@/ui/empty";
 
 /**
- * 设置 → Agent（§24.1）。
+ * 设置 → 自定义 Agent（§2.1）。
  *
- * 每个内置 CLI 一行：三态（默认 / 启用 / 禁用）+ 自定义启动命令；
- * 默认 Agent、默认权限、默认视图与简洁模式在「默认」页；最后是自定义 Agent 列表，
- * 「添加 / 点一行」推入同一右栏里的子页，而不是叠一层对话框。
+ * 一条一行，点一行或「添加」推入同一右栏里的子页（名称、命令、参数、环境变量、
+ * 基础 Agent 与能力继承），删除放在子页页尾。
  */
-export function AgentPage() {
+export function CustomAgentsPage() {
   const t = useT();
-  const agents = useAgentsQuery();
   const subpage = useSubpage();
   const { settings, save } = useRuntimeSettings();
-
-  const modes = usePreferencesStore((state) => state.agentModes);
-  const setAgentMode = usePreferencesStore((state) => state.setAgentMode);
-  const overrides = usePreferencesStore((state) => state.launchOverrides);
-  const setLaunchOverride = usePreferencesStore(
-    (state) => state.setLaunchOverride,
-  );
-  const autoTitle = usePreferencesStore((state) => state.autoTitle);
-  const setAutoTitle = usePreferencesStore((state) => state.setAutoTitle);
-
-  const list = agents.data ?? [];
-  // 自定义 Agent 也在 `GET /api/agents` 里（§24.1），但三态、启动命令这两组
-  // 只对内置 CLI 有意义，自定义的在下面自己那一组里维护。
-  const builtins = React.useMemo(
-    () => list.filter((agent) => !agent.baseAgent),
-    [list],
-  );
   const custom = React.useMemo(
     () => settings.data?.agents?.custom ?? [],
     [settings.data],
@@ -111,132 +79,37 @@ export function AgentPage() {
     </Button>
   );
 
-  return (
-    <>
+  if (custom.length === 0) {
+    // 空态：一句话 + 一个动作（设计系统 §5.16）。
+    return (
       <SettingsGroup>
-        {builtins.map((agent, index) => (
-          <SettingsRow
-            key={agent.id}
-            label={
-              <span className="flex items-center gap-2">{agent.label}</span>
-            }
-            footnote={index === 0 ? t("settings.agentMode.note") : undefined}
-          >
-            <ToggleGroup
-              type="single"
-              size="sm"
-              spacing={0}
-              variant="outline"
-              value={modes[agent.id] ?? "default"}
-              aria-label={agent.label}
-              onValueChange={(value) => {
-                if (value) setAgentMode(agent.id, value as AgentMode);
-              }}
-            >
-              {AGENT_MODES.map((mode) => (
-                <ToggleGroupItem key={mode} value={mode}>
-                  {t(`settings.agentMode.${mode}`)}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-          </SettingsRow>
-        ))}
+        <Empty className="py-6">
+          <EmptyHeader>
+            <EmptyTitle className="text-[13px] font-normal text-muted-foreground">
+              {t("settings.customAgent.empty")}
+            </EmptyTitle>
+          </EmptyHeader>
+          <EmptyContent>{addCustom}</EmptyContent>
+        </Empty>
       </SettingsGroup>
+    );
+  }
 
-      <SettingsGroup title={t("settings.launchCommand")}>
-        {builtins.map((agent) => (
-          <SettingsRow key={agent.id} label={agent.label}>
-            <Input
-              className="h-8 w-[240px] text-xs"
-              aria-label={`${agent.label} ${t("settings.launchCommand")}`}
-              placeholder={agent.resolvedPath ?? agent.launchCmd}
-              value={overrides[agent.id] ?? ""}
-              onChange={(event) =>
-                setLaunchOverride(agent.id, event.target.value)
-              }
-            />
-          </SettingsRow>
-        ))}
-      </SettingsGroup>
-
-      <AmaKeys />
-
-      <SettingsGroup title={t("settings.autoTitle")}>
+  return (
+    <SettingsGroup>
+      {custom.map((agent) => (
         <SettingsRow
-          label={t("settings.autoTitle.label")}
-          footnote={t("settings.autoTitle.note")}
+          key={agent.id}
+          label={agent.label}
+          onClick={() => subpage.open("agent", agent.id)}
         >
-          <Switch
-            checked={autoTitle}
-            aria-label={t("settings.autoTitle.label")}
-            onCheckedChange={setAutoTitle}
-          />
+          <span className="max-w-[240px] truncate font-mono text-[11px] text-muted-foreground">
+            {agent.launchCmd}
+          </span>
         </SettingsRow>
-      </SettingsGroup>
-
-      <SettingsGroup title={t("settings.conversations")}>
-        <SettingsRow
-          label={t("settings.conversations.scope")}
-          footnote={t("settings.conversations.scopeNote")}
-        >
-          <Select
-            value={settings.data?.conversations?.scope ?? "workspaces"}
-            disabled={!settings.data}
-            onValueChange={(value) =>
-              save.mutate({
-                conversations: { scope: value as ConversationScope },
-              })
-            }
-          >
-            <SelectTrigger
-              aria-label={t("settings.conversations.scope")}
-              size="sm"
-              className={CONTROL_WIDTH}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="z-[var(--z-dialog)]">
-              {CONVERSATION_SCOPES.map((scope) => (
-                <SelectItem key={scope} value={scope}>
-                  {t(`settings.conversations.scope.${scope}`)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingsRow>
-      </SettingsGroup>
-
-      <SettingsGroup title={t("settings.customAgents")}>
-        {custom.map((agent) => (
-          <SettingsRow
-            key={agent.id}
-            label={
-              <span className="flex items-center gap-2">{agent.label}</span>
-            }
-            onClick={() => subpage.open("agent", agent.id)}
-          >
-            <span className="text-[11px] text-muted-foreground">
-              {agent.launchCmd}
-            </span>
-          </SettingsRow>
-        ))}
-        {custom.length === 0 ? (
-          // 空态：一句话 + 一个动作（设计系统 §5.16），不再单列一行「添加」。
-          <Empty className="py-6">
-            <EmptyHeader>
-              <EmptyTitle className="text-[13px] font-normal text-muted-foreground">
-                {t("settings.customAgent.empty")}
-              </EmptyTitle>
-            </EmptyHeader>
-            <EmptyContent>{addCustom}</EmptyContent>
-          </Empty>
-        ) : (
-          <SettingsRow label={null}>{addCustom}</SettingsRow>
-        )}
-      </SettingsGroup>
-
-      <AgentCredentials />
-    </>
+      ))}
+      <SettingsRow label={null}>{addCustom}</SettingsRow>
+    </SettingsGroup>
   );
 }
 

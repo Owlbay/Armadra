@@ -8,7 +8,6 @@ import { useT } from "../../../app/preferences-store";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { useRuntimeSettings } from "../use-runtime-settings";
-import { CopilotSignIn } from "./CopilotSignIn";
 import { CONTROL_WIDTH } from "./GeneralPage";
 import { ModelCatalogPanel } from "./ModelCatalogPanel";
 import { Button } from "@/ui/button";
@@ -39,16 +38,16 @@ const POLICY_KEYS: Partial<
 const REFRESH_CHOICES = [0, 1, 2, 5, 15] as const;
 
 /**
- * 设置 → 账号与用量（§24.1 + §4.2）。
+ * 设置 → 用量与额度（§24.1 + §4.2；Copilot 登录在「凭据与密钥」）。
  *
  * 每个 provider 一张卡：凭据来源（只说**放在哪**，从不显示凭据本身）、
  * 各限流窗口的占用条与重置时间。刷新走 `POST /api/usage/refresh`，
  * Runtime 侧 30s 内只真取一次。
  *
  * §4.2 补上四组控制：总开关、逐个 provider 开关、刷新节奏、以及本地成本
- * 统计开关；Copilot 的登录 / 登出单独一张卡。
+ * 统计开关。
  */
-export function AccountPage() {
+export function UsagePage() {
   const t = useT();
   const queryClient = useQueryClient();
   const { usage, refresh, refreshing, refreshFailed, now, cooldown } =
@@ -200,8 +199,6 @@ export function AccountPage() {
           />
         </SettingsRow>
       </SettingsGroup>
-
-      <CopilotSignIn disabled={busy} signInDisabled={!providerOn("copilot")} />
 
       <SettingsGroup>
         <SettingsRow

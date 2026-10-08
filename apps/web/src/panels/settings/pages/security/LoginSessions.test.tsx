@@ -64,7 +64,7 @@ vi.mock("../../../../api/security", async (original) => {
 
 import { usePreferencesStore } from "../../../../app/preferences-store";
 import { installDomPolyfills } from "../../../../app/test-harness";
-import { SecurityPage } from "./SecurityPage";
+import { LoginSessions } from "./LoginSessions";
 
 installDomPolyfills();
 
@@ -94,7 +94,7 @@ function mount() {
   });
   return render(
     <QueryClientProvider client={client}>
-      <SecurityPage />
+      <LoginSessions />
     </QueryClientProvider>,
   );
 }
@@ -103,57 +103,28 @@ beforeEach(() => {
   usePreferencesStore.setState({ locale: "zh-CN" });
   for (const mock of Object.values(mocks)) mock.mockReset();
 });
-afterEach(() => {
-  cleanup();
-  window.history.replaceState(null, "", window.location.pathname);
-});
+afterEach(cleanup);
 
-describe("SecurityPage", () => {
-  it("成员：两步验证要求排第一，审计不出现；登录会话在「设备与会话」", async () => {
+describe("LoginSessions", () => {
+  it("有会话时列出登录会话；成员看不到「所有成员」", async () => {
     mocks.resume.mockResolvedValue(session(["canvas:read"]));
     mount();
-    expect(await screen.findByText("需要开启两步验证")).toBeTruthy();
-    expect(screen.queryByText("这台")).toBeNull();
-    expect(
-      screen.getByText("用 IP 地址访问时无法使用通行密钥，请改用域名"),
-    ).toBeTruthy();
-    const headings = screen
-      .getAllByRole("heading", { level: 3 })
-      .map((node) => node.textContent);
-    expect(headings[0]).toBe("两步验证");
-    expect(headings).not.toContain("审计");
-  });
-
-  it("owner 看得到审计", async () => {
-    mocks.resume.mockResolvedValue(session(["identity:manage"]));
-    mount();
-    expect(await screen.findByRole("heading", { name: "审计" })).toBeTruthy();
+    expect(await screen.findByText("这台")).toBeTruthy();
     expect(screen.queryByRole("switch", { name: "所有成员" })).toBeNull();
   });
 
-  it("没登录：登录表单；OAuth 回调的 mfa 片段直接进第二步并抹掉地址栏", async () => {
-    mocks.resume.mockResolvedValue(null);
-    window.history.replaceState(null, "", "#oauth=mfa&challengeId=ch1");
+  it("有管理权时可以看所有成员的会话", async () => {
+    mocks.resume.mockResolvedValue(session(["identity:manage"]));
     mount();
     expect(
-      await screen.findByRole("heading", { name: "两步验证" }),
+      await screen.findByRole("switch", { name: "所有成员" }),
     ).toBeTruthy();
-    expect(screen.getByLabelText("验证码")).toBeTruthy();
-    expect(window.location.hash).toBe("");
   });
 
-  it("OAuth 错误：没登录时写在表单里，登录了弹一条", async () => {
+  it("没有会话时整块不出现", async () => {
     mocks.resume.mockResolvedValue(null);
-    window.history.replaceState(null, "", "#oauth=error&code=oauth_not_bound");
-    mount();
-    expect(await screen.findByText("这个账号还没有绑定")).toBeTruthy();
-
-    cleanup();
-    mocks.resume.mockResolvedValue(session([]));
-    window.history.replaceState(null, "", "#oauth=bound");
-    mount();
-    await waitFor(() =>
-      expect(mocks.toastSuccess).toHaveBeenCalledWith("已绑定"),
-    );
+    const view = mount();
+    await waitFor(() => expect(mocks.resume).toHaveBeenCalled());
+    expect(view.container.textContent).toBe("");
   });
 });

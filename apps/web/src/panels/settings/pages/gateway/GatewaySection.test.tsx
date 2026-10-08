@@ -6,7 +6,7 @@ import {
   TestProviders,
   installDomPolyfills,
 } from "../../../../app/test-harness";
-import { GatewaySection } from "./GatewaySection";
+import { GatewayDevicesSection } from "./GatewaySection";
 
 /**
  * 设备表的「取消在路上的那一次」：配对成功的那一刻会话换了，还在路上的设备
@@ -76,7 +76,7 @@ function pending(signal: AbortSignal | undefined): Promise<never> {
   });
 }
 
-describe("GatewaySection：会话换了就取消在路上的设备请求", () => {
+describe("GatewayDevicesSection：会话换了就取消在路上的设备请求", () => {
   it("第一次请求被中止，重取的那一次的答案上屏", async () => {
     const signals: (AbortSignal | undefined)[] = [];
     mocks.listIdentityDevices.mockImplementation(
@@ -89,7 +89,7 @@ describe("GatewaySection：会话换了就取消在路上的设备请求", () =>
     );
     render(
       <TestProviders>
-        <GatewaySection />
+        <GatewayDevicesSection />
       </TestProviders>,
     );
     await vi.waitFor(() =>
@@ -115,7 +115,7 @@ describe("GatewaySection：会话换了就取消在路上的设备请求", () =>
     mocks.listIdentityDevices.mockResolvedValue(page("手机"));
     const view = render(
       <TestProviders>
-        <GatewaySection />
+        <GatewayDevicesSection />
       </TestProviders>,
     );
     expect(await screen.findByText("手机")).toBeTruthy();
