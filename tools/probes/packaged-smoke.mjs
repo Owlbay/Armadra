@@ -182,7 +182,13 @@ const CLIENT = linux
 const OLD_SKILL =
   "---\nname: armadra\ndescription: old\n---\n\n# old skill\n\n<!-- armadra:skill-revision 11 -->\n";
 
-/** 旧版装进各 CLI 全局目录的东西，外加用户自己的条目。答要断言的清单。 */
+/** 别的工具装进 CLI 配置的 Hook 命令。 */
+const OTHER_TOOL = "sh '/Users/dev/.othertool/agent-hooks/hook.sh'";
+
+/**
+ * 旧版装进各 CLI 全局目录的东西，外加用户自己的条目和别的工具装进同一批目录的
+ * 东西。答要断言的清单；`foreign` 是别的工具的，启动与清理都不许碰。
+ */
 function seedLegacy(home) {
   const write = (relative, body) => {
     const path = join(home, relative);
@@ -199,7 +205,11 @@ function seedLegacy(home) {
         {
           model: "user-choice",
           hooks: {
-            Stop: [{ hooks: [hook("claude")] }, { hooks: [user] }],
+            Stop: [
+              { hooks: [hook("claude")] },
+              { hooks: [user] },
+              { hooks: [{ type: "command", command: OTHER_TOOL }] },
+            ],
             SessionStart: [{ hooks: [hook("claude")] }],
           },
         },
@@ -240,6 +250,20 @@ function seedLegacy(home) {
     codexSkill: write(".codex/skills/armadra/SKILL.md", OLD_SKILL),
     // 用户自己的技能：同名目录之外的一个，必须原样留下。
     userSkill: write(".claude/skills/mine/SKILL.md", "---\nname: mine\n---\n"),
+    foreign: [
+      write(
+        ".copilot/hooks/othertool-status.json",
+        `${JSON.stringify({ version: 1, hooks: { sessionStart: [{ type: "command", bash: OTHER_TOOL }] } }, null, 2)}\n`,
+      ),
+      write(
+        ".claude/skills/othertool-canvas/SKILL.md",
+        "---\nname: othertool-canvas\n---\nsh othertool.sh\n",
+      ),
+      write(
+        ".config/opencode/AGENTS.md",
+        "<!-- othertool:manage-canvas:start -->\ntheirs\n<!-- othertool:manage-canvas:end -->\n",
+      ),
+    ],
   };
 }
 
@@ -276,10 +300,17 @@ async function main() {
 
   const legacy = seedLegacy(home);
 
-  // 外加上一版写进来的一条会话级信任记录：迁移第二步要把它清掉，其余原样留着。
   writeFileSync(
     join(home, ".codex/config.toml"),
-    `model_reasoning_effort = "low"\ncheck_for_update_on_startup = false\n\n[projects."${projectReal}"]\ntrust_level = "trusted"\n\n[hooks.state."/<session-flags>/config.toml:session_start:0:0"]\ntrusted_hash = "sha256:0000"\n`,
+    `model_reasoning_effort = "low"\ncheck_for_update_on_startup = false\n\n[projects."${projectReal}"]\ntrust_level = "trusted"\n`,
+  );
+  // 启动之前 HOME 里每个造好的文件的指纹：启动不许改其中任何一个。
+  const seeded = [
+    ...Object.values(legacy).flat(),
+    join(home, ".codex/config.toml"),
+  ];
+  const seededBefore = Object.fromEntries(
+    seeded.map((path) => [path, sha(path)]),
   );
   if (realCli) {
     // Codex：临时 HOME 里的 ~/.codex，只复制 auth.json。token 超过 7 天没刷新就
@@ -370,7 +401,7 @@ async function main() {
     writeFileSync(join(output, "app.log"), appLog);
   });
 
-  /* ---------------------------- 1. 迁移全局安装 ---------------------------- */
+  /* ------------------------ 1. 启动不碰 CLI 的配置 ------------------------- */
 
   const record = await waitFor(
     "迁移记录",
@@ -386,87 +417,18 @@ async function main() {
     { timeout: 90_000 },
   );
   report.migration = record;
-  const agents = record.agents ?? {};
-  const backups = Object.values(agents).flatMap((entry) => entry.backups);
   check(
-    "迁移每个 CLI 都没有报错",
-    Object.values(agents).every((entry) => entry.error === undefined),
-    Object.fromEntries(
-      Object.entries(agents).map(([id, entry]) => [id, entry.error ?? "ok"]),
-    ),
+    "启动只做数据目录内的迁移（version 3，不涉及任何 CLI）",
+    record.version === 3 && Object.keys(record.agents ?? {}).length === 0,
+    record,
   );
-  for (const [name, agentId, path] of [
-    ["Copilot 的 hooks/armadra.json", "copilot", legacy.copilotHooks],
-    ["OpenCode 的状态模块", "opencode", legacy.opencodeModule],
-    ["Pi 的状态模块", "pi", legacy.piModule],
-    ["OMP 的状态模块", "omp", legacy.ompModule],
-    ["Claude 的 skills/armadra", "claude", legacy.claudeSkill],
-    ["Codex 的 skills/armadra", "codex", legacy.codexSkill],
-  ]) {
-    const backup = (agents[agentId]?.backups ?? []).find(
-      (file) =>
-        basename(file) === basename(path) ||
-        file.startsWith(`${path}.armadra-backup-`),
-    );
-    check(
-      `${name}：清掉了，先备份（${backup?.startsWith(data) ? "数据目录" : "旁边"}）`,
-      !existsSync(path) &&
-        backup !== undefined &&
-        existsSync(backup) &&
-        readFileSync(backup, "utf8").includes("armadra"),
-      { path, backup },
-    );
-  }
-  const claudeAfter = readFileSync(legacy.claudeSettings, "utf8");
-  const claudeBackup = backups.find((file) =>
-    file.startsWith(`${legacy.claudeSettings}.armadra-backup-`),
+  const changedAtStart = seeded.filter(
+    (path) => sha(path) !== seededBefore[path],
   );
   check(
-    "Claude settings.json：我们的 Hook 没了，用户自己的 Hook 与 model 还在",
-    !claudeAfter.includes("armadra-hook") &&
-      claudeAfter.includes("echo user-own-hook") &&
-      claudeAfter.includes("user-choice"),
-    claudeAfter.slice(0, 400),
-  );
-  check(
-    "Claude settings.json：改之前备份在旁边，备份里是原来的内容",
-    claudeBackup !== undefined &&
-      readFileSync(claudeBackup, "utf8").includes("armadra-hook claude"),
-    claudeBackup,
-  );
-  const codexHooksAfter = readFileSync(legacy.codexHooks, "utf8");
-  check(
-    "Codex hooks.json：我们的条目没了，用户的留着，旁边有备份",
-    !codexHooksAfter.includes("armadra-hook") &&
-      codexHooksAfter.includes("echo user-own-hook") &&
-      backups.some((file) =>
-        file.startsWith(`${legacy.codexHooks}.armadra-backup-`),
-      ),
-    codexHooksAfter.slice(0, 300),
-  );
-  check("用户自己的技能原样留着", existsSync(legacy.userSkill));
-  const codexConfig = await waitFor(
-    "旧的会话级信任记录从临时 HOME 清掉",
-    () => {
-      const text = readFileSync(join(home, ".codex/config.toml"), "utf8");
-      return text.includes("/<session-flags>/") ? undefined : text;
-    },
-    { timeout: 30_000 },
-  ).catch(() => readFileSync(join(home, ".codex/config.toml"), "utf8"));
-  check(
-    "迁移清掉了 ~/.codex/config.toml 里上一版的会话级信任记录，用户原有的行还在",
-    !codexConfig.includes("/<session-flags>/") &&
-      codexConfig.includes('model_reasoning_effort = "low"') &&
-      codexConfig.includes('trust_level = "trusted"'),
-    codexConfig.slice(0, 400),
-  );
-
-  // 用户那条示例 Hook 断言做完就拿掉，免得后面 Codex 的会话里多跑一条与本测
-  // 无关的 Hook。画布内的 Codex 带 --dangerously-bypass-hook-trust，不靠信任
-  // 记录；下面休眠与唤醒之后再确认 config.toml 没被写回信任记录。
-  writeFileSync(
-    legacy.codexHooks,
-    `${JSON.stringify({ hooks: {} }, null, 2)}\n`,
+    "启动没有改临时 HOME 里的任何 CLI 文件（我们的旧条目、用户的、别的工具的）",
+    changedAtStart.length === 0,
+    changedAtStart,
   );
 
   /* ----------------------------- 渲染进程 ------------------------------ */
@@ -549,6 +511,84 @@ async function main() {
   const backend = await api("/api/terminals/backend");
   note("终端后端", backend);
   await gatewayServesPage(api);
+
+  /* ------------------------ 2. 用户点「清理旧版」 ------------------------- */
+
+  const repairs = [];
+  for (const agentId of ["claude", "codex", "opencode", "pi", "omp", "copilot"])
+    repairs.push(
+      await api(`/api/agents/${agentId}/integration/repair`, {
+        method: "POST",
+      }),
+    );
+  report.repairs = repairs;
+  const backups = repairs.flatMap((one) => one.backups ?? []);
+  check(
+    "清理结果里没有别的工具的条目或路径",
+    !JSON.stringify(repairs).includes("othertool"),
+  );
+  for (const [name, path] of [
+    ["Copilot 的 hooks/armadra.json", legacy.copilotHooks],
+    ["OpenCode 的状态模块", legacy.opencodeModule],
+    ["Pi 的状态模块", legacy.piModule],
+    ["OMP 的状态模块", legacy.ompModule],
+    ["Claude 的 skills/armadra", legacy.claudeSkill],
+    ["Codex 的 skills/armadra", legacy.codexSkill],
+  ]) {
+    check(`${name}：清掉了`, !existsSync(path), path);
+  }
+  check(
+    "Copilot 的 hooks/armadra.json 删之前在旁边留了备份",
+    backups.some((file) =>
+      file.startsWith(`${legacy.copilotHooks}.armadra-backup-`),
+    ),
+    backups,
+  );
+  const claudeAfter = readFileSync(legacy.claudeSettings, "utf8");
+  const claudeBackup = backups.find((file) =>
+    file.startsWith(`${legacy.claudeSettings}.armadra-backup-`),
+  );
+  check(
+    "Claude settings.json：我们的 Hook 没了，用户与别的工具的 Hook、model 还在",
+    !claudeAfter.includes("armadra-hook") &&
+      claudeAfter.includes("echo user-own-hook") &&
+      claudeAfter.includes(".othertool/agent-hooks") &&
+      claudeAfter.includes("user-choice"),
+    claudeAfter.slice(0, 400),
+  );
+  check(
+    "Claude settings.json：改之前备份在旁边，备份里是原来的内容",
+    claudeBackup !== undefined &&
+      readFileSync(claudeBackup, "utf8").includes("armadra-hook claude"),
+    claudeBackup,
+  );
+  const codexHooksAfter = readFileSync(legacy.codexHooks, "utf8");
+  check(
+    "Codex hooks.json：我们的条目没了，用户的留着，旁边有备份",
+    !codexHooksAfter.includes("armadra-hook") &&
+      codexHooksAfter.includes("echo user-own-hook") &&
+      backups.some((file) =>
+        file.startsWith(`${legacy.codexHooks}.armadra-backup-`),
+      ),
+    codexHooksAfter.slice(0, 300),
+  );
+  check("用户自己的技能原样留着", existsSync(legacy.userSkill));
+  const foreignChanged = [
+    ...legacy.foreign,
+    join(home, ".codex/config.toml"),
+  ].filter((path) => sha(path) !== seededBefore[path]);
+  check(
+    "别的工具的 Hook、技能、指令块与 Codex 的 config.toml 一个字节没变",
+    foreignChanged.length === 0,
+    foreignChanged,
+  );
+  // 用户那条示例 Hook 断言做完就拿掉，免得后面 Codex 的会话里多跑一条与本测
+  // 无关的 Hook。画布内的 Codex 带 --dangerously-bypass-hook-trust，不靠信任
+  // 记录；下面休眠与唤醒之后再确认 config.toml 没被写进信任记录。
+  writeFileSync(
+    legacy.codexHooks,
+    `${JSON.stringify({ hooks: {} }, null, 2)}\n`,
+  );
 
   // 视频夹具：仓库里的一段 H.264（`fixtures/clip-h264.mp4`，320×240、约 1.6
   // 秒，Chrome 的 MediaRecorder 录的 canvas 动画）。以前在打包版的窗口里现录：
