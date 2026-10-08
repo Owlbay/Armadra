@@ -2,10 +2,11 @@
 //
 // core 的 HOME / CLAUDE_CONFIG_DIR 指向探针自己造的临时目录（`prepareIntegrationHome`
 // 在 core 启动前调用），里面的 `.claude/settings.json` 在 11 个 Hook 事件下各挂
-// 一条同样的本产品旧版命令，外加一条用户自己的命令和一条别的工具的命令。截图
+// 一条同样的本产品旧版命令，外加一条用户自己的命令、一条别的工具的命令和一条
+// 与本产品改名前同名的命令（现在只认 armadra 命名，它按别的工具对待）。截图
 // 确认：Claude Code 那张分组的标题在视口里、「画布注入」一行行高正常、「清理旧版
 // 11」点开的清单弹层在设置对话框之上且没被盖住、同一条命令合并成一行并标 ×11、
-// 别的工具的命令不出现。最后点清单底下的「清理」：我们的条目清掉、用户与别的工具
+// 别的工具与改名前同名的命令不出现。最后点清单底下的「清理」：我们的条目清掉、用户与别的工具
 // 的留着、旁边多一份备份——这些都只发生在临时目录里。
 import {
   existsSync,
@@ -22,6 +23,8 @@ import { removeTree, sleep } from "./harness.mjs";
 
 /** 别的工具装进同一个文件的 Hook：不列、不改、不删。 */
 const OTHER_TOOL = "sh '/Users/dev/.othertool/agent-hooks/claude.sh'";
+/** 与本产品改名前同名的程序：现在不认它，按别的工具的条目对待。 */
+const FORMER_NAME = "/usr/local/bin/aicc-hook claude";
 
 const EVENTS = [
   "PreToolUse",
@@ -42,7 +45,7 @@ export function prepareIntegrationHome() {
   const path = mkdtempSync(join(tmpdir(), "armadra-ui-home-"));
   const claude = join(path, ".claude");
   mkdirSync(claude, { recursive: true });
-  const legacy = `"${join(path, "Old Build", "aicc-hook")}" claude`;
+  const legacy = `"${join(path, "Old Build", "armadra-hook")}" claude`;
   const hooks = Object.fromEntries(
     EVENTS.map((event) => [
       event,
@@ -51,6 +54,7 @@ export function prepareIntegrationHome() {
   );
   hooks.Stop.push({ hooks: [{ type: "command", command: "echo mine" }] });
   hooks.Stop.push({ hooks: [{ type: "command", command: OTHER_TOOL }] });
+  hooks.Stop.push({ hooks: [{ type: "command", command: FORMER_NAME }] });
   writeFileSync(
     join(claude, "settings.json"),
     `${JSON.stringify({ hooks }, null, 2)}\n`,
@@ -135,9 +139,10 @@ export default async function integration({ stack, output, report, scenario }) {
   run.check(popover.inViewport, "弹层整块在视口内");
   run.check(
     popover.text.includes("×11") &&
-      popover.text.split('aicc-hook" claude').length === 2 &&
-      !popover.text.includes("othertool"),
-    "同一条命令只列一行并标 ×11，别的工具的命令不列",
+      popover.text.split('armadra-hook" claude').length === 2 &&
+      !popover.text.includes("othertool") &&
+      !popover.text.includes(FORMER_NAME),
+    "同一条命令只列一行并标 ×11，别的工具与改名前同名的命令不列",
     popover.text.slice(0, 160),
   );
   await sleep(300);
@@ -159,10 +164,11 @@ export default async function integration({ stack, output, report, scenario }) {
     groups.flatMap((group) => group.hooks.map((hook) => hook.command)),
   );
   run.check(
-    commands.every((command) => !command.includes("aicc-hook")) &&
+    commands.every((command) => !command.includes("armadra-hook")) &&
       commands.includes("echo mine") &&
-      commands.includes(OTHER_TOOL),
-    "我们的旧条目全部移除，用户与别的工具的命令保留",
+      commands.includes(OTHER_TOOL) &&
+      commands.includes(FORMER_NAME),
+    "我们的旧条目全部移除，用户、别的工具与改名前同名的命令保留",
     commands,
   );
   const backups = readdirSync(join(stack.home, ".claude")).filter((name) =>
