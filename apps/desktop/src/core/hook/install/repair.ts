@@ -1,13 +1,14 @@
 import {
   copyFileSync,
   readFileSync,
-  readdirSync,
   rmSync,
   rmdirSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, extname, join } from "node:path";
+import { basename, join } from "node:path";
+import { hooksPath as copilotHooksPath } from "./copilot";
+import { modulePath } from "./extensions";
 import { SKILLS_ROOT, instructionFile } from "./skills";
 import {
   type JsonObject,
@@ -21,16 +22,18 @@ import {
  * What earlier versions of this product left in the user's CLI configuration
  * (docs/design/agent-integration.md §4), cleaned up only when the user asks.
  *
- * What is on disk out there, all of it ours:
+ * What is on disk out there, all of it ours and all of it under our own
+ * name — nothing else is recognised, including whatever this product was
+ * called before it was Armadra:
  *
- *   * hook entries and status lines whose program is our hook client, under
- *     its current name or the one before the rename — including a developer
- *     build of it that was installed once and then moved;
- *   * the generated status modules that call that client;
- *   * skill directories we installed (`armadra`, the revision-4 pair and the
- *     pair before the rename), when the `SKILL.md` in them carries our
+ *   * hook entries and status lines whose program is `armadra-hook` — including
+ *     a developer build of it that was installed once and then moved;
+ *   * the generated status modules `armadra-status.ts` / `armadra-status.js`
+ *     that call that client, and Copilot's `hooks/armadra.json`;
+ *   * skill directories we installed (`armadra`, `armadra-canvas`,
+ *     `armadra-linked-context`), when the `SKILL.md` in them carries our
  *     signature;
- *   * the instruction block we fenced into the CLI's global `AGENTS.md` /
+ *   * the `armadra:skills` block we fenced into the CLI's global `AGENTS.md` /
  *     `CLAUDE.md` before skills were separate;
  *   * the top-level `version` our installer wrote into Codex's `hooks.json`,
  *     which that CLI parses with `deny_unknown_fields` — one stale key and
@@ -53,15 +56,15 @@ import {
  */
 
 /**
- * Our hook client as a path's last segment: the current name, the one before
- * the rename, and the Windows launchers of either. A directory of that name
- * (`…/<name>/x.sh`) is not the client and does not count.
+ * Our hook client as a path's last segment, and its Windows launchers. A
+ * directory of that name (`…/armadra-hook/x.sh`) is not the client and does
+ * not count; neither does any other program, whatever it is called.
  */
 const OWN_CLIENT =
-  /(?:^|[\s"'`=/\\])(?:armadra-hook|aicc-hook)(?:\.exe|\.cmd)?(?=$|[\s"'`;)])/i;
+  /(?:^|[\s"'`=/\\])armadra-hook(?:\.exe|\.cmd)?(?=$|[\s"'`;)])/i;
 
-/** The instruction blocks we fenced, by their exact marker names. */
-const OWN_BLOCKS = ["armadra:skills", "aicc:skills"];
+/** The instruction block we fenced, by its exact marker name. */
+const OWN_BLOCKS = ["armadra:skills"];
 
 /** Our skill trailer (`skills.ts` `revisionOf`). */
 const OWN_SKILL_TRAILER = /<!--\s*armadra:skill-revision\s+\d+\s*-->/;
@@ -75,8 +78,6 @@ export const OWN_SKILL_DIRS = [
   "armadra",
   "armadra-canvas",
   "armadra-linked-context",
-  "aicc-canvas",
-  "aicc-linked-context",
 ];
 
 /** The providers a scan walks, in registry order. */
@@ -271,9 +272,9 @@ function lastLine(text: string): string[] {
 }
 
 /**
- * The JSON files a provider keeps hook entries in. Copilot merges a whole
- * directory, so every file in it is read — and none of them is rewritten
- * unless it holds one of our commands.
+ * The JSON files a provider keeps hook entries in. For Copilot, which merges a
+ * whole directory, only the file we wrote there counts; the rest of the
+ * directory belongs to whoever wrote it and is never opened.
  */
 function hookFiles(agentId: string, home: string): string[] {
   switch (agentId) {
@@ -282,43 +283,20 @@ function hookFiles(agentId: string, home: string): string[] {
     case "codex":
       return [join(home, "hooks.json")];
     case "copilot":
-      return jsonFiles(join(home, "hooks"));
+      return [copilotHooksPath(home)].filter(isFile);
     default:
       return [];
   }
 }
 
-/** The modules a provider auto-discovers; only ones calling our client count. */
+/**
+ * The status module we generated into a directory the provider
+ * auto-discovers, by its own file name; it counts only when it also calls our
+ * client. Other files there are never opened.
+ */
 function generatedModuleFiles(agentId: string, home: string): string[] {
-  const directory =
-    agentId === "opencode"
-      ? join(home, "plugins")
-      : agentId === "pi" || agentId === "omp"
-        ? join(home, "extensions")
-        : undefined;
-  if (directory === undefined) return [];
-  let entries: string[];
-  try {
-    entries = readdirSync(directory);
-  } catch {
-    return [];
-  }
-  return entries
-    .map((name) => join(directory, name))
-    .filter((path) => isFile(path) && [".js", ".ts"].includes(extname(path)));
-}
-
-function jsonFiles(directory: string): string[] {
-  let entries: string[];
-  try {
-    entries = readdirSync(directory);
-  } catch {
-    return [];
-  }
-  return entries
-    .map((name) => join(directory, name))
-    .filter((path) => isFile(path) && extname(path) === ".json")
-    .sort();
+  if (!["opencode", "pi", "omp"].includes(agentId)) return [];
+  return [modulePath(agentId, home)].filter(isFile);
 }
 
 function scanHookFile(agentId: string, path: string): LegacyFinding[] {

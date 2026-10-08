@@ -184,7 +184,7 @@ describe("Agent CLI 子页", () => {
           {
             kind: "hook_entry",
             path: "~/.claude/settings.json",
-            detail: "armadra-hook --event session-start",
+            detail: "target/debug/armadra-hook",
           },
           {
             kind: "skill_dir",

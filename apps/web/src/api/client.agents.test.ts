@@ -125,7 +125,7 @@ describe("目录与集成", () => {
             {
               kind: "hook_entry",
               path: "/home/u/.claude/settings.json",
-              detail: "/usr/local/bin/aicc-hook claude",
+              detail: "/usr/local/bin/armadra-hook claude",
             },
           ],
         },

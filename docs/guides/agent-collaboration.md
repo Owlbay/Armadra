@@ -57,15 +57,16 @@ Hook、技能（`SKILL.md`）与画布说明是一组**注入产物**，生成�
 
 ### 旧残留与清理
 
-本产品旧版本留在 CLI 全局配置里的东西不会自己消失：程序是我们 Hook 客户端（`armadra-hook`，或改名前的
-`aicc-hook`，含开发构建）的 Hook 条目与状态行、调用它的状态模块；技能目录 `armadra`、`armadra-canvas`、
-`armadra-linked-context`、`aicc-canvas`、`aicc-linked-context`（`SKILL.md` 带我们的修订号尾注或调用我们的客户端）；
-全局 `AGENTS.md` / `CLAUDE.md` 里 `armadra:skills` / `aicc:skills` 标记块；以及与我们的条目同在时 Codex
-`hooks.json` 顶层的 `version`——Codex 用 `deny_unknown_fields` 解析这个文件，多一个陌生键，**整份文件的 hook
+本产品旧版本留在 CLI 全局配置里的东西不会自己消失：程序是我们 Hook 客户端 `armadra-hook`（含开发构建）的
+Hook 条目与状态行、调用它的状态模块 `armadra-status.*`、Copilot 的 `hooks/armadra.json`；技能目录 `armadra`、
+`armadra-canvas`、`armadra-linked-context`（`SKILL.md` 带我们的修订号尾注或调用我们的客户端）；全局
+`AGENTS.md` / `CLAUDE.md` 里的 `armadra:skills` 标记块；以及与我们的条目同在时 Codex `hooks.json` 顶层的
+`version`——Codex 用 `deny_unknown_fields` 解析这个文件，多一个陌生键，**整份文件的 hook
 全都不跑**，包括用户自己的。
 
-只认这些签名。其他工具也会往同一批文件和目录里装 Hook、技能和指令块，名字可能与我们的旧版相似；
-它们不出现在集成状态里，不出现在清理结果里，也不会被改动或删除。
+只认这些签名，而且只认 `armadra` 开头的名字：本产品改名前的旧名也不再认。其他工具也会往同一批文件和目录里装
+Hook、技能和指令块，名字可能与我们的旧版相似；它们不出现在集成状态里，不出现在清理结果里，也不会被改动或删除。
+交给 CLI 的每个名字（Hook 程序、技能、插件、状态模块、MCP 服务器、环境变量）都以本产品名开头，清单见契约 §13.5。
 
 `GET /api/agents/{id}/integration` 的 `legacy.found` 列出这些条目，启动时**不改**任何 CLI 文件。真正动手的只有
 设置页的「清理旧版」：先把要重写的文件备份成 `<file>.armadra-backup-<时间戳>`，只删我们的条目，其余原样写回。
@@ -237,8 +238,8 @@ ACP 是同一个 Agent 节点的另一种驱动方式，不是第二条 Agent �
 使用独立临时 SQLite 数据库测试完整 HTTP 路由：节点 token 缺失/伪造、未连线、跨工作空间移动、正文超限、重复 key 冲突、满容量、分页、过期清理、重复确认、数据库重新连接后确认状态仍保留，以及没有终端会话时仍可完成收发确认。共享包测试覆盖六种 CLI 命令和不支持权限模式拒绝。所有测试不修改真实 CLI 的凭据、配置或会话。
 
 集成的验证分三层：`hook/install/**` 的单元测试断言每个安装器写出的字节与重装的幂等；`hook/install/repair.test.ts`
-用用户真实报上来的三种形状（`aicc-hook` 的 Claude `settings.json`、带顶层 `version` 的 Codex `hooks.json`、
-`aicc-canvas` 这类技能目录）当夹具，并在同一批文件里放一个中性名字的其他工具的 Hook、技能与指令块，断言扫描、清理与启动迁移都不碰它；夹具写在测试里，不读任何真实目录；`pnpm agent:smoke <cli>` 在临时 `HOME`
+用用户真实报上来的三种形状（`armadra-hook` 的 Claude `settings.json`、带顶层 `version` 的 Codex `hooks.json`、
+`armadra-canvas` 这类技能目录）当夹具，并在同一批文件里放一个中性名字的其他工具的 Hook、技能与指令块，以及与改名前旧名同名的条目，断言扫描、清理与启动迁移都不碰它们；`inject.test.ts` 断言注入给 CLI 的每个名字都带 `armadra` 前缀；夹具写在测试里，不读任何真实目录；`pnpm agent:smoke <cli>` 在临时 `HOME`
 下用真实 CLI 跑「装一次 → Hook 事件到达 + 技能文件在位 + `armadra-hook canvas/context` 动词可用 → 卸载后两者都不在」，
 并连线两个节点验证 `context summary` 能读到对方的真实转录。`pnpm ownership:e2e --domain agent` 证明 Host 模式下这四个
 动作是**转发**给执行主机的，Host 一个字节也不写。

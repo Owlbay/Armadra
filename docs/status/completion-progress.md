@@ -3339,6 +3339,33 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - `nav.ts`：`SettingsScope`、`SettingsSection.scope / pinnedLocal`、`LEGACY_SECTION_IDS`、`canonicalSectionId`、`activeSectionId`；`pages/index.ts`：`SECTION_PAGES`（B 只改自己那些行）；`scope-badge.tsx`：`ScopeBadge`、`useScopeLabel`；`useRuntimeSettings({ enabled })`；`GeneralPage.tsx` 导出 `CrashReportGroup`；`AboutPage.tsx` 导出 `UpdateStatusRows / UpdateStatusNotes / loadThirdPartyNotices`；`fonts.ts`：`MONOSPACE_CANDIDATES`、`filterMonospace`、`detectMonospaceFonts`、`useMonospaceFonts`；偏好 `TERMINAL_LETTER_SPACING_RANGE`。
 - 文案：`settings.group.*`（8 组）、`settings.section.*`（21 页）、`settings.scope.*`（6 个）、`terminal.settings.{fontSystem,fontCustom,fontStack,letterSpacing,preview,previewSample,group.*}`。契约、协议号、数据库都不变。
 
+## 注入只用 armadra 命名、清理不再认旧名（2026-10-09）
+
+用户要求：注入的 Hook 等一律用本产品独立的名称，不和别的工具混淆，也不兼容旧别名。
+
+做了什么：
+
+- 盘点：交给 CLI 的名字已全部以 `armadra` 开头——Hook 程序 `armadra-hook`、技能 `armadra`、插件清单 `armadra`、状态模块 `armadra-status.*`（导出 `ArmadraStatus`）、Copilot `armadra.instructions.md`、MCP 服务器 `armadra`、环境变量 `ARMADRA_*`、备份后缀 `.armadra-backup-*`、`armadra-launch.exe`。不需要改名，因此也没有要迁移的旧 armadra 条目。清单写进契约 §13.5。
+- `repair.ts`：删掉改名前旧名的识别（Hook 客户端、`…:skills` 指令块、两个旧技能目录）；Copilot 只看我们写过的 `hooks/armadra.json`，状态模块只看 `armadra-status.ts` / `.js`，同目录的其他文件不再打开。
+- `integration.ts`：早期迁移记录里的旧名技能目录路径随之不再出现在 `migration`。
+- 测试：`inject.test.ts`「our names」对每个 CLI 生成产物，断言每个文件与目录名（CLI 规定的除外）、技能 `name`、插件 `name`、每条 Hook 命令的程序、Codex `-c hooks.*` 的程序都以 `armadra` 开头，我们设的环境变量以 `ARMADRA_` 开头，MCP 服务器名同样；`repair.test.ts`「entries under the former name」在六种 CLI 的每个扫描位置放与旧名同名的条目（以及调用我们客户端的他人文件），断言不列、不改、不删、不备份、字节不变。web 夹具与 `ui-features/integration.mjs` 改用 armadra 命名，探针多一条与旧名同名的命令，断言弹层不列、清理后保留。
+- 文档：契约 §13.5（新增）、§39.1，`design/agent-integration.md` §4 / §7，`guides/agent-collaboration.md`。
+
+实测（macOS arm64，基于 main f2f1d18b）：
+
+- `pnpm libs:build && pnpm -r --if-present test` 全过（web 4027、desktop 5342 / 74 跳、shared 372、server 98 / 4 跳）；web / desktop typecheck、`pnpm check` 通过。
+- `ui-features-e2e --only=integration` 通过（临时 HOME 与数据目录）。
+
+没做 / 偏离：
+
+- MCP 与 ama 的工具名（`canvas_post`、`browser_click` 等）不改：它们在 `armadra` 服务器的命名空间下，各 CLI 显示为该服务器的一组；改名会改动词表与契约。
+- `run/<cli>`、`shims/<cli>` 必须与 CLI 同名才能接管启动，只在数据目录里，不进 CLI 配置。
+- 用户机器上旧名的残留不再由「清理旧版」处理，需要时用户手动删除。
+
+接口：
+
+- core：`OWN_SKILL_DIRS` 只剩三个 armadra 目录；`isOwnCommand` 只认 `armadra-hook`。形状不变，契约 §13.5 新增、§39.1 改写。
+
 ## 设置拆页：Agent CLI、主机、远程访问与账号各页（界面第二波 §2.5–§2.7，包 B）
 
 做了什么：

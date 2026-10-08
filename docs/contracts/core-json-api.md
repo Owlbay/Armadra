@@ -651,6 +651,24 @@ G5-25 追加：`GET /api/usage` 与 `POST /api/usage/refresh` 里 Claude 那一�
 - 控制端只要求 `remote.integration.v1` 就能同步，且不再发 `codexCommand`（旧 Worker 只在收到它时写信任）。只有 v1 的主机控制端记为「Worker 旧」：它之前写下的 Codex 信任记录要等 Worker 升级后才会被清。
 - 远端注入文件改为与本机同一个生成器：`run/<cli>`（POSIX 启动器）与委托给它的 `shims/<cli>`。
 
+### 13.5 注入给 CLI 的名称
+
+2026-10-09 起，交给 CLI 的每个名字都以本产品名开头，不用通用名，也不认改名前的旧名（代码与断言在 `core/hook/install/inject.ts`、`inject.test.ts` 的「our names」）：
+
+| 东西                                                                             | 名称                                                                                                                        |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Hook 与状态行的程序                                                              | `armadra-hook`（Windows `armadra-hook.exe` / `.cmd`）                                                                       |
+| 技能目录与 `SKILL.md` 的 `name`                                                  | `armadra`；尾注 `<!-- armadra:skill-revision N -->`                                                                         |
+| 插件清单 `name`（Claude、Copilot）                                               | `armadra`                                                                                                                   |
+| 状态模块（OpenCode / Pi / OMP）                                                  | `armadra-status.js` / `armadra-status.ts`（OpenCode 的导出名 `ArmadraStatus`）                                              |
+| Copilot 指令文件                                                                 | `armadra.instructions.md`                                                                                                   |
+| MCP 服务器（ACP `session/new.mcpServers` 与 `armadra-hook mcp` 的 `serverInfo`） | `armadra`；工具名在它的命名空间下                                                                                           |
+| 我们设的环境变量                                                                 | `ARMADRA_*`；`OPENCODE_CONFIG_DIR`、`OPENCODE_CONFIG_CONTENT`、`COPILOT_CUSTOM_INSTRUCTIONS_DIRS` 是 CLI 自己的变量，只填值 |
+| 备份后缀                                                                         | `<file>.armadra-backup-<时间戳>`                                                                                            |
+| Windows 启动器                                                                   | `armadra-launch.exe` 的副本 `run\<cli>.exe`；`run/<cli>`、`shims/<cli>` 必须与 CLI 同名，只在数据目录里                     |
+
+文件名由 CLI 规定的（`settings.json`、`plugin.json`、`hooks.json`、`SKILL.md`）不在此列。「清理旧版」（§39.1）也只认这些名字：与改名前同名的 Hook、指令块、技能目录、状态模块按其他工具的条目对待，不列、不改、不删。
+
 ## 14. ACP：`/api/acp/*` 与 `/api/agents` 行的 `acp`
 
 > 自协议 1.12 起这些路由同时是 `acp.*` procedure（§43.1），旧路径与 procedure 调同一份实现。
@@ -2815,7 +2833,7 @@ core 校验远程服务地址与指纹的写法时用具名码（状态均 400�
 ### 39.1 目录、模型菜单、集成与 ama 密钥
 
 - `models` 对不认识的 Agent 答 404；`integration*` 的拒绝是集成域自己的 `InstallError`（码与状态它带），其余失败是 500。
-- 集成只写数据目录（画布内注入）；`repairIntegration` 只在用户点击时动 CLI 自己的配置目录，且只认本产品写下的条目：程序是我们的 Hook 客户端（现名或改名前的名字，含开发构建）的 Hook 与状态行、调用它的状态模块、带我们签名的技能目录、我们的指令块标记 `armadra:skills` / `aicc:skills`、与我们的条目同在时 Codex `hooks.json` 顶层的 `version`；先备份再改。其他工具写进同一批文件的条目不列入 `found`、不进 `removed` / `kept`、不改不删（2026-10-08 起）。`kept` 只剩我们自己留下没删的（旁边有用户文件的技能目录、指令文件的其余部分）。
+- 集成只写数据目录（画布内注入）；`repairIntegration` 只在用户点击时动 CLI 自己的配置目录，且只认本产品写下的条目：程序是 `armadra-hook`（含开发构建）的 Hook 与状态行、调用它的状态模块 `armadra-status.*`、Copilot 的 `hooks/armadra.json`、技能目录 `armadra` / `armadra-canvas` / `armadra-linked-context` 且带我们签名、指令块标记 `armadra:skills`、与我们的条目同在时 Codex `hooks.json` 顶层的 `version`；先备份再改。其他工具写进同一批文件的条目不列入 `found`、不进 `removed` / `kept`、不改不删（2026-10-08 起）。2026-10-09 起不再认改名前的旧名（§13.5）：同名条目一律按其他工具的对待。`kept` 只剩我们自己留下没删的（旁边有用户文件的技能目录、指令文件的其余部分）。
 - ama 的密钥只进不出：三条都答「哪家设了、存在哪个后端」。密钥后端不可用时答 503，码是后端自己的（`secret_unavailable`），原话不带后端给的理由。
 
 <!-- rpc:begin contract=§39.1 -->
