@@ -1,8 +1,19 @@
-import { describe, expect, it } from "vitest";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   AGENT_IDS,
   AGENT_REGISTRY,
   AGENT_STATE_SOURCES,
+  clearShimCache,
   OBSERVED,
   STATE_SOURCE_ACP,
   STATE_SOURCE_EXTENSION,
@@ -15,6 +26,7 @@ import {
   stateSourceFor,
   stateSourceIsReported,
   validAgentId,
+  versionManagerTarget,
 } from "./registry";
 
 /** Ported from the `mod tests` in the pre-merge implementation. */
@@ -217,5 +229,75 @@ describe("the agent registry", () => {
     expect(validAgentId(`custom:${"x".repeat(65)}`)).toBe(false);
     expect(validAgentId("gemini")).toBe(false);
     expect(validAgentId("")).toBe(false);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("versionManagerTarget", () => {
+  /** 一份假的 mise：本体是个 sh 脚本，垫片是指向它的符号链接。 */
+  function fakeMise(answer: string) {
+    const root = mkdtempSync(join(tmpdir(), "armadra-shim-"));
+    mkdirSync(join(root, "bin"));
+    mkdirSync(join(root, "mise", "shims"), { recursive: true });
+    mkdirSync(join(root, "real"));
+    const real = join(root, "real", "codex");
+    writeFileSync(real, "#!/bin/sh\nexit 0\n");
+    chmodSync(real, 0o755);
+    const mise = join(root, "bin", "mise");
+    writeFileSync(mise, `#!/bin/sh\necho "${answer.replace("$REAL", real)}"\n`);
+    chmodSync(mise, 0o755);
+    const shim = join(root, "mise", "shims", "codex");
+    symlinkSync(mise, shim);
+    return { root, real, shim };
+  }
+
+  afterEach(() => clearShimCache());
+
+  it("asks mise for the real program behind a shim", () => {
+    const { root, real, shim } = fakeMise("$REAL");
+    try {
+      expect(versionManagerTarget(shim)).toEqual({ program: real, args: [] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the shim when mise cannot answer, and caches the answer", () => {
+    const { root, shim } = fakeMise("");
+    try {
+      let calls = 0;
+      const which = () => {
+        calls += 1;
+        return undefined;
+      };
+      expect(versionManagerTarget(shim, which)).toBeUndefined();
+      expect(versionManagerTarget(shim, which)).toBeUndefined();
+      expect(calls).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores answers that are not a real executable", () => {
+    const { root, shim } = fakeMise("relative/codex");
+    try {
+      expect(versionManagerTarget(shim)).toBeUndefined();
+      clearShimCache();
+      expect(versionManagerTarget(shim, () => shim)).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a plain program alone", () => {
+    const { root, real } = fakeMise("$REAL");
+    try {
+      expect(
+        versionManagerTarget(real, () => {
+          throw new Error("must not ask");
+        }),
+      ).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
