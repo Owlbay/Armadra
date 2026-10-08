@@ -3554,3 +3554,17 @@ human initiator。页面不接收任何 controller 凭据；body owner/controlle
 - **谁读得到**：只有 `acp.log`（`GET /api/acp/sessions/{id}/log`）的 `entries` 带这两种块与 `diffs` / `status` / `kind` / `locations`。连线读取、摘要、交接、终端画面（`capture`）这些经 `history/registry.ts` 读镜像的读取方照旧只看到 `text` / `tool_use` / `tool_result`，图片的 base64 不进别人的上下文。
 - **`acp.log` 的 `snapshot`**：出参多一个可选的 `snapshot: { plan: AcpPlanEntry[], usage: { used, size, cost?: { amount, currency } } | null, availableCommands: { name, description }[], title: string | null }`，是活进程最近一次 `plan` / `usage_update` / `available_commands_update` / `session_info_update` 的值（命令最多 200 条）。与 `pending`、`turns` 同一条件：没有活进程时缺席。回放（`session/load`）的这几种不进快照。
 - 镜像与快照都不含凭据；`title` 只给页面作命名建议，core 不拿它改节点。
+
+## 50. 布局方向：`canvas.layoutDirection` 与派发放置
+
+自协议 1.24 起。派发树往哪个方向长是一条**主机设置**（`settings.json`），core 的控制动词与页面都按它放置；没有新 procedure、没有新事件，也没有数据库迁移。实现在 `core/settings/schema.ts`（归一）、`packages/shared/src/domain/placement.ts`（`dispatchPlacement`，core 与页面共用）与 `core/collab/control/board.ts`（`placement`）。
+
+- **设置键**：`settings.get` / `settings.update`（`GET` / `PATCH /api/settings`）的文档多一段 `canvas: { layoutDirection: "vertical" | "horizontal" }`，缺省 `vertical`。缺席、类型不对或不在两值里时归一成 `vertical`（与其它段同一条「坏值退回缺省」规矩），归一后的文档总带这一段。旧 core 不认这一段：`looseObject` 原样透传，页面按缺省纵向读。
+- **放置规则**（`dispatchPlacement(boxes, parentId, size, direction, childIds)`）：
+  - `vertical`：`y = 主底 + 48`；`x` 接在主已有的从（`role: "supervises"` 边的目标）里最右那个的右边 + 60，没有从时与主左对齐。
+  - `horizontal`：`x = 主右 + 60`；`y` 接在已有的从里最下那个的下面 + 48，没有从时与主顶对齐。
+  - 落点与任何盒子包围盒相交（贴边不算）就沿同一行（纵向）/ 同一列（横向）让一格（新节点宽 + 60 / 高 + 48），64 次后放到所有盒子的最下方（纵向）/ 最右方（横向）。只和主在同一坐标系里的节点比：主在分组里时只比同组的兄弟。已有节点一概不动。
+  - core 不知道节点尺寸：没写 `size` 的节点按 960×600 算，新节点也按 960×600 让位。
+- **谁遵循**：`open-agent`、`open-terminal`、`open-browser`、`sticky`、`worktree` 等建节点的控制动词都经 `placement`；`team` 的成员依次排成一行（纵向）/ 一列（横向），`--gather` 的汇总节点在成员那一行的下一行、水平居中于成员（横向：下一列、垂直居中）；有成员进了 worktree 分组或落点被占时退回普通放置。
+- **页面**：节点菜单「派生」与拖线建从用同一个 `dispatchPlacement`（拖线时落点是松手处，以它为中心）；整理（`canvas.tidy`）按方向排主从树、主居中于子（Dock 整理钮的右键「纵向整理 / 横向整理」只覆盖这一次，不写设置）。
+- **链接文档带 role**（行为说明，形状见 §39.4 的 `agents.putContextLinks`）：页面推送的链接文档每一项都带 `role`——`supervises` 边对 `source` 一侧写 `"sub"`、对 `target` 一侧写 `"main"`，对等边写 `"peer"`；「派生」建出的从因此立刻得到 `send` 的授权，与 Agent 自己 `open-agent` 的结果一致。
